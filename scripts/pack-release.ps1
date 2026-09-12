@@ -10,9 +10,17 @@
       · MySQL：mysqld.exe 只在 D:\tools\mysql 这种**本机绝对路径**下找，换台机器直接崩。
 
     结果就是"把 Release 目录拷给别人"跑不起来。本脚本按 packaging\manifest.json 这份
-    **软件打包清单**把它们装配到同一个目录里，产出 dist\ComfyHub\。
+    **软件打包清单**把它们装配到同一个目录里。
 
-    发布包是便携式的（免安装、免管理员）：解压出来整个目录就是运行时根目录，可整体搬走。
+    **默认就地装配**：输出目录就是 flutter build 的产物目录
+    `build\windows\x64\runner\Release\` —— 装完之后这个目录本身就是完整可运行的发布包，
+    直接双击里面的 viewer.exe 就能用，也可以整个目录拷给别人。
+
+      · 想另存一份干净的副本（比如打成 zip 发出去）用 -OutDir 指个别的地方；
+      · ⚠ `flutter clean` / 重新 clone 会把这个目录整个清掉，那样就只剩 App 了，
+        需要重新跑一次本脚本。
+
+    发布包是便携式的（免安装、免管理员）：整个目录就是运行时根目录，可整体搬走。
     可写数据都在根目录内：
       · 数据库实例  <根>\.mysql     （可用 mysql.ps1 move / -DataDir 搬走）
       · 生成产物    <根>\storage    （后端按 COMFYHUB_STORAGE 写这里）
@@ -28,11 +36,12 @@
     pwsh -File scripts\pack-release.ps1
     pwsh -File scripts\pack-release.ps1 -Zip
     pwsh -File scripts\pack-release.ps1 -SkipApp -SkipJre -Clean      # 只重装后端 + MySQL，快速迭代
-    pwsh -File scripts\pack-release.ps1 -OutDir 'D:\dist\ComfyHub' -NoPrune
+    pwsh -File scripts\pack-release.ps1 -OutDir 'D:\dist\ComfyHub'    # 另存一份干净的独立副本
 #>
 [CmdletBinding()]
 param(
-    # 发布包输出目录。默认 <项目>\dist\ComfyHub
+    # 发布包输出目录。默认**就地**装配进 flutter build 的产物目录
+    # build\windows\x64\runner\Release（装完那个目录就是完整发布包）
     [string]$OutDir,
 
     # 装配完再打一个 zip（几百 MB，会慢一会儿）
@@ -59,7 +68,7 @@ $ErrorActionPreference = 'Stop'
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $ManifestFile = Join-Path $ProjectRoot 'packaging\manifest.json'
-if (-not $OutDir) { $OutDir = Join-Path $ProjectRoot 'dist\ComfyHub' }
+if (-not $OutDir) { $OutDir = Join-Path $ProjectRoot 'build\windows\x64\runner\Release' }
 
 # 被 App / 别的脚本重定向时钉成 UTF-8（与其它脚本一致，避免中文字符串乱码）
 if ([Console]::IsOutputRedirected) {
@@ -338,9 +347,25 @@ $manifest = Get-Content -LiteralPath $ManifestFile -Raw -Encoding utf8 | Convert
 Say ("  清单: {0}  ({1} 个组件)" -f $ManifestFile.Replace($ProjectRoot + '\', ''), $manifest.components.Count) 'DarkGray'
 Say "  输出: $OutDir" 'DarkGray'
 
-if ($Clean -and (Test-Path -LiteralPath $OutDir)) {
-    Say '  清空输出目录…' 'DarkGray'
-    Remove-Item -LiteralPath $OutDir -Recurse -Force
+# -Clean 只清掉"我们自己装进去的东西"。
+# 默认输出目录就是 flutter 的产物目录，整个 Remove-Item 会把 viewer.exe /
+# flutter_windows.dll 一起删掉 —— 那不叫清理，那叫把 App 弄没了。
+# 运行期数据（.mysql 库、storage 产物、.run 日志）**不动**：那是用户的数据，不是装配产物。
+if ($Clean) {
+    Say '  清理上次装进去的东西（Flutter 自己的产物保留不动）…' 'DarkGray'
+    $owned = New-Object System.Collections.ArrayList
+    foreach ($c in $manifest.components) {
+        if ($c.target -and $c.target -ne '.') { [void]$owned.Add([string]$c.target) }
+    }
+    [void]$owned.Add('packaging')
+    [void]$owned.Add('BUILD-INFO.txt')
+    foreach ($e in ($owned | Select-Object -Unique)) {
+        $p = Join-Path $OutDir $e
+        if (Test-Path -LiteralPath $p) {
+            Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
+            Say "    已删 $e" 'DarkGray'
+        }
+    }
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
@@ -359,8 +384,18 @@ foreach ($c in $manifest.components) {
                 $src = Get-FlutterReleaseDir
                 if (-not $src) { throw '找不到 Release 产物（viewer.exe），flutter 构建可能没成功。' }
                 Say "  来源: $($src.Replace($ProjectRoot + '\', ''))" 'DarkGray'
-                $r = Copy-Tree -Source $src -Dest $target
-                $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = $r.Bytes; dropped = $r.DroppedBytes }
+
+                # 默认输出目录**就是** flutter 的产物目录 —— 源和目标是同一个目录，
+                # 不能自己往自己身上拷（会报 "Cannot copy item to itself"）。
+                $srcFull = [System.IO.Path]::GetFullPath($src).TrimEnd('\')
+                $dstFull = [System.IO.Path]::GetFullPath($target).TrimEnd('\')
+                if ($srcFull -eq $dstFull) {
+                    Say '    就地装配：Flutter 产物本来就在输出目录里，跳过拷贝' 'DarkGray'
+                    $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = (Get-DirSize $src); dropped = 0 }
+                } else {
+                    $r = Copy-Tree -Source $src -Dest $target
+                    $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = $r.Bytes; dropped = $r.DroppedBytes }
+                }
             }
             'gradle_install_dist' {
                 Build-ServerDist
@@ -468,12 +503,24 @@ if ($manifest.runtimeRequirements -and $manifest.runtimeRequirements.required) {
     }
 }
 
+$flutterRelDir = Join-Path $ProjectRoot 'build\windows\x64\runner\Release'
+$inPlaceNote = ''
+if ([System.IO.Path]::GetFullPath($OutDir).TrimEnd('\') -eq [System.IO.Path]::GetFullPath($flutterRelDir).TrimEnd('\')) {
+    $inPlaceNote = @"
+
+注意       : 本目录就是 flutter build 的产物目录（默认就地装配）。
+             跑 flutter clean / 重新构建会把它整个清空，后端、MySQL、JRE 会一起没，
+             那时重新执行一次 scripts\pack-release.ps1 即可。
+"@
+}
+
 $buildInfo = @"
 ComfyHub 发布包
 打包时间   : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 清单       : packaging\manifest.json
 包大小     : $(Format-Size $totalSize)
-运行时布局 : 便携式 —— 解压后整个目录即根目录，可整体移动，免安装、免管理员
+位置       : $OutDir
+运行时布局 : 便携式 —— 整个目录即根目录，可整体移动，免安装、免管理员
 $reqLines
 可写数据（都在根目录内）:
   .mysql\     数据库实例（data\ + my.ini + 日志）
@@ -485,6 +532,7 @@ $reqLines
   2. 或命令行: pwsh -File scripts\comfyhub.ps1 up -WithApp
   3. 起不来先体检: pwsh -File scripts\comfyhub.ps1 doctor
   4. 换数据库存放位置: pwsh -File scripts\mysql.ps1 move -DataDir <新位置>
+$inPlaceNote
 "@
 Set-Content -Path (Join-Path $OutDir 'BUILD-INFO.txt') -Value $buildInfo -Encoding utf8
 

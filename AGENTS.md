@@ -122,6 +122,16 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   路径类问题先看它。
 - **发布包是便携式的**：可写数据（数据库 `<根>\.mysql`、产物 `<根>\storage`、日志 `<根>\.run`）
   都在包内，`packaging\manifest.json` 里 `runtimeLayout` 记着这份约定；改存放位置要先改那里和 README 9.2。
+- **发布包默认"就地装配"**：`pack-release.ps1` 的 `-OutDir` 默认就是
+  `build\windows\x64\runner\Release`，装完那个目录本身就是完整发布包（App 认根目录时往上找
+  `scripts\comfyhub.ps1`，正好命中它自己的那一份）。三个连带后果别踩：
+  ① `flutter clean` / 重新构建会把它整个清空（又变回只有 App），要重跑脚本；
+  ② `-Clean` **不能**整个 `Remove-Item $OutDir`，否则把 `viewer.exe` 一起删了 ——
+     只能清清单里那些 target（`server` / `mysql` / `jre` / `scripts` / `db` / `comfyui` …）+
+     `packaging` / `BUILD-INFO.txt`；运行期数据（`.mysql` / `storage` / `.run`）**不要动**；
+  ③ `flutter_release` 组件此时**源和目标是同一个目录**，必须跳过拷贝
+     （`Copy-Item` 会报 "Cannot copy item to itself"）。
+- 想要一份不随 `build\` 消失的长期副本，用 `-OutDir D:\dist\ComfyHub`。
 - MySQL 分发目录**接近 1GB**，其中 `bin\mysqld.pdb` 一个就 368MB —— 裁剪规则写在清单的
   `prune` 字段里（glob 支持 `**`），拷贝约 400MB。改裁剪规则务必带上 `-Clean` 重装并看自检。
 - **发布包只能带走 Java 和 MySQL 本体**：`pwsh` 和 VC++ 运行时带不走。缺 VC++ 运行时的时候
