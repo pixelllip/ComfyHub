@@ -1,0 +1,11 @@
+{
+  "_注释": "把这个文件复制成同目录下的 config.json 即可生效；不复制则全部走默认值（http://127.0.0.1:8080）。环境变量 COMFYHUB_URL 的优先级高于这里。",
+  "comfyhubUrl": "http://127.0.0.1:8080",
+  "comfyUrl": "http://127.0.0.1:8188",
+  "tags": ["ComfyUI"],
+  "enabled": true,
+  "includeTemp": false,
+  "timeoutSeconds": 5,
+  "delaySeconds": 0.5,
+  "queueSize": 256
+}

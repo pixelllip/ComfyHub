@@ -1,0 +1,368 @@
+import 'package:flutter/foundation.dart';
+
+import '../core/api_client.dart';
+import '../core/settings_store.dart';
+import '../models/models.dart';
+
+/// 全局数据仓库：提示词库 / 媒体画廊 / 标签词表 的搜索状态与缓存。
+class LibraryStore extends ChangeNotifier {
+  /// [api] 只用于测试时注入假的 HTTP 客户端；生产代码传 null 即可。
+  LibraryStore(this._settings, {ApiClient? api}) {
+    _apiInjected = api != null;
+    this.api = api ?? ApiClient(_settings.baseUrl);
+    _apiBaseUrl = _settings.baseUrl;
+    _settings.addListener(_onSettingsChanged);
+  }
+
+  final SettingsStore _settings;
+
+  late ApiClient api;
+  String _apiBaseUrl = '';
+  /// 测试注入的客户端不允许被 baseUrl 变化替换掉
+  bool _apiInjected = false;
+
+  // -------------------------------------------------------------------------
+  //  提示词
+  // -------------------------------------------------------------------------
+
+  Paged<Prompt> prompts = Paged.empty<Prompt>();
+  bool loadingPrompts = false;
+  String? promptsError;
+
+  String promptQuery = '';
+  final Set<String> selectedTags = <String>{};
+  String tagMode = 'any';
+  String? promptKind;
+  bool onlyFavorite = false;
+  String promptSort = 'newest';
+  int promptPage = 1;
+
+  // -------------------------------------------------------------------------
+  //  媒体
+  // -------------------------------------------------------------------------
+
+  Paged<MediaAsset> media = Paged.empty<MediaAsset>();
+  bool loadingMedia = false;
+  String? mediaError;
+
+  String mediaQuery = '';
+  final Set<String> mediaTags = <String>{};
+  String mediaTagMode = 'any';
+  String? mediaKind;
+  bool mediaOnlyFavorite = false;
+  bool mediaUntagged = false;
+  String mediaSort = 'newest';
+  int mediaPage = 1;
+
+  // -------------------------------------------------------------------------
+  //  标签 / 统计
+  // -------------------------------------------------------------------------
+
+  List<Tag> tags = const [];
+  List<String> tagCategories = const [];
+  bool loadingTags = false;
+  String? tagsError;
+
+  LibraryStats stats = const LibraryStats();
+
+  bool _disposed = false;
+
+  String get baseUrl => _settings.baseUrl;
+
+  void _onSettingsChanged() {
+    if (_apiInjected) return;
+    if (_settings.baseUrl != _apiBaseUrl) {
+      api.dispose();
+      api = ApiClient(_settings.baseUrl);
+      _apiBaseUrl = _settings.baseUrl;
+      refreshAll();
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _settings.removeListener(_onSettingsChanged);
+    api.dispose();
+    super.dispose();
+  }
+
+  void _safeNotify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  // -------------------------------------------------------------------------
+  //  加载
+  // -------------------------------------------------------------------------
+
+  Future<void> refreshAll() async {
+    await Future.wait([
+      refreshPrompts(),
+      refreshMedia(),
+      refreshTags(),
+      refreshStats(),
+    ]);
+  }
+
+  Future<void> refreshStats() async {
+    try {
+      stats = await api.stats();
+      _safeNotify();
+    } catch (_) {
+      // 统计失败不影响主流程
+    }
+  }
+
+  Future<void> refreshPrompts() async {
+    loadingPrompts = true;
+    promptsError = null;
+    _safeNotify();
+    try {
+      prompts = await api.listPrompts(
+        q: promptQuery.isEmpty ? null : promptQuery,
+        tags: selectedTags.toList(),
+        tagMode: tagMode,
+        kind: promptKind,
+        favorite: onlyFavorite ? true : null,
+        sort: promptSort,
+        page: promptPage,
+        size: _settings.pageSize,
+      );
+    } on ApiException catch (e) {
+      promptsError = e.toString();
+      prompts = Paged.empty<Prompt>();
+    } catch (e) {
+      promptsError = '$e';
+      prompts = Paged.empty<Prompt>();
+    } finally {
+      loadingPrompts = false;
+      _safeNotify();
+    }
+  }
+
+  Future<void> refreshMedia() async {
+    loadingMedia = true;
+    mediaError = null;
+    _safeNotify();
+    try {
+      media = await api.listMedia(
+        q: mediaQuery.isEmpty ? null : mediaQuery,
+        tags: mediaTags.toList(),
+        tagMode: mediaTagMode,
+        kind: mediaKind,
+        favorite: mediaOnlyFavorite ? true : null,
+        untagged: mediaUntagged,
+        sort: mediaSort,
+        page: mediaPage,
+        size: _settings.pageSize,
+      );
+    } on ApiException catch (e) {
+      mediaError = e.toString();
+      media = Paged.empty<MediaAsset>();
+    } catch (e) {
+      mediaError = '$e';
+      media = Paged.empty<MediaAsset>();
+    } finally {
+      loadingMedia = false;
+      _safeNotify();
+    }
+  }
+
+  Future<void> refreshTags() async {
+    loadingTags = true;
+    tagsError = null;
+    _safeNotify();
+    try {
+      final results = await Future.wait([
+        api.listTags(sort: 'popular'),
+        api.tagCategories(),
+      ]);
+      tags = results[0] as List<Tag>;
+      tagCategories = results[1] as List<String>;
+    } on ApiException catch (e) {
+      tagsError = e.toString();
+    } catch (e) {
+      tagsError = '$e';
+    } finally {
+      loadingTags = false;
+      _safeNotify();
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  //  提示词筛选
+  // -------------------------------------------------------------------------
+
+  void setPromptQuery(String value) {
+    promptQuery = value;
+    promptPage = 1;
+    refreshPrompts();
+  }
+
+  void toggleTag(String name) {
+    if (selectedTags.contains(name)) {
+      selectedTags.remove(name);
+    } else {
+      selectedTags.add(name);
+    }
+    promptPage = 1;
+    refreshPrompts();
+  }
+
+  void clearTags() {
+    selectedTags.clear();
+    promptPage = 1;
+    refreshPrompts();
+  }
+
+  void setTagMode(String mode) {
+    tagMode = mode;
+    promptPage = 1;
+    refreshPrompts();
+  }
+
+  void setPromptKind(String? kind) {
+    promptKind = kind;
+    promptPage = 1;
+    refreshPrompts();
+  }
+
+  void setOnlyFavorite(bool value) {
+    onlyFavorite = value;
+    promptPage = 1;
+    refreshPrompts();
+  }
+
+  void setPromptSort(String sort) {
+    promptSort = sort;
+    promptPage = 1;
+    refreshPrompts();
+  }
+
+  void setPromptPage(int page) {
+    promptPage = page;
+    refreshPrompts();
+  }
+
+  bool get hasPromptFilter =>
+      promptQuery.isNotEmpty ||
+      selectedTags.isNotEmpty ||
+      promptKind != null ||
+      onlyFavorite;
+
+  // -------------------------------------------------------------------------
+  //  媒体筛选
+  // -------------------------------------------------------------------------
+
+  void setMediaQuery(String value) {
+    mediaQuery = value;
+    mediaPage = 1;
+    refreshMedia();
+  }
+
+  void toggleMediaTag(String name) {
+    if (mediaTags.contains(name)) {
+      mediaTags.remove(name);
+    } else {
+      mediaTags.add(name);
+    }
+    mediaPage = 1;
+    refreshMedia();
+  }
+
+  void clearMediaTags() {
+    mediaTags.clear();
+    mediaPage = 1;
+    refreshMedia();
+  }
+
+  void setMediaTagMode(String mode) {
+    mediaTagMode = mode;
+    mediaPage = 1;
+    refreshMedia();
+  }
+
+  void setMediaKind(String? kind) {
+    mediaKind = kind;
+    mediaPage = 1;
+    refreshMedia();
+  }
+
+  void setMediaOnlyFavorite(bool value) {
+    mediaOnlyFavorite = value;
+    mediaPage = 1;
+    refreshMedia();
+  }
+
+  void setMediaUntagged(bool value) {
+    mediaUntagged = value;
+    mediaPage = 1;
+    refreshMedia();
+  }
+
+  void setMediaSort(String sort) {
+    mediaSort = sort;
+    mediaPage = 1;
+    refreshMedia();
+  }
+
+  void setMediaPage(int page) {
+    mediaPage = page;
+    refreshMedia();
+  }
+
+  bool get hasMediaFilter =>
+      mediaQuery.isNotEmpty ||
+      mediaTags.isNotEmpty ||
+      mediaKind != null ||
+      mediaOnlyFavorite ||
+      mediaUntagged;
+
+  // -------------------------------------------------------------------------
+  //  变更
+  // -------------------------------------------------------------------------
+
+  Future<void> deletePrompt(int id) async {
+    await api.deletePrompt(id);
+    await Future.wait([refreshPrompts(), refreshTags(), refreshStats()]);
+  }
+
+  // 批量操作走的是后端已有的单条接口（本地库，几条到几十条的循环开销可以忽略），
+  // 好处是 App 和后端不需要为"批量"再各维护一套语义。
+
+  Future<void> setPromptsFavorite(Iterable<int> ids, bool favorite) async {
+    for (final id in ids) {
+      await api.setPromptFavorite(id, favorite);
+    }
+    await Future.wait([refreshPrompts(), refreshStats()]);
+  }
+
+  Future<void> addTagsToPrompts(Iterable<int> ids, List<String> tags) async {
+    for (final id in ids) {
+      await api.addPromptTags(id, tags);
+    }
+    await Future.wait([refreshPrompts(), refreshTags(), refreshStats()]);
+  }
+
+  Future<void> deletePrompts(Iterable<int> ids) async {
+    for (final id in ids) {
+      await api.deletePrompt(id);
+    }
+    await Future.wait([refreshPrompts(), refreshTags(), refreshStats()]);
+  }
+
+  Future<void> deleteMedia(int id) async {
+    await api.deleteMedia(id);
+    await Future.wait([refreshMedia(), refreshTags(), refreshStats()]);
+  }
+
+  Future<void> togglePromptFavorite(Prompt p) async {
+    await api.setPromptFavorite(p.id, !p.favorite);
+    await Future.wait([refreshPrompts(), refreshStats()]);
+  }
+
+  Future<void> toggleMediaFavorite(MediaAsset m) async {
+    await api.updateMedia(m.id, favorite: !m.favorite);
+    await refreshMedia();
+  }
+}

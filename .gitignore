@@ -1,0 +1,85 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Widget Preview related
+.widget_preview/
+
+# ---------------------------------------------------------------------------
+# ComfyHub
+# ---------------------------------------------------------------------------
+
+# 本地 MySQL 便携版的数据目录 / 配置 / 日志（体积大且是机器相关数据）
+/.mysql/
+
+# MySQL 存储位置指针（每台机器不一样，比如 D:\mysql\comfyhub）
+/.mysql-location.json
+
+# 运行期产物：后端日志、PID、临时启动脚本
+/.run/
+
+# 用户上传的生成产物原始文件
+/storage/
+
+# 演示用媒体（可由 scripts/make-sample-media.ps1 重新生成）
+/samples/
+
+# Kotlin 后端构建产物
+/server/build/
+/server/.gradle/
+/server/storage/
+
+# ComfyUI 捕获扩展：本机配置（从 config.example.json 复制而来，地址每台机器不同）
+/comfyui/comfyhub_capture/config.json
+
+# Python 编译缓存（捕获扩展与 e2e 自测脚本会产生）
+__pycache__/
+
+# 临时跑批 / 调试产物（日志、比对图、抽帧、一次性脚本）
+/_run/
+
+# Kotlin 增量编译缓存
+/server/.kotlin/
+

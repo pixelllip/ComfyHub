@@ -1,0 +1,213 @@
+package com.comfyhub
+
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
+import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationStopped
+import io.ktor.server.application.install
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.calllogging.CallLogging
+import io.ktor.server.plugins.compression.Compression
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.cors.routing.CORS
+import io.ktor.server.plugins.defaultheaders.DefaultHeaders
+import io.ktor.server.plugins.partialcontent.PartialContent
+import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.request.httpMethod
+import io.ktor.server.request.path
+import io.ktor.server.response.respond
+import io.ktor.server.routing.get
+import io.ktor.server.routing.route
+import io.ktor.server.routing.routing
+import kotlinx.serialization.SerializationException
+import org.slf4j.LoggerFactory
+import org.slf4j.event.Level
+import java.sql.SQLException
+import java.time.Instant
+
+/** 全局上下文，注入到各路由 */
+class AppContext(val cfg: AppConfig, val storage: Storage)
+
+const val APP_VERSION = "1.0.0"
+
+fun main() {
+    val log = LoggerFactory.getLogger("com.comfyhub.Main")
+    val cfg = AppConfig.fromEnv()
+
+    cfg.ensureStorage()
+
+    // 数据库是后端的硬依赖。这里带重试地等它，而不是一连不上就直接退出 ——
+    // 这样即便 MySQL 比后端晚几秒就绪（脚本并行拉起时很常见）也能自愈。
+    if (!waitForDatabase(cfg)) {
+        Db.close()
+        kotlin.system.exitProcess(1)
+    }
+
+    val storage = Storage(cfg.storageDir)
+
+    // 库结构自动补齐（新增列 / 新表），保证 App 自动拉起后端时不需要人工跑 SQL
+    runCatching { Migrate.run() }.onFailure {
+        log.error("数据库结构迁移失败（后端继续启动，但 ComfyUI 自动捕获可能不可用）: {}", it.message)
+    }
+
+    log.info("ComfyHub 服务启动中...\n{}", cfg.describe())
+
+    embeddedServer(Netty, port = cfg.port, host = cfg.host) {
+        module(AppContext(cfg, storage))
+    }.start(wait = true)
+}
+
+/**
+ * 等待数据库可用。返回 false 表示彻底失败（调用方应退出进程）。
+ *
+ * @param attempts 尝试次数
+ * @param delayMs  每次之间的间隔
+ */
+private fun waitForDatabase(cfg: AppConfig, attempts: Int = 20, delayMs: Long = 1500): Boolean {
+    val log = LoggerFactory.getLogger("com.comfyhub.Main")
+    var lastError: Exception? = null
+
+    repeat(attempts) { i ->
+        val attempt = i + 1
+        try {
+            if (!Db.isInitialized) Db.init(cfg)
+            // 真正打一次查询，确认库和表都在
+            Db.withConnection { conn ->
+                conn.queryOne("SELECT COUNT(*) FROM prompts") { it.getLong(1) }
+            }
+            if (attempt > 1) log.info("数据库已就绪（第 {} 次尝试）", attempt)
+            return true
+        } catch (e: Exception) {
+            lastError = e
+            if (attempt == 1) {
+                log.warn("数据库暂时不可用，开始重试（最多 {} 次，每次间隔 {}ms）：{}", attempts, delayMs, e.message)
+            } else {
+                log.warn("第 {}/{} 次连接数据库失败: {}", attempt, attempts, e.message)
+            }
+            Db.close()
+            Thread.sleep(delayMs)
+        }
+    }
+
+    log.error(
+        """
+        无法访问数据库，已重试 {} 次。
+        请先执行:  pwsh -File scripts\\comfyhub.ps1 up
+        原因: {}
+        """.trimIndent(),
+        attempts, lastError?.message
+    )
+    return false
+}
+
+fun Application.module(ctx: AppContext) {
+    val log = LoggerFactory.getLogger("com.comfyhub.Module")
+
+    // ComfyUI 自动捕获：轮询 /history，把「参数 + 工作流 + 产物」整条收进库
+    val capture = ComfyCapture(ctx.cfg, ctx.storage)
+    capture.start()
+    monitor.subscribe(ApplicationStopped) { capture.stop() }
+
+    install(DefaultHeaders) {
+        header("X-App", "ComfyHub/$APP_VERSION")
+    }
+
+    install(CallLogging) {
+        level = Level.INFO
+        format { call ->
+            "${call.request.httpMethod.value} ${call.request.path()} -> ${call.response.status()?.value ?: "-"}"
+        }
+    }
+
+    install(ContentNegotiation) {
+        json(AppJson)
+    }
+
+    install(Compression)
+
+    // 视频拖动进度条依赖 Range 支持
+    install(PartialContent) {
+        maxRangeCount = 20
+    }
+
+    install(CORS) {
+        anyHost()
+        allowHeader(HttpHeaders.ContentType)
+        allowHeader(HttpHeaders.Authorization)
+        allowHeader(HttpHeaders.Range)
+        exposeHeader(HttpHeaders.ContentLength)
+        exposeHeader(HttpHeaders.ContentRange)
+        exposeHeader(HttpHeaders.AcceptRanges)
+        allowMethod(HttpMethod.Get)
+        allowMethod(HttpMethod.Post)
+        allowMethod(HttpMethod.Put)
+        allowMethod(HttpMethod.Patch)
+        allowMethod(HttpMethod.Delete)
+        allowMethod(HttpMethod.Options)
+    }
+
+    install(StatusPages) {
+        exception<IllegalArgumentException> { call, cause ->
+            call.respond(HttpStatusCode.BadRequest, ApiError(cause.message ?: "请求参数不合法"))
+        }
+        exception<SerializationException> { call, cause ->
+            call.respond(HttpStatusCode.BadRequest, ApiError("请求体 JSON 解析失败", cause.message))
+        }
+        exception<SQLException> { call, cause ->
+            log.error("数据库错误: {}", cause.message, cause)
+            call.respond(HttpStatusCode.InternalServerError, ApiError("数据库错误", cause.message))
+        }
+        exception<Throwable> { call, cause ->
+            log.error("未处理异常: {}", cause.message, cause)
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                ApiError(cause::class.simpleName ?: "UnknownError", cause.message)
+            )
+        }
+        status(HttpStatusCode.NotFound) { call, _ ->
+            call.respond(ApiError("接口不存在: ${call.request.path()}"))
+        }
+    }
+
+    routing {
+        get("/") {
+            call.respond(
+                mapOf(
+                    "app" to "ComfyHub",
+                    "version" to APP_VERSION,
+                    "docs" to "/api/health",
+                )
+            )
+        }
+
+        route("/api") {
+            get("/health") {
+                val dbState = runCatching {
+                    Db.withConnection { conn -> conn.queryOne("SELECT 1") { it.getInt(1) } }
+                }.fold({ "ok" }, { "error: ${it.message}" })
+
+                call.respond(
+                    HealthDto(
+                        status = if (dbState == "ok") "ok" else "degraded",
+                        version = APP_VERSION,
+                        database = dbState,
+                        storageDir = ctx.cfg.storageDir.toString(),
+                        serverTime = Instant.now().toString(),
+                    )
+                )
+            }
+
+            get("/stats") {
+                call.respond(Db.withConnection { MediaRepo.stats(it) })
+            }
+
+            promptRoutes()
+            tagRoutes()
+            mediaRoutes(ctx)
+            captureRoutes(ctx, capture)
+        }
+    }
+}

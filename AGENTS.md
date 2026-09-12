@@ -1,0 +1,95 @@
+# AGENTS.md
+
+给在这个仓库里干活的 AI / 自动化协作者看的注意事项。**功能说明、接口清单、排错表都在 [README.md](README.md)**，这里只记"怎么做才不踩坑"。
+
+---
+
+## 1. 只改前端时：用 debug 版 + 热重载，别每次完整构建
+
+- **只动 `lib/` 下的 Dart 代码**（页面 / 组件 / 主题 / 状态）→ 用 debug 版，跑起来后按 `r` 热重载，1~2 秒见效：
+
+  ```powershell
+  pwsh -File scripts\dev-app.ps1        # 确保 MySQL + 后端在跑 → flutter run -d windows --debug
+  ```
+
+  它会先 `comfyhub.ps1 up -SkipBuild`，再 `flutter run -d windows --debug`；
+  想自己来也可以直接 `flutter run -d windows --debug`（记得先 `$env:PUB_HOSTED_URL='https://pub.dev'`）。
+
+- **别**为了看一个前端改动去跑 `scripts\autorun-app.ps1` / `flutter build windows` ——
+  那是 Release 完整构建，几分钟起步（改 `windows/` 原生代码、改 `pubspec.yaml` 依赖、
+  要出正式产物时才需要）。
+- 改完前端至少过一遍：`flutter analyze` + `flutter test`（`PUB_HOSTED_URL=https://pub.dev`）。
+  详情页大图、工作流弹窗这类交互改动，回归用例分别在 `test\zoomable_image_test.dart` 和
+  `test\workflow_viewer_test.dart`，别只跑 `widget_test.dart`。
+- 产物目录：debug 在 `build\windows\...\runner\Debug\`、Release 在 `...\Release\`；
+  `autorun-app.ps1` / `comfyhub.ps1 up -WithApp` 启动 App 时**优先挑 Release**。
+
+## 2. 本地服务必须"静默"启动（不弹命令行窗口）
+
+MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控制台窗口**。三件事都要记住：
+
+1. **不能用 `Start-Process`** 起 mysqld / 后端：进程属于当前 PowerShell 的进程树，
+   命令行一结束就可能被一起回收。要用 WMI `Win32_Process.Create` 脱离进程树。
+2. **WMI 默认会给控制台程序分配一个可见的控制台窗口**（就是那个 cmd 黑框），
+   所以必须传 `Win32_ProcessStartup{ ShowWindow = 0 }`（SW_HIDE）。
+   公共实现是 `scripts\silent-process.ps1`，`mysql.ps1` / `server.ps1` 都 dot-source 它。
+   - `CreateFlags = CREATE_NO_WINDOW(0x08000000)` 会被 WMI 拒绝（`ReturnValue=21`），不要用；
+   - 传给 WMI 的 `CurrentDirectory` 绝不能是空串（`[string]` 参数没传值就是空串，不是 `$null`），
+     否则同样 `ReturnValue=21` —— 这就是"手敲行、脚本不行"的那个坑；
+   - `[wmiclass]`（System.Management）不可用时自动退到 `wscript` + 临时 `.vbs`：
+     命令行先落成 UTF-16 文件，VBS 读出来交给 `cmd.exe /c "…"`（**不能**让 `Run` 直接跑
+     "带引号的完整路径 + 参数"，实测 mysqld 会被悄悄丢掉），最后才退回裸 WMI（弹窗但服务能起）。
+3. **验证"没弹窗口"要看枚举窗口，不能看 `MainWindowHandle`**：控制台窗口属于 `conhost.exe`，
+   `Get-Process cmd | Select MainWindowHandle` 永远是 0，会给你假绿灯。
+   正确做法是用 `EnumWindows` + `IsWindowVisible` 枚举可见顶层窗口，
+   并且**边启动边以 ~50ms 轮询**，否则"闪一下就没"的窗口抓不到。
+   现成的一条命令（返回 0 才算通过）：
+
+   ```powershell
+   pwsh -File scripts\check-silent-start.ps1 -Restart      # 从零走一遍 down → up
+   ```
+
+## 3. 首页 / 导航顺序
+
+`lib/app.dart` 的 `HomeShell`：**默认落在「画廊」（产物 / 图片）页**，
+顺序是 `画廊 → 提示词 → 标签 → 设置`。
+`_destinations`（图标 / 文案）和 `pages`（页面）两个列表**必须同序**，`_index` 同时索引它们。
+改完跑一遍 `flutter test test\home_nav_test.dart`（断言落地页和顺序）。
+
+## 4. 本机环境的硬约束（换机器要重新确认）
+
+| 约束 | 说明 |
+| --- | --- |
+| JDK | **21~23**（后端用的 Gradle 8.12 不支持 24/25），`server.ps1` 会自己挑；可用 `COMFYHUB_JDK_HOME` 指定 |
+| MySQL | 免安装 zip 版，默认 `D:\tools\mysql\mysql-8.4.3-winx64`；实例目录默认 `<项目>\.mysql`，可用 `COMFYHUB_MYSQL_DIR` / `mysql.ps1 move` 换 |
+| pub 源 | 必须 `https://pub.dev`（国内镜像对个别包返回 424） |
+| 脚本 | 一律 `pwsh`（PowerShell 7）；脚本里的 WMI / CIM 调用依赖 Windows |
+| 端口 | MySQL `3307`、后端 `8080`、ComfyUI `8188` |
+| Android 构建 | `android/` 走 AGP **9.4.0** + Gradle **9.6.0** + **AGP 内建 Kotlin**（`android.builtInKotlin=true`，`org.jetbrains.kotlin.android` 只钉版本、不 apply）；动 `android/` 之前先读 `docs/android-agp9-builtin-kotlin-migration.md` |
+| Gradle 代理 | `~/.gradle/gradle.properties` 配了本机代理 `127.0.0.1:7890`：`dl.google.com` / `repo.maven.apache.org` **必须绕过代理**（`systemProp.http.nonProxyHosts`），而 `github.com` 直连不通、**必须走代理** |
+| Kotlin 增量编译 | 本机 pub 缓存在 C:、工程在 D:，跨盘会炸（`this and base files have different roots`），所以 `android/gradle.properties` 里关掉了 `kotlin.incremental` |
+
+## 5. 改脚本时的约定
+
+- 脚本是**唯一入口**：App 的「启动 / 修复 / 重启 / 停止」按钮调的就是 `scripts\comfyhub.ps1`，
+  命令行和 App 行为必须一致，不要在 Dart 侧另写一份启动逻辑。
+- 新增脚本请放进 `scripts\`、用 `pwsh -File scripts\xxx.ps1 <动作>` 的形式，
+  并在 README 的「脚本速查」表里登记。
+- PowerShell 坑：`& script.ps1` 的 **stdout 会成为表达式的返回值**，
+  在 `$ok = & other.ps1 …` 这种地方必须 `| Out-Null`，否则返回值被输出数组污染、判断永远为真。
+
+## 6. 改界面时的两条硬约定
+
+- **列表一律用 `lib/widgets/adaptive_layout.dart` 里的多列组件**，不要自己写单列 `ListView`：
+  提示词 / 标签这种高度接近的用 `AdaptiveColumnList`，设置页这种卡片高度差几倍的用
+  `AdaptiveColumns`。规则是**列数 = 可用宽度 / 550**（最多 4 列，窄了退回单列），
+  对应回归用例 `test/adaptive_layout_test.dart`。
+- **界面语言只能有一种**：App 自己的文案本来就是中文，但文本框选择菜单（复制 / 全选）、
+  返回按钮 tooltip 这类**系统文案来自 `MaterialLocalizations`** ——
+  `lib/app.dart` 里必须留着 `locale: zh_CN` + `flutter_localizations` 的三个 delegate，
+  少一个就会在中文界面里冒出英文的 "Copy / Select all"（用例 `test/localization_test.dart`）。
+- 右键菜单统一用 `showContextMenuAt(...)` + `contextMenuItem(...)`（`lib/widgets/common.dart`），
+  自己算 `RelativeRect` 容易把菜单弹到屏幕角上。
+- 开关行别直接用 `SwitchListTile(contentPadding: EdgeInsets.zero)` 贴卡片边缘：
+  用 `settings_page.dart` 里的 `_SwitchRow`（自带内边距 + Material 底色，
+  底色不能用 `Container` 的 decoration，否则会盖掉水波纹并触发断言）。
