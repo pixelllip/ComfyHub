@@ -217,6 +217,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQ
 | `scripts\server.ps1 fatjar` | 打成一个独立 jar |
 | `scripts\autorun-app.ps1` | 一键全流程：服务 → 分析 → 构建（Release）→ 启动 App |
 | `scripts\pack-release.ps1` | **打包发布版**：按 `packaging\manifest.json` 把 App + Kotlin 后端 + 便携版 MySQL + JRE 装配成 `dist\ComfyHub\`（`-Zip` 顺带压包） |
+| `scripts\ensure-runtime.ps1` | **运行时一键就绪**：检测不到的运行时自动下载安装（Java 下便携版塞进 `<根>\jre`；pwsh / VC++ 走 winget）。`-CheckOnly` 只检测 |
 | `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
 | `scripts\check-silent-start.ps1` | **静默启动自测**：启动服务的同时盯屏，报告有没有弹出 cmd / 控制台窗口（加 `-Restart` 从零走一遍） |
 | `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成） |
@@ -597,9 +598,27 @@ pwsh -File scripts\pack-release.ps1 -Zip     # 顺带压成 dist\ComfyHub.zip
 | --- | --- | --- |
 | **PowerShell 7 (`pwsh`)** | App 用它执行 `scripts\*.ps1`，脚本之间也**互相调 `pwsh`** | ❌ 要装：`winget install --id Microsoft.PowerShell` |
 | **VC++ 2015-2022 x64 可再发行组件** | `mysqld.exe` 依赖 `vcruntime140.dll` / `vcruntime140_1.dll` / `msvcp140.dll`，而便携版 MySQL 的 zip **不带**这几个 DLL | ❌ 要装：`winget install --id Microsoft.VCRedist.2015+.x64` |
-| Java 21 运行时 | Kotlin 后端（JVM） | ✅ `<根>\jre` |
+| Java 21 运行时 | Kotlin 后端（JVM） | ✅ `<根>\jre`；**没有就自动下载**（见下） |
 | MySQL 8.4（免安装版） | 数据库本体 | ✅ `<根>\mysql` |
 | Windows 10 / 11 x64 | 桌面端 + 脚本（WMI / CIM） | — |
+
+#### 运行时能自动补齐：`ensure-runtime.ps1`
+
+```powershell
+pwsh -File scripts\ensure-runtime.ps1            # 检测 + 缺什么装什么
+pwsh -File scripts\ensure-runtime.ps1 -CheckOnly # 只看不装
+pwsh -File scripts\ensure-runtime.ps1 -JavaOnly  # 只保证 Java
+```
+
+- **Java 全自动**：没有（或版本低于 21）就下载一份便携版塞进 `<根>\jre` —— **免安装、免管理员**，
+  带 sha256 校验。下载源按顺序试：Adoptium 官方（Temurin JRE，约 47MB，有官方校验值）→
+  华为云 OpenJDK 21.0.2（国内可达性好，约 190MB）→ Adoptium 重定向 → Microsoft OpenJDK。
+  每个源下载前先做一次 1KB 探测，连不上就立刻换下一个，不会卡在超时上。
+- **`comfyhub.ps1 up` 会顺带做这件事**：后端是 JVM 程序，缺 Java 时 App 启动会先自动补上
+  （已经有 ≥21 的 java 时只是几次文件检查，不联网）。设 `COMFYHUB_NO_DOWNLOAD=1` 可关闭。
+- **pwsh / VC++ 是系统级安装**，脚本用 `winget` 自动装（VC++ 需要管理员，会弹 UAC）；
+  没有 winget 就打印官方下载地址。`up` 阶段**不会**碰这两个（避免启动时弹 UAC），
+  只用 `ensure-runtime.ps1` 显式跑（或失败提示里给出的命令）来装。
 
 > **PowerShell 版本是个坑**：Windows 自带的 `powershell.exe` 是 5.1，**不算数** ——
 > `comfyhub.ps1` / `mysql.ps1` / `server.ps1` 之间有 15 处 `& pwsh -NoProfile -File ...` 互调，

@@ -71,7 +71,8 @@
         "name": "Java 21 运行时",
         "bundled": true,
         "location": "jre",
-        "why": "Kotlin 后端跑在 JVM 上（目标机器不需要装 JDK）"
+        "autoDownload": "scripts\\ensure-runtime.ps1",
+        "why": "Kotlin 后端跑在 JVM 上。发布包自带 <根>\\jre；万一缺了，scripts\\ensure-runtime.ps1 会自动下载一份便携版塞进去（免安装、免管理员，带 sha256 校验），comfyhub.ps1 up 也会顺带补"
       },
       {
         "name": "MySQL 8.4（免安装版）",

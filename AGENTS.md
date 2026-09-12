@@ -132,3 +132,26 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 - **首次运行必须能自动建库**：`mysql.ps1` 的 `Do-Start` 发现 `<实例目录>\data\mysql` 不存在时，
   会先跑一次 `Do-Init -SkipSeed` 再启动（发布包解压出来没有数据目录，少了这一步首次启动必然失败）。
   自动初始化**故意不灌演示数据**（不能往用户库里塞演示提示词），只有手敲 `mysql.ps1 init` 才灌。
+
+## 8. 运行时自动补齐 + 一个血泪教训
+
+`scripts\ensure-runtime.ps1`（实现都在 `scripts\runtime-deps.ps1`，被 `comfyhub.ps1` dot-source）
+负责"缺运行时自动装"：
+
+- **Java**：`Ensure-JavaRuntime` 全自动 —— 下便携版塞进 `<根>\jre`，免安装免管理员，带 sha256。
+  源顺序：Adoptium 官方(47MB,有官方 sha256) → 华为云 OpenJDK 21.0.2(190MB,sha256 硬编码在代码里)
+  → Adoptium 重定向 → Microsoft OpenJDK。每个源先 `Test-UrlReachable`(Range 取 1KB) 探测再下。
+  `comfyhub.ps1 up` 会调它；`COMFYHUB_NO_DOWNLOAD=1` 关闭。
+- **pwsh / VC++**：系统级安装，走 winget；`up` 阶段不碰（免得启动弹 UAC），只由 `ensure-runtime.ps1` 显式装。
+
+> **⚠ 变量的坑：永远不要给变量起名 `$home`、`$input`、`$host`、`$pid`、`$profile`、`$args`。**
+> PowerShell 里自动变量**大小写不敏感**，`$home = ...` 会直接抛
+> "Cannot overwrite variable HOME because it is read-only or constant"；
+> 而更可怕的是**漏改了一处引用**：本仓库真的写出过
+> `$javaHome = ...`（定义）却仍用 `$home`（引用）的代码，于是
+> `Move-Item $home -Destination <解压目标>` 去搬 **`C:\Users\<用户>\` 整个用户目录**，
+> 把用户主目录下的 10 个文件（`.gitconfig` / `.npmrc` / `.claude.json` …）搬进了发布包。
+> 幸好目录被占用才没造成更大破坏。
+> 所以 `Expand-JavaArchive` 里加了一条**安全闸**：只允许搬运 staging 目录内的路径，
+> 否则当场抛异常（`$javaHome.StartsWith($stage, OrdinalIgnoreCase)`）。
+> 写任何 `Move-Item` / `Remove-Item -Recurse` 之前，先确认目标是"算出来的、可验证的"路径。

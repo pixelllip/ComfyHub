@@ -285,7 +285,19 @@ function Install-Jre {
     param([string]$Target)
 
     $jdk = Resolve-Jdk -Explicit $JdkHome
-    if (-not $jdk) { throw '找不到可用的 JDK 21~23，无法准备 JRE。用 -JdkHome 指定。' }
+    if (-not $jdk) {
+        # 本机连 JDK 都没有 → 借 ensure-runtime.ps1 的自动下载能力拿一份便携版，
+        # 免得"想打个包还得先自己装 JDK"。
+        $runtimeHelper = Join-Path $PSScriptRoot 'runtime-deps.ps1'
+        if (Test-Path $runtimeHelper) {
+            if (-not (Get-Command Ensure-JavaRuntime -ErrorAction SilentlyContinue)) { . $runtimeHelper }
+            Say '  本机找不到 JDK 21~23，自动下载一份便携版运行时…' 'Yellow'
+            $javaExe = Ensure-JavaRuntime -ProjectRoot $ProjectRoot
+            # Ensure-JavaRuntime 返回的是 ...\jre\bin\java.exe，这里要的是运行时根目录
+            if ($javaExe) { $jdk = Split-Path -Parent (Split-Path -Parent $javaExe) }
+        }
+    }
+    if (-not $jdk) { throw '找不到可用的 JDK 21~23，无法准备 JRE。用 -JdkHome 指定，或先跑 scripts\ensure-runtime.ps1。' }
     Say "  来源 JDK: $jdk" 'DarkGray'
 
     $jmods = Join-Path $jdk 'jmods'

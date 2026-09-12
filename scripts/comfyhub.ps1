@@ -487,6 +487,17 @@ function Do-Up {
     # 不带 -OwnerPid 的手工 up = 用户自己接管，撤掉之前 App 留下的守护
     if ($OwnerPid -le 0) { Clear-OwnerWatchdog }
 
+    # 后端是 JVM 程序：没有 Java 就先自动下一个便携版（免安装、免管理员）。
+    # 已经有 >=21 的 java 时这里只是几次文件检查 + 一次 java -version，不会联网。
+    # COMFYHUB_NO_DOWNLOAD=1 可以关掉这个行为（离线环境/不想让它自己下东西时）。
+    if ((Get-Command Ensure-JavaRuntime -ErrorAction SilentlyContinue) -and -not $env:COMFYHUB_NO_DOWNLOAD) {
+        try {
+            Ensure-JavaRuntime -ProjectRoot $ProjectRoot -Quiet | Out-Null
+        } catch {
+            Say "  提示: Java 运行时自动获取失败（$($_.Exception.Message)）" 'Yellow'
+        }
+    }
+
     if (-not (Start-MySqlPart)) { Show-Status | Out-Null; Show-RuntimeHintsIfAvailable; exit 1 }
     if (-not (Start-ApiPart))   { Show-Status | Out-Null; Show-RuntimeHintsIfAvailable; exit 1 }
     if ($WithApp) { Start-AppPart | Out-Null }

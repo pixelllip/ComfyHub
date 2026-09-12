@@ -86,3 +86,6 @@ __pycache__/
 # 发布包装配输出（scripts\pack-release.ps1 的产物，几百 MB，不进版本库）
 /dist/
 
+# 自动下载的 Java 运行时（scripts\ensure-runtime.ps1 装到 <根>\jre，约 200MB）
+/jre/
+
