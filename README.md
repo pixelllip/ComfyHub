@@ -127,6 +127,7 @@ viewer/
 │   ├── silent-process.ps1        # ★ 后台进程「无窗口 + 脱离进程树」启动（MySQL / 后端共用）
 │   ├── mysql.ps1                 # 只操作 MySQL（init/start/stop/status/cli/seed/reset/move）
 │   ├── server.ps1                # 只操作后端（自动挑选 JDK 21，自动确保数据库在跑）
+│   ├── pack-release.ps1          # ★ 打包发布版：App + 后端 + 便携版 MySQL + JRE → dist\ComfyHub\
 │   ├── autorun-app.ps1           # 一键：服务 → 分析 → 构建（Release）→ 启动 App
 │   ├── dev-app.ps1               # ★ 前端开发用：服务 → flutter run --debug（热重载）
 │   ├── e2e-capture-test.ps1      # ★ 自动捕获端到端自测（用假 ComfyUI，不跑真实生成）
@@ -135,6 +136,8 @@ viewer/
 │   ├── e2e/                      # 自测用的假 ComfyUI 与测试 PNG 生成器
 │   └── make-sample-media.ps1     # 生成演示用图片 / 音频
 │
+├── packaging/manifest.json       # ★ 软件打包清单：发布包里装哪些件、各放在哪（pack-release.ps1 读它）
+├── dist/                         # 发布包装配输出（运行时生成，已 gitignore）
 ├── comfyui/comfyhub_capture/     # ★（可选）ComfyUI 自定义节点：跑完立刻推送捕获
 ├── docs/comfyui-capture.md       # ★ 三种捕获方式的详细说明与排错
 ├── docs/android-agp9-builtin-kotlin-migration.md  # ★ AGP 9.1 / 内建 Kotlin 迁移记录与踩坑
@@ -213,6 +216,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQ
 | `scripts\server.ps1 run` | 后端前台运行（Ctrl+C 停） |
 | `scripts\server.ps1 fatjar` | 打成一个独立 jar |
 | `scripts\autorun-app.ps1` | 一键全流程：服务 → 分析 → 构建（Release）→ 启动 App |
+| `scripts\pack-release.ps1` | **打包发布版**：按 `packaging\manifest.json` 把 App + Kotlin 后端 + 便携版 MySQL + JRE 装配成 `dist\ComfyHub\`（`-Zip` 顺带压包） |
 | `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
 | `scripts\check-silent-start.ps1` | **静默启动自测**：启动服务的同时盯屏，报告有没有弹出 cmd / 控制台窗口（加 `-Restart` 从零走一遍） |
 | `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成） |
@@ -550,11 +554,81 @@ pwsh -File scripts\dev-app.ps1
 | --- | --- | --- |
 | `lib/` 里的 Dart 代码 | `scripts\dev-app.ps1` → 之后按 `r` | 首次 30~60s，热重载 1~2s |
 | `pubspec.yaml` 依赖 / `windows/` 原生代码 | `scripts\dev-app.ps1`（会重新编译）/ `autorun-app.ps1` | 分钟级 |
-| 要出正式产物 / 交给别人用 | `scripts\autorun-app.ps1`（Release） | 几分钟 |
+| 要出正式产物 / 交给别人用 | `scripts\pack-release.ps1`（Release + 后端 + MySQL + JRE 装配成一个目录） | 几分钟（首次拷 MySQL 会久一点） |
 
 - debug 产物在 `build\windows\...\runner\Debug\`，Release 在 `...\Release\`，两者互不影响；
   脚本启动 App 时**优先挑 Release**，所以做过 debug 调试也不会误启动一个 debug 版。
 - 后端不用管：App 启动时自己会拉起（见第 5 节），`dev-app.ps1` 也会先探一次。
+
+### 9.2 出发布包：`pack-release.ps1`
+
+`flutter build windows --release` 的产物（`build\windows\x64\runner\Release\`）**只有一个 App**，
+里面没有后端、没有数据库、没有 Java 运行时 —— 直接把这个目录拷给别人跑不起来：
+
+- Kotlin 后端在 `server\build\install\` 下，那是 Gradle 的**构建中间产物**，不会跟着 Release 目录走；
+- MySQL 的 `mysqld.exe` 以前只在 `D:\tools\mysql\...` 这种**本机绝对路径**下找，换台机器直接崩；
+- 后端是 JVM 程序，不能假设目标机器装了 JDK。
+
+所以「交给别人用」要走 `pack-release.ps1`。它按 `packaging\manifest.json`（**软件打包清单**）
+把这几样装配到同一个目录：
+
+```powershell
+pwsh -File scripts\pack-release.ps1          # → dist\ComfyHub\
+pwsh -File scripts\pack-release.ps1 -Zip     # 顺带压成 dist\ComfyHub.zip
+```
+
+| 清单里的件 | 发布包里的位置 | 说明 |
+| --- | --- | --- |
+| Flutter App | `<根>\viewer.exe` + `data\` | 必须铺在**根目录**：App 从 exe 所在目录往上找 `scripts\comfyhub.ps1` 来认根目录 |
+| Kotlin 后端 | `<根>\server\` | `gradle installDist` 的 `bin\` + `lib\`（入口 `bin\comfy-hub-server.bat`） |
+| Java 运行时 | `<根>\jre\` | 优先 `jlink` 出精简运行时；本机 JDK 没有 `jmods`（Android Studio 的 JBR 就没有）就整份拷 |
+| 便携版 MySQL | `<根>\mysql\` | 默认剪掉调试符号等：`mysqld.pdb` 一个就 368MB，裁完约 400MB（`-NoPrune` 可关） |
+| 生命周期脚本 | `<根>\scripts\` | **整个目录**都要：`comfyhub.ps1` 依赖 `mysql.ps1` / `server.ps1` / `silent-process.ps1` / `watch-owner.ps1` |
+| SQL 脚本 | `<根>\db\` | 首次初始化要导入 `schema.sql` |
+
+#### 运行时依赖：发布包带不走的那几样
+
+打包只把 **Java 运行时**和 **MySQL 本体**装进了包里，其余得目标机器自己装 ——
+缺了服务起不来，而且报错往往没头没尾（`mysqld 启动超时` / `pwsh 不是内部或外部命令`）。
+`scripts\comfyhub.ps1 doctor` 会把它们逐个报出来；`up` 失败时也会自动提示缺哪个、怎么装
+（缺的都在 `packaging\manifest.json` 的 `runtimeRequirements` 里登记）。
+
+| 依赖 | 谁需要它 | 随包携带？ |
+| --- | --- | --- |
+| **PowerShell 7 (`pwsh`)** | App 用它执行 `scripts\*.ps1`，脚本之间也**互相调 `pwsh`** | ❌ 要装：`winget install --id Microsoft.PowerShell` |
+| **VC++ 2015-2022 x64 可再发行组件** | `mysqld.exe` 依赖 `vcruntime140.dll` / `vcruntime140_1.dll` / `msvcp140.dll`，而便携版 MySQL 的 zip **不带**这几个 DLL | ❌ 要装：`winget install --id Microsoft.VCRedist.2015+.x64` |
+| Java 21 运行时 | Kotlin 后端（JVM） | ✅ `<根>\jre` |
+| MySQL 8.4（免安装版） | 数据库本体 | ✅ `<根>\mysql` |
+| Windows 10 / 11 x64 | 桌面端 + 脚本（WMI / CIM） | — |
+
+> **PowerShell 版本是个坑**：Windows 自带的 `powershell.exe` 是 5.1，**不算数** ——
+> `comfyhub.ps1` / `mysql.ps1` / `server.ps1` 之间有 15 处 `& pwsh -NoProfile -File ...` 互调，
+> 机器上只有 5.1 时这些子调用会失败。App 若只找到 5.1，会在启动页日志里明确告警并给出安装命令。
+
+**发布包是便携式的**（免安装、免管理员）：解压出来整个目录就是运行时根目录，可整体搬到任意盘/目录。
+可写数据都落在根目录内，卸载 = 删目录：
+
+| 用途 | 默认位置 | 怎么改 |
+| --- | --- | --- |
+| 数据库实例 | `<根>\.mysql\`（`data\` + `my.ini` + 错误日志） | `pwsh -File scripts\mysql.ps1 move -DataDir <新位置>`；或临时用 `-DataDir` / `COMFYHUB_MYSQL_DIR` |
+| 生成产物 | `<根>\storage\`（`media\` + `tmp\`） | 后端启动时由 `server.ps1` 显式设成 `COMFYHUB_STORAGE`；要换位置就预先设这个环境变量 |
+| 日志 / PID | `<根>\.run\` | — |
+
+拿到包的人双击 `viewer.exe` 即可：App 会自己把 MySQL + 后端拉起来，首次会自动初始化数据库（稍等一会儿）。
+命令行等价写法 `pwsh -File scripts\comfyhub.ps1 up -WithApp`；体检 `... doctor`；全停 `... down`。
+
+> 装配完脚本会**自检** `viewer.exe`、`server\bin\comfy-hub-server.bat`、`mysql\bin\mysqld.exe`、
+> `jre\bin\java.exe`、`db\schema.sql` 是否都在，缺任何一个都以退出码 1 结束 ——
+> 不会悄悄给你一个跑不起来的包。同样的说明也写在包里的 `BUILD-INFO.txt`。
+
+为了让同一个脚本在**源码树**和**发布包**两种布局下都能用，路径解析都做成"两边都认"：
+
+| 找什么 | 源码树 | 发布包 |
+| --- | --- | --- |
+| 后端启动脚本 | `server\build\install\comfy-hub-server\bin\` | `<根>\server\bin\`（`server.ps1` 会因此跳过 Gradle 构建） |
+| `mysqld.exe` / `mysqladmin.exe` | `D:\tools\mysql\...` | `<根>\mysql\bin\`（`mysql.ps1` / `comfyhub.ps1` / `server.ps1` 三处都优先认它） |
+| Java | 本机 JDK 21~23 | `<根>\jre`（`server.ps1` 的 `Resolve-Jdk` 优先用它） |
+| `viewer.exe` | `build\windows\...\runner\Release\` | `<根>\viewer.exe` |
 
 ---
 

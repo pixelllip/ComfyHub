@@ -1,0 +1,173 @@
+{
+  "name": "ComfyHub",
+  "displayName": "ComfyHub — ComfyUI 提示词与生成产物管理",
+  "manifestVersion": 1,
+  "generatedBy": "scripts/pack-release.ps1",
+  "platform": "windows-x64",
+
+  "//": "==========================================================================",
+  "//_": "软件打包清单：scripts\\pack-release.ps1 按本文件装配发布包。",
+  "//__": "新增一个要进发布包的东西 = 往 components 里加一条，再在脚本的 switch 里实现对应 kind。",
+  "//___": "==========================================================================",
+
+  "runtimeLayout": {
+    "comment": [
+      "发布包是**便携式**的：解压后整个目录就是运行时根目录，可以整体挪到任意盘/目录，",
+      "不需要安装、不需要管理员权限。所有可写数据都落在根目录内，卸载 = 删目录。",
+      "根目录的判定方式：App 从 viewer.exe 所在目录往上找 scripts\\comfyhub.ps1（见",
+      "lib\\core\\backend_launcher.dart 的 detectProjectRoot），脚本则用自己所在目录的上级。"
+    ],
+    "readOnly": {
+      "backend": "server",
+      "mysqlBinaries": "mysql",
+      "jre": "jre",
+      "scripts": "scripts",
+      "sql": "db",
+      "comfyExtension": "comfyui"
+    },
+    "writable": {
+      "database": ".mysql",
+      "artifacts": "storage",
+      "logs": ".run"
+    },
+    "databaseLocation": {
+      "default": ".mysql",
+      "overrideOrder": [
+        "mysql.ps1 -DataDir <路径>",
+        "环境变量 COMFYHUB_MYSQL_DIR",
+        "<根>\\.mysql-location.json 里的 dataDir",
+        "默认 <根>\\.mysql"
+      ],
+      "mover": "pwsh -File scripts\\mysql.ps1 move -DataDir <新位置>"
+    },
+    "artifactsLocation": {
+      "default": "storage",
+      "envVar": "COMFYHUB_STORAGE",
+      "setBy": "scripts\\server.ps1 启动后端时显式设成 <根>\\storage（后端 Config.kt 的 defaultStorageDir 只是兜底）",
+      "subdirs": ["media", "tmp"]
+    }
+  },
+
+  "runtimeRequirements": {
+    "comment": [
+      "发布包只能带走 Java 运行时和 MySQL 本体（下面 bundled=true 的那两条）。",
+      "其余必须目标机器自己装 —— 缺了服务起不来，而且报错往往没头没尾。",
+      "scripts\\runtime-deps.ps1 会在 `comfyhub.ps1 up` 失败时和 `comfyhub.ps1 doctor` 里把这几项报出来。"
+    ],
+    "required": [
+      {
+        "name": "PowerShell 7 (pwsh)",
+        "bundled": false,
+        "why": "App 用 pwsh 执行 scripts\\comfyhub.ps1，脚本之间也互相调 pwsh；Windows 自带的 powershell.exe 5.1 不够",
+        "install": "winget install --id Microsoft.PowerShell --source winget"
+      },
+      {
+        "name": "Microsoft Visual C++ 2015-2022 Redistributable (x64)",
+        "bundled": false,
+        "why": "mysqld.exe 是 MSVC 编的，依赖 vcruntime140.dll / vcruntime140_1.dll / msvcp140.dll；便携版 MySQL 的 zip 不带这几个 DLL",
+        "install": "winget install --id Microsoft.VCRedist.2015+.x64"
+      },
+      {
+        "name": "Java 21 运行时",
+        "bundled": true,
+        "location": "jre",
+        "why": "Kotlin 后端跑在 JVM 上（目标机器不需要装 JDK）"
+      },
+      {
+        "name": "MySQL 8.4（免安装版）",
+        "bundled": true,
+        "location": "mysql",
+        "why": "数据库本体，随包携带，不需要单独安装"
+      },
+      {
+        "name": "Windows 10 / 11 x64",
+        "bundled": false,
+        "why": "桌面端只有 Windows 构建；脚本里的 WMI / CIM 调用也依赖 Windows"
+      }
+    ]
+  },
+
+  "components": [
+    {
+      "id": "app",
+      "title": "Flutter 桌面 App（Release）",
+      "kind": "flutter_release",
+      "required": true,
+      "source": "build/windows/x64/runner/Release",
+      "target": ".",
+      "produces": ["viewer.exe", "flutter_windows.dll", "data/"],
+      "note": "flutter build windows --release 的产物整体铺到根目录，viewer.exe 必须在根目录，App 才认得出根目录。"
+    },
+    {
+      "id": "backend",
+      "title": "Kotlin 后端（gradle installDist）",
+      "kind": "gradle_install_dist",
+      "required": true,
+      "source": "server",
+      "target": "server",
+      "produces": ["bin/comfy-hub-server.bat", "bin/comfy-hub-server", "lib/*.jar"],
+      "note": "之前发布包只有 App，后端得靠用户自己装 JDK + 跑 Gradle；现在把 installDist 的产物一起装进来。"
+    },
+    {
+      "id": "jre",
+      "title": "Java 运行时（后端专用）",
+      "kind": "jdk_runtime",
+      "required": true,
+      "target": "jre",
+      "note": "后端是 JVM 程序，目标机器不能假设装了 JDK。优先 jlink 出精简运行时；本机 JDK 没有 jmods 时退化为拷贝一份 JRE。scripts\\server.ps1 的 Resolve-Jdk 会优先用 <根>\\jre。"
+    },
+    {
+      "id": "mysql",
+      "title": "便携版 MySQL（免安装）",
+      "kind": "mysql_portable",
+      "required": true,
+      "target": "mysql",
+      "prune": [
+        "**/*.pdb",
+        "**/*.lib",
+        "include/**",
+        "docs/**",
+        "lib/plugin/debug/**",
+        "**/*-debug.dll",
+        "lib/mecab/dic/ipadic_euc-jp/**",
+        "lib/mecab/dic/ipadic_sjis/**"
+      ],
+      "note": "之前 mysqld.exe 只在 D:\\tools\\mysql 下找，换台机器就崩。拷一份进发布包，并剪掉调试符号（mysqld.pdb 单个就 368MB）。scripts\\mysql.ps1 的 Resolve-MySqlHome 会优先用 <根>\\mysql。"
+    },
+    {
+      "id": "scripts",
+      "title": "生命周期脚本（App 靠它拉起 MySQL + 后端）",
+      "kind": "copy_tree",
+      "required": true,
+      "source": "scripts",
+      "target": "scripts",
+      "note": "整个 scripts 目录都要，别只挑几个：comfyhub.ps1 依赖 mysql.ps1 / server.ps1 / silent-process.ps1 / watch-owner.ps1。"
+    },
+    {
+      "id": "db",
+      "title": "SQL 脚本（建库建表 / 迁移 / 种子数据）",
+      "kind": "copy_tree",
+      "required": true,
+      "source": "db",
+      "target": "db",
+      "note": "mysql.ps1 init 会导入 <根>\\db\\schema.sql，缺了首次初始化就失败。"
+    },
+    {
+      "id": "comfyui",
+      "title": "ComfyUI 捕获扩展 (comfyhub_capture)",
+      "kind": "copy_tree",
+      "required": false,
+      "source": "comfyui",
+      "target": "comfyui",
+      "note": "要装到 ComfyUI 的 custom_nodes 里才生效，发布包里只是一份源，方便用户复制。"
+    },
+    {
+      "id": "readme",
+      "title": "使用说明",
+      "kind": "copy_file",
+      "required": false,
+      "source": "README.md",
+      "target": "README.md"
+    }
+  ]
+}

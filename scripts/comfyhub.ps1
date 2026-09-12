@@ -60,6 +60,10 @@ New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
 $SilentHelper = Join-Path $Scripts 'silent-process.ps1'
 if (Test-Path $SilentHelper) { . $SilentHelper }
 
+# 运行时依赖体检（缺 pwsh / VC++ 运行时时给出安装提示），见 scripts\runtime-deps.ps1
+$RuntimeHelper = Join-Path $Scripts 'runtime-deps.ps1'
+if (Test-Path $RuntimeHelper) { . $RuntimeHelper }
+
 # ---------------------------------------------------------------------------
 #  输出编码
 # ---------------------------------------------------------------------------
@@ -173,6 +177,11 @@ function Resolve-MysqlBin([string]$exe) {
     $mysqlHome = $env:COMFYHUB_MYSQL_HOME
     $cands = @()
     if ($mysqlHome) { $cands += (Join-Path $mysqlHome "bin\$exe") }
+
+    # 发布包自带的便携版（<根>\mysql）要排在 D:\tools 前面：
+    # 装配好的发布包里有自己那份 MySQL，去找开发机路径的话换台机器就找不到，
+    # Test-MySqlAlive 会永远为假 → 状态页明明库在跑却报"未运行"。
+    $cands += (Join-Path $ProjectRoot "mysql\bin\$exe")
 
     foreach ($root in @('D:\tools\mysql', 'C:\tools\mysql')) {
         if (-not (Test-Path $root)) { continue }
@@ -337,8 +346,16 @@ function Start-ApiPart {
     return $false
 }
 
-function Start-AppPart {
-    # 优先 Release 产物：debug 版（scripts\dev-app.ps1 跑出来的）只用于热重载调试
+function Resolve-AppExe {
+    <#
+      三种布局，按优先级：
+        1. 发布包：<根>\viewer.exe —— scripts\pack-release.ps1 装配出来的，exe 就在根目录
+        2. Release 构建产物：build\windows\...\runner\Release\viewer.exe
+        3. 兜底：build\windows 下最新的 viewer.exe（debug 版，只用于热重载调试）
+    #>
+    $packaged = Join-Path $ProjectRoot 'viewer.exe'
+    if (Test-Path -LiteralPath $packaged) { return (Get-Item -LiteralPath $packaged) }
+
     $exe = Get-ChildItem (Join-Path $ProjectRoot 'build\windows') -Filter 'viewer.exe' -Recurse -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -like '*\Release\*' } |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -346,8 +363,13 @@ function Start-AppPart {
         $exe = Get-ChildItem (Join-Path $ProjectRoot 'build\windows') -Filter 'viewer.exe' -Recurse -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
     }
+    return $exe
+}
+
+function Start-AppPart {
+    $exe = Resolve-AppExe
     if (-not $exe) {
-        Say '  找不到 viewer.exe，先执行: pwsh -File scripts\autorun-app.ps1' 'Yellow'
+        Say '  找不到 viewer.exe，先执行: pwsh -File scripts\autorun-app.ps1（或打包: pwsh -File scripts\pack-release.ps1）' 'Yellow'
         return $false
     }
     if (Get-AppProcess) { Say '  App 已经在跑了。' 'DarkGray'; return $true }
@@ -439,6 +461,23 @@ function Start-OwnerWatchdog([int]$Owner) {
     return $true
 }
 
+function Show-RuntimeHintsIfAvailable {
+    <#
+      启动失败时按需给"还缺哪个运行时、怎么装"的提示。
+      runtime-deps.ps1 不在（比如只拷了部分脚本）就静默跳过，不影响启动逻辑本身。
+    #>
+    if (-not (Get-Command Show-RuntimeFailureHints -ErrorAction SilentlyContinue)) { return }
+
+    $binDir = $null
+    try {
+        $mysqld = Resolve-MysqlBin 'mysqld.exe'
+        if ($mysqld) { $binDir = Split-Path -Parent $mysqld }
+    } catch { }
+
+    # Java 交给 runtime-deps.ps1 自己解析（发布包 <根>\jre → PATH → 本机常见 JDK 位置）
+    Show-RuntimeFailureHints -ProjectRoot $ProjectRoot -MySqlBinDir $binDir | Out-Null
+}
+
 function Do-Up {
     $chain = if ($WithApp) { 'MySQL → 后端 → App' } else { 'MySQL → 后端' }
     Say ''
@@ -448,8 +487,8 @@ function Do-Up {
     # 不带 -OwnerPid 的手工 up = 用户自己接管，撤掉之前 App 留下的守护
     if ($OwnerPid -le 0) { Clear-OwnerWatchdog }
 
-    if (-not (Start-MySqlPart)) { Show-Status | Out-Null; exit 1 }
-    if (-not (Start-ApiPart))   { Show-Status | Out-Null; exit 1 }
+    if (-not (Start-MySqlPart)) { Show-Status | Out-Null; Show-RuntimeHintsIfAvailable; exit 1 }
+    if (-not (Start-ApiPart))   { Show-Status | Out-Null; Show-RuntimeHintsIfAvailable; exit 1 }
     if ($WithApp) { Start-AppPart | Out-Null }
 
     if ($OwnerPid -gt 0) {
@@ -516,14 +555,24 @@ function Do-Doctor {
     Say '  ComfyHub 环境体检' 'White'
     Say '  ────────────────────────────────────────────────────────────'
 
+    # 后端启动脚本 / App 的路径有两种布局（源码树 vs 装配好的发布包），这里都探一遍
+    $packagedBat = Join-Path $ProjectRoot 'server\bin\comfy-hub-server.bat'
+    $gradleBat   = Join-Path $ProjectRoot 'server\build\install\comfy-hub-server\bin\comfy-hub-server.bat'
+    $batToShow   = if (Test-Path $packagedBat) { $packagedBat } else { $gradleBat }
+    $appExe      = Resolve-AppExe
+    $layout      = if (Test-Path (Join-Path $ProjectRoot 'viewer.exe')) { '发布包（便携式）' } else { '源码树' }
+
+    # 布局是"是什么"不是"在不在"，不能塞进下面那个 Test-Path 列表里（会被报成"缺失"）
+    Say ("  {0,-16} {1}" -f '运行布局', $layout) 'Gray'
+
     foreach ($p in @(
             @{ n = '项目根目录';    v = $ProjectRoot },
             @{ n = 'db\schema.sql'; v = (Join-Path $ProjectRoot 'db\schema.sql') },
             @{ n = 'MySQL 实例目录'; v = $MysqlInstanceDir },
             @{ n = 'MySQL 数据目录'; v = (Join-Path $MysqlDataPath 'mysql') },
             @{ n = 'MySQL 错误日志'; v = $MysqlErrorLog },
-            @{ n = '后端安装目录';   v = (Join-Path $ProjectRoot 'server\build\install\comfy-hub-server\bin\comfy-hub-server.bat') },
-            @{ n = '桌面 App';      v = (Join-Path $ProjectRoot 'build\windows\x64\runner\Release\viewer.exe') }
+            @{ n = '后端启动脚本';   v = $batToShow },
+            @{ n = '桌面 App';      v = $(if ($appExe) { $appExe.FullName } else { (Join-Path $ProjectRoot 'viewer.exe') }) }
         )) {
         $ok = Test-Path $p.v
         Say ("  {0,-16} {1}" -f $p.n, $(if ($ok) { 'OK' } else { "缺失: $($p.v)" })) $(if ($ok) { 'Green' } else { 'Yellow' })
@@ -539,6 +588,18 @@ function Do-Doctor {
     foreach ($port in @($MysqlPort, $ApiPort)) {
         $listen = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
         Say ("  {0,-16} {1}" -f "端口 $port", $(if ($listen) { "被 PID $($listen[0].OwningProcess) 占用" } else { '空闲' })) 'Gray'
+    }
+
+    # 运行时依赖：发布包带不走的那几样（pwsh / VC++ 运行时）在这里现形
+    Say ''
+    Say '  运行时依赖' 'White'
+    Say '  ────────────────────────────────────────────────────────────'
+    if (Get-Command Show-RuntimeReport -ErrorAction SilentlyContinue) {
+        $mysqldForCheck = Resolve-MysqlBin 'mysqld.exe'
+        $binDirForCheck = if ($mysqldForCheck) { Split-Path -Parent $mysqldForCheck } else { $null }
+        Show-RuntimeReport -ProjectRoot $ProjectRoot -MySqlBinDir $binDirForCheck | Out-Null
+    } else {
+        Say '  （找不到 scripts\runtime-deps.ps1，跳过运行时体检）' 'Yellow'
     }
     Say ''
 }

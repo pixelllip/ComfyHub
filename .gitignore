@@ -83,3 +83,6 @@ __pycache__/
 # Kotlin 增量编译缓存
 /server/.kotlin/
 
+# 发布包装配输出（scripts\pack-release.ps1 的产物，几百 MB，不进版本库）
+/dist/
+

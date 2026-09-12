@@ -35,6 +35,13 @@ $OutLog      = Join-Path $LogDir 'server.out.log'
 $ErrLog      = Join-Path $LogDir 'server.err.log'
 $PidFile     = Join-Path $LogDir 'server.pid'
 
+# 后端启动脚本有两个可能的布局：
+#   · 开发布局：Gradle installDist 的产物     <根>\server\build\install\comfy-hub-server\bin\
+#   · 发布包布局：scripts\pack-release.ps1 装配的 <根>\server\bin\（只有 bin\ + lib\，没有 Gradle 源码）
+# 两边都认，App / 脚本在源码树里和装配好的发布包里行为一致。
+$GradleServerBat   = Join-Path $ServerDir 'build\install\comfy-hub-server\bin\comfy-hub-server.bat'
+$PackagedServerBat = Join-Path $ServerDir 'bin\comfy-hub-server.bat'
+
 # 静默启动（无窗口 + 脱离进程树）的公共实现，见 scripts\silent-process.ps1
 $SilentHelper = Join-Path $PSScriptRoot 'silent-process.ps1'
 if (Test-Path $SilentHelper) { . $SilentHelper }
@@ -119,6 +126,9 @@ function Resolve-Jdk {
     foreach ($cand in @(
             $Explicit,
             $env:COMFYHUB_JDK_HOME,
+            # 发布包自带的运行时（scripts\pack-release.ps1 装到 <根>\jre）。
+            # 目标机器不能假设装了 JDK，所以这一项要排在开发机的那些路径前面。
+            (Join-Path $ProjectRoot 'jre'),
             'D:\tools\jdk-21',
             "$env:ProgramFiles\Eclipse Adoptium\jdk-21*",
             "$env:ProgramFiles\Java\jdk-21*",
@@ -228,6 +238,12 @@ function Resolve-MysqlAdmin {
     # 路径里带通配符时 Get-ChildItem -Filter 不生效，必须逐层解析；解析一次就缓存
     if ($Script:MysqlAdminExe -and (Test-Path $Script:MysqlAdminExe)) { return $Script:MysqlAdminExe }
     $admin = $null
+
+    # 发布包自带的便携版优先（<根>\mysql），否则换台机器就找不到 mysqladmin.exe，
+    # 于是 Test-MySqlAlive 永远返回 $false —— 库明明在跑却报"数据库不可用"。
+    $packaged = Join-Path $ProjectRoot 'mysql\bin\mysqladmin.exe'
+    if (Test-Path $packaged) { $Script:MysqlAdminExe = $packaged; return $packaged }
+
     foreach ($root in @('D:\tools\mysql', 'C:\tools\mysql')) {
         if (-not (Test-Path $root)) { continue }
         $direct = Join-Path $root 'bin\mysqladmin.exe'
@@ -301,16 +317,24 @@ function Do-Start {
     }
 
     Write-Host "==> 使用 JDK: $Jdk" -ForegroundColor DarkGray
-    if ($SkipBuild) {
-        Write-Host '==> 跳过构建（-SkipBuild）' -ForegroundColor DarkGray
+    if (Test-Path $PackagedServerBat) {
+        # 发布包布局：没有 Gradle 源码也没有 gradle 可跑，别去 attempt 构建
+        $bat = $PackagedServerBat
+        Write-Host '==> 发布包布局：直接用自带的 server\bin，跳过 Gradle 构建' -ForegroundColor DarkGray
     } else {
-        Write-Host '==> gradle installDist' -ForegroundColor Cyan
-        Invoke-Gradle @('installDist')
+        if ($SkipBuild) {
+            Write-Host '==> 跳过构建（-SkipBuild）' -ForegroundColor DarkGray
+        } else {
+            Write-Host '==> gradle installDist' -ForegroundColor Cyan
+            Invoke-Gradle @('installDist')
+        }
+        $bat = $GradleServerBat
     }
     Trace '构建阶段结束（SkipBuild 则跳过）'
 
-    $bat = Join-Path $ServerDir 'build\install\comfy-hub-server\bin\comfy-hub-server.bat'
-    if (-not (Test-Path $bat)) { throw "找不到启动脚本: $bat（去掉 -SkipBuild 重新构建）" }
+    if (-not (Test-Path $bat)) {
+        throw "找不到后端启动脚本: $bat`n（开发布局去掉 -SkipBuild 重新构建；发布包布局请重新执行 scripts\pack-release.ps1）"
+    }
 
     Write-Host "==> 后台启动后端 (port $Port)" -ForegroundColor Cyan
     $storageDir = Join-Path $ProjectRoot 'storage'

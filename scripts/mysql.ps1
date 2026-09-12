@@ -144,8 +144,16 @@ function Set-InstancePaths([string]$Dir) {
 }
 
 function Resolve-MySqlHome {
+    <#
+      顺序：-MySqlHome / COMFYHUB_MYSQL_HOME  →  **发布包自带的 <根>\mysql**  →  本机 D:\tools、C:\tools。
+
+      发布包那一项必须排在 D:\tools 前面：装配好的发布包里自带一份便携版 MySQL
+      （见 scripts\pack-release.ps1 / packaging\manifest.json），如果还去找开发机的
+      D:\tools\mysql，换台机器就崩 —— 这正是以前"Release 目录拷给别人跑不起来"的原因之一。
+    #>
     if ($MySqlHome -and (Test-Path (Join-Path $MySqlHome 'bin\mysqld.exe'))) { return $MySqlHome }
     $candidates = @(
+        (Join-Path $ProjectRoot 'mysql'),
         'D:\tools\mysql\mysql-8.4.3-winx64',
         'C:\tools\mysql\mysql-8.4.3-winx64'
     ) + (Get-ChildItem -Path 'D:\tools\mysql', 'C:\tools\mysql' -Directory -ErrorAction SilentlyContinue |
@@ -256,6 +264,13 @@ function Wait-Ready([int]$Seconds = 60) {
 }
 
 function Do-Init {
+    <#
+      -SkipSeed：只建库建表 + 建应用账号，不灌演示数据。
+      自动初始化（Do-Start 发现数据目录不存在时）走的就是这个 ——
+      不能悄悄往用户库里塞演示提示词。
+    #>
+    param([switch]$SkipSeed)
+
     if (Test-Path (Join-Path $DataDir 'mysql')) {
         Write-Host "数据目录已存在，跳过 initialize：$DataDir" -ForegroundColor Yellow
     } else {
@@ -272,8 +287,12 @@ function Do-Init {
     Write-Host "==> 创建数据库与表结构" -ForegroundColor Cyan
     Invoke-SqlFile (Join-Path $ProjectRoot 'db\schema.sql') $null
     Do-EnsureAppUser
-    Write-Host "==> 写入演示数据" -ForegroundColor Cyan
-    Invoke-SqlFile (Join-Path $ProjectRoot 'db\seed.sql') $DbName
+    if ($SkipSeed) {
+        Write-Host '==> 跳过演示数据（要演示数据执行: pwsh -File scripts\mysql.ps1 seed）' -ForegroundColor DarkGray
+    } else {
+        Write-Host "==> 写入演示数据" -ForegroundColor Cyan
+        Invoke-SqlFile (Join-Path $ProjectRoot 'db\seed.sql') $DbName
+    }
     Do-Status
 }
 
@@ -304,6 +323,17 @@ function Do-Start {
         Trace 'mysqld 已在运行'
         return
     }
+
+    # 数据目录还不存在就直接起 mysqld 一定失败（"Can't find data directory"）。
+    # 全新解压的发布包、或刚 clone 下来还没跑过 init 的源码树都会走到这里 ——
+    # 补一次初始化，让"首次双击 viewer.exe"不用先手敲一条 init 就能用。
+    # （Do-Init 内部也会调 Do-Start，那时数据目录已经建好了，不会再进这个分支。）
+    if (-not (Test-Path (Join-Path $DataDir 'mysql'))) {
+        Write-Host '==> 数据目录还没初始化，先建库建表（首次启动会慢一点）…' -ForegroundColor Cyan
+        Do-Init -SkipSeed
+        return
+    }
+
     if (-not (Test-Path $IniFile)) { Write-Ini }
     Write-Host "==> 启动 mysqld (port $Port)" -ForegroundColor Cyan
     $how = Start-Detached -FilePath $Mysqld -Arguments "--defaults-file=`"$IniFile`""

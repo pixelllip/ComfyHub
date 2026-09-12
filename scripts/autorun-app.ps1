@@ -103,13 +103,20 @@ Run-Step ("flutter " + ($buildArgs -join ' ')) {
 # ---------------------------------------------------------------------------
 # 5. 启动
 # ---------------------------------------------------------------------------
-$exe = Get-ChildItem (Join-Path $ProjectRoot 'build\windows') -Filter 'viewer.exe' -Recurse -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -like '*\Release\*' } |
-    Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if (-not $exe) {
-    # 没有 Release 产物（比如只跑过 scripts\dev-app.ps1 的 debug 版）就退回最新的那个
+$exe = $null
+# 发布包布局：viewer.exe 就在根目录（scripts\pack-release.ps1 装配的）
+$packagedExe = Join-Path $ProjectRoot 'viewer.exe'
+if (Test-Path -LiteralPath $packagedExe) {
+    $exe = Get-Item -LiteralPath $packagedExe
+} else {
     $exe = Get-ChildItem (Join-Path $ProjectRoot 'build\windows') -Filter 'viewer.exe' -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -like '*\Release\*' } |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $exe) {
+        # 没有 Release 产物（比如只跑过 scripts\dev-app.ps1 的 debug 版）就退回最新的那个
+        $exe = Get-ChildItem (Join-Path $ProjectRoot 'build\windows') -Filter 'viewer.exe' -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    }
 }
 
 if (-not $exe) {

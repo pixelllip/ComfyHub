@@ -93,3 +93,42 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 - 开关行别直接用 `SwitchListTile(contentPadding: EdgeInsets.zero)` 贴卡片边缘：
   用 `settings_page.dart` 里的 `_SwitchRow`（自带内边距 + Material 底色，
   底色不能用 `Container` 的 decoration，否则会盖掉水波纹并触发断言）。
+
+---
+
+## 7. 两套运行布局：源码树 vs 发布包（改路径解析前必读）
+
+同一个脚本/App 要能在**两种布局**下跑，任何"找东西"的逻辑都得两边都认 ——
+只按源码树的路径写，发布包（或者反过来）就会出现"文件明明在，它却说找不到"。
+
+| | 源码树（开发） | 发布包（`scripts\pack-release.ps1` 的产物） |
+| --- | --- | --- |
+| 根目录怎么定 | 往上找 `scripts\comfyhub.ps1` | 同上（发布包的 `viewer.exe` 就铺在根目录，深度 0 就命中） |
+| 后端启动脚本 | `server\build\install\comfy-hub-server\bin\` | `<根>\server\bin\` |
+| `mysqld.exe` / `mysqladmin.exe` | `D:\tools\mysql\...` | `<根>\mysql\bin\` |
+| Java | 本机 JDK 21~23 | `<根>\jre` |
+| `viewer.exe` | `build\windows\...\runner\Release\` | `<根>\viewer.exe` |
+
+踩过的坑：
+
+- **发布包里必须跳过 Gradle**：`server.ps1` 看到 `<根>\server\bin\comfy-hub-server.bat` 就直接用它，
+  不再 `gradle installDist`（包里既没有源码也没有 gradle）。Dart 侧同理，
+  `backend_launcher.dart` 的 `_hasBuiltServer()` 要认两种路径，否则会给脚本加 `-SkipBuild` 加错。
+- **发布包自带的 MySQL / JRE 必须排在"开发机绝对路径"前面**：`mysql.ps1` 的 `Resolve-MySqlHome`、
+  `comfyhub.ps1` 的 `Resolve-MysqlBin`、`server.ps1` 的 `Resolve-MysqlAdmin` 和 `Resolve-Jdk`
+  都是同一个顺序（显式参数 → 环境变量 → `<根>\...` → 本机 `D:\tools\...`）。
+  漏掉一处，换台机器就会出现"库在跑但报数据库不可用"或者"找不到 mysqld.exe"。
+- **`comfyhub.ps1 doctor` 会打印当前是哪种布局**（`运行布局: 发布包（便携式）/ 源码树`），
+  路径类问题先看它。
+- **发布包是便携式的**：可写数据（数据库 `<根>\.mysql`、产物 `<根>\storage`、日志 `<根>\.run`）
+  都在包内，`packaging\manifest.json` 里 `runtimeLayout` 记着这份约定；改存放位置要先改那里和 README 9.2。
+- MySQL 分发目录**接近 1GB**，其中 `bin\mysqld.pdb` 一个就 368MB —— 裁剪规则写在清单的
+  `prune` 字段里（glob 支持 `**`），拷贝约 400MB。改裁剪规则务必带上 `-Clean` 重装并看自检。
+- **发布包只能带走 Java 和 MySQL 本体**：`pwsh` 和 VC++ 运行时带不走。缺 VC++ 运行时的时候
+  `mysqld.exe` 只是起不来，原因只写进 `mysql-error.log`，命令行上只看到"启动超时"，非常难查。
+  所以有 `scripts\runtime-deps.ps1`：`comfyhub.ps1` dot-source 它（跟 `silent-process.ps1` 一样），
+  `up` 失败时按需提示、`doctor` 里逐项列出；清单在 `packaging\manifest.json` 的
+  `runtimeRequirements`。**改启动流程时别把这块提示丢了。**
+- **首次运行必须能自动建库**：`mysql.ps1` 的 `Do-Start` 发现 `<实例目录>\data\mysql` 不存在时，
+  会先跑一次 `Do-Init -SkipSeed` 再启动（发布包解压出来没有数据目录，少了这一步首次启动必然失败）。
+  自动初始化**故意不灌演示数据**（不能往用户库里塞演示提示词），只有手敲 `mysql.ps1 init` 才灌。

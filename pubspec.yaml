@@ -1,4 +1,4 @@
-name: ComfyHub
+name: viewer
 description: "ComfyHub — ComfyUI 提示词与生成产物管理"
 publish_to: 'none'
 

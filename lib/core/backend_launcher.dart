@@ -140,25 +140,36 @@ class BackendLauncher extends ChangeNotifier {
     return file;
   }
 
+  /// 找到的是不是 PowerShell 7 的 `pwsh.exe`（Windows 自带的 `powershell.exe` 不算）
+  static bool _isPwsh(String shellPath) =>
+      shellPath.toLowerCase().endsWith('pwsh.exe');
+
   static String? resolveShell() {
     if (kIsWeb || !Platform.isWindows) return null;
     final candidates = <String>[
       r'C:\Program Files\PowerShell\7\pwsh.exe',
       r'C:\Program Files\PowerShell\7-preview\pwsh.exe',
-      r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
     ];
     for (final c in candidates) {
       if (File(c).existsSync()) return c;
     }
+    // 在整个 PATH 里先找一遍 pwsh，再退而求其次找 powershell.exe。
+    // （逐个目录地"先 pwsh 后 powershell"会让靠前目录里的 5.1 抢在靠后的 7 前面。）
     final pathEnv = Platform.environment['PATH'] ?? '';
-    for (final dir in pathEnv.split(';')) {
-      final trimmed = dir.trim();
-      if (trimmed.isEmpty) continue;
-      for (final exe in const ['pwsh.exe', 'powershell.exe']) {
-        final p = '$trimmed${Platform.pathSeparator}$exe';
+    final dirs = pathEnv
+        .split(';')
+        .map((d) => d.trim())
+        .where((d) => d.isNotEmpty);
+    for (final exe in const ['pwsh.exe', 'powershell.exe']) {
+      for (final dir in dirs) {
+        final p = '$dir${Platform.pathSeparator}$exe';
         if (File(p).existsSync()) return p;
       }
     }
+    // 最后兜底：Windows 自带的 5.1 一定在。返回它让启动能试一次，
+    // 上层会用 _isPwsh 判出来并提示装 PowerShell 7。
+    const systemPs = r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe';
+    if (File(systemPs).existsSync()) return systemPs;
     return null;
   }
 
@@ -173,14 +184,23 @@ class BackendLauncher extends ChangeNotifier {
     return true;
   }
 
-  /// 后端是否已经构建过（决定要不要给脚本加 -SkipBuild）
+  /// 后端是否已经构建/装配过（决定要不要给脚本加 -SkipBuild）
+  ///
+  /// 两种布局都要认，否则发布包里的 App 会以为后端没构建，去跑一次不存在的 Gradle：
+  ///   · 开发布局：server\build\install\comfy-hub-server\bin\（gradle installDist 的产物）
+  ///   · 发布包布局：server\bin\（scripts\pack-release.ps1 装配的，见 packaging\manifest.json）
   bool _hasBuiltServer() {
     final root = projectRoot ?? _settings.projectRoot ?? detectProjectRoot();
     if (root == null) return false;
     final sep = Platform.pathSeparator;
-    final bat = File(
-        '$root${sep}server${sep}build${sep}install${sep}comfy-hub-server${sep}bin${sep}comfy-hub-server.bat');
-    return bat.existsSync();
+    final candidates = <String>[
+      '$root${sep}server${sep}bin${sep}comfy-hub-server.bat',
+      '$root${sep}server${sep}build${sep}install${sep}comfy-hub-server${sep}bin${sep}comfy-hub-server.bat',
+    ];
+    for (final path in candidates) {
+      if (File(path).existsSync()) return true;
+    }
+    return false;
   }
 
   // -------------------------------------------------------------------------
@@ -216,7 +236,15 @@ class BackendLauncher extends ChangeNotifier {
     }
     final shell = resolveShell();
     if (shell == null) {
-      return _fail('PATH 里找不到 pwsh / powershell，无法启动本地服务。');
+      return _fail('PATH 里找不到 PowerShell，无法启动本地服务。'
+          '请安装 PowerShell 7（winget install --id Microsoft.PowerShell），装完重启 App。');
+    }
+    if (!_isPwsh(shell)) {
+      // Windows 自带的 5.1 不算数：scripts\*.ps1 内部到处是 `& pwsh -NoProfile -File ...`，
+      // 拿 powershell.exe 去跑，子调用会以"pwsh 不是内部或外部命令"失败。
+      _log('警告: 只找到 Windows PowerShell 5.1（$shell），缺少 PowerShell 7。');
+      _log('      scripts 之间互相调用 pwsh，缺了它启动多半会失败。');
+      _log('      安装: winget install --id Microsoft.PowerShell --source winget');
     }
     shellPath = shell;
 
@@ -293,7 +321,9 @@ class BackendLauncher extends ChangeNotifier {
       await Future.delayed(const Duration(seconds: 2));
     }
 
-    return _fail('等待后端超时。可以看设置页的「查看服务日志」，或手动执行 scripts\\comfyhub.ps1 up。');
+    return _fail('等待后端超时。可以看设置页的「查看服务日志」，或手动执行 '
+        'scripts\\comfyhub.ps1 doctor 体检（缺 pwsh / VC++ 运行时 / JDK 会在那里报出来），'
+        '也可以直接 scripts\\comfyhub.ps1 up 看完整输出。');
   }
 
   /// 停止 / 重启 / 只跑一遍脚本（不走健康等待）
