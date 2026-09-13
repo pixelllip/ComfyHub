@@ -779,6 +779,7 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 | 静默启动的兜底路径（`wscript` + `.vbs`）起不来 mysqld | 两个坑叠在一起：`WScript.Shell.Run` 直接跑「"带引号的完整路径" + 参数」时会把 mysqld 悄悄丢掉（交给 `cmd` 解析才稳）；命令行里的引号 / 中文路径作为 wscript 参数传递时会被拆坏 | 命令行写进一个 UTF-16 文件，VBS 读出来再交给 `cmd.exe /c "…"` 执行；启动方式见 `Start-SilentProcess` 的返回值（`wmi-hidden` / `wmi-vbs` / `wmi-plain`） |
 | 后端存储目录跑到 `C:\Windows\System32\...` | WMI 启动时工作目录丢失 | 启动脚本里显式 `cd /d` + `set COMFYHUB_STORAGE=...`；后端还加了系统目录兜底检查 |
 | `media_kit` 无法构建 | 它的 Windows 原生库要从 GitHub Releases 下载，本机 GitHub 不可达 | 视频改用 `video_player_win`（Windows Media Foundation，只依赖 nuget.org，本机可用）；音频用 `audioplayers` |
+| 视频**只有声音、画面全黑**（引擎日志刷 `Could not create external texture`） | Flutter 3.47 在 Windows 上默认启用 **Impeller**；Impeller 建外部纹理时用的尺寸是 `FlutterDesktopGpuSurfaceDescriptor.visible_width / visible_height`，而 `video_player_win` 3.2.2（上游 master 也一样）只填了 `width / height` → 纹理是 0×0，`WrapTexture` 返回空 → 音频照放、画面全黑。Skia 后端因为"尺寸为 0 就退回用控件尺寸"而侥幸正常，所以这个坑只在 Impeller 下暴露，升级 Flutter 之后才炸 | 插件复制到 `third_party\video_player_win`（本地副本），在 `initTexture()` 里补上 `visible_width / visible_height`，`pubspec.yaml` 改成 path 依赖；改动点搜 `ComfyHub 补丁`，上游修好后可以换回 pub.dev 版本 |
 | `main.cpp` 报 `C4819` / `C2001 常量中有换行符` | 窗口标题是中文，而 MSVC 默认按 936(GBK) 代码页读 UTF-8 源码，`/WX` 又把警告升级成错误 | `windows/CMakeLists.txt` 里加 `add_compile_options("/utf-8")` |
 | `FilePicker.platform` / `PlatformFile.size` 找不到 | file_picker 12.x 把 `pickFiles` 改成了**静态方法**并返回 `List<PlatformFile>`，`size` 换成 `lengthSync()`/`length()` | 按新 API 改写 `upload_sheet.dart` |
 | 详情页「正向提示词」的框被撑到几百像素高 | `SelectableText` 底层是 `EditableText`，设了 `maxLines: 30` 会**预留** 30 行高度 | `CopyableText` 不设 `maxLines`，按内容自然撑开 |
@@ -820,6 +821,8 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 ## 13. 已知限制
 
 - **视频内嵌播放仅 Windows**：依赖 `video_player_win`（Media Foundation）。其他平台会显示提示并引导用系统播放器打开；视频能否播放取决于系统已装解码器（AV1 / H.265 需另装）。
+  注意依赖指向 `third_party\video_player_win` —— 那是上游 3.2.2 的**本地副本 + 一处补丁**（Impeller 下画面全黑，见第 12 节）。
+  升级 Flutter / 换插件版本前先确认这个补丁还在，否则会立刻退回"只有声音、画面全黑"。
 - **没有视频缩略图**：服务端不调用 ffmpeg，因此视频格子在画廊里显示的是播放图标占位，不是首帧。
 - **中文检索用 LIKE 而非 FULLTEXT**：MySQL 默认分词器对中文支持差（`ngram` 需额外配置），所以用多词 AND 的 `LIKE` 匹配。
 - **自动捕获有轮询延迟**：默认 4 秒一次（可调到 1 秒），想要零延迟就装自定义节点（见 6.2）。

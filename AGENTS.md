@@ -165,3 +165,19 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 > 所以 `Expand-JavaArchive` 里加了一条**安全闸**：只允许搬运 staging 目录内的路径，
 > 否则当场抛异常（`$javaHome.StartsWith($stage, OrdinalIgnoreCase)`）。
 > 写任何 `Move-Item` / `Remove-Item -Recurse` 之前，先确认目标是"算出来的、可验证的"路径。
+
+## 9. 视频播放依赖一份打过补丁的插件副本
+
+`pubspec.yaml` 里的 `video_player_win` 指向 **`third_party\video_player_win`**（上游 3.2.2 的本地副本），
+不是 pub.dev。原因：上游的 `GpuSurfaceDescriptor` 少了 `visible_width / visible_height` 两个字段，
+而 Flutter 3.4x 在 Windows 上**默认用 Impeller**、偏偏拿这两个字段当外部纹理尺寸 ——
+结果是**只有声音、画面全黑**（引擎日志里能看到 `Could not create external texture`）。
+
+- 改动点一共两行，搜 `ComfyHub 补丁` 就能定位（`windows\video_player_win_plugin.cpp` 的 `initTexture()`）。
+- **别把它"顺手升级"回 pub.dev**，也别在 `flutter pub upgrade` 后不看 `pubspec.lock`：
+  一升回去就立刻复发。上游修好后再整体换回去，并删掉这一节。
+- 排查这类问题的顺序：① 看 `flutter run` 的控制台有没有 `Could not create external texture`；
+  ② 确认日志里是 `Using the Impeller rendering backend`；③ 用 `--no-enable-impeller` 跑一遍对照
+  （Skia 会容忍 0 尺寸，所以它在旧版本里"看起来是好的"）。
+- 相关回归手段：`.run\videoprobe\ui.ps1` 是当时写的窗口截图 / 点击小工具（**不在版本库里**，按需重建），
+  `scripts\dev-app.ps1` 起 debug 版后按 `r` 热重载最快。

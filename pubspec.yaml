@@ -30,7 +30,12 @@ dependencies:
   intl: ^0.20.3
 
   # --- 媒体播放（Windows 走 Media Foundation，不需要联网拉二进制） ---
-  video_player_win: ^3.2.2
+  # 用 third_party 里的本地副本：上游 3.2.2 的 GpuSurfaceDescriptor 少了
+  # visible_width / visible_height，而 Impeller（Windows 上默认的渲染后端）正是
+  # 拿这两个字段当外部纹理尺寸 —— 结果是「只有声音、画面全黑」。
+  # 补丁内容见 third_party/video_player_win/windows/video_player_win_plugin.cpp
+  video_player_win:
+    path: third_party/video_player_win
   audioplayers: ^6.8.1
 
   # --- 用系统默认播放器打开（兜底） ---

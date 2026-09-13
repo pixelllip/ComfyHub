@@ -18,6 +18,9 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    # 第三方插件的本地副本（只打了「视频黑屏」那一处原生补丁），
+    # 上游代码的 lint 不归我们管，别让它污染 flutter analyze 的输出
+    - third_party/**
 
 linter:
   # The lint rules applied to this project can be customized in the
