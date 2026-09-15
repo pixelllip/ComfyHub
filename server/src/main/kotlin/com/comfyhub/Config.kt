@@ -19,7 +19,20 @@ data class AppConfig(
     val comfyUrl: String = "http://127.0.0.1:8188",
     /** ComfyUI 输出目录的默认值，留空表示走 HTTP 下载 */
     val comfyOutputDir: String? = null,
+    /**
+     * 允许被局域网访问（AIH-016）。
+     *
+     * 后端持有 AI Provider 的 API Key 并会代替用户花钱；一旦监听 `0.0.0.0`，
+     * 同一局域网里任何人都能用你的额度。所以默认只监听回环地址，
+     * 必须显式打开 `COMFYHUB_ALLOW_REMOTE=1`（远程/移动端场景）才能对外。
+     */
+    val allowRemote: Boolean = false,
+    /** CORS 允许的 Origin 白名单（AIH-016）；空表示只允许本机来源 */
+    val corsOrigins: List<String> = emptyList(),
 ) {
+    /** 是否只监听回环地址 */
+    val loopbackOnly: Boolean get() = host == "127.0.0.1" || host == "::1" || host == "localhost"
+
     companion object {
         fun fromEnv(): AppConfig {
             val env = System.getenv()
@@ -30,8 +43,19 @@ data class AppConfig(
                 get("COMFYHUB_STORAGE", defaultStorageDir())
             ).toAbsolutePath().normalize()
 
+            // 默认只监听回环。想被局域网访问必须显式 COMFYHUB_ALLOW_REMOTE=1；
+            // 也可以直接给 COMFYHUB_HOST 覆盖（此时以显式值为准）。
+            val allowRemote = get("COMFYHUB_ALLOW_REMOTE", "0").let { it == "1" || it.equals("true", true) }
+            val explicitHost = env["COMFYHUB_HOST"]?.takeIf { it.isNotBlank() }
+            val host = explicitHost ?: if (allowRemote) "0.0.0.0" else "127.0.0.1"
+
+            val corsOrigins = get("COMFYHUB_CORS_ORIGINS", "")
+                .split(',')
+                .map { it.trim().trimEnd('/') }
+                .filter { it.isNotBlank() }
+
             return AppConfig(
-                host = get("COMFYHUB_HOST", "0.0.0.0"),
+                host = host,
                 port = get("COMFYHUB_PORT", "8080").toInt(),
                 jdbcUrl = get(
                     "COMFYHUB_JDBC_URL",
@@ -45,6 +69,8 @@ data class AppConfig(
                 maxUploadBytes = get("COMFYHUB_MAX_UPLOAD_MB", "4096").toLong() * 1024 * 1024,
                 comfyUrl = get("COMFYHUB_COMFY_URL", "http://127.0.0.1:8188").trimEnd('/'),
                 comfyOutputDir = get("COMFYHUB_COMFY_OUTPUT", "").takeIf { it.isNotBlank() },
+                allowRemote = allowRemote,
+                corsOrigins = corsOrigins,
             )
         }
 
@@ -77,6 +103,8 @@ data class AppConfig(
     /** 不打印密码的展示串 */
     fun describe(): String = buildString {
         append("host=$host port=$port\n")
+        append("监听范围=${if (loopbackOnly) "仅本机回环" else "对外（局域网可达）"}\n")
+        if (corsOrigins.isNotEmpty()) append("CORS 白名单=${corsOrigins.joinToString(",")}\n")
         append("jdbcUrl=$jdbcUrl\n")
         append("dbUser=$dbUser\n")
         append("storage=$storageDir\n")

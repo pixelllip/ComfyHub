@@ -94,3 +94,51 @@ CALL comfyhub_migrate();
 DROP PROCEDURE comfyhub_migrate;
 
 SELECT '迁移完成' AS result;
+
+-- ---------------------------------------------------------------------
+-- AI 工作台：Provider 与模型目录（M1 / AIH-006 / AIH-007 / AIH-010 / AIH-011）
+-- 凭据值不进库：只有 credential_ref 这个名字，值由 DPAPI 加密单独保管（AIH-012/015）
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_providers (
+  id             VARCHAR(96)   NOT NULL COMMENT '小写 kebab-case，创建后不可改',
+  display_name   VARCHAR(128)  NOT NULL,
+  api            VARCHAR(32)   NOT NULL COMMENT 'openai-completions / openai-responses / anthropic-messages',
+  base_url       VARCHAR(1024) NOT NULL,
+  credential_ref VARCHAR(128)  NULL COMMENT '凭据引用名；值由 DPAPI 单独保管',
+  endpoint_trust VARCHAR(32)   NOT NULL DEFAULT 'public',
+  headers_json   JSON          NULL COMMENT '高级配置；禁止放密钥',
+  compat_json    JSON          NULL,
+  enabled        TINYINT(1)    NOT NULL DEFAULT 1,
+  revision       BIGINT        NOT NULL DEFAULT 1 COMMENT '乐观锁',
+  created_at     DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at     DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                               ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ai_models (
+  provider_id            VARCHAR(96)  NOT NULL,
+  model_id               VARCHAR(191) NOT NULL,
+  display_name           VARCHAR(191) NOT NULL,
+  input_modalities       JSON         NULL COMMENT '能力真源，未知即不支持',
+  attachment_transports  JSON         NULL,
+  mime_allowlist         JSON         NULL,
+  tools                  TINYINT(1)   NOT NULL DEFAULT 0,
+  parallel_tools         TINYINT(1)   NOT NULL DEFAULT 0,
+  reasoning              TINYINT(1)   NOT NULL DEFAULT 0,
+  context_window         INT          NULL,
+  max_output_tokens      INT          NULL,
+  max_attachment_bytes   BIGINT       NULL,
+  max_attachment_count   INT          NULL,
+  limits_json            JSON         NULL,
+  capability_source      VARCHAR(16)  NOT NULL DEFAULT 'manual'
+                                      COMMENT 'builtin / discovered / manual / tested',
+  capability_verified_at DATETIME(3)  NULL,
+  enabled                TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at             DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at             DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                      ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (provider_id, model_id),
+  CONSTRAINT fk_ai_models_provider FOREIGN KEY (provider_id)
+    REFERENCES ai_providers (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

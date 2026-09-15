@@ -1,5 +1,7 @@
 package com.comfyhub
 
+import com.comfyhub.ai.CredentialService
+import com.comfyhub.ai.aiRoutes
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
@@ -111,6 +113,15 @@ fun Application.module(ctx: AppContext) {
     capture.start()
     monitor.subscribe(ApplicationStopped) { capture.stop() }
 
+    // AI 凭据：值只存在 DPAPI 加密文件里，DB / 日志 / 接口都拿不到明文（AIH-012 / AIH-015）
+    val credentials = com.comfyhub.ai.CredentialService(ctx.cfg.storageDir.resolve("ai"))
+    if (!ctx.cfg.loopbackOnly) {
+        log.warn(
+            "后端监听 {}（非回环）：AI 接口会代替用户调用上游模型并产生费用，请确认局域网可信",
+            ctx.cfg.host
+        )
+    }
+
     install(DefaultHeaders) {
         header("X-App", "ComfyHub/$APP_VERSION")
     }
@@ -133,8 +144,24 @@ fun Application.module(ctx: AppContext) {
         maxRangeCount = 20
     }
 
+    // CORS 收紧（AIH-016）：原来是 anyHost()，任何网页都能调用本机后端。
+    // 在 AI 接口会拿着用户的 API Key 代替用户请求上游之后，这等于把额度和密钥暴露给
+    // 任意一个本机打开的网页，所以改成"只允许本机来源 + 显式配置的白名单"。
     install(CORS) {
-        anyHost()
+        val schemes = listOf("http", "https")
+        allowHost("localhost", schemes)
+        allowHost("127.0.0.1", schemes)
+        allowHost("[::1]", schemes)
+        ctx.cfg.corsOrigins.forEach { origin ->
+            runCatching {
+                val uri = java.net.URI(origin)
+                val h = uri.host ?: return@runCatching
+                val scheme = uri.scheme ?: "https"
+                allowHost(h, listOf(scheme))
+            }.onFailure {
+                log.warn("忽略无法解析的 CORS Origin 配置: {}", origin)
+            }
+        }
         allowHeader(HttpHeaders.ContentType)
         allowHeader(HttpHeaders.Authorization)
         allowHeader(HttpHeaders.Range)
@@ -208,6 +235,7 @@ fun Application.module(ctx: AppContext) {
             tagRoutes()
             mediaRoutes(ctx)
             captureRoutes(ctx, capture)
+            aiRoutes(credentials)
         }
     }
 }
