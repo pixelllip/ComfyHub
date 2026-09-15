@@ -50,7 +50,7 @@ fun ApplicationCall.setInlineFileHeaders(fileName: String, contentType: ContentT
     response.header(HttpHeaders.ContentType, contentType.toString())
     response.header(HttpHeaders.AcceptRanges, "bytes")
     response.header(HttpHeaders.CacheControl, "public, max-age=86400")
-    val ascii = fileName.map { if (it.code in 32..126 && it != '"' && it != '\\') it else '_' }.joinToString("")
+    val ascii = fileName.map { if (it.code in 32..126 && it != '\"' && it != '\\') it else '_' }.joinToString("")
     val encoded = java.net.URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20")
     response.header(
         HttpHeaders.ContentDisposition,
