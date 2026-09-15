@@ -46,6 +46,10 @@ class AiWorkspaceStore extends ChangeNotifier {
   bool loading = false;
   String? error;
 
+  /// 正在执行的 Run（用于"停止"按钮，AIH-022）。
+  String? _activeRunId;
+  bool get running => _activeRunId != null;
+
   /// 当前还没接通的能力，用**明确的话**告诉用户，而不是假装成功。
   String? notice;
 
@@ -247,35 +251,153 @@ class AiWorkspaceStore extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    final provider = selectedProvider;
+    final model = selectedModel;
+    if (provider == null || model == null) {
+      error = '请先选择 Provider 与模型（设置 → AI 模型）';
+      notifyListeners();
+      return;
+    }
 
     sending = true;
     error = null;
+    notice = null;
+    notifyListeners();
+
     try {
       if (conversation == null) {
         final conv = await _api.createConversation(
           title: body.length > 20 ? body.substring(0, 20) : body,
-          providerId: selectedProvider?.id,
-          modelId: selectedModel?.id,
+          providerId: provider.id,
+          modelId: model.id,
         );
         conversations = [conv, ...conversations];
         conversation = conv;
       }
       final conv = conversation!;
-      final parts = <Map<String, dynamic>>[
-        if (body.isNotEmpty) {'type': 'text', 'text': body},
-        for (final a in attachments)
-          {'type': 'attachment', 'text': a.name, 'jsonPayload': a.toJson()},
+      final start = await _api.startRun(
+        conv.id,
+        text: body,
+        providerId: provider.id,
+        modelId: model.id,
+      );
+      _activeRunId = start.runId;
+
+      // 乐观插入：用户消息 + 空的助手流式消息，收到 delta 就地增长
+      messages = [
+        ...messages,
+        AiMessage(
+          id: start.userMessageId ?? 'local-user',
+          conversationId: conv.id,
+          seq: messages.length + 1,
+          role: 'user',
+          status: 'complete',
+          text: body,
+        ),
+        AiMessage(
+          id: start.assistantMessageId,
+          conversationId: conv.id,
+          seq: messages.length + 2,
+          role: 'assistant',
+          status: 'streaming',
+          text: '',
+          modelId: model.id,
+        ),
       ];
-      await _api.appendMessage(conv.id, role: 'user', text: body, parts: parts);
-      messages = await _api.listMessages(conv.id);
       attachments.clear();
       preflight = null;
-      notice = '消息已保存。模型执行（Run + 流式事件）属于下一阶段，尚未接通。';
-    } catch (e) {
-      error = '发送失败：$e';
-    } finally {
+      notifyListeners();
+
+      await _consumeRun(start.runId, start.assistantMessageId, conv.id);
+    } on AiApiException catch (e) {
+      error = '启动失败：${e.message}';
       sending = false;
       notifyListeners();
+    } catch (e) {
+      error = '发送失败：$e';
+      sending = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _consumeRun(String runId, String assistantMessageId, String conversationId) async {
+    var streamed = '';
+    try {
+      await for (final event in _api.runEvents(runId)) {
+        switch (event.type) {
+          case 'text.delta':
+            streamed += event.text ?? '';
+            _replaceMessage(assistantMessageId, text: streamed, status: 'streaming');
+            notifyListeners();
+          case 'message.completed':
+            streamed = event.text ?? streamed;
+            _replaceMessage(assistantMessageId, text: streamed, status: 'complete');
+            notifyListeners();
+          case 'run.failed':
+            _replaceMessage(assistantMessageId, text: streamed, status: 'failed');
+            error = '[${event.code ?? 'ERROR'}] ${event.message ?? '运行失败'}';
+          case 'run.cancelled':
+            _replaceMessage(assistantMessageId, text: streamed, status: 'cancelled');
+            notice = '已停止本次生成。';
+          default:
+            break;
+        }
+      }
+    } catch (e) {
+      error = '事件流中断：$e';
+    } finally {
+      _activeRunId = null;
+      sending = false;
+      // 与服务端对齐一次（seq、状态、usage 都以库为准）
+      await _reloadMessages(conversationId);
+      conversations = await _safeListConversations();
+      notifyListeners();
+    }
+  }
+
+  /// 停止：取消上游请求（AIH-022）。
+  Future<void> stop() async {
+    final runId = _activeRunId;
+    if (runId == null) return;
+    try {
+      await _api.cancelRun(runId);
+      notice = '已请求停止…';
+    } catch (e) {
+      error = '停止失败：$e';
+    }
+    notifyListeners();
+  }
+
+  void _replaceMessage(String id, {String? text, String? status}) {
+    messages = messages
+        .map((m) => m.id == id
+            ? AiMessage(
+                id: m.id,
+                conversationId: m.conversationId,
+                seq: m.seq,
+                role: m.role,
+                status: status ?? m.status,
+                text: text ?? m.text,
+                modelId: m.modelId,
+                parts: m.parts,
+              )
+            : m)
+        .toList();
+  }
+
+  Future<void> _reloadMessages(String conversationId) async {
+    try {
+      messages = await _api.listMessages(conversationId);
+    } catch (_) {
+      // 保留本地已有的流式内容，别因为一次刷新失败把回复擦掉
+    }
+  }
+
+  Future<List<AiConversation>> _safeListConversations() async {
+    try {
+      return await _api.listConversations();
+    } catch (_) {
+      return conversations;
     }
   }
 

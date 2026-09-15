@@ -1,9 +1,13 @@
 package com.comfyhub.ai
 
 import com.comfyhub.ApiError
+import com.comfyhub.ai.protocol.Adapters
+import com.comfyhub.ai.protocol.TransportRef
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -11,17 +15,26 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
- * AI 工作台接口 —— 阶段 1：Provider / 模型目录 / 凭据（M1）。
+ * AI 工作台接口。
  *
  * 约定：
  *  - 任何返回 DTO 都不含密钥值，只有 [CredentialStatusDto]（AIH-012）；
  *  - 凭据 `PUT` 时值为空 = 不修改；清除必须显式 `DELETE`（AIH-013）；
- *  - Provider 更新必须带 revision（AIH-007）。
+ *  - Provider 更新必须带 revision（AIH-007）；
+ *  - Run 为独立实体：创建返回 202，事件走 SSE（AIH-020/021）。
  */
-fun Route.aiRoutes(credentials: CredentialService) {
+fun Route.aiRoutes(
+    credentials: CredentialService,
+    runner: HarnessRunner,
+    bus: RunEventBus,
+) {
 
     route("/ai") {
 
@@ -223,6 +236,123 @@ fun Route.aiRoutes(credentials: CredentialService) {
         }
 
         // -------------------------------------------------------------------
+        //  Run：创建 202 → SSE 事件 → 取消（AIH-020 / AIH-021 / AIH-022）
+        // -------------------------------------------------------------------
+
+        post("/conversations/{id}/runs") {
+            val conversationId = call.parameters["id"].orEmpty()
+            AiConversationRepo.get(conversationId)
+                ?: throw AiException(AiErrorCode.CONFIG_ERROR, "会话不存在: $conversationId")
+            val body = call.receive<AiRunStartRequest>()
+            if (body.text.isBlank()) throw AiException(AiErrorCode.CONFIG_ERROR, "消息内容不能为空")
+
+            val provider = requireProvider(body.providerId)
+            if (!provider.enabled) throw AiException(AiErrorCode.CONFIG_ERROR, "该 Provider 已被停用")
+            val model = AiRepo.getModel(provider.id, body.modelId)
+                ?: throw AiException(AiErrorCode.UNKNOWN_MODEL, "模型不在目录中: ${body.modelId}")
+            if (!model.enabled) throw AiException(AiErrorCode.CONFIG_ERROR, "该模型已被停用")
+
+            // 用户消息与助手占位都在"创建 Run"里完成，保证顺序与 seq 稳定
+            val userMessage = AiConversationRepo.appendMessage(
+                conversationId,
+                AiMessageAppend(
+                    role = "user",
+                    text = body.text,
+                    parts = listOf(AiMessagePartDto(type = "text", text = body.text)),
+                ),
+            )
+            val assistantId = AiRunRepo.insertAssistantPlaceholder(conversationId, provider.id, model.id)
+
+            val run = AiRunRepo.create(
+                conversationId = conversationId,
+                providerId = provider.id,
+                modelId = model.id,
+                // 快照**不含密钥**，只留引用名（AIH-023）
+                providerSnapshot = buildJsonObject {
+                    put("id", provider.id)
+                    put("displayName", provider.displayName)
+                    put("api", provider.api)
+                    put("baseURL", provider.baseURL)
+                    put("endpointTrust", provider.endpointTrust)
+                    provider.credentialRef?.let { put("credentialRef", it) }
+                },
+                modelSnapshot = buildJsonObject {
+                    put("id", model.id)
+                    put("displayName", model.displayName)
+                    put("tools", model.tools)
+                    put("capabilitySource", model.capabilitySource)
+                },
+                promptVersion = HarnessRunner.PROMPT_VERSION,
+                userMessageId = userMessage.id,
+                assistantMessageId = assistantId,
+                retryOfRunId = body.retryOfRunId,
+            )
+
+            bus.open(run.id)
+            runner.start(run.id)
+            call.respond(
+                HttpStatusCode.Accepted,
+                AiRunStartResponse(runId = run.id, assistantMessageId = assistantId, userMessageId = userMessage.id),
+            )
+        }
+
+        get("/runs/{id}") {
+            val runId = call.parameters["id"].orEmpty()
+            val run = AiRunRepo.get(runId) ?: throw AiException(AiErrorCode.CONFIG_ERROR, "Run 不存在: $runId")
+            call.respond(run.copy().let { it })
+        }
+
+        /**
+         * 统一事件流（SSE）。`after=<seq>` 可断线续传；
+         * Run 不在内存里（后端重启过）时从数据库回放已持久化的部分。
+         */
+        get("/runs/{id}/events") {
+            val runId = call.parameters["id"].orEmpty()
+            val after = call.request.queryParameters["after"]?.toIntOrNull() ?: 0
+            if (AiRunRepo.get(runId) == null) {
+                throw AiException(AiErrorCode.CONFIG_ERROR, "Run 不存在: $runId")
+            }
+            call.respondTextWriter(ContentType.Text.EventStream, HttpStatusCode.OK) {
+                val channel: ReceiveChannel<RunEvent>? = bus.subscribe(runId, after)
+                if (channel == null) {
+                    // 进程重启过：只能回放落库的事件
+                    AiRunRepo.events(runId, after).forEach {
+                        write(it.toSse())
+                        flush()
+                    }
+                    return@respondTextWriter
+                }
+                try {
+                    while (true) {
+                        val event = withTimeoutOrNull(15_000) { channel.receiveCatching().getOrNull() }
+                        if (event == null) {
+                            if (bus.isClosed(runId)) break
+                            write("event: ${RunEventType.HEARTBEAT}\ndata: {}\n\n")
+                            flush()
+                            continue
+                        }
+                        write(event.toSse())
+                        flush()
+                        if (event.type in TERMINAL_EVENTS) break
+                    }
+                } finally {
+                    bus.unsubscribe(runId, channel)
+                }
+            }
+        }
+
+        post("/runs/{id}/cancel") {
+            val runId = call.parameters["id"].orEmpty()
+            val run = AiRunRepo.get(runId) ?: throw AiException(AiErrorCode.CONFIG_ERROR, "Run 不存在: $runId")
+            if (run.status != "running") {
+                call.respond(CancelResult(cancelled = false, status = run.status))
+                return@post
+            }
+            val cancelled = runner.cancel(runId)
+            call.respond(CancelResult(cancelled = cancelled, status = if (cancelled) "cancelling" else run.status))
+        }
+
+        // -------------------------------------------------------------------
         //  附件准入预检（AIH-029 / AIH-030）
         //
         //  这是纯计算：不产生任何上游请求。前端发送前先调它，
@@ -282,6 +412,16 @@ data class CredentialSetRequest(val value: String = "")
  */
 @Serializable
 data class DeleteResult(val deleted: Boolean, val id: String)
+
+/** Run 的终态事件：SSE 流到这里就该关闭了。 */
+private val TERMINAL_EVENTS = setOf(
+    RunEventType.RUN_COMPLETED,
+    RunEventType.RUN_FAILED,
+    RunEventType.RUN_CANCELLED,
+)
+
+@Serializable
+data class CancelResult(val cancelled: Boolean, val status: String)
 
 /** 连接测试结果：只含状态与稳定错误码，**不含任何密钥或原始 Header**。 */
 @Serializable
@@ -351,14 +491,22 @@ private fun validateModel(m: AiModelDto) {
 }
 
 /**
- * 协议适配器"实际实现"的传输方式。
+ * 协议适配器"实际实现"的传输方式（AIH-028）。
  *
- * **当前阶段（M1）适配器尚未实现，因此这里诚实地返回空集** —— 预检会把附件判为
- * "协议适配尚未实现"而不是乐观放行。M3 实现图片内联后在此登记，
- * 保证"能不能发"永远以代码事实为准，而不是靠模型能力声明猜。
+ * 事实来源是 [Adapters]：适配器里 `transports` 为空集，预检就把附件判为
+ * "协议适配尚未实现"而不是乐观放行。实现了图片内联之后改适配器即可，
+ * 不需要在别处再维护一份"支持矩阵"。
  */
 object AdapterCapabilities {
-    fun transportsFor(api: AiApi): Set<Transport> = when (api) {
-        AiApi.OPENAI_COMPLETIONS, AiApi.OPENAI_RESPONSES, AiApi.ANTHROPIC_MESSAGES -> emptySet()
+    fun transportsFor(api: AiApi): Set<Transport> {
+        val ref = com.comfyhub.ai.protocol.AiApiRef.parse(api.wire) ?: return emptySet()
+        val adapter = Adapters.of(ref) ?: return emptySet()
+        return adapter.transports.mapNotNull { t -> Transport.parse(t.wire) }.toSet()
     }
+
+    /** 调试/界面用：哪些协议真的能跑。 */
+    fun implemented(): List<String> = Adapters.supported().map { it.wire }
+
+    fun transportRefs(api: AiApi): Set<TransportRef> =
+        com.comfyhub.ai.protocol.AiApiRef.parse(api.wire)?.let { Adapters.of(it)?.transports } ?: emptySet()
 }

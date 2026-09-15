@@ -1,6 +1,9 @@
 package com.comfyhub
 
+import com.comfyhub.ai.AiRunRepo
 import com.comfyhub.ai.CredentialService
+import com.comfyhub.ai.HarnessRunner
+import com.comfyhub.ai.RunEventBus
 import com.comfyhub.ai.aiRoutes
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
@@ -114,7 +117,16 @@ fun Application.module(ctx: AppContext) {
     monitor.subscribe(ApplicationStopped) { capture.stop() }
 
     // AI 凭据：值只存在 DPAPI 加密文件里，DB / 日志 / 接口都拿不到明文（AIH-012 / AIH-015）
-    val credentials = com.comfyhub.ai.CredentialService(ctx.cfg.storageDir.resolve("ai"))
+    val credentials = CredentialService(ctx.cfg.storageDir.resolve("ai"))
+
+    // Run 事件总线 + 后台执行器（AIH-020/021）
+    val runBus = RunEventBus()
+    val runner = HarnessRunner(credentials, runBus)
+    monitor.subscribe(ApplicationStopped) { runner.shutdown() }
+    // 上次进程退出时还在 running 的 Run 不可能再继续：标成失败，而不是让界面永远转圈
+    runCatching { AiRunRepo.failStaleRunning() }
+        .onSuccess { if (it > 0) log.warn("有 {} 个 Run 因后端重启被标记为失败", it) }
+
     if (!ctx.cfg.loopbackOnly) {
         log.warn(
             "后端监听 {}（非回环）：AI 接口会代替用户调用上游模型并产生费用，请确认局域网可信",
@@ -235,7 +247,7 @@ fun Application.module(ctx: AppContext) {
             tagRoutes()
             mediaRoutes(ctx)
             captureRoutes(ctx, capture)
-            aiRoutes(credentials)
+            aiRoutes(credentials, runner, runBus)
         }
     }
 }

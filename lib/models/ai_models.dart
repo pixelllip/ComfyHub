@@ -225,6 +225,41 @@ class AiProviderTestResult {
   String get display => errorCode == null ? message : '[$errorCode] $message';
 }
 
+/// Run 启动结果（AIH-020）：POST 返回 202 + runId，执行在后台。
+class AiRunStart {
+  final String runId;
+  final String assistantMessageId;
+  final String? userMessageId;
+
+  const AiRunStart({
+    required this.runId,
+    required this.assistantMessageId,
+    this.userMessageId,
+  });
+
+  factory AiRunStart.fromJson(Map<String, dynamic> json) => AiRunStart(
+        runId: (json['runId'] ?? '').toString(),
+        assistantMessageId: (json['assistantMessageId'] ?? '').toString(),
+        userMessageId: json['userMessageId']?.toString(),
+      );
+}
+
+/// 统一 Harness 事件（AIH-021）。Flutter 只认这一套，不解析供应商 SSE。
+class AiRunEvent {
+  final String type;
+  final Map<String, dynamic> data;
+
+  const AiRunEvent(this.type, this.data);
+
+  String? get text => data['text']?.toString();
+  String? get code => data['code']?.toString();
+  String? get message => data['message']?.toString();
+  String? get messageId => data['messageId']?.toString();
+
+  bool get isTerminal =>
+      type == 'run.completed' || type == 'run.failed' || type == 'run.cancelled';
+}
+
 class AiConversation {
   final String id;
   final String title;

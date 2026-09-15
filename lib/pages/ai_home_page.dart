@@ -261,6 +261,26 @@ class _MessageList extends StatelessWidget {
                         ),
                       ),
                   if (m.text.isNotEmpty) SelectableText(m.text),
+                  // 流式进行中且还没有内容：给一个明确的"在生成"提示，而不是空白气泡
+                  if (m.status == 'streaming' && m.text.isEmpty)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 8),
+                        Text('正在生成…', style: theme.textTheme.bodySmall),
+                      ],
+                    ),
+                  if (m.status == 'cancelled')
+                    Text('（已停止）',
+                        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+                  if (m.status == 'failed')
+                    Text('（生成失败）',
+                        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error)),
                 ],
               ),
             ),
@@ -385,6 +405,38 @@ class _ComposerState extends State<_Composer> {
                 ],
               ),
             ),
+          // 排版：上一行整宽输入框，下一行 [附件] [模型选择] …… [发送]
+          Shortcuts(
+            shortcuts: const {
+              SingleActivator(LogicalKeyboardKey.enter): _SendIntent(),
+            },
+            child: Actions(
+              actions: {
+                _SendIntent: CallbackAction<_SendIntent>(
+                  onInvoke: (_) {
+                    // 中文输入法 composing 期间的回车是"选词"，不能当发送（AIH-053）
+                    if (_composing) return null;
+                    _submit();
+                    return null;
+                  },
+                ),
+              },
+              child: TextField(
+                controller: widget.controller,
+                focusNode: widget.focusNode,
+                minLines: 2,
+                maxLines: 8,
+                textInputAction: TextInputAction.newline,
+                onChanged: (v) => setState(() => _composing = false),
+                decoration: const InputDecoration(
+                  hintText: '描述你的生图 / 生视频需求，或输入 / 调用 Skill（Enter 发送，Shift+Enter 换行）',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
           Row(
             children: [
               IconButton(
@@ -393,42 +445,9 @@ class _ComposerState extends State<_Composer> {
                 icon: const Icon(Icons.attach_file),
               ),
               _ModelPicker(store: store),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Shortcuts(
-                  shortcuts: const {
-                    SingleActivator(LogicalKeyboardKey.enter): _SendIntent(),
-                  },
-                  child: Actions(
-                    actions: {
-                      _SendIntent: CallbackAction<_SendIntent>(
-                        onInvoke: (_) {
-                          // 中文输入法 composing 期间的回车是"选词"，不能当发送（AIH-053）
-                          if (_composing) return null;
-                          _submit();
-                          return null;
-                        },
-                      ),
-                    },
-                    child: TextField(
-                      controller: widget.controller,
-                      focusNode: widget.focusNode,
-                      minLines: 1,
-                      maxLines: 6,
-                      textInputAction: TextInputAction.newline,
-                      onChanged: (v) => setState(() => _composing = false),
-                      decoration: const InputDecoration(
-                        hintText: '描述你的生图 / 生视频需求，或输入 / 调用 Skill（Enter 发送，Shift+Enter 换行）',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
+              const Spacer(),
               FilledButton.icon(
-                onPressed: store.canSend || store.sending ? _submit : null,
+                onPressed: store.sending ? () => store.stop() : (store.canSend ? _submit : null),
                 icon: Icon(store.sending ? Icons.stop : Icons.send, size: 18),
                 label: Text(store.sending ? '停止' : '发送'),
               ),

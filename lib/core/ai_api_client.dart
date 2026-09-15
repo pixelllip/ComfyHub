@@ -149,6 +149,66 @@ class AiApiClient {
         'modelId': ?modelId,
         'parts': parts,
       }) as Map));
+
+  // --- Run（AIH-020 / AIH-021 / AIH-022） --------------------------------
+
+  /// 创建 Run：立即返回 runId（后端 202），真正的执行在后台。
+  Future<AiRunStart> startRun(
+    String conversationId, {
+    required String text,
+    required String providerId,
+    required String modelId,
+    String? retryOfRunId,
+  }) async =>
+      AiRunStart.fromJson(Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/conversations/$conversationId/runs', {
+        'text': text,
+        'providerId': providerId,
+        'modelId': modelId,
+        'retryOfRunId': ?retryOfRunId,
+      }) as Map));
+
+  Future<void> cancelRun(String runId) async => _send('POST', '/api/ai/runs/$runId/cancel');
+
+  /// 订阅统一事件流（SSE）。`after` 用于断线续传。
+  Stream<AiRunEvent> runEvents(String runId, {int after = 0}) async* {
+    final req = http.Request('GET', _uri('/api/ai/runs/$runId/events?after=$after'))
+      ..headers['Accept'] = 'text/event-stream';
+    final res = await _client.send(req);
+    if (res.statusCode != 200) {
+      final body = await res.stream.bytesToString();
+      throw AiApiException(res.statusCode, body.isEmpty ? '事件流连接失败' : body);
+    }
+    String? event;
+    final data = StringBuffer();
+    await for (final line in res.stream.transform(utf8.decoder).transform(const LineSplitter())) {
+      if (line.isEmpty) {
+        if (event != null || data.isNotEmpty) {
+          Map<String, dynamic> parsed = const {};
+          final raw = data.toString().trim();
+          if (raw.isNotEmpty && raw != '{}') {
+            try {
+              final decoded = jsonDecode(raw);
+              if (decoded is Map) parsed = Map<String, dynamic>.from(decoded);
+            } catch (_) {
+              parsed = const {};
+            }
+          }
+          yield AiRunEvent(event ?? 'message', parsed);
+        }
+        event = null;
+        data.clear();
+        continue;
+      }
+      if (line.startsWith(':')) continue;
+      if (line.startsWith('event:')) {
+        event = line.substring(6).trim();
+      } else if (line.startsWith('data:')) {
+        if (data.isNotEmpty) data.write('\n');
+        data.write(line.substring(5).trimLeft());
+      }
+    }
+  }
 }
 
 class AiApiException implements Exception {

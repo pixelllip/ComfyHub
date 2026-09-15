@@ -52,8 +52,48 @@ MockClient _fakeBackend({List<String> modalities = const ['text']}) {
           'enabled': true,
         }
       ];
+    } else if (path == '/api/ai/conversations' && request.method == 'POST') {
+      body = {
+        'id': 'c1',
+        'title': '新对话',
+        'providerId': 'local-gw',
+        'modelId': 'm-text',
+        'messageCount': 0,
+      };
     } else if (path == '/api/ai/conversations') {
       body = <Object>[];
+    } else if (path == '/api/ai/conversations/c1/runs') {
+      body = {'runId': 'r1', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
+    } else if (path == '/api/ai/runs/r1/events') {
+      // 统一事件流：两段文本增量 + 完成（AIH-021）
+      const sse = 'id: 1\nevent: run.started\ndata: {"runId":"r1"}\n\n'
+          'id: 2\nevent: message.started\ndata: {"messageId":"a1"}\n\n'
+          'id: 3\nevent: text.delta\ndata: {"messageId":"a1","text":"你好，"}\n\n'
+          'id: 4\nevent: text.delta\ndata: {"messageId":"a1","text":"我是假模型"}\n\n'
+          'id: 5\nevent: message.completed\ndata: {"messageId":"a1","text":"你好，我是假模型"}\n\n'
+          'id: 6\nevent: run.completed\ndata: {"runId":"r1"}\n\n';
+      return http.Response(sse, 200, headers: {'content-type': 'text/event-stream'});
+    } else if (path == '/api/ai/conversations/c1/messages') {
+      body = [
+        {
+          'id': 'u1',
+          'conversationId': 'c1',
+          'seq': 1,
+          'role': 'user',
+          'status': 'complete',
+          'text': '你好',
+          'parts': <Object>[],
+        },
+        {
+          'id': 'a1',
+          'conversationId': 'c1',
+          'seq': 2,
+          'role': 'assistant',
+          'status': 'complete',
+          'text': '你好，我是假模型',
+          'parts': <Object>[],
+        },
+      ];
     } else if (path == '/api/ai/preflight') {
       body = {
         'allowed': false,
@@ -171,5 +211,28 @@ void main() {
 
     // 预检结论是阻断，不允许被前端"放行"
     expect(store.preflight?.allowed, isFalse);
+  });
+
+  testWidgets('发送后按统一事件流逐段显示助手回复，结束后恢复发送按钮', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page());
+    await tester.pumpAndSettle();
+
+    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    expect(store.selectedModel?.id, 'm-text', reason: '加载后应自动选中目录里的模型');
+
+    await tester.enterText(find.byType(TextField), '你好');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    // 用户消息 + 助手回复都在（回复来自 SSE 的 text.delta / message.completed）
+    expect(find.text('你好'), findsWidgets);
+    expect(find.text('你好，我是假模型'), findsOneWidget);
+    expect(store.sending, isFalse);
+    expect(store.running, isFalse);
+    expect(find.text('发送'), findsOneWidget, reason: '结束后按钮回到「发送」');
   });
 }

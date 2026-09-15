@@ -196,3 +196,46 @@ CREATE TABLE IF NOT EXISTS ai_message_parts (
   CONSTRAINT fk_ai_part_msg FOREIGN KEY (message_id)
     REFERENCES ai_messages (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- AI Run 与事件（M2 / AIH-020 ~ AIH-024）
+-- Run 是独立实体：POST 只创建（202），执行在后台，事件带单调 seq 供断线续传
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_runs (
+  id                   CHAR(36)     NOT NULL,
+  conversation_id      CHAR(36)     NOT NULL,
+  status               VARCHAR(16)  NOT NULL COMMENT 'running / completed / failed / cancelled',
+  provider_id          VARCHAR(96)  NULL,
+  model_id             VARCHAR(191) NULL,
+  user_message_id      CHAR(36)     NULL,
+  assistant_message_id CHAR(36)     NULL,
+  provider_snapshot    JSON         NULL COMMENT '脱敏快照：不含密钥',
+  model_snapshot       JSON         NULL,
+  skill_snapshot       JSON         NULL,
+  prompt_version       VARCHAR(32)  NULL,
+  retry_of_run_id      CHAR(36)     NULL,
+  error_code           VARCHAR(48)  NULL,
+  error_message        TEXT         NULL,
+  usage_json           JSON         NULL,
+  started_at           DATETIME(3)  NULL,
+  completed_at         DATETIME(3)  NULL,
+  created_at           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                   ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_ai_runs_conv (conversation_id, created_at),
+  KEY idx_ai_runs_status (status),
+  CONSTRAINT fk_ai_runs_conv FOREIGN KEY (conversation_id)
+    REFERENCES ai_conversations (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ai_run_events (
+  run_id       CHAR(36)    NOT NULL,
+  seq          INT         NOT NULL,
+  event_type   VARCHAR(32) NOT NULL,
+  payload_json JSON        NULL,
+  created_at   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (run_id, seq),
+  CONSTRAINT fk_ai_events_run FOREIGN KEY (run_id)
+    REFERENCES ai_runs (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
