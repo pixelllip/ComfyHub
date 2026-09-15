@@ -95,6 +95,26 @@ fun Route.aiRoutes(credentials: CredentialService) {
         }
 
         // -------------------------------------------------------------------
+        //  连接测试（AIH-008）：只返回脱敏结果与稳定错误码，日志不含密钥
+        // -------------------------------------------------------------------
+
+        post("/providers/{id}/test") {
+            val p = requireProvider(call.parameters["id"].orEmpty())
+            // 密钥只在后端内部解析，用完即弃；不写日志、不进响应
+            val secret = credentials.resolve(p.credentialRef)
+            val result = AiUpstream.testConnection(p, secret)
+            call.respond(
+                ProviderTestResponse(
+                    ok = result.ok,
+                    errorCode = result.errorCode,
+                    message = result.message,
+                    httpStatus = result.httpStatus,
+                    modelCount = result.modelCount,
+                )
+            )
+        }
+
+        // -------------------------------------------------------------------
         //  凭据：只写 + 状态
         // -------------------------------------------------------------------
 
@@ -262,6 +282,16 @@ data class CredentialSetRequest(val value: String = "")
  */
 @Serializable
 data class DeleteResult(val deleted: Boolean, val id: String)
+
+/** 连接测试结果：只含状态与稳定错误码，**不含任何密钥或原始 Header**。 */
+@Serializable
+data class ProviderTestResponse(
+    val ok: Boolean,
+    val errorCode: String? = null,
+    val message: String,
+    val httpStatus: Int? = null,
+    val modelCount: Int? = null,
+)
 
 @Serializable
 data class AttachmentFactDto(
