@@ -65,6 +65,10 @@ class AiApiClient {
 
   Future<void> deleteProvider(String id) async => _send('DELETE', '/api/ai/providers/$id');
 
+  /// 连接测试：只拿回状态与稳定错误码，**不会拿回密钥**（AIH-008）。
+  Future<AiProviderTestResult> testProvider(String id) async => AiProviderTestResult.fromJson(
+      Map<String, dynamic>.from(await _send('POST', '/api/ai/providers/$id/test') as Map));
+
   Future<AiCredentialStatus> credentialStatus(String providerId) async =>
       AiCredentialStatus.fromJson(Map<String, dynamic>.from(
           await _get('/api/ai/providers/$providerId/credentials') as Map));

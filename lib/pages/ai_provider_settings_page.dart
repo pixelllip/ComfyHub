@@ -293,6 +293,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
   /// 密钥输入框**永远是空字符串**：只写不读，不留任何回显可能（AIH-012）。
   final _key = TextEditingController();
   bool _busy = false;
+  AiProviderTestResult? _testResult;
   final _models = <AiModel>[];
 
   @override
@@ -331,6 +332,26 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         if (widget.error != null) ...[
           const SizedBox(height: 10),
           _Note(text: widget.error!, error: true),
+        ],
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Text('连接测试', style: theme.textTheme.titleSmall),
+            const SizedBox(width: 10),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _test,
+              icon: const Icon(Icons.network_check, size: 18),
+              label: const Text('测试连接'),
+            ),
+          ],
+        ),
+        Text(
+          '测试只发一次 GET 请求：不跟随重定向、10 秒超时，密钥不会出现在日志里。',
+          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+        ),
+        if (_testResult != null) ...[
+          const SizedBox(height: 8),
+          _Note(text: _testResult!.display, error: !_testResult!.ok),
         ],
         const SizedBox(height: 16),
         Text('API Key', style: theme.textTheme.titleSmall),
@@ -501,6 +522,21 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         capabilitySource: m.capabilitySource,
         enabled: m.enabled,
       );
+
+  Future<void> _test() async {
+    setState(() {
+      _busy = true;
+      _testResult = null;
+    });
+    try {
+      final result = await widget.api.testProvider(widget.provider.id);
+      setState(() => _testResult = result);
+    } catch (e) {
+      await widget.onChanged('连接测试失败：$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _saveKey() async {
     final value = _key.text;

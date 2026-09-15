@@ -197,6 +197,34 @@ class AiModel {
       };
 }
 
+/// 连接测试结果（AIH-008）：只有状态与稳定错误码，没有任何凭据内容。
+class AiProviderTestResult {
+  final bool ok;
+  final String? errorCode;
+  final String message;
+  final int? httpStatus;
+  final int? modelCount;
+
+  const AiProviderTestResult({
+    required this.ok,
+    required this.message,
+    this.errorCode,
+    this.httpStatus,
+    this.modelCount,
+  });
+
+  factory AiProviderTestResult.fromJson(Map<String, dynamic> json) => AiProviderTestResult(
+        ok: json['ok'] == true,
+        errorCode: json['errorCode']?.toString(),
+        message: (json['message'] ?? '').toString(),
+        httpStatus: (json['httpStatus'] as num?)?.toInt(),
+        modelCount: (json['modelCount'] as num?)?.toInt(),
+      );
+
+  /// 给用户看的完整说明：稳定错误码在前，便于报障时对齐。
+  String get display => errorCode == null ? message : '[$errorCode] $message';
+}
+
 class AiConversation {
   final String id;
   final String title;

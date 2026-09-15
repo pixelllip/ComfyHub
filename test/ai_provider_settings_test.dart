@@ -56,6 +56,13 @@ MockClient _backend(_Recorder recorder) {
     } else if (path.endsWith('/credentials')) {
       if (request.method == 'PUT') recorder.puts.add(request.body);
       body = {'configured': true, 'source': 'managed', 'writable': true};
+    } else if (path.endsWith('/test')) {
+      body = {
+        'ok': false,
+        'errorCode': 'PROVIDER_UNREACHABLE',
+        'message': '无法连接：ConnectException',
+        'httpStatus': null,
+      };
     } else {
       body = <Object>[];
     }
@@ -105,6 +112,24 @@ void main() {
       expect(f.controller?.text ?? '', isEmpty);
     }
     expect(recorder.puts, isEmpty, reason: '没有输入就不应该发出任何写密钥请求');
+  });
+
+  testWidgets('连接测试展示稳定错误码，且界面里不出现密钥', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final recorder = _Recorder();
+    await tester.pumpWidget(await _page(recorder));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('本机网关'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('测试连接'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('PROVIDER_UNREACHABLE'), findsOneWidget);
+    expect(find.textContaining('无法连接'), findsOneWidget);
   });
 
   testWidgets('新建 Provider 只提供首期三种协议', (tester) async {
