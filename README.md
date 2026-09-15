@@ -405,7 +405,7 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `DELETE` | `/api/ai/providers/{id}/credentials` | 移除受管凭据（环境变量提供的不可移除） |
 | `GET/PUT` | `/api/ai/providers/{id}/models` | 模型目录（能力真源）。`GET` 读，`PUT` 全量替换 |
 | `POST` | `/api/ai/providers/{id}/test` | 连接测试：返回 `ok / errorCode / message / httpStatus / modelCount`，**不含密钥** |
-| `POST` | `/api/ai/providers/{id}/discover-models` | 模型发现：只返回候选（`id / 显示名 / 容量`），**不落库、不推断能力** |
+| `POST` | `/api/ai/providers/{id}/discover-models` | 模型发现：返回候选并**自动预填能力**（接口声明 → 内置目录 → 仅文本，带来源标记），**不落库** |
 | `POST` | `/api/ai/preflight` | 附件准入预检：**纯计算、不发上游请求**，返回 `{allowed, blockers}` |
 | `GET/POST` | `/api/ai/conversations` | 会话列表 / 新建 |
 | `GET/PATCH/DELETE` | `/api/ai/conversations/{id}` | 详情 / 改名·归档 / 删除（消息级联清理） |
@@ -427,6 +427,26 @@ pwsh -File scripts\e2e-capture-test.ps1
 **密钥只写不读**：受管凭据用 **Windows DPAPI(CurrentUser)** 加密后存在
 `storage/ai/credentials.dpapi.json`，任何接口、数据库字段和日志都拿不到明文；
 DPAPI 不可用时写入直接失败，**不会退化成明文落盘**（AIH-012 / AIH-015）。
+
+**模型能力是怎么定下来的**（AIH-011，三个来源按可信度排序，界面上都看得见）：
+
+| 来源 | 什么时候用 | 界面标记 |
+| --- | --- | --- |
+| 接口声明 | `/models` 自己给了 `architecture.input_modalities`、`capabilities`、`supports_vision` 等字段 | 接口声明 |
+| 内置目录 | 接口没说，但命中 `ModelCapabilityCatalog`（按厂商公开文档整理的离线表，带版本号） | 内置目录 |
+| 仅文本 | 两边都没有 | 未识别（默认仅文本） |
+
+内置目录只是**预勾选建议**，可能过期；没命中的模型**绝不会按名字猜图片能力**。
+"获取可用模型"里每个候选都能展开改模态再点加入。
+
+**混合协议网关**：同一条 Base URL 上，`claude-*` 走 `/messages`、其它模型走 `/chat/completions`
+的网关很常见（例如 `api.commandcode.ai`）。因为一条 Provider 固定一种协议，
+这种网关要**建两条 Provider**（同一个凭据引用可共用），各自只放属于自己端点的模型；
+放错了会收到 `PROTOCOL_ERROR` 并附上游原文（"not supported on this endpoint…"）。
+
+**上游报错会脱敏回显**：Run 失败时错误里带上上游返回的正文（已抹掉密钥、截断到 400 字），
+并用正文关键字纠正只看状态码的误判——例如 `MODEL_NOT_IN_PLAN` 报 `QUOTA_EXCEEDED` 而不是
+误导性的"密钥不对"（AIH-024 / AIH-051）。
 
 ### 提示词
 
