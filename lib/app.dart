@@ -5,10 +5,12 @@ import 'package:provider/provider.dart';
 import 'core/backend_launcher.dart';
 import 'core/settings_store.dart';
 import 'core/theme.dart';
+import 'pages/ai_home_page.dart';
 import 'pages/gallery_page.dart';
 import 'pages/prompts_page.dart';
 import 'pages/settings_page.dart';
 import 'pages/tags_page.dart';
+import 'state/ai_workspace_store.dart';
 import 'state/library_store.dart';
 
 class ComfyHubApp extends StatelessWidget {
@@ -26,6 +28,12 @@ class ComfyHubApp extends StatelessWidget {
         // 首屏不立刻拉数据：等 StartupGate 把后端拉起来之后再刷（见 _StartupGateState）
         ChangeNotifierProvider<LibraryStore>(
           create: (_) => LibraryStore(settings),
+        ),
+        // AI 工作台状态独立一份：画廊 / 提示词刷新不应该让聊天页整体 rebuild
+        ChangeNotifierProvider<AiWorkspaceStore>(
+          create: (ctx) => AiWorkspaceStore(
+            baseUrlProvider: () => ctx.read<SettingsStore>().baseUrl,
+          ),
         ),
       ],
       child: MaterialApp(
@@ -262,10 +270,11 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  // 默认落在「画廊」（产物 / 图片）页 —— 打开 App 先看图，提示词排在第二位
+  // 默认落在「AI 工作台」（AIH-001）—— 打开 App 先进入对话，画廊退到第二位
   int _index = 0;
 
   static const _destinations = [
+    _Dest('AI 工作台', Icons.auto_awesome_outlined, Icons.auto_awesome),
     _Dest('画廊', Icons.photo_library_outlined, Icons.photo_library),
     _Dest('提示词', Icons.text_snippet_outlined, Icons.text_snippet),
     _Dest('标签', Icons.sell_outlined, Icons.sell),
@@ -276,6 +285,7 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 900;
     const pages = [
+      AiHomePage(),
       GalleryPage(),
       PromptsPage(),
       TagsPage(),

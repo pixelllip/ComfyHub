@@ -123,6 +123,73 @@ object Migrate {
             """.trimIndent()
         )
 
+        // --- AI 会话 / 消息 / 有序消息块（M2 / AIH-018 / AIH-019） ---
+        changed += createTable(
+            conn, "ai_conversations",
+            """
+            CREATE TABLE IF NOT EXISTS ai_conversations (
+              id                   CHAR(36)     NOT NULL,
+              title                VARCHAR(255) NOT NULL DEFAULT '新对话',
+              provider_id          VARCHAR(96)  NULL COMMENT '当前选择（消息里另有来源快照）',
+              model_id             VARCHAR(191) NULL,
+              system_prompt_version VARCHAR(32) NOT NULL DEFAULT 'v1',
+              archived             TINYINT(1)   NOT NULL DEFAULT 0,
+              created_at           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+              updated_at           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                               ON UPDATE CURRENT_TIMESTAMP(3),
+              PRIMARY KEY (id),
+              KEY idx_ai_conv_updated (updated_at),
+              KEY idx_ai_conv_archived (archived, updated_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """.trimIndent()
+        )
+
+        changed += createTable(
+            conn, "ai_messages",
+            """
+            CREATE TABLE IF NOT EXISTS ai_messages (
+              id                   CHAR(36)     NOT NULL,
+              conversation_id      CHAR(36)     NOT NULL,
+              seq                  INT          NOT NULL DEFAULT 0 COMMENT '会话内单调序号',
+              role                 VARCHAR(16)  NOT NULL COMMENT 'user / assistant / tool / system_note',
+              status               VARCHAR(16)  NOT NULL DEFAULT 'complete'
+                                                COMMENT 'pending / streaming / complete / failed / cancelled',
+              text                 MEDIUMTEXT   NULL,
+              provider_id          VARCHAR(96)  NULL COMMENT 'assistant 来源快照',
+              model_id             VARCHAR(191) NULL,
+              provider_response_id VARCHAR(191) NULL,
+              replay_json          JSON         NULL COMMENT '协议原生续写所需状态（含版本）',
+              usage_json           JSON         NULL,
+              created_at           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+              updated_at           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                               ON UPDATE CURRENT_TIMESTAMP(3),
+              PRIMARY KEY (id),
+              KEY idx_ai_msg_conv (conversation_id, seq),
+              CONSTRAINT fk_ai_msg_conv FOREIGN KEY (conversation_id)
+                REFERENCES ai_conversations (id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """.trimIndent()
+        )
+
+        changed += createTable(
+            conn, "ai_message_parts",
+            """
+            CREATE TABLE IF NOT EXISTS ai_message_parts (
+              message_id    CHAR(36)    NOT NULL,
+              ordinal       INT         NOT NULL,
+              type          VARCHAR(24) NOT NULL COMMENT 'text / reasoning / attachment / tool_call / tool_result',
+              text          MEDIUMTEXT  NULL,
+              attachment_id CHAR(36)    NULL,
+              tool_call_id  VARCHAR(191) NULL,
+              json_payload  JSON        NULL,
+              created_at    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+              PRIMARY KEY (message_id, ordinal),
+              CONSTRAINT fk_ai_part_msg FOREIGN KEY (message_id)
+                REFERENCES ai_messages (id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """.trimIndent()
+        )
+
         if (changed > 0) log.info("数据库结构已补齐（{} 项变更）", changed) else log.info("数据库结构已是最新")
         changed
     }

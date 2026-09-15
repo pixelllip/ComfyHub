@@ -7,6 +7,7 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
+import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
@@ -90,7 +91,7 @@ fun Route.aiRoutes(credentials: CredentialService) {
             val id = call.parameters["id"].orEmpty()
             val removed = AiRepo.deleteProvider(id)
             if (!removed) throw AiException(AiErrorCode.CONFIG_ERROR, "Provider 不存在: $id")
-            call.respond(mapOf("deleted" to true, "id" to id))
+            call.respond(DeleteResult(deleted = true, id = id))
         }
 
         // -------------------------------------------------------------------
@@ -151,6 +152,57 @@ fun Route.aiRoutes(credentials: CredentialService) {
         }
 
         // -------------------------------------------------------------------
+        //  会话与消息（AIH-018 / AIH-019）
+        // -------------------------------------------------------------------
+
+        get("/conversations") {
+            val includeArchived = call.request.queryParameters["includeArchived"]
+                ?.let { it == "1" || it.equals("true", true) } ?: false
+            call.respond(AiConversationRepo.list(includeArchived))
+        }
+
+        post("/conversations") {
+            val body = call.receive<AiConversationCreate>()
+            call.respond(HttpStatusCode.Created, AiConversationRepo.create(body))
+        }
+
+        get("/conversations/{id}") {
+            val id = call.parameters["id"].orEmpty()
+            call.respond(
+                AiConversationRepo.get(id)
+                    ?: throw AiException(AiErrorCode.CONFIG_ERROR, "会话不存在: $id")
+            )
+        }
+
+        patch("/conversations/{id}") {
+            val id = call.parameters["id"].orEmpty()
+            call.respond(AiConversationRepo.patch(id, call.receive<AiConversationPatch>()))
+        }
+
+        delete("/conversations/{id}") {
+            val id = call.parameters["id"].orEmpty()
+            if (!AiConversationRepo.delete(id)) {
+                throw AiException(AiErrorCode.CONFIG_ERROR, "会话不存在: $id")
+            }
+            call.respond(DeleteResult(deleted = true, id = id))
+        }
+
+        get("/conversations/{id}/messages") {
+            val id = call.parameters["id"].orEmpty()
+            AiConversationRepo.get(id)
+                ?: throw AiException(AiErrorCode.CONFIG_ERROR, "会话不存在: $id")
+            call.respond(AiConversationRepo.listMessages(id))
+        }
+
+        post("/conversations/{id}/messages") {
+            val id = call.parameters["id"].orEmpty()
+            call.respond(
+                HttpStatusCode.Created,
+                AiConversationRepo.appendMessage(id, call.receive<AiMessageAppend>())
+            )
+        }
+
+        // -------------------------------------------------------------------
         //  附件准入预检（AIH-029 / AIH-030）
         //
         //  这是纯计算：不产生任何上游请求。前端发送前先调它，
@@ -197,6 +249,13 @@ fun Route.aiRoutes(credentials: CredentialService) {
 
 @Serializable
 data class CredentialSetRequest(val value: String = "")
+
+/**
+ * 删除结果。**不要**用 `mapOf("deleted" to true, "id" to id)` ——
+ * kotlinx.serialization 不支持「元素类型不同的集合」，运行时会 500。
+ */
+@Serializable
+data class DeleteResult(val deleted: Boolean, val id: String)
 
 @Serializable
 data class AttachmentFactDto(

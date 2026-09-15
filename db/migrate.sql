@@ -142,3 +142,57 @@ CREATE TABLE IF NOT EXISTS ai_models (
   CONSTRAINT fk_ai_models_provider FOREIGN KEY (provider_id)
     REFERENCES ai_providers (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- AI 工作台：会话 / 消息 / 有序消息块（M2 / AIH-018 / AIH-019）
+-- 消息不是一段纯文本：正文、附件、工具调用、工具结果按 ordinal 有序块保存
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_conversations (
+  id                    CHAR(36)     NOT NULL,
+  title                 VARCHAR(255) NOT NULL DEFAULT '新对话',
+  provider_id           VARCHAR(96)  NULL,
+  model_id              VARCHAR(191) NULL,
+  system_prompt_version VARCHAR(32)  NOT NULL DEFAULT 'v1',
+  archived              TINYINT(1)   NOT NULL DEFAULT 0,
+  created_at            DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at            DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                     ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_ai_conv_updated (updated_at),
+  KEY idx_ai_conv_archived (archived, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ai_messages (
+  id                   CHAR(36)     NOT NULL,
+  conversation_id      CHAR(36)     NOT NULL,
+  seq                  INT          NOT NULL DEFAULT 0,
+  role                 VARCHAR(16)  NOT NULL,
+  status               VARCHAR(16)  NOT NULL DEFAULT 'complete',
+  text                 MEDIUMTEXT   NULL,
+  provider_id          VARCHAR(96)  NULL,
+  model_id             VARCHAR(191) NULL,
+  provider_response_id VARCHAR(191) NULL,
+  replay_json          JSON         NULL,
+  usage_json           JSON         NULL,
+  created_at           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                                    ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_ai_msg_conv (conversation_id, seq),
+  CONSTRAINT fk_ai_msg_conv FOREIGN KEY (conversation_id)
+    REFERENCES ai_conversations (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ai_message_parts (
+  message_id    CHAR(36)     NOT NULL,
+  ordinal       INT          NOT NULL,
+  type          VARCHAR(24)  NOT NULL,
+  text          MEDIUMTEXT   NULL,
+  attachment_id CHAR(36)     NULL,
+  tool_call_id  VARCHAR(191) NULL,
+  json_payload  JSON         NULL,
+  created_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (message_id, ordinal),
+  CONSTRAINT fk_ai_part_msg FOREIGN KEY (message_id)
+    REFERENCES ai_messages (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

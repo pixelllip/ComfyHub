@@ -12,7 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:viewer/app.dart';
 import 'package:viewer/core/backend_launcher.dart';
 import 'package:viewer/core/settings_store.dart';
-import 'package:viewer/pages/gallery_page.dart';
+import 'package:viewer/pages/ai_home_page.dart';
 
 void main() {
   testWidgets('App 装上中文 Material 本地化：选择菜单是「复制 / 全选」而不是 Copy / Select all',
@@ -31,11 +31,11 @@ void main() {
     await tester.pumpWidget(ComfyHubApp(settings: settings, launcher: launcher));
     await tester.pumpAndSettle();
 
-    // 主界面照旧落在画廊
-    expect(find.byType(GalleryPage), findsOneWidget);
+    // 主界面现在落在 AI 工作台（AIH-001），中文本地化断言与落地页无关
+    expect(find.byType(AiHomePage), findsOneWidget);
 
     // 系统级菜单文案来自 MaterialLocalizations
-    final context = tester.element(find.byType(GalleryPage));
+    final context = tester.element(find.byType(AiHomePage));
     final l10n = MaterialLocalizations.of(context);
     expect(l10n.copyButtonLabel, '复制');
     expect(l10n.selectAllButtonLabel, '全选');
