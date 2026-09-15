@@ -403,9 +403,14 @@ class _ProviderDetailState extends State<_ProviderDetail> {
             Text('模型目录', style: theme.textTheme.titleSmall),
             const Spacer(),
             TextButton.icon(
+              onPressed: _busy ? null : _discover,
+              icon: const Icon(Icons.cloud_download_outlined, size: 18),
+              label: const Text('获取可用模型'),
+            ),
+            TextButton.icon(
               onPressed: _busy ? null : _addModel,
               icon: const Icon(Icons.add, size: 18),
-              label: const Text('添加模型'),
+              label: const Text('手动添加'),
             ),
           ],
         ),
@@ -568,8 +573,52 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     }
   }
 
-  Future<void> _addModel() async {
-    final draft = await showDialog<_ModelDraft>(
+  /// 拉取候选模型。**发现只是候选**：勾选后先进本地列表，仍需点「保存模型目录」才落库；
+  /// 能力（图片/视频/工具…）不会因为发现而被推断，一律保持"未声明"（AIH-009 / AIH-011）。
+  Future<void> _discover() async {
+    setState(() => _busy = true);
+    try {
+      final result = await widget.api.discoverModels(widget.provider.id);
+      if (!mounted) return;
+      if (!result.ok) {
+        await widget.onChanged('获取模型失败：${result.display}');
+        return;
+      }
+      if (result.candidates.isEmpty) {
+        await widget.onChanged('端点没有返回模型列表（${result.message}）');
+        return;
+      }
+      final picked = await showDialog<List<AiModelCandidate>>(
+        context: context,
+        builder: (_) => _DiscoverDialog(result: result),
+      );
+      if (picked == null || picked.isEmpty) return;
+      var added = 0;
+      setState(() {
+        for (final c in picked) {
+          if (_models.any((m) => m.id == c.id)) continue;
+          _models.add(AiModel(
+            providerId: widget.provider.id,
+            id: c.id,
+            displayName: c.displayName,
+            // 只声明文本；其它能力必须由用户显式勾选
+            inputModalities: const ['text'],
+            contextWindow: c.contextWindow,
+            maxOutputTokens: c.maxOutputTokens,
+            capabilitySource: 'discovered',
+          ));
+          added++;
+        }
+      });
+      await widget.onChanged('已加入 $added 个候选（别忘了点「保存模型目录」）');
+    } catch (e) {
+      await widget.onChanged('获取模型失败：$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _addModel() async {    final draft = await showDialog<_ModelDraft>(
       context: context,
       builder: (_) => const _ModelDialog(),
     );
@@ -781,6 +830,73 @@ class _ModelDraft {
   final List<AiModality> modalities;
   final bool tools;
   const _ModelDraft(this.id, this.displayName, this.modalities, this.tools);
+}
+
+/// 候选模型勾选框：只列身份与容量，**不显示能力猜测**。
+class _DiscoverDialog extends StatefulWidget {
+  final AiDiscoverResult result;
+  const _DiscoverDialog({required this.result});
+
+  @override
+  State<_DiscoverDialog> createState() => _DiscoverDialogState();
+}
+
+class _DiscoverDialogState extends State<_DiscoverDialog> {
+  late final Set<String> _selected = widget.result.candidates.map((c) => c.id).toSet();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: Text('发现 ${widget.result.candidates.length} 个候选模型'),
+      content: SizedBox(
+        width: 520,
+        height: 380,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '勾选后加入模型目录（还要点「保存模型目录」才生效）。'
+              '能力不会被自动推断，请在保存前按需勾选文本/图片/视频/音频/文档。',
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView.builder(
+                itemCount: widget.result.candidates.length,
+                itemBuilder: (context, i) {
+                  final c = widget.result.candidates[i];
+                  return CheckboxListTile(
+                    dense: true,
+                    value: _selected.contains(c.id),
+                    title: Text(c.displayName),
+                    subtitle: Text(c.detail, style: theme.textTheme.labelSmall),
+                    onChanged: (on) => setState(() {
+                      if (on == true) {
+                        _selected.add(c.id);
+                      } else {
+                        _selected.remove(c.id);
+                      }
+                    }),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+        FilledButton(
+          onPressed: () => Navigator.pop(
+            context,
+            widget.result.candidates.where((c) => _selected.contains(c.id)).toList(),
+          ),
+          child: Text('加入 ${_selected.length} 个'),
+        ),
+      ],
+    );
+  }
 }
 
 class _ModelDialog extends StatefulWidget {

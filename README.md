@@ -404,10 +404,25 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `PUT` | `/api/ai/providers/{id}/credentials` | 只写。值为空 = 不修改；`NAME=value`、带引号、含空格的输入会被拒绝 |
 | `DELETE` | `/api/ai/providers/{id}/credentials` | 移除受管凭据（环境变量提供的不可移除） |
 | `GET/PUT` | `/api/ai/providers/{id}/models` | 模型目录（能力真源）。`GET` 读，`PUT` 全量替换 |
+| `POST` | `/api/ai/providers/{id}/test` | 连接测试：返回 `ok / errorCode / message / httpStatus / modelCount`，**不含密钥** |
+| `POST` | `/api/ai/providers/{id}/discover-models` | 模型发现：只返回候选（`id / 显示名 / 容量`），**不落库、不推断能力** |
 | `POST` | `/api/ai/preflight` | 附件准入预检：**纯计算、不发上游请求**，返回 `{allowed, blockers}` |
 | `GET/POST` | `/api/ai/conversations` | 会话列表 / 新建 |
 | `GET/PATCH/DELETE` | `/api/ai/conversations/{id}` | 详情 / 改名·归档 / 删除（消息级联清理） |
 | `GET/POST` | `/api/ai/conversations/{id}/messages` | 消息（按 `seq` 有序恢复）/ 追加消息（可带有序块：text / attachment / tool_call / tool_result） |
+| `POST` | `/api/ai/conversations/{id}/runs` | **发起一次对话 Run**：body `{text, providerId, modelId}` → `202 + {runId, assistantMessageId, userMessageId}`，执行在后台 |
+| `GET` | `/api/ai/runs/{id}` | Run 状态（`running / completed / failed / cancelled`、`errorCode`、`promptVersion`） |
+| `GET` | `/api/ai/runs/{id}/events?after=<seq>` | **统一 SSE 事件流**：`run.started / message.started / reasoning.delta / text.delta / usage.updated / message.completed / run.completed / run.failed / run.cancelled / heartbeat`；`after` 断线续传 |
+| `POST` | `/api/ai/runs/{id}/cancel` | 取消：关闭上游连接，Run 记为 `cancelled` |
+
+**协议支持现状**（以代码事实为准，不按模型名猜）：
+
+| 协议 | 状态 |
+| --- | --- |
+| `openai-completions` | ✅ 文本流 + 多轮历史（OpenAI / DeepSeek / Moonshot / vLLM / LM Studio / Ollama 的 OpenAI 端点等） |
+| `anthropic-messages` | ✅ 文本流（system 顶层、`max_tokens`、`content_block_delta`） |
+| `openai-responses` | ⛔ 尚未实现：会明确报错，请改用 `openai-completions` |
+| 图片 / 视频 / 音频 / 文档附件 | ⛔ 适配器尚未实现 → 预检直接阻断（不是静默丢弃） |
 
 **密钥只写不读**：受管凭据用 **Windows DPAPI(CurrentUser)** 加密后存在
 `storage/ai/credentials.dpapi.json`，任何接口、数据库字段和日志都拿不到明文；

@@ -69,6 +69,10 @@ class AiApiClient {
   Future<AiProviderTestResult> testProvider(String id) async => AiProviderTestResult.fromJson(
       Map<String, dynamic>.from(await _send('POST', '/api/ai/providers/$id/test') as Map));
 
+  /// 模型发现：返回候选，**不落库**；用户勾选后再由 [saveModels] 保存（AIH-009）。
+  Future<AiDiscoverResult> discoverModels(String id) async => AiDiscoverResult.fromJson(
+      Map<String, dynamic>.from(await _send('POST', '/api/ai/providers/$id/discover-models') as Map));
+
   Future<AiCredentialStatus> credentialStatus(String providerId) async =>
       AiCredentialStatus.fromJson(Map<String, dynamic>.from(
           await _get('/api/ai/providers/$providerId/credentials') as Map));

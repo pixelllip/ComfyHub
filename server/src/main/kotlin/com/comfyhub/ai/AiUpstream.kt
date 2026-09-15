@@ -6,6 +6,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * 上游 Provider 的连接测试与（后续）请求发送（AIH-008）。
@@ -133,5 +134,126 @@ object AiUpstream {
         AiErrorCode.QUOTA_EXCEEDED -> "配额不足（HTTP $status）"
         AiErrorCode.PROVIDER_UNREACHABLE -> "上游不可达或返回服务端错误（HTTP $status）"
         else -> "配置有误（HTTP $status）"
+    }
+
+    // -----------------------------------------------------------------------
+    //  模型发现（AIH-009）：只产生候选，**不落库**
+    // -----------------------------------------------------------------------
+
+    data class ModelCandidate(
+        val id: String,
+        val displayName: String,
+        val contextWindow: Int? = null,
+        val maxOutputTokens: Int? = null,
+    )
+
+    data class DiscoveryResult(
+        val ok: Boolean,
+        val errorCode: String? = null,
+        val message: String,
+        val candidates: List<ModelCandidate> = emptyList(),
+    )
+
+    fun discoverModels(provider: AiProviderDto, secret: String?): DiscoveryResult {
+        val response = getModels(provider, secret)
+        if (!response.ok) {
+            return DiscoveryResult(false, response.errorCode, response.message)
+        }
+        val candidates = parseCandidates(response.body)
+        return DiscoveryResult(
+            ok = true,
+            message = if (candidates.isEmpty()) "未发现模型（端点返回空列表）" else "发现 ${candidates.size} 个候选模型",
+            candidates = candidates,
+        )
+    }
+
+    /**
+     * 解析模型列表。**只取 id / 显示名 / 容量**：
+     * 能力（图片、视频、工具…）不在这里推断，必须由用户在模型目录里显式声明（AIH-011）。
+     */
+    fun parseCandidates(body: String): List<ModelCandidate> = runCatching {
+        val root = com.comfyhub.AppJson.parseToJsonElement(body)
+        val array = when (root) {
+            is kotlinx.serialization.json.JsonArray -> root
+            is kotlinx.serialization.json.JsonObject ->
+                (root["data"] ?: root["models"]) as? kotlinx.serialization.json.JsonArray
+            else -> null
+        } ?: return emptyList()
+
+        array.mapNotNull { element ->
+            val obj = element as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+            fun text(vararg keys: String): String? = keys.firstNotNullOfOrNull { key ->
+                (obj[key] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+            }
+            fun number(vararg keys: String): Int? = keys.firstNotNullOfOrNull { key ->
+                (obj[key] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toIntOrNull()
+            }
+            val id = text("id", "name", "model") ?: return@mapNotNull null
+            ModelCandidate(
+                id = id,
+                displayName = text("display_name", "displayName", "name") ?: id,
+                contextWindow = number("context_window", "contextWindow", "context_length", "max_context_tokens"),
+                maxOutputTokens = number("max_output_tokens", "maxOutputTokens", "max_tokens"),
+            )
+        }.distinctBy { it.id }
+    }.getOrDefault(emptyList())
+
+    // --- 内部：发一次 GET /models ------------------------------------------
+
+    private data class UpstreamResponse(
+        val ok: Boolean,
+        val status: Int?,
+        val errorCode: String?,
+        val message: String,
+        val body: String,
+    )
+
+    private fun getModels(provider: AiProviderDto, secret: String?): UpstreamResponse {
+        val api = AiApi.parse(provider.api)
+            ?: return UpstreamResponse(false, null, AiErrorCode.CONFIG_ERROR, "未知协议：${provider.api}", "")
+        val trust = EndpointTrust.parse(provider.endpointTrust) ?: EndpointTrust.PUBLIC
+        val uri = runCatching { URI(modelsUrl(provider.baseURL, api)) }.getOrNull()
+            ?: return UpstreamResponse(false, null, AiErrorCode.CONFIG_ERROR, "Base URL 无法解析", "")
+        val host = uri.host
+            ?: return UpstreamResponse(false, null, AiErrorCode.CONFIG_ERROR, "Base URL 缺少主机名", "")
+
+        if (provider.credentialRef != null && secret.isNullOrEmpty()) {
+            return UpstreamResponse(
+                false, null, AiErrorCode.MISSING_CREDENTIAL,
+                "该 Provider 引用了凭据 ${provider.credentialRef}，但本机没有配置", ""
+            )
+        }
+        runCatching { EndpointGuard.resolveAndCheck(host, trust) }.getOrElse { e ->
+            return UpstreamResponse(false, null, AiErrorCode.CONFIG_ERROR, e.message ?: "目标地址不被允许", "")
+        }
+
+        val builder = HttpRequest.newBuilder(uri)
+            .timeout(Duration.ofSeconds(20))
+            .GET()
+            .header("Accept", "application/json")
+        when (api) {
+            AiApi.OPENAI_COMPLETIONS, AiApi.OPENAI_RESPONSES ->
+                if (!secret.isNullOrEmpty()) builder.header("Authorization", "Bearer $secret")
+            AiApi.ANTHROPIC_MESSAGES -> {
+                if (!secret.isNullOrEmpty()) builder.header("x-api-key", secret)
+                builder.header("anthropic-version", "2023-06-01")
+            }
+        }
+        return try {
+            val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString())
+            val code = classifyStatus(response.statusCode())
+            if (code == null) {
+                UpstreamResponse(true, response.statusCode(), null, "OK", response.body())
+            } else {
+                UpstreamResponse(
+                    false, response.statusCode(), code,
+                    explain(code, response.statusCode()), ""
+                )
+            }
+        } catch (e: java.net.http.HttpTimeoutException) {
+            UpstreamResponse(false, null, AiErrorCode.PROVIDER_UNREACHABLE, "连接超时（20 秒）", "")
+        } catch (e: Exception) {
+            UpstreamResponse(false, null, AiErrorCode.PROVIDER_UNREACHABLE, "无法连接：${e::class.simpleName}", "")
+        }
     }
 }

@@ -128,6 +128,31 @@ fun Route.aiRoutes(
         }
 
         // -------------------------------------------------------------------
+        //  模型发现（AIH-009）：只返回候选，**不落库**；用户勾选后才能进目录
+        // -------------------------------------------------------------------
+
+        post("/providers/{id}/discover-models") {
+            val p = requireProvider(call.parameters["id"].orEmpty())
+            val secret = credentials.resolve(p.credentialRef)
+            val result = AiUpstream.discoverModels(p, secret)
+            call.respond(
+                DiscoverModelsResponse(
+                    ok = result.ok,
+                    errorCode = result.errorCode,
+                    message = result.message,
+                    candidates = result.candidates.map {
+                        ModelCandidateDto(
+                            id = it.id,
+                            displayName = it.displayName,
+                            contextWindow = it.contextWindow,
+                            maxOutputTokens = it.maxOutputTokens,
+                        )
+                    },
+                )
+            )
+        }
+
+        // -------------------------------------------------------------------
         //  凭据：只写 + 状态
         // -------------------------------------------------------------------
 
@@ -422,6 +447,23 @@ private val TERMINAL_EVENTS = setOf(
 
 @Serializable
 data class CancelResult(val cancelled: Boolean, val status: String)
+
+/** 模型发现候选（AIH-009）：只有身份与容量，**能力仍需用户显式声明**。 */
+@Serializable
+data class ModelCandidateDto(
+    val id: String,
+    val displayName: String,
+    val contextWindow: Int? = null,
+    val maxOutputTokens: Int? = null,
+)
+
+@Serializable
+data class DiscoverModelsResponse(
+    val ok: Boolean,
+    val errorCode: String? = null,
+    val message: String,
+    val candidates: List<ModelCandidateDto> = emptyList(),
+)
 
 /** 连接测试结果：只含状态与稳定错误码，**不含任何密钥或原始 Header**。 */
 @Serializable

@@ -225,6 +225,62 @@ class AiProviderTestResult {
   String get display => errorCode == null ? message : '[$errorCode] $message';
 }
 
+/// 模型发现候选（AIH-009）：只有身份与容量，能力仍需用户显式声明。
+class AiModelCandidate {
+  final String id;
+  final String displayName;
+  final int? contextWindow;
+  final int? maxOutputTokens;
+
+  const AiModelCandidate({
+    required this.id,
+    required this.displayName,
+    this.contextWindow,
+    this.maxOutputTokens,
+  });
+
+  factory AiModelCandidate.fromJson(Map<String, dynamic> json) => AiModelCandidate(
+        id: (json['id'] ?? '').toString(),
+        displayName: (json['displayName'] ?? json['id'] ?? '').toString(),
+        contextWindow: (json['contextWindow'] as num?)?.toInt(),
+        maxOutputTokens: (json['maxOutputTokens'] as num?)?.toInt(),
+      );
+
+  String get detail {
+    final parts = <String>[];
+    if (contextWindow != null) parts.add('上下文 $contextWindow');
+    if (maxOutputTokens != null) parts.add('输出上限 $maxOutputTokens');
+    return parts.isEmpty ? id : '$id · ${parts.join(' · ')}';
+  }
+}
+
+class AiDiscoverResult {
+  final bool ok;
+  final String? errorCode;
+  final String message;
+  final List<AiModelCandidate> candidates;
+
+  const AiDiscoverResult({
+    required this.ok,
+    required this.message,
+    this.errorCode,
+    this.candidates = const [],
+  });
+
+  factory AiDiscoverResult.fromJson(Map<String, dynamic> json) => AiDiscoverResult(
+        ok: json['ok'] == true,
+        errorCode: json['errorCode']?.toString(),
+        message: (json['message'] ?? '').toString(),
+        candidates: (json['candidates'] as List?)
+                ?.whereType<Map>()
+                .map((e) => AiModelCandidate.fromJson(Map<String, dynamic>.from(e)))
+                .toList() ??
+            const [],
+      );
+
+  String get display => errorCode == null ? message : '[$errorCode] $message';
+}
+
 /// Run 启动结果（AIH-020）：POST 返回 202 + runId，执行在后台。
 class AiRunStart {
   final String runId;
