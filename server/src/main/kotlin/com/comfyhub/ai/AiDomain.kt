@@ -327,8 +327,49 @@ data class PreflightResult(val allowed: Boolean, val blockers: List<String>) {
     }
 }
 
-object AttachmentPolicy {
-    /** 模型声明 + 适配器实现 + MIME 白名单 + 大小/数量/像素预算，全部满足才放行。 */
+/**
+ * 附件入库前的严格判定（AIH-027）。
+ *
+ * 前端声明的模态**只是线索**：只要拿到文件头，就以**后端按签名判定**的结果为准。
+ * 这样"前端谎报 image 骗过准入"这条路径是不通的 —— 判定权在后端手里。
+ */
+object StrictIntake {
+    /** 允许前端提交的文件头大小上限；超过就截断，避免拿它当上传通道。 */
+    const val MAX_HEAD_BYTES = 4096
+
+    data class Resolved(val fact: AttachmentFact, val blockers: List<String>)
+
+    fun resolve(
+        name: String,
+        declaredModality: String?,
+        declaredMime: String,
+        sizeBytes: Long,
+        pixels: Long?,
+        head: ByteArray?,
+    ): Resolved {
+        val declared = Modality.parse(declaredModality)
+        if (head == null || head.isEmpty()) {
+            // 没有文件头：只能采信声明，但把"未经签名确认"如实告诉调用方
+            return Resolved(
+                AttachmentFact(name, declared, declaredMime, sizeBytes, pixels),
+                emptyList(),
+            )
+        }
+        val detected = FileKindDetector.detect(head.copyOf(MAX_HEAD_BYTES), name, declaredMime)
+        if (detected.kind == FileKind.UNKNOWN) {
+            return Resolved(
+                AttachmentFact(name, null, detected.mimeType ?: declaredMime, sizeBytes, pixels),
+                listOf("无法识别文件 $name 的真实类型（签名不匹配声明的 $declaredMime），已阻断"),
+            )
+        }
+        return Resolved(
+            AttachmentFact(name, detected.modality, detected.mimeType ?: declaredMime, sizeBytes, pixels),
+            emptyList(),
+        )
+    }
+}
+
+object AttachmentPolicy {    /** 模型声明 + 适配器实现 + MIME 白名单 + 大小/数量/像素预算，全部满足才放行。 */
     fun evaluate(
         model: AiModelDto,
         attachment: AttachmentFact,

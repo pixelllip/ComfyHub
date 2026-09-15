@@ -219,19 +219,25 @@ fun Route.aiRoutes(credentials: CredentialService) {
             val transports = AdapterCapabilities.transportsFor(api)
 
             val results = body.attachments.mapIndexed { index, fact ->
-                val modality = Modality.parse(fact.modality)
-                AttachmentPolicy.evaluate(
+                val head = fact.headBase64?.let { raw ->
+                    runCatching { java.util.Base64.getDecoder().decode(raw) }.getOrNull()
+                }
+                val resolved = StrictIntake.resolve(
+                    name = fact.name,
+                    declaredModality = fact.modality,
+                    declaredMime = fact.mimeType,
+                    sizeBytes = fact.sizeBytes,
+                    pixels = fact.pixels,
+                    head = head,
+                )
+                val admission = AttachmentPolicy.evaluate(
                     model = model,
-                    attachment = AttachmentFact(
-                        name = fact.name,
-                        modality = modality,
-                        mimeType = fact.mimeType,
-                        sizeBytes = fact.sizeBytes,
-                        pixels = fact.pixels,
-                    ),
+                    attachment = resolved.fact,
                     adapterTransports = transports,
                     currentAttachmentCount = index,
                 )
+                // 文件头判定失败的阻断理由必须一起带出来（AIH-027/030）
+                admission.copy(blockers = resolved.blockers + admission.blockers)
             }
             call.respond(
                 PreflightResponse(
@@ -265,6 +271,8 @@ data class AttachmentFactDto(
     val mimeType: String = "application/octet-stream",
     val sizeBytes: Long = 0,
     val pixels: Long? = null,
+    /** 文件头若干字节（base64，≤4KB）：**有它就以服务端签名判定为准**，前端声明仅作线索 */
+    val headBase64: String? = null,
 )
 
 @Serializable
