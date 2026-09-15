@@ -122,22 +122,71 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('AI 模型与凭据')),
-      body: wide
-          ? Row(
-              children: [
-                SizedBox(width: 280, child: list),
-                const VerticalDivider(width: 1),
-                Expanded(child: detail),
-              ],
-            )
-          : Column(
-              children: [
-                SizedBox(height: 200, child: list),
-                const Divider(height: 1),
-                Expanded(child: detail),
-              ],
+      body: Column(
+        children: [
+          // 没有选中 Provider 时，错误也要看得见（新建失败最常发生在这种情况下）
+          if (_error != null)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              color: theme.colorScheme.errorContainer,
+              child: Row(
+                children: [
+                  Icon(Icons.error_outline, size: 18, color: theme.colorScheme.onErrorContainer),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _error!,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.onErrorContainer),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '关闭',
+                    icon: const Icon(Icons.close, size: 16),
+                    onPressed: () => setState(() => _error = null),
+                  ),
+                ],
+              ),
             ),
+          Expanded(
+            child: wide
+                ? Row(
+                    children: [
+                      SizedBox(width: 280, child: list),
+                      const VerticalDivider(width: 1),
+                      Expanded(child: detail),
+                    ],
+                  )
+                : Column(
+                    children: [
+                      SizedBox(height: 200, child: list),
+                      const Divider(height: 1),
+                      Expanded(child: detail),
+                    ],
+                  ),
+          ),
+        ],
+      ),
     );
+  }
+
+  /// 统一的用户可见反馈：**任何失败都要弹出来**。
+  ///
+  /// 之前的坑：错误只渲染在右侧详情面板里，而详情面板要先选中一个 Provider 才显示 ——
+  /// 于是"新建 Provider 失败"在界面上完全没有反应，用户看到的就是"点了没加上"。
+  void _notify(String message, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: error ? 8 : 3),
+          backgroundColor: error ? Theme.of(context).colorScheme.errorContainer : null,
+        ),
+      );
   }
 
   Future<void> _createProvider() async {
@@ -153,12 +202,15 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         'api': draft.api.wire,
         'baseURL': draft.baseURL,
         'credentialRef': draft.credentialRef,
-        'endpointTrust': draft.trust.wire,
+        // 不选就是 null，交给后端按地址推断（公网 / 本机），避免"默认只允许本机"把公网地址挡掉
+        'endpointTrust': draft.trust?.wire,
       });
       await _reload();
       await _select(created);
+      _notify('已创建 Provider「${created.displayName}」，接下来可以填 API Key 和模型目录。');
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
+      _notify('创建失败：$e', error: true);
     }
   }
 
@@ -179,8 +231,10 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       await _api.deleteProvider(p.id);
       if (_selected?.id == p.id) _selected = null;
       await _reload();
+      _notify('已删除 Provider「${p.displayName}」');
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
+      _notify('删除失败：$e', error: true);
     }
   }
 }
@@ -295,6 +349,21 @@ class _ProviderDetailState extends State<_ProviderDetail> {
   bool _busy = false;
   AiProviderTestResult? _testResult;
   final _models = <AiModel>[];
+
+  /// 本组件内的反馈统一走 SnackBar：任何一步失败都要看得见。
+  void _toast(String message, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: error ? 8 : 3),
+          backgroundColor: error ? Theme.of(context).colorScheme.errorContainer : null,
+        ),
+      );
+  }
 
   @override
   void initState() {
@@ -535,9 +604,10 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     });
     try {
       final result = await widget.api.testProvider(widget.provider.id);
-      setState(() => _testResult = result);
+      if (mounted) setState(() => _testResult = result);
+      _toast(result.ok ? '连接正常：${result.message}' : '连接失败：${result.display}', error: !result.ok);
     } catch (e) {
-      await widget.onChanged('连接测试失败：$e');
+      _toast('连接测试失败：$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -546,7 +616,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
   Future<void> _saveKey() async {
     final value = _key.text;
     if (value.trim().isEmpty) {
-      await widget.onChanged('密钥留空 = 不修改；如果要清除请点「移除密钥」。');
+      _toast('密钥留空 = 不修改；如果要清除请点「移除密钥」。');
       return;
     }
     setState(() => _busy = true);
@@ -554,8 +624,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       final status = await widget.api.setCredential(widget.provider.id, value);
       _key.clear(); // 立刻丢弃，不在内存里多留一秒
       await widget.onChanged('密钥已保存（${status.source}）。值不会再被读回。');
+      _toast('密钥已保存（${status.source}），值不会再被读回。');
     } catch (e) {
-      await widget.onChanged('保存密钥失败：$e');
+      _toast('保存密钥失败：$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -566,8 +637,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     try {
       await widget.api.removeCredential(widget.provider.id);
       await widget.onChanged('密钥已移除。');
+      _toast('密钥已移除。');
     } catch (e) {
-      await widget.onChanged('移除失败：$e');
+      _toast('移除失败：$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -581,11 +653,11 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       final result = await widget.api.discoverModels(widget.provider.id);
       if (!mounted) return;
       if (!result.ok) {
-        await widget.onChanged('获取模型失败：${result.display}');
+        _toast('获取模型失败：${result.display}', error: true);
         return;
       }
       if (result.candidates.isEmpty) {
-        await widget.onChanged('端点没有返回模型列表（${result.message}）');
+        _toast('端点没有返回模型列表（${result.message}）', error: true);
         return;
       }
       final picked = await showDialog<List<AiModelCandidate>>(
@@ -610,19 +682,34 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           added++;
         }
       });
-      await widget.onChanged('已加入 $added 个候选（别忘了点「保存模型目录」）');
+      if (added == 0) {
+        _toast('这些候选已经在目录里了');
+        return;
+      }
+      // 立刻落库：不要让用户以为"加了但没生效"
+      await _saveModels();
+      _toast('已加入并保存 $added 个模型');
     } catch (e) {
-      await widget.onChanged('获取模型失败：$e');
+      _toast('获取模型失败：$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _addModel() async {    final draft = await showDialog<_ModelDraft>(
+  Future<void> _addModel() async {
+    final draft = await showDialog<_ModelDraft>(
       context: context,
       builder: (_) => const _ModelDialog(),
     );
     if (draft == null) return;
+    if (draft.id.isEmpty) {
+      _toast('模型 ID 不能为空', error: true);
+      return;
+    }
+    if (_models.any((m) => m.id == draft.id)) {
+      _toast('模型 ${draft.id} 已经在目录里了');
+      return;
+    }
     setState(() {
       _models.add(AiModel(
         providerId: widget.provider.id,
@@ -637,6 +724,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         capabilitySource: 'manual',
       ));
     });
+    // 点一次「添加」就应该真的加上：立刻落库
+    await _saveModels();
+    _toast('已添加并保存模型「${draft.displayName}」');
   }
 
   Future<void> _saveModels() async {
@@ -665,7 +755,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       );
       await widget.onChanged('模型目录已保存（${_models.length} 个）。');
     } catch (e) {
-      await widget.onChanged('保存模型目录失败：$e');
+      _toast('保存模型目录失败：$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -704,7 +794,7 @@ class _ProviderDraft {
   final AiApi api;
   final String baseURL;
   final String? credentialRef;
-  final AiEndpointTrust trust;
+  final AiEndpointTrust? trust;
   const _ProviderDraft(this.id, this.displayName, this.api, this.baseURL, this.credentialRef, this.trust);
 }
 
@@ -721,7 +811,25 @@ class _ProviderDialogState extends State<_ProviderDialog> {
   final _url = TextEditingController();
   final _ref = TextEditingController();
   AiApi _api = AiApi.openaiCompletions;
-  AiEndpointTrust _trust = AiEndpointTrust.loopback;
+
+  /// null = 自动（由后端按地址判断公网 / 本机）。
+  ///
+  /// 之前默认是"仅本机"，用户填了公网地址却忘了改这里，保存被后端拒绝，
+  /// 而且错误看不见 —— 就是"配好了点添加没反应"。
+  AiEndpointTrust? _trust;
+
+  static final _kebab = RegExp(r'^[a-z0-9]+(-[a-z0-9]+)*$');
+
+  @override
+  void initState() {
+    super.initState();
+    // 输入时就实时校验，按钮状态跟着变
+    _id.addListener(_revalidate);
+    _url.addListener(_revalidate);
+    _name.addListener(_revalidate);
+  }
+
+  void _revalidate() => setState(() {});
 
   @override
   void dispose() {
@@ -732,28 +840,61 @@ class _ProviderDialogState extends State<_ProviderDialog> {
     super.dispose();
   }
 
+  String? get _idError {
+    final v = _id.text.trim();
+    if (v.isEmpty) return null;
+    if (!_kebab.hasMatch(v)) return '只能小写字母/数字，用 - 连接（如 my-gateway）';
+    if (v.length > 96) return '不能超过 96 个字符';
+    return null;
+  }
+
+  String? get _urlError {
+    final v = _url.text.trim();
+    if (v.isEmpty) return null;
+    final uri = Uri.tryParse(v);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https') || uri.host.isEmpty) {
+      return '要写成完整的 http(s)://主机/路径';
+    }
+    return null;
+  }
+
+  bool get _canSubmit =>
+      _kebab.hasMatch(_id.text.trim()) &&
+      _name.text.trim().isNotEmpty &&
+      _urlError == null &&
+      _url.text.trim().isNotEmpty;
+
+  /// 自动模式下的提示：让用户知道后端会怎么判断。
+  String get _autoTrustHint {
+    final host = Uri.tryParse(_url.text.trim())?.host ?? '';
+    if (host.isEmpty) return '按地址自动判断';
+    final isLocal = host == 'localhost' || host == '127.0.0.1' || host == '::1' || host.startsWith('192.168.') || host.startsWith('10.');
+    return isLocal ? '自动：识别为本机/局域网地址' : '自动：识别为公网（必须 https）';
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('新建 Provider'),
       content: SizedBox(
-        width: 460,
+        width: 480,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: _id,
-                decoration: const InputDecoration(
-                  labelText: 'Provider ID（小写 kebab-case，创建后不可改）',
+                decoration: InputDecoration(
+                  labelText: 'Provider ID（创建后不可改）',
                   hintText: 'my-gateway',
+                  errorText: _idError,
                   isDense: true,
                 ),
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: _name,
-                decoration: const InputDecoration(labelText: '显示名', isDense: true),
+                decoration: const InputDecoration(labelText: '显示名', hintText: '公司网关', isDense: true),
               ),
               const SizedBox(height: 10),
               DropdownButtonFormField<AiApi>(
@@ -768,34 +909,36 @@ class _ProviderDialogState extends State<_ProviderDialog> {
               const SizedBox(height: 10),
               TextField(
                 controller: _url,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Base URL',
-                  hintText: 'https://gateway.example/v1',
-                  helperText: '只去掉末尾的 /；Anthropic 兼容网关的路径原样保留',
+                  hintText: 'https://api.deepseek.com/v1',
+                  helperText: '只去掉末尾的 /；兼容网关的路径原样保留',
+                  errorText: _urlError,
                   isDense: true,
                 ),
               ),
               const SizedBox(height: 10),
-              DropdownButtonFormField<AiEndpointTrust>(
+              DropdownButtonFormField<AiEndpointTrust?>(
                 initialValue: _trust,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: '端点信任级别',
-                  helperText: '公网只允许 https；本机/局域网要显式选择，云元数据地址一律拒绝',
+                  helperText: _autoTrustHint,
                   isDense: true,
                 ),
                 items: [
+                  const DropdownMenuItem<AiEndpointTrust?>(value: null, child: Text('自动（按地址判断）')),
                   for (final t in AiEndpointTrust.values)
-                    DropdownMenuItem(value: t, child: Text(t.label)),
+                    DropdownMenuItem<AiEndpointTrust?>(value: t, child: Text(t.label)),
                 ],
-                onChanged: (v) => setState(() => _trust = v ?? _trust),
+                onChanged: (v) => setState(() => _trust = v),
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: _ref,
                 decoration: const InputDecoration(
                   labelText: '凭据引用名（可选）',
-                  hintText: 'MY_GATEWAY_API_KEY',
-                  helperText: '只是名字；密钥在保存 Provider 后单独填写',
+                  hintText: 'DEEPSEEK_API_KEY',
+                  helperText: '只是名字；密钥在创建之后单独填写（只写不读）',
                   isDense: true,
                 ),
               ),
@@ -806,17 +949,19 @@ class _ProviderDialogState extends State<_ProviderDialog> {
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
         FilledButton(
-          onPressed: () => Navigator.pop(
-            context,
-            _ProviderDraft(
-              _id.text.trim(),
-              _name.text.trim(),
-              _api,
-              _url.text.trim(),
-              _ref.text.trim().isEmpty ? null : _ref.text.trim(),
-              _trust,
-            ),
-          ),
+          onPressed: !_canSubmit
+              ? null
+              : () => Navigator.pop(
+                    context,
+                    _ProviderDraft(
+                      _id.text.trim(),
+                      _name.text.trim(),
+                      _api,
+                      _url.text.trim(),
+                      _ref.text.trim().isEmpty ? null : _ref.text.trim(),
+                      _trust,
+                    ),
+                  ),
           child: const Text('创建'),
         ),
       ],
