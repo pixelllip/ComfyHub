@@ -34,8 +34,7 @@ object AiUpstream {
         .build()
 
     /** 状态码 → 稳定错误码（AIH-024）。纯函数，便于单测。 */
-    fun classifyStatus(status: Int): String? = when {
-        status in 200..299 -> null
+    fun classifyStatus(status: Int): String? = when {        status in 200..299 -> null
         status == 401 || status == 403 -> AiErrorCode.MISSING_CREDENTIAL
         status == 404 -> AiErrorCode.PROTOCOL_ERROR
         status == 408 || status == 504 -> AiErrorCode.PROVIDER_UNREACHABLE
@@ -91,13 +90,13 @@ object AiUpstream {
         return try {
             val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString())
             val status = response.statusCode()
-            val code = classifyStatus(status)
-            // 只记状态与错误码，绝不记 header 或响应正文
+            val base = classifyStatus(status)
+            val code = if (base == null) null else refineFromBody(base, response.body())
             log.info("Provider 连接测试 provider={} endpoint={} status={} code={}", provider.id, safeEndpoint(uri), status, code)
             if (code == null) {
                 TestResult(true, null, "连接正常（HTTP $status）", status, countModels(response.body(), api))
             } else {
-                TestResult(false, code, explain(code, status), status)
+                TestResult(false, code, explain(code, status) + "｜上游返回：" + redact(response.body(), secret), status)
             }
         } catch (e: java.net.http.HttpTimeoutException) {
             log.warn("Provider 连接超时 provider={} endpoint={}", provider.id, safeEndpoint(uri))
@@ -115,6 +114,21 @@ object AiUpstream {
         append(uri.path ?: "")
     }
 
+    /**
+     * 上游报错文本脱敏后回显：**必须**先把密钥抹掉再截断（AIH-051）。
+     * 有些网关会把请求体/请求头原样回显，直接透传等于把 Key 写进界面和日志。
+     */
+    fun redact(raw: String, secret: String?): String {
+        var text = raw
+        if (!secret.isNullOrEmpty()) text = text.replace(secret, "***")
+        text = text.replace(Regex("(?i)(bearer\\s+)[A-Za-z0-9._\\-]{6,}"), "$1***")
+        text = text.replace(
+            Regex("(?i)((?:api[-_]?key|x-api-key|authorization)\"?\\s*[:=]\\s*\"?)[^\",}\\s]{6,}"),
+            "$1***"
+        )
+        return text.replace(Regex("\\s+"), " ").trim().take(400)
+    }
+
     fun countModels(body: String, api: AiApi): Int? = runCatching {
         val root = com.comfyhub.AppJson.parseToJsonElement(body)
         val array = when (root) {
@@ -129,11 +143,37 @@ object AiUpstream {
 
     fun explain(code: String, status: Int?): String = when (code) {
         AiErrorCode.MISSING_CREDENTIAL -> "鉴权失败（HTTP $status）：请检查 API Key 是否正确、是否已过期"
-        AiErrorCode.PROTOCOL_ERROR -> "端点不存在或协议不匹配（HTTP $status）：确认 Base URL 与所选协议"
+        AiErrorCode.PROTOCOL_ERROR ->
+            "端点或协议不匹配（HTTP $status）：确认 Base URL 与所选协议；" +
+                "若网关同时提供 OpenAI 与 Anthropic 两种端点，需要为不同协议的模型各建一条 Provider"
         AiErrorCode.RATE_LIMIT -> "被限流（HTTP 429）"
-        AiErrorCode.QUOTA_EXCEEDED -> "配额不足（HTTP $status）"
+        AiErrorCode.QUOTA_EXCEEDED -> "配额/套餐不足或该模型不在你的套餐内（HTTP $status）"
         AiErrorCode.PROVIDER_UNREACHABLE -> "上游不可达或返回服务端错误（HTTP $status）"
         else -> "配置有误（HTTP $status）"
+    }
+
+    /**
+     * 用上游返回的正文**细化**错误码（AIH-024）。
+     *
+     * 真实网关的 400/403 语义差别很大，只看状态码会把
+     * "套餐里没有这个模型" 误报成 "密钥不对"，把 "这个模型该走另一个端点"
+     * 误报成 "配置随便写错了"。这里按正文里的关键字纠正。
+     */
+    fun refineFromBody(baseCode: String?, body: String): String? {
+        val b = body.lowercase()
+        return when {
+            // 套餐 / 额度类：403 也可能是"模型不在套餐内"
+            b.contains("not_in_plan") || b.contains("not in plan") ||
+                b.contains("quota") || b.contains("insufficient_quota") ||
+                b.contains("billing") || b.contains("credit") -> AiErrorCode.QUOTA_EXCEEDED
+            // 混合网关最常见的坑：模型不属于当前协议的端点
+            b.contains("not supported on this endpoint") || b.contains("unsupported_model") ||
+                b.contains("use /") && b.contains("provider/v1") -> AiErrorCode.PROTOCOL_ERROR
+            b.contains("invalid api key") || b.contains("authentication_error") ||
+                b.contains("unauthorized") -> AiErrorCode.MISSING_CREDENTIAL
+            b.contains("rate limit") || b.contains("rate_limit") -> AiErrorCode.RATE_LIMIT
+            else -> baseCode
+        }
     }
 
     // -----------------------------------------------------------------------

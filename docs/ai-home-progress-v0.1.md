@@ -1,9 +1,14 @@
-# AI 工作台实施进度（v0.1 首次实施记录）
+# AI 工作台实施进度（v0.1 实施记录）
 
-> 日期：2026-09-15
+> 日期：2026-09-15（当天多轮追加）
 > 依据：`docs/ai-home-requirements-v0.1.xlsx`（需求清单 / 待确认决策 / 风险清单 / 里程碑）
 > 与 `docs/ai-home-implementation-plan-v0.1.md`（实施方案）
-> 本轮范围：**M1（Provider / 模型 / 凭据）+ M2 的持久化底座 + M0 的安全前置项**
+> 已覆盖范围：**M0 安全前置 + M1（Provider / 模型 / 凭据）+ M2（Run / 统一 SSE / 三协议中的两个）**
+
+## 0. 一句话现状
+
+**已经能用真实 Base URL + API Key 配对并流式对话**（OpenAI 兼容 / Anthropic）；
+附件（图片等）目前是"正确阻断"而不是能发；ComfyUI 工具与 Skills 还没接。
 
 ## 1. 本轮完成的提交
 
@@ -26,8 +31,8 @@
 | AIH-005 anthropic-messages | ✅（文本流） | system 顶层 + `max_tokens`、`content_block_delta`/`message_start`/`error` 事件，有契约单测 |
 | AIH-006/007 Provider 自定义 + revision | ✅ | ID 校验（kebab-case、创建后不可改）、URL 校验与规范化、乐观锁冲突返回明确错误 |
 | AIH-008 连接测试 | ✅ | `POST /api/ai/providers/{id}/test`：请求前 SSRF 复核、不跟随重定向、10 秒超时、状态码映射到稳定错误码；日志只记 Provider/端点/状态码，**不含密钥与 Header**（有单测） |
-| AIH-009 模型发现 | ✅ | `POST …/discover-models`：兼容 `data[]` 与 `models[]`，只取 id/显示名/容量，**不落库、不推断能力**；设置页有"获取可用模型"勾选对话框 |
-| AIH-010/011 手工能力声明、不猜能力 | ✅ | 模型目录是能力真源；UI 与预检都以目录为准，未知模态直接拒绝；发现的候选不带任何能力字段（有单测） |
+| AIH-009 模型发现 | ✅ | `POST …/discover-models`：兼容 `data[]` 与 `models[]`；**能力自动预填**并按可信度分级：接口声明(discovered) → 内置目录(builtin，标注可能过期) → 未识别(unknown，仅文本)；不落库，用户确认后才进目录 |
+| AIH-010/011 手工能力声明、不猜能力 | ✅ | 模型目录是能力真源；UI 与预检都以目录为准，未知模态直接拒绝。发现阶段会预填能力，但**来源全程可见**（接口声明/内置目录/未识别），内置目录命中不算"猜"，未识别的模型一律只给文本（有守护断言） |
 | AIH-012/013 凭据只写 + set/describe/unset | ✅ | 所有 DTO 只含 `{configured, source, writable}`；`resolve` 仅后端内部 |
 | AIH-014 改密钥下次请求生效 | ✅ | Run 开始时才 `resolve`，改密钥不影响已开始的 Run，下一次请求立即生效 |
 | AIH-015 Windows 凭据方案 | ✅ | DPAPI(CurrentUser) 加密落盘；DPAPI 不可用时**写入直接失败**，绝不退化为明文 |
@@ -83,4 +88,8 @@
   所以**实现新传输方式时先改适配器**，别在别处再维护一份支持矩阵。
 - 加新协议时照 `OpenAiCompletionsAdapter` 的样子写，并在 `Adapters.all` 注册；
   没实现完的协议要**明确抛错**（参考 `OpenAiResponsesAdapter`），不要让用户以为能用。
+- 模型能力的判断顺序**不要动**：接口声明 > 内置目录 > 仅文本。
+  往 `ModelCapabilityCatalog` 加规则等于"替用户预勾选"，宁可少勾（漏了用户能补，多勾会直接请求失败）。
+- 设置页里**任何失败都要能看见**（SnackBar / 顶部横幅）：之前"新建 Provider 失败只写进详情面板、
+  而详情面板要先选中 Provider"导致用户看到的是"点了没反应"，已修，别再引入同类回退。
 - 默认监听已改为回环；如果要用 Android 客户端连本机后端，需要显式 `COMFYHUB_ALLOW_REMOTE=1` 并自行加认证（AIH-016、AIK-003）。

@@ -296,11 +296,22 @@ class HarnessRunner(
 
         val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
         if (response.statusCode() !in 200..299) {
-            val preview = runCatching {
-                response.body().use { String(it.readNBytes(600), StandardCharsets.UTF_8) }
+            val raw = runCatching {
+                response.body().use { String(it.readNBytes(1200), StandardCharsets.UTF_8) }
             }.getOrDefault("")
-            val code = AiUpstream.classifyStatus(response.statusCode()) ?: AiErrorCode.PROTOCOL_ERROR
-            throw AiException(code, AiUpstream.explain(code, response.statusCode()))
+            val code = AiUpstream.refineFromBody(
+                AiUpstream.classifyStatus(response.statusCode()) ?: AiErrorCode.PROTOCOL_ERROR,
+                raw,
+            ) ?: AiErrorCode.PROTOCOL_ERROR
+            val detail = redact(raw, secret)
+            // 把上游的报错带出来（已脱敏、已截断）—— 否则用户只看到"配置有误"，
+            // 根本不知道是参数不支持、端点不对还是别的（400 类问题全靠这句话定位）
+            log.warn("上游返回 {}（code={}）: {}", response.statusCode(), code, detail)
+            throw AiException(
+                code,
+                if (detail.isEmpty()) AiUpstream.explain(code, response.statusCode())
+                else "${AiUpstream.explain(code, response.statusCode())}｜上游返回：$detail"
+            )
         }
 
         val accumulator = SseAccumulator()
@@ -328,8 +339,20 @@ class HarnessRunner(
         Idle(finishReason, providerResponseId)
     }
 
-    private fun chatUrl(baseURL: String, api: AiApiRef): String {
-        val base = baseURL.trimEnd('/')
+    /** 日志里只出现 scheme://host:port/path，不带 query / fragment / userInfo。 */
+    private fun safeEndpoint(uri: URI): String = buildString {
+        append(uri.scheme).append("://").append(uri.host)
+        if (uri.port > 0) append(':').append(uri.port)
+        append(uri.path ?: "")
+    }
+
+    /**
+     * 上游报错文本脱敏后回显：**必须**先把密钥抹掉，再截断。
+     * 有些网关会把请求体/请求头原样回显，直接透传等于把 Key 写进界面和日志（AIH-051）。
+     */
+    private fun redact(raw: String, secret: String?): String = AiUpstream.redact(raw, secret)
+
+    private fun chatUrl(baseURL: String, api: AiApiRef): String {        val base = baseURL.trimEnd('/')
         return when (api) {
             AiApiRef.OPENAI_COMPLETIONS, AiApiRef.OPENAI_RESPONSES -> "$base/chat/completions"
             AiApiRef.ANTHROPIC_MESSAGES ->
