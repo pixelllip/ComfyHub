@@ -11,12 +11,13 @@
 
 | 模块 | 能力 |
 | --- | --- |
+| **AI 工作台** | **App 默认落在这一页**（需求 `docs/ai-home-requirements-v0.1.xlsx`，DEC-001）。多轮对话 + 会话列表（重命名 / 归档 / 删除）；宽屏三栏（会话列表 / 对话 / ComfyUI 与模型能力），窄屏会话进抽屉、状态进底部 Sheet、输入区常驻；Composer 支持 Enter 发送、Shift+Enter 换行、输入法选词不误发、`/` 调出 Skills 目录、附件选择；模型选择器直接显示能力徽标（文本 / 图片 / 视频 / 音频 / 文档 / 工具）。Provider 与模型目录在设置里配置，**API Key 只写不读**（见第 5 节） |
 | **自动启动** | App 一启动就自己把 **MySQL + 后端**拉起来（先探健康，不健康才启动；启动过程实时回显在启动页上），不用再手动开脚本；**全程不弹命令行窗口**（见 [12 节](#12-本机环境踩坑记录)最后几条） |
 | **提示词库** | 新建 / 编辑 / 复制 / 删除；区分「生图 / 生视频 / 生音频 / 混合」；正向 + 负向提示词；模型、采样器、调度器、步数、CFG、Seed、宽高、批量、LoRA 列表、备注、收藏；**多选批量管理**（收藏 / 取消收藏 / 加标签 / 删除） |
 | **ComfyUI 自动捕获** | ComfyUI 里跑完一次生成，**提示词 + 全部参数 + 完整工作流 + 生成的图片/视频/音频**自动进库并互相关联；不需要改动工作流，也不需要装任何东西（装一个可选的推送节点可以做到零延迟） |
 | **历史产物导入** | 指向 ComfyUI 的 output 目录，把**以前生成好的**图连同图片里内嵌的 `prompt` / `workflow` 一起收进来，自动建提示词并关联 |
 | **搜索** | 关键词匹配（标题 / 正向 / 负向 / 备注 / 模型名，兼容中文）；按标签筛选（任一 / 全部）；按类型、收藏过滤；多种排序；分页 |
-| **产物画廊** | 批量上传（图片 / 视频 / 音频，自动识别类型）；缩略图网格；类型 / 标签 / 收藏 / 未关联过滤；多选批量「关联提示词 / 收藏 / 删除」；**右键单个产物**弹出「关联提示词 / 收藏 / 删除」；**App 默认落在这一页**（提示词库排第二位） |
+| **产物画廊** | 批量上传（图片 / 视频 / 音频，自动识别类型）；缩略图网格；类型 / 标签 / 收藏 / 未关联过滤；多选批量「关联提示词 / 收藏 / 删除」；**右键单个产物**弹出「关联提示词 / 收藏 / 删除」 |
 | **详情闭环** | 打开任意产物 → 直接显示**关联的提示词全文**（提示词正文一张卡）、**生成参数**（模型 / 采样器 / 调度器 / 步数 / CFG / Seed / 尺寸 / 批量，以及**逐个列出的 LoRA**，点一下复制 `<lora:名字:权重>`）单独一张卡、标签，可一键跳转到提示词详情；**右键图片 / 视频 / 音频**即可复制文件地址、文件名、正向 / 负向提示词；支持更换 / 解除关联；自动捕获的还能**查看完整工作流 JSON**（界面格式可拖回 ComfyUI 复现；agent / 脚本提交的运行只有 API 格式节点图，存成 `.json` 拖进 ComfyUI 也能加载） |
 | **标签体系** | 全局词表 + 分类 + 颜色 + 使用次数；标签详情页同时列出该标签下的提示词与产物 |
 | **媒体播放** | 图片用**大图查看器**：滚轮以鼠标位置为中心缩放、按住拖动平移、右下角缩略图指示当前看到的位置（点缩略图可直接跳过去）、左下角显示倍数并可一键适应窗口；视频内嵌播放（Windows Media Foundation，支持拖动进度）；音频用**紧凑播放器**（标题 + 播放行两行，限宽居中，不再占掉大半屏）；均可用系统默认播放器打开 |
@@ -75,16 +76,20 @@
 viewer/
 ├── lib/                          # Flutter 前端
 │   ├── main.dart                 # 入口
-│   ├── app.dart                  # ★ 启动闸门（先拉起本地服务）+ 主题 + 导航框架
+│   ├── app.dart                  # ★ 启动闸门（先拉起本地服务）+ 主题 + 导航框架（默认 AI 工作台）
 │   ├── core/
 │   │   ├── api_client.dart       # 后端 REST 客户端（含自动捕获接口）
+│   │   ├── ai_api_client.dart    # AI 工作台客户端（Provider / 模型 / 凭据状态 / 会话 / 预检）
 │   │   ├── backend_launcher.dart # ★ 启动时自动拉起 MySQL + 后端，并回显脚本输出
 │   │   ├── settings_store.dart   # 后端地址 / 项目目录 / MySQL 数据目录等本地设置
 │   │   ├── theme.dart            # ★ 主题：中文字体族 / 字号 / 行高 / 字重
 │   │   └── formatting.dart       # 时间 / 体积 / 颜色格式化
 │   ├── models/models.dart        # 与后端 DTO 对应的数据模型（含捕获配置 / 状态）
+│   ├── models/ai_models.dart     # AI 领域模型（Provider / 模型能力 / 会话 / 消息块 / 预检）
 │   ├── state/library_store.dart  # 全局状态（搜索条件 + 缓存）
+│   ├── state/ai_workspace_store.dart  # AI 工作台状态（独立一份，避免画廊刷新带着聊天页 rebuild）
 │   ├── pages/
+│   │   ├── ai_home_page.dart          # ★ AI 工作台（三栏 / 抽屉 / Composer / 能力徽标）
 │   │   ├── prompts_page.dart         # 提示词库（搜索 / 标签筛选 / 列表）
 │   │   ├── prompt_detail_page.dart   # 提示词详情 + 关联产物 + 查看工作流
 │   │   ├── prompt_edit_page.dart     # 新建 / 编辑提示词
@@ -115,6 +120,12 @@ viewer/
 │       ├── CaptureRepo.kt        # ★ 产物入库（SHA-256 去重）+ 运行记录
 │       ├── SettingsRepo.kt       # ★ app_settings k/v（自动捕获配置存放处）
 │       ├── CaptureRoutes.kt      # ★ 自动捕获 / 工作流查询接口
+│       ├── ai/                   # ★ AI 工作台领域（与现有业务代码隔离）
+│       │   ├── AiDomain.kt            # 协议 / 端点信任 / 模态 / 错误码 / 校验 / SSRF / 附件准入
+│       │   ├── CredentialService.kt   # ★ 凭据只写：env + Windows DPAPI(CurrentUser)，绝不回读
+│       │   ├── AiRepo.kt              # Provider 与模型目录仓储（revision 乐观锁）
+│       │   ├── AiConversationRepo.kt  # 会话 / 消息 / 有序消息块
+│       │   └── AiRoutes.kt            # /api/ai/*（Provider、凭据状态、模型、会话、预检）
 │       └── *Routes.kt            # 三组 REST 路由
 │
 ├── db/
@@ -377,6 +388,30 @@ pwsh -File scripts\e2e-capture-test.ps1
 ## 7. REST API
 
 后端默认 `http://127.0.0.1:8080`，全部返回 JSON（UTF-8）。
+
+> 默认**只监听回环地址**：AI 接口会拿着用户的 API Key 代用户调用上游并产生费用，
+> 所以局域网访问必须显式 `COMFYHUB_ALLOW_REMOTE=1`（或直接给 `COMFYHUB_HOST`）。
+> CORS 也从 `anyHost()` 收紧为「本机来源 + `COMFYHUB_CORS_ORIGINS` 白名单」。
+
+### AI 工作台（`/api/ai/*`）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/ai/providers` | Provider 列表（含**凭据状态**，不含值） |
+| `POST` | `/api/ai/providers` | 新建。`id` 必须是小写 kebab-case 且创建后不可改；`api` 只接受 `openai-completions` / `openai-responses` / `anthropic-messages` |
+| `GET/PUT/DELETE` | `/api/ai/providers/{id}` | 详情 / 更新（**必须带 `revision`**，旧 revision 返回冲突）/ 删除 |
+| `GET` | `/api/ai/providers/{id}/credentials` | 只返回 `{configured, source, writable}`；`source=env` 表示由环境变量提供、只读 |
+| `PUT` | `/api/ai/providers/{id}/credentials` | 只写。值为空 = 不修改；`NAME=value`、带引号、含空格的输入会被拒绝 |
+| `DELETE` | `/api/ai/providers/{id}/credentials` | 移除受管凭据（环境变量提供的不可移除） |
+| `GET/PUT` | `/api/ai/providers/{id}/models` | 模型目录（能力真源）。`GET` 读，`PUT` 全量替换 |
+| `POST` | `/api/ai/preflight` | 附件准入预检：**纯计算、不发上游请求**，返回 `{allowed, blockers}` |
+| `GET/POST` | `/api/ai/conversations` | 会话列表 / 新建 |
+| `GET/PATCH/DELETE` | `/api/ai/conversations/{id}` | 详情 / 改名·归档 / 删除（消息级联清理） |
+| `GET/POST` | `/api/ai/conversations/{id}/messages` | 消息（按 `seq` 有序恢复）/ 追加消息（可带有序块：text / attachment / tool_call / tool_result） |
+
+**密钥只写不读**：受管凭据用 **Windows DPAPI(CurrentUser)** 加密后存在
+`storage/ai/credentials.dpapi.json`，任何接口、数据库字段和日志都拿不到明文；
+DPAPI 不可用时写入直接失败，**不会退化成明文落盘**（AIH-012 / AIH-015）。
 
 ### 提示词
 
@@ -716,7 +751,8 @@ flutter test        # 52 个用例
 | --- | --- |
 | `test/widget_test.dart` | 模型 JSON 解析（Prompt / MediaAsset / 分页 / 捕获配置）、`formatSize` / `formatDuration` / `ellipsis` / 颜色解析等纯逻辑 |
 | `test/media_prompt_flow_test.dart` | **核心闭环**：用 `MockClient` 假造后端，验证「画廊渲染 → 点开产物 → 详情页显示关联提示词全文与参数 → 点标题跳提示词详情 → 点标签进入标签搜索页」，并断言每一步发出的 HTTP 请求；另有一条详情页布局断言（大图走可缩放查看器、文件信息铺满整栏） |
-| `test/home_nav_test.dart` | **首页落地页**：断言打开 App 落在「画廊」页、导航顺序是 `画廊 → 提示词 → 标签 → 设置`、点第二个才进提示词库 |
+| `test/home_nav_test.dart` | **首页落地页**：断言打开 App 落在「AI 工作台」页、导航顺序是 `AI 工作台 → 画廊 → 提示词 → 标签 → 设置`、点第二个才进画廊 |
+| `test/ai_home_test.dart` | **AI 工作台**：宽屏三栏 / 窄屏无侧栏且输入区可用、能力徽标按目录声明显示、附件被准入阻断时给出具体原因并禁用发送按钮 |
 | `test/workflow_viewer_test.dart` | 工作流查看器：格式化展示 / 204 空状态 / 复制全文 / 错误重试、界面格式与 API 格式的提示语区分，以及两个详情页的接线（按钮只在有工作流时出现） |
 | `test/zoomable_image_test.dart` | **大图查看器**：滚轮缩放（含上下限）、放大后拖动平移、缩略图只在放大后出现且高亮框跟着视野走、点缩略图跳转、适应窗口复位、图片加载失败兜底 |
 | `test/adaptive_layout_test.dart` | **多列布局**：列数规则（宽度 / 550、上限 4 列、异常宽度退回单列）、宽窗口排两列 / 窄窗口退回单列、设置页那种瀑布流把块放进最矮的一列 |

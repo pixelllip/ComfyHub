@@ -51,10 +51,14 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 
 ## 3. 首页 / 导航顺序
 
-`lib/app.dart` 的 `HomeShell`：**默认落在「画廊」（产物 / 图片）页**，
-顺序是 `画廊 → 提示词 → 标签 → 设置`。
+`lib/app.dart` 的 `HomeShell`：**默认落在「AI 工作台」页**（AIH-001），
+顺序是 `AI 工作台 → 画廊 → 提示词 → 标签 → 设置`。
 `_destinations`（图标 / 文案）和 `pages`（页面）两个列表**必须同序**，`_index` 同时索引它们。
-改完跑一遍 `flutter test test\home_nav_test.dart`（断言落地页和顺序）。
+改完跑一遍 `flutter test test\home_nav_test.dart`（断言落地页和顺序）；
+`test\localization_test.dart` 也用首页做锚点，改动落地页要一起改。
+
+> 历史约定是"默认落在画廊"，2026-09-15 按需求文档 `docs/ai-home-requirements-v0.1.xlsx`
+> 的 DEC-001 改为 AI 工作台；README 第 2 节、`lib/pages/ai_home_page.dart` 同步。
 
 ## 4. 本机环境的硬约束（换机器要重新确认）
 
