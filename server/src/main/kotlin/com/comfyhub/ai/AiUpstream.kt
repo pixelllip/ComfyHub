@@ -145,6 +145,14 @@ object AiUpstream {
         val displayName: String,
         val contextWindow: Int? = null,
         val maxOutputTokens: Int? = null,
+        /** 预处理好的输入模态：接口声明 > 内置目录 > 保守的仅文本 */
+        val modalities: List<String> = listOf("text"),
+        val tools: Boolean = false,
+        val reasoning: Boolean = false,
+        /** discovered / builtin / unknown，界面上要显示给用户看 */
+        val capabilitySource: String = "unknown",
+        /** 人类可读的来源说明，例如「命中内置规则 claude-3」 */
+        val capabilityNote: String? = null,
     )
 
     data class DiscoveryResult(
@@ -160,16 +168,29 @@ object AiUpstream {
             return DiscoveryResult(false, response.errorCode, response.message)
         }
         val candidates = parseCandidates(response.body)
+        val declared = candidates.count { it.capabilitySource == CapabilitySource.DISCOVERED.wire }
+        val builtin = candidates.count { it.capabilitySource == CapabilitySource.BUILTIN.wire }
+        val unknown = candidates.count { it.capabilitySource == "unknown" }
         return DiscoveryResult(
             ok = true,
-            message = if (candidates.isEmpty()) "未发现模型（端点返回空列表）" else "发现 ${candidates.size} 个候选模型",
+            message = if (candidates.isEmpty()) {
+                "未发现模型（端点返回空列表）"
+            } else {
+                "发现 ${candidates.size} 个候选：接口声明 $declared 个、内置目录 $builtin 个、未识别 $unknown 个"
+            },
             candidates = candidates,
         )
     }
 
     /**
-     * 解析模型列表。**只取 id / 显示名 / 容量**：
-     * 能力（图片、视频、工具…）不在这里推断，必须由用户在模型目录里显式声明（AIH-011）。
+     * 解析模型列表。
+     *
+     * 能力按**可信度从高到低**处理（AIH-011 的"不猜能力"依然成立）：
+     *  1. 接口自己声明的能力（OpenRouter 的 `architecture.input_modalities`、
+     *     各类 `capabilities` / `supports_vision` 字段）→ 标记为「接口声明」；
+     *  2. 接口没说，但命中了[ModelCapabilityCatalog]这张按公开文档整理的离线表
+     *     → 标记为「内置目录」，界面上可见、可改；
+     *  3. 两者都没有 → **只给文本**，标记为「未识别」，绝不按名字猜图片能力。
      */
     fun parseCandidates(body: String): List<ModelCandidate> = runCatching {
         val root = com.comfyhub.AppJson.parseToJsonElement(body)
@@ -189,14 +210,125 @@ object AiUpstream {
                 (obj[key] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toIntOrNull()
             }
             val id = text("id", "name", "model") ?: return@mapNotNull null
+            val declared = parseDeclaredCapabilities(obj)
+            val fromCatalog = if (declared == null) ModelCapabilityCatalog.lookup(id) else null
+
             ModelCandidate(
                 id = id,
                 displayName = text("display_name", "displayName", "name") ?: id,
                 contextWindow = number("context_window", "contextWindow", "context_length", "max_context_tokens"),
                 maxOutputTokens = number("max_output_tokens", "maxOutputTokens", "max_tokens"),
+                modalities = declared?.modalities ?: fromCatalog?.modalities ?: listOf("text"),
+                tools = declared?.tools ?: fromCatalog?.tools ?: false,
+                reasoning = declared?.reasoning ?: fromCatalog?.reasoning ?: false,
+                capabilitySource = when {
+                    declared != null -> CapabilitySource.DISCOVERED.wire
+                    fromCatalog != null -> CapabilitySource.BUILTIN.wire
+                    else -> "unknown"
+                },
+                capabilityNote = when {
+                    declared != null -> "接口在下发的模型信息里声明了输入模态"
+                    fromCatalog != null -> "命中内置目录规则「${fromCatalog.matchedBy}」（可能过期，可手工修改）"
+                    else -> "接口未声明、内置目录也没有 → 按仅文本处理，需要图片请手工勾选"
+                },
             )
         }.distinctBy { it.id }
     }.getOrDefault(emptyList())
+
+    private data class DeclaredCapabilities(
+        val modalities: List<String>,
+        val tools: Boolean,
+        val reasoning: Boolean,
+    )
+
+    /**
+     * 读取接口**自己声明**的能力。只要看到任何一个已知字段就认为"接口说了"，
+     * 没看到的维度按 false / 无处理；一个字段都没有则返回 null（交给内置目录）。
+     */
+    private fun parseDeclaredCapabilities(obj: kotlinx.serialization.json.JsonObject): DeclaredCapabilities? {
+        val modalities = linkedSetOf<String>()
+        var sawAnything = false
+
+        fun addModality(raw: String?) {
+            val token = raw?.trim()?.lowercase() ?: return
+            if (token.isEmpty()) return
+            sawAnything = true
+            // "text+image->text" / "image->text" 这类 OpenRouter 写法
+            token.split('+', ',', '/', '|', ' ', '>')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .forEach { part ->
+                    when {
+                        part.startsWith("image") || part == "vision" -> modalities += "image"
+                        part.startsWith("video") -> modalities += "video"
+                        part.startsWith("audio") -> modalities += "audio"
+                        part.startsWith("file") || part.startsWith("pdf") -> modalities += "document"
+                        part.startsWith("text") || part == "prompt" -> modalities += "text"
+                    }
+                }
+        }
+
+        fun readArrayOf(target: kotlinx.serialization.json.JsonObject, key: String) {
+            val arr = target[key] as? kotlinx.serialization.json.JsonArray ?: return
+            sawAnything = true
+            arr.forEach { element ->
+                when (element) {
+                    is kotlinx.serialization.json.JsonPrimitive -> addModality(element.contentOrNull)
+                    is kotlinx.serialization.json.JsonObject -> element.keys.forEach { addModality(it) }
+                    else -> {}
+                }
+            }
+        }
+
+        fun readArray(key: String) = readArrayOf(obj, key)
+
+        // 1) 数组形态：input_modalities / modalities / capabilities: ["vision","tools"]
+        listOf("input_modalities", "inputModalities", "modalities", "supported_modalities", "capabilities")
+            .forEach { readArray(it) }
+
+        // 2) OpenRouter：architecture.input_modalities / architecture.modality
+        (obj["architecture"] as? kotlinx.serialization.json.JsonObject)?.let { arch ->
+            readArrayOf(arch, "input_modalities")
+            addModality((arch["modality"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull)
+        }
+
+        // 3) 布尔开关形态
+        fun boolOf(vararg keys: String): Boolean? = keys.firstNotNullOfOrNull { key ->
+            when (val v = obj[key]) {
+                is kotlinx.serialization.json.JsonPrimitive -> v.contentOrNull?.toBooleanStrictOrNull()
+                is kotlinx.serialization.json.JsonObject -> {
+                    sawAnything = true
+                    null
+                }
+                else -> null
+            }
+        }
+
+        boolOf("supports_vision", "vision", "supports_image", "multimodal", "image_input")?.let {
+            sawAnything = true
+            if (it) modalities += "image"
+        }
+        val tools = boolOf("supports_tools", "function_calling", "tool_call", "tools") ?: false
+        if (obj.keys.any { it in setOf("supports_tools", "function_calling", "tool_call", "tools") }) {
+            sawAnything = true
+        }
+        // capabilities: {"vision": true, "function_calling": true}
+        var toolsFromCaps = false
+        (obj["capabilities"] as? kotlinx.serialization.json.JsonObject)?.let { caps ->
+            sawAnything = true
+            fun flag(key: String) =
+                (caps[key] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toBooleanStrictOrNull()
+            if (flag("vision") == true || flag("image") == true) modalities += "image"
+            if (flag("function_calling") == true || flag("tools") == true || flag("tool_call") == true) {
+                toolsFromCaps = true
+            }
+        }
+        val reasoning = boolOf("supports_reasoning", "reasoning", "thinking", "supports_thinking") ?: false
+
+        if (!sawAnything) return null
+        if (modalities.isEmpty()) modalities += "text"
+        return DeclaredCapabilities(modalities.toList(), tools || toolsFromCaps, reasoning)
+    }
 
     // --- 内部：发一次 GET /models ------------------------------------------
 

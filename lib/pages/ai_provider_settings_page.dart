@@ -673,11 +673,23 @@ class _ProviderDetailState extends State<_ProviderDetail> {
             providerId: widget.provider.id,
             id: c.id,
             displayName: c.displayName,
-            // 只声明文本；其它能力必须由用户显式勾选
-            inputModalities: const ['text'],
+            // 用发现阶段预填/用户确认过的能力，而不是无脑"仅文本"
+            inputModalities: c.modalities.map((m) => m.wire).toList(),
+            attachmentTransports: {
+              for (final m in c.modalities)
+                if (m != AiModality.text) m.wire: const ['inline_base64'],
+            },
+            tools: c.tools,
+            reasoning: c.reasoning,
             contextWindow: c.contextWindow,
             maxOutputTokens: c.maxOutputTokens,
-            capabilitySource: 'discovered',
+            // 来源如实记录：接口声明 → discovered；内置目录 → builtin；未识别 → manual（用户接受默认）
+            capabilitySource: switch (c.capabilitySource) {
+              'discovered' => 'discovered',
+              'builtin' => 'builtin',
+              'tested' => 'tested',
+              _ => 'manual',
+            },
           ));
           added++;
         }
@@ -977,7 +989,8 @@ class _ModelDraft {
   const _ModelDraft(this.id, this.displayName, this.modalities, this.tools);
 }
 
-/// 候选模型勾选框：只列身份与容量，**不显示能力猜测**。
+/// 候选模型：**自动预填**输入模态（接口声明 > 内置目录 > 仅文本），
+/// 并把来源标出来；加入前可以逐个调整。
 class _DiscoverDialog extends StatefulWidget {
   final AiDiscoverResult result;
   const _DiscoverDialog({required this.result});
@@ -987,22 +1000,29 @@ class _DiscoverDialog extends StatefulWidget {
 }
 
 class _DiscoverDialogState extends State<_DiscoverDialog> {
+  /// id -> 用户确认后的能力（默认取预填值）
+  late final Map<String, AiModelCandidate> _drafts = {
+    for (final c in widget.result.candidates) c.id: c,
+  };
   late final Set<String> _selected = widget.result.candidates.map((c) => c.id).toSet();
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final declared = widget.result.candidates.where((c) => c.capabilitySource == 'discovered').length;
+    final builtin = widget.result.candidates.where((c) => c.capabilitySource == 'builtin').length;
+
     return AlertDialog(
       title: Text('发现 ${widget.result.candidates.length} 个候选模型'),
       content: SizedBox(
-        width: 520,
-        height: 380,
+        width: 620,
+        height: 460,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '勾选后加入模型目录（还要点「保存模型目录」才生效）。'
-              '能力不会被自动推断，请在保存前按需勾选文本/图片/视频/音频/文档。',
+              '能力已按「接口声明（$declared 个）→ 内置目录（$builtin 个）→ 仅文本」自动预填，'
+              '徽标可以逐个点开修改。确认后写入模型目录，随时可以在列表里再改。',
               style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
             ),
             const SizedBox(height: 8),
@@ -1010,19 +1030,76 @@ class _DiscoverDialogState extends State<_DiscoverDialog> {
               child: ListView.builder(
                 itemCount: widget.result.candidates.length,
                 itemBuilder: (context, i) {
-                  final c = widget.result.candidates[i];
-                  return CheckboxListTile(
-                    dense: true,
-                    value: _selected.contains(c.id),
-                    title: Text(c.displayName),
-                    subtitle: Text(c.detail, style: theme.textTheme.labelSmall),
-                    onChanged: (on) => setState(() {
-                      if (on == true) {
-                        _selected.add(c.id);
-                      } else {
-                        _selected.remove(c.id);
-                      }
-                    }),
+                  final id = widget.result.candidates[i].id;
+                  final c = _drafts[id]!;
+                  final checked = _selected.contains(id);
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        CheckboxListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          value: checked,
+                          title: Row(
+                            children: [
+                              Flexible(child: Text(c.displayName, overflow: TextOverflow.ellipsis)),
+                              const SizedBox(width: 8),
+                              _SourceChip(source: c.capabilitySource, label: c.sourceLabel),
+                            ],
+                          ),
+                          subtitle: Text(c.detail, style: theme.textTheme.labelSmall),
+                          onChanged: (on) => setState(() {
+                            if (on == true) {
+                              _selected.add(id);
+                            } else {
+                              _selected.remove(id);
+                            }
+                          }),
+                        ),
+                        if (checked)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8, bottom: 4),
+                            child: Wrap(
+                              spacing: 6,
+                              children: [
+                                for (final m in AiModality.values)
+                                  FilterChip(
+                                    label: Text(m.label, style: theme.textTheme.labelSmall),
+                                    selected: c.modalities.contains(m),
+                                    visualDensity: VisualDensity.compact,
+                                    onSelected: (on) => setState(() {
+                                      final next = [...c.modalities];
+                                      if (on) {
+                                        next.add(m);
+                                      } else {
+                                        next.remove(m);
+                                      }
+                                      _drafts[id] = c.copyWith(modalities: next);
+                                    }),
+                                  ),
+                                FilterChip(
+                                  label: Text('工具', style: theme.textTheme.labelSmall),
+                                  selected: c.tools,
+                                  visualDensity: VisualDensity.compact,
+                                  onSelected: (on) =>
+                                      setState(() => _drafts[id] = c.copyWith(tools: on)),
+                                ),
+                              ],
+                            ),
+                          ),
+                        if (checked && c.capabilityNote != null)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8, bottom: 4),
+                            child: Text(
+                              c.capabilityNote!,
+                              style: theme.textTheme.labelSmall
+                                  ?.copyWith(color: theme.colorScheme.outline),
+                            ),
+                          ),
+                      ],
+                    ),
                   );
                 },
               ),
@@ -1035,11 +1112,34 @@ class _DiscoverDialogState extends State<_DiscoverDialog> {
         FilledButton(
           onPressed: () => Navigator.pop(
             context,
-            widget.result.candidates.where((c) => _selected.contains(c.id)).toList(),
+            _selected.map((id) => _drafts[id]!).toList(),
           ),
           child: Text('加入 ${_selected.length} 个'),
         ),
       ],
+    );
+  }
+}
+
+/// 能力来源徽标：接口声明（可信）/ 内置目录（离线表，可能过期）/ 未识别。
+class _SourceChip extends StatelessWidget {
+  final String source;
+  final String label;
+  const _SourceChip({required this.source, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final (bg, fg) = switch (source) {
+      'discovered' => (theme.colorScheme.primaryContainer, theme.colorScheme.onPrimaryContainer),
+      'builtin' => (theme.colorScheme.tertiaryContainer, theme.colorScheme.onTertiaryContainer),
+      'tested' => (theme.colorScheme.secondaryContainer, theme.colorScheme.onSecondaryContainer),
+      _ => (theme.colorScheme.surfaceContainerHighest, theme.colorScheme.outline),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+      child: Text(label, style: theme.textTheme.labelSmall?.copyWith(color: fg)),
     );
   }
 }

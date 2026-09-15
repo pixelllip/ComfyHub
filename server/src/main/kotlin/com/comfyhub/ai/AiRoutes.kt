@@ -146,6 +146,11 @@ fun Route.aiRoutes(
                             displayName = it.displayName,
                             contextWindow = it.contextWindow,
                             maxOutputTokens = it.maxOutputTokens,
+                            modalities = it.modalities,
+                            tools = it.tools,
+                            reasoning = it.reasoning,
+                            capabilitySource = it.capabilitySource,
+                            capabilityNote = it.capabilityNote,
                         )
                     },
                 )
@@ -448,13 +453,24 @@ private val TERMINAL_EVENTS = setOf(
 @Serializable
 data class CancelResult(val cancelled: Boolean, val status: String)
 
-/** 模型发现候选（AIH-009）：只有身份与容量，**能力仍需用户显式声明**。 */
+/**
+ * 模型发现候选（AIH-009）。
+ *
+ * 能力字段是**预填建议**而不是断言：`capabilitySource` 告诉用户判断从哪来
+ * （接口声明 / 内置目录 / 未识别），用户可以在加入前改。
+ */
 @Serializable
 data class ModelCandidateDto(
     val id: String,
     val displayName: String,
     val contextWindow: Int? = null,
     val maxOutputTokens: Int? = null,
+    val modalities: List<String> = listOf("text"),
+    val tools: Boolean = false,
+    val reasoning: Boolean = false,
+    /** discovered / builtin / unknown */
+    val capabilitySource: String = "unknown",
+    val capabilityNote: String? = null,
 )
 
 @Serializable

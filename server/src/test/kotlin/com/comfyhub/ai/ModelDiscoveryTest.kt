@@ -61,15 +61,12 @@ class ModelDiscoveryTest {
     }
 
     @Test
-    fun `发现不推断能力 候选里根本没有能力字段`() {
-        val candidate = AiUpstream.ModelCandidate("m1", "M1")
-        assertNull(candidate.contextWindow)
-        assertNull(candidate.maxOutputTokens)
-        // 能力必须由用户在模型目录里显式声明（AIH-011）：候选结构里不该出现任何能力字段
-        val names = AiUpstream.ModelCandidate::class.members.map { it.name }.toSet()
-        assertTrue(
-            names.none { it.contains("modal", true) || it.contains("tool", true) || it.contains("image", true) },
-            "候选模型不应携带能力字段：$names"
-        )
+    fun `不认识的模型不会被猜能力：只给文本并标明未识别`() {
+        val candidate = AiUpstream.parseCandidates("""{"data":[{"id":"acme-mystery-9000"}]}""").single()
+        assertEquals(listOf("text"), candidate.modalities)
+        assertEquals("unknown", candidate.capabilitySource)
+        assertTrue(!candidate.tools)
+        // 内置目录也查不到，说明确实没有"按名字硬猜"的路径
+        assertNull(ModelCapabilityCatalog.lookup("acme-mystery-9000"))
     }
 }

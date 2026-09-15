@@ -78,6 +78,29 @@ MockClient _backend(_Recorder recorder) {
               }
             ]
           : (sent['models'] as List);
+    } else if (path.endsWith('/discover-models')) {
+      body = {
+        'ok': true,
+        'message': '发现 2 个候选：接口声明 1 个、内置目录 0 个、未识别 1 个',
+        'candidates': [
+          {
+            'id': 'vision-model',
+            'displayName': '视觉模型',
+            'modalities': ['text', 'image'],
+            'tools': true,
+            'capabilitySource': 'discovered',
+            'capabilityNote': '接口在下发的模型信息里声明了输入模态',
+          },
+          {
+            'id': 'acme-mystery',
+            'displayName': '神秘模型',
+            'modalities': ['text'],
+            'tools': false,
+            'capabilitySource': 'unknown',
+            'capabilityNote': '接口未声明、内置目录也没有 → 按仅文本处理，需要图片请手工勾选',
+          },
+        ],
+      };
     } else if (path.endsWith('/credentials')) {
       if (request.method == 'PUT') recorder.puts.add(request.body);
       body = {'configured': true, 'source': 'managed', 'writable': true};
@@ -269,5 +292,42 @@ void main() {
     final models = (saved['models'] as List).cast<Map<String, dynamic>>();
     expect(models.map((m) => m['id']), contains('deepseek-chat'));
     expect(models.map((m) => m['id']), contains('m-text'), reason: '原有模型不能被覆盖掉');
+  });
+
+  testWidgets('获取可用模型：能力自动预填并标出来源，加入时按预填写库', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1100);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final recorder = _Recorder();
+    await tester.pumpWidget(await _page(recorder));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('本机网关'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('获取可用模型'));
+    await tester.pumpAndSettle();
+
+    // 两个候选都带来源徽标：一个"接口声明"，一个"未识别（默认仅文本）"
+    expect(find.text('接口声明'), findsOneWidget);
+    expect(find.text('未识别（默认仅文本）'), findsOneWidget);
+    expect(find.textContaining('接口未声明、内置目录也没有'), findsWidgets);
+
+    await tester.tap(find.text('加入 2 个'));
+    await tester.pumpAndSettle();
+
+    // 写库时：视觉模型带 image，未识别的只有 text
+    expect(recorder.modelSaves, isNotEmpty);
+    final saved = jsonDecode(recorder.modelSaves.last) as Map<String, dynamic>;
+    final models = (saved['models'] as List).cast<Map<String, dynamic>>();
+    final vision = models.firstWhere((m) => m['id'] == 'vision-model');
+    final mystery = models.firstWhere((m) => m['id'] == 'acme-mystery');
+
+    expect(vision['inputModalities'], contains('image'), reason: '接口声明的图片能力要带过来');
+    expect(vision['capabilitySource'], 'discovered');
+    expect(vision['tools'], isTrue);
+
+    expect(mystery['inputModalities'], ['text'], reason: '未识别的模型不能凭空多出图片能力');
+    expect(mystery['capabilitySource'], 'manual', reason: '未识别＝用户接受了保守默认，标成手工声明');
   });
 }

@@ -225,18 +225,33 @@ class AiProviderTestResult {
   String get display => errorCode == null ? message : '[$errorCode] $message';
 }
 
-/// 模型发现候选（AIH-009）：只有身份与容量，能力仍需用户显式声明。
+/// 模型发现候选（AIH-009）。
+///
+/// 能力字段是**预填建议**而非断言：`capabilitySource` 说明判断从哪来
+/// （接口声明 / 内置目录 / 未识别），用户加入前可以改。
 class AiModelCandidate {
   final String id;
   final String displayName;
   final int? contextWindow;
   final int? maxOutputTokens;
+  final List<AiModality> modalities;
+  final bool tools;
+  final bool reasoning;
+
+  /// discovered / builtin / unknown
+  final String capabilitySource;
+  final String? capabilityNote;
 
   const AiModelCandidate({
     required this.id,
     required this.displayName,
     this.contextWindow,
     this.maxOutputTokens,
+    this.modalities = const [AiModality.text],
+    this.tools = false,
+    this.reasoning = false,
+    this.capabilitySource = 'unknown',
+    this.capabilityNote,
   });
 
   factory AiModelCandidate.fromJson(Map<String, dynamic> json) => AiModelCandidate(
@@ -244,7 +259,26 @@ class AiModelCandidate {
         displayName: (json['displayName'] ?? json['id'] ?? '').toString(),
         contextWindow: (json['contextWindow'] as num?)?.toInt(),
         maxOutputTokens: (json['maxOutputTokens'] as num?)?.toInt(),
+        modalities: ((json['modalities'] as List?) ?? const ['text'])
+            .map((e) => AiModality.parse(e.toString()))
+            .whereType<AiModality>()
+            .toList(),
+        tools: json['tools'] == true,
+        reasoning: json['reasoning'] == true,
+        capabilitySource: (json['capabilitySource'] ?? 'unknown').toString(),
+        capabilityNote: json['capabilityNote']?.toString(),
       );
+
+  /// 能力来源的中文标签 —— 必须让用户看得出"这是谁说的"。
+  String get sourceLabel => switch (capabilitySource) {
+        'discovered' => '接口声明',
+        'builtin' => '内置目录',
+        'tested' => '已实测',
+        'manual' => '手工声明',
+        _ => '未识别（默认仅文本）',
+      };
+
+  bool get sourceIsGuess => capabilitySource == 'builtin';
 
   String get detail {
     final parts = <String>[];
@@ -252,6 +286,18 @@ class AiModelCandidate {
     if (maxOutputTokens != null) parts.add('输出上限 $maxOutputTokens');
     return parts.isEmpty ? id : '$id · ${parts.join(' · ')}';
   }
+
+  AiModelCandidate copyWith({List<AiModality>? modalities, bool? tools}) => AiModelCandidate(
+        id: id,
+        displayName: displayName,
+        contextWindow: contextWindow,
+        maxOutputTokens: maxOutputTokens,
+        modalities: modalities ?? this.modalities,
+        tools: tools ?? this.tools,
+        reasoning: reasoning,
+        capabilitySource: capabilitySource,
+        capabilityNote: capabilityNote,
+      );
 }
 
 class AiDiscoverResult {
