@@ -1402,6 +1402,12 @@ class AiToolCallState {
   /// not_required / pending / approved / denied
   final String? approval;
 
+  /// 这次工具调用**产出的画廊产物 id**（`comfy_submit` 的 mediaIds）。
+  ///
+  /// 用于在回复末尾贴「画廊入口卡」（用户建议 ⑤）：AI 真的生成了东西，
+  /// 就该在回复下面给一个能点开看详情的入口，而不是让用户自己去画廊里翻。
+  final List<int> mediaIds;
+
   const AiToolCallState({
     required this.callId,
     required this.name,
@@ -1411,6 +1417,7 @@ class AiToolCallState {
     this.error,
     this.elapsedMs = 0,
     this.approval,
+    this.mediaIds = const [],
   });
 
   factory AiToolCallState.fromJson(Map<String, dynamic> json) => AiToolCallState(
@@ -1422,7 +1429,16 @@ class AiToolCallState {
         error: json['error']?.toString(),
         elapsedMs: (json['elapsedMs'] as num?)?.toInt() ?? 0,
         approval: json['approval']?.toString(),
+        mediaIds: (json['mediaIds'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ?? const [],
       );
+
+  /// 从工具结构化结果里取出产物 id（`comfy_submit` 的 `mediaIds`）。
+  static List<int> mediaIdsOf(Object? resultJson) {
+    if (resultJson is! Map) return const [];
+    final raw = resultJson['mediaIds'];
+    if (raw is! List) return const [];
+    return raw.whereType<num>().map((e) => e.toInt()).toList();
+  }
 
   /// 由 `message.parts` 还原：`tool_call` 给名字与参数，`tool_result` 补结果与结论。
   ///
@@ -1459,6 +1475,7 @@ class AiToolCallState {
           error: ok ? null : (map['code']?.toString() ?? map['error']?.toString()),
           elapsedMs: (map['elapsedMs'] as num?)?.toInt() ?? 0,
           approval: approval.isEmpty ? null : approval,
+          mediaIds: AiToolCallState.mediaIdsOf(map),
         );
         if (i == null) {
           indexOf[id] = out.length;
@@ -1479,6 +1496,7 @@ class AiToolCallState {
     String? error,
     int? elapsedMs,
     String? approval,
+    List<int>? mediaIds,
   }) =>
       AiToolCallState(
         callId: callId,
@@ -1489,6 +1507,7 @@ class AiToolCallState {
         error: error ?? this.error,
         elapsedMs: elapsedMs ?? this.elapsedMs,
         approval: approval ?? this.approval,
+        mediaIds: mediaIds ?? this.mediaIds,
       );
 
   /// 待用户批准：气泡上要出「批准 / 拒绝」。
@@ -1508,4 +1527,122 @@ class AiToolCallState {
   String get elapsedLabel => elapsedMs <= 0
       ? ''
       : (elapsedMs < 1000 ? '$elapsedMs ms' : '${(elapsedMs / 1000).toStringAsFixed(1)} s');
+}
+
+// ---------------------------------------------------------------------------
+//  ComfyUI 提交任务与实时进度（用户建议 ① 与"其他建议"第 1 条）
+// ---------------------------------------------------------------------------
+
+/// 一次提交给 ComfyUI 的运行（后端 `ComfySubmission`）。
+class AiComfySubmission {
+  final String promptId;
+  final String submittedBy;
+
+  /// 提交时用的标题（能给界面一个好认的名字）。
+  final String? title;
+
+  /// queued / running / success / error / empty / timeout
+  final String status;
+  final String submittedAt;
+  final String? finishedAt;
+  final int elapsedMs;
+
+  /// 已经入库的产物 id（完成后才有）—— 画廊入口卡就是用它跳过去的。
+  final List<int> mediaIds;
+  final int? capturedPromptId;
+  final String? error;
+  final String? message;
+
+  const AiComfySubmission({
+    required this.promptId,
+    this.submittedBy = 'ai',
+    this.title,
+    this.status = 'queued',
+    this.submittedAt = '',
+    this.finishedAt,
+    this.elapsedMs = 0,
+    this.mediaIds = const [],
+    this.capturedPromptId,
+    this.error,
+    this.message,
+  });
+
+  factory AiComfySubmission.fromJson(Map<String, dynamic> json) => AiComfySubmission(
+        promptId: (json['promptId'] ?? '').toString(),
+        submittedBy: (json['submittedBy'] ?? 'ai').toString(),
+        title: json['title']?.toString(),
+        status: (json['status'] ?? 'queued').toString(),
+        submittedAt: (json['submittedAt'] ?? '').toString(),
+        finishedAt: json['finishedAt']?.toString(),
+        elapsedMs: (json['elapsedMs'] as num?)?.toInt() ?? 0,
+        mediaIds: (json['mediaIds'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ?? const [],
+        capturedPromptId: (json['capturedPromptId'] as num?)?.toInt(),
+        error: json['error']?.toString(),
+        message: json['message']?.toString(),
+      );
+
+  /// 还在跑（界面据此显示"实时进度"）。
+  bool get isActive => status == 'queued' || status == 'running';
+
+  bool get isFailed => status == 'error';
+
+  /// 界面上的状态文案。
+  String get statusLabel => switch (status) {
+        'queued' => '排队中',
+        'running' => '生成中',
+        'success' => '已完成',
+        'empty' => '已完成（无产物）',
+        'error' => '失败',
+        'timeout' => '仍在运行',
+        _ => status,
+      };
+
+  String get elapsedLabel {
+    if (elapsedMs <= 0) return '';
+    final s = elapsedMs / 1000;
+    return s < 60 ? '${s.toStringAsFixed(0)} 秒' : '${(s / 60).toStringAsFixed(1)} 分钟';
+  }
+
+  /// 界面上显示的名字（标题 → promptId 前 8 位）。
+  String get label => (title == null || title!.trim().isEmpty)
+      ? '任务 ${promptId.length > 8 ? promptId.substring(0, 8) : promptId}'
+      : title!;
+}
+
+/// 实时进度快照（后端 `GET /api/capture/jobs`）。
+class AiComfyJobs {
+  final int queueRunning;
+  final int queuePending;
+  final bool comfyReachable;
+
+  /// 队列里正在跑的那一个的名字（ComfyUI 里给工作流起的标题）。
+  final String? runningLabel;
+
+  /// 最近提交的任务（新的在前）。
+  final List<AiComfySubmission> submissions;
+
+  const AiComfyJobs({
+    this.queueRunning = 0,
+    this.queuePending = 0,
+    this.comfyReachable = false,
+    this.runningLabel,
+    this.submissions = const [],
+  });
+
+  static const empty = AiComfyJobs();
+
+  factory AiComfyJobs.fromJson(Map<String, dynamic> json) => AiComfyJobs(
+        queueRunning: (json['queueRunning'] as num?)?.toInt() ?? 0,
+        queuePending: (json['queuePending'] as num?)?.toInt() ?? 0,
+        comfyReachable: json['comfyReachable'] == true,
+        runningLabel: json['runningLabel']?.toString(),
+        submissions: (json['submissions'] as List?)
+                ?.whereType<Map>()
+                .map((e) => AiComfySubmission.fromJson(Map<String, dynamic>.from(e)))
+                .toList() ??
+            const [],
+      );
+
+  /// 有没有"正在跑"的东西 —— 界面据此决定要不要显示进度块、要不要继续轮询。
+  bool get hasActivity => queueRunning > 0 || queuePending > 0 || submissions.any((s) => s.isActive);
 }

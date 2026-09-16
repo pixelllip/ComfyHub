@@ -395,6 +395,73 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 批准一次待批准的工具调用（AIH-035 / AIH-049）。
   Future<void> approveToolCall(String callId) => _resolveToolCall(callId, approve: true);
 
+  // -----------------------------------------------------------------------
+  //  ComfyUI 实时进度（用户"其他建议"第 1 条）
+  // -----------------------------------------------------------------------
+
+  /// 最近一次拿到的 ComfyUI 实时进度。右侧栏显示它。
+  AiComfyJobs comfyJobs = AiComfyJobs.empty;
+
+  Timer? _jobsTimer;
+  bool _jobsInFlight = false;
+
+  /// 开始轮询实时进度（页面开始显示时调）。
+  ///
+  /// 节奏是"有活动时 1.5 秒一次、闲着时 6 秒一次"：闲着还勤问 ComfyUI，
+  /// 既费电又会让 ComfyUI 的请求日志刷屏；但没有活动时**不能完全停**，
+  /// 否则用户在 ComfyUI 里手点一下就看不到进度了。
+  void startWatchingComfy() {
+    _jobsTimer?.cancel();
+    _jobsTimer = Timer.periodic(
+      comfyJobs.hasActivity ? const Duration(milliseconds: 1500) : const Duration(seconds: 6),
+      (_) => unawaited(refreshComfyJobs()),
+    );
+    unawaited(refreshComfyJobs());
+  }
+
+  void stopWatchingComfy() {
+    _jobsTimer?.cancel();
+    _jobsTimer = null;
+  }
+
+  /// 拉一次实时进度。失败**不弹错**（进度是辅助信息，不该因为 ComfyUI 没开就骚扰用户）。
+  Future<void> refreshComfyJobs() async {
+    if (_jobsInFlight) return;
+    _jobsInFlight = true;
+    try {
+      final next = await _api.comfyJobs();
+      // 活动状态变了就重建定时器（空闲 ↔ 有任务 的节奏不一样）
+      final wasActive = comfyJobs.hasActivity;
+      comfyJobs = next;
+      notifyListeners();
+      if (wasActive != next.hasActivity) startWatchingComfy();
+    } catch (_) {
+      // 静默：后端不可达时右侧栏本来就显示"不可达"
+    } finally {
+      _jobsInFlight = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    stopWatchingComfy();
+    super.dispose();
+  }
+
+  /// 一条助手消息里**真正产出的画廊产物**（用于回复末尾的「画廊入口卡」）。
+  ///
+  /// 只认工具结构化结果里的 `mediaIds`：别的路径（比如模型在正文里说"生成了 id=7"）
+  /// 一律不信 —— 产物入口必须来自后端确认入库的事实。
+  List<int> producedMediaIds(AiMessage message) {
+    final seen = <int>{};
+    for (final call in toolCallsFor(message)) {
+      for (final id in call.mediaIds) {
+        if (id > 0) seen.add(id);
+      }
+    }
+    return seen.toList();
+  }
+
   Future<void> denyToolCall(String callId) => _resolveToolCall(callId, approve: false);
 
   Future<void> _resolveToolCall(String callId, {required bool approve}) async {
@@ -968,8 +1035,12 @@ class AiWorkspaceStore extends ChangeNotifier {
                 status: AiToolCallStatus.ok,
                 preview: event.preview ?? prev?.preview,
                 elapsedMs: event.elapsedMs ?? prev?.elapsedMs,
+                // 结构化结果里的产物 id：回复末尾的「画廊入口卡」（用户建议 ⑤）用它
+                mediaIds: AiToolCallState.mediaIdsOf(event.data['result']),
               ),
             );
+            // 提交了任务：立刻刷新进度，用户马上就能在右侧栏看到"排队中 / 正在生成"
+            unawaited(refreshComfyJobs());
             notifyListeners();
           case 'tool.failed':
             final denied = (event.approval ?? '') == 'denied';

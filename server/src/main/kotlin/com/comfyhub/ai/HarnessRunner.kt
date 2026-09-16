@@ -464,6 +464,9 @@ class HarnessRunner(
                             put("code", record.errorCode)
                             put("elapsedMs", record.elapsedMs)
                             put("approval", record.approval)
+                            // 产物 id 一起落进 parts：重开 App 之后回复末尾的
+                            // 「画廊入口卡」（用户建议 ⑤）才能照样贴出来
+                            record.resultJson?.get("mediaIds")?.let { put("mediaIds", it) }
                         },
                     )
 
@@ -475,6 +478,9 @@ class HarnessRunner(
                                 "name" to draft.name,
                                 "elapsedMs" to record.elapsedMs,
                                 "preview" to record.preview,
+                                // 工具的结构化结果（提交任务时会带 mediaIds）：界面靠它在回复末尾
+                                // 直接贴出「画廊入口卡」（用户建议 ⑤），不用去解析文本预览。
+                                "result" to record.resultJson,
                             ),
                         )
                     } else {

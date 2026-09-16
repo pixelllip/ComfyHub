@@ -10,6 +10,7 @@ import '../models/models.dart';
 import '../models/ai_models.dart';
 import '../state/ai_workspace_store.dart';
 import '../widgets/markdown_view.dart';
+import 'media_detail_page.dart';
 
 /// AI 工作台（AIH-001 / AIH-002 / AIK-002）。
 ///
@@ -407,6 +408,8 @@ class _MessageList extends StatelessWidget {
             toolCalls: message.isUser ? const [] : store.toolCallsFor(message),
             // 思考 / 正文按**流顺序**还原成段（用户要求"如实按流顺序显示"）
             segments: message.isUser ? const [] : store.segmentsFor(message),
+            // 这条回复真正产出的产物（回复末尾的「画廊入口卡」）
+            producedMediaIds: message.isUser ? const [] : store.producedMediaIds(message),
             toolCategoryOf: store.toolCategoryOf,
             onApprove: store.approveToolCall,
             onDeny: store.denyToolCall,
@@ -436,6 +439,9 @@ class _MessageBubble extends StatelessWidget {
   /// 这条消息按流顺序排好的段：思考段 + 正文段（`reasoning` / `text`）。
   final List<AiMessageSegment> segments;
 
+  /// 这次回复真正产出的画廊产物 id（`comfy_submit` 的 mediaIds）。
+  final List<int> producedMediaIds;
+
   final String Function(String toolName) toolCategoryOf;
   final Future<void> Function(String callId) onApprove;
   final Future<void> Function(String callId) onDeny;
@@ -450,6 +456,7 @@ class _MessageBubble extends StatelessWidget {
     required this.onRetry,
     this.toolCalls = const [],
     this.segments = const [],
+    this.producedMediaIds = const [],
     required this.toolCategoryOf,
     required this.onApprove,
     required this.onDeny,
@@ -543,6 +550,17 @@ class _MessageBubble extends StatelessWidget {
                   child: Text(
                     '有 ${pending.length} 个工具调用在等你的批准（写盘 / 改动类操作）。',
                     style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                  ),
+                ),
+              // 画廊入口卡（用户建议 ⑤）：这次回复**真的生成了产物**时，
+              // 在末尾贴一个能点开看详情的入口，而不是让用户自己去画廊里翻。
+              if (producedMediaIds.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: _ProducedMediaCard(
+                    mediaIds: producedMediaIds,
+                    thumbUrlOf: thumbUrlOf,
+                    fileUrlOf: fileUrlOf,
                   ),
                 ),
               if (m.status == 'cancelled')
@@ -693,14 +711,18 @@ class _ToolCallCardState extends State<_ToolCallCard> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
               if (call.hasDetail)
-                InkWell(
-                  onTap: () => setState(() => _expanded = !_expanded),
-                  child: Padding(
-                    padding: const EdgeInsets.all(2),
-                    child: Icon(
-                      _expanded ? Icons.expand_less : Icons.expand_more,
-                      size: 16,
-                      color: theme.colorScheme.outline,
+                Tooltip(
+                  // 带工具名的 tooltip：用例与用户都能精确定位"展开哪一个工具的结果"
+                  message: '${_expanded ? '收起' : '展开'} ${call.name} 的结果',
+                  child: InkWell(
+                    onTap: () => setState(() => _expanded = !_expanded),
+                    child: Padding(
+                      padding: const EdgeInsets.all(2),
+                      child: Icon(
+                        _expanded ? Icons.expand_less : Icons.expand_more,
+                        size: 16,
+                        color: theme.colorScheme.outline,
+                      ),
                     ),
                   ),
                 ),
@@ -790,6 +812,109 @@ class _StatusChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(label, style: theme.textTheme.labelSmall?.copyWith(color: color)),
+    );
+  }
+}
+
+/// 回复末尾的**画廊入口卡**（用户建议 ⑤）：
+/// "如果让 AI 调用 comfy 生成了产物，可以在回复末尾贴上一个类似画廊项目的入口，点开即查看对应详情"。
+///
+/// 只显示**后端确认入库**的产物（媒体 id 来自工具的结构化结果），
+/// 所以这里不会出现"AI 说生成了但其实没有"的假入口。
+class _ProducedMediaCard extends StatelessWidget {
+  final List<int> mediaIds;
+  final String? Function(String? attachmentId) thumbUrlOf;
+  final String? Function(String? attachmentId) fileUrlOf;
+
+  const _ProducedMediaCard({
+    required this.mediaIds,
+    required this.thumbUrlOf,
+    required this.fileUrlOf,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final shown = mediaIds.take(6).toList();
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.photo_library_outlined, size: 15, color: theme.colorScheme.primary),
+              const SizedBox(width: 6),
+              Text('生成的产物（${mediaIds.length}）', style: theme.textTheme.labelMedium),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // 横向缩略图条：懒构建，产物多的时候也不会一次全解码
+          SizedBox(
+            height: 72,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: shown.length,
+              itemBuilder: (context, i) {
+                final id = shown[i];
+                return Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: InkWell(
+                    onTap: () => _openDetail(context, id),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: SizedBox(
+                        width: 72,
+                        height: 72,
+                        child: Image.network(
+                          thumbUrlOf(id.toString()) ?? '',
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Container(
+                            color: theme.colorScheme.surfaceContainerHighest,
+                            child: Icon(Icons.image_not_supported_outlined,
+                                size: 18, color: theme.colorScheme.outline),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              TextButton.icon(
+                onPressed: () => _openDetail(context, mediaIds.first),
+                icon: const Icon(Icons.open_in_new, size: 15),
+                label: const Text('查看详情'),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 30),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+              if (mediaIds.length > 1)
+                Text(
+                  '点缩略图可以逐个看',
+                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openDetail(BuildContext context, int mediaId) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => MediaDetailPage(mediaId: mediaId)),
     );
   }
 }
@@ -1757,6 +1882,124 @@ class _Badge extends StatelessWidget {
 //  右侧上下文：模型能力 / Skills / ComfyUI
 // ---------------------------------------------------------------------------
 
+/// 右侧栏顶部的**实时进度**（用户"其他建议"第 1 条）。
+///
+/// 显示两件事：
+///  - ComfyUI 队列（运行中 / 等待中 + 正在跑的那个任务名）；
+///  - AI / 用户最近提交的任务（状态、耗时、产物数）。
+///
+/// 没有活动时**整块不占位** —— 右侧栏本来就窄，闲着的时候不该被一张空卡片吃掉高度。
+class _ComfyProgress extends StatelessWidget {
+  final AiWorkspaceStore store;
+  const _ComfyProgress({required this.store});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final jobs = store.comfyJobs;
+    final active = jobs.submissions.where((s) => s.isActive).toList();
+    final recent = jobs.submissions.where((s) => !s.isActive).take(2).toList();
+    // 队列里没人、也没有最近提交过（或最近只是"不可达"）：不显示这一块
+    if (!jobs.hasActivity && recent.isEmpty && jobs.comfyReachable) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    jobs.hasActivity ? Icons.play_circle_outline : Icons.dns_outlined,
+                    size: 16,
+                    color: jobs.hasActivity ? theme.colorScheme.primary : theme.colorScheme.outline,
+                  ),
+                  const SizedBox(width: 6),
+                  Text('实时进度', style: theme.textTheme.labelLarge),
+                  const Spacer(),
+                  if (jobs.queuePending > 0)
+                    Text('队列 ${jobs.queuePending}',
+                        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+                ],
+              ),
+              const SizedBox(height: 6),
+              if (!jobs.comfyReachable)
+                Text(
+                  'ComfyUI 不可达：进度拿不到（它没在跑？）',
+                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                )
+              else if (jobs.queueRunning > 0)
+                Text(
+                  '正在生成：${jobs.runningLabel ?? '未知工作流'}'
+                  '${jobs.queuePending > 0 ? '（还有 ${jobs.queuePending} 个排队）' : ''}',
+                  style: theme.textTheme.bodySmall,
+                ),
+              for (final s in active)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: _SubmissionRow(submission: s, highlight: true),
+                ),
+              if (active.isEmpty && jobs.queueRunning == 0 && jobs.comfyReachable)
+                Text('当前没有正在生成的任务',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+              if (recent.isNotEmpty) ...[
+                const Divider(height: 14),
+                Text('最近提交', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+                for (final s in recent)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: _SubmissionRow(submission: s, highlight: false),
+                  ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SubmissionRow extends StatelessWidget {
+  final AiComfySubmission submission;
+  final bool highlight;
+  const _SubmissionRow({required this.submission, required this.highlight});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = submission.isFailed
+        ? theme.colorScheme.error
+        : (highlight ? theme.colorScheme.primary : theme.colorScheme.outline);
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            submission.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelSmall?.copyWith(color: color),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          [
+            submission.statusLabel,
+            if (submission.elapsedLabel.isNotEmpty) submission.elapsedLabel,
+            if (submission.mediaIds.isNotEmpty) '${submission.mediaIds.length} 个产物',
+          ].join(' · '),
+          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+        ),
+      ],
+    );
+  }
+}
+
 class _ContextPanel extends StatefulWidget {
   final AiWorkspaceStore store;
   const _ContextPanel({required this.store});
@@ -1770,10 +2013,40 @@ class _ContextPanelState extends State<_ContextPanel> {
   bool _loading = false;
   String? _error;
 
+  /// Skills 列表默认**折叠**（用户"其他建议"第 2 条）：装了几十个之后右侧栏放不下，
+  /// 展开后给搜索框，找 skill 靠搜索而不是往下翻。
+  bool _skillsOpen = false;
+  final _skillSearch = TextEditingController();
+
+  /// 折叠状态下的搜索结果：名称、描述、whenToUse 里任一命中就算。
+  List<AiSkill> _filteredSkills(AiWorkspaceStore store) {
+    final q = _skillSearch.text.trim().toLowerCase();
+    if (q.isEmpty) return store.skills;
+    return store.skills
+        .where((s) =>
+            s.name.toLowerCase().contains(q) ||
+            (s.description).toLowerCase().contains(q) ||
+            (s.whenToUse ?? '').toLowerCase().contains(q))
+        .toList();
+  }
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _refresh();
+      // 实时进度（用户"其他建议"第 1 条）：右侧栏一显示就开始轮询，
+      // 这样"AI 刚提交的任务 / 用户自己在 ComfyUI 里点的任务"都能看到进度。
+      widget.store.startWatchingComfy();
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.store.stopWatchingComfy();
+    _skillSearch.dispose();
+    super.dispose();
   }
 
   Future<void> _refresh() async {
@@ -1795,7 +2068,8 @@ class _ContextPanelState extends State<_ContextPanel> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final store = widget.store;
+    // 这里 watch 一次：右侧栏要跟着"实时进度"（AI 提交的任务）自动刷新
+    final store = context.watch<AiWorkspaceStore>();
     final model = store.selectedModel;
 
     // CustomScrollView + SliverList：固定几段用 SliverToBoxAdapter，
@@ -1805,6 +2079,9 @@ class _ContextPanelState extends State<_ContextPanel> {
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
           sliver: SliverList.list(children: [
+            // 实时进度（用户"其他建议"第 1 条）：AI 提交的任务 / ComfyUI 队列就显示在最上面，
+            // 用户在对话里说"帮我跑一张"之后，不用切到 ComfyUI 就能看到它跑到哪了。
+            _ComfyProgress(store: store),
             Text('模型能力', style: theme.textTheme.labelLarge),
             const SizedBox(height: 6),
             if (model == null)
@@ -1868,9 +2145,21 @@ class _ContextPanelState extends State<_ContextPanel> {
             // **投放口**才是"装 skill"的方式：把文件夹（或 .md）拷进下面这个目录，
             // 应用启动时会自动登记（拷进来的文件没写 frontmatter 也会被补上）。
             // 这里不再有「从 DSH 导入」按钮（用户明确要求去掉）。
+            //
+            // 用户"其他建议"第 2 条：**列表默认折叠**（装了十几个 skill 之后，
+            // 右侧栏会被它们占满），展开后才给搜索框 —— 找某个 skill 靠搜索，不靠翻。
             Row(
               children: [
-                Text('Skills', style: theme.textTheme.labelLarge),
+                InkWell(
+                  onTap: () => setState(() => _skillsOpen = !_skillsOpen),
+                  child: Row(
+                    children: [
+                      Icon(_skillsOpen ? Icons.expand_less : Icons.expand_more,
+                          size: 16, color: theme.colorScheme.outline),
+                      Text('Skills', style: theme.textTheme.labelLarge),
+                    ],
+                  ),
+                ),
                 const SizedBox(width: 4),
                 Text('${store.skills.length}',
                     style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
@@ -1885,19 +2174,55 @@ class _ContextPanelState extends State<_ContextPanel> {
                 ),
               ],
             ),
+            if (_skillsOpen) ...[
+              const SizedBox(height: 4),
+              TextField(
+                controller: _skillSearch,
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: '搜索 skill（名称 / 说明）',
+                  prefixIcon: const Icon(Icons.search, size: 16),
+                  suffixIcon: _skillSearch.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: '清空搜索',
+                          icon: const Icon(Icons.close, size: 16),
+                          onPressed: () => setState(() => _skillSearch.clear()),
+                        ),
+                  border: const OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+            ],
             _SkillDropIn(store: store, onOpen: () => _openSkillsFolder(), onCopy: () => _copySkillsPath()),
             if (store.skillsBusy) const LinearProgressIndicator(minHeight: 2),
             if (store.skillsError != null)
               Text('Skills 加载失败：${store.skillsError}', style: theme.textTheme.bodySmall),
           ]),
         ),
-        if (!store.skillsBusy && store.skills.isEmpty && store.skillsError == null)
+        if (!_skillsOpen)
+          // 折叠时不列条目，只留一句提示（用户想找 skill 就展开）
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
             sliver: SliverToBoxAdapter(
               child: Text(
-                '还没有 Skill。把 skill 文件夹（或一个 .md）拷进上面的目录再点刷新，'
-                '也可以让 AI 用 register_skill 注册。',
+                store.skills.isEmpty
+                    ? '还没有 Skill。把 skill 文件夹（或一个 .md）拷进上面的目录再点刷新，'
+                        '也可以让 AI 用 register_skill 注册。'
+                    : '列表已折叠（${store.skills.length} 个）。点上面的「Skills」展开并搜索。',
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+            ),
+          )
+        else if (_filteredSkills(store).isEmpty)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+            sliver: SliverToBoxAdapter(
+              child: Text(
+                store.skills.isEmpty
+                    ? '还没有 Skill。把 skill 文件夹（或一个 .md）拷进上面的目录再点刷新，'
+                        '也可以让 AI 用 register_skill 注册。'
+                    : '没有匹配「${_skillSearch.text.trim()}」的 Skill。',
                 style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
               ),
             ),
@@ -1906,11 +2231,14 @@ class _ContextPanelState extends State<_ContextPanel> {
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
             sliver: SliverList.builder(
-              itemCount: store.skills.length,
-              itemBuilder: (context, i) => _SkillRow(
-                skill: store.skills[i],
-                onDelete: () => _deleteSkill(store.skills[i]),
-              ),
+              itemCount: _filteredSkills(store).length,
+              itemBuilder: (context, i) {
+                final skill = _filteredSkills(store)[i];
+                return _SkillRow(
+                  skill: skill,
+                  onDelete: () => _deleteSkill(skill),
+                );
+              },
             ),
           ),
         // 长期记忆（M6）：每次对话都会带上；AI 也能用 remember 追加一条

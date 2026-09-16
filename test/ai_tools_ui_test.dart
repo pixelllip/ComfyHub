@@ -100,13 +100,23 @@ MockClient _backend(
   bool approvalAccepted = true,
   List<Map<String, dynamic>>? tools,
   Map<String, dynamic>? policy,
+  /// `GET /api/capture/jobs` 的返回值（右侧栏实时进度）
+  Map<String, dynamic>? comfyJobs,
 }) {
   return MockClient((request) async {
     final path = request.url.path;
     rec.calls.add('${request.method} $path');
     Object body;
 
-    if (path == '/api/ai/providers') {
+    if (path == '/api/capture/jobs') {
+      body = comfyJobs ??
+          {
+            'queueRunning': 0,
+            'queuePending': 0,
+            'comfyReachable': true,
+            'submissions': <Object>[],
+          };
+    } else if (path == '/api/ai/providers') {
       body = [
         {
           'id': 'local-gw',
@@ -345,6 +355,7 @@ Future<Widget> _homePage(
   int modelCount = 1,
   String sse = '',
   List<Map<String, dynamic>> assistantParts = const [],
+  Map<String, dynamic>? comfyJobs,
 }) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
@@ -357,6 +368,7 @@ Future<Widget> _homePage(
         modelCount: modelCount,
         sse: sse,
         assistantParts: assistantParts,
+        comfyJobs: comfyJobs,
       ),
     ),
   );
@@ -388,6 +400,15 @@ void main() {
     await tester.pumpWidget(await _homePage(rec));
     await tester.pumpAndSettle();
 
+    // 用户"其他建议"第 2 条：列表**默认折叠**（十几个 skill 不该把右侧栏占满）
+    expect(find.text('anima-prompt'), findsNothing);
+    expect(find.textContaining('列表已折叠（3 个）'), findsOneWidget);
+
+    // 展开 → 出现搜索框 + 全部条目
+    await tester.tap(find.text('Skills'));
+    await tester.pumpAndSettle();
+    expect(find.text('搜索 skill（名称 / 说明）'), findsOneWidget);
+
     // 后端返回什么就显示什么（不是硬编码的 7 条占位目录）
     expect(find.text('anima-prompt'), findsOneWidget);
     expect(find.text('my-skill'), findsOneWidget);
@@ -396,6 +417,16 @@ void main() {
     expect(find.text('用户'), findsNWidgets(2));
     // 不合法的那条要标出来（不静默忽略）
     expect(find.textContaining('格式不合法'), findsOneWidget);
+
+    // 搜索：只留命中的那条（描述也参与匹配）
+    await tester.enterText(find.byType(TextField).last, '格式不对');
+    await tester.pumpAndSettle();
+    expect(find.text('broken-skill'), findsOneWidget);
+    expect(find.text('my-skill'), findsNothing);
+
+    await tester.enterText(find.byType(TextField).last, '');
+    await tester.pumpAndSettle();
+
     // 内置的没有删除按钮，用户来源的才有
     expect(find.byTooltip('删除 Skill'), findsNWidgets(2));
 
@@ -554,9 +585,78 @@ void main() {
     // 结果预览默认折叠
     expect(find.textContaining('# 标题'), findsNothing);
 
-    await tester.tap(find.byIcon(Icons.expand_more).last);
+    await tester.tap(find.byTooltip('展开 read_file 的结果'));
     await tester.pumpAndSettle();
     expect(find.textContaining('# 标题'), findsWidgets);
+  });
+
+  testWidgets('(e3) 回复末尾贴出「生成的产物」画廊入口卡（用户建议 ⑤）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'text.delta', '{"messageId":"a1","text":"跑好了。"}') +
+        _sse(
+            4,
+            'tool.requested',
+            '{"callId":"call-s","name":"comfy_submit","arguments":"{\\"promptId\\":7}",'
+                '"approval":"approved"}') +
+        _sse(5, 'tool.started', '{"callId":"call-s","name":"comfy_submit"}') +
+        _sse(
+            6,
+            'tool.completed',
+            '{"callId":"call-s","name":"comfy_submit","elapsedMs":9000,"preview":"完成",'
+                '"result":{"promptId":7,"status":"success","mediaIds":[31,32],"mediaCount":2}}') +
+        _sse(7, 'message.completed', '{"messageId":"a1","text":"跑好了。","steps":1}') +
+        _sse(8, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, '帮我跑一张');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    // 后端确认入库了两个产物：回复末尾要有入口卡（不是靠模型在正文里嘴上说）
+    expect(find.text('生成的产物（2）'), findsOneWidget);
+    expect(find.text('查看详情'), findsOneWidget);
+  });
+
+  testWidgets('(e4) 右侧栏显示 ComfyUI 实时进度（用户"其他建议"第 1 条）', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    await tester.pumpWidget(await _homePage(
+      rec,
+      comfyJobs: {
+        'queueRunning': 1,
+        'queuePending': 2,
+        'comfyReachable': true,
+        'runningLabel': '雨夜霓虹',
+        'submissions': [
+          {
+            'promptId': 'p-1',
+            'submittedBy': 'ai',
+            'title': '赛博朋克少女',
+            'status': 'running',
+            'elapsedMs': 12000,
+            'mediaIds': <Object>[],
+          },
+        ],
+      },
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('实时进度'), findsOneWidget);
+    expect(find.textContaining('正在生成：雨夜霓虹'), findsOneWidget);
+    expect(find.textContaining('赛博朋克少女'), findsWidgets);
+    // 进度是真的打到了后端那个接口（不是界面自己编的）
+    expect(rec.calls.any((c) => c.contains('/api/capture/jobs')), isTrue);
   });
 
   testWidgets('(c) approval=pending 时出「批准 / 拒绝」，批准 POST /api/ai/tool-calls/{id}/approve', (tester) async {

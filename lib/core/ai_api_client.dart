@@ -326,6 +326,13 @@ class AiApiClient {
 
   Future<void> cancelRun(String runId) async => _send('POST', '/api/ai/runs/$runId/cancel');
 
+  /// ComfyUI 实时进度（用户"其他建议"第 1 条）：队列状态 + 最近提交的任务。
+  ///
+  /// 走的是同一个后端的 `/api/capture/jobs`（不是 `/api/ai/*`），所以用同一个客户端实例、
+  /// 同一套错误处理；**不接受任意 URL**，和工具层一样只认应用配置里的 ComfyUI 地址。
+  Future<AiComfyJobs> comfyJobs() async =>
+      AiComfyJobs.fromJson(Map<String, dynamic>.from(await _get('/api/capture/jobs') as Map));
+
   /// 订阅统一事件流（SSE）。`after` 用于断线续传。
   Stream<AiRunEvent> runEvents(String runId, {int after = 0}) async* {
     final req = http.Request('GET', _uri('/api/ai/runs/$runId/events?after=$after'))
