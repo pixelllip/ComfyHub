@@ -145,12 +145,70 @@ class MarkdownText extends StatelessWidget {
           ),
         );
 
+      case MdTable(:final alignments, :final header, :final rows):
+        // 表格用 `Table` 的弹性列宽：气泡本身有 maxWidth（720），列会自动分摊，
+        // 单元格里的长文本正常换行 —— 比横向滚动的 IntrinsicColumnWidth 好用得多。
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Table(
+              defaultVerticalAlignment: TableCellVerticalAlignment.top,
+              border: TableBorder.symmetric(
+                inside: BorderSide(color: theme.colorScheme.outlineVariant, width: 0.8),
+                outside: BorderSide(color: theme.colorScheme.outlineVariant),
+              ),
+              children: [
+                TableRow(
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.7),
+                  ),
+                  children: [
+                    for (var c = 0; c < alignments.length; c++)
+                      _cell(context, theme, base.copyWith(fontWeight: FontWeight.w600),
+                          header[c], alignments[c]),
+                  ],
+                ),
+                for (final row in rows)
+                  TableRow(
+                    children: [
+                      for (var c = 0; c < alignments.length; c++)
+                        _cell(context, theme, base, row[c], alignments[c]),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        );
+
       case MdRule():
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Divider(height: 1, color: theme.colorScheme.outlineVariant),
         );
     }
+  }
+
+  /// 表格的一个单元格（内容照常解析行内标记，可选中复制）。
+  Widget _cell(
+    BuildContext context,
+    ThemeData theme,
+    TextStyle style,
+    List<MdInline> spans,
+    MdColumnAlign align,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: SelectableText.rich(
+        TextSpan(children: _spans(context, theme, style, spans)),
+        style: style,
+        textAlign: switch (align) {
+          MdColumnAlign.center => TextAlign.center,
+          MdColumnAlign.right => TextAlign.right,
+          _ => TextAlign.left,
+        },
+      ),
+    );
   }
 
   List<InlineSpan> _spans(

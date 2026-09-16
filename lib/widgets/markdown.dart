@@ -111,6 +111,21 @@ class MdRule extends MdBlock {
   const MdRule();
 }
 
+/// 表格列对齐（GFM 的 `:---` / `:---:` / `---:`）。
+enum MdColumnAlign { none, left, center, right }
+
+/// 表格：`header` 与每一行的单元格数都等于 `alignments.length`。
+///
+/// 单元格里的行内标记（粗体 / 行内代码 / 链接）照样解析 —— 助手回复里的
+/// 表格经常是 `| \`list_skills\` | 列出已安装 **Skills** |`，不解析就是一坨反引号。
+class MdTable extends MdBlock {
+  const MdTable(this.alignments, this.header, this.rows);
+
+  final List<MdColumnAlign> alignments;
+  final List<List<MdInline>> header;
+  final List<List<List<MdInline>>> rows;
+}
+
 /// 把 Markdown 文本解析成块列表。
 ///
 /// **流式安全**：未闭合的围栏代码块会把"剩下的内容"当代码继续渲染；
@@ -225,6 +240,18 @@ List<MdBlock> parseMarkdown(String source) {
       continue;
     }
 
+    // --- 表格（GFM）-----------------------------------------------------
+    // 必须在"段落"之前：表格的头部行本身长得就像普通段落。
+    // 判定要求**下一行是分隔行**（`|---|:--:|`），所以流式输出到一半
+    // （只吐了表头、分隔行还没来）时仍按普通文本显示，不会误吞内容。
+    final table = _tableAt(lines, i);
+    if (table != null) {
+      flushParagraph();
+      blocks.add(table.block);
+      i = table.next;
+      continue;
+    }
+
     // --- 空行 ---------------------------------------------------------
     if (_isBlank(line)) {
       flushParagraph();
@@ -241,6 +268,87 @@ List<MdBlock> parseMarkdown(String source) {
 }
 
 bool _isBlank(String line) => line.trim().isEmpty;
+
+// ---------------------------------------------------------------------------
+//  表格
+// ---------------------------------------------------------------------------
+
+/// 从第 [i] 行开始识别一张表；不是表就返回 null。
+///
+/// 判定标准（GFM）：第 i 行含 `|`，第 i+1 行是**分隔行**且每个单元格都是 `:?-+:?`。
+/// 单元格数一律以分隔行为准 —— 表头多写的列会被丢掉、少写的补空。
+({MdTable block, int next})? _tableAt(List<String> lines, int i) {
+  if (i + 1 >= lines.length) return null;
+  final head = lines[i];
+  if (!head.contains('|')) return null;
+  final aligns = _alignmentsOf(lines[i + 1]);
+  if (aligns == null) return null;
+
+  final rows = <List<List<MdInline>>>[];
+  var j = i + 2;
+  while (j < lines.length) {
+    final line = lines[j];
+    if (_isBlank(line) || !line.contains('|')) break;
+    // 又出现一行分隔行 = 另一张表开始了，停在这里
+    if (_alignmentsOf(line) != null) break;
+    rows.add(_cells(_splitRow(line), aligns.length));
+    j++;
+  }
+  return (block: MdTable(aligns, _cells(_splitRow(head), aligns.length), rows), next: j);
+}
+
+/// 分隔行 → 每列的对齐方式；不是分隔行返回 null。
+List<MdColumnAlign>? _alignmentsOf(String line) {
+  if (!line.contains('-')) return null;
+  final raw = _splitRow(line);
+  if (raw.isEmpty) return null;
+  final out = <MdColumnAlign>[];
+  for (final cell in raw) {
+    final c = cell.trim();
+    if (!RegExp(r'^:?-+:?$').hasMatch(c)) return null;
+    final left = c.startsWith(':');
+    final right = c.endsWith(':');
+    out.add(left && right
+        ? MdColumnAlign.center
+        : left
+            ? MdColumnAlign.left
+            : right
+                ? MdColumnAlign.right
+                : MdColumnAlign.none);
+  }
+  return out;
+}
+
+/// 按未转义的 `|` 切一行，并去掉首尾那两条边框竖线。
+List<String> _splitRow(String line) {
+  var s = line.trim();
+  if (s.startsWith('|')) s = s.substring(1);
+  if (s.endsWith('|') && !s.endsWith(r'\|')) s = s.substring(0, s.length - 1);
+  final cells = <String>[];
+  final buf = StringBuffer();
+  for (var k = 0; k < s.length; k++) {
+    final ch = s[k];
+    if (ch == '\\' && k + 1 < s.length && s[k + 1] == '|') {
+      buf.write('|'); // `\|` 是字面竖线，不是分列符
+      k++;
+      continue;
+    }
+    if (ch == '|') {
+      cells.add(buf.toString().trim());
+      buf.clear();
+      continue;
+    }
+    buf.write(ch);
+  }
+  cells.add(buf.toString().trim());
+  return cells;
+}
+
+/// 把 [raw] 规整成 [columns] 列（多的丢、少的补空），并解析行内标记。
+List<List<MdInline>> _cells(List<String> raw, int columns) => [
+      for (var k = 0; k < columns; k++)
+        parseInline(k < raw.length ? raw[k] : ''),
+    ];
 
 class _Fence {
   const _Fence(this.marker, this.language);
@@ -289,7 +397,11 @@ final _codeSpan = RegExp(r'`([^`]+)`');
 final _link = RegExp(r'!?\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)');
 final _autoLink = RegExp(r'https?://[^\s<>()\[\]]*[^\s<>()\[\].,;:!?]');
 
-/// 行内解析：代码 → 粗体 → 删除线 → 斜体 → 链接 → 自动链接。
+/// 行内解析：**位置最靠前的标记先处理**（同一位置才按 代码 > 粗体 > 删除线 > 斜体 > 链接）。
+///
+/// 为什么不是"代码永远优先"：`**重点看 \`read_file\` 这一行**` 这种句子（助手回复里很常见）
+/// 里 `**` 出现在行内代码**前面**，先切代码就会把 `**重点看 ` 当纯文本吐出来，
+/// 结尾的 `**` 也成了孤零零的字面量 —— 用户看到的正是"粗体渲染不正常"。
 List<MdInline> parseInline(String text) {
   if (text.isEmpty) return const [];
   final out = <MdInline>[];
@@ -301,65 +413,60 @@ List<MdInline> parseInline(String text) {
 void _scanInline(String text, MdInline style, List<MdInline> out) {
   if (text.isEmpty) return;
 
-  // 代码优先级最高：里面的 `*` `_` 都是字面量
-  final code = _codeSpan.firstMatch(text);
-  if (code != null) {
-    final before = text.substring(0, code.start);
-    if (before.isNotEmpty) out.add(style.withText(before));
-    out.add(style.withStyle(code: true).withText(code.group(1)!));
-    final after = text.substring(code.end);
-    if (after.isNotEmpty) _scanInline(after, style, out);
-    return;
+  // 候选：位置最靠前者胜；位置相同按优先级（数字小的先处理）
+  final candidates = <({int start, int priority, String kind, Match m})>[];
+  void add(String kind, int priority, Match? m) {
+    if (m != null) candidates.add((start: m.start, priority: priority, kind: kind, m: m));
   }
 
-  final bold = _boldStar.firstMatch(text) ?? _boldUnder.firstMatch(text);
-  if (bold != null) {
-    _emit(text, bold, style, out, style.withStyle(bold: true));
+  add('code', 0, _codeSpan.firstMatch(text));
+  add('bold', 1, _boldStar.firstMatch(text) ?? _boldUnder.firstMatch(text));
+  add('strike', 2, _strike.firstMatch(text));
+  add('italic', 3, _italicStar.firstMatch(text) ?? _italicUnder.firstMatch(text));
+  add('link', 4, _link.firstMatch(text));
+  // 裸链接：已经在链接标记内部时不再识别（否则会套娃）
+  if (style.link == null) add('auto', 5, _autoLink.firstMatch(text));
+
+  if (candidates.isEmpty) {
+    out.add(style.withText(text));
     return;
   }
+  candidates.sort((a, b) => a.start != b.start ? a.start - b.start : a.priority - b.priority);
+  final pick = candidates.first;
 
-  final strike = _strike.firstMatch(text);
-  if (strike != null) {
-    _emit(text, strike, style, out, style.withStyle(strike: true));
-    return;
-  }
-
-  final italic = _italicStar.firstMatch(text) ?? _italicUnder.firstMatch(text);
-  if (italic != null) {
-    _emit(text, italic, style, out, style.withStyle(italic: true));
-    return;
-  }
-
-  // [文案](url)
-  final link = _link.firstMatch(text);
-  if (link != null) {
-    final before = text.substring(0, link.start);
-    if (before.isNotEmpty) out.add(style.withText(before));
-    final label = link.group(1)!.isEmpty ? link.group(2)! : link.group(1)!;
-    out.add(MdInline(label,
-        bold: style.bold, italic: style.italic, code: style.code, strike: style.strike,
-        link: link.group(2)));
-    final after = text.substring(link.end);
-    if (after.isNotEmpty) _scanInline(after, style, out);
-    return;
-  }
-
-  // 裸链接自动识别（末尾的句号 / 括号不算地址的一部分）
-  if (style.link == null) {
-    final auto = _autoLink.firstMatch(text);
-    if (auto != null) {
+  switch (pick.kind) {
+    case 'code':
+      final before = text.substring(0, pick.m.start);
+      if (before.isNotEmpty) out.add(style.withText(before));
+      out.add(style.withStyle(code: true).withText(pick.m.group(1)!));
+      _scanInline(text.substring(pick.m.end), style, out);
+    case 'bold':
+      _emit(text, pick.m, style, out, style.withStyle(bold: true));
+    case 'strike':
+      _emit(text, pick.m, style, out, style.withStyle(strike: true));
+    case 'italic':
+      _emit(text, pick.m, style, out, style.withStyle(italic: true));
+    case 'link':
+      final before = text.substring(0, pick.m.start);
+      if (before.isNotEmpty) out.add(style.withText(before));
+      final label = pick.m.group(1)!.isEmpty ? pick.m.group(2)! : pick.m.group(1)!;
+      out.add(MdInline(label,
+          bold: style.bold,
+          italic: style.italic,
+          code: style.code,
+          strike: style.strike,
+          link: pick.m.group(2)));
+      _scanInline(text.substring(pick.m.end), style, out);
+    default: // auto
       // 末尾的中英文标点都不算地址的一部分（"见 https://a.example/x。" 这种很常见）
-      final url = auto.group(0)!.replaceAll(RegExp(r'[.,;:!?)\]、。，；：！？）】」》]+$'), '');
-      final before = text.substring(0, auto.start);
+      final url = pick.m
+          .group(0)!
+          .replaceAll(RegExp(r'[.,;:!?)\]、。，；：！？）】」》]+$'), '');
+      final before = text.substring(0, pick.m.start);
       if (before.isNotEmpty) out.add(style.withText(before));
       out.add(style.withStyle(link: url).withText(url));
-      final after = text.substring(auto.start + url.length);
-      if (after.isNotEmpty) _scanInline(after, style, out);
-      return;
-    }
+      _scanInline(text.substring(pick.m.start + url.length), style, out);
   }
-
-  out.add(style.withText(text));
 }
 
 /// 标记内递归解析：`**a *b* c**` 里的斜体要生效。
