@@ -1,6 +1,10 @@
 package com.comfyhub.ai
 
+import com.comfyhub.ai.protocol.LevelSpec
+import com.comfyhub.ai.protocol.ReasoningEffort
+import com.comfyhub.ai.protocol.ThinkingFormat
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.contentOrNull
 import java.net.InetAddress
 import java.net.URI
 
@@ -84,6 +88,73 @@ object AiErrorCode {
 /** 业务异常：带稳定 code，且不允许把密钥写进 message。 */
 class AiException(val code: String, message: String) : RuntimeException(message)
 
+/**
+ * 一次请求的 token 用量（AIH-057）。
+ *
+ * 各家的 `usage` 字段名不同（OpenAI 用 `prompt_tokens`，Anthropic 用 `input_tokens`，
+ * 还有 `prompt_tokens_details.cached_tokens` 这种明细），这里统一归一化成四个数，
+ * 前端就不必各自解析供应商方言了。
+ */
+@Serializable
+data class TokenUsage(
+    val inputTokens: Long = 0,
+    val outputTokens: Long = 0,
+    /** 缓存命中的输入 token（计费通常更便宜） */
+    val cachedTokens: Long = 0,
+    /** 思考 token（Anthropic 的 `thinking` 明细；OpenAI 兼容网关一般不给） */
+    val reasoningTokens: Long = 0,
+) {
+    val totalTokens: Long get() = inputTokens + outputTokens
+    val isEmpty: Boolean get() = totalTokens == 0L && cachedTokens == 0L
+
+    companion object {
+        val EMPTY = TokenUsage()
+
+        private val INPUT_KEYS = listOf("prompt_tokens", "input_tokens", "inputTokens", "promptTokens")
+        private val OUTPUT_KEYS = listOf("completion_tokens", "output_tokens", "outputTokens", "completionTokens")
+        private val TOTAL_KEYS = listOf("total_tokens", "totalTokens")
+
+        /** 从任意供应商的 usage 对象里尽量抽出数字；认不出来就是 0，不猜。 */
+        fun from(usage: kotlinx.serialization.json.JsonElement?): TokenUsage {
+            val obj = usage as? kotlinx.serialization.json.JsonObject ?: return EMPTY
+            fun num(vararg keys: String): Long {
+                keys.forEach { k ->
+                    val v = (obj[k] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    val n = v?.toDoubleOrNull()
+                    if (n != null) return n.toLong()
+                }
+                return 0L
+            }
+            fun nested(parent: String, vararg keys: String): Long {
+                val child = obj[parent] as? kotlinx.serialization.json.JsonObject ?: return 0L
+                keys.forEach { k ->
+                    val v = (child[k] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    val n = v?.toDoubleOrNull()
+                    if (n != null) return n.toLong()
+                }
+                return 0L
+            }
+
+            var input = num(*INPUT_KEYS.toTypedArray())
+            var output = num(*OUTPUT_KEYS.toTypedArray())
+            val total = num(*TOTAL_KEYS.toTypedArray())
+            // 只给了 total 的网关：尽量拆开，拆不开就都记在输入上（totalTokens 仍然正确）
+            if (input == 0L && output == 0L && total > 0L) input = total
+
+            val cached = maxOf(
+                nested("prompt_tokens_details", "cached_tokens"),
+                nested("input_tokens_details", "cached_tokens"),
+                num("cache_read_input_tokens"),
+            )
+            val reasoningOut = maxOf(
+                nested("completion_tokens_details", "reasoning_tokens"),
+                num("reasoning_tokens"),
+            )
+            return TokenUsage(input, output, cached, reasoningOut)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 //  DTO
 // ---------------------------------------------------------------------------
@@ -138,6 +209,14 @@ data class AiModelDto(
     val tools: Boolean = false,
     val parallelTools: Boolean = false,
     val reasoning: Boolean = false,
+    /**
+     * 该模型可选的思考等级（AIH-056）。键是等级（off/low/medium/high/max），
+     * 值是"过线拼写"：字符串表示改名（如 `max: ultra`），数字表示 Anthropic 的思考预算。
+     * 空 = 不声明，UI 上不显示思考强度选择器。
+     */
+    val thinkingEfforts: Map<String, String> = emptyMap(),
+    /** 网关的思考方言：openai / deepseek / qwen / openrouter / zai；空 = 按协议默认。 */
+    val thinkingFormat: String? = null,
     val contextWindow: Int? = null,
     val maxOutputTokens: Int? = null,
     val maxAttachmentBytes: Long? = null,
@@ -224,6 +303,60 @@ object AiValidation {
         }
         EndpointGuard.assertAllowed(host, trust)
         return text.trimEnd('/')
+    }
+    /**
+     * 思考强度校验（AIH-056）：**模型是唯一真源**。
+     *
+     * - 模型没声明 `reasoning` → 任何强度都拒绝（返回 null 表示"本次不思考"）；
+     * - 模型用 `thinkingEfforts` 显式列了可选等级 → 只允许其中的等级，不猜；
+     * - 请求 `off`（或没传）→ 返回 null，不发任何思考参数。
+     */
+    fun requireThinkingEffort(model: AiModelDto, requested: ReasoningEffort?): ReasoningEffort? {
+        if (requested == null || requested == ReasoningEffort.OFF) return null
+        if (!model.reasoning) {
+            throw AiException(
+                AiErrorCode.CONFIG_ERROR,
+                "模型 ${model.id} 未声明推理能力，不能设置思考强度（可在「设置 → AI 模型」里声明）"
+            )
+        }
+        val declared = parseThinkingEfforts(model.thinkingEfforts)
+        if (declared.isEmpty()) return requested
+        if (requested !in declared) {
+            throw AiException(
+                AiErrorCode.CONFIG_ERROR,
+                "模型 ${model.id} 未声明思考强度 ${requested.wire}（可选：${declared.joinToString(" / ") { it.wire }}）"
+            )
+        }
+        return requested
+    }
+
+    /** 思考等级表 → 枚举 + 过线表达；无法识别的键值由 [validateThinkingEfforts] 在保存时拦下。 */
+    fun parseThinkingEfforts(raw: Map<String, String>): Set<ReasoningEffort> =
+        raw.keys.mapNotNull { ReasoningEffort.parse(it) }
+            .filter { it != ReasoningEffort.OFF }
+            .toSet()
+
+    /** 保存模型目录时校验思考声明：等级必须认识、表达必须非空且不能带控制字符。 */
+    fun validateThinkingEfforts(m: AiModelDto) {
+        m.thinkingEfforts.forEach { (level, value) ->
+            ReasoningEffort.parse(level)
+                ?: throw AiException(AiErrorCode.CONFIG_ERROR, "未知的思考等级: $level")
+            if (LevelSpec.of(value) == null) {
+                throw AiException(AiErrorCode.CONFIG_ERROR, "思考等级 $level 的表达不能为空")
+            }
+            if (value.length > 64 || value.any { it.isISOControl() }) {
+                throw AiException(AiErrorCode.CONFIG_ERROR, "思考等级 $level 的表达不合法")
+            }
+        }
+        if (!m.thinkingFormat.isNullOrBlank() && ThinkingFormat.parse(m.thinkingFormat) == null) {
+            throw AiException(
+                AiErrorCode.CONFIG_ERROR,
+                "未知的思考方言: ${m.thinkingFormat}（可选 ${ThinkingFormat.entries.joinToString(" / ") { it.wire }}）"
+            )
+        }
+        if (m.thinkingEfforts.isNotEmpty() && !m.reasoning) {
+            throw AiException(AiErrorCode.CONFIG_ERROR, "声明了思考等级却没勾选「支持推理」，两者必须一致")
+        }
     }
 }
 

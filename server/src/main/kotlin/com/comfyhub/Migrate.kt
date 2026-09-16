@@ -104,6 +104,8 @@ object Migrate {
               tools                  TINYINT(1)   NOT NULL DEFAULT 0,
               parallel_tools         TINYINT(1)   NOT NULL DEFAULT 0,
               reasoning              TINYINT(1)   NOT NULL DEFAULT 0,
+              thinking_efforts       JSON         NULL COMMENT '可选的思考等级：等级 -> 过线拼写/预算（AIH-056）',
+              thinking_format        VARCHAR(16)  NULL COMMENT '思考方言：openai/deepseek/qwen/openrouter/zai',
               context_window         INT          NULL,
               max_output_tokens      INT          NULL,
               max_attachment_bytes   BIGINT       NULL,
@@ -207,6 +209,7 @@ object Migrate {
               skill_snapshot       JSON         NULL,
               prompt_version       VARCHAR(32)  NULL,
               retry_of_run_id      CHAR(36)     NULL,
+              reasoning_effort     VARCHAR(16)  NULL COMMENT '本次 Run 实际使用的思考强度（AIH-056）',
               error_code           VARCHAR(48)  NULL,
               error_message        TEXT         NULL,
               usage_json           JSON         NULL,
@@ -239,6 +242,11 @@ object Migrate {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """.trimIndent()
         )
+
+        // --- 思考强度（AIH-056）：老库补列，模型目录声明可选等级与网关方言 ---
+        changed += addColumn(conn, "ai_models", "thinking_efforts", "JSON NULL COMMENT '可选的思考等级：等级 -> 过线拼写/预算'")
+        changed += addColumn(conn, "ai_models", "thinking_format", "VARCHAR(16) NULL COMMENT '思考方言：openai/deepseek/qwen/openrouter/zai'")
+        changed += addColumn(conn, "ai_runs", "reasoning_effort", "VARCHAR(16) NULL COMMENT '本次 Run 实际使用的思考强度'")
 
         if (changed > 0) log.info("数据库结构已补齐（{} 项变更）", changed) else log.info("数据库结构已是最新")
         changed

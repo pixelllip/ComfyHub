@@ -88,8 +88,18 @@ interface ProtocolAdapter {
     val transports: Set<TransportRef>
     val adapterVersion: String
 
-    /** 组装请求体（纯函数，便于单测断言"到底发出去了什么"）。 */
-    fun buildBody(model: String, messages: List<ChatTurn>, stream: Boolean): JsonObject
+    /**
+     * 组装请求体（纯函数，便于单测断言"到底发出去了什么"）。
+     *
+     * [reasoning] 是**已过滤**的思考设置：模型没声明推理能力时调用方传 [ReasoningRequest.NONE]，
+     * 适配器只管按方言落到正确的字段上（AIH-056）。
+     */
+    fun buildBody(
+        model: String,
+        messages: List<ChatTurn>,
+        stream: Boolean,
+        reasoning: ReasoningRequest = ReasoningRequest.NONE,
+    ): JsonObject
 
     /** 解释一行 SSE frame；返回 null 表示该 frame 不产生任何内容。 */
     fun interpret(frame: SseAccumulator.Frame): List<StreamEvent>

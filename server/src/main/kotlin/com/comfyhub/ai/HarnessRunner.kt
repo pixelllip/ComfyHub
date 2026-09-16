@@ -3,9 +3,13 @@ package com.comfyhub.ai
 import com.comfyhub.ai.protocol.Adapters
 import com.comfyhub.ai.protocol.AiApiRef
 import com.comfyhub.ai.protocol.ChatTurn
+import com.comfyhub.ai.protocol.LevelSpec
 import com.comfyhub.ai.protocol.ProtocolFailure
+import com.comfyhub.ai.protocol.ReasoningEffort
+import com.comfyhub.ai.protocol.ReasoningRequest
 import com.comfyhub.ai.protocol.SseAccumulator
 import com.comfyhub.ai.protocol.StreamEvent
+import com.comfyhub.ai.protocol.ThinkingFormat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -111,6 +115,7 @@ class HarnessRunner(
                     "providerId" to provider.id,
                     "modelId" to run.modelId,
                     "promptVersion" to PROMPT_VERSION,
+                    "reasoningEffort" to run.reasoningEffort,
                 )
             )
             emit(RunEventType.MESSAGE_STARTED, payload("messageId" to assistantId, "role" to "assistant"))
@@ -142,6 +147,10 @@ class HarnessRunner(
             var providerResponseId: String? = null
             var lastPersist = 0L
 
+            // 思考强度：真源是模型目录（AIH-056）。Run 记录的是**生效值**；
+            // 模型不支持推理时这里已经是 NONE，适配器一个思考字段都不会发。
+            val reasoningRequest = buildReasoningRequest(run)
+
             val outcome = streamUpstream(
                 provider = provider,
                 api = api,
@@ -149,7 +158,12 @@ class HarnessRunner(
                 model = run.modelId.orEmpty(),
                 turns = turns,
                 secret = secret,
-                body = adapter.buildBody(run.modelId.orEmpty(), turns, stream = true),
+                body = adapter.buildBody(
+                    run.modelId.orEmpty(),
+                    turns,
+                    stream = true,
+                    reasoning = reasoningRequest,
+                ),
                 onEvent = { event ->
                     when (event) {
                         is StreamEvent.TextDelta -> {
@@ -195,6 +209,16 @@ class HarnessRunner(
                     "reasoning" to reasoning.toString().takeIf { it.isNotEmpty() },
                     "finishReason" to outcome.finishReason,
                     "elapsedMs" to (System.currentTimeMillis() - started),
+                    "reasoningEffort" to run.reasoningEffort,
+                    // token 统计（AIH-057）：归一化后再给前端，避免前端解析各家的 usage 方言
+                    "usage" to TokenUsage.from(usage).let { u ->
+                        buildJsonObject {
+                            put("inputTokens", u.inputTokens)
+                            put("outputTokens", u.outputTokens)
+                            put("cachedTokens", u.cachedTokens)
+                            put("reasoningTokens", u.reasoningTokens)
+                        }
+                    },
                 )
             )
             AiRunRepo.finish(runId, "completed", usage = usage)
@@ -218,6 +242,24 @@ class HarnessRunner(
         } finally {
             bus.close(runId)
         }
+    }
+
+    /**
+     * 把 Run 记录（生效强度）+ 模型快照（是否支持推理 / 等级表 / 方言）换算成请求设置（AIH-056）。
+     *
+     * 读**快照**而不是读模型目录：用户在这次 Run 跑起来之后改目录，不应该影响已经在飞的请求。
+     */
+    private fun buildReasoningRequest(run: AiRunDto): ReasoningRequest {
+        val effort = ReasoningEffort.parse(run.reasoningEffort) ?: return ReasoningRequest.NONE
+        val model = AiRepo.getModel(run.providerId.orEmpty(), run.modelId.orEmpty())
+        val format = ThinkingFormat.parse(model?.thinkingFormat) ?: ThinkingFormat.OPENAI
+
+        // 模型目录已经不在（被删）时，按"不支持推理"处理，宁可不发参数也不要 400
+        val declared = model?.reasoning == true
+        val levelMap = model?.thinkingEfforts.orEmpty().mapNotNull { (k, v) ->
+            LevelSpec.of(v)?.let { k to it }
+        }.toMap()
+        return ReasoningRequest.of(effort, declaredReasoning = declared, levelMap = levelMap, format = format)
     }
 
     private fun classify(e: Throwable): Pair<String, String> = when (e) {

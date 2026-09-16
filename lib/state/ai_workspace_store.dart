@@ -41,10 +41,17 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   // --- 输入区 ---
   final List<AiAttachment> attachments = [];
+
+  /// 思考强度（AIH-056）：只有当前模型声明了可选档位时才有意义。
+  AiReasoningEffort reasoningEffort = AiReasoningEffort.off;
+
   AiPreflightResult? preflight;
   bool sending = false;
   bool loading = false;
   String? error;
+
+  /// 当前会话的 token 汇总（AIH-057），由消息里的 usage 聚合而来。
+  AiUsageSummary get usageSummary => AiUsageSummary.of(messages);
 
   /// 正在执行的 Run（用于"停止"按钮，AIH-022）。
   String? _activeRunId;
@@ -106,6 +113,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       selectedModel = null;
     }
     selectedModel ??= models.where((m) => m.enabled).firstOrNull;
+    _clampReasoningEffort();
   }
 
   Future<void> selectProvider(AiProvider? p) async {
@@ -119,8 +127,23 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 切换模型必须立刻重算准入（AIH-029），不能等到发送时才提示。
   Future<void> selectModel(AiModel? m) async {
     selectedModel = m;
+    _clampReasoningEffort();
     await refreshPreflight();
     notifyListeners();
+  }
+
+  /// 选择思考强度。模型没声明这个档位时直接忽略（真源在模型目录，AIH-056）。
+  void selectReasoningEffort(AiReasoningEffort effort) {
+    final allowed = selectedModel?.selectableEfforts ?? const <AiReasoningEffort>[];
+    if (!allowed.contains(effort)) return;
+    reasoningEffort = effort;
+    notifyListeners();
+  }
+
+  /// 换模型后把档位收敛回合法集合：新模型没有这个档位就退回"关闭"。
+  void _clampReasoningEffort() {
+    final allowed = selectedModel?.selectableEfforts ?? const <AiReasoningEffort>[];
+    if (!allowed.contains(reasoningEffort)) reasoningEffort = AiReasoningEffort.off;
   }
 
   // -----------------------------------------------------------------------
@@ -275,11 +298,16 @@ class AiWorkspaceStore extends ChangeNotifier {
         conversation = conv;
       }
       final conv = conversation!;
+      // 模型没声明推理能力时不带这个字段（后端也会再挡一次，AIH-056）
+      final effort = (model.supportsReasoningEffort && reasoningEffort.isThinking)
+          ? reasoningEffort.wire
+          : null;
       final start = await _api.startRun(
         conv.id,
         text: body,
         providerId: provider.id,
         modelId: model.id,
+        reasoningEffort: effort,
       );
       _activeRunId = start.runId;
 
@@ -302,6 +330,7 @@ class AiWorkspaceStore extends ChangeNotifier {
           status: 'streaming',
           text: '',
           modelId: model.id,
+          reasoningEffort: effort,
         ),
       ];
       attachments.clear();
@@ -331,7 +360,16 @@ class AiWorkspaceStore extends ChangeNotifier {
             notifyListeners();
           case 'message.completed':
             streamed = event.text ?? streamed;
-            _replaceMessage(assistantMessageId, text: streamed, status: 'complete');
+            _replaceMessage(
+              assistantMessageId,
+              text: streamed,
+              status: 'complete',
+              // token 统计（AIH-057）：后端已在事件里给了归一化 usage
+              usage: event.data['usage'] is Map
+                  ? AiTokenUsage.fromJson(Map<String, dynamic>.from(event.data['usage'] as Map))
+                  : null,
+              reasoningEffort: event.data['reasoningEffort']?.toString(),
+            );
             notifyListeners();
           case 'run.failed':
             _replaceMessage(assistantMessageId, text: streamed, status: 'failed');
@@ -368,18 +406,20 @@ class AiWorkspaceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _replaceMessage(String id, {String? text, String? status}) {
+  void _replaceMessage(
+    String id, {
+    String? text,
+    String? status,
+    AiTokenUsage? usage,
+    String? reasoningEffort,
+  }) {
     messages = messages
         .map((m) => m.id == id
-            ? AiMessage(
-                id: m.id,
-                conversationId: m.conversationId,
-                seq: m.seq,
-                role: m.role,
-                status: status ?? m.status,
-                text: text ?? m.text,
-                modelId: m.modelId,
-                parts: m.parts,
+            ? m.copyWith(
+                text: text,
+                status: status,
+                usage: usage,
+                reasoningEffort: reasoningEffort,
               )
             : m)
         .toList();

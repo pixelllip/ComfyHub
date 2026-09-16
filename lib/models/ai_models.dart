@@ -69,6 +69,53 @@ enum AiApi {
   }
 }
 
+/// 思考强度（AIH-056）。
+///
+/// "等级"是给用户看的，**能不能选、发什么值由模型目录决定**：
+/// 模型声明了 `thinkingEfforts` 就只显示其中的等级；没声明推理能力就完全不给选。
+enum AiReasoningEffort {
+  off('off', '关闭'),
+  low('low', '低'),
+  medium('medium', '中'),
+  high('high', '高'),
+  max('max', '最大');
+
+  const AiReasoningEffort(this.wire, this.label);
+  final String wire;
+  final String label;
+
+  static AiReasoningEffort? parse(String? wire) {
+    for (final e in values) {
+      if (e.wire == wire) return e;
+    }
+    return null;
+  }
+
+  /// 关闭以外的等级（模型可选的"真的在思考"的档位）
+  bool get isThinking => this != AiReasoningEffort.off;
+}
+
+/// 网关的思考方言：同一个"高"在 DeepSeek / Qwen / OpenRouter / Z.AI 上落到的字段不同。
+enum AiThinkingFormat {
+  openai('openai', 'OpenAI 风格（reasoning_effort）'),
+  deepseek('deepseek', 'DeepSeek（thinking + reasoning_effort）'),
+  qwen('qwen', 'Qwen（enable_thinking + reasoning_effort）'),
+  openrouter('openrouter', 'OpenRouter（reasoning.effort）'),
+  zai('zai', 'Z.AI（thinking + reasoning_effort）');
+
+  const AiThinkingFormat(this.wire, this.label);
+  final String wire;
+  final String label;
+
+  static AiThinkingFormat? parse(String? wire) {
+    if (wire == null || wire.isEmpty) return null;
+    for (final f in values) {
+      if (f.wire == wire) return f;
+    }
+    return null;
+  }
+}
+
 /// 端点信任级别（AIH-017）。
 enum AiEndpointTrust {
   public_('public', '公网（仅 https）'),
@@ -135,6 +182,12 @@ class AiModel {
   final bool tools;
   final bool parallelTools;
   final bool reasoning;
+
+  /// 该模型可选的思考等级（AIH-056）；空 = 不声明，UI 上不给选。
+  final Map<String, String> thinkingEfforts;
+
+  /// 网关思考方言：openai / deepseek / qwen / openrouter / zai；null = 按协议默认。
+  final String? thinkingFormat;
   final int? contextWindow;
   final int? maxOutputTokens;
   final int? maxAttachmentCount;
@@ -151,6 +204,8 @@ class AiModel {
     this.tools = false,
     this.parallelTools = false,
     this.reasoning = false,
+    this.thinkingEfforts = const {},
+    this.thinkingFormat,
     this.contextWindow,
     this.maxOutputTokens,
     this.maxAttachmentCount,
@@ -175,6 +230,11 @@ class AiModel {
         tools: json['tools'] == true,
         parallelTools: json['parallelTools'] == true,
         reasoning: json['reasoning'] == true,
+        thinkingEfforts: (json['thinkingEfforts'] as Map?)?.map(
+              (k, v) => MapEntry(k.toString(), (v ?? '').toString()),
+            ) ??
+            const {},
+        thinkingFormat: json['thinkingFormat']?.toString(),
         contextWindow: (json['contextWindow'] as num?)?.toInt(),
         maxOutputTokens: (json['maxOutputTokens'] as num?)?.toInt(),
         maxAttachmentCount: (json['maxAttachmentCount'] as num?)?.toInt(),
@@ -187,6 +247,22 @@ class AiModel {
       inputModalities.map(AiModality.parse).whereType<AiModality>().toList();
 
   bool supports(AiModality m) => inputModalities.contains(m.wire);
+
+  /// 该模型能不能调思考强度：必须声明推理能力，且**至少声明了一个具体档位**。
+  bool get supportsReasoningEffort =>
+      reasoning && thinkingEfforts.keys.any((k) => k != AiReasoningEffort.off.wire);
+
+  /// 可选的思考档位（按 关闭→低→中→高→最大 的固定顺序，只保留模型声明过的）。
+  List<AiReasoningEffort> get selectableEfforts {
+    if (!reasoning) return const [];
+    final declared = thinkingEfforts.keys.toSet();
+    return AiReasoningEffort.values.where((e) => declared.contains(e.wire)).toList();
+  }
+
+  /// 该等级的线上表达（网关改名时显示给用户看）。数字表示 Anthropic 的思考预算。
+  String? effortWireValue(AiReasoningEffort effort) => thinkingEfforts[effort.wire];
+
+  AiThinkingFormat? get thinkingFormatEnum => AiThinkingFormat.parse(thinkingFormat);
 
   /// 能力来源提示：让用户知道这个声明是人填的还是探测来的（AIH-011）。
   String get capabilitySourceLabel => switch (capabilitySource) {
@@ -392,6 +468,147 @@ class AiConversation {
       );
 }
 
+/// 一次请求的 token 用量（AIH-057）。
+///
+/// 后端已经把各家 `usage` 方言归一化成这四个数，前端**不要再解析供应商字段**。
+class AiTokenUsage {
+  final int inputTokens;
+  final int outputTokens;
+  final int cachedTokens;
+  final int reasoningTokens;
+
+  const AiTokenUsage({
+    this.inputTokens = 0,
+    this.outputTokens = 0,
+    this.cachedTokens = 0,
+    this.reasoningTokens = 0,
+  });
+
+  static const empty = AiTokenUsage();
+
+  factory AiTokenUsage.fromJson(Map<String, dynamic> json) => AiTokenUsage(
+        inputTokens: (json['inputTokens'] as num?)?.toInt() ?? 0,
+        outputTokens: (json['outputTokens'] as num?)?.toInt() ?? 0,
+        cachedTokens: (json['cachedTokens'] as num?)?.toInt() ?? 0,
+        reasoningTokens: (json['reasoningTokens'] as num?)?.toInt() ?? 0,
+      );
+
+  /// 兼容后端历史数据：某些老消息的 `usage` 还是供应商原始对象（OpenAI/Anthropic 两种方言）。
+  factory AiTokenUsage.fromRaw(Object? raw) {
+    final map = raw is Map ? Map<String, dynamic>.from(raw) : null;
+    if (map == null) return empty;
+    int pick(List<String> keys) {
+      for (final k in keys) {
+        final v = map[k];
+        if (v is num) return v.toInt();
+        if (v is String) {
+          final n = int.tryParse(v);
+          if (n != null) return n;
+        }
+      }
+      return 0;
+    }
+
+    int nested(String parent, String key) {
+      final child = map[parent];
+      if (child is Map) {
+        final v = child[key];
+        if (v is num) return v.toInt();
+      }
+      return 0;
+    }
+
+    var input = pick(['inputTokens', 'prompt_tokens', 'input_tokens']);
+    final output = pick(['outputTokens', 'completion_tokens', 'output_tokens']);
+    if (input == 0 && output == 0) input = pick(['total_tokens', 'totalTokens']);
+    return AiTokenUsage(
+      inputTokens: input,
+      outputTokens: output,
+      cachedTokens: [
+        nested('prompt_tokens_details', 'cached_tokens'),
+        nested('input_tokens_details', 'cached_tokens'),
+        pick(['cachedTokens']),
+      ].reduce((a, b) => a > b ? a : b),
+      reasoningTokens: [
+        nested('completion_tokens_details', 'reasoning_tokens'),
+        pick(['reasoningTokens']),
+      ].reduce((a, b) => a > b ? a : b),
+    );
+  }
+
+  int get totalTokens => inputTokens + outputTokens;
+
+  bool get isEmpty => totalTokens == 0 && cachedTokens == 0 && reasoningTokens == 0;
+
+  /// `↑1.2k ↓340` —— 输入/输出，聊天里最常看的一对。
+  String get shortLabel => '↑${compact(inputTokens)} ↓${compact(outputTokens)}';
+
+  String get detailLabel {
+    final parts = <String>['输入 $inputTokens', '输出 $outputTokens'];
+    if (cachedTokens > 0) parts.add('缓存命中 $cachedTokens');
+    if (reasoningTokens > 0) parts.add('思考 $reasoningTokens');
+    parts.add('合计 $totalTokens');
+    return parts.join(' · ');
+  }
+
+  /// 大数字压缩成 `1.2k` / `15k`，聊天里不占地方。
+  static String compact(int n) =>
+      n < 1000 ? '$n' : '${(n / 1000).toStringAsFixed(n < 10000 ? 1 : 0)}k';
+}
+
+/// 会话级的 token 汇总（AIH-057）：列表里一眼看出"这个对话花了多少"。
+class AiUsageSummary {
+  final int inputTokens;
+  final int outputTokens;
+  final int cachedTokens;
+  final int reasoningTokens;
+  final int requests;
+
+  const AiUsageSummary({
+    this.inputTokens = 0,
+    this.outputTokens = 0,
+    this.cachedTokens = 0,
+    this.reasoningTokens = 0,
+    this.requests = 0,
+  });
+
+  static const empty = AiUsageSummary();
+
+  int get totalTokens => inputTokens + outputTokens;
+
+  bool get isEmpty => requests == 0;
+
+  /// 把一个会话里的消息用量加起来；没有 usage 的消息不计入 requests。
+  factory AiUsageSummary.of(Iterable<AiMessage> messages) {
+    var input = 0, output = 0, cached = 0, reasoning = 0, requests = 0;
+    for (final m in messages) {
+      final u = m.usage;
+      if (u == null || u.isEmpty) continue;
+      input += u.inputTokens;
+      output += u.outputTokens;
+      cached += u.cachedTokens;
+      reasoning += u.reasoningTokens;
+      requests++;
+    }
+    return AiUsageSummary(
+      inputTokens: input,
+      outputTokens: output,
+      cachedTokens: cached,
+      reasoningTokens: reasoning,
+      requests: requests,
+    );
+  }
+
+  /// `3 次请求 · ↑12.4k ↓3.1k · 合计 15.5k`
+  String get label {
+    if (isEmpty) return '本对话暂无 token 统计';
+    final buf = StringBuffer('$requests 次请求 · ↑${AiTokenUsage.compact(inputTokens)} '
+        '↓${AiTokenUsage.compact(outputTokens)} · 合计 ${AiTokenUsage.compact(totalTokens)}');
+    if (cachedTokens > 0) buf.write(' · 缓存命中 ${AiTokenUsage.compact(cachedTokens)}');
+    return buf.toString();
+  }
+}
+
 /// 有序消息块（AIH-019）：正文、附件、工具调用、工具结果各占一块。
 class AiMessagePart {
   final String type;
@@ -429,6 +646,12 @@ class AiMessage {
   final String? modelId;
   final List<AiMessagePart> parts;
 
+  /// token 用量（AIH-057）：只对助手消息有值；老数据可能是供应商原始对象，已兼容解析。
+  final AiTokenUsage? usage;
+
+  /// 本消息实际使用的思考强度（AIH-056），来自 `message.completed` 事件。
+  final String? reasoningEffort;
+
   const AiMessage({
     required this.id,
     required this.conversationId,
@@ -438,6 +661,8 @@ class AiMessage {
     required this.text,
     this.modelId,
     this.parts = const [],
+    this.usage,
+    this.reasoningEffort,
   });
 
   factory AiMessage.fromJson(Map<String, dynamic> json) => AiMessage(
@@ -453,6 +678,27 @@ class AiMessage {
                 .map((e) => AiMessagePart.fromJson(Map<String, dynamic>.from(e)))
                 .toList() ??
             const [],
+        usage: json['usage'] == null ? null : AiTokenUsage.fromRaw(json['usage']),
+        reasoningEffort: json['reasoningEffort']?.toString(),
+      );
+
+  AiMessage copyWith({
+    String? text,
+    String? status,
+    AiTokenUsage? usage,
+    String? reasoningEffort,
+  }) =>
+      AiMessage(
+        id: id,
+        conversationId: conversationId,
+        seq: seq,
+        role: role,
+        status: status ?? this.status,
+        text: text ?? this.text,
+        modelId: modelId,
+        parts: parts,
+        usage: usage ?? this.usage,
+        reasoningEffort: reasoningEffort ?? this.reasoningEffort,
       );
 
   bool get isUser => role == 'user';

@@ -33,6 +33,8 @@ data class AiRunDto(
     val errorCode: String? = null,
     val errorMessage: String? = null,
     val promptVersion: String? = null,
+    /** 本次 Run 实际生效的思考强度（`off` 表示不支持或用户关掉了，AIH-056） */
+    val reasoningEffort: String? = null,
     val retryOfRunId: String? = null,
     val startedAt: String? = null,
     val completedAt: String? = null,
@@ -44,6 +46,8 @@ data class AiRunStartRequest(
     val text: String,
     val providerId: String,
     val modelId: String,
+    /** 思考强度：off / low / medium / high / max；缺省按 `off`（AIH-056） */
+    val reasoningEffort: String? = null,
     /** 继续同一条消息的重试时带上（AIH-024） */
     val retryOfRunId: String? = null,
 )
@@ -67,6 +71,7 @@ object AiRunRepo {
         userMessageId: String?,
         assistantMessageId: String,
         retryOfRunId: String?,
+        reasoningEffort: String? = null,
     ): AiRunDto {
         val id = UUID.randomUUID().toString()
         Db.withConnection { conn ->
@@ -74,13 +79,13 @@ object AiRunRepo {
                 """
                 INSERT INTO ai_runs
                   (id, conversation_id, status, provider_id, model_id, user_message_id, assistant_message_id,
-                   provider_snapshot, model_snapshot, prompt_version, retry_of_run_id, started_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP(3))
+                   provider_snapshot, model_snapshot, prompt_version, retry_of_run_id, reasoning_effort, started_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP(3))
                 """.trimIndent(),
                 id, conversationId, RUNNING, providerId, modelId, userMessageId, assistantMessageId,
                 AppJson.encodeToString(JsonObject.serializer(), providerSnapshot),
                 AppJson.encodeToString(JsonObject.serializer(), modelSnapshot),
-                promptVersion, retryOfRunId,
+                promptVersion, retryOfRunId, reasoningEffort,
             )
         }
         return get(id) ?: error("Run 写入后读不到: $id")
@@ -226,6 +231,7 @@ object AiRunRepo {
         errorCode = getString("error_code"),
         errorMessage = getString("error_message"),
         promptVersion = getString("prompt_version"),
+        reasoningEffort = getString("reasoning_effort"),
         retryOfRunId = getString("retry_of_run_id"),
         startedAt = isoTime("started_at"),
         completedAt = isoTime("completed_at"),

@@ -2,6 +2,7 @@ package com.comfyhub.ai
 
 import com.comfyhub.ApiError
 import com.comfyhub.ai.protocol.Adapters
+import com.comfyhub.ai.protocol.ReasoningEffort
 import com.comfyhub.ai.protocol.TransportRef
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -282,6 +283,14 @@ fun Route.aiRoutes(
                 ?: throw AiException(AiErrorCode.UNKNOWN_MODEL, "模型不在目录中: ${body.modelId}")
             if (!model.enabled) throw AiException(AiErrorCode.CONFIG_ERROR, "该模型已被停用")
 
+            // 思考强度：先落成枚举（非法值直接拒绝，不能悄悄当 off，AIH-056）
+            val requestedEffort = ReasoningEffort.parse(body.reasoningEffort)
+                ?: throw AiException(
+                    AiErrorCode.CONFIG_ERROR,
+                    "未知的思考强度：${body.reasoningEffort}（可选 ${ReasoningEffort.entries.joinToString(" / ") { it.wire }}）"
+                )
+            val effort = AiValidation.requireThinkingEffort(model, requestedEffort)
+
             // 用户消息与助手占位都在"创建 Run"里完成，保证顺序与 seq 稳定
             val userMessage = AiConversationRepo.appendMessage(
                 conversationId,
@@ -310,12 +319,15 @@ fun Route.aiRoutes(
                     put("id", model.id)
                     put("displayName", model.displayName)
                     put("tools", model.tools)
+                    put("reasoning", model.reasoning)
                     put("capabilitySource", model.capabilitySource)
                 },
                 promptVersion = HarnessRunner.PROMPT_VERSION,
                 userMessageId = userMessage.id,
                 assistantMessageId = assistantId,
                 retryOfRunId = body.retryOfRunId,
+                // 快照里记生效值（不是请求值）：模型不支持推理时会落成 off
+                reasoningEffort = (effort ?: ReasoningEffort.OFF).wire,
             )
 
             bus.open(run.id)
@@ -546,6 +558,7 @@ private fun validateModel(m: AiModelDto) {
     if (m.capabilitySource !in setOf("builtin", "discovered", "manual", "tested")) {
         throw AiException(AiErrorCode.CONFIG_ERROR, "非法的能力来源: ${m.capabilitySource}")
     }
+    AiValidation.validateThinkingEfforts(m)
 }
 
 /**

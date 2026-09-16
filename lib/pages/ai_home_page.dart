@@ -281,6 +281,39 @@ class _MessageList extends StatelessWidget {
                   if (m.status == 'failed')
                     Text('（生成失败）',
                         style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error)),
+                  // token 统计（AIH-057）：只对真有 usage 的助手消息显示，没有就不占位
+                  if (!m.isUser && (m.usage?.isEmpty == false || (m.reasoningEffort ?? 'off') != 'off'))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if ((m.reasoningEffort ?? 'off') != 'off') ...[
+                            Icon(Icons.psychology_outlined,
+                                size: 13, color: theme.colorScheme.outline),
+                            const SizedBox(width: 3),
+                            Text(
+                              '思考 ${AiReasoningEffort.parse(m.reasoningEffort)?.label ?? m.reasoningEffort}',
+                              style: theme.textTheme.labelSmall
+                                  ?.copyWith(color: theme.colorScheme.outline),
+                            ),
+                            const SizedBox(width: 10),
+                          ],
+                          if (m.usage?.isEmpty == false) ...[
+                            Icon(Icons.data_usage, size: 13, color: theme.colorScheme.outline),
+                            const SizedBox(width: 3),
+                            Tooltip(
+                              message: m.usage!.detailLabel,
+                              child: Text(
+                                m.usage!.shortLabel,
+                                style: theme.textTheme.labelSmall
+                                    ?.copyWith(color: theme.colorScheme.outline),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -445,7 +478,22 @@ class _ComposerState extends State<_Composer> {
                 icon: const Icon(Icons.attach_file),
               ),
               _ModelPicker(store: store),
+              const SizedBox(width: 8),
+              _EffortPicker(store: store),
               const Spacer(),
+              // 本次对话的 token 汇总（AIH-057）：一直是可见的，不必翻设置
+              if (!store.usageSummary.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: Tooltip(
+                    message: store.usageSummary.label,
+                    child: Text(
+                      '本对话 ↑${AiTokenUsage.compact(store.usageSummary.inputTokens)} '
+                      '↓${AiTokenUsage.compact(store.usageSummary.outputTokens)}',
+                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                    ),
+                  ),
+                ),
               FilledButton.icon(
                 onPressed: store.sending ? () => store.stop() : (store.canSend ? _submit : null),
                 icon: Icon(store.sending ? Icons.stop : Icons.send, size: 18),
@@ -638,6 +686,79 @@ class _ModelPicker extends StatelessWidget {
                 child: _Badge(m.label),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 思考强度选择器（AIH-056）。
+///
+/// 只显示**当前模型声明过**的档位：没声明推理能力就整块置灰并说明原因，
+/// 而不是给一堆选了会被后端拒绝的选项。
+class _EffortPicker extends StatelessWidget {
+  final AiWorkspaceStore store;
+  const _EffortPicker({required this.store});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final model = store.selectedModel;
+    final options = model?.selectableEfforts ?? const <AiReasoningEffort>[];
+    final enabled = options.isNotEmpty;
+
+    final label = enabled
+        ? store.reasoningEffort.label
+        : (model == null ? '思考强度' : '不支持思考');
+
+    return PopupMenuButton<AiReasoningEffort>(
+      tooltip: enabled
+          ? '思考强度（当前模型声明：${options.map((e) => e.label).join(' / ')}）'
+          : '该模型未声明可用的思考档位，请到「设置 → AI 模型」声明',
+      enabled: enabled,
+      onSelected: store.selectReasoningEffort,
+      itemBuilder: (_) => [
+        for (final e in options)
+          PopupMenuItem(
+            value: e,
+            child: Row(
+              children: [
+                Icon(
+                  e == store.reasoningEffort ? Icons.radio_button_checked : Icons.radio_button_off,
+                  size: 16,
+                ),
+                const SizedBox(width: 8),
+                Text(e.label),
+                const Spacer(),
+                if (model?.effortWireValue(e) != null)
+                  Text(
+                    '→ ${model!.effortWireValue(e)}',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                  ),
+              ],
+            ),
+          ),
+      ],
+      child: Opacity(
+        opacity: enabled ? 1 : 0.6,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            border: Border.all(color: theme.dividerColor),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.psychology_outlined,
+                  size: 16,
+                  color: store.reasoningEffort.isThinking && enabled
+                      ? theme.colorScheme.primary
+                      : null),
+              const SizedBox(width: 5),
+              Text(label, style: theme.textTheme.labelMedium),
+            ],
+          ),
         ),
       ),
     );

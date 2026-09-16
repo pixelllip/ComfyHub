@@ -543,6 +543,8 @@ class _ProviderDetailState extends State<_ProviderDetail> {
                 ),
               ],
             ),
+            // 思考强度（AIH-056）：模型级声明，聊天框里的思考强度选择器就读这里
+            _thinkingEditor(theme, index),
           ],
         ),
       ),
@@ -562,40 +564,134 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       transports[modality.wire] = const ['inline_base64'];
     }
     if (!on) transports.remove(modality.wire);
-    return AiModel(
-      providerId: m.providerId,
-      id: m.id,
-      displayName: m.displayName,
-      inputModalities: next,
-      attachmentTransports: transports,
-      mimeAllowlist: m.mimeAllowlist,
-      tools: m.tools,
-      parallelTools: m.parallelTools,
-      reasoning: m.reasoning,
-      contextWindow: m.contextWindow,
-      maxOutputTokens: m.maxOutputTokens,
-      maxAttachmentCount: m.maxAttachmentCount,
-      capabilitySource: 'manual',
-      enabled: m.enabled,
-    );
+    return _copy(m, inputModalities: next, attachmentTransports: transports);
   }
 
-  AiModel _copy(AiModel m, {bool? tools}) => AiModel(
+  /// 唯一的模型复制入口：**新增字段必须在这里带上**，否则切换某个徽标会把别的声明悄悄抹掉。
+  AiModel _copy(
+    AiModel m, {
+    bool? tools,
+    bool? reasoning,
+    List<String>? inputModalities,
+    Map<String, List<String>>? attachmentTransports,
+    Map<String, String>? thinkingEfforts,
+    String? thinkingFormat,
+    bool clearThinkingFormat = false,
+    bool manual = false,
+  }) =>
+      AiModel(
         providerId: m.providerId,
         id: m.id,
         displayName: m.displayName,
-        inputModalities: m.inputModalities,
-        attachmentTransports: m.attachmentTransports,
+        inputModalities: inputModalities ?? m.inputModalities,
+        attachmentTransports: attachmentTransports ?? m.attachmentTransports,
         mimeAllowlist: m.mimeAllowlist,
         tools: tools ?? m.tools,
         parallelTools: m.parallelTools,
-        reasoning: m.reasoning,
+        reasoning: reasoning ?? m.reasoning,
+        thinkingEfforts: thinkingEfforts ?? m.thinkingEfforts,
+        thinkingFormat: clearThinkingFormat ? null : (thinkingFormat ?? m.thinkingFormat),
         contextWindow: m.contextWindow,
         maxOutputTokens: m.maxOutputTokens,
         maxAttachmentCount: m.maxAttachmentCount,
-        capabilitySource: m.capabilitySource,
+        // 用户手工动过能力就标成 manual（AIH-011：声明从哪来要看得见）
+        capabilitySource: manual ? 'manual' : m.capabilitySource,
         enabled: m.enabled,
       );
+
+  /// 切换"支持推理"：关掉时必须一并清掉思考档位声明（后端也会校验两者一致）。
+  AiModel _toggleReasoning(AiModel m, bool on) =>
+      _copy(m, reasoning: on, thinkingEfforts: on ? m.thinkingEfforts : const {}, manual: true);
+
+  /// 展开的模型编辑：思考档位 + 网关方言（AIH-056）。
+  Widget _thinkingEditor(ThemeData theme, int index) {
+    final m = _models[index];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(height: 20),
+        Row(
+          children: [
+            Expanded(
+              child: Text('思考强度', style: theme.textTheme.labelLarge),
+            ),
+            Switch(
+              value: m.reasoning,
+              onChanged: _busy ? null : (on) => setState(() => _models[index] = _toggleReasoning(m, on)),
+            ),
+          ],
+        ),
+        Text(
+          m.reasoning
+              ? '勾选该模型真正支持的档位。留空 = 不声明，聊天界面不显示思考强度选择器（宁可不给选，也不要发出去被上游 400）。'
+              : '该模型不支持推理；勾选后可以逐档声明。',
+          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+        ),
+        if (m.reasoning) ...[
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final e in AiReasoningEffort.values)
+                FilterChip(
+                  label: Text(e.label, style: theme.textTheme.labelSmall),
+                  selected: m.thinkingEfforts.containsKey(e.wire),
+                  onSelected: _busy
+                      ? null
+                      : (on) => setState(() {
+                            final next = Map<String, String>.from(m.thinkingEfforts);
+                            if (on) {
+                              next[e.wire] = _defaultEffortWire(e);
+                            } else {
+                              next.remove(e.wire);
+                            }
+                            _models[index] = _copy(m, thinkingEfforts: next, manual: true);
+                          }),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            initialValue: m.thinkingFormatEnum?.wire,
+            isDense: true,
+            decoration: const InputDecoration(
+              labelText: '网关思考方言（同一个"高"落到哪个字段）',
+              helperText: 'OpenAI 风格用 reasoning_effort；DeepSeek / Qwen / Z.AI / OpenRouter 各有自己的字段组合',
+              isDense: true,
+            ),
+            items: [
+              const DropdownMenuItem(value: null, child: Text('按协议默认（OpenAI 风格）')),
+              for (final f in AiThinkingFormat.values)
+                DropdownMenuItem(value: f.wire, child: Text(f.label)),
+            ],
+            onChanged: _busy
+                ? null
+                : (v) => setState(() => _models[index] = v == null
+                    ? _copy(m, clearThinkingFormat: true, manual: true)
+                    : _copy(m, thinkingFormat: v, manual: true)),
+          ),
+          if (m.thinkingEfforts.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                '实际发送：${m.thinkingEfforts.entries.map((e) => '${e.key}→${e.value}').join('  ')}',
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+            ),
+        ],
+      ],
+    );
+  }
+
+  /// 各档位的默认"过线拼写"（与后端 ThinkingLevels.DEFAULT 对齐）。
+  static String _defaultEffortWire(AiReasoningEffort e) => switch (e) {
+        AiReasoningEffort.off => 'none',
+        AiReasoningEffort.low => 'low',
+        AiReasoningEffort.medium => 'medium',
+        AiReasoningEffort.high => 'high',
+        AiReasoningEffort.max => 'high',
+      };
 
   Future<void> _test() async {
     setState(() {
@@ -757,6 +853,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
                   'tools': m.tools,
                   'parallelTools': m.parallelTools,
                   'reasoning': m.reasoning,
+                  // 思考强度声明（AIH-056）：空表 / null 都不发没用的字段
+                  if (m.thinkingEfforts.isNotEmpty) 'thinkingEfforts': m.thinkingEfforts,
+                  if (m.thinkingFormat != null) 'thinkingFormat': m.thinkingFormat,
                   'contextWindow': m.contextWindow,
                   'maxOutputTokens': m.maxOutputTokens,
                   'maxAttachmentCount': m.maxAttachmentCount,

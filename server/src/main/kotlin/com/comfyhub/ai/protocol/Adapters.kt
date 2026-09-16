@@ -1,6 +1,7 @@
 package com.comfyhub.ai.protocol
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -20,7 +21,12 @@ class OpenAiCompletionsAdapter : ProtocolAdapter {
     override val transports: Set<TransportRef> = emptySet()
     override val adapterVersion = "openai-completions/1"
 
-    override fun buildBody(model: String, messages: List<ChatTurn>, stream: Boolean): JsonObject =
+    override fun buildBody(
+        model: String,
+        messages: List<ChatTurn>,
+        stream: Boolean,
+        reasoning: ReasoningRequest,
+    ): JsonObject =
         buildJsonObject {
             put("model", model)
             put(
@@ -41,7 +47,42 @@ class OpenAiCompletionsAdapter : ProtocolAdapter {
                 // 让上游在最后一个 chunk 里带上 usage（OpenAI 兼容网关不一定支持，忽略即可）
                 put("stream_options", buildJsonObject { put("include_usage", true) })
             }
+            applyReasoning(reasoning)
         }
+
+    // 思考强度按方言落到不同字段（AIH-056）。关闭思考时**分两种**：`openai` 方言什么都不发
+    // （最安全，很多网关不认 `reasoning_effort:"none"`），而 `deepseek`/`zai`/`openrouter` 方言
+    // 必须显式发"禁用"，否则网关会默认开思考。
+    private fun JsonObjectBuilder.applyReasoning(r: ReasoningRequest) {
+        if (r.effort != null && r.wireValue != null) {
+            when (r.format) {
+                ThinkingFormat.DEEPSEEK -> {
+                    put("thinking", buildJsonObject { put("type", "enabled") })
+                    put("reasoning_effort", r.wireValue)
+                }
+                ThinkingFormat.QWEN -> {
+                    put("enable_thinking", true)
+                    put("reasoning_effort", r.wireValue)
+                }
+                ThinkingFormat.ZAI -> {
+                    put("thinking", buildJsonObject { put("type", "enabled"); put("clear_thinking", false) })
+                    put("reasoning_effort", r.wireValue)
+                }
+                ThinkingFormat.OPENROUTER -> {
+                    put("reasoning", buildJsonObject { put("effort", r.wireValue) })
+                }
+                ThinkingFormat.OPENAI -> put("reasoning_effort", r.wireValue)
+            }
+            return
+        }
+        // 关闭：只有"默认会思考"的方言才需要显式关闭
+        when (r.format) {
+            ThinkingFormat.DEEPSEEK -> put("thinking", buildJsonObject { put("type", "disabled") })
+            ThinkingFormat.ZAI -> put("thinking", buildJsonObject { put("type", "disabled") })
+            ThinkingFormat.OPENROUTER -> put("reasoning", buildJsonObject { put("effort", "none") })
+            else -> Unit
+        }
+    }
 
     override fun interpret(frame: SseAccumulator.Frame): List<StreamEvent> {
         val data = frame.data.trim()
@@ -77,13 +118,23 @@ class AnthropicMessagesAdapter : ProtocolAdapter {
     override val transports: Set<TransportRef> = emptySet()
     override val adapterVersion = "anthropic-messages/1"
 
-    override fun buildBody(model: String, messages: List<ChatTurn>, stream: Boolean): JsonObject {
+    override fun buildBody(
+        model: String,
+        messages: List<ChatTurn>,
+        stream: Boolean,
+        reasoning: ReasoningRequest,
+    ): JsonObject {
         // Anthropic 的 system 是顶层字段，不能混在 messages 里
         val system = messages.filter { it.role == "system" }.joinToString("\n\n") { it.content }
         val turns = messages.filter { it.role != "system" }
+        // 开启思考时 max_tokens 必须严格大于思考预算，否则上游直接 400
+        val budget = if (reasoning.enabled) {
+            (reasoning.budgetTokens ?: ThinkingLevels.ANTHROPIC_BUDGET.getValue(ReasoningEffort.MEDIUM))
+                .coerceAtLeast(ThinkingLevels.ANTHROPIC_MIN_BUDGET)
+        } else 0
         return buildJsonObject {
             put("model", model)
-            put("max_tokens", 4096)
+            put("max_tokens", if (budget > 0) budget + 4096 else 4096)
             if (system.isNotBlank()) put("system", system)
             put(
                 "messages",
@@ -99,6 +150,15 @@ class AnthropicMessagesAdapter : ProtocolAdapter {
                 }
             )
             put("stream", stream)
+            if (budget > 0) {
+                put(
+                    "thinking",
+                    buildJsonObject {
+                        put("type", "enabled")
+                        put("budget_tokens", budget)
+                    }
+                )
+            }
         }
     }
 
@@ -140,7 +200,12 @@ class OpenAiResponsesAdapter : ProtocolAdapter {
     override val transports: Set<TransportRef> = emptySet()
     override val adapterVersion = "openai-responses/0"
 
-    override fun buildBody(model: String, messages: List<ChatTurn>, stream: Boolean): JsonObject =
+    override fun buildBody(
+        model: String,
+        messages: List<ChatTurn>,
+        stream: Boolean,
+        reasoning: ReasoningRequest,
+    ): JsonObject =
         throw ProtocolFailure("openai-responses 协议尚未实现，请先改用 openai-completions")
 
     override fun interpret(frame: SseAccumulator.Frame): List<StreamEvent> = emptyList()

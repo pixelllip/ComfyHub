@@ -104,9 +104,10 @@ object AiRepo {
                     """
                     INSERT INTO ai_models
                       (provider_id, model_id, display_name, input_modalities, attachment_transports,
-                       mime_allowlist, tools, parallel_tools, reasoning, context_window, max_output_tokens,
+                       mime_allowlist, tools, parallel_tools, reasoning, thinking_efforts, thinking_format,
+                       context_window, max_output_tokens,
                        max_attachment_bytes, max_attachment_count, capability_source, capability_verified_at, enabled)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """.trimIndent(),
                     m.providerId, m.id, m.displayName,
                     AppJson.encodeToString(JsonArray.serializer(), JsonArray(m.inputModalities.map { JsonPrimitive(it) })),
@@ -115,7 +116,13 @@ object AiRepo {
                         JsonObject(m.attachmentTransports.mapValues { (_, v) -> JsonArray(v.map { JsonPrimitive(it) }) })
                     ),
                     AppJson.encodeToString(JsonArray.serializer(), JsonArray(m.mimeAllowlist.map { JsonPrimitive(it) })),
-                    m.tools, m.parallelTools, m.reasoning, m.contextWindow, m.maxOutputTokens,
+                    m.tools, m.parallelTools, m.reasoning,
+                    AppJson.encodeToString(
+                        JsonObject.serializer(),
+                        JsonObject(m.thinkingEfforts.mapValues { (_, v) -> JsonPrimitive(v) })
+                    ),
+                    m.thinkingFormat?.takeIf { it.isNotBlank() },
+                    m.contextWindow, m.maxOutputTokens,
                     m.maxAttachmentBytes, m.maxAttachmentCount, m.capabilitySource, m.capabilityVerifiedAt, m.enabled
                 )
             }
@@ -160,6 +167,8 @@ object AiRepo {
         tools = getBoolean("tools"),
         parallelTools = getBoolean("parallel_tools"),
         reasoning = getBoolean("reasoning"),
+        thinkingEfforts = AppJson.parseStringMap(getString("thinking_efforts")),
+        thinkingFormat = getString("thinking_format")?.takeIf { it.isNotBlank() },
         contextWindow = getIntOrNull("context_window"),
         maxOutputTokens = getIntOrNull("max_output_tokens"),
         maxAttachmentBytes = getLongOrNull("max_attachment_bytes"),
@@ -196,5 +205,16 @@ internal fun kotlinx.serialization.json.Json.parseStringListMap(raw: String?): M
         (parseToJsonElement(raw) as? JsonObject)?.mapValues { (_, v) ->
             (v as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull } ?: emptyList()
         } ?: emptyMap()
+    }.getOrDefault(emptyMap())
+}
+
+/** 思考等级表：值既可能是改名（字符串）也可能是预算（数字），统一按字符串存读（AIH-056）。 */
+internal fun kotlinx.serialization.json.Json.parseStringMap(raw: String?): Map<String, String> {
+    if (raw.isNullOrBlank()) return emptyMap()
+    return runCatching {
+        (parseToJsonElement(raw) as? JsonObject)
+            ?.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { k to it } }
+            ?.toMap()
+            ?: emptyMap()
     }.getOrDefault(emptyMap())
 }

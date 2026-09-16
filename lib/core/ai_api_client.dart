@@ -157,11 +157,15 @@ class AiApiClient {
   // --- Run（AIH-020 / AIH-021 / AIH-022） --------------------------------
 
   /// 创建 Run：立即返回 runId（后端 202），真正的执行在后台。
+  ///
+  /// [reasoningEffort] 是思考强度（AIH-056）：`off/low/medium/high/max`，
+  /// 后端会按模型目录复核——模型没声明推理能力就直接拒绝，不会悄悄忽略。
   Future<AiRunStart> startRun(
     String conversationId, {
     required String text,
     required String providerId,
     required String modelId,
+    String? reasoningEffort,
     String? retryOfRunId,
   }) async =>
       AiRunStart.fromJson(Map<String, dynamic>.from(
@@ -169,6 +173,7 @@ class AiApiClient {
         'text': text,
         'providerId': providerId,
         'modelId': modelId,
+        'reasoningEffort': ?reasoningEffort,
         'retryOfRunId': ?retryOfRunId,
       }) as Map));
 
