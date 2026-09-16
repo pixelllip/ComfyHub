@@ -22,6 +22,9 @@
 | `文档同步…` | AGENTS 第 3 节、README 功能/目录/接口表 |
 | `AI 模型设置页…` | Provider 配置界面、模型目录编辑、只写密钥界面 |
 | `思考强度…` | 模型声明可选档位；三协议按方言各自落到正确字段；token 统计归一化（AIH-056 / AIH-057） |
+| `markdown 渲染…` | 助手回复不再吐 `**加粗**` 原文；自研流式安全解析器 + 8 项单测 |
+| `设置页：AI 模型与凭据挪到最前面…` | 它是最常去的入口，原先压在自动捕获 / 库统计后面 |
+| `openai-responses 协议真正实现…` | AIH-004：请求体 / 流事件 / 端点（原来拼成 `/chat/completions`）+ 5 项契约单测 |
 
 ## 2. 逐条对照需求
 
@@ -30,7 +33,7 @@
 | AIH-001 默认落地页 | ✅ | `HomeShell` 默认 `AI 工作台`，顺序 AI 工作台→画廊→提示词→标签→设置；`home_nav_test` / `localization_test` 已同步 |
 | AIH-002 宽屏三栏 / 窄屏 | ✅ | ≥900 三栏，≥1200 才显示右侧栏；窄屏会话进抽屉、状态进底部 Sheet，Composer 常驻 |
 | AIH-003 openai-completions | ✅ | 文本流 + 多轮历史真的能聊；`SseAccumulator` + `OpenAiCompletionsAdapter`，适配器有契约单测 |
-| AIH-004 openai-responses | ⛔ 明确拒绝 | 尚未实现，`buildBody` 直接报错并提示改用 `openai-completions`（不做半吊子实现） |
+| AIH-004 openai-responses | ✅（文本流，待真实 API 实测） | 已实现：顶层 `instructions`、`input[{role,content:[{type:input_text/output_text,text}]}]`、`store:false`、思考落 `reasoning{effort,summary}`；事件 `response.output_text.delta` / `reasoning_summary_text.delta` / `completed`（取 usage+id）/ `failed`。**端点也修了**：原先拼成 `/chat/completions`，现在走 `/responses`。契约单测 5 项 |
 | AIH-005 anthropic-messages | ✅（文本流） | system 顶层 + `max_tokens`、`content_block_delta`/`message_start`/`error` 事件，有契约单测 |
 | AIH-006/007 Provider 自定义 + revision | ✅ | ID 校验（kebab-case、创建后不可改）、URL 校验与规范化、乐观锁冲突返回明确错误 |
 | AIH-008 连接测试 | ✅ | `POST /api/ai/providers/{id}/test`：请求前 SSRF 复核、不跟随重定向、10 秒超时、状态码映射到稳定错误码；日志只记 Provider/端点/状态码，**不含密钥与 Header**（有单测） |
@@ -77,13 +80,19 @@
 1. **附件真正可发（M3）**：实现图片内联（openai-completions 的 `image_url` data URI）后，
    把适配器 `transports` 从空集改成实际实现，并在 Run 准入处用事务内快照再验一次（AIH-030 的"上游请求数为 0"用例）。
    现在的行为是**正确阻断**，不是静默丢弃。
-2. **`openai-responses` 适配器**（AIH-004）：目前明确拒绝。
+2. **`openai-responses` 真实 API 实测**（AIH-004）：协议已按官方结构实现并有契约单测，
+   但**还没拿真实 API Key 跑通过一条完整流**（用户说稍后提供可用 API）。
+   要确认的点：① 端点是否 `{base}/responses`；② `instructions` 是否被接受；
+   ③ `reasoning.summary` 是否下发思考摘要；④ `response.completed` 的 usage 字段名。
 3. **工具循环与 Comfy 查询（M4）**：`ai_tool_calls` 表、`comfy_get_status` / `comfy_get_run` / `comfy_sync_history`（含审批）、
    单次回复最多 3 次主动查询；系统提示词里现在**明确写了"尚未注册任何工具"**，加了工具要同步改提示词版本。
 4. **Skills（M5）**：目录扫描、`load_skill`、第三方安全导入；界面上的 `/` 菜单目前只是目录展示。
 5. 事件表保留策略：`AiRunRepo.pruneEvents()` 已写好但还没接到定时任务。
+6. **模型目录按内置目录预填模态与思考强度**（用户要求）：`.dsh/settings.yaml` 里已经有
+   `input`（模态）与 `reasoningEfforts`（档位）现成数据，可以让"获取可用模型"少查一次
+   `/models` 自带信息。当前实现只用了 `ModelCapabilityCatalog` 的模态，**思考档位还没预填**。
 
-> ⚠️ **需求 xlsx 的"状态"列不可信**：里面把没实现的需求（AIH-004 openai-responses、AIH-025~032 附件可发、
+> ⚠️ **需求 xlsx 的"状态"列不可信**：里面把没实现的需求（AIH-025~032 附件可发、
 > AIH-033~045 工具与 Skills）都标成了"通过"。**以代码与本文档为准**，别照抄那一列。
 
 ## 5. 思考强度与 token 统计（AIH-056 / AIH-057，2026-09-16 新增）

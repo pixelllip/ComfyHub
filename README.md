@@ -11,7 +11,7 @@
 
 | 模块 | 能力 |
 | --- | --- |
-| **AI 工作台** | **App 默认落在这一页**（需求 `docs/ai-home-requirements-v0.1.xlsx`，DEC-001）。多轮对话 + 会话列表（重命名 / 归档 / 删除）；宽屏三栏（会话列表 / 对话 / ComfyUI 与模型能力），窄屏会话进抽屉、状态进底部 Sheet、输入区常驻；Composer 支持 Enter 发送、Shift+Enter 换行、输入法选词不误发、`/` 调出 Skills 目录、附件选择；模型选择器直接显示能力徽标（文本 / 图片 / 视频 / 音频 / 文档 / 工具）。Provider 与模型目录在设置里配置，**API Key 只写不读**（见第 5 节） |
+| **AI 工作台** | **App 默认落在这一页**（需求 `docs/ai-home-requirements-v0.1.xlsx`，DEC-001）。多轮对话 + 会话列表（重命名 / 归档 / 删除）；宽屏三栏（会话列表 / 对话 / ComfyUI 与模型能力），窄屏会话进抽屉、状态进底部 Sheet、输入区常驻；Composer 支持 Enter 发送、Shift+Enter 换行、输入法选词不误发、`/` 调出 Skills 目录、附件选择；模型选择器直接显示能力徽标（文本 / 图片 / 视频 / 音频 / 文档 / 工具）。助手回复按 **Markdown 渲染**（标题 / 列表 / 引用 / 围栏代码块 / 行内代码 / 粗斜体 / 删除线 / 可点链接，裸链接自动识别）；自研解析器是**流式安全**的 —— 模型吐到一半的 `**` 或未闭合代码围栏按字面量显示，不会吞内容。Provider 与模型目录在设置里配置，**API Key 只写不读**（见第 5 节） |
 | **自动启动** | App 一启动就自己把 **MySQL + 后端**拉起来（先探健康，不健康才启动；启动过程实时回显在启动页上），不用再手动开脚本；**全程不弹命令行窗口**（见 [12 节](#12-本机环境踩坑记录)最后几条） |
 | **提示词库** | 新建 / 编辑 / 复制 / 删除；区分「生图 / 生视频 / 生音频 / 混合」；正向 + 负向提示词；模型、采样器、调度器、步数、CFG、Seed、宽高、批量、LoRA 列表、备注、收藏；**多选批量管理**（收藏 / 取消收藏 / 加标签 / 删除） |
 | **ComfyUI 自动捕获** | ComfyUI 里跑完一次生成，**提示词 + 全部参数 + 完整工作流 + 生成的图片/视频/音频**自动进库并互相关联；不需要改动工作流，也不需要装任何东西（装一个可选的推送节点可以做到零延迟） |
@@ -425,7 +425,7 @@ pwsh -File scripts\e2e-capture-test.ps1
 | --- | --- |
 | `openai-completions` | ✅ 文本流 + 多轮历史 + 思考强度（OpenAI / DeepSeek / Moonshot / vLLM / LM Studio / Ollama 的 OpenAI 端点等） |
 | `anthropic-messages` | ✅ 文本流（system 顶层、`max_tokens`、`content_block_delta`）+ 思考强度（`thinking.budget_tokens`） |
-| `openai-responses` | ⛔ 尚未实现：会明确报错，请改用 `openai-completions` |
+| `openai-responses` | ✅ 文本流（`instructions` + `input[].content[]`、`store:false`）+ 思考强度（`reasoning.effort`）；端点 `{base}/responses`。**尚未用真实 API Key 实测** |
 | 图片 / 视频 / 音频 / 文档附件 | ⛔ 适配器尚未实现 → 预检直接阻断（不是静默丢弃） |
 
 **思考强度（AIH-056）**：聊天框下方除了选模型，还能选 `关闭 / 低 / 中 / 高 / 最大`。
@@ -821,7 +821,9 @@ flutter test        # 52 个用例
 | `test/context_menu_test.dart` | **右键菜单**：画廊缩略图右键弹出「关联提示词 / 收藏 / 删除」并真的发出 PATCH / DELETE、删除前必须确认；详情页右键图片弹出复制项，复制到剪贴板的是完整文件地址 / 提示词全文 |
 | `test/prompt_batch_test.dart` | **提示词批量管理**：宽窗口分两列；多选后批量收藏（只打勾的那几条）、批量加标签（走追加标签接口）、批量删除（先确认再逐条 DELETE） |
 | `test/tags_layout_test.dart` | 标签页在宽窗口分两列，超长分类 / 说明只截断一行，不会把固定高度的卡片撑破 |
-| `test/settings_layout_test.dart` | 设置页宽窗口分列；开关行（「开启自动捕获」这些）左右都留出内边距，不贴卡片边缘 |
+| `test/settings_layout_test.dart` | 设置页宽窗口分列；开关行（「开启自动捕获」这些）左右都留出内边距，不贴卡片边缘；**「AI 模型与凭据」排在「ComfyUI 自动捕获」之前** |
+| `test/markdown_test.dart` | **Markdown 渲染**：粗斜体 / 删除线 / 行内代码 / 链接 / 标题 / 列表 / 引用 / 围栏代码块；重点是**流式安全**（未闭合的 `**`、代码围栏按字面量显示，不吞内容）与两个解析陷阱（`snake_case_name` 不算斜体、`3 * 4 = 12` 不算斜体） |
+| `test/ai_model_persistence_repro_test.dart` | **模型目录不丢**：用"PUT 存、GET 读"的有状态假后端，走完「选中 Provider → 添加模型 → 退出页面 → 重新进入 → 再选中」后目录里仍有该模型 |
 | `test/localization_test.dart` | App 装的是 `zh_CN` 的 Material 本地化：选择菜单是「复制 / 全选 / 剪切 / 粘贴」而不是 Copy / Select all |
 | `test/comfyui_capture_test.py` | ComfyUI 捕获节点的纯逻辑（payload 组装、类型判定、重试），见 `docs/comfyui-capture.md` |
 | `server/src/test/kotlin/.../GraphParseTest.kt` | **参数解析器的回归测试**：经典 KSampler 图、真实的自定义采样链（MiniMax H3 那种）、空图/坏图、只有 `text_g`/`text_l` 的图。`pwsh -File scripts\server.ps1 test` |
