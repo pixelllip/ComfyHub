@@ -252,3 +252,27 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 - **任何运行期代码都不许依赖 `%USERPROFILE%\.dsh`** —— 装我们项目的人可能根本没装 DSH
   （模型目录同理，见 `AiSeedCatalog` 的 classpath 冻结副本）。这条以前是"只在点导入时读一次"，
   现在连那个按钮都删了：DSH 与本项目再无运行期关系。
+
+### 10.1 提交任务与实时进度（2026-09-17 起）
+
+- **`comfy_submit` 只能提交 API 格式节点图**，那份图在 `capture_runs.raw` 里
+  （`ComfyCapture.apiGraphOf`），**不是** `prompts.workflow_json`（那是界面格式，
+  `widgets_values` 只有位置没有参数名，转换出来一定是错的）。
+  没有 API 图的老数据要报 `NO_API_GRAPH`，别猜着转。
+- 参数覆盖走 `ComfySubmitter.WorkflowEdit.applyOverrides`：键是 `节点id.输入名`，
+  **按原值类型转换**，字段不存在 / 是连线数组一律抛错。**不许静默忽略**。
+- 提交后的产物必须走 `capture.captureRun()` 入库（与轮询捕获同一条路，幂等靠
+  `prompt_id` + 文件 SHA-256）；绕开它自己写库就会出现"AI 出的图没进画廊"或者重复入库。
+- 等待有上限（`DEFAULT_WAIT_SECONDS` / `MAX_WAIT_SECONDS`），超时记 `timeout` 并如实说明，
+  **不许假装完成，也不许假装失败**。
+- **界面上的产物入口只认后端给的 `mediaIds`**（`tool_result.jsonPayload.mediaIds` /
+  `tool.completed.result.mediaIds`）：模型在正文里说"我生成了 xx"不算数。
+- 详情页 / 画廊入口卡的跳转用 `MediaDetailPage(mediaId:)`；别在前端自己拼媒体 URL
+  （`thumbUrlFor` / `fileUrlFor` 走的是后端算好的路径）。
+- **会话标题是"模型在正文最前面输出 `[标题]…[/标题]`，后端摘掉"**（`TitleStripper`）。
+  改这段代码时守住两条：**绝不吞内容**（标记不闭合就把缓冲当正文放出去）、
+  **绝不重复内容**（寒暄被逐字流式送达时不能放两遍）。`ConversationTitleTest` 盯的就是这两条。
+- **ComfyUI 位置解析有两份实现**（`ComfyLocator.kt` 与 `scripts\comfy-path.ps1`），判据必须一致：
+  源码形态 = `main.py` + `comfy/`；任何形态 = `output/` + `models/` 或 `input/`。
+  改判据要同时改两边，否则会出现"App 说找到了、脚本说找不到"。
+  探测**只读**，写配置必须由用户点「使用这个目录」（`POST /api/capture/locate/apply`）。

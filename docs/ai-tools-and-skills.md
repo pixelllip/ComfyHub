@@ -29,7 +29,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | **`skill`（加载 Skill 正文）** | **采纳** | 对应我们的 `load_skill`，并补了 `list_skills` / `register_skill` / `delete_skill` |
 | Skills 目录注入 | **采纳思路，实现不同** | DSH 把目录作为 **user 消息**（`<system-reminder>` + `<available_skills>`）注入，为的是不打断系统前缀的 KV cache；我们的系统提示本来就带时间戳（每 Run 变化），所以直接写进系统提示的独立区块，省一层消息 |
 
-我们的工具清单（出厂 11 个，全部可在设置里改成 `allow / ask / deny`）：
+我们的工具清单（出厂 13 个，全部可在设置里改成 `allow / ask / deny`）：
 
 | 工具 | 类别 | 权限档 | 说明 |
 | --- | --- | --- | --- |
@@ -41,9 +41,24 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `list_dir` | files | allow | 列目录（默认 ComfyUI 目录，深度 ≤2） |
 | `read_file` | files | allow | 读文本，上限 256KB |
 | `write_file` | files | allow | **只能写 ComfyUI 目录**（越界直接拒绝） |
-| `comfy_get_status` | comfy | allow | 复用 `ComfyCapture.status()`：连通性 / 队列 / 最近捕获 |
+| `comfy_get_status` | comfy | allow | 复用 `ComfyCapture.status()`：连通性 / 队列 / 最近捕获（**附最近提交的任务**） |
 | `comfy_get_run` | comfy | allow | 按 runKey 查一次捕获（AIH-034） |
 | `comfy_sync_history` | comfy | **ask** | 会写我们的库，按 DEC-005 默认要审批 |
+| `comfy_find_workflow` | comfy | allow | 搜库里**能直接跑**的工作流（标注 `runnable` = 有没有 API 节点图） |
+| `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数，跑完直接入库；会消耗显卡时间，默认要审批 |
+
+### 2.1 提交任务（`comfy_submit`）的几条纪律（2026-09-17）
+
+- **只认 API 格式节点图**：`prompts.workflow_json` 是界面格式（`widgets_values` 只有位置、没有参数名），
+  提交要用的是 `capture_runs.raw` 里那份"当时真正跑的东西"（`ComfyCapture.apiGraphOf`）。
+  老数据没有它就报 `NO_API_GRAPH` 并说明怎么办 —— **不做"看起来差不多"的转换**。
+- **参数覆盖按原类型转换**：原来存整数就不能塞字符串；字段不存在、或值是连线数组（`[节点, 序号]`）
+  一律报错（`WorkflowEditTest` 9 例）。静默忽略的后果是模型以为改了、用户以为改了，实际没改。
+- **等待有上限**：默认 240 秒、最多 900 秒；超时报 `timeout` 并提示"跑完会自动入库"，
+  **不假装完成也不假装失败**。
+- **产物入库与手动出图完全同路**：`capture.captureRun()`（幂等靠 `prompt_id` + 文件 SHA-256），
+  所以"AI 提交的产出"和"用户自己点的产出"在库里是同一种东西，画廊里都能看到；
+  产物 id 会随工具结果回到界面，在回复末尾贴成「画廊入口卡」（用户建议 ⑤）。
 
 ## 2. 权限模型：为什么不是照搬 DSH 的 preset
 

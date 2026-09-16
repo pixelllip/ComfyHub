@@ -235,7 +235,8 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQ
 | `scripts\comfyhub.ps1 unwatch` | 撤掉上面那个守护进程（用户在设置里关掉「关闭 App 时一并停止本地服务」时 App 会调它），本地服务继续跑 |
 | `scripts\watch-owner.ps1` | 那个守护进程本体：盯着 `-OwnerPid`，目标进程一退出就按 `-StopApi` / `-StopMysql` 停掉对应服务（一般由 `up -OwnerPid` 自动拉起，不用手敲；日志在 `.run\watch-owner.log`） |
 | `$env:COMFYHUB_TRACE=1` + `scripts\comfyhub.ps1 up` | 把冷启动**每一段的耗时**打到 stderr（`[trace   1660ms] mysql: 就绪` 这种），用来定位"到底慢在哪" |
-| `scripts\comfyhub.ps1 doctor` | 体检：路径 / 依赖 / 端口占用逐项检查 |
+| `scripts\comfyhub.ps1 doctor` | 体检：路径 / 依赖 / 端口占用逐项检查（含**探测到的 ComfyUI 目录与输出目录**） |
+| `scripts\comfy-path.ps1` | **ComfyUI 位置解析**（被 dot-source 使用）：`Resolve-ComfyHome` / `Resolve-ComfyOutputDir`，判据与后端 `ComfyLocator.kt` 一致（用户"其他建议"第 3 条） |
 | `scripts\mysql.ps1 init` | 首次初始化数据目录 + 建库建表 + 演示数据 + 创建 `comfyhub` 账号 |
 | `scripts\mysql.ps1 start / stop / status / restart` | 只操作数据库（stop 会提示后端还在跑） |
 | `scripts\mysql.ps1 move -DataDir <新目录>` | **把 MySQL 实例目录整体搬到别的位置**（自动改配置 + 记住新位置 + 重启） |
@@ -363,6 +364,9 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `GET` | `/api/capture/config` | 读自动捕获配置 |
 | `PUT` | `/api/capture/config` | 整体覆盖配置 |
 | `GET` | `/api/capture/status` | 状态：ComfyUI 是否可达、队列长度、最近捕获的若干次运行 |
+| `GET` | `/api/capture/jobs` | **实时进度**：队列运行/等待数、正在跑的工作流名、最近提交的任务（AI 工作台右侧栏轮询它；只刷队列，不触发入库扫描） |
+| `GET` | `/api/capture/locate` | **探测 ComfyUI 装在哪**（只读）：根目录 / 输出目录 / 来源 / 候选与否决原因 |
+| `POST` | `/api/capture/locate/apply` | 把探测到的输出目录写进配置（用户在设置页点「使用这个目录」时调） |
 | `POST` | `/api/capture/poll` | 立刻轮询一次（App 的「立即同步」） |
 | `POST` | `/api/capture/import` | 导入某个目录里已有的产物（读 PNG 内嵌元数据） |
 | `POST` | `/api/ingest/comfyui` | 捕获入口，供自定义节点 / 外部脚本推送 |
