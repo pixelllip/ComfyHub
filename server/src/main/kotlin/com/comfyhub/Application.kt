@@ -1,5 +1,6 @@
 package com.comfyhub
 
+import com.comfyhub.ai.AiAttachmentStore
 import com.comfyhub.ai.AiRunRepo
 import com.comfyhub.ai.AiSeeder
 import com.comfyhub.ai.CredentialService
@@ -142,6 +143,10 @@ fun Application.module(ctx: AppContext) {
     // 长期记忆（M6）：一个人类可读的 memory.md，注入系统提示 + AI 可用 remember 追加
     val memory = MemoryStore(ctx.cfg.storageDir.resolve("ai"))
 
+    // AI 附件（M3）：原件与缩略图都落在 storage 下（与画廊产物分开），
+    // 视频预览帧复用画廊那套 Windows 缩略图管线（不引入 ffmpeg）。
+    val aiAttachments = AiAttachmentStore(ctx.storage, ctx.cfg.projectRoot)
+
     // 工具层（M4）：出厂只能写 <根>\comfyui，只读 <根>\comfyui + <根>\storage（见 ToolPolicy）
     val approvals = ToolApprovalGate()
     val toolRegistry = ToolRegistry(
@@ -171,6 +176,7 @@ fun Application.module(ctx: AppContext) {
         approvals = approvals,
         projectRoot = ctx.cfg.projectRoot,
         memory = memory,
+        attachments = aiAttachments,
     )
     monitor.subscribe(ApplicationStopped) { runner.shutdown() }
     // 上次进程退出时还在 running 的 Run 不可能再继续：标成失败，而不是让界面永远转圈
@@ -302,7 +308,7 @@ fun Application.module(ctx: AppContext) {
             tagRoutes()
             mediaRoutes(ctx)
             captureRoutes(ctx, capture)
-            aiRoutes(credentials, runner, runBus, skills, memory, toolRegistry, approvals, ctx.cfg.projectRoot)
+            aiRoutes(credentials, runner, runBus, skills, memory, toolRegistry, approvals, ctx.cfg.projectRoot, aiAttachments)
         }
     }
 }

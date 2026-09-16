@@ -85,6 +85,40 @@ def one_line(text: str, limit: int = 60) -> str:
     return flat if len(flat) <= limit else flat[:limit] + "…"
 
 
+def text_of(content) -> str:
+    """取出一轮消息的文本。
+
+    M3 之后带图片的用户轮 `content` 是**有序块数组**（`[{type:text},{type:image_url}]`），
+    这里必须把文字块拼出来，否则下游 `"注册" in user_text` 会直接抛 TypeError。
+    """
+    if isinstance(content, list):
+        return "".join(
+            (p.get("text") or "")
+            for p in content
+            if isinstance(p, dict) and p.get("type") in ("text", "input_text")
+        )
+    return content or ""
+
+
+def images_of(content):
+    """取出这一轮带的图片（OpenAI 的 `image_url` 与 Responses 的 `input_image`）。"""
+    if not isinstance(content, list):
+        return []
+    out = []
+    for p in content:
+        if not isinstance(p, dict):
+            continue
+        if p.get("type") == "image_url":
+            url = (p.get("image_url") or {}).get("url") or ""
+            if url:
+                out.append(url)
+        elif p.get("type") == "input_image":
+            url = p.get("image_url") or ""
+            if url:
+                out.append(url)
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -163,12 +197,15 @@ class Handler(BaseHTTPRequestHandler):
         assistant_tool_calls = any(m.get("role") == "assistant" and m.get("tool_calls")
                                    for m in messages)
         tool_results = [m for m in messages if m.get("role") == "tool"]
-        system_text = "\n".join((m.get("content") or "") for m in messages
+        system_text = "\n".join(text_of(m.get("content")) for m in messages
                                 if m.get("role") == "system")
         # 「长期记忆」是每次 Run 现渲染进系统提示的：这里把是否带上、带没带上某条记进日志，
         # 测试脚本据此断言"AI 记得住、也看得到"（不用去猜后端实现）。
         memory_marker = "长期记忆"
         tool_names = [((t.get("function") or {}).get("name")) for t in tools]
+        # 附件（M3）：图片是不是真的以内联 data URL 发过来了，只看这一条日志
+        last_user = next((m for m in reversed(messages) if m.get("role") == "user"), {})
+        last_images = images_of(last_user.get("content"))
 
         entry = {
             "method": "POST",
@@ -186,6 +223,10 @@ class Handler(BaseHTTPRequestHandler):
             "assistantHasToolCall": assistant_tool_calls,
             "toolResultCount": len(tool_results),
             "lastRole": last.get("role"),
+            "imageCount": len(last_images),
+            "imageUrlPrefix": (last_images[0][:32] if last_images else None),
+            "imagePayloadChars": (len(last_images[0]) if last_images else 0),
+            "userContentIsBlocks": isinstance(last_user.get("content"), list),
         }
 
         # 1) 工具结果已回填 -> 用正文收尾（循环终止）
@@ -202,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
         user_text = ""
         for m in reversed(messages):
             if m.get("role") == "user":
-                user_text = m.get("content") or ""
+                user_text = text_of(m.get("content"))
                 break
         entry["userText"] = user_text
 

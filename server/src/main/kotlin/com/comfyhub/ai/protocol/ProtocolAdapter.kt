@@ -139,12 +139,15 @@ class ToolCallAccumulator {
 /**
  * 协议适配器。一个 Provider 固定一种协议（AIH-006），因此适配器是**无状态**的。
  *
- * `transports` 表示"这个适配器真的实现了哪种附件传输"——预检和 Run 准入都以此为准，
- * 不是根据模型声明的能力猜（AIH-028）。
+ * [attachmentTransports] 表示"这个适配器对**每种模态**真的实现了哪种传输"——预检和 Run 准入
+ * 都以此为准，不是根据模型声明的能力猜（AIH-028）。**按模态分开声明**是必须的：
+ * 三家协议都支持图片内联 base64，但都不支持把视频塞进聊天请求体，混在一个集合里就没法区分。
  */
 interface ProtocolAdapter {
     val api: AiApiRef
-    val transports: Set<TransportRef>
+
+    /** 模态 → 已实现的传输方式；没列出的模态 = 适配器还没实现，预检直接阻断。 */
+    val attachmentTransports: Map<AttachmentKindRef, Set<TransportRef>>
     val adapterVersion: String
 
     /**
@@ -191,17 +194,61 @@ enum class TransportRef(val wire: String) {
 }
 
 /**
+ * 附件模态（协议层视角）。
+ *
+ * 与 `com.comfyhub.ai.Modality` 一一对应，但**刻意分两份**：协议层不能反向依赖领域层。
+ * 两边的映射只有 `AdapterCapabilities` 一处，别在别处再写一份 `when`。
+ */
+enum class AttachmentKindRef(val wire: String) {
+    IMAGE("image"),
+    VIDEO("video"),
+    AUDIO("audio"),
+    DOCUMENT("document"),
+    TEXT("text");
+
+    companion object {
+        fun parse(wire: String?): AttachmentKindRef? = entries.firstOrNull { it.wire == wire }
+    }
+}
+
+/**
+ * 一次请求里要内联给模型的附件（M3）。
+ *
+ * [base64] 是**不含** `data:` 前缀的原始 base64：OpenAI 的 `image_url.url` 与 Responses 的
+ * `input_image.image_url` 要 data URL（用 [dataUrl]），Anthropic 的 `source.data` 要裸 base64。
+ */
+data class ChatAttachment(
+    val kind: AttachmentKindRef,
+    val mimeType: String,
+    val base64: String,
+    val fileName: String = "",
+) {
+    /** `data:<mime>;base64,<payload>` */
+    val dataUrl: String get() = "data:$mimeType;base64,$base64"
+}
+
+/**
+ * 适配器在构造请求体时发现"这种模态我还没实现"。
+ *
+ * 正常路径上预检已经阻断，走不到这里；这是**编程不变式**的最后一道：
+ * 宁可整轮失败，也不要静默把附件丢掉后假装发成功（AIH-030）。
+ */
+class UnsupportedContentFailure(message: String) : RuntimeException(message)
+
+/**
  * 对话中的一轮。
  *
  * M4 之后一轮不再只有正文：[toolCalls] 是助手发起的工具调用，[toolCallId] 是**工具结果**这一轮
- * 回填的调用 id。适配器负责把它翻译成各家协议的结构（`tool_calls` / `tool_use` /
- * `function_call_output`）。
+ * 回填的调用 id。M3 之后用户轮还可以带 [attachments]（图片以内联 base64 发给上游）。
+ * 适配器负责把它们翻译成各家协议的结构（`tool_calls` / `tool_use` / `function_call_output`、
+ * `image_url` / `image` / `input_image`）。
  */
 data class ChatTurn(
     val role: String,
     val content: String,
     val toolCalls: List<ToolCallRef> = emptyList(),
     val toolCallId: String? = null,
+    val attachments: List<ChatAttachment> = emptyList(),
 )
 
 /** 助手发起的一次工具调用（已拼好参数 JSON 文本，原样回传给上游）。 */

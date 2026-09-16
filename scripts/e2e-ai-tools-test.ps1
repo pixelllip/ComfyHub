@@ -12,6 +12,8 @@
       4. 目录内写成功 —— write_file 写 comfyui/ 成功，内容正确
       5. 审批    —— comfy_sync_history 发 tool.requested(approval=pending)，批准后才 tool.started
       6. 只读工具 —— comfy_get_status 直接执行（不需要审批）
+      7. 长期记忆 —— remember 落盘 + 下一次 Run 注入系统提示
+      8. 附件（M3）—— 上传 → 缩略图 → 内联图片进请求体 → 纯文本模型零上游请求
 
     还会核对落库的消息 parts 顺序（tool_call / tool_result / text），保证重开会话能渲染工具卡。
 
@@ -55,6 +57,10 @@ $script:ConversationId = $null
 
 # 长期记忆的原内容：本脚本会往里写一条测试记忆，结束时原样放回
 $script:MemoryBefore = $null
+
+# 附件（M3）：测试用的一张 1×1 PNG 与上传后的附件 id
+$script:AttachPng = Join-Path ([System.IO.Path]::GetTempPath()) 'comfyhub-e2e-attach.png'
+$script:AttachmentId = $null
 
 function Say([string]$msg, [string]$color = 'Gray') { Write-Host $msg -ForegroundColor $color }
 
@@ -197,18 +203,18 @@ function Get-Events {
 function Convert-Data($Event) { return ($Event.data | ConvertFrom-Json) }
 
 function Start-AiRun {
-    param([string]$ConversationId, [string]$Text)
+    param([string]$ConversationId, [string]$Text, [string[]]$AttachmentIds)
     # 故意**不带** reasoningEffort：DTO 与文档都写着"缺省 = off"，而前端在"模型不支持推理"时
     # 本来就不传这个字段。早先后端对 null 直接抛错（"未知的思考强度：null"），
     # 于是所有不支持推理的模型都发不出消息 —— 这条路径就是那个 bug 的回归防线。
-    return Invoke-Api 'POST' "/api/ai/conversations/$ConversationId/runs" @{
-        text = $Text; providerId = $ProviderId; modelId = $ModelId
-    }
+    $body = @{ text = $Text; providerId = $ProviderId; modelId = $ModelId }
+    if ($AttachmentIds -and $AttachmentIds.Count -gt 0) { $body.attachmentIds = @($AttachmentIds) }
+    return Invoke-Api 'POST' "/api/ai/conversations/$ConversationId/runs" $body
 }
 
 function Receive-Scenario {
-    param([string]$ConversationId, [string]$Text, [scriptblock]$OnEvent)
-    $run = Start-AiRun -ConversationId $ConversationId -Text $Text
+    param([string]$ConversationId, [string]$Text, [string[]]$AttachmentIds, [scriptblock]$OnEvent)
+    $run = Start-AiRun -ConversationId $ConversationId -Text $Text -AttachmentIds $AttachmentIds
     Open-RunStream -RunId $run.runId
     $events = @(Receive-RunEvents -RunId $run.runId -TimeoutSec $TimeoutSec -OnEvent $OnEvent)
     Close-RunStream -RunId $run.runId
@@ -327,7 +333,7 @@ try {
 
     # --- 3. 场景 1：注册 skill --------------------------------------------
     Say ''
-    Say '  [1/8] 注册：register_skill 落盘' 'Cyan'
+    Say '  [1/9] 注册：register_skill 落盘' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s1 = Receive-Scenario -ConversationId $conv.id -Text '帮我注册一个新的 skill'
     $e1 = $s1.events
@@ -371,7 +377,7 @@ try {
 
     # --- 4. 场景 2：按需加载 ----------------------------------------------
     Say ''
-    Say '  [2/8] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
+    Say '  [2/9] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s2 = Receive-Scenario -ConversationId $conv.id -Text '加载那个 skill'
     $e2 = $s2.events
@@ -397,7 +403,7 @@ try {
 
     # --- 5. 场景 3：越界写被拒 --------------------------------------------
     Say ''
-    Say '  [3/8] 越界写被拒：write_file 打到 storage/' 'Cyan'
+    Say '  [3/9] 越界写被拒：write_file 打到 storage/' 'Cyan'
     $s3 = Receive-Scenario -ConversationId $conv.id -Text '越界写个文件'
     $e3 = $s3.events
     $fail3 = @(Get-Events $e3 'tool.failed')
@@ -414,7 +420,7 @@ try {
 
     # --- 6. 场景 4：目录内写成功 ------------------------------------------
     Say ''
-    Say '  [4/8] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
+    Say '  [4/9] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
     $s4 = Receive-Scenario -ConversationId $conv.id -Text '在目录内写个文件'
     $e4 = $s4.events
     $comp4 = @(Get-Events $e4 'tool.completed')
@@ -428,7 +434,7 @@ try {
 
     # --- 7. 场景 5：审批闸门 ----------------------------------------------
     Say ''
-    Say '  [5/8] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
+    Say '  [5/9] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
     $state = @{ callId = $null; pending = $false; accepted = $false; startedIndex = -1; requestedIndex = -1 }
     $s5 = Receive-Scenario -ConversationId $conv.id -Text '同步一下历史' -OnEvent {
         param($e, $i)
@@ -462,7 +468,7 @@ try {
 
     # --- 8. 场景 6：只读工具 ----------------------------------------------
     Say ''
-    Say '  [6/8] 只读工具：comfy_get_status 不需要审批' 'Cyan'
+    Say '  [6/9] 只读工具：comfy_get_status 不需要审批' 'Cyan'
     $s6 = Receive-Scenario -ConversationId $conv.id -Text '看看 ComfyUI 状态'
     $e6 = $s6.events
     $req6 = @(Get-Events $e6 'tool.requested')
@@ -476,7 +482,7 @@ try {
 
     # --- 9. 落库的消息 parts（重开会话能渲染工具卡） ----------------------
     Say ''
-    Say '  [7/8] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
+    Say '  [7/9] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
     $runDto = Invoke-Api 'GET' "/api/ai/runs/$($s1.run.runId)" $null
     Check 'run 落库状态 == completed' ($runDto.status -eq 'completed') ($runDto | ConvertTo-Json -Compress)
 
@@ -503,7 +509,7 @@ try {
 
     # --- 10. 场景 8：长期记忆（M6） ---------------------------------------
     Say ''
-    Say '  [8/8] 长期记忆：remember 落盘 + 下一次 Run 注入系统提示' 'Cyan'
+    Say '  [8/9] 长期记忆：remember 落盘 + 下一次 Run 注入系统提示' 'Cyan'
     $s8 = Receive-Scenario -ConversationId $conv.id -Text '记住：E2E 记一条，用户偏好 4:3 画幅'
     $e8 = $s8.events
     $req8 = @(Get-Events $e8 'tool.requested')
@@ -532,6 +538,113 @@ try {
     Check '下发给模型的工具里有 remember' `
         ((@($runLog2 | Where-Object { $_.hasRememberTool -eq $true })).Count -ge 1) `
         (($runLog2 | ForEach-Object { $_.toolNames -join ',' }) -join ' | ')
+
+    # --- 11. 场景 9：附件（M3 / AIH-027 ~ AIH-031） -----------------------
+    Say ''
+    Say '  [9/9] 附件：上传 → 缩略图 → 内联进请求体 → 不支持的模型零请求' 'Cyan'
+
+    function Set-E2eModel {
+        param([string[]]$Modalities)
+        Invoke-Api 'PUT' "/api/ai/providers/$ProviderId/models" @{
+            models = @(@{
+                providerId = $ProviderId
+                id = $ModelId
+                displayName = 'Fake Tools Model'
+                inputModalities = $Modalities
+                # 刻意**不声明** attachmentTransports：内置目录里那 69 个模型就是这样，
+                # 传输方式是协议的属性，后端应当回落到适配器实现的那种（否则图片永远发不出去）
+                attachmentTransports = @{}
+                mimeAllowlist = @()
+                tools = $true
+                parallelTools = $false
+                reasoning = $false
+                thinkingEfforts = @{}
+                contextWindow = 32768
+                maxOutputTokens = 4096
+                capabilitySource = 'manual'
+                enabled = $true
+            })
+        } | Out-Null
+    }
+
+    Set-E2eModel -Modalities @('text', 'image')
+
+    # 一张真的 PNG（2×2，脚本内联生成，不依赖 python 的图片库）：
+    # 签名对得上，后端才会按 image 收下；而且它能被 ImageIO 解码，缩略图那条路才跑得通。
+    $pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR42mNwaDiQ0HCAwaFhQULDAgApDgYB4vLIfgAAAABJRU5ErkJggg=='
+    [IO.File]::WriteAllBytes($script:AttachPng, [Convert]::FromBase64String($pngBase64))
+    $upload = Invoke-RestMethod -Method 'Post' -Uri "$ApiBase/api/ai/attachments" `
+        -Form @{ files = Get-Item $script:AttachPng } -TimeoutSec 60
+    $item = @($upload.items) | Select-Object -First 1
+    $script:AttachmentId = if ($item) { $item.id } else { $null }
+    Check '附件上传成功且按签名判定为 image' ($null -ne $item -and $item.kind -eq 'image') ($upload | ConvertTo-Json -Compress)
+    Check "附件 id / 大小 / 尺寸都在（size=$($item.sizeBytes)）" `
+        (-not [string]::IsNullOrWhiteSpace("$($item.id)") -and $item.sizeBytes -gt 0 -and $item.width -eq 2)
+
+    # 缩略图：图片走 JPEG 缩略图这条路（视频走同一张接口的预览帧）
+    $thumb = Invoke-WebRequest -Uri "$ApiBase/api/ai/attachments/$($script:AttachmentId)/thumb" -TimeoutSec 60
+    Check '缩略图接口 200 + image/jpeg' `
+        ($thumb.StatusCode -eq 200 -and "$($thumb.Headers['Content-Type'])" -like 'image/jpeg*') `
+        ("$($thumb.StatusCode) $($thumb.Headers['Content-Type'])")
+    Check '缩略图不是空文件' ($thumb.RawContentLength -gt 0) ("$($thumb.RawContentLength) bytes")
+
+    # 谎报类型骗不过准入：把一个文本文件改名成 .png 传上来必须被拒（AIH-027）
+    $liar = Join-Path ([System.IO.Path]::GetTempPath()) 'comfyhub-e2e-liar.png'
+    Set-Content -Path $liar -Value 'this is definitely not a png' -Encoding utf8
+    $liarRejected = $false
+    try {
+        Invoke-RestMethod -Method 'Post' -Uri "$ApiBase/api/ai/attachments" -Form @{ files = Get-Item $liar } -TimeoutSec 60 | Out-Null
+    } catch {
+        $liarRejected = "$($_.ErrorDetails.Message)" -like '*UNSUPPORTED_CONTENT*'
+    }
+    Remove-Item $liar -Force -ErrorAction SilentlyContinue
+    Check '签名不匹配的文件被拒绝入库（不是乐观放行）' $liarRejected
+
+    $pre = Invoke-Api 'POST' '/api/ai/preflight' @{
+        providerId = $ProviderId; modelId = $ModelId; attachmentIds = @($script:AttachmentId)
+    }
+    Check '预检放行（模型声明了 image + 协议实现了内联）' ($pre.allowed -eq $true) ($pre | ConvertTo-Json -Compress)
+
+    $beforeLog3 = @(Invoke-Gateway '/__log').Count
+    $s9 = Receive-Scenario -ConversationId $conv.id -Text '这张图里画的是什么？' -AttachmentIds @($script:AttachmentId)
+    $e9 = $s9.events
+    Check '带附件的 Run 正常完成' ((@(Get-Events $e9 'run.completed')).Count -ge 1) ($e9[-1].event)
+
+    $log3 = @(@(Invoke-Gateway '/__log') | Select-Object -Skip $beforeLog3)
+    $withImage = @($log3 | Where-Object { $_.imageCount -ge 1 })
+    Check '上游请求里真的带了内联图片' ($withImage.Count -ge 1) ($log3 | ConvertTo-Json -Depth 6 -Compress)
+    if ($withImage.Count -ge 1) {
+        Check "图片是 data URL 且带 base64 载荷（prefix=$($withImage[0].imageUrlPrefix)）" `
+            ($withImage[0].imageUrlPrefix -like 'data:image/png;base64,*' -and $withImage[0].imagePayloadChars -gt 60)
+        Check '带图那一轮的 content 是"文本 + 图片"的有序块数组' ($withImage[0].userContentIsBlocks -eq $true)
+    }
+
+    # 用户消息落库时要带 attachment 有序块：重开 App 才画得出缩略图
+    # （注意只挑 role=user：假网关会把提问原样回显在助手正文里，按文本找会挑错人）
+    $msgs9 = @(Invoke-Api 'GET' "/api/ai/conversations/$($conv.id)/messages" $null)
+    $user9 = @($msgs9 | Where-Object { $_.role -eq 'user' -and $_.text -like '*这张图里画的是什么*' }) |
+        Select-Object -Last 1
+    $att9 = if ($user9) { @($user9.parts | Where-Object { $_.type -eq 'attachment' }) | Select-Object -First 1 } else { $null }
+    Check '用户消息落库带 attachment 有序块（含 attachmentId）' `
+        ($null -ne $att9 -and $att9.attachmentId -eq $script:AttachmentId) `
+        ($user9.parts | ConvertTo-Json -Depth 6 -Compress)
+
+    # 零请求证明（AIH-030）：换成纯文本模型，同一个附件必须被拒，且**一个上游请求都不发**
+    Set-E2eModel -Modalities @('text')
+    $beforeLog4 = @(Invoke-Gateway '/__log').Count
+    $blockedBody = $null
+    try {
+        Invoke-Api 'POST' "/api/ai/conversations/$($conv.id)/runs" @{
+            text = '再发一次这张图'; providerId = $ProviderId; modelId = $ModelId
+            attachmentIds = @($script:AttachmentId)
+        } | Out-Null
+    } catch {
+        $blockedBody = "$($_.ErrorDetails.Message)"
+    }
+    $afterLog4 = @(Invoke-Gateway '/__log').Count
+    Check '纯文本模型 + 图片 → 创建 Run 被拒且带 UNSUPPORTED_CONTENT' `
+        ($blockedBody -like '*UNSUPPORTED_CONTENT*') $blockedBody
+    Check '这一路**零上游请求**（before=$beforeLog4 after=$afterLog4）' ($afterLog4 -eq $beforeLog4)
 } finally {
     # --- 清理 -------------------------------------------------------------
     Say ''
@@ -551,6 +664,11 @@ try {
         Remove-Item (Split-Path -Parent $SkillFile) -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item $HackFile -Force -ErrorAction SilentlyContinue
         Remove-Item $OkFile -Force -ErrorAction SilentlyContinue
+        # 附件（M3）：先删库里的附件行（连原件与缩略图一起删），再删本地那张测试图
+        if ($script:AttachmentId) {
+            try { Invoke-Api 'DELETE' "/api/ai/attachments/$($script:AttachmentId)" $null | Out-Null } catch { }
+        }
+        Remove-Item $script:AttachPng -Force -ErrorAction SilentlyContinue
         if ($null -ne $script:MemoryBefore) {
             try {
                 Invoke-Api 'PUT' '/api/ai/memory' @{ content = $script:MemoryBefore } | Out-Null

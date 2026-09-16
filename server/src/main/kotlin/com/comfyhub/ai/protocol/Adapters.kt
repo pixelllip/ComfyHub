@@ -15,15 +15,19 @@ import kotlinx.serialization.json.put
  * 覆盖 OpenAI 官方以及绝大多数兼容网关（DeepSeek / Moonshot / vLLM / LM Studio / Ollama 的
  * OpenAI 端点等），是首期唯一"真的能聊"的协议。
  *
- * 只实现文本流；**图片等附件暂不支持**，所以 [transports] 是空集 —— 预检据此阻断，
- * 而不是让请求带着前端声明直接发出去（AIH-028）。
+ * 附件（M3）：**图片以内联 base64 发送** —— `content` 从字符串变成数组
+ * `[{type:"text"},{type:"image_url",image_url:{url:"data:image/png;base64,…"}}]`，
+ * 这是所有兼容网关共同认的写法。视频 / 音频 / 文档不声明传输方式，预检直接阻断
+ * （不是静默丢掉，AIH-028/AIH-030）。纯文本轮仍然用最朴素的字符串 `content`，兼容性最好。
  *
  * M4 起支持工具调用：`tools[].function` 下发定义，`delta.tool_calls[]` 收分片。
  */
 class OpenAiCompletionsAdapter : ProtocolAdapter {
     override val api = AiApiRef.OPENAI_COMPLETIONS
-    override val transports: Set<TransportRef> = emptySet()
-    override val adapterVersion = "openai-completions/2"
+    override val attachmentTransports: Map<AttachmentKindRef, Set<TransportRef>> = mapOf(
+        AttachmentKindRef.IMAGE to setOf(TransportRef.INLINE_BASE64),
+    )
+    override val adapterVersion = "openai-completions/3"
 
     override fun buildBody(
         model: String,
@@ -69,6 +73,8 @@ class OpenAiCompletionsAdapter : ProtocolAdapter {
                                             }
                                         })
                                     }
+                                    // 带附件的用户轮：content 变成有序块数组（文本在前，图片在后）
+                                    turn.attachments.isNotEmpty() -> put("content", openAiContent(turn))
                                     else -> put("content", turn.content)
                                 }
                             }
@@ -84,6 +90,25 @@ class OpenAiCompletionsAdapter : ProtocolAdapter {
             if (tools.isNotEmpty()) put("tools", openAiTools(tools))
             applyReasoning(reasoning)
         }
+
+    private fun openAiContent(turn: ChatTurn): JsonArray = buildJsonArray {
+        if (turn.content.isNotEmpty()) {
+            add(buildJsonObject { put("type", "text"); put("text", turn.content) })
+        }
+        turn.attachments.forEach { a ->
+            when (a.kind) {
+                AttachmentKindRef.IMAGE -> add(
+                    buildJsonObject {
+                        put("type", "image_url")
+                        put("image_url", buildJsonObject { put("url", a.dataUrl) })
+                    }
+                )
+                else -> throw UnsupportedContentFailure(
+                    "openai-completions 适配器尚未实现${a.kind.wire}附件内联（预检本应已阻断这次发送）"
+                )
+            }
+        }
+    }
 
     // 思考强度按方言落到不同字段（AIH-056）。关闭思考时**分两种**：`openai` 方言什么都不发
     // （最安全，很多网关不认 `reasoning_effort:"none"`），而 `deepseek`/`zai`/`openrouter` 方言
@@ -159,7 +184,11 @@ class OpenAiCompletionsAdapter : ProtocolAdapter {
  * Anthropic Messages 兼容协议（AIH-005）。
  *
  * 请求体与 OpenAI 不同（system 独立字段、必须给 max_tokens），SSE 事件类型也不同
- * （`content_block_delta` 的 `delta.text`）。这里实现文本流，附件同样暂不支持。
+ * （`content_block_delta` 的 `delta.text`）。
+ *
+ * 附件（M3）：图片用 Anthropic 自己的结构
+ * `content: [{type:"image",source:{type:"base64",media_type,data}}]`（图片在前、文本在后，
+ * 官方建议长文档场景把图放前面）。视频 / 音频 / 文档不声明传输方式，预检直接阻断。
  *
  * 工具调用用 Anthropic 自己的结构：助手 `content` 里是 `tool_use` 块，工具结果必须回在
  * **紧随其后的 user 消息**里、用 `tool_result` 块（`tool_use_id` 对应）—— 所以这里会把
@@ -167,8 +196,10 @@ class OpenAiCompletionsAdapter : ProtocolAdapter {
  */
 class AnthropicMessagesAdapter : ProtocolAdapter {
     override val api = AiApiRef.ANTHROPIC_MESSAGES
-    override val transports: Set<TransportRef> = emptySet()
-    override val adapterVersion = "anthropic-messages/2"
+    override val attachmentTransports: Map<AttachmentKindRef, Set<TransportRef>> = mapOf(
+        AttachmentKindRef.IMAGE to setOf(TransportRef.INLINE_BASE64),
+    )
+    override val adapterVersion = "anthropic-messages/3"
 
     override fun buildBody(
         model: String,
@@ -244,6 +275,14 @@ class AnthropicMessagesAdapter : ProtocolAdapter {
                     }
                 }
                 add(buildJsonObject { put("role", "assistant"); put("content", blocks) })
+            } else if (turn.attachments.isNotEmpty()) {
+                // 带附件的用户轮：content 变成有序块（图片在前、文本在后）
+                add(
+                    buildJsonObject {
+                        put("role", if (assistant) "assistant" else "user")
+                        put("content", anthropicBlocks(turn))
+                    }
+                )
             } else {
                 add(
                     buildJsonObject {
@@ -253,6 +292,32 @@ class AnthropicMessagesAdapter : ProtocolAdapter {
                 )
             }
             i++
+        }
+    }
+
+    private fun anthropicBlocks(turn: ChatTurn): JsonArray = buildJsonArray {
+        turn.attachments.forEach { a ->
+            when (a.kind) {
+                AttachmentKindRef.IMAGE -> add(
+                    buildJsonObject {
+                        put("type", "image")
+                        put(
+                            "source",
+                            buildJsonObject {
+                                put("type", "base64")
+                                put("media_type", a.mimeType)
+                                put("data", a.base64)
+                            },
+                        )
+                    }
+                )
+                else -> throw UnsupportedContentFailure(
+                    "anthropic-messages 适配器尚未实现${a.kind.wire}附件内联（预检本应已阻断这次发送）"
+                )
+            }
+        }
+        if (turn.content.isNotEmpty()) {
+            add(buildJsonObject { put("type", "text"); put("text", turn.content) })
         }
     }
 
@@ -319,15 +384,18 @@ class ProtocolFailure(message: String) : RuntimeException(message)
  * | 流事件 | `choices[].delta.content` | `response.output_text.delta` |
  * | 用量 | 最后一个 chunk 的 `usage` | `response.completed.response.usage` |
  *
- * 只实现文本流（附件传输仍为空集，预检据此阻断，AIH-028）。
+ * 附件（M3）：图片走 `input[].content[]` 里的 `{type:"input_image",image_url:"data:…"}`，
+ * 与 `input_text` 并列。视频 / 音频 / 文档不声明传输方式，预检直接阻断。
  *
  * 工具调用是**顶层 item**（不是消息里的字段）：`function_call` 与 `function_call_output`
  * 各自作为 `input[]` 的一项，用 `call_id` 关联。
  */
 class OpenAiResponsesAdapter : ProtocolAdapter {
     override val api = AiApiRef.OPENAI_RESPONSES
-    override val transports: Set<TransportRef> = emptySet()
-    override val adapterVersion = "openai-responses/2"
+    override val attachmentTransports: Map<AttachmentKindRef, Set<TransportRef>> = mapOf(
+        AttachmentKindRef.IMAGE to setOf(TransportRef.INLINE_BASE64),
+    )
+    override val adapterVersion = "openai-responses/3"
 
     override fun buildBody(
         model: String,
@@ -366,20 +434,36 @@ class OpenAiResponsesAdapter : ProtocolAdapter {
                 return@forEach
             }
             val assistant = turn.role == "assistant"
-            if (turn.content.isNotEmpty()) {
+            if (turn.content.isNotEmpty() || turn.attachments.isNotEmpty()) {
                 add(
                     buildJsonObject {
                         put("role", if (assistant) "assistant" else "user")
                         put(
                             "content",
                             buildJsonArray {
-                                add(
-                                    buildJsonObject {
-                                        // 助手历史用 output_text，用户输入用 input_text
-                                        put("type", if (assistant) "output_text" else "input_text")
-                                        put("text", turn.content)
+                                turn.attachments.forEach { a ->
+                                    when (a.kind) {
+                                        AttachmentKindRef.IMAGE -> add(
+                                            buildJsonObject {
+                                                put("type", "input_image")
+                                                put("image_url", a.dataUrl)
+                                            }
+                                        )
+                                        else -> throw UnsupportedContentFailure(
+                                            "openai-responses 适配器尚未实现${a.kind.wire}附件内联" +
+                                                "（预检本应已阻断这次发送）"
+                                        )
                                     }
-                                )
+                                }
+                                if (turn.content.isNotEmpty()) {
+                                    add(
+                                        buildJsonObject {
+                                            // 助手历史用 output_text，用户输入用 input_text
+                                            put("type", if (assistant) "output_text" else "input_text")
+                                            put("text", turn.content)
+                                        }
+                                    )
+                                }
                             }
                         )
                     }

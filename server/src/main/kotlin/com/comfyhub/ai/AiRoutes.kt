@@ -1,7 +1,9 @@
 package com.comfyhub.ai
 
 import com.comfyhub.ApiError
+import com.comfyhub.FailedInfo
 import com.comfyhub.ai.protocol.Adapters
+import com.comfyhub.ai.protocol.AttachmentKindRef
 import com.comfyhub.ai.protocol.ReasoningEffort
 import com.comfyhub.ai.protocol.TransportRef
 import com.comfyhub.ai.tools.MemoryStore
@@ -13,11 +15,18 @@ import com.comfyhub.ai.tools.ToolInfoDto
 import com.comfyhub.ai.tools.ToolPolicy
 import com.comfyhub.ai.tools.ToolPolicyConfig
 import com.comfyhub.ai.tools.ToolRegistry
+import com.comfyhub.contentTypeFor
+import com.comfyhub.setInlineFileHeaders
 import io.ktor.http.ContentType
+import java.nio.file.Files
 import java.nio.file.Path
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.PartData
+import io.ktor.http.content.forEachPart
 import io.ktor.server.request.receive
+import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.delete
@@ -26,11 +35,17 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
+import io.ktor.utils.io.jvm.javaio.toInputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import org.slf4j.LoggerFactory
+
+private val log = LoggerFactory.getLogger("com.comfyhub.AiRoutes")
 
 /**
  * AI 工作台接口。
@@ -50,6 +65,8 @@ fun Route.aiRoutes(
     toolRegistry: ToolRegistry,
     approvals: ToolApprovalGate,
     projectRoot: Path,
+    /** AI 附件（M3）：上传 / 缩略图 / 删 / 读成内联附件都走它 */
+    attachments: AiAttachmentStore,
 ) {
 
     route("/ai") {
@@ -292,7 +309,10 @@ fun Route.aiRoutes(
             AiConversationRepo.get(conversationId)
                 ?: throw AiException(AiErrorCode.CONFIG_ERROR, "会话不存在: $conversationId")
             val body = call.receive<AiRunStartRequest>()
-            if (body.text.isBlank()) throw AiException(AiErrorCode.CONFIG_ERROR, "消息内容不能为空")
+            val attachmentIds = body.attachmentIds.distinct()
+            if (body.text.isBlank() && attachmentIds.isEmpty()) {
+                throw AiException(AiErrorCode.CONFIG_ERROR, "消息内容不能为空")
+            }
 
             val provider = requireProvider(body.providerId)
             if (!provider.enabled) throw AiException(AiErrorCode.CONFIG_ERROR, "该 Provider 已被停用")
@@ -314,13 +334,40 @@ fun Route.aiRoutes(
             }
             val effort = AiValidation.requireThinkingEffort(model, requestedEffort)
 
+            // ---- 附件准入（AIH-030 的"事务内再用快照验一次"）-------------------
+            // 前端预检只是**提前告知**；真正的放行判定在这里、在创建 Run **之前**完成：
+            // 不通过就直接报错返回，不会有任何上游请求（零请求证明见 e2e 脚本）。
+            val api = AiApi.parse(provider.api)
+                ?: throw AiException(AiErrorCode.CONFIG_ERROR, "Provider 协议非法: ${provider.api}")
+            val attached = attachmentIds.map { id ->
+                AiAttachmentRepo.get(id)
+                    ?: throw AiException(AiErrorCode.CONFIG_ERROR, "附件不存在或已被删除: $id")
+            }
+            val attachmentBlockers = attached.flatMapIndexed { index, dto ->
+                val fact = dto.toFact()
+                val transports = fact.modality?.let { AdapterCapabilities.transportsFor(api, it) }.orEmpty()
+                AttachmentPolicy.evaluate(model, fact, transports, currentAttachmentCount = index).let { result ->
+                    result.blockers.map { "${dto.name}：$it" }
+                }
+            }
+            if (attachmentBlockers.isNotEmpty()) {
+                throw AiException(
+                    AiErrorCode.UNSUPPORTED_CONTENT,
+                    "有附件未通过准入，已阻断发送（未产生任何上游请求）：${attachmentBlockers.joinToString("；")}",
+                )
+            }
+
             // 用户消息与助手占位都在"创建 Run"里完成，保证顺序与 seq 稳定
             val userMessage = AiConversationRepo.appendMessage(
                 conversationId,
                 AiMessageAppend(
                     role = "user",
                     text = body.text,
-                    parts = listOf(AiMessagePartDto(type = "text", text = body.text)),
+                    parts = buildList {
+                        add(AiMessagePartDto(type = "text", text = body.text))
+                        // 附件的引用落成有序块：重开 App 还要能把缩略图/预览帧显示出来
+                        attached.forEach { add(AiMessagePartDto(type = "attachment", text = it.name, attachmentId = it.id)) }
+                    },
                 ),
             )
             val assistantId = AiRunRepo.insertAssistantPlaceholder(conversationId, provider.id, model.id)
@@ -617,6 +664,114 @@ fun Route.aiRoutes(
         }
 
         // -------------------------------------------------------------------
+        //  附件（M3 / AIH-027 ~ AIH-031）
+        //
+        //  原件落 `storage/ai-attachments`，缩略图 / 视频预览帧落 `storage/ai-thumbs`，
+        //  与画廊产物分开（生命周期不同，混在一起以后清孤儿会互相误删）。
+        //  类型判定**只认签名**：认不出来直接拒收，绝不做"未知即图片"的乐观回退。
+        // -------------------------------------------------------------------
+
+        post("/attachments") {
+            data class Incoming(val name: String, val tmp: Path, val mime: String?)
+
+            val incoming = mutableListOf<Incoming>()
+            val failed = mutableListOf<FailedInfo>()
+            try {
+                call.receiveMultipart(formFieldLimit = AiAttachmentStore.MAX_UPLOAD_BYTES).forEachPart { part ->
+                    try {
+                        if (part is PartData.FileItem) {
+                            val name = part.originalFileName?.takeIf { it.isNotBlank() } ?: "attachment.bin"
+                            val tmp = attachments.tempFile()
+                            try {
+                                part.provider().toInputStream().use { input ->
+                                    Files.newOutputStream(tmp).use { out -> input.copyTo(out) }
+                                }
+                            } catch (e: Exception) {
+                                Files.deleteIfExists(tmp)
+                                throw e
+                            }
+                            incoming += Incoming(name, tmp, part.contentType?.toString())
+                        }
+                    } catch (e: Exception) {
+                        log.warn("附件 multipart 分段处理失败: {}", e.message)
+                        failed += FailedInfo("(part)", e.message ?: "解析失败")
+                    } finally {
+                        part.dispose()
+                    }
+                }
+            } catch (e: Exception) {
+                incoming.forEach { runCatching { Files.deleteIfExists(it.tmp) } }
+                throw AiException(AiErrorCode.CONFIG_ERROR, "附件上传解析失败：${e.message}")
+            }
+
+            if (incoming.isEmpty() && failed.isEmpty()) {
+                throw AiException(AiErrorCode.CONFIG_ERROR, "没有收到文件（表单字段名请用 files）")
+            }
+
+            val items = mutableListOf<AiAttachmentDto>()
+            incoming.forEach { item ->
+                try {
+                    items += attachments.save(item.name, item.tmp, item.mime)
+                } catch (e: AiException) {
+                    failed += FailedInfo(item.name, e.message ?: "入库失败")
+                } catch (e: Exception) {
+                    log.error("附件入库失败 {}", item.name, e)
+                    runCatching { Files.deleteIfExists(item.tmp) }
+                    failed += FailedInfo(item.name, e.message ?: "入库失败")
+                }
+            }
+            // 一个都没成 → 400（前端要能直接看到"为什么这张图发不上去"）；
+            // 部分成功仍然 201，失败的逐条列在 failed 里（不静默丢弃）。
+            if (items.isEmpty()) {
+                throw AiException(
+                    AiErrorCode.UNSUPPORTED_CONTENT,
+                    failed.joinToString("；") { "${it.fileName}：${it.reason}" }.ifEmpty { "附件入库失败" },
+                )
+            }
+            call.respond(HttpStatusCode.Created, AiAttachmentUploadResult(items = items, failed = failed))
+        }
+
+        get("/attachments/{id}") {
+            val id = call.parameters["id"].orEmpty()
+            val dto = AiAttachmentRepo.get(id)
+                ?: throw AiException(AiErrorCode.CONFIG_ERROR, "附件不存在: $id")
+            call.respond(dto)
+        }
+
+        /** 原件（点开看大图 / 视频播放都走它，支持 Range 以便视频拖动）。 */
+        get("/attachments/{id}/file") {
+            val id = call.parameters["id"].orEmpty()
+            val dto = AiAttachmentRepo.get(id)
+                ?: throw AiException(AiErrorCode.CONFIG_ERROR, "附件不存在: $id")
+            val path = attachments.fileOf(id)
+                ?: throw AiException(AiErrorCode.CONFIG_ERROR, "附件文件已丢失: ${dto.name}")
+            call.setInlineFileHeaders(dto.name, contentTypeFor(dto.mimeType))
+            call.respondFile(path.toFile())
+        }
+
+        /**
+         * 缩略图 / 视频预览帧：**同一张接口**，界面按 `kind` 决定显示成缩略图还是播放器封面。
+         * 没有可看的图（音频 / 文档 / 抽帧失败）回 204，界面退化成文件图标（不是破图）。
+         */
+        get("/attachments/{id}/thumb") {
+            val id = call.parameters["id"].orEmpty()
+            AiAttachmentRepo.get(id) ?: throw AiException(AiErrorCode.CONFIG_ERROR, "附件不存在: $id")
+            // 抽帧要起子进程，放到 IO 线程上，别占着事件循环
+            val thumb = withContext(Dispatchers.IO) { attachments.thumbnailOf(id) }
+                ?: return@get call.respond(HttpStatusCode.NoContent)
+            call.response.headers.append("X-Thumbnail", "1")
+            call.setInlineFileHeaders("thumb-$id", contentTypeFor(thumb.second))
+            call.respondFile(thumb.first.toFile())
+        }
+
+        delete("/attachments/{id}") {
+            val id = call.parameters["id"].orEmpty()
+            val deleted = attachments.delete(id)
+            if (!deleted) throw AiException(AiErrorCode.CONFIG_ERROR, "附件不存在: $id")
+            call.respond(DeleteResult(deleted = true, id = id))
+        }
+
+        // -------------------------------------------------------------------
         //  附件准入预检（AIH-029 / AIH-030）
         //
         //  这是纯计算：不产生任何上游请求。前端发送前先调它，
@@ -630,33 +785,70 @@ fun Route.aiRoutes(
                 ?: throw AiException(AiErrorCode.CONFIG_ERROR, "Provider 协议非法")
             val model = AiRepo.getModel(provider.id, body.modelId)
                 ?: throw AiException(AiErrorCode.UNKNOWN_MODEL, "模型不存在于目录中: ${body.modelId}")
-            val transports = AdapterCapabilities.transportsFor(api)
 
-            val results = body.attachments.mapIndexed { index, fact ->
+            // 两种入参：已上传的 id（**库里的事实为准**）或前端直接给的线索（老用法）。
+            // 严格分类器都在这一层跑：前端谎报 image 骗不过准入（AIH-027）。
+            data class Item(val dto: AiAttachmentDto?, val resolved: StrictIntake.Resolved, val id: String?)
+
+            val items = mutableListOf<Item>()
+            body.attachmentIds.distinct().forEach { id ->
+                val dto = AiAttachmentRepo.get(id)
+                if (dto == null) {
+                    items += Item(
+                        dto = null,
+                        resolved = StrictIntake.Resolved(
+                            AttachmentFact(name = id, modality = null, mimeType = "application/octet-stream", sizeBytes = 0),
+                            listOf("附件不存在或已被删除：$id"),
+                        ),
+                        id = id,
+                    )
+                } else {
+                    items += Item(dto = dto, resolved = StrictIntake.Resolved(dto.toFact(), emptyList()), id = id)
+                }
+            }
+            body.attachments.forEach { fact ->
                 val head = fact.headBase64?.let { raw ->
                     runCatching { java.util.Base64.getDecoder().decode(raw) }.getOrNull()
                 }
-                val resolved = StrictIntake.resolve(
-                    name = fact.name,
-                    declaredModality = fact.modality,
-                    declaredMime = fact.mimeType,
-                    sizeBytes = fact.sizeBytes,
-                    pixels = fact.pixels,
-                    head = head,
+                items += Item(
+                    dto = null,
+                    resolved = StrictIntake.resolve(
+                        name = fact.name,
+                        declaredModality = fact.modality,
+                        declaredMime = fact.mimeType,
+                        sizeBytes = fact.sizeBytes,
+                        pixels = fact.pixels,
+                        head = head,
+                    ),
+                    id = null,
                 )
+            }
+
+            val results = items.mapIndexed { index, item ->
+                val fact = item.resolved.fact
+                val transports = fact.modality?.let { AdapterCapabilities.transportsFor(api, it) }.orEmpty()
                 val admission = AttachmentPolicy.evaluate(
                     model = model,
-                    attachment = resolved.fact,
+                    attachment = fact,
                     adapterTransports = transports,
                     currentAttachmentCount = index,
                 )
                 // 文件头判定失败的阻断理由必须一起带出来（AIH-027/030）
-                admission.copy(blockers = resolved.blockers + admission.blockers)
+                admission.copy(blockers = item.resolved.blockers + admission.blockers)
             }
             call.respond(
                 PreflightResponse(
                     allowed = results.all { it.allowed },
                     blockers = results.flatMap { it.blockers },
+                    items = items.mapIndexed { index, item ->
+                        PreflightItemDto(
+                            index = index,
+                            name = item.resolved.fact.name,
+                            allowed = results[index].allowed,
+                            blockers = results[index].blockers,
+                            attachmentId = item.id,
+                        )
+                    },
                 )
             )
         }
@@ -838,11 +1030,29 @@ data class AttachmentFactDto(
 data class PreflightRequest(
     val providerId: String,
     val modelId: String,
+    /** 前端直接给的线索（可含文件头）；有 [attachmentIds] 时以库里的为准 */
     val attachments: List<AttachmentFactDto> = emptyList(),
+    /** 已上传附件的 id（M3）：**服务端以库里的事实为准**，前端声明只是线索 */
+    val attachmentIds: List<String> = emptyList(),
+)
+
+/** 逐个附件的准入结论：界面用它给对应的缩略图打红框 / 显示原因。 */
+@Serializable
+data class PreflightItemDto(
+    val index: Int,
+    val name: String,
+    val allowed: Boolean,
+    val blockers: List<String> = emptyList(),
+    val attachmentId: String? = null,
 )
 
 @Serializable
-data class PreflightResponse(val allowed: Boolean, val blockers: List<String>)
+data class PreflightResponse(
+    val allowed: Boolean,
+    val blockers: List<String>,
+    /** 与请求的附件顺序一一对应 */
+    val items: List<PreflightItemDto> = emptyList(),
+)
 
 // ---------------------------------------------------------------------------
 //  内部
@@ -896,20 +1106,23 @@ private fun validateModel(m: AiModelDto) {
 /**
  * 协议适配器"实际实现"的传输方式（AIH-028）。
  *
- * 事实来源是 [Adapters]：适配器里 `transports` 为空集，预检就把附件判为
- * "协议适配尚未实现"而不是乐观放行。实现了图片内联之后改适配器即可，
- * 不需要在别处再维护一份"支持矩阵"。
+ * 事实来源是 [Adapters] 的 `attachmentTransports`：**按模态分开**声明，
+ * 没实现的那种模态预检就判"协议适配尚未实现"而不是乐观放行。实现了新模态（或新传输方式）
+ * 之后改适配器即可，不需要在别处再维护一份"支持矩阵"。
  */
 object AdapterCapabilities {
-    fun transportsFor(api: AiApi): Set<Transport> {
+    fun transportsFor(api: AiApi, modality: Modality): Set<Transport> {
         val ref = com.comfyhub.ai.protocol.AiApiRef.parse(api.wire) ?: return emptySet()
         val adapter = Adapters.of(ref) ?: return emptySet()
-        return adapter.transports.mapNotNull { t -> Transport.parse(t.wire) }.toSet()
+        val kind = AttachmentKindRef.parse(modality.wire) ?: return emptySet()
+        return adapter.attachmentTransports[kind].orEmpty().mapNotNull { t -> Transport.parse(t.wire) }.toSet()
     }
 
     /** 调试/界面用：哪些协议真的能跑。 */
     fun implemented(): List<String> = Adapters.supported().map { it.wire }
 
+    /** 该协议**所有**已实现的传输方式（不分模态），只用于展示与排错。 */
     fun transportRefs(api: AiApi): Set<TransportRef> =
-        com.comfyhub.ai.protocol.AiApiRef.parse(api.wire)?.let { Adapters.of(it)?.transports } ?: emptySet()
+        com.comfyhub.ai.protocol.AiApiRef.parse(api.wire)?.let { Adapters.of(it)?.attachmentTransports }
+            ?.values?.flatten()?.toSet() ?: emptySet()
 }

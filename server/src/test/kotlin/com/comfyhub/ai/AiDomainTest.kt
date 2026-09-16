@@ -156,11 +156,73 @@ class AiDomainTest {
     @Test
     fun `视频在未实现时被阻断 绝不静默抽帧`() {
         val model = textOnlyModel().copy(inputModalities = listOf("text", "video"))
+        // 真实来源：适配器**没有**实现视频的任何传输方式（见 Adapters.attachmentTransports）
         val r = AttachmentPolicy.evaluate(
             model, AttachmentFact("a.mp4", Modality.VIDEO, "video/mp4", 1024),
+            adapterTransports = AdapterCapabilities.transportsFor(AiApi.OPENAI_COMPLETIONS, Modality.VIDEO),
+        )
+        assertFalse(r.allowed)
+        assertTrue(r.blockers.any { it.contains("尚未实现") }, r.blockers.toString())
+    }
+
+    @Test
+    fun `模型没声明传输方式时用协议实现的那种（内置目录只声明模态）`() {
+        // 内置目录里的 69 个模型只声明 inputModalities，不声明 attachmentTransports；
+        // 传输方式是**协议**的属性，所以这里必须回落到适配器实现的那种，否则图片永远发不出去。
+        val model = textOnlyModel().copy(inputModalities = listOf("text", "image"))
+        val image = AdapterCapabilities.transportsFor(AiApi.OPENAI_COMPLETIONS, Modality.IMAGE)
+        assertEquals(setOf(Transport.INLINE_BASE64), image)
+
+        val ok = AttachmentPolicy.evaluate(
+            model, AttachmentFact("a.png", Modality.IMAGE, "image/png", 1024),
+            adapterTransports = image,
+        )
+        assertTrue(ok.allowed, ok.blockers.toString())
+    }
+
+    @Test
+    fun `模型显式声明了传输方式就只认它 声明的没实现照样阻断`() {
+        val model = textOnlyModel().copy(
+            inputModalities = listOf("text", "image"),
+            // 只声明远程 URL：当前适配器只实现了内联 base64 → 交集为空 → 阻断
+            attachmentTransports = mapOf("image" to listOf("remote_url")),
+        )
+        val r = AttachmentPolicy.evaluate(
+            model, AttachmentFact("a.png", Modality.IMAGE, "image/png", 1024),
             adapterTransports = setOf(Transport.INLINE_BASE64),
         )
         assertFalse(r.allowed)
+        assertTrue(r.blockers.any { it.contains("remote_url") }, r.blockers.toString())
+    }
+
+    @Test
+    fun `内联超过 8MB 的图先压缩再发 不把网关打成 413`() {
+        val model = textOnlyModel().copy(inputModalities = listOf("text", "image"))
+        val r = AttachmentPolicy.evaluate(
+            model, AttachmentFact("huge.png", Modality.IMAGE, "image/png", 9 * 1024 * 1024),
+            adapterTransports = setOf(Transport.INLINE_BASE64),
+        )
+        assertFalse(r.allowed)
+        assertTrue(r.blockers.any { it.contains("内联发送上限") }, r.blockers.toString())
+    }
+
+    @Test
+    fun `附件内联预算：最新优先 装不下就跳过小的顶上`() {
+        // 3 张：12MB（超单张上限）/ 6MB（装得下）/ 5MB（总预算 20MB 里只剩 14MB，也装得下）
+        val plan = InlineBudget.plan(
+            sizes = listOf(12L * 1024 * 1024, 6L * 1024 * 1024, 5L * 1024 * 1024),
+            maxTotal = 20L * 1024 * 1024,
+            maxSingle = AttachmentPolicy.MAX_INLINE_BYTES,
+        )
+        assertEquals(listOf(false, true, true), plan)
+
+        // 总预算装不下第三张时如实标 false（调用方要把它变成一句"没随本次请求发送"）
+        val tight = InlineBudget.plan(
+            sizes = listOf(6L * 1024 * 1024, 6L * 1024 * 1024, 6L * 1024 * 1024),
+            maxTotal = 13L * 1024 * 1024,
+        )
+        assertEquals(listOf(true, true, false), tight)
+        assertTrue(InlineBudget.plan(listOf(0L)).none { it }, "空文件不发")
     }
 
     // --- 凭据 --------------------------------------------------------------

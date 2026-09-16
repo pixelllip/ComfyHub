@@ -314,6 +314,9 @@ class _MessageList extends StatelessWidget {
             toolCategoryOf: store.toolCategoryOf,
             onApprove: store.approveToolCall,
             onDeny: store.denyToolCall,
+            // 用户消息里的附件块：按 id 现取缩略图 / 视频预览帧（M3）
+            thumbUrlOf: store.thumbUrlFor,
+            fileUrlOf: store.fileUrlFor,
           ),
         );
       },
@@ -341,6 +344,10 @@ class _MessageBubble extends StatelessWidget {
   final Future<void> Function(String callId) onApprove;
   final Future<void> Function(String callId) onDeny;
 
+  /// 附件 id → 缩略图 / 预览帧地址（M3）。
+  final String? Function(String? attachmentId) thumbUrlOf;
+  final String? Function(String? attachmentId) fileUrlOf;
+
   const _MessageBubble({
     required this.message,
     required this.sending,
@@ -350,6 +357,8 @@ class _MessageBubble extends StatelessWidget {
     required this.toolCategoryOf,
     required this.onApprove,
     required this.onDeny,
+    required this.thumbUrlOf,
+    required this.fileUrlOf,
   });
 
   @override
@@ -382,14 +391,10 @@ class _MessageBubble extends StatelessWidget {
                 if (part.type == 'attachment')
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.attach_file, size: 14),
-                        const SizedBox(width: 4),
-                        Text(part.text ?? part.attachmentId ?? '附件',
-                            style: theme.textTheme.labelSmall),
-                      ],
+                    child: _MessageAttachment(
+                      name: part.text ?? part.attachmentId ?? '附件',
+                      thumbUrl: thumbUrlOf(part.attachmentId),
+                      fileUrl: fileUrlOf(part.attachmentId),
                     ),
                   ),
               // 用户消息按纯文本显示（自己敲的，不需要渲染）；
@@ -885,18 +890,34 @@ class _ComposerState extends State<_Composer> {
               icon: Icons.block,
               error: true,
             ),
-          if (store.attachments.isNotEmpty)
+          if (store.attachments.isNotEmpty || store.uploadingAttachments)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Wrap(
-                spacing: 6,
-                runSpacing: 6,
+                spacing: 8,
+                runSpacing: 8,
                 children: [
                   for (var i = 0; i < store.attachments.length; i++)
-                    Chip(
-                      label: Text('${store.attachments[i].name} · ${store.attachments[i].sizeLabel}',
-                          style: theme.textTheme.labelSmall),
-                      onDeleted: () => store.removeAttachmentAt(i),
+                    _AttachmentTile(
+                      key: ValueKey('attach-${store.attachments[i].id ?? i}'),
+                      attachment: store.attachments[i],
+                      // 图片给缩略图、视频给预览帧（后端同一张 /thumb 接口，抽不出来回 204）
+                      thumbUrl: store.thumbUrlFor(store.attachments[i].id),
+                      fileUrl: store.fileUrlFor(store.attachments[i].id),
+                      blockers: store.preflight?.blockersAt(i) ?? const [],
+                      onRemove: () => store.removeAttachmentAt(i),
+                    ),
+                  if (store.uploadingAttachments)
+                    const SizedBox(
+                      width: 92,
+                      height: 92,
+                      child: Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
                     ),
                 ],
               ),
@@ -1019,80 +1040,26 @@ class _ComposerState extends State<_Composer> {
     // file_picker 12.x 起 pickFiles 是静态方法，直接返回 List<PlatformFile>
     final files = await FilePicker.pickFiles(dialogTitle: '选择要发给 AI 的附件');
     if (files.isEmpty) return;
+    // 上传走"路径"：不让几十 MB 的图片进 Dart 堆；类型判定、缩略图与准入都在后端做（M3）
+    final picked = <({String name, String path})>[];
+    final missing = <String>[];
     for (final f in files) {
-      final size = f.lengthSync() ?? await f.length();
-      widget.store.addAttachment(AiAttachment(
-        name: f.name,
-        // 模态由后端严格分类器判定（AIH-027）；这里只做初步提示，不当作准入结论
-        modality: _guessModality(f.extension),
-        mimeType: _guessMime(f.extension),
-        sizeBytes: size,
-      ));
+      final path = f.path;
+      if (path == null || path.isEmpty) {
+        missing.add(f.name);
+      } else {
+        picked.add((name: f.name, path: path));
+      }
     }
+    if (missing.isNotEmpty) {
+      widget.store.noteAttachmentsUnreadable(missing);
+    }
+    await widget.store.attachFiles(picked);
   }
 }
 
 class _SendIntent extends Intent {
   const _SendIntent();
-}
-
-/// 仅用于预检请求的初步类型（后端会用 magic bytes 复核，AIH-027）。
-String? _guessModality(String? ext) {
-  switch ((ext ?? '').toLowerCase()) {
-    case 'png':
-    case 'jpg':
-    case 'jpeg':
-    case 'webp':
-    case 'gif':
-    case 'bmp':
-      return 'image';
-    case 'mp4':
-    case 'webm':
-    case 'mov':
-    case 'mkv':
-      return 'video';
-    case 'mp3':
-    case 'wav':
-    case 'flac':
-    case 'm4a':
-      return 'audio';
-    case 'pdf':
-    case 'txt':
-    case 'md':
-    case 'doc':
-    case 'docx':
-      return 'document';
-    default:
-      return null; // 未知类型交给后端判定并在预检里阻断
-  }
-}
-
-String _guessMime(String? ext) {
-  switch ((ext ?? '').toLowerCase()) {
-    case 'png':
-      return 'image/png';
-    case 'jpg':
-    case 'jpeg':
-      return 'image/jpeg';
-    case 'webp':
-      return 'image/webp';
-    case 'gif':
-      return 'image/gif';
-    case 'mp4':
-      return 'video/mp4';
-    case 'webm':
-      return 'video/webm';
-    case 'mov':
-      return 'video/quicktime';
-    case 'mp3':
-      return 'audio/mpeg';
-    case 'wav':
-      return 'audio/wav';
-    case 'pdf':
-      return 'application/pdf';
-    default:
-      return 'application/octet-stream';
-  }
 }
 
 class _Banner extends StatelessWidget {
@@ -1381,6 +1348,213 @@ class _EffortPicker extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// 附件托盘里的一格：**图片显示缩略图、视频显示预览帧**（M3）。
+///
+/// 缩略图 / 预览帧都来自后端的 `GET /api/ai/attachments/{id}/thumb`：
+/// 图片是 JPEG 缩略图，视频是 Windows 缩略图管线抽的第一帧。抽不出来（或音频 / 文档）
+/// 后端回 204，这里退化成文件图标 —— 不是破图。
+///
+/// 与画廊同一条性能规矩：**按实际绘制像素解码**（`cacheWidth`），
+/// 否则一张 4096² 的原图会以全尺寸进 ImageCache。
+class _AttachmentTile extends StatelessWidget {
+  final AiAttachment attachment;
+  final String? thumbUrl;
+  final String? fileUrl;
+
+  /// 这张附件在当前模型下的准入问题（非空 = 打红框并说明）
+  final List<String> blockers;
+  final VoidCallback onRemove;
+
+  static const double _size = 92;
+
+  const _AttachmentTile({
+    super.key,
+    required this.attachment,
+    required this.thumbUrl,
+    required this.fileUrl,
+    required this.blockers,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final blocked = blockers.isNotEmpty;
+    final borderColor = blocked ? theme.colorScheme.error : theme.dividerColor;
+
+    return Tooltip(
+      message: blocked
+          ? '这张附件发不出去：\n${blockers.map((b) => '· $b').join('\n')}'
+          : '${attachment.name} · ${attachment.sizeLabel}${attachment.isVideo ? '（已取预览帧）' : ''}'
+              '\n点击在新窗口打开',
+      child: SizedBox(
+        width: _size,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: _size,
+              height: _size,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: InkWell(
+                      onTap: fileUrl == null ? null : () => _openAttachment(fileUrl!),
+                      child: Container(
+                        clipBehavior: Clip.antiAlias,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: borderColor,
+                            width: blocked ? 2 : 1,
+                          ),
+                        ),
+                        child: _preview(context),
+                      ),
+                    ),
+                  ),
+                  // 视频：盖一个播放角标，一眼看出这是"预览帧"而不是一张图片
+                  if (attachment.isVideo && thumbUrl != null)
+                    const Positioned.fill(
+                      child: IgnorePointer(
+                        child: Center(
+                          child: Icon(Icons.play_circle_fill, size: 28, color: Colors.white70),
+                        ),
+                      ),
+                    ),
+                  if (blocked)
+                    const Positioned(
+                      left: 3,
+                      bottom: 3,
+                      child: Icon(Icons.block, size: 15, color: Colors.white),
+                    ),
+                  Positioned(
+                    top: -6,
+                    right: -6,
+                    child: IconButton(
+                      tooltip: '移除附件',
+                      iconSize: 15,
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+                      onPressed: onRemove,
+                      icon: const Icon(Icons.cancel),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              attachment.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall,
+            ),
+            Text(
+              attachment.sizeLabel,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _preview(BuildContext context) {
+    if (thumbUrl == null) return _iconFallback(context);
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return Image.network(
+      thumbUrl!,
+      width: _size,
+      height: _size,
+      fit: BoxFit.cover,
+      // 与画廊缩略图同一条规矩：解码宽度跟着绘制尺寸 × DPR，上限 512（见 media_thumb.dart）
+      cacheWidth: (_size * dpr).round().clamp(1, 512),
+      // 缩略图用不上 mipmap（medium 会为每张纹理生成 mipmap）
+      filterQuality: FilterQuality.low,
+      errorBuilder: (_, _, _) => _iconFallback(context),
+      loadingBuilder: (context, child, progress) =>
+          progress == null ? child : _iconFallback(context, dim: true),
+    );
+  }
+
+  Widget _iconFallback(BuildContext context, {bool dim = false}) {
+    final theme = Theme.of(context);
+    return Container(
+      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: dim ? 0.3 : 0.6),
+      child: Center(
+        child: Icon(
+          attachmentIcon(attachment.modality),
+          size: 28,
+          color: theme.colorScheme.outline,
+        ),
+      ),
+    );
+  }
+}
+
+/// 消息气泡里的附件：只读的小缩略图（用户消息发出去之后回头看得到自己发了什么）。
+class _MessageAttachment extends StatelessWidget {
+  final String name;
+  final String? thumbUrl;
+  final String? fileUrl;
+
+  const _MessageAttachment({required this.name, required this.thumbUrl, required this.fileUrl});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Tooltip(
+      message: '$name\n点击在新窗口打开',
+      child: InkWell(
+        onTap: fileUrl == null ? null : () => _openAttachment(fileUrl!),
+        child: Container(
+          width: 96,
+          height: 96,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: theme.dividerColor),
+          ),
+          child: thumbUrl == null
+              ? Center(child: Icon(Icons.attach_file, size: 22, color: theme.colorScheme.outline))
+              : Image.network(
+                  thumbUrl!,
+                  fit: BoxFit.cover,
+                  cacheWidth: (96 * MediaQuery.devicePixelRatioOf(context)).round().clamp(1, 512),
+                  filterQuality: FilterQuality.low,
+                  errorBuilder: (_, _, _) =>
+                      Center(child: Icon(Icons.attach_file, size: 22, color: theme.colorScheme.outline)),
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 附件模态 → 图标（音频 / 文档 / 未知类型没有缩略图可看）。
+IconData attachmentIcon(String? modality) => switch (modality) {
+      'image' => Icons.image_outlined,
+      'video' => Icons.movie_outlined,
+      'audio' => Icons.audiotrack_outlined,
+      'document' => Icons.description_outlined,
+      'text' => Icons.article_outlined,
+      _ => Icons.attach_file,
+    };
+
+/// 用系统默认程序打开附件原件（Windows 上落到 ShellExecute）。
+Future<void> _openAttachment(String url) async {
+  try {
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  } catch (_) {
+    // 打不开就什么都不做：URL 本身在 tooltip 里能看到
   }
 }
 

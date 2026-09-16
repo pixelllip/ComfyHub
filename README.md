@@ -11,7 +11,7 @@
 
 | 模块 | 能力 |
 | --- | --- |
-| **AI 工作台** | **App 默认落在这一页**（需求 `docs/ai-home-requirements-v0.1.xlsx`，DEC-001）。多轮对话 + 会话列表（重命名 / 归档 / 删除）；**每次冷启动都新建一条聊天记录**（历史仍在左侧列表），**切走时把一条消息都没有的空会话删掉**；**输入框内容按会话存草稿**，切走 / 关窗口都不会把打了一半的字丢掉；**记住上次用的 Provider / 模型 / 思考强度**，下次开 App 直接选回来。宽屏三栏（会话列表 / 对话 / ComfyUI 与模型能力），窄屏会话进抽屉、状态进底部 Sheet、输入区常驻；Composer 支持 Enter 发送、Shift+Enter 换行、输入法选词不误发、`/` 调出 Skills 目录、附件选择；模型选择器直接显示能力徽标（文本 / 图片 / 视频 / 音频 / 文档 / 工具）。助手回复按 **Markdown 渲染**（标题 / 列表 / 引用 / 围栏代码块 / 行内代码 / 粗斜体 / 删除线 / 可点链接，裸链接自动识别）；自研解析器是**流式安全**的 —— 模型吐到一半的 `**` 或未闭合代码围栏按字面量显示，不会吞内容。Provider 与模型目录在设置里配置，**API Key 只写不读**（见第 5 节） |
+| **AI 工作台** | **App 默认落在这一页**（需求 `docs/ai-home-requirements-v0.1.xlsx`，DEC-001）。多轮对话 + 会话列表（重命名 / 归档 / 删除）；**每次冷启动都新建一条聊天记录**（历史仍在左侧列表），**切走时把一条消息都没有的空会话删掉**；**输入框内容按会话存草稿**，切走 / 关窗口都不会把打了一半的字丢掉；**记住上次用的 Provider / 模型 / 思考强度**，下次开 App 直接选回来。宽屏三栏（会话列表 / 对话 / ComfyUI 与模型能力），窄屏会话进抽屉、状态进底部 Sheet、输入区常驻；Composer 支持 Enter 发送、Shift+Enter 换行、输入法选词不误发、`/` 调出 Skills 目录、附件选择（**图片在托盘里显示缩略图、视频显示预览帧**，见第 6 节"附件"）；模型选择器直接显示能力徽标（文本 / 图片 / 视频 / 音频 / 文档 / 工具）。助手回复按 **Markdown 渲染**（标题 / 列表 / 引用 / 围栏代码块 / 行内代码 / 粗斜体 / 删除线 / 可点链接，裸链接自动识别）；自研解析器是**流式安全**的 —— 模型吐到一半的 `**` 或未闭合代码围栏按字面量显示，不会吞内容。Provider 与模型目录在设置里配置，**API Key 只写不读**（见第 5 节） |
 | **自动启动** | App 一启动就自己把 **MySQL + 后端**拉起来（先探健康，不健康才启动；启动过程实时回显在启动页上），不用再手动开脚本；**全程不弹命令行窗口**（见 [12 节](#12-本机环境踩坑记录)最后几条）；关 App 时按设置停掉本地服务（正常关窗口走 `release`，被硬杀有守护进程兜底，见第 5 节脚本速查下面的说明） |
 | **AI 工具调用** | 助手会**真的动手**：查 ComfyUI 状态 / 按 runKey 查一次运行 / 触发一次历史同步（要用户批准）、在 **ComfyUI 目录内**读写文件（越界直接拒绝）。工具卡显示名字、参数摘要、状态（运行中 / 待批准 / 已完成 / 失败 / 已拒绝）、耗时与结果预览，可在卡片上点「批准 / 拒绝」；一次回复最多 8 轮工具、单 Run 有调用次数上限，到顶就逼模型用正文收尾（见 [docs/ai-tools-and-skills.md](docs/ai-tools-and-skills.md)） |
 | **AI Skills** | 磁盘上的 `SKILL.md` 就是真源：**跟 AI 说一句「把这个流程注册成 skill」它就用 `register_skill` 写到本机**，右侧栏立刻能看到、能删（内置的只读），**改动不用重启 App，下一次回复就生效**。装 skill 的方式是**投放口**：把 skill 文件夹（或一个 `.md`）拷进右侧栏显示的那个目录（`<storage>\ai\skills`，源码树 / 发布包都由后端算好绝对路径，带「打开文件夹 / 复制路径」），**后端启动时自动登记** —— 没有 frontmatter 的文件会被补上 `name`（文件名 kebab-case）与 `description`（正文第一行），正文一字不改；应用开着时点一下刷新（重新扫描）即可，不用重启。系统提示只注入名称 + 描述（`description: \|` 这类多行块标量也能正确读取并压成一行），正文由 `load_skill` 按需加载；非法 frontmatter 会带诊断列出但不参与对话 |
@@ -46,6 +46,7 @@
                                     │  ├─ 原生 JDBC + HikariCP          │
                                     │  ├─ 文件存储 storage/media         │
                                     │  ├─ 缩略图 storage/thumbs          │
+                                    │  ├─ AI 附件 storage/ai-attachments │
                                     │  ├─ ImageIO 生成缩略图             │
                                     │  └─ 自动捕获：轮询 /history ★      │
                                     └───────┬──────────────────┬────────┘
@@ -166,7 +167,9 @@ viewer/
 ├── comfyui/comfyhub_capture/     # ★（可选）ComfyUI 自定义节点：跑完立刻推送捕获
 ├── docs/comfyui-capture.md       # ★ 三种捕获方式的详细说明与排错
 ├── docs/android-agp9-builtin-kotlin-migration.md  # ★ AGP 9.1 / 内建 Kotlin 迁移记录与踩坑
-├── storage/                      # 产物文件（运行时生成，已 gitignore）
+├── storage/                      # 产物文件与 AI 附件（运行时生成，已 gitignore）
+│   ├── media/ thumbs/            # 画廊产物与它的缩略图 / 视频封面
+│   └── ai-attachments/ ai-thumbs/# 发给 AI 的附件原件、缩略图 / 视频预览帧（M3，与画廊分开）
 ├── .mysql/                       # 默认的 MySQL 实例目录（可用 -DataDir 换位置）
 └── .run/                         # 后端日志 / PID / e2e 临时文件（已 gitignore）
 ```
@@ -249,7 +252,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQ
 | `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
 | `scripts\check-silent-start.ps1` | **静默启动自测**：启动服务的同时盯屏，报告有没有弹出 cmd / 控制台窗口（加 `-Restart` 从零走一遍） |
 | `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成） |
-| `scripts\e2e-ai-tools-test.ps1` | **AI 工具循环 + Skills 端到端自测**（假 OpenAI 流式网关 `scripts\e2e\fake_openai.py`，不需要真 API Key、不出网：注册 / 按需加载 / 越界写被拒 / 目录内写成功 / 审批闸门 / 只读工具） |
+| `scripts\e2e-ai-tools-test.ps1` | **AI 工具循环 + Skills + 附件端到端自测**（假 OpenAI 流式网关 `scripts\e2e\fake_openai.py`，不需要真 API Key、不出网：注册 / 按需加载 / 越界写被拒 / 目录内写成功 / 审批闸门 / 只读工具 / 长期记忆 / **附件上传·缩略图·图片内联·零上游请求**） |
 | `scripts\install-comfy-node.ps1` | （可选）把捕获节点装进 ComfyUI，实现「跑完立刻捕获」 |
 | `scripts\anima-gen.ps1` | **Anima 生图执行器**：向本机 ComfyUI 提交一次文生图并等落盘（`-PromptFile/-NegativeFile/-Width/-Height/-Seed/-Prefix`） |
 | `scripts\gen-builtin-catalog.ps1` | **开发期工具**：把 `%USERPROFILE%\.dsh\settings.yaml` 里的模型目录抄成我们自己的冻结副本 `server\src\main\resources\ai\builtin-catalog.json`（运行时只读这份副本，**绝不读 YAML**；解析到少于 60 个模型就拒绝写盘） |
@@ -432,11 +435,16 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `GET/PUT` | `/api/ai/providers/{id}/models` | 模型目录（能力真源）。`GET` 读，`PUT` 全量替换 |
 | `POST` | `/api/ai/providers/{id}/test` | 连接测试：返回 `ok / errorCode / message / httpStatus / modelCount`，**不含密钥** |
 | `POST` | `/api/ai/providers/{id}/discover-models` | 模型发现：返回候选并**自动预填能力**（接口声明 → 内置目录 → 仅文本，带来源标记），**不落库** |
-| `POST` | `/api/ai/preflight` | 附件准入预检：**纯计算、不发上游请求**，返回 `{allowed, blockers}` |
+| `POST` | `/api/ai/attachments` | **上传附件**（multipart，字段名 `files`）。类型**只认签名**：认不出来直接拒收（不乐观回退）；原件落 `storage/ai-attachments`，返回 `{items, failed}`（逐个失败原因不静默丢弃） |
+| `GET` | `/api/ai/attachments/{id}` | 附件事实：`{id, name, kind, modality, mimeType, sizeBytes, width, height, sha256}` |
+| `GET` | `/api/ai/attachments/{id}/file` | 原件（点开看大图 / 播视频） |
+| `GET` | `/api/ai/attachments/{id}/thumb` | **缩略图 / 视频预览帧**（同一张接口）：图片是 JPEG 缩略图，视频是抽的第一帧 PNG；音频 / 文档 / 抽帧失败回 **204**（界面退化成文件图标） |
+| `DELETE` | `/api/ai/attachments/{id}` | 删除附件（原件 + 缩略图一起删）；**已被聊天记录引用的会被拒绝**（历史消息还要显示它） |
+| `POST` | `/api/ai/preflight` | 附件准入预检：**纯计算、不发上游请求**。传 `attachmentIds`（以库里事实为准，推荐）或 `attachments`（前端线索 + 文件头）；返回 `{allowed, blockers, items[]}`，`items` 逐个附件给结论与原因 |
 | `GET/POST` | `/api/ai/conversations` | 会话列表 / 新建 |
 | `GET/PATCH/DELETE` | `/api/ai/conversations/{id}` | 详情 / 改名·归档 / 删除（消息级联清理） |
 | `GET/POST` | `/api/ai/conversations/{id}/messages` | 消息（按 `seq` 有序恢复）/ 追加消息（可带有序块：text / attachment / tool_call / tool_result） |
-| `POST` | `/api/ai/conversations/{id}/runs` | **发起一次对话 Run**：body `{text, providerId, modelId, reasoningEffort?}` → `202 + {runId, assistantMessageId, userMessageId}`，执行在后台 |
+| `POST` | `/api/ai/conversations/{id}/runs` | **发起一次对话 Run**：body `{text, providerId, modelId, reasoningEffort?, attachmentIds?}` → `202 + {runId, assistantMessageId, userMessageId}`，执行在后台。**附件准入在创建 Run 之前完成**：任何一个附件不通过就 `400 UNSUPPORTED_CONTENT`，上游请求数为 0（AIH-030） |
 | `GET` | `/api/ai/runs/{id}` | Run 状态（`running / completed / failed / cancelled`、`errorCode`、`promptVersion`、`reasoningEffort`） |
 | `GET` | `/api/ai/runs/{id}/events?after=<seq>` | **统一 SSE 事件流**：`run.started / message.started / reasoning.delta / text.delta / tool.requested / tool.started / tool.completed / tool.failed / usage.updated / message.completed / run.completed / run.failed / run.cancelled / heartbeat`；`after` 断线续传。`message.completed` 里带 `reasoningEffort`、归一化 `usage`、`steps` 与**有序块 `parts`**（界面按它定稿工具卡） |
 | `POST` | `/api/ai/runs/{id}/cancel` | 取消：关闭上游连接，Run 记为 `cancelled`，**不再继续工具循环** |
@@ -460,10 +468,24 @@ pwsh -File scripts\e2e-capture-test.ps1
 
 | 协议 | 状态 |
 | --- | --- |
-| `openai-completions` | ✅ 文本流 + 多轮历史 + 思考强度（OpenAI / DeepSeek / Moonshot / vLLM / LM Studio / Ollama 的 OpenAI 端点等） |
-| `anthropic-messages` | ✅ 文本流（system 顶层、`max_tokens`、`content_block_delta`）+ 思考强度（`thinking.budget_tokens`） |
-| `openai-responses` | ✅ 文本流（`instructions` + `input[].content[]`、`store:false`）+ 思考强度（`reasoning.effort`）；端点 `{base}/responses`。**尚未用真实 API Key 实测**；本地假网关的端到端用例见 `AuthAndModelsUrlTest` |
-| 图片 / 视频 / 音频 / 文档附件 | ⛔ 适配器尚未实现 → 预检直接阻断（不是静默丢弃） |
+| `openai-completions` | ✅ 文本流 + 多轮历史 + 思考强度（OpenAI / DeepSeek / Moonshot / vLLM / LM Studio / Ollama 的 OpenAI 端点等）+ **图片内联**（`content` 变成有序块数组，`image_url` 用 `data:` URL） |
+| `anthropic-messages` | ✅ 文本流（system 顶层、`max_tokens`、`content_block_delta`）+ 思考强度（`thinking.budget_tokens`）+ **图片内联**（`{type:"image",source:{type:"base64",…}}`，图在前文在后） |
+| `openai-responses` | ✅ 文本流（`instructions` + `input[].content[]`、`store:false`）+ 思考强度（`reasoning.effort`）+ **图片内联**（`input_image` + `data:` URL）；端点 `{base}/responses`。**尚未用真实 API Key 实测**；本地假网关的端到端用例见 `AuthAndModelsUrlTest` |
+| 视频 / 音频 / 文档附件 | ⛔ 适配器尚未实现 → 预检直接阻断（不是静默丢弃，也不偷偷抽帧降级） |
+
+**附件（M3 / AIH-027 ~ AIH-031）**：聊天框左边的回形针选文件 → **先上传到后端**（类型只认签名）
+→ 托盘里**图片显示缩略图、视频显示预览帧**（同一张 `/thumb` 接口：图片走 JPEG 缩略图，
+视频复用画廊那套 Windows 缩略图管线抽第一帧，不引入 ffmpeg；抽不出来就退化成文件图标）→
+发送时只带 `attachmentIds`。准入分三层，**任何一层不通过都不会产生上游请求**：
+
+1. 选完就预检（托盘里被拦下的那张打红框 + 悬浮说明原因）；
+2. 点发送前前端再拦一次（发送按钮直接禁用）；
+3. **后端在创建 Run 之前用库里的附件事实 + 模型快照再验一次** → `UNSUPPORTED_CONTENT` 且零上游请求。
+
+历史里的图片**是会被一起发出去的**（图片属于上下文）；但当前模型没声明这种模态、或协议没实现这种传输、
+或超出单次请求的内联预算（单图 8MB / 合计 20MB，base64 会再涨 1/3）时，那一轮正文后面会附一句
+"（以下附件未随本次请求发送：…）"——**如实说明，不静默丢弃**。模型声明了模态但没声明传输方式时
+（内置目录里 69 个模型就是这种），传输方式回落到**协议适配器真正实现的那种**。
 
 **思考强度（AIH-056）**：聊天框下方除了选模型，还能选
 `关闭 / 极低 / 低 / 中 / 高 / 极高 / 最大`（等级表与 pi-ai / DSH 一致：
@@ -639,7 +661,8 @@ MiMo、Step、Hy、Inkling、LongCat、Nemotron 等），连**同系列里的视
 | `capture_runs` | ★ 自动捕获的运行记录（`run_key` 唯一 = ComfyUI 的 `prompt_id`，`raw` 留一份 history 片段便于排查） |
 | `app_settings` | ★ 运行期设置 k/v（自动捕获配置、**AI 工具权限策略**都在这，App 与后端共用） |
 | `ai_providers` / `ai_models` | AI Provider 与模型目录（能力真源：输入模态 / 工具 / 思考档位与方言）；凭据**只存引用名**，值在 DPAPI 文件里 |
-| `ai_conversations` / `ai_messages` / `ai_message_parts` | 会话 / 消息 / **有序消息块**（text · reasoning · attachment · tool_call · tool_result，按 `ordinal` 无损恢复，工具卡就靠它渲染） |
+| `ai_conversations` / `ai_messages` / `ai_message_parts` | 会话 / 消息 / **有序消息块**（text · reasoning · attachment · tool_call · tool_result，按 `ordinal` 无损恢复，工具卡与附件缩略图就靠它渲染） |
+| `ai_attachments` | **AI 附件**（M3）：原件落 `storage/ai-attachments`、缩略图/视频预览帧落 `storage/ai-thumbs`；类型由签名判定，`status` 记 `ready / rejected / deleted`。**刻意不对 `ai_message_parts.attachment_id` 加外键**：附件是用户可删的临时对象，删掉后消息块还要能如实显示"这个附件不在了" |
 | `ai_runs` / `ai_run_events` | 每次 Run 的快照（Provider / 模型 / Skills digest / `promptVersion`，**不含密钥**）与统一事件流（单调 `seq`，可断线续传） |
 | `ai_tool_calls` | ★ 工具调用审计：`approval`（not_required / pending / approved / denied）与 `status` 分开记 —— **被用户拒绝的调用也留痕** |
 | `v_media_full` | 视图：产物 + 关联提示词 + 聚合标签名 |
@@ -930,10 +953,13 @@ pwsh -File scripts\server.ps1 test   # 后端 126 个用例
 | `test/ai_conversation_lifecycle_test.dart` | **会话生命周期**：已有干净空会话就复用（不再新建）、切页重建不会重复加载/新建、历史遗留的多条空壳只留最新一条、**打了一半的字切走再切回还在**、有草稿的空会话不会被顺手删掉。5 例 |
 | `test/model_list_scroll_test.dart` | **「AI 模型与凭据」69 个模型的长列表**：滚动范围（滑块长度）全程稳定、一趟只建视口附近的行、行高是常数、能力编辑弹窗改完点确定写回行并落库、点取消不留痕迹。4 例 |
 | `test/ai_thinking_off_test.dart` | **思考强度「关闭」档**：「关闭」永远可选且排在第一位（不要求模型声明 `off`）、没声明的思考档位仍然不给选、不支持推理的模型完全不给选、在聊天框选中「关闭」后创建 Run 的请求体里**不带** `reasoningEffort`。3 例 |
+| `test/ai_attachment_test.dart` | **附件（M3）的界面**：上传走真文件路径（`runAsync`）且只传一次、图片附件在托盘里显示 `/thumb` 缩略图、视频显示预览帧 + 播放角标、音频/文档落回文件图标、被准入拦下时说明原因并禁用发送、上传失败如实报错且不进托盘、部分成功时逐个列出失败原因、发送时带上 `attachmentIds` 且用户消息气泡里也能看到附件缩略图。6 例 |
+| `server/src/test/kotlin/.../protocol/AttachmentProtocolTest.kt` | **附件内联的协议契约（三家）**：OpenAI 的 `image_url` + `data:` URL（文本在前）、Anthropic 的 `{type:"image",source:{type:"base64"}}`（图在前文在后）、Responses 的 `input_image`；纯文本轮仍是字符串（最广兼容）；视频/音频/文档抛 `UnsupportedContentFailure` 而不是静默丢掉；工具轮与附件轮互不干扰。12 例 |
 
-### AI 工具循环 + Skills 的端到端验证
+### AI 工具循环 + Skills + 附件的端到端验证
 
-工具循环（模型要工具 → 后端按权限执行 → 结果喂回 → 再问一次）只有真跑一遍才盖得住。
+工具循环（模型要工具 → 后端按权限执行 → 结果喂回 → 再问一次）与附件内联
+（上传 → 缩略图 → 真的以 data URL 发进请求体 → 不支持的模型零上游请求）只有真跑一遍才盖得住。
 用一个**假的 OpenAI 流式网关**离线跑完整条链路，不需要真 API Key、不花钱：
 
 ```powershell
@@ -941,7 +967,10 @@ pwsh -File scripts\e2e-ai-tools-test.ps1
 # 注册 skill 落盘 → 按需 load_skill → 越界写被 PATH_DENIED 拒绝 → comfyui 内写成功
 # → comfy_sync_history 等批准才执行 → 只读工具免审批 → 落库 parts 有序
 # → remember 落盘 + 下一轮 Run 的系统提示里确实带上了这条记忆
-# 58 项检查；跑完自动删掉测试用的会话 / Provider / skill / 临时文件（并把长期记忆恢复原样）；
+# → 附件：上传（签名判定）→ 缩略图 200 → 谎报类型被拒 → 预检放行
+#   → 上游请求里确实带 data:image/png;base64 的图片块 → 落库带 attachment 有序块
+#   → 换成纯文本模型再发同一个附件：400 UNSUPPORTED_CONTENT 且**上游请求数为 0**
+# 71 项检查；跑完自动删掉测试用的会话 / Provider / skill / 附件 / 临时文件（并把长期记忆恢复原样）；
 # 加 -KeepData 保留
 ```
 

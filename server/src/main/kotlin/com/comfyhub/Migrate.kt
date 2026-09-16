@@ -278,6 +278,31 @@ object Migrate {
         changed += addColumn(conn, "ai_models", "thinking_format", "VARCHAR(16) NULL COMMENT '思考方言：openai/deepseek/qwen/openrouter/zai'")
         changed += addColumn(conn, "ai_runs", "reasoning_effort", "VARCHAR(16) NULL COMMENT '本次 Run 实际使用的思考强度'")
 
+        // --- AI 附件（M3）：上传的原件 + 缩略图/预览帧。
+        // 刻意**不**对 ai_message_parts.attachment_id 加外键：附件是用户可删的临时对象，
+        // 删掉之后消息块还要能如实显示"这个附件已经不在了"，而不是被级联删掉半条消息。
+        changed += createTable(
+            conn, "ai_attachments",
+            """
+            CREATE TABLE IF NOT EXISTS ai_attachments (
+              id            CHAR(36)     NOT NULL,
+              original_name VARCHAR(255) NOT NULL,
+              stored_name   VARCHAR(255) NOT NULL COMMENT 'storage/ai-attachments/<uuid>.<ext>',
+              kind          VARCHAR(16)  NOT NULL COMMENT 'image / video / audio / document / text',
+              mime_type     VARCHAR(128) NOT NULL,
+              size_bytes    BIGINT       NOT NULL DEFAULT 0,
+              width         INT          NULL,
+              height        INT          NULL,
+              sha256        CHAR(64)     NULL,
+              status        VARCHAR(16)  NOT NULL DEFAULT 'ready' COMMENT 'ready / rejected / deleted',
+              metadata_json JSON         NULL,
+              created_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+              PRIMARY KEY (id),
+              KEY idx_ai_attachments_created (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """.trimIndent()
+        )
+
         if (changed > 0) log.info("数据库结构已补齐（{} 项变更）", changed) else log.info("数据库结构已是最新")
         changed
     }

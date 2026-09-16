@@ -113,10 +113,14 @@ class AiWorkspaceStore extends ChangeNotifier {
         for (final e in list.whereType<Map>()) {
           final m = Map<String, dynamic>.from(e);
           out.add(AiAttachment(
+            // id 要一起存：草稿恢复出来的附件已经在后端了，重发时直接引用，不必再传一次
+            id: m['id']?.toString(),
             name: (m['name'] ?? '').toString(),
             modality: m['modality']?.toString(),
             mimeType: (m['mimeType'] ?? 'application/octet-stream').toString(),
             sizeBytes: (m['sizeBytes'] as num?)?.toInt() ?? 0,
+            width: (m['width'] as num?)?.toInt(),
+            height: (m['height'] as num?)?.toInt(),
           ));
         }
       }
@@ -179,6 +183,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   // --- 输入区 ---
   final List<AiAttachment> attachments = [];
 
+  /// 附件正在上传（M3）：期间禁止发送，托盘显示进度。
+  bool uploadingAttachments = false;
+
   /// 思考强度（AIH-056）：只有当前模型声明了可选档位时才有意义。
   AiReasoningEffort reasoningEffort = AiReasoningEffort.off;
 
@@ -198,7 +205,13 @@ class AiWorkspaceStore extends ChangeNotifier {
   String? notice;
 
   bool get hasProvider => selectedProvider != null;
-  bool get canSend => !sending && selectedModel != null && (preflight?.allowed ?? true);
+  bool get canSend =>
+      !sending &&
+      !uploadingAttachments &&
+      selectedModel != null &&
+      (preflight?.allowed ?? true) &&
+      // 还有没上传成功的附件时不给发：否则用户以为图发出去了，其实只发了文字
+      attachments.every((a) => a.hasId);
 
   // -----------------------------------------------------------------------
   //  Skills（M5 / AIH-037 ~ AIH-045）
@@ -685,9 +698,40 @@ class AiWorkspaceStore extends ChangeNotifier {
     refreshPreflight();
   }
 
+  /// 选好文件后先**上传到后端**再进托盘（M3）。
+  ///
+  /// 为什么要先上传：准入判定、严格类型识别、缩略图 / 视频预览帧都在后端做，
+  /// 前端只拿到一个 id 和客观事实，不把字节留在内存里。
+  /// 上传失败**如实报出来**（哪个文件、为什么），不是静默吞掉。
+  Future<void> attachFiles(List<({String name, String path})> files) async {
+    if (files.isEmpty) return;
+    uploadingAttachments = true;
+    error = null;
+    notice = null;
+    notifyListeners();
+    try {
+      final result = await _api.uploadAttachments(files);
+      attachments.addAll(result.items);
+      if (result.failed.isNotEmpty) {
+        notice = '有 ${result.failed.length} 个附件没能上传：${result.failedLabel}';
+      }
+      await _stashAttachments();
+      await refreshPreflight();
+    } catch (e) {
+      error = '附件上传失败：$e';
+    } finally {
+      uploadingAttachments = false;
+      notifyListeners();
+    }
+  }
+
   void removeAttachmentAt(int index) {
     if (index < 0 || index >= attachments.length) return;
-    attachments.removeAt(index);
+    final removed = attachments.removeAt(index);
+    // 顺手删掉后端那份：还没用进聊天记录的附件留着只会占盘。
+    // 已被聊天记录引用的会被后端拒绝（历史消息还要显示它的缩略图），这里忽略即可。
+    final id = removed.id;
+    if (id != null) unawaited(_api.deleteAttachment(id).catchError((_) {}));
     unawaited(_stashAttachments());
     refreshPreflight();
   }
@@ -700,6 +744,8 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   /// 预检由**后端**判定（AIH-029/030）；前端只展示结论，不自行放行。
+  ///
+  /// 已经有后端 id 的附件只发 id：后端以库里的事实为准（前端自称的 MIME / 模态只是线索）。
   Future<void> refreshPreflight() async {
     final p = selectedProvider;
     final m = selectedModel;
@@ -709,12 +755,34 @@ class AiWorkspaceStore extends ChangeNotifier {
       return;
     }
     try {
-      preflight = await _api.preflight(providerId: p.id, modelId: m.id, attachments: attachments);
+      final ids = attachments.map((a) => a.id).whereType<String>().toList();
+      preflight = await _api.preflight(
+        providerId: p.id,
+        modelId: m.id,
+        attachments: ids.length == attachments.length ? const [] : attachments,
+        attachmentIds: ids,
+      );
     } catch (e) {
       preflight = AiPreflightResult(allowed: false, blockers: ['预检请求失败：$e']);
     }
     notifyListeners();
   }
+
+  /// 有些文件拿不到本地路径（file_picker 偶发）：如实告诉用户，
+  /// 而不是"选了却什么都没发生"。
+  void noteAttachmentsUnreadable(List<String> names) {
+    if (names.isEmpty) return;
+    notice = '这些文件读不到本地路径，已跳过：${names.join('、')}';
+    notifyListeners();
+  }
+
+  /// 某个附件在当前模型下的缩略图 / 预览帧地址（界面用）。
+  String? thumbUrlFor(String? attachmentId) =>
+      attachmentId == null || attachmentId.isEmpty ? null : _api.attachmentThumbUrl(attachmentId);
+
+  /// 原件的地址（点开看大图 / 播视频）。
+  String? fileUrlFor(String? attachmentId) =>
+      attachmentId == null || attachmentId.isEmpty ? null : _api.attachmentFileUrl(attachmentId);
 
   // -----------------------------------------------------------------------
   //  发送
@@ -729,6 +797,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     if (sending) return;
     final body = text.trim();
     if (body.isEmpty && attachments.isEmpty) return;
+    if (uploadingAttachments) return; // 还在上传：等它落地再发，免得发出半截
     if (!(preflight?.allowed ?? true)) {
       notice = '有附件未通过准入，已阻断发送：${preflight!.blockers.join('；')}';
       notifyListeners();
@@ -738,6 +807,13 @@ class AiWorkspaceStore extends ChangeNotifier {
     final model = selectedModel;
     if (provider == null || model == null) {
       error = '请先选择 Provider 与模型（设置 → AI 模型）';
+      notifyListeners();
+      return;
+    }
+    // 上传失败的附件没有 id：直接说清楚，不要发出去才发现漏了东西
+    final ids = attachments.map((a) => a.id).whereType<String>().toList();
+    if (ids.length != attachments.length) {
+      notice = '有附件还没上传成功，已阻断发送；请移除它们或重新选择文件。';
       notifyListeners();
       return;
     }
@@ -768,13 +844,15 @@ class AiWorkspaceStore extends ChangeNotifier {
         providerId: provider.id,
         modelId: model.id,
         reasoningEffort: effort,
+        attachmentIds: ids,
       );
       _activeRunId = start.runId;
       // 记下"助手消息 → Run"的关联：失败后的「重试」要把它作为 retryOfRunId 带回去（AIH-024）。
       // 在请求返回时就记，而不是等 `run.started` 事件 —— 后者在流中断时根本收不到。
       _runIds[start.assistantMessageId] = start.runId;
 
-      // 乐观插入：用户消息 + 空的助手流式消息，收到 delta 就地增长
+      // 乐观插入：用户消息 + 空的助手流式消息，收到 delta 就地增长。
+      // 用户消息也带上 attachment 块：气泡里立刻就能看到缩略图，不用等重新拉历史。
       messages = [
         ...messages,
         AiMessage(
@@ -784,6 +862,11 @@ class AiWorkspaceStore extends ChangeNotifier {
           role: 'user',
           status: 'complete',
           text: body,
+          parts: [
+            if (body.isNotEmpty) AiMessagePart(type: 'text', text: body),
+            for (final a in attachments)
+              AiMessagePart(type: 'attachment', text: a.name, attachmentId: a.id),
+          ],
         ),
         AiMessage(
           id: start.assistantMessageId,

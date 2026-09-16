@@ -304,6 +304,29 @@ CREATE TABLE IF NOT EXISTS ai_message_parts (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
+-- AI 附件（M3 / AIH-027 ~ AIH-031）
+-- 原件在 storage/ai-attachments，缩略图 / 视频预览帧在 storage/ai-thumbs
+-- 刻意不对 ai_message_parts.attachment_id 加外键：附件可被用户删除，
+-- 删掉之后消息块仍要能如实显示"这个附件已经不在了"
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_attachments (
+  id            CHAR(36)     NOT NULL,
+  original_name VARCHAR(255) NOT NULL,
+  stored_name   VARCHAR(255) NOT NULL COMMENT 'storage/ai-attachments/<uuid>.<ext>',
+  kind          VARCHAR(16)  NOT NULL COMMENT 'image / video / audio / document / text',
+  mime_type     VARCHAR(128) NOT NULL,
+  size_bytes    BIGINT       NOT NULL DEFAULT 0,
+  width         INT          NULL,
+  height        INT          NULL,
+  sha256        CHAR(64)     NULL,
+  status        VARCHAR(16)  NOT NULL DEFAULT 'ready' COMMENT 'ready / rejected / deleted',
+  metadata_json JSON         NULL,
+  created_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_ai_attachments_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
 -- AI Run 与事件（M2 / AIH-020 ~ AIH-024）
 -- Run 是独立实体：POST 只创建（202），执行在后台，事件带单调 seq 供断线续传
 -- ---------------------------------------------------------------------

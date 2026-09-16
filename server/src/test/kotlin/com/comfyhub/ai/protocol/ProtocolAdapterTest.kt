@@ -301,16 +301,28 @@ class ProtocolAdapterTest {
     fun `openai-responses 已实现：进入 supported 名单`() {
         assertTrue(Adapters.supported().contains(AiApiRef.OPENAI_RESPONSES))
         assertTrue(Adapters.supported().contains(AiApiRef.OPENAI_COMPLETIONS))
-        // M4 起三种协议都支持工具调用，版本号升到 /2
-        assertEquals("openai-responses/2", Adapters.of(AiApiRef.OPENAI_RESPONSES)!!.adapterVersion)
+        // M4 三种协议都支持工具调用（/2），M3 起三种协议都支持图片内联（/3）
+        assertEquals("openai-responses/3", Adapters.of(AiApiRef.OPENAI_RESPONSES)!!.adapterVersion)
     }
 
     @Test
-    fun `文本适配器不声明任何附件传输方式 预检据此阻断`() {
-        assertTrue(openai.transports.isEmpty())
-        assertTrue(anthropic.transports.isEmpty())
-        assertTrue(Adapters.of(AiApiRef.OPENAI_COMPLETIONS) != null)
+    fun `三种协议都只声明了图片内联 视频音频文档仍然阻断`() {
+        listOf(
+            AiApiRef.OPENAI_COMPLETIONS,
+            AiApiRef.ANTHROPIC_MESSAGES,
+            AiApiRef.OPENAI_RESPONSES,
+        ).forEach { api ->
+            val adapter = Adapters.of(api)!!
+            val image = adapter.attachmentTransports[AttachmentKindRef.IMAGE].orEmpty()
+            assertEquals(setOf(TransportRef.INLINE_BASE64), image, "$api 的图片内联")
+            // 视频 / 音频 / 文档：首期**一个都没实现**，预检据此阻断（不做不透明的抽帧降级）
+            listOf(AttachmentKindRef.VIDEO, AttachmentKindRef.AUDIO, AttachmentKindRef.DOCUMENT).forEach { kind ->
+                assertTrue(
+                    adapter.attachmentTransports[kind].orEmpty().isEmpty(),
+                    "$api 不应该声称实现了 ${kind.wire}",
+                )
+            }
+        }
         assertNull(AiApiRef.parse("nope"), "未知协议不能被解析成任何适配器")
-        assertTrue(Adapters.of(AiApiRef.OPENAI_COMPLETIONS) != null)
     }
 }

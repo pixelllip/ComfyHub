@@ -502,7 +502,21 @@ object StrictIntake {
     }
 }
 
-object AttachmentPolicy {    /** 模型声明 + 适配器实现 + MIME 白名单 + 大小/数量/像素预算，全部满足才放行。 */
+object AttachmentPolicy {
+    /**
+     * 内联 base64 的原始字节上限（与 `AiAttachmentStore.MAX_INLINE_BYTES` 同一个口径）。
+     *
+     * base64 会把体积放大 1/3，各网关的请求体上限普遍在 20MB 量级，所以超过这个体积的图片
+     * **不发**，让用户先压缩 —— 而不是发出去被网关 413。
+     */
+    const val MAX_INLINE_BYTES: Long = 8L * 1024 * 1024
+
+    /**
+     * 模型声明 + 适配器实现 + MIME 白名单 + 大小/数量/像素预算，全部满足才放行。
+     *
+     * @param adapterTransports **该模态**在这个协议适配器上真的实现了的传输方式
+     *   （`AdapterCapabilities.transportsFor(api, modality)`）。
+     */
     fun evaluate(
         model: AiModelDto,
         attachment: AttachmentFact,
@@ -521,14 +535,22 @@ object AttachmentPolicy {    /** 模型声明 + 适配器实现 + MIME 白名单
             blockers += "模型 ${model.displayName} 未声明支持${modality.label()}输入"
         }
 
-        val transports = model.attachmentTransports[modality.wire].orEmpty()
+        // 传输方式是**协议**的属性，模型声明的是"能不能吃这种输入"。
+        // 模型显式声明了就用它的（与适配器的交集），没声明就用适配器实现的那种 ——
+        // 否则内置目录里那 69 个模型（只声明模态、不声明传输）永远发不出图片。
+        val declared = model.attachmentTransports[modality.wire].orEmpty()
             .mapNotNull { Transport.parse(it) }
             .toSet()
-        val usable = transports.intersect(adapterTransports)
-        if (transports.isEmpty()) {
-            blockers += "模型未声明${modality.label()}的传输方式"
-        } else if (usable.isEmpty()) {
-            blockers += "${modality.label()}的传输方式（${transports.joinToString { it.wire }}）当前协议适配器尚未实现"
+        val usable = if (declared.isEmpty()) adapterTransports else declared.intersect(adapterTransports)
+        if (usable.isEmpty()) {
+            blockers += if (declared.isEmpty()) {
+                "${modality.label()}的传输方式当前协议适配器尚未实现"
+            } else {
+                "${modality.label()}的传输方式（${declared.joinToString { it.wire }}）当前协议适配器尚未实现"
+            }
+        } else if (Transport.INLINE_BASE64 in usable && attachment.sizeBytes > MAX_INLINE_BYTES) {
+            blockers += "文件 ${attachment.name} 超过内联发送上限（${MAX_INLINE_BYTES / 1024 / 1024} MB），" +
+                "请先压缩或换一张更小的图"
         }
 
         val maxBytes = model.maxAttachmentBytes
@@ -562,5 +584,32 @@ object AttachmentPolicy {    /** 模型声明 + 适配器实现 + MIME 白名单
         Modality.VIDEO -> "视频"
         Modality.AUDIO -> "音频"
         Modality.DOCUMENT -> "文档"
+    }
+}
+
+/**
+ * 一次请求里"哪些附件真的发出去"的判定（M3，纯函数便于单测）。
+ *
+ * 一次对话可能累积好几张历史图片，而请求体不能无限大：超过预算的那些**不发**，
+ * 但调用方必须把它们变成一条**明确的说明**（"这张图没随本次请求发送"），
+ * 而不是静默消失 —— AIH-030 要防的就是"看起来发出去了、其实没有"。
+ *
+ * 这是"贪心 + 保序"：从最新到最旧由调用方决定顺序，装不下就跳过、继续试后面的小图。
+ */
+object InlineBudget {
+    /** 单次请求内联附件的原始字节总预算（base64 后约 ×1.33）。 */
+    const val MAX_TOTAL_BYTES: Long = 20L * 1024 * 1024
+
+    fun plan(
+        sizes: List<Long>,
+        maxTotal: Long = MAX_TOTAL_BYTES,
+        maxSingle: Long = AttachmentPolicy.MAX_INLINE_BYTES,
+    ): List<Boolean> {
+        var total = 0L
+        return sizes.map { size ->
+            val ok = size in 1..maxSingle && total + size <= maxTotal
+            if (ok) total += size
+            ok
+        }
     }
 }

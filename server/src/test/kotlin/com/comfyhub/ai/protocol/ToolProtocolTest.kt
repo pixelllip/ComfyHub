@@ -423,10 +423,11 @@ class ToolProtocolTest {
     // --- 版本号 -------------------------------------------------------------
 
     @Test
-    fun `三种协议的适配器都升到 2 且都在 supported 名单里`() {
-        assertEquals("openai-completions/2", openai.adapterVersion)
-        assertEquals("anthropic-messages/2", anthropic.adapterVersion)
-        assertEquals("openai-responses/2", responses.adapterVersion)
+    fun `三种协议的适配器都升到 3 且都在 supported 名单里`() {
+        // /2 = 工具循环（M4），/3 = 图片附件内联（M3）；版本号只在序列化行为变化时才动
+        assertEquals("openai-completions/3", openai.adapterVersion)
+        assertEquals("anthropic-messages/3", anthropic.adapterVersion)
+        assertEquals("openai-responses/3", responses.adapterVersion)
         assertEquals(
             setOf(AiApiRef.OPENAI_COMPLETIONS, AiApiRef.ANTHROPIC_MESSAGES, AiApiRef.OPENAI_RESPONSES),
             Adapters.supported().toSet(),

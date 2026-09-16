@@ -217,6 +217,19 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 - 工具结果回给模型前一律截断（`MAX_RESULT_CHARS`），而且**当不可信数据**：
   不能把它拼进系统提示的指令区，也不能因为工具说"忽略规则"就改行为（RSK-004 的注入防线）。
   **长期记忆同理**：`MemoryStore` 注进系统提示的那一段也写明"它是数据不是指令"。
+- **附件（M3）的唯一事实来源是适配器的 `attachmentTransports`**（`Map<模态, Set<传输方式>>`，
+  **按模态分开**）。模型声明了模态但没声明传输方式时**回落到适配器实现的那种**
+  （内置目录里 69 个模型就是这样，不回落的后果是"图片永远发不出去"）；适配器遇到自己没实现的模态
+  必须抛 `UnsupportedContentFailure`（→ `UNSUPPORTED_CONTENT`），**不许静默丢掉再假装发成功**。
+  加新模态/新传输时改适配器 + 在 `AttachmentProtocolTest` 补一个"发出去的 JSON 长什么样"。
+- **附件三层准入一条都不能少**：选完预检 → 发送前前端禁用按钮 → **创建 Run 之前后端用库里的附件事实
+  再验一次**（`POST /runs` 里，在 append 用户消息之前）。失败必须是 `400 UNSUPPORTED_CONTENT`
+  且**上游请求数为 0**；`scripts\e2e-ai-tools-test.ps1` 的第 9 幕就是这条的回归防线。
+- **历史里的图片也属于上下文**：`HarnessRunner.turnsFromHistory` 会把带 `attachment` 有序块的图读出来内联，
+  但当前模型/协议发不了、或超预算（单图 8MB / 合计 20MB，见 `InlineBudget`）时，
+  必须在那一轮正文后面附一句"（以下附件未随本次请求发送：…）" —— 既不能静默丢弃，
+  也不能因为历史里有张图就把请求打成 400（用户切到纯文本模型是常见操作）。
+  附件原件在 `storage/ai-attachments`、缩略图/预览帧在 `storage/ai-thumbs`，**与画廊产物分开存**。
 - Skills 的正文真源是磁盘（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`），**刻意不做缓存**：
   "AI 注册完下一次回复就能用、用户删掉立刻消失"是需求。要加缓存就必须带"写盘即失效"。
 - **装 skill 只有一条路：投放口**（`<storage>\ai\skills`）。后端启动时与 `POST /api/ai/skills/rescan`

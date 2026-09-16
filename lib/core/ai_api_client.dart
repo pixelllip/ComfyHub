@@ -199,17 +199,58 @@ class AiApiClient {
       AiBuiltinCatalogStatus.fromJson(Map<String, dynamic>.from(
           await _send('POST', '/api/ai/builtin/sync', {'mode': mode}) as Map));
 
+  // --- 附件（M3） --------------------------------------------------------
+
+  /// 上传附件（multipart，字段名 `files`）。
+  ///
+  /// 传的是**磁盘路径**而不是字节：桌面端 `file_picker` 给的就是路径，
+  /// 让 `http` 直接流式读文件，避免把几十 MB 读进 Dart 堆。
+  /// 类型由后端按签名判定（AIH-027）：认不出来会被拒，错误消息原样带回界面。
+  Future<AiAttachmentUploadResult> uploadAttachments(
+    List<({String name, String path})> files,
+  ) async {
+    final req = http.MultipartRequest('POST', _uri('/api/ai/attachments'));
+    for (final f in files) {
+      req.files.add(await http.MultipartFile.fromPath('files', f.path, filename: f.name));
+    }
+    final streamed = await _client.send(req);
+    final res = await http.Response.fromStream(streamed);
+    return AiAttachmentUploadResult.fromJson(
+        Map<String, dynamic>.from(_decode(res) as Map));
+  }
+
+  /// 缩略图 / 视频预览帧（**同一张接口**）：图片给缩略图，视频给第一帧预览图。
+  /// 没有可看的图时后端回 204，界面要退化成文件图标（用 `errorBuilder`）。
+  String attachmentThumbUrl(String attachmentId) =>
+      '$baseUrl/api/ai/attachments/$attachmentId/thumb';
+
+  /// 原件（点开看大图 / 播视频）。
+  String attachmentFileUrl(String attachmentId) =>
+      '$baseUrl/api/ai/attachments/$attachmentId/file';
+
+  /// 删除还没用进聊天记录的附件（已被引用的会报错，调用方可以忽略）。
+  Future<void> deleteAttachment(String attachmentId) async =>
+      _send('DELETE', '/api/ai/attachments/$attachmentId');
+
   // --- 附件预检 ----------------------------------------------------------
 
+  /// 准入预检（**纯计算**，不产生上游请求）。
+  ///
+  /// 有新式 `attachmentIds` 就只发它 —— 后端以**库里的事实**为准，前端声明只是线索；
+  /// 老式 `attachments`（只有名字 / MIME / 文件头）保留给直接构造附件的场景。
   Future<AiPreflightResult> preflight({
     required String providerId,
     required String modelId,
-    required List<AiAttachment> attachments,
+    List<AiAttachment> attachments = const [],
+    List<String> attachmentIds = const [],
   }) async =>
       AiPreflightResult.fromJson(Map<String, dynamic>.from(await _send('POST', '/api/ai/preflight', {
         'providerId': providerId,
         'modelId': modelId,
-        'attachments': attachments.map((a) => a.toJson()).toList(),
+        if (attachmentIds.isNotEmpty)
+          'attachmentIds': attachmentIds
+        else
+          'attachments': attachments.map((a) => a.toJson()).toList(),
       }) as Map));
 
   // --- 会话与消息 --------------------------------------------------------
@@ -261,12 +302,16 @@ class AiApiClient {
   ///
   /// [reasoningEffort] 是思考强度（AIH-056）：`off/low/medium/high/max`，
   /// 后端会按模型目录复核——模型没声明推理能力就直接拒绝，不会悄悄忽略。
+  ///
+  /// [attachmentIds] 是这次要发给模型的附件（M3）：**准入判定在创建 Run 之前完成**，
+  /// 不通过会直接 400，不会产生任何上游请求（AIH-030）。
   Future<AiRunStart> startRun(
     String conversationId, {
     required String text,
     required String providerId,
     required String modelId,
     String? reasoningEffort,
+    List<String> attachmentIds = const [],
     String? retryOfRunId,
   }) async =>
       AiRunStart.fromJson(Map<String, dynamic>.from(
@@ -275,6 +320,7 @@ class AiApiClient {
         'providerId': providerId,
         'modelId': modelId,
         'reasoningEffort': ?reasoningEffort,
+        if (attachmentIds.isNotEmpty) 'attachmentIds': attachmentIds,
         'retryOfRunId': ?retryOfRunId,
       }) as Map));
 

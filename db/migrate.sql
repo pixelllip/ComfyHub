@@ -265,3 +265,24 @@ CREATE TABLE IF NOT EXISTS ai_tool_calls (
   CONSTRAINT fk_ai_tool_run FOREIGN KEY (run_id)
     REFERENCES ai_runs (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- AI 附件（M3 / AIH-027 ~ AIH-031）
+-- 原件在 storage/ai-attachments，缩略图 / 视频预览帧在 storage/ai-thumbs
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_attachments (
+  id            CHAR(36)     NOT NULL,
+  original_name VARCHAR(255) NOT NULL,
+  stored_name   VARCHAR(255) NOT NULL COMMENT 'storage/ai-attachments/<uuid>.<ext>',
+  kind          VARCHAR(16)  NOT NULL COMMENT 'image / video / audio / document / text',
+  mime_type     VARCHAR(128) NOT NULL,
+  size_bytes    BIGINT       NOT NULL DEFAULT 0,
+  width         INT          NULL,
+  height        INT          NULL,
+  sha256        CHAR(64)     NULL,
+  status        VARCHAR(16)  NOT NULL DEFAULT 'ready' COMMENT 'ready / rejected / deleted',
+  metadata_json JSON         NULL,
+  created_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_ai_attachments_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

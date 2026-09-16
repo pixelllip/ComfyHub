@@ -844,26 +844,58 @@ class AiBuiltinCatalogStatus {
   String get divergenceLabel => '有 $divergentCount 个模型的能力声明与内置目录不同';
 }
 
-/// 附件（AIH-029）：准入结论由后端 preflight 给出，前端不自行放行。
+/// 附件（AIH-029 / M3）：准入结论由后端 preflight 给出，前端不自行放行。
+///
+/// 上传成功后后端会返回 `id`：界面靠它取**缩略图 / 视频预览帧**
+/// （`GET /api/ai/attachments/{id}/thumb`），发送时也只传 id —— 文件在后端手里，
+/// 前端不再需要把字节读进内存。
 class AiAttachment {
+  /// 后端附件 id；还没上传成功时为 null（本地占位 / 老用例直接构造）
+  final String? id;
   final String name;
+
+  /// image / video / audio / document / text（真源是后端的签名判定，AIH-027）
   final String? modality;
   final String mimeType;
   final int sizeBytes;
 
+  /// 图片像素尺寸（后端探测；非图片为 null）
+  final int? width;
+  final int? height;
+
   const AiAttachment({
+    this.id,
     required this.name,
     required this.modality,
     required this.mimeType,
     required this.sizeBytes,
+    this.width,
+    this.height,
   });
 
+  /// 后端 `AiAttachmentDto` → 前端模型。
+  factory AiAttachment.fromJson(Map<String, dynamic> json) => AiAttachment(
+        id: json['id']?.toString(),
+        name: (json['name'] ?? '附件').toString(),
+        modality: json['modality']?.toString(),
+        mimeType: (json['mimeType'] ?? 'application/octet-stream').toString(),
+        sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
+        width: (json['width'] as num?)?.toInt(),
+        height: (json['height'] as num?)?.toInt(),
+      );
+
+  /// 预检用的"线索"（后端有 id 时以库里的判定为准，这里只是兼容老路径与草稿存储）
   Map<String, dynamic> toJson() => {
+        if (id != null) 'id': id,
         'name': name,
         if (modality != null) 'modality': modality,
         'mimeType': mimeType,
         'sizeBytes': sizeBytes,
       };
+
+  bool get isImage => modality == 'image';
+  bool get isVideo => modality == 'video';
+  bool get hasId => id != null && id!.isNotEmpty;
 
   String get sizeLabel {
     if (sizeBytes < 1024) return '$sizeBytes B';
@@ -872,19 +904,83 @@ class AiAttachment {
   }
 }
 
+/// 一次附件上传的结果：成功的 + 逐个失败的原因（不静默丢弃）。
+class AiAttachmentUploadResult {
+  final List<AiAttachment> items;
+  final List<({String fileName, String reason})> failed;
+
+  const AiAttachmentUploadResult({this.items = const [], this.failed = const []});
+
+  factory AiAttachmentUploadResult.fromJson(Map<String, dynamic> json) => AiAttachmentUploadResult(
+        items: (json['items'] as List?)
+                ?.whereType<Map>()
+                .map((e) => AiAttachment.fromJson(Map<String, dynamic>.from(e)))
+                .toList() ??
+            const [],
+        failed: (json['failed'] as List?)
+                ?.whereType<Map>()
+                .map((e) => (
+                      fileName: (e['fileName'] ?? '附件').toString(),
+                      reason: (e['reason'] ?? '上传失败').toString(),
+                    ))
+                .toList() ??
+            const [],
+      );
+
+  String get failedLabel =>
+      failed.map((f) => '${f.fileName}：${f.reason}').join('；');
+}
+
+/// 单个附件的准入结论：界面用它给对应的缩略图打红框 / 悬浮显示原因。
+class AiPreflightItem {
+  final int index;
+  final String name;
+  final bool allowed;
+  final List<String> blockers;
+  final String? attachmentId;
+
+  const AiPreflightItem({
+    required this.index,
+    required this.name,
+    required this.allowed,
+    this.blockers = const [],
+    this.attachmentId,
+  });
+
+  factory AiPreflightItem.fromJson(Map<String, dynamic> json) => AiPreflightItem(
+        index: (json['index'] as num?)?.toInt() ?? 0,
+        name: (json['name'] ?? '附件').toString(),
+        allowed: json['allowed'] == true,
+        blockers: (json['blockers'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        attachmentId: json['attachmentId']?.toString(),
+      );
+}
+
 /// 预检结果：`allowed=false` 时必须阻断发送，不能"先发再说"（AIH-030）。
 class AiPreflightResult {
   final bool allowed;
   final List<String> blockers;
 
-  const AiPreflightResult({required this.allowed, required this.blockers});
+  /// 逐个附件的结论（顺序与请求一致）：托盘里给被拦下的那张打标记
+  final List<AiPreflightItem> items;
+
+  const AiPreflightResult({required this.allowed, required this.blockers, this.items = const []});
 
   static const allow = AiPreflightResult(allowed: true, blockers: []);
 
   factory AiPreflightResult.fromJson(Map<String, dynamic> json) => AiPreflightResult(
         allowed: json['allowed'] == true,
         blockers: (json['blockers'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        items: (json['items'] as List?)
+                ?.whereType<Map>()
+                .map((e) => AiPreflightItem.fromJson(Map<String, dynamic>.from(e)))
+                .toList() ??
+            const [],
       );
+
+  /// 第 [index] 个附件被拦下的原因（空列表 = 没问题）。
+  List<String> blockersAt(int index) =>
+      items.where((it) => it.index == index).expand((it) => it.blockers).toList();
 }
 
 // ---------------------------------------------------------------------------

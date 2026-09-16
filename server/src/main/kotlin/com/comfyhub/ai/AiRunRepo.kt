@@ -48,6 +48,11 @@ data class AiRunStartRequest(
     val modelId: String,
     /** 思考强度：off / low / medium / high / max；缺省按 `off`（AIH-056） */
     val reasoningEffort: String? = null,
+    /**
+     * 要随这次提问一起发给模型的附件 id（M3）。**准入判定在创建 Run 之前完成**：
+     * 任何一个附件不通过就直接 400，不会产生上游请求（AIH-030）。
+     */
+    val attachmentIds: List<String> = emptyList(),
     /** 继续同一条消息的重试时带上（AIH-024） */
     val retryOfRunId: String? = null,
 )
