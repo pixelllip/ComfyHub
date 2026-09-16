@@ -210,3 +210,14 @@
 - 默认监听已改为回环；如果要用 Android 客户端连本机后端，需要显式 `COMFYHUB_ALLOW_REMOTE=1` 并自行加认证（AIH-016、AIK-003）。
 - 思考强度**不要加"模型 ID 猜档位"的回退**：目录没声明就不给选（AIH-011 同一条原则）。
   设置页模型卡片的 `_copy` 是唯一复制入口，加字段时务必带上，否则切换某个徽标会把别的声明悄悄抹掉。
+- **空会话清理与输入草稿是一对**：`AiWorkspaceStore._cleanupEmptyConversation()` 只删"没有消息
+  **且** `attachments` 为空"的会话；输入框文字另外按会话存在本地（`saveDraft` / `loadDraft`），
+  所以"打了一半切走"不会丢字。改这几处时三个条件要一起看，别只顾删会话。
+- **别把"列表接口 404"当成鉴权失败**：`AiUpstream` 里 `/models` 的 404 是
+  `MODEL_LIST_UNAVAILABLE`（端点不提供列表，连接本身是好的），401/403 才是 Key 的问题，
+  而且此时**不再回退第二个地址** —— 否则会把"Key 不对"掩盖成"地址不对"。
+- **列表页的页码要能收敛**：批量删除后当前页可能已经不存在，后端对越界页码返回空 items。
+  `LibraryStore.refreshMedia/refreshPrompts` 已经内置"items 空但 total>0 → 回最后一页重取一次"，
+  新增列表/筛选逻辑时要沿用，否则会出现"删了几个却显示整个库空了"。
+- **长列表一律懒构建**：模型卡片、聊天气泡这类"一屏装不下"的列表用 `ListView.builder`，
+  别用 `children: [for (...) ...]`（首帧会建出全部条目）；流式刷新时给每项加 `RepaintBoundary`。

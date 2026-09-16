@@ -97,6 +97,11 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 - 开关行别直接用 `SwitchListTile(contentPadding: EdgeInsets.zero)` 贴卡片边缘：
   用 `settings_page.dart` 里的 `_SwitchRow`（自带内边距 + Material 底色，
   底色不能用 `Container` 的 decoration，否则会盖掉水波纹并触发断言）。
+- **长列表必须懒构建，别用 `children: [for (...) ...]`**：模型卡片（每张 6 个 FilterChip +
+  一个下拉框）、聊天气泡这类"一屏装不下"的列表一律 `ListView.builder`；流式刷新（聊天逐字回包）
+  时每项还要包 `RepaintBoundary`。这两条就是"滑动长列表卡顿"的解药，改列表时别退回去。
+- `ListView.builder` 的头部是**固定几条**（`header` 列表）；要按状态拼的用 `switch`/`if` 明确分支，
+  别把 `children` 拼回去——一旦拼回去，懒构建就失效了。
 
 ---
 
