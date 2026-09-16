@@ -1,19 +1,23 @@
 # AI 工作台实施进度（v0.1 实施记录）
 
 > 日期：2026-09-15 起，2026-09-16 追加（思考强度 + token 统计 / 用户清单收尾），
-> **2026-09-16 第二轮追加（工具循环 M4 + Skills M5 + 退出收尾 + 内置模型目录 + 长列表卡顿）**
+> **2026-09-16 第二轮追加（工具循环 M4 + Skills M5 + 退出收尾 + 内置模型目录 + 长列表卡顿）**，
+> **2026-09-16 第三轮追加（用户新清单 5 个 bug + 2 条建议：会话/草稿、滚动条、卡顿、Markdown 表格、
+> Skills 投放口、长期记忆 M6）**
 > 依据：`docs/ai-home-requirements-v0.1.xlsx`（需求清单 / 待确认决策 / 风险清单 / 里程碑）
 > 与 `docs/ai-home-implementation-plan-v0.1.md`（实施方案）
 > 已覆盖范围：**M0 安全前置 + M1（Provider / 模型 / 凭据）+ M2（Run / 统一 SSE / 三协议）
 > + 思考强度与 token 统计（AIH-056 / AIH-057）+ **M4 工具循环（AIH-033~036 / 046 / 049）
-> + M5 Skills（AIH-037~045）** + 用户清单 `docs/bug-and-suggestion-9.16.md` 全部条目**
+> + M5 Skills（AIH-037~045）** + **M6 长期记忆** + 用户清单 `docs/bug-and-suggestion-9.16.md` 全部条目**
 
 ## 0. 一句话现状
 
 **已经能用真实 Base URL + API Key 配对并流式对话**（OpenAI 兼容 / Anthropic / OpenAI Responses），
 可以在聊天框里直接切模型**和思考强度**、看到每轮消耗的 token；
-**助手现在会真的调工具**（查 ComfyUI / 在 ComfyUI 目录内读写文件 / 注册与加载 Skills，需要批准的工具会弹批准卡），
-**Skills 落盘、即时生效、右侧栏可删**；附件（图片等）仍然是"正确阻断"而不是能发（M3 未做）。
+**助手现在会真的调工具**（查 ComfyUI / 在 ComfyUI 目录内读写文件 / 注册与加载 Skills / 记长期记忆，
+需要批准的工具会弹批准卡），
+**Skills 落盘、即时生效、右侧栏可删，装 skill 就是把文件夹拷进"投放口"**，
+**长期记忆跨对话生效、用户随时能看能改**；附件（图片等）仍然是"正确阻断"而不是能发（M3 未做）。
 
 ## 1. 本轮完成的提交
 
@@ -35,6 +39,11 @@
 | `AI 工作台：冷启动新会话、空会话自清、草稿保留、记住上次模型、状态栏去「上下文」` | 见第 4.1 节 ④⑤⑥⑦ |
 | `未关联提示词标记 + 一键清除；新建 Provider 的凭据引用名默认全大写` | 见第 4.1 节 ⑧ 与 4.2 节 |
 | `连接测试 / 获取模型：/models 地址自动回退，404 不再被当成「Key 报错」` | 见 4.3 节（用户报的"填 API Key 报错"最可能的原因） |
+| `AI 工具循环（M4）+ Skills（M5）+ 退出收尾 + 内置模型目录 + 卡顿修复` | 见 4.6 节 |
+| `修两个会话 bug：开 App 冒出多条「新对话」+ 打了一半的字切走就没了` | 见 4.8 节 ①② |
+| `Markdown 渲染：表格支持 + 粗体里嵌行内代码不再吐出星号` | 见 4.8 节 ⑤ |
+| `AI 模型与凭据：69 个模型不再卡顿，滚动条滑块也不再越滚越短` | 见 4.8 节 ③④ |
+| `Skills 改成「投放口」+ 引入长期记忆（用户建议第 6、7 条）` | 见 4.8 节 ⑥⑦ |
 
 ## 2. 逐条对照需求
 
@@ -77,18 +86,23 @@
 | AIH-038 frontmatter 严格校验 | ✅ | name kebab-case 且与目录名一致、description 必填、正文上限；非法项**列出来带诊断**但不进提示、不能加载 |
 | AIH-039 只注入目录摘要 | ✅ | 系统提示只给名称 + 描述（截断 240 字）+ whenToUse |
 | AIH-040 `load_skill` 按需加载 | ✅ | 返回 `<skill_content>` 块；同一 Run 内重复调用直接报"已加载过" |
-| AIH-041/042 内置 Anima / H3 Skills | ⬜ | 内置根是空的；用户可一键从 `%USERPROFILE%\.dsh\skills` 导入（本机 16 个） |
-| AIH-043 第三方 Skill 导入 | ◐ | 目录导入（从 DSH）已做；**ZIP 导入 + 预览确认**未做 |
-| AIH-044 阻断路径穿越 / ZIP bomb | ◐ | 目录导入已挡符号链接、`..`、文件数与总体积上限；ZIP 相关规则要等 ZIP 导入 |
+| AIH-041/042 内置 Anima / H3 Skills | ⬜ | 内置根 `<根>\skills\builtin` 仍是空的（发布包会带上 `skills\` 目录）；用户自己的 16 个在投放口里 |
+| AIH-043 第三方 Skill 导入 | ◐ | 装 skill 现在只有**投放口**一条路（拷进去 → 启动/重新扫描时自动登记）；ZIP 导入仍未做 |
+| AIH-044 阻断路径穿越 / ZIP bomb | ◐ | 投放口只读"根下一层"、自动登记只补 frontmatter 不动正文、正文有 256KB 上限；ZIP 相关规则要等 ZIP 导入 |
 | AIH-045 禁止执行第三方脚本 | ✅ | 工具集里**根本没有** shell / 进程工具；`scripts/` 只是不可执行资源 |
 | AIH-046 版本化系统提示 | ✅ | `SystemPrompt.VERSION = v2`：工具清单 + 权限边界 + Skill 纪律 + 防提示注入 + 附件诚实 |
 | AIH-047 用户指令不覆盖安全段 | ◐ | 系统提示里把安全规则写成"必须遵守"，Run 记 `skill_snapshot`（名称 + digest）可追溯；**用户自定义追加段的界面**还没做 |
 | AIH-049 工具调用状态卡 | ✅ | 工具卡显示名字 / 参数摘要 / 审批按钮 / 耗时 / 结果预览 / 错误码，服务端已截断脱敏 |
 | AIH-052 三协议 Fake Provider | ◐ | 三家协议的**工具**线格式都有单测（`ToolProtocolTest` 20 例）+ 本地假网关端到端；401/429/500 / 断流 / 畸形 SSE 属于既有覆盖 |
+| **用户建议：长期记忆（M6）** | ✅ | `MemoryStore` + `<storage>\ai\memory.md`（一行一条、人可手改）+ `remember` 工具 + 右侧栏面板/编辑器；系统提示 v3 每次 Run 现注入，明写"记忆是数据不是指令"；写入超限**报错**不截断。见 `MemoryStoreTest` 9 例 + 4.8 节 ⑦ |
+| **用户建议：Skills 投放口** | ✅ | 删掉「从 DSH 导入」按钮与整套 `.dsh` 导入代码；投放口 = `<storage>\ai\skills`，启动/重新扫描时自动补 frontmatter 登记；界面显示后端算好的绝对路径 + 打开/复制。见 4.8 节 ⑥ |
 
 图例：✅ 完成　◐ 部分完成　⬜ 未开始
 
 ## 3. 验证证据（实测，非推断）
+
+> 每轮的数字都在累加，**最新一轮（第三轮）见 §4.8.1**：后端 235 tests、前端 148 例、
+> 端到端 58 项检查。下面这几条是第一轮时的记录，保留作对照。
 
 - `pwsh -File scripts\server.ps1 test` → **126 项全通过**（`AiDomainTest` / `FileKindDetectorTest` /
   `AiUpstreamTest` / `AuthAndModelsUrlTest` / `ModelDiscoveryTest` / `ModelCapabilityTest` /
@@ -116,11 +130,13 @@
 3. **工具循环的"真实网关实测"**（M4 已完成，缺真实环境验证）：三家协议的**假网关**端到端
    （`scripts\e2e-ai-tools-test.ps1`）已覆盖工具调用、审批、越界拒绝、注册/加载 Skill；
    但仍没用真实网关跑过一轮工具调用（不同网关对 `tools` / `tool_calls` 的方言差异最大）。
-4. **Skills 的第三方 ZIP 导入 + 预览确认**（AIH-043/044）：现在只有"从 DSH 目录导入"这一条路。
+4. **Skills 的第三方 ZIP 导入 + 预览确认**（AIH-043/044）：现在装 skill 只有"拷进投放口"这一条路
+   （ZIP 要用户自己解压后拷进去）。
 5. **内置 Anima / H3 Skills 正文**（AIH-041/042）：内置根 `<项目根>\skills\builtin` 目前是空的，
-   用户可以从 DSH 一键导入自带的 16 个；要把正文随项目分发需要单独确认许可。
+   用户自己的 16 个在投放口里（发布包会带上 `skills\` 目录，但正文能否随项目分发要单独确认许可）。
 6. **工具审批的"本次会话都允许"**：现在每次 `ask` 都要点一次批准。
-7. 事件表保留策略：`AiRunRepo.pruneEvents()` 已写好但还没接到定时任务。
+7. **长期记忆的进阶**：按类别分组 / 命中检索（现在是全量注入 + 截断）、"这条是谁写的"审计。
+8. 事件表保留策略：`AiRunRepo.pruneEvents()` 已写好但还没接到定时任务。
 
 ## 4.1 用户提的 bug / 建议清单（`docs/bug-and-suggestion-9.16.md`）对照
 
@@ -265,6 +281,35 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 > 判断依据是 `AiSeederPlanTest` 里的 `planSeed`/`capabilityDiffers`：只有"目录里有、库里也有、
 > 但能力字段不同"才算分歧，展示名、启用状态、附件上限这些属于用户地盘，永远不碰。
 
+### 4.8 第三轮：用户新清单（5 个 bug + 2 条建议，2026-09-16）
+
+用户当天又更新了 `docs/bug-and-suggestion-9.16.md`：5 个 bug + 2 条建议，**本轮全部做完**。
+
+| # | 用户报的 | 真正的根因 | 做法 / 证据 |
+| --- | --- | --- | --- |
+| ① | 打开 ComfyHub 会产生大于 1 条新对话 | `HomeShell` 每次切页都会**重建** `AiHomePage`（不是 IndexedStack），页面 `didChangeDependencies` 又无条件 `store.load()`，而 `load()` 里含"新建一条会话"；每次开 App 新增的那条空壳在关窗口时也没人清 | `AiWorkspaceStore.load()` 改成幂等（`_loaded` + `_loading` 去重，失败允许重试）；冷启动不再无条件新建：已经有"没有消息、也没有草稿"的空会话就直接用，历史遗留的多条空壳只留最新一条（`_startFreshConversation`） |
+| ② | 输入框内容切换对话后无法保存 | 切会话时先改 `_draftConversationId` 再 `_input.clear()`，`_onInputChanged` 于是用**空串**把新会话刚存好的草稿覆盖掉；另外"有草稿的空会话"会被当成空壳顺手指掉 | 页面加 `_applyingDraft` 屏蔽位 + `_setInputText()`（程序改字不触发草稿回调），取草稿用 epoch 防串台；`_cleanupEmptyConversation` 判定空壳时**连本地草稿一起看**；附件托盘也按会话归属（`_stashAttachments` / `_applyDraftAttachments`） |
+| ③ | 实用大列表快速滑动依旧卡顿 | 「AI 模型与凭据」每行是一张 6 个 FilterChip + 工具 chip + 思考强度编辑器的卡片，69 行全是一屏装不下的重组件 | 行改成**固定 64px**：只留显示名 + id + 能力图标 + 编辑/移除，能力编辑搬进 `_ModelEditorDialog`；列表换 `SliverFixedExtentList`，一趟只建视口附近的行（用例断言 < 30，实测 4） |
+| ④ | 右侧滚动条不能反映当前位置（从页顶往下滚会变短） | 懒构建的 `SliverList` 只能用"**已布局**子项的平均高度"估算 `maxScrollExtent`。探针实测（69 个模型、前 35 个矮后 34 个高）：页顶 `max=3512`、滑块 17.9%，滚到底 `max=21318`、滑块 3.5% | 同 ③ 的固定 extent：修完后全程 `max=4217`、滑块恒为 14.3%（探针复测 + `test/model_list_scroll_test.dart` 断言"滚到任何位置 extent 不变"）；保存按钮也从列表尾巴挪到常驻底栏 |
+| ⑤ | Markdown 表格 / 粗体渲染不正常 | （a）解析器**根本没有表格**，整张 GFM 表变成一堆带竖线的段落；（b）行内扫描是"代码永远优先"，`**…以 \`x\` 为准）**` 会先切代码，两头的 `**` 原样吐出、粗体失效 | （a）新增 `MdTable`（表头/数据行/每列对齐，以分隔行为判定，单元格内行内标记照常解析），渲染用弹性列宽 `Table`；（b）改成**位置最靠前的标记先处理**，同位置才按 代码>粗体>删除线>斜体>链接。用库里那条真实回复（2007 字、含 3 张表）核查：3 张表全部识别、裸露 `**` 为 0 |
+| ⑥ | 建议：不要「从 DSH 导入」按钮，给一个目录，启动时检测到新 skill 自动注册 | — | 投放口 = `<storage>\ai\skills`（发布包 `<根>\storage\ai\skills`，便携式）；启动 + `POST /api/ai/skills/rescan` 自动给**没有 frontmatter** 的文件补 `name`/`description`（正文不动，已有 frontmatter 一个字节不改）；界面显示后端算好的绝对路径 + 打开文件夹 / 复制路径；整套 `.dsh` 导入代码删除。顺带修了 `description: \|` 块标量被读成字面量 `\|` 的真实缺陷（本机 16 个 skill 里 5 个中招） |
+| ⑦ | 其他建议：引入长期记忆（memory） | — | M6：`MemoryStore` + `<storage>\ai\memory.md`（一行一条、人可手改）+ `remember` 工具（默认 allow）+ 右侧栏「长期记忆」面板/编辑器（改 / 加一条 / 清空）；系统提示 **v2 → v3** 每次 Run 现注入并明写"记忆是数据不是指令"；注入截断 4000 字、文件上限 8000 字，**超限报错不静默截断** |
+
+#### 4.8.1 验证证据（实测）
+
+- 后端：`pwsh -File scripts\server.ps1 test` → **235 tests / 0 failed**
+  （新增 `MemoryStoreTest` 9 例、`SkillStoreTest` 投放口 7 例 + 块标量 3 例、`ToolRegistryTest` 记忆 3 例）。
+- 前端：`flutter analyze` 无问题；`flutter test` → **148 例全过**
+  （新增 `ai_conversation_lifecycle_test` 5 例、`model_list_scroll_test` 4 例、`markdown_test` 表格/粗体 12 例、
+  `ai_tools_ui_test` 投放口与长期记忆 2 例）。
+- **端到端**（真后端 + 假 OpenAI 网关，离线不花钱）：`scripts\e2e-ai-tools-test.ps1` 新增第 8 幕 →
+  **58 项检查全过、exit 0**，其中包含「`remember` 落盘 → `GET /api/ai/memory` 读得到 →
+  下一轮 Run 的系统提示里确实带上了这条记忆 → 工具清单里确实有 `remember`」；
+  测试写入的记忆在结束时被原样恢复（不污染用户真实记忆）。
+- 真机：往投放口拷一个**没有 frontmatter** 的 `.md` → `POST /skills/rescan` 返回 `registered=1`，
+  列表里出现且描述取自正文第一行；同时 16 个已有 skill 的 frontmatter 未被改动。
+- 滚动条：`.run\scrollprobe_test.dart` 探针在修复前后各跑一次（数据见上表 ④）。
+
 ### 4.3 用户报的「OpenAI Responses 填 API Key 报错」（2026-09-16 第一轮）
 
 **无法实测**（用户暂时没有可用 Key），做了两件能确定的事：
@@ -356,9 +401,15 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 - 默认监听已改为回环；如果要用 Android 客户端连本机后端，需要显式 `COMFYHUB_ALLOW_REMOTE=1` 并自行加认证（AIH-016、AIK-003）。
 - 思考强度**不要加"模型 ID 猜档位"的回退**：目录没声明就不给选（AIH-011 同一条原则）。
   设置页模型卡片的 `_copy` 是唯一复制入口，加字段时务必带上，否则切换某个徽标会把别的声明悄悄抹掉。
-- **空会话清理与输入草稿是一对**：`AiWorkspaceStore._cleanupEmptyConversation()` 只删"没有消息
-  **且** `attachments` 为空"的会话；输入框文字另外按会话存在本地（`saveDraft` / `loadDraft`），
-  所以"打了一半切走"不会丢字。改这几处时三个条件要一起看，别只顾删会话。
+- **空会话清理与输入草稿是一对**：`AiWorkspaceStore._cleanupEmptyConversation()` 只在"没有消息、
+  `attachments` 为空、**且本地草稿也是空的**"时才删会话；输入框文字按会话存在本地
+  （`saveDraft` / `loadDraft`），附件托盘也按会话存（`_stashAttachments` / `_applyDraftAttachments`）。
+  页面侧还有一条不能破的规矩：**程序性地改输入框内容必须屏蔽草稿回调**（`_applyingDraft` +
+  `_setInputText`），否则"清空输入框"会被当成用户删光了字，把刚取回来的草稿覆盖成空串
+  —— 这就是用户报的"切走再切回字没了"的成因。回归：`test/ai_conversation_lifecycle_test.dart`。
+- **`AiWorkspaceStore.load()` 是幂等的**：`HomeShell` 每次切页都会重建页面，重跑加载流程就会
+  白送一条新会话（用户报的"打开就冒出好几条新对话"）。冷启动也不再无条件新建会话：
+  已有干净空会话就复用。改这段前先看 §4.8 的 ①。
 - **别把"列表接口 404"当成鉴权失败**：`AiUpstream` 里 `/models` 的 404 是
   `MODEL_LIST_UNAVAILABLE`（端点不提供列表，连接本身是好的），401/403 才是 Key 的问题，
   而且此时**不再回退第二个地址** —— 否则会把"Key 不对"掩盖成"地址不对"。
@@ -367,12 +418,20 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
   新增列表/筛选逻辑时要沿用，否则会出现"删了几个却显示整个库空了"。
 - **长列表一律懒构建**：模型卡片、聊天气泡这类"一屏装不下"的列表用 `ListView.builder`，
   别用 `children: [for (...) ...]`（首帧会建出全部条目）；流式刷新时给每项加 `RepaintBoundary`。
+  但**懒构建 + 高矮不一的条目 = 滚动条滑块会乱跳**（`maxScrollExtent` 是估算的）：
+  「AI 模型与凭据」那类列表要用 `SliverFixedExtentList(itemExtent: 常数)` + 编辑弹窗，
+  别让每行自己撑高（详见 AGENTS §6 与 `test/model_list_scroll_test.dart`）。
+- **Markdown 解析器是自研的**（`lib/widgets/markdown.dart`）：改行内规则时记住
+  **"位置最靠前的标记先处理"**，不能"代码永远优先"；块级规则要**流式安全**
+  （未闭合的围栏/标记按字面量显示，不吞内容）。表格以 GFM 的分隔行为判定，没有分隔行就是普通段落。
 - **缩略图必须给 `cacheWidth`**：`Image.network` 不带解码上限时会按原图尺寸解码，
   而 `/thumb` 在"生成失败"时会**回退原图**（4096² 就是 64MB）——画廊快速滑动卡顿的主因。
   规则与回归用例见 `lib/widgets/media_thumb.dart` 与 `test/scroll_perf_test.dart`。
   ⚠️ 顺带纠正一个常见误判：`SliverChildBuilderDelegate` 默认 `addRepaintBoundaries: true`，
   **网格里的每格本来就有 RepaintBoundary**，不用手加（真正该关的是 `addAutomaticKeepAlives`）。
-- **AI 工具 / Skills 的改动规矩见 `AGENTS.md` 第 10 节**（工具清单唯一真源、写入路径必须过
-  `ToolPolicy`、审批必须先 open 再 emit、Skills 不做缓存、改提示词必须 bump `SystemPrompt.VERSION`）。
+- **AI 工具 / Skills / 长期记忆的改动规矩见 `AGENTS.md` 第 10 节**（工具清单唯一真源、写入路径必须过
+  `ToolPolicy`、审批必须先 open 再 emit、Skills 不做缓存、投放口自动登记不许改已有 frontmatter、
+  记忆超限报错不许截断、改提示词必须 bump `SystemPrompt.VERSION`）。
 - **改 AI 相关接口后跑一次 `scripts\e2e-ai-tools-test.ps1`**：它是唯一能覆盖"工具循环 + 审批 +
-  权限拒绝 + 落库 parts"的端到端用例（假网关，离线、不花钱，49 项检查）。本轮三个真 bug 就是它抓出来的。
+  权限拒绝 + 落库 parts + 长期记忆注入"的端到端用例（假网关，离线、不花钱，58 项检查）。
+  第二轮三个真 bug、第三轮的记忆链路都是它抓出来/钉住的。

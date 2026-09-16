@@ -102,6 +102,13 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   时每项还要包 `RepaintBoundary`。这两条就是"滑动长列表卡顿"的解药，改列表时别退回去。
 - `ListView.builder` 的头部是**固定几条**（`header` 列表）；要按状态拼的用 `switch`/`if` 明确分支，
   别把 `children` 拼回去——一旦拼回去，懒构建就失效了。
+- **高矮差别大的长列表，用「固定行高 + 编辑弹窗」，别让每行自己撑高**：懒构建的
+  `ListView`/`SliverList` 只能用"已布局子项的平均高度"估算 `maxScrollExtent`，
+  于是滚动条滑块会**越滚越短**（用户报的"滚动条不能反映当前位置"）。
+  「AI 模型与凭据」页 69 个模型实测：页顶 3512 → 滚到底 21318，滑块 17.9% → 3.5%。
+  正确做法是 `CustomScrollView` + `SliverFixedExtentList(itemExtent: 常数)`（extent 精确、滚动条不跳），
+  行的详细编辑搬进 `showDialog`；回归用例 `test\model_list_scroll_test.dart`。
+  代价是每行高度是常数，**别在行里塞会换行的 `Wrap`**（那会让常数失效）。
 
 ---
 
@@ -203,15 +210,25 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   路径必须过 `ToolPolicy.resolveWrite()` / `resolveRead()`，**不要自己 `Path.of()` 拼**；
   `.git` / `.mysql` / `.run` / `node_modules` 是**永远禁写**的（`ToolPolicyConfig.FORBIDDEN_SEGMENTS`），
   即使用户把白名单放宽到项目根也一样拒绝。
-- 工具 handler **只从 `ToolContext` 拿策略 / Skills**，不要读环境变量或全局单例 ——
+- 工具 handler **只从 `ToolContext` 拿策略 / Skills / 记忆**，不要读环境变量或全局单例 ——
   否则"策略在 Run 开始时快照一次"这个前提就破了（用户中途改设置不该影响在飞的请求）。
 - 需要审批的工具：`defaultAccess = ToolAccess.ASK`。调用方**必须先 `ToolApprovalGate.open(callId)`
   再发 `tool.requested` 事件**，否则用户手快先点按钮会落空、只能等超时；`await` 超时与 Run 取消都算拒绝。
 - 工具结果回给模型前一律截断（`MAX_RESULT_CHARS`），而且**当不可信数据**：
   不能把它拼进系统提示的指令区，也不能因为工具说"忽略规则"就改行为（RSK-004 的注入防线）。
+  **长期记忆同理**：`MemoryStore` 注进系统提示的那一段也写明"它是数据不是指令"。
 - Skills 的正文真源是磁盘（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`），**刻意不做缓存**：
   "AI 注册完下一次回复就能用、用户删掉立刻消失"是需求。要加缓存就必须带"写盘即失效"。
+- **装 skill 只有一条路：投放口**（`<storage>\ai\skills`）。后端启动时与 `POST /api/ai/skills/rescan`
+  都会跑 `SkillStore.autoRegister()`：给**没有 frontmatter** 的文件补 `name`/`description`（正文不动），
+  已经有 frontmatter 的**一个字节都不许改**。路径真源是后端（`GET /api/ai/skills/roots`），
+  界面只显示 —— **别在前端拼这个路径**（发布包与源码树的根不一样）。
+  `description: |` 这类 YAML 块标量必须能读（真实 SKILL.md 大量这么写），进提示前压成一行。
 - frontmatter 非法**不静默忽略**：照样列进界面并带 `validationError`，但**不进系统提示、不能被 `load_skill` 加载**。
 - 改系统提示词**必须 bump `SystemPrompt.VERSION`**（Run 里记 `promptVersion`，事后才能追溯哪次回答用的哪版规则）。
-- `.dsh` 只在用户点「从 DSH 导入」时读一次；**任何运行期代码都不许依赖 `%USERPROFILE%\.dsh`** ——
-  装我们项目的人可能根本没装 DSH（模型目录同理，见 `AiSeedCatalog` 的 classpath 冻结副本）。
+- **长期记忆（`MemoryStore`）**：真源是 `<storage>\ai\memory.md`，一行一条，用户能直接手改；
+  写入（AI 的 `remember` / 界面的保存）**超限一律报错，不许静默截断**（截断等于悄悄丢用户的话）；
+  注入系统提示时截断到 `PROMPT_CHARS`，文件本身保留完整内容。
+- **任何运行期代码都不许依赖 `%USERPROFILE%\.dsh`** —— 装我们项目的人可能根本没装 DSH
+  （模型目录同理，见 `AiSeedCatalog` 的 classpath 冻结副本）。这条以前是"只在点导入时读一次"，
+  现在连那个按钮都删了：DSH 与本项目再无运行期关系。

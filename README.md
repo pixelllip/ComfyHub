@@ -14,7 +14,8 @@
 | **AI 工作台** | **App 默认落在这一页**（需求 `docs/ai-home-requirements-v0.1.xlsx`，DEC-001）。多轮对话 + 会话列表（重命名 / 归档 / 删除）；**每次冷启动都新建一条聊天记录**（历史仍在左侧列表），**切走时把一条消息都没有的空会话删掉**；**输入框内容按会话存草稿**，切走 / 关窗口都不会把打了一半的字丢掉；**记住上次用的 Provider / 模型 / 思考强度**，下次开 App 直接选回来。宽屏三栏（会话列表 / 对话 / ComfyUI 与模型能力），窄屏会话进抽屉、状态进底部 Sheet、输入区常驻；Composer 支持 Enter 发送、Shift+Enter 换行、输入法选词不误发、`/` 调出 Skills 目录、附件选择；模型选择器直接显示能力徽标（文本 / 图片 / 视频 / 音频 / 文档 / 工具）。助手回复按 **Markdown 渲染**（标题 / 列表 / 引用 / 围栏代码块 / 行内代码 / 粗斜体 / 删除线 / 可点链接，裸链接自动识别）；自研解析器是**流式安全**的 —— 模型吐到一半的 `**` 或未闭合代码围栏按字面量显示，不会吞内容。Provider 与模型目录在设置里配置，**API Key 只写不读**（见第 5 节） |
 | **自动启动** | App 一启动就自己把 **MySQL + 后端**拉起来（先探健康，不健康才启动；启动过程实时回显在启动页上），不用再手动开脚本；**全程不弹命令行窗口**（见 [12 节](#12-本机环境踩坑记录)最后几条）；关 App 时按设置停掉本地服务（正常关窗口走 `release`，被硬杀有守护进程兜底，见第 5 节脚本速查下面的说明） |
 | **AI 工具调用** | 助手会**真的动手**：查 ComfyUI 状态 / 按 runKey 查一次运行 / 触发一次历史同步（要用户批准）、在 **ComfyUI 目录内**读写文件（越界直接拒绝）。工具卡显示名字、参数摘要、状态（运行中 / 待批准 / 已完成 / 失败 / 已拒绝）、耗时与结果预览，可在卡片上点「批准 / 拒绝」；一次回复最多 8 轮工具、单 Run 有调用次数上限，到顶就逼模型用正文收尾（见 [docs/ai-tools-and-skills.md](docs/ai-tools-and-skills.md)） |
-| **AI Skills** | 磁盘上的 `SKILL.md` 就是真源：**跟 AI 说一句「把这个流程注册成 skill」它就用 `register_skill` 写到本机**，右侧栏立刻能看到、能删（内置的只读），**改动不用重启 App，下一次回复就生效**。系统提示只注入名称 + 描述，正文由 `load_skill` 按需加载；非法 frontmatter 会带诊断列出但不参与对话。可以一键从 `%USERPROFILE%\.dsh\skills` 导入已有 skills（只在点按钮时读一次，运行时绝不依赖 `.dsh`） |
+| **AI Skills** | 磁盘上的 `SKILL.md` 就是真源：**跟 AI 说一句「把这个流程注册成 skill」它就用 `register_skill` 写到本机**，右侧栏立刻能看到、能删（内置的只读），**改动不用重启 App，下一次回复就生效**。装 skill 的方式是**投放口**：把 skill 文件夹（或一个 `.md`）拷进右侧栏显示的那个目录（`<storage>\ai\skills`，源码树 / 发布包都由后端算好绝对路径，带「打开文件夹 / 复制路径」），**后端启动时自动登记** —— 没有 frontmatter 的文件会被补上 `name`（文件名 kebab-case）与 `description`（正文第一行），正文一字不改；应用开着时点一下刷新（重新扫描）即可，不用重启。系统提示只注入名称 + 描述（`description: \|` 这类多行块标量也能正确读取并压成一行），正文由 `load_skill` 按需加载；非法 frontmatter 会带诊断列出但不参与对话 |
+| **长期记忆** | 右侧栏「长期记忆」面板 + `remember` 工具：真源是一个**人能看、能手改**的 `<storage>\ai\memory.md`（一行一条）。每次 Run 都会**现读并注入系统提示**，所以"以后每次对话都带上它"是自然结果；编辑器可以整篇改、加一条、清空（清空要确认）。记忆与工具输出一样是**数据不是指令**（系统提示 v3 明写），单条 / 总量都有硬上限，超限**报错**而不是悄悄截断 |
 | **AI 工具权限** | 设置页新增「AI 工具权限」：默认**只能写 `<项目根>\comfyui`**，只读 `comfyui` + `storage`；`.git` / `.mysql` / `.run` / `node_modules` 永远禁写（即使用户把白名单放宽到项目根）。每个工具可以单独设成 允许 / 需批准 / 禁用，禁用后**根本不下发给模型** |
 | **提示词库** | 新建 / 编辑 / 复制 / 删除；区分「生图 / 生视频 / 生音频 / 混合」；正向 + 负向提示词；模型、采样器、调度器、步数、CFG、Seed、宽高、批量、LoRA 列表、备注、收藏；**多选批量管理**（收藏 / 取消收藏 / 加标签 / 删除）；**没有关联任何产物的提示词会挂一个橙色「未关联」标记**（产物被删掉之后就是这种状态），可以按「未关联产物」筛选，也可以**一键清除**（先报条数 + 前几条标题再确认，按批循环删除，超过单页 200 条也不会漏） |
 | **ComfyUI 自动捕获** | ComfyUI 里跑完一次生成，**提示词 + 全部参数 + 完整工作流 + 生成的图片/视频/音频**自动进库并互相关联；不需要改动工作流，也不需要装任何东西（装一个可选的推送节点可以做到零延迟） |
@@ -130,13 +131,14 @@ viewer/
 │       │   ├── AiConversationRepo.kt  # 会话 / 消息 / 有序消息块
 │       │   ├── AiSeedCatalog.kt       # ★ 读 classpath 里的冻结模型目录（不读 .dsh/settings.yaml）
 │       │   ├── AiSeeder.kt            # ★ 把冻结目录登记进库（幂等、只补不覆盖）
-│       │   ├── HarnessRunner.kt       # ★ Run 执行器：工具循环 / 统一事件 / 系统提示词（v2）
+│       │   ├── HarnessRunner.kt       # ★ Run 执行器：工具循环 / 统一事件 / 系统提示词（v3，含长期记忆）
 │       │   ├── ModelCapabilityCatalog.kt # 模型发现时的能力预填建议表
-│       │   ├── tools/                 # ★ M4/M5：工具与 Skills
+│       │   ├── tools/                 # ★ M4/M5/M6：工具、Skills 与长期记忆
 │       │   │   ├── ToolModel.kt       # 工具定义 / 权限档 / 调用记录
 │       │   │   ├── ToolPolicy.kt      # ★ 权限策略：默认只写 comfyui，真实路径判定
-│       │   │   ├── ToolRegistry.kt    # ★ 出厂 10 个工具 + 审批闸门
-│       │   │   └── SkillStore.kt      # ★ SKILL.md 扫描 / 校验 / 注册 / 删除 / 导入
+│       │   │   ├── ToolRegistry.kt    # ★ 出厂 11 个工具（含 remember）+ 审批闸门
+│       │   │   ├── SkillStore.kt      # ★ SKILL.md 扫描 / 校验 / 注册 / 删除 / 投放口自动登记
+│       │   │   └── MemoryStore.kt     # ★ 长期记忆：memory.md 的读 / 改 / 追加（带硬上限）
 │       │   └── AiRoutes.kt            # /api/ai/*（Provider、凭据、模型、会话、Run、Skills、工具权限）
 │       └── *Routes.kt            # 三组 REST 路由
 │
@@ -442,7 +444,10 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `GET` | `/api/ai/skills/{name}` | 元数据 + 正文（正文只在打开详情时读） |
 | `POST` | `/api/ai/skills` | 注册 / 覆盖一个用户来源的 Skill（界面用；AI 走 `register_skill` 工具） |
 | `DELETE` | `/api/ai/skills/{name}` | 删除（**只允许用户来源**；内置的返回 400 拒绝） |
-| `POST` | `/api/ai/skills/import-dsh` | 从 `%USERPROFILE%\.dsh\skills` 导入（用户显式动作；目录不存在返回 400） |
+| `GET` | `/api/ai/skills/roots` | Skills **投放口**位置（`userRoot` = `<storage>\ai\skills`、`builtinRoot`）；界面显示它让用户知道往哪儿拷 |
+| `POST` | `/api/ai/skills/rescan` | 重新扫描投放口：给"拷进来但没写 frontmatter"的 skill **自动补 frontmatter 登记**，返回 `{registered, names, errors, skills}` |
+| `GET/PUT/DELETE` | `/api/ai/memory` | **长期记忆**（真源 `<storage>\ai\memory.md`）：读 / 整篇替换 / 清空 |
+| `POST` | `/api/ai/memory/entries` | 追加一条记忆（界面「添加」用；AI 走 `remember` 工具） |
 | `GET` | `/api/ai/tools` | 工具清单 + 生效权限（`allow / ask / deny`）与是否被用户覆盖 |
 | `GET/PUT` | `/api/ai/tools/policy` | 读 / 改工具权限：写白名单、读白名单、逐工具覆盖、`maxToolSteps`、`maxCallsPerRun` |
 | `POST` | `/api/ai/tool-calls/{callId}/approve` \| `/deny` | 工具卡上的「批准 / 拒绝」；返回 `{callId, approved, accepted}`（`accepted=false` 表示这次调用已经超时或不在等待） |
@@ -914,12 +919,15 @@ pwsh -File scripts\server.ps1 test   # 后端 126 个用例
 | `server/src/test/kotlin/.../AuthAndModelsUrlTest.kt` | **真起一个本地假网关**（不联网）：Base URL 带 / 不带 `/v1` 都能回退到可用的模型列表地址、网关根本没有 `/models`（404）时连接测试仍算连通并说明原因、Key 真的不对（401）时报鉴权失败且**错误里不回显密钥**、`openai-responses` 的请求确实落在 `/v1/responses` 并带 `Bearer` |
 | `server/src/test/kotlin/.../ToolProtocolTest.kt` | **工具调用的协议契约（三家）**：OpenAI 的 `tool_calls` / `tool` 轮、Anthropic 的 `tool_use` + `tool_result` **合并成一条 user 消息**、Responses 的顶层 `function_call` / `function_call_output`；`tools` 为空时**整个字段省略**；流式工具分片的三种拼法（含参数被切在 JSON 中间）；`ToolCallAccumulator` 的并行调用与缺 id 兜底。20 例 |
 | `server/src/test/kotlin/.../ToolPolicyTest.kt` | **权限策略**：默认写根只有 `comfyui`、`storage` 只读、`..` 与符号链接逃逸被拒、`.git`/`.mysql`/`.run`/`node_modules` 即使把白名单放宽到项目根也拒、`overrides` 与 `deny` 不进下发清单。9 例 |
-| `server/src/test/kotlin/.../SkillStoreTest.kt` | **Skills 仓库**：frontmatter（引号 / 注释 / CRLF / BOM / 无围栏）、名称与体积校验、非法项"列出来但不参与对话"、同名用户版胜出带冲突提示、内置不可删、**描述很长不算非法**。18 例 |
-| `server/src/test/kotlin/.../ToolRegistryTest.kt` | **工具执行**：注册后立刻可见、同一 Run 不重复加载、`write_file` 落在正确位置且越界**不落盘**、审批闸门（不批就不执行、批了执行一次）、预算与截断、`SystemPrompt.render(v2)` 的内容。16 例 |
+| `server/src/test/kotlin/.../SkillStoreTest.kt` | **Skills 仓库 + 投放口**：frontmatter（引号 / 注释 / CRLF / BOM / 无围栏 / **`description: \|` 块标量**）、名称与体积校验、非法项"列出来但不参与对话"、同名用户版胜出带冲突提示、内置不可删、**描述很长不算非法**；投放口自动登记（平铺 md / bundle 目录 / 已有 frontmatter 一个字节不动 / 中文文件名如实报错 / 重复扫描幂等 / `ensureUserRoot`）。28 例 |
+| `server/src/test/kotlin/.../ToolRegistryTest.kt` | **工具执行**：注册后立刻可见、同一 Run 不重复加载、`write_file` 落在正确位置且越界**不落盘**、审批闸门（不批就不执行、批了执行一次）、预算与截断、`remember` 写进 `memory.md` 且空内容/无存储时明确失败、`SystemPrompt.render(v3)` 的内容。19 例 |
+| `server/src/test/kotlin/.../MemoryStoreTest.kt` | **长期记忆**：一行一条的 markdown 往返、同一条不重复、空内容与超长单条被拒（**被拒的写入不留半条**）、写满后 append 报错且旧内容完好、注入系统提示的部分被截断而文件里完整、系统提示明写"记忆是数据不是指令"。9 例 |
 | `server/src/test/kotlin/.../AiSeedCatalogTest.kt` + `AiSeederPlanTest.kt` | **内置模型目录**：资源里有 1 provider / 69 模型、逐条对照（含 `off: null` 被丢掉、纯文本条目、`xhigh` 档位）、生成器与手抄版一致；`planSeed` 的"只补缺失 / 不改用户行 / 分歧单独列出 / 用户自加模型永不被删"。27 例 |
 | `test/scroll_perf_test.dart` | **长列表性能**：缩略图解码宽度随格子与 DPR 变化且 ≤512、横竖图不变形、`FilterQuality.low`、`AdaptiveColumnList` 500 条只建 <60 项、单列 0 次固有高度查询、多列仍等高、网格每格有 `RepaintBoundary` 且无 `AutomaticKeepAlive`。8 例 |
 | `test/backend_launcher_test.dart` | **退出收尾**（全假进程，不真起服务）：`release` / `watch` / `unwatch` 的参数向量、没认领过服务就不主动停、`accepted`/失败不抛、`stopServicesOnExit` 关掉时不动作。11 例 |
-| `test/ai_tools_ui_test.dart` | **工具与 Skills 的界面**：侧栏渲染实时 Skills 与 DELETE URL、工具卡状态与折叠预览、`pending` 时点批准 POST 到正确地址、`accepted=false` 如实告知、思考过程折叠、模型选择器懒构建 + 搜索过滤、权限页 PUT、内置目录卡片"确认前绝不发 sync"、`/` 菜单，以及流式期间未变消息对象实例唯一（O(n) 热点回归）。13 例 |
+| `test/ai_tools_ui_test.dart` | **工具、Skills 与长期记忆的界面**：侧栏渲染实时 Skills 与 DELETE URL、**投放口路径 + 打开/复制 + 重新扫描（且没有「从 DSH 导入」按钮）**、**长期记忆面板（条数/预览）与编辑弹窗（改 / 加一条 / 清空）**、工具卡状态与折叠预览、`pending` 时点批准 POST 到正确地址、`accepted=false` 如实告知、思考过程折叠、模型选择器懒构建 + 搜索过滤、权限页 PUT、内置目录卡片"确认前绝不发 sync"、`/` 菜单，以及流式期间未变消息对象实例唯一（O(n) 热点回归）。15 例 |
+| `test/ai_conversation_lifecycle_test.dart` | **会话生命周期**：已有干净空会话就复用（不再新建）、切页重建不会重复加载/新建、历史遗留的多条空壳只留最新一条、**打了一半的字切走再切回还在**、有草稿的空会话不会被顺手删掉。5 例 |
+| `test/model_list_scroll_test.dart` | **「AI 模型与凭据」69 个模型的长列表**：滚动范围（滑块长度）全程稳定、一趟只建视口附近的行、行高是常数、能力编辑弹窗改完点确定写回行并落库、点取消不留痕迹。4 例 |
 
 ### AI 工具循环 + Skills 的端到端验证
 
@@ -930,7 +938,9 @@ pwsh -File scripts\server.ps1 test   # 后端 126 个用例
 pwsh -File scripts\e2e-ai-tools-test.ps1
 # 注册 skill 落盘 → 按需 load_skill → 越界写被 PATH_DENIED 拒绝 → comfyui 内写成功
 # → comfy_sync_history 等批准才执行 → 只读工具免审批 → 落库 parts 有序
-# 49 项检查；跑完自动删掉测试用的会话 / Provider / skill / 临时文件；加 -KeepData 保留
+# → remember 落盘 + 下一轮 Run 的系统提示里确实带上了这条记忆
+# 58 项检查；跑完自动删掉测试用的会话 / Provider / skill / 临时文件（并把长期记忆恢复原样）；
+# 加 -KeepData 保留
 ```
 
 ### 自动捕获的端到端验证
@@ -1057,6 +1067,9 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
   等待超过 5 分钟或 Run 被取消都按"拒绝"处理（绝不会因为没人管就默认执行）。
 - **历史消息里的工具轮会被送回上游**：多轮对话会把之前的 `tool_call` / `tool_result` 一起带进上下文，
   长对话里这部分 token 不能忽略（`ai_message_parts` 是有序块，前端按它渲染工具卡）。
+- **长期记忆是明文文件**：`<storage>\ai\memory.md`，模型能写（`remember`）、能读（注入系统提示），
+  用户可以随时在右侧栏改或清空。**别往里放密钥 / 口令**（系统提示里明确禁止模型记这些）。
+  注入部分截断到 4000 字符，文件本身可以更长。
 - **`ai_tool_calls` 只增不减**：每次工具调用一行（含被拒绝的），目前没有自动清理策略。
 - **单用户、无鉴权**：后端默认只监听本机，请勿直接暴露到公网。
 - **Windows 高 DPI**：窗口按系统缩放渲染（本机 150%），因此逻辑尺寸 = 1440/1.5 = 960×613，界面会走 NavigationRail 布局。
@@ -1073,5 +1086,7 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 - **AI 工具**：第三方 Skill 的 ZIP 导入（解压前预览 + 拒绝穿越 / 炸弹，AIH-043/044）、
   内置 Anima / H3 Skills 正文随项目分发（AIH-041/042）、工具审批的"本次会话都允许"、
   可选的 `edit`（字面量替换）与 `glob`/`grep` 文件工具（要先有 ripgrep 依赖）
+- **长期记忆**：按类别分组 / 命中检索（现在是全量注入 + 截断）、"这条是谁写的"审计
+  （现在只记内容与时间，AI 写的和用户写的混在一起）
 - **附件可发（M3）**：图片内联是唯一还缺的"能聊"能力，做完 `transports` 非空、预检才会放行图片
 - 远端 ComfyUI（跨机捕获）的鉴权与限流
