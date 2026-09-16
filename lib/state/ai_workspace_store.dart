@@ -160,8 +160,17 @@ class AiWorkspaceStore extends ChangeNotifier {
   List<AiSkill> skills = const [];
   String? skillsError;
 
+  /// skills 投放口的位置（把 skill 拷进这个文件夹就算装好）。
+  AiSkillRoots? skillRoots;
+
   /// 刷新 / 删除 / 导入进行中：界面据此显示进度并防重复点击。
   bool skillsBusy = false;
+
+  // --- 长期记忆（M6） ----------------------------------------------------
+  /// 跨对话保留的用户偏好 / 约定；每次 Run 由后端注入系统提示。
+  AiMemory memory = const AiMemory();
+  String? memoryError;
+  bool memoryBusy = false;
 
   // --- 工具清单（M4） ----------------------------------------------------
   /// 只用来在工具卡上显示分类图标；拿不到不影响聊天。
@@ -202,9 +211,29 @@ class AiWorkspaceStore extends ChangeNotifier {
     skillsError = null;
     notifyListeners();
     try {
+      // 投放口路径只问一次（它是后端算出来的绝对路径，运行期不会变）
+      skillRoots ??= await _api.skillRoots();
       skills = await _api.listSkills();
     } catch (e) {
       skillsError = '$e';
+    } finally {
+      skillsBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// 重新扫描投放口：**给"拷进来但没写 frontmatter"的 skill 自动补上并登记**，
+  /// 然后刷新列表。用户不用重启应用，也不用点任何"导入"。
+  Future<({bool ok, String message})> rescanSkills() async {
+    skillsBusy = true;
+    notifyListeners();
+    try {
+      final result = await _api.rescanSkills();
+      skills = result.skills;
+      skillsError = null;
+      return (ok: result.errors.isEmpty, message: result.summary);
+    } catch (e) {
+      return (ok: false, message: '重新扫描失败：$e');
     } finally {
       skillsBusy = false;
       notifyListeners();
@@ -229,19 +258,68 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// 从 `%USERPROFILE%\.dsh\skills` 导入（用户在右侧栏显式点击）。
-  Future<({bool ok, String message})> importDshSkills() async {
-    skillsBusy = true;
+  /// 长期记忆（M6）：读回来给右侧栏显示 / 编辑。
+  Future<void> loadMemory() async {
+    memoryBusy = true;
     notifyListeners();
     try {
-      final result = await _api.importDshSkills();
-      skills = await _api.listSkills();
-      skillsError = null;
-      return (ok: true, message: '${result.summary}（来源：${result.source}）');
+      memory = await _api.memory();
+      memoryError = null;
     } catch (e) {
-      return (ok: false, message: '从 DSH 导入失败：$e');
+      memoryError = '$e';
     } finally {
-      skillsBusy = false;
+      memoryBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// 整篇保存（用户在编辑器里改完）。
+  Future<({bool ok, String message})> saveMemory(String content) async {
+    memoryBusy = true;
+    notifyListeners();
+    try {
+      memory = await _api.saveMemory(content);
+      memoryError = null;
+      return (ok: true, message: '长期记忆已保存（${memory.entryCount} 条）');
+    } catch (e) {
+      memoryError = '$e';
+      return (ok: false, message: '保存失败：$e');
+    } finally {
+      memoryBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// 追加一条。
+  Future<({bool ok, String message})> addMemory(String content) async {
+    memoryBusy = true;
+    notifyListeners();
+    try {
+      memory = await _api.appendMemory(content);
+      memoryError = null;
+      return (ok: true, message: '已添加（共 ${memory.entryCount} 条）');
+    } catch (e) {
+      memoryError = '$e';
+      return (ok: false, message: '添加失败：$e');
+    } finally {
+      memoryBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// 清空（不可逆，界面必须先确认）。
+  Future<({bool ok, String message})> clearMemory() async {
+    memoryBusy = true;
+    notifyListeners();
+    try {
+      memory = await _api.clearMemory();
+      memoryError = null;
+      return (ok: true, message: '长期记忆已清空');
+    } catch (e) {
+      memoryError = '$e';
+      return (ok: false, message: '清空失败：$e');
+    } finally {
+      memoryBusy = false;
       notifyListeners();
     }
   }
@@ -280,12 +358,13 @@ class AiWorkspaceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 工具名 → 分类（skill / files / comfy）。先查后端给的清单，查不到按名字兜底。
+  /// 工具名 → 分类（skill / files / comfy / memory）。先查后端给的清单，查不到按名字兜底。
   String toolCategoryOf(String name) {
     for (final t in tools) {
       if (t.name == name) return t.category;
     }
     if (name.contains('skill')) return 'skill';
+    if (name == 'remember' || name.contains('memory')) return 'memory';
     if (name.startsWith('read_') ||
         name.startsWith('write_') ||
         name.startsWith('list_dir') ||
@@ -369,9 +448,10 @@ class AiWorkspaceStore extends ChangeNotifier {
       notifyListeners();
     }
     if (!_loaded) return;
-    // skills / 工具清单走"尽力而为"：拉不到不影响聊天（各自把失败记在自己的字段里）
+    // skills / 工具清单 / 长期记忆走"尽力而为"：拉不到不影响聊天（各自把失败记在自己的字段里）
     await reloadSkills();
     await reloadTools();
+    await loadMemory();
   }
 
   /// 挑一条现成的空会话接着用；一条都没有才真的新建。

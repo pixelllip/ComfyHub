@@ -6,7 +6,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.time.Instant
 
@@ -54,13 +53,41 @@ data class SkillDto(
     val conflict: String? = null,
     /** 来源说明（例如 `dsh:%USERPROFILE%\.dsh\skills`） */
     val origin: String? = null,
-)
+) {
+    /**
+     * 进系统提示时的描述（**单行**）：目录是"一行一条"，
+     * 而块标量写出来的 description 自带换行，不压平会把提示词撑乱。
+     */
+    val oneLineForPrompt: String get() = description.replace(Regex("\\s+"), " ").trim()
+}
 
 @Serializable
-data class SkillImportResult(
-    val imported: Int = 0,
-    val skipped: Int = 0,
-    val source: String,
+data class SkillRootsDto(
+    /** 用户投放口（**拷进来就算装好**）：`<storage>\ai\skills` */
+    val userRoot: String,
+    /** 项目自带、只读：`<根>\skills\builtin` */
+    val builtinRoot: String,
+    val userRootExists: Boolean = false,
+)
+
+/**
+ * 自动登记的结果（启动时 / 用户点「重新扫描」时）。
+ *
+ * [registered] 是这次补上 frontmatter 的条数；[errors] 是"放进来了但没法用"的原因，
+ * 必须显示给用户 —— 不能让人以为拷进去就生效了。
+ */
+@Serializable
+data class SkillAutoRegisterResult(
+    val registered: Int = 0,
+    val names: List<String> = emptyList(),
+    val errors: List<String> = emptyList(),
+)
+
+/** 「重新扫描」的返回：这次自动登记了什么 + 扫描后的完整清单。 */
+@Serializable
+data class SkillRescanDto(
+    val registered: Int = 0,
+    val names: List<String> = emptyList(),
     val errors: List<String> = emptyList(),
     val skills: List<SkillDto> = emptyList(),
 )
@@ -77,6 +104,9 @@ class SkillStore(
         /** 名称规则：kebab-case，最长 64（AIH-038） */
         private val NAME_RE = Regex("^[a-z0-9][a-z0-9-]{0,63}$")
 
+        /** YAML 块标量指示符：`|` / `|-` / `>` / `>-`（可带缩进位数） */
+        private val BLOCK_SCALAR = Regex("^[|>][-+]?\\d?$")
+
         /**
          * description 的**安全上限**（只约束 `save()` 这条写入路径）。
          *
@@ -86,14 +116,18 @@ class SkillStore(
          */
         const val MAX_DESCRIPTION = 4000
         const val MAX_BODY_BYTES = 256 * 1024
-        const val MAX_IMPORT_FILES = 300
-        const val MAX_IMPORT_BYTES = 8L * 1024 * 1024
 
-        /** DSH 的 skills 目录：**只在用户显式点"导入"时读一次**，运行时绝不依赖它。 */
-        fun dshRoot(): Path? {
-            val home = System.getenv("USERPROFILE") ?: System.getProperty("user.home") ?: return null
-            val dir = Path.of(home, ".dsh", "skills")
-            return if (Files.isDirectory(dir)) dir else null
+        /** 自动登记时描述的兜底长度（取正文第一行的前若干字） */
+        private const val AUTO_DESCRIPTION_CHARS = 160
+
+        /** 名字兜底：把文件名/目录名收敛成 kebab-case；收敛不出合法名字时返回 null。 */
+        fun slugOf(raw: String): String? {
+            val slug = raw.trim().lowercase()
+                .replace(Regex("[^a-z0-9]+"), "-")
+                .trim('-')
+                .take(64)
+                .trim('-')
+            return if (slug.isNotEmpty() && NAME_RE.matches(slug)) slug else null
         }
 
         fun validateName(name: String) {
@@ -105,7 +139,13 @@ class SkillStore(
             }
         }
 
-        /** 极简 frontmatter 解析：只认 `key: value`，带引号的去引号，`#` 起注释。 */
+        /**
+         * 极简 frontmatter 解析：只认 `key: value`，带引号的去引号，`#` 起注释。
+         *
+         * 额外支持 **YAML 块标量**（`description: |` / `>-`）：市面上的 SKILL.md
+         * 十有八九把 description 写成多行，不认的话读出来就是字面量 `|`，
+         * 等于让这个 skill 在目录里"没有描述" —— 模型根本不知道什么时候该用它。
+         */
         fun parseFrontMatter(raw: String): Pair<Map<String, String>, String> {
             val text = raw.removePrefix("\uFEFF")
             val lines = text.lines()
@@ -113,22 +153,52 @@ class SkillStore(
 
             val meta = LinkedHashMap<String, String>()
             var bodyStart = -1
-            for (i in 1 until lines.size) {
+            var i = 1
+            while (i < lines.size) {
                 val line = lines[i].trim()
                 if (line == "---") {
                     bodyStart = i + 1
                     break
                 }
-                if (line.isEmpty() || line.startsWith("#")) continue
+                if (line.isEmpty() || line.startsWith("#")) {
+                    i++
+                    continue
+                }
                 val idx = line.indexOf(':')
-                if (idx <= 0) continue
+                if (idx <= 0) {
+                    i++
+                    continue
+                }
                 val key = line.substring(0, idx).trim().lowercase().replace('_', '-')
                 var value = line.substring(idx + 1).trim()
+                // 块标量：值在下面的缩进行里（`|` 保留换行，`>` 折成空格；`-` 表示去掉结尾换行）
+                if (BLOCK_SCALAR.matches(value)) {
+                    val fold = value.startsWith(">")
+                    val collected = mutableListOf<String>()
+                    var j = i + 1
+                    while (j < lines.size) {
+                        val next = lines[j]
+                        // 块在"下一个不缩进的行"（下一个 key 或结尾 ---）处结束
+                        if (next.isNotBlank() && !next.startsWith(" ") && !next.startsWith("\t")) break
+                        collected.add(next)
+                        j++
+                    }
+                    // 去掉块首尾的空行，再按最小缩进去掉缩进
+                    while (collected.isNotEmpty() && collected.first().isBlank()) collected.removeAt(0)
+                    while (collected.isNotEmpty() && collected.last().isBlank()) collected.removeLast()
+                    val indent = collected.filter { it.isNotBlank() }
+                        .minOfOrNull { it.takeWhile { c -> c == ' ' }.length } ?: 0
+                    val body = collected.map { it.drop(indent) }
+                    meta[key] = if (fold) body.joinToString(" ").trim() else body.joinToString("\n").trim()
+                    i = j
+                    continue
+                }
                 if (!value.startsWith("\"") && !value.startsWith("'")) {
                     value = value.substringBefore(" #").trim()
                 }
                 value = value.trim().trim('"').trim('\'')
                 meta[key] = value
+                i++
             }
             if (bodyStart < 0) return emptyMap<String, String>() to text
             return meta to lines.drop(bodyStart).joinToString("\n")
@@ -248,93 +318,111 @@ class SkillStore(
     }
 
     // -----------------------------------------------------------------------
-    //  导入（用户显式动作；运行时绝不自动读 .dsh）
+    //  投放口：把 skill 拷进用户目录就算装好（启动 / 重新扫描时自动登记）
     // -----------------------------------------------------------------------
 
     /**
-     * 从某个目录批量导入（典型来源：`%USERPROFILE%\.dsh\skills`）。
+     * 用户投放口的位置（界面要显示绝对路径，让用户知道往哪儿拷）。
      *
-     * 安全约束（AIH-044 的精神，先校验再复制）：拒绝符号链接、拒绝路径穿越、
-     * 限制单文件与总量、限制文件数；解不开的条目记进 [SkillImportResult.errors]。
+     * 两种运行布局都由 `storageDir` 决定，所以发布包（便携式）里它就落在
+     * `<根>\storage\ai\skills`，和源码树完全同构 —— 不需要为发布版另写一套路径规则。
      */
-    fun importFrom(sourceDir: Path, originLabel: String = sourceDir.toString()): SkillImportResult {
-        if (!Files.isDirectory(sourceDir)) {
-            throw ToolFailure("INVALID_ARGUMENT", "不是目录：$sourceDir")
-        }
-        var imported = 0
-        var skipped = 0
-        val errors = mutableListOf<String>()
-        val importedSkills = mutableListOf<SkillDto>()
+    fun roots(): SkillRootsDto = SkillRootsDto(
+        userRoot = userRoot.toString(),
+        builtinRoot = builtinRoot.toString(),
+        userRootExists = Files.isDirectory(userRoot),
+    )
 
-        val entries = Files.list(sourceDir).use { it.toList() }
-        entries.sortedBy { it.fileName.toString() }.forEach { entry ->
-            val label = entry.fileName.toString()
-            try {
-                if (Files.isSymbolicLink(entry)) {
-                    skipped++
-                    errors += "$label：符号链接，已跳过"
-                    return@forEach
-                }
-                val (skillFile, dir) = when {
-                    Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS) -> {
-                        val candidate = entry.resolve("SKILL.md")
-                        if (Files.isRegularFile(candidate)) candidate to entry
-                        else entry.resolve("skill.md").takeIf { Files.isRegularFile(it) }?.let { it to entry }
-                            ?: run { skipped++; errors += "$label：没有 SKILL.md"; return@forEach }
-                    }
-                    label.lowercase().endsWith(".md") -> entry to null
-                    else -> {
-                        skipped++
-                        return@forEach
-                    }
-                }
-                val name = label.removeSuffix(".md").removeSuffix(".MD")
-                validateName(name)
-
-                if (dir != null) {
-                    copyTree(dir, safeChild(userRoot, name), errors, label)
-                } else {
-                    Files.createDirectories(userRoot)
-                    Files.copy(skillFile, safeChild(userRoot, "$name.md"), StandardCopyOption.REPLACE_EXISTING)
-                }
-                find(name)?.let {
-                    importedSkills += it.copy(origin = originLabel)
-                    if (it.validationError != null) errors += "$name：${it.validationError}"
-                }
-                imported++
-            } catch (e: ToolFailure) {
-                skipped++
-                errors += "$label：${e.message}"
-            } catch (e: Exception) {
-                skipped++
-                errors += "$label：${e.message}"
-            }
-        }
-        log.info("skill 导入完成：来源 {} 导入 {} 跳过 {} 错误 {}", originLabel, imported, skipped, errors.size)
-        return SkillImportResult(imported, skipped, originLabel, errors.take(50), importedSkills)
+    /** 确保投放口存在（启动时调用；顺带让用户一眼能在资源管理器里找到它）。 */
+    fun ensureUserRoot(): Path {
+        Files.createDirectories(userRoot)
+        return userRoot
     }
 
-    private fun copyTree(from: Path, to: Path, errors: MutableList<String>, label: String) {
-        var files = 0
-        var bytes = 0L
-        Files.walk(from, 4).use { stream ->
-            stream.forEach { src ->
-                val rel = from.relativize(src)
-                if (rel.any { it.toString() == ".." }) return@forEach
-                if (Files.isSymbolicLink(src)) return@forEach
-                if (Files.isDirectory(src)) {
-                    Files.createDirectories(to.resolve(rel))
-                    return@forEach
+    /**
+     * 启动时（以及用户点「重新扫描」时）把丢进用户目录、**还没有 frontmatter** 的 skill
+     * 自动登记：补一段 `--- name / description ---`，正文原样保留。
+     *
+     * 为什么需要它：用户目录就是"把 skill 拷进来就算装好"的投放口，而从别处拷来的
+     * `.md`（或 `<名字>/SKILL.md`）通常不带 frontmatter。按 AIH-038 的规矩，
+     * 缺少 name/description 属于非法、不能加载，用户会以为"拷进去没用"。
+     *
+     * **已经有 frontmatter 的文件一律不碰** —— 哪怕它不合法：那是用户自己写的内容，
+     * 继续按既有规则"列出来 + 带 validationError"，不擅自改写。
+     */
+    fun autoRegister(): SkillAutoRegisterResult {
+        ensureUserRoot()
+        val registered = mutableListOf<String>()
+        val errors = mutableListOf<String>()
+        runCatching {
+            Files.list(userRoot).use { stream ->
+                stream.sorted().forEach { entry ->
+                    val label = entry.fileName.toString()
+                    val resolved = entryOf(entry) ?: return@forEach
+                    val (file, fallback) = resolved
+                    val raw = runCatching { Files.readString(file, StandardCharsets.UTF_8) }
+                        .getOrElse {
+                            errors += "$label：读不了（${it.message}）"
+                            return@forEach
+                        }
+                    // 已经有 frontmatter：用户（或 AI）自己写过了，不碰
+                    if (parseFrontMatter(raw).first.isNotEmpty()) return@forEach
+
+                    val name = slugOf(fallback)
+                    if (name == null) {
+                        errors += "$label：文件名转不成 kebab-case 的 skill 名（中文名请在里面写 frontmatter 的 name）"
+                        return@forEach
+                    }
+                    val body = raw.trim()
+                    if (body.isEmpty()) {
+                        errors += "$label：正文为空"
+                        return@forEach
+                    }
+                    if (body.toByteArray(StandardCharsets.UTF_8).size > MAX_BODY_BYTES) {
+                        errors += "$label：正文超过 $MAX_BODY_BYTES 字节"
+                        return@forEach
+                    }
+                    runCatching {
+                        Files.writeString(
+                            file,
+                            render(name, describe(body, label), null, body),
+                            StandardCharsets.UTF_8,
+                        )
+                    }.onSuccess {
+                        registered += name
+                        log.info("自动登记 skill: {}（补写 frontmatter，来源 {}）", name, label)
+                    }.onFailure {
+                        errors += "$label：写入失败（${it.message}）"
+                    }
                 }
-                val size = runCatching { Files.size(src) }.getOrDefault(0L)
-                files++
-                bytes += size
-                if (files > MAX_IMPORT_FILES || bytes > MAX_IMPORT_BYTES) {
-                    throw ToolFailure("IMPORT_TOO_LARGE", "$label：条目太多或体积过大，已中止（保护性限制）")
-                }
-                Files.copy(src, to.resolve(rel), StandardCopyOption.REPLACE_EXISTING)
             }
+        }.onFailure { errors += "扫描投放口失败：${it.message}" }
+        return SkillAutoRegisterResult(registered.size, registered, errors.take(20))
+    }
+
+    /** 目录项 → (正文文件, 名字兜底)；不是 skill 条目返回 null。 */
+    private fun entryOf(entry: Path): Pair<Path, String>? {
+        val label = entry.fileName.toString()
+        return when {
+            Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS) -> {
+                val file = entry.resolve("SKILL.md").takeIf { Files.isRegularFile(it) }
+                    ?: entry.resolve("skill.md").takeIf { Files.isRegularFile(it) }
+                file?.let { it to label }
+            }
+            label.lowercase().endsWith(".md") -> entry to label.removeSuffix(".md").removeSuffix(".MD")
+            else -> null
         }
+    }
+
+    /** 没有 description 时，用正文第一行（去掉标题井号之类的标记）兜一个。 */
+    private fun describe(body: String, label: String): String {
+        val first = body.lines()
+            .asSequence()
+            .map { it.trim().trimStart('#', '>', '-', '*', ' ', '\t') }
+            .firstOrNull { it.isNotEmpty() }
+            .orEmpty()
+        val text = first.ifEmpty { "从 $label 自动登记" }
+        return text.take(AUTO_DESCRIPTION_CHARS)
     }
 
     // -----------------------------------------------------------------------

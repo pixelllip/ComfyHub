@@ -58,6 +58,7 @@ SCENARIOS = [
     # (关键词, 工具名, arguments JSON 字符串)
     ("注册", "register_skill", _args(SKILL_ARGS)),
     ("加载", "load_skill", _args({"name": "e2e-tool-demo"})),
+    ("记住", "remember", _args({"content": "E2E 记一条：用户偏好 4:3 画幅"})),
     ("越界", "write_file", _args({"path": "storage/e2e-hack.txt", "content": "should be denied"})),
     ("目录内", "write_file", _args({"path": "comfyui/e2e-ok.txt", "content": "hello from tool"})),
     ("同步", "comfy_sync_history", _args({})),
@@ -162,6 +163,12 @@ class Handler(BaseHTTPRequestHandler):
         assistant_tool_calls = any(m.get("role") == "assistant" and m.get("tool_calls")
                                    for m in messages)
         tool_results = [m for m in messages if m.get("role") == "tool"]
+        system_text = "\n".join((m.get("content") or "") for m in messages
+                                if m.get("role") == "system")
+        # 「长期记忆」是每次 Run 现渲染进系统提示的：这里把是否带上、带没带上某条记进日志，
+        # 测试脚本据此断言"AI 记得住、也看得到"（不用去猜后端实现）。
+        memory_marker = "长期记忆"
+        tool_names = [((t.get("function") or {}).get("name")) for t in tools]
 
         entry = {
             "method": "POST",
@@ -172,7 +179,10 @@ class Handler(BaseHTTPRequestHandler):
             "roles": roles,
             "toolsPresent": bool(tools),
             "toolCount": len(tools),
-            "toolNames": [((t.get("function") or {}).get("name")) for t in tools],
+            "toolNames": tool_names,
+            "hasRememberTool": "remember" in tool_names,
+            "systemHasMemorySection": memory_marker in system_text,
+            "systemMemoryHasProbe": "E2E 记一条" in system_text,
             "assistantHasToolCall": assistant_tool_calls,
             "toolResultCount": len(tool_results),
             "lastRole": last.get("role"),

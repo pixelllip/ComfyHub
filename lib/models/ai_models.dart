@@ -995,26 +995,45 @@ class AiSkillDetail {
       );
 }
 
-/// 从 `%USERPROFILE%\.dsh\skills` 导入的结果。
-class AiSkillImportResult {
-  final int imported;
-  final int skipped;
-  final String source;
+/// skills 投放口的位置（用户建议：不要「从 DSH 导入」按钮，改成"往文件夹里拷"）。
+///
+/// 两种运行布局都由后端算好：源码树是 `<项目根>\storage\ai\skills`，
+/// 发布包是 `<根>\storage\ai\skills`（便携式）。
+class AiSkillRoots {
+  final String userRoot;
+  final String builtinRoot;
+  final bool userRootExists;
+
+  const AiSkillRoots({
+    this.userRoot = '',
+    this.builtinRoot = '',
+    this.userRootExists = false,
+  });
+
+  factory AiSkillRoots.fromJson(Map<String, dynamic> json) => AiSkillRoots(
+        userRoot: (json['userRoot'] ?? '').toString(),
+        builtinRoot: (json['builtinRoot'] ?? '').toString(),
+        userRootExists: json['userRootExists'] == true,
+      );
+}
+
+/// 「重新扫描投放口」的结果：这次自动登记了什么 + 扫描后的完整清单。
+class AiSkillRescanResult {
+  final int registered;
+  final List<String> names;
   final List<String> errors;
   final List<AiSkill> skills;
 
-  const AiSkillImportResult({
-    this.imported = 0,
-    this.skipped = 0,
-    this.source = '',
+  const AiSkillRescanResult({
+    this.registered = 0,
+    this.names = const [],
     this.errors = const [],
     this.skills = const [],
   });
 
-  factory AiSkillImportResult.fromJson(Map<String, dynamic> json) => AiSkillImportResult(
-        imported: (json['imported'] as num?)?.toInt() ?? 0,
-        skipped: (json['skipped'] as num?)?.toInt() ?? 0,
-        source: (json['source'] ?? '').toString(),
+  factory AiSkillRescanResult.fromJson(Map<String, dynamic> json) => AiSkillRescanResult(
+        registered: (json['registered'] as num?)?.toInt() ?? 0,
+        names: (json['names'] as List?)?.map((e) => e.toString()).toList() ?? const [],
         errors: (json['errors'] as List?)?.map((e) => e.toString()).toList() ?? const [],
         skills: (json['skills'] as List?)
                 ?.whereType<Map>()
@@ -1023,12 +1042,43 @@ class AiSkillImportResult {
             const [],
       );
 
-  /// 导入完要弹给用户看的话（**失败条目也要说**，不能只报"成功 N 个"）。
+  /// 要给用户看的话：**失败条目也要说**，不能只报"成功 N 个"。
   String get summary {
-    final parts = <String>['导入 $imported 个'];
-    if (skipped > 0) parts.add('跳过 $skipped 个');
-    if (errors.isNotEmpty) parts.add('${errors.length} 个失败：${errors.take(3).join('；')}');
+    final parts = <String>['扫描到 ${skills.length} 个 skill'];
+    if (registered > 0) parts.add('自动登记 $registered 个（${names.take(3).join('、')}）');
+    if (errors.isNotEmpty) parts.add('${errors.length} 个没法用：${errors.take(2).join('；')}');
     return parts.join(' · ');
+  }
+}
+
+/// 长期记忆（M6）：真源是 `<storage>\ai\memory.md`。
+class AiMemory {
+  final String content;
+  final String path;
+  final int entryCount;
+  final int maxChars;
+
+  const AiMemory({
+    this.content = '',
+    this.path = '',
+    this.entryCount = 0,
+    this.maxChars = 8000,
+  });
+
+  factory AiMemory.fromJson(Map<String, dynamic> json) => AiMemory(
+        content: (json['content'] ?? '').toString(),
+        path: (json['path'] ?? '').toString(),
+        entryCount: (json['entryCount'] as num?)?.toInt() ?? 0,
+        maxChars: (json['maxChars'] as num?)?.toInt() ?? 8000,
+      );
+
+  /// 面板上的一行预览（第一条记忆）。
+  String get preview {
+    final first = content
+        .split('\n')
+        .map((l) => l.trim())
+        .firstWhere((l) => l.isNotEmpty, orElse: () => '');
+    return first.replaceFirst(RegExp(r'^[-*]\s*'), '');
   }
 }
 

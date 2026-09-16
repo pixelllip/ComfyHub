@@ -133,9 +133,30 @@ class AiApiClient {
   Future<void> deleteSkill(String name) async =>
       _send('DELETE', '/api/ai/skills/${Uri.encodeComponent(name)}');
 
-  /// 从 `%USERPROFILE%\.dsh\skills` 导入（用户显式动作；目录不存在时后端报错）。
-  Future<AiSkillImportResult> importDshSkills() async => AiSkillImportResult.fromJson(
-      Map<String, dynamic>.from(await _send('POST', '/api/ai/skills/import-dsh') as Map));
+  /// skills 投放口在哪（界面显示绝对路径，让用户知道往哪个文件夹拷）。
+  Future<AiSkillRoots> skillRoots() async =>
+      AiSkillRoots.fromJson(Map<String, dynamic>.from(await _get('/api/ai/skills/roots') as Map));
+
+  /// 重新扫描投放口：给"拷进来但没写 frontmatter"的 skill 自动登记，并返回最新清单。
+  /// 应用开着的时候往文件夹里拷东西，点一下就生效，不用重启（启动时后端也会扫一次）。
+  Future<AiSkillRescanResult> rescanSkills() async => AiSkillRescanResult.fromJson(
+      Map<String, dynamic>.from(await _send('POST', '/api/ai/skills/rescan') as Map));
+
+  // --- 长期记忆（M6） ----------------------------------------------------
+
+  Future<AiMemory> memory() async =>
+      AiMemory.fromJson(Map<String, dynamic>.from(await _get('/api/ai/memory') as Map));
+
+  /// 整篇替换（界面的「保存」）。
+  Future<AiMemory> saveMemory(String content) async => AiMemory.fromJson(
+      Map<String, dynamic>.from(await _send('PUT', '/api/ai/memory', {'content': content}) as Map));
+
+  /// 追加一条（界面的「添加一条」）。
+  Future<AiMemory> appendMemory(String content) async => AiMemory.fromJson(Map<String, dynamic>.from(
+      await _send('POST', '/api/ai/memory/entries', {'content': content}) as Map));
+
+  Future<AiMemory> clearMemory() async =>
+      AiMemory.fromJson(Map<String, dynamic>.from(await _send('DELETE', '/api/ai/memory') as Map));
 
   // --- 工具与权限（M4） --------------------------------------------------
 

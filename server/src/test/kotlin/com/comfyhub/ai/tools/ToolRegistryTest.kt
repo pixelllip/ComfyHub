@@ -29,6 +29,7 @@ class ToolRegistryTest {
 
     private class Env(val root: Path) {
         val skills = SkillStore(root.resolve("skills-builtin"), root.resolve("skills-user"))
+        val memory = MemoryStore(root.resolve("storage").resolve("ai"))
         val gate = ToolApprovalGate(timeoutMs = 2000)
         var syncCalls = 0
         var statusCalls = 0
@@ -52,7 +53,7 @@ class ToolRegistryTest {
 
         val policy = ToolPolicy(root, ToolPolicyConfig())
 
-        fun ctx(p: ToolPolicy = policy) = ToolContext("run-1", p, skills)
+        fun ctx(p: ToolPolicy = policy) = ToolContext("run-1", p, skills, memory)
     }
 
     private fun env(): Env {
@@ -66,6 +67,7 @@ class ToolRegistryTest {
 
     private val builtinNames = listOf(
         "list_skills", "load_skill", "register_skill", "delete_skill",
+        "remember",
         "list_dir", "read_file", "write_file",
         "comfy_get_status", "comfy_get_run", "comfy_sync_history",
     )
@@ -112,6 +114,44 @@ class ToolRegistryTest {
         assertTrue(after["read_file"]!!.overridden)
         assertEquals("allow", after["comfy_sync_history"]!!.access)
         assertTrue(after["comfy_sync_history"]!!.overridden)
+    }
+
+    // --- 长期记忆（M6）------------------------------------------------------
+
+    @Test
+    fun `remember 真的写进 memory_md 并且可以连着写多条`() = runBlocking {
+        val e = env()
+        val ctx = e.ctx()
+
+        val first = e.registry.invoke("c1", "remember", args("content" to "用户偏好 4:3 画幅"), ctx)
+        assertEquals("ok", first.status, first.error ?: first.content)
+        assertEquals("memory", e.registry.info(e.policy).first { it.name == "remember" }.category)
+
+        e.registry.invoke("c2", "remember", args("content" to "出图统一用 Anima"), ctx)
+
+        val content = Files.readString(e.memory.file, StandardCharsets.UTF_8)
+        assertTrue(content.contains("- 用户偏好 4:3 画幅"), content)
+        assertTrue(content.contains("- 出图统一用 Anima"), content)
+        assertEquals(2, e.memory.read().entryCount)
+        assertTrue(first.content.contains("长期记忆"), "结果要告诉模型写进哪儿了")
+    }
+
+    @Test
+    fun `remember 空内容报错 不会落一条空记忆`() = runBlocking {
+        val e = env()
+        val record = e.registry.invoke("c1", "remember", args("content" to "  "), e.ctx())
+        assertEquals("failed", record.status)
+        assertEquals("INVALID_ARGUMENT", record.errorCode)
+        assertEquals("", e.memory.read().content)
+    }
+
+    @Test
+    fun `没有记忆存储时 remember 明确失败而不是假装成功`() = runBlocking {
+        val e = env()
+        val noMemory = ToolContext("run-1", e.policy, e.skills, memory = null)
+        val record = e.registry.invoke("c1", "remember", args("content" to "随便"), noMemory)
+        assertEquals("failed", record.status)
+        assertEquals("MEMORY_DISABLED", record.errorCode)
     }
 
     // --- Skills：AI 说一声就注册到本地 ---------------------------------------

@@ -29,6 +29,7 @@ enum class ToolCategory(val wire: String) {
     SKILL("skill"),
     FILES("files"),
     COMFY("comfy"),
+    MEMORY("memory"),
     ;
 
     companion object {
@@ -45,6 +46,8 @@ class ToolContext(
     val runId: String,
     val policy: ToolPolicy,
     val skills: SkillStore,
+    /** 长期记忆（M6）；为 null 表示本次部署没启用 */
+    val memory: MemoryStore? = null,
     /** 本 Run 已加载过的 Skill：AIH-040 要求同一份正文不重复塞进上下文 */
     val loadedSkills: MutableSet<String> = mutableSetOf(),
     /** 本 Run 的工具调用计数（AIH-036：不允许无休止轮询） */

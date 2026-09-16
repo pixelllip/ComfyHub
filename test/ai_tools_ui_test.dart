@@ -37,8 +37,20 @@ class _Recorder {
   /// 可变的 skills 列表：删除之后 fake 要真的少一个（否则刷新又回来了）
   List<Map<String, dynamic>> skills = [];
 
+  /// 长期记忆（M6）：PUT 整篇 / POST 追加都要真的改掉这份内容
+  String memory = '';
+
+  /// 追加过的记忆条目（按顺序），用来断言"「添加」真的发出去了"
+  final List<String> memoryAdded = [];
+
+  /// 下一次「重新扫描」会登记几个（模拟往投放口里拷了东西）
+  int rescanRegistered = 0;
+
   String? get lastPolicyPut => policyPuts.isEmpty ? null : jsonEncode(policyPuts.last);
 }
+
+int _entryCount(String content) =>
+    content.split('\n').where((l) => l.trim().isNotEmpty).length;
 
 /// 按真实 SSE 格式拼事件（冒号后必须有空格）。
 String _sse(int seq, String type, String dataJson) =>
@@ -167,14 +179,34 @@ MockClient _backend(
       final name = Uri.decodeComponent(path.split('/').last);
       rec.skills = rec.skills.where((s) => s['name'] != name).toList();
       body = {'deleted': true, 'id': name};
-    } else if (path == '/api/ai/skills/import-dsh') {
+    } else if (path == '/api/ai/skills/roots') {
+      // 投放口路径由后端算好（两种运行布局都对），界面只负责显示
       body = {
-        'imported': 2,
-        'skipped': 1,
-        'source': r'C:\Users\u\.dsh\skills',
-        'errors': <String>[],
-        'skills': <Object>[],
+        'userRoot': r'D:\ComfyHub\storage\ai\skills',
+        'builtinRoot': r'D:\ComfyHub\skills\builtin',
+        'userRootExists': true,
       };
+    } else if (path == '/api/ai/skills/rescan') {
+      // 投放口里新拷进来的东西在这里被自动登记
+      body = {
+        'registered': rec.rescanRegistered,
+        'names': rec.rescanRegistered > 0 ? const ['dropped-in'] : const <String>[],
+        'errors': const <String>[],
+        'skills': rec.skills,
+      };
+    } else if (path == '/api/ai/memory' && request.method == 'GET') {
+      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000};
+    } else if (path == '/api/ai/memory' && request.method == 'PUT') {
+      rec.memory = (jsonDecode(request.body) as Map)['content'].toString();
+      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000};
+    } else if (path == '/api/ai/memory/entries' && request.method == 'POST') {
+      final entry = (jsonDecode(request.body) as Map)['content'].toString();
+      rec.memoryAdded.add(entry);
+      rec.memory = rec.memory.isEmpty ? '- $entry' : '${rec.memory}\n- $entry';
+      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000};
+    } else if (path == '/api/ai/memory' && request.method == 'DELETE') {
+      rec.memory = '';
+      body = {'content': '', 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': 0, 'maxChars': 8000};
     } else if (path == '/api/ai/tools') {
       body = tools ??
           [
@@ -376,6 +408,83 @@ void main() {
     expect(rec.calls, contains('DELETE /api/ai/skills/broken-skill'));
     expect(find.text('broken-skill'), findsNothing, reason: '删完要重新拉列表，不能还留在界面上');
     expect(find.text('my-skill'), findsOneWidget);
+  });
+
+  testWidgets('(a2) skills 投放口：显示后端给的绝对路径，没有「从 DSH 导入」按钮', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder()..skills = [_skill('anima-prompt', source: 'builtin')];
+    await tester.pumpWidget(await _homePage(rec));
+    await tester.pumpAndSettle();
+
+    // 用户明确要求去掉那个按钮
+    expect(find.text('从 DSH 导入'), findsNothing);
+    expect(rec.calls.any((c) => c.contains('import-dsh')), isFalse);
+
+    // 投放口路径要能看见（用户得知道往哪儿拷），并有打开 / 复制两个入口
+    expect(find.textContaining(r'D:\ComfyHub\storage\ai\skills'), findsWidgets);
+    expect(find.text('打开文件夹'), findsOneWidget);
+    expect(find.text('复制路径'), findsOneWidget);
+
+    // 往目录里拷了东西之后：点刷新 = 重新扫描 + 自动登记
+    rec.rescanRegistered = 1;
+    await tester.tap(find.byTooltip('重新扫描投放口（自动登记新拷进来的 skill）'));
+    await tester.pumpAndSettle();
+    expect(rec.calls, contains('POST /api/ai/skills/rescan'));
+    expect(find.textContaining('自动登记 1 个'), findsWidgets, reason: '要如实说这次自动登记了什么');
+  });
+
+  testWidgets('(a3) 长期记忆：面板显示条数与预览，编辑弹窗能改 / 加一条 / 清空', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder()..memory = '- 用户偏好 4:3 画幅\n- 出图统一用 Anima';
+    await tester.pumpWidget(await _homePage(rec));
+    await tester.pumpAndSettle();
+
+    expect(find.text('长期记忆'), findsOneWidget);
+    expect(find.text('2 条'), findsOneWidget);
+    expect(find.textContaining('用户偏好 4:3 画幅'), findsWidgets, reason: '第一条记忆要做预览');
+
+    // 打开编辑器 → 改内容 → 保存 → PUT 出去的正文就是改过的
+    await tester.tap(find.byTooltip('查看 / 编辑长期记忆'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('memory.md'), findsWidgets, reason: '要告诉用户真源文件在哪');
+
+    await tester.enterText(
+      find.widgetWithText(TextField, '- 用户偏好 4:3 画幅\n- 出图统一用 Anima'),
+      '- 只保留这一条',
+    );
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+
+    expect(rec.calls, contains('PUT /api/ai/memory'));
+    expect(rec.memory, '- 只保留这一条');
+    expect(find.text('1 条'), findsOneWidget, reason: '面板要跟着刷新');
+
+    // 再加一条：走 POST /memory/entries
+    await tester.tap(find.byTooltip('查看 / 编辑长期记忆'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, '例如：交付一律 16:9、带字幕'), '交付 16:9');
+    await tester.tap(find.text('添加'));
+    await tester.pumpAndSettle();
+    expect(rec.memoryAdded, ['交付 16:9']);
+    expect(rec.memory, contains('交付 16:9'));
+
+    // 编辑器里的正文要跟着更新（不然用户会以为没加上）
+    expect(find.textContaining('交付 16:9'), findsWidgets);
+
+    // 清空要先确认
+    await tester.tap(find.text('清空'));
+    await tester.pumpAndSettle();
+    expect(find.text('清空长期记忆？'), findsOneWidget);
+    await tester.tap(find.text('清空').last);
+    await tester.pumpAndSettle();
+    expect(rec.calls, contains('DELETE /api/ai/memory'));
+    expect(rec.memory, isEmpty);
   });
 
   testWidgets('(b) tool.requested / tool.completed 事件生成可见的工具卡（预览默认折叠）', (tester) async {

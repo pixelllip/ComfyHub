@@ -207,6 +207,36 @@ class ToolRegistry(
         },
 
         // ------------------------------------------------------------------
+        //  长期记忆（M6）：跨对话记住用户的偏好与固定约定
+        // ------------------------------------------------------------------
+        AgentTool(
+            name = "remember",
+            description = "把一条**长期有效**的信息写进长期记忆（用户偏好、固定约定、称呼、常用参数等），" +
+                "以后每次对话都会带上它。只记用户明确说过、且跨对话仍然成立的事；一次只写一条。" +
+                "**不要**记录本次任务的临时状态、文件内容、以及任何密钥 / 口令 / 隐私凭据。",
+            parameters = schema(
+                """{"type":"object","properties":{"content":{"type":"string","description":"一条记忆，直接写事实，例如：用户偏好 4:3 画幅，出图统一用 Aesthetic 模型"}},"required":["content"],"additionalProperties":false}"""
+            ),
+            category = ToolCategory.MEMORY,
+            mutating = true,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, ctx ->
+            val content = args.str("content") ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 content")
+            val store = ctx.memory
+                ?: throw ToolFailure("MEMORY_DISABLED", "本次运行没有启用长期记忆")
+            val dto = store.append(content)
+            val json = buildJsonObject {
+                put("entryCount", dto.entryCount)
+                put("path", dto.path)
+            }
+            ToolOutput(
+                "已记住（长期记忆现有 ${dto.entryCount} 条）。用户可以在 AI 工作台右侧栏的" +
+                    "「长期记忆」里查看、修改或清空。",
+                json,
+            )
+        },
+
+        // ------------------------------------------------------------------
         //  文件系统：默认只能碰 ComfyUI 目录（用户要求：默认不能改 comfy 目录以外的内容）
         // ------------------------------------------------------------------
         AgentTool(

@@ -23,7 +23,8 @@
       "jre": "jre",
       "scripts": "scripts",
       "sql": "db",
-      "comfyExtension": "comfyui"
+      "comfyExtension": "comfyui",
+      "builtinSkills": "skills/builtin"
     },
     "writable": {
       "database": ".mysql",
@@ -44,7 +45,11 @@
       "default": "storage",
       "envVar": "COMFYHUB_STORAGE",
       "setBy": "scripts\\server.ps1 启动后端时显式设成 <根>\\storage（后端 Config.kt 的 defaultStorageDir 只是兜底）",
-      "subdirs": ["media", "tmp"]
+      "subdirs": ["media", "tmp", "ai"],
+      "skillsDropIn": {
+        "path": "storage/ai/skills",
+        "why": "Skills 的**投放口**：把 skill 文件夹（或一个 .md）拷进来就算装好，后端启动时自动补 frontmatter 登记（缺 frontmatter 也认）。<根>\\skills\\builtin 是只读的项目自带 skill。"
+      }
     }
   },
 
@@ -161,6 +166,15 @@
       "source": "comfyui",
       "target": "comfyui",
       "note": "要装到 ComfyUI 的 custom_nodes 里才生效，发布包里只是一份源，方便用户复制。"
+    },
+    {
+      "id": "skills",
+      "title": "项目自带 Skills（只读）",
+      "kind": "copy_tree",
+      "required": false,
+      "source": "skills",
+      "target": "skills",
+      "note": "后端的 builtinRoot = <根>\\skills\\builtin。用户自己装的 skill 不放这里（那是可写数据，落在 <根>\\storage\\ai\\skills，见 runtimeLayout.artifactsLocation.skillsDropIn）。"
     },
     {
       "id": "readme",

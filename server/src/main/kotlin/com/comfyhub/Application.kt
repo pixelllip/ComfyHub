@@ -6,6 +6,7 @@ import com.comfyhub.ai.CredentialService
 import com.comfyhub.ai.HarnessRunner
 import com.comfyhub.ai.RunEventBus
 import com.comfyhub.ai.aiRoutes
+import com.comfyhub.ai.tools.MemoryStore
 import com.comfyhub.ai.tools.SkillStore
 import com.comfyhub.ai.tools.ToolApprovalGate
 import com.comfyhub.ai.tools.ToolRegistry
@@ -123,11 +124,23 @@ fun Application.module(ctx: AppContext) {
     // AI 凭据：值只存在 DPAPI 加密文件里，DB / 日志 / 接口都拿不到明文（AIH-012 / AIH-015）
     val credentials = CredentialService(ctx.cfg.storageDir.resolve("ai"))
 
-    // Skills（M5）：**磁盘是正文真源**，AI 注册 / 用户删除都立刻生效，不需要重启应用
+    // Skills（M5）：**磁盘是正文真源**，AI 注册 / 用户删除都立刻生效，不需要重启应用。
+    // 用户投放口 = `<storage>\ai\skills`：把 skill 文件夹（或 .md）拷进去就算装好，
+    // 启动时自动补 frontmatter 登记（见 SkillStore.autoRegister）。
     val skills = SkillStore(
         builtinRoot = ctx.cfg.projectRoot.resolve("skills").resolve("builtin"),
         userRoot = ctx.cfg.storageDir.resolve("ai").resolve("skills"),
     )
+    runCatching { skills.autoRegister() }
+        .onSuccess {
+            if (it.registered > 0) log.info("投放口自动登记了 {} 个 skill：{}", it.registered, it.names.joinToString("、"))
+            it.errors.forEach { msg -> log.warn("投放口有没法自动登记的条目：{}", msg) }
+        }
+        .onFailure { log.warn("扫描 skills 投放口失败（不影响启动）：{}", it.message) }
+    log.info("skills 投放口: {}", skills.roots().userRoot)
+
+    // 长期记忆（M6）：一个人类可读的 memory.md，注入系统提示 + AI 可用 remember 追加
+    val memory = MemoryStore(ctx.cfg.storageDir.resolve("ai"))
 
     // 工具层（M4）：出厂只能写 <根>\comfyui，只读 <根>\comfyui + <根>\storage（见 ToolPolicy）
     val approvals = ToolApprovalGate()
@@ -157,6 +170,7 @@ fun Application.module(ctx: AppContext) {
         skills = skills,
         approvals = approvals,
         projectRoot = ctx.cfg.projectRoot,
+        memory = memory,
     )
     monitor.subscribe(ApplicationStopped) { runner.shutdown() }
     // 上次进程退出时还在 running 的 Run 不可能再继续：标成失败，而不是让界面永远转圈
@@ -288,7 +302,7 @@ fun Application.module(ctx: AppContext) {
             tagRoutes()
             mediaRoutes(ctx)
             captureRoutes(ctx, capture)
-            aiRoutes(credentials, runner, runBus, skills, toolRegistry, approvals, ctx.cfg.projectRoot)
+            aiRoutes(credentials, runner, runBus, skills, memory, toolRegistry, approvals, ctx.cfg.projectRoot)
         }
     }
 }

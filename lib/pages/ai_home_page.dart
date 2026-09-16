@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/api_client.dart';
 import '../core/settings_store.dart';
@@ -1509,7 +1510,9 @@ class _ContextPanelState extends State<_ContextPanel> {
             ],
             const SizedBox(height: 16),
             // Skills：名字就是真源，这里只是后端的只读视图（M5）。
-            // 这栏只有 260px 宽，标题行放不下两个按钮：刷新在标题行，导入单独一行。
+            // **投放口**才是"装 skill"的方式：把文件夹（或 .md）拷进下面这个目录，
+            // 应用启动时会自动登记（拷进来的文件没写 frontmatter 也会被补上）。
+            // 这里不再有「从 DSH 导入」按钮（用户明确要求去掉）。
             Row(
               children: [
                 Text('Skills', style: theme.textTheme.labelLarge),
@@ -1518,28 +1521,16 @@ class _ContextPanelState extends State<_ContextPanel> {
                     style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
                 const Spacer(),
                 IconButton(
-                  tooltip: '刷新 Skills',
+                  tooltip: '重新扫描投放口（自动登记新拷进来的 skill）',
                   visualDensity: VisualDensity.compact,
                   constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                   padding: EdgeInsets.zero,
-                  onPressed: store.skillsBusy ? null : () => _refreshSkills(),
+                  onPressed: store.skillsBusy ? null : () => _rescanSkills(),
                   icon: const Icon(Icons.refresh, size: 16),
                 ),
               ],
             ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: store.skillsBusy ? null : () => _importDsh(),
-                icon: const Icon(Icons.download_outlined, size: 16),
-                label: const Text('从 DSH 导入'),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  minimumSize: const Size(0, 30),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-              ),
-            ),
+            _SkillDropIn(store: store, onOpen: () => _openSkillsFolder(), onCopy: () => _copySkillsPath()),
             if (store.skillsBusy) const LinearProgressIndicator(minHeight: 2),
             if (store.skillsError != null)
               Text('Skills 加载失败：${store.skillsError}', style: theme.textTheme.bodySmall),
@@ -1550,7 +1541,8 @@ class _ContextPanelState extends State<_ContextPanel> {
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
             sliver: SliverToBoxAdapter(
               child: Text(
-                '还没有 Skill。可以点「从 DSH 导入」，或让 AI 用 register_skill 注册。',
+                '还没有 Skill。把 skill 文件夹（或一个 .md）拷进上面的目录再点刷新，'
+                '也可以让 AI 用 register_skill 注册。',
                 style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
               ),
             ),
@@ -1566,19 +1558,61 @@ class _ContextPanelState extends State<_ContextPanel> {
               ),
             ),
           ),
+        // 长期记忆（M6）：每次对话都会带上；AI 也能用 remember 追加一条
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+          sliver: SliverToBoxAdapter(
+            child: _MemoryPanel(
+              store: store,
+              onEdit: () => _editMemory(),
+            ),
+          ),
+        ),
       ],
     );
   }
 
-  Future<void> _refreshSkills() async {
-    await widget.store.reloadSkills();
+  Future<void> _rescanSkills() async {
+    final result = await widget.store.rescanSkills();
     if (!mounted) return;
-    final count = widget.store.skills.length;
-    _snack(widget.store.skillsError == null ? 'Skills 已刷新：$count 个' : 'Skills 加载失败：${widget.store.skillsError}');
+    if (result.ok && widget.store.skillsError == null) {
+      _snack(result.message);
+    } else if (widget.store.skillsError != null) {
+      _snack('Skills 加载失败：${widget.store.skillsError}', error: true);
+    } else {
+      _snack(result.message, error: true);
+    }
   }
 
-  Future<void> _importDsh() async {
-    final result = await widget.store.importDshSkills();
+  /// 在资源管理器里打开投放口（打不开就退回"把路径给用户"）。
+  Future<void> _openSkillsFolder() async {
+    final path = widget.store.skillRoots?.userRoot ?? '';
+    if (path.isEmpty) {
+      _snack('还没有拿到 skills 目录位置，点一下刷新试试', error: true);
+      return;
+    }
+    final ok = await _openFolder(path);
+    if (!ok && mounted) {
+      _snack('打不开文件管理器，请手动打开：$path');
+    }
+  }
+
+  /// 把投放口路径放进剪贴板（打不开资源管理器时的兜底）。
+  Future<void> _copySkillsPath() async {
+    final path = widget.store.skillRoots?.userRoot ?? '';
+    if (path.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: path));
+    if (mounted) _snack('已复制 skills 目录：$path');
+  }
+
+  /// 长期记忆编辑器：整篇可改（真源是 memory.md，人是可以手改的）。
+  Future<void> _editMemory() async {
+    final saved = await showDialog<String>(
+      context: context,
+      builder: (_) => _MemoryEditorDialog(store: widget.store),
+    );
+    if (!mounted || saved == null) return;
+    final result = await widget.store.saveMemory(saved);
     if (!mounted) return;
     _snack(result.message, error: !result.ok);
   }
@@ -1743,4 +1777,275 @@ class _CapabilityChip extends StatelessWidget {
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+//  Skills 投放口 + 长期记忆（右侧栏）
+// ---------------------------------------------------------------------------
+
+/// 显示 skills 投放口的绝对路径，并提供「打开文件夹 / 复制路径」。
+///
+/// 用户在建议里要的就是这个：**不要「从 DSH 导入」按钮**，改成一个能拷东西进去的目录。
+/// 路径由后端算（两种运行布局都对），界面只负责显示 —— 别在前端拼路径。
+class _SkillDropIn extends StatelessWidget {
+  final AiWorkspaceStore store;
+  final VoidCallback onOpen;
+  final VoidCallback onCopy;
+
+  const _SkillDropIn({required this.store, required this.onOpen, required this.onCopy});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final path = store.skillRoots?.userRoot ?? '';
+    if (path.isEmpty) return const SizedBox.shrink();
+    final style = TextButton.styleFrom(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      minimumSize: const Size(0, 28),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 2),
+        Text('把 skill 拷进这个目录即装好（启动/刷新时自动登记）：',
+            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+        const SizedBox(height: 2),
+        Tooltip(
+          message: path,
+          child: Text(
+            path,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelSmall?.copyWith(fontFamily: 'Consolas'),
+          ),
+        ),
+        Row(
+          children: [
+            TextButton.icon(
+              onPressed: store.skillsBusy ? null : onOpen,
+              icon: const Icon(Icons.folder_open, size: 14),
+              label: const Text('打开文件夹'),
+              style: style,
+            ),
+            TextButton.icon(
+              onPressed: store.skillsBusy ? null : onCopy,
+              icon: const Icon(Icons.copy, size: 14),
+              label: const Text('复制路径'),
+              style: style,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// 右侧栏的「长期记忆」：条数 + 第一条预览 + 编辑入口。
+class _MemoryPanel extends StatelessWidget {
+  final AiWorkspaceStore store;
+  final VoidCallback onEdit;
+
+  const _MemoryPanel({required this.store, required this.onEdit});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final memory = store.memory;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text('长期记忆', style: theme.textTheme.labelLarge),
+            const SizedBox(width: 4),
+            Text('${memory.entryCount} 条',
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+            const Spacer(),
+            if (store.memoryBusy)
+              const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+            else
+              IconButton(
+                tooltip: '查看 / 编辑长期记忆',
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                padding: EdgeInsets.zero,
+                onPressed: onEdit,
+                icon: const Icon(Icons.edit_note, size: 16),
+              ),
+          ],
+        ),
+        Text(
+          '每次对话都会带上它；AI 也能用 remember 追加一条。',
+          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+        ),
+        if (memory.entryCount > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              memory.preview,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall,
+            ),
+          ),
+        if (store.memoryError != null)
+          Text('长期记忆不可用：${store.memoryError}', style: theme.textTheme.bodySmall),
+      ],
+    );
+  }
+}
+
+/// 长期记忆编辑器：整篇可改、可以加一条、可以清空。
+///
+/// 真源是 `memory.md`，所以这里就是一个普通的文本框 —— 不做"结构化条目"的花活，
+/// 用户手改文件的内容也能原样读回来。
+class _MemoryEditorDialog extends StatefulWidget {
+  final AiWorkspaceStore store;
+  const _MemoryEditorDialog({required this.store});
+
+  @override
+  State<_MemoryEditorDialog> createState() => _MemoryEditorDialogState();
+}
+
+class _MemoryEditorDialogState extends State<_MemoryEditorDialog> {
+  late final TextEditingController _text =
+      TextEditingController(text: widget.store.memory.content);
+  final TextEditingController _entry = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _text.dispose();
+    _entry.dispose();
+    super.dispose();
+  }
+
+  Future<void> _add() async {
+    final entry = _entry.text.trim();
+    if (entry.isEmpty) return;
+    setState(() => _busy = true);
+    final result = await widget.store.addMemory(entry);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (result.ok) {
+        _text.text = widget.store.memory.content;
+        _entry.clear();
+      }
+    });
+    if (!result.ok) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(result.message)));
+    }
+  }
+
+  Future<void> _clear() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('清空长期记忆？'),
+        content: const Text('会把 memory.md 里的内容全部删掉，不能撤销。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('清空')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    final result = await widget.store.clearMemory();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (result.ok) _text.clear();
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(result.message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final path = widget.store.memory.path;
+    return AlertDialog(
+      title: const Text('长期记忆'),
+      content: SizedBox(
+        width: 560,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                path.isEmpty
+                    ? '一行一条；AI 的 remember 工具会追加到这里。'
+                    : '一行一条，真源是 $path（也可以直接改那个文件）。',
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _text,
+                minLines: 8,
+                maxLines: 14,
+                style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'Consolas'),
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  hintText: '- 用户偏好 4:3 画幅\n- 出图统一用 Anima 模型',
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _entry,
+                      decoration: const InputDecoration(
+                        labelText: '再加一条',
+                        hintText: '例如：交付一律 16:9、带字幕',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onSubmitted: (_) => _add(),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: _busy ? null : _add,
+                    child: const Text('添加'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : _clear,
+          child: const Text('清空'),
+        ),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+        FilledButton(
+          onPressed: _busy ? null : () => Navigator.pop(context, _text.text),
+          child: const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 在系统文件管理器里打开一个目录。
+///
+/// 走 `url_launcher` 的 `file:` 协议（Windows 上落到 ShellExecute）；**打不开就返回 false**,
+/// 由调用方把路径显示给用户 —— 不能假装打开了。
+Future<bool> _openFolder(String path) async {
+  final base = Uri.file(path, windows: true);
+  for (final uri in [base, Uri.parse('${base.toString()}/')]) {
+    try {
+      if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return true;
+    } catch (_) {
+      // 试下一个形式
+    }
+  }
+  return false;
 }

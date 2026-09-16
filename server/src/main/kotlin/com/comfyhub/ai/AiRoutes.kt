@@ -4,7 +4,9 @@ import com.comfyhub.ApiError
 import com.comfyhub.ai.protocol.Adapters
 import com.comfyhub.ai.protocol.ReasoningEffort
 import com.comfyhub.ai.protocol.TransportRef
+import com.comfyhub.ai.tools.MemoryStore
 import com.comfyhub.ai.tools.SkillDto
+import com.comfyhub.ai.tools.SkillRescanDto
 import com.comfyhub.ai.tools.SkillStore
 import com.comfyhub.ai.tools.ToolApprovalGate
 import com.comfyhub.ai.tools.ToolInfoDto
@@ -44,6 +46,7 @@ fun Route.aiRoutes(
     runner: HarnessRunner,
     bus: RunEventBus,
     skills: SkillStore,
+    memory: MemoryStore,
     toolRegistry: ToolRegistry,
     approvals: ToolApprovalGate,
     projectRoot: Path,
@@ -474,14 +477,56 @@ fun Route.aiRoutes(
             call.respond(DeleteResult(deleted = deleted, id = name))
         }
 
-        /** 把本机 `%USERPROFILE%\.dsh\skills` 里的 skills 复制进来（**用户显式动作**）。 */
-        post("/skills/import-dsh") {
-            val dir = SkillStore.dshRoot()
-                ?: throw AiException(
-                    AiErrorCode.CONFIG_ERROR,
-                    "本机没有 %USERPROFILE%\\.dsh\\skills 目录，没什么可导入的",
+        /**
+         * skills 投放口的位置。界面上要显示绝对路径 —— 用户得知道往哪个文件夹拷。
+         *
+         * 两种布局都由 `storageDir` 决定：源码树是 `<项目根>\storage\ai\skills`，
+         * 发布包是 `<根>\storage\ai\skills`（便携式，跟着包走）。
+         */
+        get("/skills/roots") {
+            call.respond(skills.roots())
+        }
+
+        /**
+         * 重新扫描投放口：给"拷进来但没写 frontmatter"的 skill 自动补上并登记，
+         * 然后返回最新列表。
+         *
+         * 启动时后端已经扫过一次（见 Application.module）；这里是给
+         * "应用开着的时候又拷进来一个"用的，不用重启。
+         */
+        post("/skills/rescan") {
+            val result = toolGuard { skills.autoRegister() }
+            call.respond(
+                SkillRescanDto(
+                    registered = result.registered,
+                    names = result.names,
+                    errors = result.errors,
+                    skills = skills.scan(),
                 )
-            call.respond(toolGuard { skills.importFrom(dir, originLabel = "dsh") })
+            )
+        }
+
+        // -------------------------------------------------------------------
+        //  长期记忆（M6，用户建议）
+        //  真源是 `<storage>\ai\memory.md`：人能看懂、能手改，AI 也能用 remember 追加。
+        // -------------------------------------------------------------------
+
+        get("/memory") {
+            call.respond(memory.read())
+        }
+
+        put("/memory") {
+            val body = call.receive<MemoryUpdateRequest>()
+            call.respond(toolGuard { memory.write(body.content) })
+        }
+
+        post("/memory/entries") {
+            val body = call.receive<MemoryEntryRequest>()
+            call.respond(toolGuard { memory.append(body.content) })
+        }
+
+        delete("/memory") {
+            call.respond(toolGuard { memory.clear() })
         }
 
         // -------------------------------------------------------------------
@@ -647,6 +692,14 @@ data class SkillUpsertRequest(
 /** skill 详情：元数据 + 正文（正文只在打开详情时读，列表不读） */
 @Serializable
 data class SkillDetailDto(val skill: SkillDto, val content: String)
+
+/** 长期记忆：整篇替换（界面「保存」） */
+@Serializable
+data class MemoryUpdateRequest(val content: String = "")
+
+/** 长期记忆：追加一条（界面「+ 添加一条」；AI 走 remember 工具，不经过这里） */
+@Serializable
+data class MemoryEntryRequest(val content: String = "")
 
 /** 工具权限视图（界面用）：写/读白名单 + 逐工具覆盖 + 预算 */
 @Serializable

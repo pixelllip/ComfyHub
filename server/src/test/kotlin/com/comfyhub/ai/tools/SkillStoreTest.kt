@@ -327,4 +327,158 @@ class SkillStoreTest {
         assertEquals(1, e.store.catalog().count { it.name == "long-desc" }, "要能进系统提示目录")
         assertEquals("正文", e.store.read("long-desc")!!.second)
     }
+
+    // --- 投放口：拷进来就算装好（用户建议：不要「从 DSH 导入」按钮）----------
+
+    @Test
+    fun `投放口：拷贝进来的平铺 md 没有 frontmatter 也会被自动登记`() {
+        val e = env()
+        writeSkill(e.user.resolve("my-helper.md"), "# 我的助手\n\n第一步：先这样\n第二步：再那样")
+
+        val result = e.store.autoRegister()
+        assertEquals(listOf("my-helper"), result.names)
+        assertEquals(0, result.errors.size, result.errors.toString())
+
+        // 补写的 frontmatter 要用文件名当 name、正文第一行当 description，正文一字不改
+        val dto = e.store.find("my-helper")!!
+        assertNull(dto.validationError)
+        assertEquals("我的助手", dto.description)
+        assertEquals(
+            "# 我的助手\n\n第一步：先这样\n第二步：再那样",
+            e.store.read("my-helper")!!.second,
+            "补 frontmatter 不能动正文",
+        )
+        val raw = Files.readString(e.user.resolve("my-helper.md"), StandardCharsets.UTF_8)
+        assertTrue(raw.startsWith("---\nname: my-helper\n"), raw.take(80))
+    }
+
+    @Test
+    fun `投放口：bundle 目录（名字_SKILL_md）同样自动登记`() {
+        val e = env()
+        writeSkill(e.user.resolve("scene-prompt").resolve("SKILL.md"), "场景提示词规则")
+
+        val result = e.store.autoRegister()
+        assertEquals(listOf("scene-prompt"), result.names)
+        assertEquals("场景提示词规则", e.store.find("scene-prompt")!!.description)
+    }
+
+    @Test
+    fun `投放口：已经有 frontmatter 的文件一个字节都不动（哪怕它不合法）`() {
+        val e = env()
+        val original = "---\nname: broken-skill\n---\n正文" // 缺 description → 非法
+        writeSkill(e.user.resolve("broken-skill").resolve("SKILL.md"), original)
+
+        val result = e.store.autoRegister()
+        assertEquals(0, result.registered)
+        assertEquals(original, Files.readString(e.user.resolve("broken-skill").resolve("SKILL.md")))
+        // 既有规矩不变：列出来、带诊断、不进 catalog
+        assertNotNull(e.store.find("broken-skill")!!.validationError)
+        assertTrue(e.store.catalog().none { it.name == "broken-skill" })
+    }
+
+    @Test
+    fun `投放口：中文文件名没法转成 kebab-case 时如实报错 而不是静默忽略`() {
+        val e = env()
+        writeSkill(e.user.resolve("我的技能.md"), "正文")
+
+        val result = e.store.autoRegister()
+        assertEquals(0, result.registered)
+        assertEquals(1, result.errors.size)
+        assertTrue(result.errors.first().contains("kebab-case"), result.errors.first())
+        // 文件保持原样，仍然在列表里（带 validationError）
+        assertEquals("正文", Files.readString(e.user.resolve("我的技能.md"), StandardCharsets.UTF_8))
+        assertNotNull(e.store.find("我的技能")!!.validationError)
+    }
+
+    @Test
+    fun `投放口：空文件与非 md 文件不会被当成 skill`() {
+        val e = env()
+        writeSkill(e.user.resolve("empty-skill.md"), "   \n\n")
+        writeSkill(e.user.resolve("readme.txt"), "这不是 skill")
+
+        val result = e.store.autoRegister()
+        assertEquals(0, result.registered)
+        assertTrue(result.errors.any { it.contains("empty-skill") }, result.errors.toString())
+        assertNull(e.store.find("readme"))
+    }
+
+    @Test
+    fun `投放口：重复扫描是幂等的（第二次不会又登记一遍）`() {
+        val e = env()
+        writeSkill(e.user.resolve("idempotent.md"), "内容")
+        assertEquals(1, e.store.autoRegister().registered)
+        assertEquals(0, e.store.autoRegister().registered)
+        assertEquals("内容", e.store.read("idempotent")!!.second)
+    }
+
+    @Test
+    fun `投放口：ensureUserRoot 会把目录建出来（发布包里首次启动就靠它）`() {
+        val root = Files.createTempDirectory("comfyhub-skills-fresh").toRealPath()
+        val store = SkillStore(root.resolve("builtin"), root.resolve("storage").resolve("ai").resolve("skills"))
+        val dir = store.ensureUserRoot()
+        assertTrue(Files.isDirectory(dir))
+        assertTrue(store.roots().userRootExists)
+        assertTrue(store.roots().userRoot.endsWith("skills"))
+    }
+
+    // --- YAML 块标量（真实 SKILL.md 里到处都是 `description: |`）--------------
+
+    @Test
+    fun `description 写成块标量竖线时读出多行正文`() {
+        val e = env()
+        writeSkill(
+            e.user.resolve("blocky").resolve("SKILL.md"),
+            """
+            ---
+            name: blocky
+            description: |
+              第一行说明
+              第二行说明
+            version: 2
+            ---
+            正文
+            """.trimIndent(),
+        )
+        val dto = e.store.find("blocky")!!
+        assertNull(dto.validationError, dto.validationError)
+        assertEquals("第一行说明\n第二行说明", dto.description)
+        assertEquals("2", dto.version, "块标量结束后的同级 key 要继续读")
+        assertEquals("正文", e.store.read("blocky")!!.second)
+    }
+
+    @Test
+    fun `description 用折行符号时合成一行 去掉横杠时不留空行`() {
+        val e = env()
+        writeSkill(
+            e.user.resolve("folded").resolve("SKILL.md"),
+            "---\nname: folded\ndescription: >-\n  前半句\n  后半句\n---\n正文",
+        )
+        assertEquals("前半句 后半句", e.store.find("folded")!!.description)
+    }
+
+    @Test
+    fun `真实形态：description 块标量 + 后面还有列表型 key`() {
+        val e = env()
+        writeSkill(
+            e.user.resolve("realistic").resolve("SKILL.md"),
+            """
+            ---
+            name: realistic
+            description: |
+              做视频用
+              只在需要时加载
+            allowed-tools:
+            - webfetch
+            - hub_image_search
+            ---
+            正文
+            """.trimIndent(),
+        )
+        val dto = e.store.find("realistic")!!
+        assertNull(dto.validationError, dto.validationError)
+        assertEquals("做视频用\n只在需要时加载", dto.description)
+        assertEquals("正文", e.store.read("realistic")!!.second)
+        // 进系统提示时不能带换行（目录是一行一条）
+        assertEquals("做视频用 只在需要时加载", dto.oneLineForPrompt)
+    }
 }

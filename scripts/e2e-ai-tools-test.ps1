@@ -53,6 +53,9 @@ $script:Http   = $null
 $script:Streams = @{}
 $script:ConversationId = $null
 
+# 长期记忆的原内容：本脚本会往里写一条测试记忆，结束时原样放回
+$script:MemoryBefore = $null
+
 function Say([string]$msg, [string]$color = 'Gray') { Write-Host $msg -ForegroundColor $color }
 
 function Check([string]$name, [bool]$ok, [string]$detail = '') {
@@ -267,7 +270,7 @@ try {
 
     # --- 2. Provider + 模型目录 -------------------------------------------
     Say ''
-    Say '  [0/7] 配置 e2e Provider / 模型' 'Cyan'
+    Say '  [0/8] 配置 e2e Provider / 模型' 'Cyan'
 
     try { Invoke-Api 'DELETE' "/api/ai/providers/$ProviderId" $null | Out-Null } catch { }
     try { Invoke-Api 'DELETE' "/api/ai/skills/$SkillName" $null | Out-Null } catch { }
@@ -282,6 +285,8 @@ try {
     Remove-Item $SkillFile -Force -ErrorAction SilentlyContinue
     Remove-Item $HackFile -Force -ErrorAction SilentlyContinue
     Remove-Item $OkFile -Force -ErrorAction SilentlyContinue
+    # 长期记忆先存一份：后面会往里面写测试数据，结束时原样放回（不能污染用户真实的记忆）
+    $script:MemoryBefore = (Invoke-Api 'GET' '/api/ai/memory' $null).content
 
     $provider = Invoke-Api 'POST' '/api/ai/providers' @{
         id = $ProviderId
@@ -322,7 +327,7 @@ try {
 
     # --- 3. 场景 1：注册 skill --------------------------------------------
     Say ''
-    Say '  [1/7] 注册：register_skill 落盘' 'Cyan'
+    Say '  [1/8] 注册：register_skill 落盘' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s1 = Receive-Scenario -ConversationId $conv.id -Text '帮我注册一个新的 skill'
     $e1 = $s1.events
@@ -366,7 +371,7 @@ try {
 
     # --- 4. 场景 2：按需加载 ----------------------------------------------
     Say ''
-    Say '  [2/7] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
+    Say '  [2/8] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s2 = Receive-Scenario -ConversationId $conv.id -Text '加载那个 skill'
     $e2 = $s2.events
@@ -392,7 +397,7 @@ try {
 
     # --- 5. 场景 3：越界写被拒 --------------------------------------------
     Say ''
-    Say '  [3/7] 越界写被拒：write_file 打到 storage/' 'Cyan'
+    Say '  [3/8] 越界写被拒：write_file 打到 storage/' 'Cyan'
     $s3 = Receive-Scenario -ConversationId $conv.id -Text '越界写个文件'
     $e3 = $s3.events
     $fail3 = @(Get-Events $e3 'tool.failed')
@@ -409,7 +414,7 @@ try {
 
     # --- 6. 场景 4：目录内写成功 ------------------------------------------
     Say ''
-    Say '  [4/7] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
+    Say '  [4/8] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
     $s4 = Receive-Scenario -ConversationId $conv.id -Text '在目录内写个文件'
     $e4 = $s4.events
     $comp4 = @(Get-Events $e4 'tool.completed')
@@ -423,7 +428,7 @@ try {
 
     # --- 7. 场景 5：审批闸门 ----------------------------------------------
     Say ''
-    Say '  [5/7] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
+    Say '  [5/8] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
     $state = @{ callId = $null; pending = $false; accepted = $false; startedIndex = -1; requestedIndex = -1 }
     $s5 = Receive-Scenario -ConversationId $conv.id -Text '同步一下历史' -OnEvent {
         param($e, $i)
@@ -457,7 +462,7 @@ try {
 
     # --- 8. 场景 6：只读工具 ----------------------------------------------
     Say ''
-    Say '  [6/7] 只读工具：comfy_get_status 不需要审批' 'Cyan'
+    Say '  [6/8] 只读工具：comfy_get_status 不需要审批' 'Cyan'
     $s6 = Receive-Scenario -ConversationId $conv.id -Text '看看 ComfyUI 状态'
     $e6 = $s6.events
     $req6 = @(Get-Events $e6 'tool.requested')
@@ -471,7 +476,7 @@ try {
 
     # --- 9. 落库的消息 parts（重开会话能渲染工具卡） ----------------------
     Say ''
-    Say '  [7/7] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
+    Say '  [7/8] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
     $runDto = Invoke-Api 'GET' "/api/ai/runs/$($s1.run.runId)" $null
     Check 'run 落库状态 == completed' ($runDto.status -eq 'completed') ($runDto | ConvertTo-Json -Compress)
 
@@ -495,6 +500,38 @@ try {
         $tw = $assistant.parts | Where-Object { $_.type -eq 'tool_result' } | Select-Object -First 1
         Check 'tool_result part 带 ok=true' ($null -ne $tw -and $tw.jsonPayload.ok -eq $true) ($tw | ConvertTo-Json -Depth 6 -Compress)
     }
+
+    # --- 10. 场景 8：长期记忆（M6） ---------------------------------------
+    Say ''
+    Say '  [8/8] 长期记忆：remember 落盘 + 下一次 Run 注入系统提示' 'Cyan'
+    $s8 = Receive-Scenario -ConversationId $conv.id -Text '记住：E2E 记一条，用户偏好 4:3 画幅'
+    $e8 = $s8.events
+    $req8 = @(Get-Events $e8 'tool.requested')
+    $r8 = if ($req8.Count -ge 1) { Convert-Data $req8[0] } else { $null }
+    Check 'tool.requested.name == remember' ($null -ne $r8 -and $r8.name -eq 'remember') ($req8 | ConvertTo-Json -Compress)
+    Check 'remember 不需要审批（写的是应用自己的记忆文件）' ($null -ne $r8 -and $r8.approval -ne 'pending') ($r8 | ConvertTo-Json -Compress)
+    $comp8 = @(Get-Events $e8 'tool.completed')
+    Check 'remember 执行成功' ($comp8.Count -ge 1) ($e8 | ConvertTo-Json -Depth 6 -Compress)
+
+    $mem = Invoke-Api 'GET' '/api/ai/memory' $null
+    Check "memory.md 里真的多了一条（entryCount=$($mem.entryCount)）" ($mem.entryCount -ge 1) ($mem | ConvertTo-Json -Compress)
+    Check '记忆正文里带刚写的内容' ($mem.content -like '*E2E 记一条*') ($mem.content)
+    Check '记忆文件落在 storage\ai\memory.md' ($mem.path -like '*storage\ai\memory.md') ($mem.path)
+
+    # 再发一轮普通对话：系统提示里必须带上长期记忆（"以后每次对话都会带上它"）
+    $beforeLog2 = @(Invoke-Gateway '/__log').Count
+    $null = Receive-Scenario -ConversationId $conv.id -Text '你好'
+    $logAfter = @(Invoke-Gateway '/__log')
+    $runLog2 = @($logAfter | Select-Object -Skip $beforeLog2)
+    Check '后续 Run 的系统提示里带上了那条记忆' `
+        ((@($runLog2 | Where-Object { $_.systemMemoryHasProbe -eq $true })).Count -ge 1) `
+        ($runLog2 | ConvertTo-Json -Depth 6 -Compress)
+    Check '系统提示里有「长期记忆」段落' `
+        ((@($runLog2 | Where-Object { $_.systemHasMemorySection -eq $true })).Count -ge 1) `
+        ($runLog2 | ConvertTo-Json -Depth 6 -Compress)
+    Check '下发给模型的工具里有 remember' `
+        ((@($runLog2 | Where-Object { $_.hasRememberTool -eq $true })).Count -ge 1) `
+        (($runLog2 | ForEach-Object { $_.toolNames -join ',' }) -join ' | ')
 } finally {
     # --- 清理 -------------------------------------------------------------
     Say ''
@@ -514,6 +551,12 @@ try {
         Remove-Item (Split-Path -Parent $SkillFile) -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item $HackFile -Force -ErrorAction SilentlyContinue
         Remove-Item $OkFile -Force -ErrorAction SilentlyContinue
+        if ($null -ne $script:MemoryBefore) {
+            try {
+                Invoke-Api 'PUT' '/api/ai/memory' @{ content = $script:MemoryBefore } | Out-Null
+                Say '  已把长期记忆恢复成本次运行前的内容' 'DarkGray'
+            } catch { }
+        }
         Say '  已删除会话 / Provider / skill / 临时文件' 'DarkGray'
     }
     if ($script:Http) { try { $script:Http.Dispose() } catch { } }
