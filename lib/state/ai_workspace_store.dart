@@ -647,6 +647,21 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
+  /// 后端把会话标题总结出来了（`conversation.updated`）：本地就地更新，**不再拉一次接口**。
+  ///
+  /// 标题是"用户第一问之后自动来的"，不该为了它多打一次网络往返；
+  /// 但**只改标题**这一个字段，不整条覆盖 —— 事件里的会话对象没有 messageCount 之类的新鲜数据。
+  void _applyConversationTitle(String conversationId, String title) {
+    conversations = [
+      for (final c in conversations)
+        if (c.id == conversationId) c.copyWith(title: title) else c,
+    ];
+    final current = conversation;
+    if (current != null && current.id == conversationId) {
+      conversation = current.copyWith(title: title);
+    }
+  }
+
   Future<void> renameConversation(String title) async {
     final conv = conversation;
     if (conv == null) return;
@@ -901,12 +916,14 @@ class AiWorkspaceStore extends ChangeNotifier {
     var streamed = '';
     // 这一条助手消息的实时思考 / 工具调用（气泡边流边渲染）
     _liveReasoning.remove(assistantMessageId);
+    _liveSegments.remove(assistantMessageId);
     _liveToolCalls.remove(assistantMessageId);
     try {
       await for (final event in _api.runEvents(runId)) {
         switch (event.type) {
           case 'text.delta':
             streamed += event.text ?? '';
+            _appendLiveSegment(assistantMessageId, 'text', event.text ?? '');
             _replaceMessage(assistantMessageId, text: streamed, status: 'streaming');
             notifyListeners();
           // 思考增量（M4）：按消息累加，气泡里折叠展示
@@ -914,6 +931,7 @@ class AiWorkspaceStore extends ChangeNotifier {
             final delta = event.text ?? '';
             if (delta.isEmpty) break;
             _liveReasoning.update(assistantMessageId, (v) => v + delta, ifAbsent: () => delta);
+            _appendLiveSegment(assistantMessageId, 'reasoning', delta);
             notifyListeners();
           // 工具调用请求：approval=pending 的要在气泡上等用户点「批准 / 拒绝」
           case 'tool.requested':
@@ -996,6 +1014,15 @@ class AiWorkspaceStore extends ChangeNotifier {
           case 'run.cancelled':
             _replaceMessage(assistantMessageId, text: streamed, status: 'cancelled');
             notice = '已停止本次生成。';
+          // 会话标题被后端自动总结出来了（用户建议 ③）：立刻刷新标题与对话列表，
+          // 不等这次 Run 结束 —— 用户第一眼就能在 AppBar 上看到这条对话叫什么。
+          case 'conversation.updated':
+            final newTitle = event.data['title']?.toString();
+            final convId = event.data['conversationId']?.toString() ?? conversation?.id;
+            if (newTitle != null && newTitle.isNotEmpty && convId != null) {
+              _applyConversationTitle(convId, newTitle);
+              notifyListeners();
+            }
           // 这些事件不需要额外动作：
           //  - run.started 带 tools 清单（留给后续"本次可用工具"展示）
           //  - message.started / run.completed 只标示阶段
@@ -1126,6 +1153,40 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 助手消息 id → 实时思考正文。
   final Map<String, String> _liveReasoning = {};
 
+  /// 助手消息 id → **按流顺序**排好的段（思考 / 正文）。
+  ///
+  /// 用户要求"思考过程按照流顺序如实显示"：正文与思考是交错的，
+  /// 只把思考单独堆在气泡顶上就不是"如实"了。流式过程中按到达顺序追加，
+  /// `message.completed` 之后以 parts 还原的段为准。
+  final Map<String, List<AiMessageSegment>> _liveSegments = {};
+
+  /// 一条助手消息按流顺序排好的段（思考 / 正文）。
+  ///
+  /// 优先用 `parts`（权威有序块）；流式过程中 parts 还没到，就用事件累积的实时段。
+  List<AiMessageSegment> segmentsFor(AiMessage message) {
+    final fromParts = AiMessageSegment.fromParts(message.parts);
+    if (fromParts.isNotEmpty) return fromParts;
+    final live = _liveSegments[message.id];
+    if (live != null && live.isNotEmpty) return live;
+    // 兜底：老后端只给一段汇总的 reasoning（没有 parts）
+    final legacy = _liveReasoning[message.id];
+    if (legacy != null && legacy.isNotEmpty) {
+      return [AiMessageSegment('reasoning', legacy)];
+    }
+    return const [];
+  }
+
+  /// 往实时段列表里追加一片增量：与上一段同类型就并进去，否则新开一段。
+  void _appendLiveSegment(String messageId, String type, String delta) {
+    if (delta.isEmpty) return;
+    final list = _liveSegments.putIfAbsent(messageId, () => <AiMessageSegment>[]);
+    if (list.isNotEmpty && list.last.type == type) {
+      list[list.length - 1] = AiMessageSegment(type, list.last.text + delta);
+    } else {
+      list.add(AiMessageSegment(type, delta));
+    }
+  }
+
   /// 一条消息要渲染的工具调用（有序）。
   ///
   /// 优先用 `parts`（`message.completed` 给的权威有序块 / 历史消息）；
@@ -1174,6 +1235,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   void _pruneLiveState() {
     final ids = messages.map((m) => m.id).toSet();
     _liveReasoning.removeWhere((k, _) => !ids.contains(k));
+    _liveSegments.removeWhere((k, _) => !ids.contains(k));
     _liveToolCalls.removeWhere((k, _) => !ids.contains(k));
   }
 

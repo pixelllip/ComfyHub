@@ -516,6 +516,16 @@ class AiConversation {
         messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
         updatedAt: DateTime.tryParse((json['updatedAt'] ?? '').toString()),
       );
+
+  AiConversation copyWith({String? title}) => AiConversation(
+        id: id,
+        title: title ?? this.title,
+        providerId: providerId,
+        modelId: modelId,
+        archived: archived,
+        messageCount: messageCount,
+        updatedAt: updatedAt,
+      );
 }
 
 /// 一次请求的 token 用量（AIH-057）。
@@ -698,6 +708,43 @@ class AiMessagePart {
     final map = payload;
     return map == null ? null : map['arguments']?.toString();
   }
+}
+
+/// 一条助手消息里**按流顺序**排好的一段内容：思考段或正文段。
+///
+/// 为什么需要它：工具循环会让一次回复变成
+/// `思考 → 正文 → 工具 → 思考 → 正文 …`，而人想看到的就是这个顺序。
+/// 后端给的 `parts` 已经是权威的有序块，这里只是把**相邻的同类块合并**成段，
+/// 免得一个气泡里冒出十几个碎段。
+class AiMessageSegment {
+  /// reasoning / text
+  final String type;
+  final String text;
+
+  const AiMessageSegment(this.type, this.text);
+
+  bool get isReasoning => type == 'reasoning';
+
+  /// 从有序块还原成段（相邻同类合并）。没有 parts 时返回空列表，调用方回退到实时状态。
+  static List<AiMessageSegment> fromParts(List<AiMessagePart> parts) {
+    final out = <AiMessageSegment>[];
+    for (final p in parts) {
+      if (p.type != 'reasoning' && p.type != 'text') continue;
+      final text = p.text ?? '';
+      if (text.isEmpty) continue;
+      if (out.isNotEmpty && out.last.type == p.type) {
+        out[out.length - 1] = AiMessageSegment(p.type, out.last.text + text);
+      } else {
+        out.add(AiMessageSegment(p.type, text));
+      }
+    }
+    return out;
+  }
+
+  /// 反过来：把段落列表拼回有序块（测试与排错时用）。
+  static List<AiMessagePart> toParts(List<AiMessageSegment> segments) => [
+        for (final s in segments) AiMessagePart(type: s.type, text: s.text),
+      ];
 }
 
 class AiMessage {

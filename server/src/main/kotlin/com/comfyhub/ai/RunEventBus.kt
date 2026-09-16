@@ -96,6 +96,8 @@ object RunEventType {
     const val TOOL_FAILED = "tool.failed"
     const val USAGE_UPDATED = "usage.updated"
     const val MESSAGE_COMPLETED = "message.completed"
+    /** 会话标题被自动总结出来了（用户建议 ③）：前端据此刷新标题与对话列表 */
+    const val CONVERSATION_UPDATED = "conversation.updated"
     const val RUN_COMPLETED = "run.completed"
     const val RUN_FAILED = "run.failed"
     const val RUN_CANCELLED = "run.cancelled"

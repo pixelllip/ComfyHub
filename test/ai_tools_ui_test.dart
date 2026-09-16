@@ -167,7 +167,8 @@ MockClient _backend(
           'conversationId': 'c1',
           'seq': 2,
           'role': 'assistant',
-          // 工具还在等批准时，后端这条消息还是 streaming
+          // 后端落库后的状态：给了 parts 就是写完了（complete）；
+          // 没有 parts 说明这一轮还没收尾（例如工具卡还在等批准），仍是 streaming
           'status': assistantParts.isEmpty ? 'streaming' : 'complete',
           'text': assistantText,
           'parts': assistantParts,
@@ -639,15 +640,22 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
+    // 思考正文写得比折叠摘要（160 字）长：这样才能断言"折叠时只给摘要、展开后才有全文"
+    final filler = '先看需求，再定风格。' * 20;
     final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
-        _sse(3, 'reasoning.delta', '{"messageId":"a1","text":"先看需求，"}') +
-        _sse(4, 'reasoning.delta', '{"messageId":"a1","text":"再定风格。"}') +
+        _sse(3, 'reasoning.delta', '{"messageId":"a1","text":"$filler"}') +
+        _sse(4, 'reasoning.delta', '{"messageId":"a1","text":"尾巴结论。"}') +
         _sse(5, 'text.delta', '{"messageId":"a1","text":"好的"}') +
         _sse(6, 'message.completed', '{"messageId":"a1","text":"好的","steps":0}') +
         _sse(7, 'run.completed', '{"runId":"r1"}');
+    // 后端落库后的有序块：思考/正文按流顺序各一块（与 message.completed 之后库里的一致）
+    final parts = [
+      {'type': 'reasoning', 'text': '$filler尾巴结论。'},
+      {'type': 'text', 'text': '好的'},
+    ];
 
-    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpWidget(await _homePage(rec, sse: sse, assistantParts: parts));
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField).first, '帮我想想');
@@ -655,11 +663,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('思考过程'), findsOneWidget);
-    // 默认折叠：正文里的增量不直接铺开
-    expect(find.textContaining('先看需求'), findsNothing);
+    // 默认折叠：只给一段摘要（开头能看到），完整正文铺不开（摘要限 160 字 + 省略号）
+    expect(find.textContaining('先看需求'), findsWidgets);
+    expect(find.textContaining('尾巴结论'), findsNothing);
     await tester.tap(find.text('思考过程'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('先看需求，再定风格。'), findsOneWidget);
+    expect(find.textContaining('尾巴结论。'), findsOneWidget);
   });
 
   testWidgets('(d) 模型选择器懒构建并可按搜索过滤', (tester) async {

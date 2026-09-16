@@ -134,8 +134,11 @@ class _AiHomePageState extends State<AiHomePage> {
     final wide = width >= 900;
 
     final conversationList = _ConversationList(store: store);
+    // AppBar 显示**当前对话标题**（用户建议 ④）：标题是自动总结出来的，
+    // 所以它得一直在视野里，用户才知道自己在哪条对话里、也可以随手改名。
     final thread = Column(
       children: [
+        _ConversationAppBar(store: store),
         Expanded(child: _MessageList(store: store, controller: _scroll)),
         _Composer(
           store: store,
@@ -283,6 +286,98 @@ class _ConversationList extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
+//  AppBar：当前对话标题（用户建议 ④）
+// ---------------------------------------------------------------------------
+
+/// 顶部条：显示**当前对话标题**，可以直接改名，也能看到当前模型与消息数。
+///
+/// 对话标题现在是 AI 在第一次提问时自动总结出来的（用户建议 ③），
+/// 用户不接受这个总结时可以在这里（或会话列表的「重命名」里）改掉。
+class _ConversationAppBar extends StatelessWidget implements PreferredSizeWidget {
+  final AiWorkspaceStore store;
+
+  const _ConversationAppBar({required this.store});
+
+  @override
+  Size get preferredSize => const Size.fromHeight(56);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final conv = store.conversation;
+    final title = (conv?.title ?? '').trim();
+    final model = store.selectedModel?.displayName ?? store.selectedModel?.id;
+    final showTitle = title.isNotEmpty && title != '新对话';
+
+    return AppBar(
+      toolbarHeight: 56,
+      // 窄屏时左上角是抽屉入口（会话列表）
+      automaticallyImplyLeading: MediaQuery.sizeOf(context).width < 900,
+      titleSpacing: 8,
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            showTitle ? title : '新对话',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.titleMedium,
+          ),
+          Text(
+            [
+              ?model,
+              if (conv != null) '${conv.messageCount} 条消息',
+              if (store.sending) '生成中…',
+            ].join(' · '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+          ),
+        ],
+      ),
+      actions: [
+        if (conv != null)
+          IconButton(
+            tooltip: '重命名这条对话',
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            onPressed: () => _renameCurrent(context),
+          ),
+        IconButton(
+          tooltip: '新建对话',
+          icon: const Icon(Icons.add_comment_outlined, size: 18),
+          onPressed: () => store.newConversation(),
+        ),
+        const SizedBox(width: 4),
+      ],
+    );
+  }
+
+  Future<void> _renameCurrent(BuildContext context) async {
+    final conv = store.conversation;
+    if (conv == null) return;
+    final controller = TextEditingController(text: conv.title);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('重命名会话'),
+        content: TextField(controller: controller, autofocus: true),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (result != null && result.trim().isNotEmpty) {
+      await store.renameConversation(result.trim());
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 //  消息区
 // ---------------------------------------------------------------------------
 
@@ -310,7 +405,8 @@ class _MessageList extends StatelessWidget {
             onRetry: store.retry,
             // 工具卡 / 思考都只属于助手消息
             toolCalls: message.isUser ? const [] : store.toolCallsFor(message),
-            reasoning: message.isUser ? '' : store.reasoningFor(message),
+            // 思考 / 正文按**流顺序**还原成段（用户要求"如实按流顺序显示"）
+            segments: message.isUser ? const [] : store.segmentsFor(message),
             toolCategoryOf: store.toolCategoryOf,
             onApprove: store.approveToolCall,
             onDeny: store.denyToolCall,
@@ -337,8 +433,8 @@ class _MessageBubble extends StatelessWidget {
   /// 这条消息的有序工具调用（M4）。
   final List<AiToolCallState> toolCalls;
 
-  /// 这条消息累积的思考正文（`reasoning.delta` / reasoning 块）。
-  final String reasoning;
+  /// 这条消息按流顺序排好的段：思考段 + 正文段（`reasoning` / `text`）。
+  final List<AiMessageSegment> segments;
 
   final String Function(String toolName) toolCategoryOf;
   final Future<void> Function(String callId) onApprove;
@@ -353,7 +449,7 @@ class _MessageBubble extends StatelessWidget {
     required this.sending,
     required this.onRetry,
     this.toolCalls = const [],
-    this.reasoning = '',
+    this.segments = const [],
     required this.toolCategoryOf,
     required this.onApprove,
     required this.onDeny,
@@ -385,8 +481,14 @@ class _MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 思考过程（M4）：默认折叠，只有真有 reasoning 增量时才出现
-              if (!m.isUser && reasoning.trim().isNotEmpty) _ReasoningPanel(text: reasoning),
+              // 思考过程与正文**按流顺序**交替渲染（用户要求：如实显示，不合并、不重排）。
+              // 思考段默认折叠，收起时给一段摘要；正文段照旧走 Markdown。
+              for (final seg in segments)
+                if (seg.isReasoning)
+                  _ReasoningPanel(text: seg.text, streaming: m.status == 'streaming')
+                else if (seg.text.trim().isNotEmpty)
+                  MarkdownText(seg.text, style: theme.textTheme.bodyMedium),
+              // 附件块（只出现在用户轮）
               for (final part in m.parts)
                 if (part.type == 'attachment')
                   Padding(
@@ -397,9 +499,9 @@ class _MessageBubble extends StatelessWidget {
                       fileUrl: fileUrlOf(part.attachmentId),
                     ),
                   ),
-              // 用户消息按纯文本显示（自己敲的，不需要渲染）；
-              // 助手消息渲染 Markdown —— 之前把 `**加粗**` 原样吐出来，很难读。
-              if (m.text.isNotEmpty)
+              // 没有段可用时（老数据 / 只有纯文本）退回整段正文，
+              // 用户消息本来就是纯文本，不走 Markdown。
+              if (segments.isEmpty && m.text.isNotEmpty)
                 m.isUser
                     ? SelectableText(m.text)
                     : MarkdownText(m.text, style: theme.textTheme.bodyMedium),
@@ -692,10 +794,18 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
-/// 思考过程：默认折叠，避免把气泡撑成一屏高。
+/// 思考过程：默认折叠。
+///
+/// 收起时**不是简单藏起来** —— 显示模型思考的摘要（首段，压成一行），
+/// 这样一眼能看出"它想了什么"；展开后给完整正文，可滚动、可选中复制。
+/// 流式生成中自动展开（跟 DeepSeek 的做法一致），结束后回落成折叠摘要。
 class _ReasoningPanel extends StatefulWidget {
   final String text;
-  const _ReasoningPanel({required this.text});
+
+  /// 这一轮还在生成：自动展开跟着走，用户手动点过之后不再自动干预。
+  final bool streaming;
+
+  const _ReasoningPanel({required this.text, this.streaming = false});
 
   @override
   State<_ReasoningPanel> createState() => _ReasoningPanelState();
@@ -704,16 +814,47 @@ class _ReasoningPanel extends StatefulWidget {
 class _ReasoningPanelState extends State<_ReasoningPanel> {
   bool _expanded = false;
 
+  /// 用户手动点过之后，流式自动展开就不再插手（别跟用户抢）。
+  bool _touched = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _expanded = widget.streaming;
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReasoningPanel old) {
+    super.didUpdateWidget(old);
+    if (_touched) return;
+    if (widget.streaming && !_expanded) {
+      setState(() => _expanded = true);
+    } else if (!widget.streaming && _expanded) {
+      setState(() => _expanded = false);
+    }
+  }
+
+  /// 收起时的摘要：压掉换行、取开头一段，末尾还有内容就加省略号。
+  static String summaryOf(String text, {int limit = 160}) {
+    final flat = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (flat.length <= limit) return flat;
+    return '${flat.substring(0, limit)}…';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final label = theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline);
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           InkWell(
-            onTap: () => setState(() => _expanded = !_expanded),
+            onTap: () => setState(() {
+              _touched = true;
+              _expanded = !_expanded;
+            }),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -721,23 +862,59 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
                     size: 16, color: theme.colorScheme.outline),
                 Icon(Icons.psychology_outlined, size: 14, color: theme.colorScheme.outline),
                 const SizedBox(width: 4),
-                Text('思考过程',
-                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+                Text('思考过程', style: label),
+                if (widget.streaming) ...[
+                  const SizedBox(width: 6),
+                  // 这里**不用** CircularProgressIndicator：无限动画会让
+                  // `pumpAndSettle` 永远等下去，而且一屏好几个转圈也很吵。
+                  Text('思考中…', style: label),
+                ],
               ],
             ),
           ),
           if (_expanded)
             ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 240),
+              constraints: const BoxConstraints(maxHeight: 320),
               child: SingleChildScrollView(
+                // 收起时**整段不建**（不是 Opacity/Offstage）：长思考的文本量不小，
+                // 折叠状态不该还把它留在 widget 树里。
+                child: _SelectableReasoning(text: widget.text),
+              ),
+            )
+          else if (widget.text.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 20, top: 2),
+              child: Tooltip(
+                message: '点击展开完整思考过程',
                 child: Text(
-                  widget.text,
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                  summaryOf(widget.text),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.outline.withValues(alpha: 0.85),
+                  ),
                 ),
               ),
             ),
         ],
       ),
+    );
+  }
+}
+
+/// 展开后的完整思考正文：可选中复制（长度不受摘要限制）。
+///
+/// 单独包一层是为了让"折叠时完全不构建它"这个行为一眼可见（见 `_ReasoningPanel`）。
+class _SelectableReasoning extends StatelessWidget {
+  final String text;
+  const _SelectableReasoning({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SelectableText(
+      text,
+      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
     );
   }
 }
