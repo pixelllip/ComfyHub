@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:video_player_win/video_player_win.dart';
 
 /// Windows 上的视频播放器（基于 Media Foundation）。
@@ -77,11 +78,22 @@ class _WinVideoViewState extends State<WinVideoView> {
   /// 不复用同一个 controller —— `video_player_win` 的同一个 controller 接到两个
   /// `WinVideoPlayer` 上会互相抢纹理，实测会出现其中一个黑屏。新开一路更稳，
   /// 代价只是多解码一次（本地文件，可接受）。
+  ///
+  /// 进去之前先**暂停**内嵌这一路，退出时按全屏页回传的位置续播。
+  /// 以前只传 `startAt` 却不暂停/不回写，两路同时输出同一份音频，
+  /// 回来还停在旧进度 —— 看上去就是"点全屏后从头播"（bug 清单第 1 条）。
   Future<void> _openFullscreen() async {
-    final v = _controller?.value;
-    final startAt = v?.position ?? Duration.zero;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
+    final controller = _controller;
+    final v = controller?.value;
+    if (controller == null || v == null || !v.isInitialized) return;
+
+    final startAt = v.position;
+    final wasPlaying = v.isPlaying;
+    if (wasPlaying) await controller.pause();
+    if (!mounted) return;
+
+    final exitAt = await Navigator.of(context).push<Duration>(
+      MaterialPageRoute<Duration>(
         fullscreenDialog: true,
         builder: (_) => _FullscreenVideo(
           url: widget.url,
@@ -90,6 +102,13 @@ class _WinVideoViewState extends State<WinVideoView> {
         ),
       ),
     );
+
+    // 全屏页里可能拖到了别处：回到内嵌这一路时接着最新进度，而不是倒回去
+    if (!mounted) return;
+    if (exitAt != null && exitAt > startAt) {
+      await controller.seekTo(exitAt);
+    }
+    if (wasPlaying && mounted) await controller.play();
   }
 
   @override
@@ -107,42 +126,38 @@ class _WinVideoViewState extends State<WinVideoView> {
     return Column(
       children: [
         Expanded(
-          child: Stack(
-            children: [
-              // 视频按**长边铺满**：可用区域偏宽就拉满宽度，偏窄就拉满高度，
-              // 保持原始比例、不裁切。以前的固定 16:9 会让竖屏视频两侧留一大块黑。
-              Positioned.fill(
-                child: LayoutBuilder(
-                  builder: (context, box) {
-                    var w = box.maxWidth;
-                    var h = w / ratio;
-                    if (h > box.maxHeight) {
-                      h = box.maxHeight;
-                      w = h * ratio;
-                    }
-                    return Center(
-                      child: SizedBox(
-                        width: w,
-                        height: h,
-                        child: WinVideoPlayer(controller),
-                      ),
-                    );
-                  },
+          child: ColoredBox(
+            color: Colors.black,
+            child: Stack(
+              children: [
+                // 视频按**长边铺满**：可用区域偏宽就拉满宽度，偏窄就拉满高度，
+                // 保持原始比例、不裁切。以前的固定 16:9 会让竖屏视频两侧留一大块黑。
+                Positioned.fill(
+                  child: LayoutBuilder(
+                    builder: (context, box) {
+                      var w = box.maxWidth;
+                      var h = w / ratio;
+                      if (h > box.maxHeight) {
+                        h = box.maxHeight;
+                        w = h * ratio;
+                      }
+                      return Center(
+                        child: SizedBox(
+                          width: w,
+                          height: h,
+                          child: WinVideoPlayer(controller),
+                        ),
+                      );
+                    },
+                  ),
                 ),
-              ),
-              Positioned(
-                right: 8,
-                top: 8,
-                child: _OverlayButton(
-                  icon: Icons.fullscreen,
-                  tooltip: '全屏（Esc 退出）',
-                  onTap: _openFullscreen,
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
-        _Controls(controller: controller, onFullscreen: _openFullscreen),
+        // 全屏入口只留控制条上这一个。以前右上角还有一个悬浮按钮，
+        // 同一个页面出现两个"全屏"图标，用户会以为是两个功能（bug 清单第 1 条）。
+        _Controls(controller: controller, onFullscreen: _openFullscreen, dark: false),
       ],
     );
   }
@@ -197,6 +212,10 @@ class _FullscreenVideoState extends State<_FullscreenVideo> {
   String? _error;
   bool _ready = false;
 
+  /// 键盘焦点锚点：没有它，按 Esc 时全屏页里可能没有任何东西持有焦点，
+  /// `Shortcuts` 收不到按键（这就是"无法按 Esc 退出"的成因）。
+  final _focus = FocusNode(debugLabel: 'fullscreen-video');
+
   @override
   void initState() {
     super.initState();
@@ -219,13 +238,21 @@ class _FullscreenVideoState extends State<_FullscreenVideo> {
       }
       setState(() => _ready = true);
       await controller.play();
+      // 自动接管焦点，Esc 才有效（点击控件后焦点会移过去，退出按钮依然在）
+      _focus.requestFocus();
     } catch (e) {
       if (mounted) setState(() => _error = '全屏播放失败: $e');
     }
   }
 
+  /// 退出全屏：把当前进度交还给内嵌那一路，避免"退出后从头开始"。
+  void _exit() {
+    Navigator.of(context).pop<Duration>(_controller?.value.position ?? Duration.zero);
+  }
+
   @override
   void dispose() {
+    _focus.dispose();
     _controller?.dispose();
     super.dispose();
   }
@@ -234,59 +261,78 @@ class _FullscreenVideoState extends State<_FullscreenVideo> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          if (_error != null)
-            Center(
-              child: Text(_error!, style: const TextStyle(color: Colors.white70)),
-            )
-          else if (!_ready)
-            _PosterOrSpinner(url: widget.posterUrl)
-          else
-            Positioned.fill(
-              child: LayoutBuilder(
-                builder: (context, box) {
-                  final ratio = _WinVideoViewState._ratioOf(_controller!);
-                  var w = box.maxWidth;
-                  var h = w / ratio;
-                  if (h > box.maxHeight) {
-                    h = box.maxHeight;
-                    w = h * ratio;
-                  }
-                  return Center(
-                    child: SizedBox(
-                      width: w,
-                      height: h,
-                      child: WinVideoPlayer(_controller!),
-                    ),
-                  );
-                },
-              ),
+      body: Shortcuts(
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
+        },
+        child: Actions(
+          actions: {
+            DismissIntent: CallbackAction<DismissIntent>(
+              onInvoke: (_) {
+                _exit();
+                return null;
+              },
             ),
-          // 顶部：退出全屏
-          Positioned(
-            left: 8,
-            top: 8,
-            child: _OverlayButton(
-              icon: Icons.fullscreen_exit,
-              tooltip: '退出全屏（Esc）',
-              onTap: () => Navigator.of(context).maybePop(),
+          },
+          child: Focus(
+            focusNode: _focus,
+            child: Stack(
+              children: [
+                if (_error != null)
+                  Center(
+                    child: Text(_error!, style: const TextStyle(color: Colors.white70)),
+                  )
+                else if (!_ready)
+                  _PosterOrSpinner(url: widget.posterUrl)
+                else
+                  Positioned.fill(
+                    child: LayoutBuilder(
+                      builder: (context, box) {
+                        final ratio = _WinVideoViewState._ratioOf(_controller!);
+                        var w = box.maxWidth;
+                        var h = w / ratio;
+                        if (h > box.maxHeight) {
+                          h = box.maxHeight;
+                          w = h * ratio;
+                        }
+                        return Center(
+                          child: SizedBox(
+                            width: w,
+                            height: h,
+                            child: WinVideoPlayer(_controller!),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                // 顶部：退出全屏
+                Positioned(
+                  left: 8,
+                  top: 8,
+                  child: _OverlayButton(
+                    icon: Icons.fullscreen_exit,
+                    tooltip: '退出全屏（Esc）',
+                    onTap: _exit,
+                  ),
+                ),
+                if (_ready)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: ColoredBox(
+                      color: Colors.black54,
+                      child: _Controls(
+                        controller: _controller!,
+                        onFullscreen: null,
+                        dark: true,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
-          if (_ready)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: ColoredBox(
-                color: Colors.black54,
-                child: _Controls(
-                  controller: _controller!,
-                  onFullscreen: null,
-                ),
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
@@ -326,7 +372,10 @@ class _Controls extends StatefulWidget {
   /// 控制条上的全屏按钮；传 null 表示已经有别的全屏入口（全屏页自己不再显示）。
   final VoidCallback? onFullscreen;
 
-  const _Controls({required this.controller, this.onFullscreen});
+  /// 黑底场景（全屏页）：文字与图标用白色。
+  final bool dark;
+
+  const _Controls({required this.controller, this.onFullscreen, this.dark = false});
 
   @override
   State<_Controls> createState() => _ControlsState();
@@ -360,13 +409,17 @@ class _ControlsState extends State<_Controls> {
     final v = widget.controller.value;
     final total = v.duration.inMilliseconds;
     final pos = v.position.inMilliseconds.clamp(0, total == 0 ? 1 : total);
+    // 全屏页是黑底，字与图标必须跟着变白，否则时间显示看不见
+    final fg = widget.dark ? Colors.white : null;
+    final timeStyle = TextStyle(fontSize: 12, color: fg);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
         children: [
           IconButton(
-            icon: Icon(v.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_fill, size: 34),
+            icon: Icon(v.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_fill,
+                size: 34, color: fg),
             onPressed: () async {
               if (v.isPlaying) {
                 await widget.controller.pause();
@@ -376,7 +429,7 @@ class _ControlsState extends State<_Controls> {
               setState(() {});
             },
           ),
-          Text(_fmt(v.position), style: const TextStyle(fontSize: 12)),
+          Text(_fmt(v.position), style: timeStyle),
           Expanded(
             child: Slider(
               value: pos.toDouble(),
@@ -386,12 +439,12 @@ class _ControlsState extends State<_Controls> {
                   : (value) => widget.controller.seekTo(Duration(milliseconds: value.toInt())),
             ),
           ),
-          Text(_fmt(v.duration), style: const TextStyle(fontSize: 12)),
+          Text(_fmt(v.duration), style: timeStyle),
           const SizedBox(width: 8),
           Icon(
             v.volume == 0 ? Icons.volume_off : Icons.volume_up,
             size: 18,
-            color: Theme.of(context).colorScheme.outline,
+            color: fg ?? Theme.of(context).colorScheme.outline,
           ),
           SizedBox(
             width: 90,
@@ -404,7 +457,7 @@ class _ControlsState extends State<_Controls> {
             const SizedBox(width: 4),
             IconButton(
               tooltip: '全屏（Esc 退出）',
-              icon: const Icon(Icons.fullscreen, size: 22),
+              icon: Icon(Icons.fullscreen, size: 22, color: fg),
               onPressed: widget.onFullscreen,
             ),
           ],

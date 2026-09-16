@@ -223,7 +223,6 @@ class _MessageList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     if (store.messages.isEmpty) return _EmptyThread(store: store);
 
     return ListView.builder(
@@ -231,119 +230,141 @@ class _MessageList extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       itemCount: store.messages.length,
       itemBuilder: (context, i) {
-        final m = store.messages[i];
-        final align = m.isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start;
-        final bg = m.isUser
-            ? theme.colorScheme.primaryContainer
-            : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5);
-        // 失败/取消的助手消息可以重试：新建一个 Run，用 retryOfRunId 关联回去（AIH-024）
-        final canRetry = !m.isUser &&
-            (m.status == 'failed' || m.status == 'cancelled') &&
-            !store.sending;
-        return Column(
-          crossAxisAlignment: align,
-          children: [
-            Container(
-              constraints: const BoxConstraints(maxWidth: 720),
-              margin: const EdgeInsets.symmetric(vertical: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final part in m.parts)
-                    if (part.type == 'attachment')
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.attach_file, size: 14),
-                            const SizedBox(width: 4),
-                            Text(part.text ?? part.attachmentId ?? '附件',
-                                style: theme.textTheme.labelSmall),
-                          ],
-                        ),
-                      ),
-                  // 用户消息按纯文本显示（自己敲的，不需要渲染）；
-                  // 助手消息渲染 Markdown —— 之前把 `**加粗**` 原样吐出来，很难读。
-                  if (m.text.isNotEmpty)
-                    m.isUser
-                        ? SelectableText(m.text)
-                        : MarkdownText(m.text, style: theme.textTheme.bodyMedium),
-                  // 流式进行中且还没有内容：给一个明确的"在生成"提示，而不是空白气泡
-                  if (m.status == 'streaming' && m.text.isEmpty)
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                        const SizedBox(width: 8),
-                        Text('正在生成…', style: theme.textTheme.bodySmall),
-                      ],
-                    ),
-                  if (m.status == 'cancelled')
-                    Text('（已停止）',
-                        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
-                  if (m.status == 'failed')
-                    Text('（生成失败）',
-                        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error)),
-                  if (canRetry)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: () => store.retry(m.id),
-                        icon: const Icon(Icons.refresh, size: 16),
-                        label: const Text('重试'),
-                        style: TextButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          minimumSize: const Size(0, 32),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                      ),
-                    ),
-                  // token 统计（AIH-057）：只对真有 usage 的助手消息显示，没有就不占位
-                  if (!m.isUser && (m.usage?.isEmpty == false || (m.reasoningEffort ?? 'off') != 'off'))
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if ((m.reasoningEffort ?? 'off') != 'off') ...[
-                            Icon(Icons.psychology_outlined,
-                                size: 13, color: theme.colorScheme.outline),
-                            const SizedBox(width: 3),
-                            Text(
-                              '思考 ${AiReasoningEffort.parse(m.reasoningEffort)?.label ?? m.reasoningEffort}',
-                              style: theme.textTheme.labelSmall
-                                  ?.copyWith(color: theme.colorScheme.outline),
-                            ),
-                            const SizedBox(width: 10),
-                          ],
-                          if (m.usage?.isEmpty == false) ...[
-                            Icon(Icons.data_usage, size: 13, color: theme.colorScheme.outline),
-                            const SizedBox(width: 3),
-                            Tooltip(
-                              message: m.usage!.detailLabel,
-                              child: Text(
-                                m.usage!.shortLabel,
-                                style: theme.textTheme.labelSmall
-                                    ?.copyWith(color: theme.colorScheme.outline),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ],
+        // RepaintBoundary：流式生成时每一帧都会重建列表，没有它的话所有
+        // Markdown 气泡都要跟着重绘一遍（长对话越聊越卡）。
+        return RepaintBoundary(
+          child: _MessageBubble(message: store.messages[i], sending: store.sending, onRetry: store.retry),
         );
       },
+    );
+  }
+}
+
+/// 一条消息气泡。
+///
+/// 拆成独立组件（而不是塞在 `_MessageList` 的 itemBuilder 里）是为了让
+/// Markdown 渲染只在**这一条**变化时重建：长回复逐字流式刷新时，
+/// 早就不变的历史气泡不会被重新解析。
+class _MessageBubble extends StatelessWidget {
+  final AiMessage message;
+  final bool sending;
+  final Future<void> Function(String assistantMessageId) onRetry;
+
+  const _MessageBubble({required this.message, required this.sending, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final m = message;
+    final align = m.isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    final bg = m.isUser
+        ? theme.colorScheme.primaryContainer
+        : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5);
+    // 失败/取消的助手消息可以重试：新建一个 Run，用 retryOfRunId 关联回去（AIH-024）
+    final canRetry = !m.isUser && (m.status == 'failed' || m.status == 'cancelled') && !sending;
+
+    return Column(
+      crossAxisAlignment: align,
+      children: [
+        Container(
+          constraints: const BoxConstraints(maxWidth: 720),
+          margin: const EdgeInsets.symmetric(vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final part in m.parts)
+                if (part.type == 'attachment')
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.attach_file, size: 14),
+                        const SizedBox(width: 4),
+                        Text(part.text ?? part.attachmentId ?? '附件',
+                            style: theme.textTheme.labelSmall),
+                      ],
+                    ),
+                  ),
+              // 用户消息按纯文本显示（自己敲的，不需要渲染）；
+              // 助手消息渲染 Markdown —— 之前把 `**加粗**` 原样吐出来，很难读。
+              if (m.text.isNotEmpty)
+                m.isUser
+                    ? SelectableText(m.text)
+                    : MarkdownText(m.text, style: theme.textTheme.bodyMedium),
+              // 流式进行中且还没有内容：给一个明确的"在生成"提示，而不是空白气泡
+              if (m.status == 'streaming' && m.text.isEmpty)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 8),
+                    Text('正在生成…', style: theme.textTheme.bodySmall),
+                  ],
+                ),
+              if (m.status == 'cancelled')
+                Text('（已停止）',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+              if (m.status == 'failed')
+                Text('（生成失败）',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error)),
+              if (canRetry)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => onRetry(m.id),
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: const Text('重试'),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: const Size(0, 32),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+                ),
+              // token 统计（AIH-057）：只对真有 usage 的助手消息显示，没有就不占位
+              if (!m.isUser && (m.usage?.isEmpty == false || (m.reasoningEffort ?? 'off') != 'off'))
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if ((m.reasoningEffort ?? 'off') != 'off') ...[
+                        Icon(Icons.psychology_outlined,
+                            size: 13, color: theme.colorScheme.outline),
+                        const SizedBox(width: 3),
+                        Text(
+                          '思考 ${AiReasoningEffort.parse(m.reasoningEffort)?.label ?? m.reasoningEffort}',
+                          style: theme.textTheme.labelSmall
+                              ?.copyWith(color: theme.colorScheme.outline),
+                        ),
+                        const SizedBox(width: 10),
+                      ],
+                      if (m.usage?.isEmpty == false) ...[
+                        Icon(Icons.data_usage, size: 13, color: theme.colorScheme.outline),
+                        const SizedBox(width: 3),
+                        Tooltip(
+                          message: m.usage!.detailLabel,
+                          child: Text(
+                            m.usage!.shortLabel,
+                            style: theme.textTheme.labelSmall
+                                ?.copyWith(color: theme.colorScheme.outline),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

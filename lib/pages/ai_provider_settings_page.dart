@@ -417,123 +417,137 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     final theme = Theme.of(context);
     final p = widget.provider;
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Text(p.displayName, style: theme.textTheme.titleLarge),
-        const SizedBox(height: 4),
-        Text('${p.id} · ${p.apiLabel} · revision ${p.revision}',
-            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
-        const SizedBox(height: 6),
-        SelectableText(p.baseURL, style: theme.textTheme.bodySmall),
-        const SizedBox(height: 4),
-        Text('端点信任级别：${p.endpointTrust}（保存时校验，公网必须是 https）',
-            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
-        if (widget.info != null) ...[
-          const SizedBox(height: 10),
-          _Note(text: widget.info!, error: false),
+    // 头部（固定几条）+ 模型卡片。**必须用 builder 懒构建**：
+    // 以前是 `children: [..., for (var i...) _modelTile(...)]`，
+    // 每个模型卡里有 6 个 FilterChip + 一个下拉框，几十个模型全在首帧就建出来，
+    // 滚动时整个列表跟着重建 —— 这就是"AI 模型与凭据界面滑动卡顿"的主因。
+    final header = <Widget>[
+      Text(p.displayName, style: theme.textTheme.titleLarge),
+      const SizedBox(height: 4),
+      Text('${p.id} · ${p.apiLabel} · revision ${p.revision}',
+          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+      const SizedBox(height: 6),
+      SelectableText(p.baseURL, style: theme.textTheme.bodySmall),
+      const SizedBox(height: 4),
+      Text('端点信任级别：${p.endpointTrust}（保存时校验，公网必须是 https）',
+          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+      if (widget.info != null) ...[
+        const SizedBox(height: 10),
+        _Note(text: widget.info!, error: false),
+      ],
+      if (widget.error != null) ...[
+        const SizedBox(height: 10),
+        _Note(text: widget.error!, error: true),
+      ],
+      const SizedBox(height: 16),
+      Row(
+        children: [
+          Text('连接测试', style: theme.textTheme.titleSmall),
+          const SizedBox(width: 10),
+          OutlinedButton.icon(
+            onPressed: _busy ? null : _test,
+            icon: const Icon(Icons.network_check, size: 18),
+            label: const Text('测试连接'),
+          ),
         ],
-        if (widget.error != null) ...[
-          const SizedBox(height: 10),
-          _Note(text: widget.error!, error: true),
+      ),
+      Text(
+        '测试只发一次 GET 请求：不跟随重定向、10 秒超时，密钥不会出现在日志里。',
+        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+      ),
+      if (_testResult != null) ...[
+        const SizedBox(height: 8),
+        _Note(text: _testResult!.display, error: !_testResult!.ok),
+      ],
+      const SizedBox(height: 16),
+      Text('API Key', style: theme.textTheme.titleSmall),
+      const SizedBox(height: 6),
+      Row(
+        children: [
+          _CredentialDot(status: p.credential),
+          const SizedBox(width: 6),
+          Text(p.credential.label, style: theme.textTheme.bodySmall),
         ],
-        const SizedBox(height: 16),
+      ),
+      const SizedBox(height: 8),
+      if (p.credential.source == 'env')
+        Text('该凭据由环境变量 ${p.credentialRef} 提供，是只读的，不能在应用内修改或移除。',
+            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline))
+      else ...[
+        TextField(
+          controller: _key,
+          obscureText: true,
+          autocorrect: false,
+          enableSuggestions: false,
+          decoration: const InputDecoration(
+            labelText: '粘贴密钥（留空表示不修改已有密钥）',
+            helperText: '只粘贴值本身：不要带引号，也不要粘贴 NAME=value',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+        ),
+        const SizedBox(height: 8),
         Row(
           children: [
-            Text('连接测试', style: theme.textTheme.titleSmall),
-            const SizedBox(width: 10),
+            FilledButton.icon(
+              onPressed: _busy ? null : _saveKey,
+              icon: const Icon(Icons.key, size: 18),
+              label: const Text('保存密钥'),
+            ),
+            const SizedBox(width: 8),
             OutlinedButton.icon(
-              onPressed: _busy ? null : _test,
-              icon: const Icon(Icons.network_check, size: 18),
-              label: const Text('测试连接'),
+              onPressed: _busy || !p.credential.configured ? null : _removeKey,
+              icon: const Icon(Icons.delete_outline, size: 18),
+              label: const Text('移除密钥'),
             ),
           ],
-        ),
-        Text(
-          '测试只发一次 GET 请求：不跟随重定向、10 秒超时，密钥不会出现在日志里。',
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-        ),
-        if (_testResult != null) ...[
-          const SizedBox(height: 8),
-          _Note(text: _testResult!.display, error: !_testResult!.ok),
-        ],
-        const SizedBox(height: 16),
-        Text('API Key', style: theme.textTheme.titleSmall),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            _CredentialDot(status: p.credential),
-            const SizedBox(width: 6),
-            Text(p.credential.label, style: theme.textTheme.bodySmall),
-          ],
-        ),
-        const SizedBox(height: 8),
-        if (p.credential.source == 'env')
-          Text('该凭据由环境变量 ${p.credentialRef} 提供，是只读的，不能在应用内修改或移除。',
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline))
-        else ...[
-          TextField(
-            controller: _key,
-            obscureText: true,
-            autocorrect: false,
-            enableSuggestions: false,
-            decoration: const InputDecoration(
-              labelText: '粘贴密钥（留空表示不修改已有密钥）',
-              helperText: '只粘贴值本身：不要带引号，也不要粘贴 NAME=value',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              FilledButton.icon(
-                onPressed: _busy ? null : _saveKey,
-                icon: const Icon(Icons.key, size: 18),
-                label: const Text('保存密钥'),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: _busy || !p.credential.configured ? null : _removeKey,
-                icon: const Icon(Icons.delete_outline, size: 18),
-                label: const Text('移除密钥'),
-              ),
-            ],
-          ),
-        ],
-        const Divider(height: 32),
-        Row(
-          children: [
-            Text('模型目录', style: theme.textTheme.titleSmall),
-            const Spacer(),
-            TextButton.icon(
-              onPressed: _busy ? null : _discover,
-              icon: const Icon(Icons.cloud_download_outlined, size: 18),
-              label: const Text('获取可用模型'),
-            ),
-            TextButton.icon(
-              onPressed: _busy ? null : _addModel,
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('手动添加'),
-            ),
-          ],
-        ),
-        Text(
-          '能力必须显式声明：这里填了什么就是什么，Harness 不会根据模型名字猜（未知即不支持）。',
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-        ),
-        const SizedBox(height: 8),
-        if (_models.isEmpty)
-          Text('还没有模型', style: theme.textTheme.bodySmall)
-        else
-          for (var i = 0; i < _models.length; i++) _modelTile(theme, i),
-        const SizedBox(height: 12),
-        FilledButton.icon(
-          onPressed: _busy || _models.isEmpty ? null : _saveModels,
-          icon: const Icon(Icons.save_outlined, size: 18),
-          label: const Text('保存模型目录'),
         ),
       ],
+      const Divider(height: 32),
+      Row(
+        children: [
+          Text('模型目录', style: theme.textTheme.titleSmall),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: _busy ? null : _discover,
+            icon: const Icon(Icons.cloud_download_outlined, size: 18),
+            label: const Text('获取可用模型'),
+          ),
+          TextButton.icon(
+            onPressed: _busy ? null : _addModel,
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('手动添加'),
+          ),
+        ],
+      ),
+      Text(
+        '能力必须显式声明：这里填了什么就是什么，Harness 不会根据模型名字猜（未知即不支持）。',
+        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+      ),
+      const SizedBox(height: 8),
+      if (_models.isEmpty) Text('还没有模型', style: theme.textTheme.bodySmall),
+    ];
+    final count = _models.length;
+    final tail = <Widget>[
+      const SizedBox(height: 12),
+      FilledButton.icon(
+        onPressed: _busy || _models.isEmpty ? null : _saveModels,
+        icon: const Icon(Icons.save_outlined, size: 18),
+        label: const Text('保存模型目录'),
+      ),
+    ];
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: header.length + count + tail.length,
+      itemBuilder: (context, i) {
+        if (i < header.length) return header[i];
+        if (i < header.length + count) {
+          // RepaintBoundary：勾选某个能力时不会把旁边已经画好的卡片一起重绘
+          return RepaintBoundary(child: _modelTile(theme, i - header.length));
+        }
+        return tail[i - header.length - count];
+      },
     );
   }
 

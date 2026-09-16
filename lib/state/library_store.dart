@@ -113,21 +113,19 @@ class LibraryStore extends ChangeNotifier {
     }
   }
 
+  /// 同 [refreshMedia]：批量删除后当前页可能已经不存在，自动回到最后一页，
+  /// 避免"删了几个却显示整个库空了"。
   Future<void> refreshPrompts() async {
     loadingPrompts = true;
     promptsError = null;
     _safeNotify();
     try {
-      prompts = await api.listPrompts(
-        q: promptQuery.isEmpty ? null : promptQuery,
-        tags: selectedTags.toList(),
-        tagMode: tagMode,
-        kind: promptKind,
-        favorite: onlyFavorite ? true : null,
-        sort: promptSort,
-        page: promptPage,
-        size: _settings.pageSize,
-      );
+      var result = await _listPrompts(page: promptPage);
+      if (result.items.isEmpty && result.total > 0 && promptPage > result.pages) {
+        promptPage = result.pages < 1 ? 1 : result.pages;
+        result = await _listPrompts(page: promptPage);
+      }
+      prompts = result;
     } on ApiException catch (e) {
       promptsError = e.toString();
       prompts = Paged.empty<Prompt>();
@@ -140,22 +138,34 @@ class LibraryStore extends ChangeNotifier {
     }
   }
 
+  Future<Paged<Prompt>> _listPrompts({required int page}) => api.listPrompts(
+        q: promptQuery.isEmpty ? null : promptQuery,
+        tags: selectedTags.toList(),
+        tagMode: tagMode,
+        kind: promptKind,
+        favorite: onlyFavorite ? true : null,
+        sort: promptSort,
+        page: page,
+        size: _settings.pageSize,
+      );
+
+  /// 拉当前这一页产物。
+  ///
+  /// **页码超出总页数时要回到最后一页**：在"只有一页多"的画廊里多选删除后，
+  /// 原来的页码可能已经不存在了 —— 后端对越界页码返回空数组，界面就会显示
+  /// "画廊还是空的"，其实库里还有东西，刷新一下才恢复（bug 清单第 2 条）。
+  /// 这里多发一次请求把它纠正过来，用户感觉不到。
   Future<void> refreshMedia() async {
     loadingMedia = true;
     mediaError = null;
     _safeNotify();
     try {
-      media = await api.listMedia(
-        q: mediaQuery.isEmpty ? null : mediaQuery,
-        tags: mediaTags.toList(),
-        tagMode: mediaTagMode,
-        kind: mediaKind,
-        favorite: mediaOnlyFavorite ? true : null,
-        untagged: mediaUntagged,
-        sort: mediaSort,
-        page: mediaPage,
-        size: _settings.pageSize,
-      );
+      var result = await _listMedia(page: mediaPage);
+      if (result.items.isEmpty && result.total > 0 && mediaPage > result.pages) {
+        mediaPage = result.pages < 1 ? 1 : result.pages;
+        result = await _listMedia(page: mediaPage);
+      }
+      media = result;
     } on ApiException catch (e) {
       mediaError = e.toString();
       media = Paged.empty<MediaAsset>();
@@ -167,6 +177,18 @@ class LibraryStore extends ChangeNotifier {
       _safeNotify();
     }
   }
+
+  Future<Paged<MediaAsset>> _listMedia({required int page}) => api.listMedia(
+        q: mediaQuery.isEmpty ? null : mediaQuery,
+        tags: mediaTags.toList(),
+        tagMode: mediaTagMode,
+        kind: mediaKind,
+        favorite: mediaOnlyFavorite ? true : null,
+        untagged: mediaUntagged,
+        sort: mediaSort,
+        page: page,
+        size: _settings.pageSize,
+      );
 
   Future<void> refreshTags() async {
     loadingTags = true;
