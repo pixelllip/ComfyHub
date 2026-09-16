@@ -71,7 +71,7 @@
 
 ## 3. 验证证据（实测，非推断）
 
-- `pwsh -File scripts\server.ps1 test` → **122 项全通过**（`AiDomainTest` / `FileKindDetectorTest` /
+- `pwsh -File scripts\server.ps1 test` → **126 项全通过**（`AiDomainTest` / `FileKindDetectorTest` /
   `AiUpstreamTest` / `AuthAndModelsUrlTest` / `ModelDiscoveryTest` / `ModelCapabilityTest` /
   `ProtocolAdapterTest` / `ThinkingAndUsageTest`…）。
 - `flutter analyze` → 无问题；`flutter test` → **94 项全通过**（含流式发送、连接测试、密钥不回显、
@@ -155,7 +155,35 @@ Inkling、LongCat、Nemotron、Ling、Laguna、gpt-oss 等（`VERSION = 2026-09b
 回归用例 `ModelCapabilityTest` 里有一张**逐模型对照表**（27 个条目），
 以后 settings.yaml 变了、或者表写错了，跑一遍后端测试就会报是哪一条对不上。
 
-> 仍然是"预填建议"，不是真相：接口声明 > 内置目录 > 仅文本，界面标来源、可手改。
+> 仍然是"预填建议"，不是真相：接口声明 > 内置目录 > 兜底（**逐维度**合并，界面标来源、可手改）。
+
+### 4.5 模型发现：逐维度合并 + 工具默认给上（2026-09-16 补）
+
+用户实测发现："自动获取模型，接口没有声明模态和思考强度，怎么还不改成内置目录的呢"。
+查出来是 `parseDeclaredCapabilities()` 的判定太宽 —— 只要 JSON 里出现任何一个已知字段名
+（`capabilities`、`reasoning`、`vision`……）就把整个模型标成"接口声明"，于是内置目录
+**永远不会被查到**。真实网关的 `/models` 多数只回 `{id, object, owned_by}`，
+少数会带上 `capabilities: {}` 这种空对象 —— 恰好都触发这条错路。
+
+改法：
+
+| 维度 | 接口明确声明 | 接口没说 | 两边都没有 |
+| --- | --- | --- | --- |
+| 输入模态 | 用接口的 | 用内置目录 | 仅文本 |
+| 思考支持 + 档位/方言 | 用接口的（档位仍由内置目录预填） | 用内置目录 | 不支持 |
+| 工具 | 用接口的 | 用内置目录 | **默认给上**（用户要求） |
+
+- "接口说了"改成**三态**：`null` = 没说这一项；只有真的读到数组/布尔值才算说了。
+  `capabilities: {}`、`reasoning: false` 这种只影响它自己那一项，不再一票否决内置目录。
+- **所有模型默认提供工具支持**：`ModelCandidate.tools` 默认值、`ModelCapabilityCatalog.UNKNOWN.tools`、
+  设置页"手动添加"对话框的初始勾选全部改成 true。这么做有两个前提：
+  ① 很多网关不声明工具能力但实际支持；② **当前请求体根本不发 `tools`**
+  （工具循环属于 M4，还没实现），所以这个声明只影响界面显示与预检，不会让请求失败。
+- 来源标记也跟着变：接口说过能力 → 「接口声明」；只有内置目录命中 → 「内置目录」；
+  两者都有时说明里会写"模态/思考按接口声明，其余维度参考内置目录规则「xxx」"。
+- 新增/更新用例：`ModelDiscoveryTest`（接口只给 id → 回退内置目录；只声明一部分维度 →
+  其余由内置目录补；空 `capabilities` 不算声明；未知模型"仅文本 + 工具"）、
+  `ModelCapabilityTest`（接口说"没有"时优先于内置目录）。
 > 表命中的模型如果档位不对，用户在模型卡片上改一下即可（改完来源会变成"手工声明"）。
 
 ### 4.3 用户报的「OpenAI Responses 填 API Key 报错」
@@ -235,7 +263,14 @@ Inkling、LongCat、Nemotron、Ling、Laguna、gpt-oss 等（`VERSION = 2026-09b
   所以**实现新传输方式时先改适配器**，别在别处再维护一份支持矩阵。
 - 加新协议时照 `OpenAiCompletionsAdapter` 的样子写，并在 `Adapters.all` 注册；
   没实现完的协议要**明确抛错**（参考 `OpenAiResponsesAdapter`），不要让用户以为能用。
-- 模型能力的判断顺序**不要动**：接口声明 > 内置目录 > 仅文本。
+- 模型能力的判断顺序**不要动**，而且必须**逐个维度**判断：接口声明 > 内置目录 > 兜底。
+  兜底里只有"工具"默认给 true（网关普遍支持但不声明，且请求体还不发 `tools`），
+  模态兜底"仅文本"、思考兜底"不支持"。
+  ⚠️ 这里踩过一次：旧写法是"看到任何已知字段就整体采信接口"，于是网关只回
+  `{id, object, owned_by}` 时内置目录永远轮不到，用户看到的全是"未识别 / 仅文本"、
+  模态和思考档位还得手填。判"接口说了"必须**按维度**、且**真的读到值**才算说
+  （`capabilities: {}` 不算）。用例：`ModelDiscoveryTest` 的"接口只给 id 时回退到内置目录"、
+  "空的 capabilities 对象不再被当成接口声明"。
   往 `ModelCapabilityCatalog` 加规则等于"替用户预勾选"，宁可少勾（漏了用户能补，多勾会直接请求失败）。
 - 设置页里**任何失败都要能看见**（SnackBar / 顶部横幅）：之前"新建 Provider 失败只写进详情面板、
   而详情面板要先选中 Provider"导致用户看到的是"点了没反应"，已修，别再引入同类回退。

@@ -70,7 +70,9 @@ class ModelCapabilityTest {
         val c = AiUpstream.parseCandidates("""{"data":[{"id":"acme-mystery-9000"}]}""").single()
         assertEquals(listOf("text"), c.modalities)
         assertEquals("unknown", c.capabilitySource)
-        assertTrue(!c.tools)
+        // 工具是唯一的兜底（用户要求默认给上）；图片/思考都不猜
+        assertTrue(c.tools)
+        assertTrue(!c.reasoning)
         assertNull(ModelCapabilityCatalog.lookup("acme-mystery-9000"))
         assertTrue(c.capabilityNote!!.contains("未声明"))
     }
@@ -136,13 +138,29 @@ class ModelCapabilityTest {
     }
 
     @Test
-    fun `接口自己声明了推理时 不叠加内置目录的档位`() {
-        // capabilities.reasoning 是接口声明的形态之一
+    fun `接口声明推理时 档位仍由内置目录预填`() {
+        // capabilities.reasoning 是接口声明的形态之一。接口只说了"支持推理"，
+        // 没说具体档位 —— 那就用内置目录的档位，省得用户自己一档档勾。
         val c = AiUpstream.parseCandidates(
             """{"data":[{"id":"deepseek-reasoner","capabilities":{"reasoning":true}}]}"""
         ).single()
         assertEquals(CapabilitySource.DISCOVERED.wire, c.capabilitySource)
-        assertTrue(c.thinkingEfforts.isEmpty(), "接口声明优先，档位交给用户自己填")
+        assertTrue(c.reasoning)
+        assertTrue(c.thinkingEfforts.containsKey("high"), "档位：${c.thinkingEfforts}")
+        assertEquals("deepseek", c.thinkingFormat)
+        // 模态接口没说 → 由内置目录补（deepseek-reasoner 是纯文本）
+        assertEquals(listOf("text"), c.modalities)
+    }
+
+    @Test
+    fun `接口明确说没有的能力 优先于内置目录`() {
+        // 内置目录认为 claude-sonnet-5 能看图、能思考；接口明确说不行 → 听接口的
+        val c = AiUpstream.parseCandidates(
+            """{"data":[{"id":"claude-sonnet-5","supports_vision":false,"supports_reasoning":false}]}"""
+        ).single()
+        assertEquals(listOf("text"), c.modalities)
+        assertTrue(!c.reasoning)
+        assertTrue(c.thinkingEfforts.isEmpty(), "接口说没有思考，就不能再带档位（否则保存会被拒）")
     }
 
     // --- 与 %USERPROFILE%\.dsh\settings.yaml 对齐的常用模型 ------------------

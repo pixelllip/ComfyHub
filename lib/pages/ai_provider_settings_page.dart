@@ -1222,8 +1222,8 @@ class _ModelDraft {
   const _ModelDraft(this.id, this.displayName, this.modalities, this.tools);
 }
 
-/// 候选模型：**自动预填**输入模态（接口声明 > 内置目录 > 仅文本），
-/// 并把来源标出来；加入前可以逐个调整。
+/// 候选模型：**自动预填**能力（逐维度：接口声明 > 内置目录 > 兜底；
+/// 工具默认给上），并把来源标出来；加入前可以逐个调整。
 class _DiscoverDialog extends StatefulWidget {
   final AiDiscoverResult result;
   const _DiscoverDialog({required this.result});
@@ -1388,7 +1388,10 @@ class _ModelDialogState extends State<_ModelDialog> {
   final _id = TextEditingController();
   final _name = TextEditingController();
   final _modalities = <AiModality>{AiModality.text};
-  bool _tools = false;
+
+  /// 工具默认给上：网关多半不声明工具能力但实际支持，而当前请求体还不发 `tools`，
+  /// 勾着不会让请求失败（用户随时能取消）。
+  bool _tools = true;
 
   @override
   void dispose() {

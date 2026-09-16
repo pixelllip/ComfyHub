@@ -273,7 +273,8 @@ object AiUpstream {
         val maxOutputTokens: Int? = null,
         /** 预处理好的输入模态：接口声明 > 内置目录 > 保守的仅文本 */
         val modalities: List<String> = listOf("text"),
-        val tools: Boolean = false,
+        /** 工具支持：接口声明 > 内置目录 > **默认给上**（见下面的说明） */
+        val tools: Boolean = true,
         val reasoning: Boolean = false,
         /**
          * 预填的思考档位（AIH-056）：等级 → 线上表达。
@@ -320,12 +321,22 @@ object AiUpstream {
     /**
      * 解析模型列表。
      *
-     * 能力按**可信度从高到低**处理（AIH-011 的"不猜能力"依然成立）：
-     *  1. 接口自己声明的能力（OpenRouter 的 `architecture.input_modalities`、
-     *     各类 `capabilities` / `supports_vision` 字段）→ 标记为「接口声明」；
-     *  2. 接口没说，但命中了[ModelCapabilityCatalog]这张按公开文档整理的离线表
-     *     → 标记为「内置目录」，界面上可见、可改；
-     *  3. 两者都没有 → **只给文本**，标记为「未识别」，绝不按名字猜图片能力。
+     * 能力按**逐个维度**合并，可信度从高到低（AIH-011 的"不猜能力"依然成立）：
+     *
+     * | 维度 | 接口明确声明 | 接口没说 | 两边都没有 |
+     * | --- | --- | --- | --- |
+     * | 输入模态 | 用接口的 | 用[ModelCapabilityCatalog] | 仅文本 |
+     * | 思考支持 + 档位 | 用接口的（档位留空给用户填） | 用内置目录（含档位与方言） | 不支持 |
+     * | 工具 | 用接口的 | 用内置目录 | **默认给上** |
+     *
+     * **为什么是"逐维度"而不是"接口说了就全听接口的"**：
+     * 绝大多数网关的 `/models` 只回 `id` / `object` / `owned_by`，最多再声明一两个字段
+     * （比如只有 `capabilities: {}`）。按"看到任何字段就整体采信"的旧写法，内置目录
+     * 永远不会生效 —— 用户看到的全是"未识别 / 仅文本"，模态和思考档位还得手填。
+     *
+     * **工具为什么兜底给 true**：很多网关根本不声明工具能力，但实际都支持；而且当前版本的
+     * 请求体里**根本不发 `tools`**（工具循环还没实现），所以这个勾选只影响界面显示与预检，
+     * 不会让请求失败。宁可默认给上（用户能取消），也不要默认关掉让用户去猜。
      */
     fun parseCandidates(body: String): List<ModelCandidate> = runCatching {
         val root = com.comfyhub.AppJson.parseToJsonElement(body)
@@ -346,136 +357,165 @@ object AiUpstream {
             }
             val id = text("id", "name", "model") ?: return@mapNotNull null
             val declared = parseDeclaredCapabilities(obj)
-            val fromCatalog = if (declared == null) ModelCapabilityCatalog.lookup(id) else null
+            // 内置目录**始终**查：接口只声明一部分时，剩下的维度由它补
+            val fromCatalog = ModelCapabilityCatalog.lookup(id)
 
+            val modalities = declared?.modalities
+                ?: fromCatalog?.modalities
+                ?: ModelCapabilityCatalog.UNKNOWN.modalities
+            // 工具：接口声明 > 内置目录 > 默认给上
+            val tools = declared?.tools ?: fromCatalog?.tools ?: true
+            // 思考：接口声明 > 内置目录 > 不支持
+            val reasoning = declared?.reasoning ?: fromCatalog?.reasoning ?: false
+            // 档位/方言只来自内置目录（接口一般不下发），且必须与"支持推理"一致，
+            // 否则保存时会被 validateThinkingEfforts 拒绝（"声明了档位却没勾推理"）
+            val thinkingEfforts =
+                if (reasoning) fromCatalog?.thinkingEfforts ?: emptyMap() else emptyMap()
+            val thinkingFormat = if (reasoning) fromCatalog?.thinkingFormat else null
+
+            val byApi = declared != null
+            val byCatalog = fromCatalog != null
             ModelCandidate(
                 id = id,
                 displayName = text("display_name", "displayName", "name") ?: id,
                 contextWindow = number("context_window", "contextWindow", "context_length", "max_context_tokens"),
                 maxOutputTokens = number("max_output_tokens", "maxOutputTokens", "max_tokens"),
-                modalities = declared?.modalities ?: fromCatalog?.modalities ?: listOf("text"),
-                tools = declared?.tools ?: fromCatalog?.tools ?: false,
-                reasoning = declared?.reasoning ?: fromCatalog?.reasoning ?: false,
-                // 思考档位只可能来自内置目录：接口一般不下发这个信息。
-                // 只有真的声明了推理能力才带档位 —— 否则保存时会被
-                // validateThinkingEfforts 拒绝（"声明了思考等级却没勾支持推理"）。
-                thinkingEfforts = if (declared?.reasoning ?: fromCatalog?.reasoning ?: false) {
-                    fromCatalog?.thinkingEfforts ?: emptyMap()
-                } else {
-                    emptyMap()
-                },
-                thinkingFormat = if (declared?.reasoning ?: fromCatalog?.reasoning ?: false) {
-                    fromCatalog?.thinkingFormat
-                } else {
-                    null
-                },
+                modalities = modalities,
+                tools = tools,
+                reasoning = reasoning,
+                thinkingEfforts = thinkingEfforts,
+                thinkingFormat = thinkingFormat,
+                // 来源标记：接口说过能力就显示"接口声明"（它最可信），
+                // 只靠内置目录才显示"内置目录"。逐个维度从哪来，说明里会写清楚。
                 capabilitySource = when {
-                    declared != null -> CapabilitySource.DISCOVERED.wire
-                    fromCatalog != null -> CapabilitySource.BUILTIN.wire
+                    byApi -> CapabilitySource.DISCOVERED.wire
+                    byCatalog -> CapabilitySource.BUILTIN.wire
                     else -> "unknown"
                 },
                 capabilityNote = when {
-                    declared != null -> "接口在下发的模型信息里声明了输入模态"
-                    fromCatalog != null -> "命中内置目录规则「${fromCatalog.matchedBy}」（可能过期，可手工修改）"
-                    else -> "接口未声明、内置目录也没有 → 按仅文本处理，需要图片请手工勾选"
+                    byApi && byCatalog ->
+                        "模态/思考按接口声明；其余维度参考内置目录规则「${fromCatalog!!.matchedBy}」"
+                    byApi -> "接口在下发的模型信息里声明了输入模态"
+                    byCatalog -> "接口没给能力信息 → 用内置目录规则「${fromCatalog!!.matchedBy}」" +
+                        "（可能过期，可手工修改）"
+                    else -> "接口未声明、内置目录也没有 → 仅文本 + 默认给工具；" +
+                        "需要图片/思考请手工勾选"
                 },
             )
         }.distinctBy { it.id }
     }.getOrDefault(emptyList())
 
+    /** 接口**明确**声明的能力。每个维度都是三态：`null` = 接口没说这一项。 */
     private data class DeclaredCapabilities(
-        val modalities: List<String>,
-        val tools: Boolean,
-        val reasoning: Boolean,
+        val modalities: List<String>?,
+        val tools: Boolean?,
+        val reasoning: Boolean?,
     )
 
     /**
-     * 读取接口**自己声明**的能力。只要看到任何一个已知字段就认为"接口说了"，
-     * 没看到的维度按 false / 无处理；一个字段都没有则返回 null（交给内置目录）。
+     * 读取接口**自己声明**的能力，逐个维度返回三态结果。
+     *
+     * 关键点：**只有真的读到这一项的值，才算"接口说了"**。
+     * 旧写法只要看到任何一个已知字段名（比如 `capabilities: {}`、`reasoning: false`）就把
+     * 整个模型标成"接口声明"，于是内置目录永远轮不到 —— 这正是"接口没声明模态和思考强度，
+     * 却没有回退到内置目录"的原因。
      */
     private fun parseDeclaredCapabilities(obj: kotlinx.serialization.json.JsonObject): DeclaredCapabilities? {
-        val modalities = linkedSetOf<String>()
-        var sawAnything = false
+        var modalities: List<String>? = null
+        var tools: Boolean? = null
+        var reasoning: Boolean? = null
 
-        fun addModality(raw: String?) {
-            val token = raw?.trim()?.lowercase() ?: return
-            if (token.isEmpty()) return
-            sawAnything = true
+        fun modalityTokens(raw: String?): List<String> {
+            val token = raw?.trim()?.lowercase() ?: return emptyList()
+            if (token.isEmpty()) return emptyList()
+            val out = linkedSetOf<String>()
             // "text+image->text" / "image->text" 这类 OpenRouter 写法
             token.split('+', ',', '/', '|', ' ', '>')
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
                 .forEach { part ->
                     when {
-                        part.startsWith("image") || part == "vision" -> modalities += "image"
-                        part.startsWith("video") -> modalities += "video"
-                        part.startsWith("audio") -> modalities += "audio"
-                        part.startsWith("file") || part.startsWith("pdf") -> modalities += "document"
-                        part.startsWith("text") || part == "prompt" -> modalities += "text"
+                        part.startsWith("image") || part == "vision" -> out += "image"
+                        part.startsWith("video") -> out += "video"
+                        part.startsWith("audio") -> out += "audio"
+                        part.startsWith("file") || part.startsWith("pdf") -> out += "document"
+                        part.startsWith("text") || part == "prompt" -> out += "text"
                     }
                 }
+            return out.toList()
         }
 
-        fun readArrayOf(target: kotlinx.serialization.json.JsonObject, key: String) {
-            val arr = target[key] as? kotlinx.serialization.json.JsonArray ?: return
-            sawAnything = true
+        fun parseArrayOf(target: kotlinx.serialization.json.JsonObject, key: String): List<String>? {
+            val arr = target[key] as? kotlinx.serialization.json.JsonArray ?: return null
+            val found = linkedSetOf<String>()
             arr.forEach { element ->
                 when (element) {
-                    is kotlinx.serialization.json.JsonPrimitive -> addModality(element.contentOrNull)
-                    is kotlinx.serialization.json.JsonObject -> element.keys.forEach { addModality(it) }
+                    is kotlinx.serialization.json.JsonPrimitive -> {
+                        val token = element.contentOrNull?.trim()?.lowercase()
+                        // `capabilities: ["vision","tools"]` 这种混装数组里，"tools" 是工具声明
+                        if (token == "tools" || token == "function_calling" || token == "tool_call") {
+                            if (tools == null) tools = true
+                        } else {
+                            found += modalityTokens(token)
+                        }
+                    }
+                    is kotlinx.serialization.json.JsonObject -> element.keys.forEach { found += modalityTokens(it) }
                     else -> {}
                 }
             }
+            if (found.isEmpty()) found += "text"
+            return found.toList()
         }
 
-        fun readArray(key: String) = readArrayOf(obj, key)
-
         // 1) 数组形态：input_modalities / modalities / capabilities: ["vision","tools"]
-        listOf("input_modalities", "inputModalities", "modalities", "supported_modalities", "capabilities")
-            .forEach { readArray(it) }
+        for (key in listOf(
+            "input_modalities", "inputModalities", "modalities", "supported_modalities", "capabilities",
+        )) {
+            parseArrayOf(obj, key)?.let { if (modalities == null) modalities = it }
+        }
 
         // 2) OpenRouter：architecture.input_modalities / architecture.modality
         (obj["architecture"] as? kotlinx.serialization.json.JsonObject)?.let { arch ->
-            readArrayOf(arch, "input_modalities")
-            addModality((arch["modality"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull)
-        }
-
-        // 3) 布尔开关形态
-        fun boolOf(vararg keys: String): Boolean? = keys.firstNotNullOfOrNull { key ->
-            when (val v = obj[key]) {
-                is kotlinx.serialization.json.JsonPrimitive -> v.contentOrNull?.toBooleanStrictOrNull()
-                is kotlinx.serialization.json.JsonObject -> {
-                    sawAnything = true
-                    null
-                }
-                else -> null
+            parseArrayOf(arch, "input_modalities")?.let { if (modalities == null) modalities = it }
+            val modality = (arch["modality"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+            if (!modality.isNullOrBlank()) {
+                val parsed = modalityTokens(modality)
+                if (parsed.isNotEmpty() && modalities == null) modalities = parsed
             }
         }
 
-        boolOf("supports_vision", "vision", "supports_image", "multimodal", "image_input")?.let {
-            sawAnything = true
-            if (it) modalities += "image"
+        // 3) 布尔开关形态（只有真读到布尔值才算声明）
+        fun boolOf(vararg keys: String): Boolean? = keys.firstNotNullOfOrNull { key ->
+            (obj[key] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toBooleanStrictOrNull()
         }
-        val tools = boolOf("supports_tools", "function_calling", "tool_call", "tools") ?: false
-        if (obj.keys.any { it in setOf("supports_tools", "function_calling", "tool_call", "tools") }) {
-            sawAnything = true
+        boolOf("supports_vision", "vision", "supports_image", "multimodal", "image_input")?.let { vision ->
+            val current = modalities.orEmpty()
+            modalities = if (vision) {
+                (current + "image").distinct().ifEmpty { listOf("text", "image") }
+            } else {
+                current.ifEmpty { listOf("text") }
+            }
         }
-        // capabilities: {"vision": true, "function_calling": true}
-        var toolsFromCaps = false
+        boolOf("supports_tools", "function_calling", "tool_call", "tools")?.let { tools = it }
+        boolOf("supports_reasoning", "reasoning", "thinking", "supports_thinking")?.let { reasoning = it }
+
+        // 4) 嵌套形态：capabilities: {"vision": true, "function_calling": true, "thinking": true}
         (obj["capabilities"] as? kotlinx.serialization.json.JsonObject)?.let { caps ->
-            sawAnything = true
             fun flag(key: String) =
                 (caps[key] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toBooleanStrictOrNull()
-            if (flag("vision") == true || flag("image") == true) modalities += "image"
-            if (flag("function_calling") == true || flag("tools") == true || flag("tool_call") == true) {
-                toolsFromCaps = true
+            if (flag("vision") == true || flag("image") == true) {
+                modalities = ((modalities.orEmpty()) + "image").distinct()
+            }
+            (flag("function_calling") ?: flag("tools") ?: flag("tool_call"))?.let {
+                if (tools == null) tools = it
+            }
+            (flag("reasoning") ?: flag("thinking"))?.let {
+                if (reasoning == null) reasoning = it
             }
         }
-        val reasoning = boolOf("supports_reasoning", "reasoning", "thinking", "supports_thinking") ?: false
 
-        if (!sawAnything) return null
-        if (modalities.isEmpty()) modalities += "text"
-        return DeclaredCapabilities(modalities.toList(), tools || toolsFromCaps, reasoning)
+        if (modalities == null && tools == null && reasoning == null) return null
+        return DeclaredCapabilities(modalities, tools, reasoning)
     }
 
     // --- 内部：发一次 GET /models ------------------------------------------

@@ -273,8 +273,11 @@ object ModelCapabilityCatalog {
     }
 
     /**
-     * 保守默认：目录里没有、接口也没说 → 只给文本。
+     * 保守默认：目录里没有、接口也没说 → 仅文本。
      * 图片要用户自己勾（勾错了会被 Provider 拒绝，但不会被我们静默丢弃）。
+     *
+     * 工具**默认给上**（用户要求）：很多网关不声明工具能力、但实际都支持；
+     * 而且当前请求体里根本不发 `tools`，勾选只影响界面显示与预检，不会让请求失败。
      */
-    val UNKNOWN: Capability = Capability(TEXT_ONLY, tools = false, reasoning = false, matchedBy = "unknown")
+    val UNKNOWN: Capability = Capability(TEXT_ONLY, tools = true, reasoning = false, matchedBy = "unknown")
 }

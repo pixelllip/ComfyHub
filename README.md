@@ -459,15 +459,21 @@ pwsh -File scripts\e2e-capture-test.ps1
 `storage/ai/credentials.dpapi.json`，任何接口、数据库字段和日志都拿不到明文；
 DPAPI 不可用时写入直接失败，**不会退化成明文落盘**（AIH-012 / AIH-015）。
 
-**模型能力是怎么定下来的**（AIH-011，三个来源按可信度排序，界面上都看得见）：
+**模型能力是怎么定下来的**（AIH-011，**逐维度**按可信度合并，界面上都看得见）：
 
 | 来源 | 什么时候用 | 界面标记 |
 | --- | --- | --- |
-| 接口声明 | `/models` 自己给了 `architecture.input_modalities`、`capabilities`、`supports_vision` 等字段 | 接口声明 |
-| 内置目录 | 接口没说，但命中 `ModelCapabilityCatalog`（按厂商公开文档整理 + 与本机 `%USERPROFILE%\.dsh\settings.yaml` 对齐的离线表，带版本号） | 内置目录 |
-| 仅文本 | 两边都没有 | 未识别（默认仅文本） |
+| 接口声明 | `/models` 自己给了 `architecture.input_modalities`、`capabilities`、`supports_vision`、`supports_reasoning` 等字段（**只影响它真的声明了的那一项**） | 接口声明 |
+| 内置目录 | 接口没说这一项，但命中 `ModelCapabilityCatalog`（按厂商公开文档整理 + 与本机 `%USERPROFILE%\.dsh\settings.yaml` 对齐的离线表，带版本号） | 内置目录 |
+| 兜底 | 两边都没有 | 输入模态 → 仅文本；思考 → 不支持；**工具 → 默认给上** |
 
-内置目录只是**预勾选建议**，可能过期；没命中的模型**绝不会按名字猜图片能力**。
+"接口说了"是**逐维度**判断的：网关上最常见的 `{id, object, owned_by}` 什么能力都没说，
+`capabilities: {}` 这种空对象也不算声明 —— 这两种情况**都会回退到内置目录**，
+模态、思考档位与方言一起预填好，不用手工勾。
+**所有模型的工具能力默认给上**（网关普遍支持却很少声明，而当前请求体还不发 `tools`，
+勾着不会让请求失败；用户随时能取消）。
+
+内置目录只是**预勾选建议**，可能过期；没命中的模型**绝不会按名字猜图片能力与思考支持**。
 "获取可用模型"里每个候选都能展开改模态再点加入。
 目前这张表覆盖了 DSH 里登记的那批常用模型（Claude 4.6/5、GPT-5.x、DeepSeek V4.x、
 Kimi K2.5~K3、GLM-5.x、MiniMax M2/M3、Qwen3.6~3.8、Gemini 3.x、Grok 4.5/4.6、Muse Spark、
@@ -828,7 +834,7 @@ App 自己的文案都是中文，但文本框右键的「复制 / 全选 / 剪�
 $env:PUB_HOSTED_URL='https://pub.dev'
 flutter analyze     # 无任何 error / warning / info
 flutter test        # 94 个用例
-pwsh -File scripts\server.ps1 test   # 后端 122 个用例
+pwsh -File scripts\server.ps1 test   # 后端 126 个用例
 ```
 
 | 文件 | 覆盖内容 |
