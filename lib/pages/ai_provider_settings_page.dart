@@ -1819,7 +1819,8 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
               ),
               Text(
                 _m.reasoning
-                    ? '勾选该模型真正支持的档位。留空 = 不声明，聊天界面不显示思考强度选择器（宁可不给选，也不要发出去被上游 400）。'
+                    ? '勾选该模型真正支持的档位。留空 = 不声明，聊天界面仍可选「关闭」（关闭不需要网关参数，'
+                        '任何模型都成立）；真正的思考档位宁可不给选，也不要发出去被上游 400。'
                     : '该模型不支持推理；勾选后可以逐档声明。',
                 style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
               ),

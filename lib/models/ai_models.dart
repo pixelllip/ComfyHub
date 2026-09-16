@@ -257,11 +257,19 @@ class AiModel {
   bool get supportsReasoningEffort =>
       reasoning && thinkingEfforts.keys.any((k) => k != AiReasoningEffort.off.wire);
 
-  /// 可选的思考档位（按 关闭→低→中→高→最大 的固定顺序，只保留模型声明过的）。
+  /// 可选的思考档位（固定顺序：关闭 → 极低 → 低 → 中 → 高 → 极高 → 最大）。
+  ///
+  /// **「关闭」永远可选**（用户要求："允许我关闭模型思考，不影响模型声明"）：
+  /// 它不发任何思考参数、任何网关都成立，所以不要求模型在 `thinkingEfforts` 里声明 `off`
+  /// —— 否则"只想安静地问一句"的用户得先去改模型声明，这是本末倒置。
+  /// 真正的思考档位仍然**只列模型声明过的**，不猜、不降级（AIH-056 第 2 条）。
   List<AiReasoningEffort> get selectableEfforts {
     if (!reasoning) return const [];
     final declared = thinkingEfforts.keys.toSet();
-    return AiReasoningEffort.values.where((e) => declared.contains(e.wire)).toList();
+    return [
+      AiReasoningEffort.off,
+      ...AiReasoningEffort.values.where((e) => e.isThinking && declared.contains(e.wire)),
+    ];
   }
 
   /// 该等级的线上表达（网关改名时显示给用户看）。数字表示 Anthropic 的思考预算。

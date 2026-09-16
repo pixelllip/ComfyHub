@@ -1311,8 +1311,9 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
 
 /// 思考强度选择器（AIH-056）。
 ///
-/// 只显示**当前模型声明过**的档位：没声明推理能力就整块置灰并说明原因，
-/// 而不是给一堆选了会被后端拒绝的选项。
+/// 只显示**当前模型声明过**的档位；**「关闭」例外** —— 它不发任何思考参数、
+/// 任何网关都成立，所以永远可选（用户要求"能关掉思考，且不用去改模型声明"）。
+/// 模型完全没声明推理能力时整块置灰并说明原因，而不是给一堆选了会被后端拒绝的选项。
 class _EffortPicker extends StatelessWidget {
   final AiWorkspaceStore store;
   const _EffortPicker({required this.store});
@@ -1330,8 +1331,9 @@ class _EffortPicker extends StatelessWidget {
 
     return PopupMenuButton<AiReasoningEffort>(
       tooltip: enabled
-          ? '思考强度（当前模型声明：${options.map((e) => e.label).join(' / ')}）'
-          : '该模型未声明可用的思考档位，请到「设置 → AI 模型」声明',
+          ? '思考强度（「关闭」始终可选；模型声明的档位：'
+              '${options.where((e) => e.isThinking).map((e) => e.label).join(' / ')}）'
+          : '该模型未声明推理能力，请到「设置 → AI 模型」声明',
       enabled: enabled,
       onSelected: store.selectReasoningEffort,
       itemBuilder: (_) => [

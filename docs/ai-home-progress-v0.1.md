@@ -44,6 +44,7 @@
 | `Markdown 渲染：表格支持 + 粗体里嵌行内代码不再吐出星号` | 见 4.8 节 ⑤ |
 | `AI 模型与凭据：69 个模型不再卡顿，滚动条滑块也不再越滚越短` | 见 4.8 节 ③④ |
 | `Skills 改成「投放口」+ 引入长期记忆（用户建议第 6、7 条）` | 见 4.8 节 ⑥⑦ |
+| `思考强度加「关闭」档：不再要求模型声明 off` | 见第 5.1 节引用块（`test/ai_thinking_off_test.dart` 3 例） |
 
 ## 2. 逐条对照需求
 
@@ -76,7 +77,7 @@
 | AIH-048 能力徽标 | ✅ | 模型选择器与侧栏都按目录声明显示，未声明的一律标不支持 |
 | AIH-053 首页 Widget 测试 | ✅ | `test/ai_home_test.dart`（含流式发送）、`test/ai_provider_settings_test.dart` |
 | AIH-055 文档同步 | ✅ | AGENTS 第 3 节 + README 功能表/目录树/API 表/协议现状表/测试表 |
-| AIH-056 思考强度 | ✅ | 模型目录声明可选档位（`thinkingEfforts`）+ 网关方言（`thinkingFormat`）；聊天框选择器只列声明过的档位；Run 记录**生效值**；三协议方言分别适配（见第 6 节） |
+| AIH-056 思考强度 | ✅ | 模型目录声明可选档位（`thinkingEfforts`）+ 网关方言（`thinkingFormat`）；聊天框选择器只列声明过的档位（**「关闭」永远可选、不需要声明**）；Run 记录**生效值**；三协议方言分别适配（见第 6 节/第 5 节） |
 | AIH-057 token 统计 | ✅ | 后端把各家 `usage` 归一化成 input/output/cached/reasoning；助手消息显示单轮用量，输入区显示本对话汇总；历史老数据（供应商原始 usage）也能回算 |
 | AIH-033 `comfy_get_status` | ✅ | 复用 `ComfyCapture.status()`（连通性 / 队列 / 最近捕获）；**不接受任意 URL**；只读、免审批 |
 | AIH-034 `comfy_get_run` | ✅ | 按 `runKey` 查捕获记录（给 `CaptureRepo` 加了 `findRun`）；查不到如实报 `NOT_FOUND` |
@@ -347,8 +348,14 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 | `openai` + `zai` | `thinking{type:enabled,clear_thinking:false}` + `reasoning_effort` | `thinking{type:disabled}` |
 | `openai` + `openrouter` | `reasoning{effort: "high"}` | `reasoning{effort: "none"}` |
 
-等级：`off / low / medium / high / max`。模型可以用 `thinkingEfforts` 把等级**改名**
+等级：`off / minimal / low / medium / high / xhigh / max`。模型可以用 `thinkingEfforts` 把等级**改名**
 （`max: ultra`，给自有词汇的网关）或直接给 Anthropic 的**预算数字**（`medium: "4096"`）。
+
+> **「关闭」永远可选，且不要求模型声明 `off`**（用户要求："允许我关闭模型思考，加一个关的选项，
+> 不影响模型声明"）：关闭不发任何思考参数、任何网关都成立，所以聊天框的选择器把它**固定排在最前**；
+> 真正的思考档位仍然只列模型声明过的。实现只有一处：`AiModel.selectableEfforts`
+> （`lib/models/ai_models.dart`）—— 后端 `requireThinkingEffort` 本来就把 `off` 直接翻成"不发"，
+> 所以这个改动没有碰任何声明校验。回归用例 `test/ai_thinking_off_test.dart`。
 
 ### 5.2 四条不能动的规矩
 
@@ -356,6 +363,7 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
    因为往不支持推理参数的模型上塞 `reasoning_effort` 会被网关 400。
 2. **声明了档位就只允许声明过的档位**：请求 `max` 而模型只列了 `low/high` → 直接
    `CONFIG_ERROR`，不静默降级成 `high`（用户以为选了 max，其实没有，比报错更糟）。
+   **唯一的例外是 `off`**：它不需要网关参数，永远允许（见 5.1 的引用块）。
 3. **Run 快照记的是"生效值"不是"请求值"**：`ai_runs.reasoning_effort` 存的是过滤后的结果，
    事后审计能看出这次到底思考了没有。
 4. **读快照、不读目录**：Run 开始后用户改模型目录，不影响已经在飞的请求。
