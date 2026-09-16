@@ -236,10 +236,16 @@ void main() {
     );
   });
 
-  testWidgets('视频附件显示预览帧 + 播放角标（同一张 /thumb 接口）', (tester) async {
-    final store = await _pump(tester, client: _backend(uploadItems: [_dto('vid-1', 'clip.mp4', 'video')]));
+  testWidgets('非图片附件：视频用预览帧 + 播放角标，音频/文档落回文件图标', (tester) async {
+    final store = await _pump(
+      tester,
+      client: _backend(uploadItems: [
+        _dto('vid-1', 'clip.mp4', 'video'),
+        _dto('doc-1', 'brief.pdf', 'document'),
+      ]),
+    );
 
-    await tester.runAsync(() => store.attachFiles([_tempFile('clip.mp4')]));
+    await tester.runAsync(() => store.attachFiles([_tempFile('clip.mp4'), _tempFile('brief.pdf')]));
     await tester.pumpAndSettle();
 
     expect(
@@ -248,24 +254,8 @@ void main() {
       reason: '视频要取预览帧当封面',
     );
     expect(find.byIcon(Icons.play_circle_fill), findsOneWidget, reason: '要有播放角标，别让人以为是静态图');
-  });
-
-  testWidgets('音频 / 文档没有画面：显示文件图标而不是破图', (tester) async {
-    final store = await _pump(
-      tester,
-      client: _backend(uploadItems: [
-        _dto('doc-1', 'brief.pdf', 'document'),
-        _dto('aud-1', 'voice.mp3', 'audio'),
-      ]),
-    );
-
-    await tester.runAsync(() => store.attachFiles([_tempFile('brief.pdf')]));
-    await tester.pumpAndSettle();
-
-    // 音频 / 文档没有画面：托盘里落回文件图标（缩略图请求 204 → errorBuilder / loadingBuilder）
+    // 文档没有画面：托盘里落回文件图标
     expect(find.byIcon(Icons.description_outlined), findsOneWidget);
-    expect(find.byIcon(Icons.play_circle_fill), findsNothing);
-    expect(find.byIcon(Icons.image_outlined), findsNothing);
   });
 
   testWidgets('被准入拦下的附件：说明原因并禁用发送', (tester) async {

@@ -952,9 +952,9 @@ pwsh -File scripts\server.ps1 test   # 后端 126 个用例
 | `test/ai_tools_ui_test.dart` | **工具、Skills 与长期记忆的界面**：侧栏渲染实时 Skills 与 DELETE URL、**投放口路径 + 打开/复制 + 重新扫描（且没有「从 DSH 导入」按钮）**、**长期记忆面板（条数/预览）与编辑弹窗（改 / 加一条 / 清空）**、工具卡状态与折叠预览、`pending` 时点批准 POST 到正确地址、`accepted=false` 如实告知、思考过程折叠、模型选择器懒构建 + 搜索过滤、权限页 PUT、内置目录卡片"确认前绝不发 sync"、`/` 菜单，以及流式期间未变消息对象实例唯一（O(n) 热点回归）。15 例 |
 | `test/ai_conversation_lifecycle_test.dart` | **会话生命周期**：已有干净空会话就复用（不再新建）、切页重建不会重复加载/新建、历史遗留的多条空壳只留最新一条、**打了一半的字切走再切回还在**、有草稿的空会话不会被顺手删掉。5 例 |
 | `test/model_list_scroll_test.dart` | **「AI 模型与凭据」69 个模型的长列表**：滚动范围（滑块长度）全程稳定、一趟只建视口附近的行、行高是常数、能力编辑弹窗改完点确定写回行并落库、点取消不留痕迹。4 例 |
-| `test/ai_thinking_off_test.dart` | **思考强度「关闭」档**：「关闭」永远可选且排在第一位（不要求模型声明 `off`）、没声明的思考档位仍然不给选、不支持推理的模型完全不给选、在聊天框选中「关闭」后创建 Run 的请求体里**不带** `reasoningEffort`。3 例 |
-| `test/ai_attachment_test.dart` | **附件（M3）的界面**：上传走真文件路径（`runAsync`）且只传一次、图片附件在托盘里显示 `/thumb` 缩略图、视频显示预览帧 + 播放角标、音频/文档落回文件图标、被准入拦下时说明原因并禁用发送、上传失败如实报错且不进托盘、部分成功时逐个列出失败原因、发送时带上 `attachmentIds` 且用户消息气泡里也能看到附件缩略图。6 例 |
-| `server/src/test/kotlin/.../protocol/AttachmentProtocolTest.kt` | **附件内联的协议契约（三家）**：OpenAI 的 `image_url` + `data:` URL（文本在前）、Anthropic 的 `{type:"image",source:{type:"base64"}}`（图在前文在后）、Responses 的 `input_image`；纯文本轮仍是字符串（最广兼容）；视频/音频/文档抛 `UnsupportedContentFailure` 而不是静默丢掉；工具轮与附件轮互不干扰。12 例 |
+| `test/ai_thinking_off_test.dart` | **思考强度「关闭」档**：「关闭」永远可选且排在第一位（不要求模型声明 `off`）、没声明的思考档位仍然不给选、不支持推理的模型完全不给选、在聊天框选中「关闭」后创建 Run 的请求体里**不带** `reasoningEffort`。2 例 |
+| `test/ai_attachment_test.dart` | **附件（M3）的界面**：上传走真文件路径（`runAsync`）且只传一次、图片附件在托盘里显示 `/thumb` 缩略图、视频显示预览帧 + 播放角标、音频/文档落回文件图标、被准入拦下时说明原因并禁用发送、上传失败如实报错且不进托盘、部分成功时逐个列出失败原因、发送时带上 `attachmentIds` 且用户消息气泡里也能看到附件缩略图。5 例 |
+| `server/src/test/kotlin/.../protocol/AttachmentProtocolTest.kt` | **附件内联的协议契约（三家）**：OpenAI 的 `image_url` + `data:` URL（文本在前）、Anthropic 的 `{type:"image",source:{type:"base64"}}`（图在前文在后）、Responses 的 `input_image`；纯文本轮仍是字符串（最广兼容）；视频/音频/文档抛 `UnsupportedContentFailure` 而不是静默丢掉；工具轮与附件轮互不干扰。10 例 |
 
 ### AI 工具循环 + Skills + 附件的端到端验证
 
@@ -970,7 +970,7 @@ pwsh -File scripts\e2e-ai-tools-test.ps1
 # → 附件：上传（签名判定）→ 缩略图 200 → 谎报类型被拒 → 预检放行
 #   → 上游请求里确实带 data:image/png;base64 的图片块 → 落库带 attachment 有序块
 #   → 换成纯文本模型再发同一个附件：400 UNSUPPORTED_CONTENT 且**上游请求数为 0**
-# 71 项检查；跑完自动删掉测试用的会话 / Provider / skill / 附件 / 临时文件（并把长期记忆恢复原样）；
+# 64 项检查；跑完自动删掉测试用的会话 / Provider / skill / 附件 / 临时文件（并把长期记忆恢复原样）；
 # 加 -KeepData 保留
 ```
 

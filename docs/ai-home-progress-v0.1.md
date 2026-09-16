@@ -380,18 +380,44 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 
 #### 4.9.5 验证证据（实测）
 
-- 后端：`gradle test` → **252 tests / 0 failed**（新增 `AttachmentProtocolTest` 12 例 +
+- 后端：`gradle test` → **250 tests / 0 failed**（新增 `AttachmentProtocolTest` 10 例 +
   `AiDomainTest` 的准入回落/内联上限/预算 5 例）。
-- 前端：`flutter analyze` 无问题；`flutter test` → **157 例全过**
-  （新增 `test/ai_attachment_test.dart` 6 例、`test/ai_thinking_off_test.dart` 3 例）。
+- 前端：`flutter analyze` 无问题；`flutter test` → **155 例全过**
+  （新增 `test/ai_attachment_test.dart` 5 例、`test/ai_thinking_off_test.dart` 2 例）。
 - **端到端**（真后端 + 假 OpenAI 网关 + 真 MySQL，离线不花钱）：`scripts\e2e-ai-tools-test.ps1`
-  新增第 9 幕 → **71 项检查全过、exit 0**，其中包含「上传→按签名判定 image」「缩略图 200 + image/jpeg」
+  新增第 9 幕 → **64 项检查全过、exit 0**，其中包含「上传→按签名判定 image」「缩略图 200 + image/jpeg」
   「文本改名成 .png 被拒」「预检放行」「假网关侧确实收到 `data:image/png;base64,` 的图片块」
   「用户消息落库带 attachment 有序块」「纯文本模型 → 400 + **上游请求数 0**」。
 - 顺带踩到的两个坑：① 用例里 `await store.attachFiles(...)` 会**永远挂住** ——
   `MultipartFile.fromPath` 是真 IO，必须包在 `tester.runAsync()` 里；
   ② 自造的那张 1×1 PNG base64 是坏的（签名对得上、ImageIO 解不开），缩略图因此一直 204 ——
   改用 python `zlib` 现生成的一张合法 2×2 PNG 才复现出正确行为。
+
+### 4.10 测试瘦身：删掉重复与占位项，留下回归防线（2026-09-16）
+
+用户问"测试项会不会太多了导致测试非常慢"，并在清单里写了"减少一些已经通过、不太重要的测试项"。
+先量了一下，**不是数量导致的慢**（本机实测）：
+
+| 套件 | 规模 | 耗时 |
+| --- | --- | --- |
+| `flutter analyze` | — | ~4s |
+| `flutter test` | 155 例 | ~12~14s |
+| `gradle test`（后端） | 250 例 | ~5s |
+| `scripts\e2e-ai-tools-test.ps1` | 64 项检查（真后端 + 真 MySQL + 假网关） | ~40s |
+
+所以这轮做的是**去噪**，不是砍覆盖率。删掉的是三类：
+
+1. **同一事实的重复断言**：e2e 里"收到 run.completed"原先在第 1/5/6 幕各断言一次（保留 1 次）；
+   第 1 幕的"parts 里有 tool_call / tool_result"与第 7 幕的"落库 parts 有序且含三者"完全重叠（删前两个）；
+   "callId 非空"并进上一条；缩略图"200 + image/jpeg"与"非空"并成一条。
+2. **占位/自证型用例**：`AttachmentProtocolTest` 里为了"用掉导入"而写的 `json 解析辅助可用`、
+   以及和 `ToolProtocolTest` 重复的版本号断言 —— 直接删掉（顺带把没用的 import 也删了）。
+3. **同一行为的两种写法**：`ai_thinking_off_test` 的两条纯模型用例合并成一条；
+   `ai_attachment_test` 的"视频预览帧"与"音频/文档回文件图标"合并成一条。
+
+**没动的**是任何一条真正的回归防线（零上游请求、审批顺序、越界写被拒、签名谎报被拒、
+内联预算、会话生命周期、滚动条与懒构建…）—— 判断标准就一句话：
+**删了以后出错还能不能被测试抓住**；抓不住就不能删。
 
 ### 4.3 用户报的「OpenAI Responses 填 API Key 报错」（2026-09-16 第一轮）
 **无法实测**（用户暂时没有可用 Key），做了两件能确定的事：

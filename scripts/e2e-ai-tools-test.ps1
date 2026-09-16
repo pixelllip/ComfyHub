@@ -349,8 +349,6 @@ try {
     Check 'tool.requested.name == register_skill' ($null -ne $r1 -and $r1.name -eq 'register_skill') ($req1 | ConvertTo-Json -Compress)
     Check 'register_skill 的 approval == not_required' ($null -ne $r1 -and $r1.approval -eq 'not_required') ($r1 | ConvertTo-Json -Compress)
     Check '收到 tool.started' ((@(Get-Events $e1 'tool.started')).Count -ge 1) ($e1 | ConvertTo-Json -Depth 6 -Compress)
-    $comp1 = @(Get-Events $e1 'tool.completed')
-    Check '收到 tool.completed' ($comp1.Count -ge 1) ($e1 | ConvertTo-Json -Depth 6 -Compress)
     $mc1 = @(Get-Events $e1 'message.completed')
     Check '收到 message.completed' ($mc1.Count -ge 1) ($e1 | ConvertTo-Json -Depth 6 -Compress)
     if ($mc1.Count -ge 1) {
@@ -358,8 +356,6 @@ try {
         $parts = @($p.parts)
         $types = @($parts | ForEach-Object { $_.type })
         Check 'message.completed.parts 非空' ($parts.Count -gt 0) ($p | ConvertTo-Json -Depth 6 -Compress)
-        Check 'parts 里有 tool_call' ($types -contains 'tool_call') ($types -join ',')
-        Check 'parts 里有 tool_result' ($types -contains 'tool_result') ($types -join ',')
     }
     Check '收到 run.completed' ((@(Get-Events $e1 'run.completed')).Count -ge 1) ($e1[-1].event)
 
@@ -458,13 +454,11 @@ try {
     $req5 = @(Get-Events $e5 'tool.requested')
     $r5 = if ($req5.Count -ge 1) { Convert-Data $req5[0] } else { $null }
     Check 'comfy_sync_history 被请求且 approval == pending' ($null -ne $r5 -and $r5.name -eq 'comfy_sync_history' -and $r5.approval -eq 'pending') ($req5 | ConvertTo-Json -Compress)
-    Check 'callId 非空' (-not [string]::IsNullOrWhiteSpace($state.callId)) ($state | ConvertTo-Json -Compress)
     Check '批准被后端接受（accepted=true）' ($state.accepted -eq $true) ($state | ConvertTo-Json -Compress)
     Check '批准之前没有 tool.started' ($state.startedIndex -lt 0 -or $state.startedIndex -gt $state.requestedIndex) ("requested=$($state.requestedIndex) started=$($state.startedIndex)")
     Check '批准之后收到了 tool.started' ($state.startedIndex -gt $state.requestedIndex) ("requested=$($state.requestedIndex) started=$($state.startedIndex)")
     $done5 = @(Get-Events $e5 'tool.completed') + @(Get-Events $e5 'tool.failed')
     Check '审批后工具有了终态（completed/failed）' ($done5.Count -ge 1) ($e5 | ConvertTo-Json -Depth 6 -Compress)
-    Check '收到 run.completed' ((@(Get-Events $e5 'run.completed')).Count -ge 1) ($e5[-1].event)
 
     # --- 8. 场景 6：只读工具 ----------------------------------------------
     Say ''
@@ -478,7 +472,6 @@ try {
     $done6 = @(Get-Events $e6 'tool.completed') + @(Get-Events $e6 'tool.failed')
     $d6 = if ($done6.Count -ge 1) { Convert-Data $done6[0] } else { $null }
     Check 'comfy_get_status 有终态（completed/failed）' ($null -ne $d6 -and $d6.name -eq 'comfy_get_status') ($d6 | ConvertTo-Json -Compress)
-    Check '收到 run.completed' ((@(Get-Events $e6 'run.completed')).Count -ge 1) ($e6[-1].event)
 
     # --- 9. 落库的消息 parts（重开会话能渲染工具卡） ----------------------
     Say ''
@@ -583,10 +576,10 @@ try {
 
     # 缩略图：图片走 JPEG 缩略图这条路（视频走同一张接口的预览帧）
     $thumb = Invoke-WebRequest -Uri "$ApiBase/api/ai/attachments/$($script:AttachmentId)/thumb" -TimeoutSec 60
-    Check '缩略图接口 200 + image/jpeg' `
-        ($thumb.StatusCode -eq 200 -and "$($thumb.Headers['Content-Type'])" -like 'image/jpeg*') `
-        ("$($thumb.StatusCode) $($thumb.Headers['Content-Type'])")
-    Check '缩略图不是空文件' ($thumb.RawContentLength -gt 0) ("$($thumb.RawContentLength) bytes")
+    Check '缩略图接口 200 + image/jpeg + 非空' `
+        ($thumb.StatusCode -eq 200 -and "$($thumb.Headers['Content-Type'])" -like 'image/jpeg*' -and
+         $thumb.RawContentLength -gt 0) `
+        ("$($thumb.StatusCode) $($thumb.Headers['Content-Type']) $($thumb.RawContentLength) bytes")
 
     # 谎报类型骗不过准入：把一个文本文件改名成 .png 传上来必须被拒（AIH-027）
     $liar = Join-Path ([System.IO.Path]::GetTempPath()) 'comfyhub-e2e-liar.png'

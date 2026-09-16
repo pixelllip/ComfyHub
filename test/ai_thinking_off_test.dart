@@ -126,7 +126,7 @@ void main() {
     runBodies.clear();
   });
 
-  test('「关闭」永远可选，且排在第一位；未声明的思考档位仍然不给选', () {
+  test('「关闭」永远可选且排在最前；没声明的档位不给选，不支持推理则完全不给选', () {
     const model = AiModel(
       providerId: 'p',
       id: 'm',
@@ -142,11 +142,10 @@ void main() {
     expect(options, isNot(contains(AiReasoningEffort.medium)));
     expect(options, isNot(contains(AiReasoningEffort.minimal)));
     expect(model.thinkingEfforts.containsKey('off'), isFalse, reason: '模型声明不需要为了"关"而改动');
-  });
 
-  test('不支持推理的模型仍然完全不给选', () {
-    const model = AiModel(providerId: 'p', id: 'm', displayName: 'M');
-    expect(model.selectableEfforts, isEmpty);
+    // 完全没声明推理能力的模型：一个档位都不给（后端也会拒）
+    const plain = AiModel(providerId: 'p', id: 'm', displayName: 'M');
+    expect(plain.selectableEfforts, isEmpty);
   });
 
   testWidgets('思考强度选择器里能选「关闭」，选了之后 Run 请求不带思考参数', (tester) async {

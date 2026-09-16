@@ -1,9 +1,7 @@
 package com.comfyhub.ai.protocol
 
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -122,18 +120,6 @@ class AttachmentProtocolTest {
         assertEquals("input_text", content[1].jsonObject["type"]!!.jsonPrimitive.content)
     }
 
-    @Test
-    fun `responses：没有附件的文本轮结构不变`() {
-        val body = responses.buildBody(
-            model = "m",
-            messages = listOf(ChatTurn("user", "只有文字")),
-            stream = true,
-        )
-        val content = body["input"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
-        assertEquals(1, content.size)
-        assertEquals("input_text", content[0].jsonObject["type"]!!.jsonPrimitive.content)
-    }
-
     // --- 未实现的模态 -------------------------------------------------------
 
     @Test
@@ -145,13 +131,6 @@ class AttachmentProtocolTest {
                 adapter.buildBody("m", turns, stream = true)
             }
         }
-    }
-
-    @Test
-    fun `adapters 的版本号随附件能力一起前进`() {
-        assertEquals("openai-completions/3", openai.adapterVersion)
-        assertEquals("anthropic-messages/3", anthropic.adapterVersion)
-        assertEquals("openai-responses/3", responses.adapterVersion)
     }
 
     /** 顺带钉住 JSON 访问辅助函数的行为（上面几个断言全靠它）。 */
@@ -175,12 +154,5 @@ class AttachmentProtocolTest {
         assertEquals("call_1", messages[0].jsonObject["tool_calls"]!!.jsonArray[0].jsonObject["id"]!!.jsonPrimitive.content)
         assertEquals("call_1", messages[1].jsonObject["tool_call_id"]!!.jsonPrimitive.content)
         assertEquals(2, (messages[2].jsonObject["content"] as JsonArray).size)
-    }
-
-    /** 未使用的导入保护：`JsonObject` / `contentOrNull` 在断言里用得到，这里显式用一次。 */
-    @Test
-    fun `json 解析辅助可用`() {
-        val obj: JsonObject = ProtocolJson.parseToJsonElement("""{"a":"b"}""").jsonObject
-        assertEquals("b", (obj["a"] as? JsonPrimitive)?.contentOrNull)
     }
 }

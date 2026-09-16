@@ -21,6 +21,13 @@
 - 改完前端至少过一遍：`flutter analyze` + `flutter test`（`PUB_HOSTED_URL=https://pub.dev`）。
   详情页大图、工作流弹窗这类交互改动，回归用例分别在 `test\zoomable_image_test.dart` 和
   `test\workflow_viewer_test.dart`，别只跑 `widget_test.dart`。
+- **测试不是越多越好，但"能不能抓住回归"是唯一标准**：同一个事实写两遍（e2e 里
+  "收到 run.completed" 每幕都断言一次、"parts 里有 tool_call" 又与后面"落库 parts 有序"重叠）、
+  为了用掉 import 而写的占位用例、同一行为的两种写法 —— 这类**该删就删**（用户提过"减少一些
+  已经通过、不太重要的测试项"）。判断方法只有一句：**删了以后出错还能不能被测试抓住**。
+  真正的防线（零上游请求、审批顺序、越界写被拒、内联预算、滚动条与懒构建…）一条都不能删。
+  本机实测的耗时（别凭感觉说"测试太慢"）：`flutter test` 155 例 ≈ 12~14s、
+  `gradle test` 250 例 ≈ 5s、`e2e-ai-tools-test.ps1` 64 项 ≈ 40s。
 - 产物目录：debug 在 `build\windows\...\runner\Debug\`、Release 在 `...\Release\`；
   `autorun-app.ps1` / `comfyhub.ps1 up -WithApp` 启动 App 时**优先挑 Release**。
 
