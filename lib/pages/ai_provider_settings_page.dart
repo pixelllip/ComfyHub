@@ -813,6 +813,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
             },
             tools: c.tools,
             reasoning: c.reasoning,
+            // 思考档位/方言也从内置目录预填（AIH-056）：用户能在模型卡片上改
+            thinkingEfforts: c.thinkingEfforts,
+            thinkingFormat: c.thinkingFormat,
             contextWindow: c.contextWindow,
             maxOutputTokens: c.maxOutputTokens,
             // 来源如实记录：接口声明 → discovered；内置目录 → builtin；未识别 → manual（用户接受默认）

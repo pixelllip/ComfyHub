@@ -189,6 +189,15 @@ object AiUpstream {
         val modalities: List<String> = listOf("text"),
         val tools: Boolean = false,
         val reasoning: Boolean = false,
+        /**
+         * 预填的思考档位（AIH-056）：等级 → 线上表达。
+         *
+         * 只来自内置目录（接口一般不声明这个）。用户可以改；
+         * 保存时后端会校验"声明了档位就必须勾推理"。
+         */
+        val thinkingEfforts: Map<String, String> = emptyMap(),
+        /** 预填的思考方言：deepseek / qwen / zai / openrouter；null = 按协议默认。 */
+        val thinkingFormat: String? = null,
         /** discovered / builtin / unknown，界面上要显示给用户看 */
         val capabilitySource: String = "unknown",
         /** 人类可读的来源说明，例如「命中内置规则 claude-3」 */
@@ -261,6 +270,19 @@ object AiUpstream {
                 modalities = declared?.modalities ?: fromCatalog?.modalities ?: listOf("text"),
                 tools = declared?.tools ?: fromCatalog?.tools ?: false,
                 reasoning = declared?.reasoning ?: fromCatalog?.reasoning ?: false,
+                // 思考档位只可能来自内置目录：接口一般不下发这个信息。
+                // 只有真的声明了推理能力才带档位 —— 否则保存时会被
+                // validateThinkingEfforts 拒绝（"声明了思考等级却没勾支持推理"）。
+                thinkingEfforts = if (declared?.reasoning ?: fromCatalog?.reasoning ?: false) {
+                    fromCatalog?.thinkingEfforts ?: emptyMap()
+                } else {
+                    emptyMap()
+                },
+                thinkingFormat = if (declared?.reasoning ?: fromCatalog?.reasoning ?: false) {
+                    fromCatalog?.thinkingFormat
+                } else {
+                    null
+                },
                 capabilitySource = when {
                     declared != null -> CapabilitySource.DISCOVERED.wire
                     fromCatalog != null -> CapabilitySource.BUILTIN.wire

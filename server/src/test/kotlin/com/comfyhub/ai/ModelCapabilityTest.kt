@@ -98,4 +98,50 @@ class ModelCapabilityTest {
         assertEquals(2, candidates.size)
         assertTrue(candidates.all { it.modalities == listOf("text", "image") })
     }
+
+    // --- 思考档位预填（AIH-056）---------------------------------------------
+
+    @Test
+    fun `内置目录会预填思考档位 并带上方言`() {
+        val candidates = AiUpstream.parseCandidates(
+            """
+            {"data":[
+              {"id":"deepseek-reasoner","object":"model"},
+              {"id":"gpt-5.6-sol","object":"model"}
+            ]}
+            """.trimIndent()
+        )
+        val ds = candidates.first { it.id == "deepseek-reasoner" }
+        assertTrue(ds.reasoning, "内置目录知道它支持推理")
+        assertTrue(ds.thinkingEfforts.containsKey("high"), "预填的档位：${ds.thinkingEfforts}")
+        assertEquals("deepseek", ds.thinkingFormat, "DeepSeek 的思考开关要发 thinking{type}")
+
+        val gpt5 = candidates.first { it.id == "gpt-5.6-sol" }
+        assertTrue(gpt5.reasoning)
+        assertTrue(gpt5.thinkingEfforts.containsKey("low"))
+        assertNull(gpt5.thinkingFormat, "OpenAI 官方方言不需要额外字段")
+    }
+
+    @Test
+    fun `没声明推理的模型绝不带思考档位`() {
+        // 否则保存时会被 validateThinkingEfforts 拒绝（"声明了档位却没勾推理"），
+        // 用户看到的就是"获取模型后加不进去"。
+        val candidates = AiUpstream.parseCandidates(
+            """{"data":[{"id":"deepseek-chat","object":"model"},{"id":"gpt-4o","object":"model"}]}"""
+        )
+        for (c in candidates) {
+            assertTrue(c.thinkingEfforts.isEmpty(), "${c.id} 不该有思考档位")
+            assertNull(c.thinkingFormat, "${c.id} 不该有思考方言")
+        }
+    }
+
+    @Test
+    fun `接口自己声明了推理时 不叠加内置目录的档位`() {
+        // capabilities.reasoning 是接口声明的形态之一
+        val c = AiUpstream.parseCandidates(
+            """{"data":[{"id":"deepseek-reasoner","capabilities":{"reasoning":true}}]}"""
+        ).single()
+        assertEquals(CapabilitySource.DISCOVERED.wire, c.capabilitySource)
+        assertTrue(c.thinkingEfforts.isEmpty(), "接口声明优先，档位交给用户自己填")
+    }
 }

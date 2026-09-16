@@ -150,6 +150,8 @@ fun Route.aiRoutes(
                             modalities = it.modalities,
                             tools = it.tools,
                             reasoning = it.reasoning,
+                            thinkingEfforts = it.thinkingEfforts,
+                            thinkingFormat = it.thinkingFormat,
                             capabilitySource = it.capabilitySource,
                             capabilityNote = it.capabilityNote,
                         )
@@ -480,6 +482,10 @@ data class ModelCandidateDto(
     val modalities: List<String> = listOf("text"),
     val tools: Boolean = false,
     val reasoning: Boolean = false,
+    /** 预填的思考档位：等级 → 线上表达（来自内置目录，可改）。 */
+    val thinkingEfforts: Map<String, String> = emptyMap(),
+    /** 预填的思考方言；null = 按协议默认。 */
+    val thinkingFormat: String? = null,
     /** discovered / builtin / unknown */
     val capabilitySource: String = "unknown",
     val capabilityNote: String? = null,

@@ -314,6 +314,12 @@ class AiModelCandidate {
   final bool tools;
   final bool reasoning;
 
+  /// 预填的思考档位（来自内置目录；接口一般不声明这个）。
+  final Map<String, String> thinkingEfforts;
+
+  /// 预填的思考方言；null = 按协议默认。
+  final String? thinkingFormat;
+
   /// discovered / builtin / unknown
   final String capabilitySource;
   final String? capabilityNote;
@@ -326,6 +332,8 @@ class AiModelCandidate {
     this.modalities = const [AiModality.text],
     this.tools = false,
     this.reasoning = false,
+    this.thinkingEfforts = const {},
+    this.thinkingFormat,
     this.capabilitySource = 'unknown',
     this.capabilityNote,
   });
@@ -341,6 +349,11 @@ class AiModelCandidate {
             .toList(),
         tools: json['tools'] == true,
         reasoning: json['reasoning'] == true,
+        thinkingEfforts: (json['thinkingEfforts'] as Map?)?.map(
+              (k, v) => MapEntry(k.toString(), (v ?? '').toString()),
+            ) ??
+            const {},
+        thinkingFormat: json['thinkingFormat']?.toString(),
         capabilitySource: (json['capabilitySource'] ?? 'unknown').toString(),
         capabilityNote: json['capabilityNote']?.toString(),
       );
