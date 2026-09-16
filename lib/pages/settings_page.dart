@@ -351,6 +351,25 @@ class _SettingsPageState extends State<SettingsPage> {
             AdaptiveSection(
               _section(
                 theme,
+                'AI 模型与凭据',
+                Card(
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    leading: const Icon(Icons.smart_toy_outlined),
+                    title: const Text('Provider / 模型目录 / API Key'),
+                    subtitle: const Text('配置协议、Base URL 与模型能力；密钥只写不读，不会出现在界面、数据库普通字段和日志里'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const AiProviderSettingsPage()),
+                    ),
+                  ),
+                ),
+              ),
+              estimatedHeight: 120,
+            ),
+            AdaptiveSection(
+              _section(
+                theme,
                 '后端服务',
                 Card(
                   child: Padding(
@@ -478,25 +497,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               estimatedHeight: 340,
-            ),
-            AdaptiveSection(
-              _section(
-                theme,
-                'AI 模型与凭据',
-                Card(
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                    leading: const Icon(Icons.smart_toy_outlined),
-                    title: const Text('Provider / 模型目录 / API Key'),
-                    subtitle: const Text('配置协议、Base URL 与模型能力；密钥只写不读，不会出现在界面、数据库普通字段和日志里'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const AiProviderSettingsPage()),
-                    ),
-                  ),
-                ),
-              ),
-              estimatedHeight: 120,
             ),
             AdaptiveSection(
               _section(

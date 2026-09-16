@@ -116,4 +116,43 @@ void main() {
     expect(cardRect.right - tileRect.right, greaterThanOrEqualTo(20),
         reason: '右侧（开关那一侧）也要有留白');
   });
+
+  // 「AI 模型与凭据」是这一页最常去的入口，必须排在前面的列里，
+  // 不能压在「ComfyUI 自动捕获 / 库统计」下面（用户反馈过要往下翻很久）。
+  testWidgets('设置页：AI 模型与凭据排在 ComfyUI 自动捕获前面', (tester) async {
+    tester.view.physicalSize = const Size(1700, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    SharedPreferences.setMockInitialValues({});
+    final settings = SettingsStore();
+    await settings.load();
+    final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: _mockClient()));
+    final launcher = BackendLauncher(settings);
+    addTearDown(store.dispose);
+    addTearDown(launcher.dispose);
+    await store.refreshAll();
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsStore>.value(value: settings),
+          ChangeNotifierProvider<BackendLauncher>.value(value: launcher),
+          ChangeNotifierProvider<LibraryStore>.value(value: store),
+        ],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final local = tester.getTopLeft(find.text('本地服务（MySQL + 后端）'));
+    final ai = tester.getTopLeft(find.text('AI 模型与凭据'));
+    final capture = tester.getTopLeft(find.text('ComfyUI 自动捕获'));
+
+    // 排在「自动捕获」前面（同一列更靠上，或者前一个列）
+    final beforeCapture = ai.dx < capture.dx - 100 || ai.dy < capture.dy;
+    expect(beforeCapture, isTrue,
+        reason: 'AI 入口不能排在 ComfyUI 自动捕获之后（实际 ai=$ai capture=$capture）');
+    expect(ai.dy, greaterThan(local.dy - 1), reason: '本地服务仍然排在最前');
+  });
 }
