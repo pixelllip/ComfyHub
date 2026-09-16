@@ -71,9 +71,18 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   /// 输入区草稿：按会话保存。切换会话（以及把空会话删掉）都不会丢没发出去的文字。
-  Future<void> saveDraft(String conversationId, String text, List<AiAttachment> attachments) async {
+  ///
+  /// [attachments] **不传**表示"只动文字，附件那半边保持原样"：附件托盘归 Store 管
+  /// （切换会话时 [_stashAttachments] 存走、进入时按草稿恢复），页面只负责把输入框
+  /// 里的文字落盘。传 `const []` 才是"明确清空附件"。
+  Future<void> saveDraft(
+    String conversationId,
+    String text, {
+    List<AiAttachment>? attachments,
+  }) async {
     final prefs = await _store;
-    if (text.trim().isEmpty && attachments.isEmpty) {
+    final next = attachments ?? _decodeAttachments(prefs.getString('$_kDraftAttachPrefix$conversationId'));
+    if (text.trim().isEmpty && next.isEmpty) {
       await prefs.remove('$_kDraftTextPrefix$conversationId');
       await prefs.remove('$_kDraftAttachPrefix$conversationId');
       return;
@@ -81,35 +90,40 @@ class AiWorkspaceStore extends ChangeNotifier {
     await prefs.setString('$_kDraftTextPrefix$conversationId', text);
     await prefs.setString(
       '$_kDraftAttachPrefix$conversationId',
-      jsonEncode(attachments.map((a) => a.toJson()).toList()),
+      jsonEncode(next.map((a) => a.toJson()).toList()),
     );
   }
 
   /// 取回草稿；没有就返回空。
   Future<({String text, List<AiAttachment> attachments})> loadDraft(String conversationId) async {
     final prefs = await _store;
-    final text = prefs.getString('$_kDraftTextPrefix$conversationId') ?? '';
-    final raw = prefs.getString('$_kDraftAttachPrefix$conversationId');
-    final attachments = <AiAttachment>[];
-    if (raw != null && raw.isNotEmpty) {
-      try {
-        final list = jsonDecode(raw);
-        if (list is List) {
-          for (final e in list.whereType<Map>()) {
-            final m = Map<String, dynamic>.from(e);
-            attachments.add(AiAttachment(
-              name: (m['name'] ?? '').toString(),
-              modality: m['modality']?.toString(),
-              mimeType: (m['mimeType'] ?? 'application/octet-stream').toString(),
-              sizeBytes: (m['sizeBytes'] as num?)?.toInt() ?? 0,
-            ));
-          }
+    return (
+      text: prefs.getString('$_kDraftTextPrefix$conversationId') ?? '',
+      attachments: _decodeAttachments(prefs.getString('$_kDraftAttachPrefix$conversationId')),
+    );
+  }
+
+  /// 草稿里的附件是 JSON 里的一段，解坏了就当没有（不能影响主流程）。
+  static List<AiAttachment> _decodeAttachments(String? raw) {
+    final out = <AiAttachment>[];
+    if (raw == null || raw.isEmpty) return out;
+    try {
+      final list = jsonDecode(raw);
+      if (list is List) {
+        for (final e in list.whereType<Map>()) {
+          final m = Map<String, dynamic>.from(e);
+          out.add(AiAttachment(
+            name: (m['name'] ?? '').toString(),
+            modality: m['modality']?.toString(),
+            mimeType: (m['mimeType'] ?? 'application/octet-stream').toString(),
+            sizeBytes: (m['sizeBytes'] as num?)?.toInt() ?? 0,
+          ));
         }
-      } catch (_) {
-        // 草稿坏了就当没有，不影响主流程
       }
+    } catch (_) {
+      // 坏草稿不抛异常
     }
-    return (text: text, attachments: attachments);
+    return out;
   }
 
   Future<void> _clearDraft(String conversationId) async {
@@ -317,12 +331,23 @@ class AiWorkspaceStore extends ChangeNotifier {
   //  加载
   // -----------------------------------------------------------------------
 
-  /// 冷启动加载。
+  /// 冷启动加载：**一个 Store 只跑一次**（重复调用直接返回同一个 Future）。
   ///
-  /// 每次开 App **都新建一个聊天记录**（用户明确要求）：历史会话仍在左侧列表里，
-  /// 但默认落在一个干净的对话上，不用先手动点「新建对话」再开聊。
-  /// 上一次用的模型会从本地记忆里恢复，这次也不用重新挑。
-  Future<void> load() async {
+  /// 为什么必须去重：`HomeShell` 每次切页都会重建 `AiHomePage`（不是 IndexedStack），
+  /// 页面 `didChangeDependencies` 里那句 `load()` 于是会跟着跑第二遍 —— 而加载流程里
+  /// 会新建会话，用户看到的就是"打开 ComfyHub 冒出好几条新对话"（用户报的 bug ①）。
+  bool _loaded = false;
+  Future<void>? _loading;
+
+  /// 是否已经成功加载过一次。
+  bool get loaded => _loaded;
+
+  Future<void> load() {
+    if (_loaded) return Future<void>.value();
+    return _loading ??= _doLoad();
+  }
+
+  Future<void> _doLoad() async {
     loading = true;
     error = null;
     notifyListeners();
@@ -330,16 +355,68 @@ class AiWorkspaceStore extends ChangeNotifier {
       providers = await _api.listProviders();
       await _restoreRememberedModel();
       conversations = await _api.listConversations();
-      await newConversation();
+      // 冷启动落在一条**空会话**上（用户明确要求：开 App 就能直接开聊，
+      // 而不是重新打开上一条）。但"落在空会话上"不等于"每次都造一条新的" ——
+      // 见 [_startFreshConversation]。
+      await _startFreshConversation();
+      _loaded = true;
     } catch (e) {
       error = '连接后端失败：$e';
+      // 失败不算"加载过"：下次进页面还能重试
+      _loading = null;
     } finally {
       loading = false;
       notifyListeners();
     }
+    if (!_loaded) return;
     // skills / 工具清单走"尽力而为"：拉不到不影响聊天（各自把失败记在自己的字段里）
     await reloadSkills();
     await reloadTools();
+  }
+
+  /// 挑一条现成的空会话接着用；一条都没有才真的新建。
+  ///
+  /// "空"要**同时**满足两件事：会话里一条消息都没有、本地草稿里也没有打了一半的字
+  /// 或挂着的附件。只看 `messageCount` 会把用户没发出去的内容当成垃圾删掉。
+  /// 顺带清掉历史遗留的多余空壳（只留最新的一条，列表按更新时间倒序）。
+  Future<void> _startFreshConversation() async {
+    final reusable = <AiConversation>[];
+    for (final c in conversations) {
+      if (c.archived || c.messageCount != 0) continue;
+      final draft = await loadDraft(c.id);
+      if (draft.text.trim().isEmpty && draft.attachments.isEmpty) reusable.add(c);
+    }
+    if (reusable.isEmpty) {
+      await _createConversation();
+      return;
+    }
+    for (final extra in reusable.skip(1)) {
+      await _deleteConversationQuietly(extra.id);
+    }
+    _openEmptyConversation(reusable.first);
+  }
+
+  /// 把输入区托盘换成这条会话草稿里挂着的附件（附件按会话归属，不跨会话搬运）。
+  Future<void> _applyDraftAttachments(String conversationId) async {
+    final draft = await loadDraft(conversationId);
+    attachments
+      ..clear()
+      ..addAll(draft.attachments);
+    if (attachments.isEmpty) {
+      preflight = null;
+      notifyListeners();
+    } else {
+      await refreshPreflight();
+    }
+  }
+
+  /// 离开当前会话之前，把输入区的附件托盘存回它的草稿。
+  Future<void> _stashAttachments() async {
+    final conv = conversation;
+    if (conv == null || conv.id.startsWith('local-')) return;
+    final prefs = await _store;
+    final text = prefs.getString('$_kDraftTextPrefix${conv.id}') ?? '';
+    await saveDraft(conv.id, text, attachments: attachments);
   }
 
   Future<void> _loadModels() async {
@@ -396,30 +473,45 @@ class AiWorkspaceStore extends ChangeNotifier {
   Future<void> newConversation() async {
     try {
       // 换新对话之前，把上一个"空壳"清掉（AIH-018 的清理策略，见 [isEmptyConversation]）
+      await _stashAttachments();
       await _cleanupEmptyConversation();
-      final conv = await _api.createConversation(
-        providerId: selectedProvider?.id,
-        modelId: selectedModel?.id,
-      );
-      conversations = [conv, ...conversations];
-      conversation = conv;
-      messages = const [];
-      _liveReasoning.clear();
-      _liveToolCalls.clear();
-      notice = null;
+      await _createConversation();
     } catch (e) {
       error = '新建会话失败：$e';
     }
     notifyListeners();
   }
 
+  /// 真正落库一条新会话，并切过去（新建 / 冷启动都走这里）。
+  Future<void> _createConversation() async {
+    final conv = await _api.createConversation(
+      providerId: selectedProvider?.id,
+      modelId: selectedModel?.id,
+    );
+    conversations = [conv, ...conversations];
+    _openEmptyConversation(conv);
+  }
+
+  /// 切到一条空会话：消息、附件托盘、流式状态一起清干净。
+  void _openEmptyConversation(AiConversation conv) {
+    conversation = conv;
+    messages = const [];
+    attachments.clear();
+    preflight = null;
+    _liveReasoning.clear();
+    _liveToolCalls.clear();
+    notice = null;
+  }
+
   /// 打开历史会话。同样先清理上一个空会话。
   Future<void> openConversation(String id) async {
     if (conversation?.id == id) return;
     try {
+      await _stashAttachments();
       await _cleanupEmptyConversation();
       conversation = conversations.firstWhere((c) => c.id == id);
       messages = await _api.listMessages(id);
+      await _applyDraftAttachments(id);
       _pruneLiveState();
       notice = null;
     } catch (e) {
@@ -429,24 +521,36 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   /// 当前会话是不是"空壳"：一条消息都没有，输入区也没有待发送的内容。
-  ///
-  /// 输入区有文字或附件时**不删** —— 那些草稿挂在会话上（见 [saveDraft]），
-  /// 删掉等于把用户打了一半的字扔掉。
   bool get isEmptyConversation =>
       (conversation?.id ?? '').isNotEmpty && messages.isEmpty && attachments.isEmpty;
 
   /// 切换会话时顺手删掉上一个空会话（用户要求）：聊天记录列表不该堆一串"新对话"。
+  ///
+  /// 判定要连**本地草稿**一起看：输入框里打了一半的字也是用户内容，
+  /// 只看 `messages` 会把"打了字还没发"的会话连同草稿一起删掉（用户报的 bug ②）。
   Future<void> _cleanupEmptyConversation() async {
     final conv = conversation;
     if (conv == null) return;
     if (messages.isNotEmpty || attachments.isNotEmpty) return;
     // 本地乐观插入的占位（还没落库）不能拿去删
     if (conv.id.startsWith('local-')) return;
+    final draft = await loadDraft(conv.id);
+    if (draft.text.trim().isNotEmpty || draft.attachments.isNotEmpty) return;
+    await _deleteConversationQuietly(conv.id);
+  }
+
+  /// 删一条会话（连它的草稿一起清掉）。删不掉也不影响切换：可能是归档 / 网络抖动。
+  Future<void> _deleteConversationQuietly(String id) async {
     try {
-      await _api.deleteConversation(conv.id);
-      conversations = conversations.where((c) => c.id != conv.id).toList();
+      await _api.deleteConversation(id);
+      conversations = conversations.where((c) => c.id != id).toList();
+      if (conversation?.id == id) {
+        conversation = null;
+        messages = const [];
+      }
+      await _clearDraft(id);
     } catch (_) {
-      // 删不掉也不影响切换（可能是归档 / 网络抖动），保持静默
+      // 静默：清理是"顺手做的事"，失败不该弹错误
     }
   }
 
@@ -497,17 +601,20 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   void addAttachment(AiAttachment a) {
     attachments.add(a);
+    unawaited(_stashAttachments());
     refreshPreflight();
   }
 
   void removeAttachmentAt(int index) {
     if (index < 0 || index >= attachments.length) return;
     attachments.removeAt(index);
+    unawaited(_stashAttachments());
     refreshPreflight();
   }
 
   void clearAttachments() {
     attachments.clear();
+    unawaited(_stashAttachments());
     preflight = null;
     notifyListeners();
   }

@@ -33,6 +33,14 @@ class _AiHomePageState extends State<AiHomePage> {
   /// 缓存 store：`dispose()` 里不能再碰 `context`
   late AiWorkspaceStore _store;
 
+  /// 正在把草稿写回输入框。这时**必须屏蔽** `_onInputChanged` ——
+  /// 否则"清空输入框"这个动作会被当成"用户把字删光了"，把刚取回来的草稿覆盖成空串
+  /// （切走再切回来字就没了，用户报的 bug ②）。
+  bool _applyingDraft = false;
+
+  /// 第几次切换会话：异步取草稿回来时用它判断"还是不是同一次切换"。
+  int _draftEpoch = 0;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -42,15 +50,18 @@ class _AiHomePageState extends State<AiHomePage> {
     _input.addListener(_onInputChanged);
     _store.addListener(_onStoreChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // `load()` 自己是幂等的：切到别的页再回来（页面会被重建）不会重新加载、
+      // 更不会再新建一条会话。
       if (mounted) _store.load();
     });
   }
 
   /// 输入变化就落草稿：切会话 / 关掉 App 都不会把没发出去的文字丢掉。
   void _onInputChanged() {
+    if (_applyingDraft) return;
     final id = _draftConversationId;
     if (id == null || !mounted) return;
-    _store.saveDraft(id, _input.text, _store.attachments);
+    _store.saveDraft(id, _input.text);
   }
 
   /// 会话切换时把上一条的草稿存好、把新一条的草稿取回来。
@@ -62,28 +73,40 @@ class _AiHomePageState extends State<AiHomePage> {
     final previous = _draftConversationId;
     _draftConversationId = id;
     if (previous != null) {
-      // 附件不跨会话搬运（它们属于刚离开的那次输入），这里只保住文字
-      _store.saveDraft(previous, _input.text, const []);
+      // 附件托盘由 Store 随会话存走（`AiWorkspaceStore._stashAttachments`），
+      // 这里只保住输入框里的文字
+      _store.saveDraft(previous, _input.text);
     }
     if (id == null) return;
-    // 先清空再异步取回，避免把上一条会话的文字留在输入框里
-    _input.clear();
+
+    // 先把输入框清干净（屏蔽回调，别把新会话的草稿抹掉），再去取这条会话的草稿
+    _setInputText('');
+    final epoch = ++_draftEpoch;
     _store.loadDraft(id).then((draft) {
-      if (!mounted || _draftConversationId != id) return;
-      if (draft.text.isEmpty) return;
-      _input.text = draft.text;
-      _input.selection = TextSelection.collapsed(offset: draft.text.length);
+      if (!mounted || _draftEpoch != epoch) return;
+      // 取草稿期间用户已经开始打字了：以用户现在打的为准，不要回退成旧草稿
+      if (_input.text.isEmpty) _setInputText(draft.text);
     });
+  }
+
+  /// 程序性地改输入框内容：**不**触发草稿保存（草稿是"用户打出来的"才算数）。
+  void _setInputText(String text) {
+    _applyingDraft = true;
+    _input.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    _applyingDraft = false;
   }
 
   @override
   void dispose() {
     _input.removeListener(_onInputChanged);
     _store.removeListener(_onStoreChanged);
-    // 页面销毁（比如窗口关掉）之前把当前草稿落一次
+    // 页面销毁（比如切到别的功能页、关窗口）之前把当前草稿落一次
     final id = _draftConversationId;
     if (id != null) {
-      _store.saveDraft(id, _input.text, const []);
+      _store.saveDraft(id, _input.text);
     }
     _input.dispose();
     _inputFocus.dispose();
