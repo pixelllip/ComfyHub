@@ -178,14 +178,117 @@ class ProtocolAdapterTest {
         }
     }
 
-    // --- 未实现的协议必须明确拒绝 -------------------------------------------
+    // --- OpenAI Responses（AIH-004）-----------------------------------------
 
     @Test
-    fun `openai-responses 尚未实现时明确报错 而不是静默失败`() {
+    fun `openai-responses 请求结构：system 提到 instructions、输入包成 content 数组`() {
         val responses = OpenAiResponsesAdapter()
-        assertFailsWith<ProtocolFailure> { responses.buildBody("m", emptyList(), true) }
-        assertTrue(Adapters.supported().none { it == AiApiRef.OPENAI_RESPONSES })
+        val body = responses.buildBody(
+            "gpt-5",
+            listOf(
+                ChatTurn("system", "你是助手"),
+                ChatTurn("user", "你好"),
+                ChatTurn("assistant", "在的"),
+                ChatTurn("user", "继续"),
+            ),
+            stream = true,
+            reasoning = ReasoningRequest.NONE,
+        )
+
+        // system 不能留在 input 里
+        assertEquals("你是助手", body["instructions"]?.jsonPrimitive?.content)
+        val input = body["input"]!!.jsonArray
+        assertEquals(3, input.size, message = "system 之后的三轮才进 input")
+        assertEquals("user", input[0].jsonObject["role"]?.jsonPrimitive?.content)
+        assertEquals(
+            "input_text",
+            input[0].jsonObject["content"]!!.jsonArray[0].jsonObject["type"]?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "output_text",
+            input[1].jsonObject["content"]!!.jsonArray[0].jsonObject["type"]?.jsonPrimitive?.content,
+            message = "助手历史用 output_text",
+        )
+        assertEquals(true, body["stream"]?.jsonPrimitive?.content?.toBoolean())
+        assertEquals("false", body["store"]?.jsonPrimitive?.content, message = "不做服务端存储")
+        // 没声明推理能力时一个思考字段都不发
+        assertNull(body["reasoning"])
+    }
+
+    @Test
+    fun `openai-responses 思考强度落到 reasoning-effort，max 收敛成 high`() {
+        val responses = OpenAiResponsesAdapter()
+        fun effortOf(r: ReasoningRequest) = responses.buildBody("gpt-5", emptyList(), true, r)["reasoning"]
+
+        val high = effortOf(
+            ReasoningRequest(ReasoningEffort.HIGH, "high", ThinkingFormat.OPENAI)
+        )!!.jsonObject
+        assertEquals("high", high["effort"]?.jsonPrimitive?.content)
+        assertEquals("auto", high["summary"]?.jsonPrimitive?.content,
+            message = "不带 summary 网关不下发思考过程")
+
+        val max = effortOf(
+            ReasoningRequest(ReasoningEffort.MAX, "max", ThinkingFormat.OPENAI)
+        )!!.jsonObject
+        assertEquals("high", max["effort"]?.jsonPrimitive?.content,
+            message = "Responses 没有 max 档")
+
+        // 关闭思考 = 不带 reasoning 字段
+        assertNull(effortOf(ReasoningRequest.NONE))
+    }
+
+    @Test
+    fun `openai-responses 解析 output_text 增量、思考摘要与 completed 里的用量`() {
+        val responses = OpenAiResponsesAdapter()
+        val events = listOf(
+            SseAccumulator.Frame(
+                "response.created",
+                """{"type":"response.created","response":{"id":"resp_1"}}""",
+            ),
+            SseAccumulator.Frame(
+                "response.output_text.delta",
+                """{"type":"response.output_text.delta","delta":"你"}""",
+            ),
+            SseAccumulator.Frame(
+                "response.reasoning_summary_text.delta",
+                """{"type":"response.reasoning_summary_text.delta","delta":"想一下"}""",
+            ),
+            SseAccumulator.Frame(
+                "response.completed",
+                """{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":5,"output_tokens":7}}}""",
+            ),
+        ).flatMap { responses.interpret(it) }
+
+        assertEquals("你", events.filterIsInstance<StreamEvent.TextDelta>().single().text)
+        assertEquals("想一下", events.filterIsInstance<StreamEvent.ReasoningDelta>().single().text)
+        assertEquals("resp_1", events.filterIsInstance<StreamEvent.ProviderId>().last().id)
+        assertEquals(1, events.filterIsInstance<StreamEvent.Usage>().size)
+    }
+
+    @Test
+    fun `openai-responses 的失败事件转成协议错误`() {
+        val responses = OpenAiResponsesAdapter()
+        assertFailsWith<ProtocolFailure> {
+            responses.interpret(
+                SseAccumulator.Frame(
+                    "response.failed",
+                    """{"type":"response.failed","response":{"error":{"message":"boom"}}}""",
+                )
+            )
+        }
+        // 只有 type、没有 event 行的网关也要认
+        assertFailsWith<ProtocolFailure> {
+            responses.interpret(
+                SseAccumulator.Frame(null, """{"type":"error","message":"rate limited"}""")
+            )
+        }
+    }
+
+    @Test
+    fun `openai-responses 已实现：进入 supported 名单`() {
+        assertTrue(Adapters.supported().contains(AiApiRef.OPENAI_RESPONSES))
         assertTrue(Adapters.supported().contains(AiApiRef.OPENAI_COMPLETIONS))
+        assertEquals("openai-responses/1", Adapters.of(AiApiRef.OPENAI_RESPONSES)!!.adapterVersion)
     }
 
     @Test

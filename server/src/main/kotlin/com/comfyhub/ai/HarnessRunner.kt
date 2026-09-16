@@ -296,6 +296,19 @@ class HarnessRunner(
                 (delta["stop_reason"] as? JsonPrimitive)?.contentOrNull?.let { finishReason = it }
             }
         }
+        if (apiRef == AiApiRef.OPENAI_RESPONSES) {
+            // Responses 的结束状态在 response.completed 的 response.status 里（completed / incomplete）
+            val response = (root["response"] as? JsonObject) ?: root
+            (response["status"] as? JsonPrimitive)?.contentOrNull?.let { status ->
+                if (status == "incomplete") {
+                    finishReason = (response["incomplete_details"] as? JsonObject)
+                        ?.let { (it["reason"] as? JsonPrimitive)?.contentOrNull }
+                        ?: "incomplete"
+                } else if (status.isNotEmpty()) {
+                    finishReason = status
+                }
+            }
+        }
         return Meta(providerId, finishReason)
     }
 
@@ -394,9 +407,13 @@ class HarnessRunner(
      */
     private fun redact(raw: String, secret: String?): String = AiUpstream.redact(raw, secret)
 
-    private fun chatUrl(baseURL: String, api: AiApiRef): String {        val base = baseURL.trimEnd('/')
+    private fun chatUrl(baseURL: String, api: AiApiRef): String {
+        val base = baseURL.trimEnd('/')
         return when (api) {
-            AiApiRef.OPENAI_COMPLETIONS, AiApiRef.OPENAI_RESPONSES -> "$base/chat/completions"
+            AiApiRef.OPENAI_COMPLETIONS -> "$base/chat/completions"
+            // Responses 是另一个端点：/v1/responses。（AIH-004）
+            AiApiRef.OPENAI_RESPONSES ->
+                if (base.endsWith("/v1")) "$base/responses" else "$base/v1/responses"
             AiApiRef.ANTHROPIC_MESSAGES ->
                 if (base.endsWith("/v1")) "$base/messages" else "$base/v1/messages"
         }

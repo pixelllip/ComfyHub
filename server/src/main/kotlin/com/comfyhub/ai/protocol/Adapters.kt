@@ -192,23 +192,137 @@ class ProtocolFailure(message: String) : RuntimeException(message)
 /**
  * OpenAI Responses 协议（AIH-004）。
  *
- * 首期尚未实现：请求/事件结构与 Chat Completions 差异较大（`output_text.delta` 等），
- * 与其半吊子实现，不如**明确拒绝**并让用户改用 openai-completions。
+ * 与 Chat Completions 的差别是结构性的，不是改个字段名：
+ *
+ * | | Chat Completions | Responses |
+ * | --- | --- | --- |
+ * | 路径 | `/chat/completions` | `/responses` |
+ * | 系统提示词 | `messages[0].role=system` | 顶层 `instructions` |
+ * | 输入 | `messages[{role,content:String}]` | `input[{role,content:[{type:input_text,text}]}]` |
+ * | 流事件 | `choices[].delta.content` | `response.output_text.delta` |
+ * | 用量 | 最后一个 chunk 的 `usage` | `response.completed.response.usage` |
+ *
+ * 只实现文本流（附件传输仍为空集，预检据此阻断，AIH-028）。
  */
 class OpenAiResponsesAdapter : ProtocolAdapter {
     override val api = AiApiRef.OPENAI_RESPONSES
     override val transports: Set<TransportRef> = emptySet()
-    override val adapterVersion = "openai-responses/0"
+    override val adapterVersion = "openai-responses/1"
 
     override fun buildBody(
         model: String,
         messages: List<ChatTurn>,
         stream: Boolean,
         reasoning: ReasoningRequest,
-    ): JsonObject =
-        throw ProtocolFailure("openai-responses 协议尚未实现，请先改用 openai-completions")
+    ): JsonObject {
+        // system 提示词在 Responses 里是顶层 instructions，不能留在 input 里
+        val instructions = messages.filter { it.role == "system" }
+            .joinToString("\n\n") { it.content }
+        val turns = messages.filter { it.role != "system" }
 
-    override fun interpret(frame: SseAccumulator.Frame): List<StreamEvent> = emptyList()
+        return buildJsonObject {
+            put("model", model)
+            if (instructions.isNotBlank()) put("instructions", instructions)
+            put(
+                "input",
+                buildJsonArray {
+                    turns.forEach { turn ->
+                        val assistant = turn.role == "assistant"
+                        add(
+                            buildJsonObject {
+                                put("role", if (assistant) "assistant" else "user")
+                                put(
+                                    "content",
+                                    buildJsonArray {
+                                        add(
+                                            buildJsonObject {
+                                                // 助手历史用 output_text，用户输入用 input_text
+                                                put("type", if (assistant) "output_text" else "input_text")
+                                                put("text", turn.content)
+                                            }
+                                        )
+                                    }
+                                )
+                            }
+                        )
+                    }
+                }
+            )
+            put("stream", stream)
+            // 不做服务端存储：和 Chat Completions 的行为对齐，避免把用户内容留在上游
+            put("store", false)
+            applyReasoning(reasoning)
+        }
+    }
+
+    /**
+     * Responses 的思考字段是 `reasoning: {effort, summary}`。
+     *
+     * 两点与 Chat Completions 不同：
+     *  1. **只有 `reasoning.effort` 一种写法**，没有 deepseek/qwen/zai 那些方言字段 ——
+     *     那些网关在 Responses 协议下同样认这个字段，所以这里不需要 `thinkingFormat` 分支；
+     *  2. `effort` 只接受 minimal/low/medium/high（Responses 早期只有 low/medium/high，
+     *     后来加了 minimal）。我们的 `MAX` 落成 `high`，`OFF` 就**不带**这个字段。
+     *
+     * 另外开 `summary: "auto"`：不带摘要时多数网关不会下发思考过程，
+     * 聊天框里的"思考中"就会一直空着。
+     */
+    private fun JsonObjectBuilder.applyReasoning(r: ReasoningRequest) {
+        if (r.effort == null || r.wireValue == null) return
+        val effort = when (r.wireValue) {
+            "max", "xhigh" -> "high"
+            "minimal" -> "minimal"
+            "low", "medium", "high" -> r.wireValue
+            else -> "medium"
+        }
+        put(
+            "reasoning",
+            buildJsonObject {
+                put("effort", effort)
+                put("summary", "auto")
+            }
+        )
+    }
+
+    override fun interpret(frame: SseAccumulator.Frame): List<StreamEvent> {
+        val data = frame.data.trim()
+        if (data.isEmpty() || data == "[DONE]") return emptyList()
+        val root = runCatching { ProtocolJson.parseToJsonElement(data) }.getOrNull() ?: return emptyList()
+        val out = mutableListOf<StreamEvent>()
+        // 事件类型：有的网关发 SSE `event:` 行，有的只在 body 的 type 里
+        val type = frame.event ?: root.str("type")
+
+        when {
+            // 正文增量
+            type == "response.output_text.delta" -> {
+                root.str("delta")?.takeIf { it.isNotEmpty() }?.let { out += StreamEvent.TextDelta(it) }
+            }
+            // 思考过程（推理摘要 / 推理正文，两种事件名都见过）
+            type == "response.reasoning_summary_text.delta" ||
+                type == "response.reasoning_text.delta" -> {
+                root.str("delta")?.takeIf { it.isNotEmpty() }?.let { out += StreamEvent.ReasoningDelta(it) }
+            }
+            // 流结束：用量与上游响应 id 都在这里
+            type == "response.completed" || type == "response.incomplete" -> {
+                val response = root.raw("response") ?: root
+                response.str("id")?.let { out += StreamEvent.ProviderId(it) }
+                response.raw("usage")?.let { out += StreamEvent.Usage(it) }
+            }
+            // 单条消息创建（拿 id 用）
+            type == "response.created" || type == "response.in_progress" -> {
+                root.raw("response")?.str("id")?.let { out += StreamEvent.ProviderId(it) }
+            }
+            // 明确的失败事件
+            type == "response.failed" || type == "error" -> {
+                val message = root.raw("response").str("error", "message")
+                    ?: root.raw("error").str("message")
+                    ?: root.str("message")
+                    ?: "上游返回错误事件"
+                throw ProtocolFailure(message)
+            }
+        }
+        return out
+    }
 }
 
 object Adapters {
