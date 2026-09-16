@@ -89,3 +89,6 @@ __pycache__/
 # 自动下载的 Java 运行时（scripts\ensure-runtime.ps1 装到 <根>\jre，约 200MB）
 /jre/
 
+
+# 本机用 anima 跑批留下的任务文件（不属于工程产物）
+/comfyui/anima_jobs/
