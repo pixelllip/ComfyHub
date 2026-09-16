@@ -25,7 +25,7 @@ import io.ktor.server.routing.route
  *  GET    /api/media/{id}/workflow   该产物对应的完整工作流 JSON
  * ```
  */
-fun Route.captureRoutes(ctx: AppContext, capture: ComfyCapture) {
+fun Route.captureRoutes(ctx: AppContext, capture: ComfyCapture, submitter: ComfySubmitter) {
 
     route("/capture") {
 
@@ -41,6 +41,27 @@ fun Route.captureRoutes(ctx: AppContext, capture: ComfyCapture) {
 
         get("/status") {
             call.respond(capture.status())
+        }
+
+        /**
+         * 实时进度（用户"其他建议"第 1 条）：AI 工作台右侧栏轮询它。
+         *
+         * 与 `/status` 的区别：这里**每次都真的去问一次 ComfyUI 的队列**，
+         * 而且带上 AI / 用户最近提交的任务进度 —— 界面要的就是"现在到底在跑什么"。
+         */
+        get("/jobs") {
+            val enabled = SettingsRepo.captureConfig(ctx.cfg).enabled
+            capture.refreshQueueNow()
+            val reachable = capture.isReachable()
+            call.respond(
+                CaptureJobSnapshot(
+                    queueRunning = capture.queueRunning(),
+                    queuePending = capture.queuePending(),
+                    comfyReachable = reachable,
+                    runningLabel = capture.runningLabel(),
+                    submissions = submitter.submissions(10),
+                )
+            )
         }
 
         post("/poll") {

@@ -60,6 +60,38 @@ class ComfyCapture(private val cfg: AppConfig, private val storage: Storage) {
     @Volatile private var queueRunning = 0
     @Volatile private var queuePending = 0
 
+    /** 队列里正在跑的任务名（ComfyUI 会在队列项里给 `extra_pnginfo.workflow.extra.title`）。 */
+    @Volatile private var queueRunningLabel: String? = null
+
+    /** 界面上「正在生成什么」的一句话：取不到就返回 null（界面自己说"正在生成…"）。 */
+    fun runningLabel(): String? = queueRunningLabel
+
+    /** 队列长度（最近一次刷新时的快照）。 */
+    fun queueRunning(): Int = queueRunning
+
+    fun queuePending(): Int = queuePending
+
+    /** 最近一次轮询时 ComfyUI 是否可达。 */
+    fun isReachable(): Boolean = comfyReachable
+
+    /**
+     * 立刻去问一次 ComfyUI 的队列（界面"实时进度"用）。
+     *
+     * 与 [pollOnce] 的区别：只刷队列计数，**不做** `/history` 的入库扫描 ——
+     * 界面 1.5 秒轮询一次，不能每次都触发一遍解析与写库。
+     */
+    fun refreshQueueNow() {
+        val conf = runCatching { SettingsRepo.captureConfig(cfg) }
+            .getOrElse { CaptureConfig(comfyUrl = cfg.comfyUrl, outputDir = cfg.comfyOutputDir) }
+        runCatching {
+            refreshQueue(conf.comfyUrl)
+            comfyReachable = true
+        }.onFailure {
+            comfyReachable = false
+            lastError = friendlyError(it as? Exception ?: Exception(it), conf.comfyUrl)
+        }
+    }
+
     // -----------------------------------------------------------------------
     //  轮询
     // -----------------------------------------------------------------------
@@ -195,8 +227,7 @@ class ComfyCapture(private val cfg: AppConfig, private val storage: Storage) {
     // -----------------------------------------------------------------------
 
     /** 外部（自定义节点 / 脚本）调用：自己抢运行锁 */
-    fun ingest(req: IngestRequest): IngestResult {
-        val runKey = req.runKey.trim()
+    fun ingest(req: IngestRequest): IngestResult {        val runKey = req.runKey.trim()
         if (runKey.isEmpty()) return IngestResult(runKey = "", message = "runKey 不能为空")
 
         val conf = runCatching { SettingsRepo.captureConfig(cfg) }
@@ -214,9 +245,55 @@ class ComfyCapture(private val cfg: AppConfig, private val storage: Storage) {
         return ingestClaimed(req, conf)
     }
 
+    /**
+     * 把**一条已经跑完的 `/history` 条目**收进库（用户建议 ①：AI 提交任务后的产出也要入库）。
+     *
+     * 与轮询捕获走完全同一条路（解析 → 建提示词 → 导入产物 → 完成运行记录），
+     * 幂等同样靠 `capture_runs.run_key` + 文件 SHA-256：
+     * 所以"AI 刚提交完就入库"和"轮询几秒后又看到它"不会变成两条数据。
+     *
+     * 入口是 [ComfySubmitter]：它提交后自己盯着这一次运行，跑完直接调这里，
+     * 不用等后台轮询的下一个周期（用户希望"提交完就能看到结果"）。
+     */
+    fun captureRun(runKey: String, entry: kotlinx.serialization.json.JsonObject): IngestResult {
+        val conf = runCatching { SettingsRepo.captureConfig(cfg) }
+            .getOrElse { CaptureConfig(comfyUrl = cfg.comfyUrl, outputDir = cfg.comfyOutputDir) }
+        val claim = CaptureRepo.beginRun(runKey, "ComfyUI", entry)
+        if (!claim.claimed) {
+            return IngestResult(
+                runKey = runKey,
+                promptId = claim.existingPromptId,
+                alreadyCaptured = true,
+                message = "这次运行已经捕获过了",
+            )
+        }
+        val statusObj = entry["status"] as? kotlinx.serialization.json.JsonObject
+        val isError = (statusObj?.get("status_str") as? kotlinx.serialization.json.JsonPrimitive)
+            ?.contentOrNull == "error"
+        return ingestClaimed(buildIngestRequest(runKey, entry, conf, isError), conf)
+    }
+
+    /**
+     * 从一条已捕获运行的原始 `/history` 片段里取出 **API 格式节点图**。
+     *
+     * 为什么要有它：`prompts.workflow_json` 存的是**界面格式**（能拖回 ComfyUI 复现），
+     * 而提交任务需要的是 API 格式。两者不能互相转换（界面格式里 `widgets_values` 只有位置、
+     * 没有参数名，猜就会猜错），所以这里回到最原始的那份记录上取 —— 它就是"当时真正跑的东西"。
+     *
+     * 老记录（捕获前就存在的 import 项）可能没有，返回 null，由调用方如实说明。
+     */
+    fun apiGraphOf(promptId: Long): kotlinx.serialization.json.JsonObject? {
+        val prompt = PromptRepo.get(promptId) ?: return null
+        val runKey = prompt.sourceRef ?: return null
+        val raw = CaptureRepo.rawOf(runKey) ?: return null
+        val entry = runCatching {
+            AppJson.parseToJsonElement(raw) as? kotlinx.serialization.json.JsonObject
+        }.getOrNull() ?: return null
+        return HistoryEntry.parse(entry).graph
+    }
+
     /** 已经抢到运行锁之后的实际入库逻辑 */
-    private fun ingestClaimed(req: IngestRequest, conf: CaptureConfig): IngestResult {
-        val runKey = req.runKey
+    private fun ingestClaimed(req: IngestRequest, conf: CaptureConfig): IngestResult {        val runKey = req.runKey
         val source = req.source.ifBlank { "ComfyUI" }
         try {
             val parsed = GraphParse.parse(req.prompt)
@@ -600,9 +677,25 @@ class ComfyCapture(private val cfg: AppConfig, private val storage: Storage) {
 
     private fun refreshQueue(comfyUrl: String) {
         val obj = fetchJson("${comfyUrl.trimEnd('/')}/queue") as? JsonObject ?: return
-        queueRunning = (obj["queue_running"] as? JsonArray)?.size ?: 0
+        val running = obj["queue_running"] as? JsonArray
+        queueRunning = running?.size ?: 0
         queuePending = (obj["queue_pending"] as? JsonArray)?.size ?: 0
+        queueRunningLabel = running?.firstOrNull()?.let { labelOfQueueItem(it) }
     }
+
+    /**
+     * 队列项是 `[number, prompt_id, graph, extra_data, outputs]`：
+     * 标题藏在 `extra_data.extra_pnginfo.workflow.extra.title`（我们在 ComfyUI 里给工作流起的名字）。
+     * 取不到就返回 null —— 界面宁可只说「正在生成…」，也不要编一个名字出来。
+     */
+    private fun labelOfQueueItem(item: JsonElement): String? = runCatching {
+        val row = item as? JsonArray ?: return null
+        val extra = row.firstOrNull { (it as? JsonObject)?.containsKey("extra_pnginfo") == true } as? JsonObject
+            ?: return null
+        val workflow = (extra["extra_pnginfo"] as? JsonObject)?.get("workflow") as? JsonObject ?: return null
+        val title = ((workflow["extra"] as? JsonObject)?.get("title") as? JsonPrimitive)?.contentOrNull
+        title?.takeIf { it.isNotBlank() }
+    }.getOrNull()
 
     private fun enc(value: String): String =
         URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20")

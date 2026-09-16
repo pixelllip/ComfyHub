@@ -111,3 +111,29 @@ data class ToolInfoDto(
     /** 是否被用户设置覆盖过 */
     val overridden: Boolean = false,
 )
+
+/**
+ * `comfy_find_workflow` 的搜索结果（用户建议 ①）。
+ *
+ * [json] 是回给模型与界面用的完整结构；[count] 单独留一份，方便工具在"一条都没找到"时
+ * 用 `NOT_FOUND` 失败（模型看到失败码比看到 `count: 0` 更容易纠正自己的做法）。
+ */
+data class WorkflowSearch(
+    val count: Int,
+    val json: JsonObject,
+)
+
+/**
+ * `comfy_submit` 的结果（用户建议 ①）。
+ *
+ * [mediaIds] 让界面能在助手回复末尾直接贴上**画廊入口卡**（用户建议 ⑤）：
+ * 模型拿到的 `json` 里也有它们，但界面不应该去解析工具结果 JSON。
+ */
+data class ComfySubmitOutcome(
+    val promptId: String,
+    val status: String,
+    val title: String?,
+    val mediaIds: List<Long> = emptyList(),
+    val capturedPromptId: Long? = null,
+    val json: JsonObject,
+)

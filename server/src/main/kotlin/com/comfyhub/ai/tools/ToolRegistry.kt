@@ -85,6 +85,18 @@ class ToolRegistry(
     private val comfyFindRun: (String) -> JsonElement?,
     /** `ComfyCapture.pollOnce()` 的结果 */
     private val comfySync: () -> JsonElement,
+    /**
+     * 在库里找能跑的工作流（用户建议 ①）。
+     *
+     * `query` 关键词、`limit` 条数、`includeGraph` 是否带上 API 节点图。
+     * 查不到时返回 `count=0`（由工具报 NOT_FOUND）。
+     */
+    private val comfyFindWorkflow: (String, Int, Boolean) -> WorkflowSearch = { _, _, _ ->
+        WorkflowSearch(0, buildJsonObject { put("count", 0) })
+    },
+    /** 提交一个工作流给 ComfyUI 跑（用户建议 ①）；`waitSeconds=0` 表示只提交不等。 */
+    private val comfySubmit: suspend (Long, JsonObject?, String?, Int) -> ComfySubmitOutcome =
+        { _, _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用 ComfyUI 提交能力") },
 ) {
     private val log = LoggerFactory.getLogger(ToolRegistry::class.java)
 
@@ -393,6 +405,73 @@ class ToolRegistry(
             val result = comfySync()
             ToolOutput(AppJson.encodeToString(JsonElement.serializer(), result), result as? JsonObject)
         },
+
+        // ------------------------------------------------------------------
+        //  提交任务（用户建议 ①：让 AI 可以直接调用 Comfy 提交任务）
+        // ------------------------------------------------------------------
+        AgentTool(
+            name = "comfy_find_workflow",
+            description = "在库里的提示词中找一个**能直接跑的工作流**（按标题/正文关键词搜索）。" +
+                "返回它的参数摘要（采样器 / steps / cfg / seed / 尺寸 / 提示词）与可覆盖的参数路径，" +
+                "然后就能用 comfy_submit 按同一个工作流再跑一次（改提示词或参数）。",
+            parameters = schema(
+                """{"type":"object","properties":{"query":{"type":"string","description":"关键词，匹配标题与正/负面提示词"},"limit":{"type":"integer","description":"最多返回几条，默认 5，最多 20"},"includeGraph":{"type":"boolean","description":"是否带上完整 API 节点图（默认 false；要看节点编号与输入名时才带上）"}},"required":["query"],"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = false,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, _ ->
+            val query = args.str("query") ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 query")
+            val limit = (args.int("limit") ?: 5).coerceIn(1, 20)
+            val includeGraph = args.bool("includeGraph") ?: false
+            val found = comfyFindWorkflow(query, limit, includeGraph)
+            if (found.count == 0) {
+                throw ToolFailure(
+                    "NOT_FOUND",
+                    "库里没有匹配「$query」的提示词。可以先用更短的关键词再搜一次，" +
+                        "或者让用户先在 ComfyUI 里手动跑一次（跑过之后就会自动被捕获）。",
+                )
+            }
+            ToolOutput(AppJson.encodeToString(JsonElement.serializer(), found.json), found.json)
+        },
+
+        AgentTool(
+            name = "comfy_submit",
+            description = "**把一个工作流提交给 ComfyUI 真的跑一次**（会消耗显卡时间，默认需要用户批准）。" +
+                "用 promptId 指定库里的工作流（先 comfy_find_workflow 找），用 overrides 覆盖参数" +
+                "（键写成 节点id.输入名，例如 \"3.steps\"、\"6.text\"）。跑完后产物会自动入库到画廊。" +
+                "不要凭想象编造工作流；说不清要跑什么就先问用户。",
+            parameters = schema(
+                """{"type":"object","properties":{"promptId":{"type":"integer","description":"库里提示词的 id（来自 comfy_find_workflow）"},"overrides":{"type":"object","description":"要覆盖的参数：{\"6.text\":\"新提示词\",\"3.steps\":30}","additionalProperties":true},"title":{"type":"string","description":"这次运行的标题（给用户认，可选）"},"wait":{"type":"boolean","description":"是否等它跑完（默认 true；false 表示排上队就返回）"},"waitSeconds":{"type":"integer","description":"最长等多少秒，默认 240，最多 900"}},"required":["promptId"],"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = true,
+            defaultAccess = ToolAccess.ASK,
+        ) { args, _ ->
+            val promptId = args.int("promptId")
+                ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 promptId（先用 comfy_find_workflow 找到一个）")
+            val overrides = args.obj("overrides")
+            val wait = args.bool("wait") ?: true
+            val waitSeconds = (args.int("waitSeconds") ?: 240).coerceIn(0, 900)
+            val result = try {
+                comfySubmit(
+                    promptId.toLong(),
+                    overrides,
+                    args.str("title"),
+                    if (wait) waitSeconds else 0,
+                )
+            } catch (e: ToolFailure) {
+                throw e
+            } catch (e: Exception) {
+                // 连不上 / 被 ComfyUI 拒绝：如实报出来，并告诉模型它还能做什么
+                throw ToolFailure(
+                    "COMFY_SUBMIT_FAILED",
+                    "提交失败：${e.message?.take(400)}。" +
+                        "可以先 comfy_get_status 看 ComfyUI 是否在跑；不要反复重试同一个工作流。",
+                )
+            }
+            ToolOutput(AppJson.encodeToString(JsonElement.serializer(), result.json), result.json)
+        },
     )
 
     private val byName = tools.associateBy { it.name }
@@ -568,3 +647,6 @@ internal fun JsonObject.int(field: String): Int? =
 
 internal fun JsonObject.bool(field: String): Boolean? =
     (this[field] as? JsonPrimitive)?.let { runCatching { it.content.toBooleanStrictOrNull() }.getOrNull() }
+
+/** 对象参数（例如 `overrides`）；不是对象就当作没给（模型偶尔会给字符串）。 */
+internal fun JsonObject.obj(field: String): JsonObject? = this[field] as? JsonObject

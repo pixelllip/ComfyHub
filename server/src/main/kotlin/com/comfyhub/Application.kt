@@ -20,6 +20,7 @@ import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import kotlinx.serialization.json.JsonObject
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.compression.Compression
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -149,15 +150,34 @@ fun Application.module(ctx: AppContext) {
 
     // 工具层（M4）：出厂只能写 <根>\comfyui，只读 <根>\comfyui + <根>\storage（见 ToolPolicy）
     val approvals = ToolApprovalGate()
+    // 提交任务（用户建议 ①）：AI 可以把库里的工作流真的送进 ComfyUI 队列
+    val submitter = ComfySubmitter(ctx.cfg, capture)
     val toolRegistry = ToolRegistry(
         projectRoot = ctx.cfg.projectRoot,
         skills = skills,
         approvals = approvals,
-        comfyStatus = { AppJson.encodeToJsonElement(CaptureStatus.serializer(), capture.status()) },
+        // 状态里额外带上"最近提交的任务"：模型查状态时就能看到自己刚提交的那个跑到哪了
+        comfyStatus = {
+            val base = AppJson.encodeToJsonElement(CaptureStatus.serializer(), capture.status()) as JsonObject
+            JsonObject(
+                base + mapOf(
+                    "submissions" to AppJson.encodeToJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(ComfySubmission.serializer()),
+                        submitter.submissions(5),
+                    ),
+                )
+            )
+        },
         comfyFindRun = { runKey ->
             CaptureRepo.findRun(runKey)?.let { AppJson.encodeToJsonElement(CaptureRunInfo.serializer(), it) }
         },
         comfySync = { AppJson.encodeToJsonElement(CapturePollResult.serializer(), capture.pollOnce()) },
+        comfyFindWorkflow = { query, limit, includeGraph ->
+            AiWorkflowSearch.search(capture, query, limit, includeGraph)
+        },
+        comfySubmit = { promptId, overrides, title, waitSeconds ->
+            AiWorkflowSearch.submit(submitter, capture, promptId, overrides, title, waitSeconds)
+        },
     )
 
     // 内置模型目录：项目内置的冻结副本（classpath）里那份，缺哪个补哪个；已存在的一律不覆盖
@@ -307,7 +327,7 @@ fun Application.module(ctx: AppContext) {
             promptRoutes()
             tagRoutes()
             mediaRoutes(ctx)
-            captureRoutes(ctx, capture)
+            captureRoutes(ctx, capture, submitter)
             aiRoutes(credentials, runner, runBus, skills, memory, toolRegistry, approvals, ctx.cfg.projectRoot, aiAttachments)
         }
     }

@@ -70,6 +70,8 @@ class ToolRegistryTest {
         "remember",
         "list_dir", "read_file", "write_file",
         "comfy_get_status", "comfy_get_run", "comfy_sync_history",
+        // 用户建议 ①：AI 可以直接提交 Comfy 任务
+        "comfy_find_workflow", "comfy_submit",
     )
 
     // --- 清单 / 权限 --------------------------------------------------------

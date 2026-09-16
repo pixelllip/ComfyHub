@@ -321,6 +321,18 @@ data class CaptureStatus(
 )
 
 @Serializable
+data class CaptureJobSnapshot(
+    /** ComfyUI 上的运行中 / 等待中任务数 */
+    val queueRunning: Int = 0,
+    val queuePending: Int = 0,
+    val comfyReachable: Boolean = false,
+    /** 正在生成的那一个（ComfyUI 队列里的队首）名称，给界面一句话说明 */
+    val runningLabel: String? = null,
+    /** AI / 用户最近提交的任务（新的在前），见 [ComfySubmission] */
+    val submissions: List<ComfySubmission> = emptyList(),
+)
+
+@Serializable
 data class CapturePollResult(
     val ok: Boolean,
     val checked: Int = 0,

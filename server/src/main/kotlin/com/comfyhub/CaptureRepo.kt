@@ -208,8 +208,7 @@ object CaptureRepo {
     }
 
     /** 按 runKey 查一条记录（AIH-034：`comfy_get_run` 工具用）。 */
-    fun findRun(runKey: String): CaptureRunInfo? = Db.withConnection { conn ->
-        conn.queryOne(
+    fun findRun(runKey: String): CaptureRunInfo? = Db.withConnection { conn ->        conn.queryOne(
             """
             SELECT run_key, prompt_id, status, media_count, title, error, created_at
               FROM capture_runs WHERE run_key = ?
@@ -226,6 +225,11 @@ object CaptureRepo {
                 capturedAt = rs.isoTime("created_at"),
             )
         }
+    }
+
+    /** 原始 `/history` 片段（`raw` 列）—— 提交任务时要从中取回 API 格式节点图。 */
+    fun rawOf(runKey: String): String? = Db.withConnection { conn ->
+        conn.queryOne("SELECT raw FROM capture_runs WHERE run_key = ?", runKey) { it.getString(1) }
     }
 
     /** 返回 (运行数, 产物数) */
