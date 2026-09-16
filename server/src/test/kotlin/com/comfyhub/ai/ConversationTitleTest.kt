@@ -24,7 +24,9 @@ class ConversationTitleTest {
     fun `完整标记被摘掉，正文原样保留`() {
         val (text, title) = run("[标题]雨夜霓虹街头[/标题]\n\n你想做什么样的图？")
         assertEquals("雨夜霓虹街头", title)
-        assertEquals("\n\n你想做什么样的图？", text)
+        // 标记后面那一个空行也剪掉：模型被要求"标题之后空一行再写正文"，
+        // 不剪的话气泡顶部会空一块（真机实测过）
+        assertEquals("你想做什么样的图？", text)
     }
 
     @Test
@@ -32,6 +34,22 @@ class ConversationTitleTest {
         val (text, title) = run("[", "标", "题", "]猫", "娘立", "绘[/标", "题]", "好的")
         assertEquals("猫娘立绘", title, "title=$title text=[$text]")
         assertEquals("好的", text, "title=$title text=[$text]")
+    }
+
+    @Test
+    fun `每三个字一片时正文前的空行也被剪掉（真机就是这么发的）`() {
+        val body = "[标题]赛博朋克少女[/标题]\n\n好的，我按赛博朋克少女的方向来。"
+        val (text, title) = run(*body.chunked(3).toTypedArray())
+        assertEquals("赛博朋克少女", title, "title=$title text=[$text]")
+        assertEquals("好的，我按赛博朋克少女的方向来。", text, "title=$title text=[$text]")
+    }
+
+    @Test
+    fun `正文中间的换行不受影响`() {
+        val (text, title) = run("[标题]赛博朋克[/标题]\n\n第一段\n\n第二段")
+        assertEquals("赛博朋克", title)
+        // 只剪"标题之后紧接着的"空白，正文内部自己的空行必须留着
+        assertEquals("第一段\n\n第二段", text)
     }
 
     @Test
@@ -46,7 +64,7 @@ class ConversationTitleTest {
     fun `先寒暄再给标题：寒暄保留，标题摘走`() {
         val (text, title) = run("好的，我先给这个对话起个名字。\n[标题]赛博朋克城市[/标题]\n正文开始")
         assertEquals("赛博朋克城市", title)
-        assertEquals("好的，我先给这个对话起个名字。\n\n正文开始", text)
+        assertEquals("好的，我先给这个对话起个名字。\n正文开始", text)
     }
 
     @Test

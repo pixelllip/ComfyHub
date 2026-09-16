@@ -48,6 +48,14 @@ class TitleStripper(private val enabled: Boolean) {
     private val buffer = StringBuilder()
     private var state = START
 
+    /**
+     * 刚摘掉标题标记：接下来放出去的那一小段要先剪掉前导空白。
+     *
+     * 为什么需要：模型被要求"标题之后空一行再写正文"，于是标记后面紧跟的是 `\n\n`，
+     * 摘掉标记之后正文就会以两个空行开头（真机实测过一次，气泡顶部空一块）。
+     */
+    private var trimLeadingBlank = false
+
     /** 摘出来的标题（还没摘到 / 不需要摘时为 null）。 */
     var title: String? = null
         private set
@@ -61,7 +69,11 @@ class TitleStripper(private val enabled: Boolean) {
      * 调用方只需把返回值原样发给界面 / 追加到落库文本，不要另外拼接缓冲。
      */
     fun push(chunk: String): String {
-        if (!enabled || state == PASSTHROUGH || chunk.isEmpty()) return chunk
+        if (!enabled || chunk.isEmpty()) return chunk
+        // PASSTHROUGH（已经摘完 / 确认没有标记）也要过一遍 cleanLeading：
+        // 标题标记后面那一个空行常常落在**下一片**里，直接 return chunk 就会把它放进正文
+        // （真机就是这么发的：`[/标题]` 和 `\n\n` 被切成两片）。
+        if (state == PASSTHROUGH) return cleanLeading(chunk)
         buffer.append(chunk)
 
         if (state == START) {
@@ -74,14 +86,14 @@ class TitleStripper(private val enabled: Boolean) {
             // 已经压得太久，模型显然没按格式来：先把确定不是标记的部分放行。
             // 只保留"可能是标记开头"的最后几个字符，避免把切开的 `[标` 漏给用户看。
             state = STREAM
-            return dropBefore(lastPartialMarkerStart())
+            return cleanLeading(dropBefore(lastPartialMarkerStart()))
         }
 
         if (state == STREAM) {
             val openAt = buffer.indexOf(OPEN)
             if (openAt >= 0) return takeTitle(openAt)
             // 尾部可能藏着切了一半的标记，留到最后再说
-            return dropBefore(lastPartialMarkerStart())
+            return cleanLeading(dropBefore(lastPartialMarkerStart()))
         }
 
         // IN_TITLE：已经在标记里了，只等闭合
@@ -116,7 +128,8 @@ class TitleStripper(private val enabled: Boolean) {
             val rest = buffer.substring(closeAt + CLOSE.length)
             buffer.clear()
             state = PASSTHROUGH
-            return rest
+            trimLeadingBlank = true
+            return cleanLeading(rest)
         }
         // 标题本身长得离谱 → 认输，把整段当正文放行（模型没按格式来）
         if (buffer.length > MAX_TITLE_CHARS + 40) {
@@ -132,6 +145,14 @@ class TitleStripper(private val enabled: Boolean) {
         val out = buffer.substring(0, end)
         buffer.delete(0, end)
         return out
+    }
+
+    /** 标题标记之后的第一段内容：剪掉前导空白（见 [trimLeadingBlank]）。 */
+    private fun cleanLeading(text: String): String {
+        if (!trimLeadingBlank || text.isEmpty()) return text
+        val trimmed = text.trimStart()
+        if (trimmed.isNotEmpty()) trimLeadingBlank = false
+        return trimmed
     }
 
     /**
