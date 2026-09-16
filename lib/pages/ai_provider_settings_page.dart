@@ -371,6 +371,41 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     _models.addAll(widget.models);
   }
 
+  /// 父级把模型目录加载完之后会重建本组件（key 带 revision）。
+  ///
+  /// **必须有这一条**：只靠 `initState` 初始化的话，父级异步补上目录时
+  /// 本地 `_models` 还停在空列表，界面就一直显示"还没有模型" ——
+  /// 这正是"获取完可用模型并加入后，退出重进看不到模型"的成因。
+  /// 用户在本地已经改过（还没保存）时**不要**用父级数据覆盖。
+  @override
+  void didUpdateWidget(_ProviderDetail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_dirty) return;
+    if (widget.provider.id != oldWidget.provider.id ||
+        !_sameModels(widget.models, oldWidget.models)) {
+      setState(() {
+        _models
+          ..clear()
+          ..addAll(widget.models);
+      });
+    }
+  }
+
+  /// 本地有未保存的改动（增删模型、改能力勾选）。
+  bool _dirty = false;
+
+  /// 任何本地模型改动都要置脏：否则父级重建时会把用户没保存的编辑冲掉。
+  void _markDirty() => _dirty = true;
+
+  static bool _sameModels(List<AiModel> a, List<AiModel> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id) return false;
+    }
+    return true;
+  }
+
   @override
   void dispose() {
     _key.dispose();
@@ -519,7 +554,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
                 IconButton(
                   tooltip: '移除',
                   icon: const Icon(Icons.close, size: 16),
-                  onPressed: _busy ? null : () => setState(() => _models.removeAt(index)),
+                  onPressed: _busy ? null : () => setState(() { _models.removeAt(index); _markDirty(); }),
                 ),
               ],
             ),
@@ -534,12 +569,12 @@ class _ProviderDetailState extends State<_ProviderDetail> {
                     selected: m.supports(modality),
                     onSelected: _busy
                         ? null
-                        : (on) => setState(() => _models[index] = _toggleModality(m, modality, on)),
+                        : (on) => setState(() { _models[index] = _toggleModality(m, modality, on); _markDirty(); }),
                   ),
                 FilterChip(
                   label: Text('工具', style: theme.textTheme.labelSmall),
                   selected: m.tools,
-                  onSelected: _busy ? null : (on) => setState(() => _models[index] = _copy(m, tools: on)),
+                  onSelected: _busy ? null : (on) => setState(() { _models[index] = _copy(m, tools: on); _markDirty(); }),
                 ),
               ],
             ),
@@ -617,7 +652,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
             ),
             Switch(
               value: m.reasoning,
-              onChanged: _busy ? null : (on) => setState(() => _models[index] = _toggleReasoning(m, on)),
+              onChanged: _busy ? null : (on) => setState(() { _models[index] = _toggleReasoning(m, on); _markDirty(); }),
             ),
           ],
         ),
@@ -763,6 +798,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       if (picked == null || picked.isEmpty) return;
       var added = 0;
       setState(() {
+        _markDirty();
         for (final c in picked) {
           if (_models.any((m) => m.id == c.id)) continue;
           _models.add(AiModel(
@@ -819,6 +855,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       return;
     }
     setState(() {
+      _markDirty();
       _models.add(AiModel(
         providerId: widget.provider.id,
         id: draft.id,
@@ -864,6 +901,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
                 })
             .toList(),
       );
+      _dirty = false; // 已经落库，之后父级重建可以直接覆盖本地副本
       await widget.onChanged('模型目录已保存（${_models.length} 个）。');
     } catch (e) {
       _toast('保存模型目录失败：$e', error: true);
