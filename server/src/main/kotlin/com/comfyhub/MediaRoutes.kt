@@ -14,6 +14,8 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.utils.io.jvm.javaio.toInputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
@@ -252,6 +254,28 @@ fun Route.mediaRoutes(ctx: AppContext) {
                 call.response.headers.append("X-Thumbnail", "1")
                 call.setInlineFileHeaders("thumb-$id.jpg", contentTypeFor("image/jpeg"))
                 call.respondFile(thumb.toFile())
+            }
+
+            get("/poster") {
+                val id = call.requireId() ?: return@get call.respondBadRequest("非法的 id")
+                val media = MediaRepo.get(id) ?: return@get call.respondNotFound("产物 $id 不存在")
+                // 只有视频需要"第一帧封面"；图片本来就有缩略图，音频没有画面
+                if (media.kind != "VIDEO") return@get call.respond(HttpStatusCode.NoContent)
+
+                val poster = storage.posterPath(id)
+                if (!Files.isRegularFile(poster)) {
+                    val src = storage.resolveMedia(media.storedName)
+                        ?: return@get call.respondNotFound("文件已丢失")
+                    // 抽帧要起一个子进程，放到 IO 线程上，别占着事件循环
+                    val ok = withContext(Dispatchers.IO) {
+                        MediaFiles.writeVideoPoster(src, poster, roots = listOf(ctx.storage.mediaDir))
+                    }
+                    // 抽不出来就明确告诉前端"没有封面"（204），播放器会转圈而不是显示破图
+                    if (!ok) return@get call.respond(HttpStatusCode.NoContent)
+                }
+                call.response.headers.append("X-Poster", "1")
+                call.setInlineFileHeaders("poster-$id.png", contentTypeFor("image/png"))
+                call.respondFile(poster.toFile())
             }
 
             get("/prompt") {

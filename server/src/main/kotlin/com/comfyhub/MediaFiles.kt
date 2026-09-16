@@ -8,6 +8,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.security.MessageDigest
 import javax.imageio.IIOImage
 import javax.imageio.ImageIO
@@ -243,5 +244,96 @@ object MediaFiles {
             log.debug("缩略图生成失败 {}: {}", source.fileName, e.message)
             false
         }
+    }
+
+    // -----------------------------------------------------------------------
+    //  视频封面（预览图）
+    // -----------------------------------------------------------------------
+
+    /**
+     * 抽视频封面，走 `scripts\video-poster.ps1`（Windows 资源管理器的缩略图管线）。
+     *
+     * 为什么不自己解码：JVM 侧没有随包的解码器，而引入 ffmpeg 意味着要分发一个
+     * 几十 MB 的二进制。系统缩略图对"本机能播的视频"都能出图，零额外依赖。
+     *
+     * 约定：成功返回 true 且 [dest] 存在；任何失败都返回 false 并**删掉半成品**，
+     * 让调用方走"没有封面"的降级路径（播放器转圈），不影响播放。脚本用
+     * `OK` / `FAIL` 前缀报告结果，这里只看文件是否真的生成了。
+     */
+    fun writeVideoPoster(source: Path, dest: Path, size: Int = 640, roots: List<Path> = emptyList()): Boolean {
+        val script = locatePosterScript(roots) ?: run {
+            log.debug("找不到 video-poster.ps1，跳过封面抽取")
+            return false
+        }
+        return try {
+            Files.createDirectories(dest.parent)
+            Files.deleteIfExists(dest)
+            val pwsh = locatePwsh() ?: "pwsh"
+            val process = ProcessBuilder(
+                pwsh, "-NoProfile", "-NonInteractive", "-File", script.toString(),
+                "-Source", source.toAbsolutePath().toString(),
+                "-Dest", dest.toAbsolutePath().toString(),
+                "-Size", size.toString(),
+                "-Force",
+            )
+                .redirectErrorStream(true)
+                .start()
+
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            val finished = process.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                log.debug("封面抽取超时: {}", source.fileName)
+                return false
+            }
+            val ok = Files.isRegularFile(dest) && Files.size(dest) > 0
+            if (!ok) {
+                Files.deleteIfExists(dest)
+                log.debug("封面抽取失败 {}: {}", source.fileName, output.trim().take(200))
+            }
+            ok
+        } catch (e: Exception) {
+            runCatching { Files.deleteIfExists(dest) }
+            log.debug("封面抽取异常 {}: {}", source.fileName, e.message)
+            false
+        }
+    }
+
+    /** 两种布局都认：源码树 `<根>\scripts`，发布包 `<根>\scripts`（根由 storage 往上找）。 */
+    private fun locatePosterScript(roots: List<Path>): Path? {
+        val seeds = mutableListOf<Path>()
+        seeds.addAll(roots)
+        val cwd = Paths.get("").toAbsolutePath().normalize()
+        seeds.add(cwd)
+        cwd.parent?.let { seeds.add(it) }
+        // 再补上 cwd 往上的两级（运行目录可能是 server/ 或发布包根）
+        var up = cwd.parent
+        repeat(2) {
+            up?.parent?.let { seeds.add(it) }
+            up = up?.parent
+        }
+        for (root in seeds) {
+            var cursor: Path? = root
+            // 往上最多找三层：viewer/ → server/ → 项目根
+            repeat(3) {
+                val candidate = cursor?.resolve("scripts")?.resolve("video-poster.ps1")
+                if (candidate != null && Files.isRegularFile(candidate)) return candidate
+                cursor = cursor?.parent
+            }
+        }
+        return null
+    }
+
+    /** 优先用 PATH 里的 pwsh；找不到就交给 ProcessBuilder 报错并降级。 */
+    private fun locatePwsh(): String? {
+        val explicit = System.getenv("COMFYHUB_PWSH")
+        if (!explicit.isNullOrBlank() && Files.isRegularFile(Paths.get(explicit))) return explicit
+        val home = System.getProperty("user.home") ?: return null
+        val candidates = listOf(
+            Paths.get("C:", "Program Files", "PowerShell", "7", "pwsh.exe"),
+            Paths.get(home, "scoop", "shims", "pwsh.exe"),
+            Paths.get("C:", "Program Files", "PowerShell", "7-preview", "pwsh.exe"),
+        )
+        return candidates.firstOrNull { Files.isRegularFile(it) }?.toString()
     }
 }

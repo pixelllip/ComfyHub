@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/formatting.dart';
+import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
 import '../widgets/audio_player_view.dart';
@@ -221,10 +222,10 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   /// 不用先划选文字再复制。
   Widget _previewArea(MediaAsset m, String url, {required bool wide, double? height}) {
     final preview = GestureDetector(
-      // translucent：视频/音频四周的留白也要能右键
+      // translucent：视频/音频四周的留白也要右键
       behavior: HitTestBehavior.translucent,
       onSecondaryTapDown: (d) => _showPreviewMenu(m, url, d.globalPosition),
-      child: _Preview(media: m, url: url),
+      child: _Preview(media: m, url: url, posterUrl: _posterUrl(m)),
     );
 
     if (m.kind == MediaKind.image) {
@@ -244,7 +245,21 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       );
       return wide ? centered : preview;
     }
-    return wide ? SingleChildScrollView(child: preview) : preview;
+    // 视频：宽屏铺满整栏（长边铺满靠播放器自己算），窄屏给固定高度、
+    // 不放进滚动容器 —— 播放器的控制条和全屏按钮需要一块稳定可见的区域。
+    return SizedBox(
+      width: double.infinity,
+      height: wide ? null : (height ?? 420),
+      child: preview,
+    );
+  }
+
+  /// 视频封面（预览图）：后端用 ffmpeg 抽的第一帧；拿不到就返回 null，
+  /// 播放器会退化成转圈，不影响播放。
+  String? _posterUrl(MediaAsset m) {
+    if (m.kind != MediaKind.video) return null;
+    final base = context.read<SettingsStore>().baseUrl;
+    return '$base/api/media/${m.id}/poster';
   }
 
   /// 详情页里对媒体本身右键：只列"复制"相关的操作。
@@ -339,8 +354,9 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
 class _Preview extends StatelessWidget {
   final MediaAsset media;
   final String url;
+  final String? posterUrl;
 
-  const _Preview({required this.media, required this.url});
+  const _Preview({required this.media, required this.url, this.posterUrl});
 
   @override
   Widget build(BuildContext context) {
@@ -357,9 +373,9 @@ class _Preview extends StatelessWidget {
       case MediaKind.video:
         return Container(
           color: Colors.black,
-          height: 420,
+          width: double.infinity,
           child: WinVideoView.supported
-              ? WinVideoView(url: url)
+              ? WinVideoView(url: url, posterUrl: posterUrl)
               : _Unsupported(
                   icon: Icons.movie_outlined,
                   message: '当前平台不支持内嵌视频播放',

@@ -43,6 +43,9 @@ class Storage(private val root: Path) {
 
     fun thumbPath(mediaId: Long): Path = thumbDir.resolve("$mediaId.jpg")
 
+    /** 视频封面缓存：thumbs/<mediaId>.poster.png（与图片缩略图分开存，互不覆盖）。 */
+    fun posterPath(mediaId: Long): Path = thumbDir.resolve("$mediaId.poster.png")
+
     fun tempFile(suffix: String = ".part"): Path = Files.createTempFile(tmpDir, "upload-", suffix)
 
     fun deleteMediaFile(storedName: String) {
@@ -51,6 +54,7 @@ class Storage(private val root: Path) {
 
     fun deleteThumb(mediaId: Long) {
         runCatching { Files.deleteIfExists(thumbPath(mediaId)) }
+        runCatching { Files.deleteIfExists(posterPath(mediaId)) }
     }
 
     fun sizeOf(storedName: String): Long =
