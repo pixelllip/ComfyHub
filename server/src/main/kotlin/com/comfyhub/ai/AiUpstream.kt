@@ -45,7 +45,11 @@ object AiUpstream {
         else -> AiErrorCode.PROTOCOL_ERROR
     }
 
-    /** 列表 URL：OpenAI 兼容拼 `/models`，Anthropic 只对列表归一化 `/v1`。 */
+    /**
+     * 列表 URL：OpenAI 兼容拼 `/models`，Anthropic 只对列表归一化 `/v1`。
+     *
+     * 这是**首选**地址；探测失败时会依次回退到 [modelsUrlCandidates] 里的其它写法。
+     */
     fun modelsUrl(baseURL: String, api: AiApi): String {
         val base = baseURL.trimEnd('/')
         return when (api) {
@@ -55,27 +59,53 @@ object AiUpstream {
         }
     }
 
-    fun testConnection(provider: AiProviderDto, secret: String?): TestResult {
-        val api = AiApi.parse(provider.api)
-            ?: return TestResult(false, AiErrorCode.CONFIG_ERROR, "未知协议：${provider.api}")
-        val trust = EndpointTrust.parse(provider.endpointTrust) ?: EndpointTrust.PUBLIC
+    /**
+     * 模型列表地址的候选序列（按可能性从高到低）。
+     *
+     * 为什么需要它：同一个 Key，Base URL 填 `https://api.openai.com` 和
+     * `https://api.openai.com/v1` 是两个不同的 URL —— 前者拼出来是
+     * `https://api.openai.com/models`（**404**），用户看到的却是"连接失败"。
+     * 官方的对话 / 响应端点路径里带 `/v1`，而 `/models` 也有不带 `/v1` 的网关，
+     * 所以这里两种都试，试到能通为止，并把"实际用的是哪个 URL"回报给界面。
+     */
+    fun modelsUrlCandidates(baseURL: String, api: AiApi): List<String> {
+        val base = baseURL.trimEnd('/')
+        val hasV1 = base.endsWith("/v1")
+        val stripped = if (hasV1) base.dropLast(3) else "$base/v1"
+        // 另一种写法：Base URL 带 /v1 就去掉试，不带就补上试。
+        // 两种协议都用同一条规则 —— 区别只在首选是哪一个（见 [modelsUrl]）。
+        val alternate = "$stripped/models"
+        return (listOf(modelsUrl(baseURL, api)) + alternate).distinct()
+    }
 
-        val uri = runCatching { URI(modelsUrl(provider.baseURL, api)) }.getOrNull()
-            ?: return TestResult(false, AiErrorCode.CONFIG_ERROR, "Base URL 无法解析")
-        val host = uri.host ?: return TestResult(false, AiErrorCode.CONFIG_ERROR, "Base URL 缺少主机名")
+    private data class Probe(
+        val ok: Boolean,
+        val status: Int?,
+        val code: String,
+        val detail: String,
+        val modelCount: Int? = null,
+        /** 只有确实需要正文时（取模型列表）才带回来，避免白读一遍 */
+        val body: String? = null,
+    )
 
-        // 先查凭据（便宜、不需要网络）：缺密钥时应该报得比"地址不可信"更准
-        if (provider.credentialRef != null && secret.isNullOrEmpty()) {
-            return TestResult(false, AiErrorCode.MISSING_CREDENTIAL, "该 Provider 引用了凭据 ${provider.credentialRef}，但本机没有配置")
-        }
-
-        // SSRF 复核：保存时已经查过一次，这里按真实解析结果再查一次
+    /** 发一次 `GET` 探测；`/models` 拿到 404 单独标出来（见 [testConnection]）。 */
+    private fun httpGet(
+        url: String,
+        api: AiApi,
+        secret: String?,
+        trust: EndpointTrust,
+        timeoutSeconds: Long,
+        withBody: Boolean = false,
+    ): Probe {
+        val uri = runCatching { URI(url) }.getOrNull()
+            ?: return Probe(false, null, AiErrorCode.CONFIG_ERROR, "Base URL 无法解析")
+        val host = uri.host ?: return Probe(false, null, AiErrorCode.CONFIG_ERROR, "Base URL 缺少主机名")
         runCatching { EndpointGuard.resolveAndCheck(host, trust) }.getOrElse { e ->
-            return TestResult(false, AiErrorCode.CONFIG_ERROR, e.message ?: "目标地址不被信任级别允许")
+            return Probe(false, null, AiErrorCode.CONFIG_ERROR, e.message ?: "目标地址不被允许")
         }
 
         val builder = HttpRequest.newBuilder(uri)
-            .timeout(Duration.ofSeconds(10))
+            .timeout(Duration.ofSeconds(timeoutSeconds))
             .GET()
             .header("Accept", "application/json")
         when (api) {
@@ -90,21 +120,77 @@ object AiUpstream {
         return try {
             val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString())
             val status = response.statusCode()
+            val body = response.body().orEmpty()
             val base = classifyStatus(status)
-            val code = if (base == null) null else refineFromBody(base, response.body())
-            log.info("Provider 连接测试 provider={} endpoint={} status={} code={}", provider.id, safeEndpoint(uri), status, code)
-            if (code == null) {
-                TestResult(true, null, "连接正常（HTTP $status）", status, countModels(response.body(), api))
+                ?: return Probe(true, status, "", "", countModels(body, api), body.takeIf { withBody })
+            val code = refineFromBody(base, body) ?: base
+            if (status == 404) {
+                // 鉴权不在这里判断：有些网关根本没有 /models，给 404 不代表 Key 不对
+                Probe(false, status, MODEL_LIST_STATUS, explain(code, status))
             } else {
-                TestResult(false, code, explain(code, status) + "｜上游返回：" + redact(response.body(), secret), status)
+                Probe(false, status, code, explain(code, status) + "｜上游返回：" + redact(body, secret))
             }
         } catch (e: java.net.http.HttpTimeoutException) {
-            log.warn("Provider 连接超时 provider={} endpoint={}", provider.id, safeEndpoint(uri))
-            TestResult(false, AiErrorCode.PROVIDER_UNREACHABLE, "连接超时（10 秒）")
+            Probe(false, null, AiErrorCode.PROVIDER_UNREACHABLE, "连接超时（${timeoutSeconds}秒）")
         } catch (e: Exception) {
-            log.warn("Provider 连接失败 provider={} endpoint={} reason={}", provider.id, safeEndpoint(uri), e::class.simpleName)
-            TestResult(false, AiErrorCode.PROVIDER_UNREACHABLE, "无法连接：${e::class.simpleName}")
+            Probe(false, null, AiErrorCode.PROVIDER_UNREACHABLE, "无法连接：${e::class.simpleName}")
         }
+    }
+
+    /** `/models` 返回 404 时的内部标记：**鉴权已经过了**，只是拿不到模型列表。 */
+    private const val MODEL_LIST_STATUS = "MODEL_LIST_UNAVAILABLE"
+
+    /**
+     * 连接测试：不看 `Bearer` 是否被接受，只看**这个 Base URL 到底能不能用**。
+     *
+     * Base URL 填 `.../v1` 与不填是两个不同的地址，所以候选地址依次试；
+     * 全都拿不到列表时，只要有一个地址**不是鉴权失败**（401/403），
+     * 就认为连通（Key 是对的，只是这份端点不提供 /models）。
+     */
+    fun testConnection(provider: AiProviderDto, secret: String?): TestResult {
+        val api = AiApi.parse(provider.api)
+            ?: return TestResult(false, AiErrorCode.CONFIG_ERROR, "未知协议：${provider.api}")
+        val trust = EndpointTrust.parse(provider.endpointTrust) ?: EndpointTrust.PUBLIC
+
+        // 先查凭据（便宜、不需要网络）：缺密钥时应该报得比"地址不可信"更准
+        if (provider.credentialRef != null && secret.isNullOrEmpty()) {
+            return TestResult(false, AiErrorCode.MISSING_CREDENTIAL, "该 Provider 引用了凭据 ${provider.credentialRef}，但本机没有配置")
+        }
+
+        val candidates = modelsUrlCandidates(provider.baseURL, api)
+        var firstProbe: Probe? = null
+        for (url in candidates) {
+            val probe = httpGet(url, api, secret, trust, timeoutSeconds = 10)
+            if (firstProbe == null) firstProbe = probe
+            log.info(
+                "Provider 连接测试 provider={} endpoint={} status={} code={}",
+                provider.id, url, probe.status, probe.code,
+            )
+            if (probe.ok) {
+                val via = if (url == candidates.first()) "" else "（实际可用地址 $url）"
+                return TestResult(
+                    true, null,
+                    "连接正常（HTTP ${probe.status}）$via",
+                    probe.status, probe.modelCount,
+                )
+            }
+            // 鉴权失败：换地址也没用，直接报（这才是真正的"API Key 报错"）
+            if (probe.code == AiErrorCode.MISSING_CREDENTIAL) {
+                return TestResult(false, probe.code, probe.detail, probe.status)
+            }
+        }
+
+        val first = firstProbe ?: return TestResult(false, AiErrorCode.CONFIG_ERROR, "Base URL 无法解析")
+        // 所有候选都拿不到模型列表：只要不是鉴权问题，就说明端点本身是通的
+        if (first.code == MODEL_LIST_STATUS) {
+            return TestResult(
+                true, null,
+                "连接正常（HTTP ${first.status}）：该端点不提供模型列表（/models 返回 404），"
+                    + "因此「获取可用模型」可能为空，手工添加模型即可。",
+                first.status,
+            )
+        }
+        return TestResult(false, first.code, first.detail, first.status)
     }
 
     /** 日志里只出现 scheme://host:port/path，不带 query / fragment / userInfo。 */
@@ -400,16 +486,18 @@ object AiUpstream {
         val errorCode: String?,
         val message: String,
         val body: String,
+        /** 真正取到列表的那个地址（候选回退后可能不是 Base URL 直接拼出来的那个） */
+        val usedUrl: String? = null,
     )
 
+    /**
+     * 取模型列表：候选地址依次试（`{base}/models` ↔ `{base}/v1/models`），
+     * 第一个返回 2xx 的就算数。这样 Base URL 填不填 `/v1` 都能用。
+     */
     private fun getModels(provider: AiProviderDto, secret: String?): UpstreamResponse {
         val api = AiApi.parse(provider.api)
             ?: return UpstreamResponse(false, null, AiErrorCode.CONFIG_ERROR, "未知协议：${provider.api}", "")
         val trust = EndpointTrust.parse(provider.endpointTrust) ?: EndpointTrust.PUBLIC
-        val uri = runCatching { URI(modelsUrl(provider.baseURL, api)) }.getOrNull()
-            ?: return UpstreamResponse(false, null, AiErrorCode.CONFIG_ERROR, "Base URL 无法解析", "")
-        val host = uri.host
-            ?: return UpstreamResponse(false, null, AiErrorCode.CONFIG_ERROR, "Base URL 缺少主机名", "")
 
         if (provider.credentialRef != null && secret.isNullOrEmpty()) {
             return UpstreamResponse(
@@ -417,37 +505,23 @@ object AiUpstream {
                 "该 Provider 引用了凭据 ${provider.credentialRef}，但本机没有配置", ""
             )
         }
-        runCatching { EndpointGuard.resolveAndCheck(host, trust) }.getOrElse { e ->
-            return UpstreamResponse(false, null, AiErrorCode.CONFIG_ERROR, e.message ?: "目标地址不被允许", "")
-        }
 
-        val builder = HttpRequest.newBuilder(uri)
-            .timeout(Duration.ofSeconds(20))
-            .GET()
-            .header("Accept", "application/json")
-        when (api) {
-            AiApi.OPENAI_COMPLETIONS, AiApi.OPENAI_RESPONSES ->
-                if (!secret.isNullOrEmpty()) builder.header("Authorization", "Bearer $secret")
-            AiApi.ANTHROPIC_MESSAGES -> {
-                if (!secret.isNullOrEmpty()) builder.header("x-api-key", secret)
-                builder.header("anthropic-version", "2023-06-01")
-            }
+        var last: UpstreamResponse? = null
+        for (url in modelsUrlCandidates(provider.baseURL, api)) {
+            val probe = httpGet(url, api, secret, trust, timeoutSeconds = 20, withBody = true)
+            val attempt = UpstreamResponse(
+                ok = probe.ok,
+                status = probe.status,
+                errorCode = probe.code.takeIf { !probe.ok },
+                message = if (probe.ok) "OK" else probe.detail,
+                body = probe.body.orEmpty(),
+                usedUrl = url,
+            )
+            if (attempt.ok) return attempt
+            // 鉴权失败换地址也没用，直接返回（别把"Key 不对"掩盖成"地址不对"）
+            if (probe.code == AiErrorCode.MISSING_CREDENTIAL) return attempt
+            last = attempt
         }
-        return try {
-            val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString())
-            val code = classifyStatus(response.statusCode())
-            if (code == null) {
-                UpstreamResponse(true, response.statusCode(), null, "OK", response.body())
-            } else {
-                UpstreamResponse(
-                    false, response.statusCode(), code,
-                    explain(code, response.statusCode()), ""
-                )
-            }
-        } catch (e: java.net.http.HttpTimeoutException) {
-            UpstreamResponse(false, null, AiErrorCode.PROVIDER_UNREACHABLE, "连接超时（20 秒）", "")
-        } catch (e: Exception) {
-            UpstreamResponse(false, null, AiErrorCode.PROVIDER_UNREACHABLE, "无法连接：${e::class.simpleName}", "")
-        }
+        return last ?: UpstreamResponse(false, null, AiErrorCode.CONFIG_ERROR, "Base URL 无法解析", "")
     }
 }

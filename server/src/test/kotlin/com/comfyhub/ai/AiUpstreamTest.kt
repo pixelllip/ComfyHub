@@ -43,6 +43,23 @@ class AiUpstreamTest {
     }
 
     @Test
+    fun `模型列表地址会回退到另一种 v1 写法`() {
+        // Base URL 填不填 /v1 都能用：两个候选都要在，首选仍然是原来那个
+        assertEquals(
+            listOf("https://api.openai.com/v1/models", "https://api.openai.com/models"),
+            AiUpstream.modelsUrlCandidates("https://api.openai.com/v1", AiApi.OPENAI_RESPONSES)
+        )
+        assertEquals(
+            listOf("https://api.openai.com/models", "https://api.openai.com/v1/models"),
+            AiUpstream.modelsUrlCandidates("https://api.openai.com", AiApi.OPENAI_COMPLETIONS)
+        )
+        assertEquals(
+            listOf("https://gw.example/v1/models", "https://gw.example/models"),
+            AiUpstream.modelsUrlCandidates("https://gw.example/v1", AiApi.ANTHROPIC_MESSAGES)
+        )
+    }
+
+    @Test
     fun `模型数量解析兼容 data 数组与 models 对象`() {
         assertEquals(2, AiUpstream.countModels("""{"data":[{"id":"a"},{"id":"b"}]}""", AiApi.OPENAI_COMPLETIONS))
         assertEquals(1, AiUpstream.countModels("""{"models":[{"id":"a"}]}""", AiApi.ANTHROPIC_MESSAGES))
