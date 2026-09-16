@@ -8,6 +8,7 @@ import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../models/ai_models.dart';
 import '../state/ai_workspace_store.dart';
+import '../widgets/markdown_view.dart';
 
 /// AI 工作台（AIH-001 / AIH-002 / AIK-002）。
 ///
@@ -264,7 +265,12 @@ class _MessageList extends StatelessWidget {
                           ],
                         ),
                       ),
-                  if (m.text.isNotEmpty) SelectableText(m.text),
+                  // 用户消息按纯文本显示（自己敲的，不需要渲染）；
+                  // 助手消息渲染 Markdown —— 之前把 `**加粗**` 原样吐出来，很难读。
+                  if (m.text.isNotEmpty)
+                    m.isUser
+                        ? SelectableText(m.text)
+                        : MarkdownText(m.text, style: theme.textTheme.bodyMedium),
                   // 流式进行中且还没有内容：给一个明确的"在生成"提示，而不是空白气泡
                   if (m.status == 'streaming' && m.text.isEmpty)
                     Row(
