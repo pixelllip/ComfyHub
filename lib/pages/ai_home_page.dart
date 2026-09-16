@@ -235,6 +235,10 @@ class _MessageList extends StatelessWidget {
         final bg = m.isUser
             ? theme.colorScheme.primaryContainer
             : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5);
+        // 失败/取消的助手消息可以重试：新建一个 Run，用 retryOfRunId 关联回去（AIH-024）
+        final canRetry = !m.isUser &&
+            (m.status == 'failed' || m.status == 'cancelled') &&
+            !store.sending;
         return Column(
           crossAxisAlignment: align,
           children: [
@@ -281,6 +285,20 @@ class _MessageList extends StatelessWidget {
                   if (m.status == 'failed')
                     Text('（生成失败）',
                         style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error)),
+                  if (canRetry)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () => store.retry(m.id),
+                        icon: const Icon(Icons.refresh, size: 16),
+                        label: const Text('重试'),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: const Size(0, 32),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+                    ),
                   // token 统计（AIH-057）：只对真有 usage 的助手消息显示，没有就不占位
                   if (!m.isUser && (m.usage?.isEmpty == false || (m.reasoningEffort ?? 'off') != 'off'))
                     Padding(

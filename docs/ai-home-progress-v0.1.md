@@ -47,7 +47,7 @@
 | AIH-021 统一 SSE + seq 续传 | ✅ | `GET /runs/{id}/events?after=seq`；事件全部落库（`ai_run_events`），进程重启后仍可回放；带 15 秒心跳 |
 | AIH-022 取消 | ✅ | `POST /runs/{id}/cancel` → 取消协程 → `runInterruptible` 打断阻塞读 → 上游连接关闭，Run 记 `cancelled` |
 | AIH-023 快照 | ✅ | Provider/模型快照 + `promptVersion` 随 Run 保存，**快照不含密钥**（只有引用名） |
-| AIH-024 稳定错误码 + 有限重试 | ✅（重试待补） | `MISSING_CREDENTIAL / UNKNOWN_MODEL / RATE_LIMIT / QUOTA_EXCEEDED / CONFIG_ERROR / PROTOCOL_ERROR / ABORTED / PROVIDER_UNREACHABLE / UNSUPPORTED_CONTENT`；`retryOfRunId` 字段与 `POST /runs` 已就绪，UI 的"重试"按钮尚未做 |
+| AIH-024 稳定错误码 + 有限重试 | ✅ | `MISSING_CREDENTIAL / UNKNOWN_MODEL / RATE_LIMIT / QUOTA_EXCEEDED / CONFIG_ERROR / PROTOCOL_ERROR / ABORTED / PROVIDER_UNREACHABLE / UNSUPPORTED_CONTENT`；失败/被取消的回复上直接给「重试」：**新建 Run** 并用 `retryOfRunId` 关联回原 Run，重放原来的提问与思考强度 |
 | AIH-027 严格文件识别 | ✅（分类器 + 预检接入） | `FileKindDetector` 签名优先、未知即 UNKNOWN；`StrictIntake` 让**服务端判定压过前端声明**（前端谎报 image 骗不过准入，有单测）。上传落盘链路要等 M3 |
 | AIH-028 能力矩阵 | ✅ | 模型声明 ∩ 适配器实现 ∩ MIME ∩ 大小/数量，任一不满足即阻断（有单测）；适配器 `transports` 是唯一事实来源 |
 | AIH-029/030 前后端阻断、零上游请求 | ◐ | 前端以后端 preflight 为准并禁用发送，`preflight` 是纯计算；Run 准入已在创建 Run 前做能力校验，但"事务内快照再验一次"要等附件真正可发（M3） |
@@ -78,11 +78,13 @@
    把适配器 `transports` 从空集改成实际实现，并在 Run 准入处用事务内快照再验一次（AIH-030 的"上游请求数为 0"用例）。
    现在的行为是**正确阻断**，不是静默丢弃。
 2. **`openai-responses` 适配器**（AIH-004）：目前明确拒绝。
-3. **重试按钮**：`retryOfRunId` 与 `POST /runs` 已就绪，UI 上还差一个「重试」入口（AIH-024）。
-4. **工具循环与 Comfy 查询（M4）**：`ai_tool_calls` 表、`comfy_get_status` / `comfy_get_run` / `comfy_sync_history`（含审批）、
+3. **工具循环与 Comfy 查询（M4）**：`ai_tool_calls` 表、`comfy_get_status` / `comfy_get_run` / `comfy_sync_history`（含审批）、
    单次回复最多 3 次主动查询；系统提示词里现在**明确写了"尚未注册任何工具"**，加了工具要同步改提示词版本。
-5. **Skills（M5）**：目录扫描、`load_skill`、第三方安全导入；界面上的 `/` 菜单目前只是目录展示。
-6. 事件表保留策略：`AiRunRepo.pruneEvents()` 已写好但还没接到定时任务。
+4. **Skills（M5）**：目录扫描、`load_skill`、第三方安全导入；界面上的 `/` 菜单目前只是目录展示。
+5. 事件表保留策略：`AiRunRepo.pruneEvents()` 已写好但还没接到定时任务。
+
+> ⚠️ **需求 xlsx 的"状态"列不可信**：里面把没实现的需求（AIH-004 openai-responses、AIH-025~032 附件可发、
+> AIH-033~045 工具与 Skills）都标成了"通过"。**以代码与本文档为准**，别照抄那一列。
 
 ## 5. 思考强度与 token 统计（AIH-056 / AIH-057，2026-09-16 新增）
 

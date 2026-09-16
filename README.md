@@ -415,6 +415,10 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `GET` | `/api/ai/runs/{id}/events?after=<seq>` | **统一 SSE 事件流**：`run.started / message.started / reasoning.delta / text.delta / usage.updated / message.completed / run.completed / run.failed / run.cancelled / heartbeat`；`after` 断线续传。`message.completed` 里带 `reasoningEffort` 与归一化 `usage` |
 | `POST` | `/api/ai/runs/{id}/cancel` | 取消：关闭上游连接，Run 记为 `cancelled` |
 
+**重试**：失败或被取消的回复上会出现「重试」按钮 —— 它是**新开一个 Run**（用 `retryOfRunId`
+关联回原 Run，便于事后看出这是哪次失败的重放），重放原来的提问、同一个 Provider/模型与思考强度；
+不会自动重放工具调用（首期还没有工具）。
+
 **协议支持现状**（以代码事实为准，不按模型名猜）：
 
 | 协议 | 状态 |

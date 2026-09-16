@@ -23,6 +23,25 @@ import 'package:viewer/state/ai_workspace_store.dart';
 /// 最近一次 Run 请求体：用例据此断言"思考强度到底有没有真的发出去"。
 Map<String, dynamic>? lastRunBody;
 
+/// 本次用例里所有 Run 请求体（按顺序）。
+final List<Map<String, dynamic>> lastRunBodies = [];
+
+/// 事件流请求打到的 runId（按顺序）。
+final List<String> sseProbe = [];
+
+/// 按真实 SSE 格式拼事件（**冒号后必须有空格**，否则 `event:` 前缀匹配不上，
+/// 客户端会把整个事件当成未知行丢掉 —— 这里踩过一次，别省这个空格）。
+String _sse(int seq, String type, String dataJson) =>
+    'id: $seq\nevent: $type\ndata: $dataJson\n\n';
+
+/// SSE 响应必须给出 **UTF-8 字节**：正文里有中文，直接当字符串塞进 `http.Response`
+/// 会被按 Latin-1 编码，客户端解码时炸成 "Contains invalid characters"。
+http.Response _sseResponse(String body) => http.Response.bytes(
+      utf8.encode(body),
+      200,
+      headers: {'content-type': 'text/event-stream; charset=utf-8'},
+    );
+
 /// 一个「纯文本模型」的假后端：任何图片附件都会被后端的 preflight 阻断。
 MockClient _fakeBackend({
   List<String> modalities = const ['text'],
@@ -30,7 +49,9 @@ MockClient _fakeBackend({
   bool reasoning = false,
   String? thinkingFormat,
   Map<String, dynamic>? usage,
+  bool failFirstRun = false,
 }) {
+  var runCount = 0;
   return MockClient((request) async {
     final path = request.url.path;
     Object body;
@@ -75,20 +96,35 @@ MockClient _fakeBackend({
     } else if (path == '/api/ai/conversations') {
       body = <Object>[];
     } else if (path == '/api/ai/conversations/c1/runs') {
-      // 记录发出去的思考强度，供用例断言"到底有没有真的带上"
+      // 记录发出去的请求体，供用例断言"思考强度有没有真的带上""重试有没有带 retryOfRunId"
       lastRunBody = jsonDecode(request.body) as Map<String, dynamic>;
-      body = {'runId': 'r1', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
-    } else if (path == '/api/ai/runs/r1/events') {
+      lastRunBodies.add(lastRunBody!);
+      runCount++;
+      final id = 'r$runCount';
+      body = {'runId': id, 'assistantMessageId': 'a$runCount', 'userMessageId': 'u1'};
+    } else if (path.startsWith('/api/ai/runs/') && path.endsWith('/events')) {
+      final startedRunId = path.split('/')[4];
+      sseProbe.add(startedRunId);
+      // 第一次 Run 可以直接失败（重试用例）
+      if (failFirstRun && startedRunId == 'r1') {
+        final fail = _sse(1, 'run.started', '{"runId":"r1"}') +
+            _sse(2, 'run.failed', '{"runId":"r1","code":"RATE_LIMIT","message":"上游限流"}');
+        return _sseResponse(fail);
+      }
       // 统一事件流：两段文本增量 + 完成（AIH-021）
-      final sse = 'id: 1\nevent: run.started\ndata: {"runId":"r1"}\n\n'
-          'id: 2\nevent: message.started\ndata: {"messageId":"a1"}\n\n'
-          'id: 3\nevent: text.delta\ndata: {"messageId":"a1","text":"你好，"}\n\n'
-          'id: 4\nevent: text.delta\ndata: {"messageId":"a1","text":"我是假模型"}\n\n'
-          'id: 5\nevent: message.completed\ndata: {"messageId":"a1","text":"你好，我是假模型",'
-          '"reasoningEffort":"${lastRunBody?['reasoningEffort'] ?? 'off'}",'
-          '"usage":${jsonEncode(usage ?? const {'inputTokens': 120, 'outputTokens': 30})}}\n\n'
-          'id: 6\nevent: run.completed\ndata: {"runId":"r1"}\n\n';
-      return http.Response(sse, 200, headers: {'content-type': 'text/event-stream'});
+      final sse = _sse(1, 'run.started', '{"runId":"$startedRunId"}') +
+          _sse(2, 'message.started', '{"messageId":"a$runCount"}') +
+          _sse(3, 'text.delta', '{"messageId":"a$runCount","text":"你好，"}') +
+          _sse(4, 'text.delta', '{"messageId":"a$runCount","text":"我是假模型"}') +
+          _sse(
+            5,
+            'message.completed',
+            '{"messageId":"a$runCount","text":"你好，我是假模型",'
+                '"reasoningEffort":"${lastRunBody?['reasoningEffort'] ?? 'off'}",'
+                '"usage":${jsonEncode(usage ?? const {'inputTokens': 120, 'outputTokens': 30})}}',
+          ) +
+          _sse(6, 'run.completed', '{"runId":"$startedRunId"}');
+      return _sseResponse(sse);
     } else if (path == '/api/ai/conversations/c1/messages') {
       body = [
         {
@@ -101,13 +137,15 @@ MockClient _fakeBackend({
           'parts': <Object>[],
         },
         {
-          'id': 'a1',
+          'id': failFirstRun && runCount < 2 ? 'a1' : 'a2',
           'conversationId': 'c1',
           'seq': 2,
           'role': 'assistant',
-          'status': 'complete',
-          'text': '你好，我是假模型',
-          'usage': usage ?? const {'inputTokens': 120, 'outputTokens': 30},
+          'status': failFirstRun && runCount < 2 ? 'failed' : 'complete',
+          'text': failFirstRun && runCount < 2 ? '' : '你好，我是假模型',
+          'usage': failFirstRun && runCount < 2
+              ? null
+              : (usage ?? const {'inputTokens': 120, 'outputTokens': 30}),
           'reasoningEffort': lastRunBody?['reasoningEffort'],
           'parts': <Object>[],
         },
@@ -146,6 +184,7 @@ Future<Widget> _page({
   bool reasoning = false,
   String? thinkingFormat,
   Map<String, dynamic>? usage,
+  bool failFirstRun = false,
 }) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
@@ -159,6 +198,7 @@ Future<Widget> _page({
         reasoning: reasoning,
         thinkingFormat: thinkingFormat,
         usage: usage,
+        failFirstRun: failFirstRun,
       ),
     ),
   );
@@ -172,6 +212,11 @@ Future<Widget> _page({
 }
 
 void main() {
+  setUp(() {
+    lastRunBody = null;
+    lastRunBodies.clear();
+  });
+
   testWidgets('宽屏显示三栏：会话列表 / 对话 / 上下文', (tester) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1.0;
@@ -369,6 +414,39 @@ void main() {
     expect(store.usageSummary.totalTokens, 1500);
     expect(store.usageSummary.cachedTokens, 400);
     expect(store.usageSummary.requests, 1);
+  });
+
+  // --- 重试（AIH-024） ---------------------------------------------------
+
+  testWidgets('失败的回复给出「重试」，重试会新开 Run 并带上 retryOfRunId', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1100);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page(failFirstRun: true));
+    await tester.pumpAndSettle();
+
+    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    await tester.enterText(find.byType(TextField), '你好');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    // 第一次失败：错误可见 + 有重试入口
+    expect(find.textContaining('上游限流'), findsOneWidget);
+    expect(find.text('重试'), findsOneWidget);
+    expect(lastRunBodies.length, 1);
+    expect(lastRunBodies.first.containsKey('retryOfRunId'), isFalse, reason: '首次请求不该带重试标记');
+
+    await tester.tap(find.text('重试'));
+    await tester.pumpAndSettle();
+
+    // 第二次是**新 Run**，且通过 retryOfRunId 关联回第一次
+    expect(lastRunBodies.length, 2, reason: '重试应当新开一个 Run，而不是复用旧的');
+    expect(lastRunBodies.last['retryOfRunId'], 'r1');
+    expect(lastRunBodies.last['text'], '你好', reason: '重试要重放原来的问题');
+    expect(find.text('你好，我是假模型'), findsOneWidget);
+    expect(find.text('重试'), findsNothing, reason: '成功之后不该还留着重试按钮');
+    expect(store.sending, isFalse);
   });
 
   testWidgets('后端没给 usage 时消息上不显示假的 token 数字', (tester) async {

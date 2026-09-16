@@ -310,6 +310,9 @@ class AiWorkspaceStore extends ChangeNotifier {
         reasoningEffort: effort,
       );
       _activeRunId = start.runId;
+      // 记下"助手消息 → Run"的关联：失败后的「重试」要把它作为 retryOfRunId 带回去（AIH-024）。
+      // 在请求返回时就记，而不是等 `run.started` 事件 —— 后者在流中断时根本收不到。
+      _runIds[start.assistantMessageId] = start.runId;
 
       // 乐观插入：用户消息 + 空的助手流式消息，收到 delta 就地增长
       messages = [
@@ -405,6 +408,91 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
     notifyListeners();
   }
+
+  /// 重试（AIH-024）：**新建一个 Run**，用原来的问题、同一个 Provider/模型与思考强度，
+  /// 通过 `retryOfRunId` 关联回去，便于事后看出这是哪次失败的重放。
+  ///
+  /// 不重放工具调用（首期还没有工具）；失败/取消的助手消息会被换成新的流式占位。
+  Future<void> retry(String assistantMessageId) async {
+    if (sending) return;
+    final conv = conversation;
+    final p = selectedProvider;
+    final m = selectedModel;
+    if (conv == null || p == null || m == null) {
+      error = '无法重试：请先选择 Provider 与模型';
+      notifyListeners();
+      return;
+    }
+    final index = messages.indexWhere((x) => x.id == assistantMessageId);
+    if (index <= 0) {
+      error = '无法重试：找不到这条回复对应的提问';
+      notifyListeners();
+      return;
+    }
+    // 助手消息前面最近的一条用户消息就是这次要重放的提问
+    final ask = messages
+        .sublist(0, index)
+        .lastWhere((x) => x.isUser, orElse: () => messages[index]);
+    if (!ask.isUser) {
+      error = '无法重试：找不到这条回复对应的提问';
+      notifyListeners();
+      return;
+    }
+
+    sending = true;
+    error = null;
+    notice = null;
+    notifyListeners();
+
+    try {
+      final effort = (m.supportsReasoningEffort && reasoningEffort.isThinking)
+          ? reasoningEffort.wire
+          : null;
+      final start = await _api.startRun(
+        conv.id,
+        text: ask.text,
+        providerId: p.id,
+        modelId: m.id,
+        reasoningEffort: effort,
+        retryOfRunId: _runIdOf(assistantMessageId),
+      );
+      _activeRunId = start.runId;
+      // 这次 Run 与助手消息的关联就地记下（不依赖事件流，刷新消息也不会丢）
+      _runIds[start.assistantMessageId] = start.runId;
+      // 就地替换那条失败消息，不新增一条重复的助手气泡
+      messages = [
+        for (final msg in messages)
+          if (msg.id == assistantMessageId)
+            AiMessage(
+              id: start.assistantMessageId,
+              conversationId: conv.id,
+              seq: msg.seq,
+              role: 'assistant',
+              status: 'streaming',
+              text: '',
+              modelId: m.id,
+              reasoningEffort: effort,
+            )
+          else
+            msg,
+      ];
+      notifyListeners();
+      await _consumeRun(start.runId, start.assistantMessageId, conv.id);
+    } on AiApiException catch (e) {
+      error = '重试失败：${e.message}';
+      sending = false;
+      notifyListeners();
+    } catch (e) {
+      error = '重试失败：$e';
+      sending = false;
+      notifyListeners();
+    }
+  }
+
+  /// 这次 Run 的 id（由 `run.started` 事件记下），重试时作为 `retryOfRunId` 带回去。
+  final Map<String, String> _runIds = {};
+
+  String? _runIdOf(String assistantMessageId) => _runIds[assistantMessageId];
 
   void _replaceMessage(
     String id, {
