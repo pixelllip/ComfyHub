@@ -1,14 +1,14 @@
 # AI 工作台实施进度（v0.1 实施记录）
 
-> 日期：2026-09-15 起，2026-09-16 追加（思考强度 + token 统计）
+> 日期：2026-09-15 起，2026-09-16 追加（思考强度 + token 统计 / 用户清单收尾）
 > 依据：`docs/ai-home-requirements-v0.1.xlsx`（需求清单 / 待确认决策 / 风险清单 / 里程碑）
 > 与 `docs/ai-home-implementation-plan-v0.1.md`（实施方案）
-> 已覆盖范围：**M0 安全前置 + M1（Provider / 模型 / 凭据）+ M2（Run / 统一 SSE / 三协议中的两个）
-> + 思考强度与 token 统计（AIH-056 / AIH-057）**
+> 已覆盖范围：**M0 安全前置 + M1（Provider / 模型 / 凭据）+ M2（Run / 统一 SSE / 三协议）
+> + 思考强度与 token 统计（AIH-056 / AIH-057）+ 用户清单 `docs/bug-and-suggestion-9.16.md` 全部条目**
 
 ## 0. 一句话现状
 
-**已经能用真实 Base URL + API Key 配对并流式对话**（OpenAI 兼容 / Anthropic），
+**已经能用真实 Base URL + API Key 配对并流式对话**（OpenAI 兼容 / Anthropic / OpenAI Responses），
 可以在聊天框里直接切模型**和思考强度**、看到每轮消耗的 token；
 附件（图片等）目前是"正确阻断"而不是能发；ComfyUI 工具与 Skills 还没接。
 
@@ -28,6 +28,10 @@
 | `修「获取完可用模型并加入后，退出重进模型全消失」…` | 真机复现并修复：详情面板只在 `initState` 拷目录，父级异步补上时不更新（补 `didUpdateWidget` + `_dirty` 保护） |
 | `视频播放：长边铺满 + 全屏 + 封面预览图` | 预览区不再固定 16:9/420 高；全屏页接着进度播；新增 `/api/media/{id}/poster`（Windows 缩略图管线抽帧，不依赖 ffmpeg） |
 | `内置模型目录：模态 + 思考档位一起预填…` | 内置目录新增 `thinkingEfforts` / `thinkingFormat`，"获取可用模型"时随候选下发 |
+| `修两个 bug + 长列表卡顿：视频全屏、画廊删除、懒构建` | 见第 4.1 节 ①②③ |
+| `AI 工作台：冷启动新会话、空会话自清、草稿保留、记住上次模型、状态栏去「上下文」` | 见第 4.1 节 ④⑤⑥⑦ |
+| `未关联提示词标记 + 一键清除；新建 Provider 的凭据引用名默认全大写` | 见第 4.1 节 ⑧ 与 4.2 节 |
+| `连接测试 / 获取模型：/models 地址自动回退，404 不再被当成「Key 报错」` | 见 4.3 节（用户报的"填 API Key 报错"最可能的原因） |
 
 ## 2. 逐条对照需求
 
@@ -67,8 +71,11 @@
 
 ## 3. 验证证据（实测，非推断）
 
-- `pwsh -File scripts\server.ps1 test` → **55 项全通过**（`AiDomainTest` / `FileKindDetectorTest` / `AiUpstreamTest` / `ModelDiscoveryTest` / `ProtocolAdapterTest`）。
-- `flutter analyze` → 无问题；`flutter test` → **60 项全通过**（含流式发送、连接测试、密钥不回显）。
+- `pwsh -File scripts\server.ps1 test` → **113 项全通过**（`AiDomainTest` / `FileKindDetectorTest` /
+  `AiUpstreamTest` / `AuthAndModelsUrlTest` / `ModelDiscoveryTest` / `ProtocolAdapterTest` / `ThinkingAndUsageTest`…）。
+- `flutter analyze` → 无问题；`flutter test` → **94 项全通过**（含流式发送、连接测试、密钥不回显、
+  画廊分页回退、未关联清理、新建 Provider 对话框、视频/聊天懒构建后的页面结构）。
+- `flutter build windows --debug` → 通过（本轮改动不影响原生构建）。
 - **端到端对话（用本地假 OpenAI 服务，真跑 HTTP + SSE，不联网、不花钱）**：
   - 建 Provider（loopback）→ 写密钥（DPAPI）→ 连接测试 `ok=true, modelCount=2`；
   - 模型发现返回 2 个候选，**目录里仍是 1 个**（证明发现不落库）；
@@ -83,34 +90,60 @@
 1. **附件真正可发（M3）**：实现图片内联（openai-completions 的 `image_url` data URI）后，
    把适配器 `transports` 从空集改成实际实现，并在 Run 准入处用事务内快照再验一次（AIH-030 的"上游请求数为 0"用例）。
    现在的行为是**正确阻断**，不是静默丢弃。
-2. **`openai-responses` 真实 API 实测**（AIH-004）：协议已按官方结构实现并有契约单测，
-   但**还没拿真实 API Key 跑通过一条完整流**（用户说稍后提供可用 API）。
-   要确认的点：① 端点是否 `{base}/responses`；② `instructions` 是否被接受；
-   ③ `reasoning.summary` 是否下发思考摘要；④ `response.completed` 的 usage 字段名。
+2. **`openai-responses` 真实 API 实测**（AIH-004）：协议已按官方结构实现、契约单测 + 本地假网关端到端
+   都过了，但**还没拿真实 API Key 跑通过一条完整流**（用户暂时没有可用 Key）。
+   要确认的点与已修的"填 Key 报错"见第 4.3 节。
 3. **工具循环与 Comfy 查询（M4）**：`ai_tool_calls` 表、`comfy_get_status` / `comfy_get_run` / `comfy_sync_history`（含审批）、
    单次回复最多 3 次主动查询；系统提示词里现在**明确写了"尚未注册任何工具"**，加了工具要同步改提示词版本。
 4. **Skills（M5）**：目录扫描、`load_skill`、第三方安全导入；界面上的 `/` 菜单目前只是目录展示。
 5. 事件表保留策略：`AiRunRepo.pruneEvents()` 已写好但还没接到定时任务。
-6. **模型目录按内置目录预填模态与思考强度**（用户要求）：✅ 已完成 —— 内置目录
-   (`ModelCapabilityCatalog`) 现在同时预填模态、思考档位与网关方言，"获取可用模型"
-   时随候选下发。**用户可以再用真实网关验证档位是否正确**（猜错只影响默认勾选，
-   请求时只发模型声明过的档位，不会被静默降级）。
-7. **ComfyUI 查询工具（M4）尚未注册给 AI**：AI 工作台右侧已经能看到 ComfyUI 状态，
+6. **ComfyUI 查询工具（M4）尚未注册给 AI**：AI 工作台右侧已经能看到 ComfyUI 状态，
    但工具循环（`ai_tool_calls` 表、`comfy_get_status` / `comfy_get_run` /
    `comfy_sync_history` + 审批 + 单次回复最多 3 次主动查询）还没做，
    系统提示词里也仍写着"尚未注册任何工具"。
 
 ## 4.1 用户提的 bug / 建议清单（`docs/bug-and-suggestion-9.16.md`）对照
 
-| 条目 | 状态 |
+**本轮已全部做完**（清单里 8 条 + 1 条追加建议）：
+
+| # | 条目 | 状态 / 做法 |
+| --- | --- | --- |
+| ① | bug：视频页两个全屏按钮、点全屏从头播、Esc 退不出 | ✅ 右上角那个悬浮全屏按钮删掉（只留控制条一个）；全屏前**暂停内嵌那一路**并记下位置，全屏页退出时回传最后进度续播（原来两路同时出声、回来还停在旧位置）；全屏页补 `Focus` 焦点锚点 + `DismissIntent`，Esc 真的能退出；控制条在全屏页改白字 |
+| ② | bug：删除数量大于单页承载时，画廊提示为空 | ✅ 成因是删除后**当前页码越界**，后端对越界页码返回空数组。`LibraryStore.refreshMedia` 发现"items 空但 total>0 且页码超页数"就回到最后一页重取一次；提示词列表同样处理。回归用例 `test/gallery_paging_test.dart` |
+| ③ | 建议：滑动长列表卡顿（AI 模型与凭据） | ✅ 模型卡片原来用 `children: [... for i in models]` **一次性建出全部卡片**（每张 6 个 FilterChip + 一个下拉框），改成 `ListView.builder` 懒构建 + `RepaintBoundary`；聊天页每条消息拆成独立组件加 `RepaintBoundary`，流式刷新不再重绘所有 Markdown 气泡 |
+| ④ | 建议：冷启动后 AI 工作台应是新建聊天记录 | ✅ `AiWorkspaceStore.load()` 每次都新建一条会话（历史仍在左侧列表），不再自动打开上一条 |
+| ⑤ | 建议：内容为空的聊天记录，切换时可以删掉 | ✅ 切换 / 新建会话前把"没有消息且输入区没有待发送内容"的会话删掉；**有草稿或有消息的一律保留**（草稿按会话存在本地，见 ⑥） |
+| ⑥ | 建议：记住上一次使用的模型 | ✅ Provider / 模型 / 思考强度记进 SharedPreferences（**不碰密钥**），下次开 App 自动选回 |
+| ⑦ | 建议：去掉「上下文」字样，刷新按钮放 ComfyUI 右边 | ✅ 右侧栏不再有含混的「上下文」标题；刷新按钮移到「ComfyUI」字样右侧（它刷的本来就只有 ComfyUI 状态） |
+| ⑧ | 要求：产物删除后提示词显著标「未关联」+ 批量管理一键清除未关联产物 | ✅ 提示词卡片上 `mediaCount == 0` 时显示橙色「未关联」标记（带 tooltip 说明是"产物被删掉或还没关联"）；工具栏新增「未关联产物」筛选（走 `hasMedia=0`）与「一键清除未关联」；画廊侧另有「清除未关联产物」清掉孤儿产物。两者都**先报条数 + 举例再确认**，删除按批循环（超过单页 200 条不会漏） |
+| ⑨ | 追加建议：新建 Provider 的凭据引用名实际必填 → 默认值取 Provider ID 全大写 | ✅ 默认值 = Provider ID 全大写、`-` → `_`，跟着 ID 实时变；手动改过之后不再覆盖；留空或推不出合法名字（ID 以数字开头）时禁止提交并给出原因 |
+
+### 4.2 别人的两条"其他建议"怎么处理的
+
+| 条目 | 处理 |
 | --- | --- |
-| bug：获取完可用模型并加入后，退出重进模型全消失 | ✅ 真机复现并修复（`initState` → 补 `didUpdateWidget`） |
-| 建议：提前写好调用 ComfyUI 的脚本，注册该工具供 AI 调用 | ⬜ 未做（见上一节第 7 条） |
-| 建议：设置里 AI 模型与凭据放到靠前 | ✅ 移到「本地服务」之后 |
-| 建议：实现 markdown 渲染 | ✅ 自研流式安全解析器 + 富文本渲染 |
-| 建议：视频窗口长边铺满 + 全屏 + 预览图 | ✅ 三件都做了 |
-| 要求：实现 OpenAI responses 接口 | ✅ 已实现 + 契约测试；**待用真实 API Key 实测** |
-| 要求：查常见大模型的模态与思考强度，导入时少查一次 | ✅ 模态 + 思考档位都内置换算 |
+| 调试用 flutter debug + 热重载 | 已经是仓库约定（`AGENTS.md` 第 1 节 + `scripts/dev-app.ps1`）；本轮改动的验证走 `flutter analyze` / `flutter test` / `server.ps1 test`，没有每次 Release 全量构建 |
+| 减少截屏 / 读图次数 | 采用：本轮 UI 改动全部用 widget 测试断言（结构 + 发出的请求），没有靠截图确认 |
+| 先读 `%USERPROFILE%\.dsh\settings.yaml` 预填模型模态与思考强度 | ✅ 做法等价但更稳：内置目录 `ModelCapabilityCatalog` 已内置常见模型的模态 / 思考档位 / 网关方言（上一轮完成），**不依赖用户机器上的外部文件**，获取模型时自动预填并标注来源。要扩表就往 `ModelCapabilityCatalog` 加规则 |
+
+### 4.3 用户报的「OpenAI Responses 填 API Key 报错」
+
+**无法实测**（用户暂时没有可用 Key），做了两件能确定的事：
+
+1. **代码走查 + 修掉最可能的一条**：Base URL 填 `https://api.openai.com` 与
+   `https://api.openai.com/v1` 会拼出两个不同的 `/models` 地址，其中必然有一个 404，
+   而原来的实现把 404 显示成"连接失败 / 端点或协议不匹配"——看着就像密钥不对。
+   现在两个候选地址**依次试**并回报实际可用的那个；`/models` 404 时连接测试仍算**连通**
+   （鉴权已经过了，只是这份端点不提供模型列表）；只有 401/403 才报 `MISSING_CREDENTIAL`
+   且不再试第二个地址。
+2. **把协议行为钉进测试**：`AuthAndModelsUrlTest` 真起一个本地假网关，
+   覆盖"只认 `/v1/models`"、"只认 `/models`"、"根本没有 `/models`"、"401"四种情况，
+   以及 `openai-responses` 的请求确实落在 `/v1/responses` 并带 `Bearer`。
+
+**仍待用户实测**：拿到真实 Key 后按 ①②③④ 确认——
+① 端点是否 `{base}/responses`；② `instructions` 是否被接受；
+③ `reasoning.summary` 是否下发思考摘要；④ `response.completed.response.usage` 的字段名。
+失败时界面会带上上游原文（已抹密钥），把那段话发回来就能定位。
 
 > ⚠️ **需求 xlsx 的"状态"列不可信**：里面把没实现的需求（AIH-025~032 附件可发、
 > AIH-033~045 工具与 Skills）都标成了"通过"。**以代码与本文档为准**，别照抄那一列。
