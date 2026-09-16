@@ -636,221 +636,149 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       if (_models.isEmpty) Text('还没有模型', style: theme.textTheme.bodySmall),
     ];
     final count = _models.length;
-    final tail = <Widget>[
-      const SizedBox(height: 12),
-      FilledButton.icon(
-        onPressed: _busy || _models.isEmpty ? null : _saveModels,
-        icon: const Icon(Icons.save_outlined, size: 18),
-        label: const Text('保存模型目录'),
-      ),
-    ];
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: header.length + count + tail.length,
-      itemBuilder: (context, i) {
-        if (i < header.length) return header[i];
-        if (i < header.length + count) {
-          // RepaintBoundary：勾选某个能力时不会把旁边已经画好的卡片一起重绘
-          return RepaintBoundary(child: _modelTile(theme, i - header.length));
-        }
-        return tail[i - header.length - count];
-      },
-    );
-  }
-
-  Widget _modelTile(ThemeData theme, int index) {
-    final m = _models[index];
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(m.displayName, style: theme.textTheme.titleSmall),
-                ),
-                IconButton(
-                  tooltip: '移除',
-                  icon: const Icon(Icons.close, size: 16),
-                  onPressed: _busy ? null : () => setState(() { _models.removeAt(index); _markDirty(); }),
-                ),
-              ],
-            ),
-            Text(m.id, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              children: [
-                for (final modality in AiModality.values)
-                  FilterChip(
-                    label: Text(modality.label, style: theme.textTheme.labelSmall),
-                    selected: m.supports(modality),
-                    onSelected: _busy
-                        ? null
-                        : (on) => setState(() { _models[index] = _toggleModality(m, modality, on); _markDirty(); }),
-                  ),
-                FilterChip(
-                  label: Text('工具', style: theme.textTheme.labelSmall),
-                  selected: m.tools,
-                  onSelected: _busy ? null : (on) => setState(() { _models[index] = _copy(m, tools: on); _markDirty(); }),
-                ),
-              ],
-            ),
-            // 思考强度（AIH-056）：模型级声明，聊天框里的思考强度选择器就读这里
-            _thinkingEditor(theme, index),
-          ],
-        ),
-      ),
-    );
-  }
-
-  AiModel _toggleModality(AiModel m, AiModality modality, bool on) {
-    final next = [...m.inputModalities];
-    if (on) {
-      if (!next.contains(modality.wire)) next.add(modality.wire);
-    } else {
-      next.remove(modality.wire);
-    }
-    // 传输方式跟着模态一起改：这里只登记"模型声明支持"，适配器是否实现了由后端另判（AIH-028）
-    final transports = Map<String, List<String>>.from(m.attachmentTransports);
-    if (on && modality != AiModality.text && !transports.containsKey(modality.wire)) {
-      transports[modality.wire] = const ['inline_base64'];
-    }
-    if (!on) transports.remove(modality.wire);
-    return _copy(m, inputModalities: next, attachmentTransports: transports);
-  }
-
-  /// 唯一的模型复制入口：**新增字段必须在这里带上**，否则切换某个徽标会把别的声明悄悄抹掉。
-  AiModel _copy(
-    AiModel m, {
-    bool? tools,
-    bool? reasoning,
-    List<String>? inputModalities,
-    Map<String, List<String>>? attachmentTransports,
-    Map<String, String>? thinkingEfforts,
-    String? thinkingFormat,
-    bool clearThinkingFormat = false,
-    bool manual = false,
-  }) =>
-      AiModel(
-        providerId: m.providerId,
-        id: m.id,
-        displayName: m.displayName,
-        inputModalities: inputModalities ?? m.inputModalities,
-        attachmentTransports: attachmentTransports ?? m.attachmentTransports,
-        mimeAllowlist: m.mimeAllowlist,
-        tools: tools ?? m.tools,
-        parallelTools: m.parallelTools,
-        reasoning: reasoning ?? m.reasoning,
-        thinkingEfforts: thinkingEfforts ?? m.thinkingEfforts,
-        thinkingFormat: clearThinkingFormat ? null : (thinkingFormat ?? m.thinkingFormat),
-        contextWindow: m.contextWindow,
-        maxOutputTokens: m.maxOutputTokens,
-        maxAttachmentCount: m.maxAttachmentCount,
-        // 用户手工动过能力就标成 manual（AIH-011：声明从哪来要看得见）
-        capabilitySource: manual ? 'manual' : m.capabilitySource,
-        enabled: m.enabled,
-      );
-
-  /// 切换"支持推理"：关掉时必须一并清掉思考档位声明（后端也会校验两者一致）。
-  AiModel _toggleReasoning(AiModel m, bool on) =>
-      _copy(m, reasoning: on, thinkingEfforts: on ? m.thinkingEfforts : const {}, manual: true);
-
-  /// 展开的模型编辑：思考档位 + 网关方言（AIH-056）。
-  Widget _thinkingEditor(ThemeData theme, int index) {
-    final m = _models[index];
+    // 列表结构改成 **固定行高 + 编辑弹窗**（用户报的 bug ③ 卡顿 / ④ 滚动条不准）：
+    //
+    //   · 懒构建的 `ListView` / `SliverList` 只能用"**已布局**子项的平均高度"估算
+    //     `maxScrollExtent`。卡片高矮不一时（支持推理的卡片多出 7 个档位 chip），
+    //     越往下滚估算值越大 —— 实测 69 个模型时从 3512 一路涨到 21318，
+    //     滚动条滑块于是从 17.9% 缩到 3.5%，位置也全错。
+    //   · `SliverFixedExtentList` 的 extent 是**算出来的常数**，首帧就精确，
+    //     滚动条不再跳；每行也不再是"7 个 FilterChip + 下拉框"，快速滑动不掉帧。
+    //
+    // 能力编辑没有丢：点一行（或右侧的调节按钮）打开编辑弹窗，见 [_ModelEditorDialog]。
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Divider(height: 20),
-        Row(
-          children: [
-            Expanded(
-              child: Text('思考强度', style: theme.textTheme.labelLarge),
-            ),
-            Switch(
-              value: m.reasoning,
-              onChanged: _busy ? null : (on) => setState(() { _models[index] = _toggleReasoning(m, on); _markDirty(); }),
-            ),
-          ],
-        ),
-        Text(
-          m.reasoning
-              ? '勾选该模型真正支持的档位。留空 = 不声明，聊天界面不显示思考强度选择器（宁可不给选，也不要发出去被上游 400）。'
-              : '该模型不支持推理；勾选后可以逐档声明。',
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-        ),
-        if (m.reasoning) ...[
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              for (final e in AiReasoningEffort.values)
-                FilterChip(
-                  label: Text(e.label, style: theme.textTheme.labelSmall),
-                  selected: m.thinkingEfforts.containsKey(e.wire),
-                  onSelected: _busy
-                      ? null
-                      : (on) => setState(() {
-                            final next = Map<String, String>.from(m.thinkingEfforts);
-                            if (on) {
-                              next[e.wire] = _defaultEffortWire(e);
-                            } else {
-                              next.remove(e.wire);
-                            }
-                            _models[index] = _copy(m, thinkingEfforts: next, manual: true);
-                          }),
+        Expanded(
+          child: CustomScrollView(
+            slivers: [
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                sliver: SliverToBoxAdapter(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: header),
                 ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            initialValue: m.thinkingFormatEnum?.wire,
-            isDense: true,
-            decoration: const InputDecoration(
-              labelText: '网关思考方言（同一个"高"落到哪个字段）',
-              helperText: 'OpenAI 风格用 reasoning_effort；DeepSeek / Qwen / Z.AI / OpenRouter 各有自己的字段组合',
-              isDense: true,
-            ),
-            items: [
-              const DropdownMenuItem(value: null, child: Text('按协议默认（OpenAI 风格）')),
-              for (final f in AiThinkingFormat.values)
-                DropdownMenuItem(value: f.wire, child: Text(f.label)),
-            ],
-            onChanged: _busy
-                ? null
-                : (v) => setState(() => _models[index] = v == null
-                    ? _copy(m, clearThinkingFormat: true, manual: true)
-                    : _copy(m, thinkingFormat: v, manual: true)),
-          ),
-          if (m.thinkingEfforts.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                '实际发送：${m.thinkingEfforts.entries.map((e) => '${e.key}→${e.value}').join('  ')}',
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
               ),
-            ),
-        ],
+              SliverFixedExtentList(
+                itemExtent: kModelRowHeight,
+                delegate: SliverChildBuilderDelegate(
+                  (context, i) => RepaintBoundary(child: _modelRow(theme, i)),
+                  childCount: count,
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 16)),
+            ],
+          ),
+        ),
+        // 保存按钮常驻底部：69 个模型不用一路滚到底才找得到它
+        Container(
+          decoration: BoxDecoration(
+            border: Border(top: BorderSide(color: theme.dividerColor)),
+            color: theme.colorScheme.surface,
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              if (_dirty)
+                Text('有未保存的改动', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary))
+              else
+                Text('模型目录已与后端一致',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+              const Spacer(),
+              FilledButton.icon(
+                onPressed: _busy || _models.isEmpty ? null : _saveModels,
+                icon: const Icon(Icons.save_outlined, size: 18),
+                label: const Text('保存模型目录'),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
 
-  /// 各档位的默认"过线拼写"（与后端 ThinkingLevels.DEFAULT 对齐）。
-  static String _defaultEffortWire(AiReasoningEffort e) => switch (e) {
-        AiReasoningEffort.off => 'none',
-        AiReasoningEffort.minimal => 'minimal',
-        AiReasoningEffort.low => 'low',
-        AiReasoningEffort.medium => 'medium',
-        AiReasoningEffort.high => 'high',
-        AiReasoningEffort.xhigh => 'xhigh',
-        AiReasoningEffort.max => 'high',
-      };
+  /// 一行模型 = **固定高度**（[kModelRowHeight]），能力概览用图标表达。
+  Widget _modelRow(ThemeData theme, int index) {
+    final m = _models[index];
+    return InkWell(
+      onTap: _busy ? null : () => _editModel(index),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(m.displayName,
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.textTheme.titleSmall),
+                  const SizedBox(height: 2),
+                  Text(m.id,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            _capabilityIcons(theme, m),
+            IconButton(
+              tooltip: '编辑能力',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.tune, size: 18),
+              onPressed: _busy ? null : () => _editModel(index),
+            ),
+            IconButton(
+              tooltip: '移除',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.close, size: 16),
+              onPressed: _busy ? null : () => setState(() { _models.removeAt(index); _markDirty(); }),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 能力一览：只画**声明过**的（未知即不支持，宁可不画也不猜）。
+  Widget _capabilityIcons(ThemeData theme, AiModel m) {
+    final items = <(IconData, String)>[
+      for (final modality in AiModality.values)
+        if (m.supports(modality)) (_modalityIcons[modality]!, modality.label),
+      if (m.tools) (Icons.handyman_outlined, '工具'),
+      if (m.reasoning) (Icons.psychology_outlined, '推理'),
+    ];
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final (icon, label) in items)
+          Tooltip(
+            message: label,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Icon(icon, size: 15, color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// 打开某个模型的能力编辑弹窗；点了「确定」才写回列表（仍是本地改动，等「保存模型目录」落库）。
+  Future<void> _editModel(int index) async {
+    final edited = await showDialog<AiModel>(
+      context: context,
+      builder: (_) => _ModelEditorDialog(model: _models[index], busy: _busy),
+    );
+    if (edited == null || !mounted) return;
+    setState(() {
+      _models[index] = edited;
+      _markDirty();
+    });
+  }
+
+  // 模型卡的"能力 chips + 思考强度"编辑界面搬去了 [_ModelEditorDialog]，
+  // 列表里只留固定高度的一行（[_modelRow]）—— 这正是滚动条不再乱跳、
+  // 快速滑动不掉帧的原因。
 
   Future<void> _test() async {
     setState(() {
@@ -1735,6 +1663,231 @@ class _Tag extends StatelessWidget {
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(text, style: theme.textTheme.labelSmall),
+    );
+  }
+}
+
+/// 一行模型的高度（常数）。
+///
+/// **别改成按内容自适应**：`SliverFixedExtentList` 就是靠这个常数精确算出
+/// `maxScrollExtent` 的，一旦不固定，滚动条滑块又会随滚动变短（用户报的 bug ④）。
+const double kModelRowHeight = 64;
+
+/// 模态 → 图标（模型行右侧的能力一览）。
+const Map<AiModality, IconData> _modalityIcons = {
+  AiModality.text: Icons.notes_outlined,
+  AiModality.image: Icons.image_outlined,
+  AiModality.video: Icons.movie_outlined,
+  AiModality.audio: Icons.graphic_eq,
+  AiModality.document: Icons.description_outlined,
+};
+
+/// 模型能力编辑的公共规则：**列表页与编辑弹窗共用这一份**，
+/// 免得"点一下某个徽标把别的声明抹掉"这类问题在两边各写一遍。
+class _ModelEdit {
+  const _ModelEdit._();
+
+  /// 唯一的模型复制入口：**新增字段必须在这里带上**。
+  static AiModel copy(
+    AiModel m, {
+    bool? tools,
+    bool? reasoning,
+    List<String>? inputModalities,
+    Map<String, List<String>>? attachmentTransports,
+    Map<String, String>? thinkingEfforts,
+    String? thinkingFormat,
+    bool clearThinkingFormat = false,
+    bool manual = false,
+  }) =>
+      AiModel(
+        providerId: m.providerId,
+        id: m.id,
+        displayName: m.displayName,
+        inputModalities: inputModalities ?? m.inputModalities,
+        attachmentTransports: attachmentTransports ?? m.attachmentTransports,
+        mimeAllowlist: m.mimeAllowlist,
+        tools: tools ?? m.tools,
+        parallelTools: m.parallelTools,
+        reasoning: reasoning ?? m.reasoning,
+        thinkingEfforts: thinkingEfforts ?? m.thinkingEfforts,
+        thinkingFormat: clearThinkingFormat ? null : (thinkingFormat ?? m.thinkingFormat),
+        contextWindow: m.contextWindow,
+        maxOutputTokens: m.maxOutputTokens,
+        maxAttachmentCount: m.maxAttachmentCount,
+        // 用户手工动过能力就标成 manual（AIH-011：声明从哪来要看得见）
+        capabilitySource: manual ? 'manual' : m.capabilitySource,
+        enabled: m.enabled,
+      );
+
+  static AiModel toggleModality(AiModel m, AiModality modality, bool on) {
+    final next = [...m.inputModalities];
+    if (on) {
+      if (!next.contains(modality.wire)) next.add(modality.wire);
+    } else {
+      next.remove(modality.wire);
+    }
+    // 传输方式跟着模态一起改：这里只登记"模型声明支持"，适配器是否实现了由后端另判（AIH-028）
+    final transports = Map<String, List<String>>.from(m.attachmentTransports);
+    if (on && modality != AiModality.text && !transports.containsKey(modality.wire)) {
+      transports[modality.wire] = const ['inline_base64'];
+    }
+    if (!on) transports.remove(modality.wire);
+    return copy(m, inputModalities: next, attachmentTransports: transports, manual: true);
+  }
+
+  /// 切换"支持推理"：关掉时必须一并清掉思考档位声明（后端也会校验两者一致）。
+  static AiModel toggleReasoning(AiModel m, bool on) =>
+      copy(m, reasoning: on, thinkingEfforts: on ? m.thinkingEfforts : const {}, manual: true);
+
+  /// 各档位的默认"过线拼写"（与后端 ThinkingLevels.DEFAULT 对齐）。
+  static String defaultEffortWire(AiReasoningEffort e) => switch (e) {
+        AiReasoningEffort.off => 'none',
+        AiReasoningEffort.minimal => 'minimal',
+        AiReasoningEffort.low => 'low',
+        AiReasoningEffort.medium => 'medium',
+        AiReasoningEffort.high => 'high',
+        AiReasoningEffort.xhigh => 'xhigh',
+        AiReasoningEffort.max => 'high',
+      };
+}
+
+/// 模型能力编辑弹窗：模态 / 工具 / 思考强度与方言。
+///
+/// 点「确定」把改好的模型返回给调用方（**不落库** —— 落库仍然要点列表底部的
+/// 「保存模型目录」，这条规矩没变）。
+class _ModelEditorDialog extends StatefulWidget {
+  const _ModelEditorDialog({required this.model, required this.busy});
+
+  final AiModel model;
+  final bool busy;
+
+  @override
+  State<_ModelEditorDialog> createState() => _ModelEditorDialogState();
+}
+
+class _ModelEditorDialogState extends State<_ModelEditorDialog> {
+  late AiModel _m = widget.model;
+
+  void _update(AiModel next) => setState(() => _m = next);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final busy = widget.busy;
+    return AlertDialog(
+      title: Text('模型能力：${_m.displayName}'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SelectableText(_m.id,
+                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+              const SizedBox(height: 10),
+              Text('输入模态与工具', style: theme.textTheme.titleSmall),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final modality in AiModality.values)
+                    FilterChip(
+                      label: Text(modality.label, style: theme.textTheme.labelSmall),
+                      selected: _m.supports(modality),
+                      onSelected: busy
+                          ? null
+                          : (on) => _update(_ModelEdit.toggleModality(_m, modality, on)),
+                    ),
+                  FilterChip(
+                    label: Text('工具', style: theme.textTheme.labelSmall),
+                    selected: _m.tools,
+                    onSelected: busy ? null : (on) => _update(_ModelEdit.copy(_m, tools: on, manual: true)),
+                  ),
+                ],
+              ),
+              const Divider(height: 24),
+              Row(
+                children: [
+                  Expanded(child: Text('思考强度', style: theme.textTheme.titleSmall)),
+                  Switch(
+                    value: _m.reasoning,
+                    onChanged: busy ? null : (on) => _update(_ModelEdit.toggleReasoning(_m, on)),
+                  ),
+                ],
+              ),
+              Text(
+                _m.reasoning
+                    ? '勾选该模型真正支持的档位。留空 = 不声明，聊天界面不显示思考强度选择器（宁可不给选，也不要发出去被上游 400）。'
+                    : '该模型不支持推理；勾选后可以逐档声明。',
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+              if (_m.reasoning) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final e in AiReasoningEffort.values)
+                      FilterChip(
+                        label: Text(e.label, style: theme.textTheme.labelSmall),
+                        selected: _m.thinkingEfforts.containsKey(e.wire),
+                        onSelected: busy
+                            ? null
+                            : (on) {
+                                final next = Map<String, String>.from(_m.thinkingEfforts);
+                                if (on) {
+                                  next[e.wire] = _ModelEdit.defaultEffortWire(e);
+                                } else {
+                                  next.remove(e.wire);
+                                }
+                                _update(_ModelEdit.copy(_m, thinkingEfforts: next, manual: true));
+                              },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  initialValue: _m.thinkingFormatEnum?.wire,
+                  // 弹窗比原来的卡片窄得多：不设 isExpanded 时选中项会按原样撑开
+                  // （实测窄到 492px 时 "spaceBetween" 那一行溢出 154px）
+                  isExpanded: true,
+                  isDense: true,
+                  decoration: const InputDecoration(
+                    labelText: '网关思考方言（同一个"高"落到哪个字段）',
+                    helperText:
+                        'OpenAI 风格用 reasoning_effort；DeepSeek / Qwen / Z.AI / OpenRouter 各有自己的字段组合',
+                    isDense: true,
+                  ),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('按协议默认（OpenAI 风格）')),
+                    for (final f in AiThinkingFormat.values)
+                      DropdownMenuItem(value: f.wire, child: Text(f.label)),
+                  ],
+                  onChanged: busy
+                      ? null
+                      : (v) => _update(v == null
+                          ? _ModelEdit.copy(_m, clearThinkingFormat: true, manual: true)
+                          : _ModelEdit.copy(_m, thinkingFormat: v, manual: true)),
+                ),
+                if (_m.thinkingEfforts.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      '实际发送：${_m.thinkingEfforts.entries.map((e) => '${e.key}→${e.value}').join('  ')}',
+                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                    ),
+                  ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+        FilledButton(onPressed: () => Navigator.pop(context, _m), child: const Text('确定')),
+      ],
     );
   }
 }
