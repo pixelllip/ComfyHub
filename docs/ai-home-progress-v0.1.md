@@ -71,8 +71,9 @@
 
 ## 3. 验证证据（实测，非推断）
 
-- `pwsh -File scripts\server.ps1 test` → **113 项全通过**（`AiDomainTest` / `FileKindDetectorTest` /
-  `AiUpstreamTest` / `AuthAndModelsUrlTest` / `ModelDiscoveryTest` / `ProtocolAdapterTest` / `ThinkingAndUsageTest`…）。
+- `pwsh -File scripts\server.ps1 test` → **122 项全通过**（`AiDomainTest` / `FileKindDetectorTest` /
+  `AiUpstreamTest` / `AuthAndModelsUrlTest` / `ModelDiscoveryTest` / `ModelCapabilityTest` /
+  `ProtocolAdapterTest` / `ThinkingAndUsageTest`…）。
 - `flutter analyze` → 无问题；`flutter test` → **94 项全通过**（含流式发送、连接测试、密钥不回显、
   画廊分页回退、未关联清理、新建 Provider 对话框、视频/聊天懒构建后的页面结构）。
 - `flutter build windows --debug` → 通过（本轮改动不影响原生构建）。
@@ -116,7 +117,8 @@
 | ⑥ | 建议：记住上一次使用的模型 | ✅ Provider / 模型 / 思考强度记进 SharedPreferences（**不碰密钥**），下次开 App 自动选回 |
 | ⑦ | 建议：去掉「上下文」字样，刷新按钮放 ComfyUI 右边 | ✅ 右侧栏不再有含混的「上下文」标题；刷新按钮移到「ComfyUI」字样右侧（它刷的本来就只有 ComfyUI 状态） |
 | ⑧ | 要求：产物删除后提示词显著标「未关联」+ 批量管理一键清除未关联产物 | ✅ 提示词卡片上 `mediaCount == 0` 时显示橙色「未关联」标记（带 tooltip 说明是"产物被删掉或还没关联"）；工具栏新增「未关联产物」筛选（走 `hasMedia=0`）与「一键清除未关联」；画廊侧另有「清除未关联产物」清掉孤儿产物。两者都**先报条数 + 举例再确认**，删除按批循环（超过单页 200 条不会漏） |
-| ⑨ | 追加建议：新建 Provider 的凭据引用名实际必填 → 默认值取 Provider ID 全大写 | ✅ 默认值 = Provider ID 全大写、`-` → `_`，跟着 ID 实时变；手动改过之后不再覆盖；留空或推不出合法名字（ID 以数字开头）时禁止提交并给出原因 |
+| ⑨ | 追加建议：新建 Provider 的凭据引用名实际必填 → 默认值取 Provider ID 全大写 | ✅ 改为**程序自动处理**：默认值 = Provider ID 全大写、`-` 换成 `_`、末尾加 `_API_KEY`，跟着 ID 实时变；只有用户**主动改过**才停；界面上标「可选」，留空提交也会自动补默认值（只有 ID 以数字开头时才需要手填）。 |
+| ⑩ | 追加要求：调查 `%USERPROFILE%\.dsh\settings.yaml`，把常用模型的模态与思考支持预填进去 | ✅ 见 4.4 节 |
 
 ### 4.2 别人的两条"其他建议"怎么处理的
 
@@ -124,7 +126,37 @@
 | --- | --- |
 | 调试用 flutter debug + 热重载 | 已经是仓库约定（`AGENTS.md` 第 1 节 + `scripts/dev-app.ps1`）；本轮改动的验证走 `flutter analyze` / `flutter test` / `server.ps1 test`，没有每次 Release 全量构建 |
 | 减少截屏 / 读图次数 | 采用：本轮 UI 改动全部用 widget 测试断言（结构 + 发出的请求），没有靠截图确认 |
-| 先读 `%USERPROFILE%\.dsh\settings.yaml` 预填模型模态与思考强度 | ✅ 做法等价但更稳：内置目录 `ModelCapabilityCatalog` 已内置常见模型的模态 / 思考档位 / 网关方言（上一轮完成），**不依赖用户机器上的外部文件**，获取模型时自动预填并标注来源。要扩表就往 `ModelCapabilityCatalog` 加规则 |
+| 先读 `%USERPROFILE%\.dsh\settings.yaml` 预填模型模态与思考强度 | ✅ **本轮真做了**，见 4.4 节 |
+
+### 4.4 `%USERPROFILE%\.dsh\settings.yaml` 调查结论（本轮新增）
+
+那份文件是本机在用的**权威声明**：一个 provider（`command-code-goat`，
+`https://api.commandcode.ai/provider/v1/`，`openai-completions`）下面挂了几十个模型，
+每个条目带 `input`（输入模态）与 `reasoningEfforts`（思考档位）。调查到三件事：
+
+1. **思考等级其实有 7 档**，我们原来只有 5 档：
+   pi-ai / DSH 的顺序是 `off → minimal → low → medium → high → xhigh → max`。
+   我们缺 `minimal` 与 `xhigh`，后果很实际 —— **GPT-5.5 / 5.4 / 5.3-codex / Grok 4.6 /
+   Muse Spark / Fugu Ultra / Qwen3.8 这些只声明到 `xhigh`**，原来只能被压回 `high`，
+   用户以为选了"极高"、实际发出去的是"高"（比报错更糟）。
+   → `ReasoningEffort` 补 `MINIMAL` / `XHIGH`（后端 + 前端 `AiReasoningEffort` 同步），
+   `ThinkingLevels.DEFAULT` 补 `minimal→minimal`、`xhigh→xhigh`，
+   Anthropic 预算表补 1024 / 24576，Responses 适配器改成**显式映射、不再降级**。
+2. **用户对"别人替我决定"的容忍度**：DSH 的做法是——模型条目没声明 `reasoningEfforts` 就
+   **继承安装目录（catalog）里的能力**；声明了就必须逐档写清楚（没写的档位=不支持）。
+   我们的 `ModelCapabilityCatalog` 就是扮演那个 catalog，所以本轮把它按 settings.yaml 补齐。
+3. **同系列里存在视觉差异**：`deepseek-v4-flash-vision-exp` 有图、`deepseek-v4-pro` 没有；
+   `glm-5.3` 有图、`glm-5.2` 没有；`mimo-v2.5` 有图、`mimo-v2.5-pro` 没有。
+   → 内置目录按**具体变体**登记，不再只用宽前缀。
+
+补齐后的表覆盖：Claude 4.6/5、GPT-5.x、DeepSeek V4.x、Kimi K2.5~K3、GLM-5.x、
+MiniMax M2/M3、Qwen3.6~3.8、Gemini 3.x、Grok 4.5/4.6、Muse Spark、MiMo、Step、Hy、
+Inkling、LongCat、Nemotron、Ling、Laguna、gpt-oss 等（`VERSION = 2026-09b`）。
+回归用例 `ModelCapabilityTest` 里有一张**逐模型对照表**（27 个条目），
+以后 settings.yaml 变了、或者表写错了，跑一遍后端测试就会报是哪一条对不上。
+
+> 仍然是"预填建议"，不是真相：接口声明 > 内置目录 > 仅文本，界面标来源、可手改。
+> 表命中的模型如果档位不对，用户在模型卡片上改一下即可（改完来源会变成"手工声明"）。
 
 ### 4.3 用户报的「OpenAI Responses 填 API Key 报错」
 

@@ -261,19 +261,21 @@ class OpenAiResponsesAdapter : ProtocolAdapter {
      * 两点与 Chat Completions 不同：
      *  1. **只有 `reasoning.effort` 一种写法**，没有 deepseek/qwen/zai 那些方言字段 ——
      *     那些网关在 Responses 协议下同样认这个字段，所以这里不需要 `thinkingFormat` 分支；
-     *  2. `effort` 只接受 minimal/low/medium/high（Responses 早期只有 low/medium/high，
-     *     后来加了 minimal）。我们的 `MAX` 落成 `high`，`OFF` 就**不带**这个字段。
-     *
-     * 另外开 `summary: "auto"`：不带摘要时多数网关不会下发思考过程，
-     * 聊天框里的"思考中"就会一直空着。
+     *  2. 官方文档里 `effort` 的可选值是 `minimal / low / medium / high`（不同模型还会多出
+     *     `xhigh` / `max`）。这里**显式映射**而不是 `else -> medium`：写错时宁可让上游
+     *     明确拒绝，也不要偷偷把用户的"最大"降成"中"。
      */
     private fun JsonObjectBuilder.applyReasoning(r: ReasoningRequest) {
         if (r.effort == null || r.wireValue == null) return
         val effort = when (r.wireValue) {
-            "max", "xhigh" -> "high"
             "minimal" -> "minimal"
-            "low", "medium", "high" -> r.wireValue
-            else -> "medium"
+            "low" -> "low"
+            "medium" -> "medium"
+            "high" -> "high"
+            "xhigh" -> "xhigh"
+            // 只有"用户确实声明过 max"才会走到这里；官方若不支持会 400 —— 那也比降级好
+            "max" -> "max"
+            else -> r.wireValue
         }
         put(
             "reasoning",

@@ -216,7 +216,7 @@ class ProtocolAdapterTest {
     }
 
     @Test
-    fun `openai-responses 思考强度落到 reasoning-effort，max 收敛成 high`() {
+    fun `openai-responses 思考强度落到 reasoning-effort，不偷偷降级`() {
         val responses = OpenAiResponsesAdapter()
         fun effortOf(r: ReasoningRequest) = responses.buildBody("gpt-5", emptyList(), true, r)["reasoning"]
 
@@ -227,11 +227,24 @@ class ProtocolAdapterTest {
         assertEquals("auto", high["summary"]?.jsonPrimitive?.content,
             message = "不带 summary 网关不下发思考过程")
 
-        val max = effortOf(
-            ReasoningRequest(ReasoningEffort.MAX, "max", ThinkingFormat.OPENAI)
-        )!!.jsonObject
-        assertEquals("high", max["effort"]?.jsonPrimitive?.content,
-            message = "Responses 没有 max 档")
+        // 低/中/极高都按原样发（"极高"是前沿模型真实存在的档位）
+        assertEquals(
+            "minimal",
+            effortOf(ReasoningRequest(ReasoningEffort.MINIMAL, "minimal", ThinkingFormat.OPENAI))!!
+                .jsonObject["effort"]?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "xhigh",
+            effortOf(ReasoningRequest(ReasoningEffort.XHIGH, "xhigh", ThinkingFormat.OPENAI))!!
+                .jsonObject["effort"]?.jsonPrimitive?.content,
+        )
+        // max 也照发：只有模型真的声明过 max 才会走到这里，写错就让上游明确拒绝，
+        // 总好过把用户的"最大"悄悄降成"高"
+        assertEquals(
+            "max",
+            effortOf(ReasoningRequest(ReasoningEffort.MAX, "max", ThinkingFormat.OPENAI))!!
+                .jsonObject["effort"]?.jsonPrimitive?.content,
+        )
 
         // 关闭思考 = 不带 reasoning 字段
         assertNull(effortOf(ReasoningRequest.NONE))

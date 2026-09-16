@@ -144,4 +144,78 @@ class ModelCapabilityTest {
         assertEquals(CapabilitySource.DISCOVERED.wire, c.capabilitySource)
         assertTrue(c.thinkingEfforts.isEmpty(), "接口声明优先，档位交给用户自己填")
     }
+
+    // --- 与 %USERPROFILE%\.dsh\settings.yaml 对齐的常用模型 ------------------
+
+    @Test
+    fun `本机 dsh settings 里登记的常用模型都能预填模态与思考档位`() {
+        // (model id, 是否支持图片, 期望的思考档位键集合) —— 数据取自 settings.yaml
+        val expectations = listOf(
+            Triple("claude-sonnet-5", true, setOf("off", "low", "medium", "high", "xhigh", "max")),
+            Triple("claude-opus-5", true, setOf("off", "low", "medium", "high", "xhigh", "max")),
+            Triple("claude-haiku-4-5-20251001", true, emptySet<String>()),
+            Triple("gpt-5.6-sol", true, setOf("off", "low", "medium", "high", "xhigh", "max")),
+            Triple("gpt-5.5", true, setOf("off", "low", "medium", "high", "xhigh")),
+            Triple("gpt-5.4-mini", true, setOf("off", "low", "medium", "high")),
+            Triple("deepseek/deepseek-v4.1-flash", true, setOf("off", "low", "high", "max")),
+            Triple("deepseek/deepseek-v4-pro", false, setOf("off", "high", "max")),
+            Triple("deepseek/deepseek-v4-flash-vision-exp", true, setOf("off", "high", "max")),
+            Triple("moonshotai/Kimi-K3", true, setOf("off", "low", "high", "max")),
+            Triple("moonshotai/Kimi-K2.6", true, emptySet<String>()),
+            Triple("z-ai/glm-5.3-flash", true, setOf("off", "low", "high", "max")),
+            Triple("zai-org/GLM-5.2", false, setOf("off", "high", "max")),
+            Triple("MiniMaxAI/MiniMax-M3", true, setOf("off", "low", "medium", "high")),
+            Triple("MiniMaxAI/MiniMax-M2.5", false, emptySet<String>()),
+            Triple("xiaomi/mimo-v2.5", true, emptySet<String>()),
+            Triple("Qwen/Qwen3.8-Max", true, setOf("off", "low", "medium", "xhigh")),
+            Triple("Qwen/Qwen3.6-Plus", true, emptySet<String>()),
+            Triple("tencent/hy4-preview", false, setOf("off", "low", "medium", "high")),
+            Triple("google/gemini-3.8-flash", true, setOf("off", "low", "medium", "high")),
+            Triple("sakana/fugu-ultra", true, setOf("off", "high", "xhigh")),
+            Triple("meta/muse-spark-1.3", true, setOf("off", "low", "medium", "high", "xhigh", "max")),
+            Triple("xai/grok-4.6", true, setOf("off", "low", "medium", "high", "xhigh")),
+            Triple("xai/grok-4.5", true, setOf("off", "low", "medium", "high")),
+            Triple("stepfun/Step-3.7-Flash", true, emptySet<String>()),
+            Triple("thinkingmachines/inkling", true, emptySet<String>()),
+            Triple("meituan/LongCat-2.0:free", false, emptySet<String>()),
+            Triple("nvidia/nemotron-3-ultra-550b-a55b", false, emptySet<String>()),
+        )
+        for ((id, vision, efforts) in expectations) {
+            val cap = ModelCapabilityCatalog.lookup(id)
+                ?: error("内置目录漏了 $id（settings.yaml 里有它）")
+            assertEquals(
+                vision,
+                cap.modalities.contains("image"),
+                "$id 的图片能力不对：${cap.modalities}（规则 ${cap.matchedBy}）",
+            )
+            assertEquals(efforts, cap.thinkingEfforts.keys, "$id 的思考档位不对（规则 ${cap.matchedBy}）")
+            if (efforts.isNotEmpty()) assertTrue(cap.reasoning, "$id 声明了档位就必须支持推理")
+        }
+    }
+
+    @Test
+    fun `没有 max 档的模型只声明到 xhigh 不降级`() {
+        // GPT-5.5 / Grok 4.6 / Qwen3.8 这些只到 xhigh：以前会把 max 收敛成 high，
+        // 用户以为选了"极高"，实际发出去的是 high —— 现在按声明走。
+        val gpt55 = ModelCapabilityCatalog.lookup("gpt-5.5")!!
+        assertTrue(gpt55.thinkingEfforts.containsKey("xhigh"))
+        assertTrue(!gpt55.thinkingEfforts.containsKey("max"), "它没有 max 档，不该声明")
+        assertEquals("xhigh", gpt55.thinkingEfforts["xhigh"])
+
+        val qwen = ModelCapabilityCatalog.lookup("Qwen/Qwen3.8-Max")!!
+        assertEquals(setOf("off", "low", "medium", "xhigh"), qwen.thinkingEfforts.keys)
+    }
+
+    @Test
+    fun `视觉变体不会被同系列的纯文本规则抢走`() {
+        // deepseek/deepseek-v4-flash-vision-exp 有图片，而 deepseek/deepseek-v4-pro 没有
+        assertEquals(
+            listOf("text", "image"),
+            ModelCapabilityCatalog.lookup("deepseek/deepseek-v4-flash-vision-exp")!!.modalities,
+        )
+        assertEquals(listOf("text"), ModelCapabilityCatalog.lookup("deepseek/deepseek-v4-pro")!!.modalities)
+        // glm-5.3 有图片、glm-5.2 没有
+        assertEquals(listOf("text", "image"), ModelCapabilityCatalog.lookup("z-ai/glm-5.3-flash")!!.modalities)
+        assertEquals(listOf("text"), ModelCapabilityCatalog.lookup("zai-org/GLM-5.2")!!.modalities)
+    }
 }

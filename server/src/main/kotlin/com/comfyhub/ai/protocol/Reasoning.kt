@@ -22,9 +22,20 @@ package com.comfyhub.ai.protocol
 /** 一个可选的思考等级。`off` 表示"明确要求关闭思考"。 */
 enum class ReasoningEffort(val wire: String) {
     OFF("off"),
+    MINIMAL("minimal"),
     LOW("low"),
     MEDIUM("medium"),
     HIGH("high"),
+
+    /**
+     * 比 high 更高、但还没到厂商上限的一档。
+     *
+     * 它不是我们发明的：pi-ai / DSH 的等级表就是
+     * `off → minimal → low → medium → high → xhigh → max`，而且不少前沿模型
+     * （GPT-5.5 / Grok 4.6 这类）**只声明到 xhigh**——没有这一档就只能把它们
+     * 压回 high，用户以为选了"极高"其实发出去的是 high，比报错更糟。
+     */
+    XHIGH("xhigh"),
     MAX("max");
 
     companion object {
@@ -62,17 +73,22 @@ enum class ThinkingFormat(val wire: String) {
 object ThinkingLevels {
     val DEFAULT: Map<ReasoningEffort, String> = mapOf(
         ReasoningEffort.OFF to "none",
+        ReasoningEffort.MINIMAL to "minimal",
         ReasoningEffort.LOW to "low",
         ReasoningEffort.MEDIUM to "medium",
         ReasoningEffort.HIGH to "high",
+        ReasoningEffort.XHIGH to "xhigh",
+        // 只有 `max` 是"收敛"的：Responses 早期没有 max 档，客户端会按协议再收一次
         ReasoningEffort.MAX to "high",
     )
 
     /** 每个等级的默认思考预算（仅 Anthropic 需要具体 token 数）。 */
     val ANTHROPIC_BUDGET: Map<ReasoningEffort, Int> = mapOf(
+        ReasoningEffort.MINIMAL to 1024,
         ReasoningEffort.LOW to 2048,
         ReasoningEffort.MEDIUM to 8192,
         ReasoningEffort.HIGH to 16384,
+        ReasoningEffort.XHIGH to 24576,
         ReasoningEffort.MAX to 32768,
     )
 

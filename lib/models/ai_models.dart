@@ -73,11 +73,16 @@ enum AiApi {
 ///
 /// "等级"是给用户看的，**能不能选、发什么值由模型目录决定**：
 /// 模型声明了 `thinkingEfforts` 就只显示其中的等级；没声明推理能力就完全不给选。
+///
+/// 等级表与 pi-ai / DSH 对齐：`关闭 → 极低 → 低 → 中 → 高 → 极高 → 最大`。
+/// 前沿模型常常只声明到"极高"（没有 `max`），少了这一档就只能把用户的选择压回"高"。
 enum AiReasoningEffort {
   off('off', '关闭'),
+  minimal('minimal', '极低'),
   low('low', '低'),
   medium('medium', '中'),
   high('high', '高'),
+  xhigh('xhigh', '极高'),
   max('max', '最大');
 
   const AiReasoningEffort(this.wire, this.label);

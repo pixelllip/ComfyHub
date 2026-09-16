@@ -736,9 +736,11 @@ class _ProviderDetailState extends State<_ProviderDetail> {
   /// 各档位的默认"过线拼写"（与后端 ThinkingLevels.DEFAULT 对齐）。
   static String _defaultEffortWire(AiReasoningEffort e) => switch (e) {
         AiReasoningEffort.off => 'none',
+        AiReasoningEffort.minimal => 'minimal',
         AiReasoningEffort.low => 'low',
         AiReasoningEffort.medium => 'medium',
         AiReasoningEffort.high => 'high',
+        AiReasoningEffort.xhigh => 'xhigh',
         AiReasoningEffort.max => 'high',
       };
 
@@ -1005,13 +1007,14 @@ class _ProviderDialogState extends State<_ProviderDialog> {
 
   final _refFocus = FocusNode(debugLabel: 'credential-ref');
 
-  /// 由 Provider ID 推出的默认凭据引用名：**全大写**，`-` 换成 `_`
+  /// 由 Provider ID 推出的默认凭据引用名：**全大写、`-` 换成 `_`、末尾加 `_API_KEY`**
   /// （后端要求环境变量风格：大写字母/数字/下划线，且以字母开头）。
   ///
-  /// 凭据引用名实际上是必填的（没有它就没法保存 API Key），
-  /// 所以这里给一个合理的默认值，用户不用自己想名字。
+  /// 例：`my-gateway` → `MY_GATEWAY_API_KEY`。
+  /// 凭据引用名实际上不能空着（没有它就没法保存 API Key），但用户不该为它操心，
+  /// 所以默认自动生成、跟着 ID 走，只有主动改过才停。
   static String defaultCredentialRef(String providerId) =>
-      providerId.trim().toUpperCase().replaceAll('-', '_');
+      '${providerId.trim().toUpperCase().replaceAll('-', '_')}_API_KEY';
 
   /// 默认值合不合法（ID 以数字开头时会推不出合法名字）。
   static bool isValidCredentialRef(String ref) => RegExp(r'^[A-Z][A-Z0-9_]{0,127}$').hasMatch(ref);
@@ -1029,7 +1032,8 @@ class _ProviderDialogState extends State<_ProviderDialog> {
   }
 
   void _onIdChanged() {
-    if (!_refTouched) {
+    // 用户没主动接管过、或者把框清空了 → 继续跟着 ID 自动填
+    if (!_refTouched || _ref.text.trim().isEmpty) {
       final next = defaultCredentialRef(_id.text);
       if (_ref.text != next) {
         _syncingRef = true;
@@ -1064,10 +1068,14 @@ class _ProviderDialogState extends State<_ProviderDialog> {
     return null;
   }
 
-  /// 凭据引用名是必填的：它是 API Key 的存放位置，没有它就没法保存密钥。
+  /// 凭据引用名：**自动处理**。
+  ///
+  /// 它是 API Key 的存放名，所以不能空着；但用户不该为它操心 —— 默认值直接由
+  /// Provider ID 推出来（全大写、`-` 换成 `_`），并且跟着 ID 实时变；
+  /// 只有用户**主动改过**它之后才停止同步（见 [_refTouched]）。
   String? get _refError {
     final v = _ref.text.trim();
-    if (v.isEmpty) return '必填：这里只是密钥的名字（如 OPENAI_API_KEY），密钥在创建后单独填';
+    if (v.isEmpty) return null;
     if (!isValidCredentialRef(v)) {
       return '只能是大写字母、数字和下划线，且以字母开头（Provider ID 以数字开头时要手改一个）';
     }
@@ -1075,12 +1083,23 @@ class _ProviderDialogState extends State<_ProviderDialog> {
     return null;
   }
 
-  bool get _canSubmit =>
-      _kebab.hasMatch(_id.text.trim()) &&
-      _name.text.trim().isNotEmpty &&
-      _urlError == null &&
-      _url.text.trim().isNotEmpty &&
-      _refError == null;
+  /// 提交时把"用户没动过、值为空"的情况补上默认值，而不是拦着他（数据没错就行）。
+  ///
+  /// **用户手动清空也算"没填"**：那就用默认值，不去追究他为什么清空。
+  String get _effectiveRef {
+    final v = _ref.text.trim();
+    if (v.isNotEmpty) return v;
+    return defaultCredentialRef(_id.text);
+  }
+
+  bool get _canSubmit {
+    final ref = _effectiveRef;
+    if (ref.isEmpty || !isValidCredentialRef(ref)) return false;
+    return _kebab.hasMatch(_id.text.trim()) &&
+        _name.text.trim().isNotEmpty &&
+        _urlError == null &&
+        _url.text.trim().isNotEmpty;
+  }
 
   /// 自动模式下的提示：让用户知道后端会怎么判断。
   String get _autoTrustHint {
@@ -1151,19 +1170,18 @@ class _ProviderDialogState extends State<_ProviderDialog> {
                 onChanged: (v) => setState(() => _trust = v),
               ),
               const SizedBox(height: 10),
-              // 凭据引用名：**实际是必填的**（没有它就没法保存 API Key），
-              // 所以默认值直接由 Provider ID 推出来（全大写，- 换 _），
-              // 用户想改还是能改；改过之后就不再跟着 ID 变。
+              // 凭据引用名：正常不用用户操心 —— 默认跟着 Provider ID 走
+              // （全大写、`-` 换成 `_`），只有主动改过才停。提交时若还空着就自动补上默认值。
               TextField(
                 controller: _ref,
                 focusNode: _refFocus,
                 textCapitalization: TextCapitalization.characters,
                 decoration: InputDecoration(
-                  labelText: '凭据引用名（必填）',
+                  labelText: '凭据引用名（可选）',
                   hintText: 'DEEPSEEK_API_KEY',
                   helperText: _refTouched
                       ? '只是名字；密钥在创建之后单独填写（只写不读）'
-                      : '默认跟随 Provider ID 全大写；可以改，改过之后不再自动变',
+                      : '默认跟随 Provider ID：全大写、- 换成 _、末尾加 _API_KEY',
                   errorText: _refError,
                   isDense: true,
                 ),
@@ -1184,7 +1202,8 @@ class _ProviderDialogState extends State<_ProviderDialog> {
                       _name.text.trim(),
                       _api,
                       _url.text.trim(),
-                      _ref.text.trim().isEmpty ? null : _ref.text.trim(),
+                      // 空着也没关系：这里补上由 Provider ID 推出来的默认名
+                      _effectiveRef,
                       _trust,
                     ),
                   ),

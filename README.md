@@ -428,9 +428,13 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `openai-responses` | ✅ 文本流（`instructions` + `input[].content[]`、`store:false`）+ 思考强度（`reasoning.effort`）；端点 `{base}/responses`。**尚未用真实 API Key 实测**；本地假网关的端到端用例见 `AuthAndModelsUrlTest` |
 | 图片 / 视频 / 音频 / 文档附件 | ⛔ 适配器尚未实现 → 预检直接阻断（不是静默丢弃） |
 
-**思考强度（AIH-056）**：聊天框下方除了选模型，还能选 `关闭 / 低 / 中 / 高 / 最大`。
+**思考强度（AIH-056）**：聊天框下方除了选模型，还能选
+`关闭 / 极低 / 低 / 中 / 高 / 极高 / 最大`（等级表与 pi-ai / DSH 一致：
+`off → minimal → low → medium → high → xhigh → max`）。
 **能选哪些档位由模型目录决定**（设置 → AI 模型 → 模型卡片的"思考强度"）：
 没勾"支持推理"就不发任何思考字段（避免上游 400），声明了档位就只允许声明过的档位。
+**没有 `max` 档的模型（GPT-5.5 / Grok 4.6 / Qwen3.8 这些只到 `xhigh`）不会被降级**——
+声明什么就发什么，宁可让上游明确拒绝，也不把用户的"极高"偷偷改成"高"。
 同一个"高"在不同网关上落到的字段不一样，模型可单独选方言：
 
 | 方言 | 开启 | 关闭 |
@@ -460,11 +464,16 @@ DPAPI 不可用时写入直接失败，**不会退化成明文落盘**（AIH-012
 | 来源 | 什么时候用 | 界面标记 |
 | --- | --- | --- |
 | 接口声明 | `/models` 自己给了 `architecture.input_modalities`、`capabilities`、`supports_vision` 等字段 | 接口声明 |
-| 内置目录 | 接口没说，但命中 `ModelCapabilityCatalog`（按厂商公开文档整理的离线表，带版本号） | 内置目录 |
+| 内置目录 | 接口没说，但命中 `ModelCapabilityCatalog`（按厂商公开文档整理 + 与本机 `%USERPROFILE%\.dsh\settings.yaml` 对齐的离线表，带版本号） | 内置目录 |
 | 仅文本 | 两边都没有 | 未识别（默认仅文本） |
 
 内置目录只是**预勾选建议**，可能过期；没命中的模型**绝不会按名字猜图片能力**。
 "获取可用模型"里每个候选都能展开改模态再点加入。
+目前这张表覆盖了 DSH 里登记的那批常用模型（Claude 4.6/5、GPT-5.x、DeepSeek V4.x、
+Kimi K2.5~K3、GLM-5.x、MiniMax M2/M3、Qwen3.6~3.8、Gemini 3.x、Grok 4.5/4.6、Muse Spark、
+MiMo、Step、Hy、Inkling、LongCat、Nemotron 等），连**同系列里的视觉变体**
+（`deepseek-v4-flash-vision-exp` 有图、`deepseek-v4-pro` 没有；`glm-5.3` 有图、`glm-5.2` 没有）
+也分开登记了。
 
 **混合协议网关**：同一条 Base URL 上，`claude-*` 走 `/messages`、其它模型走 `/chat/completions`
 的网关很常见（例如 `api.commandcode.ai`）。因为一条 Provider 固定一种协议，
@@ -481,9 +490,10 @@ DPAPI 不可用时写入直接失败，**不会退化成明文落盘**（AIH-012
 （鉴权已经过了，只是这份端点不提供模型列表，手工添加模型即可），只有 401/403 才是真正的密钥问题
 （此时不再试第二个地址，避免把"Key 不对"掩盖成"地址不对"）。
 
-**新建 Provider 时的凭据引用名是必填的**（它就是 API Key 的存放名）：
-默认值由 Provider ID 推出来——**全大写、`-` 换成 `_`**，跟着 ID 实时变；手动改过之后不再自动覆盖；
-ID 以数字开头推不出合法名字（必须字母开头）或留空时禁止提交并给出原因。
+**新建 Provider 时的凭据引用名由程序自动生成**（它就是 API Key 的存放名，不能空着）：
+默认值 = **Provider ID 全大写、`-` 换成 `_`、末尾加 `_API_KEY`**（`my-gateway` → `MY_GATEWAY_API_KEY`），
+跟着 ID 实时变；只有用户**主动改过**它之后才停止同步；界面上标成「可选」，留空提交也会自动补上默认值。
+唯一要手填的情况是 ID 以数字开头（推出来的名字必须以字母开头）。
 
 ### 提示词
 
@@ -818,7 +828,7 @@ App 自己的文案都是中文，但文本框右键的「复制 / 全选 / 剪�
 $env:PUB_HOSTED_URL='https://pub.dev'
 flutter analyze     # 无任何 error / warning / info
 flutter test        # 94 个用例
-pwsh -File scripts\server.ps1 test   # 后端 113 个用例
+pwsh -File scripts\server.ps1 test   # 后端 122 个用例
 ```
 
 | 文件 | 覆盖内容 |
@@ -829,7 +839,7 @@ pwsh -File scripts\server.ps1 test   # 后端 113 个用例
 | `test/ai_home_test.dart` | **AI 工作台**：宽屏三栏 / 窄屏无侧栏且输入区可用、**冷启动落在新建的会话上**、**输入草稿按会话保存**、**空会话切走时被清掉（聊过的不动）**、**记住上次选的模型**、能力徽标按目录声明显示、附件被准入阻断时给出具体原因并禁用发送按钮、**思考强度只列模型声明过的档位且选中的档位真的随请求发出**、**token 用量与对话汇总（没给 usage 就不显示）** |
 | `test/gallery_paging_test.dart` | **画廊分页**：在最后一页把当前页删空之后要**自动回到最后一页**而不是显示"画廊为空"（越界时多发一次请求）、真的删光才允许空态、正常刷新只发一个请求 |
 | `test/unlinked_prompt_test.dart` | **未关联产物**：没有关联产物的提示词显示「未关联」标记、「未关联产物」筛选走 `hasMedia=0`、一键清除只删未关联的（有关联的一条都不动）、**超过单页 200 条也要全部删掉**（边删边翻页最容易漏） |
-| `test/ai_provider_dialog_test.dart` | **新建 Provider 对话框**：凭据引用名默认 = Provider ID 全大写（`-` → `_`）并跟着 ID 变、手动改过之后不再覆盖、留空或推不出合法名字（ID 以数字开头）时禁止提交并给出原因 |
+| `test/ai_provider_dialog_test.dart` | **新建 Provider 对话框**：凭据引用名默认 = Provider ID 全大写 + `-`→`_` + 末尾 `_API_KEY` 并跟着 ID 变、手动改过之后不再覆盖、留空也能提交（程序补默认值）、ID 以数字开头推不出合法名字时才要手填 |
 | `test/workflow_viewer_test.dart` | 工作流查看器：格式化展示 / 204 空状态 / 复制全文 / 错误重试、界面格式与 API 格式的提示语区分，以及两个详情页的接线（按钮只在有工作流时出现） |
 | `test/zoomable_image_test.dart` | **大图查看器**：滚轮缩放（含上下限）、放大后拖动平移、缩略图只在放大后出现且高亮框跟着视野走、点缩略图跳转、适应窗口复位、图片加载失败兜底 |
 | `test/adaptive_layout_test.dart` | **多列布局**：列数规则（宽度 / 550、上限 4 列、异常宽度退回单列）、宽窗口排两列 / 窄窗口退回单列、设置页那种瀑布流把块放进最矮的一列 |
@@ -842,7 +852,8 @@ pwsh -File scripts\server.ps1 test   # 后端 113 个用例
 | `test/comfyui_capture_test.py` | ComfyUI 捕获节点的纯逻辑（payload 组装、类型判定、重试），见 `docs/comfyui-capture.md` |
 | `server/src/test/kotlin/.../GraphParseTest.kt` | **参数解析器的回归测试**：经典 KSampler 图、真实的自定义采样链（MiniMax H3 那种）、空图/坏图、只有 `text_g`/`text_l` 的图。`pwsh -File scripts\server.ps1 test` |
 | `server/src/test/kotlin/.../HistoryEntryTest.kt` | **`/history` 记录解析的回归测试**：ComfyUI 0.34.2 的六元组、老版本三元组、带界面工作流 / 不带、坏数据不抛异常 —— 钉住"提示词与工作流整条丢失"那个坑 |
-| `server/src/test/kotlin/.../ReasoningEffortTest.kt` | **思考强度的协议契约**：模型没声明推理能力时一个字段都不发、六种方言开启/关闭各自落到哪个字段、`reasoning_effort` 改名与 token 预算、Anthropic 的 `max_tokens` 必须大于预算 |
+| `server/src/test/kotlin/.../ReasoningEffortTest.kt` | **思考强度的协议契约**：模型没声明推理能力时一个字段都不发、六种方言开启/关闭各自落到哪个字段、`reasoning_effort` 改名与 token 预算、七个等级（含 `minimal` / `xhigh`）不降级、Anthropic 的 `max_tokens` 必须大于预算 |
+| `server/src/test/kotlin/.../ModelCapabilityTest.kt` | **能力预填**：接口声明优先、内置目录来源可见、未知模型只给文本；另有一张**逐模型对照表**（27 个常用模型：模态 + 思考档位键集合），数据取自 `%USERPROFILE%\.dsh\settings.yaml`，settings 变了或表写错都会在这里报出来 |
 | `server/src/test/kotlin/.../ThinkingAndUsageTest.kt` | **思考声明校验 + token 归一化**：未知等级 / 空表达 / 声明档位却没勾推理都会被拒；OpenAI 与 Anthropic 两种 usage 方言、只给 `total_tokens` 的网关、坏数据都当成 0 |
 | `server/src/test/kotlin/.../AuthAndModelsUrlTest.kt` | **真起一个本地假网关**（不联网）：Base URL 带 / 不带 `/v1` 都能回退到可用的模型列表地址、网关根本没有 `/models`（404）时连接测试仍算连通并说明原因、Key 真的不对（401）时报鉴权失败且**错误里不回显密钥**、`openai-responses` 的请求确实落在 `/v1/responses` 并带 `Bearer` |
 
