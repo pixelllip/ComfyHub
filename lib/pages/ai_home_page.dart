@@ -27,18 +27,64 @@ class _AiHomePageState extends State<AiHomePage> {
   final _scroll = ScrollController();
   bool _loaded = false;
 
+  /// 当前输入框内容挂在哪条会话上（用来把草稿写进本地存储）。
+  String? _draftConversationId;
+
+  /// 缓存 store：`dispose()` 里不能再碰 `context`
+  late AiWorkspaceStore _store;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_loaded) return;
     _loaded = true;
+    _store = context.read<AiWorkspaceStore>();
+    _input.addListener(_onInputChanged);
+    _store.addListener(_onStoreChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<AiWorkspaceStore>().load();
+      if (mounted) _store.load();
+    });
+  }
+
+  /// 输入变化就落草稿：切会话 / 关掉 App 都不会把没发出去的文字丢掉。
+  void _onInputChanged() {
+    final id = _draftConversationId;
+    if (id == null || !mounted) return;
+    _store.saveDraft(id, _input.text, _store.attachments);
+  }
+
+  /// 会话切换时把上一条的草稿存好、把新一条的草稿取回来。
+  void _onStoreChanged() {
+    if (!mounted) return;
+    final id = _store.conversation?.id;
+    if (id == _draftConversationId) return;
+
+    final previous = _draftConversationId;
+    _draftConversationId = id;
+    if (previous != null) {
+      // 附件不跨会话搬运（它们属于刚离开的那次输入），这里只保住文字
+      _store.saveDraft(previous, _input.text, const []);
+    }
+    if (id == null) return;
+    // 先清空再异步取回，避免把上一条会话的文字留在输入框里
+    _input.clear();
+    _store.loadDraft(id).then((draft) {
+      if (!mounted || _draftConversationId != id) return;
+      if (draft.text.isEmpty) return;
+      _input.text = draft.text;
+      _input.selection = TextSelection.collapsed(offset: draft.text.length);
     });
   }
 
   @override
   void dispose() {
+    _input.removeListener(_onInputChanged);
+    _store.removeListener(_onStoreChanged);
+    // 页面销毁（比如窗口关掉）之前把当前草稿落一次
+    final id = _draftConversationId;
+    if (id != null) {
+      _store.saveDraft(id, _input.text, const []);
+    }
     _input.dispose();
     _inputFocus.dispose();
     _scroll.dispose();
@@ -876,18 +922,6 @@ class _ContextPanelState extends State<_ContextPanel> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        Row(
-          children: [
-            Text('上下文', style: theme.textTheme.titleSmall),
-            const Spacer(),
-            IconButton(
-              tooltip: '刷新 ComfyUI 状态',
-              onPressed: _loading ? null : _refresh,
-              icon: const Icon(Icons.refresh, size: 16),
-            ),
-          ],
-        ),
-        const Divider(),
         Text('模型能力', style: theme.textTheme.labelLarge),
         const SizedBox(height: 6),
         if (model == null)
@@ -916,7 +950,21 @@ class _ContextPanelState extends State<_ContextPanel> {
           ),
         ],
         const SizedBox(height: 16),
-        Text('ComfyUI', style: theme.textTheme.labelLarge),
+        // 「ComfyUI」右边就是刷新按钮：它刷新的是 ComfyUI 状态，
+        // 以前挂在"上下文"标题右边，看着像是刷新整个面板（用户建议第 5 条）。
+        Row(
+          children: [
+            Text('ComfyUI', style: theme.textTheme.labelLarge),
+            IconButton(
+              tooltip: '刷新 ComfyUI 状态',
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              padding: EdgeInsets.zero,
+              onPressed: _loading ? null : _refresh,
+              icon: const Icon(Icons.refresh, size: 16),
+            ),
+          ],
+        ),
         const SizedBox(height: 6),
         if (_loading)
           const LinearProgressIndicator(minHeight: 2)

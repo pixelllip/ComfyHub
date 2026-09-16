@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/ai_api_client.dart';
 import '../models/ai_models.dart';
@@ -8,13 +12,111 @@ import '../models/ai_models.dart';
 /// 单独一个 Store，**不塞进 LibraryStore**：画廊 / 提示词的刷新不应该让聊天页整体 rebuild。
 class AiWorkspaceStore extends ChangeNotifier {
   /// [baseUrl] 每次取当前后端地址（设置里改地址后无需重建 store）；
-  /// [api] 仅供测试注入。
-  AiWorkspaceStore({this.baseUrlProvider, AiApiClient? api}) : _injected = api;
+  /// [api] 仅供测试注入；[prefs] 仅供测试注入（默认走 SharedPreferences）。
+  AiWorkspaceStore({this.baseUrlProvider, AiApiClient? api, SharedPreferences? prefs})
+      : _injected = api,
+        _injectedPrefs = prefs;
 
   final String Function()? baseUrlProvider;
   final AiApiClient? _injected;
+  final SharedPreferences? _injectedPrefs;
+  SharedPreferences? _prefs;
   AiApiClient? _cached;
   String? _cachedFor;
+
+  // --- 本地记忆（只用 SharedPreferences，绝不碰密钥） ---
+  static const _kLastProvider = 'comfyhub.ai.lastProviderId';
+  static const _kLastModel = 'comfyhub.ai.lastModelId';
+  static const _kLastEffort = 'comfyhub.ai.lastReasoningEffort';
+  static const _kDraftTextPrefix = 'comfyhub.ai.draft.';
+  static const _kDraftAttachPrefix = 'comfyhub.ai.draftAttachments.';
+
+  Future<SharedPreferences> get _store async =>
+      _injectedPrefs ?? (_prefs ??= await SharedPreferences.getInstance());
+
+  /// 记住"上一次用的模型"：下次开 App 或者新建对话直接选中它，
+  /// 不用每次都在聊天框里重新挑一遍。
+  Future<void> _rememberModel() async {
+    final prefs = await _store;
+    final p = selectedProvider?.id;
+    final m = selectedModel?.id;
+    if (p == null || m == null) return;
+    await prefs.setString(_kLastProvider, p);
+    await prefs.setString(_kLastModel, m);
+    await prefs.setString(_kLastEffort, reasoningEffort.wire);
+  }
+
+  Future<void> _restoreRememberedModel() async {
+    final prefs = await _store;
+    final providerId = prefs.getString(_kLastProvider);
+    final modelId = prefs.getString(_kLastModel);
+    final effort = prefs.getString(_kLastEffort);
+    if (providerId != null) {
+      for (final p in providers) {
+        if (p.id == providerId) selectedProvider = p;
+      }
+    }
+    selectedProvider ??= providers.where((p) => p.enabled).firstOrNull;
+    await _loadModels();
+    if (modelId != null) {
+      for (final m in models) {
+        if (m.id == modelId) selectedModel = m;
+      }
+    }
+    if (effort != null) {
+      final parsed = AiReasoningEffort.parse(effort);
+      if (parsed != null) reasoningEffort = parsed;
+      _clampReasoningEffort();
+    }
+  }
+
+  /// 输入区草稿：按会话保存。切换会话（以及把空会话删掉）都不会丢没发出去的文字。
+  Future<void> saveDraft(String conversationId, String text, List<AiAttachment> attachments) async {
+    final prefs = await _store;
+    if (text.trim().isEmpty && attachments.isEmpty) {
+      await prefs.remove('$_kDraftTextPrefix$conversationId');
+      await prefs.remove('$_kDraftAttachPrefix$conversationId');
+      return;
+    }
+    await prefs.setString('$_kDraftTextPrefix$conversationId', text);
+    await prefs.setString(
+      '$_kDraftAttachPrefix$conversationId',
+      jsonEncode(attachments.map((a) => a.toJson()).toList()),
+    );
+  }
+
+  /// 取回草稿；没有就返回空。
+  Future<({String text, List<AiAttachment> attachments})> loadDraft(String conversationId) async {
+    final prefs = await _store;
+    final text = prefs.getString('$_kDraftTextPrefix$conversationId') ?? '';
+    final raw = prefs.getString('$_kDraftAttachPrefix$conversationId');
+    final attachments = <AiAttachment>[];
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final list = jsonDecode(raw);
+        if (list is List) {
+          for (final e in list.whereType<Map>()) {
+            final m = Map<String, dynamic>.from(e);
+            attachments.add(AiAttachment(
+              name: (m['name'] ?? '').toString(),
+              modality: m['modality']?.toString(),
+              mimeType: (m['mimeType'] ?? 'application/octet-stream').toString(),
+              sizeBytes: (m['sizeBytes'] as num?)?.toInt() ?? 0,
+            ));
+          }
+        }
+      } catch (_) {
+        // 草稿坏了就当没有，不影响主流程
+      }
+    }
+    return (text: text, attachments: attachments);
+  }
+
+  Future<void> _clearDraft(String conversationId) async {
+    final prefs = await _store;
+    await prefs.remove('$_kDraftTextPrefix$conversationId');
+    await prefs.remove('$_kDraftAttachPrefix$conversationId');
+  }
 
   AiApiClient get _api {
     final injected = _injected;
@@ -81,18 +183,20 @@ class AiWorkspaceStore extends ChangeNotifier {
   //  加载
   // -----------------------------------------------------------------------
 
+  /// 冷启动加载。
+  ///
+  /// 每次开 App **都新建一个聊天记录**（用户明确要求）：历史会话仍在左侧列表里，
+  /// 但默认落在一个干净的对话上，不用先手动点「新建对话」再开聊。
+  /// 上一次用的模型会从本地记忆里恢复，这次也不用重新挑。
   Future<void> load() async {
     loading = true;
     error = null;
     notifyListeners();
     try {
       providers = await _api.listProviders();
-      selectedProvider ??= providers.where((p) => p.enabled).firstOrNull;
-      await _loadModels();
+      await _restoreRememberedModel();
       conversations = await _api.listConversations();
-      if (conversation == null && conversations.isNotEmpty) {
-        await openConversation(conversations.first.id);
-      }
+      await newConversation();
     } catch (e) {
       error = '连接后端失败：$e';
     } finally {
@@ -129,6 +233,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     selectedModel = m;
     _clampReasoningEffort();
     await refreshPreflight();
+    await _rememberModel();
     notifyListeners();
   }
 
@@ -137,6 +242,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     final allowed = selectedModel?.selectableEfforts ?? const <AiReasoningEffort>[];
     if (!allowed.contains(effort)) return;
     reasoningEffort = effort;
+    _rememberModel();
     notifyListeners();
   }
 
@@ -152,6 +258,8 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   Future<void> newConversation() async {
     try {
+      // 换新对话之前，把上一个"空壳"清掉（AIH-018 的清理策略，见 [isEmptyConversation]）
+      await _cleanupEmptyConversation();
       final conv = await _api.createConversation(
         providerId: selectedProvider?.id,
         modelId: selectedModel?.id,
@@ -166,8 +274,11 @@ class AiWorkspaceStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 打开历史会话。同样先清理上一个空会话。
   Future<void> openConversation(String id) async {
+    if (conversation?.id == id) return;
     try {
+      await _cleanupEmptyConversation();
       conversation = conversations.firstWhere((c) => c.id == id);
       messages = await _api.listMessages(id);
       notice = null;
@@ -175,6 +286,28 @@ class AiWorkspaceStore extends ChangeNotifier {
       error = '打开会话失败：$e';
     }
     notifyListeners();
+  }
+
+  /// 当前会话是不是"空壳"：一条消息都没有，输入区也没有待发送的内容。
+  ///
+  /// 输入区有文字或附件时**不删** —— 那些草稿挂在会话上（见 [saveDraft]），
+  /// 删掉等于把用户打了一半的字扔掉。
+  bool get isEmptyConversation =>
+      (conversation?.id ?? '').isNotEmpty && messages.isEmpty && attachments.isEmpty;
+
+  /// 切换会话时顺手删掉上一个空会话（用户要求）：聊天记录列表不该堆一串"新对话"。
+  Future<void> _cleanupEmptyConversation() async {
+    final conv = conversation;
+    if (conv == null) return;
+    if (messages.isNotEmpty || attachments.isNotEmpty) return;
+    // 本地乐观插入的占位（还没落库）不能拿去删
+    if (conv.id.startsWith('local-')) return;
+    try {
+      await _api.deleteConversation(conv.id);
+      conversations = conversations.where((c) => c.id != conv.id).toList();
+    } catch (_) {
+      // 删不掉也不影响切换（可能是归档 / 网络抖动），保持静默
+    }
   }
 
   Future<void> renameConversation(String title) async {
@@ -338,6 +471,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       ];
       attachments.clear();
       preflight = null;
+      // 已经发出去了，本地草稿也一并清掉（否则下次切回这个会话会看到旧内容）
+      unawaited(_clearDraft(conv.id));
       notifyListeners();
 
       await _consumeRun(start.runId, start.assistantMessageId, conv.id);

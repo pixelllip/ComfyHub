@@ -29,6 +29,9 @@ final List<Map<String, dynamic>> lastRunBodies = [];
 /// 事件流请求打到的 runId（按顺序）。
 final List<String> sseProbe = [];
 
+/// 被删除的会话 id（按顺序）：用于断言"空会话切换时自动删掉"。
+final List<String> deletedConversations = [];
+
 /// 按真实 SSE 格式拼事件（**冒号后必须有空格**，否则 `event:` 前缀匹配不上，
 /// 客户端会把整个事件当成未知行丢掉 —— 这里踩过一次，别省这个空格）。
 String _sse(int seq, String type, String dataJson) =>
@@ -50,6 +53,8 @@ MockClient _fakeBackend({
   String? thinkingFormat,
   Map<String, dynamic>? usage,
   bool failFirstRun = false,
+  String conversationId = 'c1',
+  List<Map<String, dynamic>> conversations = const [],
 }) {
   var runCount = 0;
   return MockClient((request) async {
@@ -87,15 +92,19 @@ MockClient _fakeBackend({
       ];
     } else if (path == '/api/ai/conversations' && request.method == 'POST') {
       body = {
-        'id': 'c1',
+        'id': conversationId,
         'title': '新对话',
         'providerId': 'local-gw',
         'modelId': 'm-text',
         'messageCount': 0,
       };
     } else if (path == '/api/ai/conversations') {
-      body = <Object>[];
-    } else if (path == '/api/ai/conversations/c1/runs') {
+      body = conversations;
+    } else if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) &&
+        request.method == 'DELETE') {
+      deletedConversations.add(path.split('/').last);
+      body = {'deleted': true, 'id': path.split('/').last};
+    } else if (path == '/api/ai/conversations/$conversationId/runs') {
       // 记录发出去的请求体，供用例断言"思考强度有没有真的带上""重试有没有带 retryOfRunId"
       lastRunBody = jsonDecode(request.body) as Map<String, dynamic>;
       lastRunBodies.add(lastRunBody!);
@@ -125,11 +134,11 @@ MockClient _fakeBackend({
           ) +
           _sse(6, 'run.completed', '{"runId":"$startedRunId"}');
       return _sseResponse(sse);
-    } else if (path == '/api/ai/conversations/c1/messages') {
+    } else if (path == '/api/ai/conversations/$conversationId/messages') {
       body = [
         {
           'id': 'u1',
-          'conversationId': 'c1',
+          'conversationId': conversationId,
           'seq': 1,
           'role': 'user',
           'status': 'complete',
@@ -138,7 +147,7 @@ MockClient _fakeBackend({
         },
         {
           'id': failFirstRun && runCount < 2 ? 'a1' : 'a2',
-          'conversationId': 'c1',
+          'conversationId': conversationId,
           'seq': 2,
           'role': 'assistant',
           'status': failFirstRun && runCount < 2 ? 'failed' : 'complete',
@@ -185,6 +194,7 @@ Future<Widget> _page({
   String? thinkingFormat,
   Map<String, dynamic>? usage,
   bool failFirstRun = false,
+  String conversationId = 'c1',
 }) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
@@ -199,6 +209,7 @@ Future<Widget> _page({
         thinkingFormat: thinkingFormat,
         usage: usage,
         failFirstRun: failFirstRun,
+        conversationId: conversationId,
       ),
     ),
   );
@@ -215,9 +226,10 @@ void main() {
   setUp(() {
     lastRunBody = null;
     lastRunBodies.clear();
+    deletedConversations.clear();
   });
 
-  testWidgets('宽屏显示三栏：会话列表 / 对话 / 上下文', (tester) async {
+  testWidgets('宽屏显示三栏：会话列表 / 对话 / 右侧状态栏', (tester) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -227,7 +239,10 @@ void main() {
 
     expect(find.text('新建对话'), findsOneWidget);
     expect(find.text('AI 工作台'), findsOneWidget); // 空态标题
-    expect(find.text('上下文'), findsOneWidget); // 右侧栏
+    // 右侧栏用「ComfyUI」/ Skills 目录做锚点：以前那栏顶部写着"上下文"，
+    // 但栏里其实只有模型能力 + ComfyUI 状态 + Skills，名不副实（用户建议第 5 条）。
+    expect(find.text('ComfyUI'), findsOneWidget);
+    expect(find.text('上下文'), findsNothing, reason: '「上下文」这个含混的标题已经去掉');
     // 左侧栏和右侧栏同时存在，说明是三栏而不是单列
     expect(find.byType(VerticalDivider), findsNWidgets(2));
   });
@@ -240,9 +255,102 @@ void main() {
     await tester.pumpWidget(await _page());
     await tester.pumpAndSettle();
 
-    expect(find.text('上下文'), findsNothing);
+    expect(find.text('ComfyUI'), findsNothing);
     expect(find.byType(TextField), findsOneWidget);
     expect(find.text('发送'), findsOneWidget);
+  });
+
+  testWidgets('冷启动落在新建的聊天记录上，而不是重新打开上次那条', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page());
+    await tester.pumpAndSettle();
+
+    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    expect(store.conversation?.id, 'c1');
+    expect(store.messages, isEmpty, reason: '新开一条，不该带出历史消息');
+    expect(find.text('AI 工作台'), findsOneWidget, reason: '空态页面 = 新会话');
+  });
+
+  testWidgets('输入框草稿按会话保存：切走再切回来文字还在', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page());
+    await tester.pumpAndSettle();
+
+    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    await tester.enterText(find.byType(TextField), '打了一半的需求');
+    await tester.pumpAndSettle();
+
+    // 输入停下就已经落盘（不用等发送或关窗口）
+    final saved = await store.loadDraft('c1');
+    expect(saved.text, '打了一半的需求');
+
+    // 清空输入 → 草稿一起清掉，不会下次又冒出来
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pumpAndSettle();
+    expect((await store.loadDraft('c1')).text, isEmpty);
+  });
+
+  testWidgets('切走时把空会话删掉，有内容的会话留着', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page());
+    await tester.pumpAndSettle();
+
+    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    expect(store.isEmptyConversation, isTrue);
+
+    // 再点一次「新建对话」：上一个一条消息都没有的会话应该被清掉
+    await store.newConversation();
+    await tester.pumpAndSettle();
+
+    expect(deletedConversations, contains('c1'), reason: '一条消息都没有的空会话应该被清掉');
+  });
+
+  testWidgets('有内容的会话切走时不会被删', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page());
+    await tester.pumpAndSettle();
+
+    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    await tester.enterText(find.byType(TextField), '你好');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+    expect(store.isEmptyConversation, isFalse);
+
+    await store.newConversation();
+    await tester.pumpAndSettle();
+
+    expect(deletedConversations, isNot(contains('c1')), reason: '聊过的会话不能顺手删掉');
+  });
+
+  testWidgets('记住上次用的模型：下一次加载直接选中它', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page());
+    await tester.pumpAndSettle();
+
+    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    await store.selectModel(store.models.first);
+    await tester.pumpAndSettle();
+
+    // 新建一个 store（同一份 SharedPreferences）→ 模拟下次冷启动
+    final second = AiWorkspaceStore(api: AiApiClient('http://127.0.0.1:8080', client: _fakeBackend()));
+    await second.load();
+    expect(second.selectedModel?.id, 'm-text', reason: '上次选的模型要自动选回来');
+    expect(second.selectedProvider?.id, 'local-gw');
   });
 
   testWidgets('模型能力徽标只显示目录声明的能力，未声明的一律标不支持', (tester) async {
