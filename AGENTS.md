@@ -190,3 +190,28 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   （Skia 会容忍 0 尺寸，所以它在旧版本里"看起来是好的"）。
 - 相关回归手段：`.run\videoprobe\ui.ps1` 是当时写的窗口截图 / 点击小工具（**不在版本库里**，按需重建），
   `scripts\dev-app.ps1` 起 debug 版后按 `r` 热重载最快。
+
+## 10. AI 工具与 Skills（M4 / M5）的接线约定
+
+**功能说明见 [`docs/ai-tools-and-skills.md`](docs/ai-tools-and-skills.md)**（含"DSH 哪些工具抄了、哪些没抄"的对照表）。
+这里只记改动时容易踩的规矩。
+
+- 工具清单**只有一个真源**：`server/src/main/kotlin/com/comfyhub/ai/tools/ToolRegistry.kt` 的 `tools` 列表。
+  系统提示、`GET /api/ai/tools`、界面都从它派生 —— 加工具就在这里加一项 + 在 `ToolRegistryTest` 补用例，
+  **别在别处再维护一份"可用工具"名单**。
+- **默认只能写 `<项目根>\comfyui`**（用户要求："默认不能修改 comfy 目录以外的内容"）。新增写入类工具时：
+  路径必须过 `ToolPolicy.resolveWrite()` / `resolveRead()`，**不要自己 `Path.of()` 拼**；
+  `.git` / `.mysql` / `.run` / `node_modules` 是**永远禁写**的（`ToolPolicyConfig.FORBIDDEN_SEGMENTS`），
+  即使用户把白名单放宽到项目根也一样拒绝。
+- 工具 handler **只从 `ToolContext` 拿策略 / Skills**，不要读环境变量或全局单例 ——
+  否则"策略在 Run 开始时快照一次"这个前提就破了（用户中途改设置不该影响在飞的请求）。
+- 需要审批的工具：`defaultAccess = ToolAccess.ASK`。调用方**必须先 `ToolApprovalGate.open(callId)`
+  再发 `tool.requested` 事件**，否则用户手快先点按钮会落空、只能等超时；`await` 超时与 Run 取消都算拒绝。
+- 工具结果回给模型前一律截断（`MAX_RESULT_CHARS`），而且**当不可信数据**：
+  不能把它拼进系统提示的指令区，也不能因为工具说"忽略规则"就改行为（RSK-004 的注入防线）。
+- Skills 的正文真源是磁盘（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`），**刻意不做缓存**：
+  "AI 注册完下一次回复就能用、用户删掉立刻消失"是需求。要加缓存就必须带"写盘即失效"。
+- frontmatter 非法**不静默忽略**：照样列进界面并带 `validationError`，但**不进系统提示、不能被 `load_skill` 加载**。
+- 改系统提示词**必须 bump `SystemPrompt.VERSION`**（Run 里记 `promptVersion`，事后才能追溯哪次回答用的哪版规则）。
+- `.dsh` 只在用户点「从 DSH 导入」时读一次；**任何运行期代码都不许依赖 `%USERPROFILE%\.dsh`** ——
+  装我们项目的人可能根本没装 DSH（模型目录同理，见 `AiSeedCatalog` 的 classpath 冻结副本）。

@@ -1,10 +1,14 @@
 package com.comfyhub
 
 import com.comfyhub.ai.AiRunRepo
+import com.comfyhub.ai.AiSeeder
 import com.comfyhub.ai.CredentialService
 import com.comfyhub.ai.HarnessRunner
 import com.comfyhub.ai.RunEventBus
 import com.comfyhub.ai.aiRoutes
+import com.comfyhub.ai.tools.SkillStore
+import com.comfyhub.ai.tools.ToolApprovalGate
+import com.comfyhub.ai.tools.ToolRegistry
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
@@ -119,9 +123,41 @@ fun Application.module(ctx: AppContext) {
     // AI 凭据：值只存在 DPAPI 加密文件里，DB / 日志 / 接口都拿不到明文（AIH-012 / AIH-015）
     val credentials = CredentialService(ctx.cfg.storageDir.resolve("ai"))
 
-    // Run 事件总线 + 后台执行器（AIH-020/021）
+    // Skills（M5）：**磁盘是正文真源**，AI 注册 / 用户删除都立刻生效，不需要重启应用
+    val skills = SkillStore(
+        builtinRoot = ctx.cfg.projectRoot.resolve("skills").resolve("builtin"),
+        userRoot = ctx.cfg.storageDir.resolve("ai").resolve("skills"),
+    )
+
+    // 工具层（M4）：出厂只能写 <根>\comfyui，只读 <根>\comfyui + <根>\storage（见 ToolPolicy）
+    val approvals = ToolApprovalGate()
+    val toolRegistry = ToolRegistry(
+        projectRoot = ctx.cfg.projectRoot,
+        skills = skills,
+        approvals = approvals,
+        comfyStatus = { AppJson.encodeToJsonElement(CaptureStatus.serializer(), capture.status()) },
+        comfyFindRun = { runKey ->
+            CaptureRepo.findRun(runKey)?.let { AppJson.encodeToJsonElement(CaptureRunInfo.serializer(), it) }
+        },
+        comfySync = { AppJson.encodeToJsonElement(CapturePollResult.serializer(), capture.pollOnce()) },
+    )
+
+    // 内置模型目录：项目内置的冻结副本（classpath）里那份，缺哪个补哪个；已存在的一律不覆盖
+    val seed = AiSeeder.syncBuiltinProvider()
+    if (seed.added > 0) log.info("内置模型目录已登记：新增 {} 个模型（{}）", seed.added, seed.version)
+    if (seed.divergent.isNotEmpty()) log.info("有 {} 个模型的能力声明与内置目录不同（保持用户当前设置）", seed.divergent.size)
+    if (seed.error != null) log.warn("内置模型目录登记失败（不影响启动）：{}", seed.error)
+
+    // Run 事件总线 + 后台执行器（AIH-020/021，M4 工具循环）
     val runBus = RunEventBus()
-    val runner = HarnessRunner(credentials, runBus)
+    val runner = HarnessRunner(
+        credentials = credentials,
+        bus = runBus,
+        tools = toolRegistry,
+        skills = skills,
+        approvals = approvals,
+        projectRoot = ctx.cfg.projectRoot,
+    )
     monitor.subscribe(ApplicationStopped) { runner.shutdown() }
     // 上次进程退出时还在 running 的 Run 不可能再继续：标成失败，而不是让界面永远转圈
     runCatching { AiRunRepo.failStaleRunning() }
@@ -189,6 +225,11 @@ fun Application.module(ctx: AppContext) {
     }
 
     install(StatusPages) {
+        // AI 领域异常统一成**稳定错误码**（AIH-024）：前端拿 `error` 判断、拿 `detail` 给用户看。
+        // 不这样做的话它们会落到下面的 Throwable 分支，变成 500 + "AiException"，用户只看到"服务器错误"。
+        exception<com.comfyhub.ai.AiException> { call, cause ->
+            call.respond(HttpStatusCode.BadRequest, ApiError(cause.code, cause.message))
+        }
         exception<IllegalArgumentException> { call, cause ->
             call.respond(HttpStatusCode.BadRequest, ApiError(cause.message ?: "请求参数不合法"))
         }
@@ -247,7 +288,7 @@ fun Application.module(ctx: AppContext) {
             tagRoutes()
             mediaRoutes(ctx)
             captureRoutes(ctx, capture)
-            aiRoutes(credentials, runner, runBus)
+            aiRoutes(credentials, runner, runBus, skills, toolRegistry, approvals, ctx.cfg.projectRoot)
         }
     }
 }

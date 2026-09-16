@@ -141,6 +141,18 @@ class AiWorkspaceStore extends ChangeNotifier {
   AiConversation? conversation;
   List<AiMessage> messages = const [];
 
+  // --- Skills（M5） ------------------------------------------------------
+  /// 后端扫出来的 skills（磁盘是真源，**不做本地缓存**：改完立刻重拉）。
+  List<AiSkill> skills = const [];
+  String? skillsError;
+
+  /// 刷新 / 删除 / 导入进行中：界面据此显示进度并防重复点击。
+  bool skillsBusy = false;
+
+  // --- 工具清单（M4） ----------------------------------------------------
+  /// 只用来在工具卡上显示分类图标；拿不到不影响聊天。
+  List<AiToolInfo> tools = const [];
+
   // --- 输入区 ---
   final List<AiAttachment> attachments = [];
 
@@ -165,19 +177,141 @@ class AiWorkspaceStore extends ChangeNotifier {
   bool get hasProvider => selectedProvider != null;
   bool get canSend => !sending && selectedModel != null && (preflight?.allowed ?? true);
 
-  /// 内置 Skill 目录（AIH-041/AIH-042）。
-  ///
-  /// 目录先按需求登记出来；按需加载（load_skill）属于 M5，未接通前明确标注，
-  /// 绝不显示成"已可用"。
-  static const skillCatalog = <String, String>{
-    'anima-prompt': '将需求转为 Anima 优化提示词',
-    'anima-scene-prompt': '纯场景 / 背景 / 地图资源提示词',
-    'anima-workflow': '跑批、对比、审计与交付约定',
-    'anima-change': '画面突变 / 记忆点呈现方法论',
-    'anima-doujin-plan': '多页套图剧本与分镜设计',
-    'h3-prompt-writing': 'MiniMax H3 视频提示词结构',
-    'music-caption-rewriter': '音乐描述改写为结构化 caption',
-  };
+  // -----------------------------------------------------------------------
+  //  Skills（M5 / AIH-037 ~ AIH-045）
+  // -----------------------------------------------------------------------
+
+  /// 拉一次 skills 列表。失败**不抛异常**（右侧栏不该因为 skills 挂了就整页报错），
+  /// 只把原因记进 [skillsError]。
+  Future<void> reloadSkills() async {
+    skillsBusy = true;
+    skillsError = null;
+    notifyListeners();
+    try {
+      skills = await _api.listSkills();
+    } catch (e) {
+      skillsError = '$e';
+    } finally {
+      skillsBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// 删除用户 skill；成功后重拉列表（磁盘是真源）。内置 skill 会被后端拒绝，
+  /// 这里把后端的原话返回给调用方去弹提示。
+  Future<({bool ok, String message})> deleteSkill(String name) async {
+    skillsBusy = true;
+    notifyListeners();
+    try {
+      await _api.deleteSkill(name);
+      skills = await _api.listSkills();
+      skillsError = null;
+      return (ok: true, message: '已删除 skill「$name」');
+    } catch (e) {
+      return (ok: false, message: '删除「$name」失败：$e');
+    } finally {
+      skillsBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// 从 `%USERPROFILE%\.dsh\skills` 导入（用户在右侧栏显式点击）。
+  Future<({bool ok, String message})> importDshSkills() async {
+    skillsBusy = true;
+    notifyListeners();
+    try {
+      final result = await _api.importDshSkills();
+      skills = await _api.listSkills();
+      skillsError = null;
+      return (ok: true, message: '${result.summary}（来源：${result.source}）');
+    } catch (e) {
+      return (ok: false, message: '从 DSH 导入失败：$e');
+    } finally {
+      skillsBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// 注册 / 覆盖一个用户 skill（AI 或用户在界面上登记）。
+  Future<({bool ok, String message})> registerSkill({
+    required String name,
+    required String description,
+    String? whenToUse,
+    required String content,
+  }) async {
+    try {
+      final saved = await _api.createSkill(
+        name: name,
+        description: description,
+        whenToUse: whenToUse,
+        content: content,
+      );
+      skills = await _api.listSkills();
+      skillsError = null;
+      notifyListeners();
+      return (ok: true, message: '已注册 skill「${saved.name}」');
+    } catch (e) {
+      notifyListeners();
+      return (ok: false, message: '注册失败：$e');
+    }
+  }
+
+  /// 工具清单：气泡上的分类图标要用。失败静默（非关键路径）。
+  Future<void> reloadTools() async {
+    try {
+      tools = await _api.listTools();
+    } catch (_) {
+      // 后端老版本 / 临时不可用：图标退回按名字猜，不打扰用户
+    }
+    notifyListeners();
+  }
+
+  /// 工具名 → 分类（skill / files / comfy）。先查后端给的清单，查不到按名字兜底。
+  String toolCategoryOf(String name) {
+    for (final t in tools) {
+      if (t.name == name) return t.category;
+    }
+    if (name.contains('skill')) return 'skill';
+    if (name.startsWith('read_') ||
+        name.startsWith('write_') ||
+        name.startsWith('list_dir') ||
+        name.contains('file') ||
+        name.contains('dir')) {
+      return 'files';
+    }
+    return 'comfy';
+  }
+
+  // -----------------------------------------------------------------------
+  //  工具调用（M4）：批准 / 拒绝
+  // -----------------------------------------------------------------------
+
+  /// 批准一次待批准的工具调用（AIH-035 / AIH-049）。
+  Future<void> approveToolCall(String callId) => _resolveToolCall(callId, approve: true);
+
+  Future<void> denyToolCall(String callId) => _resolveToolCall(callId, approve: false);
+
+  Future<void> _resolveToolCall(String callId, {required bool approve}) async {
+    try {
+      final accepted = approve ? await _api.approveToolCall(callId) : await _api.denyToolCall(callId);
+      if (!accepted) {
+        // 点晚了：这次调用已经结束 / 超时，**如实说**，不要假装批准成功
+        notice = '这次工具调用已经结束或超时，${approve ? '批准' : '拒绝'}没有生效。';
+      } else {
+        _patchToolCall(
+          callId,
+          (c) => c.copyWith(
+            status: approve ? AiToolCallStatus.running : AiToolCallStatus.denied,
+            approval: approve ? c.approval : 'denied',
+          ),
+        );
+        notice = approve ? '已批准这次工具调用，模型会继续执行。' : '已拒绝这次工具调用。';
+      }
+    } catch (e) {
+      notice = '${approve ? '批准' : '拒绝'}失败：$e';
+    }
+    notifyListeners();
+  }
 
   // -----------------------------------------------------------------------
   //  加载
@@ -203,6 +337,9 @@ class AiWorkspaceStore extends ChangeNotifier {
       loading = false;
       notifyListeners();
     }
+    // skills / 工具清单走"尽力而为"：拉不到不影响聊天（各自把失败记在自己的字段里）
+    await reloadSkills();
+    await reloadTools();
   }
 
   Future<void> _loadModels() async {
@@ -267,6 +404,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       conversations = [conv, ...conversations];
       conversation = conv;
       messages = const [];
+      _liveReasoning.clear();
+      _liveToolCalls.clear();
       notice = null;
     } catch (e) {
       error = '新建会话失败：$e';
@@ -281,6 +420,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       await _cleanupEmptyConversation();
       conversation = conversations.firstWhere((c) => c.id == id);
       messages = await _api.listMessages(id);
+      _pruneLiveState();
       notice = null;
     } catch (e) {
       error = '打开会话失败：$e';
@@ -489,6 +629,9 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   Future<void> _consumeRun(String runId, String assistantMessageId, String conversationId) async {
     var streamed = '';
+    // 这一条助手消息的实时思考 / 工具调用（气泡边流边渲染）
+    _liveReasoning.remove(assistantMessageId);
+    _liveToolCalls.remove(assistantMessageId);
     try {
       await for (final event in _api.runEvents(runId)) {
         switch (event.type) {
@@ -496,12 +639,80 @@ class AiWorkspaceStore extends ChangeNotifier {
             streamed += event.text ?? '';
             _replaceMessage(assistantMessageId, text: streamed, status: 'streaming');
             notifyListeners();
+          // 思考增量（M4）：按消息累加，气泡里折叠展示
+          case 'reasoning.delta':
+            final delta = event.text ?? '';
+            if (delta.isEmpty) break;
+            _liveReasoning.update(assistantMessageId, (v) => v + delta, ifAbsent: () => delta);
+            notifyListeners();
+          // 工具调用请求：approval=pending 的要在气泡上等用户点「批准 / 拒绝」
+          case 'tool.requested':
+            final approval = event.approval ?? 'not_required';
+            _upsertToolCall(
+              assistantMessageId,
+              event.callId ?? '',
+              (prev) => (prev ?? AiToolCallState(callId: event.callId ?? '', name: event.toolName ?? ''))
+                  .copyWith(
+                name: event.toolName ?? prev?.name,
+                arguments: event.arguments ?? prev?.arguments,
+                approval: approval,
+                status: approval == 'pending'
+                    ? AiToolCallStatus.pendingApproval
+                    : AiToolCallStatus.running,
+              ),
+            );
+            notifyListeners();
+          case 'tool.started':
+            _upsertToolCall(
+              assistantMessageId,
+              event.callId ?? '',
+              (prev) => (prev ?? AiToolCallState(callId: event.callId ?? '', name: event.toolName ?? ''))
+                  .copyWith(name: event.toolName ?? prev?.name, status: AiToolCallStatus.running),
+            );
+            notifyListeners();
+          case 'tool.completed':
+            _upsertToolCall(
+              assistantMessageId,
+              event.callId ?? '',
+              (prev) => (prev ?? AiToolCallState(callId: event.callId ?? '', name: event.toolName ?? ''))
+                  .copyWith(
+                name: event.toolName ?? prev?.name,
+                status: AiToolCallStatus.ok,
+                preview: event.preview ?? prev?.preview,
+                elapsedMs: event.elapsedMs ?? prev?.elapsedMs,
+              ),
+            );
+            notifyListeners();
+          case 'tool.failed':
+            final denied = (event.approval ?? '') == 'denied';
+            _upsertToolCall(
+              assistantMessageId,
+              event.callId ?? '',
+              (prev) => (prev ?? AiToolCallState(callId: event.callId ?? '', name: event.toolName ?? ''))
+                  .copyWith(
+                name: event.toolName ?? prev?.name,
+                // 被拒绝不是"出错"：状态要分开显示
+                status: denied ? AiToolCallStatus.denied : AiToolCallStatus.failed,
+                error: event.message ?? event.code,
+                approval: event.approval ?? prev?.approval,
+                elapsedMs: event.elapsedMs ?? prev?.elapsedMs,
+              ),
+            );
+            notifyListeners();
           case 'message.completed':
             streamed = event.text ?? streamed;
+            // parts 是**权威的有序块**（正文 / 思考 / 工具调用 / 工具结果交错）；
+            // 老后端不给 parts 时退回实时累积，二者取其一，不混用。
+            final parts = event.parts;
+            final reasoning = event.reasoning;
+            if (parts == null && (reasoning ?? '').isNotEmpty) {
+              _liveReasoning[assistantMessageId] = reasoning!;
+            }
             _replaceMessage(
               assistantMessageId,
               text: streamed,
               status: 'complete',
+              parts: parts,
               // token 统计（AIH-057）：后端已在事件里给了归一化 usage
               usage: event.data['usage'] is Map
                   ? AiTokenUsage.fromJson(Map<String, dynamic>.from(event.data['usage'] as Map))
@@ -515,8 +726,16 @@ class AiWorkspaceStore extends ChangeNotifier {
           case 'run.cancelled':
             _replaceMessage(assistantMessageId, text: streamed, status: 'cancelled');
             notice = '已停止本次生成。';
-          default:
+          // 这些事件不需要额外动作：
+          //  - run.started 带 tools 清单（留给后续"本次可用工具"展示）
+          //  - message.started / run.completed 只标示阶段
+          case 'run.started':
+          case 'message.started':
+          case 'run.completed':
             break;
+          default:
+            // 未知事件（后端加了新的）不能悄悄丢：至少留一条可查的日志
+            debugPrint('AI 事件流收到未处理事件：${event.type}');
         }
       }
     } catch (e) {
@@ -629,28 +848,104 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   String? _runIdOf(String assistantMessageId) => _runIds[assistantMessageId];
 
+  // --- 流式实时状态（工具卡 / 思考）---------------------------------------
+
+  /// 助手消息 id → 实时工具调用（有序）。
+  final Map<String, List<AiToolCallState>> _liveToolCalls = {};
+
+  /// 助手消息 id → 实时思考正文。
+  final Map<String, String> _liveReasoning = {};
+
+  /// 一条消息要渲染的工具调用（有序）。
+  ///
+  /// 优先用 `parts`（`message.completed` 给的权威有序块 / 历史消息）；
+  /// 流式过程中 parts 还没有，就用事件累积的实时列表。
+  List<AiToolCallState> toolCallsFor(AiMessage message) {
+    final fromParts = AiToolCallState.listFromParts(message.parts);
+    if (fromParts.isNotEmpty) return fromParts;
+    return _liveToolCalls[message.id] ?? const [];
+  }
+
+  /// 一条消息的思考正文（`reasoning.delta` 累积 / parts 里的 reasoning 块）。
+  String reasoningFor(AiMessage message) {
+    final fromParts = message.parts
+        .where((p) => p.type == 'reasoning')
+        .map((p) => p.text ?? '')
+        .where((t) => t.isNotEmpty)
+        .join('\n\n');
+    if (fromParts.isNotEmpty) return fromParts;
+    return _liveReasoning[message.id] ?? '';
+  }
+
+  void _upsertToolCall(
+    String messageId,
+    String callId,
+    AiToolCallState Function(AiToolCallState? previous) update,
+  ) {
+    if (callId.isEmpty) return;
+    final list = _liveToolCalls.putIfAbsent(messageId, () => <AiToolCallState>[]);
+    final i = list.indexWhere((c) => c.callId == callId);
+    final next = update(i < 0 ? null : list[i]);
+    if (i < 0) {
+      list.add(next);
+    } else {
+      list[i] = next;
+    }
+  }
+
+  void _patchToolCall(String callId, AiToolCallState Function(AiToolCallState call) update) {
+    for (final list in _liveToolCalls.values) {
+      final i = list.indexWhere((c) => c.callId == callId);
+      if (i >= 0) list[i] = update(list[i]);
+    }
+  }
+
+  /// 流式状态只对"还在列表里的消息"有意义：换会话 / 刷新后清掉孤儿，避免内存只增不减。
+  void _pruneLiveState() {
+    final ids = messages.map((m) => m.id).toSet();
+    _liveReasoning.removeWhere((k, _) => !ids.contains(k));
+    _liveToolCalls.removeWhere((k, _) => !ids.contains(k));
+  }
+
+  /// 就地改一条消息。
+  ///
+  /// **性能**：逐字回包时每次 delta 都会走到这里，所以只复制列表本身
+  /// （O(n) 指针拷贝），**不再重建其它 `AiMessage`**——之前 `map().toList()`
+  /// 会把整段历史的每个气泡都重造一遍，长对话越聊越卡。
   void _replaceMessage(
     String id, {
     String? text,
     String? status,
     AiTokenUsage? usage,
     String? reasoningEffort,
+    List<AiMessagePart>? parts,
   }) {
-    messages = messages
-        .map((m) => m.id == id
-            ? m.copyWith(
-                text: text,
-                status: status,
-                usage: usage,
-                reasoningEffort: reasoningEffort,
-              )
-            : m)
-        .toList();
+    final index = messages.indexWhere((m) => m.id == id);
+    if (index < 0) return;
+    final next = List<AiMessage>.of(messages);
+    next[index] = messages[index].copyWith(
+      text: text,
+      status: status,
+      usage: usage,
+      reasoningEffort: reasoningEffort,
+      parts: parts,
+    );
+    messages = next;
   }
 
   Future<void> _reloadMessages(String conversationId) async {
     try {
-      messages = await _api.listMessages(conversationId);
+      final fresh = await _api.listMessages(conversationId);
+      // 后端可能还没落 parts（消息仍在写库）：保留事件里拿到的那些，别把工具卡擦掉
+      final known = {for (final m in messages) m.id: m.parts};
+      messages = [
+        for (final m in fresh)
+          if (m.parts.isEmpty && (known[m.id]?.isNotEmpty ?? false))
+            m.copyWith(parts: known[m.id])
+          else
+            m,
+      ];
+      _pruneLiveState();
     } catch (_) {
       // 保留本地已有的流式内容，别因为一次刷新失败把回复擦掉
     }

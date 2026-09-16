@@ -145,6 +145,9 @@ class _TagsPageState extends State<TagsPage> {
                           final columns = adaptiveColumnCount(constraints.maxWidth);
                           return GridView.builder(
                             padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
+                            // 卡片外层 RepaintBoundary 由 delegate 自动加；
+                            // keep-alive 对标签卡没用，关掉省一层包装
+                            addAutomaticKeepAlives: false,
                             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                               crossAxisCount: columns,
                               crossAxisSpacing: 8,

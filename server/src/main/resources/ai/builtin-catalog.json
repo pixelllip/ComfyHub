@@ -1,0 +1,1164 @@
+{
+  "version": "2026-09b-dsh",
+  "source": ".dsh/settings.yaml",
+  "note": "由 scripts/gen-builtin-catalog.ps1 从本机 .dsh/settings.yaml 生成；运行时只读这份冻结副本，不读 YAML。",
+  "agentDefaultModel": {
+    "provider": "command-code-goat",
+    "model": "deepseek/deepseek-v4.1-flash"
+  },
+  "providers": [
+    {
+      "id": "command-code-goat",
+      "displayName": "Command Code GOAT",
+      "api": "openai-completions",
+      "baseURL": "https://api.commandcode.ai/provider/v1/",
+      "credentialRef": "COMMAND_CODE_GOAT_API_KEY",
+      "endpointTrust": "public",
+      "models": [
+        {
+          "id": "claude-sonnet-5",
+          "displayName": "Claude Sonnet 5",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "claude-sonnet-4-6",
+          "displayName": "Claude Sonnet 4.6",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "claude-fable-5-1",
+          "displayName": "Claude Fable 5.1",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "claude-fable-5",
+          "displayName": "Claude Fable 5",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "claude-opus-5",
+          "displayName": "Claude Opus 5",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "claude-opus-4-8",
+          "displayName": "Claude Opus 4.8",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "claude-opus-4-7",
+          "displayName": "Claude Opus 4.7",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "claude-haiku-4-5-20251001",
+          "displayName": "Claude Haiku 4.5",
+          "contextWindow": 200000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "displayName": "GPT-5.6 Sol",
+          "contextWindow": 1050000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "gpt-5.6-terra",
+          "displayName": "GPT-5.6 Terra",
+          "contextWindow": 1050000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "displayName": "GPT-5.6 Luna",
+          "contextWindow": 1050000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "gpt-5.5",
+          "displayName": "GPT-5.5",
+          "contextWindow": 400000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "gpt-5.4",
+          "displayName": "GPT-5.4",
+          "contextWindow": 400000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "gpt-5.3-codex",
+          "displayName": "GPT-5.3 Codex",
+          "contextWindow": 400000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "gpt-5.4-mini",
+          "displayName": "GPT-5.4 Mini",
+          "contextWindow": 400000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high"
+          }
+        },
+        {
+          "id": "deepseek/deepseek-v4-pro",
+          "displayName": "DeepSeek V4 Pro (latest)",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "high": "high",
+            "max": "max"
+          }
+        },
+        {
+          "id": "deepseek/deepseek-v4-flash",
+          "displayName": "DeepSeek V4 Flash (latest)",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "high": "high",
+            "max": "max"
+          }
+        },
+        {
+          "id": "deepseek/deepseek-v4-flash-vision-exp",
+          "displayName": "DeepSeek V4 Flash Vision (exp)",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "high": "high",
+            "max": "max"
+          }
+        },
+        {
+          "id": "deepseek/deepseek-v4-flash-fast",
+          "displayName": "DeepSeek V4 Flash Fast",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "high": "high",
+            "max": "max"
+          }
+        },
+        {
+          "id": "deepseek/deepseek-v4.1-flash",
+          "displayName": "DeepSeek V4.1 Flash",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "high": "high",
+            "max": "max"
+          }
+        },
+        {
+          "id": "moonshotai/Kimi-K3",
+          "displayName": "Kimi K3",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "high": "high",
+            "max": "max"
+          }
+        },
+        {
+          "id": "moonshotai/Kimi-K2.7-Code",
+          "displayName": "Kimi K2.7 Code",
+          "contextWindow": 256000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "moonshotai/Kimi-K2.7-Code-Highspeed",
+          "displayName": "Kimi K2.7 Code HighSpeed",
+          "contextWindow": 262000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "moonshotai/Kimi-K2.6",
+          "displayName": "Kimi K2.6",
+          "contextWindow": 256000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "moonshotai/Kimi-K2.5",
+          "displayName": "Kimi K2.5",
+          "contextWindow": 256000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "z-ai/glm-5.3-flash",
+          "displayName": "GLM-5.3 Flash",
+          "contextWindow": 1048576,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "high": "high",
+            "max": "max"
+          }
+        },
+        {
+          "id": "zai-org/GLM-5.3",
+          "displayName": "GLM-5.3",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "high": "high",
+            "max": "max"
+          }
+        },
+        {
+          "id": "zai-org/GLM-5.2",
+          "displayName": "GLM-5.2",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "high": "high",
+            "max": "max"
+          }
+        },
+        {
+          "id": "zai-org/GLM-5.2-Fast",
+          "displayName": "GLM-5.2 Fast",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "zai-org/GLM-5.1",
+          "displayName": "GLM-5.1",
+          "contextWindow": 200000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "zai-org/GLM-5",
+          "displayName": "GLM-5",
+          "contextWindow": 200000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "MiniMaxAI/MiniMax-M3",
+          "displayName": "MiniMax M3",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high"
+          }
+        },
+        {
+          "id": "MiniMaxAI/MiniMax-M2.7",
+          "displayName": "MiniMax M2.7",
+          "contextWindow": 200000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "MiniMaxAI/MiniMax-M2.5",
+          "displayName": "MiniMax M2.5",
+          "contextWindow": 200000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "xiaomi/mimo-v2.5-pro",
+          "displayName": "MiMo V2.5 Pro",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "xiaomi/mimo-v2.5",
+          "displayName": "MiMo V2.5",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "Qwen/Qwen3.8-Max-0902",
+          "displayName": "Qwen 3.8 Max 0902",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "Qwen/Qwen3.8-Max",
+          "displayName": "Qwen 3.8 Max",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "Qwen/Qwen3.8-27B",
+          "displayName": "Qwen 3.8 27B",
+          "contextWindow": 262144,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "Qwen/Qwen3.8-Flash",
+          "displayName": "Qwen 3.8 Flash",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "Qwen/Qwen3.7-Max",
+          "displayName": "Qwen 3.7 Max",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "Qwen/Qwen3.7-Plus",
+          "displayName": "Qwen 3.7 Plus",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "Qwen/Qwen3.7-Flash",
+          "displayName": "Qwen 3.7 Flash",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "Qwen/Qwen3.6-Max-Preview",
+          "displayName": "Qwen 3.6 Max Preview",
+          "contextWindow": 200000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "Qwen/Qwen3.6-Plus",
+          "displayName": "Qwen 3.6 Plus",
+          "contextWindow": 200000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "meituan/LongCat-2.0:free",
+          "displayName": "LongCat 2.0",
+          "contextWindow": 1048576,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "stepfun/Step-3.7-Flash",
+          "displayName": "Step 3.7 Flash",
+          "contextWindow": 256000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "stepfun/Step-3.5-Flash",
+          "displayName": "Step 3.5 Flash",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "tencent/hy3-paid",
+          "displayName": "Tencent Hy3",
+          "contextWindow": 262144,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "tencent/hy4-preview",
+          "displayName": "Tencent Hy4 Preview",
+          "contextWindow": 1048576,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high"
+          }
+        },
+        {
+          "id": "google/gemini-3.8-flash",
+          "displayName": "Gemini 3.8 Flash",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high"
+          }
+        },
+        {
+          "id": "google/gemini-3.7-flash",
+          "displayName": "Gemini 3.7 Flash",
+          "contextWindow": 1048576,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high"
+          }
+        },
+        {
+          "id": "google/gemini-3.6-flash",
+          "displayName": "Gemini 3.6 Flash",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high"
+          }
+        },
+        {
+          "id": "google/gemini-3.5-flash",
+          "displayName": "Gemini 3.5 Flash",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high"
+          }
+        },
+        {
+          "id": "google/gemini-3.5-flash-lite",
+          "displayName": "Gemini 3.5 Flash Lite",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high"
+          }
+        },
+        {
+          "id": "google/gemini-3.1-flash-lite",
+          "displayName": "Gemini 3.1 Flash Lite",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high"
+          }
+        },
+        {
+          "id": "sakana/fugu-ultra",
+          "displayName": "Fugu Ultra",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "high": "high",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "displayName": "Nemotron 3 Ultra",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "thinkingmachines/inkling",
+          "displayName": "Inkling",
+          "contextWindow": 256000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "thinkingmachines/inkling-small",
+          "displayName": "Inkling Small",
+          "contextWindow": 1000000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "poolside/laguna-s-2.1-free",
+          "displayName": "Laguna S 2.1",
+          "contextWindow": 256000,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "inclusionai/ling-3.0-flash-sante:free",
+          "displayName": "Ling 3.0 Flash Sante",
+          "contextWindow": 262144,
+          "inputModalities": [
+            "text"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": false,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {}
+        },
+        {
+          "id": "meta/muse-spark-1.1",
+          "displayName": "Muse Spark 1.1",
+          "contextWindow": 1048576,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "meta/muse-spark-1.2",
+          "displayName": "Muse Spark 1.2",
+          "contextWindow": 1048576,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "meta/muse-spark-1.2-contributor",
+          "displayName": "Muse Spark 1.2 Contributor",
+          "contextWindow": 1048576,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "meta/muse-spark-1.3",
+          "displayName": "Muse Spark 1.3",
+          "contextWindow": 1048576,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        },
+        {
+          "id": "meta/muse-spark-1.3-contributor",
+          "displayName": "Muse Spark 1.3 Contributor",
+          "contextWindow": 1048576,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh"
+          }
+        },
+        {
+          "id": "xai/grok-4.5",
+          "displayName": "Grok 4.5",
+          "contextWindow": 500000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high"
+          }
+        },
+        {
+          "id": "xai/grok-4.6",
+          "displayName": "Grok 4.6",
+          "contextWindow": 500000,
+          "inputModalities": [
+            "text",
+            "image"
+          ],
+          "tools": true,
+          "parallelTools": false,
+          "reasoning": true,
+          "thinkingFormat": "openai",
+          "thinkingEfforts": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh"
+          }
+        }
+      ]
+    }
+  ]
+}

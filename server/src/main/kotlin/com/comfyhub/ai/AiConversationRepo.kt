@@ -235,6 +235,36 @@ object AiConversationRepo {
 
     // -----------------------------------------------------------------------
 
+    /**
+     * 追加一个有序块到已存在的消息上（M4 工具循环用）。
+     *
+     * 工具循环会往同一条助手消息里依次追加 text / tool_call / tool_result，
+     * 所以序号必须由调用方保证单调递增（Harness 用一个 run 内的计数器）。
+     */
+    fun appendPart(messageId: String, ordinal: Int, part: AiMessagePartDto) {
+        Db.withConnection { conn ->
+            conn.execute(
+                """
+                INSERT INTO ai_message_parts
+                  (message_id, ordinal, type, text, attachment_id, tool_call_id, json_payload)
+                VALUES (?,?,?,?,?,?,?)
+                ON DUPLICATE KEY UPDATE text = VALUES(text), json_payload = VALUES(json_payload)
+                """.trimIndent(),
+                messageId, ordinal, part.type, part.text, part.attachmentId, part.toolCallId,
+                part.jsonPayload?.let { AppJson.encodeToString(JsonElement.serializer(), it) },
+            )
+        }
+    }
+
+    /** 取某条消息已有的最大 ordinal（重启后接着追加时用）。 */
+    fun maxOrdinal(messageId: String): Int = Db.withConnection { conn ->
+        conn.queryOne("SELECT COALESCE(MAX(ordinal), -1) FROM ai_message_parts WHERE message_id = ?", messageId) {
+            it.getInt(1)
+        } ?: -1
+    }
+
+    // -----------------------------------------------------------------------
+
     private fun ResultSet.toConversation() = AiConversationDto(
         id = getString("id"),
         title = getString("title") ?: "新对话",

@@ -452,6 +452,30 @@ class AiRunEvent {
   String? get message => data['message']?.toString();
   String? get messageId => data['messageId']?.toString();
 
+  /// 工具调用相关（M4）：`tool.*` 事件共用这几个字段。
+  String? get callId => data['callId']?.toString();
+  String? get toolName => data['name']?.toString();
+  String? get arguments => data['arguments']?.toString();
+  String? get approval => data['approval']?.toString();
+  String? get preview => data['preview']?.toString();
+  int? get elapsedMs => (data['elapsedMs'] as num?)?.toInt();
+
+  /// 工具轮数（`message.completed` 新增）。
+  int? get steps => (data['steps'] as num?)?.toInt();
+
+  /// 这一轮累计的思考正文（`message.completed` 里的 `reasoning`）。
+  String? get reasoning => data['reasoning']?.toString();
+
+  /// `message.completed` 的有序 parts（权威）；不是列表就是 null（老后端没有）。
+  List<AiMessagePart>? get parts {
+    final raw = data['parts'];
+    if (raw is! List) return null;
+    return raw
+        .whereType<Map>()
+        .map((e) => AiMessagePart.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
   bool get isTerminal =>
       type == 'run.completed' || type == 'run.failed' || type == 'run.cancelled';
 }
@@ -652,6 +676,20 @@ class AiMessagePart {
             ? Map<String, dynamic>.from(json['jsonPayload'] as Map)
             : null,
       );
+
+  /// `tool_call` 部分里模型给的工具名（其它类型返回 null）。
+  String? get toolName {
+    if (type != 'tool_call') return null;
+    final map = payload;
+    return map == null ? null : map['name']?.toString();
+  }
+
+  /// `tool_call` 部分里模型给的参数（JSON 文本，原样展示，前端不解析）。
+  String? get toolArguments {
+    if (type != 'tool_call') return null;
+    final map = payload;
+    return map == null ? null : map['arguments']?.toString();
+  }
 }
 
 class AiMessage {
@@ -705,6 +743,7 @@ class AiMessage {
     String? status,
     AiTokenUsage? usage,
     String? reasoningEffort,
+    List<AiMessagePart>? parts,
   }) =>
       AiMessage(
         id: id,
@@ -714,12 +753,87 @@ class AiMessage {
         status: status ?? this.status,
         text: text ?? this.text,
         modelId: modelId,
-        parts: parts,
+        parts: parts ?? this.parts,
         usage: usage ?? this.usage,
         reasoningEffort: reasoningEffort ?? this.reasoningEffort,
       );
 
   bool get isUser => role == 'user';
+}
+
+// ---------------------------------------------------------------------------
+//  内置模型目录（M6：冻结副本 + 对齐）
+// ---------------------------------------------------------------------------
+
+/// 内置模型目录的状态 / 同步结果（`GET /api/ai/builtin/status`、
+/// `POST /api/ai/builtin/sync`）。
+///
+/// 内置目录是 `%USERPROFILE%\.dsh\settings.yaml` 的**冻结副本**
+/// （`resources/ai/builtin-catalog.json`）：运行时绝不读 YAML，
+/// 只按用户点的那一下把差异对齐进库。
+class AiBuiltinCatalogStatus {
+  /// add-missing / refresh-capabilities
+  final String mode;
+  final String version;
+
+  /// 内置目录对应的 Provider id。
+  final String? providerId;
+
+  /// 这次会补 / 已补的模型数。
+  final int added;
+
+  /// 这次对齐 / 已对齐的能力条数。
+  final int updated;
+
+  /// 库里已有、且与内置目录一致（不用动）的条数。
+  final int kept;
+
+  /// 库里已有、但能力声明与内置目录**不一致**的 model_id。
+  final List<String> divergent;
+
+  /// 内置目录里一共有多少个模型。
+  final int modelCount;
+  final bool providerCreated;
+
+  /// 非空就是出错（预览也可能因为目录缺失而报错）。
+  final String? error;
+
+  const AiBuiltinCatalogStatus({
+    this.mode = 'add-missing',
+    this.version = '',
+    this.providerId,
+    this.added = 0,
+    this.updated = 0,
+    this.kept = 0,
+    this.divergent = const [],
+    this.modelCount = 0,
+    this.providerCreated = false,
+    this.error,
+  });
+
+  factory AiBuiltinCatalogStatus.fromJson(Map<String, dynamic> json) => AiBuiltinCatalogStatus(
+        mode: (json['mode'] ?? 'add-missing').toString(),
+        version: (json['version'] ?? '').toString(),
+        providerId: json['providerId']?.toString(),
+        added: (json['added'] as num?)?.toInt() ?? 0,
+        updated: (json['updated'] as num?)?.toInt() ?? 0,
+        kept: (json['kept'] as num?)?.toInt() ?? 0,
+        divergent:
+            (json['divergent'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        modelCount: (json['modelCount'] as num?)?.toInt() ?? 0,
+        providerCreated: json['providerCreated'] == true,
+        error: json['error']?.toString(),
+      );
+
+  bool get ok => (error ?? '').isEmpty;
+
+  /// 分歧条数（也就是"对齐"这次会改多少条）。
+  int get divergentCount => divergent.length;
+
+  bool get hasDivergence => divergent.isNotEmpty;
+
+  /// 醒目提示的原文。
+  String get divergenceLabel => '有 $divergentCount 个模型的能力声明与内置目录不同';
 }
 
 /// 附件（AIH-029）：准入结论由后端 preflight 给出，前端不自行放行。
@@ -763,4 +877,434 @@ class AiPreflightResult {
         allowed: json['allowed'] == true,
         blockers: (json['blockers'] as List?)?.map((e) => e.toString()).toList() ?? const [],
       );
+}
+
+// ---------------------------------------------------------------------------
+//  Skills（M5 / AIH-037 ~ AIH-045）
+// ---------------------------------------------------------------------------
+
+/// 一个 Skill 的元数据。
+///
+/// 正文**不在列表里**（可能几十 KB）：列表只给元数据，要正文得单独
+/// [AiSkillDetail] 请求。`validationError` 非空表示磁盘上这份不合法 ——
+/// 照样列出来（不静默忽略），但不能参与对话。
+class AiSkill {
+  final String name;
+  final String description;
+  final String? whenToUse;
+  final String? version;
+
+  /// builtin（项目自带、只读）/ user（用户或 AI 注册、可删）
+  final String source;
+  final bool enabled;
+  final bool userInvocable;
+  final bool modelInvocable;
+
+  /// 正文 sha256 前 16 位（变更审计用），后端没给就是 null。
+  final String? digest;
+  final int sizeBytes;
+  final int fileCount;
+  final DateTime? updatedAt;
+
+  /// 非空 = 这份 skill 不合法，界面要标红并按 [validationError] 说明原因。
+  final String? validationError;
+
+  /// 非空的"提示"类信息（例如覆盖了同名内置 skill）：不影响可用性。
+  final String? conflict;
+
+  /// 来源说明（例如 `dsh:%USERPROFILE%\.dsh\skills`）。
+  final String? origin;
+
+  const AiSkill({
+    required this.name,
+    this.description = '',
+    this.whenToUse,
+    this.version,
+    this.source = 'user',
+    this.enabled = true,
+    this.userInvocable = true,
+    this.modelInvocable = true,
+    this.digest,
+    this.sizeBytes = 0,
+    this.fileCount = 1,
+    this.updatedAt,
+    this.validationError,
+    this.conflict,
+    this.origin,
+  });
+
+  factory AiSkill.fromJson(Map<String, dynamic> json) => AiSkill(
+        name: (json['name'] ?? '').toString(),
+        description: (json['description'] ?? '').toString(),
+        whenToUse: json['whenToUse']?.toString(),
+        version: json['version']?.toString(),
+        source: (json['source'] ?? 'user').toString(),
+        // 后端缺字段时按"可用"处理，不要凭空把 skill 变成停用
+        enabled: json['enabled'] != false,
+        userInvocable: json['userInvocable'] != false,
+        modelInvocable: json['modelInvocable'] != false,
+        digest: json['digest']?.toString(),
+        sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
+        fileCount: (json['fileCount'] as num?)?.toInt() ?? 1,
+        updatedAt: DateTime.tryParse((json['updatedAt'] ?? '').toString()),
+        validationError: json['validationError']?.toString(),
+        conflict: json['conflict']?.toString(),
+        origin: json['origin']?.toString(),
+      );
+
+  bool get isBuiltin => source == 'builtin';
+
+  /// 列表上的来源徽标：内置 / 用户。
+  String get sourceLabel => isBuiltin ? '内置' : '用户';
+
+  /// 有没有需要提醒用户的问题（不合法或冲突）。
+  bool get hasWarning => (validationError ?? '').isNotEmpty || (conflict ?? '').isNotEmpty;
+
+  /// 悬浮提示上的完整说明：问题优先，其次冲突，最后来源。
+  String get warningText {
+    if ((validationError ?? '').isNotEmpty) return '不合法：$validationError';
+    if ((conflict ?? '').isNotEmpty) return conflict!;
+    return origin == null ? sourceLabel : '$sourceLabel · $origin';
+  }
+
+  String get sizeLabel {
+    if (sizeBytes < 1024) return '$sizeBytes B';
+    if (sizeBytes < 1024 * 1024) return '${(sizeBytes / 1024).toStringAsFixed(1)} KB';
+    return '${(sizeBytes / 1024 / 1024).toStringAsFixed(1)} MB';
+  }
+
+  /// 一行副标题：描述写不下时用 whenToUse 兜底。
+  String get oneLine {
+    final text = description.isNotEmpty ? description : (whenToUse ?? '');
+    return text.replaceAll('\n', ' ');
+  }
+}
+
+/// skill 详情：元数据 + 正文（打开详情时才请求）。
+class AiSkillDetail {
+  final AiSkill skill;
+  final String content;
+
+  const AiSkillDetail({required this.skill, required this.content});
+
+  factory AiSkillDetail.fromJson(Map<String, dynamic> json) => AiSkillDetail(
+        skill: json['skill'] is Map
+            ? AiSkill.fromJson(Map<String, dynamic>.from(json['skill'] as Map))
+            : const AiSkill(name: ''),
+        content: (json['content'] ?? '').toString(),
+      );
+}
+
+/// 从 `%USERPROFILE%\.dsh\skills` 导入的结果。
+class AiSkillImportResult {
+  final int imported;
+  final int skipped;
+  final String source;
+  final List<String> errors;
+  final List<AiSkill> skills;
+
+  const AiSkillImportResult({
+    this.imported = 0,
+    this.skipped = 0,
+    this.source = '',
+    this.errors = const [],
+    this.skills = const [],
+  });
+
+  factory AiSkillImportResult.fromJson(Map<String, dynamic> json) => AiSkillImportResult(
+        imported: (json['imported'] as num?)?.toInt() ?? 0,
+        skipped: (json['skipped'] as num?)?.toInt() ?? 0,
+        source: (json['source'] ?? '').toString(),
+        errors: (json['errors'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        skills: (json['skills'] as List?)
+                ?.whereType<Map>()
+                .map((e) => AiSkill.fromJson(Map<String, dynamic>.from(e)))
+                .toList() ??
+            const [],
+      );
+
+  /// 导入完要弹给用户看的话（**失败条目也要说**，不能只报"成功 N 个"）。
+  String get summary {
+    final parts = <String>['导入 $imported 个'];
+    if (skipped > 0) parts.add('跳过 $skipped 个');
+    if (errors.isNotEmpty) parts.add('${errors.length} 个失败：${errors.take(3).join('；')}');
+    return parts.join(' · ');
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  工具与权限（M4 / AIH-031 ~ AIH-036 / AIH-049）
+// ---------------------------------------------------------------------------
+
+/// 一个工具的生效权限（`GET /api/ai/tools`）。
+class AiToolInfo {
+  final String name;
+  final String description;
+
+  /// skill / files / comfy —— 界面按它选图标。
+  final String category;
+
+  /// 会不会写盘（界面要标出来）。
+  final bool mutating;
+
+  /// allow / ask / deny
+  final String access;
+
+  /// 是否被用户设置覆盖过（没覆盖 = 出厂默认）。
+  final bool overridden;
+
+  const AiToolInfo({
+    required this.name,
+    this.description = '',
+    this.category = 'comfy',
+    this.mutating = false,
+    this.access = 'ask',
+    this.overridden = false,
+  });
+
+  factory AiToolInfo.fromJson(Map<String, dynamic> json) => AiToolInfo(
+        name: (json['name'] ?? '').toString(),
+        description: (json['description'] ?? '').toString(),
+        category: (json['category'] ?? 'comfy').toString(),
+        mutating: json['mutating'] == true,
+        access: (json['access'] ?? 'ask').toString(),
+        overridden: json['overridden'] == true,
+      );
+
+  String get categoryLabel => switch (category) {
+        'skill' => 'Skills',
+        'files' => '文件',
+        'comfy' => 'ComfyUI',
+        _ => category,
+      };
+
+  String get accessLabel => AiToolPolicy.accessLabel(access);
+
+  bool get isDenied => access == 'deny';
+}
+
+/// 工具权限策略（`GET/PUT /api/ai/tools/policy`）。
+///
+/// 界面只需要"写/读白名单 + 逐工具覆盖 + 预算"这几项；字节上限后端自己管，
+/// 只读展示，不在这里改。
+class AiToolPolicy {
+  final List<String> writeRoots;
+  final List<String> readRoots;
+
+  /// toolName → allow / ask / deny
+  final Map<String, String> overrides;
+  final int maxToolSteps;
+  final int maxCallsPerRun;
+  final int maxReadBytes;
+  final int maxWriteBytes;
+
+  /// 出厂默认的写入目录：界面上要大声说明"默认只能写这里"。
+  final String? defaultWriteRoot;
+
+  const AiToolPolicy({
+    this.writeRoots = const [],
+    this.readRoots = const [],
+    this.overrides = const {},
+    this.maxToolSteps = 8,
+    this.maxCallsPerRun = 16,
+    this.maxReadBytes = 0,
+    this.maxWriteBytes = 0,
+    this.defaultWriteRoot,
+  });
+
+  factory AiToolPolicy.fromJson(Map<String, dynamic> json) => AiToolPolicy(
+        writeRoots: (json['writeRoots'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        readRoots: (json['readRoots'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        overrides: (json['overrides'] as Map?)?.map(
+              (k, v) => MapEntry(k.toString(), v.toString()),
+            ) ??
+            const {},
+        maxToolSteps: (json['maxToolSteps'] as num?)?.toInt() ?? 8,
+        maxCallsPerRun: (json['maxCallsPerRun'] as num?)?.toInt() ?? 16,
+        maxReadBytes: (json['maxReadBytes'] as num?)?.toInt() ?? 0,
+        maxWriteBytes: (json['maxWriteBytes'] as num?)?.toInt() ?? 0,
+        defaultWriteRoot: json['defaultWriteRoot']?.toString(),
+      );
+
+  static const accessOptions = <String, String>{
+    'allow': '允许',
+    'ask': '询问',
+    'deny': '拒绝',
+  };
+
+  static String accessLabel(String? access) => accessOptions[access] ?? '询问';
+
+  AiToolPolicy copyWith({
+    List<String>? writeRoots,
+    List<String>? readRoots,
+    Map<String, String>? overrides,
+    int? maxToolSteps,
+    int? maxCallsPerRun,
+  }) =>
+      AiToolPolicy(
+        writeRoots: writeRoots ?? this.writeRoots,
+        readRoots: readRoots ?? this.readRoots,
+        overrides: overrides ?? this.overrides,
+        maxToolSteps: maxToolSteps ?? this.maxToolSteps,
+        maxCallsPerRun: maxCallsPerRun ?? this.maxCallsPerRun,
+        maxReadBytes: maxReadBytes,
+        maxWriteBytes: maxWriteBytes,
+        defaultWriteRoot: defaultWriteRoot,
+      );
+
+  /// 界面上那句"默认只能写哪里"。
+  String get defaultWriteHint => defaultWriteRoot == null || defaultWriteRoot!.isEmpty
+      ? '默认只能写后端预设的产物目录，其它位置一律拒绝。'
+      : '默认只能写 $defaultWriteRoot，其它位置一律拒绝。';
+}
+
+/// 一次工具调用的状态机。
+enum AiToolCallStatus {
+  running('running', '运行中'),
+  pendingApproval('pending_approval', '待批准'),
+  ok('ok', '已完成'),
+  failed('failed', '失败'),
+  denied('denied', '已拒绝');
+
+  const AiToolCallStatus(this.wire, this.label);
+  final String wire;
+  final String label;
+
+  static AiToolCallStatus parse(String? wire) {
+    for (final s in values) {
+      if (s.wire == wire) return s;
+    }
+    return AiToolCallStatus.running;
+  }
+}
+
+/// 一条工具调用（气泡里的工具卡）。
+///
+/// 两种来源共用这一个结构：
+///  - **流式**：`tool.requested / started / completed / failed` 事件逐条更新；
+///  - **历史**：`message.parts` 里的 `tool_call` + `tool_result` 配对还原（见 [listFromParts]）。
+class AiToolCallState {
+  final String callId;
+  final String name;
+
+  /// 模型给的参数原文（JSON 文本）。**原样展示**，前端不解析、不执行。
+  final String arguments;
+  final AiToolCallStatus status;
+
+  /// 结果预览（后端已按 8KB 截断）。
+  final String? preview;
+
+  /// 失败 / 拒绝的原因（稳定错误码或消息）。
+  final String? error;
+  final int elapsedMs;
+
+  /// not_required / pending / approved / denied
+  final String? approval;
+
+  const AiToolCallState({
+    required this.callId,
+    required this.name,
+    this.arguments = '',
+    this.status = AiToolCallStatus.running,
+    this.preview,
+    this.error,
+    this.elapsedMs = 0,
+    this.approval,
+  });
+
+  factory AiToolCallState.fromJson(Map<String, dynamic> json) => AiToolCallState(
+        callId: (json['callId'] ?? '').toString(),
+        name: (json['name'] ?? '').toString(),
+        arguments: (json['arguments'] ?? '').toString(),
+        status: AiToolCallStatus.parse(json['status']?.toString()),
+        preview: json['preview']?.toString(),
+        error: json['error']?.toString(),
+        elapsedMs: (json['elapsedMs'] as num?)?.toInt() ?? 0,
+        approval: json['approval']?.toString(),
+      );
+
+  /// 由 `message.parts` 还原：`tool_call` 给名字与参数，`tool_result` 补结果与结论。
+  ///
+  /// 顺序就是 parts 的顺序（= 模型实际调用的顺序），不能被 map 打乱。
+  static List<AiToolCallState> listFromParts(List<AiMessagePart> parts) {
+    final out = <AiToolCallState>[];
+    final indexOf = <String, int>{};
+    for (final part in parts) {
+      if (part.type == 'tool_call') {
+        final id = part.toolCallId ?? '';
+        final map = part.payload ?? const <String, dynamic>{};
+        indexOf[id] = out.length;
+        out.add(AiToolCallState(
+          callId: id,
+          name: (map['name'] ?? '').toString(),
+          arguments: (map['arguments'] ?? '').toString(),
+        ));
+      } else if (part.type == 'tool_result') {
+        final id = part.toolCallId ?? '';
+        final map = part.payload ?? const <String, dynamic>{};
+        final ok = map['ok'] == true;
+        final approval = (map['approval'] ?? '').toString();
+        final i = indexOf[id];
+        final prev = i == null ? null : out[i];
+        final next = AiToolCallState(
+          callId: id,
+          name: (map['name'] ?? prev?.name ?? '').toString(),
+          arguments: prev?.arguments ?? '',
+          status: ok
+              ? AiToolCallStatus.ok
+              : (approval == 'denied' ? AiToolCallStatus.denied : AiToolCallStatus.failed),
+          // tool_result.text 就是完整输出（后端已截断到 8KB）
+          preview: part.text,
+          error: ok ? null : (map['code']?.toString() ?? map['error']?.toString()),
+          elapsedMs: (map['elapsedMs'] as num?)?.toInt() ?? 0,
+          approval: approval.isEmpty ? null : approval,
+        );
+        if (i == null) {
+          indexOf[id] = out.length;
+          out.add(next);
+        } else {
+          out[i] = next;
+        }
+      }
+    }
+    return out;
+  }
+
+  AiToolCallState copyWith({
+    String? name,
+    String? arguments,
+    AiToolCallStatus? status,
+    String? preview,
+    String? error,
+    int? elapsedMs,
+    String? approval,
+  }) =>
+      AiToolCallState(
+        callId: callId,
+        name: name ?? this.name,
+        arguments: arguments ?? this.arguments,
+        status: status ?? this.status,
+        preview: preview ?? this.preview,
+        error: error ?? this.error,
+        elapsedMs: elapsedMs ?? this.elapsedMs,
+        approval: approval ?? this.approval,
+      );
+
+  /// 待用户批准：气泡上要出「批准 / 拒绝」。
+  bool get needsApproval => status == AiToolCallStatus.pendingApproval;
+
+  bool get isRunning => status == AiToolCallStatus.running;
+
+  /// 展开后能看到的详情（没有就不给展开箭头）。
+  String get detailText {
+    if ((error ?? '').isNotEmpty) return error!;
+    if ((preview ?? '').isNotEmpty) return preview!;
+    return '';
+  }
+
+  bool get hasDetail => detailText.isNotEmpty || arguments.isNotEmpty;
+
+  String get elapsedLabel => elapsedMs <= 0
+      ? ''
+      : (elapsedMs < 1000 ? '$elapsedMs ms' : '${(elapsedMs / 1000).toStringAsFixed(1)} s');
 }

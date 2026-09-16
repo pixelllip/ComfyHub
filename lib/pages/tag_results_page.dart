@@ -99,6 +99,7 @@ class _TagResultsPageState extends State<TagResultsPage>
                           )
                         : ListView.separated(
                             padding: const EdgeInsets.all(16),
+                            addAutomaticKeepAlives: false,
                             itemCount: _prompts.length,
                             separatorBuilder: (_, _) => const SizedBox(height: 10),
                             itemBuilder: (context, i) {
@@ -147,6 +148,9 @@ class _TagResultsPageState extends State<TagResultsPage>
                           )
                         : GridView.builder(
                             padding: const EdgeInsets.all(16),
+                            // 同画廊网格：RepaintBoundary 由 delegate 自动加，
+                            // 这里只关掉用不上的 keep-alive 包装
+                            addAutomaticKeepAlives: false,
                             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                               maxCrossAxisExtent: 240,
                               crossAxisSpacing: 10,

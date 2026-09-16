@@ -36,6 +36,12 @@ int adaptiveColumnCount(
 /// 适合卡片高度接近的列表（提示词 / 标签）。
 ///
 /// 懒加载：只构建可见的那些行，翻页 / 上千条也不会卡。
+///
+/// 性能注意：`IntrinsicHeight` 会让这一行**多走一遍固有尺寸查询**
+/// （卡片里的 `Wrap` 标签、多行正文都要按列宽重新量一次），所以只在
+/// "一行里真的并排了 ≥2 张卡片、需要等高"时才套它；
+/// 单列（窄窗口）和每行的尾巴只有一个条目时，直接 `CrossAxisAlignment.start`
+/// 排下去 —— 一个条目本来就没什么可对齐的，白花的那次查询直接省掉。
 class AdaptiveColumnList extends StatelessWidget {
   final int itemCount;
   final Widget Function(BuildContext context, int index) itemBuilder;
@@ -85,24 +91,30 @@ class AdaptiveColumnList extends StatelessWidget {
           itemBuilder: (context, row) {
             final start = row * columns;
             final end = math.min(start + columns, itemCount);
+            final items = <Widget>[
+              for (var i = start; i < end; i++) ...[
+                if (i > start) SizedBox(width: spacing),
+                Expanded(child: itemBuilder(context, i)),
+              ],
+              // 最后一行不满时补空位，保证每列宽度和其他行一致
+              for (var i = end; i < start + columns; i++) ...[
+                SizedBox(width: spacing),
+                const Expanded(child: SizedBox.shrink()),
+              ],
+            ];
+            // 单条目行（窄窗口的单列，或最后一行的尾巴）不需要等高，也就没必要
+            // 付 IntrinsicHeight 那次固有尺寸查询的钱。
+            final single = end - start <= 1;
             return Padding(
               padding: EdgeInsets.only(bottom: row == rows - 1 ? 0 : runSpacing),
-              child: IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    for (var i = start; i < end; i++) ...[
-                      if (i > start) SizedBox(width: spacing),
-                      Expanded(child: itemBuilder(context, i)),
-                    ],
-                    // 最后一行不满时补空位，保证每列宽度和其他行一致
-                    for (var i = end; i < start + columns; i++) ...[
-                      SizedBox(width: spacing),
-                      const Expanded(child: SizedBox.shrink()),
-                    ],
-                  ],
-                ),
-              ),
+              child: single
+                  ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: items)
+                  : IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: items,
+                      ),
+                    ),
             );
           },
         );

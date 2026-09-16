@@ -276,10 +276,21 @@ class _MessageList extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       itemCount: store.messages.length,
       itemBuilder: (context, i) {
+        final message = store.messages[i];
         // RepaintBoundary：流式生成时每一帧都会重建列表，没有它的话所有
         // Markdown 气泡都要跟着重绘一遍（长对话越聊越卡）。
         return RepaintBoundary(
-          child: _MessageBubble(message: store.messages[i], sending: store.sending, onRetry: store.retry),
+          child: _MessageBubble(
+            message: message,
+            sending: store.sending,
+            onRetry: store.retry,
+            // 工具卡 / 思考都只属于助手消息
+            toolCalls: message.isUser ? const [] : store.toolCallsFor(message),
+            reasoning: message.isUser ? '' : store.reasoningFor(message),
+            toolCategoryOf: store.toolCategoryOf,
+            onApprove: store.approveToolCall,
+            onDeny: store.denyToolCall,
+          ),
         );
       },
     );
@@ -296,7 +307,26 @@ class _MessageBubble extends StatelessWidget {
   final bool sending;
   final Future<void> Function(String assistantMessageId) onRetry;
 
-  const _MessageBubble({required this.message, required this.sending, required this.onRetry});
+  /// 这条消息的有序工具调用（M4）。
+  final List<AiToolCallState> toolCalls;
+
+  /// 这条消息累积的思考正文（`reasoning.delta` / reasoning 块）。
+  final String reasoning;
+
+  final String Function(String toolName) toolCategoryOf;
+  final Future<void> Function(String callId) onApprove;
+  final Future<void> Function(String callId) onDeny;
+
+  const _MessageBubble({
+    required this.message,
+    required this.sending,
+    required this.onRetry,
+    this.toolCalls = const [],
+    this.reasoning = '',
+    required this.toolCategoryOf,
+    required this.onApprove,
+    required this.onDeny,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -308,6 +338,8 @@ class _MessageBubble extends StatelessWidget {
         : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5);
     // 失败/取消的助手消息可以重试：新建一个 Run，用 retryOfRunId 关联回去（AIH-024）
     final canRetry = !m.isUser && (m.status == 'failed' || m.status == 'cancelled') && !sending;
+    // 待批准的工具调用（M4）：气泡里要能点「批准 / 拒绝」
+    final pending = toolCalls.where((c) => c.needsApproval).toList();
 
     return Column(
       crossAxisAlignment: align,
@@ -320,6 +352,8 @@ class _MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 思考过程（M4）：默认折叠，只有真有 reasoning 增量时才出现
+              if (!m.isUser && reasoning.trim().isNotEmpty) _ReasoningPanel(text: reasoning),
               for (final part in m.parts)
                 if (part.type == 'attachment')
                   Padding(
@@ -341,7 +375,7 @@ class _MessageBubble extends StatelessWidget {
                     ? SelectableText(m.text)
                     : MarkdownText(m.text, style: theme.textTheme.bodyMedium),
               // 流式进行中且还没有内容：给一个明确的"在生成"提示，而不是空白气泡
-              if (m.status == 'streaming' && m.text.isEmpty)
+              if (m.status == 'streaming' && m.text.isEmpty && toolCalls.isEmpty)
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -353,6 +387,32 @@ class _MessageBubble extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text('正在生成…', style: theme.textTheme.bodySmall),
                   ],
+                ),
+              // 工具卡（M4）：按调用顺序排在正文下面
+              if (toolCalls.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final call in toolCalls)
+                        _ToolCallCard(
+                          key: ValueKey('${m.id}-${call.callId}'),
+                          call: call,
+                          category: toolCategoryOf(call.name),
+                          onApprove: onApprove,
+                          onDeny: onDeny,
+                        ),
+                    ],
+                  ),
+                ),
+              if (pending.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    '有 ${pending.length} 个工具调用在等你的批准（写盘 / 改动类操作）。',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                  ),
                 ),
               if (m.status == 'cancelled')
                 Text('（已停止）',
@@ -411,6 +471,242 @@ class _MessageBubble extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  工具卡与思考（M4）
+// ---------------------------------------------------------------------------
+
+/// 一张工具卡：图标 + 工具名 + 状态徽标 + 耗时，详情默认折叠。
+///
+/// 只渲染后端给的内容（后端已经把凭据脱敏、结果截断到 8KB），前端不改写、不补全。
+class _ToolCallCard extends StatefulWidget {
+  final AiToolCallState call;
+  final String category;
+  final Future<void> Function(String callId) onApprove;
+  final Future<void> Function(String callId) onDeny;
+
+  const _ToolCallCard({
+    super.key,
+    required this.call,
+    required this.category,
+    required this.onApprove,
+    required this.onDeny,
+  });
+
+  @override
+  State<_ToolCallCard> createState() => _ToolCallCardState();
+}
+
+class _ToolCallCardState extends State<_ToolCallCard> {
+  bool _expanded = false;
+  bool _busy = false;
+
+  IconData get _icon => switch (widget.category) {
+        'skill' => Icons.auto_awesome_outlined,
+        'files' => Icons.folder_outlined,
+        _ => Icons.dns_outlined,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final call = widget.call;
+    final color = switch (call.status) {
+      AiToolCallStatus.ok => theme.colorScheme.primary,
+      AiToolCallStatus.pendingApproval => theme.colorScheme.tertiary,
+      AiToolCallStatus.failed || AiToolCallStatus.denied => theme.colorScheme.error,
+      AiToolCallStatus.running => theme.colorScheme.outline,
+    };
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+        color: theme.colorScheme.surface.withValues(alpha: 0.6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(_icon, size: 14, color: color),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  call.name.isEmpty ? '未知工具' : call.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelMedium,
+                ),
+              ),
+              const SizedBox(width: 6),
+              _StatusChip(label: call.status.label, color: color),
+              if (call.elapsedLabel.isNotEmpty) ...[
+                const SizedBox(width: 6),
+                Text(call.elapsedLabel,
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: theme.colorScheme.outline)),
+              ],
+              const Spacer(),
+              if (call.isRunning)
+                const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              if (call.hasDetail)
+                InkWell(
+                  onTap: () => setState(() => _expanded = !_expanded),
+                  child: Padding(
+                    padding: const EdgeInsets.all(2),
+                    child: Icon(
+                      _expanded ? Icons.expand_less : Icons.expand_more,
+                      size: 16,
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          // 待批准：气泡里直接给按钮（后端 ToolApprovalGate 已经开着，点了才算数）
+          if (call.needsApproval)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  FilledButton(
+                    onPressed: _busy ? null : () => _resolve(approve: true),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      minimumSize: const Size(0, 30),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('批准'),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: _busy ? null : () => _resolve(approve: false),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      minimumSize: const Size(0, 30),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('拒绝'),
+                  ),
+                ],
+              ),
+            ),
+          if (_expanded)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 260),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (call.arguments.isNotEmpty) ...[
+                        Text('参数', style: theme.textTheme.labelSmall),
+                        SelectableText(call.arguments, style: theme.textTheme.bodySmall),
+                        if (call.detailText.isNotEmpty) const SizedBox(height: 6),
+                      ],
+                      if (call.detailText.isNotEmpty) ...[
+                        Text(
+                          call.status == AiToolCallStatus.ok ? '结果' : '说明',
+                          style: theme.textTheme.labelSmall,
+                        ),
+                        SelectableText(call.detailText, style: theme.textTheme.bodySmall),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _resolve({required bool approve}) async {
+    setState(() => _busy = true);
+    try {
+      await (approve ? widget.onApprove(widget.call.callId) : widget.onDeny(widget.call.callId));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _StatusChip({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(label, style: theme.textTheme.labelSmall?.copyWith(color: color)),
+    );
+  }
+}
+
+/// 思考过程：默认折叠，避免把气泡撑成一屏高。
+class _ReasoningPanel extends StatefulWidget {
+  final String text;
+  const _ReasoningPanel({required this.text});
+
+  @override
+  State<_ReasoningPanel> createState() => _ReasoningPanelState();
+}
+
+class _ReasoningPanelState extends State<_ReasoningPanel> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(_expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 16, color: theme.colorScheme.outline),
+                Icon(Icons.psychology_outlined, size: 14, color: theme.colorScheme.outline),
+                const SizedBox(width: 4),
+                Text('思考过程',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+              ],
+            ),
+          ),
+          if (_expanded)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240),
+              child: SingleChildScrollView(
+                child: Text(
+                  widget.text,
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -485,11 +781,61 @@ class _Composer extends StatefulWidget {
 class _ComposerState extends State<_Composer> {
   bool _composing = false;
 
+  /// `/` 后面的查询词；null = 不显示 Skill 菜单。
+  String? _slashQuery;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onControllerChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerChanged);
+    super.dispose();
+  }
+
+  /// `/` 菜单：输入区里最后一段要是 `/xxx`（行首或空格后）才弹出来。
+  void _onControllerChanged() {
+    final text = widget.controller.text;
+    final match = RegExp(r'(?:^|\s)/([^\s/]*)$').firstMatch(text);
+    final next = match?.group(1);
+    if (next != _slashQuery) setState(() => _slashQuery = next);
+  }
+
+  /// 菜单里列出的 skills：只列**用户可调用**且启用的（`/` 就是用户显式调用）。
+  List<AiSkill> get _slashMatches {
+    final query = _slashQuery;
+    if (query == null) return const [];
+    final all = widget.store.skills.where((s) => s.enabled && s.userInvocable).toList();
+    if (query.isEmpty) return all;
+    final q = query.toLowerCase();
+    return all
+        .where((s) =>
+            s.name.toLowerCase().contains(q) || s.description.toLowerCase().contains(q))
+        .toList();
+  }
+
+  /// 把 `/xxx` 换成 `/skill 名 `，模型看到的就是这个 skill 名。
+  void _insertSlash(AiSkill skill) {
+    final text = widget.controller.text;
+    final match = RegExp(r'(?:^|\s)/([^\s/]*)$').firstMatch(text);
+    if (match == null) return;
+    final slash = text.lastIndexOf('/');
+    final next = '${text.substring(0, slash)}/${skill.name} ';
+    widget.controller.value =
+        TextEditingValue(text: next, selection: TextSelection.collapsed(offset: next.length));
+    setState(() => _slashQuery = null);
+    widget.focusNode.requestFocus();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final store = widget.store;
     final blockers = store.preflight?.blockers ?? const <String>[];
+    final slashMatches = _slashMatches;
 
     return Container(
       decoration: BoxDecoration(
@@ -529,6 +875,45 @@ class _ComposerState extends State<_Composer> {
                 ],
               ),
             ),
+          // Skills 的 `/` 菜单（M5）：只列可见的几条，懒构建，点一条就写进输入框
+          if (slashMatches.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 180),
+                // 底色必须由 Material 给：用 Container 的 decoration 会盖掉
+                // ListTile 的水波纹（Flutter 会直接抛断言）
+                child: Material(
+                  color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    side: BorderSide(color: theme.dividerColor),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    itemCount: slashMatches.length,
+                    itemBuilder: (context, i) {
+                      final skill = slashMatches[i];
+                      return ListTile(
+                        dense: true,
+                        visualDensity: VisualDensity.compact,
+                        title: Text('/${skill.name}', style: theme.textTheme.labelMedium),
+                        subtitle: Text(
+                          skill.oneLine.isEmpty ? skill.sourceLabel : skill.oneLine,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.labelSmall,
+                        ),
+                        trailing: _Badge(skill.sourceLabel),
+                        onTap: () => _insertSlash(skill),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
           // 排版：上一行整宽输入框，下一行 [附件] [模型选择] …… [发送]
           Shortcuts(
             shortcuts: const {
@@ -540,6 +925,8 @@ class _ComposerState extends State<_Composer> {
                   onInvoke: (_) {
                     // 中文输入法 composing 期间的回车是"选词"，不能当发送（AIH-053）
                     if (_composing) return null;
+                    // `/` 菜单开着时回车不发送（否则会把半截 skill 名发出去）
+                    if (_slashMatches.isNotEmpty) return null;
                     _submit();
                     return null;
                   },
@@ -721,6 +1108,11 @@ class _Banner extends StatelessWidget {
 //  模型选择（聊天框内直接切换，AIK-002）
 // ---------------------------------------------------------------------------
 
+/// 模型选择（聊天框内直接切换，AIK-002）。
+///
+/// 内置目录有 **69 个模型**，所以这里是"搜索框 + 懒构建列表"的对话框，
+/// 不是把每个模型都塞进 PopupMenu 的 `for (...)` —— 那样每次打开都要
+/// 一次性建 69 行（每行还带徽标），弹出明显卡顿。
 class _ModelPicker extends StatelessWidget {
   final AiWorkspaceStore store;
   const _ModelPicker({required this.store});
@@ -729,31 +1121,12 @@ class _ModelPicker extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final model = store.selectedModel;
-    return PopupMenuButton<String>(
-      tooltip: '选择模型',
-      onSelected: (id) {
-        final m = store.models.where((x) => x.id == id).firstOrNull;
-        store.selectModel(m);
-      },
-      itemBuilder: (_) => [
-        for (final m in store.models)
-          PopupMenuItem(
-            value: m.id,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(m.displayName),
-                Text(
-                  '${m.modalities.map((e) => e.label).join(' / ')}'
-                  '${m.tools ? ' · 工具' : ''} · ${m.capabilitySourceLabel}',
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-                ),
-              ],
-            ),
-          ),
-        if (store.models.isEmpty)
-          const PopupMenuItem(enabled: false, value: '', child: Text('还没有模型，请到设置里添加')),
-      ],
+    return InkWell(
+      onTap: () => showDialog<void>(
+        context: context,
+        builder: (_) => _ModelPickerDialog(store: store),
+      ),
+      borderRadius: BorderRadius.circular(8),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
@@ -776,6 +1149,133 @@ class _ModelPicker extends StatelessWidget {
                 padding: const EdgeInsets.only(right: 4),
                 child: _Badge(m.label),
               ),
+            const SizedBox(width: 2),
+            Icon(Icons.arrow_drop_down, size: 18, color: theme.colorScheme.outline),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 可搜索的模型选择对话框（懒构建：只建屏幕上看得见的那几行）。
+class _ModelPickerDialog extends StatefulWidget {
+  final AiWorkspaceStore store;
+  const _ModelPickerDialog({required this.store});
+
+  @override
+  State<_ModelPickerDialog> createState() => _ModelPickerDialogState();
+}
+
+class _ModelPickerDialogState extends State<_ModelPickerDialog> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// 按 id / 显示名过滤（大小写不敏感）。
+  List<AiModel> get _filtered {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return widget.store.models;
+    return widget.store.models
+        .where((m) => m.id.toLowerCase().contains(q) || m.displayName.toLowerCase().contains(q))
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final models = _filtered;
+    final selectedId = widget.store.selectedModel?.id;
+
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560, maxHeight: 520),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+              child: TextField(
+                controller: _search,
+                autofocus: true,
+                onChanged: (v) => setState(() => _query = v),
+                decoration: const InputDecoration(
+                  hintText: '搜索模型 id 或名称',
+                  prefixIcon: Icon(Icons.search, size: 18),
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Text('共 ${widget.store.models.length} 个模型',
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: theme.colorScheme.outline)),
+                  const Spacer(),
+                  Text('显示 ${models.length} 个',
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: theme.colorScheme.outline)),
+                ],
+              ),
+            ),
+            const Divider(height: 12),
+            // 懒构建：69 个模型也只建可见的那几行
+            Expanded(
+              child: models.isEmpty
+                  ? Center(
+                      child: Text('没有匹配的模型',
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: theme.colorScheme.outline)),
+                    )
+                  : ListView.builder(
+                      itemCount: models.length,
+                      itemBuilder: (context, i) {
+                        final m = models[i];
+                        return ListTile(
+                          dense: true,
+                          selected: m.id == selectedId,
+                          title: Text(m.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${m.modalities.map((e) => e.label).join(' / ')}'
+                                '${m.tools ? ' · 工具' : ''} · ${m.capabilitySourceLabel}'
+                                ' · ${m.id}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.labelSmall
+                                    ?.copyWith(color: theme.colorScheme.outline),
+                              ),
+                              const SizedBox(height: 2),
+                              Wrap(
+                                spacing: 4,
+                                runSpacing: 2,
+                                children: [
+                                  for (final modality in m.modalities) _Badge(modality.label),
+                                  if (m.tools) const _Badge('工具'),
+                                  if (m.reasoning) const _Badge('思考'),
+                                ],
+                              ),
+                            ],
+                          ),
+                          // 唯一的选择入口：store.selectModel
+                          onTap: () {
+                            widget.store.selectModel(m);
+                            Navigator.of(context).pop();
+                          },
+                        );
+                      },
+                    ),
+            ),
           ],
         ),
       ),
@@ -919,82 +1419,257 @@ class _ContextPanelState extends State<_ContextPanel> {
     final store = widget.store;
     final model = store.selectedModel;
 
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
-        Text('模型能力', style: theme.textTheme.labelLarge),
-        const SizedBox(height: 6),
-        if (model == null)
-          Text('未选择模型', style: theme.textTheme.bodySmall)
-        else ...[
-          Text(model.displayName, style: theme.textTheme.bodyMedium),
-          const SizedBox(height: 4),
-          Wrap(
-            spacing: 4,
-            runSpacing: 4,
-            children: [
-              for (final m in AiModality.values)
-                _CapabilityChip(
-                  label: m.label,
-                  // 未声明的能力一律显示为不支持（AIH-011：不猜）
-                  supported: model.supports(m),
-                ),
-              _CapabilityChip(label: '工具', supported: model.tools),
+    // CustomScrollView + SliverList：固定几段用 SliverToBoxAdapter，
+    // skills 可能有几十个，必须懒构建（`ListView(children: [...])` 会一次全建）。
+    return CustomScrollView(
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+          sliver: SliverList.list(children: [
+            Text('模型能力', style: theme.textTheme.labelLarge),
+            const SizedBox(height: 6),
+            if (model == null)
+              Text('未选择模型', style: theme.textTheme.bodySmall)
+            else ...[
+              Text(model.displayName, style: theme.textTheme.bodyMedium),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: [
+                  for (final m in AiModality.values)
+                    _CapabilityChip(
+                      label: m.label,
+                      // 未声明的能力一律显示为不支持（AIH-011：不猜）
+                      supported: model.supports(m),
+                    ),
+                  _CapabilityChip(label: '工具', supported: model.tools),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '来源：${model.capabilitySourceLabel}'
+                '${model.contextWindow != null ? ' · 上下文 ${model.contextWindow}' : ''}',
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              ),
             ],
+            const SizedBox(height: 16),
+            // 「ComfyUI」右边就是刷新按钮：它刷新的是 ComfyUI 状态，
+            // 以前挂在"上下文"标题右边，看着像是刷新整个面板（用户建议第 5 条）。
+            Row(
+              children: [
+                Text('ComfyUI', style: theme.textTheme.labelLarge),
+                IconButton(
+                  tooltip: '刷新 ComfyUI 状态',
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  padding: EdgeInsets.zero,
+                  onPressed: _loading ? null : _refresh,
+                  icon: const Icon(Icons.refresh, size: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            if (_loading)
+              const LinearProgressIndicator(minHeight: 2)
+            else if (_error != null)
+              Text('查询失败：$_error', style: theme.textTheme.bodySmall)
+            else if (_status == null)
+              Text('暂无数据', style: theme.textTheme.bodySmall)
+            else ...[
+              _KV('连通性', _status!.comfyReachable ? '可达' : '不可达'),
+              _KV('运行中', '${_status!.queueRunning}'),
+              _KV('等待中', '${_status!.queuePending}'),
+              _KV('已捕获', '${_status!.capturedRuns} 次 / ${_status!.capturedMedia} 个产物'),
+              if (_status!.lastError != null)
+                Text(_status!.lastError!, style: theme.textTheme.labelSmall),
+            ],
+            const SizedBox(height: 16),
+            // Skills：名字就是真源，这里只是后端的只读视图（M5）。
+            // 这栏只有 260px 宽，标题行放不下两个按钮：刷新在标题行，导入单独一行。
+            Row(
+              children: [
+                Text('Skills', style: theme.textTheme.labelLarge),
+                const SizedBox(width: 4),
+                Text('${store.skills.length}',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+                const Spacer(),
+                IconButton(
+                  tooltip: '刷新 Skills',
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  padding: EdgeInsets.zero,
+                  onPressed: store.skillsBusy ? null : () => _refreshSkills(),
+                  icon: const Icon(Icons.refresh, size: 16),
+                ),
+              ],
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: store.skillsBusy ? null : () => _importDsh(),
+                icon: const Icon(Icons.download_outlined, size: 16),
+                label: const Text('从 DSH 导入'),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  minimumSize: const Size(0, 30),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
+            if (store.skillsBusy) const LinearProgressIndicator(minHeight: 2),
+            if (store.skillsError != null)
+              Text('Skills 加载失败：${store.skillsError}', style: theme.textTheme.bodySmall),
+          ]),
+        ),
+        if (!store.skillsBusy && store.skills.isEmpty && store.skillsError == null)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+            sliver: SliverToBoxAdapter(
+              child: Text(
+                '还没有 Skill。可以点「从 DSH 导入」，或让 AI 用 register_skill 注册。',
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            sliver: SliverList.builder(
+              itemCount: store.skills.length,
+              itemBuilder: (context, i) => _SkillRow(
+                skill: store.skills[i],
+                onDelete: () => _deleteSkill(store.skills[i]),
+              ),
+            ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            '来源：${model.capabilitySourceLabel}'
-            '${model.contextWindow != null ? ' · 上下文 ${model.contextWindow}' : ''}',
-            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-          ),
+      ],
+    );
+  }
+
+  Future<void> _refreshSkills() async {
+    await widget.store.reloadSkills();
+    if (!mounted) return;
+    final count = widget.store.skills.length;
+    _snack(widget.store.skillsError == null ? 'Skills 已刷新：$count 个' : 'Skills 加载失败：${widget.store.skillsError}');
+  }
+
+  Future<void> _importDsh() async {
+    final result = await widget.store.importDshSkills();
+    if (!mounted) return;
+    _snack(result.message, error: !result.ok);
+  }
+
+  Future<void> _deleteSkill(AiSkill skill) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('删除 Skill「${skill.name}」？'),
+        content: const Text('会从磁盘上删掉它的正文文件，模型之后不能再加载。内置 Skill 不能删除。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除')),
         ],
-        const SizedBox(height: 16),
-        // 「ComfyUI」右边就是刷新按钮：它刷新的是 ComfyUI 状态，
-        // 以前挂在"上下文"标题右边，看着像是刷新整个面板（用户建议第 5 条）。
-        Row(
-          children: [
-            Text('ComfyUI', style: theme.textTheme.labelLarge),
-            IconButton(
-              tooltip: '刷新 ComfyUI 状态',
+      ),
+    );
+    if (ok != true) return;
+    final result = await widget.store.deleteSkill(skill.name);
+    if (!mounted) return;
+    _snack(result.message, error: !result.ok);
+  }
+
+  void _snack(String message, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: error ? 8 : 3),
+          backgroundColor: error ? Theme.of(context).colorScheme.errorContainer : null,
+        ),
+      );
+  }
+}
+
+/// 右侧栏里的一行 Skill：名字 + 一行描述 + 来源徽标 + 警告 + 删除（仅用户来源）。
+class _SkillRow extends StatelessWidget {
+  final AiSkill skill;
+  final VoidCallback onDelete;
+
+  const _SkillRow({required this.skill, required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              skill.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelMedium?.copyWith(
+                // 不合法的 skill 不进系统提示，界面上标红（不静默忽略）
+                color: skill.validationError != null ? theme.colorScheme.error : null,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          _Badge(skill.sourceLabel),
+          if (!skill.enabled) ...[
+            const SizedBox(width: 4),
+            _Badge('停用'),
+          ],
+        ],
+      ),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            skill.oneLine.isEmpty ? '（没有描述）' : skill.oneLine,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelSmall,
+          ),
+          if (skill.hasWarning)
+            Tooltip(
+              message: skill.warningText,
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, size: 13, color: theme.colorScheme.error),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      '有问题：${skill.validationError != null ? '格式不合法' : '有冲突'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: theme.colorScheme.error),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+      trailing: skill.isBuiltin
+          ? Tooltip(
+              message: '内置 Skill 只读（可在磁盘上改）',
+              child: Icon(Icons.lock_outline, size: 14, color: theme.colorScheme.outline),
+            )
+          : IconButton(
+              tooltip: '删除 Skill',
+              icon: const Icon(Icons.delete_outline, size: 16),
               visualDensity: VisualDensity.compact,
               constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
               padding: EdgeInsets.zero,
-              onPressed: _loading ? null : _refresh,
-              icon: const Icon(Icons.refresh, size: 16),
+              onPressed: onDelete,
             ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        if (_loading)
-          const LinearProgressIndicator(minHeight: 2)
-        else if (_error != null)
-          Text('查询失败：$_error', style: theme.textTheme.bodySmall)
-        else if (_status == null)
-          Text('暂无数据', style: theme.textTheme.bodySmall)
-        else ...[
-          _KV('连通性', _status!.comfyReachable ? '可达' : '不可达'),
-          _KV('运行中', '${_status!.queueRunning}'),
-          _KV('等待中', '${_status!.queuePending}'),
-          _KV('已捕获', '${_status!.capturedRuns} 次 / ${_status!.capturedMedia} 个产物'),
-          if (_status!.lastError != null) Text(_status!.lastError!, style: theme.textTheme.labelSmall),
-        ],
-        const SizedBox(height: 16),
-        Text('Skills 目录', style: theme.textTheme.labelLarge),
-        const SizedBox(height: 4),
-        Text(
-          '当前只登记目录；按需加载（load_skill）尚未接通，模型还不能读取正文。',
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-        ),
-        const SizedBox(height: 6),
-        for (final entry in AiWorkspaceStore.skillCatalog.entries)
-          ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: Text(entry.key, style: theme.textTheme.labelMedium),
-            subtitle: Text(entry.value, style: theme.textTheme.labelSmall),
-          ),
-      ],
     );
   }
 }
@@ -1045,8 +1720,4 @@ class _CapabilityChip extends StatelessWidget {
       ),
     );
   }
-}
-
-extension _FirstOrNullExt<T> on Iterable<T> {
-  T? get firstOrNull => isEmpty ? null : first;
 }

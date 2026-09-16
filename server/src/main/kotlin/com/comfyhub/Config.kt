@@ -29,6 +29,13 @@ data class AppConfig(
     val allowRemote: Boolean = false,
     /** CORS 允许的 Origin 白名单（AIH-016）；空表示只允许本机来源 */
     val corsOrigins: List<String> = emptyList(),
+    /**
+     * 项目根目录（M4 工具权限的基准）。
+     *
+     * AI 的文件工具默认只能写 `<根>\comfyui`、只能读 `<根>\comfyui` 与 `<根>\storage`，
+     * 所以"根"必须是**算出来的、可验证的**，不能靠当前工作目录碰运气。
+     */
+    val projectRoot: Path = storageDir.parent ?: storageDir,
 ) {
     /** 是否只监听回环地址 */
     val loopbackOnly: Boolean get() = host == "127.0.0.1" || host == "::1" || host == "localhost"
@@ -71,7 +78,30 @@ data class AppConfig(
                 comfyOutputDir = get("COMFYHUB_COMFY_OUTPUT", "").takeIf { it.isNotBlank() },
                 allowRemote = allowRemote,
                 corsOrigins = corsOrigins,
+                projectRoot = resolveProjectRoot(storage),
             )
+        }
+
+        /**
+         * 项目根解析（`scripts\server.ps1` 会显式给 COMFYHUB_PROJECT_ROOT）。
+         *
+         * 顺序：环境变量 → `<storage 的父目录>`（源码树 / 发布包都是这个形状）→ 当前工作目录
+         * （cwd 是 `<根>\server` 时再往上一层）。**永远返回绝对路径**。
+         */
+        private fun resolveProjectRoot(storage: Path): Path {
+            System.getenv("COMFYHUB_PROJECT_ROOT")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return Paths.get(it).toAbsolutePath().normalize() }
+
+            if (storage.fileName?.toString().equals("storage", ignoreCase = true)) {
+                storage.parent?.let { return it.toAbsolutePath().normalize() }
+            }
+            val cwd = Paths.get("").toAbsolutePath().normalize()
+            return if (cwd.fileName?.toString().equals("server", ignoreCase = true) && cwd.parent != null) {
+                cwd.parent
+            } else {
+                cwd
+            }
         }
 
         private fun defaultStorageDir(): String {
@@ -109,6 +139,7 @@ data class AppConfig(
         append("dbUser=$dbUser\n")
         append("storage=$storageDir\n")
         append("maxUploadMB=${maxUploadBytes / 1024 / 1024}\n")
+        append("projectRoot=$projectRoot\n")
         append("comfyUrl=$comfyUrl\n")
         append("comfyOutput=${comfyOutputDir ?: "(未设置，走 HTTP 下载)"}\n")
     }

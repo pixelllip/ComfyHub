@@ -1,16 +1,19 @@
 # AI 工作台实施进度（v0.1 实施记录）
 
-> 日期：2026-09-15 起，2026-09-16 追加（思考强度 + token 统计 / 用户清单收尾）
+> 日期：2026-09-15 起，2026-09-16 追加（思考强度 + token 统计 / 用户清单收尾），
+> **2026-09-16 第二轮追加（工具循环 M4 + Skills M5 + 退出收尾 + 内置模型目录 + 长列表卡顿）**
 > 依据：`docs/ai-home-requirements-v0.1.xlsx`（需求清单 / 待确认决策 / 风险清单 / 里程碑）
 > 与 `docs/ai-home-implementation-plan-v0.1.md`（实施方案）
 > 已覆盖范围：**M0 安全前置 + M1（Provider / 模型 / 凭据）+ M2（Run / 统一 SSE / 三协议）
-> + 思考强度与 token 统计（AIH-056 / AIH-057）+ 用户清单 `docs/bug-and-suggestion-9.16.md` 全部条目**
+> + 思考强度与 token 统计（AIH-056 / AIH-057）+ **M4 工具循环（AIH-033~036 / 046 / 049）
+> + M5 Skills（AIH-037~045）** + 用户清单 `docs/bug-and-suggestion-9.16.md` 全部条目**
 
 ## 0. 一句话现状
 
 **已经能用真实 Base URL + API Key 配对并流式对话**（OpenAI 兼容 / Anthropic / OpenAI Responses），
 可以在聊天框里直接切模型**和思考强度**、看到每轮消耗的 token；
-附件（图片等）目前是"正确阻断"而不是能发；ComfyUI 工具与 Skills 还没接。
+**助手现在会真的调工具**（查 ComfyUI / 在 ComfyUI 目录内读写文件 / 注册与加载 Skills，需要批准的工具会弹批准卡），
+**Skills 落盘、即时生效、右侧栏可删**；附件（图片等）仍然是"正确阻断"而不是能发（M3 未做）。
 
 ## 1. 本轮完成的提交
 
@@ -66,6 +69,22 @@
 | AIH-055 文档同步 | ✅ | AGENTS 第 3 节 + README 功能表/目录树/API 表/协议现状表/测试表 |
 | AIH-056 思考强度 | ✅ | 模型目录声明可选档位（`thinkingEfforts`）+ 网关方言（`thinkingFormat`）；聊天框选择器只列声明过的档位；Run 记录**生效值**；三协议方言分别适配（见第 6 节） |
 | AIH-057 token 统计 | ✅ | 后端把各家 `usage` 归一化成 input/output/cached/reasoning；助手消息显示单轮用量，输入区显示本对话汇总；历史老数据（供应商原始 usage）也能回算 |
+| AIH-033 `comfy_get_status` | ✅ | 复用 `ComfyCapture.status()`（连通性 / 队列 / 最近捕获）；**不接受任意 URL**；只读、免审批 |
+| AIH-034 `comfy_get_run` | ✅ | 按 `runKey` 查捕获记录（给 `CaptureRepo` 加了 `findRun`）；查不到如实报 `NOT_FOUND` |
+| AIH-035 `comfy_sync_history` + 审批 | ✅ | 默认 `ask`：工具卡上点「批准 / 拒绝」才执行（`POST /api/ai/tool-calls/{callId}/approve|deny`）；超时 5 分钟或 Run 取消 = 拒绝；复用 `pollOnce` 的并发锁 |
+| AIH-036 限制主动轮询 | ◐ | 轮数上限 8 / 单 Run 调用上限 16 / 取消即停都做了；"一次回复最多主动查询 3 次"这个**按工具类别**的细分没做（现在是统一预算 + 提示词纪律） |
+| AIH-037 扫描 Skills 根目录 | ✅ | `<项目根>\skills\builtin` + `<storage>\ai\skills`，只扫根下一层（bundle/SKILL.md 或平铺 .md）；同名用户版胜出并标冲突 |
+| AIH-038 frontmatter 严格校验 | ✅ | name kebab-case 且与目录名一致、description 必填、正文上限；非法项**列出来带诊断**但不进提示、不能加载 |
+| AIH-039 只注入目录摘要 | ✅ | 系统提示只给名称 + 描述（截断 240 字）+ whenToUse |
+| AIH-040 `load_skill` 按需加载 | ✅ | 返回 `<skill_content>` 块；同一 Run 内重复调用直接报"已加载过" |
+| AIH-041/042 内置 Anima / H3 Skills | ⬜ | 内置根是空的；用户可一键从 `%USERPROFILE%\.dsh\skills` 导入（本机 16 个） |
+| AIH-043 第三方 Skill 导入 | ◐ | 目录导入（从 DSH）已做；**ZIP 导入 + 预览确认**未做 |
+| AIH-044 阻断路径穿越 / ZIP bomb | ◐ | 目录导入已挡符号链接、`..`、文件数与总体积上限；ZIP 相关规则要等 ZIP 导入 |
+| AIH-045 禁止执行第三方脚本 | ✅ | 工具集里**根本没有** shell / 进程工具；`scripts/` 只是不可执行资源 |
+| AIH-046 版本化系统提示 | ✅ | `SystemPrompt.VERSION = v2`：工具清单 + 权限边界 + Skill 纪律 + 防提示注入 + 附件诚实 |
+| AIH-047 用户指令不覆盖安全段 | ◐ | 系统提示里把安全规则写成"必须遵守"，Run 记 `skill_snapshot`（名称 + digest）可追溯；**用户自定义追加段的界面**还没做 |
+| AIH-049 工具调用状态卡 | ✅ | 工具卡显示名字 / 参数摘要 / 审批按钮 / 耗时 / 结果预览 / 错误码，服务端已截断脱敏 |
+| AIH-052 三协议 Fake Provider | ◐ | 三家协议的**工具**线格式都有单测（`ToolProtocolTest` 20 例）+ 本地假网关端到端；401/429/500 / 断流 / 畸形 SSE 属于既有覆盖 |
 
 图例：✅ 完成　◐ 部分完成　⬜ 未开始
 
@@ -94,14 +113,14 @@
 2. **`openai-responses` 真实 API 实测**（AIH-004）：协议已按官方结构实现、契约单测 + 本地假网关端到端
    都过了，但**还没拿真实 API Key 跑通过一条完整流**（用户暂时没有可用 Key）。
    要确认的点与已修的"填 Key 报错"见第 4.3 节。
-3. **工具循环与 Comfy 查询（M4）**：`ai_tool_calls` 表、`comfy_get_status` / `comfy_get_run` / `comfy_sync_history`（含审批）、
-   单次回复最多 3 次主动查询；系统提示词里现在**明确写了"尚未注册任何工具"**，加了工具要同步改提示词版本。
-4. **Skills（M5）**：目录扫描、`load_skill`、第三方安全导入；界面上的 `/` 菜单目前只是目录展示。
-5. 事件表保留策略：`AiRunRepo.pruneEvents()` 已写好但还没接到定时任务。
-6. **ComfyUI 查询工具（M4）尚未注册给 AI**：AI 工作台右侧已经能看到 ComfyUI 状态，
-   但工具循环（`ai_tool_calls` 表、`comfy_get_status` / `comfy_get_run` /
-   `comfy_sync_history` + 审批 + 单次回复最多 3 次主动查询）还没做，
-   系统提示词里也仍写着"尚未注册任何工具"。
+3. **工具循环的"真实网关实测"**（M4 已完成，缺真实环境验证）：三家协议的**假网关**端到端
+   （`scripts\e2e-ai-tools-test.ps1`）已覆盖工具调用、审批、越界拒绝、注册/加载 Skill；
+   但仍没用真实网关跑过一轮工具调用（不同网关对 `tools` / `tool_calls` 的方言差异最大）。
+4. **Skills 的第三方 ZIP 导入 + 预览确认**（AIH-043/044）：现在只有"从 DSH 目录导入"这一条路。
+5. **内置 Anima / H3 Skills 正文**（AIH-041/042）：内置根 `<项目根>\skills\builtin` 目前是空的，
+   用户可以从 DSH 一键导入自带的 16 个；要把正文随项目分发需要单独确认许可。
+6. **工具审批的"本次会话都允许"**：现在每次 `ask` 都要点一次批准。
+7. 事件表保留策略：`AiRunRepo.pruneEvents()` 已写好但还没接到定时任务。
 
 ## 4.1 用户提的 bug / 建议清单（`docs/bug-and-suggestion-9.16.md`）对照
 
@@ -186,7 +205,67 @@ Inkling、LongCat、Nemotron、Ling、Laguna、gpt-oss 等（`VERSION = 2026-09b
   `ModelCapabilityTest`（接口说"没有"时优先于内置目录）。
 > 表命中的模型如果档位不对，用户在模型卡片上改一下即可（改完来源会变成"手工声明"）。
 
-### 4.3 用户报的「OpenAI Responses 填 API Key 报错」
+### 4.6 第二轮：工具循环 + Skills + 退出收尾 + 内置模型目录 + 卡顿（2026-09-16）
+
+这一轮对应 `docs/bug-and-suggestion-9.16.md` 的新内容（用户当天更新的那份）：
+三条 bug + 两条建议。设计说明单独成文：[`docs/ai-tools-and-skills.md`](ai-tools-and-skills.md)，
+DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool-layer-report.md)。
+
+| 用户报的 | 做法 | 证据 |
+| --- | --- | --- |
+| **① 关掉前端时没杀掉冷启动同步启动的后端与 MySQL** | 根因：`ensureRunning()` 探到 `/api/health` 健康就早返回，**根本没跑 `up`**，于是没有任何守护进程被挂上；而服务是用 WMI 脱离进程树起的（父进程是 `WmiPrvSE.exe`），App 退出后天然存活；Dart 侧也**没有任何退出钩子**。三处修：`comfyhub.ps1` 新增 `release`（只停服务、不杀 App）与 `watch`（给"已经在用本地服务"的 App 补挂守护）+ `unwatch`（撤销守护）；`backend_launcher` 加 `releaseOnExit()` / `armOwnerWatch()` / `disarmOwnerWatch()` 与"认领"门；`app.dart` 注册 `AppLifecycleListener(onExitRequested:)` | 单测 11 例；scratch 应用实测 `onExitRequested` 在 WM_CLOSE 时确实送达且会等异步收尾；真机脚本演示：`release` 后 java=0 / mysqld=0 / 端口全关而 viewer 仍在；`watch` 后杀掉 owner，11 秒内服务全停（`.run\watch-owner.log` 可查） |
+| **② settings.yaml 的模型信息还是没登记进项目** | 三段式：`scripts\gen-builtin-catalog.ps1`（开发期）把 YAML 抄成 `server/src/main/resources/ai/builtin-catalog.json`（1 provider + **69 模型**，生成结果与手抄版 **逐字节一致**，sha256 相同）；`AiSeedCatalog` 只读 classpath 副本（**运行时不读 YAML**）；`AiSeeder` 幂等落库（启动只"补缺失"，`REFRESH_CAPABILITIES` 是显式动作，不覆盖用户改过的行） | `AiSeedCatalogTest` 11 例 + `AiSeederPlanTest` 13 例；真库探针验证"只补不覆盖 / 对齐只改能力 8 列"；本机旧导入的 69 个模型能力字段全是错的 → 已用 `REFRESH_CAPABILITIES` 对齐（见 4.7） |
+| **③ 大量列表快速滑动仍然卡顿** | 缩略图 `Image.network` 没有 `cacheWidth`：`/thumb` 是 512px，但**生成失败时会回退原图**，于是每格可能解码 4096²；且 `filterQuality.medium` 每张纹理都要 mipmap。改成按格子尺寸 × DPR 反推解码宽度（上限 512）、`low`、静态骨架（原来每格一个无限 ticker）、图片单独 `RepaintBoundary`；`AdaptiveColumnList` 只对**多列行**保留 `IntrinsicHeight`（单条目的行不再白跑一次固有尺寸查询）；网格关掉 `addAutomaticKeepAlives` | 新增 `test/scroll_perf_test.dart` 8 例（解码宽度随格子/DPR 变化且 ≤512、500 条只建 <60 项、单列 0 次固有高度查询、多列仍等高…）。典型 230px 格子解码从 1MB 降到 211KB，120 格不再触发 ImageCache 淘汰 |
+| **建议：DSH 的工具哪些能复用 + 权限设计** | 见 `docs/ai-tools-and-skills.md` 第 1 节的对照表：采纳文件类（收敛成 4 个）与 `skill` 加载，**明确不采纳** shell / subagent / workflow / web / present；权限不照搬 DSH 的 preset，改成"写白名单（默认只有 `comfyui`）+ 逐工具 allow/ask/deny + 真实路径判定 + 四个永久禁写段" | `ToolPolicyTest` 9 例（含符号链接逃逸、白名单放宽到项目根仍拒 `.git`/`.mysql`）、`ToolRegistryTest` 16 例 |
+| **其他建议：让 AI 直接注册 skill，右侧栏能删，即时生效** | `register_skill` / `load_skill` / `list_skills` / `delete_skill` 四个工具 + `GET/POST/DELETE /api/ai/skills` + `import-dsh`；正文真源在磁盘、**无缓存**（下一次回复即生效）；系统提示每次 Run 现渲染，所以"新对话生效"是自然结果 | 单测覆盖"注册后立刻可见"；端到端见 4.7 |
+
+顺带修的：
+- AI 领域异常以前会落到 `StatusPages` 的兜底分支变成 **500 + "AiException"**，现在统一成
+  400 + 稳定 `code`（AIH-024 才有意义）；工具层的拒绝理由（`PATH_DENIED` 等）也照样透出。
+- 网关不认 `tools` 直接 400 时，本次 Run 会自动**退回纯文本重试一次**并如实说明，
+  而不是让用户以为模型坏了。
+- 多轮工具循环的 token 改成**累加**（只算最后一轮会严重少报）。
+
+#### 4.6.1 验证证据（实测）
+
+- 后端：`pwsh -File scripts\server.ps1 test` → **216 tests / 18 classes，0 failures / 0 errors**。
+  本轮新增的 90 例分布在 `ToolProtocolTest`(20) / `ToolPolicyTest`(9) / `SkillStoreTest`(18) /
+  `ToolRegistryTest`(16) / `AiSeedCatalogTest`(11) / `AiSeederPlanTest`(16)。
+- 前端：`flutter analyze` → **No issues found**；`flutter test` → **126 个用例全通过**
+  （本轮新增 `scroll_perf_test.dart` 8 例、`backend_launcher_test.dart` 11 例、`ai_tools_ui_test.dart` 13 例）。
+- 工具循环的**端到端**：`scripts\e2e-ai-tools-test.ps1` + `scripts\e2e\fake_openai.py`
+  （假 OpenAI 网关，离线、不花钱）→ **49 项检查全过、exit 0**，覆盖注册 Skill / 按需加载 /
+  越界写被拒 / 目录内写成功 / 审批闸门（批准前不发 `tool.started`）/ 只读工具 / 落库 parts 有序。
+- 退出收尾：`release` / `watch` 真机演示 + scratch 应用验证 `onExitRequested`（见上表 ①）。
+- 顺带被端到端测试抓出来的三个真 bug（都已修，见 4.6.2）。
+
+#### 4.6.2 端到端测试抓出来的三个真 bug（都已修）
+
+这三个都是"单测测不到、只有真跑一遍才暴露"的类型，值得记下来：
+
+| # | 症状 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| ① | **任何"不支持推理"的模型都发不出消息**：`POST /runs` 不带 `reasoningEffort` → `400 未知的思考强度：null` | `AiRoutes` 里 `ReasoningEffort.parse(null) ?: throw`，而 DTO 与 `AiRunRepo` 都写着"缺省按 off"；前端在模型不支持推理时**本来就不传这个字段**（本机 69 个模型里有 26 个属于这类） | 缺省/空串 → 直接落 `OFF`；非法值仍然报错（不静默降级）。E2E 脚本改成**故意不带**这个字段，当回归防线 |
+| ② | 审批类的工具：用户手快在工具卡出现的一瞬间点批准 → `accepted=false`，然后一直等到 5 分钟超时被当拒绝 | `HarnessRunner` 先发 `tool.requested` 事件、**后**才 `ToolApprovalGate.open()`，中间那几毫秒里的点击打空 | 先 `open` 再 `emit`；AGENTS §10 早就写了这条规矩，代码没照做 —— 现在照做了 |
+| ③ | 审批通过后，工具卡一直显示"待批准"，直到工具跑完才跳成"已完成" | `tool.started` 是在 `invoke` **返回之后**补发的 | `invoke` 加 `onApproved` 回调，批准的那一刻就发 `tool.started`（同步工具可能跑好几秒，界面要有"运行中"） |
+
+顺带修的还有一个**真实数据**问题：从 DSH 导入的 `anima-nsfw-prompt` 描述有 762 字，
+而扫描时按"超过 600 字算非法"处理 → 这个 skill 直接被禁用、进不了系统提示。
+现在**只有 `save()`（AI/界面写入）才管长度上限**，扫描已有 skill 不因为描述长就判非法
+（注入目录时本来就截断到 240 字）—— 见 `SkillStoreTest` 的"描述很长仍然可用"用例。
+
+#### 4.7 本机数据的处理（重要）
+本机数据库里那份 `command-code-goat` 是**前一天手工导入的旧数据**：69 个模型的能力字段
+（模态全开、`reasoning=false`、`thinkingFormat=null`、`capabilitySource=manual`）与内置目录**全部不一致**，
+所以"启动时只补缺失模型"在本机上不会带来任何变化 —— 必须显式跑一次
+`REFRESH_CAPABILITIES`（界面上是「用内置目录对齐模型能力」按钮，先预览再确认）。
+**本轮已经在这台机器上跑过一次对齐**，所以现在库里的模型声明与 `settings.yaml` 的冻结副本一致。
+
+> 这是刻意的取舍：**启动时绝不覆盖用户改过的行**（只补缺失），对齐必须由用户点一下。
+> 判断依据是 `AiSeederPlanTest` 里的 `planSeed`/`capabilityDiffers`：只有"目录里有、库里也有、
+> 但能力字段不同"才算分歧，展示名、启用状态、附件上限这些属于用户地盘，永远不碰。
+
+### 4.3 用户报的「OpenAI Responses 填 API Key 报错」（2026-09-16 第一轮）
 
 **无法实测**（用户暂时没有可用 Key），做了两件能确定的事：
 
@@ -288,3 +367,12 @@ Inkling、LongCat、Nemotron、Ling、Laguna、gpt-oss 等（`VERSION = 2026-09b
   新增列表/筛选逻辑时要沿用，否则会出现"删了几个却显示整个库空了"。
 - **长列表一律懒构建**：模型卡片、聊天气泡这类"一屏装不下"的列表用 `ListView.builder`，
   别用 `children: [for (...) ...]`（首帧会建出全部条目）；流式刷新时给每项加 `RepaintBoundary`。
+- **缩略图必须给 `cacheWidth`**：`Image.network` 不带解码上限时会按原图尺寸解码，
+  而 `/thumb` 在"生成失败"时会**回退原图**（4096² 就是 64MB）——画廊快速滑动卡顿的主因。
+  规则与回归用例见 `lib/widgets/media_thumb.dart` 与 `test/scroll_perf_test.dart`。
+  ⚠️ 顺带纠正一个常见误判：`SliverChildBuilderDelegate` 默认 `addRepaintBoundaries: true`，
+  **网格里的每格本来就有 RepaintBoundary**，不用手加（真正该关的是 `addAutomaticKeepAlives`）。
+- **AI 工具 / Skills 的改动规矩见 `AGENTS.md` 第 10 节**（工具清单唯一真源、写入路径必须过
+  `ToolPolicy`、审批必须先 open 再 emit、Skills 不做缓存、改提示词必须 bump `SystemPrompt.VERSION`）。
+- **改 AI 相关接口后跑一次 `scripts\e2e-ai-tools-test.ps1`**：它是唯一能覆盖"工具循环 + 审批 +
+  权限拒绝 + 落库 parts"的端到端用例（假网关，离线、不花钱，49 项检查）。本轮三个真 bug 就是它抓出来的。

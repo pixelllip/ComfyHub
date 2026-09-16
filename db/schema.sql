@@ -346,3 +346,30 @@ CREATE TABLE IF NOT EXISTS ai_run_events (
   CONSTRAINT fk_ai_events_run FOREIGN KEY (run_id)
     REFERENCES ai_runs (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- AI 工具调用（M4 / AIH-033 ~ AIH-036 / AIH-049）
+-- 审批状态与执行状态分开记：被用户拒绝的调用也必须留痕
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_tool_calls (
+  id               CHAR(36)      NOT NULL,
+  run_id           CHAR(36)      NOT NULL,
+  provider_call_id VARCHAR(191)  NOT NULL COMMENT '上游的 tool_call_id / tool_use_id / call_id',
+  name             VARCHAR(96)   NOT NULL,
+  arguments_json   MEDIUMTEXT    NULL COMMENT '模型给的参数（已截断），可能含用户内容',
+  approval         VARCHAR(16)   NOT NULL DEFAULT 'not_required'
+                                 COMMENT 'not_required / pending / approved / denied',
+  status           VARCHAR(16)   NOT NULL COMMENT 'ok / failed / denied',
+  result_json      JSON          NULL COMMENT '结构化结果（不含密钥）',
+  content          MEDIUMTEXT    NULL COMMENT '回灌给模型的文本（已截断）',
+  error            VARCHAR(2000) NULL,
+  elapsed_ms       BIGINT        NOT NULL DEFAULT 0,
+  started_at       DATETIME(3)   NULL,
+  completed_at     DATETIME(3)   NULL,
+  created_at       DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_ai_tool_run (run_id, started_at),
+  KEY idx_ai_tool_name (name),
+  CONSTRAINT fk_ai_tool_run FOREIGN KEY (run_id)
+    REFERENCES ai_runs (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -280,6 +280,12 @@ class _GalleryPageState extends State<GalleryPage> {
         Expanded(
           child: GridView.builder(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+            // 每个格子**已经**带了自己的 RepaintBoundary（SliverChildBuilderDelegate
+            // 的 addRepaintBoundaries 默认就是 true），所以这里不用再手包一层；
+            // 但 keep-alive 媒体格子用不上（没有输入框 / 可保留的选择），关掉就少两个
+            // 包装 Element + State 要建。cacheExtent 也用默认的 250 逻辑像素：
+            // 只多预建一行的量，正是它挡住了"滑动时把几百张离屏图都解出来"。
+            addAutomaticKeepAlives: false,
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 230,
               crossAxisSpacing: 10,

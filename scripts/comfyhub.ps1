@@ -18,6 +18,8 @@
     pwsh -File scripts\comfyhub.ps1 up -WithApp   # 再顺带把桌面 App 拉起来
     pwsh -File scripts\comfyhub.ps1 status        # 三者状态一览
     pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQL）
+    pwsh -File scripts\comfyhub.ps1 release       # 只停后端 + MySQL，不动 App（App 退出时调它）
+    pwsh -File scripts\comfyhub.ps1 watch -OwnerPid <pid>   # 给"已经在跑服务"的 App 补挂退出守护
     pwsh -File scripts\comfyhub.ps1 restart
     pwsh -File scripts\comfyhub.ps1 logs
     pwsh -File scripts\comfyhub.ps1 up -DataDir 'D:\mysql\comfyhub'   # 指定 MySQL 存储位置
@@ -25,7 +27,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('up', 'down', 'status', 'restart', 'logs', 'doctor')]
+    [ValidateSet('up', 'down', 'status', 'restart', 'logs', 'doctor', 'release', 'watch', 'unwatch')]
     [string]$Action = 'status',
 
     [switch]$WithApp,
@@ -37,6 +39,7 @@ param(
     # 调用方（桌面 App）的 PID。传了它 = “这些服务是 App 拉起来的”：
     # 服务起来后会挂一个守护进程盯着这个 PID，App 一退出就把**这次启动过的**服务停掉。
     # 手工敲 `up` 不带它时，服务照旧常驻（以前的行为）。见 scripts\watch-owner.ps1
+    # `watch` 动作也用它：服务本来就跑着（App 探到健康就直接返回、没跑 up）时补挂守护进程。
     [int]$OwnerPid = 0
 )
 
@@ -398,14 +401,27 @@ function Clear-OwnerWatchdog {
     if (Test-Path $WatchState) { Remove-Item $WatchState -Force -ErrorAction SilentlyContinue }
 }
 
-function Start-OwnerWatchdog([int]$Owner) {
+function Start-OwnerWatchdog {
     <#
       挂一个「脱离进程树 + 隐藏窗口」的 watchdog 盯着 App 的 PID（见 scripts\watch-owner.ps1）。
       只是锦上添花：拉不起来也不影响启动，只是关 App 时服务继续留着。
+
+      -StopApi / -StopMysql 显式指定要停哪几个服务；不传就沿用 up 的判定
+      （这次真正启动过的那几个，即 $Script:StartedApi / $Script:StartedMysql），
+      所以 up 的行为和以前完全一样。`watch` 动作会用显式参数覆盖它。
     #>
+    param(
+        [int]$Owner = 0,
+        [bool]$StopApi = $Script:StartedApi,
+        [bool]$StopMysql = $Script:StartedMysql
+    )
     $watcher = Join-Path $Scripts 'watch-owner.ps1'
     if (-not (Test-Path $watcher)) {
         Say '  提示: 找不到 scripts\watch-owner.ps1，关闭 App 时不会自动停服务。' 'Yellow'
+        return $false
+    }
+    if (-not $StopApi -and -not $StopMysql) {
+        Say '  没有需要跟着 App 一起停的服务，跳过守护进程。' 'DarkGray'
         return $false
     }
 
@@ -422,8 +438,8 @@ function Start-OwnerWatchdog([int]$Owner) {
         '-OwnerStartTicks', $ownerStart,
         '-Token', $token
     )
-    if ($Script:StartedApi) { $parts += '-StopApi' }
-    if ($Script:StartedMysql) { $parts += '-StopMysql' }
+    if ($StopApi) { $parts += '-StopApi' }
+    if ($StopMysql) { $parts += '-StopMysql' }
     if ($DataDir) { $parts += @('-DataDir', "`"$DataDir`"") }
     $cmdline = $parts -join ' '
 
@@ -454,8 +470,8 @@ function Start-OwnerWatchdog([int]$Owner) {
     }
 
     $what = @()
-    if ($Script:StartedMysql) { $what += 'MySQL' }
-    if ($Script:StartedApi) { $what += '后端' }
+    if ($StopMysql) { $what += 'MySQL' }
+    if ($StopApi) { $what += '后端' }
     Say "  已挂守护进程（$how）：App(PID $Owner) 退出后自动停 $($what -join ' + ')" 'DarkGray'
     Trace "watchdog 已挂（owner=$Owner, $how）"
     return $true
@@ -545,6 +561,88 @@ function Do-Down {
     Show-Status | Out-Null
 }
 
+function Do-Release {
+    <#
+      App 退出时**自己**调用的：只停后端 + MySQL，绝不碰 App 进程。
+      和 Do-Down 的区别只有一条，但很关键 —— Do-Down 会按进程名 `viewer` 杀 App，
+      在"App 自己还活着、正等我们停完服务"的时候调用它等于自杀。
+
+      顺序和 down 一致：后端 → 等 java 真的退出 → MySQL（反过来的话后端会一直对着死库重连报错）。
+    #>
+    Say ''
+    Say '  ComfyHub 停止中（后端 → MySQL，App 不动）' 'White'
+
+    # 手工/App 主动停了就别让 watchdog 再补一刀（它可能和我们同时动手）
+    Clear-OwnerWatchdog
+
+    Say '  [1/2] 停止后端…' 'Cyan'
+    & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop @DataDirArgs
+
+    # 必须等后端真的退出再停库，否则它会一边报错一边重连
+    $deadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $deadline -and @(Get-ApiProcess).Count -gt 0) { Start-Sleep -Milliseconds 400 }
+
+    Say '  [2/2] 停止 MySQL…' 'Cyan'
+    & pwsh -NoProfile -File (Join-Path $Scripts 'mysql.ps1') stop @DataDirArgs
+
+    Say ''
+    Show-Status | Out-Null
+}
+
+function Do-Watch {
+    <#
+      「补挂守护进程」：App 启动时探到后端已经健康（比如你刚在终端里 up 过，
+      或者上一次 App 的 watchdog 已经不在了）就直接返回，根本没跑 up ——
+      于是 watchdog 没挂上，之后关 App / 硬杀 App 就会把 MySQL + 后端留在后台。
+
+      App 在这种情况下会调一次 `watch -OwnerPid <自己的 PID>`，我们按**当前实际活着**的
+      服务来挂守护：谁在跑就准备停谁。已经在跑的库可能是用户手工起的，但既然 App 正在
+      用它、而用户又开着"关闭 App 时一并停止本地服务"，就一起带走（和 up -OwnerPid 的语义一致）。
+    #>
+    if ($OwnerPid -le 0) {
+        Say '  watch 需要 -OwnerPid <pid>：它是给"已经在用本地服务的 App"补挂守护进程用的。' 'Yellow'
+        Say '  例如: pwsh -File scripts\comfyhub.ps1 watch -OwnerPid 1234' 'DarkGray'
+        exit 2
+    }
+
+    $stopApi = (@(Get-ApiProcess).Count -gt 0) -or ($null -ne (Get-ApiHealth))
+    $stopMysql = Test-MySqlAlive
+
+    if (-not $stopApi -and -not $stopMysql) {
+        Say '  后端和 MySQL 都没在跑，不需要挂守护进程。' 'DarkGray'
+        Clear-OwnerWatchdog
+        return
+    }
+
+    $what = @()
+    if ($stopMysql) { $what += 'MySQL' }
+    if ($stopApi) { $what += '后端' }
+    Say ''
+    Say "  ComfyHub 补挂退出守护（App PID $OwnerPid 退出后停 $($what -join ' + ')）" 'White'
+    Start-OwnerWatchdog -Owner $OwnerPid -StopApi $stopApi -StopMysql $stopMysql | Out-Null
+    Say ''
+}
+
+function Do-Unwatch {
+    <#
+      「撤销守护」：用户在设置里把「关闭 App 时一并停止本地服务」**关掉**时调用。
+
+      为什么需要它：守护进程是 App 启动时挂上的，挂上之后就只认状态文件里的令牌。
+      用户中途改主意（不想让 App 退出时停服务）而 App 又已经挂了守护的话，
+      光靠 release 跳过是不够的 —— 那个守护还活着，App 一死它照样把服务停掉。
+      这里删掉令牌文件，守护下一轮（≤3 秒）就会发现自己"已被顶替"并静默退出。
+    #>
+    Say ''
+    $had = Test-Path $WatchState
+    Clear-OwnerWatchdog
+    if ($had) {
+        Say '  已撤销「关 App 自动停服务」的守护进程：本地服务会继续运行。' 'DarkGray'
+    } else {
+        Say '  当前没有挂守护进程，无需撤销。' 'DarkGray'
+    }
+    Say ''
+}
+
 # ---------------------------------------------------------------------------
 
 function Do-Logs {
@@ -618,6 +716,9 @@ function Do-Doctor {
 switch ($Action) {
     'up'      { Do-Up }
     'down'    { Do-Down }
+    'release' { Do-Release }
+    'watch'   { Do-Watch }
+    'unwatch' { Do-Unwatch }
     'status'  { Show-Status | Out-Null }
     'restart' { Do-Down; Do-Up }
     'logs'    { Do-Logs }

@@ -207,6 +207,27 @@ object CaptureRepo {
         }
     }
 
+    /** 按 runKey 查一条记录（AIH-034：`comfy_get_run` 工具用）。 */
+    fun findRun(runKey: String): CaptureRunInfo? = Db.withConnection { conn ->
+        conn.queryOne(
+            """
+            SELECT run_key, prompt_id, status, media_count, title, error, created_at
+              FROM capture_runs WHERE run_key = ?
+            """.trimIndent(),
+            runKey,
+        ) { rs ->
+            CaptureRunInfo(
+                runKey = rs.strOr("run_key"),
+                promptId = rs.longOrNull("prompt_id"),
+                status = rs.strOr("status", "success"),
+                mediaCount = rs.intOrNull("media_count") ?: 0,
+                title = rs.str("title"),
+                error = rs.str("error"),
+                capturedAt = rs.isoTime("created_at"),
+            )
+        }
+    }
+
     /** 返回 (运行数, 产物数) */
     fun stats(): Pair<Long, Long> = Db.withConnection { conn ->
         val runs = conn.queryOne("SELECT COUNT(*) FROM capture_runs") { it.getLong(1) } ?: 0L

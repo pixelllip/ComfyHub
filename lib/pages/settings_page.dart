@@ -623,10 +623,14 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             _SwitchRow(
               value: settings.stopServicesOnExit,
-              onChanged: settings.setStopServicesOnExit,
+              onChanged: (value) async {
+                await settings.setStopServicesOnExit(value);
+                // 关掉时要**真的撤销**已挂的守护进程，否则它在 App 死后照样停服务
+                if (!value) await launcher.disarmOwnerWatch();
+              },
               title: '关闭 App 时一并停止本地服务',
-              subtitle: '谁起的谁关：只停这次由 App 启动的 MySQL / 后端；'
-                  '平时在终端里自己起的服务不受影响。关掉则服务常驻，下次开 App 就是热启动',
+              subtitle: '开着时：关掉 App 就停掉本机的 MySQL / 后端（包括启动 App 之前就已经在跑的），'
+                  '下次开 App 是冷启动。关掉时：服务常驻，下次开 App 是热启动。',
             ),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,

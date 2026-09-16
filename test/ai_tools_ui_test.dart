@@ -1,0 +1,789 @@
+// AI 工具 / Skills 接线回归（M4 / M5）：
+//
+//   (a) 右侧栏渲染后端返回的 skills，删除走 DELETE /api/ai/skills/{name}；
+//   (b) tool.requested / tool.completed 事件在助手气泡里生成工具卡（含结果预览）；
+//   (c) approval=pending 时出「批准 / 拒绝」，点批准 POST 到
+//       /api/ai/tool-calls/{callId}/approve；
+//   (d) 模型选择器是"搜索框 + 懒构建列表"，不是把 69 个模型一次全建出来；
+//   (e) 工具权限页显示生效的白名单与逐工具权限，改动走 PUT /api/ai/tools/policy。
+//
+// 假后端沿用 test/ai_home_test.dart 的写法（MockClient + 手拼 SSE），不另造一套。
+
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:viewer/core/ai_api_client.dart';
+import 'package:viewer/core/settings_store.dart';
+import 'package:viewer/models/ai_models.dart';
+import 'package:viewer/pages/ai_home_page.dart';
+import 'package:viewer/pages/ai_provider_settings_page.dart';
+import 'package:viewer/pages/ai_tools_settings_page.dart';
+import 'package:viewer/state/ai_workspace_store.dart';
+
+/// 记录这次用例里后端收到的请求，用来断言"界面上的动作真的打到了对的接口"。
+class _Recorder {
+  final List<String> calls = [];
+  final List<Map<String, dynamic>> policyPuts = [];
+
+  /// 内置目录 sync 的请求体（用来断言"确认之前没有偷偷改库"）。
+  final List<Map<String, dynamic>> syncBodies = [];
+
+  /// 可变的 skills 列表：删除之后 fake 要真的少一个（否则刷新又回来了）
+  List<Map<String, dynamic>> skills = [];
+
+  String? get lastPolicyPut => policyPuts.isEmpty ? null : jsonEncode(policyPuts.last);
+}
+
+/// 按真实 SSE 格式拼事件（冒号后必须有空格）。
+String _sse(int seq, String type, String dataJson) =>
+    'id: $seq\nevent: $type\ndata: $dataJson\n\n';
+
+http.Response _sseResponse(String body) => http.Response.bytes(
+      utf8.encode(body),
+      200,
+      headers: {'content-type': 'text/event-stream; charset=utf-8'},
+    );
+
+Map<String, dynamic> _skill(
+  String name, {
+  String description = '',
+  String source = 'user',
+  String? validationError,
+  String? conflict,
+}) =>
+    {
+      'name': name,
+      'description': description,
+      'source': source,
+      'enabled': true,
+      'userInvocable': true,
+      'modelInvocable': true,
+      'sizeBytes': 1024,
+      'fileCount': 1,
+      'validationError': ?validationError,
+      'conflict': ?conflict,
+    };
+
+Map<String, dynamic> _tool(String name, {String category = 'files', String access = 'ask'}) => {
+      'name': name,
+      'description': '$name 的说明',
+      'category': category,
+      'mutating': category == 'files',
+      'access': access,
+      'overridden': false,
+    };
+
+MockClient _backend(
+  _Recorder rec, {
+  int modelCount = 1,
+  String sse = '',
+  List<Map<String, dynamic>> assistantParts = const [],
+  String assistantText = '好的，我看一下文件。',
+  bool approvalAccepted = true,
+  List<Map<String, dynamic>>? tools,
+  Map<String, dynamic>? policy,
+}) {
+  return MockClient((request) async {
+    final path = request.url.path;
+    rec.calls.add('${request.method} $path');
+    Object body;
+
+    if (path == '/api/ai/providers') {
+      body = [
+        {
+          'id': 'local-gw',
+          'displayName': '本机网关',
+          'api': 'openai-completions',
+          'baseURL': 'http://127.0.0.1:11434/v1',
+          'credentialRef': 'LOCAL_KEY',
+          'endpointTrust': 'loopback',
+          'enabled': true,
+          'revision': 1,
+          'credential': {'configured': true, 'source': 'managed', 'writable': true},
+        }
+      ];
+    } else if (path == '/api/ai/providers/local-gw/models') {
+      body = [
+        for (var i = 0; i < modelCount; i++)
+          {
+            'providerId': 'local-gw',
+            'id': 'model-${i.toString().padLeft(2, '0')}',
+            'displayName': '模型 ${i.toString().padLeft(2, '0')}',
+            'inputModalities': ['text', if (i.isEven) 'image'],
+            'tools': true,
+            'reasoning': i.isEven,
+            'capabilitySource': 'manual',
+            'enabled': true,
+          }
+      ];
+    } else if (path == '/api/ai/conversations' && request.method == 'POST') {
+      body = {
+        'id': 'c1',
+        'title': '新对话',
+        'providerId': 'local-gw',
+        'modelId': 'model-00',
+        'messageCount': 0,
+      };
+    } else if (path == '/api/ai/conversations') {
+      body = <Object>[];
+    } else if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) &&
+        request.method == 'DELETE') {
+      body = {'deleted': true, 'id': path.split('/').last};
+    } else if (path == '/api/ai/conversations/c1/runs') {
+      body = {'runId': 'r1', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
+    } else if (path.startsWith('/api/ai/runs/') && path.endsWith('/events')) {
+      return _sseResponse(sse);
+    } else if (path == '/api/ai/conversations/c1/messages') {
+      body = [
+        {
+          'id': 'u1',
+          'conversationId': 'c1',
+          'seq': 1,
+          'role': 'user',
+          'status': 'complete',
+          'text': '你好',
+          'parts': <Object>[],
+        },
+        {
+          'id': 'a1',
+          'conversationId': 'c1',
+          'seq': 2,
+          'role': 'assistant',
+          // 工具还在等批准时，后端这条消息还是 streaming
+          'status': assistantParts.isEmpty ? 'streaming' : 'complete',
+          'text': assistantText,
+          'parts': assistantParts,
+        },
+      ];
+    } else if (path == '/api/ai/skills' && request.method == 'GET') {
+      body = rec.skills;
+    } else if (path.startsWith('/api/ai/skills/') && request.method == 'DELETE') {
+      final name = Uri.decodeComponent(path.split('/').last);
+      rec.skills = rec.skills.where((s) => s['name'] != name).toList();
+      body = {'deleted': true, 'id': name};
+    } else if (path == '/api/ai/skills/import-dsh') {
+      body = {
+        'imported': 2,
+        'skipped': 1,
+        'source': r'C:\Users\u\.dsh\skills',
+        'errors': <String>[],
+        'skills': <Object>[],
+      };
+    } else if (path == '/api/ai/tools') {
+      body = tools ??
+          [
+            _tool('read_file', category: 'files', access: 'ask'),
+            _tool('load_skill', category: 'skill', access: 'allow'),
+          ];
+    } else if (path == '/api/ai/tools/policy' && request.method == 'PUT') {
+      final sent = jsonDecode(request.body) as Map<String, dynamic>;
+      rec.policyPuts.add(sent);
+      body = {...(policy ?? _defaultPolicy()), ...sent};
+    } else if (path == '/api/ai/tools/policy') {
+      body = policy ?? _defaultPolicy();
+    } else if (path.startsWith('/api/ai/tool-calls/')) {
+      final segments = path.split('/');
+      body = {
+        'callId': segments[4],
+        'approved': segments.last == 'approve',
+        'accepted': approvalAccepted,
+      };
+    } else if (path == '/api/ai/preflight') {
+      body = {'allowed': true, 'blockers': <String>[]};
+    } else if (path.startsWith('/api/capture')) {
+      body = {
+        'enabled': true,
+        'comfyUrl': 'http://127.0.0.1:8188',
+        'comfyReachable': true,
+        'queueRunning': 0,
+        'queuePending': 0,
+        'capturedRuns': 0,
+        'capturedMedia': 0,
+        'recent': <Object>[],
+      };
+    } else {
+      body = <Object>[];
+    }
+
+    return http.Response(
+      jsonEncode(body),
+      200,
+      headers: {'content-type': 'application/json; charset=utf-8'},
+    );
+  });
+}
+
+/// AI 设置页的假后端（只覆盖「内置模型目录」卡片要用的那几个接口）。
+MockClient _providerBackend(
+  _Recorder rec, {
+  List<String> divergent = const ['claude-sonnet-5', 'gpt-5'],
+  int missing = 3,
+  String? statusError,
+}) {
+  var synced = false;
+  Map<String, dynamic> status({
+    List<String>? divergent,
+    int added = 0,
+    int updated = 0,
+    int kept = 67,
+  }) =>
+      {
+        'mode': 'add-missing',
+        'version': '2026-09b-dsh',
+        'providerId': 'command-code-goat',
+        'added': added,
+        'updated': updated,
+        'kept': kept,
+        'divergent': divergent ?? const <String>[],
+        'modelCount': 69,
+        'providerCreated': false,
+        'error': statusError,
+      };
+
+  return MockClient((request) async {
+    final path = request.url.path;
+    Object body;
+    if (path == '/api/ai/builtin/status') {
+      body = status(divergent: synced ? const [] : divergent, kept: synced ? 69 : 67);
+    } else if (path == '/api/ai/builtin/sync') {
+      final sent = jsonDecode(request.body) as Map<String, dynamic>;
+      rec.syncBodies.add(sent);
+      synced = true;
+      body = sent['mode'] == 'add-missing'
+          ? status(divergent: divergent, added: missing, kept: 66)
+          : status(updated: divergent.length);
+    } else if (path == '/api/ai/providers') {
+      body = [
+        {
+          'id': 'command-code-goat',
+          'displayName': '内置网关',
+          'api': 'openai-completions',
+          'baseURL': 'http://127.0.0.1:11434/v1',
+          'credentialRef': 'GOAT_KEY',
+          'endpointTrust': 'loopback',
+          'enabled': true,
+          'revision': 1,
+          'credential': {'configured': false, 'source': 'none', 'writable': true},
+        }
+      ];
+    } else {
+      body = <Object>[];
+    }
+    return http.Response(
+      jsonEncode(body),
+      200,
+      headers: {'content-type': 'application/json; charset=utf-8'},
+    );
+  });
+}
+
+Map<String, dynamic> _defaultPolicy() => {      'writeRoots': [r'D:\myProject\FlutterProject\viewer\comfyui'],
+      'readRoots': [r'D:\myProject\FlutterProject\viewer'],
+      'overrides': <String, String>{},
+      'maxToolSteps': 8,
+      'maxCallsPerRun': 16,
+      'maxReadBytes': 262144,
+      'maxWriteBytes': 262144,
+      'defaultWriteRoot': r'D:\myProject\FlutterProject\viewer\comfyui',
+    };
+
+Future<AiWorkspaceStore> _store(
+  _Recorder rec, {
+  int modelCount = 1,
+  String sse = '',
+  String assistantText = '好的，我看一下文件。',
+}) async {
+  SharedPreferences.setMockInitialValues({});
+  final store = AiWorkspaceStore(
+    api: AiApiClient('http://127.0.0.1:8080',
+        client: _backend(rec, modelCount: modelCount, sse: sse, assistantText: assistantText)),
+  );
+  return store;
+}
+
+Future<Widget> _homePage(
+  _Recorder rec, {
+  int modelCount = 1,
+  String sse = '',
+  List<Map<String, dynamic>> assistantParts = const [],
+}) async {
+  SharedPreferences.setMockInitialValues({});
+  final settings = SettingsStore();
+  await settings.load();
+  final store = AiWorkspaceStore(
+    api: AiApiClient(
+      settings.baseUrl,
+      client: _backend(
+        rec,
+        modelCount: modelCount,
+        sse: sse,
+        assistantParts: assistantParts,
+      ),
+    ),
+  );
+  return MultiProvider(
+    providers: [
+      ChangeNotifierProvider<SettingsStore>.value(value: settings),
+      ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
+    ],
+    child: const MaterialApp(home: AiHomePage()),
+  );
+}
+
+void main() {
+  // 纯 dart 用例也要用 SharedPreferences 的 mock（草稿 / 上次模型记录）
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('(a) 右侧栏列出后端的 skills：来源徽标 + 删除打到 DELETE /api/ai/skills/{name}', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder()
+      ..skills = [
+        _skill('anima-prompt', description: '把需求转成 Anima 优化提示词', source: 'builtin'),
+        _skill('my-skill', description: '我自己写的', source: 'user'),
+        _skill('broken-skill', description: '格式不对', validationError: 'frontmatter 缺少 description'),
+      ];
+
+    await tester.pumpWidget(await _homePage(rec));
+    await tester.pumpAndSettle();
+
+    // 后端返回什么就显示什么（不是硬编码的 7 条占位目录）
+    expect(find.text('anima-prompt'), findsOneWidget);
+    expect(find.text('my-skill'), findsOneWidget);
+    expect(find.text('broken-skill'), findsOneWidget);
+    expect(find.text('内置'), findsOneWidget);
+    expect(find.text('用户'), findsNWidgets(2));
+    // 不合法的那条要标出来（不静默忽略）
+    expect(find.textContaining('格式不合法'), findsOneWidget);
+    // 内置的没有删除按钮，用户来源的才有
+    expect(find.byTooltip('删除 Skill'), findsNWidgets(2));
+
+    await tester.tap(find.byTooltip('删除 Skill').last);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('删除 Skill「broken-skill」？'), findsOneWidget);
+
+    await tester.tap(find.text('删除'));
+    await tester.pumpAndSettle();
+
+    expect(rec.calls, contains('DELETE /api/ai/skills/broken-skill'));
+    expect(find.text('broken-skill'), findsNothing, reason: '删完要重新拉列表，不能还留在界面上');
+    expect(find.text('my-skill'), findsOneWidget);
+  });
+
+  testWidgets('(b) tool.requested / tool.completed 事件生成可见的工具卡（预览默认折叠）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'text.delta', '{"messageId":"a1","text":"好的，"}') +
+        _sse(
+            4,
+            'tool.requested',
+            '{"runId":"r1","callId":"call-1","name":"read_file",'
+                '"arguments":"{\\"path\\":\\"a.md\\"}","approval":"not_required"}') +
+        _sse(5, 'tool.started', '{"callId":"call-1","name":"read_file"}') +
+        _sse(
+            6,
+            'tool.completed',
+            '{"callId":"call-1","name":"read_file","elapsedMs":42,"preview":"# 标题\\n正文"}') +
+        _sse(
+            7,
+            'message.completed',
+            '{"messageId":"a1","text":"好的，我看一下文件。","steps":1,"parts":['
+                '{"type":"text","text":"好的，我看一下文件。"},'
+                '{"type":"tool_call","toolCallId":"call-1","jsonPayload":{"name":"read_file","arguments":"{\\"path\\":\\"a.md\\"}"}},'
+                '{"type":"tool_result","toolCallId":"call-1","text":"# 标题\\n正文","jsonPayload":{"name":"read_file","ok":true,"elapsedMs":42,"approval":"approved"}}'
+                ']}') +
+        _sse(8, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(
+      rec,
+      sse: sse,
+      assistantParts: [
+        {'type': 'text', 'text': '好的，我看一下文件。'},
+        {
+          'type': 'tool_call',
+          'toolCallId': 'call-1',
+          'jsonPayload': {'name': 'read_file', 'arguments': '{"path":"a.md"}'},
+        },
+        {
+          'type': 'tool_result',
+          'toolCallId': 'call-1',
+          'text': '# 标题\n正文',
+          'jsonPayload': {
+            'name': 'read_file',
+            'ok': true,
+            'elapsedMs': 42,
+            'approval': 'approved',
+          },
+        },
+      ],
+    ));
+    await tester.pumpAndSettle();
+
+    // 发一条消息把 Run 跑起来，SSE 里才有工具事件
+    await tester.enterText(find.byType(TextField).first, '看看 a.md');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    // 工具卡：名字 + 状态 + 耗时
+    expect(find.text('read_file'), findsOneWidget);
+    expect(find.text('已完成'), findsOneWidget);
+    expect(find.text('42 ms'), findsOneWidget);
+    // 结果预览默认折叠
+    expect(find.textContaining('# 标题'), findsNothing);
+
+    await tester.tap(find.byIcon(Icons.expand_more).last);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('# 标题'), findsWidgets);
+  });
+
+  testWidgets('(c) approval=pending 时出「批准 / 拒绝」，批准 POST /api/ai/tool-calls/{id}/approve', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(
+            3,
+            'tool.requested',
+            '{"runId":"r1","callId":"call-9","name":"write_file",'
+                '"arguments":"{\\"path\\":\\"x.txt\\"}","approval":"pending"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, '写个文件');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('write_file'), findsOneWidget);
+    expect(find.text('待批准'), findsOneWidget);
+    expect(find.text('批准'), findsOneWidget);
+    expect(find.text('拒绝'), findsOneWidget);
+    expect(find.textContaining('在等你的批准'), findsOneWidget);
+
+    await tester.tap(find.text('批准'));
+    // 批准后卡片进入「运行中」（真的在转圈），所以这里不能用 pumpAndSettle
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(rec.calls, contains('POST /api/ai/tool-calls/call-9/approve'));
+    expect(find.text('运行中'), findsOneWidget, reason: '批准生效后就该进入运行中');
+  });
+
+  testWidgets('(c2) 点晚了（accepted=false）如实告知，不假装成功', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(
+            3,
+            'tool.requested',
+            '{"runId":"r1","callId":"call-9","name":"write_file","arguments":"{}","approval":"pending"}');
+
+    SharedPreferences.setMockInitialValues({});
+    final settings = SettingsStore();
+    await settings.load();
+    final store = AiWorkspaceStore(
+      api: AiApiClient(settings.baseUrl,
+          client: _backend(rec, sse: sse, approvalAccepted: false)),
+    );
+    await tester.pumpWidget(MultiProvider(
+      providers: [
+        ChangeNotifierProvider<SettingsStore>.value(value: settings),
+        ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
+      ],
+      child: const MaterialApp(home: AiHomePage()),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, '写个文件');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('批准'));
+    await tester.pumpAndSettle();
+
+    expect(store.notice, contains('没有生效'));
+    expect(find.textContaining('没有生效'), findsOneWidget);
+  });
+
+  testWidgets('(b2) reasoning.delta 累积成折叠的「思考过程」', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'reasoning.delta', '{"messageId":"a1","text":"先看需求，"}') +
+        _sse(4, 'reasoning.delta', '{"messageId":"a1","text":"再定风格。"}') +
+        _sse(5, 'text.delta', '{"messageId":"a1","text":"好的"}') +
+        _sse(6, 'message.completed', '{"messageId":"a1","text":"好的","steps":0}') +
+        _sse(7, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, '帮我想想');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('思考过程'), findsOneWidget);
+    // 默认折叠：正文里的增量不直接铺开
+    expect(find.textContaining('先看需求'), findsNothing);
+    await tester.tap(find.text('思考过程'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('先看需求，再定风格。'), findsOneWidget);
+  });
+
+  testWidgets('(d) 模型选择器懒构建并可按搜索过滤', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    await tester.pumpWidget(await _homePage(rec, modelCount: 69));
+    await tester.pumpAndSettle();
+
+    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    expect(store.models.length, 69);
+
+    // 打开选择器（按钮上就是当前模型名）
+    await tester.tap(find.text('模型 00').first);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('共 69 个模型'), findsOneWidget);
+
+    // 懒构建：69 个模型不能一次全建出来（否则每行 6 个徽标，弹出就卡）
+    final built = find.descendant(of: find.byType(Dialog), matching: find.byType(ListTile));
+    expect(built.evaluate().length, lessThan(69));
+
+    // 搜索过滤
+    await tester.enterText(
+      find.descendant(of: find.byType(Dialog), matching: find.byType(TextField)),
+      '模型 42',
+    );
+    await tester.pumpAndSettle();
+    // 只认对话框里的那几行：聊天框和右侧栏也会显示当前模型名
+    final inDialog = find.byType(Dialog);
+    expect(find.descendant(of: inDialog, matching: find.widgetWithText(ListTile, '模型 42')),
+        findsOneWidget);
+    expect(find.descendant(of: inDialog, matching: find.text('模型 00')), findsNothing);
+
+    await tester.tap(find.descendant(of: inDialog, matching: find.widgetWithText(ListTile, '模型 42')));
+    await tester.pumpAndSettle();
+    expect(store.selectedModel?.id, 'model-42');
+  });
+
+  testWidgets('(e) 工具权限页：默认策略说清楚，逐工具权限改动走 PUT /api/ai/tools/policy', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    await tester.pumpWidget(MaterialApp(
+      home: AiToolsSettingsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: _backend(rec)),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // 默认状态要大声、明确
+    expect(find.textContaining('其它位置一律拒绝'), findsOneWidget);
+    expect(find.textContaining(r'viewer\comfyui'), findsWidgets);
+    expect(find.text('写白名单'), findsOneWidget);
+    expect(find.text('读白名单'), findsOneWidget);
+    expect(find.text('read_file'), findsOneWidget);
+    expect(find.text('load_skill'), findsOneWidget);
+
+    // 把 read_file 改成「拒绝」→ 立刻 PUT
+    final dropdown = find.byType(DropdownButton<String>).first;
+    await tester.ensureVisible(dropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(dropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('拒绝').last);
+    await tester.pumpAndSettle();
+
+    expect(rec.lastPolicyPut, contains('"overrides"'));
+    expect(rec.lastPolicyPut, contains('"read_file":"deny"'));
+  });
+
+  testWidgets('(e2) 加一个写目录会 PUT writeRoots', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    await tester.pumpWidget(MaterialApp(
+      home: AiToolsSettingsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: _backend(rec)),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    final field = find.widgetWithText(TextField, '要放行的目录（绝对路径）').first;
+    await tester.ensureVisible(field);
+    await tester.pumpAndSettle();
+    await tester.enterText(field, r'D:\out');
+    await tester.pumpAndSettle();
+
+    final add = find.widgetWithText(FilledButton, '添加').first;
+    await tester.ensureVisible(add);
+    await tester.pumpAndSettle();
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+
+    expect(rec.lastPolicyPut, contains(r'D:\\out'));
+    expect(rec.lastPolicyPut, contains('"writeRoots"'));
+  });
+
+  testWidgets('(f) 内置目录卡片：分歧数醒目 + 先预览再确认才对齐能力', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    await tester.pumpWidget(MaterialApp(
+      home: AiProviderSettingsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: _providerBackend(rec)),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('内置模型目录'), findsOneWidget);
+    expect(find.textContaining('冻结副本'), findsOneWidget);
+    expect(find.text('版本 2026-09b-dsh'), findsOneWidget);
+    expect(find.text('目录模型 69'), findsOneWidget);
+    expect(find.textContaining('有 2 个模型的能力声明与内置目录不同'), findsOneWidget);
+
+    // 点对齐：先 GET 预览 → 弹确认框；**这一步绝不能已经改库**
+    await tester.tap(find.text('用内置目录对齐模型能力'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('重写 2 个模型的能力声明'), findsOneWidget);
+    expect(find.textContaining('不会新增或删除模型'), findsOneWidget);
+    expect(rec.syncBodies, isEmpty, reason: '确认之前不能已经发过 sync');
+
+    await tester.tap(find.text('对齐'));
+    await tester.pumpAndSettle();
+
+    expect(rec.syncBodies.single['mode'], 'refresh-capabilities');
+    expect(find.textContaining('已对齐 2 个模型的能力声明'), findsOneWidget);
+    // 对齐完分歧清零
+    expect(find.textContaining('能力声明一致'), findsOneWidget);
+  });
+
+  testWidgets('(f2) 补齐缺失模型是纯新增，直接 POST add-missing', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    await tester.pumpWidget(MaterialApp(
+      home: AiProviderSettingsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: _providerBackend(rec, divergent: const [])),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('补齐缺失模型'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AlertDialog), findsNothing, reason: '纯新增不需要确认框');
+    expect(rec.syncBodies.single['mode'], 'add-missing');
+    expect(find.textContaining('已补齐 3 个缺失模型'), findsOneWidget);
+  });
+
+  testWidgets('(f3) 内置目录读取失败要如实显示原因', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    await tester.pumpWidget(MaterialApp(
+      home: AiProviderSettingsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: _providerBackend(rec, statusError: '目录缺失')),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('目录缺失'), findsOneWidget);
+  });
+
+  testWidgets('(g) 输入 / 弹出 Skill 菜单并写入 /skill-name', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder()
+      ..skills = [
+        _skill('anima-prompt', description: '把需求转成 Anima 优化提示词'),
+        _skill('my-skill', description: '我自己写的'),
+      ];
+
+    await tester.pumpWidget(await _homePage(rec));
+    await tester.pumpAndSettle();
+
+    // 还没打 `/` 时不显示菜单
+    expect(find.text('/anima-prompt'), findsNothing);
+
+    await tester.enterText(find.byType(TextField).first, '/');
+    await tester.pumpAndSettle();
+    expect(find.text('/anima-prompt'), findsOneWidget);
+    expect(find.text('/my-skill'), findsOneWidget);
+
+    // 打一半要按查询词过滤
+    await tester.enterText(find.byType(TextField).first, '/anima');
+    await tester.pumpAndSettle();
+    expect(find.text('/anima-prompt'), findsOneWidget);
+    expect(find.text('/my-skill'), findsNothing);
+
+    await tester.tap(find.text('/anima-prompt'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(find.byType(TextField).first).controller?.text, '/anima-prompt ');
+    expect(find.text('/anima-prompt'), findsNothing, reason: '选完菜单要收起来');
+  });
+
+  test('逐字回包只替换那一条消息：流式期间不能重建整段历史（O(n) 热点的回归）', () async {
+    final rec = _Recorder();
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'text.delta', '{"messageId":"a1","text":"你"}') +
+        _sse(3, 'text.delta', '{"messageId":"a1","text":"好"}') +
+        _sse(4, 'text.delta', '{"messageId":"a1","text":"呀"}') +
+        _sse(5, 'message.completed', '{"messageId":"a1","text":"你好呀","steps":0}') +
+        _sse(6, 'run.completed', '{"runId":"r1"}');
+    final store = await _store(rec, sse: sse, assistantText: '你好呀');
+
+    // 流式期间每一帧的用户消息实例：之前 `messages.map().toList()` 会每帧重造一个
+    final userInstances = <AiMessage>{};
+    store.addListener(() {
+      if (store.sending && store.messages.length >= 2) {
+        userInstances.add(store.messages.first);
+      }
+    });
+
+    await store.load();
+    await store.send('你好');
+
+    expect(store.messages.length, 2);
+    expect(store.messages.last.text, '你好呀');
+    expect(userInstances.length, 1,
+        reason: '逐字回包只该替换变化的那一条，其余 AiMessage 对象必须原样复用');
+  });
+}

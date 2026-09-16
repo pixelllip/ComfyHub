@@ -138,6 +138,76 @@ object AiRepo {
         ) { it.toModel() }
     }
 
+    /**
+     * **只插一条**模型；不 DELETE、不改同 provider 下的其它模型（内置目录"补齐"用）。
+     *
+     * 与 [replaceModels] 的区别就在这：主键是 `(provider_id, model_id)`，所以"库里已经有同 id 的行"
+     * 时这里会直接主键冲突报错 —— 调用方必须先查库、只把**缺失**的那些传进来，
+     * 这正是"绝不覆盖用户改过的行"所需要的保护（[com.comfyhub.ai.AiSeeder] 就是这么用的）。
+     */
+    fun insertModel(m: AiModelDto): AiModelDto = Db.withConnection { conn ->
+        conn.execute(
+            """
+            INSERT INTO ai_models
+              (provider_id, model_id, display_name, input_modalities, attachment_transports,
+               mime_allowlist, tools, parallel_tools, reasoning, thinking_efforts, thinking_format,
+               context_window, max_output_tokens,
+               max_attachment_bytes, max_attachment_count, capability_source, capability_verified_at, enabled)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """.trimIndent(),
+            m.providerId, m.id, m.displayName,
+            encodeStringArray(m.inputModalities),
+            encodeStringListMap(m.attachmentTransports),
+            encodeStringArray(m.mimeAllowlist),
+            m.tools, m.parallelTools, m.reasoning,
+            encodeStringMap(m.thinkingEfforts),
+            m.thinkingFormat?.takeIf { it.isNotBlank() },
+            m.contextWindow, m.maxOutputTokens,
+            m.maxAttachmentBytes, m.maxAttachmentCount, m.capabilitySource, m.capabilityVerifiedAt, m.enabled
+        )
+        getModel(m.providerId, m.id) ?: error("模型写入后读不到: ${m.providerId}/${m.id}")
+    }
+
+    /**
+     * **只更新"能力声明"相关的列**（内置目录对齐用）。
+     *
+     * 刻意不碰 `display_name` / `enabled` / 附件相关列 / `capability_verified_at`：
+     * 用户改过的显示名、用户关掉的模型、用户的实测时间，都不是"对齐能力"该动的东西。
+     */
+    fun updateModelCapabilities(m: AiModelDto): AiModelDto = Db.withConnection { conn ->
+        conn.execute(
+            """
+            UPDATE ai_models
+               SET input_modalities = ?, tools = ?, parallel_tools = ?, reasoning = ?,
+                   thinking_efforts = ?, thinking_format = ?, context_window = ?,
+                   capability_source = ?
+             WHERE provider_id = ? AND model_id = ?
+            """.trimIndent(),
+            encodeStringArray(m.inputModalities),
+            m.tools, m.parallelTools, m.reasoning,
+            encodeStringMap(m.thinkingEfforts),
+            m.thinkingFormat?.takeIf { it.isNotBlank() },
+            m.contextWindow,
+            m.capabilitySource,
+            m.providerId, m.id
+        )
+        getModel(m.providerId, m.id) ?: error("模型更新后读不到: ${m.providerId}/${m.id}")
+    }
+
+    // JSON 列编码（insertModel / updateModelCapabilities 用；replaceModels 的历史写法保持不动）
+
+    private fun encodeStringArray(values: List<String>): String =
+        AppJson.encodeToString(JsonArray.serializer(), JsonArray(values.map { JsonPrimitive(it) }))
+
+    private fun encodeStringMap(values: Map<String, String>): String =
+        AppJson.encodeToString(JsonObject.serializer(), JsonObject(values.mapValues { (_, v) -> JsonPrimitive(v) }))
+
+    private fun encodeStringListMap(values: Map<String, List<String>>): String =
+        AppJson.encodeToString(
+            JsonObject.serializer(),
+            JsonObject(values.mapValues { (_, v) -> JsonArray(v.map { JsonPrimitive(it) }) })
+        )
+
     // -----------------------------------------------------------------------
     //  行映射
     // -----------------------------------------------------------------------

@@ -18,6 +18,28 @@ enum StartupPhase {
   skipped,
 }
 
+/// 起子进程的可注入缝隙：测试里换掉它，就能断言"到底传了哪些参数"，
+/// 而不用真去拉一个 pwsh（在没有 Windows / 没有 PowerShell 的环境里也能跑）。
+typedef BackendProcessStarter = Future<Process> Function(
+  String executable,
+  List<String> arguments, {
+  String? workingDirectory,
+});
+
+Future<Process> _startProcess(
+  String executable,
+  List<String> arguments, {
+  String? workingDirectory,
+  ProcessStartMode mode = ProcessStartMode.normal,
+}) =>
+    Process.start(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      runInShell: false,
+      mode: mode,
+    );
+
 /// 负责在 App 启动时把 **MySQL + Kotlin 后端** 拉起来。
 ///
 /// 做法很直接：先探一次 `/api/health`；
@@ -47,8 +69,30 @@ class BackendLauncher extends ChangeNotifier {
 
   Process? _process;
   bool _cancelled = false;
+  bool _disposed = false;
+
+  /// 退出收尾只允许跑一次（窗口关闭 + detach 可能都触发）
+  bool _releaseStarted = false;
+
+  /// 这个 App 有没有"认领"本地服务：自己用 `up -OwnerPid` 起的，
+  /// 或者给已经在跑的服务补挂了退出守护（[armOwnerWatch]）。
+  ///
+  /// 只有认领过，退出时才会去停它们 —— 不然「你自己在终端里 `up`、
+  /// 只是开个 App 看看」这种场景会被 App 顺手带走（README 里承诺过不会）。
+  bool servicesClaimed = false;
+
+  /// 起子进程的实现，测试里替换成假的；见 [BackendProcessStarter]
+  @visibleForTesting
+  static BackendProcessStarter processStarter = _startProcess;
+
+  /// 测试里覆盖 [resolveShell] 的结果，让用例不依赖本机装没装 pwsh；null = 走真实解析
+  @visibleForTesting
+  static String? shellPathOverride;
 
   static const int _maxLogLines = 200;
+
+  /// 退出时最多等脚本多久：超时就让它在后台跑完，**关窗口绝不能卡住**
+  static const Duration exitReleaseTimeout = Duration(seconds: 8);
 
   bool get busy =>
       phase == StartupPhase.probing ||
@@ -146,6 +190,7 @@ class BackendLauncher extends ChangeNotifier {
 
   static String? resolveShell() {
     if (kIsWeb || !Platform.isWindows) return null;
+    if (shellPathOverride != null) return shellPathOverride;
     final candidates = <String>[
       r'C:\Program Files\PowerShell\7\pwsh.exe',
       r'C:\Program Files\PowerShell\7-preview\pwsh.exe',
@@ -181,6 +226,7 @@ class BackendLauncher extends ChangeNotifier {
     if (kIsWeb || !Platform.isWindows) return false;
     if (action != 'up' && action != 'restart') return false;
     args..add('-OwnerPid')..add('$pid');
+    servicesClaimed = true;
     return true;
   }
 
@@ -218,6 +264,10 @@ class BackendLauncher extends ChangeNotifier {
     if (!force && health != null && health['database'] == 'ok') {
       _log('后端已在运行（版本 ${health['version']}，数据库 ok）');
       _set(StartupPhase.ready, '后端已就绪');
+      // 走这条分支说明脚本根本没跑过 up —— 于是「关 App 停服务」的 watchdog 也没挂上，
+      // 之后硬杀 App（任务管理器 / 崩溃）就会把 MySQL + 后端留在后台。
+      // 这里补挂一个守护进程；它只是锦上添花，失败也绝不影响启动。
+      unawaited(armOwnerWatch());
       return true;
     }
     if (health != null) {
@@ -366,6 +416,138 @@ class BackendLauncher extends ChangeNotifier {
     }
   }
 
+  // -------------------------------------------------------------------------
+  //  退出收尾：「谁起的谁关」
+  // -------------------------------------------------------------------------
+
+  /// 关 App 时把**本地服务**停掉：调 `scripts\comfyhub.ps1 release`
+  /// （只停后端 + MySQL，**绝不动 App 进程** —— `down` 会按进程名杀 viewer，不能在这里用）。
+  ///
+  /// 为什么能"活过我们自己的退出"：pwsh 是独立进程，父进程（App）退出不会带走它
+  /// （Windows 不会因为父进程退出就杀子进程）。实测：父进程起来 400ms 后直接 exit(0)，
+  /// 子 pwsh 的 stdout 管道虽然断了，它依然把后面的步骤全部跑完并写了收尾文件。
+  ///
+  /// 最多等 [timeout] 就返回，剩下的步骤在后台跑完 —— 关窗口绝不能卡住。
+  /// 任何异常（找不到脚本 / 起不来 / 超时）都只记日志，绝不让 App 关不掉。
+  Future<bool> releaseOnExit({
+    Duration timeout = exitReleaseTimeout,
+  }) async {
+    if (_releaseStarted) return false;
+    _releaseStarted = true;
+    if (!_settings.stopServicesOnExit) {
+      _log('设置里关掉了「关闭 App 时一并停止本地服务」，保留后台服务。');
+      return false;
+    }
+    if (!servicesClaimed) {
+      _log('这次运行没有启动/接管过本地服务，退出时不主动停它们。');
+      return false;
+    }
+    final args = _buildServiceArgs('release');
+    if (args == null) return false;
+
+    final proc = await _spawnDetached(args.shell, args.args, args.workDir);
+    if (proc == null) return false;
+
+    try {
+      final code = await proc.exitCode.timeout(timeout);
+      _log('已停止本地服务（release 退出码 $code）');
+      return true;
+    } on TimeoutException {
+      _log('release 超过 ${timeout.inSeconds}s 还没结束，让它在后台跑完（不影响关闭）。');
+      return false;
+    } catch (e) {
+      // exitCode 在个别平台/模式下会直接抛（比如 detached），忽略即可
+      _log('release 结果未知（$e），已放它在后台跑完。');
+      return false;
+    }
+  }
+
+  /// 用户把「关闭 App 时一并停止本地服务」**关掉**时调用：撤掉已挂的守护进程。
+  ///
+  /// 只跳过 release 是不够的 —— 守护进程还在跑，App 一死它照样停服务。
+  /// 这个动作删掉认领令牌，守护下一轮（≤3 秒）就静默退出，服务交还给用户。
+  Future<bool> disarmOwnerWatch() async {
+    if (!servicesClaimed) return false;
+    final args = _buildServiceArgs('unwatch');
+    if (args == null) return false;
+    final proc = await _spawnDetached(args.shell, args.args, args.workDir);
+    if (proc == null) return false;
+    // 撤回认领：之后退出时 release 不会再动服务
+    servicesClaimed = false;
+    _log('用户关掉了「关闭 App 时一并停止本地服务」：已撤销退出守护，服务继续运行。');
+    return true;
+  }
+
+  /// 补挂「关 App 自动停服务」的守护进程：`comfyhub.ps1 watch -OwnerPid <自己>`。
+  ///
+  /// 用在 [ensureRunning] 探到后端已经健康、**根本没跑 up** 的那条路径上：
+  /// 那种情况下 watchdog 没挂上，硬杀 App 就会留下没人管的 MySQL + 后端。
+  /// 只等"进程起来"（几毫秒），不等它退出；出错只记日志，绝不抛。
+  Future<bool> armOwnerWatch() async {
+    if (!_settings.stopServicesOnExit) return false;
+    final args = _buildServiceArgs('watch', withOwnerPid: true);
+    if (args == null) return false;
+
+    final proc = await _spawnDetached(args.shell, args.args, args.workDir);
+    if (proc == null) return false;
+    // 挂上了守护 = 我们认领了这几个服务：硬杀由守护收尾，正常关闭由 release 收尾
+    servicesClaimed = true;
+    _log('已补挂退出守护：App(PID $pid) 退出后会停掉正在运行的本地服务。');
+    return true;
+  }
+
+  /// 给 release / watch 拼参数；返回 null 表示环境不满足（找不到脚本 / pwsh）。
+  _ServiceCall? _buildServiceArgs(String action, {bool withOwnerPid = false}) {
+    if (kIsWeb || !Platform.isWindows) return null;
+    final script = resolveScript();
+    if (script == null) {
+      _log('提示: 找不到 scripts\\comfyhub.ps1，退出时不会自动停本地服务。');
+      return null;
+    }
+    final shell = resolveShell();
+    if (shell == null) {
+      _log('提示: PATH 里找不到 PowerShell，退出时不会自动停本地服务。');
+      return null;
+    }
+    final args = <String>[
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      script.path,
+      action,
+    ];
+    if (withOwnerPid) {
+      args..add('-OwnerPid')..add('$pid');
+    }
+    final dataDir = _settings.mysqlDataDir;
+    if (dataDir != null && dataDir.isNotEmpty) {
+      args..add('-DataDir')..add(dataDir);
+    }
+    return _ServiceCall(shell, args, script.parent.parent.path);
+  }
+
+  /// 起一个"自己活下去"的子进程并把输出回显到日志；起不来返回 null（不抛）。
+  Future<Process?> _spawnDetached(
+      String shell, List<String> args, String workingDirectory) async {
+    try {
+      _log('$shell ${args.join(' ')}');
+      final proc = await processStarter(shell, args, workingDirectory: workingDirectory);
+      proc.stdout
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .transform(const LineSplitter())
+          .listen(_log, onError: (_) {});
+      proc.stderr
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .transform(const LineSplitter())
+          .listen(_log, onError: (_) {});
+      return proc;
+    } catch (e) {
+      _log('执行失败（已忽略，不影响关闭）: $e');
+      return null;
+    }
+  }
+
   /// 把 MySQL 的实例目录整体搬到 [newDir]（数据文件 + my.ini + 日志）。
   ///
   /// 调的是 `scripts\mysql.ps1 move`：它会先停库、robocopy 过去、
@@ -457,7 +639,7 @@ class BackendLauncher extends ChangeNotifier {
 
   void clearLog() {
     logLines.clear();
-    notifyListeners();
+    _notify();
   }
 
   // -------------------------------------------------------------------------
@@ -475,20 +657,37 @@ class BackendLauncher extends ChangeNotifier {
     if (logLines.length > _maxLogLines) {
       logLines.removeRange(0, logLines.length - _maxLogLines);
     }
-    notifyListeners();
+    _notify();
   }
 
   void _set(StartupPhase p, String msg) {
     phase = p;
     message = msg;
+    _notify();
+  }
+
+  /// 退出收尾是异步的，可能落在 dispose 之后 —— 那时再 notifyListeners 会抛
+  /// 「was used after being disposed」，会把 App 的关闭流程搅乱，所以这里兜一下。
+  void _notify() {
+    if (_disposed) return;
     notifyListeners();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     try {
       _process?.kill();
     } catch (_) {}
     super.dispose();
   }
+}
+
+/// release / watch 一次调用的参数（shell + 参数 + 工作目录）
+class _ServiceCall {
+  final String shell;
+  final List<String> args;
+  final String workDir;
+
+  const _ServiceCall(this.shell, this.args, this.workDir);
 }

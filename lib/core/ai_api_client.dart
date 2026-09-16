@@ -36,7 +36,10 @@ class AiApiClient {
     if (res.statusCode >= 200 && res.statusCode < 300) return json;
     final message = (json is Map && json['detail'] != null)
         ? json['detail'].toString()
-        : (json is Map && json['error'] != null ? json['error'].toString() : '请求失败');
+        : (json is Map && json['error'] != null
+            ? json['error'].toString()
+            // 后端的统一错误体是 {code, message}：带上它，用户才看得懂为什么失败
+            : (json is Map && json['message'] != null ? json['message'].toString() : '请求失败'));
     throw AiApiException(res.statusCode, message);
   }
 
@@ -97,6 +100,83 @@ class AiApiClient {
     final raw = await _send('PUT', '/api/ai/providers/$providerId/models', {'models': models});
     return (raw as List).whereType<Map>().map((e) => AiModel.fromJson(Map<String, dynamic>.from(e))).toList();
   }
+
+  // --- Skills（M5） ------------------------------------------------------
+
+  /// Skills 列表：只给元数据，**不读正文**（磁盘是真源，后端刻意不缓存）。
+  Future<List<AiSkill>> listSkills() async {
+    final raw = await _get('/api/ai/skills');
+    return (raw as List)
+        .whereType<Map>()
+        .map((e) => AiSkill.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<AiSkillDetail> skillDetail(String name) async => AiSkillDetail.fromJson(
+      Map<String, dynamic>.from(await _get('/api/ai/skills/${Uri.encodeComponent(name)}') as Map));
+
+  /// 注册（或覆盖）用户 skill；后端 201 + SkillDto。
+  Future<AiSkill> createSkill({
+    required String name,
+    required String description,
+    String? whenToUse,
+    required String content,
+  }) async =>
+      AiSkill.fromJson(Map<String, dynamic>.from(await _send('POST', '/api/ai/skills', {
+        'name': name,
+        'description': description,
+        'whenToUse': ?whenToUse,
+        'content': content,
+      }) as Map));
+
+  /// 删除用户 skill。内置 skill 会被后端拒绝（错误消息原样展示给用户）。
+  Future<void> deleteSkill(String name) async =>
+      _send('DELETE', '/api/ai/skills/${Uri.encodeComponent(name)}');
+
+  /// 从 `%USERPROFILE%\.dsh\skills` 导入（用户显式动作；目录不存在时后端报错）。
+  Future<AiSkillImportResult> importDshSkills() async => AiSkillImportResult.fromJson(
+      Map<String, dynamic>.from(await _send('POST', '/api/ai/skills/import-dsh') as Map));
+
+  // --- 工具与权限（M4） --------------------------------------------------
+
+  Future<List<AiToolInfo>> listTools() async {
+    final raw = await _get('/api/ai/tools');
+    return (raw as List)
+        .whereType<Map>()
+        .map((e) => AiToolInfo.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<AiToolPolicy> toolPolicy() async =>
+      AiToolPolicy.fromJson(Map<String, dynamic>.from(await _get('/api/ai/tools/policy') as Map));
+
+  /// 只发要改的字段（`any subset`），返回生效后的完整策略。
+  Future<AiToolPolicy> updateToolPolicy(Map<String, dynamic> patch) async => AiToolPolicy.fromJson(
+      Map<String, dynamic>.from(await _send('PUT', '/api/ai/tools/policy', patch) as Map));
+
+  /// 批准 / 拒绝一次工具调用。返回 `accepted`：false 表示这次调用已经结束或超时，
+  /// 按钮点晚了 —— 界面要把这个如实说出来，不能假装成功。
+  Future<bool> approveToolCall(String callId) async =>
+      _approvalAccepted(await _send('POST', '/api/ai/tool-calls/${Uri.encodeComponent(callId)}/approve'));
+
+  Future<bool> denyToolCall(String callId) async =>
+      _approvalAccepted(await _send('POST', '/api/ai/tool-calls/${Uri.encodeComponent(callId)}/deny'));
+
+  bool _approvalAccepted(dynamic raw) => raw is Map && raw['accepted'] == true;
+
+  // --- 内置模型目录（只读预览 / 对齐） ------------------------------------
+
+  /// 预览：内置目录有哪些模型、库里有多少条与它不一致。**不写库**。
+  Future<AiBuiltinCatalogStatus> builtinStatus() async => AiBuiltinCatalogStatus.fromJson(
+      Map<String, dynamic>.from(await _get('/api/ai/builtin/status') as Map));
+
+  /// 对齐内置目录。
+  ///  - `add-missing`：只补库里缺的模型，**绝不改已有行**；
+  ///  - `refresh-capabilities`：把同名模型的能力（模态 / 工具 / 推理 / 档位 / 方言 /
+  ///    上下文）对齐过来，不新增不删除、不动展示名与启用状态。
+  Future<AiBuiltinCatalogStatus> syncBuiltinCatalog({required String mode}) async =>
+      AiBuiltinCatalogStatus.fromJson(Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/builtin/sync', {'mode': mode}) as Map));
 
   // --- 附件预检 ----------------------------------------------------------
 

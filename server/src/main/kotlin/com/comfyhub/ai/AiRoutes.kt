@@ -4,7 +4,15 @@ import com.comfyhub.ApiError
 import com.comfyhub.ai.protocol.Adapters
 import com.comfyhub.ai.protocol.ReasoningEffort
 import com.comfyhub.ai.protocol.TransportRef
+import com.comfyhub.ai.tools.SkillDto
+import com.comfyhub.ai.tools.SkillStore
+import com.comfyhub.ai.tools.ToolApprovalGate
+import com.comfyhub.ai.tools.ToolInfoDto
+import com.comfyhub.ai.tools.ToolPolicy
+import com.comfyhub.ai.tools.ToolPolicyConfig
+import com.comfyhub.ai.tools.ToolRegistry
 import io.ktor.http.ContentType
+import java.nio.file.Path
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -35,6 +43,10 @@ fun Route.aiRoutes(
     credentials: CredentialService,
     runner: HarnessRunner,
     bus: RunEventBus,
+    skills: SkillStore,
+    toolRegistry: ToolRegistry,
+    approvals: ToolApprovalGate,
+    projectRoot: Path,
 ) {
 
     route("/ai") {
@@ -285,12 +297,18 @@ fun Route.aiRoutes(
                 ?: throw AiException(AiErrorCode.UNKNOWN_MODEL, "模型不在目录中: ${body.modelId}")
             if (!model.enabled) throw AiException(AiErrorCode.CONFIG_ERROR, "该模型已被停用")
 
-            // 思考强度：先落成枚举（非法值直接拒绝，不能悄悄当 off，AIH-056）
-            val requestedEffort = ReasoningEffort.parse(body.reasoningEffort)
-                ?: throw AiException(
-                    AiErrorCode.CONFIG_ERROR,
-                    "未知的思考强度：${body.reasoningEffort}（可选 ${ReasoningEffort.entries.joinToString(" / ") { it.wire }}）"
-                )
+            // 思考强度：先落成枚举（非法值直接拒绝，不能悄悄当 off，AIH-056）。
+            // **缺省字段 = off**：DTO 注释与 `AiRunRepo` 都是这么声明的，前端在"模型不支持推理"
+            // 时本来就不传这个字段 —— 早先这里对 null 直接抛错，等于任何不支持推理的模型都发不出消息。
+            val requestedEffort = if (body.reasoningEffort == null || body.reasoningEffort.isBlank()) {
+                ReasoningEffort.OFF
+            } else {
+                ReasoningEffort.parse(body.reasoningEffort)
+                    ?: throw AiException(
+                        AiErrorCode.CONFIG_ERROR,
+                        "未知的思考强度：${body.reasoningEffort}（可选 ${ReasoningEffort.entries.joinToString(" / ") { it.wire }}）"
+                    )
+            }
             val effort = AiValidation.requireThinkingEffort(model, requestedEffort)
 
             // 用户消息与助手占位都在"创建 Run"里完成，保证顺序与 seq 稳定
@@ -330,6 +348,27 @@ fun Route.aiRoutes(
                 retryOfRunId = body.retryOfRunId,
                 // 快照里记生效值（不是请求值）：模型不支持推理时会落成 off
                 reasoningEffort = (effort ?: ReasoningEffort.OFF).wire,
+                // Skills 快照（名称 + digest）：AIH-047 要求事后能看出当时用的是哪版规则
+                skillSnapshot = run {
+                    val current = skills.catalog()
+                    buildJsonObject {
+                        put("count", current.size)
+                        put(
+                            "skills",
+                            kotlinx.serialization.json.buildJsonArray {
+                                current.forEach { s ->
+                                    add(
+                                        buildJsonObject {
+                                            put("name", s.name)
+                                            put("digest", s.digest)
+                                            put("source", s.source)
+                                        }
+                                    )
+                                }
+                            },
+                        )
+                    }
+                },
             )
 
             bus.open(run.id)
@@ -397,6 +436,142 @@ fun Route.aiRoutes(
         }
 
         // -------------------------------------------------------------------
+        //  Skills（M5 / AIH-037 ~ AIH-045）
+        //
+        //  磁盘是正文真源，这里只做"列表 / 读 / 写 / 删 / 导入"四件事；
+        //  **不缓存**：AI 刚注册完、用户在右侧栏刚删掉，下一次请求就能看到。
+        // -------------------------------------------------------------------
+
+        get("/skills") {
+            call.respond(skills.scan())
+        }
+
+        get("/skills/{name}") {
+            val name = call.parameters["name"].orEmpty()
+            val (dto, content) = toolGuard {
+                skills.read(name) ?: throw AiException(AiErrorCode.CONFIG_ERROR, "没有名为 $name 的 skill")
+            }
+            call.respond(SkillDetailDto(skill = dto, content = content))
+        }
+
+        post("/skills") {
+            val body = call.receive<SkillUpsertRequest>()
+            val dto = toolGuard {
+                skills.save(
+                    name = body.name,
+                    description = body.description,
+                    whenToUse = body.whenToUse,
+                    content = body.content,
+                    origin = "ui",
+                )
+            }
+            call.respond(HttpStatusCode.Created, dto)
+        }
+
+        delete("/skills/{name}") {
+            val name = call.parameters["name"].orEmpty()
+            val deleted = toolGuard { skills.delete(name) }
+            call.respond(DeleteResult(deleted = deleted, id = name))
+        }
+
+        /** 把本机 `%USERPROFILE%\.dsh\skills` 里的 skills 复制进来（**用户显式动作**）。 */
+        post("/skills/import-dsh") {
+            val dir = SkillStore.dshRoot()
+                ?: throw AiException(
+                    AiErrorCode.CONFIG_ERROR,
+                    "本机没有 %USERPROFILE%\\.dsh\\skills 目录，没什么可导入的",
+                )
+            call.respond(toolGuard { skills.importFrom(dir, originLabel = "dsh") })
+        }
+
+        // -------------------------------------------------------------------
+        //  工具与权限（M4，用户要求：默认不能改 comfy 目录以外的内容）
+        // -------------------------------------------------------------------
+
+        get("/tools") {
+            val policy = ToolPolicy.load(projectRoot)
+            call.respond(toolRegistry.info(policy))
+        }
+
+        get("/tools/policy") {
+            val policy = ToolPolicy.load(projectRoot)
+            call.respond(
+                ToolPolicyDto(
+                    writeRoots = policy.writeRoots.map { it.toString() },
+                    readRoots = policy.readRoots.map { it.toString() },
+                    overrides = policy.config.overrides,
+                    maxToolSteps = policy.config.maxToolSteps,
+                    maxCallsPerRun = policy.config.maxCallsPerRun,
+                    maxComfyQueriesPerRun = policy.config.maxComfyQueriesPerRun,
+                    maxReadBytes = policy.config.maxReadBytes,
+                    maxWriteBytes = policy.config.maxWriteBytes,
+                    defaultWriteRoot = projectRoot.resolve(ToolPolicyConfig.DEFAULT_WRITE_DIR).toString(),
+                )
+            )
+        }
+
+        put("/tools/policy") {
+            val body = call.receive<ToolPolicyUpdate>()
+            val current = ToolPolicy.load(projectRoot).config
+            // 只做"校验 + 存"，真正的路径判定每次调用现算（改了立刻生效，不用重启）
+            val next = current.copy(
+                writeRoots = body.writeRoots ?: current.writeRoots,
+                readRoots = body.readRoots ?: current.readRoots,
+                overrides = body.overrides ?: current.overrides,
+                maxToolSteps = (body.maxToolSteps ?: current.maxToolSteps).coerceIn(1, 24),
+                maxCallsPerRun = (body.maxCallsPerRun ?: current.maxCallsPerRun).coerceIn(1, 100),
+            )
+            ToolPolicy.save(next)
+            call.respond(
+                ToolPolicyDto(
+                    writeRoots = ToolPolicy(projectRoot, next).writeRoots.map { it.toString() },
+                    readRoots = ToolPolicy(projectRoot, next).readRoots.map { it.toString() },
+                    overrides = next.overrides,
+                    maxToolSteps = next.maxToolSteps,
+                    maxCallsPerRun = next.maxCallsPerRun,
+                    maxReadBytes = next.maxReadBytes,
+                    maxWriteBytes = next.maxWriteBytes,
+                    defaultWriteRoot = projectRoot.resolve(ToolPolicyConfig.DEFAULT_WRITE_DIR).toString(),
+                )
+            )
+        }
+
+        // -------------------------------------------------------------------
+        //  内置模型目录（用户要求：把 settings.yaml 里的模型抄进我们自己的库）
+        //
+        //  运行时只读 classpath 里的冻结副本；这两个接口让**用户**决定什么时候把库里的
+        //  旧数据与那份副本对齐（启动时只做"补齐缺失模型"，绝不覆盖用户改过的行）。
+        // -------------------------------------------------------------------
+
+        /** 只读预览：现在同步会发生什么（不写库）。界面按钮拿它弹确认框。 */
+        get("/builtin/status") {
+            call.respond(AiSeeder.previewBuiltinSync().toDto())
+        }
+
+        post("/builtin/sync") {
+            val body = call.receive<BuiltinSyncRequest>()
+            val mode = when (body.mode?.lowercase()) {
+                null, "", "add-missing" -> SeedMode.ADD_MISSING
+                "refresh-capabilities", "refresh" -> SeedMode.REFRESH_CAPABILITIES
+                else -> throw AiException(
+                    AiErrorCode.CONFIG_ERROR,
+                    "未知的同步模式：${body.mode}（可选 add-missing / refresh-capabilities）",
+                )
+            }
+            call.respond(AiSeeder.syncBuiltinProvider(mode).toDto())
+        }
+
+        /** 工具卡上的「批准」（AIH-035 / AIH-049）。 */
+        post("/tool-calls/{callId}/approve") {            val callId = call.parameters["callId"].orEmpty()
+            call.respond(ToolApprovalResult(callId, approved = true, accepted = runner.resolveApproval(callId, true)))
+        }
+
+        post("/tool-calls/{callId}/deny") {
+            val callId = call.parameters["callId"].orEmpty()
+            call.respond(ToolApprovalResult(callId, approved = false, accepted = runner.resolveApproval(callId, false)))
+        }
+
+        // -------------------------------------------------------------------
         //  附件准入预检（AIH-029 / AIH-030）
         //
         //  这是纯计算：不产生任何上游请求。前端发送前先调它，
@@ -456,6 +631,91 @@ data class CredentialSetRequest(val value: String = "")
  */
 @Serializable
 data class DeleteResult(val deleted: Boolean, val id: String)
+
+// ---------------------------------------------------------------------------
+//  Skills / 工具（M4 / M5）
+// ---------------------------------------------------------------------------
+
+@Serializable
+data class SkillUpsertRequest(
+    val name: String,
+    val description: String,
+    val whenToUse: String? = null,
+    val content: String,
+)
+
+/** skill 详情：元数据 + 正文（正文只在打开详情时读，列表不读） */
+@Serializable
+data class SkillDetailDto(val skill: SkillDto, val content: String)
+
+/** 工具权限视图（界面用）：写/读白名单 + 逐工具覆盖 + 预算 */
+@Serializable
+data class ToolPolicyDto(
+    val writeRoots: List<String>,
+    val readRoots: List<String>,
+    val overrides: Map<String, String> = emptyMap(),
+    val maxToolSteps: Int = 8,
+    val maxCallsPerRun: Int = 16,
+    /** AIH-036：一次回复最多主动查 ComfyUI 几次 */
+    val maxComfyQueriesPerRun: Int = 3,
+    val maxReadBytes: Int = 0,
+    val maxWriteBytes: Int = 0,
+    /** 出厂默认的写入目录（界面里显示"默认只能写这里"） */
+    val defaultWriteRoot: String? = null,
+)
+
+@Serializable
+data class ToolPolicyUpdate(
+    val writeRoots: List<String>? = null,
+    val readRoots: List<String>? = null,
+    val overrides: Map<String, String>? = null,
+    val maxToolSteps: Int? = null,
+    val maxCallsPerRun: Int? = null,
+)
+
+@Serializable
+data class ToolApprovalResult(val callId: String, val approved: Boolean, val accepted: Boolean)
+
+// ---------------------------------------------------------------------------
+//  内置模型目录的同步（ADD_MISSING / REFRESH_CAPABILITIES）
+// ---------------------------------------------------------------------------
+
+@Serializable
+data class BuiltinSyncRequest(val mode: String? = null)
+
+@Serializable
+data class BuiltinSyncResult(
+    /** add-missing / refresh-capabilities */
+    val mode: String,
+    /** 冻结目录的版本号（`server/src/main/resources/ai/builtin-catalog.json`） */
+    val version: String,
+    val providerId: String? = null,
+    /** 这次新增的模型数 */
+    val added: Int = 0,
+    /** 这次被对齐能力声明的模型数（只有 refresh 模式会 > 0） */
+    val updated: Int = 0,
+    /** 与目录一致、未改动的模型数 */
+    val kept: Int = 0,
+    /** 库里已有但能力声明与内置目录不同的 model_id（保持用户当前设置，等用户决定） */
+    val divergent: List<String> = emptyList(),
+    /** 库里该 provider 当前的模型总数 */
+    val modelCount: Int = 0,
+    val providerCreated: Boolean = false,
+    val error: String? = null,
+)
+
+private fun SeedSyncOutcome.toDto() = BuiltinSyncResult(
+    mode = if (mode == SeedMode.REFRESH_CAPABILITIES) "refresh-capabilities" else "add-missing",
+    version = version,
+    providerId = providerId,
+    added = added,
+    updated = updated,
+    kept = kept,
+    divergent = divergent,
+    modelCount = modelCount,
+    providerCreated = providerCreated,
+    error = error,
+)
 
 /** Run 的终态事件：SSE 流到这里就该关闭了。 */
 private val TERMINAL_EVENTS = setOf(
@@ -537,6 +797,19 @@ data class PreflightResponse(val allowed: Boolean, val blockers: List<String>)
 
 private fun requireProvider(id: String): AiProviderDto =
     AiRepo.getProvider(id) ?: throw AiException(AiErrorCode.CONFIG_ERROR, "Provider 不存在: $id")
+
+/**
+ * 工具层的 [ToolFailure] → [AiException]。
+ *
+ * 工具层用的是自己的稳定 code（`PATH_DENIED` / `INVALID_SKILL_NAME` …），
+ * 直接抛出去会落到 StatusPages 的 Throwable 分支变成 500；这里换成带 code 的 AI 异常，
+ * 前端就能把"为什么被拒绝"原样显示给用户。
+ */
+private inline fun <T> toolGuard(block: () -> T): T = try {
+    block()
+} catch (e: com.comfyhub.ai.tools.ToolFailure) {
+    throw AiException(e.code, e.message ?: "工具层拒绝了这次操作")
+}
 
 private fun AiProviderDto.withCredential(credentials: CredentialService): AiProviderDto =
     copy(credential = credentials.describe(credentialRef))

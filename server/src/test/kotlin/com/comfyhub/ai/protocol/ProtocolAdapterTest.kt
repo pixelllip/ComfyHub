@@ -301,7 +301,8 @@ class ProtocolAdapterTest {
     fun `openai-responses 已实现：进入 supported 名单`() {
         assertTrue(Adapters.supported().contains(AiApiRef.OPENAI_RESPONSES))
         assertTrue(Adapters.supported().contains(AiApiRef.OPENAI_COMPLETIONS))
-        assertEquals("openai-responses/1", Adapters.of(AiApiRef.OPENAI_RESPONSES)!!.adapterVersion)
+        // M4 起三种协议都支持工具调用，版本号升到 /2
+        assertEquals("openai-responses/2", Adapters.of(AiApiRef.OPENAI_RESPONSES)!!.adapterVersion)
     }
 
     @Test

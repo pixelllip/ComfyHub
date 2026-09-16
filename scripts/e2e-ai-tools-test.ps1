@@ -1,0 +1,525 @@
+<#
+.SYNOPSIS
+    ComfyHub「AI 工具循环（M4）+ Skills（M5）」端到端自测。
+
+.DESCRIPTION
+    用 scripts\e2e\fake_openai.py 假装成一个 OpenAI 兼容的流式网关（**不需要真实 API Key、不出网**），
+    把整条工具链路走一遍：
+
+      1. 注册    —— register_skill 落盘 + GET /api/ai/skills + SKILL.md 真的写出来了
+      2. 按需加载 —— load_skill 把正文喂给模型，**工具结果确实被回了上游**（第二轮带 role=tool）
+      3. 越界写被拒 —— write_file 写 storage/ 被 PATH_DENIED 拦下，文件不存在
+      4. 目录内写成功 —— write_file 写 comfyui/ 成功，内容正确
+      5. 审批    —— comfy_sync_history 发 tool.requested(approval=pending)，批准后才 tool.started
+      6. 只读工具 —— comfy_get_status 直接执行（不需要审批）
+
+    还会核对落库的消息 parts 顺序（tool_call / tool_result / text），保证重开会话能渲染工具卡。
+
+    前置条件：MySQL + 后端已经在跑，且后端是**带 M4/M5 的新构建**：
+        pwsh -File scripts\comfyhub.ps1 up
+        pwsh -File scripts\server.ps1 stop
+        pwsh -File scripts\server.ps1 start
+
+.EXAMPLE
+    pwsh -File scripts\e2e-ai-tools-test.ps1
+    pwsh -File scripts\e2e-ai-tools-test.ps1 -KeepData
+#>
+[CmdletBinding()]
+param(
+    [string]$ApiBase = 'http://127.0.0.1:8080',
+    [int]$GatewayPort = 8799,
+    [int]$TimeoutSec = 60,
+    [switch]$KeepData
+)
+
+$ErrorActionPreference = 'Continue'
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
+$E2eDir      = Join-Path $PSScriptRoot 'e2e'
+$GatewayBase = "http://127.0.0.1:$GatewayPort"
+
+$ProviderId  = 'e2e-tools'
+$ModelId     = 'fake-tools-model'
+$SkillName   = 'e2e-tool-demo'
+$ConversationTitle = 'e2e-ai-tools'
+
+$SkillFile   = Join-Path $ProjectRoot "storage\ai\skills\$SkillName\SKILL.md"
+$HackFile    = Join-Path $ProjectRoot 'storage\e2e-hack.txt'
+$OkFile      = Join-Path $ProjectRoot 'comfyui\e2e-ok.txt'
+$ExpectedWriteRoot = Join-Path $ProjectRoot 'comfyui'
+
+$script:Failed = 0
+$script:Total  = 0
+$script:Http   = $null
+$script:Streams = @{}
+$script:ConversationId = $null
+
+function Say([string]$msg, [string]$color = 'Gray') { Write-Host $msg -ForegroundColor $color }
+
+function Check([string]$name, [bool]$ok, [string]$detail = '') {
+    $script:Total++
+    if ($ok) {
+        Say ("  [OK]   " + $name) 'Green'
+    } else {
+        Say ("  [FAIL] " + $name + $(if ($detail) { "  -> $detail" } else { '' })) 'Red'
+        $script:Failed++
+    }
+}
+
+# PS7 的 Invoke-RestMethod **不会枚举** JSON 数组（整块作为一个对象返回），
+# 直接 `@(...)` 只会得到「一个里面装着数组的元素」——这里显式摊平，
+# 保证调用方 `@(Invoke-Api ...)` 拿到的是逐项的元素。
+function Expand-Result($value) {
+    if ($null -eq $value) { return }
+    if ($value -is [System.Array]) {
+        foreach ($item in $value) { Write-Output $item }
+        return
+    }
+    Write-Output $value
+}
+
+function Invoke-Api {
+    param([string]$Method, [string]$Path, $Body)
+    $uri = "$ApiBase$Path"
+    if ($null -eq $Body) {
+        Expand-Result (Invoke-RestMethod -Method $Method -Uri $uri -TimeoutSec 120)
+        return
+    }
+    $json = $Body | ConvertTo-Json -Depth 12 -Compress
+    Expand-Result (Invoke-RestMethod -Method $Method -Uri $uri -TimeoutSec 180 `
+        -ContentType 'application/json; charset=utf-8' -Body $json)
+}
+
+function Invoke-Gateway {
+    param([string]$Path)
+    Expand-Result (Invoke-RestMethod -Method 'GET' -Uri "$GatewayBase$Path" -TimeoutSec 30)
+}
+
+function Find-Python {
+    $cands = @($env:COMFYHUB_PYTHON)
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd) { $cands += $cmd.Source }
+    $cands += @(
+        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\standalone-env\python.exe',
+        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\.venv\Scripts\python.exe'
+    )
+    foreach ($c in $cands) {
+        if ($c -and (Test-Path $c)) { return $c }
+    }
+    return $null
+}
+
+# --- 假网关进程（静默启动 / 按命令行精确回收） ------------------------------
+
+function Get-GatewayPids {
+    # 只认 python 进程：命令行里出现 fake_openai.py 的 pwsh（也就是我们自己）绝不能被杀
+    @(Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like '*fake_openai.py*' } |
+        Select-Object -ExpandProperty ProcessId)
+}
+
+function Stop-Gateway {
+    foreach ($procId in (Get-GatewayPids)) {
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# --- SSE（后端统一事件流，不是供应商流） ------------------------------------
+
+function Open-RunStream {
+    param([string]$RunId)
+    $uri = "$ApiBase/api/ai/runs/$RunId/events"
+    $req = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $uri)
+    $req.Headers.Accept.ParseAdd('text/event-stream')
+    $resp = $script:Http.Send($req, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead)
+    if (-not $resp.IsSuccessStatusCode) {
+        $code = [int]$resp.StatusCode
+        $resp.Dispose(); $req.Dispose()
+        throw "SSE 订阅失败：HTTP $code"
+    }
+    $reader = [System.IO.StreamReader]::new($resp.Content.ReadAsStream(), [System.Text.Encoding]::UTF8)
+    $script:Streams[$RunId] = @{ resp = $resp; reader = $reader }
+    $req.Dispose()
+}
+
+function Close-RunStream {
+    param([string]$RunId)
+    $s = $script:Streams[$RunId]
+    if (-not $s) { return }
+    try { $s.reader.Dispose() } catch { }
+    try { $s.resp.Dispose() } catch { }
+    $script:Streams.Remove($RunId)
+}
+
+function Read-RunEvent {
+    <# 读一个完整 SSE 事件；返回 $null 表示流结束或超时。
+       后端每 15s 会发一次 heartbeat，所以阻塞读不会真的卡死。 #>
+    param([string]$RunId, [datetime]$Deadline)
+    $reader = $script:Streams[$RunId].reader
+    $ev = $null
+    $data = New-Object System.Collections.Generic.List[string]
+    while ((Get-Date) -lt $Deadline) {
+        $line = $reader.ReadLine()
+        if ($null -eq $line) { return $null }
+        if ($line.Length -eq 0) {
+            if ($null -ne $ev -or $data.Count -gt 0) {
+                return @{ event = $ev; data = ($data -join "`n") }
+            }
+            continue
+        }
+        if ($line.StartsWith('event:')) { $ev = $line.Substring(6).Trim() }
+        elseif ($line.StartsWith('data:')) { $data.Add($line.Substring(5).TrimStart()) }
+    }
+    return $null
+}
+
+function Receive-RunEvents {
+    param([string]$RunId, [int]$TimeoutSec = 60, [scriptblock]$OnEvent)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $list = New-Object System.Collections.Generic.List[hashtable]
+    while ($true) {
+        $e = Read-RunEvent -RunId $RunId -Deadline $deadline
+        if ($null -eq $e) { break }
+        $list.Add($e)
+        if ($OnEvent) { & $OnEvent $e ($list.Count - 1) | Out-Null }
+        if ($e.event -in @('run.completed', 'run.failed', 'run.cancelled')) { break }
+    }
+    Expand-Result $list.ToArray()
+}
+
+function Get-Events {
+    param($Events, [string]$Type)
+    Expand-Result @($Events | Where-Object { $_.event -eq $Type })
+}
+
+function Convert-Data($Event) { return ($Event.data | ConvertFrom-Json) }
+
+function Start-AiRun {
+    param([string]$ConversationId, [string]$Text)
+    # 故意**不带** reasoningEffort：DTO 与文档都写着"缺省 = off"，而前端在"模型不支持推理"时
+    # 本来就不传这个字段。早先后端对 null 直接抛错（"未知的思考强度：null"），
+    # 于是所有不支持推理的模型都发不出消息 —— 这条路径就是那个 bug 的回归防线。
+    return Invoke-Api 'POST' "/api/ai/conversations/$ConversationId/runs" @{
+        text = $Text; providerId = $ProviderId; modelId = $ModelId
+    }
+}
+
+function Receive-Scenario {
+    param([string]$ConversationId, [string]$Text, [scriptblock]$OnEvent)
+    $run = Start-AiRun -ConversationId $ConversationId -Text $Text
+    Open-RunStream -RunId $run.runId
+    $events = @(Receive-RunEvents -RunId $run.runId -TimeoutSec $TimeoutSec -OnEvent $OnEvent)
+    Close-RunStream -RunId $run.runId
+    return @{ run = $run; events = $events }
+}
+
+# ---------------------------------------------------------------------------
+
+Say ''
+Say '  ComfyHub AI 工具循环 + Skills · 端到端自测（假网关，不出网）' 'White'
+Say '  ────────────────────────────────────────────────────────────'
+
+# --- 0. 环境 ---------------------------------------------------------------
+$python = Find-Python
+if (-not $python) {
+    Say '  找不到 python（可用环境变量 COMFYHUB_PYTHON 指定）。' 'Red'
+    exit 1
+}
+Say "  python: $python" 'DarkGray'
+
+try {
+    $health = Invoke-Api 'GET' '/api/health' $null
+} catch {
+    $health = $null
+}
+if (-not $health -or $health.database -ne 'ok') {
+    Say '' 
+    Say '  后端没在跑（GET /api/health 不可用）。请先：' 'Red'
+    Say '    pwsh -File scripts\comfyhub.ps1 up' 'Yellow'
+    Say '    pwsh -File scripts\server.ps1 stop' 'Yellow'
+    Say '    pwsh -File scripts\server.ps1 start' 'Yellow'
+    exit 1
+}
+Say ("  后端: {0}  v{1}  db={2}" -f $ApiBase, $health.version, $health.database) 'DarkGray'
+
+$gatewayStarted = $false
+
+# SSE 用流式读；整体超时给足（Run 本身可能跑几十秒）
+$script:Http = [System.Net.Http.HttpClient]::new()
+$script:Http.Timeout = [TimeSpan]::FromSeconds(300)
+
+try {
+    # --- 1. 启动假网关（静默，绝不弹窗；finally 里必杀） -------------------
+    Stop-Gateway   # 清掉上一次残留
+    . "$PSScriptRoot\silent-process.ps1"
+    $cmdLine = "`"$python`" `"$(Join-Path $E2eDir 'fake_openai.py')`" --port $GatewayPort"
+    $way = Start-SilentProcess -CommandLine $cmdLine -WorkingDirectory $ProjectRoot -Tag 'fake-openai'
+    $gatewayStarted = $true
+    Say "  假网关启动方式: $way" 'DarkGray'
+
+    $ready = $false
+    foreach ($i in 1..40) {
+        try {
+            $models = Invoke-Gateway '/v1/models'
+            if ($models.data[0].id -eq $ModelId) { $ready = $true; break }
+        } catch { Start-Sleep -Milliseconds 300 }
+    }
+    Check "假网关已就绪（$GatewayBase/v1）" $ready
+
+    # --- 2. Provider + 模型目录 -------------------------------------------
+    Say ''
+    Say '  [0/7] 配置 e2e Provider / 模型' 'Cyan'
+
+    try { Invoke-Api 'DELETE' "/api/ai/providers/$ProviderId" $null | Out-Null } catch { }
+    try { Invoke-Api 'DELETE' "/api/ai/skills/$SkillName" $null | Out-Null } catch { }
+    # 上一次 -KeepData / 失败留下的会话也一并清掉，保证脚本可重复跑
+    try {
+        foreach ($old in @(Invoke-Api 'GET' '/api/ai/conversations?includeArchived=true' $null)) {
+            if ($old.title -eq $ConversationTitle) {
+                Invoke-Api 'DELETE' "/api/ai/conversations/$($old.id)" $null | Out-Null
+            }
+        }
+    } catch { }
+    Remove-Item $SkillFile -Force -ErrorAction SilentlyContinue
+    Remove-Item $HackFile -Force -ErrorAction SilentlyContinue
+    Remove-Item $OkFile -Force -ErrorAction SilentlyContinue
+
+    $provider = Invoke-Api 'POST' '/api/ai/providers' @{
+        id = $ProviderId
+        displayName = 'E2E Tools (fake)'
+        api = 'openai-completions'
+        baseURL = "$GatewayBase/v1"
+        credentialRef = $null
+        endpointTrust = 'loopback'
+        enabled = $true
+    }
+    Check "Provider 已创建（$ProviderId, api=$($provider.api), trust=$($provider.endpointTrust)）" `
+        ($provider.id -eq $ProviderId -and $provider.api -eq 'openai-completions') ($provider | ConvertTo-Json -Compress)
+
+    $models = Invoke-Api 'PUT' "/api/ai/providers/$ProviderId/models" @{
+        models = @(@{
+            providerId = $ProviderId
+            id = $ModelId
+            displayName = 'Fake Tools Model'
+            inputModalities = @('text')
+            attachmentTransports = @{}
+            mimeAllowlist = @()
+            tools = $true
+            parallelTools = $false
+            reasoning = $false
+            thinkingEfforts = @{}
+            contextWindow = 32768
+            maxOutputTokens = 4096
+            capabilitySource = 'manual'
+            enabled = $true
+        })
+    }
+    $m = @($models) | Where-Object { $_.id -eq $ModelId } | Select-Object -First 1
+    Check '模型已登记且 tools=true' ($null -ne $m -and $m.tools -eq $true) ($models | ConvertTo-Json -Compress)
+
+    $conv = Invoke-Api 'POST' '/api/ai/conversations' @{ title = $ConversationTitle; providerId = $ProviderId; modelId = $ModelId }
+    $script:ConversationId = $conv.id
+    Check '会话已创建' (-not [string]::IsNullOrWhiteSpace($conv.id)) ($conv | ConvertTo-Json -Compress)
+
+    # --- 3. 场景 1：注册 skill --------------------------------------------
+    Say ''
+    Say '  [1/7] 注册：register_skill 落盘' 'Cyan'
+    $beforeLog = @(Invoke-Gateway '/__log').Count
+    $s1 = Receive-Scenario -ConversationId $conv.id -Text '帮我注册一个新的 skill'
+    $e1 = $s1.events
+    $started = @(Get-Events $e1 'run.started')
+    Check '收到 run.started' ($started.Count -ge 1)
+    if ($started.Count -ge 1) {
+        $p = Convert-Data $started[0]
+        $toolKeys = @($p.tools.PSObject.Properties.Name)
+        Check "run.started 带上了非空 tools（$($toolKeys.Count) 个工具）" ($toolKeys.Count -gt 0) ($p | ConvertTo-Json -Compress)
+    }
+    $req1 = @(Get-Events $e1 'tool.requested')
+    $r1 = if ($req1.Count -ge 1) { Convert-Data $req1[0] } else { $null }
+    Check 'tool.requested.name == register_skill' ($null -ne $r1 -and $r1.name -eq 'register_skill') ($req1 | ConvertTo-Json -Compress)
+    Check 'register_skill 的 approval == not_required' ($null -ne $r1 -and $r1.approval -eq 'not_required') ($r1 | ConvertTo-Json -Compress)
+    Check '收到 tool.started' ((@(Get-Events $e1 'tool.started')).Count -ge 1) ($e1 | ConvertTo-Json -Depth 6 -Compress)
+    $comp1 = @(Get-Events $e1 'tool.completed')
+    Check '收到 tool.completed' ($comp1.Count -ge 1) ($e1 | ConvertTo-Json -Depth 6 -Compress)
+    $mc1 = @(Get-Events $e1 'message.completed')
+    Check '收到 message.completed' ($mc1.Count -ge 1) ($e1 | ConvertTo-Json -Depth 6 -Compress)
+    if ($mc1.Count -ge 1) {
+        $p = Convert-Data $mc1[0]
+        $parts = @($p.parts)
+        $types = @($parts | ForEach-Object { $_.type })
+        Check 'message.completed.parts 非空' ($parts.Count -gt 0) ($p | ConvertTo-Json -Depth 6 -Compress)
+        Check 'parts 里有 tool_call' ($types -contains 'tool_call') ($types -join ',')
+        Check 'parts 里有 tool_result' ($types -contains 'tool_result') ($types -join ',')
+    }
+    Check '收到 run.completed' ((@(Get-Events $e1 'run.completed')).Count -ge 1) ($e1[-1].event)
+
+    $skills = @(Invoke-Api 'GET' '/api/ai/skills' $null)
+    $skill = $skills | Where-Object { $_.name -eq $SkillName } | Select-Object -First 1
+    Check "GET /api/ai/skills 里有 $SkillName" ($null -ne $skill) (($skills | ForEach-Object { $_.name }) -join ',')
+    if ($skill) {
+        Check 'skill 来源是 user 且无校验错误' ($skill.source -eq 'user' -and -not $skill.validationError) ($skill | ConvertTo-Json -Compress)
+    }
+    Check "SKILL.md 已落盘（$SkillFile）" (Test-Path $SkillFile)
+    if (Test-Path $SkillFile) {
+        $head = (Get-Content $SkillFile -TotalCount 1 -Encoding UTF8)
+        Check 'SKILL.md 以 --- 开头（带 frontmatter）' ($head -eq '---') $head
+    }
+
+    # --- 4. 场景 2：按需加载 ----------------------------------------------
+    Say ''
+    Say '  [2/7] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
+    $beforeLog = @(Invoke-Gateway '/__log').Count
+    $s2 = Receive-Scenario -ConversationId $conv.id -Text '加载那个 skill'
+    $e2 = $s2.events
+    $comp2 = @(Get-Events $e2 'tool.completed')
+    $c2 = if ($comp2.Count -ge 1) { Convert-Data $comp2[0] } else { $null }
+    Check 'load_skill 执行成功（tool.completed）' ($null -ne $c2 -and $c2.name -eq 'load_skill') ($comp2 | ConvertTo-Json -Compress)
+    Check '结果里带 <skill_content' ($null -ne $c2 -and $c2.preview -like '*<skill_content*') ($c2 | ConvertTo-Json -Compress)
+
+    $newLog = @(Invoke-Gateway '/__log')
+    $runLog = @($newLog | Select-Object -Skip $beforeLog)
+    Say ("    本次 Run 的上游请求 {0} 次：{1}" -f $runLog.Count, (($runLog | ForEach-Object { "[$($_.roles -join '/')] tools=$($_.toolCount)" }) -join ' | ')) 'DarkGray'
+    Check '该 Run 至少发了 2 次上游请求（工具结果被喂回去了）' ($runLog.Count -ge 2) ($runLog | ConvertTo-Json -Depth 6 -Compress)
+    $second = if ($runLog.Count -ge 2) { $runLog[1] } else { $null }
+    Check '第二次请求最后一条是 role=tool' ($null -ne $second -and $second.lastRole -eq 'tool') ($second | ConvertTo-Json -Depth 6 -Compress)
+    Check '第二次请求带上了 assistant 的 tool_calls 与 tool 结果' `
+        ($null -ne $second -and $second.assistantHasToolCall -eq $true -and $second.toolResultCount -ge 1) ($second | ConvertTo-Json -Depth 6 -Compress)
+    $mcp2 = @(Get-Events $e2 'message.completed')
+    if ($mcp2.Count -ge 1) {
+        $p = Convert-Data $mcp2[0]
+        $tr = @($p.parts | Where-Object { $_.type -eq 'tool_result' }) | Select-Object -First 1
+        Check '落库的 tool_result 正文里带 <skill_content' ($null -ne $tr -and $tr.text -like '*<skill_content*') ($tr.text)
+    }
+
+    # --- 5. 场景 3：越界写被拒 --------------------------------------------
+    Say ''
+    Say '  [3/7] 越界写被拒：write_file 打到 storage/' 'Cyan'
+    $s3 = Receive-Scenario -ConversationId $conv.id -Text '越界写个文件'
+    $e3 = $s3.events
+    $fail3 = @(Get-Events $e3 'tool.failed')
+    $f3 = if ($fail3.Count -ge 1) { Convert-Data $fail3[0] } else { $null }
+    Check 'write_file 越界 -> tool.failed' ($null -ne $f3 -and $f3.name -eq 'write_file') ($fail3 | ConvertTo-Json -Compress)
+    Check '错误码 == PATH_DENIED' ($null -ne $f3 -and $f3.code -eq 'PATH_DENIED') ($f3 | ConvertTo-Json -Compress)
+    Check "storage\e2e-hack.txt 不存在" (-not (Test-Path $HackFile))
+
+    $policy = Invoke-Api 'GET' '/api/ai/tools/policy' $null
+    $roots = @($policy.writeRoots)
+    Check "writeRoots 恰好是 $ExpectedWriteRoot" `
+        ($roots.Count -eq 1 -and $roots[0].TrimEnd('\') -ieq $ExpectedWriteRoot.TrimEnd('\')) `
+        ($roots -join ' | ')
+
+    # --- 6. 场景 4：目录内写成功 ------------------------------------------
+    Say ''
+    Say '  [4/7] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
+    $s4 = Receive-Scenario -ConversationId $conv.id -Text '在目录内写个文件'
+    $e4 = $s4.events
+    $comp4 = @(Get-Events $e4 'tool.completed')
+    $c4 = if ($comp4.Count -ge 1) { Convert-Data $comp4[0] } else { $null }
+    Check 'write_file 在 comfyui/ 内成功' ($null -ne $c4 -and $c4.name -eq 'write_file') ($comp4 | ConvertTo-Json -Compress)
+    Check "comfyui\e2e-ok.txt 已创建" (Test-Path $OkFile)
+    if (Test-Path $OkFile) {
+        $body = (Get-Content $OkFile -Raw -Encoding UTF8).Trim()
+        Check '文件内容 == hello from tool' ($body -eq 'hello from tool') $body
+    }
+
+    # --- 7. 场景 5：审批闸门 ----------------------------------------------
+    Say ''
+    Say '  [5/7] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
+    $state = @{ callId = $null; pending = $false; accepted = $false; startedIndex = -1; requestedIndex = -1 }
+    $s5 = Receive-Scenario -ConversationId $conv.id -Text '同步一下历史' -OnEvent {
+        param($e, $i)
+        if ($e.event -eq 'tool.requested') {
+            $p = $e.data | ConvertFrom-Json
+            if ($p.name -eq 'comfy_sync_history') {
+                $state.requestedIndex = $i
+                $state.callId = $p.callId
+                if ($p.approval -eq 'pending') { $state.pending = $true }
+                # 立刻批准；open() 与 emit() 之间可能有极短竞争，accepted=false 就重试
+                foreach ($try in 1..15) {
+                    $res = Invoke-Api 'POST' "/api/ai/tool-calls/$($p.callId)/approve" $null
+                    if ($res.accepted) { $state.accepted = $true; break }
+                    Start-Sleep -Milliseconds 150
+                }
+            }
+        }
+        if ($e.event -eq 'tool.started' -and $state.startedIndex -lt 0) { $state.startedIndex = $i }
+    }
+    $e5 = $s5.events
+    $req5 = @(Get-Events $e5 'tool.requested')
+    $r5 = if ($req5.Count -ge 1) { Convert-Data $req5[0] } else { $null }
+    Check 'comfy_sync_history 被请求且 approval == pending' ($null -ne $r5 -and $r5.name -eq 'comfy_sync_history' -and $r5.approval -eq 'pending') ($req5 | ConvertTo-Json -Compress)
+    Check 'callId 非空' (-not [string]::IsNullOrWhiteSpace($state.callId)) ($state | ConvertTo-Json -Compress)
+    Check '批准被后端接受（accepted=true）' ($state.accepted -eq $true) ($state | ConvertTo-Json -Compress)
+    Check '批准之前没有 tool.started' ($state.startedIndex -lt 0 -or $state.startedIndex -gt $state.requestedIndex) ("requested=$($state.requestedIndex) started=$($state.startedIndex)")
+    Check '批准之后收到了 tool.started' ($state.startedIndex -gt $state.requestedIndex) ("requested=$($state.requestedIndex) started=$($state.startedIndex)")
+    $done5 = @(Get-Events $e5 'tool.completed') + @(Get-Events $e5 'tool.failed')
+    Check '审批后工具有了终态（completed/failed）' ($done5.Count -ge 1) ($e5 | ConvertTo-Json -Depth 6 -Compress)
+    Check '收到 run.completed' ((@(Get-Events $e5 'run.completed')).Count -ge 1) ($e5[-1].event)
+
+    # --- 8. 场景 6：只读工具 ----------------------------------------------
+    Say ''
+    Say '  [6/7] 只读工具：comfy_get_status 不需要审批' 'Cyan'
+    $s6 = Receive-Scenario -ConversationId $conv.id -Text '看看 ComfyUI 状态'
+    $e6 = $s6.events
+    $req6 = @(Get-Events $e6 'tool.requested')
+    $r6 = if ($req6.Count -ge 1) { Convert-Data $req6[0] } else { $null }
+    Check '工具是 comfy_get_status' ($null -ne $r6 -and $r6.name -eq 'comfy_get_status') ($req6 | ConvertTo-Json -Compress)
+    Check '只读工具 approval != pending' ($null -ne $r6 -and $r6.approval -ne 'pending') ($r6 | ConvertTo-Json -Compress)
+    $done6 = @(Get-Events $e6 'tool.completed') + @(Get-Events $e6 'tool.failed')
+    $d6 = if ($done6.Count -ge 1) { Convert-Data $done6[0] } else { $null }
+    Check 'comfy_get_status 有终态（completed/failed）' ($null -ne $d6 -and $d6.name -eq 'comfy_get_status') ($d6 | ConvertTo-Json -Compress)
+    Check '收到 run.completed' ((@(Get-Events $e6 'run.completed')).Count -ge 1) ($e6[-1].event)
+
+    # --- 9. 落库的消息 parts（重开会话能渲染工具卡） ----------------------
+    Say ''
+    Say '  [7/7] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
+    $runDto = Invoke-Api 'GET' "/api/ai/runs/$($s1.run.runId)" $null
+    Check 'run 落库状态 == completed' ($runDto.status -eq 'completed') ($runDto | ConvertTo-Json -Compress)
+
+    $msgs = @(Invoke-Api 'GET' "/api/ai/conversations/$($conv.id)/messages" $null)
+    $assistant = @($msgs | Where-Object { $_.id -eq $s1.run.assistantMessageId }) | Select-Object -First 1
+    Check '助手消息已落库' ($null -ne $assistant)
+    if ($assistant) {
+        $types = @($assistant.parts | ForEach-Object { $_.type })
+        Check '助手消息 parts 有序且含 tool_call/tool_result/text' `
+            (($types -contains 'tool_call') -and ($types -contains 'tool_result') -and ($types -contains 'text')) `
+            ($types -join ',')
+        $iCall = [array]::IndexOf($types, 'tool_call')
+        $iRes  = [array]::IndexOf($types, 'tool_result')
+        $iText = [array]::IndexOf($types, 'text')
+        Check "parts 顺序 tool_call($iCall) < tool_result($iRes) < text($iText)" `
+            ($iCall -ge 0 -and $iRes -gt $iCall -and $iText -gt $iRes) ($types -join ',')
+        $tc = $assistant.parts | Where-Object { $_.type -eq 'tool_call' } | Select-Object -First 1
+        Check 'tool_call part 带 name 与 arguments' `
+            ($null -ne $tc -and $tc.jsonPayload.name -eq 'register_skill' -and $tc.jsonPayload.arguments -like '*e2e-tool-demo*') `
+            ($tc | ConvertTo-Json -Depth 6 -Compress)
+        $tw = $assistant.parts | Where-Object { $_.type -eq 'tool_result' } | Select-Object -First 1
+        Check 'tool_result part 带 ok=true' ($null -ne $tw -and $tw.jsonPayload.ok -eq $true) ($tw | ConvertTo-Json -Depth 6 -Compress)
+    }
+} finally {
+    # --- 清理 -------------------------------------------------------------
+    Say ''
+    Say '  清理' 'Cyan'
+    Stop-Gateway
+    if ($gatewayStarted) { Say '  已停止假网关' 'DarkGray' }
+
+    if ($KeepData) {
+        Say '  -KeepData：保留了测试产生的数据（会话 / Provider / skill / 临时文件）' 'Yellow'
+    } else {
+        if ($script:ConversationId) {
+            try { Invoke-Api 'DELETE' "/api/ai/conversations/$($script:ConversationId)" $null | Out-Null } catch { }
+        }
+        try { Invoke-Api 'DELETE' "/api/ai/providers/$ProviderId" $null | Out-Null } catch { }
+        try { Invoke-Api 'DELETE' "/api/ai/skills/$SkillName" $null | Out-Null } catch { }
+        Remove-Item $SkillFile -Force -ErrorAction SilentlyContinue
+        Remove-Item (Split-Path -Parent $SkillFile) -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item $HackFile -Force -ErrorAction SilentlyContinue
+        Remove-Item $OkFile -Force -ErrorAction SilentlyContinue
+        Say '  已删除会话 / Provider / skill / 临时文件' 'DarkGray'
+    }
+    if ($script:Http) { try { $script:Http.Dispose() } catch { } }
+}
+
+Say ''
+Say ("  总计 {0} 项，失败 {1} 项" -f $script:Total, $script:Failed) $(if ($script:Failed -gt 0) { 'Red' } else { 'Green' })
+Say ''
+exit $script:Failed

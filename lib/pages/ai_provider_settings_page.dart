@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../core/ai_api_client.dart';
 import '../core/settings_store.dart';
 import '../models/ai_models.dart';
+import 'ai_tools_settings_page.dart';
 
 /// AI 模型设置（AIH-006 / AIH-007 / AIH-010 / AIH-011 / AIH-012 / AIH-013）。
 ///
@@ -32,18 +33,35 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   String? _error;
   String? _info;
 
+  /// 内置模型目录的状态（只读预览，打开页面时拉一次）。
+  AiBuiltinCatalogStatus? _builtin;
+  bool _builtinBusy = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _api = widget.api ?? AiApiClient(context.read<SettingsStore>().baseUrl);
       _reload();
+      _loadBuiltin();
     });
   }
 
   @override
   void dispose() {
     super.dispose();
+  }
+
+  /// 内置目录状态：拉不到只影响这张卡（要如实显示失败原因，不能静默）。
+  Future<void> _loadBuiltin() async {
+    try {
+      final status = await _api.builtinStatus();
+      if (mounted) setState(() => _builtin = status);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _builtin = AiBuiltinCatalogStatus(error: '$e'));
+      }
+    }
   }
 
   Future<void> _reload() async {
@@ -121,7 +139,20 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('AI 模型与凭据')),
+      appBar: AppBar(
+        title: const Text('AI 模型与凭据'),
+        actions: [
+          // 工具权限（M4）单独一页：白名单 / 逐工具 allow-ask-deny / 预算
+          TextButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const AiToolsSettingsPage()),
+            ),
+            icon: const Icon(Icons.shield_outlined, size: 18),
+            label: const Text('AI 工具权限'),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: Column(
         children: [
           // 没有选中 Provider 时，错误也要看得见（新建失败最常发生在这种情况下）
@@ -149,6 +180,14 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
                 ],
               ),
             ),
+          // 内置模型目录（M6）：冻结副本 → 库里的对齐入口，永远可见
+          _BuiltinCatalogCard(
+            status: _builtin,
+            busy: _builtinBusy,
+            onRefresh: _loading ? null : _loadBuiltin,
+            onAlignCapabilities: _alignBuiltinCapabilities,
+            onAddMissing: _addMissingBuiltinModels,
+          ),
           Expanded(
             child: wide
                 ? Row(
@@ -169,6 +208,75 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         ],
       ),
     );
+  }
+
+  /// 内置模型目录（M6）。
+  ///
+  /// 顺序不能颠倒：**先 GET status 预览 → 让用户确认 → 再 POST sync**。
+  /// 直接 POST 等于不问就改库里的能力声明。
+  Future<void> _alignBuiltinCapabilities() async {
+    final AiBuiltinCatalogStatus status;
+    try {
+      status = await _api.builtinStatus();
+    } catch (e) {
+      _notify('读取内置目录状态失败：$e', error: true);
+      return;
+    }
+    if (!mounted) return;
+    if (!status.ok) {
+      _notify('内置目录不可用：${status.error}', error: true);
+      return;
+    }
+    final count = status.divergentCount;
+    if (count == 0) {
+      _notify('内置目录与库里的能力声明已经一致，不需要对齐。');
+      setState(() => _builtin = status);
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('用内置目录对齐模型能力？'),
+        content: Text(
+          '会按内置目录（版本 ${status.version}）重写 $count 个模型的能力声明：'
+          '输入模态、工具 / 推理能力、思考档位、思考方言与上下文。\n\n'
+          '不会新增或删除模型，也不会改展示名与启用状态。',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('对齐')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await _syncBuiltin('refresh-capabilities');
+  }
+
+  /// 补齐缺失模型：纯新增，不改已有行，所以不必弹确认框。
+  Future<void> _addMissingBuiltinModels() => _syncBuiltin('add-missing');
+
+  Future<void> _syncBuiltin(String mode) async {
+    setState(() => _builtinBusy = true);
+    try {
+      final result = await _api.syncBuiltinCatalog(mode: mode);
+      if (!mounted) return;
+      setState(() => _builtin = result);
+      if (!result.ok) {
+        _notify('同步失败：${result.error}', error: true);
+      } else if (mode == 'add-missing') {
+        _notify('已补齐 ${result.added} 个缺失模型（保留 ${result.kept} 个已有一致的模型）。');
+      } else {
+        _notify('已对齐 ${result.updated} 个模型的能力声明。');
+      }
+      // 库里的模型变了，右侧的模型目录要跟着刷新
+      await _reload();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _builtin = AiBuiltinCatalogStatus(error: '$e'));
+      _notify('同步失败：$e', error: true);
+    } finally {
+      if (mounted) setState(() => _builtinBusy = false);
+    }
   }
 
   /// 统一的用户可见反馈：**任何失败都要弹出来**。
@@ -1471,4 +1579,162 @@ class _ModelDialogState extends State<_ModelDialog> {
 
 extension _FirstOrNullExt<T> on Iterable<T> {
   T? get firstOrNull => isEmpty ? null : first;
+}
+
+/// 「内置模型目录」卡片（M6）。
+///
+/// 内置目录是 `%USERPROFILE%\.dsh\settings.yaml` 的**冻结副本**
+/// （`server/src/main/resources/ai/builtin-catalog.json`）—— 运行时**绝不读 YAML**，
+/// 装我们项目的人没装 DSH 也能用；这里只是把冻结副本与库里的差异摆出来，让用户决定要不要对齐。
+class _BuiltinCatalogCard extends StatelessWidget {
+  final AiBuiltinCatalogStatus? status;
+  final bool busy;
+  final VoidCallback? onRefresh;
+  final Future<void> Function() onAlignCapabilities;
+  final Future<void> Function() onAddMissing;
+
+  const _BuiltinCatalogCard({
+    required this.status,
+    required this.busy,
+    required this.onRefresh,
+    required this.onAlignCapabilities,
+    required this.onAddMissing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final s = status;
+    final divergent = s?.divergentCount ?? 0;
+
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.inventory_2_outlined, size: 18, color: theme.colorScheme.primary),
+                const SizedBox(width: 6),
+                Text('内置模型目录', style: theme.textTheme.titleSmall),
+                if (busy) ...[
+                  const SizedBox(width: 10),
+                  const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ],
+                const Spacer(),
+                IconButton(
+                  tooltip: '刷新内置目录状态',
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  padding: EdgeInsets.zero,
+                  onPressed: busy ? null : onRefresh,
+                  icon: const Icon(Icons.refresh, size: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              r'来自 %USERPROFILE%\.dsh\settings.yaml 的冻结副本（内置目录），运行时不会去读 YAML；'
+              '已自动登记进数据库，这里只做「按需对齐」。',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+            const SizedBox(height: 8),
+            if (s == null)
+              Text('正在读取内置目录状态…', style: theme.textTheme.bodySmall)
+            else if (!s.ok)
+              Text('读取失败：${s.error}',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error))
+            else ...[
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _Tag('版本 ${s.version}'),
+                  _Tag('目录模型 ${s.modelCount}'),
+                  _Tag('库里一致 ${s.kept}'),
+                  if (divergent > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.errorContainer,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.warning_amber_rounded,
+                              size: 13, color: theme.colorScheme.onErrorContainer),
+                          const SizedBox(width: 4),
+                          Text(
+                            s.divergenceLabel,
+                            style: theme.textTheme.labelSmall
+                                ?.copyWith(color: theme.colorScheme.onErrorContainer),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    const _Tag('能力声明一致'),
+                  if (s.providerCreated) const _Tag('Provider 按内置目录创建'),
+                ],
+              ),
+              if (divergent > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    '分歧的模型：${s.divergent.take(6).join('、')}'
+                    '${divergent > 6 ? ' 等 $divergent 个' : ''}',
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: theme.colorScheme.outline),
+                  ),
+                ),
+            ],
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                FilledButton.icon(
+                  onPressed: busy ? null : () => onAlignCapabilities(),
+                  icon: const Icon(Icons.tune, size: 16),
+                  label: const Text('用内置目录对齐模型能力'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: busy ? null : () => onAddMissing(),
+                  icon: const Icon(Icons.playlist_add, size: 16),
+                  // 纯新增：不改任何已有行，所以不弹确认框
+                  label: const Text('补齐缺失模型'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Tag extends StatelessWidget {
+  final String text;
+  const _Tag(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(text, style: theme.textTheme.labelSmall),
+    );
+  }
 }

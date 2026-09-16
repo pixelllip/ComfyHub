@@ -12,7 +12,10 @@
 | 模块 | 能力 |
 | --- | --- |
 | **AI 工作台** | **App 默认落在这一页**（需求 `docs/ai-home-requirements-v0.1.xlsx`，DEC-001）。多轮对话 + 会话列表（重命名 / 归档 / 删除）；**每次冷启动都新建一条聊天记录**（历史仍在左侧列表），**切走时把一条消息都没有的空会话删掉**；**输入框内容按会话存草稿**，切走 / 关窗口都不会把打了一半的字丢掉；**记住上次用的 Provider / 模型 / 思考强度**，下次开 App 直接选回来。宽屏三栏（会话列表 / 对话 / ComfyUI 与模型能力），窄屏会话进抽屉、状态进底部 Sheet、输入区常驻；Composer 支持 Enter 发送、Shift+Enter 换行、输入法选词不误发、`/` 调出 Skills 目录、附件选择；模型选择器直接显示能力徽标（文本 / 图片 / 视频 / 音频 / 文档 / 工具）。助手回复按 **Markdown 渲染**（标题 / 列表 / 引用 / 围栏代码块 / 行内代码 / 粗斜体 / 删除线 / 可点链接，裸链接自动识别）；自研解析器是**流式安全**的 —— 模型吐到一半的 `**` 或未闭合代码围栏按字面量显示，不会吞内容。Provider 与模型目录在设置里配置，**API Key 只写不读**（见第 5 节） |
-| **自动启动** | App 一启动就自己把 **MySQL + 后端**拉起来（先探健康，不健康才启动；启动过程实时回显在启动页上），不用再手动开脚本；**全程不弹命令行窗口**（见 [12 节](#12-本机环境踩坑记录)最后几条） |
+| **自动启动** | App 一启动就自己把 **MySQL + 后端**拉起来（先探健康，不健康才启动；启动过程实时回显在启动页上），不用再手动开脚本；**全程不弹命令行窗口**（见 [12 节](#12-本机环境踩坑记录)最后几条）；关 App 时按设置停掉本地服务（正常关窗口走 `release`，被硬杀有守护进程兜底，见第 5 节脚本速查下面的说明） |
+| **AI 工具调用** | 助手会**真的动手**：查 ComfyUI 状态 / 按 runKey 查一次运行 / 触发一次历史同步（要用户批准）、在 **ComfyUI 目录内**读写文件（越界直接拒绝）。工具卡显示名字、参数摘要、状态（运行中 / 待批准 / 已完成 / 失败 / 已拒绝）、耗时与结果预览，可在卡片上点「批准 / 拒绝」；一次回复最多 8 轮工具、单 Run 有调用次数上限，到顶就逼模型用正文收尾（见 [docs/ai-tools-and-skills.md](docs/ai-tools-and-skills.md)） |
+| **AI Skills** | 磁盘上的 `SKILL.md` 就是真源：**跟 AI 说一句「把这个流程注册成 skill」它就用 `register_skill` 写到本机**，右侧栏立刻能看到、能删（内置的只读），**改动不用重启 App，下一次回复就生效**。系统提示只注入名称 + 描述，正文由 `load_skill` 按需加载；非法 frontmatter 会带诊断列出但不参与对话。可以一键从 `%USERPROFILE%\.dsh\skills` 导入已有 skills（只在点按钮时读一次，运行时绝不依赖 `.dsh`） |
+| **AI 工具权限** | 设置页新增「AI 工具权限」：默认**只能写 `<项目根>\comfyui`**，只读 `comfyui` + `storage`；`.git` / `.mysql` / `.run` / `node_modules` 永远禁写（即使用户把白名单放宽到项目根）。每个工具可以单独设成 允许 / 需批准 / 禁用，禁用后**根本不下发给模型** |
 | **提示词库** | 新建 / 编辑 / 复制 / 删除；区分「生图 / 生视频 / 生音频 / 混合」；正向 + 负向提示词；模型、采样器、调度器、步数、CFG、Seed、宽高、批量、LoRA 列表、备注、收藏；**多选批量管理**（收藏 / 取消收藏 / 加标签 / 删除）；**没有关联任何产物的提示词会挂一个橙色「未关联」标记**（产物被删掉之后就是这种状态），可以按「未关联产物」筛选，也可以**一键清除**（先报条数 + 前几条标题再确认，按批循环删除，超过单页 200 条也不会漏） |
 | **ComfyUI 自动捕获** | ComfyUI 里跑完一次生成，**提示词 + 全部参数 + 完整工作流 + 生成的图片/视频/音频**自动进库并互相关联；不需要改动工作流，也不需要装任何东西（装一个可选的推送节点可以做到零延迟） |
 | **历史产物导入** | 指向 ComfyUI 的 output 目录，把**以前生成好的**图连同图片里内嵌的 `prompt` / `workflow` 一起收进来，自动建提示词并关联 |
@@ -125,7 +128,16 @@ viewer/
 │       │   ├── CredentialService.kt   # ★ 凭据只写：env + Windows DPAPI(CurrentUser)，绝不回读
 │       │   ├── AiRepo.kt              # Provider 与模型目录仓储（revision 乐观锁）
 │       │   ├── AiConversationRepo.kt  # 会话 / 消息 / 有序消息块
-│       │   └── AiRoutes.kt            # /api/ai/*（Provider、凭据状态、模型、会话、预检）
+│       │   ├── AiSeedCatalog.kt       # ★ 读 classpath 里的冻结模型目录（不读 .dsh/settings.yaml）
+│       │   ├── AiSeeder.kt            # ★ 把冻结目录登记进库（幂等、只补不覆盖）
+│       │   ├── HarnessRunner.kt       # ★ Run 执行器：工具循环 / 统一事件 / 系统提示词（v2）
+│       │   ├── ModelCapabilityCatalog.kt # 模型发现时的能力预填建议表
+│       │   ├── tools/                 # ★ M4/M5：工具与 Skills
+│       │   │   ├── ToolModel.kt       # 工具定义 / 权限档 / 调用记录
+│       │   │   ├── ToolPolicy.kt      # ★ 权限策略：默认只写 comfyui，真实路径判定
+│       │   │   ├── ToolRegistry.kt    # ★ 出厂 10 个工具 + 审批闸门
+│       │   │   └── SkillStore.kt      # ★ SKILL.md 扫描 / 校验 / 注册 / 删除 / 导入
+│       │   └── AiRoutes.kt            # /api/ai/*（Provider、凭据、模型、会话、Run、Skills、工具权限）
 │       └── *Routes.kt            # 三组 REST 路由
 │
 ├── db/
@@ -209,10 +221,13 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQ
 
 | 命令 | 作用 |
 | --- | --- |
-| **`scripts\comfyhub.ps1 up / down / status / restart / logs / doctor`** | **统一入口：把 MySQL + 后端当成一个整体来起停和体检** |
+| **`scripts\comfyhub.ps1 up / down / status / restart / logs / doctor / release / watch / unwatch`** | **统一入口：把 MySQL + 后端当成一个整体来起停和体检** |
 | `scripts\comfyhub.ps1 up -WithApp` | 顺带把桌面 App 也拉起来 |
 | `scripts\comfyhub.ps1 up -SkipBuild` | 跳过 gradle 构建，直接用上次的产物启动（App 自动启动时走的就是这个） |
 | `scripts\comfyhub.ps1 up -OwnerPid <pid>` | **App 自动启动时用的形式**：多挂一个「关 App 就停服务」的守护进程（见下面说明） |
+| `scripts\comfyhub.ps1 release` | **只停后端 + MySQL，不动 App 自己**（App 关窗口时调的就是它；`down` 会按进程名杀 `viewer`，在 App 内部不能调） |
+| `scripts\comfyhub.ps1 watch -OwnerPid <pid>` | 给**已经在用本地服务**的 App 补挂「关 App 就停服务」的守护进程（App 启动时探到后端已健康、没跑 `up` 的那条路） |
+| `scripts\comfyhub.ps1 unwatch` | 撤掉上面那个守护进程（用户在设置里关掉「关闭 App 时一并停止本地服务」时 App 会调它），本地服务继续跑 |
 | `scripts\watch-owner.ps1` | 那个守护进程本体：盯着 `-OwnerPid`，目标进程一退出就按 `-StopApi` / `-StopMysql` 停掉对应服务（一般由 `up -OwnerPid` 自动拉起，不用手敲；日志在 `.run\watch-owner.log`） |
 | `$env:COMFYHUB_TRACE=1` + `scripts\comfyhub.ps1 up` | 把冷启动**每一段的耗时**打到 stderr（`[trace   1660ms] mysql: 就绪` 这种），用来定位"到底慢在哪" |
 | `scripts\comfyhub.ps1 doctor` | 体检：路径 / 依赖 / 端口占用逐项检查 |
@@ -232,20 +247,29 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQ
 | `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
 | `scripts\check-silent-start.ps1` | **静默启动自测**：启动服务的同时盯屏，报告有没有弹出 cmd / 控制台窗口（加 `-Restart` 从零走一遍） |
 | `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成） |
+| `scripts\e2e-ai-tools-test.ps1` | **AI 工具循环 + Skills 端到端自测**（假 OpenAI 流式网关 `scripts\e2e\fake_openai.py`，不需要真 API Key、不出网：注册 / 按需加载 / 越界写被拒 / 目录内写成功 / 审批闸门 / 只读工具） |
 | `scripts\install-comfy-node.ps1` | （可选）把捕获节点装进 ComfyUI，实现「跑完立刻捕获」 |
 | `scripts\anima-gen.ps1` | **Anima 生图执行器**：向本机 ComfyUI 提交一次文生图并等落盘（`-PromptFile/-NegativeFile/-Width/-Height/-Seed/-Prefix`） |
+| `scripts\gen-builtin-catalog.ps1` | **开发期工具**：把 `%USERPROFILE%\.dsh\settings.yaml` 里的模型目录抄成我们自己的冻结副本 `server\src\main\resources\ai\builtin-catalog.json`（运行时只读这份副本，**绝不读 YAML**；解析到少于 60 个模型就拒绝写盘） |
 
-> **关 App 的时候，后端 / MySQL 会不会跟着停？** 看服务是谁起的：
+> **关 App 的时候，后端 / MySQL 会不会跟着停？**
 >
-> * **App 自己拉起来的**（启动页那次 `up`）→ 会。App 启动脚本时会带上 `-OwnerPid <自己的 PID>`，
->   服务起来后 `up` 会挂一个脱离进程树的 `watch-owner.ps1` 守护进程。App 一退出
->   （正常关闭 / 崩溃 / 任务管理器强杀都算）它就把**这次真正启动过**的服务停掉，
->   只停自己起的 —— 库本来就是你在终端里开的，就不会被带走。
-> * **你在终端里 `comfyhub.ps1 up` 起的** → 不会。服务常驻，App 开着关着都不影响；
->   之后手工 `up` / `down` 还会顺手把这个守护撤掉，免得它反过来把新起的服务停掉。
+> 一句话：**开着「关闭 App 时一并停止本地服务」（默认）就停，关着就不停。**
 >
-> 开关在「设置 → 本地服务 → 关闭 App 时一并停止本地服务」。**关掉的好处**是服务常驻，
-> 下次开 App 直接热启动（不用等 7~8 秒冷启动）；**开着的好处**是不留后台进程、不占端口。
+> * **App 启动时自己把服务拉起来的**（那次 `up`）→ 停。脚本会带 `-OwnerPid <App 的 PID>`，
+>   服务起来后挂一个脱离进程树的 `watch-owner.ps1` 守护进程；App 一退出
+>   （正常关闭 / 崩溃 / 任务管理器强杀都算）它就把服务停掉（后端 → 等 java 真退出 → MySQL）。
+> * **启动 App 之前服务就已经在跑**（比如你刚在终端 `up` 过、或上一次 App 留下过服务）→ 也停。
+>   App 探到 `/api/health` 健康就不会再跑一次 `up`，这种情况下它会补挂同一条守护
+>   （`comfyhub.ps1 watch -OwnerPid <自己的 PID>`），所以**不会再出现"关了 App，3307/8080 还占着"**。
+>   ⚠️ 这比 2026-09-16 之前的行为更强硬：那时候"你在终端里起的服务"不会被带走。
+>   不想被带走就关掉那个开关，或者在关 App 前把开关关掉（App 会立刻 `unwatch` 撤销守护）。
+> * **关掉开关** → 服务常驻，App 开着关着都不影响；下次开 App 直接热启动（省掉 7~8 秒冷启动）。
+>   `autoStartBackend` 也关掉时，App 完全不碰服务生命周期。
+>
+> 开关在「设置 → 本地服务 → 关闭 App 时一并停止本地服务」。
+> 另外还有一个兜底：App 正常关窗口时会**自己**调一次 `comfyhub.ps1 release`（只停服务、不杀 App），
+> 所以不用等守护进程那 3 秒轮询。
 
 ### 为什么需要一个统一的 `comfyhub.ps1`
 
@@ -412,12 +436,20 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `GET/POST` | `/api/ai/conversations/{id}/messages` | 消息（按 `seq` 有序恢复）/ 追加消息（可带有序块：text / attachment / tool_call / tool_result） |
 | `POST` | `/api/ai/conversations/{id}/runs` | **发起一次对话 Run**：body `{text, providerId, modelId, reasoningEffort?}` → `202 + {runId, assistantMessageId, userMessageId}`，执行在后台 |
 | `GET` | `/api/ai/runs/{id}` | Run 状态（`running / completed / failed / cancelled`、`errorCode`、`promptVersion`、`reasoningEffort`） |
-| `GET` | `/api/ai/runs/{id}/events?after=<seq>` | **统一 SSE 事件流**：`run.started / message.started / reasoning.delta / text.delta / usage.updated / message.completed / run.completed / run.failed / run.cancelled / heartbeat`；`after` 断线续传。`message.completed` 里带 `reasoningEffort` 与归一化 `usage` |
-| `POST` | `/api/ai/runs/{id}/cancel` | 取消：关闭上游连接，Run 记为 `cancelled` |
+| `GET` | `/api/ai/runs/{id}/events?after=<seq>` | **统一 SSE 事件流**：`run.started / message.started / reasoning.delta / text.delta / tool.requested / tool.started / tool.completed / tool.failed / usage.updated / message.completed / run.completed / run.failed / run.cancelled / heartbeat`；`after` 断线续传。`message.completed` 里带 `reasoningEffort`、归一化 `usage`、`steps` 与**有序块 `parts`**（界面按它定稿工具卡） |
+| `POST` | `/api/ai/runs/{id}/cancel` | 取消：关闭上游连接，Run 记为 `cancelled`，**不再继续工具循环** |
+| `GET` | `/api/ai/skills` | Skills 列表（含 `validationError` 诊断与 `conflict` 冲突提示；内置 / 用户两种来源） |
+| `GET` | `/api/ai/skills/{name}` | 元数据 + 正文（正文只在打开详情时读） |
+| `POST` | `/api/ai/skills` | 注册 / 覆盖一个用户来源的 Skill（界面用；AI 走 `register_skill` 工具） |
+| `DELETE` | `/api/ai/skills/{name}` | 删除（**只允许用户来源**；内置的返回 400 拒绝） |
+| `POST` | `/api/ai/skills/import-dsh` | 从 `%USERPROFILE%\.dsh\skills` 导入（用户显式动作；目录不存在返回 400） |
+| `GET` | `/api/ai/tools` | 工具清单 + 生效权限（`allow / ask / deny`）与是否被用户覆盖 |
+| `GET/PUT` | `/api/ai/tools/policy` | 读 / 改工具权限：写白名单、读白名单、逐工具覆盖、`maxToolSteps`、`maxCallsPerRun` |
+| `POST` | `/api/ai/tool-calls/{callId}/approve` \| `/deny` | 工具卡上的「批准 / 拒绝」；返回 `{callId, approved, accepted}`（`accepted=false` 表示这次调用已经超时或不在等待） |
 
 **重试**：失败或被取消的回复上会出现「重试」按钮 —— 它是**新开一个 Run**（用 `retryOfRunId`
 关联回原 Run，便于事后看出这是哪次失败的重放），重放原来的提问、同一个 Provider/模型与思考强度；
-不会自动重放工具调用（首期还没有工具）。
+**已经产生过工具调用的 Run 不会自动重放**（免得工具副作用跑两次，AIH-024）。
 
 **协议支持现状**（以代码事实为准，不按模型名猜）：
 
@@ -470,8 +502,22 @@ DPAPI 不可用时写入直接失败，**不会退化成明文落盘**（AIH-012
 "接口说了"是**逐维度**判断的：网关上最常见的 `{id, object, owned_by}` 什么能力都没说，
 `capabilities: {}` 这种空对象也不算声明 —— 这两种情况**都会回退到内置目录**，
 模态、思考档位与方言一起预填好，不用手工勾。
-**所有模型的工具能力默认给上**（网关普遍支持却很少声明，而当前请求体还不发 `tools`，
-勾着不会让请求失败；用户随时能取消）。
+**所有模型的工具能力默认给上**（网关普遍支持却很少声明）。
+M4 之后请求体**真的会带 `tools`**：如果网关不认这个字段而直接 400，本次 Run 会**自动退回纯文本模式**
+重试一次，并在回复里如实写明"上游不接受工具参数"（而不是让用户以为模型坏了）。
+
+**内置模型目录：`%USERPROFILE%\.dsh\settings.yaml` 的内容已经抄进我们自己的项目**
+（用户要求：不能依赖"装了我们项目的人也装了 DSH"）。实现是三段：
+
+1. `scripts\gen-builtin-catalog.ps1`（开发期工具）把那份 YAML 抄成
+   `server\src\main\resources\ai\builtin-catalog.json` —— 现在这份副本是 **1 个 provider
+   （`command-code-goat`，openai-completions）+ 69 个模型**，逐条带 `contextWindow` / 输入模态 /
+   思考档位，生成的 JSON 与手抄版本**逐字节一致**（sha256 相同）；
+2. 后端启动时 `AiSeeder` 把这份**冻结副本**（读 classpath，**不读 YAML**）登记进数据库：
+   provider 不存在就整套建好；已经存在就**只补库里缺的模型**，绝不覆盖用户改过的行
+   （能力声明与内置目录不一致的会记日志提示，可在界面上重新对齐）；
+3. `ModelCapabilityCatalog`（那张"按名字前缀猜能力"的建议表）继续用于**模型发现时的预填**，
+   两者不冲突：一个是"目录里真的有哪些模型"，一个是"接口没说时怎么预填能力"。
 
 内置目录只是**预勾选建议**，可能过期；没命中的模型**绝不会按名字猜图片能力与思考支持**。
 "获取可用模型"里每个候选都能展开改模态再点加入。
@@ -585,7 +631,11 @@ MiMo、Step、Hy、Inkling、LongCat、Nemotron 等），连**同系列里的视
 | `media_assets` | 生成产物元数据（`prompt_id` 可空，`ON DELETE SET NULL`） |
 | `media_tags` | 产物 ↔ 标签，多对多 |
 | `capture_runs` | ★ 自动捕获的运行记录（`run_key` 唯一 = ComfyUI 的 `prompt_id`，`raw` 留一份 history 片段便于排查） |
-| `app_settings` | ★ 运行期设置 k/v（自动捕获配置就存在这，App 与后端共用） |
+| `app_settings` | ★ 运行期设置 k/v（自动捕获配置、**AI 工具权限策略**都在这，App 与后端共用） |
+| `ai_providers` / `ai_models` | AI Provider 与模型目录（能力真源：输入模态 / 工具 / 思考档位与方言）；凭据**只存引用名**，值在 DPAPI 文件里 |
+| `ai_conversations` / `ai_messages` / `ai_message_parts` | 会话 / 消息 / **有序消息块**（text · reasoning · attachment · tool_call · tool_result，按 `ordinal` 无损恢复，工具卡就靠它渲染） |
+| `ai_runs` / `ai_run_events` | 每次 Run 的快照（Provider / 模型 / Skills digest / `promptVersion`，**不含密钥**）与统一事件流（单调 `seq`，可断线续传） |
+| `ai_tool_calls` | ★ 工具调用审计：`approval`（not_required / pending / approved / denied）与 `status` 分开记 —— **被用户拒绝的调用也留痕** |
 | `v_media_full` | 视图：产物 + 关联提示词 + 聚合标签名 |
 
 ### 8.1 数据库放在哪（可以指定）
@@ -862,6 +912,26 @@ pwsh -File scripts\server.ps1 test   # 后端 126 个用例
 | `server/src/test/kotlin/.../ModelCapabilityTest.kt` | **能力预填**：接口声明优先、内置目录来源可见、未知模型只给文本；另有一张**逐模型对照表**（27 个常用模型：模态 + 思考档位键集合），数据取自 `%USERPROFILE%\.dsh\settings.yaml`，settings 变了或表写错都会在这里报出来 |
 | `server/src/test/kotlin/.../ThinkingAndUsageTest.kt` | **思考声明校验 + token 归一化**：未知等级 / 空表达 / 声明档位却没勾推理都会被拒；OpenAI 与 Anthropic 两种 usage 方言、只给 `total_tokens` 的网关、坏数据都当成 0 |
 | `server/src/test/kotlin/.../AuthAndModelsUrlTest.kt` | **真起一个本地假网关**（不联网）：Base URL 带 / 不带 `/v1` 都能回退到可用的模型列表地址、网关根本没有 `/models`（404）时连接测试仍算连通并说明原因、Key 真的不对（401）时报鉴权失败且**错误里不回显密钥**、`openai-responses` 的请求确实落在 `/v1/responses` 并带 `Bearer` |
+| `server/src/test/kotlin/.../ToolProtocolTest.kt` | **工具调用的协议契约（三家）**：OpenAI 的 `tool_calls` / `tool` 轮、Anthropic 的 `tool_use` + `tool_result` **合并成一条 user 消息**、Responses 的顶层 `function_call` / `function_call_output`；`tools` 为空时**整个字段省略**；流式工具分片的三种拼法（含参数被切在 JSON 中间）；`ToolCallAccumulator` 的并行调用与缺 id 兜底。20 例 |
+| `server/src/test/kotlin/.../ToolPolicyTest.kt` | **权限策略**：默认写根只有 `comfyui`、`storage` 只读、`..` 与符号链接逃逸被拒、`.git`/`.mysql`/`.run`/`node_modules` 即使把白名单放宽到项目根也拒、`overrides` 与 `deny` 不进下发清单。9 例 |
+| `server/src/test/kotlin/.../SkillStoreTest.kt` | **Skills 仓库**：frontmatter（引号 / 注释 / CRLF / BOM / 无围栏）、名称与体积校验、非法项"列出来但不参与对话"、同名用户版胜出带冲突提示、内置不可删、**描述很长不算非法**。18 例 |
+| `server/src/test/kotlin/.../ToolRegistryTest.kt` | **工具执行**：注册后立刻可见、同一 Run 不重复加载、`write_file` 落在正确位置且越界**不落盘**、审批闸门（不批就不执行、批了执行一次）、预算与截断、`SystemPrompt.render(v2)` 的内容。16 例 |
+| `server/src/test/kotlin/.../AiSeedCatalogTest.kt` + `AiSeederPlanTest.kt` | **内置模型目录**：资源里有 1 provider / 69 模型、逐条对照（含 `off: null` 被丢掉、纯文本条目、`xhigh` 档位）、生成器与手抄版一致；`planSeed` 的"只补缺失 / 不改用户行 / 分歧单独列出 / 用户自加模型永不被删"。27 例 |
+| `test/scroll_perf_test.dart` | **长列表性能**：缩略图解码宽度随格子与 DPR 变化且 ≤512、横竖图不变形、`FilterQuality.low`、`AdaptiveColumnList` 500 条只建 <60 项、单列 0 次固有高度查询、多列仍等高、网格每格有 `RepaintBoundary` 且无 `AutomaticKeepAlive`。8 例 |
+| `test/backend_launcher_test.dart` | **退出收尾**（全假进程，不真起服务）：`release` / `watch` / `unwatch` 的参数向量、没认领过服务就不主动停、`accepted`/失败不抛、`stopServicesOnExit` 关掉时不动作。11 例 |
+| `test/ai_tools_ui_test.dart` | **工具与 Skills 的界面**：侧栏渲染实时 Skills 与 DELETE URL、工具卡状态与折叠预览、`pending` 时点批准 POST 到正确地址、`accepted=false` 如实告知、思考过程折叠、模型选择器懒构建 + 搜索过滤、权限页 PUT、内置目录卡片"确认前绝不发 sync"、`/` 菜单，以及流式期间未变消息对象实例唯一（O(n) 热点回归）。13 例 |
+
+### AI 工具循环 + Skills 的端到端验证
+
+工具循环（模型要工具 → 后端按权限执行 → 结果喂回 → 再问一次）只有真跑一遍才盖得住。
+用一个**假的 OpenAI 流式网关**离线跑完整条链路，不需要真 API Key、不花钱：
+
+```powershell
+pwsh -File scripts\e2e-ai-tools-test.ps1
+# 注册 skill 落盘 → 按需 load_skill → 越界写被 PATH_DENIED 拒绝 → comfyui 内写成功
+# → comfy_sync_history 等批准才执行 → 只读工具免审批 → 落库 parts 有序
+# 49 项检查；跑完自动删掉测试用的会话 / Provider / skill / 临时文件；加 -KeepData 保留
+```
 
 ### 自动捕获的端到端验证
 
@@ -979,6 +1049,15 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
   库里会存下 API 节点图作为兜底，参数、连接、模型都在，但节点位置是 ComfyUI 自己布局的，不是当初画布上的样子。
 - **Web 端**：`file_picker` 在 Web 上拿不到本地路径，上传功能在 Web 不可用；本项目定位是桌面 / 移动端。
 - **自动启动本地服务仅 Windows 桌面端**：其他平台会明确提示，不会静默失败。
+- **AI 工具默认只在 ComfyUI 目录内写文件**：这是刻意的（用户要求"默认不能修改 comfy 目录以外的内容"）。
+  想让它写别处，去「设置 → AI 工具权限」加白名单；`.git` / `.mysql` / `.run` / `node_modules` 是硬禁写。
+- **没有 shell / 进程类工具**：Skill 带来的 `scripts/` 只是不可执行的资源（AIH-045）。
+  要执行命令请自己跑脚本 —— 这是权限模型的边界，不是漏做。
+- **工具审批没有"记住这次允许"**：每次 `ask` 类工具（`comfy_sync_history`、`delete_skill`）都要点一次；
+  等待超过 5 分钟或 Run 被取消都按"拒绝"处理（绝不会因为没人管就默认执行）。
+- **历史消息里的工具轮会被送回上游**：多轮对话会把之前的 `tool_call` / `tool_result` 一起带进上下文，
+  长对话里这部分 token 不能忽略（`ai_message_parts` 是有序块，前端按它渲染工具卡）。
+- **`ai_tool_calls` 只增不减**：每次工具调用一行（含被拒绝的），目前没有自动清理策略。
 - **单用户、无鉴权**：后端默认只监听本机，请勿直接暴露到公网。
 - **Windows 高 DPI**：窗口按系统缩放渲染（本机 150%），因此逻辑尺寸 = 1440/1.5 = 960×613，界面会走 NavigationRail 布局。
 
@@ -991,4 +1070,8 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 - 视频首帧抽取（引入 ffmpeg 后可做真正的视频缩略图）
 - `capture_runs` 的自动清理 / 归档（现在只增不减，数据量大了需要定期删）
 - 从 mp4 元数据里还原 VHS_VideoCombine 的工作流（现在视频只入库、不自动关联提示词）
+- **AI 工具**：第三方 Skill 的 ZIP 导入（解压前预览 + 拒绝穿越 / 炸弹，AIH-043/044）、
+  内置 Anima / H3 Skills 正文随项目分发（AIH-041/042）、工具审批的"本次会话都允许"、
+  可选的 `edit`（字面量替换）与 `glob`/`grep` 文件工具（要先有 ripgrep 依赖）
+- **附件可发（M3）**：图片内联是唯一还缺的"能聊"能力，做完 `transports` 非空、预检才会放行图片
 - 远端 ComfyUI（跨机捕获）的鉴权与限流

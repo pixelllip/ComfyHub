@@ -56,6 +56,8 @@ data class AiRunStartRequest(
 data class AiRunStartResponse(val runId: String, val assistantMessageId: String, val userMessageId: String?)
 
 object AiRunRepo {
+    private val log = org.slf4j.LoggerFactory.getLogger(AiRunRepo::class.java)
+
     private const val RUNNING = "running"
     private const val COMPLETED = "completed"
     private const val FAILED = "failed"
@@ -72,6 +74,8 @@ object AiRunRepo {
         assistantMessageId: String,
         retryOfRunId: String?,
         reasoningEffort: String? = null,
+        /** 本次 Run 生效的 Skills（名称 + digest）：AIH-047 要求能追溯"当时用的是哪版规则" */
+        skillSnapshot: JsonObject? = null,
     ): AiRunDto {
         val id = UUID.randomUUID().toString()
         Db.withConnection { conn ->
@@ -79,12 +83,14 @@ object AiRunRepo {
                 """
                 INSERT INTO ai_runs
                   (id, conversation_id, status, provider_id, model_id, user_message_id, assistant_message_id,
-                   provider_snapshot, model_snapshot, prompt_version, retry_of_run_id, reasoning_effort, started_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP(3))
+                   provider_snapshot, model_snapshot, skill_snapshot, prompt_version, retry_of_run_id,
+                   reasoning_effort, started_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP(3))
                 """.trimIndent(),
                 id, conversationId, RUNNING, providerId, modelId, userMessageId, assistantMessageId,
                 AppJson.encodeToString(JsonObject.serializer(), providerSnapshot),
                 AppJson.encodeToString(JsonObject.serializer(), modelSnapshot),
+                skillSnapshot?.let { AppJson.encodeToString(JsonObject.serializer(), it) },
                 promptVersion, retryOfRunId, reasoningEffort,
             )
         }
@@ -130,6 +136,56 @@ object AiRunRepo {
             """.trimIndent(),
             FAILED, AiErrorCode.PROTOCOL_ERROR, reason, RUNNING,
         )
+    }
+
+    // --- 工具调用（M4 / AIH-035 / AIH-049） ---------------------------------
+
+    /**
+     * 落一条工具调用记录（审计用）。
+     *
+     * `approval` 与 `status` 分开记：需要审批的工具即使被拒绝也要留痕
+     * （"AI 想同步历史但用户拒绝了"这种事必须能回溯）。
+     */
+    fun insertToolCall(rec: com.comfyhub.ai.tools.ToolCallRecord) {
+        runCatching {
+            Db.withConnection { conn ->
+                conn.execute(
+                    """
+                    INSERT INTO ai_tool_calls
+                      (id, run_id, provider_call_id, name, arguments_json, approval, status,
+                       result_json, content, error, elapsed_ms, started_at, completed_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+                    ON DUPLICATE KEY UPDATE status = VALUES(status), result_json = VALUES(result_json),
+                       content = VALUES(content), error = VALUES(error),
+                       approval = VALUES(approval), elapsed_ms = VALUES(elapsed_ms),
+                       completed_at = CURRENT_TIMESTAMP(3)
+                    """.trimIndent(),
+                    rec.id, rec.runId, rec.callId, rec.name, rec.argumentsJson.take(16_000),
+                    rec.approval, rec.status,
+                    rec.resultJson?.let { AppJson.encodeToString(JsonObject.serializer(), it) },
+                    rec.content.take(64_000), rec.error?.take(2000), rec.elapsedMs,
+                )
+            }
+        }.onFailure { log.warn("工具调用记录落库失败: {}", it.message) }
+    }
+
+    /** 某个 Run 用过的工具（界面回放 / 排查用）。 */
+    fun listToolCalls(runId: String): List<Map<String, Any?>> = Db.withConnection { conn ->
+        conn.queryList(
+            "SELECT * FROM ai_tool_calls WHERE run_id = ? ORDER BY started_at, id",
+            runId,
+        ) { rs ->
+            mapOf(
+                "id" to rs.getString("id"),
+                "callId" to rs.getString("provider_call_id"),
+                "name" to rs.getString("name"),
+                "argumentsJson" to rs.getString("arguments_json"),
+                "approval" to rs.getString("approval"),
+                "status" to rs.getString("status"),
+                "error" to rs.getString("error"),
+                "elapsedMs" to rs.getLong("elapsed_ms"),
+            )
+        }
     }
 
     // --- 事件 ---------------------------------------------------------------

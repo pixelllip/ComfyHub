@@ -1,3 +1,5 @@
+import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
@@ -71,12 +73,15 @@ class StartupGate extends StatefulWidget {
 
 class _StartupGateState extends State<StartupGate> {
   BackendLauncher? _launcher;
+  SettingsStore? _settings;
+  AppLifecycleListener? _lifecycle;
   bool _bootstrapped = false;
   bool _refreshed = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _settings = context.read<SettingsStore>();
     final launcher = context.read<BackendLauncher>();
     if (!identical(launcher, _launcher)) {
       _launcher?.removeListener(_onLauncherChanged);
@@ -86,8 +91,28 @@ class _StartupGateState extends State<StartupGate> {
 
   @override
   void dispose() {
+    _lifecycle?.dispose();
     _launcher?.removeListener(_onLauncherChanged);
     super.dispose();
+  }
+
+  /// 关窗口时把**本地服务**停掉：`scripts\comfyhub.ps1 release`（只停后端 + MySQL，
+  /// 不碰 App 自己）。Windows 上这是唯一可靠的收尾时机 —— 模板 runner
+  /// （windows\runner\flutter_window.cpp:50-70）把窗口消息交给引擎，
+  /// WM_CLOSE 会被转成 onExitRequested；而 detach / dispose 之后 Dart 侧已经
+  /// 不适合再起子进程（onDetach 在桌面端也不可靠，注册它反而可能在启动时就误触发）。
+  ///
+  /// 无论脚本成功、失败还是没有，都必须返回 exit：绝不能让 App 关不掉。
+  Future<AppExitResponse> _onExitRequested() async {
+    final launcher = _launcher;
+    if (launcher != null && (_settings?.stopServicesOnExit ?? false)) {
+      try {
+        await launcher.releaseOnExit();
+      } catch (_) {
+        // 收尾失败也要照常关闭
+      }
+    }
+    return AppExitResponse.exit;
   }
 
   void _onLauncherChanged() {
@@ -103,6 +128,8 @@ class _StartupGateState extends State<StartupGate> {
   @override
   void initState() {
     super.initState();
+    // 「关 App 就停服务」的窗口关闭钩子（见 _onExitRequested）
+    _lifecycle = AppLifecycleListener(onExitRequested: _onExitRequested);
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
 
