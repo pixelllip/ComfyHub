@@ -531,6 +531,8 @@ class _ToolCallCardState extends State<_ToolCallCard> {
   IconData get _icon => switch (widget.category) {
         'skill' => Icons.auto_awesome_outlined,
         'files' => Icons.folder_outlined,
+        // 长期记忆（M6）：记住一条事实用的是「便签」这个意象
+        'memory' => Icons.push_pin_outlined,
         _ => Icons.dns_outlined,
       };
 

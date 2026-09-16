@@ -383,6 +383,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                         switch (tool.category) {
                           'skill' => Icons.auto_awesome_outlined,
                           'files' => Icons.folder_outlined,
+                          'memory' => Icons.push_pin_outlined,
                           _ => Icons.dns_outlined,
                         },
                         size: 16,
