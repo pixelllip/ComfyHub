@@ -49,7 +49,9 @@ param(
     [string]$SageAttention = "disabled",
     [switch]$SageAllowCompile,
     [string]$Host_ = "127.0.0.1:8188",
-    [int]$TimeoutSec = 900
+    [int]$TimeoutSec = 900,
+    # ComfyUI 的 output 目录（留空则自动探测，见 scripts\comfy-path.ps1）
+    [string]$OutputDir = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -168,7 +170,18 @@ while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
 if (-not $files) { throw "超时（$TimeoutSec s）未拿到输出。" }
 
 # 定位落盘文件（output 根或日期子目录）；subfolder 可能为空串，不能直接 Join-Path
-$outRoot = "D:\Comfy-Desktop\ComfyUI-Shared\output"
+# 输出目录**不再写死**：优先级 = -OutputDir 参数 → COMFYHUB_COMFY_OUTPUT → 探测到的 ComfyUI 的 output/
+$outRoot = $OutputDir
+if ([string]::IsNullOrWhiteSpace($outRoot)) {
+    $helper = Join-Path $PSScriptRoot 'comfy-path.ps1'
+    if (Test-Path $helper) {
+        . $helper
+        $outRoot = Resolve-ComfyOutputDir
+    }
+}
+if ([string]::IsNullOrWhiteSpace($outRoot)) {
+    throw "定位不到 ComfyUI 的输出目录。请用 -OutputDir 指定，或设置 COMFYHUB_COMFY_OUTPUT。"
+}
 foreach ($f in $files) {
     $rel = if ([string]::IsNullOrWhiteSpace($f.subfolder)) { $f.filename } else { Join-Path $f.subfolder $f.filename }
     $p = Join-Path $outRoot $rel

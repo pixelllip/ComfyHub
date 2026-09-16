@@ -342,6 +342,9 @@ data class CapturePollResult(
 )
 
 @Serializable
+data class LocateApplyRequest(val outputDir: String? = null)
+
+@Serializable
 data class ImportFolderRequest(
     val dir: String,
     val recursive: Boolean = true,

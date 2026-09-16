@@ -67,6 +67,11 @@ if (Test-Path $SilentHelper) { . $SilentHelper }
 $RuntimeHelper = Join-Path $Scripts 'runtime-deps.ps1'
 if (Test-Path $RuntimeHelper) { . $RuntimeHelper }
 
+# ComfyUI 位置解析（用户"其他建议"第 3 条）：发布包是便携式的，ComfyUI 装在哪不能靠猜，
+# 这里与后端 ComfyLocator.kt 用同一套判据，见 scripts\comfy-path.ps1
+$ComfyPathHelper = Join-Path $Scripts 'comfy-path.ps1'
+if (Test-Path $ComfyPathHelper) { . $ComfyPathHelper }
+
 # ---------------------------------------------------------------------------
 #  输出编码
 # ---------------------------------------------------------------------------
@@ -690,6 +695,17 @@ function Do-Doctor {
 
     $mysqld = Resolve-MysqlBin 'mysqld.exe'
     Say ("  {0,-16} {1}" -f 'mysqld.exe', $(if ($mysqld) { $mysqld } else { '找不到，设置 COMFYHUB_MYSQL_HOME' })) $(if ($mysqld) { 'Green' } else { 'Red' })
+
+    # ComfyUI 在哪（其他建议第 3 条）：发布包里这块最容易出问题，
+    # 所以 doctor 里直接把它指出来 —— 找不到时给出该怎么填，而不是让用户自己猜。
+    if (Get-Command Resolve-ComfyHome -ErrorAction SilentlyContinue) {
+        $comfyHome = Resolve-ComfyHome -ProjectRoot $ProjectRoot
+        $comfyOut = Resolve-ComfyOutputDir -ProjectRoot $ProjectRoot
+        Say ("  {0,-16} {1}" -f 'ComfyUI 目录', $(if ($comfyHome) { $comfyHome } else { '没找到（后端会在打开 App 时探测；也可以设置 COMFYHUB_COMFY_HOME）' })) $(if ($comfyHome) { 'Green' } else { 'Yellow' })
+        if ($comfyOut) {
+            Say ("  {0,-16} {1}" -f 'ComfyUI 输出目录', $comfyOut) 'Gray'
+        }
+    }
 
     $flutter = (Get-Command flutter -ErrorAction SilentlyContinue)
     Say ("  {0,-16} {1}" -f 'flutter', $(if ($flutter) { $flutter.Source } else { 'PATH 里没有' })) $(if ($flutter) { 'Green' } else { 'Red' })

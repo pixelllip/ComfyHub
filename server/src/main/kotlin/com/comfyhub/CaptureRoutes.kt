@@ -68,6 +68,26 @@ fun Route.captureRoutes(ctx: AppContext, capture: ComfyCapture, submitter: Comfy
             call.respond(capture.pollOnce())
         }
 
+        /**
+         * 探测 ComfyUI 装在哪（用户"其他建议"第 3 条）。**只读**：
+         * 探测结果不会自动生效，用户点「使用这个目录」才会写进配置。
+         */
+        get("/locate") {
+            call.respond(ComfyLocator.find(ctx.cfg))
+        }
+
+        /** 把探测到的输出目录写进配置（用户点了「使用这个目录」）。 */
+        post("/locate/apply") {
+            val body = call.receive<LocateApplyRequest>()
+            val dir = body.outputDir?.trim().orEmpty()
+            if (dir.isEmpty()) return@post call.respondBadRequest("outputDir 不能为空")
+            if (!java.nio.file.Files.isDirectory(java.nio.file.Paths.get(dir))) {
+                return@post call.respondBadRequest("目录不存在：$dir")
+            }
+            val current = SettingsRepo.captureConfig(ctx.cfg)
+            call.respond(SettingsRepo.saveCaptureConfig(current.copy(outputDir = dir)))
+        }
+
         post("/import") {
             val body = call.receive<ImportFolderRequest>()
             if (body.dir.isBlank()) return@post call.respondBadRequest("dir 不能为空")

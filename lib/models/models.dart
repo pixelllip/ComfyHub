@@ -619,9 +619,50 @@ class CaptureStatus {
       );
 }
 
+/// ComfyUI 安装位置探测结果（用户"其他建议"第 3 条）。
+///
+/// 发布包是便携式的：用户把包解压到哪、ComfyUI 装在哪，两边都不知道。
+/// 后端按特征文件（`main.py` + `comfy/` 或 `output/` + `models/`）探测，
+/// 探测结果**不会自动生效** —— 用户点「使用这个目录」才会写进配置。
+class ComfyLocation {
+  /// 探测到的 ComfyUI 根目录（找不到为 null）。
+  final String? home;
+
+  /// 大概率可直接读产物的输出目录。
+  final String? outputDir;
+
+  /// 从哪里找到的（给用户看的一句话）。
+  final String? source;
+
+  /// 当前设置里已经生效的输出目录。
+  final String? configuredOutputDir;
+
+  /// 没找到时给用户的建议。
+  final String? note;
+
+  const ComfyLocation({
+    this.home,
+    this.outputDir,
+    this.source,
+    this.configuredOutputDir,
+    this.note,
+  });
+
+  factory ComfyLocation.fromJson(Map<String, dynamic> j) => ComfyLocation(
+        home: j['home'] as String?,
+        outputDir: j['outputDir'] as String?,
+        source: j['source'] as String?,
+        configuredOutputDir: j['configuredOutputDir'] as String?,
+        note: j['note'] as String?,
+      );
+
+  /// 探测到了可以直接用的输出目录，且和当前配置不一样。
+  bool get canApply =>
+      outputDir != null && outputDir!.isNotEmpty && outputDir != configuredOutputDir;
+}
+
 class CapturePollResult {
-  final bool ok;
-  final int checked;
+  final bool ok;  final int checked;
   final int newRuns;
   final int newMedia;
   final String? message;

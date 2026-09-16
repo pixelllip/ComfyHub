@@ -308,6 +308,15 @@ class ApiClient {
   Future<CaptureStatus> captureStatus() async =>
       CaptureStatus.fromJson(Map<String, dynamic>.from(await _get('/api/capture/status') as Map));
 
+  /// 探测 ComfyUI 装在哪（用户"其他建议"第 3 条）。**只读**：不会自动改配置。
+  Future<ComfyLocation> locateComfy() async =>
+      ComfyLocation.fromJson(Map<String, dynamic>.from(await _get('/api/capture/locate') as Map));
+
+  /// 把探测到的输出目录写进配置（用户点了「使用这个目录」）。
+  Future<CaptureConfig> applyComfyLocation(String outputDir) async =>
+      CaptureConfig.fromJson(Map<String, dynamic>.from(
+          await _send('POST', '/api/capture/locate/apply', {'outputDir': outputDir}) as Map));
+
   /// 立刻轮询一次 ComfyUI 的 /history（App 里点「立即同步」时用）
   Future<CapturePollResult> pollCapture() async => CapturePollResult.fromJson(
       Map<String, dynamic>.from(await _send('POST', '/api/capture/poll', null) as Map));

@@ -41,6 +41,9 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _captureEnabled = true;
   int _pollSeconds = 4;
 
+  /// 「自动查找 ComfyUI」的探测结果（用户"其他建议"第 3 条）；null = 还没查过。
+  ComfyLocation? _comfyLocation;
+
   @override
   void initState() {
     super.initState();
@@ -135,8 +138,100 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  Future<void> _saveCapture() async {
+  /// 自动查找本机的 ComfyUI（用户"其他建议"第 3 条）。
+  ///
+  /// 探测本身是只读的：**不点「使用这个目录」就不会改任何设置**。
+  Future<void> _locateComfy() async {
     final store = context.read<LibraryStore>();
+    setState(() {
+      _captureBusy = true;
+      _captureMessage = null;
+      _captureError = null;
+    });
+    try {
+      final found = await store.api.locateComfy();
+      if (!mounted) return;
+      setState(() {
+        _comfyLocation = found;
+        _captureMessage = found.outputDir == null
+            ? '没找到 ComfyUI 的安装位置。'
+            : '找到了：${found.outputDir}';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _captureError = '查找失败：$e');
+    } finally {
+      if (mounted) setState(() => _captureBusy = false);
+    }
+  }
+
+  /// 把探测到的输出目录写进配置（用户显式点的那一下）。
+  Future<void> _applyComfyLocation(String outputDir) async {
+    final store = context.read<LibraryStore>();
+    setState(() {
+      _captureBusy = true;
+      _captureMessage = null;
+      _captureError = null;
+    });
+    try {
+      final saved = await store.api.applyComfyLocation(outputDir);
+      if (!mounted) return;
+      setState(() {
+        _capture = saved;
+        _comfyOutputController.text = saved.outputDir ?? '';
+        _comfyLocation = null;
+        _captureMessage = '已使用探测到的输出目录：${saved.outputDir}';
+      });
+      await _refreshCaptureStatus();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _captureError = '应用失败：$e');
+    } finally {
+      if (mounted) setState(() => _captureBusy = false);
+    }
+  }
+
+  /// 探测结果面板：找到了就给一句"从哪找到的 + 一键使用"，没找到就给该怎么填。
+  Widget _comfyLocationPanel(ThemeData theme) {
+    final loc = _comfyLocation!;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 4),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (loc.outputDir != null) ...[
+                Text('找到 ComfyUI：${loc.home ?? '-'}', style: theme.textTheme.bodySmall),
+                const SizedBox(height: 2),
+                Text(
+                  '输出目录：${loc.outputDir}'
+                  '${loc.source != null ? '（${loc.source}）' : ''}',
+                  style: theme.textTheme.labelSmall,
+                ),
+                const SizedBox(height: 6),
+                if (loc.canApply)
+                  FilledButton.tonal(
+                    onPressed: _captureBusy ? null : () => _applyComfyLocation(loc.outputDir!),
+                    child: const Text('使用这个目录'),
+                  )
+                else
+                  Text('已经在用这个目录了。', style: theme.textTheme.labelSmall),
+              ] else
+                Text(
+                  loc.note ?? '没找到 ComfyUI。请手工填上面的输出目录。',
+                  style: theme.textTheme.bodySmall,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveCapture() async {    final store = context.read<LibraryStore>();
     setState(() {
       _captureBusy = true;
       _captureMessage = null;
@@ -850,12 +945,25 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(height: 4),
             Align(
               alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: _pickComfyOutputDir,
-                icon: const Icon(Icons.folder_open, size: 18),
-                label: const Text('选择目录…'),
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  TextButton.icon(
+                    onPressed: _pickComfyOutputDir,
+                    icon: const Icon(Icons.folder_open, size: 18),
+                    label: const Text('选择目录…'),
+                  ),
+                  // 用户"其他建议"第 3 条：发布包是便携式的，ComfyUI 装在哪不能靠猜。
+                  // 探测是只读的，点「使用这个目录」才写进配置（绝不偷偷改用户设置）。
+                  TextButton.icon(
+                    onPressed: _captureBusy ? null : _locateComfy,
+                    icon: const Icon(Icons.travel_explore, size: 18),
+                    label: const Text('自动查找 ComfyUI'),
+                  ),
+                ],
               ),
             ),
+            if (_comfyLocation != null) _comfyLocationPanel(theme),
             const SizedBox(height: 4),
             Row(
               children: [
