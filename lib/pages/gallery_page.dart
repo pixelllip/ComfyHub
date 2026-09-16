@@ -173,6 +173,15 @@ class _GalleryPageState extends State<GalleryPage> {
                   selected: store.mediaUntagged,
                   onSelected: store.setMediaUntagged,
                 ),
+                const SizedBox(width: 4),
+                // 提示词被删掉后，它名下的产物会解除关联（prompt_id → NULL）。
+                // 这里给一个"把这些孤儿产物一次清掉"的入口（用户要求）。
+                TextButton.icon(
+                  onPressed: _busy ? null : _clearUnlinked,
+                  icon: const Icon(Icons.cleaning_services_outlined, size: 16),
+                  label: const Text('清除未关联产物'),
+                  style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+                ),
                 const SizedBox(width: 6),
                 if (store.mediaTags.isNotEmpty)
                   SegmentedButton<String>(
@@ -438,6 +447,42 @@ class _GalleryPageState extends State<GalleryPage> {
         await store.api.deleteMedia(id);
       }
     }, '已删除 ${_selected.length} 项');
+  }
+
+  /// 清除未关联产物：没有关联任何提示词的图片 / 视频 / 音频。
+  ///
+  /// 这类产物通常是"提示词被删掉了，产物留了下来"；磁盘文件会一起删，
+  /// 所以先报条数再确认。
+  Future<void> _clearUnlinked() async {
+    final store = context.read<LibraryStore>();
+    final total = await store.countUnlinkedMedia();
+    if (!mounted) return;
+    if (total == 0) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('没有未关联的产物')));
+      return;
+    }
+    final ok = await confirmDialog(
+      context,
+      title: '清除 $total 个未关联产物？',
+      message: '这些产物没有关联任何提示词（多为提示词被删后留下的）。\n'
+          '磁盘上的文件会被删除，且不可恢复；提示词本身不受影响。',
+      confirmText: '删除 $total 个',
+    );
+    if (!ok || !mounted) return;
+    await _run(
+      () async {
+        // 每次重新取第一页：边删边翻页会因为页码前移漏掉一部分
+        while (true) {
+          final page = await store.api.listMedia(untagged: true, page: 1, size: 200);
+          if (page.items.isEmpty) break;
+          for (final m in page.items) {
+            await store.api.deleteMedia(m.id);
+          }
+        }
+      },
+      '已清除 $total 个未关联产物',
+    );
   }
 
   Future<void> _run(Future<void> Function() action, String toast) async {

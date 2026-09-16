@@ -34,6 +34,10 @@ class LibraryStore extends ChangeNotifier {
   String tagMode = 'any';
   String? promptKind;
   bool onlyFavorite = false;
+
+  /// 只看「未关联产物」的提示词（用户要求）：产物被删掉之后，
+  /// 对应提示词的 mediaCount 会变成 0，用这个筛出来一键清理。
+  bool onlyUnlinked = false;
   String promptSort = 'newest';
   int promptPage = 1;
 
@@ -144,10 +148,31 @@ class LibraryStore extends ChangeNotifier {
         tagMode: tagMode,
         kind: promptKind,
         favorite: onlyFavorite ? true : null,
+        hasMedia: onlyUnlinked ? false : null,
         sort: promptSort,
         page: page,
         size: _settings.pageSize,
       );
+
+  /// 未关联产物的提示词条数（一键清除入口要先告诉用户会删掉多少）。
+  Future<int> countUnlinkedPrompts() async {
+    try {
+      final page = await api.listPrompts(hasMedia: false, page: 1, size: 1);
+      return page.total;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 未关联任何提示词的产物条数（画廊那边的「清除未关联产物」）。
+  Future<int> countUnlinkedMedia() async {
+    try {
+      final page = await api.listMedia(untagged: true, page: 1, size: 1);
+      return page.total;
+    } catch (_) {
+      return 0;
+    }
+  }
 
   /// 拉当前这一页产物。
   ///
@@ -255,6 +280,12 @@ class LibraryStore extends ChangeNotifier {
     refreshPrompts();
   }
 
+  void setOnlyUnlinked(bool value) {
+    onlyUnlinked = value;
+    promptPage = 1;
+    refreshPrompts();
+  }
+
   void setPromptSort(String sort) {
     promptSort = sort;
     promptPage = 1;
@@ -270,7 +301,8 @@ class LibraryStore extends ChangeNotifier {
       promptQuery.isNotEmpty ||
       selectedTags.isNotEmpty ||
       promptKind != null ||
-      onlyFavorite;
+      onlyFavorite ||
+      onlyUnlinked;
 
   // -------------------------------------------------------------------------
   //  媒体筛选
@@ -371,6 +403,25 @@ class LibraryStore extends ChangeNotifier {
       await api.deletePrompt(id);
     }
     await Future.wait([refreshPrompts(), refreshTags(), refreshStats()]);
+  }
+
+  /// 批量删除未关联产物的提示词，返回实际删掉的条数。
+  ///
+  /// 循环按批拉取再删：**不能边删边翻页**（页码会因为前面的记录被删而整体前移，
+  /// 漏掉一部分）；每次都重新取第一页，直到取不到为止。
+  /// 后端单页上限 200，所以超出部分靠这个循环兜住。
+  Future<int> deleteUnlinkedPrompts({int max = 1000}) async {
+    var deleted = 0;
+    while (deleted < max) {
+      final page = await api.listPrompts(hasMedia: false, page: 1, size: 200);
+      if (page.items.isEmpty) break;
+      for (final p in page.items) {
+        await api.deletePrompt(p.id);
+        deleted++;
+      }
+    }
+    await Future.wait([refreshPrompts(), refreshTags(), refreshStats()]);
+    return deleted;
   }
 
   Future<void> deleteMedia(int id) async {

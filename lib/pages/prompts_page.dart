@@ -176,6 +176,26 @@ class _PromptsPageState extends State<PromptsPage> {
                   onSelected: (v) => store.setOnlyFavorite(v),
                 ),
                 const SizedBox(width: 8),
+                // 「未关联产物」：产物被删掉之后提示词会变成未关联，
+                // 这里筛出来，配合右边的「一键清除未关联」一起用（用户要求）
+                FilterChip(
+                  label: const Text('未关联产物'),
+                  avatar: Icon(
+                    Icons.link_off,
+                    size: 16,
+                    color: store.onlyUnlinked ? Colors.orange : null,
+                  ),
+                  selected: store.onlyUnlinked,
+                  onSelected: (v) => store.setOnlyUnlinked(v),
+                ),
+                const SizedBox(width: 4),
+                TextButton.icon(
+                  onPressed: _busy ? null : _clearUnlinked,
+                  icon: const Icon(Icons.cleaning_services_outlined, size: 16),
+                  label: const Text('一键清除未关联'),
+                  style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+                ),
+                const SizedBox(width: 8),
                 if (store.selectedTags.isNotEmpty) ...[
                   SegmentedButton<String>(
                     style: const ButtonStyle(visualDensity: VisualDensity.compact),
@@ -376,6 +396,63 @@ class _PromptsPageState extends State<PromptsPage> {
     await _run(() => store.deletePrompts(ids), '已删除 ${ids.length} 条');
   }
 
+  /// 一键清除"未关联产物"的提示词。
+  ///
+  /// 直接删库，不做"解除关联"——它们本来就没有关联任何东西可解除。
+  /// 删之前先把**条数和几条标题**摆出来，避免用户以为只是筛一下。
+  Future<void> _clearUnlinked() async {
+    final store = context.read<LibraryStore>();
+    final total = await store.countUnlinkedPrompts();
+    if (!mounted) return;
+    if (total == 0) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('没有未关联产物的提示词')));
+      return;
+    }
+    // 顺手拿前几条标题当例子
+    final sample = await store.api.listPrompts(hasMedia: false, page: 1, size: 5);
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('清除 $total 条未关联产物的提示词？'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('这些提示词目前没有关联任何产物（产物被删掉了，或还没关联过）。\n'
+                '删除后不可恢复；产物本身不受影响。'),
+            const SizedBox(height: 10),
+            for (final p in sample.items)
+              Text('· ${p.title}', style: Theme.of(ctx).textTheme.bodySmall),
+            if (total > sample.items.length)
+              Text('…… 还有 ${total - sample.items.length} 条',
+                  style: Theme.of(ctx).textTheme.labelSmall),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('删除 $total 条'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await _run(
+      () async {
+        // 真正删除交给 store 循环按批处理（边删边翻页会漏掉一部分）
+        final removed = await store.deleteUnlinkedPrompts();
+        if (removed != total) {
+          debugPrint('未关联提示词期望删除 $total 条，实际删除 $removed 条');
+        }
+      },
+      '已清除 $total 条未关联提示词',
+    );
+  }
+
   Future<void> _run(Future<void> Function() action, String toast) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -550,6 +627,25 @@ class PromptCard extends StatelessWidget {
                         visualDensity: VisualDensity.compact,
                         avatar: const Icon(Icons.photo_library_outlined, size: 14),
                         label: Text('${prompt.mediaCount}'),
+                      ),
+                    )
+                  // 产物被删掉（或还没关联上）时给出**一眼能看到**的标记：
+                  // 提示词本身还在，但它已经不对应任何产物了（用户要求）
+                  else
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Tooltip(
+                        message: '没有关联任何产物：可能是产物被删掉了，或还没关联过',
+                        child: Chip(
+                          visualDensity: VisualDensity.compact,
+                          backgroundColor: Colors.orange.withValues(alpha: 0.12),
+                          side: BorderSide(color: Colors.orange.withValues(alpha: 0.6)),
+                          avatar: const Icon(Icons.link_off, size: 14, color: Colors.orange),
+                          label: Text(
+                            '未关联',
+                            style: theme.textTheme.labelSmall?.copyWith(color: Colors.orange),
+                          ),
+                        ),
                       ),
                     ),
                   // 多选模式下藏掉单条操作，避免"想选中却点了收藏"

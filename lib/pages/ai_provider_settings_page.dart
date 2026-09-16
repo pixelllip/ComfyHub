@@ -990,10 +990,31 @@ class _ProviderDialogState extends State<_ProviderDialog> {
   void initState() {
     super.initState();
     // 输入时就实时校验，按钮状态跟着变
-    _id.addListener(_revalidate);
+    _id.addListener(_onIdChanged);
     _url.addListener(_revalidate);
     _name.addListener(_revalidate);
+    // 凭据引用名默认跟着 ID 走（provider id 全大写），用户手动改过就不再覆盖
+    _ref.addListener(_onRefChanged);
   }
+
+  /// 用户手动改过凭据引用名 → 不再自动同步。
+  bool _refTouched = false;
+
+  /// 正在按 ID 自动填引用名：此时不把 `_ref` 的变化当成"用户手动改过"。
+  bool _syncingRef = false;
+
+  final _refFocus = FocusNode(debugLabel: 'credential-ref');
+
+  /// 由 Provider ID 推出的默认凭据引用名：**全大写**，`-` 换成 `_`
+  /// （后端要求环境变量风格：大写字母/数字/下划线，且以字母开头）。
+  ///
+  /// 凭据引用名实际上是必填的（没有它就没法保存 API Key），
+  /// 所以这里给一个合理的默认值，用户不用自己想名字。
+  static String defaultCredentialRef(String providerId) =>
+      providerId.trim().toUpperCase().replaceAll('-', '_');
+
+  /// 默认值合不合法（ID 以数字开头时会推不出合法名字）。
+  static bool isValidCredentialRef(String ref) => RegExp(r'^[A-Z][A-Z0-9_]{0,127}$').hasMatch(ref);
 
   void _revalidate() => setState(() {});
 
@@ -1003,7 +1024,26 @@ class _ProviderDialogState extends State<_ProviderDialog> {
     _name.dispose();
     _url.dispose();
     _ref.dispose();
+    _refFocus.dispose();
     super.dispose();
+  }
+
+  void _onIdChanged() {
+    if (!_refTouched) {
+      final next = defaultCredentialRef(_id.text);
+      if (_ref.text != next) {
+        _syncingRef = true;
+        _ref.text = next;
+        _syncingRef = false;
+      }
+    }
+    _revalidate();
+  }
+
+  /// 引用名变化：只有**用户自己**改的才算"手动接管"（程序自动填的不算）。
+  void _onRefChanged() {
+    if (!_syncingRef && !_refTouched) _refTouched = true;
+    _revalidate();
   }
 
   String? get _idError {
@@ -1024,11 +1064,23 @@ class _ProviderDialogState extends State<_ProviderDialog> {
     return null;
   }
 
+  /// 凭据引用名是必填的：它是 API Key 的存放位置，没有它就没法保存密钥。
+  String? get _refError {
+    final v = _ref.text.trim();
+    if (v.isEmpty) return '必填：这里只是密钥的名字（如 OPENAI_API_KEY），密钥在创建后单独填';
+    if (!isValidCredentialRef(v)) {
+      return '只能是大写字母、数字和下划线，且以字母开头（Provider ID 以数字开头时要手改一个）';
+    }
+    if (v.length > 128) return '不能超过 128 个字符';
+    return null;
+  }
+
   bool get _canSubmit =>
       _kebab.hasMatch(_id.text.trim()) &&
       _name.text.trim().isNotEmpty &&
       _urlError == null &&
-      _url.text.trim().isNotEmpty;
+      _url.text.trim().isNotEmpty &&
+      _refError == null;
 
   /// 自动模式下的提示：让用户知道后端会怎么判断。
   String get _autoTrustHint {
@@ -1099,12 +1151,20 @@ class _ProviderDialogState extends State<_ProviderDialog> {
                 onChanged: (v) => setState(() => _trust = v),
               ),
               const SizedBox(height: 10),
+              // 凭据引用名：**实际是必填的**（没有它就没法保存 API Key），
+              // 所以默认值直接由 Provider ID 推出来（全大写，- 换 _），
+              // 用户想改还是能改；改过之后就不再跟着 ID 变。
               TextField(
                 controller: _ref,
-                decoration: const InputDecoration(
-                  labelText: '凭据引用名（可选）',
+                focusNode: _refFocus,
+                textCapitalization: TextCapitalization.characters,
+                decoration: InputDecoration(
+                  labelText: '凭据引用名（必填）',
                   hintText: 'DEEPSEEK_API_KEY',
-                  helperText: '只是名字；密钥在创建之后单独填写（只写不读）',
+                  helperText: _refTouched
+                      ? '只是名字；密钥在创建之后单独填写（只写不读）'
+                      : '默认跟随 Provider ID 全大写；可以改，改过之后不再自动变',
+                  errorText: _refError,
                   isDense: true,
                 ),
               ),
