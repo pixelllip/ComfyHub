@@ -410,19 +410,42 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `GET/POST` | `/api/ai/conversations` | 会话列表 / 新建 |
 | `GET/PATCH/DELETE` | `/api/ai/conversations/{id}` | 详情 / 改名·归档 / 删除（消息级联清理） |
 | `GET/POST` | `/api/ai/conversations/{id}/messages` | 消息（按 `seq` 有序恢复）/ 追加消息（可带有序块：text / attachment / tool_call / tool_result） |
-| `POST` | `/api/ai/conversations/{id}/runs` | **发起一次对话 Run**：body `{text, providerId, modelId}` → `202 + {runId, assistantMessageId, userMessageId}`，执行在后台 |
-| `GET` | `/api/ai/runs/{id}` | Run 状态（`running / completed / failed / cancelled`、`errorCode`、`promptVersion`） |
-| `GET` | `/api/ai/runs/{id}/events?after=<seq>` | **统一 SSE 事件流**：`run.started / message.started / reasoning.delta / text.delta / usage.updated / message.completed / run.completed / run.failed / run.cancelled / heartbeat`；`after` 断线续传 |
+| `POST` | `/api/ai/conversations/{id}/runs` | **发起一次对话 Run**：body `{text, providerId, modelId, reasoningEffort?}` → `202 + {runId, assistantMessageId, userMessageId}`，执行在后台 |
+| `GET` | `/api/ai/runs/{id}` | Run 状态（`running / completed / failed / cancelled`、`errorCode`、`promptVersion`、`reasoningEffort`） |
+| `GET` | `/api/ai/runs/{id}/events?after=<seq>` | **统一 SSE 事件流**：`run.started / message.started / reasoning.delta / text.delta / usage.updated / message.completed / run.completed / run.failed / run.cancelled / heartbeat`；`after` 断线续传。`message.completed` 里带 `reasoningEffort` 与归一化 `usage` |
 | `POST` | `/api/ai/runs/{id}/cancel` | 取消：关闭上游连接，Run 记为 `cancelled` |
 
 **协议支持现状**（以代码事实为准，不按模型名猜）：
 
 | 协议 | 状态 |
 | --- | --- |
-| `openai-completions` | ✅ 文本流 + 多轮历史（OpenAI / DeepSeek / Moonshot / vLLM / LM Studio / Ollama 的 OpenAI 端点等） |
-| `anthropic-messages` | ✅ 文本流（system 顶层、`max_tokens`、`content_block_delta`） |
+| `openai-completions` | ✅ 文本流 + 多轮历史 + 思考强度（OpenAI / DeepSeek / Moonshot / vLLM / LM Studio / Ollama 的 OpenAI 端点等） |
+| `anthropic-messages` | ✅ 文本流（system 顶层、`max_tokens`、`content_block_delta`）+ 思考强度（`thinking.budget_tokens`） |
 | `openai-responses` | ⛔ 尚未实现：会明确报错，请改用 `openai-completions` |
 | 图片 / 视频 / 音频 / 文档附件 | ⛔ 适配器尚未实现 → 预检直接阻断（不是静默丢弃） |
+
+**思考强度（AIH-056）**：聊天框下方除了选模型，还能选 `关闭 / 低 / 中 / 高 / 最大`。
+**能选哪些档位由模型目录决定**（设置 → AI 模型 → 模型卡片的"思考强度"）：
+没勾"支持推理"就不发任何思考字段（避免上游 400），声明了档位就只允许声明过的档位。
+同一个"高"在不同网关上落到的字段不一样，模型可单独选方言：
+
+| 方言 | 开启 | 关闭 |
+| --- | --- | --- |
+| `openai`（默认） | `reasoning_effort: "high"` | 什么都不发 |
+| `deepseek` | `thinking{type:enabled}` + `reasoning_effort` | `thinking{type:disabled}` |
+| `qwen` | `enable_thinking: true` + `reasoning_effort` | 不发 |
+| `zai` | `thinking{type:enabled,clear_thinking:false}` + `reasoning_effort` | `thinking{type:disabled}` |
+| `openrouter` | `reasoning{effort:"high"}` | `reasoning{effort:"none"}` |
+| `anthropic-messages` | `thinking{type:enabled,budget_tokens}`，`max_tokens` 自动设为预算 + 4096 | 不发 |
+
+档位还能**改名或直接给预算**：`thinkingEfforts` 里 `{"max": "ultra"}` 表示这个网关管"最大"叫 `ultra`，
+`{"medium": "4096"}` 表示这一档给 Anthropic 4096 token 预算。详见
+[`docs/ai-home-progress-v0.1.md`](docs/ai-home-progress-v0.1.md) 第 5 节。
+
+**token 统计（AIH-057）**：后端把各家的 `usage` 方言归一化成
+`inputTokens / outputTokens / cachedTokens / reasoningTokens`，助手消息下面显示单轮用量
+（悬停看明细），输入区右下角显示**本对话累计**。网关没给 usage 就是 0，
+界面上**不编数字**——没有就是不显示，而不是显示一个假的 0。
 
 **密钥只写不读**：受管凭据用 **Windows DPAPI(CurrentUser)** 加密后存在
 `storage/ai/credentials.dpapi.json`，任何接口、数据库字段和日志都拿不到明文；
@@ -787,7 +810,7 @@ flutter test        # 52 个用例
 | `test/widget_test.dart` | 模型 JSON 解析（Prompt / MediaAsset / 分页 / 捕获配置）、`formatSize` / `formatDuration` / `ellipsis` / 颜色解析等纯逻辑 |
 | `test/media_prompt_flow_test.dart` | **核心闭环**：用 `MockClient` 假造后端，验证「画廊渲染 → 点开产物 → 详情页显示关联提示词全文与参数 → 点标题跳提示词详情 → 点标签进入标签搜索页」，并断言每一步发出的 HTTP 请求；另有一条详情页布局断言（大图走可缩放查看器、文件信息铺满整栏） |
 | `test/home_nav_test.dart` | **首页落地页**：断言打开 App 落在「AI 工作台」页、导航顺序是 `AI 工作台 → 画廊 → 提示词 → 标签 → 设置`、点第二个才进画廊 |
-| `test/ai_home_test.dart` | **AI 工作台**：宽屏三栏 / 窄屏无侧栏且输入区可用、能力徽标按目录声明显示、附件被准入阻断时给出具体原因并禁用发送按钮 |
+| `test/ai_home_test.dart` | **AI 工作台**：宽屏三栏 / 窄屏无侧栏且输入区可用、能力徽标按目录声明显示、附件被准入阻断时给出具体原因并禁用发送按钮、**思考强度只列模型声明过的档位且选中的档位真的随请求发出**、**token 用量与对话汇总（没给 usage 就不显示）** |
 | `test/workflow_viewer_test.dart` | 工作流查看器：格式化展示 / 204 空状态 / 复制全文 / 错误重试、界面格式与 API 格式的提示语区分，以及两个详情页的接线（按钮只在有工作流时出现） |
 | `test/zoomable_image_test.dart` | **大图查看器**：滚轮缩放（含上下限）、放大后拖动平移、缩略图只在放大后出现且高亮框跟着视野走、点缩略图跳转、适应窗口复位、图片加载失败兜底 |
 | `test/adaptive_layout_test.dart` | **多列布局**：列数规则（宽度 / 550、上限 4 列、异常宽度退回单列）、宽窗口排两列 / 窄窗口退回单列、设置页那种瀑布流把块放进最矮的一列 |
@@ -799,6 +822,8 @@ flutter test        # 52 个用例
 | `test/comfyui_capture_test.py` | ComfyUI 捕获节点的纯逻辑（payload 组装、类型判定、重试），见 `docs/comfyui-capture.md` |
 | `server/src/test/kotlin/.../GraphParseTest.kt` | **参数解析器的回归测试**：经典 KSampler 图、真实的自定义采样链（MiniMax H3 那种）、空图/坏图、只有 `text_g`/`text_l` 的图。`pwsh -File scripts\server.ps1 test` |
 | `server/src/test/kotlin/.../HistoryEntryTest.kt` | **`/history` 记录解析的回归测试**：ComfyUI 0.34.2 的六元组、老版本三元组、带界面工作流 / 不带、坏数据不抛异常 —— 钉住"提示词与工作流整条丢失"那个坑 |
+| `server/src/test/kotlin/.../ReasoningEffortTest.kt` | **思考强度的协议契约**：模型没声明推理能力时一个字段都不发、六种方言开启/关闭各自落到哪个字段、`reasoning_effort` 改名与 token 预算、Anthropic 的 `max_tokens` 必须大于预算 |
+| `server/src/test/kotlin/.../ThinkingAndUsageTest.kt` | **思考声明校验 + token 归一化**：未知等级 / 空表达 / 声明档位却没勾推理都会被拒；OpenAI 与 Anthropic 两种 usage 方言、只给 `total_tokens` 的网关、坏数据都当成 0 |
 
 ### 自动捕获的端到端验证
 

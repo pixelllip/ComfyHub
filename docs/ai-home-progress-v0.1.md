@@ -1,13 +1,15 @@
 # AI 工作台实施进度（v0.1 实施记录）
 
-> 日期：2026-09-15（当天多轮追加）
+> 日期：2026-09-15 起，2026-09-16 追加（思考强度 + token 统计）
 > 依据：`docs/ai-home-requirements-v0.1.xlsx`（需求清单 / 待确认决策 / 风险清单 / 里程碑）
 > 与 `docs/ai-home-implementation-plan-v0.1.md`（实施方案）
-> 已覆盖范围：**M0 安全前置 + M1（Provider / 模型 / 凭据）+ M2（Run / 统一 SSE / 三协议中的两个）**
+> 已覆盖范围：**M0 安全前置 + M1（Provider / 模型 / 凭据）+ M2（Run / 统一 SSE / 三协议中的两个）
+> + 思考强度与 token 统计（AIH-056 / AIH-057）**
 
 ## 0. 一句话现状
 
-**已经能用真实 Base URL + API Key 配对并流式对话**（OpenAI 兼容 / Anthropic）；
+**已经能用真实 Base URL + API Key 配对并流式对话**（OpenAI 兼容 / Anthropic），
+可以在聊天框里直接切模型**和思考强度**、看到每轮消耗的 token；
 附件（图片等）目前是"正确阻断"而不是能发；ComfyUI 工具与 Skills 还没接。
 
 ## 1. 本轮完成的提交
@@ -19,6 +21,7 @@
 | `AI 工作台成为默认首页…` | 三栏工作台、会话/消息持久化、附件阻断提示、默认导航切换 |
 | `文档同步…` | AGENTS 第 3 节、README 功能/目录/接口表 |
 | `AI 模型设置页…` | Provider 配置界面、模型目录编辑、只写密钥界面 |
+| `思考强度…` | 模型声明可选档位；三协议按方言各自落到正确字段；token 统计归一化（AIH-056 / AIH-057） |
 
 ## 2. 逐条对照需求
 
@@ -51,6 +54,8 @@
 | AIH-048 能力徽标 | ✅ | 模型选择器与侧栏都按目录声明显示，未声明的一律标不支持 |
 | AIH-053 首页 Widget 测试 | ✅ | `test/ai_home_test.dart`（含流式发送）、`test/ai_provider_settings_test.dart` |
 | AIH-055 文档同步 | ✅ | AGENTS 第 3 节 + README 功能表/目录树/API 表/协议现状表/测试表 |
+| AIH-056 思考强度 | ✅ | 模型目录声明可选档位（`thinkingEfforts`）+ 网关方言（`thinkingFormat`）；聊天框选择器只列声明过的档位；Run 记录**生效值**；三协议方言分别适配（见第 6 节） |
+| AIH-057 token 统计 | ✅ | 后端把各家 `usage` 归一化成 input/output/cached/reasoning；助手消息显示单轮用量，输入区显示本对话汇总；历史老数据（供应商原始 usage）也能回算 |
 
 图例：✅ 完成　◐ 部分完成　⬜ 未开始
 
@@ -79,7 +84,53 @@
 5. **Skills（M5）**：目录扫描、`load_skill`、第三方安全导入；界面上的 `/` 菜单目前只是目录展示。
 6. 事件表保留策略：`AiRunRepo.pruneEvents()` 已写好但还没接到定时任务。
 
-## 5. 给下一个协作者的注意事项
+## 5. 思考强度与 token 统计（AIH-056 / AIH-057，2026-09-16 新增）
+
+### 5.1 为什么不能"直接发 reasoning_effort"
+
+同一个"高"，不同网关落到**完全不同的字段**（`server/.../ai/protocol/Reasoning.kt`）：
+
+| 协议 / 方言 | 开启 | 关闭 |
+| --- | --- | --- |
+| `anthropic-messages` | `thinking{type:enabled,budget_tokens}`，且 `max_tokens` 必须**严格大于**预算 | 不发 `thinking`，`max_tokens` 回默认 |
+| `openai` + `openai`（默认） | `reasoning_effort: "high"` | **什么都不发**（很多网关不认 `"none"`） |
+| `openai` + `deepseek` | `thinking{type:enabled}` + `reasoning_effort` | `thinking{type:disabled}` |
+| `openai` + `qwen` | `enable_thinking: true` + `reasoning_effort` | 不发 |
+| `openai` + `zai` | `thinking{type:enabled,clear_thinking:false}` + `reasoning_effort` | `thinking{type:disabled}` |
+| `openai` + `openrouter` | `reasoning{effort: "high"}` | `reasoning{effort: "none"}` |
+
+等级：`off / low / medium / high / max`。模型可以用 `thinkingEfforts` 把等级**改名**
+（`max: ultra`，给自有词汇的网关）或直接给 Anthropic 的**预算数字**（`medium: "4096"`）。
+
+### 5.2 四条不能动的规矩
+
+1. **真源是模型目录**：模型没勾"支持推理"→ 适配器一个思考字段都不发（不是发个空值），
+   因为往不支持推理参数的模型上塞 `reasoning_effort` 会被网关 400。
+2. **声明了档位就只允许声明过的档位**：请求 `max` 而模型只列了 `low/high` → 直接
+   `CONFIG_ERROR`，不静默降级成 `high`（用户以为选了 max，其实没有，比报错更糟）。
+3. **Run 快照记的是"生效值"不是"请求值"**：`ai_runs.reasoning_effort` 存的是过滤后的结果，
+   事后审计能看出这次到底思考了没有。
+4. **读快照、不读目录**：Run 开始后用户改模型目录，不影响已经在飞的请求。
+
+### 5.3 加新协议/新方言时怎么做
+
+在 `ThinkingFormat` 里加一个枚举值 + 在 `OpenAiCompletionsAdapter.applyReasoning` 里加一个
+`when` 分支，然后在 `ReasoningEffortTest` 里补一个"开启发什么、关闭发什么"的用例。
+**别在别处再维护一份支持矩阵** —— 预检、Run 准入、UI 都读同一处声明。
+
+### 5.4 token 统计
+
+后端 `TokenUsage.from(usage)` 把各家方言归一化：
+
+- 输入：`prompt_tokens` / `input_tokens`；
+- 输出：`completion_tokens` / `output_tokens`；
+- 缓存命中：`prompt_tokens_details.cached_tokens` / `cache_read_input_tokens`；
+- 思考：`completion_tokens_details.reasoning_tokens`。
+
+只给 `total_tokens` 的网关会退化成"全记在输入上"（`totalTokens` 仍然正确）。
+没给 usage 就是 0，**不编数字**：界面上没有就是没有，不显示占位的 0。
+
+## 6. 给下一个协作者的注意事项
 
 - **别把密钥塞进 `app_settings` / SharedPreferences / 日志**：唯一入口是 `CredentialService`；
   Run 的 provider 快照里只有 `credentialRef` 名字。
@@ -93,3 +144,5 @@
 - 设置页里**任何失败都要能看见**（SnackBar / 顶部横幅）：之前"新建 Provider 失败只写进详情面板、
   而详情面板要先选中 Provider"导致用户看到的是"点了没反应"，已修，别再引入同类回退。
 - 默认监听已改为回环；如果要用 Android 客户端连本机后端，需要显式 `COMFYHUB_ALLOW_REMOTE=1` 并自行加认证（AIH-016、AIK-003）。
+- 思考强度**不要加"模型 ID 猜档位"的回退**：目录没声明就不给选（AIH-011 同一条原则）。
+  设置页模型卡片的 `_copy` 是唯一复制入口，加字段时务必带上，否则切换某个徽标会把别的声明悄悄抹掉。
