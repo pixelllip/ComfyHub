@@ -35,6 +35,14 @@ data class ToolPolicyConfig(
     val readRoots: List<String> = emptyList(),
     /** 逐工具权限覆盖：工具名 → allow/ask/deny */
     val overrides: Map<String, String> = emptyMap(),
+    /**
+     * 权限档（用户建议 ⑤）：`ask` = 默认，需要审批的工具得等用户点批准；
+     * `full` = **完全权限**，AI 不必再等批准（在 AI 工作台输入区里切换）。
+     *
+     * 它只决定"要不要问一下"，**不放宽路径白名单**：完全权限下越界写照样被拒，
+     * 被显式 `deny` 的工具也照样不放宽（deny 的含义是"这个工具不该用它"）。
+     */
+    val permissionMode: String = PERMISSION_ASK,
     /** 单次回复最多工具轮数（AIH-036 建议 8） */
     val maxToolSteps: Int = 8,
     /** 单个 Run 最多工具调用次数 */
@@ -55,6 +63,11 @@ data class ToolPolicyConfig(
         const val DEFAULT_WRITE_DIR = "comfyui"
         val DEFAULT_READ_DIRS = listOf("comfyui", "storage")
 
+        /** 权限档：默认「询问」/「完全权限」 */
+        const val PERMISSION_ASK = "ask"
+        const val PERMISSION_FULL = "full"
+        val PERMISSION_MODES = setOf(PERMISSION_ASK, PERMISSION_FULL)
+
         /** 永远不可写：本项目的运行期数据、源码控制与依赖目录 */
         val FORBIDDEN_SEGMENTS = setOf(".git", ".mysql", ".run", "node_modules")
     }
@@ -74,10 +87,28 @@ class ToolPolicy(
         }.onFailure { LOG.warn("忽略非法路径配置 {}: {}", raw, it.message) }.getOrNull()
     }
 
-    /** 生效权限：用户覆盖 → 出厂档。 */
-    fun accessFor(tool: AgentTool): ToolAccess =
-        ToolAccess.parse(config.overrides[tool.name]) ?: tool.defaultAccess
+    /**
+     * 生效权限：用户覆盖 → 出厂档 → **再按权限档放宽**。
+     *
+     * 「完全权限」只把 `ask` 变成 `allow`：
+     *  - `deny` 不动（那是"禁用这个工具"，不是"要不要问一下"）；
+     *  - 路径白名单不动（在 [resolveWrite] 里另判，越界照样拒绝）。
+     * 配置里写了非法档位时**一律回落「询问」**：权限这种事不能因为配置坏了就放开。
+     */
+    fun accessFor(tool: AgentTool): ToolAccess {
+        val base = ToolAccess.parse(config.overrides[tool.name]) ?: tool.defaultAccess
+        return if (fullPermission && base == ToolAccess.ASK) ToolAccess.ALLOW else base
+    }
 
+    /** 用户选的权限档（非法值回落 ask）。 */
+    val permissionMode: String =
+        config.permissionMode.takeIf { it in ToolPolicyConfig.PERMISSION_MODES }
+            ?: ToolPolicyConfig.PERMISSION_ASK
+
+    /** 完全权限：AI 不必再等批准。 */
+    val fullPermission: Boolean get() = permissionMode == ToolPolicyConfig.PERMISSION_FULL
+
+    /** 用户显式覆盖过档位（用于界面上的"已覆盖"标记）。 */
     fun isOverridden(tool: AgentTool): Boolean = ToolAccess.parse(config.overrides[tool.name]) != null
 
     /** 读路径：必须落在 readRoots 内。 */

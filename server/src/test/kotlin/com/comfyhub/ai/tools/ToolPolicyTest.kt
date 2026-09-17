@@ -203,4 +203,39 @@ class ToolPolicyTest {
         val denied = assertFailsWith<ToolFailure> { policy.resolveWrite("comfyui") }
         assertEquals("PATH_DENIED", denied.code)
     }
+
+    // --- 权限档（用户建议 ⑤）-------------------------------------------------
+
+    @Test
+    fun `完全权限只把 ask 变 allow deny 与路径白名单都不放宽`() {
+        val root = newRoot()
+        val askTool = fakeTool("comfy_submit", ToolAccess.ASK)
+        val allowTool = fakeTool("read_file", ToolAccess.ALLOW)
+        val denyTool = fakeTool("write_file", ToolAccess.DENY)
+
+        val ask = ToolPolicy(root, ToolPolicyConfig())
+        assertTrue(!ask.fullPermission)
+        assertEquals(ToolAccess.ASK, ask.accessFor(askTool))
+
+        val full = ToolPolicy(root, ToolPolicyConfig(permissionMode = ToolPolicyConfig.PERMISSION_FULL))
+        assertTrue(full.fullPermission)
+        assertEquals(ToolAccess.ALLOW, full.accessFor(askTool), "完全权限下不必再等批准")
+        assertEquals(ToolAccess.ALLOW, full.accessFor(allowTool))
+        assertEquals(ToolAccess.DENY, full.accessFor(denyTool), "deny 是「不许用」，不是「要不要问一下」")
+
+        // 关键：路径边界一点都没松 —— 越界写照样拒绝（"完全权限"不是"随便写"）
+        val escaped = assertFailsWith<ToolFailure> { full.resolveWrite("other/x.txt") }
+        assertEquals("PATH_DENIED", escaped.code)
+        val forbidden = assertFailsWith<ToolFailure> { full.resolveWrite(".git/config") }
+        assertEquals("PATH_DENIED", forbidden.code)
+    }
+
+    @Test
+    fun `权限档取值非法时回落询问 绝不当成完全权限`() {
+        val root = newRoot()
+        val bogus = ToolPolicy(root, ToolPolicyConfig(permissionMode = "yes-please"))
+        assertEquals(ToolPolicyConfig.PERMISSION_ASK, bogus.permissionMode)
+        assertTrue(!bogus.fullPermission)
+        assertEquals(ToolAccess.ASK, bogus.accessFor(fakeTool("comfy_submit", ToolAccess.ASK)))
+    }
 }

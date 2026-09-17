@@ -1382,20 +1382,27 @@ class _ComposerState extends State<_Composer> {
                 onPressed: _pickFiles,
                 icon: const Icon(Icons.attach_file),
               ),
+              // 权限档（用户建议 ⑤）：就在附件按钮和模型选择之间
+              _PermissionPicker(store: store),
               _ModelPicker(store: store),
               const SizedBox(width: 8),
               _EffortPicker(store: store),
               const Spacer(),
-              // 本次对话的 token 汇总（AIH-057）：一直是可见的，不必翻设置
+              // 本次对话的 token 汇总（AIH-057）：一直是可见的，不必翻设置。
+              // 窄一点就省略，别把[附件 / 权限 / 模型 / 思考强度 / 发送]这一行挤溢出。
               if (!store.usageSummary.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: Tooltip(
-                    message: store.usageSummary.label,
-                    child: Text(
-                      '本对话 ↑${AiTokenUsage.compact(store.usageSummary.inputTokens)} '
-                      '↓${AiTokenUsage.compact(store.usageSummary.outputTokens)}',
-                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                Flexible(
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Tooltip(
+                      message: store.usageSummary.label,
+                      child: Text(
+                        '本对话 ↑${AiTokenUsage.compact(store.usageSummary.inputTokens)} '
+                        '↓${AiTokenUsage.compact(store.usageSummary.outputTokens)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                      ),
                     ),
                   ),
                 ),
@@ -1478,6 +1485,84 @@ class _Banner extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
+//  权限档（用户建议 ⑤）
+// ---------------------------------------------------------------------------
+
+/// 权限两档：**询问**（默认）/ **完全权限**。
+///
+/// 位置就是用户指定的：输入区底部、附件按钮与模型选择之间。
+/// 真源在后端（`ai.tools.policy.permissionMode`），切档写回后端 ——
+/// 后端每次 Run 现读策略，于是"切到完全权限"会**即时**把那段规则注入系统提示，
+/// 并且 AI 调工具不再走审批闸门。路径白名单不受影响，越界写照样被拒。
+class _PermissionPicker extends StatelessWidget {
+  final AiWorkspaceStore store;
+  const _PermissionPicker({required this.store});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final full = store.fullPermission;
+    final color = full ? theme.colorScheme.error : theme.colorScheme.outline;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Tooltip(
+        message: full
+            ? '当前：完全权限 —— AI 调用工具不会等你批准（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「询问」。'
+            : '当前：询问 —— 写盘 / 提交任务这类改动操作会先弹批准。点一下切到「完全权限」。',
+        child: PopupMenuButton<String>(
+          // 两种档位的选择放在菜单里：按钮本身体积小，不会把输入区挤爆
+          enabled: !store.permissionBusy,
+          tooltip: '',
+          initialValue: store.permissionMode,
+          onSelected: store.setPermissionMode,
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: AiToolPolicy.modeAsk,
+              child: ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.how_to_reg_outlined, size: 18),
+                title: Text('询问'),
+                subtitle: Text('改动类工具先等你批准'),
+              ),
+            ),
+            const PopupMenuItem(
+              value: AiToolPolicy.modeFull,
+              child: ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.gpp_maybe_outlined, size: 18),
+                title: Text('完全权限'),
+                subtitle: Text('AI 无需批准，直接动手'),
+              ),
+            ),
+          ],
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              border: Border.all(color: full ? color : theme.dividerColor),
+              borderRadius: BorderRadius.circular(8),
+              color: full ? color.withValues(alpha: 0.08) : null,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(full ? Icons.gpp_maybe_outlined : Icons.how_to_reg_outlined,
+                    size: 16, color: color),
+                const SizedBox(width: 6),
+                Text(full ? '完全权限' : '询问',
+                    style: theme.textTheme.labelMedium?.copyWith(color: full ? color : null)),
+                Icon(Icons.arrow_drop_down, size: 18, color: theme.colorScheme.outline),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 //  模型选择（聊天框内直接切换，AIK-002）
 // ---------------------------------------------------------------------------
 
@@ -1515,7 +1600,17 @@ class _ModelPicker extends StatelessWidget {
               color: model == null ? theme.colorScheme.error : null,
             ),
             const SizedBox(width: 6),
-            Text(model?.displayName ?? '未选择模型', style: theme.textTheme.labelMedium),
+            // 模型名可能很长（内置目录里就有 "…-preview-2026-01" 这种）：
+            // 输入区底部这一行还要塞下附件 / 权限 / 思考强度 / token 汇总 / 发送，
+            // 所以这里**必须**能压缩，不能把整行撑溢出。
+            Flexible(
+              child: Text(
+                model?.displayName ?? '未选择模型',
+                style: theme.textTheme.labelMedium,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
             const SizedBox(width: 6),
             for (final m in model?.modalities ?? const <AiModality>[])
               Padding(

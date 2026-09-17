@@ -598,6 +598,7 @@ fun Route.aiRoutes(
                     maxReadBytes = policy.config.maxReadBytes,
                     maxWriteBytes = policy.config.maxWriteBytes,
                     defaultWriteRoot = projectRoot.resolve(ToolPolicyConfig.DEFAULT_WRITE_DIR).toString(),
+                    permissionMode = policy.permissionMode,
                 )
             )
         }
@@ -605,6 +606,16 @@ fun Route.aiRoutes(
         put("/tools/policy") {
             val body = call.receive<ToolPolicyUpdate>()
             val current = ToolPolicy.load(projectRoot).config
+            // 权限档：非法值**直接拒绝**（回落成 ask 看起来更"安全"，但那是静默改成另一种行为）
+            val mode = body.permissionMode?.trim()?.lowercase()?.let {
+                if (it !in ToolPolicyConfig.PERMISSION_MODES) {
+                    throw AiException(
+                        AiErrorCode.CONFIG_ERROR,
+                        "未知的权限档：${body.permissionMode}（可选 ${ToolPolicyConfig.PERMISSION_MODES.joinToString(" / ")}）",
+                    )
+                }
+                it
+            }
             // 只做"校验 + 存"，真正的路径判定每次调用现算（改了立刻生效，不用重启）
             val next = current.copy(
                 writeRoots = body.writeRoots ?: current.writeRoots,
@@ -612,18 +623,21 @@ fun Route.aiRoutes(
                 overrides = body.overrides ?: current.overrides,
                 maxToolSteps = (body.maxToolSteps ?: current.maxToolSteps).coerceIn(1, 24),
                 maxCallsPerRun = (body.maxCallsPerRun ?: current.maxCallsPerRun).coerceIn(1, 100),
+                permissionMode = mode ?: current.permissionMode,
             )
             ToolPolicy.save(next)
+            val saved = ToolPolicy(projectRoot, next)
             call.respond(
                 ToolPolicyDto(
-                    writeRoots = ToolPolicy(projectRoot, next).writeRoots.map { it.toString() },
-                    readRoots = ToolPolicy(projectRoot, next).readRoots.map { it.toString() },
+                    writeRoots = saved.writeRoots.map { it.toString() },
+                    readRoots = saved.readRoots.map { it.toString() },
                     overrides = next.overrides,
                     maxToolSteps = next.maxToolSteps,
                     maxCallsPerRun = next.maxCallsPerRun,
                     maxReadBytes = next.maxReadBytes,
                     maxWriteBytes = next.maxWriteBytes,
                     defaultWriteRoot = projectRoot.resolve(ToolPolicyConfig.DEFAULT_WRITE_DIR).toString(),
+                    permissionMode = saved.permissionMode,
                 )
             )
         }
@@ -907,6 +921,8 @@ data class ToolPolicyDto(
     val maxWriteBytes: Int = 0,
     /** 出厂默认的写入目录（界面里显示"默认只能写这里"） */
     val defaultWriteRoot: String? = null,
+    /** 权限档：ask（默认，需要审批的工具要用户点批准）/ full（完全权限，AI 无需批准） */
+    val permissionMode: String = ToolPolicyConfig.PERMISSION_ASK,
 )
 
 @Serializable
@@ -916,6 +932,8 @@ data class ToolPolicyUpdate(
     val overrides: Map<String, String>? = null,
     val maxToolSteps: Int? = null,
     val maxCallsPerRun: Int? = null,
+    /** 权限档：只接受 ask / full，别的值直接 400（权限不能悄悄降级成"随便写"） */
+    val permissionMode: String? = null,
 )
 
 @Serializable

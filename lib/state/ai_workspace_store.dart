@@ -180,6 +180,18 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 只用来在工具卡上显示分类图标；拿不到不影响聊天。
   List<AiToolInfo> tools = const [];
 
+  // --- 权限档（用户建议 ⑤） ----------------------------------------------
+  /// `ask`（默认，需要审批的工具要用户点批准）/ `full`（完全权限，AI 无需批准）。
+  ///
+  /// 真源在后端（`ai.tools.policy`，每次 Run 现读），这里只是界面上的镜像：
+  /// 切档写回后端后，**下一次回复立刻生效**（后端会把"完全权限"那段即时注入系统提示）。
+  String permissionMode = AiToolPolicy.modeAsk;
+
+  bool get fullPermission => permissionMode == AiToolPolicy.modeFull;
+
+  /// 正在切换权限档：按钮据此禁用，避免连点。
+  bool permissionBusy = false;
+
   // --- 输入区 ---
   final List<AiAttachment> attachments = [];
 
@@ -371,6 +383,40 @@ class AiWorkspaceStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 读一次权限档（真源在后端策略里）。失败静默：拿不到就按最保守的「询问」显示。
+  Future<void> loadPermissionMode() async {
+    try {
+      final policy = await _api.toolPolicy();
+      permissionMode = policy.permissionMode;
+      notifyListeners();
+    } catch (_) {
+      // 后端不可用：保持当前显示，发送时后端自己还有一道判定
+    }
+  }
+
+  /// 切换权限档（用户建议 ⑤：询问 / 完全权限）。
+  ///
+  /// **先写后端再改界面**：这是权限，不能"界面看着切了、后端其实没切"。
+  /// 是**全局**设置（存在 `ai.tools.policy` 里），切一次对之后所有对话都有效；
+  /// 后端每次 Run 现读策略，所以下一次回复立刻按新档位走（系统提示也即时注入）。
+  Future<void> setPermissionMode(String mode) async {
+    if (mode == permissionMode || permissionBusy) return;
+    permissionBusy = true;
+    notifyListeners();
+    try {
+      final policy = await _api.updateToolPolicy({'permissionMode': mode});
+      permissionMode = policy.permissionMode;
+      notice = policy.permissionMode == AiToolPolicy.modeFull
+          ? '已切换到「完全权限」：AI 调用工具不再等你批准（可读 / 可写目录范围不变，越界仍会被拒）。'
+          : '已切换到「询问」：写盘 / 提交这类改动操作会先等你批准。';
+    } catch (e) {
+      notice = '切换权限失败：$e';
+    } finally {
+      permissionBusy = false;
+      notifyListeners();
+    }
+  }
+
   /// 工具名 → 分类（skill / files / comfy / memory）。先查后端给的清单，查不到按名字兜底。
   String toolCategoryOf(String name) {
     for (final t in tools) {
@@ -532,6 +578,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     await reloadSkills();
     await reloadTools();
     await loadMemory();
+    await loadPermissionMode();
   }
 
   /// 挑一条现成的空会话接着用；一条都没有才真的新建。

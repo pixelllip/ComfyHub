@@ -1302,6 +1302,12 @@ class AiToolPolicy {
   /// 出厂默认的写入目录：界面上要大声说明"默认只能写这里"。
   final String? defaultWriteRoot;
 
+  /// 权限档（用户建议 ⑤）：`ask` 默认，需要审批的工具要用户点批准；`full` 完全权限。
+  final String permissionMode;
+
+  static const modeAsk = 'ask';
+  static const modeFull = 'full';
+
   const AiToolPolicy({
     this.writeRoots = const [],
     this.readRoots = const [],
@@ -1311,6 +1317,7 @@ class AiToolPolicy {
     this.maxReadBytes = 0,
     this.maxWriteBytes = 0,
     this.defaultWriteRoot,
+    this.permissionMode = modeAsk,
   });
 
   factory AiToolPolicy.fromJson(Map<String, dynamic> json) => AiToolPolicy(
@@ -1325,6 +1332,8 @@ class AiToolPolicy {
         maxReadBytes: (json['maxReadBytes'] as num?)?.toInt() ?? 0,
         maxWriteBytes: (json['maxWriteBytes'] as num?)?.toInt() ?? 0,
         defaultWriteRoot: json['defaultWriteRoot']?.toString(),
+        // 认不出的档位一律当「询问」：权限这种事不猜
+        permissionMode: json['permissionMode'] == modeFull ? modeFull : modeAsk,
       );
 
   static const accessOptions = <String, String>{
@@ -1351,6 +1360,7 @@ class AiToolPolicy {
         maxReadBytes: maxReadBytes,
         maxWriteBytes: maxWriteBytes,
         defaultWriteRoot: defaultWriteRoot,
+        permissionMode: permissionMode,
       );
 
   /// 界面上那句"默认只能写哪里"。
