@@ -1123,4 +1123,44 @@ void main() {
     expect(find.text('完全权限'), findsWidgets);
     expect(find.textContaining('不再等你批准'), findsWidgets);
   });
+
+  testWidgets('用户翻上去时不自动跟随，右下角给「回到最新消息」（用户建议 ③④）', (tester) async {
+    tester.view.physicalSize = const Size(1000, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    // 一条足够长的回复：列表一定会超出视口，才谈得上"滚动位置"
+    final long = List.generate(120, (i) => '第 $i 行内容，用来把列表撑长。').join('\n\n');
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'text.delta', '{"messageId":"a1","text":${jsonEncode(long)}}') +
+        _sse(4, 'message.completed', '{"messageId":"a1","text":${jsonEncode(long)},"steps":0}') +
+        _sse(5, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '给我一段长文');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    // 贴底时不该有这个按钮
+    expect(find.byTooltip('回到最新消息'), findsNothing);
+
+    // 往上翻：按钮出现，而且**不会**被自动跟随拽回底部
+    await tester.drag(find.byType(ListView).first, const Offset(0, 900));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('回到最新消息'), findsOneWidget);
+
+    final scrollable = find.byType(Scrollable).first;
+    final offsetAfterDrag = tester.widget<Scrollable>(scrollable).controller!.offset;
+    expect(offsetAfterDrag, lessThan(tester.widget<Scrollable>(scrollable).controller!.position.maxScrollExtent));
+
+    // 点一下回到最新消息：按钮消失，并且真的到了底部
+    await tester.tap(find.byTooltip('回到最新消息'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('回到最新消息'), findsNothing);
+    final controller = tester.widget<Scrollable>(scrollable).controller!;
+    expect(controller.offset, closeTo(controller.position.maxScrollExtent, 1));
+  });
 }
