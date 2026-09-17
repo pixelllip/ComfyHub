@@ -178,6 +178,11 @@ fun Application.module(ctx: AppContext) {
         comfySubmit = { promptId, overrides, title, waitSeconds ->
             AiWorkflowSearch.submit(submitter, capture, promptId, overrides, title, waitSeconds)
         },
+        // 图生图：把用户发来的图投放进 ComfyUI 的 input 目录（用户 bug：
+        // "LoadImage 读的是捕获时绑定的那张 jpg，我只能改文本，改不了文件名"）
+        comfyUseAttachment = { attachmentId, filename ->
+            AiWorkflowSearch.useAttachment(ctx.cfg, aiAttachments, attachmentId, filename)
+        },
     )
 
     // 内置模型目录：项目内置的冻结副本（classpath）里那份，缺哪个补哪个；已存在的一律不覆盖

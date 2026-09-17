@@ -638,9 +638,16 @@ class HarnessRunner(
                 "user" -> {
                     val chats = mutableListOf<ChatAttachment>()
                     val skipped = mutableListOf<String>()
+                    // 图片附件要把 id 告诉模型（用户 bug）：图生图必须先把这个 id 交给
+                    // comfy_use_attachment 投放进 ComfyUI 的 input 目录，模型没有 id 就只能干看着。
+                    // 注意：**没随本次请求内联的图也算**——文件在库里，照样能当参考图用。
+                    val images = mutableListOf<String>()
                     msg.parts.filter { it.type == "attachment" }.forEach { part ->
                         val id = part.attachmentId
                         val dto = id?.let { AiAttachmentRepo.get(it) }
+                        if (id != null && dto?.toFact()?.modality == Modality.IMAGE) {
+                            images += "id=$id（${part.text ?: dto.name}）"
+                        }
                         if (id != null && included.contains(msg.id to id) && dto != null) {
                             val chat = attachments?.toChatAttachment(dto)
                             if (chat != null) chats += chat else skipped += (part.text ?: dto.name)
@@ -656,6 +663,12 @@ class HarnessRunner(
                             append("（以下附件未随本次请求发送：")
                             append(skipped.joinToString("、"))
                             append("）")
+                        }
+                        if (images.isNotEmpty()) {
+                            if (isNotEmpty()) append("\n\n")
+                            append("（这条消息里的图片附件：")
+                            append(images.joinToString("、"))
+                            append("。需要把它们当参考图 / 图生图底图时，先用 comfy_use_attachment 把 id 投放进 ComfyUI 的 input 目录。）")
                         }
                     }
                     if (text.isNotBlank() || chats.isNotEmpty()) {
@@ -943,9 +956,12 @@ private fun TokenUsage.toOpenAiShape(): JsonObject? {
  *     （见 [SystemPrompt.TITLE_INSTRUCTION]），后端摘掉标记后写进会话。
  * v6：权限两档（用户建议 ⑤）—— 用户切到「完全权限」时，标「需要用户批准」的工具
  *     直接变成可调用；提示词里如实说明这一点（**同时说明路径白名单没有放宽**）。
+ * v7：图生图（用户 bug）—— 新增 `comfy_use_attachment`：把用户发来的图片投放进
+ *     ComfyUI 的 input 目录并返回真实文件名；提示词里钉死"投放 → 查 LoadImage 节点 →
+ *     覆盖 image 输入"这三步，并明确禁止"改不了文件名所以算了"这种半途而废的答复。
  */
 object SystemPrompt {
-    const val VERSION = "v6"
+    const val VERSION = "v7"
 
     /**
      * 第一问时追加的一段：让模型在正文最前面带一行 `[标题]…[/标题]`，
@@ -1080,6 +1096,14 @@ object SystemPrompt {
             11. 用户说出**跨对话仍然成立**的偏好或约定（画幅、风格、模型、称呼、交付格式…）时，
                 用 `remember` 记一条；一次只记一条、只记事实本身。不要记录密钥 / 口令 / 隐私凭据、
                 不要记录本次任务的临时进度；用户让你忘掉某条时，如实说明可以在右侧栏的「长期记忆」里删。
+            12. **图生图 / 参考图要按这个顺序做，不要凭想象**：
+                ① 用户消息里给了图片附件 id 时，先 `comfy_use_attachment` 把 id 投放进 ComfyUI 的 input 目录，
+                   拿它返回的 `filename`；
+                ② 用 `comfy_find_workflow`（`includeGraph=true`）找到工作流里 LoadImage 节点的 id 与输入名；
+                ③ 再用 `comfy_submit` 覆盖那个节点的 `image` 输入，例如 `{"89.image":"<filename>"}`。
+                工作流被捕获时绑定的那个文件名（形如 `478952….jpg`）**跟你没有关系，也改不了**：
+                不许改写它（那会指向一个不存在的文件），也不许对用户说"我改不了文件名"就作罢 ——
+                按上面三步做就能真的把用户的图用上。图片没随本次请求内联（正文里有那句说明）时也一样能投放。
             """.trimIndent()
         )
     }

@@ -72,6 +72,8 @@ class ToolRegistryTest {
         "comfy_get_status", "comfy_get_run", "comfy_sync_history",
         // 用户建议 ①：AI 可以直接提交 Comfy 任务
         "comfy_find_workflow", "comfy_submit",
+        // 用户 bug：图生图要把用户发来的图片投放进 ComfyUI 的 input 目录
+        "comfy_use_attachment",
     )
 
     // --- 清单 / 权限 --------------------------------------------------------
@@ -393,6 +395,36 @@ class ToolRegistryTest {
         assertTrue(record.content.contains("connected"))
     }
 
+    // --- 图生图投放（用户 bug） ----------------------------------------------
+
+    @Test
+    fun `comfy_use_attachment 默认要批准 没人批准就绝不执行`() = runBlocking {
+        val e = env()
+        val info = e.registry.info(e.policy).associateBy { it.name }["comfy_use_attachment"]!!
+        assertEquals("ask", info.access, "要往用户机器上写文件，默认必须问一下")
+        assertEquals("comfy", info.category)
+        assertTrue(info.mutating)
+
+        // 没人批准（这里会等到闸门超时）：一律失败，绝不能"悄悄就把文件放进去了"
+        val denied = e.registry.invoke("c1", "comfy_use_attachment", args("attachmentId" to "att_x"), e.ctx())
+        assertEquals("failed", denied.status)
+        assertEquals("APPROVAL_DENIED", denied.errorCode)
+    }
+
+    @Test
+    fun `comfy_use_attachment 缺参数时报错 不会自己编一个附件 id`() = runBlocking {
+        val e = env()
+        // 放宽成 allow 才能走到 handler 本身（默认档位会先卡在审批上）
+        val allow = ToolPolicy(e.root, ToolPolicyConfig(overrides = mapOf("comfy_use_attachment" to "allow")))
+        val missing = e.registry.invoke("c2", "comfy_use_attachment", "{}", e.ctx(allow))
+        assertEquals("failed", missing.status)
+        // 测试环境没接投放能力，默认 lambda 会如实拒绝（绝不假装成功）
+        assertTrue(
+            missing.errorCode == "COMFY_DISABLED" || missing.errorCode == "INVALID_ARGUMENT",
+            "意外错误码：${missing.errorCode} / ${missing.error}",
+        )
+    }
+
     // --- 系统提示词 ---------------------------------------------------------
 
     @Test
@@ -424,5 +456,47 @@ class ToolRegistryTest {
         assertTrue(text.contains(e.policy.readRoots.first().toString()), "必须写明可读目录")
         assertTrue(!text.contains("尚未注册任何工具"), "v1 那句「尚未注册任何工具」不能再出现")
         assertTrue(text.contains("需要用户批准"), "ask 的工具要标出来")
+    }
+
+    @Test
+    fun `完全权限档下提示词明说本次不必等批准 且写明目录没有放宽`() {
+        val e = env()
+        val full = ToolPolicy(e.root, ToolPolicyConfig(permissionMode = ToolPolicyConfig.PERMISSION_FULL))
+        val text = SystemPrompt.render(
+            provider = AiProviderDto(
+                id = "p1",
+                displayName = "本地网关",
+                api = "openai-completions",
+                baseURL = "https://example.test/v1",
+                endpointTrust = "user",
+            ),
+            modelId = "gpt-4o-mini",
+            tools = e.registry.specs(full),
+            skills = emptyList(),
+            policy = full,
+            registry = e.registry,
+        )
+        assertTrue(text.contains("完全权限"), "要把当前档位如实告诉模型（即时注入）")
+        assertTrue(text.contains("不必再等批准"))
+        // 关键：说清"免的只是问一下"，白名单没动
+        assertTrue(text.contains("一点都没放宽"))
+        assertTrue(text.contains(full.writeRoots.first().toString()))
+
+        // 默认档位不该冒出这段话（否则模型会以为可以随便动手）
+        val askText = SystemPrompt.render(
+            provider = AiProviderDto(
+                id = "p1",
+                displayName = "本地网关",
+                api = "openai-completions",
+                baseURL = "https://example.test/v1",
+                endpointTrust = "user",
+            ),
+            modelId = "gpt-4o-mini",
+            tools = e.registry.specs(e.policy),
+            skills = emptyList(),
+            policy = e.policy,
+            registry = e.registry,
+        )
+        assertTrue(!askText.contains("不必再等批准"))
     }
 }

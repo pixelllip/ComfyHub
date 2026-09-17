@@ -97,6 +97,15 @@ class ToolRegistry(
     /** 提交一个工作流给 ComfyUI 跑（用户建议 ①）；`waitSeconds=0` 表示只提交不等。 */
     private val comfySubmit: suspend (Long, JsonObject?, String?, Int) -> ComfySubmitOutcome =
         { _, _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用 ComfyUI 提交能力") },
+    /**
+     * 把用户发来的**图片附件**放进 ComfyUI 的 `input/` 目录，返回它在那边真实可用的文件名。
+     *
+     * 图生图 / 参考图 / 结构参考的唯一正路：LoadImage 只能读 input 目录里真实存在的文件，
+     * 而工作流被捕获时绑定的那个文件名跟我们库里的附件毫无关系（用户报的 bug）。
+     * 返回 `{attachmentId, filename, inputDir, hint}`。
+     */
+    private val comfyUseAttachment: suspend (String, String?) -> JsonObject =
+        { _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用图片投放能力") },
 ) {
     private val log = LoggerFactory.getLogger(ToolRegistry::class.java)
 
@@ -471,6 +480,32 @@ class ToolRegistry(
                 )
             }
             ToolOutput(AppJson.encodeToString(JsonElement.serializer(), result.json), result.json)
+        },
+
+        // ------------------------------------------------------------------
+        //  图生图：把用户发来的图片放进 ComfyUI 的 input 目录（用户 bug）
+        // ------------------------------------------------------------------
+        AgentTool(
+            name = "comfy_use_attachment",
+            description = "把**用户随消息发来的图片附件**放进 ComfyUI 的 input 目录，返回它在那边的真实文件名。" +
+                "做图生图 / 参考图 / 结构参考 / 换脸时必须先用它：工作流里 LoadImage 的 image 输入" +
+                "**只能填 ComfyUI input 目录里真实存在的文件名**，你不能改也编不出一个。" +
+                "拿到 filename 之后再用 comfy_submit 覆盖 LoadImage 节点的输入，" +
+                "例如 overrides={\"89.image\":\"<返回的 filename>\"}。" +
+                "只接受图片附件；附件 id 见用户消息末尾的附件说明。",
+            parameters = schema(
+                """{"type":"object","properties":{"attachmentId":{"type":"string","description":"用户消息里那张图片的附件 id（形如 att_xxx / 32 位十六进制）"},"filename":{"type":"string","description":"可选：希望它在 ComfyUI 里叫什么（不填就用原文件名；会自动加一段 id 后缀防重名）"}},"required":["attachmentId"],"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = true,
+            // 要往用户机器上写文件（ComfyUI input 目录）→ 默认要批准；
+            // 切到「完全权限」后就不必等了（用户建议 ⑤）
+            defaultAccess = ToolAccess.ASK,
+        ) { args, _ ->
+            val attachmentId = args.str("attachmentId")
+                ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 attachmentId（见用户消息里的附件说明）")
+            val result = comfyUseAttachment(attachmentId, args.str("filename"))
+            ToolOutput(AppJson.encodeToString(JsonElement.serializer(), result), result)
         },
     )
 
