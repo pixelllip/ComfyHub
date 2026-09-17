@@ -185,6 +185,10 @@ object AiWorkflowSearch {
         }
         val source = attachments.fileOf(attachmentId)
             ?: throw ToolFailure("ATTACHMENT_NOT_FOUND", "附件「${dto.name}」的原件已经不在了（可能被清理过）")
+        if (!Files.isRegularFile(source)) {
+            // 库里有行、盘上没文件：如实说，别走到拷贝那一步再报一个看不懂的 IO 错
+            throw ToolFailure("ATTACHMENT_NOT_FOUND", "附件「${dto.name}」的原件文件不在了：$source")
+        }
 
         val inputDir = resolveComfyInputDir(cfg)
             ?: throw ToolFailure(
