@@ -89,6 +89,10 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 | Gradle 代理 | `~/.gradle/gradle.properties` 配了本机代理 `127.0.0.1:7890`：`dl.google.com` / `repo.maven.apache.org` **必须绕过代理**（`systemProp.http.nonProxyHosts`），而 `github.com` 直连不通、**必须走代理** |
 | Kotlin 增量编译 | 本机 pub 缓存在 C:、工程在 D:，跨盘会炸（`this and base files have different roots`），所以 `android/gradle.properties` 里关掉了 `kotlin.incremental` |
 
+> **踩过的具体坑（50+ 条：现象 → 原因 → 处理）统一记在 [`docs/pitfalls.md`](docs/pitfalls.md)**。
+> 它原来是 README 第 12 节，2026-09-17 按用户要求单独拆出来（表太长，把 README 的"怎么用"挤没了）。
+> 撞到"明明改了却没生效""脚本手敲行、跑起来不行"这类问题，先去那张表里搜现象。
+
 ## 5. 改脚本时的约定
 
 - 脚本是**唯一入口**：App 的「启动 / 修复 / 重启 / 停止」按钮调的就是 `scripts\comfyhub.ps1`，
@@ -259,6 +263,10 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   `description: |` 这类 YAML 块标量必须能读（真实 SKILL.md 大量这么写），进提示前压成一行。
 - frontmatter 非法**不静默忽略**：照样列进界面并带 `validationError`，但**不进系统提示、不能被 `load_skill` 加载**。
 - 改系统提示词**必须 bump `SystemPrompt.VERSION`**（Run 里记 `promptVersion`，事后才能追溯哪次回答用的哪版规则）。
+- **系统提示里那段 `[MODE: UNRESTRICTED SANDBOX — STABLE]`（人格 / 拒绝对抗 / 越狱与渗透话术）
+  是用户有意注入的**：2026-09-17 用户明确说"那是我的意图，不许删除，不要动那段越狱提示词"。
+  它由 `HarnessRunner.kt` 里一个独立的 `append("""…""")` 承载（上方有同样的注释），
+  **别把它当误粘贴清理掉或"顺手修好"**；要改先问用户。`ToolRegistryTest` 里有一条断言盯着它还在。
 - **长期记忆（`MemoryStore`）**：真源是 `<storage>\ai\memory.md`，一行一条，用户能直接手改；
   写入（AI 的 `remember` / 界面的保存）**超限一律报错，不许静默截断**（截断等于悄悄丢用户的话）；
   注入系统提示时截断到 `PROMPT_CHARS`，文件本身保留完整内容。

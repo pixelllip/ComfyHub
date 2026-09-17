@@ -1,0 +1,66 @@
+# 本机环境踩坑记录
+
+> 这张表原本在 [README](../README.md) 第 12 节。2026-09-17 按用户要求**单独拆出来**：
+> 它已经长到 50+ 行，留在 README 里把「怎么用」挤得看不见了。内容**原样搬过来**，只加了这段抬头。
+>
+> 换机器 / 重建环境时照着这张表走；本机的硬约束（JDK 21~23、MySQL 路径、端口、pub 源、
+> Gradle 代理…）在 [AGENTS.md](../AGENTS.md) 第 4 节。脚本侧的约定在第 5 节。
+
+---
+
+这些都是搭建时实际遇到并已绕开的，换机器时可以直接参考：
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| `flutter pub get` 报 `424 Failed Dependency ... synchronized` | `PUB_HOSTED_URL=https://pub.flutter-io.cn` 镜像对个别包返回 424 | 改用 `https://pub.dev`（本机可直连） |
+| `Could not resolve plugin org.jetbrains.kotlin.plugin.serialization` | `plugins.gradle.org` 不可达，而 Kotlin 插件 marker 不在 Maven Central | `build.gradle.kts` 改用 `buildscript { classpath(...) } + apply(plugin=...)` 从 Maven Central 拉取 |
+| Gradle 报 `Unsupported class file major version 69` | 本机默认 JDK 25，Gradle 8.12 只支持到 JDK 23 | `scripts\server.ps1` 自动挑选 JDK 21~23（本机用了 Android Studio 自带 JBR 21） |
+| `Unknown or incorrect time zone: 'Asia/Shanghai'` | 便携版 MySQL 没有导入时区表 | JDBC URL 去掉 `connectionTimeZone`，用驱动默认的 `LOCAL` |
+| `Unsupported character encoding 'utf8mb4'` | Connector/J 不认 `characterEncoding=utf8mb4` | 改成 `characterEncoding=UTF-8`（驱动会自动映射到 utf8mb4） |
+| `ERROR 1130 Host '127.0.0.1' is not allowed to connect` | my.ini 里开了 `skip-name-resolve`，`root@localhost` 匹配不上 TCP 连接 | 去掉 `skip-name-resolve` |
+| 命令行结束后 mysqld / java 立刻消失 | `Start-Process` 启动的进程属于当前命令的进程树，命令结束被一起回收 | 改用 `Win32_Process.Create`（WMI）启动，脱离进程树；后端再包一层临时 `.cmd` 处理 `cd` / `set` / 输出重定向 |
+| 改用 WMI 之后，App 自动拉起服务时**闪出一个 cmd 黑框** | WMI 的提供程序进程（WmiPrvSE）自己没有控制台，`CreateProcess` 没带 `CREATE_NEW_CONSOLE` 时系统会给控制台程序**新分配一个可见的控制台窗口** | 给 WMI 传一个 `Win32_ProcessStartup{ShowWindow=0}`（SW_HIDE）：窗口在创建时就是隐藏的（不是"先显示再隐藏"，所以不闪）；`cmd → .bat → java.exe` 这类孙进程会继承这个隐藏控制台，也不会各弹一个。见 `scripts\silent-process.ps1` |
+| 想一步到位用 `CreateFlags = CREATE_NO_WINDOW` | WMI 的 `Win32_ProcessStartup.CreateFlags` **拒绝**这个值 | `InvokeMethod('Create', …)` 返回 `21`（Invalid parameter）。所以只设 `ShowWindow = 0`；`[wmiclass]`（System.Management）不可用时退到 `wscript` + 临时 `.vbs`（`WScript.Shell.Run cmd, 0, False`），仍然拿 `ShowWindow`，最后才退回裸 WMI（会弹窗但服务能起来） |
+| 同一个 WMI 调用：命令行手敲成功、放进脚本却返回 `21` | PowerShell 里**没传值的 `[string]` 参数是空串，不是 `$null`**；WMI 的 `Create` 一收到 `CurrentDirectory=''` 就报 `21`（Invalid parameter） | 空串统一转回 `$null`（`silent-process.ps1` 里的 `$curDir`）—— "手敲行、脚本不行"时先怀疑参数类型的默认值 |
+| 用 `Get-Process xxx \| Select MainWindowHandle` 判断"有没有弹窗口"永远得到 0 | Windows 的控制台窗口属于 **conhost.exe**，不属于那个控制台程序本身 | 验证「静默启动」要枚举可见的顶层窗口（`EnumWindows` + `IsWindowVisible`），并且**边启动边轮询**（50ms 一次）才能发现"闪一下"的窗口 —— 现成的一条命令：`pwsh -File scripts\check-silent-start.ps1 -Restart` |
+| 静默启动的兜底路径（`wscript` + `.vbs`）起不来 mysqld | 两个坑叠在一起：`WScript.Shell.Run` 直接跑「"带引号的完整路径" + 参数」时会把 mysqld 悄悄丢掉（交给 `cmd` 解析才稳）；命令行里的引号 / 中文路径作为 wscript 参数传递时会被拆坏 | 命令行写进一个 UTF-16 文件，VBS 读出来再交给 `cmd.exe /c "…"` 执行；启动方式见 `Start-SilentProcess` 的返回值（`wmi-hidden` / `wmi-vbs` / `wmi-plain`） |
+| 后端存储目录跑到 `C:\Windows\System32\...` | WMI 启动时工作目录丢失 | 启动脚本里显式 `cd /d` + `set COMFYHUB_STORAGE=...`；后端还加了系统目录兜底检查 |
+| `media_kit` 无法构建 | 它的 Windows 原生库要从 GitHub Releases 下载，本机 GitHub 不可达 | 视频改用 `video_player_win`（Windows Media Foundation，只依赖 nuget.org，本机可用）；音频用 `audioplayers` |
+| 视频**只有声音、画面全黑**（引擎日志刷 `Could not create external texture`） | Flutter 3.47 在 Windows 上默认启用 **Impeller**；Impeller 建外部纹理时用的尺寸是 `FlutterDesktopGpuSurfaceDescriptor.visible_width / visible_height`，而 `video_player_win` 3.2.2（上游 master 也一样）只填了 `width / height` → 纹理是 0×0，`WrapTexture` 返回空 → 音频照放、画面全黑。Skia 后端因为"尺寸为 0 就退回用控件尺寸"而侥幸正常，所以这个坑只在 Impeller 下暴露，升级 Flutter 之后才炸 | 插件复制到 `third_party\video_player_win`（本地副本），在 `initTexture()` 里补上 `visible_width / visible_height`，`pubspec.yaml` 改成 path 依赖；改动点搜 `ComfyHub 补丁`，上游修好后可以换回 pub.dev 版本 |
+| `main.cpp` 报 `C4819` / `C2001 常量中有换行符` | 窗口标题是中文，而 MSVC 默认按 936(GBK) 代码页读 UTF-8 源码，`/WX` 又把警告升级成错误 | `windows/CMakeLists.txt` 里加 `add_compile_options("/utf-8")` |
+| `FilePicker.platform` / `PlatformFile.size` 找不到 | file_picker 12.x 把 `pickFiles` 改成了**静态方法**并返回 `List<PlatformFile>`，`size` 换成 `lengthSync()`/`length()` | 按新 API 改写 `upload_sheet.dart` |
+| 详情页「正向提示词」的框被撑到几百像素高 | `SelectableText` 底层是 `EditableText`，设了 `maxLines: 30` 会**预留** 30 行高度 | `CopyableText` 不设 `maxLines`，按内容自然撑开 |
+| 用 PowerShell 点击 App 坐标总是偏 | pwsh 进程 DPI 不感知，`SetCursorPos` 坐标被系统按缩放比换算（本机 150%） | 脚本里先调用 `SetProcessDPIAware()`，坐标统一用物理像素 |
+| 大文件上传内存暴涨 | 早期实现把整个 multipart 读进内存 | 改为流式落盘（`ByteReadChannel` → 临时文件 → 原子 `move`） |
+| `PrintWindow` 抓 Flutter 窗口抓到错帧 | Flutter 走 ANGLE/D3D 合成，`PrintWindow` 对这类窗口不可靠 | 改用 `SetForegroundWindow` + `CopyFromScreen` 抓真实屏幕像素 |
+| `loras` / `extra_params` 静默存成 `NULL` | 早期写成 `encode(value: Any)`：reified 的 `T` 退化成 `Any`，运行时找不到序列化器抛异常，而异常又被 `runCatching` 吞掉 —— 不报错但也没写进去 | 改成显式传序列化器：`encodeToString(ListSerializer(LoraRef.serializer()), …)` / `MapSerializer(…)`。"会吞异常的 runCatching + 泛型退化" 是个必须留意的组合 |
+| `ALTER TABLE … ADD COLUMN IF NOT EXISTS` 报语法错误 | MySQL 8.4 **不支持** `IF NOT EXISTS`（那是 MariaDB 的扩展） | 先查 `information_schema.COLUMNS / STATISTICS / TABLES` 再执行 DDL（`Migrate.kt` / `db\migrate.sql`），幂等可重复执行 |
+| 换了 `datadir` 之后 mysqld 起不来 | 新目录是空的，里面没有 `mysql` 系统库，mysqld 直接退出 | `mysql.ps1 move` 先停库 → `robocopy` 整个实例目录过去 → 再拉起来；不删源目录，留一条后路 |
+| App 里点「启动服务」没反应 / 一闪而过 | 脚本是子进程，工作目录会丢，进程还可能随父进程被回收 | 脚本内部用 WMI（`Win32_Process.Create`）脱离进程树；Flutter 侧用 `Process.start` 流式读 stdout/stderr 实时回显到启动页，超时/失败都有明确文案 |
+| 捕获节点挂上了 `add_on_prompt_handler` 却拿不到 `prompt_id` | ComfyUI 0.34.2 里 `prompt_id` 是在回调**之后**才生成/校验的（`server.py:1076` 调回调，`server.py:1088` 才有 id） | 主钩子改成包装 `PromptExecutor.execute_async(prompt, prompt_id, extra_data, execute_outputs)`（`execution.py:730`）：这里同时拿得到 id、参数图和 `extra_data`，而且自带 `finally`，执行失败也能收尾 |
+| 包装 ComfyUI 的 `send_sync` 之后事件链路出问题 | 忘了原样转发 `*args/**kwargs` 或改动了返回值 | 包装器只做旁路观察：`*args, **kwargs` 原样透传、返回值原样返回，内部逻辑全部 try/except（`comfyui\comfyhub_capture\__init__.py`） |
+| `VHS_VideoCombine` 生成的视频没被捕获 | 它默认把视频写成 `type=temp`（预览临时目录），而自动捕获只收 `output` 类产物 | 工作流里把 `save_output` 打开（或在节点配置里设 `includeTemp: true`），这类视频才会进库 |
+| `server.ps1` 在数据库起不来时仍然硬拉起后端 JVM | PowerShell 里 `& script.ps1` 的 **stdout 会成为表达式的返回值**，`$mysqlOk` 被输出数组污染后永远为真，`if (-not $mysqlOk)` 形同虚设 | 调用处加 `| Out-Null`（`Ensure-MySql` 只关心退出/返回值），失败时直接抛「数据库不可用」而不是留一个连不上库的后端 |
+| `mysqld` 相关判断时好时坏 | Windows 上 MySQL 8 是**父进程 + 真正的服务子进程**两个 `mysqld.exe`；`CommandLine` 里的路径还可能带引号 | 匹配命令行时两边都去引号再比；状态行打印完整 PID 列表（以前只打进程个数，显示成 `PID 2` 很误导） |
+| 后端新功能点了没反应（实测：切「自动允许（无需批准）」界面又跳回「询问」） | `<项目根>\server\build\install\...\lib\comfy-hub-server-1.0.0.jar` 是**旧构建**：`gradle build` 只更新 `build\libs`，**不会**同步 `build\install`（那是 `installDist` 的产物），而后端跑的是 install 那份。于是 `/api/ai/tools/policy` 的响应里根本没有 `permissionMode` 字段，Dart 侧按最保守的「询问」解析（用户 bug ①） | 重建后**必须**跑一次 `installDist` 再重启：`gradle -p server installDist`（`pwsh -File scripts\server.ps1 start` 本来就会做，但 `build` 之后直接 `start` 时 Gradle 可能判它 up-to-date）。查证一条命令：`javap -p -classpath <install jar> com.comfyhub.ai.ToolPolicyDto \| Select-String permissionMode` |
+| 界面改完却看不到效果（实测：画廊 / 提示词里的视频预览图一直不显示） | 跑着的 **App 是旧构建**：直接双击或 `Start-Process` 拉起的还是上一次编的 Dart（Release 看 `data\app.so`、debug 看 `data\flutter_assets\kernel_blob.bin`）。改完 `lib\` 只跑 `flutter analyze` / `flutter test` 是**看不见界面**的 —— 测试跑的是源码，用户手里是旧二进制，于是"明明修了却还是老样子" | 重编 + 重启再看：`flutter build windows --debug`（或 `scripts\dev-app.ps1` 起 debug 版按 `r` 热重载）；`pwsh -File scripts\comfyhub.ps1 doctor` 会分别报「该启动的 App」和「正在跑的 App」是不是旧构建，`up -WithApp` 选中/接管到旧构建时也会当场警告 |
+| App 启动页日志刷 `FormatException: Missing extension byte (at offset 12)`，中文变乱码 | pwsh 在 stdout 被**重定向**时跟随控制台代码页输出（中文系统是 936/GBK），而 App 是按 UTF-8 解的 —— 报错 offset 正好落在第一个中文字符上（`  ComfyHub 启…` 的 `启`） | 三个脚本顶部在 `[Console]::IsOutputRedirected` 时把 `[Console]::OutputEncoding` 钉成 UTF-8（不动用户的交互式终端）；App 侧解码再加 `allowMalformed` 兜底，一行坏字节不再打断整个日志流。实测 CP=936 下：旧脚本 `ce b4 d4 cb`（GBK），新脚本 `e8 bf 90 e8 a1 8c`（UTF-8） |
+| 冷启动要 10 秒往上，其中一多半是在"干等" | "服务起来没有"的探测直接去连 127.0.0.1 上一个没人监听的端口，本机要等 **SYN 重传 ≈ 2 秒**（`mysqladmin ping` / `Invoke-RestMethod` / 裸 `TcpClient` 实测都是 2.04~2.08s；开着 Clash/mihomo 这类 TUN 代理时 RST 被吃掉更明显），而冷启动时"还没起来"恰恰是常态，一次启动里要撞好几次 | 所有存活探测先过 `Test-TcpPort`（`BeginConnect` + 200ms 超时，端口开着时和正常连接一样快），确认端口开了再去做权威的 ping / 健康检查；轮询间隔 700/800ms 收紧到 200ms。实测 `up -SkipBuild`：**10.8~11.2s → 7.6~7.7s**（后台耗时未变：MySQL 1.7s + JVM 1.9s 是真实启动时间） |
+| 自动捕获的提示词是空的（真实的视频工作流） | 参数解析只认「采样器自己身上有 `steps`/`cfg`」的经典图；而 MiniMax H3 这类图是 `SamplerCustomAdvanced` + `BasicGuider` + `BasicScheduler` + `KSamplerSelect` + `RandomNoise`，参数散在兄弟节点上，文本提示词在条件节点的 `prompt` 输入里 | 改成顺着 `sigmas` / `sampler` / `noise` / `guider` 把链走一遍，并统一从「条件节点」的文本输入取提示词；补了 `GraphParseTest` 把这几个真实结构钉住 |
+| **用 agent / 脚本生图时，提示词与工作流双双为空** | ComfyUI **0.34.2** 把入队的 prompt 从 3 元组扩成了 6 元组 `(number, prompt_id, prompt, extra_data, outputs_to_execute, sensitive)`（`server.py:1131`），而 `/history` 存的就是这一整条；旧实现按 `prompt[0]` / `prompt[1]` 取节点图和 `extra_data`，升级后取到的是数字和 prompt_id 字符串 → `GraphParse` 拿到 null，提示词、参数、工作流一起丢 | 改成**按内容认**（值全是 `{class_type: ...}` 的对象才是节点图，带 `extra_pnginfo`/`client_id` 的才是 extra_data），新旧两种形状都吃得下；`HistoryEntryTest` 把六元组 / 三元组 / 坏数据都钉住（见 `ComfyCapture.kt` 的 `HistoryEntry`） |
+| agent / 脚本生图"没有工作流" | 这类运行是直接 POST `/prompt` 的，从没给过 ComfyUI 界面格式工作流，`/history` 里自然没有 —— 但它提交的 **API 格式节点图**一直躺在 history 里 | 捕获时工作流缺失就退回存 API 格式节点图（ComfyUI 前端 `loadApiJson` 能直接加载这种 JSON），查看器按格式给不同提示语 |
+| 产物详情页永远不显示「查看工作流」 | `MediaDto` 里压根没有 `hasWorkflow` 字段（提示词有），前端 `media.hasWorkflow` 恒为 false | `MediaRepo` 的查询补上 `(m.workflow_json IS NOT NULL) AS has_workflow` |
+| 详情页大图"拖不动、滚轮不缩放" | 旧实现把 `Image.network` 直接塞进 `InteractiveViewer`，再套在外层 `SingleChildScrollView` 里：图片按原始尺寸撑开、高度不受限，于是一放大就变成"整页滚动"而不是"画面平移" | 抽出 `ZoomableImageView`：视口有界、图片 `contain` 铺满，滚轮以指针为中心缩放、按住拖动平移，右下角加缩略图 + 视野高亮框（`test/zoomable_image_test.dart` 覆盖） |
+| 「文件信息」的值挤在卡片左半边 | 单列键值对在一张宽卡片里，右边一大片空白 | 卡片宽 ≥ 460 时排成两列（文件名 / 备注这类长值仍独占整行），把整张卡片铺满 |
+| 删掉导入的产物后，再点「导入已有产物」永远提示重复 | `capture_runs.run_key = import:<sha>` 只是个日志，却把重新导入挡在门外（媒体行其实已经删了） | 调用前先按 SHA-256 确认文件不在库里；导入这条路用 `force` 抢占运行记录（**正在处理中的**运行仍不会被抢），轮询那条路保持原样 —— 用户删掉的捕获不会被下一次轮询偷偷加回来 |
+| 后端在跑但 MySQL 挂了，`server.ps1 start` 什么都不修 | 它看到后端进程存在就提前 return，跳过了数据库检查 | 统一入口 `comfyhub.ps1 up`：先确保数据库，再判断后端 `db` 是否 ok，不 ok 就重启后端 |
+| 脚本报 `Cannot overwrite variable HOME` | `$home` 是 PowerShell 的只读自动变量，不能当普通变量赋值 | 改名成 `$mysqlHome` / `$javaHome` |
+| `Get-ChildItem 'D:\tools\mysql\*\bin' -Filter x.exe` 静默返回空 | 路径里带通配符时文件系统提供程序不会正确应用 `-Filter` | 改成先 `-Directory` 列目录再拼 `bin\x.exe` |
+| 中文又细又糊 | Flutter 在 Windows 默认用 Segoe UI（无中文字形），且 M3 字号字距按拉丁字体调 | 见 [README 第 10 节](../README.md#10-界面与中文排版)：显式指定中文字体族 + 字距归零 + 行高 1.6 + 小字号加字重 |
+| `flutter build apk` 报 `Error: Your project's Kotlin version (2.2.10) is lower than Flutter's minimum supported version of 2.2.20` | AGP 9 的内建 Kotlin 用 AGP 运行时依赖的 KGP，而 AGP 9.1.0 只带 **2.2.10**；把 `org.jetbrains.kotlin.android` 从 settings 里删掉后 classpath 上就只剩它，低于 Flutter 3.47 的门槛（flutter/flutter#192167，3.47.3 还没带修复） | `settings.gradle.kts` 里保留 `id("org.jetbrains.kotlin.android") version "2.4.0" apply false`：只进 classpath、不 apply，内建 Kotlin 就用 2.4.0，也不会抢 `kotlin` 扩展名 |
+| 构建失败时 Flutter 额外弹框说 "opt out of `android.newDsl`"，但 `android.newDsl=false` 早就配了 | `flutter_tools` 的 `useNewAgpDslErrorHandler` 只按 `> Failed to apply plugin 'dev.flutter.flutter-gradle-plugin'` 这一行文本匹配，**apply 阶段任何异常都会命中**，是误报 | 别理这个框，往上看真正的 `* What went wrong:` |
+| 插件模块 `compileDebugKotlin` 报 `Could not close incremental caches`，被 Suppressed 的真因是 `this and base files have different roots` | pub 缓存在 **C:** 盘、工程在 **D:** 盘；Kotlin 增量编译的可重定位缓存要把源文件路径相对于工程目录转相对路径，跨盘直接 `IllegalArgumentException`（flutter/flutter#187225 也是它，最后没定位到根因就关了） | `android/gradle.properties` 加 `kotlin.incremental=false`（代价是 Kotlin 不再增量编译）；彻底解决就把 `PUB_CACHE` 挪到 D 盘 |
+| Gradle 报 `Could not GET 'https://dl.google.com/...'` / `repo.maven.apache.org` + `TLS protocol versions` / `Remote host terminated the handshake` | `~/.gradle/gradle.properties` 里配的本机代理 `127.0.0.1:7890` 对这两个仓库 TLS 握手失败，**直连反而正常**；但 github.com 直连不通、必须走代理，所以代理不能整个关 | `~/.gradle/gradle.properties` 加 `systemProp.http.nonProxyHosts=dl.google.com\|*.google.com\|repo.maven.apache.org\|*.maven.apache.org\|...`（Java 只有 `http.nonProxyHosts` 一个属性，https 同样生效），改完先 `android\gradlew.bat --stop` |
+| 升 Gradle 时构建刚起头就抛 `SSLHandshakeException`，栈里是 `org.gradle.wrapper.Download.downloadInternal` | Gradle 官方分发包地址会 **307 跳到 github.com**，本机 github 直连不通；而 **Gradle wrapper 跑在 Gradle 之前、不读 `~/.gradle/gradle.properties` 里的 `systemProp.*` 代理设置** | 从 `mirrors.cloud.tencent.com/gradle/`（或华为镜像）下 `gradle-x.y.z-all.zip` → 和官方 `.sha256` 核对 → 塞进 `~/.gradle/wrapper/dists/<版本>/<hash>/`；再在 `gradle-wrapper.properties` 里加 `distributionSha256Sum` 防掉包。完整步骤见 [android-agp9-builtin-kotlin-migration.md](android-agp9-builtin-kotlin-migration.md) 的踩坑 P8 |
+| 升级 AGP 后构建报"需要更高的 Gradle 版本" | AGP 每个版本都有最低 Gradle 要求（9.1→9.3.1、9.2→9.4.1、9.3→9.5.0、9.4→9.6.0），AGP 与 Gradle 必须配对升级 | 查 AGP release notes 顶部的"最低版本"表，同时改 `android/settings.gradle.kts` 和 `android/gradle/wrapper/gradle-wrapper.properties` |
+| 删掉 `android.builtInKotlin=false` 想打开内建 Kotlin，结果又被写回 `false` | Flutter 的 `DisableBuiltInKotlinMigration` 只在属性**完全缺失**时才补 `=false`（`android.newDsl` 同理） | 必须显式写 `android.builtInKotlin=true`，属性名大小写敏感；`android.newDsl` 保持 `false` 是官方现状（Flutter 自己也没迁完新 DSL），不是漏迁移。细节见 [android-agp9-builtin-kotlin-migration.md](android-agp9-builtin-kotlin-migration.md) |
