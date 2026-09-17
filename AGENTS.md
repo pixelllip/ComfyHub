@@ -26,7 +26,7 @@
   为了用掉 import 而写的占位用例、同一行为的两种写法 —— 这类**该删就删**（用户提过"减少一些
   已经通过、不太重要的测试项"）。判断方法只有一句：**删了以后出错还能不能被测试抓住**。
   真正的防线（零上游请求、审批顺序、越界写被拒、内联预算、滚动条与懒构建…）一条都不能删。
-  本机实测的耗时（别凭感觉说"测试太慢"，2026-09-17 重新量过）：`flutter test` 157 例 ≈ 11~14s、
+  本机实测的耗时（别凭感觉说"测试太慢"，2026-09-17 重新量过）：`flutter test` 168 例 ≈ 11~15s、
   `gradle test` 285 例 ≈ 5~11s（首跑要编译，稳定后更快）、`e2e-ai-tools-test.ps1` 64 项 ≈ 40s、
   `e2e-capture-test.ps1` / `e2e-submit-test.ps1` 各 ≈ 20~30s。
 - 产物目录：debug 在 `build\windows\...\runner\Debug\`、Release 在 `...\Release\`；
@@ -100,8 +100,12 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   返回按钮 tooltip 这类**系统文案来自 `MaterialLocalizations`** ——
   `lib/app.dart` 里必须留着 `locale: zh_CN` + `flutter_localizations` 的三个 delegate，
   少一个就会在中文界面里冒出英文的 "Copy / Select all"（用例 `test/localization_test.dart`）。
-- 右键菜单统一用 `showContextMenuAt(...)` + `contextMenuItem(...)`（`lib/widgets/common.dart`），
-  自己算 `RelativeRect` 容易把菜单弹到屏幕角上。
+- 弹出菜单统一用 `AppMenuButton`（按钮下拉）/ `showAppContextMenu`（右键），页面根部挂一个
+  `ContextMenuScope`（`lib/widgets/app_menu.dart` + `lib/widgets/context_menu.dart`，
+  `common.dart` 里转出）。**别改回 `PopupMenuButton` / `showMenu`**：它们铺的 `ModalBarrier`
+  会把整页的滚轮和拖动全吃掉（用户 bug ②，上游 flutter/flutter#90223 至今未修），
+  回归用例 `test/menu_scroll_test.dart`。传 `context` 时要用**在 `ContextMenuScope` 里面**的那一个
+  （页面自己的 `State.context` 在它外面）。
 - 开关行别直接用 `SwitchListTile(contentPadding: EdgeInsets.zero)` 贴卡片边缘：
   用 `settings_page.dart` 里的 `_SwitchRow`（自带内边距 + Material 底色，
   底色不能用 `Container` 的 decoration，否则会盖掉水波纹并触发断言）。
