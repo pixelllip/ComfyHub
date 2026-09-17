@@ -110,6 +110,23 @@ fun Route.captureRoutes(ctx: AppContext, capture: ComfyCapture, submitter: Comfy
         call.respondText(json, ContentType.Application.Json)
     }
 
+    /**
+     * **API 格式**节点图（提交给 ComfyUI `/prompt` 用的那一份）。
+     *
+     * 与上面的 `/workflow` 不是一回事：那是界面格式（能拖回 ComfyUI 复现），
+     * 这是"当时真正跑的东西"。`comfy_submit` 与端到端自测都用它；
+     * 老数据没有就 204（调用方如实说明"这条跑不了"，不猜着转换）。
+     */
+    get("/prompts/{id}/api-graph") {
+        val id = call.requireId() ?: return@get call.respondBadRequest("非法的 id")
+        if (Db.withConnection { PromptRepo.get(it, id) } == null) return@get call.respondNotFound("提示词 $id 不存在")
+        val graph = capture.apiGraphOf(id) ?: return@get call.respond(HttpStatusCode.NoContent)
+        call.respondText(
+            AppJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), graph),
+            ContentType.Application.Json,
+        )
+    }
+
     get("/media/{id}/workflow") {
         val id = call.requireId() ?: return@get call.respondBadRequest("非法的 id")
         if (MediaRepo.get(id) == null) return@get call.respondNotFound("产物 $id 不存在")

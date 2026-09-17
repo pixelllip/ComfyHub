@@ -79,15 +79,20 @@ class Handler(BaseHTTPRequestHandler):
             keyword = user_text.split("找找看", 1)[1].strip().split(" ")[0] or "e2e"
             self._stream_tool("comfy_find_workflow", {"query": keyword, "limit": 2, "includeGraph": True})
             return
-        # 模板 C：真的提交一次任务（用户建议 ① 的端到端）。promptId 从「提交 82」里取。
-        # 覆盖的参数路径按**工作流自己的节点编号**给（节点 id 不一定是数字，
-        # 这个库里的工作流用的是 "sch" 这类字符串 id —— 与 ComfyUI 界面上看到的一致）。
+        # 模板 C：真的提交一次任务（用户建议 ① 的端到端）。
+        # 用户那句话的格式由测试脚本决定：`提交 <promptId> <节点id>.<输入名>=<值>`
+        # （不同工作流的可覆盖参数不一样，写死一个 "sch.steps" 只能测到那一条工作流）。
         if "提交" in user_text and last.get("role") != "tool":
-            digits = "".join(ch for ch in user_text.split("提交", 1)[1] if ch.isdigit())
-            prompt_id = int(digits or "0")
+            tail = user_text.split("提交", 1)[1].strip()
+            parts = tail.split()
+            prompt_id = int("".join(ch for ch in parts[0] if ch.isdigit()) or "0")
+            overrides = {}
+            if len(parts) > 1 and "=" in parts[1]:
+                path, value = parts[1].split("=", 1)
+                overrides[path] = value
             self._stream_tool("comfy_submit", {
                 "promptId": prompt_id,
-                "overrides": {"sch.steps": "12"},
+                "overrides": overrides,
                 "title": "E2E 提交验证",
                 "waitSeconds": 60,
             })

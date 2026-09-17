@@ -137,6 +137,23 @@ object CaptureRepo {
      *
      * 卡在 `running` 超过 10 分钟的记录会被重新抢占，避免后端中途被杀之后再也补不上。
      */
+    /**
+     * 已经存在一条记录时，这次调用能不能抢占它。
+     *
+     * 抽成纯函数是为了能单测（`CaptureRunRetryTest`）—— 这里的每一条都是实测踩出来的：
+     *  - `running` 且没过 10 分钟：别人正在收，让开；
+     *  - **`empty` / `error` 可以重试**：`/history` 先有记录、产物文件晚到是常态，
+     *    当终态就会出现"AI 说生成了、画廊里却没有"这种最难查的问题；
+     *  - `success` 是唯一不再重复收的终态（幂等靠它）；
+     *  - `force` 给「目录导入」用：那边已经用 SHA-256 确认文件不在库里。
+     */
+    internal fun canReclaim(status: String, ageSeconds: Int, force: Boolean): Boolean = when {
+        status == "running" && ageSeconds <= 600 -> false
+        status == "empty" || status == "error" || force -> true
+        status == "running" -> true
+        else -> false
+    }
+
     fun beginRun(runKey: String, source: String, raw: JsonObject? = null, force: Boolean = false): RunClaim =
         Db.withConnection { conn ->
             val rawText = raw?.let { runCatching { AppJson.encodeToString(JsonObject.serializer(), it) }.getOrNull() }
@@ -154,17 +171,13 @@ object CaptureRepo {
 
             val (promptId, status, age) = existing ?: return@withConnection RunClaim(true)
 
-            // 别人正在处理：无论 force 与否都让开
-            if (status == "running" && age <= 600) return@withConnection RunClaim(false, promptId, status)
+            if (!canReclaim(status, age, force)) return@withConnection RunClaim(false, promptId, status)
 
-            if (status == "running" || force) {
-                conn.execute(
-                    "UPDATE capture_runs SET status = 'running', error = NULL, created_at = CURRENT_TIMESTAMP(3) WHERE run_key = ?",
-                    runKey
-                )
-                return@withConnection RunClaim(true)
-            }
-            RunClaim(false, promptId, status)
+            conn.execute(
+                "UPDATE capture_runs SET status = 'running', error = NULL, created_at = CURRENT_TIMESTAMP(3) WHERE run_key = ?",
+                runKey
+            )
+            RunClaim(true)
         }
 
     fun finishRun(

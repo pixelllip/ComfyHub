@@ -315,6 +315,13 @@ class ComfyCapture(private val cfg: AppConfig, private val storage: Storage) {
             if (files.isEmpty()) {
                 val status = if (req.status == "error") "error" else "empty"
                 CaptureRepo.finishRun(runKey, null, status, 0, null, req.error)
+                // 这条日志是排"产物怎么没进来"的第一现场：说清楚是 /history 里就没有 outputs，
+                // 还是 outputs 里的条目被过滤掉了（type 不是 output / 文件名为空）
+                log.warn(
+                    "运行 {} 没有可入库的产物：/history 的 outputs 原始条目={}，过滤后={}",
+                    runKey, (req.raw?.get("outputs") as? JsonElement)?.toString()?.take(400) ?: "(无 outputs)",
+                    files.size,
+                )
                 return IngestResult(
                     runKey = runKey,
                     message = if (status == "error") "这次运行执行失败，只记录了日志" else "这次运行没有产出文件",
