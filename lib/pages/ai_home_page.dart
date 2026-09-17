@@ -571,8 +571,11 @@ class _MessageBubble extends StatelessWidget {
       if (text.isEmpty) return;
       if (type == 'reasoning') {
         blocks.add(_ReasoningPanel(text: text, streaming: streaming));
-      } else if (text.trim().isNotEmpty) {
-        blocks.add(MarkdownText(text, style: theme.textTheme.bodyMedium));
+      } else if (type == 'text' && text.trim().isNotEmpty) {
+        // 用户消息是**纯文本**，不走 Markdown（用户打什么就显示什么）
+        blocks.add(m.isUser
+            ? SelectableText(text)
+            : MarkdownText(text, style: theme.textTheme.bodyMedium));
       }
     }
 
