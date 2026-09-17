@@ -164,6 +164,27 @@ class HarnessRunner(
     private class RoundResult {
         val text = StringBuilder()
         val reasoning = StringBuilder()
+
+        /**
+         * 这一轮里思考 / 正文**到达的先后顺序**（相邻同类型已合并）。
+         *
+         * 为什么不直接"先写 reasoning 再写 text"：多数上游确实是先思考后正文，
+         * 但那只是**惯例**，不是协议保证（有的网关会把思考片段夹在正文中间吐出来）。
+         * 用户要求"完全按照消息获取顺序来"，所以这里如实记下到达顺序，
+         * 落库的 parts 就照这个顺序写（用户报的 bug：最终回复被排到了最终思考前面）。
+         */
+        val chunks = mutableListOf<Pair<String, String>>()
+
+        fun addChunk(type: String, chunk: String) {
+            if (chunk.isEmpty()) return
+            val last = chunks.lastOrNull()
+            if (last != null && last.first == type) {
+                chunks[chunks.size - 1] = type to (last.second + chunk)
+            } else {
+                chunks += type to chunk
+            }
+        }
+
         val toolCalls = ToolCallAccumulator()
         var usage: JsonElement? = null
         var finishReason: String? = null
@@ -316,6 +337,7 @@ class HarnessRunner(
                                 val visible = titleStripper?.push(event.text) ?: event.text
                                 if (visible.isNotEmpty()) {
                                     r.text.append(visible)
+                                    r.addChunk("text", visible)
                                     text.append(visible)
                                     emit(
                                         RunEventType.TEXT_DELTA,
@@ -331,6 +353,7 @@ class HarnessRunner(
                             }
                             is StreamEvent.ReasoningDelta -> {
                                 r.reasoning.append(event.text)
+                                r.addChunk("reasoning", event.text)
                                 reasoning.append(event.text)
                                 emit(
                                     RunEventType.REASONING_DELTA,
@@ -376,12 +399,13 @@ class HarnessRunner(
                     providerResponseId = idle.providerResponseId ?: providerResponseId
                     usageTotal = usageTotal + TokenUsage.from(round.usage)
 
-                    // 这一轮的正文单独落一个 part（工具卡要按顺序插在正文之间）
-                    if (round.text.isNotEmpty()) {
-                        addPart("text", round.text.toString())
-                    }
-                    if (round.reasoning.isNotEmpty()) {
-                        addPart("reasoning", round.reasoning.toString())
+                    // 这一轮的思考 / 正文各落一个 part（工具卡要按顺序插在正文之间）。
+                    //
+                    // **顺序 = 到达顺序**（[RoundResult.chunks]）：上游先流思考、再流正文，
+                    // 于是 reasoning 在前。早先这里固定"先 text 后 reasoning"，
+                    // 前端按 parts 还原段之后就变成"最终回复排在最终思考前面"（用户报的 bug）。
+                    for ((type, chunk) in round.chunks) {
+                        addPart(type, chunk)
                     }
 
                     val drafts = round.toolCalls.drafts().map { ToolDraft(it.callId, it.name, it.arguments) }
