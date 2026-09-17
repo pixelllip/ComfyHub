@@ -43,6 +43,17 @@ class _AiHomePageState extends State<AiHomePage> {
   /// 第几次切换会话：异步取草稿回来时用它判断"还是不是同一次切换"。
   int _draftEpoch = 0;
 
+  /// 视口是不是贴着底部（用户建议 ③）：**贴底才自动跟随**，翻旧消息时不打扰。
+  bool _atBottom = true;
+
+  /// 上一次的滚动位置：用来判断"用户是不是往上翻了"。
+  ///
+  /// 为什么不能只看 `maxScrollExtent - pixels`：流式输出时内容一直在变长，
+  /// `max` 蹭蹭往上涨而 `pixels` 没动，距离自然就超过阈值了 ——
+  /// 那样会把"用户明明还在底部"误判成"用户翻上去了"，自动跟随第一帧就停。
+  /// 只有**位置真的变小**（往上翻）才算用户主动离开底部。
+  double _lastPixels = 0;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -50,6 +61,7 @@ class _AiHomePageState extends State<AiHomePage> {
     _loaded = true;
     _store = context.read<AiWorkspaceStore>();
     _input.addListener(_onInputChanged);
+    _scroll.addListener(_onScroll);
     _store.addListener(_onStoreChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // `load()` 自己是幂等的：切到别的页再回来（页面会被重建）不会重新加载、
@@ -69,6 +81,7 @@ class _AiHomePageState extends State<AiHomePage> {
   /// 会话切换时把上一条的草稿存好、把新一条的草稿取回来。
   void _onStoreChanged() {
     if (!mounted) return;
+    _followIfAtBottom();
     final id = _store.conversation?.id;
     if (id == _draftConversationId) return;
 
@@ -104,6 +117,7 @@ class _AiHomePageState extends State<AiHomePage> {
   @override
   void dispose() {
     _input.removeListener(_onInputChanged);
+    _scroll.removeListener(_onScroll);
     _store.removeListener(_onStoreChanged);
     // 页面销毁（比如切到别的功能页、关窗口）之前把当前草稿落一次
     final id = _draftConversationId;
@@ -114,6 +128,38 @@ class _AiHomePageState extends State<AiHomePage> {
     _inputFocus.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  /// 用户手动滚到底 / 翻上去时更新"贴底"状态（用户建议 ③ / ④）。
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final position = _scroll.position;
+    final pixels = position.pixels;
+    final distance = position.maxScrollExtent - pixels;
+    // 往上翻（位置真的变小）才算离开底部；内容变长导致的"距离变大"不算
+    final wentUp = pixels < _lastPixels - 2;
+    _lastPixels = pixels;
+    final next = distance < 80 ? true : (wentUp ? false : _atBottom);
+    if (next != _atBottom && mounted) setState(() => _atBottom = next);
+  }
+
+  /// 只有"用户本来就在底部"才跟着新内容滚（用户建议 ③）。
+  void _followIfAtBottom() {
+    if (!_atBottom) return;
+    _scrollToBottom();
+  }
+
+  /// 回到最新消息（右下角按钮，用户建议 ④）。
+  void _jumpToBottom() {
+    if (mounted) setState(() => _atBottom = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   void _scrollToBottom() {
@@ -140,7 +186,28 @@ class _AiHomePageState extends State<AiHomePage> {
     final thread = Column(
       children: [
         _ConversationAppBar(store: store),
-        Expanded(child: _MessageList(store: store, controller: _scroll)),
+        Expanded(
+          child: Stack(
+            children: [
+              _MessageList(store: store, controller: _scroll),
+              // 回到聊天底部（用户建议 ④）：**只在用户翻上去之后**才出现，
+              // 贴在对话主体右下角，不挡输入区。
+              if (!_atBottom)
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: Tooltip(
+                    message: '回到最新消息',
+                    child: FloatingActionButton.small(
+                      heroTag: 'ai-jump-bottom',
+                      onPressed: _jumpToBottom,
+                      child: const Icon(Icons.arrow_downward),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
         _Composer(
           store: store,
           controller: _input,
@@ -155,6 +222,8 @@ class _AiHomePageState extends State<AiHomePage> {
             // 清空之后 send() 仍会做它自己的准入判断；不通过时它把原因写进 `store.notice`，
             // 气泡区上方会如实显示，不会静默丢字。
             _input.clear();
+            // 用户刚发了消息：无论刚才翻到哪儿，都跳回底部看回复
+            if (mounted) setState(() => _atBottom = true);
             _scrollToBottom();
             await store.send(text);
             _scrollToBottom();
@@ -425,6 +494,9 @@ class _MessageList extends StatelessWidget {
             // 用户消息里的附件块：按 id 现取缩略图 / 视频预览帧（M3）
             thumbUrlOf: store.thumbUrlFor,
             fileUrlOf: store.fileUrlFor,
+            // 画廊产物（媒体 id）走画廊接口，别再喂给附件接口
+            mediaThumbUrlOf: store.mediaThumbUrlFor,
+            mediaPosterUrlOf: store.mediaPosterUrlFor,
           ),
         );
       },
@@ -459,6 +531,12 @@ class _MessageBubble extends StatelessWidget {
   final String? Function(String? attachmentId) thumbUrlOf;
   final String? Function(String? attachmentId) fileUrlOf;
 
+  /// 画廊产物（媒体 id）→ 缩略图 / 视频封面地址。
+  ///
+  /// 与上面那两条**必须分开**：附件接口的 id 空间和画廊 media id 完全不同。
+  final String Function(int mediaId) mediaThumbUrlOf;
+  final String Function(int mediaId) mediaPosterUrlOf;
+
   const _MessageBubble({
     required this.message,
     required this.sending,
@@ -471,6 +549,8 @@ class _MessageBubble extends StatelessWidget {
     required this.onDeny,
     required this.thumbUrlOf,
     required this.fileUrlOf,
+    required this.mediaThumbUrlOf,
+    required this.mediaPosterUrlOf,
   });
 
   @override
@@ -568,8 +648,8 @@ class _MessageBubble extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 8),
                   child: _ProducedMediaCard(
                     mediaIds: producedMediaIds,
-                    thumbUrlOf: thumbUrlOf,
-                    fileUrlOf: fileUrlOf,
+                    mediaThumbUrlOf: mediaThumbUrlOf,
+                    mediaPosterUrlOf: mediaPosterUrlOf,
                   ),
                 ),
               if (m.status == 'cancelled')
@@ -830,15 +910,19 @@ class _StatusChip extends StatelessWidget {
 ///
 /// 只显示**后端确认入库**的产物（媒体 id 来自工具的结构化结果），
 /// 所以这里不会出现"AI 说生成了但其实没有"的假入口。
+///
+/// 缩略图走**画廊**的 `/api/media/{id}/thumb`（视频退到 `/poster`）：
+/// 早先这里复用了附件那两条接口（`thumbUrlOf(id)`），id 空间不同，必然 404 ——
+/// 用户看到的就是"生成产物后预览图不可用"。
 class _ProducedMediaCard extends StatelessWidget {
   final List<int> mediaIds;
-  final String? Function(String? attachmentId) thumbUrlOf;
-  final String? Function(String? attachmentId) fileUrlOf;
+  final String Function(int mediaId) mediaThumbUrlOf;
+  final String Function(int mediaId) mediaPosterUrlOf;
 
   const _ProducedMediaCard({
     required this.mediaIds,
-    required this.thumbUrlOf,
-    required this.fileUrlOf,
+    required this.mediaThumbUrlOf,
+    required this.mediaPosterUrlOf,
   });
 
   @override
@@ -881,12 +965,17 @@ class _ProducedMediaCard extends StatelessWidget {
                         width: 72,
                         height: 72,
                         child: Image.network(
-                          thumbUrlOf(id.toString()) ?? '',
+                          mediaThumbUrlOf(id),
                           fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => Container(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            child: Icon(Icons.image_not_supported_outlined,
-                                size: 18, color: theme.colorScheme.outline),
+                          // 图片有 thumb；视频的 thumb 会回 204，退到后端抽的第一帧封面
+                          errorBuilder: (_, _, _) => Image.network(
+                            mediaPosterUrlOf(id),
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Container(
+                              color: theme.colorScheme.surfaceContainerHighest,
+                              child: Icon(Icons.image_not_supported_outlined,
+                                  size: 18, color: theme.colorScheme.outline),
+                            ),
                           ),
                         ),
                       ),
@@ -928,15 +1017,16 @@ class _ProducedMediaCard extends StatelessWidget {
   }
 }
 
-/// 思考过程：默认折叠。
+/// 思考过程：**默认折叠**（用户要求："思考过程默认自动折叠"）。
 ///
 /// 收起时**不是简单藏起来** —— 显示模型思考的摘要（首段，压成一行），
 /// 这样一眼能看出"它想了什么"；展开后给完整正文，可滚动、可选中复制。
-/// 流式生成中自动展开（跟 DeepSeek 的做法一致），结束后回落成折叠摘要。
+/// 流式生成中也**不自动展开**：思考是过程，正文才是结果，
+/// 一屏里几条长思考会把真正的回答顶到看不见的地方；想看的点一下就展开。
 class _ReasoningPanel extends StatefulWidget {
   final String text;
 
-  /// 这一轮还在生成：自动展开跟着走，用户手动点过之后不再自动干预。
+  /// 这一轮还在生成：标题栏上显示"思考中…"。
   final bool streaming;
 
   const _ReasoningPanel({required this.text, this.streaming = false});
@@ -946,27 +1036,9 @@ class _ReasoningPanel extends StatefulWidget {
 }
 
 class _ReasoningPanelState extends State<_ReasoningPanel> {
+  /// 默认收起。**组件重建（切会话 / 刷新消息）后依然收起**：
+  /// 状态只活在这一个 State 里，不写全局偏好，折叠与否本来就是"临时看一眼"的动作。
   bool _expanded = false;
-
-  /// 用户手动点过之后，流式自动展开就不再插手（别跟用户抢）。
-  bool _touched = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _expanded = widget.streaming;
-  }
-
-  @override
-  void didUpdateWidget(covariant _ReasoningPanel old) {
-    super.didUpdateWidget(old);
-    if (_touched) return;
-    if (widget.streaming && !_expanded) {
-      setState(() => _expanded = true);
-    } else if (!widget.streaming && _expanded) {
-      setState(() => _expanded = false);
-    }
-  }
 
   /// 收起时的摘要：压掉换行、取开头一段，末尾还有内容就加省略号。
   static String summaryOf(String text, {int limit = 160}) {
@@ -985,10 +1057,7 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           InkWell(
-            onTap: () => setState(() {
-              _touched = true;
-              _expanded = !_expanded;
-            }),
+            onTap: () => setState(() => _expanded = !_expanded),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [

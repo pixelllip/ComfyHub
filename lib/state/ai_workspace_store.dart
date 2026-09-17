@@ -866,6 +866,13 @@ class AiWorkspaceStore extends ChangeNotifier {
   String? fileUrlFor(String? attachmentId) =>
       attachmentId == null || attachmentId.isEmpty ? null : _api.attachmentFileUrl(attachmentId);
 
+  /// **画廊产物**（媒体 id）的缩略图 / 视频封面地址。
+  ///
+  /// 必须与附件那两条分开：`/api/ai/attachments/{id}/...` 和 `/api/media/{id}/...`
+  /// 是两套 id 空间，混用一定 404（用户报的"生成产物后预览图不可用"）。
+  String mediaThumbUrlFor(int mediaId) => _api.mediaThumbUrl(mediaId);
+  String mediaPosterUrlFor(int mediaId) => _api.mediaPosterUrl(mediaId);
+
   // -----------------------------------------------------------------------
   //  发送
   // -----------------------------------------------------------------------

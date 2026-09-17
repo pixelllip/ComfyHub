@@ -228,6 +228,14 @@ class AiApiClient {
   String attachmentFileUrl(String attachmentId) =>
       '$baseUrl/api/ai/attachments/$attachmentId/file';
 
+  /// **画廊产物**（不是附件）的缩略图 / 封面地址。
+  ///
+  /// 这两个必须走画廊的 `/api/media/{id}/...`：附件那两条接口的 id 空间完全不同，
+  /// 把媒体 id 塞进附件接口只会 404 —— 界面上就是"生成的产物预览图不可用"
+  /// （用户报的 bug）。图片走 `thumb`，视频走 `poster`（后端抽第一帧）。
+  String mediaThumbUrl(int mediaId) => '$baseUrl/api/media/$mediaId/thumb';
+  String mediaPosterUrl(int mediaId) => '$baseUrl/api/media/$mediaId/poster';
+
   /// 删除还没用进聊天记录的附件（已被引用的会报错，调用方可以忽略）。
   Future<void> deleteAttachment(String attachmentId) async =>
       _send('DELETE', '/api/ai/attachments/$attachmentId');
