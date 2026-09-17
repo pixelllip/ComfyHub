@@ -48,11 +48,15 @@ data class ToolPolicyConfig(
     /** 单个 Run 最多工具调用次数 */
     val maxCallsPerRun: Int = 16,
     /**
-     * 单个 Run 最多**主动查询 ComfyUI** 的次数（AIH-036：一次回复最多查 3 次）。
+     * 单个 Run 最多**主动查询 ComfyUI** 的次数（默认见 [DEFAULT_MAX_COMFY_QUERIES_PER_RUN]）。
      *
      * 和 [maxCallsPerRun] 是两件事：后者是总预算，这个是"不许拿 ComfyUI 当轮询器"。
+     *
+     * ⚠ 这一项**不是用户设置**（界面与 `ToolPolicyUpdate` 里都没有它），但 [ToolPolicy.save]
+     * 会把整份配置写进 `app_settings`，于是老库里会冻住一份出厂值 —— 光改代码里的默认值不会生效。
+     * 读库一律过 [normalizeStored]。
      */
-    val maxComfyQueriesPerRun: Int = 3,
+    val maxComfyQueriesPerRun: Int = DEFAULT_MAX_COMFY_QUERIES_PER_RUN,
     /** 一次工具最多读取的字节数 */
     val maxReadBytes: Int = 256 * 1024,
     /** 一次 write_file 最多写入的字节数 */
@@ -75,6 +79,30 @@ data class ToolPolicyConfig(
 
         /** 永远不可写：本项目的运行期数据、源码控制与依赖目录 */
         val FORBIDDEN_SEGMENTS = setOf(".git", ".mysql", ".run", "node_modules")
+
+        /**
+         * 出厂默认：一次回复里最多主动查 ComfyUI 几次。
+         *
+         * AIH-036 的原话是 3 次；2026-09-17 用户实测"3 次太少"（投递附件 + 查节点 + 查工作流
+         * 很容易就撞上限），要求放宽到 9。**这是唯一的真源**：系统提示词里的那个数字由它插值，
+         * 不许在别处再写一遍字面量。
+         */
+        const val DEFAULT_MAX_COMFY_QUERIES_PER_RUN = 9
+
+        /**
+         * 从库里读出来的配置要过一遍这里：**内置预算一律以代码里的常量为准**。
+         *
+         * 为什么需要它：[ToolPolicy.save] 会把整份 [ToolPolicyConfig]（含默认值）写进
+         * `app_settings`，所以老库里会冻着一份"当年的出厂值"。只改代码默认值的话，
+         * 用户那边的库里还是旧数字，表现为"改了没用"（实测：3 → 9 时库里仍写着 3，
+         * 且用户切一次权限档就会把当时的值写进去）。
+         *
+         * [maxToolSteps] / [maxCallsPerRun] **不能**这样处理：它们是用户可改的
+         * （`ToolPolicyUpdate` 里有），库里的值必须生效。
+         */
+        fun normalizeStored(config: ToolPolicyConfig) = config.copy(
+            maxComfyQueriesPerRun = DEFAULT_MAX_COMFY_QUERIES_PER_RUN,
+        )
     }
 }
 
@@ -193,7 +221,8 @@ class ToolPolicy(
                     .onFailure { e -> LOG.warn("解析 {} 失败，回退出厂策略: {}", ToolPolicyConfig.KEY, e.message) }
                     .getOrNull()
             } ?: ToolPolicyConfig()
-            return ToolPolicy(projectRoot, config)
+            // 内置预算（查 ComfyUI 的次数）以代码为准，不认库里冻着的历史值 —— 见 normalizeStored
+            return ToolPolicy(projectRoot, ToolPolicyConfig.normalizeStored(config))
         }
 
         fun save(config: ToolPolicyConfig) {

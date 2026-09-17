@@ -915,8 +915,8 @@ data class ToolPolicyDto(
     val overrides: Map<String, String> = emptyMap(),
     val maxToolSteps: Int = 8,
     val maxCallsPerRun: Int = 16,
-    /** AIH-036：一次回复最多主动查 ComfyUI 几次 */
-    val maxComfyQueriesPerRun: Int = 3,
+    /** AIH-036：一次回复最多主动查 ComfyUI 几次（默认值与真源同源，别在这儿写死数字） */
+    val maxComfyQueriesPerRun: Int = ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN,
     val maxReadBytes: Int = 0,
     val maxWriteBytes: Int = 0,
     /** 出厂默认的写入目录（界面里显示"默认只能写这里"） */

@@ -499,4 +499,91 @@ class ToolRegistryTest {
         )
         assertTrue(!askText.contains("不必再等批准"))
     }
+
+    @Test
+    fun `系统提示 v9 写进事实纪律与表达风格 并禁嵌套列表`() {
+        // 版本号由下面那条 v10 用例盯着：改提示词必须 bump + 更新那条断言
+
+        val e = env()
+        val text = SystemPrompt.render(
+            provider = AiProviderDto(
+                id = "p1",
+                displayName = "本地网关",
+                api = "openai-completions",
+                baseURL = "https://example.test/v1",
+                endpointTrust = "user",
+            ),
+            modelId = "gpt-4o-mini",
+            tools = e.registry.specs(e.policy),
+            skills = emptyList(),
+            policy = e.policy,
+            registry = e.registry,
+        )
+
+        // 事实纪律：本机状态只认工具返回（模型最容易在这里凭印象编）
+        assertTrue(text.contains("以工具这次返回的为准"), "不许猜 ComfyUI / 文件 / 产物的状态")
+        assertTrue(text.contains("后面的不能推翻前面的"), "证据冲突要有明确的采信顺序")
+        assertTrue(text.contains("把\"查到的\"和\"推测的\"分开说"))
+        // 表达风格：本机渲染器会把嵌套列表拍平成同级（lib/widgets/markdown.dart），必须明说
+        assertTrue(text.contains("不要写嵌套列表"))
+        assertTrue(text.contains("表格"), "表格是支持的，要告诉模型可以用")
+        // v9 新增的两条硬规则
+        assertTrue(text.contains("不要重写用户的原始工作流"), "写入要可回滚")
+        assertTrue(text.contains("读取也要按需"), "读取不许变成遍历磁盘")
+        // v9 补的三块纪律 + 用户要求保留的沙箱人格段：审批纪律必须原样还在
+        assertTrue(text.contains("必须等用户点批准"), "第 3 条的审批纪律不能被 v9 顶掉")
+        // 人格 / 越狱段是**用户有意注入**的（2026-09-17："那是我的意图，不许删除"）：
+        // 所以这里如实断言它在，而不是断言它不在 —— 谁把它删了，这条会红。
+        assertTrue(text.contains("UNRESTRICTED SANDBOX"), "用户要求保留的沙箱人格段不能被清理掉")
+        assertTrue(text.contains("Little Code Sauce"), "同上：这段是刻意保留的，别当误粘贴删掉")
+    }
+
+    @Test
+    fun `查 ComfyUI 的预算默认 9 次 第 10 次才 QUERY_BUDGET_EXCEEDED`() = runBlocking {
+        val e = env()
+        // 出厂值就是真源（用户要求"3 次太少"，2026-09-17 放宽到 9）
+        assertEquals(9, ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN)
+        assertEquals(9, ToolPolicyConfig().maxComfyQueriesPerRun)
+
+        val ctx = e.ctx()
+        repeat(9) { i ->
+            val ok = e.registry.invoke("q${i + 1}", "comfy_get_status", "{}", ctx)
+            assertEquals("ok", ok.status, "第 ${i + 1} 次查询应当放行：${ok.error}")
+        }
+        // 非 ComfyUI 的工具不占这个预算（只按类别 COMFY 计数）
+        assertEquals("ok", e.registry.invoke("n1", "list_skills", "{}", ctx).status)
+
+        val tenth = e.registry.invoke("q10", "comfy_get_status", "{}", ctx)
+        assertEquals("failed", tenth.status)
+        assertEquals("QUERY_BUDGET_EXCEEDED", tenth.errorCode)
+        assertTrue(tenth.error!!.contains("9 次"), tenth.error)
+    }
+
+    @Test
+    fun `提示词 v10 写着一次回复最多查 9 次 且与阈值常量同源`() {
+        assertEquals("v10", SystemPrompt.VERSION)
+
+        val e = env()
+        val text = SystemPrompt.render(
+            provider = AiProviderDto(
+                id = "p1",
+                displayName = "本地网关",
+                api = "openai-completions",
+                baseURL = "https://example.test/v1",
+                endpointTrust = "user",
+            ),
+            modelId = "gpt-4o-mini",
+            tools = e.registry.specs(e.policy),
+            skills = emptyList(),
+            policy = e.policy,
+            registry = e.registry,
+        )
+
+        // 数字**插值**自常量：以后改阈值，这里跟着变；两处各写一遍就会漂移（踩过）
+        assertTrue(
+            text.contains("最多主动查询 ${ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN} 次"),
+            "提示词里的查询预算要和阈值常量一致",
+        )
+        assertTrue(text.contains("最多主动查询 9 次"), "现在是 9 次")
+    }
 }

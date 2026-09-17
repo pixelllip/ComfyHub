@@ -238,4 +238,31 @@ class ToolPolicyTest {
         assertTrue(!bogus.fullPermission)
         assertEquals(ToolAccess.ASK, bogus.accessFor(fakeTool("comfy_submit", ToolAccess.ASK)))
     }
+
+    // --- 内置预算（查 ComfyUI 的次数）----------------------------------------
+
+    @Test
+    fun `查 ComfyUI 的预算默认 9 次`() {
+        assertEquals(9, ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN)
+        assertEquals(
+            ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN,
+            ToolPolicyConfig().maxComfyQueriesPerRun,
+        )
+    }
+
+    @Test
+    fun `库里冻着的旧查询预算不生效 一律以代码常量为准`() {
+        val root = newRoot()
+        // 老库里的那份 JSON 会写着当年的出厂值（用户切一次权限档就会写进去）
+        val stored = ToolPolicyConfig(maxComfyQueriesPerRun = 3, permissionMode = ToolPolicyConfig.PERMISSION_FULL)
+
+        val normalized = ToolPolicyConfig.normalizeStored(stored)
+        assertEquals(9, normalized.maxComfyQueriesPerRun, "只改代码默认值不够，读库时要规范化")
+        // 用户真的能改的项必须原样保留，不能被顺手冲掉
+        assertEquals(ToolPolicyConfig.PERMISSION_FULL, normalized.permissionMode)
+
+        val policy = ToolPolicy(root, normalized)
+        assertEquals(9, policy.config.maxComfyQueriesPerRun)
+        assertTrue(policy.fullPermission)
+    }
 }

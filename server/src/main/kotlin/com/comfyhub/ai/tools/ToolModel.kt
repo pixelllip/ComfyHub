@@ -52,7 +52,7 @@ class ToolContext(
     val loadedSkills: MutableSet<String> = mutableSetOf(),
     /** 本 Run 的工具调用计数（AIH-036：不允许无休止轮询） */
     var calls: Int = 0,
-    /** 本 Run 里查 ComfyUI 的次数（AIH-036：一次回复最多主动查 3 次） */
+    /** 本 Run 里查 ComfyUI 的次数（预算见 `ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN`） */
     var comfyQueries: Int = 0,
 )
 

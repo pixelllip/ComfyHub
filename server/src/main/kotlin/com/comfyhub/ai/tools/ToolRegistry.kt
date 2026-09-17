@@ -564,7 +564,8 @@ class ToolRegistry(
         }
         ctx.calls++
 
-        // AIH-036：不许把 ComfyUI 当轮询器 —— 一次回复最多主动查 3 次
+        // AIH-036：不许把 ComfyUI 当轮询器 —— 一次回复的查询次数有上限
+        // （数字的唯一真源是 ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN）
         if (tool.category == ToolCategory.COMFY &&
             ctx.comfyQueries >= ctx.policy.config.maxComfyQueriesPerRun
         ) {

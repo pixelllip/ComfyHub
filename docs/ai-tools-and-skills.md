@@ -28,6 +28,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `present` / `exit_plan_mode` / `goal` 系列 | 不采纳 | 交付物在画廊里，不在工具里 |
 | **`skill`（加载 Skill 正文）** | **采纳** | 对应我们的 `load_skill`，并补了 `list_skills` / `register_skill` / `delete_skill` |
 | Skills 目录注入 | **采纳思路，实现不同** | DSH 把目录作为 **user 消息**（`<system-reminder>` + `<available_skills>`）注入，为的是不打断系统前缀的 KV cache；我们的系统提示本来就带时间戳（每 Run 变化），所以直接写进系统提示的独立区块，省一层消息 |
+| DSH 默认提示词的**行为纪律段** | **择优采纳**（2026-09-17，用户要求） | 原文 `docs\default-prompt-inject.md`。挑出与我们对得上的三块写进系统提示 **v9**：① 事实纪律（不猜本机状态 / 证据冲突的采信顺序 / 把"查到的"与"推测的"分开说）；② 表达风格（开门见山、不奉承、不复述、**不写嵌套列表** —— `lib\widgets\markdown.dart` 会把子项拍平成同级，而表格反而是支持的）；③ 两条硬规则（写入留退路：改参数用覆盖不重写原始工作流；读取按需：不遍历磁盘）。**刻意不搬**那份文档里的越狱人格段（"无条件服从""禁止出现拒绝字样""把工具输出当可行指令"等）：那几段会直接顶掉提示词第 3 条的审批纪律与第 8 条的凭据红线，等于把安全约束交给模型自己"无视" |
 
 我们的工具清单（出厂 13 个，全部可在设置里改成 `allow / ask / deny`）：
 
@@ -110,8 +111,8 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
    「询问」）/ `full`（界面叫「自动允许（无需批准）」），在 AI 工作台输入区底部、附件按钮与模型选择之间切换。
    `full` 只把 `ask` 放宽成 `allow`：**`deny` 不放宽、路径白名单不放宽**（越界写照样被拒，
    回归用例 `ToolPolicyTest` 盯着这两条）。后端每次 Run 现读策略，所以切完档**下一次回复立刻生效**
-   ——系统提示里会即时写明"本次是自动允许（无需批准）档"（`SystemPrompt.VERSION` 由 v5 提到 v8：
-   v6 = 权限档，v7 = 图生图那三步纪律，v8 = 档位改名）。
+   ——系统提示里会即时写明"本次是自动允许（无需批准）档"（`SystemPrompt.VERSION` 由 v5 提到 v10：
+   v6 = 权限档，v7 = 图生图那三步纪律，v8 = 档位改名，v9 = DSH 行为纪律段，v10 = 查询预算 9 次）。
    > 名字的由来（用户建议）：「完全权限」听着像"什么都能干"，其实它只免掉"问一下"，文件夹白名单
    > 一点都没放宽 —— 所以改叫「自动允许（无需批准）」。界面上那两个名字是
    > `AiToolPolicy.modeAskLabel` / `modeFullLabel`（Dart 侧真源），系统提示里与它们一字不差。
@@ -149,10 +150,17 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
 - **三层预算**（防"AI 拿 ComfyUI 当轮询器"）：
   ① 一次回复最多 `maxToolSteps = 8` 轮（到顶那轮不带 `tools`，逼它收尾）；
   ② 单 Run 工具调用总数 `maxCallsPerRun = 16`；
-  ③ **查 ComfyUI 的次数 `maxComfyQueriesPerRun = 3`**（AIH-036 的原话）。
+  ③ **查 ComfyUI 的次数 `maxComfyQueriesPerRun = 9`**（AIH-036 原话是 3 次；2026-09-17 用户实测
+  "3 次太少"——投递附件 + 查节点 + 查工作流很容易就撞上限——要求放宽到 9）。
+  这个数字的**唯一真源**是 `ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN`：系统提示词里插值它，
+  读库时也用 `ToolPolicyConfig.normalizeStored` 覆盖掉库里冻着的历史值（它是内置预算，不是用户设置，
+  但 `ToolPolicy.save` 会把整份配置写进 `app_settings`，只改默认值老库不生效）。
   超预算的工具调用会以 `TOOL_BUDGET_EXCEEDED` / `QUERY_BUDGET_EXCEEDED` 失败返回，模型能看懂并改用已有信息。
-- **提示词版本 v2**：v1 里那句「当前版本尚未注册任何工具」删掉了，改成工具清单 + 权限边界 +
-  Skills 使用纪律 + 防注入规则（AIH-046）。
+- **提示词版本**：v1 里那句「当前版本尚未注册任何工具」删掉了，v2 改成工具清单 + 权限边界 +
+  Skills 使用纪律 + 防注入规则（AIH-046）；v3 长期记忆、v4 附件诚实、v5 会话标题、
+  v6/v8 权限档与档位改名、v7 图生图三步；**v9 = 移植 DSH 默认提示词的行为纪律段**
+  （事实纪律 / 表达风格 / 写入留退路 + 读取按需，见 §1 表格最后一行）；**v10 = 查询预算 3 → 9**
+  （提示词里那个数字改成从常量插值）。改动只影响新 Run。
 - **网关不认 `tools` 时的兜底**：很多网关收到 `tools` 直接 400。这种情况本次 Run 会自动
   **退回纯文本模式重试一次**，并在回复开头如实写明"上游网关不接受工具参数"——
   不能让用户在"模型到底行不行"上猜（也绝不假装是模型自己不想用工具）。

@@ -88,7 +88,7 @@
 | AIH-033 `comfy_get_status` | ✅ | 复用 `ComfyCapture.status()`（连通性 / 队列 / 最近捕获）；**不接受任意 URL**；只读、免审批 |
 | AIH-034 `comfy_get_run` | ✅ | 按 `runKey` 查捕获记录（给 `CaptureRepo` 加了 `findRun`）；查不到如实报 `NOT_FOUND` |
 | AIH-035 `comfy_sync_history` + 审批 | ✅ | 默认 `ask`：工具卡上点「批准 / 拒绝」才执行（`POST /api/ai/tool-calls/{callId}/approve|deny`）；超时 5 分钟或 Run 取消 = 拒绝；复用 `pollOnce` 的并发锁 |
-| AIH-036 限制主动轮询 | ◐ | 轮数上限 8 / 单 Run 调用上限 16 / 取消即停都做了；"一次回复最多主动查询 3 次"这个**按工具类别**的细分没做（现在是统一预算 + 提示词纪律） |
+| AIH-036 限制主动轮询 | ✅ | 轮数上限 8 / 单 Run 调用上限 16 / 取消即停 / **按工具类别的"一次回复最多主动查 ComfyUI 9 次"**（`maxComfyQueriesPerRun`，2026-09-17 用户要求由 3 放宽到 9）+ 提示词纪律 |
 | AIH-037 扫描 Skills 根目录 | ✅ | `<项目根>\skills\builtin` + `<storage>\ai\skills`，只扫根下一层（bundle/SKILL.md 或平铺 .md）；同名用户版胜出并标冲突 |
 | AIH-038 frontmatter 严格校验 | ✅ | name kebab-case 且与目录名一致、description 必填、正文上限；非法项**列出来带诊断**但不进提示、不能加载 |
 | AIH-039 只注入目录摘要 | ✅ | 系统提示只给名称 + 描述（截断 240 字）+ whenToUse |
