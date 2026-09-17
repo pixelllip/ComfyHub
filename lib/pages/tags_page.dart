@@ -102,21 +102,25 @@ class _TagsPageState extends State<TagsPage> {
                         ),
                         const SizedBox(width: 6),
                       ],
-                      PopupMenuButton<String>(
-                        initialValue: _sort,
+                      AppMenuButton<String>(
+                        tooltip: '排序',
                         onSelected: (v) => setState(() => _sort = v),
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'popular', child: Text('按使用频率')),
-                          PopupMenuItem(value: 'name', child: Text('按名称')),
-                          PopupMenuItem(value: 'newest', child: Text('按创建时间')),
+                        options: const [
+                          MenuOption(value: 'popular', icon: Icons.trending_up, label: '按使用频率'),
+                          MenuOption(value: 'name', icon: Icons.sort_by_alpha, label: '按名称'),
+                          MenuOption(value: 'newest', icon: Icons.schedule, label: '按创建时间'),
                         ],
-                        child: Chip(
-                          avatar: const Icon(Icons.sort, size: 16),
-                          label: Text(switch (_sort) {
-                            'name' => '按名称',
-                            'newest' => '按创建时间',
-                            _ => '按使用频率',
-                          }),
+                        button: (context, controller, isOpen) => InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: () => controller.isOpen ? controller.close() : controller.open(),
+                          child: Chip(
+                            avatar: const Icon(Icons.sort, size: 16),
+                            label: Text(switch (_sort) {
+                              'name' => '按名称',
+                              'newest' => '按创建时间',
+                              _ => '按使用频率',
+                            }),
+                          ),
                         ),
                       ),
                     ],

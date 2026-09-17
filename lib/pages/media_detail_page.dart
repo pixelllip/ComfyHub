@@ -90,7 +90,11 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     final m = _media!;
     final fileUrl = store.api.absolute(m.fileUrl);
 
-    return Scaffold(
+    // ContextMenuScope：右键菜单的宿主（不铺 ModalBarrier，菜单开着也能滚，用户 bug ②）
+    // Builder 让下面的 context 落在 Scope **之内**，showAppContextMenu 才找得到宿主。
+    return ContextMenuScope(
+      child: Builder(
+        builder: (context) => Scaffold(
       appBar: AppBar(
         title: Text(
           m.title.isEmpty ? m.originalName : m.title,
@@ -107,7 +111,8 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
               if (mounted) store.refreshAll();
             },
           ),
-          PopupMenuButton<String>(
+          AppMenuButton<String>(
+            tooltip: '更多',
             onSelected: (v) async {
               final messenger = ScaffoldMessenger.of(context);
               final navigator = Navigator.of(context);
@@ -159,13 +164,29 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                   break;
               }
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'rename', child: ListTile(leading: Icon(Icons.drive_file_rename_outline), title: Text('重命名'))),
-              PopupMenuItem(value: 'notes', child: ListTile(leading: Icon(Icons.notes), title: Text('编辑备注'))),
-              PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.open_in_new), title: Text('用系统播放器打开'))),
-              PopupMenuItem(value: 'copyUrl', child: ListTile(leading: Icon(Icons.link), title: Text('复制文件地址'))),
-              PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('删除'))),
+            options: const [
+              MenuOption(value: 'rename', icon: Icons.drive_file_rename_outline, label: '重命名'),
+              MenuOption(value: 'notes', icon: Icons.notes, label: '编辑备注'),
+              MenuOption(value: 'open', icon: Icons.open_in_new, label: '用系统播放器打开'),
+              MenuOption(
+                value: 'copyUrl',
+                icon: Icons.link,
+                label: '复制文件地址',
+                dividerBefore: true,
+              ),
+              MenuOption(
+                value: 'delete',
+                icon: Icons.delete_outline,
+                label: '删除',
+                danger: true,
+                dividerBefore: true,
+              ),
             ],
+            button: (context, controller, isOpen) => IconButton(
+              tooltip: '更多',
+              onPressed: () => controller.isOpen ? controller.close() : controller.open(),
+              icon: const Icon(Icons.more_vert),
+            ),
           ),
         ],
       ),
@@ -210,6 +231,8 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           },
         ),
       ),
+        ),
+      ),
     );
   }
 
@@ -221,36 +244,43 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   /// 整块都能**右键**：弹出复制相关的快捷项（地址 / 文件名 / 提示词），
   /// 不用先划选文字再复制。
   Widget _previewArea(MediaAsset m, String url, {required bool wide, double? height}) {
-    final preview = GestureDetector(
-      // translucent：视频/音频四周的留白也要右键
-      behavior: HitTestBehavior.translucent,
-      onSecondaryTapDown: (d) => _showPreviewMenu(m, url, d.globalPosition),
-      child: _Preview(media: m, url: url, posterUrl: _posterUrl(m)),
-    );
+    // Builder 取一个**在 ContextMenuScope 里面**的 context 传给右键菜单：
+    // 页面自己的 `State.context` 在 Scope 外面，用它找不到菜单宿主。
+    return Builder(
+      builder: (menuContext) {
+        final preview = GestureDetector(
+          // translucent：视频/音频四周的留白也要右键
+          behavior: HitTestBehavior.translucent,
+          onSecondaryTapDown: (d) =>
+              _showPreviewMenu(menuContext, m, url, d.globalPosition),
+          child: _Preview(media: m, url: url, posterUrl: _posterUrl(m)),
+        );
 
-    if (m.kind == MediaKind.image) {
-      return SizedBox(
-        width: double.infinity,
-        height: wide ? null : height, // 宽屏时高度由 Row 的 stretch 给
-        child: preview,
-      );
-    }
-    if (m.kind == MediaKind.audio) {
-      // 音频没有画面，不需要占满整栏：限宽 + 居中，剩下的空间留给提示词
-      final centered = Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
+        if (m.kind == MediaKind.image) {
+          return SizedBox(
+            width: double.infinity,
+            height: wide ? null : height, // 宽屏时高度由 Row 的 stretch 给
+            child: preview,
+          );
+        }
+        if (m.kind == MediaKind.audio) {
+          // 音频没有画面，不需要占满整栏：限宽 + 居中，剩下的空间留给提示词
+          final centered = Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: preview,
+            ),
+          );
+          return wide ? centered : preview;
+        }
+        // 视频：宽屏铺满整栏（长边铺满靠播放器自己算），窄屏给固定高度、
+        // 不放进滚动容器 —— 播放器的控制条和全屏按钮需要一块稳定可见的区域。
+        return SizedBox(
+          width: double.infinity,
+          height: wide ? null : (height ?? 420),
           child: preview,
-        ),
-      );
-      return wide ? centered : preview;
-    }
-    // 视频：宽屏铺满整栏（长边铺满靠播放器自己算），窄屏给固定高度、
-    // 不放进滚动容器 —— 播放器的控制条和全屏按钮需要一块稳定可见的区域。
-    return SizedBox(
-      width: double.infinity,
-      height: wide ? null : (height ?? 420),
-      child: preview,
+        );
+      },
     );
   }
 
@@ -263,31 +293,36 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   }
 
   /// 详情页里对媒体本身右键：只列"复制"相关的操作。
-  Future<void> _showPreviewMenu(MediaAsset m, String url, Offset globalPosition) async {
+  ///
+  /// [source] 必须是**在 `ContextMenuScope` 里面**的 context（`_previewArea` 里用
+  /// `Builder` 取的那一个），否则找不到右键菜单宿主。
+  Future<void> _showPreviewMenu(
+    BuildContext source,
+    MediaAsset m,
+    String url,
+    Offset globalPosition,
+  ) async {
     final positive = (_prompt?.positivePrompt ?? m.promptPositive ?? '').trim();
     final negative = (_prompt?.negativePrompt ?? m.promptNegative ?? '').trim();
 
     final action = await showContextMenuAt<String>(
-      context,
+      source,
       globalPosition: globalPosition,
-      items: [
-        contextMenuItem(context, value: 'copyUrl', icon: Icons.link, label: '复制文件地址'),
-        contextMenuItem(
-          context,
+      items: (_) => [
+        const MenuOption(value: 'copyUrl', icon: Icons.link, label: '复制文件地址'),
+        const MenuOption(
           value: 'copyName',
           icon: Icons.description_outlined,
           label: '复制文件名',
         ),
-        const PopupMenuDivider(),
-        contextMenuItem(
-          context,
+        MenuOption(
           value: 'copyPositive',
           icon: Icons.article_outlined,
           label: '复制正向提示词',
           enabled: positive.isNotEmpty,
+          dividerBefore: true,
         ),
-        contextMenuItem(
-          context,
+        MenuOption(
           value: 'copyNegative',
           icon: Icons.block_outlined,
           label: '复制负向提示词',

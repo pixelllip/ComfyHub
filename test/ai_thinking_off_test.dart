@@ -19,6 +19,7 @@ import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/models/ai_models.dart';
 import 'package:viewer/pages/ai_home_page.dart';
 import 'package:viewer/state/ai_workspace_store.dart';
+import 'package:viewer/widgets/app_menu.dart';
 
 /// 每次创建 Run 的请求体（按顺序）。
 final List<Map<String, dynamic>> runBodies = [];
@@ -153,7 +154,7 @@ void main() {
     expect(store.reasoningEffort, AiReasoningEffort.off);
 
     // 选「高」→ 请求体里必须带 high（证明选择器真的生效）
-    await tester.tap(find.byType(PopupMenuButton<AiReasoningEffort>));
+    await tester.tap(find.byType(AppMenuButton<AiReasoningEffort>));
     await tester.pumpAndSettle();
     expect(find.text('高'), findsOneWidget, reason: '模型声明过的档位要列出来');
     expect(find.text('关闭'), findsWidgets, reason: '「关闭」即使没声明也要能选');
@@ -167,7 +168,7 @@ void main() {
     expect(runBodies.last['reasoningEffort'], 'high');
 
     // 再选「关闭」→ 请求体里不带这个字段（后端缺省即 off）
-    await tester.tap(find.byType(PopupMenuButton<AiReasoningEffort>));
+    await tester.tap(find.byType(AppMenuButton<AiReasoningEffort>));
     await tester.pumpAndSettle();
     await tester.tap(find.text('关闭').last);
     await tester.pumpAndSettle();

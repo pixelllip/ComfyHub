@@ -181,10 +181,10 @@ class AiWorkspaceStore extends ChangeNotifier {
   List<AiToolInfo> tools = const [];
 
   // --- 权限档（用户建议 ⑤） ----------------------------------------------
-  /// `ask`（默认，需要审批的工具要用户点批准）/ `full`（完全权限，AI 无需批准）。
+  /// `ask`（默认，需要审批的工具要用户点批准）/ `full`（自动允许，AI 无需批准）。
   ///
   /// 真源在后端（`ai.tools.policy`，每次 Run 现读），这里只是界面上的镜像：
-  /// 切档写回后端后，**下一次回复立刻生效**（后端会把"完全权限"那段即时注入系统提示）。
+  /// 切档写回后端后，**下一次回复立刻生效**（后端会把那段规则即时注入系统提示）。
   String permissionMode = AiToolPolicy.modeAsk;
 
   bool get fullPermission => permissionMode == AiToolPolicy.modeFull;
@@ -394,7 +394,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// 切换权限档（用户建议 ⑤：询问 / 完全权限）。
+  /// 切换权限档（用户建议 ⑤：询问 / 自动允许（无需批准））。
   ///
   /// **先写后端再改界面**：这是权限，不能"界面看着切了、后端其实没切"。
   /// 是**全局**设置（存在 `ai.tools.policy` 里），切一次对之后所有对话都有效；
@@ -406,9 +406,19 @@ class AiWorkspaceStore extends ChangeNotifier {
     try {
       final policy = await _api.updateToolPolicy({'permissionMode': mode});
       permissionMode = policy.permissionMode;
+      if (policy.permissionMode != mode) {
+        // 后端没接受这一档：旧后端（响应里根本没有 permissionMode 字段）会静默回落
+        // 成「询问」，界面上看着就是"点了没反应"（用户 bug ①）。这里如实说出来，
+        // 而不是让用户一直点。
+        notice =
+            '切换权限失败：后端没有接受「${mode == AiToolPolicy.modeFull ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel}」'
+            '（当前仍是「${policy.permissionMode == AiToolPolicy.modeFull ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel}」）。'
+            '多半是后端还是旧构建 —— 在「设置 → 本地服务」里重启一次本地服务即可。';
+        return;
+      }
       notice = policy.permissionMode == AiToolPolicy.modeFull
-          ? '已切换到「完全权限」：AI 调用工具不再等你批准（可读 / 可写目录范围不变，越界仍会被拒）。'
-          : '已切换到「询问」：写盘 / 提交这类改动操作会先等你批准。';
+          ? '已切换到「${AiToolPolicy.modeFullLabel}」：AI 调用工具不再等你批准（可读 / 可写目录范围不变，越界仍会被拒）。'
+          : '已切换到「${AiToolPolicy.modeAskLabel}」：写盘 / 提交这类改动操作会先等你批准。';
     } catch (e) {
       notice = '切换权限失败：$e';
     } finally {

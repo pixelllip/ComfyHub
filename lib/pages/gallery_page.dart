@@ -40,7 +40,12 @@ class _GalleryPageState extends State<GalleryPage> {
     final store = context.watch<LibraryStore>();
     final theme = Theme.of(context);
 
-    return Scaffold(
+    // ContextMenuScope：右键菜单的宿主。它**不铺 ModalBarrier**，所以菜单开着时
+    // 画廊照样能滚（用户 bug ②）。一个页面只挂一个。
+    // 外面套 Builder：让下面的 context 落在 Scope **之内**，右键菜单才找得到宿主。
+    return ContextMenuScope(
+      child: Builder(
+        builder: (context) => Scaffold(
       appBar: AppBar(
         leading: _selectionMode
             ? IconButton(
@@ -109,6 +114,8 @@ class _GalleryPageState extends State<GalleryPage> {
           _buildToolbar(context, store),
           Expanded(child: _buildBody(context, store)),
         ],
+      ),
+        ),
       ),
     );
   }
@@ -194,20 +201,23 @@ class _GalleryPageState extends State<GalleryPage> {
                     onSelectionChanged: (s) => store.setMediaTagMode(s.first),
                   ),
                 const SizedBox(width: 6),
-                PopupMenuButton<String>(
+                AppMenuButton<String>(
                   tooltip: '排序',
-                  initialValue: store.mediaSort,
                   onSelected: store.setMediaSort,
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'newest', child: Text('最新加入')),
-                    PopupMenuItem(value: 'oldest', child: Text('最旧加入')),
-                    PopupMenuItem(value: 'name', child: Text('按文件名')),
-                    PopupMenuItem(value: 'largest', child: Text('按体积')),
-                    PopupMenuItem(value: 'favorite', child: Text('收藏优先')),
+                  options: const [
+                    MenuOption(value: 'newest', icon: Icons.schedule, label: '最新加入'),
+                    MenuOption(value: 'oldest', icon: Icons.history, label: '最旧加入'),
+                    MenuOption(value: 'name', icon: Icons.sort_by_alpha, label: '按文件名'),
+                    MenuOption(value: 'largest', icon: Icons.data_usage, label: '按体积'),
+                    MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
                   ],
-                  child: Chip(
-                    avatar: const Icon(Icons.sort, size: 16),
-                    label: Text(_sortLabel(store.mediaSort)),
+                  button: (context, controller, isOpen) => InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => controller.isOpen ? controller.close() : controller.open(),
+                    child: Chip(
+                      avatar: const Icon(Icons.sort, size: 16),
+                      label: Text(_sortLabel(store.mediaSort)),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -300,8 +310,12 @@ class _GalleryPageState extends State<GalleryPage> {
                   _selectionMode = true;
                   _selected.add(m.id);
                 }),
-                // 右键：单个产物最常用的三个操作，不用先点进详情页
-                onSecondaryTapDown: (details) => _showThumbMenu(m, details.globalPosition),
+                // 右键：单个产物最常用的三个操作，不用先点进详情页。
+                // 这里把 itemBuilder 的 context 传下去 —— 它在 ContextMenuScope **里面**，
+                // 而 `_GalleryPageState.context` 在 Scope 外面（页面 build 才返回 Scope），
+                // 用后者去找右键菜单宿主必然找不到。
+                onSecondaryTapDown: (details) =>
+                    _showThumbMenu(context, m, details.globalPosition),
                 child: MediaThumb(
                   media: m,
                   selectionMode: _selectionMode,
@@ -356,33 +370,37 @@ class _GalleryPageState extends State<GalleryPage> {
   /// 画廊里对单个产物右键：关联提示词 / 收藏 / 删除。
   ///
   /// 这三个是"看图中途最想干的事"，走右键就不用先点进详情页再出来。
-  Future<void> _showThumbMenu(MediaAsset media, Offset globalPosition) async {
+  ///
+  /// [source] 必须是**在 `ContextMenuScope` 里面**的 context（这里传的是格子的
+  /// `itemBuilder` context）：`showAppContextMenu` 要靠它往上找菜单宿主。
+  Future<void> _showThumbMenu(
+    BuildContext source,
+    MediaAsset media,
+    Offset globalPosition,
+  ) async {
     // 多选模式下右键留给选择操作，别弹菜单打断
     if (_selectionMode) return;
 
     final action = await showContextMenuAt<String>(
-      context,
+      source,
       globalPosition: globalPosition,
-      items: [
-        contextMenuItem(
-          context,
+      items: (_) => [
+        MenuOption(
           value: 'link',
           icon: Icons.link,
           label: media.hasPrompt ? '更换关联提示词…' : '关联提示词…',
         ),
-        contextMenuItem(
-          context,
+        MenuOption(
           value: 'favorite',
           icon: media.favorite ? Icons.star_border : Icons.star,
           label: media.favorite ? '取消收藏' : '收藏',
         ),
-        const PopupMenuDivider(),
-        contextMenuItem(
-          context,
+        const MenuOption(
           value: 'delete',
           icon: Icons.delete_outline,
           label: '删除',
           danger: true,
+          dividerBefore: true,
         ),
       ],
     );

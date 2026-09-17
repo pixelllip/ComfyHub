@@ -1302,11 +1302,20 @@ class AiToolPolicy {
   /// 出厂默认的写入目录：界面上要大声说明"默认只能写这里"。
   final String? defaultWriteRoot;
 
-  /// 权限档（用户建议 ⑤）：`ask` 默认，需要审批的工具要用户点批准；`full` 完全权限。
+  /// 权限档（用户建议 ⑤）：`ask` 默认，需要审批的工具要用户点批准；
+  /// `full` 自动允许（无需批准），见 [modeFullLabel]。
   final String permissionMode;
 
   static const modeAsk = 'ask';
   static const modeFull = 'full';
+
+  /// 界面上给两档起的名字。
+  ///
+  /// `full` 以前叫「完全权限」，用户指出这个名字不准确：它只免掉"问一下"，
+  /// 并没有放开文件夹白名单。所以改叫「自动允许（无需批准）」——
+  /// 名字直接说清它做了什么、没做什么（用户建议）。
+  static const modeAskLabel = '询问';
+  static const modeFullLabel = '自动允许（无需批准）';
 
   const AiToolPolicy({
     this.writeRoots = const [],

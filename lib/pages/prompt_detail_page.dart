@@ -109,7 +109,8 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
               if (mounted) store.refreshAll();
             },
           ),
-          PopupMenuButton<String>(
+          AppMenuButton<String>(
+            tooltip: '更多',
             onSelected: (v) async {
               final messenger = ScaffoldMessenger.of(context);
               final navigator = Navigator.of(context);
@@ -129,16 +130,21 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
                 }
               }
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                value: 'duplicate',
-                child: ListTile(leading: Icon(Icons.copy), title: Text('复制一份')),
-              ),
-              PopupMenuItem(
+            options: const [
+              MenuOption(value: 'duplicate', icon: Icons.copy, label: '复制一份'),
+              MenuOption(
                 value: 'delete',
-                child: ListTile(leading: Icon(Icons.delete_outline), title: Text('删除')),
+                icon: Icons.delete_outline,
+                label: '删除',
+                danger: true,
+                dividerBefore: true,
               ),
             ],
+            button: (context, controller, isOpen) => IconButton(
+              tooltip: '更多',
+              onPressed: () => controller.isOpen ? controller.close() : controller.open(),
+              icon: const Icon(Icons.more_vert),
+            ),
           ),
         ],
       ),

@@ -353,5 +353,42 @@ void main() {
       // keep-alive 对媒体格子没用，已经关掉，省一层包装
       expect(find.byType(AutomaticKeepAlive), findsNothing);
     });
+
+    testWidgets('视频格子请求的是 /poster 封面帧，不是回 204 的 /thumb（用户 bug ③）', (tester) async {
+      tester.view.physicalSize = const Size(800, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final store = await _store();
+      addTearDown(store.dispose);
+
+      await _pumpThumb(
+        tester,
+        store,
+        const MediaAsset(
+          id: 7,
+          kind: MediaKind.video,
+          title: 'clip.mp4',
+          originalName: 'clip.mp4',
+          storedName: 'c.mp4',
+          fileUrl: '/api/media/7/file',
+          // 后端对视频根本不返回 thumbUrl；就算返回了也不能用
+          thumbUrl: '/api/media/7/thumb',
+        ),
+        cell: const Size(220, 220),
+      );
+
+      final image = tester.widget<Image>(find.byType(Image));
+      final provider = image.image;
+      expect(provider, isA<ResizeImage>(),
+          reason: '封面帧同样要按绘制像素解码，别整帧进 ImageCache');
+      final inner = (provider as ResizeImage).imageProvider;
+      expect(inner, isA<NetworkImage>());
+      final url = (inner as NetworkImage).url;
+      expect(url, endsWith('/api/media/7/poster'),
+          reason: '视频要走抽帧接口；/thumb 对视频回 204，用它就永远没有预览图');
+      // 播放角标仍然要在封面之上
+      expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+    });
   });
 }

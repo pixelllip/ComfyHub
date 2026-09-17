@@ -208,20 +208,23 @@ class _PromptsPageState extends State<PromptsPage> {
                   ),
                   const SizedBox(width: 8),
                 ],
-                PopupMenuButton<String>(
+                AppMenuButton<String>(
                   tooltip: '排序',
-                  initialValue: store.promptSort,
                   onSelected: store.setPromptSort,
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'newest', child: Text('最新创建')),
-                    PopupMenuItem(value: 'oldest', child: Text('最旧创建')),
-                    PopupMenuItem(value: 'updated', child: Text('最近修改')),
-                    PopupMenuItem(value: 'title', child: Text('按标题')),
-                    PopupMenuItem(value: 'favorite', child: Text('收藏优先')),
+                  options: const [
+                    MenuOption(value: 'newest', icon: Icons.schedule, label: '最新创建'),
+                    MenuOption(value: 'oldest', icon: Icons.history, label: '最旧创建'),
+                    MenuOption(value: 'updated', icon: Icons.update, label: '最近修改'),
+                    MenuOption(value: 'title', icon: Icons.sort_by_alpha, label: '按标题'),
+                    MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
                   ],
-                  child: Chip(
-                    avatar: const Icon(Icons.sort, size: 16),
-                    label: Text(_sortLabel(store.promptSort)),
+                  button: (context, controller, isOpen) => InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => controller.isOpen ? controller.close() : controller.open(),
+                    child: Chip(
+                      avatar: const Icon(Icons.sort, size: 16),
+                      label: Text(_sortLabel(store.promptSort)),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -659,7 +662,7 @@ class PromptCard extends StatelessWidget {
                       ),
                       onPressed: () => store.togglePromptFavorite(prompt),
                     ),
-                    PopupMenuButton<String>(
+                    AppMenuButton<String>(
                       tooltip: '更多',
                       onSelected: (v) async {
                         final messenger = ScaffoldMessenger.of(context);
@@ -688,11 +691,24 @@ class PromptCard extends StatelessWidget {
                             break;
                         }
                       },
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit), title: Text('编辑'))),
-                        PopupMenuItem(value: 'duplicate', child: ListTile(leading: Icon(Icons.copy), title: Text('复制一份'))),
-                        PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('删除'))),
+                      options: const [
+                        MenuOption(value: 'edit', icon: Icons.edit, label: '编辑'),
+                        MenuOption(value: 'duplicate', icon: Icons.copy, label: '复制一份'),
+                        MenuOption(
+                          value: 'delete',
+                          icon: Icons.delete_outline,
+                          label: '删除',
+                          danger: true,
+                          dividerBefore: true,
+                        ),
                       ],
+                      button: (context, controller, isOpen) => IconButton(
+                        tooltip: '更多',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () =>
+                            controller.isOpen ? controller.close() : controller.open(),
+                        icon: const Icon(Icons.more_vert, size: 18),
+                      ),
                     ),
                   ] else if (prompt.favorite)
                     const Icon(Icons.star, size: 18, color: Colors.amber),

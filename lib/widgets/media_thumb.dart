@@ -42,9 +42,16 @@ class MediaThumb extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final store = context.read<LibraryStore>();
-    final thumb = media.kind == MediaKind.image
+    // 图片走 /thumb；**视频走 /poster**（用户 bug ③：视频格子一直没有预览图）。
+    //
+    // `/api/media/{id}/thumb` 对非图片直接回 204，所以以前视频格子只能显示一个
+    // 电影图标占位。后端其实有 `/api/media/{id}/poster`：用 Windows 缩略图管线抽第一帧
+    // 并缓存在 `storage/thumbs/<id>.poster.png`（详情页的封面预览一直用的就是它）。
+    // 抽不出来（缺解码器）回 204 —— 那时仍退化成占位图标，不是破图。
+    final image = media.kind == MediaKind.image
         ? store.api.absolute(media.thumbUrl ?? media.fileUrl)
         : null;
+    final thumb = image ?? (media.kind == MediaKind.video ? store.api.mediaPosterUrl(media.id) : null);
 
     return Material(
       color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
@@ -56,7 +63,7 @@ class MediaThumb extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             if (thumb != null)
-              // 图片单独占一层 RepaintBoundary：解码完成 / 加载进度变化时只重绘这一层，
+              // 缩略图单独占一层 RepaintBoundary：解码完成 / 加载进度变化时只重绘这一层，
               // 格子上的渐变和带投影的文字不会跟着重新栅格化
               // （文字阴影是每层最贵的一笔，现在每张图只会白付一次）
               RepaintBoundary(child: _networkThumb(context, thumb, theme))

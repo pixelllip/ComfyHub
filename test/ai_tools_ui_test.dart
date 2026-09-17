@@ -1100,7 +1100,7 @@ void main() {
         reason: '不能把媒体 id 当附件 id 用，实际：$urls');
   });
 
-  testWidgets('权限档可在输入区切换，切到完全权限会写回后端（PUT permissionMode）', (tester) async {
+  testWidgets('权限档可在输入区切换，切到「自动允许（无需批准）」会写回后端（PUT permissionMode）', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -1110,17 +1110,19 @@ void main() {
     await tester.pumpAndSettle();
 
     // 默认就是「询问」
-    expect(find.text('询问'), findsOneWidget);
+    expect(find.text(AiToolPolicy.modeAskLabel), findsOneWidget);
 
-    await tester.tap(find.text('询问'));
+    await tester.tap(find.text(AiToolPolicy.modeAskLabel));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('完全权限').last);
+    await tester.tap(find.text(AiToolPolicy.modeFullLabel).last);
     await tester.pumpAndSettle();
 
     expect(rec.policyPuts.length, 1, reason: '切档必须真的写回后端');
     expect(rec.policyPuts.last['permissionMode'], 'full');
     // 界面上要如实显示新档位（而且给出"目录范围没放宽"的说明）
-    expect(find.text('完全权限'), findsWidgets);
+    // 档位名来自用户建议：以前叫「完全权限」，容易被理解成"什么都能干"。
+    expect(AiToolPolicy.modeFullLabel, '自动允许（无需批准）');
+    expect(find.text(AiToolPolicy.modeFullLabel), findsWidgets);
     expect(find.textContaining('不再等你批准'), findsWidgets);
   });
 

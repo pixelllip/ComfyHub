@@ -19,6 +19,7 @@ import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/models/ai_models.dart';
 import 'package:viewer/pages/ai_home_page.dart';
 import 'package:viewer/state/ai_workspace_store.dart';
+import 'package:viewer/widgets/app_menu.dart';
 
 /// 最近一次 Run 请求体：用例据此断言"思考强度到底有没有真的发出去"。
 Map<String, dynamic>? lastRunBody;
@@ -433,10 +434,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('不支持思考'), findsOneWidget, reason: '没声明就别给一堆选了会被拒的选项');
-    final picker = tester.widget<PopupMenuButton<AiReasoningEffort>>(
-      find.byType(PopupMenuButton<AiReasoningEffort>),
+    // 没有可选档位时按钮不可点（点到也不会弹菜单）：InkWell.onTap 为 null
+    final button = tester.widget<InkWell>(
+      find.ancestor(
+        of: find.text('不支持思考'),
+        matching: find.byType(InkWell),
+      ).first,
     );
-    expect(picker.enabled, isFalse);
+    expect(button.onTap, isNull, reason: '没档位时不该给出可点的选择器');
   });
 
   testWidgets('只列出模型声明过的档位，选中的档位随请求发给后端', (tester) async {
@@ -461,7 +466,7 @@ void main() {
     ]);
     expect(find.text('关闭'), findsOneWidget, reason: '默认关闭');
 
-    await tester.tap(find.byType(PopupMenuButton<AiReasoningEffort>));
+    await tester.tap(find.byType(AppMenuButton<AiReasoningEffort>));
     await tester.pumpAndSettle();
     expect(find.text('低'), findsWidgets);
     expect(find.text('中'), findsNothing, reason: '未声明的档位不能出现');

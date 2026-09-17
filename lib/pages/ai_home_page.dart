@@ -9,6 +9,7 @@ import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../models/ai_models.dart';
 import '../state/ai_workspace_store.dart';
+import '../widgets/app_menu.dart';
 import '../widgets/markdown_view.dart';
 import 'media_detail_page.dart';
 
@@ -319,18 +320,31 @@ class _ConversationList extends StatelessWidget {
                           Navigator.of(context).pop();
                         }
                       },
-                      trailing: PopupMenuButton<String>(
+                      trailing: AppMenuButton<String>(
                         tooltip: '更多',
                         onSelected: (v) {
                           if (v == 'rename') _rename(context, c);
                           if (v == 'archive') store.archiveConversation(c.id);
                           if (v == 'delete') store.deleteConversation(c.id);
                         },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'rename', child: Text('重命名')),
-                          PopupMenuItem(value: 'archive', child: Text('归档')),
-                          PopupMenuItem(value: 'delete', child: Text('删除')),
+                        options: const [
+                          MenuOption(value: 'rename', icon: Icons.edit_outlined, label: '重命名'),
+                          MenuOption(value: 'archive', icon: Icons.archive_outlined, label: '归档'),
+                          MenuOption(
+                            value: 'delete',
+                            icon: Icons.delete_outline,
+                            label: '删除',
+                            danger: true,
+                            dividerBefore: true,
+                          ),
                         ],
+                        button: (context, controller, isOpen) => IconButton(
+                          tooltip: '更多',
+                          onPressed: () => controller.isOpen
+                              ? controller.close()
+                              : controller.open(),
+                          icon: const Icon(Icons.more_vert, size: 18),
+                        ),
                       ),
                     );
                   },
@@ -1552,12 +1566,15 @@ class _Banner extends StatelessWidget {
 //  权限档（用户建议 ⑤）
 // ---------------------------------------------------------------------------
 
-/// 权限两档：**询问**（默认）/ **完全权限**。
+/// 权限两档：**询问**（默认）/ **自动允许（无需批准）**。
 ///
 /// 位置就是用户指定的：输入区底部、附件按钮与模型选择之间。
 /// 真源在后端（`ai.tools.policy.permissionMode`），切档写回后端 ——
-/// 后端每次 Run 现读策略，于是"切到完全权限"会**即时**把那段规则注入系统提示，
+/// 后端每次 Run 现读策略，于是"切到自动允许"会**即时**把那段规则注入系统提示，
 /// 并且 AI 调工具不再走审批闸门。路径白名单不受影响，越界写照样被拒。
+///
+/// 名字来自用户建议：「完全权限」听着像"什么都能干"，其实它只免掉"问一下"，
+/// 文件夹白名单一点都没放宽 —— 所以改叫「自动允许（无需批准）」。
 class _PermissionPicker extends StatelessWidget {
   final AiWorkspaceStore store;
   const _PermissionPicker({required this.store});
@@ -1567,57 +1584,59 @@ class _PermissionPicker extends StatelessWidget {
     final theme = Theme.of(context);
     final full = store.fullPermission;
     final color = full ? theme.colorScheme.error : theme.colorScheme.outline;
+    final label = full ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: Tooltip(
-        message: full
-            ? '当前：完全权限 —— AI 调用工具不会等你批准（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「询问」。'
-            : '当前：询问 —— 写盘 / 提交任务这类改动操作会先弹批准。点一下切到「完全权限」。',
-        child: PopupMenuButton<String>(
-          // 两种档位的选择放在菜单里：按钮本身体积小，不会把输入区挤爆
-          enabled: !store.permissionBusy,
-          tooltip: '',
-          initialValue: store.permissionMode,
-          onSelected: store.setPermissionMode,
-          itemBuilder: (context) => [
-            const PopupMenuItem(
-              value: AiToolPolicy.modeAsk,
-              child: ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.how_to_reg_outlined, size: 18),
-                title: Text('询问'),
-                subtitle: Text('改动类工具先等你批准'),
+      child: AppMenuButton<String>(
+        tooltip: full
+            ? '当前：$label —— AI 调用工具不会等你批准（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'
+            : '当前：$label —— 写盘 / 提交任务这类改动操作会先弹批准。点一下切到「${AiToolPolicy.modeFullLabel}」。',
+        onSelected: store.setPermissionMode,
+        options: [
+          MenuOption(
+            value: AiToolPolicy.modeAsk,
+            icon: Icons.how_to_reg_outlined,
+            label: AiToolPolicy.modeAskLabel,
+            subtitle: '改动类工具先等你批准',
+            trailingIcon: full ? null : Icons.check,
+          ),
+          MenuOption(
+            value: AiToolPolicy.modeFull,
+            icon: Icons.gpp_maybe_outlined,
+            label: AiToolPolicy.modeFullLabel,
+            subtitle: 'AI 无需批准，直接动手（目录白名单不变）',
+            trailingIcon: full ? Icons.check : null,
+          ),
+        ],
+        // 两种档位的选择放在菜单里：按钮本身体积小，不会把输入区挤爆
+        button: (context, controller, isOpen) => Opacity(
+          opacity: store.permissionBusy ? 0.5 : 1,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: store.permissionBusy
+                ? null
+                : () => controller.isOpen ? controller.close() : controller.open(),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: full ? color : theme.dividerColor),
+                borderRadius: BorderRadius.circular(8),
+                color: full ? color.withValues(alpha: 0.08) : null,
               ),
-            ),
-            const PopupMenuItem(
-              value: AiToolPolicy.modeFull,
-              child: ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.gpp_maybe_outlined, size: 18),
-                title: Text('完全权限'),
-                subtitle: Text('AI 无需批准，直接动手'),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    full ? Icons.gpp_maybe_outlined : Icons.how_to_reg_outlined,
+                    size: 16,
+                    color: color,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(label,
+                      style: theme.textTheme.labelMedium?.copyWith(color: full ? color : null)),
+                  Icon(Icons.arrow_drop_down, size: 18, color: theme.colorScheme.outline),
+                ],
               ),
-            ),
-          ],
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              border: Border.all(color: full ? color : theme.dividerColor),
-              borderRadius: BorderRadius.circular(8),
-              color: full ? color.withValues(alpha: 0.08) : null,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(full ? Icons.gpp_maybe_outlined : Icons.how_to_reg_outlined,
-                    size: 16, color: color),
-                const SizedBox(width: 6),
-                Text(full ? '完全权限' : '询问',
-                    style: theme.textTheme.labelMedium?.copyWith(color: full ? color : null)),
-                Icon(Icons.arrow_drop_down, size: 18, color: theme.colorScheme.outline),
-              ],
             ),
           ),
         ),
@@ -1835,54 +1854,49 @@ class _EffortPicker extends StatelessWidget {
         ? store.reasoningEffort.label
         : (model == null ? '思考强度' : '不支持思考');
 
-    return PopupMenuButton<AiReasoningEffort>(
+    return AppMenuButton<AiReasoningEffort>(
       tooltip: enabled
           ? '思考强度（「关闭」始终可选；模型声明的档位：'
               '${options.where((e) => e.isThinking).map((e) => e.label).join(' / ')}）'
           : '该模型未声明推理能力，请到「设置 → AI 模型」声明',
-      enabled: enabled,
       onSelected: store.selectReasoningEffort,
-      itemBuilder: (_) => [
+      options: [
         for (final e in options)
-          PopupMenuItem(
+          MenuOption(
             value: e,
-            child: Row(
-              children: [
-                Icon(
-                  e == store.reasoningEffort ? Icons.radio_button_checked : Icons.radio_button_off,
-                  size: 16,
-                ),
-                const SizedBox(width: 8),
-                Text(e.label),
-                const Spacer(),
-                if (model?.effortWireValue(e) != null)
-                  Text(
-                    '→ ${model!.effortWireValue(e)}',
-                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-                  ),
-              ],
-            ),
+            label: e.label,
+            icon: e == store.reasoningEffort
+                ? Icons.radio_button_checked
+                : Icons.radio_button_off,
+            // 线上表达（例如 "→ high"）放第二行，别跟标题挤在一行
+            subtitle: model?.effortWireValue(e) == null ? null : '→ ${model!.effortWireValue(e)}',
           ),
       ],
-      child: Opacity(
+      button: (context, controller, isOpen) => Opacity(
         opacity: enabled ? 1 : 0.6,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            border: Border.all(color: theme.dividerColor),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.psychology_outlined,
-                  size: 16,
-                  color: store.reasoningEffort.isThinking && enabled
-                      ? theme.colorScheme.primary
-                      : null),
-              const SizedBox(width: 5),
-              Text(label, style: theme.textTheme.labelMedium),
-            ],
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: enabled
+              ? () => controller.isOpen ? controller.close() : controller.open()
+              : null,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              border: Border.all(color: theme.dividerColor),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.psychology_outlined,
+                    size: 16,
+                    color: store.reasoningEffort.isThinking && enabled
+                        ? theme.colorScheme.primary
+                        : null),
+                const SizedBox(width: 5),
+                Text(label, style: theme.textTheme.labelMedium),
+              ],
+            ),
           ),
         ),
       ),

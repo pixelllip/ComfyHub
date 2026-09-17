@@ -3,6 +3,13 @@ import 'package:flutter/services.dart';
 
 import '../core/formatting.dart';
 import '../models/models.dart';
+import 'app_menu.dart';
+import 'context_menu.dart';
+
+// 菜单相关的东西（MenuOption / AppMenuButton / ContextMenuScope）与 common.dart 里
+// 的通用组件是一套，统一从这里转出去，调用点不用多写一行 import。
+export 'app_menu.dart';
+export 'context_menu.dart';
 
 /// 标签小胶囊。可用于展示、筛选、删除。
 class TagChip extends StatelessWidget {
@@ -373,52 +380,18 @@ Future<void> copyToClipboard(BuildContext context, String text, {String label = 
 
 /// 在鼠标**右键点下去的位置**弹出菜单。
 ///
-/// [showMenu] 要的是"相对 Overlay 的矩形"，每个调用点各写一遍很容易算错
-/// （算错了菜单就跑到屏幕角上），所以统一收到这里。
+/// 历史实现基于 `showMenu`（Material 的 `_PopupMenuRoute`）。它会铺一层铺满窗口的
+/// `ModalBarrier`，在命中测试里第一个命中就终止整条路径 —— **菜单一开，页面滚轮与
+/// 拖动全部失效**（用户 bug ②）。现在统一走 [showAppContextMenu]（`MenuAnchor` +
+/// `TapRegion`，不铺屏障），见 `lib/widgets/context_menu.dart`。
+///
+/// 调用方所在页面必须已经挂了 `ContextMenuScope`（`pages/*` 都挂了）。
 Future<T?> showContextMenuAt<T>(
   BuildContext context, {
   required Offset globalPosition,
-  required List<PopupMenuEntry<T>> items,
-}) {
-  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-  return showMenu<T>(
-    context: context,
-    position: RelativeRect.fromRect(
-      globalPosition & const Size(1, 1),
-      Offset.zero & overlay.size,
-    ),
-    items: items,
-  );
-}
-
-/// 右键菜单里的一项：图标 + 文字，[danger] 用于删除这种破坏性操作。
-PopupMenuItem<T> contextMenuItem<T>(
-  BuildContext context, {
-  required T value,
-  required IconData icon,
-  required String label,
-  bool enabled = true,
-  bool danger = false,
-}) {
-  final theme = Theme.of(context);
-  final color = danger ? theme.colorScheme.error : null;
-  return PopupMenuItem<T>(
-    value: value,
-    enabled: enabled,
-    height: 42,
-    child: Row(
-      children: [
-        Icon(
-          icon,
-          size: 18,
-          color: enabled ? color ?? theme.colorScheme.onSurfaceVariant : theme.disabledColor,
-        ),
-        const SizedBox(width: 10),
-        Text(
-          label,
-          style: enabled && danger ? TextStyle(color: color) : null,
-        ),
-      ],
-    ),
-  );
-}
+  required MenuSpec<T> Function(BuildContext context) items,
+}) => showAppContextMenu<T>(
+  context,
+  globalPosition: globalPosition,
+  buildOptions: items,
+);

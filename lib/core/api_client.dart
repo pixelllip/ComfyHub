@@ -230,6 +230,12 @@ class ApiClient {
   Future<MediaAsset> getMedia(int id) async =>
       MediaAsset.fromJson(Map<String, dynamic>.from(await _get('/api/media/$id') as Map));
 
+  /// 视频封面（第一帧）的完整地址。
+  ///
+  /// 走后端的 `GET /api/media/{id}/poster`（Windows 缩略图管线抽帧 + 缓存），
+  /// 非视频 / 抽不出来时后端回 204，界面该退化成占位图标。画廊格子与详情页共用。
+  String mediaPosterUrl(int id) => '$baseUrl/api/media/$id/poster';
+
   Future<Prompt?> mediaPrompt(int id) async {
     final res = await _client.get(_uri('/api/media/$id/prompt'));
     if (res.statusCode == 204) return null;
