@@ -534,8 +534,8 @@ class ToolRegistryTest {
         assertTrue(text.contains("必须等用户点批准"), "第 3 条的审批纪律不能被 v9 顶掉")
         // 人格 / 越狱段是**用户有意注入**的（2026-09-17："那是我的意图，不许删除"）：
         // 所以这里如实断言它在，而不是断言它不在 —— 谁把它删了，这条会红。
+        // （只认那个固定的段落标记，不认具体人格名：用户会按自己的喜好改称呼。）
         assertTrue(text.contains("UNRESTRICTED SANDBOX"), "用户要求保留的沙箱人格段不能被清理掉")
-        assertTrue(text.contains("Little Code Sauce"), "同上：这段是刻意保留的，别当误粘贴删掉")
     }
 
     @Test

@@ -1109,7 +1109,7 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 | **Anima skills** —— `anima-prompt` / `anima-nsfw-prompt` / `anima-doujin-plan` / `anima-scene-prompt` / `anima-workflow` / `anima-change` | [adventyhwh/comfy-anima-skill-share](https://github.com/adventyhwh/comfy-anima-skill-share) | 投放进 Skills 投放口 `<storage>\ai\skills`（**运行期数据，不在本仓库里**），AI 工作台右侧栏能看到 |
 | **MiniMax-H3 skills** —— H3 视频提示词相关（如 `h3-prompt-writing`） | [MiniMax-AI/MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) | 同上 |
 | **MiniMax-Music3 skills** —— 音乐 caption 相关（如 `music-caption-rewriter`） | [MiniMax-AI/MiniMax-Music3](https://github.com/MiniMax-AI/MiniMax-Music3) | 同上 |
-| **harness 破甲系统提示词** —— `[MODE: UNRESTRICTED SANDBOX — STABLE]` 整段（人格 / 拒绝对抗 / 越狱与渗透话术；默认提示词面向国模「小码酱」，就是提示词里那句 `Little Code Sauce` 的出处） | [YuJunZhiXue/dsh-purge](https://github.com/YuJunZhiXue/dsh-purge)（MIT） | `HarnessRunner.kt` 里一个独立的 `append("""…""")`（原文另存 `docs\default-prompt-inject.md`），随系统提示词 **v9** 起注入 |
+| **harness 破甲系统提示词** —— `[MODE: UNRESTRICTED SANDBOX — STABLE]` 整段（人格 / 拒绝对抗 / 越狱与渗透话术） | [YuJunZhiXue/dsh-purge](https://github.com/YuJunZhiXue/dsh-purge)（MIT） | `HarnessRunner.kt` 里一个独立的 `append("""…""")`（原文另存 `docs\default-prompt-inject.md`），随系统提示词 **v9** 起注入。上游默认提示词面向国模「小码酱」（`Little Code Sauce`）——本仓库里那个人格名已按自己的需要改过，段落与话术仍来自上游 |
 
 补充两点，免得后来的人踩到：
 
