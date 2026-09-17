@@ -304,50 +304,65 @@ class _ConversationList extends StatelessWidget {
                     style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
                   ),
                 )
-              : ListView.builder(
-                  itemCount: store.conversations.length,
-                  itemBuilder: (context, i) {
-                    final c = store.conversations[i];
-                    final selected = store.conversation?.id == c.id;
-                    return ListTile(
-                      dense: true,
-                      selected: selected,
-                      title: Text(c.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text('${c.messageCount} 条消息', style: theme.textTheme.labelSmall),
-                      onTap: () {
-                        store.openConversation(c.id);
-                        if (Scaffold.maybeOf(context)?.isDrawerOpen == true) {
-                          Navigator.of(context).pop();
-                        }
-                      },
-                      trailing: AppMenuButton<String>(
-                        tooltip: '更多',
-                        onSelected: (v) {
-                          if (v == 'rename') _rename(context, c);
-                          if (v == 'archive') store.archiveConversation(c.id);
-                          if (v == 'delete') store.deleteConversation(c.id);
+              // 「选中」和「鼠标按下 / 悬停」必须一眼分得开（用户 bug：次新那条会话
+              // 顶着一块亮灰底，看起来比当前会话还像被选中）。
+              // Material 默认的**按下高亮**是 ~38% 白，比选中态的存在感强得多；而且窗口在
+              // 收到 mouse-up 之前失去焦点 / 被最小化时，这个按下高亮会**卡在屏幕上不动**。
+              // 所以：按下 / 水波纹 / 悬停一律压到很淡，选中态改用明确底色（见下面的 selectedTileColor）。
+              : Theme(
+                  data: theme.copyWith(
+                    highlightColor: theme.colorScheme.primary.withValues(alpha: 0.10),
+                    splashColor: theme.colorScheme.primary.withValues(alpha: 0.10),
+                    hoverColor: theme.colorScheme.onSurface.withValues(alpha: 0.06),
+                  ),
+                  child: ListView.builder(
+                    itemCount: store.conversations.length,
+                    itemBuilder: (context, i) {
+                      final c = store.conversations[i];
+                      final selected = store.conversation?.id == c.id;
+                      return ListTile(
+                        dense: true,
+                        selected: selected,
+                        // M3 的 ListTile 选中态**默认只把文字染成主题色、没有底色**，
+                        // 于是"鼠标压过的那一行"看着比真选中的还显眼。这里给当前会话一个明确的底色。
+                        selectedTileColor: theme.colorScheme.primary.withValues(alpha: 0.16),
+                        title: Text(c.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle:
+                            Text('${c.messageCount} 条消息', style: theme.textTheme.labelSmall),
+                        onTap: () {
+                          store.openConversation(c.id);
+                          if (Scaffold.maybeOf(context)?.isDrawerOpen == true) {
+                            Navigator.of(context).pop();
+                          }
                         },
-                        options: const [
-                          MenuOption(value: 'rename', icon: Icons.edit_outlined, label: '重命名'),
-                          MenuOption(value: 'archive', icon: Icons.archive_outlined, label: '归档'),
-                          MenuOption(
-                            value: 'delete',
-                            icon: Icons.delete_outline,
-                            label: '删除',
-                            danger: true,
-                            dividerBefore: true,
-                          ),
-                        ],
-                        button: (context, controller, isOpen) => IconButton(
+                        trailing: AppMenuButton<String>(
                           tooltip: '更多',
-                          onPressed: () => controller.isOpen
-                              ? controller.close()
-                              : controller.open(),
-                          icon: const Icon(Icons.more_vert, size: 18),
+                          onSelected: (v) {
+                            if (v == 'rename') _rename(context, c);
+                            if (v == 'archive') store.archiveConversation(c.id);
+                            if (v == 'delete') store.deleteConversation(c.id);
+                          },
+                          options: const [
+                            MenuOption(value: 'rename', icon: Icons.edit_outlined, label: '重命名'),
+                            MenuOption(value: 'archive', icon: Icons.archive_outlined, label: '归档'),
+                            MenuOption(
+                              value: 'delete',
+                              icon: Icons.delete_outline,
+                              label: '删除',
+                              danger: true,
+                              dividerBefore: true,
+                            ),
+                          ],
+                          button: (context, controller, isOpen) => IconButton(
+                            tooltip: '更多',
+                            onPressed: () =>
+                                controller.isOpen ? controller.close() : controller.open(),
+                            icon: const Icon(Icons.more_vert, size: 18),
+                          ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
         ),
       ],
@@ -1453,37 +1468,54 @@ class _ComposerState extends State<_Composer> {
             ),
           ),
           const SizedBox(height: 8),
+          // 底行排版（用户 bug：token 汇总被挤没 + 发送按钮不贴右）。两个症状同一个根因：
+          //   ① 汇总当时是 `Flexible`（loose）—— 它用不满自己那份空间时，多出来的空白落在
+          //      **发送按钮右边**，按钮就不贴右了；
+          //   ② 它和 `Spacer` 各占 1 flex —— 剩余空间对半分，窗口一窄就先被省略成"本对话…"。
+          // 现在的规矩：左侧操作组是**唯一的弹性位**（Expanded，内部横向可滚动：窄屏时自己滚，
+          // 不把右边顶出去），汇总固定占位（≤220，只在自己太长时才省略），发送放最后且不参与压缩。
           Row(
             children: [
-              IconButton(
-                tooltip: '添加附件',
-                onPressed: _pickFiles,
-                icon: const Icon(Icons.attach_file),
-              ),
-              // 权限档（用户建议 ⑤）：就在附件按钮和模型选择之间
-              _PermissionPicker(store: store),
-              _ModelPicker(store: store),
-              const SizedBox(width: 8),
-              _EffortPicker(store: store),
-              const Spacer(),
-              // 本次对话的 token 汇总（AIH-057）：一直是可见的，不必翻设置。
-              // 窄一点就省略，别把[附件 / 权限 / 模型 / 思考强度 / 发送]这一行挤溢出。
-              if (!store.usageSummary.isEmpty)
-                Flexible(
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: Tooltip(
-                      message: store.usageSummary.label,
-                      child: Text(
-                        '本对话 ↑${AiTokenUsage.compact(store.usageSummary.inputTokens)} '
-                        '↓${AiTokenUsage.compact(store.usageSummary.outputTokens)}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: '添加附件',
+                        onPressed: _pickFiles,
+                        icon: const Icon(Icons.attach_file),
                       ),
+                      // 权限档（用户建议 ⑤）：就在附件按钮和模型选择之间
+                      _PermissionPicker(store: store),
+                      _ModelPicker(store: store),
+                      const SizedBox(width: 8),
+                      _EffortPicker(store: store),
+                      const SizedBox(width: 8),
+                    ],
+                  ),
+                ),
+              ),
+              // 本次对话的 token 汇总（AIH-057）：一直是可见的，不必翻设置。
+              // 固定占位（不吃 flex），所以它只会因为**自己太长**而省略，不会被别人挤掉。
+              if (!store.usageSummary.isEmpty) ...[
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 220),
+                  child: Tooltip(
+                    message: store.usageSummary.label,
+                    child: Text(
+                      '本对话 ↑${AiTokenUsage.compact(store.usageSummary.inputTokens)} '
+                      '↓${AiTokenUsage.compact(store.usageSummary.outputTokens)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
                     ),
                   ),
                 ),
+                const SizedBox(width: 12),
+              ],
               FilledButton.icon(
                 onPressed: store.sending ? () => store.stop() : (store.canSend ? _submit : null),
                 icon: Icon(store.sending ? Icons.stop : Icons.send, size: 18),

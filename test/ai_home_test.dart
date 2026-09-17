@@ -8,6 +8,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -16,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:viewer/core/ai_api_client.dart';
 import 'package:viewer/core/settings_store.dart';
+import 'package:viewer/core/theme.dart';
 import 'package:viewer/models/ai_models.dart';
 import 'package:viewer/pages/ai_home_page.dart';
 import 'package:viewer/state/ai_workspace_store.dart';
@@ -56,6 +58,8 @@ MockClient _fakeBackend({
   bool failFirstRun = false,
   String conversationId = 'c1',
   List<Map<String, dynamic>> conversations = const [],
+  // 模型显示名可以换：名字长的模型会把输入区底行挤紧（用户 bug 的复现条件之一）
+  String modelName = '纯文本模型',
 }) {
   var runCount = 0;
   return MockClient((request) async {
@@ -81,7 +85,7 @@ MockClient _fakeBackend({
         {
           'providerId': 'local-gw',
           'id': 'm-text',
-          'displayName': '纯文本模型',
+          'displayName': modelName,
           'inputModalities': modalities,
           'tools': true,
           'reasoning': reasoning,
@@ -196,6 +200,9 @@ Future<Widget> _page({
   Map<String, dynamic>? usage,
   bool failFirstRun = false,
   String conversationId = 'c1',
+  List<Map<String, dynamic>> conversations = const [],
+  ThemeData? theme,
+  String modelName = '纯文本模型',
 }) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
@@ -211,6 +218,8 @@ Future<Widget> _page({
         usage: usage,
         failFirstRun: failFirstRun,
         conversationId: conversationId,
+        conversations: conversations,
+        modelName: modelName,
       ),
     ),
   );
@@ -219,7 +228,7 @@ Future<Widget> _page({
       ChangeNotifierProvider<SettingsStore>.value(value: settings),
       ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
     ],
-    child: const MaterialApp(home: AiHomePage()),
+    child: MaterialApp(theme: theme, home: const AiHomePage()),
   );
 }
 
@@ -246,6 +255,57 @@ void main() {
     expect(find.text('上下文'), findsNothing, reason: '「上下文」这个含混的标题已经去掉');
     // 左侧栏和右侧栏同时存在，说明是三栏而不是单列
     expect(find.byType(VerticalDivider), findsNWidgets(2));
+  });
+
+  testWidgets('会话列表：当前会话有明确底色，按下 / 悬停高亮被压淡（用户 bug：次新那条看着像被选中）',
+      (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // 用 App 真正在跑的深色主题：Material 默认的按下高亮（~38% 白）只在深色下才这么抢眼，
+    // 拿默认浅色主题测等于没测。
+    await tester.pumpWidget(await _page(
+      theme: AppTheme.build(Brightness.dark),
+      conversations: [
+        {'id': 'cA', 'title': '会话 A', 'messageCount': 2},
+        {'id': 'cB', 'title': '会话 B', 'messageCount': 4},
+      ],
+    ));
+    await tester.pumpAndSettle();
+
+    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    await store.openConversation('cA');
+    await tester.pumpAndSettle();
+
+    ListTile tileOf(String title) =>
+        tester.widget<ListTile>(find.widgetWithText(ListTile, title));
+
+    // ListTile 的底色由它自己那层 Ink 的 ShapeDecoration 画出来
+    Color? tileBackground(String title) {
+      final ink = tester.widget<Ink>(find
+          .descendant(of: find.widgetWithText(ListTile, title), matching: find.byType(Ink))
+          .first);
+      final decoration = ink.decoration;
+      return decoration is ShapeDecoration ? decoration.color : null;
+    }
+
+    // ① 当前会话必须有**看得见的底色**。
+    //    M3 的 ListTile 选中态默认只把文字染成主题色、没有底色，于是"鼠标压过的那一行"
+    //    反而比真选中的更像选中 —— 用户报的就是这个。
+    expect(tileOf('会话 A').selected, isTrue);
+    expect(tileOf('会话 B').selected, isFalse);
+    expect(tileBackground('会话 A')?.a, greaterThan(0.1),
+        reason: '当前会话的底色要看得出来，不能是透明或接近透明');
+    expect(tileBackground('会话 B'), anyOf(isNull, isA<Color>().having((c) => c.a, 'alpha', 0)),
+        reason: '没打开的会话不该有底色');
+
+    // ② 按下 / 水波纹高亮必须压淡：它比选中态还亮，而且窗口在收到 mouse-up 之前
+    //    失去焦点 / 被最小化时会**卡在屏幕上**，看着就是"某一条被选中了"。
+    final tileTheme = Theme.of(tester.element(find.widgetWithText(ListTile, '会话 A')));
+    expect(tileTheme.highlightColor.a, lessThanOrEqualTo(0.12),
+        reason: '按下高亮必须比选中底色淡，卡住也不刺眼');
+    expect(tileTheme.splashColor.a, lessThanOrEqualTo(0.12));
   });
 
   testWidgets('窄屏不显示侧栏，输入框仍然可用', (tester) async {
@@ -527,6 +587,78 @@ void main() {
     expect(store.usageSummary.totalTokens, 1500);
     expect(store.usageSummary.cachedTokens, 400);
     expect(store.usageSummary.requests, 1);
+  });
+
+  testWidgets('输入区底行：token 汇总不被挤没，发送按钮永远贴右（用户 bug）', (tester) async {
+    // 1440 宽 = 用户那台机器的窗口：中栏 = 1440 - 240(会话列表) - 260(右栏) - 2 = 938，
+    // 模型名长 + 能力徽标多的时候底行会被挤紧，正好复现"汇总被省略 / 按钮不贴右"。
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page(
+      modelName: 'DeepSeek V4.1 Flash',
+      modalities: const ['text', 'image', 'video', 'audio'],
+      usage: {'inputTokens': 6400, 'outputTokens': 1500},
+    ));
+    await tester.pumpAndSettle();
+
+    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    expect(store.usageSummary.isEmpty, isTrue, reason: '还没对话时不显示统计');
+
+    await tester.enterText(find.byType(TextField), '你好');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    final usage = find.textContaining('本对话 ↑');
+    expect(usage, findsOneWidget);
+
+    // ① 汇总没被挤掉：它的渲染宽度 == 自己的固有宽度。
+    //    被省略号截断时宽度会被压到上限（220），这条就会红。
+    final para = tester.renderObject<RenderParagraph>(usage);
+    expect(
+      para.size.width,
+      greaterThanOrEqualTo(para.getMaxIntrinsicWidth(double.infinity) - 1),
+      reason: 'token 汇总不该被别的控件挤到省略',
+    );
+
+    // ② 发送按钮贴在输入区内容的最右边：以前汇总一旦用不满自己那份 flex，
+    //    多出来的空白就落在按钮右边，按钮于是不贴右。
+    final send = tester.getRect(
+      find.ancestor(of: find.text('发送'), matching: find.byType(FilledButton)),
+    );
+    final input = tester.getRect(find.byType(TextField));
+    expect(send.right, closeTo(input.right, 1), reason: '发送按钮必须贴右（不能被顶出去、也不该缩在中间）');
+    // 按钮右边不该再有空白：贴右的另一种写法是"右边还剩一截"
+    expect(send.right, greaterThanOrEqualTo(input.right - 1));
+    // 汇总排在按钮左边（中间只隔 12px），不是被甩到别处
+    expect(send.left, greaterThan(para.localToGlobal(Offset.zero).dx));
+  });
+
+  testWidgets('输入区底行：窗口宽裕时发送按钮右边也不留空白（用户 bug）', (tester) async {
+    // 1600 宽 → 中栏 1098：底行非常宽裕。旧写法里 `Spacer` 只吃掉一半剩余空间、
+    // 汇总又是 loose 的 `Flexible`，用不满的那半空白就落在**按钮右边** ——
+    // 表现就是"发送按钮没有固定在最右侧"。
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page(
+      modelName: 'GPT-4o',
+      usage: {'inputTokens': 1200, 'outputTokens': 300},
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), '你好');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    final send = tester.getRect(
+      find.ancestor(of: find.text('发送'), matching: find.byType(FilledButton)),
+    );
+    final input = tester.getRect(find.byType(TextField));
+    expect(send.right, closeTo(input.right, 1), reason: '宽裕时按钮右边也不该留一截空白');
+    expect(find.textContaining('本对话 ↑1.2k ↓300'), findsOneWidget);
   });
 
   // --- 重试（AIH-024） ---------------------------------------------------
