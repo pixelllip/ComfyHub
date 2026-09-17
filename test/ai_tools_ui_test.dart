@@ -771,6 +771,36 @@ void main() {
     expect(find.textContaining('尾巴结论。'), findsOneWidget);
   });
 
+  testWidgets('(b3) 思考过程在**流式生成中**也是折叠的（用户要求默认自动折叠）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final filler = '先看需求，再定风格。' * 20;
+    // 只有思考增量、没有 run.completed：停在"正在生成"这一刻
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'reasoning.delta', '{"messageId":"a1","text":"$filler尾巴结论。"}') +
+        _sse(4, 'text.delta', '{"messageId":"a1","text":"好的"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '帮我想想');
+    await tester.tap(find.text('发送'));
+    // 只推进有限的帧：Run 停在流式过程中
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+
+    expect(find.text('思考中…'), findsOneWidget, reason: '流式中要有明确的进行中标记');
+    expect(find.textContaining('尾巴结论'), findsNothing,
+        reason: '流式生成中也不能自动展开整段思考（用户要求默认自动折叠）');
+    // 但用户点一下还是能看到全文
+    await tester.tap(find.text('思考过程'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('尾巴结论。'), findsOneWidget);
+  });
+
   testWidgets('(d) 模型选择器懒构建并可按搜索过滤', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1.0;
@@ -1028,5 +1058,69 @@ void main() {
     expect(store.messages.last.text, '你好呀');
     expect(userInstances.length, 1,
         reason: '逐字回包只该替换变化的那一条，其余 AiMessage 对象必须原样复用');
+  });
+
+  // --- 用户建议 ⑤ / bug：产物预览 ------------------------------------------
+
+  testWidgets('产物卡的预览图走画廊接口（/api/media/{id}/thumb），不是附件接口', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'text.delta', '{"messageId":"a1","text":"跑好了。"}') +
+        _sse(
+            4,
+            'tool.completed',
+            '{"callId":"call-s","name":"comfy_submit","elapsedMs":900,"preview":"完成",'
+                '"result":{"promptId":7,"status":"success","mediaIds":[31],"mediaCount":1}}') +
+        _sse(5, 'message.completed', '{"messageId":"a1","text":"跑好了。","steps":1}') +
+        _sse(6, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '帮我跑一张');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('生成的产物（1）'), findsOneWidget);
+
+    // 两套 id 空间不同：媒体 id 塞进附件接口一定 404，界面就是"预览图不可用"（用户报的 bug）
+    final urls = tester
+        .widgetList<Image>(find.byType(Image))
+        .map((w) => w.image)
+        .whereType<NetworkImage>()
+        .map((p) => p.url)
+        .toList();
+    expect(urls.any((u) => u.contains('/api/media/31/thumb')), isTrue,
+        reason: '产物缩略图必须走画廊接口，实际：$urls');
+    expect(urls.any((u) => u.contains('/api/ai/attachments/')), isFalse,
+        reason: '不能把媒体 id 当附件 id 用，实际：$urls');
+  });
+
+  testWidgets('权限档可在输入区切换，切到完全权限会写回后端（PUT permissionMode）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    await tester.pumpWidget(await _homePage(rec));
+    await tester.pumpAndSettle();
+
+    // 默认就是「询问」
+    expect(find.text('询问'), findsOneWidget);
+
+    await tester.tap(find.text('询问'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('完全权限').last);
+    await tester.pumpAndSettle();
+
+    expect(rec.policyPuts.length, 1, reason: '切档必须真的写回后端');
+    expect(rec.policyPuts.last['permissionMode'], 'full');
+    // 界面上要如实显示新档位（而且给出"目录范围没放宽"的说明）
+    expect(find.text('完全权限'), findsWidgets);
+    expect(find.textContaining('不再等你批准'), findsWidgets);
   });
 }
