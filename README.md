@@ -14,7 +14,7 @@
 | **AI 工作台** | **App 默认落在这一页**（需求 `docs/ai-home-requirements-v0.1.xlsx`，DEC-001）。多轮对话 + 会话列表（重命名 / 归档 / 删除）；**每次冷启动都新建一条聊天记录**（历史仍在左侧列表），**切走时把一条消息都没有的空会话删掉**；**输入框内容按会话存草稿**，切走 / 关窗口都不会把打了一半的字丢掉；**记住上次用的 Provider / 模型 / 思考强度**，下次开 App 直接选回来。宽屏三栏（会话列表 / 对话 / ComfyUI 与模型能力），窄屏会话进抽屉、状态进底部 Sheet、输入区常驻；Composer 支持 Enter 发送、Shift+Enter 换行、输入法选词不误发、`/` 调出 Skills 目录、附件选择（**图片在托盘里显示缩略图、视频显示预览帧**，见第 6 节"附件"）；模型选择器直接显示能力徽标（文本 / 图片 / 视频 / 音频 / 文档 / 工具）。助手回复按 **Markdown 渲染**（标题 / 列表 / 引用 / 围栏代码块 / 行内代码 / 粗斜体 / 删除线 / 可点链接，裸链接自动识别）；自研解析器是**流式安全**的 —— 模型吐到一半的 `**` 或未闭合代码围栏按字面量显示，不会吞内容。Provider 与模型目录在设置里配置，**API Key 只写不读**（见第 5 节） |
 | **自动启动** | App 一启动就自己把 **MySQL + 后端**拉起来（先探健康，不健康才启动；启动过程实时回显在启动页上），不用再手动开脚本；**全程不弹命令行窗口**（见 [12 节](#12-本机环境踩坑记录)最后几条）；关 App 时按设置停掉本地服务（正常关窗口走 `release`，被硬杀有守护进程兜底，见第 5 节脚本速查下面的说明） |
 | **AI 工具调用** | 助手会**真的动手**：查 ComfyUI 状态 / 按 runKey 查一次运行 / 触发一次历史同步（要用户批准）、在 **ComfyUI 目录内**读写文件（越界直接拒绝）。工具卡显示名字、参数摘要、状态（运行中 / 待批准 / 已完成 / 失败 / 已拒绝）、耗时与结果预览，可在卡片上点「批准 / 拒绝」；一次回复最多 8 轮工具、单 Run 有调用次数上限，到顶就逼模型用正文收尾（见 [docs/ai-tools-and-skills.md](docs/ai-tools-and-skills.md)） |
-| **AI Skills** | 磁盘上的 `SKILL.md` 就是真源：**跟 AI 说一句「把这个流程注册成 skill」它就用 `register_skill` 写到本机**，右侧栏立刻能看到、能删（内置的只读），**改动不用重启 App，下一次回复就生效**。装 skill 的方式是**投放口**：把 skill 文件夹（或一个 `.md`）拷进右侧栏显示的那个目录（`<storage>\ai\skills`，源码树 / 发布包都由后端算好绝对路径，带「打开文件夹 / 复制路径」），**后端启动时自动登记** —— 没有 frontmatter 的文件会被补上 `name`（文件名 kebab-case）与 `description`（正文第一行），正文一字不改；应用开着时点一下刷新（重新扫描）即可，不用重启。系统提示只注入名称 + 描述（`description: \|` 这类多行块标量也能正确读取并压成一行），正文由 `load_skill` 按需加载；非法 frontmatter 会带诊断列出但不参与对话 |
+| **AI Skills** | 磁盘上的 `SKILL.md` 就是真源：**跟 AI 说一句「把这个流程注册成 skill」它就用 `register_skill` 写到本机**，右侧栏立刻能看到、能删（内置的只读），**改动不用重启 App，下一次回复就生效**。装 skill 的方式是**投放口**：把 skill 文件夹（或一个 `.md`）拷进右侧栏显示的那个目录（`<storage>\ai\skills`，源码树 / 发布包都由后端算好绝对路径，带「打开文件夹 / 复制路径」），**后端启动时自动登记** —— 没有 frontmatter 的文件会被补上 `name`（文件名 kebab-case）与 `description`（正文第一行），正文一字不改；应用开着时点一下刷新（重新扫描）即可，不用重启。系统提示只注入名称 + 描述（`description: \|` 这类多行块标量也能正确读取并压成一行），正文由 `load_skill` 按需加载；非法 frontmatter 会带诊断列出但不参与对话。本机在用的 Anima / H3 / Music3 等 skill 来自几个开源项目，见 [第 15 节](#15-开源项目与致谢) |
 | **长期记忆** | 右侧栏「长期记忆」面板 + `remember` 工具：真源是一个**人能看、能手改**的 `<storage>\ai\memory.md`（一行一条）。每次 Run 都会**现读并注入系统提示**，所以"以后每次对话都带上它"是自然结果；编辑器可以整篇改、加一条、清空（清空要确认）。记忆与工具输出一样是**数据不是指令**（系统提示 v3 明写），单条 / 总量都有硬上限，超限**报错**而不是悄悄截断 |
 | **AI 工具权限** | 设置页新增「AI 工具权限」：默认**只能写 `<项目根>\comfyui`**，只读 `comfyui` + `storage`；`.git` / `.mysql` / `.run` / `node_modules` 永远禁写（即使用户把白名单放宽到项目根）。每个工具可以单独设成 允许 / 需批准 / 禁用，禁用后**根本不下发给模型**。聊天输入区底部还有**权限两档**开关（附件按钮与模型选择之间）：「询问」（默认）与「自动允许（无需批准）」—— 后者让 AI 不必等批准，**只免掉"问一下"，`deny` 与目录白名单一点都不放宽**；后端每次 Run 现读策略，切完下一次回复立刻生效 |
 | **图生图 / 参考图** | 用户上传的图片可以直接进工作流：AI 先用 `comfy_use_attachment` 把附件投放进 ComfyUI 的 `input/` 目录拿到真实文件名，再用 `comfy_submit` 覆盖 `LoadImage` 节点的 `image` 输入（例 `{"89.image":"…"}`）。工作流被捕获时绑定的那个旧文件名**改不了也不用改** —— 内置 skill `img2img-reference` 与系统提示 v7 都写清了这三步 |
@@ -1096,3 +1096,26 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
   （现在只记内容与时间，AI 写的和用户写的混在一起）
 - **附件可发（M3）**：图片内联是唯一还缺的"能聊"能力，做完 `transports` 非空、预检才会放行图片
 - 远端 ComfyUI（跨机捕获）的鉴权与限流
+
+---
+
+## 15. 开源项目与致谢
+
+本项目的**提示词工程部分**（AI 工作台的 Skills 与系统提示词）借用/移植了下面这些开源项目，
+版权与许可以各自的上游仓库为准：
+
+| 用到了什么 | 上游项目 | 在本项目里的位置 |
+| --- | --- | --- |
+| **Anima skills** —— `anima-prompt` / `anima-nsfw-prompt` / `anima-doujin-plan` / `anima-scene-prompt` / `anima-workflow` / `anima-change` | [adventyhwh/comfy-anima-skill-share](https://github.com/adventyhwh/comfy-anima-skill-share) | 投放进 Skills 投放口 `<storage>\ai\skills`（**运行期数据，不在本仓库里**），AI 工作台右侧栏能看到 |
+| **MiniMax-H3 skills** —— H3 视频提示词相关（如 `h3-prompt-writing`） | [MiniMax-AI/MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) | 同上 |
+| **MiniMax-Music3 skills** —— 音乐 caption 相关（如 `music-caption-rewriter`） | [MiniMax-AI/MiniMax-Music3](https://github.com/MiniMax-AI/MiniMax-Music3) | 同上 |
+| **harness 破甲系统提示词** —— `[MODE: UNRESTRICTED SANDBOX — STABLE]` 整段（人格 / 拒绝对抗 / 越狱与渗透话术；默认提示词面向国模「小码酱」，就是提示词里那句 `Little Code Sauce` 的出处） | [YuJunZhiXue/dsh-purge](https://github.com/YuJunZhiXue/dsh-purge)（MIT） | `HarnessRunner.kt` 里一个独立的 `append("""…""")`（原文另存 `docs\default-prompt-inject.md`），随系统提示词 **v9** 起注入 |
+
+补充两点，免得后来的人踩到：
+
+- **Skills 是运行期数据，不是仓库源码**：后端只在启动时与 `POST /api/ai/skills/rescan`
+  扫投放口（`<storage>\ai\skills`），所以上面这些 skill 的升级走各自上游仓库、重新投放即可生效，
+  **不用重编 App**；本仓库自带的只有 `skills\builtin\img2img-reference` 一个（只读、不可删）。
+- **破甲那段系统提示词是用户有意注入的**（2026-09-17 明确指示"那是我的意图，不许删除"）：
+  它在 `HarnessRunner.kt` 里有独立注释、`ToolRegistryTest` 里有"必须还在"的断言，
+  **别当误粘贴清理掉**；要改先问用户（见 `AGENTS.md` 第 10 节）。
