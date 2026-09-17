@@ -1124,6 +1124,54 @@ void main() {
     expect(find.textContaining('不再等你批准'), findsWidgets);
   });
 
+  testWidgets('(b4) 工具卡按 parts 的真实顺序插在正文之间（不重排到最后）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    // 一轮里：思考 → 正文 → 工具 → 正文。
+    // 界面上工具卡必须夹在两段正文**中间**（用户要求：完全按照消息获取顺序来）。
+    final parts = [
+      {'type': 'reasoning', 'text': '先想一想'},
+      {'type': 'text', 'text': '前半句正文'},
+      {
+        'type': 'tool_call',
+        'toolCallId': 'c1',
+        'jsonPayload': {'name': 'read_file', 'arguments': '{"path":"a.txt"}'},
+      },
+      {
+        'type': 'tool_result',
+        'toolCallId': 'c1',
+        'text': '文件内容',
+        'jsonPayload': {'name': 'read_file', 'ok': true, 'elapsedMs': 12},
+      },
+      {'type': 'text', 'text': '后半句正文'},
+    ];
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'text.delta', '{"messageId":"a1","text":"前半句正文"}') +
+        _sse(
+            4,
+            'message.completed',
+            '{"messageId":"a1","text":"前半句正文后半句正文","steps":1,'
+                '"parts":${jsonEncode(parts)}}') +
+        _sse(5, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '看看这个文件');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('read_file'), findsWidgets, reason: '工具卡要渲染出来');
+    final first = tester.getTopLeft(find.textContaining('前半句正文')).dy;
+    final card = tester.getTopLeft(find.text('read_file').first).dy;
+    final last = tester.getTopLeft(find.textContaining('后半句正文')).dy;
+    expect(card, greaterThan(first), reason: '工具卡不能跑到第一段正文前面');
+    expect(card, lessThan(last), reason: '工具卡必须夹在正文之间，不能被重排到最后');
+  });
+
   testWidgets('用户翻上去时不自动跟随，右下角给「回到最新消息」（用户建议 ③④）', (tester) async {
     tester.view.physicalSize = const Size(1000, 800);
     tester.view.devicePixelRatio = 1.0;

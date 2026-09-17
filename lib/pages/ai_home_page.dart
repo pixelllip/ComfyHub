@@ -553,6 +553,85 @@ class _MessageBubble extends StatelessWidget {
     required this.mediaPosterUrlOf,
   });
 
+  /// 气泡正文的有序块：思考 / 正文 / 工具卡，顺序 = `parts` 的顺序（= 消息获取顺序）。
+  ///
+  /// 用户明确要求"完全按照消息获取顺序来，不要将最终回复置于最终思考的前面"：
+  /// 早先这里是"所有思考与正文段先铺完、工具卡统统一坨挂在最下面"，
+  /// 一轮回复里工具卡就跑到最终正文后面去了 —— 那也是重排。
+  ///
+  /// `parts` 还没到的流式阶段退回 `segments`（只有思考与正文），
+  /// 实时累积的工具卡追加在末尾（此刻它们确实是最新的）。
+  List<Widget> _orderedBody(ThemeData theme) {
+    final m = message;
+    final streaming = m.status == 'streaming';
+    final blocks = <Widget>[];
+    final placed = <String>{};
+
+    void addSeg(String type, String text) {
+      if (text.isEmpty) return;
+      if (type == 'reasoning') {
+        blocks.add(_ReasoningPanel(text: text, streaming: streaming));
+      } else if (text.trim().isNotEmpty) {
+        blocks.add(MarkdownText(text, style: theme.textTheme.bodyMedium));
+      }
+    }
+
+    if (m.parts.isNotEmpty) {
+      // 相邻同类块合并成一段（免得一个气泡里冒出十几个碎段），但**不跨工具卡合并**
+      var type = '';
+      var buffer = StringBuffer();
+      void flush() {
+        if (buffer.isEmpty) {
+          type = '';
+          return;
+        }
+        addSeg(type, buffer.toString());
+        buffer = StringBuffer();
+        type = '';
+      }
+
+      for (final part in m.parts) {
+        if (part.type == 'reasoning' || part.type == 'text') {
+          if (part.type != type) {
+            flush();
+            type = part.type;
+          }
+          buffer.write(part.text ?? '');
+          continue;
+        }
+        if (part.type != 'tool_call') continue;
+        flush();
+        final call = toolCalls.where((c) => c.callId == part.toolCallId).firstOrNull;
+        if (call == null) continue;
+        placed.add(call.callId);
+        blocks.add(_toolCard(call));
+      }
+      flush();
+    } else {
+      for (final seg in segments) {
+        addSeg(seg.type, seg.text);
+      }
+    }
+
+    // 还没归位的工具卡（流式过程中 parts 尚未到达 / parts 里没记的）追加在末尾
+    for (final call in toolCalls) {
+      if (placed.contains(call.callId)) continue;
+      blocks.add(_toolCard(call));
+    }
+    return blocks;
+  }
+
+  Widget _toolCard(AiToolCallState call) => Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: _ToolCallCard(
+          key: ValueKey('${message.id}-${call.callId}'),
+          call: call,
+          category: toolCategoryOf(call.name),
+          onApprove: onApprove,
+          onDeny: onDeny,
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -577,13 +656,11 @@ class _MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 思考过程与正文**按流顺序**交替渲染（用户要求：如实显示，不合并、不重排）。
-              // 思考段默认折叠，收起时给一段摘要；正文段照旧走 Markdown。
-              for (final seg in segments)
-                if (seg.isReasoning)
-                  _ReasoningPanel(text: seg.text, streaming: m.status == 'streaming')
-                else if (seg.text.trim().isNotEmpty)
-                  MarkdownText(seg.text, style: theme.textTheme.bodyMedium),
+              // 思考 / 正文 / 工具卡**按 parts 的真实顺序**交错渲染
+              // （用户要求：完全按照消息获取顺序来，不重排）。
+              // 后端给的 parts 就是权威的有序块；`segments` 是它的降级版本（只有思考与正文段），
+              // 流式过程中 parts 还没到，就用它 + 末尾追加还没归位的工具卡。
+              ..._orderedBody(theme),
               // 附件块（只出现在用户轮）
               for (final part in m.parts)
                 if (part.type == 'attachment')
@@ -615,24 +692,8 @@ class _MessageBubble extends StatelessWidget {
                     Text('正在生成…', style: theme.textTheme.bodySmall),
                   ],
                 ),
-              // 工具卡（M4）：按调用顺序排在正文下面
-              if (toolCalls.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (final call in toolCalls)
-                        _ToolCallCard(
-                          key: ValueKey('${m.id}-${call.callId}'),
-                          call: call,
-                          category: toolCategoryOf(call.name),
-                          onApprove: onApprove,
-                          onDeny: onDeny,
-                        ),
-                    ],
-                  ),
-                ),
+              // 工具卡已经在 [_orderedBody] 里按 parts 的真实顺序插好了 ——
+              // 这里**不能再统一补一坨**，否则又变回"工具卡全排到最后"。
               if (pending.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
