@@ -499,7 +499,7 @@ class ToolRegistry(
             category = ToolCategory.COMFY,
             mutating = true,
             // 要往用户机器上写文件（ComfyUI input 目录）→ 默认要批准；
-            // 切到「完全权限」后就不必等了（用户建议 ⑤）
+            // 切到「自动允许（无需批准）」后就不必等了（用户建议 ⑤）
             defaultAccess = ToolAccess.ASK,
         ) { args, _ ->
             val attachmentId = args.str("attachmentId")

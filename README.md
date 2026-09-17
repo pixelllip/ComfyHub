@@ -16,13 +16,13 @@
 | **AI 工具调用** | 助手会**真的动手**：查 ComfyUI 状态 / 按 runKey 查一次运行 / 触发一次历史同步（要用户批准）、在 **ComfyUI 目录内**读写文件（越界直接拒绝）。工具卡显示名字、参数摘要、状态（运行中 / 待批准 / 已完成 / 失败 / 已拒绝）、耗时与结果预览，可在卡片上点「批准 / 拒绝」；一次回复最多 8 轮工具、单 Run 有调用次数上限，到顶就逼模型用正文收尾（见 [docs/ai-tools-and-skills.md](docs/ai-tools-and-skills.md)） |
 | **AI Skills** | 磁盘上的 `SKILL.md` 就是真源：**跟 AI 说一句「把这个流程注册成 skill」它就用 `register_skill` 写到本机**，右侧栏立刻能看到、能删（内置的只读），**改动不用重启 App，下一次回复就生效**。装 skill 的方式是**投放口**：把 skill 文件夹（或一个 `.md`）拷进右侧栏显示的那个目录（`<storage>\ai\skills`，源码树 / 发布包都由后端算好绝对路径，带「打开文件夹 / 复制路径」），**后端启动时自动登记** —— 没有 frontmatter 的文件会被补上 `name`（文件名 kebab-case）与 `description`（正文第一行），正文一字不改；应用开着时点一下刷新（重新扫描）即可，不用重启。系统提示只注入名称 + 描述（`description: \|` 这类多行块标量也能正确读取并压成一行），正文由 `load_skill` 按需加载；非法 frontmatter 会带诊断列出但不参与对话 |
 | **长期记忆** | 右侧栏「长期记忆」面板 + `remember` 工具：真源是一个**人能看、能手改**的 `<storage>\ai\memory.md`（一行一条）。每次 Run 都会**现读并注入系统提示**，所以"以后每次对话都带上它"是自然结果；编辑器可以整篇改、加一条、清空（清空要确认）。记忆与工具输出一样是**数据不是指令**（系统提示 v3 明写），单条 / 总量都有硬上限，超限**报错**而不是悄悄截断 |
-| **AI 工具权限** | 设置页新增「AI 工具权限」：默认**只能写 `<项目根>\comfyui`**，只读 `comfyui` + `storage`；`.git` / `.mysql` / `.run` / `node_modules` 永远禁写（即使用户把白名单放宽到项目根）。每个工具可以单独设成 允许 / 需批准 / 禁用，禁用后**根本不下发给模型**。聊天输入区底部还有**权限两档**开关（附件按钮与模型选择之间）：「询问」（默认）与「完全权限」—— 后者让 AI 不必等批准，**只免掉"问一下"，`deny` 与目录白名单一点都不放宽**；后端每次 Run 现读策略，切完下一次回复立刻生效 |
+| **AI 工具权限** | 设置页新增「AI 工具权限」：默认**只能写 `<项目根>\comfyui`**，只读 `comfyui` + `storage`；`.git` / `.mysql` / `.run` / `node_modules` 永远禁写（即使用户把白名单放宽到项目根）。每个工具可以单独设成 允许 / 需批准 / 禁用，禁用后**根本不下发给模型**。聊天输入区底部还有**权限两档**开关（附件按钮与模型选择之间）：「询问」（默认）与「自动允许（无需批准）」—— 后者让 AI 不必等批准，**只免掉"问一下"，`deny` 与目录白名单一点都不放宽**；后端每次 Run 现读策略，切完下一次回复立刻生效 |
 | **图生图 / 参考图** | 用户上传的图片可以直接进工作流：AI 先用 `comfy_use_attachment` 把附件投放进 ComfyUI 的 `input/` 目录拿到真实文件名，再用 `comfy_submit` 覆盖 `LoadImage` 节点的 `image` 输入（例 `{"89.image":"…"}`）。工作流被捕获时绑定的那个旧文件名**改不了也不用改** —— 内置 skill `img2img-reference` 与系统提示 v7 都写清了这三步 |
 | **提示词库** | 新建 / 编辑 / 复制 / 删除；区分「生图 / 生视频 / 生音频 / 混合」；正向 + 负向提示词；模型、采样器、调度器、步数、CFG、Seed、宽高、批量、LoRA 列表、备注、收藏；**多选批量管理**（收藏 / 取消收藏 / 加标签 / 删除）；**没有关联任何产物的提示词会挂一个橙色「未关联」标记**（产物被删掉之后就是这种状态），可以按「未关联产物」筛选，也可以**一键清除**（先报条数 + 前几条标题再确认，按批循环删除，超过单页 200 条也不会漏） |
 | **ComfyUI 自动捕获** | ComfyUI 里跑完一次生成，**提示词 + 全部参数 + 完整工作流 + 生成的图片/视频/音频**自动进库并互相关联；不需要改动工作流，也不需要装任何东西（装一个可选的推送节点可以做到零延迟） |
 | **历史产物导入** | 指向 ComfyUI 的 output 目录，把**以前生成好的**图连同图片里内嵌的 `prompt` / `workflow` 一起收进来，自动建提示词并关联 |
 | **搜索** | 关键词匹配（标题 / 正向 / 负向 / 备注 / 模型名，兼容中文）；按标签筛选（任一 / 全部）；按类型、收藏过滤；多种排序；分页 |
-| **产物画廊** | 批量上传（图片 / 视频 / 音频，自动识别类型）；缩略图网格；类型 / 标签 / 收藏 / 未关联过滤；多选批量「关联提示词 / 收藏 / 删除」；**右键单个产物**弹出「关联提示词 / 收藏 / 删除」；**「清除未关联产物」**一键清掉提示词被删后留下的孤儿产物（同样先报条数再确认） |
+| **产物画廊** | 批量上传（图片 / 视频 / 音频，自动识别类型）；缩略图网格（**视频格子显示抽出的第一帧封面**，见 `GET /api/media/{id}/poster`）；类型 / 标签 / 收藏 / 未关联过滤；多选批量「关联提示词 / 收藏 / 删除」；**右键单个产物**弹出「关联提示词 / 收藏 / 删除」；**「清除未关联产物」**一键清掉提示词被删后留下的孤儿产物（同样先报条数再确认） |
 | **详情闭环** | 打开任意产物 → 直接显示**关联的提示词全文**（提示词正文一张卡）、**生成参数**（模型 / 采样器 / 调度器 / 步数 / CFG / Seed / 尺寸 / 批量，以及**逐个列出的 LoRA**，点一下复制 `<lora:名字:权重>`）单独一张卡、标签，可一键跳转到提示词详情；**右键图片 / 视频 / 音频**即可复制文件地址、文件名、正向 / 负向提示词；支持更换 / 解除关联；**视频按长边铺满预览区并支持全屏播放**（全屏页接着当前位置继续放，Esc 退出），解码出第一帧前先显示**封面预览图**（后端用 Windows 缩略图管线抽帧并缓存）；自动捕获的还能**查看完整工作流 JSON**（界面格式可拖回 ComfyUI 复现；agent / 脚本提交的运行只有 API 格式节点图，存成 `.json` 拖进 ComfyUI 也能加载） |
 | **标签体系** | 全局词表 + 分类 + 颜色 + 使用次数；标签详情页同时列出该标签下的提示词与产物 |
 | **媒体播放** | 图片用**大图查看器**：滚轮以鼠标位置为中心缩放、按住拖动平移、右下角缩略图指示当前看到的位置（点缩略图可直接跳过去）、左下角显示倍数并可一键适应窗口；视频内嵌播放（Windows Media Foundation，支持拖动进度）；音频用**紧凑播放器**（标题 + 播放行两行，限宽居中，不再占掉大半屏）；均可用系统默认播放器打开 |
@@ -912,6 +912,21 @@ App 自己的文案都是中文，但文本框右键的「复制 / 全选 / 剪�
 550 是"一行中文提示词读起来不费劲"的经验值：再宽眼睛就要来回扫。新增列表页时直接套这两个组件，
 不要自己写 `ListView` 的单列布局。
 
+### 10.3 弹出菜单一律用 `AppMenuButton` / `showAppContextMenu`
+
+`lib/widgets/app_menu.dart`（按钮下拉）与 `lib/widgets/context_menu.dart`（右键菜单）是**唯一**的两套菜单实现，
+页面根部挂一个 `ContextMenuScope` 就能用 `showAppContextMenu`。
+
+**不要改回 `PopupMenuButton` / `showMenu`**（用户 bug ②）：它们推的 `_PopupMenuRoute` 会铺一层铺满窗口的
+`ModalBarrier`，而屏障的 `RawGestureDetector(behavior: HitTestBehavior.opaque)` 在命中测试里
+**第一个命中就终止整条路径** —— 菜单一开，底下列表的滚轮与拖动全部失效（上游 flutter/flutter#90223
+至今未修，也没有任何公开开关能关掉它）。新实现走 `OverlayPortal` + `TapRegion`：不铺屏障，
+菜单只占自己那一小块，外面照常滚、照常点。回归在 `test/menu_scroll_test.dart`。
+
+一个**踩过的坑**：`showAppContextMenu(context, ...)` 的 `context` 必须是**在 `ContextMenuScope` 里面**的
+那一个。页面的 `State.context` 在 Scope 外面（页面 `build` 才 `return ContextMenuScope(...)`），
+拿它去找宿主必然找不到 —— 所以画廊/详情页是把"格子/预览区"的 context 传进右键处理函数的。
+
 ---
 
 ## 11. 测试
@@ -936,6 +951,7 @@ pwsh -File scripts\server.ps1 test   # 后端 126 个用例
 | `test/zoomable_image_test.dart` | **大图查看器**：滚轮缩放（含上下限）、放大后拖动平移、缩略图只在放大后出现且高亮框跟着视野走、点缩略图跳转、适应窗口复位、图片加载失败兜底 |
 | `test/adaptive_layout_test.dart` | **多列布局**：列数规则（宽度 / 550、上限 4 列、异常宽度退回单列）、宽窗口排两列 / 窄窗口退回单列、设置页那种瀑布流把块放进最矮的一列 |
 | `test/context_menu_test.dart` | **右键菜单**：画廊缩略图右键弹出「关联提示词 / 收藏 / 删除」并真的发出 PATCH / DELETE、删除前必须确认；详情页右键图片弹出复制项，复制到剪贴板的是完整文件地址 / 提示词全文 |
+| `test/menu_scroll_test.dart` | **弹出菜单不吃滚动、不吃点击**（用户 bug ②）：菜单开着时底下的列表照样能滚（并顺带收起菜单）；菜单外的点击能穿透到页面；右键菜单同理。这条钉的是"别再改回 `PopupMenuButton` / `showMenu`"（它们铺的 `ModalBarrier` 会把整页的滚轮和拖动全吃掉） |
 | `test/prompt_batch_test.dart` | **提示词批量管理**：宽窗口分两列；多选后批量收藏（只打勾的那几条）、批量加标签（走追加标签接口）、批量删除（先确认再逐条 DELETE） |
 | `test/tags_layout_test.dart` | 标签页在宽窗口分两列，超长分类 / 说明只截断一行，不会把固定高度的卡片撑破 |
 | `test/settings_layout_test.dart` | 设置页宽窗口分列；开关行（「开启自动捕获」这些）左右都留出内边距，不贴卡片边缘；**「AI 模型与凭据」排在「ComfyUI 自动捕获」之前** |
@@ -1047,6 +1063,7 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 | `VHS_VideoCombine` 生成的视频没被捕获 | 它默认把视频写成 `type=temp`（预览临时目录），而自动捕获只收 `output` 类产物 | 工作流里把 `save_output` 打开（或在节点配置里设 `includeTemp: true`），这类视频才会进库 |
 | `server.ps1` 在数据库起不来时仍然硬拉起后端 JVM | PowerShell 里 `& script.ps1` 的 **stdout 会成为表达式的返回值**，`$mysqlOk` 被输出数组污染后永远为真，`if (-not $mysqlOk)` 形同虚设 | 调用处加 `| Out-Null`（`Ensure-MySql` 只关心退出/返回值），失败时直接抛「数据库不可用」而不是留一个连不上库的后端 |
 | `mysqld` 相关判断时好时坏 | Windows 上 MySQL 8 是**父进程 + 真正的服务子进程**两个 `mysqld.exe`；`CommandLine` 里的路径还可能带引号 | 匹配命令行时两边都去引号再比；状态行打印完整 PID 列表（以前只打进程个数，显示成 `PID 2` 很误导） |
+| 后端新功能点了没反应（实测：切「自动允许（无需批准）」界面又跳回「询问」） | `<项目根>\server\build\install\...\lib\comfy-hub-server-1.0.0.jar` 是**旧构建**：`gradle build` 只更新 `build\libs`，**不会**同步 `build\install`（那是 `installDist` 的产物），而后端跑的是 install 那份。于是 `/api/ai/tools/policy` 的响应里根本没有 `permissionMode` 字段，Dart 侧按最保守的「询问」解析（用户 bug ①） | 重建后**必须**跑一次 `installDist` 再重启：`gradle -p server installDist`（`pwsh -File scripts\server.ps1 start` 本来就会做，但 `build` 之后直接 `start` 时 Gradle 可能判它 up-to-date）。查证一条命令：`javap -p -classpath <install jar> com.comfyhub.ai.ToolPolicyDto \| Select-String permissionMode` |
 | App 启动页日志刷 `FormatException: Missing extension byte (at offset 12)`，中文变乱码 | pwsh 在 stdout 被**重定向**时跟随控制台代码页输出（中文系统是 936/GBK），而 App 是按 UTF-8 解的 —— 报错 offset 正好落在第一个中文字符上（`  ComfyHub 启…` 的 `启`） | 三个脚本顶部在 `[Console]::IsOutputRedirected` 时把 `[Console]::OutputEncoding` 钉成 UTF-8（不动用户的交互式终端）；App 侧解码再加 `allowMalformed` 兜底，一行坏字节不再打断整个日志流。实测 CP=936 下：旧脚本 `ce b4 d4 cb`（GBK），新脚本 `e8 bf 90 e8 a1 8c`（UTF-8） |
 | 冷启动要 10 秒往上，其中一多半是在"干等" | "服务起来没有"的探测直接去连 127.0.0.1 上一个没人监听的端口，本机要等 **SYN 重传 ≈ 2 秒**（`mysqladmin ping` / `Invoke-RestMethod` / 裸 `TcpClient` 实测都是 2.04~2.08s；开着 Clash/mihomo 这类 TUN 代理时 RST 被吃掉更明显），而冷启动时"还没起来"恰恰是常态，一次启动里要撞好几次 | 所有存活探测先过 `Test-TcpPort`（`BeginConnect` + 200ms 超时，端口开着时和正常连接一样快），确认端口开了再去做权威的 ping / 健康检查；轮询间隔 700/800ms 收紧到 200ms。实测 `up -SkipBuild`：**10.8~11.2s → 7.6~7.7s**（后台耗时未变：MySQL 1.7s + JVM 1.9s 是真实启动时间） |
 | 自动捕获的提示词是空的（真实的视频工作流） | 参数解析只认「采样器自己身上有 `steps`/`cfg`」的经典图；而 MiniMax H3 这类图是 `SamplerCustomAdvanced` + `BasicGuider` + `BasicScheduler` + `KSamplerSelect` + `RandomNoise`，参数散在兄弟节点上，文本提示词在条件节点的 `prompt` 输入里 | 改成顺着 `sigmas` / `sampler` / `noise` / `guider` 把链走一遍，并统一从「条件节点」的文本输入取提示词；补了 `GraphParseTest` 把这几个真实结构钉住 |
@@ -1080,8 +1097,10 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
   代价是切进切出时多解码一次（本地文件，可接受）。
 - **「未关联」标记不代表出错**：还没关联过产物的提示词（例如手工新建的）同样是 `mediaCount == 0`，
   所以也会挂上这个橙色标记；它只表示"当前不对应任何产物"。
-- **没有视频缩略图**：服务端不调用 ffmpeg，因此视频格子在画廊里显示的是播放图标占位，不是首帧。
-  （视频**详情页**的封面预览图走的是 Windows 缩略图管线抽帧，见 `docs/ai-home-progress-v0.1.md`。）
+- **视频格子用抽帧封面，不是 ffmpeg 缩略图**：画廊格子的视频预览图走 `GET /api/media/{id}/poster`
+  （Windows 资源管理器缩略图管线抽第一帧并缓存在 `storage/thumbs/<id>.poster.png`），
+  所以首次显示要等 ~1.5s 抽帧；抽不出来（缺解码器）时退化成电影图标占位，**不是破图**。
+  同样刻意不引入 ffmpeg（那要分发几十 MB 的二进制）。
 - **中文检索用 LIKE 而非 FULLTEXT**：MySQL 默认分词器对中文支持差（`ngram` 需额外配置），所以用多词 AND 的 `LIKE` 匹配。
 - **自动捕获有轮询延迟**：默认 4 秒一次（可调到 1 秒），想要零延迟就装自定义节点（见 6.2）。
 - **只有 PNG 能还原提示词**：历史导入时，PNG 内嵌的 `prompt` / `workflow` 才能反推出参数；

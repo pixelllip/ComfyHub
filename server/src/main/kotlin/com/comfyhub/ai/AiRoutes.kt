@@ -921,7 +921,7 @@ data class ToolPolicyDto(
     val maxWriteBytes: Int = 0,
     /** 出厂默认的写入目录（界面里显示"默认只能写这里"） */
     val defaultWriteRoot: String? = null,
-    /** 权限档：ask（默认，需要审批的工具要用户点批准）/ full（完全权限，AI 无需批准） */
+    /** 权限档：ask（默认，需要审批的工具要用户点批准）/ full（自动允许（无需批准），AI 无需批准） */
     val permissionMode: String = ToolPolicyConfig.PERMISSION_ASK,
 )
 

@@ -106,12 +106,18 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
 2. **逐工具三态**：`allow` 直接执行、`ask` 弹工具卡等用户点批准、`deny` **根本不下发给模型**
    （与其让模型看见再被骗着调用，不如不让它知道）。用户覆盖记在 `app_settings` 的 `ai.tools.policy`。
 3. **审批超时 = 拒绝**：默认 5 分钟没人点、或 Run 被取消，都按拒绝处理 —— 绝不允许"没人管就默认执行"。
-4. **权限两档（用户建议 ⑤，2026-09-17）**：`ai.tools.policy.permissionMode` = `ask`（默认）/
-   `full`（完全权限），在 AI 工作台输入区底部、附件按钮与模型选择之间切换。
+4. **权限两档（用户建议 ⑤，2026-09-17）**：`ai.tools.policy.permissionMode` = `ask`（默认，界面叫
+   「询问」）/ `full`（界面叫「自动允许（无需批准）」），在 AI 工作台输入区底部、附件按钮与模型选择之间切换。
    `full` 只把 `ask` 放宽成 `allow`：**`deny` 不放宽、路径白名单不放宽**（越界写照样被拒，
    回归用例 `ToolPolicyTest` 盯着这两条）。后端每次 Run 现读策略，所以切完档**下一次回复立刻生效**
-   ——系统提示里会即时写明"本次是完全权限档"（`SystemPrompt.VERSION` 由 v5 提到 v7：
-   v6 = 权限档，v7 = 图生图那三步纪律）。
+   ——系统提示里会即时写明"本次是自动允许（无需批准）档"（`SystemPrompt.VERSION` 由 v5 提到 v8：
+   v6 = 权限档，v7 = 图生图那三步纪律，v8 = 档位改名）。
+   > 名字的由来（用户建议）：「完全权限」听着像"什么都能干"，其实它只免掉"问一下"，文件夹白名单
+   > 一点都没放宽 —— 所以改叫「自动允许（无需批准）」。界面上那两个名字是
+   > `AiToolPolicy.modeAskLabel` / `modeFullLabel`（Dart 侧真源），系统提示里与它们一字不差。
+   > **踩过的坑**：`/api/ai/tools/policy` 的响应里如果没有 `permissionMode` 字段（后端是旧构建），
+   > 前端会按最保守的「询问」解析 —— 表现就是"点了自动允许，界面又跳回询问"（用户 bug ①）。
+   > `AiWorkspaceStore.setPermissionMode` 现在会比对后端**回显**的档位，不一致就明说"后端还是旧构建"。
 
 > 移植自 DSH 的两个细节：工具的 JSON Schema 里 `additionalProperties: false`（模型乱加参数会当场报错，
 > 而不是悄悄忽略）；工具结果**视为不可信数据**，写进系统提示第 4 条（防提示注入，对应 RSK-004）。

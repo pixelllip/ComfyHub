@@ -459,7 +459,7 @@ class ToolRegistryTest {
     }
 
     @Test
-    fun `完全权限档下提示词明说本次不必等批准 且写明目录没有放宽`() {
+    fun `自动允许档下提示词明说本次不必等批准 且写明目录没有放宽`() {
         val e = env()
         val full = ToolPolicy(e.root, ToolPolicyConfig(permissionMode = ToolPolicyConfig.PERMISSION_FULL))
         val text = SystemPrompt.render(
@@ -476,7 +476,7 @@ class ToolRegistryTest {
             policy = full,
             registry = e.registry,
         )
-        assertTrue(text.contains("完全权限"), "要把当前档位如实告诉模型（即时注入）")
+        assertTrue(text.contains("自动允许（无需批准）"), "要把当前档位如实告诉模型（即时注入）")
         assertTrue(text.contains("不必再等批准"))
         // 关键：说清"免的只是问一下"，白名单没动
         assertTrue(text.contains("一点都没放宽"))

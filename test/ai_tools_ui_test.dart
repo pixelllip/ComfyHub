@@ -873,6 +873,75 @@ void main() {
     expect(rec.lastPolicyPut, contains('"read_file":"deny"'));
   });
 
+  testWidgets('(e1b) 逐工具设成「允许」后界面真的显示「允许」，不是悄悄回落到「询问」', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    // 假后端要像真后端一样"按覆盖重算生效权限"，否则这条用例只是自欺欺人
+    var tools = [
+      _tool('read_file', category: 'files', access: 'ask'),
+      _tool('write_file', category: 'files', access: 'ask'),
+    ];
+
+    await tester.pumpWidget(MaterialApp(
+      home: AiToolsSettingsPage(
+        api: AiApiClient(
+          'http://127.0.0.1:8080',
+          client: MockClient((request) async {
+            final path = request.url.path;
+            Object body;
+            if (path == '/api/ai/tools' && request.method == 'GET') {
+              body = tools;
+            } else if (path == '/api/ai/tools/policy' && request.method == 'PUT') {
+              final sent = jsonDecode(request.body) as Map<String, dynamic>;
+              rec.policyPuts.add(sent);
+              final overrides = (sent['overrides'] as Map?)?.cast<String, dynamic>() ?? {};
+              tools = [
+                for (final t in tools)
+                  {...t, 'access': overrides[t['name']] ?? t['access'], 'overridden': overrides.containsKey(t['name'])},
+              ];
+              body = {
+                'writeRoots': const [r'D:\ComfyHub\comfyui'],
+                'readRoots': const [r'D:\ComfyHub\comfyui'],
+                'overrides': overrides,
+                'defaultWriteRoot': r'D:\ComfyHub\comfyui',
+              };
+            } else if (path == '/api/ai/tools/policy') {
+              body = {
+                'writeRoots': const [r'D:\ComfyHub\comfyui'],
+                'readRoots': const [r'D:\ComfyHub\comfyui'],
+                'defaultWriteRoot': r'D:\ComfyHub\comfyui',
+              };
+            } else {
+              body = <Object>[];
+            }
+            return http.Response(jsonEncode(body), 200,
+                headers: {'content-type': 'application/json; charset=utf-8'});
+          }),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // 逐工具权限是页面上唯一的 DropdownButton：第一行就是 read_file，第二行是 write_file
+    final dropdowns = find.byType(DropdownButton<String>);
+    expect(dropdowns, findsNWidgets(2), reason: '两个工具两行下拉');
+    final dropdown = dropdowns.at(1);
+    await tester.ensureVisible(dropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(dropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('允许').last);
+    await tester.pumpAndSettle();
+
+    expect(rec.policyPuts.last['overrides'], containsPair('write_file', 'allow'));
+    // 关键（用户报的「点了允许，实际还是询问」）：界面上要如实显示生效后的档位
+    expect(find.text('允许'), findsWidgets);
+    expect(find.text('询问'), findsWidgets, reason: 'read_file 还是询问，别的行不受影响');
+  });
+
   testWidgets('(e2) 加一个写目录会 PUT writeRoots', (tester) async {
     tester.view.physicalSize = const Size(1400, 1600);
     tester.view.devicePixelRatio = 1.0;
