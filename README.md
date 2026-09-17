@@ -253,6 +253,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQ
 | `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
 | `scripts\check-silent-start.ps1` | **静默启动自测**：启动服务的同时盯屏，报告有没有弹出 cmd / 控制台窗口（加 `-Restart` 从零走一遍） |
 | `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成） |
+| `scripts\e2e-submit-test.ps1` | **AI 提交任务端到端自测**（假网关 + 假 ComfyUI）：批准闸门 / 真的提交 / 参数覆盖 / 产物入库，6 项断言，不出网不花钱 |
 | `scripts\e2e-ai-tools-test.ps1` | **AI 工具循环 + Skills + 附件端到端自测**（假 OpenAI 流式网关 `scripts\e2e\fake_openai.py`，不需要真 API Key、不出网：注册 / 按需加载 / 越界写被拒 / 目录内写成功 / 审批闸门 / 只读工具 / 长期记忆 / **附件上传·缩略图·图片内联·零上游请求**） |
 | `scripts\install-comfy-node.ps1` | （可选）把捕获节点装进 ComfyUI，实现「跑完立刻捕获」 |
 | `scripts\anima-gen.ps1` | **Anima 生图执行器**：向本机 ComfyUI 提交一次文生图并等落盘（`-PromptFile/-NegativeFile/-Width/-Height/-Seed/-Prefix`） |
@@ -367,6 +368,7 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `GET` | `/api/capture/jobs` | **实时进度**：队列运行/等待数、正在跑的工作流名、最近提交的任务（AI 工作台右侧栏轮询它；只刷队列，不触发入库扫描） |
 | `GET` | `/api/capture/locate` | **探测 ComfyUI 装在哪**（只读）：根目录 / 输出目录 / 来源 / 候选与否决原因 |
 | `POST` | `/api/capture/locate/apply` | 把探测到的输出目录写进配置（用户在设置页点「使用这个目录」时调） |
+| `GET` | `/api/prompts/{id}/api-graph` | 该提示词的 **API 格式**节点图（提交给 ComfyUI `/prompt` 用的那一份；老数据没有则 204） |
 | `POST` | `/api/capture/poll` | 立刻轮询一次（App 的「立即同步」） |
 | `POST` | `/api/capture/import` | 导入某个目录里已有的产物（读 PNG 内嵌元数据） |
 | `POST` | `/api/ingest/comfyui` | 捕获入口，供自定义节点 / 外部脚本推送 |

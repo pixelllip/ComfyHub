@@ -276,3 +276,13 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   源码形态 = `main.py` + `comfy/`；任何形态 = `output/` + `models/` 或 `input/`。
   改判据要同时改两边，否则会出现"App 说找到了、脚本说找不到"。
   探测**只读**，写配置必须由用户点「使用这个目录」（`POST /api/capture/locate/apply`）。
+- **`capture_runs` 的 `empty` / `error` 是可重试状态**（`CaptureRepo.canReclaim`）：
+  ComfyUI 的 `/history` 先出现记录、产物文件晚到是常态，把 `empty` 当终态就会出现
+  "AI 说生成了、画廊里却没有"。只有 `success` 才是"不再重复收"的终态，改这段前先看
+  `CaptureRunRetryTest`。
+- 改完这一块请跑两条端到端（都不出网、不花钱）：
+  `pwsh -File scripts\e2e-submit-test.ps1`（提交链路）与
+  `pwsh -File scripts\e2e-capture-test.ps1`（捕获链路）。它们会临时改自动捕获配置、
+  建一个 loopback Provider，跑完自己还原并清理数据；`-KeepData` 可以留着看效果。
+  **别在跑完前 Ctrl+C**：清理在 finally 里，中断会留下 `e2e-submit-*` 的运行记录，
+  而那会把下一次捕获 e2e 的 SHA-256 判重弄乱（实测踩过：表现为"新导入 0 个"）。

@@ -146,10 +146,13 @@
    （`comfy_submit`、`comfy_sync_history`、`delete_skill` 都是 `ask`）。
 7. **长期记忆的进阶**：按类别分组 / 命中检索（现在是全量注入 + 截断）、"这条是谁写的"审计。
 8. 事件表保留策略：`AiRunRepo.pruneEvents()` 已写好但还没接到定时任务。
-9. **`comfy_submit` 的真实环境验证**：假 ComfyUI 的路径没铺（`e2e-capture-test.ps1` 只有捕获），
-   目前靠 `WorkflowEditTest` 覆盖参数改写的纯逻辑；真机上让 AI 提交一次任务还没实测过。
+9. **`comfy_submit` 的真实 ComfyUI 验证**：整条链路已经用**假 ComfyUI** 端到端跑通
+   （`scripts\e2e-submit-test.ps1`，6 项断言），但**没在真 ComfyUI 上让 AI 提交过一次** ——
+   真机的差异主要在：工作流里的模型文件名是否存在、节点参数类型、以及大图/视频的等待时长。
 10. **提交任务的取消**：ComfyUI 支持 `POST /interrupt` 与 `/queue` 删除，
     现在 AI 提交之后没有"停止这次生成"的入口（用户要停只能去 ComfyUI 界面点）。
+11. **预览节点的产物**：`/history` 里 `PreviewImage` 这类节点的文件在 ComfyUI 的 `temp` 目录，
+    现在只收 `type=output` 的产物（这是有意的：预览图不该进库）。要支持得先想清楚去重与清理。
 
 ## 4.1 用户提的 bug / 建议清单（`docs/bug-and-suggestion-9.16.md`）对照
 
@@ -426,9 +429,23 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 - **探测结果不自动生效**：`/locate` 只回答"在哪"，写配置是另一个接口（用户点「使用这个目录」）。
   认错目录的代价是"捕获一条也收不到"，所以判据宁可严（只有一个空 `output/` 不算）。
 
-验证：后端 **278** 例全通过（新增 `ConversationTitleTest` 11 例、`WorkflowEditTest` 9 例、
-`ComfyLocatorTest` 8 例），前端 **157** 例全通过（新增画廊入口卡与实时进度 2 例），
-`flutter analyze` 无问题；`scripts\comfyhub.ps1 doctor` 实测会打印 `ComfyUI 目录` 一行。
+验证：后端 **285** 例全通过（新增 `ConversationTitleTest` 13 例、`WorkflowEditTest` 9 例、
+`ComfyLocatorTest` 8 例、`CaptureRunRetryTest` 6 例），前端 **157** 例全通过
+（新增画廊入口卡与实时进度 2 例），`flutter analyze` 无问题。
+
+**真机端到端实测**（真后端 + 真 MySQL + 假网关 + 假 ComfyUI，不出网、不花钱）：
+
+| 脚本 | 验的是什么 | 结果 |
+| --- | --- | --- |
+| `scripts\e2e-submit-test.ps1`（本轮新增） | 提交任务整条链路：工具默认 `ask`（不批准就不提交）→ 批准后才真的 `POST /prompt` → 参数覆盖按类型生效 → 产物入库并返回 `mediaIds` | ✓ 全部通过（6 项断言） |
+| `scripts\e2e-capture-test.ps1` | 捕获侧没被这轮改动弄坏（轮询 / 幂等 / 目录导入 / 推送） | ✓ 全部通过 |
+| `scripts\comfyhub.ps1 doctor` | 会打印探测到的 `ComfyUI 目录` 与输出目录 | 实测打印正常（本机没装 ComfyUI，如实显示"没找到"） |
+
+顺带修掉一个**实测才暴露的缺陷**：`capture_runs` 的 `empty` / `error` 原本是终态，
+于是一旦 `ComfyUI /history` 先出现记录、产物文件晚到（或后台轮询抢在提交者前面），
+这次运行就**永远**收不回来了 —— 表现正是"AI 说生成了、画廊里却没有"这种最难查的现象。
+现在这两种状态可重试（`success` 仍是唯一不再重复收的终态），判据抽成纯函数
+`CaptureRepo.canReclaim()` 并有 6 例单测盯着。
 
 ### 4.10 测试瘦身：删掉重复与占位项，留下回归防线（2026-09-16）
 
