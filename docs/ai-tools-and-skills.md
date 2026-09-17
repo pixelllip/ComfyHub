@@ -46,6 +46,29 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `comfy_sync_history` | comfy | **ask** | 会写我们的库，按 DEC-005 默认要审批 |
 | `comfy_find_workflow` | comfy | allow | 搜库里**能直接跑**的工作流（标注 `runnable` = 有没有 API 节点图） |
 | `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数，跑完直接入库；会消耗显卡时间，默认要审批 |
+| `comfy_use_attachment` | comfy | **ask** | 把用户发来的**图片附件**投放进 ComfyUI 的 `input/` 目录并返回真实文件名（用户 bug，2026-09-17）：图生图 / 参考图的唯一正路，默认要审批（往用户机器上写文件） |
+
+### 2.1.1 图生图为什么要单独一个工具（2026-09-17）
+
+用户报的原话：「工作流的 LoadImage（节点 89）读的是它自己被捕获时绑定的那张 jpg，
+我只能改文本，改不了这个文件名」。根因是 **LoadImage 的 `image` 输入只能是 ComfyUI
+`input/` 目录里真实存在的文件名**，而那个名字是工作流被捕获时留下的，跟我们库里的附件毫无关系。
+
+所以正路只有一条，写进了系统提示 v7 与内置 skill `img2img-reference`：
+
+1. `comfy_use_attachment(attachmentId)` → 拿到投放后的 `filename`；
+2. `comfy_find_workflow(includeGraph=true)` → 找到 `LoadImage` 节点的 id 与输入名；
+3. `comfy_submit(overrides={"<节点id>.image": "<filename>"})`。
+
+几条纪律：
+
+- **文件名由后端算**：`<原文件名>-<附件 id 前 8 位>.<扩展名>`。同一个附件重复投放得到同一个名字
+  （重跑工作流不会指向一个已经消失的文件），不同附件即使原文件名相同也不会互相覆盖。
+- **只投图片**：非图片附件直接报 `NOT_AN_IMAGE`；找不到 ComfyUI 报 `COMFY_NOT_FOUND`，
+  **不猜路径、不在随机位置建目录**。
+- **附件 id 要交给模型**：用户轮正文末尾会附「这条消息里的图片附件：id=…」。
+  **没随本次请求内联的图也算** —— 文件在库里，纯文本模型照样能拿它当参考图（但不能假装看过图内容）。
+- 提示词里明确禁止"改不了文件名所以做不了"这种半途而废的答复。
 
 ### 2.1 提交任务（`comfy_submit`）的几条纪律（2026-09-17）
 
@@ -83,6 +106,12 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
 2. **逐工具三态**：`allow` 直接执行、`ask` 弹工具卡等用户点批准、`deny` **根本不下发给模型**
    （与其让模型看见再被骗着调用，不如不让它知道）。用户覆盖记在 `app_settings` 的 `ai.tools.policy`。
 3. **审批超时 = 拒绝**：默认 5 分钟没人点、或 Run 被取消，都按拒绝处理 —— 绝不允许"没人管就默认执行"。
+4. **权限两档（用户建议 ⑤，2026-09-17）**：`ai.tools.policy.permissionMode` = `ask`（默认）/
+   `full`（完全权限），在 AI 工作台输入区底部、附件按钮与模型选择之间切换。
+   `full` 只把 `ask` 放宽成 `allow`：**`deny` 不放宽、路径白名单不放宽**（越界写照样被拒，
+   回归用例 `ToolPolicyTest` 盯着这两条）。后端每次 Run 现读策略，所以切完档**下一次回复立刻生效**
+   ——系统提示里会即时写明"本次是完全权限档"（`SystemPrompt.VERSION` 由 v5 提到 v7：
+   v6 = 权限档，v7 = 图生图那三步纪律）。
 
 > 移植自 DSH 的两个细节：工具的 JSON Schema 里 `additionalProperties: false`（模型乱加参数会当场报错，
 > 而不是悄悄忽略）；工具结果**视为不可信数据**，写进系统提示第 4 条（防提示注入，对应 RSK-004）。
