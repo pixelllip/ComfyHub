@@ -146,8 +146,17 @@ class _AiHomePageState extends State<AiHomePage> {
           controller: _input,
           focusNode: _inputFocus,
           onSubmit: (text) async {
-            await store.send(text);
+            // **先清空输入框，再等这一次 Run 跑完**。
+            //
+            // `store.send()` 要一直 await 到整轮结束（流式收完、落库、与服务端对齐），
+            // 所以把它放在清空之前，用户会在模型整个生成过程里都看到自己那句话还留在输入框里
+            // —— 看起来就像"点了发送没反应"（用户报的就是这个）。
+            //
+            // 清空之后 send() 仍会做它自己的准入判断；不通过时它把原因写进 `store.notice`，
+            // 气泡区上方会如实显示，不会静默丢字。
             _input.clear();
+            _scrollToBottom();
+            await store.send(text);
             _scrollToBottom();
           },
         ),

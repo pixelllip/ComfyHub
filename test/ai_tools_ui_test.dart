@@ -978,6 +978,31 @@ void main() {
     expect(find.text('/anima-prompt'), findsNothing, reason: '选完菜单要收起来');
   });
 
+  testWidgets('(h) 点发送后输入框立刻清空，不用等模型整轮跑完', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // 刻意**不给任何 SSE 事件**：这一次 Run 会一直挂着，
+    // 正好用来证明"清空发生在等待之前"——以前 `await store.send()` 才 clear，
+    // 用户会在整个生成过程里看到自己的话还留在输入框（看起来像点了没反应）。
+    final rec = _Recorder();
+    await tester.pumpWidget(await _homePage(rec, sse: ''));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, '帮我画一张赛博朋克少女');
+    await tester.pump();
+    // 发送按钮上还有刚输入的文字（发送前的基线）
+    expect(find.text('发送'), findsOneWidget);
+    await tester.tap(find.text('发送'));
+    await tester.pump(); // 只推进一帧：这一次 Run 还没跑完
+
+    final field = tester.widget<TextField>(find.byType(TextField).first);
+    expect(field.controller?.text, isEmpty, reason: '发送后输入框必须马上清空');
+    // Run 真的发出去了（不是"点了没反应"，也不是"清空了却没发"）
+    expect(rec.calls.any((c) => c.contains('/runs')), isTrue, reason: 'Run 真的发出去了');
+  });
+
   test('逐字回包只替换那一条消息：流式期间不能重建整段历史（O(n) 热点的回归）', () async {
     final rec = _Recorder();
     final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
