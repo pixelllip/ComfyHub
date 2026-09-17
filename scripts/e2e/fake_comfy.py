@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-假的 ComfyUI，用来端到端验证 ComfyHub 的「自动捕获」链路。
+假的 ComfyUI，用来端到端验证 ComfyHub 的「自动捕获」链路与「AI 提交任务」。
 
-它只实现自动捕获会用到的几个接口：
-    GET /history    -> 一条已经执行完的运行（参数节点图 + 工作流 + 产物文件名）
-    GET /queue      -> 空队列
-    GET /view       -> 把 output 目录里的文件吐出来
-    GET /system_stats
+它只实现会用到的几个接口：
+    GET  /history    -> 一条已经执行完的运行（参数节点图 + 工作流 + 产物文件名）
+    GET  /history/<prompt_id> -> 同上，但只给那一条（提交任务后按 prompt_id 轮询用）
+    GET  /queue      -> 空队列
+    GET  /view       -> 把 output 目录里的文件吐出来
+    GET  /system_stats
+    POST /prompt     -> 收下一次提交，**用它自己的节点图**造一条已完成的运行
+                        （用户建议 ①：AI 提交任务这条链路要能端到端验）
 
 这样不需要真的跑一次生成，就能验证：
   · 后端轮询能否发现新运行
@@ -15,6 +18,7 @@
   · 工作流是否原样存进库
   · 产物文件（本地读取 或 HTTP 下载）是否入库并与提示词关联
   · 重复轮询是否幂等
+  · `comfy_submit` 提交→轮询→入库→拿到 mediaIds 的整条链路
 
 用法：
     python fake_comfy.py [--port 8188] [--output <dir>] [--prompt-id <id>]
@@ -73,6 +77,29 @@ WORKFLOW = {
 }
 
 
+def pick_output_node(graph):
+    """挑出这张图的产物节点。
+
+    真实工作流的节点 id 不一定是数字（这个库里的 H3 工作流用的是 "out"），
+    而且产物节点也不一定叫 SaveImage（VHS_VideoCombine、SaveAnimatedWEBP…）。
+    判据按可能性从高到低：名字里带 save/combine → 没有任何下游引用 → 第一个节点。
+    """
+    if not isinstance(graph, dict) or not graph:
+        return None
+    preferred = ("save", "combine", "preview", "export")
+    for nid, node in graph.items():
+        cls = str((node or {}).get("class_type", "")).lower()
+        if any(k in cls for k in preferred):
+            return nid
+    referenced = set()
+    for node in graph.values():
+        for value in ((node or {}).get("inputs") or {}).values():
+            if isinstance(value, list) and value and isinstance(value[0], str):
+                referenced.add(value[0])
+    leaves = [nid for nid in graph.keys() if nid not in referenced]
+    return leaves[0] if leaves else next(iter(graph.keys()))
+
+
 def build_history(prompt_id: str, filename: str, extra_files=None):
     images = [{"filename": filename, "subfolder": "", "type": "output"}]
     if extra_files:
@@ -95,6 +122,9 @@ class Handler(BaseHTTPRequestHandler):
     history = {}
     output_dir = ""
     version = "0.34.2-fake"
+    filename = "e2e_capture_00001_.png"
+    # 收到过的提交（POST /prompt），供测试脚本检查"到底提交了什么图"
+    submitted = []
 
     def log_message(self, *args):  # 静音，免得刷屏
         pass
@@ -112,8 +142,16 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/history":
             # 真实 ComfyUI 支持 ?max_items=，这里忽略即可
             self._json(self.history)
+        elif parsed.path.startswith("/history/"):
+            # 提交任务之后 ComfyHub 会按 prompt_id 精确轮询（ComfySubmitter.historyEntry）
+            key = parsed.path[len("/history/"):]
+            entry = self.history.get(key)
+            self._json({key: entry} if entry else {})
         elif parsed.path == "/queue":
             self._json({"queue_running": [], "queue_pending": []})
+        elif parsed.path == "/__submitted":
+            # 测试脚本用它检查"到底提交了什么图"，不参与生成
+            self._json({"runs": Handler.submitted})
         elif parsed.path == "/system_stats":
             self._json({"system": {"comfyui_version": self.version, "os": sys.platform}})
         elif parsed.path == "/view":
@@ -137,6 +175,40 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b""
+        if parsed.path == "/__submitted":
+            # 测试脚本用它检查"到底提交了什么图"，不参与生成
+            self._json({"runs": Handler.submitted})
+            return
+        if parsed.path != "/prompt":
+            self.send_error(404)
+            return
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            self.send_error(400, "bad json: %s" % exc)
+            return
+        graph = body.get("prompt") or {}
+        if not isinstance(graph, dict) or not graph:
+            self.send_error(400, "empty prompt")
+            return
+
+        # 每一次提交都当成"立刻跑完"：用**它自己的节点图**造 history，
+        # 这样 ComfyHub 解析出来的提示词 / 参数就是模型实际提交的那一份，
+        # 而不是 fake_comfy 里写死的那条 —— 否则这个测试证明不了任何事。
+        prompt_id = "e2e-submit-%04d" % (len(Handler.submitted) + 1)
+        Handler.submitted.append({"promptId": prompt_id, "graph": graph})
+        out_node = pick_output_node(graph)
+        Handler.history[prompt_id] = {
+            "prompt": [graph, {"client_id": body.get("client_id") or "e2e", "extra_pnginfo": {"workflow": WORKFLOW}}, [out_node]],
+            "outputs": {out_node: {"images": [{"filename": Handler.filename, "subfolder": "", "type": "output"}]}},
+            "status": {"status_str": "success", "completed": True, "messages": []},
+        }
+        self._json({"prompt_id": prompt_id, "number": len(Handler.submitted), "node_errors": {}})
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -147,6 +219,7 @@ def main():
     args = parser.parse_args()
 
     Handler.output_dir = args.output
+    Handler.filename = args.filename
     Handler.history = build_history(args.prompt_id, args.filename)
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)

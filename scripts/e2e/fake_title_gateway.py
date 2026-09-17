@@ -79,6 +79,19 @@ class Handler(BaseHTTPRequestHandler):
             keyword = user_text.split("找找看", 1)[1].strip().split(" ")[0] or "e2e"
             self._stream_tool("comfy_find_workflow", {"query": keyword, "limit": 2, "includeGraph": True})
             return
+        # 模板 C：真的提交一次任务（用户建议 ① 的端到端）。promptId 从「提交 82」里取。
+        # 覆盖的参数路径按**工作流自己的节点编号**给（节点 id 不一定是数字，
+        # 这个库里的工作流用的是 "sch" 这类字符串 id —— 与 ComfyUI 界面上看到的一致）。
+        if "提交" in user_text and last.get("role") != "tool":
+            digits = "".join(ch for ch in user_text.split("提交", 1)[1] if ch.isdigit())
+            prompt_id = int(digits or "0")
+            self._stream_tool("comfy_submit", {
+                "promptId": prompt_id,
+                "overrides": {"sch.steps": "12"},
+                "title": "E2E 提交验证",
+                "waitSeconds": 60,
+            })
+            return
         # 模板 B：普通问答（顺带验标题）
         prefix = "[标题]赛博朋克少女[/标题]\n\n" if not has_assistant else ""
         text = prefix + "好的，我按赛博朋克少女的方向来。"

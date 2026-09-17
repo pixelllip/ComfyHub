@@ -270,7 +270,12 @@ class ComfyCapture(private val cfg: AppConfig, private val storage: Storage) {
         val statusObj = entry["status"] as? kotlinx.serialization.json.JsonObject
         val isError = (statusObj?.get("status_str") as? kotlinx.serialization.json.JsonPrimitive)
             ?.contentOrNull == "error"
-        return ingestClaimed(buildIngestRequest(runKey, entry, conf, isError), conf)
+        val req = buildIngestRequest(runKey, entry, conf, isError)
+        log.info(
+            "captureRun {}：outputDir={} 产物条目={} 图节点={}",
+            runKey, conf.outputDir, req.outputs.size, req.prompt?.size ?: 0,
+        )
+        return ingestClaimed(req, conf)
     }
 
     /**
@@ -357,6 +362,7 @@ class ComfyCapture(private val cfg: AppConfig, private val storage: Storage) {
                     log.warn("找不到 ComfyUI 产物文件: {}（本地无 outputDir 命中，HTTP 下载也没成功）", f.filename)
                     continue
                 }
+                log.info("捕获产物 {} -> {}", f.filename, src)
 
                 when (val r = CaptureRepo.importFile(
                     storage = storage,
