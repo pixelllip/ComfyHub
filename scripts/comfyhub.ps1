@@ -374,13 +374,105 @@ function Resolve-AppExe {
     return $exe
 }
 
+function Get-AppDartPayload {
+    <#
+      这个 exe 里"装着 Dart 代码"的那份产物：
+        · Release / 发布包 → data\app.so（AOT）
+        · debug            → data\flutter_assets\kernel_blob.bin（JIT 内核）
+      找不到就返回 $null（判断不了新旧，别乱报警 —— 比如原生 exe 的时间戳
+      除非动过 windows\ 否则一直很旧，拿它比会永远报"过期"）。
+    #>
+    param([System.IO.FileInfo]$Exe)
+    if (-not $Exe) { return $null }
+    foreach ($rel in @('data\app.so', 'data\flutter_assets\kernel_blob.bin')) {
+        $p = Join-Path $Exe.DirectoryName $rel
+        if (Test-Path -LiteralPath $p) { return (Get-Item -LiteralPath $p) }
+    }
+    return $null
+}
+
+function Get-AppBuildStaleness {
+    <#
+      比较 App 的 Dart 产物与源码，判断"跑的到底是新代码还是旧代码"。
+
+      为什么要查这个：改完 lib\ 只跑 flutter test / analyze 是**看不见界面**的，
+      而 App 又常常是直接双击/Start-Process 拉起旧产物 —— 于是用户看到的还是旧界面，
+      反馈回来就是"明明修了却还是老样子"。2026-09-17 的"视频没有预览图"就是这么丢的：
+      源码 20:11 改好，跑起来的却是 18:50 编的内核。
+      返回 $null（判断不了）或 @{ Payload; Source; Newer }。
+    #>
+    param([System.IO.FileInfo]$Exe)
+    $payload = Get-AppDartPayload -Exe $Exe
+    if (-not $payload) { return $null }
+
+    $items = @()
+    $lib = Join-Path $ProjectRoot 'lib'
+    if (Test-Path -LiteralPath $lib) {
+        $items += Get-ChildItem -LiteralPath $lib -Recurse -Filter '*.dart' -File -ErrorAction SilentlyContinue
+    }
+    # 依赖或资源变了同样得重编，所以 pubspec 两个文件一起比
+    foreach ($f in @('pubspec.yaml', 'pubspec.lock')) {
+        $p = Join-Path $ProjectRoot $f
+        if (Test-Path -LiteralPath $p) { $items += Get-Item -LiteralPath $p }
+    }
+    if ($items.Count -eq 0) { return $null }   # 发布包/别人机器上没有源码，静默跳过
+
+    return [pscustomobject]@{
+        Payload = $payload
+        Source  = ($items | Sort-Object LastWriteTime -Descending | Select-Object -First 1)
+        Newer   = (($items | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime -gt $payload.LastWriteTime)
+    }
+}
+
+function Format-AppFreshness {
+    param([System.IO.FileInfo]$Exe)
+    if (-not $Exe) { return '没有产物' }
+    $s = Get-AppBuildStaleness -Exe $Exe
+    if (-not $s) { return '无法判断（找不到 app.so / kernel_blob.bin）' }
+    $built = $s.Payload.LastWriteTime.ToString('MM-dd HH:mm')
+    if ($s.Newer) {
+        return "旧构建：$($s.Payload.Name) 编于 $built，源码已改到 $($s.Source.LastWriteTime.ToString('MM-dd HH:mm'))"
+    }
+    return "最新（$($s.Payload.Name) 编于 $built）"
+}
+
+function Show-AppStaleWarning {
+    param([string]$Label, $Stale)
+    Say "  ⚠ $Label 是旧构建：$($Stale.Payload.Name) 编于 $($Stale.Payload.LastWriteTime.ToString('MM-dd HH:mm'))，" 'Yellow'
+    Say "    而源码（$($Stale.Source.Name)）已改到 $($Stale.Source.LastWriteTime.ToString('MM-dd HH:mm')) —— 界面上看到的是旧代码。" 'Yellow'
+    Say '    重新构建：pwsh -File scripts\autorun-app.ps1（Release）或 pwsh -File scripts\dev-app.ps1（debug 热重载）' 'DarkGray'
+}
+
+function Get-RunningAppExe {
+    <# 正在跑的那个 viewer.exe（拿不到路径就返回 $null，不抛错） #>
+    $running = Get-AppProcess | Select-Object -First 1
+    if (-not $running) { return $null }
+    try { $p = $running.Path } catch { return $null }
+    if (-not $p -or -not (Test-Path -LiteralPath $p)) { return $null }
+    return (Get-Item -LiteralPath $p)
+}
+
 function Start-AppPart {
     $exe = Resolve-AppExe
     if (-not $exe) {
         Say '  找不到 viewer.exe，先执行: pwsh -File scripts\autorun-app.ps1（或打包: pwsh -File scripts\pack-release.ps1）' 'Yellow'
         return $false
     }
-    if (Get-AppProcess) { Say '  App 已经在跑了。' 'DarkGray'; return $true }
+
+    # 已经在跑的这个也可能是旧构建 —— 那正是"改了却看不到效果"的另一种形态，
+    # 所以这里也查一遍（不然一句"App 已经在跑了"就把线索盖掉了）。
+    $runningExe = Get-RunningAppExe
+    if ($runningExe) {
+        Say '  App 已经在跑了。' 'DarkGray'
+        $rs = Get-AppBuildStaleness -Exe $runningExe
+        if ($rs -and $rs.Newer) { Show-AppStaleWarning -Label '正在运行的 App' -Stale $rs }
+        return $true
+    }
+
+    # 旧构建 = 界面还是老样子。这时候把 App 拉起来只会让人以为"改了没用"，
+    # 所以先明说，再给重编的命令（照旧启动，不拦着 —— 也许他就是想看旧版对照）。
+    $stale = Get-AppBuildStaleness -Exe $exe
+    if ($stale -and $stale.Newer) { Show-AppStaleWarning -Label '选中的 App' -Stale $stale }
 
     Say '  [3/3] 启动桌面 App…' 'Cyan'
     $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
@@ -692,6 +784,19 @@ function Do-Doctor {
         Say ("  {0,-16} {1}" -f $p.n, $(if ($ok) { 'OK' } else { "缺失: $($p.v)" })) $(if ($ok) { 'Green' } else { 'Yellow' })
     }
     Say ("  {0,-16} {1}" -f '位置来源', $(if ($DataDir) { "-DataDir 参数" } elseif ($env:COMFYHUB_MYSQL_DIR) { '环境变量 COMFYHUB_MYSQL_DIR' } elseif (Test-Path (Join-Path $ProjectRoot '.mysql-location.json')) { '.mysql-location.json' } else { '默认 .mysql' })) 'Gray'
+
+    # 构建新鲜度：App 的产物比 lib\ 旧时，界面上看到的是旧代码。
+    # 这类"改了没生效"最容易被误报成功能 bug（2026-09-17 视频预览图踩过一次），
+    # 所以 doctor 里把"该启动的 App"和"正在跑的 App"分别报一遍（两者常常不是同一个）。
+    $appStale = Get-AppBuildStaleness -Exe $appExe
+    if ($appExe) {
+        Say ("  {0,-16} {1}" -f 'App 构建', (Format-AppFreshness -Exe $appExe)) $(if ($appStale -and $appStale.Newer) { 'Yellow' } else { 'Gray' })
+    }
+    $runningExe = Get-RunningAppExe
+    if ($runningExe) {
+        $rs = Get-AppBuildStaleness -Exe $runningExe
+        Say ("  {0,-16} {1}" -f '运行中的 App', "$($runningExe.FullName) — $(Format-AppFreshness -Exe $runningExe)") $(if ($rs -and $rs.Newer) { 'Yellow' } else { 'Gray' })
+    }
 
     $mysqld = Resolve-MysqlBin 'mysqld.exe'
     Say ("  {0,-16} {1}" -f 'mysqld.exe', $(if ($mysqld) { $mysqld } else { '找不到，设置 COMFYHUB_MYSQL_HOME' })) $(if ($mysqld) { 'Green' } else { 'Red' })

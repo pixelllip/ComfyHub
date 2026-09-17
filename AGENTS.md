@@ -31,6 +31,14 @@
   `e2e-capture-test.ps1` / `e2e-submit-test.ps1` 各 ≈ 20~30s。
 - 产物目录：debug 在 `build\windows\...\runner\Debug\`、Release 在 `...\Release\`；
   `autorun-app.ps1` / `comfyhub.ps1 up -WithApp` 启动 App 时**优先挑 Release**。
+- **"我改了但界面没变"先查构建新鲜度，别急着怀疑代码**：App 是直接双击 / `Start-Process`
+  拉起旧产物时，跑的还是上一次编的 Dart（Release 看 `data\app.so`、debug 看
+  `data\flutter_assets\kernel_blob.bin`）。2026-09-17 "画廊/提示词里的视频预览图不显示"
+  就是这么丢的：源码 20:11 改好，用户手里跑的是 18:50 编的内核 —— 只跑 `flutter test`
+  永远发现不了（测试跑的是源码，用户看的是旧二进制）。所以**界面类修复必须
+  `flutter build windows --debug`（或 `dev-app.ps1`）重启一次，再截图确认**；
+  `comfyhub.ps1 doctor` 会分别报"该启动的 App"和"正在跑的 App"是不是旧构建，
+  `up -WithApp` 选中/接管到旧构建时也会当场警告。
 
 ## 2. 本地服务必须"静默"启动（不弹命令行窗口）
 
