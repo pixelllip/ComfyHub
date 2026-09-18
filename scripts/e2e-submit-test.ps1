@@ -137,6 +137,31 @@ function Clear-SubmitTestCaptures {
     return $done
 }
 
+# 测试自己开的**会话**也要收掉：AI 工作台的左侧列表就是库里这些会话，
+# 不清的话用户会在自己的历史里看到一串「补线 C:\...\e2e_ui_gap_workflow.json」。
+#
+# 认法是**会话绑的 Provider**：本脚本的会话全都挂在临时 Provider `e2e-submit-gw` 上
+# （跑完会把它删掉），比"在正文里找关键词"准得多 —— 第一幕那种"提交 126 3.steps=13"
+# 的会话正文里根本没有 e2e 字样。
+function Clear-SubmitTestConversations {
+    if (-not $script:Mysql) { return 0 }
+    $ids = & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
+        --database=comfy_hub -N -B -e "SELECT id FROM ai_conversations WHERE provider_id LIKE 'e2e-submit%';" 2>$null
+    $done = 0
+    foreach ($id in @($ids)) {
+        if (-not $id -or "$id" -eq 'NULL') { continue }
+        try { Invoke-Api 'DELETE' "/api/ai/conversations/$id" $null | Out-Null; $done++ } catch { }
+    }
+    # 上一版靠"正文里有 e2e 临时路径"认的那种，一并收掉（历史遗留）
+    $old = & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
+        --database=comfy_hub -N -B -e "SELECT DISTINCT c.id FROM ai_conversations c JOIN ai_messages m ON m.conversation_id = c.id WHERE m.text LIKE '%comfyhub-e2e-submit-wf-%';" 2>$null
+    foreach ($id in @($old)) {
+        if (-not $id -or "$id" -eq 'NULL') { continue }
+        try { Invoke-Api 'DELETE' "/api/ai/conversations/$id" $null | Out-Null; $done++ } catch { }
+    }
+    return $done
+}
+
 # ---------------------------------------------------------------------------
 
 Say ''
@@ -167,7 +192,10 @@ try {
 
     # 上一轮遗留的测试数据先清掉（见 Clear-SubmitTestCaptures 的说明）
     $stale = Clear-SubmitTestCaptures
-    if ($stale -gt 0) { Say "  已清掉上一轮遗留的 $stale 条测试提示词与运行记录" 'DarkGray' }
+    $staleConvs = Clear-SubmitTestConversations
+    if ($stale -gt 0 -or $staleConvs -gt 0) {
+        Say "  已清掉上一轮遗留的 $stale 条测试提示词 / $staleConvs 个测试会话与运行记录" 'DarkGray'
+    }
 
     # --- 0. 找一条能跑的工作流 -------------------------------------------
     # `hasWorkflow` 只说明存过工作流（可能是界面格式），提交需要的是 **API 节点图**，
@@ -638,9 +666,13 @@ try {
         }
         Say ("  已删除 {0} 个产物 / {1} 条提示词 / 运行记录" -f `
                 ($createdMediaIds | Select-Object -Unique).Count, (1 + $filePromptIds.Count)) 'DarkGray'
-        # 假 ComfyUI 的 prompt_id 造的提示词与运行记录（被自动捕获轮询收进来的那些）
+        # 假 ComfyUI 的 prompt_id 造的提示词与运行记录（被自动捕获轮询收进来的那些），
+        # 以及测试自己开的会话（左侧列表里那串「补线 …」）
         $stale = Clear-SubmitTestCaptures
-        if ($stale -gt 0) { Say "  已清掉 $stale 条捕获进来的测试提示词与运行记录" 'DarkGray' }
+        $staleConvs = Clear-SubmitTestConversations
+        if ($stale -gt 0 -or $staleConvs -gt 0) {
+            Say "  已清掉 $stale 条捕获进来的测试提示词 / $staleConvs 个测试会话与运行记录" 'DarkGray'
+        }
         Remove-Item $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item $WfDir -Recurse -Force -ErrorAction SilentlyContinue
     }
