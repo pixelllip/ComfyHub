@@ -20,7 +20,10 @@
 [CmdletBinding()]
 param(
     [string]$ApiBase = 'http://127.0.0.1:8080',
-    [int]$ComfyPort = 8188,
+    # **故意不用 8188**：那是真实 ComfyUI 的默认端口，开发机上它多半正开着。
+    # 撞上之后假 ComfyUI 起不来（Address already in use），而就绪探测会**连上真实的那个**、
+    # 于是脚本一路跑下去读到陌生人的 /history —— 表现为"轮询啥也没收到"，极难查。
+    [int]$ComfyPort = 18188,
     [switch]$KeepData
 )
 
@@ -29,6 +32,10 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $E2eDir      = Join-Path $PSScriptRoot 'e2e'
 $WorkDir     = Join-Path $ProjectRoot '.run\e2e'
 $OutDir      = Join-Path $WorkDir 'output'
+# 三张测试图（内容由 make_png.py 确定性生成：同名同色 → 同字节）
+$capturePng  = Join-Path $OutDir 'e2e_capture_00001_.png'
+$importPng   = Join-Path $OutDir 'e2e_import_00002_.png'
+$pushPng     = Join-Path $OutDir 'e2e_push_00003_.png'
 
 $script:Failed = 0
 $script:CreatedPromptIds = New-Object System.Collections.Generic.List[long]
@@ -113,6 +120,65 @@ if ($script:Failed -gt 0) { exit 1 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 Get-ChildItem $OutDir -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
+# --- 0.5 先把**上一轮遗留的测试数据**清掉 -----------------------------------
+#
+# 为什么必须在开头清（而不只是在 finally 里清）：这个脚本用的 run_key 是固定的
+# （假 ComfyUI 的 prompt_id = `e2e-capture-0001` / 推送用的 `e2e-push-0001`），
+# 而 `CaptureRepo.beginRun` 对 `success` 的记录**永远不再抢占**（那是幂等的正确行为）。
+# 于是只要上一轮被 Ctrl+C 打断过（清理在 finally 里，没跑到），这一轮的第 1 幕就会
+# 「/history 明明有一条、轮询却 checked=0」—— 表现为"捕获全挂"，但根因只是一个残留行。
+# 这个坑在 `docs/pitfalls.md` 里记着，脚本自己先兜住它。
+$script:Mysql = Find-MysqlExe
+if ($script:Mysql) {
+    $ownKeys = "'e2e-capture-0001'", "'e2e-push-0001'"
+    # 三张测试图先按同样的方式生成一遍，算出 hash —— 判重是按 **sha256** 走的
+    # （`media_assets.sha256`），上一轮没清干净的产物会让这一轮的"目录导入"全都判成重复：
+    # 表现是 `imported=0 duplicates=2`，而目录里其实只有一份是该重复的。
+    foreach ($spec in @(@($capturePng, '30,90,180'), @($importPng, '200,120,30'), @($pushPng, '20,200,120'))) {
+        & $python (Join-Path $E2eDir 'make_png.py') $spec[0] --color $spec[1] 2>&1 | Out-Null
+    }
+    $staleHashes = @()
+    foreach ($f in @($capturePng, $importPng, $pushPng)) {
+        if (Test-Path $f) {
+            $sha = (Get-FileHash -Algorithm SHA256 -Path $f).Hash.ToLower()
+            $staleHashes += "'$sha'"
+            # 目录导入那条路还会留一条 `import:<sha 前 40 位>` 的运行记录
+            $ownKeys += "'import:$($sha.Substring(0, 40))'"
+        }
+    }
+    $staleMedia = 0
+    if ($staleHashes.Count -gt 0) {
+        $ids = & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
+            --database=comfy_hub -N -B -e "SELECT GROUP_CONCAT(id) FROM media_assets WHERE sha256 IN ($($staleHashes -join ','));" 2>$null
+        if ($ids -and "$ids" -ne 'NULL') {
+            foreach ($id in ("$ids" -split ',')) {
+                if (-not $id) { continue }
+                try { Invoke-Api 'DELETE' "/api/media/$id" $null | Out-Null; $staleMedia++ } catch { }
+            }
+        }
+    }
+    $keyList = $ownKeys -join ','
+    $stalePrompts = & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
+        --database=comfy_hub -N -B -e "SELECT GROUP_CONCAT(id) FROM prompts WHERE source_ref IN ($keyList);" 2>$null
+    $staleCount = 0
+    if ($stalePrompts -and "$stalePrompts" -ne 'NULL') {
+        foreach ($id in ("$stalePrompts" -split ',')) {
+            if (-not $id) { continue }
+            try { Invoke-Api 'DELETE' "/api/prompts/$id" $null | Out-Null; $staleCount++ } catch { }
+        }
+    }
+    & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
+        --database=comfy_hub -e "DELETE FROM capture_runs WHERE run_key IN ($keyList);" 2>&1 | Out-Null
+    if ($staleCount -gt 0 -or $staleMedia -gt 0) {
+        Say "  已清掉上一轮遗留的 $staleCount 条测试提示词 / $staleMedia 个产物与运行记录" 'DarkGray'
+    }
+    # 探针用的三张图删掉：它们是**按需**生成的（act 3 / act 4 各自造自己那张），
+    # 留下来会让 act 3 的"扫描到 2 个文件"变成 3 个。
+    foreach ($f in @($capturePng, $importPng, $pushPng)) {
+        Remove-Item $f -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $capturePng = Join-Path $OutDir 'e2e_capture_00001_.png'
 $importPng  = Join-Path $OutDir 'e2e_import_00002_.png'
 $pushPng    = Join-Path $OutDir 'e2e_push_00003_.png'
@@ -152,6 +218,18 @@ try {
         } catch { Start-Sleep -Milliseconds 300 }
     }
     Check "假 ComfyUI 已就绪（127.0.0.1:$ComfyPort）" $ready
+
+    # 「连得上」不等于「连的是我们起的那个」：端口被真实 ComfyUI 占着时，上面那句就绪检查
+    # 会**对着它**返回成功，然后整场测试都在读陌生人的 /history —— 现象是"轮询啥也没收到",
+    # 根因却在一个跟代码无关的地方。所以这里认一下身份，不认就当场停下。
+    $isOurs = $false
+    try {
+        $root = Invoke-RestMethod "http://127.0.0.1:$ComfyPort/" -TimeoutSec 3
+        $isOurs = ("$($root.app)" -eq 'fake-comfyui')
+    } catch { }
+    Check "端口 $ComfyPort 上是我们起的假 ComfyUI（不是真实 ComfyUI）" $isOurs `
+        '多半是真实 ComfyUI 占着这个端口，用 -ComfyPort <空闲端口> 重跑'
+    if (-not $isOurs) { throw "端口 $ComfyPort 被别的服务占用（不是 fake-comfyui）" }
 
     $status = Invoke-Api 'GET' '/api/capture/status' $null
     Check '状态接口能连上假 ComfyUI' ($status.comfyReachable -eq $true)

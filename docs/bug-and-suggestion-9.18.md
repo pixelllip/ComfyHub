@@ -56,7 +56,30 @@ bug:
   WebSocket，不是可复用库）。硬约束：本机库里 13 份工作流中**只有 3 份是 UI 格式、10 份是 API 格式**，
   而 **API 格式没有坐标** —— 那段布局只能是猜测，界面上必须标注。）
 
-- krea2 那条工作流本身仍然不能自动转换 —— 这种问题，能放权给AI自动处理吗？
+- ~~krea2 那条工作流本身仍然不能自动转换 —— 这种问题，能放权给AI自动处理吗？~~ → **能，而且已经做成两条腿**（2026-09-18）
+  （**先查了那份文件**：113 节点里真正卡住的是 2 个 `Anything Everywhere` + 一堆 rgthree 纯前端节点
+  + 6 个 **UUID 组节点**；同时发现一个好消息 —— 这份文件里有 `widgets_values_named`（参数名写全了），
+  而旧转换器只读位置式的 `widgets_values`。
+  于是按你选的"双管齐下"：
+  **① 确定性增强**（不用猜的部分自己扛下来）：
+  `widgets_values_named` 优先（只认 `/object_info` 声明过的键，避免版本不一致塞进未知参数）；
+  **组节点按 `definitions.subgraphs` 展开** —— 内部节点重新编号（内部 id 会与主图撞号）、
+  内部连线整表重编、外层控件值直接填给内部输入、实例输出穿透到内部真正的产出节点；
+  旁路实例（krea2 里 34 / 110）不展开，交给原有的旁路逻辑按类型接过去。
+  **② 放权通道**（剩下的交回给 AI，但只交"接线"这件事，不交"猜语义"）：
+  `comfy_load_workflow(tolerateUnsupported=true)` 把转换不了的节点摘掉，并给出**缺口清单** ——
+  `openInputs`（哪些连线型输入空着、缺什么类型）/ `unresolvedInputs`（哪个输入还悬着）/
+  `unsupportedNodes`（摘掉了哪些类），结果标 `runnable=false`；
+  AI 照着清单用 `comfy_submit(promptId=…, connections={"8.vae":["1",2]})` 补线再提交。
+  线接错了 ComfyUI 自己的校验会当场拒（`node_errors`，不入队）—— 比服务端瞎猜一个语义安全得多。
+  用本机那份真实文件实测过：6 个组节点里 4 个被展开（另 2 个是旁路）、
+  18 条悬空输入全部点名、111 个节点转出来结构自洽。
+  防线：`WorkflowConvertTest` 20 例 + `WorkflowEditTest` 13 例 + `e2e-submit-test.ps1` **第 5 幕**
+  （真读一份带 `Anything Everywhere` 的工作流 → 断言 `runnable=false` 与 `openInputs` →
+  按清单补线 → 断言提交出去的图里 `8.vae=[1,2]` 且被摘掉的节点没混进去）
+  顺带修掉一个真 bug：**提示词被删掉之后，同一份工作流文件再也导不进来**
+  （`run_key = file:<sha256>` 是内容寻址的，删提示词只把 `prompt_id` 置空、`status` 还是 `success`，
+  而 `success` 是"永不抢占"的终态 → 永远回 `LOAD_IN_PROGRESS`）。）
 - ~~AIH-002（900~1199px 宽度下 Comfy 状态整块不可达）——这是什么意思，另外本机开了1.5倍缩放，会不会对宽度判定有点影响？~~ → **已修 + 已解释**（2026-09-18）
   （含义：`ai_home_page.dart` 里 `wide = width >= 900` 决定"要不要三栏布局"，
   而第三栏（Comfy 状态）的门槛是另一个数 `width >= 1200`；右下角那个「ComfyUI 状态」FAB

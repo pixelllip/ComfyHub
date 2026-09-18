@@ -100,15 +100,22 @@ class ToolRegistry(
     private val comfyFindWorkflow: (String, Int, Boolean) -> WorkflowSearch = { _, _, _ ->
         WorkflowSearch(0, buildJsonObject { put("count", 0) })
     },
-    /** 提交一个工作流给 ComfyUI 跑（用户建议 ①）；`waitSeconds=0` 表示只提交不等。 */
-    private val comfySubmit: suspend (Long, JsonObject?, String?, Int) -> ComfySubmitOutcome =
-        { _, _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用 ComfyUI 提交能力") },
+    /**
+     * 提交一个工作流给 ComfyUI 跑（用户建议 ①）；`waitSeconds=0` 表示只提交不等。
+     *
+     * 第二个 JsonObject 是**参数覆盖**，第三个是**补线**（用户建议 ②：界面格式里那些纯前端节点
+     * 被摘掉之后，缺口由模型照着 `openInputs` 填上）。
+     */
+    private val comfySubmit: suspend (Long, JsonObject?, JsonObject?, String?, Int) -> ComfySubmitOutcome =
+        { _, _, _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用 ComfyUI 提交能力") },
     /**
      * 把一份**本机工作流文件**读进库（用户 bug ③：`comfy_submit` 只认库里的 promptId，
      * "我不能凭一个文件路径提交"）。返回的结构里有 `promptId`（下一步就能提交）与节点摘要。
+     *
+     * 第四个参数 `tolerateUnsupported`：转换不了的前端节点是否照样入库（带缺口清单）。
      */
-    private val comfyLoadWorkflow: suspend (String, String?, Boolean) -> JsonObject =
-        { _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用工作流文件加载能力") },
+    private val comfyLoadWorkflow: suspend (String, String?, Boolean, Boolean) -> JsonObject =
+        { _, _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用工作流文件加载能力") },
     /**
      * 把用户发来的**图片附件**放进 ComfyUI 的 `input/` 目录，返回它在那边真实可用的文件名。
      *
@@ -484,13 +491,16 @@ class ToolRegistry(
             description = "把**一份本机工作流文件**（ComfyUI 保存的 .json，或「导出（API）」得到的节点图）" +
                 "读进库里，换成一个能提交的 promptId。用户甩给你一个工作流文件路径时用它 —— " +
                 "别再回答\"我只能提交库里的 promptId\"。" +
-                "界面格式（nodes/links）会按 ComfyUI 的 /object_info 转成 API 节点图；" +
-                "用了纯前端节点（Anything Everywhere 之类）转不出来的会如实报错，那时让用户在 ComfyUI 里" +
-                "「导出（API）」一次，或点一次 Queue 让它被捕获。" +
-                "返回里有 promptId 与每个节点的 id / 可覆盖的输入名（用于 comfy_submit 的 overrides）。" +
+                "界面格式（nodes/links）会按 ComfyUI 的 /object_info 转成 API 节点图：" +
+                "普通节点、组节点（subgraph）、Reroute / Set-Get、旁路都会等价展开或改写。" +
+                "剩下的纯前端节点（Anything Everywhere、rgthree 的那些显示节点…）默认**如实报错**；" +
+                "带 tolerateUnsupported=true 再来一次，我会把它们摘掉并给出**缺口清单**：" +
+                "`unresolvedInputs`（哪个输入还悬着）、`openInputs`（哪些连线型输入空着，缺的是什么类型）、" +
+                "`unsupportedNodes`（摘掉了哪些类）—— 照着清单用 comfy_submit(connections=…) 补线即可。" +
+                "返回里有 promptId、runnable（能不能直接跑）与每个节点的 id / 可覆盖的输入名。" +
                 "只读用户机器上的文件，不改它。",
             parameters = schema(
-                """{"type":"object","properties":{"path":{"type":"string","description":"工作流文件的完整路径（绝对路径最稳）"},"title":{"type":"string","description":"库里显示的名字（可选，默认取文件名）"},"includeGraph":{"type":"boolean","description":"是否连完整 API 节点图一起返回（默认 false，只有要手写参数路径时才需要）"}},"required":["path"],"additionalProperties":false}"""
+                """{"type":"object","properties":{"path":{"type":"string","description":"工作流文件的完整路径（绝对路径最稳）"},"title":{"type":"string","description":"库里显示的名字（可选，默认取文件名）"},"includeGraph":{"type":"boolean","description":"是否连完整 API 节点图一起返回（默认 false，只有要手写参数路径时才需要）"},"tolerateUnsupported":{"type":"boolean","description":"转换不了的前端节点不报错，改成摘掉并给出缺口清单（默认 false）"}},"required":["path"],"additionalProperties":false}"""
             ),
             category = ToolCategory.COMFY,
             mutating = false,
@@ -502,7 +512,12 @@ class ToolRegistry(
             // 用户工作流一般就躺在它下面的 user/default/workflows 里
             val file = ctx.policy.resolveRead(raw)
             val json = try {
-                comfyLoadWorkflow(file.toString(), args.str("title"), args.bool("includeGraph") ?: false)
+                comfyLoadWorkflow(
+                    file.toString(),
+                    args.str("title"),
+                    args.bool("includeGraph") ?: false,
+                    args.bool("tolerateUnsupported") ?: false,
+                )
             } catch (e: ToolFailure) {
                 throw e
             } catch (e: Exception) {
@@ -517,15 +532,18 @@ class ToolRegistry(
                 "用 promptId 指定库里的工作流（先 comfy_find_workflow 或 comfy_load_workflow），" +
                 "或者直接用 workflowPath 指一份本机工作流文件（等价于先 comfy_load_workflow 再提交）。" +
                 "用 overrides 覆盖参数（键写成 节点id.输入名，例如 \"3.steps\"、\"6.text\"）。" +
+                "用 connections 补连线（键一样，值写成 [\"上游节点id\", 槽位]，例如 {\"60.vae\":[\"1\",0]}）——" +
+                "comfy_load_workflow 报 runnable=false 时，照它给的 openInputs / unresolvedInputs 补。" +
                 "跑完后产物会自动入库到画廊。不要凭想象编造工作流；说不清要跑什么就先问用户。",
             parameters = schema(
-                """{"type":"object","properties":{"promptId":{"type":"integer","description":"库里提示词的 id（来自 comfy_find_workflow / comfy_load_workflow）"},"workflowPath":{"type":"string","description":"或者：本机工作流文件的完整路径（.json）"},"overrides":{"type":"object","description":"要覆盖的参数：{\"6.text\":\"新提示词\",\"3.steps\":30}","additionalProperties":true},"title":{"type":"string","description":"这次运行的标题（给用户认，可选）"},"wait":{"type":"boolean","description":"是否等它跑完（默认 true；false 表示排上队就返回）"},"waitSeconds":{"type":"integer","description":"最长等多少秒，默认 240，最多 900"}},"additionalProperties":false}"""
+                """{"type":"object","properties":{"promptId":{"type":"integer","description":"库里提示词的 id（来自 comfy_find_workflow / comfy_load_workflow）"},"workflowPath":{"type":"string","description":"或者：本机工作流文件的完整路径（.json）"},"overrides":{"type":"object","description":"要覆盖的参数：{\"6.text\":\"新提示词\",\"3.steps\":30}","additionalProperties":true},"connections":{"type":"object","description":"要补的连线：{\"60.vae\":[\"1\",0]}（key 是 节点id.输入名，值是这个输入该接到哪个节点的哪个输出槽位）","additionalProperties":true},"title":{"type":"string","description":"这次运行的标题（给用户认，可选）"},"wait":{"type":"boolean","description":"是否等它跑完（默认 true；false 表示排上队就返回）"},"waitSeconds":{"type":"integer","description":"最长等多少秒，默认 240，最多 900"}},"additionalProperties":false}"""
             ),
             category = ToolCategory.COMFY,
             mutating = true,
             defaultAccess = ToolAccess.ASK,
         ) { args, ctx ->
             val overrides = args.obj("overrides")
+            val connections = args.obj("connections")
             val wait = args.bool("wait") ?: true
             val waitSeconds = (args.int("waitSeconds") ?: 240).coerceIn(0, 900)
             var promptId = args.int("promptId")?.toLong()
@@ -536,11 +554,13 @@ class ToolRegistry(
                     "要么给 promptId（先 comfy_find_workflow 找），要么给 workflowPath（本机工作流文件路径）",
                 )
             }
-            // 给了文件路径就先加载：界面格式会在这里被转成 API 节点图
+            // 给了文件路径就先加载：界面格式会在这里被转成 API 节点图。
+            // 这里**允许带缺口入库**（tolerateUnsupported=true）：模型可以同一次调用里
+            // 一边加载一边用 connections 把缺口补上，不必来回两趟。
             val loaded = if (path != null) {
                 val file = ctx.policy.resolveRead(path)
                 try {
-                    comfyLoadWorkflow(file.toString(), args.str("title"), false)
+                    comfyLoadWorkflow(file.toString(), args.str("title"), false, true)
                 } catch (e: ToolFailure) {
                     throw e
                 } catch (e: Exception) {
@@ -557,6 +577,7 @@ class ToolRegistry(
                 comfySubmit(
                     promptId,
                     overrides,
+                    connections,
                     args.str("title"),
                     if (wait) waitSeconds else 0,
                 )

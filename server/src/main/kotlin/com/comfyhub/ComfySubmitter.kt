@@ -373,9 +373,55 @@ class ComfySubmitter(
             return JsonObject(nodes) to applied
         }
 
+        /**
+         * 把若干**连线**接进 API 图（用户建议 ②：转换不了的纯前端节点交回给 AI 收拾）。
+         *
+         * 键的写法和 [applyOverrides] 一样是 `节点id.输入名`，值必须是 `["<上游节点id>", 槽位]`。
+         * 与覆盖参数的两点不同，都是有意为之：
+         *  1. **允许写一个当前不存在的输入名** —— 转换时"空着的那个输入"本来就不会出现在 inputs 里，
+         *     而这些正是要补的位置（清单见 `comfy_load_workflow` 返回的 openInputs）；
+         *  2. 上游节点必须**在这张图里真的存在** —— 这是最容易写错、后果又最难查的一处
+         *     （写错一个节点号，ComfyUI 只会说"节点不存在"），所以当场拒绝。
+         */
+        fun applyConnections(
+            graph: JsonObject,
+            connections: Map<String, JsonElement>,
+        ): Pair<JsonObject, List<String>> {
+            val applied = mutableListOf<String>()
+            val nodes: MutableMap<String, JsonElement> = LinkedHashMap(graph)
+            connections.forEach { (path, value) ->
+                val dot = path.lastIndexOf('.')
+                require(dot > 0 && dot < path.length - 1) {
+                    "连线路径要写成 节点id.输入名（例如 60.vae），收到的是「$path」"
+                }
+                val nodeId = path.substring(0, dot)
+                val field = path.substring(dot + 1)
+                val node = nodes[nodeId] as? JsonObject
+                    ?: throw IllegalArgumentException("工作流里没有节点 $nodeId（连线路径 $path）")
+                val ref = value as? JsonArray
+                    ?: throw IllegalArgumentException("连线 $path 的值要写成 [\"上游节点id\", 槽位]，例如 [\"1\", 0]")
+                if (ref.size != 2) {
+                    throw IllegalArgumentException("连线 $path 的值要写成 [上游节点id, 槽位]（两个元素）")
+                }
+                val source = (ref[0] as? JsonPrimitive)?.contentOrNull
+                    ?: throw IllegalArgumentException("连线 $path 的上游节点 id 要是文本或数字")
+                if (!nodes.containsKey(source)) {
+                    throw IllegalArgumentException(
+                        "连线 $path 指的节点 $source 不在这张图里（现有节点：${nodes.keys.take(40).joinToString("、")}）",
+                    )
+                }
+                val slot = (ref[1] as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+                    ?: throw IllegalArgumentException("连线 $path 的槽位要是整数")
+                val inputs = (node["inputs"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+                inputs[field] = JsonArray(listOf(ref[0], JsonPrimitive(slot)))
+                nodes[nodeId] = JsonObject(node + mapOf("inputs" to JsonObject(inputs)))
+                applied += "$path ← [$source, $slot]"
+            }
+            return JsonObject(nodes) to applied
+        }
+
         /** 按原值类型转换；原来没有这个字段时按值的字面量类型落下去。 */
-        private fun coerce(previous: JsonElement?, value: JsonElement, path: String): JsonElement {
-            val text = (value as? JsonPrimitive)?.contentOrNull
+        private fun coerce(previous: JsonElement?, value: JsonElement, path: String): JsonElement {            val text = (value as? JsonPrimitive)?.contentOrNull
                 ?: throw IllegalArgumentException("参数 $path 只支持标量（数字 / 文本 / 布尔）")
             if (!value.isString) return value
             return when (previous) {

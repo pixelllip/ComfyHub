@@ -18,7 +18,7 @@
 | **长期记忆** | 右侧栏「长期记忆」面板 + `remember` 工具：真源是一个**人能看、能手改**的 `<storage>\ai\memory.md`（一行一条）。每次 Run 都会**现读并注入系统提示**，所以"以后每次对话都带上它"是自然结果。**条数是受控的**（2026-09-18 按用户要求加的三道闸）：AI 一轮最多新增 4 条、总量硬上限 100 条（满了**报错并请用户清理**，不许静默丢、也不许模型自己删别人的条目）、AI 写的每条自动带 `[日期]` 前缀方便按时间查。编辑器是**列表视图**：搜索框过滤 + 每行一个删除 + 勾选后批量删除（要确认），也保留「整篇编辑」直接改全文。记忆与工具输出一样是**数据不是指令**（系统提示 v12 明写），单条 / 总量超限**报错**而不是悄悄截断 |
 | **AI 工具权限** | 设置页新增「AI 工具权限」：默认**只能写 `<项目根>\comfyui`**，只读 `comfyui` + `storage`；`.git` / `.mysql` / `.run` / `node_modules` 永远禁写（即使用户把白名单放宽到项目根）。每个工具可以单独设成 允许 / 需批准 / 禁用，禁用后**根本不下发给模型**。聊天输入区底部还有**权限两档**开关（附件按钮与模型选择之间）：「询问」（默认）与「自动允许（无需批准）」—— 后者让 AI 不必等批准，**只免掉"问一下"，`deny` 与目录白名单一点都不放宽**；后端每次 Run 现读策略，切完下一次回复立刻生效 |
 | **图生图 / 参考图** | 用户上传的图片可以直接进工作流：AI 先用 `comfy_use_attachment` 把附件投放进 ComfyUI 的 `input/` 目录拿到真实文件名，再用 `comfy_submit` 覆盖 `LoadImage` 节点的 `image` 输入（例 `{"89.image":"…"}`）。工作流被捕获时绑定的那个旧文件名**改不了也不用改** —— 内置 skill `img2img-reference` 与系统提示 v7 都写清了这三步 |
-| **工作流文件直接提交** | 用户甩过来一个工作流 `.json` 路径时，AI 不再回"我只能提交库里的 promptId"：`comfy_load_workflow` 读那份文件 → **API 格式原样用**；**界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图** → 入库拿 `promptId` → `comfy_submit` 正常提交（也可以 `comfy_submit(workflowPath=…)` 一步到位）。转换不出来的（`Anything Everywhere` 这类纯前端节点）**如实报 `UNSUPPORTED_NODES`** 并给出两个出口：在 ComfyUI 里「导出（API）」一次，或点一次 Queue 让它被自动捕获。顺带：**本机 ComfyUI 的目录现在是自动放行的只读白名单**（`ComfyRoots` 每次现探），所以 AI 能直接读你自己的工作流文件；写仍然只允许 `<项目根>\comfyui`。 |
+| **工作流文件直接提交** | 用户甩过来一个工作流 `.json` 路径时，AI 不再回"我只能提交库里的 promptId"：`comfy_load_workflow` 读那份文件 → **API 格式原样用**；**界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图** → 入库拿 `promptId` → `comfy_submit` 正常提交（也可以 `comfy_submit(workflowPath=…)` 一步到位）。转换器现在能等价处理的比过去多得多：**组节点（subgraph）按 `definitions.subgraphs` 展开**、旁路 / Reroute / Set-Get 照旧、**`widgets_values_named`（带参数名的那份）优先**（不必再按位置猜）。剩下纯粹的**前端**节点（`Anything Everywhere`、rgthree 的显示节点…）默认仍**如实报 `UNSUPPORTED_NODES`**，但**不再是死路**：带 `tolerateUnsupported=true` 再读一次，会把这些节点摘掉并给出**缺口清单**（`openInputs` = 哪些连线型输入空着、缺什么类型；`unresolvedInputs` = 哪个输入还悬着），AI 照着用 `comfy_submit(promptId=…, connections={"8.vae":["1",2]})` 把线补上就能跑 —— 猜的那部分仍然由 ComfyUI 自己的校验兜底。顺带：**本机 ComfyUI 的目录现在是自动放行的只读白名单**（`ComfyRoots` 每次现探），所以 AI 能直接读你自己的工作流文件；写仍然只允许 `<项目根>\comfyui`。 |
 | **提示词库** | 新建 / 编辑 / 复制 / 删除；区分「生图 / 生视频 / 生音频 / 混合」；正向 + 负向提示词；模型、采样器、调度器、步数、CFG、Seed、宽高、批量、LoRA 列表、备注、收藏；**多选批量管理**（收藏 / 取消收藏 / 加标签 / 删除）；**没有关联任何产物的提示词会挂一个橙色「未关联」标记**（产物被删掉之后就是这种状态），可以按「未关联产物」筛选，也可以**一键清除**（先报条数 + 前几条标题再确认，按批循环删除，超过单页 200 条也不会漏） |
 | **ComfyUI 自动捕获** | ComfyUI 里跑完一次生成，**提示词 + 全部参数 + 完整工作流 + 生成的图片/视频/音频**自动进库并互相关联；不需要改动工作流，也不需要装任何东西（装一个可选的推送节点可以做到零延迟） |
 | **历史产物导入** | 指向 ComfyUI 的 output 目录，把**以前生成好的**图连同图片里内嵌的 `prompt` / `workflow` 一起收进来，自动建提示词并关联 |
@@ -254,8 +254,8 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQ
 | `scripts\ensure-runtime.ps1` | **运行时一键就绪**：检测不到的运行时自动下载安装（Java 下便携版塞进 `<根>\jre`；pwsh / VC++ 走 winget）。`-CheckOnly` 只检测 |
 | `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
 | `scripts\check-silent-start.ps1` | **静默启动自测**：启动服务的同时盯屏，报告有没有弹出 cmd / 控制台窗口（加 `-Restart` 从零走一遍） |
-| `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成） |
-| `scripts\e2e-submit-test.ps1` | **AI 提交任务端到端自测**（假网关 + 假 ComfyUI）：批准闸门 / 真的提交 / 参数覆盖 / 产物入库，6 项断言，不出网不花钱 |
+| `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成）。假 ComfyUI 默认在 **18188**（**不是 8188** —— 那是真实 ComfyUI 的端口，撞上会让测试悄悄连到真实那一个），起好后还会认一次身份，不是自己的就当场停下 |
+| `scripts\e2e-submit-test.ps1` | **AI 提交任务端到端自测**（假网关 + 假 ComfyUI）：批准闸门 / 真的提交 / 参数覆盖 / 产物入库 / 工作流文件直接提交 / **前端节点缺口补线**，32 项断言，不出网不花钱 |
 | `scripts\e2e-ai-tools-test.ps1` | **AI 工具循环 + Skills + 附件端到端自测**（假 OpenAI 流式网关 `scripts\e2e\fake_openai.py`，不需要真 API Key、不出网：注册 / 按需加载 / 越界写被拒 / 目录内写成功 / 审批闸门 / 只读工具 / 长期记忆 / **附件上传·缩略图·图片内联·零上游请求**） |
 | `scripts\install-comfy-node.ps1` | （可选）把捕获节点装进 ComfyUI，实现「跑完立刻捕获」 |
 | `scripts\anima-gen.ps1` | **Anima 生图执行器**：向本机 ComfyUI 提交一次文生图并等落盘（`-PromptFile/-NegativeFile/-Width/-Height/-Seed/-Prefix`） |
@@ -982,6 +982,8 @@ pwsh -File scripts\server.ps1 test   # 后端 325 个用例
 | `test/comfyui_capture_test.py` | ComfyUI 捕获节点的纯逻辑（payload 组装、类型判定、重试），见 `docs/comfyui-capture.md` |
 | `server/src/test/kotlin/.../GraphParseTest.kt` | **参数解析器的回归测试**：经典 KSampler 图、真实的自定义采样链（MiniMax H3 那种）、空图/坏图、只有 `text_g`/`text_l` 的图。`pwsh -File scripts\server.ps1 test` |
 | `server/src/test/kotlin/.../HistoryEntryTest.kt` | **`/history` 记录解析的回归测试**：ComfyUI 0.34.2 的六元组、老版本三元组、带界面工作流 / 不带、坏数据不抛异常 —— 钉住"提示词与工作流整条丢失"那个坑 |
+| `server/src/test/kotlin/.../WorkflowConvertTest.kt` | **界面格式 → API 节点图**（用户 bug ③ + 用户建议 ②）：连线还原成 `["上游id", 槽位]`、控件值按声明顺序贴回名字、`control_after_generate` 多占的槽位要跳过、`forceInput` 不算控件、静音 / 旁路 / Reroute / Set-Get 的语义、**`widgets_values_named` 优先且只认声明过的键**、**组节点按 `definitions.subgraphs` 展开**（内部节点换新号、外层控件值填进内部输入、实例输出穿透到真正的产出节点）、**缺口清单**（悬空输入点名 + 空着的连线型输入）、嵌套组节点与未知类的"宁可报错也不猜"。20 例 |
+| `server/src/test/kotlin/.../WorkflowEditTest.kt` | **提交前的改写**：参数覆盖按原类型转换（整数不能变字符串）、路径不存在 / 是连线数组一律报错、**补连线**（`8.vae ← [1, 0]`、上游节点必须真的在图里、值必须是 `[节点, 槽位]`）。13 例 |
 | `server/src/test/kotlin/.../ReasoningEffortTest.kt` | **思考强度的协议契约**：模型没声明推理能力时一个字段都不发、六种方言开启/关闭各自落到哪个字段、`reasoning_effort` 改名与 token 预算、七个等级（含 `minimal` / `xhigh`）不降级、Anthropic 的 `max_tokens` 必须大于预算 |
 | `server/src/test/kotlin/.../ModelCapabilityTest.kt` | **能力预填**：接口声明优先、内置目录来源可见、未知模型只给文本；另有一张**逐模型对照表**（27 个常用模型：模态 + 思考档位键集合），数据取自 `%USERPROFILE%\.dsh\settings.yaml`，settings 变了或表写错都会在这里报出来 |
 | `server/src/test/kotlin/.../ThinkingAndUsageTest.kt` | **思考声明校验 + token 归一化**：未知等级 / 空表达 / 声明档位却没勾推理都会被拒；OpenAI 与 Anthropic 两种 usage 方言、只给 `total_tokens` 的网关、坏数据都当成 0 |

@@ -986,6 +986,10 @@ private fun TokenUsage.toOpenAiShape(): JsonObject? {
  *     到时候想查找、改动、删除会比较困难"）—— 第 11 条写清三条闸门：
  *     一次回复最多新增 [MemoryStore.MAX_ENTRIES_PER_RUN] 条、总量上限 [MemoryStore.MAX_ENTRIES] 条
  *     （满了要请用户清理，**不许自己删改用户已有的条目**）、每条自动带日期前缀。
+ *     **同一次还把"工作流转换不了"这件事从死路改成出路**（用户建议 ②）：
+ *     组节点 / 旁路现在由后端确定性展开，剩下的纯前端节点可以带 `tolerateUnsupported=true`
+ *     读进来拿**缺口清单**，再由模型用 `comfy_submit(connections=…)` 补线 ——
+ *     第 15 条因此从"给用户两个出口"改成"你自己先按清单把线补上"。
  */
 object SystemPrompt {
     const val VERSION = "v12"
@@ -1541,9 +1545,16 @@ object SystemPrompt {
                 本机 ComfyUI 的目录（含它下面的 `user\default\workflows`）**已经自动在读白名单里**，
                 所以读到 `PATH_DENIED` 只可能是那个路径不在任何 ComfyUI 目录下 —— 那时如实说清
                 被拒的路径与允许的目录，别猜原因、也别让用户先去改设置。
-                文件是界面格式（nodes/links）时后端会用 ComfyUI 的 `/object_info` 转换；
-                转不出来（用了 Anything Everywhere 这类纯前端节点）会明确报 `UNSUPPORTED_NODES`，
-                那时给用户两个出口：在 ComfyUI 里「导出（API）」一次，或者点一次 Queue 让它被自动捕获。
+                界面格式（nodes/links）里普通节点、**组节点（subgraph）**、Reroute / Set-Get、旁路
+                都会被等价展开或改写；剩下那些**纯前端**节点（`Anything Everywhere`、rgthree 的显示节点…）
+                默认会报 `UNSUPPORTED_NODES` —— 那时**不要就此收摊**：
+                带 `tolerateUnsupported=true` 再读一次，我会把那些节点摘掉并给出缺口清单
+                （`openInputs` = 哪些连线型输入空着、缺什么类型；`unresolvedInputs` = 哪个输入还悬着；
+                `unsupportedNodes` = 摘掉了哪些类）。照着清单用
+                `comfy_submit(promptId=…, connections={"<节点id>.<输入名>":["<上游节点id>", 槽位]})`
+                把线补上再跑 —— 补的是"哪根线接哪"，**不确定就先问用户，不许乱接**。
+                只有确实补不出来（说不清语义）时，才让用户去 ComfyUI 里「导出（API）」一次，
+                或者点一次 Queue 让它被自动捕获。
             """.trimIndent()
         )
     }

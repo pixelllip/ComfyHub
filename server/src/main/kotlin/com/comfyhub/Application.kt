@@ -179,12 +179,19 @@ fun Application.module(ctx: AppContext) {
         comfyFindWorkflow = { query, limit, includeGraph ->
             AiWorkflowSearch.search(capture, query, limit, includeGraph)
         },
-        comfySubmit = { promptId, overrides, title, waitSeconds ->
-            AiWorkflowSearch.submit(submitter, capture, promptId, overrides, title, waitSeconds)
+        comfySubmit = { promptId, overrides, connections, title, waitSeconds ->
+            AiWorkflowSearch.submit(submitter, capture, promptId, overrides, connections, title, waitSeconds)
         },
         // 用户 bug ③：给一个工作流文件路径就能读进库、拿到 promptId（界面格式在这里被转成 API 图）
-        comfyLoadWorkflow = { path, title, includeGraph ->
-            AiWorkflowSearch.loadWorkflowFromFile(submitter, java.nio.file.Paths.get(path), title, includeGraph)
+        // tolerateUnsupported（用户建议 ②）：转换不了的前端节点摘掉并给出缺口清单，交给模型补线
+        comfyLoadWorkflow = { path, title, includeGraph, tolerateUnsupported ->
+            AiWorkflowSearch.loadWorkflowFromFile(
+                submitter,
+                java.nio.file.Paths.get(path),
+                title,
+                includeGraph,
+                tolerateUnsupported,
+            )
         },
         // 图生图：把用户发来的图投放进 ComfyUI 的 input 目录（用户 bug：
         // "LoadImage 读的是捕获时绑定的那张 jpg，我只能改文本，改不了文件名"）

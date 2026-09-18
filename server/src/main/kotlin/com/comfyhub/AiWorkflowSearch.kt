@@ -43,6 +43,12 @@ object AiWorkflowSearch {
     /** 节点摘要最多列几个（8KB 的工具结果装不下 100+ 个节点的完整清单）。 */
     const val MAX_SUMMARY_NODES = 120
 
+    /** 工具结果是**截断**过的（全局 8KB 上限）：每一类缺口各留多少条。 */
+    const val MAX_UNSUPPORTED = 20
+    const val MAX_GAPS = 40
+    const val MAX_REWRITTEN = 12
+    const val MAX_WARNINGS = 5
+
 
     /**
      * 按关键词找库里能跑的工作流。
@@ -120,6 +126,15 @@ object AiWorkflowSearch {
         file: Path,
         title: String?,
         includeGraph: Boolean,
+        /**
+         * 遇到转换不了的前端节点时**是否照样入库**（默认 false = 如实报错）。
+         *
+         * 这是"放权给 AI"的那条通道（用户建议 ②）：点名之后，转换结果会带上
+         * **缺口清单**（哪个输入还悬着、哪些连线型输入空着、缺的是哪个类），
+         * 模型照着清单用 `comfy_submit(connections=…)` 把线补上再提交。
+         * 补的是"哪根线接哪"，不是让谁去猜语义 —— 猜的那部分仍然由 ComfyUI 的校验兜底。
+         */
+        tolerateUnsupported: Boolean = false,
     ): JsonObject {
         if (!Files.isRegularFile(file)) {
             throw ToolFailure("NOT_A_FILE", "不是文件：$file")
@@ -152,6 +167,9 @@ object AiWorkflowSearch {
 
         var warnings: List<String> = emptyList()
         var rewritten: List<String> = emptyList()
+        var unsupported: List<String> = emptyList()
+        var unresolved: List<String> = emptyList()
+        var openInputs: List<String> = emptyList()
         val apiGraph: JsonObject = if (apiFormat) {
             root
         } else {
@@ -169,21 +187,27 @@ object AiWorkflowSearch {
             } catch (e: IllegalArgumentException) {
                 throw ToolFailure("INVALID_ARGUMENT", "转换工作流失败：${e.message}")
             }
-            if (converted.unsupportedNodes.isNotEmpty()) {
+            if (converted.unsupportedNodes.isNotEmpty() && !tolerateUnsupported) {
                 throw ToolFailure(
                     "UNSUPPORTED_NODES",
                     "这条工作流用了 ComfyUI **前端**才有的节点，服务端没法等价转换：" +
                         converted.unsupportedNodes.joinToString("、").take(400) +
-                        "。两个出口：① 在 ComfyUI 里用「工作流菜单 → 导出（API）」存成 API 格式，" +
-                        "再把那份文件路径给我（API 格式是原样提交，零转换）；" +
-                        "② 在 ComfyUI 里点一次 Queue 让它跑一次，跑完会被自动捕获，之后就能按 promptId 提交。",
+                        "。三个出口：① 把 tolerateUnsupported=true 再来一次 —— 我会把这些节点摘掉、" +
+                        "并把**缺哪些线**列出来（openInputs / unresolvedInputs），" +
+                        "你照着用 comfy_submit(connections=…) 补上就能跑；" +
+                        "② 在 ComfyUI 里用「工作流菜单 → 导出（API）」存成 API 格式，再把那份文件路径给我" +
+                        "（API 格式是原样提交，零转换）；" +
+                        "③ 在 ComfyUI 里点一次 Queue 让它跑一次，跑完会被自动捕获，之后就能按 promptId 提交。",
                 )
             }
             if (converted.graph.isEmpty()) {
                 throw ToolFailure("NO_API_GRAPH", "转换之后一个可提交的节点都没有：$file")
             }
-            warnings = converted.warnings.take(5)
-            rewritten = converted.rewritten.take(20)
+            warnings = converted.warnings.take(MAX_WARNINGS)
+            rewritten = converted.rewritten.take(MAX_REWRITTEN)
+            unsupported = converted.unsupportedNodes.take(MAX_UNSUPPORTED)
+            unresolved = converted.unresolvedInputs.take(MAX_GAPS)
+            openInputs = converted.openInputs.take(MAX_GAPS)
             converted.graph
         }
 
@@ -193,9 +217,23 @@ object AiWorkflowSearch {
             source = SOURCE,
             raw = buildJsonObject { put("prompt", apiGraph) },
         )
-        val promptId = if (!claim.claimed) {
+        // 抢不到 + 那条记录是 `success` 但 prompt_id 已经没了 = **库里的提示词被用户删掉了**
+        // （删除会把 prompt_id 置空，run_key 是文件内容算出来的，于是这份文件再也导不进来，
+        // 只会永远回一句"正在被另一次调用加载"）。这种情况要能重新导入 ——
+        // 正在处理中（running）的仍然让开，不然并发加载同一份文件会各建一条。
+        val retried = if (!claim.claimed && claim.existingPromptId == null && claim.existingStatus == "success") {
+            CaptureRepo.beginRun(
+                runKey = runKey,
+                source = SOURCE,
+                raw = buildJsonObject { put("prompt", apiGraph) },
+                force = true,
+            )
+        } else {
+            claim
+        }
+        val promptId = if (!retried.claimed) {
             // 同一份文件已经加载过：直接复用（幂等，不重复建提示词）
-            claim.existingPromptId ?: throw ToolFailure(
+            retried.existingPromptId ?: throw ToolFailure(
                 "LOAD_IN_PROGRESS",
                 "这份工作流正在被另一次调用加载，稍等一下再试（或直接用 comfy_find_workflow 找它）",
             )
@@ -225,6 +263,7 @@ object AiWorkflowSearch {
         }
 
         val prompt = PromptRepo.get(promptId)
+        val runnable = unsupported.isEmpty() && unresolved.isEmpty()
         return buildJsonObject {
             put("promptId", promptId)
             put("runKey", runKey)
@@ -232,14 +271,33 @@ object AiWorkflowSearch {
             put("path", file.toString())
             put("format", if (uiFormat) "ui" else "api")
             put("nodeCount", apiGraph.size)
-            put("runnable", true)
-            put(
-                "hint",
-                "现在可以 comfy_submit(promptId=$promptId, overrides={\"<节点id>.<输入名>\": 值}) 提交它；" +
-                    "参数路径见下面的 nodes（linked 里的输入是连线，不能覆盖）。",
-            )
+            // 「能不能直接跑」是模型最需要知道的一件事：缺口的图提交上去 ComfyUI 只会报缺输入
+            put("runnable", runnable)
+            when {
+                runnable -> put(
+                    "hint",
+                    "现在可以 comfy_submit(promptId=$promptId, overrides={\"<节点id>.<输入名>\": 值}) 提交它；" +
+                        "参数路径见下面的 nodes（linked 里的输入是连线，不能覆盖）。",
+                )
+                else -> put(
+                    "hint",
+                    "**这条现在还不能跑**：转换时摘掉了 ${unsupported.size} 个 ComfyUI 前端节点，" +
+                        "留下的缺口见 openInputs / unresolvedInputs。请照着缺口用 " +
+                        "comfy_submit(promptId=$promptId, connections={\"<节点id>.<输入名>\": [\"<上游节点id>\", 槽位]}) " +
+                        "把线补上再提交（要改的字面量仍走 overrides）。不确定某条线该接哪时，先问用户，别乱接。",
+                )
+            }
             if (rewritten.isNotEmpty()) {
                 put("rewrittenNodes", buildJsonArray { rewritten.forEach { add(JsonPrimitive(it)) } })
+            }
+            if (unsupported.isNotEmpty()) {
+                put("unsupportedNodes", buildJsonArray { unsupported.forEach { add(JsonPrimitive(it)) } })
+            }
+            if (unresolved.isNotEmpty()) {
+                put("unresolvedInputs", buildJsonArray { unresolved.forEach { add(JsonPrimitive(it)) } })
+            }
+            if (openInputs.isNotEmpty()) {
+                put("openInputs", buildJsonArray { openInputs.forEach { add(JsonPrimitive(it)) } })
             }
             if (warnings.isNotEmpty()) {
                 put("warnings", buildJsonArray { warnings.forEach { add(JsonPrimitive(it)) } })
@@ -294,6 +352,7 @@ object AiWorkflowSearch {
         capture: ComfyCapture,
         promptId: Long,
         overrides: JsonObject?,
+        connections: JsonObject?,
         title: String?,
         waitSeconds: Int,
     ): ComfySubmitOutcome {
@@ -306,11 +365,18 @@ object AiWorkflowSearch {
                     "可以换一条 runnable=true 的，或者先在 ComfyUI 里手动跑一次让它被捕获。",
             )
 
-        val (patched, applied) = try {
+        val (overridden, appliedOverrides) = try {
             ComfySubmitter.WorkflowEdit.applyOverrides(graph, overrides.orEmpty())
         } catch (e: IllegalArgumentException) {
             throw ToolFailure("INVALID_ARGUMENT", e.message ?: "参数覆盖不合法")
         }
+        // 补线（放权通道）：界面格式里那些纯前端节点被摘掉之后，缺口由模型的 connections 填上
+        val (patched, appliedConnections) = try {
+            ComfySubmitter.WorkflowEdit.applyConnections(overridden, connections.orEmpty())
+        } catch (e: IllegalArgumentException) {
+            throw ToolFailure("INVALID_ARGUMENT", e.message ?: "补线不合法")
+        }
+        val applied = appliedOverrides + appliedConnections
 
         val label = title?.takeIf { it.isNotBlank() } ?: prompt.title
         val submission = submitter.submit(patched, label, waitSeconds = waitSeconds)

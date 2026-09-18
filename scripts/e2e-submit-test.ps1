@@ -51,10 +51,20 @@ $ProviderId  = 'e2e-submit-gw'
 
 $script:Failed = 0
 
+# 断言计数：脚本里任何一处意外抛错都会让后面的 Check **静默不执行**、最后却报"全部通过"。
+# 打印出来，数目对不上就是有断言被跳过了。
+$script:Checks = 0
+
 function Say([string]$msg, [string]$color = 'Gray') { Write-Host $msg -ForegroundColor $color }
 
-function Check([string]$name, [bool]$ok, [string]$detail = '') {
-    if ($ok) {
+function Check([string]$name, $ok, [string]$detail = '') {
+    # `$ok` 故意不强类型（`[bool]`）：`-match` / `-contains` 这类表达式可能返回**数组**，
+    # 强类型参数会当场抛绑定错误 —— 而那个错误会让后面所有断言**静默跳过**、脚本还报"全部通过"
+    # （这个坑真踩过）。这里统一按"非空即真"处理。
+    $passed = $false
+    if ($ok -is [array]) { $passed = $ok.Count -gt 0 } else { $passed = [bool]$ok }
+    $script:Checks++
+    if ($passed) {
         Say ("  [OK]   " + $name) 'Green'
     } else {
         Say ("  [FAIL] " + $name + $(if ($detail) { "  -> $detail" } else { '' })) 'Red'
@@ -106,6 +116,27 @@ function Get-PendingCallId([string]$RunId) {
     return $null
 }
 
+# 测试自己造出来的数据：假 ComfyUI 的 prompt_id 一律长成 `e2e-submit-0001`，
+# 于是被自动捕获轮询收进来的那些提示词（source_ref）与运行记录（run_key）都带这个前缀。
+#
+# 开头也要清一次（不只是结尾）：`CaptureRepo.beginRun` 对 `success` 的记录永远不再抢占
+# —— 那是幂等的正确行为，但脚本被 Ctrl+C 打断时清理跑不到，残留就会攒下来。
+function Clear-SubmitTestCaptures {
+    if (-not $script:Mysql) { return 0 }
+    $done = 0
+    $ids = & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
+        --database=comfy_hub -N -B -e "SELECT GROUP_CONCAT(id) FROM prompts WHERE source_ref LIKE 'e2e-submit-%';" 2>$null
+    if ($ids -and "$ids" -ne 'NULL') {
+        foreach ($id in ("$ids" -split ',')) {
+            if (-not $id) { continue }
+            try { Invoke-Api 'DELETE' "/api/prompts/$id" $null | Out-Null; $done++ } catch { }
+        }
+    }
+    & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
+        --database=comfy_hub -e "DELETE FROM capture_runs WHERE run_key LIKE 'e2e-submit-%';" 2>&1 | Out-Null
+    return $done
+}
+
 # ---------------------------------------------------------------------------
 
 Say ''
@@ -126,11 +157,17 @@ $createdMediaIds = @()
 $script:PermissionModeBefore = $null
 $script:ReadRootsBefore = $null
 $script:LoadedPromptId = $null
+# 第 5 幕从（另一份）文件加载出来的提示词
+$script:GapPromptId = $null
 
 try {
     $health = Invoke-Api 'GET' '/api/health' $null
     Check '后端可用（db=ok）' ($health.database -eq 'ok')
     if ($script:Failed -gt 0) { exit 1 }
+
+    # 上一轮遗留的测试数据先清掉（见 Clear-SubmitTestCaptures 的说明）
+    $stale = Clear-SubmitTestCaptures
+    if ($stale -gt 0) { Say "  已清掉上一轮遗留的 $stale 条测试提示词与运行记录" 'DarkGray' }
 
     # --- 0. 找一条能跑的工作流 -------------------------------------------
     # `hasWorkflow` 只说明存过工作流（可能是界面格式），提交需要的是 **API 节点图**，
@@ -234,7 +271,7 @@ try {
 
     # --- 3. 发一次「提交」，工具调用应当是"待批准"而不是直接执行 -----------
     Say ''
-    Say '  [1/3] comfy_submit 默认要用户批准' 'Cyan'
+    Say '  [1/5] comfy_submit 默认要用户批准' 'Cyan'
     $conv = Invoke-Api 'POST' '/api/ai/conversations' @{ providerId = $ProviderId; modelId = 'fake-title-model' }
     $run = Invoke-Api 'POST' "/api/ai/conversations/$($conv.id)/runs" @{
         text = "帮我用工作流 $($target.id) 提交 $($target.id) $overridePath=$overrideValue"
@@ -249,7 +286,7 @@ try {
 
     # --- 4. 批准 → 真的提交 → 入库 ----------------------------------------
     Say ''
-    Say '  [2/3] 批准之后才真的提交并入库' 'Cyan'
+    Say '  [2/5] 批准之后才真的提交并入库' 'Cyan'
     $approve = Invoke-Api 'POST' "/api/ai/tool-calls/$callId/approve" @{}
     Check '批准被后端接受' ($approve.accepted -eq $true) ($approve | ConvertTo-Json -Compress)
 
@@ -284,7 +321,7 @@ try {
 
     # --- 5. 参数覆盖与"提交的就是库里的图" --------------------------------
     Say ''
-    Say '  [3/3] 参数覆盖与提交内容' 'Cyan'
+    Say '  [3/5] 参数覆盖与提交内容' 'Cyan'
     $submitted = (Invoke-RestMethod "http://127.0.0.1:$ComfyPort/__submitted").runs
     Check '假 ComfyUI 收到了 1 次提交' ($submitted.Count -eq 1) "$($submitted.Count) 次"
     if ($submitted.Count -ge 1) {
@@ -307,7 +344,7 @@ try {
     #   ② 界面格式（nodes/links）被按 ComfyUI 的 /object_info 转成 API 节点图；
     #   ③ 转换出来的图真的提交给了 ComfyUI，且参数覆盖生效。
     Say ''
-    Say '  [4/4] 工作流文件直接提交（界面格式 → API 节点图）' 'Cyan'
+    Say '  [4/5] 工作流文件直接提交（界面格式 → API 节点图）' 'Cyan'
 
     $uiWorkflowPath = Join-Path $WfDir 'e2e_ui_workflow.json'
     New-Item -ItemType Directory -Path $WfDir -Force | Out-Null
@@ -400,6 +437,12 @@ try {
     $submittedAfter4 = (Invoke-RestMethod "http://127.0.0.1:$ComfyPort/__submitted").runs
     Check '转换出来的工作流真的提交给了 ComfyUI' ($submittedAfter4.Count -eq $submittedBefore4 + 1) `
         "$($submittedAfter4.Count) 次"
+    # 这一跑出来的产物也要登记进清理清单（不然画廊里会攒下 e2e 的图）
+    $submitTr4 = $null
+    if ($submitMsg) {
+        $submitTr4 = $submitMsg.parts | Where-Object { $_.jsonPayload.name -eq 'comfy_submit' } | Select-Object -First 1
+    }
+    if ($submitTr4) { $createdMediaIds += @($submitTr4.jsonPayload.mediaIds) }
     if ($submittedAfter4.Count -gt $submittedBefore4) {
         $g4 = $submittedAfter4[-1].graph
         Check '提交的图有 6 个节点（与转换结果一致）' (@($g4.PSObject.Properties.Name).Count -eq 6) `
@@ -411,6 +454,119 @@ try {
             ("$($g4.'3'.inputs.positive -join ',')" -eq '6,0') "$($g4.'3'.inputs.positive -join ',')"
         Check '提示词正文按声明顺序贴回（6.text）' ("$($g4.'6'.inputs.text)" -eq 'a cyberpunk cat') "$($g4.'6'.inputs.text)"
         if ($loaded) { $script:LoadedPromptId = $loaded.promptId }
+    }
+
+    # --- 7. 前端节点转不出来时：模型拿缺口清单 → 补线 → 提交（用户建议 ②）----
+    #
+    # 现场：krea2 那份工作流里有一堆纯前端节点（Anything Everywhere 之类），
+    # 服务端不敢猜着改写，于是整件事卡在"这条工作流转不了"。
+    # 现在的处理是**放权给 AI**：带 tolerateUnsupported=true 读进来，拿到
+    # `openInputs`（哪些连线型输入空着、缺什么类型）与 `unresolvedInputs`，
+    # 由模型用 comfy_submit(connections=…) 把线补上再跑 —— 补的是"哪根线接哪"，
+    # 猜的那部分仍然由 ComfyUI 自己的校验兜底。
+    Say ''
+    Say '  [5/5] 前端节点转不出来：模型按缺口清单补线再提交（用户建议 ②）' 'Cyan'
+
+    $gapPath = Join-Path $WfDir 'e2e_ui_gap_workflow.json'
+    $gapWorkflow = @'
+{
+  "last_node_id": 9,
+  "last_link_id": 10,
+  "nodes": [
+    { "id": 1, "type": "CheckpointLoaderSimple", "mode": 0,
+      "widgets_values": ["e2e_model.safetensors"], "inputs": [] },
+    { "id": 2, "type": "Anything Everywhere", "mode": 0,
+      "inputs": [{ "name": "anything", "type": "VAE", "link": 9 }], "outputs": [] },
+    { "id": 6, "type": "CLIPTextEncode", "mode": 0,
+      "widgets_values": ["a cyberpunk cat"], "inputs": [{ "name": "clip", "type": "CLIP", "link": 1 }] },
+    { "id": 7, "type": "CLIPTextEncode", "mode": 0,
+      "widgets_values": ["lowres"], "inputs": [{ "name": "clip", "type": "CLIP", "link": 2 }] },
+    { "id": 5, "type": "EmptyLatentImage", "mode": 0, "widgets_values": [640, 960, 1], "inputs": [] },
+    { "id": 3, "type": "KSampler", "mode": 0,
+      "widgets_values": [777002, "fixed", 20, 7.0, "euler", "normal", 1.0],
+      "inputs": [
+        { "name": "model", "type": "MODEL", "link": 3 },
+        { "name": "positive", "type": "CONDITIONING", "link": 4 },
+        { "name": "negative", "type": "CONDITIONING", "link": 5 },
+        { "name": "latent_image", "type": "LATENT", "link": 6 }
+      ] },
+    { "id": 8, "type": "VAEDecode", "mode": 0,
+      "inputs": [
+        { "name": "samples", "type": "LATENT", "link": 8 },
+        { "name": "vae", "type": "VAE", "link": null }
+      ] },
+    { "id": 9, "type": "SaveImage", "mode": 0,
+      "widgets_values": ["e2e/ui_gap"], "inputs": [{ "name": "images", "type": "IMAGE", "link": 10 }] }
+  ],
+  "links": [
+    [1, 1, 1, 6, 0, "CLIP"],
+    [2, 1, 1, 7, 0, "CLIP"],
+    [3, 1, 0, 3, 0, "MODEL"],
+    [4, 6, 0, 3, 1, "CONDITIONING"],
+    [5, 7, 0, 3, 2, "CONDITIONING"],
+    [6, 5, 0, 3, 3, "LATENT"],
+    [8, 3, 0, 8, 0, "LATENT"],
+    [9, 1, 2, 2, 0, "VAE"],
+    [10, 8, 0, 9, 0, "IMAGE"]
+  ]
+}
+'@
+    Set-Content -Path $gapPath -Value $gapWorkflow -Encoding utf8
+
+    $submittedBefore5 = (Invoke-RestMethod "http://127.0.0.1:$ComfyPort/__submitted").runs.Count
+    $conv3 = Invoke-Api 'POST' '/api/ai/conversations' @{ providerId = $ProviderId; modelId = 'fake-title-model' }
+    # VAEDecode 的 vae 该接节点 1 的 2 号输出（CheckpointLoaderSimple 的 VAE）——
+    # 这条线正是被摘掉的 `Anything Everywhere` 原来广播进去的
+    $gapRun = Invoke-Api 'POST' "/api/ai/conversations/$($conv3.id)/runs" @{
+        text = "补线 $gapPath 8.vae=1,2"
+        providerId = $ProviderId; modelId = 'fake-title-model'
+    }
+    $gapMsg = $null
+    foreach ($i in 1..200) {
+        Start-Sleep -Milliseconds 400
+        # 第二轮那个 comfy_submit 是要批准的（本脚本此刻把权限档钉在 ask）
+        $cid = Get-PendingCallId $gapRun.runId
+        if ($cid) { Invoke-Api 'POST' "/api/ai/tool-calls/$cid/approve" @{} | Out-Null }
+        $msgs = Invoke-Api 'GET' "/api/ai/conversations/$($conv3.id)/messages" $null
+        $gapMsg = $msgs | Where-Object { $_.id -eq $gapRun.assistantMessageId } | Select-Object -First 1
+        if ($gapMsg -and ($gapMsg.status -eq 'complete' -or $gapMsg.status -eq 'failed')) { break }
+    }
+    $gapParts = @()
+    if ($gapMsg) { $gapParts = @($gapMsg.parts | Where-Object { $_.type -eq 'tool_result' }) }
+    $gapLoad = $gapParts | Where-Object { $_.jsonPayload.name -eq 'comfy_load_workflow' } | Select-Object -First 1
+    Check '转不出来的那份也能读进来（ok=true）' ($null -ne $gapLoad -and $gapLoad.jsonPayload.ok -eq $true) `
+        $(if ($gapLoad) { $gapLoad.text } else { '没有 comfy_load_workflow 的结果' })
+    $gapLoaded = $null
+    if ($gapLoad -and $gapLoad.jsonPayload.ok -eq $true) { $gapLoaded = $gapLoad.text | ConvertFrom-Json }
+    Check '如实标成 runnable=false（缺口没补之前不能跑）' `
+        ($null -ne $gapLoaded -and $gapLoaded.runnable -eq $false) $(if ($gapLoaded) { $gapLoaded.runnable })
+    Check '点名摘掉了哪个前端节点（Anything Everywhere）' `
+        ($null -ne $gapLoaded -and @($gapLoaded.unsupportedNodes) -match 'Anything Everywhere') `
+        $(if ($gapLoaded) { @($gapLoaded.unsupportedNodes) -join ';' })
+    Check '列出空着的连线型输入（8.vae 该补什么一目了然）' `
+        ($null -ne $gapLoaded -and @($gapLoaded.openInputs) -contains '8.vae (VAE)') `
+        $(if ($gapLoaded) { @($gapLoaded.openInputs) -join ';' })
+
+    $gapSubmit = $gapParts | Where-Object { $_.jsonPayload.name -eq 'comfy_submit' } | Select-Object -First 1
+    Check '补完线之后提交成功（ok=true）' ($null -ne $gapSubmit -and $gapSubmit.jsonPayload.ok -eq $true) `
+        $(if ($gapSubmit) { $gapSubmit.text } else { '没有 comfy_submit 的结果' })
+    if ($gapSubmit -and $gapSubmit.jsonPayload.ok -eq $true) {
+        $gapOut = $gapSubmit.text | ConvertFrom-Json
+        $script:GapPromptId = $gapOut.promptId
+        $createdMediaIds += @($gapSubmit.jsonPayload.mediaIds)
+        $appliedGap = @($gapOut.appliedOverrides) | Where-Object { $_ -match '8\.vae' }
+        Check '补的那根线如实记进了 appliedOverrides' ($appliedGap.Count -gt 0) `
+            (@($gapOut.appliedOverrides) -join ';')
+    }
+    $submittedAfter5 = (Invoke-RestMethod "http://127.0.0.1:$ComfyPort/__submitted").runs
+    Check '补线的图真的提交给了 ComfyUI' ($submittedAfter5.Count -eq $submittedBefore5 + 1) `
+        "$($submittedAfter5.Count) 次"
+    if ($submittedAfter5.Count -gt $submittedBefore5) {
+        $g5 = $submittedAfter5[-1].graph
+        Check '提交的图里补上了 vae 连线（8.vae=[1,2]）' `
+            ("$($g5.'8'.inputs.vae -join ',')" -eq '1,2') "$($g5.'8'.inputs.vae -join ',')"
+        Check '被摘掉的前端节点没有混进提交的图' `
+            ($null -eq $g5.PSObject.Properties['2']) (@($g5.PSObject.Properties.Name) -join ',')
     }
 } finally {
     # --- 清理 -------------------------------------------------------------
@@ -453,14 +609,24 @@ try {
             try { Invoke-Api 'DELETE' "/api/media/$id" $null | Out-Null } catch { }
         }
         if ($createdPromptId) { try { Invoke-Api 'DELETE' "/api/prompts/$createdPromptId" $null | Out-Null } catch { } }
-        # 第 4 幕从文件加载出来的那条提示词（source=ComfyUI-File）也要清掉，
+        # 第 4 / 5 幕从文件加载出来的提示词（source=ComfyUI-File）也要清掉，
         # 否则库里会攒下一堆 e2e 工作流，下一次跑"载入"还会命中同一个 run_key（幂等 → 不算新数据）
-        if ($script:LoadedPromptId) {
-            try { Invoke-Api 'DELETE' "/api/prompts/$($script:LoadedPromptId)" $null | Out-Null } catch { }
-            if ($script:Mysql) {
-                & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
-                    --database=comfy_hub -e "DELETE FROM capture_runs WHERE source='ComfyUI-File' AND prompt_id=$($script:LoadedPromptId)" 2>&1 | Out-Null
+        $filePromptIds = @($script:LoadedPromptId, $script:GapPromptId) | Where-Object { $_ }
+        foreach ($fid in $filePromptIds) {
+            try { Invoke-Api 'DELETE' "/api/prompts/$fid" $null | Out-Null } catch { }
+        }
+        # capture_runs 用**文件内容的 sha256** 精确定位（run_key = `file:<sha256>`）：
+        # 只按 prompt_id 删会漏掉"提示词已经被删、prompt_id 置空"的那种残留记录。
+        $fileRunKeys = @()
+        foreach ($wf in @($uiWorkflowPath, $gapPath)) {
+            if ($wf -and (Test-Path $wf)) {
+                $sha = (Get-FileHash -Algorithm SHA256 -Path $wf).Hash.ToLower()
+                $fileRunKeys += "'file:$sha'"
             }
+        }
+        if ($script:Mysql -and $fileRunKeys.Count -gt 0) {
+            & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
+                --database=comfy_hub -e "DELETE FROM capture_runs WHERE run_key IN ($($fileRunKeys -join ','))" 2>&1 | Out-Null
         }
         if ($script:Mysql) {
             $keys = @()
@@ -470,7 +636,11 @@ try {
                     --database=comfy_hub -e "DELETE FROM capture_runs WHERE run_key IN ($($keys -join ','))" 2>&1 | Out-Null
             }
         }
-        Say ("  已删除 {0} 个产物 / {1} 条提示词 / 运行记录" -f $createdMediaIds.Count, $(if ($createdPromptId) { 1 } else { 0 })) 'DarkGray'
+        Say ("  已删除 {0} 个产物 / {1} 条提示词 / 运行记录" -f `
+                ($createdMediaIds | Select-Object -Unique).Count, (1 + $filePromptIds.Count)) 'DarkGray'
+        # 假 ComfyUI 的 prompt_id 造的提示词与运行记录（被自动捕获轮询收进来的那些）
+        $stale = Clear-SubmitTestCaptures
+        if ($stale -gt 0) { Say "  已清掉 $stale 条捕获进来的测试提示词与运行记录" 'DarkGray' }
         Remove-Item $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item $WfDir -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -481,7 +651,8 @@ if ($script:Failed -gt 0) {
     Say ("  ✗ 有 $script:Failed 项没通过，请看上面的 [FAIL]") 'Red'
     exit 1
 }
-Say '  ✓ 全部通过：批准闸门 / 真的提交 / 参数覆盖 / 产物入库 / 工作流文件直接提交' 'Green'
+Say '  ✓ 全部通过：批准闸门 / 真的提交 / 参数覆盖 / 产物入库 / 工作流文件直接提交 / 前端节点缺口补线' 'Green'
+Say ("  （{0} 项检查）" -f $script:Checks) 'DarkGray'
 Say ''
 exit 0
 

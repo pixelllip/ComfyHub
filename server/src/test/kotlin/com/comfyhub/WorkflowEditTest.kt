@@ -108,4 +108,45 @@ class WorkflowEditTest {
         assertEquals(graph().toString(), g.toString())
         assertTrue(applied.isEmpty())
     }
+
+    // --- 补线（用户建议 ②：转换不了的前端节点，缺口交回给模型填）------------
+
+    private fun connect(vararg pairs: Pair<String, kotlinx.serialization.json.JsonElement>): Pair<JsonObject, List<String>> =
+        ComfySubmitter.WorkflowEdit.applyConnections(graph(), pairs.toMap())
+
+    private fun ref(node: String, slot: Int) = kotlinx.serialization.json.buildJsonArray {
+        add(JsonPrimitive(node)); add(JsonPrimitive(slot))
+    }
+
+    @Test
+    fun `补线：把空着的输入接上上游节点`() {
+        // KSampler 的 positive 本来就没写（= 转换后空着的那种），补上去
+        val (g, applied) = connect("3.positive" to ref("6", 0))
+        assertEquals(ref("6", 0), inputOf(g, "3", "positive"))
+        assertEquals(listOf("3.positive ← [6, 0]"), applied)
+    }
+
+    @Test
+    fun `补线：可以覆盖原来就有的连线（换一个上游）`() {
+        val (g, _) = connect("3.model" to ref("6", 0))
+        assertEquals(ref("6", 0), inputOf(g, "3", "model"))
+    }
+
+    @Test
+    fun `补线的上游节点必须真的在图里（写错节点号最难查）`() {
+        val e = assertFailsWith<IllegalArgumentException> { connect("3.positive" to ref("999", 0)) }
+        assertTrue(e.message!!.contains("999"), e.message)
+    }
+
+    @Test
+    fun `补线的值必须写成 节点id 加槽位`() {
+        val e = assertFailsWith<IllegalArgumentException> {
+            connect("3.positive" to JsonPrimitive("6"))
+        }
+        assertTrue(e.message!!.contains("槽位") || e.message!!.contains("[") , e.message)
+        assertFailsWith<IllegalArgumentException> {
+            connect("3.positive" to kotlinx.serialization.json.buildJsonArray { add(JsonPrimitive("6")) })
+        }
+        assertFailsWith<IllegalArgumentException> { connect("steps" to ref("6", 0)) }
+    }
 }

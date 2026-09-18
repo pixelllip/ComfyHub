@@ -45,9 +45,9 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `comfy_get_status` | comfy | allow | 复用 `ComfyCapture.status()`：连通性 / 队列 / 最近捕获（**附最近提交的任务**） |
 | `comfy_get_run` | comfy | allow | 按 runKey 查一次捕获（AIH-034） |
 | `comfy_sync_history` | comfy | **ask** | 会写我们的库，按 DEC-005 默认要审批 |
-| `comfy_load_workflow` | comfy | allow | 把**一份本机工作流文件**读进库换成一个能提交的 `promptId`（用户 bug ③，2026-09-18）：API 格式原样用，界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图；转不出来（Anything Everywhere 这类纯前端节点）如实报 `UNSUPPORTED_NODES`。只读用户机器上的文件，不改它 |
+| `comfy_load_workflow` | comfy | allow | 把**一份本机工作流文件**读进库换成一个能提交的 `promptId`（用户 bug ③，2026-09-18）：API 格式原样用；界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图 —— 普通节点、**组节点（subgraph）**、Reroute / Set-Get、旁路都会等价展开或改写，控件值**首选带名字的 `widgets_values_named`**。剩下的纯前端节点默认如实报 `UNSUPPORTED_NODES`；带 `tolerateUnsupported=true` 再来一次则**摘掉它们并给出缺口清单**（`openInputs` / `unresolvedInputs`），交给模型补线（用户建议 ②）。只读用户机器上的文件，不改它 |
 | `comfy_find_workflow` | comfy | allow | 搜库里**能直接跑**的工作流（标注 `runnable` = 有没有 API 节点图） |
-| `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数，跑完直接入库；会消耗显卡时间，默认要审批 |
+| `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数、`connections` 补连线（值写 `["<上游节点id>", 槽位]`），跑完直接入库；会消耗显卡时间，默认要审批 |
 | `comfy_use_attachment` | comfy | **ask** | 把用户发来的**图片附件**投放进 ComfyUI 的 `input/` 目录并返回真实文件名（用户 bug，2026-09-17）：图生图 / 参考图的唯一正路，默认要审批（往用户机器上写文件） |
 
 ### 2.1.1 图生图为什么要单独一个工具（2026-09-17）
@@ -78,7 +78,16 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
   提交要用的是 `capture_runs.raw` 里那份"当时真正跑的东西"（`ComfyCapture.apiGraphOf`）。
   老数据没有它就报 `NO_API_GRAPH` 并说明怎么办 —— **不做"看起来差不多"的转换**。
 - **参数覆盖按原类型转换**：原来存整数就不能塞字符串；字段不存在、或值是连线数组（`[节点, 序号]`）
-  一律报错（`WorkflowEditTest` 9 例）。静默忽略的后果是模型以为改了、用户以为改了，实际没改。
+  一律报错（`WorkflowEditTest` 13 例）。静默忽略的后果是模型以为改了、用户以为改了，实际没改。
+- **补连线 (`connections`) 与覆盖参数分开**（用户建议 ②，2026-09-18）：前面那套是"改值"，
+  这套是"接线"。键同样是 `节点id.输入名`，值必须是 `["<上游节点id>", 槽位]`，而且
+  **上游节点必须真的在这张图里**（写错一个节点号，ComfyUI 只会回一句"节点不存在"，最难查）。
+  与覆盖参数不同的是：它**允许写一个当前不存在的输入名** —— 界面格式里那些被摘掉的前端节点
+  留下的空位本来就不在 `inputs` 里。
+- **"转换不了"不再是死路**（用户建议 ②，2026-09-18）：`comfy_load_workflow` 带
+  `tolerateUnsupported=true` 时会把纯前端节点摘掉并给出缺口清单（`runnable=false` +
+  `openInputs` + `unresolvedInputs`），模型照着清单补线再提交。**猜的那部分没有变多** ——
+  线接错了 ComfyUI 自己的校验会当场拒绝（`node_errors`，不入队），比服务端瞎猜一个语义安全得多。
 - **等待有上限**：默认 240 秒、最多 900 秒；超时报 `timeout` 并提示"跑完会自动入库"，
   **不假装完成也不假装失败**。
 - **产物入库与手动出图完全同路**：`capture.captureRun()`（幂等靠 `prompt_id` + 文件 SHA-256），
@@ -159,7 +168,9 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
   超预算的工具调用会以 `TOOL_BUDGET_EXCEEDED` / `QUERY_BUDGET_EXCEEDED` 失败返回，模型能看懂并改用已有信息。
 - **提示词版本**：v1 里那句「当前版本尚未注册任何工具」删掉了，v2 改成工具清单 + 权限边界 +
   Skills 使用纪律 + 防注入规则（AIH-046）；v3 长期记忆、v4 附件诚实、v5 会话标题、
-  v6/v8 权限档与档位改名、v7 图生图三步；**v11 = 工作流文件可以直接提交**（`comfy_load_workflow`，用户 bug ③）；**v9 = 移植 DSH 默认提示词的行为纪律段**
+  v6/v8 权限档与档位改名、v7 图生图三步；**v11 = 工作流文件可以直接提交**（`comfy_load_workflow`，用户 bug ③）；
+  **v12 = 长期记忆的条数闸门 + 工作流转换不了时按缺口清单补线**（`tolerateUnsupported` / `connections`，用户建议 ②）；
+  **v9 = 移植 DSH 默认提示词的行为纪律段**
   （事实纪律 / 表达风格 / 写入留退路 + 读取按需，见 §1 表格最后一行）；**v10 = 查询预算 3 → 9**
   （提示词里那个数字改成从常量插值）。改动只影响新 Run。
 - **网关不认 `tools` 时的兜底**：很多网关收到 `tools` 直接 400。这种情况本次 Run 会自动

@@ -119,6 +119,10 @@ OBJECT_INFO = {
             "denoise": ["FLOAT", {"default": 1.0}],
         }}
     },
+    # 第 5 幕用：它的 `vae` 故意在图里空着，好让"纯前端广播节点被摘掉之后的缺口"有地方补
+    "VAEDecode": {
+        "input": {"required": {"samples": ["LATENT"], "vae": ["VAE"]}}
+    },
     "SaveImage": {
         "input": {
             "required": {"images": ["IMAGE"]},

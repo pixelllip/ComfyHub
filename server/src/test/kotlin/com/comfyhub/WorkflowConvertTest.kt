@@ -392,10 +392,199 @@ class WorkflowConvertTest {
         assertTrue(!WorkflowConvert.isUiWorkflow(buildJsonObject { put("1", buildJsonObject { put("class_type", "KSampler") }) }))
     }
 
+    // --- 2026-09-18：两条"不用猜"的增强 + 缺口清单 -------------------------
+
+    @Test
+    fun `带名字的 widgets_values_named 优先 且按输入声明过滤（用户 bug：参数对不齐）`() {
+        val ui = AppJson.parseToJsonElement(
+            """
+            { "nodes": [ { "id": 1, "type": "EmptyLatentImage", "mode": 0,
+                           "widgets_values": [512, 512, 1],
+                           "widgets_values_named": {"width":1024,"height":768,"batch_size":2,"bogus":9} } ],
+              "links": [] }
+            """.trimIndent(),
+        ) as JsonObject
+        val result = WorkflowConvert.toApiGraph(ui, objectInfo())
+
+        // 有名字就用名字：位置式那份完全被忽略（这正是"对不齐"的来源）
+        assertEquals(JsonPrimitive(1024), result.graph.inputsOf("1")["width"])
+        assertEquals(JsonPrimitive(768), result.graph.inputsOf("1")["height"])
+        assertEquals(JsonPrimitive(2), result.graph.inputsOf("1")["batch_size"])
+        // 声明里没有的键不能塞进去（ComfyUI 会当未知参数拒掉整张图），但要留一句话
+        assertTrue(!result.graph.inputsOf("1").containsKey("bogus"))
+        assertTrue(result.warnings.any { it.contains("bogus") }, result.warnings.toString())
+        assertTrue(
+            !result.warnings.any { it.contains("控件值有") },
+            "带名字的那份不该再报「个数对不上」：${result.warnings}",
+        )
+    }
+
+    @Test
+    fun `组节点按定义展开：内部节点换新号 连线与控件值都接对 输出穿透到真正的产出节点`() {
+        val result = WorkflowConvert.toApiGraph(subgraphWorkflow(), objectInfo())
+
+        assertTrue(result.unsupportedNodes.isEmpty(), "组节点该被展开而不是报错：${result.unsupportedNodes}")
+        // 顶层 1（CheckpointLoaderSimple）+ 20（KSampler）+ 展开出来的两个内部节点
+        assertEquals(4, result.nodeCount)
+        assertTrue(!result.graph.containsKey("10"), "被展开的组节点实例自己不该再出现")
+        assertTrue(result.rewritten.any { it.contains("组节点") }, result.rewritten.toString())
+
+        // 内部节点拿到的是没人用过的新号（内部 id 与主图撞号，必须重编）
+        val innerLatent = result.graph.entries.first { (k, v) ->
+            k != "1" && k != "20" && (v as JsonObject)["class_type"].asText() == "EmptyLatentImage"
+        }
+        val innerModel = result.graph.entries.first { (k, v) ->
+            (v as JsonObject)["class_type"].asText() == "ModelPassthrough"
+        }
+
+        // ① 实例上的控件值（width=768）要填进内部节点的对应输入，而不是走控件顺序
+        assertEquals(
+            JsonPrimitive(768),
+            (innerLatent.value as JsonObject).inputsOf()["width"],
+            "组节点把 width 暴露到了外层，值必须原样传进去",
+        )
+        // ② 组节点的"连线型输入"要接上主图那边真正的来源
+        assertEquals(
+            JsonArray(listOf(JsonPrimitive(1), JsonPrimitive(0))),
+            (innerModel.value as JsonObject).inputsOf()["model"],
+            "组节点输入喂进来的 MODEL 应该接回主图的 CheckpointLoaderSimple",
+        )
+        // ③ 组节点的输出要穿透到内部真正产出它的节点
+        assertEquals(
+            JsonArray(listOf(JsonPrimitive(innerLatent.key.toInt()), JsonPrimitive(0))),
+            result.graph.inputsOf("20")["latent_image"],
+            "下游拿到的必须是内部那个 EmptyLatentImage",
+        )
+        assertTrue(result.unresolvedInputs.isEmpty(), result.unresolvedInputs.toString())
+    }
+
+    @Test
+    fun `组节点里的组节点这一版不展开 如实报错（不猜）`() {
+        val ui = AppJson.parseToJsonElement(
+            """
+            { "nodes": [ { "id": 10, "type": "aaaaaaaa-0000-0000-0000-000000000000", "mode": 0,
+                           "widgets_values": [], "inputs": [] } ],
+              "links": [],
+              "definitions": { "subgraphs": [
+                { "id": "aaaaaaaa-0000-0000-0000-000000000000",
+                  "inputNode": {"id": -10}, "outputNode": {"id": -20},
+                  "inputs": [], "outputs": [],
+                  "nodes": [ { "id": 1, "type": "bbbbbbbb-0000-0000-0000-000000000000" } ],
+                  "links": [] },
+                { "id": "bbbbbbbb-0000-0000-0000-000000000000",
+                  "inputNode": {"id": -10}, "outputNode": {"id": -20},
+                  "inputs": [], "outputs": [], "nodes": [], "links": [] }
+              ] } }
+            """.trimIndent(),
+        ) as JsonObject
+        val result = WorkflowConvert.toApiGraph(ui, objectInfo())
+        assertTrue(
+            result.unsupportedNodes.any { it.contains("还套着一层组节点") },
+            result.unsupportedNodes.toString(),
+        )
+    }
+
+    @Test
+    fun `静音节点留下的悬挂输入要点名报出来（不然 ComfyUI 只会说节点不存在）`() {
+        val ui = AppJson.parseToJsonElement(
+            """
+            { "nodes": [
+                { "id": 1, "type": "CLIPTextEncode", "mode": 2, "widgets_values": ["不跑"], "inputs": [] },
+                { "id": 3, "type": "KSampler", "mode": 0,
+                  "widgets_values": [1, "fixed", 20, 7.0, "euler", "normal", 1.0],
+                  "inputs": [{"name":"positive","type":"CONDITIONING","link":8}] }
+              ],
+              "links": [[8, 1, 0, 3, 1, "CONDITIONING"]] }
+            """.trimIndent(),
+        ) as JsonObject
+        val result = WorkflowConvert.toApiGraph(ui, objectInfo())
+        assertEquals(listOf("3.positive ← 节点 1（没有转换出来）"), result.unresolvedInputs)
+    }
+
+    @Test
+    fun `空着的连线型输入列成清单（纯前端广播节点原来就是往这些地方灌值的）`() {
+        val ui = AppJson.parseToJsonElement(
+            """
+            { "nodes": [ { "id": 1, "type": "ForceInputNode", "mode": 0,
+                           "widgets_values": ["hello"], "inputs": [] } ],
+              "links": [] }
+            """.trimIndent(),
+        ) as JsonObject
+        val result = WorkflowConvert.toApiGraph(ui, objectInfo())
+        // value 是 forceInput（插口）：空着 = 缺输入，要列出来
+        assertTrue(result.openInputs.contains("1.value (STRING)"), result.openInputs.toString())
+        // note 是普通控件：空着时 ComfyUI 用默认值，不算缺口
+        assertTrue(!result.openInputs.any { it.contains("note") }, result.openInputs.toString())
+    }
+
     @Test
     fun `空工作流报错 而不是转出一张空图`() {
         val empty = AppJson.parseToJsonElement("""{"nodes":[],"links":[]}""") as JsonObject
         val e = kotlin.runCatching { WorkflowConvert.toApiGraph(empty, objectInfo()) }.exceptionOrNull()
         assertTrue(e is IllegalArgumentException, "空工作流必须报错：$e")
     }
+
+    /**
+     * 一份带**组节点**的界面格式工作流，结构照着本机真实存档（krea2 那份）抄：
+     * 主图 → 组节点实例（type 是 UUID）→ `definitions.subgraphs` 里的定义，
+     * 定义用 `inputNode.id = -10` / `outputNode.id = -20` 两个代理节点表示接口。
+     *
+     * 这里刻意让内部节点 id 与主图**撞号**（内部也有 1 号节点）、
+     * 内部连线 id 与主图也不共用一套编号 —— 这两件事真实文件里都会发生。
+     */
+    private fun subgraphWorkflow(): JsonObject = AppJson.parseToJsonElement(
+        """
+        {
+          "nodes": [
+            { "id": 1, "type": "CheckpointLoaderSimple", "mode": 0,
+              "widgets_values": ["a.safetensors"], "inputs": [],
+              "outputs": [{"name":"MODEL","type":"MODEL"}] },
+            { "id": 10, "type": "11111111-2222-3333-4444-555555555555", "mode": 0,
+              "widgets_values_named": {"width": 768},
+              "inputs": [
+                {"name":"model","type":"MODEL","link":1},
+                {"name":"width","type":"INT","widget":{"name":"width"},"link":null}
+              ],
+              "outputs": [{"name":"LATENT","type":"LATENT","links":[2]}] },
+            { "id": 20, "type": "KSampler", "mode": 0,
+              "widgets_values": [1, "fixed", 20, 7.0, "euler", "normal", 1.0],
+              "inputs": [
+                {"name":"model","type":"MODEL","link":3},
+                {"name":"latent_image","type":"LATENT","link":2}
+              ] }
+          ],
+          "links": [
+            [1, 1, 0, 10, 0, "MODEL"],
+            [2, 10, 0, 20, 1, "LATENT"],
+            [3, 1, 0, 20, 0, "MODEL"]
+          ],
+          "definitions": { "subgraphs": [
+            { "id": "11111111-2222-3333-4444-555555555555", "name": "新组节点",
+              "inputNode": {"id": -10}, "outputNode": {"id": -20},
+              "inputs": [
+                {"name":"model","type":"MODEL","linkIds":[1401]},
+                {"name":"width","type":"INT","linkIds":[1402]}
+              ],
+              "outputs": [ {"name":"LATENT","type":"LATENT","linkIds":[1403]} ],
+              "nodes": [
+                { "id": 1, "type": "EmptyLatentImage", "mode": 0,
+                  "widgets_values": [512, 512, 1],
+                  "inputs": [{"name":"width","type":"INT","widget":{"name":"width"},"link":1402}],
+                  "outputs": [{"name":"LATENT","type":"LATENT","links":[1403]}] },
+                { "id": 2, "type": "ModelPassthrough", "mode": 0, "widgets_values": [],
+                  "inputs": [{"name":"model","type":"MODEL","link":1401}] }
+              ],
+              "links": [
+                {"id":1401,"origin_id":-10,"origin_slot":0,"target_id":2,"target_slot":0,"type":"MODEL"},
+                {"id":1402,"origin_id":-10,"origin_slot":1,"target_id":1,"target_slot":0,"type":"INT"},
+                {"id":1403,"origin_id":1,"origin_slot":0,"target_id":-20,"target_slot":0,"type":"LATENT"}
+              ] }
+          ] }
+        }
+        """.trimIndent(),
+    ) as JsonObject
+
+    /** 取一个已转出节点的 inputs（名字短一点，断言好读）。 */
+    private fun JsonObject.inputsOf() = this["inputs"] as JsonObject
 }
+
