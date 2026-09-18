@@ -591,6 +591,7 @@ fun Route.aiRoutes(
                 ToolPolicyDto(
                     writeRoots = policy.writeRoots.map { it.toString() },
                     readRoots = policy.readRoots.map { it.toString() },
+                    autoReadRoots = policy.autoReadRoots.map { it.toString() },
                     overrides = policy.config.overrides,
                     maxToolSteps = policy.config.maxToolSteps,
                     maxCallsPerRun = policy.config.maxCallsPerRun,
@@ -626,11 +627,12 @@ fun Route.aiRoutes(
                 permissionMode = mode ?: current.permissionMode,
             )
             ToolPolicy.save(next)
-            val saved = ToolPolicy(projectRoot, next)
+            val saved = ToolPolicy.load(projectRoot)
             call.respond(
                 ToolPolicyDto(
                     writeRoots = saved.writeRoots.map { it.toString() },
                     readRoots = saved.readRoots.map { it.toString() },
+                    autoReadRoots = saved.autoReadRoots.map { it.toString() },
                     overrides = next.overrides,
                     maxToolSteps = next.maxToolSteps,
                     maxCallsPerRun = next.maxCallsPerRun,
@@ -912,6 +914,12 @@ data class MemoryEntryRequest(val content: String = "")
 data class ToolPolicyDto(
     val writeRoots: List<String>,
     val readRoots: List<String>,
+    /**
+     * **自动发现**的只读目录（用户 bug ④）：本机 ComfyUI 的安装目录 / 共享目录会被自动放行，
+     * 这样 `read_file` 读用户自己的工作流文件不会被 PATH_DENIED 挡住。
+     * 界面只展示、不编辑 —— 它是每次现算的，不是用户配置。
+     */
+    val autoReadRoots: List<String> = emptyList(),
     val overrides: Map<String, String> = emptyMap(),
     val maxToolSteps: Int = 8,
     val maxCallsPerRun: Int = 16,

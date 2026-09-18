@@ -77,6 +77,57 @@ WORKFLOW = {
 }
 
 
+# 节点定义表（`GET /object_info` 的极简版）。
+#
+# 只覆盖"界面格式 → API 节点图"这条转换会问到的几个字段：
+# `input.required` 的**声明顺序**（决定 widgets_values 的位置对应哪个参数）、
+# 组合框（值是一个数组）与 `control_after_generate`（种子后面那个下拉框会多占一个槽位）。
+OBJECT_INFO = {
+    "CheckpointLoaderSimple": {
+        "input": {"required": {"ckpt_name": [[CHECKPOINT, "other.safetensors"]]}}
+    },
+    "CLIPTextEncode": {
+        "input": {"required": {"text": ["STRING", {"multiline": True}], "clip": ["CLIP"]}}
+    },
+    "EmptyLatentImage": {
+        "input": {"required": {
+            "width": ["INT", {"default": 512}],
+            "height": ["INT", {"default": 512}],
+            "batch_size": ["INT", {"default": 1}],
+        }}
+    },
+    "LoraLoader": {
+        "input": {"required": {
+            "lora_name": [[LORA]],
+            "strength_model": ["FLOAT", {"default": 1.0}],
+            "strength_clip": ["FLOAT", {"default": 1.0}],
+            "model": ["MODEL"],
+            "clip": ["CLIP"],
+        }}
+    },
+    "KSampler": {
+        "input": {"required": {
+            "model": ["MODEL"],
+            "seed": ["INT", {"default": 0, "control_after_generate": True}],
+            "steps": ["INT", {"default": 20}],
+            "cfg": ["FLOAT", {"default": 7.0}],
+            "sampler_name": [["euler", "dpmpp_2m", "ddim"]],
+            "scheduler": [["normal", "karras"]],
+            "positive": ["CONDITIONING"],
+            "negative": ["CONDITIONING"],
+            "latent_image": ["LATENT"],
+            "denoise": ["FLOAT", {"default": 1.0}],
+        }}
+    },
+    "SaveImage": {
+        "input": {
+            "required": {"images": ["IMAGE"]},
+            "optional": {"filename_prefix": ["STRING", {"default": "ComfyUI"}]},
+        }
+    },
+}
+
+
 def pick_output_node(graph):
     """挑出这张图的产物节点。
 
@@ -142,6 +193,11 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/history":
             # 真实 ComfyUI 支持 ?max_items=，这里忽略即可
             self._json(self.history)
+        elif parsed.path == "/object_info":
+            # 真实 ComfyUI 的节点定义表。ComfyHub 把**界面格式**工作流转成 API 节点图时要用它
+            # （widgets_values 只有位置、没有参数名，顺序只能从这里拿）——
+            # 少了这个端点，`comfy_load_workflow` 那条链路在测试里就只能报"连不上"。
+            self._json(OBJECT_INFO)
         elif parsed.path.startswith("/history/"):
             # 提交任务之后 ComfyHub 会按 prompt_id 精确轮询（ComfySubmitter.historyEntry）
             key = parsed.path[len("/history/"):]

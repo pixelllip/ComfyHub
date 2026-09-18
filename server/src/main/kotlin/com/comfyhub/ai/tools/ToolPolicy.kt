@@ -109,9 +109,23 @@ data class ToolPolicyConfig(
 class ToolPolicy(
     val projectRoot: Path,
     val config: ToolPolicyConfig,
+    /**
+     * **自动发现的**只读目录（用户 bug ④："应该自动发现 comfy 目录，给 comfy 的目录默认白名单"）。
+     *
+     * 与 [ToolPolicyConfig.readRoots] 刻意分开两件事：
+     *  - `readRoots` 是**用户配过的**（落库、界面可改、可删）；
+     *  - 这一份是**每次现算的探测结果**（[com.comfyhub.ComfyRoots]），不落库 ——
+     *    换了 ComfyUI 的安装位置、或者用户第一次装上 ComfyUI，下一次工具调用就自动认得。
+     *
+     * 它**只影响读**，写仍然只认 [writeRoots]。
+     */
+    val autoReadRoots: List<Path> = emptyList(),
 ) {
     val writeRoots: List<Path> = expand(config.writeRoots.ifEmpty { listOf(ToolPolicyConfig.DEFAULT_WRITE_DIR) })
     val readRoots: List<Path> = expand(config.readRoots.ifEmpty { ToolPolicyConfig.DEFAULT_READ_DIRS })
+
+    /** 实际生效的读白名单：用户配的 + 自动发现的（去重，保持顺序）。 */
+    val effectiveReadRoots: List<Path> = (readRoots + autoReadRoots).distinct()
 
     private fun expand(entries: List<String>): List<Path> = entries.mapNotNull { raw ->
         runCatching {
@@ -144,8 +158,8 @@ class ToolPolicy(
     /** 用户显式覆盖过档位（用于界面上的"已覆盖"标记）。 */
     fun isOverridden(tool: AgentTool): Boolean = ToolAccess.parse(config.overrides[tool.name]) != null
 
-    /** 读路径：必须落在 readRoots 内。 */
-    fun resolveRead(raw: String): Path = resolve(raw, readRoots, "读")
+    /** 读路径：必须落在生效读白名单内（用户配的 + 自动发现的 ComfyUI 目录）。 */
+    fun resolveRead(raw: String): Path = resolve(raw, effectiveReadRoots, "读")
 
     /** 写路径：必须落在 writeRoots 内，且不能落在禁写段。 */
     fun resolveWrite(raw: String): Path = resolve(raw, writeRoots, "写")
@@ -186,7 +200,10 @@ class ToolPolicy(
         val hit = segments.firstOrNull { it in ToolPolicyConfig.FORBIDDEN_SEGMENTS } ?: return
         throw ToolFailure(
             "PATH_DENIED",
-            "拒绝$verb ${path.fileName}：$hit 是本项目的运行期数据 / 依赖目录，任何工具都不可改"
+            // 措辞要跟 verb 对上：这些段读写都不许碰，写成"不可改"会让一次读取被拒看起来像
+            // "我能读、只是不能改"（实测被这条消息误导过一次）
+            "拒绝$verb ${path.fileName}：$hit 是本项目的运行期数据 / 依赖目录，" +
+                "任何工具都不许读也不许写（与用户白名单无关）"
         )
     }
 
@@ -222,7 +239,11 @@ class ToolPolicy(
                     .getOrNull()
             } ?: ToolPolicyConfig()
             // 内置预算（查 ComfyUI 的次数）以代码为准，不认库里冻着的历史值 —— 见 normalizeStored
-            return ToolPolicy(projectRoot, ToolPolicyConfig.normalizeStored(config))
+            // 用户机器上的 ComfyUI 目录每次现探（不落库）：读白名单要自动跟着它走（用户 bug ④）
+            val auto = runCatching { com.comfyhub.ComfyRoots.autoReadRoots(projectRoot) }
+                .onFailure { LOG.warn("探测 ComfyUI 目录失败：{}", it.message) }
+                .getOrDefault(emptyList())
+            return ToolPolicy(projectRoot, ToolPolicyConfig.normalizeStored(config), auto)
         }
 
         fun save(config: ToolPolicyConfig) {

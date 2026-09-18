@@ -227,18 +227,37 @@ object CaptureRepo {
               FROM capture_runs WHERE run_key = ?
             """.trimIndent(),
             runKey,
-        ) { rs ->
-            CaptureRunInfo(
-                runKey = rs.strOr("run_key"),
-                promptId = rs.longOrNull("prompt_id"),
-                status = rs.strOr("status", "success"),
-                mediaCount = rs.intOrNull("media_count") ?: 0,
-                title = rs.str("title"),
-                error = rs.str("error"),
-                capturedAt = rs.isoTime("created_at"),
-            )
-        }
+        ) { rs -> rs.toRunInfo() }
     }
+
+    /**
+     * 按**捕获记录里的数字 prompt_id** 查一条记录。
+     *
+     * 为什么需要（实测踩到的坑）：`comfy_submit` 的结果里同时有
+     * `promptId`（库里 prompts 表的 id）、`comfyPromptId`（ComfyUI 的 UUID）、
+     * `capturedPromptId`（`capture_runs.prompt_id`）三个"id"，模型很自然地会拿数字那个
+     * 去 `comfy_get_run`，而那边只认 runKey（UUID）→ 直接 `NOT_FOUND`，
+     * 表现就是"刚提交完，它却说查不到这次运行"（真实对话里发生过）。
+     * 所以查询入口要把数字也认下来。
+     */
+    fun findRunByPromptId(promptId: Long): CaptureRunInfo? = Db.withConnection { conn ->        conn.queryOne(
+            """
+            SELECT run_key, prompt_id, status, media_count, title, error, created_at
+              FROM capture_runs WHERE prompt_id = ? ORDER BY id DESC LIMIT 1
+            """.trimIndent(),
+            promptId,
+        ) { rs -> rs.toRunInfo() }
+    }
+
+    private fun java.sql.ResultSet.toRunInfo() = CaptureRunInfo(
+        runKey = strOr("run_key"),
+        promptId = longOrNull("prompt_id"),
+        status = strOr("status", "success"),
+        mediaCount = intOrNull("media_count") ?: 0,
+        title = str("title"),
+        error = str("error"),
+        capturedAt = isoTime("created_at"),
+    )
 
     /** 原始 `/history` 片段（`raw` 列）—— 提交任务时要从中取回 API 格式节点图。 */
     fun rawOf(runKey: String): String? = Db.withConnection { conn ->

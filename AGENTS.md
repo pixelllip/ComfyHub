@@ -26,9 +26,9 @@
   为了用掉 import 而写的占位用例、同一行为的两种写法 —— 这类**该删就删**（用户提过"减少一些
   已经通过、不太重要的测试项"）。判断方法只有一句：**删了以后出错还能不能被测试抓住**。
   真正的防线（零上游请求、审批顺序、越界写被拒、内联预算、滚动条与懒构建…）一条都不能删。
-  本机实测的耗时（别凭感觉说"测试太慢"，2026-09-17 重新量过）：`flutter test` 168 例 ≈ 11~15s、
-  `gradle test` 285 例 ≈ 5~11s（首跑要编译，稳定后更快）、`e2e-ai-tools-test.ps1` 64 项 ≈ 40s、
-  `e2e-capture-test.ps1` / `e2e-submit-test.ps1` 各 ≈ 20~30s。
+  本机实测的耗时（别凭感觉说"测试太慢"，2026-09-18 重新量过）：`flutter test` 178 例 ≈ 13~16s、
+  `gradle test` 325 例 ≈ 5~11s（首跑要编译，稳定后更快）、`e2e-ai-tools-test.ps1` 67 项 ≈ 40s、
+  `e2e-capture-test.ps1` / `e2e-submit-test.ps1` 各 ≈ 20~35s（后者含"工作流文件直接提交"那一幕）。
 - 产物目录：debug 在 `build\windows\...\runner\Debug\`、Release 在 `...\Release\`；
   `autorun-app.ps1` / `comfyhub.ps1 up -WithApp` 启动 App 时**优先挑 Release**。
 - **"我改了但界面没变"先查构建新鲜度，别急着怀疑代码**：App 是直接双击 / `Start-Process`
@@ -230,6 +230,11 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 - 工具清单**只有一个真源**：`server/src/main/kotlin/com/comfyhub/ai/tools/ToolRegistry.kt` 的 `tools` 列表。
   系统提示、`GET /api/ai/tools`、界面都从它派生 —— 加工具就在这里加一项 + 在 `ToolRegistryTest` 补用例，
   **别在别处再维护一份"可用工具"名单**。
+- **读白名单里会自动加上本机 ComfyUI 的目录**（`ComfyRoots` 每次现探、不落库，见用户 bug ④）：
+  用户的 ComfyUI 不在项目里（发布包解压到哪、ComfyUI 装在哪，两者无关），只按 `<根>\comfyui` 判
+  会让 `read_file` 读不了用户自己的工作流文件。**这只放宽读** —— 写仍然只认 `<根>\comfyui`，
+  `comfy_use_attachment` 往 ComfyUI `input\` 投放那条专用通道不受影响。
+  判定仍是"认特征文件"（复用 `ComfyLocator.looksLikeComfy`），搜索有界（深度 ≤3、只往名字带 comfy 的分支下钻）。
 - **默认只能写 `<项目根>\comfyui`**（用户要求："默认不能修改 comfy 目录以外的内容"）。新增写入类工具时：
   路径必须过 `ToolPolicy.resolveWrite()` / `resolveRead()`，**不要自己 `Path.of()` 拼**；
   `.git` / `.mysql` / `.run` / `node_modules` 是**永远禁写**的（`ToolPolicyConfig.FORBIDDEN_SEGMENTS`），
@@ -302,8 +307,11 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   "AI 说生成了、画廊里却没有"。只有 `success` 才是"不再重复收"的终态，改这段前先看
   `CaptureRunRetryTest`。
 - 改完这一块请跑两条端到端（都不出网、不花钱）：
-  `pwsh -File scripts\e2e-submit-test.ps1`（提交链路）与
+  `pwsh -File scripts\e2e-submit-test.ps1`（提交链路，4 幕：审批闸门 / 真提交 / 参数覆盖 /
+  工作流文件直接提交）与
   `pwsh -File scripts\e2e-capture-test.ps1`（捕获链路）。它们会临时改自动捕获配置、
   建一个 loopback Provider，跑完自己还原并清理数据；`-KeepData` 可以留着看效果。
   **别在跑完前 Ctrl+C**：清理在 finally 里，中断会留下 `e2e-submit-*` 的运行记录，
   而那会把下一次捕获 e2e 的 SHA-256 判重弄乱（实测踩过：表现为"新导入 0 个"）。
+  `e2e-submit-test.ps1` **会自己把权限档临时钉成 `ask`**（第 1 幕验的就是"没人批准就不提交"，
+  用户平时可能切在「自动允许（无需批准）」档，靠机器当前设置会让这一幕必然红），跑完还原。

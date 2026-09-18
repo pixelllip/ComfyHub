@@ -168,8 +168,12 @@ fun Application.module(ctx: AppContext) {
                 )
             )
         },
-        comfyFindRun = { runKey ->
-            CaptureRepo.findRun(runKey)?.let { AppJson.encodeToJsonElement(CaptureRunInfo.serializer(), it) }
+        comfyFindRun = { key ->
+            // 两个都认：ComfyUI 的 UUID（runKey）与捕获记录里的数字 prompt_id。
+            // 只认 UUID 的话，模型拿 comfy_submit 结果里的数字来查就会"刚提交完却说没这次运行"。
+            val info = CaptureRepo.findRun(key)
+                ?: key.trim().toLongOrNull()?.let { CaptureRepo.findRunByPromptId(it) }
+            info?.let { AppJson.encodeToJsonElement(CaptureRunInfo.serializer(), it) }
         },
         comfySync = { AppJson.encodeToJsonElement(CapturePollResult.serializer(), capture.pollOnce()) },
         comfyFindWorkflow = { query, limit, includeGraph ->
@@ -177,6 +181,10 @@ fun Application.module(ctx: AppContext) {
         },
         comfySubmit = { promptId, overrides, title, waitSeconds ->
             AiWorkflowSearch.submit(submitter, capture, promptId, overrides, title, waitSeconds)
+        },
+        // 用户 bug ③：给一个工作流文件路径就能读进库、拿到 promptId（界面格式在这里被转成 API 图）
+        comfyLoadWorkflow = { path, title, includeGraph ->
+            AiWorkflowSearch.loadWorkflowFromFile(submitter, java.nio.file.Paths.get(path), title, includeGraph)
         },
         // 图生图：把用户发来的图投放进 ComfyUI 的 input 目录（用户 bug：
         // "LoadImage 读的是捕获时绑定的那张 jpg，我只能改文本，改不了文件名"）

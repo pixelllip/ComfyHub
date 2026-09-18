@@ -365,6 +365,7 @@ Future<Widget> _homePage(
   List<Map<String, dynamic>> assistantParts = const [],
   Map<String, dynamic>? comfyJobs,
   bool hangRuns = false,
+  String? assistantText,
 }) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
@@ -379,6 +380,7 @@ Future<Widget> _homePage(
         assistantParts: assistantParts,
         comfyJobs: comfyJobs,
         hangRuns: hangRuns,
+        assistantText: assistantText ?? '好的，我看一下文件。',
       ),
     ),
   );
@@ -1233,6 +1235,72 @@ void main() {
 
   // --- 用户建议 ⑤ / bug：产物预览 ------------------------------------------
 
+  testWidgets('AppBar 的消息数跟着对话实时变（不用切走再切回来）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'text.delta', '{"messageId":"a1","text":"跑好了。"}') +
+        _sse(4, 'message.completed', '{"messageId":"a1","text":"跑好了。","steps":0}') +
+        _sse(5, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+
+    // 打开时是空会话（标题栏已经显示 0 条）
+    expect(find.textContaining('0 条消息'), findsWidgets);
+
+    await tester.enterText(find.byType(TextField).first, '帮我跑一张');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    // 用户报的 bug：这个数字只有拉会话列表时后端才会给，本机乐观插入的消息不更新它，
+    // 于是标题栏一直停在"打开这条会话时"的值，要切走再切回来才变。
+    // 现在发了 1 问 + 1 答 = 2 条，必须当场显示 2。
+    expect(find.textContaining('2 条消息'), findsOneWidget);
+  });
+
+  testWidgets('一条回复只有一个选择域：正文用 Text，跨段拖选才拉得下去（用户 bug：仅能选 3 行）',
+      (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // 一段会被解析成**多个块**的回复（正文段 / 标题 / 段内粗体）：
+    // 换行在 SSE 的 data 里必须是转义的 `\n`，所以这里写成 `\\n`（JSON 解析后才是真换行）。
+    const reply = '第一段说明。\\n\\n## 小标题\\n\\n最后一段里带 **粗体**。';
+
+    final rec = _Recorder();
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'message.completed', '{"messageId":"a1","text":"$reply","steps":0}') +
+        _sse(4, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse, assistantText: reply));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '写一段');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    // 每个块各是一个 SelectableText 时，鼠标拖到当前块末尾就拉不动了（用户报的"仅能选择 3 行"）。
+    // 现在正文一律是 `Text`，整条气泡包在**一个** SelectionArea 里 —— 选择可以跨段落连续拉下去。
+    final inBubble = find.descendant(
+      of: find.byType(SelectionArea),
+      matching: find.byType(SelectableText),
+    );
+    expect(inBubble, findsNothing,
+        reason: '气泡里不能再有嵌套的选择域：那会让拖选只能停在当前这一段');
+
+    // 三个块都真的渲染出来了（不是"没选中所以没文本"）。
+    // 正文是 Text.rich，所以要 findRichText: true 才匹配得到。
+    expect(find.textContaining('第一段说明', findRichText: true), findsOneWidget);
+    expect(find.textContaining('小标题', findRichText: true), findsOneWidget);
+    expect(find.textContaining('最后一段', findRichText: true), findsOneWidget);
+  });
+
   testWidgets('产物卡的预览图走画廊接口（/api/media/{id}/thumb），不是附件接口', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1.0;
@@ -1269,6 +1337,39 @@ void main() {
         reason: '产物缩略图必须走画廊接口，实际：$urls');
     expect(urls.any((u) => u.contains('/api/ai/attachments/')), isFalse,
         reason: '不能把媒体 id 当附件 id 用，实际：$urls');
+  });
+
+  testWidgets('「生成的产物」里也含生成它的那份工作流：卡上能直接打开（用户建议 ①）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(
+            3,
+            'tool.completed',
+            '{"callId":"call-s","name":"comfy_submit","elapsedMs":900,"preview":"完成",'
+                // capturedPromptId = 捕获真正入库的那份提示词（= 改过参数之后跑的节点图）
+                '"result":{"promptId":7,"capturedPromptId":42,"status":"success","mediaIds":[31],"mediaCount":1}}') +
+        _sse(4, 'message.completed', '{"messageId":"a1","text":"跑好了。","steps":1}') +
+        _sse(5, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse, assistantText: '跑好了。'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '帮我跑一张');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    // 标题要同时说清"几张图 + 几份工作流"（用户建议 ①："生成的产物"包括生成的工作流）
+    expect(find.text('生成的产物（1 个 · 含 1 份工作流）'), findsOneWidget);
+
+    await tester.tap(find.text('查看工作流'));
+    await tester.pumpAndSettle();
+    expect(rec.calls.any((c) => c.contains('/api/prompts/42/workflow')), isTrue,
+        reason: '必须打开**本次入库**的那份工作流（capturedPromptId），实际：${rec.calls}');
+    expect(find.textContaining('本次生成的工作流'), findsOneWidget);
   });
 
   testWidgets('权限档可在输入区切换，切到「自动允许（无需批准）」会写回后端（PUT permissionMode）', (tester) async {

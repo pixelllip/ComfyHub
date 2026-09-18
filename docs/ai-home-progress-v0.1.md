@@ -55,54 +55,63 @@
 
 | 需求 | 状态 | 说明 |
 | --- | --- | --- |
+| ⚠️ **本表的逐条判定已被独立审计取代** | — | 状态列已按 [`docs/ai-home-requirements-audit.md`](ai-home-requirements-audit.md)（逐条读代码、每条给 file:line 的独立审计）改成现状：**✅ 33 / ◐ 19 / ⬜ 8**（含补登记的 AIH-056/057）。审计列出了本表此前 18 处高估/过时之处及证据，遇到冲突以审计与代码为准。 |
 | AIH-001 默认落地页 | ✅ | `HomeShell` 默认 `AI 工作台`，顺序 AI 工作台→画廊→提示词→标签→设置；`home_nav_test` / `localization_test` 已同步 |
-| AIH-002 宽屏三栏 / 窄屏 | ✅ | ≥900 三栏，≥1200 才显示右侧栏；窄屏会话进抽屉、状态进底部 Sheet，Composer 常驻 |
+| AIH-002 宽屏三栏 / 窄屏 | ◐ | ≥900 三栏，≥1200 才显示右侧栏；窄屏会话进抽屉、状态进底部 Sheet，Composer 常驻 |
 | AIH-003 openai-completions | ✅ | 文本流 + 多轮历史真的能聊；`SseAccumulator` + `OpenAiCompletionsAdapter`，适配器有契约单测 |
 | AIH-004 openai-responses | ✅（文本流，待真实 API 实测） | 已实现：顶层 `instructions`、`input[{role,content:[{type:input_text/output_text,text}]}]`、`store:false`、思考落 `reasoning{effort,summary}`；事件 `response.output_text.delta` / `reasoning_summary_text.delta` / `completed`（取 usage+id）/ `failed`。**端点也修了**：原先拼成 `/chat/completions`，现在走 `/responses`。契约单测 5 项 |
 | AIH-005 anthropic-messages | ✅（文本流） | system 顶层 + `max_tokens`、`content_block_delta`/`message_start`/`error` 事件，有契约单测 |
-| AIH-006/007 Provider 自定义 + revision | ✅ | ID 校验（kebab-case、创建后不可改）、URL 校验与规范化、乐观锁冲突返回明确错误 |
+| AIH-006/007 Provider 自定义 + revision | ◐ | ID 校验（kebab-case、创建后不可改）、URL 校验与规范化、乐观锁冲突返回明确错误 |
 | AIH-008 连接测试 | ✅ | `POST /api/ai/providers/{id}/test`：请求前 SSRF 复核、不跟随重定向、10 秒超时、状态码映射到稳定错误码；日志只记 Provider/端点/状态码，**不含密钥与 Header**（有单测） |
-| AIH-009 模型发现 | ✅ | `POST …/discover-models`：兼容 `data[]` 与 `models[]`；**能力自动预填**并按可信度分级：接口声明(discovered) → 内置目录(builtin，标注可能过期) → 未识别(unknown，仅文本)；不落库，用户确认后才进目录 |
-| AIH-010/011 手工能力声明、不猜能力 | ✅ | 模型目录是能力真源；UI 与预检都以目录为准，未知模态直接拒绝。发现阶段会预填能力，但**来源全程可见**（接口声明/内置目录/未识别），内置目录命中不算"猜"，未识别的模型一律只给文本（有守护断言） |
+| AIH-009 模型发现 | ◐ | `POST …/discover-models`：兼容 `data[]` 与 `models[]`；**能力自动预填**并按可信度分级：接口声明(discovered) → 内置目录(builtin，标注可能过期) → 未识别(unknown，仅文本)；不落库，用户确认后才进目录 |
+| AIH-010/011 手工能力声明、不猜能力 | ◐ | 模型目录是能力真源；UI 与预检都以目录为准，未知模态直接拒绝。发现阶段会预填能力，但**来源全程可见**（接口声明/内置目录/未识别），内置目录命中不算"猜"，未识别的模型一律只给文本（有守护断言） |
 | AIH-012/013 凭据只写 + set/describe/unset | ✅ | 所有 DTO 只含 `{configured, source, writable}`；`resolve` 仅后端内部 |
 | AIH-014 改密钥下次请求生效 | ✅ | Run 开始时才 `resolve`，改密钥不影响已开始的 Run，下一次请求立即生效 |
 | AIH-015 Windows 凭据方案 | ✅ | DPAPI(CurrentUser) 加密落盘；DPAPI 不可用时**写入直接失败**，绝不退化为明文 |
-| AIH-016 监听/CORS 收紧 | ✅ | 默认 `127.0.0.1`；`COMFYHUB_ALLOW_REMOTE=1` 才对外；CORS 由 `anyHost()` 改为本机 + 白名单 |
+| AIH-016 监听/CORS 收紧 | ◐ | 默认 `127.0.0.1`；`COMFYHUB_ALLOW_REMOTE=1` 才对外；CORS 由 `anyHost()` 改为本机 + 白名单 |
 | AIH-017 SSRF 保护 | ✅（保存时 + 每次请求复核） | 地址范围判定、信任级别匹配、云元数据地址任何级别都拒绝、DNS 解析后复核 |
-| AIH-018 会话 CRUD | ✅ | 新建/改名/归档/删除；删除走外键级联（已验证） |
+| AIH-018 会话 CRUD | ◐ | 新建/改名/归档/删除；删除走外键级联（已验证） |
 | AIH-019 有序消息块 | ✅ | `ai_message_parts`（text/attachment/tool_call/tool_result），按 `seq`+`ordinal` 无损恢复 |
 | AIH-020 Run 独立实体 | ✅ | `POST /conversations/{id}/runs` → `202 + runId`；后台协程执行；启动时把遗留 `running` 标成失败 |
-| AIH-021 统一 SSE + seq 续传 | ✅ | `GET /runs/{id}/events?after=seq`；事件全部落库（`ai_run_events`），进程重启后仍可回放；带 15 秒心跳 |
+| AIH-021 统一 SSE + seq 续传 | ◐ | `GET /runs/{id}/events?after=seq`；事件全部落库（`ai_run_events`），进程重启后仍可回放；带 15 秒心跳 |
 | AIH-022 取消 | ✅ | `POST /runs/{id}/cancel` → 取消协程 → `runInterruptible` 打断阻塞读 → 上游连接关闭，Run 记 `cancelled` |
-| AIH-023 快照 | ✅ | Provider/模型快照 + `promptVersion` 随 Run 保存，**快照不含密钥**（只有引用名） |
-| AIH-024 稳定错误码 + 有限重试 | ✅ | `MISSING_CREDENTIAL / UNKNOWN_MODEL / RATE_LIMIT / QUOTA_EXCEEDED / CONFIG_ERROR / PROTOCOL_ERROR / ABORTED / PROVIDER_UNREACHABLE / UNSUPPORTED_CONTENT`；失败/被取消的回复上直接给「重试」：**新建 Run** 并用 `retryOfRunId` 关联回原 Run，重放原来的提问与思考强度 |
+| AIH-023 快照 | ◐ | Provider/模型快照 + `promptVersion` 随 Run 保存，**快照不含密钥**（只有引用名） |
+| AIH-024 稳定错误码 + 有限重试 | ◐ | `MISSING_CREDENTIAL / UNKNOWN_MODEL / RATE_LIMIT / QUOTA_EXCEEDED / CONFIG_ERROR / PROTOCOL_ERROR / ABORTED / PROVIDER_UNREACHABLE / UNSUPPORTED_CONTENT`；失败/被取消的回复上直接给「重试」：**新建 Run** 并用 `retryOfRunId` 关联回原 Run，重放原来的提问与思考强度 |
 | AIH-027 严格文件识别 | ✅ | `FileKindDetector` 签名优先、未知即 UNKNOWN；`StrictIntake` 让**服务端判定压过前端声明**；上传时就用它判定，认不出来**直接拒收**（e2e 里"文本改名成 .png"被拒是一条断言） |
 | AIH-028 能力矩阵 | ✅ | 模型声明 ∩ 适配器实现（**按模态**）∩ MIME ∩ 大小/数量，任一不满足即阻断（有单测）；适配器 `attachmentTransports` 是唯一事实来源 |
 | AIH-029/030 前后端阻断、零上游请求 | ✅ | 三层：选完预检（托盘红框 + 原因）→ 发送前前端禁用按钮 → **后端创建 Run 之前用库里的附件事实再验一次**；e2e 实测"纯文本模型 + 图片"= 400 `UNSUPPORTED_CONTENT` 且上游请求数 **0** |
-| AIH-031 图片真的能发 | ✅ | 三种协议都实现**图片内联 base64**（`data:` URL / `source.base64` / `input_image`）；e2e 在假网关侧断言"请求里确实带 `data:image/png;base64,` 的图片块" |
-| AIH-048 能力徽标 | ✅ | 模型选择器与侧栏都按目录声明显示，未声明的一律标不支持 |
-| AIH-053 首页 Widget 测试 | ✅ | `test/ai_home_test.dart`（含流式发送）、`test/ai_provider_settings_test.dart` |
-| AIH-055 文档同步 | ✅ | AGENTS 第 3 节 + README 功能表/目录树/API 表/协议现状表/测试表 |
+| AIH-031 图片真的能发 | ◐ | 三种协议都实现**图片内联 base64**（`data:` URL / `source.base64` / `input_image`）；e2e 在假网关侧断言"请求里确实带 `data:image/png;base64,` 的图片块" |
+| AIH-048 能力徽标 | ◐ | 模型选择器与侧栏都按目录声明显示，未声明的一律标不支持 |
+| AIH-053 首页 Widget 测试 | ◐ | `test/ai_home_test.dart`（含流式发送）、`test/ai_provider_settings_test.dart` |
+| AIH-055 文档同步 | ◐ | AGENTS 第 3 节 + README 功能表/目录树/API 表/协议现状表/测试表 |
 | AIH-056 思考强度 | ✅ | 模型目录声明可选档位（`thinkingEfforts`）+ 网关方言（`thinkingFormat`）；聊天框选择器只列声明过的档位（**「关闭」永远可选、不需要声明**）；Run 记录**生效值**；三协议方言分别适配（见第 6 节/第 5 节） |
 | AIH-057 token 统计 | ✅ | 后端把各家 `usage` 归一化成 input/output/cached/reasoning；助手消息显示单轮用量，输入区显示本对话汇总；历史老数据（供应商原始 usage）也能回算 |
 | AIH-033 `comfy_get_status` | ✅ | 复用 `ComfyCapture.status()`（连通性 / 队列 / 最近捕获）；**不接受任意 URL**；只读、免审批 |
 | AIH-034 `comfy_get_run` | ✅ | 按 `runKey` 查捕获记录（给 `CaptureRepo` 加了 `findRun`）；查不到如实报 `NOT_FOUND` |
 | AIH-035 `comfy_sync_history` + 审批 | ✅ | 默认 `ask`：工具卡上点「批准 / 拒绝」才执行（`POST /api/ai/tool-calls/{callId}/approve|deny`）；超时 5 分钟或 Run 取消 = 拒绝；复用 `pollOnce` 的并发锁 |
-| AIH-036 限制主动轮询 | ✅ | 轮数上限 8 / 单 Run 调用上限 16 / 取消即停 / **按工具类别的"一次回复最多主动查 ComfyUI 9 次"**（`maxComfyQueriesPerRun`，2026-09-17 用户要求由 3 放宽到 9）+ 提示词纪律 |
+| AIH-036 限制主动轮询 | ◐ | 轮数上限 8 / 单 Run 调用上限 16 / 取消即停 / **按工具类别的"一次回复最多主动查 ComfyUI 9 次"**（`maxComfyQueriesPerRun`，2026-09-17 用户要求由 3 放宽到 9）+ 提示词纪律 |
 | AIH-037 扫描 Skills 根目录 | ✅ | `<项目根>\skills\builtin` + `<storage>\ai\skills`，只扫根下一层（bundle/SKILL.md 或平铺 .md）；同名用户版胜出并标冲突 |
 | AIH-038 frontmatter 严格校验 | ✅ | name kebab-case 且与目录名一致、description 必填、正文上限；非法项**列出来带诊断**但不进提示、不能加载 |
 | AIH-039 只注入目录摘要 | ✅ | 系统提示只给名称 + 描述（截断 240 字）+ whenToUse |
 | AIH-040 `load_skill` 按需加载 | ✅ | 返回 `<skill_content>` 块；同一 Run 内重复调用直接报"已加载过" |
-| AIH-041/042 内置 Anima / H3 Skills | ⬜ | 内置根 `<根>\skills\builtin` 仍是空的（发布包会带上 `skills\` 目录）；用户自己的 16 个在投放口里 |
-| AIH-043 第三方 Skill 导入 | ◐ | 装 skill 现在只有**投放口**一条路（拷进去 → 启动/重新扫描时自动登记）；ZIP 导入仍未做 |
-| AIH-044 阻断路径穿越 / ZIP bomb | ◐ | 投放口只读"根下一层"、自动登记只补 frontmatter 不动正文、正文有 256KB 上限；ZIP 相关规则要等 ZIP 导入 |
+| AIH-041/042 内置 Anima / H3 Skills | ⬜ | 内置根**不是空的**了（已有 `img2img-reference` 与 `krea-2`），但需求点名的 `anima-*` / `h3-*` / 视频 skills 全在投放口 `<storage>\ai\skills`（被 gitignore 的本机运行期数据，不随包）；「模型 Skill 集可选择」也没做 |
+| AIH-043 第三方 Skill 导入 | ⬜ | 装 skill 现在只有**投放口**一条路（拷进去 → 启动/重新扫描时自动登记）；ZIP 导入仍未做 |
+| AIH-044 阻断路径穿越 / ZIP bomb | ⬜ | 投放口只读"根下一层"、自动登记只补 frontmatter 不动正文、正文有 256KB 上限；ZIP 相关规则要等 ZIP 导入 |
 | AIH-045 禁止执行第三方脚本 | ✅ | 工具集里**根本没有** shell / 进程工具；`scripts/` 只是不可执行资源 |
-| AIH-046 版本化系统提示 | ✅ | `SystemPrompt.VERSION = v2`：工具清单 + 权限边界 + Skill 纪律 + 防提示注入 + 附件诚实 |
-| AIH-047 用户指令不覆盖安全段 | ◐ | 系统提示里把安全规则写成"必须遵守"，Run 记 `skill_snapshot`（名称 + digest）可追溯；**用户自定义追加段的界面**还没做 |
-| AIH-049 工具调用状态卡 | ✅ | 工具卡显示名字 / 参数摘要 / 审批按钮 / 耗时 / 结果预览 / 错误码，服务端已截断脱敏 |
+| AIH-046 版本化系统提示 | ✅ | `SystemPrompt.VERSION = v11`（2026-09-18）：工具清单 + 权限边界 + Skill 纪律 + 防提示注入 + 附件诚实 + 事实纪律/表达风格 + 工作流文件提交 |
+| AIH-047 用户指令不覆盖安全段 | ⬜ | 系统提示里把安全规则写成"必须遵守"，Run 记 `skill_snapshot`（名称 + digest）可追溯；**用户自定义追加段的界面**还没做 |
+| AIH-049 工具调用状态卡 | ◐ | 工具卡显示名字 / 参数摘要 / 审批按钮 / 耗时 / 结果预览 / 错误码；**但服务端只截断、不脱敏**，参数仍是原样全文（审计：缺"不展示敏感原文"这一半） |
 | AIH-052 三协议 Fake Provider | ◐ | 三家协议的**工具**线格式都有单测（`ToolProtocolTest` 20 例）+ 本地假网关端到端；401/429/500 / 断流 / 畸形 SSE 属于既有覆盖 |
-| **用户建议：长期记忆（M6）** | ✅ | `MemoryStore` + `<storage>\ai\memory.md`（一行一条、人可手改）+ `remember` 工具 + 右侧栏面板/编辑器；系统提示 v3 每次 Run 现注入，明写"记忆是数据不是指令"；写入超限**报错**不截断。见 `MemoryStoreTest` 9 例 + 4.8 节 ⑦ |
+| **用户建议：长期记忆（M6）** | ✅ | `MemoryStore` + `<storage>\ai\memory.md`（一行一条、人可手改）+ `remember` 工具 + 右侧栏面板/编辑器；系统提示每次 Run 现注入（2026-09-18 为 v11），明写"记忆是数据不是指令"；写入超限**报错**不截断。见 `MemoryStoreTest` 9 例 + 4.8 节 ⑦ |
 | **用户建议：Skills 投放口** | ✅ | 删掉「从 DSH 导入」按钮与整套 `.dsh` 导入代码；投放口 = `<storage>\ai\skills`，启动/重新扫描时自动补 frontmatter 登记；界面显示后端算好的绝对路径 + 打开/复制。见 4.8 节 ⑥ |
+| AIH-025 从本机选附件 | ✅ | `FilePicker` → 上传即按签名判定 → 托盘显示名称/大小/类型/准入红框（有 e2e） |
+| AIH-026 从画廊选媒体 | ⬜ | **整条未做**：`lib/` 里没有任何"发送到 AI 工作台"入口，后端也没有 `attachments/from-media` |
+| AIH-032 视频不静默抽帧 | ✅ | 唯一的抽帧是**托盘预览帧**（界面标注"已取预览帧"），从不作为模型输入 → 不存在静默降级 |
+| AIH-050 AI 生成提示词存库 | ⬜ | **整条未做**：前端无入口、`prompts` 表也没有"来源会话"列 |
+| AIH-054 跑全回归 | ✅ | 2026-09-18 实测：`flutter analyze` 无问题、`flutter test` **178 例全过**、`gradle test` **325 例全过**、`e2e-ai-tools` **67 项**、`e2e-submit` **4 幕**、`e2e-capture` 全过（见 §4.14） |
+| AIK-001 端口不固定 8080 | ⬜ | 仍是"可配置的固定 8080"（`Config.kt` / `server.ps1` / `comfyhub.ps1` / `settings_store.dart` 四处写死），没有空闲端口探测与自动分配 |
+| AIK-002 前端参考 DSH | ◐ | `/` 选 skill、框内换模型、深色主题已有；**不跟随系统浅/深色**（硬编码 `ThemeMode.dark`）、**无文件拖拽**、**无 Ctrl+V 粘贴为附件** |
+| AIK-003 预留 Android / 远程 | ◐ | 只有可配 Base URL + 显式允许对外监听 + Android 默认地址；认证 / 会话令牌 / 远程管理接口都没有 |
 
 图例：✅ 完成　◐ 部分完成　⬜ 未开始
 
@@ -396,6 +405,7 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
   新增第 9 幕 → **64 项检查全过、exit 0**，其中包含「上传→按签名判定 image」「缩略图 200 + image/jpeg」
   「文本改名成 .png 被拒」「预检放行」「假网关侧确实收到 `data:image/png;base64,` 的图片块」
   「用户消息落库带 attachment 有序块」「纯文本模型 → 400 + **上游请求数 0**」。
+  （2026-09 追加 WebP 三连后是 **67 项**：WebP 按签名收下 + 尺寸探测 + 缩略图真的是 JPEG。）
 - 顺带踩到的两个坑：① 用例里 `await store.attachFiles(...)` 会**永远挂住** ——
   `MultipartFile.fromPath` 是真 IO，必须包在 `tester.runAsync()` 里；
   ② 自造的那张 1×1 PNG base64 是坏的（签名对得上、ImageIO 解不开），缩略图因此一直 204 ——
@@ -447,6 +457,115 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 现在这两种状态可重试（`success` 仍是唯一不再重复收的终态），判据抽成纯函数
 `CaptureRepo.canReclaim()` 并有 6 例单测盯着。
 
+### 4.12 第六轮：附件 WebP 支持 + 内置 Krea 2 skill（2026-09-18）
+
+用户两句话：**"附件加入 webp 格式支持"**、**"加入 krea2 的官方 skill（你要查）"**。
+
+**① WebP（附件 / 画廊的缩略图真的能出了）**
+
+- 根因不是前端：附件准入本来按签名就认 webp，前端也没有扩展名白名单 ——
+  卡在**后端解码**上：JDK 自带的 ImageIO 读不了 WebP，`MediaFiles.writeThumbnail` 返回 false，
+  于是 webp 附件在托盘里只剩一个文件图标（画廊那条路则是回退发原件，能显示但没有真缩略图）。
+- 处理：`server\build.gradle.kts` 挂 **`com.twelvemonkeys.imageio:imageio-webp`（纯 Java，无本地库）**；
+  两级降级保留 —— 能解就出 JPEG 缩略图，解不了（AVIF / HEIC / 动图边界）**回退把原件发出去**，
+  与 `MediaRoutes` 的 `/thumb` 同一条规矩。
+- **顺手修掉一个老 bug**：`jpegSize` 把 SOI（`FFD8`）当成"带长度字段的段"，
+  导致**任何 JPEG 的尺寸探测都返回 null**（jpg 附件的宽高、`AttachmentFact.pixels` 一直是空的）。
+  SOI / EOI / TEM / RSTn 都是没有长度字段的独立标记，现在先认它们再读长度。
+- 防线：`MediaFilesTest` 5 例（webp 有损 + 无损解码、按 maxEdge 缩放、坏字节不假装成功、JPEG 尺寸），
+  `scripts\e2e-ai-tools-test.ps1` 第 9 幕加 WebP 三连（**67 项**）。
+
+**② 内置 Krea 2 skill（`skills\builtin\krea-2`）**
+
+- Krea 官方确实有 Agent Skill 仓库（[krea-ai/skills](https://github.com/krea-ai/skills)，MIT），
+  里面专写 Krea 2 的是 `krea-generate/references/models/krea-2.md`；开源模型仓库
+  [krea-ai/krea-2](https://github.com/krea-ai/krea-2) 另有官方 `docs/prompting.md` 与
+  `docs/expansion.txt`（提示词扩写用的 system prompt）。
+- 本项目的 skill 是给"本机 ComfyUI 路线"的 AI 用的，而官方那份是给"连着 Krea MCP 工具"的 agent 用的 ——
+  所以做成：**正文按官方材料适配本机工具契约**（`comfy_find_workflow` / `comfy_submit` 只覆盖真实存在的输入、
+  产物只认 `mediaIds`；云端独有的情绪板 / Srefs 强度 / Intensity-Complexity-Movement 滑杆
+  **本机没有就如实说没有**，不许编字段）；**官方原文逐字**放 `references\`
+  （`official-skill-krea-2.md` / `official-prompting.md` / `official-expansion-system-prompt.txt` /
+  `official-comfyui-krea-2.md`），出处、采集日期与许可集中写在 `references\SOURCES.md`。
+- 参数按官方推荐值写进 skill：RAW 52 步 / cfg 3.5 / ≤1K，Turbo 8 步 / cfg 0 / mu 1.15 / 1K~2K，
+  分辨率 16 的倍数；风格 LoRA 的 9 个触发词照抄官方表。
+
+### 4.13 第七轮：输入框不再"复制一遍再发送"（2026-09-18）
+
+用户指着最新的聊天记录报的一句：**"特定情况下，一条消息会复制一遍再发送"**。
+记录里能看到的现场：19:30:58 发出去一条、19:31:00 点了停止、19:31:38 又发了一条
+**= 上一条原话 + 中间插进去的提示语**。先把两处实现细节还原出来（都跟"输入框什么时候清空、草稿什么时候作废"有关）：
+
+1. **被拒时字已经被清掉了。** `onSubmit` 里是 `_input.clear()` **在前**、`send()` 的准入判断在后 ——
+   而 `send()` 里"正在生成中"这一条是**直接 `return`（连 notice 都没有）**。
+   于是"生成中又按了一次回车"= 用户刚打的字被静默吃掉，只能自己把上一条复制一遍再发一次。
+   （9-17 那次"点发送后输入框文本没有及时清空"的修法引入了这个洞：当时假定"拒绝一定会留下提示"。）
+2. **草稿把刚发出去的原话灌回输入框。** `send()` 里清草稿（`_clearDraft`）是在 `startRun` **之后**，
+   而"发送中"那次 `notifyListeners()` 在它**之前**；页面收到通知会去 `loadDraft()` 取回草稿 ——
+   正好落在这个空档里。当时页面的"当前草稿挂在哪条会话上"（`_draftConversationId`）在
+   页面刚重建 / 会话被清掉时还是空的，既不存字也不清草稿，于是这段窗口真的能命中：
+   **发出去的那句话原样回到输入框，下一次回车就发出去了第二遍。**
+
+改法（三条一起，缺一条这个洞就还在）：
+
+- 准入判断独立成**同步**的 `AiWorkspaceStore.sendBlockReason()`（唯一真源，`send()` 自己也调它），
+  页面**先问它再决定要不要清空**：被拒时一个字节都不动，原因照旧写进 `notice`（含"正在生成中"）。
+- 这条会话的草稿（文字 + 附件）在 `send()` 的**第一次 `notifyListeners()` 之前**就作废。
+- 页面输入时一律把字认领到"当前会话"（`_draftConversationId ??= store.conversation?.id`），
+  只有**真的换会话**才清空输入框、取回草稿；页面刚挂上来那次（previous == null）不清空。
+- 顺手把 AIH-053 那道"输入法组字期间不发送"的闸接上：以前 `_composing` 是**永远 false** 的字段，
+  现在直接读 `controller.value.composing.isValid`，组字期间回车只当"选词/上屏"、发送按钮同时置灰
+  （"清空时输入法还在组字"正是 Windows 引擎回灌旧文本的触发条件，见 `pitfalls.md`）。
+
+防线（4 条，都验证过"改回旧写法就红"）：
+
+| 用例 | 钉住的事实 |
+| --- | --- |
+| `ai_tools_ui_test.dart` (i) | 正在生成中按回车：输入框里的字必须还在、提示必须说明原因、**不能再发一次** |
+| `ai_tools_ui_test.dart` (j) | 组字期间回车不发送、不清空；上屏后回车才发 |
+| `ai_tools_ui_test.dart` "草稿必须在第一次界面通知之前就作废" | 页面在第一次通知里取回的草稿必须是空的 |
+| `ai_conversation_lifecycle_test.dart` "发出去的话不会再被草稿灌回输入框" | 旧代码下这一条会看到 `Actual: '这句话只该发一次'` —— 就是用户报的那个现象 |
+
+### 4.14 第八轮：用户清单 `docs/bug-and-suggestion-9.18.md`（2026-09-18）
+
+这一轮按用户当天的清单逐条做，另外**独立审计了需求 xlsx 的状态列**（那份表整列写着"通过"，
+与代码差得很远）。
+
+| # | 用户报的 | 根因 / 做法 | 防线 |
+| --- | --- | --- | --- |
+| ① | **AppBar 不及时更新当前对话的消息数** | 标题栏读的是 `conversation.messageCount`，而这个数字**只有拉会话列表时后端才会给**；发出去的消息与流式回复都是本机乐观插入的，于是它一直停在"打开这条会话时"的值，要切走再切回来才变。加了 `AiWorkspaceStore._syncMessageCount()`：每次消息列表变化就把当前会话（以及 `conversations` 里那一条）的计数对齐到本机消息数 | `ai_tools_ui_test.dart` "AppBar 的消息数跟着对话实时变" |
+| ② | **仅能选择 3 行文本** | `MarkdownText` 把一段回复解析成很多块，**每块一个 `SelectableText`** —— 每个都是独立的选择域，鼠标拖到当前段末尾就再也拉不过去了（短段落正好三行）。改成：正文一律用 `Text` / `Text.rich`，整条气泡（含思考段与工具卡）包在**一个** `SelectionArea` 里 | `ai_tools_ui_test.dart` "一条回复只有一个选择域"（断言气泡里没有嵌套选择域，且三个块都渲染出来） |
+| ③ | **`comfy_submit` 只认库里的 promptId，"我不能凭一个文件路径提交"** | 新增 `comfy_load_workflow`：读一份本机工作流 .json → **API 格式原样用**；**界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图**（`WorkflowConvert`）→ 入库拿 `promptId` → 正常提交。`comfy_submit` 也接受 `workflowPath` 一步到位。转换不出来的（`Anything Everywhere` 这类纯前端节点）**如实报 `UNSUPPORTED_NODES`**，并给出两个出口：在 ComfyUI 里「导出（API）」一次，或点一次 Queue 让它被捕获 | `WorkflowConvertTest` 13 例 + `e2e-submit-test.ps1` 第 4 幕 11 项断言（界面格式 → 转换 → 真的提交 → 控件值/连线都对） |
+| ④ | **`read_file` 对用户自己的 ComfyUI 目录 PATH_DENIED** | 读白名单出厂只有 `<根>\comfyui` + `<根>\storage`，而**用户的 ComfyUI 根本不在项目里**。新增 `ComfyRoots`：每次现探本机 ComfyUI 目录（环境变量 → 用户配的产物目录的父目录 → 项目内 `comfyui`，再在其兄弟目录里有界搜索 —— ComfyUI Desktop 把程序与共享数据分家，本机实例的工作流就在 `…\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows`），作为**只读**白名单交给 `ToolPolicy`；**写仍然只允许 `<根>\comfyui`**。设置页「AI 工具权限」多一张「自动放行（只读）」卡，只展示不编辑 | `ComfyRootsTest` 5 例 + `ToolPolicyTest` "自动发现的目录只放宽读、不放宽写" |
+| ⑤ | **调研最新对话记录找出的 bug**：`comfy_get_run` 查不到**刚提交完**的那次运行 | `comfy_submit` 的结果里同时有 `promptId`（库里的提示词）/ `comfyPromptId`（ComfyUI 的 UUID）/ `capturedPromptId`（捕获记录编号），模型很自然地拿数字那个去 `comfy_get_run`，而那边只认 runKey（UUID）→ 直接 `NOT_FOUND`。现在：结果里显式给出 `runKey` 与 `idHint`，查询入口**数字与 UUID 都认**（`CaptureRepo.findRunByPromptId`） | `ToolRegistryTest` / `CaptureRepo` 侧改动；工具描述里写明三样 id 各是什么 |
+| ⑥ | **一条消息会复制一遍再发送** | 上一轮已修（见 §4.13，4 条用例）。本轮复核：`flutter test` 里那 4 条仍然全过 | `ai_tools_ui_test.dart` (i)(j) + `ai_conversation_lifecycle_test.dart` |
+| 建议① | **"生成的产物"包括生成的工作流** | 回复末尾那张「生成的产物」卡原来只有缩略图。现在工具结果里的 `capturedPromptId`（**本次真正入库**的那份提示词，含改过的参数）也带进界面，卡上多一个「查看工作流」按钮，直接打开这次真跑过的工作流 | `ai_tools_ui_test.dart` "「生成的产物」里也含生成它的那份工作流" |
+| 建议② | **查看工作流能不能像 ComfyUI 那样展开成蓝图**（用户说"难度比较大，先调研"） | 出了一份调研：[`docs/workflow-blueprint-research.md`](workflow-blueprint-research.md)。结论：分两阶段 —— A 结构化大纲（1~1.5 人日）、B `CustomPainter + InteractiveViewer` 只读蓝图画布（3.5~5 人日）；**不**内嵌 litegraph.js / ComfyUI 前端（Flutter Windows 没有 DOM，且那套前端依赖服务端 API + WebSocket，不是可复用库）。硬约束：库里 13 份工作流中 **10 份是 API 格式、没有坐标**，分层布局只能是猜测且必须标注 | 本轮只出调研，未动代码 |
+
+顺带修的：
+
+- **`e2e-submit-test.ps1` 之前一直是红的**（本机 `permissionMode` 被切成「自动允许（无需批准）」后，
+  第 1 幕"没人批准就不提交"必然失败）。脚本现在**自己把前置条件钉住**：临时把权限档设成 `ask`、
+  结束后还原 —— 和 `e2e-ai-tools-test.ps1` 早就在做的一样。
+- 工具权限里"禁写段"（`.git` / `.mysql` / `.run` / `node_modules`）的报错文案原来写"任何工具都不可改"，
+  但它在**读**被拒时也照样抛出，读起来像"能读、只是不能改"。改成"任何工具都不许读也不许写"。
+- 系统提示升到 **v11**：告诉模型"用户给的是工作流文件路径时不要回答'我只能提交库里的 promptId'"、
+  `comfy_load_workflow` 怎么用、本机 ComfyUI 目录已经在读白名单里（读到 `PATH_DENIED` 时该怎么如实说）。
+
+#### 4.14.1 验证证据（实测，2026-09-18）
+
+| 套件 | 结果 |
+| --- | --- |
+| `flutter analyze` | No issues found |
+| `flutter test` | **178 例全过**（新增 3 例：AppBar 消息数 / 跨段选择 / 产物里的工作流） |
+| `pwsh -File scripts\server.ps1 test` | **325 例全过**（新增 `WorkflowConvertTest` 13 例、`ComfyRootsTest` 5 例、`ToolPolicyTest` 1 例） |
+| `scripts\e2e-ai-tools-test.ps1` | **67 项全过**、exit 0 |
+| `scripts\e2e-submit-test.ps1` | **4 幕全过**（新增第 4 幕 11 项：工作流文件 → 界面格式转 API 图 → 真的提交 → `3.steps=13` / `3.positive=[6,0]` / `6.text` 都对） |
+| `scripts\e2e-capture-test.ps1` | 全过（捕获链路没被这轮改动弄坏） |
+
+需求 xlsx 的状态列也按独立审计改了现状（`docs/ai-home-requirements-audit.md` + 表内新增的「验收结论」页）：
+**✅ 33 / ◐ 19 / ⬜ 8**，并补登记了原表漏掉的 AIH-056/057。
+
 ### 4.10 测试瘦身：删掉重复与占位项，留下回归防线（2026-09-16）
 
 用户问"测试项会不会太多了导致测试非常慢"，并在清单里写了"减少一些已经通过、不太重要的测试项"。
@@ -454,10 +573,12 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 
 | 套件 | 规模 | 耗时 |
 | --- | --- | --- |
-| `flutter analyze` | — | ~4s |
-| `flutter test` | 155 例 | ~12~14s |
-| `gradle test`（后端） | 250 例 | ~5s |
-| `scripts\e2e-ai-tools-test.ps1` | 64 项检查（真后端 + 真 MySQL + 假网关） | ~40s |
+| `flutter analyze` | — | ~5s |
+| `flutter test` | **178 例**（2026-09-18 实测） | ~15s |
+| `gradle test`（后端） | **325 例**（2026-09-18 实测） | ~5s（warm） |
+| `scripts\e2e-ai-tools-test.ps1` | 67 项检查（真后端 + 真 MySQL + 假网关） | ~40s |
+| `scripts\e2e-submit-test.ps1` | 4 幕（含"工作流文件直接提交"） | ~30s |
+| `scripts\e2e-capture-test.ps1` | 轮询 / 幂等 / 目录导入 / 推送 | ~25s |
 
 所以这轮做的是**去噪**，不是砍覆盖率。删掉的是三类：
 
@@ -491,8 +612,10 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 ③ `reasoning.summary` 是否下发思考摘要；④ `response.completed.response.usage` 的字段名。
 失败时界面会带上上游原文（已抹密钥），把那段话发回来就能定位。
 
-> ⚠️ **需求 xlsx 的"状态"列不可信**：里面把没实现的需求（AIH-025~032 附件可发、
-> AIH-033~045 工具与 Skills）都标成了"通过"。**以代码与本文档为准**，别照抄那一列。
+> ⚠️ **需求 xlsx 的"状态"列曾经不可信**（整列一律写着"通过"）。2026-09-18 已按
+> [`docs/ai-home-requirements-audit.md`](ai-home-requirements-audit.md)（逐条读代码、每条给 `file:line` 的独立审计）
+> 改成现状：**✅ 33 / ◐ 19 / ⬜ 8**，并补登记了原表漏掉的 AIH-056/057。
+> 需要逐条判定与证据时**以那份审计为准**——本文档第 2 节的表格此前有 18 处与代码不符（现已同步）。
 
 ## 5. 思考强度与 token 统计（AIH-056 / AIH-057，2026-09-16 新增）
 

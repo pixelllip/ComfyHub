@@ -977,9 +977,14 @@ private fun TokenUsage.toOpenAiShape(): JsonObject? {
  * v10：查 ComfyUI 的预算 3 → 9（用户要求：投递附件 + 查节点 + 查工作流很容易就撞上 3 次）。
  *     阈值真源是 `ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN`，提示词里**插值**它，
  *     不再写死字面量（两处数字漂移过一次）。
+ * v11：工作流文件可以直接提交（用户 bug ③）—— 用户甩过来一个工作流 .json 路径时，
+ *     以前模型只能回"comfy_submit 只认库里的 promptId，我不能凭文件路径提交"（真实对话里就是这么卡住的）。
+ *     现在多了 `comfy_load_workflow`：读文件 → 入库拿 promptId → 正常提交；
+ *     同时把"读白名单里已经自动放行了本机 ComfyUI 目录"这件事告诉模型，
+ *     免得它把 PATH_DENIED 当成"用户没配好"。
  */
 object SystemPrompt {
-    const val VERSION = "v10"
+    const val VERSION = "v11"
 
     /**
      * 第一问时追加的一段：让模型在正文最前面带一行 `[标题]…[/标题]`，
@@ -1519,6 +1524,15 @@ object SystemPrompt {
                 也不要顺手覆盖用户自己的文件；改完如实说清改了哪里，让用户能自己回退。
             14. 读取也要按需：为当前任务读必要的目录与文件就够了，不要为了"先了解一下环境"去遍历磁盘；
                 API Key、密码、私人文件一律不碰（第 8 条）。
+            15. **用户给的是一个工作流 .json 文件路径时，不要回答"我只能提交库里的 promptId"**：
+                用 `comfy_load_workflow` 把它读进库（返回 `promptId` 与每个节点的可覆盖输入名），
+                再 `comfy_submit` 提交；也可以直接 `comfy_submit(workflowPath=…)` 一步到位。
+                本机 ComfyUI 的目录（含它下面的 `user\default\workflows`）**已经自动在读白名单里**，
+                所以读到 `PATH_DENIED` 只可能是那个路径不在任何 ComfyUI 目录下 —— 那时如实说清
+                被拒的路径与允许的目录，别猜原因、也别让用户先去改设置。
+                文件是界面格式（nodes/links）时后端会用 ComfyUI 的 `/object_info` 转换；
+                转不出来（用了 Anything Everywhere 这类纯前端节点）会明确报 `UNSUPPORTED_NODES`，
+                那时给用户两个出口：在 ComfyUI 里「导出（API）」一次，或者点一次 Queue 让它被自动捕获。
             """.trimIndent()
         )
     }

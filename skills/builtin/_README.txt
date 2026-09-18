@@ -18,9 +18,14 @@
   这一份会被隐藏并在界面上标"冲突"；
 - 这个目录里的 Skill **不能通过界面或 AI 删除**（`DELETE /api/ai/skills/{name}` 返回
   `SKILL_READONLY`），只能停用；
-- **本目录不会被自动创建/填充**：项目当前没有随包分发的内置 Skill，用户可以从
-  `%USERPROFILE%\.dsh\skills` 一键导入（右侧栏「从 DSH 导入」）。
-  要给发布包带上内置 Skill，记得同时在 `packaging/manifest.json` 里登记这个目录。
+- 本目录里目前有两个**随包分发**的内置 Skill：
+  `img2img-reference`（把用户发来的图投放进 ComfyUI 的 input 目录，再覆盖 LoadImage）；
+  `krea-2`（Krea 2 提示词规则 + RAW/Turbo 官方参数 + 本机 ComfyUI 落地，
+  官方原文逐字放在它的 `references/` 里，出处/许可见那份 `SOURCES.md`）。
+  发布包能带上它们靠 `packaging/manifest.json` 的 `skills` 组件（source/target 都是 `skills`）。
+- 用户自己的 Skill **不放这里**：拷进投放口 `<storage>\ai\skills` 就算装好
+  （后端启动时 / 点「重新扫描」会自动给没有 frontmatter 的文件补登记）。
+  注意 `%USERPROFILE%\.dsh` 已经没有任何代码读了（连"从 DSH 导入"按钮都删了）。
 
 > 注意：本文件故意用 `.txt` 后缀 —— 扫描器只认 `*.md`，一个 `README.md` 会被当成
 > 一个"缺少 description 的非法 Skill"列到界面上。

@@ -517,13 +517,13 @@ class AiConversation {
         updatedAt: DateTime.tryParse((json['updatedAt'] ?? '').toString()),
       );
 
-  AiConversation copyWith({String? title}) => AiConversation(
+  AiConversation copyWith({String? title, int? messageCount}) => AiConversation(
         id: id,
         title: title ?? this.title,
         providerId: providerId,
         modelId: modelId,
         archived: archived,
-        messageCount: messageCount,
+        messageCount: messageCount ?? this.messageCount,
         updatedAt: updatedAt,
       );
 }
@@ -1292,6 +1292,13 @@ class AiToolPolicy {
   final List<String> writeRoots;
   final List<String> readRoots;
 
+  /// **自动发现**的只读目录（本机 ComfyUI 的安装 / 共享目录）。
+  ///
+  /// 与 [readRoots] 分开：那一份是用户配的（可加可删），这一份是后端每次现算的探测结果
+  /// （用户 bug ④："应该自动发现 comfy 目录，给 comfy 的目录默认白名单"）。
+  /// 界面上只展示、不编辑。
+  final List<String> autoReadRoots;
+
   /// toolName → allow / ask / deny
   final Map<String, String> overrides;
   final int maxToolSteps;
@@ -1320,6 +1327,7 @@ class AiToolPolicy {
   const AiToolPolicy({
     this.writeRoots = const [],
     this.readRoots = const [],
+    this.autoReadRoots = const [],
     this.overrides = const {},
     this.maxToolSteps = 8,
     this.maxCallsPerRun = 16,
@@ -1332,6 +1340,8 @@ class AiToolPolicy {
   factory AiToolPolicy.fromJson(Map<String, dynamic> json) => AiToolPolicy(
         writeRoots: (json['writeRoots'] as List?)?.map((e) => e.toString()).toList() ?? const [],
         readRoots: (json['readRoots'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        autoReadRoots:
+            (json['autoReadRoots'] as List?)?.map((e) => e.toString()).toList() ?? const [],
         overrides: (json['overrides'] as Map?)?.map(
               (k, v) => MapEntry(k.toString(), v.toString()),
             ) ??
@@ -1356,6 +1366,7 @@ class AiToolPolicy {
   AiToolPolicy copyWith({
     List<String>? writeRoots,
     List<String>? readRoots,
+    List<String>? autoReadRoots,
     Map<String, String>? overrides,
     int? maxToolSteps,
     int? maxCallsPerRun,
@@ -1363,6 +1374,7 @@ class AiToolPolicy {
       AiToolPolicy(
         writeRoots: writeRoots ?? this.writeRoots,
         readRoots: readRoots ?? this.readRoots,
+        autoReadRoots: autoReadRoots ?? this.autoReadRoots,
         overrides: overrides ?? this.overrides,
         maxToolSteps: maxToolSteps ?? this.maxToolSteps,
         maxCallsPerRun: maxCallsPerRun ?? this.maxCallsPerRun,
@@ -1427,6 +1439,12 @@ class AiToolCallState {
   /// 就该在回复下面给一个能点开看详情的入口，而不是让用户自己去画廊里翻。
   final List<int> mediaIds;
 
+  /// 这次工具调用入库的**提示词 id**（`comfy_submit` 的 `capturedPromptId`）。
+  ///
+  /// 产物只是"结果图"，**生成它的那份工作流同样属于本次的产物**（用户建议 ①）：
+  /// 有了它就能在回复末尾直接打开这次真正跑过的工作流 / 把它拖回 ComfyUI 复现。
+  final int? promptId;
+
   const AiToolCallState({
     required this.callId,
     required this.name,
@@ -1437,6 +1455,7 @@ class AiToolCallState {
     this.elapsedMs = 0,
     this.approval,
     this.mediaIds = const [],
+    this.promptId,
   });
 
   factory AiToolCallState.fromJson(Map<String, dynamic> json) => AiToolCallState(
@@ -1449,6 +1468,7 @@ class AiToolCallState {
         elapsedMs: (json['elapsedMs'] as num?)?.toInt() ?? 0,
         approval: json['approval']?.toString(),
         mediaIds: (json['mediaIds'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ?? const [],
+        promptId: (json['promptId'] as num?)?.toInt(),
       );
 
   /// 从工具结构化结果里取出产物 id（`comfy_submit` 的 `mediaIds`）。
@@ -1457,6 +1477,16 @@ class AiToolCallState {
     final raw = resultJson['mediaIds'];
     if (raw is! List) return const [];
     return raw.whereType<num>().map((e) => e.toInt()).toList();
+  }
+
+  /// 从工具结构化结果里取出**本次入库**的提示词 id（`comfy_submit` 的 `capturedPromptId`）。
+  ///
+  /// 刻意**不**回落到 `promptId`：那个是"提交时用的库里的提示词"（源工作流），
+  /// 而这次真正跑的是**改过参数之后**的节点图；捕获入库的 `capturedPromptId` 才是它。
+  static int? promptIdOf(Object? resultJson) {
+    if (resultJson is! Map) return null;
+    final raw = resultJson['capturedPromptId'];
+    return raw is num ? raw.toInt() : null;
   }
 
   /// 由 `message.parts` 还原：`tool_call` 给名字与参数，`tool_result` 补结果与结论。
@@ -1495,6 +1525,7 @@ class AiToolCallState {
           elapsedMs: (map['elapsedMs'] as num?)?.toInt() ?? 0,
           approval: approval.isEmpty ? null : approval,
           mediaIds: AiToolCallState.mediaIdsOf(map),
+          promptId: AiToolCallState.promptIdOf(map),
         );
         if (i == null) {
           indexOf[id] = out.length;
@@ -1516,6 +1547,7 @@ class AiToolCallState {
     int? elapsedMs,
     String? approval,
     List<int>? mediaIds,
+    int? promptId,
   }) =>
       AiToolCallState(
         callId: callId,
@@ -1527,6 +1559,7 @@ class AiToolCallState {
         elapsedMs: elapsedMs ?? this.elapsedMs,
         approval: approval ?? this.approval,
         mediaIds: mediaIds ?? this.mediaIds,
+        promptId: promptId ?? this.promptId,
       );
 
   /// 待用户批准：气泡上要出「批准 / 拒绝」。

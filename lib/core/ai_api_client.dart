@@ -236,6 +236,21 @@ class AiApiClient {
   String mediaThumbUrl(int mediaId) => '$baseUrl/api/media/$mediaId/thumb';
   String mediaPosterUrl(int mediaId) => '$baseUrl/api/media/$mediaId/poster';
 
+  /// 本次生成真正入库的那份提示词 / 工作流原文（用户建议 ①："生成的产物"包括生成的工作流）。
+  ///
+  /// 后端没存过工作流时返回 null（HTTP 204），界面据此说"这次没有工作流"。
+  /// 走画廊的 `/api/prompts/{id}/workflow`：与上面那两个媒体地址同一个道理，
+  /// **必须用注入进来的 http client**，否则测试里换了假后端这条就测不到
+  /// （真实客户端在 widget 测试里一律 400）。
+  Future<String?> promptWorkflow(int promptId) async {
+    final res = await _client.get(_uri('/api/prompts/$promptId/workflow'), headers: _headers);
+    if (res.statusCode == 204 || res.statusCode == 404) return null;
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw AiApiException(res.statusCode, '读取工作流失败（HTTP ${res.statusCode}）');
+    }
+    return res.body.isEmpty ? null : res.body;
+  }
+
   /// 删除还没用进聊天记录的附件（已被引用的会报错，调用方可以忽略）。
   Future<void> deleteAttachment(String attachmentId) async =>
       _send('DELETE', '/api/ai/attachments/$attachmentId');

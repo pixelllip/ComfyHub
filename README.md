@@ -11,13 +11,14 @@
 
 | 模块 | 能力 |
 | --- | --- |
-| **AI 工作台** | **App 默认落在这一页**（需求 `docs/ai-home-requirements-v0.1.xlsx`，DEC-001）。多轮对话 + 会话列表（重命名 / 归档 / 删除）；**每次冷启动都新建一条聊天记录**（历史仍在左侧列表），**切走时把一条消息都没有的空会话删掉**；**输入框内容按会话存草稿**，切走 / 关窗口都不会把打了一半的字丢掉；**记住上次用的 Provider / 模型 / 思考强度**，下次开 App 直接选回来。宽屏三栏（会话列表 / 对话 / ComfyUI 与模型能力），窄屏会话进抽屉、状态进底部 Sheet、输入区常驻；Composer 支持 Enter 发送、Shift+Enter 换行、输入法选词不误发、`/` 调出 Skills 目录、附件选择（**图片在托盘里显示缩略图、视频显示预览帧**，见第 6 节"附件"）；模型选择器直接显示能力徽标（文本 / 图片 / 视频 / 音频 / 文档 / 工具）。助手回复按 **Markdown 渲染**（标题 / 列表 / 引用 / 围栏代码块 / 行内代码 / 粗斜体 / 删除线 / 可点链接，裸链接自动识别）；自研解析器是**流式安全**的 —— 模型吐到一半的 `**` 或未闭合代码围栏按字面量显示，不会吞内容。Provider 与模型目录在设置里配置，**API Key 只写不读**（见第 5 节） |
+| **AI 工作台** | **App 默认落在这一页**（需求 `docs/ai-home-requirements-v0.1.xlsx`，DEC-001）。多轮对话 + 会话列表（重命名 / 归档 / 删除）；**每次冷启动都新建一条聊天记录**（历史仍在左侧列表），**切走时把一条消息都没有的空会话删掉**；**输入框内容按会话存草稿**，切走 / 关窗口都不会把打了一半的字丢掉；**发送被拒（还在生成中 / 附件没过准入）时输入框一个字节都不动**，**发出去的话也不会被草稿灌回输入框**（见第 4 节"输入区两条纪律"）；**记住上次用的 Provider / 模型 / 思考强度**，下次开 App 直接选回来。宽屏三栏（会话列表 / 对话 / ComfyUI 与模型能力），窄屏会话进抽屉、状态进底部 Sheet、输入区常驻；Composer 支持 Enter 发送、Shift+Enter 换行、输入法选词不误发（组字期间按钮置灰）、`/` 调出 Skills 目录、附件选择（**图片在托盘里显示缩略图、视频显示预览帧**，见第 6 节"附件"）；模型选择器直接显示能力徽标（文本 / 图片 / 视频 / 音频 / 文档 / 工具）。助手回复按 **Markdown 渲染**（标题 / 列表 / 引用 / 围栏代码块 / 行内代码 / 粗斜体 / 删除线 / 可点链接，裸链接自动识别）；自研解析器是**流式安全**的 —— 模型吐到一半的 `**` 或未闭合代码围栏按字面量显示，不会吞内容。Provider 与模型目录在设置里配置，**API Key 只写不读**（见第 5 节） |
 | **自动启动** | App 一启动就自己把 **MySQL + 后端**拉起来（先探健康，不健康才启动；启动过程实时回显在启动页上），不用再手动开脚本；**全程不弹命令行窗口**（见 [12 节](#12-本机环境踩坑记录)最后几条）；关 App 时按设置停掉本地服务（正常关窗口走 `release`，被硬杀有守护进程兜底，见第 5 节脚本速查下面的说明） |
 | **AI 工具调用** | 助手会**真的动手**：查 ComfyUI 状态 / 按 runKey 查一次运行 / 触发一次历史同步（要用户批准）、在 **ComfyUI 目录内**读写文件（越界直接拒绝）。工具卡显示名字、参数摘要、状态（运行中 / 待批准 / 已完成 / 失败 / 已拒绝）、耗时与结果预览，可在卡片上点「批准 / 拒绝」；一次回复最多 8 轮工具、单 Run 有调用次数上限，到顶就逼模型用正文收尾（见 [docs/ai-tools-and-skills.md](docs/ai-tools-and-skills.md)） |
 | **AI Skills** | 磁盘上的 `SKILL.md` 就是真源：**跟 AI 说一句「把这个流程注册成 skill」它就用 `register_skill` 写到本机**，右侧栏立刻能看到、能删（内置的只读），**改动不用重启 App，下一次回复就生效**。装 skill 的方式是**投放口**：把 skill 文件夹（或一个 `.md`）拷进右侧栏显示的那个目录（`<storage>\ai\skills`，源码树 / 发布包都由后端算好绝对路径，带「打开文件夹 / 复制路径」），**后端启动时自动登记** —— 没有 frontmatter 的文件会被补上 `name`（文件名 kebab-case）与 `description`（正文第一行），正文一字不改；应用开着时点一下刷新（重新扫描）即可，不用重启。系统提示只注入名称 + 描述（`description: \|` 这类多行块标量也能正确读取并压成一行），正文由 `load_skill` 按需加载；非法 frontmatter 会带诊断列出但不参与对话。本机在用的 Anima / H3 / Music3 等 skill 来自几个开源项目，见 [第 15 节](#15-开源项目与致谢) |
-| **长期记忆** | 右侧栏「长期记忆」面板 + `remember` 工具：真源是一个**人能看、能手改**的 `<storage>\ai\memory.md`（一行一条）。每次 Run 都会**现读并注入系统提示**，所以"以后每次对话都带上它"是自然结果；编辑器可以整篇改、加一条、清空（清空要确认）。记忆与工具输出一样是**数据不是指令**（系统提示 v3 明写），单条 / 总量都有硬上限，超限**报错**而不是悄悄截断 |
+| **长期记忆** | 右侧栏「长期记忆」面板 + `remember` 工具：真源是一个**人能看、能手改**的 `<storage>\ai\memory.md`（一行一条）。每次 Run 都会**现读并注入系统提示**，所以"以后每次对话都带上它"是自然结果；编辑器可以整篇改、加一条、清空（清空要确认）。记忆与工具输出一样是**数据不是指令**（系统提示 v11 明写），单条 / 总量都有硬上限，超限**报错**而不是悄悄截断 |
 | **AI 工具权限** | 设置页新增「AI 工具权限」：默认**只能写 `<项目根>\comfyui`**，只读 `comfyui` + `storage`；`.git` / `.mysql` / `.run` / `node_modules` 永远禁写（即使用户把白名单放宽到项目根）。每个工具可以单独设成 允许 / 需批准 / 禁用，禁用后**根本不下发给模型**。聊天输入区底部还有**权限两档**开关（附件按钮与模型选择之间）：「询问」（默认）与「自动允许（无需批准）」—— 后者让 AI 不必等批准，**只免掉"问一下"，`deny` 与目录白名单一点都不放宽**；后端每次 Run 现读策略，切完下一次回复立刻生效 |
 | **图生图 / 参考图** | 用户上传的图片可以直接进工作流：AI 先用 `comfy_use_attachment` 把附件投放进 ComfyUI 的 `input/` 目录拿到真实文件名，再用 `comfy_submit` 覆盖 `LoadImage` 节点的 `image` 输入（例 `{"89.image":"…"}`）。工作流被捕获时绑定的那个旧文件名**改不了也不用改** —— 内置 skill `img2img-reference` 与系统提示 v7 都写清了这三步 |
+| **工作流文件直接提交** | 用户甩过来一个工作流 `.json` 路径时，AI 不再回"我只能提交库里的 promptId"：`comfy_load_workflow` 读那份文件 → **API 格式原样用**；**界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图** → 入库拿 `promptId` → `comfy_submit` 正常提交（也可以 `comfy_submit(workflowPath=…)` 一步到位）。转换不出来的（`Anything Everywhere` 这类纯前端节点）**如实报 `UNSUPPORTED_NODES`** 并给出两个出口：在 ComfyUI 里「导出（API）」一次，或点一次 Queue 让它被自动捕获。顺带：**本机 ComfyUI 的目录现在是自动放行的只读白名单**（`ComfyRoots` 每次现探），所以 AI 能直接读你自己的工作流文件；写仍然只允许 `<项目根>\comfyui`。 |
 | **提示词库** | 新建 / 编辑 / 复制 / 删除；区分「生图 / 生视频 / 生音频 / 混合」；正向 + 负向提示词；模型、采样器、调度器、步数、CFG、Seed、宽高、批量、LoRA 列表、备注、收藏；**多选批量管理**（收藏 / 取消收藏 / 加标签 / 删除）；**没有关联任何产物的提示词会挂一个橙色「未关联」标记**（产物被删掉之后就是这种状态），可以按「未关联产物」筛选，也可以**一键清除**（先报条数 + 前几条标题再确认，按批循环删除，超过单页 200 条也不会漏） |
 | **ComfyUI 自动捕获** | ComfyUI 里跑完一次生成，**提示词 + 全部参数 + 完整工作流 + 生成的图片/视频/音频**自动进库并互相关联；不需要改动工作流，也不需要装任何东西（装一个可选的推送节点可以做到零延迟） |
 | **历史产物导入** | 指向 ComfyUI 的 output 目录，把**以前生成好的**图连同图片里内嵌的 `prompt` / `workflow` 一起收进来，自动建提示词并关联 |
@@ -133,12 +134,12 @@ viewer/
 │       │   ├── AiConversationRepo.kt  # 会话 / 消息 / 有序消息块
 │       │   ├── AiSeedCatalog.kt       # ★ 读 classpath 里的冻结模型目录（不读 .dsh/settings.yaml）
 │       │   ├── AiSeeder.kt            # ★ 把冻结目录登记进库（幂等、只补不覆盖）
-│       │   ├── HarnessRunner.kt       # ★ Run 执行器：工具循环 / 统一事件 / 系统提示词（v3，含长期记忆）
+│       │   ├── HarnessRunner.kt       # ★ Run 执行器：工具循环 / 统一事件 / 系统提示词（v11）
 │       │   ├── ModelCapabilityCatalog.kt # 模型发现时的能力预填建议表
 │       │   ├── tools/                 # ★ M4/M5/M6：工具、Skills 与长期记忆
 │       │   │   ├── ToolModel.kt       # 工具定义 / 权限档 / 调用记录
 │       │   │   ├── ToolPolicy.kt      # ★ 权限策略：默认只写 comfyui，真实路径判定
-│       │   │   ├── ToolRegistry.kt    # ★ 出厂 11 个工具（含 remember）+ 审批闸门
+│       │   │   ├── ToolRegistry.kt    # ★ 出厂 15 个工具（含 remember / comfy_load_workflow）+ 审批闸门
 │       │   │   ├── SkillStore.kt      # ★ SKILL.md 扫描 / 校验 / 注册 / 删除 / 投放口自动登记
 │       │   │   └── MemoryStore.kt     # ★ 长期记忆：memory.md 的读 / 改 / 追加（带硬上限）
 │       │   └── AiRoutes.kt            # /api/ai/*（Provider、凭据、模型、会话、Run、Skills、工具权限）
@@ -445,7 +446,7 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `POST` | `/api/ai/attachments` | **上传附件**（multipart，字段名 `files`）。类型**只认签名**：认不出来直接拒收（不乐观回退）；原件落 `storage/ai-attachments`，返回 `{items, failed}`（逐个失败原因不静默丢弃） |
 | `GET` | `/api/ai/attachments/{id}` | 附件事实：`{id, name, kind, modality, mimeType, sizeBytes, width, height, sha256}` |
 | `GET` | `/api/ai/attachments/{id}/file` | 原件（点开看大图 / 播视频） |
-| `GET` | `/api/ai/attachments/{id}/thumb` | **缩略图 / 视频预览帧**（同一张接口）：图片是 JPEG 缩略图，视频是抽的第一帧 PNG；音频 / 文档 / 抽帧失败回 **204**（界面退化成文件图标） |
+| `GET` | `/api/ai/attachments/{id}/thumb` | **缩略图 / 视频预览帧**（同一张接口）：图片是 JPEG 缩略图（PNG / JPEG / GIF / BMP / TIFF / **WebP** 都能解码），视频是抽的第一帧 PNG；**解不了的格式（AVIF / HEIC）回退发原件**（界面照旧能显示）；音频 / 文档 / 抽帧失败回 **204**（界面退化成文件图标） |
 | `DELETE` | `/api/ai/attachments/{id}` | 删除附件（原件 + 缩略图一起删）；**已被聊天记录引用的会被拒绝**（历史消息还要显示它） |
 | `POST` | `/api/ai/preflight` | 附件准入预检：**纯计算、不发上游请求**。传 `attachmentIds`（以库里事实为准，推荐）或 `attachments`（前端线索 + 文件头）；返回 `{allowed, blockers, items[]}`，`items` 逐个附件给结论与原因 |
 | `GET/POST` | `/api/ai/conversations` | 会话列表 / 新建 |
@@ -471,6 +472,24 @@ pwsh -File scripts\e2e-capture-test.ps1
 关联回原 Run，便于事后看出这是哪次失败的重放），重放原来的提问、同一个 Provider/模型与思考强度；
 **已经产生过工具调用的 Run 不会自动重放**（免得工具副作用跑两次，AIH-024）。
 
+**输入区两条纪律（2026-09-18 修，用户报的"一条消息会复制一遍再发送"）**：
+
+1. **被拒时一个字节都不动输入框。** 能不能发由 `AiWorkspaceStore.sendBlockReason()` 一次判定
+   （还在生成中 / 附件没传完 / 准入不通过 / 没选模型 / 有附件没有 id），页面**先问它、再决定要不要清空**。
+   以前是"先清空、由 `send()` 拒绝"：最常见的"正在生成中又按了一次回车"会把用户刚打的字**静默吃掉**，
+   用户只能自己把上一条复制一遍再发一次 —— 看起来就像同一句话被复制着发了两遍。
+2. **发出去的话不会再被草稿灌回输入框。** 这条会话的草稿（文字 + 附件）在 `send()` 里
+   **第一次 `notifyListeners()` 之前**就作废；页面那边也跟着收紧：用户打的字一律认领到"当前会话"
+   （不再是"页面自己记账、记账还没同步时就不存"），只有**真的换会话**才清空输入框、取回草稿。
+   改之前有一条真实的复现路径：页面的"当前草稿挂在哪条会话上"还是空的时候发送，
+   草稿既没被清掉、又在通知里被"取回"，于是刚发出去的那句话原样回到输入框，下一次回车就发出去了第二遍。
+
+另外，输入法**组字期间（composing range 非空）不发**：回车是"选词 / 上屏"（AIH-053），
+发送按钮这时也置灰。以前那个 `_composing` 字段**永远是 false**（只在 `onChanged` 里被赋 false），
+等于没有这道闸 —— 半截拼音会被当成消息发出去，而"清空时输入法还在组字"正是 Windows 引擎
+把旧文本回灌 / 复制的触发条件（[flutter/flutter#191196](https://github.com/flutter/flutter/issues/191196)，
+修复 PR [#192624](https://github.com/flutter/flutter/pull/192624) 截至 2026-09-18 仍未合入）。
+
 **协议支持现状**（以代码事实为准，不按模型名猜）：
 
 | 协议 | 状态 |
@@ -481,7 +500,9 @@ pwsh -File scripts\e2e-capture-test.ps1
 | 视频 / 音频 / 文档附件 | ⛔ 适配器尚未实现 → 预检直接阻断（不是静默丢弃，也不偷偷抽帧降级） |
 
 **附件（M3 / AIH-027 ~ AIH-031）**：聊天框左边的回形针选文件 → **先上传到后端**（类型只认签名）
-→ 托盘里**图片显示缩略图、视频显示预览帧**（同一张 `/thumb` 接口：图片走 JPEG 缩略图，
+→ 托盘里**图片显示缩略图、视频显示预览帧**（同一张 `/thumb` 接口：图片走 JPEG 缩略图 ——
+PNG / JPEG / GIF / BMP / TIFF / **WebP** 都解得了（WebP 靠 `imageio-webp` 这个纯 Java 的 ImageIO 插件），
+解不了的格式（AVIF / HEIC）**回退把原件发出去**而不是给个文件图标；
 视频复用画廊那套 Windows 缩略图管线抽第一帧，不引入 ffmpeg；抽不出来就退化成文件图标）→
 发送时只带 `attachmentIds`。准入分三层，**任何一层不通过都不会产生上游请求**：
 
@@ -634,7 +655,7 @@ MiMo、Step、Hy、Inkling、LongCat、Nemotron 等），连**同系列里的视
 | `PATCH` | `/api/media/{id}` | `promptId` 关联、`clearPrompt:true` 解除、`title` `notes` `favorite` `source` |
 | `DELETE` | `/api/media/{id}` | 删除记录 + 磁盘文件 + 缩略图 |
 | `GET` | `/api/media/{id}/file` | 原始文件，`Accept-Ranges: bytes`（视频可拖进度，返回 206） |
-| `GET` | `/api/media/{id}/thumb` | 缩略图（仅图片，最长边 512 的 JPEG；非图片返回 204） |
+| `GET` | `/api/media/{id}/thumb` | 缩略图（仅图片，最长边 512 的 JPEG，PNG / JPEG / GIF / BMP / TIFF / **WebP** 都解得了；解不了的格式 —— 例如 AVIF —— **回退发原件**，前端自己解码）；非图片返回 204 |
 | `GET` | `/api/media/{id}/poster` | **视频封面**（第一帧，PNG，最长边 640）：走 `scripts\video-poster.ps1`（Windows 资源管理器缩略图管线），结果缓存在 `storage/thumbs/<id>.poster.png`；抽不出图返回 204（播放器退化成转圈）。仅视频，其余 204 |
 | `GET` | `/api/media/{id}/prompt` | 关联的完整提示词；未关联返回 204 |
 
@@ -934,8 +955,8 @@ App 自己的文案都是中文，但文本框右键的「复制 / 全选 / 剪�
 ```powershell
 $env:PUB_HOSTED_URL='https://pub.dev'
 flutter analyze     # 无任何 error / warning / info
-flutter test        # 94 个用例
-pwsh -File scripts\server.ps1 test   # 后端 126 个用例
+flutter test        # 178 个用例
+pwsh -File scripts\server.ps1 test   # 后端 325 个用例
 ```
 
 | 文件 | 覆盖内容 |
@@ -972,8 +993,8 @@ pwsh -File scripts\server.ps1 test   # 后端 126 个用例
 | `server/src/test/kotlin/.../AiSeedCatalogTest.kt` + `AiSeederPlanTest.kt` | **内置模型目录**：资源里有 1 provider / 69 模型、逐条对照（含 `off: null` 被丢掉、纯文本条目、`xhigh` 档位）、生成器与手抄版一致；`planSeed` 的"只补缺失 / 不改用户行 / 分歧单独列出 / 用户自加模型永不被删"。27 例 |
 | `test/scroll_perf_test.dart` | **长列表性能**：缩略图解码宽度随格子与 DPR 变化且 ≤512、横竖图不变形、`FilterQuality.low`、`AdaptiveColumnList` 500 条只建 <60 项、单列 0 次固有高度查询、多列仍等高、网格每格有 `RepaintBoundary` 且无 `AutomaticKeepAlive`。8 例 |
 | `test/backend_launcher_test.dart` | **退出收尾**（全假进程，不真起服务）：`release` / `watch` / `unwatch` 的参数向量、没认领过服务就不主动停、`accepted`/失败不抛、`stopServicesOnExit` 关掉时不动作。11 例 |
-| `test/ai_tools_ui_test.dart` | **工具、Skills 与长期记忆的界面**：侧栏渲染实时 Skills 与 DELETE URL、**投放口路径 + 打开/复制 + 重新扫描（且没有「从 DSH 导入」按钮）**、**长期记忆面板（条数/预览）与编辑弹窗（改 / 加一条 / 清空）**、工具卡状态与折叠预览、`pending` 时点批准 POST 到正确地址、`accepted=false` 如实告知、思考过程折叠、模型选择器懒构建 + 搜索过滤、权限页 PUT、内置目录卡片"确认前绝不发 sync"、`/` 菜单，以及流式期间未变消息对象实例唯一（O(n) 热点回归）。15 例 |
-| `test/ai_conversation_lifecycle_test.dart` | **会话生命周期**：已有干净空会话就复用（不再新建）、切页重建不会重复加载/新建、历史遗留的多条空壳只留最新一条、**打了一半的字切走再切回还在**、有草稿的空会话不会被顺手删掉。5 例 |
+| `test/ai_tools_ui_test.dart` | **工具、Skills 与长期记忆的界面**：侧栏渲染实时 Skills 与 DELETE URL、**投放口路径 + 打开/复制 + 重新扫描（且没有「从 DSH 导入」按钮）**、**长期记忆面板（条数/预览）与编辑弹窗（改 / 加一条 / 清空）**、工具卡状态与折叠预览、`pending` 时点批准 POST 到正确地址、`accepted=false` 如实告知、思考过程折叠、模型选择器懒构建 + 搜索过滤、权限页 PUT、内置目录卡片"确认前绝不发 sync"、`/` 菜单、**发送被拒（还在生成中）时不吃掉输入框里的字**、**输入法组字期间回车不发送也不清空**、**会话草稿在第一次界面通知之前就作废**，以及流式期间未变消息对象实例唯一（O(n) 热点回归）。18 例 |
+| `test/ai_conversation_lifecycle_test.dart` | **会话生命周期**：已有干净空会话就复用（不再新建）、切页重建不会重复加载/新建、历史遗留的多条空壳只留最新一条、**打了一半的字切走再切回还在**、有草稿的空会话不会被顺手删掉、**发出去的话不会被草稿灌回输入框（用户报的"一条消息复制一遍再发送"）**。6 例 |
 | `test/model_list_scroll_test.dart` | **「AI 模型与凭据」69 个模型的长列表**：滚动范围（滑块长度）全程稳定、一趟只建视口附近的行、行高是常数、能力编辑弹窗改完点确定写回行并落库、点取消不留痕迹。4 例 |
 | `test/ai_thinking_off_test.dart` | **思考强度「关闭」档**：「关闭」永远可选且排在第一位（不要求模型声明 `off`）、没声明的思考档位仍然不给选、不支持推理的模型完全不给选、在聊天框选中「关闭」后创建 Run 的请求体里**不带** `reasoningEffort`。2 例 |
 | `test/ai_attachment_test.dart` | **附件（M3）的界面**：上传走真文件路径（`runAsync`）且只传一次、图片附件在托盘里显示 `/thumb` 缩略图、视频显示预览帧 + 播放角标、音频/文档落回文件图标、被准入拦下时说明原因并禁用发送、上传失败如实报错且不进托盘、部分成功时逐个列出失败原因、发送时带上 `attachmentIds` 且用户消息气泡里也能看到附件缩略图。5 例 |
@@ -991,9 +1012,10 @@ pwsh -File scripts\e2e-ai-tools-test.ps1
 # → comfy_sync_history 等批准才执行 → 只读工具免审批 → 落库 parts 有序
 # → remember 落盘 + 下一轮 Run 的系统提示里确实带上了这条记忆
 # → 附件：上传（签名判定）→ 缩略图 200 → 谎报类型被拒 → 预检放行
+#   → WebP 附件按签名收下 + 尺寸探测 + 缩略图真的是 JPEG（ImageIO 插件没掉）
 #   → 上游请求里确实带 data:image/png;base64 的图片块 → 落库带 attachment 有序块
 #   → 换成纯文本模型再发同一个附件：400 UNSUPPORTED_CONTENT 且**上游请求数为 0**
-# 64 项检查；跑完自动删掉测试用的会话 / Provider / skill / 附件 / 临时文件（并把长期记忆恢复原样）；
+# 67 项检查；跑完自动删掉测试用的会话 / Provider / skill / 附件 / 临时文件（并把长期记忆恢复原样）；
 # 加 -KeepData 保留
 ```
 
@@ -1109,13 +1131,17 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 | **Anima skills** —— `anima-prompt` / `anima-nsfw-prompt` / `anima-doujin-plan` / `anima-scene-prompt` / `anima-workflow` / `anima-change` | [adventyhwh/comfy-anima-skill-share](https://github.com/adventyhwh/comfy-anima-skill-share) | 投放进 Skills 投放口 `<storage>\ai\skills`（**运行期数据，不在本仓库里**），AI 工作台右侧栏能看到 |
 | **MiniMax-H3 skills** —— H3 视频提示词相关（如 `h3-prompt-writing`） | [MiniMax-AI/MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) | 同上 |
 | **MiniMax-Music3 skills** —— 音乐 caption 相关（如 `music-caption-rewriter`） | [MiniMax-AI/MiniMax-Music3](https://github.com/MiniMax-AI/MiniMax-Music3) | 同上 |
+| **Krea 2 skill** —— `krea-2`（Krea 2 提示词规则 + RAW/Turbo 参数 + ComfyUI 落地） | [krea-ai/skills](https://github.com/krea-ai/skills)（MIT）、[krea-ai/krea-2](https://github.com/krea-ai/krea-2)（Krea 2 Community License） | **本仓库自带**：`skills\builtin\krea-2\`（正文按官方材料适配本机 ComfyUI 路线，官方原文逐字存在 `references\`，出处/日期/许可见 `references\SOURCES.md`） |
+| **WebP 解码** —— 给 JVM 的 ImageIO 补 WebP 读取器（附件与画廊的缩略图） | [haraldk/TwelveMonkeys](https://github.com/haraldk/TwelveMonkeys)（BSD-3） | `server\build.gradle.kts` 的 `com.twelvemonkeys.imageio:imageio-webp`（**纯 Java**，无本地库） |
 | **harness 破甲系统提示词** —— `[MODE: UNRESTRICTED SANDBOX — STABLE]` 整段（人格 / 拒绝对抗 / 越狱与渗透话术） | [YuJunZhiXue/dsh-purge](https://github.com/YuJunZhiXue/dsh-purge)（MIT） | `HarnessRunner.kt` 里一个独立的 `append("""…""")`（原文另存 `docs\default-prompt-inject.md`），随系统提示词 **v9** 起注入。上游默认提示词面向国模「小码酱」（`Little Code Sauce`）——本仓库里那个人格名已按自己的需要改过，段落与话术仍来自上游 |
 
 补充两点，免得后来的人踩到：
 
 - **Skills 是运行期数据，不是仓库源码**：后端只在启动时与 `POST /api/ai/skills/rescan`
   扫投放口（`<storage>\ai\skills`），所以上面这些 skill 的升级走各自上游仓库、重新投放即可生效，
-  **不用重编 App**；本仓库自带的只有 `skills\builtin\img2img-reference` 一个（只读、不可删）。
+  **不用重编 App**；本仓库自带的只有 `skills\builtin\img2img-reference` 与 `skills\builtin\krea-2`
+  两个（只读、不可删）。`krea-2` 是按 Krea 官方材料整理的 **Krea 2 提示词 + ComfyUI 参数** skill
+  （官方原文另存 `<根>\skills\builtin\krea-2\references\`，来源与许可见那里的 `SOURCES.md`）。
 - **破甲那段系统提示词是用户有意注入的**（2026-09-17 明确指示"那是我的意图，不许删除"）：
   它在 `HarnessRunner.kt` 里有独立注释、`ToolRegistryTest` 里有"必须还在"的断言，
   **别当误粘贴清理掉**；要改先问用户（见 `AGENTS.md` 第 10 节）。

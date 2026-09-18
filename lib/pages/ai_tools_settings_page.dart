@@ -162,6 +162,8 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                           ),
                           estimatedHeight: 280,
                         ),
+                        if (_policy.autoReadRoots.isNotEmpty)
+                          AdaptiveSection(_autoReadCard(), estimatedHeight: 160),
                         AdaptiveSection(_toolsCard(), estimatedHeight: 560),
                       ],
                     ),
@@ -204,6 +206,47 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.onTertiaryContainer),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 后端**自动发现**的只读目录（用户 bug ④）。
+  ///
+  /// 只展示、不可编辑：它不是用户配置，而是每次现算的探测结果（本机 ComfyUI 装在哪、
+  /// 共享目录在哪）。放在这里是为了回答"为什么我明明没配、AI 却能读我的工作流文件"。
+  Widget _autoReadCard() {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.travel_explore_outlined, size: 18, color: theme.colorScheme.primary),
+                const SizedBox(width: 6),
+                Text('自动放行（只读）', style: theme.textTheme.titleSmall),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '这些是本机 ComfyUI 的目录，后端每次现探、自动只读放行 —— '
+              '所以 AI 能直接读你自己的工作流文件（例如 user\\default\\workflows 下的 .json），'
+              '不用你手动加白名单。**它们不在写白名单里**：写入仍然只允许上面那些目录。',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+            const SizedBox(height: 8),
+            for (final root in _policy.autoReadRoots)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: SelectableText(
+                  root,
+                  style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
+                ),
+              ),
           ],
         ),
       ),

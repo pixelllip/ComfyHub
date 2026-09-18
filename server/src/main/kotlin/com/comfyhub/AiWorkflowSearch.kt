@@ -6,10 +6,13 @@ import com.comfyhub.ai.Modality
 import com.comfyhub.ai.tools.ComfySubmitOutcome
 import com.comfyhub.ai.tools.ToolFailure
 import com.comfyhub.ai.tools.WorkflowSearch
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -28,6 +31,18 @@ import java.nio.file.StandardCopyOption
  *  3. 交给 [ComfySubmitter] 真跑，并把结果整理成模型 / 界面都能用的形状。
  */
 object AiWorkflowSearch {
+
+    private val log = LoggerFactory.getLogger(AiWorkflowSearch::class.java)
+
+    /** 从本机文件加载进来的工作流在库里的来源标记（也是自动打的标签）。 */
+    const val SOURCE = "ComfyUI-File"
+
+    /** 一份工作流文件最大读多少（本机工作流通常几十 KB，上百 MB 的一定是拿错文件了）。 */
+    const val MAX_WORKFLOW_FILE_BYTES = 32L * 1024 * 1024
+
+    /** 节点摘要最多列几个（8KB 的工具结果装不下 100+ 个节点的完整清单）。 */
+    const val MAX_SUMMARY_NODES = 120
+
 
     /**
      * 按关键词找库里能跑的工作流。
@@ -87,6 +102,186 @@ object AiWorkflowSearch {
     }
 
     /**
+     * 把一份**本机工作流文件**读进库，返回一个可以交给 `comfy_submit` 的 `promptId`
+     * （用户 bug ③："comfy_submit 只认库里的 promptId —— 我不能凭一个文件路径提交"）。
+     *
+     * 两条路都要认：
+     *  - 文件是 **API 格式**（`{"1":{"class_type":…}}`，ComfyUI 的「导出（API）」产物）→ **原样用**，
+     *    零转换、零猜测；
+     *  - 文件是 **界面格式**（`{nodes:[…], links:[…]}`，ComfyUI 保存工作流的默认格式）→
+     *    用 `/object_info` 做等价转换（[WorkflowConvert]）。转换不出来的（Anything Everywhere
+     *    这类纯前端节点）**如实报错**，绝不糊一个"看起来差不多"的图 —— 猜错的代价是 ComfyUI
+     *    报一堆莫名其妙的节点错误，用户根本查不出来。
+     *
+     * 入库是**幂等**的：`run_key = file:<文件 sha256>`，同一份文件重复加载只会得到同一个 promptId。
+     */
+    suspend fun loadWorkflowFromFile(
+        submitter: ComfySubmitter,
+        file: Path,
+        title: String?,
+        includeGraph: Boolean,
+    ): JsonObject {
+        if (!Files.isRegularFile(file)) {
+            throw ToolFailure("NOT_A_FILE", "不是文件：$file")
+        }
+        val size = runCatching { Files.size(file) }.getOrDefault(0L)
+        if (size <= 0L) throw ToolFailure("EMPTY_FILE", "文件是空的：$file")
+        if (size > MAX_WORKFLOW_FILE_BYTES) {
+            throw ToolFailure(
+                "TOO_LARGE",
+                "工作流文件太大（$size 字节 > $MAX_WORKFLOW_FILE_BYTES）：$file",
+            )
+        }
+        val bytes = Files.readAllBytes(file)
+        val root = runCatching { AppJson.parseToJsonElement(String(bytes, Charsets.UTF_8)) as? JsonObject }
+            .getOrNull()
+            ?: throw ToolFailure(
+                "NOT_A_WORKFLOW",
+                "这份文件不是 ComfyUI 工作流 JSON（解析失败）：$file。" +
+                    "需要 ComfyUI 保存的工作流文件（含 nodes/links），或「导出（API）」得到的节点图。",
+            )
+
+        val apiFormat = HistoryEntry.isNodeGraph(root)
+        val uiFormat = !apiFormat && WorkflowConvert.isUiWorkflow(root)
+        if (!apiFormat && !uiFormat) {
+            throw ToolFailure(
+                "NOT_A_WORKFLOW",
+                "这份 JSON 既不是 API 格式节点图，也不是界面格式工作流（没有 nodes / links）：$file",
+            )
+        }
+
+        var warnings: List<String> = emptyList()
+        var rewritten: List<String> = emptyList()
+        val apiGraph: JsonObject = if (apiFormat) {
+            root
+        } else {
+            val objectInfo = try {
+                submitter.objectInfo()
+            } catch (e: Exception) {
+                throw ToolFailure(
+                    "COMFY_UNREACHABLE",
+                    "这是界面格式工作流，转换需要问 ComfyUI 要节点定义（/object_info），但连不上：" +
+                        "${e.message?.take(200)}。先 comfy_get_status 看 ComfyUI 在不在跑。",
+                )
+            }
+            val converted = try {
+                WorkflowConvert.toApiGraph(root, objectInfo)
+            } catch (e: IllegalArgumentException) {
+                throw ToolFailure("INVALID_ARGUMENT", "转换工作流失败：${e.message}")
+            }
+            if (converted.unsupportedNodes.isNotEmpty()) {
+                throw ToolFailure(
+                    "UNSUPPORTED_NODES",
+                    "这条工作流用了 ComfyUI **前端**才有的节点，服务端没法等价转换：" +
+                        converted.unsupportedNodes.joinToString("、").take(400) +
+                        "。两个出口：① 在 ComfyUI 里用「工作流菜单 → 导出（API）」存成 API 格式，" +
+                        "再把那份文件路径给我（API 格式是原样提交，零转换）；" +
+                        "② 在 ComfyUI 里点一次 Queue 让它跑一次，跑完会被自动捕获，之后就能按 promptId 提交。",
+                )
+            }
+            if (converted.graph.isEmpty()) {
+                throw ToolFailure("NO_API_GRAPH", "转换之后一个可提交的节点都没有：$file")
+            }
+            warnings = converted.warnings.take(5)
+            rewritten = converted.rewritten.take(20)
+            converted.graph
+        }
+
+        val runKey = "file:" + sha256Hex(bytes)
+        val claim = CaptureRepo.beginRun(
+            runKey = runKey,
+            source = SOURCE,
+            raw = buildJsonObject { put("prompt", apiGraph) },
+        )
+        val promptId = if (!claim.claimed) {
+            // 同一份文件已经加载过：直接复用（幂等，不重复建提示词）
+            claim.existingPromptId ?: throw ToolFailure(
+                "LOAD_IN_PROGRESS",
+                "这份工作流正在被另一次调用加载，稍等一下再试（或直接用 comfy_find_workflow 找它）",
+            )
+        } else {
+            val parsed = GraphParse.parse(apiGraph)
+            val label = title?.takeIf { it.isNotBlank() }
+                ?: file.fileName.toString().substringBeforeLast('.').take(200)
+            val workflowJson = runCatching {
+                AppJson.encodeToString(JsonObject.serializer(), if (uiFormat) root else apiGraph)
+            }.getOrNull()
+            val created = Db.tx { conn ->
+                PromptRepo.createCaptured(
+                    conn = conn,
+                    parsed = parsed,
+                    title = label,
+                    source = SOURCE,
+                    sourceRef = runKey,
+                    workflowJson = workflowJson,
+                    tags = listOf(SOURCE),
+                    notes = "从本机工作流文件加载：$file" +
+                        if (uiFormat) "（界面格式，已按 ComfyUI /object_info 转成 API 节点图）" else "（API 格式，原样使用）",
+                )
+            }
+            CaptureRepo.finishRun(runKey, created, "success", 0, label, null)
+            log.info("加载工作流文件入库：{} -> promptId={}（{} 格式，{} 个节点）", file, created, if (uiFormat) "UI" else "API", apiGraph.size)
+            created
+        }
+
+        val prompt = PromptRepo.get(promptId)
+        return buildJsonObject {
+            put("promptId", promptId)
+            put("runKey", runKey)
+            put("title", prompt?.title ?: title ?: file.fileName.toString())
+            put("path", file.toString())
+            put("format", if (uiFormat) "ui" else "api")
+            put("nodeCount", apiGraph.size)
+            put("runnable", true)
+            put(
+                "hint",
+                "现在可以 comfy_submit(promptId=$promptId, overrides={\"<节点id>.<输入名>\": 值}) 提交它；" +
+                    "参数路径见下面的 nodes（linked 里的输入是连线，不能覆盖）。",
+            )
+            if (rewritten.isNotEmpty()) {
+                put("rewrittenNodes", buildJsonArray { rewritten.forEach { add(JsonPrimitive(it)) } })
+            }
+            if (warnings.isNotEmpty()) {
+                put("warnings", buildJsonArray { warnings.forEach { add(JsonPrimitive(it)) } })
+            }
+            put("nodes", summarizeNodes(apiGraph))
+            if (includeGraph) put("apiGraph", apiGraph)
+        }
+    }
+
+    /**
+     * 给模型看的节点摘要：每个节点的 `id` / 类型 / 标题 / 可覆盖的控件名 / 已连线的输入名。
+     *
+     * 为什么不直接把整张图丢过去：113 个节点的 API 图有 100+ KB，一次工具结果上限是 8KB，
+     * 模型看到的会是被截断的半个 JSON —— 那比给一张清楚的"哪个节点能改什么"的表更难用。
+     */
+    private fun summarizeNodes(apiGraph: JsonObject): JsonArray = buildJsonArray {
+        apiGraph.entries.take(MAX_SUMMARY_NODES).forEach { (id, value) ->
+            val node = value as? JsonObject ?: return@forEach
+            val inputs = node.inputs()
+            val widgets = mutableListOf<String>()
+            val linked = mutableListOf<String>()
+            inputs.forEach { (name, v) ->
+                if (v is JsonArray) linked += name else widgets += name
+            }
+            add(
+                buildJsonObject {
+                    put("id", id)
+                    put("classType", node.cls())
+                    (node["_meta"] as? JsonObject)?.get("title").asText()?.let { put("title", it) }
+                    put("widgets", buildJsonArray { widgets.forEach { add(JsonPrimitive(it)) } })
+                    put("linked", buildJsonArray { linked.forEach { add(JsonPrimitive(it)) } })
+                },
+            )
+        }
+    }
+
+    private fun sha256Hex(bytes: ByteArray): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    /**
      * 提交一条库里的工作流给 ComfyUI 跑。
      *
      * 步骤：取 API 图 → 覆盖参数（类型不符当场报错）→ 提交并等待 → 返回产物 id。
@@ -122,6 +317,9 @@ object AiWorkflowSearch {
 
         val json = buildJsonObject {
             put("promptId", promptId)
+            // 三个 id 各是什么，写清楚 —— 实测模型会拿错（它拿数字 promptId 去 comfy_get_run，
+            // 而那边旧实现只认 UUID，于是"刚提交完却说查不到这次运行"）
+            put("runKey", submission.promptId)
             put("comfyPromptId", submission.promptId)
             put("title", label)
             put("status", submission.status)
@@ -129,6 +327,8 @@ object AiWorkflowSearch {
             put("message", submission.message)
             put("error", submission.error)
             put("capturedPromptId", submission.capturedPromptId)
+            put("idHint", "查这次运行用 comfy_get_run(runKey=\"${submission.promptId}\")；" +
+                "capturedPromptId 是捕获记录编号（画廊 / 提示词用的那个是 promptId）")
             put(
                 "appliedOverrides",
                 buildJsonArray { applied.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } },
@@ -139,7 +339,7 @@ object AiWorkflowSearch {
                 put(
                     "hint",
                     "还没跑完：产物会在跑完后自动入库，让用户稍后刷新画廊即可；" +
-                        "也可以隔一会儿用 comfy_get_run 查 comfyPromptId=${submission.promptId}",
+                        "也可以隔一会儿用 comfy_get_run runKey=${submission.promptId} 查",
                 )
             }
         }

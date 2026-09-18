@@ -79,6 +79,13 @@ class Handler(BaseHTTPRequestHandler):
             keyword = user_text.split("找找看", 1)[1].strip().split(" ")[0] or "e2e"
             self._stream_tool("comfy_find_workflow", {"query": keyword, "limit": 2, "includeGraph": True})
             return
+        # 模板 D：把一份**本机界面格式工作流文件**读进库（用户 bug ③：
+        # "comfy_submit 只认库里的 promptId——我不能凭一个文件路径提交"）。
+        # 脚本给的格式：`载入 <绝对路径>`
+        if "载入" in user_text and last.get("role") != "tool":
+            path = user_text.split("载入", 1)[1].strip()
+            self._stream_tool("comfy_load_workflow", {"path": path, "includeGraph": False})
+            return
         # 模板 C：真的提交一次任务（用户建议 ① 的端到端）。
         # 用户那句话的格式由测试脚本决定：`提交 <promptId> <节点id>.<输入名>=<值>`
         # （不同工作流的可覆盖参数不一样，写死一个 "sch.steps" 只能测到那一条工作流）。

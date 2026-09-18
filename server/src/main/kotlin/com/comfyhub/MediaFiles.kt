@@ -18,6 +18,12 @@ import kotlin.math.max
 /**
  * 文件层面的事情：类型识别、尺寸探测、哈希、缩略图。
  * 不依赖外部二进制（不调用 ffmpeg），保证部署零依赖。
+ *
+ * 关于 WebP：JDK 自带的 ImageIO **读不了 WebP**，所以 `build.gradle.kts` 里挂了
+ * TwelveMonkeys 的 `imageio-webp` —— 纯 Java 的 ImageReaderSpi 插件，不解码就没人能解码，
+ * 结果就是"附件/画廊里的 webp 有图没缩略图"（2026-09 用户要求补上 WebP 支持）。
+ * 没有解码器的格式（AVIF / HEIC）**不在这里硬造**：调用方按"回退原件"处理
+ * （`MediaRoutes` 的 `/thumb`、`AiAttachmentStore.thumbnailOf`），让 Flutter 自己解码。
  */
 object MediaFiles {
     private val log = LoggerFactory.getLogger(MediaFiles::class.java)
@@ -159,19 +165,33 @@ object MediaFiles {
         }
     }
 
+    /**
+     * JPEG 尺寸：一路跳段，遇到 SOF（`C0`~`CF`，去掉 `C4`/`C8`/`CC` 这三个）读宽高。
+     *
+     * ⚠ 2026-09 修的老 bug：旧实现把 **SOI（`FFD8`）也当成"带长度字段的段"** ——
+     * 它读到 `FFD8` 后紧接着把下一个段的 `FFE0` 当成"长度 = 0xFFE0"，要跳六万多字节，
+     * 于是**任何 JPEG 都返回 null**（jpg 附件的宽高一直是空的，png/webp 却正常）。
+     * SOI / EOI / TEM / RSTn 都是**没有长度字段的独立标记**，必须在读长度之前先认出来。
+     */
     private fun jpegSize(input: InputStream): Pair<Int, Int>? {
-        var prev = input.read()
-        if (prev != 0xFF) return null
-        var marker = input.read()
-        while (marker != -1) {
-            if (marker == 0xFF) {
+        if (input.read() != 0xFF) return null
+        while (true) {
+            var marker = input.read()
+            if (marker == -1) return null
+            // 标记前面允许有任意多个填充 0xFF
+            while (marker == 0xFF) {
                 marker = input.read()
-                continue
+                if (marker == -1) return null
             }
-            val isSof = marker in 0xC0..0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC
+            // 没有长度字段的独立标记：SOI(FFD8) / EOI(FFD9) / TEM(FF01) / RSTn(FFD0~FFD7)
+            if (marker == 0xD8 || marker == 0xD9 || marker == 0x01 || marker in 0xD0..0xD7) continue
+
             val lenHi = input.read(); val lenLo = input.read()
             if (lenHi == -1 || lenLo == -1) return null
             val len = (lenHi shl 8) or lenLo
+            if (len < 2) return null
+
+            val isSof = marker in 0xC0..0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC
             if (isSof) {
                 val data = ByteArray(5)
                 if (input.readNBytes(data, 0, 5) < 5) return null
@@ -179,25 +199,30 @@ object MediaFiles {
                 val w = (data[3].toInt() and 0xFF shl 8) or (data[4].toInt() and 0xFF)
                 return if (w > 0 && h > 0) w to h else null
             }
+
             var skipped = 0L
-            while (skipped < len - 2) {
-                val s = input.skip(len - 2 - skipped)
+            val need = (len - 2).toLong()
+            while (skipped < need) {
+                val s = input.skip(need - skipped)
                 if (s <= 0) {
                     if (input.read() == -1) return null
                     skipped += 1
                 } else skipped += s
             }
-            prev = input.read()
-            if (prev == -1) return null
-            marker = input.read()
         }
-        return null
     }
 
     // -----------------------------------------------------------------------
     //  缩略图（ImageIO，仅用于图片）
     // -----------------------------------------------------------------------
 
+    /**
+     * 生成 JPEG 缩略图。支持 ImageIO 能读的一切（png / jpg / gif / bmp / tiff，
+     * 以及 TwelveMonkeys 插件补上的 **webp**）。
+     *
+     * 返回 false 表示"这个格式解不了"（例如 AVIF / HEIC）—— 这**不是错误**，
+     * 调用方必须走"回退原件"的降级路径，而不是给用户一个破图或干脆什么都不显示。
+     */
     fun writeThumbnail(source: Path, dest: Path, maxEdge: Int = 512): Boolean {
         return try {
             val img: BufferedImage = ImageIO.read(source.toFile()) ?: return false
@@ -238,10 +263,12 @@ object MediaFiles {
             }
             true
         } catch (e: IOException) {
-            log.debug("缩略图生成失败 {}: {}", source.fileName, e.message)
+            log.debug("缩略图生成失败 {}: {} {}", source.fileName, e.javaClass.simpleName, e.message)
             false
         } catch (e: Exception) {
-            log.debug("缩略图生成失败 {}: {}", source.fileName, e.message)
+            // 带上异常类名：有些 IIOException / NoSuchElementException 的 message 是 null，
+            // 只打 message 会得到"缩略图生成失败 x.webp: null"这种没法查的日志。
+            log.debug("缩略图生成失败 {}: {} {}", source.fileName, e.javaClass.simpleName, e.message)
             false
         }
     }

@@ -536,6 +536,20 @@ class AiWorkspaceStore extends ChangeNotifier {
     return seen.toList();
   }
 
+  /// 一条助手消息里**真正入库的提示词**（= 生成这些产物用的那份工作流）。
+  ///
+  /// 用户建议 ①："「生成的产物」包括生成的工作流" —— 所以回复末尾那张卡除了缩略图，
+  /// 还要能直接打开这次真正跑过的工作流（而不是只给几张结果图）。
+  /// 同样只认后端确认的 `capturedPromptId`，不解析正文。
+  List<int> producedPromptIds(AiMessage message) {
+    final seen = <int>{};
+    for (final call in toolCallsFor(message)) {
+      final id = call.promptId;
+      if (id != null && id > 0) seen.add(id);
+    }
+    return seen.toList();
+  }
+
   Future<void> denyToolCall(String callId) => _resolveToolCall(callId, approve: false);
 
   Future<void> _resolveToolCall(String callId, {required bool approve}) async {
@@ -736,6 +750,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     _liveReasoning.clear();
     _liveToolCalls.clear();
     notice = null;
+    _syncMessageCount();
   }
 
   /// 打开历史会话。同样先清理上一个空会话。
@@ -746,6 +761,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       await _cleanupEmptyConversation();
       conversation = conversations.firstWhere((c) => c.id == id);
       messages = await _api.listMessages(id);
+      _syncMessageCount();
       await _applyDraftAttachments(id);
       _pruneLiveState();
       notice = null;
@@ -948,6 +964,11 @@ class AiWorkspaceStore extends ChangeNotifier {
   String mediaThumbUrlFor(int mediaId) => _api.mediaThumbUrl(mediaId);
   String mediaPosterUrlFor(int mediaId) => _api.mediaPosterUrl(mediaId);
 
+  /// 一条提示词的工作流原文（画廊接口，但走 AI 的 http client 以便测试能拦到）。
+  ///
+  /// 用户建议 ①："生成的产物"包括生成的工作流 —— 回复末尾那张卡上的「查看工作流」用它。
+  Future<String?> promptWorkflow(int promptId) => _api.promptWorkflow(promptId);
+
   // -----------------------------------------------------------------------
   //  发送
   // -----------------------------------------------------------------------
@@ -1044,6 +1065,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       ];
       attachments.clear();
       preflight = null;
+      // 乐观插进去的这两条也要算进"当前会话有多少条消息"（用户 bug ①）
+      _syncMessageCount();
       // 草稿在上面（第一次 notify 之前）就已经清掉了 —— 这里补一次没有意义，
       // 但也绝不能省掉上面那次：顺序错了就会把刚发出去的话灌回输入框。
       notifyListeners();
@@ -1118,6 +1141,8 @@ class AiWorkspaceStore extends ChangeNotifier {
                 elapsedMs: event.elapsedMs ?? prev?.elapsedMs,
                 // 结构化结果里的产物 id：回复末尾的「画廊入口卡」（用户建议 ⑤）用它
                 mediaIds: AiToolCallState.mediaIdsOf(event.data['result']),
+                // 入库的提示词 id：那张卡还要能打开"生成这些图的工作流"（用户建议 ①）
+                promptId: AiToolCallState.promptIdOf(event.data['result']),
               ),
             );
             // 提交了任务：立刻刷新进度，用户马上就能在右侧栏看到"排队中 / 正在生成"
@@ -1279,6 +1304,7 @@ class AiWorkspaceStore extends ChangeNotifier {
           else
             msg,
       ];
+      _syncMessageCount();
       notifyListeners();
       await _consumeRun(start.runId, start.assistantMessageId, conv.id);
     } on AiApiException catch (e) {
@@ -1415,6 +1441,28 @@ class AiWorkspaceStore extends ChangeNotifier {
       parts: parts,
     );
     messages = next;
+    _syncMessageCount();
+  }
+
+  /// 把"当前会话有多少条消息"对齐到本机已经拿到的消息数。
+  ///
+  /// 为什么需要（用户 bug ①）：AppBar 上的"N 条消息"读的是 `conversation.messageCount`，
+  /// 而那个数字**只有拉会话列表时后端才会给**。发出去的消息是本机乐观插进去的、
+  /// 流式回复也是本机长出来的，所以不同步的话，标题栏那个数字会一直停在"打开这条会话时"的值，
+  /// 要切走再切回来才变。
+  ///
+  /// 只动这一个字段：`conversations` 里那条也一起改，免得切到别的会话再切回来又变回旧数字。
+  void _syncMessageCount() {
+    final conv = conversation;
+    if (conv == null) return;
+    final count = messages.length;
+    if (conv.messageCount == count) return;
+    final updated = conv.copyWith(messageCount: count);
+    conversation = updated;
+    conversations = [
+      for (final c in conversations)
+        if (c.id == conv.id) updated else c,
+    ];
   }
 
   Future<void> _reloadMessages(String conversationId) async {
@@ -1430,6 +1478,7 @@ class AiWorkspaceStore extends ChangeNotifier {
             m,
       ];
       _pruneLiveState();
+      _syncMessageCount();
     } catch (_) {
       // 保留本地已有的流式内容，别因为一次刷新失败把回复擦掉
     }

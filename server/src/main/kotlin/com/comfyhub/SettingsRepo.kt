@@ -47,6 +47,18 @@ object SettingsRepo {
             }
     }
 
+    /**
+     * 只回答"用户配过产物目录没有"，**不做默认值回填**。
+     *
+     * 给 [ComfyRoots] 的目录探测用：那里需要的是"用户实际在用的那个 ComfyUI 在哪"，
+     * 而不是 `AppConfig` 里的出厂默认值（发布包的默认值跟用户机器上的安装位置毫无关系）。
+     */
+    fun captureOutputDirOrNull(): String? = get(KEY_CAPTURE)
+        ?.let { raw ->
+            runCatching { AppJson.decodeFromString(CaptureConfig.serializer(), raw).outputDir }.getOrNull()
+        }
+        ?.takeIf { it.isNotBlank() }
+
     fun saveCaptureConfig(config: CaptureConfig): CaptureConfig {
         val normalized = config.copy(
             comfyUrl = config.comfyUrl.trim().trimEnd('/').ifBlank { "http://127.0.0.1:8188" },

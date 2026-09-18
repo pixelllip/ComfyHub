@@ -50,6 +50,13 @@ dependencies {
     implementation("com.zaxxer:HikariCP:6.3.3")
     implementation("com.mysql:mysql-connector-j:9.4.0")
 
+    // --- 图片解码：给 JVM 的 ImageIO 补一个 **纯 Java** 的 WebP 读取器 ---
+    // 为什么需要它：JDK 自带的 ImageIO 读不了 WebP（附件与画廊里的 .webp 都是"有图没缩略图"，
+    // 只能退化成文件图标）。TwelveMonkeys 这个插件是纯 Java（无本地库、无外部进程），
+    // 与 MediaFiles 的"零外部二进制"前提不冲突：它只补一个 ImageReaderSpi 注册。
+    // 注意：它只能**读**（缩略图仍然写 JPEG），且只有 WebP —— AVIF/HEIC 依旧走"回退原件"那条路。
+    implementation("com.twelvemonkeys.imageio:imageio-webp:3.12.0")
+
     // --- 日志 ---
     implementation("ch.qos.logback:logback-classic:$logbackVersion")
 

@@ -11,6 +11,7 @@ import '../models/ai_models.dart';
 import '../state/ai_workspace_store.dart';
 import '../widgets/app_menu.dart';
 import '../widgets/markdown_view.dart';
+import '../widgets/workflow_viewer.dart';
 import 'media_detail_page.dart';
 
 /// AI 工作台（AIH-001 / AIH-002 / AIK-002）。
@@ -531,6 +532,8 @@ class _MessageList extends StatelessWidget {
             segments: message.isUser ? const [] : store.segmentsFor(message),
             // 这条回复真正产出的产物（回复末尾的「画廊入口卡」）
             producedMediaIds: message.isUser ? const [] : store.producedMediaIds(message),
+            // 产出这些图的那份工作流也属于"生成的产物"（用户建议 ①）
+            producedPromptIds: message.isUser ? const [] : store.producedPromptIds(message),
             toolCategoryOf: store.toolCategoryOf,
             onApprove: store.approveToolCall,
             onDeny: store.denyToolCall,
@@ -566,6 +569,12 @@ class _MessageBubble extends StatelessWidget {
   /// 这次回复真正产出的画廊产物 id（`comfy_submit` 的 mediaIds）。
   final List<int> producedMediaIds;
 
+  /// 这次回复入库的提示词 id（`comfy_submit` 的 capturedPromptId）。
+  ///
+  /// 用户建议 ①："「生成的产物」包括生成的工作流" —— 有了它，回复末尾那张卡
+  /// 就能直接打开这次真正跑过的工作流（也能拖回 ComfyUI 复现）。
+  final List<int> producedPromptIds;
+
   final String Function(String toolName) toolCategoryOf;
   final Future<void> Function(String callId) onApprove;
   final Future<void> Function(String callId) onDeny;
@@ -587,6 +596,7 @@ class _MessageBubble extends StatelessWidget {
     this.toolCalls = const [],
     this.segments = const [],
     this.producedMediaIds = const [],
+    this.producedPromptIds = const [],
     required this.toolCategoryOf,
     required this.onApprove,
     required this.onDeny,
@@ -617,8 +627,8 @@ class _MessageBubble extends StatelessWidget {
       } else if (type == 'text' && text.trim().isNotEmpty) {
         // 用户消息是**纯文本**，不走 Markdown（用户打什么就显示什么）
         blocks.add(m.isUser
-            ? SelectableText(text)
-            : MarkdownText(text, style: theme.textTheme.bodyMedium));
+            ? Text(text)
+            : MarkdownText(text, style: theme.textTheme.bodyMedium, selectable: false));
       }
     }
 
@@ -699,7 +709,12 @@ class _MessageBubble extends StatelessWidget {
           margin: const EdgeInsets.symmetric(vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
-          child: Column(
+          // 整条气泡一个选择域（用户 bug ②："仅能选择 3 行文本"）：
+          // 一段回复被解析成很多个块（段落 / 标题 / 列表 / 表格 / 代码块），
+          // 每块一个 SelectableText 的话，鼠标拖到当前块末尾就拉不动了。
+          // 包一层 SelectionArea、内部一律用 Text，选择就能跨段连续拉下去。
+          child: SelectionArea(
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // 思考 / 正文 / 工具卡**按 parts 的真实顺序**交错渲染
@@ -722,8 +737,8 @@ class _MessageBubble extends StatelessWidget {
               // 用户消息本来就是纯文本，不走 Markdown。
               if (segments.isEmpty && m.text.isNotEmpty)
                 m.isUser
-                    ? SelectableText(m.text)
-                    : MarkdownText(m.text, style: theme.textTheme.bodyMedium),
+                    ? Text(m.text)
+                    : MarkdownText(m.text, style: theme.textTheme.bodyMedium, selectable: false),
               // 流式进行中且还没有内容：给一个明确的"在生成"提示，而不是空白气泡
               if (m.status == 'streaming' && m.text.isEmpty && toolCalls.isEmpty)
                 Row(
@@ -750,11 +765,14 @@ class _MessageBubble extends StatelessWidget {
                 ),
               // 画廊入口卡（用户建议 ⑤）：这次回复**真的生成了产物**时，
               // 在末尾贴一个能点开看详情的入口，而不是让用户自己去画廊里翻。
-              if (producedMediaIds.isNotEmpty)
+              // 用户建议 ①：这张卡里也包含"生成它的工作流"（一次运行出来的图 + 那份工作流
+              // 本来就是同一批产物），所以多一个「查看工作流」按钮。
+              if (producedMediaIds.isNotEmpty || producedPromptIds.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: _ProducedMediaCard(
                     mediaIds: producedMediaIds,
+                    promptIds: producedPromptIds,
                     mediaThumbUrlOf: mediaThumbUrlOf,
                     mediaPosterUrlOf: mediaPosterUrlOf,
                   ),
@@ -813,6 +831,7 @@ class _MessageBubble extends StatelessWidget {
                   ),
                 ),
             ],
+          ),
           ),
         ),
       ],
@@ -963,7 +982,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
                     children: [
                       if (call.arguments.isNotEmpty) ...[
                         Text('参数', style: theme.textTheme.labelSmall),
-                        SelectableText(call.arguments, style: theme.textTheme.bodySmall),
+                        Text(call.arguments, style: theme.textTheme.bodySmall),
                         if (call.detailText.isNotEmpty) const SizedBox(height: 6),
                       ],
                       if (call.detailText.isNotEmpty) ...[
@@ -971,7 +990,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
                           call.status == AiToolCallStatus.ok ? '结果' : '说明',
                           style: theme.textTheme.labelSmall,
                         ),
-                        SelectableText(call.detailText, style: theme.textTheme.bodySmall),
+                        Text(call.detailText, style: theme.textTheme.bodySmall),
                       ],
                     ],
                   ),
@@ -1023,14 +1042,28 @@ class _StatusChip extends StatelessWidget {
 /// 用户看到的就是"生成产物后预览图不可用"。
 class _ProducedMediaCard extends StatelessWidget {
   final List<int> mediaIds;
+
+  /// 产出这些图的那份提示词 / 工作流（用户建议 ①）。
+  final List<int> promptIds;
+
   final String Function(int mediaId) mediaThumbUrlOf;
   final String Function(int mediaId) mediaPosterUrlOf;
 
   const _ProducedMediaCard({
     required this.mediaIds,
+    this.promptIds = const [],
     required this.mediaThumbUrlOf,
     required this.mediaPosterUrlOf,
   });
+
+  /// 标题：图 + 工作流算同一批产物（用户建议 ①），有几个就分别说清楚。
+  ///
+  /// 只有图时保持原来的写法，别为了多一个维度把常见情况的标题变啰嗦。
+  String get _title {
+    if (promptIds.isEmpty) return '生成的产物（${mediaIds.length}）';
+    if (mediaIds.isEmpty) return '生成的产物（工作流 ${promptIds.length} 份）';
+    return '生成的产物（${mediaIds.length} 个 · 含 ${promptIds.length} 份工作流）';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1048,63 +1081,77 @@ class _ProducedMediaCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.photo_library_outlined, size: 15, color: theme.colorScheme.primary),
+              Icon(
+                mediaIds.isEmpty ? Icons.account_tree_outlined : Icons.photo_library_outlined,
+                size: 15,
+                color: theme.colorScheme.primary,
+              ),
               const SizedBox(width: 6),
-              Text('生成的产物（${mediaIds.length}）', style: theme.textTheme.labelMedium),
+              Text(_title, style: theme.textTheme.labelMedium),
             ],
           ),
-          const SizedBox(height: 8),
-          // 横向缩略图条：懒构建，产物多的时候也不会一次全解码
-          SizedBox(
-            height: 72,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: shown.length,
-              itemBuilder: (context, i) {
-                final id = shown[i];
-                return Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: InkWell(
-                    onTap: () => _openDetail(context, id),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: SizedBox(
-                        width: 72,
-                        height: 72,
-                        child: Image.network(
-                          mediaThumbUrlOf(id),
-                          fit: BoxFit.cover,
-                          // 图片有 thumb；视频的 thumb 会回 204，退到后端抽的第一帧封面
-                          errorBuilder: (_, _, _) => Image.network(
-                            mediaPosterUrlOf(id),
+          if (shown.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            // 横向缩略图条：懒构建，产物多的时候也不会一次全解码
+            SizedBox(
+              height: 72,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: shown.length,
+                itemBuilder: (context, i) {
+                  final id = shown[i];
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: InkWell(
+                      onTap: () => _openDetail(context, id),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: SizedBox(
+                          width: 72,
+                          height: 72,
+                          child: Image.network(
+                            mediaThumbUrlOf(id),
                             fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => Container(
-                              color: theme.colorScheme.surfaceContainerHighest,
-                              child: Icon(Icons.image_not_supported_outlined,
-                                  size: 18, color: theme.colorScheme.outline),
+                            // 图片有 thumb；视频的 thumb 会回 204，退到后端抽的第一帧封面
+                            errorBuilder: (_, _, _) => Image.network(
+                              mediaPosterUrlOf(id),
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => Container(
+                                color: theme.colorScheme.surfaceContainerHighest,
+                                child: Icon(Icons.image_not_supported_outlined,
+                                    size: 18, color: theme.colorScheme.outline),
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              TextButton.icon(
-                onPressed: () => _openDetail(context, mediaIds.first),
-                icon: const Icon(Icons.open_in_new, size: 15),
-                label: const Text('查看详情'),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: const Size(0, 30),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
+                  );
+                },
               ),
+            ),
+          ],
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (mediaIds.isNotEmpty)
+                TextButton.icon(
+                  onPressed: () => _openDetail(context, mediaIds.first),
+                  icon: const Icon(Icons.open_in_new, size: 15),
+                  label: const Text('查看详情'),
+                  style: _buttonStyle,
+                ),
+              if (promptIds.isNotEmpty)
+                // 「生成的产物」包括生成的工作流（用户建议 ①）：
+                // 直接打开这次真正跑过的那份工作流，而不是让用户去画廊里找
+                TextButton.icon(
+                  onPressed: () => _openWorkflow(context),
+                  icon: const Icon(Icons.account_tree_outlined, size: 15),
+                  label: const Text('查看工作流'),
+                  style: _buttonStyle,
+                ),
               if (mediaIds.length > 1)
                 Text(
                   '点缩略图可以逐个看',
@@ -1117,9 +1164,28 @@ class _ProducedMediaCard extends StatelessWidget {
     );
   }
 
+  static final ButtonStyle _buttonStyle = TextButton.styleFrom(
+    padding: const EdgeInsets.symmetric(horizontal: 8),
+    minimumSize: const Size(0, 30),
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  );
+
   void _openDetail(BuildContext context, int mediaId) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => MediaDetailPage(mediaId: mediaId)),
+    );
+  }
+
+  /// 打开"生成这些图的那份工作流"。
+  ///
+  /// 用 `AiApiClient`（而不是 `ApiClient(base)` 现造一个）是为了**走注入的 http client** ——
+  /// 仓库里现造客户端的写法在 widget 测试里会真的发 HTTP（一定 400），这条路径就测不到了。
+  void _openWorkflow(BuildContext context) {
+    final store = context.read<AiWorkspaceStore>();
+    showWorkflowDialog(
+      context,
+      title: '本次生成的工作流（提示词 #${promptIds.first}）',
+      load: () => store.promptWorkflow(promptIds.first),
     );
   }
 }
@@ -1215,6 +1281,9 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
 /// 展开后的完整思考正文：可选中复制（长度不受摘要限制）。
 ///
 /// 单独包一层是为了让"折叠时完全不构建它"这个行为一眼可见（见 `_ReasoningPanel`）。
+///
+/// 用普通 `Text` 而不是 `SelectableText`：思考与正文同在一个 `SelectionArea` 里，
+/// 内层再开一个选择域的话，拖选到思考段末尾就拉不到下面的正文了（用户 bug ②）。
 class _SelectableReasoning extends StatelessWidget {
   final String text;
   const _SelectableReasoning({required this.text});
@@ -1222,7 +1291,7 @@ class _SelectableReasoning extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return SelectableText(
+    return Text(
       text,
       style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
     );

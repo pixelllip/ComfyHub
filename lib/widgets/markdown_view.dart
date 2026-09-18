@@ -3,7 +3,12 @@
 // 设计取舍：
 //   · **流式友好**：每次 setState 都重新解析整段文本。解析是纯函数、量级很小
 //     （聊天回复单条最多几 KB），换来的好处是"半截文本也能正确显示"；
-//   · **只读**：不提供编辑，所以直接用 SelectableText.rich 保证可以选中复制；
+//   · **只读**：不提供编辑；
+//   · **可跨段选择**（用户 bug ②："仅能选择 3 行文本"）：一段回复会被解析成很多个块
+//     （段落 / 标题 / 列表项 / 表格单元格 / 代码块），而 `SelectableText` 是**每块一个选择域** ——
+//     结果就是鼠标拖到这一段的末尾就再也拉不过去了（短段落正好三行）。
+//     现在整块正文包在一个 `SelectionArea` 里，内部用普通的 `Text.rich`，
+//     于是选择可以跨段落、跨表格连续拉下去（外层气泡还会把它和思考 / 工具卡合并成一个域）；
 //   · 链接可点，走系统浏览器（url_launcher），失败只提示不抛。
 
 import 'package:flutter/gestures.dart';
@@ -14,7 +19,13 @@ import 'markdown.dart';
 
 /// 渲染一段 Markdown。文本为空时返回空盒子（调用方自己决定占位）。
 class MarkdownText extends StatelessWidget {
-  const MarkdownText(this.source, {super.key, this.style, this.onLinkTap});
+  const MarkdownText(
+    this.source, {
+    super.key,
+    this.style,
+    this.onLinkTap,
+    this.selectable = true,
+  });
 
   final String source;
 
@@ -24,26 +35,32 @@ class MarkdownText extends StatelessWidget {
   /// 链接点击回调；默认用系统默认程序打开。
   final Future<void> Function(String url)? onLinkTap;
 
+  /// 是否自己包一层 [SelectionArea]。
+  ///
+  /// 调用方**已经**在更外层包了 `SelectionArea`（聊天气泡就是：它要把思考段、正文、
+  /// 工具卡连成一个选择域）时必须传 false —— 嵌套的选择域会让拖选又只能停在当前这一块里。
+  final bool selectable;
+
   @override
   Widget build(BuildContext context) {
     if (source.trim().isEmpty) return const SizedBox.shrink();
     final theme = Theme.of(context);
     final base = style ?? theme.textTheme.bodyMedium ?? const TextStyle(fontSize: 14);
     final blocks = parseMarkdown(source);
-    return Column(
+    final column = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         for (final b in blocks) _block(context, theme, base, b),
       ],
     );
+    return selectable ? SelectionArea(child: column) : column;
   }
 
   Widget _block(BuildContext context, ThemeData theme, TextStyle base, MdBlock block) {
     switch (block) {
       case MdParagraph(:final spans):
-        return SelectableText.rich(TextSpan(children: _spans(context, theme, base, spans)),
-            style: base);
+        return Text.rich(TextSpan(children: _spans(context, theme, base, spans)), style: base);
 
       case MdHeading(:final level, :final spans):
         final size = switch (level) {
@@ -59,7 +76,7 @@ class MarkdownText extends StatelessWidget {
         );
         return Padding(
           padding: EdgeInsets.only(top: level <= 2 ? 10 : 6, bottom: 4),
-          child: SelectableText.rich(
+          child: Text.rich(
             TextSpan(children: _spans(context, theme, heading, spans)),
             style: heading,
           ),
@@ -77,7 +94,7 @@ class MarkdownText extends StatelessWidget {
                 child: Text(marker, style: base.copyWith(color: theme.colorScheme.outline)),
               ),
               Expanded(
-                child: SelectableText.rich(
+                child: Text.rich(
                   TextSpan(children: _spans(context, theme, base, spans)),
                   style: base,
                 ),
@@ -131,7 +148,7 @@ class MarkdownText extends StatelessWidget {
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
-                child: SelectableText(
+                child: Text(
                   code,
                   style: base.copyWith(
                     fontFamily: 'Consolas',
@@ -199,7 +216,7 @@ class MarkdownText extends StatelessWidget {
   ) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      child: SelectableText.rich(
+      child: Text.rich(
         TextSpan(children: _spans(context, theme, style, spans)),
         style: style,
         textAlign: switch (align) {

@@ -86,6 +86,9 @@ class ComfySubmitter(
         /** 等一次运行跑完的默认 / 最大时长 */
         const val DEFAULT_WAIT_SECONDS = 240
         const val MAX_WAIT_SECONDS = 900
+
+        /** `/object_info` 的缓存时长（自定义节点装完能很快被认出来） */
+        const val OBJECT_INFO_TTL_MS = 60_000L
     }
 
     /** 最近的提交记录，新的在前。 */
@@ -93,6 +96,33 @@ class ComfySubmitter(
         submissions.values.sortedByDescending { it.submittedAt }.take(limit.coerceIn(1, MAX_TRACKED))
 
     fun find(promptId: String): ComfySubmission? = submissions[promptId.trim()]
+
+    /**
+     * ComfyUI 的节点定义表（`GET /object_info`）。
+     *
+     * 提交**界面格式工作流**时必须用它：界面格式里的 `widgets_values` 只有位置、没有参数名，
+     * 而每个节点的输入声明顺序只有这里才有（见 [WorkflowConvert]）。
+     *
+     * 缓存 [OBJECT_INFO_TTL_MS]：这份响应有几 MB，一次工具调用里不该重复拉；
+     * 但也不能永久缓存 —— 用户可能刚在 ComfyUI 里装了个自定义节点，那时要能立刻认出来。
+     */
+    fun objectInfo(): JsonObject {
+        val now = System.currentTimeMillis()
+        val cached = objectInfoCache
+        if (cached != null && now - objectInfoAt < OBJECT_INFO_TTL_MS) return cached
+
+        val conf = SettingsRepo.captureConfig(cfg)
+        val base = conf.comfyUrl.trimEnd('/')
+        val fetched = fetchJson("$base/object_info") as? JsonObject
+            ?: throw IllegalStateException("ComfyUI 的 /object_info 返回格式异常（不是对象）")
+        objectInfoCache = fetched
+        objectInfoAt = now
+        log.info("已读取 ComfyUI 节点定义：{} 个节点", fetched.size)
+        return fetched
+    }
+
+    @Volatile private var objectInfoCache: JsonObject? = null
+    @Volatile private var objectInfoAt: Long = 0
 
     /** 只提交、不等：适合"先排上队，我继续做别的"。 */
     suspend fun submitDetached(

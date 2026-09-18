@@ -14,8 +14,13 @@
       6. 只读工具 —— comfy_get_status 直接执行（不需要审批）
       7. 长期记忆 —— remember 落盘 + 下一次 Run 注入系统提示
       8. 附件（M3）—— 上传 → 缩略图 → 内联图片进请求体 → 纯文本模型零上游请求
+         （含 **WebP**：按签名收下 + 尺寸探测 + 缩略图真的是 JPEG）
 
     还会核对落库的消息 parts 顺序（tool_call / tool_result / text），保证重开会话能渲染工具卡。
+
+    脚本会**临时**改两处配置，跑完在 finally 里原样还原：
+      · 权限档切成 `ask`（不然用户在界面上选了「自动允许」时，第 5 幕的审批断言必红）；
+      · 长期记忆写一条测试记忆（结束时放回原文）。
 
     前置条件：MySQL + 后端已经在跑，且后端是**带 M4/M5 的新构建**：
         pwsh -File scripts\comfyhub.ps1 up
@@ -58,9 +63,15 @@ $script:ConversationId = $null
 # 长期记忆的原内容：本脚本会往里写一条测试记忆，结束时原样放回
 $script:MemoryBefore = $null
 
-# 附件（M3）：测试用的一张 1×1 PNG 与上传后的附件 id
+# 权限档的原值：审批那一幕要求 `comfy_sync_history` 是 pending，而用户在界面上把档位切到
+# 「自动允许（无需批准）」时它会是 `not_required`（第 5 幕会红）。所以脚本先临时钉成 ask、结束时原样放回。
+$script:PermissionModeBefore = $null
+
+# 附件（M3）：测试用的一张 1×1 PNG / 一张 64×64 WebP 与上传后的附件 id
 $script:AttachPng = Join-Path ([System.IO.Path]::GetTempPath()) 'comfyhub-e2e-attach.png'
+$script:AttachWebp = Join-Path ([System.IO.Path]::GetTempPath()) 'comfyhub-e2e-attach.webp'
 $script:AttachmentId = $null
+$script:WebpAttachmentId = $null
 
 function Say([string]$msg, [string]$color = 'Gray') { Write-Host $msg -ForegroundColor $color }
 
@@ -293,6 +304,12 @@ try {
     Remove-Item $OkFile -Force -ErrorAction SilentlyContinue
     # 长期记忆先存一份：后面会往里面写测试数据，结束时原样放回（不能污染用户真实的记忆）
     $script:MemoryBefore = (Invoke-Api 'GET' '/api/ai/memory' $null).content
+    # 权限档也存一份并临时钉成 ask：审批那一幕只有在"需要批准"的档位下才有意义
+    $script:PermissionModeBefore = (Invoke-Api 'GET' '/api/ai/tools/policy' $null).permissionMode
+    if ($script:PermissionModeBefore -ne 'ask') {
+        Invoke-Api 'PUT' '/api/ai/tools/policy' @{ permissionMode = 'ask' } | Out-Null
+        Say "  权限档临时从 '$($script:PermissionModeBefore)' 切成 'ask'（结束时还原）" 'DarkGray'
+    }
 
     $provider = Invoke-Api 'POST' '/api/ai/providers' @{
         id = $ProviderId
@@ -581,6 +598,29 @@ try {
          $thumb.RawContentLength -gt 0) `
         ("$($thumb.StatusCode) $($thumb.Headers['Content-Type']) $($thumb.RawContentLength) bytes")
 
+    # WebP（2026-09 用户要求"附件要支持 webp"）：这是**真的能解码**的回归防线 ——
+    # 后端靠 ImageIO 插件读 webp，插件一旦被删 / 版本回退 / 打 fatJar 时服务文件合并丢了，
+    # 编译与上传检查**全都照样通过**，只有"缩略图不是 JPEG"这一条会红。
+    # 这张 64×64 有损（VP8）webp 是 Pillow 生成的，字节写死在下面。
+    $webpBase64 = 'UklGRuoAAABXRUJQVlA4IN4AAACQCACdASpAAEAAPm0wkkayIyGhLAgCQA2JYjONegSAAFLTZ+qf5n7AAJJ/waDCo4kd4G3mQ4ftx///U6nCgIpl//99xQExTbx5N92fMAD+/6DU6mCVjkfOhi0I8uNUKj2DdJnq/rAPrkVF243S7MPMrGu8Ul80qyiVfB8x8Hnunp8OP5rWxLluq4jfQAz49c78P9t9P94sotsk6aZc9g6mR4CWpx6trTZcpJYfCfztO7j2rgviRmudIeJaevtpnAKp4RL+rOYWD1eaTGcxWXBtVBitBN4RFD4bIgiYwAA='
+    [IO.File]::WriteAllBytes($script:AttachWebp, [Convert]::FromBase64String($webpBase64))
+    $uploadWebp = Invoke-RestMethod -Method 'Post' -Uri "$ApiBase/api/ai/attachments" `
+        -Form @{ files = Get-Item $script:AttachWebp } -TimeoutSec 60
+    $witem = @($uploadWebp.items) | Select-Object -First 1
+    $script:WebpAttachmentId = if ($witem) { $witem.id } else { $null }
+    Check 'WebP 附件按签名收下（kind=image / mime=image/webp）' `
+        ($null -ne $witem -and $witem.kind -eq 'image' -and $witem.mimeType -eq 'image/webp') `
+        ($uploadWebp | ConvertTo-Json -Compress)
+    Check 'WebP 尺寸探测正确（64×64，有损 VP8 头）' `
+        ($null -ne $witem -and $witem.width -eq 64 -and $witem.height -eq 64) `
+        ("$($witem.width)x$($witem.height)")
+
+    $wthumb = Invoke-WebRequest -Uri "$ApiBase/api/ai/attachments/$($script:WebpAttachmentId)/thumb" -TimeoutSec 60
+    Check 'WebP 缩略图 200 + image/jpeg（ImageIO 真的解出了 webp，不是回退原件）' `
+        ($wthumb.StatusCode -eq 200 -and "$($wthumb.Headers['Content-Type'])" -like 'image/jpeg*' -and
+         $wthumb.RawContentLength -gt 0) `
+        ("$($wthumb.StatusCode) $($wthumb.Headers['Content-Type']) $($wthumb.RawContentLength) bytes")
+
     # 谎报类型骗不过准入：把一个文本文件改名成 .png 传上来必须被拒（AIH-027）
     $liar = Join-Path ([System.IO.Path]::GetTempPath()) 'comfyhub-e2e-liar.png'
     Set-Content -Path $liar -Value 'this is definitely not a png' -Encoding utf8
@@ -657,15 +697,25 @@ try {
         Remove-Item (Split-Path -Parent $SkillFile) -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item $HackFile -Force -ErrorAction SilentlyContinue
         Remove-Item $OkFile -Force -ErrorAction SilentlyContinue
-        # 附件（M3）：先删库里的附件行（连原件与缩略图一起删），再删本地那张测试图
+        # 附件（M3）：先删库里的附件行（连原件与缩略图一起删），再删本地那两张测试图
         if ($script:AttachmentId) {
             try { Invoke-Api 'DELETE' "/api/ai/attachments/$($script:AttachmentId)" $null | Out-Null } catch { }
         }
+        if ($script:WebpAttachmentId) {
+            try { Invoke-Api 'DELETE' "/api/ai/attachments/$($script:WebpAttachmentId)" $null | Out-Null } catch { }
+        }
         Remove-Item $script:AttachPng -Force -ErrorAction SilentlyContinue
+        Remove-Item $script:AttachWebp -Force -ErrorAction SilentlyContinue
         if ($null -ne $script:MemoryBefore) {
             try {
                 Invoke-Api 'PUT' '/api/ai/memory' @{ content = $script:MemoryBefore } | Out-Null
                 Say '  已把长期记忆恢复成本次运行前的内容' 'DarkGray'
+            } catch { }
+        }
+        if ($null -ne $script:PermissionModeBefore) {
+            try {
+                Invoke-Api 'PUT' '/api/ai/tools/policy' @{ permissionMode = $script:PermissionModeBefore } | Out-Null
+                Say "  已把权限档还原成 '$($script:PermissionModeBefore)'" 'DarkGray'
             } catch { }
         }
         Say '  已删除会话 / Provider / skill / 临时文件' 'DarkGray'

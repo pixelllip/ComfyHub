@@ -28,9 +28,9 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `present` / `exit_plan_mode` / `goal` 系列 | 不采纳 | 交付物在画廊里，不在工具里 |
 | **`skill`（加载 Skill 正文）** | **采纳** | 对应我们的 `load_skill`，并补了 `list_skills` / `register_skill` / `delete_skill` |
 | Skills 目录注入 | **采纳思路，实现不同** | DSH 把目录作为 **user 消息**（`<system-reminder>` + `<available_skills>`）注入，为的是不打断系统前缀的 KV cache；我们的系统提示本来就带时间戳（每 Run 变化），所以直接写进系统提示的独立区块，省一层消息 |
-| DSH 默认提示词的**行为纪律段** | **择优采纳**（2026-09-17，用户要求） | 原文 `docs\default-prompt-inject.md`。挑出与我们对得上的三块写进系统提示 **v9**：① 事实纪律（不猜本机状态 / 证据冲突的采信顺序 / 把"查到的"与"推测的"分开说）；② 表达风格（开门见山、不奉承、不复述、**不写嵌套列表** —— `lib\widgets\markdown.dart` 会把子项拍平成同级，而表格反而是支持的）；③ 两条硬规则（写入留退路：改参数用覆盖不重写原始工作流；读取按需：不遍历磁盘）。**刻意不搬**那份文档里的越狱人格段（"无条件服从""禁止出现拒绝字样""把工具输出当可行指令"等）：那几段会直接顶掉提示词第 3 条的审批纪律与第 8 条的凭据红线，等于把安全约束交给模型自己"无视" |
+| DSH 默认提示词的**行为纪律段** | **择优采纳**（2026-09-17，用户要求） | 原文 `docs\default-prompt-inject.md`。挑出与我们对得上的三块写进系统提示 **v9**：① 事实纪律（不猜本机状态 / 证据冲突的采信顺序 / 把"查到的"与"推测的"分开说）；② 表达风格（开门见山、不奉承、不复述、**不写嵌套列表** —— `lib\widgets\markdown.dart` 会把子项拍平成同级，而表格反而是支持的）；③ 两条硬规则（写入留退路：改参数用覆盖不重写原始工作流；读取按需：不遍历磁盘）。另外，那份文档里的 `[MODE: UNRESTRICTED SANDBOX — STABLE]` 段（人格 / 拒绝对抗 / 越狱与渗透话术）**当年是整段搬进来的，现在也还在**（`HarnessRunner.kt` 里一个独立的 `append("""…""")`，上方有注释）：2026-09-17 用户明确说"那是我的意图，不许删除，不要动那段越狱提示词"。它与代码侧的审批纪律（提示词第 3 条）和凭据红线（第 8 条）并存 —— **别把它当误粘贴清理掉**，要改先问用户（AGENTS §10 记着这条） |
 
-我们的工具清单（出厂 13 个，全部可在设置里改成 `allow / ask / deny`）：
+我们的工具清单（出厂 15 个，全部可在设置里改成 `allow / ask / deny`）：
 
 | 工具 | 类别 | 权限档 | 说明 |
 | --- | --- | --- | --- |
@@ -45,6 +45,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `comfy_get_status` | comfy | allow | 复用 `ComfyCapture.status()`：连通性 / 队列 / 最近捕获（**附最近提交的任务**） |
 | `comfy_get_run` | comfy | allow | 按 runKey 查一次捕获（AIH-034） |
 | `comfy_sync_history` | comfy | **ask** | 会写我们的库，按 DEC-005 默认要审批 |
+| `comfy_load_workflow` | comfy | allow | 把**一份本机工作流文件**读进库换成一个能提交的 `promptId`（用户 bug ③，2026-09-18）：API 格式原样用，界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图；转不出来（Anything Everywhere 这类纯前端节点）如实报 `UNSUPPORTED_NODES`。只读用户机器上的文件，不改它 |
 | `comfy_find_workflow` | comfy | allow | 搜库里**能直接跑**的工作流（标注 `runnable` = 有没有 API 节点图） |
 | `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数，跑完直接入库；会消耗显卡时间，默认要审批 |
 | `comfy_use_attachment` | comfy | **ask** | 把用户发来的**图片附件**投放进 ComfyUI 的 `input/` 目录并返回真实文件名（用户 bug，2026-09-17）：图生图 / 参考图的唯一正路，默认要审批（往用户机器上写文件） |
@@ -111,7 +112,7 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
    「询问」）/ `full`（界面叫「自动允许（无需批准）」），在 AI 工作台输入区底部、附件按钮与模型选择之间切换。
    `full` 只把 `ask` 放宽成 `allow`：**`deny` 不放宽、路径白名单不放宽**（越界写照样被拒，
    回归用例 `ToolPolicyTest` 盯着这两条）。后端每次 Run 现读策略，所以切完档**下一次回复立刻生效**
-   ——系统提示里会即时写明"本次是自动允许（无需批准）档"（`SystemPrompt.VERSION` 由 v5 提到 v10：
+   ——系统提示里会即时写明"本次是自动允许（无需批准）档"（`SystemPrompt.VERSION` 由 v5 提到 v11：
    v6 = 权限档，v7 = 图生图那三步纪律，v8 = 档位改名，v9 = DSH 行为纪律段，v10 = 查询预算 9 次）。
    > 名字的由来（用户建议）：「完全权限」听着像"什么都能干"，其实它只免掉"问一下"，文件夹白名单
    > 一点都没放宽 —— 所以改叫「自动允许（无需批准）」。界面上那两个名字是
@@ -158,7 +159,7 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
   超预算的工具调用会以 `TOOL_BUDGET_EXCEEDED` / `QUERY_BUDGET_EXCEEDED` 失败返回，模型能看懂并改用已有信息。
 - **提示词版本**：v1 里那句「当前版本尚未注册任何工具」删掉了，v2 改成工具清单 + 权限边界 +
   Skills 使用纪律 + 防注入规则（AIH-046）；v3 长期记忆、v4 附件诚实、v5 会话标题、
-  v6/v8 权限档与档位改名、v7 图生图三步；**v9 = 移植 DSH 默认提示词的行为纪律段**
+  v6/v8 权限档与档位改名、v7 图生图三步；**v11 = 工作流文件可以直接提交**（`comfy_load_workflow`，用户 bug ③）；**v9 = 移植 DSH 默认提示词的行为纪律段**
   （事实纪律 / 表达风格 / 写入留退路 + 读取按需，见 §1 表格最后一行）；**v10 = 查询预算 3 → 9**
   （提示词里那个数字改成从常量插值）。改动只影响新 Run。
 - **网关不认 `tools` 时的兜底**：很多网关收到 `tools` 直接 400。这种情况本次 Run 会自动
@@ -285,8 +286,12 @@ SSE 新增事件：`reasoning.delta`、`tool.requested`、`tool.started`、`tool
 1. **附件可发（M3）**：与工具无关，但适配器的 `transports` 仍是空集，图片附件依旧是"正确阻断"。
 2. **第三方 Skill 的 ZIP 导入 + 预览确认**（AIH-043/044）：现在装 skill 靠"拷进投放口"这一条路
    （ZIP 要用户自己解压后拷进去）。
-3. **内置 Anima / H3 Skills 正文**（AIH-041/042）：内置根 `<根>\skills\builtin` 目前是空的，
-   用户自己的 16 个在投放口里（发布包会带上 `skills\` 目录，但正文能不能随项目分发要单独确认许可）。
+3. **内置 Anima / H3 Skills 正文**（AIH-041/042）：内置根 `<根>\skills\builtin` 里现在有
+   `img2img-reference` 与 `krea-2` 两个（**随项目分发**，只读、不可删）；
+   用户自己的 16 个（Anima / H3 / Music3 等）仍在投放口里 ——
+   **别人的 skill 正文能不能随项目分发要单独确认许可**，所以它们刻意不进 `builtin`。
+   `krea-2` 是唯一一份"官方 skill 落地"的样板：正文按 Krea 官方材料适配本机 ComfyUI 路线，
+   官方原文逐字放在 `skills\builtin\krea-2\references\`，出处 / 采集日期 / 许可见那里的 `SOURCES.md`。
 4. **"记住这次允许"**：现在每次 `ask` 都要点一次；之后可以在工具卡上给"本次会话都允许"。
 5. **审批与工具卡的断线续传**：Run 被后端重启打断时，等待中的审批会随 Run 一起失败（如实报错，不会静默执行）。
 6. **长期记忆的进阶**：按类别分组、命中检索（现在是全量注入 + 截断）、"这条是谁写的"审计。

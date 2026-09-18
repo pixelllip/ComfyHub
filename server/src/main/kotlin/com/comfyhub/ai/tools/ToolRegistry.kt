@@ -81,7 +81,13 @@ class ToolRegistry(
     private val approvals: ToolApprovalGate,
     /** `ComfyCapture.status()` 的序列化结果 */
     private val comfyStatus: () -> JsonElement,
-    /** 按 runKey 查一条捕获记录，查不到返回 null */
+    /**
+     * 按 runKey / 数字 prompt_id 查一条捕获记录，查不到返回 null。
+     *
+     * **两个都要认**：`comfy_submit` 的结果里同时给了 ComfyUI 的 UUID（`runKey`）与
+     * 捕获记录里的数字 id，模型会拿哪个来查并不确定（实测它用了数字那个，
+     * 而旧实现只认 UUID → "刚提交完却说没有这次运行"）。
+     */
     private val comfyFindRun: (String) -> JsonElement?,
     /** `ComfyCapture.pollOnce()` 的结果 */
     private val comfySync: () -> JsonElement,
@@ -97,6 +103,12 @@ class ToolRegistry(
     /** 提交一个工作流给 ComfyUI 跑（用户建议 ①）；`waitSeconds=0` 表示只提交不等。 */
     private val comfySubmit: suspend (Long, JsonObject?, String?, Int) -> ComfySubmitOutcome =
         { _, _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用 ComfyUI 提交能力") },
+    /**
+     * 把一份**本机工作流文件**读进库（用户 bug ③：`comfy_submit` 只认库里的 promptId，
+     * "我不能凭一个文件路径提交"）。返回的结构里有 `promptId`（下一步就能提交）与节点摘要。
+     */
+    private val comfyLoadWorkflow: suspend (String, String?, Boolean) -> JsonObject =
+        { _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用工作流文件加载能力") },
     /**
      * 把用户发来的**图片附件**放进 ComfyUI 的 `input/` 目录，返回它在那边真实可用的文件名。
      *
@@ -386,9 +398,11 @@ class ToolRegistry(
 
         AgentTool(
             name = "comfy_get_run",
-            description = "按 runKey（ComfyUI 的 prompt_id，或 import:<sha256>）查一次已捕获运行的状态、错误与产物数。",
+            description = "按 runKey 查一次已捕获运行的状态、错误与产物数。" +
+                "runKey 可以用三样中的任何一个：ComfyUI 的 prompt_id（UUID，comfy_submit 结果里的 runKey）、" +
+                "捕获记录里的数字 id（capturedPromptId），或 import:<sha256>。",
             parameters = schema(
-                """{"type":"object","properties":{"runKey":{"type":"string"}},"required":["runKey"],"additionalProperties":false}"""
+                """{"type":"object","properties":{"runKey":{"type":"string","description":"ComfyUI prompt_id（UUID）/ 数字 prompt_id / import:<sha256>"}},"required":["runKey"],"additionalProperties":false}"""
             ),
             category = ToolCategory.COMFY,
             mutating = false,
@@ -396,7 +410,12 @@ class ToolRegistry(
         ) { args, _ ->
             val key = args.str("runKey") ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 runKey")
             val found = comfyFindRun(key)
-                ?: throw ToolFailure("NOT_FOUND", "没有 runKey=$key 的捕获记录（可能还没被轮询到，或不属于本机）")
+                ?: throw ToolFailure(
+                    "NOT_FOUND",
+                    "没有 runKey=$key 的捕获记录（可能还没被轮询到，或不属于本机）。" +
+                        "注意 comfy_submit 的结果里 `runKey` 是 ComfyUI 的 UUID、" +
+                        "`capturedPromptId` 是捕获记录的编号，两者都能查。",
+                )
             ToolOutput(AppJson.encodeToString(JsonElement.serializer(), found), found as? JsonObject)
         },
 
@@ -445,26 +464,82 @@ class ToolRegistry(
         },
 
         AgentTool(
+            name = "comfy_load_workflow",
+            description = "把**一份本机工作流文件**（ComfyUI 保存的 .json，或「导出（API）」得到的节点图）" +
+                "读进库里，换成一个能提交的 promptId。用户甩给你一个工作流文件路径时用它 —— " +
+                "别再回答\"我只能提交库里的 promptId\"。" +
+                "界面格式（nodes/links）会按 ComfyUI 的 /object_info 转成 API 节点图；" +
+                "用了纯前端节点（Anything Everywhere 之类）转不出来的会如实报错，那时让用户在 ComfyUI 里" +
+                "「导出（API）」一次，或点一次 Queue 让它被捕获。" +
+                "返回里有 promptId 与每个节点的 id / 可覆盖的输入名（用于 comfy_submit 的 overrides）。" +
+                "只读用户机器上的文件，不改它。",
+            parameters = schema(
+                """{"type":"object","properties":{"path":{"type":"string","description":"工作流文件的完整路径（绝对路径最稳）"},"title":{"type":"string","description":"库里显示的名字（可选，默认取文件名）"},"includeGraph":{"type":"boolean","description":"是否连完整 API 节点图一起返回（默认 false，只有要手写参数路径时才需要）"}},"required":["path"],"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = false,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, ctx ->
+            val raw = args.str("path")
+                ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 path（工作流文件的完整路径）")
+            // 路径判定走读白名单：本机 ComfyUI 的目录已经被自动放行（见 ComfyRoots），
+            // 用户工作流一般就躺在它下面的 user/default/workflows 里
+            val file = ctx.policy.resolveRead(raw)
+            val json = try {
+                comfyLoadWorkflow(file.toString(), args.str("title"), args.bool("includeGraph") ?: false)
+            } catch (e: ToolFailure) {
+                throw e
+            } catch (e: Exception) {
+                throw ToolFailure("COMFY_LOAD_FAILED", "加载工作流失败：${e.message?.take(400)}")
+            }
+            ToolOutput(AppJson.encodeToString(JsonElement.serializer(), json), json)
+        },
+
+        AgentTool(
             name = "comfy_submit",
             description = "**把一个工作流提交给 ComfyUI 真的跑一次**（会消耗显卡时间，默认需要用户批准）。" +
-                "用 promptId 指定库里的工作流（先 comfy_find_workflow 找），用 overrides 覆盖参数" +
-                "（键写成 节点id.输入名，例如 \"3.steps\"、\"6.text\"）。跑完后产物会自动入库到画廊。" +
-                "不要凭想象编造工作流；说不清要跑什么就先问用户。",
+                "用 promptId 指定库里的工作流（先 comfy_find_workflow 或 comfy_load_workflow），" +
+                "或者直接用 workflowPath 指一份本机工作流文件（等价于先 comfy_load_workflow 再提交）。" +
+                "用 overrides 覆盖参数（键写成 节点id.输入名，例如 \"3.steps\"、\"6.text\"）。" +
+                "跑完后产物会自动入库到画廊。不要凭想象编造工作流；说不清要跑什么就先问用户。",
             parameters = schema(
-                """{"type":"object","properties":{"promptId":{"type":"integer","description":"库里提示词的 id（来自 comfy_find_workflow）"},"overrides":{"type":"object","description":"要覆盖的参数：{\"6.text\":\"新提示词\",\"3.steps\":30}","additionalProperties":true},"title":{"type":"string","description":"这次运行的标题（给用户认，可选）"},"wait":{"type":"boolean","description":"是否等它跑完（默认 true；false 表示排上队就返回）"},"waitSeconds":{"type":"integer","description":"最长等多少秒，默认 240，最多 900"}},"required":["promptId"],"additionalProperties":false}"""
+                """{"type":"object","properties":{"promptId":{"type":"integer","description":"库里提示词的 id（来自 comfy_find_workflow / comfy_load_workflow）"},"workflowPath":{"type":"string","description":"或者：本机工作流文件的完整路径（.json）"},"overrides":{"type":"object","description":"要覆盖的参数：{\"6.text\":\"新提示词\",\"3.steps\":30}","additionalProperties":true},"title":{"type":"string","description":"这次运行的标题（给用户认，可选）"},"wait":{"type":"boolean","description":"是否等它跑完（默认 true；false 表示排上队就返回）"},"waitSeconds":{"type":"integer","description":"最长等多少秒，默认 240，最多 900"}},"additionalProperties":false}"""
             ),
             category = ToolCategory.COMFY,
             mutating = true,
             defaultAccess = ToolAccess.ASK,
-        ) { args, _ ->
-            val promptId = args.int("promptId")
-                ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 promptId（先用 comfy_find_workflow 找到一个）")
+        ) { args, ctx ->
             val overrides = args.obj("overrides")
             val wait = args.bool("wait") ?: true
             val waitSeconds = (args.int("waitSeconds") ?: 240).coerceIn(0, 900)
+            var promptId = args.int("promptId")?.toLong()
+            val path = args.str("workflowPath")
+            if (promptId == null && path == null) {
+                throw ToolFailure(
+                    "INVALID_ARGUMENT",
+                    "要么给 promptId（先 comfy_find_workflow 找），要么给 workflowPath（本机工作流文件路径）",
+                )
+            }
+            // 给了文件路径就先加载：界面格式会在这里被转成 API 节点图
+            val loaded = if (path != null) {
+                val file = ctx.policy.resolveRead(path)
+                try {
+                    comfyLoadWorkflow(file.toString(), args.str("title"), false)
+                } catch (e: ToolFailure) {
+                    throw e
+                } catch (e: Exception) {
+                    throw ToolFailure("COMFY_LOAD_FAILED", "加载工作流失败：${e.message?.take(400)}")
+                }
+            } else {
+                null
+            }
+            if (promptId == null) {
+                promptId = (loaded?.get("promptId") as? JsonPrimitive)?.content?.toLongOrNull()
+                    ?: throw ToolFailure("COMFY_LOAD_FAILED", "加载了工作流文件，但没拿到 promptId")
+            }
             val result = try {
                 comfySubmit(
-                    promptId.toLong(),
+                    promptId,
                     overrides,
                     args.str("title"),
                     if (wait) waitSeconds else 0,

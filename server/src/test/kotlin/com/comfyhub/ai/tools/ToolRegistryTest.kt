@@ -72,6 +72,8 @@ class ToolRegistryTest {
         "comfy_get_status", "comfy_get_run", "comfy_sync_history",
         // 用户建议 ①：AI 可以直接提交 Comfy 任务
         "comfy_find_workflow", "comfy_submit",
+        // 用户 bug ③：工作流文件可以直接读进库（"我不能凭一个文件路径提交"）
+        "comfy_load_workflow",
         // 用户 bug：图生图要把用户发来的图片投放进 ComfyUI 的 input 目录
         "comfy_use_attachment",
     )
@@ -560,8 +562,8 @@ class ToolRegistryTest {
     }
 
     @Test
-    fun `提示词 v10 写着一次回复最多查 9 次 且与阈值常量同源`() {
-        assertEquals("v10", SystemPrompt.VERSION)
+    fun `提示词 v11 写着一次回复最多查 9 次 且与阈值常量同源`() {
+        assertEquals("v11", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(

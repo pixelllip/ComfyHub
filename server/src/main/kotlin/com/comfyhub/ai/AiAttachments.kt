@@ -31,7 +31,9 @@ import java.util.UUID
  * 关键规矩：
  *  - 类型判定**只认签名**（`FileKindDetector`）：认不出来直接拒收，不做"未知即图片"的乐观回退；
  *  - 原件与缩略图放在 `storage/ai-attachments` 与 `storage/ai-thumbs`，与画廊产物**分开**存；
- *  - 图片缩略图 = JPEG 缩略图，视频预览帧 = Windows 缩略图管线抽的第一帧（复用画廊那套，
+ *  - 图片缩略图 = JPEG 缩略图（PNG / JPEG / GIF / BMP / TIFF / **WebP** 都能解码，
+ *    WebP 由 `imageio-webp` 这个纯 Java 插件提供；解不了的格式回退发原件），
+ *    视频预览帧 = Windows 缩略图管线抽的第一帧（复用画廊那套，
  *    不引入 ffmpeg）；抽不出来就返回 null，界面退化成文件图标（不是破图）。
  */
 @Serializable
@@ -233,6 +235,13 @@ class AiAttachmentStore(
      *
      * 生成是**惰性**的：上传时只落原件，第一次请求缩略图时才解码 —— 上传路径不该为一张
      * 可能永远没人看的缩略图停下来。
+     *
+     * 图片分支有**两级降级**（与画廊 `/thumb` 同一条规矩）：
+     *  1. 先尝试 JPEG 缩略图（png / jpg / gif / bmp / tiff / **webp**，webp 靠
+     *     `imageio-webp` 这个纯 Java 插件，见 `build.gradle.kts`）；
+     *  2. 解不了（AVIF / HEIC / 动图 webp 这类没有解码器的）就**把原件当预览发出去**
+     *     （带它自己的 MIME）—— Flutter 侧本来就认得 WebP/AVIF，
+     *     断在这里的话用户只会看到一个文件图标，而"图明明在那儿"。
      */
     fun thumbnailOf(id: String): Pair<Path, String>? {
         val dto = AiAttachmentRepo.get(id) ?: return null
@@ -240,8 +249,11 @@ class AiAttachmentStore(
         return when (dto.kind) {
             "image" -> {
                 val dest = storage.aiThumbPath(id)
-                if (!Files.isRegularFile(dest) && !MediaFiles.writeThumbnail(src, dest)) return null
-                if (Files.isRegularFile(dest)) dest to "image/jpeg" else null
+                if (Files.isRegularFile(dest) || MediaFiles.writeThumbnail(src, dest)) {
+                    dest to "image/jpeg"
+                } else {
+                    src to dto.mimeType
+                }
             }
             "video" -> {
                 val dest = storage.aiPosterPath(id)

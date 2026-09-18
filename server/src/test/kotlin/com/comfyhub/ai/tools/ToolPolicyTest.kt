@@ -144,6 +144,38 @@ class ToolPolicyTest {
     }
 
     @Test
+    fun `自动发现的 ComfyUI 目录只放宽读 不放宽写`() {
+        val root = newRoot()
+        // 模拟"用户机器上的 ComfyUI 在工作流目录那边"（真实形状见 ComfyRootsTest）
+        val comfy = Files.createTempDirectory("comfyhub-auto-comfy").toRealPath()
+        Files.createDirectories(comfy.resolve("user/default/workflows"))
+        val workflow = comfy.resolve("user/default/workflows/krea2.json")
+        Files.writeString(workflow, """{"nodes":[],"links":[]}""")
+
+        // 没有自动发现时：读不到（用户报的 PATH_DENIED 就是这个）
+        val plain = ToolPolicy(root, ToolPolicyConfig())
+        assertEquals(
+            "PATH_DENIED",
+            assertFailsWith<ToolFailure> { plain.resolveRead(workflow.toString()) }.code,
+        )
+
+        // 自动发现之后：读得到，而且**用户配的那一份没被改**
+        val auto = ToolPolicy(root, ToolPolicyConfig(), autoReadRoots = listOf(comfy))
+        assertEquals(workflow, auto.resolveRead(workflow.toString()))
+        assertEquals(listOf(root.resolve("comfyui"), root.resolve("storage")), auto.readRoots)
+        assertEquals(
+            listOf(root.resolve("comfyui"), root.resolve("storage"), comfy),
+            auto.effectiveReadRoots,
+        )
+
+        // 写仍然只允许项目内的 comfyui：放行读不等于放行写
+        assertEquals(
+            "PATH_DENIED",
+            assertFailsWith<ToolFailure> { auto.resolveWrite(workflow.toString()) }.code,
+        )
+    }
+
+    @Test
     fun `空路径与非法字符报自己的错误码`() {
         val root = newRoot()
         val policy = ToolPolicy(root, ToolPolicyConfig())
