@@ -217,13 +217,31 @@ class AiWorkspaceStore extends ChangeNotifier {
   String? notice;
 
   bool get hasProvider => selectedProvider != null;
-  bool get canSend =>
-      !sending &&
-      !uploadingAttachments &&
-      selectedModel != null &&
-      (preflight?.allowed ?? true) &&
-      // 还有没上传成功的附件时不给发：否则用户以为图发出去了，其实只发了文字
-      attachments.every((a) => a.hasId);
+
+  /// 发送按钮是否可用（只看"状态"，不看正文）。
+  bool get canSend => sendBlockReason() == null;
+
+  /// 这一次发送会不会被拒：可以发返回 `null`，否则返回**为什么不能发**。
+  ///
+  /// 这是准入判断的**唯一真源**（[send] 自己也用它），而且必须是**同步**的：
+  /// 页面得在"清空输入框"之前就知道能不能发 —— 以前是"先清空、再由 send() 拒绝"，
+  /// 于是最常见的"正在生成中又按了一次回车"会把用户刚打的字**静默吃掉**
+  /// （用户报的 bug：只能自己把上一条复制一遍再发一次）。被拒时一个字节都不能动。
+  String? sendBlockReason() {
+    if (sending) return '正在生成中：先点「停止」，或等这一轮结束再发。你打的字还在输入框里。';
+    if (uploadingAttachments) return '附件还在上传，等它传完再发（免得只发出去一半）。';
+    if (!(preflight?.allowed ?? true)) {
+      return '有附件未通过准入，已阻断发送：${preflight!.blockers.join('；')}';
+    }
+    if (selectedProvider == null || selectedModel == null) {
+      return '请先选择 Provider 与模型（设置 → AI 模型）';
+    }
+    // 还有没上传成功的附件时不给发：否则用户以为图发出去了，其实只发了文字
+    if (!attachments.every((a) => a.hasId)) {
+      return '有附件还没上传成功，已阻断发送；请移除它们或重新选择文件。';
+    }
+    return null;
+  }
 
   // -----------------------------------------------------------------------
   //  Skills（M5 / AIH-037 ~ AIH-045）
@@ -936,38 +954,30 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 发送当前输入。
   ///
-  /// 现阶段（M1/M2 之间）只做两件**真实**的事：把用户消息与附件引用持久化，
-  /// 并在预检不通过时**阻断**。模型执行（Run + SSE）属于 M2，未接通前用
-  /// [notice] 明确告知，绝不伪造助手回复。
+  /// 准入判断是**同步**的（[sendBlockReason]，页面用它决定要不要清空输入框）；这里再挡一次，
+  /// 因为 `send()` 也可能被别处直接调用 —— 被拒时**只**写 [notice]，绝不动调用方的输入框。
+  /// 通过之后：先把这条会话的草稿作废（顺序见下面那段注释），再创建 Run，
+  /// 并一直 await 到整轮结束（流式收完 → 落库 → 与服务端对齐）。
   Future<void> send(String text) async {
-    if (sending) return;
     final body = text.trim();
+    // 没什么可发的（空正文 + 没附件）：静默返回，不弹任何提示
     if (body.isEmpty && attachments.isEmpty) return;
-    if (uploadingAttachments) return; // 还在上传：等它落地再发，免得发出半截
-    if (!(preflight?.allowed ?? true)) {
-      notice = '有附件未通过准入，已阻断发送：${preflight!.blockers.join('；')}';
+    // 准入判断与页面共用同一份（[sendBlockReason]）：不通过就**只**写提示，
+    // 绝不先清空输入框 —— 用户打的字必须原样留着。
+    final blocked = sendBlockReason();
+    if (blocked != null) {
+      notice = blocked;
       notifyListeners();
       return;
     }
-    final provider = selectedProvider;
-    final model = selectedModel;
-    if (provider == null || model == null) {
-      error = '请先选择 Provider 与模型（设置 → AI 模型）';
-      notifyListeners();
-      return;
-    }
-    // 上传失败的附件没有 id：直接说清楚，不要发出去才发现漏了东西
+    final provider = selectedProvider!;
+    final model = selectedModel!;
+    // 上传失败的附件没有 id：上面已经挡过了，这里拿到的都是能发的
     final ids = attachments.map((a) => a.id).whereType<String>().toList();
-    if (ids.length != attachments.length) {
-      notice = '有附件还没上传成功，已阻断发送；请移除它们或重新选择文件。';
-      notifyListeners();
-      return;
-    }
 
     sending = true;
     error = null;
     notice = null;
-    notifyListeners();
 
     try {
       if (conversation == null) {
@@ -980,6 +990,13 @@ class AiWorkspaceStore extends ChangeNotifier {
         conversation = conv;
       }
       final conv = conversation!;
+      // **顺序是这条 bug 的关键**：这条会话的草稿（文字 + 附件）必须在任何
+      // `notifyListeners()` **之前**清掉。页面收到通知会去"取回草稿"，
+      // 那时草稿要是还在，就等于把用户刚发出去的话又灌回输入框
+      // （用户报的"特定情况下一条消息会复制一遍再发送"）。
+      // 以前这一步在 `startRun` 之后才做（几十毫秒以后），中间那次通知正好落在这个空档。
+      await _clearDraft(conv.id);
+      notifyListeners(); // 到这里：发送中 + 这条会话的草稿已作废
       // 模型没声明推理能力时不带这个字段（后端也会再挡一次，AIH-056）
       final effort = (model.supportsReasoningEffort && reasoningEffort.isThinking)
           ? reasoningEffort.wire
@@ -1027,8 +1044,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       ];
       attachments.clear();
       preflight = null;
-      // 已经发出去了，本地草稿也一并清掉（否则下次切回这个会话会看到旧内容）
-      unawaited(_clearDraft(conv.id));
+      // 草稿在上面（第一次 notify 之前）就已经清掉了 —— 这里补一次没有意义，
+      // 但也绝不能省掉上面那次：顺序错了就会把刚发出去的话灌回输入框。
       notifyListeners();
 
       await _consumeRun(start.runId, start.assistantMessageId, conv.id);

@@ -83,6 +83,20 @@ MockClient _fakeBackend(
     } else if (RegExp(r'^/api/ai/conversations/[^/]+/messages$').hasMatch(path)) {
       final id = path.split('/')[4];
       body = messages[id] ?? <Object>[];
+    } else if (RegExp(r'^/api/ai/conversations/[^/]+/runs$').hasMatch(path)) {
+      // 发一条消息：立刻给回 runId，正文与流式收尾由下面那段固定 SSE 负责
+      body = {'runId': 'r1', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
+    } else if (RegExp(r'^/api/ai/runs/[^/]+/events$').hasMatch(path)) {
+      // 冒号后必须有空格，否则客户端会把整行当未知事件丢掉
+      final sse = 'id: 1\nevent: run.started\ndata: {"runId":"r1"}\n\n'
+          'id: 2\nevent: message.completed\n'
+          'data: {"messageId":"a1","text":"收到","steps":0}\n\n'
+          'id: 3\nevent: run.completed\ndata: {"runId":"r1"}\n\n';
+      return http.Response.bytes(
+        utf8.encode(sse),
+        200,
+        headers: {'content-type': 'text/event-stream; charset=utf-8'},
+      );
     } else if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) &&
         request.method == 'DELETE') {
       final id = path.split('/').last;
@@ -255,5 +269,30 @@ void main() {
     expect(deleted, isNot(contains('c-empty')), reason: '有草稿的空会话要留着');
     expect((await store.loadDraft('c-empty')).text, '别删我');
     expect(created, hasLength(1), reason: '新建的那条才算新建');
+  });
+
+  testWidgets('发出去的话不会再被草稿灌回输入框（用户报的"一条消息复制一遍再发送"）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // 会话已经在库里加载好了（页面这次挂上来不会再收到"加载完成"的通知）：
+    // 这正是出事的那种状态 —— 页面的"当前草稿挂在哪条会话上"还是空的，
+    // 而这条会话的草稿里躺着上一次（重建前那个页面实例）存下来的同一句话。
+    final store = await _store([_conv('c-empty')]);
+    await store.load();
+    await store.saveDraft('c-empty', '这句话只该发一次');
+
+    await tester.pumpWidget(_page(store));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), '这句话只该发一次');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    expect(_inputText(tester), isEmpty,
+        reason: '发出去之后输入框必须是空的：同一句话不能被草稿灌回来（那就是同一条消息发两遍）');
+    expect((await store.loadDraft('c-empty')).text, isEmpty, reason: '发出去 = 这条会话的草稿作废');
   });
 }

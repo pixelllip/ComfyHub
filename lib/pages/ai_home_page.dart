@@ -74,7 +74,10 @@ class _AiHomePageState extends State<AiHomePage> {
   /// 输入变化就落草稿：切会话 / 关掉 App 都不会把没发出去的文字丢掉。
   void _onInputChanged() {
     if (_applyingDraft) return;
-    final id = _draftConversationId;
+    // 页面刚挂上来时 `_draftConversationId` 还是空的（要等第一次通知才同步）：
+    // 这里就地认领当前会话 —— 否则这段字既不会存进草稿，发送时也不会被清掉，
+    // 下一次"取回草稿"就会把它灌回输入框（等于同一条消息发两遍）。
+    final id = _draftConversationId ??= _store.conversation?.id;
     if (id == null || !mounted) return;
     _store.saveDraft(id, _input.text);
   }
@@ -92,11 +95,16 @@ class _AiHomePageState extends State<AiHomePage> {
       // 附件托盘由 Store 随会话存走（`AiWorkspaceStore._stashAttachments`），
       // 这里只保住输入框里的文字
       _store.saveDraft(previous, _input.text);
+      // **真的换了会话**才清空输入框（下面再把新会话的草稿取回来）。
+      // 页面刚挂上来的那一次（previous == null）不算切换：用户可能已经打了字，
+      // 清空就等于把他的字吃掉。
+      _setInputText('');
+    } else if (id != null && _input.text.isNotEmpty) {
+      // 用户抢在第一次通知之前就打了字：这段字属于当前会话，存下来、别被草稿覆盖
+      _store.saveDraft(id, _input.text);
     }
     if (id == null) return;
 
-    // 先把输入框清干净（屏蔽回调，别把新会话的草稿抹掉），再去取这条会话的草稿
-    _setInputText('');
     final epoch = ++_draftEpoch;
     _store.loadDraft(id).then((draft) {
       if (!mounted || _draftEpoch != epoch) return;
@@ -214,18 +222,24 @@ class _AiHomePageState extends State<AiHomePage> {
           controller: _input,
           focusNode: _inputFocus,
           onSubmit: (text) async {
-            // **先清空输入框，再等这一次 Run 跑完**。
+            // 空输入 + 没有附件：没什么可发的，静默返回（也别弹提示）。
+            if (text.trim().isEmpty && store.attachments.isEmpty) return;
+
+            // **只有"真的会被发出去"才清空输入框**。
             //
-            // `store.send()` 要一直 await 到整轮结束（流式收完、落库、与服务端对齐），
-            // 所以把它放在清空之前，用户会在模型整个生成过程里都看到自己那句话还留在输入框里
-            // —— 看起来就像"点了发送没反应"（用户报的就是这个）。
+            // 准入判断是同步的、和 `send()` 共用同一份（`store.sendBlockReason()`）：
+            // 被拒时（最常见的是"还在生成中又按了一次回车"）一个字节都不动 ——
+            // 以前是"先清空、再由 send() 拒绝"，用户打的字被静默吃掉，只能自己
+            // 把上一条复制一遍再发一次（用户报的 bug）。
             //
-            // 清空之后 send() 仍会做它自己的准入判断；不通过时它把原因写进 `store.notice`，
-            // 气泡区上方会如实显示，不会静默丢字。
-            _input.clear();
-            // 用户刚发了消息：无论刚才翻到哪儿，都跳回底部看回复
-            if (mounted) setState(() => _atBottom = true);
-            _scrollToBottom();
+            // 清空仍然发生在等待之前：`store.send()` 要一直 await 到整轮结束，
+            // 放到后面就会出现"点了发送输入框里的话还在"，看起来像没反应。
+            if (store.sendBlockReason() == null) {
+              _input.clear();
+              // 用户刚发了消息：无论刚才翻到哪儿，都跳回底部看回复
+              if (mounted) setState(() => _atBottom = true);
+              _scrollToBottom();
+            }
             await store.send(text);
             _scrollToBottom();
           },
@@ -1283,7 +1297,13 @@ class _Composer extends StatefulWidget {
 }
 
 class _ComposerState extends State<_Composer> {
-  bool _composing = false;
+  /// 中文输入法正在组字（拼音还没上屏）。
+  ///
+  /// 以前这里是个**永远是 false** 的布尔字段（只在 `onChanged` 里被赋 false），
+  /// 等于没有这道闸：组字期间按回车会把半截拼音当消息发出去，并且顺手清空输入框 ——
+  /// 在 Windows 上"清空时输入法还在组字"正是引擎把旧文本回灌/复制的触发条件
+  /// （flutter/flutter#191196）。现在直接读控制器里的 composing range，是真的。
+  bool get _composing => widget.controller.value.composing.isValid;
 
   /// `/` 后面的查询词；null = 不显示 Skill 菜单。
   String? _slashQuery;
@@ -1305,8 +1325,18 @@ class _ComposerState extends State<_Composer> {
     final text = widget.controller.text;
     final match = RegExp(r'(?:^|\s)/([^\s/]*)$').firstMatch(text);
     final next = match?.group(1);
-    if (next != _slashQuery) setState(() => _slashQuery = next);
+    // 组字状态也参与"发送按钮可不可用"，所以它一变就得重建（见 build 里的 `composing`）
+    final composing = _composing;
+    if (next != _slashQuery || composing != _wasComposing) {
+      setState(() {
+        _slashQuery = next;
+        _wasComposing = composing;
+      });
+    }
   }
+
+  /// 上一次重建时的组字状态：只在**变化**时 setState，免得每次按键都重建。
+  bool _wasComposing = false;
 
   /// 菜单里列出的 skills：只列**用户可调用**且启用的（`/` 就是用户显式调用）。
   List<AiSkill> get _slashMatches {
@@ -1443,10 +1473,9 @@ class _ComposerState extends State<_Composer> {
               actions: {
                 _SendIntent: CallbackAction<_SendIntent>(
                   onInvoke: (_) {
-                    // 中文输入法 composing 期间的回车是"选词"，不能当发送（AIH-053）
-                    if (_composing) return null;
                     // `/` 菜单开着时回车不发送（否则会把半截 skill 名发出去）
                     if (_slashMatches.isNotEmpty) return null;
+                    // 组字期间的判断在 `_submit()` 里（按钮也走同一条路）
                     _submit();
                     return null;
                   },
@@ -1458,7 +1487,6 @@ class _ComposerState extends State<_Composer> {
                 minLines: 2,
                 maxLines: 8,
                 textInputAction: TextInputAction.newline,
-                onChanged: (v) => setState(() => _composing = false),
                 decoration: const InputDecoration(
                   hintText: '描述你的生图 / 生视频需求，或输入 / 调用 Skill（Enter 发送，Shift+Enter 换行）',
                   border: OutlineInputBorder(),
@@ -1517,7 +1545,11 @@ class _ComposerState extends State<_Composer> {
                 const SizedBox(width: 12),
               ],
               FilledButton.icon(
-                onPressed: store.sending ? () => store.stop() : (store.canSend ? _submit : null),
+                // 组字（拼音还没上屏）期间不给发：这时候发出去的是半截拼音，
+                // 而且"清空输入框"正好踩在 Windows 输入法回灌旧文本的触发点上。
+                onPressed: store.sending
+                    ? () => store.stop()
+                    : (store.canSend && !_wasComposing ? _submit : null),
                 icon: Icon(store.sending ? Icons.stop : Icons.send, size: 18),
                 label: Text(store.sending ? '停止' : '发送'),
               ),
@@ -1529,6 +1561,9 @@ class _ComposerState extends State<_Composer> {
   }
 
   void _submit() {
+    // 组字（拼音还没上屏）期间的回车是"选词 / 上屏"，不是发送（AIH-053）；
+    // 按钮走同一条路，所以闸放在这里，两条入口都拦得住。
+    if (_composing) return;
     final text = widget.controller.text;
     widget.onSubmit(text);
   }

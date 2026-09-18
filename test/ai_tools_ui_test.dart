@@ -9,9 +9,11 @@
 //
 // 假后端沿用 test/ai_home_test.dart 的写法（MockClient + 手拼 SSE），不另造一套。
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -102,6 +104,8 @@ MockClient _backend(
   Map<String, dynamic>? policy,
   /// `GET /api/capture/jobs` 的返回值（右侧栏实时进度）
   Map<String, dynamic>? comfyJobs,
+  /// 让 `POST /runs` 永远不返回：把界面钉在"正在生成中"这个状态（见用例 (i)）
+  bool hangRuns = false,
 }) {
   return MockClient((request) async {
     final path = request.url.path;
@@ -158,6 +162,10 @@ MockClient _backend(
         request.method == 'DELETE') {
       body = {'deleted': true, 'id': path.split('/').last};
     } else if (path == '/api/ai/conversations/c1/runs') {
+      if (hangRuns) {
+        // 不返回 = 这一次 Run 一直"在生成中"（`store.sending` 不会落回 false）
+        return Completer<http.Response>().future;
+      }
       body = {'runId': 'r1', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
     } else if (path.startsWith('/api/ai/runs/') && path.endsWith('/events')) {
       return _sseResponse(sse);
@@ -356,6 +364,7 @@ Future<Widget> _homePage(
   String sse = '',
   List<Map<String, dynamic>> assistantParts = const [],
   Map<String, dynamic>? comfyJobs,
+  bool hangRuns = false,
 }) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
@@ -369,6 +378,7 @@ Future<Widget> _homePage(
         sse: sse,
         assistantParts: assistantParts,
         comfyJobs: comfyJobs,
+        hangRuns: hangRuns,
       ),
     ),
   );
@@ -1082,8 +1092,8 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    // 刻意**不给任何 SSE 事件**：这一次 Run 会一直挂着，
-    // 正好用来证明"清空发生在等待之前"——以前 `await store.send()` 才 clear，
+    // 刻意**不给任何 SSE 事件**，而且只推进一帧：Run 请求已经发出、整轮还没回来，
+    // 正好用来证明"清空发生在等待之前"——以前 `await store.send()` 之后才 clear，
     // 用户会在整个生成过程里看到自己的话还留在输入框（看起来像点了没反应）。
     final rec = _Recorder();
     await tester.pumpWidget(await _homePage(rec, sse: ''));
@@ -1100,6 +1110,98 @@ void main() {
     expect(field.controller?.text, isEmpty, reason: '发送后输入框必须马上清空');
     // Run 真的发出去了（不是"点了没反应"，也不是"清空了却没发"）
     expect(rec.calls.any((c) => c.contains('/runs')), isTrue, reason: 'Run 真的发出去了');
+  });
+
+  testWidgets('(i) 正在生成中按回车：不吃掉输入框里的字，也不会再偷偷发一次', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // `hangRuns` = 这一次 Run 永远不返回，正好停在"正在生成中"这个状态
+    final rec = _Recorder();
+    await tester.pumpWidget(await _homePage(rec, hangRuns: true));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, '第一句');
+    await tester.tap(find.text('发送'));
+    await tester.pump();
+    final runsAfterFirst = rec.calls.where((c) => c.endsWith('/runs')).length;
+    expect(runsAfterFirst, 1);
+
+    // 生成中又打了一句、又按了回车：以前这一下会**先清空再拒绝**，
+    // 用户打的字被静默吃掉，只能自己把上一条复制一遍再发（用户报的 bug）。
+    await tester.enterText(find.byType(TextField).first, '生成中打的第二句');
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+
+    expect(tester.widget<TextField>(find.byType(TextField).first).controller?.text, '生成中打的第二句',
+        reason: '被拒时一个字节都不能动：这是用户刚打的字');
+    expect(find.textContaining('正在生成中'), findsOneWidget, reason: '要如实说明为什么没发出去');
+    expect(rec.calls.where((c) => c.endsWith('/runs')).length, runsAfterFirst,
+        reason: '不能再发一次：重复消息就是这么来的');
+  });
+
+  testWidgets('(j) 输入法组字期间（composing）回车不发送、也不清空输入框', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    await tester.pumpWidget(await _homePage(rec, sse: ''));
+    await tester.pumpAndSettle();
+
+    // 输入法正在组字：拼音 "nihao" 还没上屏（composing range 非空）
+    await tester.enterText(find.byType(TextField).first, '');
+    tester.testTextInput.updateEditingValue(const TextEditingValue(
+      text: 'nihao',
+      selection: TextSelection.collapsed(offset: 5),
+      composing: TextRange(start: 0, end: 5),
+    ));
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(rec.calls.any((c) => c.endsWith('/runs')), isFalse,
+        reason: '组字中的回车是"选词/上屏"，不能把半截拼音发出去（AIH-053）');
+    expect(tester.widget<TextField>(find.byType(TextField).first).controller?.text, 'nihao',
+        reason: '组字期间更不能清空输入框');
+
+    // 上屏之后再回车：这次要真的发出去
+    tester.testTextInput.updateEditingValue(const TextEditingValue(
+      text: '你好',
+      selection: TextSelection.collapsed(offset: 2),
+    ));
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(rec.calls.any((c) => c.endsWith('/runs')), isTrue, reason: '上屏后回车就该发出去');
+  });
+
+  test('发出去的那句话：会话草稿必须在第一次界面通知之前就作废', () async {
+    final rec = _Recorder();
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.completed', '{"messageId":"a1","text":"收到","steps":0}') +
+        _sse(3, 'run.completed', '{"runId":"r1"}');
+    final store = await _store(rec, sse: sse, assistantText: '收到');
+    await store.load();
+    expect(store.conversation?.id, 'c1');
+    await store.saveDraft('c1', '只发一次的话');
+
+    // 页面就是这么做的：一收到通知就去"取回草稿"（见 _AiHomePageState._onStoreChanged）
+    String? draftSeenAtFirstNotify;
+    var first = true;
+    store.addListener(() {
+      if (!first) return;
+      first = false;
+      store.loadDraft('c1').then((d) => draftSeenAtFirstNotify = d.text);
+    });
+
+    await store.send('只发一次的话');
+
+    expect(draftSeenAtFirstNotify, isEmpty,
+        reason: '第一次通知时草稿必须已经作废；否则页面的"取回草稿"会把刚发出去的话塞回输入框');
+    expect((await store.loadDraft('c1')).text, isEmpty);
   });
 
   test('逐字回包只替换那一条消息：流式期间不能重建整段历史（O(n) 热点的回归）', () async {
