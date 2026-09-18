@@ -254,11 +254,23 @@ disable-model-invocation: false
 
 - **注入**：每次 Run 现读，`SystemPrompt.VERSION = v3` 起多一段「长期记忆」，
   与工具输出同等对待（数据不是指令）；注入部分截断到 4000 字符，文件本身可以更长（上限 8000）。
+  标题行会带上"现有 N/100 条"，让模型知道还剩多少额度。
 - **写入**：AI 走 `remember` 工具（默认 `allow`，写的是应用自己的记忆文件，
   不是用户文件系统 —— 所以不走 `ToolPolicy.resolveWrite`，也不需要审批）；
-  界面走 `PUT /api/ai/memory`（整篇）与 `POST /api/ai/memory/entries`（追加一条）。
+  界面走 `PUT /api/ai/memory`（整篇）、`POST /api/ai/memory/entries`（追加一条）
+  与 `POST /api/ai/memory/delete`（按下标删单条 / 批量）。
+- **规则限制（2026-09-18，用户要求）**：用户的顾虑是"条数太多，想查找、改动、删除会比较困难"，
+  所以除了字符上限再压三道闸：
+  ① **总条数硬上限 100**（`MAX_ENTRIES`），满了 `remember` 报 `MEMORY_FULL` 并**请用户去界面清理**
+     —— 不许静默丢、也不许自动挤掉最旧的一条，更不许模型自己删改用户的条目；
+  ② **一次 Run 最多新增 4 条**（`MAX_ENTRIES_PER_RUN`，查 `ToolContext.memoryWrites`）；
+     判重命中的"同一件事又说了一遍"不算新增 —— 既不占额度，也不被节流挡住；
+  ③ AI 写的每条自动带 `[yyyy-MM-dd]` 前缀（用户手敲的**不带**，不替用户改写他自己的话）；
+     判重忽略这个前缀，所以"隔天又说一遍"不会堆成两行。
+  界面上：面板显示 `N / 100 条`，编辑弹窗是**列表视图**（搜索框 + 每行一个删除 + 勾选后批量删除，
+  删除前确认），「整篇编辑」仍然保留（真源是文件，用户想手改就手改）。
 - **不做静默截断**：单条 > 500 字、总量 > 8000 字都是**报错**，并提示用户去界面里清理；
-  重复内容（忽略大小写与首尾空白）不会写两遍。
+  重复内容（忽略 `- `/`[日期] ` 前缀与大小写）不会写两遍。
 - **为什么是文件而不是表**：用户随时能打开看、能手改、能整篇删掉。
   代价是"按类别检索 / 谁写的审计"这类能力暂时没有（见第 6 节）。
 
@@ -274,6 +286,7 @@ disable-model-invocation: false
 | POST | `/api/ai/skills/rescan` | 重新扫描投放口 + 自动登记没有 frontmatter 的 skill |
 | GET / PUT / DELETE | `/api/ai/memory` | 长期记忆：读 / 整篇替换 / 清空 |
 | POST | `/api/ai/memory/entries` | 追加一条记忆 |
+| POST | `/api/ai/memory/delete` | 按下标删除若干条记忆（界面的单条 / 批量删除；用 POST 而不是带 body 的 DELETE） |
 | GET | `/api/ai/tools` | 工具清单 + 生效权限 |
 | GET / PUT | `/api/ai/tools/policy` | 读 / 改白名单、逐工具权限、轮数与调用上限 |
 | POST | `/api/ai/tool-calls/{callId}/approve` \| `/deny` | 工具卡上的批准 / 拒绝 |

@@ -1211,11 +1211,15 @@ class AiMemory {
   final int entryCount;
   final int maxChars;
 
+  /// 条数上限（用户要求：条数太多，查找 / 改动 / 删除都会变难）
+  final int maxEntries;
+
   const AiMemory({
     this.content = '',
     this.path = '',
     this.entryCount = 0,
     this.maxChars = 8000,
+    this.maxEntries = 100,
   });
 
   factory AiMemory.fromJson(Map<String, dynamic> json) => AiMemory(
@@ -1223,16 +1227,25 @@ class AiMemory {
         path: (json['path'] ?? '').toString(),
         entryCount: (json['entryCount'] as num?)?.toInt() ?? 0,
         maxChars: (json['maxChars'] as num?)?.toInt() ?? 8000,
+        maxEntries: (json['maxEntries'] as num?)?.toInt() ?? 100,
       );
 
+  /// 一行一条的正文（去掉空行）。**下标与后端 `MemoryStore.entries()` 同源** ——
+  /// 界面按这份列表做单条 / 批量删除，顺手把 `- ` 与 `[日期] ` 前缀剥掉只用于展示。
+  List<String> get entries => content
+      .split('\n')
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty)
+      .map((l) => l.replaceFirst(RegExp(r'^[-*]\s*'), '').replaceFirst(_datePrefix, '').trim())
+      .toList();
+
+  static final _datePrefix = RegExp(r'^\[\d{4}-\d{2}-\d{2}]\s*');
+
   /// 面板上的一行预览（第一条记忆）。
-  String get preview {
-    final first = content
-        .split('\n')
-        .map((l) => l.trim())
-        .firstWhere((l) => l.isNotEmpty, orElse: () => '');
-    return first.replaceFirst(RegExp(r'^[-*]\s*'), '');
-  }
+  ///
+  /// 走 [entries] 而不是直接切原文：`- ` 与 `[日期] ` 前缀只是存储用的标记，
+  /// 预览里再显示一遍方括号反而把正文挤没了。
+  String get preview => entries.isEmpty ? '' : entries.first;
 }
 
 // ---------------------------------------------------------------------------

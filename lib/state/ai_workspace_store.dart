@@ -350,6 +350,26 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
+  /// 按下标删除几条（界面的单条 / 批量删除）。
+  ///
+  /// 下标由界面从 `memory.entries` 里选中给出，与后端的行序同源。
+  Future<({bool ok, String message})> deleteMemoryEntries(List<int> indices) async {
+    if (indices.isEmpty) return (ok: true, message: '没有选中任何一条');
+    memoryBusy = true;
+    notifyListeners();
+    try {
+      memory = await _api.deleteMemoryEntries(indices);
+      memoryError = null;
+      return (ok: true, message: '已删除 ${indices.length} 条（剩 ${memory.entryCount} 条）');
+    } catch (e) {
+      memoryError = '$e';
+      return (ok: false, message: '删除失败：$e');
+    } finally {
+      memoryBusy = false;
+      notifyListeners();
+    }
+  }
+
   /// 清空（不可逆，界面必须先确认）。
   Future<({bool ok, String message})> clearMemory() async {
     memoryBusy = true;

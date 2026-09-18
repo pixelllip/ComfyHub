@@ -3001,10 +3001,14 @@ class _MemoryPanel extends StatelessWidget {
   }
 }
 
-/// 长期记忆编辑器：整篇可改、可以加一条、可以清空。
+/// 长期记忆编辑器：**搜索 + 单条 / 批量删除** + 加一条 + 整篇编辑。
 ///
-/// 真源是 `memory.md`，所以这里就是一个普通的文本框 —— 不做"结构化条目"的花活，
-/// 用户手改文件的内容也能原样读回来。
+/// 真源仍然是 `memory.md`（用户直接改那个文件也认），所以这里没有另造一套存储 ——
+/// 列表视图只是"一行一条"的一个方便入口。加搜索与删除是用户的明确要求：
+/// 他的顾虑不是存不下，而是"条数太多，想查找、改动、删除会比较困难"。
+///
+/// 下标语义：列表按 `memory.entries` 的顺序（0 起）编号，与后端的行序**同源** ——
+/// 所以勾选之后把下标原样发给后端就行，不需要把内容传回去比对。
 class _MemoryEditorDialog extends StatefulWidget {
   final AiWorkspaceStore store;
   const _MemoryEditorDialog({required this.store});
@@ -3014,16 +3018,38 @@ class _MemoryEditorDialog extends StatefulWidget {
 }
 
 class _MemoryEditorDialogState extends State<_MemoryEditorDialog> {
+  /// 整篇编辑用的文本框（只在「整篇编辑」模式下可见 / 可保存）
   late final TextEditingController _text =
       TextEditingController(text: widget.store.memory.content);
   final TextEditingController _entry = TextEditingController();
+  final TextEditingController _search = TextEditingController();
   bool _busy = false;
+
+  /// 勾选中的条目下标（指向 `memory.entries` 的**原始**顺序，不是过滤后的）
+  final Set<int> _selected = {};
+
+  /// 想一次改很多条 / 粘贴一大段时用整篇编辑；平时用列表视图。
+  bool _rawMode = false;
 
   @override
   void dispose() {
     _text.dispose();
     _entry.dispose();
+    _search.dispose();
     super.dispose();
+  }
+
+  /// 记忆列表 + 关键词过滤：返回 (原始下标, 正文)。
+  List<(int, String)> get _visible {
+    final all = widget.store.memory.entries;
+    final q = _search.text.trim().toLowerCase();
+    final out = <(int, String)>[];
+    for (var i = 0; i < all.length; i++) {
+      if (q.isEmpty || all[i].toLowerCase().contains(q)) out.add((i, all[i]));
+    }
+    // 搜索时把已有的勾选收拢到"还看得见的那几条"：否则"删除选中"会删掉用户
+    // 当前看不到的东西 —— 那是很坏的一种惊喜。
+    return out;
   }
 
   Future<void> _add() async {
@@ -3037,6 +3063,54 @@ class _MemoryEditorDialogState extends State<_MemoryEditorDialog> {
       if (result.ok) {
         _text.text = widget.store.memory.content;
         _entry.clear();
+      }
+    });
+    if (!result.ok) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(result.message)));
+    }
+  }
+
+  Future<void> _deleteSelected() async {
+    final indices = _selected.toList()..sort();
+    if (indices.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('删除这 ${indices.length} 条记忆？'),
+        content: const Text('删掉之后就找不回来了。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    final result = await widget.store.deleteMemoryEntries(indices);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (result.ok) {
+        _selected.clear();
+        _text.text = widget.store.memory.content;
+      }
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(result.message)));
+  }
+
+  Future<void> _deleteOne(int index) async {
+    setState(() => _busy = true);
+    final result = await widget.store.deleteMemoryEntries([index]);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (result.ok) {
+        // 删掉一行之后，后面所有下标都要往前挪一位
+        final shifted = {for (final i in _selected) if (i < index) i else if (i > index) i - 1};
+        _selected
+          ..clear()
+          ..addAll(shifted);
+        _text.text = widget.store.memory.content;
       }
     });
     if (!result.ok) {
@@ -3062,7 +3136,10 @@ class _MemoryEditorDialogState extends State<_MemoryEditorDialog> {
     if (!mounted) return;
     setState(() {
       _busy = false;
-      if (result.ok) _text.clear();
+      if (result.ok) {
+        _text.clear();
+        _selected.clear();
+      }
     });
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(result.message)));
   }
@@ -3070,7 +3147,8 @@ class _MemoryEditorDialogState extends State<_MemoryEditorDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final path = widget.store.memory.path;
+    final memory = widget.store.memory;
+    final path = memory.path;
     return AlertDialog(
       title: const Text('长期记忆'),
       content: SizedBox(
@@ -3080,24 +3158,72 @@ class _MemoryEditorDialogState extends State<_MemoryEditorDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                path.isEmpty
-                    ? '一行一条；AI 的 remember 工具会追加到这里。'
-                    : '一行一条，真源是 $path（也可以直接改那个文件）。',
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      path.isEmpty
+                          ? '一行一条；AI 的 remember 工具会追加到这里。'
+                          : '真源是 $path（也可以直接改那个文件）。',
+                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                    ),
+                  ),
+                  // 条数占用（用户要求：条数要可控，界面上得看得见还剩多少）
+                  Text(
+                    '${memory.entryCount} / ${memory.maxEntries} 条',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: memory.entryCount >= memory.maxEntries
+                          ? theme.colorScheme.error
+                          : theme.colorScheme.outline,
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 8),
-              TextField(
-                controller: _text,
-                minLines: 8,
-                maxLines: 14,
-                style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'Consolas'),
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  hintText: '- 用户偏好 4:3 画幅\n- 出图统一用 Anima 模型',
-                  isDense: true,
+              if (_rawMode) ...[
+                TextField(
+                  controller: _text,
+                  minLines: 8,
+                  maxLines: 14,
+                  style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'Consolas'),
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: '- 用户偏好 4:3 画幅\n- 出图统一用 Anima 模型',
+                    isDense: true,
+                  ),
                 ),
-              ),
+              ] else ...[
+                TextField(
+                  controller: _search,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    suffixIcon: _search.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: '清空搜索',
+                            icon: const Icon(Icons.close, size: 16),
+                            onPressed: () => setState(() => _search.clear()),
+                          ),
+                    hintText: '搜索记忆（按关键词过滤）',
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _MemoryEntryList(
+                  entries: _visible,
+                  selected: _selected,
+                  busy: _busy,
+                  emptyHint: widget.store.memory.entryCount == 0
+                      ? '还没有记忆。AI 在你说出跨对话的偏好时会用 remember 记一条。'
+                      : '没有匹配「${_search.text.trim()}」的记忆。',
+                  onToggle: (i) => setState(() {
+                    if (!_selected.remove(i)) _selected.add(i);
+                  }),
+                  onDelete: _busy ? null : _deleteOne,
+                ),
+              ],
               const SizedBox(height: 10),
               Row(
                 children: [
@@ -3125,16 +3251,97 @@ class _MemoryEditorDialogState extends State<_MemoryEditorDialog> {
         ),
       ),
       actions: [
+        TextButton.icon(
+          onPressed: _busy
+              ? null
+              : () => setState(() {
+                    _rawMode = !_rawMode;
+                    if (_rawMode) _text.text = widget.store.memory.content;
+                  }),
+          icon: Icon(_rawMode ? Icons.list_alt_outlined : Icons.edit_note, size: 18),
+          label: Text(_rawMode ? '列表视图' : '整篇编辑'),
+        ),
+        if (!_rawMode && _selected.isNotEmpty)
+          TextButton.icon(
+            onPressed: _busy ? null : _deleteSelected,
+            icon: const Icon(Icons.delete_outline, size: 18),
+            label: Text('删除选中（${_selected.length}）'),
+            style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+          ),
         TextButton(
           onPressed: _busy ? null : _clear,
           child: const Text('清空'),
         ),
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-        FilledButton(
-          onPressed: _busy ? null : () => Navigator.pop(context, _text.text),
-          child: const Text('保存'),
-        ),
+        if (_rawMode) ...[
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+          FilledButton(
+            onPressed: _busy ? null : () => Navigator.pop(context, _text.text),
+            child: const Text('保存'),
+          ),
+        ] else
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
       ],
+    );
+  }
+}
+
+/// 长期记忆的条目列表（搜索过滤后的结果 + 勾选 + 单条删除）。
+///
+/// 用 `ListView.builder` 懒构建：记忆上限 100 条，一次全建出来没必要
+/// （AGENTS.md §6：长列表一律懒构建，别用 `children: [for (...) ...]`）。
+class _MemoryEntryList extends StatelessWidget {
+  final List<(int, String)> entries;
+  final Set<int> selected;
+  final bool busy;
+  final String emptyHint;
+  final void Function(int index) onToggle;
+  final void Function(int index)? onDelete;
+
+  const _MemoryEntryList({
+    required this.entries,
+    required this.selected,
+    required this.busy,
+    required this.emptyHint,
+    required this.onToggle,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (entries.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Text(emptyHint, style: theme.textTheme.bodySmall),
+      );
+    }
+    return SizedBox(
+      height: 260,
+      child: ListView.builder(
+        itemCount: entries.length,
+        itemBuilder: (context, i) {
+          final (index, text) = entries[i];
+          return ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+            leading: Checkbox(
+              value: selected.contains(index),
+              onChanged: busy ? null : (_) => onToggle(index),
+            ),
+            title: Text(text, style: theme.textTheme.bodySmall),
+            onTap: busy ? null : () => onToggle(index),
+            trailing: IconButton(
+              tooltip: '删掉这一条',
+              icon: const Icon(Icons.delete_outline, size: 16),
+              onPressed: onDelete == null ? null : () => onDelete!(index),
+            ),
+          );
+        },
+      ),
     );
   }
 }

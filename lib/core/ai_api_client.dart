@@ -155,6 +155,11 @@ class AiApiClient {
   Future<AiMemory> appendMemory(String content) async => AiMemory.fromJson(Map<String, dynamic>.from(
       await _send('POST', '/api/ai/memory/entries', {'content': content}) as Map));
 
+  /// 按下标删几条（界面的单条 / 批量删除）。下标与 `AiMemory.entries` 同源。
+  Future<AiMemory> deleteMemoryEntries(List<int> indices) async => AiMemory.fromJson(
+      Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/memory/delete', {'indices': indices}) as Map));
+
   Future<AiMemory> clearMemory() async =>
       AiMemory.fromJson(Map<String, dynamic>.from(await _send('DELETE', '/api/ai/memory') as Map));
 

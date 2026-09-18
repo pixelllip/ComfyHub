@@ -572,6 +572,13 @@ fun Route.aiRoutes(
             call.respond(toolGuard { memory.append(body.content) })
         }
 
+        // 单条 / 批量删除（界面选中后删）。用 POST 而不是带 body 的 DELETE：
+        // Ktor 对 DELETE 带请求体的处理在各客户端上并不一致。
+        post("/memory/delete") {
+            val body = call.receive<MemoryDeleteRequest>()
+            call.respond(toolGuard { memory.deleteEntries(body.indices) })
+        }
+
         delete("/memory") {
             call.respond(toolGuard { memory.clear() })
         }
@@ -908,6 +915,15 @@ data class MemoryUpdateRequest(val content: String = "")
 /** 长期记忆：追加一条（界面「+ 添加一条」；AI 走 remember 工具，不经过这里） */
 @Serializable
 data class MemoryEntryRequest(val content: String = "")
+
+/**
+ * 长期记忆：按下标删几条（界面里的单条 / 批量删除）。
+ *
+ * 下标是"一行一条"里的顺序（0 起），与 `MemoryStore.entries()` 同源 ——
+ * 界面拿到的就是那份列表，不会对不上。
+ */
+@Serializable
+data class MemoryDeleteRequest(val indices: List<Int> = emptyList())
 
 /** 工具权限视图（界面用）：写/读白名单 + 逐工具覆盖 + 预算 */
 @Serializable

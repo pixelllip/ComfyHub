@@ -136,10 +136,31 @@ class ToolRegistryTest {
         e.registry.invoke("c2", "remember", args("content" to "出图统一用 Anima"), ctx)
 
         val content = Files.readString(e.memory.file, StandardCharsets.UTF_8)
-        assertTrue(content.contains("- 用户偏好 4:3 画幅"), content)
-        assertTrue(content.contains("- 出图统一用 Anima"), content)
+        // AI 写的每条会带 `[日期] ` 前缀（用户要求：便于按时间查找 / 清理）
+        val today = java.time.LocalDate.now().toString()
+        assertTrue(content.contains("- [$today] 用户偏好 4:3 画幅"), content)
+        assertTrue(content.contains("- [$today] 出图统一用 Anima"), content)
         assertEquals(2, e.memory.read().entryCount)
         assertTrue(first.content.contains("长期记忆"), "结果要告诉模型写进哪儿了")
+    }
+
+    @Test
+    fun `remember 一轮最多新增 N 条 超了直接拒绝（用户要求：别让条数失控）`() = runBlocking {
+        val e = env()
+        val ctx = e.ctx()
+
+        repeat(MemoryStore.MAX_ENTRIES_PER_RUN) { i ->
+            val r = e.registry.invoke("c$i", "remember", args("content" to "偏好第 $i 条"), ctx)
+            assertEquals("ok", r.status, r.error ?: r.content)
+        }
+        val extra = e.registry.invoke("cX", "remember", args("content" to "再来一条"), ctx)
+        assertEquals("failed", extra.status)
+        assertEquals("MEMORY_RATE_LIMITED", extra.errorCode)
+        assertEquals(MemoryStore.MAX_ENTRIES_PER_RUN, e.memory.read().entryCount, "被拒的那条不该落盘")
+
+        // 判重命中的"重复说一遍"不占额度：模型啰嗦不该让它后面记不了真正的新事实
+        val again = e.registry.invoke("cY", "remember", args("content" to "偏好第 0 条"), ctx)
+        assertEquals("ok", again.status, "判重命中不算新增，不该被节流挡住")
     }
 
     @Test
@@ -562,8 +583,8 @@ class ToolRegistryTest {
     }
 
     @Test
-    fun `提示词 v11 写着一次回复最多查 9 次 且与阈值常量同源`() {
-        assertEquals("v11", SystemPrompt.VERSION)
+    fun `提示词 v12：查询预算与记忆规则都与常量同源`() {
+        assertEquals("v12", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
@@ -587,5 +608,19 @@ class ToolRegistryTest {
             "提示词里的查询预算要和阈值常量一致",
         )
         assertTrue(text.contains("最多主动查询 9 次"), "现在是 9 次")
+
+        // 长期记忆的闸门（用户要求：条数别失控）
+        assertTrue(
+            text.contains("一次回复最多新增 ${MemoryStore.MAX_ENTRIES_PER_RUN} 条"),
+            "每轮新增上限要写进提示词，且与常量同源",
+        )
+        assertTrue(
+            text.contains("${MemoryStore.MAX_ENTRIES} 条就写不进去了"),
+            "总条数上限也要写进提示词",
+        )
+        assertTrue(
+            text.contains("不要自己删改用户已有的条目"),
+            "满了要让用户来清理，不能让模型自己删别人的记忆",
+        )
     }
 }

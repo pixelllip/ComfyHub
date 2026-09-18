@@ -246,6 +246,8 @@ class ToolRegistry(
             name = "remember",
             description = "把一条**长期有效**的信息写进长期记忆（用户偏好、固定约定、称呼、常用参数等），" +
                 "以后每次对话都会带上它。只记用户明确说过、且跨对话仍然成立的事；一次只写一条。" +
+                "写进去的每条会自动带上 `[日期]` 前缀；**一次回复最多新增 ${MemoryStore.MAX_ENTRIES_PER_RUN} 条**，" +
+                "总条数上限 ${MemoryStore.MAX_ENTRIES} 条（满了要请用户去界面里清理，不能自己删别人的条目）。" +
                 "**不要**记录本次任务的临时状态、文件内容、以及任何密钥 / 口令 / 隐私凭据。",
             parameters = schema(
                 """{"type":"object","properties":{"content":{"type":"string","description":"一条记忆，直接写事实，例如：用户偏好 4:3 画幅，出图统一用 Aesthetic 模型"}},"required":["content"],"additionalProperties":false}"""
@@ -257,14 +259,28 @@ class ToolRegistry(
             val content = args.str("content") ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 content")
             val store = ctx.memory
                 ?: throw ToolFailure("MEMORY_DISABLED", "本次运行没有启用长期记忆")
-            val dto = store.append(content)
+            // 写入节流（用户要求）：不限制的话模型很容易把整段对话都"记下来"，
+            // 条数一多，用户想查找 / 改动 / 删除都会变难。
+            // 判重命中的"又说了一遍"不算新增，所以它既不占额度、也不该被这条挡住。
+            if (!store.hasEntry(content) && ctx.memoryWrites >= MemoryStore.MAX_ENTRIES_PER_RUN) {
+                throw ToolFailure(
+                    "MEMORY_RATE_LIMITED",
+                    "本次回复已经新增了 ${ctx.memoryWrites} 条记忆（每轮上限 ${MemoryStore.MAX_ENTRIES_PER_RUN} 条）。" +
+                        "挑最要紧的留下，其余的等用户明确让你记再写。",
+                )
+            }
+            val before = store.read().entryCount
+            val dto = store.append(content, dated = true)
+            // 判重命中时条数没变 —— 那是"模型把同一件事说了两遍"，不该占额度
+            if (dto.entryCount > before) ctx.memoryWrites++
             val json = buildJsonObject {
                 put("entryCount", dto.entryCount)
+                put("maxEntries", dto.maxEntries)
                 put("path", dto.path)
             }
             ToolOutput(
-                "已记住（长期记忆现有 ${dto.entryCount} 条）。用户可以在 AI 工作台右侧栏的" +
-                    "「长期记忆」里查看、修改或清空。",
+                "已记住（长期记忆现有 ${dto.entryCount}/${dto.maxEntries} 条，本次回复已记 ${ctx.memoryWrites} 条）。" +
+                    "用户可以在 AI 工作台右侧栏的「长期记忆」里搜索、修改或删除。",
                 json,
             )
         },

@@ -54,6 +54,14 @@ class ToolContext(
     var calls: Int = 0,
     /** 本 Run 里查 ComfyUI 的次数（预算见 `ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN`） */
     var comfyQueries: Int = 0,
+    /**
+     * 本 Run 里**真的新增**了几条长期记忆（用户要求：一次最多
+     * [MemoryStore.MAX_ENTRIES_PER_RUN] 条）。
+     *
+     * 记的是"新增成功"的次数：模型把同一件事说两遍时 `append` 会判重直接返回，
+     * 那种不算，不然模型会因为自己啰嗦而被拒。
+     */
+    var memoryWrites: Int = 0,
 )
 
 /** 工具执行结果。 */

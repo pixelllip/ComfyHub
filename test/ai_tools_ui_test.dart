@@ -45,6 +45,9 @@ class _Recorder {
   /// 追加过的记忆条目（按顺序），用来断言"「添加」真的发出去了"
   final List<String> memoryAdded = [];
 
+  /// 删过的记忆下标（每次一批），用来断言删除真的发出去了、且下标对得上
+  final List<List<int>> memoryDeleted = [];
+
   /// 下一次「重新扫描」会登记几个（模拟往投放口里拷了东西）
   int rescanRegistered = 0;
 
@@ -214,18 +217,31 @@ MockClient _backend(
         'skills': rec.skills,
       };
     } else if (path == '/api/ai/memory' && request.method == 'GET') {
-      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000};
+      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000, 'maxEntries': 100};
     } else if (path == '/api/ai/memory' && request.method == 'PUT') {
       rec.memory = (jsonDecode(request.body) as Map)['content'].toString();
-      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000};
+      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000, 'maxEntries': 100};
     } else if (path == '/api/ai/memory/entries' && request.method == 'POST') {
       final entry = (jsonDecode(request.body) as Map)['content'].toString();
       rec.memoryAdded.add(entry);
       rec.memory = rec.memory.isEmpty ? '- $entry' : '${rec.memory}\n- $entry';
-      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000};
+      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000, 'maxEntries': 100};
+    } else if (path == '/api/ai/memory/delete' && request.method == 'POST') {
+      // 与后端同语义：下标指向"一行一条"的顺序（0 起），越界的忽略
+      final want = ((jsonDecode(request.body) as Map)['indices'] as List).cast<num>().map((e) => e.toInt()).toSet();
+      rec.memoryDeleted.add(want.toList()..sort());
+      final kept = <String>[];
+      var i = 0;
+      for (final line in rec.memory.split('\n')) {
+        if (line.trim().isEmpty) continue;
+        if (!want.contains(i)) kept.add(line);
+        i++;
+      }
+      rec.memory = kept.join('\n');
+      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000, 'maxEntries': 100};
     } else if (path == '/api/ai/memory' && request.method == 'DELETE') {
       rec.memory = '';
-      body = {'content': '', 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': 0, 'maxChars': 8000};
+      body = {'content': '', 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': 0, 'maxChars': 8000, 'maxEntries': 100};
     } else if (path == '/api/ai/tools') {
       body = tools ??
           [
@@ -493,11 +509,15 @@ void main() {
     expect(find.text('2 条'), findsOneWidget);
     expect(find.textContaining('用户偏好 4:3 画幅'), findsWidgets, reason: '第一条记忆要做预览');
 
-    // 打开编辑器 → 改内容 → 保存 → PUT 出去的正文就是改过的
+    // 打开编辑器 → 列表视图默认可见（2026-09-18 起：搜索 + 单条删除走列表视图）
     await tester.tap(find.byTooltip('查看 / 编辑长期记忆'));
     await tester.pumpAndSettle();
     expect(find.textContaining('memory.md'), findsWidgets, reason: '要告诉用户真源文件在哪');
+    expect(find.text('2 / 100 条'), findsOneWidget, reason: '要能看出条数占用（用户要求条数可控）');
 
+    // 整篇编辑是另一个模式：切过去才能改全文 → 保存 → PUT 出去的正文就是改过的
+    await tester.tap(find.text('整篇编辑'));
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.widgetWithText(TextField, '- 用户偏好 4:3 画幅\n- 出图统一用 Anima'),
       '- 只保留这一条',
@@ -518,7 +538,7 @@ void main() {
     expect(rec.memoryAdded, ['交付 16:9']);
     expect(rec.memory, contains('交付 16:9'));
 
-    // 编辑器里的正文要跟着更新（不然用户会以为没加上）
+    // 列表里要跟着出现（不然用户会以为没加上）
     expect(find.textContaining('交付 16:9'), findsWidgets);
 
     // 清空要先确认
@@ -528,6 +548,60 @@ void main() {
     await tester.tap(find.text('清空').last);
     await tester.pumpAndSettle();
     expect(rec.calls, contains('DELETE /api/ai/memory'));
+    expect(rec.memory, isEmpty);
+  });
+
+  testWidgets('(a3b) 长期记忆：能按关键词搜、单条删与批量删（用户要求：条数多了也好查好删）',
+      (tester) async {
+    tester.view.physicalSize = const Size(1600, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder()
+      ..memory = '- [2026-09-10] 画幅一律 4:3\n- [2026-09-11] 出图用 Anima 模型\n- [2026-09-12] 交付带字幕';
+    await tester.pumpWidget(await _homePage(rec));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('查看 / 编辑长期记忆'));
+    await tester.pumpAndSettle();
+
+    // 只看弹窗里的那几行（面板预览也会显示第一条，别把两者混起来数）
+    Finder inDialog(Finder f) => find.descendant(of: find.byType(AlertDialog), matching: f);
+
+    // 日期前缀只是给人看时间用的，列表里剥掉（不然后缀里全是方括号，正文反而看不见）
+    expect(inDialog(find.text('画幅一律 4:3')), findsOneWidget);
+    expect(inDialog(find.textContaining('[2026-09-10]')), findsNothing);
+
+    // 搜索：只剩匹配的那条
+    await tester.enterText(find.widgetWithText(TextField, '搜索记忆（按关键词过滤）'), '字幕');
+    await tester.pumpAndSettle();
+    expect(inDialog(find.text('交付带字幕')), findsOneWidget);
+    expect(inDialog(find.text('画幅一律 4:3')), findsNothing, reason: '搜索要真的过滤掉不匹配的条目');
+
+    // 清空搜索 → 三条都在
+    await tester.tap(find.byTooltip('清空搜索'));
+    await tester.pumpAndSettle();
+    expect(inDialog(find.text('画幅一律 4:3')), findsOneWidget);
+
+    // 单条删除（每行那个小垃圾桶）：删中间的 → 发出去的就是下标 1
+    await tester.tap(find.byTooltip('删掉这一条').at(1));
+    await tester.pumpAndSettle();
+    expect(rec.memoryDeleted, [
+      [1]
+    ]);
+    expect(rec.memory, contains('画幅一律 4:3'));
+    expect(rec.memory, isNot(contains('Anima')));
+
+    // 批量删除：勾两条 → 删除选中（先确认）
+    await tester.tap(find.byType(Checkbox).at(0));
+    await tester.tap(find.byType(Checkbox).at(1));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('删除选中'));
+    await tester.pumpAndSettle();
+    expect(find.text('删除这 2 条记忆？'), findsOneWidget, reason: '不可逆的批量删除要先确认');
+    await tester.tap(find.text('删除'));
+    await tester.pumpAndSettle();
+    expect(rec.memoryDeleted.last, [0, 1]);
     expect(rec.memory, isEmpty);
   });
 

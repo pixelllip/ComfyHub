@@ -92,6 +92,67 @@ class MemoryStoreTest {
         assertEquals("", Files.readString(m.file, StandardCharsets.UTF_8))
     }
 
+    // --- 条数与写入规则（2026-09-18，用户要求）-------------------------------
+
+    @Test
+    fun `AI 写的带日期前缀 用户手敲的不带`() {
+        val (m, _) = store()
+        val today = java.time.LocalDate.now().toString()
+        m.append("用户偏好 4:3 画幅", dated = true)
+        m.append("交付一律带字幕")
+
+        assertTrue(
+            m.read().content.startsWith("- [$today] 用户偏好 4:3 画幅"),
+            "AI 写入要带日期前缀，便于按时间查找 / 清理：${m.read().content}",
+        )
+        assertTrue(
+            m.read().content.contains("- 交付一律带字幕"),
+            "用户自己手敲的那条不该被我们改写：${m.read().content}",
+        )
+    }
+
+    @Test
+    fun `判重忽略日期前缀（同一件事隔天再记不会堆成两行）`() {
+        val (m, _) = store()
+        m.append("用户偏好 4:3 画幅", dated = true)
+        // 第二天模型又说了一遍同一件事：内容一样，只有日期会不同 → 不该变成两条
+        val again = m.append("  用户偏好 4:3 画幅  ", dated = true)
+        assertEquals(1, again.entryCount, "带日期前缀之后判重仍要命中：${again.content}")
+    }
+
+    @Test
+    fun `条数到上限之后 append 报 MEMORY_FULL 而不是挤掉最旧的一条`() {
+        val (m, _) = store()
+        m.write((1..MemoryStore.MAX_ENTRIES).joinToString("\n") { "- 第 $it 条" })
+        assertEquals(MemoryStore.MAX_ENTRIES, m.read().entryCount)
+
+        val e = assertFailsWith<ToolFailure> { m.append("再来一条") }
+        assertEquals("MEMORY_FULL", e.code)
+        assertTrue(e.message!!.contains("删掉一些"), "要告诉用户去界面里清理：${e.message}")
+        assertEquals(MemoryStore.MAX_ENTRIES, m.read().entryCount, "旧内容必须完好")
+        assertTrue(m.read().content.contains("- 第 1 条"), "最旧的一条不许被悄悄挤掉")
+    }
+
+    @Test
+    fun `按下标删除：单条、批量都行 越界的忽略`() {
+        val (m, _) = store()
+        m.write("- A\n- B\n- C\n- D")
+
+        // 单条（界面上的那一行小垃圾桶）
+        assertEquals("- A\n- C\n- D", m.deleteEntries(listOf(1)).content)
+        // 批量 + 一个越界下标（界面与磁盘差一瞬间）：不该整批失败
+        assertEquals("- D", m.deleteEntries(listOf(0, 1, 99)).content)
+        // 空集合什么都不做
+        assertEquals("- D", m.deleteEntries(emptyList()).content)
+    }
+
+    @Test
+    fun `条目列表与落盘内容同源 删除按同一份下标`() {
+        val (m, _) = store()
+        m.write("- A\n\n- B\n- C")
+        assertEquals(listOf("- A", "- B", "- C"), m.entries(), "空行不算，下标要和界面对得上")
+    }
+
     @Test
     fun `注入系统提示的正文会被截断 但文件里仍然完整`() {
         val (m, _) = store()
