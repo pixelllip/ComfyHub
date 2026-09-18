@@ -189,13 +189,25 @@ class _AiHomePageState extends State<AiHomePage> {
     final store = context.watch<AiWorkspaceStore>();
     final width = MediaQuery.sizeOf(context).width;
     final wide = width >= 900;
+    // 第三栏（Comfy 状态）只在够宽时才铺开。
+    //
+    // **900~1199px 曾经是个死角**（用户建议 ② / 需求审计 AIH-002）：那个区间
+    // `wide` 成立 → 没有窄屏那个 FAB，但 `showPanel` 不成立 → 也没有第三栏，
+    // 于是「ComfyUI 状态」整块内容在界面上**一个入口都没有**。
+    // 现在宽屏分支在这个区间把入口补到 AppBar 上（见 `onShowStatus`）。
+    final showPanel = wide && width >= 1200;
 
     final conversationList = _ConversationList(store: store);
     // AppBar 显示**当前对话标题**（用户建议 ④）：标题是自动总结出来的，
     // 所以它得一直在视野里，用户才知道自己在哪条对话里、也可以随手改名。
     final thread = Column(
       children: [
-        _ConversationAppBar(store: store),
+        _ConversationAppBar(
+          store: store,
+          // 只有"宽屏但不够宽到铺第三栏"这一段才需要在标题栏补入口；
+          // 更窄时有右下角的 FAB，更宽时有第三栏本身。
+          onShowStatus: wide && !showPanel ? () => _showStatusSheet(context, store) : null,
+        ),
         Expanded(
           child: Stack(
             children: [
@@ -249,7 +261,6 @@ class _AiHomePageState extends State<AiHomePage> {
     );
 
     if (wide) {
-      final showPanel = width >= 1200;
       return Scaffold(
         body: Row(
           children: [
@@ -419,7 +430,13 @@ class _ConversationList extends StatelessWidget {
 class _ConversationAppBar extends StatelessWidget implements PreferredSizeWidget {
   final AiWorkspaceStore store;
 
-  const _ConversationAppBar({required this.store});
+  /// 给「ComfyUI 状态」用的入口（可空）。
+  ///
+  /// 只在 **900~1199px** 这一段给：那个宽度下第三栏铺不开、又没有窄屏的 FAB，
+  /// 不补这个按钮的话 Comfy 状态整块内容在界面上不可达（用户建议 ②）。
+  final VoidCallback? onShowStatus;
+
+  const _ConversationAppBar({required this.store, this.onShowStatus});
 
   @override
   Size get preferredSize => const Size.fromHeight(56);
@@ -460,6 +477,12 @@ class _ConversationAppBar extends StatelessWidget implements PreferredSizeWidget
         ],
       ),
       actions: [
+        if (onShowStatus != null)
+          IconButton(
+            tooltip: 'ComfyUI 状态',
+            icon: const Icon(Icons.dns_outlined, size: 18),
+            onPressed: onShowStatus,
+          ),
         if (conv != null)
           IconButton(
             tooltip: '重命名这条对话',

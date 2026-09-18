@@ -257,6 +257,40 @@ void main() {
     expect(find.byType(VerticalDivider), findsNWidgets(2));
   });
 
+  testWidgets('900~1199px：第三栏铺不开，但 Comfy 状态仍然可达（AIH-002 死角）', (tester) async {
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page());
+    await tester.pumpAndSettle();
+
+    // 这一段仍然是两栏（900px 宽时再塞一栏，正文区只剩约 400px，太挤）
+    expect(find.byType(VerticalDivider), findsOneWidget);
+    expect(find.text('ComfyUI'), findsNothing);
+
+    // 但入口必须在：这一段既不是 <900 的右下角 FAB，也不是 ≥1200 的第三栏，
+    // 曾经两边都不占 → Comfy 状态整块内容在界面上不可达（需求审计 AIH-002）。
+    final entry = find.byTooltip('ComfyUI 状态');
+    expect(entry, findsOneWidget, reason: 'AIH-002：900~1199px 必须有一个 Comfy 状态入口');
+
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    expect(find.text('ComfyUI'), findsWidgets, reason: '点开就能看到状态内容');
+  });
+
+  testWidgets('≥1200px 有第三栏，就不必再占标题栏一个入口', (tester) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page());
+    await tester.pumpAndSettle();
+
+    expect(find.text('ComfyUI'), findsOneWidget);
+    expect(find.byTooltip('ComfyUI 状态'), findsNothing);
+  });
+
   testWidgets('会话列表：当前会话有明确底色，按下 / 悬停高亮被压淡（用户 bug：次新那条看着像被选中）',
       (tester) async {
     tester.view.physicalSize = const Size(1600, 1000);
