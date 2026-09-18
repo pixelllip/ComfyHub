@@ -750,7 +750,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     _liveReasoning.clear();
     _liveToolCalls.clear();
     notice = null;
-    _syncMessageCount();
+    _syncConversationStats();
   }
 
   /// 打开历史会话。同样先清理上一个空会话。
@@ -761,7 +761,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       await _cleanupEmptyConversation();
       conversation = conversations.firstWhere((c) => c.id == id);
       messages = await _api.listMessages(id);
-      _syncMessageCount();
+      _syncConversationStats();
       await _applyDraftAttachments(id);
       _pruneLiveState();
       notice = null;
@@ -1066,7 +1066,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       attachments.clear();
       preflight = null;
       // 乐观插进去的这两条也要算进"当前会话有多少条消息"（用户 bug ①）
-      _syncMessageCount();
+      _syncConversationStats();
       // 草稿在上面（第一次 notify 之前）就已经清掉了 —— 这里补一次没有意义，
       // 但也绝不能省掉上面那次：顺序错了就会把刚发出去的话灌回输入框。
       notifyListeners();
@@ -1304,7 +1304,7 @@ class AiWorkspaceStore extends ChangeNotifier {
           else
             msg,
       ];
-      _syncMessageCount();
+      _syncConversationStats();
       notifyListeners();
       await _consumeRun(start.runId, start.assistantMessageId, conv.id);
     } on AiApiException catch (e) {
@@ -1441,27 +1441,34 @@ class AiWorkspaceStore extends ChangeNotifier {
       parts: parts,
     );
     messages = next;
-    _syncMessageCount();
+    _syncConversationStats();
   }
 
-  /// 把"当前会话有多少条消息"对齐到本机已经拿到的消息数。
+  /// 把"当前会话有多少条消息 / 最近一次对话是什么时候"对齐到本机已发生的事实，
+  /// 并把有新消息的那条顶到会话列表最前面。
   ///
   /// 为什么需要（用户 bug ①）：AppBar 上的"N 条消息"读的是 `conversation.messageCount`，
   /// 而那个数字**只有拉会话列表时后端才会给**。发出去的消息是本机乐观插进去的、
   /// 流式回复也是本机长出来的，所以不同步的话，标题栏那个数字会一直停在"打开这条会话时"的值，
   /// 要切走再切回来才变。
   ///
-  /// 只动这一个字段：`conversations` 里那条也一起改，免得切到别的会话再切回来又变回旧数字。
-  void _syncMessageCount() {
+  /// 时间戳（用户建议 ⑥）是同一个道理：左侧会话列表上写的"最近一次对话"如果也读后端那份旧值，
+  /// 刚聊完看着还是"3 天前"。所以这里在**消息数真的变了**的时候把它改成当前时间 ——
+  /// 只是打开旧会话看看不改，否则"翻一下就变成刚刚"。
+  ///
+  /// 后端列表按 `updated_at DESC` 排；本机既然长了新消息，就同样把它顶到最前，
+  /// 不然会出现"列表最后一条写着刚刚"这种自相矛盾的画面。
+  void _syncConversationStats() {
     final conv = conversation;
     if (conv == null) return;
     final count = messages.length;
     if (conv.messageCount == count) return;
-    final updated = conv.copyWith(messageCount: count);
+    final updated = conv.copyWith(messageCount: count, updatedAt: DateTime.now());
     conversation = updated;
     conversations = [
+      updated,
       for (final c in conversations)
-        if (c.id == conv.id) updated else c,
+        if (c.id != conv.id) c,
     ];
   }
 
@@ -1478,7 +1485,7 @@ class AiWorkspaceStore extends ChangeNotifier {
             m,
       ];
       _pruneLiveState();
-      _syncMessageCount();
+      _syncConversationStats();
     } catch (_) {
       // 保留本地已有的流式内容，别因为一次刷新失败把回复擦掉
     }

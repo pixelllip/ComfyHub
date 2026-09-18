@@ -104,7 +104,9 @@ MockClient _fakeBackend({
         'messageCount': 0,
       };
     } else if (path == '/api/ai/conversations') {
-      body = conversations;
+      // 真后端是 `ORDER BY c.updated_at DESC`，照做 —— 用例里"聊完顶到最前"才有意义
+      body = [...conversations]..sort((a, b) => ((b['updatedAt'] ?? '') as String)
+          .compareTo((a['updatedAt'] ?? '') as String));
     } else if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) &&
         request.method == 'DELETE') {
       deletedConversations.add(path.split('/').last);
@@ -114,6 +116,15 @@ MockClient _fakeBackend({
       lastRunBody = jsonDecode(request.body) as Map<String, dynamic>;
       lastRunBodies.add(lastRunBody!);
       runCount++;
+      // 真后端在发消息时会 `UPDATE ai_conversations SET updated_at = …` 并把 message_count 顶上去
+      // （见 AiConversationRepo.appendMessage）；这里也照做，否则用例结尾那次"对齐一次列表"
+      // 会把界面刚写上的"刚刚"打回 fixture 里的旧时间。
+      for (final c in conversations) {
+        if (c['id'] == conversationId) {
+          c['messageCount'] = ((c['messageCount'] as num?)?.toInt() ?? 0) + 2;
+          c['updatedAt'] = DateTime.now().toUtc().toIso8601String();
+        }
+      }
       final id = 'r$runCount';
       body = {'runId': id, 'assistantMessageId': 'a$runCount', 'userMessageId': 'u1'};
     } else if (path.startsWith('/api/ai/runs/') && path.endsWith('/events')) {
@@ -289,6 +300,45 @@ void main() {
 
     expect(find.text('ComfyUI'), findsOneWidget);
     expect(find.byTooltip('ComfyUI 状态'), findsNothing);
+  });
+
+  testWidgets('会话列表：显示最近一次对话时间，聊完立刻变成「刚刚」（用户建议 ⑥）', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page(
+      conversations: [
+        {
+          'id': 'c2',
+          'title': '五分钟前聊过的',
+          'messageCount': 4,
+          'updatedAt': DateTime.now().toUtc().subtract(const Duration(minutes: 5)).toIso8601String(),
+        },
+        // 后端给的是 UTC（`Instant.toString()`），前端要按本地时区显示才对
+        {
+          'id': 'c1',
+          'title': '三天前聊过的',
+          'messageCount': 0,
+          'updatedAt': DateTime.now().toUtc().subtract(const Duration(days: 3)).toIso8601String(),
+        },
+      ],
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('4 条消息 · 5 分钟前'), findsOneWidget);
+    expect(find.text('0 条消息 · 3 天前'), findsOneWidget);
+
+    // 在空会话（c1）里发一条消息 → 那条会话的"最近一次对话"必须跟着变成刚刚，
+    // 并且顶到列表最前（后端也按 updated_at DESC 排）
+    await tester.enterText(find.byType(TextField), '你好');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('刚刚'), findsWidgets, reason: '刚发过消息的会话不能还写着旧时间');
+    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    expect(store.conversation?.id, 'c1');
+    expect(store.conversations.first.id, 'c1', reason: '刚聊过的会话要顶到列表最前');
   });
 
   testWidgets('会话列表：当前会话有明确底色，按下 / 悬停高亮被压淡（用户 bug：次新那条看着像被选中）',

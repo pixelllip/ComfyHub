@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/api_client.dart';
+import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../models/ai_models.dart';
@@ -342,6 +343,9 @@ class _ConversationList extends StatelessWidget {
                     hoverColor: theme.colorScheme.onSurface.withValues(alpha: 0.06),
                   ),
                   child: ListView.builder(
+                    // 列表整体留出内边距（用户建议 ⑥）：以前 ListTile 是**贴着**左右边缘画的，
+                    // 选中底色从窗口边缘一直铺到底，看着像"一整条横幅"而不是一行一个会话。
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     itemCount: store.conversations.length,
                     itemBuilder: (context, i) {
                       final c = store.conversations[i];
@@ -349,12 +353,20 @@ class _ConversationList extends StatelessWidget {
                       return ListTile(
                         dense: true,
                         selected: selected,
+                        // 有了外边距之后配圆角才像"一行一条"
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         // M3 的 ListTile 选中态**默认只把文字染成主题色、没有底色**，
                         // 于是"鼠标压过的那一行"看着比真选中的还显眼。这里给当前会话一个明确的底色。
                         selectedTileColor: theme.colorScheme.primary.withValues(alpha: 0.16),
                         title: Text(c.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle:
-                            Text('${c.messageCount} 条消息', style: theme.textTheme.labelSmall),
+                        // 条数 + **最近一次对话时间**（用户建议 ⑥）：
+                        // 光有"N 条消息"看不出哪条是刚聊过的，得切进去才知道。
+                        subtitle: Text(
+                          '${c.messageCount} 条消息 · ${relativeTime(c.updatedAt)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.labelSmall,
+                        ),
                         onTap: () {
                           store.openConversation(c.id);
                           if (Scaffold.maybeOf(context)?.isDrawerOpen == true) {

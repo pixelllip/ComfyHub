@@ -32,12 +32,15 @@ String formatDuration(int? ms) {
 
 String relativeTime(DateTime? dt) {
   if (dt == null) return '—';
-  final diff = DateTime.now().difference(dt);
+  // 后端时间戳是 UTC（`Instant.toString()`）；不转本地的话，最上面那句"绝对时间"
+  // 会按 UTC 时钟显示，整体偏一个时差。
+  final local = dt.toLocal();
+  final diff = DateTime.now().difference(local);
   if (diff.inSeconds < 60) return '刚刚';
   if (diff.inMinutes < 60) return '${diff.inMinutes} 分钟前';
   if (diff.inHours < 24) return '${diff.inHours} 小时前';
   if (diff.inDays < 30) return '${diff.inDays} 天前';
-  return _dateFmt.format(dt);
+  return _dateFmt.format(local);
 }
 
 /// 把标签名字符串映射成稳定颜色，保证同名标签颜色一致。

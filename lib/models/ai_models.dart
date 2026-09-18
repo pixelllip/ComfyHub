@@ -514,17 +514,19 @@ class AiConversation {
         modelId: json['modelId']?.toString(),
         archived: json['archived'] == true,
         messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
-        updatedAt: DateTime.tryParse((json['updatedAt'] ?? '').toString()),
+        // 后端给的是 `Instant.toString()`（UTC，带 Z）；不转本地时区的话，
+        // 列表里那个"最近一次对话"时间会整体偏掉一个时差（本机是 +08:00）。
+        updatedAt: DateTime.tryParse((json['updatedAt'] ?? '').toString())?.toLocal(),
       );
 
-  AiConversation copyWith({String? title, int? messageCount}) => AiConversation(
+  AiConversation copyWith({String? title, int? messageCount, DateTime? updatedAt}) => AiConversation(
         id: id,
         title: title ?? this.title,
         providerId: providerId,
         modelId: modelId,
         archived: archived,
         messageCount: messageCount ?? this.messageCount,
-        updatedAt: updatedAt,
+        updatedAt: updatedAt ?? this.updatedAt,
       );
 }
 
