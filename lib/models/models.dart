@@ -722,6 +722,51 @@ class ImportFolderResult {
       '其中 $promptsCreated 个带内嵌工作流已自动建提示词';
 }
 
+/// 「导入本机工作流文件」的结果（用户 bug ⑤）。
+///
+/// 现场：`prompts` 库过去只有两个入口 —— 自动捕获（轮询 ComfyUI `/history`）与 AI 手动按路径读，
+/// 所以**首次使用时库里是空的**，而用户机器上早就存着一堆工作流（`user\<用户>\workflows`）。
+/// 设置页这颗按钮就是"一次把它们读进库"。
+class ImportWorkflowsResult {
+  final List<String> dirs;
+  final int scanned;
+  final int imported;
+  final int duplicates;
+  final int failed;
+  final List<int> promptIds;
+
+  /// 后端给的一句话（"没找到 workflows 目录"这类情况也走它，所以界面直接显示）
+  final String? message;
+
+  const ImportWorkflowsResult({
+    this.dirs = const [],
+    this.scanned = 0,
+    this.imported = 0,
+    this.duplicates = 0,
+    this.failed = 0,
+    this.promptIds = const [],
+    this.message,
+  });
+
+  factory ImportWorkflowsResult.fromJson(Map<String, dynamic> j) => ImportWorkflowsResult(
+        dirs: ((j['dirs'] as List?) ?? const []).map((e) => e.toString()).toList(),
+        scanned: (j['scanned'] as num?)?.toInt() ?? 0,
+        imported: (j['imported'] as num?)?.toInt() ?? 0,
+        duplicates: (j['duplicates'] as num?)?.toInt() ?? 0,
+        failed: (j['failed'] as num?)?.toInt() ?? 0,
+        promptIds: ((j['promptIds'] as List?) ?? const [])
+            .map((e) => (e as num).toInt())
+            .toList(),
+        message: j['message'] as String?,
+      );
+
+  String get summary {
+    final base = message ??
+        '扫描 $scanned 份工作流文件：新导入 $imported，已在库里 $duplicates，失败 $failed';
+    return dirs.isEmpty ? base : '$base（目录：${dirs.join("、")}）';
+  }
+}
+
 // ===========================================================================
 
 DateTime? _dt(Object? v) {

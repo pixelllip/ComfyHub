@@ -30,7 +30,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | Skills 目录注入 | **采纳思路，实现不同** | DSH 把目录作为 **user 消息**（`<system-reminder>` + `<available_skills>`）注入，为的是不打断系统前缀的 KV cache；我们的系统提示本来就带时间戳（每 Run 变化），所以直接写进系统提示的独立区块，省一层消息 |
 | DSH 默认提示词的**行为纪律段** | **择优采纳**（2026-09-17，用户要求） | 原文 `docs\default-prompt-inject.md`。挑出与我们对得上的三块写进系统提示 **v9**：① 事实纪律（不猜本机状态 / 证据冲突的采信顺序 / 把"查到的"与"推测的"分开说）；② 表达风格（开门见山、不奉承、不复述、**不写嵌套列表** —— `lib\widgets\markdown.dart` 会把子项拍平成同级，而表格反而是支持的）；③ 两条硬规则（写入留退路：改参数用覆盖不重写原始工作流；读取按需：不遍历磁盘）。另外，那份文档里的 `[MODE: UNRESTRICTED SANDBOX — STABLE]` 段（人格 / 拒绝对抗 / 越狱与渗透话术）**当年是整段搬进来的，现在也还在**（`HarnessRunner.kt` 里一个独立的 `append("""…""")`，上方有注释）：2026-09-17 用户明确说"那是我的意图，不许删除，不要动那段越狱提示词"。它与代码侧的审批纪律（提示词第 3 条）和凭据红线（第 8 条）并存 —— **别把它当误粘贴清理掉**，要改先问用户（AGENTS §10 记着这条） |
 
-我们的工具清单（出厂 15 个，全部可在设置里改成 `allow / ask / deny`）：
+我们的工具清单（出厂 16 个，全部可在设置里改成 `allow / ask / deny`）：
 
 | 工具 | 类别 | 权限档 | 说明 |
 | --- | --- | --- | --- |
@@ -46,7 +46,8 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `comfy_get_run` | comfy | allow | 按 runKey 查一次捕获（AIH-034） |
 | `comfy_sync_history` | comfy | **ask** | 会写我们的库，按 DEC-005 默认要审批 |
 | `comfy_load_workflow` | comfy | allow | 把**一份本机工作流文件**读进库换成一个能提交的 `promptId`（用户 bug ③，2026-09-18）：API 格式原样用；界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图 —— 普通节点、**组节点（subgraph）**、Reroute / Set-Get、旁路都会等价展开或改写，控件值**首选带名字的 `widgets_values_named`**。剩下的纯前端节点默认如实报 `UNSUPPORTED_NODES`；带 `tolerateUnsupported=true` 再来一次则**摘掉它们并给出缺口清单**（`openInputs` / `unresolvedInputs`），交给模型补线（用户建议 ②）。只读用户机器上的文件，不改它 |
-| `comfy_find_workflow` | comfy | allow | 搜库里**能直接跑**的工作流（标注 `runnable` = 有没有 API 节点图） |
+| `comfy_find_workflow` | comfy | allow | 找一个**能直接跑**的工作流：先搜库里**能直接跑**的工作流（标注 `runnable` = 有没有 API 节点图）；**库里没有时自动回头列本机 ComfyUI 已保存的工作流文件**（结果在 `localWorkflows` 里，用户 bug ⑤，2026-09-18） |
+| `comfy_list_workflows` | comfy | allow | 列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`，用户 bug ⑤，2026-09-18）：带路径 / 格式（ui/api）/ 是否已入库（`inLibrary` / `promptId`），可按文件名过滤（如 `krea2`）。**只读**，不改用户的文件。首次使用、或 `comfy_find_workflow` 什么都搜不到时先看它 —— 这些工作流**不需要在 ComfyUI 里跑过一次**，拿到 path 直接 `comfy_load_workflow` 就能提交 |
 | `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数、`connections` 补连线（值写 `["<上游节点id>", 槽位]`），跑完直接入库；会消耗显卡时间，默认要审批 |
 | `comfy_use_attachment` | comfy | **ask** | 把用户发来的**图片附件**投放进 ComfyUI 的 `input/` 目录并返回真实文件名（用户 bug，2026-09-17）：图生图 / 参考图的唯一正路，默认要审批（往用户机器上写文件） |
 
@@ -71,6 +72,46 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 - **附件 id 要交给模型**：用户轮正文末尾会附「这条消息里的图片附件：id=…」。
   **没随本次请求内联的图也算** —— 文件在库里，纯文本模型照样能拿它当参考图（但不能假装看过图内容）。
 - 提示词里明确禁止"改不了文件名所以做不了"这种半途而废的答复。
+
+### 2.1.2 "库里没有这条工作流"为什么不等于"用不了"（用户 bug ⑤，2026-09-18）
+
+现场是一条真实对话：用户说"基于 `krea2SFWNSFWUncensoredImageTo_v10` 工作流生成"，
+AI 回"**库里搜不到**这条工作流，要么把 `.json` 的完整路径发我，要么你在 ComfyUI 里点一次 Queue
+让它被自动捕获"。而那份文件**一直躺在磁盘上**：
+
+```
+D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows\krea2SFWNSFWUncensoredImageTo_v10.json
+```
+
+根因不在模型，在库的来源：`prompts` 表过去只有两个入口 —— **自动捕获**（轮询 ComfyUI `/history`，
+只收"本进程活着的时候跑过的"）与 **`comfy_load_workflow`**（要有人先给出路径）。
+于是用户机器上早就存着的工作流，在 AI 眼里等于不存在。用户的原话：
+**"我需要在本项目进程存活的时候，产生新工作流运行的记录才会入库，这不对吧"** —— 对。
+
+三处一起改（`ComfyWorkflowFiles`）：
+
+1. **看得见**：`comfy_list_workflows`（只读）列出本机 ComfyUI 已保存的工作流文件；
+   `comfy_find_workflow` 在库里搜不到时**自动带上**它们（`localWorkflows`）。
+2. **说得对**：`NOT_FOUND` 兜底文案改成"…本机 workflows 目录里也没有文件名匹配它的"，
+   并指向 `comfy_list_workflows`；系统提示 **v13 第 16 条**给出正确顺序
+   （`comfy_find_workflow` → `comfy_list_workflows` → `comfy_load_workflow(path=…)` → `comfy_submit`），
+   并**明确禁止**再说"得先在 ComfyUI 里跑一次才会被捕获"。
+3. **进得去库**：设置页 →「ComfyUI 自动捕获」多一颗**「导入本机工作流」**按钮
+   （`POST /api/capture/import-workflows`），把目录里的工作流批量读进 `prompts`
+   （`source=ComfyUI-File`，与 `comfy_load_workflow` 同一把钥匙 `run_key = file:<sha256>`，所以**幂等**）；
+   转换不了的那几份也照样入库、如实标 `runnable=false`（缺口照旧交给 AI 按清单补线）。
+   另有只读的 `GET /api/capture/workflows?q=`（界面 / 脚本 / 排错都用它）。
+
+目录怎么找（与读白名单同一套判据，绝不"看到个叫 workflows 的目录就认"）：
+配置里已生效的输出目录的**父目录**（ComfyUI 的真实形状就是 `output` 与 `user` 并列）→
+`ComfyLocator` 探测到的 home → `ComfyRoots.autoReadRoots`（Desktop 把程序与共享数据分家时，
+工作流在**安装目录**下，只按输出目录推是推不到的）。扫描**有界**：只看
+`user\<用户>\workflows` 一层，非 `.json` / 空文件 / 坏 JSON / 既不是界面格式也不是 API 格式的
+一律不列（列出来只会让 AI 白跑一趟 `comfy_load_workflow`）。
+
+防线：`ComfyWorkflowFilesTest` 7 例（懒加载发现 / 多用户目录 / 坏文件过滤 / query / 入库标记 /
+空目录如实说）+ `ToolRegistryTest` 3 例（回落、`NOT_FOUND` 指路、只读 allow）+
+`e2e-submit-test.ps1` 第 6 幕 6 项断言（只读列出 → AI 拿到路径 → 一键导入 → 幂等 → 状态回填）。
 
 ### 2.1 提交任务（`comfy_submit`）的几条纪律（2026-09-17）
 
@@ -170,6 +211,9 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
   Skills 使用纪律 + 防注入规则（AIH-046）；v3 长期记忆、v4 附件诚实、v5 会话标题、
   v6/v8 权限档与档位改名、v7 图生图三步；**v11 = 工作流文件可以直接提交**（`comfy_load_workflow`，用户 bug ③）；
   **v12 = 长期记忆的条数闸门 + 工作流转换不了时按缺口清单补线**（`tolerateUnsupported` / `connections`，用户建议 ②）；
+  **v13 = "库里搜不到工作流"不等于"这条工作流用不了"**（用户 bug ⑤，2026-09-18）：先
+  `comfy_find_workflow`（库里没有会自动带上本机文件 `localWorkflows`）→ `comfy_list_workflows` →
+  `comfy_load_workflow(path=…)` → `comfy_submit`，并**明确禁止**再说"得先在 ComfyUI 里跑一次才会被捕获"；
   **v9 = 移植 DSH 默认提示词的行为纪律段**
   （事实纪律 / 表达风格 / 写入留退路 + 读取按需，见 §1 表格最后一行）；**v10 = 查询预算 3 → 9**
   （提示词里那个数字改成从常量插值）。改动只影响新 Run。

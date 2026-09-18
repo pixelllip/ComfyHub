@@ -990,9 +990,16 @@ private fun TokenUsage.toOpenAiShape(): JsonObject? {
  *     组节点 / 旁路现在由后端确定性展开，剩下的纯前端节点可以带 `tolerateUnsupported=true`
  *     读进来拿**缺口清单**，再由模型用 `comfy_submit(connections=…)` 补线 ——
  *     第 15 条因此从"给用户两个出口"改成"你自己先按清单把线补上"。
+ * v13：**库里搜不到工作流 ≠ 这份工作流用不了**（用户 bug ⑤）。现场是一条真实对话：
+ *     用户说"基于 `krea2SFWNSFWUncensoredImageTo_v10` 生成"，AI 回"库里搜不到，要么把路径发我、
+ *     要么你在 ComfyUI 里点一次 Queue 让它被捕获" —— 而那份文件一直在
+ *     `…\user\default\workflows\` 里。根因是库的来源只有"捕获过的运行 + 手动读进来的文件"，
+ *     首次使用时必然是空的。现在第 16 条给出正确顺序：`comfy_find_workflow`（库里没有会自动
+ *     带上本机文件）→ `comfy_list_workflows` → `comfy_load_workflow(path=…)` → 提交，
+ *     并**明确禁止**再说"得先跑一次才会被捕获"。
  */
 object SystemPrompt {
-    const val VERSION = "v12"
+    const val VERSION = "v13"
 
     /**
      * 第一问时追加的一段：让模型在正文最前面带一行 `[标题]…[/标题]`，
@@ -1555,6 +1562,17 @@ object SystemPrompt {
                 把线补上再跑 —— 补的是"哪根线接哪"，**不确定就先问用户，不许乱接**。
                 只有确实补不出来（说不清语义）时，才让用户去 ComfyUI 里「导出（API）」一次，
                 或者点一次 Queue 让它被自动捕获。
+            16. **"库里搜不到某个工作流"不等于"这条工作流用不了"**：本项目库里只有两类工作流 ——
+                被自动捕获过的运行、以及手动读进来的文件；所以**首次使用时库就是空的**。
+                要找某个工作流（用户报了个名字，或你要按某条工作流生成）时按这个顺序做：
+                ① `comfy_find_workflow(query=…)` —— 它先搜库，**库里没有就自动带上本机 ComfyUI
+                   已保存的工作流文件**（结果在 `localWorkflows` 里，带 path 与 inLibrary）；
+                ② 还是空就 `comfy_list_workflows`（可按文件名过滤，例如 `query="krea2"`）
+                   看本机到底存了哪些；
+                ③ 拿到 path 直接 `comfy_load_workflow(path=…, includeGraph=true)` 读进库
+                   （拿 promptId 与节点/输入名），再 `comfy_submit` 提交。
+                **不许**因为"库里没有"就说这条工作流用不了，**也不许**让用户"先在 ComfyUI 里
+                跑一次让它被自动捕获"：工作流文件本来就躺在磁盘上，跑过一次才有 ID 是过去的老路。
             """.trimIndent()
         )
     }

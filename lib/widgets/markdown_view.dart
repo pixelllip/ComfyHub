@@ -126,6 +126,21 @@ class MarkdownText extends StatelessWidget {
         );
 
       case MdCodeBlock(:final code, :final language):
+        // 单行代码块（模型经常把一条命令 / 一段 JSON 整段塞进 ``` 里且不换行）：
+        // 横向滚动在这种场景下等于"永远看不全" —— 用户要求**超过容器宽度就换行显示**。
+        // 多行代码块**保持横向滚动**：代码的换行位置本身有意义（缩进 / 对齐 / 表格状输出），
+        // 自动折行反而更难读。
+        final singleLine = !code.contains('\n');
+        final codeText = Text(
+          code,
+          style: base.copyWith(
+            fontFamily: 'Consolas',
+            fontFamilyFallback: const ['Courier New', 'monospace'],
+            fontSize: (base.fontSize ?? 14) - 0.5,
+            height: 1.4,
+          ),
+          softWrap: singleLine,
+        );
         return Container(
           width: double.infinity,
           margin: const EdgeInsets.symmetric(vertical: 6),
@@ -145,19 +160,19 @@ class MarkdownText extends StatelessWidget {
                       style: theme.textTheme.labelSmall
                           ?.copyWith(color: theme.colorScheme.outline)),
                 ),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
-                child: Text(
-                  code,
-                  style: base.copyWith(
-                    fontFamily: 'Consolas',
-                    fontFamilyFallback: const ['Courier New', 'monospace'],
-                    fontSize: (base.fontSize ?? 14) - 0.5,
-                    height: 1.4,
-                  ),
+              // 单行：直接放进有界宽度里（软换行，必要时连超长单词也会被拆开）；
+              // 多行：横向滚动，保持原始排版
+              if (singleLine)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
+                  child: codeText,
+                )
+              else
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
+                  child: codeText,
                 ),
-              ),
             ],
           ),
         );

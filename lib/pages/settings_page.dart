@@ -320,6 +320,32 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  /// 把本机 ComfyUI 里**已经保存的工作流文件**批量读进库（用户 bug ⑤）。
+  ///
+  /// 为什么需要这颗按钮：库里的工作流过去只有两个来源 —— 自动捕获（轮询 `/history`）与
+  /// AI 按路径读。于是"用户在 ComfyUI 里存过、但本项目跑起来之后没跑过"的工作流
+  /// **在 AI 眼里等于不存在**，首次使用时尤其明显。这里一键把它们读进来（幂等，重复点没关系）。
+  Future<void> _importWorkflows() async {
+    final store = context.read<LibraryStore>();
+    setState(() {
+      _captureBusy = true;
+      _captureMessage = '正在扫描本机 ComfyUI 的 workflows 目录…';
+      _captureError = null;
+    });
+    try {
+      final result = await store.api.importWorkflowFiles();
+      if (!mounted) return;
+      setState(() => _captureMessage = result.summary);
+      await _refreshCaptureStatus();
+      await store.refreshAll();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _captureError = '导入工作流失败：$e');
+    } finally {
+      if (mounted) setState(() => _captureBusy = false);
+    }
+  }
+
   Future<void> _pickComfyOutputDir() async {
     final dir = await FilePicker.getDirectoryPath(dialogTitle: '选择 ComfyUI 的输出目录');
     if (dir == null || dir.isEmpty) return;
@@ -666,6 +692,8 @@ class _SettingsPageState extends State<SettingsPage> {
                         _endpoint(theme, 'PUT', '/api/capture/config', '修改自动捕获配置'),
                         _endpoint(theme, 'POST', '/api/capture/poll', '立刻轮询一次 ComfyUI'),
                         _endpoint(theme, 'POST', '/api/capture/import', '导入已有产物目录（含 PNG 内嵌工作流）'),
+                        _endpoint(theme, 'GET', '/api/capture/workflows', '本机 ComfyUI 已保存的工作流文件（只读）'),
+                        _endpoint(theme, 'POST', '/api/capture/import-workflows', '把这些工作流文件读进库'),
                         _endpoint(theme, 'POST', '/api/ingest/comfyui', '捕获入口（自定义节点 / 外部脚本推送）'),
                         _endpoint(theme, 'GET', '/api/prompts/{id}/workflow', '该提示词的完整工作流 JSON'),
                       ],
@@ -1015,6 +1043,13 @@ class _SettingsPageState extends State<SettingsPage> {
                   onPressed: _captureBusy ? null : _importFolder,
                   icon: const Icon(Icons.download_for_offline_outlined),
                   label: const Text('导入已有产物…'),
+                ),
+                // 用户 bug ⑤：库只收"捕获过的运行"，而用户机器上的工作流一直在磁盘上
+                // （`user\<用户>\workflows`）—— 一键把它们读进来，第一次用 AI 就不用"先跑一次"了
+                OutlinedButton.icon(
+                  onPressed: _captureBusy ? null : _importWorkflows,
+                  icon: const Icon(Icons.account_tree_outlined),
+                  label: const Text('导入本机工作流'),
                 ),
               ],
             ),

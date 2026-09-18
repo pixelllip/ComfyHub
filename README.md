@@ -19,6 +19,7 @@
 | **AI 工具权限** | 设置页新增「AI 工具权限」：默认**只能写 `<项目根>\comfyui`**，只读 `comfyui` + `storage`；`.git` / `.mysql` / `.run` / `node_modules` 永远禁写（即使用户把白名单放宽到项目根）。每个工具可以单独设成 允许 / 需批准 / 禁用，禁用后**根本不下发给模型**。聊天输入区底部还有**权限两档**开关（附件按钮与模型选择之间）：「询问」（默认）与「自动允许（无需批准）」—— 后者让 AI 不必等批准，**只免掉"问一下"，`deny` 与目录白名单一点都不放宽**；后端每次 Run 现读策略，切完下一次回复立刻生效 |
 | **图生图 / 参考图** | 用户上传的图片可以直接进工作流：AI 先用 `comfy_use_attachment` 把附件投放进 ComfyUI 的 `input/` 目录拿到真实文件名，再用 `comfy_submit` 覆盖 `LoadImage` 节点的 `image` 输入（例 `{"89.image":"…"}`）。工作流被捕获时绑定的那个旧文件名**改不了也不用改** —— 内置 skill `img2img-reference` 与系统提示 v7 都写清了这三步 |
 | **工作流文件直接提交** | 用户甩过来一个工作流 `.json` 路径时，AI 不再回"我只能提交库里的 promptId"：`comfy_load_workflow` 读那份文件 → **API 格式原样用**；**界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图** → 入库拿 `promptId` → `comfy_submit` 正常提交（也可以 `comfy_submit(workflowPath=…)` 一步到位）。转换器现在能等价处理的比过去多得多：**组节点（subgraph）按 `definitions.subgraphs` 展开**、旁路 / Reroute / Set-Get 照旧、**`widgets_values_named`（带参数名的那份）优先**（不必再按位置猜）。剩下纯粹的**前端**节点（`Anything Everywhere`、rgthree 的显示节点…）默认仍**如实报 `UNSUPPORTED_NODES`**，但**不再是死路**：带 `tolerateUnsupported=true` 再读一次，会把这些节点摘掉并给出**缺口清单**（`openInputs` = 哪些连线型输入空着、缺什么类型；`unresolvedInputs` = 哪个输入还悬着），AI 照着用 `comfy_submit(promptId=…, connections={"8.vae":["1",2]})` 把线补上就能跑 —— 猜的那部分仍然由 ComfyUI 自己的校验兜底。顺带：**本机 ComfyUI 的目录现在是自动放行的只读白名单**（`ComfyRoots` 每次现探），所以 AI 能直接读你自己的工作流文件；写仍然只允许 `<项目根>\comfyui`。 |
+| **本机工作流看得见**（2026-09-18） | **"库里搜不到"不再等于"这条工作流用不了"**。库里的工作流只有两个来源（自动捕获 = 只收"本进程活着的时候跑过的"、以及手动按路径读），所以**首次使用时库里必然是空的** —— 而你机器上早就存着一堆工作流（`…\ComfyUI\user\<用户>\workflows\*.json`）。现在：① `comfy_list_workflows`（只读）直接列出本机已保存的工作流文件（路径 / 格式 / 是否已入库），`comfy_find_workflow` 在库里搜不到时**自动带上**它们；② 系统提示 v13 写清顺序（find → list → `comfy_load_workflow(path=…)` → submit），并**禁止**再说"得先在 ComfyUI 里跑一次才会被捕获"；③ 设置页 →「ComfyUI 自动捕获」多一颗**「导入本机工作流」**：把目录里的工作流批量读进库（幂等，重复点没关系；转换不了的也入库并如实标 `runnable=false`）。对应的只读接口 `GET /api/capture/workflows?q=` 与导入接口 `POST /api/capture/import-workflows`（实测本机 11 份一把列全）。 |
 | **提示词库** | 新建 / 编辑 / 复制 / 删除；区分「生图 / 生视频 / 生音频 / 混合」；正向 + 负向提示词；模型、采样器、调度器、步数、CFG、Seed、宽高、批量、LoRA 列表、备注、收藏；**多选批量管理**（收藏 / 取消收藏 / 加标签 / 删除）；**没有关联任何产物的提示词会挂一个橙色「未关联」标记**（产物被删掉之后就是这种状态），可以按「未关联产物」筛选，也可以**一键清除**（先报条数 + 前几条标题再确认，按批循环删除，超过单页 200 条也不会漏） |
 | **ComfyUI 自动捕获** | ComfyUI 里跑完一次生成，**提示词 + 全部参数 + 完整工作流 + 生成的图片/视频/音频**自动进库并互相关联；不需要改动工作流，也不需要装任何东西（装一个可选的推送节点可以做到零延迟） |
 | **历史产物导入** | 指向 ComfyUI 的 output 目录，把**以前生成好的**图连同图片里内嵌的 `prompt` / `workflow` 一起收进来，自动建提示词并关联 |
@@ -373,6 +374,8 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `GET` | `/api/prompts/{id}/api-graph` | 该提示词的 **API 格式**节点图（提交给 ComfyUI `/prompt` 用的那一份；老数据没有则 204） |
 | `POST` | `/api/capture/poll` | 立刻轮询一次（App 的「立即同步」） |
 | `POST` | `/api/capture/import` | 导入某个目录里已有的产物（读 PNG 内嵌元数据） |
+| `GET` | `/api/capture/workflows` | **列出本机 ComfyUI 已保存的工作流文件**（只读，`?q=` 按文件名过滤）：路径 / 格式（ui/api）/ 是否已入库。用户 bug ⑤ |
+| `POST` | `/api/capture/import-workflows` | **把这些工作流文件读进库**（设置页「导入本机工作流」；幂等，`run_key = file:<sha256>`） |
 | `POST` | `/api/ingest/comfyui` | 捕获入口，供自定义节点 / 外部脚本推送 |
 | `GET` | `/api/prompts/{id}/workflow` | 该提示词的完整工作流 JSON（没有则 204） |
 | `GET` | `/api/media/{id}/workflow` | 该产物的完整工作流 JSON（没有则 204） |

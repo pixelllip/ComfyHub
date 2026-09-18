@@ -179,6 +179,14 @@ fun Application.module(ctx: AppContext) {
         comfyFindWorkflow = { query, limit, includeGraph ->
             AiWorkflowSearch.search(capture, query, limit, includeGraph)
         },
+        // 用户 bug ⑤：库只收"捕获过的运行"，所以首次使用时库里是空的 —— 本机 ComfyUI 里
+        // 已经保存的工作流文件（user\<用户>\workflows\*.json）要能直接被列出来（只读），
+        // 并标出哪几份已经在本项目库里（run_key = file:<sha256>，与 comfy_load_workflow 同一把钥匙）。
+        comfyListWorkflows = { query, limit ->
+            ComfyWorkflowFiles.listJson(ComfyWorkflowFiles.dirs(ctx.cfg), query, limit) { sha ->
+                CaptureRepo.findRun("file:$sha")?.promptId
+            }
+        },
         comfySubmit = { promptId, overrides, connections, title, waitSeconds ->
             AiWorkflowSearch.submit(submitter, capture, promptId, overrides, connections, title, waitSeconds)
         },

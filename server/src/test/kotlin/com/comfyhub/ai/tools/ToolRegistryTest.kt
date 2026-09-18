@@ -9,6 +9,10 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.nio.charset.StandardCharsets
@@ -27,7 +31,20 @@ import java.nio.file.Path
  */
 class ToolRegistryTest {
 
-    private class Env(val root: Path) {
+    private class Env(
+        val root: Path,
+        /**
+         * 库里搜工作流的结果（默认"一条都没有"）。用户 bug ⑤ 的回落那条路要用：
+         * 库里搜不到时，工具必须回头看**本机 ComfyUI 已保存的工作流文件**。
+         */
+        val findWorkflow: (String, Int, Boolean) -> WorkflowSearch = { _, _, _ ->
+            WorkflowSearch(0, buildJsonObject { put("count", 0) })
+        },
+        /** 本机工作流文件的假清单（默认空）。 */
+        val listWorkflows: (String?, Int) -> JsonObject = { _, _ ->
+            buildJsonObject { put("count", 0) }
+        },
+    ) {
         val skills = SkillStore(root.resolve("skills-builtin"), root.resolve("skills-user"))
         val memory = MemoryStore(root.resolve("storage").resolve("ai"))
         val gate = ToolApprovalGate(timeoutMs = 2000)
@@ -38,6 +55,8 @@ class ToolRegistryTest {
             projectRoot = root,
             skills = skills,
             approvals = gate,
+            comfyFindWorkflow = findWorkflow,
+            comfyListWorkflows = listWorkflows,
             comfyStatus = {
                 statusCalls++
                 buildJsonObject { put("connected", true); put("queue", 0) }
@@ -74,6 +93,8 @@ class ToolRegistryTest {
         "comfy_find_workflow", "comfy_submit",
         // 用户 bug ③：工作流文件可以直接读进库（"我不能凭一个文件路径提交"）
         "comfy_load_workflow",
+        // 用户 bug ⑤：库只收"捕获过的运行"，所以要能列出**本机 ComfyUI 已保存的工作流文件**
+        "comfy_list_workflows",
         // 用户 bug：图生图要把用户发来的图片投放进 ComfyUI 的 input 目录
         "comfy_use_attachment",
     )
@@ -448,6 +469,60 @@ class ToolRegistryTest {
         )
     }
 
+    // --- 本机工作流文件（用户 bug ⑤） ----------------------------------------
+
+    @Test
+    fun `comfy_list_workflows 只读、默认不需要批准`() {
+        val e = env()
+        val info = e.registry.info(e.policy).associateBy { it.name }["comfy_list_workflows"]!!
+        assertEquals("allow", info.access, "只列用户的文件，不该要批准")
+        assertEquals("comfy", info.category)
+        assertTrue(!info.mutating, "它既不改用户的文件，也不写库")
+    }
+
+    @Test
+    fun `comfy_find_workflow 库里搜不到时自动列出本机工作流文件`() = runBlocking {
+        // 现场（用户 bug ⑤）：首次使用时库里一条工作流都没有（库只收"捕获过的运行"），
+        // 而用户机器上的 krea2 工作流文件一直在磁盘上。AI 必须能自己找到它，
+        // 而不是回一句"库里没有"、让用户先手跑一次。
+        val local = buildJsonObject {
+            put("count", 1)
+            put("total", 1)
+            put(
+                "files",
+                buildJsonArray {
+                    add(
+                        buildJsonObject {
+                            put("name", "krea2SFWNSFWUncensoredImageTo_v10.json")
+                            put("path", "D:\\Comfy-Desktop\\ComfyUI-Installs\\ComfyUI\\ComfyUI\\user\\default\\workflows\\krea2SFWNSFWUncensoredImageTo_v10.json")
+                            put("format", "ui")
+                            put("inLibrary", false)
+                        },
+                    )
+                },
+            )
+        }
+        val e = Env(Files.createTempDirectory("comfyhub-registry-local").toRealPath(), listWorkflows = { _, _ -> local })
+        val record = e.registry.invoke("c1", "comfy_find_workflow", args("query" to "krea2"), e.ctx())
+
+        assertEquals("ok", record.status, record.error ?: record.content)
+        assertTrue(record.content.contains("krea2SFWNSFWUncensoredImageTo_v10.json"), "文件名要出现在给模型的正文里")
+        val json = record.resultJson!!
+        assertEquals(1, (json["localWorkflows"] as JsonArray).size)
+        assertEquals(0, (json["count"] as JsonPrimitive).content.toInt(), "库里确实是 0 条")
+        val hint = (json["hint"] as JsonPrimitive).content
+        assertTrue(hint.contains("comfy_load_workflow"), "要告诉模型下一步怎么把文件读进库：$hint")
+    }
+
+    @Test
+    fun `两个来源都没有时 NOT_FOUND 指向 comfy_list_workflows`() = runBlocking {
+        val e = env()
+        val record = e.registry.invoke("c1", "comfy_find_workflow", args("query" to "谁都没有的工作流"), e.ctx())
+        assertEquals("failed", record.status)
+        assertEquals("NOT_FOUND", record.errorCode)
+        assertTrue(record.error!!.contains("comfy_list_workflows"), "要让模型知道还有「列本机文件」这条路：${record.error}")
+    }
+
     // --- 系统提示词 ---------------------------------------------------------
 
     @Test
@@ -583,8 +658,8 @@ class ToolRegistryTest {
     }
 
     @Test
-    fun `提示词 v12：查询预算与记忆规则都与常量同源`() {
-        assertEquals("v12", SystemPrompt.VERSION)
+    fun `提示词 v13：查询预算与记忆规则都与常量同源 且首次使用先看本机工作流`() {
+        assertEquals("v13", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
@@ -621,6 +696,15 @@ class ToolRegistryTest {
         assertTrue(
             text.contains("不要自己删改用户已有的条目"),
             "满了要让用户来清理，不能让模型自己删别人的记忆",
+        )
+
+        // v13（用户 bug ⑤）：首次使用时库里是空的 —— 必须先去本机 ComfyUI 的工作流目录找，
+        // 而且不许再说"得先跑一次才会被捕获"
+        assertTrue(text.contains("comfy_list_workflows"), "第 16 条要把这条路写清楚")
+        assertTrue(text.contains("localWorkflows"), "要告诉模型 comfy_find_workflow 会自动带上本机文件")
+        assertTrue(
+            text.contains("也不许") && text.contains("跑一次让它被自动捕获"),
+            "明确禁止把老路（先跑一次）当答案",
         )
     }
 }

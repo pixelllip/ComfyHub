@@ -20,6 +20,8 @@ import io.ktor.server.routing.route
  *  GET    /api/capture/status        状态 + 最近捕获的若干次运行
  *  POST   /api/capture/poll          立刻轮询一次 ComfyUI /history
  *  POST   /api/capture/import        导入某个目录里已经生成好的产物（含 PNG 内嵌工作流）
+ *  GET    /api/capture/workflows     列出本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）
+ *  POST   /api/capture/import-workflows  把这些工作流文件批量读进本项目库
  *  POST   /api/ingest/comfyui        捕获入口（ComfyUI 自定义节点 / 外部脚本推送）
  *  GET    /api/prompts/{id}/workflow 该提示词对应的完整工作流 JSON
  *  GET    /api/media/{id}/workflow   该产物对应的完整工作流 JSON
@@ -92,6 +94,52 @@ fun Route.captureRoutes(ctx: AppContext, capture: ComfyCapture, submitter: Comfy
             val body = call.receive<ImportFolderRequest>()
             if (body.dir.isBlank()) return@post call.respondBadRequest("dir 不能为空")
             call.respond(capture.importFolder(body))
+        }
+
+        /**
+         * **本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`，用户 bug ⑤）。
+         *
+         * 只读：只列文件名 / 路径 / 格式 / 是否已入库，不改用户的文件、不写库。
+         * 为什么需要它：`prompts` 库只收"捕获过的运行"与"手动读进来的文件"，
+         * 所以**首次使用时库里是空的**，而用户机器上早就存着工作流 —— 这个接口把它们摆出来。
+         */
+        get("/workflows") {
+            val query = call.request.queryParameters["q"]
+            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 50
+            val json = ComfyWorkflowFiles.listJson(ComfyWorkflowFiles.dirs(ctx.cfg), query, limit) { sha ->
+                CaptureRepo.findRun("file:$sha")?.promptId
+            }
+            call.respondText(
+                AppJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), json),
+                ContentType.Application.Json,
+            )
+        }
+
+        /**
+         * 把这些工作流文件**批量读进本项目库**（界面上的「导入工作流文件…」按钮）。
+         *
+         * 写的是我们自己的库，用户机器上的文件一个字节都不动；幂等靠
+         * `run_key = file:<sha256>`（与 `comfy_load_workflow` 同一把钥匙）。
+         */
+        post("/import-workflows") {
+            val body = call.receive<ImportWorkflowsRequest>()
+            val dirs = body.dir?.takeIf { it.isNotBlank() }?.let { raw ->
+                val p = runCatching { java.nio.file.Paths.get(raw) }.getOrNull()
+                    ?: return@post call.respondBadRequest("目录不合法：$raw")
+                if (!java.nio.file.Files.isDirectory(p)) return@post call.respondBadRequest("目录不存在：$raw")
+                listOf(p)
+            } ?: ComfyWorkflowFiles.dirs(ctx.cfg)
+            val json = ComfyWorkflowFiles.importAll(
+                cfg = ctx.cfg,
+                submitter = submitter,
+                dirs = dirs,
+                limit = body.limit,
+                query = body.query,
+            )
+            call.respondText(
+                AppJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), json),
+                ContentType.Application.Json,
+            )
         }
     }
 

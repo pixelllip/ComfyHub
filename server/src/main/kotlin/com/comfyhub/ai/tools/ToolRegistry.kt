@@ -101,6 +101,16 @@ class ToolRegistry(
         WorkflowSearch(0, buildJsonObject { put("count", 0) })
     },
     /**
+     * **本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`，用户 bug ⑤）。
+     *
+     * `query` 匹配文件名、`limit` 最多列几条。这条与 `comfyFindWorkflow` 的关系是互补的：
+     * 那边查的是**我们的库**（只有被捕获过 / 手动读进来过的工作流才在），
+     * 这里查的是**用户机器上真实存在的文件** —— 首次使用时库里是空的，价值就在这里。
+     */
+    private val comfyListWorkflows: (String?, Int) -> JsonObject = { _, _ ->
+        buildJsonObject { put("count", 0) }
+    },
+    /**
      * 提交一个工作流给 ComfyUI 跑（用户建议 ①）；`waitSeconds=0` 表示只提交不等。
      *
      * 第二个 JsonObject 是**参数覆盖**，第三个是**补线**（用户建议 ②：界面格式里那些纯前端节点
@@ -462,11 +472,14 @@ class ToolRegistry(
         // ------------------------------------------------------------------
         AgentTool(
             name = "comfy_find_workflow",
-            description = "在库里的提示词中找一个**能直接跑的工作流**（按标题/正文关键词搜索）。" +
-                "返回它的参数摘要（采样器 / steps / cfg / seed / 尺寸 / 提示词）与可覆盖的参数路径，" +
+            description = "找一个**能直接跑的工作流**。先在库里的提示词中搜（按标题/正文关键词）；" +
+                "库里没有时**自动回头看本机 ComfyUI 已保存的工作流文件**" +
+                "（`user\\<用户>\\workflows\\*.json`，结果在 localWorkflows 里，带 path）—— " +
+                "所以\"库里搜不到\"不等于\"这份工作流用不了\"。" +
+                "返回参数摘要（采样器 / steps / cfg / seed / 尺寸 / 提示词）与可覆盖的参数路径，" +
                 "然后就能用 comfy_submit 按同一个工作流再跑一次（改提示词或参数）。",
             parameters = schema(
-                """{"type":"object","properties":{"query":{"type":"string","description":"关键词，匹配标题与正/负面提示词"},"limit":{"type":"integer","description":"最多返回几条，默认 5，最多 20"},"includeGraph":{"type":"boolean","description":"是否带上完整 API 节点图（默认 false；要看节点编号与输入名时才带上）"}},"required":["query"],"additionalProperties":false}"""
+                """{"type":"object","properties":{"query":{"type":"string","description":"关键词：匹配库里的标题与正/负面提示词，也会匹配本机工作流文件名（如 krea2）"},"limit":{"type":"integer","description":"最多返回几条，默认 5，最多 20"},"includeGraph":{"type":"boolean","description":"是否带上完整 API 节点图（默认 false；要看节点编号与输入名时才带上）"}},"required":["query"],"additionalProperties":false}"""
             ),
             category = ToolCategory.COMFY,
             mutating = false,
@@ -477,13 +490,57 @@ class ToolRegistry(
             val includeGraph = args.bool("includeGraph") ?: false
             val found = comfyFindWorkflow(query, limit, includeGraph)
             if (found.count == 0) {
-                throw ToolFailure(
-                    "NOT_FOUND",
-                    "库里没有匹配「$query」的提示词。可以先用更短的关键词再搜一次，" +
-                        "或者让用户先在 ComfyUI 里手动跑一次（跑过之后就会自动被捕获）。",
-                )
+                // 用户 bug ⑤：库里搜不到是**首次使用的常态**（库只收"捕获过的运行"）。
+                // 这时候绝不能回一句"库里没有"就收摊 —— 用户机器上那份工作流一直在磁盘上，
+                // 立刻列给他，他拿 path 就能 comfy_load_workflow 读进来跑。
+                val local = comfyListWorkflows(query, 8)
+                val localCount = (local["count"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull() ?: 0
+                if (localCount > 0) {
+                    val merged = buildJsonObject {
+                        put("count", 0)
+                        put("query", query)
+                        put("workflows", buildJsonArray { })
+                        put("localWorkflows", local["files"] ?: buildJsonArray { })
+                        put("dirs", local["dirs"] ?: buildJsonArray { })
+                        put(
+                            "hint",
+                            "库里（捕获过 / 读进来过的工作流）没有匹配「$query」的，" +
+                                "但**本机 ComfyUI 里存着上面这些工作流文件**。它们不需要先跑一次：" +
+                                "直接 comfy_load_workflow(path=…, includeGraph=true) 读进库（拿 promptId + 节点/输入名），" +
+                                "再 comfy_submit 提交。**不要跟用户说「得先跑一次才会被捕获」**。",
+                        )
+                    }
+                    ToolOutput(AppJson.encodeToString(JsonElement.serializer(), merged), merged)
+                } else {
+                    throw ToolFailure(
+                        "NOT_FOUND",
+                        "库里没有匹配「$query」的提示词，本机 ComfyUI 的 workflows 目录里也没有文件名匹配它的工作流。" +
+                            "可以先用更短的关键词再搜一次（例如只用模型名），或者不带关键词用 comfy_list_workflows " +
+                            "看本机到底存了哪些工作流；再不行就让用户直接把工作流 .json 的完整路径给过来。",
+                    )
+                }
+            } else {
+                ToolOutput(AppJson.encodeToString(JsonElement.serializer(), found.json), found.json)
             }
-            ToolOutput(AppJson.encodeToString(JsonElement.serializer(), found.json), found.json)
+        },
+
+        AgentTool(
+            name = "comfy_list_workflows",
+            description = "列出**本机 ComfyUI 里已经保存的工作流文件**（`user\\<用户>\\workflows\\*.json`），" +
+                "带完整路径、格式（ui/api）与是否已经在本项目库里（inLibrary / promptId）。" +
+                "**首次使用、或者 comfy_find_workflow 什么都搜不到时，先看这里** —— " +
+                "这些工作流不需要在 ComfyUI 里跑过一次才可用：" +
+                "拿到 path 直接 comfy_load_workflow(path=…) 读进库，再用返回的 promptId 提交。" +
+                "只读，不改用户的文件。",
+            parameters = schema(
+                """{"type":"object","properties":{"query":{"type":"string","description":"按**文件名**过滤（大小写不敏感的子串，例如 krea2）；不填就列最近修改的若干份"},"limit":{"type":"integer","description":"最多列几份，默认 20，最多 100"}},"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = false,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, _ ->
+            val json = comfyListWorkflows(args.str("query"), (args.int("limit") ?: 20).coerceIn(1, 100))
+            ToolOutput(AppJson.encodeToString(JsonElement.serializer(), json), json)
         },
 
         AgentTool(

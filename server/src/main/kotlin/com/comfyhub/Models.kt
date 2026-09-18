@@ -366,3 +366,17 @@ data class ImportFolderResult(
     val errors: List<String> = emptyList(),
 )
 
+/**
+ * 「导入本机工作流文件」（用户 bug ⑤）的请求。
+ *
+ * [dir] 不填就**自动发现**本机 ComfyUI 的 `user\<用户>\workflows` 目录（推荐，见 [ComfyWorkflowFiles.dirs]）；
+ * 填了就当它是那个 workflows 目录本身（给脚本 / e2e 用，也方便用户指一个别处的目录）。
+ */
+@Serializable
+data class ImportWorkflowsRequest(
+    val dir: String? = null,
+    val limit: Int = 200,
+    /** 只导入文件名匹配这个关键词的（可选） */
+    val query: String? = null,
+)
+

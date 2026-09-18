@@ -235,6 +235,13 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   会让 `read_file` 读不了用户自己的工作流文件。**这只放宽读** —— 写仍然只认 `<根>\comfyui`，
   `comfy_use_attachment` 往 ComfyUI `input\` 投放那条专用通道不受影响。
   判定仍是"认特征文件"（复用 `ComfyLocator.looksLikeComfy`），搜索有界（深度 ≤3、只往名字带 comfy 的分支下钻）。
+- **本机 ComfyUI 的工作流文件是"库"之外的第二来源**（用户 bug ⑤，2026-09-18）：`prompts` 库只收
+  "捕获过的运行"与"手动读进来的文件"，所以**首次使用时库必然是空的** —— 而
+  `user\<用户>\workflows\*.json` 早就存在。`ComfyWorkflowFiles` 现探这些目录（配置的输出目录父目录 →
+  `ComfyLocator` → `ComfyRoots`），`comfy_list_workflows` / `GET /api/capture/workflows` **只列不写**；
+  批量入库（设置页「导入本机工作流」/ `POST /api/capture/import-workflows`）与 `comfy_load_workflow`
+  用**同一把钥匙** `run_key = file:<sha256>`（所以幂等，重复导入只有一条）。
+  **别把"库里没有"当成"这条工作流用不了"**：系统提示 v13 第 16 条守着这条纪律，`ToolRegistryTest` 盯它。
 - **默认只能写 `<项目根>\comfyui`**（用户要求："默认不能修改 comfy 目录以外的内容"）。新增写入类工具时：
   路径必须过 `ToolPolicy.resolveWrite()` / `resolveRead()`，**不要自己 `Path.of()` 拼**；
   `.git` / `.mysql` / `.run` / `node_modules` 是**永远禁写**的（`ToolPolicyConfig.FORBIDDEN_SEGMENTS`），
@@ -307,8 +314,8 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   "AI 说生成了、画廊里却没有"。只有 `success` 才是"不再重复收"的终态，改这段前先看
   `CaptureRunRetryTest`。
 - 改完这一块请跑两条端到端（都不出网、不花钱）：
-  `pwsh -File scripts\e2e-submit-test.ps1`（提交链路，4 幕：审批闸门 / 真提交 / 参数覆盖 /
-  工作流文件直接提交）与
+  `pwsh -File scripts\e2e-submit-test.ps1`（提交链路，6 幕：审批闸门 / 真提交 / 参数覆盖 /
+  工作流文件直接提交 / 前端节点缺口补线 / 本机工作流列出来并一键入库）与
   `pwsh -File scripts\e2e-capture-test.ps1`（捕获链路）。它们会临时改自动捕获配置、
   建一个 loopback Provider，跑完自己还原并清理数据；`-KeepData` 可以留着看效果。
   **别在跑完前 Ctrl+C**：清理在 finally 里，中断会留下 `e2e-submit-*` 的运行记录，

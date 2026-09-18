@@ -21,6 +21,10 @@
       6. 工作流文件可直接提交   —— 界面格式（nodes/links）按 /object_info 转成 API 节点图，
                                    控件值按声明顺序贴回名字、连线还原成 ["上游id", 槽位]，
                                    转换结果真的能提交并生效（用户 bug ③）
+      7. 本机工作流文件看得见   —— 库只收"捕获过的运行 + 手动读进来的文件"，所以**首次使用时
+                                    库里是空的**；而工作流文件一直躺在 `user\<用户>\workflows` 下。
+                                    这一幕验：只读接口列得出它们、AI 的 `comfy_list_workflows` 也看得见、
+                                    一键导入真的入库且幂等（用户 bug ⑤）
 
     前置条件：MySQL + 后端在跑（scripts\comfyhub.ps1 up），本机有 python，
     库里至少有 1 条**带 API 节点图**的提示词（runnable=true）。
@@ -299,7 +303,7 @@ try {
 
     # --- 3. 发一次「提交」，工具调用应当是"待批准"而不是直接执行 -----------
     Say ''
-    Say '  [1/5] comfy_submit 默认要用户批准' 'Cyan'
+    Say '  [1/6] comfy_submit 默认要用户批准' 'Cyan'
     $conv = Invoke-Api 'POST' '/api/ai/conversations' @{ providerId = $ProviderId; modelId = 'fake-title-model' }
     $run = Invoke-Api 'POST' "/api/ai/conversations/$($conv.id)/runs" @{
         text = "帮我用工作流 $($target.id) 提交 $($target.id) $overridePath=$overrideValue"
@@ -314,7 +318,7 @@ try {
 
     # --- 4. 批准 → 真的提交 → 入库 ----------------------------------------
     Say ''
-    Say '  [2/5] 批准之后才真的提交并入库' 'Cyan'
+    Say '  [2/6] 批准之后才真的提交并入库' 'Cyan'
     $approve = Invoke-Api 'POST' "/api/ai/tool-calls/$callId/approve" @{}
     Check '批准被后端接受' ($approve.accepted -eq $true) ($approve | ConvertTo-Json -Compress)
 
@@ -349,7 +353,7 @@ try {
 
     # --- 5. 参数覆盖与"提交的就是库里的图" --------------------------------
     Say ''
-    Say '  [3/5] 参数覆盖与提交内容' 'Cyan'
+    Say '  [3/6] 参数覆盖与提交内容' 'Cyan'
     $submitted = (Invoke-RestMethod "http://127.0.0.1:$ComfyPort/__submitted").runs
     Check '假 ComfyUI 收到了 1 次提交' ($submitted.Count -eq 1) "$($submitted.Count) 次"
     if ($submitted.Count -ge 1) {
@@ -372,7 +376,7 @@ try {
     #   ② 界面格式（nodes/links）被按 ComfyUI 的 /object_info 转成 API 节点图；
     #   ③ 转换出来的图真的提交给了 ComfyUI，且参数覆盖生效。
     Say ''
-    Say '  [4/5] 工作流文件直接提交（界面格式 → API 节点图）' 'Cyan'
+    Say '  [4/6] 工作流文件直接提交（界面格式 → API 节点图）' 'Cyan'
 
     $uiWorkflowPath = Join-Path $WfDir 'e2e_ui_workflow.json'
     New-Item -ItemType Directory -Path $WfDir -Force | Out-Null
@@ -493,7 +497,7 @@ try {
     # 由模型用 comfy_submit(connections=…) 把线补上再跑 —— 补的是"哪根线接哪"，
     # 猜的那部分仍然由 ComfyUI 自己的校验兜底。
     Say ''
-    Say '  [5/5] 前端节点转不出来：模型按缺口清单补线再提交（用户建议 ②）' 'Cyan'
+    Say '  [5/6] 前端节点转不出来：模型按缺口清单补线再提交（用户建议 ②）' 'Cyan'
 
     $gapPath = Join-Path $WfDir 'e2e_ui_gap_workflow.json'
     $gapWorkflow = @'
@@ -596,6 +600,83 @@ try {
         Check '被摘掉的前端节点没有混进提交的图' `
             ($null -eq $g5.PSObject.Properties['2']) (@($g5.PSObject.Properties.Name) -join ',')
     }
+    # --- 8. 本机 ComfyUI 已保存的工作流文件（用户 bug ⑤）--------------------
+    #
+    # 现场：用户说"基于 krea2SFWNSFWUncensoredImageTo_v10 生成"，AI 回"库里搜不到这条工作流，
+    # 要么把 .json 路径发我，要么你在 ComfyUI 里点一次 Queue 让它被自动捕获"。
+    # 根因：库只收"捕获过的运行 + 手动读进来的文件"，所以**首次使用时库里必然是空的** ——
+    # 而那份文件一直躺在 `user\<用户>\workflows` 里。这一幕验三件事：
+    #   ① 只读接口能把它们列出来（带路径 / 格式 / 是否已入库）；
+    #   ② AI 的 `comfy_list_workflows` 也看得见（第一次就不必让用户报路径）；
+    #   ③ 一键导入真的入库，而且重复点是幂等的。
+    Say ''
+    Say '  [6/6] 本机工作流文件：列出来 + 一键入库（用户 bug ⑤）' 'Cyan'
+
+    # 本机工作流目录 = **配置的输出目录的父目录**下的 user\<用户>\workflows
+    # （ComfyWorkflowFiles 认的第一条来源；ComfyUI 真实的形状就是 output 与 user 并列）
+    $localWfDir = Join-Path $WorkDir 'user/default/workflows'
+    New-Item -ItemType Directory -Path $localWfDir -Force | Out-Null
+    $localWfPath = Join-Path $localWfDir 'e2e_local_workflow.json'
+    # 内容必须与第 4 幕那份**不同**：入库幂等靠 `run_key = file:<sha256>`，
+    # 同一份内容会走"已在库里"那条分支（这一幕验的是"新导入"）；
+    # 而且**每轮都不一样** —— 上一轮要是被打断（清理没跑完），库里那份会让"尚未入库"永远红
+    # （第 1 幕给假图随机颜色是同一个理由）
+    $localWorkflow = $uiWorkflow.Replace('a cyberpunk cat', "a local cat $PID")
+    Set-Content -Path $localWfPath -Value $localWorkflow -Encoding utf8
+
+    $listed = Invoke-Api 'GET' '/api/capture/workflows?q=e2e_local' $null
+    $hitListed = @($listed.files) | Where-Object { $_.name -eq 'e2e_local_workflow.json' } | Select-Object -First 1
+    Check '只读接口列出了本机工作流文件（带路径 / 格式 / 尚未入库）' `
+        ($null -ne $hitListed -and $hitListed.path -eq $localWfPath `
+            -and $hitListed.format -eq 'ui' -and $hitListed.inLibrary -eq $false) `
+        ($listed | ConvertTo-Json -Depth 4 -Compress)
+
+    $conv5 = Invoke-Api 'POST' '/api/ai/conversations' @{ providerId = $ProviderId; modelId = 'fake-title-model' }
+    $listRun = Invoke-Api 'POST' "/api/ai/conversations/$($conv5.id)/runs" @{
+        text = '列出工作流 e2e_local'
+        providerId = $ProviderId; modelId = 'fake-title-model'
+    }
+    $listMsg = $null
+    foreach ($i in 1..120) {
+        Start-Sleep -Milliseconds 400
+        $msgs = Invoke-Api 'GET' "/api/ai/conversations/$($conv5.id)/messages" $null
+        $listMsg = $msgs | Where-Object { $_.id -eq $listRun.assistantMessageId } | Select-Object -First 1
+        if ($listMsg -and ($listMsg.status -eq 'complete' -or $listMsg.status -eq 'failed')) { break }
+    }
+    # 只看 tool_result：tool_requested 那一份的 jsonPayload 里也有 name（text 是空的），
+    # 不加 type 过滤会挑中它，断言就会莫名其妙地红（踩过）
+    $listParts = @()
+    if ($listMsg) { $listParts = @($listMsg.parts | Where-Object { $_.type -eq 'tool_result' }) }
+    $listTr = $listParts | Where-Object { $_.jsonPayload.name -eq 'comfy_list_workflows' } | Select-Object -First 1
+    Check 'comfy_list_workflows 只读执行成功（ok=true）' `
+        ($null -ne $listTr -and $listTr.jsonPayload.ok -eq $true) `
+        $(if ($listTr) { $listTr.text } else { '没有 comfy_list_workflows 的结果' })
+    if ($listTr -and $listTr.jsonPayload.ok -eq $true) {
+        $listOut = $listTr.text | ConvertFrom-Json
+        $hitAi = @($listOut.files) | Where-Object { $_.name -eq 'e2e_local_workflow.json' } | Select-Object -First 1
+        Check 'AI 拿到了那份文件的完整路径（不必再让用户报路径）' `
+            ($null -ne $hitAi -and $hitAi.path -eq $localWfPath) $(if ($hitAi) { $hitAi.path })
+        Check '结果里说清"不必先跑一次、直接读进库"' ($listTr.text -match 'comfy_load_workflow') `
+            '提示里要点名 comfy_load_workflow'
+    }
+
+    # 一键导入（设置页那颗「导入本机工作流」按钮走的就是这个接口）
+    $import1 = Invoke-Api 'POST' '/api/capture/import-workflows' @{ dir = $localWfDir }
+    Check '一键导入真的把工作流读进了库' `
+        ($import1.imported -eq 1 -and @($import1.promptIds).Count -eq 1) `
+        ($import1 | ConvertTo-Json -Depth 4 -Compress)
+    $script:LocalFilePromptId = @($import1.promptIds)[0]
+    $import2 = Invoke-Api 'POST' '/api/capture/import-workflows' @{ dir = $localWfDir }
+    Check '同一份文件重复导入是幂等的（不会又建一条）' `
+        ($import2.imported -eq 0 -and $import2.duplicates -eq 1) `
+        ($import2 | ConvertTo-Json -Depth 4 -Compress)
+    $listed2 = Invoke-Api 'GET' '/api/capture/workflows?q=e2e_local' $null
+    $hit2 = @($listed2.files) | Where-Object { $_.name -eq 'e2e_local_workflow.json' } | Select-Object -First 1
+    # 清理段要删的那条提示词：以**清单里回填的 promptId** 为准（导入结果为空时也不会漏删）
+    $script:LocalFilePromptId = if ($hit2) { $hit2.promptId } else { @($import1.promptIds) | Select-Object -First 1 }
+    Check '导入之后清单如实标出它已经在本项目库里' `
+        ($null -ne $hit2 -and $hit2.inLibrary -eq $true -and $hit2.promptId -eq $script:LocalFilePromptId) `
+        ($listed2 | ConvertTo-Json -Depth 4 -Compress)
 } finally {
     # --- 清理 -------------------------------------------------------------
     Say ''
@@ -637,16 +718,17 @@ try {
             try { Invoke-Api 'DELETE' "/api/media/$id" $null | Out-Null } catch { }
         }
         if ($createdPromptId) { try { Invoke-Api 'DELETE' "/api/prompts/$createdPromptId" $null | Out-Null } catch { } }
-        # 第 4 / 5 幕从文件加载出来的提示词（source=ComfyUI-File）也要清掉，
+        # 第 4 / 5 / 8 幕从文件加载出来的提示词（source=ComfyUI-File）也要清掉，
         # 否则库里会攒下一堆 e2e 工作流，下一次跑"载入"还会命中同一个 run_key（幂等 → 不算新数据）
-        $filePromptIds = @($script:LoadedPromptId, $script:GapPromptId) | Where-Object { $_ }
+        $filePromptIds = @($script:LoadedPromptId, $script:GapPromptId, $script:LocalFilePromptId) |
+            Where-Object { $_ }
         foreach ($fid in $filePromptIds) {
             try { Invoke-Api 'DELETE' "/api/prompts/$fid" $null | Out-Null } catch { }
         }
         # capture_runs 用**文件内容的 sha256** 精确定位（run_key = `file:<sha256>`）：
         # 只按 prompt_id 删会漏掉"提示词已经被删、prompt_id 置空"的那种残留记录。
         $fileRunKeys = @()
-        foreach ($wf in @($uiWorkflowPath, $gapPath)) {
+        foreach ($wf in @($uiWorkflowPath, $gapPath, $localWfPath)) {
             if ($wf -and (Test-Path $wf)) {
                 $sha = (Get-FileHash -Algorithm SHA256 -Path $wf).Hash.ToLower()
                 $fileRunKeys += "'file:$sha'"
@@ -683,7 +765,7 @@ if ($script:Failed -gt 0) {
     Say ("  ✗ 有 $script:Failed 项没通过，请看上面的 [FAIL]") 'Red'
     exit 1
 }
-Say '  ✓ 全部通过：批准闸门 / 真的提交 / 参数覆盖 / 产物入库 / 工作流文件直接提交 / 前端节点缺口补线' 'Green'
+Say '  ✓ 全部通过：批准闸门 / 真的提交 / 参数覆盖 / 产物入库 / 工作流文件直接提交 / 前端节点缺口补线 / 本机工作流看得见' 'Green'
 Say ("  （{0} 项检查）" -f $script:Checks) 'DarkGray'
 Say ''
 exit 0

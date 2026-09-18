@@ -41,6 +41,29 @@ bug:
   灌回输入框。现在：准入判断同步化（`sendBlockReason()`，被拒时不动输入框）、草稿在第一次通知前作废、
   用户打的字一律认领到当前会话；回归用例 4 条，见 [`ai-home-progress-v0.1.md`](ai-home-progress-v0.1.md) §4.13）
 
+* ~~"**我需要在本项目进程存活的时候，产生新工作流运行的记录才会入库**，这不对吧"~~ → **已修，你说得对**（2026-09-18）
+  （现场：你说"基于 `krea2SFWNSFWUncensoredImageTo_v10` 生成"，AI 回"库里搜不到这条工作流，
+  要么把 `.json` 路径发我、要么你在 ComfyUI 里点一次 Queue 让它被自动捕获" —— 而那份文件
+  **一直躺在磁盘上**：`…\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows\krea2…v10.json`。
+  根因是库的来源：`prompts` 只有两个入口 —— 自动捕获（只收"本进程活着的时候跑过的"）与
+  手动按路径读，所以**首次使用时库里必然是空的**。三处一起改：
+  ① 新增 `comfy_list_workflows`（只读）列出本机 ComfyUI 已保存的工作流文件，
+  `comfy_find_workflow` 在库里搜不到时**自动带上**它们（`localWorkflows`，带 path）；
+  ② `NOT_FOUND` 兜底文案与系统提示 **v13 第 16 条**给出正确顺序
+  （`comfy_find_workflow` → `comfy_list_workflows` → `comfy_load_workflow(path=…)` → `comfy_submit`），
+  并**明确禁止**再说"得先在 ComfyUI 里跑一次才会被捕获"；
+  ③ 设置页 →「ComfyUI 自动捕获」加一颗**「导入本机工作流」**按钮
+  （`POST /api/capture/import-workflows`）把目录里的工作流批量读进库，幂等
+  （`run_key = file:<sha256>`，与 `comfy_load_workflow` 同一把钥匙）；转换不了的那份也照样入库、
+  如实标 `runnable=false`。另有只读的 `GET /api/capture/workflows?q=`。
+  防线：`ComfyWorkflowFilesTest` 7 例 + `ToolRegistryTest` 3 例（回落 / `NOT_FOUND` 指路 / 只读 allow）
+  + `e2e-submit-test.ps1` 第 6 幕 6 项断言。**本机实测**：11 份工作流全部列得出来，
+  `krea2SFWNSFWUncensoredImageTo_v10.json` 就在里面）
+* ~~代码块里的内容超过宽度只能横向拖~~ → **已改**（2026-09-18）
+  （`lib/widgets/markdown_view.dart`：**不含换行符**的代码块改成软换行 —— 超过容器宽度就折行显示，
+  必要时连超长单词也拆开；**多行**代码块**保持横向滚动**：缩进 / 对齐 / 表格状输出是有意义的排版，
+  自动折行反而更难读。回归用例 `test/markdown_test.dart` 两条：单行折行 + 多行仍可横滚）
+
 建议：
 
 * ~~“生成的产物”包括生成的工作流~~ → **已做**（2026-09-18）

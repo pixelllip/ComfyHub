@@ -250,4 +250,41 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'RenderFlex overflow 会在这里冒出来');
     });
   });
+
+  group('代码块：单行超宽要换行，多行保持横向滚动', () {
+    const oneLine = 'curl -X POST http://127.0.0.1:8080/api/ai/conversations/xxx/runs '
+        '-H "Content-Type: application/json" -d @body.json';
+
+    Future<void> pump(WidgetTester tester, String reply) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Center(child: SizedBox(width: 320, child: MarkdownText(reply))),
+        ),
+      ));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('单行代码块超过容器宽度时折行（不再横向滚动）', (tester) async {
+      await pump(tester, '```\n$oneLine\n```');
+
+      expect(tester.takeException(), isNull);
+      // 不再有横向滚动容器
+      expect(find.byType(SingleChildScrollView), findsNothing,
+          reason: '单行代码块该折行显示，而不是让人横向拖着看');
+      final size = tester.getSize(find.text(oneLine));
+      expect(size.width, lessThanOrEqualTo(320), reason: '不能超出容器宽度');
+      // 一行的高度约 13.5 × 1.4 ≈ 19；折行之后一定明显更高
+      expect(size.height, greaterThan(30), reason: '要真的折成多行（实际高 ${size.height}）');
+    });
+
+    testWidgets('多行代码块仍然横向滚动（缩进与对齐不能被自动折行破坏）', (tester) async {
+      const multi = 'line-one-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+          'line-two-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      await pump(tester, '```\n$multi\n```');
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(SingleChildScrollView), findsOneWidget);
+      expect(find.text(multi), findsOneWidget);
+    });
+  });
 }

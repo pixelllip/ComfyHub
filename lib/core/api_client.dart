@@ -344,6 +344,18 @@ class ApiClient {
         'tags': tags,
       }) as Map));
 
+  /// 把**本机 ComfyUI 里已经保存的工作流文件**批量读进库（用户 bug ⑤）。
+  ///
+  /// `dir` 不传就自动发现本机 ComfyUI 的 `user\<用户>\workflows` 目录 ——
+  /// 过去这些工作流只有"在 ComfyUI 里跑过一次被捕获"或"AI 手动按路径读"才会进库，
+  /// 首次使用时库里是空的。
+  Future<ImportWorkflowsResult> importWorkflowFiles({String? dir, int limit = 200}) async =>
+      ImportWorkflowsResult.fromJson(Map<String, dynamic>.from(
+          await _send('POST', '/api/capture/import-workflows', {
+        if (dir != null && dir.isNotEmpty) 'dir': dir,
+        'limit': limit,
+      }) as Map));
+
   /// 提示词对应的完整工作流 JSON；没存过返回 null
   Future<String?> promptWorkflow(int promptId) => _workflowText('/api/prompts/$promptId/workflow');
 
