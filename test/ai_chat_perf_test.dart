@@ -650,6 +650,59 @@ void main() {
         reason: '第一条消息不能被顶到视口上面去（用户报的"直接消失"）');
   });
 
+  // 上面两条证明"总长精确"。这条把结论落到**用户看到的那个滑块**上：
+  // 滑块的长度 = `viewport / (maxScrollExtent + viewport)`，位置 = `pixels / maxScrollExtent`
+  // —— 总长一稳，滑块就稳。
+  //
+  // （不直接 `find.byType(RawScrollbar)`：widget test 的运行平台不是桌面，
+  //  Material 也不会给它挂滚动条，那样断言只会红得没有意义。
+  //  这里按滑块的**定义**算，等价于量它。）
+  //
+  // 视口按本机真实显示设置来（1707×920 物理 / dpr 1.25 → 1366×736 逻辑），
+  // 免得"逻辑像素下没问题、真实缩放下才有问题"。
+  testWidgets('滚动条滑块：往上滚时长度不变、位置单调，不会来回跳', (tester) async {
+    tester.view.physicalSize = const Size(1707, 920);
+    tester.view.devicePixelRatio = 1.25;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _homePage(_backend(_Fake(text: _lines(1, 60)))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('卡顿复现'));
+    await tester.pumpAndSettle();
+
+    final position = tester.state<ScrollableState>(
+      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
+    ).position;
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pump();
+
+    // 应用用默认的 Material 滚动条：滑块长度与位置就是下面这两个比值。
+    double thumbRatio() =>
+        position.viewportDimension / (position.maxScrollExtent + position.viewportDimension);
+    double thumbProgress() => position.pixels / position.maxScrollExtent;
+
+    final thumbs = <double>{};
+    final progress = <double>[];
+    for (var i = 0; i < 12; i++) {
+      await tester.pump();
+      thumbs.add(thumbRatio());
+      progress.add(thumbProgress());
+      position.jumpTo((position.pixels - 400).clamp(0.0, position.maxScrollExtent));
+      await tester.pump();
+      if (position.pixels <= 0) break;
+    }
+
+    // 滑块长度只该随"总长"变；总长精确时它全程一致（旧版估算会一路变短）
+    expect(thumbs.length, 1,
+        reason: '总长精确 → 滑块长度全程不变，实测 ${thumbs.map((t) => t.toStringAsFixed(4)).toSet()}');
+    // 位置单调：往上滚，滑块只会越来越靠近顶部，不会往回跳
+    for (var i = 1; i < progress.length; i++) {
+      expect(progress[i], lessThanOrEqualTo(progress[i - 1] + 0.001),
+          reason: '往上滚时滑块位置必须单调上移，不能跳回来'
+          '（实测 ${progress.map((t) => t.toStringAsFixed(3)).toList()}）');
+    }
+  });
+
   // 用户 bug（2026-09-20）："在最新一条聊天记录里，滚动条会跳变 1/3 的进度。"
   //
   // 根因：懒构建的 `ListView.builder` 对**还没布局到的**子项只能估算总长，
