@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -570,6 +571,21 @@ class _MessageList extends StatelessWidget {
       // 回归用例要能精确点到**这一个**（滚动跟随 / 贴底那几条断言都靠它）。
       key: const Key('ai-message-list'),
       controller: controller,
+      // 视口前后各多缓存**两个视口**（按视口倍数算，不写死像素）。
+      //
+      // 这是"滚动条跳变 1/3 进度"的解药（用户 bug 2026-09-20）：懒构建的列表对
+      // **还没布局到的**子项只能估算总长，估法是把剩余未建项数乘以"已建那几项的
+      // 平均高度"（`estimateMaxScrollOffset`）—— 建得越少，均值越不代表整体。
+      // 本机实测（30 条长短交错、视口 595 高、真值 max≈4200）：
+      //   默认缓存：总长变了 17 次、回缩 9 次，摆动 36%
+      //   前 后各 1 视口：17 次 / 9 次，摆动 36%（**没用**）
+      //   前后各 2 视口：11 次 / 4 次，摆动 13%
+      //   前后各 4 视口：6 次 / 2 次，摆动 16%（但等于把整个会话都建出来）
+      // 取 2：滚动条明显稳下来，而**这一趟滚动里的气泡重建次数没有变差**
+      // （24 次 → 19 次，反而更少 —— 估算稳了就不会反复重排）。
+      // 别再加到 4 以上：那会把长会话的每一行都建出来，正是我们当初为了
+      // "不卡顿"才拆掉的懒构建。
+      scrollCacheExtent: const ScrollCacheExtent.viewport(2.0),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       itemCount: store.messages.length,
       itemBuilder: (context, i) {

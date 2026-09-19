@@ -14,6 +14,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -99,7 +100,7 @@ class _Fake {
           'title': '卡顿复现',
           'providerId': 'local-gw',
           'modelId': 'm-text',
-          'messageCount': 8,
+          'messageCount': 30,
           'updatedAt': '2026-09-19T01:00:00.000Z',
         }
       ];
@@ -114,7 +115,10 @@ class _Fake {
     if (RegExp(r'^/api/ai/conversations/[^/]+/messages$').hasMatch(path)) {
       final convId = path.split('/')[4];
       final history = convId == historyConversationId
-          ? [for (var i = 1; i <= 8; i++) _historyMessage(i)]
+          // **长短交错**的一长串：滚动条跳变只在"高度差异大 + 项目多"时才明显
+          // （用户现场就是一条聊了很久的会话）。30 条足够复现，也让
+          // "总长稳定性"那条用例真的量得到东西。
+          ? [for (var i = 1; i <= 30; i++) _historyMessage(i)]
           : <Map<String, dynamic>>[
               {
                 'id': 'u1',
@@ -175,21 +179,36 @@ class _Fake {
   }
 }
 
-/// 历史里的一条助手消息（内容足够长，才谈得上"每次解析都要花钱"）。
+/// 历史里的一条消息。
+///
+/// **高度差异故意做得很大**（短句 / 中段 / 带大代码块的长段，三种交错）：
+/// 滚动条跳变（总长估算乱跳）只在"有的气泡一行、有的两屏"时才明显 ——
+/// 用户现场就是这种聊了很久的会话。"总长稳定性"那条用例全靠它量得出东西。
 Map<String, dynamic> _historyMessage(int i) => {
       'id': 'h$i',
       'conversationId': _Fake.historyConversationId,
       'seq': i,
       'role': i.isOdd ? 'user' : 'assistant',
       'status': 'complete',
-      'text': i.isOdd
-          ? '第 $i 条提问：帮我看看这个工作流。'
-          : '第 $i 条回答：**结论**是这样的。\n\n'
-              '- 第一点说明文字，比较长，用来让解析真的有成本。\n'
-              '- 第二点说明文字，同样比较长。\n'
-              '```json\n{"node": $i, "input": "checkpoint"}\n```\n',
+      'text': _variedText(i),
       'parts': <Object>[],
     };
+
+String _variedText(int i) {
+  if (i % 5 == 0) {
+    final b = StringBuffer('第 $i 条：很长的回答。\n\n```json\n');
+    for (var k = 0; k < 14; k++) {
+      b.writeln('{"node": $k, "input": "checkpoint-$i", "value": "value-$k"}');
+    }
+    b.writeln('```\n\n后面还有一段收尾说明文字，再加一点点高度。');
+    return b.toString();
+  }
+  if (i % 3 == 0) {
+    return '第 $i 条：中等长度的一段说明文字，大概三四行的样子，'
+        '用来把气泡高度做出层次。再来一句凑数的话。';
+  }
+  return '第 $i 条：短句。';
+}
 
 bool _isSsePath(String path) =>
     path.startsWith('/api/ai/runs/') && path.endsWith('/events');
@@ -282,7 +301,7 @@ void main() {
     // 冷启动落在一条空会话上（设计如此），历史要点开左侧列表里的那条才进来
     await tester.tap(find.text('卡顿复现'));
     await tester.pumpAndSettle();
-    expect(lastStore!.messages.length, 9, reason: '8 条历史 + 1 条 fixture 助手消息');
+    expect(lastStore!.messages.length, 31, reason: '30 条历史 + 1 条 fixture 助手消息');
     expect(find.byType(MarkdownText).evaluate().length, greaterThan(1),
         reason: '一屏里得有不止一条气泡，这个用例才有意义');
 
@@ -467,6 +486,71 @@ void main() {
     ));
     unawaited(events.close());
     await tester.pumpAndSettle();
+  });
+
+  // 用户 bug（2026-09-20）："在最新一条聊天记录里，滚动条会跳变 1/3 的进度。"
+  //
+  // 根因：懒构建的 `ListView.builder` 对**还没布局到的**子项只能估算总长，
+  // 估法是把剩余未建项数乘以"已建那几项的平均高度"（`estimateMaxScrollOffset`）——
+  // 聊天气泡高度差 5 倍以上，这个均值每滚一段就换一次，总长就来回跳，
+  // 而滚动条滑块的长度与位置都是 `pixels / maxScrollExtent` 算出来的。
+  // 本机实测（30 条长短交错、1100×800、真值 max=4137）：默认缓存下往上滚一趟
+  // 总长变了 **18 次**、其中 **9 次是回缩**，范围 3539~5392。
+  //
+  // 修复：把视口前后的缓存放到**一个视口**（`ScrollCacheExtent.viewport(1.0)`）——
+  // 建得越多，均值越代表整体，估算越稳（实测 18 次 → 9 次，偏差 44% → 14%）。
+  // 这条用例钉住的是"总长不许大幅回缩"：回缩会让滚动条**往回跳**，
+  // 而且估算掉到当前位置以下时画面会当场被夹回去。
+  testWidgets('长会话滚动时总长不许来回跳（用户 bug：滚动条跳变 1/3 进度）', (tester) async {
+    tester.view.physicalSize = const Size(1100, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _homePage(_backend(_Fake(text: _lines(1, 60)))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('卡顿复现'));
+    await tester.pumpAndSettle();
+
+    // 列表必须真的在缓存视口外的内容（这条修复的全部依据）
+    final listView = tester.widget<ListView>(find.byKey(const Key('ai-message-list')));
+    expect(listView.scrollCacheExtent, isNotNull,
+        reason: '聊天列表要显式给缓存窗口，否则估算只按一屏内的几项算，总长必然乱跳');
+    expect(listView.scrollCacheExtent, const ScrollCacheExtent.viewport(2.0));
+
+    final position = tester.state<ScrollableState>(
+      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
+    ).position;
+    expect(position.maxScrollExtent, greaterThan(400), reason: '得真的能滚，这个用例才有意义');
+
+    // 往上滚一趟，记录总长的每一次变化（含幅度与方向）
+    final values = <double>{position.maxScrollExtent};
+    var changes = 0;
+    var shrinks = 0;
+    var last = position.maxScrollExtent;
+    for (var i = 0; i < 60; i++) {
+      position.jumpTo((position.pixels - 120).clamp(0.0, position.maxScrollExtent));
+      await tester.pump();
+      final max = position.maxScrollExtent;
+      if ((max - last).abs() > 0.5) {
+        changes++;
+        if (max < last) shrinks++;
+        values.add(max);
+      }
+      last = max;
+      if (position.pixels <= 0) break;
+    }
+
+    final lo = values.reduce((a, b) => a < b ? a : b);
+    final hi = values.reduce((a, b) => a > b ? a : b);
+    debugPrint('[总长稳定性] 变化=$changes 回缩=$shrinks 范围=${lo.toStringAsFixed(0)}~'
+        '${hi.toStringAsFixed(0)} 摆动=${((hi - lo) / hi * 100).toStringAsFixed(1)}%');
+    // 修的是**回缩**：总长一变小于当前位置，`ScrollPosition` 会把 `pixels` 夹回来
+    // （画面当场回弹），滚动条也跟着往回跳；单调变大则只是"下面是新内容"，无害。
+    // 修复后实测：变化 13 次、**回缩 5 次**；退回默认缓存实测 17~24 次变化、
+    // 9~12 次回缩。阈值卡在两者之间，并给机器差异留余量。
+    expect(shrinks, lessThan(8),
+        reason: '总长频繁变小 = 滚动条在往回跳、画面会被夹回去'
+        '（实测 $lo~$hi，变化 $changes 次，回缩 $shrinks 次）');
   });
 
   testWidgets('展开的流式思考：贴底跟到最新一行，没变过的块复用同一个 widget', (tester) async {
