@@ -39,6 +39,15 @@ class _AiHomePageState extends State<AiHomePage> {
   /// 缓存 store：`dispose()` 里不能再碰 `context`
   late AiWorkspaceStore _store;
 
+  /// 左侧会话列表（宽屏左栏 / 窄屏抽屉共用同一个实例）。
+  ///
+  /// **必须是常驻字段，不能在 `build()` 里新建**：页面在流式回包 / 进度轮询时
+  /// 每通知一次就重建一次，若每次都 `_ConversationList(...)` 造一个新 widget，
+  /// Flutter 的 `canUpdate` 会认下来并调 `State.build()` —— 侧栏（几十个
+  /// ListTile + 每个一个菜单锚点 + Tooltip）就跟着重排，正是 DevTools 里
+  /// 那一帧 24.7ms Build 的来源。实例不变时整棵子树被跳过。
+  late final Widget _conversationList;
+
   /// 正在把草稿写回输入框。这时**必须屏蔽** `_onInputChanged` ——
   /// 否则"清空输入框"这个动作会被当成"用户把字删光了"，把刚取回来的草稿覆盖成空串
   /// （切走再切回来字就没了，用户报的 bug ②）。
@@ -62,6 +71,7 @@ class _AiHomePageState extends State<AiHomePage> {
     if (_loaded) return;
     _loaded = true;
     _store = context.read<AiWorkspaceStore>();
+    _conversationList = _ConversationList(onRename: _rename);
     _input.addListener(_onInputChanged);
     _scroll.addListener(_onScroll);
     _store.addListener(_onStoreChanged);
@@ -216,67 +226,43 @@ class _AiHomePageState extends State<AiHomePage> {
     // 现在宽屏分支在这个区间把入口补到 AppBar 上（见 `onShowStatus`）。
     final showPanel = wide && width >= 1200;
 
-    final conversationList = _ConversationList(store: store);
+    final conversationList = _conversationList;
     // AppBar 显示**当前对话标题**（用户建议 ④）：标题是自动总结出来的，
     // 所以它得一直在视野里，用户才知道自己在哪条对话里、也可以随手改名。
-    final thread = Column(
-      children: [
-        _ConversationAppBar(
-          store: store,
-          // 只有"宽屏但不够宽到铺第三栏"这一段才需要在标题栏补入口；
-          // 更窄时有右下角的 FAB，更宽时有第三栏本身。
-          onShowStatus: wide && !showPanel ? () => _showStatusSheet(context, store) : null,
-        ),
-        Expanded(
-          child: Stack(
-            children: [
-              _MessageList(store: store, controller: _scroll),
-              // 回到聊天底部（用户建议 ④）：**只在用户翻上去之后**才出现，
-              // 贴在对话主体右下角，不挡输入区。
-              if (!_atBottom)
-                Positioned(
-                  right: 16,
-                  bottom: 16,
-                  child: Tooltip(
-                    message: '回到最新消息',
-                    child: FloatingActionButton.small(
-                      heroTag: 'ai-jump-bottom',
-                      onPressed: _jumpToBottom,
-                      child: const Icon(Icons.arrow_downward),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        _Composer(
-          store: store,
-          controller: _input,
-          focusNode: _inputFocus,
-          onSubmit: (text) async {
-            // 空输入 + 没有附件：没什么可发的，静默返回（也别弹提示）。
-            if (text.trim().isEmpty && store.attachments.isEmpty) return;
+    //
+    // **对话主体单独抽成一个会 `watch` 的 widget**（[_Thread]）：流式回包 /
+    // ComfyUI 进度轮询每秒会通知好几次，以前是整页（含左侧 240px 会话列表）
+    // 跟着重建 —— DevTools 实测一帧 Build 24.7ms、侧栏每个会话行一次重建
+    // （Tooltip 12 / MenuAnchor 12 / ListTile 10）。现在只有这棵树重建。
+    final thread = _Thread(
+      controller: _scroll,
+      atBottom: _atBottom,
+      input: _input,
+      inputFocus: _inputFocus,
+      onShowStatus: wide && !showPanel ? () => _showStatusSheet(context) : null,
+      onJumpToBottom: _jumpToBottom,
+      onSubmitted: (store, text) async {
+        // 空输入 + 没有附件：没什么可发的，静默返回（也别弹提示）。
+        if (text.trim().isEmpty && store.attachments.isEmpty) return;
 
-            // **只有"真的会被发出去"才清空输入框**。
-            //
-            // 准入判断是同步的、和 `send()` 共用同一份（`store.sendBlockReason()`）：
-            // 被拒时（最常见的是"还在生成中又按了一次回车"）一个字节都不动 ——
-            // 以前是"先清空、再由 send() 拒绝"，用户打的字被静默吃掉，只能自己
-            // 把上一条复制一遍再发一次（用户报的 bug）。
-            //
-            // 清空仍然发生在等待之前：`store.send()` 要一直 await 到整轮结束，
-            // 放到后面就会出现"点了发送输入框里的话还在"，看起来像没反应。
-            if (store.sendBlockReason() == null) {
-              _input.clear();
-              // 用户刚发了消息：无论刚才翻到哪儿，都跳回底部看回复
-              if (mounted) setState(() => _atBottom = true);
-              _scrollToBottom();
-            }
-            await store.send(text);
-            _scrollToBottom();
-          },
-        ),
-      ],
+        // **只有"真的会被发出去"才清空输入框**。
+        //
+        // 准入判断是同步的、和 `send()` 共用同一份（`store.sendBlockReason()`）：
+        // 被拒时（最常见的是"还在生成中又按了一次回车"）一个字节都不动 ——
+        // 以前是"先清空、再由 send() 拒绝"，用户打的字被静默吃掉，只能自己
+        // 把上一条复制一遍再发一次（用户报的 bug）。
+        //
+        // 清空仍然发生在等待之前：`store.send()` 要一直 await 到整轮结束，
+        // 放到后面就会出现"点了发送输入框里的话还在"，看起来像没反应。
+        if (store.sendBlockReason() == null) {
+          _input.clear();
+          // 用户刚发了消息：无论刚才翻到哪儿，都跳回底部看回复
+          if (mounted) setState(() => _atBottom = true);
+          _scrollToBottom();
+        }
+        await store.send(text);
+        _scrollToBottom();
+      },
     );
 
     if (wide) {
@@ -300,13 +286,14 @@ class _AiHomePageState extends State<AiHomePage> {
       body: thread,
       floatingActionButton: FloatingActionButton.small(
         tooltip: 'ComfyUI 状态',
-        onPressed: () => _showStatusSheet(context, store),
+        onPressed: () => _showStatusSheet(context),
         child: const Icon(Icons.dns_outlined),
       ),
     );
   }
 
-  void _showStatusSheet(BuildContext context, AiWorkspaceStore store) {
+  void _showStatusSheet(BuildContext context) {
+    final store = context.read<AiWorkspaceStore>();
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -316,19 +303,169 @@ class _AiHomePageState extends State<AiHomePage> {
       ),
     );
   }
+
+  /// 重命名一条会话（侧栏那行的「重命名」菜单递过来的动作）。
+  Future<void> _rename(BuildContext context, AiConversation c) async {
+    // 页面自己的 State 不再 `watch` store（见 build 的注释）：
+    // 这里按需取，改完由 store 通知侧栏自己重建。
+    final store = context.read<AiWorkspaceStore>();
+    final controller = TextEditingController(text: c.title);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('重命名会话'),
+        content: TextField(controller: controller, autofocus: true),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('保存')),
+        ],
+      ),
+    );
+    if (result != null && result.trim().isNotEmpty) {
+      if (store.conversation?.id == c.id) {
+        await store.renameConversation(result.trim());
+      } else {
+        await store.openConversation(c.id);
+        await store.renameConversation(result.trim());
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  对话主体：AppBar + 消息列表 + 输入区
+// ---------------------------------------------------------------------------
+
+/// 会话主体整棵树。
+///
+/// **单独抽出来是为了把 `watch` 关在这棵子树里**：流式回包（约 60 次/秒的增量、
+/// 攒到一帧仍有一二十次）与 ComfyUI 进度轮询（1.5 秒一次）都会
+/// `notifyListeners()`，以前整页（含左侧 240px 会话列表）跟着重建 ——
+/// DevTools 实测一帧 Build 24.7ms（UI Jank），侧栏每个会话行重建 10~12 次
+/// （Tooltip / MenuAnchor / ListTile 全在表上）。
+/// 侧栏与消息区本来就不相关，不该被对面的刷新拖着重建。
+///
+/// 回调都从外面传进来（滚动位置、输入框控制器、提交动作），
+/// 这样这棵树刷新时上面的页面 State 不必跟着动。
+class _Thread extends StatelessWidget {
+  const _Thread({
+    required this.controller,
+    required this.atBottom,
+    required this.input,
+    required this.inputFocus,
+    required this.onShowStatus,
+    required this.onJumpToBottom,
+    required this.onSubmitted,
+  });
+
+  final ScrollController controller;
+  final bool atBottom;
+  final TextEditingController input;
+  final FocusNode inputFocus;
+  final VoidCallback? onShowStatus;
+  final VoidCallback onJumpToBottom;
+  final Future<void> Function(AiWorkspaceStore store, String text) onSubmitted;
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AiWorkspaceStore>();
+    return Column(
+      children: [
+        _ConversationAppBar(store: store, onShowStatus: onShowStatus),
+        Expanded(
+          child: Stack(
+            children: [
+              _MessageList(store: store, controller: controller),
+              // 回到聊天底部（用户建议 ④）：**只在用户翻上去之后**才出现，
+              // 贴在对话主体右下角，不挡输入区。
+              if (!atBottom)
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: Tooltip(
+                    message: '回到最新消息',
+                    child: FloatingActionButton.small(
+                      heroTag: 'ai-jump-bottom',
+                      onPressed: onJumpToBottom,
+                      child: const Icon(Icons.arrow_downward),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        _Composer(
+          store: store,
+          controller: input,
+          focusNode: inputFocus,
+          onSubmit: (text) => onSubmitted(store, text),
+        ),
+      ],
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
 //  会话列表
 // ---------------------------------------------------------------------------
 
-class _ConversationList extends StatelessWidget {
-  final AiWorkspaceStore store;
-  const _ConversationList({required this.store});
+class _ConversationList extends StatefulWidget {
+  /// 重命名一条会话（对话框在页面那边，这里只负责把动作递过去）。
+  final Future<void> Function(BuildContext context, AiConversation conversation) onRename;
+
+  const _ConversationList({required this.onRename});
+
+  @override
+  State<_ConversationList> createState() => _ConversationListState();
+}
+
+/// 这一栏**只在"会话列表真的变了"时重建**（用户 bug 2026-09-20 的性能现场）。
+///
+/// 为什么不直接 `context.watch`：Provider 的 watch 是"通知一次就重建一次"，
+/// 而流式回包（攒到一帧也有十几次/秒）与 ComfyUI 进度轮询（1.5 秒一次）都会
+/// `notifyListeners()` —— DevTools 实测那些通知把左侧 240px 里每个 ListTile +
+/// 菜单锚点 + Tooltip 全重建了一遍（Rebuild Count 10~12，一帧 Build 24.7ms）。
+/// 会话列表跟"消息在长"没有关系，不该跟着刷。
+///
+/// 这里自己 `addListener`，比较**真正影响这一栏的两样东西**：会话列表本身
+/// 与"当前选中哪一条"。都没变就什么都不做。
+class _ConversationListState extends State<_ConversationList> {
+  late AiWorkspaceStore _store;
+  List<AiConversation> _conversations = const [];
+  String? _selectedId;
+
+  @override
+  void initState() {
+    super.initState();
+    _store = context.read<AiWorkspaceStore>();
+    _snapshot();
+    _store.addListener(_onStoreChanged);
+  }
+
+  @override
+  void dispose() {
+    _store.removeListener(_onStoreChanged);
+    super.dispose();
+  }
+
+  void _snapshot() {
+    _conversations = _store.conversations;
+    _selectedId = _store.conversation?.id;
+  }
+
+  void _onStoreChanged() {
+    if (!mounted) return;
+    final next = _store.conversations;
+    final nextSelected = _store.conversation?.id;
+    if (identical(next, _conversations) && nextSelected == _selectedId) return;
+    setState(_snapshot);
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final store = _store;
+    sidebarBuilds++;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -394,7 +531,7 @@ class _ConversationList extends StatelessWidget {
                         trailing: AppMenuButton<String>(
                           tooltip: '更多',
                           onSelected: (v) {
-                            if (v == 'rename') _rename(context, c);
+                            if (v == 'rename') widget.onRename(context, c);
                             if (v == 'archive') store.archiveConversation(c.id);
                             if (v == 'delete') store.deleteConversation(c.id);
                           },
@@ -424,34 +561,7 @@ class _ConversationList extends StatelessWidget {
       ],
     );
   }
-
-  Future<void> _rename(BuildContext context, AiConversation c) async {
-    final controller = TextEditingController(text: c.title);
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('重命名会话'),
-        content: TextField(controller: controller, autofocus: true),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('保存')),
-        ],
-      ),
-    );
-    if (result != null && result.trim().isNotEmpty) {
-      if (store.conversation?.id == c.id) {
-        await store.renameConversation(result.trim());
-      } else {
-        await store.openConversation(c.id);
-        await store.renameConversation(result.trim());
-      }
-    }
-  }
 }
-
-// ---------------------------------------------------------------------------
-//  AppBar：当前对话标题（用户建议 ④）
-// ---------------------------------------------------------------------------
 
 /// 顶部条：显示**当前对话标题**，可以直接改名，也能看到当前模型与消息数。
 ///
@@ -607,6 +717,12 @@ class _MessageList extends StatelessWidget {
 /// 生产路径上只加一次自增，不参与任何逻辑判断。
 @visibleForTesting
 int aiChatBubbleBuilds = 0;
+
+/// 侧栏整栏 build 的次数（回归用例用它证明"与侧栏无关的通知不会重建侧栏"）。
+///
+/// 生产路径上只加一次自增，不参与任何逻辑判断。
+@visibleForTesting
+int sidebarBuilds = 0;
 
 /// 一条气泡的「重建闸门」（用户 bug：聊天快速上下滑动卡顿 / 展开流式思考后卡顿）。
 ///

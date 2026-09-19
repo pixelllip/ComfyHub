@@ -55,7 +55,7 @@ class _Fake {
   static const String historyConversationId = 'c1';
   static const String freshConversationId = 'c-new';
 
-  Object? body(String method, String path) {
+  Object? body(String method, String path, {String? requestBody}) {
     if (path == '/api/ai/providers') {
       return [
         {
@@ -107,6 +107,19 @@ class _Fake {
     }
     if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) && method == 'DELETE') {
       return {'deleted': true, 'id': path.split('/').last};
+    }
+    if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) && method == 'PATCH') {
+      // 重命名 / 归档走这条（后端回的是改完的那一条会话）
+      final id = path.split('/').last;
+      final patch = jsonDecode(requestBody ?? '{}') as Map<String, dynamic>;
+      return {
+        'id': id,
+        'title': (patch['title'] ?? '卡顿复现').toString(),
+        'providerId': 'local-gw',
+        'modelId': 'm-text',
+        'messageCount': 30,
+        'updatedAt': '2026-09-19T01:00:00.000Z',
+      };
     }
     if (RegExp(r'^/api/ai/conversations/[^/]+/runs$').hasMatch(path)) {
       runCount++;
@@ -219,7 +232,7 @@ MockClient _backend(_Fake fake, {int deltas = 1}) => MockClient((request) async 
         return _sseResponse(fake.textDeltasSse(path.split('/')[4], deltas));
       }
       return http.Response(
-        jsonEncode(fake.body(request.method, path)),
+        jsonEncode(fake.body(request.method, path, requestBody: request.body)),
         200,
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
@@ -233,8 +246,13 @@ MockClient _streamingBackend(_Fake fake, Stream<List<int>> events) =>
         return http.StreamedResponse(events, 200,
             headers: {'content-type': 'text/event-stream; charset=utf-8'});
       }
-      return _jsonResponse(fake.body(request.method, path));
+      return _jsonResponse(fake.body(request.method, path, requestBody: _requestBody(request)));
     });
+
+/// `MockClient.streaming` 给的是 `BaseRequest`（没有 body 字段）——
+/// 真类型是 `Request` 时把 body 取出来，给 PATCH 那条假路由用。
+String? _requestBody(http.BaseRequest request) =>
+    request is http.Request ? request.body : null;
 
 AiWorkspaceStore? lastStore;
 
@@ -551,6 +569,50 @@ void main() {
     expect(shrinks, lessThan(8),
         reason: '总长频繁变小 = 滚动条在往回跳、画面会被夹回去'
         '（实测 $lo~$hi，变化 $changes 次，回缩 $shrinks 次）');
+  });
+
+  // 用户 bug（2026-09-20）的性能现场：DevTools 抓到一帧 **Build 24.7ms**（UI Jank），
+  // Rebuild Stats 上排前几名的全是**左侧会话列表**里的东西
+  // （Tooltip 12 / MenuAnchor 12 / ListTile 10 / AppMenuButton 10）。
+  //
+  // 根因不是滚动本身，是**通知**：流式回包（攒到一帧也有十几次/秒）与 ComfyUI
+  // 进度轮询（1.5 秒一次）都会 `notifyListeners()`，而页面用 `context.watch`
+  // 盯着整个 store、`build()` 里又新建 `_ConversationList(...)` ——
+  // 于是每通知一次，那一栏（几十个 ListTile + 每个一个菜单锚点 + Tooltip）
+  // 就整个重排一遍。会话列表跟"消息在长"毫无关系。
+  //
+  // 修复：① 会话主体抽成 `_Thread` 单独 watch，页面 State 不再 watch；
+  // ② 侧栏自己 `addListener`，只在**会话列表实例或选中项真的变了**时才 setState；
+  // ③ 侧栏 widget 实例提到 State 字段里（实例不变，Flutter 整棵跳过）。
+  // 实测：通知期间侧栏重建从"每通知 1 次"降到 **0 次**。
+  testWidgets('与侧栏无关的通知（流式回包 / 进度轮询）不会再重建会话列表', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _homePage(_backend(_Fake(text: '段0，'))));
+    await tester.pumpAndSettle();
+    // 冷启动落在空会话上，历史会话要点开才进来（侧栏这时才真的有几十行）
+    await tester.tap(find.text('卡顿复现'));
+    await tester.pumpAndSettle();
+
+    final store = lastStore!;
+    final before = sidebarBuilds;
+    for (var i = 0; i < 5; i++) {
+      // `clearNotice()` 会 notifyListeners()，但会话列表与选中项都没变
+      store.clearNotice();
+      await tester.pump();
+    }
+
+    expect(sidebarBuilds, before,
+        reason: '侧栏跟消息/进度无关：那些通知不该让它重建'
+        '（修之前每通知一次重建一次，DevTools 上一帧 Build 24.7ms）');
+
+    // 反例：会话列表真的变了（重命名）时，侧栏**必须**跟着更新
+    await store.renameConversation('改个名字');
+    await tester.pumpAndSettle();
+    expect(sidebarBuilds, greaterThan(before), reason: '会话名变了，侧栏当然要重建');
+    expect(find.text('改个名字'), findsWidgets, reason: '改完要看得见');
   });
 
   testWidgets('展开的流式思考：贴底跟到最新一行，没变过的块复用同一个 widget', (tester) async {
