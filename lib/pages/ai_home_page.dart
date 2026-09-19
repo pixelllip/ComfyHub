@@ -376,12 +376,22 @@ class _Thread extends StatelessWidget {
           child: Stack(
             children: [
               _MessageList(store: store, controller: controller),
+              // AI 正在生成回复时，消息区底部给一个**一直可见**的"加载中"提示
+              // （用户要求 2026-09-20）。它是浮层、不进列表内容，所以
+              // 既不会把总长撑大、也不会跟着滚动跑掉 —— 生成期间抬头就能看见。
+              if (store.sending)
+                const Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: _GeneratingIndicator(),
+                ),
               // 回到聊天底部（用户建议 ④）：**只在用户翻上去之后**才出现，
               // 贴在对话主体右下角，不挡输入区。
               if (!atBottom)
                 Positioned(
                   right: 16,
-                  bottom: 16,
+                  bottom: 56,
                   child: Tooltip(
                     message: '回到最新消息',
                     child: FloatingActionButton.small(
@@ -666,6 +676,58 @@ class _ConversationAppBar extends StatelessWidget implements PreferredSizeWidget
 // ---------------------------------------------------------------------------
 //  消息区
 // ---------------------------------------------------------------------------
+
+/// 「AI 正在生成」的加载提示（用户要求 2026-09-20）。
+///
+/// 放在消息区**底部浮层**（不是列表的一项）：
+///   · 进列表当 item 的话，它会**改总长** —— 正好撞上滚动条总长敏感这件事；
+///   · 浮层还能保证"用户翻上去看历史"时提示依然可见（提示的是"还在生成"，
+///     跟用户在看哪一段无关）。
+///
+/// 只显示一条动画 + 一行字：气泡里那个"正在生成…"只在**还没有任何正文**时出现，
+/// 而这里的判据是"这一轮 Run 还没结束"（`store.sending`）—— 首字一到就消失的那个
+/// 反而最需要它。
+class _GeneratingIndicator extends StatelessWidget {
+  const _GeneratingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return IgnorePointer(
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              theme.colorScheme.surface.withValues(alpha: 0),
+              theme.colorScheme.surface.withValues(alpha: 0.92),
+            ],
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'AI 正在生成…',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class _MessageList extends StatelessWidget {
   final AiWorkspaceStore store;

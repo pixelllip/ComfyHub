@@ -387,8 +387,13 @@ void main() {
           _sse(2, 'text.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 100)})),
     ));
     await tester.pump(const Duration(milliseconds: 50));
-    // 贴底那一下是 `animateTo`（180ms）：要真的把它跑完再量位置
-    await tester.pumpAndSettle();
+    // 贴底那一下是 `animateTo`（180ms）：要真的把它跑完再量位置。
+    // **不能用 `pumpAndSettle`**：生成期间底部那个"AI 正在生成…"提示里的
+    // `CircularProgressIndicator` 是永不停的动画，`pumpAndSettle` 会一直等到超时
+    // （空转 300ms 足够跑完那次 180ms 的贴底动画）。
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
 
     final position = tester.state<ScrollableState>(
       find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)),
@@ -422,7 +427,10 @@ void main() {
       _sse(50, 'text.delta', jsonEncode({'messageId': 'a1', 'text': '\n${_lines(200, 204)}'})),
     ));
     await tester.pump(const Duration(milliseconds: 16));
-    await tester.pumpAndSettle();
+    // 同样不能用 `pumpAndSettle`：这一轮还没结束，底部提示的转圈动画不会停
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
     expect(position.pixels, closeTo(position.maxScrollExtent, 1.5),
         reason: '滚回底部后要重新贴底（跟随不能永久失效）');
 
@@ -463,7 +471,11 @@ void main() {
           _sse(2, 'text.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 100)})),
     ));
     await tester.pump(const Duration(milliseconds: 50));
-    await tester.pumpAndSettle();
+    // 同样不能用 `pumpAndSettle` —— 这一轮还没结束，底部"AI 正在生成…"那个
+    // `CircularProgressIndicator` 是永不停的动画（空转 300ms 足够跑完 180ms 的贴底动画）。
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
 
     final position = tester.state<ScrollableState>(
       find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
@@ -673,6 +685,51 @@ void main() {
     // `await close()` 会把用例挂死（本机踩过一次，表现为整个 test 进程不动了）。
     unawaited(events.close());
     await tester.pumpAndSettle();
+  });
+
+  // 用户要求（2026-09-20）："如果 AI 正在生成回复，请在底部加一个「加载中」的动画提示"。
+  //
+  // 判据是"这一轮 Run 还没结束"（`store.sending`），**不是**"气泡里还没有正文"——
+  // 气泡里那个"正在生成…"首字一到就没了，而"还在往外吐字"这段最长的时间里
+  // 恰恰最需要一个看得见的提示。
+  testWidgets('AI 生成期间底部一直有「加载中」提示，这一轮结束就收掉', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final events = StreamController<List<int>>();
+    await tester.pumpWidget(await _homePage(_streamingBackend(_Fake(), events.stream)));
+    await tester.pumpAndSettle();
+
+    // 还没发消息：不该莫名其妙冒出一个"正在生成"
+    expect(find.text('AI 正在生成…'), findsNothing, reason: '没有在生成时底部不该有加载提示');
+
+    await tester.enterText(find.byType(TextField).first, '写一份很长的方案');
+    await tester.tap(find.text('发送'));
+    await tester.pump();
+
+    // 已经有正文了（气泡里那个"正在生成…"这时已经不显示）：底部这条提示
+    // 就是"这一轮还在跑"的唯一可见信号。
+    events.add(utf8.encode(
+      _sse(1, 'run.started', '{"runId":"r1"}') +
+          _sse(2, 'text.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 40)})),
+    ));
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('AI 正在生成…'), findsOneWidget,
+        reason: 'AI 正在生成回复时，底部要有"加载中"提示');
+    expect(find.byType(CircularProgressIndicator), findsWidgets,
+        reason: '提示里那个转圈动画要在（用户要的就是这个）');
+
+    // 这一轮结束：提示必须收掉，不能一直转
+    events.add(utf8.encode(
+      _sse(3, 'message.completed',
+          jsonEncode({'messageId': 'a1', 'text': '写好了。', 'steps': 0, 'reasoningEffort': 'off'})) +
+          _sse(4, 'run.completed', '{"runId":"r1"}'),
+    ));
+    unawaited(events.close());
+    await tester.pumpAndSettle();
+    expect(find.text('AI 正在生成…'), findsNothing,
+        reason: '这一轮结束后提示要收掉（否则会一直转下去）');
   });
 }
 
