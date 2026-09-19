@@ -1597,12 +1597,18 @@ void main() {
     // 贴底时不该有这个按钮
     expect(find.byTooltip('回到最新消息'), findsNothing);
 
-    // 往上翻：按钮出现，而且**不会**被自动跟随拽回底部
-    await tester.drag(find.byType(ListView).first, const Offset(0, 900));
+    // 往上翻：按钮出现，而且**不会**被自动跟随拽回底部。
+    // 拖动对象要点名消息区那一个（侧栏的会话列表也是可滚动的，而且是先建出来的）——
+    // 消息区现在用 `SingleChildScrollView + Column`（精确总长），
+    // 但那条纪律不变：**滚动跟的是"消息区"，不是"某个 ListView 类型"**。
+    await tester.drag(find.byKey(const Key('ai-message-list')), const Offset(0, 900));
     await tester.pumpAndSettle();
     expect(find.byTooltip('回到最新消息'), findsOneWidget);
 
-    final scrollable = find.byType(Scrollable).first;
+    final scrollable = find.descendant(
+      of: find.byKey(const Key('ai-message-list')),
+      matching: find.byType(Scrollable),
+    ).first;
     final offsetAfterDrag = tester.widget<Scrollable>(scrollable).controller!.offset;
     expect(offsetAfterDrag, lessThan(tester.widget<Scrollable>(scrollable).controller!.position.maxScrollExtent));
 

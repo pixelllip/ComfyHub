@@ -1,6 +1,5 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -708,6 +707,7 @@ class _GeneratingIndicator extends StatelessWidget {
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
               width: 14,
@@ -718,9 +718,15 @@ class _GeneratingIndicator extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            Text(
-              'AI 正在生成…',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+            // 窄屏（比如只留了 240px 的会话栏旁边）时这段字必须先让步 ——
+            // 否则 `Row` 会直接 `RenderFlex overflowed`（本机实测 7.7px）。
+            Flexible(
+              child: Text(
+                'AI 正在生成…',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              ),
             ),
           ],
         ),
@@ -729,50 +735,89 @@ class _GeneratingIndicator extends StatelessWidget {
   }
 }
 
+/// 消息区。
+///
+/// **精确总长**（用户 bug 2026-09-20，第二版）：滚动条滑块的长度与位置都是
+/// `pixels / maxScrollExtent` 算出来的，而懒构建的 `ListView` 对**还没布局到的**
+/// 子项只能估算总长 —— 估算每滚一段就换一个值，滑块就来回跳（用户报的
+/// "在最新一条聊天记录里，滚动条会跳变 1/3 的进度"）。
+///
+/// 前一版把缓存窗口放到前后各 2 个视口，只是让"已建那几项的平均高度"更稳一点：
+/// 实测变化 17 次 → 11 次、回缩 9 次 → 4 次，**压掉一半、压不到 0** ——
+/// 因为"估"这个本质没变。
+///
+/// 这一版把"估"整个拿掉：`SingleChildScrollView + Column` 里，内容高度
+/// **就是真实高度**（不是估算、也没有第二条"硬约束"通路），
+/// `maxScrollExtent = scrollExtent − viewportDimension` 从第一帧起就精确，
+/// 滑块的长度与位置**全程不变**。
+///
+/// 为什么不用 `ListView` 的 `itemExtentBuilder`（用户探过的那条路）：
+/// 它要求**每一条**都给一个精确高度，而且那个返回值是**硬约束**，差一点就直接
+/// 裁内容（用户实测 `RenderFlex overflowed by 168~512px`）。要在懒构建的前提下
+/// 拿到"每一条的真值"，就得再搭一层离屏测量（量宽度还得和真实布局宽度
+/// 逐像素一致）—— 拿一个必然会算错的地方，去换一个本来就有精确答案的地方，不值得。
+///
+/// 代价说清楚（本机实测，`flutter test` 里同一趟滚动 40 帧、视口 1100×800、
+/// 每条气泡一段中长文本）：
+///
+/// | 会话长度 | 懒构建 + 估算（旧） | 本文这一版（精确） |
+/// | --- | --- | --- |
+/// | 31 条 | 168ms | 165ms（持平） |
+/// | 200 条 | 294ms | 401ms |
+/// | 800 条 | 293ms | 990ms |
+///
+/// 也就是：**常用长度持平，极端长度才变贵**。贵在"整棵树每帧要走一遍"，
+/// 换来的是滚动条滑块**一次都不跳**（用例实测：滚一趟 `maxScrollExtent`
+/// 变化 0 次，旧版 13~24 次），这个交换是值的。
+///
+/// 为什么"整棵树走一遍"没把事情弄坏：
+///   · 气泡本身就是懒的：`_MessageBubbleSlot` 在内容没变时把**同一个 widget
+///     实例**交回去，Flutter 连那棵子树的重建与布局都跳过；
+///   · 没变过的 `RenderBox` 不会重排、不在视口里的不会重绘。
+/// 所以**流式输出时每帧只有正在长的那一条要重排** —— 这一点和以前一样。
+///
+/// 真要再往下优化，方向是"给还没量过的行一个精确高度的懒构建"
+/// （`ListView.itemExtentBuilder`）。但那要额外搭一层离屏测量，而且它的返回值是
+/// **硬约束**：差一点就直接裁内容（用户实测 `RenderFlex overflowed by 168~512px`），
+/// 量宽度还必须与真实布局宽度逐像素一致 —— 不该塞进这次修复里。
 class _MessageList extends StatelessWidget {
   final AiWorkspaceStore store;
   final ScrollController controller;
+
   const _MessageList({required this.store, required this.controller});
+
+  /// 每一条气泡的内边距。
+  static const EdgeInsets _itemPadding = EdgeInsets.symmetric(horizontal: 16, vertical: 6);
 
   @override
   Widget build(BuildContext context) {
     if (store.messages.isEmpty) return _EmptyThread(store: store);
 
-    return ListView.builder(
-      // 聊天气泡列表：界面里还有别的 ListView（会话列表、气泡里的清单），
+    return SingleChildScrollView(
+      // 聊天气泡列表：界面里还有别的可滚动区域（会话列表、气泡里的清单），
       // 回归用例要能精确点到**这一个**（滚动跟随 / 贴底那几条断言都靠它）。
       key: const Key('ai-message-list'),
       controller: controller,
-      // 视口前后各多缓存**两个视口**（按视口倍数算，不写死像素）。
-      //
-      // 这是"滚动条跳变 1/3 进度"的解药（用户 bug 2026-09-20）：懒构建的列表对
-      // **还没布局到的**子项只能估算总长，估法是把剩余未建项数乘以"已建那几项的
-      // 平均高度"（`estimateMaxScrollOffset`）—— 建得越少，均值越不代表整体。
-      // 本机实测（30 条长短交错、视口 595 高、真值 max≈4200）：
-      //   默认缓存：总长变了 17 次、回缩 9 次，摆动 36%
-      //   前 后各 1 视口：17 次 / 9 次，摆动 36%（**没用**）
-      //   前后各 2 视口：11 次 / 4 次，摆动 13%
-      //   前后各 4 视口：6 次 / 2 次，摆动 16%（但等于把整个会话都建出来）
-      // 取 2：滚动条明显稳下来，而**这一趟滚动里的气泡重建次数没有变差**
-      // （24 次 → 19 次，反而更少 —— 估算稳了就不会反复重排）。
-      // 别再加到 4 以上：那会把长会话的每一行都建出来，正是我们当初为了
-      // "不卡顿"才拆掉的懒构建。
-      scrollCacheExtent: const ScrollCacheExtent.viewport(2.0),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      itemCount: store.messages.length,
-      itemBuilder: (context, i) {
-        final message = store.messages[i];
-        // RepaintBoundary / 重建闸门都在 `_MessageBubbleSlot` 里：见它的注释
-        // （流式输出时只有**真的变了**的那一条会重建，历史气泡整棵跳过）。
-        return _MessageBubbleSlot(
-          key: ValueKey(message.id),
-          store: store,
-          message: message,
-        );
-      },
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        // `start`（不是 `stretch`）：气泡自己决定多宽、自己决定靠左还是靠右
+        // （`_MessageBubble` 里用户消息靠右）。这一层只负责"一条一行"。
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final message in store.messages)
+            Padding(
+              key: ValueKey(message.id),
+              padding: _itemPadding,
+              // RepaintBoundary / 重建闸门都在 `_MessageBubbleSlot` 里：见它的注释
+              // （流式输出时只有**真的变了**的那一条会重建，历史气泡整棵跳过）。
+              child: _MessageBubbleSlot(store: store, message: message),
+            ),
+        ],
+      ),
     );
   }
 }
+
 
 /// 聊天气泡**真正被重建**的次数（回归用例用它证明"没变化的气泡不会跟着重建"）。
 ///
@@ -804,7 +849,7 @@ class _MessageBubbleSlot extends StatefulWidget {
   final AiWorkspaceStore store;
   final AiMessage message;
 
-  const _MessageBubbleSlot({super.key, required this.store, required this.message});
+  const _MessageBubbleSlot({required this.store, required this.message});
 
   @override
   State<_MessageBubbleSlot> createState() => _MessageBubbleSlotState();

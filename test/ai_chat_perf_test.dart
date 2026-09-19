@@ -14,7 +14,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -527,11 +526,15 @@ void main() {
   // 本机实测（30 条长短交错、1100×800、真值 max=4137）：默认缓存下往上滚一趟
   // 总长变了 **18 次**、其中 **9 次是回缩**，范围 3539~5392。
   //
-  // 修复：把视口前后的缓存放到**一个视口**（`ScrollCacheExtent.viewport(1.0)`）——
-  // 建得越多，均值越代表整体，估算越稳（实测 18 次 → 9 次，偏差 44% → 14%）。
-  // 这条用例钉住的是"总长不许大幅回缩"：回缩会让滚动条**往回跳**，
-  // 而且估算掉到当前位置以下时画面会当场被夹回去。
-  testWidgets('长会话滚动时总长不许来回跳（用户 bug：滚动条跳变 1/3 进度）', (tester) async {
+  // 走过的两步（第二步才是答案）：
+  //   ① 把缓存窗口放到前后各 2 个视口 —— 只让均值更稳，实测变化 17→11、
+  //      回缩 9→4，**压掉一半、压不到 0**（"估"这个本质没变）；
+  //   ② 换成 `SingleChildScrollView + Column` —— 内容高度**就是真实高度**，
+  //      `maxScrollExtent` 从第一帧起精确，滑块全程不变。
+  //
+  // 这条用例现在钉的是**更强的性质**：滚一趟，总长一次都不许变
+  // （以前只能钉"回缩不超过 8 次"）。
+  testWidgets('长会话滚动时总长一次都不变（用户 bug：滚动条跳变 1/3 进度）', (tester) async {
     tester.view.physicalSize = const Size(1100, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -540,12 +543,6 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('卡顿复现'));
     await tester.pumpAndSettle();
-
-    // 列表必须真的在缓存视口外的内容（这条修复的全部依据）
-    final listView = tester.widget<ListView>(find.byKey(const Key('ai-message-list')));
-    expect(listView.scrollCacheExtent, isNotNull,
-        reason: '聊天列表要显式给缓存窗口，否则估算只按一屏内的几项算，总长必然乱跳');
-    expect(listView.scrollCacheExtent, const ScrollCacheExtent.viewport(2.0));
 
     final position = tester.state<ScrollableState>(
       find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
@@ -574,13 +571,46 @@ void main() {
     final hi = values.reduce((a, b) => a > b ? a : b);
     debugPrint('[总长稳定性] 变化=$changes 回缩=$shrinks 范围=${lo.toStringAsFixed(0)}~'
         '${hi.toStringAsFixed(0)} 摆动=${((hi - lo) / hi * 100).toStringAsFixed(1)}%');
-    // 修的是**回缩**：总长一变小于当前位置，`ScrollPosition` 会把 `pixels` 夹回来
-    // （画面当场回弹），滚动条也跟着往回跳；单调变大则只是"下面是新内容"，无害。
-    // 修复后实测：变化 13 次、**回缩 5 次**；退回默认缓存实测 17~24 次变化、
-    // 9~12 次回缩。阈值卡在两者之间，并给机器差异留余量。
-    expect(shrinks, lessThan(8),
-        reason: '总长频繁变小 = 滚动条在往回跳、画面会被夹回去'
+    // 精确总长下这里必须是 **0 次**：滚动条滑块的长度与位置全程不变。
+    // 退回懒构建（`ListView.builder`）实测 13~24 次变化、5~12 次回缩，必红。
+    expect(changes, 0,
+        reason: '总长一变，滚动条滑块的长度/位置就跟着变（用户 bug：跳变 1/3 进度）'
         '（实测 $lo~$hi，变化 $changes 次，回缩 $shrinks 次）');
+  });
+
+  // 上一条只证明"滚动时不变"，这条证明**精确**：总长必须等于真实内容高度。
+  //
+  // 判据来自 `ScrollPosition` 自己的定义：`maxScrollExtent = scrollExtent − viewportDimension`，
+  // 而 `Column` 的 `scrollExtent` 就是它子项的真实高度之和。所以拿
+  // "最底那条气泡的相对位置"当独立参照来反推，两边必须严格相等 ——
+  // 估算出来的总长（懒构建那套）在这里一定会差出几百像素。
+  testWidgets('精确总长：maxScrollExtent 与内容真实高度严格相等', (tester) async {
+    tester.view.physicalSize = const Size(1100, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _homePage(_backend(_Fake(text: _lines(1, 60)))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('卡顿复现'));
+    await tester.pumpAndSettle();
+
+    final position = tester.state<ScrollableState>(
+      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
+    ).position;
+
+    // 滚到底：`pixels` 必须真的等于 `maxScrollExtent`（估算偏高时会被夹住/滚进空白）
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pump();
+    expect(position.pixels, closeTo(position.maxScrollExtent, 0.5),
+        reason: '精确总长下能真的滚到最底，不会滚进估算多出来的空白');
+
+    // 独立参照：最后一条气泡的底边相对视口底部的位置。
+    // 贴底时它必须正好落在视口下沿（差的就是最后那段 6px 内边距 + 6px 滚动视图内边距）。
+    final last = tester.getRect(find.byKey(ValueKey(lastStore!.messages.last.id)));
+    final viewport = tester.getRect(find.byKey(const Key('ai-message-list')));
+    expect(last.bottom, closeTo(viewport.bottom - 6, 1.0),
+        reason: '贴底后最后一条气泡的底边要正好落在视口下沿；'
+        '对不上说明总长与真实内容高度不一致（那就是"估算"）');
   });
 
   // 用户 bug（2026-09-20）的性能现场：DevTools 抓到一帧 **Build 24.7ms**（UI Jank），
