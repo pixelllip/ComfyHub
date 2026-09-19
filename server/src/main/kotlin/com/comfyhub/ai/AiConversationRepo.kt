@@ -268,6 +268,15 @@ object AiConversationRepo {
         } ?: -1
     }
 
+    /**
+     * 这条消息有没有落过有序块。
+     *
+     * 重试前判断"那条失败的回复里到底有没有内容"要用它：正文可能被清空过、也可能只有
+     * 思考 / 工具卡（模型只调工具没说话时正文就是空的），所以**不能只看 `text`**。
+     * 有内容就不许就地重置 —— 那是用户已经在界面上看到过的东西。
+     */
+    fun hasParts(messageId: String): Boolean = maxOrdinal(messageId) >= 0
+
     // -----------------------------------------------------------------------
 
     private fun ResultSet.toConversation() = AiConversationDto(

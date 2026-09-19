@@ -26,8 +26,8 @@
   为了用掉 import 而写的占位用例、同一行为的两种写法 —— 这类**该删就删**（用户提过"减少一些
   已经通过、不太重要的测试项"）。判断方法只有一句：**删了以后出错还能不能被测试抓住**。
   真正的防线（零上游请求、审批顺序、越界写被拒、内联预算、滚动条与懒构建…）一条都不能删。
-  本机实测的耗时（别凭感觉说"测试太慢"，2026-09-19 重新量过）：`flutter test` 194 例 ≈ 23s、
-  `gradle test` 364 例 ≈ 7s（热构建；首跑要编译）、`e2e-ai-tools-test.ps1` 93 项 ≈ 5~15s、
+  本机实测的耗时（别凭感觉说"测试太慢"，2026-09-19 重新量过）：`flutter test` 196 例 ≈ 23s、
+  `gradle test` 364 例 ≈ 7s（热构建；首跑要编译）、`e2e-ai-tools-test.ps1` 111 项 ≈ 5~15s、
   `e2e-capture-test.ps1` / `e2e-submit-test.ps1` 各 ≈ 20~35s（后者含"工作流文件直接提交"那一幕）。
 - 产物目录：debug 在 `build\windows\...\runner\Debug\`、Release 在 `...\Release\`；
   `autorun-app.ps1` / `comfyhub.ps1 up -WithApp` 启动 App 时**优先挑 Release**。
@@ -310,6 +310,11 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   另外：那条"起标题"的附加指令**只能按轮带**（`runRound(askTitle=…)`），
   **绝不能塞进常驻的 `turns`** —— 常驻会让后面的每一轮都再提醒模型输出 `[标题]`，
   标记就漏进正文（2026-09-19 用户报的"回答首尾被截断"里的"首"就是这个）。
+  **位置也必须插在系统提示之后、历史之前（第 2 条），不能挂末尾**：挂末尾会挡住
+  "最后一条消息是工具结果"这个事实 —— 模型靠它判断"工具跑完了、该收口"，
+  假网关靠它分流。实测代价：`e2e-submit-test.ps1` 的提交流程会一直重复调 `comfy_submit`、
+  最后卡在审批闸门上（Run 永远 `running`），而第 10 轮"没动提交链路所以没重跑"，红了整整一轮
+  （2026-09-19 深夜修）。**教训：改了 `HarnessRunner` 的上下文拼装，三条 e2e 全跑一遍。**
 - **ComfyUI 位置解析有两份实现**（`ComfyLocator.kt` 与 `scripts\comfy-path.ps1`），判据必须一致：
   源码形态 = `main.py` + `comfy/`；任何形态 = `output/` + `models/` 或 `input/`。
   改判据要同时改两边，否则会出现"App 说找到了、脚本说找不到"。
@@ -318,6 +323,23 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   ComfyUI 的 `/history` 先出现记录、产物文件晚到是常态，把 `empty` 当终态就会出现
   "AI 说生成了、画廊里却没有"。只有 `success` 才是"不再重复收"的终态，改这段前先看
   `CaptureRunRetryTest`。
+- **失败 / 取消时"已经说出去的话"一个字都不能丢**（用户 bug，2026-09-19 的 429 现场：会话
+  `9b6d01af` 的 seq12 —— 那次 Run 跑了 4 分钟、3 次 `comfy_submit` 全成功，最后一轮撞 429；
+  用户点「重试」后那条消息变成 `text=''` + 零个 part，全没了）。三条纪律：
+  ① **`message.text` 里有的内容，parts 里也必须有** —— 前端 `_orderedBody` 在 parts 非空时
+  **只渲染 parts**，只写正文不落块 = 用户看不见。落块时机是"一轮跑完"，所以被 429 / 断流打断的
+  那一轮必须由失败分支补落（`PartSink.flushInflight()`，挂在 `rescueAlreadySaid()` 上）；
+  ② **标题摘取缓冲**（`TitleStripper` 还没确认不是标记时压住的开头，最多 ~200 字符）
+  失败 / 取消时也要 `flush()` 放出来 —— 第一条回复刚开口就断时，那是整段话；
+  ③ **"就地重置"只能用在空壳上**：`POST /runs` 重试时判据是
+  `AiMessageDto.isEmptyReply()`（正文空 **且** `AiConversationRepo.hasParts()` 为假），
+  有内容的失败回复**原样留着**、重试另起一条助手气泡（前端按返回的 `assistantMessageId`
+  是否变化决定"就地换占位 / 末尾追加"）。**别退回"只要 failed 就 resetAssistantForRetry"**——
+  那会把工具卡和已经生成的图片入口卡一起删掉。
+  防线：`e2e-ai-tools-test.ps1` 第 13 幕 15 项（假网关 `failkeep_*` / `break_*` 两个场景）
+  + `test/ai_retry_keep_content_test.dart` 2 例。**写假网关场景时**：给会话先定一个标题，
+  把"起标题"那条链路从断言里摘出去（历史上那条指令排在最后一条 system，把
+  `last.role == "tool"` 这类分流挡住过 —— 现在它固定插在第 2 条，见上面那条）。
 - 改完这一块请跑两条端到端（都不出网、不花钱）：
   `pwsh -File scripts\e2e-submit-test.ps1`（提交链路，6 幕：审批闸门 / 真提交 / 参数覆盖 /
   工作流文件直接提交 / 前端节点缺口补线 / 本机工作流列出来并一键入库）与

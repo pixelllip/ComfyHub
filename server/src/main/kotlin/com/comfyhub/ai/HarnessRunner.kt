@@ -207,30 +207,70 @@ class HarnessRunner(
         val text = StringBuilder()
         val reasoning = StringBuilder()
 
-        /**
-         * 这一轮里思考 / 正文**到达的先后顺序**（相邻同类型已合并）。
-         *
-         * 为什么不直接"先写 reasoning 再写 text"：多数上游确实是先思考后正文，
-         * 但那只是**惯例**，不是协议保证（有的网关会把思考片段夹在正文中间吐出来）。
-         * 用户要求"完全按照消息获取顺序来"，所以这里如实记下到达顺序，
-         * 落库的 parts 就照这个顺序写（用户报的 bug：最终回复被排到了最终思考前面）。
-         */
-        val chunks = mutableListOf<Pair<String, String>>()
-
-        fun addChunk(type: String, chunk: String) {
-            if (chunk.isEmpty()) return
-            val last = chunks.lastOrNull()
-            if (last != null && last.first == type) {
-                chunks[chunks.size - 1] = type to (last.second + chunk)
-            } else {
-                chunks += type to chunk
-            }
-        }
-
         val toolCalls = ToolCallAccumulator()
         var usage: JsonElement? = null
         var finishReason: String? = null
         var providerResponseId: String? = null
+    }
+
+    /**
+     * 一条助手消息的"有序块（parts）"落库器。
+     *
+     * 为什么自成一个类，而不是 `execute` 里的几个局部变量：失败 / 取消的兜底分支在 `try`
+     * **外面**，而那里同样要能把"已经流出去、还没落成 part"的内容补上（见 [flushInflight]）。
+     *
+     * 顺序纪律（用户要求"完全按照消息获取顺序来，不要将最终回复置于最终思考的前面"）：
+     * 思考 / 正文按**到达顺序**进 [inflight]（相邻同类合并成一段），一轮跑完再原样落库；
+     * 工具卡由调用方在轮次边界上直接用 [add] 插进去，于是 parts 就是真实的时间顺序。
+     */
+    private class PartSink(private val assistantId: String) {
+        val parts = mutableListOf<AiMessagePartDto>()
+        private var ordinal = AiConversationRepo.maxOrdinal(assistantId) + 1
+
+        /**
+         * 这一轮已经流出去、但**还没落成 part** 的思考 / 正文（顺序 = 到达顺序）。
+         *
+         * 它是"失败也不能丢内容"的那一半：正文早就写进了 `message.text`（界面正在流式显示），
+         * 块却要等这一轮跑完才落。中间被 429 / 网络断掉时这一轮永远跑不完，
+         * 不补落的话库里就只有正文没有块 —— 而前端 `_orderedBody` 在 **parts 非空时只渲染 parts**，
+         * 于是用户"直接看不到它已经回复完的内容"（2026-09-19 的 429 现场，查库实据：
+         * 失败的那条消息 text 有内容、parts 却是空的）。
+         */
+        private val inflight = mutableListOf<Pair<String, String>>()
+
+        fun add(type: String, text: String?, toolCallId: String? = null, payloadJson: JsonObject? = null) {
+            val part = AiMessagePartDto(
+                type = type,
+                text = text,
+                toolCallId = toolCallId,
+                jsonPayload = payloadJson,
+            )
+            parts += part
+            AiConversationRepo.appendPart(assistantId, ordinal++, part)
+        }
+
+        /** 记一片"还没落块"的增量（相邻同类型合并成一段）。 */
+        fun buffer(type: String, chunk: String) {
+            if (chunk.isEmpty()) return
+            val last = inflight.lastOrNull()
+            if (last != null && last.first == type) {
+                inflight[inflight.size - 1] = type to (last.second + chunk)
+            } else {
+                inflight += type to chunk
+            }
+        }
+
+        /**
+         * 把缓冲里的思考 / 正文按到达顺序落成有序块并清空。
+         *
+         * 两个调用点：一轮**正常跑完**（把这一轮的块插进 parts），
+         * 以及失败 / 取消的兜底分支（把已经流出去的那部分补上，一个字都不许丢）。
+         */
+        fun flushInflight() {
+            if (inflight.isEmpty()) return
+            for ((type, chunk) in inflight) add(type, chunk)
+            inflight.clear()
+        }
     }
 
     private suspend fun execute(runId: String) {
@@ -247,6 +287,14 @@ class HarnessRunner(
         // （用户建议 ②："不要强行截断 AI 回复" —— 落库时抹成空串等于把用户已经看到的内容删了）
         val text = StringBuilder()
         val reasoning = StringBuilder()
+
+        // 有序块落库器（同样声明在 try 外面）：失败 / 取消时也要能补落"这一轮已经流出去、
+        // 但还没落成 part"的那一段 —— 见 PartSink.flushInflight 的注释。
+        val parts = PartSink(assistantId)
+
+        // 标题摘取状态机：按 Run 建（只有需要自动起标题的那一次），但**声明在 try 外面** ——
+        // 失败 / 取消时要把缓冲里压着的那一小段放出来（那也是模型说过的话）。
+        var titleStripper: TitleStripper? = null
 
         try {
             val provider = AiRepo.getProvider(run.providerId.orEmpty())
@@ -335,19 +383,8 @@ class HarnessRunner(
             var usageTotal = TokenUsage.EMPTY
             var providerResponseId: String? = null
             var lastPersist = 0L
-            var ordinal = AiConversationRepo.maxOrdinal(assistantId) + 1
             // 内存里同步维护一份有序块：结束时要原样发给前端（免得为了发事件再查一次库）
-            val partList = mutableListOf<AiMessagePartDto>()
-            fun addPart(type: String, partText: String?, toolCallId: String? = null, payloadJson: JsonObject? = null) {
-                val part = AiMessagePartDto(
-                    type = type,
-                    text = partText,
-                    toolCallId = toolCallId,
-                    jsonPayload = payloadJson,
-                )
-                partList += part
-                AiConversationRepo.appendPart(assistantId, ordinal++, part)
-            }
+            // —— `parts.parts` 就是它（PartSink 同时负责落库与攒这份列表）
 
             val toolCtx = if (tools != null && skills != null && policy != null) {
                 ToolContext(runId = runId, policy = policy, skills = skills, memory = memory)
@@ -366,7 +403,7 @@ class HarnessRunner(
             var continueFrom: String? = null
 
             // 标题摘取状态机（只在需要自动起标题的那次 Run 里建）：把 `[标题]…[/标题]` 从正文里摘掉
-            val titleStripper = if (wantsTitle) TitleStripper(true) else null
+            titleStripper = if (wantsTitle) TitleStripper(true) else null
 
             /**
              * 跑一轮上游请求。
@@ -384,14 +421,25 @@ class HarnessRunner(
                 askTitle: Boolean = false,
             ): Pair<RoundResult, Idle> {
                 val r = RoundResult()
-                // 这一轮真正发给上游的轮次（标题指令按轮决定要不要带上）
-                val roundTurns = if (askTitle) turns + titleAsk else turns.toList()
+                // 这一轮真正发给上游的轮次（标题指令按轮决定要不要带上）。
+                //
+                // 位置固定在**系统提示之后、历史之前**（第 2 条），**不能挂在末尾**：
+                // 挂末尾会挡住"最后一条消息是工具结果"这个事实 —— 上游模型靠它判断
+                // "工具跑完了、该收口了"，网关也靠它分流。实测（2026-09-19 深夜）：
+                // 挂末尾会把 `scripts\e2e-submit-test.ps1` 的提交流程顶成"一直重复调
+                // `comfy_submit`"，最后卡在审批闸门上（第 10 轮改成按轮带上时把位置也挪到了末尾，
+                // 而那一轮没有重跑这条 e2e，所以漏了过去）。
+                val roundTurns = buildList {
+                    addAll(turns)
+                    if (askTitle) add(1.coerceAtMost(size), titleAsk)
+                }
 
                 // 真正把一段文本放给界面 / 落库 / 上游上下文（原来的 onEvent 正文逻辑）
                 fun emitText(visible: String) {
                     if (visible.isEmpty()) return
                     r.text.append(visible)
-                    r.addChunk("text", visible)
+                    // 块先攒着（这一轮跑完才落 part）；失败 / 取消时由 PartSink.flushInflight 兜底
+                    parts.buffer("text", visible)
                     text.append(visible)
                     emit(RunEventType.TEXT_DELTA, payload("messageId" to assistantId, "text" to visible))
                     // 粗粒度落库：UI 靠事件实时刷新，数据库只需要"接近最新"
@@ -450,7 +498,8 @@ class HarnessRunner(
                             }
                             is StreamEvent.ReasoningDelta -> {
                                 r.reasoning.append(event.text)
-                                r.addChunk("reasoning", event.text)
+                                // 同上：思考也先攒着，这一轮跑完才落块
+                                parts.buffer("reasoning", event.text)
                                 reasoning.append(event.text)
                                 emit(
                                     RunEventType.REASONING_DELTA,
@@ -526,14 +575,12 @@ class HarnessRunner(
                     providerResponseId = idle.providerResponseId ?: providerResponseId
                     usageTotal = usageTotal + TokenUsage.from(round.usage)
 
-                    // 这一轮的思考 / 正文各落一个 part（工具卡要按顺序插在正文之间）。
+                    // 这一轮的思考 / 正文落 parts（工具卡要按顺序插在正文之间）。
                     //
-                    // **顺序 = 到达顺序**（[RoundResult.chunks]）：上游先流思考、再流正文，
+                    // **顺序 = 到达顺序**（`PartSink.inflight`）：上游先流思考、再流正文，
                     // 于是 reasoning 在前。早先这里固定"先 text 后 reasoning"，
                     // 前端按 parts 还原段之后就变成"最终回复排在最终思考前面"（用户报的 bug）。
-                    for ((type, chunk) in round.chunks) {
-                        addPart(type, chunk)
-                    }
+                    parts.flushInflight()
 
                     val drafts = round.toolCalls.drafts().map { ToolDraft(it.callId, it.name, it.arguments) }
                     if (drafts.isEmpty() || outOfSteps || toolSpecs.isEmpty() || toolCtx == null) {
@@ -544,7 +591,7 @@ class HarnessRunner(
                                 "这次要调用的工具没有执行；再发一条消息它就能接着做。）"
                             text.append(note)
                             emit(RunEventType.TEXT_DELTA, payload("messageId" to assistantId, "text" to note))
-                            addPart("text", note)
+                            parts.add("text", note)
                         }
                         // **输出被上游的长度上限卡断时接着写，而不是把半句话当成结尾**
                         // （用户建议 ②："读写 token 达到上限时，不要强行截断 AI 回复"）。
@@ -582,7 +629,7 @@ class HarnessRunner(
                     )
 
                     drafts.forEach { draft ->
-                        addPart(
+                        parts.add(
                             "tool_call",
                             null,
                             toolCallId = draft.callId,
@@ -632,7 +679,7 @@ class HarnessRunner(
 
                     AiRunRepo.insertToolCall(record)
 
-                    addPart(
+                    parts.add(
                         "tool_result",
                         record.content,
                         toolCallId = draft.callId,
@@ -688,7 +735,7 @@ class HarnessRunner(
                 if (tail.isNotEmpty()) {
                     text.append(tail)
                     emit(RunEventType.TEXT_DELTA, payload("messageId" to assistantId, "text" to tail))
-                    addPart("text", tail)
+                    parts.add("text", tail)
                 }
                 applyConversationTitle(
                     runId, conversationId, stripper.title?.takeIf { it.isNotBlank() },
@@ -717,7 +764,7 @@ class HarnessRunner(
                     "steps" to step,
                     "parts" to AppJson.encodeToJsonElement(
                         kotlinx.serialization.builtins.ListSerializer(AiMessagePartDto.serializer()),
-                        partList.toList(),
+                        parts.parts.toList(),
                     ),
                     // token 统计（AIH-057）：多轮工具循环**累加**，不是只算最后一轮
                     "usage" to buildJsonObject {
@@ -735,6 +782,8 @@ class HarnessRunner(
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             // 用户点了停止：已经说出来的部分**保留**，不抹掉
+            // （含"这一轮刚流出去、还没落成 part"的那一段，见 PartSink.flushInflight）
+            rescueAlreadySaid(titleStripper, text, parts)
             AiRunRepo.updateMessage(assistantId, text.toString(), "cancelled")
             AiRunRepo.finish(runId, "cancelled", errorCode = AiErrorCode.ABORTED, errorMessage = "用户已停止")
             emit(RunEventType.RUN_CANCELLED, payload("runId" to runId))
@@ -745,12 +794,41 @@ class HarnessRunner(
             // 失败也**保留已经说出去的部分**（用户建议 ②："不要强行截断 AI 回复"）：
             // 前面那些话是模型真的说了、用户也真的看到了，落库时抹成空串等于把它从记录里删掉。
             // 状态仍然是 failed（界面会显示"生成失败"+ 重试），不假装这一轮成功了。
+            //
+            // ⚠️ 只把正文写回 `message.text` **不够**：界面在 parts 非空时只渲染 parts
+            // （`_orderedBody`），所以"这一轮已经流出去、还没落成 part"的那一段必须补落，
+            // 否则用户就是"看不到它已经回复完的内容"（用户 bug，2026-09-19 的 429 现场）。
+            rescueAlreadySaid(titleStripper, text, parts)
             AiRunRepo.updateMessage(assistantId, text.toString(), "failed")
             AiRunRepo.finish(runId, "failed", errorCode = code, errorMessage = message)
             emit(RunEventType.RUN_FAILED, payload("runId" to runId, "code" to code, "message" to message))
         } finally {
             bus.close(runId)
         }
+    }
+
+    /**
+     * 失败 / 取消的收尾：把"模型已经说出去、但还没进落库"的内容一个字不落地补上。
+     *
+     * 两处都要补，缺一处用户就会看到"内容凭空消失"：
+     *  1. **标题摘取缓冲**里可能还压着开头那一小段（还没确认它不是 `[标题]` 标记）；
+     *  2. **这一轮的 parts 还没落**（落块的时机是"一轮跑完"，中途被 429 / 断网打断就永远轮不到）、
+     *     而正文早就写进了 `message.text` —— 前端在 parts 非空时**只渲染 parts**，于是看不见。
+     */
+    private fun rescueAlreadySaid(
+        titleStripper: TitleStripper?,
+        text: StringBuilder,
+        parts: PartSink,
+    ) {
+        titleStripper?.let { stripper ->
+            val held = stripper.flush()
+            if (held.isNotEmpty()) {
+                text.append(held)
+                // 与成功路径的收尾一致：压住的这一段补在正文末尾（见 execute 里那段注释）
+                parts.buffer("text", held)
+            }
+        }
+        parts.flushInflight()
     }
 
     /**

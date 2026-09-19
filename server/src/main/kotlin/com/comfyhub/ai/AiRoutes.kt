@@ -357,7 +357,8 @@ fun Route.aiRoutes(
                 )
             }
 
-            // 重试（AIH-024）：**复用**原来那条用户消息与助手占位，绝不新增一行。
+            // 重试（AIH-024）：**复用**原来那条用户消息，绝不新增一行；助手那边分两种情况
+            // （空壳就地复用 / 有内容另起一条，见下面 `isEmptyReply` 那段）。
             //
             // 用户 2026-09-19 报的"发送消息时容易出现同一条语句重复"就是这么来的：
             // 以前这里不看 `retryOfRunId` 照旧 append 一条新用户消息，于是"点一次重试，
@@ -372,6 +373,15 @@ fun Route.aiRoutes(
             }
             // 旧的那条助手消息：**只有 failed / cancelled 才允许接着用**。
             // 已经答完的回复绝不能因为一次（可能来自旧界面的）重试就被擦掉。
+            //
+            // 而且 failed / cancelled 里也要再分一刀（用户 bug，2026-09-19 的 429 现场）：
+            // 被限流 / 断网打断的那条回复**可能已经说了很多话、还跑过工具**（实据：会话
+            // 9b6d01af 的 seq12 那次 Run 跑了 4 分钟、成功调了 3 次 comfy_submit，最后一轮撞 429）。
+            // 老写法不分青红皂白 `resetAssistantForRetry`（正文清空 + 删光 parts），
+            // 用户点一次「重试」就把这些东西连同**已经生成的图片入口卡**一起抹掉了，
+            // 而这第二次重试本身也再次 429 —— 落库结果就是 `text=''`、一个 part 都没有，
+            // 也就是用户说的"我直接看不到它已经回复完的内容"。
+            // 现在：**空的**失败气泡就地复用（不留空壳），**有内容的**原样留着、重试另起一条。
             val retryAssistant = retryOf?.assistantMessageId?.let { AiConversationRepo.getMessage(it) }
             if (retryAssistant != null) {
                 if (retryAssistant.conversationId != conversationId) {
@@ -407,11 +417,15 @@ fun Route.aiRoutes(
                     },
                 ),
             )
-            val assistantId = if (retryAssistant != null) {
+            val assistantId = if (retryAssistant != null && retryAssistant.isEmptyReply()) {
                 // 就地重置那条失败/取消的占位（连 part 一起清）：会话里不留空壳气泡
                 AiRunRepo.resetAssistantForRetry(retryAssistant.id, provider.id, model.id)
                 retryAssistant.id
             } else {
+                // 有内容的那条**原样留着**（正文、思考、工具卡、产物入口卡都是用户看到过的东西），
+                // 重试另起一条助手气泡；它的 seq 由 insertAssistantPlaceholder 取 max+1，排在最后。
+                // 附带好处：那段半截回复 + 工具结果会作为历史喂回上游，模型能接着往下做，
+                // 不必把已经成功的工具调用（真机上就是几十分钟的显卡时间）再跑一遍。
                 AiRunRepo.insertAssistantPlaceholder(conversationId, provider.id, model.id)
             }
 
@@ -1164,6 +1178,17 @@ private fun AiProviderDto.withCredential(credentials: CredentialService): AiProv
 
 private fun hostOf(url: String): String =
     runCatching { java.net.URI(url.trim()).host.orEmpty() }.getOrDefault("")
+
+/**
+ * 这条失败 / 取消的助手消息是不是**空壳**（没有任何用户看得见的内容）。
+ *
+ * 判据必须是"正文为空 **且** 一个有序块都没有"：模型只调工具没说话时正文本来就是空的，
+ * 但工具卡已经画在界面上了；反过来老数据也可能只有正文没有块。
+ * 只有真空壳才允许 `resetAssistantForRetry` 就地复用，有内容的一律保留（用户 bug，
+ * 2026-09-19 的 429 现场 —— 点一次重试就把 4 分钟的工具成果全抹了）。
+ */
+private fun AiMessageDto.isEmptyReply(): Boolean =
+    text.isBlank() && !AiConversationRepo.hasParts(id)
 
 private fun validateModel(m: AiModelDto) {
     AiValidation.requireModelId(m.id)

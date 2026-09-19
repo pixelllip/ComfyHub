@@ -25,6 +25,10 @@
     · 含「轮数收尾」且请求里有 tools  -> 正常发起工具调用
     · 含「续写测试」且没有续写指令     -> 正文 + finish_reason=length（**模拟被长度上限截断**）
     · 带着续写指令（"紧接中断处继续写"）-> 接着写的后半段 + finish_reason=stop
+    · 含「限流截断」且是第一轮         -> 正文 + comfy_get_status 工具调用（**有内容的半截回复**）
+    · 含「限流截断」且工具结果已回填   -> **第一次**回 HTTP 429（模拟限流打断），之后正常收尾
+    · 含「中途断流」且是第一轮         -> 正文 + comfy_get_status 工具调用
+    · 含「中途断流」且工具结果已回填   -> 吐一半正文后**掐断连接**（模拟流中间被截断）
     · 其它                          -> 普通正文
 
 SSE 线格式刻意做成**真网关的样子**：第一片带 index/id/type/function.name +
@@ -83,6 +87,25 @@ SKILL_ARGS = {
     "whenToUse": "只在自动化测试里",
     "content": "# 演示\n步骤一\n步骤二",
 }
+
+# --- 「限流打断，但已经说的内容不能丢」用例（用户 bug，2026-09-19 的 429 现场）------
+# 真机实据（会话 9b6d01af 的 seq12）：那次 Run 跑了 4 分钟、成功调了 3 次 comfy_submit，
+# 最后一轮撞上 HTTP 429 —— 失败之后用户点了一次「重试」，结果**整条回复连同工具卡一起消失**
+# （库里 text=''、一个 part 都没有），也就是用户说的"我直接看不到它已经回复完的内容"。
+# 这里复现同一形状：第一轮吐正文 + 一次工具调用（内容已经不空了），工具结果回填的那一轮返回 429；
+# 之后（重试）同样的请求要能正常收尾 —— 于是"失败时内容还在不在""重试会不会把它抹掉"都能断言。
+FAILKEEP_ASK = "限流截断"
+FAILKEEP_TEXT = "先把本机状态查出来，再动手："
+
+# --- 「流中间被掐断」用例（同一类用户 bug 的另一半：**这一轮的内容还没落块**）---------
+# 上一幕是"请求级"的 429（这一轮一个字都没吐）；真机上更常见的是**流到一半**被掐断：
+# 后端这时已经把半段正文写进了 `message.text`，但有序块要等这一轮跑完才落
+# （落块时机 = 一轮的边界）。不补落的话，前端在 parts 非空时**只渲染 parts**，
+# 那半段正文就"看不见"了。这里第一轮先跑完一次工具（于是 parts 非空），
+# 第二轮吐一半正文再把连接掐掉。
+BREAK_ASK = "中途断流"
+BREAK_FIRST_TEXT = "先查一下当前状态："
+BREAK_TAIL_TEXT = "状态查完了，接下来这一步其实是：这段话还没来得及说完，连接就断了。"
 
 
 def _args(obj) -> str:
@@ -161,6 +184,8 @@ class Handler(BaseHTTPRequestHandler):
     log_lock = threading.Lock()
     call_seq = 0
     call_lock = threading.Lock()
+    # 「限流截断」用例：只打断**第一次**（工具结果回填的那一轮），重试时正常收尾
+    failkeep_limited = False
 
     # ------------------------------------------------------------------ 工具
 
@@ -213,6 +238,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/__reset":
             with Handler.log_lock:
                 Handler.log_entries.clear()
+            Handler.failkeep_limited = False
             self._json({"ok": True})
             return
         if path != "/v1/chat/completions":
@@ -303,6 +329,38 @@ class Handler(BaseHTTPRequestHandler):
                 entry["decision"] = "wrapup_tool"
                 self._record(entry)
                 self._stream_tool("comfy_get_status", _args({}))
+            return
+        # 「限流截断」：第一轮正常说话 + 调工具；工具结果回填的那一轮**第一次**回 429（限流打断），
+        # 之后（用户点重试）同样的请求正常收尾 —— 后端必须把第一轮已经说出去的内容留住。
+        if FAILKEEP_ASK in user_text:
+            if last.get("role") == "tool":
+                if Handler.failkeep_limited:
+                    entry["decision"] = "failkeep_final"
+                    self._record(entry)
+                    self._stream_text("重试之后把话说完：状态已查到，可以动手了。")
+                else:
+                    Handler.failkeep_limited = True
+                    entry["decision"] = "failkeep_429"
+                    self._record(entry)
+                    # 限流是 **HTTP 状态码**（真机实据就是这么回来的），不是流里的错误帧
+                    self._json({"error": {"message": "Upstream model provider is temporarily "
+                                                     "unavailable. Please try again in a moment.",
+                                          "type": "rate_limit_error"}}, 429)
+            else:
+                entry["decision"] = "failkeep_tool"
+                self._record(entry)
+                self._stream_text_and_tool(FAILKEEP_TEXT, "comfy_get_status", _args({}))
+            return
+        # 「中途断流」：第一轮跑一次工具（让 parts 非空），第二轮吐一半正文就掐断连接。
+        if BREAK_ASK in user_text:
+            if last.get("role") == "tool":
+                entry["decision"] = "break_midstream"
+                self._record(entry)
+                self._stream_text_then_abort(BREAK_TAIL_TEXT)
+            else:
+                entry["decision"] = "break_tool"
+                self._record(entry)
+                self._stream_text_and_tool(BREAK_FIRST_TEXT, "comfy_get_status", _args({}))
             return
 
         # 1) 工具结果已回填 -> 用正文收尾（循环终止）
@@ -414,6 +472,23 @@ class Handler(BaseHTTPRequestHandler):
         self._data(self._envelope({}, finish_reason="tool_calls",
                                   usage=self._usage(24, len(arguments))))
         self._sse_end()
+
+    def _stream_text_then_abort(self, text: str):
+        """吐一片正文之后**掐断连接**（不写 [DONE]、也不收尾 chunked）—— 模拟"流到一半被截断"。
+
+        真机上是网关 / 网络在流中间断掉。后端这时候必须把已经流出去的那半段保住
+        （正文 + 有序块都要），否则前端在 parts 非空时只渲染 parts，
+        用户就是"直接看不到它已经回复完的内容"。
+        """
+        self._sse_start()
+        self._data(self._envelope({"role": "assistant", "content": ""}))
+        mid = max(1, len(text) // 2)
+        for piece in (text[:mid], text[mid:]):
+            if piece:
+                self._data(self._envelope({"content": piece}))
+        self.wfile.flush()
+        # 不写终结块（`0\r\n\r\n`）就断开 → 客户端的 chunked 读取会遇到"传输提前结束"
+        self.close_connection = True
 
     def _stream_text_and_tool(self, text: str, name: str, arguments: str):
         """一轮里**既有正文又有工具调用**（真机常见：先说一句再调工具）。"""

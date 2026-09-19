@@ -1319,7 +1319,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 重试（AIH-024）：**新建一个 Run**，用原来的问题、同一个 Provider/模型与思考强度，
   /// 通过 `retryOfRunId` 关联回去，便于事后看出这是哪次失败的重放。
   ///
-  /// 不重放工具调用（首期还没有工具）；失败/取消的助手消息会被换成新的流式占位。
+  /// 不重放工具调用（后端会把已经跑完的那段半截回复 + 工具结果当历史喂回上游，模型自己接着做）。
+  /// 失败/取消的助手消息**有内容就留着**、重试另起一条气泡；只有空壳才就地换掉
+  /// （判据在后端 `AiMessageDto.isEmptyReply()`，本机靠返回的 `assistantMessageId` 是否变化来分辨）。
   Future<void> retry(String assistantMessageId) async {
     if (sending) return;
     final conv = conversation;
@@ -1366,23 +1368,31 @@ class AiWorkspaceStore extends ChangeNotifier {
       _activeRunId = start.runId;
       // 这次 Run 与助手消息的关联就地记下（不依赖事件流，刷新消息也不会丢）
       _runIds[start.assistantMessageId] = start.runId;
-      // 就地替换那条失败消息，不新增一条重复的助手气泡
-      messages = [
-        for (final msg in messages)
-          if (msg.id == assistantMessageId)
-            AiMessage(
-              id: start.assistantMessageId,
-              conversationId: conv.id,
-              seq: msg.seq,
-              role: 'assistant',
-              status: 'streaming',
-              text: '',
-              modelId: m.id,
-              reasoningEffort: effort,
-            )
-          else
-            msg,
-      ];
+
+      AiMessage streamingPlaceholder(int seq) => AiMessage(
+            id: start.assistantMessageId,
+            conversationId: conv.id,
+            seq: seq,
+            role: 'assistant',
+            status: 'streaming',
+            text: '',
+            modelId: m.id,
+            reasoningEffort: effort,
+          );
+
+      if (start.assistantMessageId == assistantMessageId) {
+        // 后端**就地复用**了那条失败气泡（它是空的）→ 同样就地换成流式占位，不新增气泡
+        messages = [
+          for (final msg in messages)
+            if (msg.id == assistantMessageId) streamingPlaceholder(msg.seq) else msg,
+        ];
+      } else {
+        // 后端**另起**了一条：原来那条失败回复里有内容（正文 / 思考 / 工具卡 / 产物入口卡），
+        // 必须原样留着 —— 以前这里无条件就地替换，用户点一次「重试」就把 AI 已经说完的内容
+        // 全擦掉了（用户 bug：429 截断之后"直接看不到它已经回复完的内容"）。
+        // 新的流式占位追加在末尾（后端取的 seq 就是 max+1）。
+        messages = [...messages, streamingPlaceholder(messages.length + 1)];
+      }
       _syncConversationStats();
       notifyListeners();
       await _consumeRun(start.runId, start.assistantMessageId, conv.id);

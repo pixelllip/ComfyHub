@@ -15,11 +15,15 @@
       7. 长期记忆 —— remember 落盘 + 下一次 Run 注入系统提示
       8. 附件（M3）—— 上传 → 缩略图 → 内联图片进请求体 → 纯文本模型零上游请求
          （含 **WebP**：按签名收下 + 尺寸探测 + 缩略图真的是 JPEG）
-      9. 重试      —— `retryOfRunId` 复用**同一条**提问与**同一条**助手占位：
-         会话消息数不变、不留空壳气泡（用户 2026-09-19 报的"同一条语句出现两次"）
+      9. 重试      —— `retryOfRunId` 复用**同一条**提问：空壳失败气泡就地复用（消息数不变、
+          不留空壳），**有内容的**失败气泡原样留着、重试另起一条（用户 2026-09-19 报的
+          "同一条语句出现两次" + "429 之后看不到已经回复完的内容"）
      10. 接着写    —— 输出被长度上限截断时**再要一轮**把话补完，而不是把半句当结尾（用户建议 ②）
      11. 首尾干净  —— 起标题的指令只发第一轮（回声标记不漏进正文、也不改会话名）+
          工具轮数用尽那一轮照给工具清单（模型就不会把工具语法当正文吐出来，用户 bug⑤）
+     12. 限流保住  —— 被 HTTP 429 打断时正文与 parts（含工具卡）一个字都不丢；
+         重试另起一条助手气泡，原来那条原样保留。另一半：**流到一半被掐断**时，
+         已经流出去的正文照样要落成 part（parts 非空时界面只渲染 parts）
 
     还会核对落库的消息 parts 顺序（tool_call / tool_result / text），保证重开会话能渲染工具卡。
 
@@ -65,6 +69,15 @@ $TruncateAsk = '续写测试'
 $HeadText = '第一段正文：这段话写到一半就被上游的输出长度上限切断了，'
 $TailText = '第二段正文：这里是接着写下去的部分。'
 
+# 第 13 幕（被不可抗力打断时内容不许消失）：
+#   · 假网关第一轮吐正文 + 工具调用，工具结果回填那一轮返回 HTTP 429（真机实据就是这么回来的）；
+#   · 另一半是"流到一半被掐断"：第一轮照旧跑一次工具（让 parts 非空），第二轮吐一半正文就断连接。
+$FailKeepAsk  = '限流截断：先看状态再动手'
+$FailKeepText = '先把本机状态查出来，再动手：'
+$BreakAsk     = '中途断流：先看状态再动手'
+$BreakFirst   = '先查一下当前状态：'
+$BreakTail    = '状态查完了，接下来这一步其实是：'
+
 $SkillFile   = Join-Path $ProjectRoot "storage\ai\skills\$SkillName\SKILL.md"
 $HackFile    = Join-Path $ProjectRoot 'storage\e2e-hack.txt'
 $OkFile      = Join-Path $ProjectRoot 'comfyui\e2e-ok.txt'
@@ -77,6 +90,8 @@ $script:Streams = @{}
 $script:ConversationId = $null
 $script:RetryConversationId = $null
 $script:TitleConversationId = $null
+$script:FailKeepConversationId = $null
+$script:BreakConversationId = $null
 
 # 长期记忆的原内容：本脚本会往里写一条测试记忆，结束时原样放回
 $script:MemoryBefore = $null
@@ -308,7 +323,7 @@ try {
 
     # --- 2. Provider + 模型目录 -------------------------------------------
     Say ''
-    Say '  [0/12] 配置 e2e Provider / 模型' 'Cyan'
+    Say '  [0/13] 配置 e2e Provider / 模型' 'Cyan'
 
     try { Invoke-Api 'DELETE' "/api/ai/providers/$ProviderId" $null | Out-Null } catch { }
     try { Invoke-Api 'DELETE' "/api/ai/skills/$SkillName" $null | Out-Null } catch { }
@@ -371,7 +386,7 @@ try {
 
     # --- 3. 场景 1：注册 skill --------------------------------------------
     Say ''
-    Say '  [1/12] 注册：register_skill 落盘' 'Cyan'
+    Say '  [1/13] 注册：register_skill 落盘' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s1 = Receive-Scenario -ConversationId $conv.id -Text '帮我注册一个新的 skill'
     $e1 = $s1.events
@@ -411,7 +426,7 @@ try {
 
     # --- 4. 场景 2：按需加载 ----------------------------------------------
     Say ''
-    Say '  [2/12] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
+    Say '  [2/13] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s2 = Receive-Scenario -ConversationId $conv.id -Text '加载那个 skill'
     $e2 = $s2.events
@@ -437,7 +452,7 @@ try {
 
     # --- 5. 场景 3：越界写被拒 --------------------------------------------
     Say ''
-    Say '  [3/12] 越界写被拒：write_file 打到 storage/' 'Cyan'
+    Say '  [3/13] 越界写被拒：write_file 打到 storage/' 'Cyan'
     $s3 = Receive-Scenario -ConversationId $conv.id -Text '越界写个文件'
     $e3 = $s3.events
     $fail3 = @(Get-Events $e3 'tool.failed')
@@ -454,7 +469,7 @@ try {
 
     # --- 6. 场景 4：目录内写成功 ------------------------------------------
     Say ''
-    Say '  [4/12] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
+    Say '  [4/13] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
     $s4 = Receive-Scenario -ConversationId $conv.id -Text '在目录内写个文件'
     $e4 = $s4.events
     $comp4 = @(Get-Events $e4 'tool.completed')
@@ -468,7 +483,7 @@ try {
 
     # --- 7. 场景 5：审批闸门 ----------------------------------------------
     Say ''
-    Say '  [5/12] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
+    Say '  [5/13] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
     $state = @{ callId = $null; pending = $false; accepted = $false; startedIndex = -1; requestedIndex = -1 }
     $s5 = Receive-Scenario -ConversationId $conv.id -Text '同步一下历史' -OnEvent {
         param($e, $i)
@@ -500,7 +515,7 @@ try {
 
     # --- 8. 场景 6：只读工具 ----------------------------------------------
     Say ''
-    Say '  [6/12] 只读工具：comfy_get_status 不需要审批' 'Cyan'
+    Say '  [6/13] 只读工具：comfy_get_status 不需要审批' 'Cyan'
     $s6 = Receive-Scenario -ConversationId $conv.id -Text '看看 ComfyUI 状态'
     $e6 = $s6.events
     $req6 = @(Get-Events $e6 'tool.requested')
@@ -513,7 +528,7 @@ try {
 
     # --- 9. 落库的消息 parts（重开会话能渲染工具卡） ----------------------
     Say ''
-    Say '  [7/12] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
+    Say '  [7/13] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
     $runDto = Invoke-Api 'GET' "/api/ai/runs/$($s1.run.runId)" $null
     Check 'run 落库状态 == completed' ($runDto.status -eq 'completed') ($runDto | ConvertTo-Json -Compress)
 
@@ -540,7 +555,7 @@ try {
 
     # --- 10. 场景 8：长期记忆（M6） ---------------------------------------
     Say ''
-    Say '  [8/12] 长期记忆：remember 落盘 + 下一次 Run 注入系统提示' 'Cyan'
+    Say '  [8/13] 长期记忆：remember 落盘 + 下一次 Run 注入系统提示' 'Cyan'
     $s8 = Receive-Scenario -ConversationId $conv.id -Text '记住：E2E 记一条，用户偏好 4:3 画幅'
     $e8 = $s8.events
     $req8 = @(Get-Events $e8 'tool.requested')
@@ -572,7 +587,7 @@ try {
 
     # --- 11. 场景 9：附件（M3 / AIH-027 ~ AIH-031） -----------------------
     Say ''
-    Say '  [9/12] 附件：上传 → 缩略图 → 内联进请求体 → 不支持的模型零请求' 'Cyan'
+    Say '  [9/13] 附件：上传 → 缩略图 → 内联进请求体 → 不支持的模型零请求' 'Cyan'
 
     function Set-E2eModel {
         param([string[]]$Modalities)
@@ -706,7 +721,7 @@ try {
     # 根因是 `POST /conversations/{id}/runs` 不看 `retryOfRunId`，照旧 append 了一条新用户消息。
     # 这一幕钉三件事：重试复用**同一条**用户消息、复用**同一条**助手占位、消息总数不变。
     Say ''
-    Say '  [10/12] 重试：复用原来那条提问与失败气泡，绝不新增' 'Cyan'
+    Say '  [10/13] 重试：复用原来那条提问与失败气泡，绝不新增' 'Cyan'
 
     # 先造一次"必然失败"的 Run：Provider 指向一个没人监听的端口（连接被拒 → PROVIDER_UNREACHABLE）
     try { Invoke-Api 'DELETE' "/api/ai/providers/$DeadProviderId" $null | Out-Null } catch { }
@@ -788,7 +803,7 @@ try {
     # 现场：长回复被上游的 max_tokens 切断（这里用假网关的 finish_reason=length 复现），
     # 后端必须**再要一轮**把话说完，而不是把半句话当成结尾。
     Say ''
-    Say '  [11/12] 接着写：输出被长度上限截断时把回复补完（不强行截断）' 'Cyan'
+    Say '  [11/13] 接着写：输出被长度上限截断时把回复补完（不强行截断）' 'Cyan'
 
     $beforeLog5 = @(Invoke-Gateway '/__log').Count
     $s11 = Receive-Scenario -ConversationId $conv.id -Text "$TruncateAsk 请写两段话"
@@ -830,7 +845,7 @@ try {
     #      "在最前面输出一行 [标题]"，模型就又吐一遍，而那时摘取状态机已经收工 → 标记漏进正文；
     #   ② 工具轮数用尽的那一轮原先**不给工具清单**，DeepSeek 系模型就把工具语法当正文吐了出来。
     Say ''
-    Say '  [12/12] 首尾不再"被截断"：起标题指令只发首轮 + 收尾轮照给工具清单' 'Cyan'
+    Say '  [12/13] 首尾不再"被截断"：起标题指令只发首轮 + 收尾轮照给工具清单' 'Cyan'
 
     $script:MaxStepsBefore = (Invoke-Api 'GET' '/api/ai/tools/policy' $null).maxToolSteps
 
@@ -884,6 +899,140 @@ try {
         ($null -ne $answer13 -and $answer13.text -notmatch 'invoke name=') ($answer13.text)
     Check '如实说明"工具轮数到上限、这次没执行"' `
         ($null -ne $answer13 -and $answer13.text -match '工具轮数上限') ($answer13.text)
+
+    # --- 15. 场景 13：被 429 打断时，已经回复完的内容一个字都不能丢（用户 bug）-------
+    #
+    # 现场（会话 9b6d01af 的 seq12，**查库实据**）：那次 Run 跑了 4 分钟、成功调了 3 次
+    # `comfy_submit`，最后一轮撞上 HTTP 429（`error_code=RATE_LIMIT`）。用户接着点了「重试」，
+    # 结果**整条回复连同工具卡一起消失** —— 库里那条消息 `text=''`、一个 part 都没有：
+    # `resetAssistantForRetry` 把"有内容的失败回复"就地清零了（现在只在**空壳**上才这么做）。
+    # 这一幕钉五件事：
+    #   ① 失败时正文与 parts（正文 + 工具调用 + 工具结果）都还在；
+    #   ② 重试**另起一条**助手气泡（原来那条原样保留，含工具卡）；
+    #   ③ 提问仍然只有 1 条（重试复用那条用户消息，不重复提问）；
+    #   ④ 重试能正常收尾，新气泡是完整回复；
+    #   ⑤ 假网关确实按"先内容、再 429、重试成功"三步走的（防止断言失真）。
+    Say ''
+    Say '  [13/13] 被 429 打断：已经回复完的内容不许消失，重试另起一条' 'Cyan'
+
+    # 上一幕把工具轮数上限钉成了 1（那一幕要跑到"轮数用尽"）；这一幕要真的执行工具，先还原
+    if ($null -ne $script:MaxStepsBefore) {
+        Invoke-Api 'PUT' '/api/ai/tools/policy' @{ maxToolSteps = $script:MaxStepsBefore } | Out-Null
+    }
+
+    # 会话**先给个标题**再发：这一幕不打算把"自动起标题"那条链路卷进断言
+    # （没有标题时后端会按轮带上"起标题"的 system 指令；它固定在系统提示之后，
+    #  但一劳永逸地把这条链路摘出去，断言才只盯"工具轮之后撞 429"这一件事）。
+    $failConv = Invoke-Api 'POST' '/api/ai/conversations' @{
+        title = 'e2e-ai-tools-failkeep'; providerId = $ProviderId; modelId = $ModelId
+    }
+    $script:FailKeepConversationId = $failConv.id
+
+    $beforeLog8 = @(Invoke-Gateway '/__log').Count
+    $s14 = Receive-Scenario -ConversationId $failConv.id -Text $FailKeepAsk
+
+    # 先钉假网关的走法：这一轮**真的**是"先吐内容、再被 429 打断"（断言不空转）
+    $log8 = @(@(Invoke-Gateway '/__log') | Select-Object -Skip $beforeLog8)
+    $decisions8 = @($log8 | ForEach-Object { $_.decision })
+    Check '假网关确实走了"先内容 + 工具 → 429"两步' `
+        (($decisions8 -join ' | ') -eq 'failkeep_tool | failkeep_429') ($decisions8 -join ' | ')
+
+    $failEv = @(Get-Events $s14.events 'run.failed') | Select-Object -First 1
+    Check '被限流的那次 Run 如实失败（RATE_LIMIT，不假装成功）' `
+        ($null -ne $failEv -and (Convert-Data $failEv).code -eq 'RATE_LIMIT') `
+        ($s14.events[-1].event)
+
+    $msgs14 = @(Invoke-Api 'GET' "/api/ai/conversations/$($failConv.id)/messages" $null)
+    $failedMsg = @($msgs14 | Where-Object { $_.id -eq $s14.run.assistantMessageId }) | Select-Object -First 1
+    Check '失败之后会话里是 1 问 1 答（2 条）' ($msgs14.Count -eq 2) `
+        (($msgs14 | ForEach-Object { "$($_.role):$($_.status)" }) -join ' | ')
+    Check '失败的那条回复**正文还在**（429 不许把已经说出去的话抹掉）' `
+        ($null -ne $failedMsg -and $failedMsg.status -eq 'failed' -and
+         $failedMsg.text -like "*$FailKeepText*") ($failedMsg.text)
+    $failedTypes = @($failedMsg.parts | ForEach-Object { $_.type })
+    Check '失败的那条回复**parts 也在**（正文 + 工具卡：少了块，界面上就看不见这些内容）' `
+        (($failedTypes -contains 'text') -and ($failedTypes -contains 'tool_call') -and
+         ($failedTypes -contains 'tool_result')) ($failedTypes -join ' | ')
+
+    # 重试：原来那条**有内容**，后端必须另起一条助手气泡（不是就地清零）
+    $retry14 = $null
+    $retryErr = ''
+    try {
+        $retry14 = Invoke-Api 'POST' "/api/ai/conversations/$($failConv.id)/runs" @{
+            text = $FailKeepAsk; providerId = $ProviderId; modelId = $ModelId
+            retryOfRunId = $s14.run.runId
+        }
+    } catch {
+        $retryErr = "$($_.ErrorDetails.Message)"
+    }
+    Check '重试请求被接受（有内容的失败回复允许重试）' ($null -ne $retry14) $retryErr
+    if ($null -ne $retry14) {
+        Check '重试**另起**了一条助手气泡（有内容的失败回复不许被就地重置）' `
+            ($retry14.assistantMessageId -ne $s14.run.assistantMessageId) `
+            ("before=$($s14.run.assistantMessageId) after=$($retry14.assistantMessageId)")
+        Check '重试仍然复用原来那条提问（userMessageId 不变）' `
+            ($retry14.userMessageId -eq $s14.run.userMessageId) `
+            ("before=$($s14.run.userMessageId) after=$($retry14.userMessageId)")
+
+        Open-RunStream -RunId $retry14.runId
+        $e14 = @(Receive-RunEvents -RunId $retry14.runId -TimeoutSec $TimeoutSec)
+        Close-RunStream -RunId $retry14.runId
+        Check '重试的 Run 正常完成' ((@(Get-Events $e14 'run.completed')).Count -ge 1) ($e14[-1].event)
+
+        $msgs14b = @(Invoke-Api 'GET' "/api/ai/conversations/$($failConv.id)/messages" $null)
+        Check '重试之后是 3 条：1 条提问 + 两条助手气泡（旧的留在原地，新的另起）' `
+            ($msgs14b.Count -eq 3) `
+            (($msgs14b | ForEach-Object { "$($_.role):$($_.status):$($_.text.Length)" }) -join ' | ')
+        $old14 = @($msgs14b | Where-Object { $_.id -eq $s14.run.assistantMessageId }) | Select-Object -First 1
+        $old14Types = @($old14.parts | ForEach-Object { $_.type })
+        Check '重试没有擦掉原来那条：正文与 parts（含工具卡）一个不少' `
+            ($null -ne $old14 -and $old14.status -eq 'failed' -and
+             $old14.text -like "*$FailKeepText*" -and
+             ($old14Types -contains 'text') -and ($old14Types -contains 'tool_call') -and
+             ($old14Types -contains 'tool_result')) `
+            ("text=$($old14.text) parts=$($old14Types -join ' | ')")
+        $new14 = @($msgs14b | Where-Object { $_.id -eq $retry14.assistantMessageId }) | Select-Object -First 1
+        Check '新的那条是完整回复（重试真的接上了没说完的部分）' `
+            ($null -ne $new14 -and $new14.status -eq 'complete' -and
+             $new14.text -like '*重试之后把话说完*') ($new14.text)
+        Check '那句提问在会话里仍然只有 1 条（重试不重复提问）' `
+            (@($msgs14b | Where-Object { $_.role -eq 'user' }).Count -eq 1) `
+            (@($msgs14b | Where-Object { $_.role -eq 'user' }).Count)
+    }
+
+    $decisions8b = @(@(Invoke-Gateway '/__log') | Select-Object -Skip $beforeLog8 |
+        ForEach-Object { $_.decision })
+    Check '假网关最后一步是"重试正常收尾"（三步都真的走了）' `
+        (($decisions8b -join ' | ') -eq 'failkeep_tool | failkeep_429 | failkeep_final') `
+        ($decisions8b -join ' | ')
+
+    # 另一半：**流到一半被掐断**（这一轮已经流出去的正文还没落成 part，见 HarnessRunner 的
+    # `rescueAlreadySaid` / `PartSink.flushInflight`）。第一轮先跑完一次工具 → parts 非空，
+    # 于是"这一轮的半段正文"如果没补成 part，界面上就只渲染 parts、那半段就看不见了
+    # （退回去实测：正文里有、parts 里没有）。
+    Say ''
+    Say '  [13/13·续] 流到一半被掐断：已经流出去的正文照样要落成 part' 'Cyan'
+
+    $breakConv = Invoke-Api 'POST' '/api/ai/conversations' @{
+        title = 'e2e-ai-tools-break'; providerId = $ProviderId; modelId = $ModelId
+    }
+    $script:BreakConversationId = $breakConv.id
+
+    $s15 = Receive-Scenario -ConversationId $breakConv.id -Text $BreakAsk
+    $breakEv = @(Get-Events $s15.events 'run.failed') | Select-Object -First 1
+    Check '中途断流的那次 Run 如实失败（不假装答完）' ($null -ne $breakEv) ($s15.events[-1].event)
+
+    $msgs15 = @(Invoke-Api 'GET' "/api/ai/conversations/$($breakConv.id)/messages" $null)
+    $breakMsg = @($msgs15 | Where-Object { $_.id -eq $s15.run.assistantMessageId }) | Select-Object -First 1
+    $breakTexts = @($breakMsg.parts | Where-Object { $_.type -eq 'text' } | ForEach-Object { $_.text })
+    Check '被掐断前流出去的正文在正文里（text）' `
+        ($null -ne $breakMsg -and $breakMsg.text -like "*$BreakTail*") ($breakMsg.text)
+    Check '同样也落成了 part（parts 非空时界面只渲染 parts —— 少了它用户就看不见这半段）' `
+        (($breakTexts -join '') -like "*$BreakTail*") ($breakTexts -join ' || ')
+    Check '工具轮那一轮的内容也还在（工具卡没被这次失败吃掉）' `
+        (@($breakMsg.parts | Where-Object { $_.type -eq 'tool_call' }).Count -ge 1 -and
+         (@($breakMsg.parts | ForEach-Object { $_.type }) -contains 'tool_result')) `
+        (@($breakMsg.parts | ForEach-Object { $_.type }) -join ' | ')
 } finally {
     # --- 清理 -------------------------------------------------------------
     Say ''
@@ -904,6 +1053,14 @@ try {
         # 第 12 幕那条"不带标题"的会话（自动起标题的现场）
         if ($script:TitleConversationId) {
             try { Invoke-Api 'DELETE' "/api/ai/conversations/$($script:TitleConversationId)" $null | Out-Null } catch { }
+        }
+        # 第 13 幕那条"被 429 打断"的会话
+        if ($script:FailKeepConversationId) {
+            try { Invoke-Api 'DELETE' "/api/ai/conversations/$($script:FailKeepConversationId)" $null | Out-Null } catch { }
+        }
+        # 第 13 幕那条"流到一半被掐断"的会话
+        if ($script:BreakConversationId) {
+            try { Invoke-Api 'DELETE' "/api/ai/conversations/$($script:BreakConversationId)" $null | Out-Null } catch { }
         }
         try { Invoke-Api 'DELETE' "/api/ai/providers/$DeadProviderId" $null | Out-Null } catch { }
         try { Invoke-Api 'DELETE' "/api/ai/providers/$ProviderId" $null | Out-Null } catch { }
