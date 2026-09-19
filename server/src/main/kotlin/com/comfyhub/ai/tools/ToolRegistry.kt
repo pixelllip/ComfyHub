@@ -139,8 +139,15 @@ class ToolRegistry(
     private val log = LoggerFactory.getLogger(ToolRegistry::class.java)
 
     companion object {
-        /** 单条工具结果回给模型的字符上限（超出保留头尾并注明） */
-        const val MAX_RESULT_CHARS = 8_000
+        /**
+         * 单条工具结果回给模型的字符上限（超出保留头部并注明）。
+         *
+         * 8_000 → 32_000（用户 2026-09-19：「单轮读写上限给得太低了，万一工作流本身有问题，
+         * AI 尝试修改工作流就会显得不够用」）。8KB 连一份工作流 JSON 的节点表都装不下，
+         * 模型看到的是"半个 JSON"，自然改不动 —— 它要改什么就得先完整看见什么。
+         * 32K 字符对现在的上下文窗口（普遍 128K tokens 起）是很小的一笔开销。
+         */
+        const val MAX_RESULT_CHARS = 32_000
         /** 工具卡上显示的摘要长度 */
         const val MAX_PREVIEW_CHARS = 400
     }
@@ -347,9 +354,10 @@ class ToolRegistry(
 
         AgentTool(
             name = "read_file",
-            description = "读一个文本文件（默认限制在允许读取的目录内，超过 256KB 会截断）。",
+            description = "读一个文本文件（默认限制在允许读取的目录内）。超过上限会**分段读**：" +
+                "返回里会给出 nextOffset，按它再调用一次就能接着读，不要因为一次没读完就放弃。",
             parameters = schema(
-                """{"type":"object","properties":{"path":{"type":"string"},"maxBytes":{"type":"integer","description":"可选，默认 262144"}},"required":["path"],"additionalProperties":false}"""
+                """{"type":"object","properties":{"path":{"type":"string"},"maxBytes":{"type":"integer","description":"可选，本次最多读多少字节（默认 2097152）"},"offset":{"type":"integer","description":"可选，从第几个字节开始读（默认 0；接着上一次的 nextOffset 读下一段）"}},"required":["path"],"additionalProperties":false}"""
             ),
             category = ToolCategory.FILES,
             mutating = false,
@@ -361,9 +369,25 @@ class ToolRegistry(
             val limit = (args.int("maxBytes") ?: ctx.policy.config.maxReadBytes)
                 .coerceIn(1, ctx.policy.config.maxReadBytes)
             val size = Files.size(file)
-            val bytes = Files.newInputStream(file).use { it.readNBytes(limit) }
-            val text = String(bytes, StandardCharsets.UTF_8)
-            val note = if (size > bytes.size) "\n…（文件 $size 字节，已截断到 ${bytes.size} 字节）" else ""
+            val start = (args.int("offset") ?: 0).coerceIn(0, size.toInt())
+            val window = Files.newInputStream(file).use { input ->
+                input.skipNBytes(start.toLong())
+                input.readNBytes(limit)
+            }
+            // 起止都要落在**字符边界**上（见 [snapToCharStart] / [completeUtf8Prefix]）：
+            // 一份中文工作流按字节硬切，模型会在每页交界处看到乱码，照着写回去还会把文件写坏。
+            val from = snapToCharStart(window)
+            val to = from + completeUtf8Prefix(window, from)
+            val text = String(window, from, to - from, StandardCharsets.UTF_8)
+            val readStart = start + from
+            val end = start + to
+            // 没读完时把"下一段从哪读"直接算好给模型 —— 只说"已截断"等于让它自己猜
+            val note = if (size > end) {
+                "\n…（文件共 $size 字节，本次是 [$readStart, $end)；接着读请再调一次 read_file，" +
+                    "path 不变、offset=$end）"
+            } else {
+                ""
+            }
             ToolOutput("$file\n$text$note")
         },
 
@@ -384,7 +408,9 @@ class ToolRegistry(
             if (bytes.size > ctx.policy.config.maxWriteBytes) {
                 throw ToolFailure(
                     "TOO_LARGE",
-                    "内容太大（${bytes.size} > ${ctx.policy.config.maxWriteBytes} 字节），拆成多次写"
+                    "内容太大（${bytes.size} > ${ctx.policy.config.maxWriteBytes} 字节）：" +
+                        "拆成多次写（第一次 overwrite、之后用 mode=\"append\"），" +
+                        "别因为一次写不下就放弃"
                 )
             }
             val target = ctx.policy.resolveWrite(raw)
@@ -846,6 +872,47 @@ class ToolRegistry(
 
 internal fun JsonObject.str(field: String): String? =
     (this[field] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+
+/**
+ * [bytes] 开头有几个字节是"某个多字节 UTF-8 字符的续字节"（0b10xxxxxx）。
+ *
+ * `read_file(offset=…)` 是模型给的下标，它可能落在字符中间（或者文件本身就被截断过）。
+ * 从这里起读会得到一串乱码 —— 宁可从字符开头起读，也不要给模型看半截字。
+ */
+internal fun snapToCharStart(bytes: ByteArray): Int {
+    var i = 0
+    while (i < bytes.size && i < 4 && (bytes[i].toInt() and 0xC0) == 0x80) i++
+    return i
+}
+
+/**
+ * [bytes] 从 [from] 起、**完整** UTF-8 字符覆盖的字节数（末尾被切断的多字节字符不计入）。
+ *
+ * 这是"按字节分段读中文"的命门：1000 字节的切点大概率落在一个汉字中间，
+ * 直接 `String(bytes, UTF_8)` 会在页尾留一个 U+FFFD（乱码），模型照着改回去
+ * 就把文件写坏了。退回上一个字符边界，下一页从那里接着读即可，**一个字都不会丢**。
+ */
+internal fun completeUtf8Prefix(bytes: ByteArray, from: Int = 0): Int {
+    if (from >= bytes.size) return 0
+    var i = bytes.size
+    var back = 0
+    while (i > from && back < 4) {
+        if ((bytes[i - 1].toInt() and 0xC0) != 0x80) break // 前导字节：停在这里
+        i--
+        back++
+    }
+    if (i == from) return bytes.size - from // 全段都是续字节：交给解码器兜底
+    val lead = bytes[i - 1].toInt() and 0xFF
+    val need = when {
+        lead and 0x80 == 0x00 -> 1
+        lead and 0xE0 == 0xC0 -> 2
+        lead and 0xF0 == 0xE0 -> 3
+        lead and 0xF8 == 0xF0 -> 4
+        else -> 1
+    }
+    val have = bytes.size - (i - 1)
+    return if (have >= need) bytes.size - from else (i - 1) - from
+}
 
 internal fun JsonObject.int(field: String): Int? =
     (this[field] as? JsonPrimitive)?.let { runCatching { it.intOrNull ?: it.content.toInt() }.getOrNull() }

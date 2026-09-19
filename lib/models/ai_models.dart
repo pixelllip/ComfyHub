@@ -1438,7 +1438,7 @@ class AiToolCallState {
   final String arguments;
   final AiToolCallStatus status;
 
-  /// 结果预览（后端已按 8KB 截断）。
+  /// 结果预览（后端已按 MAX_RESULT_CHARS 截断）。
   final String? preview;
 
   /// 失败 / 拒绝的原因（稳定错误码或消息）。
@@ -1534,7 +1534,7 @@ class AiToolCallState {
           status: ok
               ? AiToolCallStatus.ok
               : (approval == 'denied' ? AiToolCallStatus.denied : AiToolCallStatus.failed),
-          // tool_result.text 就是完整输出（后端已截断到 8KB）
+          // tool_result.text 就是完整输出（后端已截断到 MAX_RESULT_CHARS）
           preview: part.text,
           error: ok ? null : (map['code']?.toString() ?? map['error']?.toString()),
           elapsedMs: (map['elapsedMs'] as num?)?.toInt() ?? 0,
@@ -1713,3 +1713,5 @@ class AiComfyJobs {
   /// 有没有"正在跑"的东西 —— 界面据此决定要不要显示进度块、要不要继续轮询。
   bool get hasActivity => queueRunning > 0 || queuePending > 0 || submissions.any((s) => s.isActive);
 }
+
+

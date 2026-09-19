@@ -404,6 +404,85 @@ class ToolRegistryTest {
     }
 
     @Test
+    fun `read_file 超过单次上限时按 offset 分段读 不会丢内容`() = runBlocking {
+        val e = env()
+        // 用一份"一次只让读 1000 字节"的策略，把分段读这条路走出来（跟上限多大无关）
+        val tight = ToolPolicy(e.root, ToolPolicyConfig(maxReadBytes = 1000))
+        val ctx = e.ctx(tight)
+        val body = (1..300).joinToString("\n") { "第 $it 行内容" }
+        Files.writeString(e.root.resolve("comfyui/workflow.json"), body)
+
+        val head = e.policy.resolveRead("comfyui/workflow.json").toString() + "\n"
+        fun chunk(record: com.comfyhub.ai.tools.ToolCallRecord): String =
+            record.content.removePrefix(head).substringBefore("\n…（")
+
+        // 一页一页接着读，直到读完（按返回的 offset 走，不自己猜）
+        val first = e.registry.invoke(
+            "c0", "read_file",
+            args("path" to "comfyui/workflow.json", "maxBytes" to "1000"),
+            ctx,
+        )
+        assertEquals("ok", first.status, first.error ?: first.content)
+        assertTrue(first.content.contains("offset="), "没读完必须告诉模型下一段从哪读：${first.content.takeLast(140)}")
+
+        var joined = chunk(first)
+        var offset = Regex("offset=(\\d+)").find(first.content)!!.groupValues[1].toInt()
+        var noMoreNote = false
+        var guard = 0
+        while (guard++ < 12) {
+            val next = e.registry.invoke(
+                "c$guard", "read_file",
+                args("path" to "comfyui/workflow.json", "maxBytes" to "1000", "offset" to offset.toString()),
+                ctx,
+            )
+            assertEquals("ok", next.status, next.error ?: next.content)
+            joined += chunk(next)
+            val m = Regex("offset=(\\d+)").find(next.content)
+            if (m == null) {
+                noMoreNote = true
+                break
+            }
+            offset = m.groupValues[1].toInt()
+        }
+        assertTrue(noMoreNote, "读到文件尾之后不该再提示接着读")
+        assertEquals(body, joined, "分段读拼起来必须和原文一模一样（中文不能被切成两半）")
+        assertTrue(!joined.contains('\uFFFD'), "页尾不能留乱码")
+    }
+
+    @Test
+    fun `单次读写上限的出厂值不会被库里冻住的旧值盖回去`() {
+        // 老库里的 ai.tools.policy 冻着 256KB / 1MB（本机实测就是这个值）：
+        // 只在代码里上调默认值对老用户完全无效，必须过 normalizeStored
+        val frozen = ToolPolicyConfig(
+            maxComfyQueriesPerRun = 3,
+            maxReadBytes = 256 * 1024,
+            maxWriteBytes = 1024 * 1024,
+        )
+        val normalized = ToolPolicyConfig.normalizeStored(frozen)
+        assertEquals(ToolPolicyConfig.DEFAULT_MAX_READ_BYTES, normalized.maxReadBytes)
+        assertEquals(ToolPolicyConfig.DEFAULT_MAX_WRITE_BYTES, normalized.maxWriteBytes)
+        assertEquals(ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN, normalized.maxComfyQueriesPerRun)
+        // 用户可改的那两项**不能**被覆盖（库里的值必须生效）
+        assertEquals(8, normalized.maxToolSteps)
+        assertEquals(16, normalized.maxCallsPerRun)
+    }
+
+    @Test
+    fun `write_file 超限时报 TOO_LARGE 并指出用 append 分多次写`() = runBlocking {
+        val e = env()
+        val tight = ToolPolicy(e.root, ToolPolicyConfig(maxWriteBytes = 16))
+        val record = e.registry.invoke(
+            "c1", "write_file",
+            args("path" to "comfyui/big.txt", "content" to "x".repeat(64)),
+            e.ctx(tight),
+        )
+        assertEquals("failed", record.status)
+        assertEquals("TOO_LARGE", record.errorCode)
+        assertTrue(record.error!!.contains("append"), record.error!!)
+        assertTrue(!Files.exists(e.root.resolve("comfyui/big.txt")))
+    }
+
+    @Test
     fun `超长结果截断到 MAX_RESULT_CHARS 并注明`() = runBlocking {
         val e = env()
         val body = "A".repeat(ToolRegistry.MAX_RESULT_CHARS + 500)

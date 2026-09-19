@@ -355,8 +355,9 @@ Map<String, dynamic> _defaultPolicy() => {      'writeRoots': [r'D:\myProject\Fl
       'overrides': <String, String>{},
       'maxToolSteps': 8,
       'maxCallsPerRun': 16,
-      'maxReadBytes': 262144,
-      'maxWriteBytes': 262144,
+      // 与后端 ToolPolicyConfig 的出厂值保持一致（2026-09-19 上调成 2MB / 4MB）
+      'maxReadBytes': 2 * 1024 * 1024,
+      'maxWriteBytes': 4 * 1024 * 1024,
       'defaultWriteRoot': r'D:\myProject\FlutterProject\viewer\comfyui',
     };
 
@@ -1560,3 +1561,4 @@ void main() {
     expect(controller.offset, closeTo(controller.position.maxScrollExtent, 1));
   });
 }
+

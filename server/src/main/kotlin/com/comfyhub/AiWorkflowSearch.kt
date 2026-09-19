@@ -40,10 +40,10 @@ object AiWorkflowSearch {
     /** 一份工作流文件最大读多少（本机工作流通常几十 KB，上百 MB 的一定是拿错文件了）。 */
     const val MAX_WORKFLOW_FILE_BYTES = 32L * 1024 * 1024
 
-    /** 节点摘要最多列几个（8KB 的工具结果装不下 100+ 个节点的完整清单）。 */
+    /** 节点摘要最多列几个（一份 100+ 节点的清单会把工具结果撑满，挑前若干个足够定位）。 */
     const val MAX_SUMMARY_NODES = 120
 
-    /** 工具结果是**截断**过的（全局 8KB 上限）：每一类缺口各留多少条。 */
+    /** 工具结果是**截断**过的（`ToolRegistry.MAX_RESULT_CHARS`）：每一类缺口各留多少条。 */
     const val MAX_UNSUPPORTED = 20
     const val MAX_GAPS = 40
     const val MAX_REWRITTEN = 12
@@ -310,7 +310,8 @@ object AiWorkflowSearch {
     /**
      * 给模型看的节点摘要：每个节点的 `id` / 类型 / 标题 / 可覆盖的控件名 / 已连线的输入名。
      *
-     * 为什么不直接把整张图丢过去：113 个节点的 API 图有 100+ KB，一次工具结果上限是 8KB，
+     * 为什么不直接把整张图丢过去：113 个节点的 API 图有 100+ KB，一次工具结果上限
+     * 只有 `ToolRegistry.MAX_RESULT_CHARS`（2026-09-19 起 32K 字符，以前 8K），
      * 模型看到的会是被截断的半个 JSON —— 那比给一张清楚的"哪个节点能改什么"的表更难用。
      */
     private fun summarizeNodes(apiGraph: JsonObject): JsonArray = buildJsonArray {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/ai_api_client.dart';
+import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/ai_models.dart';
 import '../widgets/adaptive_layout.dart';
@@ -288,7 +289,11 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
             if (_policy.maxReadBytes > 0 || _policy.maxWriteBytes > 0) ...[
               const SizedBox(height: 10),
               Text(
-                '单次读写上限：读 ${_policy.maxReadBytes} 字节 · 写 ${_policy.maxWriteBytes} 字节（后端固定，界面不可改）',
+                // 用户 2026-09-19：「单轮读写上限给得太低了」→ 读 256KB→2MB、写 1MB→4MB，
+                // 而且 read_file 现在支持 offset 分段读（没读完会告诉你下一段从哪读）。
+                '单次读写上限：读 ${formatSize(_policy.maxReadBytes)} · '
+                '写 ${formatSize(_policy.maxWriteBytes)}（后端固定，界面不可改；'
+                '读不完可以按 offset 分段读）',
                 style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
               ),
             ],

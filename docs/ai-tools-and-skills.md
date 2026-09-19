@@ -40,8 +40,8 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `delete_skill` | skill | **ask** | 不可逆，默认要用户点批准 |
 | `remember` | memory | allow | 把一条跨对话成立的事实写进长期记忆（M6）；写的是应用自己的 `memory.md`，不是用户文件系统 |
 | `list_dir` | files | allow | 列目录（默认 ComfyUI 目录，深度 ≤2） |
-| `read_file` | files | allow | 读文本，上限 256KB |
-| `write_file` | files | allow | **只能写 ComfyUI 目录**（越界直接拒绝） |
+| `read_file` | files | allow | 读文本，单次上限 2MB（2026-09-19 由 256KB 上调）；没读完会给出 `nextOffset`，按 `offset=` 接着读 |
+| `write_file` | files | allow | **只能写 ComfyUI 目录**（越界直接拒绝）；单次上限 4MB，超了用 `mode="append"` 分多次写 |
 | `comfy_get_status` | comfy | allow | 复用 `ComfyCapture.status()`：连通性 / 队列 / 最近捕获（**附最近提交的任务**） |
 | `comfy_get_run` | comfy | allow | 按 runKey 查一次捕获（AIH-034） |
 | `comfy_sync_history` | comfy | **ask** | 会写我们的库，按 DEC-005 默认要审批 |

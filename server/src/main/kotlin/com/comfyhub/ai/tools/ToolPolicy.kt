@@ -57,10 +57,10 @@ data class ToolPolicyConfig(
      * 读库一律过 [normalizeStored]。
      */
     val maxComfyQueriesPerRun: Int = DEFAULT_MAX_COMFY_QUERIES_PER_RUN,
-    /** 一次工具最多读取的字节数 */
-    val maxReadBytes: Int = 256 * 1024,
-    /** 一次 write_file 最多写入的字节数 */
-    val maxWriteBytes: Int = 1024 * 1024,
+    /** 单次 `read_file` 最多读取的字节数（2026-09-19 上调，见 [DEFAULT_MAX_READ_BYTES]） */
+    val maxReadBytes: Int = DEFAULT_MAX_READ_BYTES,
+    /** 一次 write_file 最多写入的字节数（2026-09-19 上调，见 [DEFAULT_MAX_WRITE_BYTES]） */
+    val maxWriteBytes: Int = DEFAULT_MAX_WRITE_BYTES,
 ) {
     companion object {
         const val KEY = "ai.tools.policy"
@@ -90,6 +90,24 @@ data class ToolPolicyConfig(
         const val DEFAULT_MAX_COMFY_QUERIES_PER_RUN = 9
 
         /**
+         * 单次读取上限：**2MB**（用户 2026-09-19：「单轮读写上限给得太低了，
+         * 万一工作流本身有问题，AI 尝试修改工作流就会显得不够用」）。
+         *
+         * 以前是 256KB —— 一份界面格式的工作流 JSON（100+ 节点、带 `widgets_values`）
+         * 轻轻松松就超过它，`read_file` 只能读到前面一截，模型自然改不动。
+         * 现在 2MB 足够装下工作流本体；再往上（比如视频 / 模型文件）本来也不是它的活。
+         */
+        const val DEFAULT_MAX_READ_BYTES = 2 * 1024 * 1024
+
+        /**
+         * 单次写入上限：**4MB**（同一条用户建议）。
+         *
+         * 以前是 1MB：把一份大工作流改好写回去会直接 `TOO_LARGE`，用户看到的
+         * 就是"AI 说它改不了"。写入仍然是白名单里的路径 + 有上限，**不是不限量**。
+         */
+        const val DEFAULT_MAX_WRITE_BYTES = 4 * 1024 * 1024
+
+        /**
          * 从库里读出来的配置要过一遍这里：**内置预算一律以代码里的常量为准**。
          *
          * 为什么需要它：[ToolPolicy.save] 会把整份 [ToolPolicyConfig]（含默认值）写进
@@ -97,11 +115,18 @@ data class ToolPolicyConfig(
          * 用户那边的库里还是旧数字，表现为"改了没用"（实测：3 → 9 时库里仍写着 3，
          * 且用户切一次权限档就会把当时的值写进去）。
          *
+         * 所以**界面上不可改、纯粹是后端固定预算**的这几项都在这里强制回落到代码常量：
+         * `maxComfyQueriesPerRun` / `maxReadBytes` / `maxWriteBytes`
+         * （实测 2026-09-19：库里的 `ai.tools.policy` 冻着 `maxReadBytes:262144`，
+         * 光走上调代码默认值这条路对老用户完全无效）。
+         *
          * [maxToolSteps] / [maxCallsPerRun] **不能**这样处理：它们是用户可改的
          * （`ToolPolicyUpdate` 里有），库里的值必须生效。
          */
         fun normalizeStored(config: ToolPolicyConfig) = config.copy(
             maxComfyQueriesPerRun = DEFAULT_MAX_COMFY_QUERIES_PER_RUN,
+            maxReadBytes = DEFAULT_MAX_READ_BYTES,
+            maxWriteBytes = DEFAULT_MAX_WRITE_BYTES,
         )
     }
 }

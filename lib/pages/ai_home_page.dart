@@ -940,7 +940,7 @@ class _MessageBubble extends StatelessWidget {
 
 /// 一张工具卡：图标 + 工具名 + 状态徽标 + 耗时，详情默认折叠。
 ///
-/// 只渲染后端给的内容（后端已经把凭据脱敏、结果截断到 8KB），前端不改写、不补全。
+/// 只渲染后端给的内容（后端已经把凭据脱敏、结果截断到 MAX_RESULT_CHARS），前端不改写、不补全。
 class _ToolCallCard extends StatefulWidget {
   final AiToolCallState call;
   final String category;
@@ -3539,3 +3539,4 @@ Future<bool> _openFolder(String path) async {
   }
   return false;
 }
+
