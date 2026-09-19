@@ -1309,11 +1309,27 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
   bool _expanded = false;
 
   /// 收起时的摘要：压掉换行、取开头一段，末尾还有内容就加省略号。
+  ///
+  /// **只扫开头一小段**：思考正文可能是几万字，而收起时最多显示两行 ——
+  /// 全文过一遍正则（还每帧一次）纯属白花钱，流式期间这就是"卡顿"的一部分。
   static String summaryOf(String text, {int limit = 160}) {
-    final flat = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    const lookahead = 4; // 多扫几倍，保证压掉换行后仍够 limit 个字符
+    var head = text;
+    final cut = limit * lookahead;
+    if (text.length > cut) {
+      var end = cut;
+      // 别把代理对（emoji）切成半个
+      if (end > 0 && _isLowSurrogate(text.codeUnitAt(end))) end -= 1;
+      head = text.substring(0, end);
+    }
+    final flat = head.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (flat.length <= limit) return flat;
-    return '${flat.substring(0, limit)}…';
+    var end = limit;
+    if (_isLowSurrogate(flat.codeUnitAt(end))) end -= 1;
+    return '${flat.substring(0, end)}…';
   }
+
+  static bool _isLowSurrogate(int unit) => unit >= 0xDC00 && unit <= 0xDFFF;
 
   @override
   Widget build(BuildContext context) {
@@ -1346,11 +1362,9 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
           if (_expanded)
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 320),
-              child: SingleChildScrollView(
-                // 收起时**整段不建**（不是 Opacity/Offstage）：长思考的文本量不小，
-                // 折叠状态不该还把它留在 widget 树里。
-                child: _SelectableReasoning(text: widget.text),
-              ),
+              // 收起时**整段不建**（不是 Opacity/Offstage）：长思考的文本量不小，
+              // 折叠状态不该还把它留在 widget 树里。
+              child: _StreamingReasoning(text: widget.text, streaming: widget.streaming),
             )
           else if (widget.text.trim().isNotEmpty)
             Padding(
@@ -1373,22 +1387,126 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
   }
 }
 
-/// 展开后的完整思考正文：可选中复制（长度不受摘要限制）。
+/// 展开后的完整思考正文：可选中复制（长度不受摘要限制）、流式期间贴底跟随。
 ///
 /// 单独包一层是为了让"折叠时完全不构建它"这个行为一眼可见（见 `_ReasoningPanel`）。
 ///
 /// 用普通 `Text` 而不是 `SelectableText`：思考与正文同在一个 `SelectionArea` 里，
 /// 内层再开一个选择域的话，拖选到思考段末尾就拉不到下面的正文了（用户 bug ②）。
-class _SelectableReasoning extends StatelessWidget {
+///
+/// 这里解决用户 2026-09-19 报的两个问题：
+///
+///  ① **展开正在持续流式输出的思考过程后卡顿**：以前整段思考是一个 `Text`，
+///     每来一个字都要把**几万字**重新排版一遍（一帧几十毫秒，直接掉帧）。
+///     现在按固定行数切成小块、**没变过的块复用上一次的 widget**
+///     （widget 相同 → Flutter 整棵子树跳过，`RenderParagraph` 连布局都不重做），
+///     于是每帧只重排"最后那一块"。
+///  ② **展开后无法及时刷新**：内层滚动条停在自己原来的位置，新思考长在可视区下面，
+///     看起来像"不刷新"。现在流式期间和聊天列表同一套纪律 —— **贴底才跟随**，
+///     用户自己往上翻了就不打扰。
+class _StreamingReasoning extends StatefulWidget {
   final String text;
-  const _SelectableReasoning({required this.text});
+
+  /// 这一轮还在生成：贴着底就跟，不贴底就不动。
+  final bool streaming;
+
+  const _StreamingReasoning({required this.text, this.streaming = false});
+
+  /// 每多少行合成一块。
+  ///
+  /// 块越大 → widget 越少，但"最后一块"越长、每帧重排越多；块越小 → 复用率越高，
+  /// 但一棵几十万字符的思考会碎成上千个 `RenderParagraph`。8 行是折中值。
+  static const int linesPerBlock = 8;
+
+  /// 把思考正文切成小块（按行分组，最后一块可能还在长）。
+  static List<String> splitBlocks(String text) {
+    if (text.isEmpty) return const [];
+    final lines = text.split('\n');
+    final blocks = <String>[];
+    for (var i = 0; i < lines.length; i += linesPerBlock) {
+      final end = (i + linesPerBlock).clamp(0, lines.length);
+      blocks.add(lines.sublist(i, end).join('\n'));
+    }
+    return blocks;
+  }
+
+  @override
+  State<_StreamingReasoning> createState() => _StreamingReasoningState();
+}
+
+class _StreamingReasoningState extends State<_StreamingReasoning> {
+  final _scroll = ScrollController();
+
+  /// 上一帧的块划分与它们的 widget：逐块比较，只重建变过的那块。
+  List<String> _blocks = const [];
+  List<Widget> _rendered = const [];
+
+  /// 上一次渲染的正文：判断"这一帧文本真的变了吗"（没变就不必再跟一次底）。
+  String _lastText = '';
+
+  /// 视口是不是贴着底部：**只有贴底才跟随**（和聊天列表同一条纪律）。
+  bool _atBottom = true;
+  double _lastPixels = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final position = _scroll.position;
+    final pixels = position.pixels;
+    final distance = position.maxScrollExtent - pixels;
+    final wentUp = pixels < _lastPixels - 2;
+    _lastPixels = pixels;
+    _atBottom = distance < 24 ? true : (wentUp ? false : _atBottom);
+  }
+
+  /// 贴底时把内层视口拉到最新一行（`jumpTo` 而不是动画：这是"跟上"不是"滚一段"）。
+  void _followIfAtBottom() {
+    if (!mounted || !_atBottom || !_scroll.hasClients) return;
+    _scroll.jumpTo(_scroll.position.maxScrollExtent);
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Text(
-      text,
-      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+    final style = theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline);
+
+    // 逐块复用：内容一样的块直接把上一帧的 widget 交回去（见类注释 ①）
+    final next = _StreamingReasoning.splitBlocks(widget.text);
+    final rendered = <Widget>[];
+    for (var i = 0; i < next.length; i++) {
+      if (i < _blocks.length && _blocks[i] == next[i] && i < _rendered.length) {
+        rendered.add(_rendered[i]);
+      } else {
+        rendered.add(Text(next[i], style: style));
+      }
+    }
+    _blocks = next;
+    _rendered = rendered;
+
+    if (widget.streaming && _lastText != widget.text) {
+      _lastText = widget.text;
+      // 布局完成后才知道新的 maxScrollExtent，所以跟随放在帧后
+      WidgetsBinding.instance.addPostFrameCallback((_) => _followIfAtBottom());
+    }
+
+    return SingleChildScrollView(
+      controller: _scroll,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: rendered,
+      ),
     );
   }
 }
