@@ -707,8 +707,11 @@ class _MessageBubble extends StatelessWidget {
   /// 早先这里是"所有思考与正文段先铺完、工具卡统统一坨挂在最下面"，
   /// 一轮回复里工具卡就跑到最终正文后面去了 —— 那也是重排。
   ///
-  /// `parts` 还没到的流式阶段退回 `segments`（只有思考与正文），
-  /// 实时累积的工具卡追加在末尾（此刻它们确实是最新的）。
+  /// `parts` 还没到的流式阶段退回 `segments`：实时段里除了思考 / 正文，还有
+  /// **工具卡到达时的位置**（`type == 'tool_call'`，`text` 是 callId，见
+  /// `AiWorkspaceStore._appendLiveToolCall`）。少了后者，流式期间工具卡就只能补在末尾，
+  /// "思考 → 工具 → 正文"被画成"思考 → 正文 → 工具"，直到最终答复落库才跳回正确位置
+  /// （用户 2026-09-19 报的错位）。
   List<Widget> _orderedBody(ThemeData theme) {
     final m = message;
     final streaming = m.status == 'streaming';
@@ -760,6 +763,15 @@ class _MessageBubble extends StatelessWidget {
       flush();
     } else {
       for (final seg in segments) {
+        // 实时段里的工具卡位置占位（`text` 是 callId）：插回它到达时的位置，
+        // 而不是等所有正文铺完再补在末尾
+        if (seg.type == 'tool_call') {
+          final call = toolCalls.where((c) => c.callId == seg.text).firstOrNull;
+          if (call == null) continue;
+          placed.add(call.callId);
+          blocks.add(_toolCard(call));
+          continue;
+        }
         addSeg(seg.type, seg.text);
       }
     }

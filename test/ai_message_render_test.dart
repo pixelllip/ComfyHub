@@ -310,4 +310,58 @@ void main() {
     expect(find.textContaining(_streamDelta, findRichText: true), findsOneWidget,
         reason: '落库后（有 parts 了）同样只渲染一次');
   });
+
+  // 用户 bug⑥（2026-09-19）："AI 的思考、回答和工具调用错位（没有按时间顺序显示），
+  // 直到最终答复生成时才回到正确位置"。
+  //
+  // 根因：`message.parts`（权威有序块）**只在整条消息结束时**才到（后端在
+  // `message.completed` 里一次给全）。流式阶段气泡退回 `segments`，而实时段里
+  // 早先只有思考与正文 —— 工具卡只能在末尾统一补一坨，于是
+  // "思考 → 工具 → 正文" 被画成 "思考 → 正文 → 工具"，落库那一瞬间又跳回去。
+  // 防线：实时段里也要记下**工具卡到达的位置**，这条用例量三个块的纵向坐标。
+  testWidgets('流式生成中：思考 / 工具卡 / 正文按到达顺序交错（工具卡不能堆到最后）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    const reasoning = '先看看这个文件长什么样';
+    const body = '看完了，里面写的是标题。';
+
+    final events = StreamController<List<int>>();
+    await tester.pumpWidget(await _homePage(_streamingBackend(events.stream)));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, '看看 a.md');
+    await tester.tap(find.text('发送'));
+    await tester.pump();
+
+    // 到达顺序：思考 → 工具调用（请求 / 开始 / 完成）→ 正文
+    events.add(utf8.encode(
+      _sse(1, 'run.started', '{"runId":"r1"}') +
+          _sse(2, 'reasoning.delta', jsonEncode({'messageId': 'a9', 'text': reasoning})) +
+          _sse(
+              3,
+              'tool.requested',
+              '{"runId":"r1","callId":"call-1","name":"read_file",'
+                  '"arguments":"{}","approval":"not_required"}') +
+          _sse(4, 'tool.started', '{"callId":"call-1","name":"read_file"}') +
+          _sse(5, 'tool.completed',
+              '{"callId":"call-1","name":"read_file","elapsedMs":8,"preview":"# 标题"}') +
+          _sse(6, 'text.delta', jsonEncode({'messageId': 'a9', 'text': body})),
+    ));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump();
+
+    final reasoningY = tester.getTopLeft(find.text(reasoning)).dy;
+    final toolY = tester.getTopLeft(find.text('read_file')).dy;
+    final bodyY = tester.getTopLeft(find.textContaining(body, findRichText: true)).dy;
+
+    expect(reasoningY, lessThan(toolY), reason: '思考在工具卡上面');
+    expect(toolY, lessThan(bodyY),
+        reason: '工具卡要插在它到达时的那个位置（正文之前），不能等所有正文铺完再补到末尾');
+
+    // 收尾（不能 await：单订阅 controller 的 done future 要等消费方收尾）
+    unawaited(events.close());
+    await tester.pumpAndSettle();
+  });
 }

@@ -1183,7 +1183,7 @@ class AiWorkspaceStore extends ChangeNotifier {
           // 工具调用请求：approval=pending 的要在气泡上等用户点「批准 / 拒绝」
           case 'tool.requested':
             final approval = event.approval ?? 'not_required';
-            _upsertToolCall(
+            final added = _upsertToolCall(
               assistantMessageId,
               event.callId ?? '',
               (prev) => (prev ?? AiToolCallState(callId: event.callId ?? '', name: event.toolName ?? ''))
@@ -1196,6 +1196,9 @@ class AiWorkspaceStore extends ChangeNotifier {
                     : AiToolCallStatus.running,
               ),
             );
+            // 第一次见到这个调用号：把工具卡的**位置**也记进实时段，
+            // 流式期间才画得出"思考 → 工具 → 正文"的真实交错（用户 bug⑥）
+            if (added) _appendLiveToolCall(assistantMessageId, event.callId ?? '');
             _notifyNow();
           case 'tool.started':
             _upsertToolCall(
@@ -1407,11 +1410,14 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 助手消息 id → 实时思考正文。
   final Map<String, String> _liveReasoning = {};
 
-  /// 助手消息 id → **按流顺序**排好的段（思考 / 正文）。
+  /// 助手消息 id → **按流顺序**排好的段（思考 / 正文 / 工具卡的位置）。
   ///
   /// 用户要求"思考过程按照流顺序如实显示"：正文与思考是交错的，
   /// 只把思考单独堆在气泡顶上就不是"如实"了。流式过程中按到达顺序追加，
   /// `message.completed` 之后以 parts 还原的段为准。
+  ///
+  /// 段里还会出现 `type == 'tool_call'`、`text == callId` 的"占位段"：
+  /// 它记的是**工具卡到达时插在哪个位置**（见 [_appendLiveToolCall]）。
   final Map<String, List<AiMessageSegment>> _liveSegments = {};
 
   /// 一条助手消息按流顺序排好的段（思考 / 正文）。
@@ -1442,6 +1448,23 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
+  /// 把一个工具调用的**位置**记进实时段（用户 bug⑥：流式时工具卡全跑到最后）。
+  ///
+  /// 为什么必须记位置：`message.parts` 是**整条消息结束时**才到的（后端在
+  /// `message.completed` 里一次给全），所以流式阶段气泡只能靠实时段还原顺序。
+  /// 早先这里只记思考与正文，工具卡就只能在末尾统一补一坨 —— 一轮
+  /// "思考 → 工具 → 正文" 被画成 "思考 → 正文 → 工具"，直到最终答复落库才跳回正确位置。
+  ///
+  /// 与 [_appendLiveSegment] 的区别：**每个工具调用都新开一段**，
+  /// 相邻两个工具调用合并会把两个 callId 粘成一个字符串。
+  void _appendLiveToolCall(String messageId, String callId) {
+    if (callId.isEmpty) return;
+    _bumpLiveRevision(messageId);
+    _liveSegments
+        .putIfAbsent(messageId, () => <AiMessageSegment>[])
+        .add(AiMessageSegment('tool_call', callId));
+  }
+
   /// 一条消息要渲染的工具调用（有序）。
   ///
   /// 优先用 `parts`（`message.completed` 给的权威有序块 / 历史消息）；
@@ -1463,21 +1486,25 @@ class AiWorkspaceStore extends ChangeNotifier {
     return _liveReasoning[message.id] ?? '';
   }
 
-  void _upsertToolCall(
+  /// 插入 / 更新一条实时工具调用。
+  ///
+  /// 返回 `true` 表示这是**新出现**的一个调用号（调用方要靠它在实时段里记下位置）。
+  bool _upsertToolCall(
     String messageId,
     String callId,
     AiToolCallState Function(AiToolCallState? previous) update,
   ) {
-    if (callId.isEmpty) return;
+    if (callId.isEmpty) return false;
     _bumpLiveRevision(messageId);
     final list = _liveToolCalls.putIfAbsent(messageId, () => <AiToolCallState>[]);
     final i = list.indexWhere((c) => c.callId == callId);
     final next = update(i < 0 ? null : list[i]);
     if (i < 0) {
       list.add(next);
-    } else {
-      list[i] = next;
+      return true;
     }
+    list[i] = next;
+    return false;
   }
 
   void _patchToolCall(String callId, AiToolCallState Function(AiToolCallState call) update) {
