@@ -19,6 +19,10 @@
     · 含「目录内」                    -> write_file（comfyui/e2e-ok.txt，应成功）
     · 含「同步」                     -> comfy_sync_history（需要审批）
     · 含「状态」                     -> comfy_get_status（只读）
+    · 含「回声标题」且还没调过工具    -> 正文（带 `[标题]…[/标题]`）+ comfy_get_status
+    · 含「回声标题」且已经调过工具    -> 正文里**再吐一遍**标题标记（回声，后端必须摘掉且不改会话名）
+    · 含「轮数收尾」且请求里**没有** tools -> 把工具调用语法当正文吐出来（真机的翻车形态）
+    · 含「轮数收尾」且请求里有 tools  -> 正常发起工具调用
     · 含「续写测试」且没有续写指令     -> 正文 + finish_reason=length（**模拟被长度上限截断**）
     · 带着续写指令（"紧接中断处继续写"）-> 接着写的后半段 + finish_reason=stop
     · 其它                          -> 普通正文
@@ -50,6 +54,26 @@ TRUNCATE_ASK = "续写测试"
 CONTINUE_MARKER = "紧接中断处继续写"
 HEAD_TEXT = "第一段正文：这段话写到一半就被上游的输出长度上限切断了，"
 TAIL_TEXT = "第二段正文：这里是接着写下去的部分。"
+
+# --- 「起标题」用例（用户 bug⑤：AI 回答首尾疑似又被截断）----------------------
+# 第一轮：带标题标记的正文 + 一次工具调用（标题被后端摘掉、写进会话名）；
+# 第二轮：模型自己**又把标记吐一遍**（真机实测过）。
+# 后端必须把这一遍也摘掉（回声），且**不能改**已经定下来的会话名。
+TITLE_ECHO_ASK = "回声标题"
+TITLE_FIRST_TEXT = "[标题]E2E 回声标题[/标题]\n\n先看一眼状态。"
+TITLE_ECHO_TEXT = "[标题]E2E 回声标题二号[/标题]\n\n回执来了，正文在这里。"
+
+# --- 「工具轮数用尽」用例（用户 bug⑤：回答尾部变成一段原始的调用语法）----------
+# 真实事故（会话 ab487605 的 10:12 回复）：最后一轮**没有工具可用**时，
+# DeepSeek 系模型把工具调用语法当正文吐了出来，尾巴上就是一段调用标记，看起来像被截断。
+# 假网关照样复现：请求里没有 tools 就吐那段标记，有 tools 就正常发起工具调用。
+WRAPUP_ASK = "轮数收尾"
+RAW_TOOLCALL_TEXT = (
+    "查一下产物落盘位置，好让你直接去看：\n\n"
+    "<||DSML|| invoke name=\"comfy_get_status\">\n"
+    "<||DSML|| parameter name=\"x\" string=\"true\">1</||DSML|| parameter>\n"
+    "</||DSML|| invoke>"
+)
 
 # --- 每个场景要发出的工具调用（arguments 是 JSON 字符串） ----------------------
 
@@ -213,6 +237,8 @@ class Handler(BaseHTTPRequestHandler):
         # 「长期记忆」是每次 Run 现渲染进系统提示的：这里把是否带上、带没带上某条记进日志，
         # 测试脚本据此断言"AI 记得住、也看得到"（不用去猜后端实现）。
         memory_marker = "长期记忆"
+        # 「起标题」的指令长这样（HarnessRunner.SystemPrompt.TITLE_INSTRUCTION）；取中间那句当指纹
+        title_ask_marker = "为这个对话起标题"
         tool_names = [((t.get("function") or {}).get("name")) for t in tools]
         # 附件（M3）：图片是不是真的以内联 data URL 发过来了，只看这一条日志
         last_user = next((m for m in reversed(messages) if m.get("role") == "user"), {})
@@ -231,6 +257,8 @@ class Handler(BaseHTTPRequestHandler):
             "hasRememberTool": "remember" in tool_names,
             "systemHasMemorySection": memory_marker in system_text,
             "systemMemoryHasProbe": "E2E 记一条" in system_text,
+            # 「起标题」的指令这一轮到底有没有带上（用户 bug⑤：它只能出现在第一轮）
+            "systemHasTitleAsk": title_ask_marker in system_text,
             "assistantHasToolCall": assistant_tool_calls,
             "toolResultCount": len(tool_results),
             "lastRole": last.get("role"),
@@ -240,17 +268,7 @@ class Handler(BaseHTTPRequestHandler):
             "userContentIsBlocks": isinstance(last_user.get("content"), list),
         }
 
-        # 1) 工具结果已回填 -> 用正文收尾（循环终止）
-        if last.get("role") == "tool":
-            replied = one_line(last.get("content"))
-            entry["decision"] = "final_text"
-            entry["replyPreview"] = replied
-            self._record(entry)
-            text = "工具已返回：%s。" % replied
-            self._stream_text(text, prompt_tokens=sum(len(m.get("content") or "") for m in messages))
-            return
-
-        # 2) 按最后一条 user 文本分流
+        # 最后一条 user 正文（下面几处分流都看它）
         user_text = ""
         for m in reversed(messages):
             if m.get("role") == "user":
@@ -263,6 +281,39 @@ class Handler(BaseHTTPRequestHandler):
             "",
         )
         entry["lastAssistantText"] = last_assistant[:200]
+
+        # 0) 跨轮次的场景要先分流（它们要看"这是第几轮"，不能在下面"最后一条是 tool"处就收尾）
+        if TITLE_ECHO_ASK in user_text:
+            if assistant_tool_calls:
+                entry["decision"] = "title_echo"
+                self._record(entry)
+                self._stream_text(TITLE_ECHO_TEXT)
+            else:
+                entry["decision"] = "title_first"
+                self._record(entry)
+                self._stream_text_and_tool(TITLE_FIRST_TEXT, "comfy_get_status", _args({}))
+            return
+        if WRAPUP_ASK in user_text:
+            if not tools:
+                # 没有工具可用：把调用写成正文（真机就是这么吐的）
+                entry["decision"] = "wrapup_no_tools"
+                self._record(entry)
+                self._stream_text(RAW_TOOLCALL_TEXT)
+            else:
+                entry["decision"] = "wrapup_tool"
+                self._record(entry)
+                self._stream_tool("comfy_get_status", _args({}))
+            return
+
+        # 1) 工具结果已回填 -> 用正文收尾（循环终止）
+        if last.get("role") == "tool":
+            replied = one_line(last.get("content"))
+            entry["decision"] = "final_text"
+            entry["replyPreview"] = replied
+            self._record(entry)
+            text = "工具已返回：%s。" % replied
+            self._stream_text(text, prompt_tokens=sum(len(m.get("content") or "") for m in messages))
+            return
 
         # 2.5) 输出被长度上限截断 → 后端应当**接着写**（用户建议 ②）：
         #      第二次请求的最后一条 user 就是那句"紧接中断处继续写"。
@@ -355,6 +406,31 @@ class Handler(BaseHTTPRequestHandler):
             "function": {"name": name, "arguments": ""},
         }]}))
         # 后续片：只有 index + arguments 片段
+        for piece in pieces:
+            self._data(self._envelope({"tool_calls": [{
+                "index": 0,
+                "function": {"arguments": piece},
+            }]}))
+        self._data(self._envelope({}, finish_reason="tool_calls",
+                                  usage=self._usage(24, len(arguments))))
+        self._sse_end()
+
+    def _stream_text_and_tool(self, text: str, name: str, arguments: str):
+        """一轮里**既有正文又有工具调用**（真机常见：先说一句再调工具）。"""
+        call_id = self._next_call_id(name)
+        pieces = split_arguments(arguments, 4)
+        self._sse_start()
+        self._data(self._envelope({"role": "assistant", "content": ""}))
+        mid = max(1, len(text) // 2)
+        for piece in (text[:mid], text[mid:]):
+            if piece:
+                self._data(self._envelope({"content": piece}))
+        self._data(self._envelope({"tool_calls": [{
+            "index": 0,
+            "id": call_id,
+            "type": "function",
+            "function": {"name": name, "arguments": ""},
+        }]}))
         for piece in pieces:
             self._data(self._envelope({"tool_calls": [{
                 "index": 0,

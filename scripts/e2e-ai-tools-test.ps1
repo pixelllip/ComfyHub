@@ -17,12 +17,16 @@
          （含 **WebP**：按签名收下 + 尺寸探测 + 缩略图真的是 JPEG）
       9. 重试      —— `retryOfRunId` 复用**同一条**提问与**同一条**助手占位：
          会话消息数不变、不留空壳气泡（用户 2026-09-19 报的"同一条语句出现两次"）
+     10. 接着写    —— 输出被长度上限截断时**再要一轮**把话补完，而不是把半句当结尾（用户建议 ②）
+     11. 首尾干净  —— 起标题的指令只发第一轮（回声标记不漏进正文、也不改会话名）+
+         工具轮数用尽那一轮照给工具清单（模型就不会把工具语法当正文吐出来，用户 bug⑤）
 
     还会核对落库的消息 parts 顺序（tool_call / tool_result / text），保证重开会话能渲染工具卡。
 
-    脚本会**临时**改两处配置，跑完在 finally 里原样还原：
+    脚本会**临时**改三处配置，跑完在 finally 里原样还原：
       · 权限档切成 `ask`（不然用户在界面上选了「自动允许」时，第 5 幕的审批断言必红）；
-      · 长期记忆写一条测试记忆（结束时放回原文）。
+      · 长期记忆写一条测试记忆（结束时放回原文）；
+      · 工具轮数上限钉成 1（第 12 幕要真的跑到"轮数用尽"那一轮）。
 
     前置条件：MySQL + 后端已经在跑，且后端是**带 M4/M5 的新构建**：
         pwsh -File scripts\comfyhub.ps1 up
@@ -72,9 +76,13 @@ $script:Http   = $null
 $script:Streams = @{}
 $script:ConversationId = $null
 $script:RetryConversationId = $null
+$script:TitleConversationId = $null
 
 # 长期记忆的原内容：本脚本会往里写一条测试记忆，结束时原样放回
 $script:MemoryBefore = $null
+
+# 工具轮数上限的原值：第 12 幕要临时钉成 1（跑到"轮数用尽"那一轮），结束时原样放回
+$script:MaxStepsBefore = $null
 
 # 权限档的原值：审批那一幕要求 `comfy_sync_history` 是 pending，而用户在界面上把档位切到
 # 「自动允许（无需批准）」时它会是 `not_required`（第 5 幕会红）。所以脚本先临时钉成 ask、结束时原样放回。
@@ -300,7 +308,7 @@ try {
 
     # --- 2. Provider + 模型目录 -------------------------------------------
     Say ''
-    Say '  [0/11] 配置 e2e Provider / 模型' 'Cyan'
+    Say '  [0/12] 配置 e2e Provider / 模型' 'Cyan'
 
     try { Invoke-Api 'DELETE' "/api/ai/providers/$ProviderId" $null | Out-Null } catch { }
     try { Invoke-Api 'DELETE' "/api/ai/skills/$SkillName" $null | Out-Null } catch { }
@@ -363,7 +371,7 @@ try {
 
     # --- 3. 场景 1：注册 skill --------------------------------------------
     Say ''
-    Say '  [1/11] 注册：register_skill 落盘' 'Cyan'
+    Say '  [1/12] 注册：register_skill 落盘' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s1 = Receive-Scenario -ConversationId $conv.id -Text '帮我注册一个新的 skill'
     $e1 = $s1.events
@@ -403,7 +411,7 @@ try {
 
     # --- 4. 场景 2：按需加载 ----------------------------------------------
     Say ''
-    Say '  [2/11] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
+    Say '  [2/12] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s2 = Receive-Scenario -ConversationId $conv.id -Text '加载那个 skill'
     $e2 = $s2.events
@@ -429,7 +437,7 @@ try {
 
     # --- 5. 场景 3：越界写被拒 --------------------------------------------
     Say ''
-    Say '  [3/11] 越界写被拒：write_file 打到 storage/' 'Cyan'
+    Say '  [3/12] 越界写被拒：write_file 打到 storage/' 'Cyan'
     $s3 = Receive-Scenario -ConversationId $conv.id -Text '越界写个文件'
     $e3 = $s3.events
     $fail3 = @(Get-Events $e3 'tool.failed')
@@ -446,7 +454,7 @@ try {
 
     # --- 6. 场景 4：目录内写成功 ------------------------------------------
     Say ''
-    Say '  [4/11] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
+    Say '  [4/12] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
     $s4 = Receive-Scenario -ConversationId $conv.id -Text '在目录内写个文件'
     $e4 = $s4.events
     $comp4 = @(Get-Events $e4 'tool.completed')
@@ -460,7 +468,7 @@ try {
 
     # --- 7. 场景 5：审批闸门 ----------------------------------------------
     Say ''
-    Say '  [5/11] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
+    Say '  [5/12] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
     $state = @{ callId = $null; pending = $false; accepted = $false; startedIndex = -1; requestedIndex = -1 }
     $s5 = Receive-Scenario -ConversationId $conv.id -Text '同步一下历史' -OnEvent {
         param($e, $i)
@@ -492,7 +500,7 @@ try {
 
     # --- 8. 场景 6：只读工具 ----------------------------------------------
     Say ''
-    Say '  [6/11] 只读工具：comfy_get_status 不需要审批' 'Cyan'
+    Say '  [6/12] 只读工具：comfy_get_status 不需要审批' 'Cyan'
     $s6 = Receive-Scenario -ConversationId $conv.id -Text '看看 ComfyUI 状态'
     $e6 = $s6.events
     $req6 = @(Get-Events $e6 'tool.requested')
@@ -505,7 +513,7 @@ try {
 
     # --- 9. 落库的消息 parts（重开会话能渲染工具卡） ----------------------
     Say ''
-    Say '  [7/11] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
+    Say '  [7/12] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
     $runDto = Invoke-Api 'GET' "/api/ai/runs/$($s1.run.runId)" $null
     Check 'run 落库状态 == completed' ($runDto.status -eq 'completed') ($runDto | ConvertTo-Json -Compress)
 
@@ -532,7 +540,7 @@ try {
 
     # --- 10. 场景 8：长期记忆（M6） ---------------------------------------
     Say ''
-    Say '  [8/11] 长期记忆：remember 落盘 + 下一次 Run 注入系统提示' 'Cyan'
+    Say '  [8/12] 长期记忆：remember 落盘 + 下一次 Run 注入系统提示' 'Cyan'
     $s8 = Receive-Scenario -ConversationId $conv.id -Text '记住：E2E 记一条，用户偏好 4:3 画幅'
     $e8 = $s8.events
     $req8 = @(Get-Events $e8 'tool.requested')
@@ -564,7 +572,7 @@ try {
 
     # --- 11. 场景 9：附件（M3 / AIH-027 ~ AIH-031） -----------------------
     Say ''
-    Say '  [9/11] 附件：上传 → 缩略图 → 内联进请求体 → 不支持的模型零请求' 'Cyan'
+    Say '  [9/12] 附件：上传 → 缩略图 → 内联进请求体 → 不支持的模型零请求' 'Cyan'
 
     function Set-E2eModel {
         param([string[]]$Modalities)
@@ -698,7 +706,7 @@ try {
     # 根因是 `POST /conversations/{id}/runs` 不看 `retryOfRunId`，照旧 append 了一条新用户消息。
     # 这一幕钉三件事：重试复用**同一条**用户消息、复用**同一条**助手占位、消息总数不变。
     Say ''
-    Say '  [10/11] 重试：复用原来那条提问与失败气泡，绝不新增' 'Cyan'
+    Say '  [10/12] 重试：复用原来那条提问与失败气泡，绝不新增' 'Cyan'
 
     # 先造一次"必然失败"的 Run：Provider 指向一个没人监听的端口（连接被拒 → PROVIDER_UNREACHABLE）
     try { Invoke-Api 'DELETE' "/api/ai/providers/$DeadProviderId" $null | Out-Null } catch { }
@@ -780,7 +788,7 @@ try {
     # 现场：长回复被上游的 max_tokens 切断（这里用假网关的 finish_reason=length 复现），
     # 后端必须**再要一轮**把话说完，而不是把半句话当成结尾。
     Say ''
-    Say '  [11/11] 接着写：输出被长度上限截断时把回复补完（不强行截断）' 'Cyan'
+    Say '  [11/12] 接着写：输出被长度上限截断时把回复补完（不强行截断）' 'Cyan'
 
     $beforeLog5 = @(Invoke-Gateway '/__log').Count
     $s11 = Receive-Scenario -ConversationId $conv.id -Text "$TruncateAsk 请写两段话"
@@ -811,6 +819,71 @@ try {
          $answer11.text.IndexOf($TailText) -gt $answer11.text.IndexOf($HeadText) -and
          $answer11.text.Split($HeadText).Count -eq 2) `
         ($answer11.text)
+
+    # --- 14. 场景 12：回答首尾不再"被截断"（用户 bug⑤）--------------------------
+    #
+    # 现场（会话 ab487605，2026-09-19）：
+    #   ① 10:08 那条回复里漏出一行 `[标题] Krea2 初音画风迁移出图[/标题]`（"首"）；
+    #   ② 10:12 那条回复的**尾巴**是一段原始的调用语法（"尾"），看起来像被截断在一半。
+    # 根因两条：
+    #   ① 起标题的指令原先常驻在每一轮的上下文里，后面的工具轮 / 收尾轮还在提醒模型
+    #      "在最前面输出一行 [标题]"，模型就又吐一遍，而那时摘取状态机已经收工 → 标记漏进正文；
+    #   ② 工具轮数用尽的那一轮原先**不给工具清单**，DeepSeek 系模型就把工具语法当正文吐了出来。
+    Say ''
+    Say '  [12/12] 首尾不再"被截断"：起标题指令只发首轮 + 收尾轮照给工具清单' 'Cyan'
+
+    $script:MaxStepsBefore = (Invoke-Api 'GET' '/api/ai/tools/policy' $null).maxToolSteps
+
+    # 自动起标题只在"还没有标题"的会话上做 —— 所以这里专门建一条不带标题的
+    $titleConv = Invoke-Api 'POST' '/api/ai/conversations' @{ providerId = $ProviderId; modelId = $ModelId }
+    $script:TitleConversationId = $titleConv.id
+    Check '不带标题的会话已建好（标题回落成「新对话」，才会触发自动起标题）' `
+        ($titleConv.title -eq '新对话') ($titleConv | ConvertTo-Json -Compress)
+
+    $beforeLog6 = @(Invoke-Gateway '/__log').Count
+    $s12 = Receive-Scenario -ConversationId $titleConv.id -Text '回声标题：随便做点什么'
+    Check '起标题那一幕正常收尾（run.completed）' `
+        ((@(Get-Events $s12.events 'run.completed')).Count -ge 1) ($s12.events[-1].event)
+
+    $log6 = @(@(Invoke-Gateway '/__log') | Select-Object -Skip $beforeLog6)
+    Check '这一轮发了两次上游请求（首轮 + 工具结果回填）' ($log6.Count -eq 2) `
+        (($log6 | ForEach-Object { $_.decision }) -join ' | ')
+    if ($log6.Count -ge 2) {
+        Check '起标题的指令**只出现在第一轮**请求里' `
+            ($log6[0].systemHasTitleAsk -eq $true -and $log6[1].systemHasTitleAsk -eq $false) `
+            (($log6 | ForEach-Object { "titleAsk=$($_.systemHasTitleAsk)" }) -join ' | ')
+    }
+
+    $msgs12 = @(Invoke-Api 'GET' "/api/ai/conversations/$($titleConv.id)/messages" $null)
+    $answer12 = @($msgs12 | Where-Object { $_.id -eq $s12.run.assistantMessageId }) | Select-Object -First 1
+    Check '回声（第二遍的标记）没有漏进正文' `
+        ($null -ne $answer12 -and $answer12.text -notmatch '\[标题\]' -and $answer12.text -like '*回执来了*') `
+        ($answer12.text)
+    $conv12 = @(Invoke-Api 'GET' '/api/ai/conversations?includeArchived=true' $null) |
+        Where-Object { $_.id -eq $titleConv.id } | Select-Object -First 1
+    Check '会话名保持最早摘到的那个（回声不许改名）' `
+        ($null -ne $conv12 -and $conv12.title -eq 'E2E 回声标题') ($conv12.title)
+
+    # 收尾轮：把工具轮数上限临时钉成 1，第二轮的 step 就等于上限
+    Invoke-Api 'PUT' '/api/ai/tools/policy' @{ maxToolSteps = 1 } | Out-Null
+    $beforeLog7 = @(Invoke-Gateway '/__log').Count
+    $s13 = Receive-Scenario -ConversationId $titleConv.id -Text '轮数收尾：再查一次状态'
+    Check '收尾那一幕正常收尾（run.completed）' `
+        ((@(Get-Events $s13.events 'run.completed')).Count -ge 1) ($s13.events[-1].event)
+
+    $log7 = @(@(Invoke-Gateway '/__log') | Select-Object -Skip $beforeLog7)
+    Check '这一轮同样只发两次上游请求（没执行的工具不会引发无限循环）' ($log7.Count -eq 2) `
+        (($log7 | ForEach-Object { $_.decision }) -join ' | ')
+    if ($log7.Count -ge 2) {
+        Check '轮数用尽那一轮**照样**带上了工具清单' ($log7[1].toolsPresent -eq $true) `
+            ($log7[1] | ConvertTo-Json -Depth 6 -Compress)
+    }
+    $msgs13 = @(Invoke-Api 'GET' "/api/ai/conversations/$($titleConv.id)/messages" $null)
+    $answer13 = @($msgs13 | Where-Object { $_.id -eq $s13.run.assistantMessageId }) | Select-Object -First 1
+    Check '正文里没有原始的调用语法（模型没机会把它当正文吐出来）' `
+        ($null -ne $answer13 -and $answer13.text -notmatch 'invoke name=') ($answer13.text)
+    Check '如实说明"工具轮数到上限、这次没执行"' `
+        ($null -ne $answer13 -and $answer13.text -match '工具轮数上限') ($answer13.text)
 } finally {
     # --- 清理 -------------------------------------------------------------
     Say ''
@@ -827,6 +900,10 @@ try {
         # 第 10 幕的会话与那个"死端口 Provider"也要收干净（否则用户会在工作台里看到它）
         if ($script:RetryConversationId) {
             try { Invoke-Api 'DELETE' "/api/ai/conversations/$($script:RetryConversationId)" $null | Out-Null } catch { }
+        }
+        # 第 12 幕那条"不带标题"的会话（自动起标题的现场）
+        if ($script:TitleConversationId) {
+            try { Invoke-Api 'DELETE' "/api/ai/conversations/$($script:TitleConversationId)" $null | Out-Null } catch { }
         }
         try { Invoke-Api 'DELETE' "/api/ai/providers/$DeadProviderId" $null | Out-Null } catch { }
         try { Invoke-Api 'DELETE' "/api/ai/providers/$ProviderId" $null | Out-Null } catch { }
@@ -857,6 +934,13 @@ try {
             } catch { }
         }
         Say '  已删除会话 / Provider / skill / 临时文件' 'DarkGray'
+    }
+    # 工具轮数上限是"改了配置"而不是"造了数据"，**-KeepData 时也必须还原**
+    if ($null -ne $script:MaxStepsBefore) {
+        try {
+            Invoke-Api 'PUT' '/api/ai/tools/policy' @{ maxToolSteps = $script:MaxStepsBefore } | Out-Null
+            Say "  已把工具轮数上限还原成 $($script:MaxStepsBefore)" 'DarkGray'
+        } catch { }
     }
     if ($script:Http) { try { $script:Http.Dispose() } catch { } }
 }

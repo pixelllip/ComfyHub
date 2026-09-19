@@ -310,10 +310,16 @@ class HarnessRunner(
             // 会话标题自动总结（用户建议 ③）：只在**这条对话的第一条提问**上做。
             // 做法是让模型在正文最前面带一行 `[标题]…[/标题]`，由 TitleStripper 摘掉，
             // 用户看不到标记，也不需要多花一次上游请求（见 ConversationTitle 的说明）。
+            //
+            // ⚠️ 这条指令**不进 `turns`**（那是每轮都发出去的公共上下文）：
+            // 一旦它留在上下文里，后面的工具轮 / 收尾轮都会再提醒模型"在最前面输出一行 [标题]"，
+            // 模型就真的又吐一遍 —— 而那时摘取状态机往往已经摘到标题收工了，
+            // 于是标记**漏进正文**（用户 2026-09-19 在 10:08 那条回复看到的
+            // `[标题]…[/标题]` 就是这么来的）。改成"还没摘到标题时按轮带上去"。
             val conversation = AiConversationRepo.get(conversationId)
             val userMessageCount = history.count { it.role == "user" }
             val wantsTitle = shouldSummarizeTitle(conversation, userMessageCount)
-            if (wantsTitle) turns += ChatTurn("system", SystemPrompt.TITLE_INSTRUCTION)
+            val titleAsk = ChatTurn("system", SystemPrompt.TITLE_INSTRUCTION)
 
             val secret = credentials.resolve(provider.credentialRef)
             if (provider.credentialRef != null && secret.isNullOrEmpty()) {
@@ -358,7 +364,7 @@ class HarnessRunner(
             var continuations = 0
             var continueFrom: String? = null
 
-            // 标题摘取状态机（只在第一轮有效）：把 `[标题]…[/标题]` 从正文里摘掉
+            // 标题摘取状态机（只在需要自动起标题的那次 Run 里建）：把 `[标题]…[/标题]` 从正文里摘掉
             val titleStripper = if (wantsTitle) TitleStripper(true) else null
 
             /**
@@ -367,9 +373,18 @@ class HarnessRunner(
              * [dedupeTail] 只在"接着写"那一轮给：续写时模型常把上一轮的结尾重说一遍，
              * 这里先把它开头压住 [OVERLAP_WINDOW] 个字符，等看清楚与已说过的内容重叠多少再放行
              * —— 否则用户会在同一条回复里看到两遍同一段话（正是 2026-09-19 报的那个 bug 的形态）。
+             *
+             * [askTitle] 只在**还没摘到标题**的那些轮次为 true：这条指令一旦常驻上下文，
+             * 后面的轮次会让模型把 `[标题]…[/标题]` 再吐一遍（见上面 `titleAsk` 的注释）。
              */
-            suspend fun runRound(useTools: List<ToolSpec>, dedupeTail: String? = null): Pair<RoundResult, Idle> {
+            suspend fun runRound(
+                useTools: List<ToolSpec>,
+                dedupeTail: String? = null,
+                askTitle: Boolean = false,
+            ): Pair<RoundResult, Idle> {
                 val r = RoundResult()
+                // 这一轮真正发给上游的轮次（标题指令按轮决定要不要带上）
+                val roundTurns = if (askTitle) turns + titleAsk else turns.toList()
 
                 // 真正把一段文本放给界面 / 落库 / 上游上下文（原来的 onEvent 正文逻辑）
                 fun emitText(visible: String) {
@@ -406,11 +421,11 @@ class HarnessRunner(
                     api = api,
                     adapterVersion = adapter.adapterVersion,
                     model = run.modelId.orEmpty(),
-                    turns = turns.toList(),
+                    turns = roundTurns,
                     secret = secret,
                     body = adapter.buildBody(
                         run.modelId.orEmpty(),
-                        turns.toList(),
+                        roundTurns,
                         stream = true,
                         reasoning = reasoningRequest,
                         tools = useTools,
@@ -456,8 +471,18 @@ class HarnessRunner(
 
                 while (true) {
                     if (selfJob?.isActive == false) throw InterruptedException("Run 已取消")
-                    // 最后一轮不再给工具：逼模型用正文收尾，而不是继续要工具
-                    var roundTools = if (step < maxSteps) toolSpecs else emptyList()
+                    // 工具轮数用尽的那一轮**照样把工具清单给上游**（只是不再执行，见下面那句 note）。
+                    //
+                    // 为什么不能"最后一轮回空清单"：模型（尤其 DeepSeek 系）在**没有工具可用**
+                    // 却还想调工具时，会把工具调用语法当正文吐出来 —— 真机实测
+                    // （2026-09-19 10:12 那条回复）末尾就是一段 `<｜｜DSML｜｜ invoke name="comfy_get_run">…`，
+                    // 用户看到的是"回答被截断在一半的工具调用上"。给清单，网关就能把它翻成
+                    // 真正的 tool_calls，我们才看得见"它还想再调一次"，也才能如实说明。
+                    val roundTools = toolSpecs
+                    // 轮数用尽：这一轮只用来收尾，模型要的工具**不执行**
+                    val outOfSteps = step >= maxSteps
+                    // 还没摘到标题时，这一轮才带"起标题"的指令（见上面 `titleAsk` 的说明）
+                    val askTitle = titleStripper != null && titleStripper.title == null
 
                     // 跑一轮，外加"网关不接受工具参数"时的纯文本回退（AIH-006 / 用户 2026-09-19 的重复 bug）。
                     //
@@ -466,14 +491,14 @@ class HarnessRunner(
                     // 但**本轮已经有可见输出时绝不重放**：已经流出去的话再说一遍，
                     // 用户会在同一条回复里看到两遍同一段话（实测过）。
                     // 宁可如实失败（有 errorCode），也不要假装重来一次没发生过。
-                    suspend fun runRoundWithFallback(): Pair<RoundResult, Idle> {
+                    suspend fun runRoundWithFallback(useTools: List<ToolSpec>, ask: Boolean): Pair<RoundResult, Idle> {
                         val textBefore = text.length
                         try {
-                            return runRound(roundTools, continueFrom)
+                            return runRound(useTools, continueFrom, ask)
                         } catch (e: AiException) {
                             val retriable =
                                 e.code == AiErrorCode.CONFIG_ERROR || e.code == AiErrorCode.PROTOCOL_ERROR
-                            if (roundTools.isEmpty() || !retriable) throw e
+                            if (useTools.isEmpty() || !retriable) throw e
                             if (text.length > textBefore) {
                                 log.warn(
                                     "上游在接受工具参数后中途报错，但本轮已有可见输出：不再重放（避免重复）: {}",
@@ -489,12 +514,11 @@ class HarnessRunner(
                             }
                             text.append(note)
                             emit(RunEventType.TEXT_DELTA, payload("messageId" to assistantId, "text" to note))
-                            roundTools = emptyList()
-                            return runRound(roundTools, continueFrom)
+                            return runRound(emptyList(), continueFrom, ask)
                         }
                     }
 
-                    val (round, idle) = runRoundWithFallback()
+                    val (round, idle) = runRoundWithFallback(roundTools, askTitle)
                     // 续写的去重只对紧接的那一轮有效
                     continueFrom = null
                     finishReason = idle.finishReason ?: finishReason
@@ -511,10 +535,12 @@ class HarnessRunner(
                     }
 
                     val drafts = round.toolCalls.drafts().map { ToolDraft(it.callId, it.name, it.arguments) }
-                    if (drafts.isEmpty() || roundTools.isEmpty() || toolCtx == null) {
-                        if (drafts.isNotEmpty() && roundTools.isEmpty()) {
-                            // 到轮数上限还在要工具：告诉用户发生了什么（不假装它答完了）
-                            val note = "\n\n（已达到本次回复的工具轮数上限 $maxSteps，以下是模型的收尾说明。）"
+                    if (drafts.isEmpty() || outOfSteps || toolSpecs.isEmpty() || toolCtx == null) {
+                        if (drafts.isNotEmpty() && outOfSteps) {
+                            // 到轮数上限还在要工具：**不执行**，但如实告诉用户发生了什么
+                            // （不假装它答完了，也不把这段工具调用悄悄丢掉）
+                            val note = "\n\n（已达到本次回复的工具轮数上限 $maxSteps，" +
+                                "这次要调用的工具没有执行；再发一条消息它就能接着做。）"
                             text.append(note)
                             emit(RunEventType.TEXT_DELTA, payload("messageId" to assistantId, "text" to note))
                             addPart("text", note)
@@ -541,7 +567,7 @@ class HarnessRunner(
                             turns += ChatTurn("user", CONTINUE_INSTRUCTION)
                             // 下一轮的开头可能与刚说过的结尾重叠：交给 runRound 去重
                             continueFrom = text.toString()
-                            // 下一轮同样不给工具（这一轮本来就没有工具调用）
+                            // 这一轮没有工具调用，续写那一轮照常带工具清单（step 没动）
                             continue
                         }
                         break
