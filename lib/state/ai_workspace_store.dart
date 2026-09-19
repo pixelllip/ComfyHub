@@ -354,17 +354,27 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   /// 长期记忆（M6）：读回来给右侧栏显示 / 编辑。
-  Future<void> loadMemory() async {
-    memoryBusy = true;
-    notifyListeners();
+  ///
+  /// [silent] 是给"AI 调用了 `remember`"这条路的（用户 bug：更新长期记忆之后右侧栏不刷新）：
+  /// 它发生在一次 Run 的中间，右侧栏的「长期记忆」面板必须当场跟上条数，
+  /// 但**不能**顺手把编辑按钮换成转圈（那是用户自己点编辑时的反馈，见 [memoryBusy]）。
+  /// 失败同样静默 —— 这条路径是"顺带对齐一下"，失败不该盖掉面板上原有的错误说明。
+  Future<void> loadMemory({bool silent = false}) async {
+    if (!silent) {
+      memoryBusy = true;
+      notifyListeners();
+    }
     try {
       memory = await _api.memory();
       memoryError = null;
+      if (silent) notifyListeners();
     } catch (e) {
-      memoryError = '$e';
+      if (!silent) memoryError = '$e';
     } finally {
-      memoryBusy = false;
-      notifyListeners();
+      if (!silent) {
+        memoryBusy = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -1226,6 +1236,10 @@ class AiWorkspaceStore extends ChangeNotifier {
             );
             // 提交了任务：立刻刷新进度，用户马上就能在右侧栏看到"排队中 / 正在生成"
             unawaited(refreshComfyJobs());
+            // AI 用 `remember` 写了长期记忆：右侧栏的条数 / 预览必须当场跟上
+            // （用户 bug：写完长期记忆后侧边栏不刷新，要切走再切回来才变）。
+            // 后端改的是 memory.md，这边只有重新拉一次才知道新条数。
+            if (event.toolName == 'remember') unawaited(loadMemory(silent: true));
             _notifyNow();
           case 'tool.failed':
             final denied = (event.approval ?? '') == 'denied';

@@ -712,6 +712,59 @@ void main() {
     expect(find.text('查看详情'), findsOneWidget);
   });
 
+  // 用户 bug（2026-09-20）:"更新长期记忆之后，侧边栏没有立即刷新状态"。
+  //
+  // 后端 `remember` 工具是**直接写 memory.md** 的，前端右侧栏读的是 `store.memory`
+  // （启动时拉一次）。Run 期间既没有 `memory` 事件、也没有任何地方重新拉 ——
+  // 所以 AI 记完一条，面板上的条数/预览一直停在旧值，要切走再切回来才变。
+  // 修复：`tool.completed` 里认出 remember 就静默重拉一次。
+  testWidgets('(e5) AI 用 remember 写完长期记忆，右侧栏当场刷新（用户 bug）', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    // 记住之前：面板是 "0 条"
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'text.delta', '{"messageId":"a1","text":"好，我记住了。"}') +
+        _sse(
+            4,
+            'tool.requested',
+            '{"callId":"call-m","name":"remember","arguments":"{\\"content\\":\\"画幅一律 4:3\\"}",'
+                '"approval":"not_required"}') +
+        _sse(5, 'tool.started', '{"callId":"call-m","name":"remember"}') +
+        // 真后端在这一刻 memory.md 已经写完了（工具先落盘、后发事件），
+        // 所以假后端在事件发出前就把内容改掉 —— 事件本身**不带**记忆正文。
+        _sse(
+            6,
+            'tool.completed',
+            '{"callId":"call-m","name":"remember","elapsedMs":3,"preview":"已记住",'
+                '"result":{"entryCount":1,"maxEntries":100}}') +
+        _sse(7, 'message.completed', '{"messageId":"a1","text":"好，我记住了。","steps":1}') +
+        _sse(8, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+
+    expect(find.text('长期记忆'), findsOneWidget);
+    expect(find.text('0 条'), findsOneWidget, reason: '记住之前是空的');
+    expect(rec.calls.where((c) => c == 'GET /api/ai/memory').length, 1, reason: '只在进页面时拉过一次');
+
+    // 模拟"工具已经把 memory.md 写了"（真后端在发 tool.completed 之前就落盘了）
+    rec.memory = '- [2026-09-20] 画幅一律 4:3';
+
+    await tester.enterText(find.byType(TextField).first, '记住我喜欢 4:3');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    // 关键断言：不用切页面、不用手动刷新，条数与预览当场跟上
+    expect(find.text('1 条'), findsOneWidget, reason: 'AI 记完一条，面板条数必须当场变');
+    expect(find.textContaining('画幅一律 4:3'), findsWidgets, reason: '预览也要跟着更新');
+    expect(rec.calls.where((c) => c == 'GET /api/ai/memory').length, greaterThan(1),
+        reason: '必须真的重新拉了一次记忆（不是界面自己瞎猜一个条数）');
+  });
+
   testWidgets('(e4) 右侧栏显示 ComfyUI 实时进度（用户"其他建议"第 1 条）', (tester) async {
     tester.view.physicalSize = const Size(1400, 1000);
     tester.view.devicePixelRatio = 1.0;
