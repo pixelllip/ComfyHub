@@ -15,6 +15,8 @@
       7. 长期记忆 —— remember 落盘 + 下一次 Run 注入系统提示
       8. 附件（M3）—— 上传 → 缩略图 → 内联图片进请求体 → 纯文本模型零上游请求
          （含 **WebP**：按签名收下 + 尺寸探测 + 缩略图真的是 JPEG）
+      9. 重试      —— `retryOfRunId` 复用**同一条**提问与**同一条**助手占位：
+         会话消息数不变、不留空壳气泡（用户 2026-09-19 报的"同一条语句出现两次"）
 
     还会核对落库的消息 parts 顺序（tool_call / tool_result / text），保证重开会话能渲染工具卡。
 
@@ -49,6 +51,11 @@ $ModelId     = 'fake-tools-model'
 $SkillName   = 'e2e-tool-demo'
 $ConversationTitle = 'e2e-ai-tools'
 
+# 第 10 幕（重试不重复提问）用：一个指向死端口的 Provider（造一次必然失败的 Run）
+$DeadProviderId = 'e2e-tools-dead'
+$DeadPort       = 59901
+$RetryConversationTitle = 'e2e-ai-tools-retry'
+
 $SkillFile   = Join-Path $ProjectRoot "storage\ai\skills\$SkillName\SKILL.md"
 $HackFile    = Join-Path $ProjectRoot 'storage\e2e-hack.txt'
 $OkFile      = Join-Path $ProjectRoot 'comfyui\e2e-ok.txt'
@@ -59,6 +66,7 @@ $script:Total  = 0
 $script:Http   = $null
 $script:Streams = @{}
 $script:ConversationId = $null
+$script:RetryConversationId = $null
 
 # 长期记忆的原内容：本脚本会往里写一条测试记忆，结束时原样放回
 $script:MemoryBefore = $null
@@ -287,7 +295,7 @@ try {
 
     # --- 2. Provider + 模型目录 -------------------------------------------
     Say ''
-    Say '  [0/8] 配置 e2e Provider / 模型' 'Cyan'
+    Say '  [0/10] 配置 e2e Provider / 模型' 'Cyan'
 
     try { Invoke-Api 'DELETE' "/api/ai/providers/$ProviderId" $null | Out-Null } catch { }
     try { Invoke-Api 'DELETE' "/api/ai/skills/$SkillName" $null | Out-Null } catch { }
@@ -350,7 +358,7 @@ try {
 
     # --- 3. 场景 1：注册 skill --------------------------------------------
     Say ''
-    Say '  [1/9] 注册：register_skill 落盘' 'Cyan'
+    Say '  [1/10] 注册：register_skill 落盘' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s1 = Receive-Scenario -ConversationId $conv.id -Text '帮我注册一个新的 skill'
     $e1 = $s1.events
@@ -390,7 +398,7 @@ try {
 
     # --- 4. 场景 2：按需加载 ----------------------------------------------
     Say ''
-    Say '  [2/9] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
+    Say '  [2/10] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s2 = Receive-Scenario -ConversationId $conv.id -Text '加载那个 skill'
     $e2 = $s2.events
@@ -416,7 +424,7 @@ try {
 
     # --- 5. 场景 3：越界写被拒 --------------------------------------------
     Say ''
-    Say '  [3/9] 越界写被拒：write_file 打到 storage/' 'Cyan'
+    Say '  [3/10] 越界写被拒：write_file 打到 storage/' 'Cyan'
     $s3 = Receive-Scenario -ConversationId $conv.id -Text '越界写个文件'
     $e3 = $s3.events
     $fail3 = @(Get-Events $e3 'tool.failed')
@@ -433,7 +441,7 @@ try {
 
     # --- 6. 场景 4：目录内写成功 ------------------------------------------
     Say ''
-    Say '  [4/9] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
+    Say '  [4/10] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
     $s4 = Receive-Scenario -ConversationId $conv.id -Text '在目录内写个文件'
     $e4 = $s4.events
     $comp4 = @(Get-Events $e4 'tool.completed')
@@ -447,7 +455,7 @@ try {
 
     # --- 7. 场景 5：审批闸门 ----------------------------------------------
     Say ''
-    Say '  [5/9] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
+    Say '  [5/10] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
     $state = @{ callId = $null; pending = $false; accepted = $false; startedIndex = -1; requestedIndex = -1 }
     $s5 = Receive-Scenario -ConversationId $conv.id -Text '同步一下历史' -OnEvent {
         param($e, $i)
@@ -479,7 +487,7 @@ try {
 
     # --- 8. 场景 6：只读工具 ----------------------------------------------
     Say ''
-    Say '  [6/9] 只读工具：comfy_get_status 不需要审批' 'Cyan'
+    Say '  [6/10] 只读工具：comfy_get_status 不需要审批' 'Cyan'
     $s6 = Receive-Scenario -ConversationId $conv.id -Text '看看 ComfyUI 状态'
     $e6 = $s6.events
     $req6 = @(Get-Events $e6 'tool.requested')
@@ -492,7 +500,7 @@ try {
 
     # --- 9. 落库的消息 parts（重开会话能渲染工具卡） ----------------------
     Say ''
-    Say '  [7/9] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
+    Say '  [7/10] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
     $runDto = Invoke-Api 'GET' "/api/ai/runs/$($s1.run.runId)" $null
     Check 'run 落库状态 == completed' ($runDto.status -eq 'completed') ($runDto | ConvertTo-Json -Compress)
 
@@ -519,7 +527,7 @@ try {
 
     # --- 10. 场景 8：长期记忆（M6） ---------------------------------------
     Say ''
-    Say '  [8/9] 长期记忆：remember 落盘 + 下一次 Run 注入系统提示' 'Cyan'
+    Say '  [8/10] 长期记忆：remember 落盘 + 下一次 Run 注入系统提示' 'Cyan'
     $s8 = Receive-Scenario -ConversationId $conv.id -Text '记住：E2E 记一条，用户偏好 4:3 画幅'
     $e8 = $s8.events
     $req8 = @(Get-Events $e8 'tool.requested')
@@ -551,7 +559,7 @@ try {
 
     # --- 11. 场景 9：附件（M3 / AIH-027 ~ AIH-031） -----------------------
     Say ''
-    Say '  [9/9] 附件：上传 → 缩略图 → 内联进请求体 → 不支持的模型零请求' 'Cyan'
+    Say '  [9/10] 附件：上传 → 缩略图 → 内联进请求体 → 不支持的模型零请求' 'Cyan'
 
     function Set-E2eModel {
         param([string[]]$Modalities)
@@ -678,6 +686,89 @@ try {
     Check '纯文本模型 + 图片 → 创建 Run 被拒且带 UNSUPPORTED_CONTENT' `
         ($blockedBody -like '*UNSUPPORTED_CONTENT*') $blockedBody
     Check '这一路**零上游请求**（before=$beforeLog4 after=$afterLog4）' ($afterLog4 -eq $beforeLog4)
+
+    # --- 12. 场景 10：重试**不重复提问**（AIH-024 / 用户 2026-09-19 报的"同一条语句出现两次"）
+    #
+    # 现场：会话里点一次「重试」，就多出一条一模一样的提问（库里同时留着新提问 + 旧的失败气泡）。
+    # 根因是 `POST /conversations/{id}/runs` 不看 `retryOfRunId`，照旧 append 了一条新用户消息。
+    # 这一幕钉三件事：重试复用**同一条**用户消息、复用**同一条**助手占位、消息总数不变。
+    Say ''
+    Say '  [10/10] 重试：复用原来那条提问与失败气泡，绝不新增' 'Cyan'
+
+    # 先造一次"必然失败"的 Run：Provider 指向一个没人监听的端口（连接被拒 → PROVIDER_UNREACHABLE）
+    try { Invoke-Api 'DELETE' "/api/ai/providers/$DeadProviderId" $null | Out-Null } catch { }
+    $null = Invoke-Api 'POST' '/api/ai/providers' @{
+        id = $DeadProviderId
+        displayName = 'E2E Dead (fake)'
+        api = 'openai-completions'
+        baseURL = "http://127.0.0.1:$DeadPort/v1"
+        credentialRef = $null
+        endpointTrust = 'loopback'
+        enabled = $true
+    }
+    $null = Invoke-Api 'PUT' "/api/ai/providers/$DeadProviderId/models" @{
+        models = @(@{
+            providerId = $DeadProviderId
+            id = $ModelId
+            displayName = 'Fake Tools Model'
+            inputModalities = @('text')
+            attachmentTransports = @{}
+            mimeAllowlist = @()
+            tools = $true
+            parallelTools = $false
+            reasoning = $false
+            thinkingEfforts = @{}
+            contextWindow = 32768
+            maxOutputTokens = 4096
+            capabilitySource = 'manual'
+            enabled = $true
+        })
+    }
+
+    $retryConv = Invoke-Api 'POST' '/api/ai/conversations' @{ title = $RetryConversationTitle; providerId = $DeadProviderId; modelId = $ModelId }
+    $script:RetryConversationId = $retryConv.id
+    $ask = '重试用例：这句话在会话里只能出现一次'
+    $deadRun = Invoke-Api 'POST' "/api/ai/conversations/$($retryConv.id)/runs" @{
+        text = $ask; providerId = $DeadProviderId; modelId = $ModelId
+    }
+
+    $failedRun = $null
+    foreach ($i in 1..60) {
+        Start-Sleep -Milliseconds 300
+        $failedRun = Invoke-Api 'GET' "/api/ai/runs/$($deadRun.runId)" $null
+        if ($failedRun.status -in @('failed', 'completed', 'cancelled')) { break }
+    }
+    Check '第一次 Run 如实失败（PROVIDER_UNREACHABLE）' `
+        ($null -ne $failedRun -and $failedRun.status -eq 'failed') ($failedRun | ConvertTo-Json -Compress)
+
+    $msgsBefore = @(Invoke-Api 'GET' "/api/ai/conversations/$($retryConv.id)/messages" $null)
+    Check '失败之后会话里是 1 问 1 答（2 条）' ($msgsBefore.Count -eq 2) `
+        (($msgsBefore | ForEach-Object { "$($_.role):$($_.status)" }) -join ' | ')
+
+    # 重试：同一句话 + retryOfRunId（Provider 换成能通的那个）
+    $retryRun = Invoke-Api 'POST' "/api/ai/conversations/$($retryConv.id)/runs" @{
+        text = $ask; providerId = $ProviderId; modelId = $ModelId; retryOfRunId = $deadRun.runId
+    }
+    Check '重试复用了**原来那条**用户消息（userMessageId 不变）' `
+        ($retryRun.userMessageId -eq $deadRun.userMessageId) `
+        ("before=$($deadRun.userMessageId) after=$($retryRun.userMessageId)")
+    Check '重试复用了**那条失败气泡**（assistantMessageId 不变）' `
+        ($retryRun.assistantMessageId -eq $deadRun.assistantMessageId) `
+        ("before=$($deadRun.assistantMessageId) after=$($retryRun.assistantMessageId)")
+
+    Open-RunStream -RunId $retryRun.runId
+    $e10 = @(Receive-RunEvents -RunId $retryRun.runId -TimeoutSec $TimeoutSec)
+    Close-RunStream -RunId $retryRun.runId
+    Check '重试的 Run 正常完成' ((@(Get-Events $e10 'run.completed')).Count -ge 1) ($e10[-1].event)
+
+    $msgsAfter = @(Invoke-Api 'GET' "/api/ai/conversations/$($retryConv.id)/messages" $null)
+    Check '重试之后**仍然**只有 2 条消息（没有多出一条重复提问、也没留空壳气泡）' `
+        ($msgsAfter.Count -eq 2) `
+        (($msgsAfter | ForEach-Object { "$($_.role):$($_.status):$($_.text.Length)" }) -join ' | ')
+    $askRows = @($msgsAfter | Where-Object { $_.role -eq 'user' -and $_.text -eq $ask })
+    Check '那句提问在会话里只有 1 条' ($askRows.Count -eq 1) ("找到 $($askRows.Count) 条")
+    $assistantRows = @($msgsAfter | Where-Object { $_.role -eq 'assistant' })
+    Check '助手气泡只有 1 条' ($assistantRows.Count -eq 1) ("找到 $($assistantRows.Count) 条")
 } finally {
     # --- 清理 -------------------------------------------------------------
     Say ''
@@ -691,6 +782,11 @@ try {
         if ($script:ConversationId) {
             try { Invoke-Api 'DELETE' "/api/ai/conversations/$($script:ConversationId)" $null | Out-Null } catch { }
         }
+        # 第 10 幕的会话与那个"死端口 Provider"也要收干净（否则用户会在工作台里看到它）
+        if ($script:RetryConversationId) {
+            try { Invoke-Api 'DELETE' "/api/ai/conversations/$($script:RetryConversationId)" $null | Out-Null } catch { }
+        }
+        try { Invoke-Api 'DELETE' "/api/ai/providers/$DeadProviderId" $null | Out-Null } catch { }
         try { Invoke-Api 'DELETE' "/api/ai/providers/$ProviderId" $null | Out-Null } catch { }
         try { Invoke-Api 'DELETE' "/api/ai/skills/$SkillName" $null | Out-Null } catch { }
         Remove-Item $SkillFile -Force -ErrorAction SilentlyContinue
@@ -727,3 +823,5 @@ Say ''
 Say ("  总计 {0} 项，失败 {1} 项" -f $script:Total, $script:Failed) $(if ($script:Failed -gt 0) { 'Red' } else { 'Green' })
 Say ''
 exit $script:Failed
+
+

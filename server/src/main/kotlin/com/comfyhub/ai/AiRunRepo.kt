@@ -263,6 +263,29 @@ object AiRunRepo {
         }
     }
 
+    /**
+     * 重试时把**那条失败 / 取消的助手消息就地重置**成流式占位（AIH-024）。
+     *
+     * 为什么不新建一条：新建等于在会话里再插一个气泡，而旧的那条会作为空壳留下
+     * （用户报的"重试之后同一条语句出现两次"就是这一类）。就地重置之后
+     * seq 不变、空壳不残、`retryOfRunId` 也照样能追溯到是哪次失败的重放。
+     */
+    fun resetAssistantForRetry(messageId: String, providerId: String, modelId: String) {
+        Db.tx { conn ->
+            // 上一次失败前可能已经落过 part（思考 / 工具卡），一并清掉，别让它混进新回复
+            conn.execute("DELETE FROM ai_message_parts WHERE message_id = ?", messageId)
+            conn.execute(
+                """
+                UPDATE ai_messages
+                   SET status = 'streaming', text = '', provider_id = ?, model_id = ?,
+                       provider_response_id = NULL, usage_json = NULL
+                 WHERE id = ?
+                """.trimIndent(),
+                providerId, modelId, messageId,
+            )
+        }
+    }
+
     fun insertAssistantPlaceholder(conversationId: String, providerId: String, modelId: String): String {
         val id = UUID.randomUUID().toString()
         Db.withConnection { conn ->

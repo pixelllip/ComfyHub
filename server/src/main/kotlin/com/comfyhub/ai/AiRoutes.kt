@@ -357,8 +357,45 @@ fun Route.aiRoutes(
                 )
             }
 
+            // 重试（AIH-024）：**复用**原来那条用户消息与助手占位，绝不新增一行。
+            //
+            // 用户 2026-09-19 报的"发送消息时容易出现同一条语句重复"就是这么来的：
+            // 以前这里不看 `retryOfRunId` 照旧 append 一条新用户消息，于是"点一次重试，
+            // 会话里就多出一条一模一样的提问"（库里同时留着新提问 + 旧失败气泡；
+            // 实测会话 d9276b37 的 seq3 / seq5 就是同一句「你什么意思？继续生成。」）。
+            val retryOf = body.retryOfRunId?.let { retryId ->
+                AiRunRepo.get(retryId)
+                    ?: throw AiException(AiErrorCode.CONFIG_ERROR, "要重试的那次运行不存在：$retryId")
+            }
+            if (retryOf != null && retryOf.conversationId != conversationId) {
+                throw AiException(AiErrorCode.CONFIG_ERROR, "要重试的那次运行不属于这条会话")
+            }
+            // 旧的那条助手消息：**只有 failed / cancelled 才允许接着用**。
+            // 已经答完的回复绝不能因为一次（可能来自旧界面的）重试就被擦掉。
+            val retryAssistant = retryOf?.assistantMessageId?.let { AiConversationRepo.getMessage(it) }
+            if (retryAssistant != null) {
+                if (retryAssistant.conversationId != conversationId) {
+                    throw AiException(AiErrorCode.CONFIG_ERROR, "要重试的那条回复不属于这条会话")
+                }
+                if (retryAssistant.status != "failed" && retryAssistant.status != "cancelled") {
+                    throw AiException(
+                        AiErrorCode.CONFIG_ERROR,
+                        "那条回复的状态是 ${retryAssistant.status}，不需要（也不能）重试；直接发一条新消息即可",
+                    )
+                }
+            }
+            val retryUser = retryOf?.userMessageId?.let { AiConversationRepo.getMessage(it) }
+                ?.takeIf { it.role == "user" && it.conversationId == conversationId }
+            if (retryUser != null && retryUser.text.trim() != body.text.trim()) {
+                // 重试必须回答**原来那个问题**：以库里那条为准（如实记一笔，不静默改写）
+                log.warn(
+                    "重试请求带的正文与库里的原提问不一致，按库里的来 run={} message={}",
+                    retryOf?.id, retryUser.id,
+                )
+            }
+
             // 用户消息与助手占位都在"创建 Run"里完成，保证顺序与 seq 稳定
-            val userMessage = AiConversationRepo.appendMessage(
+            val userMessage = retryUser ?: AiConversationRepo.appendMessage(
                 conversationId,
                 AiMessageAppend(
                     role = "user",
@@ -370,7 +407,13 @@ fun Route.aiRoutes(
                     },
                 ),
             )
-            val assistantId = AiRunRepo.insertAssistantPlaceholder(conversationId, provider.id, model.id)
+            val assistantId = if (retryAssistant != null) {
+                // 就地重置那条失败/取消的占位（连 part 一起清）：会话里不留空壳气泡
+                AiRunRepo.resetAssistantForRetry(retryAssistant.id, provider.id, model.id)
+                retryAssistant.id
+            } else {
+                AiRunRepo.insertAssistantPlaceholder(conversationId, provider.id, model.id)
+            }
 
             val run = AiRunRepo.create(
                 conversationId = conversationId,

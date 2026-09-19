@@ -1021,7 +1021,8 @@ pwsh -File scripts\e2e-ai-tools-test.ps1
 #   → WebP 附件按签名收下 + 尺寸探测 + 缩略图真的是 JPEG（ImageIO 插件没掉）
 #   → 上游请求里确实带 data:image/png;base64 的图片块 → 落库带 attachment 有序块
 #   → 换成纯文本模型再发同一个附件：400 UNSUPPORTED_CONTENT 且**上游请求数为 0**
-# 67 项检查；跑完自动删掉测试用的会话 / Provider / skill / 附件 / 临时文件（并把长期记忆恢复原样）；
+# → 重试（retryOfRunId）：复用同一条提问与同一条助手占位，会话消息数不变、不留空壳气泡
+# 75 项检查；跑完自动删掉测试用的会话 / Provider / skill / 附件 / 临时文件（并把长期记忆恢复原样）；
 # 加 -KeepData 保留
 ```
 

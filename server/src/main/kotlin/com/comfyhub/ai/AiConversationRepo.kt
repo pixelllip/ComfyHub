@@ -192,6 +192,11 @@ object AiConversationRepo {
         messages.map { it.copy(parts = parts[it.id].orEmpty()) }
     }
 
+    /** 按 id 取一条消息（重试时判断"那条回复还能不能接着用"要用它）。 */
+    fun getMessage(id: String): AiMessageDto? = Db.withConnection { conn ->
+        conn.queryOne("SELECT * FROM ai_messages WHERE id = ?", id) { it.toMessage() }
+    }
+
     /**
      * 追加一条消息（可带有序块）。同一个事务里写入，避免出现"有消息没片段"的半截状态。
      * `seq` 由服务端分配，保证恢复顺序稳定。

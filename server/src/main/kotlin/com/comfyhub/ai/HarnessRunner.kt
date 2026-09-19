@@ -378,24 +378,42 @@ class HarnessRunner(
                     // 最后一轮不再给工具：逼模型用正文收尾，而不是继续要工具
                     var roundTools = if (step < maxSteps) toolSpecs else emptyList()
 
-                    val (round, idle) = try {
-                        runRound(roundTools)
-                    } catch (e: AiException) {
-                        // 很多网关明明不支持工具，却在收到 tools 时直接 400。**不能让用户因此没法聊天**：
-                        // 退回纯文本再试一次，并且如实说明发生了什么（不假装模型自己不用工具）。
-                        val retriable = e.code == AiErrorCode.CONFIG_ERROR || e.code == AiErrorCode.PROTOCOL_ERROR
-                        if (roundTools.isEmpty() || !retriable) throw e
-                        log.info("上游拒绝工具参数（{}），本次 Run 退回纯文本模式重试", e.message)
-                        val note = if (text.isEmpty() && step == 0) {
-                            "（上游网关不接受工具参数，本次已退回纯文本模式。）\n\n"
-                        } else {
-                            "\n\n（上游网关不接受工具参数，本次已退回纯文本模式。）"
+                    // 跑一轮，外加"网关不接受工具参数"时的纯文本回退（AIH-006 / 用户 2026-09-19 的重复 bug）。
+                    //
+                    // 很多网关明明不支持工具，却在收到 tools 时直接 400。**不能让用户因此没法聊天**：
+                    // 退回纯文本再试一次，并且如实说明发生了什么（不假装模型自己不用工具）。
+                    // 但**本轮已经有可见输出时绝不重放**：已经流出去的话再说一遍，
+                    // 用户会在同一条回复里看到两遍同一段话（实测过）。
+                    // 宁可如实失败（有 errorCode），也不要假装重来一次没发生过。
+                    suspend fun runRoundWithFallback(): Pair<RoundResult, Idle> {
+                        val textBefore = text.length
+                        try {
+                            return runRound(roundTools)
+                        } catch (e: AiException) {
+                            val retriable =
+                                e.code == AiErrorCode.CONFIG_ERROR || e.code == AiErrorCode.PROTOCOL_ERROR
+                            if (roundTools.isEmpty() || !retriable) throw e
+                            if (text.length > textBefore) {
+                                log.warn(
+                                    "上游在接受工具参数后中途报错，但本轮已有可见输出：不再重放（避免重复）: {}",
+                                    e.message,
+                                )
+                                throw e
+                            }
+                            log.info("上游拒绝工具参数（{}），本次 Run 退回纯文本模式重试", e.message)
+                            val note = if (text.isEmpty() && step == 0) {
+                                "（上游网关不接受工具参数，本次已退回纯文本模式。）\n\n"
+                            } else {
+                                "\n\n（上游网关不接受工具参数，本次已退回纯文本模式。）"
+                            }
+                            text.append(note)
+                            emit(RunEventType.TEXT_DELTA, payload("messageId" to assistantId, "text" to note))
+                            roundTools = emptyList()
+                            return runRound(roundTools)
                         }
-                        text.append(note)
-                        emit(RunEventType.TEXT_DELTA, payload("messageId" to assistantId, "text" to note))
-                        roundTools = emptyList()
-                        runRound(roundTools)
                     }
+
+                    val (round, idle) = runRoundWithFallback()
                     finishReason = idle.finishReason ?: finishReason
                     providerResponseId = idle.providerResponseId ?: providerResponseId
                     usageTotal = usageTotal + TokenUsage.from(round.usage)
