@@ -185,7 +185,9 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
        └─ 有工具调用 → 逐个：策略 →（必要时审批）→ 执行 → 落 ai_tool_calls
                       → 事件 tool.requested/started/completed/failed
                       → 结果作为 role=tool 轮喂回去
-  └─ 最后一轮（step == maxSteps）**不带 tools**：逼模型用正文收尾，而不是继续要工具
+  └─ 轮数用尽（step == maxSteps）那一轮**照样带 tools，但不再执行**：
+     不给清单的话，模型（DeepSeek 系）会把工具调用语法当正文吐出来，答案尾巴上就是一段
+     原始标记（用户 2026-09-19 报的"回答像被截断"）；给清单只是不执行，还要调就如实说明
 ```
 
 要点：
