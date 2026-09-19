@@ -49,13 +49,11 @@ class _AiHomePageState extends State<AiHomePage> {
   /// 视口是不是贴着底部（用户建议 ③）：**贴底才自动跟随**，翻旧消息时不打扰。
   bool _atBottom = true;
 
-  /// 上一次的滚动位置：用来判断"用户是不是往上翻了"。
+  /// "已经贴底"的容差，单位像素。**只用来吸收亚像素误差**，不是"接近底部"的意思。
   ///
-  /// 为什么不能只看 `maxScrollExtent - pixels`：流式输出时内容一直在变长，
-  /// `max` 蹭蹭往上涨而 `pixels` 没动，距离自然就超过阈值了 ——
-  /// 那样会把"用户明明还在底部"误判成"用户翻上去了"，自动跟随第一帧就停。
-  /// 只有**位置真的变小**（往上翻）才算用户主动离开底部。
-  double _lastPixels = 0;
+  /// 老代码这里是 80，那个数字就是"只滚一小段就被拽回底部"的根因 ——
+  /// 完整的来龙去脉见 [_onScroll] 的注释。
+  static const double _bottomEpsilon = 1.5;
 
   @override
   void didChangeDependencies() {
@@ -142,15 +140,34 @@ class _AiHomePageState extends State<AiHomePage> {
   }
 
   /// 用户手动滚到底 / 翻上去时更新"贴底"状态（用户建议 ③ / ④）。
+  ///
+  /// 判据只有一条：**是不是真的贴底**（容差 [_bottomEpsilon]，只吸收亚像素误差）。
+  ///
+  /// 老写法是 `distance < 80 ? true : ...` —— 那等于给"贴底"画了一个 80px 宽的笼子。
+  /// 这就是用户 bug 2026-09-20 那个"两个症状、一个根因"：
+  ///  ① 流式输出时往上滚一小段：内容同时在往下长，`max` 涨、`pixels` 没动多少，
+  ///     算出来的距离一直落在 80 以内 → 下一帧又被判成"贴底" →
+  ///     `_followIfAtBottom()` 的 `animateTo(max)` 把人拽回底部（"只滚一小段的话
+  ///     界面会立即重置到底部，再继续滚才不会滚下去"）。
+  ///  ② 快速拉滚动条时位置变化异常：用户一边拖，那个 180ms 的跟随动画一边在执行、
+  ///     每来一段流式内容又排一次新的 —— 手指和动画各拉一个方向，位置就跳。
+  ///
+  /// 容差收到 1.5 之后，**用户滚一像素就脱离"贴底"**：`_followIfAtBottom()` 当场不再
+  /// 排新的跟随动画，上面两条同时消失（用户滚回底部时距离归零，自然重新贴上）。
+  ///
+  /// 这里**不需要**再判"位置有没有变小"：内容变长时 `max` 在涨而 `pixels` 没动，
+  /// 距离确实会变大，但那只是"新内容在下面"，跟随照旧；而用户真的滚上去了，
+  /// 距离一定会超过这个容差。
+  ///
+  /// 另外**不要**在这里去动 `position`（比如"把在飞的动画按停"）：`UserScrollNotification`
+  /// 是在 `ScrollDragController.update` 的中间派发的，此刻 `applyUserOffset` 正等着
+  /// `setPixels`，任何 `jumpTo` / `hold` 都会把 `activity` 换成 Idle ——
+  /// 结果是**用户的手指当场失效**，而且 Flutter 会直接抛
+  /// `'activity!.isScrolling': is not true`（本机实测过）。
   void _onScroll() {
     if (!_scroll.hasClients) return;
-    final position = _scroll.position;
-    final pixels = position.pixels;
-    final distance = position.maxScrollExtent - pixels;
-    // 往上翻（位置真的变小）才算离开底部；内容变长导致的"距离变大"不算
-    final wentUp = pixels < _lastPixels - 2;
-    _lastPixels = pixels;
-    final next = distance < 80 ? true : (wentUp ? false : _atBottom);
+    final distance = _scroll.position.maxScrollExtent - _scroll.position.pixels;
+    final next = distance <= _bottomEpsilon;
     if (next != _atBottom && mounted) setState(() => _atBottom = next);
   }
 
@@ -549,6 +566,9 @@ class _MessageList extends StatelessWidget {
     if (store.messages.isEmpty) return _EmptyThread(store: store);
 
     return ListView.builder(
+      // 聊天气泡列表：界面里还有别的 ListView（会话列表、气泡里的清单），
+      // 回归用例要能精确点到**这一个**（滚动跟随 / 贴底那几条断言都靠它）。
+      key: const Key('ai-message-list'),
       controller: controller,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       itemCount: store.messages.length,
@@ -1465,7 +1485,10 @@ class _StreamingReasoningState extends State<_StreamingReasoning> {
 
   /// 视口是不是贴着底部：**只有贴底才跟随**（和聊天列表同一条纪律）。
   bool _atBottom = true;
-  double _lastPixels = 0;
+
+  /// 贴底容差：只吸收亚像素误差，不是"接近底部"（聊天列表那边踩过同样的坑，
+  /// 见 `_AiHomePageState._bottomEpsilon` 的注释）。
+  static const double _bottomEpsilon = 1.5;
 
   @override
   void initState() {
@@ -1481,12 +1504,7 @@ class _StreamingReasoningState extends State<_StreamingReasoning> {
 
   void _onScroll() {
     if (!_scroll.hasClients) return;
-    final position = _scroll.position;
-    final pixels = position.pixels;
-    final distance = position.maxScrollExtent - pixels;
-    final wentUp = pixels < _lastPixels - 2;
-    _lastPixels = pixels;
-    _atBottom = distance < 24 ? true : (wentUp ? false : _atBottom);
+    _atBottom = _scroll.position.maxScrollExtent - _scroll.position.pixels <= _bottomEpsilon;
   }
 
   /// 贴底时把内层视口拉到最新一行（`jumpTo` 而不是动画：这是"跟上"不是"滚一段"）。

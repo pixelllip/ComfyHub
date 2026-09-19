@@ -219,7 +219,7 @@ MockClient _streamingBackend(_Fake fake, Stream<List<int>> events) =>
 
 AiWorkspaceStore? lastStore;
 
-Future<Widget> _homePage(MockClient client) async {
+Future<Widget> _homePage(MockClient client, {ScrollBehavior? scrollBehavior}) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
@@ -232,7 +232,12 @@ Future<Widget> _homePage(MockClient client) async {
       ChangeNotifierProvider<SettingsStore>.value(value: settings),
       ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
     ],
-    child: const MaterialApp(home: AiHomePage()),
+    child: MaterialApp(
+      // 滚动条的拖动 / 鼠标拖动在 widget test 的默认作用域里是关着的，
+      // 要测"用户拖着滚"就得把它打开（见下面那条用户 bug 用例）。
+      scrollBehavior: scrollBehavior,
+      home: const AiHomePage(),
+    ),
   );
 }
 
@@ -313,6 +318,155 @@ void main() {
     expect(notices, lessThan(6),
         reason: '流式增量必须攒到一帧再通知，不能一个一个字地重建界面');
     expect(store.messages.last.text, text, reason: '攒着通知不能把内容攒丢');
+  });
+
+  // 用户 bug（2026-09-20）："如果在 AI 正输出回答的时候滚动页面，只滚一小段的话
+  // 界面会立即重置到底部，再继续滚才不会滚下去。"
+  //
+  // 根因在 `_onScroll` 的"贴底"判据：老写法是 `distance < 80`，等于给"贴底"画了个
+  // 80px 宽的笼子。流式期间用户往上滚一点点，内容同时在往下长，
+  // `maxScrollExtent - pixels` 一直落在 80 以内 → 下一帧又被判成"贴底"、
+  // 被 `_followIfAtBottom()` 的 `animateTo(max)` 拽回去。
+  // 一次滚够 80px 以上才逃得出去 —— 用户的"再继续滚才不会滚下去"就是这么来的。
+  //
+  // 用例走**真实链路**：贴底 → 往上跳 30px（等价于滚轮推一下 / 拖一小段，
+  // 会触发同一个 `_onScroll`）→ 继续灌流式增量 → 位置必须留在原地。
+  testWidgets('流式输出中往上滚一小段：位置要留住，不能被拽回底部（用户 bug）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final events = StreamController<List<int>>();
+    await tester.pumpWidget(await _homePage(_streamingBackend(_Fake(), events.stream)));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, '写一份很长的方案');
+    await tester.tap(find.text('发送'));
+    await tester.pump();
+
+    // 第一批：足够长，列表可滚动且**已经贴底**
+    events.add(utf8.encode(
+      _sse(1, 'run.started', '{"runId":"r1"}') +
+          _sse(2, 'text.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 100)})),
+    ));
+    await tester.pump(const Duration(milliseconds: 50));
+    // 贴底那一下是 `animateTo`（180ms）：要真的把它跑完再量位置
+    await tester.pumpAndSettle();
+
+    final position = tester.state<ScrollableState>(
+      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)),
+    ).position;
+    expect(position.maxScrollExtent, greaterThan(200), reason: '得真的能滚，这个用例才有意义');
+    final bottom = position.pixels;
+    expect(bottom, closeTo(position.maxScrollExtent, 1.5), reason: '流式输出时本来就该贴底');
+
+    // 用户往上滚**一小段**（30px —— 老判据那个 80px 笼子里的一小步）
+    position.jumpTo(bottom - 30);
+    await tester.pump();
+    expect(position.pixels, closeTo(bottom - 30, 1.0), reason: '手势本身要真的滚上去');
+
+    // AI 还在往外吐字（用户说的"正输出回答的时候"）：每帧都来一段
+    for (var i = 0; i < 8; i++) {
+      events.add(utf8.encode(
+        _sse(10 + i, 'text.delta', jsonEncode({'messageId': 'a1', 'text': '\n${_lines(110 + i * 5, 114 + i * 5)}'})),
+      ));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+
+    expect(position.pixels, closeTo(bottom - 30, 2.0),
+        reason: '用户已经往上翻了，流式的新内容不该把他拽回底部（用户 bug：只滚一小段立即重置到底部）');
+    expect(find.byTooltip('回到最新消息'), findsOneWidget,
+        reason: '翻上去之后右下角要出现"回到最新消息"');
+
+    // 自己滚回底部：贴底之后必须重新跟随（不然"跟随"就永久失效了）
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pump();
+    events.add(utf8.encode(
+      _sse(50, 'text.delta', jsonEncode({'messageId': 'a1', 'text': '\n${_lines(200, 204)}'})),
+    ));
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pumpAndSettle();
+    expect(position.pixels, closeTo(position.maxScrollExtent, 1.5),
+        reason: '滚回底部后要重新贴底（跟随不能永久失效）');
+
+    // 收尾：正常结束这一轮（免得留下未完成的流 / 定时器）
+    events.add(utf8.encode(
+      _sse(99, 'message.completed',
+          jsonEncode({'messageId': 'a1', 'text': _lines(1, 100), 'steps': 0, 'reasoningEffort': 'off'})) +
+          _sse(100, 'run.completed', '{"runId":"r1"}'),
+    ));
+    unawaited(events.close());
+    await tester.pumpAndSettle();
+  });
+
+  // 用户 bug（2026-09-20）："快速拉动滚动条时，其位置变化异常。"
+  //
+  // 和上一条是同一个根因的另一个症状：老判据（距离 < 80 也算贴底）让用户以为
+  // "我还在底部"，于是 `_followIfAtBottom()` 的 `animateTo(maxScrollExtent)` 一直在排队，
+  // 用户一边拉滚动条、那个 180ms 的动画一边在跑 —— 手指和动画各拉一个方向，位置就跳。
+  // 容差收到 1.5 之后，用户滚一像素就脱离"贴底"，跟随当场不再排新的动画。
+  //
+  // 这条用例直接**真的拖**：从贴底往上拖 300px，然后要求位置就是"往上 300px 左右"，
+  // 而不是被拖回底部；再往上拖，位置继续跟着走。
+  testWidgets('用户往上拖时，位置跟手、不被跟随动画拽回底部（用户 bug：位置变化异常）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final events = StreamController<List<int>>();
+    await tester.pumpWidget(await _homePage(_streamingBackend(_Fake(), events.stream)));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, '写一份很长的方案');
+    await tester.tap(find.text('发送'));
+    await tester.pump();
+
+    events.add(utf8.encode(
+      _sse(1, 'run.started', '{"runId":"r1"}') +
+          _sse(2, 'text.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 100)})),
+    ));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pumpAndSettle();
+
+    final position = tester.state<ScrollableState>(
+      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
+    ).position;
+    final bottom = position.pixels;
+    expect(bottom, closeTo(position.maxScrollExtent, 1.5), reason: '起点是贴底的');
+
+    // 拖动期间 AI 还在吐字（这时老代码会不停排跟随动画）
+    events.add(utf8.encode(
+      _sse(3, 'text.delta', jsonEncode({'messageId': 'a1', 'text': '\n${_lines(101, 140)}'})),
+    ));
+    await tester.pump(const Duration(milliseconds: 16));
+
+    await tester.drag(find.byKey(const Key('ai-message-list')), const Offset(0, 300));
+    await tester.pump();
+
+    // 被"拽回底部"的话这里会重新贴到 max；跟手的话应该往上走了 300px 上下。
+    // 只钉"确实离开底部"（拖动本身带一点物理摩擦，不写死像素数）。
+    expect(position.pixels, lessThan(bottom - 150),
+        reason: '往上拖了 300px，位置必须真的上去（被动画拽回底部就是这个断言先红）');
+
+    // 再拖一次：仍然跟手（不是"只有第一次能动"）
+    events.add(utf8.encode(
+      _sse(4, 'text.delta', jsonEncode({'messageId': 'a1', 'text': '\n${_lines(141, 180)}'})),
+    ));
+    await tester.pump(const Duration(milliseconds: 16));
+    final afterFirst = position.pixels;
+    await tester.drag(find.byKey(const Key('ai-message-list')), const Offset(0, 200));
+    await tester.pump();
+    expect(position.pixels, lessThan(afterFirst - 100),
+        reason: '第二次拖动同样要跟手（跟随动画不许把人往回拽）');
+
+    // 收尾：正常结束这一轮
+    events.add(utf8.encode(
+      _sse(9, 'message.completed',
+          jsonEncode({'messageId': 'a1', 'text': _lines(1, 100), 'steps': 0, 'reasoningEffort': 'off'})) +
+          _sse(10, 'run.completed', '{"runId":"r1"}'),
+    ));
+    unawaited(events.close());
+    await tester.pumpAndSettle();
   });
 
   testWidgets('展开的流式思考：贴底跟到最新一行，没变过的块复用同一个 widget', (tester) async {

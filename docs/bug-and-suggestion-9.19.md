@@ -129,6 +129,31 @@
   换成转圈（那是用户自己点编辑时的反馈，`memoryBusy` 只管那个）。
   防线：`test/ai_tools_ui_test.dart` 用例 (e5)（去掉那一行实测必红：
   `1 条` 找不到、`GET /api/ai/memory` 只发了 1 次））
+- ~~快速拉动滚动条时，其位置变化异常；~~
+  ~~如果在 AI 正输出回答的时候滚动页面，只滚一小段的话界面会立即重置到底部，再继续滚才不会滚下去。~~
+  → **已修**（2026-09-20，**两个症状一个根因**）
+  （根因在 `lib/pages/ai_home_page.dart` 的 `_onScroll`：判"贴底"用的是 `distance < 80`
+  —— 那等于给"贴底"画了一个 **80px 宽的笼子**。流式输出时：
+  **① "只滚一小段就被重置到底部"**：用户往上滚一点点，内容同时在往下长，
+  `maxScrollExtent` 涨而 `pixels` 没动多少，算出来的距离一直落在 80 以内 →
+  下一帧又被判成"贴底" → `_followIfAtBottom()` 的 `animateTo(max)` 把人拽回底部；
+  一次滚够 80px 才逃得出去（用户说的"再继续滚才不会滚下去"就是这么来的）。
+  **② "快速拉滚动条时位置变化异常"**：同一个笼子让 `_atBottom` 一直是 true，
+  于是每来一段流式内容就**排一个新的 180ms 跟随动画**，用户一边拖、动画一边在跑，
+  手指和动画各拉一个方向 —— 位置就跳。
+  修复：容差 `80 → 1.5`（`_bottomEpsilon`，只吸收亚像素误差）。用户滚一像素就脱离贴底，
+  跟随当场不再排新动画，上面两条同时消失；滚回底部时距离归零，自然重新贴上。
+  内侧「思考过程」那个滚动条是同一套老判据（`distance < 24`），一起收了。
+  **走过的弯路（别再试）**：想让"用户一动就把跟随动画按停"，在
+  `UserScrollNotification` 里 `position.jumpTo(position.pixels)` —— 那个通知是在
+  `ScrollDragController.update` 中间派发的，此刻 `applyUserOffset` 正等着 `setPixels`，
+  `jumpTo` 会把 `activity` 换成 Idle，**用户的手指当场失效**并抛
+  `'activity!.isScrolling': is not true`（本机实测：拖动第 2 帧就死）。
+  用 `position.isScrollingNotifier` 当"用户在滚"更不行 —— 我们自己 `animateTo` 时它也是 true，
+  会把跟随动画掐死（实测流式时列表停在 202/1413，再也贴不到底）。
+  防线：`test/ai_chat_perf_test.dart` 两例（① 流式途中往上滚 30px，位置要留住、
+  还要冒出「回到最新消息」；② 真的 `tester.drag` 两次，位置要跟手）。
+  第 ① 例退回旧判据实测必红）
 
 建议：
 
