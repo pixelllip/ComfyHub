@@ -30,6 +30,14 @@ enum class ToolCategory(val wire: String) {
     FILES("files"),
     COMFY("comfy"),
     MEMORY("memory"),
+
+    /**
+     * 联网搜索（2026-09-20 新增）。
+     *
+     * 单独一类而不是塞进 [FILES]：它是**唯一会把数据送出本机**的工具类别，
+     * 界面要能一眼分组、用户要能整类关掉（`deny`），预算也是按类单独算的。
+     */
+    WEB("web"),
     ;
 
     companion object {
@@ -54,6 +62,14 @@ class ToolContext(
     var calls: Int = 0,
     /** 本 Run 里查 ComfyUI 的次数（预算见 `ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN`） */
     var comfyQueries: Int = 0,
+    /**
+     * 本 Run 里**联网搜索**的次数（[ToolCategory.WEB]，预算见
+     * `ToolPolicyConfig.maxWebQueriesPerRun`）。
+     *
+     * 搜一次就是一次外部请求 + 一份要烧 token 的正文，模型的"再搜一下确认"
+     * 很容易刹不住车，所以和 ComfyUI 一样有独立预算，不共用 [calls]。
+     */
+    var webQueries: Int = 0,
     /**
      * 本 Run 里**真的新增**了几条长期记忆（用户要求：一次最多
      * [MemoryStore.MAX_ENTRIES_PER_RUN] 条）。

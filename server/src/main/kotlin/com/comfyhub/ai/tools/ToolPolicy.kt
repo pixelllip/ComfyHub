@@ -57,6 +57,14 @@ data class ToolPolicyConfig(
      * 读库一律过 [normalizeStored]。
      */
     val maxComfyQueriesPerRun: Int = DEFAULT_MAX_COMFY_QUERIES_PER_RUN,
+    /**
+     * 单个 Run 最多**联网搜索**几次（默认见 [DEFAULT_MAX_WEB_QUERIES_PER_RUN]）。
+     *
+     * 与 [maxComfyQueriesPerRun] 同一个道理：那是"不许拿 ComfyUI 当轮询器"，
+     * 这个是"不许拿搜索引擎当草稿纸"。⚠ 同样**不是用户设置**，所以必须进 [normalizeStored]，
+     * 否则老库里会冻住一份出厂值。
+     */
+    val maxWebQueriesPerRun: Int = DEFAULT_MAX_WEB_QUERIES_PER_RUN,
     /** 单次 `read_file` 最多读取的字节数（2026-09-19 上调，见 [DEFAULT_MAX_READ_BYTES]） */
     val maxReadBytes: Int = DEFAULT_MAX_READ_BYTES,
     /** 一次 write_file 最多写入的字节数（2026-09-19 上调，见 [DEFAULT_MAX_WRITE_BYTES]） */
@@ -90,6 +98,17 @@ data class ToolPolicyConfig(
         const val DEFAULT_MAX_COMFY_QUERIES_PER_RUN = 9
 
         /**
+         * 出厂默认：一次回复里最多联网搜索几次。
+         *
+         * 8 次的依据：一次典型的"查资料"是"搜 1~2 次 → 发现不对 → 换个说法再搜"，
+         * 8 次足够走完两三轮；再往上就不是在用了，是在拿搜索引擎当草稿纸
+         * （每一次都是真实的外部请求 + 一份要烧 token 的正文）。
+         *
+         * 另外免密钥额度是 1000 次/小时，8 次/轮 的设计让单机用户基本不可能撞上它。
+         */
+        const val DEFAULT_MAX_WEB_QUERIES_PER_RUN = 8
+
+        /**
          * 单次读取上限：**2MB**（用户 2026-09-19：「单轮读写上限给得太低了，
          * 万一工作流本身有问题，AI 尝试修改工作流就会显得不够用」）。
          *
@@ -120,11 +139,15 @@ data class ToolPolicyConfig(
          * （实测 2026-09-19：库里的 `ai.tools.policy` 冻着 `maxReadBytes:262144`，
          * 光走上调代码默认值这条路对老用户完全无效）。
          *
+         * [maxWebQueriesPerRun] 同理：它是新加的固定预算，老库里根本没有这个键，
+         * 但一旦用户切一次权限档，[save] 就会把当时的默认值写进去 —— 所以从一开始就归它管。
+         *
          * [maxToolSteps] / [maxCallsPerRun] **不能**这样处理：它们是用户可改的
          * （`ToolPolicyUpdate` 里有），库里的值必须生效。
          */
         fun normalizeStored(config: ToolPolicyConfig) = config.copy(
             maxComfyQueriesPerRun = DEFAULT_MAX_COMFY_QUERIES_PER_RUN,
+            maxWebQueriesPerRun = DEFAULT_MAX_WEB_QUERIES_PER_RUN,
             maxReadBytes = DEFAULT_MAX_READ_BYTES,
             maxWriteBytes = DEFAULT_MAX_WRITE_BYTES,
         )

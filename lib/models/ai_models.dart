@@ -1257,7 +1257,7 @@ class AiToolInfo {
   final String name;
   final String description;
 
-  /// skill / files / comfy —— 界面按它选图标。
+  /// skill / files / comfy / memory / web —— 界面按它选图标。
   final String category;
 
   /// 会不会写盘（界面要标出来）。
@@ -1291,6 +1291,9 @@ class AiToolInfo {
         'skill' => 'Skills',
         'files' => '文件',
         'comfy' => 'ComfyUI',
+        'memory' => '记忆',
+        // 联网搜索（2026-09-20）：唯一会把数据送出本机的类别
+        'web' => '联网搜索',
         _ => category,
       };
 

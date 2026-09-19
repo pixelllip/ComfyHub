@@ -24,13 +24,13 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `workflow` / `ralph` | 不采纳 | 同上 |
 | `job_output` / `job_list` / `job_kill` | 不采纳 | 没有长任务后台作业的概念（ComfyUI 那边是轮询捕获，不是 job） |
 | `todo_write` / `ask_user_question` | 暂不采纳 | 属于交互协议，等有了"多步任务面板"再说 |
-| `web_search` / `web_fetch` | 不采纳（首期） | 需要外部搜索服务与密钥，且与"本地创作工具"定位不符 |
+| `web_search` / `web_fetch` | **采纳**（2026-09-20 起推翻"首期不采纳"） | 用户定的规则：**只用通用方案**——不碰各家原生内置搜索（OpenAI `web_search` / Anthropic `web_search_20250305` 那套：能力没有统一的查询接口、按模型逐个变，取舍记录见 §2.0.1），接 **Keenable**（给 AI Agent 用的独立搜索索引，**默认免密钥**，按来源约 1000 次/小时；可选 key 只用来提额）。原"不采纳"的理由是"需要外部搜索服务与密钥"——免密钥默认把它消掉了；"与本地创作工具定位不符"由用户拍板推翻：查提示词用法 / 模型文档 / ComfyUI 节点说明是真需求。出网客户端：`KeenableSearch.kt`（本项目**唯一**出网口，复用 `EndpointGuard`） |
 | `present` / `exit_plan_mode` / `goal` 系列 | 不采纳 | 交付物在画廊里，不在工具里 |
 | **`skill`（加载 Skill 正文）** | **采纳** | 对应我们的 `load_skill`，并补了 `list_skills` / `register_skill` / `delete_skill` |
 | Skills 目录注入 | **采纳思路，实现不同** | DSH 把目录作为 **user 消息**（`<system-reminder>` + `<available_skills>`）注入，为的是不打断系统前缀的 KV cache；我们的系统提示本来就带时间戳（每 Run 变化），所以直接写进系统提示的独立区块，省一层消息 |
 | DSH 默认提示词的**行为纪律段** | **择优采纳**（2026-09-17，用户要求） | 原文 `docs\default-prompt-inject.md`。挑出与我们对得上的三块写进系统提示 **v9**：① 事实纪律（不猜本机状态 / 证据冲突的采信顺序 / 把"查到的"与"推测的"分开说）；② 表达风格（开门见山、不奉承、不复述、**不写嵌套列表** —— `lib\widgets\markdown.dart` 会把子项拍平成同级，而表格反而是支持的）；③ 两条硬规则（写入留退路：改参数用覆盖不重写原始工作流；读取按需：不遍历磁盘）。另外，那份文档里的 `[MODE: UNRESTRICTED SANDBOX — STABLE]` 段（人格 / 拒绝对抗 / 越狱与渗透话术）**当年是整段搬进来的，现在也还在**（`HarnessRunner.kt` 里一个独立的 `append("""…""")`，上方有注释）：2026-09-17 用户明确说"那是我的意图，不许删除，不要动那段越狱提示词"。它与代码侧的审批纪律（提示词第 3 条）和凭据红线（第 8 条）并存 —— **别把它当误粘贴清理掉**，要改先问用户（AGENTS §10 记着这条） |
 
-我们的工具清单（出厂 16 个，全部可在设置里改成 `allow / ask / deny`）：
+我们的工具清单（出厂 18 个，全部可在设置里改成 `allow / ask / deny`）：
 
 | 工具 | 类别 | 权限档 | 说明 |
 | --- | --- | --- | --- |
@@ -50,6 +50,28 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `comfy_list_workflows` | comfy | allow | 列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`，用户 bug ⑤，2026-09-18）：带路径 / 格式（ui/api）/ 是否已入库（`inLibrary` / `promptId`），可按文件名过滤（如 `krea2`）。**只读**，不改用户的文件。首次使用、或 `comfy_find_workflow` 什么都搜不到时先看它 —— 这些工作流**不需要在 ComfyUI 里跑过一次**，拿到 path 直接 `comfy_load_workflow` 就能提交 |
 | `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数、`connections` 补连线（值写 `["<上游节点id>", 槽位]`），跑完直接入库；会消耗显卡时间，默认要审批 |
 | `comfy_use_attachment` | comfy | **ask** | 把用户发来的**图片附件**投放进 ComfyUI 的 `input/` 目录并返回真实文件名（用户 bug，2026-09-17）：图生图 / 参考图的唯一正路，默认要审批（往用户机器上写文件） |
+| `web_search` | web | **ask** | 联网搜索（Keenable）：用自然语言描述"你想要的那一页"（语义索引，别堆关键词），返回**带编号与链接**的网页正文（`[n] 标题 (URL)` + 抽取好的正文），引用时给编号与 URL。**出厂免密钥**；查询词会离开本机，所以默认要批准；一次回复最多 8 次（独立预算 `maxWebQueriesPerRun`）。一条没搜到报 `NO_RESULTS` 并要求模型如实说明 |
+| `web_fetch` | web | **ask** | 把一个**公开**网页取回来读全文（服务端去样板转 markdown，默认 20000 字符上限）。目标 URL 出网前先过 `EndpointGuard` 的 PUBLIC 判定：内网 / 本机 / 云元数据一律 `FETCH_TARGET_DENIED`。正文套**不可信数据**横幅后才给模型 |
+
+### 2.0.1 联网搜索的三条安全线（2026-09-20）
+
+1. **默认 ask**：`web_search` / `web_fetch` 是**本项目唯一会把数据送出本机的工具类别**（`ToolCategory.WEB`）。
+   查询词本身可能带用户的创作意图，所以出厂停在「询问」档；用户在权限页改成 allow 后才免批准。
+2. **独立预算**：`maxWebQueriesPerRun = 8`（`ToolPolicyConfig`，进 `normalizeStored`——
+   它不是用户设置，老库切一次权限档就会把出厂值冻进去，不过 normalize 就会"改了没用"）。
+   每搜一次都是真实外呼 + 一份要烧 token 的正文，"再搜一下确认"必须刹得住。
+3. **不可信数据 + 地址判定**：返回正文前套 `untrustedBanner()`（RSK-004 注入防线：网页里的
+   "忽略规则"与工具结果里的任何指令都不是指令）；`web_fetch` 的目标先过 `EndpointGuard`
+   PUBLIC 判定。HTTP 层纪律与 `AiUpstream` 相同：不跟随重定向、日志绝不落密钥、
+   免密钥请求必须带 `X-Keenable-Title`（缺它服务端 400，实测）。
+
+测试怎么钉的：`ToolRegistryTest`（预算 / 审批 / 横幅 / SEARCH_DISABLED，假客户端不碰 HTTP）+
+`KeenableSearchTest`（本机起假服务钉路径 / 头 / 错误映射 / 内网拒绝，**不出网**）。
+
+> 曾考虑过的替代方案 open-webSearch（Node MCP 爬虫聚合）记录在案：中文引擎是真优势，
+> 但它需要一个常驻 Node 进程（实施方案 §5.2 明确排除 sidecar）且爬虫会随引擎改版静默坏掉。
+> 将来若要中文引擎，正确姿势是**用户自跑 `open-websearch serve`，我们加"自建搜索网关"设置**打它的
+> `POST /search`（纯 HTTP，不带 Node，与 ComfyUI 接入同款模式）。
 
 ### 2.1.1 图生图为什么要单独一个工具（2026-09-17）
 

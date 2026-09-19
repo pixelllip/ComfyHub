@@ -7,6 +7,7 @@ import com.comfyhub.ai.CredentialService
 import com.comfyhub.ai.HarnessRunner
 import com.comfyhub.ai.RunEventBus
 import com.comfyhub.ai.aiRoutes
+import com.comfyhub.ai.tools.KeenableSearch
 import com.comfyhub.ai.tools.MemoryStore
 import com.comfyhub.ai.tools.SkillStore
 import com.comfyhub.ai.tools.ToolApprovalGate
@@ -206,6 +207,9 @@ fun Application.module(ctx: AppContext) {
         comfyUseAttachment = { attachmentId, filename ->
             AiWorkflowSearch.useAttachment(ctx.cfg, aiAttachments, attachmentId, filename)
         },
+        // 联网搜索（2026-09-20，用户定的规则：只用通用方案）：本项目**唯一**会出网的工具类别。
+        // 免密钥默认可用；可选 key 走 CredentialService（DPAPI），设置页里填。
+        search = KeenableSearch(credentials),
     )
 
     // 内置模型目录：项目内置的冻结副本（classpath）里那份，缺哪个补哪个；已存在的一律不覆盖

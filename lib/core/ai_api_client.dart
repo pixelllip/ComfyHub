@@ -89,6 +89,24 @@ class AiApiClient {
       AiCredentialStatus.fromJson(Map<String, dynamic>.from(
           await _send('DELETE', '/api/ai/providers/$providerId/credentials') as Map));
 
+  // --- 联网搜索（Keenable）的可选密钥 -------------------------------------
+  //
+  // 与 Provider 凭据同一套纪律（AIH-012）：只写不读、状态里没有值、
+  // env 来源只读。出厂免密钥就能用，这里只是给想提额的用户一个入口。
+
+  Future<AiCredentialStatus> webSearchCredentialStatus() async =>
+      AiCredentialStatus.fromJson(Map<String, dynamic>.from(
+          await _get('/api/ai/web-search/credential') as Map));
+
+  /// 只写：值传出去之后前端不再持有，也不回读（留空表示不修改）。
+  Future<AiCredentialStatus> setWebSearchCredential(String value) async =>
+      AiCredentialStatus.fromJson(Map<String, dynamic>.from(
+          await _send('PUT', '/api/ai/web-search/credential', {'value': value}) as Map));
+
+  Future<AiCredentialStatus> removeWebSearchCredential() async =>
+      AiCredentialStatus.fromJson(Map<String, dynamic>.from(
+          await _send('DELETE', '/api/ai/web-search/credential') as Map));
+
   // --- 模型目录 ----------------------------------------------------------
 
   Future<List<AiModel>> listModels(String providerId) async {

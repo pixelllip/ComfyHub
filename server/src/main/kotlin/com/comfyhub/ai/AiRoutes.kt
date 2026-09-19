@@ -6,6 +6,7 @@ import com.comfyhub.ai.protocol.Adapters
 import com.comfyhub.ai.protocol.AttachmentKindRef
 import com.comfyhub.ai.protocol.ReasoningEffort
 import com.comfyhub.ai.protocol.TransportRef
+import com.comfyhub.ai.tools.KeenableSearch
 import com.comfyhub.ai.tools.MemoryStore
 import com.comfyhub.ai.tools.SkillDto
 import com.comfyhub.ai.tools.SkillRescanDto
@@ -227,6 +228,44 @@ fun Route.aiRoutes(
                 ?: throw AiException(AiErrorCode.CONFIG_ERROR, "该 Provider 未设置凭据引用名（credentialRef）")
             if (credentials.describe(ref).source == "env") {
                 throw AiException(AiErrorCode.CONFIG_ERROR, "凭据 $ref 由环境变量提供，无法在应用内移除")
+            }
+            credentials.unset(ref)
+            call.respond(credentials.describe(ref))
+        }
+
+        // -------------------------------------------------------------------
+        //  联网搜索（Keenable）的可选密钥（2026-09-20）。
+        //
+        //  出厂**免密钥**就能用（官方 1000 次/小时），这里只是给想提额的用户一个
+        //  只写入口。与 Provider 凭据同一个 [CredentialService]、同一套纪律：
+        //  值只进 DPAPI，接口只回状态不回值；env 来源只读。
+        // -------------------------------------------------------------------
+        get("/web-search/credential") {
+            call.respond(credentials.describe(KeenableSearch.CREDENTIAL_REF))
+        }
+
+        put("/web-search/credential") {
+            val ref = KeenableSearch.CREDENTIAL_REF
+            if (credentials.describe(ref).source == "env") {
+                throw AiException(
+                    AiErrorCode.CONFIG_ERROR,
+                    "密钥 $ref 由环境变量（COMFYHUB_CRED_$ref）提供，是只读的；请先移除环境变量再在应用内填写"
+                )
+            }
+            val body = call.receive<CredentialSetRequest>()
+            if (body.value.isBlank()) {
+                // 留空 = 不修改（AIH-012）；清除请用 DELETE
+                call.respond(credentials.describe(ref))
+                return@put
+            }
+            credentials.set(ref, body.value)
+            call.respond(credentials.describe(ref))
+        }
+
+        delete("/web-search/credential") {
+            val ref = KeenableSearch.CREDENTIAL_REF
+            if (credentials.describe(ref).source == "env") {
+                throw AiException(AiErrorCode.CONFIG_ERROR, "密钥 $ref 由环境变量提供，无法在应用内移除")
             }
             credentials.unset(ref)
             call.respond(credentials.describe(ref))

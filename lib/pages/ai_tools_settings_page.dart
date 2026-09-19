@@ -38,6 +38,12 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
   final _writeInput = TextEditingController();
   final _readInput = TextEditingController();
 
+  /// 联网搜索（Keenable）的可选密钥。输入框**永远是空字符串**：只写不读，
+  /// 不留任何回显可能（AIH-012，与 Provider 凭据同一约定）。
+  final _searchKey = TextEditingController();
+  AiCredentialStatus _searchCred = AiCredentialStatus.none;
+  bool _searchBusy = false;
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +57,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
   void dispose() {
     _writeInput.dispose();
     _readInput.dispose();
+    _searchKey.dispose();
     super.dispose();
   }
 
@@ -62,10 +69,16 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
     try {
       final tools = await _api.listTools();
       final policy = await _api.toolPolicy();
+      // 密钥状态拿不到不挡这一页：联网搜索出厂免密钥就能用
+      AiCredentialStatus cred = AiCredentialStatus.none;
+      try {
+        cred = await _api.webSearchCredentialStatus();
+      } catch (_) {}
       if (!mounted) return;
       setState(() {
         _tools = tools;
         _policy = policy;
+        _searchCred = cred;
       });
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
@@ -104,6 +117,114 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
           backgroundColor: error ? Theme.of(context).colorScheme.errorContainer : null,
         ),
       );
+  }
+
+  // --- 联网搜索（Keenable）的可选密钥 ---------------------------------------
+
+  /// 只写：值传出去之后前端不再持有，也不回读（AIH-012）。
+  Future<void> _saveSearchKey() async {
+    final value = _searchKey.text;
+    if (value.trim().isEmpty) {
+      _snack('密钥留空 = 不修改；要清除请点「移除密钥」。');
+      return;
+    }
+    setState(() => _searchBusy = true);
+    try {
+      final status = await _api.setWebSearchCredential(value);
+      _searchKey.clear(); // 立刻丢弃，不在内存里多留一秒
+      if (mounted) setState(() => _searchCred = status);
+      _snack('密钥已保存（${status.source}）。值不会再被读回。');
+    } catch (e) {
+      _snack('保存密钥失败：$e', error: true);
+    } finally {
+      if (mounted) setState(() => _searchBusy = false);
+    }
+  }
+
+  Future<void> _removeSearchKey() async {
+    setState(() => _searchBusy = true);
+    try {
+      final status = await _api.removeWebSearchCredential();
+      if (mounted) setState(() => _searchCred = status);
+      _snack('密钥已移除，联网搜索回到免密钥模式。');
+    } catch (e) {
+      _snack('移除失败：$e', error: true);
+    } finally {
+      if (mounted) setState(() => _searchBusy = false);
+    }
+  }
+
+  /// 联网搜索卡：说明 + 可选密钥。**出厂免密钥可用**，这里只是给想提额的用户一个入口。
+  Widget _webSearchCard() {
+    final theme = Theme.of(context);
+    final cred = _searchCred;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('联网搜索（Keenable）', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 4),
+            Text(
+              'web_search / web_fetch 的后端。出厂免密钥可用（按来源限速，每小时约 1000 次）；'
+              '两个工具的默认权限档都是「询问」——查询词会发送给搜索服务，每一次都要你点批准，'
+              '嫌烦可在下面改成「允许」。抓取目标只接受公开网址，内网与本机地址会被拒绝。',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Icon(
+                  Icons.circle,
+                  size: 10,
+                  color: !cred.configured
+                      ? theme.colorScheme.outline
+                      : (cred.source == 'env' ? theme.colorScheme.outline : Colors.green),
+                ),
+                const SizedBox(width: 6),
+                Text(cred.source == 'none' ? '未填密钥（免密钥模式）' : cred.label,
+                    style: theme.textTheme.bodySmall),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (cred.source == 'env')
+              Text('密钥由环境变量 COMFYHUB_CRED_keenable 提供，是只读的，不能在应用内修改或移除。',
+                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline))
+            else ...[
+              TextField(
+                controller: _searchKey,
+                obscureText: true,
+                autocorrect: false,
+                enableSuggestions: false,
+                decoration: const InputDecoration(
+                  labelText: '粘贴 Keenable 密钥（可选；留空表示不修改）',
+                  helperText: '只用来提高额度（keenable.ai/console 创建）；只粘贴值本身，不要引号或 NAME=value',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  FilledButton.icon(
+                    onPressed: _searchBusy ? null : _saveSearchKey,
+                    icon: const Icon(Icons.key, size: 18),
+                    label: const Text('保存密钥'),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _searchBusy || !cred.configured ? null : _removeSearchKey,
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    label: const Text('移除密钥'),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -165,6 +286,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                         ),
                         if (_policy.autoReadRoots.isNotEmpty)
                           AdaptiveSection(_autoReadCard(), estimatedHeight: 160),
+                        AdaptiveSection(_webSearchCard(), estimatedHeight: 320),
                         AdaptiveSection(_toolsCard(), estimatedHeight: 560),
                       ],
                     ),
@@ -432,6 +554,8 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                           'skill' => Icons.auto_awesome_outlined,
                           'files' => Icons.folder_outlined,
                           'memory' => Icons.push_pin_outlined,
+                          // 联网搜索（2026-09-20）：地球仪，一眼区分"这个工具出网"
+                          'web' => Icons.travel_explore_outlined,
                           _ => Icons.dns_outlined,
                         },
                         size: 16,

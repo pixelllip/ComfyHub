@@ -67,6 +67,9 @@
 - AI 直接提交任意 ComfyUI 工作流并自动消费算力；
 - 第三方 Skill 中脚本的任意执行；
 - MCP、网页搜索、Shell、文件系统全权限；
+  （2026-09-20 更新：**网页搜索已以通用方案落地**——Keenable 免密钥搜索，走固定服务的受限
+  `web_search` / `web_fetch` 工具，不是"任意 URL 客户端"，见 `docs/ai-tools-and-skills.md` §2.0.1；
+  MCP / Shell / 文件系统全权限仍然不在承诺内。）
 - 多用户账号、云端同步和团队权限；
 - Provider OAuth 登录；
 - 根据模型 ID 猜附件能力；

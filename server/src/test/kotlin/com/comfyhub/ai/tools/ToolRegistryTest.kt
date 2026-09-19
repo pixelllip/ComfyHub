@@ -44,6 +44,8 @@ class ToolRegistryTest {
         val listWorkflows: (String?, Int) -> JsonObject = { _, _ ->
             buildJsonObject { put("count", 0) }
         },
+        /** 联网搜索客户端（默认 null = 走 SEARCH_DISABLED 那条路）。 */
+        val search: WebSearchClient? = null,
     ) {
         val skills = SkillStore(root.resolve("skills-builtin"), root.resolve("skills-user"))
         val memory = MemoryStore(root.resolve("storage").resolve("ai"))
@@ -68,6 +70,7 @@ class ToolRegistryTest {
                 syncCalls++
                 buildJsonObject { put("synced", true) }
             },
+            search = search,
         )
 
         val policy = ToolPolicy(root, ToolPolicyConfig())
@@ -75,14 +78,47 @@ class ToolRegistryTest {
         fun ctx(p: ToolPolicy = policy) = ToolContext("run-1", p, skills, memory)
     }
 
-    private fun env(): Env {
+    private fun env(search: WebSearchClient? = null): Env {
         val root = Files.createTempDirectory("comfyhub-registry").toRealPath()
         listOf("comfyui", "storage", "other").forEach { Files.createDirectories(root.resolve(it)) }
-        return Env(root)
+        return Env(root, search = search)
     }
 
     private fun args(vararg pairs: Pair<String, String>): String =
         buildJsonObject { pairs.forEach { (k, v) -> put(k, v) } }.toString()
+
+    /** 假联网客户端：不碰 HTTP，只记录调用并吐固定结果（HTTP 层由 KeenableSearchTest 单独钉）。 */
+    private class FakeSearch(
+        var results: List<WebResult> = listOf(
+            WebResult("标题一", "https://example.com/a", "正文一", "2026-09-20"),
+        ),
+    ) : WebSearchClient {
+        var searchCalls = 0
+        var pageCalls = 0
+
+        override suspend fun search(
+            query: String,
+            site: String?,
+            publishedAfter: String?,
+            publishedBefore: String?,
+            mode: String?,
+        ): WebSearchOutcome {
+            searchCalls++
+            val rs = results
+            return WebSearchOutcome(
+                query = query,
+                results = rs,
+                context = rs.mapIndexed { i, r -> "[${i + 1}] ${r.title} (${r.url})\n${r.snippet}" }
+                    .joinToString("\n\n"),
+                meta = buildJsonObject { put("count", rs.size); put("query", query); put("keyless", true) },
+            )
+        }
+
+        override suspend fun page(url: String, maxChars: Int): WebPage {
+            pageCalls++
+            return WebPage(url = url, title = "页标题", content = "页正文一。")
+        }
+    }
 
     private val builtinNames = listOf(
         "list_skills", "load_skill", "register_skill", "delete_skill",
@@ -97,6 +133,8 @@ class ToolRegistryTest {
         "comfy_list_workflows",
         // 用户 bug：图生图要把用户发来的图片投放进 ComfyUI 的 input 目录
         "comfy_use_attachment",
+        // 2026-09-20：联网搜索（用户定的规则——只用通用方案 Keenable，不碰各家原生内置搜索）
+        "web_search", "web_fetch",
     )
 
     // --- 清单 / 权限 --------------------------------------------------------
@@ -131,6 +169,11 @@ class ToolRegistryTest {
         assertEquals("files", defaults["read_file"]!!.category)
         assertEquals("skill", defaults["register_skill"]!!.category)
         assertEquals("comfy", defaults["comfy_get_status"]!!.category)
+        assertEquals("web", defaults["web_search"]!!.category)
+        assertEquals("web", defaults["web_fetch"]!!.category)
+        // 联网是唯一会把数据送出本机的类别：出厂必须停在「询问」档
+        assertEquals("ask", defaults["web_search"]!!.access)
+        assertEquals("ask", defaults["web_fetch"]!!.access)
 
         val overridden = ToolPolicy(
             e.root,
@@ -455,6 +498,7 @@ class ToolRegistryTest {
         // 只在代码里上调默认值对老用户完全无效，必须过 normalizeStored
         val frozen = ToolPolicyConfig(
             maxComfyQueriesPerRun = 3,
+            maxWebQueriesPerRun = 2,
             maxReadBytes = 256 * 1024,
             maxWriteBytes = 1024 * 1024,
         )
@@ -462,6 +506,7 @@ class ToolRegistryTest {
         assertEquals(ToolPolicyConfig.DEFAULT_MAX_READ_BYTES, normalized.maxReadBytes)
         assertEquals(ToolPolicyConfig.DEFAULT_MAX_WRITE_BYTES, normalized.maxWriteBytes)
         assertEquals(ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN, normalized.maxComfyQueriesPerRun)
+        assertEquals(ToolPolicyConfig.DEFAULT_MAX_WEB_QUERIES_PER_RUN, normalized.maxWebQueriesPerRun)
         // 用户可改的那两项**不能**被覆盖（库里的值必须生效）
         assertEquals(8, normalized.maxToolSteps)
         assertEquals(16, normalized.maxCallsPerRun)
@@ -736,9 +781,96 @@ class ToolRegistryTest {
         assertTrue(tenth.error!!.contains("9 次"), tenth.error)
     }
 
+    // --- 联网搜索（2026-09-20：web_search / web_fetch，Keenable 通用方案） ----
+
     @Test
-    fun `提示词 v13：查询预算与记忆规则都与常量同源 且首次使用先看本机工作流`() {
-        assertEquals("v13", SystemPrompt.VERSION)
+    fun `web_search 默认要批准 没人批准就绝不出网`() = runBlocking {
+        val fake = FakeSearch()
+        val e = env(search = fake)
+        val record = e.registry.invoke("call-web", "web_search", args("query" to "随便查一下"), e.ctx())
+
+        assertEquals("failed", record.status)
+        assertEquals("APPROVAL_DENIED", record.errorCode)
+        assertEquals("denied", record.approval)
+        assertEquals(0, fake.searchCalls, "没批准就绝不能把查询词送出本机")
+    }
+
+    @Test
+    fun `web_search 没有搜索客户端时报 SEARCH_DISABLED 而不是假装失败`() = runBlocking {
+        val e = env() // search = null
+        val allow = ToolPolicy(e.root, ToolPolicyConfig(overrides = mapOf("web_search" to "allow")))
+        val record = e.registry.invoke("c1", "web_search", args("query" to "test"), e.ctx(allow))
+        assertEquals("failed", record.status)
+        assertEquals("SEARCH_DISABLED", record.errorCode)
+    }
+
+    @Test
+    fun `web_search 批准后返回编号可引用的结果 且套上不可信数据横幅`() = runBlocking {
+        val fake = FakeSearch()
+        val e = env(search = fake)
+        e.gate.open("call-web")
+        val resolver = launch {
+            delay(30)
+            assertTrue(e.gate.resolve("call-web", true))
+        }
+        val record = e.registry.invoke("call-web", "web_search", args("query" to "flux 提示词技巧"), e.ctx())
+        resolver.join()
+
+        assertEquals("ok", record.status, record.error ?: record.content)
+        assertEquals(1, fake.searchCalls)
+        assertTrue(record.content.contains("[1] 标题一 (https://example.com/a)"), record.content)
+        assertTrue(record.content.contains("不可信数据"), "联网结果必须声明为不可信数据")
+        assertTrue(record.content.contains("flux 提示词技巧"), "横幅要带查询词，模型才知道这是哪次搜索")
+    }
+
+    @Test
+    fun `web_search 一条都没搜到时报 NO_RESULTS 并要求如实说明`() = runBlocking {
+        val fake = FakeSearch(results = emptyList())
+        val e = env(search = fake)
+        val allow = ToolPolicy(e.root, ToolPolicyConfig(overrides = mapOf("web_search" to "allow")))
+        val record = e.registry.invoke("c1", "web_search", args("query" to "查无此物"), e.ctx(allow))
+        assertEquals("failed", record.status)
+        assertEquals("NO_RESULTS", record.errorCode)
+        assertTrue(record.error!!.contains("不要凭记忆编造"), record.error)
+    }
+
+    @Test
+    fun `联网搜索的预算默认 8 次 第 9 次才 QUERY_BUDGET_EXCEEDED`() = runBlocking {
+        assertEquals(8, ToolPolicyConfig.DEFAULT_MAX_WEB_QUERIES_PER_RUN)
+        val fake = FakeSearch()
+        val e = env(search = fake)
+        val allow = ToolPolicy(e.root, ToolPolicyConfig(overrides = mapOf("web_search" to "allow")))
+        val ctx = e.ctx(allow)
+        repeat(8) { i ->
+            val ok = e.registry.invoke("w${i + 1}", "web_search", args("query" to "q$i"), ctx)
+            assertEquals("ok", ok.status, "第 ${i + 1} 次搜索应当放行：${ok.error}")
+        }
+        // 非 WEB 的工具不占这个预算（只按类别 WEB 计数）
+        assertEquals("ok", e.registry.invoke("n1", "list_skills", "{}", ctx).status)
+
+        val ninth = e.registry.invoke("w9", "web_search", args("query" to "q9"), ctx)
+        assertEquals("failed", ninth.status)
+        assertEquals("QUERY_BUDGET_EXCEEDED", ninth.errorCode)
+        assertTrue(ninth.error!!.contains("8 次"), ninth.error)
+        assertEquals(8, fake.searchCalls, "超限的那次不能真的发出去")
+    }
+
+    @Test
+    fun `web_fetch 把页面正文带回 并套不可信横幅`() = runBlocking {
+        val fake = FakeSearch()
+        val e = env(search = fake)
+        val allow = ToolPolicy(e.root, ToolPolicyConfig(overrides = mapOf("web_fetch" to "allow")))
+        val record = e.registry.invoke("c1", "web_fetch", args("url" to "https://example.com/a"), e.ctx(allow))
+        assertEquals("ok", record.status, record.error ?: record.content)
+        assertEquals(1, fake.pageCalls)
+        assertTrue(record.content.contains("页标题"), record.content)
+        assertTrue(record.content.contains("不可信数据"))
+        assertTrue(record.content.contains("https://example.com/a"))
+    }
+
+    @Test
+    fun `提示词 v14：查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份`() {
+        assertEquals("v14", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
@@ -784,6 +916,21 @@ class ToolRegistryTest {
         assertTrue(
             text.contains("也不许") && text.contains("跑一次让它被自动捕获"),
             "明确禁止把老路（先跑一次）当答案",
+        )
+
+        // v14（2026-09-20）：联网搜索的纪律要进提示词，预算与常量同源
+        assertTrue(
+            text.contains("最多联网 ${ToolPolicyConfig.DEFAULT_MAX_WEB_QUERIES_PER_RUN} 次"),
+            "第 17 条的联网预算要和阈值常量一致",
+        )
+        assertTrue(text.contains("web_search") && text.contains("web_fetch"), "两个联网工具都要点名")
+        assertTrue(
+            text.contains("没有叫别的名字的联网工具"),
+            "要把联网工具的真名字钉死，模型不该去找不存在的工具名",
+        )
+        assertTrue(
+            text.contains("别人的网页"),
+            "要告诉模型搜到的正文是别人的网页、属于数据而非指令",
         )
     }
 }
