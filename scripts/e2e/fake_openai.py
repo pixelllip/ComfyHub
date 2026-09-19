@@ -19,6 +19,8 @@
     · 含「目录内」                    -> write_file（comfyui/e2e-ok.txt，应成功）
     · 含「同步」                     -> comfy_sync_history（需要审批）
     · 含「状态」                     -> comfy_get_status（只读）
+    · 含「续写测试」且没有续写指令     -> 正文 + finish_reason=length（**模拟被长度上限截断**）
+    · 带着续写指令（"紧接中断处继续写"）-> 接着写的后半段 + finish_reason=stop
     · 其它                          -> 普通正文
 
 SSE 线格式刻意做成**真网关的样子**：第一片带 index/id/type/function.name +
@@ -39,6 +41,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 MODEL_ID = "fake-tools-model"
+
+# --- 「接着写」用例（用户建议 ②）---------------------------------------------
+# TRUNCATE_ASK 出现在提问里 → 第一轮只吐 HEAD_TEXT 且 finish_reason=length（模拟被长度上限截断）；
+# 紧接着后端会带着 CONTINUE_MARKER（HarnessRunner.CONTINUE_INSTRUCTION 里的标志句）再来一轮，
+# 那时才吐 TAIL_TEXT。两段拼起来必须正好等于 HEAD_TEXT + TAIL_TEXT，一个字都不能重复。
+TRUNCATE_ASK = "续写测试"
+CONTINUE_MARKER = "紧接中断处继续写"
+HEAD_TEXT = "第一段正文：这段话写到一半就被上游的输出长度上限切断了，"
+TAIL_TEXT = "第二段正文：这里是接着写下去的部分。"
 
 # --- 每个场景要发出的工具调用（arguments 是 JSON 字符串） ----------------------
 
@@ -246,6 +257,25 @@ class Handler(BaseHTTPRequestHandler):
                 user_text = text_of(m.get("content"))
                 break
         entry["userText"] = user_text
+        # 最后一条 assistant 正文（"接着写"那一幕要断言：续写请求里真的带上了已经说过的那半段）
+        last_assistant = next(
+            (text_of(m.get("content")) for m in reversed(messages) if m.get("role") == "assistant"),
+            "",
+        )
+        entry["lastAssistantText"] = last_assistant[:200]
+
+        # 2.5) 输出被长度上限截断 → 后端应当**接着写**（用户建议 ②）：
+        #      第二次请求的最后一条 user 就是那句"紧接中断处继续写"。
+        if CONTINUE_MARKER in user_text:
+            entry["decision"] = "continue"
+            self._record(entry)
+            self._stream_text(TAIL_TEXT, finish_reason="stop")
+            return
+        if TRUNCATE_ASK in user_text:
+            entry["decision"] = "truncated"
+            self._record(entry)
+            self._stream_text(HEAD_TEXT, finish_reason="length")
+            return
 
         for keyword, tool_name, arguments in SCENARIOS:
             if keyword in user_text:
@@ -300,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
             "total_tokens": prompt_tokens + completion_tokens,
         }
 
-    def _stream_text(self, text: str, prompt_tokens: int = 12):
+    def _stream_text(self, text: str, prompt_tokens: int = 12, finish_reason: str = "stop"):
         self._sse_start()
         self._data(self._envelope({"role": "assistant", "content": ""}))
         # 正文也切成两片，顺便覆盖 text.delta 的拼接
@@ -308,7 +338,7 @@ class Handler(BaseHTTPRequestHandler):
         for piece in (text[:mid], text[mid:]):
             if piece:
                 self._data(self._envelope({"content": piece}))
-        self._data(self._envelope({}, finish_reason="stop",
+        self._data(self._envelope({}, finish_reason=finish_reason,
                                   usage=self._usage(prompt_tokens, len(text))))
         self._sse_end()
 

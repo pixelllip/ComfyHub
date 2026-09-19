@@ -165,6 +165,15 @@ interface ProtocolAdapter {
         stream: Boolean,
         reasoning: ReasoningRequest = ReasoningRequest.NONE,
         tools: List<ToolSpec> = emptyList(),
+        /**
+         * 模型声明的**单次输出上限**（模型目录里的 `maxOutputTokens`，没有就 null）。
+         *
+         * 只有 Anthropic 会把它落到 `max_tokens`（那边这个字段是**必填**的，以前写死 4096，
+         * 长回复必然被截断）。OpenAI 兼容协议不发这个字段 —— 发了反而容易被网关判成
+         * "超出該模型上限"直接 400，让上游用自己那份默认值更稳；被截断的情况由
+         * `HarnessRunner` 的"接着写"兜住（用户建议 ②）。
+         */
+        maxOutputTokens: Int? = null,
     ): JsonObject
 
     /** 解释一行 SSE frame；返回 null 表示该 frame 不产生任何内容。 */

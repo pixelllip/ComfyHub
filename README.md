@@ -1022,7 +1022,7 @@ pwsh -File scripts\e2e-ai-tools-test.ps1
 #   → 上游请求里确实带 data:image/png;base64 的图片块 → 落库带 attachment 有序块
 #   → 换成纯文本模型再发同一个附件：400 UNSUPPORTED_CONTENT 且**上游请求数为 0**
 # → 重试（retryOfRunId）：复用同一条提问与同一条助手占位，会话消息数不变、不留空壳气泡
-# 75 项检查；跑完自动删掉测试用的会话 / Provider / skill / 附件 / 临时文件（并把长期记忆恢复原样）；
+# 82 项检查；跑完自动删掉测试用的会话 / Provider / skill / 附件 / 临时文件（并把长期记忆恢复原样）；
 # 加 -KeepData 保留
 ```
 
@@ -1152,3 +1152,4 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 - **破甲那段系统提示词是用户有意注入的**（2026-09-17 明确指示"那是我的意图，不许删除"）：
   它在 `HarnessRunner.kt` 里有独立注释、`ToolRegistryTest` 里有"必须还在"的断言，
   **别当误粘贴清理掉**；要改先问用户（见 `AGENTS.md` 第 10 节）。
+

@@ -56,6 +56,11 @@ $DeadProviderId = 'e2e-tools-dead'
 $DeadPort       = 59901
 $RetryConversationTitle = 'e2e-ai-tools-retry'
 
+# 第 11 幕（接着写）：假网关见到这个关键词就只吐半段 + finish_reason=length
+$TruncateAsk = '续写测试'
+$HeadText = '第一段正文：这段话写到一半就被上游的输出长度上限切断了，'
+$TailText = '第二段正文：这里是接着写下去的部分。'
+
 $SkillFile   = Join-Path $ProjectRoot "storage\ai\skills\$SkillName\SKILL.md"
 $HackFile    = Join-Path $ProjectRoot 'storage\e2e-hack.txt'
 $OkFile      = Join-Path $ProjectRoot 'comfyui\e2e-ok.txt'
@@ -295,7 +300,7 @@ try {
 
     # --- 2. Provider + 模型目录 -------------------------------------------
     Say ''
-    Say '  [0/10] 配置 e2e Provider / 模型' 'Cyan'
+    Say '  [0/11] 配置 e2e Provider / 模型' 'Cyan'
 
     try { Invoke-Api 'DELETE' "/api/ai/providers/$ProviderId" $null | Out-Null } catch { }
     try { Invoke-Api 'DELETE' "/api/ai/skills/$SkillName" $null | Out-Null } catch { }
@@ -358,7 +363,7 @@ try {
 
     # --- 3. 场景 1：注册 skill --------------------------------------------
     Say ''
-    Say '  [1/10] 注册：register_skill 落盘' 'Cyan'
+    Say '  [1/11] 注册：register_skill 落盘' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s1 = Receive-Scenario -ConversationId $conv.id -Text '帮我注册一个新的 skill'
     $e1 = $s1.events
@@ -398,7 +403,7 @@ try {
 
     # --- 4. 场景 2：按需加载 ----------------------------------------------
     Say ''
-    Say '  [2/10] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
+    Say '  [2/11] 按需加载：load_skill + 工具结果回灌上游' 'Cyan'
     $beforeLog = @(Invoke-Gateway '/__log').Count
     $s2 = Receive-Scenario -ConversationId $conv.id -Text '加载那个 skill'
     $e2 = $s2.events
@@ -424,7 +429,7 @@ try {
 
     # --- 5. 场景 3：越界写被拒 --------------------------------------------
     Say ''
-    Say '  [3/10] 越界写被拒：write_file 打到 storage/' 'Cyan'
+    Say '  [3/11] 越界写被拒：write_file 打到 storage/' 'Cyan'
     $s3 = Receive-Scenario -ConversationId $conv.id -Text '越界写个文件'
     $e3 = $s3.events
     $fail3 = @(Get-Events $e3 'tool.failed')
@@ -441,7 +446,7 @@ try {
 
     # --- 6. 场景 4：目录内写成功 ------------------------------------------
     Say ''
-    Say '  [4/10] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
+    Say '  [4/11] 目录内写成功：write_file 打到 comfyui/' 'Cyan'
     $s4 = Receive-Scenario -ConversationId $conv.id -Text '在目录内写个文件'
     $e4 = $s4.events
     $comp4 = @(Get-Events $e4 'tool.completed')
@@ -455,7 +460,7 @@ try {
 
     # --- 7. 场景 5：审批闸门 ----------------------------------------------
     Say ''
-    Say '  [5/10] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
+    Say '  [5/11] 审批：comfy_sync_history 必须等批准才执行' 'Cyan'
     $state = @{ callId = $null; pending = $false; accepted = $false; startedIndex = -1; requestedIndex = -1 }
     $s5 = Receive-Scenario -ConversationId $conv.id -Text '同步一下历史' -OnEvent {
         param($e, $i)
@@ -487,7 +492,7 @@ try {
 
     # --- 8. 场景 6：只读工具 ----------------------------------------------
     Say ''
-    Say '  [6/10] 只读工具：comfy_get_status 不需要审批' 'Cyan'
+    Say '  [6/11] 只读工具：comfy_get_status 不需要审批' 'Cyan'
     $s6 = Receive-Scenario -ConversationId $conv.id -Text '看看 ComfyUI 状态'
     $e6 = $s6.events
     $req6 = @(Get-Events $e6 'tool.requested')
@@ -500,7 +505,7 @@ try {
 
     # --- 9. 落库的消息 parts（重开会话能渲染工具卡） ----------------------
     Say ''
-    Say '  [7/10] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
+    Say '  [7/11] 落库校验：GET /api/ai/runs/{id} + /conversations/{id}/messages' 'Cyan'
     $runDto = Invoke-Api 'GET' "/api/ai/runs/$($s1.run.runId)" $null
     Check 'run 落库状态 == completed' ($runDto.status -eq 'completed') ($runDto | ConvertTo-Json -Compress)
 
@@ -527,7 +532,7 @@ try {
 
     # --- 10. 场景 8：长期记忆（M6） ---------------------------------------
     Say ''
-    Say '  [8/10] 长期记忆：remember 落盘 + 下一次 Run 注入系统提示' 'Cyan'
+    Say '  [8/11] 长期记忆：remember 落盘 + 下一次 Run 注入系统提示' 'Cyan'
     $s8 = Receive-Scenario -ConversationId $conv.id -Text '记住：E2E 记一条，用户偏好 4:3 画幅'
     $e8 = $s8.events
     $req8 = @(Get-Events $e8 'tool.requested')
@@ -559,7 +564,7 @@ try {
 
     # --- 11. 场景 9：附件（M3 / AIH-027 ~ AIH-031） -----------------------
     Say ''
-    Say '  [9/10] 附件：上传 → 缩略图 → 内联进请求体 → 不支持的模型零请求' 'Cyan'
+    Say '  [9/11] 附件：上传 → 缩略图 → 内联进请求体 → 不支持的模型零请求' 'Cyan'
 
     function Set-E2eModel {
         param([string[]]$Modalities)
@@ -693,7 +698,7 @@ try {
     # 根因是 `POST /conversations/{id}/runs` 不看 `retryOfRunId`，照旧 append 了一条新用户消息。
     # 这一幕钉三件事：重试复用**同一条**用户消息、复用**同一条**助手占位、消息总数不变。
     Say ''
-    Say '  [10/10] 重试：复用原来那条提问与失败气泡，绝不新增' 'Cyan'
+    Say '  [10/11] 重试：复用原来那条提问与失败气泡，绝不新增' 'Cyan'
 
     # 先造一次"必然失败"的 Run：Provider 指向一个没人监听的端口（连接被拒 → PROVIDER_UNREACHABLE）
     try { Invoke-Api 'DELETE' "/api/ai/providers/$DeadProviderId" $null | Out-Null } catch { }
@@ -769,6 +774,43 @@ try {
     Check '那句提问在会话里只有 1 条' ($askRows.Count -eq 1) ("找到 $($askRows.Count) 条")
     $assistantRows = @($msgsAfter | Where-Object { $_.role -eq 'assistant' })
     Check '助手气泡只有 1 条' ($assistantRows.Count -eq 1) ("找到 $($assistantRows.Count) 条")
+
+    # --- 13. 场景 11：输出被长度上限截断时**接着写**，不强行截断（用户建议 ②）------
+    #
+    # 现场：长回复被上游的 max_tokens 切断（这里用假网关的 finish_reason=length 复现），
+    # 后端必须**再要一轮**把话说完，而不是把半句话当成结尾。
+    Say ''
+    Say '  [11/11] 接着写：输出被长度上限截断时把回复补完（不强行截断）' 'Cyan'
+
+    $beforeLog5 = @(Invoke-Gateway '/__log').Count
+    $s11 = Receive-Scenario -ConversationId $conv.id -Text "$TruncateAsk 请写两段话"
+    $e11 = $s11.events
+    Check '截断那一轮正常收尾（run.completed）' ((@(Get-Events $e11 'run.completed')).Count -ge 1) ($e11[-1].event)
+
+    $log5 = @(@(Invoke-Gateway '/__log') | Select-Object -Skip $beforeLog5)
+    Check '后端为"接着写"真的多要了一轮上游请求（共 2 次）' ($log5.Count -eq 2) `
+        (($log5 | ForEach-Object { $_.decision }) -join ' | ')
+    if ($log5.Count -ge 2) {
+        Check '第一轮是被截断的那一轮（finish_reason=length）' ($log5[0].decision -eq 'truncated') `
+            ($log5[0] | ConvertTo-Json -Compress)
+        Check '第二轮是接着写（最后一条 user 就是续写指令）' ($log5[1].decision -eq 'continue') `
+            ($log5[1] | ConvertTo-Json -Compress)
+        Check '续写请求里真的带上了"已经说过的那半段"（最后一条 assistant 正文）' `
+            ($log5[1].lastAssistantText -like "*$HeadText*") `
+            ($log5[1].lastAssistantText)
+    }
+
+    $msgs11 = @(Invoke-Api 'GET' "/api/ai/conversations/$($conv.id)/messages" $null)
+    $answer11 = @($msgs11 | Where-Object { $_.id -eq $s11.run.assistantMessageId }) | Select-Object -First 1
+    Check '截断后的回复被补完了（两段都在同一条消息里）' `
+        ($null -ne $answer11 -and $answer11.text -like "*$HeadText*" -and $answer11.text -like "*$TailText*") `
+        ($answer11.text)
+    Check '两段按顺序拼在一起、没有把结尾重说一遍' `
+        ($null -ne $answer11 -and
+         $answer11.text.IndexOf($HeadText) -ge 0 -and
+         $answer11.text.IndexOf($TailText) -gt $answer11.text.IndexOf($HeadText) -and
+         $answer11.text.Split($HeadText).Count -eq 2) `
+        ($answer11.text)
 } finally {
     # --- 清理 -------------------------------------------------------------
     Say ''
@@ -823,5 +865,6 @@ Say ''
 Say ("  总计 {0} 项，失败 {1} 项" -f $script:Total, $script:Failed) $(if ($script:Failed -gt 0) { 'Red' } else { 'Green' })
 Say ''
 exit $script:Failed
+
 
 

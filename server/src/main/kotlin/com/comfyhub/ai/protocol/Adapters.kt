@@ -35,6 +35,7 @@ class OpenAiCompletionsAdapter : ProtocolAdapter {
         stream: Boolean,
         reasoning: ReasoningRequest,
         tools: List<ToolSpec>,
+        maxOutputTokens: Int?,
     ): JsonObject =
         buildJsonObject {
             put("model", model)
@@ -201,12 +202,18 @@ class AnthropicMessagesAdapter : ProtocolAdapter {
     )
     override val adapterVersion = "anthropic-messages/3"
 
+    companion object {
+        /** 模型没声明输出上限时的回落值（Anthropic 的 `max_tokens` 必填，不能省略）。 */
+        const val DEFAULT_MAX_TOKENS = 4096
+    }
+
     override fun buildBody(
         model: String,
         messages: List<ChatTurn>,
         stream: Boolean,
         reasoning: ReasoningRequest,
         tools: List<ToolSpec>,
+        maxOutputTokens: Int?,
     ): JsonObject {
         // Anthropic 的 system 是顶层字段，不能混在 messages 里
         val system = messages.filter { it.role == "system" }.joinToString("\n\n") { it.content }
@@ -216,9 +223,14 @@ class AnthropicMessagesAdapter : ProtocolAdapter {
             (reasoning.budgetTokens ?: ThinkingLevels.ANTHROPIC_BUDGET.getValue(ReasoningEffort.MEDIUM))
                 .coerceAtLeast(ThinkingLevels.ANTHROPIC_MIN_BUDGET)
         } else 0
+        // max_tokens 是 Anthropic 的**必填**字段：以前写死 4096，长回复必然被上游截断
+        // （用户建议 ②："不要强行截断 AI 回复"）。模型目录声明了上限就用它，
+        // 再保证严格大于思考预算（否则 400）；没有声明时仍然回落 4096（保持兼容）。
+        val wanted = maxOutputTokens?.takeIf { it > 0 } ?: DEFAULT_MAX_TOKENS
+        val maxTokens = if (budget > 0) wanted.coerceAtLeast(budget + 1024) else wanted
         return buildJsonObject {
             put("model", model)
-            put("max_tokens", if (budget > 0) budget + 4096 else 4096)
+            put("max_tokens", maxTokens)
             if (system.isNotBlank()) put("system", system)
             put("messages", anthropicMessages(turns))
             put("stream", stream)
@@ -403,17 +415,22 @@ class OpenAiResponsesAdapter : ProtocolAdapter {
         stream: Boolean,
         reasoning: ReasoningRequest,
         tools: List<ToolSpec>,
+        maxOutputTokens: Int?,
     ): JsonObject {
         // system 提示词在 Responses 里是顶层 instructions，不能留在 input 里
         val instructions = messages.filter { it.role == "system" }
             .joinToString("\n\n") { it.content }
         val turns = messages.filter { it.role != "system" }
+        // Responses 的 `max_output_tokens` 是**可选**的：模型目录声明过就如实带上
+        // （它是"输出上限"，不是上下文窗口；声明错的模型很少，带上能让长回复少被截断一次）
+        val outputCap = maxOutputTokens?.takeIf { it > 0 }
 
         return buildJsonObject {
             put("model", model)
             if (instructions.isNotBlank()) put("instructions", instructions)
             put("input", responsesInput(turns))
             put("stream", stream)
+            if (outputCap != null) put("max_output_tokens", outputCap)
             // 不做服务端存储：和 Chat Completions 的行为对齐，避免把用户内容留在上游
             put("store", false)
             if (tools.isNotEmpty()) put("tools", responsesTools(tools))

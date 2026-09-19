@@ -88,6 +88,46 @@ class HarnessRunner(
         /** 单次 Run 总时限（AIH-020 建议 15 分钟） */
         private const val RUN_TIMEOUT = "15m"
         const val PROMPT_VERSION = SystemPrompt.VERSION
+
+        /**
+         * 一轮回复被上游的长度上限截断时，最多**接着写**几次（用户建议 ②）。
+         *
+         * 3 次是个折中：常见模型一轮 4096 tokens（≈ 3000 汉字），3 次足够把一篇长回答写完；
+         * 再多就是"模型陷在长回复里出不来"，用户等到的是账单和页面一直转圈。
+         */
+        const val MAX_CONTINUATIONS = 3
+
+        /** 续写时压住开头多少个字符用来查重（见 [longestSuffixOverlap]）。 */
+        const val OVERLAP_WINDOW = 80
+
+        /**
+         * "接着写"的指令。**必须说清三件事**：这是被截断的续写、不要重复已说过的、
+         * 不要重新开头 —— 少一条模型就会把上一条的结尾再念一遍。
+         */
+        const val CONTINUE_INSTRUCTION =
+            "（上一条回复因为输出长度上限被截断了。）请**紧接中断处继续写**：" +
+                "不要重复已经说过的内容，不要重新开头，也不要道歉或解释，直接从下一个字接着写。"
+
+        /** 上游给出的结束原因里，哪些表示"是被输出长度上限截断的"。 */
+        fun isTruncatedByOutputLimit(finishReason: String?): Boolean = when (finishReason?.lowercase()) {
+            "length", "max_tokens", "max_output_tokens", "max_output_token" -> true
+            else -> false
+        }
+
+        /**
+         * [previous] 的**结尾**与 [next] 的**开头**最长的重叠长度（用于去掉续写时的重复）。
+         *
+         * 只在 [OVERLAP_WINDOW] 范围内找：模型重复的通常是最后半句话，
+         * 超过这个长度的"巧合"不值得为它付出截断正文的风险。
+         */
+        fun longestSuffixOverlap(previous: String?, next: String): Int {
+            if (previous.isNullOrEmpty() || next.isEmpty()) return 0
+            val max = minOf(next.length, OVERLAP_WINDOW)
+            for (k in max downTo 1) {
+                if (previous.endsWith(next.substring(0, k))) return k
+            }
+            return 0
+        }
     }
 
     private val client: HttpClient = HttpClient.newBuilder()
@@ -202,6 +242,11 @@ class HarnessRunner(
             AiRunRepo.appendEvent(runId, event.seq, type, payload)
         }
 
+        // 已说出的正文 / 思考：**声明在 try 外面**，失败分支要用它把已经产生的部分保留下来
+        // （用户建议 ②："不要强行截断 AI 回复" —— 落库时抹成空串等于把用户已经看到的内容删了）
+        val text = StringBuilder()
+        val reasoning = StringBuilder()
+
         try {
             val provider = AiRepo.getProvider(run.providerId.orEmpty())
                 ?: throw AiException(AiErrorCode.CONFIG_ERROR, "Provider 不存在: ${run.providerId}")
@@ -280,8 +325,6 @@ class HarnessRunner(
 
             val started = System.currentTimeMillis()
             val selfJob = coroutineContext[Job]
-            val text = StringBuilder()
-            val reasoning = StringBuilder()
             var usageTotal = TokenUsage.EMPTY
             var providerResponseId: String? = null
             var lastPersist = 0L
@@ -311,11 +354,53 @@ class HarnessRunner(
             var step = 0
             var finishReason: String? = null
 
+            // "接着写"（用户建议 ②）用：续写次数（上限见 [MAX_CONTINUATIONS]）与去重基准
+            var continuations = 0
+            var continueFrom: String? = null
+
             // 标题摘取状态机（只在第一轮有效）：把 `[标题]…[/标题]` 从正文里摘掉
             val titleStripper = if (wantsTitle) TitleStripper(true) else null
 
-            suspend fun runRound(useTools: List<ToolSpec>): Pair<RoundResult, Idle> {
+            /**
+             * 跑一轮上游请求。
+             *
+             * [dedupeTail] 只在"接着写"那一轮给：续写时模型常把上一轮的结尾重说一遍，
+             * 这里先把它开头压住 [OVERLAP_WINDOW] 个字符，等看清楚与已说过的内容重叠多少再放行
+             * —— 否则用户会在同一条回复里看到两遍同一段话（正是 2026-09-19 报的那个 bug 的形态）。
+             */
+            suspend fun runRound(useTools: List<ToolSpec>, dedupeTail: String? = null): Pair<RoundResult, Idle> {
                 val r = RoundResult()
+
+                // 真正把一段文本放给界面 / 落库 / 上游上下文（原来的 onEvent 正文逻辑）
+                fun emitText(visible: String) {
+                    if (visible.isEmpty()) return
+                    r.text.append(visible)
+                    r.addChunk("text", visible)
+                    text.append(visible)
+                    emit(RunEventType.TEXT_DELTA, payload("messageId" to assistantId, "text" to visible))
+                    // 粗粒度落库：UI 靠事件实时刷新，数据库只需要"接近最新"
+                    val now = System.currentTimeMillis()
+                    if (now - lastPersist > 1000) {
+                        lastPersist = now
+                        AiRunRepo.updateMessage(assistantId, text.toString(), "streaming")
+                    }
+                }
+
+                // 续写那一轮的开头缓冲（null = 这一轮不需要去重，逐片直接放行）
+                var pending = if (dedupeTail == null) null else StringBuilder()
+                fun flushPending() {
+                    val buf = pending ?: return
+                    pending = null
+                    var out = buf.toString()
+                    if (out.isEmpty()) return
+                    val overlap = longestSuffixOverlap(dedupeTail, out)
+                    if (overlap > 0) {
+                        log.info("续写开头与已说过的内容重叠 {} 个字符，已去掉（避免同一条回复里出现两遍）", overlap)
+                        out = out.substring(overlap)
+                    }
+                    emitText(out)
+                }
+
                 val idle = streamUpstream(
                     provider = provider,
                     api = api,
@@ -329,6 +414,7 @@ class HarnessRunner(
                         stream = true,
                         reasoning = reasoningRequest,
                         tools = useTools,
+                        maxOutputTokens = model?.maxOutputTokens,
                     ),
                     onEvent = { event ->
                         when (event) {
@@ -337,18 +423,12 @@ class HarnessRunner(
                                 // 不该在回答里出现一行 [标题]）
                                 val visible = titleStripper?.push(event.text) ?: event.text
                                 if (visible.isNotEmpty()) {
-                                    r.text.append(visible)
-                                    r.addChunk("text", visible)
-                                    text.append(visible)
-                                    emit(
-                                        RunEventType.TEXT_DELTA,
-                                        payload("messageId" to assistantId, "text" to visible),
-                                    )
-                                    // 粗粒度落库：UI 靠事件实时刷新，数据库只需要"接近最新"
-                                    val now = System.currentTimeMillis()
-                                    if (now - lastPersist > 1000) {
-                                        lastPersist = now
-                                        AiRunRepo.updateMessage(assistantId, text.toString(), "streaming")
+                                    val buffer = pending
+                                    if (buffer == null) {
+                                        emitText(visible)
+                                    } else {
+                                        buffer.append(visible)
+                                        if (buffer.length >= OVERLAP_WINDOW) flushPending()
                                     }
                                 }
                             }
@@ -370,6 +450,7 @@ class HarnessRunner(
                         apiRef = api,
                         isCancelled = { selfJob?.isActive == false },
                     )
+                    flushPending()
                     return r to idle
                 }
 
@@ -388,7 +469,7 @@ class HarnessRunner(
                     suspend fun runRoundWithFallback(): Pair<RoundResult, Idle> {
                         val textBefore = text.length
                         try {
-                            return runRound(roundTools)
+                            return runRound(roundTools, continueFrom)
                         } catch (e: AiException) {
                             val retriable =
                                 e.code == AiErrorCode.CONFIG_ERROR || e.code == AiErrorCode.PROTOCOL_ERROR
@@ -409,11 +490,13 @@ class HarnessRunner(
                             text.append(note)
                             emit(RunEventType.TEXT_DELTA, payload("messageId" to assistantId, "text" to note))
                             roundTools = emptyList()
-                            return runRound(roundTools)
+                            return runRound(roundTools, continueFrom)
                         }
                     }
 
                     val (round, idle) = runRoundWithFallback()
+                    // 续写的去重只对紧接的那一轮有效
+                    continueFrom = null
                     finishReason = idle.finishReason ?: finishReason
                     providerResponseId = idle.providerResponseId ?: providerResponseId
                     usageTotal = usageTotal + TokenUsage.from(round.usage)
@@ -435,6 +518,31 @@ class HarnessRunner(
                             text.append(note)
                             emit(RunEventType.TEXT_DELTA, payload("messageId" to assistantId, "text" to note))
                             addPart("text", note)
+                        }
+                        // **输出被上游的长度上限卡断时接着写，而不是把半句话当成结尾**
+                        // （用户建议 ②："读写 token 达到上限时，不要强行截断 AI 回复"）。
+                        //
+                        // 为什么必须由我们来做：OpenAI 兼容网关不设 max_tokens 时用的是**模型自己的**
+                        // 默认输出上限（常见 4096），Anthropic 那边我们请求里也只给了 4096 —— 长回复被
+                        // 截断是常态。模型并不知道自己被截断了，只有收到 stop_reason=length 的我们知道。
+                        // 上限 [MAX_CONTINUATIONS] 轮，且**不算工具轮**（step 不动）。
+                        if (drafts.isEmpty() &&
+                            continuations < MAX_CONTINUATIONS &&
+                            isTruncatedByOutputLimit(idle.finishReason) &&
+                            text.isNotEmpty()
+                        ) {
+                            continuations++
+                            log.info(
+                                "本轮输出被长度上限截断（finishReason={}），接着写第 {} 次",
+                                idle.finishReason, continuations,
+                            )
+                            // 把已经说出去的部分作为助手轮喂回去，再要求从中断处接着写
+                            turns += ChatTurn("assistant", round.text.toString())
+                            turns += ChatTurn("user", CONTINUE_INSTRUCTION)
+                            // 下一轮的开头可能与刚说过的结尾重叠：交给 runRound 去重
+                            continueFrom = text.toString()
+                            // 下一轮同样不给工具（这一轮本来就没有工具调用）
+                            continue
                         }
                         break
                     }
@@ -599,16 +707,18 @@ class HarnessRunner(
                 payload("runId" to runId, "elapsedMs" to System.currentTimeMillis() - started)
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
-            val partial = AiConversationRepo.listMessages(conversationId)
-                .firstOrNull { it.id == assistantId }?.text.orEmpty()
-            AiRunRepo.updateMessage(assistantId, partial, "cancelled")
+            // 用户点了停止：已经说出来的部分**保留**，不抹掉
+            AiRunRepo.updateMessage(assistantId, text.toString(), "cancelled")
             AiRunRepo.finish(runId, "cancelled", errorCode = AiErrorCode.ABORTED, errorMessage = "用户已停止")
             emit(RunEventType.RUN_CANCELLED, payload("runId" to runId))
             throw e
         } catch (e: Throwable) {
             val (code, message) = classify(e)
             log.warn("Run 失败 run={} provider={} code={} msg={}", runId, run.providerId, code, message)
-            AiRunRepo.updateMessage(assistantId, "", "failed")
+            // 失败也**保留已经说出去的部分**（用户建议 ②："不要强行截断 AI 回复"）：
+            // 前面那些话是模型真的说了、用户也真的看到了，落库时抹成空串等于把它从记录里删掉。
+            // 状态仍然是 failed（界面会显示"生成失败"+ 重试），不假装这一轮成功了。
+            AiRunRepo.updateMessage(assistantId, text.toString(), "failed")
             AiRunRepo.finish(runId, "failed", errorCode = code, errorMessage = message)
             emit(RunEventType.RUN_FAILED, payload("runId" to runId, "code" to code, "message" to message))
         } finally {
