@@ -566,6 +566,35 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 需求 xlsx 的状态列也按独立审计改了现状（`docs/ai-home-requirements-audit.md` + 表内新增的「验收结论」页）：
 **✅ 33 / ◐ 19 / ⬜ 8**，并补登记了原表漏掉的 AIH-056/057。
 
+### 4.15 第九轮：用户清单 `docs/bug-and-suggestion-9.19.md`（2026-09-19）
+
+这一轮四条 bug 里有三条是**性能 / 刷新**、一条是**重复**；两条建议都落在"上限"上。
+每一处都先在本机把根因量出来（会话数据、请求日志、widget 重建次数），再改。
+
+| # | 用户报的 | 根因 / 做法 | 防线 |
+| --- | --- | --- | --- |
+| ① | **聊天快速上下滑动卡顿** | 三处叠加：`parseMarkdown` 每次 build 都重新解析整段文本（滑动时反复建同一个气泡）；列表 itemBuilder 每次刷新都给**每一条**气泡重建 widget（流式时一秒几十次）；逐字回包**每个字**通知一次界面。改成：解析结果按内容做 LRU 记忆化（64 段）、新增「重建闸门」`_MessageBubbleSlot`（`AiMessage` 实例 + 发送状态 + 该条实时版本都没变就整棵跳过）、流式通知攒到下一帧（`_notifyStreaming` 约 16ms，`_notifyNow()` 负责"必须当场看到"的那些）。实时版本号**按消息**记 —— 全局计数器会让正在流式的那一条每来一个字就把一屏历史气泡全标脏 | `test/ai_chat_perf_test.dart` 4 例（同一段文本只解析一次 / 缓存有界 / 与消息无关的通知不重建任何气泡：修前 54 次、修后 9 次 / 12 个增量只通知个位数次：修前 16 次） |
+| ② | **展开流式思考后卡顿** | 展开后整段思考是一个 `Text`，每来一个字把几万字重新排版一遍。`_StreamingReasoning` 按固定行数切块、**没变过的块复用上一次的 widget**（widget 相同 → 连 `RenderParagraph` 的布局都不重做），每帧只重排最后一块。顺带把收起时的摘要限制在开头一小段（以前每帧对整段跑正则），截断处不切半个代理对 | `ai_chat_perf_test.dart`「展开的流式思考」②：第 1 块必须还是同一个 widget 实例（退回整段一个 `Text` 实测就红） |
+| ③ | **展开流式思考后无法及时刷新** | 内层滚动条停在自己原来的位置，新思考长在可视区下面。现在与聊天列表同一套纪律：**贴底才跟随**（帧后 `jumpTo`），用户翻上去就不打扰 | 同一条用例①：最新一行必须落在视口内（老写法实测 812 > 视口 492） |
+| ④ | **发送消息时同一条语句出现两次** | 查库拿到实据：会话 `d9276b37` 的 seq3 / seq5 是同一句「你什么意思？继续生成。」，中间夹着空的 failed 气泡，那次 Run 的 `retry_of_run_id` 指向前面失败的那次。两处根因：`POST /runs` 不看 `retryOfRunId` 照旧 append 新用户消息（点一次重试多一条提问）；`HarnessRunner` 的"退回纯文本"重试**无条件重放**本轮已流出的半句话。现在重试**复用**原用户消息与那条失败/取消的助手占位（就地重置、连 part 一起清），有可见输出就**不重放** | `e2e-ai-tools-test.ps1` 第 10 幕 8 项（退回去实测会话变成 `user:complete:18 \| assistant:failed:0 \| user:complete:18 \| assistant:complete:26`） |
+| 建议① | **单轮读写上限太低** | 读 256KB→**2MB**、写 1MB→**4MB**、单条工具结果 8K→**32K 字符**、`read_file` 支持 **offset 分段读**（没读完把下一段 offset 算给模型；切点落在 UTF-8 字符边界，页尾不留乱码）。⚠️ 库里的 `ai.tools.policy` 冻着旧值，只改代码默认值对老用户无效 → 这两项进 `normalizeStored` 永远以代码常量为准 | `ToolRegistryTest` 3 例；本机 `GET /api/ai/tools/policy` 已报 2097152 / 4194304 |
+| 建议② | **到上限不要强行截断 AI 回复** | ①**接着写**：`finish_reason` 是 length / max_tokens / max_output_tokens 时把已说出去的部分作为 assistant 轮喂回去、附续写指令再要一轮（上限 3 轮、不算工具轮）；②**续写去重**：续写开头压住 80 字符与已说过的话求最长后缀重叠并去掉；③Anthropic 的 `max_tokens` 改用模型声明的输出上限（没声明回落 4096，开启思考时保证大于预算），Responses 只在声明过时才带；④失败/取消**不再把已说出的部分抹成空串** | `OutputContinuationTest` 8 例 + `e2e-ai-tools-test.ps1` 第 11 幕 7 项（把 `MAX_CONTINUATIONS` 调成 0 实测就红：79 项 3 失败） |
+
+#### 4.15.1 验证证据（实测，2026-09-19）
+
+| 套件 | 结果 |
+| --- | --- |
+| `flutter analyze` | No issues found |
+| `flutter test` | **189 例全过**（新增 `test/ai_chat_perf_test.dart` 5 例；4 例都验证过"去掉修复就红"） |
+| `pwsh -File scripts\server.ps1 test` | **361 例全过**（新增 `ToolRegistryTest` 3 例、`OutputContinuationTest` 8 例） |
+| `scripts\e2e-ai-tools-test.ps1` | **82 项全过**、exit 0（新增第 10 幕"重试不重复提问"8 项 + 第 11 幕"接着写"7 项；两幕都实测过退回去就红） |
+| `scripts\e2e-submit-test.ps1` / `e2e-capture-test.ps1` | 本轮未动提交 / 捕获链路，未重跑 |
+
+顺带记录一个**真实数据里挖出来的证据链**（改之前先查了库）：
+`ai_runs` 里那次失败 Run 的 `retry_of_run_id` 指着上一次失败 → 用户点过「重试」→
+`POST /runs` 又 append 了一条一样的用户消息。这是"同一条语句出现两次"的直接成因，
+也说明**用户报 bug 时先去库里看一眼**比只看代码快得多。
+
 ### 4.10 测试瘦身：删掉重复与占位项，留下回归防线（2026-09-16）
 
 用户问"测试项会不会太多了导致测试非常慢"，并在清单里写了"减少一些已经通过、不太重要的测试项"。
@@ -732,5 +761,15 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
   `ToolPolicy`、审批必须先 open 再 emit、Skills 不做缓存、投放口自动登记不许改已有 frontmatter、
   记忆超限报错不许截断、改提示词必须 bump `SystemPrompt.VERSION`）。
 - **改 AI 相关接口后跑一次 `scripts\e2e-ai-tools-test.ps1`**：它是唯一能覆盖"工具循环 + 审批 +
-  权限拒绝 + 落库 parts + 长期记忆注入"的端到端用例（假网关，离线、不花钱，58 项检查）。
-  第二轮三个真 bug、第三轮的记忆链路都是它抓出来/钉住的。
+  权限拒绝 + 落库 parts + 长期记忆注入 + 重试不重复提问 + 截断续写"的端到端用例
+  （假网关，离线、不花钱，82 项检查）。
+  第二轮三个真 bug、第三轮的记忆链路、第九轮的"重复"与"截断"都是它抓出来/钉住的。
+- **聊天界面的性能改动别退回去**（2026-09-19）：气泡的"重建闸门"（`_MessageBubbleSlot`）与
+  流式通知的"攒到下一帧"（`_notifyStreaming`）是"快速滑动 / 展开流式思考卡顿"的解药；
+  改列表时**别把 `_MessageBubble` 直接建在 itemBuilder 里**，也别在流式路径上逐条 `notifyListeners()`。
+  实时状态（思考增量 / 工具卡）的版本号必须**按消息**记（`liveRevisionOf`）—— 换成全局计数器，
+  正在流式的那一条每来一个字就会把一屏历史气泡全部标脏，等于没优化。
+- **"接着写"（`HarnessRunner`）改的时候守住两条**：续写那一轮必须**去重**（`longestSuffixOverlap`
+  压住开头 80 字符），否则会在同一个气泡里制造用户刚报过的"重复"；续写**不算工具轮**（`step` 不动），
+  否则会把工具预算吃掉。改系统提示词/指令时记得 `CONTINUE_INSTRUCTION` 与假网关里的
+  `CONTINUE_MARKER` 是同一句话，改了一边要改另一边。
