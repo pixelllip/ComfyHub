@@ -213,6 +213,58 @@ class AiWorkspaceStore extends ChangeNotifier {
   String? _activeRunId;
   bool get running => _activeRunId != null;
 
+  // -----------------------------------------------------------------------
+  //  流式期间的刷新节流（用户 bug：聊天快速滑动 / 展开流式思考时卡顿）
+  // -----------------------------------------------------------------------
+
+  /// 流式增量攒下的"待通知"标记与定时器（见 [_notifyStreaming]）。
+  bool _streamDirty = false;
+  Timer? _streamFlush;
+
+  /// 一帧最多通知一次（约 16ms）。
+  ///
+  /// 上游逐字回包时**每一个字**都会触发一次状态变化，直接 `notifyListeners()` 等于
+  /// 每秒重建几十次界面：滚动条跟着跳、Markdown 跟着重排、长回复越流越卡。
+  /// 攒到下一帧再通知，肉眼完全看不出差别（60fps 就是 16ms），
+  /// 但重建次数从"每个字一次"降到"每帧一次"。
+  void _notifyStreaming() {
+    _streamDirty = true;
+    _streamFlush ??= Timer(const Duration(milliseconds: 16), () {
+      _streamFlush = null;
+      if (!_streamDirty) return;
+      _streamDirty = false;
+      notifyListeners();
+    });
+  }
+
+  /// 把攒着的通知丢掉、立刻通知一次。
+  ///
+  /// 用在"必须当场看到"的时刻（消息完成、工具卡状态变化、Run 结束）：
+  /// 既不能让这些变化等下一个 16ms，也不能让攒着的那次通知再补发一次。
+  void _notifyNow() {
+    _streamFlush?.cancel();
+    _streamFlush = null;
+    _streamDirty = false;
+    notifyListeners();
+  }
+
+  /// 每条消息**流式实时状态**的版本号（思考增量 / 工具卡状态）。
+  ///
+  /// 消息列表按"这条 `AiMessage` 实例有没有变"来跳过重建（见 `_MessageBubbleSlot`），
+  /// 而思考增量、工具卡状态**不改 `AiMessage` 实例**（它们挂在实时状态上）。
+  /// 有这个版本号，那两类变化才不会被误判成"没变"。
+  ///
+  /// 刻意做成**按消息**的：全局计数器会让"正在流式的那一条"每来一个字就把
+  /// 一屏历史气泡全部标脏 —— 那就等于没省。`_liveRevisionOf()` 只看这一条。
+  final Map<String, int> _liveRevisions = {};
+
+  /// 这条消息的实时状态版本（没有实时状态就是 0）。
+  int liveRevisionOf(String messageId) => _liveRevisions[messageId] ?? 0;
+
+  void _bumpLiveRevision(String messageId) {
+    _liveRevisions[messageId] = (_liveRevisions[messageId] ?? 0) + 1;
+  }
+
   /// 当前还没接通的能力，用**明确的话**告诉用户，而不是假装成功。
   String? notice;
 
@@ -539,6 +591,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   @override
   void dispose() {
     stopWatchingComfy();
+    // 攒着的流式通知定时器要一起收掉，否则页面都销毁了还会被回调
+    _streamFlush?.cancel();
+    _streamFlush = null;
     super.dispose();
   }
 
@@ -1116,14 +1171,15 @@ class AiWorkspaceStore extends ChangeNotifier {
             streamed += event.text ?? '';
             _appendLiveSegment(assistantMessageId, 'text', event.text ?? '');
             _replaceMessage(assistantMessageId, text: streamed, status: 'streaming');
-            notifyListeners();
+            // 逐字回包只攒着，交给下一帧统一刷新（见 _notifyStreaming）
+            _notifyStreaming();
           // 思考增量（M4）：按消息累加，气泡里折叠展示
           case 'reasoning.delta':
             final delta = event.text ?? '';
             if (delta.isEmpty) break;
             _liveReasoning.update(assistantMessageId, (v) => v + delta, ifAbsent: () => delta);
             _appendLiveSegment(assistantMessageId, 'reasoning', delta);
-            notifyListeners();
+            _notifyStreaming();
           // 工具调用请求：approval=pending 的要在气泡上等用户点「批准 / 拒绝」
           case 'tool.requested':
             final approval = event.approval ?? 'not_required';
@@ -1140,7 +1196,7 @@ class AiWorkspaceStore extends ChangeNotifier {
                     : AiToolCallStatus.running,
               ),
             );
-            notifyListeners();
+            _notifyNow();
           case 'tool.started':
             _upsertToolCall(
               assistantMessageId,
@@ -1148,7 +1204,7 @@ class AiWorkspaceStore extends ChangeNotifier {
               (prev) => (prev ?? AiToolCallState(callId: event.callId ?? '', name: event.toolName ?? ''))
                   .copyWith(name: event.toolName ?? prev?.name, status: AiToolCallStatus.running),
             );
-            notifyListeners();
+            _notifyNow();
           case 'tool.completed':
             _upsertToolCall(
               assistantMessageId,
@@ -1167,7 +1223,7 @@ class AiWorkspaceStore extends ChangeNotifier {
             );
             // 提交了任务：立刻刷新进度，用户马上就能在右侧栏看到"排队中 / 正在生成"
             unawaited(refreshComfyJobs());
-            notifyListeners();
+            _notifyNow();
           case 'tool.failed':
             final denied = (event.approval ?? '') == 'denied';
             _upsertToolCall(
@@ -1183,7 +1239,7 @@ class AiWorkspaceStore extends ChangeNotifier {
                 elapsedMs: event.elapsedMs ?? prev?.elapsedMs,
               ),
             );
-            notifyListeners();
+            _notifyNow();
           case 'message.completed':
             streamed = event.text ?? streamed;
             // parts 是**权威的有序块**（正文 / 思考 / 工具调用 / 工具结果交错）；
@@ -1204,7 +1260,7 @@ class AiWorkspaceStore extends ChangeNotifier {
                   : null,
               reasoningEffort: event.data['reasoningEffort']?.toString(),
             );
-            notifyListeners();
+            _notifyNow();
           case 'run.failed':
             _replaceMessage(assistantMessageId, text: streamed, status: 'failed');
             error = '[${event.code ?? 'ERROR'}] ${event.message ?? '运行失败'}';
@@ -1218,7 +1274,7 @@ class AiWorkspaceStore extends ChangeNotifier {
             final convId = event.data['conversationId']?.toString() ?? conversation?.id;
             if (newTitle != null && newTitle.isNotEmpty && convId != null) {
               _applyConversationTitle(convId, newTitle);
-              notifyListeners();
+              _notifyNow();
             }
           // 这些事件不需要额外动作：
           //  - run.started 带 tools 清单（留给后续"本次可用工具"展示）
@@ -1240,7 +1296,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 与服务端对齐一次（seq、状态、usage 都以库为准）
       await _reloadMessages(conversationId);
       conversations = await _safeListConversations();
-      notifyListeners();
+      _notifyNow();
     }
   }
 
@@ -1377,6 +1433,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 往实时段列表里追加一片增量：与上一段同类型就并进去，否则新开一段。
   void _appendLiveSegment(String messageId, String type, String delta) {
     if (delta.isEmpty) return;
+    _bumpLiveRevision(messageId);
     final list = _liveSegments.putIfAbsent(messageId, () => <AiMessageSegment>[]);
     if (list.isNotEmpty && list.last.type == type) {
       list[list.length - 1] = AiMessageSegment(type, list.last.text + delta);
@@ -1412,6 +1469,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     AiToolCallState Function(AiToolCallState? previous) update,
   ) {
     if (callId.isEmpty) return;
+    _bumpLiveRevision(messageId);
     final list = _liveToolCalls.putIfAbsent(messageId, () => <AiToolCallState>[]);
     final i = list.indexWhere((c) => c.callId == callId);
     final next = update(i < 0 ? null : list[i]);
@@ -1423,9 +1481,14 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   void _patchToolCall(String callId, AiToolCallState Function(AiToolCallState call) update) {
-    for (final list in _liveToolCalls.values) {
+    for (final entry in _liveToolCalls.entries) {
+      final list = entry.value;
       final i = list.indexWhere((c) => c.callId == callId);
-      if (i >= 0) list[i] = update(list[i]);
+      if (i >= 0) {
+        list[i] = update(list[i]);
+        // 只有**真的动过**的那条消息才算变了
+        _bumpLiveRevision(entry.key);
+      }
     }
   }
 
@@ -1435,6 +1498,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     _liveReasoning.removeWhere((k, _) => !ids.contains(k));
     _liveSegments.removeWhere((k, _) => !ids.contains(k));
     _liveToolCalls.removeWhere((k, _) => !ids.contains(k));
+    _liveRevisions.removeWhere((k, _) => !ids.contains(k));
   }
 
   /// 就地改一条消息。

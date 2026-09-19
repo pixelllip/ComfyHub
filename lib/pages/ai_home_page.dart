@@ -554,34 +554,94 @@ class _MessageList extends StatelessWidget {
       itemCount: store.messages.length,
       itemBuilder: (context, i) {
         final message = store.messages[i];
-        // RepaintBoundary：流式生成时每一帧都会重建列表，没有它的话所有
-        // Markdown 气泡都要跟着重绘一遍（长对话越聊越卡）。
-        return RepaintBoundary(
-          child: _MessageBubble(
-            message: message,
-            sending: store.sending,
-            onRetry: store.retry,
-            // 工具卡 / 思考都只属于助手消息
-            toolCalls: message.isUser ? const [] : store.toolCallsFor(message),
-            // 思考 / 正文按**流顺序**还原成段（用户要求"如实按流顺序显示"）
-            segments: message.isUser ? const [] : store.segmentsFor(message),
-            // 这条回复真正产出的产物（回复末尾的「画廊入口卡」）
-            producedMediaIds: message.isUser ? const [] : store.producedMediaIds(message),
-            // 产出这些图的那份工作流也属于"生成的产物"（用户建议 ①）
-            producedPromptIds: message.isUser ? const [] : store.producedPromptIds(message),
-            toolCategoryOf: store.toolCategoryOf,
-            onApprove: store.approveToolCall,
-            onDeny: store.denyToolCall,
-            // 用户消息里的附件块：按 id 现取缩略图 / 视频预览帧（M3）
-            thumbUrlOf: store.thumbUrlFor,
-            fileUrlOf: store.fileUrlFor,
-            // 画廊产物（媒体 id）走画廊接口，别再喂给附件接口
-            mediaThumbUrlOf: store.mediaThumbUrlFor,
-            mediaPosterUrlOf: store.mediaPosterUrlFor,
-          ),
+        // RepaintBoundary / 重建闸门都在 `_MessageBubbleSlot` 里：见它的注释
+        // （流式输出时只有**真的变了**的那一条会重建，历史气泡整棵跳过）。
+        return _MessageBubbleSlot(
+          key: ValueKey(message.id),
+          store: store,
+          message: message,
         );
       },
     );
+  }
+}
+
+/// 聊天气泡**真正被重建**的次数（回归用例用它证明"没变化的气泡不会跟着重建"）。
+///
+/// 生产路径上只加一次自增，不参与任何逻辑判断。
+@visibleForTesting
+int aiChatBubbleBuilds = 0;
+
+/// 一条气泡的「重建闸门」（用户 bug：聊天快速上下滑动卡顿 / 展开流式思考后卡顿）。
+///
+/// 为什么需要它：列表的 `itemBuilder` 每次刷新都会重跑，如果直接建 `_MessageBubble`，
+/// 一屏里的**每一条历史气泡**都会跟着重新解析 Markdown、重新排版 —— 逐字回包时
+/// 一秒几十次，长对话越聊越卡，滑块也跟着抖。
+///
+/// 可行的前提是 Store 那边的两件事：
+///  1. `_replaceMessage()` 只替换**变化的那一条** `AiMessage` 实例，其余原样复用；
+///  2. 实时状态（思考增量 / 工具卡）按消息记版本号（`store.liveRevisionOf`）。
+///
+/// 所以"实例没变 + 发送状态没变 + 这条的实时版本没变"就等于"这条没有变化"，
+/// 把上一次建好的子树原样交回去 —— Flutter 见到 identical 的 widget 会整棵跳过
+/// （`Element.updateChild` 里的 `child.widget == newWidget` 快速路径）。
+/// 主题 / 语言这类 InheritedWidget 依赖**不受影响**：它们走依赖通知，各自标脏。
+class _MessageBubbleSlot extends StatefulWidget {
+  final AiWorkspaceStore store;
+  final AiMessage message;
+
+  const _MessageBubbleSlot({super.key, required this.store, required this.message});
+
+  @override
+  State<_MessageBubbleSlot> createState() => _MessageBubbleSlotState();
+}
+
+class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
+  Widget? _cached;
+  AiMessage? _cachedMessage;
+  bool? _cachedSending;
+  int? _cachedLive;
+
+  @override
+  Widget build(BuildContext context) {
+    final store = widget.store;
+    final live = store.liveRevisionOf(widget.message.id);
+    final unchanged = _cached != null &&
+        identical(_cachedMessage, widget.message) &&
+        _cachedSending == store.sending &&
+        _cachedLive == live;
+    if (unchanged) return _cached!;
+
+    final message = widget.message;
+    _cachedMessage = message;
+    _cachedSending = store.sending;
+    _cachedLive = live;
+    aiChatBubbleBuilds++;
+    _cached = RepaintBoundary(
+      child: _MessageBubble(
+        message: message,
+        sending: store.sending,
+        onRetry: store.retry,
+        // 工具卡 / 思考都只属于助手消息
+        toolCalls: message.isUser ? const [] : store.toolCallsFor(message),
+        // 思考 / 正文按**流顺序**还原成段（用户要求"如实按流顺序显示"）
+        segments: message.isUser ? const [] : store.segmentsFor(message),
+        // 这条回复真正产出的产物（回复末尾的「画廊入口卡」）
+        producedMediaIds: message.isUser ? const [] : store.producedMediaIds(message),
+        // 产出这些图的那份工作流也属于"生成的产物"（用户建议 ①）
+        producedPromptIds: message.isUser ? const [] : store.producedPromptIds(message),
+        toolCategoryOf: store.toolCategoryOf,
+        onApprove: store.approveToolCall,
+        onDeny: store.denyToolCall,
+        // 用户消息里的附件块：按 id 现取缩略图 / 视频预览帧（M3）
+        thumbUrlOf: store.thumbUrlFor,
+        fileUrlOf: store.fileUrlFor,
+        // 画廊产物（媒体 id）走画廊接口，别再喂给附件接口
+        mediaThumbUrlOf: store.mediaThumbUrlFor,
+        mediaPosterUrlOf: store.mediaPosterUrlFor,
+      ),
+    );
+    return _cached!;
   }
 }
 

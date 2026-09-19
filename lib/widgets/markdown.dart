@@ -126,11 +126,50 @@ class MdTable extends MdBlock {
   final List<List<List<MdInline>>> rows;
 }
 
+/// 解析结果的记忆化缓存（按文本内容寻址，LRU）。
+///
+/// 为什么需要（用户 bug：聊天**快速上下滑动**容易卡顿）：列表滚动时同一个气泡会被
+/// 反复建出来、反复解析 —— 一屏十几个气泡、每个几 KB，一帧光解析就能把预算吃完。
+/// 命中缓存只花一次字符串哈希 + Map 查找，滑块来回拉也不会再解析第二遍。
+///
+/// **有界**：只留最近 [_cacheLimit] 段，聊得很长也不会把整段历史永远钉在内存里
+/// （键是文本本身，值只是解析出的块对象，量级远小于文本）。
+const int _parseCacheLimit = 64;
+final Map<String, List<MdBlock>> _parseCache = <String, List<MdBlock>>{};
+
+/// 缓存的命中次数（回归用例用它证明"同一段文本不会被解析第二遍"）。
+int get markdownParseCacheHits => _parseCacheHits;
+int _parseCacheHits = 0;
+
+/// 清空解析缓存（用例之间互不干扰）。
+void clearMarkdownParseCache() {
+  _parseCache.clear();
+  _parseCacheHits = 0;
+}
+
 /// 把 Markdown 文本解析成块列表。
 ///
 /// **流式安全**：未闭合的围栏代码块会把"剩下的内容"当代码继续渲染；
 /// 未闭合的行内标记（`**`、`*`、`` ` ``）一律按字面量显示，不会吞内容。
+///
+/// 返回值是**内部缓存的对象，调用方只许读、不许改**（要改先 `toList()`）。
 List<MdBlock> parseMarkdown(String source) {
+  final hit = _parseCache.remove(source);
+  if (hit != null) {
+    _parseCacheHits++;
+    _parseCache[source] = hit; // LRU：命中的挪到队尾
+    return hit;
+  }
+  final blocks = _parseMarkdownUncached(source);
+  if (_parseCache.length >= _parseCacheLimit) {
+    _parseCache.remove(_parseCache.keys.first);
+  }
+  _parseCache[source] = blocks;
+  return blocks;
+}
+
+/// 真正的解析（不带缓存）。递归解析引用块时也走 `parseMarkdown`。
+List<MdBlock> _parseMarkdownUncached(String source) {
   final lines = source.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
   final blocks = <MdBlock>[];
   final paragraph = <String>[];
