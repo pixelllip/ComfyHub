@@ -54,6 +54,19 @@ class _Fake {
   static const String historyConversationId = 'c1';
   static const String freshConversationId = 'c-new';
 
+  /// 第二条历史会话：内容**和第一条一样长**。
+  ///
+  /// 用来复现"内容整批换掉（切会话）而 `pixels` 被原样带过去"：总长一样时它甚至
+  /// 不会被夹回来，用户落在新会话的**半路**上 —— 聊天软件里这是错的，
+  /// 换会话该落在最新一条。
+  static const String otherConversationId = 'c3';
+
+  /// 第三条历史会话：**只有两条短消息**（内容比第一条短得多）。
+  ///
+  /// 用来复现用户实测的"总长第一次量完会变小，`pixels` 还停在按旧总长算的位置上
+  /// —— 内容被顶到视口外，第一条消息在界面上直接消失"。
+  static const String shortConversationId = 'c2';
+
   Object? body(String method, String path, {String? requestBody}) {
     if (path == '/api/ai/providers') {
       return [
@@ -101,7 +114,23 @@ class _Fake {
           'modelId': 'm-text',
           'messageCount': 30,
           'updatedAt': '2026-09-19T01:00:00.000Z',
-        }
+        },
+        {
+          'id': otherConversationId,
+          'title': '另一个长会话',
+          'providerId': 'local-gw',
+          'modelId': 'm-text',
+          'messageCount': 30,
+          'updatedAt': '2026-09-18T01:00:00.000Z',
+        },
+        {
+          'id': shortConversationId,
+          'title': '短会话',
+          'providerId': 'local-gw',
+          'modelId': 'm-text',
+          'messageCount': 2,
+          'updatedAt': '2026-09-17T01:00:00.000Z',
+        },
       ];
     }
     if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) && method == 'DELETE') {
@@ -126,6 +155,45 @@ class _Fake {
     }
     if (RegExp(r'^/api/ai/conversations/[^/]+/messages$').hasMatch(path)) {
       final convId = path.split('/')[4];
+      if (convId == otherConversationId) {
+        // 和第一条同构（同样 30 条长短交错），只是 id 不同：
+        // 总长一样 → 切过去之后 `pixels` 连"被夹回来"都不会发生。
+        return [
+          for (var i = 1; i <= 30; i++)
+            {
+              'id': 'o$i',
+              'conversationId': convId,
+              'seq': i,
+              'role': i.isOdd ? 'user' : 'assistant',
+              'status': 'complete',
+              'text': _variedText(i),
+              'parts': <Object>[],
+            },
+        ];
+      }
+      if (convId == shortConversationId) {
+        // 两条短消息：总长比第一条小一个数量级（用户实测"估计 220 → 真实 52"的放大版）
+        return [
+          {
+            'id': 's1',
+            'conversationId': convId,
+            'seq': 1,
+            'role': 'user',
+            'status': 'complete',
+            'text': '短会话的第一句。',
+            'parts': <Object>[],
+          },
+          {
+            'id': 's2',
+            'conversationId': convId,
+            'seq': 2,
+            'role': 'assistant',
+            'status': 'complete',
+            'text': '短会话的最后一句。',
+            'parts': <Object>[],
+          },
+        ];
+      }
       final history = convId == historyConversationId
           // **长短交错**的一长串：滚动条跳变只在"高度差异大 + 项目多"时才明显
           // （用户现场就是一条聊了很久的会话）。30 条足够复现，也让
@@ -515,6 +583,71 @@ void main() {
     ));
     unawaited(events.close());
     await tester.pumpAndSettle();
+  });
+
+  // 用户撞上的第四个坑（2026-09-20）："总长第一次量完会变小，而 pixels 还停在
+  // 按旧总长算的位置上 —— 内容被顶到视口外，第一条消息在界面上直接消失。"
+  //
+  // 对应的真实时机就是"内容整批换掉"：**切会话**。切过去之后 `messages` 整批换成
+  // 新的，而 `_Thread` 只是换了数据，**滚动位置不会自己重置** —— `pixels` 被原样
+  // 带到新会话上。新内容短就是"被顶到视口外"，新内容一样长就是"落在半路"，
+  // 两者都是错的：聊天软件里换会话就该落在**最新一条**。
+  //
+  // 这一版把"总长变小"这件事彻底绕开了：内容高度就是真实高度，框架不会把 `pixels`
+  // 夹到视口外去（旧版会，因为总长是估算的、可能比真值小）。剩下这一条是
+  // "换会话要重置位置"的**产品纪律**，由界面显式负责，不靠框架的夹取去猜。
+  testWidgets('切换会话落在最新一条（内容整批换掉时位置要重置，用户 bug）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _homePage(_backend(_Fake(text: _lines(1, 60)))));
+    await tester.pumpAndSettle();
+
+    // 先在长会话里滚上去（`pixels` 远离底部）
+    await tester.tap(find.text('卡顿复现'));
+    await tester.pumpAndSettle();
+    final position = tester.state<ScrollableState>(
+      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
+    ).position;
+    expect(position.maxScrollExtent, greaterThan(400), reason: '长会话得真的能滚');
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pump();
+    position.jumpTo(position.pixels - 1500);
+    await tester.pump();
+    expect(position.pixels, greaterThan(0), reason: '要真的停在半路，这个用例才有意义');
+
+    // 切到另一个**同样长**的会话：总长一样，`pixels` 连"被夹回来"都不会发生
+    await tester.tap(find.text('另一个长会话'));
+    await tester.pumpAndSettle();
+
+    expect(position.pixels, closeTo(position.maxScrollExtent, 1.5),
+        reason: '换会话要落在最新一条；位置被原样带过去的话会停在半路'
+        '（用户 bug：内容整批换掉后位置还在按旧总长算）');
+
+    // 反向再验一次：从半路切回第一条会话，同样要贴底
+    position.jumpTo(position.pixels - 800);
+    await tester.pump();
+    await tester.tap(find.text('卡顿复现'));
+    await tester.pumpAndSettle();
+    expect(position.pixels, closeTo(position.maxScrollExtent, 1.5),
+        reason: '两个方向都要重置（不是"只有第一次切才生效"）');
+
+    // 第三种：切到**内容短得多**的会话。
+    // 这是用户实测的那个现场 —— 总长一下子小掉一个数量级，
+    // `pixels` 要是还按旧总长算，新内容就被顶到视口外去了。
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pump();
+    expect(position.pixels, greaterThan(1000), reason: '长会话要真的滚得动，这个用例才有意义');
+    await tester.tap(find.text('短会话'));
+    await tester.pumpAndSettle();
+    expect(position.pixels, closeTo(position.maxScrollExtent, 1.5),
+        reason: '切到短会话同样要落在最新一条（不能被顶到视口外）');
+    final first = find.text('短会话的第一句。');
+    expect(first, findsOneWidget, reason: '第一条消息要真的可见');
+    final listRect = tester.getRect(find.byKey(const Key('ai-message-list')));
+    expect(tester.getRect(first).top, greaterThanOrEqualTo(listRect.top - 0.5),
+        reason: '第一条消息不能被顶到视口上面去（用户报的"直接消失"）');
   });
 
   // 用户 bug（2026-09-20）："在最新一条聊天记录里，滚动条会跳变 1/3 的进度。"

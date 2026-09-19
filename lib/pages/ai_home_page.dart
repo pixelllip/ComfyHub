@@ -58,6 +58,12 @@ class _AiHomePageState extends State<AiHomePage> {
   /// 视口是不是贴着底部（用户建议 ③）：**贴底才自动跟随**，翻旧消息时不打扰。
   bool _atBottom = true;
 
+  /// 上一次通知时**消息区里装的是哪条会话**。
+  ///
+  /// 用来识别"内容整批被换掉"这个时机（换会话 / 重新加载）——
+  /// 见 [_resetScrollForConversation]：换会话要把滚动位置重置到最新一条。
+  String? _shownConversationId;
+
   /// "已经贴底"的容差，单位像素。**只用来吸收亚像素误差**，不是"接近底部"的意思。
   ///
   /// 老代码这里是 80，那个数字就是"只滚一小段就被拽回底部"的根因 ——
@@ -97,6 +103,7 @@ class _AiHomePageState extends State<AiHomePage> {
     if (!mounted) return;
     _followIfAtBottom();
     final id = _store.conversation?.id;
+    _resetScrollForConversation(id);
     if (id == _draftConversationId) return;
 
     final previous = _draftConversationId;
@@ -185,6 +192,32 @@ class _AiHomePageState extends State<AiHomePage> {
   void _followIfAtBottom() {
     if (!_atBottom) return;
     _scrollToBottom();
+  }
+
+  /// 换了会话（消息内容**整批被换掉**）时，把滚动位置重置到最新一条。
+  ///
+  /// 用户 2026-09-20 报的第四个坑是"总长变小、`pixels` 还停在按旧总长算的位置上 ——
+  /// 内容被顶到视口外，第一条消息在界面上直接消失"。触发它的时机正是这里：
+  /// `openConversation` 会把 `messages` 整批换掉，而本页只是重新 `build`，
+  /// **滚动位置不会自己重置** —— `pixels` 被原样带到新会话上：
+  ///   · 新会话内容更短 → 被夹回/顶出视口；
+  ///   · 新会话内容一样长 → 直接落在半路（连夹取都不会发生，用例里实测差 256px）。
+  ///
+  /// 所以"换会话落在最新一条"这条产品纪律由界面**显式**负责，不靠框架的夹取去猜。
+  /// 换会话 = 用户想看最新的进展，落在半路没有任何理由。
+  ///
+  /// 必须放在**帧后**：这一刻新会话的内容还没布局，`maxScrollExtent` 还是旧的，
+  /// 当场 `jumpTo` 会跳到一个马上就不成立的偏移上。这里用 `jumpTo`（不是动画）：
+  /// 内容整批换掉是"切换"，不是"滚一段"，中间那几帧滑过旧位置没有意义。
+  void _resetScrollForConversation(String? id) {
+    if (id == _shownConversationId) return;
+    _shownConversationId = id;
+    if (id == null) return;
+    if (mounted) setState(() => _atBottom = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    });
   }
 
   /// 回到最新消息（右下角按钮，用户建议 ④）。
