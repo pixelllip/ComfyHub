@@ -576,7 +576,7 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 | ① | **聊天快速上下滑动卡顿** | 三处叠加：`parseMarkdown` 每次 build 都重新解析整段文本（滑动时反复建同一个气泡）；列表 itemBuilder 每次刷新都给**每一条**气泡重建 widget（流式时一秒几十次）；逐字回包**每个字**通知一次界面。改成：解析结果按内容做 LRU 记忆化（64 段）、新增「重建闸门」`_MessageBubbleSlot`（`AiMessage` 实例 + 发送状态 + 该条实时版本都没变就整棵跳过）、流式通知攒到下一帧（`_notifyStreaming` 约 16ms，`_notifyNow()` 负责"必须当场看到"的那些）。实时版本号**按消息**记 —— 全局计数器会让正在流式的那一条每来一个字就把一屏历史气泡全标脏 | `test/ai_chat_perf_test.dart` 4 例（同一段文本只解析一次 / 缓存有界 / 与消息无关的通知不重建任何气泡：修前 54 次、修后 9 次 / 12 个增量只通知个位数次：修前 16 次） |
 | ② | **展开流式思考后卡顿** | 展开后整段思考是一个 `Text`，每来一个字把几万字重新排版一遍。`_StreamingReasoning` 按固定行数切块、**没变过的块复用上一次的 widget**（widget 相同 → 连 `RenderParagraph` 的布局都不重做），每帧只重排最后一块。顺带把收起时的摘要限制在开头一小段（以前每帧对整段跑正则），截断处不切半个代理对 | `ai_chat_perf_test.dart`「展开的流式思考」②：第 1 块必须还是同一个 widget 实例（退回整段一个 `Text` 实测就红） |
 | ③ | **展开流式思考后无法及时刷新** | 内层滚动条停在自己原来的位置，新思考长在可视区下面。现在与聊天列表同一套纪律：**贴底才跟随**（帧后 `jumpTo`），用户翻上去就不打扰 | 同一条用例①：最新一行必须落在视口内（老写法实测 812 > 视口 492） |
-| ④ | **发送消息时同一条语句出现两次** | 查库拿到实据：会话 `d9276b37` 的 seq3 / seq5 是同一句「你什么意思？继续生成。」，中间夹着空的 failed 气泡，那次 Run 的 `retry_of_run_id` 指向前面失败的那次。两处根因：`POST /runs` 不看 `retryOfRunId` 照旧 append 新用户消息（点一次重试多一条提问）；`HarnessRunner` 的"退回纯文本"重试**无条件重放**本轮已流出的半句话。现在重试**复用**原用户消息与那条失败/取消的助手占位（就地重置、连 part 一起清），有可见输出就**不重放** | `e2e-ai-tools-test.ps1` 第 10 幕 8 项（退回去实测会话变成 `user:complete:18 \| assistant:failed:0 \| user:complete:18 \| assistant:complete:26`） |
+| ④ | **发送消息时同一条语句出现两次** | 两处根因。**界面**：`_MessageBubble` 有两条渲染正文的路，兜底那条写成 `segments.isEmpty && m.text.isNotEmpty`，而**用户消息的 `segments` 是刻意传空的**（它走 parts 那条路）→ 兜底对用户消息永远成立 → 正文渲染两遍（带附件时图片正好夹在中间，就是用户 9.19 给的截图）；判据改成 `body.isEmpty`（两条路都没产出才兜底）。**后端**：查库拿到实据 —— 会话 `d9276b37` 的 seq3 / seq5 是同一句「你什么意思？继续生成。」，中间夹着空的 failed 气泡，那次 Run 的 `retry_of_run_id` 指着前面失败的那次；`POST /runs` 不看 `retryOfRunId` 照旧 append 新用户消息，`HarnessRunner` 的"退回纯文本"重试**无条件重放**本轮已流出的半句话。现在重试**复用**原用户消息与那条失败/取消的助手占位（就地重置、连 part 一起清），有可见输出就**不重放** | `test/ai_message_render_test.dart` 4 例（前两例修前实测"同一条正文找到 2 个"）+ `e2e-ai-tools-test.ps1` 第 10 幕 8 项 |
 | 建议① | **单轮读写上限太低** | 读 256KB→**2MB**、写 1MB→**4MB**、单条工具结果 8K→**32K 字符**、`read_file` 支持 **offset 分段读**（没读完把下一段 offset 算给模型；切点落在 UTF-8 字符边界，页尾不留乱码）。⚠️ 库里的 `ai.tools.policy` 冻着旧值，只改代码默认值对老用户无效 → 这两项进 `normalizeStored` 永远以代码常量为准 | `ToolRegistryTest` 3 例；本机 `GET /api/ai/tools/policy` 已报 2097152 / 4194304 |
 | 建议② | **到上限不要强行截断 AI 回复** | ①**接着写**：`finish_reason` 是 length / max_tokens / max_output_tokens 时把已说出去的部分作为 assistant 轮喂回去、附续写指令再要一轮（上限 3 轮、不算工具轮）；②**续写去重**：续写开头压住 80 字符与已说过的话求最长后缀重叠并去掉；③Anthropic 的 `max_tokens` 改用模型声明的输出上限（没声明回落 4096，开启思考时保证大于预算），Responses 只在声明过时才带；④失败/取消**不再把已说出的部分抹成空串** | `OutputContinuationTest` 8 例 + `e2e-ai-tools-test.ps1` 第 11 幕 7 项（把 `MAX_CONTINUATIONS` 调成 0 实测就红：79 项 3 失败） |
 
@@ -585,7 +585,7 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 | 套件 | 结果 |
 | --- | --- |
 | `flutter analyze` | No issues found |
-| `flutter test` | **189 例全过**（新增 `test/ai_chat_perf_test.dart` 5 例；4 例都验证过"去掉修复就红"） |
+| `flutter test` | **193 例全过**（新增 `ai_chat_perf_test.dart` 5 例 + `ai_message_render_test.dart` 4 例；前两例实测"修前同一条正文找到 2 个"） |
 | `pwsh -File scripts\server.ps1 test` | **361 例全过**（新增 `ToolRegistryTest` 3 例、`OutputContinuationTest` 8 例） |
 | `scripts\e2e-ai-tools-test.ps1` | **82 项全过**、exit 0（新增第 10 幕"重试不重复提问"8 项 + 第 11 幕"接着写"7 项；两幕都实测过退回去就红） |
 | `scripts\e2e-submit-test.ps1` / `e2e-capture-test.ps1` | 本轮未动提交 / 捕获链路，未重跑 |
@@ -773,3 +773,4 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
   压住开头 80 字符），否则会在同一个气泡里制造用户刚报过的"重复"；续写**不算工具轮**（`step` 不动），
   否则会把工具预算吃掉。改系统提示词/指令时记得 `CONTINUE_INSTRUCTION` 与假网关里的
   `CONTINUE_MARKER` 是同一句话，改了一边要改另一边。
+

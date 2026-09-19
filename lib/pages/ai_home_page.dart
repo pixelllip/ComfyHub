@@ -795,6 +795,8 @@ class _MessageBubble extends StatelessWidget {
     final canRetry = !m.isUser && (m.status == 'failed' || m.status == 'cancelled') && !sending;
     // 待批准的工具调用（M4）：气泡里要能点「批准 / 拒绝」
     final pending = toolCalls.where((c) => c.needsApproval).toList();
+    // 正文块只算一次：下面"退回整段正文"的兜底要用它判断"有序块与段是不是都没产出内容"
+    final body = _orderedBody(theme);
 
     return Column(
       crossAxisAlignment: align,
@@ -816,7 +818,7 @@ class _MessageBubble extends StatelessWidget {
               // （用户要求：完全按照消息获取顺序来，不重排）。
               // 后端给的 parts 就是权威的有序块；`segments` 是它的降级版本（只有思考与正文段），
               // 流式过程中 parts 还没到，就用它 + 末尾追加还没归位的工具卡。
-              ..._orderedBody(theme),
+              ...body,
               // 附件块（只出现在用户轮）
               for (final part in m.parts)
                 if (part.type == 'attachment')
@@ -828,9 +830,14 @@ class _MessageBubble extends StatelessWidget {
                       fileUrl: fileUrlOf(part.attachmentId),
                     ),
                   ),
-              // 没有段可用时（老数据 / 只有纯文本）退回整段正文，
+              // 上面两条路**都没产出内容**时才退回整段正文（老数据 / 只有纯文本），
               // 用户消息本来就是纯文本，不走 Markdown。
-              if (segments.isEmpty && m.text.isNotEmpty)
+              //
+              // ⚠️ 判据必须是"正文块为空"，**不能**写成 `segments.isEmpty`：
+              // 用户消息的 `segments` 是刻意传空的（它走 parts 那条路），那个条件对它**永远成立**，
+              // 于是正文被渲染两遍 —— 用户 2026-09-19 的截图就是它：带附件的消息里
+              // 同一句话上下各一份、图片正好夹在中间（`_orderedBody` 一份 + 这里一份）。
+              if (body.isEmpty && m.text.isNotEmpty)
                 m.isUser
                     ? Text(m.text)
                     : MarkdownText(m.text, style: theme.textTheme.bodyMedium, selectable: false),
