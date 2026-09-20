@@ -302,6 +302,51 @@ void main() {
     expect(find.byTooltip('ComfyUI 状态'), findsNothing);
   });
 
+  // 用户建议（2026-09-20）：「给右边栏除了实时进度以外的内容也拿类似容器分别包裹起来」。
+  //
+  // 以前只有"实时进度"是 Card，其余几块（模型能力 / ComfyUI / Skills / 长期记忆）
+  // 是直接摊在背景上的文字与列表 —— 一眼看不出哪几行属于同一块、到哪里算下一块。
+  testWidgets('右侧栏每块各自一个卡片容器（用户建议）', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page());
+    await tester.pumpAndSettle();
+
+    // 四块各有一张卡（Skills 那张是 `DecoratedSliver`：条目要懒构建，见页面里的注释）
+    for (final key in const [
+      'ai-panel-card-model',
+      'ai-panel-card-comfy',
+      'ai-panel-card-skills',
+      'ai-panel-card-memory',
+    ]) {
+      expect(find.byKey(Key(key)), findsOneWidget, reason: '$key 这块要有自己的容器');
+    }
+
+    // 三张能取到矩形的卡自上而下依次排开、互不重叠
+    final model = tester.getRect(find.byKey(const Key('ai-panel-card-model')));
+    final comfy = tester.getRect(find.byKey(const Key('ai-panel-card-comfy')));
+    final memory = tester.getRect(find.byKey(const Key('ai-panel-card-memory')));
+    expect(comfy.top, greaterThan(model.bottom), reason: '两块之间要断开');
+    expect(memory.top, greaterThan(comfy.bottom), reason: '两块之间要断开');
+
+    // 卡片外观统一：Skills 那张（sliver）与其余几张必须是同一套底色 / 圆角
+    final modelCard = tester
+        .widget<DecoratedBox>(
+          find.descendant(
+            of: find.byKey(const Key('ai-panel-card-model')),
+            matching: find.byType(DecoratedBox),
+          ).first,
+        )
+        .decoration as BoxDecoration;
+    final skillsCard = tester
+        .widget<DecoratedSliver>(find.byKey(const Key('ai-panel-card-skills')))
+        .decoration as BoxDecoration;
+    expect(skillsCard.color, modelCard.color, reason: 'Skills 那张卡的底色要跟别的卡一样');
+    expect(skillsCard.borderRadius, modelCard.borderRadius);
+  });
+
   // 用户建议（2026-09-20）：
   //   「聊天界面主体，距离两侧边栏空出了一大片空白，空间利用率低，也不美观。
   //     建议滚动条贴边放置，聊天气泡距离边缘 20 到 30 像素。」

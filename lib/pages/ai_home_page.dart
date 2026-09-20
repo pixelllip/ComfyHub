@@ -3113,30 +3113,28 @@ class _ComfyProgress extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Card(
-        margin: EdgeInsets.zero,
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    jobs.hasActivity ? Icons.play_circle_outline : Icons.dns_outlined,
-                    size: 16,
-                    color: jobs.hasActivity ? theme.colorScheme.primary : theme.colorScheme.outline,
-                  ),
-                  const SizedBox(width: 6),
-                  Text('实时进度', style: theme.textTheme.labelLarge),
-                  const Spacer(),
-                  if (jobs.queuePending > 0)
-                    Text('队列 ${jobs.queuePending}',
-                        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
-                ],
-              ),
+    return DecoratedBox(
+      decoration: panelCardDecoration(theme),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  jobs.hasActivity ? Icons.play_circle_outline : Icons.dns_outlined,
+                  size: 16,
+                  color: jobs.hasActivity ? theme.colorScheme.primary : theme.colorScheme.outline,
+                ),
+                const SizedBox(width: 6),
+                Text('实时进度', style: theme.textTheme.labelLarge),
+                const Spacer(),
+                if (jobs.queuePending > 0)
+                  Text('队列 ${jobs.queuePending}',
+                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+              ],
+            ),
               const SizedBox(height: 6),
               if (!jobs.comfyReachable)
                 Text(
@@ -3168,6 +3166,60 @@ class _ComfyProgress extends StatelessWidget {
               ],
             ],
           ),
+        ),
+      );
+  }
+}
+
+/// 右侧栏卡片的统一外观。
+///
+/// 刻意**手写**而不是直接 `Card`：Skills 那一块要罩住"标题 + 懒构建的条目列表"，
+/// 只能用 `DecoratedSliver`（它只吃 `Decoration`，给不了 `Card`）。
+/// 两处共用这一个函数，就不会出现"只有实时进度有卡片"或者几张卡长得不一样。
+/// 数值与主题里的 `cardTheme` 对齐（M3 的 surfaceContainerLow、14 圆角、
+/// outlineVariant@0.5 描边）。
+BoxDecoration panelCardDecoration(ThemeData theme) => BoxDecoration(
+      color: theme.colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+    );
+
+/// 右侧栏里的一块：统一的卡片容器 + 一行标题（可选右侧动作）。
+///
+/// 用户建议（2026-09-20）：「给右边栏除了实时进度以外的内容也拿类似容器分别包裹起来」。
+/// 包裹之后每块自己成一张卡，"哪几行属于同一块、到哪里算下一块"一眼可见。
+class _PanelCard extends StatelessWidget {
+  /// 标题行左侧的文字（为空则只画 [children]，由内容自带标题）。
+  final String? title;
+
+  /// 标题行右侧的动作（例如 ComfyUI 的刷新按钮）。
+  final Widget? trailing;
+
+  final List<Widget> children;
+
+  const _PanelCard({super.key, this.title, this.trailing, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: panelCardDecoration(theme),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (title != null) ...[
+              Row(
+                children: [
+                  Text(title!, style: theme.textTheme.labelLarge),
+                  if (trailing != null) ...[const Spacer(), trailing!],
+                ],
+              ),
+              const SizedBox(height: 6),
+            ],
+            ...children,
+          ],
         ),
       ),
     );
@@ -3280,183 +3332,226 @@ class _ContextPanelState extends State<_ContextPanel> {
     // 这里 watch 一次：右侧栏要跟着"实时进度"（AI 提交的任务）自动刷新
     final store = context.watch<AiWorkspaceStore>();
     final model = store.selectedModel;
+    final visibleSkills = _filteredSkills(store);
 
-    // CustomScrollView + SliverList：固定几段用 SliverToBoxAdapter，
-    // skills 可能有几十个，必须懒构建（`ListView(children: [...])` 会一次全建）。
+    // 右侧栏每一块**各自一个卡片容器**（用户建议 2026-09-20：「给右边栏除了实时进度
+    // 以外的内容也拿类似容器分别包裹起来」）。以前只有"实时进度"是 Card，其余几块是
+    // 直接摊在背景上的文字与列表，一眼看不出哪几行属于同一块、到哪里算下一块。
+    //
+    // 为什么不用 `Card`+`Column` 一把包住：skills 可能有几十个，**必须懒构建**
+    // （`ListView(children: [...])` 会一次全建）。所以 Skills 那张卡走
+    // `DecoratedSliver` + `SliverMainAxisGroup`：卡片背景罩住"标题 + 懒构建的条目"，
+    // 行数再多也只建看得见的那几条。外观与 [_PanelCard] 共用 [panelCardDecoration]。
     return CustomScrollView(
       slivers: [
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
           sliver: SliverList.list(children: [
             // 实时进度（用户"其他建议"第 1 条）：AI 提交的任务 / ComfyUI 队列就显示在最上面，
             // 用户在对话里说"帮我跑一张"之后，不用切到 ComfyUI 就能看到它跑到哪了。
             _ComfyProgress(store: store),
-            Text('模型能力', style: theme.textTheme.labelLarge),
-            const SizedBox(height: 6),
-            if (model == null)
-              Text('未选择模型', style: theme.textTheme.bodySmall)
-            else ...[
-              Text(model.displayName, style: theme.textTheme.bodyMedium),
-              const SizedBox(height: 4),
-              Wrap(
-                spacing: 4,
-                runSpacing: 4,
-                children: [
-                  for (final m in AiModality.values)
-                    _CapabilityChip(
-                      label: m.label,
-                      // 未声明的能力一律显示为不支持（AIH-011：不猜）
-                      supported: model.supports(m),
-                    ),
-                  _CapabilityChip(label: '工具', supported: model.tools),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                '来源：${model.capabilitySourceLabel}'
-                '${model.contextWindow != null ? ' · 上下文 ${model.contextWindow}' : ''}',
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-              ),
-            ],
-            const SizedBox(height: 16),
-            // 「ComfyUI」右边就是刷新按钮：它刷新的是 ComfyUI 状态，
-            // 以前挂在"上下文"标题右边，看着像是刷新整个面板（用户建议第 5 条）。
-            Row(
+            const SizedBox(height: 10),
+            _PanelCard(
+              key: const Key('ai-panel-card-model'),
+              title: '模型能力',
               children: [
-                Text('ComfyUI', style: theme.textTheme.labelLarge),
-                IconButton(
-                  tooltip: '刷新 ComfyUI 状态',
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                  padding: EdgeInsets.zero,
-                  onPressed: _loading ? null : _refresh,
-                  icon: const Icon(Icons.refresh, size: 16),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            if (_loading)
-              const LinearProgressIndicator(minHeight: 2)
-            else if (_error != null)
-              Text('查询失败：$_error', style: theme.textTheme.bodySmall)
-            else if (_status == null)
-              Text('暂无数据', style: theme.textTheme.bodySmall)
-            else ...[
-              _KV('连通性', _status!.comfyReachable ? '可达' : '不可达'),
-              _KV('运行中', '${_status!.queueRunning}'),
-              _KV('等待中', '${_status!.queuePending}'),
-              _KV('已捕获', '${_status!.capturedRuns} 次 / ${_status!.capturedMedia} 个产物'),
-              if (_status!.lastError != null)
-                Text(_status!.lastError!, style: theme.textTheme.labelSmall),
-            ],
-            const SizedBox(height: 16),
-            // Skills：名字就是真源，这里只是后端的只读视图（M5）。
-            // **投放口**才是"装 skill"的方式：把文件夹（或 .md）拷进下面这个目录，
-            // 应用启动时会自动登记（拷进来的文件没写 frontmatter 也会被补上）。
-            // 这里不再有「从 DSH 导入」按钮（用户明确要求去掉）。
-            //
-            // 用户"其他建议"第 2 条：**列表默认折叠**（装了十几个 skill 之后，
-            // 右侧栏会被它们占满），展开后才给搜索框 —— 找某个 skill 靠搜索，不靠翻。
-            Row(
-              children: [
-                InkWell(
-                  onTap: () => setState(() => _skillsOpen = !_skillsOpen),
-                  child: Row(
+                if (model == null)
+                  Text('未选择模型', style: theme.textTheme.bodySmall)
+                else ...[
+                  Text(model.displayName, style: theme.textTheme.bodyMedium),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 4,
+                    runSpacing: 4,
                     children: [
-                      Icon(_skillsOpen ? Icons.expand_less : Icons.expand_more,
-                          size: 16, color: theme.colorScheme.outline),
-                      Text('Skills', style: theme.textTheme.labelLarge),
+                      for (final m in AiModality.values)
+                        _CapabilityChip(
+                          label: m.label,
+                          // 未声明的能力一律显示为不支持（AIH-011：不猜）
+                          supported: model.supports(m),
+                        ),
+                      _CapabilityChip(label: '工具', supported: model.tools),
                     ],
                   ),
-                ),
-                const SizedBox(width: 4),
-                Text('${store.skills.length}',
-                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
-                const Spacer(),
-                IconButton(
-                  tooltip: '重新扫描投放口（自动登记新拷进来的 skill）',
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                  padding: EdgeInsets.zero,
-                  onPressed: store.skillsBusy ? null : () => _rescanSkills(),
-                  icon: const Icon(Icons.refresh, size: 16),
-                ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '来源：${model.capabilitySourceLabel}'
+                    '${model.contextWindow != null ? ' · 上下文 ${model.contextWindow}' : ''}',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                  ),
+                ],
               ],
             ),
-            if (_skillsOpen) ...[
-              const SizedBox(height: 4),
-              TextField(
-                controller: _skillSearch,
-                decoration: InputDecoration(
-                  isDense: true,
-                  hintText: '搜索 skill（名称 / 说明）',
-                  prefixIcon: const Icon(Icons.search, size: 16),
-                  suffixIcon: _skillSearch.text.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: '清空搜索',
-                          icon: const Icon(Icons.close, size: 16),
-                          onPressed: () => setState(() => _skillSearch.clear()),
-                        ),
-                  border: const OutlineInputBorder(),
-                ),
-                onChanged: (_) => setState(() {}),
+            const SizedBox(height: 10),
+            // 「ComfyUI」右边就是刷新按钮：它刷新的是 ComfyUI 状态，
+            // 以前挂在"上下文"标题右边，看着像是刷新整个面板（用户建议第 5 条）。
+            _PanelCard(
+              key: const Key('ai-panel-card-comfy'),
+              title: 'ComfyUI',
+              trailing: IconButton(
+                tooltip: '刷新 ComfyUI 状态',
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                padding: EdgeInsets.zero,
+                onPressed: _loading ? null : _refresh,
+                icon: const Icon(Icons.refresh, size: 16),
               ),
-            ],
-            _SkillDropIn(store: store, onOpen: () => _openSkillsFolder(), onCopy: () => _copySkillsPath()),
-            if (store.skillsBusy) const LinearProgressIndicator(minHeight: 2),
-            if (store.skillsError != null)
-              Text('Skills 加载失败：${store.skillsError}', style: theme.textTheme.bodySmall),
+              children: [
+                if (_loading)
+                  const LinearProgressIndicator(minHeight: 2)
+                else if (_error != null)
+                  Text('查询失败：$_error', style: theme.textTheme.bodySmall)
+                else if (_status == null)
+                  Text('暂无数据', style: theme.textTheme.bodySmall)
+                else ...[
+                  _KV('连通性', _status!.comfyReachable ? '可达' : '不可达'),
+                  _KV('运行中', '${_status!.queueRunning}'),
+                  _KV('等待中', '${_status!.queuePending}'),
+                  _KV('已捕获', '${_status!.capturedRuns} 次 / ${_status!.capturedMedia} 个产物'),
+                  if (_status!.lastError != null)
+                    Text(_status!.lastError!, style: theme.textTheme.labelSmall),
+                ],
+              ],
+            ),
+            const SizedBox(height: 10),
           ]),
         ),
-        if (!_skillsOpen)
-          // 折叠时不列条目，只留一句提示（用户想找 skill 就展开）
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-            sliver: SliverToBoxAdapter(
-              child: Text(
-                store.skills.isEmpty
-                    ? '还没有 Skill。把 skill 文件夹（或一个 .md）拷进上面的目录再点刷新，'
-                        '也可以让 AI 用 register_skill 注册。'
-                    : '列表已折叠（${store.skills.length} 个）。点上面的「Skills」展开并搜索。',
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-              ),
-            ),
-          )
-        else if (_filteredSkills(store).isEmpty)
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-            sliver: SliverToBoxAdapter(
-              child: Text(
-                store.skills.isEmpty
-                    ? '还没有 Skill。把 skill 文件夹（或一个 .md）拷进上面的目录再点刷新，'
-                        '也可以让 AI 用 register_skill 注册。'
-                    : '没有匹配「${_skillSearch.text.trim()}」的 Skill。',
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-              ),
-            ),
-          )
-        else
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            sliver: SliverList.builder(
-              itemCount: _filteredSkills(store).length,
-              itemBuilder: (context, i) {
-                final skill = _filteredSkills(store)[i];
-                return _SkillRow(
-                  skill: skill,
-                  onDelete: () => _deleteSkill(skill),
-                );
-              },
+        // Skills：名字就是真源，这里只是后端的只读视图（M5）。
+        // **投放口**才是"装 skill"的方式：把文件夹（或 .md）拷进下面这个目录，
+        // 应用启动时会自动登记（拷进来的文件没写 frontmatter 也会被补上）。
+        // 这里不再有「从 DSH 导入」按钮（用户明确要求去掉）。
+        //
+        // 用户"其他建议"第 2 条：**列表默认折叠**（装了十几个 skill 之后，
+        // 右侧栏会被它们占满），展开后才给搜索框 —— 找某个 skill 靠搜索，不靠翻。
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+          sliver: DecoratedSliver(
+            key: const Key('ai-panel-card-skills'),
+            decoration: panelCardDecoration(theme),
+            sliver: SliverMainAxisGroup(
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            InkWell(
+                              onTap: () => setState(() => _skillsOpen = !_skillsOpen),
+                              child: Row(
+                                children: [
+                                  Icon(_skillsOpen ? Icons.expand_less : Icons.expand_more,
+                                      size: 16, color: theme.colorScheme.outline),
+                                  Text('Skills', style: theme.textTheme.labelLarge),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Text('${store.skills.length}',
+                                style: theme.textTheme.labelSmall
+                                    ?.copyWith(color: theme.colorScheme.outline)),
+                            const Spacer(),
+                            IconButton(
+                              tooltip: '重新扫描投放口（自动登记新拷进来的 skill）',
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                              padding: EdgeInsets.zero,
+                              onPressed: store.skillsBusy ? null : () => _rescanSkills(),
+                              icon: const Icon(Icons.refresh, size: 16),
+                            ),
+                          ],
+                        ),
+                        if (_skillsOpen) ...[
+                          const SizedBox(height: 4),
+                          TextField(
+                            controller: _skillSearch,
+                            decoration: InputDecoration(
+                              isDense: true,
+                              hintText: '搜索 skill（名称 / 说明）',
+                              prefixIcon: const Icon(Icons.search, size: 16),
+                              suffixIcon: _skillSearch.text.isEmpty
+                                  ? null
+                                  : IconButton(
+                                      tooltip: '清空搜索',
+                                      icon: const Icon(Icons.close, size: 16),
+                                      onPressed: () => setState(() => _skillSearch.clear()),
+                                    ),
+                              border: const OutlineInputBorder(),
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ],
+                        _SkillDropIn(
+                          store: store,
+                          onOpen: () => _openSkillsFolder(),
+                          onCopy: () => _copySkillsPath(),
+                        ),
+                        if (store.skillsBusy) const LinearProgressIndicator(minHeight: 2),
+                        if (store.skillsError != null)
+                          Text('Skills 加载失败：${store.skillsError}',
+                              style: theme.textTheme.bodySmall),
+                      ],
+                    ),
+                  ),
+                ),
+                if (!_skillsOpen)
+                  // 折叠时不列条目，只留一句提示（用户想找 skill 就展开）
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
+                    sliver: SliverToBoxAdapter(
+                      child: Text(
+                        store.skills.isEmpty
+                            ? '还没有 Skill。把 skill 文件夹（或一个 .md）拷进上面的目录再点刷新，'
+                                '也可以让 AI 用 register_skill 注册。'
+                            : '列表已折叠（${store.skills.length} 个）。点上面的「Skills」展开并搜索。',
+                        style:
+                            theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                      ),
+                    ),
+                  )
+                else if (visibleSkills.isEmpty)
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
+                    sliver: SliverToBoxAdapter(
+                      child: Text(
+                        store.skills.isEmpty
+                            ? '还没有 Skill。把 skill 文件夹（或一个 .md）拷进上面的目录再点刷新，'
+                                '也可以让 AI 用 register_skill 注册。'
+                            : '没有匹配「${_skillSearch.text.trim()}」的 Skill。',
+                        style:
+                            theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                      ),
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(4, 2, 4, 8),
+                    sliver: SliverList.builder(
+                      itemCount: visibleSkills.length,
+                      itemBuilder: (context, i) => _SkillRow(
+                        skill: visibleSkills[i],
+                        onDelete: () => _deleteSkill(visibleSkills[i]),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
+        ),
         // 长期记忆（M6）：每次对话都会带上；AI 也能用 remember 追加一条
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
           sliver: SliverToBoxAdapter(
-            child: _MemoryPanel(
-              store: store,
-              onEdit: () => _editMemory(),
+            child: _PanelCard(
+              key: const Key('ai-panel-card-memory'),
+              children: [
+                _MemoryPanel(
+                  store: store,
+                  onEdit: () => _editMemory(),
+                ),
+              ],
             ),
           ),
         ),
