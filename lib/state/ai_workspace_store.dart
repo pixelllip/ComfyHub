@@ -189,6 +189,10 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   bool get fullPermission => permissionMode == AiToolPolicy.modeFull;
 
+  /// 当前权限档的界面名字（用户建议 ①，2026-09-20：正在生成的回复气泡里要能看见它）。
+  String get permissionLabel =>
+      fullPermission ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel;
+
   /// 正在切换权限档：按钮据此禁用，避免连点。
   bool permissionBusy = false;
 

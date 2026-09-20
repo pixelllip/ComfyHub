@@ -828,6 +828,7 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
   bool? _cachedSending;
   int? _cachedLive;
   String? _cachedStreamingId;
+  String? _cachedPermission;
 
   @override
   Widget build(BuildContext context) {
@@ -836,11 +837,16 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
     // 「是不是正在生成的那一条」也要进闸门：不然"这一轮换了哪条消息在流"
     // 时，旧气泡上的转圈动画会留在原地（父级重建了、缓存却没失效）。
     final streamingId = store.streamingMessage?.id;
+    final generating = !widget.message.isUser && streamingId != null && streamingId == widget.message.id;
+    // 权限档同样要进闸门（用户建议 ①）：**生成过程中切档**要当场反映到气泡里，
+    // 它不在 `message` 实例里、也不是 `liveRevision`，漏掉就会"切了但字没变"。
+    final permission = generating ? store.permissionMode : '';
     final unchanged = _cached != null &&
         identical(_cachedMessage, widget.message) &&
         _cachedSending == store.sending &&
         _cachedLive == live &&
-        _cachedStreamingId == streamingId;
+        _cachedStreamingId == streamingId &&
+        _cachedPermission == permission;
     if (unchanged) return _cached!;
 
     final message = widget.message;
@@ -848,13 +854,17 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
     _cachedSending = store.sending;
     _cachedLive = live;
     _cachedStreamingId = streamingId;
+    _cachedPermission = permission;
     aiChatBubbleBuilds++;
     _cached = RepaintBoundary(
       child: _MessageBubble(
         message: message,
         sending: store.sending,
         // 「AI 正在生成」的转圈动画只画在**正在流的那一条**上（用户建议 2026-09-20）
-        generating: !message.isUser && streamingId != null && streamingId == message.id,
+        generating: generating,
+        // 本轮权限档（用户建议 ①，2026-09-20）：**实时**读 store，就在正在生成的气泡里显示。
+        // 只在流式期间给值 —— 历史气泡上挂"现在的档位"是错的（后端没按轮存过权限档）。
+        permissionLabel: generating ? store.permissionLabel : '',
         // 这条回复当时用的是哪个模型（用户建议 2026-09-20）
         modelLabel: message.isUser ? '' : store.modelLabelOf(message.modelId),
         onRetry: store.retry,
@@ -893,6 +903,13 @@ class _MessageBubble extends StatelessWidget {
   /// 这条就是**正在流式生成**的那一条（用户建议 2026-09-20）：
   /// 「AI 正在生成」只在它的底部画一个转圈动画。
   final bool generating;
+
+  /// 正在生成期间显示的本轮权限档（用户建议 ①，2026-09-20）。
+  ///
+  /// 这里给的是**这一刻**的档位（`store.permissionMode` 实时读），所以用户在
+  /// 生成过程中切档，气泡里的字会立刻跟着变 —— 这正是"实时权限切换并展示"要的效果。
+  /// 非流式期间一律空：后端没有按轮存过权限档，历史气泡上挂"现在的档位"是假的。
+  final String permissionLabel;
 
   /// 这条回复**当时**用的模型名（用户建议 2026-09-20）。
   ///
@@ -936,6 +953,7 @@ class _MessageBubble extends StatelessWidget {
     required this.message,
     required this.sending,
     this.generating = false,
+    this.permissionLabel = '',
     this.modelLabel = '',
     required this.onRetry,
     this.toolCalls = const [],
@@ -1121,13 +1139,42 @@ class _MessageBubble extends StatelessWidget {
                     // 已经有内容时贴在末尾，留一点呼吸位。
                     top: (body.isEmpty && m.text.isEmpty && toolCalls.isEmpty) ? 0 : 6,
                   ),
-                  child: SizedBox(
-                    width: 13,
-                    height: 13,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: theme.colorScheme.primary,
-                    ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 13,
+                        height: 13,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                      // 本轮权限档（用户建议 ①）：就贴在这个转圈旁边。
+                      // 用户在生成过程中切档，这行字**立刻**跟着变 ——
+                      // 不用等这一轮结束，也不用去输入区低头找那个按钮。
+                      if (permissionLabel.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        Icon(
+                          permissionLabel == AiToolPolicy.modeFullLabel
+                              ? Icons.gpp_maybe_outlined
+                              : Icons.how_to_reg_outlined,
+                          size: 13,
+                          color: permissionLabel == AiToolPolicy.modeFullLabel
+                              ? theme.colorScheme.error
+                              : theme.colorScheme.outline,
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          '本轮权限：$permissionLabel',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: permissionLabel == AiToolPolicy.modeFullLabel
+                                ? theme.colorScheme.error
+                                : theme.colorScheme.outline,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               // 工具卡已经在 [_orderedBody] 里按 parts 的真实顺序插好了 ——

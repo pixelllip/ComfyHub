@@ -22,6 +22,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:viewer/core/ai_api_client.dart';
 import 'package:viewer/core/settings_store.dart';
+import 'package:viewer/models/ai_models.dart';
 import 'package:viewer/pages/ai_home_page.dart';
 import 'package:viewer/state/ai_workspace_store.dart';
 import 'package:viewer/widgets/markdown.dart';
@@ -49,6 +50,9 @@ class _Fake {
   /// 助手消息的完整正文（`message.completed` / 历史消息都用它）。
   final String text;
   int runCount = 0;
+
+  /// 权限档（用户建议 ① 的用例要验证"生成中切档"）：默认 `ask`。
+  String permissionMode = 'ask';
 
   /// 冷启动落在一条空会话上（设计如此），历史要点开左侧列表里的那条才进来。
   static const String historyConversationId = 'c1';
@@ -224,6 +228,26 @@ class _Fake {
       ];
     }
     if (path == '/api/ai/skills') return <Object>[];
+    // 权限档（用户建议 ①）：GET 给当前档，PUT 收下新的档再回读 ——
+    // 与后端 `PUT /api/ai/tools/policy` 同语义，否则切档会静默回落。
+    if (path == '/api/ai/tools/policy') {
+      if (method == 'PUT') {
+        permissionMode = ((jsonDecode(requestBody ?? '{}') as Map)['permissionMode'] ?? '')
+            .toString()
+            .trim();
+        if (permissionMode.isEmpty) permissionMode = 'ask';
+      }
+      return {
+        'writeRoots': <Object>[],
+        'readRoots': <Object>[],
+        'overrides': <String, String>{},
+        'maxToolSteps': 8,
+        'maxCallsPerRun': 16,
+        'maxReadBytes': 2 * 1024 * 1024,
+        'maxWriteBytes': 4 * 1024 * 1024,
+        'permissionMode': permissionMode,
+      };
+    }
     if (path == '/api/ai/skills/roots') {
       return {
         'userRoot': r'D:\ComfyHub\storage\ai\skills',
@@ -963,6 +987,56 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(CircularProgressIndicator), findsNothing,
         reason: '这一轮结束后要收掉（否则会一直转下去）');
+  });
+
+  // 用户建议（2026-09-20）①：「实时权限切换，并在正在运行的回复气泡中展示相关信息」。
+  //
+  // "实时"是可观察的事实：生成**过程中**切档，那个气泡里的字立刻跟着变 ——
+  // 不是等这一轮结束、也不用去输入区低头找按钮。
+  testWidgets('生成中切权限档：正在生成的气泡里立刻显示新档位', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final events = StreamController<List<int>>();
+    await tester.pumpWidget(await _homePage(_streamingBackend(_Fake(), events.stream)));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, '帮我改一下工作流');
+    await tester.tap(find.text('发送'));
+    await tester.pump();
+    events.add(utf8.encode(
+      _sse(1, 'run.started', '{"runId":"r1"}') +
+          _sse(2, 'text.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 8)})),
+    ));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // 默认档是「询问」，气泡里要写着
+    expect(find.textContaining('本轮权限：${AiToolPolicy.modeAskLabel}'), findsOneWidget);
+
+    // 生成**还没结束**就切档（转圈动画会让 pumpAndSettle 超时，这里只能 pump）
+    await tester.tap(find.text(AiToolPolicy.modeAskLabel));
+    await tester.pump(const Duration(milliseconds: 100));
+    final fullItem = find.text(AiToolPolicy.modeFullLabel).last;
+    await tester.ensureVisible(fullItem);
+    await tester.tap(fullItem);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.textContaining('本轮权限：${AiToolPolicy.modeFullLabel}'), findsOneWidget,
+        reason: '切档要**当场**反映到正在生成的回复气泡里（用户建议 ①）');
+
+    // 这一轮结束：那个"实时"标记跟着转圈一起收掉（后端没按轮存权限档，
+    // 留下来就是一条假的历史记录）
+    events.add(utf8.encode(
+      _sse(3, 'message.completed',
+          jsonEncode({'messageId': 'a1', 'text': '改好了。', 'steps': 0, 'reasoningEffort': 'off'})) +
+          _sse(4, 'run.completed', '{"runId":"r1"}'),
+    ));
+    unawaited(events.close());
+    await tester.pumpAndSettle();
+    expect(find.textContaining('本轮权限：'), findsNothing,
+        reason: '历史气泡上挂"现在的档位"是假的，必须收掉');
   });
 }
 
