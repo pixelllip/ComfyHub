@@ -172,7 +172,11 @@ class CivitaiSearch(
             append(base).append("/api/v1/models?")
             append("query=").append(enc(q))
             append("&limit=").append(limit.coerceIn(1, MAX_LIMIT))
-            append("&sort=Most Downloaded&period=AllTime")
+            // ⚠️ 这里**必须**过 enc：`Most Downloaded` 里有个空格，
+            // 直接拼进 URI 会抛 `URISyntaxException: Illegal character in query`
+            // （本机测试当场抓到过一次 —— 拼 URL 的每一段都得当成"用户输入"对待）
+            append("&sort=").append(enc("Most Downloaded"))
+            append("&period=AllTime")
             type?.takeIf { it.isNotBlank() }?.let { append("&types=").append(enc(it.trim())) }
             // 走 .red 时把 nsfw 明写进查询串：这正是"模拟用户真机搜索"要做的那一步
             if (allowNsfw) append("&nsfw=true")
@@ -231,7 +235,9 @@ class CivitaiSearch(
             creator = obj["creator"]?.let { runCatching { it.jsonObject }.getOrNull() }?.str("username"),
             downloads = stats?.get("downloadCount")?.jsonPrimitive?.intOrNull ?: 0,
             thumbsUp = stats?.get("thumbsUpCount")?.jsonPrimitive?.intOrNull ?: 0,
-            pageUrl = "$safeBase/models/$id",
+            // 链接给**正式站**，不是本次请求用的 base：base 可以被环境变量指到本机假服务 /
+            // 自建代理（测试就是这么用的），把那种地址写进给用户的链接是错的
+            pageUrl = "$SAFE_BASE_URL/models/$id",
             description = obj.str("description").orEmpty()
                 .replace(Regex("<[^>]+>"), " ")
                 .replace(Regex("\\s+"), " ")
@@ -246,7 +252,13 @@ class CivitaiSearch(
     // -----------------------------------------------------------------------
 
     private suspend fun get(url: String, token: String?): JsonObject {
-        val builder = HttpRequest.newBuilder(URI(url))
+        // URL 拼错了（空格、中文没编码…）不该变成一个裸的 URISyntaxException 冒到 Run 外面：
+        // 那就是一次"工具失败"，按稳定错误码如实报给模型
+        val uri = runCatching { URI(url) }.getOrElse { e ->
+            log.warn("Civitai 搜索 URL 不合法: {}", e::class.simpleName)
+            throw ToolFailure("CIVITAI_FAILED", "搜索地址拼装失败（${e::class.simpleName}）；这是本机的 bug，请如实告诉用户")
+        }
+        val builder = HttpRequest.newBuilder(uri)
             .timeout(Duration.ofSeconds(timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS)))
             .header("Accept", "application/json")
             .GET()
