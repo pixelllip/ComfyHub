@@ -1260,12 +1260,6 @@ class AiMemory {
       .toList();
 
   static final _datePrefix = RegExp(r'^\[\d{4}-\d{2}-\d{2}]\s*');
-
-  /// 面板上的一行预览（第一条记忆）。
-  ///
-  /// 走 [entries] 而不是直接切原文：`- ` 与 `[日期] ` 前缀只是存储用的标记，
-  /// 预览里再显示一遍方括号反而把正文挤没了。
-  String get preview => entries.isEmpty ? '' : entries.first;
 }
 
 // ---------------------------------------------------------------------------

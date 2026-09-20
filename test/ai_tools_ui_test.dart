@@ -497,7 +497,7 @@ void main() {
     expect(find.textContaining('自动登记 1 个'), findsWidgets, reason: '要如实说这次自动登记了什么');
   });
 
-  testWidgets('(a3) 长期记忆：面板显示条数与预览，编辑弹窗能改 / 加一条 / 清空', (tester) async {
+  testWidgets('(a3) 长期记忆：面板只显示条数，编辑弹窗能改 / 加一条 / 清空', (tester) async {
     tester.view.physicalSize = const Size(1600, 1400);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -508,7 +508,10 @@ void main() {
 
     expect(find.text('长期记忆'), findsOneWidget);
     expect(find.text('2 条'), findsOneWidget);
-    expect(find.textContaining('用户偏好 4:3 画幅'), findsWidgets, reason: '第一条记忆要做预览');
+    // 用户建议（2026-09-20）：「右边栏长期记忆，不显示记忆内容的预览」——
+    // 右侧栏一直摊在屏幕上，记忆正文（私下的偏好与上下文）不该印在上面
+    expect(find.textContaining('用户偏好 4:3 画幅'), findsNothing,
+        reason: '面板上不许出现记忆正文，要看就点开编辑弹窗');
 
     // 打开编辑器 → 列表视图默认可见（2026-09-18 起：搜索 + 单条删除走列表视图）
     await tester.tap(find.byTooltip('查看 / 编辑长期记忆'));
@@ -758,9 +761,10 @@ void main() {
     await tester.tap(find.text('发送'));
     await tester.pumpAndSettle();
 
-    // 关键断言：不用切页面、不用手动刷新，条数与预览当场跟上
+    // 关键断言：不用切页面、不用手动刷新，条数当场跟上（面板上不印正文，只认条数）
     expect(find.text('1 条'), findsOneWidget, reason: 'AI 记完一条，面板条数必须当场变');
-    expect(find.textContaining('画幅一律 4:3'), findsWidgets, reason: '预览也要跟着更新');
+    expect(find.textContaining('画幅一律 4:3'), findsNothing,
+        reason: '面板上不印记忆正文（用户建议 2026-09-20）');
     expect(rec.calls.where((c) => c == 'GET /api/ai/memory').length, greaterThan(1),
         reason: '必须真的重新拉了一次记忆（不是界面自己瞎猜一个条数）');
   });

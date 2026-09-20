@@ -3733,7 +3733,12 @@ class _SkillDropIn extends StatelessWidget {
   }
 }
 
-/// 右侧栏的「长期记忆」：条数 + 第一条预览 + 编辑入口。
+/// 右侧栏的「长期记忆」：条数 + 说明 + 编辑入口。
+///
+/// **刻意不在这里印记忆正文**（用户建议 2026-09-20：「右边栏长期记忆，
+/// 不显示记忆内容的预览」）：记忆里存的多半是私下的偏好与上下文，而右侧栏是
+/// **一直摊在屏幕上**的一面墙 —— 把正文印上去，任何路过屏幕的人都看得到。
+/// 要看内容就点右边的编辑按钮进弹窗（`_MemoryEditorDialog`）。
 class _MemoryPanel extends StatelessWidget {
   final AiWorkspaceStore store;
   final VoidCallback onEdit;
@@ -3768,19 +3773,9 @@ class _MemoryPanel extends StatelessWidget {
           ],
         ),
         Text(
-          '每次对话都会带上它；AI 也能用 remember 追加一条。',
+          '每次对话都会带上它；AI 也能用 remember 追加一条。点右上角的图标查看 / 编辑内容。',
           style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
         ),
-        if (memory.entryCount > 0)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              memory.preview,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall,
-            ),
-          ),
         if (store.memoryError != null)
           Text('长期记忆不可用：${store.memoryError}', style: theme.textTheme.bodySmall),
       ],
