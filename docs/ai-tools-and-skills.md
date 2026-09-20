@@ -52,7 +52,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `comfy_use_attachment` | comfy | **ask** | 把用户发来的**图片附件**投放进 ComfyUI 的 `input/` 目录并返回真实文件名（用户 bug，2026-09-17）：图生图 / 参考图的唯一正路，默认要审批（往用户机器上写文件） |
 | `comfy_check_inputs` | comfy | allow | **体检一份工作流：哪些输入还等着外部给**（用户建议 ⑤，2026-09-20）：把 `comfy_get_run` 的 `raw` / `comfy_load_workflow` 的 `apiGraph` 传进来，逐条列出 `节点id.输入名` / 节点类 / 缺什么类型 / 现在是什么值 / 下一步该怎么办，分成 `image` / `video` / `connection` / `parameter` 四类。**只读**。用户现场是"用户没提供参考图，但工作流的节点用到参考图"——没有它，模型会带着缺口硬提交，ComfyUI 只回一句缺输入。判据刻意保守：只有"连线型空着 / 值缺失"才算缺口，已经填好值的不报；`Save*` / `Preview*` 这类输出节点不算缺口。本次带了图附件时，图片类位置进 `suppliedByAttachment`（投放就能解决），不混进"要用户补" |
 | `web_search` | web | **ask** | 联网搜索（Keenable）：用自然语言描述"你想要的那一页"（语义索引，别堆关键词），返回**带编号与链接**的网页正文（`[n] 标题 (URL)` + 抽取好的正文），引用时给编号与 URL。**出厂免密钥**；查询词会离开本机，所以默认要批准；一次回复最多 8 次（独立预算 `maxWebQueriesPerRun`）。一条没搜到报 `NO_RESULTS` 并要求模型如实说明 |
-| `web_fetch` | web | **ask** | 把一个**公开**网页取回来读全文（服务端去样板转 markdown，默认 20000 字符上限）。目标 URL 出网前先过 `EndpointGuard` 的 PUBLIC 判定：内网 / 本机 / 云元数据一律 `FETCH_TARGET_DENIED`。正文套**不可信数据**横幅后才给模型 |
+| `web_fetch` | web | **ask** | 把一个**公开**网页取回来读全文（服务端去样板转 markdown，默认 20000 字符上限）。目标 URL 出网前先过 `EndpointGuard` 的 PUBLIC 判定：内网 / 本机 / 云元数据一律 `FETCH_TARGET_DENIED`。正文套**不可信数据**横幅后才给模型。**它不是模型库检索**：要模型 / LoRA 的字段用 `civitai_search`（见 §2.0.3） |
 | `civitai_search` | web | **ask** | 搜 **Civitai 模型库**（用户建议 ④⑦，2026-09-20）：每条结果都给"**拿来做什么**"——类型 / 底模 / 简介 / 触发词 / 下载量 / 链接，并放进结构化 `meta.models`（界面与"登记进长期记忆"直接可用）。普通搜索走 `civitai.com`（免令牌）；**NSFW 必须显式 `allowNsfw=true`**，走 `civitai.red`：配了令牌（凭据名 `civitai`，或环境变量 `CIVITAI_API_KEY`）就带上登录态，**没配也照搜**，但结果里会写明"本次是匿名通道"（2026-09-20 线上核对后由用户决定放宽，见第 9 节第 11 条）。与 `web_search` / `web_fetch` **共用同一个联网额度** |
 | `comfy_prune_workflow` | comfy | allow | **给一份工作流做减法 / 加法**（用户建议 ②，2026-09-20）：`removeFrom` 点名要摘的输入（`"89.image"`）或节点（`"89"`），后端做**确定性图运算**——摘掉目标、把指着它的线接回它自己的上游、把"从输出再也走不到又不是孤立节点"的那些级联收掉；`injections` 往一条线上插节点（典型是显存不足时的 `SageAttention`，接哪些输入由 `/object_info` 算）。返回**改好的完整图** + `removed` / `rewired` / `injected` / `unresolvedInputs` / `openInputs` / `runnable`。**只读**（不改用户的文件）；`runnable=false` 时工具会明确说"别硬提交" |
 | `ask_user_question` | ask | allow | **当场提问、不中断当前回答**（用户建议 ⑥，2026-09-20）：把问题（+ 2~4 个可点选项）递到界面，**挂在原地等**用户答，答完把答案当工具结果喂回模型，**同一个 Run 接着往下做**。等不到（超时 / 用户跳过 / Run 结束）时如实返回"用户还没有回答"，模型据此基于已有信息继续。同一句话问两遍会被 `QUESTION_ALREADY_ASKED` 挡掉。既不改盘也不出网，所以默认 allow |
@@ -130,6 +130,25 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 测试怎么钉的：`ToolRegistryTest`（预算 / 审批 / 横幅 / SEARCH_DISABLED / CIVITAI_DISABLED / 结构化 meta，假客户端不碰 HTTP）+
 `KeenableSearchTest`（本机起假服务钉路径 / 头 / 错误映射 / 内网拒绝，**不出网**）+
 `WorkflowInputsTest`（待补输入的判据：该报的不漏、填好的不报，**不碰 HTTP**）。
+
+### 2.0.3 `civitai_search` 为什么不和 `web_search` / `web_fetch` 合并（2026-09-20 用户问）
+
+用户的原话：「civitai_search 跟 web_fetch，有没有合并的可能？感觉有点重复造轮子。」
+**结论是不合并**，三者的动作根本不是一回事：
+
+| | 打的是什么 | 回的是什么 | 能不能带登录态 |
+| --- | --- | --- | --- |
+| `web_search` | Keenable 的语义索引 | 若干网页的**片段** + 链接 | 不适用 |
+| `web_fetch` | 某个 URL 的**那一页** | 去样板后的 markdown 正文 | 不能（不接受自定义头） |
+| `civitai_search` | Civitai 的**模型检索接口** | 结构化字段：类型 / 底模 / 触发词 / 下载量 / 是否 NSFW + 链接 | 能（`Authorization: Bearer`） |
+
+真要"合并"，模型就只能拿 `web_fetch` 去拼 `civitai.com/api/v1/models?query=…`：
+拿到的是转成 markdown 的 JSON（字段全糊在一起）、带不上令牌、
+还得自己猜 `types` 的大小写与 `limit` 上限（上游对这些是 400 报错的）。
+所以保留成两个工具，**把边界写进三处**：工具描述（`web_fetch` / `civitai_search` /
+`web_search` 各自点名该走哪条路）、系统提示第 17 条、以及本表。
+判据：`ToolRegistryTest` 的「web_fetch 与 civitai_search 的分工写在工具描述里」
+（顺带钉住"工具描述被系统提示截断到 300 字时，数据边界那句不能被挤掉"）。
 
 > 曾考虑过的替代方案 open-webSearch（Node MCP 爬虫聚合）记录在案：中文引擎是真优势，
 > 但它需要一个常驻 Node 进程（实施方案 §5.2 明确排除 sidecar）且爬虫会随引擎改版静默坏掉。

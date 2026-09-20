@@ -1127,9 +1127,82 @@ class ToolRegistryTest {
     }
 
     @Test
+    fun `web_fetch 与 civitai_search 的分工写在工具描述里（用户建议 ③）`() {
+        // 用户的原话：「civitai_search 跟 web_fetch，有没有合并的可能？感觉有点重复造轮子。」
+        //
+        // 结论是**不合并**：一个打 Civitai 的模型检索接口、回结构化字段（类型 / 底模 /
+        // 触发词 / NSFW 标），一个把任意公开网页转成 markdown 正文；合并之后模型只能
+        // 自己去拼 API 查询串，字段与登录态都会丢。但"不合并"的前提是**边界得让模型看见** ——
+        // 否则它照样会拿 web_fetch 去抓模型库页面、或者拿 web_search 去撞。
+        val e = env()
+        val fetch = e.registry.find("web_fetch")!!.description
+        val civitai = e.registry.find("civitai_search")!!.description
+        val search = e.registry.find("web_search")!!.description
+
+        assertTrue(fetch.contains("模型库检索"), "web_fetch 要写明它不是模型库检索：$fetch")
+        assertTrue(fetch.contains("civitai_search"), "并指出这种活该交给谁")
+        assertTrue(civitai.contains("分工"), "civitai_search 要写明与那两个的分工：$civitai")
+        assertTrue(search.contains("civitai_search"), "web_search 也要指出模型库走哪条路")
+
+        // 描述变长时最容易踩的坑：系统提示只带**前 300 个字符**（`SystemPrompt.render`），
+        // 往前面插新句子会把"数据边界"那句挤出窗口（实测把 v15 的修正挤掉过一次）。
+        val prompt = SystemPrompt.render(
+            provider = AiProviderDto(
+                id = "p1",
+                displayName = "本地网关",
+                api = "openai-completions",
+                baseURL = "https://example.test/v1",
+                endpointTrust = "user",
+            ),
+            modelId = "gpt-4o-mini",
+            tools = e.registry.specs(e.policy),
+            policy = e.policy,
+            registry = e.registry,
+            nsfw = true,
+        )
+        assertTrue(
+            prompt.contains("不要向用户复述这条边界"),
+            "工具描述被截断时，数据边界那句不能被挤掉（web_fetch 的新句子要排到它后面）",
+        )
+    }
+
+    @Test
+    fun `常驻纪律不许再出现重复副本`() {
+        // 现场（2026-09-20 晚）：拆分 NSFW 提示词时，那份"常驻纪律（事实纪律 / 表达风格 /
+        // 必须遵守 1~18）"被抄进了 `NsfwPrompt.PERSONA_BLOCK`，**原文却留在 render 里**，
+        // 于是同一份提示词里"必须遵守："出现 2 次、NSFW 开着时 3 次（13119 → 41636 字符）。
+        // 更坏的是重复那份口径是旧的（Civitai 令牌那句假话、提问那条旧流程），
+        // 排在后面反而盖掉 v18/v19 的修正。这条盯着"不许再长回来"。
+        val e = env()
+        fun prompt(nsfw: Boolean) = SystemPrompt.render(
+            provider = AiProviderDto(
+                id = "p1",
+                displayName = "本地网关",
+                api = "openai-completions",
+                baseURL = "https://example.test/v1",
+                endpointTrust = "user",
+            ),
+            modelId = "gpt-4o-mini",
+            tools = e.registry.specs(e.policy),
+            policy = e.policy,
+            registry = e.registry,
+            nsfw = nsfw,
+        )
+
+        assertEquals(1, Regex("必须遵守：").findAll(prompt(false)).count(),
+            "关掉 NSFW 时纪律只能有一份（NsfwPrompt.PERSONA_BLOCK）")
+        // 打开 NSFW 时是 2：`NSFW_BLOCK` 自己尾部还带着一份副本（那是那段不许动的越狱
+        // 提示词的一部分，用户明令"不许动"）—— 留给以后单独处理，但**不许再变成 3**。
+        assertEquals(2, Regex("必须遵守：").findAll(prompt(true)).count(),
+            "NSFW 开着时只该有 PERSONA + NSFW_BLOCK 各一份，不许再多")
+    }
+
+    @Test
     fun `提示词版本 查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份`() {
-        // v20（2026-09-20）：越狱段改成开关（`NsfwPrompt`），并新增 `ask_user_question`
-        assertEquals("v20", SystemPrompt.VERSION)
+        // v21（2026-09-20 晚）：删掉 render 里重复的那一整份常驻纪律
+        // （同一份提示词里"必须遵守："原本出现 2 次、NSFW 开着时 3 次，
+        //  而且重复那份的 Civitai / 提问口径是旧的，排在后面会盖掉 v18/v19 的修正）
+        assertEquals("v21", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
