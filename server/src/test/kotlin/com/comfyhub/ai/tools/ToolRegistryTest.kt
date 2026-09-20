@@ -1044,8 +1044,8 @@ class ToolRegistryTest {
     }
 
     @Test
-    fun `提示词 v15：查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份`() {
-        assertEquals("v15", SystemPrompt.VERSION)
+    fun `提示词 v16：查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份`() {
+        assertEquals("v16", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
@@ -1102,6 +1102,17 @@ class ToolRegistryTest {
         assertTrue(
             text.contains("没有叫别的名字的联网工具"),
             "要把联网工具的真名字钉死，模型不该去找不存在的工具名",
+        )
+        // v16（2026-09-20，用户建议 ④⑦）：civitai_search 上线 ——
+        // 找模型/LoRA 要走它；NSFW 缺令牌时要如实要令牌，不许改口说"没搜到"。
+        assertTrue(text.contains("civitai_search"), "第 17 条要点名 Civitai 搜索这条工具")
+        assertTrue(
+            text.contains("CIVITAI_TOKEN_REQUIRED"),
+            "要把「缺令牌」这件事的处置写清楚（如实告诉用户去填，而不是说没搜到）",
+        )
+        assertTrue(
+            text.contains("共用这一个额度"),
+            "三个联网工具共用同一个预算，提示词里要说清楚",
         )
         assertTrue(
             text.contains("别人的网页"),
