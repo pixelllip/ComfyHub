@@ -1,10 +1,16 @@
 // NSFW 模糊选项的回归（用户 2026-09-20 要求：
 // 「再加一个 NSFW 模糊选项，开启后 NSFW 内容的预览图模糊显示。这两个选项放一起」）。
 //
-// 盯住三件事，缺一条这个功能就是"看着开了、其实没用"：
-//   1) 后端说 `effectiveBlur=false` 时**不打码**（没开 NSFW 的人不能被糊一脸）；
-//   2) 后端说开了时**画面真的被 `ImageFiltered` 糊住**，而且点一下能解开那一张；
-//   3) "点了看过"只记在内存里：关掉 App 再打开（新 store）重新打码。
+// ⚠ 同日晚上按用户 bug 重写过一版：「NSFW内容模糊——怎么丝毫不区分正常内容全部模糊呢？」
+// 那版的判据只有"用户开着模糊开关"，于是**所有**缩略图都被糊住（连测试图和音频封面）。
+// 现在判据是两条：**这一条被标记过 NSFW**（`nsfw: true`）+ 用户开着模糊开关。
+//
+// 盯住五件事，缺一条这个功能就是"看着开了、其实没用"或"用起来反而更糟"：
+//   1) 没标记的内容**一张都不糊**（哪怕开关开着）—— 这是那次 bug 的本身；
+//   2) 后端说 `effectiveBlur=false` 时也不打码；
+//   3) 标记过的内容**真的被 `ImageFiltered` 糊住**，打开详情（`reveal`）后不再糊；
+//   4) 打码层**不吃点击**：点下去要能走到"打开详情"那一层（用户要的是点开就能看）；
+//   5) "看过"只记在内存里：关掉 App 再打开（新 store）重新打码。
 
 import 'dart:convert';
 
@@ -56,16 +62,27 @@ Future<NsfwStore> _store(MockClient client) async {
   return store;
 }
 
-Widget _wrap(NsfwStore store, {String key = 'http://x/1'}) => ChangeNotifierProvider<NsfwStore>.value(
+/// 一张图：默认是"被标记为 NSFW"的那一种（`nsfw: true`）。
+Widget _wrap(
+  NsfwStore store, {
+  String key = 'media:1',
+  bool nsfw = true,
+  VoidCallback? onTap,
+}) =>
+    ChangeNotifierProvider<NsfwStore>.value(
       value: store,
       child: MaterialApp(
         home: Scaffold(
           body: SizedBox(
             width: 200,
             height: 200,
-            child: NsfwBlur(
-              blurKey: key,
-              child: Container(key: const ValueKey('content'), color: Colors.red),
+            child: GestureDetector(
+              onTap: onTap,
+              child: NsfwBlur(
+                nsfw: nsfw,
+                revealKey: key,
+                child: Container(key: const ValueKey('content'), color: Colors.red),
+              ),
             ),
           ),
         ),
@@ -93,7 +110,19 @@ void main() {
     expect(find.byType(ImageFiltered), findsNothing);
   });
 
-  testWidgets('两个都开：图被糊住，点一下解开这一张', (tester) async {
+  // 用户 bug 的本身：开关一开，**没被标记过的正常内容也被糊了**。
+  testWidgets('没标记为 NSFW 的内容：开关开着也一张都不糊（用户 bug）', (tester) async {
+    final store = await _store(_nsfwBackend(enabled: true, blur: true));
+    await tester.pumpWidget(_wrap(store, nsfw: false));
+    await tester.pumpAndSettle();
+
+    expect(store.blurEnabled, isTrue, reason: '前提：用户确实开着"预览图模糊"');
+    expect(find.byType(ImageFiltered), findsNothing,
+        reason: '这一条没被标记过 → 一个像素都不该动（风景图 / 音频封面都在这一类里）');
+    expect(find.text('已模糊 · 点击查看'), findsNothing);
+  });
+
+  testWidgets('标记为 NSFW + 两个开关都开：图被糊住，打开详情后不再糊', (tester) async {
     final store = await _store(_nsfwBackend(enabled: true, blur: true));
     await tester.pumpWidget(_wrap(store));
     await tester.pumpAndSettle();
@@ -102,11 +131,26 @@ void main() {
     expect(find.byType(ImageFiltered), findsOneWidget);
     expect(find.text('已模糊 · 点击查看'), findsOneWidget);
 
-    await tester.tap(find.text('已模糊 · 点击查看'));
+    // 用户点开详情 = 主动要看（用户 2026-09-20：「打开详情之后就没必要模糊了」）。
+    // 详情页不打码，并顺手把"这一条看过了"记下来 —— 回到列表也不再糊。
+    store.reveal('media:1');
     await tester.pumpAndSettle();
 
-    expect(find.byType(ImageFiltered), findsNothing, reason: '点过之后就解开这一张');
+    expect(find.byType(ImageFiltered), findsNothing, reason: '看过之后就解开这一条');
     expect(find.byKey(const ValueKey('content')), findsOneWidget);
+  });
+
+  testWidgets('打码层不吃点击：点下去要能走到"打开详情"那一层', (tester) async {
+    final store = await _store(_nsfwBackend(enabled: true, blur: true));
+    var taps = 0;
+    await tester.pumpWidget(_wrap(store, onTap: () => taps++));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ImageFiltered), findsOneWidget, reason: '前提：它确实被打码了');
+    // 点在打码层正中间（用 tapAt：那层是 IgnorePointer，按 widget 找会报"没点到"）
+    await tester.tapAt(tester.getCenter(find.byType(NsfwBlur)));
+    await tester.pumpAndSettle();
+    expect(taps, 1, reason: '第一下就该是"打开详情"，而不是"第一下只解锁、第二下才打开"');
   });
 
   testWidgets('解开只针对那一张：别的图仍然糊着', (tester) async {
@@ -118,8 +162,14 @@ void main() {
           home: Scaffold(
             body: Column(
               children: [
-                SizedBox(width: 120, height: 120, child: NsfwBlur(blurKey: 'a', child: const SizedBox())),
-                SizedBox(width: 120, height: 120, child: NsfwBlur(blurKey: 'b', child: const SizedBox())),
+                SizedBox(
+                    width: 120,
+                    height: 120,
+                    child: NsfwBlur(nsfw: true, revealKey: 'media:a', child: const SizedBox())),
+                SizedBox(
+                    width: 120,
+                    height: 120,
+                    child: NsfwBlur(nsfw: true, revealKey: 'media:b', child: const SizedBox())),
               ],
             ),
           ),
@@ -129,10 +179,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(ImageFiltered), findsNWidgets(2));
 
-    await tester.tap(find.text('已模糊 · 点击查看').first);
+    store.reveal('media:a');
     await tester.pumpAndSettle();
 
-    expect(find.byType(ImageFiltered), findsOneWidget, reason: '只解开点过的那一张');
+    expect(find.byType(ImageFiltered), findsOneWidget, reason: '只解开看过的那一张');
   });
 
   testWidgets('关掉打码后重新打开：又是打码状态（"看过"不落盘）', (tester) async {
@@ -140,7 +190,7 @@ void main() {
     await tester.pumpWidget(_wrap(store));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('已模糊 · 点击查看'));
+    store.reveal('media:1');
     await tester.pumpAndSettle();
     expect(find.byType(ImageFiltered), findsNothing);
 

@@ -281,9 +281,14 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   **2026-09-20 起它成了开关**（用户要求「将那部分"越狱"的系统提示词摘出来，如果启用了 NSFW
   开关，则注入…反之不加」）：正文一个字都没改，只是搬进了 `ai/NsfwPrompt.kt`，
   由 `app_settings` 的 `ai.nsfw`（设置页「NSFW 内容」卡片，两个开关放一起）决定注不注入；
-  同一张卡片的第二个开关是"预览图模糊显示"（`NsfwBlur`，只作用于渲染层）。
-  改这块先读 `NsfwPrompt.kt` 的文件头注释与 `SystemPromptNsfwTest`；
-  **要改那段文字先问用户**。`ToolRegistryTest` 里有一条断言盯着"默认不注入"。
+  同一张卡片的第二个开关是"预览图模糊显示"。**它只糊"被标记过 NSFW"的那一条**
+  （`media_assets.nsfw`）—— 2026-09-20 用户 bug「怎么丝毫不区分正常内容全部模糊呢？」
+  就是因为当时只有"开关"、没有"哪一条是 NSFW"这个事实，于是开关一开全页缩略图都糊了。
+  现在：`comfy_submit(nsfw=true)` 由 AI 声明 → 产物入库带标记；画廊右键 / 详情页菜单可手动
+  标记；**详情页与大图查看器不打码**（用户原话"打开详情之后就没必要模糊了"，
+  打开详情顺带把这条记进 `NsfwStore._revealed`，回列表也不再糊）；用户自己上传的附件不打码。
+  改这块先读 `NsfwPrompt.kt` 与 `nsfw_blur.dart` 的文件头注释、`SystemPromptNsfwTest`；
+  **要改那段越狱文字先问用户**。`ToolRegistryTest` 里有一条断言盯着"默认不注入"。
 - **长期记忆（`MemoryStore`）**：真源是 `<storage>\ai\memory.md`，一行一条，用户能直接手改；
   写入（AI 的 `remember` / 界面的保存）**超限一律报错，不许静默截断**（截断等于悄悄丢用户的话）；
   注入系统提示时截断到 `PROMPT_CHARS`，文件本身保留完整内容。

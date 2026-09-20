@@ -28,6 +28,12 @@ object Migrate {
         // --- media_assets：产物也记住它来自哪次生成 ---
         changed += addColumn(conn, "media_assets", "source_ref", "VARCHAR(128) NULL COMMENT '来源侧唯一标识（如 ComfyUI prompt_id）'")
         changed += addIndex(conn, "media_assets", "idx_media_source_ref", "source_ref")
+        // NSFW 标记（用户 bug 2026-09-20：模糊开关一开就把**所有**缩略图都糊了）。
+        // 默认 0 = 没标记 = 不打码：宁可漏糊，也不要用户一开开关整页正常内容全被糊住。
+        changed += addColumn(
+            conn, "media_assets", "nsfw",
+            "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否成人内容（只影响预览图打不打码）'"
+        )
 
         // --- 自动捕获的运行记录（run_key 唯一 => 同一次生成只入库一次） ---
         changed += createTable(

@@ -1579,6 +1579,12 @@ class AiToolCallState {
   /// 就该在回复下面给一个能点开看详情的入口，而不是让用户自己去画廊里翻。
   final List<int> mediaIds;
 
+  /// 这次工具调用**声明为成人内容**的那几个产物 id（`comfy_submit` 的 `nsfwMediaIds`）。
+  ///
+  /// 用户 bug 2026-09-20：模糊开关一开，回复里的产物卡把**所有**缩略图都糊了。
+  /// 现在只糊 AI 明说过的那几张（它提交时写了 `nsfw=true`），其余正常内容一律不糊。
+  final List<int> nsfwMediaIds;
+
   /// 这次工具调用入库的**提示词 id**（`comfy_submit` 的 `capturedPromptId`）。
   ///
   /// 产物只是"结果图"，**生成它的那份工作流同样属于本次的产物**（用户建议 ①）：
@@ -1601,6 +1607,7 @@ class AiToolCallState {
     this.elapsedMs = 0,
     this.approval,
     this.mediaIds = const [],
+    this.nsfwMediaIds = const [],
     this.promptId,
     this.question,
   });
@@ -1615,6 +1622,8 @@ class AiToolCallState {
         elapsedMs: (json['elapsedMs'] as num?)?.toInt() ?? 0,
         approval: json['approval']?.toString(),
         mediaIds: (json['mediaIds'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ?? const [],
+        nsfwMediaIds:
+            (json['nsfwMediaIds'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ?? const [],
         promptId: (json['promptId'] as num?)?.toInt(),
         question: json['question'] is Map
             ? AiQuestion.fromJson(Map<String, dynamic>.from(json['question'] as Map))
@@ -1625,6 +1634,15 @@ class AiToolCallState {
   static List<int> mediaIdsOf(Object? resultJson) {
     if (resultJson is! Map) return const [];
     final raw = resultJson['mediaIds'];
+    if (raw is! List) return const [];
+    return raw.whereType<num>().map((e) => e.toInt()).toList();
+  }
+
+  /// 从工具结构化结果里取出**被标记为成人内容**的产物 id
+  /// （`comfy_submit` 的 `nsfwMediaIds`；没声明过就是空表 → 一张都不糊）。
+  static List<int> nsfwMediaIdsOf(Object? resultJson) {
+    if (resultJson is! Map) return const [];
+    final raw = resultJson['nsfwMediaIds'];
     if (raw is! List) return const [];
     return raw.whereType<num>().map((e) => e.toInt()).toList();
   }
@@ -1680,6 +1698,7 @@ class AiToolCallState {
           elapsedMs: (map['elapsedMs'] as num?)?.toInt() ?? 0,
           approval: approval.isEmpty ? null : approval,
           mediaIds: AiToolCallState.mediaIdsOf(map),
+          nsfwMediaIds: AiToolCallState.nsfwMediaIdsOf(map),
           promptId: AiToolCallState.promptIdOf(map),
           question: asked ?? prev?.question,
         );
@@ -1703,6 +1722,7 @@ class AiToolCallState {
     int? elapsedMs,
     String? approval,
     List<int>? mediaIds,
+    List<int>? nsfwMediaIds,
     int? promptId,
     AiQuestion? question,
   }) =>
@@ -1716,6 +1736,7 @@ class AiToolCallState {
         elapsedMs: elapsedMs ?? this.elapsedMs,
         approval: approval ?? this.approval,
         mediaIds: mediaIds ?? this.mediaIds,
+        nsfwMediaIds: nsfwMediaIds ?? this.nsfwMediaIds,
         promptId: promptId ?? this.promptId,
         question: question ?? this.question,
       );

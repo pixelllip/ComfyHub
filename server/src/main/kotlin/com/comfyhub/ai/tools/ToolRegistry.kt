@@ -122,9 +122,12 @@ class ToolRegistry(
      *
      * 第二个 JsonObject 是**参数覆盖**，第三个是**补线**（用户建议 ②：界面格式里那些纯前端节点
      * 被摘掉之后，缺口由模型照着 `openInputs` 填上）。
+     *
+     * 最后一个 Boolean 是 `nsfw`：本次产物是不是成人内容（用户 bug 2026-09-20）。
+     * 它只影响"预览图打不打码"，跟着产物一起入库。
      */
-    private val comfySubmit: suspend (Long, JsonObject?, JsonObject?, String?, Int) -> ComfySubmitOutcome =
-        { _, _, _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用 ComfyUI 提交能力") },
+    private val comfySubmit: suspend (Long, JsonObject?, JsonObject?, String?, Int, Boolean) -> ComfySubmitOutcome =
+        { _, _, _, _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用 ComfyUI 提交能力") },
     /**
      * 把一份**本机工作流文件**读进库（用户 bug ③：`comfy_submit` 只认库里的 promptId，
      * "我不能凭一个文件路径提交"）。返回的结构里有 `promptId`（下一步就能提交）与节点摘要。
@@ -655,9 +658,13 @@ class ToolRegistry(
                 "用 overrides 覆盖参数（键写成 节点id.输入名，例如 \"3.steps\"、\"6.text\"）。" +
                 "用 connections 补连线（键一样，值写成 [\"上游节点id\", 槽位]，例如 {\"60.vae\":[\"1\",0]}）——" +
                 "comfy_load_workflow 报 runnable=false 时，照它给的 openInputs / unresolvedInputs 补。" +
-                "跑完后产物会自动入库到画廊。不要凭想象编造工作流；说不清要跑什么就先问用户。",
+                "跑完后产物会自动入库到画廊。不要凭想象编造工作流；说不清要跑什么就先问用户。" +
+                "\n**成人内容**：这一跑出的是 NSFW / R18 内容时必须显式写 `nsfw=true` ——" +
+                "产物会带上 NSFW 标记，用户在设置里开了「预览图模糊」时画廊与回复里的缩略图就会打码。" +
+                "正常内容**不要**打开它（那会让正常的图也被糊住）；也**不要**因为用户没提就默认关闭" +
+                "——你比用户更清楚自己这次在生成什么。",
             parameters = schema(
-                """{"type":"object","properties":{"promptId":{"type":"integer","description":"库里提示词的 id（来自 comfy_find_workflow / comfy_load_workflow）"},"workflowPath":{"type":"string","description":"或者：本机工作流文件的完整路径（.json）"},"overrides":{"type":"object","description":"要覆盖的参数：{\"6.text\":\"新提示词\",\"3.steps\":30}","additionalProperties":true},"connections":{"type":"object","description":"要补的连线：{\"60.vae\":[\"1\",0]}（key 是 节点id.输入名，值是这个输入该接到哪个节点的哪个输出槽位）","additionalProperties":true},"title":{"type":"string","description":"这次运行的标题（给用户认，可选）"},"wait":{"type":"boolean","description":"是否等它跑完（默认 true；false 表示排上队就返回）"},"waitSeconds":{"type":"integer","description":"最长等多少秒，默认 240，最多 900"}},"additionalProperties":false}"""
+                """{"type":"object","properties":{"promptId":{"type":"integer","description":"库里提示词的 id（来自 comfy_find_workflow / comfy_load_workflow）"},"workflowPath":{"type":"string","description":"或者：本机工作流文件的完整路径（.json）"},"overrides":{"type":"object","description":"要覆盖的参数：{\"6.text\":\"新提示词\",\"3.steps\":30}","additionalProperties":true},"connections":{"type":"object","description":"要补的连线：{\"60.vae\":[\"1\",0]}（key 是 节点id.输入名，值是这个输入该接到哪个节点的哪个输出槽位）","additionalProperties":true},"title":{"type":"string","description":"这次运行的标题（给用户认，可选）"},"nsfw":{"type":"boolean","description":"可选：这一跑出的是成人内容（NSFW/R18）时填 true，产物会带标记、预览图会按用户设置打码；正常内容不要填"},"wait":{"type":"boolean","description":"是否等它跑完（默认 true；false 表示排上队就返回）"},"waitSeconds":{"type":"integer","description":"最长等多少秒，默认 240，最多 900"}},"additionalProperties":false}"""
             ),
             category = ToolCategory.COMFY,
             mutating = true,
@@ -701,6 +708,8 @@ class ToolRegistry(
                     connections,
                     args.str("title"),
                     if (wait) waitSeconds else 0,
+                    // 成人内容：**只有模型显式声明**才标记（默认 false）
+                    args.bool("nsfw") == true,
                 )
             } catch (e: ToolFailure) {
                 throw e

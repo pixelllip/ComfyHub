@@ -112,6 +112,15 @@ data class MediaDto(
     val source: String? = null,
     val favorite: Boolean = false,
     val notes: String? = null,
+    /**
+     * 是否成人内容（用户 bug 2026-09-20）。
+     *
+     * **只影响"预览图打不打码"**，不影响能不能看、能不能下载：默认 false，
+     * 只有 AI 明确声明（`comfy_submit` 的 `nsfw`）或用户手动标记过才为 true。
+     * 早先的"模糊开关"没有这一列，于是开关一开**所有**缩略图都糊了 ——
+     * 连风景图、甚至音频封面都糊。
+     */
+    val nsfw: Boolean = false,
     val createdAt: String? = null,
     val updatedAt: String? = null,
     /** 这条产物是否存了工作流原文（前端据此决定要不要显示「查看工作流」） */
@@ -139,6 +148,8 @@ data class MediaUpdate(
     val notes: String? = null,
     val favorite: Boolean? = null,
     val source: String? = null,
+    /** 手动标记 / 取消标记成人内容（用户 bug 2026-09-20：模糊只作用于标记过的条目）。 */
+    val nsfw: Boolean? = null,
 )
 
 // ===========================================================================
@@ -238,6 +249,14 @@ data class IngestExtra(
     val tags: List<String> = emptyList(),
     val title: String? = null,
     val notes: String? = null,
+    /**
+     * 这一批产物是不是成人内容（由提交方声明）。
+     *
+     * `comfy_submit` 的 `nsfw=true` 走的就是这里：AI 明说了这一跑是成人内容，
+     * 产物入库时就打上标记，画廊 / 气泡里的预览图才会糊（用户 bug 2026-09-20）。
+     * 轮询捕获（用户自己在 ComfyUI 里点的那次）没有这个信息 → 默认不标记。
+     */
+    val nsfw: Boolean = false,
 )
 
 /**

@@ -45,6 +45,8 @@ object CaptureRepo {
         notes: String? = null,
         tags: List<String> = emptyList(),
         move: Boolean = false,
+        /** 成人内容标记（提交方声明 / 用户手动标记）；只影响预览图打不打码 */
+        nsfw: Boolean = false,
     ): Imported {
         if (!Files.isRegularFile(source)) return Imported.Failed("文件不存在: $source")
 
@@ -104,6 +106,7 @@ object CaptureRepo {
                     notes = notes,
                     sourceRef = sourceRef,
                     workflowJson = workflowJson,
+                    nsfw = nsfw,
                 )
                 if (tags.isNotEmpty()) TagRepo.setMediaTags(conn, newId, tags)
                 TagRepo.refreshUseCounts(conn)

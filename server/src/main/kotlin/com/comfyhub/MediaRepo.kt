@@ -10,7 +10,7 @@ object MediaRepo {
     private const val COLS = """
         m.id, m.prompt_id, m.kind, m.title, m.original_name, m.stored_name, m.mime_type,
         m.size_bytes, m.width, m.height, m.duration_ms, m.sha256, m.source, m.favorite, m.notes,
-        m.created_at, m.updated_at, (m.workflow_json IS NOT NULL) AS has_workflow,
+        m.nsfw, m.created_at, m.updated_at, (m.workflow_json IS NOT NULL) AS has_workflow,
         p.title AS prompt_title, p.positive_prompt AS prompt_positive,
         p.negative_prompt AS prompt_negative, p.checkpoint, p.seed
     """
@@ -34,6 +34,9 @@ object MediaRepo {
             sha256 = rs.str("sha256"),
             source = rs.str("source"),
             favorite = rs.boolOr("favorite"),
+            // NSFW 标记（用户 bug 2026-09-20）：模糊只作用于**这一条被标记过的**产物，
+            // 正常内容一律不糊
+            nsfw = rs.boolOr("nsfw"),
             notes = rs.str("notes"),
             createdAt = rs.isoTime("created_at"),
             updatedAt = rs.isoTime("updated_at"),
@@ -215,15 +218,18 @@ object MediaRepo {
         notes: String?,
         sourceRef: String? = null,
         workflowJson: String? = null,
+        /** 成人内容标记（AI 声明或用户手动标记），只影响预览图打不打码 */
+        nsfw: Boolean = false,
     ): Long = conn.executeReturningKey(
         """
         INSERT INTO media_assets
           (prompt_id, kind, title, original_name, stored_name, mime_type, size_bytes,
-           width, height, duration_ms, sha256, source, notes, source_ref, workflow_json)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           width, height, duration_ms, sha256, source, notes, source_ref, workflow_json, nsfw)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """.trimIndent(),
         promptId, kind, title, originalName, storedName, mimeType, sizeBytes,
-        width, height, durationMs, sha256, source, notes, sourceRef, workflowJson
+        width, height, durationMs, sha256, source, notes, sourceRef, workflowJson,
+        if (nsfw) 1 else 0
     )
 
     /** 该产物的工作流快照（自动捕获时会一并存下来） */
@@ -244,6 +250,7 @@ object MediaRepo {
         input.notes?.let { sets += "notes = ?"; params += it }
         input.source?.let { sets += "source = ?"; params += it }
         input.favorite?.let { sets += "favorite = ?"; params += if (it) 1 else 0 }
+        input.nsfw?.let { sets += "nsfw = ?"; params += if (it) 1 else 0 }
 
         if (sets.isEmpty()) return false
         params += id

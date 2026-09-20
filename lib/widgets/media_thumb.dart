@@ -71,9 +71,14 @@ class MediaThumb extends StatelessWidget {
               // NSFW 打码包在**最里面**（用户 2026-09-20 的"模糊"选项）：
               // 糊的是图，角标 / 时长 / 文件名仍然看得见 —— 用户得先知道
               // "这是什么"才谈得上决定要不要点开。
+              //
+              // ⚠ `nsfw: media.nsfw` 是**必给的**（用户 bug 2026-09-20）：
+              // 不给就退回"开关一开全糊"，连风景图都会被糊住。打码层不吃点击，
+              // 点一下就是**打开详情**（详情页不打码）。
               RepaintBoundary(
                 child: NsfwBlur(
-                  blurKey: thumb,
+                  nsfw: media.nsfw,
+                  revealKey: 'media:${media.id}',
                   borderRadius: BorderRadius.circular(12),
                   child: _networkThumb(context, thumb, theme),
                 ),

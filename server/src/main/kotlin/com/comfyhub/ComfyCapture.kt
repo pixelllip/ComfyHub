@@ -259,7 +259,16 @@ class ComfyCapture(private val cfg: AppConfig, private val storage: Storage) {
      * 入口是 [ComfySubmitter]：它提交后自己盯着这一次运行，跑完直接调这里，
      * 不用等后台轮询的下一个周期（用户希望"提交完就能看到结果"）。
      */
-    fun captureRun(runKey: String, entry: kotlinx.serialization.json.JsonObject): IngestResult {
+    fun captureRun(
+        runKey: String,
+        entry: kotlinx.serialization.json.JsonObject,
+        /**
+         * 本次产物是不是成人内容（[ComfySubmitter] 从 `comfy_submit` 的 `nsfw` 带下来）。
+         *
+         * 不给（null）就用请求里 `extra.nsfw`；两者都没有 → 不标记（默认不打码）。
+         */
+        nsfw: Boolean? = null,
+    ): IngestResult {
         val conf = runCatching { SettingsRepo.captureConfig(cfg) }
             .getOrElse { CaptureConfig(comfyUrl = cfg.comfyUrl, outputDir = cfg.comfyOutputDir) }
         val claim = CaptureRepo.beginRun(runKey, "ComfyUI", entry)
@@ -274,10 +283,13 @@ class ComfyCapture(private val cfg: AppConfig, private val storage: Storage) {
         val statusObj = entry["status"] as? kotlinx.serialization.json.JsonObject
         val isError = (statusObj?.get("status_str") as? kotlinx.serialization.json.JsonPrimitive)
             ?.contentOrNull == "error"
-        val req = buildIngestRequest(runKey, entry, conf, isError)
+        val built = buildIngestRequest(runKey, entry, conf, isError)
+        val req = if (nsfw == null) built else built.copy(
+            extra = (built.extra ?: IngestExtra()).copy(nsfw = nsfw),
+        )
         log.info(
-            "captureRun {}：outputDir={} 产物条目={} 图节点={}",
-            runKey, conf.outputDir, req.outputs.size, req.prompt?.size ?: 0,
+            "captureRun {}：outputDir={} 产物条目={} 图节点={} nsfw={}",
+            runKey, conf.outputDir, req.outputs.size, req.prompt?.size ?: 0, req.extra?.nsfw == true,
         )
         return ingestClaimed(req, conf)
     }
@@ -387,6 +399,8 @@ class ComfyCapture(private val cfg: AppConfig, private val storage: Storage) {
                     workflowJson = workflowJson,
                     tags = tags.toList(),
                     move = isTemp,
+                    // 成人内容标记跟着本次运行一起入库（默认 false = 不打码）
+                    nsfw = req.extra?.nsfw == true,
                 )) {
                     is CaptureRepo.Imported.Created -> {
                         imported++

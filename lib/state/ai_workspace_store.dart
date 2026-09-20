@@ -663,6 +663,21 @@ class AiWorkspaceStore extends ChangeNotifier {
     return seen.toList();
   }
 
+  /// 一条助手消息里**被标记为成人内容**的产物（用户 bug 2026-09-20）。
+  ///
+  /// 与 [producedMediaIds] 同源（工具结构化结果），只是这一份只含
+  /// `comfy_submit` 明说过 `nsfw=true` 的那几张：回复里的产物卡只糊这些，
+  /// 其余正常内容一张都不糊 —— 以前是"开关一开全糊"。
+  List<int> producedNsfwMediaIds(AiMessage message) {
+    final seen = <int>{};
+    for (final call in toolCallsFor(message)) {
+      for (final id in call.nsfwMediaIds) {
+        if (id > 0) seen.add(id);
+      }
+    }
+    return seen.toList();
+  }
+
   Future<void> denyToolCall(String callId) => _resolveToolCall(callId, approve: false);
 
   /// 回答 AI 的提问（用户建议 ⑥）。

@@ -192,8 +192,8 @@ fun Application.module(ctx: AppContext) {
                 CaptureRepo.findRun("file:$sha")?.promptId
             }
         },
-        comfySubmit = { promptId, overrides, connections, title, waitSeconds ->
-            AiWorkflowSearch.submit(submitter, capture, promptId, overrides, connections, title, waitSeconds)
+        comfySubmit = { promptId, overrides, connections, title, waitSeconds, nsfw ->
+            AiWorkflowSearch.submit(submitter, capture, promptId, overrides, connections, title, waitSeconds, nsfw)
         },
         // 用户 bug ③：给一个工作流文件路径就能读进库、拿到 promptId（界面格式在这里被转成 API 图）
         // tolerateUnsupported（用户建议 ②）：转换不了的前端节点摘掉并给出缺口清单，交给模型补线

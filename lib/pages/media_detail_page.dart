@@ -6,6 +6,7 @@ import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
+import '../state/nsfw_store.dart';
 import '../widgets/audio_player_view.dart';
 import '../widgets/common.dart';
 import '../widgets/prompt_params.dart';
@@ -44,6 +45,10 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   Future<void> _load() async {
     if (!mounted) return;
     final store = context.read<LibraryStore>();
+    // 打开详情 = 用户主动要看这一条（用户 2026-09-20：「打开详情之后就没必要模糊了」）：
+    // 详情页自己不打码，顺手把"这一条看过了"记下来 —— 回到列表时它的缩略图也不再糊。
+    // 只记在内存里（`NsfwStore`），关掉 App 再打开照旧打码。
+    context.read<NsfwStore?>()?.reveal('media:${widget.mediaId}');
     setState(() {
       _loading = true;
       _error = null;
@@ -151,6 +156,13 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                 case 'copyUrl':
                   await copyToClipboard(context, fileUrl, label: '文件地址');
                   break;
+                case 'nsfw':
+                  // 手动标记 / 取消标记（用户 bug 2026-09-20）：AI 没声明过的内容
+                  // （自己导入的、或老数据）由用户自己说了算 —— 打码只作用于标记过的条目。
+                  await store.api.updateMedia(m.id, nsfw: !m.nsfw);
+                  await _load();
+                  if (mounted) store.refreshAll();
+                  break;
                 case 'delete':
                   final ok = await confirmDialog(
                     context,
@@ -164,17 +176,22 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                   break;
               }
             },
-            options: const [
-              MenuOption(value: 'rename', icon: Icons.drive_file_rename_outline, label: '重命名'),
-              MenuOption(value: 'notes', icon: Icons.notes, label: '编辑备注'),
-              MenuOption(value: 'open', icon: Icons.open_in_new, label: '用系统播放器打开'),
+            options: [
+              const MenuOption(value: 'rename', icon: Icons.drive_file_rename_outline, label: '重命名'),
+              const MenuOption(value: 'notes', icon: Icons.notes, label: '编辑备注'),
               MenuOption(
+                value: 'nsfw',
+                icon: m.nsfw ? Icons.visibility : Icons.visibility_off_outlined,
+                label: m.nsfw ? '取消 NSFW 标记' : '标记为 NSFW',
+              ),
+              const MenuOption(value: 'open', icon: Icons.open_in_new, label: '用系统播放器打开'),
+              const MenuOption(
                 value: 'copyUrl',
                 icon: Icons.link,
                 label: '复制文件地址',
                 dividerBefore: true,
               ),
-              MenuOption(
+              const MenuOption(
                 value: 'delete',
                 icon: Icons.delete_outline,
                 label: '删除',

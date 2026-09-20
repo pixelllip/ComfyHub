@@ -60,14 +60,21 @@ class NsfwStore extends ChangeNotifier {
   /// 注入正文的版本号（后端 `NsfwPrompt.VERSION`）。
   String get promptVersion => settings.promptVersion;
 
-  /// 这一张图现在要不要打码（[key] 通常是文件 URL）。
+  /// 这一张图现在要不要打码（[key] 通常是 `media:<id>`）。
+  ///
+  /// **调用方必须先确认这一条是 NSFW**（`NsfwBlur` 的 `nsfw` 参数）：
+  /// 这个方法只回答"用户开着模糊开关、且这一条这次还没被看过吗"。
+  /// 以前它就是全部判据，于是开关一开**所有**内容都被糊住（用户 bug 2026-09-20）。
   bool shouldBlur(String? key) {
     if (!blurEnabled) return false;
     if (key == null || key.isEmpty) return true;
     return !_revealed.contains(key);
   }
 
-  /// 用户点了这张图：把它解开（只对本次会话有效）。
+  /// 这一条已经被看过（打开了详情页）：本次会话不再糊它。
+  bool isRevealed(String? key) => key != null && key.isNotEmpty && _revealed.contains(key);
+
+  /// 用户点开了这一条（详情页）：把它解开（只对本次会话有效）。
   void reveal(String? key) {
     if (key == null || key.isEmpty) return;
     if (_revealed.add(key)) notifyListeners();

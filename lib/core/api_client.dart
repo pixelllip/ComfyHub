@@ -255,6 +255,8 @@ class ApiClient {
     String? notes,
     bool? favorite,
     String? source,
+    /// 标记 / 取消标记成人内容（用户 bug 2026-09-20：模糊只作用于标记过的条目）
+    bool? nsfw,
   }) async =>
       MediaAsset.fromJson(Map<String, dynamic>.from(await _send('PATCH', '/api/media/$id', {
         if (clearPrompt) 'clearPrompt': true,
@@ -264,6 +266,7 @@ class ApiClient {
         'notes': ?notes,
         'favorite': ?favorite,
         'source': ?source,
+        'nsfw': ?nsfw,
       }) as Map));
 
   Future<void> deleteMedia(int id) async => _send('DELETE', '/api/media/$id', null);

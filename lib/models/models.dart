@@ -300,6 +300,13 @@ class MediaAsset {
   final String? sourceRef;
   final bool hasWorkflow;
   final bool favorite;
+
+  /// 是否成人内容（用户 bug 2026-09-20）。
+  ///
+  /// **只决定预览图打不打码**，不影响能不能看：AI 用 `comfy_submit` 的 `nsfw`
+  /// 声明过、或用户手动标记过才为 true。默认 false —— 以前没有这一项，
+  /// 「NSFW 预览图模糊」开关一开会把风景图、甚至音频封面全都糊住。
+  final bool nsfw;
   final String? notes;
   final DateTime? createdAt;
   final DateTime? updatedAt;
@@ -333,6 +340,7 @@ class MediaAsset {
     this.sourceRef,
     this.hasWorkflow = false,
     this.favorite = false,
+    this.nsfw = false,
     this.notes,
     this.createdAt,
     this.updatedAt,
@@ -363,6 +371,7 @@ class MediaAsset {
         sourceRef: j['sourceRef'] as String?,
         hasWorkflow: (j['hasWorkflow'] as bool?) ?? false,
         favorite: (j['favorite'] as bool?) ?? false,
+        nsfw: (j['nsfw'] as bool?) ?? false,
         notes: j['notes'] as String?,
         createdAt: _dt(j['createdAt']),
         updatedAt: _dt(j['updatedAt']),

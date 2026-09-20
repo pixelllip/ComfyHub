@@ -395,6 +395,13 @@ class _GalleryPageState extends State<GalleryPage> {
           icon: media.favorite ? Icons.star_border : Icons.star,
           label: media.favorite ? '取消收藏' : '收藏',
         ),
+        // 手动标记成人内容（用户 bug 2026-09-20）：AI 没声明过的（自己导入的、老数据）
+        // 由用户说了算 —— 「预览图模糊」只作用于标记过的条目。
+        MenuOption(
+          value: 'nsfw',
+          icon: media.nsfw ? Icons.visibility : Icons.visibility_off_outlined,
+          label: media.nsfw ? '取消 NSFW 标记' : '标记为 NSFW',
+        ),
         const MenuOption(
           value: 'delete',
           icon: Icons.delete_outline,
@@ -420,6 +427,13 @@ class _GalleryPageState extends State<GalleryPage> {
       case 'favorite':
         await store.api.updateMedia(media.id, favorite: !media.favorite);
         await store.refreshAll();
+        break;
+      case 'nsfw':
+        await store.api.updateMedia(media.id, nsfw: !media.nsfw);
+        await store.refreshAll();
+        messenger.showSnackBar(
+          SnackBar(content: Text(media.nsfw ? '已取消 NSFW 标记' : '已标记为 NSFW，预览图会按设置打码')),
+        );
         break;
       case 'delete':
         final ok = await confirmDialog(

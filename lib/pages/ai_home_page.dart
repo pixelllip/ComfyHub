@@ -893,6 +893,8 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
         segments: message.isUser ? const [] : store.segmentsFor(message),
         // 这条回复真正产出的产物（回复末尾的「画廊入口卡」）
         producedMediaIds: message.isUser ? const [] : store.producedMediaIds(message),
+        // 其中被 AI 声明为成人内容的那些：产物卡只糊这几张（用户 bug 2026-09-20）
+        producedNsfwMediaIds: message.isUser ? const [] : store.producedNsfwMediaIds(message),
         // 产出这些图的那份工作流也属于"生成的产物"（用户建议 ①）
         producedPromptIds: message.isUser ? const [] : store.producedPromptIds(message),
         toolCategoryOf: store.toolCategoryOf,
@@ -952,6 +954,9 @@ class _MessageBubble extends StatelessWidget {
   /// 这次回复真正产出的画廊产物 id（`comfy_submit` 的 mediaIds）。
   final List<int> producedMediaIds;
 
+  /// 其中被 AI 声明为成人内容的那些（`comfy_submit` 的 `nsfwMediaIds`）。
+  final List<int> producedNsfwMediaIds;
+
   /// 这次回复入库的提示词 id（`comfy_submit` 的 capturedPromptId）。
   ///
   /// 用户建议 ①："「生成的产物」包括生成的工作流" —— 有了它，回复末尾那张卡
@@ -986,6 +991,7 @@ class _MessageBubble extends StatelessWidget {
     this.toolCalls = const [],
     this.segments = const [],
     this.producedMediaIds = const [],
+    this.producedNsfwMediaIds = const [],
     this.producedPromptIds = const [],
     required this.toolCategoryOf,
     required this.onApprove,
@@ -1237,6 +1243,7 @@ class _MessageBubble extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 8),
                   child: _ProducedMediaCard(
                     mediaIds: producedMediaIds,
+                    nsfwMediaIds: producedNsfwMediaIds,
                     promptIds: producedPromptIds,
                     mediaThumbUrlOf: mediaThumbUrlOf,
                     mediaPosterUrlOf: mediaPosterUrlOf,
@@ -1739,6 +1746,12 @@ class _StatusChip extends StatelessWidget {
 class _ProducedMediaCard extends StatelessWidget {
   final List<int> mediaIds;
 
+  /// 这一批里**被标记为成人内容**的那些（`comfy_submit` 声明了 `nsfw=true`）。
+  ///
+  /// 用户 bug 2026-09-20：模糊开关一开，回复里的产物卡也把所有图糊了 ——
+  /// 只有 AI 明说过"这次是成人内容"的那几张才该糊。
+  final List<int> nsfwMediaIds;
+
   /// 产出这些图的那份提示词 / 工作流（用户建议 ①）。
   final List<int> promptIds;
 
@@ -1747,6 +1760,7 @@ class _ProducedMediaCard extends StatelessWidget {
 
   const _ProducedMediaCard({
     required this.mediaIds,
+    this.nsfwMediaIds = const [],
     this.promptIds = const [],
     required this.mediaThumbUrlOf,
     required this.mediaPosterUrlOf,
@@ -1801,7 +1815,8 @@ class _ProducedMediaCard extends StatelessWidget {
                     child: InkWell(
                       onTap: () => _openDetail(context, id),
                       child: NsfwBlur(
-                        blurKey: mediaThumbUrlOf(id),
+                        nsfw: nsfwMediaIds.contains(id),
+                        revealKey: 'media:$id',
                         borderRadius: BorderRadius.circular(8),
                         child: SizedBox(
                           width: 72,
@@ -2978,21 +2993,21 @@ class _AttachmentTile extends StatelessWidget {
   Widget _preview(BuildContext context) {
     if (thumbUrl == null) return _iconFallback(context);
     final dpr = MediaQuery.devicePixelRatioOf(context);
-    return NsfwBlur(
-      blurKey: thumbUrl,
-      child: Image.network(
-        thumbUrl!,
-        width: _size,
-        height: _size,
-        fit: BoxFit.cover,
-        // 与画廊缩略图同一条规矩：解码宽度跟着绘制尺寸 × DPR，上限 512（见 media_thumb.dart）
-        cacheWidth: (_size * dpr).round().clamp(1, 512),
-        // 缩略图用不上 mipmap（medium 会为每张纹理生成 mipmap）
-        filterQuality: FilterQuality.low,
-        errorBuilder: (_, _, _) => _iconFallback(context),
-        loadingBuilder: (context, child, progress) =>
-            progress == null ? child : _iconFallback(context, dim: true),
-      ),
+    // **附件不打码**（用户 bug 2026-09-20 之后定的规矩）：附件是用户自己挑的文件，
+    // 库里没有、也不该有"这条是不是 NSFW"的标记 —— 按"没标记就不糊"的判据，
+    // 这里本来就不该再包一层（以前无脑糊，用户自己的参考图一上传就是一片马赛克）。
+    return Image.network(
+      thumbUrl!,
+      width: _size,
+      height: _size,
+      fit: BoxFit.cover,
+      // 与画廊缩略图同一条规矩：解码宽度跟着绘制尺寸 × DPR，上限 512（见 media_thumb.dart）
+      cacheWidth: (_size * dpr).round().clamp(1, 512),
+      // 缩略图用不上 mipmap（medium 会为每张纹理生成 mipmap）
+      filterQuality: FilterQuality.low,
+      errorBuilder: (_, _, _) => _iconFallback(context),
+      loadingBuilder: (context, child, progress) =>
+          progress == null ? child : _iconFallback(context, dim: true),
     );
   }
 

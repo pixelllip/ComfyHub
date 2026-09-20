@@ -356,6 +356,8 @@ object AiWorkflowSearch {
         connections: JsonObject?,
         title: String?,
         waitSeconds: Int,
+        /** 本次产物是不是成人内容（`comfy_submit` 的 `nsfw`）；只影响预览图打不打码 */
+        nsfw: Boolean = false,
     ): ComfySubmitOutcome {
         val prompt = PromptRepo.get(promptId)
             ?: throw ToolFailure("NOT_FOUND", "库里没有 id=$promptId 的提示词（先用 comfy_find_workflow 找）")
@@ -380,7 +382,7 @@ object AiWorkflowSearch {
         val applied = appliedOverrides + appliedConnections
 
         val label = title?.takeIf { it.isNotBlank() } ?: prompt.title
-        val submission = submitter.submit(patched, label, waitSeconds = waitSeconds)
+        val submission = submitter.submit(patched, label, waitSeconds = waitSeconds, nsfw = nsfw)
 
         val json = buildJsonObject {
             put("promptId", promptId)
@@ -402,6 +404,15 @@ object AiWorkflowSearch {
             )
             put("mediaIds", buildJsonArray { submission.mediaIds.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } })
             put("mediaCount", submission.mediaIds.size)
+            // 成人内容标记（用户 bug 2026-09-20）：界面据此决定回复里那张产物卡的缩略图
+            // 要不要打码 —— 不再靠前端去猜，也不用为此再查一次库。
+            put("nsfw", nsfw)
+            put(
+                "nsfwMediaIds",
+                buildJsonArray {
+                    if (nsfw) submission.mediaIds.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+                },
+            )
             if (submission.status == "timeout") {
                 put(
                     "hint",

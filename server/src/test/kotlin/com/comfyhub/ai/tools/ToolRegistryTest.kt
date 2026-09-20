@@ -53,6 +53,13 @@ class ToolRegistryTest {
         val search: WebSearchClient? = null,
         /** Civitai 搜索客户端（默认 null = 走 CIVITAI_DISABLED 那条路）。 */
         val civitai: CivitaiClient? = null,
+        /**
+         * `comfy_submit` 的假提交层（默认"没启用"）。
+         *
+         * 用户 bug 2026-09-20 要钉的是"参数有没有真的传下去"：工具参数 `nsfw`
+         * 必须一路传到提交层（再往下就是产物入库时的标记）。
+         */
+        val submit: (suspend (Long, JsonObject?, JsonObject?, String?, Int, Boolean) -> ComfySubmitOutcome)? = null,
     ) {
         val skills = SkillStore(root.resolve("skills-builtin"), root.resolve("skills-user"))
         val memory = MemoryStore(root.resolve("storage").resolve("ai"))
@@ -79,6 +86,9 @@ class ToolRegistryTest {
             },
             search = search,
             civitai = civitai,
+            comfySubmit = submit ?: { _, _, _, _, _, _ ->
+                throw ToolFailure("COMFY_DISABLED", "本次运行没有启用 ComfyUI 提交能力")
+            },
         )
 
         val policy = ToolPolicy(root, ToolPolicyConfig())
@@ -1007,6 +1017,64 @@ class ToolRegistryTest {
         assertEquals(1, models.size)
         assertEquals("水墨风 LoRA", models[0].jsonObject["name"]!!.jsonPrimitive.content)
         assertEquals(42, models[0].jsonObject["id"]!!.jsonPrimitive.int)
+    }
+
+    @Test
+    fun `comfy_submit 的 nsfw 声明一路传到提交层 并在结果里回带标记`() = runBlocking {
+        // 用户 bug（2026-09-20）：「NSFW 内容模糊——怎么丝毫不区分正常内容全部模糊呢？」
+        // 修法是"内容自带标记"：AI 提交时显式声明这一跑是成人内容 → 产物入库带标记 →
+        // 前端只糊标记过的条目。这里钉**工具到提交层**这一段（再往下是
+        // ComfyCapture/CaptureRepo 的入库，由真实运行覆盖）。
+        var seenNsfw: Boolean? = null
+        val root = Files.createTempDirectory("comfyhub-registry").toRealPath()
+        listOf("comfyui", "storage", "other").forEach { Files.createDirectories(root.resolve(it)) }
+        val e = Env(
+            root,
+            submit = { _, _, _, _, _, nsfw ->
+                seenNsfw = nsfw
+                ComfySubmitOutcome(
+                    promptId = "pid-1",
+                    status = "success",
+                    title = "跑一次",
+                    mediaIds = listOf(11L, 12L),
+                    capturedPromptId = 7L,
+                    json = buildJsonObject {
+                        put("status", "success")
+                        put("mediaIds", buildJsonArray { add(JsonPrimitive(11)); add(JsonPrimitive(12)) })
+                        put("nsfw", nsfw)
+                        put(
+                            "nsfwMediaIds",
+                            buildJsonArray {
+                                if (nsfw) {
+                                    add(JsonPrimitive(11)); add(JsonPrimitive(12))
+                                }
+                            },
+                        )
+                    },
+                )
+            },
+        )
+        val allow = ToolPolicy(e.root, ToolPolicyConfig(overrides = mapOf("comfy_submit" to "allow")))
+
+        // ① 没写 nsfw：按正常内容走（绝不默认打标）
+        val plain = e.registry.invoke("c1", "comfy_submit", args("promptId" to "3"), e.ctx(allow))
+        assertEquals("ok", plain.status, plain.error ?: plain.content)
+        assertEquals(false, seenNsfw, "模型没声明时不许自己打上 NSFW 标记")
+
+        // ② 显式写 nsfw=true：必须原样传到提交层，结果里回带这批产物 id
+        val marked = e.registry.invoke(
+            "c2",
+            "comfy_submit",
+            args("promptId" to "3", "nsfw" to "true"),
+            e.ctx(allow),
+        )
+        assertEquals("ok", marked.status, marked.error ?: marked.content)
+        assertEquals(true, seenNsfw, "AI 声明了成人内容，提交层必须收到这个事实")
+        assertEquals(
+            listOf(11, 12),
+            marked.resultJson!!["nsfwMediaIds"]!!.jsonArray.map { it.jsonPrimitive.int },
+            "界面靠这份 id 决定回复里哪几张缩略图要打码",
+        )
     }
 
     @Test

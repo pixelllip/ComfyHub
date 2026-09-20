@@ -140,12 +140,16 @@ class ComfySubmitter(
      * @param graph ComfyUI `/prompt` 需要的 API 格式（节点 id → {class_type, inputs}）。
      *              界面格式 workflow（带 nodes/links）**不能**直接提交，见 [ComfyCapture.apiGraphOf]。
      * @param waitSeconds 等多久（0 = 不等，只提交）。**超时不代表失败**。
+     * @param nsfw 本次产物是不是成人内容（由调用方声明，见 `comfy_submit` 的 `nsfw` 参数）：
+     *             入库时给产物打上标记，画廊 / 气泡里的**预览图**才会糊。
+     *             用户 bug 2026-09-20：以前没有这个概念，模糊开关一开把所有内容都糊了。
      */
     suspend fun submit(
         graph: JsonObject,
         title: String?,
         waitSeconds: Int = DEFAULT_WAIT_SECONDS,
         submittedBy: String = "ai",
+        nsfw: Boolean = false,
     ): ComfySubmission {
         require(graph.isNotEmpty()) { "工作流是空的：不能提交一个没有节点的图" }
         val conf = SettingsRepo.captureConfig(cfg)
@@ -189,7 +193,7 @@ class ComfySubmitter(
 
             // 跑完了：交给捕获那套入库（与轮询捕获走同一条路，幂等靠 prompt_id）
             val failed = statusStr == "error"
-            val result = runCatching { capture.captureRun(promptId, entry) }.getOrElse { e ->
+            val result = runCatching { capture.captureRun(promptId, entry, nsfw = nsfw) }.getOrElse { e ->
                 log.warn("提交的任务 {} 入库失败: {}", promptId, e.message)
                 val broken = initial.copy(
                     status = if (failed) "error" else "success",
