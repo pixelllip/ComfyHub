@@ -1046,8 +1046,8 @@ class ToolRegistryTest {
     }
 
     @Test
-    fun `提示词 v17：查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份`() {
-        assertEquals("v17", SystemPrompt.VERSION)
+    fun `提示词 v18：查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份`() {
+        assertEquals("v18", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
@@ -1127,6 +1127,21 @@ class ToolRegistryTest {
         assertTrue(
             text.contains("绑死的旧文件名"),
             "要提醒模型别拿工作流里那个绑死的旧文件名去提交",
+        )
+
+        // v18（2026-09-20，用户建议 ⑥）：提问要成为一条明确纪律 ——
+        // 缺了关键信息就先问、这一轮以问句收尾并停止调工具，用户答完从断点接着做。
+        assertTrue(
+            text.contains("要问就问在该动手之前"),
+            "第 9.1 条要写明「先问再动手」这条纪律",
+        )
+        assertTrue(
+            text.contains("先把它问清楚再动手"),
+            "要明确「缺了那条信息就做不对时先问」",
+        )
+        assertTrue(
+            text.contains("从断点接着做"),
+            "用户答完之后要接着做，不许重头再问一遍",
         )
         assertTrue(
             text.contains("别人的网页"),
