@@ -307,9 +307,10 @@ object AiValidation {
     /**
      * 思考强度校验（AIH-056）：**模型是唯一真源**。
      *
-     * - 模型没声明 `reasoning` → 任何强度都拒绝（返回 null 表示"本次不思考"）；
+     * - 模型没声明 `reasoning` → 任何强度都拒绝（返回 null 表示"本次不指定"）；
      * - 模型用 `thinkingEfforts` 显式列了可选等级 → 只允许其中的等级，不猜；
-     * - 请求 `off`（或没传）→ 返回 null，不发任何思考参数。
+     * - 请求 `off`（或没传）→ 返回 null，不指定强度（界面上叫「默认」：
+     *   一个思考参数都不发，思考与否由网关决定，**不保证不思考**）。
      */
     fun requireThinkingEffort(model: AiModelDto, requested: ReasoningEffort?): ReasoningEffort? {
         if (requested == null || requested == ReasoningEffort.OFF) return null

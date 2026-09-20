@@ -1819,8 +1819,9 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
               ),
               Text(
                 _m.reasoning
-                    ? '勾选该模型真正支持的档位。留空 = 不声明，聊天界面仍可选「关闭」（关闭不需要网关参数，'
-                        '任何模型都成立）；真正的思考档位宁可不给选，也不要发出去被上游 400。'
+                    ? '勾选该模型真正支持的档位（「默认」不在这个列表里 —— 它不发任何思考参数、'
+                        '任何模型都成立，聊天界面永远可选）。留空 = 不声明；真正的思考档位宁可不给选，'
+                        '也不要发出去被上游 400。'
                     : '该模型不支持推理；勾选后可以逐档声明。',
                 style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
               ),
@@ -1830,7 +1831,8 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    for (final e in AiReasoningEffort.values)
+                    // 「默认」不列在这里：它是"什么都不声明"的那一档，不是模型能力。
+                    for (final e in AiReasoningEffort.values.where((e) => e.isThinking))
                       FilterChip(
                         label: Text(e.label, style: theme.textTheme.labelSmall),
                         selected: _m.thinkingEfforts.containsKey(e.wire),

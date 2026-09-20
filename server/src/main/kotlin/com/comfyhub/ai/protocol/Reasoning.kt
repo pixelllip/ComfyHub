@@ -13,13 +13,24 @@ package com.comfyhub.ai.protocol
  * | openai + qwen | `enable_thinking` + `reasoning_effort` |
  * | openai + openrouter | `reasoning{effort}`（"none" 表示关闭） |
  * | openai + zai | `thinking{type,clear_thinking}` + `reasoning_effort` |
- * | openai（默认 openai 方言） | `reasoning_effort`；关闭就是不带这个字段 |
+ * | openai（默认 openai 方言） | `reasoning_effort`；不指定就是不带这个字段 |
  *
  * **模型没声明 [com.comfyhub.ai.AiModelDto.reasoning] 时一律不发这些字段** —— 往不支持
  * 推理参数的模型上塞 `reasoning_effort` 会被网关 400，宁可不发。
+ *
+ * ## [ReasoningEffort.OFF] 是"不指定"，不是"一定不思考"
+ *
+ * 界面上这一档叫**「默认」**（2026-09-20 由「关闭」改名，用户报的 bug：选了「关闭」却仍在思考）。
+ * 真机核对：本机在用的 `command-code-goat` 网关 `reasoning_effort` 只认
+ * `low|medium|high|xhigh|max`，而 `thinking{type:disabled}` / `enable_thinking:false` /
+ * `reasoning{enabled:false}` / `thinking_budget:0` / `/no_think` 一律被忽略 —— 照样思考。
+ * 所以：
+ *  · 对 `deepseek` / `zai` / `openrouter` 这些**默认开思考**的方言，我们仍然显式发"禁用"
+ *    （那是我们能做的最好），但**不许对外承诺"已经关掉了"**；
+ *  · 对 `openai` 方言，一个字段都不发，思考与否完全由网关决定。
  */
 
-/** 一个可选的思考等级。`off` 表示"明确要求关闭思考"。 */
+/** 一个可选的思考等级。`off` 表示"**不指定**思考强度"（界面上叫「默认」，不是"保证不思考"）。 */
 enum class ReasoningEffort(val wire: String) {
     OFF("off"),
     MINIMAL("minimal"),
@@ -98,7 +109,8 @@ object ThinkingLevels {
 /**
  * 一次请求的思考设置（已经过"模型是否声明推理能力"过滤）。
  *
- * @param effort 用户选择的等级，`null` 表示这次不开思考
+ * @param effort 用户选的等级，`null` 表示这次**不指定**（界面上是「默认」；
+ *   不是"保证不思考"—— 有的网关默认就思考，见文件头的说明）
  * @param wireValue 实际要发的值（默认取 [ThinkingLevels.DEFAULT]，模型可用 `reasoningEfforts` 改名）
  * @param format 网关方言
  * @param budgetTokens Anthropic 的思考预算；数字直接写在 `reasoningEfforts` 里时也可以带值
@@ -116,11 +128,11 @@ data class ReasoningRequest(
         val NONE = ReasoningRequest(null, null, ThinkingFormat.OPENAI)
 
         /**
-         * @param requested 用户选的等级；`off` 与 `null` 都表示"不思考"
+         * @param requested 用户选的等级；`off` 与 `null` 都表示"不指定"（界面上叫「默认」）
          * @param declaredReasoning 模型目录是否声明了推理能力 —— 没声明就直接 [NONE]
          * @param levelMap 该模型自定义的"等级 → 过线拼写"，值可以是字符串（改名）或数字（预算）
-         * @param format 网关方言。**即使关闭思考也要带上**：DeepSeek / Z.AI / OpenRouter
-         *   这类默认开思考的网关必须显式发"禁用"，否则关不掉。
+         * @param format 网关方言。**即使不指定也要带上**：DeepSeek / Z.AI / OpenRouter
+         *   这类默认开思考的网关，我们会试着显式发"禁用"（网关未必认，见文件头）。
          */
         fun of(
             requested: ReasoningEffort?,

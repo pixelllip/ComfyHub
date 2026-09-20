@@ -15,7 +15,8 @@ import kotlinx.serialization.json.jsonPrimitive
  * 这里守的是三条底线：
  *  1. **模型没声明推理能力 → 一个思考字段都不发**（否则网关 400）；
  *  2. 同一个等级在不同方言落到**各自正确的字段**；
- *  3. 关闭思考时，只有"默认会思考"的方言才显式发禁用，OpenAI 方言什么都不发。
+ *  3. 不指定强度时（`off`，界面上的「默认」），只有"默认会思考"的方言才显式发禁用，
+ *     OpenAI 方言什么都不发。**这个禁用是尽力而为**：网关未必认（见 Reasoning.kt 文件头）。
  */
 class ReasoningEffortTest {
 

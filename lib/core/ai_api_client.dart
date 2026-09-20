@@ -208,6 +208,56 @@ class AiApiClient {
 
   bool _approvalAccepted(dynamic raw) => raw is Map && raw['accepted'] == true;
 
+  // --- 提问（用户建议 ⑥）------------------------------------------------
+
+  /// 这个 Run 现在还在等用户回答什么（没有就返回 null）。
+  ///
+  /// 给"界面重开 / 断线重连"用：SSE 里那条 `user.question` 事件可能是在界面
+  /// 没挂着的时候发出的，靠这个接口把那张卡片补回来。
+  Future<AiQuestion?> pendingQuestion(String runId) async {
+    final raw = Map<String, dynamic>.from(
+        await _get('/api/ai/runs/${Uri.encodeComponent(runId)}/question') as Map);
+    if (raw['pending'] != true) return null;
+    final q = raw['question'];
+    return q is Map ? AiQuestion.fromJson(Map<String, dynamic>.from(q)) : null;
+  }
+
+  /// 回答一条提问。[optionIndex] 与 [answer] 至少给一个。
+  ///
+  /// 返回 `accepted`：false 表示这条提问已经结束了（超时 / Run 已停），
+  /// 界面要如实告诉用户"这次回答没被采纳"，不能假装成功。
+  Future<bool> answerQuestion(String questionId, {int? optionIndex, String? answer}) async {
+    final raw = await _send(
+      'POST',
+      '/api/ai/questions/${Uri.encodeComponent(questionId)}/answer',
+      {
+        'optionIndex': ?optionIndex,
+        'answer': ?answer,
+      },
+    );
+    return raw is Map && raw['accepted'] == true;
+  }
+
+  /// 跳过一条提问：当作"用户没有回答"放行（模型据此基于已有信息继续）。
+  Future<bool> skipQuestion(String questionId) async {
+    final raw = await _send('POST', '/api/ai/questions/${Uri.encodeComponent(questionId)}/skip');
+    return raw is Map && raw['accepted'] == true;
+  }
+
+  // --- NSFW 内容开关（2026-09-20） ----------------------------------------
+
+  /// 读 NSFW 设置（是否注入那段越狱提示词 + 预览图要不要打码）。
+  ///
+  /// 真源在后端（`app_settings` 的 `ai.nsfw`）：`enabled` 决定系统提示词里注不注入那一段，
+  /// 所以前端**不能**自己存一份 —— 否则会出现"界面说开着、后端其实没注入"。
+  Future<AiNsfwSettings> nsfwSettings() async =>
+      AiNsfwSettings.fromJson(Map<String, dynamic>.from(await _get('/api/ai/nsfw') as Map));
+
+  /// 写 NSFW 设置，返回**生效后**的那份（`effectiveBlur` 由后端算好）。
+  Future<AiNsfwSettings> updateNsfwSettings({required bool enabled, required bool blur}) async =>
+      AiNsfwSettings.fromJson(Map<String, dynamic>.from(
+          await _send('PUT', '/api/ai/nsfw', {'enabled': enabled, 'blur': blur}) as Map));
+
   // --- 内置模型目录（只读预览 / 对齐） ------------------------------------
 
   /// 预览：内置目录有哪些模型、库里有多少条与它不一致。**不写库**。
@@ -346,8 +396,9 @@ class AiApiClient {
 
   /// 创建 Run：立即返回 runId（后端 202），真正的执行在后台。
   ///
-  /// [reasoningEffort] 是思考强度（AIH-056）：`off/low/medium/high/max`，
-  /// 后端会按模型目录复核——模型没声明推理能力就直接拒绝，不会悄悄忽略。
+  /// [reasoningEffort] 是思考强度（AIH-056）：`off/low/medium/high/max`（界面上的
+  /// 「默认」就是 `off`，wire 名保持不动），后端会按模型目录复核——模型没声明推理能力
+  /// 就直接拒绝，不会悄悄忽略。**传 `null` = 默认**：一个思考字段都不发，由网关决定。
   ///
   /// [attachmentIds] 是这次要发给模型的附件（M3）：**准入判定在创建 Run 之前完成**，
   /// 不通过会直接 400，不会产生任何上游请求（AIH-030）。

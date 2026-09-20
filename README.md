@@ -21,6 +21,7 @@
 | **工作流文件直接提交** | 用户甩过来一个工作流 `.json` 路径时，AI 不再回"我只能提交库里的 promptId"：`comfy_load_workflow` 读那份文件 → **API 格式原样用**；**界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图** → 入库拿 `promptId` → `comfy_submit` 正常提交（也可以 `comfy_submit(workflowPath=…)` 一步到位）。转换器现在能等价处理的比过去多得多：**组节点（subgraph）按 `definitions.subgraphs` 展开**、旁路 / Reroute / Set-Get 照旧、**`widgets_values_named`（带参数名的那份）优先**（不必再按位置猜）。剩下纯粹的**前端**节点（`Anything Everywhere`、rgthree 的显示节点…）默认仍**如实报 `UNSUPPORTED_NODES`**，但**不再是死路**：带 `tolerateUnsupported=true` 再读一次，会把这些节点摘掉并给出**缺口清单**（`openInputs` = 哪些连线型输入空着、缺什么类型；`unresolvedInputs` = 哪个输入还悬着），AI 照着用 `comfy_submit(promptId=…, connections={"8.vae":["1",2]})` 把线补上就能跑 —— 猜的那部分仍然由 ComfyUI 自己的校验兜底。顺带：**本机 ComfyUI 的目录现在是自动放行的只读白名单**（`ComfyRoots` 每次现探），所以 AI 能直接读你自己的工作流文件；写仍然只允许 `<项目根>\comfyui`。 |
 | **本机工作流看得见**（2026-09-18） | **"库里搜不到"不再等于"这条工作流用不了"**。库里的工作流只有两个来源（自动捕获 = 只收"本进程活着的时候跑过的"、以及手动按路径读），所以**首次使用时库里必然是空的** —— 而你机器上早就存着一堆工作流（`…\ComfyUI\user\<用户>\workflows\*.json`）。现在：① `comfy_list_workflows`（只读）直接列出本机已保存的工作流文件（路径 / 格式 / 是否已入库），`comfy_find_workflow` 在库里搜不到时**自动带上**它们；② 系统提示 v13 写清顺序（find → list → `comfy_load_workflow(path=…)` → submit），并**禁止**再说"得先在 ComfyUI 里跑一次才会被捕获"；③ 设置页 →「ComfyUI 自动捕获」多一颗**「导入本机工作流」**：把目录里的工作流批量读进库（幂等，重复点没关系；转换不了的也入库并如实标 `runnable=false`）。对应的只读接口 `GET /api/capture/workflows?q=` 与导入接口 `POST /api/capture/import-workflows`（实测本机 11 份一把列全）。 |
 | **联网搜索**（2026-09-20） | AI 会**真的上网查资料**：`web_search`（用一句自然语言描述"你想要的那一页"，返回带编号与链接的网页正文，引用时给编号 + URL）与 `web_fetch`（把搜索结果里的某篇取回来读全文，服务端已去样板转 markdown）。后端是 **Keenable**（用户定的规则：只用通用方案，不碰各家原生内置搜索），**出厂免密钥可用**（按来源限速约 1000 次/小时），想要提额在「设置 → AI 工具权限 → 联网搜索」里填可选密钥（DPAPI 加密，只写不读）。三条安全线：① 两个工具出厂都是**「询问」档**——查询词会离开本机；② 一次回复最多联网 8 次（独立预算）；③ 抓取目标只接受公开网址（内网 / 本机 / 云元数据地址出网前就拒），搜到的正文一律按**不可信数据**交给模型（注入防线）。搜索不到会如实说"没搜到"，不许编。 |
+| **出网与代理**（2026-09-20） | 本机的**系统代理会被遵守**（`civitai_search` 反复超时的根因就是 JVM 默认无视它，见 [docs/pitfalls.md](docs/pitfalls.md)）：公网目标按本机代理设置走，**本机 / 内网地址（`127.0.0.1`、`192.168.*`、`10.*`…）永远直连** —— 打开系统代理之后 Java 会把内网也交给代理，那会打死本机 ComfyUI。要用环境变量覆盖时设 `COMFYHUB_HTTPS_PROXY`（`HTTPS_PROXY` / `HTTP_PROXY` 兜底；写 `direct` = 强制直连）。出网工具报错时会写明**本次路径**（`直连（DIRECT）` / `HTTP 代理 127.0.0.1:7890`），连接超时也不再冒充"回得慢"。 |
 | **提示词库** | 新建 / 编辑 / 复制 / 删除；区分「生图 / 生视频 / 生音频 / 混合」；正向 + 负向提示词；模型、采样器、调度器、步数、CFG、Seed、宽高、批量、LoRA 列表、备注、收藏；**多选批量管理**（收藏 / 取消收藏 / 加标签 / 删除）；**没有关联任何产物的提示词会挂一个橙色「未关联」标记**（产物被删掉之后就是这种状态），可以按「未关联产物」筛选，也可以**一键清除**（先报条数 + 前几条标题再确认，按批循环删除，超过单页 200 条也不会漏） |
 | **ComfyUI 自动捕获** | ComfyUI 里跑完一次生成，**提示词 + 全部参数 + 完整工作流 + 生成的图片/视频/音频**自动进库并互相关联；不需要改动工作流，也不需要装任何东西（装一个可选的推送节点可以做到零延迟） |
 | **历史产物导入** | 指向 ComfyUI 的 output 目录，把**以前生成好的**图连同图片里内嵌的 `prompt` / `workflow` 一起收进来，自动建提示词并关联 |
@@ -535,23 +536,33 @@ PNG / JPEG / GIF / BMP / TIFF / **WebP** 都解得了（WebP 靠 `imageio-webp` 
 （内置目录里 69 个模型就是这种），传输方式回落到**协议适配器真正实现的那种**。
 
 **思考强度（AIH-056）**：聊天框下方除了选模型，还能选
-`关闭 / 极低 / 低 / 中 / 高 / 极高 / 最大`（等级表与 pi-ai / DSH 一致：
-`off → minimal → low → medium → high → xhigh → max`）。
-**「关闭」永远可选，且不需要模型声明 `off`**（关闭不发任何思考参数、任何网关都成立）；
+`默认 / 极低 / 低 / 中 / 高 / 极高 / 最大`（等级表与 pi-ai / DSH 一致：
+`off → minimal → low → medium → high → xhigh → max`；界面上的「默认」就是 `off`）。
+**「默认」永远可选，且不需要模型声明 `off`**（默认=**一个思考参数都不发**、任何网关都成立）；
 **除此之外的档位由模型目录决定**（设置 → AI 模型 → 模型卡片的"思考强度"）：
 没勾"支持推理"就不发任何思考字段（避免上游 400），声明了档位就只允许声明过的档位。
+**它叫「默认」而不是「关闭」（2026-09-20 改名）**：实测本机在用的聚合网关
+（`command-code-goat`）**根本关不掉思考** —— 它的 `reasoning_effort` 只认
+`low|medium|high|xhigh|max`，而 `thinking{type:disabled}` / `enable_thinking:false` /
+`reasoning{enabled:false}` / `/no_think` 一律被忽略，照样返回 reasoning；
+叫「关闭」就是承诺一件我们做不到的事。改名之后这条档位的意思只有一句真话：
+**我们不指定思考强度，由网关决定**（要真正不思考，只能换一个不思考的模型 / 网关）。
 **没有 `max` 档的模型（GPT-5.5 / Grok 4.6 / Qwen3.8 这些只到 `xhigh`）不会被降级**——
 声明什么就发什么，宁可让上游明确拒绝，也不把用户的"极高"偷偷改成"高"。
 同一个"高"在不同网关上落到的字段不一样，模型可单独选方言：
 
-| 方言 | 开启 | 关闭 |
+| 方言 | 指定档位（开启） | 「默认」（`off`） |
 | --- | --- | --- |
 | `openai`（默认） | `reasoning_effort: "high"` | 什么都不发 |
-| `deepseek` | `thinking{type:enabled}` + `reasoning_effort` | `thinking{type:disabled}` |
+| `deepseek` | `thinking{type:enabled}` + `reasoning_effort` | 显式发 `thinking{type:disabled}` |
 | `qwen` | `enable_thinking: true` + `reasoning_effort` | 不发 |
-| `zai` | `thinking{type:enabled,clear_thinking:false}` + `reasoning_effort` | `thinking{type:disabled}` |
-| `openrouter` | `reasoning{effort:"high"}` | `reasoning{effort:"none"}` |
+| `zai` | `thinking{type:enabled,clear_thinking:false}` + `reasoning_effort` | 显式发 `thinking{type:disabled}` |
+| `openrouter` | `reasoning{effort:"high"}` | 显式发 `reasoning{effort:"none"}` |
 | `anthropic-messages` | `thinking{type:enabled,budget_tokens}`，`max_tokens` 自动设为预算 + 4096 | 不发 |
+
+> deepseek / zai / openrouter 三档之所以在「默认」时**显式发禁用**，是因为它们的网关默认就开思考；
+> 但这只是**我们能做的最好**，**网关未必认**（本机的 `command-code-goat` 就完全忽略它）——
+> 所以界面上这一档叫「默认」而不是「关闭」。
 
 档位还能**改名或直接给预算**：`thinkingEfforts` 里 `{"max": "ultra"}` 表示这个网关管"最大"叫 `ultra`，
 `{"medium": "4096"}` 表示这一档给 Anthropic 4096 token 预算。详见
@@ -1018,7 +1029,7 @@ pwsh -File scripts\server.ps1 test   # 后端 325 个用例
 | `test/ai_conversation_lifecycle_test.dart` | **会话生命周期**：已有干净空会话就复用（不再新建）、切页重建不会重复加载/新建、历史遗留的多条空壳只留最新一条、**打了一半的字切走再切回还在**、有草稿的空会话不会被顺手删掉、**发出去的话不会被草稿灌回输入框（用户报的"一条消息复制一遍再发送"）**。6 例 |
 | `test/ai_retry_keep_content_test.dart` | **被 429 / 断流打断之后的内容不丢**（用户 bug，2026-09-19 深夜）：走真实链路"发消息 → 429 打断 → 点重试"，断言失败后正文与 parts（正文 + 工具卡）都在、重试**另起一条**助手气泡且旧气泡原样保留、空壳失败气泡仍然就地复用（不冒多余气泡）。2 例 |
 | `test/model_list_scroll_test.dart` | **「AI 模型与凭据」69 个模型的长列表**：滚动范围（滑块长度）全程稳定、一趟只建视口附近的行、行高是常数、能力编辑弹窗改完点确定写回行并落库、点取消不留痕迹。4 例 |
-| `test/ai_thinking_off_test.dart` | **思考强度「关闭」档**：「关闭」永远可选且排在第一位（不要求模型声明 `off`）、没声明的思考档位仍然不给选、不支持推理的模型完全不给选、在聊天框选中「关闭」后创建 Run 的请求体里**不带** `reasoningEffort`。2 例 |
+| `test/ai_reasoning_default_test.dart` | **思考强度「默认」档**（2026-09-20 由 `ai_thinking_off_test.dart` 改名）：「默认」永远可选且排在第一位（不要求模型声明 `off`）、没声明的思考档位仍然不给选、不支持推理的模型完全不给选、在聊天框选中「默认」后创建 Run 的请求体里**不带** `reasoningEffort`。2 例 |
 | `test/ai_attachment_test.dart` | **附件（M3）的界面**：上传走真文件路径（`runAsync`）且只传一次、图片附件在托盘里显示 `/thumb` 缩略图、视频显示预览帧 + 播放角标、音频/文档落回文件图标、被准入拦下时说明原因并禁用发送、上传失败如实报错且不进托盘、部分成功时逐个列出失败原因、发送时带上 `attachmentIds` 且用户消息气泡里也能看到附件缩略图。5 例 |
 | `server/src/test/kotlin/.../protocol/AttachmentProtocolTest.kt` | **附件内联的协议契约（三家）**：OpenAI 的 `image_url` + `data:` URL（文本在前）、Anthropic 的 `{type:"image",source:{type:"base64"}}`（图在前文在后）、Responses 的 `input_image`；纯文本轮仍是字符串（最广兼容）；视频/音频/文档抛 `UnsupportedContentFailure` 而不是静默丢掉；工具轮与附件轮互不干扰。10 例 |
 

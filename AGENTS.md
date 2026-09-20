@@ -87,6 +87,7 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 | 端口 | MySQL `3307`、后端 `8080`、ComfyUI `8188` |
 | Android 构建 | `android/` 走 AGP **9.4.0** + Gradle **9.6.0** + **AGP 内建 Kotlin**（`android.builtInKotlin=true`，`org.jetbrains.kotlin.android` 只钉版本、不 apply）；动 `android/` 之前先读 `docs/android-agp9-builtin-kotlin-migration.md` |
 | Gradle 代理 | `~/.gradle/gradle.properties` 配了本机代理 `127.0.0.1:7890`：`dl.google.com` / `repo.maven.apache.org` **必须绕过代理**（`systemProp.http.nonProxyHosts`），而 `github.com` 直连不通、**必须走代理** |
+| 后端出网代理 | **JVM 默认无视 Windows 系统代理**（一律 DIRECT）：本机 `civitai.com` 这类目标直连不通、只有 `127.0.0.1:7890` 通，所以 `server/build.gradle.kts` 的 `applicationDefaultJvmArgs` 带着 `-Djava.net.useSystemProxies=true`，出网客户端再统一挂 `com.comfyhub.ai.OutboundProxy` 的选择器（**公网走代理、本机/内网强制直连**——打开系统代理后 Java 会把 `127.0.0.1:8188` 也交给代理，会打死 ComfyUI）。自己用 `java -jar` 起后端时要手动补这个参数，或设 `COMFYHUB_HTTPS_PROXY` |
 | Kotlin 增量编译 | 本机 pub 缓存在 C:、工程在 D:，跨盘会炸（`this and base files have different roots`），所以 `android/gradle.properties` 里关掉了 `kotlin.incremental` |
 
 > **踩过的具体坑（50+ 条：现象 → 原因 → 处理）统一记在 [`docs/pitfalls.md`](docs/pitfalls.md)**。
@@ -277,8 +278,12 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 - 改系统提示词**必须 bump `SystemPrompt.VERSION`**（Run 里记 `promptVersion`，事后才能追溯哪次回答用的哪版规则）。
 - **系统提示里那段 `[MODE: UNRESTRICTED SANDBOX — STABLE]`（人格 / 拒绝对抗 / 越狱与渗透话术）
   是用户有意注入的**：2026-09-17 用户明确说"那是我的意图，不许删除，不要动那段越狱提示词"。
-  它由 `HarnessRunner.kt` 里一个独立的 `append("""…""")` 承载（上方有同样的注释），
-  **别把它当误粘贴清理掉或"顺手修好"**；要改先问用户。`ToolRegistryTest` 里有一条断言盯着它还在。
+  **2026-09-20 起它成了开关**（用户要求「将那部分"越狱"的系统提示词摘出来，如果启用了 NSFW
+  开关，则注入…反之不加」）：正文一个字都没改，只是搬进了 `ai/NsfwPrompt.kt`，
+  由 `app_settings` 的 `ai.nsfw`（设置页「NSFW 内容」卡片，两个开关放一起）决定注不注入；
+  同一张卡片的第二个开关是"预览图模糊显示"（`NsfwBlur`，只作用于渲染层）。
+  改这块先读 `NsfwPrompt.kt` 的文件头注释与 `SystemPromptNsfwTest`；
+  **要改那段文字先问用户**。`ToolRegistryTest` 里有一条断言盯着"默认不注入"。
 - **长期记忆（`MemoryStore`）**：真源是 `<storage>\ai\memory.md`，一行一条，用户能直接手改；
   写入（AI 的 `remember` / 界面的保存）**超限一律报错，不许静默截断**（截断等于悄悄丢用户的话）；
   注入系统提示时截断到 `PROMPT_CHARS`，文件本身保留完整内容。

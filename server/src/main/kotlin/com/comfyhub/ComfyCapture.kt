@@ -1,5 +1,6 @@
 package com.comfyhub
 
+import com.comfyhub.ai.OutboundProxy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -49,6 +50,9 @@ class ComfyCapture(private val cfg: AppConfig, private val storage: Storage) {
     private val http: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(4))
         .followRedirects(HttpClient.Redirect.NORMAL)
+        // ComfyUI 多半在 127.0.0.1 —— OutboundProxy 对这类地址强制直连，
+        // 但用户把 ComfyUI 放在公网时也该遵守本机的代理设置
+        .proxy(OutboundProxy.selector())
         .build()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

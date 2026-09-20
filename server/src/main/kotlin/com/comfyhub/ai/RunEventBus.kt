@@ -94,6 +94,17 @@ object RunEventType {
     const val TOOL_STARTED = "tool.started"
     const val TOOL_COMPLETED = "tool.completed"
     const val TOOL_FAILED = "tool.failed"
+    /**
+     * AI 向用户提问（用户建议 ⑥，2026-09-20）。
+     *
+     * 与 `tool.requested` 分开是**有意的**：那个是"等你点批准"，这个是"等你回答"。
+     * 界面上两者长得像，语义完全不同 —— 批准是允许/不允许，回答是一段文字，
+     * 而且**这次 Run 不会因此结束**：`ask_user_question` 会挂在这里等，
+     * 用户答完把回答作为工具结果喂回模型，同一个 Run 接着往下做。
+     */
+    const val USER_QUESTION = "user.question"
+    /** 用户答完了：界面据此把提问卡切成"已回答"（`POST /api/ai/questions/{id}/answer`）。 */
+    const val USER_QUESTION_ANSWERED = "user.question.answered"
     const val USAGE_UPDATED = "usage.updated"
     const val MESSAGE_COMPLETED = "message.completed"
     /** 会话标题被自动总结出来了（用户建议 ③）：前端据此刷新标题与对话列表 */

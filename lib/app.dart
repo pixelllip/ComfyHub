@@ -14,6 +14,7 @@ import 'pages/settings_page.dart';
 import 'pages/tags_page.dart';
 import 'state/ai_workspace_store.dart';
 import 'state/library_store.dart';
+import 'state/nsfw_store.dart';
 
 class ComfyHubApp extends StatelessWidget {
   final SettingsStore settings;
@@ -36,6 +37,13 @@ class ComfyHubApp extends StatelessWidget {
           create: (ctx) => AiWorkspaceStore(
             baseUrlProvider: () => ctx.read<SettingsStore>().baseUrl,
           ),
+        ),
+        // NSFW 开关（2026-09-20）：**全局**一份 —— 打码要同时作用于画廊、提示词、
+        // 标签页与 AI 气泡里的产物卡，页面各自持有一份做不到这件事。
+        ChangeNotifierProvider<NsfwStore>(
+          create: (ctx) => NsfwStore(
+            baseUrlProvider: () => ctx.read<SettingsStore>().baseUrl,
+          )..load(silent: true),
         ),
       ],
       child: MaterialApp(

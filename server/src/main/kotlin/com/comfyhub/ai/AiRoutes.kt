@@ -7,6 +7,7 @@ import com.comfyhub.ai.protocol.AttachmentKindRef
 import com.comfyhub.ai.protocol.ReasoningEffort
 import com.comfyhub.ai.protocol.TransportRef
 import com.comfyhub.ai.tools.KeenableSearch
+import com.comfyhub.ai.tools.AskRegistry
 import com.comfyhub.ai.tools.MemoryStore
 import com.comfyhub.ai.tools.SkillDto
 import com.comfyhub.ai.tools.SkillRescanDto
@@ -42,6 +43,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
@@ -68,6 +70,11 @@ fun Route.aiRoutes(
     projectRoot: Path,
     /** AI 附件（M3）：上传 / 缩略图 / 删 / 读成内联附件都走它 */
     attachments: AiAttachmentStore,
+    /**
+     * 提问登记表（用户建议 ⑥）：界面重连时查"还在等用户回答什么"、
+     * 以及用户答完之后把回答递给还在等的那个协程。
+     */
+    asks: AskRegistry,
 ) {
 
     route("/ai") {
@@ -487,6 +494,12 @@ fun Route.aiRoutes(
                     put("tools", model.tools)
                     put("reasoning", model.reasoning)
                     put("capabilitySource", model.capabilitySource)
+                    // NSFW 开关（2026-09-20）：**注入与没注入是两次不同的行为**，
+                    // 快照里如实记一笔，事后才能回答"这条回答当时带没带那段越狱提示词"。
+                    // 执行时还会再读一次（用户可能在排队期间改了设置），
+                    // 但 Run 的开始状态以这里为准 —— 与 `reasoningEffort` 的处理一致。
+                    put("nsfw", NsfwConfig.load().enabled)
+                    put("nsfwPromptVersion", NsfwPrompt.VERSION)
                 },
                 promptVersion = HarnessRunner.PROMPT_VERSION,
                 userMessageId = userMessage.id,
@@ -680,6 +693,31 @@ fun Route.aiRoutes(
         }
 
         // -------------------------------------------------------------------
+        //  NSFW 内容开关（2026-09-20 用户要求）
+        //
+        //  两个选项放一起（用户原话）：① 是否注入那段越狱系统提示词；
+        //  ② 预览图要不要模糊。真源在 `app_settings` 的 `ai.nsfw`，
+        //  两个开关的**生效组合**（enabled && blur）由后端算好回给界面，
+        //  前端不自己再推一遍 —— 否则就会出现"设置页说会打码、画廊其实没打"。
+        // -------------------------------------------------------------------
+
+        get("/nsfw") {
+            call.respond(NsfwSettingsDto.of(NsfwConfig.load()))
+        }
+
+        put("/nsfw") {
+            val body = call.receive<NsfwUpdate>()
+            val saved = NsfwConfig.save(
+                NsfwConfig(
+                    enabled = body.enabled ?: false,
+                    blur = body.blur ?: false,
+                )
+            )
+            // 立刻回读一次：界面显示的就是**库里真正生效**的那份
+            call.respond(NsfwSettingsDto.of(saved))
+        }
+
+        // -------------------------------------------------------------------
         //  工具与权限（M4，用户要求：默认不能改 comfy 目录以外的内容）
         // -------------------------------------------------------------------
 
@@ -780,6 +818,102 @@ fun Route.aiRoutes(
         post("/tool-calls/{callId}/deny") {
             val callId = call.parameters["callId"].orEmpty()
             call.respond(ToolApprovalResult(callId, approved = false, accepted = runner.resolveApproval(callId, false)))
+        }
+
+        // -------------------------------------------------------------------
+        //  提问（用户建议 ⑥，2026-09-20）
+        //
+        //  "让 AI 像 deepseek harness 一样支持提问功能，回答结束时不中断当前对话"。
+        //
+        //  与工具审批的区别就写在接口形状上：审批只回一个 `accepted`（允不允许），
+        //  提问回的是一段**文字**，而且这股文字会作为工具结果喂回模型、
+        //  同一个 Run 接着往下做 —— 所以这里**没有**"取消 / 不回答"以外的分支，
+        //  也不改 Run 的状态。
+        // -------------------------------------------------------------------
+
+        /**
+         * 这个 Run 现在还在等用户回答的提问（没有就回 `pending=false`）。
+         *
+         * 给"界面重开 / 断线重连"用：SSE 里那条 `user.question` 事件可能是在
+         * 界面没挂着的时候发出的，靠这个接口把卡片补回来。
+         */
+        get("/runs/{id}/question") {
+            val runId = call.parameters["id"].orEmpty()
+            val pending = asks.pendingFor(runId)
+            call.respond(
+                PendingQuestionResponse(
+                    pending = pending != null,
+                    question = pending?.toJson(),
+                )
+            )
+        }
+
+        /** 单条提问的状态（界面按 questionId 校验"我这张卡还作数吗"）。 */
+        get("/questions/{questionId}") {
+            val id = call.parameters["questionId"].orEmpty()
+            val q = asks.get(id)
+                ?: throw AiException(AiErrorCode.CONFIG_ERROR, "提问不存在或已过期: $id")
+            call.respond(q.toJson())
+        }
+
+        /**
+         * 用户回答了。`optionIndex` 给了就是"点了第几个按钮"，否则用 `answer` 的自由文本。
+         *
+         * `accepted=false` 时必须**如实告诉用户**：这条提问已经结束了（超时 / Run 已停），
+         * 这次回答没被采纳 —— 不能假装成功。
+         */
+        post("/questions/{questionId}/answer") {
+            val questionId = call.parameters["questionId"].orEmpty()
+            val body = call.receive<QuestionAnswerRequest>()
+            val q = asks.get(questionId)
+                ?: throw AiException(AiErrorCode.CONFIG_ERROR, "提问不存在或已过期: $questionId")
+
+            val index = body.optionIndex
+            val text = when {
+                index != null && index in q.options.indices -> q.options[index]
+                !body.answer.isNullOrBlank() -> body.answer.trim()
+                else -> throw AiException(
+                    AiErrorCode.CONFIG_ERROR,
+                    "要给出回答：要么给 optionIndex（0~${q.options.size - 1}），要么给 answer 文本",
+                )
+            }
+            val accepted = asks.answer(questionId, text, index?.takeIf { it in q.options.indices })
+            if (accepted) {
+                // 事件让**所有**开着这条会话的界面都切成"已回答"（不只是点的那一个窗口）
+                bus.emit(
+                    q.runId,
+                    RunEventType.USER_QUESTION_ANSWERED,
+                    buildJsonObject {
+                        put("questionId", questionId)
+                        put("answer", text)
+                        index?.let { put("optionIndex", it) }
+                    },
+                )
+            }
+            call.respond(QuestionAnswerResult(questionId = questionId, accepted = accepted, answer = text))
+        }
+
+        /**
+         * 用户跳过这条提问：**当作"没有回答"**放行。
+         *
+         * 与"不回答就永远挂着"相比，模型拿到的是"用户没有回答"——
+         * 它据此基于已有信息继续，而不是卡死在这里。
+         */
+        post("/questions/{questionId}/skip") {
+            val questionId = call.parameters["questionId"].orEmpty()
+            val q = asks.get(questionId)
+                ?: throw AiException(AiErrorCode.CONFIG_ERROR, "提问不存在或已过期: $questionId")
+            asks.clear(questionId)
+            bus.emit(
+                q.runId,
+                RunEventType.USER_QUESTION_ANSWERED,
+                buildJsonObject {
+                    put("questionId", questionId)
+                    put("answer", "")
+                    put("skipped", true)
+                },
+            )
+            call.respond(QuestionAnswerResult(questionId = questionId, accepted = true, answer = ""))
         }
 
         // -------------------------------------------------------------------
@@ -1058,6 +1192,41 @@ data class ToolPolicyUpdate(
 
 @Serializable
 data class ToolApprovalResult(val callId: String, val approved: Boolean, val accepted: Boolean)
+
+// ---------------------------------------------------------------------------
+//  提问（用户建议 ⑥）
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /api/ai/runs/{id}/question`：这个 Run 还在等什么。
+ *
+ * [pending] 为 false 时 [question] 是 null —— 界面据此把提问卡收起来
+ * （或者反过来，把断线期间漏掉的那张补回来）。
+ */
+@Serializable
+data class PendingQuestionResponse(val pending: Boolean, val question: JsonObject? = null)
+
+/**
+ * 用户的回答。
+ *
+ * 两种给法：`optionIndex`（点了第几个按钮）或 `answer`（自己敲的）。
+ * 两个都没给 → 400（不许把"空回答"当成"用户说了一段空话"塞给模型）。
+ */
+@Serializable
+data class QuestionAnswerRequest(val optionIndex: Int? = null, val answer: String? = null)
+
+/** 回答是否被采纳：`accepted=false`（提问已超时 / Run 已停）时界面要如实说明。 */
+@Serializable
+data class QuestionAnswerResult(val questionId: String, val accepted: Boolean, val answer: String)
+
+/**
+ * NSFW 设置的写入请求（`PUT /api/ai/nsfw`）。
+ *
+ * 两个字段都可缺省（缺省 = 关）：这两个开关的默认方向必须是"关"，
+ * 漏传一个字段绝不能让那段越狱提示词被悄悄打开。
+ */
+@Serializable
+data class NsfwUpdate(val enabled: Boolean? = null, val blur: Boolean? = null)
 
 // ---------------------------------------------------------------------------
 //  内置模型目录的同步（ADD_MISSING / REFRESH_CAPABILITIES）

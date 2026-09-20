@@ -152,6 +152,9 @@ fun Application.module(ctx: AppContext) {
 
     // 工具层（M4）：出厂只能写 <根>\comfyui，只读 <根>\comfyui + <根>\storage（见 ToolPolicy）
     val approvals = ToolApprovalGate()
+    // 提问闸门（用户建议 ⑥）：AI 可以当场问一句、**不中断**这一次回答
+    val askGate = com.comfyhub.ai.tools.AskGate()
+    val asks = com.comfyhub.ai.tools.AskRegistry(askGate)
     // 提交任务（用户建议 ①）：AI 可以把库里的工作流真的送进 ComfyUI 队列
     val submitter = ComfySubmitter(ctx.cfg, capture)
     val toolRegistry = ToolRegistry(
@@ -215,6 +218,13 @@ fun Application.module(ctx: AppContext) {
         // NSFW 档走 civitai.red 且必须令牌（设置页里的凭据名 civitai，
         // 或环境变量 CIVITAI_API_KEY）。工具默认 ask —— 用户原话就是"这种情况可以询问用户"。
         civitai = CivitaiSearch(credentials),
+        // 提问（用户建议 ⑥）：把问题递到用户面前、在原地等回答，
+        // 答完作为工具结果喂回模型，**同一个 Run 接着做**。
+        ask = askGate,
+        askRegistry = asks,
+        // 摘/拼节点（用户建议 ②）：拼装要照着 ComfyUI 的节点定义算，
+        // 拿不到就只摘不拼（宁可不做，也不乱接一根线）
+        comfyObjectInfo = { runCatching { submitter.objectInfo() }.getOrNull() },
     )
 
     // 内置模型目录：项目内置的冻结副本（classpath）里那份，缺哪个补哪个；已存在的一律不覆盖
@@ -234,6 +244,7 @@ fun Application.module(ctx: AppContext) {
         projectRoot = ctx.cfg.projectRoot,
         memory = memory,
         attachments = aiAttachments,
+        askRegistry = asks,
     )
     monitor.subscribe(ApplicationStopped) { runner.shutdown() }
     // 上次进程退出时还在 running 的 Run 不可能再继续：标成失败，而不是让界面永远转圈
@@ -365,7 +376,7 @@ fun Application.module(ctx: AppContext) {
             tagRoutes()
             mediaRoutes(ctx)
             captureRoutes(ctx, capture, submitter)
-            aiRoutes(credentials, runner, runBus, skills, memory, toolRegistry, approvals, ctx.cfg.projectRoot, aiAttachments)
+            aiRoutes(credentials, runner, runBus, skills, memory, toolRegistry, approvals, ctx.cfg.projectRoot, aiAttachments, asks)
         }
     }
 }

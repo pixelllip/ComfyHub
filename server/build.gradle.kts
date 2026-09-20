@@ -77,7 +77,14 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 application {
     mainClass.set("com.comfyhub.ApplicationKt")
-    applicationDefaultJvmArgs = listOf("-Dfile.encoding=UTF-8")
+    applicationDefaultJvmArgs = listOf(
+        "-Dfile.encoding=UTF-8",
+        // 认本机的系统代理（Windows 的 WinINET 设置）。Java 默认**一律直连**，
+        // 于是"本机要走 127.0.0.1:7890 才能出网"的机器上，所有出网工具都会连接超时
+        // （用户报的 "civitai_search 反复超时"）。真正的取舍与"内网永不代理"的旁路
+        // 都在 com.comfyhub.ai.OutboundProxy 里，这里只负责把系统代理**读得到**。
+        "-Djava.net.useSystemProxies=true",
+    )
 }
 
 tasks.test {

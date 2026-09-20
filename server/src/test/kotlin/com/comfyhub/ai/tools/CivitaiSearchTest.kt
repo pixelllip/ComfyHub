@@ -18,10 +18,11 @@ import kotlinx.coroutines.runBlocking
  * Civitai 客户端在**真实 HTTP** 上的行为（不联网：全部打本机临时端口）。
  *
  * 钉的是用户建议 ④ 那条原话里的两件事：
- *   · **NSFW 要令牌、且域名变成 `.red`** —— 走安全档还是成人档，必须在请求上看得见
- *     （Host 不同、查询串里明写 `nsfw=true`、带不带 Bearer 令牌）；
- *   · **缺令牌时不许静默降级** —— 必须报 `CIVITAI_TOKEN_REQUIRED` 并且**一个请求都不发**，
- *     否则模型会拿到一份被过滤过的结果却以为看到了全部。
+ *   · **NSFW 要显式打开、且域名变成 `.red`** —— 走安全档还是成人档，必须在请求上看得见
+ *     （Host 不同、查询串里明写 `nsfw=true`）；
+ *   · **令牌有就带、没有也说实话** —— 2026-09-20 核对线上后放宽：`.red` 匿名也能搜到成人结果
+ *     （见 `CivitaiSearch` 的类注释），所以缺令牌**不再拒绝搜索**，
+ *     但正文里必须写明"本次是匿名通道"，不许让模型以为拿到的是登录态的全量结果。
  *
  * 另外三条 HTTP 纪律与 [KeenableSearchTest] 同规矩：错误只映射成稳定码、
  * **绝不在错误正文里回显令牌**、解析出来的"用途说明"要能进给模型的文本。
@@ -128,16 +129,36 @@ class CivitaiSearchTest {
         }
     }
 
+    /**
+     * 没配令牌时的 NSFW 搜索（2026-09-20 用户决定放宽）。
+     *
+     * 老行为是当场抛 `CIVITAI_TOKEN_REQUIRED`、**一个请求都不发**，依据是"`.red` 只认登录态"。
+     * 真机核对推翻了这个前提（`.red` 匿名 200，结果与 `.com?nsfw=true` 逐条一致），
+     * 于是改成：**照搜**，但正文里如实写明这次是匿名通道 ——
+     * 放宽的是"能不能搜"，没有放宽"要不要说实话"。
+     */
     @Test
-    fun `NSFW 缺令牌时直接 CIVITAI_TOKEN_REQUIRED 且一个请求都不发`() = runBlocking {
+    fun `NSFW 没令牌也照搜 成人站 并在正文里写明是匿名通道`() = runBlocking {
         withCivitai { safe, nsfw, captured ->
             val client = CivitaiSearch(credentials(), safeBaseUrl = safe, nsfwBaseUrl = nsfw)
-            val e = assertFailsWith<ToolFailure> { client.search("任意查询", allowNsfw = true) }
+            val outcome = client.search("任意查询", allowNsfw = true)
 
-            assertEquals("CIVITAI_TOKEN_REQUIRED", e.code)
-            assertTrue(e.message!!.contains("令牌"), e.message)
-            // 关键：**不许静默降级成安全搜索**（那会让模型以为看到了全部）
-            assertTrue(captured().isEmpty(), "缺令牌时不该发任何请求：${captured()}")
+            val hit = captured().single()
+            assertNull(hit.authorization, "没配令牌就不带 Authorization 头")
+            assertTrue(hit.query!!.contains("nsfw=true"), "成人档要明写 nsfw=true：${hit.query}")
+            assertEquals(true, outcome.meta["nsfw"]?.let { it.toString().toBoolean() })
+            assertEquals(true, outcome.meta["tokenless"]?.let { it.toString().toBoolean() })
+            assertTrue(outcome.context.contains("匿名通道"), "要如实说明这次没带令牌：${outcome.context}")
+        }
+    }
+
+    /** 安全档不许出现"匿名通道"那句（那是 NSFW 档的提示，别到处贴）。 */
+    @Test
+    fun `安全档的正文里不写匿名通道提示`() = runBlocking {
+        withCivitai { safe, _, _ ->
+            val client = CivitaiSearch(credentials(), safeBaseUrl = safe, nsfwBaseUrl = safe)
+            val outcome = client.search("水墨风")
+            assertFalse(outcome.context.contains("匿名通道"), outcome.context)
         }
     }
 
@@ -179,6 +200,54 @@ class CivitaiSearchTest {
             val q = captured().single().query!!
             assertTrue(q.contains("types=LORA"), q)
             assertTrue(q.contains("limit=${CivitaiSearch.MAX_LIMIT}"), "limit 必须被夹到上限：$q")
+        }
+    }
+
+    /**
+     * `types` 线上**大小写敏感**（2026-09-20 实测：`LORA` 200，`lora` / `Lora` 400）：
+     * 小写很自然（模型自己写工具参数时不会抄大小写），直接透传就会变成一句没头没脑的
+     * "上游 400"，所以本地先归一成官方拼写再发。
+     */
+    @Test
+    fun `type 的大小写会被归一成官方拼写`() = runBlocking {
+        withCivitai { safe, _, captured ->
+            val client = CivitaiSearch(credentials(), safeBaseUrl = safe, nsfwBaseUrl = safe)
+            client.search("任意查询", type = "lora")
+            assertTrue(captured().single().query!!.contains("types=LORA"), captured().single().query!!)
+        }
+    }
+
+    @Test
+    fun `不认识的 type 当场报清楚 不发请求`() = runBlocking {
+        withCivitai { safe, _, captured ->
+            val client = CivitaiSearch(credentials(), safeBaseUrl = safe, nsfwBaseUrl = safe)
+            val e = assertFailsWith<ToolFailure> { client.search("任意查询", type = "Loraa") }
+
+            assertEquals("INVALID_ARGUMENT", e.code)
+            // 报错要把**可选值**列出来，模型才能自己改对；只说"400"它就只会反复试
+            assertTrue(e.message!!.contains("LORA"), e.message)
+            assertTrue(captured().isEmpty(), "本地就能判错的东西不该出网")
+        }
+    }
+
+    /**
+     * 线上字段核对（2026-09-20 实打 `GET /api/v1/models`）：`baseModel` 在
+     * `modelVersions[0]` 里，顶层另有一个 `baseModels` **数组**。前者缺失时用后者兜底 ——
+     * 兜底那一条要有用例盯着，否则它只是"看起来很稳"的一行代码。
+     */
+    @Test
+    fun `modelVersions 缺失时用顶层 baseModels 兜底`() = runBlocking {
+        val body = """
+            {"items":[{"id":7,"name":"只有顶层底模","type":"LORA","nsfw":false,
+              "baseModels":["Illustrious","SDXL 1.0"],
+              "stats":{"downloadCount":5,"thumbsUpCount":1},
+              "description":"测试用"}]}
+        """.trimIndent().replace("\n", "")
+
+        withCivitai(body = body) { safe, _, _ ->
+            val client = CivitaiSearch(credentials(), safeBaseUrl = safe, nsfwBaseUrl = safe)
+            val outcome = client.search("任意查询")
+            assertEquals("Illustrious", outcome.models[0].baseModel)
         }
     }
 

@@ -2,6 +2,7 @@ package com.comfyhub.ai.tools
 
 import com.comfyhub.AppJson
 import com.comfyhub.ai.CredentialService
+import com.comfyhub.ai.OutboundProxy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -74,9 +75,26 @@ interface CivitaiClient {
  *
  * ## 为什么域名要真的切到 `.red`
  *
- * 用户观察到的现象是对的：`.com` 上匿名请求拿到的是**已被过滤**的结果集，
- * NSFW 模型根本不在里面；`.red` 是同一套 API 的成人站镜像。照用户说的"模拟用户真机搜索"
- * 就是：带令牌、打 `.red`、把 `nsfw=true` 明明白白写进查询串。
+ * 用户的要求是"模拟用户真机搜索"：NSFW 走成人站镜像、把 `nsfw=true` 明明白白写进查询串。
+ * `.red` 是同一套 API 的成人站镜像，这条照做。
+ *
+ * ## ⚠ 与线上实测不一致的假设（2026-09-20 在本机实打 civitai.com / civitai.red 核对过）
+ *
+ * 用户原话里的前提是"NSFW 需要登录/令牌，且域名变成 `.red`"。实测 `/api/v1/models`
+ * 这条**搜索**接口并不是这样：
+ *
+ *  · `https://civitai.com/api/v1/models?query=breasts&nsfw=true` **匿名**就返回
+ *    `nsfw=true / nsfwLevel=60` 的条目（`id=7328 breasts_on_glass`），和 `.red` 上
+ *    同一查询的结果**逐条一致**；
+ *  · `.red` 匿名同样 200，要不要令牌都一样；
+ *  · 反过来，一个**假的** `Authorization: Bearer` 也不会被拒（两个域名都照样 200）——
+ *    也就是说这条接口根本不校验令牌。
+ *
+ * 所以本类里的"NSFW 必须有令牌"是**用户定的策略**（表达"这是登录态才做的事"，
+ * 并且它天然带一次审批），**不是**上游的要求。这个区别要留着：
+ * 别在注释、文档或给模型的提示里把它说成"不给令牌就搜不到" —— 那是**假话**，
+ * 而模型会据此对用户撒谎（"需要配置令牌"）或者干脆放弃搜索。
+ * 上游真正会 400 的是别的东西：`types` 大小写敏感、`limit` 上限 100（见下）。
  */
 class CivitaiSearch(
     private val credentials: CredentialService,
@@ -92,9 +110,11 @@ class CivitaiSearch(
     private val nsfwBase = nsfwBaseUrl.trim().trimEnd('/')
 
     private val client: HttpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(5))
+        .connectTimeout(Duration.ofSeconds(CONNECT_TIMEOUT_SECONDS))
         // 与 KeenableSearch 同规矩：不跟随重定向（目标是我们写死的域名，没必要被带走）
         .followRedirects(HttpClient.Redirect.NEVER)
+        // 本机的代理设置要认（JVM 默认一律直连 —— 用户报的"反复超时"就是这个，见 OutboundProxy）
+        .proxy(OutboundProxy.selector())
         .build()
 
     companion object {
@@ -114,16 +134,37 @@ class CivitaiSearch(
         /** Civitai 生态里通行的环境变量名（用户手边多半已经有一个）。 */
         const val ENV_TOKEN = "CIVITAI_API_KEY"
 
+        /**
+         * 连接超时（秒）。
+         *
+         * 单独拎出来是因为**错误信息必须说实话**：连接超时与"连上了但回得慢"是两回事，
+         * 以前两者都报"超时（25 秒）"，用户按"稍后再试"永远好不了（实际是 5 秒连不上）。
+         */
+        const val CONNECT_TIMEOUT_SECONDS = 5L
+
         const val DEFAULT_TIMEOUT_SECONDS = 25L
         const val MAX_TIMEOUT_SECONDS = 60L
 
         /** 一次最多回几条（再多也没人看，还白烧 token）。 */
         const val MAX_LIMIT = 20
 
+        /**
+         * 上游自己允许的 `limit` 上限（2026-09-20 实测：`limit=100` 200、`limit=101` 400）。
+         *
+         * 记在这里是为了让 [MAX_LIMIT] 看起来是"我们自己的取舍"而不是"上游只给这么多"——
+         * 哪天有人想放宽到 50，不必再去试探一遍线上。
+         */
+        const val UPSTREAM_MAX_LIMIT = 100
+
         /** 每条简介截断到多少字符 —— 用户要的是"简短的说明"，不是整页 README。 */
         const val MAX_DESCRIPTION_CHARS = 600
 
-        /** 允许的模型类型（Civitai 的 `types` 参数取值）。 */
+        /**
+         * 允许的模型类型（Civitai 的 `types` 参数取值）。
+         *
+         * **线上大小写敏感**（实测：`LORA` 200，`lora` / `Lora` 400），所以这里的拼写
+         * 就是官方拼写，[search] 会先把调用方给的值归一成它。[TYPES] 里每一个值都实测过 200。
+         */
         val TYPES = setOf("Checkpoint", "LORA", "TextualInversion", "Controlnet", "Upscaler", "VAE", "LoCon", "DoRA")
 
         private fun defaultSafeBaseUrl(): String =
@@ -154,17 +195,30 @@ class CivitaiSearch(
         if (q.isEmpty()) throw ToolFailure("INVALID_ARGUMENT", "缺少搜索词 query")
 
         val token = token()
-        // NSFW：用户点过头（工具默认 ASK）之后才可能走到这里，令牌仍然必须有 ——
-        // `.red` 上匿名请求拿不到成人结果，与其返回一份空结果让模型瞎猜，
-        // 不如当场说清楚"要令牌，去哪儿填"。
+        // NSFW 档：走成人站 `.red`，**有没有令牌都照搜**。
+        //
+        // 2026-09-20 之前的写法是"没令牌当场抛 CIVITAI_TOKEN_REQUIRED、一个请求都不发"，
+        // 依据是"`.red` 只认登录态"。真机核对把这个前提推翻了：`.red` 匿名 200
+        // （和 `.com?nsfw=true` 的结果逐条一致，见类注释）。所以那条硬门槛等于
+        // "明明能搜，工具却说搜不了" —— 用户 2026-09-20 选择放宽成现在这样：
+        //   · 显式 `allowNsfw=true` 仍然必须（工具默认 ASK，用户点过头才走到这里）；
+        //   · 配了令牌就带上（登录态更稳，也符合"模拟用户真机搜索"的本意）；
+        //   · 没配也不拒绝，但**必须如实说明这次是匿名通道**（[render] 里那行提示），
+        //     不能让模型以为"没配令牌也没关系"而去建议用户省掉这一步。
         if (allowNsfw && token == null) {
-            throw ToolFailure(
-                "CIVITAI_TOKEN_REQUIRED",
-                "搜索 Civitai 的 NSFW 内容需要令牌（成人站 $nsfwBase 只认登录态）。" +
-                    "请让用户在「设置 → AI 工具 / 凭据」里填一个 Civitai API Key" +
-                    "（凭据名 $CREDENTIAL_REF），或设置环境变量 $ENV_TOKEN；" +
-                    "**不要**改口说\"没搜到\"，也不要凭记忆编造模型信息。",
-            )
+            log.info("Civitai NSFW 搜索走匿名通道（没配令牌）")
+        }
+
+        // `types` 线上是**大小写敏感的枚举**：实测 `LORA` 200，而 `lora` / `Lora` 都是 400。
+        // 模型把类型写成小写是很自然的（工具描述里也有 "LORA" 之外的小写词），
+        // 所以这里先归一成官方拼写；真不认识的值当场报清楚，
+        // 别让它变成一句"上游 400"——模型看不出自己哪里写错了，只会反复试。
+        val typeFilter = type?.takeIf { it.isNotBlank() }?.trim()?.let { raw ->
+            TYPES.firstOrNull { it.equals(raw, ignoreCase = true) }
+                ?: throw ToolFailure(
+                    "INVALID_ARGUMENT",
+                    "不认识的模型类型 \"$raw\"；可选：${TYPES.joinToString(" / ")}",
+                )
         }
 
         val base = if (allowNsfw) nsfwBase else safeBase
@@ -177,7 +231,7 @@ class CivitaiSearch(
             // （本机测试当场抓到过一次 —— 拼 URL 的每一段都得当成"用户输入"对待）
             append("&sort=").append(enc("Most Downloaded"))
             append("&period=AllTime")
-            type?.takeIf { it.isNotBlank() }?.let { append("&types=").append(enc(it.trim())) }
+            typeFilter?.let { append("&types=").append(enc(it)) }
             // 走 .red 时把 nsfw 明写进查询串：这正是"模拟用户真机搜索"要做的那一步
             if (allowNsfw) append("&nsfw=true")
         }
@@ -195,7 +249,7 @@ class CivitaiSearch(
         return CivitaiOutcome(
             query = q,
             models = models,
-            context = render(models, q, allowNsfw),
+            context = render(models, q, allowNsfw, tokenless = token == null),
             meta = buildJsonObject {
                 put("count", models.size)
                 put("query", q)
@@ -215,11 +269,21 @@ class CivitaiSearch(
         val name = obj.str("name").orEmpty().ifBlank { "#$id" }
         val type = obj.str("type").orEmpty()
         // 第一个版本里第一个文件就是"主文件"，它的 baseModel 才是"这份模型跑在哪个底模上"——
-        // 顶层没有 baseModel 字段，这一步不取的话界面上就是一片空白
+        // 顶层没有 baseModel 字段，这一步不取的话界面上就是一片空白。
+        //
+        // 字段名与线上核对过（2026-09-20，`GET /api/v1/models?query=anime`）：
+        // `items[].modelVersions[0].baseModel` = `"SD 1.5"`，与本条顶层的
+        // `baseModels: ["SD 1.5"]` 一致 —— 后者是**数组**（一个模型可以跨多个底模），
+        // 所以只在 `modelVersions` 缺失/为空时拿它兜底，别拿它当主来源。
         val firstVersion = obj["modelVersions"]?.let { el ->
             runCatching { el.jsonArray }.getOrNull()?.firstOrNull()
         }?.let { runCatching { it.jsonObject }.getOrNull() }
-        val baseModel = firstVersion?.str("baseModel").orEmpty()
+        val baseModel = firstVersion?.str("baseModel").orEmpty().ifBlank {
+            obj["baseModels"]?.let { el -> runCatching { el.jsonArray }.getOrNull() }
+                ?.firstOrNull()
+                ?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
+                .orEmpty()
+        }
         val trainedWords = firstVersion?.get("trainedWords")?.let { el ->
             runCatching { el.jsonArray }.getOrNull().orEmpty().mapNotNull { w ->
                 runCatching { w.jsonPrimitive.contentOrNull }.getOrNull()
@@ -268,13 +332,32 @@ class CivitaiSearch(
         val response = withContext(Dispatchers.IO) {
             runCatching { client.send(builder.build(), HttpResponse.BodyHandlers.ofString()) }
         }.getOrElse { e ->
+            val host = runCatching { URI(url).host }.getOrNull() ?: "civitai"
+            // 路由也写进错误里（"直连"还是"走代理 127.0.0.1:7890"）：用户看不到日志，
+            // 但这一行就能让人判断是"本机出不去"还是"对方的问题"。
+            // 顺带修一个**说谎的提示**：连接超时（HttpConnectTimeoutException）以前被
+            // 归到"超时（25 秒）"里，其实是 5 秒内连都连不上 —— 用户按"稍后再试"永远好不了。
             throw when (e) {
+                is java.net.http.HttpConnectTimeoutException ->
+                    ToolFailure(
+                        "CIVITAI_TIMEOUT",
+                        "连不上 Civitai：$host 在 $CONNECT_TIMEOUT_SECONDS 秒内没连上。" +
+                            "本次出网路径是「${OutboundProxy.describe(host)}」。" +
+                            "如果本机需要代理才能访问 civitai.com，请确认系统代理可用（或设环境变量 " +
+                            "${OutboundProxy.ENV_PROXY}，写 direct 表示强制直连）；" +
+                            "**不要**反复重试同一个查询，如实告诉用户「本机连不上 Civitai」。",
+                    )
                 is java.net.http.HttpTimeoutException ->
-                    ToolFailure("CIVITAI_TIMEOUT", "搜 Civitai 超时（$timeoutSeconds 秒），稍后再试")
+                    ToolFailure(
+                        "CIVITAI_TIMEOUT",
+                        "搜 Civitai 超时（连上了但 $timeoutSeconds 秒没回完），稍后再试；" +
+                            "本次出网路径是「${OutboundProxy.describe(host)}」",
+                    )
                 else ->
                     ToolFailure(
                         "CIVITAI_FAILED",
-                        "连不上 Civitai（${e::class.simpleName}）；本机需要能访问 ${URI(url).host}",
+                        "连不上 Civitai（${e::class.simpleName}）；本机需要能访问 $host" +
+                            "（本次出网路径：${OutboundProxy.describe(host)}）",
                     )
             }
         }
@@ -311,13 +394,26 @@ class CivitaiSearch(
      * 用户要的是"**简短的说明**（比如它拿来做什么）"，所以每条固定四行：
      * 名字/类型/底模 → 干什么用（简介首句）→ 触发词 → 链接与热度。
      * 宁可每条短一点，也不要让两三行占满上下文。
+     *
+     * [tokenless] 且 [nsfw] 时在抬头补一句"本次是匿名通道"：这不是给用户看的装饰，
+     * 而是让模型知道**这次没带登录态**（`.red` 匿名能出结果，但拿到的可能比登录态少），
+     * 免得它把"匿名可见"当成"这就是全部"。
      */
-    private fun render(models: List<CivitaiModel>, query: String, nsfw: Boolean): String {
+    private fun render(
+        models: List<CivitaiModel>,
+        query: String,
+        nsfw: Boolean,
+        tokenless: Boolean = false,
+    ): String {
         if (models.isEmpty()) return ""
         val head = buildString {
             append("Civitai 搜索「").append(query).append("」")
             if (nsfw) append("（NSFW 通道）")
             append("：").append(models.size).append(" 条")
+            if (nsfw && tokenless) {
+                append("\n（本次没带 Civitai 令牌，走的是匿名通道 —— 结果照常可用；")
+                append("要更稳的登录态可以提醒用户去「设置 → AI 工具 / 凭据」填一个，但不必停下来等。）")
+            }
         }
         val blocks = models.mapIndexed { i, m ->
             buildString {

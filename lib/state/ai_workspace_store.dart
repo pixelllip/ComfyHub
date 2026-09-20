@@ -665,6 +665,60 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   Future<void> denyToolCall(String callId) => _resolveToolCall(callId, approve: false);
 
+  /// 回答 AI 的提问（用户建议 ⑥）。
+  ///
+  /// **不新建消息、也不改 Run 状态**：后端把这段文字当工具结果喂回模型，
+  /// 同一个 Run 接着往下做 —— 这正是用户要的"回答结束时不中断当前对话"。
+  ///
+  /// [optionIndex] 与 [text] 至少给一个；点了按钮就用前者（后端会把它翻成选项文字）。
+  Future<({bool ok, String message})> answerQuestion(
+    String questionId, {
+    int? optionIndex,
+    String? text,
+  }) async {
+    try {
+      final accepted = await _api.answerQuestion(questionId, optionIndex: optionIndex, answer: text);
+      if (!accepted) {
+        // 提问已经结束（超时 / Run 停了）：如实说，不能假装收到
+        return (ok: false, message: '这条提问已经结束了（超时或本次回答已停止），这次回答没有被采纳。');
+      }
+      // 本地立刻切成"已回答"：不等 SSE 回来（它也会来，但用户点完就该有反馈）
+      _patchToolCall(
+        questionId,
+        (call) => call.copyWith(
+          status: AiToolCallStatus.ok,
+          question: call.question?.copyWith(
+            answered: true,
+            answer: text ?? (optionIndex != null ? call.question?.options.elementAtOrNull(optionIndex) : null),
+            optionIndex: optionIndex,
+          ),
+        ),
+      );
+      notifyListeners();
+      return (ok: true, message: '已回答');
+    } catch (e) {
+      return (ok: false, message: '回答失败：$e');
+    }
+  }
+
+  /// 跳过提问：后端当作"用户没有回答"放行，模型基于已有信息继续。
+  Future<({bool ok, String message})> skipQuestion(String questionId) async {
+    try {
+      await _api.skipQuestion(questionId);
+      _patchToolCall(
+        questionId,
+        (call) => call.copyWith(
+          status: AiToolCallStatus.ok,
+          question: call.question?.copyWith(answered: true, answer: ''),
+        ),
+      );
+      notifyListeners();
+      return (ok: true, message: '已跳过');
+    } catch (e) {
+      return (ok: false, message: '跳过失败：$e');
+    }
+  }
+
   Future<void> _resolveToolCall(String callId, {required bool approve}) async {
     try {
       final accepted = approve ? await _api.approveToolCall(callId) : await _api.denyToolCall(callId);
@@ -1259,6 +1313,45 @@ class AiWorkspaceStore extends ChangeNotifier {
               event.callId ?? '',
               (prev) => (prev ?? AiToolCallState(callId: event.callId ?? '', name: event.toolName ?? ''))
                   .copyWith(name: event.toolName ?? prev?.name, status: AiToolCallStatus.running),
+            );
+            _notifyNow();
+          // 提问（用户建议 ⑥）：AI 当场问一句，**这一次回答不会结束**。
+          // 与"等待批准"分开处理：这里要画的是一张带选项 / 输入框的卡片。
+          case 'user.question':
+            final q = event.data['question'] is Map
+                ? AiQuestion.fromJson(Map<String, dynamic>.from(event.data['question'] as Map))
+                : null;
+            if (q == null) {
+              debugPrint('user.question 事件没有带 question 字段：${event.data}');
+              break;
+            }
+            _upsertToolCall(
+              assistantMessageId,
+              event.callId ?? q.questionId,
+              (prev) => (prev ?? AiToolCallState(callId: q.questionId, name: 'ask_user_question'))
+                  .copyWith(
+                name: 'ask_user_question',
+                status: AiToolCallStatus.pendingApproval,
+                question: q,
+                // 卡片要画在正确的位置：与工具卡一样，第一次见到就记进实时段
+                arguments: (prev?.arguments ?? '').isEmpty
+                    ? '{"question":"${q.question}"}'
+                    : prev?.arguments,
+              ),
+            );
+            _notifyNow();
+          case 'user.question.answered':
+            final qid = event.data['questionId']?.toString() ?? '';
+            if (qid.isEmpty) break;
+            final ans = event.data['answer']?.toString() ?? '';
+            final idx = (event.data['optionIndex'] as num?)?.toInt();
+            // 提问卡按 **questionId** 更新（用户答完 → 卡片切成"已回答"）
+            _patchToolCall(
+              qid,
+              (call) => call.copyWith(
+                status: AiToolCallStatus.ok,
+                question: call.question?.copyWith(answered: true, answer: ans, optionIndex: idx),
+              ),
             );
             _notifyNow();
           case 'tool.completed':

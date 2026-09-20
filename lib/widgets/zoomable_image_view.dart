@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'nsfw_blur.dart';
+
 /// 缩略图（右下角）与倍数条（左下角）的 key，测试里用来定位
 const Key zoomableMinimapKey = Key('zoomable-minimap');
 const Key zoomableZoomBarKey = Key('zoomable-zoom-bar');
@@ -265,7 +267,9 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
                     onInteractionEnd: (_) => setState(() => _dragging = false),
                     child: SizedBox.fromSize(
                       size: viewport,
-                      child: _image(viewport),
+                      // NSFW 打码（用户 2026-09-20 的"模糊"选项）：糊在图片那一层，
+                      // 缩放条 / 缩略图导航仍然能用 —— 用户点一下就能看原图。
+                      child: NsfwBlur(blurKey: widget.url, child: _image(viewport)),
                     ),
                   ),
                 ),

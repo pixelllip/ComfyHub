@@ -13,11 +13,13 @@ import 'package:http/testing.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:viewer/core/ai_api_client.dart';
 import 'package:viewer/core/api_client.dart';
 import 'package:viewer/core/backend_launcher.dart';
 import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/pages/settings_page.dart';
 import 'package:viewer/state/library_store.dart';
+import 'package:viewer/state/nsfw_store.dart';
 
 MockClient _mockClient() {
   return MockClient((request) async {
@@ -45,6 +47,9 @@ MockClient _mockClient() {
         'capturedMedia': 0,
         'recent': <Object>[],
       };
+    } else if (path == '/api/ai/nsfw') {
+      // NSFW 开关（两个选项放一起）：默认全关
+      body = {'enabled': false, 'blur': false, 'effectiveBlur': false, 'promptVersion': 'nsfw-v1'};
     } else if (path == '/api/tags' || path == '/api/tags/categories') {
       body = <Object>[];
     } else if (path == '/api/stats') {
@@ -72,32 +77,42 @@ MockClient _mockClient() {
   });
 }
 
+/// 设置页现在还要 `NsfwStore`（NSFW 两个开关的真源在后端），返回挂好 provider 的那棵树。
+Future<void> _pumpSettings(WidgetTester tester) async {
+  SharedPreferences.setMockInitialValues({});
+  final settings = SettingsStore();
+  await settings.load();
+  final client = _mockClient();
+  final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: client));
+  final launcher = BackendLauncher(settings);
+  final nsfw = NsfwStore(api: AiApiClient(settings.baseUrl, client: client));
+  addTearDown(store.dispose);
+  addTearDown(launcher.dispose);
+  addTearDown(nsfw.dispose);
+  await store.refreshAll();
+  await nsfw.load(silent: true);
+
+  await tester.pumpWidget(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<SettingsStore>.value(value: settings),
+        ChangeNotifierProvider<BackendLauncher>.value(value: launcher),
+        ChangeNotifierProvider<LibraryStore>.value(value: store),
+        ChangeNotifierProvider<NsfwStore>.value(value: nsfw),
+      ],
+      child: const MaterialApp(home: SettingsPage()),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('设置页：宽窗口分列，开关行左右都留出了内边距', (tester) async {
     tester.view.physicalSize = const Size(1700, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    SharedPreferences.setMockInitialValues({});
-    final settings = SettingsStore();
-    await settings.load();
-    final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: _mockClient()));
-    final launcher = BackendLauncher(settings);
-    addTearDown(store.dispose);
-    addTearDown(launcher.dispose);
-    await store.refreshAll();
-
-    await tester.pumpWidget(
-      MultiProvider(
-        providers: [
-          ChangeNotifierProvider<SettingsStore>.value(value: settings),
-          ChangeNotifierProvider<BackendLauncher>.value(value: launcher),
-          ChangeNotifierProvider<LibraryStore>.value(value: store),
-        ],
-        child: const MaterialApp(home: SettingsPage()),
-      ),
-    );
-    await tester.pumpAndSettle();
+    await _pumpSettings(tester);
 
     // 1) 分列：自动捕获排到了右边那一列
     final left = tester.getTopLeft(find.text('本地服务（MySQL + 后端）'));
@@ -124,26 +139,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    SharedPreferences.setMockInitialValues({});
-    final settings = SettingsStore();
-    await settings.load();
-    final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: _mockClient()));
-    final launcher = BackendLauncher(settings);
-    addTearDown(store.dispose);
-    addTearDown(launcher.dispose);
-    await store.refreshAll();
-
-    await tester.pumpWidget(
-      MultiProvider(
-        providers: [
-          ChangeNotifierProvider<SettingsStore>.value(value: settings),
-          ChangeNotifierProvider<BackendLauncher>.value(value: launcher),
-          ChangeNotifierProvider<LibraryStore>.value(value: store),
-        ],
-        child: const MaterialApp(home: SettingsPage()),
-      ),
-    );
-    await tester.pumpAndSettle();
+    await _pumpSettings(tester);
 
     final local = tester.getTopLeft(find.text('本地服务（MySQL + 后端）'));
     final ai = tester.getTopLeft(find.text('AI 模型与凭据'));
@@ -154,5 +150,40 @@ void main() {
     expect(beforeCapture, isTrue,
         reason: 'AI 入口不能排在 ComfyUI 自动捕获之后（实际 ai=$ai capture=$capture）');
     expect(ai.dy, greaterThan(local.dy - 1), reason: '本地服务仍然排在最前');
+  });
+
+  // NSFW 两个开关放一起（用户要求），而且模糊选项**从属于**开关：
+  // 主开关没开时它是置灰的 —— 没开 NSFW 就谈不上"给 NSFW 内容打码"。
+  testWidgets('设置页：NSFW 开关与模糊选项放一起，后者从属于前者', (tester) async {
+    tester.view.physicalSize = const Size(1700, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await _pumpSettings(tester);
+
+    expect(find.text('NSFW 内容'), findsOneWidget);
+    final master = find.ancestor(
+      of: find.text('NSFW 模式'),
+      matching: find.byType(SwitchListTile),
+    );
+    final blur = find.ancestor(
+      of: find.text('NSFW 内容模糊显示'),
+      matching: find.byType(SwitchListTile),
+    );
+    expect(master, findsOneWidget);
+    expect(blur, findsOneWidget);
+
+    // 同一张卡片里（"放一起"）
+    final card = find.ancestor(of: find.text('NSFW 模式'), matching: find.byType(Card)).first;
+    expect(
+      find.descendant(of: card, matching: find.text('NSFW 内容模糊显示')),
+      findsOneWidget,
+      reason: '两个选项必须在同一张卡片里',
+    );
+
+    // 主开关关着 → 模糊那一项不可点
+    expect(tester.widget<SwitchListTile>(master).value, isFalse);
+    expect(tester.widget<SwitchListTile>(blur).onChanged, isNull,
+        reason: 'NSFW 模式没开时模糊选项应当置灰');
   });
 }

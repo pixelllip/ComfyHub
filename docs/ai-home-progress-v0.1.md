@@ -740,6 +740,18 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 > 真正的思考档位仍然只列模型声明过的。实现只有一处：`AiModel.selectableEfforts`
 > （`lib/models/ai_models.dart`）—— 后端 `requireThinkingEffort` 本来就把 `off` 直接翻成"不发"，
 > 所以这个改动没有碰任何声明校验。回归用例 `test/ai_thinking_off_test.dart`。
+>
+> ⚠️ **2026-09-20 更正**（用户 bug："我明明重新选择关闭思考发起对话，然而还是高思考状态"）：
+> 上面那句"任何网关都成立"是**错的**。真机核对本机在用的网关 `command-code-goat`：
+> 它的 `reasoning_effort` 只认 `low|medium|high|xhigh|max`（400 报错原文），
+> 而 `thinking{type:disabled}` / `enable_thinking:false` / `reasoning{enabled:false}` /
+> `thinking_budget:0` / `/no_think` / JSON null **全被忽略**，照样返回 reasoning；
+> 连目录里标着"不支持推理"的 `xiaomi/mimo-v2.5`、`moonshotai/Kimi-K2.6`、`Qwen/Qwen3.7-Flash`
+> 也在思考。数据库里那条 Run 记的是 `reasoning_effort=off`，所以不是前端没生效 ——
+> 是**这个网关上根本关不掉**。
+> 按用户当场给的决定改名：**「关闭」→「默认」**（wire 仍是 `off`，不动历史数据），
+> 含义收窄成一句真话："我们不指定思考强度，由网关决定"。
+> 回归用例改名 `test/ai_reasoning_default_test.dart`，README 的思考强度一节同步。
 
 ### 5.2 四条不能动的规矩
 

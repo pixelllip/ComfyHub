@@ -4,6 +4,7 @@ import com.comfyhub.AppJson
 import com.comfyhub.ai.CredentialService
 import com.comfyhub.ai.EndpointGuard
 import com.comfyhub.ai.EndpointTrust
+import com.comfyhub.ai.OutboundProxy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -85,6 +86,8 @@ class KeenableSearch(
         .connectTimeout(Duration.ofSeconds(5))
         // 约束 ③：模型给的 URL 不能被重定向带跑
         .followRedirects(HttpClient.Redirect.NEVER)
+        // 本机的代理设置要认（JVM 默认一律直连，见 OutboundProxy）
+        .proxy(OutboundProxy.selector())
         .build()
 
     companion object {
@@ -274,12 +277,26 @@ class KeenableSearch(
         val response = withContext(Dispatchers.IO) {
             runCatching { client.send(builder.build(), HttpResponse.BodyHandlers.ofString()) }
         }.getOrElse { e ->
+            val host = runCatching { URI(base).host }.getOrNull() ?: base
+            // 与 CivitaiSearch 同一口径：连接超时 ≠ "回得慢"，出网路径也一并写出来
+            // （JVM 默认不走系统代理，这条信息是"是不是代理的事"的唯一线索）
             throw when (e) {
+                is java.net.http.HttpConnectTimeoutException ->
+                    ToolFailure(
+                        "SEARCH_TIMEOUT",
+                        "连不上搜索服务：$host 在 5 秒内没连上（本次出网路径：" +
+                            "${OutboundProxy.describe(host)}）。本机若需要代理才能出网，" +
+                            "请确认系统代理可用（或设环境变量 ${OutboundProxy.ENV_PROXY}）",
+                    )
                 is java.net.http.HttpTimeoutException ->
-                    ToolFailure("SEARCH_TIMEOUT", "联网搜索超时（${timeoutSeconds} 秒），稍后再试")
+                    ToolFailure(
+                        "SEARCH_TIMEOUT",
+                        "联网搜索超时（连上了但 ${timeoutSeconds} 秒没回完），稍后再试；" +
+                            "本次出网路径：${OutboundProxy.describe(host)}",
+                    )
                 else ->
                     ToolFailure("SEARCH_FAILED", "连不上搜索服务（${e::class.simpleName}）；" +
-                        "本机需要能访问 $base")
+                        "本机需要能访问 $host（本次出网路径：${OutboundProxy.describe(host)}）")
             }
         }
 

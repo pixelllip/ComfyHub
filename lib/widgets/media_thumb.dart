@@ -7,6 +7,7 @@ import '../core/formatting.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
 import 'common.dart';
+import 'nsfw_blur.dart';
 
 /// 缩略图解码的最大边长（**设备像素**）。
 ///
@@ -66,7 +67,17 @@ class MediaThumb extends StatelessWidget {
               // 缩略图单独占一层 RepaintBoundary：解码完成 / 加载进度变化时只重绘这一层，
               // 格子上的渐变和带投影的文字不会跟着重新栅格化
               // （文字阴影是每层最贵的一笔，现在每张图只会白付一次）
-              RepaintBoundary(child: _networkThumb(context, thumb, theme))
+              //
+              // NSFW 打码包在**最里面**（用户 2026-09-20 的"模糊"选项）：
+              // 糊的是图，角标 / 时长 / 文件名仍然看得见 —— 用户得先知道
+              // "这是什么"才谈得上决定要不要点开。
+              RepaintBoundary(
+                child: NsfwBlur(
+                  blurKey: thumb,
+                  borderRadius: BorderRadius.circular(12),
+                  child: _networkThumb(context, thumb, theme),
+                ),
+              )
             else
               _placeholder(theme),
 

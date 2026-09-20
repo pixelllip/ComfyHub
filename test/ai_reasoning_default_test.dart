@@ -1,9 +1,11 @@
-// 思考强度「关闭」档（用户要求：允许我关闭模型思考，加一个"关"的选项，**不影响模型声明**）。
+// 思考强度「默认」档（AIH-056；2026-09-20 由「关闭」改名，用户报的 bug：
+// 选了「关闭」却仍然在思考 —— 那个网关根本关不掉，见 AiReasoningEffort.off 的注释）。
 //
 // 关键约定：
-//   · 「关闭」不需要模型在 thinkingEfforts 里声明 off —— 它不发任何思考参数，任何网关都成立；
+//   · 「默认」不需要模型在 thinkingEfforts 里声明 off —— 它不发任何思考参数，任何网关都成立；
+//     **但它不承诺"不会思考"**：网关默认开思考时照样会思考，所以名字不能叫「关闭」；
 //   · 真正的思考档位仍然只列模型声明过的（不猜、不降级，AIH-056）；
-//   · 选「关闭」后创建 Run 的请求体里**不带** reasoningEffort 字段（后端缺省即 off）。
+//   · 选「默认」后创建 Run 的请求体里**不带** reasoningEffort 字段（后端缺省即 off）。
 
 import 'dart:convert';
 
@@ -127,7 +129,7 @@ void main() {
     runBodies.clear();
   });
 
-  test('「关闭」永远可选且排在最前；没声明的档位不给选，不支持推理则完全不给选', () {
+  test('「默认」永远可选且排在最前；没声明的档位不给选，不支持推理则完全不给选', () {
     const model = AiModel(
       providerId: 'p',
       id: 'm',
@@ -136,20 +138,20 @@ void main() {
       thinkingEfforts: {'high': 'high', 'max': 'max'},
     );
     final options = model.selectableEfforts;
-    expect(options.first, AiReasoningEffort.off, reason: '关必须排在最前');
+    expect(options.first, AiReasoningEffort.off, reason: '「默认」必须排在最前');
     expect(options, containsAll([AiReasoningEffort.high, AiReasoningEffort.max]));
     // 没声明的档位仍然不出现（不猜、不降级）
     expect(options, isNot(contains(AiReasoningEffort.low)));
     expect(options, isNot(contains(AiReasoningEffort.medium)));
     expect(options, isNot(contains(AiReasoningEffort.minimal)));
-    expect(model.thinkingEfforts.containsKey('off'), isFalse, reason: '模型声明不需要为了"关"而改动');
+    expect(model.thinkingEfforts.containsKey('off'), isFalse, reason: '模型声明不需要为了「默认」而改动');
 
     // 完全没声明推理能力的模型：一个档位都不给（后端也会拒）
     const plain = AiModel(providerId: 'p', id: 'm', displayName: 'M');
     expect(plain.selectableEfforts, isEmpty);
   });
 
-  testWidgets('思考强度选择器里能选「关闭」，选了之后 Run 请求不带思考参数', (tester) async {
+  testWidgets('思考强度选择器里能选「默认」，选了之后 Run 请求不带思考参数', (tester) async {
     final store = await _store(tester);
     expect(store.reasoningEffort, AiReasoningEffort.off);
 
@@ -157,7 +159,7 @@ void main() {
     await tester.tap(find.byType(AppMenuButton<AiReasoningEffort>));
     await tester.pumpAndSettle();
     expect(find.text('高'), findsOneWidget, reason: '模型声明过的档位要列出来');
-    expect(find.text('关闭'), findsWidgets, reason: '「关闭」即使没声明也要能选');
+    expect(find.text('默认'), findsWidgets, reason: '「默认」即使没声明也要能选');
     await tester.tap(find.text('高'));
     await tester.pumpAndSettle();
     expect(store.reasoningEffort, AiReasoningEffort.high);
@@ -167,10 +169,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(runBodies.last['reasoningEffort'], 'high');
 
-    // 再选「关闭」→ 请求体里不带这个字段（后端缺省即 off）
+    // 再选「默认」→ 请求体里不带这个字段（后端缺省即 off）
     await tester.tap(find.byType(AppMenuButton<AiReasoningEffort>));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('关闭').last);
+    await tester.tap(find.text('默认').last);
     await tester.pumpAndSettle();
     expect(store.reasoningEffort, AiReasoningEffort.off);
 
@@ -181,7 +183,7 @@ void main() {
     expect(
       runBodies.last.containsKey('reasoningEffort'),
       isFalse,
-      reason: '关闭思考时不应该发任何思考参数',
+      reason: '「默认」= 一个思考参数都不发（由网关决定），这条是它对用户的全部承诺',
     );
   });
 }

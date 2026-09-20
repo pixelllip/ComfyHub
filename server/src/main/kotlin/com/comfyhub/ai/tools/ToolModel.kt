@@ -38,6 +38,15 @@ enum class ToolCategory(val wire: String) {
      * 界面要能一眼分组、用户要能整类关掉（`deny`），预算也是按类单独算的。
      */
     WEB("web"),
+
+    /**
+     * 提问（用户建议 ⑥，2026-09-20）。
+     *
+     * 单独一类是因为它**碰的不是世界，是人**：它不读写文件、不查 ComfyUI、不出网，
+     * 只是把一个问题递到用户面前并把回答带回来。界面上也应当与"工具卡"分开画
+     * （见 `_AskCard`），否则用户会把"等你回答"误当成"等你批准"。
+     */
+    ASK("ask"),
     ;
 
     companion object {
@@ -55,8 +64,7 @@ class ToolContext(
     val policy: ToolPolicy,
     val skills: SkillStore,
     /** 长期记忆（M6）；为 null 表示本次部署没启用 */
-    val memory: MemoryStore? = null,
-    /** 本 Run 已加载过的 Skill：AIH-040 要求同一份正文不重复塞进上下文 */
+    val memory: MemoryStore? = null,    /** 本 Run 已加载过的 Skill：AIH-040 要求同一份正文不重复塞进上下文 */
     val loadedSkills: MutableSet<String> = mutableSetOf(),
     /** 本 Run 的工具调用计数（AIH-036：不允许无休止轮询） */
     var calls: Int = 0,
@@ -85,6 +93,16 @@ class ToolContext(
      * 那种不算，不然模型会因为自己啰嗦而被拒。
      */
     var memoryWrites: Int = 0,
+    /**
+     * 本 Run 所属的会话 id（用户建议 ⑥ 的提问要用它把提问挂到正确的那条对话上）。
+     */
+    val conversationId: String = "",
+    /**
+     * 往这次 Run 的事件流里发一条事件（由 HarnessRunner 注入，签名与它内部的 emit 一致）。
+     *
+     * `ask_user_question` 靠它把提问送到界面；测试里可以传一个只记下来不真发的实现。
+     */
+    val emit: ((String, JsonObject) -> Unit)? = null,
 )
 
 /** 工具执行结果。 */

@@ -31,6 +31,8 @@ object AiUpstream {
     private val client: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(5))
         .followRedirects(HttpClient.Redirect.NEVER)
+        // 本机的代理设置要认（JVM 默认一律直连；本机网关 / 127.0.0.1 仍然强制直连）
+        .proxy(OutboundProxy.selector())
         .build()
 
     /** 状态码 → 稳定错误码（AIH-024）。纯函数，便于单测。 */

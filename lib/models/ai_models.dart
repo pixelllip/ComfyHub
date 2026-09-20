@@ -74,10 +74,23 @@ enum AiApi {
 /// "等级"是给用户看的，**能不能选、发什么值由模型目录决定**：
 /// 模型声明了 `thinkingEfforts` 就只显示其中的等级；没声明推理能力就完全不给选。
 ///
-/// 等级表与 pi-ai / DSH 对齐：`关闭 → 极低 → 低 → 中 → 高 → 极高 → 最大`。
+/// 等级表与 pi-ai / DSH 对齐：`默认 → 极低 → 低 → 中 → 高 → 极高 → 最大`。
 /// 前沿模型常常只声明到"极高"（没有 `max`），少了这一档就只能把用户的选择压回"高"。
 enum AiReasoningEffort {
-  off('off', '关闭'),
+  /// 最低档：**不指定思考等级**，交给网关自己决定。
+  ///
+  /// 2026-09-20 由「关闭」改名而来（用户报的 bug：选了「关闭」却仍然在思考）。
+  /// 真机核对（本机在用的 command-code-goat 网关）表明这个前提是错的：
+  ///
+  ///  · 它的 `reasoning_effort` 只认 `low|medium|high|xhigh|max`（报错原文），**没有 off**；
+  ///  · `thinking{type:disabled}` / `enable_thinking:false` / `reasoning{enabled:false}` /
+  ///    `thinking_budget:0` / `/no_think` / JSON null **全被忽略**，照样返回 reasoning；
+  ///  · 不止 DeepSeek：MiMo V2.5、Kimi K2.6、Qwen3.7-Flash、MiniMax M2.5 也在思考。
+  ///
+  /// 也就是说"关掉思考"在这类网关上**做不到**，叫「关闭」就是承诺一件做不到的事。
+  /// 叫「默认」才是真话 —— 我们不发任何思考参数，思考与否由网关决定
+  /// （DSH 同一个档位也叫 `Default`）。要真正不思考，只能换一个不思考的模型/网关。
+  off('off', '默认', hint: '不发思考参数，由网关决定；有的网关（如聚合站）仍会思考'),
   minimal('minimal', '极低'),
   low('low', '低'),
   medium('medium', '中'),
@@ -85,9 +98,15 @@ enum AiReasoningEffort {
   xhigh('xhigh', '极高'),
   max('max', '最大');
 
-  const AiReasoningEffort(this.wire, this.label);
+  const AiReasoningEffort(this.wire, this.label, {this.hint});
+
+  /// 线上 / 入库用的值。**`off` 这个名字保留**：它是数据库与 API 里的既有取值，
+  /// 改它要动历史 Run 与各地图里的 `off` 键，而用户看到的是 [label]「默认」。
   final String wire;
   final String label;
+
+  /// 一档的补充说明（可选）：菜单里当副标题、按钮上当 tooltip。
+  final String? hint;
 
   static AiReasoningEffort? parse(String? wire) {
     for (final e in values) {
@@ -96,7 +115,7 @@ enum AiReasoningEffort {
     return null;
   }
 
-  /// 关闭以外的等级（模型可选的"真的在思考"的档位）
+  /// 默认以外的等级（模型可选的"真的在指定思考强度"的档位）
   bool get isThinking => this != AiReasoningEffort.off;
 }
 
@@ -257,11 +276,12 @@ class AiModel {
   bool get supportsReasoningEffort =>
       reasoning && thinkingEfforts.keys.any((k) => k != AiReasoningEffort.off.wire);
 
-  /// 可选的思考档位（固定顺序：关闭 → 极低 → 低 → 中 → 高 → 极高 → 最大）。
+  /// 可选的思考档位（固定顺序：默认 → 极低 → 低 → 中 → 高 → 极高 → 最大）。
   ///
-  /// **「关闭」永远可选**（用户要求："允许我关闭模型思考，不影响模型声明"）：
+  /// **「默认」永远可选**（用户要求："允许我默认不指定思考强度，不影响模型声明"）：
   /// 它不发任何思考参数、任何网关都成立，所以不要求模型在 `thinkingEfforts` 里声明 `off`
   /// —— 否则"只想安静地问一句"的用户得先去改模型声明，这是本末倒置。
+  /// **但它不承诺"不会思考"**：网关若默认开思考，它照样会思考（看 [AiReasoningEffort.off]）。
   /// 真正的思考档位仍然**只列模型声明过的**，不猜、不降级（AIH-056 第 2 条）。
   List<AiReasoningEffort> get selectableEfforts {
     if (!reasoning) return const [];
@@ -1408,9 +1428,117 @@ class AiToolPolicy {
       : '默认只能写 $defaultWriteRoot，其它位置一律拒绝。';
 }
 
+/// NSFW 内容设置（2026-09-20 用户要求：把那段"越狱"系统提示词做成开关 + 预览图模糊选项）。
+///
+/// 两个开关**放一起**（用户原话），而且**真源在后端**（`app_settings` 的 `ai.nsfw`）：
+/// [enabled] 决定后端拼系统提示词时注不注入那一段，前端自己存一份就会出现
+/// "界面显示开着、后端其实没注入"这种自相矛盾的状态。
+///
+/// [effectiveBlur] 由后端算好（= `enabled && blur`）：关了 NSFW 开关就不存在
+/// "NSFW 内容"这个概念，那时把整页图打码只会让人以为应用坏了。
+class AiNsfwSettings {
+  /// 是否注入 `[MODE: UNRESTRICTED SANDBOX — STABLE]` 那段越狱提示词。
+  final bool enabled;
+
+  /// 是否把预览图模糊显示（只有 [enabled] 也打开时才生效）。
+  final bool blur;
+
+  /// 真正生效的"打不打码" = `enabled && blur`。**前端不要自己再算一遍。**
+  final bool effectiveBlur;
+
+  /// 注入正文的版本号（后端 `NsfwPrompt.VERSION`），界面用它说明"这版是哪一版"。
+  final String promptVersion;
+
+  const AiNsfwSettings({
+    this.enabled = false,
+    this.blur = false,
+    this.effectiveBlur = false,
+    this.promptVersion = '',
+  });
+
+  factory AiNsfwSettings.fromJson(Map<String, dynamic> json) => AiNsfwSettings(
+        enabled: json['enabled'] == true,
+        blur: json['blur'] == true,
+        effectiveBlur: json['effectiveBlur'] == true,
+        promptVersion: (json['promptVersion'] ?? '').toString(),
+      );
+
+  AiNsfwSettings copyWith({bool? enabled, bool? blur}) => AiNsfwSettings(
+        enabled: enabled ?? this.enabled,
+        blur: blur ?? this.blur,
+        // 本地先按同一套规则预示；写回后以后端返回的为准
+        effectiveBlur: (enabled ?? this.enabled) && (blur ?? this.blur),
+        promptVersion: promptVersion,
+      );
+}
+
+/// AI 向用户提的一个问题（用户建议 ⑥，2026-09-20："让 AI 像 deepseek harness 一样
+/// 支持提问功能，回答结束时不中断当前对话"）。
+///
+/// 它与「需要批准的工具」长得像、语义完全不同：批准是"允不允许"，提问是"缺哪条信息"；
+/// 而且**这次 Run 不会因此结束** —— 用户答完，答案作为工具结果喂回模型，同一个回复接着做。
+class AiQuestion {
+  final String questionId;
+  final String runId;
+  final String conversationId;
+  final String question;
+
+  /// 界面画成按钮的候选答案（可能为空，那就只能自己敲）。
+  final List<String> options;
+
+  /// 允许自己敲一段（后端目前恒为 true —— 选项不一定对得上用户的需求）。
+  final bool allowFreeText;
+
+  /// 可选小标题（例如「参考图」「输出尺寸」）。
+  final String? header;
+
+  /// 用户已经答过（界面切成"已回答"）。
+  final bool answered;
+  final String? answer;
+  final int? optionIndex;
+
+  const AiQuestion({
+    required this.questionId,
+    this.runId = '',
+    this.conversationId = '',
+    required this.question,
+    this.options = const [],
+    this.allowFreeText = true,
+    this.header,
+    this.answered = false,
+    this.answer,
+    this.optionIndex,
+  });
+
+  factory AiQuestion.fromJson(Map<String, dynamic> json) => AiQuestion(
+        questionId: (json['questionId'] ?? '').toString(),
+        runId: (json['runId'] ?? '').toString(),
+        conversationId: (json['conversationId'] ?? '').toString(),
+        question: (json['question'] ?? '').toString(),
+        options: (json['options'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        allowFreeText: json['allowFreeText'] != false,
+        header: json['header']?.toString(),
+        answered: json['answered'] == true,
+        answer: json['answer']?.toString(),
+        optionIndex: (json['optionIndex'] as num?)?.toInt(),
+      );
+
+  AiQuestion copyWith({bool? answered, String? answer, int? optionIndex}) => AiQuestion(
+        questionId: questionId,
+        runId: runId,
+        conversationId: conversationId,
+        question: question,
+        options: options,
+        allowFreeText: allowFreeText,
+        header: header,
+        answered: answered ?? this.answered,
+        answer: answer ?? this.answer,
+        optionIndex: optionIndex ?? this.optionIndex,
+      );
+}
+
 /// 一次工具调用的状态机。
-enum AiToolCallStatus {
-  running('running', '运行中'),
+enum AiToolCallStatus {  running('running', '运行中'),
   pendingApproval('pending_approval', '待批准'),
   ok('ok', '已完成'),
   failed('failed', '失败'),
@@ -1463,6 +1591,12 @@ class AiToolCallState {
   /// 有了它就能在回复末尾直接打开这次真正跑过的工作流 / 把它拖回 ComfyUI 复现。
   final int? promptId;
 
+  /// `ask_user_question` 提的那个问题（用户建议 ⑥）；别的工具为 null。
+  ///
+  /// 有值时气泡里画的**不是工具卡而是提问卡**（带按钮 / 输入框），
+  /// 因为"等你回答"和"等你批准"是两件事，UI 不能混。
+  final AiQuestion? question;
+
   const AiToolCallState({
     required this.callId,
     required this.name,
@@ -1474,6 +1608,7 @@ class AiToolCallState {
     this.approval,
     this.mediaIds = const [],
     this.promptId,
+    this.question,
   });
 
   factory AiToolCallState.fromJson(Map<String, dynamic> json) => AiToolCallState(
@@ -1487,6 +1622,9 @@ class AiToolCallState {
         approval: json['approval']?.toString(),
         mediaIds: (json['mediaIds'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ?? const [],
         promptId: (json['promptId'] as num?)?.toInt(),
+        question: json['question'] is Map
+            ? AiQuestion.fromJson(Map<String, dynamic>.from(json['question'] as Map))
+            : null,
       );
 
   /// 从工具结构化结果里取出产物 id（`comfy_submit` 的 `mediaIds`）。
@@ -1530,6 +1668,11 @@ class AiToolCallState {
         final approval = (map['approval'] ?? '').toString();
         final i = indexOf[id];
         final prev = i == null ? null : out[i];
+        // 提问工具的结果里记着"问了什么、答了什么"：重开 App 之后那张卡要照原样显示
+        // （已完成状态），不能变成一张空白卡片（用户建议 ⑥）。
+        final asked = map['question'] is Map
+            ? AiQuestion.fromJson(Map<String, dynamic>.from(map['question'] as Map))
+            : null;
         final next = AiToolCallState(
           callId: id,
           name: (map['name'] ?? prev?.name ?? '').toString(),
@@ -1544,6 +1687,7 @@ class AiToolCallState {
           approval: approval.isEmpty ? null : approval,
           mediaIds: AiToolCallState.mediaIdsOf(map),
           promptId: AiToolCallState.promptIdOf(map),
+          question: asked ?? prev?.question,
         );
         if (i == null) {
           indexOf[id] = out.length;
@@ -1566,6 +1710,7 @@ class AiToolCallState {
     String? approval,
     List<int>? mediaIds,
     int? promptId,
+    AiQuestion? question,
   }) =>
       AiToolCallState(
         callId: callId,
@@ -1578,6 +1723,7 @@ class AiToolCallState {
         approval: approval ?? this.approval,
         mediaIds: mediaIds ?? this.mediaIds,
         promptId: promptId ?? this.promptId,
+        question: question ?? this.question,
       );
 
   /// 待用户批准：气泡上要出「批准 / 拒绝」。

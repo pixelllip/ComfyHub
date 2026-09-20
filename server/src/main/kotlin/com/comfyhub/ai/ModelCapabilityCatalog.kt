@@ -222,7 +222,8 @@ object ModelCapabilityCatalog {
         rule("gpt-5", TEXT_IMAGE, tools = true, reasoning = true, efforts = EFFORT_MIN_LOW_MED_HIGH)
 
         // --- 明确只吃文本的（避免被上面更宽的前缀误伤，也为界面提供"确定不支持"的结论） ---
-        // DeepSeek 的思考开关是 `thinking{type}`，且**默认开**，所以关闭要显式发 disabled
+        // DeepSeek 的思考开关是 `thinking{type}`，且**默认开**：不指定强度时会显式发 disabled
+        // （界面上的「默认」；网关认不认另说 —— 2026-09-20 实测聚合站全忽略，见 Reasoning.kt）
         rule("deepseek-reasoner", TEXT_ONLY, tools = true, reasoning = true,
             efforts = EFFORT_HIGH_ONLY, format = "deepseek")
         rule("deepseek-chat", TEXT_ONLY, tools = true, format = "deepseek")

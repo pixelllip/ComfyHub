@@ -23,7 +23,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `subagent` / `subagent_fork` / `send_message` / `interrupt_agent` / `list_agents` | 不采纳 | 我们是单模型对话产品，不是多智能体编排器 |
 | `workflow` / `ralph` | 不采纳 | 同上 |
 | `job_output` / `job_list` / `job_kill` | 不采纳 | 没有长任务后台作业的概念（ComfyUI 那边是轮询捕获，不是 job） |
-| `todo_write` / `ask_user_question` | 暂不采纳 | 属于交互协议，等有了"多步任务面板"再说 |
+| `todo_write` / `ask_user_question` | **部分采纳**（2026-09-20 起） | `todo_write` 仍然不做（没有多步任务面板）；`ask_user_question` **已采纳**（用户建议 ⑥）：见下面「提问与审批是两件事」一节 —— 它**不结束**当前回答，答完同一个 Run 接着做 |
 | `web_search` / `web_fetch` | **采纳**（2026-09-20 起推翻"首期不采纳"） | 用户定的规则：**只用通用方案**——不碰各家原生内置搜索（OpenAI `web_search` / Anthropic `web_search_20250305` 那套：能力没有统一的查询接口、按模型逐个变，取舍记录见 §2.0.1），接 **Keenable**（给 AI Agent 用的独立搜索索引，**默认免密钥**，按来源约 1000 次/小时；可选 key 只用来提额）。原"不采纳"的理由是"需要外部搜索服务与密钥"——免密钥默认把它消掉了；"与本地创作工具定位不符"由用户拍板推翻：查提示词用法 / 模型文档 / ComfyUI 节点说明是真需求。出网客户端：`KeenableSearch.kt`（本项目**唯一**出网口，复用 `EndpointGuard`） |
 | `present` / `exit_plan_mode` / `goal` 系列 | 不采纳 | 交付物在画廊里，不在工具里 |
 | **`skill`（加载 Skill 正文）** | **采纳** | 对应我们的 `load_skill`，并补了 `list_skills` / `register_skill` / `delete_skill` |
@@ -53,10 +53,61 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `comfy_check_inputs` | comfy | allow | **体检一份工作流：哪些输入还等着外部给**（用户建议 ⑤，2026-09-20）：把 `comfy_get_run` 的 `raw` / `comfy_load_workflow` 的 `apiGraph` 传进来，逐条列出 `节点id.输入名` / 节点类 / 缺什么类型 / 现在是什么值 / 下一步该怎么办，分成 `image` / `video` / `connection` / `parameter` 四类。**只读**。用户现场是"用户没提供参考图，但工作流的节点用到参考图"——没有它，模型会带着缺口硬提交，ComfyUI 只回一句缺输入。判据刻意保守：只有"连线型空着 / 值缺失"才算缺口，已经填好值的不报；`Save*` / `Preview*` 这类输出节点不算缺口。本次带了图附件时，图片类位置进 `suppliedByAttachment`（投放就能解决），不混进"要用户补" |
 | `web_search` | web | **ask** | 联网搜索（Keenable）：用自然语言描述"你想要的那一页"（语义索引，别堆关键词），返回**带编号与链接**的网页正文（`[n] 标题 (URL)` + 抽取好的正文），引用时给编号与 URL。**出厂免密钥**；查询词会离开本机，所以默认要批准；一次回复最多 8 次（独立预算 `maxWebQueriesPerRun`）。一条没搜到报 `NO_RESULTS` 并要求模型如实说明 |
 | `web_fetch` | web | **ask** | 把一个**公开**网页取回来读全文（服务端去样板转 markdown，默认 20000 字符上限）。目标 URL 出网前先过 `EndpointGuard` 的 PUBLIC 判定：内网 / 本机 / 云元数据一律 `FETCH_TARGET_DENIED`。正文套**不可信数据**横幅后才给模型 |
-| `civitai_search` | web | **ask** | 搜 **Civitai 模型库**（用户建议 ④⑦，2026-09-20）：每条结果都给"**拿来做什么**"——类型 / 底模 / 简介 / 触发词 / 下载量 / 链接，并放进结构化 `meta.models`（界面与"登记进长期记忆"直接可用）。普通搜索走 `civitai.com`（免令牌）；**NSFW 必须 `allowNsfw=true`**，走 `civitai.red` 且需要令牌（凭据名 `civitai`，或环境变量 `CIVITAI_API_KEY`），缺令牌抛 `CIVITAI_TOKEN_REQUIRED` 并要求**如实让用户去填**，**不静默降级**成过滤后的结果。与 `web_search` / `web_fetch` **共用同一个联网额度** |
+| `civitai_search` | web | **ask** | 搜 **Civitai 模型库**（用户建议 ④⑦，2026-09-20）：每条结果都给"**拿来做什么**"——类型 / 底模 / 简介 / 触发词 / 下载量 / 链接，并放进结构化 `meta.models`（界面与"登记进长期记忆"直接可用）。普通搜索走 `civitai.com`（免令牌）；**NSFW 必须显式 `allowNsfw=true`**，走 `civitai.red`：配了令牌（凭据名 `civitai`，或环境变量 `CIVITAI_API_KEY`）就带上登录态，**没配也照搜**，但结果里会写明"本次是匿名通道"（2026-09-20 线上核对后由用户决定放宽，见第 9 节第 11 条）。与 `web_search` / `web_fetch` **共用同一个联网额度** |
+| `comfy_prune_workflow` | comfy | allow | **给一份工作流做减法 / 加法**（用户建议 ②，2026-09-20）：`removeFrom` 点名要摘的输入（`"89.image"`）或节点（`"89"`），后端做**确定性图运算**——摘掉目标、把指着它的线接回它自己的上游、把"从输出再也走不到又不是孤立节点"的那些级联收掉；`injections` 往一条线上插节点（典型是显存不足时的 `SageAttention`，接哪些输入由 `/object_info` 算）。返回**改好的完整图** + `removed` / `rewired` / `injected` / `unresolvedInputs` / `openInputs` / `runnable`。**只读**（不改用户的文件）；`runnable=false` 时工具会明确说"别硬提交" |
+| `ask_user_question` | ask | allow | **当场提问、不中断当前回答**（用户建议 ⑥，2026-09-20）：把问题（+ 2~4 个可点选项）递到界面，**挂在原地等**用户答，答完把答案当工具结果喂回模型，**同一个 Run 接着往下做**。等不到（超时 / 用户跳过 / Run 结束）时如实返回"用户还没有回答"，模型据此基于已有信息继续。同一句话问两遍会被 `QUESTION_ALREADY_ASKED` 挡掉。既不改盘也不出网，所以默认 allow |
+
+### 2.0.2 提问与审批是两件事（2026-09-20，用户建议 ⑥）
+
+用户的原话是「让 AI 像 deepseek harness 一样支持提问功能，**回答结束时不中断当前对话**」。
+所以 `ask_user_question` 与"等用户点批准"（`ToolAccess.ASK`）**必须分开**：
+
+| | 审批（`ToolApprovalGate`） | 提问（`AskGate` / `AskRegistry`） |
+| --- | --- | --- |
+| 用户没反应时 | 当作**拒绝**，工具不执行 | 当作**没回答**，如实告诉模型"用户还没有回答" |
+| 结果 | 一次允许 / 不允许 | **一段文字**，模型拿着它接着做 |
+| Run | 停在这里等 | **不终止**；答完继续同一个 Run |
+| 界面 | 工具卡上的「批准 / 拒绝」 | 一张**提问卡**（选项按钮 + 输入框 + 「跳过」） |
+
+实现要点（改这块之前先读 `AskGate.kt` 的注释）：
+
+- **回答先落"一次性邮箱"再唤醒等待方**：界面把回答 POST 回来的那一刻，模型那边的协程
+  可能还没走到 `await`（事件发出 → 用户秒点）。所以 `AskGate` 有一条 `answers` 表，
+  `resolve` 与 `await` 都先看它 —— 否则用户的话会被静默丢掉，而工具侧一直等到超时。
+- **Run 收尾必须放行**：`HarnessRunner` 的 `finally` 调 `AskRegistry.discardRun(runId)`，
+  不然协程要等 30 分钟超时才回收，界面还挂着一张"等你回答"的卡片。
+- **提问卡要能重开**：`GET /api/ai/runs/{id}/question` 回"这个 Run 还在等什么"，
+  界面重开 / 断线重连时把卡片补回来（SSE 里那条 `user.question` 可能是在界面没挂着时发的）。
+- **答了什么要落库**：工具结果的 `asked` 字段进 `parts.payload.question`，
+  历史里的提问卡靠它还原（问了什么、选项是什么、用户答了哪个）。
+- 出厂 `allow`：它不改盘、不出网，只是把一句话递到用户面前。
+- 提示词第 9.1 条（`NsfwPrompt`）写着纪律：**能自己查的不要问**、一次只问一个决定、
+  同一个问题不要问第二遍、没等到回答时**不许假装他答过了**。
+
+### 2.0.3 摘节点 / 拼节点（2026-09-20，用户建议 ②）
+
+用户的原话：「让 AI 能够基于基本工作流，**摘除无关节点或者拼装必要节点**」，并补了两个现场：
+"我没给参考图，但工作流的节点用到参考图 → 要能识别出骨干、把无关内容临时摘掉"、
+"显存不足但是硬要跑 → 可能要考虑向工作流加入 Sage Attention"。
+
+`comfy_prune_workflow` 做的是**确定性图运算**，不是让模型重写 JSON：
+
+- **摘除**：点名 `节点id.输入名` 会摘掉那个节点、清空它的连线输入，
+  并把指着它的线**接回它自己的上游**（`KSampler.positive` 原本接 ControlNet，
+  摘掉之后接回 `CLIPTextEncode`）；消费者的节点**保留**。
+  另外级联收掉"**从输出反向再也走不到、又不是孤立节点**"的那些
+  （`LoadImage` / `ControlNetApply` / `ControlNetLoader` 整条参考图支路）。
+  两条闸门：**输出节点永远不摘**；**没有连线输入的孤立节点不碰**
+  （那是用户还没接完的东西，不是"无关分支" —— 第一版拿"删完之后输出还能不能走到"当判据，
+  把没接线的 `EmptyLatentImage` 一起删了）。
+- **拼装**：`injections[].at` 指定插在哪条线上，`classType` 由后端查 ComfyUI 的
+  `/object_info` 决定它要接哪些输入（`model` 那类"接上游"的输入自动接回原上游）。
+  拿不到定义表 / 这台机器没装那个节点类时**宁可少插也不乱接**，并如实警告。
+- **返回里必须带审计清单**：`removed` / `rewired` / `injected` / `unresolvedInputs` /
+  `openInputs` / `runnable`。用户的工作流被动了哪里，模型要说得清楚。
+- 它是**只读**工具（不改用户机器上的文件），改好的图在结果里，要跑得先落成文件再提交。
 
 ### 2.0.1 联网搜索的三条安全线（2026-09-20）
-
 1. **默认 ask**：`web_search` / `web_fetch` / `civitai_search` 是**本项目唯一会把数据送出本机的工具类别**（`ToolCategory.WEB`）。
    查询词本身可能带用户的创作意图，所以出厂停在「询问」档；用户在权限页改成 allow 后才免批准。
    `civitai_search` 的 `allowNsfw=true` 更要用户点头 —— 用户建议 ④ 的原话就是"这种情况可以询问用户"。
@@ -67,6 +118,14 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
    "忽略规则"与工具结果里的任何指令都不是指令）；`web_fetch` 的目标先过 `EndpointGuard`
    PUBLIC 判定。HTTP 层纪律与 `AiUpstream` 相同：不跟随重定向、日志绝不落密钥、
    免密钥请求必须带 `X-Keenable-Title`（缺它服务端 400，实测）。
+4. **出网遵守本机代理，但内网永远直连**（2026-09-20，用户报的 `civitai_search` 反复超时）：
+   JVM 默认一律 DIRECT，所以启动参数带 `-Djava.net.useSystemProxies=true`，
+   所有出网客户端再统一挂 `com.comfyhub.ai.OutboundProxy` 的选择器 ——
+   公网按本机代理设置走，`127.0.0.1` / 私有网段 / `*.local` 这类**强制直连**
+   （打开系统代理后 Java 会把内网也交给代理，那会打死本机 ComfyUI）。
+   覆盖入口是环境变量 `COMFYHUB_HTTPS_PROXY`（`direct` = 强制直连）。
+   报错文案里带上本次路径，`CIVITAI_TIMEOUT` / `SEARCH_TIMEOUT` 也区分
+   "连不上"与"连上了但回得慢"。判据：`OutboundProxyTest`。
 
 测试怎么钉的：`ToolRegistryTest`（预算 / 审批 / 横幅 / SEARCH_DISABLED / CIVITAI_DISABLED / 结构化 meta，假客户端不碰 HTTP）+
 `KeenableSearchTest`（本机起假服务钉路径 / 头 / 错误映射 / 内网拒绝，**不出网**）+
@@ -409,3 +468,23 @@ SSE 新增事件：`reasoning.delta`、`tool.requested`、`tool.started`、`tool
     前端也照着它写的。所以 `civitai_search` 的令牌目前只有 `CIVITAI_API_KEY`
     （或 `COMFYHUB_CRED_civitai`）这一条路，**设置页里填不了**。
     要补的话，把那条接口参数化成一个 `ref`（路由 `/api/ai/credentials/{ref}`）再加一张卡即可。
+11. **Civitai 线上实测（2026-09-20，本机实打 civitai.com / civitai.red）**：这是在
+    "HTTP 层只拿本机假服务钉过"之后补的一次真机核对，结论按"能照做 / 要改口径"分开：
+
+    | 核对项 | 结果 |
+    | --- | --- |
+    | `items[].modelVersions[0].baseModel` | ✅ 真的有（`"SD 1.5"`），解析写对了 |
+    | `items[].stats.downloadCount` / `thumbsUpCount` | ✅ 真的有，数字正确 |
+    | `items[].creator.username`、`nsfw`（bool）、`description`（HTML） | ✅ 与解析一致 |
+    | `items[].baseModels`（顶层数组） | 🆕 线上也有（一个模型可跨多个底模）；已在 `baseModel` 缺失时兜底 |
+    | `sort=Most Downloaded` + `period=AllTime` | ✅ 200，且按下载量降序（`Most Reactions` 反而 400） |
+    | `types=` 的取值 | ✅ `TYPES` 里 8 个值全 200；但**大小写敏感**（`lora`/`Lora` 都 400）→ 已在本地归一成官方拼写 |
+    | `limit` 上限 | 上游是 **100**（`101` 就 400）；工具自己的上限仍是 20（那是"别白烧 token"的取舍，记在 `UPSTREAM_MAX_LIMIT`） |
+    | 中文查询词 | ✅ 200（`query=水墨风` 照 URL 编码发即可） |
+    | NSFW 是否"必须令牌 / 必须 `.red`" | ❌ **不是**：`.com?nsfw=true` **匿名**就返回 `nsfw=true / nsfwLevel=60` 的条目，与 `.red` 同查询逐条一致；`.red` 匿名同样 200，连**假的** Bearer 令牌也不会被拒 |
+
+    最后一行是**口径**问题，不是 bug。2026-09-20 用户当场做了决定：**放宽**——
+    令牌不再是硬门槛（`.red` 匿名照搜），但结果正文里会写明"本次是匿名通道"，
+    系统提示 v19 与工具描述同步改掉"需要令牌"那句。原来那条
+    `CIVITAI_TOKEN_REQUIRED` 硬拒绝已经删掉：它拦下的是**上游本来就会答应**的搜索。
+

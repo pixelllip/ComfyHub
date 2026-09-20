@@ -8,6 +8,7 @@ import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
+import '../state/nsfw_store.dart';
 import '../widgets/adaptive_layout.dart';
 import 'ai_provider_settings_page.dart';
 
@@ -40,6 +41,9 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _captureBusy = false;
   bool _captureEnabled = true;
   int _pollSeconds = 4;
+
+  /// NSFW 两个开关正在写库（避免连点把两次写入交叉）。
+  bool _nsfwBusy = false;
 
   /// 「自动查找 ComfyUI」的探测结果（用户"其他建议"第 3 条）；null = 还没查过。
   ComfyLocation? _comfyLocation;
@@ -489,6 +493,10 @@ class _SettingsPageState extends State<SettingsPage> {
               estimatedHeight: 120,
             ),
             AdaptiveSection(
+              _section(theme, 'NSFW 内容', _nsfwCard(theme)),
+              estimatedHeight: 300,
+            ),
+            AdaptiveSection(
               _section(
                 theme,
                 '后端服务',
@@ -718,6 +726,89 @@ class _SettingsPageState extends State<SettingsPage> {
           card,
         ],
       );
+
+  // -------------------------------------------------------------------------
+  //  NSFW 内容（2026-09-20 用户要求）
+  //
+  //  两个选项**放一起**（用户原话）。真源在后端的 `ai.nsfw`，这里只是读写通道：
+  //  ① 开关：开 = 系统提示词里注入那段"越狱"提示词，关 = 注入一句"本机没开"；
+  //  ② 模糊：开 = 预览图打码（点一下解开这一张），且**只有 ① 也开着才生效**。
+  // -------------------------------------------------------------------------
+
+  Widget _nsfwCard(ThemeData theme) {
+    final nsfw = context.watch<NsfwStore>();
+    final busy = _nsfwBusy;
+    final enabled = nsfw.nsfwEnabled;
+    final blur = nsfw.blurOptionEnabled;
+
+    Future<void> apply({bool? nextEnabled, bool? nextBlur}) async {
+      setState(() => _nsfwBusy = true);
+      final next = await nsfw.save(
+        enabled: nextEnabled ?? enabled,
+        // 关掉开关时模糊也一并落成"关"：不然下次再打开会莫名其妙地全糊
+        blur: (nextEnabled == false) ? false : (nextBlur ?? blur),
+      );
+      if (!mounted) return;
+      setState(() => _nsfwBusy = false);
+      if (!next.ok) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(next.message)));
+      }
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+              child: Text(
+                '成人内容相关。两个开关都由后端保存，改完**下一次回复**立刻生效，不用重启应用。',
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+            ),
+            _SwitchRow(
+              title: 'NSFW 模式',
+              subtitle: enabled
+                  ? '已开启：系统提示词里会注入那段"越狱"人格提示词（对话语气更放开）。'
+                  : '未开启：不注入那段提示词，模型会按常规内容策略作答。',
+              value: enabled,
+              onChanged: busy ? null : (v) => apply(nextEnabled: v),
+            ),
+            const Divider(height: 1),
+            _SwitchRow(
+              title: 'NSFW 内容模糊显示',
+              subtitle: !enabled
+                  ? '先开启上面的「NSFW 模式」才有意义 —— 没开时不存在"NSFW 内容"，打码只会让人以为应用坏了。'
+                  : (blur
+                      ? '已开启：画廊 / 提示词 / 标签页与 AI 回复里的预览图会打码，点一下看原图（只对本次运行有效）。'
+                      : '未开启：预览图原样显示。'),
+              value: blur,
+              // 开关没开时这一项置灰：两个选项的从属关系要一眼看得出来
+              onChanged: (busy || !enabled) ? null : (v) => apply(nextBlur: v),
+            ),
+            if (nsfw.promptVersion.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Text(
+                  '注入正文版本：${nsfw.promptVersion}',
+                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                ),
+              ),
+            if (nsfw.error != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+                child: Text(
+                  nsfw.error!,
+                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   // -------------------------------------------------------------------------
   //  本地服务卡片

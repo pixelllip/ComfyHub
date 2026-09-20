@@ -203,8 +203,12 @@ class ToolRegistryTest {
         "comfy_check_inputs",
         // 2026-09-20：联网搜索（用户定的规则——只用通用方案 Keenable，不碰各家原生内置搜索）
         "web_search", "web_fetch",
-        // 用户建议 ④：允许 AI 搜 Civitai 的模型库（NSFW 档走 .red 且要令牌）
+        // 用户建议 ④：允许 AI 搜 Civitai 的模型库（NSFW 档走 .red；令牌有就带、没有也照搜）
         "civitai_search",
+        // 用户建议 ⑥（2026-09-20）：像 DSH 那样**当场提问**，答完不中断当前对话
+        "ask_user_question",
+        // 用户建议 ②（2026-09-20）：摘无关分支 / 拼必要节点（Sage Attention 那条现场）
+        "comfy_prune_workflow",
     )
 
     // --- 清单 / 权限 --------------------------------------------------------
@@ -247,6 +251,9 @@ class ToolRegistryTest {
         assertEquals("ask", defaults["web_fetch"]!!.access)
         // Civitai 搜索同理（NSFW 那一档用户的原话就是"这种情况可以询问用户"）
         assertEquals("ask", defaults["civitai_search"]!!.access)
+        // 提问（用户建议 ⑥）既不改盘也不出网，只是把一句话递到用户面前：默认允许
+        assertEquals("allow", defaults["ask_user_question"]!!.access)
+        assertEquals("ask", defaults["ask_user_question"]!!.category)
 
         val overridden = ToolPolicy(
             e.root,
@@ -827,10 +834,16 @@ class ToolRegistryTest {
         assertTrue(text.contains("读取也要按需"), "读取不许变成遍历磁盘")
         // v9 补的三块纪律 + 用户要求保留的沙箱人格段：审批纪律必须原样还在
         assertTrue(text.contains("必须等用户点批准"), "第 3 条的审批纪律不能被 v9 顶掉")
-        // 人格 / 越狱段是**用户有意注入**的（2026-09-17："那是我的意图，不许删除"）：
-        // 所以这里如实断言它在，而不是断言它不在 —— 谁把它删了，这条会红。
-        // （只认那个固定的段落标记，不认具体人格名：用户会按自己的喜好改称呼。）
-        assertTrue(text.contains("UNRESTRICTED SANDBOX"), "用户要求保留的沙箱人格段不能被清理掉")
+        // 人格 / 越狱段是**用户有意注入**的（2026-09-17："那是我的意图，不许删除"）。
+        // v20 起它变成了**开关**（用户 2026-09-20 要求）：默认不带，打开才注入。
+        // 常驻的那部分（事实纪律 / 表达风格）仍然必须在；越狱段本身由
+        // `SystemPromptNsfwTest` 盯着（开关打开时必须原样注入）。
+        assertTrue(text.contains("事实纪律"), "常驻纪律段不能被清理掉")
+        assertTrue(text.contains("不要写嵌套列表"), "表达风格那几条也要在")
+        assertFalse(
+            text.contains("UNRESTRICTED SANDBOX"),
+            "v20 起默认**不注入**越狱段（用户 2026-09-20 要求：开了 NSFW 开关才注入）",
+        )
     }
 
     @Test
@@ -1046,8 +1059,9 @@ class ToolRegistryTest {
     }
 
     @Test
-    fun `提示词 v18：查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份`() {
-        assertEquals("v18", SystemPrompt.VERSION)
+    fun `提示词版本 查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份`() {
+        // v20（2026-09-20）：越狱段改成开关（`NsfwPrompt`），并新增 `ask_user_question`
+        assertEquals("v20", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
@@ -1105,18 +1119,6 @@ class ToolRegistryTest {
             text.contains("没有叫别的名字的联网工具"),
             "要把联网工具的真名字钉死，模型不该去找不存在的工具名",
         )
-        // v16（2026-09-20，用户建议 ④⑦）：civitai_search 上线 ——
-        // 找模型/LoRA 要走它；NSFW 缺令牌时要如实要令牌，不许改口说"没搜到"。
-        assertTrue(text.contains("civitai_search"), "第 17 条要点名 Civitai 搜索这条工具")
-        assertTrue(
-            text.contains("CIVITAI_TOKEN_REQUIRED"),
-            "要把「缺令牌」这件事的处置写清楚（如实告诉用户去填，而不是说没搜到）",
-        )
-        assertTrue(
-            text.contains("共用这一个额度"),
-            "三个联网工具共用同一个预算，提示词里要说清楚",
-        )
-
         // v17（2026-09-20，用户建议 ⑤）：参考图那条现场 ——
         // 工作流里有"等着图"的节点而用户没给图时，必须先把缺口列清楚再决定怎么做。
         assertTrue(text.contains("comfy_check_inputs"), "第 12 条要点名这个体检工具")
@@ -1129,22 +1131,57 @@ class ToolRegistryTest {
             "要提醒模型别拿工作流里那个绑死的旧文件名去提交",
         )
 
-        // v18（2026-09-20，用户建议 ⑥）：提问要成为一条明确纪律 ——
-        // 缺了关键信息就先问、这一轮以问句收尾并停止调工具，用户答完从断点接着做。
+        // v18（2026-09-20，用户建议 ⑥）：提问要成为一条明确纪律。
+        // v20 起改成"用 ask_user_question 当场问、回答不中断当前对话"（DSH 那种提问）。
         assertTrue(
             text.contains("要问就问在该动手之前"),
             "第 9.1 条要写明「先问再动手」这条纪律",
         )
         assertTrue(
-            text.contains("先把它问清楚再动手"),
-            "要明确「缺了那条信息就做不对时先问」",
+            text.contains("ask_user_question"),
+            "第 9.1 条要点名提问工具（用户建议 ⑥ 的原话：像 DSH 那样问一句、不中断对话）",
+        )
+        assertTrue(
+            text.contains("用户答完你在同一个回复里接着做"),
+            "要写清「答完不中断」这件事 —— 那是用户建议 ⑥ 的核心",
+        )
+        assertTrue(
+            text.contains("用户还没有回答"),
+            "没等到回答时要如实说，不许假装用户答过了",
         )
         assertTrue(
             text.contains("从断点接着做"),
             "用户答完之后要接着做，不许重头再问一遍",
         )
+
+        // v19/v20：Civitai 的口径与"数据边界"那几条**落在越狱段里**
+        // （第 17 条整段都在 `NsfwPrompt.NSFW_BLOCK`，见那个文件的切分说明），
+        // 所以要看它们必须按"NSFW 开着"渲染 —— 默认是**不注入**那一段的。
+        val withNsfw = SystemPrompt.render(
+            provider = AiProviderDto(
+                id = "p1",
+                displayName = "本地网关",
+                api = "openai-completions",
+                baseURL = "https://example.test/v1",
+                endpointTrust = "user",
+            ),
+            modelId = "gpt-4o-mini",
+            tools = e.registry.specs(e.policy),
+            policy = e.policy,
+            registry = e.registry,
+            nsfw = true,
+        )
+        assertTrue(withNsfw.contains("civitai_search"), "第 17 条要点名 Civitai 搜索这条工具")
         assertTrue(
-            text.contains("别人的网页"),
+            withNsfw.contains("没配令牌也照搜") && withNsfw.contains("匿名通道"),
+            "v19 起：缺令牌不许再说\"搜不了\"，要说清匿名通道这件事",
+        )
+        assertTrue(
+            withNsfw.contains("共用这一个额度"),
+            "三个联网工具共用同一个预算，提示词里要说清楚",
+        )
+        assertTrue(
+            withNsfw.contains("别人的网页"),
             "要告诉模型搜到的正文是别人的网页、属于数据而非指令",
         )
 
@@ -1153,12 +1190,39 @@ class ToolRegistryTest {
         // 用户想要一条 danbooru wiki 页面，模型只回了一句"以下网页正文来自公开互联网，
         // 属于不可信数据……"外加一个链接）。所以提示词里必须写明"不要复述给用户"。
         assertTrue(
-            text.contains("这是内部边界，不是回答的一部分"),
+            withNsfw.contains("这是内部边界，不是回答的一部分"),
             "第 4 条要明确：数据边界的处理过程不写进给用户的回答",
         )
         assertTrue(
-            text.contains("不要向用户复述这条边界"),
+            withNsfw.contains("不要向用户复述这条边界"),
             "第 17 条也要挡一次（联网那条路最容易把横幅念出来）",
         )
+    }
+
+    /**
+     * v20（2026-09-20）：越狱段成了**开关**，所以"它在不在"取决于 NSFW 设置。
+     *
+     * 这里只钉一件事：**关掉时它一个字都不该出现**（用户的原话："反之不加"）。
+     * 打开时必须**逐字原样**注入 —— 那条由 `SystemPromptNsfwTest` 盯着。
+     */
+    @Test
+    fun `NSFW 默认关闭 越狱段不注入`() {
+        val e = env()
+        val off = SystemPrompt.render(
+            provider = AiProviderDto(
+                id = "p1",
+                displayName = "本地网关",
+                api = "openai-completions",
+                baseURL = "https://example.test/v1",
+                endpointTrust = "user",
+            ),
+            modelId = "gpt-4o-mini",
+            tools = e.registry.specs(e.policy),
+            policy = e.policy,
+            registry = e.registry,
+        )
+        assertTrue(off.contains("事实纪律"), "常驻纪律段两种模式都要在")
+        assertFalse(off.contains("WEB PENTEST ROUTING"), "没开 NSFW 时越狱段不许出现")
+        assertTrue(off.contains(com.comfyhub.ai.NsfwPrompt.DISABLED_NOTE), "要如实说明当前没开")
     }
 }

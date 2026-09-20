@@ -1,5 +1,6 @@
 package com.comfyhub
 
+import com.comfyhub.ai.OutboundProxy
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -74,6 +75,8 @@ class ComfySubmitter(
     private val http: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(4))
         .followRedirects(HttpClient.Redirect.NORMAL)
+        // 与 ComfyCapture 同一条：ComfyUI 在本机时强制直连，在公网时遵守本机代理设置
+        .proxy(OutboundProxy.selector())
         .build()
 
     /** 最近提交的运行（prompt_id → 进度）。界面右侧栏与 `comfy_get_status` 都读它。 */

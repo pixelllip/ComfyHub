@@ -12,6 +12,7 @@ import '../models/ai_models.dart';
 import '../state/ai_workspace_store.dart';
 import '../widgets/app_menu.dart';
 import '../widgets/markdown_view.dart';
+import '../widgets/nsfw_blur.dart';
 import '../widgets/workflow_viewer.dart';
 import 'media_detail_page.dart';
 
@@ -879,6 +880,10 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
         toolCategoryOf: store.toolCategoryOf,
         onApprove: store.approveToolCall,
         onDeny: store.denyToolCall,
+        // 提问（用户建议 ⑥）：答完同一个 Run 接着做，不新建消息
+        onAnswerQuestion: (questionId, {int? optionIndex, String? text}) async =>
+            (await store.answerQuestion(questionId, optionIndex: optionIndex, text: text)).ok,
+        onSkipQuestion: (questionId) async => (await store.skipQuestion(questionId)).ok,
         // 用户消息里的附件块：按 id 现取缩略图 / 视频预览帧（M3）
         thumbUrlOf: store.thumbUrlFor,
         fileUrlOf: store.fileUrlFor,
@@ -939,6 +944,10 @@ class _MessageBubble extends StatelessWidget {
   final Future<void> Function(String callId) onApprove;
   final Future<void> Function(String callId) onDeny;
 
+  /// 回答 / 跳过 AI 的提问（用户建议 ⑥）。
+  final Future<bool> Function(String questionId, {int? optionIndex, String? text}) onAnswerQuestion;
+  final Future<bool> Function(String questionId) onSkipQuestion;
+
   /// 附件 id → 缩略图 / 预览帧地址（M3）。
   final String? Function(String? attachmentId) thumbUrlOf;
   final String? Function(String? attachmentId) fileUrlOf;
@@ -963,6 +972,8 @@ class _MessageBubble extends StatelessWidget {
     required this.toolCategoryOf,
     required this.onApprove,
     required this.onDeny,
+    required this.onAnswerQuestion,
+    required this.onSkipQuestion,
     required this.thumbUrlOf,
     required this.fileUrlOf,
     required this.mediaThumbUrlOf,
@@ -1054,13 +1065,23 @@ class _MessageBubble extends StatelessWidget {
 
   Widget _toolCard(AiToolCallState call) => Padding(
         padding: const EdgeInsets.only(top: 8),
-        child: _ToolCallCard(
-          key: ValueKey('${message.id}-${call.callId}'),
-          call: call,
-          category: toolCategoryOf(call.name),
-          onApprove: onApprove,
-          onDeny: onDeny,
-        ),
+        // 提问（用户建议 ⑥）画的**不是工具卡而是提问卡**：一个是"等你批准"，
+        // 一个是"等你回答"，混在一起用户会以为点了就等于批准。
+        child: call.question != null
+            ? _AskCard(
+                key: ValueKey('${message.id}-${call.callId}'),
+                call: call,
+                question: call.question!,
+                onAnswer: onAnswerQuestion,
+                onSkip: onSkipQuestion,
+              )
+            : _ToolCallCard(
+                key: ValueKey('${message.id}-${call.callId}'),
+                call: call,
+                category: toolCategoryOf(call.name),
+                onApprove: onApprove,
+                onDeny: onDeny,
+              ),
       );
 
   @override
@@ -1285,6 +1306,207 @@ class _MessageBubble extends StatelessWidget {
             Tooltip(
               message: m.usage!.detailLabel,
               child: Text(m.usage!.shortLabel, style: dim),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  提问卡（用户建议 ⑥，2026-09-20）
+// ---------------------------------------------------------------------------
+
+/// 一张提问卡：AI 当场问一句，用户在这里答，**回答不会结束当前对话**。
+///
+/// 与 [_ToolCallCard] 刻意分开画：
+///  - 工具卡是"我在干什么"（参数 + 结果预览，读的多、点的少）；
+///  - 提问卡是"我需要你告诉我一件事"（问题 + 可点的选项 + 输入框）。
+///
+/// 用户答完之后卡片**不消失**，而是切成"已回答"—— 历史里一眼能看出这一轮
+/// 是基于什么信息做的（与工具卡一样，都是这条回复的上下文）。
+class _AskCard extends StatefulWidget {
+  final AiToolCallState call;
+  final AiQuestion question;
+  final Future<bool> Function(String questionId, {int? optionIndex, String? text}) onAnswer;
+  final Future<bool> Function(String questionId) onSkip;
+
+  const _AskCard({
+    super.key,
+    required this.call,
+    required this.question,
+    required this.onAnswer,
+    required this.onSkip,
+  });
+
+  @override
+  State<_AskCard> createState() => _AskCardState();
+}
+
+class _AskCardState extends State<_AskCard> {
+  final TextEditingController _controller = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send({int? optionIndex, String? text}) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final ok = await widget.onAnswer(
+      widget.question.questionId,
+      optionIndex: optionIndex,
+      text: text,
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('这条提问已经结束了（超时或本次回答已停止），回答没有被采纳。')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final q = widget.question;
+    final answered = q.answered;
+    final color = answered ? theme.colorScheme.primary : theme.colorScheme.tertiary;
+    final hasText = _controller.text.trim().isNotEmpty;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.55)),
+        color: theme.colorScheme.surface.withValues(alpha: 0.6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                answered ? Icons.question_answer_outlined : Icons.help_outline,
+                size: 15,
+                color: color,
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  q.header?.isNotEmpty == true ? q.header! : 'AI 想确认一件事',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelMedium?.copyWith(color: color),
+                ),
+              ),
+              const Spacer(),
+              // 状态徽标：**等你回答**与**已回答**一眼分得开
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  answered ? '已回答' : '等你回答',
+                  style: theme.textTheme.labelSmall?.copyWith(color: color),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(q.question, style: theme.textTheme.bodyMedium),
+          if (answered) ...[
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.subdirectory_arrow_right, size: 15, color: theme.colorScheme.outline),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    (q.answer ?? '').isEmpty ? '（已跳过，没有回答）' : q.answer!,
+                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                  ),
+                ),
+              ],
+            ),
+          ] else ...[
+            if (q.options.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (var i = 0; i < q.options.length; i++)
+                    FilledButton.tonal(
+                      onPressed: _busy ? null : () => _send(optionIndex: i),
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        minimumSize: const Size(0, 32),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        textStyle: theme.textTheme.bodySmall,
+                      ),
+                      child: Text(q.options[i]),
+                    ),
+                ],
+              ),
+            ],
+            if (q.allowFreeText) ...[
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      enabled: !_busy,
+                      minLines: 1,
+                      maxLines: 3,
+                      onChanged: (_) => setState(() {}),
+                      onSubmitted: (v) {
+                        final t = v.trim();
+                        if (t.isNotEmpty) _send(text: t);
+                      },
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        hintText: '也可以直接打字回答…',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  FilledButton(
+                    onPressed: (_busy || !hasText) ? null : () => _send(text: _controller.text.trim()),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      minimumSize: const Size(0, 40),
+                    ),
+                    child: const Text('回答'),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                // 跳过 = 如实告诉模型"用户没有回答"，它会基于已有信息继续
+                onPressed: _busy ? null : () => widget.onSkip(q.questionId),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 28),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('跳过这个问题'),
+              ),
             ),
           ],
         ],
@@ -1558,7 +1780,8 @@ class _ProducedMediaCard extends StatelessWidget {
                     padding: const EdgeInsets.only(right: 6),
                     child: InkWell(
                       onTap: () => _openDetail(context, id),
-                      child: ClipRRect(
+                      child: NsfwBlur(
+                        blurKey: mediaThumbUrlOf(id),
                         borderRadius: BorderRadius.circular(8),
                         child: SizedBox(
                           width: 72,
@@ -2542,8 +2765,10 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
 
 /// 思考强度选择器（AIH-056）。
 ///
-/// 只显示**当前模型声明过**的档位；**「关闭」例外** —— 它不发任何思考参数、
-/// 任何网关都成立，所以永远可选（用户要求"能关掉思考，且不用去改模型声明"）。
+/// 只显示**当前模型声明过**的档位；**「默认」例外** —— 它不发任何思考参数、
+/// 任何网关都成立，所以永远可选（用户要求"能默认不指定思考强度，且不用去改模型声明"）。
+/// **但它不承诺"不会思考"**（2026-09-20 改名的原因，见 [AiReasoningEffort.off]：
+/// 本机在用的聚合网关关不掉思考，叫「关闭」就是撒谎）。
 /// 模型完全没声明推理能力时整块置灰并说明原因，而不是给一堆选了会被后端拒绝的选项。
 class _EffortPicker extends StatelessWidget {
   final AiWorkspaceStore store;
@@ -2562,7 +2787,8 @@ class _EffortPicker extends StatelessWidget {
 
     return AppMenuButton<AiReasoningEffort>(
       tooltip: enabled
-          ? '思考强度（「关闭」始终可选；模型声明的档位：'
+          ? '思考强度（「默认」始终可选：不发思考参数、由网关决定；'
+              '模型声明的档位：'
               '${options.where((e) => e.isThinking).map((e) => e.label).join(' / ')}）'
           : '该模型未声明推理能力，请到「设置 → AI 模型」声明',
       onSelected: store.selectReasoningEffort,
@@ -2574,8 +2800,11 @@ class _EffortPicker extends StatelessWidget {
             icon: e == store.reasoningEffort
                 ? Icons.radio_button_checked
                 : Icons.radio_button_off,
-            // 线上表达（例如 "→ high"）放第二行，别跟标题挤在一行
-            subtitle: model?.effortWireValue(e) == null ? null : '→ ${model!.effortWireValue(e)}',
+            // 线上表达（例如 "→ high"）放第二行，别跟标题挤在一行。
+            // 「默认」没有"线上表达"（我们什么都不发），就把它的真实含义写在那儿 ——
+            // 用户报的 bug 正是"以为选了关闭就不会思考"，这一行是那个 bug 的正面回答。
+            subtitle: e.hint ??
+                (model?.effortWireValue(e) == null ? null : '→ ${model!.effortWireValue(e)}'),
           ),
       ],
       button: (context, controller, isOpen) => Opacity(
@@ -2729,18 +2958,21 @@ class _AttachmentTile extends StatelessWidget {
   Widget _preview(BuildContext context) {
     if (thumbUrl == null) return _iconFallback(context);
     final dpr = MediaQuery.devicePixelRatioOf(context);
-    return Image.network(
-      thumbUrl!,
-      width: _size,
-      height: _size,
-      fit: BoxFit.cover,
-      // 与画廊缩略图同一条规矩：解码宽度跟着绘制尺寸 × DPR，上限 512（见 media_thumb.dart）
-      cacheWidth: (_size * dpr).round().clamp(1, 512),
-      // 缩略图用不上 mipmap（medium 会为每张纹理生成 mipmap）
-      filterQuality: FilterQuality.low,
-      errorBuilder: (_, _, _) => _iconFallback(context),
-      loadingBuilder: (context, child, progress) =>
-          progress == null ? child : _iconFallback(context, dim: true),
+    return NsfwBlur(
+      blurKey: thumbUrl,
+      child: Image.network(
+        thumbUrl!,
+        width: _size,
+        height: _size,
+        fit: BoxFit.cover,
+        // 与画廊缩略图同一条规矩：解码宽度跟着绘制尺寸 × DPR，上限 512（见 media_thumb.dart）
+        cacheWidth: (_size * dpr).round().clamp(1, 512),
+        // 缩略图用不上 mipmap（medium 会为每张纹理生成 mipmap）
+        filterQuality: FilterQuality.low,
+        errorBuilder: (_, _, _) => _iconFallback(context),
+        loadingBuilder: (context, child, progress) =>
+            progress == null ? child : _iconFallback(context, dim: true),
+      ),
     );
   }
 

@@ -608,7 +608,7 @@ void main() {
       AiReasoningEffort.low,
       AiReasoningEffort.high,
     ]);
-    expect(find.text('关闭'), findsOneWidget, reason: '默认关闭');
+    expect(find.text('默认'), findsOneWidget, reason: '缺省档位叫「默认」（2026-09-20 由「关闭」改名）');
 
     await tester.tap(find.byType(AppMenuButton<AiReasoningEffort>));
     await tester.pumpAndSettle();
@@ -626,7 +626,7 @@ void main() {
     expect(lastRunBody?['reasoningEffort'], 'high', reason: '选了的档位必须真的带上');
   });
 
-  testWidgets('选关闭时不把思考参数发给后端', (tester) async {
+  testWidgets('选「默认」时不把思考参数发给后端', (tester) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
