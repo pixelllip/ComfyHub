@@ -120,6 +120,19 @@ class AppTheme {
           ),
         ),
       ),
+      // 滚动条**贴边**（用户 bug 2026-09-20："AI 工作台的聊天详情，滚动条没有贴边"）。
+      //
+      // M3 默认给滚动条留了内边距（轨道离视口右边 8px 左右、滑块本身还有一圈留白），
+      // 在聊天这种"内容铺到边缘"的页面上看着就是滑块**悬在离边老远的地方**。
+      // 这里把两处留白都收掉：
+      //   · `thickness` 是滑块本体宽度；
+      //   · `crossAxisMargin` 是轨道与视口边缘的距离（默认非 0，就是"没贴边"的元凶）。
+      // 全局设一次，聊天 / 画廊 / 提示词列表一起对齐，不用逐个页面写 `Scrollbar`。
+      scrollbarTheme: ScrollbarThemeData(
+        thickness: const WidgetStatePropertyAll(10.0),
+        radius: const Radius.circular(5),
+        crossAxisMargin: 0,
+      ),
       tooltipTheme: base.tooltipTheme.copyWith(
         textStyle: TextStyle(
           fontFamily: family,
