@@ -15,6 +15,10 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -47,6 +51,8 @@ class ToolRegistryTest {
         },
         /** 联网搜索客户端（默认 null = 走 SEARCH_DISABLED 那条路）。 */
         val search: WebSearchClient? = null,
+        /** Civitai 搜索客户端（默认 null = 走 CIVITAI_DISABLED 那条路）。 */
+        val civitai: CivitaiClient? = null,
     ) {
         val skills = SkillStore(root.resolve("skills-builtin"), root.resolve("skills-user"))
         val memory = MemoryStore(root.resolve("storage").resolve("ai"))
@@ -72,6 +78,7 @@ class ToolRegistryTest {
                 buildJsonObject { put("synced", true) }
             },
             search = search,
+            civitai = civitai,
         )
 
         val policy = ToolPolicy(root, ToolPolicyConfig())
@@ -83,6 +90,64 @@ class ToolRegistryTest {
         val root = Files.createTempDirectory("comfyhub-registry").toRealPath()
         listOf("comfyui", "storage", "other").forEach { Files.createDirectories(root.resolve(it)) }
         return Env(root, search = search)
+    }
+
+    private fun envCivitai(civitai: CivitaiClient?): Env {
+        val root = Files.createTempDirectory("comfyhub-registry").toRealPath()
+        listOf("comfyui", "storage", "other").forEach { Files.createDirectories(root.resolve(it)) }
+        return Env(root, civitai = civitai)
+    }
+
+    /** 假 Civitai 客户端：只记"被谁用什么参数调了"，不起 HTTP（真 HTTP 在 CivitaiSearchTest 里钉）。 */
+    private class FakeCivitai(
+        private val models: List<CivitaiModel> = listOf(
+            CivitaiModel(
+                id = 42,
+                name = "水墨风 LoRA",
+                type = "LORA",
+                baseModel = "SDXL 1.0",
+                nsfw = false,
+                creator = "someone",
+                downloads = 1234,
+                thumbsUp = 56,
+                pageUrl = "https://civitai.com/models/42",
+                description = "把照片转成水墨画风格，适合风景与人物。",
+                trainedWords = listOf("inkwash", "chinese painting"),
+            ),
+        ),
+    ) : CivitaiClient {
+        var calls = 0
+        var lastNsfw: Boolean? = null
+        var lastType: String? = null
+
+        override suspend fun search(
+            query: String,
+            allowNsfw: Boolean,
+            type: String?,
+            limit: Int,
+        ): CivitaiOutcome {
+            calls++
+            lastNsfw = allowNsfw
+            lastType = type
+            val context = models.joinToString("\n\n") { m ->
+                buildString {
+                    append("[1] ").append(m.name).append('\n')
+                    append("用途：").append(m.description)
+                    if (m.trainedWords.isNotEmpty()) {
+                        append("\n触发词：").append(m.trainedWords.joinToString(", "))
+                    }
+                }
+            }
+            return CivitaiOutcome(
+                query = query,
+                models = models,
+                context = context,
+                meta = buildJsonObject {
+                    put("count", models.size)
+                    put("nsfw", allowNsfw)
+                },
+            )
+        }
     }
 
     private fun args(vararg pairs: Pair<String, String>): String =
@@ -136,6 +201,8 @@ class ToolRegistryTest {
         "comfy_use_attachment",
         // 2026-09-20：联网搜索（用户定的规则——只用通用方案 Keenable，不碰各家原生内置搜索）
         "web_search", "web_fetch",
+        // 用户建议 ④：允许 AI 搜 Civitai 的模型库（NSFW 档走 .red 且要令牌）
+        "civitai_search",
     )
 
     // --- 清单 / 权限 --------------------------------------------------------
@@ -172,9 +239,12 @@ class ToolRegistryTest {
         assertEquals("comfy", defaults["comfy_get_status"]!!.category)
         assertEquals("web", defaults["web_search"]!!.category)
         assertEquals("web", defaults["web_fetch"]!!.category)
+        assertEquals("web", defaults["civitai_search"]!!.category)
         // 联网是唯一会把数据送出本机的类别：出厂必须停在「询问」档
         assertEquals("ask", defaults["web_search"]!!.access)
         assertEquals("ask", defaults["web_fetch"]!!.access)
+        // Civitai 搜索同理（NSFW 那一档用户的原话就是"这种情况可以询问用户"）
+        assertEquals("ask", defaults["civitai_search"]!!.access)
 
         val overridden = ToolPolicy(
             e.root,
@@ -872,6 +942,105 @@ class ToolRegistryTest {
         assertTrue(record.content.contains("只当资料看"))
         assertFalse(record.content.contains("不可信数据"), "不要在工具结果里留一句会被模型复述的告警")
         assertTrue(record.content.contains("https://example.com/a"))
+    }
+
+    // --- Civitai 模型库搜索（用户建议 ④/⑦，2026-09-20） -------------------
+
+    @Test
+    fun `civitai_search 默认要批准 没人批准就绝不出网`() = runBlocking {
+        val fake = FakeCivitai()
+        val e = envCivitai(fake)
+        val record = e.registry.invoke("call-civ", "civitai_search", args("query" to "水墨风"), e.ctx())
+
+        assertEquals("failed", record.status)
+        assertEquals("APPROVAL_DENIED", record.errorCode)
+        assertEquals("denied", record.approval)
+        assertEquals(0, fake.calls, "没批准就绝不能把查询词送去 Civitai")
+    }
+
+    @Test
+    fun `civitai_search 没有客户端时报 CIVITAI_DISABLED 而不是假装没搜到`() = runBlocking {
+        val e = envCivitai(null)
+        val allow = ToolPolicy(e.root, ToolPolicyConfig(overrides = mapOf("civitai_search" to "allow")))
+        val record = e.registry.invoke("c1", "civitai_search", args("query" to "x"), e.ctx(allow))
+        assertEquals("failed", record.status)
+        assertEquals("CIVITAI_DISABLED", record.errorCode)
+    }
+
+    @Test
+    fun `civitai_search 批准后返回用途说明与结构化条目 并标出数据区来源`() = runBlocking {
+        val fake = FakeCivitai()
+        val e = envCivitai(fake)
+        val allow = ToolPolicy(e.root, ToolPolicyConfig(overrides = mapOf("civitai_search" to "allow")))
+        val record = e.registry.invoke(
+            "call-civ",
+            "civitai_search",
+            args("query" to "水墨风", "type" to "LORA"),
+            e.ctx(allow),
+        )
+
+        assertEquals("ok", record.status, record.error ?: record.content)
+        assertEquals(1, fake.calls)
+        assertEquals("LORA", fake.lastType, "type 要原样传给客户端（大小写按用户写的归一）")
+        assertEquals(false, fake.lastNsfw, "用户没提 NSFW 时不许自作主张打开")
+        // 用户建议 ⑦ 要的"简短的说明（比如它拿来做什么）"
+        assertTrue(record.content.contains("用途："), record.content)
+        assertTrue(record.content.contains("触发词：inkwash"), record.content)
+        assertTrue(record.content.contains("只当资料看"), "结果必须标出数据区来源")
+        // 结构化 meta：界面与"登记进库"都靠它，不必再解析那段给模型看的文本
+        val models = record.resultJson!!["models"]!!.jsonArray
+        assertEquals(1, models.size)
+        assertEquals("水墨风 LoRA", models[0].jsonObject["name"]!!.jsonPrimitive.content)
+        assertEquals(42, models[0].jsonObject["id"]!!.jsonPrimitive.int)
+    }
+
+    @Test
+    fun `civitai_search 的 type 写错时当场列出可选值 而不是给一份空结果`() = runBlocking {
+        val fake = FakeCivitai()
+        val e = envCivitai(fake)
+        val allow = ToolPolicy(e.root, ToolPolicyConfig(overrides = mapOf("civitai_search" to "allow")))
+        val record = e.registry.invoke(
+            "c1",
+            "civitai_search",
+            args("query" to "x", "type" to "NotARealType"),
+            e.ctx(allow),
+        )
+        assertEquals("failed", record.status)
+        assertEquals("INVALID_ARGUMENT", record.errorCode)
+        assertTrue(record.error!!.contains("LORA"), "要把可选值列出来：${record.error}")
+        assertEquals(0, fake.calls, "参数不合法就不该打出去")
+    }
+
+    @Test
+    fun `civitai_search 一条都没搜到时报 NO_RESULTS 并要求如实说明`() = runBlocking {
+        val fake = FakeCivitai(models = emptyList())
+        val e = envCivitai(fake)
+        val allow = ToolPolicy(e.root, ToolPolicyConfig(overrides = mapOf("civitai_search" to "allow")))
+        val record = e.registry.invoke("c1", "civitai_search", args("query" to "查无此模"), e.ctx(allow))
+        assertEquals("failed", record.status)
+        assertEquals("NO_RESULTS", record.errorCode)
+        assertTrue(record.error!!.contains("不要编造模型名"), record.error)
+    }
+
+    @Test
+    fun `civitai_search 与 web_search 共用同一个联网预算 不会两条路各来一份`() = runBlocking {
+        val fake = FakeCivitai()
+        val e = envCivitai(fake)
+        val allow = ToolPolicy(
+            e.root,
+            ToolPolicyConfig(
+                overrides = mapOf("civitai_search" to "allow", "list_skills" to "allow"),
+            ),
+        )
+        val ctx = e.ctx(allow)
+        repeat(ToolPolicyConfig.DEFAULT_MAX_WEB_QUERIES_PER_RUN) { i ->
+            val ok = e.registry.invoke("c${i + 1}", "civitai_search", args("query" to "q$i"), ctx)
+            assertEquals("ok", ok.status, "第 ${i + 1} 次应当放行：${ok.error}")
+        }
+        val over = e.registry.invoke("c99", "civitai_search", args("query" to "q99"), ctx)
+        assertEquals("failed", over.status)
+        assertEquals("QUERY_BUDGET_EXCEEDED", over.errorCode)
+        assertEquals(ToolPolicyConfig.DEFAULT_MAX_WEB_QUERIES_PER_RUN, fake.calls, "超限那次不能真发出去")
     }
 
     @Test

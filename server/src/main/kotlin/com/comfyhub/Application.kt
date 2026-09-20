@@ -8,6 +8,7 @@ import com.comfyhub.ai.HarnessRunner
 import com.comfyhub.ai.RunEventBus
 import com.comfyhub.ai.aiRoutes
 import com.comfyhub.ai.tools.KeenableSearch
+import com.comfyhub.ai.tools.CivitaiSearch
 import com.comfyhub.ai.tools.MemoryStore
 import com.comfyhub.ai.tools.SkillStore
 import com.comfyhub.ai.tools.ToolApprovalGate
@@ -210,6 +211,10 @@ fun Application.module(ctx: AppContext) {
         // 联网搜索（2026-09-20，用户定的规则：只用通用方案）：本项目**唯一**会出网的工具类别。
         // 免密钥默认可用；可选 key 走 CredentialService（DPAPI），设置页里填。
         search = KeenableSearch(credentials),
+        // Civitai 模型库搜索（用户建议 ④/⑦）：安全档免令牌走 civitai.com；
+        // NSFW 档走 civitai.red 且必须令牌（设置页里的凭据名 civitai，
+        // 或环境变量 CIVITAI_API_KEY）。工具默认 ask —— 用户原话就是"这种情况可以询问用户"。
+        civitai = CivitaiSearch(credentials),
     )
 
     // 内置模型目录：项目内置的冻结副本（classpath）里那份，缺哪个补哪个；已存在的一律不覆盖
