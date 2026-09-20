@@ -401,3 +401,11 @@ SSE 新增事件：`reasoning.delta`、`tool.requested`、`tool.started`、`tool
 9. **`ask_user` 式提问**：用户建议 ⑥ 想要"像 DSH 一样支持提问、回答时不中断对话"。
    DSH 那边是 `ask_user_question` 工具 + 一个暂停/恢复的 Run 状态机；本项目现在靠
    "模型在正文里问、用户在下一条消息里答"，没有真正的挂起态。
+   这一轮的改动是**纪律层**的（系统提示 v18 第 9.1 条：要问就问在该动手之前，
+   以问句收尾并停止调工具）。真要做挂起态，落点是 `ai_runs.status` 加一个 `waiting_user`
+   + 前端在气泡里给一组可点的选项。
+10. **Civitai 令牌暂时只能走环境变量**：后端凭据接口只有 Keenable 那一条
+    （`/api/ai/web-search/credential` 写死了 `KeenableSearch.CREDENTIAL_REF`），
+    前端也照着它写的。所以 `civitai_search` 的令牌目前只有 `CIVITAI_API_KEY`
+    （或 `COMFYHUB_CRED_civitai`）这一条路，**设置页里填不了**。
+    要补的话，把那条接口参数化成一个 `ref`（路由 `/api/ai/credentials/{ref}`）再加一张卡即可。
