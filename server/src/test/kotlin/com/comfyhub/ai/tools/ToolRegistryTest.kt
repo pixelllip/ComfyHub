@@ -199,6 +199,8 @@ class ToolRegistryTest {
         "comfy_list_workflows",
         // 用户 bug：图生图要把用户发来的图片投放进 ComfyUI 的 input 目录
         "comfy_use_attachment",
+        // 用户建议 ⑤：体检工作流"哪些输入还等着外部给"（参考图那条现场）
+        "comfy_check_inputs",
         // 2026-09-20：联网搜索（用户定的规则——只用通用方案 Keenable，不碰各家原生内置搜索）
         "web_search", "web_fetch",
         // 用户建议 ④：允许 AI 搜 Civitai 的模型库（NSFW 档走 .red 且要令牌）
@@ -1044,8 +1046,8 @@ class ToolRegistryTest {
     }
 
     @Test
-    fun `提示词 v16：查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份`() {
-        assertEquals("v16", SystemPrompt.VERSION)
+    fun `提示词 v17：查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份`() {
+        assertEquals("v17", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
@@ -1113,6 +1115,18 @@ class ToolRegistryTest {
         assertTrue(
             text.contains("共用这一个额度"),
             "三个联网工具共用同一个预算，提示词里要说清楚",
+        )
+
+        // v17（2026-09-20，用户建议 ⑤）：参考图那条现场 ——
+        // 工作流里有"等着图"的节点而用户没给图时，必须先把缺口列清楚再决定怎么做。
+        assertTrue(text.contains("comfy_check_inputs"), "第 12 条要点名这个体检工具")
+        assertTrue(
+            text.contains("不许") && text.contains("带着缺口硬提交"),
+            "要明确挡住「带着缺口硬提交」这条路（那正是用户报的那个现场）",
+        )
+        assertTrue(
+            text.contains("绑死的旧文件名"),
+            "要提醒模型别拿工作流里那个绑死的旧文件名去提交",
         )
         assertTrue(
             text.contains("别人的网页"),

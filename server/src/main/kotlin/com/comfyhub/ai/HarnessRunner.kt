@@ -387,7 +387,15 @@ class HarnessRunner(
             // —— `parts.parts` 就是它（PartSink 同时负责落库与攒这份列表）
 
             val toolCtx = if (tools != null && skills != null && policy != null) {
-                ToolContext(runId = runId, policy = policy, skills = skills, memory = memory)
+                ToolContext(
+                    runId = runId,
+                    policy = policy,
+                    skills = skills,
+                    memory = memory,
+                    // 用户刚发了图：`comfy_check_inputs` 要能区分"投放一下就能解决"
+                    // 与"必须问用户要一张"（否则模型会去要一张它已经收到的图）
+                    hasImageAttachment = hasInlineAttachments,
+                )
             } else {
                 null
             }
@@ -1238,8 +1246,11 @@ object SystemPrompt {
      *     （用户 bug：数据置信度太敏感 —— 模型把"不可信数据"那句横幅复述成了回答）。
      * v16（2026-09-20）：第 17 条补上 `civitai_search`（模型 / LoRA 库搜索，
      *     用户建议 ④⑦）：NSFW 要令牌就如实要，别改口说"没搜到"；三者共用同一个联网额度。
+     * v17（2026-09-20）：第 12 条补上 `comfy_check_inputs`（用户建议 ⑤：
+     *     "用户没有提供参考图，但他引导的工作流的节点用到参考图"）——
+     *     没图时先把缺口列清楚，问用户要或换工作流，**不许带着缺口硬提交**。
      */
-    const val VERSION = "v16"
+    const val VERSION = "v17"
 
     /**
      * 第一问时追加的一段：让模型在正文最前面带一行 `[标题]…[/标题]`，
@@ -1787,6 +1798,13 @@ object SystemPrompt {
                 工作流被捕获时绑定的那个文件名（形如 `478952….jpg`）**跟你没有关系，也改不了**：
                 不许改写它（那会指向一个不存在的文件），也不许对用户说"我改不了文件名"就作罢 ——
                 按上面三步做就能真的把用户的图用上。图片没随本次请求内联（正文里有那句说明）时也一样能投放。
+                **用户没给图**、而这份工作流里却有 `LoadImage` / IPAdapter 这类"等着图"的位置时，
+                先用 `comfy_check_inputs(graph=…)` 把缺口列清楚（把 `comfy_get_run` 的 `raw` 或
+                `comfy_load_workflow` 的 `apiGraph` 原样传进去）：
+                报告里 `kind=image` 的位置，用户给了附件就走第 ① 步投放覆盖；
+                **用户没给**就问他要一张，或者换一条不需要参考图的工作流 ——
+                **不许**带着缺口硬提交（ComfyUI 只会回一句缺输入，用户看到的是"AI 说生成了、其实没跑起来"），
+                也不许拿工作流里那个绑死的旧文件名（形如 `478952….jpg`）去提交。
             13. 写入类操作要留退路：改工作流参数用覆盖（`节点id.输入名`），不要重写用户的原始工作流，
                 也不要顺手覆盖用户自己的文件；改完如实说清改了哪里，让用户能自己回退。
             14. 读取也要按需：为当前任务读必要的目录与文件就够了，不要为了"先了解一下环境"去遍历磁盘；

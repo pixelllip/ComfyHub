@@ -724,6 +724,49 @@ class ToolRegistry(
         },
 
         // ------------------------------------------------------------------
+        //  工作流的待补输入诊断（用户建议 ⑤，2026-09-20）
+        //
+        //  用户的现场："用户没有提供参考图，但是他引导的工作流的节点用到参考图"。
+        //  模型不看清楚就直接提交，ComfyUI 只回一句缺输入 —— 用户看到的是
+        //  "AI 说生成了、其实没跑起来"。这个工具把"还等着外部给的位置"逐个列清楚。
+        // ------------------------------------------------------------------
+        AgentTool(
+            name = "comfy_check_inputs",
+            description = "体检一份工作流：**哪些输入还等着外部给**（缺图 / 缺视频 / 空连线 / 没值的参数），" +
+                "每条带 节点id.输入名、节点类、缺什么类型、以及下一步该怎么办。" +
+                "\n**什么时候必须先用它**：① 用户说\"用这张参考图\"这类需要图生图 / 控制网的话，" +
+                "而这份工作流你还没跑过；② `comfy_submit` 之前你想确认\"这份图是不是齐了\"；" +
+                "③ 用户抱怨\"提交了却没出图\"。" +
+                "\n怎么用：把 `comfy_get_run(raw=…)` 或 `comfy_load_workflow(includeGraph=true)` 里的" +
+                "API 节点图原样传给 `graph`。" +
+                "\n拿到结果后：`kind=image` 且用户给了附件 → 先 `comfy_use_attachment` 投放再覆盖那个输入；" +
+                "**用户没给图** → 问用户要一张，或换一条不需要参考图的工作流，" +
+                "**绝对不要**带着缺口硬提交（那只会得到一句缺输入）。" +
+                "\n本次消息带了图片附件时，图片类位置会列进 `suppliedByAttachment`（那是能直接解决的，" +
+                "不要再去问用户要图）。这个工具**只读**，不改工作流。",
+            parameters = schema(
+                """{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_get_run 的 raw / comfy_load_workflow 的 apiGraph 原样传进来）"}},"required":["graph"],"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = false,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, ctx ->
+            // 图既可以直接给（上面 schema 声明的），也可以是字符串形态的 JSON ——
+            // 模型从别处复制过来时经常带上引号，两种都认（`apiGraphOf` 负责这个容错）
+            val report = WorkflowInputs.scan(
+                apiGraphOf(args["graph"])
+                    ?: throw ToolFailure(
+                        "INVALID_ARGUMENT",
+                        "graph 不是一份 API 格式节点图（应当形如 " +
+                            """{"1":{"class_type":"KSampler","inputs":{…}}}）。""" +
+                            "界面格式（nodes/links）请先用 comfy_load_workflow 读进库。",
+                    ),
+                hasImageAttachment = ctx.hasImageAttachment,
+            )
+            ToolOutput(report.render(), report.toJson())
+        },
+
+        // ------------------------------------------------------------------
         //  联网搜索（2026-09-20，用户定的规则：只用通用方案，不碰各家原生内置搜索）
         //
         //  **这是本项目里唯一会把数据送出本机的工具类别**（[ToolCategory.WEB]），

@@ -71,6 +71,13 @@ class ToolContext(
      */
     var webQueries: Int = 0,
     /**
+     * 本次请求里是否带了图片附件（M3）。
+     *
+     * `comfy_check_inputs` 用它区分"这个图片输入必须问用户要"和"用户刚发了图、
+     * 投放一下就能解决" —— 两者混在一起，模型就会去问用户要一张它已经收到的图。
+     */
+    val hasImageAttachment: Boolean = false,
+    /**
      * 本 Run 里**真的新增**了几条长期记忆（用户要求：一次最多
      * [MemoryStore.MAX_ENTRIES_PER_RUN] 条）。
      *
