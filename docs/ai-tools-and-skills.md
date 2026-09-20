@@ -30,7 +30,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | Skills 目录注入 | **采纳思路，实现不同** | DSH 把目录作为 **user 消息**（`<system-reminder>` + `<available_skills>`）注入，为的是不打断系统前缀的 KV cache；我们的系统提示本来就带时间戳（每 Run 变化），所以直接写进系统提示的独立区块，省一层消息 |
 | DSH 默认提示词的**行为纪律段** | **择优采纳**（2026-09-17，用户要求） | 原文 `docs\default-prompt-inject.md`。挑出与我们对得上的三块写进系统提示 **v9**：① 事实纪律（不猜本机状态 / 证据冲突的采信顺序 / 把"查到的"与"推测的"分开说）；② 表达风格（开门见山、不奉承、不复述、**不写嵌套列表** —— `lib\widgets\markdown.dart` 会把子项拍平成同级，而表格反而是支持的）；③ 两条硬规则（写入留退路：改参数用覆盖不重写原始工作流；读取按需：不遍历磁盘）。另外，那份文档里的 `[MODE: UNRESTRICTED SANDBOX — STABLE]` 段（人格 / 拒绝对抗 / 越狱与渗透话术）**当年是整段搬进来的，现在也还在**（`HarnessRunner.kt` 里一个独立的 `append("""…""")`，上方有注释）：2026-09-17 用户明确说"那是我的意图，不许删除，不要动那段越狱提示词"。它与代码侧的审批纪律（提示词第 3 条）和凭据红线（第 8 条）并存 —— **别把它当误粘贴清理掉**，要改先问用户（AGENTS §10 记着这条） |
 
-我们的工具清单（出厂 18 个，全部可在设置里改成 `allow / ask / deny`）：
+我们的工具清单（出厂 20 个，全部可在设置里改成 `allow / ask / deny`）：
 
 | 工具 | 类别 | 权限档 | 说明 |
 | --- | --- | --- | --- |
@@ -50,13 +50,16 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `comfy_list_workflows` | comfy | allow | 列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`，用户 bug ⑤，2026-09-18）：带路径 / 格式（ui/api）/ 是否已入库（`inLibrary` / `promptId`），可按文件名过滤（如 `krea2`）。**只读**，不改用户的文件。首次使用、或 `comfy_find_workflow` 什么都搜不到时先看它 —— 这些工作流**不需要在 ComfyUI 里跑过一次**，拿到 path 直接 `comfy_load_workflow` 就能提交 |
 | `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数、`connections` 补连线（值写 `["<上游节点id>", 槽位]`），跑完直接入库；会消耗显卡时间，默认要审批 |
 | `comfy_use_attachment` | comfy | **ask** | 把用户发来的**图片附件**投放进 ComfyUI 的 `input/` 目录并返回真实文件名（用户 bug，2026-09-17）：图生图 / 参考图的唯一正路，默认要审批（往用户机器上写文件） |
+| `comfy_check_inputs` | comfy | allow | **体检一份工作流：哪些输入还等着外部给**（用户建议 ⑤，2026-09-20）：把 `comfy_get_run` 的 `raw` / `comfy_load_workflow` 的 `apiGraph` 传进来，逐条列出 `节点id.输入名` / 节点类 / 缺什么类型 / 现在是什么值 / 下一步该怎么办，分成 `image` / `video` / `connection` / `parameter` 四类。**只读**。用户现场是"用户没提供参考图，但工作流的节点用到参考图"——没有它，模型会带着缺口硬提交，ComfyUI 只回一句缺输入。判据刻意保守：只有"连线型空着 / 值缺失"才算缺口，已经填好值的不报；`Save*` / `Preview*` 这类输出节点不算缺口。本次带了图附件时，图片类位置进 `suppliedByAttachment`（投放就能解决），不混进"要用户补" |
 | `web_search` | web | **ask** | 联网搜索（Keenable）：用自然语言描述"你想要的那一页"（语义索引，别堆关键词），返回**带编号与链接**的网页正文（`[n] 标题 (URL)` + 抽取好的正文），引用时给编号与 URL。**出厂免密钥**；查询词会离开本机，所以默认要批准；一次回复最多 8 次（独立预算 `maxWebQueriesPerRun`）。一条没搜到报 `NO_RESULTS` 并要求模型如实说明 |
 | `web_fetch` | web | **ask** | 把一个**公开**网页取回来读全文（服务端去样板转 markdown，默认 20000 字符上限）。目标 URL 出网前先过 `EndpointGuard` 的 PUBLIC 判定：内网 / 本机 / 云元数据一律 `FETCH_TARGET_DENIED`。正文套**不可信数据**横幅后才给模型 |
+| `civitai_search` | web | **ask** | 搜 **Civitai 模型库**（用户建议 ④⑦，2026-09-20）：每条结果都给"**拿来做什么**"——类型 / 底模 / 简介 / 触发词 / 下载量 / 链接，并放进结构化 `meta.models`（界面与"登记进长期记忆"直接可用）。普通搜索走 `civitai.com`（免令牌）；**NSFW 必须 `allowNsfw=true`**，走 `civitai.red` 且需要令牌（凭据名 `civitai`，或环境变量 `CIVITAI_API_KEY`），缺令牌抛 `CIVITAI_TOKEN_REQUIRED` 并要求**如实让用户去填**，**不静默降级**成过滤后的结果。与 `web_search` / `web_fetch` **共用同一个联网额度** |
 
 ### 2.0.1 联网搜索的三条安全线（2026-09-20）
 
-1. **默认 ask**：`web_search` / `web_fetch` 是**本项目唯一会把数据送出本机的工具类别**（`ToolCategory.WEB`）。
+1. **默认 ask**：`web_search` / `web_fetch` / `civitai_search` 是**本项目唯一会把数据送出本机的工具类别**（`ToolCategory.WEB`）。
    查询词本身可能带用户的创作意图，所以出厂停在「询问」档；用户在权限页改成 allow 后才免批准。
+   `civitai_search` 的 `allowNsfw=true` 更要用户点头 —— 用户建议 ④ 的原话就是"这种情况可以询问用户"。
 2. **独立预算**：`maxWebQueriesPerRun = 8`（`ToolPolicyConfig`，进 `normalizeStored`——
    它不是用户设置，老库切一次权限档就会把出厂值冻进去，不过 normalize 就会"改了没用"）。
    每搜一次都是真实外呼 + 一份要烧 token 的正文，"再搜一下确认"必须刹得住。
@@ -65,8 +68,9 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
    PUBLIC 判定。HTTP 层纪律与 `AiUpstream` 相同：不跟随重定向、日志绝不落密钥、
    免密钥请求必须带 `X-Keenable-Title`（缺它服务端 400，实测）。
 
-测试怎么钉的：`ToolRegistryTest`（预算 / 审批 / 横幅 / SEARCH_DISABLED，假客户端不碰 HTTP）+
-`KeenableSearchTest`（本机起假服务钉路径 / 头 / 错误映射 / 内网拒绝，**不出网**）。
+测试怎么钉的：`ToolRegistryTest`（预算 / 审批 / 横幅 / SEARCH_DISABLED / CIVITAI_DISABLED / 结构化 meta，假客户端不碰 HTTP）+
+`KeenableSearchTest`（本机起假服务钉路径 / 头 / 错误映射 / 内网拒绝，**不出网**）+
+`WorkflowInputsTest`（待补输入的判据：该报的不漏、填好的不报，**不碰 HTTP**）。
 
 > 曾考虑过的替代方案 open-webSearch（Node MCP 爬虫聚合）记录在案：中文引擎是真优势，
 > 但它需要一个常驻 Node 进程（实施方案 §5.2 明确排除 sidecar）且爬虫会随引擎改版静默坏掉。
@@ -387,3 +391,13 @@ SSE 新增事件：`reasoning.delta`、`tool.requested`、`tool.started`、`tool
 4. **"记住这次允许"**：现在每次 `ask` 都要点一次；之后可以在工具卡上给"本次会话都允许"。
 5. **审批与工具卡的断线续传**：Run 被后端重启打断时，等待中的审批会随 Run 一起失败（如实报错，不会静默执行）。
 6. **长期记忆的进阶**：按类别分组、命中检索（现在是全量注入 + 截断）、"这条是谁写的"审计。
+7. **Civitai 搜索只做了"查"**：查到的模型信息现在由模型自己调 `remember` 登记进长期记忆，
+   还没有一张**结构化的模型表**（用户建议 ⑦ 里"登记在数据库中"的完整形态）。
+   要做的话，落点是一张 `ai_model_notes`（civitai_id / name / type / baseModel / description /
+   触发词 / 更新时间），再让 `comfy_find_workflow` 这类工具按类型反查。
+8. **自动"摘除无关节点 / 拼装必要节点"**：现在只有**识别**（`comfy_check_inputs` 把待补输入列清楚）
+   + **补线**（`comfy_submit(connections=…)`）。真正"按用户给的条件重写一份工作流"还没做 ——
+   那是改写用户的图，得先有"改了哪里、怎么回退"的呈现（第 13 条纪律已经在要求"用覆盖、不重写"）。
+9. **`ask_user` 式提问**：用户建议 ⑥ 想要"像 DSH 一样支持提问、回答时不中断对话"。
+   DSH 那边是 `ask_user_question` 工具 + 一个暂停/恢复的 Run 状态机；本项目现在靠
+   "模型在正文里问、用户在下一条消息里答"，没有真正的挂起态。
