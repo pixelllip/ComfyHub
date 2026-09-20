@@ -408,16 +408,10 @@ class _Thread extends StatelessWidget {
           child: Stack(
             children: [
               _MessageList(store: store, controller: controller),
-              // AI 正在生成回复时，消息区底部给一个**一直可见**的"加载中"提示
-              // （用户要求 2026-09-20）。它是浮层、不进列表内容，所以
-              // 既不会把总长撑大、也不会跟着滚动跑掉 —— 生成期间抬头就能看见。
-              if (store.sending)
-                const Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: _GeneratingIndicator(),
-                ),
+              // 「AI 正在生成」的加载提示**不再做成底部浮层**（用户建议 2026-09-20：
+              // "不要出现在底部（很影响观感），而是当前正在生成回复的气泡底部，
+              // 并且只保留转圈圈动画"）—— 它现在是那个气泡自己的内容，
+              // 见 `_MessageBubble` 里 `isStreaming` 那一段。
               // 回到聊天底部（用户建议 ④）：**只在用户翻上去之后**才出现，
               // 贴在对话主体右下角，不挡输入区。
               if (!atBottom)
@@ -650,7 +644,6 @@ class _ConversationAppBar extends StatelessWidget implements PreferredSizeWidget
             [
               ?model,
               if (conv != null) '${conv.messageCount} 条消息',
-              if (store.sending) '生成中…',
             ].join(' · '),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -708,65 +701,6 @@ class _ConversationAppBar extends StatelessWidget implements PreferredSizeWidget
 // ---------------------------------------------------------------------------
 //  消息区
 // ---------------------------------------------------------------------------
-
-/// 「AI 正在生成」的加载提示（用户要求 2026-09-20）。
-///
-/// 放在消息区**底部浮层**（不是列表的一项）：
-///   · 进列表当 item 的话，它会**改总长** —— 正好撞上滚动条总长敏感这件事；
-///   · 浮层还能保证"用户翻上去看历史"时提示依然可见（提示的是"还在生成"，
-///     跟用户在看哪一段无关）。
-///
-/// 只显示一条动画 + 一行字：气泡里那个"正在生成…"只在**还没有任何正文**时出现，
-/// 而这里的判据是"这一轮 Run 还没结束"（`store.sending`）—— 首字一到就消失的那个
-/// 反而最需要它。
-class _GeneratingIndicator extends StatelessWidget {
-  const _GeneratingIndicator();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return IgnorePointer(
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              theme.colorScheme.surface.withValues(alpha: 0),
-              theme.colorScheme.surface.withValues(alpha: 0.92),
-            ],
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: theme.colorScheme.primary,
-              ),
-            ),
-            const SizedBox(width: 8),
-            // 窄屏（比如只留了 240px 的会话栏旁边）时这段字必须先让步 ——
-            // 否则 `Row` 会直接 `RenderFlex overflowed`（本机实测 7.7px）。
-            Flexible(
-              child: Text(
-                'AI 正在生成…',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 /// 消息区。
 ///
@@ -893,26 +827,36 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
   AiMessage? _cachedMessage;
   bool? _cachedSending;
   int? _cachedLive;
+  String? _cachedStreamingId;
 
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
     final live = store.liveRevisionOf(widget.message.id);
+    // 「是不是正在生成的那一条」也要进闸门：不然"这一轮换了哪条消息在流"
+    // 时，旧气泡上的转圈动画会留在原地（父级重建了、缓存却没失效）。
+    final streamingId = store.streamingMessage?.id;
     final unchanged = _cached != null &&
         identical(_cachedMessage, widget.message) &&
         _cachedSending == store.sending &&
-        _cachedLive == live;
+        _cachedLive == live &&
+        _cachedStreamingId == streamingId;
     if (unchanged) return _cached!;
 
     final message = widget.message;
     _cachedMessage = message;
     _cachedSending = store.sending;
     _cachedLive = live;
+    _cachedStreamingId = streamingId;
     aiChatBubbleBuilds++;
     _cached = RepaintBoundary(
       child: _MessageBubble(
         message: message,
         sending: store.sending,
+        // 「AI 正在生成」的转圈动画只画在**正在流的那一条**上（用户建议 2026-09-20）
+        generating: !message.isUser && streamingId != null && streamingId == message.id,
+        // 这条回复当时用的是哪个模型（用户建议 2026-09-20）
+        modelLabel: message.isUser ? '' : store.modelLabelOf(message.modelId),
         onRetry: store.retry,
         // 工具卡 / 思考都只属于助手消息
         toolCalls: message.isUser ? const [] : store.toolCallsFor(message),
@@ -945,6 +889,18 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
 class _MessageBubble extends StatelessWidget {
   final AiMessage message;
   final bool sending;
+
+  /// 这条就是**正在流式生成**的那一条（用户建议 2026-09-20）：
+  /// 「AI 正在生成」只在它的底部画一个转圈动画。
+  final bool generating;
+
+  /// 这条回复**当时**用的模型名（用户建议 2026-09-20）。
+  ///
+  /// 取的是消息自己记的 `modelId`（后端逐条落库），不是"当前选中的模型"——
+  /// 所以往上翻历史时看到的是每轮各自的模型，切换模型那轮一眼就能看出来。
+  /// 用户消息不需要这个（显示的是"谁问的"，不是"谁答的"）。
+  final String modelLabel;
+
   final Future<void> Function(String assistantMessageId) onRetry;
 
   /// 这条消息的有序工具调用（M4）。
@@ -979,6 +935,8 @@ class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
     required this.message,
     required this.sending,
+    this.generating = false,
+    this.modelLabel = '',
     required this.onRetry,
     this.toolCalls = const [],
     this.segments = const [],
@@ -1106,6 +1064,9 @@ class _MessageBubble extends StatelessWidget {
       crossAxisAlignment: align,
       children: [
         Container(
+          // 气泡本体（内含底色那一块）在用例里要能精确取到矩形 ——
+          // "转圈动画贴在正在生成的那条气泡底部"这条断言就靠它。
+          key: ValueKey('ai-bubble-${m.id}'),
           constraints: const BoxConstraints(maxWidth: 720),
           margin: const EdgeInsets.symmetric(vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1145,19 +1106,29 @@ class _MessageBubble extends StatelessWidget {
                 m.isUser
                     ? Text(m.text)
                     : MarkdownText(m.text, style: theme.textTheme.bodyMedium, selectable: false),
-              // 流式进行中且还没有内容：给一个明确的"在生成"提示，而不是空白气泡
-              if (m.status == 'streaming' && m.text.isEmpty && toolCalls.isEmpty)
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(
-                      width: 12,
-                      height: 12,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+              // 「AI 正在生成」：**画在这条气泡自己的底部**，而且只有一个转圈动画
+              // （用户建议 2026-09-20："不要出现在底部（很影响观感），而是当前正在
+              // 生成回复的气泡底部，并且只保留转圈圈动画"）。
+              //
+              // 判据是"这条就是正在流的那一条"（`generating`），不是 `status == 'streaming'`：
+              // 后者在流中断 / 被打断的历史消息上也可能留着，那会让旧气泡一直转圈。
+              // 不再配文字 —— 转圈本身就是"正在生成"的通用语义，多一行字只是噪声；
+              // 底部浮层那条也因此整个删掉了（它还会改内容总长、把滑块顶得乱跳）。
+              if (generating)
+                Padding(
+                  padding: EdgeInsets.only(
+                    // 首字还没来时它就是气泡里唯一的内容，不加顶部间距；
+                    // 已经有内容时贴在末尾，留一点呼吸位。
+                    top: (body.isEmpty && m.text.isEmpty && toolCalls.isEmpty) ? 0 : 6,
+                  ),
+                  child: SizedBox(
+                    width: 13,
+                    height: 13,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: theme.colorScheme.primary,
                     ),
-                    const SizedBox(width: 8),
-                    Text('正在生成…', style: theme.textTheme.bodySmall),
-                  ],
+                  ),
                 ),
               // 工具卡已经在 [_orderedBody] 里按 parts 的真实顺序插好了 ——
               // 这里**不能再统一补一坨**，否则又变回"工具卡全排到最后"。
@@ -1203,44 +1174,74 @@ class _MessageBubble extends StatelessWidget {
                     ),
                   ),
                 ),
-              // token 统计（AIH-057）：只对真有 usage 的助手消息显示，没有就不占位
-              if (!m.isUser && (m.usage?.isEmpty == false || (m.reasoningEffort ?? 'off') != 'off'))
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if ((m.reasoningEffort ?? 'off') != 'off') ...[
-                        Icon(Icons.psychology_outlined,
-                            size: 13, color: theme.colorScheme.outline),
-                        const SizedBox(width: 3),
-                        Text(
-                          '思考 ${AiReasoningEffort.parse(m.reasoningEffort)?.label ?? m.reasoningEffort}',
-                          style: theme.textTheme.labelSmall
-                              ?.copyWith(color: theme.colorScheme.outline),
-                        ),
-                        const SizedBox(width: 10),
-                      ],
-                      if (m.usage?.isEmpty == false) ...[
-                        Icon(Icons.data_usage, size: 13, color: theme.colorScheme.outline),
-                        const SizedBox(width: 3),
-                        Tooltip(
-                          message: m.usage!.detailLabel,
-                          child: Text(
-                            m.usage!.shortLabel,
-                            style: theme.textTheme.labelSmall
-                                ?.copyWith(color: theme.colorScheme.outline),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
+              // 元信息（模型 / 思考 / token）在气泡**外面**渲染 —— 见下面 `_metaRow`。
             ],
           ),
           ),
         ),
+        // 这一轮是怎么答出来的：模型（用户建议 2026-09-20）+ 思考强度 + token 用量。
+        //
+        // 放在气泡**外面**（不是里面）：它是元信息、不属于回复内容 ——
+        // 放进气泡会被 `SelectionArea` 一起复制走（用户 bug ② 就是"选中的文本里
+        // 混进了不该有的东西"），挂在外面既选不中、也一眼看得出属于哪一条。
+        ?_metaRow(theme),
       ],
+    );
+  }
+
+  /// 元信息行：模型 + 思考强度 + token 用量。
+  ///
+  /// 三者挤一行是有意的：说的都是"这一轮是怎么答出来的"。分成两行会让每条回复
+  /// 底下挂两排小字，长对话读起来全是噪声。
+  Widget? _metaRow(ThemeData theme) {
+    final m = message;
+    if (m.isUser) return null;
+    final dim = theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline);
+    return Padding(
+      padding: const EdgeInsets.only(top: 2, left: 2, right: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 本轮用的模型（用户建议 2026-09-20）：切换模型那一轮一眼就能看出来。
+          // 取的是**这条消息自己记的** modelId，所以翻历史时看到的是各轮真实的模型。
+          if (modelLabel.isNotEmpty) ...[
+            Icon(Icons.smart_toy_outlined, size: 13, color: theme.colorScheme.outline),
+            const SizedBox(width: 3),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 260),
+              child: Tooltip(
+                // 短名可能被截断，完整 id 放 tooltip 里可查
+                message: (m.modelId ?? '').isEmpty ? modelLabel : m.modelId!,
+                child: Text(
+                  modelLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: dim,
+                ),
+              ),
+            ),
+            if ((m.reasoningEffort ?? 'off') != 'off' || m.usage?.isEmpty == false)
+              const SizedBox(width: 10),
+          ],
+          if ((m.reasoningEffort ?? 'off') != 'off') ...[
+            Icon(Icons.psychology_outlined, size: 13, color: theme.colorScheme.outline),
+            const SizedBox(width: 3),
+            Text(
+              '思考 ${AiReasoningEffort.parse(m.reasoningEffort)?.label ?? m.reasoningEffort}',
+              style: dim,
+            ),
+            if (m.usage?.isEmpty == false) const SizedBox(width: 10),
+          ],
+          if (m.usage?.isEmpty == false) ...[
+            Icon(Icons.data_usage, size: 13, color: theme.colorScheme.outline),
+            const SizedBox(width: 3),
+            Tooltip(
+              message: m.usage!.detailLabel,
+              child: Text(m.usage!.shortLabel, style: dim),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

@@ -903,12 +903,14 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  // 用户要求（2026-09-20）："如果 AI 正在生成回复，请在底部加一个「加载中」的动画提示"。
+  // 用户建议（2026-09-20）：「"AI 正在生成"不要出现在底部（很影响观感），
+  // 而是当前正在生成回复的气泡底部，并且只保留转圈圈动画」。
   //
-  // 判据是"这一轮 Run 还没结束"（`store.sending`），**不是**"气泡里还没有正文"——
-  // 气泡里那个"正在生成…"首字一到就没了，而"还在往外吐字"这段最长的时间里
-  // 恰恰最需要一个看得见的提示。
-  testWidgets('AI 生成期间底部一直有「加载中」提示，这一轮结束就收掉', (tester) async {
+  // 这里钉三件事，缺一条就是建议没落地：
+  //   1. **页脚那条提示整个没有了**（连文字都不该存在）；
+  //   2. 转圈动画画在**正在流的那一条气泡里**（不是页面底部）；
+  //   3. 这一轮结束就收掉（不能留下一个转个不停的历史气泡）。
+  testWidgets('「正在生成」只在当前气泡底部转圈，页脚不再有提示', (tester) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -918,25 +920,40 @@ void main() {
     await tester.pumpAndSettle();
 
     // 还没发消息：不该莫名其妙冒出一个"正在生成"
-    expect(find.text('AI 正在生成…'), findsNothing, reason: '没有在生成时底部不该有加载提示');
+    expect(find.text('AI 正在生成…'), findsNothing, reason: '页脚那条提示已经删掉了');
+    expect(find.text('正在生成…'), findsNothing, reason: '气泡里那行字也删掉了，只留转圈');
 
     await tester.enterText(find.byType(TextField).first, '写一份很长的方案');
     await tester.tap(find.text('发送'));
     await tester.pump();
 
-    // 已经有正文了（气泡里那个"正在生成…"这时已经不显示）：底部这条提示
-    // 就是"这一轮还在跑"的唯一可见信号。
+    // 首字还没到：气泡里就该有一个转圈（而不是一片空白）
+    expect(find.byType(CircularProgressIndicator), findsOneWidget,
+        reason: '首字未到时，正在生成的那条气泡里要有一个转圈');
+
+    // 已经有正文了：转圈**依然在**（用户要的就是"只要还在生成就一直转"）
     events.add(utf8.encode(
       _sse(1, 'run.started', '{"runId":"r1"}') +
           _sse(2, 'text.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 40)})),
     ));
     await tester.pump(const Duration(milliseconds: 50));
-    expect(find.text('AI 正在生成…'), findsOneWidget,
-        reason: 'AI 正在生成回复时，底部要有"加载中"提示');
-    expect(find.byType(CircularProgressIndicator), findsWidgets,
-        reason: '提示里那个转圈动画要在（用户要的就是这个）');
 
-    // 这一轮结束：提示必须收掉，不能一直转
+    final spinner = find.byType(CircularProgressIndicator);
+    expect(spinner, findsOneWidget, reason: '有正文时页脚那条旧提示会消失，转圈不能跟着消失');
+    expect(find.text('AI 正在生成…'), findsNothing, reason: '任何阶段都不该再有页脚提示');
+
+    // 它在**最后一条气泡内部**，而且贴在气泡底部（用户说的"气泡底部"）
+    final bubbleRect = tester.getRect(
+      find.byKey(ValueKey('ai-bubble-a1')).first,
+    );
+    final spinnerRect = tester.getRect(spinner);
+    expect(bubbleRect.contains(spinnerRect.center), isTrue,
+        reason: '转圈必须在正在生成的那条气泡里，不能飘在页面底部');
+    expect(spinnerRect.bottom, lessThanOrEqualTo(bubbleRect.bottom + 0.5));
+    expect(bubbleRect.bottom - spinnerRect.bottom, lessThan(24),
+        reason: '要贴在气泡底部（在末尾内容的下方）');
+
+    // 这一轮结束：转圈必须收掉，不能一直转
     events.add(utf8.encode(
       _sse(3, 'message.completed',
           jsonEncode({'messageId': 'a1', 'text': '写好了。', 'steps': 0, 'reasoningEffort': 'off'})) +
@@ -944,8 +961,8 @@ void main() {
     ));
     unawaited(events.close());
     await tester.pumpAndSettle();
-    expect(find.text('AI 正在生成…'), findsNothing,
-        reason: '这一轮结束后提示要收掉（否则会一直转下去）');
+    expect(find.byType(CircularProgressIndicator), findsNothing,
+        reason: '这一轮结束后要收掉（否则会一直转下去）');
   });
 }
 

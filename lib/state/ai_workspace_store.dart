@@ -213,6 +213,30 @@ class AiWorkspaceStore extends ChangeNotifier {
   String? _activeRunId;
   bool get running => _activeRunId != null;
 
+  /// **正在流式生成的那一条助手消息**（用户建议 2026-09-20）：
+  /// 「AI 正在生成」的转圈动画要画在**它自己那个气泡的底部**，而不是页脚浮层。
+  ///
+  /// 两个条件缺一不可：
+  ///   · `sending` —— **这一轮还活着**。光看消息状态是不够的：库里可能留着一条
+  ///     `streaming` 的旧回复（流中断、App 被杀），只按状态画就会让那条老气泡
+  ///     永远转圈，而它其实早就没人推了；
+  ///   · 列表里最后一条助手消息状态是 `streaming` —— 正在写的就是它。
+  ///
+  /// 不另存一个 id 字段：那样就多了一份可能与 `messages` 不一致的状态，
+  /// 而重试（助手消息 id 会换一条）正好是容易忘记同步的地方。
+  AiMessage? get streamingMessage {
+    if (!sending) return null;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      final m = messages[i];
+      if (m.isUser) continue;
+      if (m.status == 'streaming') return m;
+      // 末尾的助手消息已经是终态，说明这一轮没有在飞的了
+      return null;
+    }
+    return null;
+  }
+
+
   // -----------------------------------------------------------------------
   //  流式期间的刷新节流（用户 bug：聊天快速滑动 / 展开流式思考时卡顿）
   // -----------------------------------------------------------------------
@@ -783,6 +807,21 @@ class AiWorkspaceStore extends ChangeNotifier {
     await refreshPreflight();
     await _rememberModel();
     notifyListeners();
+  }
+
+  /// 把消息里记的 `modelId` 翻成界面上好认的名字（用户建议 2026-09-20：
+  /// "如果本轮对话使用模型与上轮不同，需要在回复气泡显示出来"）。
+  ///
+  /// 后端给每条助手消息都落了 `model_id`（`ai_messages.model_id`），所以**历史气泡**
+  /// 也能如实显示当时用的是哪个模型 —— 不是"当前选中的模型"。
+  /// 目录里查不到（用户换了 Provider / 删过模型）时退回 id 本身，绝不显示空白。
+  String modelLabelOf(String? modelId) {
+    final id = (modelId ?? '').trim();
+    if (id.isEmpty) return '';
+    for (final m in models) {
+      if (m.id == id) return m.displayName.isEmpty ? id : m.displayName;
+    }
+    return id;
   }
 
   /// 选择思考强度。模型没声明这个档位时直接忽略（真源在模型目录，AIH-056）。
