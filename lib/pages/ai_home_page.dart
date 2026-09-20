@@ -403,6 +403,16 @@ class _Thread extends StatelessWidget {
   Widget build(BuildContext context) {
     final store = context.watch<AiWorkspaceStore>();
     return Column(
+      // `stretch` 不能省（用户 bug 2026-09-20："聊天主体距离两侧边栏空出一大片空白"）。
+      //
+      // Column 的默认 `crossAxisAlignment` 是 **center**：子项拿到的是**松约束**，
+      // 于是消息区（`SingleChildScrollView`）会缩到"最宽那条气泡 + 内边距"的宽度
+      // （气泡上限 720 → 752），再**居中**摆在栏里 —— 实测 1600 逻辑像素的窗口下
+      // 消息区只有 752 宽、两侧各空 173，滚动条也画在那条 752 的右边缘上，
+      // 离边栏老远（theme 里把 `crossAxisMargin` 调成 0 治不了这个：滚动视图本身就没铺满）。
+      // 输入区同理：它跟着缩成一条窄条、居中。
+      // 铺开之后：消息区 = 栏宽、滚动条贴右侧边栏、输入区也是整栏宽。
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _ConversationAppBar(store: store, onShowStatus: onShowStatus),
         Expanded(
@@ -754,8 +764,11 @@ class _MessageList extends StatelessWidget {
 
   const _MessageList({required this.store, required this.controller});
 
-  /// 每一条气泡的内边距。
-  static const EdgeInsets _itemPadding = EdgeInsets.symmetric(horizontal: 16, vertical: 6);
+  /// 每一条气泡的外边距（用户建议 2026-09-20："聊天气泡距离边缘 20 到 30 像素"）。
+  ///
+  /// 取 24：气泡铺满整栏宽度（不再有 `maxWidth` 上限），左右各留 24 ——
+  /// 用户气泡贴右边栏、助手气泡贴左边栏，中间是一条读得下去的行宽。
+  static const EdgeInsets _itemPadding = EdgeInsets.symmetric(horizontal: 24, vertical: 6);
 
   @override
   Widget build(BuildContext context) {
@@ -768,9 +781,14 @@ class _MessageList extends StatelessWidget {
       controller: controller,
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Column(
-        // `start`（不是 `stretch`）：气泡自己决定多宽、自己决定靠左还是靠右
-        // （`_MessageBubble` 里用户消息靠右）。这一层只负责"一条一行"。
-        crossAxisAlignment: CrossAxisAlignment.start,
+        // `stretch`：**每条消息占满整行**，靠左还是靠右由 `_MessageBubble`
+        // 自己的 `crossAxisAlignment` 决定（用户消息靠右）。
+        //
+        // 这里以前是 `start`，子项因此拿到松约束、缩到"气泡自己那么宽"，
+        // 而 `_MessageBubble` 那层 Column 也就跟着缩成一样宽 —— 它里面写的
+        // `CrossAxisAlignment.end` 于是**完全没有效果**：用户消息实际是左对齐的，
+        // 右侧再空出一大片（用户 2026-09-20 的截图）。
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (final message in store.messages)
             Padding(
@@ -1106,7 +1124,9 @@ class _MessageBubble extends StatelessWidget {
           // 气泡本体（内含底色那一块）在用例里要能精确取到矩形 ——
           // "转圈动画贴在正在生成的那条气泡底部"这条断言就靠它。
           key: ValueKey('ai-bubble-${m.id}'),
-          constraints: const BoxConstraints(maxWidth: 720),
+          // **没有 maxWidth 上限**（用户建议 2026-09-20："空间利用率低"）：
+          // 以前写死 720，宽窗口下右半边整片空着，表格 / 代码块也被挤在 720 里
+          // 横向溢出。现在气泡由外层 `stretch` 撑满整行，左右各留 24（见 `_itemPadding`）。
           margin: const EdgeInsets.symmetric(vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),

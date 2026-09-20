@@ -302,6 +302,51 @@ void main() {
     expect(find.byTooltip('ComfyUI 状态'), findsNothing);
   });
 
+  // 用户建议（2026-09-20）：
+  //   「聊天界面主体，距离两侧边栏空出了一大片空白，空间利用率低，也不美观。
+  //     建议滚动条贴边放置，聊天气泡距离边缘 20 到 30 像素。」
+  //
+  // 根因是两处**默认对齐**，光调主题里的 `crossAxisMargin` 治不了：
+  //   ① `_Thread` 的 Column 没写 crossAxisAlignment（默认 center）→ 消息区缩到
+  //      "最宽气泡 + 内边距"（720 + 32 = 752）再**居中**，两侧各空一大片；
+  //      滚动条画在那条 752 的右边缘上，离右侧栏老远（用户说的"没贴边"）；
+  //   ② `_MessageList` 的 Column 写的是 start → 每条消息也只有气泡那么宽，
+  //      `_MessageBubble` 里"用户消息靠右"（end）因此**完全没生效**。
+  testWidgets('聊天主体铺满整栏：气泡距边缘 24、滚动条贴右侧边栏（用户建议）', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await _page());
+    await tester.pumpAndSettle();
+
+    // 发一条短消息：一条用户气泡 + 一条助手气泡，两条都短到"窄于整栏"，
+    // 这样才量得到它们各自贴的是哪一边
+    await tester.enterText(find.byType(TextField).first, '短消息');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    final dividers = find.byType(VerticalDivider);
+    expect(dividers, findsNWidgets(2), reason: '前提：这是三栏布局');
+    final paneLeft = tester.getRect(dividers.at(0)).right;
+    final paneRight = tester.getRect(dividers.at(1)).left;
+    final list = tester.getRect(find.byKey(const Key('ai-message-list')));
+
+    expect(list.left, closeTo(paneLeft, 0.5), reason: '消息区要从左边栏那条分隔线开始');
+    expect(list.right, closeTo(paneRight, 0.5),
+        reason: '消息区要铺到右侧栏那条分隔线 —— 滚动条就画在这个右边缘，这才叫"贴边"');
+    expect(list.width, greaterThan(900),
+        reason: '1600 宽的窗口下不许再缩成 752 居中（旧行为：两侧各空一大片）');
+
+    final userBubble = tester.getRect(find.byKey(const ValueKey('ai-bubble-u1')).first);
+    // 助手那条：一轮跑完界面会与服务端对齐一次（`_reloadMessages`），
+    // 所以 id 是假后端 `/messages` 里给的那个（a2），不是乐观插入时的 a1
+    final assistantBubble = tester.getRect(find.byKey(const ValueKey('ai-bubble-a2')).first);
+    expect(assistantBubble.left, closeTo(paneLeft + 24, 0.5), reason: '助手气泡距左边栏 24');
+    expect(userBubble.right, closeTo(paneRight - 24, 0.5),
+        reason: '用户气泡要贴右（旧行为：item 缩成气泡那么宽，end 对齐等于没生效）');
+  });
+
   testWidgets('会话列表：显示最近一次对话时间，聊完立刻变成「刚刚」（用户建议 ⑥）', (tester) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1.0;
