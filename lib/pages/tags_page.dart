@@ -84,47 +84,46 @@ class _TagsPageState extends State<TagsPage> {
                   onChanged: (v) => setState(() => _query = v.trim()),
                 ),
                 const SizedBox(height: 10),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
+                // 分类筛选行**折行显示**（用户要求：一行放不下就两行、三行，
+                // 不要横向滚动）。以前是 `SingleChildScrollView(horizontal)`：
+                // 分类一多 / 窗口一窄，右侧的分类和排序就被切在屏幕外。
+                FilterChipRow(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    ChoiceChip(
+                      label: const Text('全部分类'),
+                      selected: _category == null,
+                      onSelected: (_) => setState(() => _category = null),
+                    ),
+                    for (final c in store.tagCategories)
                       ChoiceChip(
-                        label: const Text('全部分类'),
-                        selected: _category == null,
-                        onSelected: (_) => setState(() => _category = null),
+                        label: Text(c),
+                        selected: _category == c,
+                        onSelected: (_) => setState(() => _category = c),
                       ),
-                      const SizedBox(width: 6),
-                      for (final c in store.tagCategories) ...[
-                        ChoiceChip(
-                          label: Text(c),
-                          selected: _category == c,
-                          onSelected: (_) => setState(() => _category = c),
-                        ),
-                        const SizedBox(width: 6),
+                    AppMenuButton<String>(
+                      tooltip: '排序',
+                      onSelected: (v) => setState(() => _sort = v),
+                      options: const [
+                        MenuOption(value: 'popular', icon: Icons.trending_up, label: '按使用频率'),
+                        MenuOption(value: 'name', icon: Icons.sort_by_alpha, label: '按名称'),
+                        MenuOption(value: 'newest', icon: Icons.schedule, label: '按创建时间'),
                       ],
-                      AppMenuButton<String>(
-                        tooltip: '排序',
-                        onSelected: (v) => setState(() => _sort = v),
-                        options: const [
-                          MenuOption(value: 'popular', icon: Icons.trending_up, label: '按使用频率'),
-                          MenuOption(value: 'name', icon: Icons.sort_by_alpha, label: '按名称'),
-                          MenuOption(value: 'newest', icon: Icons.schedule, label: '按创建时间'),
-                        ],
-                        button: (context, controller, isOpen) => InkWell(
-                          borderRadius: BorderRadius.circular(8),
-                          onTap: () => controller.isOpen ? controller.close() : controller.open(),
-                          child: Chip(
-                            avatar: const Icon(Icons.sort, size: 16),
-                            label: Text(switch (_sort) {
-                              'name' => '按名称',
-                              'newest' => '按创建时间',
-                              _ => '按使用频率',
-                            }),
-                          ),
+                      button: (context, controller, isOpen) => InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => controller.isOpen ? controller.close() : controller.open(),
+                        child: Chip(
+                          avatar: const Icon(Icons.sort, size: 16),
+                          label: Text(switch (_sort) {
+                            'name' => '按名称',
+                            'newest' => '按创建时间',
+                            _ => '按使用频率',
+                          }),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ],
             ),

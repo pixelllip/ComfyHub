@@ -60,6 +60,8 @@ MockClient _fakeBackend({
   List<Map<String, dynamic>> conversations = const [],
   // 模型显示名可以换：名字长的模型会把输入区底行挤紧（用户 bug 的复现条件之一）
   String modelName = '纯文本模型',
+  // 权限档：`full` 时那枚按钮的文案是「自动允许（无需批准）」（底行最宽的一枚控件）
+  String permissionMode = AiToolPolicy.modeAsk,
 }) {
   var runCount = 0;
   return MockClient((request) async {
@@ -175,6 +177,9 @@ MockClient _fakeBackend({
           'parts': <Object>[],
         },
       ];
+    } else if (path == '/api/ai/tools/policy') {
+      // 权限档（用户建议 ⑤）的真源：界面读它决定那枚按钮显示哪一档
+      body = {'permissionMode': permissionMode};
     } else if (path == '/api/ai/preflight') {
       body = {
         'allowed': false,
@@ -203,7 +208,11 @@ MockClient _fakeBackend({
   });
 }
 
-Future<Widget> _page({
+/// 造一个只在内存里跑的 AI 工作台页面（假后端 + mock 设置）。
+///
+/// **对测试文件公开**（不带下划线）：别的回归用例需要"同一个页面的另一套窗口尺寸"
+/// 时直接复用，别各自再抄一份假后端 —— 抄出来的第二份早晚会跟这份对不上。
+Future<Widget> buildAiHomePage({
   List<String> modalities = const ['text'],
   Map<String, String>? thinkingEfforts,
   bool reasoning = false,
@@ -214,6 +223,7 @@ Future<Widget> _page({
   List<Map<String, dynamic>> conversations = const [],
   ThemeData? theme,
   String modelName = '纯文本模型',
+  String permissionMode = AiToolPolicy.modeAsk,
 }) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
@@ -231,6 +241,7 @@ Future<Widget> _page({
         conversationId: conversationId,
         conversations: conversations,
         modelName: modelName,
+        permissionMode: permissionMode,
       ),
     ),
   );
@@ -255,7 +266,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     expect(find.text('新建对话'), findsOneWidget);
@@ -273,7 +284,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     // 这一段仍然是两栏（900px 宽时再塞一栏，正文区只剩约 400px，太挤）
@@ -295,7 +306,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     expect(find.text('ComfyUI'), findsOneWidget);
@@ -311,7 +322,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     // 四块各有一张卡（Skills 那张是 `DecoratedSliver`：条目要懒构建，见页面里的注释）
@@ -362,7 +373,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     // 发一条短消息：一条用户气泡 + 一条助手气泡，两条都短到"窄于整栏"，
@@ -397,7 +408,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page(
+    await tester.pumpWidget(await buildAiHomePage(
       conversations: [
         {
           'id': 'c2',
@@ -439,7 +450,7 @@ void main() {
 
     // 用 App 真正在跑的深色主题：Material 默认的按下高亮（~38% 白）只在深色下才这么抢眼，
     // 拿默认浅色主题测等于没测。
-    await tester.pumpWidget(await _page(
+    await tester.pumpWidget(await buildAiHomePage(
       theme: AppTheme.build(Brightness.dark),
       conversations: [
         {'id': 'cA', 'title': '会话 A', 'messageCount': 2},
@@ -487,7 +498,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     expect(find.text('ComfyUI'), findsNothing);
@@ -495,12 +506,179 @@ void main() {
     expect(find.text('发送'), findsOneWidget);
   });
 
+  // 用户 bug（2026-09-21）："当宽度低于一定值的时候，控件显示不全；进一步降低宽度，
+  // 当仅有聊天详情本身时，本来该出现在 appbar 里的 comfy UI 状态变成了盖住发送按钮的
+  // 独立按钮，同时底下控件也显示不全。"
+  //
+  // 三个根因，三条用例各盯一个：
+  //   ① 窄屏那一支用的是钉死在右下角的 `FloatingActionButton` —— 而输入区的「发送」
+  //      按钮正好在右下角，于是窗口一窄就**被 FAB 盖住**（实测 320~899px 全部重叠，
+  //      连发送按钮的点击面都被吃掉）。
+  //   ② 输入区底行左侧操作组能横向滚动，但窄窗口下视口只剩 21px（内容 847px）——
+  //      权限档 / 模型选择被从**左边缘**裁掉，用户"显示不全"且滚不动。
+  //   ③ 用户的要求：**一行放不完就折行**，不要横向滚动。
+  testWidgets('窄屏：ComfyUI 状态入口在标题栏，不再有盖住发送按钮的 FAB', (tester) async {
+    tester.view.physicalSize = const Size(420, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await buildAiHomePage());
+    await tester.pumpAndSettle();
+
+    // 全局唯一的 FAB 会压住输入区：**一个都不许有**（右下角那个位置属于「发送」）
+    expect(find.byType(FloatingActionButton), findsNothing,
+        reason: '窄屏的 Comfy 状态入口进了标题栏，不该再留一个 FAB 压住发送按钮');
+
+    final entry = find.byTooltip('ComfyUI 状态');
+    expect(entry, findsOneWidget, reason: '第三栏铺不开时，标题栏必须有一个可达的入口');
+
+    final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
+    expect(tester.getRect(entry).overlaps(send), isFalse, reason: '入口不能压在发送按钮上');
+
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    expect(find.text('ComfyUI'), findsWidgets, reason: '点开就能看到状态内容');
+  });
+
+  testWidgets('窄屏输入区底行：紧凑图标 + 发送挤在一排，控件一个都不被裁', (tester) async {
+    tester.view.physicalSize = const Size(360, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await buildAiHomePage(
+      modelName: 'DeepSeek V4.1 Flash',
+      modalities: const ['text', 'image'],
+      usage: {'inputTokens': 12167, 'outputTokens': 28},
+      // 权限档切到"自动允许（无需批准）"：宽屏下这是底行最宽的那枚控件
+      permissionMode: AiToolPolicy.modeFull,
+    ));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '你好');
+    await tester.tap(find.widgetWithText(FilledButton, '发送'));
+    await tester.pumpAndSettle();
+
+    // 输入区宽度（360 - 两侧 12）不够一行放下宽版控件 + token 汇总 + 发送 → 换行，
+    // 而且控件退成紧凑图标
+    expect(find.byKey(const Key('ai-composer-two-row')), findsOneWidget,
+        reason: '窄到放不下时，底行要换行而不是把控件裁掉');
+
+    final input = tester.getRect(find.byType(TextField).first);
+    final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
+    expect(send.right, closeTo(input.right, 1), reason: '发送按钮仍然贴右');
+    expect(tester.takeException(), isNull, reason: '窄窗口不许出现 RenderFlex overflow');
+
+    // 底行里不许再出现横向滚动（用户明确不要"一行放不下就左右拖"）
+    final horizontal = find.byType(Scrollable).evaluate().where((e) {
+      final s = e.widget as Scrollable;
+      if (s.axisDirection != AxisDirection.right && s.axisDirection != AxisDirection.left) {
+        return false;
+      }
+      return s.restorationId != 'editable'; // TextField 自己的光标滚动，不算
+    });
+    expect(horizontal, isEmpty, reason: '输入区不许再靠横向滚动兜底');
+
+    // 四枚控件都还在（一个都没被丢掉），都在输入区里、没有被裁。
+    // 窄屏是**图标**形态，所以按 tooltip 找（tooltip 里带着当前档位/模型名，信息没丢）
+    final controls = <String, Finder>{
+      '添加附件': find.byTooltip('添加附件'),
+      '权限档': find.byTooltip(
+          '当前：${AiToolPolicy.modeFullLabel} —— AI 调用工具不会等你批准'
+          '（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
+      '模型选择': find.byTooltip('当前模型：DeepSeek V4.1 Flash（文本 / 图片） —— 点一下换一个'),
+      '思考强度': find.byTooltip(
+          '不支持思考 —— 该模型未声明推理能力，请到「设置 → AI 模型」声明'),
+    };
+    for (final entry in controls.entries) {
+      expect(entry.value, findsWidgets, reason: '${entry.key} 必须还在底行里');
+      final rect = tester.getRect(entry.value.last);
+      expect(rect.left, greaterThanOrEqualTo(input.left - 0.5),
+          reason: '${entry.key} 不能被从左边裁掉（用户报的"控件显示不全"）');
+      expect(rect.right, lessThanOrEqualTo(input.right + 0.5),
+          reason: '${entry.key} 不能被从右边裁掉');
+    }
+
+    // 四枚图标 + 发送：360（内容区 336）时整排一次放得下，发送收在最右
+    for (final entry in controls.entries) {
+      expect((tester.getRect(entry.value.last).center.dy - send.center.dy).abs(), lessThan(6),
+          reason: '${entry.key} 要和发送按钮同一排');
+    }
+    // 整排贴着输入区右边缘收尾（收在发送按钮上）
+    expect(send.right, closeTo(input.right, 1),
+        reason: '这一排的右边界就是发送按钮 / 输入区右边缘');
+    expect(find.byTooltip('不支持思考 —— 该模型未声明推理能力，请到「设置 → AI 模型」声明'),
+        findsWidgets);
+    // 窄屏不再显示 token 用量（用户：宽度太窄的时候可以不显示）
+    expect(find.textContaining('本对话 ↑'), findsNothing,
+        reason: '窄屏下 token 汇总让位给操作控件');
+  });
+
+  // 「最小窗口宽度」那一档也要能看：320 是产品约定的下限（`windows/runner/win32_window.cpp`
+  // 的 `kMinWindowWidthLogical`，用户能拖到的最窄）。这一档下底行就是**一排**：
+  // 四枚紧凑图标 + 发送按钮，全部落在输入区范围内。
+  testWidgets('最小宽度 320：四枚图标 + 发送一排放下，不裁不溢出', (tester) async {
+    tester.view.physicalSize = const Size(320, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await buildAiHomePage(
+      modelName: 'DeepSeek V4.1 Flash',
+      modalities: const ['text', 'image'],
+      usage: {'inputTokens': 12167, 'outputTokens': 28},
+      permissionMode: AiToolPolicy.modeFull,
+    ));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '你好');
+    await tester.tap(find.widgetWithText(FilledButton, '发送'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('ai-composer-two-row')), findsOneWidget);
+    final input = tester.getRect(find.byType(TextField).first);
+    final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
+    final attach = tester.getRect(find.byTooltip('添加附件'));
+    expect(send.right, closeTo(input.right, 1), reason: '发送按钮贴右（和输入框右边缘对齐）');
+
+    // 附件和发送**同一排**（发送是个固定宽的按钮，不该独占一行），
+    // 整排都落在输入区里，没有任何 RenderFlex overflow。
+    // 实测 320（内容区 296）：发送 94 + 附件 48 + 权限 50 + 模型 38 + 思考 38
+    // + 4×4 间距 = 284 —— 五枚一排放得下，发送收在最右。
+    expect((send.center.dy - attach.center.dy).abs(), lessThan(6),
+        reason: '发送必须和操作控件同一排');
+    expect(attach.left, greaterThanOrEqualTo(input.left - 0.5));
+    expect(tester.takeException(), isNull, reason: '320 宽下不许 overflow');
+
+    // 操作控件全都排在发送按钮**左边**（发送仍然是最右那一枚）
+    final effort = tester.getRect(
+      find.byTooltip('不支持思考 —— 该模型未声明推理能力，请到「设置 → AI 模型」声明'));
+    expect(effort.right, lessThanOrEqualTo(send.left + 0.5),
+        reason: '操作控件在左、发送在右（和宽屏的次序一致）');
+
+    // 窄屏不显示 token 用量（它让位给操作控件），但宽屏下必须还在
+    expect(find.textContaining('本对话 ↑'), findsNothing);
+  });
+
+  // 反向保险：窗口宽裕时**不换行**（否则底行会白白多出一行高度）
+  testWidgets('宽窗口输入区底行仍然是一行', (tester) async {
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await buildAiHomePage(modelName: 'GPT-4o'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('ai-composer-two-row')), findsNothing);
+    // 一行时发送按钮和"添加附件"在同一水平带上（换行后发送会落到操作组下面）
+    final attach = tester.getRect(find.byTooltip('添加附件'));
+    final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
+    expect((send.center.dy - attach.center.dy).abs(), lessThan(8),
+        reason: '宽窗口下发送按钮仍和操作组同一行');
+  });
+
   testWidgets('冷启动落在新建的聊天记录上，而不是重新打开上次那条', (tester) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
@@ -514,7 +692,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
@@ -536,7 +714,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
@@ -554,7 +732,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
@@ -574,7 +752,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
@@ -593,7 +771,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page(modalities: ['text', 'image']));
+    await tester.pumpWidget(await buildAiHomePage(modalities: ['text', 'image']));
     await tester.pumpAndSettle();
 
     // 打开模型选择器
@@ -607,7 +785,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     final store = tester
@@ -639,7 +817,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
@@ -664,7 +842,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page());
+    await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
     expect(find.text('不支持思考'), findsOneWidget, reason: '没声明就别给一堆选了会被拒的选项');
@@ -684,7 +862,7 @@ void main() {
     addTearDown(tester.view.reset);
     lastRunBody = null;
 
-    await tester.pumpWidget(await _page(
+    await tester.pumpWidget(await buildAiHomePage(
       reasoning: true,
       thinkingFormat: 'deepseek',
       thinkingEfforts: {'off': 'none', 'low': 'low', 'high': 'high'},
@@ -722,7 +900,7 @@ void main() {
     addTearDown(tester.view.reset);
     lastRunBody = null;
 
-    await tester.pumpWidget(await _page(
+    await tester.pumpWidget(await buildAiHomePage(
       reasoning: true,
       thinkingEfforts: {'low': 'low', 'high': 'high'},
     ));
@@ -742,7 +920,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page(
+    await tester.pumpWidget(await buildAiHomePage(
       usage: {'inputTokens': 1200, 'outputTokens': 300, 'cachedTokens': 400},
     ));
     await tester.pumpAndSettle();
@@ -770,7 +948,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page(
+    await tester.pumpWidget(await buildAiHomePage(
       modelName: 'DeepSeek V4.1 Flash',
       modalities: const ['text', 'image', 'video', 'audio'],
       usage: {'inputTokens': 6400, 'outputTokens': 1500},
@@ -817,7 +995,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page(
+    await tester.pumpWidget(await buildAiHomePage(
       modelName: 'GPT-4o',
       usage: {'inputTokens': 1200, 'outputTokens': 300},
     ));
@@ -842,7 +1020,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page(failFirstRun: true));
+    await tester.pumpWidget(await buildAiHomePage(failFirstRun: true));
     await tester.pumpAndSettle();
 
     final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
@@ -873,7 +1051,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _page(usage: const {}));
+    await tester.pumpWidget(await buildAiHomePage(usage: const {}));
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField), '你好');

@@ -186,4 +186,30 @@ void main() {
     expect(tester.widget<SwitchListTile>(blur).onChanged, isNull,
         reason: 'NSFW 模式没开时模糊选项应当置灰');
   });
+
+  // 用户 bug（窄窗口）："控件显示不全"。
+  //
+  // 本地服务那张卡片里有三组**按钮**（原来是裸 `Row`）：[自动探测][保存]、
+  // [保存][迁移现有数据到该目录…]、[保存并测试连接][恢复默认]。320px 窗口下
+  // 卡片内容宽 288，最宽的那组自然宽度就有 ~295 → `Row` 直接
+  // `RenderFlex overflowed`（实测溢出 7.1px），右边那枚按钮被裁掉一半。
+  // 现在换 `Wrap`：放不下就折行，按钮一个都不少。
+  testWidgets('设置页：窗口很窄时按钮组折行，不溢出（用户 bug：控件显示不全）', (tester) async {
+    // 高度给足：三组按钮一次全在树上（这一页本身是可滚的，这里要盯的是**横向**溢出）
+    tester.view.physicalSize = const Size(320, 2600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await _pumpSettings(tester);
+
+    expect(tester.takeException(), isNull, reason: '窄窗口下设置页不许 RenderFlex overflow');
+    for (final label in const [
+      '自动探测',
+      '迁移现有数据到该目录…',
+      '保存并测试连接',
+      '恢复默认',
+    ]) {
+      expect(find.text(label), findsOneWidget, reason: '$label 不能被裁掉');
+    }
+  });
 }

@@ -519,7 +519,10 @@ class _SettingsPageState extends State<SettingsPage> {
                           style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
                         ),
                         const SizedBox(height: 12),
-                        Row(
+                        // 窄窗口下这两枚按钮加起来比卡片宽（320px 实测溢出 7.1px）
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 4,
                           children: [
                             FilledButton.icon(
                               onPressed: _testing ? null : _test,
@@ -532,7 +535,6 @@ class _SettingsPageState extends State<SettingsPage> {
                                   : const Icon(Icons.wifi_tethering),
                               label: const Text('保存并测试连接'),
                             ),
-                            const SizedBox(width: 10),
                             TextButton(
                               onPressed: () {
                                 _urlController.text = SettingsStore.defaultBaseUrl();
@@ -893,7 +895,13 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
             const SizedBox(height: 6),
-            Row(
+            // 按钮组用 `Wrap`（用户 bug：窄窗口下"控件显示不全"）：窗口窄到 ~360px
+            // （纯聊天/单列设置卡）时，两枚 `TextButton.icon` 的自然宽度加起来比卡片
+            // 还宽，`Row` 只能**溢出被裁**（实测 320px 时溢出 7.1px）。`Wrap` 放不下
+            // 就换行，按钮一个都不会消失。
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 TextButton.icon(
                   onPressed: () {
@@ -902,7 +910,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   icon: const Icon(Icons.search, size: 18),
                   label: const Text('自动探测'),
                 ),
-                const SizedBox(width: 4),
                 TextButton.icon(
                   onPressed: () async {
                     await settings.setProjectRoot(_projectRootController.text);
@@ -925,7 +932,10 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
             const SizedBox(height: 6),
-            Row(
+            // 同上：`Row` 里最长的「迁移现有数据到该目录…」在窄卡片里放不下
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 TextButton.icon(
                   onPressed: () async {
@@ -937,7 +947,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   icon: const Icon(Icons.save_outlined, size: 18),
                   label: const Text('保存'),
                 ),
-                const SizedBox(width: 4),
                 TextButton.icon(
                   onPressed: busy ? null : () => _relocateMysql(launcher),
                   icon: const Icon(Icons.drive_file_move_outline, size: 18),

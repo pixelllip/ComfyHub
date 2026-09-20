@@ -159,81 +159,88 @@ class _PromptsPageState extends State<PromptsPage> {
             onSubmitted: store.setPromptQuery,
           ),
           const SizedBox(height: 10),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _kindFilter(store),
-                const SizedBox(width: 8),
-                FilterChip(
-                  label: const Text('仅收藏'),
-                  avatar: Icon(
-                    store.onlyFavorite ? Icons.star : Icons.star_border,
-                    size: 17,
-                    color: store.onlyFavorite ? Colors.amber : null,
-                  ),
-                  selected: store.onlyFavorite,
-                  onSelected: (v) => store.setOnlyFavorite(v),
-                ),
-                const SizedBox(width: 8),
-                // 「未关联产物」：产物被删掉之后提示词会变成未关联，
-                // 这里筛出来，配合右边的「一键清除未关联」一起用（用户要求）
-                FilterChip(
-                  label: const Text('未关联产物'),
-                  avatar: Icon(
-                    Icons.link_off,
-                    size: 16,
-                    color: store.onlyUnlinked ? Colors.orange : null,
-                  ),
-                  selected: store.onlyUnlinked,
-                  onSelected: (v) => store.setOnlyUnlinked(v),
-                ),
-                const SizedBox(width: 4),
-                TextButton.icon(
-                  onPressed: _busy ? null : _clearUnlinked,
-                  icon: const Icon(Icons.cleaning_services_outlined, size: 16),
-                  label: const Text('一键清除未关联'),
-                  style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
-                ),
-                const SizedBox(width: 8),
-                if (store.selectedTags.isNotEmpty) ...[
-                  SegmentedButton<String>(
-                    style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                    segments: const [
-                      ButtonSegment(value: 'any', label: Text('任一标签')),
-                      ButtonSegment(value: 'all', label: Text('全部标签')),
-                    ],
-                    selected: {store.tagMode},
-                    onSelectionChanged: (s) => store.setTagMode(s.first),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                AppMenuButton<String>(
-                  tooltip: '排序',
-                  onSelected: store.setPromptSort,
-                  options: const [
-                    MenuOption(value: 'newest', icon: Icons.schedule, label: '最新创建'),
-                    MenuOption(value: 'oldest', icon: Icons.history, label: '最旧创建'),
-                    MenuOption(value: 'updated', icon: Icons.update, label: '最近修改'),
-                    MenuOption(value: 'title', icon: Icons.sort_by_alpha, label: '按标题'),
-                    MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
-                  ],
-                  button: (context, controller, isOpen) => InkWell(
-                    borderRadius: BorderRadius.circular(8),
-                    onTap: () => controller.isOpen ? controller.close() : controller.open(),
-                    child: Chip(
-                      avatar: const Icon(Icons.sort, size: 16),
-                      label: Text(_sortLabel(store.promptSort)),
+          // 筛选行**折行显示**（用户要求：一行放不下就两行、三行，不要横向滚动）。
+          // 这里原来是 `SingleChildScrollView(horizontal)`：窗口一窄，
+          // 「一键清除未关联 / 任一标签 / 排序」就被切在右边，不拖看不到。
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: FilterChipRow(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    ..._kindFilter(store),
+                    FilterChip(
+                      label: const Text('仅收藏'),
+                      avatar: Icon(
+                        store.onlyFavorite ? Icons.star : Icons.star_border,
+                        size: 17,
+                        color: store.onlyFavorite ? Colors.amber : null,
+                      ),
+                      selected: store.onlyFavorite,
+                      onSelected: (v) => store.setOnlyFavorite(v),
                     ),
-                  ),
+                    // 「未关联产物」：产物被删掉之后提示词会变成未关联，
+                    // 这里筛出来，配合右边的「一键清除未关联」一起用（用户要求）
+                    FilterChip(
+                      label: const Text('未关联产物'),
+                      avatar: Icon(
+                        Icons.link_off,
+                        size: 16,
+                        color: store.onlyUnlinked ? Colors.orange : null,
+                      ),
+                      selected: store.onlyUnlinked,
+                      onSelected: (v) => store.setOnlyUnlinked(v),
+                    ),
+                    TextButton.icon(
+                      onPressed: _busy ? null : _clearUnlinked,
+                      icon: const Icon(Icons.cleaning_services_outlined, size: 16),
+                      label: const Text('一键清除未关联'),
+                      style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+                    ),
+                    if (store.selectedTags.isNotEmpty)
+                      SegmentedButton<String>(
+                        style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                        segments: const [
+                          ButtonSegment(value: 'any', label: Text('任一标签')),
+                          ButtonSegment(value: 'all', label: Text('全部标签')),
+                        ],
+                        selected: {store.tagMode},
+                        onSelectionChanged: (s) => store.setTagMode(s.first),
+                      ),
+                    AppMenuButton<String>(
+                      tooltip: '排序',
+                      onSelected: store.setPromptSort,
+                      options: const [
+                        MenuOption(value: 'newest', icon: Icons.schedule, label: '最新创建'),
+                        MenuOption(value: 'oldest', icon: Icons.history, label: '最旧创建'),
+                        MenuOption(value: 'updated', icon: Icons.update, label: '最近修改'),
+                        MenuOption(value: 'title', icon: Icons.sort_by_alpha, label: '按标题'),
+                        MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
+                      ],
+                      button: (context, controller, isOpen) => InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => controller.isOpen ? controller.close() : controller.open(),
+                        child: Chip(
+                          avatar: const Icon(Icons.sort, size: 16),
+                          label: Text(_sortLabel(store.promptSort)),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Text(
+              ),
+              const SizedBox(width: 8),
+              Padding(
+                // 和 chip 的视觉基线对齐（chip 自带一点内边距）
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
                   '共 ${store.prompts.total} 条',
                   style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
           if (store.selectedTags.isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -267,7 +274,11 @@ class _PromptsPageState extends State<PromptsPage> {
         _ => '最新创建',
       };
 
-  Widget _kindFilter(LibraryStore store) {
+  /// 提示词类型筛选（"全部 / 生图 / 生视频 / 生音频 / 混合"）。
+  ///
+  /// 返回**列表**而不是 `Row`：外层的筛选行是 `FilterChipRow`（`Wrap`），
+  /// 这几个 chip 要作为独立项参与折行（用户要求：放不下就换行）。
+  List<Widget> _kindFilter(LibraryStore store) {
     const kinds = <(String?, String)>[
       (null, '全部'),
       ('IMAGE', '生图'),
@@ -275,20 +286,14 @@ class _PromptsPageState extends State<PromptsPage> {
       ('AUDIO', '生音频'),
       ('MIXED', '混合'),
     ];
-    // 注意：这里不能返回 Wrap —— 外层是横向滚动，宽度无约束
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final k in kinds) ...[
-          ChoiceChip(
-            label: Text(k.$2),
-            selected: store.promptKind == k.$1,
-            onSelected: (_) => store.setPromptKind(k.$1),
-          ),
-          const SizedBox(width: 6),
-        ],
-      ],
-    );
+    return [
+      for (final k in kinds)
+        ChoiceChip(
+          label: Text(k.$2),
+          selected: store.promptKind == k.$1,
+          onSelected: (_) => store.setPromptKind(k.$1),
+        ),
+    ];
   }
 
   Widget _buildBody(BuildContext context, LibraryStore store) {

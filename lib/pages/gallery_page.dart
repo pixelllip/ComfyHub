@@ -147,86 +147,95 @@ class _GalleryPageState extends State<GalleryPage> {
             onSubmitted: store.setMediaQuery,
           ),
           const SizedBox(height: 10),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                for (final entry in const <(String?, String)>[
-                  (null, '全部'),
-                  ('IMAGE', '图片'),
-                  ('VIDEO', '视频'),
-                  ('AUDIO', '音频'),
-                ]) ...[
-                  ChoiceChip(
-                    label: Text(entry.$2),
-                    selected: store.mediaKind == entry.$1,
-                    onSelected: (_) => store.setMediaKind(entry.$1),
-                  ),
-                  const SizedBox(width: 6),
-                ],
-                FilterChip(
-                  label: const Text('仅收藏'),
-                  avatar: Icon(
-                    store.mediaOnlyFavorite ? Icons.star : Icons.star_border,
-                    size: 16,
-                    color: store.mediaOnlyFavorite ? Colors.amber : null,
-                  ),
-                  selected: store.mediaOnlyFavorite,
-                  onSelected: store.setMediaOnlyFavorite,
-                ),
-                const SizedBox(width: 6),
-                FilterChip(
-                  label: const Text('未关联'),
-                  selected: store.mediaUntagged,
-                  onSelected: store.setMediaUntagged,
-                ),
-                const SizedBox(width: 4),
-                // 提示词被删掉后，它名下的产物会解除关联（prompt_id → NULL）。
-                // 这里给一个"把这些孤儿产物一次清掉"的入口（用户要求）。
-                TextButton.icon(
-                  onPressed: _busy ? null : _clearUnlinked,
-                  icon: const Icon(Icons.cleaning_services_outlined, size: 16),
-                  label: const Text('清除未关联产物'),
-                  style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
-                ),
-                const SizedBox(width: 6),
-                if (store.mediaTags.isNotEmpty)
-                  SegmentedButton<String>(
-                    style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                    segments: const [
-                      ButtonSegment(value: 'any', label: Text('任一标签')),
-                      ButtonSegment(value: 'all', label: Text('全部标签')),
-                    ],
-                    selected: {store.mediaTagMode},
-                    onSelectionChanged: (s) => store.setMediaTagMode(s.first),
-                  ),
-                const SizedBox(width: 6),
-                AppMenuButton<String>(
-                  tooltip: '排序',
-                  onSelected: store.setMediaSort,
-                  options: const [
-                    MenuOption(value: 'newest', icon: Icons.schedule, label: '最新加入'),
-                    MenuOption(value: 'oldest', icon: Icons.history, label: '最旧加入'),
-                    MenuOption(value: 'name', icon: Icons.sort_by_alpha, label: '按文件名'),
-                    MenuOption(value: 'largest', icon: Icons.data_usage, label: '按体积'),
-                    MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
-                  ],
-                  button: (context, controller, isOpen) => InkWell(
-                    borderRadius: BorderRadius.circular(8),
-                    onTap: () => controller.isOpen ? controller.close() : controller.open(),
-                    child: Chip(
-                      avatar: const Icon(Icons.sort, size: 16),
-                      label: Text(_sortLabel(store.mediaSort)),
+          // 筛选行**折行显示**（用户要求：一行放不下就两行、三行，不要横向滚动）。
+          // 这里原来是 `SingleChildScrollView(horizontal)`：窗口一窄，「仅收藏 / 未关联 /
+          // 清除未关联产物 / 排序」全被切在右边，不拖看不到。
+          // 「共 N 个」放在筛选行**后面**（它跟着 `Expanded` 贴到最右）：
+          // 塞进这一行的话它自己也会变成一个换行项。
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: FilterChipRow(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final entry in const <(String?, String)>[
+                      (null, '全部'),
+                      ('IMAGE', '图片'),
+                      ('VIDEO', '视频'),
+                      ('AUDIO', '音频'),
+                    ])
+                      ChoiceChip(
+                        label: Text(entry.$2),
+                        selected: store.mediaKind == entry.$1,
+                        onSelected: (_) => store.setMediaKind(entry.$1),
+                      ),
+                    FilterChip(
+                      label: const Text('仅收藏'),
+                      avatar: Icon(
+                        store.mediaOnlyFavorite ? Icons.star : Icons.star_border,
+                        size: 16,
+                        color: store.mediaOnlyFavorite ? Colors.amber : null,
+                      ),
+                      selected: store.mediaOnlyFavorite,
+                      onSelected: store.setMediaOnlyFavorite,
                     ),
-                  ),
+                    FilterChip(
+                      label: const Text('未关联'),
+                      selected: store.mediaUntagged,
+                      onSelected: store.setMediaUntagged,
+                    ),
+                    // 提示词被删掉后，它名下的产物会解除关联（prompt_id → NULL）。
+                    // 这里给一个"把这些孤儿产物一次清掉"的入口（用户要求）。
+                    TextButton.icon(
+                      onPressed: _busy ? null : _clearUnlinked,
+                      icon: const Icon(Icons.cleaning_services_outlined, size: 16),
+                      label: const Text('清除未关联产物'),
+                      style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+                    ),
+                    if (store.mediaTags.isNotEmpty)
+                      SegmentedButton<String>(
+                        style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                        segments: const [
+                          ButtonSegment(value: 'any', label: Text('任一标签')),
+                          ButtonSegment(value: 'all', label: Text('全部标签')),
+                        ],
+                        selected: {store.mediaTagMode},
+                        onSelectionChanged: (s) => store.setMediaTagMode(s.first),
+                      ),
+                    AppMenuButton<String>(
+                      tooltip: '排序',
+                      onSelected: store.setMediaSort,
+                      options: const [
+                        MenuOption(value: 'newest', icon: Icons.schedule, label: '最新加入'),
+                        MenuOption(value: 'oldest', icon: Icons.history, label: '最旧加入'),
+                        MenuOption(value: 'name', icon: Icons.sort_by_alpha, label: '按文件名'),
+                        MenuOption(value: 'largest', icon: Icons.data_usage, label: '按体积'),
+                        MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
+                      ],
+                      button: (context, controller, isOpen) => InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => controller.isOpen ? controller.close() : controller.open(),
+                        child: Chip(
+                          avatar: const Icon(Icons.sort, size: 16),
+                          label: Text(_sortLabel(store.mediaSort)),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Text(
+              ),
+              const SizedBox(width: 8),
+              Padding(
+                // 和 chip 的视觉基线对齐（chip 自带一点内边距）
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
                   '共 ${store.media.total} 个',
                   style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
           if (store.mediaTags.isNotEmpty) ...[
             const SizedBox(height: 8),

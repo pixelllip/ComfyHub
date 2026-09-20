@@ -96,6 +96,57 @@ class TagChip extends StatelessWidget {
   }
 }
 
+/// 筛选控件行（用户要求 2026-09-21）：**一行放不下就折行，不要横向滚动**。
+///
+/// 画廊 / 提示词库 / 标签页顶部那一排「全部 / 图片 / 视频 / … / 仅收藏 / 未关联 /
+/// 排序 / 共 N 个」原来是 `SingleChildScrollView(scrollDirection: horizontal)` ——
+/// 窗口一窄，右边的控件就被切掉一半，用户得横向拖才能看见。
+/// 用户明确说这样**不符合直觉**：「一行显示不完的控件用两行显示，两行还不行就三行」。
+///
+/// 所以这里统一走 `Wrap`：放不下就换行，几行都行，**一个控件都不会消失**。
+/// 统计文字（"共 N 个"）不要塞进这里 —— 它会被当成换行项，单独放更稳。
+class FilterChipRow extends StatelessWidget {
+  /// 一组组地传：**每一组内部**用 [spacing] 隔开，组与组之间也会换行。
+  ///
+  /// 传"组"而不是"拉平的 children"，是因为调用方常需要 `if (…) ...[]`
+  /// 这种条件组（`selectedTags.isNotEmpty` 才有排序按钮等等）。
+  final List<Widget> children;
+
+  /// 同一行内相邻控件之间的间距（也用于行内最后一个与行尾之间，视觉上没差别）。
+  final double spacing;
+
+  /// 行与行之间的间距。
+  final double runSpacing;
+
+  /// 整行在横向的摆放：
+  ///   · `start`（默认）—— 工具栏，靠左；
+  ///   · `end` —— 例如 AI 工作台输入区那一行（token 汇总 + 发送按钮贴右）。
+  final WrapAlignment alignment;
+
+  const FilterChipRow({
+    super.key,
+    required this.children,
+    this.spacing = 6,
+    this.runSpacing = 6,
+    this.alignment = WrapAlignment.start,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // `runAlignment` 故意不暴露、也不动：它只在**多行**时决定"行块整体靠哪边"，
+    // 默认 start 就是"从容器顶部开始往下排"。曾经想顺手设成 end 让多行贴底，
+    // 那会让窄屏输入区里那一排贴在输入框下沿，看着像被压住。
+    // 调用方要的"每行贴右"是 `alignment` 的事，跟 `runAlignment` 无关。
+    return Wrap(
+      spacing: spacing,
+      runSpacing: runSpacing,
+      alignment: alignment,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: children,
+    );
+  }
+}
+
 /// 提示词类型徽标
 class KindBadge extends StatelessWidget {
   final PromptKind kind;

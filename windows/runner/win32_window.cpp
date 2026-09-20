@@ -29,6 +29,21 @@ constexpr const wchar_t kGetPreferredBrightnessRegValue[] = L"AppsUseLightTheme"
 // The number of Win32Window objects that currently exist.
 static int g_active_window_count = 0;
 
+// 窗口能缩到的最小尺寸（**逻辑像素**，用户要求 2026-09-21："限制窗口最小宽度为 320"）。
+//
+// 界面在更窄的宽度下已经没有可用的排法：标题栏会被挤到只剩标题、输入区底行
+// 得靠折行 + 横向滚动勉强挤下。所以直接在 Win32 这一层挡住 —— 用户拖不动，
+// 不是"拖小了以后界面变形"。
+//
+// 注意 `ptMinTrackSize` 是**物理像素**，而 Flutter 的布局是逻辑像素：
+// 150% 缩放的屏幕上 320 逻辑 = 480 物理。所以要按当前窗口 DPI 换算，
+// 不能直接写 320（那样 150% 屏上只能缩到 213 逻辑，界面就碎了）。
+// 这个尺寸是**内容区**（client area）的尺寸，所以"最小内容宽度" = 320 逻辑像素，
+// 比 `ptMinTrackSize` 那个"整个窗口"的下限略小 —— WM_GETMINMAXINFO 兜住用户拖动，
+// 这里兜住"起点就比下限还小"（例如以后默认尺寸被改小）。
+constexpr int kMinWindowWidthLogical = 320;
+constexpr int kMinWindowHeightLogical = 320;
+
 using EnableNonClientDpiScaling = BOOL __stdcall(HWND hwnd);
 
 // Scale helper to convert logical scaler values to physical using passed in
@@ -144,6 +159,27 @@ bool Win32Window::Create(const std::wstring& title,
     return false;
   }
 
+  // 起手就比最小宽度还小的话，拖都拖不回来（WM_GETMINMAXINFO 只管"拖"），
+  // 所以这里把创建尺寸夹一次 —— 界面在 320x320 以下没有可用的排法。
+  {
+    RECT client_rect{};
+    GetClientRect(window, &client_rect);
+    const int client_width = client_rect.right - client_rect.left;
+    const int client_height = client_rect.bottom - client_rect.top;
+    const int min_width = Scale(kMinWindowWidthLogical, scale_factor);
+    const int min_height = Scale(kMinWindowHeightLogical, scale_factor);
+    if (client_width < min_width || client_height < min_height) {
+      RECT window_rect{};
+      GetWindowRect(window, &window_rect);
+      SetWindowPos(window, nullptr, 0, 0,
+                   (window_rect.right - window_rect.left) +
+                       (client_width < min_width ? min_width - client_width : 0),
+                   (window_rect.bottom - window_rect.top) +
+                       (client_height < min_height ? min_height - client_height : 0),
+                   SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+  }
+
   UpdateTheme(window);
 
   return OnCreate();
@@ -179,6 +215,19 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_GETMINMAXINFO: {
+      // 窗口最小尺寸（见 kMinWindowWidthLogical 的注释）。
+      // 必须在这里挡：`SetWindowPos` / 用户拖动都会被系统先问一遍这个值。
+      auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
+      UINT dpi = FlutterDesktopGetDpiForHWND(hwnd);
+      double scale_factor = dpi / 96.0;
+      info->ptMinTrackSize.x =
+          Scale(kMinWindowWidthLogical, scale_factor);
+      info->ptMinTrackSize.y =
+          Scale(kMinWindowHeightLogical, scale_factor);
+      return 0;
+    }
+
     case WM_DESTROY:
       window_handle_ = nullptr;
       Destroy();

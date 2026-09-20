@@ -11,6 +11,7 @@ import '../models/models.dart';
 import '../models/ai_models.dart';
 import '../state/ai_workspace_store.dart';
 import '../widgets/app_menu.dart';
+import '../widgets/common.dart' show FilterChipRow;
 import '../widgets/markdown_view.dart';
 import '../widgets/nsfw_blur.dart';
 import '../widgets/workflow_viewer.dart';
@@ -19,7 +20,8 @@ import 'media_detail_page.dart';
 /// AI 工作台（AIH-001 / AIH-002 / AIK-002）。
 ///
 /// 宽屏三栏：会话列表 | 消息 + 输入 | ComfyUI 与上下文。
-/// 窄屏：会话列表进抽屉，状态栏进底部 Sheet，输入区**始终可见**。
+/// 窄屏：会话列表进抽屉，状态栏进底部 Sheet（入口在标题栏，**不用 FAB** ——
+/// FAB 会盖住输入区的「发送」按钮），输入区**始终可见**。
 class AiHomePage extends StatefulWidget {
   const AiHomePage({super.key});
 
@@ -251,12 +253,15 @@ class _AiHomePageState extends State<AiHomePage> {
     final store = context.watch<AiWorkspaceStore>();
     final width = MediaQuery.sizeOf(context).width;
     final wide = width >= 900;
-    // 第三栏（Comfy 状态）只在够宽时才铺开。
+    // 第三栏（ComfyUI 状态）只在够宽时才铺开。
     //
     // **900~1199px 曾经是个死角**（用户建议 ② / 需求审计 AIH-002）：那个区间
     // `wide` 成立 → 没有窄屏那个 FAB，但 `showPanel` 不成立 → 也没有第三栏，
     // 于是「ComfyUI 状态」整块内容在界面上**一个入口都没有**。
-    // 现在宽屏分支在这个区间把入口补到 AppBar 上（见 `onShowStatus`）。
+    // 当时补的是"只在 900~1199px 把入口放进 AppBar"，结果**窄屏那一支还是靠 FAB** ——
+    // 而 FAB 钉在 `Scaffold` 的右下角，正好落在输入区「发送」按钮上面：
+    // 窗口一窄就盖住发送按钮（用户 2026-09-20 报的 bug）。现在入口只在**一个地方**：
+    // 第三栏铺不开时，一律进 AppBar（`onShowStatus`），窄屏不再有 FAB。
     final showPanel = wide && width >= 1200;
 
     final conversationList = _conversationList;
@@ -272,7 +277,7 @@ class _AiHomePageState extends State<AiHomePage> {
       atBottom: _atBottom,
       input: _input,
       inputFocus: _inputFocus,
-      onShowStatus: wide && !showPanel ? () => _showStatusSheet(context) : null,
+      onShowStatus: showPanel ? null : () => _showStatusSheet(context),
       onJumpToBottom: _jumpToBottom,
       onSubmitted: (store, text) async {
         // 空输入 + 没有附件：没什么可发的，静默返回（也别弹提示）。
@@ -317,11 +322,6 @@ class _AiHomePageState extends State<AiHomePage> {
     return Scaffold(
       drawer: Drawer(child: SafeArea(child: conversationList)),
       body: thread,
-      floatingActionButton: FloatingActionButton.small(
-        tooltip: 'ComfyUI 状态',
-        onPressed: () => _showStatusSheet(context),
-        child: const Icon(Icons.dns_outlined),
-      ),
     );
   }
 
@@ -619,8 +619,10 @@ class _ConversationAppBar extends StatelessWidget implements PreferredSizeWidget
 
   /// 给「ComfyUI 状态」用的入口（可空）。
   ///
-  /// 只在 **900~1199px** 这一段给：那个宽度下第三栏铺不开、又没有窄屏的 FAB，
-  /// 不补这个按钮的话 Comfy 状态整块内容在界面上不可达（用户建议 ②）。
+  /// **只在第三栏铺不开时给**（< 1200px）：那个宽度下右侧栏不存在，不补这个按钮
+  /// 的话 Comfy 状态整块内容在界面上不可达（用户建议 ② / AIH-002）。
+  /// 窄屏以前用的是右下角 FAB，而 FAB 会盖住输入区的发送按钮（用户 bug），
+  /// 所以现在无论宽窄都走这一个入口。
   final VoidCallback? onShowStatus;
 
   const _ConversationAppBar({required this.store, this.onShowStatus});
@@ -2393,69 +2395,144 @@ class _ComposerState extends State<_Composer> {
             ),
           ),
           const SizedBox(height: 8),
-          // 底行排版（用户 bug：token 汇总被挤没 + 发送按钮不贴右）。两个症状同一个根因：
-          //   ① 汇总当时是 `Flexible`（loose）—— 它用不满自己那份空间时，多出来的空白落在
-          //      **发送按钮右边**，按钮就不贴右了；
-          //   ② 它和 `Spacer` 各占 1 flex —— 剩余空间对半分，窗口一窄就先被省略成"本对话…"。
-          // 现在的规矩：左侧操作组是**唯一的弹性位**（Expanded，内部横向可滚动：窄屏时自己滚，
-          // 不把右边顶出去），汇总固定占位（≤220，只在自己太长时才省略），发送放最后且不参与压缩。
-          Row(
-            children: [
-              Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: '添加附件',
-                        onPressed: _pickFiles,
-                        icon: const Icon(Icons.attach_file),
-                      ),
-                      // 权限档（用户建议 ⑤）：就在附件按钮和模型选择之间
-                      _PermissionPicker(store: store),
-                      _ModelPicker(store: store),
-                      const SizedBox(width: 8),
-                      _EffortPicker(store: store),
-                      const SizedBox(width: 8),
-                    ],
-                  ),
-                ),
-              ),
-              // 本次对话的 token 汇总（AIH-057）：一直是可见的，不必翻设置。
-              // 固定占位（不吃 flex），所以它只会因为**自己太长**而省略，不会被别人挤掉。
-              if (!store.usageSummary.isEmpty) ...[
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 220),
-                  child: Tooltip(
-                    message: store.usageSummary.label,
-                    child: Text(
-                      '本对话 ↑${AiTokenUsage.compact(store.usageSummary.inputTokens)} '
-                      '↓${AiTokenUsage.compact(store.usageSummary.outputTokens)}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.right,
-                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+          // 底行排版。三条用户反馈累积到这里，规矩已经收敛成两句：
+          //   · **一条放不下就折行**，绝不横向滚动；
+          //   · **token 汇总 + 发送永远贴紧最后一行右侧**。
+          //
+          //   ① token 汇总被挤没 + 发送按钮不贴右（2026-09-20）：汇总当时是 loose 的
+          //      `Flexible`，用不满的那截空白落在**按钮右边**，按钮就不贴右；它和
+          //      `Spacer` 还各占 1 flex，窗口一窄先被省略。→ 汇总固定占位（≤220，
+          //      只因为自己太长才省略），发送放最后、不参与压缩。
+          //   ② 控件显示不全（2026-09-20）：操作组曾经是"唯一的 `Expanded` + 横向
+          //      滚动"，窄窗口下视口只剩 21px（内容 847px），权限档 / 模型选择被从
+          //      **左边缘**裁掉。→ 换成折行。
+          //   ③ 折行本身也得好看（用户 2026-09-21："你不觉得这个排版很奇怪吗"）：
+          //      把"附件(40) / 权限档(187) / 模型(296 撑满) / 思考(70)"直接折，
+          //      结果是**三行**、每行右边一大片空白、权限档孤零零挂在第一行。
+          //      根因是每个控件的固有宽度差一个数量级。→ 窄的时候这四枚一律退成
+          //      **同宽的图标按钮**（各 ~48px）：一行放得下就一行，放不下再折行，
+          //      每一行都是整齐的等宽图标。
+          //
+          // 无论哪种布局，右侧那两件都走同一个 `Wrap`（end 对齐 = 整体贴右，
+          // 换行后最后一行也贴右）。
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (constraints.maxWidth < _twoRowWidth) {
+                return Column(
+                  key: const Key('ai-composer-two-row'),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    FilterChipRow(
+                      key: const Key('ai-composer-actions'),
+                      // 发送按钮**并进这一排**（用户 2026-09-21："发送按钮是不是给设计成
+                      // 固定大小而且有字了？所以融不进一排"）—— 它就是个固定宽的按钮，
+                      // 本来没必要为它单开一行。
+                      //
+                      // **token 汇总在窄的时候不显示**（同一条反馈："宽度太窄的时候可以
+                      // 不显示对话 token 用量"）：它是个纯展示项，而这里是输入区 ——
+                      // 一行放不下时优先保住"能操作的控件"。留在详情/消息卡里照样看得到。
+                      // 省下这 ~140px，四枚图标 + 发送正好一行。
+                      //
+                      // 实测（320 逻辑宽 = 输入区内容 296）：发送 94 + 附件 48 +
+                      // 权限 50 + 模型 38 + 思考 38 + 4×4 间距 = 284 —— 五枚一排放得下，
+                      // 发送收在最右。比宽屏省下的正是 token 汇总那 ~140px。
+                      alignment: WrapAlignment.end,
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: [..._composerActions(compact: true), _sendButton(store)],
+                    ),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  // 操作组自己折行（宽裕时只占一行，不会把右边的汇总 / 发送顶出去）
+                  Expanded(
+                    child: FilterChipRow(
+                      key: const Key('ai-composer-actions'),
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: _composerActions(compact: false),
                     ),
                   ),
-                ),
-                const SizedBox(width: 12),
-              ],
-              FilledButton.icon(
-                // 组字（拼音还没上屏）期间不给发：这时候发出去的是半截拼音，
-                // 而且"清空输入框"正好踩在 Windows 输入法回灌旧文本的触发点上。
-                onPressed: store.sending
-                    ? () => store.stop()
-                    : (store.canSend && !_wasComposing ? _submit : null),
-                icon: Icon(store.sending ? Icons.stop : Icons.send, size: 18),
-                label: Text(store.sending ? '停止' : '发送'),
-              ),
-            ],
+                  ..._composerSummary(store, theme),
+                  _sendButton(store),
+                ],
+              );
+            },
           ),
         ],
       ),
     );
   }
+
+  /// 换成两行的门限（**输入区**的可用宽度，不含两侧 12px 内边距）。
+  ///
+  /// 取值依据（本机实测的控件固有宽度，`permissionMode=full` 那一档：
+  /// `自动允许（无需批准）` 那枚按钮 187、附件按钮 44、模型选择最窄 ~148（名字被挤到
+  /// 省略号）、思考强度 70，操作组合计 ~450）：发送 94 + token 汇总 ≤220 + 间距 12 = 326。
+  ///   · 门限以下单行时，操作组被压到 326 以外的全部剩余空间 —— 600px 窗口只剩
+  ///     69px（连附件按钮都放不下），这正是用户报的"控件显示不全"；
+  ///   · 560 时换成两行，并且这四枚控件退成**同宽图标**（见 `_composerActions`）：
+  ///     40 + 42 + 56 + 42 + 间距 ≈ 200，加上发送按钮 94 ≈ 294 —— 320px（产品最小
+  ///     宽度，内容区 296）刚好一行放得下，所以窄屏下底行就是**一排**。
+  static const double _twoRowWidth = 560;
+
+  /// 输入区底行的操作控件（不含发送）。
+  ///
+  /// 顺序就是用户建议 ⑤ 定的：附件 → 权限档 → 模型选择 → 思考强度。
+  /// [compact] = 窄的时候这四枚一律退成**图标按钮**（附件本来就是图标）：
+  /// 它们原来的固有宽度是 44 / 187 / 296 / 70 —— 直接折行会变成"三行 + 每行右边
+  /// 一大片空白 + 权限档孤零零一行"（用户："你不觉得这个排版很奇怪吗"）。
+  /// 退成等宽图标之后四枚只占 ~200px，能和发送按钮挤在同一排。
+  List<Widget> _composerActions({required bool compact}) {
+    return [
+      IconButton(
+        tooltip: '添加附件',
+        onPressed: _pickFiles,
+        icon: const Icon(Icons.attach_file),
+      ),
+      // 权限档（用户建议 ⑤）：就在附件按钮和模型选择之间
+      _PermissionPicker(store: widget.store, compact: compact),
+      _ModelPicker(store: widget.store, compact: compact),
+      _EffortPicker(store: widget.store, compact: compact),
+    ];
+  }
+
+  /// 本对话的 token 汇总（AIH-057）：一直是可见的，不必翻设置。
+  ///
+  /// 固定占位（不吃 flex），所以它只会因为**自己太长**而省略，不会被别人挤掉。
+  List<Widget> _composerSummary(AiWorkspaceStore store, ThemeData theme) {
+    if (store.usageSummary.isEmpty) return const [];
+    final label = '本对话 ↑${AiTokenUsage.compact(store.usageSummary.inputTokens)} '
+        '↓${AiTokenUsage.compact(store.usageSummary.outputTokens)}';
+    return [
+      ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 220),
+        child: Tooltip(
+          message: store.usageSummary.label,
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.right,
+            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+          ),
+        ),
+      ),
+      const SizedBox(width: 12),
+    ];
+  }
+
+  Widget _sendButton(AiWorkspaceStore store) => FilledButton.icon(
+        // 组字（拼音还没上屏）期间不给发：这时候发出去的是半截拼音，
+        // 而且"清空输入框"正好踩在 Windows 输入法回灌旧文本的触发点上。
+        onPressed: store.sending
+            ? () => store.stop()
+            : (store.canSend && !_wasComposing ? _submit : null),
+        icon: Icon(store.sending ? Icons.stop : Icons.send, size: 18),
+        label: Text(store.sending ? '停止' : '发送'),
+      );
 
   void _submit() {
     // 组字（拼音还没上屏）期间的回车是"选词 / 上屏"，不是发送（AIH-053）；
@@ -2541,7 +2618,11 @@ class _Banner extends StatelessWidget {
 /// 文件夹白名单一点都没放宽 —— 所以改叫「自动允许（无需批准）」。
 class _PermissionPicker extends StatelessWidget {
   final AiWorkspaceStore store;
-  const _PermissionPicker({required this.store});
+
+  /// 窄的时候只显示图标（见 `_composerActions` 的注释）。
+  final bool compact;
+
+  const _PermissionPicker({required this.store, this.compact = false});
 
   @override
   Widget build(BuildContext context) {
@@ -2581,7 +2662,7 @@ class _PermissionPicker extends StatelessWidget {
                 ? null
                 : () => controller.isOpen ? controller.close() : controller.open(),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 10, vertical: 8),
               decoration: BoxDecoration(
                 border: Border.all(color: full ? color : theme.dividerColor),
                 borderRadius: BorderRadius.circular(8),
@@ -2595,10 +2676,15 @@ class _PermissionPicker extends StatelessWidget {
                     size: 16,
                     color: color,
                   ),
-                  const SizedBox(width: 6),
-                  Text(label,
-                      style: theme.textTheme.labelMedium?.copyWith(color: full ? color : null)),
-                  Icon(Icons.arrow_drop_down, size: 18, color: theme.colorScheme.outline),
+                  if (!compact) ...[
+                    const SizedBox(width: 6),
+                    Text(label,
+                        style: theme.textTheme.labelMedium?.copyWith(color: full ? color : null)),
+                  ],
+                  // 窄屏时"哪一档"只在图标颜色 / 底色上体现，箭头也省掉（那是展开暗示，
+                  // 图标按钮已经够明显）；tooltip 里写着当前档位。
+                  if (!compact)
+                    Icon(Icons.arrow_drop_down, size: 18, color: theme.colorScheme.outline),
                 ],
               ),
             ),
@@ -2620,22 +2706,31 @@ class _PermissionPicker extends StatelessWidget {
 /// 一次性建 69 行（每行还带徽标），弹出明显卡顿。
 class _ModelPicker extends StatelessWidget {
   final AiWorkspaceStore store;
-  const _ModelPicker({required this.store});
+
+  /// 窄的时候只显示图标（见 `_composerActions` 的注释）：模型名与能力徽标
+  /// 走 tooltip 与点开的对话框，不会丢失。
+  final bool compact;
+
+  const _ModelPicker({required this.store, this.compact = false});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final model = store.selectedModel;
-    return InkWell(
+    final name = model?.displayName ?? '未选择模型';
+    final modalities = (model?.modalities ?? const <AiModality>[]).map((m) => m.label).join(' / ');
+    final button = InkWell(
+      borderRadius: BorderRadius.circular(8),
       onTap: () => showDialog<void>(
         context: context,
         builder: (_) => _ModelPickerDialog(store: store),
       ),
-      borderRadius: BorderRadius.circular(8),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          border: Border.all(color: theme.dividerColor),
+          border: Border.all(
+            color: model == null ? theme.colorScheme.error : theme.dividerColor,
+          ),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
@@ -2646,29 +2741,39 @@ class _ModelPicker extends StatelessWidget {
               size: 16,
               color: model == null ? theme.colorScheme.error : null,
             ),
-            const SizedBox(width: 6),
-            // 模型名可能很长（内置目录里就有 "…-preview-2026-01" 这种）：
-            // 输入区底部这一行还要塞下附件 / 权限 / 思考强度 / token 汇总 / 发送，
-            // 所以这里**必须**能压缩，不能把整行撑溢出。
-            Flexible(
-              child: Text(
-                model?.displayName ?? '未选择模型',
-                style: theme.textTheme.labelMedium,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+            if (!compact) ...[
+              const SizedBox(width: 6),
+              // 模型名可能很长（内置目录里就有 "…-preview-2026-01" 这种）：
+              // 输入区底部这一行还要塞下附件 / 权限 / 思考强度 / token 汇总 / 发送，
+              // 所以这里**必须**能压缩，不能把整行撑溢出。
+              Flexible(
+                child: Text(
+                  name,
+                  style: theme.textTheme.labelMedium,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-            const SizedBox(width: 6),
-            for (final m in model?.modalities ?? const <AiModality>[])
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: _Badge(m.label),
-              ),
-            const SizedBox(width: 2),
-            Icon(Icons.arrow_drop_down, size: 18, color: theme.colorScheme.outline),
+              const SizedBox(width: 6),
+              for (final m in model?.modalities ?? const <AiModality>[])
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: _Badge(m.label),
+                ),
+              const SizedBox(width: 2),
+              // 紧凑形态下**不画箭头**：那时它是"和附件/权限/思考同宽的图标按钮"，
+              // 多一个箭头就比同伴宽 20px，四枚 + 发送正好差这点放不进一排。
+              Icon(Icons.arrow_drop_down, size: 18, color: theme.colorScheme.outline),
+            ],
           ],
         ),
       ),
+    );
+    // 宽的时候名字与徽标都在按钮上，不用 tooltip（空 message 会画出空气泡）
+    if (!compact) return button;
+    return Tooltip(
+      message: '当前模型：$name${modalities.isEmpty ? '' : '（$modalities）'} —— 点一下换一个',
+      child: button,
     );
   }
 }
@@ -2807,7 +2912,11 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
 /// 模型完全没声明推理能力时整块置灰并说明原因，而不是给一堆选了会被后端拒绝的选项。
 class _EffortPicker extends StatelessWidget {
   final AiWorkspaceStore store;
-  const _EffortPicker({required this.store});
+
+  /// 窄的时候只显示图标（见 `_composerActions` 的注释）。
+  final bool compact;
+
+  const _EffortPicker({required this.store, this.compact = false});
 
   @override
   Widget build(BuildContext context) {
@@ -2820,12 +2929,16 @@ class _EffortPicker extends StatelessWidget {
         ? store.reasoningEffort.label
         : (model == null ? '思考强度' : '不支持思考');
 
+    // 窄的时候图标配 tooltip（tooltip 里带着档位说明与"为什么置灰"）
+    final tooltip = enabled
+        ? '思考强度（当前：${store.reasoningEffort.label}）'
+            '：「默认」始终可选：不发思考参数、由网关决定；'
+            '模型声明的档位：'
+            '${options.where((e) => e.isThinking).map((e) => e.label).join(' / ')}'
+        : (model == null ? '还没选模型' : '$label —— 该模型未声明推理能力，请到「设置 → AI 模型」声明');
+
     return AppMenuButton<AiReasoningEffort>(
-      tooltip: enabled
-          ? '思考强度（「默认」始终可选：不发思考参数、由网关决定；'
-              '模型声明的档位：'
-              '${options.where((e) => e.isThinking).map((e) => e.label).join(' / ')}）'
-          : '该模型未声明推理能力，请到「设置 → AI 模型」声明',
+      tooltip: tooltip,
       onSelected: store.selectReasoningEffort,
       options: [
         for (final e in options)
@@ -2852,7 +2965,11 @@ class _EffortPicker extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
-              border: Border.all(color: theme.dividerColor),
+              border: Border.all(
+                color: enabled && store.reasoningEffort.isThinking
+                    ? theme.colorScheme.primary
+                    : theme.dividerColor,
+              ),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
@@ -2863,8 +2980,11 @@ class _EffortPicker extends StatelessWidget {
                     color: store.reasoningEffort.isThinking && enabled
                         ? theme.colorScheme.primary
                         : null),
-                const SizedBox(width: 5),
-                Text(label, style: theme.textTheme.labelMedium),
+                // 紧凑形态下只有图标（和附件/权限/模型同宽，见 `_composerActions`）
+                if (!compact) ...[
+                  const SizedBox(width: 5),
+                  Text(label, style: theme.textTheme.labelMedium),
+                ],
               ],
             ),
           ),
