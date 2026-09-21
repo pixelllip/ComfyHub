@@ -283,13 +283,18 @@ void main() {
   });
 
   testWidgets('提问接管输入区：选项 + 末尾固定「自己输入答案」', (tester) async {
-    await _openAsk(tester, _Fake());
+    // 窗口给大一点：答题卡里那段选项在窄/矮窗口下是**内部滚动**的，
+    // "末尾固定项"会被滚出可视区（那是设计使然，不是 bug），这里要看到它就得有地方放。
+    await _openAsk(tester, _Fake(), size: const Size(1400, 1200));
 
+    // 选项与末尾固定项都在**底部被接管的输入区**里（气泡里那张卡是折叠的）
     expect(find.text(_question), findsWidgets, reason: '问题要显示出来');
-    expect(find.text(_options[0]), findsWidgets);
-    expect(find.text(_options[1]), findsWidgets);
-    expect(find.text('自己输入答案'), findsWidgets, reason: '末尾固定留给用户自己决定');
+    expect(find.byKey(const Key('ask-composer-option-0')), findsOneWidget);
+    expect(find.byKey(const Key('ask-composer-option-1')), findsOneWidget);
     expect(find.byKey(const Key('ask-answer-field')), findsOneWidget);
+    expect(find.text('跳过这个问题'), findsOneWidget);
+    // 注意：这里**不**断言「停止生成」——那条只在 Run 还活着时画，
+    // 而这个假后端的流已经把它后面的 run.completed 一起给了（见 `_Fake` 的注释）。
   });
 
   // 用户 bug 2026-09-21 的**根因回归**：`user.question` 事件里没有 `callId`，
@@ -305,17 +310,44 @@ void main() {
     expect(calls.single.question?.questionId, _questionId);
     expect(calls.single.question?.callId, _callId, reason: '问题里也要记着它挂在哪个调用上');
 
-    // 界面上：一张提问卡（问题+选项），而不是"工具卡里摊着一份参数 JSON、状态还在运行中"
+    // 界面上：一张**折叠的**提问卡（不要和底部输入区的选项重复一遍），
+    // 外加底部被接管的答题区
     expect(find.text('参数'), findsNothing, reason: '提问卡不该画成工具卡（那张卡会摊出参数 JSON）');
     expect(find.text('ask_user_question'), findsNothing, reason: '提问卡不显示工具名');
     expect(find.text(_question), findsWidgets);
-    expect(find.text('自己输入答案'), findsWidgets);
+    // 折叠态：**只此一份**选项（气泡那张卡里没有），状态写着"等你回答 ↓"
+    expect(find.text('等你回答 ↓'), findsOneWidget);
+    expect(find.byKey(const Key('ask-composer-option-0')), findsOneWidget);
+    expect(find.byKey(const Key('ask-answer-field')), findsOneWidget);
+  });
+
+  // 头部那个折叠/展开按钮这里**不点**：卡片与底部答题区各有一个"选择题"标题，
+  // `tap` 的目标稳定不下来；而它的行为只改本地展示状态。要守住的是**默认值**：
+  //   · 提问中 → 折叠，选项只在底部那一份（本用例）；
+  //   · 已回答 → 展开成"问题 + 答案"两行。
+  testWidgets('提问中的卡默认折叠：选项不重复画', (tester) async {
+    final store = await _openAsk(tester, _Fake(), size: const Size(1400, 1200));
+
+    expect(find.byKey(const Key('ask-composer-option-0')), findsOneWidget);
+    // 折叠态下气泡里那张卡没有选项行（`ask-composer-*` 这套 key 只给底部那一份）
+    expect(find.text('等你回答 ↓'), findsOneWidget);
+    expect(store.pendingQuestion?.questionId, _questionId);
+  });
+
+  testWidgets('矮窗口下选项再多，"自己输入答案"那行也永远在（内部滚动只滚选项）', (tester) async {
+    // 6 个选项 + 只有 500 高：选项区内部滚动，"自己输入答案"与提交按钮必须照旧可见
+    await _openAsk(tester, _Fake(), size: const Size(1000, 500));
+
+    expect(find.text('自己输入答案（Enter 提交）'), findsOneWidget);
+    expect(find.byKey(const Key('ask-answer-submit')), findsOneWidget);
+    expect(find.text('跳过这个问题'), findsOneWidget);
   });
 
   testWidgets('点选项即答：POST 带 optionIndex，答完输入区让位', (tester) async {
     final store = await _openAsk(tester, _Fake());
 
-    await tester.tap(find.text(_options[0]).last);
+    // 点底部输入区里的第一个选项（key 能精确定到那一份；气泡里那张卡是折叠的）
+    await tester.tap(find.byKey(const Key('ask-composer-option-0')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
@@ -346,7 +378,7 @@ void main() {
     final store = await _openAsk(tester, fake);
 
     expect(store.pendingQuestion?.questionId, _questionId);
-    expect(find.text('自己输入答案'), findsWidgets);
+    expect(find.byKey(const Key('ask-composer-option-0')), findsOneWidget);
     expect(find.byKey(const Key('ask-answer-field')), findsOneWidget);
   });
 

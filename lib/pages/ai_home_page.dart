@@ -1405,6 +1405,31 @@ class _AskCard extends StatefulWidget {
 class _AskCardState extends State<_AskCard> {
   bool _busy = false;
 
+  /// 用户手动点开来过 —— 之后**不再**跟着状态自动折回去。
+  ///
+  /// "等回答 → 已回答"会让卡片从"可点选项"变成"记着答案"；要是每次都替用户决定
+  /// 展开还是收起，他刚点开看清楚、答案一到就被折回去，很难受。
+  bool _expandedByUser = false;
+
+  /// 用户手动折起来了 —— 已回答时**不再**自动展开。
+  bool _collapsedByUser = false;
+
+  /// 这一帧该展开吗。
+  ///
+  /// 折叠是**默认**（用户 bug 2026-09-21：气泡里那张卡和底部被接管的输入区把整组选项
+  /// 画了两遍）。回答完又默认展开成"问题 + 答案"两行 —— 那才是历史里要留的信息。
+  bool get _expanded {
+    if (_expandedByUser) return true;
+    if (_collapsedByUser) return false;
+    return widget.question.answered;
+  }
+
+  void _toggle() => setState(() {
+        final next = !_expanded;
+        _expandedByUser = next;
+        _collapsedByUser = !next;
+      });
+
   Future<void> _send({int? optionIndex, String? text}) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -1440,24 +1465,30 @@ class _AskCardState extends State<_AskCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(
-                answered ? Icons.question_answer_outlined : Icons.help_outline,
-                size: 15,
-                color: color,
-              ),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  q.header?.isNotEmpty == true ? q.header! : 'AI 想确认一件事',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelMedium?.copyWith(color: color),
+          // 头部整行可点 = 折叠 / 展开。刻意**不**用 InkWell 包整张卡：
+          // 展开时选项行自己就是按钮，套在一起会互相抢点击。
+          InkWell(
+            onTap: _toggle,
+            borderRadius: BorderRadius.circular(8),
+            child: Row(
+              children: [
+                Icon(
+                  answered ? Icons.question_answer_outlined : Icons.help_outline,
+                  size: 15,
+                  color: color,
                 ),
-              ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    q.header?.isNotEmpty == true ? q.header! : 'AI 想确认一件事',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelMedium?.copyWith(color: color),
+                  ),
+                ),
               const Spacer(),
-              // 状态徽标：**等你回答**与**已回答**一眼分得开
+              // 状态徽标：**等你回答**与**已回答**一眼分得开。
+              // 等回答时它顺便当"去下面作答"的指标（真正能点的选项在输入区里）。
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
@@ -1465,39 +1496,50 @@ class _AskCardState extends State<_AskCard> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  answered ? '已回答' : '等你回答',
+                  answered ? '已回答' : '等你回答 ↓',
                   style: theme.textTheme.labelSmall?.copyWith(color: color),
                 ),
               ),
+              const SizedBox(width: 2),
+              Icon(
+                _expanded ? Icons.expand_less : Icons.expand_more,
+                size: 16,
+                color: theme.colorScheme.outline,
+              ),
             ],
+          ),
           ),
           const SizedBox(height: 6),
           Text(q.question, style: theme.textTheme.bodyMedium),
-          if (answered) ...[
-            const SizedBox(height: 8),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.subdirectory_arrow_right, size: 15, color: theme.colorScheme.outline),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(
-                    (q.answer ?? '').isEmpty ? '（已跳过，没有回答）' : q.answer!,
-                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+          // 折叠态 = 图二那种"一条记录"：头部 + 问题（+ 答案）就够，
+          // **不再把选项画一遍** —— 提问期间能点的那份在底部被接管的输入区里。
+          if (!_expanded) ...[
+            if (answered) ...[
+              const SizedBox(height: 6),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.subdirectory_arrow_right, size: 15, color: theme.colorScheme.outline),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      (q.answer ?? '').isEmpty ? '（已跳过，没有回答）' : q.answer!,
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
+            ],
           ] else ...[
-            // 选项按钮就是"快捷作答"：点一下即答，不必再打字。
-            // 要自己写的那条路在底下的输入区（最后一行固定写着"自己输入答案"）。
+            // 展开态（只放**慢答案**：选项按钮 + 跳过）。
+            // 打字那条路永远在底部输入区，这里不重复放输入框。
             for (var i = 0; i < q.options.length; i++) ...[
               const SizedBox(height: 6),
               _AskOptionRow(
                 index: i,
                 label: q.options[i],
                 selected: q.optionIndex == i,
-                enabled: !_busy,
+                enabled: !_busy && !answered,
                 onTap: () => _send(optionIndex: i),
               ),
             ],
@@ -1507,27 +1549,29 @@ class _AskCardState extends State<_AskCard> {
             _AskOptionRow(
               index: q.options.length,
               label: '自己输入答案',
-              hint: '在下方输入框里写下你的答案',
+              hint: answered ? '已经在下方输入框里回答过了' : '在下方输入框里写下你的答案',
               selected: false,
-              enabled: !_busy,
+              enabled: !_busy && !answered,
               trailing: Icon(Icons.keyboard_alt_outlined,
                   size: 15, color: theme.colorScheme.outline),
               onTap: widget.onFocusAnswer,
             ),
-            const SizedBox(height: 2),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                // 跳过 = 如实告诉模型"用户没有回答"，它会基于已有信息继续
-                onPressed: _busy ? null : () => widget.onSkip(q.questionId),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: const Size(0, 28),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            if (!answered) ...[
+              const SizedBox(height: 2),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  // 跳过 = 如实告诉模型"用户没有回答"，它会基于已有信息继续
+                  onPressed: _busy ? null : () => widget.onSkip(q.questionId),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('跳过这个问题'),
                 ),
-                child: const Text('跳过这个问题'),
               ),
-            ),
+            ],
           ],
         ],
       ),
@@ -1549,6 +1593,7 @@ class _AskOptionRow extends StatelessWidget {
   final VoidCallback onTap;
 
   const _AskOptionRow({
+    super.key,
     required this.index,
     required this.label,
     this.hint,
@@ -1738,6 +1783,10 @@ class _AskComposerState extends State<_AskComposer> {
           if (store.notice != null)
             _Banner(text: store.notice!, icon: Icons.info_outline, onClose: store.clearNotice),
           if (store.error != null) _Banner(text: store.error!, icon: Icons.error_outline),
+          // 卡片高度**由内容决定**（不给它设上限）：里面的选项区自己有 240 上限、
+          // 内部滚动，"自己输入答案"那行始终排在它下面、永远看得见。
+          // 试过给整张卡设"可用高度的 60%"再让选项区 Flexible —— 矮窗口下那张卡会缩到
+          // 只剩一行（Flexible 在紧高度里先被压扁），反而把作答入口挤没了，所以退回这个。
           Container(
             padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
             decoration: BoxDecoration(
@@ -1747,6 +1796,7 @@ class _AskComposerState extends State<_AskComposer> {
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Row(
                   children: [
@@ -1771,9 +1821,10 @@ class _AskComposerState extends State<_AskComposer> {
                 ),
                 const SizedBox(height: 6),
                 Text(q.question, style: theme.textTheme.bodyMedium),
-                // 选项多 / 问题长的时候内部滚动，别把输入区顶到屏幕外
+                // 选项多 / 问题长时**只有选项那段**内部滚动（240 上限），
+                // "自己输入答案"排在它下面、永远看得见
                 ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 260),
+                  constraints: const BoxConstraints(maxHeight: 240),
                   child: SingleChildScrollView(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1781,6 +1832,9 @@ class _AskComposerState extends State<_AskComposer> {
                         for (var i = 0; i < q.options.length; i++) ...[
                           const SizedBox(height: 6),
                           _AskOptionRow(
+                            // 带 key：气泡里那张提问卡**折叠时不该有**这些行，
+                            // 用例靠 key 区分"选项到底画了几份"（用户 bug 2026-09-21）
+                            key: Key('ask-composer-option-$i'),
                             index: i,
                             label: q.options[i],
                             selected: q.optionIndex == i,
