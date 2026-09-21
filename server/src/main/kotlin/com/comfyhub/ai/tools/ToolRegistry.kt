@@ -1089,7 +1089,17 @@ class ToolRegistry(
                 header = args.str("header")?.trim(),
             )
             askRegistry?.track(record)
-            emit(RunEventType.USER_QUESTION, record.toJson())
+            // ⚠️ 形状必须是**嵌套**的 `question` 对象（用户 bug 2026-09-21 的现场根因之一）：
+            // 客户端读的是 `event.data['question']`；平铺的话那个键是**问题文字**（字符串），
+            // 界面解不出提问 → 输入区不接管、工具卡一直"运行中"。
+            // `message.completed` 里的 `asked` 也是同一个形状，两处保持一致。
+            emit(
+                RunEventType.USER_QUESTION,
+                buildJsonObject {
+                    put("runId", ctx.runId)
+                    put("question", record.toJson())
+                },
+            )
 
             // 挂在这里等：Run **不结束**（用户建议 ⑥ 的原话）。
             // 等不到（超时 / 用户取消 / Run 结束）时返回 null，下面如实告诉模型"没答"。

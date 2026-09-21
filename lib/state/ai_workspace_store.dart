@@ -1412,9 +1412,7 @@ class AiWorkspaceStore extends ChangeNotifier {
           // 提问（用户建议 ⑥）：AI 当场问一句，**这一次回答不会结束**。
           // 与"等待批准"分开处理：这里要画的是一张带选项 / 输入框的卡片。
           case 'user.question':
-            final q = event.data['question'] is Map
-                ? AiQuestion.fromJson(Map<String, dynamic>.from(event.data['question'] as Map))
-                : null;
+            final q = _questionFrom(event.data);
             if (q == null) {
               debugPrint('user.question 事件没有带 question 字段：${event.data}');
               break;
@@ -1782,8 +1780,30 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// 这条助手消息里**正在等回答**的那个 `ask_user_question` 调用的 `callId`。
+  /// 一个 `user.question` 事件里解出提问。
   ///
+  /// **两种形状都要认**（用户 bug 2026-09-21 的现场根因之一）：
+  ///  - 后端现在发的是**嵌套**的 `{runId, question: {…PendingQuestion…}}`（与
+  ///    `message.completed` 里的 `asked` 同一个形状）；
+  ///  - 但历史上后端把整份 `PendingQuestion` **平铺**在 data 顶层 —— 那时
+  ///    `data['question']` 是**问题文字那个字符串**，`is Map` 判假，
+  ///    于是界面永远解不出提问（输入区不接管、工具卡一直"运行中"）。
+  ///
+  /// 平铺形状怎么认：`data['question']` 是字符串 **且** data 里有 `questionId`
+  /// —— 那 data 本身就是一份 `PendingQuestion`。刻意**不**猜别的可能，
+  /// 免得把某条未来事件的字段误当成提问。
+  static AiQuestion? _questionFrom(Map<String, dynamic> data) {
+    final nested = data['question'];
+    if (nested is Map) {
+      return AiQuestion.fromJson(Map<String, dynamic>.from(nested));
+    }
+    if (nested is String && (data['questionId']?.toString().isNotEmpty ?? false)) {
+      return AiQuestion.fromJson(data);
+    }
+    return null;
+  }
+
+  /// 这条助手消息里**正在等回答**的那个 `ask_user_question` 调用的 `callId`。  ///
   /// 提问事件落在哪条调用上，答案与状态就要回到哪条上（见 `user.question` 那段注释）：
   /// 两个 id 不是一回事，混用就会出现"工具卡一直运行中、输入区不接管"。
   String? _liveAskCallId(String messageId) {

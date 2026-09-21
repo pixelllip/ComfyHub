@@ -47,24 +47,21 @@ final List<String> skipped = [];
 ///  - 真事件里**没有 `callId`**（不要加，加了就测不出下面那个 bug）；
 ///  - `question` 是**内层对象**：`PendingQuestion.toJson()` 整份塞在 `question` 键下，
 ///    外面只多一个 `runId`。
-String _askEvent() => _sse(
-      3,
-      'user.question',
-      jsonEncode({
-        'runId': 'r1',
-        'question': {
-          'questionId': _questionId,
-          'runId': 'r1',
-          'conversationId': 'c1',
-          'question': _question,
-          'header': '选择题',
-          'options': _options,
-          'allowFreeText': true,
-          'answered': false,
-          'askedAt': 1,
-        },
-      }),
-    );
+/// 老形状：`PendingQuestion` 的字段**平铺**在 data 顶层（`question` 是问题文字那个字符串）。
+String _askPayload({required bool nested}) {
+  final q = <String, dynamic>{
+    'questionId': _questionId,
+    'runId': 'r1',
+    'conversationId': 'c1',
+    'question': _question,
+    'header': '选择题',
+    'options': _options,
+    'allowFreeText': true,
+    'answered': false,
+    'askedAt': 1,
+  };
+  return jsonEncode(nested ? {'runId': 'r1', 'question': q} : q);
+}
 
 /// `user.question` **之前**一定会先来这两条（工具调用是"先 requested、再 started、
 /// 然后才轮到工具自己去问"）。它们的 `callId` 是**模型的调用号**，
@@ -87,12 +84,12 @@ String _askToolEvents() => _sse(
 const _callId = 'call_00_w3oy2hgdwhoanKYvvw2Y8083';
 
 /// 事件体的拼装（抽出来是为了在用例里能断言"假后端真的发了这些事件"）。
-String _body() =>
+String _body({bool nested = true}) =>
     _sse(0, 'run.started', '{"runId":"r1"}') +
     _sse(1, 'message.started', '{"messageId":"a1"}') +
     // 真事件的顺序：tool.requested → tool.started → user.question
     _askToolEvents() +
-    _askEvent() +
+    _sse(3, 'user.question', _askPayload(nested: nested)) +
     _askCompleted();
 
 /// Run 收尾时的落库形态（parts 里那条 `tool_call` + `tool_result`）：
@@ -140,6 +137,9 @@ String _askCompleted() => _sse(
 /// `runEvents` 一次性读完再逐条 yield），但客户端的 `_consumeRun` 会在
 /// `user.question` 那条上挂住等回答，所以用例看到的仍然是"提问时 Run 还没结束"。
 class _Fake {
+  /// true = 用**老的平铺形状**发 `user.question`（回归用）。
+  bool flatQuestionPayload = false;
+
   List<Map<String, dynamic>> _messages() => [
         {
           'id': 'u1',
@@ -219,7 +219,7 @@ class _Fake {
           // `_consumeRun` 在 `user.question` 那条上就挂住等用户回答了。
           return http.Response.bytes(
             utf8.encode(
-              _body(),
+              _body(nested: !flatQuestionPayload),
             ),
             200,
             headers: {'content-type': 'text/event-stream; charset=utf-8'},
@@ -336,6 +336,18 @@ void main() {
 
     expect(answered.single['answer'], '用我自己传的那张');
     expect(answered.single['optionIndex'], isNull);
+  });
+
+  // 用户 bug 2026-09-21 的**第二个根因**：后端当时把 `PendingQuestion` **平铺**在事件
+  // data 顶层（`data['question']` 于是是**问题文字**，不是对象），客户端按嵌套形状解，
+  // 解出来 null → 界面永远不解出提问。现在两边都认，这里把老形状也钉住。
+  testWidgets('老的平铺形状也认：question 是字符串 + 有 questionId 就当成一份 PendingQuestion', (tester) async {
+    final fake = _Fake()..flatQuestionPayload = true;
+    final store = await _openAsk(tester, fake);
+
+    expect(store.pendingQuestion?.questionId, _questionId);
+    expect(find.text('自己输入答案'), findsWidgets);
+    expect(find.byKey(const Key('ask-answer-field')), findsOneWidget);
   });
 
   testWidgets('跳过这个问题：POST .../skip', (tester) async {
