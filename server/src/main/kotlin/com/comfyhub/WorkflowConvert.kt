@@ -74,6 +74,17 @@ object WorkflowConvert {
          * 正好是"这类节点被摘掉以后要补哪些线"的作业本。
          */
         val openInputs: List<String> = emptyList(),
+        /**
+         * ## 模拟用户行为 ##（用户建议 ②，2026-09-21）等价改写掉的纯前端节点。
+         *
+         * 只有开了 [toApiGraph] 的 `emulateFrontend` 才有内容。改了哪几根线看得见
+         * （[broadcastLines]），用户才能判断这次"替前端做的事"对不对。
+         */
+        val frontendRewritten: List<String> = emptyList(),
+        /** 广播灌进去的线，形如 `1.positive ← 节点 14（Anything Everywhere）`。 */
+        val broadcastLines: List<String> = emptyList(),
+        /** 照前端的做法自动补的输出节点。 */
+        val injectedNodes: List<String> = emptyList(),
     )
 
     /** litegraph 的节点状态：0 = 正常，2 = 静音（永不执行），4 = 旁路（接过去） */
@@ -100,7 +111,7 @@ object WorkflowConvert {
     //  主流程
     // -----------------------------------------------------------------------
 
-    fun toApiGraph(ui: JsonObject, objectInfo: JsonObject): Result {
+    fun toApiGraph(ui: JsonObject, objectInfo: JsonObject, emulateFrontend: Boolean = false): Result {
         val flat = flatten(ui, objectInfo)
         val rawNodes = flat.nodes
         if (rawNodes.isEmpty()) throw IllegalArgumentException("工作流里一个节点都没有（nodes 是空的）")
@@ -214,14 +225,41 @@ object WorkflowConvert {
             collectOpenInputs(info, inputs, id, openInputs)
         }
 
+        // --- 第三遍：## 模拟用户行为 ##（用户建议 ②，2026-09-21）---
+        //
+        // 到这一步为止，纯前端节点还都躺在 `unsupported` 里。开了 emulateFrontend 就做
+        // "前端 JS 在排队前会做的那几件事"：广播型节点按它声明的类型 / 名字过滤把上游那
+        // 一路**填空**、显示节点丢掉、一个输出节点都没有时补一个 SaveImage。
+        // 判据一律保守：说不清类型的广播**不猜**，照旧留在 unsupported 里（出口还是一样）。
+        var finalGraph: JsonObject = JsonObject(out)
+        var finalOpen: List<String> = openInputs
+        var frontendRewritten: List<String> = emptyList()
+        var broadcastLines: List<String> = emptyList()
+        var injectedNodes: List<String> = emptyList()
+        if (emulateFrontend) {
+            val (emulated, report) = FrontendNodes.emulate(rawNodes, objectInfo, out, links)
+            finalGraph = JsonObject(emulated)
+            // 广播灌完之后"还空着"的清单要重算：不然模型会去补一根已经接好的线
+            finalOpen = FrontendNodes.openInputsOf(objectInfo, emulated)
+            frontendRewritten = report.rewritten
+            broadcastLines = report.broadcast
+            injectedNodes = report.injected
+            // 已经等价改写掉的节点不该再挂在 unsupported 里
+            unsupported.removeAll { line -> report.handledIds.any { line.startsWith("$it ") } }
+            unsupported.addAll(report.unsupported)
+        }
+
         return Result(
-            graph = JsonObject(out),
-            nodeCount = out.size,
+            graph = finalGraph,
+            nodeCount = finalGraph.size,
             rewritten = rewritten,
             warnings = warnings,
             unsupportedNodes = unsupported,
-            unresolvedInputs = danglingInputs(out),
-            openInputs = openInputs,
+            unresolvedInputs = danglingInputs(finalGraph),
+            openInputs = finalOpen,
+            frontendRewritten = frontendRewritten,
+            broadcastLines = broadcastLines,
+            injectedNodes = injectedNodes,
         )
     }
 
@@ -693,24 +731,4 @@ object WorkflowConvert {
     }
 
     private fun JsonObject.int(field: String): Int? = this[field].asInt()
-
-    /**
-     * 节点引用写成**数字**（节点 id 都是数字，与 ComfyUI 自己导出的一致）。
-     * 万一以后出现非数字 id（理论上可能），退回文本 —— 两边的查表用的都是对象键，都认。
-     */
-    private fun refOf(id: String): JsonPrimitive =
-        id.toLongOrNull()?.let { JsonPrimitive(it) } ?: JsonPrimitive(id)
-
-    /** 节点 id 统一当**文本**用（界面格式里是数字，API 图里是对象键）。 */
-    private fun JsonObject.idOf(): String? = this["id"].asText()?.takeIf { it.isNotBlank() }
-
-    /**
-     * 界面格式里节点的类名在 **`type`**，不是 API 格式那个 `class_type`
-     * （[JsonObject.cls] 读的是后者）。
-     *
-     * 这两个键名混用是**踩过的坑**：第一版这里用了 `cls()`，于是每个节点都被当成"没有类名"
-     * 直接跳过，转换结果是**一张空图** —— 而空图提交上去只会得到 ComfyUI 一句
-     * "Prompt has no outputs"，完全看不出真正原因。用例里因此专门盯着 nodeCount。
-     */
-    private fun JsonObject.uiClass(): String = this["type"].asText().orEmpty()
 }

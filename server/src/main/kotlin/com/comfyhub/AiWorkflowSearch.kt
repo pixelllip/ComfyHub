@@ -135,6 +135,18 @@ object AiWorkflowSearch {
          * 补的是"哪根线接哪"，不是让谁去猜语义 —— 猜的那部分仍然由 ComfyUI 的校验兜底。
          */
         tolerateUnsupported: Boolean = false,
+        /**
+         * ## 模拟用户行为 ##（用户建议 ②，2026-09-21）：把**纯前端节点**也等价改写掉。
+         *
+         * 与 [tolerateUnsupported] 的区别：
+         *  - `tolerateUnsupported` = **摘掉**前端节点、把缺口清单交给 AI 自己补线；
+         *  - `emulateFrontend` = **照前端 JS 的做法把线补上**（广播型节点按它声明的类型填空、
+         *    显示节点丢掉、一个输出都没有时补 SaveImage），改了什么会如实列在
+         *    `frontendRewritten` / `broadcastLines` / `injectedNodes` 里。
+         *
+         * 两者可以一起用：先等价改写，剩下的仍然摘掉并报缺口。
+         */
+        emulateFrontend: Boolean = true,
     ): JsonObject {
         if (!Files.isRegularFile(file)) {
             throw ToolFailure("NOT_A_FILE", "不是文件：$file")
@@ -170,6 +182,9 @@ object AiWorkflowSearch {
         var unsupported: List<String> = emptyList()
         var unresolved: List<String> = emptyList()
         var openInputs: List<String> = emptyList()
+        var frontendRewritten: List<String> = emptyList()
+        var broadcastLines: List<String> = emptyList()
+        var injectedNodes: List<String> = emptyList()
         val apiGraph: JsonObject = if (apiFormat) {
             root
         } else {
@@ -183,7 +198,7 @@ object AiWorkflowSearch {
                 )
             }
             val converted = try {
-                WorkflowConvert.toApiGraph(root, objectInfo)
+                WorkflowConvert.toApiGraph(root, objectInfo, emulateFrontend)
             } catch (e: IllegalArgumentException) {
                 throw ToolFailure("INVALID_ARGUMENT", "转换工作流失败：${e.message}")
             }
@@ -192,12 +207,14 @@ object AiWorkflowSearch {
                     "UNSUPPORTED_NODES",
                     "这条工作流用了 ComfyUI **前端**才有的节点，服务端没法等价转换：" +
                         converted.unsupportedNodes.joinToString("、").take(400) +
-                        "。三个出口：① 把 tolerateUnsupported=true 再来一次 —— 我会把这些节点摘掉、" +
+                        "。四个出口：① 把 emulateFrontend=true（默认就是）确认开着 —— " +
+                        "广播型节点（Anything Everywhere 这类）会被照前端的行为等价改写；" +
+                        "② 把 tolerateUnsupported=true 再来一次 —— 我会把这些节点摘掉、" +
                         "并把**缺哪些线**列出来（openInputs / unresolvedInputs），" +
                         "你照着用 comfy_submit(connections=…) 补上就能跑；" +
-                        "② 在 ComfyUI 里用「工作流菜单 → 导出（API）」存成 API 格式，再把那份文件路径给我" +
+                        "③ 在 ComfyUI 里用「工作流菜单 → 导出（API）」存成 API 格式，再把那份文件路径给我" +
                         "（API 格式是原样提交，零转换）；" +
-                        "③ 在 ComfyUI 里点一次 Queue 让它跑一次，跑完会被自动捕获，之后就能按 promptId 提交。",
+                        "④ 在 ComfyUI 里点一次 Queue 让它跑一次，跑完会被自动捕获，之后就能按 promptId 提交。",
                 )
             }
             if (converted.graph.isEmpty()) {
@@ -208,6 +225,9 @@ object AiWorkflowSearch {
             unsupported = converted.unsupportedNodes.take(MAX_UNSUPPORTED)
             unresolved = converted.unresolvedInputs.take(MAX_GAPS)
             openInputs = converted.openInputs.take(MAX_GAPS)
+            frontendRewritten = converted.frontendRewritten.take(MAX_REWRITTEN)
+            broadcastLines = converted.broadcastLines.take(MAX_GAPS)
+            injectedNodes = converted.injectedNodes.take(MAX_REWRITTEN)
             converted.graph
         }
 
@@ -284,7 +304,12 @@ object AiWorkflowSearch {
                     "**这条现在还不能跑**：转换时摘掉了 ${unsupported.size} 个 ComfyUI 前端节点，" +
                         "留下的缺口见 openInputs / unresolvedInputs。请照着缺口用 " +
                         "comfy_submit(promptId=$promptId, connections={\"<节点id>.<输入名>\": [\"<上游节点id>\", 槽位]}) " +
-                        "把线补上再提交（要改的字面量仍走 overrides）。不确定某条线该接哪时，先问用户，别乱接。",
+                        "把线补上再提交（要改的字面量仍走 overrides）。不确定某条线该接哪时，先问用户，别乱接。" +
+                        if (broadcastLines.isNotEmpty()) {
+                            "（其中一部分已经被「模拟用户行为」等价改写掉了，见 frontendBroadcast）"
+                        } else {
+                            ""
+                        },
                 )
             }
             if (rewritten.isNotEmpty()) {
@@ -301,6 +326,29 @@ object AiWorkflowSearch {
             }
             if (warnings.isNotEmpty()) {
                 put("warnings", buildJsonArray { warnings.forEach { add(JsonPrimitive(it)) } })
+            }
+            // ## 模拟用户行为 ##：把"替前端做了哪几件事"如实列出来 ——
+            // 用户看得到才敢信这次跑的就是他工作流里的意思（用户建议 ②）
+            if (frontendRewritten.isNotEmpty()) {
+                put(
+                    "frontendEmulated",
+                    buildJsonArray { frontendRewritten.forEach { add(JsonPrimitive(it)) } },
+                )
+            }
+            if (broadcastLines.isNotEmpty()) {
+                put("frontendBroadcast", buildJsonArray { broadcastLines.forEach { add(JsonPrimitive(it)) } })
+            }
+            if (injectedNodes.isNotEmpty()) {
+                put("frontendInjected", buildJsonArray { injectedNodes.forEach { add(JsonPrimitive(it)) } })
+            }
+            if (frontendRewritten.isNotEmpty() || broadcastLines.isNotEmpty() || injectedNodes.isNotEmpty()) {
+                put(
+                    "frontendHint",
+                    "这条工作流里有 ComfyUI **前端**才有的节点（服务端拿不到那份 JS）。" +
+                        "已经照前端排队前的行为**等价改写**：见 frontendEmulated / frontendBroadcast / " +
+                        "frontendInjected。提交前请扫一眼这些改动是不是你要的；" +
+                        "不想让它替你做，就带 emulateFrontend=false 重新读一次（那时会如实报缺口）。",
+                )
             }
             put("nodes", summarizeNodes(apiGraph))
             if (includeGraph) put("apiGraph", apiGraph)

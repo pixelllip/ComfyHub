@@ -197,13 +197,16 @@ fun Application.module(ctx: AppContext) {
         },
         // 用户 bug ③：给一个工作流文件路径就能读进库、拿到 promptId（界面格式在这里被转成 API 图）
         // tolerateUnsupported（用户建议 ②）：转换不了的前端节点摘掉并给出缺口清单，交给模型补线
-        comfyLoadWorkflow = { path, title, includeGraph, tolerateUnsupported ->
+        // emulateFrontend（用户建议 ②「##模拟用户行为##」）：把纯前端节点照前端排队前的行为
+        // 等价改写掉（广播填空 / 丢显示节点 / 补 SaveImage），改了什么如实回给模型
+        comfyLoadWorkflow = { path, title, includeGraph, tolerateUnsupported, emulateFrontend ->
             AiWorkflowSearch.loadWorkflowFromFile(
                 submitter,
                 java.nio.file.Paths.get(path),
                 title,
                 includeGraph,
                 tolerateUnsupported,
+                emulateFrontend,
             )
         },
         // 图生图：把用户发来的图投放进 ComfyUI 的 input 目录（用户 bug：

@@ -133,9 +133,11 @@ class ToolRegistry(
      * "我不能凭一个文件路径提交"）。返回的结构里有 `promptId`（下一步就能提交）与节点摘要。
      *
      * 第四个参数 `tolerateUnsupported`：转换不了的前端节点是否照样入库（带缺口清单）。
+     * 第五个参数 `emulateFrontend`：## 模拟用户行为 ##（用户建议 ②）—— 把纯前端节点
+     * 照前端排队前的行为**等价改写**（广播填空 / 丢显示节点 / 补 SaveImage）。
      */
-    private val comfyLoadWorkflow: suspend (String, String?, Boolean, Boolean) -> JsonObject =
-        { _, _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用工作流文件加载能力") },
+    private val comfyLoadWorkflow: suspend (String, String?, Boolean, Boolean, Boolean) -> JsonObject =
+        { _, _, _, _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用工作流文件加载能力") },
     /**
      * 把用户发来的**图片附件**放进 ComfyUI 的 `input/` 目录，返回它在那边真实可用的文件名。
      *
@@ -617,14 +619,22 @@ class ToolRegistry(
                 "别再回答\"我只能提交库里的 promptId\"。" +
                 "界面格式（nodes/links）会按 ComfyUI 的 /object_info 转成 API 节点图：" +
                 "普通节点、组节点（subgraph）、Reroute / Set-Get、旁路都会等价展开或改写。" +
-                "剩下的纯前端节点（Anything Everywhere、rgthree 的那些显示节点…）默认**如实报错**；" +
-                "带 tolerateUnsupported=true 再来一次，我会把它们摘掉并给出**缺口清单**：" +
+                "\n**## 模拟用户行为 ##（默认开着，`emulateFrontend=true`）**：ComfyUI 的官方前端在排队前" +
+                "还会自己改写一遍节点图（那是浏览器里的 JS，服务端拿不到）—— 这一档就是**照它的行为等价做掉**：" +
+                "① 广播型节点（`Anything Everywhere` 这类）按它声明的 `Input Type` / 名字过滤，" +
+                "把上游那一路灌进全图**同类型且空着**的连线输入；② 纯显示节点（Preview / ShowText…）丢掉；" +
+                "③ 一个输出节点都没有时补一个 `SaveImage`。**改了什么会如实回给你**：" +
+                "`frontendEmulated` / `frontendBroadcast` / `frontendInjected`（提交前扫一眼是不是用户要的意思）；" +
+                "说不清类型的广播**不猜**，照旧报在 `unsupportedNodes` 里。" +
+                "带 `emulateFrontend=false` 重新读 = 回到「只如实报缺口、一个字都不改」的保守档。" +
+                "\n剩下的纯前端节点默认**如实报错**；带 tolerateUnsupported=true 再来一次，" +
+                "我会把它们摘掉并给出**缺口清单**：" +
                 "`unresolvedInputs`（哪个输入还悬着）、`openInputs`（哪些连线型输入空着，缺的是什么类型）、" +
                 "`unsupportedNodes`（摘掉了哪些类）—— 照着清单用 comfy_submit(connections=…) 补线即可。" +
                 "返回里有 promptId、runnable（能不能直接跑）与每个节点的 id / 可覆盖的输入名。" +
                 "只读用户机器上的文件，不改它。",
             parameters = schema(
-                """{"type":"object","properties":{"path":{"type":"string","description":"工作流文件的完整路径（绝对路径最稳）"},"title":{"type":"string","description":"库里显示的名字（可选，默认取文件名）"},"includeGraph":{"type":"boolean","description":"是否连完整 API 节点图一起返回（默认 false，只有要手写参数路径时才需要）"},"tolerateUnsupported":{"type":"boolean","description":"转换不了的前端节点不报错，改成摘掉并给出缺口清单（默认 false）"}},"required":["path"],"additionalProperties":false}"""
+                """{"type":"object","properties":{"path":{"type":"string","description":"工作流文件的完整路径（绝对路径最稳）"},"title":{"type":"string","description":"库里显示的名字（可选，默认取文件名）"},"includeGraph":{"type":"boolean","description":"是否连完整 API 节点图一起返回（默认 false，只有要手写参数路径时才需要）"},"tolerateUnsupported":{"type":"boolean","description":"转换不了的前端节点不报错，改成摘掉并给出缺口清单（默认 false）"},"emulateFrontend":{"type":"boolean","description":"## 模拟用户行为 ##：默认 true = 照 ComfyUI 前端排队前的行为等价改写纯前端节点（广播填空 / 丢显示节点 / 补 SaveImage），改了什么都如实列出来；false = 一个字都不改、只如实报缺口"}},"required":["path"],"additionalProperties":false}"""
             ),
             category = ToolCategory.COMFY,
             mutating = false,
@@ -641,6 +651,7 @@ class ToolRegistry(
                     args.str("title"),
                     args.bool("includeGraph") ?: false,
                     args.bool("tolerateUnsupported") ?: false,
+                    args.bool("emulateFrontend") ?: true,
                 )
             } catch (e: ToolFailure) {
                 throw e
@@ -688,7 +699,7 @@ class ToolRegistry(
             val loaded = if (path != null) {
                 val file = ctx.policy.resolveRead(path)
                 try {
-                    comfyLoadWorkflow(file.toString(), args.str("title"), false, true)
+                    comfyLoadWorkflow(file.toString(), args.str("title"), false, true, true)
                 } catch (e: ToolFailure) {
                     throw e
                 } catch (e: Exception) {

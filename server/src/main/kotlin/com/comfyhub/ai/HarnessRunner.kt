@@ -1292,8 +1292,14 @@ object SystemPrompt {
      *     同一份提示词里"必须遵守："出现两次、NSFW 开着时三次，而且重复那份的口径是旧的
      *     （Civitai 令牌那句假话、提问那条旧流程），排在后面反而盖掉 v18/v19 的修正。
      *     顺带把 `civitai_search` 与 `web_search` / `web_fetch` 的分工写清楚（用户建议 ③）。
+     * v22（2026-09-21）：第 15 条写清 **## 模拟用户行为 ##**（用户建议 ②）——
+     *     `comfy_load_workflow` 的 `emulateFrontend` **默认开着**，会把纯前端节点
+     *     （广播型 / 显示型）照 ComfyUI 前端排队前的行为等价改写掉，改了什么逐条列在
+     *     `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里；
+     *     模型必须把这些改动**转述给用户**（别默默替他改图），
+     *     用户说"别动我的工作流"时才带 `emulateFrontend=false` 回到只报缺口的保守档。
      */
-    const val VERSION = "v21"
+    const val VERSION = "v22"
 
     /**
      * 第一问时追加的一段：让模型在正文最前面带一行 `[标题]…[/标题]`，

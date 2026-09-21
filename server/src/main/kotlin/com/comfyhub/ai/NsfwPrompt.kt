@@ -129,12 +129,21 @@ object NsfwPrompt {
             被拒的路径与允许的目录，别猜原因、也别让用户先去改设置。
             界面格式（nodes/links）里普通节点、**组节点（subgraph）**、Reroute / Set-Get、旁路
             都会被等价展开或改写；剩下那些**纯前端**节点（`Anything Everywhere`、rgthree 的显示节点…）
-            默认会报 `UNSUPPORTED_NODES` —— 那时**不要就此收摊**：
+            由 **## 模拟用户行为 ##** 挡在前面（`emulateFrontend` **默认开着**）：
+            服务端拿不到浏览器里那份 JS，但**照前端排队前的行为等价做掉**是能做到的 ——
+            ① 广播型节点（`Anything Everywhere` 这类）按它自己声明的 `Input Type` / 名字过滤，
+            把上游那一路灌进全图**同类型且空着**的连线输入；② 纯显示节点（Preview / ShowText…）丢掉；
+            ③ 一个输出节点都没有时补一个 `SaveImage`。
+            **改了什么必须看**：返回里的 `frontendEmulated` / `frontendBroadcast` / `frontendInjected`
+            逐条列着"替前端做了哪几件事、接了哪几根线、补了哪个节点"。这些改动**要转述给用户**
+            （至少在他要的是"原样跑我的工作流"时说清你改了哪几根线），别默默替他把图改了。
+            说不清类型的广播**不猜**，仍然会报 `UNSUPPORTED_NODES` —— 那时**不要就此收摊**：
             带 `tolerateUnsupported=true` 再读一次，我会把那些节点摘掉并给出缺口清单
             （`openInputs` = 哪些连线型输入空着、缺什么类型；`unresolvedInputs` = 哪个输入还悬着；
             `unsupportedNodes` = 摘掉了哪些类）。照着清单用
             `comfy_submit(promptId=…, connections={"<节点id>.<输入名>":["<上游节点id>", 槽位]})`
             把线补上再跑 —— 补的是"哪根线接哪"，**不确定就先问用户，不许乱接**。
+            用户明确说"别动我的工作流"时带 `emulateFrontend=false` 再读一次（只报缺口、一个字都不改）。
             只有确实补不出来（说不清语义）时，才让用户去 ComfyUI 里「导出（API）」一次，
             或者点一次 Queue 让它被自动捕获。
         16. **"库里搜不到某个工作流"不等于"这条工作流用不了"**：本项目库里只有两类工作流 ——
@@ -635,12 +644,21 @@ object NsfwPrompt {
             被拒的路径与允许的目录，别猜原因、也别让用户先去改设置。
             界面格式（nodes/links）里普通节点、**组节点（subgraph）**、Reroute / Set-Get、旁路
             都会被等价展开或改写；剩下那些**纯前端**节点（`Anything Everywhere`、rgthree 的显示节点…）
-            默认会报 `UNSUPPORTED_NODES` —— 那时**不要就此收摊**：
+            由 **## 模拟用户行为 ##** 挡在前面（`emulateFrontend` **默认开着**）：
+            服务端拿不到浏览器里那份 JS，但**照前端排队前的行为等价做掉**是能做到的 ——
+            ① 广播型节点（`Anything Everywhere` 这类）按它自己声明的 `Input Type` / 名字过滤，
+            把上游那一路灌进全图**同类型且空着**的连线输入；② 纯显示节点（Preview / ShowText…）丢掉；
+            ③ 一个输出节点都没有时补一个 `SaveImage`。
+            **改了什么必须看**：返回里的 `frontendEmulated` / `frontendBroadcast` / `frontendInjected`
+            逐条列着"替前端做了哪几件事、接了哪几根线、补了哪个节点"。这些改动**要转述给用户**
+            （至少在他要的是"原样跑我的工作流"时说清你改了哪几根线），别默默替他把图改了。
+            说不清类型的广播**不猜**，仍然会报 `UNSUPPORTED_NODES` —— 那时**不要就此收摊**：
             带 `tolerateUnsupported=true` 再读一次，我会把那些节点摘掉并给出缺口清单
             （`openInputs` = 哪些连线型输入空着、缺什么类型；`unresolvedInputs` = 哪个输入还悬着；
             `unsupportedNodes` = 摘掉了哪些类）。照着清单用
             `comfy_submit(promptId=…, connections={"<节点id>.<输入名>":["<上游节点id>", 槽位]})`
             把线补上再跑 —— 补的是"哪根线接哪"，**不确定就先问用户，不许乱接**。
+            用户明确说"别动我的工作流"时带 `emulateFrontend=false` 再读一次（只报缺口、一个字都不改）。
             只有确实补不出来（说不清语义）时，才让用户去 ComfyUI 里「导出（API）」一次，
             或者点一次 Queue 让它被自动捕获。
         16. **"库里搜不到某个工作流"不等于"这条工作流用不了"**：本项目库里只有两类工作流 ——

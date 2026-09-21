@@ -1202,7 +1202,8 @@ class ToolRegistryTest {
         // v21（2026-09-20 晚）：删掉 render 里重复的那一整份常驻纪律
         // （同一份提示词里"必须遵守："原本出现 2 次、NSFW 开着时 3 次，
         //  而且重复那份的 Civitai / 提问口径是旧的，排在后面会盖掉 v18/v19 的修正）
-        assertEquals("v21", SystemPrompt.VERSION)
+        // v22（2026-09-21）：第 15 条写清 ## 模拟用户行为 ##（emulateFrontend 默认开着）
+        assertEquals("v22", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
