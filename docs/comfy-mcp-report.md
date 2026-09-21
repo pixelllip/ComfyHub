@@ -21,9 +21,23 @@
 
 **落地顺序**（每步一个提交）：
 1. ✅ MCP 运行时装配脚本 + `up` / `doctor` 接线 + ComfyUI Desktop 嵌套探测（提交 `8f0ca60`）
-2. ⬜ 后端 MCP stdio 客户端（`initialize` → `tools/list` → `tools/call`）
-3. ⬜ 工具注入与权限档：MCP 工具进 `ToolRegistry`，重复的 `comfy_*` 逐步让位
-4. ⬜ 安卓客户端预留：桌面 App 作为能力宿主，移动端只保留不依赖本地工作流的工具
+   —— 体检分**快慢两档**（提交 `7e1b363`）：`up` 走文件检查（6ms），`doctor` / `-Deep` 才真问 comfy-cli（3.1s）
+2. ✅ 后端 MCP stdio 客户端（提交 `21fae51`）：`initialize` → `tools/list` → `tools/call`、运行时发现、
+   工具桥接与权限档，含 **6 例真起子进程的端到端测试**
+3. ✅ 工具注入（提交 `2cb3a8c`）：**实测 22 + 39 = 61 个工具**（日志：`10 个默认 deny / 6 个默认 ask`），
+   同名时我们的工具胜出（`comfy_submit` 那条"产物必须入库"的链路必须保住）
+4. ⬜ 安卓客户端预留：见 [`android-client-plan.md`](android-client-plan.md)
+   （桌面 App 当能力宿主、移动端只留不依赖本地工作流的工具；**入站鉴权是开远程的前置条件**）
+
+### 现状（2026-09-21 实测）
+
+| 项 | 状态 |
+| --- | --- |
+| 装配 | `pwsh -File scripts\mcp-runtime.ps1 status` → OK；comfy-mcp 0.10.0 / comfy-cli 1.20.0 / python 3.12.10 |
+| 工作区 | `D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`（ComfyUI Desktop 新版嵌套路径，探测已补） |
+| 工具 | `GET /api/ai/tools` → 61 个；其中 39 个来自 comfy-mcp |
+| 权限 | 10 个 `deny`（起停进程 / 装节点 / 下模型 / 云账号），6 个 `ask`（写盘 / 吃显卡 / 花钱），其余 `allow` |
+| 降级 | 运行时不在 / 没 Python / 拉清单失败 → **一个 MCP 工具都不加，App 照常启动**（只记一行日志） |
 
 下面第 1~5 节保留原始查证过程与数据（仍然有效，尤其是 §3 的逐条对照与 §4 的坑）。
 
