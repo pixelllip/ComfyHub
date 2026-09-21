@@ -1477,6 +1477,18 @@ class AiQuestion {
   final String conversationId;
   final String question;
 
+  /// **发起这次提问的工具调用号**（`tool.requested` 里的 `callId`，形如 `call_00_…`）。
+  ///
+  /// 必须与 [questionId] 分开存（用户 bug 2026-09-21 的根因）：
+  /// `user.question` 事件里只有 `questionId`（后端生成的 UUID），**没有 `callId`**；
+  /// 而气泡里那张卡的"槽位"是按 `callId` 排的（`tool.requested` 先到）。
+  /// 两者混用就会出现"工具卡在跑、提问卡消失、输入区不接管"——
+  /// 所以调用方（`AiWorkspaceStore`）在收到 `user.question` 时把当前那条
+  /// `ask_user_question` 调用的 `callId` 贴进来，答题与切状态都按它定位。
+  ///
+  /// 历史消息（`parts`）里没有这个字段，那时按 [questionId] 反查即可。
+  final String? callId;
+
   /// 界面画成按钮的候选答案（可能为空，那就只能自己敲）。
   final List<String> options;
 
@@ -1496,6 +1508,7 @@ class AiQuestion {
     this.runId = '',
     this.conversationId = '',
     required this.question,
+    this.callId,
     this.options = const [],
     this.allowFreeText = true,
     this.header,
@@ -1509,6 +1522,7 @@ class AiQuestion {
         runId: (json['runId'] ?? '').toString(),
         conversationId: (json['conversationId'] ?? '').toString(),
         question: (json['question'] ?? '').toString(),
+        callId: json['callId']?.toString(),
         options: (json['options'] as List?)?.map((e) => e.toString()).toList() ?? const [],
         allowFreeText: json['allowFreeText'] != false,
         header: json['header']?.toString(),
@@ -1517,11 +1531,12 @@ class AiQuestion {
         optionIndex: (json['optionIndex'] as num?)?.toInt(),
       );
 
-  AiQuestion copyWith({bool? answered, String? answer, int? optionIndex}) => AiQuestion(
+  AiQuestion copyWith({String? callId, bool? answered, String? answer, int? optionIndex}) => AiQuestion(
         questionId: questionId,
         runId: runId,
         conversationId: conversationId,
         question: question,
+        callId: callId ?? this.callId,
         options: options,
         allowFreeText: allowFreeText,
         header: header,

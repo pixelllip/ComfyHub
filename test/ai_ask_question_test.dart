@@ -42,16 +42,22 @@ final List<Map<String, dynamic>> answered = [];
 final List<String> skipped = [];
 
 /// 提问事件（`user.question` 的 payload 就是 `PendingQuestion.toJson()`）。
+///
+/// ⚠️ **这里刻意长得和真后端一模一样**（2026-09-21 按 `ai_run_events` 里那条真事件抄的）：
+///  - 真事件里**没有 `callId`**（不要加，加了就测不出下面那个 bug）；
+///  - `question` 是**内层对象**：`PendingQuestion.toJson()` 整份塞在 `question` 键下，
+///    外面只多一个 `runId`。
 String _askEvent() => _sse(
       3,
       'user.question',
       jsonEncode({
-        'callId': _questionId,
+        'runId': 'r1',
         'question': {
           'questionId': _questionId,
           'runId': 'r1',
           'conversationId': 'c1',
           'question': _question,
+          'header': '选择题',
           'options': _options,
           'allowFreeText': true,
           'answered': false,
@@ -59,6 +65,35 @@ String _askEvent() => _sse(
         },
       }),
     );
+
+/// `user.question` **之前**一定会先来这两条（工具调用是"先 requested、再 started、
+/// 然后才轮到工具自己去问"）。它们的 `callId` 是**模型的调用号**，
+/// 与 `user.question` 里的 `questionId` **不是同一个值** ——
+/// 2026-09-21 的 bug 就出在这里：提问卡被挂在 `questionId` 这个键上，
+/// 于是 `pendingQuestion` 在 `callId` 那条上找不到问题，输入区永远不接管。
+String _askToolEvents() => _sse(
+      1,
+      'tool.requested',
+      jsonEncode({
+        'runId': 'r1',
+        'callId': _callId,
+        'name': 'ask_user_question',
+        'arguments': '{"question":"$_question"}',
+        'approval': 'not_required',
+      }),
+    ) +
+    _sse(2, 'tool.started', jsonEncode({'callId': _callId, 'name': 'ask_user_question'}));
+
+const _callId = 'call_00_w3oy2hgdwhoanKYvvw2Y8083';
+
+/// 事件体的拼装（抽出来是为了在用例里能断言"假后端真的发了这些事件"）。
+String _body() =>
+    _sse(0, 'run.started', '{"runId":"r1"}') +
+    _sse(1, 'message.started', '{"messageId":"a1"}') +
+    // 真事件的顺序：tool.requested → tool.started → user.question
+    _askToolEvents() +
+    _askEvent() +
+    _askCompleted();
 
 /// Run 收尾时的落库形态（parts 里那条 `tool_call` + `tool_result`）：
 /// 答完之后这张卡要切成"已回答"，历史里一眼能看出这一轮基于什么做的。
@@ -184,10 +219,7 @@ class _Fake {
           // `_consumeRun` 在 `user.question` 那条上就挂住等用户回答了。
           return http.Response.bytes(
             utf8.encode(
-              _sse(1, 'run.started', '{"runId":"r1"}') +
-                  _sse(2, 'message.started', '{"messageId":"a1"}') +
-                  _askEvent() +
-                  _askCompleted(),
+              _body(),
             ),
             200,
             headers: {'content-type': 'text/event-stream; charset=utf-8'},
@@ -258,6 +290,26 @@ void main() {
     expect(find.text(_options[1]), findsWidgets);
     expect(find.text('自己输入答案'), findsWidgets, reason: '末尾固定留给用户自己决定');
     expect(find.byKey(const Key('ask-answer-field')), findsOneWidget);
+  });
+
+  // 用户 bug 2026-09-21 的**根因回归**：`user.question` 事件里没有 `callId`，
+  // 提问卡必须贴到 `tool.requested` 那条已经存在的调用上，不能按 `questionId` 另开一条。
+  // 另开一条的后果就是用户截图那样：工具卡一直在"运行中"，提问卡根本不出现、输入区不接管。
+  testWidgets('提问卡贴在模型那条调用上：只有一张卡、callId 不被 questionId 顶掉', (tester) async {
+    final store = await _openAsk(tester, _Fake());
+    final message = store.messages.firstWhere((m) => !m.isUser);
+
+    final calls = store.toolCallsFor(message);
+    expect(calls, hasLength(1), reason: '一次提问只能有一条调用，别按 questionId 再开一条');
+    expect(calls.single.callId, _callId, reason: '模型那条调用的 callId 不能被 questionId 顶掉');
+    expect(calls.single.question?.questionId, _questionId);
+    expect(calls.single.question?.callId, _callId, reason: '问题里也要记着它挂在哪个调用上');
+
+    // 界面上：一张提问卡（问题+选项），而不是"工具卡里摊着一份参数 JSON、状态还在运行中"
+    expect(find.text('参数'), findsNothing, reason: '提问卡不该画成工具卡（那张卡会摊出参数 JSON）');
+    expect(find.text('ask_user_question'), findsNothing, reason: '提问卡不显示工具名');
+    expect(find.text(_question), findsWidgets);
+    expect(find.text('自己输入答案'), findsWidgets);
   });
 
   testWidgets('点选项即答：POST 带 optionIndex，答完输入区让位', (tester) async {

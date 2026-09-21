@@ -280,6 +280,27 @@ class AiWorkspaceStore extends ChangeNotifier {
         if (call.name == 'ask_user_question') consider(call);
       }
     }
+    if (best != null) return best;
+    // 兜底：**不看名字**，只看"有没有一条还没回答的提问"。
+    // 名字只在流式那一条路上可靠（`tool.requested` 给的名字），历史消息里名字可能缺失 ——
+    // 而"有没有问题"这个事实本身就够了（用户 bug 2026-09-21：输入区不接管）。
+    void considerAnywhere(AiToolCallState call) {
+      final q = call.question;
+      if (q == null || q.answered) return;
+      best = q;
+    }
+
+    for (final list in _liveToolCalls.values) {
+      for (final call in list) {
+        considerAnywhere(call);
+      }
+    }
+    if (best != null) return best;
+    for (final m in messages) {
+      for (final call in AiToolCallState.listFromParts(m.parts)) {
+        considerAnywhere(call);
+      }
+    }
     return null;
   }
 
@@ -741,8 +762,10 @@ class AiWorkspaceStore extends ChangeNotifier {
         return (ok: false, message: '这条提问已经结束了（超时或本次回答已停止），这次回答没有被采纳。');
       }
       // 本地立刻切成"已回答"：不等 SSE 回来（它也会来，但用户点完就该有反馈）。
+      // 按 **callId** 定位（提问卡挂在模型那条调用上，见 `user.question` 的注释）；
+      // 拿不到 callId（历史消息里答过了）就退回 questionId。
       _patchToolCall(
-        questionId,
+        _liveAskCallIdHere() ?? questionId,
         (call) => call.copyWith(
           status: AiToolCallStatus.ok,
           question: call.question?.copyWith(
@@ -764,7 +787,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     try {
       await _api.skipQuestion(questionId);
       _patchToolCall(
-        questionId,
+        _liveAskCallIdHere() ?? questionId,
         (call) => call.copyWith(
           status: AiToolCallStatus.ok,
           question: call.question?.copyWith(answered: true, answer: ''),
@@ -775,6 +798,19 @@ class AiWorkspaceStore extends ChangeNotifier {
     } catch (e) {
       return (ok: false, message: '跳过失败：$e');
     }
+  }
+
+  /// 当前所有消息里那个"还在等回答"的 `ask_user_question` 调用号。
+  ///
+  /// [answerQuestion] / [skipQuestion] 直接按它给气泡里那张卡切状态：
+  /// 提问事件带的 `questionId` 与工具调用的 `callId` 是两个值，混用会切不中。
+  String? _liveAskCallIdHere() {
+    for (final list in _liveToolCalls.values) {
+      for (final call in list) {
+        if (call.name == 'ask_user_question' && call.question?.answered != true) return call.callId;
+      }
+    }
+    return null;
   }
 
   Future<void> _resolveToolCall(String callId, {required bool approve}) async {
@@ -1383,14 +1419,23 @@ class AiWorkspaceStore extends ChangeNotifier {
               debugPrint('user.question 事件没有带 question 字段：${event.data}');
               break;
             }
+            // ⚠️ 提问事件**不带 `callId`**（真事件里只有 `questionId`，两者不是一回事：
+            // 前者是模型的调用号 `call_00_…`，后者是后端生成的 UUID）。所以这里必须
+            // 把问题**贴到那条已经存在的 `ask_user_question` 调用上**，不能按 `questionId`
+            // 另开一条 —— 用户的 bug（2026-09-21）就是这么来的：
+            // 提问卡被挂在另一个键上，于是 `pendingQuestion` 在 `callId` 那条上找不到问题，
+            // 输入区永远不接管（而 `tool.completed` / `tool.failed` 也按 `callId` 更新，
+            // 结果就是"工具卡一直在运行中、提问卡根本不出现"）。
+            final askCallId = _liveAskCallId(assistantMessageId) ?? event.callId ?? q.questionId;
             _upsertToolCall(
               assistantMessageId,
-              event.callId ?? q.questionId,
-              (prev) => (prev ?? AiToolCallState(callId: q.questionId, name: 'ask_user_question'))
+              askCallId,
+              (prev) => (prev ?? AiToolCallState(callId: askCallId, name: 'ask_user_question'))
                   .copyWith(
                 name: 'ask_user_question',
                 status: AiToolCallStatus.pendingApproval,
-                question: q,
+                // 把调用号一起记进问题里：答题 / 切状态都要按它定位
+                question: q.copyWith(callId: askCallId),
                 // 卡片要画在正确的位置：与工具卡一样，第一次见到就记进实时段
                 arguments: (prev?.arguments ?? '').isEmpty
                     ? '{"question":"${q.question}"}'
@@ -1403,9 +1448,9 @@ class AiWorkspaceStore extends ChangeNotifier {
             if (qid.isEmpty) break;
             final ans = event.data['answer']?.toString() ?? '';
             final idx = (event.data['optionIndex'] as num?)?.toInt();
-            // 提问卡按 **questionId** 更新（用户答完 → 卡片切成"已回答"）
+            // 提问卡按 **callId**（拿不到才退回 questionId）更新：答完 → 卡片切成"已回答"
             _patchToolCall(
-              qid,
+              _liveAskCallId(assistantMessageId) ?? qid,
               (call) => call.copyWith(
                 status: AiToolCallStatus.ok,
                 question: call.question?.copyWith(answered: true, answer: ans, optionIndex: idx),
@@ -1735,6 +1780,17 @@ class AiWorkspaceStore extends ChangeNotifier {
         _bumpLiveRevision(entry.key);
       }
     }
+  }
+
+  /// 这条助手消息里**正在等回答**的那个 `ask_user_question` 调用的 `callId`。
+  ///
+  /// 提问事件落在哪条调用上，答案与状态就要回到哪条上（见 `user.question` 那段注释）：
+  /// 两个 id 不是一回事，混用就会出现"工具卡一直运行中、输入区不接管"。
+  String? _liveAskCallId(String messageId) {
+    for (final call in _liveToolCalls[messageId] ?? const <AiToolCallState>[]) {
+      if (call.name == 'ask_user_question' && call.question?.answered != true) return call.callId;
+    }
+    return null;
   }
 
   /// 流式状态只对"还在列表里的消息"有意义：换会话 / 刷新后清掉孤儿，避免内存只增不减。
