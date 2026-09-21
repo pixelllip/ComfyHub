@@ -309,6 +309,12 @@ object Migrate {
             """.trimIndent()
         )
 
+        // --- 工具预算的一次性抬起（用户建议 ③，2026-09-22） ---
+        // 走**设置项**而不是 DDL：库里那份 ai.tools.policy 冻着旧出厂值（8 轮 / 16 次），
+        // 而这两项是用户可改的，normalizeStored 不许覆盖 —— 只能按值识别旧默认值再抬。
+        runCatching { com.comfyhub.ai.tools.ToolPolicy.bumpLegacyBudgets() }
+            .onFailure { log.warn("工具预算抬起失败（不影响启动）: {}", it.message) }
+
         if (changed > 0) log.info("数据库结构已补齐（{} 项变更）", changed) else log.info("数据库结构已是最新")
         changed
     }

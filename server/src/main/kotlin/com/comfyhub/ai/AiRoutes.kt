@@ -1167,8 +1167,8 @@ data class ToolPolicyDto(
      */
     val autoReadRoots: List<String> = emptyList(),
     val overrides: Map<String, String> = emptyMap(),
-    val maxToolSteps: Int = 8,
-    val maxCallsPerRun: Int = 16,
+    val maxToolSteps: Int = ToolPolicyConfig.DEFAULT_MAX_TOOL_STEPS,
+    val maxCallsPerRun: Int = ToolPolicyConfig.DEFAULT_MAX_CALLS_PER_RUN,
     /** AIH-036：一次回复最多主动查 ComfyUI 几次（默认值与真源同源，别在这儿写死数字） */
     val maxComfyQueriesPerRun: Int = ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN,
     val maxReadBytes: Int = 0,

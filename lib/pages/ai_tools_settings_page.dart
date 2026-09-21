@@ -389,13 +389,15 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
             Text('预算', style: theme.textTheme.titleSmall),
             const SizedBox(height: 4),
             Text(
-              '限制单次回复里模型能自己跑多少步，防止它绕圈子烧钱。',
+              '限制单次回复里模型能自己跑多少步，防止它绕圈子烧钱。'
+              '（回答一次 AI 的提问会重置"调用总数"这一窗的额度 —— '
+              '你刚做完选择，它就该接着把这件事做完。）',
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
             ),
             const SizedBox(height: 10),
             _dropdownRow<int>(
               label: '工具轮数上限',
-              value: stepOptions.contains(_policy.maxToolSteps) ? _policy.maxToolSteps : 8,
+              value: stepOptions.contains(_policy.maxToolSteps) ? _policy.maxToolSteps : 16,
               options: stepOptions,
               labelOf: (v) => '$v 轮',
               onChanged: (v) => _patch({'maxToolSteps': v}, '工具轮数上限已设为 $v'),
@@ -403,7 +405,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
             const SizedBox(height: 8),
             _dropdownRow<int>(
               label: '调用总数上限',
-              value: callOptions.contains(_policy.maxCallsPerRun) ? _policy.maxCallsPerRun : 16,
+              value: callOptions.contains(_policy.maxCallsPerRun) ? _policy.maxCallsPerRun : 48,
               options: callOptions,
               labelOf: (v) => '$v 次',
               onChanged: (v) => _patch({'maxCallsPerRun': v}, '调用总数上限已设为 $v'),

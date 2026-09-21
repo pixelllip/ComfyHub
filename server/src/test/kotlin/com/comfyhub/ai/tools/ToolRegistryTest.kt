@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -597,9 +598,104 @@ class ToolRegistryTest {
         assertEquals(ToolPolicyConfig.DEFAULT_MAX_WRITE_BYTES, normalized.maxWriteBytes)
         assertEquals(ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN, normalized.maxComfyQueriesPerRun)
         assertEquals(ToolPolicyConfig.DEFAULT_MAX_WEB_QUERIES_PER_RUN, normalized.maxWebQueriesPerRun)
-        // 用户可改的那两项**不能**被覆盖（库里的值必须生效）
-        assertEquals(8, normalized.maxToolSteps)
-        assertEquals(16, normalized.maxCallsPerRun)
+        // 用户自己调过的那两项**不能**被 normalizeStored 覆盖（库里的值必须生效）
+        val customized = ToolPolicyConfig(maxToolSteps = 12, maxCallsPerRun = 24)
+        val kept = ToolPolicyConfig.normalizeStored(customized)
+        assertEquals(12, kept.maxToolSteps)
+        assertEquals(24, kept.maxCallsPerRun)
+    }
+
+    @Test
+    fun `库里冻着的旧出厂预算会被一次性抬到新出厂值`() {
+        // 2026-09-22 之前，用户只要切过一次权限档，库里就会冻住那一份出厂值
+        // （8 轮 / 16 次）。这两项是用户可改的，normalizeStored 不许覆盖，
+        // 所以只能按值识别旧默认值再抬 —— 这一条钉住"认得出旧的、认不出自定义的"。
+        val legacy = ToolPolicyConfig(
+            maxToolSteps = ToolPolicyConfig.LEGACY_MAX_TOOL_STEPS,
+            maxCallsPerRun = ToolPolicyConfig.LEGACY_MAX_CALLS_PER_RUN,
+        )
+        val bumped = ToolPolicy.bumpedFromLegacy(legacy)!!
+        assertEquals(ToolPolicyConfig.DEFAULT_MAX_TOOL_STEPS, bumped.maxToolSteps)
+        assertEquals(ToolPolicyConfig.DEFAULT_MAX_CALLS_PER_RUN, bumped.maxCallsPerRun)
+
+        // 用户自己调过的值一律不动（哪怕比出厂值小）—— 那是他的选择
+        val custom = ToolPolicyConfig(maxToolSteps = 4, maxCallsPerRun = 8)
+        assertNull(ToolPolicy.bumpedFromLegacy(custom), "自定义值不归它管")
+
+        // 已经是新出厂值 → 不重复处理（幂等）
+        assertNull(ToolPolicy.bumpedFromLegacy(ToolPolicyConfig()))
+
+        // 出厂值本身也必须是抬过之后的数字（界面 / API 的默认值都跟着它）
+        assertEquals(ToolPolicyConfig.DEFAULT_MAX_TOOL_STEPS, ToolPolicyConfig().maxToolSteps)
+        assertEquals(ToolPolicyConfig.DEFAULT_MAX_CALLS_PER_RUN, ToolPolicyConfig().maxCallsPerRun)
+    }
+
+    // --- 预算（用户建议 ③，2026-09-22）---------------------------------------
+    //
+    // 现场：2026-09-21 三条对话都在第 8 轮被"工具轮数上限"掐断，
+    // 用户看到"再发一条消息它就能接着做"，而他的要求是
+    // "每次完成选择后，重置工具预算"。
+
+    @Test
+    fun `被拒绝与失败的调用不消耗额度 只有真的跑了的才算`() = runBlocking {
+        val e = env()
+        // 额度只有 2 次
+        val tight = ToolPolicy(e.root, ToolPolicyConfig(maxCallsPerRun = 2))
+        val ctx = e.ctx(tight)
+
+        // ① 越界写：连磁盘都没碰到
+        val denied = e.registry.invoke(
+            "c1", "write_file", args("path" to "other/x.txt", "content" to "x"), ctx,
+        )
+        assertEquals("PATH_DENIED", denied.errorCode)
+        // ② 未知工具
+        val unknown = e.registry.invoke("c2", "no_such_tool", "{}", ctx)
+        assertEquals("TOOL_NOT_FOUND", unknown.errorCode)
+        // ③ 工具自己报错（参数不合法）
+        val badArgs = e.registry.invoke("c2b", "write_file", args("path" to "comfyui/x.txt"), ctx)
+        assertEquals("INVALID_ARGUMENT", badArgs.errorCode)
+        assertEquals(0, ctx.callsInWindow, "被拒 / 找不到 / 自己报错的调用都不该消耗额度")
+
+        // 两次真调用把额度用完
+        assertEquals("ok", e.registry.invoke("c3", "list_skills", "{}", ctx).status)
+        assertEquals("ok", e.registry.invoke("c4", "comfy_get_status", "{}", ctx).status)
+        val over = e.registry.invoke("c5", "list_skills", "{}", ctx)
+        assertEquals("TOOL_BUDGET_EXCEEDED", over.errorCode)
+        assertTrue(
+            over.error!!.contains("再发一条消息") || over.error!!.contains("选择题"),
+            "额度用尽时要说清怎么接着做：${over.error}",
+        )
+    }
+
+    @Test
+    fun `额度用尽之后 用户回答一次提问就重置这一窗的预算`() = runBlocking {
+        val e = env()
+        val tight = ToolPolicy(e.root, ToolPolicyConfig(maxCallsPerRun = 2))
+        val ctx = e.ctx(tight)
+        assertEquals("ok", e.registry.invoke("c1", "list_skills", "{}", ctx).status)
+        assertEquals("ok", e.registry.invoke("c2", "list_skills", "{}", ctx).status)
+        assertEquals(
+            "TOOL_BUDGET_EXCEEDED",
+            e.registry.invoke("c3", "list_skills", "{}", ctx).errorCode,
+        )
+
+        // 这就是"完成一次选择"：提问被回答
+        assertTrue(ctx.resetBudget(), "还有重置次数时应当成功")
+        assertEquals(0, ctx.callsInWindow)
+        assertEquals("ok", e.registry.invoke("c4", "list_skills", "{}", ctx).status)
+
+        // 重置次数有上限：用尽之后不再白送额度（如实说不，而不是假装还有）
+        repeat(ToolContext.MAX_BUDGET_RESETS) { ctx.resetBudget() }
+        assertFalse(ctx.resetBudget(), "重置次数用尽后必须返回 false")
+        // 绝对调用总数只增不减（不受重置影响的那条天花板）
+        assertTrue(ctx.calls >= 3)
+    }
+
+    @Test
+    fun `提问工具自己不消耗额度 也不需要批准`() {
+        val e = env()
+        val info = e.registry.info(e.policy).associateBy { it.name }["ask_user_question"]!!
+        assertEquals("allow", info.access)
     }
 
     @Test

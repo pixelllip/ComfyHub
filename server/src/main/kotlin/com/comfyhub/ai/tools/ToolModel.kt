@@ -79,6 +79,30 @@ class ToolContext(
      */
     var webQueries: Int = 0,
     /**
+     * **可重置的调用预算**（用户建议 2026-09-22：每完成一次选择就重置工具预算）。
+     *
+     * 为什么要有它：定稿前的每一步都要问用户（用哪张参考图 / 装不装这个模型 / 摘不摘这条分支），
+     * 用户答一次就该有一次全新的额度 —— 否则他会看到"我刚回答完你的问题，你就说预算用尽、
+     * 让我再发一条消息"（2026-09-21 的对话里连着撞了三次，见 `bug-and-suggestion-9.22.md` 建议 ③）。
+     *
+     * 与 [calls] 的关系：[calls] 是**整个 Run 的绝对总数**（只增不减，硬天花板见
+     * `ToolRegistry.ABSOLUTE_CALL_CAP`）；这里是**当前这一窗**的用量，
+     * 用户回答提问时归零（[resetBudget]）。`ask_user_question` **自己不占额度**
+     * —— 它只把人拉回环路，不是往世界上做事；联网 / ComfyUI 那两个专项预算同理放在窗里。
+     */
+    var callsInWindow: Int = 0,
+    /** 当前这一窗里查 ComfyUI 的次数（用户回答提问后同样归零）。 */
+    var comfyInWindow: Int = 0,
+    /** 当前这一窗里联网搜索的次数（同上）。 */
+    var webInWindow: Int = 0,
+    /**
+     * 本 Run 里**因为用户回答了提问**而重置过几次预算。
+     *
+     * 有上限（[MAX_BUDGET_RESETS]）：用户一直答就该一直给，但"一直答"不该变成一条
+     * 无限预算的旁路 —— 到顶之后不再重置，如实告诉用户"再发一条消息接着做"。
+     */
+    var budgetResets: Int = 0,
+    /**
      * 本次请求里是否带了图片附件（M3）。
      *
      * `comfy_check_inputs` 用它区分"这个图片输入必须问用户要"和"用户刚发了图、
@@ -103,7 +127,64 @@ class ToolContext(
      * `ask_user_question` 靠它把提问送到界面；测试里可以传一个只记下来不真发的实现。
      */
     val emit: ((String, JsonObject) -> Unit)? = null,
-)
+) {
+    /** 本 Run 还能不能再动一次工具（窗内额度与绝对天花板都没到）。 */
+    val hasCallsLeft: Boolean get() = callsInWindow < windowLimit && calls < ToolRegistry.ABSOLUTE_CALL_CAP
+
+    /**
+     * 当前这一窗的调用上限。测试里构造的 [ToolPolicy] 没有真配置时回落到出厂值。
+     */
+    private val windowLimit: Int
+        get() = policy.config.maxCallsPerRun.coerceAtLeast(1)
+
+    /**
+     * 记一次**真的执行了**的工具调用。
+     *
+     * 只在"过完预算检查 + 权限档检查 + 审批"之后调 —— 被拒、越界、工具自己报错
+     * 都不该消耗用户的额度（那些调用连世界都没碰到）。
+     */
+    fun spendCall(category: ToolCategory?) {
+        calls++
+        callsInWindow++
+        when (category) {
+            ToolCategory.COMFY -> {
+                comfyQueries++
+                comfyInWindow++
+            }
+            ToolCategory.WEB -> {
+                webQueries++
+                webInWindow++
+            }
+            else -> Unit
+        }
+    }
+
+    /**
+     * 用户刚刚**回答了提问**：把这一窗的预算归零，让他接着把这件事做完
+     * （用户建议 ③ 的原话："每次完成选择后，重置工具预算"）。
+     *
+     * 返回 false = 重置次数已经用尽（[MAX_BUDGET_RESETS]），调用方要如实说明，
+     * 而不是假装额度又满了。提问工具本身不占额度，所以这里不会"重置完就欠一笔"。
+     */
+    fun resetBudget(): Boolean {
+        if (budgetResets >= MAX_BUDGET_RESETS) return false
+        budgetResets++
+        callsInWindow = 0
+        comfyInWindow = 0
+        webInWindow = 0
+        return true
+    }
+
+    companion object {
+        /**
+         * 一次 Run 里最多因"用户回答了提问"重置几次预算。
+         *
+         * 4 次的依据：问 4 次已经是一轮里非常啰嗦的对话了（正常一次提问就够），
+         * 再往上就该让用户自己说话、而不是无限续额度。
+         */
+        const val MAX_BUDGET_RESETS = 4
+    }
+}
 
 /** 工具执行结果。 */
 data class ToolOutput(

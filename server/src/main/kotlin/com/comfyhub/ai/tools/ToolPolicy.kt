@@ -43,10 +43,10 @@ data class ToolPolicyConfig(
      * 被显式 `deny` 的工具也照样不放宽（deny 的含义是"这个工具不该用它"）。
      */
     val permissionMode: String = PERMISSION_ASK,
-    /** 单次回复最多工具轮数（AIH-036 建议 8） */
-    val maxToolSteps: Int = 8,
-    /** 单个 Run 最多工具调用次数 */
-    val maxCallsPerRun: Int = 16,
+    /** 单次回复最多工具轮数（AIH-036 建议 8 → 2026-09-22 上调到 16，理由见 [LEGACY_MAX_TOOL_STEPS]） */
+    val maxToolSteps: Int = DEFAULT_MAX_TOOL_STEPS,
+    /** 单个 Run 最多工具调用次数（可被"用户回答提问"重置，见 [ToolContext.resetBudget]） */
+    val maxCallsPerRun: Int = DEFAULT_MAX_CALLS_PER_RUN,
     /**
      * 单个 Run 最多**主动查询 ComfyUI** 的次数（默认见 [DEFAULT_MAX_COMFY_QUERIES_PER_RUN]）。
      *
@@ -87,6 +87,31 @@ data class ToolPolicyConfig(
 
         /** 永远不可写：本项目的运行期数据、源码控制与依赖目录 */
         val FORBIDDEN_SEGMENTS = setOf(".git", ".mysql", ".run", "node_modules")
+
+        /**
+         * 单次回复的工具轮数上限（**出厂值**，用户可在设置里改）。
+         *
+         * 8 → **16**（2026-09-22，用户建议 ③）：MCP 接进来之后"一轮完整的事"明显变长
+         * —— 读工作流 → 查节点契约 → 查本机模型 → 摘分支 → 补线 → 提交，
+         * 光这一步就是 6~8 个工具轮。2026-09-21 的三条真实对话都在第 8 轮被掐断，
+         * 用户看到的是"已达到本次回复的工具轮数上限 8，再发一条消息它就能接着做"
+         * （`bug-and-suggestion-9.22.md` 建议 ③ 的现场）。
+         */
+        const val DEFAULT_MAX_TOOL_STEPS = 16
+
+        /** 旧出厂值（8 轮 / 16 次）：只用来识别"用户从没改过的库"，见 [bumpLegacyBudgets]。 */
+        const val LEGACY_MAX_TOOL_STEPS = 8
+        const val LEGACY_MAX_CALLS_PER_RUN = 16
+
+        /**
+         * 单个 Run 的工具调用次数上限（**出厂值**，用户可在设置里改）。
+         *
+         * 16 → **48**（同一条建议）：这一项是**可重置**的（用户每回答一次提问就归零，
+         * 见 [ToolContext.resetBudget]），所以它的含义是"一次选择之后能做多少事"，
+         * 而不是"整个 Run 只能做多少事"。绝对天花板另有其人
+         * （`ToolRegistry.ABSOLUTE_CALL_CAP`），那条不受重置影响。
+         */
+        const val DEFAULT_MAX_CALLS_PER_RUN = 48
 
         /**
          * 出厂默认：一次回复里最多主动查 ComfyUI 几次。
@@ -296,6 +321,49 @@ class ToolPolicy(
 
         fun save(config: ToolPolicyConfig) {
             SettingsRepo.put(ToolPolicyConfig.KEY, AppJson.encodeToString(ToolPolicyConfig.serializer(), config))
+        }
+
+        /**
+         * 一次性把**库里冻着的旧出厂值**抬到新出厂值（2026-09-22）。
+         *
+         * 为什么需要它：[save] 会把整份配置写进 `app_settings`，所以用户在 09-22 之前
+         * 哪怕只是切过一次权限档，库里就冻着 `maxToolSteps: 8 / maxCallsPerRun: 16`。
+         * 这两项**是用户可改的**，所以 [normalizeStored] 不许覆盖（那会把用户自己调的
+         * 数字也一起改掉）—— 于是只能在这里**按值识别**：只有恰好等于旧出厂值时
+         * （说明他从没改过、就是当年那份默认值）才抬上去。
+         *
+         * 幂等：抬过之后值不再是旧出厂值，再启动不会重复处理。返回是否真的改了。
+         */
+        fun bumpLegacyBudgets(): Boolean {
+            val raw = runCatching { SettingsRepo.get(ToolPolicyConfig.KEY) }.getOrNull() ?: return false
+            val config = runCatching { AppJson.decodeFromString(ToolPolicyConfig.serializer(), raw) }
+                .getOrNull() ?: return false
+            val bumped = bumpedFromLegacy(config) ?: return false
+            LOG.info(
+                "工具预算按新出厂值抬起：轮数 {} → {}，调用数 {} → {}",
+                config.maxToolSteps, bumped.maxToolSteps, config.maxCallsPerRun, bumped.maxCallsPerRun,
+            )
+            save(bumped)
+            return true
+        }
+
+        /**
+         * [bumpLegacyBudgets] 的**纯函数**部分：只有恰好等于旧出厂值的那一项才抬，
+         * 返回 null = 两项都不用动。抽出来是为了能不起数据库地钉住判据。
+         */
+        fun bumpedFromLegacy(config: ToolPolicyConfig): ToolPolicyConfig? {
+            val steps = if (config.maxToolSteps == ToolPolicyConfig.LEGACY_MAX_TOOL_STEPS) {
+                ToolPolicyConfig.DEFAULT_MAX_TOOL_STEPS
+            } else {
+                config.maxToolSteps
+            }
+            val calls = if (config.maxCallsPerRun == ToolPolicyConfig.LEGACY_MAX_CALLS_PER_RUN) {
+                ToolPolicyConfig.DEFAULT_MAX_CALLS_PER_RUN
+            } else {
+                config.maxCallsPerRun
+            }
+            if (steps == config.maxToolSteps && calls == config.maxCallsPerRun) return null
+            return config.copy(maxToolSteps = steps, maxCallsPerRun = calls)
         }
     }
 }

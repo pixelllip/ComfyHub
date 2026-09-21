@@ -204,6 +204,36 @@ class ToolRegistry(
         const val MAX_RESULT_CHARS = 32_000
         /** 工具卡上显示的摘要长度 */
         const val MAX_PREVIEW_CHARS = 400
+
+        /**
+         * 一次 Run 的**绝对**工具调用天花板（用户建议 ③，2026-09-22）。
+         *
+         * `maxCallsPerRun` 是"当前这一窗"的额度，用户每回答一次提问就归零
+         * （[ToolContext.resetBudget]，最多 [ToolContext.MAX_BUDGET_RESETS] 次）。
+         * 这条是**不受重置影响**的那条线：无论用户答多少次，一个 Run 最多就这么多次。
+         *
+         * 200 的依据：实测最长的成功 Run 是 18 次调用（MCP 接入之前）。
+         * 四窗满额（4 × 48）也才 192，所以它只在"真的失控"时才拦得住，
+         * 正常使用一辈子碰不到 —— 这正是它该有的样子（拦外挂，不拦用户）。
+         */
+        const val ABSOLUTE_CALL_CAP = 200
+
+        /**
+         * 额度用尽时回给模型的正文。
+         *
+         * **措辞必须与"轮数上限"那句分开**（HarnessRunner 里那句是"工具轮数"）：
+         * 2026-09-21 的现场就是用户看到"已达上限 8"却以为还有 16 次可调，
+         * 分不清是哪条线拦住了自己。
+         */
+        fun budgetExceededNote(limit: Int, resettable: Boolean): String =
+            if (resettable) {
+                "本次回复的工具调用次数已达上限（$limit 次）。" +
+                    "如果还差最后一步，向用户说明你要做什么、让他再发一条消息即可（" +
+                    "或先提一个选择题，用户答完额度会重置）。"
+            } else {
+                "本次回复的工具调用总数已达硬上限（$ABSOLUTE_CALL_CAP 次，重置额度也不再放宽）；" +
+                    "请基于已有信息作答，并把没做完的部分如实说清楚。"
+            }
     }
 
     private fun schema(json: String): JsonObject =
@@ -1121,12 +1151,21 @@ class ToolRegistry(
             // 等不到（超时 / 用户取消 / Run 结束）时返回 null，下面如实告诉模型"没答"。
             val answer = gate.await(questionId)
             askRegistry?.clear(questionId)
+            // **用户答完 = 重置这一窗的工具预算**（用户建议 ③，2026-09-22）：
+            // "每次完成选择后，重置工具预算"。他刚做了一个决定，接下来那几步
+            // （按这个选择去改图 / 装模型 / 提交）不该因为前面的问询而额度不足。
+            // 只有"真的答了"才算选择：没答（超时 / 关界面）不重置，否则等于白送额度。
+            val budgetReset = answer != null && ctx.resetBudget()
             val json = buildJsonObject {
                 put("questionId", questionId)
                 put("question", question)
                 put("answered", answer != null)
                 put("answer", answer?.answer)
                 answer?.optionIndex?.let { put("optionIndex", it) }
+                // 预算状态一起回给模型：它据此知道"还能接着做"，不用自己去猜
+                put("callsUsedInWindow", ctx.callsInWindow)
+                put("budgetResetsUsed", ctx.budgetResets)
+                put("budgetReset", budgetReset)
                 // 提问卡本身也要落库（用户建议 ⑥）：重开 App 之后那张卡要能照原样显示
                 // —— 问了什么、选项是什么、用户答了哪个。没有它，历史里就只剩一段
                 // 给模型看的正文，界面画不出卡片（会变成一张空白卡）。
@@ -1144,7 +1183,16 @@ class ToolRegistry(
                             "并如实说明还缺什么；**不要**假装他答过了，也**不要**原样再问一遍。",
                     )
                 } else {
-                    put("hint", "用户已经回答了，按这个答案接着做，不要重复提问。")
+                    put(
+                        "hint",
+                        "用户已经回答了，按这个答案接着做，不要重复提问。" +
+                            if (budgetReset) {
+                                "（你刚完成一次选择，本次回复的工具调用额度**已重置**，" +
+                                    "接着把这件事做完就行，不用让用户再发一条消息。）"
+                            } else {
+                                ""
+                            },
+                    )
                 }
             }
             val text = if (answer == null) {
@@ -1280,19 +1328,25 @@ class ToolRegistry(
             "TOOL_NOT_FOUND", "没有名为「$name」的工具；可用工具见系统提示里的清单",
         )
 
-        if (ctx.calls >= ctx.policy.config.maxCallsPerRun) {
+        // 预算检查（用户建议 ③ 重写，2026-09-22）：
+        //  · 只有"真的执行了"的调用才消耗额度 —— 被用户拒绝、越界、工具自己报错
+        //    都不算（那些调用连世界都没碰到，却让用户看到"额度用完了"）；
+        //  · 所以这几条在**审批之前**只做"还有没有额度"的预检，扣费挪到审批通过之后。
+        if (!ctx.hasCallsLeft) {
             return failure(
                 ctx.runId, callId, name, argumentsJson, "denied", started,
                 "TOOL_BUDGET_EXCEEDED",
-                "本次回复的工具调用次数已达上限（${ctx.policy.config.maxCallsPerRun}）；请基于已有信息作答",
+                budgetExceededNote(
+                    limit = ctx.policy.config.maxCallsPerRun,
+                    resettable = ctx.calls < ABSOLUTE_CALL_CAP,
+                ),
             )
         }
-        ctx.calls++
 
         // AIH-036：不许把 ComfyUI 当轮询器 —— 一次回复的查询次数有上限
         // （数字的唯一真源是 ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN）
         if (tool.category == ToolCategory.COMFY &&
-            ctx.comfyQueries >= ctx.policy.config.maxComfyQueriesPerRun
+            ctx.comfyInWindow >= ctx.policy.config.maxComfyQueriesPerRun
         ) {
             return failure(
                 ctx.runId, callId, name, argumentsJson, "not_required", started,
@@ -1301,12 +1355,11 @@ class ToolRegistry(
                     "请基于已有信息作答，或让用户稍后再问",
             )
         }
-        if (tool.category == ToolCategory.COMFY) ctx.comfyQueries++
 
         // 联网搜索同样有独立预算：每搜一次都是一次真实的外部请求 + 一份要烧 token 的正文，
         // "再搜一下确认"很容易刹不住车（数字真源在 ToolPolicyConfig）
         if (tool.category == ToolCategory.WEB &&
-            ctx.webQueries >= ctx.policy.config.maxWebQueriesPerRun
+            ctx.webInWindow >= ctx.policy.config.maxWebQueriesPerRun
         ) {
             return failure(
                 ctx.runId, callId, name, argumentsJson, "not_required", started,
@@ -1315,7 +1368,6 @@ class ToolRegistry(
                     "请基于已有的搜索结果作答，需要更多资料时如实告诉用户",
             )
         }
-        if (tool.category == ToolCategory.WEB) ctx.webQueries++
 
         val access = ctx.policy.accessFor(tool)
         if (access == ToolAccess.DENY) {
@@ -1347,6 +1399,10 @@ class ToolRegistry(
 
         return try {
             val output = tool.handler(args, ctx)
+            // **只有真跑成功**才消耗额度（用户建议 ③）：
+            // 越界被拒、参数不对、ComfyUI 不在线、用户点拒绝 —— 这些调用连世界都没碰到，
+            // 却让用户看到"额度用完了"，正是他抱怨的那种"什么都没干就说预算不足"。
+            ctx.spendCall(tool.category)
             val elapsed = System.currentTimeMillis() - started
             val (content, truncated) = truncate(output.content)
             val meta = output.meta?.let {

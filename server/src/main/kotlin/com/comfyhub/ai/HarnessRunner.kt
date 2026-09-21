@@ -425,6 +425,8 @@ class HarnessRunner(
             val reasoningRequest = buildReasoningRequest(run)
             val maxSteps = policy?.config?.maxToolSteps ?: 8
             var step = 0
+            // 工具额度用尽（用户建议 ③）：下一轮只让模型收口，不再执行工具
+            var budgetExhausted = false
             var finishReason: String? = null
 
             // "接着写"（用户建议 ②）用：续写次数（上限见 [MAX_CONTINUATIONS]）与去重基准
@@ -612,6 +614,22 @@ class HarnessRunner(
                     parts.flushInflight()
 
                     val drafts = round.toolCalls.drafts().map { ToolDraft(it.callId, it.name, it.arguments) }
+                    // 工具额度用尽（用户建议 ③）：这一轮的调用**不执行**，但照样把工具清单
+                    // 给上游（上面 `roundTools` 那段解释了为什么不能回空清单），于是模型
+                    // 会收到一条如实的 TOOL_BUDGET_EXCEEDED 工具结果并自己收口。
+                    // 下一轮就 break，不把同一句"额度用尽"重复念给用户听。
+                    if (budgetExhausted) {
+                        if (drafts.isNotEmpty()) {
+                            val note = "\n\n（" + ToolRegistry.budgetExceededNote(
+                                limit = (toolCtx?.policy ?: policy!!).config.maxCallsPerRun,
+                                resettable = (toolCtx?.calls ?: 0) < ToolRegistry.ABSOLUTE_CALL_CAP,
+                            ) + "）"
+                            text.append(note)
+                            emit(RunEventType.TEXT_DELTA, payload("messageId" to assistantId, "text" to note))
+                            parts.add("text", note)
+                        }
+                        break
+                    }
                     if (drafts.isEmpty() || outOfSteps || toolSpecs.isEmpty() || toolCtx == null) {
                         if (drafts.isNotEmpty() && outOfSteps) {
                             // 到轮数上限还在要工具：**不执行**，但如实告诉用户发生了什么
@@ -756,6 +774,9 @@ class HarnessRunner(
 
                     turns += ChatTurn("tool", record.content, toolCallId = draft.callId)
                     }
+
+                    // 这一轮把额度用光了（且用户没再答题重置）→ 下一轮只收尾、不再执行工具
+                    if (!toolCtx.hasCallsLeft) budgetExhausted = true
 
                     step++
                     if (selfJob?.isActive == false) throw InterruptedException("Run 已取消")
