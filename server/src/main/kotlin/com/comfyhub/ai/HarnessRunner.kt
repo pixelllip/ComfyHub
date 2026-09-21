@@ -877,8 +877,7 @@ class HarnessRunner(
      * 协议适配器实现了这种传输、以及本次请求的字节预算还装得下。**任何一道没过都不静默丢弃**，
      * 而是在那一轮正文后面附一句"这些附件没随本次请求发送"（AIH-030 的诚实原则）。
      */
-    private fun turnsFromHistory(
-        history: List<AiMessageDto>,
+    private fun turnsFromHistory(        history: List<AiMessageDto>,
         model: AiModelDto?,
         api: AiApiRef,
     ): List<ChatTurn> {
@@ -988,7 +987,7 @@ class HarnessRunner(
                 else -> Unit
             }
         }
-        return out
+        return ToolCallHistory.repairOrphans(out)
     }
 
     /**
