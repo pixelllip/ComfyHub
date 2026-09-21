@@ -1024,15 +1024,17 @@ class ToolRegistry(
                 "\n什么时候用：缺了某条信息就**做不对**（用哪张参考图、哪个模型、哪份工作流、" +
                 "成品要什么尺寸 / 给谁看），而只读工具又查不到时。" +
                 "\n好处：用户答完，你**在同一个回复里接着做**，不用他重新发一条消息、你也不用重头再来。" +
-                "\n怎么写：`question` 一句话问清要决定的事；`options` 给 2~4 个**具体可选项**" +
-                "（界面会画成按钮，用户点一下就算答了）；用户也可能自己敲一段。" +
+                "\n怎么写：`question` 一句话问清要决定的事；`options` 给 2~5 个**具体可选项**" +
+                "（界面会画成按钮，用户点一下就算答了，**第一个放你推荐的那个**）；" +
+                "界面还会在选项后面**固定**补一个「自己输入答案」，所以永远不用你留" +
+                "\"其他\"这种选项。" +
                 "\n几条纪律：① **能自己查的不要问**（ComfyUI 状态、库里有什么工作流、文件在不在，" +
                 "只读工具一查就知道）；② 一次只问**一个**决定，别把三个问题塞进一句话；" +
                 "③ 同一个问题不要问第二遍；④ 用户没回答（关掉界面 / 超时）时，回答会写明" +
                 "\"用户还没有回答\"，那时**基于已有信息给出你能做的那部分**，并说明缺什么，" +
                 "不要假装他答了。",
             parameters = schema(
-                """{"type":"object","properties":{"question":{"type":"string","description":"要问用户的那一句话（说清要决定什么，别把多个问题塞一起）"},"options":{"type":"array","items":{"type":"string"},"description":"可选：2~4 个具体选项，界面会画成按钮让用户点选"},"header":{"type":"string","description":"可选：这张提问卡的标题（例如「参考图」「输出尺寸」）"}},"required":["question"],"additionalProperties":false}"""
+                """{"type":"object","properties":{"question":{"type":"string","description":"要问用户的那一句话（说清要决定什么，别把多个问题塞一起）"},"options":{"type":"array","items":{"type":"string"},"description":"可选：2~5 个具体选项（第一个放你推荐的），界面会画成按钮让用户点选；界面另外固定补一个「自己输入答案」，不用你留"},"header":{"type":"string","description":"可选：这张提问卡的标题（例如「参考图」「输出尺寸」）"}},"required":["question"],"additionalProperties":false}"""
             ),
             category = ToolCategory.ASK,
             mutating = false,
@@ -1062,7 +1064,8 @@ class ToolRegistry(
                 .orEmpty()
                 .mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim() }
                 .filter { it.isNotEmpty() }
-                .take(4)
+                // 上限与描述一致（5）：多出来的丢掉，界面固定还会再补一条「自己输入答案」
+                .take(5)
             // 有选项 = 允许"点一下"；但**永远也允许自己敲**（选项不一定对得上他的需求）
             val record = PendingQuestion(
                 questionId = questionId,

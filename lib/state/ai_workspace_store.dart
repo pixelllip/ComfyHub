@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show FocusNode;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/ai_api_client.dart';
@@ -240,6 +241,47 @@ class AiWorkspaceStore extends ChangeNotifier {
     return null;
   }
 
+
+  // -----------------------------------------------------------------------
+  //  「AI 正在等用户回答」的那条提问（用户 bug 2026-09-21）
+  // -----------------------------------------------------------------------
+
+  /// 提问接管输入区时那个"自己输入答案"文本框的焦点。
+  ///
+  /// 放在 Store 上是为了让**气泡里的提问卡**能说"去下面那个框里打字"：
+  /// 卡片与输入区隔着好几层组件，回调传下去会污染一大串构造参数，
+  /// 而焦点本身是"这一轮提问"的状态，本来就属于 Store。
+  final FocusNode pendingQuestionFocus = FocusNode(debugLabel: 'ask-user-question');
+
+  /// **当前正等着用户回答的那条提问**（没有就返回 null）。
+  ///
+  /// 输入区靠它决定"是被提问接管，还是普通输入框"（用户 bug 2026-09-21：
+  /// "在调用 ask_user_question 时，将原来聊天详情下部的模块替换（输入框等）"）。
+  ///
+  /// "还在等"的判据 = 有提问 && 还没 `answered`。**不看 Run 状态**：
+  /// 提问闸门是挂在 Run 里的（Run 还没结束），而 `sending` 只表示这次 Run 活着。
+  AiQuestion? get pendingQuestion {
+    AiQuestion? best;
+    void consider(AiToolCallState call) {
+      final q = call.question;
+      if (q == null || q.answered) return;
+      // 每轮只可能有一条在等（后端 `AskRegistry.pendingFor` 同语义）；取最后收到的那条。
+      best = q;
+    }
+
+    for (final list in _liveToolCalls.values) {
+      for (final call in list) {
+        if (call.name == 'ask_user_question') consider(call);
+      }
+    }
+    if (best != null) return best;
+    for (final m in messages) {
+      for (final call in AiToolCallState.listFromParts(m.parts)) {
+        if (call.name == 'ask_user_question') consider(call);
+      }
+    }
+    return null;
+  }
 
   // -----------------------------------------------------------------------
   //  流式期间的刷新节流（用户 bug：聊天快速滑动 / 展开流式思考时卡顿）
@@ -632,6 +674,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     // 攒着的流式通知定时器要一起收掉，否则页面都销毁了还会被回调
     _streamFlush?.cancel();
     _streamFlush = null;
+    pendingQuestionFocus.dispose();
     super.dispose();
   }
 
@@ -697,7 +740,7 @@ class AiWorkspaceStore extends ChangeNotifier {
         // 提问已经结束（超时 / Run 停了）：如实说，不能假装收到
         return (ok: false, message: '这条提问已经结束了（超时或本次回答已停止），这次回答没有被采纳。');
       }
-      // 本地立刻切成"已回答"：不等 SSE 回来（它也会来，但用户点完就该有反馈）
+      // 本地立刻切成"已回答"：不等 SSE 回来（它也会来，但用户点完就该有反馈）。
       _patchToolCall(
         questionId,
         (call) => call.copyWith(

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -441,12 +443,23 @@ class _Thread extends StatelessWidget {
             ],
           ),
         ),
-        _Composer(
-          store: store,
-          controller: input,
-          focusNode: inputFocus,
-          onSubmit: (text) => onSubmitted(store, text),
-        ),
+        // 输入区**被提问接管**（用户 bug 2026-09-21）：AI 正在等用户回答时，
+        // 底下这块整个换成提问卡（选项 + 自己输入 + 跳过），而不是在普通输入框
+        // 上面再摞一张卡 —— 那样用户会不知道"该往哪儿打字"。
+        // 答完（或跳过）`pendingQuestion` 变 null，普通输入框自动回来。
+        if (store.pendingQuestion case final question?)
+          _AskComposer(
+            store: store,
+            question: question,
+            onSubmit: (text) => onSubmitted(store, text),
+          )
+        else
+          _Composer(
+            store: store,
+            controller: input,
+            focusNode: inputFocus,
+            onSubmit: (text) => onSubmitted(store, text),
+          ),
       ],
     );
   }
@@ -906,6 +919,8 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
         onAnswerQuestion: (questionId, {int? optionIndex, String? text}) async =>
             (await store.answerQuestion(questionId, optionIndex: optionIndex, text: text)).ok,
         onSkipQuestion: (questionId) async => (await store.skipQuestion(questionId)).ok,
+        // 卡片里"自己输入答案"→ 焦点交给底部被接管的那个答案框（用户 bug 2026-09-21）
+        onFocusAskAnswer: () => store.pendingQuestionFocus.requestFocus(),
         // 用户消息里的附件块：按 id 现取缩略图 / 视频预览帧（M3）
         thumbUrlOf: store.thumbUrlFor,
         fileUrlOf: store.fileUrlFor,
@@ -973,6 +988,12 @@ class _MessageBubble extends StatelessWidget {
   final Future<bool> Function(String questionId, {int? optionIndex, String? text}) onAnswerQuestion;
   final Future<bool> Function(String questionId) onSkipQuestion;
 
+  /// "自己输入答案"：把焦点交给**底部被提问接管的那块输入区**（用户 bug 2026-09-21）。
+  ///
+  /// 气泡里的提问卡刻意**不带输入框**（否则一屏两个框，不知道往哪儿写），
+  /// 所以这一行只做一件事：把光标送到下面那个唯一的答案框里。
+  final VoidCallback onFocusAskAnswer;
+
   /// 附件 id → 缩略图 / 预览帧地址（M3）。
   final String? Function(String? attachmentId) thumbUrlOf;
   final String? Function(String? attachmentId) fileUrlOf;
@@ -1000,6 +1021,7 @@ class _MessageBubble extends StatelessWidget {
     required this.onDeny,
     required this.onAnswerQuestion,
     required this.onSkipQuestion,
+    required this.onFocusAskAnswer,
     required this.thumbUrlOf,
     required this.fileUrlOf,
     required this.mediaThumbUrlOf,
@@ -1096,10 +1118,11 @@ class _MessageBubble extends StatelessWidget {
         child: call.question != null
             ? _AskCard(
                 key: ValueKey('${message.id}-${call.callId}'),
-                call: call,
                 question: call.question!,
                 onAnswer: onAnswerQuestion,
                 onSkip: onSkipQuestion,
+                // "自己输入答案"那一行把焦点交给底部被接管的输入框（用户 bug 2026-09-21）
+                onFocusAnswer: onFocusAskAnswer,
               )
             : _ToolCallCard(
                 key: ValueKey('${message.id}-${call.callId}'),
@@ -1347,26 +1370,32 @@ class _MessageBubble extends StatelessWidget {
 //  提问卡（用户建议 ⑥，2026-09-20）
 // ---------------------------------------------------------------------------
 
-/// 一张提问卡：AI 当场问一句，用户在这里答，**回答不会结束当前对话**。
+/// 一张提问卡的**历史记录形态**：AI 当场问过什么、用户答了什么。
 ///
 /// 与 [_ToolCallCard] 刻意分开画：
 ///  - 工具卡是"我在干什么"（参数 + 结果预览，读的多、点的少）；
-///  - 提问卡是"我需要你告诉我一件事"（问题 + 可点的选项 + 输入框）。
+///  - 提问卡是"我需要你告诉我一件事"（问题 + 可点的选项）。
+///
+/// **不在这里放输入框**（用户 bug 2026-09-21）：AI 提问期间，输入区整块被
+/// [_AskComposer] 接管，打字的地方只有底下一个；卡片里再放一个只会让人不知道
+/// 该往哪儿写。所以这里是"问题 + 选项按钮"，要自己写的就点最后那行进底部输入框。
 ///
 /// 用户答完之后卡片**不消失**，而是切成"已回答"—— 历史里一眼能看出这一轮
 /// 是基于什么信息做的（与工具卡一样，都是这条回复的上下文）。
 class _AskCard extends StatefulWidget {
-  final AiToolCallState call;
   final AiQuestion question;
   final Future<bool> Function(String questionId, {int? optionIndex, String? text}) onAnswer;
   final Future<bool> Function(String questionId) onSkip;
 
+  /// "去下面那个输入框里写"：把焦点交给输入区被接管后的那个文本框。
+  final VoidCallback onFocusAnswer;
+
   const _AskCard({
     super.key,
-    required this.call,
     required this.question,
     required this.onAnswer,
     required this.onSkip,
+    required this.onFocusAnswer,
   });
 
   @override
@@ -1374,14 +1403,7 @@ class _AskCard extends StatefulWidget {
 }
 
 class _AskCardState extends State<_AskCard> {
-  final TextEditingController _controller = TextEditingController();
   bool _busy = false;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
 
   Future<void> _send({int? optionIndex, String? text}) async {
     if (_busy) return;
@@ -1406,11 +1428,10 @@ class _AskCardState extends State<_AskCard> {
     final q = widget.question;
     final answered = q.answered;
     final color = answered ? theme.colorScheme.primary : theme.colorScheme.tertiary;
-    final hasText = _controller.text.trim().isNotEmpty;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: color.withValues(alpha: 0.55)),
@@ -1468,62 +1489,32 @@ class _AskCardState extends State<_AskCard> {
               ],
             ),
           ] else ...[
-            if (q.options.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  for (var i = 0; i < q.options.length; i++)
-                    FilledButton.tonal(
-                      onPressed: _busy ? null : () => _send(optionIndex: i),
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        minimumSize: const Size(0, 32),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        textStyle: theme.textTheme.bodySmall,
-                      ),
-                      child: Text(q.options[i]),
-                    ),
-                ],
+            // 选项按钮就是"快捷作答"：点一下即答，不必再打字。
+            // 要自己写的那条路在底下的输入区（最后一行固定写着"自己输入答案"）。
+            for (var i = 0; i < q.options.length; i++) ...[
+              const SizedBox(height: 6),
+              _AskOptionRow(
+                index: i,
+                label: q.options[i],
+                selected: q.optionIndex == i,
+                enabled: !_busy,
+                onTap: () => _send(optionIndex: i),
               ),
             ],
-            if (q.allowFreeText) ...[
-              const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      enabled: !_busy,
-                      minLines: 1,
-                      maxLines: 3,
-                      onChanged: (_) => setState(() {}),
-                      onSubmitted: (v) {
-                        final t = v.trim();
-                        if (t.isNotEmpty) _send(text: t);
-                      },
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        hintText: '也可以直接打字回答…',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  FilledButton(
-                    onPressed: (_busy || !hasText) ? null : () => _send(text: _controller.text.trim()),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      minimumSize: const Size(0, 40),
-                    ),
-                    child: const Text('回答'),
-                  ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
+            // --- 最后一行：固定留给"自己决定" ---
+            // 用户 bug 2026-09-21 的原话就是"最末尾选项固定让用户决定（输入你的答案）"。
+            _AskOptionRow(
+              index: q.options.length,
+              label: '自己输入答案',
+              hint: '在下方输入框里写下你的答案',
+              selected: false,
+              enabled: !_busy,
+              trailing: Icon(Icons.keyboard_alt_outlined,
+                  size: 15, color: theme.colorScheme.outline),
+              onTap: widget.onFocusAnswer,
+            ),
+            const SizedBox(height: 2),
             Align(
               alignment: Alignment.centerRight,
               child: TextButton(
@@ -1544,7 +1535,379 @@ class _AskCardState extends State<_AskCard> {
   }
 }
 
+/// 提问卡 / 提问输入区里的一行选项。
+///
+/// 抽出来是为了两处（气泡里的卡片、底部被接管的输入区）**长得一样**：
+/// 序号徽标 + 标签，点一下即答；最后一行固定是"自己输入答案"。
+class _AskOptionRow extends StatelessWidget {
+  final int index;
+  final String label;
+  final String? hint;
+  final bool selected;
+  final bool enabled;
+  final Widget? trailing;
+  final VoidCallback onTap;
+
+  const _AskOptionRow({
+    required this.index,
+    required this.label,
+    this.hint,
+    this.selected = false,
+    this.enabled = true,
+    this.trailing,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = selected ? theme.colorScheme.primary : theme.colorScheme.outline;
+    return Opacity(
+      opacity: enabled ? 1 : 0.5,
+      child: Material(
+        // 底色必须由 Material 给（用 Container 的 decoration 会盖掉水波纹，
+        // Flutter 会直接抛断言，见 AGENTS.md 第 6 节）
+        color: selected
+            ? color.withValues(alpha: 0.10)
+            : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(
+            color: selected ? color.withValues(alpha: 0.6) : theme.dividerColor,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: enabled ? onTap : null,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 10, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 20,
+                  height: 20,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '${index + 1}',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label, style: theme.textTheme.bodyMedium),
+                      if (hint != null)
+                        Text(
+                          hint!,
+                          style: theme.textTheme.labelSmall
+                              ?.copyWith(color: theme.colorScheme.outline),
+                        ),
+                    ],
+                  ),
+                ),
+                if (trailing != null) ...[const SizedBox(width: 6), trailing!],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
+//  提问输入区（用户 bug 2026-09-21：AI 提问时**接管**聊天下部的输入模块）
+// ---------------------------------------------------------------------------
+
+/// AI 提问期间**替换掉普通输入框**的那一块。
+///
+/// 参考 DeepSeek Harness 的做法（`dsh-client-ui-user-questions` 的 composer takeover）：
+/// 提问时编辑器整块变成答题卡 —— 选项点一下就答，要自己写的写在最后那一行，
+/// 底下给"跳过 / 停止"。它是**唯一的**作答入口，所以不会出现
+/// "气泡里一个输入框、底下又一个输入框，不知道往哪儿写"。
+///
+/// 与气泡里那张提问卡的分工：
+///  · 卡片 = 记录（问过什么、答了什么，跟着这条回复走）；
+///  · 这里 = 作答（现在就要做的决定，问完自动让位给普通输入框）。
+class _AskComposer extends StatefulWidget {
+  final AiWorkspaceStore store;
+  final AiQuestion question;
+
+  /// 答完之后把这句当普通消息发出去（可选题外补充）；返回是否真的发出去了。
+  final Future<void> Function(String text) onSubmit;
+
+  const _AskComposer({
+    required this.store,
+    required this.question,
+    required this.onSubmit,
+  });
+
+  @override
+  State<_AskComposer> createState() => _AskComposerState();
+}
+
+class _AskComposerState extends State<_AskComposer> {
+  final TextEditingController _controller = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _answer({int? optionIndex, String? text}) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final r = await widget.store.answerQuestion(
+      widget.question.questionId,
+      optionIndex: optionIndex,
+      text: text,
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (!r.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r.message)));
+      return;
+    }
+    _controller.clear();
+    widget.store.pendingQuestionFocus.unfocus();
+  }
+
+  Future<void> _skip() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final r = await widget.store.skipQuestion(widget.question.questionId);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (!r.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r.message)));
+    }
+  }
+
+  Future<void> _submitTyped() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty || _busy) return;
+    await _answer(text: text);
+  }
+
+  /// Enter 直接提交，Shift+Enter 换行。
+  ///
+  /// 必须拦在**文本字段外面**：多行 `TextField` 自己没有"Enter 提交"这个动作
+  /// （`onSubmitted` 在 `maxLines > 1` 时根本不会触发），而用户对答题框的直觉
+  /// 就是"打完按回车发出去"（DSH 的提问框也是这个规矩）。
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (!isEnter) return KeyEventResult.ignored;
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+    if (shift) return KeyEventResult.ignored; // Shift+Enter：交给文本框换行
+    unawaited(_submitTyped());
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final store = widget.store;
+    final q = widget.question;
+    final hasText = _controller.text.trim().isNotEmpty;
+    // "自己输入答案"那一行本身就是个输入框：点它 = 把焦点给它。
+    final focus = store.pendingQuestionFocus;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(top: BorderSide(color: theme.dividerColor)),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (store.notice != null)
+            _Banner(text: store.notice!, icon: Icons.info_outline, onClose: store.clearNotice),
+          if (store.error != null) _Banner(text: store.error!, icon: Icons.error_outline),
+          Container(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: theme.colorScheme.tertiary.withValues(alpha: 0.55)),
+              color: theme.colorScheme.surface.withValues(alpha: 0.6),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.help_outline, size: 15, color: theme.colorScheme.tertiary),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        q.header?.isNotEmpty == true ? q.header! : 'AI 想确认一件事',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelMedium
+                            ?.copyWith(color: theme.colorScheme.tertiary),
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '等你回答',
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: theme.colorScheme.tertiary),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(q.question, style: theme.textTheme.bodyMedium),
+                // 选项多 / 问题长的时候内部滚动，别把输入区顶到屏幕外
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 260),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (var i = 0; i < q.options.length; i++) ...[
+                          const SizedBox(height: 6),
+                          _AskOptionRow(
+                            index: i,
+                            label: q.options[i],
+                            selected: q.optionIndex == i,
+                            enabled: !_busy,
+                            onTap: () => _answer(optionIndex: i),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                // --- 最后一行：固定"自己输入答案"（用户 bug 2026-09-21）---
+                const SizedBox(height: 6),
+                _customAnswerRow(theme, focus, hasText),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          // 底行：左"跳过这个问题"，右"停止生成"。
+          // 两条退路都必须有：跳过让模型带着已有信息继续；停止则直接收掉这一轮。
+          Row(
+            children: [
+              TextButton(
+                onPressed: _busy ? null : _skip,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('跳过这个问题'),
+              ),
+              const Spacer(),
+              if (store.running)
+                TextButton.icon(
+                  onPressed: () => store.stop(),
+                  icon: const Icon(Icons.stop_circle_outlined, size: 16),
+                  label: const Text('停止生成'),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 32),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 最后一行：序号接着选项往下数，标签固定"自己输入答案"。
+  Widget _customAnswerRow(ThemeData theme, FocusNode focus, bool hasText) {
+    final outline = theme.colorScheme.outline;
+    return Material(
+      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(
+          color: focus.hasFocus ? theme.colorScheme.tertiary : theme.dividerColor,
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 20,
+              height: 20,
+              margin: const EdgeInsets.only(top: 6),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '${widget.question.options.length + 1}',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              // 焦点事件拦在文本框外面（见 [_onKey]：Enter 提交、Shift+Enter 换行）
+              child: Focus(
+                onKeyEvent: _onKey,
+                child: TextField(
+                  key: const Key('ask-answer-field'),
+                  controller: _controller,
+                  focusNode: focus,
+                  enabled: !_busy,
+                  minLines: 1,
+                  maxLines: 4,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    hintText: '自己输入答案（Enter 提交）',
+                    hintStyle: theme.textTheme.bodyMedium?.copyWith(color: outline),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: FilledButton(
+                key: const Key('ask-answer-submit'),
+                onPressed: (_busy || !hasText) ? null : () => unawaited(_submitTyped()),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  minimumSize: const Size(0, 36),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('回答'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 //  工具卡与思考（M4）
 // ---------------------------------------------------------------------------
 
