@@ -211,8 +211,12 @@ class _Fake {
 }
 
 /// 起一次 Run 并等到提问卡出现（事件流挂在提问上，Run 不会结束）。
-Future<AiWorkspaceStore> _openAsk(WidgetTester tester, _Fake fake) async {
-  tester.view.physicalSize = const Size(1400, 1200);
+Future<AiWorkspaceStore> _openAsk(
+  WidgetTester tester,
+  _Fake fake, {
+  Size size = const Size(1400, 1200),
+}) async {
+  tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
 
@@ -291,5 +295,15 @@ void main() {
 
     expect(skipped, [_questionId]);
     expect(store.pendingQuestion, isNull);
+  });
+
+  testWidgets('窄窗口下答题卡排得下：输入框与提交按钮都在，不溢出', (tester) async {
+    // 窗口窄到 360（App 的最小宽度是 320）：答题卡里的选项行 / 输入行 / 底行都要自己折，
+    // 不能横向溢出 —— 溢出在 `flutter test` 里会直接抛异常，这个用例就是那道闸。
+    await _openAsk(tester, _Fake(), size: const Size(360, 900));
+
+    expect(find.byKey(const Key('ask-answer-field')), findsOneWidget);
+    expect(find.byKey(const Key('ask-answer-submit')), findsOneWidget);
+    expect(find.text('跳过这个问题'), findsWidgets);
   });
 }
