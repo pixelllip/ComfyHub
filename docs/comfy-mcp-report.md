@@ -2,9 +2,36 @@
 
 > 缘起：`docs/bug and suggestion/bug-and-suggestion-9.21.md` 的建议 ④
 > ——「接入 comfy mcp，我们项目里和 mcp 重复的功能就可以删掉了」。
-> 这份文档是**结论 + 证据 + 可复现步骤**，不是实施方案。**代码一行未动**（用户 2026-09-21 定的：先看报告）。
+
+## ⚠ 最新决定（2026-09-21 晚，用户拍板，**以这一节为准**）
+
+**用户决定：接官方 comfy-mcp，用它的能力；它没捆绑 comfy-cli，我们就用脚本在启动时检测并下载。**
+（原话："但是官方mcp它覆盖的功能比我们更多更全，用它的。comfy没有自动捆绑 comfy mcp 下载，
+但是我们可以做脚本，在启动时运行脚本检测下载。"）
+
+下面第 1~5 节的"不整条接"，是当时**基于"要用户自己装 Python"这个前提**得出的；
+用户给出了这个前提的解法（脚本自动装配），所以结论随之改变：
+
+| 原来的顾虑 | 现在的处理 |
+| --- | --- |
+| 要 Python + comfy-cli，与发布包便携性冲突 | **`scripts\mcp-runtime.ps1` 把三样装进 `<根>\storage\ai\mcp`**（便携版 Python embeddable + pip 包），已实测跑通（见 §6） |
+| comfy-cli 要一个"它认的工作区" | 装配的最后一步 `comfy set-default <用户真实在用的 ComfyUI>`，目录判据复用 `comfy-path.ps1`（与后端同一套） |
+| 安全面更大（起进程 / 装节点 / 下模型） | 仍然**不把这些原样放给模型**：接进来之后按 §5 的"放行清单"逐项定权限档（默认 `deny` / `ask`），不是把 40 个工具全打开 |
+| 我们的 `comfy_submit` 删不掉（产物要入库） | 这条**依然成立**：画廊入库 / NSFW 标记 / 审批闸门是我们自己的链路，MCP 只把文件写进 ComfyUI 的 `output/`。所以保留的是**入库与审批**，让出的是**工作流执行与节点/模型查询**这一类 |
+
+**落地顺序**（每步一个提交）：
+1. ✅ MCP 运行时装配脚本 + `up` / `doctor` 接线 + ComfyUI Desktop 嵌套探测（提交 `8f0ca60`）
+2. ⬜ 后端 MCP stdio 客户端（`initialize` → `tools/list` → `tools/call`）
+3. ⬜ 工具注入与权限档：MCP 工具进 `ToolRegistry`，重复的 `comfy_*` 逐步让位
+4. ⬜ 安卓客户端预留：桌面 App 作为能力宿主，移动端只保留不依赖本地工作流的工具
+
+下面第 1~5 节保留原始查证过程与数据（仍然有效，尤其是 §3 的逐条对照与 §4 的坑）。
+
+---
+
+> 这份文档是**结论 + 证据 + 可复现步骤**，不是实施方案。
 >
-> 结论先说：**整条接入不划算，我们重复的功能删不掉；但官方 MCP 里有 5 项能力我们没有、值得用原生 HTTP 抄过来。**
+> 报告当时的结论：**整条接入不划算，我们重复的功能删不掉；但官方 MCP 里有 5 项能力我们没有、值得用原生 HTTP 抄过来。**
 > 下面每一条都给了出处，你可以自己核。
 
 ---
@@ -150,6 +177,32 @@
 3. **要保持跟踪**：官方 MCP 是 Comfy 明确的方向（云端 + 本地+mcp），
    那批 tool description 里的"盲区清单"是可以直接抄进我们工具说明的现成踩坑记录（§4.4）。
 4. 想**只是给自己用**（DSH 里跑 ComfyUI），那是配置的事，与本项目代码无关 —— 不需要改这个仓库一行。
+
+> ⚠ 上面这 4 条是**报告当时**的结论。用户在 2026-09-21 晚拍板改走"接入"，见卷首那一节。
+
+---
+
+## 6. 装配实测记录（2026-09-21，本机真跑，不是推断）
+
+落地方案见 `scripts\mcp-runtime.ps1`（文件头有完整说明）。这里只记**实测到的硬事实**，
+因为其中好几条官方文档没写、踩了才知道：
+
+| 事实 | 细节 |
+| --- | --- |
+| embeddable Python 能用 | `python-3.12.10-embed-amd64.zip`（10.6MB）解压后，要把 `python312._pth` 里的 `#import site` 打开、再补一行 `Lib\site-packages`，然后用官方 `get-pip.py` 装 pip —— 全程免安装、免管理员 |
+| **embeddable 版没有 venv 模块** | 所以不能建 venv，是"整包一个环境"。对我们反而好：跑哪个解释器是可预测的 |
+| 包能一起装上 | `comfy-cli` **1.20.0** + `comfy-mcp` **0.10.0** + `mcp` SDK **2.2.0**（comfy-mcp 需要 SDK **2.x**，1.x 直接 import 失败）。装完约 **300MB** |
+| **清华 TUNA 源装不上 comfy-mcp** | 元数据能读，**wheel 返回 HTTP 403**。阿里云可用，官方 pypi.org 可用。所以源顺序是 阿里云 → 清华 → pypi.org |
+| comfy-cli 必须设工作区 | 状态在 `%LOCALAPPDATA%\comfy-cli\config.ini`。**不设的话它默认报 `%USERPROFILE%\Documents\comfy\ComfyUI`**（目录不存在也照样这么报），于是 MCP 那边 `run_workflow` / `search_models` / `nodes` 全是错的 |
+| ComfyUI Desktop 新版的嵌套路径 | 本机真实安装是 `D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`（有 `main.py` + `comfy/`）。**只在顶层翻一层永远找不到** —— `comfy-path.ps1` 与 `ComfyLocator.kt` **两边都补了这条判据**（AGENTS §10.1 要求一致） |
+| MCP 握手已验证 | spawn `comfy-mcp.exe` → `initialize`（协议版本 `2024-11-05`）→ `notifications/initialized` → `tools/list`，**实测返回 39 个工具**（带完整 `inputSchema`，无 `outputSchema`）。协议形状可以照这个写 Kotlin 客户端 |
+| comfy-mcp 启动慢 | `initialize` 到 `tools/list` 之间它要跑 `comfy --version` 等探测，首次约几秒；客户端要有超时与"进程死了要重启"的处理 |
+
+```powershell
+# 复现整套装配（联网约 300MB）
+pwsh -File scripts\mcp-runtime.ps1 install
+pwsh -File scripts\mcp-runtime.ps1 status     # 期望：OK + python/comfy-mcp/comfy-cli 版本 + 工作区
+```
 
 ---
 

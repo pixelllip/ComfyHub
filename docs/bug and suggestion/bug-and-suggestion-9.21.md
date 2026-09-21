@@ -73,14 +73,22 @@ bug：
 - 把目前已有的skill整理成技能树，后续加skill进来用技能树管理和使用？
 - 新增对生成角色的提示词约束skill（占位符，哪天我想起来再实装）
 - 接入comfy mcp，我们项目里和mcp重复的功能就可以删掉了
-  → **已查证，结论是「不整条接」（2026-09-21）**；报告见 [`docs/comfy-mcp-report.md`](../../docs/comfy-mcp-report.md)。
-  （拉了官方本地服务端源码读（`Comfy-Org/comfy-mcp` v0.10.0，HEAD `e5f768d`，40 个 `@mcp.tool()`），
-  结论三条：① 它**每个工具都是 `comfy-cli` 的薄壳**，落地要 Python≥3.10 + `comfy-cli≥1.14.0` + 一个它认的工作区，
-  与我们"发布包便携、不装外部运行时"直接冲突；② **我们的重复功能删不掉** —— `comfy_submit` 的产物必须走
-  `capture.captureRun()` 入库（画廊 / `mediaIds` / NSFW 标记），MCP 只把文件写进 ComfyUI 的 `output/`；
-  真能删的只有界面格式→API 格式那套转换，而 comfy-cli 自己承认"老 UI 导出会检查 0 个节点却报 `valid: true`"，
-  换过去是**退步**（我们是如实报 `UNSUPPORTED_NODES`）；③ 它的安全面更大（`install_node` / `download_model` /
-  `launch_comfyui` / `update_comfyui`… = 起进程、改用户安装），违反 AIH-045「没有 shell / 进程类工具」。
-  **但它有 5 项我们没有、且都不需要 comfy-cli 的能力值得原生抄**：`GET /system_stats`（显存余量）、
-  `POST /free`（卸模型）、模型清单（`/object_info` 的枚举）、**提交前整体预检**、**工作流槽位**（`6.text` 形式，
-  和我们的 `overrides` 同格式）。这 5 项随时可以开做，用现成的 `ComfySubmitter` 那套 `HttpClient` 就行。）
+  → **决定：接（2026-09-21 晚，用户拍板）**；查证报告见 [`docs/comfy-mcp-report.md`](../../docs/comfy-mcp-report.md)。
+  （先查证后决策：拉了官方本地服务端源码读（`Comfy-Org/comfy-mcp` v0.10.0，HEAD `e5f768d`，40 个 `@mcp.tool()`），
+  当时的报告结论是"不整条接"（要 Python+comfy-cli、我们的入库链路删不掉、安全面更大）；
+  用户随后给出了依赖问题的解法并拍板**用它的**："官方 mcp 它覆盖的功能比我们更多更全，用它的。
+  comfy 没有自动捆绑 comfy mcp 下载，但是我们可以做脚本，在启动时运行脚本检测下载。"
+  落地四步（每步一个提交）：
+  ① ✅ **MCP 运行时装配**（提交 `8f0ca60`）：`scripts\mcp-runtime.ps1` 把便携版 Python 3.12 embeddable
+     + pip + `comfy-cli 1.20.0` + `comfy-mcp 0.10.0` 装进 `<根>\storage\ai\mcp`（首次约 300MB），
+     并把 comfy-cli 的工作区 `comfy set-default` 指向用户真实在用的 ComfyUI；
+     `comfyhub.ps1 up` 自动补（已就绪时只有几次文件检查）、`doctor` 单独报一段；
+     顺带补了 **ComfyUI Desktop 新版嵌套路径**的探测（`D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`，
+     `comfy-path.ps1` 与 `ComfyLocator.kt` 两边同步）。
+  ② ⬜ 后端 MCP stdio 客户端（initialize → tools/list → tools/call）
+  ③ ⬜ MCP 工具注入 `ToolRegistry` + 逐个定权限档，重复的 `comfy_*` 让位（产物入库/审批/NSFW 链路保留）
+  ④ ⬜ 安卓客户端预留：桌面 App 当能力宿主，移动端只留不依赖本地工作流的工具）
+- 近期开工 ComfyHub 安卓客户端：需要预留（用户 2026-09-21 晚提出）
+  → **待做**。已经设计好的工具可以留在移动端（生成提示词、查询网页这类**不涉及本地工作流**的）；
+  与桌面端通信的设计取向是：**移动端 → 桌面 App → 桌面 App 再调 comfy mcp**，
+  即"本地工作流能力永远在桌面那一侧"，移动端不直连 ComfyUI 也不装 Python。
