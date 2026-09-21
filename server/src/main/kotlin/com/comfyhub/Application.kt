@@ -7,10 +7,15 @@ import com.comfyhub.ai.CredentialService
 import com.comfyhub.ai.HarnessRunner
 import com.comfyhub.ai.RunEventBus
 import com.comfyhub.ai.aiRoutes
+import com.comfyhub.ai.mcp.McpRuntimeLocator
+import com.comfyhub.ai.mcp.McpStdioClient
+import com.comfyhub.ai.mcp.McpToolBridge
+import com.comfyhub.ai.mcp.McpToolPolicy
 import com.comfyhub.ai.tools.KeenableSearch
 import com.comfyhub.ai.tools.CivitaiSearch
 import com.comfyhub.ai.tools.MemoryStore
 import com.comfyhub.ai.tools.SkillStore
+import com.comfyhub.ai.tools.ToolAccess
 import com.comfyhub.ai.tools.ToolApprovalGate
 import com.comfyhub.ai.tools.ToolRegistry
 import io.ktor.http.HttpHeaders
@@ -157,6 +162,47 @@ fun Application.module(ctx: AppContext) {
     val asks = com.comfyhub.ai.tools.AskRegistry(askGate)
     // 提交任务（用户建议 ①）：AI 可以把库里的工作流真的送进 ComfyUI 队列
     val submitter = ComfySubmitter(ctx.cfg, capture)
+
+    // 官方 comfy-mcp（用户建议 ④，2026-09-21 拍板接入）：把它的 39 个工具当成
+    // **第二来源**接进工具表 —— 工作流执行、节点/模型查询、显存这些交给它，
+    // 我们的 comfy_* 保留"产物必须入库"的那条链路（同名时我们的胜出，见 ToolRegistry.tools）。
+    //
+    // 三条边界：
+    //  1. 运行时不在（没装配 / 没 Python）→ 一个 MCP 工具都不加，**不影响启动**（可选能力）；
+    //  2. `tools/list` 要真的起一次子进程（约 3 秒），所以**放在启动时做一次**并缓存 ——
+    //     不能等到用户发第一条消息才做（那会把首字延迟拖到 3 秒以上）；
+    //  3. 起不来只记日志，App 照常能用。
+    val mcpClient = runCatching { McpRuntimeLocator.discover(ctx.cfg.projectRoot) }
+        .getOrNull()
+        ?.takeIf { it.available }
+        ?.let { paths ->
+            McpStdioClient(
+                pythonExe = paths.pythonExe!!,
+                scriptsDir = paths.scriptsDir,
+                comfyCliExe = paths.comfyExe,
+                workingDir = paths.dir,
+            )
+        }
+    val mcpTools: List<com.comfyhub.ai.tools.AgentTool> = if (mcpClient != null) {
+        runCatching {
+            val decls = mcpClient.tools()
+            val bridge = com.comfyhub.ai.mcp.McpToolBridge(mcpClient, ToolRegistry.MAX_RESULT_CHARS)
+            log.info(
+                "官方 comfy-mcp 已接入：{} 个工具（{} 个默认 deny / {} 个默认 ask）",
+                decls.size,
+                decls.count { com.comfyhub.ai.mcp.McpToolPolicy.accessFor(it.name) == com.comfyhub.ai.tools.ToolAccess.DENY },
+                decls.count { com.comfyhub.ai.mcp.McpToolPolicy.accessFor(it.name) == com.comfyhub.ai.tools.ToolAccess.ASK },
+            )
+            decls.map { bridge.build(it) }
+        }.getOrElse { e ->
+            log.warn("comfy-mcp 已装上但这次没拉起来（{}）：AI 少一批 ComfyUI 工具，App 照常可用", e.message)
+            emptyList()
+        }
+    } else {
+        log.info("comfy-mcp 运行时不可用（没装配 / 没 Python）：跳过 MCP 工具。装它: pwsh -File scripts\\mcp-runtime.ps1 install")
+        emptyList()
+    }
+
     val toolRegistry = ToolRegistry(
         projectRoot = ctx.cfg.projectRoot,
         skills = skills,
@@ -228,6 +274,8 @@ fun Application.module(ctx: AppContext) {
         // 摘/拼节点（用户建议 ②）：拼装要照着 ComfyUI 的节点定义算，
         // 拿不到就只摘不拼（宁可不做，也不乱接一根线）
         comfyObjectInfo = { runCatching { submitter.objectInfo() }.getOrNull() },
+        // 官方 comfy-mcp 拉来的工具（运行时不在了就是空列表）
+        extraTools = mcpTools,
     )
 
     // 内置模型目录：项目内置的冻结副本（classpath）里那份，缺哪个补哪个；已存在的一律不覆盖

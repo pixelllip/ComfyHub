@@ -178,6 +178,17 @@ class ToolRegistry(
      * 但**不敢**自动接线（宁可告诉模型"不知道这个补丁节点要接什么"，也不乱接）。
      */
     private val comfyObjectInfo: (() -> JsonObject?)? = null,
+    /**
+     * 来自**官方 comfy-mcp** 的工具（用户建议 ④，2026-09-21）。
+     *
+     * 它们是运行时从 MCP 服务器现拉的（见 `ai/mcp/`），所以**不能**写死在这份 listOf 里 ——
+     * 那样就又变成"两处维护工具清单"，而 AGENTS §10 明写工具清单**只有一个真源**。
+     * 这里把它当成"第二来源"接进来，但：
+     *  · 同名时**我们的工具胜出**（[byName] 是 `associateBy`，先出现的不被覆盖）——
+     *    我们要保住 `comfy_submit` 那条"产物必须入库"的链路；
+     *  · `deny` 档的 MCP 工具照样不进下发给模型的 `tools`（[specs] 那条已经统一处理）。
+     */
+    private val extraTools: List<AgentTool> = emptyList(),
 ) {
     private val log = LoggerFactory.getLogger(ToolRegistry::class.java)
 
@@ -198,7 +209,12 @@ class ToolRegistry(
     private fun schema(json: String): JsonObject =
         AppJson.parseToJsonElement(json) as JsonObject
 
-    val tools: List<AgentTool> = listOf(
+    /**
+     * 出厂工具集（写死的那 22 个）—— 真源就是这一份 listOf。
+     *
+     * [tools] = 它 + [extraTools]（运行时从 MCP 拉来的），同名时这里的胜出。
+     */
+    private val builtinTools: List<AgentTool> = listOf(
         // ------------------------------------------------------------------
         //  Skills：注册 / 加载 / 列举 / 删除（用户要求：跟 AI 说一声就注册到本地）
         // ------------------------------------------------------------------
@@ -1208,6 +1224,15 @@ class ToolRegistry(
             )
         },
     )
+
+    /**
+     * 本次运行可用的**全部**工具：出厂那 22 个 + 官方 comfy-mcp 拉来的那些。
+     *
+     * 同名时**出厂的那个胜出** —— `distinctBy` 保留先出现的，而 [builtinTools] 在前。
+     * 这条不是洁癖：`comfy_submit` / `comfy_get_run` 这些的产物要进我们自己的画廊
+     * （`capture.captureRun()`），被 MCP 的同名工具顶掉就等于"AI 出的图不进画廊"。
+     */
+    val tools: List<AgentTool> = (builtinTools + extraTools).distinctBy { it.name }
 
     private val byName = tools.associateBy { it.name }
 
