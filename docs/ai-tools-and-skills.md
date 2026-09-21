@@ -45,7 +45,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `comfy_get_status` | comfy | allow | 复用 `ComfyCapture.status()`：连通性 / 队列 / 最近捕获（**附最近提交的任务**） |
 | `comfy_get_run` | comfy | allow | 按 runKey 查一次捕获（AIH-034） |
 | `comfy_sync_history` | comfy | **ask** | 会写我们的库，按 DEC-005 默认要审批 |
-| `comfy_load_workflow` | comfy | allow | 把**一份本机工作流文件**读进库换成一个能提交的 `promptId`（用户 bug ③，2026-09-18）：API 格式原样用；界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图 —— 普通节点、**组节点（subgraph）**、Reroute / Set-Get、旁路都会等价展开或改写，控件值**首选带名字的 `widgets_values_named`**。剩下的纯前端节点默认如实报 `UNSUPPORTED_NODES`；带 `tolerateUnsupported=true` 再来一次则**摘掉它们并给出缺口清单**（`openInputs` / `unresolvedInputs`），交给模型补线（用户建议 ②）。只读用户机器上的文件，不改它 |
+| `comfy_load_workflow` | comfy | allow | 把**一份本机工作流文件**读进库换成一个能提交的 `promptId`（用户 bug ③，2026-09-18）：API 格式原样用；界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图 —— 普通节点、**组节点（subgraph）**、Reroute / Set-Get、旁路都会等价展开或改写，控件值**首选带名字的 `widgets_values_named`**。**## 模拟用户行为 ##**（用户建议 ②，2026-09-21）：`emulateFrontend` **默认开着**，把纯前端节点照前端排队前的行为等价改写（广播填空 / 丢显示节点 / 补 SaveImage），改了什么都列在 `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里（见 §2.0.2）；说不清类型的仍然如实报 `UNSUPPORTED_NODES`，带 `tolerateUnsupported=true` 再来一次则**摘掉它们并给出缺口清单**（`openInputs` / `unresolvedInputs`），交给模型补线。只读用户机器上的文件，不改它 |
 | `comfy_find_workflow` | comfy | allow | 找一个**能直接跑**的工作流：先搜库里**能直接跑**的工作流（标注 `runnable` = 有没有 API 节点图）；**库里没有时自动回头列本机 ComfyUI 已保存的工作流文件**（结果在 `localWorkflows` 里，用户 bug ⑤，2026-09-18） |
 | `comfy_list_workflows` | comfy | allow | 列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`，用户 bug ⑤，2026-09-18）：带路径 / 格式（ui/api）/ 是否已入库（`inLibrary` / `promptId`），可按文件名过滤（如 `krea2`）。**只读**，不改用户的文件。首次使用、或 `comfy_find_workflow` 什么都搜不到时先看它 —— 这些工作流**不需要在 ComfyUI 里跑过一次**，拿到 path 直接 `comfy_load_workflow` 就能提交 |
 | `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数、`connections` 补连线（值写 `["<上游节点id>", 槽位]`），跑完直接入库；会消耗显卡时间，默认要审批 |
@@ -98,6 +98,40 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 - 出厂 `allow`：它不改盘、不出网，只是把一句话递到用户面前。
 - 提示词第 9.1 条（`NsfwPrompt`）写着纪律：**能自己查的不要问**、一次只问一个决定、
   同一个问题不要问第二遍、没等到回答时**不许假装他答过了**。
+
+### 2.0.2 「## 模拟用户行为 ##」——把纯前端节点也跑起来（2026-09-21，用户建议 ②）
+
+用户的原话：「加入 ##模拟用户行为## 模式，面对一些**仅面向前端的工作流节点**，
+让 AI 有能力在前端读取、编辑、在 comfy 前端提交」。
+范围与用户当面确认过：**走"后端 + ComfyUI HTTP API"这条线，不做浏览器自动化**。
+
+问题在哪：ComfyUI 的官方前端在 `graphToPrompt()` 之后、`POST /prompt` 之前，会调用各扩展
+注册的 JS 钩子改写节点图。那份 JS 在**浏览器**里，服务端永远拿不到 —— 所以
+`Anything Everywhere` 这类"只用前端 JS 实现"的节点过去只能如实报 `UNSUPPORTED_NODES`。
+
+「模拟用户行为」= **把前端排队前会做的那几件事，在后端等价地做掉**
+（`FrontendNodes.kt`，判据一律保守、做了什么都如实回报）：
+
+| 前端节点 | 前端自己干了什么 | 这里怎么等价改写 |
+| --- | --- | --- |
+| `Anything Everywhere` 一族（含 `?` / `!` / `Prompts` / `Seed` / 数字后缀变体） | 把上游那一路**广播**到全图所有同类型、且没接线的输入上 | 按它 `properties` 里声明的 `Input Type` / `Input Name` 过滤**填空**，并逐条报告灌了哪几条线 |
+| `Preview*` / `ShowText` / `Display Any`… | 只是"看一眼"的显示节点 | 丢掉（官方前端也不把它们写进提示词） |
+| （没有任何输出节点） | 前端会**自动挂一个 `SaveImage`** | 补一个接在真正产出 `IMAGE` 的节点上，`filename_prefix = ComfyHub` |
+
+几条纪律（改这块之前先读 `FrontendNodes.kt` 的文件头注释）：
+
+- **开关**：`comfy_load_workflow.emulateFrontend`，**默认开着**；
+  `false` = 一个字都不改、只如实报缺口的保守档（用户说"别动我的工作流"时用它）。
+- **改动必须可见**：`frontendEmulated` / `frontendBroadcast` / `frontendInjected` 逐条列出，
+  外加一句 `frontendHint`。系统提示第 15 条（`v22`）要求模型把这些改动**转述给用户**——
+  默默替用户改图是不允许的。
+- **说不清就不猜**：广播节点没声明类型、或者全图没有对得上的空输入，照旧落进
+  `unsupportedNodes`（出口还是老那套：`tolerateUnsupported=true` 摘掉 + `connections=` 补线，
+  或者让用户在 ComfyUI 里「导出（API）」）。**已经接好的线一个字都不动**。
+- **不做**：浏览器自动化（不驱动 ComfyUI 网页界面）；rgthree 那类"只有界面逻辑"的特殊节点
+  （说不清语义就不猜）。这两件是刻意的边界，不是没做完。
+- 判据：`FrontendNodesTest` 5 例 + `WorkflowConvertTest` 原有那批
+  （**不开开关时行为与过去逐字一致**那一条就是防回归的锚）。
 
 ### 2.0.3 摘节点 / 拼节点（2026-09-20，用户建议 ②）
 
