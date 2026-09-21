@@ -73,3 +73,14 @@ bug：
 - 把目前已有的skill整理成技能树，后续加skill进来用技能树管理和使用？
 - 新增对生成角色的提示词约束skill（占位符，哪天我想起来再实装）
 - 接入comfy mcp，我们项目里和mcp重复的功能就可以删掉了
+  → **已查证，结论是「不整条接」（2026-09-21）**；报告见 [`docs/comfy-mcp-report.md`](../../docs/comfy-mcp-report.md)。
+  （拉了官方本地服务端源码读（`Comfy-Org/comfy-mcp` v0.10.0，HEAD `e5f768d`，40 个 `@mcp.tool()`），
+  结论三条：① 它**每个工具都是 `comfy-cli` 的薄壳**，落地要 Python≥3.10 + `comfy-cli≥1.14.0` + 一个它认的工作区，
+  与我们"发布包便携、不装外部运行时"直接冲突；② **我们的重复功能删不掉** —— `comfy_submit` 的产物必须走
+  `capture.captureRun()` 入库（画廊 / `mediaIds` / NSFW 标记），MCP 只把文件写进 ComfyUI 的 `output/`；
+  真能删的只有界面格式→API 格式那套转换，而 comfy-cli 自己承认"老 UI 导出会检查 0 个节点却报 `valid: true`"，
+  换过去是**退步**（我们是如实报 `UNSUPPORTED_NODES`）；③ 它的安全面更大（`install_node` / `download_model` /
+  `launch_comfyui` / `update_comfyui`… = 起进程、改用户安装），违反 AIH-045「没有 shell / 进程类工具」。
+  **但它有 5 项我们没有、且都不需要 comfy-cli 的能力值得原生抄**：`GET /system_stats`（显存余量）、
+  `POST /free`（卸模型）、模型清单（`/object_info` 的枚举）、**提交前整体预检**、**工作流槽位**（`6.text` 形式，
+  和我们的 `overrides` 同格式）。这 5 项随时可以开做，用现成的 `ComfySubmitter` 那套 `HttpClient` 就行。）

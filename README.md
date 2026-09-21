@@ -173,6 +173,7 @@ viewer/
 ├── comfyui/comfyhub_capture/     # ★（可选）ComfyUI 自定义节点：跑完立刻推送捕获
 ├── docs/comfyui-capture.md       # ★ 三种捕获方式的详细说明与排错
 ├── docs/android-agp9-builtin-kotlin-migration.md  # ★ AGP 9.1 / 内建 Kotlin 迁移记录与踩坑
+├── docs/comfy-mcp-report.md      # ★ 官方 comfy-mcp 的查证报告：为什么不整条接、哪 5 项值得原生抄
 ├── storage/                      # 产物文件与 AI 附件（运行时生成，已 gitignore）
 │   ├── media/ thumbs/            # 画廊产物与它的缩略图 / 视频封面
 │   └── ai-attachments/ ai-thumbs/# 发给 AI 的附件原件、缩略图 / 视频预览帧（M3，与画廊分开）
