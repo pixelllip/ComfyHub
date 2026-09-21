@@ -31,6 +31,14 @@
       "artifacts": "storage",
       "logs": ".run"
     },
+    "optionalRuntime": {
+      "mcp": {
+        "path": "storage/ai/mcp",
+        "why": "MCP 运行时（便携版 Python + comfy-cli + comfy-mcp）落在这里 —— 与 storage/ai/skills 同一个 storage 根，所以发布包（便携式）与源码树里路径同构。根目录不可写时退回 %LOCALAPPDATA%\\ComfyHub\\mcp，位置记在 <该目录>\\state.json。",
+        "installer": "pwsh -File scripts\\mcp-runtime.ps1 install",
+        "status": "pwsh -File scripts\\mcp-runtime.ps1 status"
+      }
+    },
     "databaseLocation": {
       "default": ".mysql",
       "overrideOrder": [
@@ -89,6 +97,15 @@
         "name": "Windows 10 / 11 x64",
         "bundled": false,
         "why": "桌面端只有 Windows 构建；脚本里的 WMI / CIM 调用也依赖 Windows"
+      },
+      {
+        "name": "MCP 运行时（Python + comfy-cli + comfy-mcp）",
+        "bundled": false,
+        "optional": true,
+        "location": "storage/ai/mcp",
+        "autoDownload": "scripts\\mcp-runtime.ps1",
+        "why": "AI 的 ComfyUI 工具走官方 comfy-mcp，它是 Python 写的且要求 comfy-cli（不捆绑）。comfyhub.ps1 up 会自动装配进 <根>\\storage\\ai\\mcp（便携版 Python embeddable + pip 包，首次约 300MB），doctor 会报状态。**它是可选能力**：装不上只是 AI 少一批 ComfyUI 工具，不拦 App / 后端启动（与 Java 那种必需项完全不同）。COMFYHUB_NO_MCP=1 可关闭。",
+        "install": "pwsh -File scripts\\mcp-runtime.ps1 install"
       }
     ]
   },

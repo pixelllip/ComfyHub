@@ -257,6 +257,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQ
 | `scripts\autorun-app.ps1` | 一键全流程：服务 → 分析 → 构建（Release）→ 启动 App |
 | `scripts\pack-release.ps1` | **打包发布版**：按 `packaging\manifest.json` 把 Kotlin 后端 + 便携版 MySQL + JRE **就地装配进** `build\windows\x64\runner\Release\`，装完那个目录就是完整发布包（`-OutDir` 可另存，`-Zip` 顺带压包） |
 | `scripts\ensure-runtime.ps1` | **运行时一键就绪**：检测不到的运行时自动下载安装（Java 下便携版塞进 `<根>\jre`；pwsh / VC++ 走 winget）。`-CheckOnly` 只检测 |
+| `scripts\mcp-runtime.ps1` | **MCP 运行时装配**（可选能力）：把便携版 Python + `comfy-cli` + `comfy-mcp` 装进 `<根>\storage\ai\mcp`，并把 `comfy-cli` 的工作区指向用户真实在用的 ComfyUI。`status` / `install [-Force] [-ComfyHome <目录>]`；`comfyhub.ps1 up` 会自动补、`doctor` 会报状态 |
 | `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
 | `scripts\check-silent-start.ps1` | **静默启动自测**：启动服务的同时盯屏，报告有没有弹出 cmd / 控制台窗口（加 `-Restart` 从零走一遍） |
 | `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成）。假 ComfyUI 默认在 **18188**（**不是 8188** —— 那是真实 ComfyUI 的端口，撞上会让测试悄悄连到真实那一个），起好后还会认一次身份，不是自己的就当场停下 |
@@ -873,6 +874,37 @@ pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub   # 另存一份干
 | Java 21 运行时 | Kotlin 后端（JVM） | ✅ `<根>\jre`；**没有就自动下载**（见下） |
 | MySQL 8.4（免安装版） | 数据库本体 | ✅ `<根>\mysql` |
 | Windows 10 / 11 x64 | 桌面端 + 脚本（WMI / CIM） | — |
+
+#### 可选能力：MCP 运行时（`mcp-runtime.ps1`）
+
+**AI 的 ComfyUI 工具**走官方 [`comfy-mcp`](https://github.com/Comfy-Org/comfy-mcp)，而它是 Python 写的、
+并且要求 `comfy-cli`（**它自己不捆绑 comfy-cli**）。为了让发布包保持"解压就能用"，
+`scripts\mcp-runtime.ps1` 把这三样按"缺什么补什么"装进**包内**（跟 `<根>\jre` / `<根>\mysql` 一个路子）：
+
+| 装什么 | 落在哪 | 说明 |
+| --- | --- | --- |
+| 便携版 Python 3.12（embeddable） | `<根>\storage\ai\mcp\python` | 官方 embed zip（约 10MB）+ `get-pip.py`。embeddable 版**没有 venv 模块**，所以是"整包一个环境" |
+| `comfy-mcp` + `comfy-cli` | 同上 `\python\Lib\site-packages` | pip 装，首次约 300MB。实测版本：comfy-cli **1.20.0** / comfy-mcp **0.10.0** / mcp SDK **2.2.0** |
+| comfy-cli 的工作区 | `%LOCALAPPDATA%\comfy-cli\config.ini` | `comfy set-default <ComfyUI 目录>`，目录由 `comfy-path.ps1` 解析（与后端 `ComfyLocator.kt` 同一套判据） |
+
+```powershell
+pwsh -File scripts\mcp-runtime.ps1 status    # 只看装到哪一步了
+pwsh -File scripts\mcp-runtime.ps1 install   # 装配（联网，首次约 300MB）
+pwsh -File scripts\mcp-runtime.ps1 install -ComfyHome D:\ComfyUI   # 手工指定 ComfyUI 目录
+```
+
+- **它是"可选能力"，装不上不拦启动**：`comfyhub.ps1 up` 会顺带补（已就绪时只是几次文件检查，不联网），
+  失败只提示一句，App 与后端照常起来 —— 与 Java 那种"缺了根本起不来"完全不同。
+  `COMFYHUB_NO_MCP=1` 整个关掉；`COMFYHUB_NO_DOWNLOAD=1` 时只提示不自动装。
+- **pip 源按顺序试**：阿里云 → 清华 TUNA → pypi.org。
+  实测（2026-09-21）**清华 TUNA 对 `comfy_mcp` 返回 HTTP 403**（元数据能读、wheel 拿不到），
+  所以阿里云排第一；每个源失败时会把 pip 的**真实错因**（403 / 连不上）打出来，不只说"这个源不行"。
+- **`comfy-cli` 的工作区必须设**：它有自己的 workspace 概念，不设的话默认指向
+  `%USERPROFILE%\Documents\comfy\ComfyUI`（**不存在也照样这么报**），于是 `run_workflow` / `search_models` 全错。
+  找不到用户真实在用的 ComfyUI 时脚本**如实说没设**，不会瞎指一个目录过去。
+  2026-09-21 为此还补了一处探测：ComfyUI **Desktop 新版**把源码检出放在
+  `<应用目录>\ComfyUI-Installs\<实例>\ComfyUI`（本机实测 `D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`），
+  只在顶层翻一层永远找不到 —— `comfy-path.ps1` 与 `ComfyLocator.kt` **两边都补了**（判据必须一致）。
 
 #### 运行时能自动补齐：`ensure-runtime.ps1`
 

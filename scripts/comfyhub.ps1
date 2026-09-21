@@ -72,6 +72,11 @@ if (Test-Path $RuntimeHelper) { . $RuntimeHelper }
 $ComfyPathHelper = Join-Path $Scripts 'comfy-path.ps1'
 if (Test-Path $ComfyPathHelper) { . $ComfyPathHelper }
 
+# MCP 运行时（可选能力）：便携版 Python + comfy-cli + comfy-mcp，见 scripts\mcp-runtime.ps1。
+# 它是**可选**的 —— 装不上不拦 up，只让 AI 少一批 ComfyUI 工具（与 Java 那种"必需"完全不同）。
+$McpRuntimeHelper = Join-Path $Scripts 'mcp-runtime.ps1'
+if (Test-Path $McpRuntimeHelper) { . $McpRuntimeHelper }
+
 # ---------------------------------------------------------------------------
 #  输出编码
 # ---------------------------------------------------------------------------
@@ -611,6 +616,26 @@ function Do-Up {
         }
     }
 
+    # MCP 运行时（便携版 Python + comfy-cli + comfy-mcp）：AI 的 ComfyUI 工具靠它。
+    # **这是可选能力**：已就绪时这里只是几次文件检查（不联网）；没装才会去下载（约 300MB）。
+    # 失败**不拦 up**（与 Java 完全不同）—— 装不上只是 AI 少一批工具，App 照常能用。
+    # COMFYHUB_NO_MCP=1 可以整个关掉；COMFYHUB_NO_DOWNLOAD=1 时也不自动装（只提示）。
+    if ((Get-Command Ensure-McpRuntime -ErrorAction SilentlyContinue) -and -not $env:COMFYHUB_NO_MCP) {
+        if ($env:COMFYHUB_NO_DOWNLOAD) {
+            $mcpStatus = Get-McpRuntimeStatus -ProjectRoot $ProjectRoot
+            if (-not $mcpStatus.Ok) {
+                Say '  提示: MCP 运行时还没装配（COMFYHUB_NO_DOWNLOAD=1，已跳过自动安装）' 'Yellow'
+                Say '        要装: pwsh -File scripts\mcp-runtime.ps1 install' 'DarkGray'
+            }
+        } else {
+            try {
+                Ensure-McpRuntime -ProjectRoot $ProjectRoot -Quiet | Out-Null
+            } catch {
+                Say "  提示: MCP 运行时自动装配失败（$($_.Exception.Message)）" 'Yellow'
+            }
+        }
+    }
+
     if (-not (Start-MySqlPart)) { Show-Status | Out-Null; Show-RuntimeHintsIfAvailable; exit 1 }
     if (-not (Start-ApiPart))   { Show-Status | Out-Null; Show-RuntimeHintsIfAvailable; exit 1 }
     if ($WithApp) { Start-AppPart | Out-Null }
@@ -831,6 +856,14 @@ function Do-Doctor {
     } else {
         Say '  （找不到 scripts\runtime-deps.ps1，跳过运行时体检）' 'Yellow'
     }
+
+    # MCP 运行时（可选能力）：AI 的 ComfyUI 工具全靠它，所以 doctor 里单独报一段。
+    # 这一项**不影响 App 能不能启动**，所以未就绪只是黄色，不是红色。
+    if (Get-Command Show-McpRuntimeReport -ErrorAction SilentlyContinue) {
+        Show-McpRuntimeReport -ProjectRoot $ProjectRoot | Out-Null
+    } else {
+        Say '  （找不到 scripts\mcp-runtime.ps1，跳过 MCP 运行时体检）' 'Yellow'
+    }
     Say ''
 }
 
@@ -845,3 +878,4 @@ switch ($Action) {
     'logs'    { Do-Logs }
     'doctor'  { Do-Doctor }
 }
+

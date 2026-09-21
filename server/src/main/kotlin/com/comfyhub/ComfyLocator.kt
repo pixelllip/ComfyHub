@@ -99,6 +99,7 @@ object ComfyLocator {
             ?: consider(Paths.get("D:\\ComfyUI"), "常见位置 D:\\ComfyUI")
             ?: consider(Paths.get("D:\\ComfyUI_windows_portable\\ComfyUI"), "免安装包 D:\\ComfyUI_windows_portable")
             ?: searchUserProfile()
+            ?: searchDesktopInstalls()
             ?: searchDesktopPackages()
 
         if (located == null) {
@@ -133,9 +134,57 @@ object ComfyLocator {
         val tries = listOf(
             base.resolve("Documents").resolve("ComfyUI"),
             base.resolve("ComfyUI"),
+            // ComfyUI Desktop（新版）常把源码检出放在 Documents\comfy\ComfyUI
+            base.resolve("Documents").resolve("comfy").resolve("ComfyUI"),
             base.resolve("AppData").resolve("Local").resolve("Programs").resolve("@comfyorgcomfyui-electron"),
         )
         return tries.firstOrNull { Files.isDirectory(it) && looksLikeComfy(it).first }
+    }
+
+    /**
+     * ComfyUI **Desktop**（新版 Electron 启动器）的嵌套布局（2026-09-21 实测踩到）。
+     *
+     * 它把源码检出放在 `<应用目录>\ComfyUI-Installs\<实例名>\ComfyUI` 下，
+     * 而不是 `Documents\ComfyUI` —— 只在顶层翻一层永远找不到它，
+     * 而用户机器上的 ComfyUI 恰恰就是这么装的（实测：
+     * `D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`，有 `main.py` + `comfy/`）。
+     *
+     * 探测**有界**：固定几个应用目录 → 每个目录下的 `ComfyUI-Installs\*` 再拼一层 `ComfyUI`，
+     * 不做全盘扫描（与 [ComfyRoots] 的"搜索有界"是同一条纪律）。
+     * 判据不变：仍然要过 [looksLikeComfy]，找不到就如实返回 null。
+     *
+     * ⚠ 这份判据与 `scripts\comfy-path.ps1` 的 `Resolve-ComfyHome` **必须一致**
+     * （AGENTS §10.1）：改一边就要改另一边，否则会出现"App 说找到了、脚本说找不到"。
+     */
+    private fun searchDesktopInstalls(): Path? {
+        // 显式标类型（别让编译器从 chain 里推）：这两个可能拿不到，下面要用它们拼候选
+        val home: Path? = System.getenv("USERPROFILE")?.let { p -> runCatching { Paths.get(p) }.getOrNull() }
+        val localAppData: Path? = System.getenv("LOCALAPPDATA")?.let { p -> runCatching { Paths.get(p) }.getOrNull() }
+
+        val roots = mutableListOf<Path>()
+        if (localAppData != null) {
+            roots.add(localAppData.resolve("Programs").resolve("@comfyorgcomfyui-electron"))
+            roots.add(localAppData.resolve("Comfy-Desktop"))
+        }
+        if (home != null) roots.add(home.resolve("Documents").resolve("comfy"))
+        runCatching { Paths.get("D:\\Comfy-Desktop") }.getOrNull()?.let { roots.add(it) }
+        for (root in roots) {
+            if (!Files.isDirectory(root)) continue
+            // (a) <root>\ComfyUI-Installs\<实例>\ComfyUI   (b) <root>\<实例>\ComfyUI
+            for (base in listOf(root.resolve("ComfyUI-Installs"), root)) {
+                if (!Files.isDirectory(base)) continue
+                val hit = runCatching {
+                    Files.list(base).use { stream ->
+                        // 两级判定分开写，别让编译器去推 Path? 的智能转换
+                        stream.toList()
+                            .mapNotNull { it?.resolve("ComfyUI") }
+                            .firstOrNull { looksLikeComfy(it).first }
+                    }
+                }.getOrNull()
+                if (hit != null) return hit
+            }
+        }
+        return null
     }
 
     /** 秋叶整合包 / 便携包常见的 `*ComfyUI*` 顶层目录（只翻一层，避免全盘扫描）。 */
