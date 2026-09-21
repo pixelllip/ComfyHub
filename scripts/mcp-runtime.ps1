@@ -52,7 +52,9 @@ param(
     [Parameter(Position = 0)][string]$McpAction = 'status',
     [switch]$McpForce,
     [string]$ComfyHome,
-    [string]$McpProxy
+    [string]$McpProxy,
+    # status -Deep：真去问 comfy-cli（约 6 秒）拿版本与工作区；不带则读装配记录（不 spawn 进程）
+    [switch]$Deep
 )
 $script:McpRuntimeStateFileName = 'state.json'
 $script:McpRuntimeIndexUrls = @()
@@ -169,28 +171,40 @@ function Get-PythonRuntimePath {
 function Get-McpRuntimeStatus {
     <#
       体检 MCP 运行时。返回一个对象，doctor 与 up 都用它：
-        Ok           服务器件齐不齐（python + comfy-mcp + comfy-cli 都在）
+        Ok             服务器件齐不齐（python + comfy-mcp + comfy-cli 都在，且工作区可用）
         PythonExe / ComfyMcpExe / ComfyExe
         PythonVersion / ComfyMcpVersion / ComfyCliVersion
-        Workspace     comfy-cli 认的 ComfyUI 工作区（没设时为 $null）
-        WorkspaceOk   那个目录真的像个 ComfyUI 吗
+        Workspace      comfy-cli 认的 ComfyUI 工作区（没设时为 $null）
+        WorkspaceOk    那个目录真的像个 ComfyUI 吗
+        Deep           这次是真去问了 comfy-cli，还是读的装配记录
         Dir / State
+
+      **为什么分快慢两档**（2026-09-21 实测）：`& python -m comfy_cli env` 一次要 **6.1 秒**
+      （comfy-cli 的 import + typer 启动就是这么慢），而 `up` 每次冷启动都会调这个函数 ——
+      那就是白等 6 秒。所以：
+        · 默认（快档，**不 spawn 任何进程**）：exe 在不在（文件检查）+ 装配记录里的版本与工作区
+        · -Deep（慢档）：真去问 python 包版本与 `comfy_cli env`（装配完 / doctor 里想看真相时用）
     #>
-    param([Parameter(Mandatory)][string]$ProjectRoot)
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [switch]$Deep
+    )
 
     $dir = Get-McpRuntimeDir -ProjectRoot $ProjectRoot
+    $state = Read-McpRuntimeState -McpDir $dir
     $py = Get-PythonRuntimePath -McpDir $dir
     $result = [pscustomobject]@{
         Dir             = $dir
-        State           = (Read-McpRuntimeState -McpDir $dir)
+        State           = $state
+        Deep            = [bool]$Deep
         Ok              = $false
         PythonExe       = $py
-        PythonVersion   = $null
+        PythonVersion   = $(if ($state) { $state.pythonVersion } else { $null })
         ComfyMcpExe     = $null
-        ComfyMcpVersion = $null
+        ComfyMcpVersion = $(if ($state) { $state.comfyMcpVersion } else { $null })
         ComfyExe        = $null
-        ComfyCliVersion = $null
-        Workspace       = $null
+        ComfyCliVersion = $(if ($state) { $state.comfyCliVersion } else { $null })
+        Workspace       = $(if ($state) { $state.workspace } else { $null })
         WorkspaceOk     = $false
         Problems        = @()
     }
@@ -202,48 +216,47 @@ function Get-McpRuntimeStatus {
         return $result
     }
 
-    # python 版本
-    try {
-        $out = (& $py -c "import sys;print('%d.%d.%d'%sys.version_info[:3])" 2>&1 | Out-String).Trim()
-        if ($out -match '^\d+\.\d+\.\d+$') { $result.PythonVersion = $out }
-    } catch { }
-
     $scripts = Join-Path (Split-Path -Parent $py) 'Scripts'
     $mcpExe = Join-Path $scripts 'comfy-mcp.exe'
     $comfyExe = Join-Path $scripts 'comfy.exe'
     if (Test-Path -LiteralPath $mcpExe) { $result.ComfyMcpExe = $mcpExe } else { [void]$problems.Add('缺 comfy-mcp.exe（pip 没装成？）') }
     if (Test-Path -LiteralPath $comfyExe) { $result.ComfyExe = $comfyExe } else { [void]$problems.Add('缺 comfy.exe（comfy-cli 没装成？）') }
 
-    # 包版本：直接问 python，别解析 pip 的表格输出
-    foreach ($probe in @(
-            @{ Name = 'ComfyMcpVersion'; Mod = 'comfy_mcp' },
-            @{ Name = 'ComfyCliVersion'; Mod = 'comfy_cli' }
-        )) {
+    if ($Deep) {
+        # 真问 python（只在这条路上 spawn 进程）
         try {
-            $v = (& $py -c "import importlib.metadata as m;print(m.version('$($probe.Mod -replace '_','-')'))" 2>&1 | Out-String).Trim()
-            if ($v -match '^\d') { $result.($probe.Name) = $v }
+            $out = (& $py -c "import sys;print('%d.%d.%d'%sys.version_info[:3])" 2>&1 | Out-String).Trim()
+            if ($out -match '^\d+\.\d+\.\d+$') { $result.PythonVersion = $out }
+        } catch { }
+        foreach ($probe in @(
+                @{ Name = 'ComfyMcpVersion'; Mod = 'comfy-mcp' },
+                @{ Name = 'ComfyCliVersion'; Mod = 'comfy-cli' }
+            )) {
+            try {
+                $v = (& $py -c "import importlib.metadata as m;print(m.version('$($probe.Mod)'))" 2>&1 | Out-String).Trim()
+                if ($v -match '^\d') { $result.($probe.Name) = $v }
+            } catch { }
+        }
+        try {
+            $json = (& $py -m comfy_cli --json env 2>$null | Out-String)
+            $start = $json.IndexOf('{')
+            if ($start -ge 0) {
+                $obj = ($json.Substring($start) | ConvertFrom-Json)
+                $ws = [string]$obj.data.workspace.path
+                if ($ws) { $result.Workspace = $ws }
+            }
         } catch { }
     }
 
-    # comfy-cli 的工作区（它自己的 config.ini，不是我们的设置）
-    try {
-        $env:CAND = $comfyExe
-        $raw = (& $py -m comfy_cli env 2>$null | Out-String)
-        # --json 的 envelope 更好解析
-        $json = (& $py -m comfy_cli --json env 2>$null | Out-String)
-        $start = $json.IndexOf('{')
-        if ($start -ge 0) {
-            $obj = ($json.Substring($start) | ConvertFrom-Json)
-            $ws = $obj.data.workspace.path
-            if ($ws) {
-                $result.Workspace = [string]$ws
-                $result.WorkspaceOk = (Test-ComfyHome $ws)
-            }
+    # 工作区是"存在性"判断（文件检查），快慢两档都做
+    if (-not $result.Workspace) {
+        [void]$problems.Add('comfy-cli 还不知道 ComfyUI 在哪（没设工作区）')
+    } else {
+        $result.WorkspaceOk = (Test-ComfyHome $result.Workspace)
+        if (-not $result.WorkspaceOk) {
+            [void]$problems.Add("comfy-cli 的工作区不像一个 ComfyUI：$($result.Workspace)")
         }
-    } catch { }
-
-    if (-not $result.Workspace) { [void]$problems.Add('comfy-cli 还不知道 ComfyUI 在哪（没设工作区）') }
-    elseif (-not $result.WorkspaceOk) { [void]$problems.Add("comfy-cli 的工作区不像一个 ComfyUI：$($result.Workspace)") }
+    }
 
     $result.Ok = ($problems.Count -eq 0)
     $result.Problems = $problems
@@ -486,7 +499,9 @@ function Install-McpRuntime {
 
     $wsOk = Set-ComfyDefaultWorkspace -PythonExe $py -ComfyHome $ComfyHome -ProjectRoot $ProjectRoot -Proxy $McpProxy -Quiet:$Quiet
 
-    $st = Get-McpRuntimeStatus -ProjectRoot $ProjectRoot
+    # 装配时**必须**走 -Deep：state.json 里的版本与工作区就是这一步探到的真值，
+    # 之后 up 的快档全靠它（否则记录里全是 null，快档就永远判"未就绪"）。
+    $st = Get-McpRuntimeStatus -ProjectRoot $ProjectRoot -Deep
     $state = [pscustomobject]@{
         schema          = 'comfyhub-mcp-runtime/1'
         installedAt     = (Get-Date).ToString('o')
@@ -503,7 +518,7 @@ function Install-McpRuntime {
     $stateFile = Write-McpRuntimeState -McpDir $dir -State $state
     SayI ("  装配状态写入: {0}" -f $stateFile) 'DarkGray'
 
-    $st = Get-McpRuntimeStatus -ProjectRoot $ProjectRoot
+    $st = Get-McpRuntimeStatus -ProjectRoot $ProjectRoot -Deep
     if ($st.Ok) { SayI '  MCP 运行时就绪。' 'Green' } else { SayI ("  MCP 运行时还没就绪：{0}" -f ($st.Problems -join '；')) 'Yellow' }
     return $st
 }
@@ -548,10 +563,12 @@ function Show-McpRuntimeReport {
     #>
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
-        [switch]$OnlyProblems
+        [switch]$OnlyProblems,
+        # -Deep：真去问 comfy-cli（6 秒）。doctor 要看真相，up 走快档。
+        [switch]$Deep
     )
 
-    $st = Get-McpRuntimeStatus -ProjectRoot $ProjectRoot
+    $st = Get-McpRuntimeStatus -ProjectRoot $ProjectRoot -Deep:$Deep
     $mark = if ($st.Ok) { 'OK  ' } else { '未就绪' }
     $color = if ($st.Ok) { 'Green' } else { 'Yellow' }
     Write-Host ("  {0,-28} {1}  {2}" -f 'MCP 运行时 (comfy-mcp)', $mark, $st.Dir) -ForegroundColor $color
@@ -577,12 +594,14 @@ function Invoke-McpRuntimeCli {
         [string]$McpAction = 'status',
         [string]$McpProxy,
         [string]$ComfyHome,
-        [switch]$McpForce
+        [switch]$McpForce,
+        # status 默认走快档；`status -Deep` 真去问 comfy-cli（6 秒，但看得到真相）
+        [switch]$Deep
     )
 
     switch ($McpAction.ToLowerInvariant()) {
         'status' {
-            Show-McpRuntimeReport -ProjectRoot $ProjectRoot | Out-Null
+            Show-McpRuntimeReport -ProjectRoot $ProjectRoot -Deep:$Deep
             return 0
         }
         'install' {
@@ -622,7 +641,7 @@ if ($PSBoundParameters.Count -gt 0) {
     if (Test-Path -LiteralPath $rtDeps) { . $rtDeps }
 
     $rtProxy = if ($McpProxy) { $McpProxy } else { $env:COMFYHUB_HTTPS_PROXY }
-    exit (Invoke-McpRuntimeCli -ProjectRoot $rtRoot -McpAction $McpAction -McpProxy $rtProxy -ComfyHome $ComfyHome -McpForce:$McpForce)
+    exit (Invoke-McpRuntimeCli -ProjectRoot $rtRoot -McpAction $McpAction -McpProxy $rtProxy -ComfyHome $ComfyHome -McpForce:$McpForce -Deep:$Deep)
 }
 
 

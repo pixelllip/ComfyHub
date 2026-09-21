@@ -859,8 +859,9 @@ function Do-Doctor {
 
     # MCP 运行时（可选能力）：AI 的 ComfyUI 工具全靠它，所以 doctor 里单独报一段。
     # 这一项**不影响 App 能不能启动**，所以未就绪只是黄色，不是红色。
+    # doctor 走 -Deep（真去问 comfy-cli，约 6 秒）：体检就是要看真相，不是看记录。
     if (Get-Command Show-McpRuntimeReport -ErrorAction SilentlyContinue) {
-        Show-McpRuntimeReport -ProjectRoot $ProjectRoot | Out-Null
+        Show-McpRuntimeReport -ProjectRoot $ProjectRoot -Deep
     } else {
         Say '  （找不到 scripts\mcp-runtime.ps1，跳过 MCP 运行时体检）' 'Yellow'
     }
