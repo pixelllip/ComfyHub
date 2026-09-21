@@ -252,6 +252,108 @@ class WorkflowPruneTest {
         assertTrue(graphOut.containsKey("10"))
     }
 
+    // --- 无用节点分析（用户建议 ④，2026-09-22）-------------------------------
+    //
+    // 用户的原话："当用户提出类似'删除无用节点'时，分析出本地用不上的节点并向用户再次确认删除，
+    // 然后执行操作。" 所以这里钉两件事：① 分析得准（哪条用不上、哪条只是没接完）；
+    // ② 分析**一个字都不改**（确认之前不许动用户的工作流）。
+
+    /** 一份骨干齐全、另加两条**用不上**的分支（放大链 + 换脸链）+ 一个没接完的孤立节点。 */
+    private val withDeadBranches = graph(
+        """
+        {
+          "1": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"krea2.safetensors"}},
+          "6": {"class_type":"CLIPTextEncode","inputs":{"text":"a cat","clip":["1",1]}},
+          "3": {"class_type":"KSampler","inputs":{"model":["1",0],"positive":["6",0],"latent_image":["5",0],"seed":1}},
+          "5": {"class_type":"EmptyLatentImage","inputs":{"width":768,"height":1024}},
+          "9": {"class_type":"VAEDecode","inputs":{"samples":["3",0],"vae":["1",2]}},
+          "10": {"class_type":"SaveImage","inputs":{"images":["9",0],"filename_prefix":"out"}},
+          "70": {"class_type":"UpscaleModelLoader","inputs":{"model_name":"4x.pth"}},
+          "71": {"class_type":"ImageUpscaleWithModel","inputs":{"upscale_model":["70",0],"image":["9",0]}},
+          "80": {"class_type":"FaceSwap","inputs":{"image":["71",0],"face":["81",0]}},
+          "81": {"class_type":"LoadImage","inputs":{"image":"face.png"}},
+          "99": {"class_type":"Note","inputs":{"text":"还没接完的备注"}}
+        }
+        """.trimIndent()
+    )
+
+    @Test
+    fun `分析：用不上的分支连成一片 孤立节点单独列出且不建议删`() {
+        val report = WorkflowPrune.unusedBranches(withDeadBranches)
+
+        // 80 / 81 / 70 / 71 谁都不喂给出图链路 —— 连成一片 = 一条分支
+        assertEquals(4, report.totalUnused, "用不上的应当是换脸+放大那四个")
+        assertEquals(1, report.branches.size, "它们连在一起，算一条：${report.branches.map { it.nodes.map { n -> n.id } }}")
+        val branch = report.branches.first()
+        assertEquals(setOf("70", "71", "80", "81"), branch.nodes.map { it.id }.toSet())
+        // 入口 = 这条分支里谁也不引用的那个（换脸节点），摘它就是整条一起走
+        assertEquals("80", branch.entry, "入口应当是分支的梢（下游那个）")
+        assertEquals(setOf("70", "71", "80", "81"), branch.suggestRemove().toSet())
+        // 人话标签（用户要照着它做决定，不能只给节点 id）
+        assertTrue(branch.label.isNotBlank())
+        assertTrue(branch.kinds.any { it.contains("放大") }, "节点种类要说人话：${branch.kinds}")
+
+        // 99（没接任何线、也没人用）是"还没接完"，不归"用不上"
+        assertEquals(listOf("99"), report.isolated.map { it.id })
+        assertEquals(1, report.totalIsolated)
+        assertEquals(11, report.totalNodes)
+    }
+
+    @Test
+    fun `分析：干净的工作流一条都不报（宁可少报也不误报）`() {
+        val report = WorkflowPrune.unusedBranches(withReferenceBranch)
+        assertEquals(0, report.totalUnused, "这份图每个节点都在链路里")
+        assertTrue(report.branches.isEmpty())
+        assertTrue(report.toJson()["hint"].toString().contains("没有可摘"), "要明确说没有，而不是给一份空清单")
+    }
+
+    @Test
+    fun `分析结果可以直接拿去摘：建议的入口能整条摘掉`() {
+        val report = WorkflowPrune.unusedBranches(withDeadBranches)
+        val removed = report.branches.flatMap { it.suggestRemove() }
+        val r = WorkflowPrune.apply(withDeadBranches, removeFrom = removed)
+        assertTrue(r.removed.any { it.startsWith("80") }, "摘除清单里要有换脸：${r.removed}")
+        assertTrue(r.removed.any { it.startsWith("70") }, "放大节点也要跟着走：${r.removed}")
+        assertTrue(r.graph.containsKey("10"), "出图链路必须还在")
+        assertTrue(r.graph.containsKey("9"))
+        assertTrue(r.runnable, "${r.unresolved} ${r.warnings}")
+    }
+
+    @Test
+    fun `工具层 analyze 只分析不改图 并且要求先问用户再动手`() = runBlocking {
+        val reg = toolEnv()
+        val record = reg.invoke(
+            "c1",
+            "comfy_prune_workflow",
+            args("graph" to withDeadBranches, "analyze" to true),
+            ctx(),
+        )
+        assertEquals("ok", record.status, record.error)
+        val json = record.resultJson!!
+        // **一个字都不改**：没有 graph 字段（那是真摘才有的东西）
+        assertTrue(json["graph"] == null, "analyze 绝不能带回改过的图")
+        assertEquals("4", textOf(json["totalUnused"]))
+        val branches = json["branches"] as JsonArray
+        assertEquals("80", textOf((branches.first() as JsonObject)["removeFrom"]))
+        val hint = textOf(json["hint"])
+        assertTrue(hint.contains("先问用户"), "必须要求先确认：$hint")
+        assertTrue(hint.contains("isolated") || hint.contains("还没接完"), "要提醒孤立节点别删：$hint")
+    }
+
+    @Test
+    fun `工具层 什么都不要求也没开 analyze 时 报错并指路 analyze`() = runBlocking {
+        val reg = toolEnv()
+        val record = reg.invoke(
+            "c1",
+            "comfy_prune_workflow",
+            args("graph" to withDeadBranches),
+            ctx(),
+        )
+        assertEquals("failed", record.status)
+        assertEquals("INVALID_ARGUMENT", record.errorCode)
+        assertTrue(record.error!!.contains("analyze"), "要告诉模型下一步怎么走：${record.error}")
+    }
+
     @Test
     fun `工具层 什么都没要求就报 INVALID_ARGUMENT 不假装做了事`() = runBlocking {
         val reg = toolEnv()

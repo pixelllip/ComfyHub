@@ -868,11 +868,16 @@ class ToolRegistry(
                 "LoadImage / ControlNet / IPAdapter 那条参考图分支，硬跑只会缺输入；" +
                 "② 显存不够 / 想让采样更快，要往模型链上补一个节点（Sage Attention 之类）；" +
                 "③ 只想留「出图的那条骨干」，把旁支摘干净。" +
+                "\n**两种用法**：" +
+                "\n· `analyze=true`（用户说\"删掉没用的节点\"时**先走这一条**）：只分析不修改，" +
+                "告诉你哪些分支从输出节点反向走不到（= 跟出图无关）、每条在做什么、一共几个节点。" +
+                "拿到结果**先问用户**（`ask_user_question`）确认要摘哪几条，再走下面那条。" +
+                "\n· 给 `removeFrom`（真正执行）：把它所在的那条分支一起摘掉、" +
+                "并**把下游的线接回它自己的上游**（比如 KSampler.positive 原本接在 ControlNet 上，" +
+                "摘掉之后接回文本编码器）。" +
                 "\n怎么用：把工作流的 API 节点图（`comfy_load_workflow(includeGraph=true)` 的 " +
                 "`apiGraph` 或 `comfy_get_run` 的 `raw`）原样传给 `graph`；" +
-                "`removeFrom` 写要摘掉的**位置**（`\"89.image\"` 或 `\"89\"`），" +
-                "我会把它所在的那条分支一起摘掉、并**把下游的线接回它自己的上游**" +
-                "（比如 KSampler.positive 原本接在 ControlNet 上，摘掉之后接回文本编码器）。" +
+                "`removeFrom` 写要摘掉的**位置**（`\"89.image\"` 或 `\"89\"`）。" +
                 "\n`injections` 写要补的节点：`{\"at\":\"3.model\",\"classType\":\"SageAttention\"}` " +
                 "= 把这个节点插在 3.model 那根线上（它的输入定义由后端查 ComfyUI 的 /object_info 算）。" +
                 "\n返回里有改好的**完整图**（`graph`，直接给 comfy_submit 用不了 —— 它是内联图，" +
@@ -881,7 +886,7 @@ class ToolRegistry(
                 "\n**几条纪律**：不确定某个分支该不该摘就先问用户（`ask_user_question`）；" +
                 "`runnable=false` 时**不要**硬提交；摘掉的东西要如实告诉用户（那是他的工作流，不是你的）。",
             parameters = schema(
-                """{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_load_workflow 的 apiGraph / comfy_get_run 的 raw 原样传进来）"},"removeFrom":{"type":"array","items":{"type":"string"},"description":"要摘掉的输入或节点：[\"89.image\"] 或 [\"89\"]（摘的是它所在的那条分支；输出节点与上游共享节点不会被误摘）"},"keep":{"type":"array","items":{"type":"string"},"description":"可选：明确要求保留的节点 id（防止误伤）"},"injections":{"type":"array","description":"可选：要插进去的节点（典型：显存/加速补丁）","items":{"type":"object","properties":{"at":{"type":"string","description":"插在哪个输入上：节点id.输入名，例如 3.model"},"classType":{"type":"string","description":"节点类名，例如 SageAttention"},"inputs":{"type":"object","description":"可选：这个补丁节点自己的输入值（自动接上游的那个输入会由后端补上）","additionalProperties":true},"nodeId":{"type":"string","description":"可选：指定新节点编号"}},"required":["at","classType"],"additionalProperties":false}}},"required":["graph"],"additionalProperties":false}"""
+                """{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_load_workflow 的 apiGraph / comfy_get_run 的 raw 原样传进来）"},"analyze":{"type":"boolean","description":"true = 只分析「哪些分支用不上」，一个字都不改（用户说\"删掉无用节点\"时先走这条，拿到结果先问用户）"},"removeFrom":{"type":"array","items":{"type":"string"},"description":"要摘掉的输入或节点：[\"89.image\"] 或 [\"89\"]（摘的是它所在的那条分支；输出节点与上游共享节点不会被误摘）"},"keep":{"type":"array","items":{"type":"string"},"description":"可选：明确要求保留的节点 id（防止误伤）"},"injections":{"type":"array","description":"可选：要插进去的节点（典型：显存/加速补丁）","items":{"type":"object","properties":{"at":{"type":"string","description":"插在哪个输入上：节点id.输入名，例如 3.model"},"classType":{"type":"string","description":"节点类名，例如 SageAttention"},"inputs":{"type":"object","description":"可选：这个补丁节点自己的输入值（自动接上游的那个输入会由后端补上）","additionalProperties":true},"nodeId":{"type":"string","description":"可选：指定新节点编号"}},"required":["at","classType"],"additionalProperties":false}}},"required":["graph"],"additionalProperties":false}"""
             ),
             category = ToolCategory.COMFY,
             mutating = false,
@@ -911,10 +916,18 @@ class ToolRegistry(
                     )
                 }
             if (removeFrom.isEmpty() && injections.isEmpty()) {
+                // `analyze=true`（用户建议 ④）：只分析"哪些分支用不上"，一个字都不改。
+                // 用户说"删掉没用的节点"时走的就是这一条 —— 拿到清单**先问他**，再摘。
+                if (args.bool("analyze") == true) {
+                    val report = WorkflowPrune.unusedBranches(graph, keep)
+                    val json = report.toJson()
+                    return@AgentTool ToolOutput(AppJson.encodeToString(JsonElement.serializer(), json), json)
+                }
                 throw ToolFailure(
                     "INVALID_ARGUMENT",
                     "至少给一样：removeFrom（摘哪些）或 injections（插什么）——" +
-                        "什么都没要求的话，这份图原样就是你要的",
+                        "什么都没要求的话，这份图原样就是你要的。" +
+                        "想知道哪些分支用不上，先带 `analyze=true` 调一次（只分析、不改图）。",
                 )
             }
 

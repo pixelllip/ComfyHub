@@ -312,6 +312,274 @@ object WorkflowPrune {
         )
     }
 
+    /**
+     * 一份"这段是干什么的"人话描述（用户建议 ④：分析出本地**用不上**的节点，
+     * 向用户确认后再删）。
+     *
+     * 判据是几条最常见的类名特征，**认不出就照抄类名** —— 编一个听起来很懂的解释
+     * 比不解释更坏（用户会照着它做决定）。这一段只影响文案，不影响摘除判据。
+     */
+    fun describe(cls: String): String {
+        val c = cls.lowercase()
+        return when {
+            c.contains("controlnet") -> "ControlNet（结构控制）"
+            c.contains("ipadapter") -> "IPAdapter（参考图/风格）"
+            c.contains("loadimage") -> "LoadImage（参考图文件）"
+            c.contains("loadvideo") || c.contains("vhs_loadvideo") -> "LoadVideo（参考视频）"
+            c.contains("loadaudio") -> "LoadAudio（参考音频）"
+            c.contains("loraloader") || c.contains("lora_tag") -> "LoRA 加载"
+            c.contains("vae") -> "VAE 加载/解码"
+            c.contains("clip") -> "文本编码器加载"
+            c.contains("unetloader") || c.contains("checkpointloader") ||
+                c.contains("diffusionmodelloader") -> "模型加载"
+            c.contains("upscale") || c.contains("imagescale") -> "放大 / 缩放"
+            c.contains("faceswap") || c.contains("facerestore") -> "换脸 / 修脸"
+            c.contains("detailer") || c.contains("adetailer") -> "细节修复（Detailer）"
+            c.contains("segment") || c.contains("mask") -> "遮罩 / 分割"
+            c.contains("pose") || c.contains("openpose") -> "姿态提取"
+            c.contains("depth") -> "深度提取"
+            c.contains("label") -> "Label（纯界面标注，不参与出图）"
+            c.contains("note") || c.contains("bookmark") -> "笔记 / 书签（纯界面元素）"
+            c.contains("reroute") -> "Reroute（纯转接线）"
+            // 认不出来就照抄类名，别编
+            else -> cls
+        }
+    }
+
+    /**
+     * **用不上的分支**分析（用户建议 ④，2026-09-22）。
+     *
+     * > "设计工具，当用户提出类似'删除无用节点'时，分析出本地用不上的节点并向用户再次确认删除，
+     * >  然后执行操作。"
+     *
+     * 判据与摘除完全同源：**从输出节点反向走不到** = 跟出图无关。不去猜"这个类像不像
+     * ControlNet"（那样第三方节点就漏了），所以结果和真摘一次是一致的。
+     *
+     * @param graph API 格式节点图
+     * @param keep 用户点名要保留的节点（不会进建议）
+     * @param maxBranches 最多报几条分支（一次报 40 段没人看得完）
+     */
+    fun unusedBranches(
+        graph: JsonObject,
+        keep: Set<String> = emptySet(),
+        maxBranches: Int = 12,
+    ): Report {
+        val nodes = LinkedHashMap<String, JsonObject>()
+        graph.forEach { (id, v) -> (v as? JsonObject)?.let { nodes[id] = it } }
+        val outputs = nodes.filterKeys { isOutput(it, nodes) }.keys.toList()
+        val live = liveNodes(nodes, outputs)
+
+        // "还没接完"的孤立节点：**自己没接任何线，也没人用它**。
+        //
+        // ⚠ 两个条件缺一不可（写第一版时只判了"没接线"，于是把 `FaceSwap.face` 指着的
+        // `LoadImage` 也算成了孤立 —— 它是这条死分支的上游，摘的时候要一起走）。
+        // 判据与 `apply` 级联摘除里那条"孤立节点不碰"逐字一致。
+        fun isolated(id: String): Boolean {
+            if (id in live) return false
+            if (consumersOf(id, nodes).isNotEmpty()) return false
+            val inputs = (nodes[id]?.get("inputs") as? JsonObject).orEmpty()
+            return inputs.values.none { refOf(it) != null }
+        }
+
+        val orphanIds = nodes.keys.filter { it !in live && isolated(it) }.toSet()
+        val deadIds = nodes.keys.filter { it !in live && it !in orphanIds && it !in keep && it !in outputs }
+        val deadSet = deadIds.toSet()
+
+        val raw = deadIds.map { id ->
+            Candidate(
+                id = id,
+                cls = nodes[id]?.cls().orEmpty(),
+                usedBy = consumersOf(id, nodes).sorted(),
+            )
+        }
+
+        // 连成一片的算一条分支 —— 但"连成一片"必须**按数据流方向**连，不是无向连通：
+        // 一条分支 = 一个末端（谁也不引用的死节点）＋ 喂给它的所有上游。
+        // 用户在图里点那个末端，整条分支就跟着被摘掉，这正是 `apply` 的级联判据。
+        //
+        // （第一版按无向连通分组，把 `FaceSwap.face ← LoadImage` 这种"横向喂料"也连进
+        // 同一片，于是一片里出现两个互不喂料的梢，入口就选到了错误的那个。）
+        val byTip = LinkedHashMap<String, MutableList<Candidate>>()
+        raw.forEach { cand ->
+            val tip = downstreamTip(cand.id, nodes, deadSet)
+            byTip.getOrPut(tip) { mutableListOf() }.add(cand)
+        }
+        val branches = mutableListOf<Branch>()
+        byTip.forEach { (tipId, group) ->
+            val entry = group.firstOrNull { it.id == tipId }
+                ?: group.maxByOrNull { collect(it.id, nodes).count { id -> id in deadSet } }
+                ?: group.first()
+            val classes = group.map { it.cls }.distinct()
+            branches += Branch(
+                index = branches.size + 1,
+                entry = entry.id,
+                entryCls = entry.cls,
+                label = describe(entry.cls),
+                nodes = group,
+                kinds = classes.map { describe(it) }.distinct().take(6),
+            )
+        }
+
+        val sorted = branches
+            .sortedWith(compareByDescending<Branch> { it.nodes.size }.thenBy { it.entry.toLongOrNull() ?: Long.MAX_VALUE })
+            .mapIndexed { i, b -> b.copy(index = i + 1) }
+            .take(maxBranches)
+
+        val shown = sorted.sumOf { it.nodes.size }
+        return Report(
+            branches = sorted,
+            isolated = orphanIds.sortedBy { it.toLongOrNull() ?: Long.MAX_VALUE }
+                .map { Candidate(it, nodes[it]?.cls().orEmpty(), emptyList()) },
+            totalUnused = deadIds.size,
+            totalIsolated = orphanIds.size,
+            totalNodes = nodes.size,
+            outputCount = outputs.size,
+            truncated = deadIds.size > shown,
+        )
+    }
+
+    /** 一条**用不上的分支**（连成一片、可以整条摘掉）。 */
+    data class Branch(
+        val index: Int,
+        /** 建议的入口节点 id（`removeFrom` 就写它） */
+        val entry: String,
+        val entryCls: String,
+        /** 这条分支在做什么（人话） */
+        val label: String,
+        val nodes: List<Candidate>,
+        /** 组内出现过的节点种类（人话，最多 6 条） */
+        val kinds: List<String>,
+    ) {
+        /**
+         * 这条分支要摘的节点 id。
+         *
+         * **整条都给**（不是只给 entry）：`removeFrom` 只写入口时，`apply` 会按"从输出反向
+         * 再也走不到"级联摘掉同一片 —— 结果是一样的，但显式列全了，用户核对时不会漏。
+         */
+        fun suggestRemove(): List<String> = nodes.map { it.id }
+    }
+
+    /** 一个候选节点。 */
+    data class Candidate(
+        val id: String,
+        val cls: String,
+        /** 图里还有谁在引用它（空 = 这条分支的末端） */
+        val usedBy: List<String>,
+    )
+
+    /** 分析结果（只报不改）。 */
+    data class Report(
+        val branches: List<Branch>,
+        /** 未接线（还没接完）的孤立节点 —— 明确**不建议**删 */
+        val isolated: List<Candidate>,
+        val totalUnused: Int,
+        val totalIsolated: Int,
+        val totalNodes: Int,
+        val outputCount: Int,
+        /** 超过 [unusedBranches] 的 maxBranches，还有没列出来的 */
+        val truncated: Boolean,
+    ) {
+        fun toJson(): JsonObject = buildJsonObject {
+            put("ok", true)
+            put(
+                "summary",
+                if (totalUnused == 0) {
+                    "这份工作流没有用不上的分支：$totalNodes 个节点全都在出图链路上。"
+                } else {
+                    "这份工作流共 $totalNodes 个节点，其中 **$totalUnused 个** 从任何一个输出节点" +
+                        "（共 $outputCount 个）反向都走不到 —— 也就是跟出图无关，可以摘掉" +
+                        "（分成 ${branches.size} 条分支）。"
+                },
+            )
+            put("totalNodes", totalNodes)
+            put("totalUnused", totalUnused)
+            put("outputCount", outputCount)
+            put("truncated", truncated)
+            put(
+                "branches",
+                buildJsonArray {
+                    branches.forEach { b ->
+                        add(
+                            buildJsonObject {
+                                put("index", b.index)
+                                put("removeFrom", b.entry)
+                                put("label", b.label)
+                                put("classType", b.entryCls)
+                                put("nodeCount", b.nodes.size)
+                                put(
+                                    "nodes",
+                                    buildJsonArray {
+                                        b.nodes.forEach { n ->
+                                            add(
+                                                buildJsonObject {
+                                                    put("id", n.id)
+                                                    put("classType", n.cls)
+                                                    put("label", describe(n.cls))
+                                                    if (n.usedBy.isNotEmpty()) {
+                                                        put("usedBy", JsonArray(n.usedBy.map { JsonPrimitive(it) }))
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    },
+                                )
+                                put("kinds", JsonArray(b.kinds.map { JsonPrimitive(it) }))
+                            }
+                        )
+                    }
+                },
+            )
+            if (isolated.isNotEmpty()) {
+                put(
+                    "isolated",
+                    buildJsonArray {
+                        isolated.forEach { n ->
+                            add(
+                                buildJsonObject {
+                                    put("id", n.id)
+                                    put("classType", n.cls)
+                                    put("label", describe(n.cls))
+                                }
+                            )
+                        }
+                    },
+                )
+            }
+            put(
+                "hint",
+                if (totalUnused == 0) {
+                    "没有可摘的分支。别为了'看起来干净'去动还在链路里的节点。"
+                } else {
+                    "**先问用户再动手**（`ask_user_question`，选项用每条的 label）：" +
+                        "把上面每条的 removeFrom / label / 节点数说清楚，用户确认哪几条，" +
+                        "再用 `removeFrom=[那些 entry]` 调一次本工具（这次不带 analyze）真正执行。" +
+                        "`isolated` 里的是**还没接完**的节点，不要删。"
+                },
+            )
+        }
+    }
+
+    /**
+     * [id] 这条死数据流最终喂给谁（**顺流而下**找那个谁也不引用的死节点）。
+     *
+     * 它就是"这条分支的梢"：用户在图里点它，`apply` 的级联会把整条一起摘掉。
+     * 多个梢都能到（分叉到两个末端）时取编号大的那个，保证同一份图每次报同一条。
+     */
+    private fun downstreamTip(id: String, nodes: Map<String, JsonObject>, dead: Set<String>): String {
+        var cursor = id
+        var best = id
+        val seen = mutableSetOf<String>()
+        var guard = 0
+        while (guard++ < 256 && seen.add(cursor)) {
+            best = cursor
+            val next = consumersOf(cursor, nodes).filter { it in dead }.maxByOrNull {
+                it.toLongOrNull() ?: Long.MIN_VALUE
+            } ?: break
+            cursor = next
+        }
+        return best
+    }
+
     /** 谁在用它（哪些节点把它当上游）；[ignoring] 里的节点不算（它们已经被决定摘掉了）。 */
     private fun consumersOf(
         nodeId: String,
