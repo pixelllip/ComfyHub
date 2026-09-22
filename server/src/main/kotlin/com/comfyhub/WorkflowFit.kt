@@ -43,6 +43,13 @@ data class FitReport(
     val truncated: Boolean,
     val missingNodes: List<String>,
     val items: List<FitItem>,
+    /**
+     * 本机清单里"**盘上有、但当前跑的实例枚举不到**"的条数（2026-09-22 事故的诊断口）。
+     *
+     * \> 0 就说明这个实例的模型根没挂全（`--extra-model-paths-config` 没生效 /
+     * 实例不是从 ComfyUI Desktop 那套配置起的）——报告里会明说这一句。
+     */
+    val inventoryDiskOnly: Int = 0,
 ) {
     /** 有没有"必须动手"的项（缺模型，或者要改键）。 */
     val needsAction: Boolean get() = items.any { it.status != FitStatus.EXACT }
@@ -58,7 +65,11 @@ data class FitReport(
         put("required", items.size)
         put("exact", items.count { it.status == FitStatus.EXACT })
         put("substitute", items.count { it.status == FitStatus.SUBSTITUTE })
+        // 盘上有、但这个实例枚举不到（2026-09-22）：单列一档，别混进 missing ——
+        // 混进去的后果是模型让用户去下载一个本来就在硬盘上的文件
+        put("onDiskOnly", items.count { it.status == FitStatus.ON_DISK_ONLY })
         put("missing", items.count { it.status == FitStatus.MISSING })
+        if (inventoryDiskOnly > 0) put("invisibleToInstance", inventoryDiskOnly)
         if (missingNodes.isNotEmpty()) {
             put("missingNodes", buildJsonArray { missingNodes.forEach { add(JsonPrimitive(it)) } })
         }
@@ -88,6 +99,9 @@ data class FitReport(
                                                     put("folder", c.model.folder)
                                                     put("score", kotlin.math.round(c.score * 100) / 100.0)
                                                     put("sameFolder", c.sameFolder)
+                                                    // 这个候选**当前实例能不能加载**：false 的不能拿去 overrides
+                                                    // （ComfyUI 只会回一句文件不存在）
+                                                    put("visibleToInstance", c.model.visibleToInstance)
                                                     c.model.path?.let { put("path", it) }
                                                     c.model.sizeGb?.let {
                                                         put("sizeGB", kotlin.math.round(it * 100) / 100.0)
@@ -163,10 +177,14 @@ data class FitReport(
         }
         val exact = items.count { it.status == FitStatus.EXACT }
         val sub = items.count { it.status == FitStatus.SUBSTITUTE }
+        val diskOnly = items.count { it.status == FitStatus.ON_DISK_ONLY }
         val miss = items.count { it.status == FitStatus.MISSING }
         append("这份工作流要 ").append(required).append(" 个模型：")
         append("本机有同名的 ").append(exact).append(" 个");
         if (sub > 0) append("、有可替代的 ").append(sub).append(" 个")
+        if (diskOnly > 0) {
+            append("、**硬盘上有同名但当前实例看不到的 ").append(diskOnly).append(" 个**")
+        }
         if (miss > 0) append("、**本机没有的 ").append(miss).append(" 个**")
         append("。\n")
         append("（本机清单来自 ").append(if (inventorySource == ComfyModels.Source.OBJECT_INFO) {
@@ -175,6 +193,13 @@ data class FitReport(
             "目录扫描，共 $localCount 条" + (modelsDir?.let { "，扫的是 $it" } ?: "")
         })
         append("）\n")
+        if (inventoryDiskOnly > 0) {
+            append("⚠ 本机清单里有 ").append(inventoryDiskOnly)
+            append(" 个文件**只出现在硬盘上、当前跑的 ComfyUI 实例枚举不到**——")
+            append("说明这个实例的模型根没挂全（`--extra-model-paths-config` 没生效）。\n")
+            append("  这类文件**不要拿去 overrides**（提交只会报文件不存在），也**不要下载**（它就在硬盘上）：")
+            append("先让用户重启 ComfyUI（ComfyHub 起实例时会自动挂上 ComfyUI Desktop 的模型根，见 `comfy_env_report`）再对一次。\n")
+        }
 
         items.forEach { item ->
             append("\n· ").append(item.requirement.overrideKey)
@@ -194,10 +219,28 @@ data class FitReport(
                             item.candidates.joinToString("；") { c ->
                                 "${c.model.name}（像 ${(c.score * 100).toInt()}%" +
                                     (c.model.sizeGb?.let { "，${"%.1f".format(it)}GB" } ?: "") +
-                                    (if (c.sameFolder) "" else "，在 ${c.model.folder}/ 里") + "）"
+                                    (if (c.sameFolder) "" else "，在 ${c.model.folder}/ 里") +
+                                    (if (c.model.visibleToInstance) "" else "，**当前实例看不到它**") + "）"
                             } +
                             " —— 像不像、能不能顶要你自己判断（分数只是字面相似度，" +
-                            "**不保证架构兼容**）；拿不准就问用户。"
+                            "**不保证架构兼容**）；拿不准就问用户。" +
+                            if (item.candidates.none { it.model.visibleToInstance }) {
+                                "\n  ⚠️ 这些候选**当前实例都枚举不到**（在硬盘上但没挂上）：先让用户重启 ComfyUI 再提交，" +
+                                    "别拿它们去 overrides（只会得到一句文件不存在）。"
+                            } else {
+                                ""
+                            }
+                    FitStatus.ON_DISK_ONLY -> {
+                        val local = item.candidates.first().model
+                        "🟡 **硬盘上有这个文件**（${local.name}" +
+                            (local.sizeGb?.let { "，${"%.1f".format(it)}GB" } ?: "") +
+                            (local.path?.let { "，在 $it" } ?: "") +
+                            "），但**当前跑的 ComfyUI 实例枚举不到它**" +
+                            "—— 说明这次启动没挂上那套模型根（共享目录 / 别的盘）。\n" +
+                            "  **先修挂载再提交，不要下载**（文件本来就在硬盘上），也**不要**改 overrides " +
+                            "（改成它也一样加载不了）：让用户重启 ComfyUI（ComfyHub 起实例时会自动挂上），" +
+                            "或先 `comfy_env_report` 看三个根到底差在哪。"
+                    }
                     FitStatus.MISSING ->
                         "❌ 本机没找到像样的替代品。**不要编一个文件名**去提交" +
                             "（ComfyUI 只会报文件不存在）。" +
@@ -238,6 +281,10 @@ data class FitReport(
             "这份工作流没有点名模型文件" +
                 (if (missingNodes.isEmpty()) "。" else "，但有 " + missingNodes.size +
                     " 个节点类本机 ComfyUI 里没有（见 missingNodes）——先用 comfy_check_inputs 看缺口。")
+        items.any { it.status == FitStatus.ON_DISK_ONLY } ->
+            "要的模型**硬盘上就有**，只是当前这个 ComfyUI 实例枚举不到它们（模型根没挂全）。" +
+                "**不要去下载**，也别改 overrides：先让用户重启 ComfyUI" +
+                "（ComfyHub 起实例时会自动挂上 ComfyUI Desktop 的模型根），或用 comfy_env_report 看根目录差在哪。"
         allMissing ->
             "本机没有这份工作流要的模型。**不要硬提交**：先去 `civitai_search` 查这些模型" +
                 "（拿体积与下载链接），再用 `ask_user_question` 给用户 2~4 个具体选项" +
@@ -285,18 +332,31 @@ data class FitItem(
         FitStatus.SUBSTITUTE ->
             "本机没有同名的；候选见 candidates。换之前**先问用户**（那是他的模型），" +
                 "确认后写 comfy_submit(overrides={\"${requirement.overrideKey}\":\"<候选名>\"})。"
+        FitStatus.ON_DISK_ONLY ->
+            "盘上有同名的（见 candidates[0].path），但**当前实例加载不了**：先让用户重启 ComfyUI / 修好模型根，" +
+                "**不要下载**（文件就在硬盘上），也不要改 overrides（改了同样报文件不存在）。"
         FitStatus.MISSING ->
             "本机没有。先去 civitai_search 查它，再用 ask_user_question 让用户决定装 / 换工作流 / 放弃。"
     }
 }
 
-/** 配对结论（三档，见 [FitReport] 的注释）。 */
+/** 配对结论（四档，见 [FitReport] 的注释）。 */
 enum class FitStatus(val wire: String) {
-    /** 本机有一模一样的（归一化后同名）—— 唯一能自动替换的一档。 */
+    /** 本机有一模一样的（归一化后同名）**且当前实例能加载** —— 唯一能自动替换的一档。 */
     EXACT("exact"),
 
     /** 本机有更接近的（分数 ≥ 阈值）：候选给出来，用不用由模型 / 用户定。 */
     SUBSTITUTE("substitute"),
+
+    /**
+     * **硬盘上有同名的，但当前跑着的那个实例枚举不到它**（2026-09-22 新加，那次事故的直接产物）。
+     *
+     * 机制：`launch_comfyui` 直接跑 `main.py`，ComfyUI Desktop 那套"模型在共享目录 / 别的盘"
+     * 的配置一个都没传 → `/object_info` 里没有这些文件 → 只报"本机没有"会让模型
+     * **让用户去下载一个本来就在硬盘上的文件**（现场：`anima-base-v1.0` 4.18 GB）。
+     * 这一档的正确动作是**修挂载 / 重启**，不是下载。
+     */
+    ON_DISK_ONLY("onDiskOnly"),
 
     /** 本机没有像样的替代品：该去装 / 该让用户选，**不许编名字**。 */
     MISSING("missing"),
@@ -323,10 +383,18 @@ object WorkflowFit {
         val requirements = ComfyModels.requirements(graph, modelInputs)
         val items = requirements.map { req ->
             val candidates = inventory.candidatesFor(req.folder, req.fileName)
-            val exact = candidates.firstOrNull { ModelName.same(req.fileName, it.model.name) }
+            // 同名要分两种：**实例能加载**的才算"不用改"；只在盘上的要走 ON_DISK_ONLY
+            // （不然就是"AI 说模型齐了、提交却报文件不存在"的反向版本）
+            val exactVisible = candidates.firstOrNull {
+                it.model.visibleToInstance && ModelName.same(req.fileName, it.model.name)
+            }
+            val exactAny = candidates.firstOrNull { ModelName.same(req.fileName, it.model.name) }
             when {
                 // 同名优先：就算还有别的更高分的候选，"一模一样"永远是最好的答案
-                exact != null -> FitItem(req, FitStatus.EXACT, listOf(exact) + candidates.filter { it !== exact })
+                exactVisible != null ->
+                    FitItem(req, FitStatus.EXACT, listOf(exactVisible) + candidates.filter { it !== exactVisible })
+                exactAny != null ->
+                    FitItem(req, FitStatus.ON_DISK_ONLY, listOf(exactAny) + candidates.filter { it !== exactAny })
                 candidates.isNotEmpty() -> FitItem(req, FitStatus.SUBSTITUTE, candidates)
                 else -> FitItem(
                     req,
@@ -354,6 +422,7 @@ object WorkflowFit {
             truncated = inventory.truncated,
             missingNodes = missingNodes,
             items = items,
+            inventoryDiskOnly = inventory.diskOnly.size,
         )
     }
 }

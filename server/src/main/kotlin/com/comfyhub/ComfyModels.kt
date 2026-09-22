@@ -141,6 +141,15 @@ object ComfyModels {
         /** 盘上的绝对路径（扫盘来源才有；`/object_info` 来源为 null） */
         val path: String? = null,
         val bytes: Long? = null,
+        /**
+         * **当前跑着的那个 ComfyUI 实例能不能加载它**（= 它出现在 `/object_info` 的枚举里）。
+         *
+         * 这一位是 2026-09-22 那次事故的解药：盘上有 `anima-base-v1.0.safetensors`，
+         * 但 `launch_comfyui` 起的实例**没挂共享模型根**，于是枚举里没有它 ——
+         * 只报"本机没有"会让模型跑去下载一个**本来就在硬盘上**的 4GB 文件。
+         * 只有 `false` 才是需要解释的状态（"盘上有、这个实例看不到"）。
+         */
+        val visibleToInstance: Boolean = true,
     ) {
         /** 给用户看的体积（GB，一位小数）；不知道就 null —— **不编一个数出来**。 */
         val sizeGb: Double? get() = bytes?.let { it / 1024.0 / 1024.0 / 1024.0 }
@@ -153,6 +162,16 @@ object ComfyModels {
         /** 认出来的 `models\` 目录（扫盘来源才有；报告里要能说清"扫的是哪儿"） */
         val modelsDir: Path? = null,
         val truncated: Boolean = false,
+        /**
+         * **盘上有、但当前实例枚举不到**的那些（[LocalModel.visibleToInstance] 为 false）。
+         *
+         * 报告里单列一句"这个实例看不到它们" —— 这一句能一眼定位
+         * "`--extra-model-paths-config` 没生效 / 实例没挂共享模型根"，
+         * 而不是让模型以为"本机没有这个模型"（2026-09-22 现场就是这么错了 30 分钟）。
+         */
+        val diskOnly: List<LocalModel> = emptyList(),
+        /** 这份清单是不是 `/object_info` 与盘扫的**并集**（只有并集才谈得上"看不到"）。 */
+        val merged: Boolean = false,
     ) {
         fun inFolder(folder: String): List<LocalModel> =
             models.filter { it.folder.equals(folder, ignoreCase = true) }
@@ -223,17 +242,70 @@ object ComfyModels {
     private val scanCache = ConcurrentHashMap<String, Cached>()
 
     /**
-     * 拿本机清单。
+     * 拿本机清单：**`/object_info` 与盘扫的并集**（2026-09-22 改）。
      *
-     * @param objectInfo ComfyUI 的 `/object_info`（拿得到就用它 —— 那是权威清单）；
-     *   为 null 时退回扫盘（[ComfyRoots] 认出来的 ComfyUI 根 + 用户配置的输出目录父目录）。
+     * 以前是"问得到 ComfyUI 就只用它、`return`"——那次事故的机制就在这里：
+     * `launch_comfyui` 起的实例没挂共享模型根，`/object_info` 是一份**权威但看不到共享目录**的清单，
+     * 于是"盘上明明有的 anima-base / qwen_3_06b_base"被报成"本机没有"，
+     * 模型据此让用户去下载一个**本来就在硬盘上**的文件。
+     *
+     * 现在的语义分得很清：
+     *  - [Inventory.models] 里**能加载的就是能加载的**（`visibleToInstance = true`，来自 `/object_info`，权威）；
+     *  - 盘上多出来的那些也列进来，但标 `false`，并在 [Inventory.diskOnly] 里单列 ——
+     *    报告据此说"**这个实例看不到它们**"，而不是"本机没有"。
+     *
+     * @param objectInfo ComfyUI 的 `/object_info`（拿得到就是"能加载什么"的唯一权威）；
+     *   为 null 时退回扫盘（[ComfyRoots] 认出来的 ComfyUI 根 + 用户配置的输出目录父目录 + [modelDirs]）。
      * @param projectRoot 项目根（扫盘时用来定位项目内的 `comfyui` 与调用 [ComfyRoots] 的探测）；
      *   为 null 就只用环境变量与用户配置。
+     * @param modelDirs 用户**真实的模型根**（`models` 目录本身），例如 ComfyUI Desktop 的
+     *   `…\ComfyUI-Shared\models` 与 `E:\ComfyUI\models`（见 [ComfyEnv]）。
+     *   ⚠ 由调用方传进来、**不在这里读环境** —— 这样单测才不会被开发机的真实目录影响。
      */
-    fun inventory(objectInfo: JsonObject?, projectRoot: Path? = null): Inventory {
-        fromObjectInfo(objectInfo)?.let { return it }
-        return scan(projectRoot)
+    fun inventory(
+        objectInfo: JsonObject?,
+        projectRoot: Path? = null,
+        modelDirs: List<Path> = emptyList(),
+    ): Inventory {
+        val fromInstance = fromObjectInfo(objectInfo)
+        val fromDisk = scan(projectRoot, modelDirs)
+        if (fromInstance == null) return fromDisk
+        if (fromDisk.models.isEmpty()) return fromInstance
+        return merge(fromInstance, fromDisk)
     }
+
+    /**
+     * 并集：盘上的为准（有 path / 体积），实例枚举到的标成"能加载"。
+     *
+     * 判重按 `目录 + 文件名` 归一化后比（`/` 与 `\` 都当分隔符、大小写不敏感）——
+     * `/object_info` 给的可能是 `SDXL\a.safetensors`，而扫盘给的是 `SDXL/a.safetensors`。
+     */
+    private fun merge(instance: Inventory, disk: Inventory): Inventory {
+        val byKey = LinkedHashMap<String, LocalModel>()
+        disk.models.forEach { byKey[keyOf(it)] = it.copy(visibleToInstance = false) }
+        instance.models.forEach { m ->
+            val onDisk = byKey[keyOf(m)]
+            byKey[keyOf(m)] = m.copy(
+                visibleToInstance = true,
+                path = onDisk?.path,
+                bytes = onDisk?.bytes,
+            )
+        }
+        val all = byKey.values.sortedWith(compareBy({ it.folder }, { it.name }))
+        val truncated = all.size > MAX_ENTRIES
+        return Inventory(
+            // 权威来源仍然是实例：**能不能加载**由它说了算
+            source = instance.source,
+            models = if (truncated) all.take(MAX_ENTRIES) else all,
+            modelsDir = disk.modelsDir,
+            truncated = truncated,
+            diskOnly = all.filter { !it.visibleToInstance },
+            merged = true,
+        )
+    }
+
+    private fun keyOf(m: LocalModel): String =
+        m.folder.lowercase() + "|" + m.name.replace('\\', '/').lowercase()
 
     /**
      * 从 `/object_info` 的**输入枚举**里抠出模型清单。
@@ -278,17 +350,26 @@ object ComfyModels {
     }
 
     /**
-     * 扫盘：在 [ComfyRoots] 认出来的 ComfyUI 根底下看 `models\<folder>\**`（只读元数据）。
+     * 扫盘：在 [ComfyRoots] 认出来的 ComfyUI 根底下看 `models\<folder>\**`（只读元数据），
+     * 外加调用方给的真实模型根 [modelDirs]（ComfyUI Desktop 的共享目录、别的盘上的模型库）。
      *
      * 有界：每个目录最多 [MAX_ENTRIES] 条、不跟随符号链接、深度 ≤ [MAX_SCAN_DEPTH]。
      * 扫不到就返回空清单（[Source.NONE]）—— 那是"这台机器没装 ComfyUI / 没放模型"的正常情形，
      * 不是错误；报告里会如实说"本机清单是空的，所以配不上任何模型"。
+     *
+     * @param modelDirs **`models` 目录本身**（不是"ComfyUI 根"），例如
+     *   `…\ComfyUI-Shared\models`；不存在的一律忽略。
      */
-    fun scan(projectRoot: Path? = null): Inventory {
-        val roots = scanRoots(projectRoot)
-        if (roots.isEmpty()) return Inventory(Source.NONE, emptyList())
+    fun scan(projectRoot: Path? = null, modelDirs: List<Path> = emptyList()): Inventory {
+        val dirs = LinkedHashSet<Path>()
+        scanRoots(projectRoot).forEach { root ->
+            val dir = root.resolve("models")
+            if (Files.isDirectory(dir)) dirs.add(dir)
+        }
+        modelDirs.forEach { if (Files.isDirectory(it)) dirs.add(it) }
+        if (dirs.isEmpty()) return Inventory(Source.NONE, emptyList())
 
-        val key = roots.joinToString(";") { it.toString() }
+        val key = dirs.joinToString(";") { it.toString() }
         scanCache[key]?.let { if (System.currentTimeMillis() - it.at < SCAN_TTL_MS) {
             return Inventory(Source.SCAN, it.models, it.dir, it.truncated)
         } }
@@ -297,9 +378,7 @@ object ComfyModels {
         var truncated = false
         var modelsDir: Path? = null
 
-        for (root in roots) {
-            val dir = root.resolve("models")
-            if (!Files.isDirectory(dir)) continue
+        for (dir in dirs) {
             if (modelsDir == null) modelsDir = dir
             MODEL_INPUTS.values.flatten().map { it.folder }.distinct().forEach { folder ->
                 val folderDir = dir.resolve(folder)
@@ -325,7 +404,7 @@ object ComfyModels {
         }
         val models = found.values.sortedWith(compareBy({ it.folder }, { it.name }))
         scanCache[key] = Cached(System.currentTimeMillis(), modelsDir, models, truncated)
-        log.info("扫到本机模型 {} 个（models={}）", models.size, modelsDir)
+        log.info("扫到本机模型 {} 个（扫了 {} 个 models 目录，首个 {}）", models.size, dirs.size, modelsDir)
         return Inventory(Source.SCAN, models, modelsDir, truncated)
     }
 

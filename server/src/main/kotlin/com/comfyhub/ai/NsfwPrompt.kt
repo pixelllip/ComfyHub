@@ -121,10 +121,13 @@ object NsfwPrompt {
             用户从网上抄了一份工作流、或者让你"按这份工作流生成"时，**先 `comfy_fit_workflow`**
             （把 `comfy_load_workflow(includeGraph=true)` 的 `apiGraph` 原样传进去）——
             它会告诉你图里点名了哪些 checkpoint / LoRA / VAE / CLIP，本机最接近的是哪个（带**字面相似度**
-            与体积），以及要改哪几个 `overrides` 键。三种结论照这样处理：
-            `exact` = 本机有同名的，直接提交；`substitute` = 有更像的，**先跟用户确认再换**
+            与体积），以及要改哪几个 `overrides` 键。四种结论照这样处理：
+            `exact` = 本机有同名的**且当前实例能加载**，直接提交；`substitute` = 有更像的，**先跟用户确认再换**
             （那是他的模型；相似度高**不代表架构兼容** —— `sd_xl_base` 与 `sd_xl_refiner` 分数很高
-            却是两份不同的模型）；`missing` = 本机没有，**绝对不要自己编一个文件名**去提交
+            却是两份不同的模型）；`onDiskOnly` = **硬盘上有同名文件，但当前这个 ComfyUI 实例枚举不到它**
+            （= 实例的模型根没挂全）：**先让用户重启 ComfyUI / 修好挂载再提交，绝对不要去下载** ——
+            文件本来就在硬盘上，也不许把它写进 `overrides`（改了同样报文件不存在）；
+            `missing` = 本机确实没有，**绝对不要自己编一个文件名**去提交
             （ComfyUI 只会回一句文件不存在）：先 `civitai_search` 查它（名字 / 体积 / 链接），
             再用 `ask_user_question` 给用户 2~4 个**具体**选项 —— 自己装它 / 换一条只用本机已有模型的
             等价工作流 / 放弃，让他选。
@@ -651,10 +654,13 @@ object NsfwPrompt {
             用户从网上抄了一份工作流、或者让你"按这份工作流生成"时，**先 `comfy_fit_workflow`**
             （把 `comfy_load_workflow(includeGraph=true)` 的 `apiGraph` 原样传进去）——
             它会告诉你图里点名了哪些 checkpoint / LoRA / VAE / CLIP，本机最接近的是哪个（带**字面相似度**
-            与体积），以及要改哪几个 `overrides` 键。三种结论照这样处理：
-            `exact` = 本机有同名的，直接提交；`substitute` = 有更像的，**先跟用户确认再换**
+            与体积），以及要改哪几个 `overrides` 键。四种结论照这样处理：
+            `exact` = 本机有同名的**且当前实例能加载**，直接提交；`substitute` = 有更像的，**先跟用户确认再换**
             （那是他的模型；相似度高**不代表架构兼容** —— `sd_xl_base` 与 `sd_xl_refiner` 分数很高
-            却是两份不同的模型）；`missing` = 本机没有，**绝对不要自己编一个文件名**去提交
+            却是两份不同的模型）；`onDiskOnly` = **硬盘上有同名文件，但当前这个 ComfyUI 实例枚举不到它**
+            （= 实例的模型根没挂全）：**先让用户重启 ComfyUI / 修好挂载再提交，绝对不要去下载** ——
+            文件本来就在硬盘上，也不许把它写进 `overrides`（改了同样报文件不存在）；
+            `missing` = 本机确实没有，**绝对不要自己编一个文件名**去提交
             （ComfyUI 只会回一句文件不存在）：先 `civitai_search` 查它（名字 / 体积 / 链接），
             再用 `ask_user_question` 给用户 2~4 个**具体**选项 —— 自己装它 / 换一条只用本机已有模型的
             等价工作流 / 放弃，让他选。

@@ -392,12 +392,16 @@ fun Application.module(ctx: AppContext) {
         // 摘/拼节点（用户建议 ②）：拼装要照着 ComfyUI 的节点定义算，
         // 拿不到就只摘不拼（宁可不做，也不乱接一根线）
         comfyObjectInfo = { runCatching { submitter.objectInfo() }.getOrNull() },
-        // 本机模型清单（用户建议 ①）：能问 ComfyUI 就问它（/object_info 的枚举就是它能加载的），
-        // 问不到才扫盘（判据复用 ComfyRoots，与读白名单同一套根目录）
+        // 本机模型清单（用户建议 ①）：**`/object_info` 与盘扫的并集**（2026-09-22 改）。
+        // 只有并集才说得清"盘上有、但当前实例看不到"——那次事故里模型据此让用户去下载
+        // 一个本来就在硬盘上的 4GB 文件（见 ComfyModels.inventory 的注释）。
         comfyModels = { objectInfo ->
             com.comfyhub.ComfyModels.inventory(
                 objectInfo ?: runCatching { submitter.objectInfo() }.getOrNull(),
                 ctx.cfg.projectRoot,
+                // 用户**真实的模型根**：ComfyUI Desktop 的共享目录、别的盘上的模型库。
+                // 这一项必须传 —— 少了它，盘上事实里就没有 Shared，那句诊断无从谈起。
+                com.comfyhub.ComfyEnv.desktop()?.modelsDirs.orEmpty(),
             )
         },
         // 官方 comfy-mcp 拉来的工具（运行时不在了就是空列表）

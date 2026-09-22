@@ -1387,7 +1387,10 @@ class ToolRegistryTest {
         // v22（2026-09-21）：第 15 条写清 ## 模拟用户行为 ##（emulateFrontend 默认开着）
         // v23（2026-09-22）：第 12.1 条 —— 从别处拿来的工作流先 comfy_fit_workflow 对模型
         // （用户建议 ①：图里要的模型 / 本机最接近的等价物 / 要改哪几个 overrides 键）
-        assertEquals("v23", SystemPrompt.VERSION)
+        // v24（2026-09-22）：第 12.1 条补第四档 onDiskOnly —— "硬盘上有同名文件，但当前实例
+        // 枚举不到它"（= 实例的模型根没挂全）：**先重启 / 修挂载，不要去下载**。
+        // 起因是会话 0bedb3f5：anima-base-v1.0 就在 ComfyUI-Shared 里，却被报成"本机没有"。
+        assertEquals("v24", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(

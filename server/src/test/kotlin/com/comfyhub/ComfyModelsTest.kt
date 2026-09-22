@@ -40,7 +40,9 @@ class ComfyModelsTest {
     // --- 清单来源 -----------------------------------------------------------
 
     @Test
-    fun `清单优先取 object_info 的枚举 而不是扫盘`() {
+    fun `object_info 的枚举永远在清单里（拿不到盘时就是它那一份）`() {
+        // 2026-09-22 起清单是 `/object_info` ∪ 盘扫的并集（见 ComfyInventoryUnionTest），
+        // 但**能加载什么**永远由枚举说了算：这里盘扫为空，清单就该原样等于枚举。
         val inv = ComfyModels.inventory(realObjectInfo(), projectRoot = null)!!
         assertEquals(ComfyModels.Source.OBJECT_INFO, inv.source)
         assertTrue(inv.models.any { it.name == "krea2_turbo_int8.safetensors" && it.folder == "checkpoints" })

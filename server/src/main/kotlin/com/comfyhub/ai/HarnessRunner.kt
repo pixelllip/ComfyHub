@@ -1324,8 +1324,16 @@ object SystemPrompt {
      *     （去 civitai_search 查 + ask_user_question 让用户选装 / 换工作流 / 放弃）。
      *     起因是 2026-09-21 的现场（`b5233fb4` seq6）：模型只能靠**手读 safetensors 头部**判断
      *     "那个 13.49 GB 的 checkpoint 是裸 DiT、不含 CLIP/VAE" —— 代价高且不稳定。
+     * v24（2026-09-22）：第 12.1 条补第四档 **`onDiskOnly`** —— "硬盘上有同名文件，但当前跑的实例
+     *     枚举不到它"（= 实例的模型根没挂全）。处置是**先重启 / 修挂载，不要去下载**。
+     *     起因是会话 `0bedb3f5` 那次事故：`launch_comfyui` 直接跑 `main.py`、没带 ComfyUI Desktop
+     *     的 `--extra-model-paths-config`，实例的 `models\` 只有 2 个 minimax，于是
+     *     `anima-base-v1.0`（4.18 GB，就在 `ComfyUI-Shared\models` 里）被报成"本机没有"，
+     *     模型差点让用户去下载一个本来就在硬盘上的文件。配套改了 `ComfyModels.inventory()`
+     *     （清单改成 `/object_info` ∪ 盘扫的并集，并单列 `diskOnly`）与 `McpToolBridge`
+     *     （起实例时**自动补上** Desktop 的模型根 / input / output 三个参数）。
      */
-    const val VERSION = "v23"
+    const val VERSION = "v24"
 
     /**
      * 第一问时追加的一段：让模型在正文最前面带一行 `[标题]…[/标题]`，

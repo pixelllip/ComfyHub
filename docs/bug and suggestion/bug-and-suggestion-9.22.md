@@ -105,3 +105,183 @@
   Cloudflare Tunnel + Access（不需要在路由器开任何入站端口）→ **最后**才是端口映射 + 反代 + 令牌
   （那是真的把服务放到公网上，必须只有 TLS、后端只绑回环、反代限速）。
   另附"开启远程前的 8 条自检"（含"8188 不能暴露公网""电脑别睡觉""手机端要能处理审批卡"）。
+
+---
+
+## 2026-09-22 深夜：复盘最新一场对话（`0bedb3f5`「启动 ComfyUI」）
+
+**观察对象**：会话 `0bedb3f5-2510-47df-8aad-61d74b9acdec`（21:07:46 创建）。
+复盘时它**仍在跑**（`run b556e8fa` = `running`、`seq11` = `streaming`），所以下面是活现场，不是事后回忆。
+口径：7 次 Run（其中 2 次 `PROVIDER_UNREACHABLE` 白跑）、**67 次工具调用 / 7 次明确失败**、
+30 分钟里只产出 **1 张图**（mediaId 204）。
+取数：`comfy_hub.ai_messages` / `ai_message_parts` / `ai_runs` / `ai_tool_calls`。
+
+### A. 用户这次提的问题（8 条）
+
+* **AI 碰壁次数过多**
+  → **已核实，成立**。七次明确失败里，**只有两次是"这个世界真的做不到"**，其余五次是工具/环境自己的毛病：
+
+  | 现场（seq / 调用） | 代价 | 性质 |
+  | --- | --- | --- |
+  | `list_workflow_slots`（193KB 工作流）跑 61 秒 → `MCP_TOOL_ERROR` | 61 s + 一次白等 | comfy-mcp 工具糙 |
+  | `search_models(folder=unet)` / `(folder=clip)` → `MCP_TOOL_ERROR` | 3 次调用 + 推理跑偏 | 目录不存在**应该回空列表**，不该报错 |
+  | `comfy_load_workflow` → `UNSUPPORTED_NODES`（20 个 rgthree 前端节点） | 多一轮 + 需自己想到 `tolerateUnsupported` | 缺"哪些节点可直接摘"的知识 |
+  | `comfy_submit` → `QUERY_BUDGET_EXCEEDED`（9 次上限） | **Anima 那一跑根本没提交** | 预算被上面的失败调用吃满 |
+  | `list_dir D:\Comfy-Desktop` / `...\ComfyUI-Installs` → `PATH_DENIED` | — | 只放行精确目录、**不放行父目录**，恰好挡掉"往上走一层看布局" |
+  | `launch_comfyui` 87 s 失败（8188 占用 / 无权限） | 87 s | 环境冲突（Desktop 实例在跑） |
+  | `comfy_use_attachment` 投到 `ComfyUI-Shared\input`，实例去 `ComfyUI-Installs\...\input` 找 → 日志 `No such file or directory` | **整条 Image-to-Prompt 工作流报废** | 我们自己的 bug（见 C-1） |
+
+  另外两次撞顶：`seq5` 撞 **9 次 ComfyUI 查询上限**（任务半途而废）、
+  `seq9` 撞 **16 轮工具上限**（正文写成"（已达上限，再发一条消息它就能接着做）"）。
+  白跑但报成功一次：`Krea2_spine` 78 秒 → `status: success` + 一句小字"产物与已有文件相同，未重复入库"，
+  `mediaCount: 0`（用户追问才发现）。白等三次：`ask_user_question` 117 s + 95 s、`server_info` 每次 18 s。
+
+* **没有主动总结长期记忆并记下的能力**
+  → **已核实**：这条会话 `remember` 调用数 = **0**；`storage\ai\memory.md` 里 4 条全是 09-19 的 danbooru 笔记。
+  但**不是它忘了**：`seq7` 的 reasoning 里它**明确想过**"Also I should update the memory about the user's
+  preferences? ... I can remember it." —— 最后没调。
+  真因是**触发条件写窄了**：`NsfwPrompt.kt` 第 11 条只覆盖"用户说出的**偏好/约定**"，
+  还明确写着"**不要**记录本次任务的临时进度"。而这次真正值钱的是**环境事实**：
+  ① 本机真实模型根是 `D:\Comfy-Desktop\ComfyUI-Shared\models`（不是 `ComfyUI-Installs\...\models`）；
+  ② `krea2TurboOfficialComfy_krea2TurboInt8` 本身就是 Turbo 档（8 步 / cfg 1），不需要再装蒸馏 LoRA；
+  ③ 用户要 Sage Attention、不要任何画风 LoRA。三条一条都没落盘。
+  **后果**：它 21:35 才发现的事实，21:38 还在同一个坑里向用户解释。
+
+* **AI 不查找 ComfyUI-Shared 里面放着的模型等文件**
+  → **已核实，但根因不是"它没看"**。它到 `seq10` 用户点名才去看，一看全在
+  （`anima-base-v1.0` 4.18 GB / `qwen_3_06b_base` 1.19 GB / `anima-turbo-lora-v0.2` 148 MB）。
+  真正的机制是**两个模型根不是同一个地方**：
+  ① 它自己 `launch_comfyui` 起的实例，workspace = `D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`，
+  而 `user\` 下只有 `extra_model_paths.yaml.example`、**没有生效的 `extra_model_paths.yaml`** → 该实例看不到 Shared；
+  ② `ComfyModels.inventory()` **优先取 `/object_info` 并直接 return**（`ComfyModels.kt` L233-236），
+  拿到的是这个瞎实例的枚举（59 条，`diffusion_models` 只有 2 个 minimax）→
+  `comfy_fit_workflow` 于是报"本机没有 `anima-base-v1.0`"。
+  **它不是偷懒，是工具给了一份"权威但错的"清单。**
+  讽刺的是 `ComfyModels.scan()` **本来能扫到 Shared**（`scanRoots` 会收下所有含 `models/` 的根，
+  Shared 也在只读白名单里）—— 只是永远走不到那一步。
+
+* **约束 AI 提问的问题种类**
+  → **待做**。现在只有"能只读查到的不要问"这一条软约束（`NsfwPrompt.kt` 第 9 条末段）。
+  建议改成白名单：**只问"用户的意图 / 审美 / 取舍"**；"能只读查到的 / 有明确默认值的 /
+  能从已有选项反推的"一律不许问，必须自己查或明确标注默认值往下走。
+
+* **让 AI 支持提问多个问题**
+  → **待做**。现在 `ask_user_question` 的 schema 是 `{question, options, header}` **单问题**
+  （`ToolRegistry.kt` L1195），并且描述里明确写"② **一次只问一个决定**，别把三个问题塞进一句话"（L1191），
+  系统提示第 9 条同样写着"一次只问**一个**决定"（`NsfwPrompt.kt` L88）。
+  而这张卡是**同步阻塞**的（`AskGate.await` 挂在工具里，界面答完才继续），
+  所以"多问几个"的代价是 **N 轮工具预算 + N 次等待**（这次 117 s + 95 s 就是这么来的）。
+  改法：schema 扩成 `questions[]`（每项 `header` / `question` / `options`，推荐项放第一个），
+  一次挂多张卡、集中一次等待；`AskGate` 的 `PendingQuestion`（单条）+ `findSameQuestion`（防重复）
+  要扩成"一组 questionId"，前端也要能一次画多张。
+
+* **提问的数量尽量少，问题覆盖尽量全面**
+  → **待做**。建议把"提问预算"显式化（例如一次回复 ≤1 张卡、≤3 问），
+  并要求"每个问题必须互不依赖、且都影响下一步动作"——避免把一次决策拆成三次问询。
+
+* **让 AI 具有审核本地工作流的能力（skill）**
+  → **待做**。这次会话就是最好的动机：用户直接问"你有没有发现你用的 krea2 工作流本身有问题呢？"，
+  AI 承认"我上一轮确实没审这条骨架就用了"。现有 `skills\builtin` 只有 `img2img-reference` / `krea-2`，
+  **没有工作流审核**。建议两条腿：
+  ① **确定性检查器给事实**（前端外观节点清单：rgthree Label/Bookmark/Fast Groups Bypasser、Set/Get、
+  Anything Everywhere；缺模型；`IS_CHANGED` 版本不兼容节点；**输出前缀 + 固定 seed 撞名**；
+  显存估算；参数档位是否匹配该模型）；
+  ② **skill 文字给判定与修法**；并且**入库时自动跑一遍**，而不是让 AI 每次现查。
+
+* **加入 modelscope、huggingface 的查询功能，并与 civitai 合并成"定向查询" tool；查到的贴链接让用户手动下载**
+  → **待做**。代码里 **0 处** `huggingface` / `modelscope`（全仓 grep 无匹配），今天只有 `civitai_search`。
+  落地要注意三点：① civitai 直连不通、**必须走 `127.0.0.1:7890`**（AGENTS 第 4 节），HF 常需镜像，
+  所以工具**必须报可达性**（是否需代理 / 是否 gated / 是否需登录），否则又变成"AI 说能下、用户下不动"；
+  ② 直链要带 **sha256 / LFS oid** —— 用户手动下完之后我们能校验，也能判断"盘上那份是不是同一个模型"
+  （现在 `ModelName.similarity` 只是**字面**相似，正是误判之源）；
+  ③ 输出统一 schema + 永远附 `installInto`，顺序固定为**先查本机再查外网**。
+
+### B. 复盘时另外发现的（用户没提到，按严重度排）
+
+1. **冲突证据没人裁决（最要紧的一条）。** `seq9` 里 AI 自己就发现了矛盾——
+   "历史 promptId 266 用 `anima-base-v1.0` 跑成功过，但现在枚举里没有"，
+   它在 reasoning 里怀疑过 Shared、怀疑过 `extra_model_paths`，**但没验证就下了结论**，
+  还照着错的结论写了两个工作流文件（`anima_miaomiao_sage_t2i.json` 等）。
+  缺一条硬纪律：**"历史成功捕获"与"当前枚举"冲突时，必须先把目录/配置查清再说话**
+  （历史成功是强证据：文件曾经存在过）。
+2. **`launch_comfyui` 启的不是用户日常那套环境**，起完就应该**对账**：
+  实例的 models / input / output 三个根 vs 我们配置里那套，不一致当场警告
+  （而 `comfy_get_status` 报的 `outputDir` 其实是**我们 capture 配置**的值，不是实例的 —— 这点也会误导模型）。
+3. **缺一等公民「本机模型清单」工具。** 现在只有 `comfy_fit_workflow`（必须给一份图）和
+  comfy-mcp 的 `search_models`（只看实例）。所以它只能手搓十几条 `list_dir`（`seq9` + `seq11`）。
+  应有 `comfy_list_models(folder?, query?)`，返回 **`/object_info` ∪ 盘扫的并集**，每条标 `source`。
+4. **comfy-mcp 那批工具与自研工具职责重叠、且不受我们的约束。**
+  `search_models` / `search_templates` / `get_template` / `fetch_template` / `nodes` / `get_logs` /
+  `which` / `generate_image` 和我们的 `comfy_*` 混在一张清单里（62 个工具），
+  `seq7` 一轮就横跳了 7 个来源；而它们**不走读白名单、不进审计**，报错也糙（见 A 表）。
+  建议：给每个工具补"何时用 / 何时别用"的对偶说明（现在只有 `civitai_search` 与 `web_search` 有），
+  并在提示里把 `search_models` 标为"低优先，改用 `comfy_list_models`"。
+5. **"能不能跑"判早了。** `comfy_load_workflow` 只答"转换得出来"（`runnable: true`）。
+  promptId 304 挂着本机没有的画风 LoRA（`allmm style-step00003000`）、
+  还用 `UNETLoader` 读 `diffusion_models/`（文件实际在 `checkpoints/`），照样 `runnable: true`。
+  这正该由审核器补上（"转换成功 ≠ 跑得起来"）。
+6. **"成功但 0 产物"的提示强度不够。** 78 秒白跑藏在一句 `message` 小字里，模型没接住。
+  这一档应独立语义 + 直接给动作（换 seed / 换 filename_prefix）。
+7. **预算被"失败调用"吃掉。** 09-22 已经改成"真的执行了才扣"，但**"执行了却报错/超时"照样扣**
+   （61 秒那次 `MCP_TOOL_ERROR` 就扣了）。`seq5` 就是这么被吃满、Anima 跑不成的。
+8. **父目录读不到。** 写白名单只放行精确目录（`D:\Comfy-Desktop\ComfyUI-Shared`、
+  `...\ComfyUI-Installs\ComfyUI\ComfyUI`），**不放行它们的父目录**，
+  于是"往上走一层看看旁边还有什么"这个动作必然被拒 —— 而它恰恰是**自己**发现 Shared 的唯一路径。
+9. **无 HF/ModelScope**（同 A 最后一条），且三源字段要能对齐才谈得上"合并"：
+  名字 / 作者 / 类型 / 底模 / 触发词 / 体积 / 下载量 / 直链 / 需登录 / 需代理 / sha256。
+
+### C. 建议的优先级（我的判断）
+
+**P0：先把"世界状态"修对（B-1 / B-2 / B-3 / B-8）。**
+理由：清单是错的，那么加 HF/ModelScope、加审核 skill 只会把错误结论做得更精致 ——
+下一次它仍会拿那份 59 条的瞎清单去"审核"。具体四件事：
+① `ComfyModels.inventory()` 改成 **object_info ∪ scan 的并集**，并对差集报
+"**盘上有、但这次启动的实例看不到**"这句诊断（这句话能一眼定位 `extra_model_paths` 没生效）；
+② `comfy_use_attachment` 投到**实例的** input（或对账后在两个 input 都放一份）；
+③ 新增 `comfy_list_models`；
+④ 读白名单放行"已知 ComfyUI 根的上一级"（只读、有界）。
+
+**P1：审核 skill + "能不能跑"（用户点名的第 4 条 + B-5 / B-6）。**
+**P2：提问改造（多问 / 种类白名单 / 少而全 —— A 的三条 + B-7 / B-8）。**
+**P3：定向查询 tool（HF / ModelScope / civitai 合并）。**
+**P4：长期记忆沉淀（A 第 2 条）。**
+
+### D. 决策记录（2026-09-22 用户答复）
+
+| 问题 | 用户的选择 | 落地含义 |
+| --- | --- | --- |
+| 环境对账以哪套为准 | **自定义**："在 ComfyUI desktop 里下载模型，它会优先下载到 shared 里；不过**也只限模型**，节点、工作流等还是在 comfyUI-desktop 里。**以防万一还是把 shared 默认挂上**" | 不是"只报告"，而是**默认挂载**；但 Shared 只是**模型根**，工作流/节点仍在安装目录（两边都要认，谁也不能替代谁） |
+| 目录可见性 | A | 新专用「环境报告」工具 + 只读白名单放行"已知根的上一级" |
+| 审核形态 | A | 确定性检查器（新工具）+ skill 写判定与修法（**不做**入库自动跑） |
+| 提问改造 | **B** | 一次调用可多问，但**每个问题一张独立卡**（后端一组 questionId，前端保持单卡渲染） |
+| 长期记忆 | A | 扩 `remember` 纪律：环境事实与用户偏好都记 |
+
+### E. 核实"Shared 到底是怎么挂上的"（2026-09-22，实测）
+
+**这不是 extra_model_paths.yaml，是 ComfyUI Desktop 自己的一套配置。** 证据（本机实测）：
+
+- 安装根 `.comfy_environment` = `local-desktop2-standalone` → 确实由 **Comfy Desktop 2** 管理；
+- 安装根里**只有** `extra_model_paths.yaml.example`（所以 comfy-cli 直接跑 `main.py` 时**没有任何**额外模型路径）；
+- **真正的配置在 `C:\Users\<用户>\AppData\Roaming\Comfy Desktop\`**：
+  - `settings.json` → `modelsDirs: ["D:\Comfy-Desktop\ComfyUI-Shared\models", "E:\ComfyUI\models"]`、
+    `inputDir` = `…\ComfyUI-Shared\input`、`outputDir` = `…\ComfyUI-Shared\output`、`installDir` = `…\ComfyUI-Installs`；
+  - `shared_model_paths.yaml`（Desktop 自动生成，**两个**模型根：`comfy.desktop_0` = Shared\models、
+    `comfy.desktop_1` = `E:\ComfyUI\models`，各带全套子目录映射）；
+  - `instance-model-paths\inst-<id>.yaml`（同一份内容，按实例生成）；
+  - `installations.json` → `launchArgs: "--enable-manager"`、`launchMode: window`、端口冲突策略 `auto`。
+
+**结论（P0 的正确做法）**：Desktop 启动实例时把这三样传给了 `main.py` ——
+`--extra-model-paths-config <shared_model_paths.yaml>` + `--input-directory` + `--output-directory`。
+而 `launch_comfyui`（走 comfy-cli 直接跑 `main.py`）**一样都没传**，于是：
+① 看不到 Shared / `E:\ComfyUI\models`（→ AI 报"缺模型"）；
+② input 是安装根自己的 input（→ `comfy_use_attachment` 投到 Shared\input，实例找不到，日志实据）；
+③ **output 也是安装根自己的 output**（→ 我方的自动捕获盯的是 Shared\output，
+**AI 自己起的实例跑出来的图，捕获根本看不到** —— 这条是新发现，比"缺模型"更隐蔽）。
+
+**另一个新事实**：用户的模型根有**两个** —— `D:\Comfy-Desktop\ComfyUI-Shared\models` 与
+`E:\ComfyUI\models`。任何"只认一个根"的实现都是错的。
+
+**做法（待实施）**：新增 `ComfyEnv.kt` 读 Desktop 的 `settings.json` + `shared_model_paths.yaml`，
+算出 `modelsDirs / inputDir / outputDir / extraModelPathsConfig`，
+由 `McpToolBridge` 在模型调 `launch_comfyui` 时**自动补上这三个参数**（模型不用知道这件事），
+并在结果文本里如实说明"已按 ComfyUI Desktop 的配置挂上 Shared"；拿不到配置就原样透传 + 警告。

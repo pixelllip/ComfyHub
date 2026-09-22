@@ -885,17 +885,22 @@ class ToolRegistry(
                 "③ 用户抱怨\"提交了却报文件不存在\"。" +
                 "\n怎么用：把 `comfy_load_workflow(includeGraph=true)` 的 `apiGraph`（或 " +
                 "`comfy_get_run` 的 `raw`）原样传给 `graph`。" +
-                "\n三种结论：`exact`（本机有同名的，不用改）/ `substitute`（有更接近的，**要不要换" +
-                "由你判断、换之前先问用户**）/ `missing`（本机没有 —— **绝对不要自己编一个文件名**，" +
-                "先去 `civitai_search` 查这个模型，再用 `ask_user_question` 给用户 2~4 个具体选项：" +
-                "自己装它 / 换一条只用本机已有模型的等价工作流 / 放弃）。" +
+                "\n四种结论：`exact`（本机有同名的**且当前实例能加载**，不用改）/ `substitute`（有更接近的，" +
+                "**要不要换由你判断、换之前先问用户**）/ `onDiskOnly`（**硬盘上有同名，但当前这个实例枚举不到它**" +
+                "—— 说明实例的模型根没挂全：**先让用户重启 ComfyUI / 修好模型根，绝对不要去下载**，" +
+                "文件本来就在硬盘上；也不要改 overrides，改了同样报文件不存在）/ `missing`（本机确实没有 —— " +
+                "**绝对不要自己编一个文件名**，先去 `civitai_search` 查这个模型，再用 `ask_user_question` " +
+                "给用户 2~4 个具体选项：自己装它 / 换一条只用本机已有模型的等价工作流 / 放弃）。" +
                 "\n**相似度只是字面相似**（词根对得上），**不代表架构兼容**：`sd_xl_base` 与 " +
                 "`sd_xl_refiner` 分数很高却是两份不同的模型。拿不准就问用户，别硬换。" +
+                "候选里的 `visibleToInstance` 是同一个意思：`false` 的**不能**拿去 overrides。" +
                 "\n它**只报不改**：报告里给的 `suggestedOverrides` 要真生效，得由你写进 " +
                 "`comfy_submit(overrides=…)`。也不装模型、不下模型（那是用户自己的事）。" +
                 "\n返回里 `inventorySource` 说明清单来自哪里：`object_info` = 问 ComfyUI 要的权威清单" +
                 "（列出来的就是它能加载的）；`scan` = 扫盘得到的（盘上有，未必被它认到）；" +
                 "`none` = 两边都没有（ComfyUI 没跑、也没找到 models 目录）。" +
+                "清单是**并集**：`invisibleToInstance` / `onDiskOnly` 就是\"盘上有但实例看不到\"的条数，" +
+                "大于 0 时报告正文会明说这一句 —— 那是\"重启一次\"的事，不是\"再下一个\"的事。" +
                 "\n`missingNodes` 另列\"本机没有这些**节点类**\"（缺的是自定义节点，不是模型）。",
             parameters = schema(
                 """{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_load_workflow 的 apiGraph / comfy_get_run 的 raw 原样传进来）"}},"required":["graph"],"additionalProperties":false}"""

@@ -1,5 +1,6 @@
 package com.comfyhub.ai.mcp
 
+import com.comfyhub.ComfyEnv
 import com.comfyhub.ai.tools.AgentTool
 import com.comfyhub.ai.tools.ToolAccess
 import com.comfyhub.ai.tools.ToolCategory
@@ -103,18 +104,30 @@ class McpToolBridge(
         mutating = decl.name in McpToolPolicy.ASK,
         defaultAccess = McpToolPolicy.accessFor(decl.name),
     ) { args: JsonObject, _: ToolContext ->
+        // P0（2026-09-22）：`launch_comfyui` 走的是 `comfy launch --background`，**直接跑 main.py**，
+        // 而 ComfyUI Desktop 那套"模型在共享目录 / input / output 也在共享目录"的配置
+        // 它一个参数都不带（安装根里只有 `extra_model_paths.yaml.example`）。后果三连：
+        //   ① 实例看不到 `ComfyUI-Shared\models` 与 `E:\ComfyUI\models` → AI 误判"本机没有某个模型"；
+        //   ② `comfy_use_attachment` 投到 `Shared\input`，实例去自己的 input 找 → 参考图找不到；
+        //   ③ 产物落在实例自己的 output 里，而自动捕获盯的是 `Shared\output` → **图跑出来了但收不到**。
+        // 所以由**我们替它补上**这三个参数（用户 2026-09-22 拍板："以防万一还是把 shared 默认挂上"），
+        // 并把补了什么**如实**回给模型 —— 模型不需要知道这件事，也不该由它决定。
+        val plan = if (decl.name == "launch_comfyui") ComfyEnv.prepareLaunch(args) else null
+        val suffix = plan?.note?.let { "\n\n$it" }.orEmpty()
         val result = try {
-            client.callTool(decl.name, args)
+            client.callTool(decl.name, plan?.args ?: args)
         } catch (e: McpException) {
-            throw ToolFailure(e.code, e.message ?: "MCP 调用失败")
+            // 失败时也把"我们补了什么"带上：不然模型只会看到一句 MCP 报错，
+            // 完全不知道这次启动其实是被我们改过参数的
+            throw ToolFailure(e.code, (e.message ?: "MCP 调用失败") + suffix)
         }
         val text = truncate(result.text)
         if (result.isError) {
             // 服务端说是它自己的执行失败：如实报失败，别包装成成功
-            throw ToolFailure("MCP_TOOL_ERROR", text.ifBlank { "MCP 工具「${decl.name}」执行失败" })
+            throw ToolFailure("MCP_TOOL_ERROR", text.ifBlank { "MCP 工具「${decl.name}」执行失败" } + suffix)
         }
         ToolOutput(
-            text.ifBlank { "（MCP 工具「${decl.name}」没有返回文本内容）" },
+            text.ifBlank { "（MCP 工具「${decl.name}」没有返回文本内容）" } + suffix,
             meta = buildJsonObject {
                 put("source", "comfy-mcp")
                 put("tool", decl.name)
