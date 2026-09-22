@@ -360,9 +360,12 @@ object WorkflowAudit {
                 detail = "保存节点：" + prefixes.joinToString("、") + "；采样器：" + seeds.joinToString("、") +
                     "。ComfyUI 会覆盖同名文件，本项目的捕获按 `prompt_id` + 文件 SHA-256 判重，" +
                     "于是**跑完 mediaCount: 0、提示\"与已有文件相同，未重复入库\"** —— 等于白跑。" +
-                    "（现场：`Krea2_spine` 沿用 seed 20260921 + 同前缀，78 秒后什么都没入库。）",
-                fix = "提交时换掉其中之一：`overrides={\"<保存节点>.filename_prefix\":\"<新前缀>\"}` " +
-                    "或 `overrides={\"<采样器>.seed\":<新种子>}`。",
+                    "（现场：`Krea2_spine` 沿用 seed 20260921 + 同前缀，78 秒后什么都没入库。）" +
+                    "注意**抽卡是常态**：用户要连出几张挑一张时，靠的就是\"**换 seed、不换前缀**\"来攒同一批图。",
+                fix = "看用户要什么：**抽卡**（\"再出几张\"\"这张不行\"）→ **保留 filename_prefix、只换 seed**" +
+                    "（用户说\"随机\"就把 seed 换成随机值，否则给一个新数字）；" +
+                    "**只跑一次定稿** → 换 seed 或换 prefix 都行。" +
+                    "`overrides={\"<采样器>.seed\":<新种子>}`（或 `{\"<保存节点>.filename_prefix\":\"<新前缀>\"}`）。",
                 nodes = (prefixes + seeds).map { it.substringBefore('.') }.distinct(),
             ),
         )
