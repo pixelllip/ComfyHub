@@ -19,7 +19,10 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ApiBase = 'http://127.0.0.1:8080',
+    # 后端地址。默认按**后端记在案的端口**（`<项目根>\.run\api.json`）算 ——
+    # 端口从 2026-09-22 起是自动挑的，写死 8080 会让 e2e 在后端换了端口之后连不上。
+    # 显式传 `-ApiBase http://127.0.0.1:8080` 仍然照用（老用法没变）。
+    [string]$ApiBase = '',
     # **故意不用 8188**：那是真实 ComfyUI 的默认端口，开发机上它多半正开着。
     # 撞上之后假 ComfyUI 起不来（Address already in use），而就绪探测会**连上真实的那个**、
     # 于是脚本一路跑下去读到陌生人的 /history —— 表现为"轮询啥也没收到"，极难查。
@@ -29,6 +32,12 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
+if (-not $ApiBase) {
+    . (Join-Path $PSScriptRoot 'api-port.ps1')
+    $portState = Read-ApiPortState -ProjectRoot $ProjectRoot
+    $port = if ($portState -and $portState.Port -gt 0) { $portState.Port } else { 8080 }
+    $ApiBase = "http://127.0.0.1:$port"
+}
 $E2eDir      = Join-Path $PSScriptRoot 'e2e'
 $WorkDir     = Join-Path $ProjectRoot '.run\e2e'
 $OutDir      = Join-Path $WorkDir 'output'

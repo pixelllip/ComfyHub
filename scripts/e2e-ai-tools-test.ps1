@@ -43,7 +43,9 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ApiBase = 'http://127.0.0.1:8080',
+    # 后端地址。默认按**后端记在案的端口**算（端口从 2026-09-22 起是自动挑的）。
+    # 显式传 `-ApiBase …` 仍然照用。
+    [string]$ApiBase = '',
     [int]$GatewayPort = 8799,
     [int]$TimeoutSec = 60,
     [switch]$KeepData
@@ -51,6 +53,12 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
+if (-not $ApiBase) {
+    . (Join-Path $PSScriptRoot 'api-port.ps1')
+    $portState = Read-ApiPortState -ProjectRoot $ProjectRoot
+    $port = if ($portState -and $portState.Port -gt 0) { $portState.Port } else { 8080 }
+    $ApiBase = "http://127.0.0.1:$port"
+}
 $E2eDir      = Join-Path $PSScriptRoot 'e2e'
 $GatewayBase = "http://127.0.0.1:$GatewayPort"
 

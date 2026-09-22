@@ -59,9 +59,14 @@ Run-Step '确保 MySQL + Kotlin 后端在运行' {
 
 $health = $null
 try {
-    $health = Invoke-RestMethod 'http://127.0.0.1:8080/api/health' -TimeoutSec 5
+    # 端口是自动挑的（用户 2026-09-22）：读后端记在案的那个，别再写死 8080 ——
+    # 写死的话，后端换了端口之后这条自检会永远报"后端健康检查失败"。
+    . (Join-Path $PSScriptRoot 'api-port.ps1')
+    $apiPortState = Read-ApiPortState -ProjectRoot (Split-Path -Parent $PSScriptRoot)
+    $apiPort = if ($apiPortState -and $apiPortState.Port -gt 0) { $apiPortState.Port } else { 8080 }
+    $health = Invoke-RestMethod "http://127.0.0.1:$apiPort/api/health" -TimeoutSec 5
     if ($health.database -ne 'ok') { throw "数据库状态异常: $($health.database)" }
-    Log "后端健康检查: OK (db=$($health.database), storage=$($health.storageDir))" Green
+    Log "后端健康检查: OK (port=$apiPort, db=$($health.database), storage=$($health.storageDir))" Green
 } catch {
     Log "后端健康检查失败: $($_.Exception.Message)" Red
     $script:failed = $true

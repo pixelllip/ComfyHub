@@ -47,7 +47,7 @@
 └──────────────────────────┘                                  │
                                                               ▼
                                     ┌──────────────────────────────────┐
-                                    │  Kotlin + Ktor (Netty, :8080)     │
+                                    │  Kotlin + Ktor (Netty, 端口自动)  │
                                     │  ├─ 原生 JDBC + HikariCP          │
                                     │  ├─ 文件存储 storage/media         │
                                     │  ├─ 缩略图 storage/thumbs          │
@@ -215,11 +215,30 @@ pwsh -File scripts\autorun-app.ps1
 ```
 
 **从第 3 步开始，MySQL 和后端就不需要你手动起了**：
-App 启动时会先探一次 `http://127.0.0.1:8080/api/health`，
+App 启动时会先探一次后端健康检查（地址按 `<项目根>\.run\api.json` 里后端记录的**实际端口**算，
+见下面「后端端口是自动的」），
 连不上或数据库不通就自己去调 `scripts\comfyhub.ps1 up`（按「MySQL 先就绪 → 后端再起」的顺序），
 并把脚本输出实时显示在启动页上（首次如果后端没构建过，会顺便跑一次 gradle 构建，会慢一些）。
 后端已经健康时它什么都不做，所以重复启动 App 不会有副作用。
 **整个过程是静默的**：mysqld 和后端都在隐藏的（无窗口）控制台里跑，不会弹出 cmd 黑框。
+
+### 后端端口是自动的（2026-09-22）
+
+**不再有写死的 `8080`。** 启动时如果没人指定端口，后端会要一个空闲端口（`COMFYHUB_PORT` 默认 `0`
+= 交给操作系统挑），挑好之后把**真实端口**写进 `<项目根>\.run\api.json`；
+App、脚本（`scripts\api-port.ps1`）、ComfyUI 捕获扩展都读**同一个文件** —— 端口只有一个真源。
+
+优先级：`-Port` 参数 > 环境变量 `COMFYHUB_PORT` > `.run\api.json` 里上次那个 > 自动。
+指定了端口却绑不上（被占 / 落在 Windows 保留段里）时**不会起不来**，会回落成随机端口并在启动日志里
+说明（`doctor` / `status` 也会点出来）。要看当前端口：
+
+```powershell
+pwsh -File scripts\comfyhub.ps1 status     # 直接报 http://127.0.0.1:<真实端口>
+Get-Content .run\api.json                  # 后端记录的端口 + PID（脚本 / App / 捕获扩展都读它）
+```
+
+前端（设置页「后端地址」）**留空 = 自动**：按 `.run\api.json` 走；手填了就以手填的为准
+（要连别的机器时才需要填）。
 
 想关掉这个行为：设置页 →「本地服务」→ 关掉「启动 App 时自动拉起服务」。
 也可以在同一个卡片里手动「启动 / 修复」「重启」「停止」「查看日志」。
@@ -435,7 +454,8 @@ pwsh -File scripts\e2e-capture-test.ps1
 
 ## 7. REST API
 
-后端默认 `http://127.0.0.1:8080`，全部返回 JSON（UTF-8）。
+后端默认 `http://127.0.0.1:<自动端口>`（真实端口见 `.run\api.json` 或 `comfyhub.ps1 status`），
+全部返回 JSON（UTF-8）。下面例子里的 `8080` 请替换成当前端口；想固定端口就用 `-Port` / `COMFYHUB_PORT`。
 
 > 默认**只监听回环地址**：AI 接口会拿着用户的 API Key 代用户调用上游并产生费用，
 > 所以局域网访问必须显式 `COMFYHUB_ALLOW_REMOTE=1`（或直接给 `COMFYHUB_HOST`）。
@@ -775,7 +795,7 @@ $env:COMFYHUB_JDBC_URL='jdbc:mysql://127.0.0.1:3307/comfy_hub?...'
 $env:COMFYHUB_DB_USER='comfyhub'
 $env:COMFYHUB_DB_PASSWORD='comfyhub'
 $env:COMFYHUB_STORAGE='D:\comfyhub-storage'
-$env:COMFYHUB_PORT='8080'
+$env:COMFYHUB_PORT='0'          # 0 = 自动挑一个空闲端口（默认）；想固定就写具体端口
 $env:COMFYHUB_COMFY_URL='http://127.0.0.1:8188'
 $env:COMFYHUB_COMFY_OUTPUT='D:\Comfy-Desktop\ComfyUI-Shared\output'
 ```
