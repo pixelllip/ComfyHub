@@ -285,3 +285,62 @@
 算出 `modelsDirs / inputDir / outputDir / extraModelPathsConfig`，
 由 `McpToolBridge` 在模型调 `launch_comfyui` 时**自动补上这三个参数**（模型不用知道这件事），
 并在结果文本里如实说明"已按 ComfyUI Desktop 的配置挂上 Shared"；拿不到配置就原样透传 + 警告。
+
+### F. 实施进度（2026-09-22 深夜）
+
+**已做（提交 `05d9771`，492 → 507 例全绿）** —— P0 的三件（也是"世界状态先修对"的核心）：
+
+1. **`ComfyEnv.kt`（新）**：只读 `%APPDATA%\Comfy Desktop\settings.json` +
+   `shared_model_paths.yaml` / `instance-model-paths\*.yaml`，算出模型根（**两个**）、
+   input、output、`--extra-model-paths-config` 的值。四条纪律写在类注释里：
+   只读不写、拿不到就如实警告、**不覆盖模型自己写的参数**、**目录不存在就不加那个参数**
+   （给 ComfyUI 一个不存在的 input/output，启动会直接失败）。
+2. **`McpToolBridge` 自动补参数**：模型调 `launch_comfyui` 时补
+   `--extra-model-paths-config` + `--input-directory` + `--output-directory`，
+   并把"补了什么"如实回给模型（成功与失败两条路都带）；顺手把模型写成 JSON 字符串的
+   `extra_args` 归一成 schema 声明的数组（那次现场就是这么写的）。
+3. **清单改成并集**（`ComfyModels.inventory`）：`/object_info` ∪ 盘扫，
+   `LocalModel` 多一位 `visibleToInstance`，`Inventory` 多 `diskOnly` / `merged`；
+   `Application.kt` 把 `ComfyEnv` 的模型根传给扫盘（少了它，盘上事实里就没有 Shared）。
+   `WorkflowFit` 新增**第四档 `onDiskOnly`**：硬盘上有同名、但当前实例枚举不到 ——
+   不进 `suggestedOverrides`、**不算 `missing`**，正文明确"**先重启 / 修挂载，不要下载**"。
+   系统提示 **v24**（第 12.1 条，两份正文都改）。
+   回归 15 例：`ComfyEnvTest`（10，含"模型写错形状也能补全"与"拿不到配置要如实警告"）+
+   `ComfyInventoryUnionTest`（5，含"不许把它算成 missing"）。
+
+**还没做（同一个 P0 剩下的，下一批）**：
+
+- `comfy_list_models(folder?, query?)`：并集清单的一等公民入口
+  （现在 AI 只能手搓十几条 `list_dir`，`seq9`+`seq11` 就是这么烧掉半小时的）；
+- **环境报告**（`comfy_env_report`）：实例根 / 配置根 / 磁盘上的模型根 / 各自子目录，
+  一眼看出"三个根差在哪"；配套把**已知 ComfyUI 根的上一级**加入只读白名单
+  （现在 `list_dir D:\Comfy-Desktop` 被 `PATH_DENIED`，"往上走一层"这条唯一路径是堵死的）；
+- `comfy_use_attachment` 按**实例的** input 投放（现在按"配置输出目录的兄弟目录"，
+  所以投到 Shared\input 而实例去自己的 input 找）；
+- **`launch_comfyui` 起完对账**：实例的 models/input/output 三个根 vs 配置那套，
+  不一致当场警告（现在 `comfy_get_status` 报的 `outputDir` 其实是**我们 capture 配置**的值，
+  不是实例的 —— 这点也在误导模型）。
+
+**已做（第二批，提交 `1c38f40`，507 → 515 例全绿）** —— P0 收尾，三件都按用户拍板的档位：
+
+1. **`comfy_env_report`（新工具，把"环境对账"与"模型清单"合并成一条）**：
+   一次回答"**实例能加载多少个**（`/object_info` 的枚举）/ **盘上有多少个** /
+   **哪些是盘上有而实例看不到的**（大于 0 就是实例没挂全模型根）/ 自动捕获盯着的
+   output 与 input / Desktop 的模型根与映射文件"，并支持 `folder` / `query` 过滤列出清单 ——
+   以前 AI 只能靠十几条 `list_dir` 手搓。分类放在 `FILES`（本机只读巡检），
+   **不吃那 9 次"查询 ComfyUI"的轮询预算**（那次现场恰恰是预算被吃满、任务断在半路）。
+2. **提交前模型预检（`ModelPreflight`）**：`comfy_submit` 在 `overrides` / `connections`
+   **都应用完之后**对最终那张图做一次预检，要的模型加载不了就**当场拒**并给动作
+   （`onDiskOnly` → 重启 / 修挂载，**别下载**；`missing` → 查 Civitai + 问用户，
+   或者把不在执行链上的旁支摘掉）。复用 `WorkflowFit`，**不另写一份判据**。
+   **清单不可信时（`Source.NONE`）一个都不拦** —— 误拦一个能跑的工作流比白跑一次更糟。
+   与 `comfy_fit_workflow` 用**同一份** `modelInventory`（两处判据分家就会出现自相矛盾）。
+3. **只读白名单放行"已知 ComfyUI 根的上一级"**（只放一级、**绝不放盘根**）：
+   `list_dir D:\Comfy-Desktop` 不再被拒 —— 那句 `PATH_DENIED` 当初正是
+   "AI 自己发现 ComfyUI-Shared"这条路上唯一被堵死的地方。
+   回归：`ModelPreflightTest`(6) + `ComfyRootsTest`(2，含"盘根不许进白名单")。
+
+**顺带定下的两件（未单独提问，按最保守的做）**：
+`comfy_use_attachment` 仍先按配置那套推 input（等 `comfy_env_report` 的实例根接进投放路径再改，
+改错会让图生图整条链断掉）；`launch_comfyui` 的起完对账先由**返回值里的那句**
+"已按 Desktop 配置挂上哪些根"承担（`McpToolBridge` 已在做），独立告警卡留到 P1。
