@@ -58,6 +58,34 @@ class ComfyModelsTest {
     }
 
     @Test
+    fun `枚举后面的配置对象不会被当成文件名（线上形状：第一项是枚举、后面跟 tooltip）`() {
+        // 线上真实形状：`"ckpt_name": [["a.safetensors"], {"tooltip": "..."}]` ——
+        // 只看第一项才是枚举，把整条声明摊平就会把 tooltip 也读成模型名
+        val inv = ComfyModels.fromObjectInfo(
+            objectInfo(
+                """
+                {"CheckpointLoaderSimple":{"input":{"required":{
+                   "ckpt_name":[["a.safetensors"],{"tooltip":"选一个底模"}]}}}}
+                """.trimIndent(),
+            ),
+        )!!
+        assertEquals(listOf("a.safetensors"), inv.models.map { it.name })
+    }
+
+    @Test
+    fun `optional 段里的模型枚举也要认（VHS 之类把加载器放在 optional）`() {
+        // 只看 `required` 会漏掉一整类节点（缺了就是"本机明明有却说没有"）
+        val inputs = ComfyModels.enumerateModelInputs(
+            objectInfo(
+                """
+                {"SomeLoader":{"input":{"optional":{"model_name":[["x.safetensors"]]}}}}
+                """.trimIndent(),
+            ),
+        )
+        assertTrue("model_name" in inputs["SomeLoader"].orEmpty(), inputs.toString())
+    }
+
+    @Test
     fun `自定义加载器的模型枚举也认得出来（不用维护一张越来越长的白名单）`() {
         val inputs = ComfyModels.enumerateModelInputs(realObjectInfo())
         assertTrue("ckpt_name" in inputs["CheckpointLoaderSimple"].orEmpty())
