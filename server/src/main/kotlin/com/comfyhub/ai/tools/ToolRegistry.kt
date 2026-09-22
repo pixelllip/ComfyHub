@@ -1387,24 +1387,28 @@ class ToolRegistry(
         AgentTool(
             name = "ask_user_question",
             description = "**向用户提问，并在原地等他回答**（不用结束这一轮）。" +
-                "\n什么时候用：缺了某条信息就**做不对**（用哪张参考图、哪个模型、哪份工作流、" +
-                "成品要什么尺寸 / 给谁看），而只读工具又查不到时。" +
-                "\n好处：用户答完，你**在同一个回复里接着做**，不用他重新发一条消息、你也不用重头再来。" +
-                "\n怎么写：`question` 一句话问清要决定的事；`options` 给 2~5 个**具体可选项**" +
-                "（界面会画成按钮，用户点一下就算答了，**第一个放你推荐的那个**）；" +
-                "界面还会在选项后面**固定**补一个「自己输入答案」，所以永远不用你留" +
-                "\"其他\"这种选项。" +
-                "\n**典型场景：工作流要的模型本机没有**（`comfy_fit_workflow` 报 `missing`）。" +
-                "这时选项就该是「装它（**带体积**，例如 13.49 GB——那是用户唯一的决策依据）/ " +
-                "换一条只用本机已有模型的工作流 / 放弃这次生成」，别只问一句\"要装吗\"。" +
-                "他要的那个选项如果很贵（几个 GB），把\"装到哪个目录\"也写进选项里（`installProposal.installInto`）。" +
+                "一次可以问**最多 ${ToolContext.MAX_QUESTIONS_PER_CARD} 个**问题 —— " +
+                "界面是一张卡分页（上一题 / 下一题 / 跳过本题，最后一页按钮变「提交」），答案可以为空。" +
+                "\n**不问是常态**（用户 2026-09-22 定的阈值制）。问之前先自评三项：" +
+                "① 不问会不会**做错**？② 错了代价大不大（花钱 / 装模型 / 覆盖用户文件 / 白烧一轮显卡）？" +
+                "③ 我自己**能不能查到**（只读工具查得到的一律不许问）？—— **三项都过才许问**。" +
+                "每轮最多开 **1 张**卡：**少问、问全**，一次问完，别把一件事拆成三次问。" +
+                "\n优先级：**意图 / 审美 / 取舍优先**（用哪张参考图、要哪种画风路线、成品给谁看、要不要 NSFW）；" +
+                "\"要不要上 Sage Attention / 加速 LoRA / 降一档显存\"这类**技术方案可以问，但排在意向类之后**" +
+                "—— 这类偏好问完记得用 `remember` 记一条长期记忆，下次就不用再问了。" +
+                "\n怎么写：每题给 `question`（一句话说清要决定什么）+ `options`（2~5 个**具体**选项，" +
+                "**第一个放你推荐的那个**；界面会画成按钮，并在末尾**固定**补一个「自己输入答案」，" +
+                "所以永远不用留\"其他\"这种选项）；**要多选**的那一题加 `multiSelect=true`（界面画复选框）。" +
+                "\n**典型场景：工作流要的模型本机没有 / 实例看不到**（`comfy_fit_workflow` 报 `missing` / " +
+                "`onDiskOnly`）。选项要具体到能让他当场决定：「装它（**带体积**，例如 13.49 GB——" +
+                "那是唯一的决策依据）/ 换一条只用本机已有模型的工作流 / 放弃」，别只问一句\"要装吗\"；" +
+                "很贵的那个选项把\"装到哪个目录\"也写进去（`installProposal.installInto`）。" +
                 "\n几条纪律：① **能自己查的不要问**（ComfyUI 状态、库里有什么工作流、文件在不在，" +
-                "只读工具一查就知道）；② 一次只问**一个**决定，别把三个问题塞进一句话；" +
-                "③ 同一个问题不要问第二遍；④ 用户没回答（关掉界面 / 超时）时，回答会写明" +
-                "\"用户还没有回答\"，那时**基于已有信息给出你能做的那部分**，并说明缺什么，" +
-                "不要假装他答了。",
+                "只读工具一查就知道）；② 一次问完（≤${ToolContext.MAX_QUESTIONS_PER_CARD} 问）；" +
+                "③ 同一件事不问第二遍；④ 用户**跳过**或没答时，按\"他没回答\"处理：" +
+                "基于已有信息给出你能做的那部分、并说明缺什么，**不许**假装他答了、也**不许**原样再问一遍。",
             parameters = schema(
-                """{"type":"object","properties":{"question":{"type":"string","description":"要问用户的那一句话（说清要决定什么，别把多个问题塞一起）"},"options":{"type":"array","items":{"type":"string"},"description":"可选：2~5 个具体选项（第一个放你推荐的），界面会画成按钮让用户点选；界面另外固定补一个「自己输入答案」，不用你留"},"header":{"type":"string","description":"可选：这张提问卡的标题（例如「参考图」「输出尺寸」）"}},"required":["question"],"additionalProperties":false}"""
+                """{"type":"object","properties":{"questions":{"type":"array","description":"要问的问题（最多 5 个，一次问完；界面是一张卡分页）","items":{"type":"object","properties":{"question":{"type":"string","description":"这一题要问什么（说清要决定什么）"},"options":{"type":"array","items":{"type":"string"},"description":"可选：2~5 个具体选项（第一个放你推荐的）"},"multiSelect":{"type":"boolean","description":"可选：true = 这一题可多选（界面画复选框）"},"header":{"type":"string","description":"可选：这一题的小标题（例如「参考图」「输出尺寸」）"}},"required":["question"],"additionalProperties":false}},"question":{"type":"string","description":"（单问的快捷写法）等价于 questions 里只有一条"},"options":{"type":"array","items":{"type":"string"},"description":"（单问时的选项）"},"header":{"type":"string","description":"（单问时的标题）"}},"additionalProperties":false}"""
             ),
             category = ToolCategory.ASK,
             mutating = false,
@@ -1415,66 +1419,111 @@ class ToolRegistry(
                 ?: throw ToolFailure("ASK_DISABLED", "本次运行没有启用提问通道")
             val emit = ctx.emit
                 ?: throw ToolFailure("ASK_DISABLED", "本次运行没有事件通道，提问送不到界面")
-            val question = args.str("question")?.trim()
-                ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 question")
 
-            // 同一句话问两遍：直接挡掉，并告诉模型"照旧等那条的答案"——
-            // 不挡的话模型会连开好几张一模一样的卡片，用户得点几次。
-            val duplicated = askRegistry?.findSameQuestion(ctx.runId, question)
-            if (duplicated != null) {
+            // 阈值制的硬预算（用户 2026-09-22）：一窗最多一张卡。
+            // 只做预检，计数放到**真的开了卡之后** —— 参数写错 / 被下面挡掉的调用不该占额度。
+            if (ctx.askCardsInWindow >= ToolContext.MAX_ASK_CARDS_PER_WINDOW) {
                 throw ToolFailure(
-                    "QUESTION_ALREADY_ASKED",
-                    "这个问题已经问过、还在等用户回答（questionId=${duplicated.questionId}）；" +
-                        "不要重复开卡片，等那一条的答案即可",
+                    "ASK_BUDGET_EXCEEDED",
+                    "本次回复已经开过一张提问卡了（每轮最多 ${ToolContext.MAX_ASK_CARDS_PER_WINDOW} 张）。" +
+                        "请基于已有信息接着做，并如实说明还缺哪一条；确实还需要用户拍板，" +
+                        "就让他直接发一条消息告诉你，而不是再开一张卡。",
                 )
             }
 
-            val questionId = UUID.randomUUID().toString()
-            val trimmed = (args["options"] as? kotlinx.serialization.json.JsonArray)
-                .orEmpty()
-                .mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim() }
-                .filter { it.isNotEmpty() }
-                // 上限与描述一致（5）：多出来的丢掉，界面固定还会再补一条「自己输入答案」
-                .take(5)
-            // 有选项 = 允许"点一下"；但**永远也允许自己敲**（选项不一定对得上他的需求）
-            val record = PendingQuestion(
-                questionId = questionId,
-                runId = ctx.runId,
-                conversationId = ctx.conversationId,
-                question = question,
-                options = trimmed,
-                allowFreeText = true,
-                askedAtMs = System.currentTimeMillis(),
-                header = args.str("header")?.trim(),
-            )
-            askRegistry?.track(record)
-            // ⚠️ 形状必须是**嵌套**的 `question` 对象（用户 bug 2026-09-21 的现场根因之一）：
-            // 客户端读的是 `event.data['question']`；平铺的话那个键是**问题文字**（字符串），
-            // 界面解不出提问 → 输入区不接管、工具卡一直"运行中"。
-            // `message.completed` 里的 `asked` 也是同一个形状，两处保持一致。
-            emit(
-                RunEventType.USER_QUESTION,
-                buildJsonObject {
-                    put("runId", ctx.runId)
-                    put("question", record.toJson())
-                },
-            )
+            // 两种写法都认：`questions[]`（多问）与 `question`（单问，向后兼容）
+            val specs = questionSpecs(args)
+            if (specs.isEmpty()) {
+                throw ToolFailure(
+                    "INVALID_ARGUMENT",
+                    "要问什么：给 questions（最多 ${ToolContext.MAX_QUESTIONS_PER_CARD} 个）或 question（单个）",
+                )
+            }
+            // 同一件事问两遍：直接挡掉（不挡的话模型会连开好几张一模一样的卡片）
+            specs.forEach { spec ->
+                val duplicated = askRegistry?.findSameQuestion(ctx.runId, spec.question)
+                if (duplicated != null) {
+                    throw ToolFailure(
+                        "QUESTION_ALREADY_ASKED",
+                        "这个问题已经问过、还在等用户回答（questionId=${duplicated.questionId}）：" +
+                            "「${spec.question}」。不要重复开卡片，等那一条的答案即可",
+                    )
+                }
+            }
+
+            val groupId = UUID.randomUUID().toString()
+            val askedAt = System.currentTimeMillis()
+            val records = specs.mapIndexed { i, spec ->
+                PendingQuestion(
+                    questionId = UUID.randomUUID().toString(),
+                    runId = ctx.runId,
+                    conversationId = ctx.conversationId,
+                    question = spec.question,
+                    options = spec.options,
+                    // 有选项 = 允许"点一下"；但**永远也允许自己敲**（选项不一定对得上他的需求）
+                    allowFreeText = true,
+                    askedAtMs = askedAt,
+                    header = spec.header,
+                    index = i,
+                    total = specs.size,
+                    groupId = groupId,
+                    multiSelect = spec.multiSelect,
+                )
+            }
+            records.forEach { record ->
+                askRegistry?.track(record)
+                // ⚠️ 形状必须是**嵌套**的 `question` 对象（用户 bug 2026-09-21 的现场根因之一）：
+                // 客户端读的是 `event.data['question']`；平铺的话那个键是**问题文字**（字符串），
+                // 界面解不出提问 → 输入区不接管、工具卡一直"运行中"。
+                // `message.completed` 里的 `asked` 也是同一个形状，两处保持一致。
+                // 一题一条事件，界面按 `groupId` 归组成同一张卡的那几页。
+                emit(
+                    RunEventType.USER_QUESTION,
+                    buildJsonObject {
+                        put("runId", ctx.runId)
+                        put("question", record.toJson())
+                    },
+                )
+            }
+            ctx.askCardsInWindow++
 
             // 挂在这里等：Run **不结束**（用户建议 ⑥ 的原话）。
-            // 等不到（超时 / 用户取消 / Run 结束）时返回 null，下面如实告诉模型"没答"。
-            val answer = gate.await(questionId)
-            askRegistry?.clear(questionId)
-            // **用户答完 = 重置这一窗的工具预算**（用户建议 ③，2026-09-22）：
-            // "每次完成选择后，重置工具预算"。他刚做了一个决定，接下来那几步
-            // （按这个选择去改图 / 装模型 / 提交）不该因为前面的问询而额度不足。
-            // 只有"真的答了"才算选择：没答（超时 / 关界面）不重置，否则等于白送额度。
-            val budgetReset = answer != null && ctx.resetBudget()
+            // 见 AskGate.awaitAll：先等**任意一条**，再给一个短宽限窗收剩下的 ——
+            // 新界面是一次提交整张卡；旧界面只交第一题时也不至于把 Run 拖到超时。
+            val answers = gate.awaitAll(records.map { it.questionId })
+            records.forEach { askRegistry?.clear(it.questionId) }
+
+            // **用户答完 = 重置这一窗的工具预算**（用户建议 ③，2026-09-22）。
+            // 只有"真的答了"才算选择：全跳过 / 超时不重置，否则等于白送额度。
+            val anyAnswered = records.any { answers[it.questionId] != null }
+            val budgetReset = anyAnswered && ctx.resetBudget()
+
+            fun answeredJson(record: PendingQuestion): JsonObject {
+                val ans = answers[record.questionId]
+                return buildJsonObject {
+                    put("questionId", record.questionId)
+                    put("index", record.index)
+                    put("question", record.question)
+                    put("answered", ans != null)
+                    ans?.let { put("answer", it.answer) }
+                    ans?.optionIndex?.let { put("optionIndex", it) }
+                    if (!ans?.optionIndexes.isNullOrEmpty()) {
+                        put(
+                            "optionIndexes",
+                            buildJsonArray { ans!!.optionIndexes.forEach { i -> add(JsonPrimitive(i)) } },
+                        )
+                    }
+                }
+            }
+
             val json = buildJsonObject {
-                put("questionId", questionId)
-                put("question", question)
-                put("answered", answer != null)
-                put("answer", answer?.answer)
-                answer?.optionIndex?.let { put("optionIndex", it) }
+                put("groupId", groupId)
+                put("askedCount", records.size)
+                put("answeredCount", records.count { answers[it.questionId] != null })
+                put(
+                    "answers",
+                    buildJsonArray { records.forEach { add(answeredJson(it)) } },
+                )
                 // 预算状态一起回给模型：它据此知道"还能接着做"，不用自己去猜
                 put("callsUsedInWindow", ctx.callsInWindow)
                 put("budgetResetsUsed", ctx.budgetResets)
@@ -1482,37 +1531,85 @@ class ToolRegistry(
                 // 提问卡本身也要落库（用户建议 ⑥）：重开 App 之后那张卡要能照原样显示
                 // —— 问了什么、选项是什么、用户答了哪个。没有它，历史里就只剩一段
                 // 给模型看的正文，界面画不出卡片（会变成一张空白卡）。
+                // `asked` 仍是**第一条**（旧界面按单问的形状读它），多问的整组在 `askedAll`。
                 put(
                     "asked",
-                    record.copy(
-                        answer = answer?.answer,
-                        optionIndex = answer?.optionIndex,
-                    ).toJson(),
+                    records.first().let { r ->
+                        answers[r.questionId]?.let { ans ->
+                            r.copy(
+                                answer = ans.answer,
+                                optionIndex = ans.optionIndex,
+                                optionIndexes = ans.optionIndexes,
+                            )
+                        } ?: r
+                    }.toJson(),
                 )
-                if (answer == null) {
+                put(
+                    "askedAll",
+                    buildJsonArray {
+                        records.forEach { r ->
+                            val ans = answers[r.questionId]
+                            add(
+                                (answers[r.questionId]?.let { a ->
+                                    r.copy(
+                                        answer = a.answer,
+                                        optionIndex = a.optionIndex,
+                                        optionIndexes = a.optionIndexes,
+                                    )
+                                } ?: r).toJson(),
+                            )
+                        }
+                    },
+                )
+                if (!anyAnswered) {
                     put(
                         "hint",
                         "用户还没有回答（可能关了界面或超时）。基于已有信息给出你能做的那部分，" +
                             "并如实说明还缺什么；**不要**假装他答过了，也**不要**原样再问一遍。",
                     )
                 } else {
+                    val skipped = records.filter { answers[it.questionId] == null }
                     put(
                         "hint",
-                        "用户已经回答了，按这个答案接着做，不要重复提问。" +
+                        buildString {
+                            append("按用户的回答接着做，不要重复提问。")
+                            if (skipped.isNotEmpty()) {
+                                append("**跳过的 ").append(skipped.size)
+                                append(" 题按\"他没回答\"处理**：")
+                                append(skipped.joinToString("、") { "「${it.question}」" })
+                                append(" —— 做你能做的、说明缺什么；不许替他假设一个答案。")
+                            }
                             if (budgetReset) {
-                                "（你刚完成一次选择，本次回复的工具调用额度**已重置**，" +
-                                    "接着把这件事做完就行，不用让用户再发一条消息。）"
-                            } else {
-                                ""
-                            },
+                                append("（你刚完成一次选择，本次回复的工具调用额度**已重置**，")
+                                append("接着把这件事做完就行，不用让用户再发一条消息。）")
+                            }
+                        },
                     )
                 }
             }
-            val text = if (answer == null) {
-                "【用户未回答】问题：「$question」\n" +
-                    "（用户还没有回答 —— 基于已有信息继续，并如实说明缺哪一条信息。）"
-            } else {
-                "【用户回答】问题：「$question」\n回答：${answer.answer}"
+
+            val text = buildString {
+                if (records.size == 1) {
+                    val r = records.first()
+                    val ans = answers[r.questionId]
+                    if (ans == null) {
+                        append("【用户未回答】问题：「").append(r.question).append("」\n")
+                        append("（用户还没有回答 —— 基于已有信息继续，并如实说明缺哪一条信息。）")
+                    } else {
+                        append("【用户回答】问题：「").append(r.question).append("」\n回答：").append(ans.answer)
+                    }
+                } else {
+                    append("【用户回答了这张卡（共 ").append(records.size).append(" 题）】\n")
+                    records.forEach { r ->
+                        val ans = answers[r.questionId]
+                        append("\n").append(r.index + 1).append(". 「").append(r.question).append("」 → ")
+                        if (ans == null) append("（用户跳过 / 未回答）") else append(ans.answer)
+                    }
+                    if (records.any { answers[it.questionId] == null }) {
+                        append("\n\n（标了\"跳过\"的那几题按**用户没回答**处理：")
+                        append("基于已有信息做你能做的、并说明缺什么；不许假装他答了。）")
+                    }
+                }
             }
             ToolOutput(text, json)
         },
@@ -1628,6 +1725,57 @@ class ToolRegistry(
      * [onApproved] 在"用户点了批准、即将执行"这一刻回调：界面靠它把工具卡从"待批准"改成
      * "运行中"，而不是等工具跑完才补发 `tool.started`（同步工具可能跑好几秒）。
      */
+    /** 一条提问的规格（`questions[]` 与单问的 `question` 都归一成它）。 */
+    private data class AskSpec(
+        val question: String,
+        val options: List<String>,
+        val multiSelect: Boolean,
+        val header: String?,
+    )
+
+    /**
+     * 把参数解析成提问规格列表（2026-09-22 起支持一次问多个，最多
+     * [ToolContext.MAX_QUESTIONS_PER_CARD] 个）。
+     *
+     * 两种写法都认：`questions[]`（多问）与旧的 `question` + `options` + `header`（单问）。
+     * 空问题直接丢掉；一条都不剩时返回空列表，由调用方报参数错。
+     */
+    private fun questionSpecs(args: JsonObject): List<AskSpec> {
+        fun optionsOf(element: kotlinx.serialization.json.JsonElement?): List<String> =
+            (element as? kotlinx.serialization.json.JsonArray)
+                .orEmpty()
+                .mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim() }
+                .filter { it.isNotEmpty() }
+                // 上限与描述一致（5）：多出来的丢掉，界面固定还会再补一条「自己输入答案」
+                .take(5)
+
+        val many = (args["questions"] as? kotlinx.serialization.json.JsonArray).orEmpty()
+            .mapNotNull { it as? JsonObject }
+            .map { q ->
+                AskSpec(
+                    question = (q["question"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty(),
+                    options = optionsOf(q["options"]),
+                    multiSelect = (q["multiSelect"] as? JsonPrimitive)?.contentOrNull == "true",
+                    header = (q["header"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() },
+                )
+            }
+            .filter { it.question.isNotEmpty() }
+            .take(ToolContext.MAX_QUESTIONS_PER_CARD)
+
+        if (many.isNotEmpty()) return many
+        // 单问（向后兼容）
+        val single = args.str("question")?.trim().orEmpty()
+        if (single.isEmpty()) return emptyList()
+        return listOf(
+            AskSpec(
+                question = single,
+                options = optionsOf(args["options"]),
+                multiSelect = args.bool("multiSelect") ?: false,
+                header = args.str("header")?.trim()?.takeIf { it.isNotEmpty() },
+            ),
+        )
+    }
+
     suspend fun invoke(
         callId: String,
         name: String,

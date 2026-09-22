@@ -96,6 +96,14 @@ class ToolContext(
     /** 当前这一窗里联网搜索的次数（同上）。 */
     var webInWindow: Int = 0,
     /**
+     * 当前这一窗里**已经开过几张提问卡**（2026-09-22 用户拍的"阈值制"：
+     * 不问是常态，所以硬预算很紧 —— 每窗最多一张卡，卡里最多 5 问）。
+     *
+     * 为什么不跟 [callsInWindow] 一起算：一张卡最多能问 5 件事，如果按"一次调用"计数，
+     * "少问、问全"就变成了"多调几次、每次一问"。这个计数盯的是**卡**，不是调用。
+     */
+    var askCardsInWindow: Int = 0,
+    /**
      * 本 Run 里**因为用户回答了提问**而重置过几次预算。
      *
      * 有上限（[MAX_BUDGET_RESETS]）：用户一直答就该一直给，但"一直答"不该变成一条
@@ -172,6 +180,9 @@ class ToolContext(
         callsInWindow = 0
         comfyInWindow = 0
         webInWindow = 0
+        // 用户答完提问 = 他要接着往下做了，所以"这一窗开过几张卡"也归零
+        // （否则一次澄清之后模型想再确认一件事都开不了卡）
+        askCardsInWindow = 0
         return true
     }
 
@@ -183,6 +194,15 @@ class ToolContext(
          * 再往上就该让用户自己说话、而不是无限续额度。
          */
         const val MAX_BUDGET_RESETS = 4
+
+        /**
+         * 一窗（一次回复）最多开几张提问卡 —— 用户 2026-09-22 拍的"阈值制"：
+         * **不问是常态**，实在要问的关键问题才许问，所以这个数字很小。
+         */
+        const val MAX_ASK_CARDS_PER_WINDOW = 1
+
+        /** 一张卡最多几个问题（用户拍板：5）。 */
+        const val MAX_QUESTIONS_PER_CARD = 5
     }
 }
 

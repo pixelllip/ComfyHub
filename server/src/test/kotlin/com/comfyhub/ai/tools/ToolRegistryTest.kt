@@ -1396,7 +1396,7 @@ class ToolRegistryTest {
         // v24（2026-09-22）：第 12.1 条补第四档 onDiskOnly —— "硬盘上有同名文件，但当前实例
         // 枚举不到它"（= 实例的模型根没挂全）：**先重启 / 修挂载，不要去下载**。
         // 起因是会话 0bedb3f5：anima-base-v1.0 就在 ComfyUI-Shared 里，却被报成"本机没有"。
-        assertEquals("v26", SystemPrompt.VERSION)
+        assertEquals("v27", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
@@ -1561,5 +1561,6 @@ class ToolRegistryTest {
         assertTrue(off.contains(com.comfyhub.ai.NsfwPrompt.DISABLED_NOTE), "要如实说明当前没开")
     }
 }
+
 
 

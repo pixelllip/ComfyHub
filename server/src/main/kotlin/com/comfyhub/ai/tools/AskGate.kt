@@ -32,6 +32,21 @@ data class PendingQuestion(
     /** 用户答完之后填上（界面重连时能直接看到结论）。 */
     val answer: String? = null,
     val optionIndex: Int? = null,
+    /**
+     * 同一张提问卡里的第几题（0 基）与总题数；单问时是 `0 / 1`。
+     *
+     * 2026-09-22（用户拍的形态，照 DeepSeek Harness）：**一张卡装多个问题、分页、
+     * 可逐题跳过、最后一页按钮变「提交」、答案可为空**。同一次 `ask_user_question`
+     * 调用生成的多条共享 [groupId]，界面按它把这几条画成同一张卡的 N 页。
+     */
+    val index: Int = 0,
+    val total: Int = 1,
+    /** 这张卡的分组号（单问时就是自己的 questionId）。 */
+    val groupId: String = questionId,
+    /** 多选题：选项可以多选（界面画复选框）。 */
+    val multiSelect: Boolean = false,
+    /** 多选题用户勾了哪几个（自己敲的自由文本在 [answer] 里）。 */
+    val optionIndexes: List<Int> = emptyList(),
 ) {
     val answered: Boolean get() = answer != null
 
@@ -45,9 +60,16 @@ data class PendingQuestion(
         put("answered", answered)
         put("options", buildJsonArray { options.forEach { add(JsonPrimitive(it)) } })
         put("askedAt", askedAtMs)
+        put("index", index)
+        put("total", total)
+        put("groupId", groupId)
+        put("multiSelect", multiSelect)
         header?.let { put("header", it) }
         answer?.let { put("answer", it) }
         optionIndex?.let { put("optionIndex", it) }
+        if (optionIndexes.isNotEmpty()) {
+            put("optionIndexes", buildJsonArray { optionIndexes.forEach { add(JsonPrimitive(it)) } })
+        }
     }
 }
 
@@ -56,6 +78,8 @@ data class AskedAnswer(
     val answer: String,
     /** 用户点的是第几个选项（自己敲的为 null）。 */
     val optionIndex: Int? = null,
+    /** 多选题勾了哪几个。 */
+    val optionIndexes: List<Int> = emptyList(),
 )
 
 /**
@@ -130,10 +154,80 @@ class AskGate(private val timeoutMs: Long = 30 * 60 * 1000) {
         }
     }
 
+    /**
+     * 等**一整张提问卡**（同一次调用里的多条 questionId）。
+     *
+     * 返回 `questionId → 回答`；**没答的（跳过的 / 界面没提交的）是 null** ——
+     * 调用方要按"用户没回答"处理，而不是"这条不存在"。
+     *
+     * ## 为什么要"先等任意一条，再给一个短宽限窗"
+     *
+     * 新界面（分页卡）是一次把整张卡提交上来的，所以正常情况下几条答复几乎同时到，
+     * 宽限窗用不到。但**旧界面只认第一条**（它按 `tool.requested` 的 callId 挂卡，
+     * 多条事件会互相覆盖）：那时只有一条答复会来，而我们**不能**因此把 Run 挂到
+     * 30 分钟超时 —— 所以任何一条答复到达后就开一个 [graceMs] 的窗口收剩下的，
+     * 收不到就按"没回答"继续。宁可少答几题，也不能让用户对着一个卡死的 Run 干等。
+     */
+    suspend fun awaitAll(ids: List<String>, graceMs: Long = DEFAULT_GRACE_MS): Map<String, AskedAnswer?> {
+        val out = LinkedHashMap<String, AskedAnswer?>()
+        if (ids.isEmpty()) return out
+        // 先把"已经答了、放在一次性邮箱里"的收掉（用户手快，抢在 await 之前的正常竞态）
+        ids.forEach { id -> answers.remove(id)?.let { out[id] = it } }
+
+        val waiting = ids.filter { it !in out }
+        if (waiting.isNotEmpty()) {
+            val got = withTimeoutOrNull(timeoutMs) {
+                suspendCancellableCoroutine<Unit> { cont ->
+                    val futures = waiting.mapNotNull { pending[it] }
+                    if (futures.isEmpty()) {
+                        cont.resume(Unit)
+                        return@suspendCancellableCoroutine
+                    }
+                    val any = CompletableFuture.anyOf(*futures.toTypedArray())
+                    any.whenComplete { _, _ -> if (cont.isActive) cont.resume(Unit) }
+                    cont.invokeOnCancellation { any.cancel(true) }
+                }
+            }
+            if (got == null) {
+                // 一条都没等到（超时 / Run 取消）：剩下的如实记成"没回答"
+                ids.forEach { out.putIfAbsent(it, null) }
+                return out
+            }
+        }
+
+        // ② 先把**已经完成的**一次收干净 —— 不管宽限窗还剩多少，它们已经有了。
+        // （顺序很要紧：先按题号去等"还没答"的那题，会把窗口耗光，
+        //   反过来把**已经答了的**饿成 null —— 这是实测抓到的。）
+        ids.forEach { id ->
+            if (out.containsKey(id)) return@forEach
+            answers.remove(id)?.let { out[id] = it; return@forEach }
+            pending[id]?.takeIf { it.isDone }?.getNow(null)?.let { out[id] = it }
+        }
+
+        // ③ 剩下真正还没到的，用宽限窗收（新界面几乎同时到；旧界面只有一条时在这里收口）
+        val deadline = System.currentTimeMillis() + graceMs
+        ids.forEach { id ->
+            if (out.containsKey(id)) return@forEach
+            val left = deadline - System.currentTimeMillis()
+            out[id] = if (left <= 0) null else withTimeoutOrNull(left) { await(id) }
+        }
+        return out
+    }
+
     /** 这条提问处理完了：唤醒等待方并清理（Run 取消 / 超时 / 已经拿到答案）。 */
     fun discard(questionId: String) {
         pending.remove(questionId)
         answers.remove(questionId)
+    }
+
+    companion object {
+        /**
+         * 拿到任意一条答复之后，再给其余几条多久（毫秒）。
+         *
+         * 20 秒足够"整张卡一次提交"的界面把剩下的送达，又不至于让旧界面（只交一题）
+         * 把 Run 拖住 —— 这个数字是"降级体验"的边界，不是功能参数。
+         */
+        const val DEFAULT_GRACE_MS = 20_000L
     }
 }
 
@@ -167,6 +261,30 @@ class AskRegistry(private val gate: AskGate) {
         .lastOrNull { id -> questions[id]?.let { gate.isWaiting(id) && !it.answered } == true }
         ?.let { questions[it] }
 
+    /**
+     * 这个 Run 现在还挂着的**整张卡**（同一 groupId 的那几条，按题号排）。
+     *
+     * 界面重开 / 断线重连时靠它把 N 页都补回来 —— 只回第一条的话，
+     * 用户看到的是一张缺了几题的卡。
+     */
+    fun pendingGroupFor(runId: String): List<PendingQuestion> {
+        val waiting = byRun[runId].orEmpty()
+            .mapNotNull { questions[it] }
+            .filter { gate.isWaiting(it.questionId) && !it.answered }
+        val groupId = waiting.lastOrNull()?.groupId ?: return emptyList()
+        return groupBy(groupId, waiting)
+    }
+
+    /** 一次提问里的所有条目（含已答的），按题号排 —— 历史卡片回放要用。 */
+    fun groupBy(groupId: String, all: List<PendingQuestion>): List<PendingQuestion> {
+        val mine = all.filter { it.groupId == groupId }
+        return (mine.ifEmpty { all }).sortedBy { it.index }
+    }
+
+    /** 同一次提问里的全部条目（含已答的）。 */
+    fun group(groupId: String): List<PendingQuestion> =
+        groupBy(groupId, questions.values.filter { it.groupId == groupId })
+
     /** 同一个 Run 里是不是已经问过一模一样的问题（挡重复卡片）。 */
     fun findSameQuestion(runId: String, question: String): PendingQuestion? =
         byRun[runId].orEmpty()
@@ -180,12 +298,16 @@ class AskRegistry(private val gate: AskGate) {
      * "这次回答没被采纳"，而不是假装成功。
      */
     @Synchronized
-    fun answer(questionId: String, answer: String, optionIndex: Int?): Boolean {
+    fun answer(questionId: String, answer: String, optionIndex: Int?, optionIndexes: List<Int> = emptyList()): Boolean {
         val current = questions[questionId] ?: return false
         if (current.answered) return false
-        val accepted = gate.resolve(questionId, AskedAnswer(answer, optionIndex))
+        val accepted = gate.resolve(questionId, AskedAnswer(answer, optionIndex, optionIndexes))
         if (accepted) {
-            questions[questionId] = current.copy(answer = answer, optionIndex = optionIndex)
+            questions[questionId] = current.copy(
+                answer = answer,
+                optionIndex = optionIndex,
+                optionIndexes = optionIndexes,
+            )
         }
         return accepted
     }

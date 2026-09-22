@@ -840,10 +840,14 @@ fun Route.aiRoutes(
         get("/runs/{id}/question") {
             val runId = call.parameters["id"].orEmpty()
             val pending = asks.pendingFor(runId)
+            // 整张卡（一张卡可能有多页）：界面重开 / 断线重连时要把 N 页都补回来，
+            // 只回第一条的话用户看到的是一张缺了几题的卡（2026-09-22 多问改造）
+            val group = asks.pendingGroupFor(runId)
             call.respond(
                 PendingQuestionResponse(
                     pending = pending != null,
                     question = pending?.toJson(),
+                    questions = group.takeIf { it.isNotEmpty() }?.map { it.toJson() },
                 )
             )
         }
@@ -1204,7 +1208,12 @@ data class ToolApprovalResult(val callId: String, val approved: Boolean, val acc
  * （或者反过来，把断线期间漏掉的那张补回来）。
  */
 @Serializable
-data class PendingQuestionResponse(val pending: Boolean, val question: JsonObject? = null)
+data class PendingQuestionResponse(
+    val pending: Boolean,
+    val question: JsonObject? = null,
+    /** 整张卡（多问时不止一条）；旧界面只读 `question` 也能正常工作。 */
+    val questions: List<JsonObject>? = null,
+)
 
 /**
  * 用户的回答。
