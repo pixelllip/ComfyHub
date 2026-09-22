@@ -289,6 +289,24 @@ class CivitaiSearch(
                 runCatching { w.jsonPrimitive.contentOrNull }.getOrNull()
             }
         }.orEmpty()
+        // 体积与下载地址（用户建议 ②，2026-09-22）：线上 `modelVersions[0].files[]` 里
+        // `primary=true` 那条就是主文件，带 `sizeKB` 与 `downloadUrl`。
+        //
+        // 为什么要它：真实的门槛就是**体积**（昨天卡住的那份 checkpoint 一个 13.49 GB），
+        // 而"要不要装"这个决定没有体积根本没法做 —— 用户会看到"要下个模型"，
+        // 却不知道是 40MB 还是 14GB。
+        //
+        // 取舍：只报**主文件**，不在服务端做"挑最小的那个量化版"这类判断 ——
+        // 那是模型该做的事（它能看到候选清单），代码只把事实摆出来。
+        val files = firstVersion?.get("files")?.let { el ->
+            runCatching { el.jsonArray }.getOrNull().orEmpty()
+        }.orEmpty()
+        val primary = files.mapNotNull { runCatching { it.jsonObject }.getOrNull() }
+            .firstOrNull { f -> f["primary"]?.jsonPrimitive?.contentOrNull?.toBoolean() == true }
+            ?: files.firstOrNull()?.let { runCatching { it.jsonObject }.getOrNull() }
+        val sizeKb = primary?.get("sizeKB")?.jsonPrimitive?.let { p ->
+            runCatching { p.content.toDouble() }.getOrNull()
+        }
         val stats = obj["stats"]?.let { runCatching { it.jsonObject }.getOrNull() }
         return CivitaiModel(
             id = id,
@@ -308,6 +326,8 @@ class CivitaiSearch(
                 .trim()
                 .take(MAX_DESCRIPTION_CHARS),
             trainedWords = trainedWords,
+            sizeBytes = sizeKb?.let { (it * 1024).toLong() },
+            downloadUrl = primary?.str("downloadUrl")?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -429,8 +449,12 @@ class CivitaiSearch(
                     append("触发词：").append(m.trainedWords.joinToString(", "))
                     append('\n')
                 }
+                // 体积（用户建议 ②，2026-09-22）：没有它，"要不要装"这个选择做不了 ——
+                // 用户看到"要下个模型"却不知道是 40MB 还是 14GB（昨天真实卡住的那份是 13.49GB）
+                m.sizeBytes?.let { append("体积：").append(m.sizeLabel()).append('\n') }
                 append(m.pageUrl)
                 append("（下载 ").append(m.downloads).append(" · 赞 ").append(m.thumbsUp).append('）')
+                m.downloadUrl?.let { append("\n直链：").append(it) }
             }
         }
         return head + "\n\n" + blocks.joinToString("\n\n")
@@ -451,7 +475,29 @@ data class CivitaiModel(
     /** 去掉 HTML 标签、压成一行、截断后的简介 —— 就是"它拿来做什么"那句话。 */
     val description: String,
     val trainedWords: List<String>,
-)
+    /**
+     * 主文件的字节数（用户建议 ②，2026-09-22）。
+     *
+     * 来自线上 `modelVersions[0].files[primary].sizeKB`；**拿不到就是 null**
+     * （老版本 / 结构变了 / 假服务）—— 那时界面与正文都不写这一行，
+     * 绝不用一个猜出来的数字去撑场面（用户会按这个数字决定要不要下 14GB）。
+     */
+    val sizeBytes: Long? = null,
+    /** 主文件直链（有就给出来，方便用户自己下或让脚本下）。 */
+    val downloadUrl: String? = null,
+) {
+    /**
+     * 给人看的体积标签。
+     *
+     * 单位分档是有意的：LoRA 常见 100~300MB，用 GB 显示会变成 "0.1GB"（看不出差别）；
+     * 而 checkpoints 动辄 6~14GB，用 MB 显示就是 "13490MB"（数不清有几个零）。
+     * **拿不到体积时返回"未知（作者没给）"**，不是空串 —— 空着会让模型自己编一个。
+     */
+    fun sizeLabel(): String = sizeBytes?.let {
+        val gb = it / 1024.0 / 1024.0 / 1024.0
+        if (gb >= 1.0) "%.2f GB".format(gb) else "%.0f MB".format(it / 1024.0 / 1024.0)
+    } ?: "未知（作者没给文件体积）"
+}
 
 /**
  * 一次 Civitai 搜索的结果。
@@ -487,6 +533,13 @@ data class CivitaiOutcome(
                             put("thumbsUp", m.thumbsUp)
                             put("pageUrl", m.pageUrl)
                             put("description", m.description)
+                            // 体积（用户建议 ②）：结构化字段给界面与模型都能直接用；
+                            // 拿不到就**不写这个键**（比写一个 null / 0 更不容易被误读成"很小"）
+                            m.sizeBytes?.let {
+                                put("sizeBytes", it)
+                                put("sizeLabel", m.sizeLabel())
+                            }
+                            m.downloadUrl?.let { put("downloadUrl", it) }
                             if (m.trainedWords.isNotEmpty()) {
                                 put(
                                     "trainedWords",

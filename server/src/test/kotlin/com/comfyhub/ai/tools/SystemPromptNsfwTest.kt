@@ -206,6 +206,9 @@ class SystemPromptNsfwTest {
                 （ComfyUI 只会回一句文件不存在）：先 `civitai_search` 查它（名字 / 体积 / 链接），
                 再用 `ask_user_question` 给用户 2~4 个**具体**选项 —— 自己装它 / 换一条只用本机已有模型的
                 等价工作流 / 放弃，让他选。
+                **选项里必须带体积**（`civitai_search` 现在会给 `sizeLabel`，例如 `13.49 GB`；
+                用户就是按这个数决定装不装的），也要说清装到哪个目录
+                （`comfy_fit_workflow` 的 `installProposal.installInto`）。
                 报告里的 `suggestedOverrides` **只报不改**：要真生效得由你写进 `comfy_submit(overrides=…)`。
             13. 写入类操作要留退路：改工作流参数用覆盖（`节点id.输入名`），不要重写用户的原始工作流，
                 也不要顺手覆盖用户自己的文件；改完如实说清改了哪里，让用户能自己回退。
@@ -729,6 +732,9 @@ class SystemPromptNsfwTest {
                 （ComfyUI 只会回一句文件不存在）：先 `civitai_search` 查它（名字 / 体积 / 链接），
                 再用 `ask_user_question` 给用户 2~4 个**具体**选项 —— 自己装它 / 换一条只用本机已有模型的
                 等价工作流 / 放弃，让他选。
+                **选项里必须带体积**（`civitai_search` 现在会给 `sizeLabel`，例如 `13.49 GB`；
+                用户就是按这个数决定装不装的），也要说清装到哪个目录
+                （`comfy_fit_workflow` 的 `installProposal.installInto`）。
                 报告里的 `suggestedOverrides` **只报不改**：要真生效得由你写进 `comfy_submit(overrides=…)`。
             13. 写入类操作要留退路：改工作流参数用覆盖（`节点id.输入名`），不要重写用户的原始工作流，
                 也不要顺手覆盖用户自己的文件；改完如实说清改了哪里，让用户能自己回退。

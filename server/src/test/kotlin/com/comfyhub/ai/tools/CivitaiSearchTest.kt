@@ -251,6 +251,55 @@ class CivitaiSearchTest {
         }
     }
 
+    // --- 体积（用户建议 ②，2026-09-22）-----------------------------------------
+
+    /**
+     * 线上 `modelVersions[0].files[]` 里 `primary=true` 那条带 `sizeKB` / `downloadUrl`。
+     *
+     * 为什么要钉它：用户建议 ② 的原话是"把缺口升级成缺口 + 需要装什么 + **大概多大**"，
+     * 而昨天真实卡住的那份 checkpoint 是 **13.49 GB** —— 没有体积，
+     * 用户在"装它 / 换工作流 / 放弃"这三条路之间根本没法选。
+     */
+    @Test
+    fun `主文件体积与直链一路进到正文与结构化字段`() = runBlocking {
+        // 13.49 GB ≈ 14145495 KB（与昨天那份 krea2TurboInt8 同量级）
+        val body = """
+            {"items":[{"id":9,"name":"krea2 Turbo Int8","type":"Checkpoint","nsfw":false,
+              "stats":{"downloadCount":10,"thumbsUpCount":2},
+              "description":"大底模",
+              "modelVersions":[{"baseModel":"Flux.1 D","trainedWords":[],
+                "files":[{"name":"krea2.safetensors","primary":true,"sizeKB":14145495.0,
+                          "downloadUrl":"https://civitai.com/api/download/models/9"}]}]}]}
+        """.trimIndent().replace("\n", "")
+
+        withCivitai(body = body) { safe, _, _ ->
+            val client = CivitaiSearch(credentials(), safeBaseUrl = safe, nsfwBaseUrl = safe)
+            val outcome = client.search("krea2 turbo")
+            val m = outcome.models.single()
+            assertTrue(m.sizeBytes != null)
+            assertEquals("13.49 GB", m.sizeLabel())
+            assertTrue(outcome.context.contains("体积：13.49 GB"), outcome.context)
+            assertTrue(outcome.context.contains("直链：https://civitai.com/api/download/models/9"), outcome.context)
+            // 结构化字段：界面与模型都能直接用，不用去解析正文
+            val json = outcome.toJson()["models"].toString()
+            assertTrue(json.contains("sizeLabel"), json)
+            assertTrue(json.contains("13.49 GB"), json)
+        }
+    }
+
+    @Test
+    fun `作者没给体积时不编一个数：正文不写那一行 结构化字段也不写这个键`() = runBlocking {
+        withCivitai { safe, _, _ ->
+            val client = CivitaiSearch(credentials(), safeBaseUrl = safe, nsfwBaseUrl = safe)
+            val outcome = client.search("水墨风")
+            val m = outcome.models.single()
+            assertNull(m.sizeBytes, "上游没给就是 null，不许猜")
+            assertEquals("未知（作者没给文件体积）", m.sizeLabel())
+            assertFalse(outcome.context.contains("体积："), "拿不到就别写这一行：${outcome.context}")
+            assertFalse(outcome.toJson()["models"].toString().contains("sizeLabel"), "别写 0 / null")
+        }
+    }
+
     @Test
     fun `空查询词当场报 INVALID_ARGUMENT 不发请求`() = runBlocking {
         withCivitai { safe, _, captured ->

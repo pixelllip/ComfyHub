@@ -176,6 +176,23 @@ object ComfyModels {
             }
             return (same + cross).sortedByDescending { it.score }.take(MAX_CANDIDATES)
         }
+
+        /**
+         * **接近但不够像**的几条（分数低于 [ComfyModels.MIN_SCORE]）。
+         *
+         * 用途只有一个（用户建议 ②，2026-09-22）：缺模型时给用户看"本机其实有几个
+         * 名字沾边的，但没有一个够像" —— 这一句能挡掉一整类误判。用户在 `ask_user_question`
+         * 里看到"要装它（13.5GB）"时，很容易以为自己已经有那个模型了（因为盘上确实有个
+         * 名字像的），报出来他就能自己判断"哦那个不是同一个"。
+         *
+         * **它不出现在候选里**（分数不达标就不给），只作为缺模型时的一句话背景。
+         */
+        fun nearMissesFor(folder: String, wanted: String, limit: Int = 3): List<LocalModel> = models
+            .map { it to ModelName.similarity(wanted, it.name) }
+            .filter { (_, s) -> s > 0.0 && s < MIN_SCORE }
+            .sortedWith(compareByDescending<Pair<LocalModel, Double>> { it.second }.thenBy { it.first.name })
+            .take(limit)
+            .map { it.first }
     }
 
     /** 一个候选（[sameFolder] 为假 = 它不在该输入本来的那一类目录里，用之前要跟用户说一声）。 */
@@ -487,21 +504,72 @@ object ModelName {
     /** 严格相等（同名同后缀）：只有这一种情况才允许"不用问用户就替换"。 */
     fun same(wanted: String, local: String): Boolean = tokens(wanted) == tokens(local)
 
+    /**
+     * 把文件名变成一个**能拿去搜的查询词**（用户建议 ②，2026-09-22）。
+     *
+     * `krea2TurboOfficialComfy_krea2TurboInt8.safetensors` → `krea2 Turbo Int8`
+     * —— 拿整个文件名去 `civitai_search` 是搜不到的（那是一串打包名），
+     * 但词根级别的词是能的。所以：归一化成词 → 去掉最常见的那几个噪声词
+     * （`v1` / `final` / `official` 这类）→ 用空格连起来 → 最多 6 个词。
+     *
+     * **这不是"猜模型名"**：它只是把用户图里那个文件名转成一句更好的搜索词，
+     * 搜到什么仍然由 Civitai 说了算（搜不到就如实说没搜到）。
+     */
+    fun lookupQuery(fileName: String): String {
+        val stop = setOf(
+            "official", "comfy", "comfyui", "final", "fixed", "copy", "new", "old",
+            "v", "ver", "version", "model",
+        )
+        // ⚠️ 顺序要紧：**先归一化去重，再截断**。两个坑（2026-09-22 都被用例抓到）：
+        //  ① 打包名里同一个词会出现两遍（`krea2Turbo…_krea2TurboInt8`），
+        //     先去重才能保证 `take(N)` 用的是不重复的词；
+        //  ② 单字**数字**（int8 的那个 `8`）必须留着 —— 它是"量化位宽"里最有信息量的一位，
+        //     丢了会把 int8 搜成别的文件。所以只丢纯字母的单字词（`v` / `a`）。
+        val kept = tokens(fileName)
+            .filter { it !in stop }
+            .filter { it.length > 1 || it.all { c -> c.isDigit() } }
+            .toList()
+        if (kept.isEmpty()) {
+            // 全被停用词吃掉时**退回原文件名**（空查询词会被 civitai_search 当场拒掉）：
+            // 那比"返回空串"强 —— 搜不到是上游说了算，但至少这次调用是合法的
+            return fileName.trim().take(80)
+        }
+        // 再把"字母后紧跟的数字"粘回去（`krea` + `2` → `krea2`、`int` + `8` → `int8`）：
+        // 分词是为了算相似度（`krea2` 与 `krea_2` 必须能对上），但**搜索词要更像文件名** ——
+        // 真实的模型名就叫 `krea2`，搜 "krea 2 turbo int 8" 会带进一堆无关结果。
+        val merged = mutableListOf<String>()
+        kept.take(6).forEach { w ->
+            val prev = merged.lastOrNull()
+            if (prev != null && w.all { c -> c.isDigit() } && prev.last().isLetter()) {
+                merged[merged.size - 1] = prev + w
+            } else {
+                merged += w
+            }
+        }
+        return merged.joinToString(" ")
+    }
+
     /** 归一化成一个可比较的词集合。 */
     fun tokens(raw: String): Set<String> {
         val noExt = raw.substringBeforeLast('.', raw)
+        // ⚠️ 大小写边界要在**动过大小写之前**判（`toLowerCase()` 之后
+        // `krea2TurboOfficialComfy` 已经看不出词界了）—— 这一条是 2026-09-22 实测抓到的：
+        // 少了它，`lookupQuery` 会把整串当成一个词，搜出来的结果是错的。
         val spaced = StringBuilder()
-        noExt.lowercase().forEachIndexed { i, c ->
+        noExt.forEachIndexed { i, c ->
             when {
                 c in " -_.\\/|+()[]{}" -> spaced.append(' ')
-                c.isDigit() && i > 0 && noExt[i - 1].isLetter() -> {
-                    // `krea2` → `krea` + `2`；`flux1dev` → `flux` + `1` + `dev`
+                // 小写 → 大写：驼峰词界（`krea2Turbo` → `krea2` + `Turbo`）
+                c.isUpperCase() && i > 0 && noExt[i - 1].isLowerCase() ->
                     spaced.append(' ').append(c)
-                }
-                c.isLetter() && i > 0 && noExt[i - 1].isDigit() -> spaced.append(' ').append(c)
+                // 字母 → 数字（`krea2`）；两个方向都要，`flux1dev` 才会切成 flux/1/dev
+                c.isDigit() && i > 0 && noExt[i - 1].isLetter() ->
+                    spaced.append(' ').append(c)
+                c.isLetter() && i > 0 && noExt[i - 1].isDigit() ->
+                    spaced.append(' ').append(c)
                 else -> spaced.append(c)
             }
         }
-        return spaced.toString().split(' ').filter { it.isNotBlank() }.toSet()
+        return spaced.toString().lowercase().split(' ').filter { it.isNotBlank() }.toSet()
     }
 }

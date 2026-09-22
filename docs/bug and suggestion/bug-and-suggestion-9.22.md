@@ -36,6 +36,19 @@
   **下一步（半天~一天）**：把"缺口"升级成"缺口 + 需要装什么 + 大概多大 + 本机已有替代品"，
   作为一次 `ask_user_question` 的选项给用户（他刚要求过"每次完成选择后重置预算"，
   这条正好是"选择"的典型用法）。
+  → **已做（2026-09-22）**。体积这条链路现在是通的，三段都补齐了：
+  ① **`civitai_search` 报体积**（此前完全没有）：解析线上 `modelVersions[0].files[primary]`
+  的 `sizeKB` / `downloadUrl`，正文多一行「体积：13.49 GB」+「直链：…」，
+  结构化 `meta.models[].sizeLabel` 也带上（界面与模型都能直接用）。
+  **拿不到就一个数字都不写**（正文不写那一行、JSON 不写那个键）—— 作者没给就说没给，
+  绝不用猜的数字撑场面（用户会按这个数决定要不要下 14GB）。
+  ② **`comfy_fit_workflow` 的缺口带"怎么补"**：每条 `missing` 多一个 `installProposal`
+  —— `lookupQuery`（把打包文件名转成能搜的词：`krea2TurboOfficialComfy_krea2TurboInt8.safetensors`
+  → `krea2 turbo int8`；分词里 `krea`/`2` 是两个词是为了算相似度，搜索词则粘回 `krea2`）
+  / `installInto`（该放进哪个目录）/ 以及**本机"沾边但不够像"的那几个**（`nearMisses`）。
+  ③ **系统提示 v23 第 12.1 条**写明：问用户的选项里**必须带体积**、并说清装到哪个目录。
+  回归：`CivitaiSearchTest` 2 例（体积进正文与结构化字段；作者没给时不编）+ `ComfyModelsTest`
+  2 例（查询词转换；缺模型的 installProposal 与 nearMisses）。`gradle test` 475 例全绿。
 
 * 每次完成选择后，重置工具预算
   → **已做（2026-09-22，提交 `7a9b59f`）**。三件事一起改的：

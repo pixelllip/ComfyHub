@@ -211,4 +211,51 @@ class ComfyModelsTest {
         assertFalse(report.needsAction)
         assertTrue(report.render().contains("没有点名"), report.render())
     }
+
+    // --- 缺口 → 该搜什么 / 装到哪 / 本机沾边的有哪些（用户建议 ②）----------------
+
+    @Test
+    fun `文件名的打包串要转成能搜的查询词`() {
+        // 拿整个文件名去 civitai_search 是搜不到的（那是一串打包名），词根才搜得到。
+        // 分词是为了算相似度，搜索词则要**更像文件名**（`krea2` 粘回去）——
+        // 这条断言就是钉"两种用法分开"的：相似度里 krea/2 必须是两个词，搜索词里得粘回来。
+        assertEquals(
+            "krea2 turbo int8",
+            ModelName.lookupQuery("krea2TurboOfficialComfy_krea2TurboInt8.safetensors"),
+        )
+        assertEquals("ink wash2", ModelName.lookupQuery("ink_wash_v2_final.safetensors"))
+        // `int8` 的那个 8 **必须留着**：int8 / fp8 是两份不同的文件，丢了就搜成别的模型
+        assertTrue(ModelName.lookupQuery("krea2TurboInt8.safetensors").contains("int8"))
+        // 一个词都没有时不许返回空串（空查询词会被 civitai_search 当场拒掉）：
+        // 退化情况退回原文件名，宁可搜不到也不能给出一次非法调用
+        assertTrue(ModelName.lookupQuery(".safetensors").isNotBlank(), ModelName.lookupQuery(".safetensors"))
+        // 纯数字文件名也要能搜
+        assertTrue(ModelName.lookupQuery("2.safetensors").isNotBlank(), ModelName.lookupQuery("2.safetensors"))
+    }
+
+    @Test
+    fun `缺模型时给出该搜什么 装到哪 以及本机沾边但不够像的那几个`() {
+        val graph = objectInfo(
+            """{"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "krea2TurboOfficialComfy_krea2TurboInt8.safetensors"}}}"""
+        )
+        // 盘上有几个"名字沾边"的：够不上候选阈值，但用户最容易以为"我明明有这个"
+        val report = WorkflowFit.fit(graph, inventoryWith("sd15.safetensors", "sd_xl_base_1.0.safetensors"))
+        val item = report.items.single()
+        assertEquals(FitStatus.MISSING, item.status)
+        val json = report.toJson()
+        assertTrue(json.toString().contains("lookupQuery"), json.toString())
+        // 直接读字段，别用"整串包含"来断言 —— 这条用例要钉的正是**具体是哪个词**
+        val proposal = (json["models"] as kotlinx.serialization.json.JsonArray)[0]
+            .let { it as kotlinx.serialization.json.JsonObject }["installProposal"]!!
+        assertEquals(
+            "krea2 turbo int8",
+            ((proposal as kotlinx.serialization.json.JsonObject)["lookupQuery"]
+                as kotlinx.serialization.json.JsonPrimitive).content,
+            proposal.toString(),
+        )
+        assertTrue(proposal.toString().contains("installInto"), proposal.toString())
+        val text = report.render()
+        assertTrue(text.contains("krea2 turbo int8"), "要把建议的查询词写出来：$text")
+        assertTrue(text.contains("体积"), "提问选项里要带体积：$text")
+    }
 }

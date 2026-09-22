@@ -99,6 +99,27 @@ data class FitReport(
                                 )
                             }
                             item.suggestedOverride?.let { put("suggestedOverride", it) }
+                            // 缺模型时给"这个缺口该怎么补"的可执行事实（用户建议 ②）：
+                            // 查什么词、装到哪个目录、以及**本机有多少看起来沾边的替代品**
+                            if (item.status == FitStatus.MISSING) {
+                                put(
+                                    "installProposal",
+                                    buildJsonObject {
+                                        put(
+                                            "lookupQuery",
+                                            ModelName.lookupQuery(item.requirement.fileName),
+                                        )
+                                        put("installInto", item.requirement.folder)
+                                        put(
+                                            "note",
+                                            "先去 civitai_search(query=<lookupQuery>) 拿**体积与下载链接**，" +
+                                                "再把\"装它 / 换工作流 / 放弃\"作为选项问用户。" +
+                                                "本机那种\"沾一点边但不够像\"的近似文件：" +
+                                                (item.nearMisses.ifEmpty { listOf("没有") }).joinToString("、"),
+                                        )
+                                    },
+                                )
+                            }
                             put("hint", item.hint())
                         },
                     )
@@ -180,8 +201,18 @@ data class FitReport(
                     FitStatus.MISSING ->
                         "❌ 本机没找到像样的替代品。**不要编一个文件名**去提交" +
                             "（ComfyUI 只会报文件不存在）。" +
-                            "先去 `civitai_search` 查这个模型（名字 / 体积 / 下载链接），" +
-                            "再用 `ask_user_question` 让用户选：装它 / 换一条只用本机已有模型的工作流 / 放弃。"
+                            "先去 `civitai_search` 查它" +
+                            "（建议查询词：`" + ModelName.lookupQuery(item.requirement.fileName) + "`）" +
+                            "—— 拿到**体积**（几 GB）与下载链接，" +
+                            "再用 `ask_user_question` 让用户选：装它 / 换一条只用本机已有模型的工作流 / 放弃。" +
+                            "提问的选项里**把体积写进去**（用户就是按这个数决定装不装的）。" +
+                            if (item.nearMisses.isEmpty()) {
+                                "（本机连名字沾边的都没有。）"
+                            } else {
+                                "（本机有几个**名字沾边但不是一个东西**的：" +
+                                    item.nearMisses.joinToString("、") +
+                                    " —— 别拿它们顶，报给用户时也可以提一句。）"
+                            }
                 },
             )
             append('\n')
@@ -230,6 +261,13 @@ data class FitItem(
     val requirement: ComfyModels.Requirement,
     val status: FitStatus,
     val candidates: List<ComfyModels.Scored>,
+    /**
+     * 本机那几个"名字沾点边、但不够像"的文件（分数低于阈值的）。
+     *
+     * 只在 [FitStatus.MISSING] 时说给用户听：他看到"要装它"时，盘上那个像的名字
+     * 很容易让他以为已经有了（用户建议 ② 要的"本机已有替代品"这一栏）。
+     */
+    val nearMisses: List<String> = emptyList(),
 ) {
     /** 唯一可以"不问用户就直接换"的情形：同名（归一化后一致）。 */
     val safeToAutoApply: Boolean get() = status == FitStatus.EXACT
@@ -290,7 +328,15 @@ object WorkflowFit {
                 // 同名优先：就算还有别的更高分的候选，"一模一样"永远是最好的答案
                 exact != null -> FitItem(req, FitStatus.EXACT, listOf(exact) + candidates.filter { it !== exact })
                 candidates.isNotEmpty() -> FitItem(req, FitStatus.SUBSTITUTE, candidates)
-                else -> FitItem(req, FitStatus.MISSING, emptyList())
+                else -> FitItem(
+                    req,
+                    FitStatus.MISSING,
+                    emptyList(),
+                    // 缺模型时把"沾边但不够像"的也报出来：用户盘上那个像的名字最容易
+                    // 让他以为"我明明有这个模型"（用户建议 ② 的"本机已有替代品"那一栏）
+                    nearMisses = inventory.nearMissesFor(req.folder, req.fileName).map { it.name },
+                )
+
             }
         }
         val missingNodes = if (knownNodes == null) {
