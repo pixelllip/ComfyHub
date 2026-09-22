@@ -189,11 +189,26 @@ object ComfyModels {
          */
         fun nearMissesFor(folder: String, wanted: String, limit: Int = 3): List<LocalModel> = models
             .map { it to ModelName.similarity(wanted, it.name) }
-            .filter { (_, s) -> s > 0.0 && s < MIN_SCORE }
+            // 两道闸门，缺一个这句提示就会变成噪声（用户建议 ② 要的是"有用的一栏"，不是"一堆名字"）：
+            //  ① 分数要过 [NEAR_MISS_MIN]（只共用一个 `xl` / `1` 这种通用词就不算"沾边"）；
+            //  ② 至少要有一个**长度 ≥ 3 的公共词**（`krea2` / `turbo` / `int8` 这类才是真的沾边）
+            .filter { (local, s) ->
+                s > NEAR_MISS_MIN && s < MIN_SCORE &&
+                    (ModelName.tokens(wanted) intersect ModelName.tokens(local.name)).any { it.length >= 3 }
+            }
             .sortedWith(compareByDescending<Pair<LocalModel, Double>> { it.second }.thenBy { it.first.name })
             .take(limit)
             .map { it.first }
     }
+
+    /**
+     * "沾边"的下限。
+     *
+     * 0.15 ≈ 只共用一个词。定这条是因为**报错的名字比不报更糟**：用户看到
+     * "本机有个 sd15.safetensors" 会以为"那不就是我的模型吗"，
+     * 而它跟 `krea2TurboInt8` 其实毫无关系。
+     */
+    const val NEAR_MISS_MIN = 0.15
 
     /** 一个候选（[sameFolder] 为假 = 它不在该输入本来的那一类目录里，用之前要跟用户说一声）。 */
     data class Scored(val model: LocalModel, val score: Double, val sameFolder: Boolean)

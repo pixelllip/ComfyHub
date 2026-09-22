@@ -258,4 +258,31 @@ class ComfyModelsTest {
         assertTrue(text.contains("krea2 turbo int8"), "要把建议的查询词写出来：$text")
         assertTrue(text.contains("体积"), "提问选项里要带体积：$text")
     }
+
+    @Test
+    fun `沾边但不报——只共用一个通用词的文件不算替代品`() {
+        // 报错的名字比不报更糟：用户看到"本机有个 sd15.safetensors"会以为那就是他的模型，
+        // 而它跟 krea2TurboInt8 毫无关系。所以"沾边"要有下限（分数 + 至少一个 ≥3 字的公共词）。
+        val inv = ComfyModels.Inventory(
+            ComfyModels.Source.SCAN,
+            listOf(
+                ComfyModels.LocalModel("sd15.safetensors", "checkpoints", null, null),
+                ComfyModels.LocalModel("xl_base_1.0.safetensors", "checkpoints", null, null),
+            ),
+        )
+        val near = inv.nearMissesFor("checkpoints", "krea2TurboInt8.safetensors")
+        assertTrue(near.isEmpty(), "只共用一个通用词的不该被报成替代品：$near")
+
+        // 真的沾边的（词根对得上、只是不够像）要报出来：
+        // 这里刻意选了一个分数落在 [0.15, 0.35) 的例子 —— `krea2_turbo_fp8` 那种其实是
+        // **候选**（分数更高），不会走 nearMiss 这条路
+        val inv2 = ComfyModels.Inventory(
+            ComfyModels.Source.SCAN,
+            listOf(ComfyModels.LocalModel("krea_upscale_helper.safetensors", "checkpoints", null, null)),
+        )
+        assertEquals(
+            listOf("krea_upscale_helper.safetensors"),
+            inv2.nearMissesFor("checkpoints", "krea2TurboInt8.safetensors").map { it.name },
+        )
+    }
 }
