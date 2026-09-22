@@ -237,6 +237,9 @@ class ToolRegistryTest {
         // 2026-09-22（会话 0bedb3f5）：三套根对账 + 本机模型清单
         // （那天 AI 只能靠十几条 list_dir 手搓，半小时就是这么烧掉的）
         "comfy_env_report",
+        // 2026-09-22（用户：让 AI 具有审核本地工作流的能力）：七项固定检查
+        // （前端节点 / 版本不兼容 / seed·前缀撞名 / 参数档位 / 显存 / 提示词风格 / 加载器目录）
+        "comfy_audit_workflow",
     )
 
     // --- 清单 / 权限 --------------------------------------------------------
@@ -1393,7 +1396,7 @@ class ToolRegistryTest {
         // v24（2026-09-22）：第 12.1 条补第四档 onDiskOnly —— "硬盘上有同名文件，但当前实例
         // 枚举不到它"（= 实例的模型根没挂全）：**先重启 / 修挂载，不要去下载**。
         // 起因是会话 0bedb3f5：anima-base-v1.0 就在 ComfyUI-Shared 里，却被报成"本机没有"。
-        assertEquals("v25", SystemPrompt.VERSION)
+        assertEquals("v26", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
@@ -1558,3 +1561,5 @@ class ToolRegistryTest {
         assertTrue(off.contains(com.comfyhub.ai.NsfwPrompt.DISABLED_NOTE), "要如实说明当前没开")
     }
 }
+
+

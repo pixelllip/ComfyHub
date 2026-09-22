@@ -5,6 +5,7 @@ import com.comfyhub.ComfyEnv
 import com.comfyhub.ComfyModels
 import com.comfyhub.FitReport
 import com.comfyhub.SettingsRepo
+import com.comfyhub.WorkflowAudit
 import com.comfyhub.WorkflowFit
 import com.comfyhub.ai.RunEventType
 import com.comfyhub.ai.protocol.ToolSpec
@@ -1090,6 +1091,59 @@ class ToolRegistry(
                     )
                 },
             )
+        },
+
+        // ------------------------------------------------------------------
+        //  工作流审核（用户 2026-09-22：「让 AI 具有审核本地工作流的能力」）
+        //
+        //  现场：用户问"你有没有发现你用的 krea2 工作流本身有问题呢？"，AI 承认
+        //  "我上一轮确实没审这条骨架就用了"。那次踩到的全是**跑之前就能查出来**的：
+        //  20 个 rgthree 前端节点、WidgetToString 版本不兼容、固定 seed + 固定前缀撞名、
+        //  用 CheckpointLoaderSimple 读 int8 一体包、8 步/cfg1 被改、1360×1024 + 4K 放大。
+        //
+        //  分工：**这里只报事实**（可复现、可单测）；"所以该怎么办"写在 skill
+        //  `comfy-workflow-audit` 里；只有"必跑不了"的几项才进提交闸门
+        //  （见 WorkflowAudit.Report.blockingRefusal）。
+        // ------------------------------------------------------------------
+        AgentTool(
+            name = "comfy_audit_workflow",
+            description = "**审一份工作流**：跑之前先看它有没有\"跑不起来\"或\"大概率白跑\"的问题。" +
+                "\n七项检查（全部只报事实，可复现）：① 纯前端节点（rgthree 的 Label / Bookmark / " +
+                "Fast Groups Bypasser、Set/Get、Anything Everywhere）—— 服务端没有这些类，" +
+                "带着它们会在验证阶段整片丢节点（0.01 秒空跑）；② 与当前节点包**版本不兼容**的节点" +
+                "（WidgetToString / SystemNotification 那类 IS_CHANGED 崩）；③ **输出前缀 + 固定 seed**：" +
+                "每次跑都落同一个文件名，会被去重吞掉（跑完 mediaCount: 0，白跑一轮）；" +
+                "④ 参数档位与该模型的官方档位不符（Krea2 Turbo 8 步/cfg 1、Anima er_sde）；" +
+                "⑤ 显存风险（大尺寸 / 放大节点 / 多 LoRA）；⑥ 提示词风格与模型不匹配" +
+                "（给 Krea 2 堆 Danbooru tag、给 Anima 写整段自然语言）；" +
+                "⑦ 加载器与目录不匹配（UNETLoader 去读 checkpoints/ 里的文件）。" +
+                "\n**什么时候必须用**：用户给了一份**没跑过**的工作流文件、或者你要改一份工作流之前" +
+                "（尤其用户抱怨\"跑完没出图\"\"白跑了\"时）。" +
+                "\n怎么用：把 `comfy_load_workflow(includeGraph=true)` 的 `apiGraph`（或 " +
+                "`comfy_get_run` 的 `raw`）原样传给 `graph`。" +
+                "\n它**只报不改**：要摘节点用 `comfy_prune_workflow`，要改参数用 `comfy_submit(overrides=…)`。" +
+                "\n**边界**：它只看图的结构 —— 模型在不在本机用 `comfy_fit_workflow`，" +
+                "输入齐不齐用 `comfy_check_inputs`，三个根对不对用 `comfy_env_report`。" +
+                "\n提交时 `comfy_submit` 也会自动跑一次审核，但**只拦\"必跑不了\"的那些**" +
+                "（前端节点 / 版本不兼容 / 本机没有的节点类）；参数、显存、提示词风格**只提醒不拦**。",
+            parameters = schema(
+                """{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_load_workflow 的 apiGraph / comfy_get_run 的 raw 原样传进来）"}},"required":["graph"],"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = false,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, _ ->
+            val graph = apiGraphOf(args["graph"])
+                ?: throw ToolFailure(
+                    "INVALID_ARGUMENT",
+                    "graph 不是一份 API 格式节点图（应当形如 " +
+                        """{"1":{"class_type":"KSampler","inputs":{…}}}）。""" +
+                        "界面格式（nodes/links）请先用 comfy_load_workflow 读进库。",
+                )
+            val objectInfo = runCatching { comfyObjectInfo?.invoke() }.getOrNull()
+            val inv = comfyModels?.let { runCatching { it(objectInfo) }.getOrNull() }
+            val report = WorkflowAudit.audit(graph, objectInfo, inv)
+            ToolOutput(report.render(), report.toJson())
         },
 
         // ------------------------------------------------------------------

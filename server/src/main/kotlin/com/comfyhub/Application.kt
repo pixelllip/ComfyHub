@@ -383,8 +383,18 @@ fun Application.module(ctx: AppContext) {
                 // 提交前预检（用户 2026-09-22 拍板）：要的模型当前实例加载不了就**当场拒**，
                 // 并给出动作（重启 / 修挂载 / 装它 / 把用不上的分支摘掉）。取清单失败时不拦 ——
                 // 误拦一个本来能跑的工作流，比白跑一次更糟。
+                //
+                // 两道闸门，都是"必跑不了"才拦（用户拍板的档位）：
+                //  ① 审核里那三项 —— 纯前端节点 / 版本不兼容节点 / 本机没有的节点类；
+                //  ② 模型那一项 —— 盘上有但实例看不到 / 本机确实没有。
+                // 参数档位、显存、提示词风格**只提醒不拦**（那是"不推荐"，不是"跑不了"）。
                 preflight = { graph ->
-                    runCatching { com.comfyhub.ModelPreflight.check(graph, modelInventory(null)) }.getOrNull()
+                    runCatching {
+                        val info = runCatching { submitter.objectInfo() }.getOrNull()
+                        val inv = modelInventory(info)
+                        com.comfyhub.WorkflowAudit.audit(graph, info, inv).blockingRefusal()
+                            ?: com.comfyhub.ModelPreflight.check(graph, inv)
+                    }.getOrNull()
                 },
             )
         },
