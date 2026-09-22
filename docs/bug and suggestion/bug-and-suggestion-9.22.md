@@ -373,3 +373,54 @@
 | 审核是否接提交链路 | A | 接，但**只拦"必跑不了"的三项** |
 | 提问权重 | **自定义**：阈值制；**意图/审美/取舍优先问**，"sage attention / 加速 LoRA"这类技术方案**放后面但也可以问**，且这类偏好要**记进长期记忆**；**允许提问多选题** | P2 的判据与选项形态 |
 | 多问题的界面形态 | （给了 DSH 的截图）**一张卡装多个问题、分页、可逐题"跳过"、最后一页按钮变"提交"、答案可为空** | P2 的界面与"等全部答完（或跳过）才回模型"，**不是**"每问一张独立卡" |
+| 一张卡几问 | **最多 5 问** | 超过就分两张卡 |
+| 阈值制的形式 | A：**自评表 + 硬预算**；技术方案类允许问但排在意向类之后；偏好由模型调 `remember` 落 | 见下面的 P2 规格 |
+| 定向查询 | A：**一条 `find_model`**，内部按 Civitai → HF → ModelScope 顺序查，**逐个报可达性** | P3 |
+| 能不能代下 | A：**绝不代下**（只给链接 + sha256 + 目标目录） | P3；`download_model` 保持 deny |
+
+### I. P2 / P3 规格（下一轮直接照着做，不再提问）
+
+**P2 提问改造（跨栈，必须一次做完 —— 半挂会真的坏掉）**
+
+> ⚠ 为什么不可拆：schema 一旦支持多问，模型就会问多题；旧界面只认 `GET /api/ai/runs/{id}/question`
+> 返回的**第一题**，其余几题看不见 → Run 挂到 30 分钟超时。所以后端与提问卡必须同一次改。
+
+*后端*
+1. `ask_user_question` 参数加 `questions[]`（每项 `{header, question, options[], multiSelect?}`，**上限 5**）；
+   旧的 `question` / `options` 保留 = 单问（向后兼容，不破坏已有会话与用例）。
+2. `PendingQuestion` 加 `groupId` / `index` / `total` / `multiSelect` / `allowSkip`；
+   一次调用生成 N 条同 `groupId` 的记录。
+3. `AskGate.awaitAll(ids)`：一次性等这一组（`CompletableFuture.allOf` + 超时），
+   返回 `Map<questionId, AskedAnswer?>` —— **跳过的就是 null**，不当成"没问过"。
+4. `AskRegistry.pendingFor(runId)` 旁边加 `pendingGroupFor(runId)`；
+   `GET /api/ai/runs/{id}/question` 增返 `questions[]`（旧字段 `question` 仍返回第一条）。
+5. 工具结果：逐题列"问题 → 答案/（跳过）"，并写清纪律 ——
+   **跳过的按"用户没回答"处理**：基于已有信息做、说明缺什么，**不许**假装他答了、也不许原样再问一遍。
+6. 硬预算：**每轮最多 1 张卡**（`askInWindow` 计数，与 `callsInWindow` 同源）。
+7. 提问判据（**阈值制**，写进工具描述 + 系统提示）：
+   问之前自评三项 —— ① 不问会不会做错？② 错了代价大不大（花钱 / 装模型 / 覆盖文件 / 白烧一轮显卡）？
+   ③ 我自己能不能查到（只读工具查得到的一律不许问）？**三项都过才许问**。
+   排序：**意图 / 审美 / 取舍优先**（用哪张参考图、哪种画风路线、成品给谁看）；
+   "要不要上 Sage Attention / 加速 LoRA / 降一档显存"这类**技术方案可以问，但排在后面**；
+   用户答完这类偏好后**用 `remember` 落一条长期记忆**（提示里点名这几类）。
+8. 系统提示 bump（v27）。
+
+*前端*（`lib/`，按 AGENTS：改完必须 `flutter analyze` + `flutter test`，
+并且**重新构建 debug 版并截图确认**，只看测试不算数）
+- 提问卡改成**分页多题**：`第 N/M 题` + `上一题` / `下一题` / `跳过本题`，**最后一页按钮变「提交」**；
+- `multiSelect = true` 的题用**复选框**（选项上限 5），每题都保留「自己输入」；
+- 答案可为空；提交后卡片收起、结果按题列出；
+- 回归用例放 `test/`（提问卡分页 / 多选 / 跳过 / 空答案各一例），必要时扩 `e2e-ai-tools-test.ps1`。
+
+**P3 定向查询（`find_model`，一条工具）**
+
+1. 内部按 **Civitai → HuggingFace → ModelScope** 顺序查，**每个源都报可达性**：
+   `ok` / `needs_proxy`（civitai 直连不通、必须走 `127.0.0.1:7890`；HF 常需镜像）/
+   `needs_login` / `gated`（HF 需同意条款）/ `error`。
+2. 统一字段：名字 / 类型 / 底模 / 触发词 / 体积 / 直链 / **sha256**（civitai 用版本 hash、HF 用 LFS oid）/
+   **该放哪个目录**（`installInto`）/ 来源。
+3. **绝不代下**（用户拍板）：只贴链接 + sha256 + 目标目录；`download_model` 保持 deny。
+4. 顺序纪律：**先查本机**（`comfy_env_report` / `comfy_fit_workflow`）**再查外网**；
+   本机已有同名的就不要再搜了。
+5. `sha256` 的第二用途：用户手下完之后，可以用来判断"盘上那份是不是同一个模型"
+   —— 现在 `ModelName.similarity` 只是**字面**相似，正是误判之源。
