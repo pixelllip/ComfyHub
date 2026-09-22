@@ -14,7 +14,7 @@
 
 | 原来的顾虑 | 现在的处理 |
 | --- | --- |
-| 要 Python + comfy-cli，与发布包便携性冲突 | **`scripts\mcp-runtime.ps1` 把三样装进 `<根>\storage\ai\mcp`**（便携版 Python embeddable + pip 包），已实测跑通（见 §6） |
+| 要 Python + comfy-cli，与发布包便携性冲突 | **`scripts\mcp-runtime.ps1` 把三样装进 `<根>\storage\ai\mcp`**，已实测跑通（见 §6）。**2026-09-21 起改成"检测优先，安装只作兜底"**（用户："环境有 python 你的脚本就不用再装了，同理 jdk、mcp 也是"）：已有的 Python / 已有 comfy-mcp 就直接借，机器上有 Python 就借它建 venv，真的没有才下 embeddable 便携版 |
 | comfy-cli 要一个"它认的工作区" | 装配的最后一步 `comfy set-default <用户真实在用的 ComfyUI>`，目录判据复用 `comfy-path.ps1`（与后端同一套） |
 | 安全面更大（起进程 / 装节点 / 下模型） | 仍然**不把这些原样放给模型**：接进来之后按 §5 的"放行清单"逐项定权限档（默认 `deny` / `ask`），不是把 40 个工具全打开 |
 | 我们的 `comfy_submit` 删不掉（产物要入库） | 这条**依然成立**：画廊入库 / NSFW 标记 / 审批闸门是我们自己的链路，MCP 只把文件写进 ComfyUI 的 `output/`。所以保留的是**入库与审批**，让出的是**工作流执行与节点/模型查询**这一类 |
@@ -28,12 +28,14 @@
    同名时我们的工具胜出（`comfy_submit` 那条"产物必须入库"的链路必须保住）
 4. ⬜ 安卓客户端预留：见 [`android-client-plan.md`](android-client-plan.md)
    （桌面 App 当能力宿主、移动端只留不依赖本地工作流的工具；**入站鉴权是开远程的前置条件**）
+   —— 入站鉴权的完整设计（威胁模型 / 回环豁免 / 媒体签名 URL / 三阶段落地）见
+   [`inbound-auth-design.md`](inbound-auth-design.md)
 
 ### 现状（2026-09-21 实测）
 
 | 项 | 状态 |
 | --- | --- |
-| 装配 | `pwsh -File scripts\mcp-runtime.ps1 status` → OK；comfy-mcp 0.10.0 / comfy-cli 1.20.0 / python 3.12.10 |
+| 装配 | `pwsh -File scripts\mcp-runtime.ps1 status` → OK；comfy-mcp 0.10.0 / comfy-cli 1.20.0 / python 3.12.10（本机这份是**包内便携版**，即当时的装配结果；现在换成检测优先后，新机器会优先借系统 Python 建 venv） |
 | 工作区 | `D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`（ComfyUI Desktop 新版嵌套路径，探测已补） |
 | 工具 | `GET /api/ai/tools` → 61 个；其中 39 个来自 comfy-mcp |
 | 权限 | 10 个 `deny`（起停进程 / 装节点 / 下模型 / 云账号），6 个 `ask`（写盘 / 吃显卡 / 花钱），其余 `allow` |
@@ -89,6 +91,8 @@
 
 我们这边的真源是 `server/src/main/kotlin/com/comfyhub/ai/tools/ToolRegistry.kt` 的 `tools` 列表
 （22 项，逐个数过：4 个 skill、1 个 memory、3 个 files、13 个 comfy、3 个 web/ask —— 其中 `web_search`/`web_fetch`/`civitai_search`/`ask_user_question` 与 Comfy 无关）。
+> 2026-09-22 更新：写这份报告时是 22 项；此后新增了 `comfy_fit_workflow`（用户建议 ①），
+> 现在是 **23 项 / 14 个 comfy**（`ai-tools-and-skills.md` 的表已同步）。
 
 ### 3.1 真·重叠（MCP 那边有对应物，**但我们删不掉**）
 
@@ -204,7 +208,7 @@
 | 事实 | 细节 |
 | --- | --- |
 | embeddable Python 能用 | `python-3.12.10-embed-amd64.zip`（10.6MB）解压后，要把 `python312._pth` 里的 `#import site` 打开、再补一行 `Lib\site-packages`，然后用官方 `get-pip.py` 装 pip —— 全程免安装、免管理员 |
-| **embeddable 版没有 venv 模块** | 所以不能建 venv，是"整包一个环境"。对我们反而好：跑哪个解释器是可预测的 |
+| **embeddable 版没有 venv 模块** | 所以那份只能"整包一个环境"。**这只在"机器上真的没有 Python"（第 4 档）时才走到** —— 正常路径是借机器上的 Python 建 venv（`<根>\storage\ai\mcp\venv`），venv 的解释器本身就在 `Scripts\` 里，所以"pip 启动器在哪"要分两种情况判（见 `Get-PythonScriptsDir` / `scriptsDirOf`） |
 | 包能一起装上 | `comfy-cli` **1.20.0** + `comfy-mcp` **0.10.0** + `mcp` SDK **2.2.0**（comfy-mcp 需要 SDK **2.x**，1.x 直接 import 失败）。装完约 **300MB** |
 | **清华 TUNA 源装不上 comfy-mcp** | 元数据能读，**wheel 返回 HTTP 403**。阿里云可用，官方 pypi.org 可用。所以源顺序是 阿里云 → 清华 → pypi.org |
 | comfy-cli 必须设工作区 | 状态在 `%LOCALAPPDATA%\comfy-cli\config.ini`。**不设的话它默认报 `%USERPROFILE%\Documents\comfy\ComfyUI`**（目录不存在也照样这么报），于是 MCP 那边 `run_workflow` / `search_models` / `nodes` 全是错的 |
