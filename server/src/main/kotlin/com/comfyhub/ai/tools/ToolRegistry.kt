@@ -1,6 +1,9 @@
 package com.comfyhub.ai.tools
 
 import com.comfyhub.AppJson
+import com.comfyhub.ComfyModels
+import com.comfyhub.FitReport
+import com.comfyhub.WorkflowFit
 import com.comfyhub.ai.RunEventType
 import com.comfyhub.ai.protocol.ToolSpec
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -178,6 +181,14 @@ class ToolRegistry(
      * 但**不敢**自动接线（宁可告诉模型"不知道这个补丁节点要接什么"，也不乱接）。
      */
     private val comfyObjectInfo: (() -> JsonObject?)? = null,
+    /**
+     * 本机模型清单（用户建议 ①，2026-09-22）：给定 `/object_info`（拿得到就用它当权威清单），
+     * 返回"这台机器上能加载哪些模型文件"。
+     *
+     * 为 null = 本次部署没有这条能力，`comfy_fit_workflow` 一调用就报 `COMFY_DISABLED`
+     * （与 `comfySubmit` 一个路子：工具还在清单里，但**不假装**自己查过了）。
+     */
+    private val comfyModels: ((JsonObject?) -> ComfyModels.Inventory)? = null,
     /**
      * 来自**官方 comfy-mcp** 的工具（用户建议 ④，2026-09-21）。
      *
@@ -846,6 +857,80 @@ class ToolRegistry(
                             "界面格式（nodes/links）请先用 comfy_load_workflow 读进库。",
                     ),
                 hasImageAttachment = ctx.hasImageAttachment,
+            )
+            ToolOutput(report.render(), report.toJson())
+        },
+
+        // ------------------------------------------------------------------
+        //  "本机有没有这份工作流要的模型"（用户建议 ①，2026-09-22）
+        //
+        //  用户的原话："可以使用 civitai 等网站查找符合要求的工作流，优先根据本机已有的模型
+        //  修改该工作流"。三件工具当时都齐了（civitai_search / comfy_load_workflow /
+        //  comfy_submit 的 overrides），缺的是中间那一步 —— 判断"图里点的这个 .safetensors，
+        //  本机上哪个文件能顶"。2026-09-21 的现场（b5233fb4 seq6）里，模型只能手读
+        //  safetensors 头部去确认"那个 13.49 GB 的 checkpoint 是裸 DiT、不含 CLIP/VAE"。
+        //
+        //  **只报不改**：这个工具不生成图、不写文件，吐出来的是一份报告 + 一份可直接贴进
+        //  comfy_submit(overrides=…) 的覆盖建议。真改由那次提交做（还会过审批闸门）。
+        // ------------------------------------------------------------------
+        AgentTool(
+            name = "comfy_fit_workflow",
+            description = "**把一份工作流要的模型和本机已有的模型对一遍**（用户建议 ①）：" +
+                "输入一份 API 节点图，输出①图里点名的每个模型（checkpoint / LoRA / VAE / CLIP / " +
+                "ControlNet / 放大模型…）、②本机最接近的等价物（带**字面相似度**与体积）、" +
+                "③要改哪几个 `overrides` 键。" +
+                "\n**什么时候必须先用它**：① 用户从网上抄了一份工作流、或者让你\"按这份工作流生成\"" +
+                "——先看本机有没有那些模型，别提交了才发现少一个 13GB 的底模；" +
+                "② 你要用 `civitai_search` 找的模型改造一份工作流之前；" +
+                "③ 用户抱怨\"提交了却报文件不存在\"。" +
+                "\n怎么用：把 `comfy_load_workflow(includeGraph=true)` 的 `apiGraph`（或 " +
+                "`comfy_get_run` 的 `raw`）原样传给 `graph`。" +
+                "\n三种结论：`exact`（本机有同名的，不用改）/ `substitute`（有更接近的，**要不要换" +
+                "由你判断、换之前先问用户**）/ `missing`（本机没有 —— **绝对不要自己编一个文件名**，" +
+                "先去 `civitai_search` 查这个模型，再用 `ask_user_question` 给用户 2~4 个具体选项：" +
+                "自己装它 / 换一条只用本机已有模型的等价工作流 / 放弃）。" +
+                "\n**相似度只是字面相似**（词根对得上），**不代表架构兼容**：`sd_xl_base` 与 " +
+                "`sd_xl_refiner` 分数很高却是两份不同的模型。拿不准就问用户，别硬换。" +
+                "\n它**只报不改**：报告里给的 `suggestedOverrides` 要真生效，得由你写进 " +
+                "`comfy_submit(overrides=…)`。也不装模型、不下模型（那是用户自己的事）。" +
+                "\n返回里 `inventorySource` 说明清单来自哪里：`object_info` = 问 ComfyUI 要的权威清单" +
+                "（列出来的就是它能加载的）；`scan` = 扫盘得到的（盘上有，未必被它认到）；" +
+                "`none` = 两边都没有（ComfyUI 没跑、也没找到 models 目录）。" +
+                "\n`missingNodes` 另列\"本机没有这些**节点类**\"（缺的是自定义节点，不是模型）。",
+            parameters = schema(
+                """{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_load_workflow 的 apiGraph / comfy_get_run 的 raw 原样传进来）"}},"required":["graph"],"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = false,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, _ ->
+            val graph = apiGraphOf(args["graph"])
+                ?: throw ToolFailure(
+                    "INVALID_ARGUMENT",
+                    "graph 不是一份 API 格式节点图（应当形如 " +
+                        """{"1":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"…"}}}）。""" +
+                        "界面格式（nodes/links）请先用 comfy_load_workflow 读进库。",
+                )
+            val inventory = comfyModels
+                ?: throw ToolFailure("COMFY_DISABLED", "本次运行没有启用本机模型清单能力")
+            // 节点定义表拿得到就一起用：① 自定义加载器也能被认出来（不用维护白名单）；
+            // ② 顺手报出"缺哪些节点类"。拿不到（ComfyUI 没跑）不影响配对 —— 那就扫盘。
+            val objectInfo = runCatching { comfyObjectInfo?.invoke() }.getOrNull()
+            val inventoryNow = inventory(objectInfo)
+            if (inventoryNow.source == ComfyModels.Source.NONE) {
+                throw ToolFailure(
+                    "COMFY_UNREACHABLE",
+                    "拿不到本机的模型清单：ComfyUI 没在跑（/object_info 取不到），" +
+                        "也没在已知的 ComfyUI 目录下找到 models 文件夹。" +
+                        "先 comfy_get_status 确认它在跑，再重试一次；" +
+                        "**不要**凭记忆假设本机有没有某个模型。",
+                )
+            }
+            val report: FitReport = WorkflowFit.fit(
+                graph = graph,
+                inventory = inventoryNow,
+                knownNodes = objectInfo?.keys,
+                modelInputs = ComfyModels.enumerateModelInputs(objectInfo),
             )
             ToolOutput(report.render(), report.toJson())
         },

@@ -11,6 +11,20 @@
   **下一步（半天）**：加 `comfy_fit_workflow(graph)` —— 输入一份 API 图，输出
   "图里要的模型 / 本机最接近的等价物 / 需要 `overrides` 改哪几个键"，
   判据复用现成的 `ComfyModels` 与 `ComfyRoots`（**只报不改**，改由 `comfy_submit` 的 overrides 做）。
+  → **已做（2026-09-22）**。落成三块：
+  ① `ComfyModels.kt`（新，`com.comfyhub`）——**清单两个来源**：优先 ComfyUI 的 `/object_info`
+  枚举（`CheckpointLoaderSimple.ckpt_name` 就是"它能加载的 checkpoint 列表"，**权威、零成本**），
+  拿不到才按目录扫 `models\<folder>`（判据复用 `ComfyRoots`，只读元数据、有界）；
+  配对判据是**分词后的 Dice 相似度**（`ModelName`），不是编辑距离 ——
+  `krea2TurboOfficialComfy_krea2TurboInt8` ↔ `krea2_turbo_int8` 认得出来，
+  而 `sd_xl_base_1.0` ↔ `sd_xl_refiner_1.0` 虽然字面很像，**分数高也不许当成同一份**。
+  ② `WorkflowFit.kt`（新）—— 三档结论 `exact` / `substitute` / `missing`，
+  报告里给的是**事实**（`overrideKey` / 候选 / 分数 / 体积 / 在哪个目录），
+  唯一由代码下的结论是 `exact`（归一化后同名才叫"就是它"，也只有它进 `suggestedOverrides`）；
+  `missing` 时明确写"**不要编一个文件名**去提交"，并指向 `civitai_search` + `ask_user_question`。
+  ③ `comfy_fit_workflow` 工具（出厂第 23 个）+ 系统提示 **v23 第 12.1 条**（"从别处拿来的工作流
+  先对模型再提交"）。回归：`ComfyModelsTest` 12 例（纯判据）+ `ToolRegistryTest` 2 例（接线；
+  其中一条钉"配对跑完图**一个字节都没变**"）。`gradle test` 471 例全绿。
 
 * 或者将本地已有工作流的简单修改对比网上的成品工作流（先分析如果用网上工作流，需要额外安装多少节点，占用多少硬盘空间），让用户选择
   → **查明现状（未改代码）**：**"体积预估"这件事完全没有**。今天只知道"缺哪个节点类"

@@ -61,6 +61,13 @@ class ToolRegistryTest {
          * 必须一路传到提交层（再往下就是产物入库时的标记）。
          */
         val submit: (suspend (Long, JsonObject?, JsonObject?, String?, Int, Boolean) -> ComfySubmitOutcome)? = null,
+        /**
+         * 本机模型清单（用户建议 ①，2026-09-22）。
+         *
+         * 默认 null → 走 `COMFY_DISABLED`（证明"没接这条能力时**不假装**查过了"）。
+         * 真给一份清单的配对逻辑在 `ComfyModelsTest` 里钉，这里只钉**接线**。
+         */
+        val models: ((JsonObject?) -> com.comfyhub.ComfyModels.Inventory)? = null,
     ) {
         val skills = SkillStore(root.resolve("skills-builtin"), root.resolve("skills-user"))
         val memory = MemoryStore(root.resolve("storage").resolve("ai"))
@@ -87,6 +94,7 @@ class ToolRegistryTest {
             },
             search = search,
             civitai = civitai,
+            comfyModels = models,
             comfySubmit = submit ?: { _, _, _, _, _, _ ->
                 throw ToolFailure("COMFY_DISABLED", "本次运行没有启用 ComfyUI 提交能力")
             },
@@ -164,6 +172,10 @@ class ToolRegistryTest {
     private fun args(vararg pairs: Pair<String, String>): String =
         buildJsonObject { pairs.forEach { (k, v) -> put(k, v) } }.toString()
 
+    /** 同上，但值可以是任意 JSON（`comfy_fit_workflow` / `comfy_check_inputs` 要传一份图）。 */
+    private fun jsonArgs(vararg pairs: Pair<String, kotlinx.serialization.json.JsonElement>): String =
+        buildJsonObject { pairs.forEach { (k, v) -> put(k, v) } }.toString()
+
     /** 假联网客户端：不碰 HTTP，只记录调用并吐固定结果（HTTP 层由 KeenableSearchTest 单独钉）。 */
     private class FakeSearch(
         var results: List<WebResult> = listOf(
@@ -220,6 +232,8 @@ class ToolRegistryTest {
         "ask_user_question",
         // 用户建议 ②（2026-09-20）：摘无关分支 / 拼必要节点（Sage Attention 那条现场）
         "comfy_prune_workflow",
+        // 用户建议 ①（2026-09-22）：图里要的模型 vs 本机已有的（只报不改，改交给 comfy_submit）
+        "comfy_fit_workflow",
     )
 
     // --- 清单 / 权限 --------------------------------------------------------
@@ -833,6 +847,78 @@ class ToolRegistryTest {
         assertTrue(record.error!!.contains("comfy_list_workflows"), "要让模型知道还有「列本机文件」这条路：${record.error}")
     }
 
+    // --- 本机模型配对（用户建议 ①）-----------------------------------------
+
+    /** 一份最小的 `/object_info`：够让 `comfy_fit_workflow` 认出模型枚举与节点类。 */
+    private fun objectInfoWithModels(): JsonObject = com.comfyhub.AppJson.parseToJsonElement(
+        """
+        {
+          "CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": [["krea2_turbo_int8.safetensors"]]}}},
+          "LoraLoader": {"input": {"required": {"lora_name": [["ink_wash.safetensors"]]}}},
+          "KSampler": {"input": {"required": {"steps": ["INT", {"default": 20}]}}}
+        }
+        """.trimIndent(),
+    ) as JsonObject
+
+    /** 一份点名了两个模型（一个本机有、一个本机没有）的 API 图。 */
+    private fun fitGraph(): JsonObject = com.comfyhub.AppJson.parseToJsonElement(
+        """
+        {
+          "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "krea2_turbo_int8.safetensors"}},
+          "2": {"class_type": "LoraLoader", "inputs": {"lora_name": "missing_style_lora.safetensors", "model": ["1", 0]}},
+          "3": {"class_type": "KSampler", "inputs": {"steps": 20}}
+        }
+        """.trimIndent(),
+    ) as JsonObject
+
+    @Test
+    fun `comfy_fit_workflow 没接清单能力时报 COMFY_DISABLED 而不是假装查过`() = runBlocking {
+        val e = env()
+        val record = e.registry.invoke(
+            "c1",
+            "comfy_fit_workflow",
+            jsonArgs("graph" to fitGraph()),
+            e.ctx(),
+        )
+        assertEquals("failed", record.status)
+        assertEquals("COMFY_DISABLED", record.errorCode)
+    }
+
+    @Test
+    fun `comfy_fit_workflow 报出本机有同名的、要装的、以及缺的节点类 且一个字都不改图`() = runBlocking {
+        val graph = fitGraph()
+        val before = graph.toString()
+        val objectInfo = objectInfoWithModels()
+        val root = Files.createTempDirectory("comfyhub-fit").toRealPath()
+        listOf("comfyui", "storage", "other").forEach { Files.createDirectories(root.resolve(it)) }
+        val e = Env(
+            root,
+            models = { info ->
+                // 真的接线：清单从 /object_info 的枚举里来（与生产同一条路）
+                com.comfyhub.ComfyModels.inventory(info ?: objectInfo, root)!!
+            },
+        )
+        // Env 里没接 comfyObjectInfo，所以工具会自己退到"只有内置那张表"——
+        // 内置表里 CheckpointLoaderSimple.ckpt_name 与 LoraLoader.lora_name 都有，够用
+        val record = e.registry.invoke(
+            "c1",
+            "comfy_fit_workflow",
+            jsonArgs("graph" to graph),
+            e.ctx(),
+        )
+        assertEquals("ok", record.status, record.error ?: record.content)
+        assertEquals(graph.toString(), before, "配对是纯读：图必须一个字节都没变")
+
+        val json = record.resultJson!!
+        assertEquals("object_info", (json["inventorySource"] as JsonPrimitive).content)
+        assertEquals(2, (json["required"] as JsonPrimitive).content.toInt())
+        assertEquals(1, (json["exact"] as JsonPrimitive).content.toInt(), "krea2_turbo_int8 本机有同名")
+        assertEquals(1, (json["missing"] as JsonPrimitive).content.toInt(), "missing_style_lora 本机没有")
+        // 结论先行的那段正文里必须能读出"有几个缺的"
+        assertTrue(record.content.contains("本机没有"), record.content)
+        assertTrue(record.content.contains("civitai_search"), "缺模型时要把「去搜」这条路写清楚：${record.content}")
+    }
+
     // --- 系统提示词 ---------------------------------------------------------
 
     @Test
@@ -1299,7 +1385,9 @@ class ToolRegistryTest {
         // （同一份提示词里"必须遵守："原本出现 2 次、NSFW 开着时 3 次，
         //  而且重复那份的 Civitai / 提问口径是旧的，排在后面会盖掉 v18/v19 的修正）
         // v22（2026-09-21）：第 15 条写清 ## 模拟用户行为 ##（emulateFrontend 默认开着）
-        assertEquals("v22", SystemPrompt.VERSION)
+        // v23（2026-09-22）：第 12.1 条 —— 从别处拿来的工作流先 comfy_fit_workflow 对模型
+        // （用户建议 ①：图里要的模型 / 本机最接近的等价物 / 要改哪几个 overrides 键）
+        assertEquals("v23", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(

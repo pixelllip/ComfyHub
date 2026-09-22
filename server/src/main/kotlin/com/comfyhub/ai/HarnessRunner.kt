@@ -1318,8 +1318,14 @@ object SystemPrompt {
      *     `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里；
      *     模型必须把这些改动**转述给用户**（别默默替他改图），
      *     用户说"别动我的工作流"时才带 `emulateFrontend=false` 回到只报缺口的保守档。
+     * v23（2026-09-22）：新增第 12.1 条 —— **从别处拿来的工作流先 `comfy_fit_workflow` 对模型**
+     *     （用户建议 ①：图里要的模型 / 本机最接近的等价物 / 要改哪几个 overrides 键）。
+     *     三档结论各有明确处置：exact 直接跑、substitute **先问用户**、missing **不许编文件名**
+     *     （去 civitai_search 查 + ask_user_question 让用户选装 / 换工作流 / 放弃）。
+     *     起因是 2026-09-21 的现场（`b5233fb4` seq6）：模型只能靠**手读 safetensors 头部**判断
+     *     "那个 13.49 GB 的 checkpoint 是裸 DiT、不含 CLIP/VAE" —— 代价高且不稳定。
      */
-    const val VERSION = "v22"
+    const val VERSION = "v23"
 
     /**
      * 第一问时追加的一段：让模型在正文最前面带一行 `[标题]…[/标题]`，

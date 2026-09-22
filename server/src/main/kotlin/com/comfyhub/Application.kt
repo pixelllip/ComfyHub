@@ -274,6 +274,14 @@ fun Application.module(ctx: AppContext) {
         // 摘/拼节点（用户建议 ②）：拼装要照着 ComfyUI 的节点定义算，
         // 拿不到就只摘不拼（宁可不做，也不乱接一根线）
         comfyObjectInfo = { runCatching { submitter.objectInfo() }.getOrNull() },
+        // 本机模型清单（用户建议 ①）：能问 ComfyUI 就问它（/object_info 的枚举就是它能加载的），
+        // 问不到才扫盘（判据复用 ComfyRoots，与读白名单同一套根目录）
+        comfyModels = { objectInfo ->
+            com.comfyhub.ComfyModels.inventory(
+                objectInfo ?: runCatching { submitter.objectInfo() }.getOrNull(),
+                ctx.cfg.projectRoot,
+            )
+        },
         // 官方 comfy-mcp 拉来的工具（运行时不在了就是空列表）
         extraTools = mcpTools,
     )
