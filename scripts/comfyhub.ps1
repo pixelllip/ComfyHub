@@ -40,7 +40,13 @@ param(
     # 服务起来后会挂一个守护进程盯着这个 PID，App 一退出就把**这次启动过的**服务停掉。
     # 手工敲 `up` 不带它时，服务照旧常驻（以前的行为）。见 scripts\watch-owner.ps1
     # `watch` 动作也用它：服务本来就跑着（App 探到健康就直接返回、没跑 up）时补挂守护进程。
-    [int]$OwnerPid = 0
+    [int]$OwnerPid = 0,
+
+    # API 端口。**默认 0 = 交给操作系统自动挑**（用户 2026-09-22）。
+    # 解析顺序（scripts\api-port.ps1）：-Port > COMFYHUB_PORT > .run\api.json > 0。
+    # 这里必须**透传给 server.ps1** —— 过去两个脚本各写各的 8080、互不知道，
+    # 于是"后端在跑、脚本却说没起来"。
+    [int]$Port = 0
 )
 
 $ErrorActionPreference = 'Continue'
@@ -48,7 +54,6 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Scripts     = $PSScriptRoot
 $RunDir      = Join-Path $ProjectRoot '.run'
 $MysqlPort   = 3307
-$ApiPort     = 8080
 
 # 「关 App 自动停服务」的状态文件：里面记着当前负责的 watchdog PID
 $WatchState = Join-Path $RunDir 'watch-owner.json'
@@ -76,6 +81,16 @@ if (Test-Path $ComfyPathHelper) { . $ComfyPathHelper }
 # 它是**可选**的 —— 装不上不拦 up，只让 AI 少一批 ComfyUI 工具（与 Java 那种"必需"完全不同）。
 $McpRuntimeHelper = Join-Path $Scripts 'mcp-runtime.ps1'
 if (Test-Path $McpRuntimeHelper) { . $McpRuntimeHelper }
+
+# API 端口解析的唯一入口（用户 2026-09-22："不再显式指定端口，启动时自动挑一个"）。
+# 见 scripts\api-port.ps1：优先级 = -Port > COMFYHUB_PORT > .run\api.json > 0（自动）。
+$ApiPortHelper = Join-Path $Scripts 'api-port.ps1'
+if (Test-Path $ApiPortHelper) { . $ApiPortHelper }
+
+# 这一段解析出来的端口**只是"候选"**：`-Port 0` 时后端会自己挑一个并写进
+# `.run\api.json`，真实端口一律以那份文件为准（[Get-ApiPortNow] 现读）。
+$Script:RequestedPort = $Port
+$Script:ApiPort = (Resolve-ApiPort -ProjectRoot $ProjectRoot -Explicit $Port).Port
 
 # ---------------------------------------------------------------------------
 #  输出编码
@@ -225,14 +240,62 @@ function Get-ApiProcess {
         Where-Object { $_.CommandLine -and $_.CommandLine -like '*com.comfyhub.ApplicationKt*' }
 }
 
+<#
+    此刻后端**实际**在哪个端口上。
+
+    真源永远是 `<根>\.run\api.json`（后端绑定成功后写的）。解析出来的 `$Script:ApiPort`
+    只是候选（`-Port 0` 时它可能是 0），所以这里每次都现读文件：
+
+      · 文件里的端口**真的有人在听** → 用它；
+      · 没人听 / 没有文件 → 退回落候选端口（可能是显式指定的那个，也可能为 0）。
+#>
+function Get-ApiPortNow {
+    $state = Read-ApiPortState -ProjectRoot $ProjectRoot
+    if ($state -and $state.Port -gt 0 -and (Test-ApiPortListening -Port $state.Port)) {
+        return $state.Port
+    }
+    return $Script:ApiPort
+}
+
 function Get-ApiHealth {
-    # 同上：端口没开就直接返回，不要让 Invoke-RestMethod 去等那 2 秒
-    if (-not (Test-TcpPort '127.0.0.1' $ApiPort)) { return $null }
-    try { return Invoke-RestMethod "http://127.0.0.1:$ApiPort/api/health" -TimeoutSec 3 }
-    catch { return $null }
+    # 端口没开就直接返回，不要让 Invoke-RestMethod 去等那 2 秒。
+    # **必须走 [Find-LiveApiPort]**：`-Port 0` 时 `$Script:ApiPort` 是 0，
+    # 而 restart 期间状态文件与"真的在听"的那个还可能短暂不一致。
+    $live = Find-LiveApiPort -ProjectRoot $ProjectRoot -PreferredPort $Script:ApiPort
+    if (-not $live) { return $null }
+    $Script:ApiPort = $live.Port
+    return $live.Health
 }
 
 function Get-AppProcess { Get-Process -Name viewer -ErrorAction SilentlyContinue }
+
+<# 删掉端口状态文件（后端已停，记录就没意义了）。 #>
+function Remove-ApiPortState {
+    param([string]$ProjectRoot)
+    $stateFile = Join-Path (Join-Path $ProjectRoot $Script:ApiPortRunDirName) $Script:ApiPortFileName
+    Remove-Item $stateFile -Force -ErrorAction SilentlyContinue
+}
+
+<#
+    等后端真的把端口释放掉（`restart` 里紧跟着就要重新绑同一个端口）。
+
+    判据要**两个都过**，因为它们先后失效：
+      ① 没人监听了（旧进程已经不 accept 了）；
+      ② 现在**真的能 bind**（socket 完全放掉；`TIME_WAIT` 之类的尾巴散尽）。
+
+    只判 ① 会出现：旧进程刚被杀、还没放掉 socket，新后端一上来 bind 失败
+    → 回落成随机端口，白等十几秒（2026-09-22 实测）。
+#>
+function Wait-ApiPortReleased {
+    param([int]$Port, [int]$Seconds = 30)
+    if ($Port -le 0) { return $true }
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-ApiPortListening -Port $Port) -and (Test-ApiPortBindable -Port $Port)) { return $true }
+        Start-Sleep -Milliseconds 200
+    }
+    return $false
+}
 
 # ---------------------------------------------------------------------------
 #  状态
@@ -276,8 +339,14 @@ function Show-Status {
 
     # 后端（报的是端到端健康，包含数据库连通性）
     if ($s.ApiHealth -and $s.ApiHealth.database -eq 'ok') {
-        Say (Format-Row '后端' '健康' "http://127.0.0.1:$ApiPort  v$($s.ApiHealth.version)  db=ok") 'Green'
+        # 端口从状态文件现读：`-Port 0` 时 `$ApiPort` 是 0，报它等于报了个假地址
+        $livePort = Get-ApiPortNow
+        Say (Format-Row '后端' '健康' "http://127.0.0.1:$livePort  v$($s.ApiHealth.version)  db=ok") 'Green'
         Say (Format-Row '' '' "存储目录 $($s.ApiHealth.storageDir)") 'DarkGray'
+        $state = Read-ApiPortState -ProjectRoot $ProjectRoot
+        if ($state -and $state.FellBack -and $state.RequestedPort -gt 0) {
+            Say (Format-Row '' '' "注意：候选端口 $($state.RequestedPort) 绑不上（被占或落在 Windows 保留段），已用随机端口 $($state.Port)") 'Yellow'
+        }
     } elseif ($s.ApiProcess -gt 0) {
         $db = if ($s.ApiHealth) { $s.ApiHealth.database } else { '无响应' }
         Say (Format-Row '后端' '不健康' "进程在跑但 db=$db —— 多半是 MySQL 掉了") 'Red'
@@ -337,15 +406,18 @@ function Start-ApiPart {
     }
     if ($apiRunning) {
         Say '  后端在跑但数据库不通，先把它停掉再重启…' 'Yellow'
-        & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop @DataDirArgs
+        & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop -Port $Script:ApiPort @DataDirArgs
         Start-Sleep 1
     }
 
     Say '  [2/3] 启动 Kotlin 后端…' 'Cyan'
+    # ⚠️ 端口必须**透传**给 server.ps1：过去两个脚本各写各的 8080、互不知道，
+    # 于是"后端在跑、脚本却说没起来"。`-Port 0` 表示"自动"，由后端挑好写进 .run\api.json。
+    $apiArgs = @('-Port', "$Script:ApiPort") + $DataDirArgs
     if ($SkipBuild) {
-        & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') start -SkipBuild @DataDirArgs
+        & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') start -SkipBuild @apiArgs
     } else {
-        & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') start @DataDirArgs
+        & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') start @apiArgs
     }
     Trace '后端: server.ps1 start 已返回'
 
@@ -355,6 +427,42 @@ function Start-ApiPart {
         Trace '后端: 健康'
         return $true
     }
+
+    # 一次探不到不等于失败：`server.ps1 start` 返回时后端刚绑上端口，第一次受管请求
+    # 可能还没铺好（MCP 子进程 / 迁移都在启动尾部跑）。用户要的是"起来就行"，
+    # 这里给它 30 秒的确认窗口 —— 而不是让他看到一句"健康检查未通过"然后自己再试一次。
+    Trace '后端: 首次探测未通过，重试 30 秒'
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        $health = Get-ApiHealth
+        if ($health -and $health.database -eq 'ok') {
+            $Script:StartedApi = $true
+            Trace '后端: 健康（重试后）'
+            return $true
+        }
+    }
+
+    # 复用的端口仍然绑不上（旧进程还在、或那个端口落在 Windows 保留段里）：
+    # **不再空手收场**，把 `-Port 0` 明确给一次、让后端自己挑一个随机端口再来一遍。
+    # 这正是用户定的兜底规则："失败了回到随机端口"。
+    if ($Script:ApiPort -gt 0) {
+        Say "  端口 $Script:ApiPort 起不来（旧进程没退干净 / 端口被保留）——改用随机端口重试一次…" 'Yellow'
+        $script:ApiPort = 0
+        $retryArgs = @('-Port', '0') + $DataDirArgs
+        if ($SkipBuild) {
+            & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') start -SkipBuild @retryArgs
+        } else {
+            & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') start @retryArgs
+        }
+        $health = Get-ApiHealth
+        if ($health -and $health.database -eq 'ok') {
+            $Script:StartedApi = $true
+            Trace '后端: 健康（随机端口重试后）'
+            return $true
+        }
+    }
+
     Say '  后端健康检查未通过。' 'Red'
     return $false
 }
@@ -670,7 +778,7 @@ function Do-Down {
     } else { Say '  桌面 App 未运行。' 'DarkGray' }
 
     Say '  [2/3] 停止后端…' 'Cyan'
-    & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop @DataDirArgs
+    & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop -Port $Script:ApiPort @DataDirArgs
 
     # 必须等后端真的退出再停库，否则它会一边报错一边重连
     $deadline = (Get-Date).AddSeconds(20)
@@ -698,7 +806,7 @@ function Do-Release {
     Clear-OwnerWatchdog
 
     Say '  [1/2] 停止后端…' 'Cyan'
-    & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop @DataDirArgs
+    & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop -Port $Script:ApiPort @DataDirArgs
 
     # 必须等后端真的退出再停库，否则它会一边报错一边重连
     $deadline = (Get-Date).AddSeconds(20)
@@ -840,9 +948,27 @@ function Do-Doctor {
     $flutter = (Get-Command flutter -ErrorAction SilentlyContinue)
     Say ("  {0,-16} {1}" -f 'flutter', $(if ($flutter) { $flutter.Source } else { 'PATH 里没有' })) $(if ($flutter) { 'Green' } else { 'Red' })
 
-    foreach ($port in @($MysqlPort, $ApiPort)) {
-        $listen = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
-        Say ("  {0,-16} {1}" -f "端口 $port", $(if ($listen) { "被 PID $($listen[0].OwningProcess) 占用" } else { '空闲' })) 'Gray'
+    # API 端口单独报：它现在是"自动"的（默认 0），所以要看**后端记录在案的**那个端口。
+    # 再顺手把 Windows 保留端口段点出来 —— 落在保留段里的端口"谁都绑不上、netstat 也看不见"，
+    # 而错误信息只会说 "Address already in use"，非常难查（2026-09-22 本机 8080 就是这个）。
+    $apiPortNow = Get-ApiPortNow
+    if ($apiPortNow -gt 0) {
+        $apiListen = Get-NetTCPConnection -State Listen -LocalPort $apiPortNow -ErrorAction SilentlyContinue
+        Say ("  {0,-16} {1}" -f "API 端口 $apiPortNow", $(if ($apiListen) { "被 PID $($apiListen[0].OwningProcess) 占用（在跑）" } else { '空闲' })) 'Gray'
+        $state = Read-ApiPortState -ProjectRoot $ProjectRoot
+        if ($state -and $state.FellBack -and $state.RequestedPort -gt 0) {
+            Say ("  {0,-16} {1}" -f '端口回落', "候选 $($state.RequestedPort) 绑不上，已改用 $apiPortNow（要固定端口请指定一个确实空闲的）") 'Yellow'
+        }
+    } else {
+        Say ("  {0,-16} {1}" -f 'API 端口', '自动（0 = 由操作系统挑；真实端口写在 .run\api.json）') 'Gray'
+    }
+
+    $mysqlListen = Get-NetTCPConnection -State Listen -LocalPort $MysqlPort -ErrorAction SilentlyContinue
+    Say ("  {0,-16} {1}" -f "端口 $MysqlPort", $(if ($mysqlListen) { "被 PID $($mysqlListen[0].OwningProcess) 占用" } else { '空闲' })) 'Gray'
+
+    $excluded = Get-ExcludedTcpPortRange -Port $apiPortNow
+    if ($excluded) {
+        Say ("  {0,-16} {1}" -f '端口保留段', "端口落在 Windows 保留段 $excluded 里（Hyper-V/WSL 预留）——换一个端口，或管理员执行 net stop winnat / net start winnat") 'Yellow'
     }
 
     # 运行时依赖：发布包带不走的那几样（pwsh / VC++ 运行时）在这里现形
@@ -875,7 +1001,20 @@ switch ($Action) {
     'watch'   { Do-Watch }
     'unwatch' { Do-Unwatch }
     'status'  { Show-Status | Out-Null }
-    'restart' { Do-Down; Do-Up }
+    'restart' {
+        # restart = down + up。这里**故意不复用重启前的端口**，`Do-Up` 会用 `-Port 0` 要一个新的：
+        #
+        # 为什么（2026-09-22 实测，值得记住）：restart 期间会**先后有两个后端**存在几秒
+        # （旧进程收到强杀信号还没退干净、新进程已经在启动），而端口状态文件是"后写的赢"。
+        # 于是"文件里写的"和"真的在听的"会对不上：新后端可能读到旧记录、或旧进程的收尾钩子
+        # 覆盖掉新记录 → bind 失败 → 回落随机端口。表现是**每次重启白等 1~2 分钟**
+        # （两次启动尝试）并且中途报一句"不健康"，而端口最后还是变了。
+        # 与其在竞态里挣扎，不如让 restart 每次都用一个**全新端口**：
+        # 端口从来不是用户要记的东西（前端/脚本/捕获扩展都读 .run\api.json）。
+        Do-Down
+        $Script:ApiPort = 0
+        Do-Up
+    }
     'logs'    { Do-Logs }
     'doctor'  { Do-Doctor }
 }

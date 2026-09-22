@@ -63,7 +63,15 @@ data class AppConfig(
 
             return AppConfig(
                 host = host,
-                port = get("COMFYHUB_PORT", "8080").toInt(),
+                // 端口默认 **0 = 让操作系统挑一个空闲端口**（用户 2026-09-22）。
+                //
+                // 起因是本机 8080 落在 Windows 的保留端口段里（Hyper-V/WSL 预留），
+                // 连 `netstat` 都看不见"被谁占了"，后端一启动就是 BindException。
+                // 现在：显式值优先（`-Port` / `COMFYHUB_PORT` / 上次记录在
+                // `<项目根>\.run\api.json` 里的端口由脚本传进来），
+                // 没给就让 OS 挑；挑不到候选端口时 [startServer] 还会回落一次随机端口。
+                // 真实端口写进 `.run\api.json`，前端 / 脚本 / ComfyUI 扩展都读那一份。
+                port = parsePort(env["COMFYHUB_PORT"]),
                 jdbcUrl = get(
                     "COMFYHUB_JDBC_URL",
                     "jdbc:mysql://127.0.0.1:3307/comfy_hub" +
@@ -80,6 +88,23 @@ data class AppConfig(
                 corsOrigins = corsOrigins,
                 projectRoot = resolveProjectRoot(storage),
             )
+        }
+
+        /**
+         * 解析 `COMFYHUB_PORT`。
+         *
+         * 四种输入都要认，而且**一个都不许让后端起不来**：
+         *  · 没给 / 空 → `0`（= 让 OS 挑一个空闲端口）；
+         *  · `0` → 同上（显式要求随机）；
+         *  · 正整数 → 用它当候选（绑不上时由 [startServer] 回落成随机，见那里的注释）；
+         *  · 乱七八糟的字符串（`"8080 "` / `"http://…"` / `"abc"`）→ 也当成 0。
+         *    过去这里直接 `toInt()`，一个错字就让后端**崩在解析阶段**，
+         *    而报错信息只是 `NumberFormatException` —— 用户根本看不出是自己设置写错了。
+         */
+        internal fun parsePort(raw: String?): Int {
+            val text = raw?.trim().orEmpty()
+            if (text.isEmpty()) return 0
+            return text.toIntOrNull()?.takeIf { it in 0..65535 } ?: 0
         }
 
         /**

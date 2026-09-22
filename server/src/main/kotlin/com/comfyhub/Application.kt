@@ -42,6 +42,9 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.serialization.SerializationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
 import java.sql.SQLException
@@ -74,10 +77,118 @@ fun main() {
 
     log.info("ComfyHub 服务启动中...\n{}", cfg.describe())
 
-    embeddedServer(Netty, port = cfg.port, host = cfg.host) {
-        module(AppContext(cfg, storage))
-    }.start(wait = true)
+    // 端口不再写死（用户 2026-09-22）：候选端口绑不上就**换成随机端口**再来一次，
+    // 绑定成功后把**真实端口**记进 `<项目根>\.run\api.json` —— 前端 / 脚本 / ComfyUI
+    // 捕获扩展都读这一个文件，端口只有一个真源。详见 [ApiPortFile]。
+    val actual = startServer(cfg, log)
+    val portState = ApiPortState(
+        port = actual.port,
+        pid = ProcessHandle.current().pid(),
+        host = cfg.host,
+        url = ApiPortFile.urlFor(cfg.host, actual.port),
+        startedAt = java.time.Instant.now().toString(),
+        requestedPort = cfg.port,
+        fellBack = actual.fellBack,
+    )
+    ApiPortFile.write(cfg.projectRoot, portState)
+
+    // 优雅退出时清掉记录（只有还属于自己那一份才清，见 [ApiPortFile.deleteIfOwned]）
+    Runtime.getRuntime().addShutdownHook(
+        Thread { ApiPortFile.deleteIfOwned(cfg.projectRoot, portState.pid) },
+    )
+
+    actual.engine.start(wait = true)
 }
+
+/**
+ * 启动 HTTP 服务，返回**真实绑定到的端口**。
+ *
+ * 两条纪律：
+ *
+ *  1. **候选端口绑不上不算致命**：`port = 0` 时操作系统会挑一个空闲端口，
+ *     所以"8080 被占 / 落在 Windows 保留段里"这类问题从"起不来"变成"换一个"。
+ *     用户的原话是"失败了回到随机端口"。
+ *  2. **必须回读真实端口**：`cfg.port == 0` 时我们事先不知道会绑到哪个，
+ *     只能从引擎的 `resolvedConnectors()` 拿 —— 拿不到就明确报错，
+ *     **绝不**写一个猜出来的端口（那会让前端连到一个不存在的服务，且查不出原因）。
+ */
+private fun startServer(
+    cfg: AppConfig,
+    log: org.slf4j.Logger,
+): StartedServer {
+    // 模块体每次都要新建：一个 Application 实例不能挂到两个引擎上
+    fun newEngine(port: Int) = embeddedServer(Netty, port = port, host = cfg.host) {
+        module(AppContext(cfg, storage = Storage(cfg.storageDir)))
+    }
+
+    fun attempt(port: Int): StartAttempt {
+        val engine = newEngine(port)
+        // ⚠️ Netty 的绑定失败发生在**它自己的事件循环线程**里：`engine.start(wait = false)`
+        // 那一句不会抛异常，异常被记在引擎内部那个 `resolvedConnectors` 的 deferred 上。
+        // 所以**必须**去 await 它：成功时给出真实端口，失败时把 BindException 原样抛回来。
+        // 不 await 的话"回落随机端口"就是假的 —— 进程活着、日志刷 bind 失败、却没有任何人在听
+        // （2026-09-22 实测踩到：单独重启时候选端口还被上一个进程占着，回落逻辑完全没生效）。
+        return try {
+            engine.start(wait = false)
+            // 超时必须**明显短于**脚本侧等健康的窗口（server.ps1 的 Wait-Api 是 90 秒）：
+            // 这里 60 秒的话，"绑定其实成功了、只是引擎没报"这种极端情况会一直占着窗口，
+            // 让脚本等到超时才开始回落（2026-09-22 实测到 90+ 秒的启动）。
+            // 25 秒足够冷启动（实测 Netty 绑定在 5 秒内完成），失败也来得及回落。
+            val port0 = runBlocking {
+                withTimeout(25_000) { engine.engine.resolvedConnectors().firstOrNull()?.port }
+            } ?: throw IllegalStateException("服务已启动但拿不到监听端口（这是本机的 bug，请附启动日志反馈）")
+            StartAttempt(StartedServer(engine, port0, fellBack = false), null)
+        } catch (e: TimeoutCancellationException) {
+            runCatching { engine.stop(0, 0) }
+            StartAttempt(null, IllegalStateException("启动 25 秒内既没绑上也没报错（引擎内部卡住）", e))
+        } catch (e: Exception) {
+            runCatching { engine.stop(0, 0) }
+            StartAttempt(null, e)
+        }
+    }
+
+    fun isBindFailure(t: Throwable?): Boolean =
+        t != null && generateSequence(t) { it.cause }.any { it is java.net.BindException }
+
+    val first = attempt(cfg.port)
+    if (first.server != null) {
+        val s = first.server
+        log.info(
+            "后端已监听 {}{}",
+            ApiPortFile.urlFor(cfg.host, s.port),
+            if (s.port != cfg.port) "（请求的端口是 ${cfg.port}）" else "",
+        )
+        return s
+    }
+
+    val failure = first.failure
+    if (!isBindFailure(failure)) {
+        // 不是"端口被占"（比如配置错、Netty 起不来）：**不要**用随机端口把这颗雷盖住
+        throw IllegalStateException("HTTP 服务启动失败：${failure?.message}", failure)
+    }
+
+    log.warn(
+        "候选端口 {} 绑不上（{}）—— 改用随机端口重试（用户要求：失败了回到随机端口）。" +
+            "想固定端口请用 -Port / COMFYHUB_PORT 指定一个确实空闲的端口。",
+        cfg.port,
+        failure!!.message,
+    )
+    val retry = attempt(0)
+    val s = retry.server
+        ?: throw IllegalStateException("改用随机端口后仍然起不来：${retry.failure?.message}", retry.failure)
+    log.warn("已改用随机端口 {}（原候选 {}）", s.port, cfg.port)
+    return StartedServer(s.engine, s.port, fellBack = true)
+}
+
+/** 一次启动尝试：[server] 与 [failure] 恰好有一个非空。 */
+private class StartAttempt(val server: StartedServer?, val failure: Throwable?)
+
+/** [startServer] 的结果：引擎 + 真实端口 + 有没有回落。 */
+private class StartedServer(
+    val engine: io.ktor.server.engine.EmbeddedServer<*, *>,
+    val port: Int,
+    val fellBack: Boolean,
+)
 
 /**
  * 等待数据库可用。返回 false 表示彻底失败（调用方应退出进程）。
