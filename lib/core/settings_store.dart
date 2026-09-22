@@ -1,4 +1,5 @@
-import 'dart:io' show Platform;
+import 'dart:convert';
+import 'dart:io' show Directory, File, Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,8 +21,18 @@ class SettingsStore extends ChangeNotifier {
   String? _mysqlDataDir;
   bool _loaded = false;
 
+  /// 地址是用户手填的（true）还是我们自动发现的（false，见 [baseUrlIsAuto]）。
+  bool _baseUrlFromUser = false;
+
   String get baseUrl => _baseUrl;
   int get pageSize => _pageSize;
+
+  /// 当前地址是不是"用户手填的"（false = 我们按本机 `.run\api.json` 自动定的）。
+  ///
+  /// 用途只有一个（2026-09-22）：后端**重启会换端口**（端口是自动挑的），
+  /// 那时 App 必须能自己重新发现并改口 —— 但**绝不能**覆盖用户在设置页里填的地址
+  /// （那是"我要连别的机器"，改它就是把人家的远程配置弄坏了）。
+  bool get baseUrlIsAuto => !_baseUrlFromUser;
 
   /// App 启动时是否自动把 MySQL + 后端拉起来
   bool get autoStartBackend => _autoStartBackend;
@@ -38,20 +49,106 @@ class SettingsStore extends ChangeNotifier {
 
   bool get loaded => _loaded;
 
+  /// 测试用：覆盖"去哪找 `.run\api.json`"。
+  ///
+  /// `null`（生产默认）= 按 [_projectRootCandidates] 真实探测；
+  /// 空列表 = 假装这台机器上没有端口记录（用例期望"回落到 8080"时用这个）；
+  /// 给了目录 = 只在这些目录里找（用例想喂一份假的端口文件时用）。
+  @visibleForTesting
+  static List<String>? portFileRootsOverride;
+
   static String defaultBaseUrl() {
     if (kIsWeb) return 'http://127.0.0.1:8080';
     try {
-      // Android 模拟器访问宿主机需要用 10.0.2.2
+      // Android 模拟器访问宿主机需要用 10.0.2.2。
+      // 刻意**不**去读本机的 `.run\api.json`：那台机器上的后端跟手机是两台设备，
+      // 手机连的是"宿主机的某个端口"，由用户在设置页里填（远程场景见
+      // docs/inbound-auth-design.md）。
       if (Platform.isAndroid) return 'http://10.0.2.2:8080';
     } catch (_) {
       // 平台判断在个别环境下会抛异常，忽略即可
     }
-    return 'http://127.0.0.1:8080';
+    // 桌面端：后端端口现在是**自动挑的**（2026-09-22，用户要求"不再显式指定端口"），
+    // 真实端口记在 `<项目根>\.run\api.json` 里，前端必须去读它 —— 否则每次启动
+    // 都在猜一个固定端口，而后端可能正跑在别的端口上。
+    return _baseUrlFromPortFile() ?? 'http://127.0.0.1:8080';
+  }
+
+  /// 从 `<项目根>\.run\api.json` 读后端**实际**监听的端口（读不到返回 null）。
+  ///
+  /// 这是端口这件事在 Dart 侧的唯一入口，与 `scripts\api-port.ps1`、
+  /// `server\...\ApiPortFile.kt`、`comfyui\comfyhub_capture\capture_core.py` 读的是**同一个文件**。
+  ///
+  /// 三条纪律：
+  ///  · **读不到就用默认值**，绝不抛异常 —— 它在 App 启动路径上，崩了就是白屏；
+  ///  · **只在"用户没手填地址"时才用**（[load] 里 `prefs` 有值就优先用用户的），
+  ///    否则远程 / 局域网场景会被拽回本机；
+  ///  · 用完**不缓存**：端口会随重启变，每次冷启动都重新读一次。
+  static String? _baseUrlFromPortFile({String? projectRoot}) {
+    for (final root in _projectRootCandidates(projectRoot)) {
+      try {
+        final file = File('$root${Platform.pathSeparator}.run'
+            '${Platform.pathSeparator}api.json');
+        if (!file.existsSync()) continue;
+        final decoded = jsonDecode(file.readAsStringSync());
+        if (decoded is! Map) continue;
+        final port = decoded['port'];
+        if (port is! int || port <= 0 || port > 65535) continue;
+        final host = (decoded['host'] as String?) ?? '127.0.0.1';
+        // `COMFYHUB_HOST=0.0.0.0` 时后端听的是所有网卡，而客户端连 0.0.0.0 是不通的 → 回落回环
+        final connectHost = (host.isEmpty || host == '0.0.0.0' || host == '::') ? '127.0.0.1' : host;
+        return 'http://$connectHost:$port';
+      } catch (_) {
+        // 文件坏了 / 读不动：试下一个候选目录，最后回落到默认值
+      }
+    }
+    return null;
+  }
+
+  /// 去哪找 `.run\api.json`：显式给的根 → 环境变量 → 从 exe / cwd 往上找 `scripts\comfyhub.ps1`。
+  ///
+  /// **测试里必须能关掉它**（见 [portFileRootsOverride]）：否则用例的结果会随
+  /// "这台机器上后端正跑在哪个端口"变化（实测：`context_menu_test` 复制出的 URL
+  /// 变成了当时后端占用的随机端口，而不是用例期望的 8080）。
+  static List<String> _projectRootCandidates([String? explicit]) {
+    final override = portFileRootsOverride;
+    if (override != null) return override;
+    final roots = <String>[];
+    if (explicit != null && explicit.isNotEmpty) roots.add(explicit);
+    final env = Platform.environment['COMFYHUB_PROJECT_ROOT'];
+    if (env != null && env.isNotEmpty) roots.add(env);
+
+    // 与 `BackendLauncher.detectProjectRoot` 同一套判据（往上找 `scripts\comfyhub.ps1`）：
+    // 这里不 import 它是为了不让"设置"依赖"启动器"（两边各自成立、互不牵连）。
+    final starts = <String>[];
+    try {
+      starts.add(File(Platform.resolvedExecutable).parent.path);
+    } catch (_) {}
+    try {
+      starts.add(Directory.current.path);
+    } catch (_) {}
+
+    final sep = Platform.pathSeparator;
+    for (final start in starts) {
+      var dir = Directory(start);
+      for (var depth = 0; depth < 8; depth++) {
+        if (File([dir.path, 'scripts', 'comfyhub.ps1'].join(sep)).existsSync()) {
+          roots.add(dir.path);
+          break;
+        }
+        final parent = dir.parent;
+        if (parent.path == dir.path) break;
+        dir = parent;
+      }
+    }
+    return roots;
   }
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
-    _baseUrl = prefs.getString(_kBaseUrl) ?? defaultBaseUrl();
+    final stored = prefs.getString(_kBaseUrl);
+    _baseUrlFromUser = stored != null && stored.isNotEmpty;
+    _baseUrl = _baseUrlFromUser ? stored! : defaultBaseUrl();
     _pageSize = prefs.getInt(_kPageSize) ?? 24;
     _autoStartBackend = prefs.getBool(_kAutoStartBackend) ?? true;
     _stopServicesOnExit = prefs.getBool(_kStopServicesOnExit) ?? true;
@@ -61,16 +158,40 @@ class SettingsStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 重新发现本机后端地址（后端重启换了端口时用）。
+  ///
+  /// 返回 true = 地址变了（调用方要重建 api client）。
+  /// **用户手填过地址时什么也不做**并返回 false —— 那是他的远程配置，不该被本机服务改掉。
+  ///
+  /// 调用时机：后端启动完成之后（`BackendLauncher.ensureRunning` / 重启动作收尾处）。
+  /// 端口文件读不到（还没起来 / 已停止）时保持原样，绝不猜。
+  Future<bool> refreshBaseUrlFromPortFile() async {
+    if (_baseUrlFromUser) return false;
+    final discovered = _baseUrlFromPortFile(projectRoot: _projectRoot);
+    if (discovered == null || discovered == _baseUrl) return false;
+    _baseUrl = discovered;
+    notifyListeners();
+    return true;
+  }
+
   Future<void> setBaseUrl(String value) async {
     var v = value.trim();
-    if (v.isEmpty) v = defaultBaseUrl();
+    final prefs = await SharedPreferences.getInstance();
+    if (v.isEmpty) {
+      // 清空 = 回到"自动"：地址由 `.run\api.json` 决定（后端端口是自动挑的）
+      _baseUrlFromUser = false;
+      _baseUrl = defaultBaseUrl();
+      notifyListeners();
+      await prefs.remove(_kBaseUrl);
+      return;
+    }
     if (!v.startsWith('http://') && !v.startsWith('https://')) v = 'http://$v';
     while (v.endsWith('/')) {
       v = v.substring(0, v.length - 1);
     }
+    _baseUrlFromUser = true;
     _baseUrl = v;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kBaseUrl, v);
   }
 

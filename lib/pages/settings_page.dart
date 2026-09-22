@@ -79,6 +79,26 @@ class _SettingsPageState extends State<SettingsPage> {
   //  后端地址
   // -------------------------------------------------------------------------
 
+  /// 跑一个服务动作（重启 / 停止），**完事重新发现后端地址**。
+  ///
+  /// 为什么需要（2026-09-22）：端口现在是自动挑的（`COMFYHUB_PORT` 默认 0），
+  /// 重启会换一个端口。不重新读一次 `.run\api.json`，App 会继续对着旧端口说话 ——
+  /// 界面上的表现就是"重启成功但什么都刷不出来"。
+  /// 用户手填过地址时 [SettingsStore.refreshBaseUrlFromPortFile] 不会动它（那是远程配置）。
+  Future<void> _runActionThenRediscover(String action) async {
+    final launcher = context.read<BackendLauncher>();
+    final settings = context.read<SettingsStore>();
+    await launcher.runAction(action);
+    if (!mounted) return;
+    try {
+      await settings.refreshBaseUrlFromPortFile();
+      if (!mounted) return;
+      await context.read<LibraryStore>().refreshAll();
+    } catch (_) {
+      // 重新发现失败不该把重启按钮变成报错：地址没变就还是原来的行为
+    }
+  }
+
   Future<void> _test() async {
     final settings = context.read<SettingsStore>();
     final store = context.read<LibraryStore>();
@@ -510,12 +530,14 @@ class _SettingsPageState extends State<SettingsPage> {
                           controller: _urlController,
                           decoration: const InputDecoration(
                             labelText: '后端地址',
-                            hintText: 'http://127.0.0.1:8080',
+                            hintText: '留空 = 自动（按 .run\\api.json 里后端记录的端口）',
                           ),
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Windows 桌面端用 127.0.0.1；Android 模拟器用 10.0.2.2；真机用电脑的局域网 IP。',
+                          'Windows 桌面端用 127.0.0.1；Android 模拟器用 10.0.2.2；真机用电脑的局域网 IP。\n'
+                          '留空 = 自动：后端端口在启动时挑（重启会换），App 读它记录在 .run\\api.json 里的真实端口；'
+                          '只有要连别的机器时才需要手填。',
                           style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
                         ),
                         const SizedBox(height: 12),
@@ -965,7 +987,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   label: const Text('启动 / 修复服务'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: busy ? null : () => launcher.runAction('restart'),
+                  onPressed: busy ? null : () => _runActionThenRediscover('restart'),
                   icon: const Icon(Icons.restart_alt),
                   label: const Text('重启'),
                 ),

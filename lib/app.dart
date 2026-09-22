@@ -127,9 +127,18 @@ class _StartupGateState extends State<StartupGate> {
     final launcher = _launcher;
     if (launcher == null || !launcher.isReady || _refreshed) return;
     _refreshed = true;
-    // 后端刚就绪：把提示词 / 画廊 / 标签 / 统计拉一遍
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<LibraryStore>().refreshAll();
+    // 后端刚就绪：先按 `.run\api.json` **重新发现一次地址**，再拉数据。
+    //
+    // 为什么必须重新发现（2026-09-22）：后端端口现在是**自动挑的**（默认 0），
+    // 重启会换一个端口。App 冷启动时读到的可能还是上一轮那个（或者默认 8080），
+    // 不重新读一次就会一直连一个没人听的端口，用户看到的是"启动页说后端已就绪，
+    // 界面却什么都拉不出来"。用户手填过地址时这一步什么也不做（那是远程配置）。
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final settings = context.read<SettingsStore>();
+      await settings.refreshBaseUrlFromPortFile();
+      if (!mounted) return;
+      context.read<LibraryStore>().refreshAll();
     });
   }
 
