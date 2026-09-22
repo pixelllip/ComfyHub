@@ -175,6 +175,8 @@ viewer/
 ├── docs/android-agp9-builtin-kotlin-migration.md  # ★ AGP 9.1 / 内建 Kotlin 迁移记录与踩坑
 ├── docs/comfy-mcp-report.md      # ★ 官方 comfy-mcp 接入：查证过程、装配实测、放行清单与进度
 ├── docs/android-client-plan.md   # ★ 安卓客户端（ComfyHub Mobile）架构预留与落地顺序
+├── docs/inbound-auth-design.md   # ★ 入站配对令牌鉴权：设计（开远程的前置条件，含威胁模型与取舍）
+├── docs/remote-access-security.md# ★ 公网远程控制（电脑与手机异地）：可行吗 / 走哪条路 / 安全靠什么
 ├── storage/                      # 产物文件与 AI 附件（运行时生成，已 gitignore）
 │   ├── media/ thumbs/            # 画廊产物与它的缩略图 / 视频封面
 │   └── ai-attachments/ ai-thumbs/# 发给 AI 的附件原件、缩略图 / 视频预览帧（M3，与画廊分开）
@@ -258,7 +260,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQ
 | `scripts\autorun-app.ps1` | 一键全流程：服务 → 分析 → 构建（Release）→ 启动 App |
 | `scripts\pack-release.ps1` | **打包发布版**：按 `packaging\manifest.json` 把 Kotlin 后端 + 便携版 MySQL + JRE **就地装配进** `build\windows\x64\runner\Release\`，装完那个目录就是完整发布包（`-OutDir` 可另存，`-Zip` 顺带压包） |
 | `scripts\ensure-runtime.ps1` | **运行时一键就绪**：检测不到的运行时自动下载安装（Java 下便携版塞进 `<根>\jre`；pwsh / VC++ 走 winget）。`-CheckOnly` 只检测 |
-| `scripts\mcp-runtime.ps1` | **MCP 运行时装配**（可选能力）：把便携版 Python + `comfy-cli` + `comfy-mcp` 装进 `<根>\storage\ai\mcp`，并把 `comfy-cli` 的工作区指向用户真实在用的 ComfyUI。`status` / `install [-Force] [-ComfyHome <目录>]`；`comfyhub.ps1 up` 会自动补、`doctor` 会报状态 |
+| `scripts\mcp-runtime.ps1` | **MCP 运行时装配**（可选能力）：**先用机器上已有的 Python**（已有 comfy-mcp 就直接借；没有就借它建 venv），机器上没有才下便携版 Python；再装 `comfy-cli` + `comfy-mcp` 到 `<根>\storage\ai\mcp`，并把 `comfy-cli` 的工作区指向用户真实在用的 ComfyUI。`status` / `install [-Force] [-ComfyHome <目录>]`；`comfyhub.ps1 up` 会自动补、`doctor` 会报状态与"这份 Python 哪来的" |
 | `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
 | `scripts\check-silent-start.ps1` | **静默启动自测**：启动服务的同时盯屏，报告有没有弹出 cmd / 控制台窗口（加 `-Restart` 从零走一遍） |
 | `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成）。假 ComfyUI 默认在 **18188**（**不是 8188** —— 那是真实 ComfyUI 的端口，撞上会让测试悄悄连到真实那一个），起好后还会认一次身份，不是自己的就当场停下 |
@@ -872,25 +874,37 @@ pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub   # 另存一份干
 | --- | --- | --- |
 | **PowerShell 7 (`pwsh`)** | App 用它执行 `scripts\*.ps1`，脚本之间也**互相调 `pwsh`** | ❌ 要装：`winget install --id Microsoft.PowerShell` |
 | **VC++ 2015-2022 x64 可再发行组件** | `mysqld.exe` 依赖 `vcruntime140.dll` / `vcruntime140_1.dll` / `msvcp140.dll`，而便携版 MySQL 的 zip **不带**这几个 DLL | ❌ 要装：`winget install --id Microsoft.VCRedist.2015+.x64` |
-| Java 21 运行时 | Kotlin 后端（JVM） | ✅ `<根>\jre`；**没有就自动下载**（见下） |
+| Java 21 运行时 | Kotlin 后端（JVM） | ✅ `<根>\jre`；**机器上已有可用 Java 就直接用**（`JAVA_HOME` / 常见 JDK 安装位置 / PATH），真的没有才自动下载（见下） |
 | MySQL 8.4（免安装版） | 数据库本体 | ✅ `<根>\mysql` |
 | Windows 10 / 11 x64 | 桌面端 + 脚本（WMI / CIM） | — |
 
 #### 可选能力：MCP 运行时（`mcp-runtime.ps1`）
 
 **AI 的 ComfyUI 工具**走官方 [`comfy-mcp`](https://github.com/Comfy-Org/comfy-mcp)，而它是 Python 写的、
-并且要求 `comfy-cli`（**它自己不捆绑 comfy-cli**）。为了让发布包保持"解压就能用"，
-`scripts\mcp-runtime.ps1` 把这三样按"缺什么补什么"装进**包内**（跟 `<根>\jre` / `<根>\mysql` 一个路子）：
+并且要求 `comfy-cli`（**它自己不捆绑 comfy-cli**）。`scripts\mcp-runtime.ps1` 按**检测优先，安装只作兜底**
+的策略把它装进**包内**（跟 `<根>\jre` / `<根>\mysql` 一个路子）：
+
+**Python 从哪来（这个顺序就是策略本身，2026-09-21 用户定："环境有 python 你的脚本就不用再装了"）**：
+
+| 档 | 什么情况 | 做什么 |
+| --- | --- | --- |
+| 1 | 已经装配过（`state.json` / `<根>\storage\ai\mcp\venv` / `...\python`） | 直接用，**不联网、不装包** |
+| 2 | 机器上的 Python **已经装了** comfy-mcp + comfy-cli | **直接借**，一个字节都不装 |
+| 3 | 机器上有 Python（`COMFYHUB_PYTHON` → PATH 的 `python`/`python3` → `py` 启动器） | 借它建一个 **venv**（`<根>\storage\ai\mcp\venv`）再 pip 装 —— **不往用户的全局 site-packages 里塞 300MB** |
+| 4 | 机器上真的没有 Python | 才下便携版 Python 3.12 embeddable（约 10MB）。`COMFYHUB_NO_DOWNLOAD=1` 时这一步不许发生，只报"缺运行时 + 怎么装" |
 
 | 装什么 | 落在哪 | 说明 |
 | --- | --- | --- |
-| 便携版 Python 3.12（embeddable） | `<根>\storage\ai\mcp\python` | 官方 embed zip（约 10MB）+ `get-pip.py`。embeddable 版**没有 venv 模块**，所以是"整包一个环境" |
-| `comfy-mcp` + `comfy-cli` | 同上 `\python\Lib\site-packages` | pip 装，首次约 300MB。实测版本：comfy-cli **1.20.0** / comfy-mcp **0.10.0** / mcp SDK **2.2.0** |
+| Python | `<根>\storage\ai\mcp\venv`（正常）或 `...\python`（兜底） | 第 3 档用机器上的 Python 建 venv；第 4 档才是官方 embed zip + `get-pip.py`（embeddable 版**没有 venv 模块**，所以那份是"整包一个环境"） |
+| `comfy-mcp` + `comfy-cli` | 上面那份 Python 的 `Scripts` / `Lib\site-packages` | pip 装，首次约 300MB。实测版本：comfy-cli **1.20.0** / comfy-mcp **0.10.0** / mcp SDK **2.2.0** |
 | comfy-cli 的工作区 | `%LOCALAPPDATA%\comfy-cli\config.ini` | `comfy set-default <ComfyUI 目录>`，目录由 `comfy-path.ps1` 解析（与后端 `ComfyLocator.kt` 同一套判据） |
 
+`doctor` 会把"这份 Python 是哪来的"打出来（`system` / `venv` / `portable`）——
+看到 `portable` 才说明这台机器上确实没找到 Python。
+
 ```powershell
-pwsh -File scripts\mcp-runtime.ps1 status    # 只看装到哪一步了
-pwsh -File scripts\mcp-runtime.ps1 install   # 装配（联网，首次约 300MB）
+pwsh -File scripts\mcp-runtime.ps1 status    # 只看装到哪一步了（含 python 来源）
+pwsh -File scripts\mcp-runtime.ps1 install   # 装配（机器上有 Python 就不用下便携版）
 pwsh -File scripts\mcp-runtime.ps1 install -ComfyHome D:\ComfyUI   # 手工指定 ComfyUI 目录
 ```
 
@@ -1172,7 +1186,9 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
   用户可以随时在右侧栏改或清空。**别往里放密钥 / 口令**（系统提示里明确禁止模型记这些）。
   注入部分截断到 4000 字符，文件本身可以更长。
 - **`ai_tool_calls` 只增不减**：每次工具调用一行（含被拒绝的），目前没有自动清理策略。
-- **单用户、无鉴权**：后端默认只监听本机，请勿直接暴露到公网。
+- **单用户、无鉴权（回环）**：后端默认只监听本机，请勿直接暴露到公网。
+  非回环（局域网）访问的**配对令牌鉴权**已经设计好、还没实施：见
+  [`docs/inbound-auth-design.md`](docs/inbound-auth-design.md)（默认关闭时行为与本条现状逐字一致）。
 - **Windows 高 DPI**：窗口按系统缩放渲染（本机 150%），因此逻辑尺寸 = 1440/1.5 = 960×613，界面会走 NavigationRail 布局。
 
 ---
