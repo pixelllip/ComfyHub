@@ -1332,8 +1332,13 @@ object SystemPrompt {
      *     模型差点让用户去下载一个本来就在硬盘上的文件。配套改了 `ComfyModels.inventory()`
      *     （清单改成 `/object_info` ∪ 盘扫的并集，并单列 `diskOnly`）与 `McpToolBridge`
      *     （起实例时**自动补上** Desktop 的模型根 / input / output 三个参数）。
+     * v25（2026-09-22）：新增 `comfy_env_report`（三套根对账 + 本机模型清单，
+     *     取代"手搓十几条 list_dir"）；`comfy_submit` 加**提交前模型预检**
+     *     （要的模型加载不了就当场拒并给动作，见 `ModelPreflight`）；
+     *     只读白名单放行"已知 ComfyUI 根的上一级"（"往上走一层"正是 AI 自己
+     *     发现 ComfyUI-Shared 的唯一路径，那次它是靠用户点名才走到的）。
      */
-    const val VERSION = "v24"
+    const val VERSION = "v25"
 
     /**
      * 第一问时追加的一段：让模型在正文最前面带一行 `[标题]…[/标题]`，

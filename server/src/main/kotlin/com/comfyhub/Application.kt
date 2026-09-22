@@ -321,6 +321,20 @@ fun Application.module(ctx: AppContext) {
         emptyList()
     }
 
+    // 本机模型清单（用户建议 ①，2026-09-22）：**`/object_info` 与盘扫的并集**。
+    // 只有并集才说得清"盘上有、但当前实例看不到"——那次事故里模型据此让用户去下载
+    // 一个本来就在硬盘上的 4GB 文件（见 ComfyModels.inventory 的注释）。
+    // 抽成一个 val 是为了让 `comfy_submit` 的**提交前预检**用同一份清单（不另算一份、也不另写一份判据）。
+    val modelInventory: (JsonObject?) -> com.comfyhub.ComfyModels.Inventory = { objectInfo ->
+        com.comfyhub.ComfyModels.inventory(
+            objectInfo ?: runCatching { submitter.objectInfo() }.getOrNull(),
+            ctx.cfg.projectRoot,
+            // 用户**真实的模型根**：ComfyUI Desktop 的共享目录、别的盘上的模型库。
+            // 这一项必须传 —— 少了它，盘上事实里就没有 Shared，那句诊断无从谈起。
+            com.comfyhub.ComfyEnv.desktop()?.modelsDirs.orEmpty(),
+        )
+    }
+
     val toolRegistry = ToolRegistry(
         projectRoot = ctx.cfg.projectRoot,
         skills = skills,
@@ -357,7 +371,22 @@ fun Application.module(ctx: AppContext) {
             }
         },
         comfySubmit = { promptId, overrides, connections, title, waitSeconds, nsfw ->
-            AiWorkflowSearch.submit(submitter, capture, promptId, overrides, connections, title, waitSeconds, nsfw)
+            AiWorkflowSearch.submit(
+                submitter,
+                capture,
+                promptId,
+                overrides,
+                connections,
+                title,
+                waitSeconds,
+                nsfw,
+                // 提交前预检（用户 2026-09-22 拍板）：要的模型当前实例加载不了就**当场拒**，
+                // 并给出动作（重启 / 修挂载 / 装它 / 把用不上的分支摘掉）。取清单失败时不拦 ——
+                // 误拦一个本来能跑的工作流，比白跑一次更糟。
+                preflight = { graph ->
+                    runCatching { com.comfyhub.ModelPreflight.check(graph, modelInventory(null)) }.getOrNull()
+                },
+            )
         },
         // 用户 bug ③：给一个工作流文件路径就能读进库、拿到 promptId（界面格式在这里被转成 API 图）
         // tolerateUnsupported（用户建议 ②）：转换不了的前端节点摘掉并给出缺口清单，交给模型补线
@@ -393,17 +422,9 @@ fun Application.module(ctx: AppContext) {
         // 拿不到就只摘不拼（宁可不做，也不乱接一根线）
         comfyObjectInfo = { runCatching { submitter.objectInfo() }.getOrNull() },
         // 本机模型清单（用户建议 ①）：**`/object_info` 与盘扫的并集**（2026-09-22 改）。
-        // 只有并集才说得清"盘上有、但当前实例看不到"——那次事故里模型据此让用户去下载
-        // 一个本来就在硬盘上的 4GB 文件（见 ComfyModels.inventory 的注释）。
-        comfyModels = { objectInfo ->
-            com.comfyhub.ComfyModels.inventory(
-                objectInfo ?: runCatching { submitter.objectInfo() }.getOrNull(),
-                ctx.cfg.projectRoot,
-                // 用户**真实的模型根**：ComfyUI Desktop 的共享目录、别的盘上的模型库。
-                // 这一项必须传 —— 少了它，盘上事实里就没有 Shared，那句诊断无从谈起。
-                com.comfyhub.ComfyEnv.desktop()?.modelsDirs.orEmpty(),
-            )
-        },
+        // 与上面对 `comfy_submit` 预检用的是**同一份**（`modelInventory`）——
+        // 两处判据分家就会出现"预检说能用、fit 说没有"这种自相矛盾。
+        comfyModels = modelInventory,
         // 官方 comfy-mcp 拉来的工具（运行时不在了就是空列表）
         extraTools = mcpTools,
     )

@@ -1,8 +1,10 @@
 package com.comfyhub.ai.tools
 
 import com.comfyhub.AppJson
+import com.comfyhub.ComfyEnv
 import com.comfyhub.ComfyModels
 import com.comfyhub.FitReport
+import com.comfyhub.SettingsRepo
 import com.comfyhub.WorkflowFit
 import com.comfyhub.ai.RunEventType
 import com.comfyhub.ai.protocol.ToolSpec
@@ -727,6 +729,11 @@ class ToolRegistry(
                 "用 connections 补连线（键一样，值写成 [\"上游节点id\", 槽位]，例如 {\"60.vae\":[\"1\",0]}）——" +
                 "comfy_load_workflow 报 runnable=false 时，照它给的 openInputs / unresolvedInputs 补。" +
                 "跑完后产物会自动入库到画廊。不要凭想象编造工作流；说不清要跑什么就先问用户。" +
+                "\n**提交前会先做一次模型预检**（用户 2026-09-22 拍板）：要的 checkpoint / LoRA / VAE " +
+                "当前这个实例加载不了时会**当场拒**并告诉你该怎么办 —— 可能出现在硬盘上但实例看不到" +
+                "（重启 ComfyUI 就好，**别去下载**，见 `comfy_env_report`），也可能本机确实没有" +
+                "（去 `civitai_search` 查 + 问用户）。被拒时**不要改个名字重试**：" +
+                "预检看的是最终那张图（overrides / connections 应用之后），换个名字只会在下一次再被拒。" +
                 "\n**成人内容**：这一跑出的是 NSFW / R18 内容时必须显式写 `nsfw=true` ——" +
                 "产物会带上 NSFW 标记，用户在设置里开了「预览图模糊」时画廊与回复里的缩略图就会打码。" +
                 "正常内容**不要**打开它（那会让正常的图也被糊住）；也**不要**因为用户没提就默认关闭" +
@@ -938,6 +945,151 @@ class ToolRegistry(
                 modelInputs = ComfyModels.enumerateModelInputs(objectInfo),
             )
             ToolOutput(report.render(), report.toJson())
+        },
+
+        // ------------------------------------------------------------------
+        //  「这台机器上的 ComfyUI 到底长什么样」（2026-09-22，会话 0bedb3f5 的直接产物）
+        //
+        //  那次事故的根因不是"AI 没看"，而是**两个模型根**：
+        //  用户日常跑 ComfyUI Desktop（模型在 `ComfyUI-Shared\models` 与 `E:\ComfyUI\models`），
+        //  而 `launch_comfyui` 直接跑 `main.py`、没挂这些根 → `/object_info` 是一份
+        //  "权威但看不到共享目录"的清单 → "盘上明明有的 4.18GB 底模"被报成"本机没有"。
+        //
+        //  这个工具就是**把三套根摆在一起对账**，并顺带回答"本机有哪些模型"——
+        //  以前模型只能靠十几条 `list_dir` 手搓（`seq9`+`seq11` 半小时就是这么烧掉的）。
+        // ------------------------------------------------------------------
+        AgentTool(
+            name = "comfy_env_report",
+            description = "**本机 ComfyUI 环境对账**：把三套根摆在一起 + 列出本机模型清单。" +
+                "\n什么时候用：① 用户抱怨\"明明有这个模型、AI 却说没有\"；② 你要判断" +
+                "\"这份工作流能不能跑\"之前；③ `comfy_fit_workflow` 报了 `missing` 或 `onDiskOnly`；" +
+                "④ 想知道本机到底有哪些 checkpoint / LoRA / VAE（用 folder 或 query 过滤）。" +
+                "\n它会回答：**当前跑着的实例能加载多少个模型**（= `/object_info` 的枚举）、" +
+                "**盘上实际有多少个**（用户的模型根，含 ComfyUI Desktop 的共享目录与别的盘）、" +
+                "**哪些是盘上有而实例看不到的**（大于 0 就说明实例没挂全模型根 → 重启一次就好，**别去下载**）、" +
+                "以及本 App 自动捕获盯着的 output / input 是哪个目录。" +
+                "\n它**只读**：不改任何文件、不提交、不下载。看到\"盘上有但实例看不到\"时的正确动作是" +
+                "**让用户重启 ComfyUI**（ComfyHub 起实例时会自动挂上 ComfyUI Desktop 的模型根），不是去下载。",
+            parameters = schema(
+                """{"type":"object","properties":{"folder":{"type":"string","description":"可选：只看某一类目录，例如 checkpoints / loras / diffusion_models / text_encoders / vae"},"query":{"type":"string","description":"可选：模型文件名的关键词（子串匹配，大小写不敏感）"},"limit":{"type":"integer","description":"可选：最多列几条（默认 40，上限 200）"}},"additionalProperties":false}"""
+            ),
+            // 本机只读巡检，**不是**"拿 ComfyUI 当轮询器"：不进 COMFY 那一类，
+            // 免得一次对账就吃掉 1/9 的查询预算（那次现场恰恰是预算被吃满、任务断在半路）
+            category = ToolCategory.FILES,
+            mutating = false,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, _ ->
+            val inventoryOf = comfyModels
+                ?: throw ToolFailure("COMFY_DISABLED", "本次运行没有启用本机模型清单能力")
+            val objectInfo = runCatching { comfyObjectInfo?.invoke() }.getOrNull()
+            val inv = inventoryOf(objectInfo)
+            val env = ComfyEnv.desktop()
+            val configuredOutput = runCatching { SettingsRepo.captureOutputDirOrNull() }.getOrNull()
+            val folder = args.str("folder")?.trim()?.takeIf { it.isNotBlank() }
+            val query = args.str("query")?.trim()?.takeIf { it.isNotBlank() }
+            val limit = (args.int("limit") ?: 40).coerceIn(1, 200)
+
+            val visible = inv.models.count { it.visibleToInstance }
+            val matched = inv.models.filter { m ->
+                (folder == null || m.folder.equals(folder, ignoreCase = true)) &&
+                    (query == null || m.name.contains(query, ignoreCase = true))
+            }
+
+            val text = buildString {
+                append("【本机 ComfyUI 环境对账】\n")
+                append("· 实例能加载：").append(visible).append(" 个模型文件")
+                if (objectInfo == null) {
+                    append("（**没问到 /object_info** —— ComfyUI 没在跑，下面\"实例看不到\"那一栏不可信）")
+                } else {
+                    append("（= `/object_info` 的枚举，这就是**提交时真正能加载的**那些）")
+                }
+                append('\n')
+                append("· 盘上扫到：").append(inv.models.size).append(" 个\n")
+                if (inv.diskOnly.isNotEmpty()) {
+                    append("· ⚠ **盘上有、但当前实例枚举不到的：").append(inv.diskOnly.size).append(" 个** —— ")
+                    append("这通常意味着这个实例没挂上共享模型根（不是\"本机没有\"）。\n")
+                    inv.diskOnly.take(8).forEach { m ->
+                        append("    - ").append(m.folder).append('/').append(m.name)
+                        m.sizeGb?.let { append("（").append("%.2f".format(it)).append("GB）") }
+                        m.path?.let { append("  ").append(it) }
+                        append('\n')
+                    }
+                    if (inv.diskOnly.size > 8) append("    …（还有 ").append(inv.diskOnly.size - 8).append(" 个）\n")
+                    append("  → 正确动作：让用户**重启 ComfyUI**（ComfyHub 起实例时会自动挂上 ComfyUI Desktop ")
+                    append("的模型根），**不要去下载**（文件就在硬盘上）。\n")
+                }
+                append("· 自动捕获盯着的目录：output = ").append(configuredOutput ?: "（没配）")
+                env?.inputDir?.let { append("，input = ").append(it) }
+                append('\n')
+                if (env != null) {
+                    append("· ComfyUI Desktop 的模型根（来源：").append(env.source).append("）：")
+                    append(env.modelsDirs.joinToString("、") { it.toString() }.ifBlank { "（没读到）" })
+                    append('\n')
+                    env.modelPathsConfig?.let { append("  启动时挂的映射文件：").append(it).append('\n') }
+                } else {
+                    append("· 没读到 ComfyUI Desktop 的配置 —— 如果用户的模型放在共享目录或别的盘，")
+                    append("实例可能看不到它们（见上面那一栏）。\n")
+                }
+                if (folder != null || query != null) {
+                    append("\n【清单")
+                    folder?.let { append(" folder=").append(it) }
+                    query?.let { append(" query=").append(it) }
+                    append("】命中 ").append(matched.size).append(" 个")
+                    if (matched.size > limit) append("（只列前 ").append(limit).append(" 个）")
+                    append("：\n")
+                    if (matched.isEmpty()) append("  （一个都没有）\n")
+                    matched.take(limit).forEach { m ->
+                        append("  ").append(m.folder).append('/').append(m.name)
+                        if (!m.visibleToInstance) append("  ← **实例看不到**")
+                        m.sizeGb?.let { append("（").append("%.2f".format(it)).append("GB）") }
+                        append('\n')
+                    }
+                } else {
+                    append("\n（要看具体清单就带 folder（比如 checkpoints / loras）或 query 再调一次）\n")
+                }
+            }
+
+            ToolOutput(
+                text,
+                buildJsonObject {
+                    put("instanceLoadable", visible)
+                    put("onDisk", inv.models.size)
+                    put("invisibleToInstance", inv.diskOnly.size)
+                    put("merged", inv.merged)
+                    put("inventorySource", inv.source.wire)
+                    inv.modelsDir?.let { put("modelsDir", it.toString()) }
+                    configuredOutput?.let { put("captureOutputDir", it) }
+                    env?.inputDir?.let { put("inputDir", it.toString()) }
+                    env?.outputDir?.let { put("desktopOutputDir", it.toString()) }
+                    if (env != null) {
+                        put("desktopSource", env.source)
+                        put(
+                            "modelsDirs",
+                            buildJsonArray { env.modelsDirs.forEach { add(JsonPrimitive(it.toString())) } },
+                        )
+                        env.modelPathsConfig?.let { put("modelPathsConfig", it.toString()) }
+                    }
+                    if (folder != null) put("folder", folder)
+                    if (query != null) put("query", query)
+                    put("matched", matched.size)
+                    put(
+                        "models",
+                        buildJsonArray {
+                            matched.take(limit).forEach { m ->
+                                add(
+                                    buildJsonObject {
+                                        put("name", m.name)
+                                        put("folder", m.folder)
+                                        put("visibleToInstance", m.visibleToInstance)
+                                        m.path?.let { put("path", it) }
+                                        m.sizeGb?.let { put("sizeGB", kotlin.math.round(it * 100) / 100.0) }
+                                    },
+                                )
+                            }
+                        },
+                    )
+                },
+            )
         },
 
         // ------------------------------------------------------------------

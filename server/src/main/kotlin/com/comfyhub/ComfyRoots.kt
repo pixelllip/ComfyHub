@@ -63,6 +63,18 @@ object ComfyRoots {
                 val parent = seed.parent ?: return@forEach
                 findNearby(parent).forEach { out.add(it) }
             }
+            // 用户 2026-09-22 拍板：**放行"已知 ComfyUI 根的上一级"（只读）**。
+            // 为什么非放不可：ComfyUI Desktop 把程序与共享数据分家（`…\Comfy-Desktop\` 底下
+            // 才是 `ComfyUI-Installs` 与 `ComfyUI-Shared`），而会话 `0bedb3f5` 里 AI 自己
+            // 试 `list_dir D:\Comfy-Desktop` 时被 PATH_DENIED ——
+            // "往上走一层看看旁边还有什么"正是它**自己**发现 Shared 的唯一路径
+            // （那次是靠用户点名才走到的）。
+            // 只放**一级**，而且**绝不放盘根**（放了就等于整盘只读，那是另一档权限）。
+            out.toList().forEach { root ->
+                val parent = root.parent ?: return@forEach
+                if (parent.parent == null) return@forEach
+                if (Files.isDirectory(parent)) out.add(parent)
+            }
             out.toList()
         } catch (e: Exception) {
             // 探测失败绝不能让"读白名单"变成空的 —— 那会让本来能读的 storage 也读不了

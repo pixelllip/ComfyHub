@@ -406,6 +406,14 @@ object AiWorkflowSearch {
         waitSeconds: Int,
         /** 本次产物是不是成人内容（`comfy_submit` 的 `nsfw`）；只影响预览图打不打码 */
         nsfw: Boolean = false,
+        /**
+         * **提交前的模型预检**（用户 2026-09-22 拍板）：给定最终那张图，返回 null 放行、
+         * 或返回一段"为什么不能提交 + 该怎么办"。null / 不传 = 本次部署没有清单能力，不拦。
+         *
+         * 位置很要紧：必须在 `overrides` 与 `connections` **都应用完之后**才检查 ——
+         * 模型常常就是在这一次覆盖里把模型名换成能用的那个。
+         */
+        preflight: ((JsonObject) -> String?)? = null,
     ): ComfySubmitOutcome {
         val prompt = PromptRepo.get(promptId)
             ?: throw ToolFailure("NOT_FOUND", "库里没有 id=$promptId 的提示词（先用 comfy_find_workflow 找）")
@@ -428,6 +436,10 @@ object AiWorkflowSearch {
             throw ToolFailure("INVALID_ARGUMENT", e.message ?: "补线不合法")
         }
         val applied = appliedOverrides + appliedConnections
+
+        // 模型预检（用户 2026-09-22 拍板：加载不了就**当场拒**，别白烧一轮显卡）。
+        // 放在这里而不是更早：overrides / connections 都已经应用完，检查的就是**真正要提交的那张图**。
+        preflight?.invoke(patched)?.let { refusal -> throw ToolFailure("MODEL_NOT_LOADABLE", refusal) }
 
         val label = title?.takeIf { it.isNotBlank() } ?: prompt.title
         val submission = submitter.submit(patched, label, waitSeconds = waitSeconds, nsfw = nsfw)

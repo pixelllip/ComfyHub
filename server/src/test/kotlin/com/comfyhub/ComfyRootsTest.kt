@@ -87,4 +87,37 @@ class ComfyRootsTest {
         assertEquals(emptyList(), ComfyRoots.findNearby(root))
         assertEquals(emptyList(), ComfyRoots.findNearby(root.resolve("does-not-exist")))
     }
+
+    /**
+     * 用户 2026-09-22 拍板：只读白名单要放行"已知 ComfyUI 根的**上一级**"。
+     *
+     * 现场：会话 `0bedb3f5` 里 AI 试 `list_dir D:\Comfy-Desktop` 被 `PATH_DENIED` ——
+     * 而"往上走一层看看旁边还有什么"正是它**自己**发现 `ComfyUI-Shared` 的唯一路径
+     * （那次是靠用户点名才走到的）。只放一级、**绝不放盘根**。
+     */
+    @Test
+    fun `读白名单放行已知根的上一级`() {
+        val root = tmp()
+        desktopLayout(root)
+        Files.createDirectories(root.resolve("comfyui/comfy"))
+        Files.writeString(root.resolve("comfyui/main.py"), "# comfyui")
+
+        val roots = ComfyRoots.autoReadRoots(root).map { it.toString() }
+        assertTrue(root.toString() in roots, "上一级要能读（不然 AI 没法自己发现旁边还有什么）：$roots")
+        assertTrue(
+            roots.any { it.endsWith("comfyui") },
+            "项目内的 comfyui 自己当然也在：$roots",
+        )
+    }
+
+    @Test
+    fun `盘根不会被放行`() {
+        val root = tmp()
+        // 把种子放到盘根：`<盘>:\` 不许进白名单（那等于整盘只读，是另一档权限）
+        val roots = ComfyRoots.autoReadRoots(root).map { it.toString() }
+        assertTrue(
+            roots.none { it.matches(Regex("""^[A-Za-z]:[\\/]*$""")) },
+            "盘根不该出现在读白名单里：$roots",
+        )
+    }
 }
