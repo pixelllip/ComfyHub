@@ -288,8 +288,10 @@ def test_collect_outputs_dedup_and_node_types():
 # ---------------------------------------------------------------------------
 
 def test_config_resolution():
-    # 默认值
-    cfg = cc.resolve_config({}, {})
+    # 这一组钉的是"显式配置链"，所以把**端口记录那一档关掉**（port_file_roots=[]）。
+    # 不关的话用例会去读本机真实存在的 `<仓库>\.run\api.json`，结果随"后端正跑在哪个端口"变化
+    # （实测：期望 8080、实际拿到当时后端的随机端口）。端口记录那一档单独有用例钉。
+    cfg = cc.resolve_config({}, {}, port_file_roots=[])
     expect_eq(cfg["url"], "http://127.0.0.1:8080", "默认后端地址")
     expect_eq(cfg["enabled"], True, "默认启用")
     expect_eq(cfg["includeTemp"], False, "默认不报 temp")
@@ -300,6 +302,7 @@ def test_config_resolution():
     cfg = cc.resolve_config(
         {},
         {"comfyhubUrl": "http://127.0.0.1:9999/", "tags": ["ComfyUI", "本地"], "includeTemp": True, "enabled": False},
+        port_file_roots=[],
     )
     expect_eq(cfg["url"], "http://127.0.0.1:9999", "config.json 的地址要去掉尾部斜杠")
     expect_eq(cfg["tags"], ["ComfyUI", "本地"], "tags")
@@ -307,7 +310,9 @@ def test_config_resolution():
     expect_eq(cfg["enabled"], False, "enabled")
 
     # 环境变量优先级最高
-    cfg = cc.resolve_config({"COMFYHUB_URL": "127.0.0.1:7777"}, {"comfyhubUrl": "http://127.0.0.1:9999"})
+    cfg = cc.resolve_config(
+        {"COMFYHUB_URL": "127.0.0.1:7777"}, {"comfyhubUrl": "http://127.0.0.1:9999"}, port_file_roots=[]
+    )
     expect_eq(cfg["url"], "http://127.0.0.1:7777", "环境变量应覆盖 config.json，并自动补 http://")
 
     # 坏配置不能抛
@@ -317,6 +322,53 @@ def test_config_resolution():
             fh.write("{ this is not json")
         expect_eq(cc.load_config(broken), {}, "坏 json 应返回空配置")
         expect_eq(cc.load_config(os.path.join(tmp, "nope.json")), {}, "不存在的文件应返回空配置")
+
+
+def test_config_resolution_from_backend_port_file():
+    """后端端口是**自动挑的**（2026-09-22）：扩展必须能读它记在案的那个端口。
+
+    否则"装好扩展就能用"会退化成"必须手工配一个端口"——而端口每次重启都可能变。
+    显式配置（环境变量 / config.json）永远优先。
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = os.path.join(tmp, ".run")
+        os.makedirs(run_dir)
+        port_file = os.path.join(run_dir, "api.json")
+
+        # 1) 正常记录：零配置也能找到后端
+        with open(port_file, "w", encoding="utf-8") as fh:
+            json.dump({"port": 51234, "host": "127.0.0.1", "pid": 9, "url": "http://127.0.0.1:51234"}, fh)
+        cfg = cc.resolve_config({}, {}, port_file_roots=[tmp])
+        expect_eq(cfg["url"], "http://127.0.0.1:51234", "应该用后端记录的端口")
+
+        # 2) 通配地址连不上，回落回环（与 Dart / PowerShell 两侧同一判据）
+        with open(port_file, "w", encoding="utf-8") as fh:
+            json.dump({"port": 50001, "host": "0.0.0.0"}, fh)
+        expect_eq(cc.resolve_config({}, {}, port_file_roots=[tmp])["url"], "http://127.0.0.1:50001")
+
+        # 3) 坏文件 / 端口不合理：回落默认值，**绝不抛**（不能影响 ComfyUI 运行）
+        with open(port_file, "w", encoding="utf-8") as fh:
+            fh.write('{"port": 51')
+        expect_eq(cc.resolve_config({}, {}, port_file_roots=[tmp])["url"], "http://127.0.0.1:8080")
+        with open(port_file, "w", encoding="utf-8") as fh:
+            json.dump({"port": 0}, fh)
+        expect_eq(cc.resolve_config({}, {}, port_file_roots=[tmp])["url"], "http://127.0.0.1:8080")
+        os.remove(port_file)
+        expect_eq(cc.resolve_config({}, {}, port_file_roots=[tmp])["url"], "http://127.0.0.1:8080")
+
+        # 4) 显式配置优先：有人就是要把结果推到另一台机器上
+        with open(port_file, "w", encoding="utf-8") as fh:
+            json.dump({"port": 51234}, fh)
+        expect_eq(
+            cc.resolve_config({"COMFYHUB_URL": "http://10.0.0.7:9000"}, {}, port_file_roots=[tmp])["url"],
+            "http://10.0.0.7:9000",
+            "环境变量优先于端口记录",
+        )
+        expect_eq(
+            cc.resolve_config({}, {"comfyhubUrl": "http://10.0.0.8:9001"}, port_file_roots=[tmp])["url"],
+            "http://10.0.0.8:9001",
+            "config.json 也优先于端口记录",
+        )
 
 
 def test_disable_switches():

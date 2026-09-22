@@ -58,7 +58,7 @@ except Exception as _exc:  # pragma: no cover - 只在文件缺失时发生
     collect_outputs = None
     is_capture_disabled = lambda environ=None: True
     load_config = lambda path: {}
-    resolve_config = lambda environ=None, file_config=None: {
+    resolve_config = lambda environ=None, file_config=None, port_file_roots=None: {
         "url": "http://127.0.0.1:8080",
         "comfyUrl": "http://127.0.0.1:8188",
         "tags": [],

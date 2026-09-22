@@ -43,6 +43,8 @@ __all__ = [
     "is_capture_disabled",
     "load_config",
     "resolve_config",
+    "API_PORT_FILE",
+    "url_from_port_file",
     "extension_of",
     "detect_kind",
     "collect_outputs",
@@ -122,15 +124,85 @@ def load_config(config_path) -> dict:
     return {}
 
 
-def resolve_config(environ=None, file_config=None) -> dict:
+# 后端把"我实际监听在哪个端口"记在这个文件里（见 server/.../ApiPortFile.kt）。
+# 端口从 2026-09-22 起是**自动挑的**（默认 0 = 让操作系统选），所以没有任何固定端口可猜 ——
+# 这个文件是 ComfyUI 这一侧唯一能知道"该往哪儿推"的地方。
+API_PORT_FILE = os.path.join(".run", "api.json")
+
+
+def _candidate_roots(environ) -> list:
+    """去哪些目录找 `.run\\api.json`（按可能性排序，全部**有界**、只做只读探测）。
+
+    顺序：
+      1. `COMFYHUB_ROOT`（显式指定，优先级最高）；
+      2. 本文件所在目录往上找带 `scripts/comfyhub.ps1` 的那一层
+         （Junction 模式下节点目录就在仓库里，一般第一两层就命中）。
+
+    找不到就返回空列表 —— 那时按默认 8080 走（用户显式配了 `config.json` 的话根本走不到这里）。
+    """
+    roots = []
+    env = (environ or os.environ).get("COMFYHUB_ROOT")
+    if env:
+        roots.append(env)
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    cur = here
+    for _ in range(6):
+        if os.path.isfile(os.path.join(cur, "scripts", "comfyhub.ps1")):
+            roots.append(cur)
+            break
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return roots
+
+
+def url_from_port_file(environ=None, roots=None) -> str:
+    """读后端记在案的真实端口，拼成 `http://host:port`；读不到返回空串。
+
+    **绝不抛异常**：ComfyUI 的正常运行不能被"我们读一个文件失败"影响（本模块的第一条承诺）。
+    半截 JSON、端口是 0、文件被锁 —— 全部当成"没读到"。
+    """
+    try:
+        for root in (roots if roots is not None else _candidate_roots(environ)):
+            path = os.path.join(root, API_PORT_FILE)
+            if not os.path.isfile(path):
+                continue
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                continue
+            port = data.get("port")
+            if not isinstance(port, int) or port <= 0 or port > 65535:
+                continue
+            host = data.get("host") or "127.0.0.1"
+            if host in ("0.0.0.0", "::", ""):
+                # 通配地址连不上，回落回环（与 Dart / PS 两侧同一判据）
+                host = "127.0.0.1"
+            return "http://%s:%d" % (host, port)
+    except Exception as exc:
+        log.debug("读取后端端口记录失败（按默认地址走）: %s", exc)
+    return ""
+
+
+def resolve_config(environ=None, file_config=None, port_file_roots=None) -> dict:
     """解析最终生效的配置。
 
-    优先级：环境变量 COMFYHUB_URL > 节点目录 config.json > 默认 127.0.0.1:8080。
+    优先级：环境变量 `COMFYHUB_URL` > 节点目录 config.json > **后端记在案的端口**
+    （`<项目根>\\.run\\api.json`）> 默认 `127.0.0.1:8080`。
+
+    第三档是 2026-09-22 加的：后端端口从那以后是**自动挑的**，写死在 8080 会让
+    "装好扩展就能用"变成"必须手工配一个端口"。这一档让扩展零配置也能找到后端；
+    而**显式配置永远优先**（有人就是要把结果推到另一台机器上）。
     """
     env = os.environ if environ is None else environ
     cfg = dict(file_config or {})
 
     url = env.get("COMFYHUB_URL") or cfg.get("comfyhubUrl") or cfg.get("comfyhub_url")
+    if not url:
+        # 没显式配：问后端自己记在案的那个端口
+        url = url_from_port_file(environ=env, roots=port_file_roots)
     url = str(url).strip() if url else DEFAULT_COMFYHUB_URL
     if not url.startswith(("http://", "https://")):
         url = "http://" + url

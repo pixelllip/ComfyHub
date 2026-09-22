@@ -44,8 +44,15 @@ pwsh -File scripts\install-comfy-node.ps1 -Uninstall
 
 ## 2. 配置
 
-优先级：**环境变量 `COMFYHUB_URL` > 节点目录下的 `config.json` > 默认 `http://127.0.0.1:8080`**。
+优先级：**环境变量 `COMFYHUB_URL` > 节点目录下的 `config.json` > 后端记录的端口
+（`<项目根>\.run\api.json`）> 默认 `http://127.0.0.1:8080`**。
 不建 `config.json` 也能直接用默认值。
+
+> **第三档是 2026-09-22 加的，别删**：后端端口从那以后是**自动挑的**（`COMFYHUB_PORT`
+> 默认 0 = 让操作系统选，重启还会换一个），所以没有任何固定端口可猜。扩展会去读
+> 后端自己写的那份记录 —— 这样"装好扩展就能用"，不必让用户手工配一个端口。
+> 读不到（后端没跑过 / 文件被删）就回落到 8080，**绝不抛**（本扩展的第一条承诺：
+> 装不装它，ComfyUI 的行为都一样）。
 
 ```powershell
 # 方式一：环境变量（最高优先级，改完要重启 ComfyUI）
@@ -77,6 +84,7 @@ Copy-Item comfyui\comfyhub_capture\config.example.json comfyui\comfyhub_capture\
 | `COMFYHUB_CAPTURE=0` | 关闭扩展（等价于卸载，但不用动文件） |
 | `COMFYHUB_CAPTURE_DISABLED=1` | 同上 |
 | `COMFYHUB_URL` | 覆盖后端地址 |
+| `COMFYHUB_ROOT` | 覆盖"项目根在哪"（默认从本文件所在目录往上找 `scripts\comfyhub.ps1`）—— 端口记录 `.run\api.json` 就在那底下 |
 | `COMFYHUB_COMFYUI_URL` | 覆盖上报的 ComfyUI 地址 |
 | `COMFYHUB_CAPTURE_INCLUDE_TEMP=1` | 连 temp 预览一起上报（等价于 `includeTemp: true`） |
 | `COMFYHUB_COMFYUI` | 只给安装脚本用：指定 ComfyUI 根目录 |
