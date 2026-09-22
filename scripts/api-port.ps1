@@ -252,6 +252,20 @@ function Write-ApiPortState {
 }
 
 <#
+    删掉状态文件（后端已停，记录就没意义了）。
+
+    ⚠️ 必须住在这里（api-port.ps1）而不是某个调用方：server.ps1 的 Do-Stop 也用它，
+    而 server.ps1 只 dot-source 本文件 —— 之前它只定义在 comfyhub.ps1 里，
+    单独跑 `server.ps1 stop/restart` 就会报
+    "Remove-ApiPortState is not recognized"（2026-09-22 实测，restart 当场断在 down）。
+#>
+function Remove-ApiPortState {
+    param([string]$ProjectRoot)
+    $stateFile = Join-Path (Join-Path $ProjectRoot $Script:ApiPortRunDirName) $Script:ApiPortFileName
+    Remove-Item $stateFile -Force -ErrorAction SilentlyContinue
+}
+
+<#
     从"候选端口"里挑出**真的在响应 /health 的那个**。
 
     为什么需要它：状态文件是"后写的赢"，而 restart 期间会**先后有两个后端**在写它

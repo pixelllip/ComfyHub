@@ -216,7 +216,10 @@ function Wait-Api([int]$Seconds = 90) {
     $streak = 0
     while ((Get-Date) -lt $deadline) {
         $round++
-        $live = Find-LiveApiPort -ProjectRoot $ProjectRoot -PreferredPort $Script:ApiPort
+        # ⚠️ $Script:ApiPort 是 Resolve-ApiPort 的**整个对象**（Port/Source/State），
+        # 传给 [int]$PreferredPort 必须取 .Port —— 整个对象传过去会当场抛
+        # "Cannot convert @{Port=…} to System.Int32"（2026-09-22 实测：起后端必炸）。
+        $live = Find-LiveApiPort -ProjectRoot $ProjectRoot -PreferredPort $Script:ApiPort.Port
         if ($live -and $live.Health) {
             $streak++
             $Script:Port = $live.Port
@@ -226,7 +229,7 @@ function Wait-Api([int]$Seconds = 90) {
             # 每 20 轮（约 6 秒）报一次"为什么还没就绪"，便于下次排查（只在 -Trace 下出声）
             if ($round % 20 -eq 0) {
                 $st = Read-ApiPortState -ProjectRoot $ProjectRoot
-                Trace ("等待中：round=$round statePort=" + $(if ($st) { $st.Port } else { '(无)' }) + " preferred=$Script:ApiPort")
+                Trace ("等待中：round=$round statePort=" + $(if ($st) { $st.Port } else { '(无)' }) + " preferred=$($Script:ApiPort.Port)")
             }
         }
         Start-Sleep -Milliseconds 300

@@ -73,11 +73,17 @@ void main() {
     calls = [];
     realStarter = BackendLauncher.processStarter;
     BackendLauncher.shellPathOverride = fakeShell;
+    // 把"去哪找 .run\api.json"钉在临时根上：否则 load/refresh 会读到**真项目**
+    // 的端口文件，用例结果随"这台机器的后端正跑在哪个端口"漂移
+    // （settings_store.dart 里那条注释就是这个坑的现场记录）。
+    SettingsStore.portFileRootsOverride = [root.path];
   });
 
   tearDown(() {
     BackendLauncher.processStarter = realStarter;
     BackendLauncher.shellPathOverride = null;
+    BackendLauncher.waitDeadlineOverride = null;
+    SettingsStore.portFileRootsOverride = null;
     try {
       root.deleteSync(recursive: true);
     } catch (_) {}
@@ -303,6 +309,53 @@ void main() {
     expect(calls.single.args.sublist(5), ['watch', '-OwnerPid', '$pid']);
     // 补挂成功 = 认领了服务：关窗口时 release 才有资格停它们
     expect(launcher.servicesClaimed, isTrue);
+    launcher.dispose();
+  });
+
+  /// 写一份 `.run\api.json`（后端绑定成功后落盘的那份端口记录）
+  void writeApiJson(Directory root, int port) {
+    final runDir = Directory('${root.path}${Platform.pathSeparator}.run');
+    runDir.createSync(recursive: true);
+    File('${runDir.path}${Platform.pathSeparator}api.json').writeAsStringSync(
+        '{"port":$port,"pid":0,"host":"127.0.0.1",'
+        '"url":"http://127.0.0.1:$port","requestedPort":0,"fellBack":false}');
+  }
+
+  test('ensureRunning：up 把后端起到了新端口时，等待中会按 .run\\api.json 重新发现', () async {
+    // 先占一个端口再放掉 = 一个保证没人听的"死端口"（App 启动时读到的旧门牌）
+    final dead = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final deadPort = dead.port;
+    await dead.close();
+    writeApiJson(root, deadPort);
+
+    // 假后端：起来之后 /api/health 回 200 ok
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((req) {
+      req.response
+        ..statusCode = 200
+        ..headers.contentType = ContentType.json
+        ..write(jsonEncode({'version': 'test', 'database': 'ok'}));
+      req.response.close();
+    });
+
+    final settings = await loadSettings();
+    // 此时 settings.baseUrl 还是死端口（load 时读的旧 api.json）
+    final launcher = BackendLauncher(settings);
+    // 假的 up：退出前把 api.json 改写成**新端口**（后端绑上后自己会写）
+    BackendLauncher.processStarter = (exe, args, {workingDirectory}) async {
+      calls.add(_Call(exe, List<String>.of(args), workingDirectory));
+      writeApiJson(root, server.port);
+      return _FakeProcess();
+    };
+    BackendLauncher.waitDeadlineOverride = const Duration(seconds: 10);
+
+    expect(await launcher.ensureRunning(), isTrue);
+
+    // 关键断言：地址跟着 api.json 走到了新端口，而不是对着旧端口等满 90 秒
+    expect(settings.baseUrl, 'http://127.0.0.1:${server.port}');
+    expect(launcher.logLines.any((l) => l.contains('后端换了端口')), isTrue);
+    expect(launcher.phase, StartupPhase.ready);
     launcher.dispose();
   });
 }

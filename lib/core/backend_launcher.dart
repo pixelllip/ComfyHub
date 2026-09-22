@@ -94,6 +94,10 @@ class BackendLauncher extends ChangeNotifier {
   /// 退出时最多等脚本多久：超时就让它在后台跑完，**关窗口绝不能卡住**
   static const Duration exitReleaseTimeout = Duration(seconds: 8);
 
+  /// 测试里把「等后端就绪」的 90 秒截短；null = 走真实值
+  @visibleForTesting
+  static Duration? waitDeadlineOverride;
+
   bool get busy =>
       phase == StartupPhase.probing ||
       phase == StartupPhase.starting ||
@@ -259,6 +263,9 @@ class BackendLauncher extends ChangeNotifier {
     _cancelled = false;
     lastError = null;
 
+    // 后端端口是自动挑的：App 开着的时候后端可能被脚本重启到**新端口**，
+    // 探活前先按 .run\api.json 重新发现一次（用户手填过地址时它什么也不做）。
+    await _settings.refreshBaseUrlFromPortFile();
     _set(StartupPhase.probing, '正在检查本地服务 ${_settings.baseUrl} …');
     final health = await probe();
     if (!force && health != null && health['database'] == 'ok') {
@@ -324,11 +331,12 @@ class BackendLauncher extends ChangeNotifier {
     _log('$shell ${args.join(' ')}');
 
     try {
-      _process = await Process.start(
+      // 走 [processStarter] 这个可注入缝隙（与 release/watch 一致）——
+      // 之前这里直接 Process.start，测试里根本没法在不真拉 pwsh 的情况下覆盖 up 路径。
+      _process = await processStarter(
         shell,
         args,
         workingDirectory: script.parent.parent.path,
-        runInShell: false,
       );
     } catch (e) {
       return _fail('启动脚本失败: $e');
@@ -355,10 +363,18 @@ class BackendLauncher extends ChangeNotifier {
     _log('启动脚本结束，退出码 $exitCode');
 
     _set(StartupPhase.waiting, '等待后端就绪…');
-    final deadline = DateTime.now().add(const Duration(seconds: 90));
+    final deadline = DateTime.now().add(waitDeadlineOverride ?? const Duration(seconds: 90));
     var attempt = 0;
     while (DateTime.now().isBefore(deadline)) {
       attempt++;
+      // ⚠️ up 期间后端可能绑到了**新端口**（自动挑端口 / 候选被占回落）：
+      // `.run\api.json` 在它一绑上就被改写，而这里探活用的还是 App 启动时读到的
+      // 旧地址 —— 不每轮重读就会对着一个没人听的端口白等满 90 秒，报
+      // "等待后端超时"（2026-09-22 实测：后端早已就绪，只是 App 看的门牌是旧的）。
+      // 用户手填过地址时 refreshBaseUrlFromPortFile 什么也不做（那是远程配置）。
+      if (await _settings.refreshBaseUrlFromPortFile()) {
+        _log('后端换了端口，改探 ${_settings.baseUrl}（读自 .run\\api.json）');
+      }
       final h = await probe(timeout: const Duration(seconds: 2));
       if (h != null && h['database'] == 'ok') {
         _log('后端已就绪：版本 ${h['version']}，存储目录 ${h['storageDir']}');
@@ -403,6 +419,9 @@ class BackendLauncher extends ChangeNotifier {
     if (code == null) return;
 
     if (action == 'down' || action == 'restart') {
+      // restart 会换端口（旧的后端被停掉，新的重新随机挑一个）：收尾探活前
+      // 按 .run\api.json 重新发现一次，否则会对着旧端口误报"重启后后端没起来"。
+      await _settings.refreshBaseUrlFromPortFile();
       final h = await probe(timeout: const Duration(seconds: 2));
       if (h != null && h['database'] == 'ok') {
         _set(StartupPhase.ready, '后端已就绪');

@@ -269,13 +269,6 @@ function Get-ApiHealth {
 
 function Get-AppProcess { Get-Process -Name viewer -ErrorAction SilentlyContinue }
 
-<# 删掉端口状态文件（后端已停，记录就没意义了）。 #>
-function Remove-ApiPortState {
-    param([string]$ProjectRoot)
-    $stateFile = Join-Path (Join-Path $ProjectRoot $Script:ApiPortRunDirName) $Script:ApiPortFileName
-    Remove-Item $stateFile -Force -ErrorAction SilentlyContinue
-}
-
 <#
     等后端真的把端口释放掉（`restart` 里紧跟着就要重新绑同一个端口）。
 
