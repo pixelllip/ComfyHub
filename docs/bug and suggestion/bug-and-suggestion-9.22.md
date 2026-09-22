@@ -49,6 +49,11 @@
   ③ **系统提示 v23 第 12.1 条**写明：问用户的选项里**必须带体积**、并说清装到哪个目录。
   回归：`CivitaiSearchTest` 2 例（体积进正文与结构化字段；作者没给时不编）+ `ComfyModelsTest`
   2 例（查询词转换；缺模型的 installProposal 与 nearMisses）。`gradle test` 475 例全绿。
+  **另做了一次真机核验**（2026-09-22）：起后端后 `GET /api/ai/tools` → **62 个工具**，
+  其中 `comfy_fit_workflow` 在列（`category=comfy` / `access=allow`），
+  也就是"**23 个出厂 + 39 个来自 comfy-mcp**"这个分界仍然成立。
+  （⚠️ 本机 8080 落在 Windows 保留端口段里，起后端要加 `-Port 8280` 之类；
+  见 [`pitfalls.md`](../pitfalls.md) 第一行。）
 
 * 每次完成选择后，重置工具预算
   → **已做（2026-09-22，提交 `7a9b59f`）**。三件事一起改的：
