@@ -97,7 +97,14 @@ fun main() {
         Thread { ApiPortFile.deleteIfOwned(cfg.projectRoot, portState.pid) },
     )
 
-    actual.engine.start(wait = true)
+    // ⚠️ 引擎已经在 [startServer] 里 `start(wait = false)` 过了（为了回读真实端口）。
+    // 这里**绝不能**再 `start(wait = true)`：ktor 的 EmbeddedServer.start() 没有"已启动"保护，
+    // 每调一次都会 createApplication() 把 module 整个重跑一遍（comfy-mcp 子进程也会再起一个），
+    // 然后让 Netty 重绑同一端口 —— 旧连接器还没释放，赌赢照跑、赌输 BindException
+    // 直接把进程带走（2026-09-22 实测两次：启动后 ~9 秒死，栈都指向这一行）。
+    // 主线程只需要停住等停机；优雅退出由 ktor 在 start() 时挂的 shutdown hook 负责
+    //（上面我们自己那个 ApiPortFile 清理 hook 也在）。
+    Thread.currentThread().join()
 }
 
 /**
