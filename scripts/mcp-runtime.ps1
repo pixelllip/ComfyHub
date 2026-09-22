@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    ComfyHub 的 MCP 运行时装配：便携版 Python + comfy-cli + comfy-mcp。
+    ComfyHub 的 MCP 运行时装配：**先借机器上已有的 Python**，没有才装便携版 + comfy-cli + comfy-mcp。
 
 .DESCRIPTION
     为什么要这个文件：我们要把**官方 comfy-mcp** 接成 ComfyUI 能力的提供方
@@ -15,10 +15,30 @@
     所以这里的失败**不应该**拦住 up（这点和 Java 完全不同）：如实报告即可。
 
     装到哪儿（都在根目录内，便携式）：
-      <根>\storage\ai\mcp\python\           便携版 Python 3.12（embeddable + pip）
+      <根>\storage\ai\mcp\python\           便携版 Python 3.12（embeddable + pip）—— 兜底才用
+      <根>\storage\ai\mcp\venv\             借机器上已有的 Python 建的隔离环境（**正常走这条**）
       <根>\storage\ai\mcp\python\Scripts\    pip 装的 console script（comfy.exe / comfy-mcp.exe）
       <根>\storage\ai\mcp\state.json         本次装配的版本与路径（幂等判据 + doctor 显示）
       根目录不可写时退回 %LOCALAPPDATA%\ComfyHub\mcp（并把位置记进 state.json）
+
+    ⚠ **装配策略：检测优先，安装只作兜底**（2026-09-21 用户定：
+      "环境有 python 你的脚本就不用再装了，同理 jdk、mcp 也是"）。
+      顺序如下，前一步能用就绝不走下一步：
+
+        1. **已经装好的** —— state.json 记的那份 / `<McpDir>\venv` / `<McpDir>\python`
+           直接用，不联网、不装包（`up` 每次冷启动只走这一档，几次文件检查）
+        2. **机器上的 Python 里已经有 comfy-mcp + comfy-cli** —— 直接借它，
+           一个字节都不装（`pythonSource = 'system'`）
+        3. **机器上有 Python**（COMFYHUB_PYTHON → PATH 的 python/python3 → py 启动器）
+           —— 用它建一个 **venv** 再 pip 装包（`pythonSource = 'venv'`）。
+           刻意不往用户的全局 site-packages 里塞 300MB：
+           这台机器上的 Python 是用户自己的开发环境，不是我们的。
+        4. **一个都没有** —— 才下载 embeddable Python 3.12（原来的那条路，约 10MB，
+           `pythonSource = 'portable'`）。`COMFYHUB_NO_DOWNLOAD=1` 时这一步**不许发生**，
+           只如实报"缺运行时 + 怎么装"。
+
+      所以"包内必须自带 Python"这件事**不再是默认行为**了：发布包在没有 Python 的机器上
+      仍然能靠第 4 步自愈，而在有 Python 的机器上（开发机）不再多下载一份。
 
     三条实测结论（2026-09-21 在本机真跑过，不是推断）：
       1. **embeddable zip 能用**：python-3.12.10-embed-amd64.zip（10.6MB）解压后把
@@ -50,9 +70,11 @@
 #   判据用 $PSBoundParameters：被 dot-source 时一个参数都没绑，就什么都不做。
 param(
     [Parameter(Position = 0)][string]$McpAction = 'status',
-    [switch]$McpForce,
+    # 别名是给命令行用的：`scripts\mcp-runtime.ps1 install -Force / -Proxy <url>`
+    # （README 与 doctor 的提示都这么写）。变量名仍要带 Mcp 前缀 —— 见上面那段 dot-source 的教训。
+    [Alias('Force')][switch]$McpForce,
     [string]$ComfyHome,
-    [string]$McpProxy,
+    [Alias('Proxy')][string]$McpProxy,
     # status -Deep：真去问 comfy-cli（约 6 秒）拿版本与工作区；不带则读装配记录（不 spawn 进程）
     [switch]$Deep
 )
@@ -60,6 +82,10 @@ $script:McpRuntimeStateFileName = 'state.json'
 $script:McpRuntimeIndexUrls = @()
 $script:McpRuntimeSpec = @()
 $script:McpRuntimePythonVersion = '3.12.10'
+# 借机器上已有的 Python 建的隔离环境（正常路径）；embeddable 那份只是兜底
+$script:McpRuntimeVenvDirName = 'venv'
+# comfy-mcp 0.10 要求 Python >= 3.10（实测 3.13 也能装）；比这老的解释器直接跳过
+$script:McpRuntimeMinPython = @(3, 10)
 
 # 下载源按顺序试。2026-09-21 实测（本机、走系统代理）：
 #   · 阿里云    —— 可用（comfy-mcp 的 wheel 能下下来）
@@ -140,12 +166,56 @@ function Write-McpRuntimeState {
     return $file
 }
 
+function Get-McpVenvDir {
+    param([Parameter(Mandatory)][string]$McpDir)
+    return (Join-Path $McpDir $script:McpRuntimeVenvDirName)
+}
+
+function Get-PythonScriptsDir {
+    <#
+      pip 的 console script（comfy.exe / comfy-mcp.exe）在哪个目录。
+
+      **必须分两种情况**（2026-09-21 加 venv 时踩到）：
+        · 便携版 / 系统 Python：<python 所在目录>\Scripts      （python.exe 在根上）
+        · venv                ：<venv>\Scripts 本身就是它      （python.exe 就在 Scripts 里）
+      一律写 `Split-Path -Parent $py` + 'Scripts' 的话，venv 会变成
+      `venv\Scripts\Scripts` —— 于是"comfy-mcp.exe 找不到"，白装一遍。
+    #>
+    param([Parameter(Mandatory)][string]$PythonExe)
+
+    $parent = Split-Path -Parent $PythonExe
+    if (-not $parent) { return $null }
+    if ((Split-Path -Leaf $parent) -ieq 'Scripts') { return $parent }
+    return (Join-Path $parent 'Scripts')
+}
+
+function Get-PythonSourceOf {
+    <#
+      这份 Python 是哪来的 —— 给人看的一句话事实（doctor / 界面）。
+      state.json 里记了就用记的；老记录（没这个字段）就按路径特征推。
+    #>
+    param(
+        [string]$PythonExe,
+        $State
+    )
+
+    if ($State -and $State.pythonSource) { return [string]$State.pythonSource }
+    if (-not $PythonExe) { return $null }
+    if ($PythonExe -match '\\venv\\Scripts\\python\.exe$') { return 'venv' }
+    if ($PythonExe -match '\\mcp\\python\\python\.exe$') { return 'portable' }
+    return 'system'
+}
+
 function Get-PythonRuntimePath {
     <#
       找"能跑 comfy-mcp 的 python.exe"。顺序（前者优先）：
-        1. state.json 里记的（上次装配的就是它）
-        2. <McpDir>\python\python.exe
-        3. <LOCALAPPDATA>\ComfyHub\mcp\python\python.exe（根不可写时退到的那份）
+        1. state.json 里记的（上次装配的就是它；也可能是借来的系统 Python）
+        2. <McpDir>\venv\Scripts\python.exe（借机器上的 Python 建的隔离环境）
+        3. <McpDir>\python\python.exe（便携版，兜底那份）
+        4. <LOCALAPPDATA>\ComfyHub\mcp 下同样两处（根不可写时退到的那份）
+
+      ⚠ 这里**只做文件检查，不 spawn 进程**：`up` 每次冷启动都会调它，
+      快档必须便宜（承 §Get-McpRuntimeStatus 里"6.1 秒"那条实测）。
     #>
     param(
         [Parameter(Mandatory)][string]$McpDir,
@@ -153,15 +223,175 @@ function Get-PythonRuntimePath {
     )
 
     $state = Read-McpRuntimeState -McpDir $McpDir
+    $fallback = Join-Path $env:LOCALAPPDATA 'ComfyHub\mcp'
     $cands = New-Object System.Collections.ArrayList
     if ($state -and $state.pythonExe) { [void]$cands.Add([string]$state.pythonExe) }
+    [void]$cands.Add((Join-Path (Get-McpVenvDir -McpDir $McpDir) 'Scripts\python.exe'))
     [void]$cands.Add((Join-Path $McpDir 'python\python.exe'))
-    [void]$cands.Add((Join-Path $env:LOCALAPPDATA 'ComfyHub\mcp\python\python.exe'))
+    [void]$cands.Add((Join-Path $fallback 'venv\Scripts\python.exe'))
+    [void]$cands.Add((Join-Path $fallback 'python\python.exe'))
 
     foreach ($c in $cands) {
         if ($c -and (Test-Path -LiteralPath $c)) { return $c }
     }
     return $null
+}
+
+# ===========================================================================
+#  借机器上已有的 Python（检测优先的第一、二、三档都靠这两个函数）
+# ===========================================================================
+
+function Get-SystemPythonCandidates {
+    <#
+      机器上"可能是 Python"的候选解释器，按可信度排：
+        1. COMFYHUB_PYTHON（显式指定，最高优先）
+        2. PATH 上的 python / python3
+        3. py 启动器的默认解释器（`py -c "import sys;print(sys.executable)"`）
+      刻意**跳过 WindowsApps 里的那个 python.exe** —— 那是微软商店的占位存根，
+      跑起来只会弹商店、拿不到版本号，属于"看起来有 Python 其实没有"。
+
+      只返回路径，不做任何验证（验证要 spawn 进程，见 Test-SystemPython）。
+    #>
+    param()
+
+    $cands = New-Object System.Collections.ArrayList
+    if ($env:COMFYHUB_PYTHON) { [void]$cands.Add([string]$env:COMFYHUB_PYTHON) }
+    foreach ($name in @('python', 'python3')) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd -and $cmd.Source) { [void]$cands.Add([string]$cmd.Source) }
+    }
+    $py = Get-Command py -ErrorAction SilentlyContinue
+    if ($py -and $py.Source) {
+        try {
+            $exe = (& $py.Source -c "import sys;print(sys.executable)" 2>$null | Out-String).Trim()
+            if ($exe) { [void]$cands.Add($exe) }
+        } catch { }
+    }
+
+    $seen = @{}
+    foreach ($c in $cands) {
+        if (-not $c) { continue }
+        if ($c -match '\\WindowsApps\\') { continue }
+        if (-not (Test-Path -LiteralPath $c)) { continue }
+        $key = $c.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        Write-Output $c
+    }
+}
+
+function Test-SystemPython {
+    <#
+      问一个 python.exe：版本多少、comfy-mcp / comfy-cli 装了没有。
+      返回 @{ Exe; Version; Major; Minor; ComfyMcpVersion; ComfyCliVersion; HasPackages }
+      连不上 / 版本太老 / 不是解释器 → 返回 $null（调用方继续试下一个）。
+
+      一次 spawn 拿全部信息（这函数只在装配和 doctor -Deep 时走，不在 up 的快档上）。
+    #>
+    param([Parameter(Mandatory)][string]$PythonExe)
+
+    # 单行、无循环、无 try：靠 importlib.metadata.distributions() 一次列全，
+    # 缺哪个包就是空串（比 for + try/except 更好塞进 -c 的一行里）。
+    $probe = "import sys,importlib.metadata as m;d={p.metadata['Name'].lower():p.version for p in m.distributions()};" +
+        "print('sys=%d.%d.%d'%sys.version_info[:3],'comfy-mcp='+d.get('comfy-mcp',''),'comfy-cli='+d.get('comfy-cli',''),sep=';')"
+
+    try {
+        $out = (& $PythonExe -c $probe 2>$null | Out-String).Trim()
+    } catch {
+        return $null
+    }
+    if ($out -notmatch 'sys=(\d+)\.(\d+)\.(\d+)') { return $null }
+
+    $major = [int]$Matches[1]
+    $minor = [int]$Matches[2]
+    $ver = "$major.$minor.$($Matches[3])"
+    # 版本太老就别借了（comfy-mcp 要 3.10+）—— 免得"借来的解释器装不上"报一堆无关的错
+    if ($major -ne 3 -or $minor -lt $script:McpRuntimeMinPython[1]) { return $null }
+
+    $mcpV = $null
+    $cliV = $null
+    if ($out -match 'comfy-mcp=([^;]+)') { $mcpV = $Matches[1].Trim() }
+    if ($out -match 'comfy-cli=([^;]+)') { $cliV = $Matches[1].Trim() }
+
+    return [pscustomobject]@{
+        Exe             = $PythonExe
+        Version         = $ver
+        Major           = $major
+        Minor           = $minor
+        ComfyMcpVersion = $(if ($mcpV) { $mcpV } else { $null })
+        ComfyCliVersion = $(if ($cliV) { $cliV } else { $null })
+        HasPackages     = [bool]($mcpV -and $cliV)
+    }
+}
+
+function Find-SystemPython {
+    <#
+      按"检测优先"找机器上的 Python：
+        · -RequirePackages 时只认**已经装了 comfy-mcp + comfy-cli** 的那个（第 2 档：直接借）
+        · 不带时返回第一个**能用**的（第 3 档：拿它建 venv）
+      找不到返回 $null —— 调用方据此决定要不要下便携版。
+    #>
+    param(
+        [switch]$RequirePackages,
+        [switch]$Quiet
+    )
+
+    foreach ($exe in (Get-SystemPythonCandidates)) {
+        $info = Test-SystemPython -PythonExe $exe
+        if (-not $info) { continue }
+        if ($RequirePackages -and -not $info.HasPackages) {
+            if (-not $Quiet) { Write-Host ("  机器上的 Python {0} 没装 comfy-mcp / comfy-cli（可以拿它建 venv）" -f $info.Version) -ForegroundColor DarkGray }
+            continue
+        }
+        return $info
+    }
+    return $null
+}
+
+function New-McpVenv {
+    <#
+      借机器上的 Python 建一个隔离环境（<McpDir>\venv），返回 venv 里的 python.exe。
+      失败（没有 venv 模块 / 目标不可写 / 半残目录）返回 $null，让调用方退到便携版。
+
+      为什么是 venv 而不是直接往系统 Python 里 pip install：
+      那是**用户自己的开发环境**（这台机器上是 Python 3.13 + 用户自己的包），
+      往里塞 300MB 的 comfy-cli 依赖属于污染，卸载/回滚都不由我们说了算。
+    #>
+    param(
+        [Parameter(Mandatory)][string]$SystemPythonExe,
+        [Parameter(Mandatory)][string]$McpDir,
+        [switch]$Quiet
+    )
+
+    function SayV([string]$m, [string]$c = 'Gray') { if (-not $Quiet) { Write-Host $m -ForegroundColor $c } }
+
+    $venvDir = Get-McpVenvDir -McpDir $McpDir
+    $venvPy = Join-Path $venvDir 'Scripts\python.exe'
+
+    # 上次失败留下的半残目录先清掉：venv 是"要么完整要么重来"的东西
+    if (Test-Path -LiteralPath $venvDir) {
+        if (Test-Path -LiteralPath $venvPy) { return $venvPy }
+        SayV ("  清掉上次没建完的 venv: {0}" -f $venvDir) 'DarkGray'
+        Remove-Item -LiteralPath $venvDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $venvDir) { return $null }
+    }
+
+    SayV ("  用机器上的 Python 建 venv: {0}" -f $venvDir) 'Cyan'
+    try {
+        $out = (& $SystemPythonExe -m venv $venvDir 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $venvPy)) {
+            SayV ("    建 venv 失败：{0}" -f $out.Trim()) 'Yellow'
+            Remove-Item -LiteralPath $venvDir -Recurse -Force -ErrorAction SilentlyContinue
+            return $null
+        }
+    } catch {
+        SayV ("    建 venv 抛异常：{0}" -f $_.Exception.Message) 'Yellow'
+        Remove-Item -LiteralPath $venvDir -Recurse -Force -ErrorAction SilentlyContinue
+        return $null
+    }
+
+    SayV ("  venv 就绪: {0}" -f $venvPy) 'Green'
+    return $venvPy
 }
 
 # ===========================================================================
@@ -174,6 +404,7 @@ function Get-McpRuntimeStatus {
         Ok             服务器件齐不齐（python + comfy-mcp + comfy-cli 都在，且工作区可用）
         PythonExe / ComfyMcpExe / ComfyExe
         PythonVersion / ComfyMcpVersion / ComfyCliVersion
+        PythonSource   这份 Python 是哪来的：system（借环境里的）/ venv（借环境里的建的）/ portable
         Workspace      comfy-cli 认的 ComfyUI 工作区（没设时为 $null）
         WorkspaceOk    那个目录真的像个 ComfyUI 吗
         Deep           这次是真去问了 comfy-cli，还是读的装配记录
@@ -200,6 +431,7 @@ function Get-McpRuntimeStatus {
         Ok              = $false
         PythonExe       = $py
         PythonVersion   = $(if ($state) { $state.pythonVersion } else { $null })
+        PythonSource    = Get-PythonSourceOf -PythonExe $py -State $state
         ComfyMcpExe     = $null
         ComfyMcpVersion = $(if ($state) { $state.comfyMcpVersion } else { $null })
         ComfyExe        = $null
@@ -211,12 +443,12 @@ function Get-McpRuntimeStatus {
 
     $problems = New-Object System.Collections.ArrayList
     if (-not $py) {
-        [void]$problems.Add('没有便携版 Python（还没装配过？）')
+        [void]$problems.Add('没有可用的 Python（机器上没有，包内也还没装配过）')
         $result.Problems = $problems
         return $result
     }
 
-    $scripts = Join-Path (Split-Path -Parent $py) 'Scripts'
+    $scripts = Get-PythonScriptsDir -PythonExe $py
     $mcpExe = Join-Path $scripts 'comfy-mcp.exe'
     $comfyExe = Join-Path $scripts 'comfy.exe'
     if (Test-Path -LiteralPath $mcpExe) { $result.ComfyMcpExe = $mcpExe } else { [void]$problems.Add('缺 comfy-mcp.exe（pip 没装成？）') }
@@ -458,8 +690,11 @@ function Set-ComfyDefaultWorkspace {
 
 function Install-McpRuntime {
     <#
-      完整装配：Python → pip 包 → comfy-cli 工作区 → 写 state.json。
+      完整装配：找 Python → pip 包 → comfy-cli 工作区 → 写 state.json。
       返回 status 对象（与 Get-McpRuntimeStatus 同形状）。
+
+      Python 走文件头那四档（已装好的 → 借环境里已带包的 → 借环境里的建 venv → 下便携版）；
+      用了哪一档记进 state.json 的 `pythonSource`，doctor 会显示出来（下便携版是**最后手段**）。
     #>
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
@@ -473,31 +708,63 @@ function Install-McpRuntime {
 
     $dir = Get-McpRuntimeDir -ProjectRoot $ProjectRoot
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $prevState = Read-McpRuntimeState -McpDir $dir
 
     SayI ''
-    SayI '  装配 MCP 运行时（便携版 Python + comfy-cli + comfy-mcp）' 'White'
+    SayI '  装配 MCP 运行时（优先用机器上已有的 Python，没有才装便携版）' 'White'
     SayI ("  目标目录: {0}" -f $dir) 'DarkGray'
 
+    # ---- 第 1 档：已经装好的 ---------------------------------------------
     $py = $null
+    $pythonSource = $null
     if (-not $McpForce) { $py = Get-PythonRuntimePath -McpDir $dir }
-    if (-not $py) {
-        $py = Install-PortablePython -McpDir $dir -Proxy $McpProxy -Quiet:$Quiet
-    } else {
-        # 有 python 但可能没装包（上次 pip 失败）：下面按"缺什么补什么"处理
-        SayI ("  已有便携版 Python: {0}" -f $py) 'DarkGray'
+    if ($py) {
+        $pythonSource = Get-PythonSourceOf -PythonExe $py -State $prevState
+        SayI ("  已有 Python（{0}）: {1}" -f $pythonSource, $py) 'DarkGray'
     }
 
-    $scripts = Join-Path (Split-Path -Parent $py) 'Scripts'
+    if (-not $py) {
+        # ---- 第 2 档：机器上的 Python 里已经装好了 comfy-mcp + comfy-cli ----
+        $sys = Find-SystemPython -RequirePackages -Quiet:$Quiet
+        if ($sys) {
+            $py = $sys.Exe
+            $pythonSource = 'system'
+            SayI ("  借机器上已有的 Python {0}（它已经装了 comfy-mcp {1} / comfy-cli {2}，不装任何东西）" -f
+                $sys.Version, $sys.ComfyMcpVersion, $sys.ComfyCliVersion) 'Green'
+        } else {
+            # ---- 第 3 档：机器上有 Python，借它建 venv（不污染用户的全局环境）----
+            $sys = Find-SystemPython -Quiet:$Quiet
+            if ($sys) {
+                SayI ("  机器上已有 Python {0}，借它建 venv（不下便携版）" -f $sys.Version) 'DarkGray'
+                $py = New-McpVenv -SystemPythonExe $sys.Exe -McpDir $dir -Quiet:$Quiet
+                if ($py) { $pythonSource = 'venv' }
+            }
+        }
+    }
+
+    # ---- 第 4 档：都没有（或 venv 建不起来）才下便携版 --------------------
+    if (-not $py) {
+        if ($env:COMFYHUB_NO_DOWNLOAD) {
+            throw ('机器上没有可用的 Python（>= {0}.{1}），而且 COMFYHUB_NO_DOWNLOAD=1 不许下载。' -f
+                $script:McpRuntimeMinPython[0], $script:McpRuntimeMinPython[1]) +
+                "`n装一个 Python，或用 COMFYHUB_PYTHON 指向已有的解释器，再重跑。" +
+                "`n（不设 COMFYHUB_NO_DOWNLOAD 时脚本会自己下一个便携版 Python 塞进包内。）"
+        }
+        $py = Install-PortablePython -McpDir $dir -McpProxy $McpProxy -Quiet:$Quiet
+        $pythonSource = 'portable'
+    }
+
+    $scripts = Get-PythonScriptsDir -PythonExe $py
     $needPkgs = $McpForce -or
         (-not (Test-Path -LiteralPath (Join-Path $scripts 'comfy-mcp.exe'))) -or
         (-not (Test-Path -LiteralPath (Join-Path $scripts 'comfy.exe')))
     if ($needPkgs) {
-        Install-McpPackages -PythonExe $py -Proxy $McpProxy -Quiet:$Quiet | Out-Null
+        Install-McpPackages -PythonExe $py -McpProxy $McpProxy -Quiet:$Quiet | Out-Null
     } else {
         SayI '  comfy-mcp / comfy-cli 已装好，跳过 pip' 'DarkGray'
     }
 
-    $wsOk = Set-ComfyDefaultWorkspace -PythonExe $py -ComfyHome $ComfyHome -ProjectRoot $ProjectRoot -Proxy $McpProxy -Quiet:$Quiet
+    $wsOk = Set-ComfyDefaultWorkspace -PythonExe $py -ComfyHome $ComfyHome -ProjectRoot $ProjectRoot -McpProxy $McpProxy -Quiet:$Quiet
 
     # 装配时**必须**走 -Deep：state.json 里的版本与工作区就是这一步探到的真值，
     # 之后 up 的快档全靠它（否则记录里全是 null，快档就永远判"未就绪"）。
@@ -507,6 +774,8 @@ function Install-McpRuntime {
         installedAt     = (Get-Date).ToString('o')
         pythonExe       = $st.PythonExe
         pythonVersion   = $st.PythonVersion
+        # 这份 Python 是哪来的：system / venv / portable（见文件头"检测优先"）
+        pythonSource    = $pythonSource
         comfyMcpExe     = $st.ComfyMcpExe
         comfyMcpVersion = $st.ComfyMcpVersion
         comfyExe        = $st.ComfyExe
@@ -518,6 +787,13 @@ function Install-McpRuntime {
     $stateFile = Write-McpRuntimeState -McpDir $dir -State $state
     SayI ("  装配状态写入: {0}" -f $stateFile) 'DarkGray'
 
+    # 换档之后旧的便携版可能还留在盘上（约 290MB）且已经不再被使用。
+    # **不自动删**（那可能是唯一一份能跑的环境，删了就没退路），只如实说一句、告诉用户位置。
+    $stalePortable = Join-Path $dir 'python'
+    if ($pythonSource -ne 'portable' -and (Test-Path -LiteralPath $stalePortable)) {
+        SayI ("  注意: 包内还留着旧的便携版 Python（{0}），现在用的不是它；确认没用可以手动删。" -f $stalePortable) 'Yellow'
+    }
+
     $st = Get-McpRuntimeStatus -ProjectRoot $ProjectRoot -Deep
     if ($st.Ok) { SayI '  MCP 运行时就绪。' 'Green' } else { SayI ("  MCP 运行时还没就绪：{0}" -f ($st.Problems -join '；')) 'Yellow' }
     return $st
@@ -527,7 +803,8 @@ function Ensure-McpRuntime {
     <#
       comfyhub.ps1 up 用的"够用就好"入口（对标 Ensure-JavaRuntime）：
         · 已就绪 → 直接返回，**不联网、不装包**
-        · 没装   → 装配一次（这一步会联网下载约 300MB）
+        · 没装   → 装配一次。**优先借机器上已有的 Python**（连 300MB 的 pip 包都可能不用装）；
+                   只有机器上真的没有 Python 时才下便携版
         · 失败   → **不抛异常**，返回带 Problems 的 status
       这是**可选能力**：装不上不该拦住 up（与 Java 完全不同）。
     #>
@@ -546,7 +823,7 @@ function Ensure-McpRuntime {
     }
 
     try {
-        return (Install-McpRuntime -ProjectRoot $ProjectRoot -Proxy $McpProxy -ComfyHome $ComfyHome -Force:$McpForce -Quiet:$Quiet)
+        return (Install-McpRuntime -ProjectRoot $ProjectRoot -McpProxy $McpProxy -ComfyHome $ComfyHome -McpForce:$McpForce -Quiet:$Quiet)
     } catch {
         Write-Host "  !! MCP 运行时没能装好: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host '     （这不影响 App 与后端启动；只是 AI 少了一批 ComfyUI 工具）' -ForegroundColor DarkGray
@@ -572,7 +849,17 @@ function Show-McpRuntimeReport {
     $mark = if ($st.Ok) { 'OK  ' } else { '未就绪' }
     $color = if ($st.Ok) { 'Green' } else { 'Yellow' }
     Write-Host ("  {0,-28} {1}  {2}" -f 'MCP 运行时 (comfy-mcp)', $mark, $st.Dir) -ForegroundColor $color
-    if ($st.PythonExe) { Write-Host ("  {0,-28}      python {1}" -f '', $st.PythonVersion) -ForegroundColor DarkGray }
+    if ($st.PythonExe) {
+        # 把"这份 Python 是哪来的"写出来（用户 2026-09-21 要求检测优先、别乱装东西：
+        # 看到 portable 就说明这台机器上没找到 Python，脚本才自己下了一份）
+        $srcText = switch ([string]$st.PythonSource) {
+            'system' { '（借机器上已有的，没装任何东西）' }
+            'venv' { '（包内 venv，借机器上已有的 Python 建的）' }
+            'portable' { '（包内便携版 —— 机器上没有 Python 时才会走这条）' }
+            default { '' }
+        }
+        Write-Host ("  {0,-28}      python {1} {2}" -f '', $st.PythonVersion, $srcText) -ForegroundColor DarkGray
+    }
     if ($st.ComfyMcpVersion) { Write-Host ("  {0,-28}      comfy-mcp {1} / comfy-cli {2}" -f '', $st.ComfyMcpVersion, $st.ComfyCliVersion) -ForegroundColor DarkGray }
     if ($st.Workspace) {
         $wsColor = if ($st.WorkspaceOk) { 'DarkGray' } else { 'Yellow' }
@@ -606,7 +893,7 @@ function Invoke-McpRuntimeCli {
         }
         'install' {
             try {
-                $st = Install-McpRuntime -ProjectRoot $ProjectRoot -Proxy $McpProxy -ComfyHome $ComfyHome -Force:$McpForce
+                $st = Install-McpRuntime -ProjectRoot $ProjectRoot -McpProxy $McpProxy -ComfyHome $ComfyHome -McpForce:$McpForce
                 return $(if ($st.Ok) { 0 } else { 1 })
             } catch {
                 Write-Host "  装配失败: $($_.Exception.Message)" -ForegroundColor Red

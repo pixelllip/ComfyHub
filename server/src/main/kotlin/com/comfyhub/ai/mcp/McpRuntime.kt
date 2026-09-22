@@ -16,16 +16,21 @@ import java.nio.file.Path
 import java.nio.file.Paths
 
 /**
- * MCP 运行时（便携版 Python + comfy-cli + comfy-mcp）的状态。
+ * MCP 运行时（Python + comfy-cli + comfy-mcp）的状态。
  *
- * 真源是 `scripts\mcp-runtime.ps1` 装出来的那份东西，位置见下：
+ * 真源是 `scripts\mcp-runtime.ps1` 装出来的那份东西（脚本"检测优先，安装只作兜底"：
+ * 先用机器上已有的 Python，都没有才在包内下便携版）。位置见下：
  *
  * ```
- * <根>\storage\ai\mcp\python\python.exe              便携版 Python
+ * <根>\storage\ai\mcp\venv\Scripts\python.exe        借机器上的 Python 建的隔离环境（正常走这条）
+ * <根>\storage\ai\mcp\python\python.exe              便携版 Python（兜底那份）
  * <根>\storage\ai\mcp\python\Scripts\comfy-mcp.exe   pip 装的启动器
  * <根>\storage\ai\mcp\python\Scripts\comfy.exe       comfy-cli
- * <根>\storage\ai\mcp\state.json                     装配记录（版本 / 工作区）
+ * <根>\storage\ai\mcp\state.json                     装配记录（版本 / 工作区 / 这份 Python 哪来的）
  * ```
+ *
+ * ⚠ **`comfy-mcp.exe` 不一定在 `<python 的父目录>\Scripts` 下**：venv 的解释器本身就在
+ * `Scripts\` 里（再套一层就成了 `venv\Scripts\Scripts`）。所以统一走 [scriptsDirOf]。
  *
  * 后端**不自己装配**（那是脚本的活，AGENTS §5：脚本是唯一入口），只做两件事：
  *  1. 找到它、读出状态（[discover]）；
@@ -37,6 +42,8 @@ data class McpRuntimeState(
     val installedAt: String? = null,
     val pythonExe: String? = null,
     val pythonVersion: String? = null,
+    /** 这份 Python 是哪来的：`system` / `venv` / `portable`（老记录里没有这个字段 → null）。 */
+    val pythonSource: String? = null,
     val comfyMcpExe: String? = null,
     val comfyMcpVersion: String? = null,
     val comfyExe: String? = null,
@@ -44,6 +51,20 @@ data class McpRuntimeState(
     val workspace: String? = null,
     val workspaceOk: Boolean = false,
 )
+
+/**
+ * pip 的 console script（`comfy-mcp.exe`）在哪个目录。
+ *
+ * 两种布局都要认（与 `scripts\mcp-runtime.ps1` 的 `Get-PythonScriptsDir` 是同一套判据）：
+ *  · 便携版 / 系统 Python —— `<python 的父目录>\Scripts`
+ *  · venv               —— `<python 的父目录>` 本身就是 `Scripts`
+ * 判错的表现是"运行时明明装好了，却报缺 comfy-mcp.exe"。
+ */
+internal fun scriptsDirOf(pythonExe: Path): Path? {
+    val parent = pythonExe.parent ?: return null
+    return if (parent.fileName?.toString()?.equals("Scripts", ignoreCase = true) == true) parent
+    else parent.resolve("Scripts")
+}
 
 /** 发现结果：路径 + 状态 + 一句人话（缺什么）。 */
 data class McpRuntimePaths(
@@ -90,15 +111,17 @@ object McpRuntimeLocator {
         val state = readState(dir)
         val python = sequenceOf(
             state?.pythonExe?.takeIf { it.isNotBlank() }?.let { runCatching { Paths.get(it) }.getOrNull() },
+            // 顺序与脚本的 Get-PythonRuntimePath 一致：先 venv（正常路径），再便携版（兜底）
+            dir.resolve("venv").resolve("Scripts").resolve("python.exe"),
             dir.resolve("python").resolve("python.exe"),
         ).filterNotNull().firstOrNull { Files.isRegularFile(it) }
 
-        val scriptsDir = python?.parent?.resolve("Scripts")
+        val scriptsDir = python?.let { scriptsDirOf(it) }
         val comfyMcp = scriptsDir?.resolve("comfy-mcp.exe")?.takeIf { Files.isRegularFile(it) }
         val comfyExe = scriptsDir?.resolve("comfy.exe")?.takeIf { Files.isRegularFile(it) }
 
         val problems = mutableListOf<String>()
-        if (python == null) problems += "没有便携版 Python（跑 `pwsh -File scripts\\mcp-runtime.ps1 install` 装配）"
+        if (python == null) problems += "没有可用的 Python（机器上没有，包内也没装配过：跑 `pwsh -File scripts\\mcp-runtime.ps1 install`）"
         if (python != null && comfyMcp == null) problems += "缺 comfy-mcp.exe（pip 没装成？重跑 mcp-runtime.ps1 install）"
         if (python != null && comfyExe == null) problems += "缺 comfy.exe（comfy-cli 没装成？重跑 mcp-runtime.ps1 install）"
         if (state?.workspace.isNullOrBlank()) problems += "comfy-cli 还没设工作区（它不知道用户的 ComfyUI 在哪）"
@@ -125,6 +148,8 @@ object McpRuntimeLocator {
             put("dir", p.dir.toString())
             put("python", p.pythonExe?.toString())
             put("pythonVersion", p.state?.pythonVersion)
+            // 这份 Python 是哪来的（system / venv / portable）—— 界面上能说清"我们没乱装东西"
+            p.state?.pythonSource?.let { put("pythonSource", it) }
             put("comfyMcp", p.comfyMcpExe?.toString())
             put("comfyMcpVersion", p.state?.comfyMcpVersion)
             put("comfyCli", p.comfyExe?.toString())

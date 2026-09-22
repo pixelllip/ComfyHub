@@ -189,11 +189,31 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 `scripts\ensure-runtime.ps1`（实现都在 `scripts\runtime-deps.ps1`，被 `comfyhub.ps1` dot-source）
 负责"缺运行时自动装"：
 
-- **Java**：`Ensure-JavaRuntime` 全自动 —— 下便携版塞进 `<根>\jre`，免安装免管理员，带 sha256。
+> **总原则（2026-09-21 用户定）：检测优先，安装只作兜底。** "环境有 python 你的脚本就不用再装了，
+> 同理 jdk、mcp 也是。" —— 所以三条链都是**先找机器上已有的**，找不到才下便携版；
+> 判据与来源都要**能看出是哪一档**（`doctor` 会打出来）。改这三条链时别把顺序倒回去。
+
+- **Java**：`Ensure-JavaRuntime` —— 先用机器上已有的 ≥21（显式参数 → `COMFYHUB_JDK_HOME` →
+  包内 `<根>\jre` → **`JAVA_HOME`** → 常见 JDK 安装位置 → `PATH`），**没有才**下便携版塞进 `<根>\jre`，
+  免安装免管理员，带 sha256。
   源顺序：Adoptium 官方(47MB,有官方 sha256) → 华为云 OpenJDK 21.0.2(190MB,sha256 硬编码在代码里)
   → Adoptium 重定向 → Microsoft OpenJDK。每个源先 `Test-UrlReachable`(Range 取 1KB) 探测再下。
-  `comfyhub.ps1 up` 会调它；`COMFYHUB_NO_DOWNLOAD=1` 关闭。
+  `comfyhub.ps1 up` 会调它；`COMFYHUB_NO_DOWNLOAD=1` 关闭（**这条现在在 `Ensure-JavaRuntime` 内部也认**，
+  不只是 `up` 里那一处）。
+- **MCP（Python）**：`scripts\mcp-runtime.ps1` 四档 —— ① 已装好的（`state.json` / `venv` / `python`）→
+  ② 借机器上**已经装了 comfy-mcp + comfy-cli** 的 Python（一个字节都不装）→ ③ 借机器上的 Python 建
+  **venv**（`<根>\storage\ai\mcp\venv`，**不污染用户的全局 site-packages**）→ ④ 真的没有才下 embeddable
+  便携版。用了哪一档记在 `state.json` 的 `pythonSource`，`doctor` 显示 `system` / `venv` / `portable`。
+  ⚠ **venv 的解释器就在 `Scripts\` 里**，所以"pip 启动器在哪个目录"必须分两种情况
+  （`Get-PythonScriptsDir` / Kotlin 的 `scriptsDirOf`）—— 一律 `父目录\Scripts` 会拼出
+  `venv\Scripts\Scripts`，表现是"明明装好了却报缺 comfy-mcp.exe"。
 - **pwsh / VC++**：系统级安装，走 winget；`up` 阶段不碰（免得启动弹 UAC），只由 `ensure-runtime.ps1` 显式装。
+
+> **⚠ 参数改名的坑（2026-09-21 踩到）：非高级函数（没写 `[CmdletBinding()]`）收到不存在的命名参数时
+> 不报错，而是丢进 `$args`。** `mcp-runtime.ps1` 把参数从 `$Proxy`/`$Force` 改成 `$McpProxy`/`$McpForce`
+> （为了躲 dot-source 的变量覆盖，见该文件头的注释）之后，内部一堆 `-Proxy $McpProxy` / `-Force:$McpForce`
+> 就**静默失效**了 —— 没报错、没异常，只是代理没传过去、强制重装没生效。所以：改名后**必须把调用点一起改**，
+> 而且给命令行用的名字要留 `[Alias('Proxy')]` / `[Alias('Force')]`。
 
 > **⚠ 变量的坑：永远不要给变量起名 `$home`、`$input`、`$host`、`$pid`、`$profile`、`$args`。**
 > PowerShell 里自动变量**大小写不敏感**，`$home = ...` 会直接抛

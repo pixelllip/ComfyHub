@@ -85,6 +85,13 @@ bug：
      `comfyhub.ps1 up` 自动补（已就绪时只有几次文件检查）、`doctor` 单独报一段；
      顺带补了 **ComfyUI Desktop 新版嵌套路径**的探测（`D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`，
      `comfy-path.ps1` 与 `ComfyLocator.kt` 两边同步）。
+     → **随后按用户要求改成"检测优先，安装只作兜底"**（用户："环境有 python 你的脚本就不用再装了，
+       同理 jdk、mcp 也是"）：已有的（state.json / venv / 便携版）→ 借机器上**已装好 comfy-mcp** 的 Python →
+       借机器上的 Python 建 **venv**（不污染用户的全局 site-packages）→ 真的没有才下便携版。
+       `state.json` 记 `pythonSource`，`doctor` 打出来；`COMFYHUB_NO_DOWNLOAD=1` 时**不许**下便携版。
+       Java 侧同样加了 `JAVA_HOME` 与更宽的 JDK 探测（机器上有 ≥21 就直接用，`Ensure-JavaRuntime` 也认这个开关）。
+       同时修掉参数改名留下的**静默失效**：`-Proxy` / `-Force` 在 mcp-runtime.ps1 里被 PowerShell
+       丢进 `$args`（简单函数不报错），改成真名 + 给文件级参数加 `Alias('Proxy'/'Force')`。
   ② ⬜ 后端 MCP stdio 客户端（initialize → tools/list → tools/call）
   ③ ⬜ MCP 工具注入 `ToolRegistry` + 逐个定权限档，重复的 `comfy_*` 让位（产物入库/审批/NSFW 链路保留）
   ④ ⬜ 安卓客户端预留：桌面 App 当能力宿主，移动端只留不依赖本地工作流的工具）
@@ -92,3 +99,11 @@ bug：
   → **待做**。已经设计好的工具可以留在移动端（生成提示词、查询网页这类**不涉及本地工作流**的）；
   与桌面端通信的设计取向是：**移动端 → 桌面 App → 桌面 App 再调 comfy mcp**，
   即"本地工作流能力永远在桌面那一侧"，移动端不直连 ComfyUI 也不装 Python。
+- 设计入站配对令牌鉴权（开远程的前置条件）（用户 2026-09-21 晚提出）
+  → **设计完成（未实施）**：见 [`docs/inbound-auth-design.md`](../../docs/inbound-auth-design.md)。
+  一句话：默认完全关闭（回环 + 无鉴权，行为与今天逐字一致）；打开后**非回环来源**必须带
+  `X-ComfyHub-Token`，回环默认豁免（否则桌面 App 的 `NetworkImage` / 视频 / 外部打开那 11 处取字节
+  根本带不上头、本机脚本与 ComfyUI 节点也一个头都不带）；绑了 `0.0.0.0` 却没启用令牌 → 非回环一律 `403`。
+  媒体走**短期签名查询串**（P1），SSE 走 header 即可（我们的客户端不是 `EventSource`）。
+  落地分三步（P0 闸门 / P1 媒体+移动端 / P2 二维码配对），防线是**纯函数单测** + 一条新 e2e
+  （项目现在没有任何 HTTP 层路由测试，也没有 `ktor-server-test-host` 依赖）。

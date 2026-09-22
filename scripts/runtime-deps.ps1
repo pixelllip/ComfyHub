@@ -85,6 +85,10 @@ function Get-RuntimeChecks {
         $packagedJre = Join-Path $ProjectRoot 'jre\bin\java.exe'
         if (Test-Path -LiteralPath $packagedJre) { $javaExe = $packagedJre }
     }
+    if (-not $javaExe -and $env:JAVA_HOME) {
+        $jh = Join-Path $env:JAVA_HOME 'bin\java.exe'
+        if (Test-Path -LiteralPath $jh) { $javaExe = $jh }
+    }
     if (-not $javaExe) {
         $onPath = Get-Command java -ErrorAction SilentlyContinue
         if ($onPath) { $javaExe = $onPath.Source }
@@ -92,10 +96,9 @@ function Get-RuntimeChecks {
     if (-not $javaExe) {
         foreach ($cand in @(
                 'D:\tools\jdk-21', 'D:\tools\jdk-22', 'D:\tools\jdk-23',
-                "$env:ProgramFiles\Eclipse Adoptium\jdk-21*",
-                "$env:ProgramFiles\Java\jdk-21*",
-                "$env:ProgramFiles\Java\jdk-22*",
-                "$env:ProgramFiles\Java\jdk-23*",
+                'D:\tools\jdk-2*',
+                "$env:ProgramFiles\Eclipse Adoptium\jdk-2*",
+                "$env:ProgramFiles\Java\jdk-2*",
                 'D:\Program Files\Android Studio\jbr',
                 "$env:LOCALAPPDATA\Programs\Android Studio\jbr"
             )) {
@@ -232,13 +235,16 @@ function Get-JavaRuntimePath {
     # 发布包/自建自带的运行时
     if ($ProjectRoot) { [void]$cands.Add((Join-Path $ProjectRoot 'jre\bin\java.exe')) }
     [void]$cands.Add((Join-Path $env:LOCALAPPDATA 'ComfyHub\jre\bin\java.exe'))
+    # **机器自己装的那个 JDK**：JAVA_HOME 是"这台机器有 Java"最常见的表示法，
+    # 排在包内运行时之后（AGENTS §7：发布包自带的必须优先），但在"下载新的"之前 ——
+    # 检测优先：机器上有就用机器的，别再下一份（用户 2026-09-21 的要求）。
+    if ($env:JAVA_HOME) { [void]$cands.Add((Join-Path $env:JAVA_HOME 'bin\java.exe')) }
 
     foreach ($base in @(
             'D:\tools\jdk-21', 'D:\tools\jdk-22', 'D:\tools\jdk-23',
-            "$env:ProgramFiles\Eclipse Adoptium\jdk-21*",
-            "$env:ProgramFiles\Java\jdk-21*",
-            "$env:ProgramFiles\Java\jdk-22*",
-            "$env:ProgramFiles\Java\jdk-23*",
+            'D:\tools\jdk-2*',
+            "$env:ProgramFiles\Eclipse Adoptium\jdk-2*",
+            "$env:ProgramFiles\Java\jdk-2*",
             'D:\Program Files\Android Studio\jbr',
             "$env:LOCALAPPDATA\Programs\Android Studio\jbr"
         )) {
@@ -531,8 +537,11 @@ function Install-JavaRuntime {
 function Ensure-JavaRuntime {
     <#
       给 comfyhub.ps1 用的"够用就好"入口：
-        · 已经有 >=21 的 java → 直接返回，什么都不做（快，不联网）
-        · 没有 → 自动下一个便携版塞进 <根>\jre
+        · 机器上已经有 >=21 的 java → 直接返回，什么都不做（快，不联网）
+          —— 顺序是"显式参数 → COMFYHUB_JDK_HOME → 包内 <根>\jre → 机器上的 JAVA_HOME /
+             常见 JDK 安装位置 / PATH"，**检测优先**（用户 2026-09-21 要求：环境里有就别再装）
+        · 都没有 → 才自动下一个便携版塞进 <根>\jre（发布包在没有 Java 的机器上靠这一步自愈）
+        · COMFYHUB_NO_DOWNLOAD=1 → 不下载，直接抛（让调用方如实报"缺运行时 + 怎么装"）
       $Quiet=true 时只在"真的装了"的时候才有输出。
     #>
     param(
@@ -557,6 +566,10 @@ function Ensure-JavaRuntime {
         Write-Host '  没找到 Java 运行时，自动下载一个便携版 JRE 21（约 47MB，只此一次）…' -ForegroundColor Yellow
     }
 
+    if ($env:COMFYHUB_NO_DOWNLOAD) {
+        throw ('没找到可用的 Java 运行时（>= 21），而且 COMFYHUB_NO_DOWNLOAD=1 不许下载。' +
+            "`n装一个 JDK 21+，或用 -JdkHome / COMFYHUB_JDK_HOME / JAVA_HOME 指向已有的那一份。")
+    }
     return (Install-JavaRuntime -ProjectRoot $ProjectRoot -Proxy $Proxy)
 }
 
