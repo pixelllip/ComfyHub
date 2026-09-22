@@ -130,8 +130,13 @@
 | --- | --- | --- |
 | `install_node` | 装自定义节点（调 ComfyUI-Manager） | 改用户的 ComfyUI 安装 |
 | `download_model(url, …)` | 下模型进 models 目录（多 GB，后台任务） | 写用户磁盘，且要出网下大文件 |
-| `launch_comfyui` / `stop_comfyui` / `restart_comfyui` / `update_comfyui` / `switch_comfyui_version` | **起停/更新/换版本本地 ComfyUI 进程** | AGENTS §10：**没有 shell / 进程类工具**（AIH-045）。而且起停 ComfyUI 在我们这边是 `scripts\comfyhub.ps1` 的活（AGENTS §5：脚本是唯一入口） |
+| `stop_comfyui` / `restart_comfyui` / `update_comfyui` / `switch_comfyui_version` | **停/更新/换版本本地 ComfyUI 进程** | AGENTS §10：**没有 shell / 进程类工具**（AIH-045）。而且起停 ComfyUI 在我们这边是 `scripts\comfyhub.ps1` 的活（AGENTS §5：脚本是唯一入口） |
 | `get_logs` / `discover` / `which` / `project` | 读日志、探 comfy-cli 环境 | 前两个要读用户机器上任意日志路径 |
+
+> **2026-09-22 更新**：`launch_comfyui` 不再默认 deny —— 用户拍板"权限跟随当前对话的权限设置，
+> 默认是 ask，我设置了 allow 那就 allow"，已移入 `McpToolPolicy.ASK`（`McpToolBridge.kt`，
+> 回归用例 `McpToolPolicyTest`）。场景是 ComfyUI 没在跑时模型能自己把它拉起来（走 comfy-cli
+> 已设置的工作区），但每次要用户点批准。上表其余工具的规矩不变。
 
 ### 3.4 关于"删掉重复功能"：唯一真能删的那块，恰恰不能删
 
