@@ -557,3 +557,25 @@ SSE 新增事件：`reasoning.delta`、`tool.requested`、`tool.started`、`tool
     系统提示 v19 与工具描述同步改掉"需要令牌"那句。原来那条
     `CIVITAI_TOKEN_REQUIRED` 硬拒绝已经删掉：它拦下的是**上游本来就会答应**的搜索。
 
+
+---
+
+## 24. 模型能力目录的自动更新（2026-09-23"全做了"）
+
+模型导入时的模态 / 工具 / 思考档位预填，原来只靠**编进 jar 的内置表**（`ModelCapabilityCatalog`），
+新模型要等发版。现在 `lookup()` 按**逐个维度**合并三层（与"接口声明 > 目录"同一哲学）：
+
+| 层 | 位置 | 谁写 | 匹配 |
+| --- | --- | --- | --- |
+| 手工 custom | `<storage>\ai\capabilities\custom.json` | 用户（界面/手改），最高优先 | 精确 id（去前缀须唯一） |
+| 在线 remote | `<storage>\ai\capabilities\remote.json` | `CapabilityRefresh` 拉 **models.dev** | 精确 id（去前缀须唯一） |
+| 内置 builtin | 代码里的家族规则表（118 条） | 随版本发布 | 包含匹配（含档位/方言） |
+
+- **自动刷新**：启动读一次覆盖层；后台 daemon 每小时看一眼，remote.json 超 **7 天**才真出网
+  拉取；`COMFYHUB_NO_DOWNLOAD=1` 一刀关。拉取失败旧文件原样保留（原子写）。
+- **实测校准（TESTED）**：档位阶梯的线上表达没有标准接口，只有真发请求才知道。设置页
+  「AI 模型与凭据 → 模型能力目录」打开「允许实测校准」后可触发（默认关）：对每个 Provider
+  最多 8 个推理模型，从最高档降档发 `reasoning_effort` 极小请求，把**网关实际接受**的档位写回
+  （4xx 与思考参数无关时如实中止；`manual` 行绝不覆盖；只把 builtin 行升为 tested）。
+- **可见性**：设置页卡片 + `GET /api/ai/capabilities/status` + `comfyhub.ps1 doctor` 都报新鲜度。
+  接口自述（DISCOVERED）永远优先 —— models.dev 只是"网关什么都没说"时的兜底。
