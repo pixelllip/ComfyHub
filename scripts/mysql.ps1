@@ -24,7 +24,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('init', 'start', 'stop', 'restart', 'status', 'cli', 'schema', 'seed', 'reset', 'logs', 'move')]
+    [ValidateSet('init', 'start', 'stop', 'restart', 'status', 'cli', 'schema', 'seed', 'reset', 'logs', 'move', 'config')]
     [string]$Action = 'status',
 
     [string]$MySqlHome = $env:COMFYHUB_MYSQL_HOME,
@@ -182,12 +182,27 @@ bind-address=127.0.0.1
 mysqlx=0
 character-set-server=utf8mb4
 collation-server=utf8mb4_unicode_ci
-max_connections=200
+max_connections=24
 max_allowed_packet=512M
-innodb_buffer_pool_size=256M
 innodb_flush_log_at_trx_commit=2
+# ↓ P0 内存调优（2026-09-23）：实测见 docs/memory-and-storage-evaluation.md §3.2.1 ——
+#   真实数据（62.1 万行 ai_run_events）下 mysqld Working Set 638MB → 189MB，保守档、零风险。
+#   ① performance_schema=0 单独就省 233MB（本项目一个字节都不需要）；② buffer pool 256M→32M
+#   （真实热数据只有 24MB）；③ log_buffer 64M→8M。max_allowed_packet 别动小 ——
+#   导入大工作流 JSON 靠它（见该文档 §3.1 的"都保持不变"清单）。
+performance_schema=0
+innodb_buffer_pool_size=32M
+innodb_log_buffer_size=8M
+innodb_redo_log_capacity=32M
+table_open_cache=256
+table_definition_cache=400
+thread_cache_size=4
 log-error=$errlog
 local_infile=0
+# 关掉 binlog（2026-09-23）：本机单实例、没有从库、不需要 PITR，
+# 而 MySQL 8 默认开着它，实测在 .mysql\data 里堆了 202 个文件共 4.27GB（ROW 格式 + 30 天保留）。
+# ⚠ 必须写 `skip-log-bin`：实测写 `log_bin=0` 会被 MySQL 8.4 **静默忽略**（@@log_bin 仍为 1）。
+skip-log-bin
 
 [client]
 port=$Port
@@ -480,5 +495,12 @@ switch ($Action) {
     'reset'   { Do-Stop; Remove-Item -Recurse -Force $DataDir -ErrorAction SilentlyContinue; Do-Init }
     'cli'     { & $MysqlCli --protocol=TCP -h 127.0.0.1 -P $Port -u $DbUser "--password=$DbPassword" $DbName }
     'logs'    { if (Test-Path $ErrorLog) { Get-Content $ErrorLog -Tail 60 } else { Write-Host '暂无日志' } }
+    'config'  {
+        # 按当前 $MySqlHome / 实例目录重写 my.ini（改 Write-Ini 的调优项后用这个让它在原地生效，
+        # 不必 init/move —— 那两条会把数据目录一起动）。库在跑时要自己 restart 才读到新配置。
+        Write-Ini
+        Write-Host "已重写 my.ini：$IniFile" -ForegroundColor Green
+        Write-Host "库在跑的话执行 pwsh -File scripts\mysql.ps1 restart 才生效" -ForegroundColor Yellow
+    }
     'move'    { Do-Move -Force:$Force }
 }

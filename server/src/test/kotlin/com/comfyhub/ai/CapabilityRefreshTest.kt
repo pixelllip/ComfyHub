@@ -93,7 +93,11 @@ class CapabilityRefreshTest {
     @Test
     fun `刚落盘不算过期、没有文件算过期`() {
         assertTrue(CapabilityRefresh.isStale(dir), "没有 remote.json 应视为过期")
-        CapabilityRefresh.parseAndWrite(fixture, dir, "2026-09-23T02:00:00Z")
+        // 时间戳必须**当场取**：`remoteAgeHours` 是拿它减 `Instant.now()`，写死一个绝对时刻的话
+        // 这条用例就变成了"跑它的那天是不是还早于那个字面量" —— 2026-09-23 13:27 实测它就是
+        // 这么红的（字面量 02:00 已经过去 11 小时，age=11h 仍 < 7 天，但断言的是 ==0）。
+        val justNow = java.time.Instant.now().toString()
+        CapabilityRefresh.parseAndWrite(fixture, dir, justNow)
         assertFalse(CapabilityRefresh.isStale(dir), "刚刷新不应视为过期")
         assertEquals(0L, CapabilityRefresh.remoteAgeHours(dir))
     }

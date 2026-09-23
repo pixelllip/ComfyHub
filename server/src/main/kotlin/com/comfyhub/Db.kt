@@ -31,7 +31,10 @@ object Db {
             username = cfg.dbUser
             password = cfg.dbPassword
             driverClassName = "com.mysql.cj.jdbc.Driver"
-            maximumPoolSize = 12
+            // P0（2026-09-23）：12 → 4。单用户桌面应用，实测真实并发远低于 4
+            //（Hikari 自己会在忙时扩到上限）；12 条连接只是白占 MySQL 的每连接缓冲。
+            // 连接池 ≥ MySQL 的 max_connections 会导致"爬满就拒绝连接"，两边一起调（my.ini 现为 24）。
+            maximumPoolSize = 4
             minimumIdle = 2
             poolName = "comfyhub-pool"
             connectionTimeout = 10_000

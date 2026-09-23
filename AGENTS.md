@@ -380,6 +380,31 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   `e2e-submit-test.ps1` **会自己把权限档临时钉成 `ask`**（第 1 幕验的就是"没人批准就不提交"，
   用户平时可能切在「自动允许（无需批准）」档，靠机器当前设置会让这一幕必然红），跑完还原。
 
+---
+
+## 11. ⚠ 目标架构（方案已敲定，**尚未实施**）
+
+**2026-09-23 敲定**：`SQLite + 桌面 Rust + 移动 Kotlin + Flutter（两端）`。
+**当前代码仍是 MySQL + Kotlin/Ktor + 纯 Flutter** —— 第 1~10 节写的都是**现状**，仍然有效。
+
+**动手之前先读 [`docs/implementation-master-plan.md`](docs/implementation-master-plan.md)**
+（实施总纲：冻结的接口契约、**14 条红线**、分阶段验收判据、回归防线归属、文档地图）。
+
+四条最容易踩的：
+
+1. **桌面要换 Rust、数据库要换 SQLite** —— 别在 `server/`（Kotlin）里继续堆只对 MySQL 成立的东西
+   （新的 MySQL 方言、`information_schema` 探测、`ON DUPLICATE KEY`）。能用标准 SQL 就用标准 SQL；
+   新增表结构时顺手想一句"它在 SQLite 里长什么样"。
+2. **不要引入 KMP**（`kotlin.multiplatform`）。本工程已迁到 **AGP 9 内建 Kotlin**
+   （`android.builtInKotlin=true`，任何模块都不 apply KGP），KMP 与这个刻意设计正面冲突 ——
+   理由见 `docs/mobile-harness-design.md` §2.1。动 `android/` 前照旧先读
+   `docs/android-agp9-builtin-kotlin-migration.md`。
+3. **移动端 harness 用 Android Kotlin**（Flutter UI 通过 platform channel 调用），
+   不是 Dart、不是 Rust。**手机端不许硬编码系统提示 / 工具描述 / 安全文案** ——
+   它们由桌面的 `/api/ai/run-kit` 版本化下发。
+4. **发布包与运行时会变**：`mysql/`（304MB）、`jre/`、VC++ 运行时依赖都将消失。
+   `packaging\manifest.json` 与第 7 节的"两套运行布局"届时都要改 —— **改之前先看总纲**。
+
 
 
 

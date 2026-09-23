@@ -84,6 +84,18 @@ application {
         // （用户报的 "civitai_search 反复超时"）。真正的取舍与"内网永不代理"的旁路
         // 都在 com.comfyhub.ai.OutboundProxy 里，这里只负责把系统代理**读得到**。
         "-Djava.net.useSystemProxies=true",
+        // ↓ P0 内存调优（2026-09-23，实测见 docs/memory-and-storage-evaluation.md §3.2.2）：
+        //   同一份代码同一个库，只换启动参数 —— 私有提交 378.6→150.5MB、线程 74→35。
+        //   关键收益不是"平均更低"（Windows 本来会把空闲 JVM 的页换出去），
+        //   而是**把峰值压平**：默认参数跑一次内置模型种子写入会冲到 272.6MB，调优后停 141.3MB。
+        "-Xms64m",                        // 初始堆 394MB → 64MB
+        "-Xmx256m",                       // 上限 6.25GB → 256MB（实测实用堆 135MB，留一倍余量）
+        "-XX:MaxMetaspaceSize=192m",      // 实测 42MB
+        "-XX:+UseSerialGC",               // 省掉 16 个 GC 线程 + G1 的 Remembered Set（GC 结构仅 983KB）
+        "-Xss512k",                       // 线程栈减半
+        "-XX:CICompilerCount=2",          // 单用户应用不需要 4 个 JIT 线程
+        "-XX:ReservedCodeCacheSize=48m",  // 实测 Code Cache 用 8.2MB
+        "-XX:MaxDirectMemorySize=32m",    // Netty 直接内存封顶
     )
 }
 
