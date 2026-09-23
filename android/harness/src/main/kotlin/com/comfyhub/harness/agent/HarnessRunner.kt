@@ -216,6 +216,9 @@ class HarnessRunner(
         var status = RunStatus.RUNNING
         var errorCode: String? = null
         var errorMessage: String? = null
+        val startedAtMs = System.currentTimeMillis()
+        // token 用量**多轮累加**（与桌面同口径：工具循环里每一轮都要加进去）
+        var usageTotal = EventPayloads.usage(0, 0)
 
         try {
             val adapter = Adapters.of(request.api)
@@ -274,7 +277,7 @@ class HarnessRunner(
             fun applyTitleOnce(title: String) {
                 if (titleApplied) return
                 titleApplied = true
-                applyConversationTitle(conversationId, title, ::emit)
+                applyConversationTitle(runId, conversationId, title, ::emit)
             }
 
             while (true) {
@@ -336,7 +339,10 @@ class HarnessRunner(
                             parts.buffer(PartType.REASONING, event.text)
                             emit(RunEventType.REASONING_DELTA, payload("text" to event.text))
                         }
-                        is StreamEvent.Usage -> emit(RunEventType.USAGE_UPDATED, payload("usage" to event.usage))
+                        is StreamEvent.Usage -> {
+                            usageTotal = EventPayloads.usageOf(event.usage)
+                            emit(RunEventType.USAGE_UPDATED, usageTotal)
+                        }
                         is StreamEvent.ProviderId -> Unit
                         is StreamEvent.ToolCallDelta -> idle = false
                     }
@@ -411,7 +417,20 @@ class HarnessRunner(
                     toolCallId = calls.joinToString(",") { it.id },
                     jsonPayload = buildJsonArrayOfCalls(calls),
                 )
-                calls.forEach { call -> emit(RunEventType.TOOL_REQUESTED, payload("callId" to call.id, "name" to call.name, "args" to call.arguments)) }
+                calls.forEach { call ->
+                    // 手机侧的工具都不需要审批（没有桌面写操作），所以 approval 恒为 not_required；
+                    // **键名与桌面逐字一致**，否则共享的 Flutter 界面读不到参数/审批态
+                    emit(
+                        RunEventType.TOOL_REQUESTED,
+                        EventPayloads.toolRequested(
+                            runId = runId,
+                            callId = call.id,
+                            name = call.name,
+                            arguments = call.arguments,
+                            approval = "not_required",
+                        ),
+                    )
+                }
 
                 val ctx = ToolContext(
                     runId = runId,
@@ -424,35 +443,22 @@ class HarnessRunner(
                     emit = { type, body -> emit(type, body) },
                 )
                 calls.forEach { call ->
-                    emit(RunEventType.TOOL_STARTED, payload("callId" to call.id))
+                    emit(RunEventType.TOOL_STARTED, EventPayloads.toolStarted(call.id, call.name))
+                    val startedAt = System.currentTimeMillis()
                     val outcome = tools.invoke(ToolCallRequest(call.id, call.name, call.arguments), ctx)
-                    if (outcome.ok) {
-                        parts.add(
-                            PartType.TOOL_RESULT,
-                            text = outcome.content,
-                            toolCallId = call.id,
-                            jsonPayload = outcome.jsonPayload?.toString(),
-                        )
-                        emit(
-                            RunEventType.TOOL_COMPLETED,
-                            payload(
-                                "callId" to call.id,
-                                "name" to call.name,
-                                "result" to (outcome.jsonPayload ?: payload("content" to outcome.content)),
-                            ),
-                        )
-                    } else {
-                        parts.add(
-                            PartType.TOOL_RESULT,
-                            text = outcome.content,
-                            toolCallId = call.id,
-                            jsonPayload = null,
-                        )
-                        emit(
-                            RunEventType.TOOL_FAILED,
-                            payload("callId" to call.id, "name" to call.name, "error" to outcome.content),
-                        )
-                    }
+                    parts.add(
+                        PartType.TOOL_RESULT,
+                        text = outcome.content,
+                        toolCallId = call.id,
+                        jsonPayload = outcome.jsonPayload?.toString(),
+                    )
+                    val (type, body) = EventPayloads.forToolOutcome(
+                        callId = call.id,
+                        name = call.name,
+                        outcome = outcome,
+                        elapsedMs = System.currentTimeMillis() - startedAt,
+                    )
+                    emit(type, body)
                     // 工具结果回填给模型：**当不可信数据**（横幅文案由 run-kit 下发，R7）
                     toolTurns += ChatTurn("tool", outcome.content, toolCallId = call.id)
                 }
@@ -474,8 +480,21 @@ class HarnessRunner(
             status = RunStatus.COMPLETED
             store.updateMessage(assistantId, text = text.toString(), status = MessageStatus.COMPLETE)
             store.finishRun(runId, status)
-            emit(RunEventType.MESSAGE_COMPLETED, payload("messageId" to assistantId))
-            emit(RunEventType.RUN_COMPLETED, payload("runId" to runId))
+            emit(
+                RunEventType.MESSAGE_COMPLETED,
+                EventPayloads.messageCompleted(
+                    messageId = assistantId,
+                    text = text.toString(),
+                    reasoning = reasoning.toString().takeIf { it.isNotEmpty() },
+                    finishReason = finishReason,
+                    elapsedMs = System.currentTimeMillis() - startedAtMs,
+                    reasoningEffort = request.reasoningEffort?.wire,
+                    steps = step,
+                    parts = store.listParts(assistantId),
+                    usage = usageTotal,
+                ),
+            )
+            emit(RunEventType.RUN_COMPLETED, EventPayloads.runCompleted(runId, System.currentTimeMillis() - startedAtMs))
         } catch (e: kotlinx.coroutines.CancellationException) {
             // 取消：与失败同一条兜底（已经说出去的话一个字都不能丢）
             status = RunStatus.CANCELLED
@@ -484,8 +503,21 @@ class HarnessRunner(
             rescueAlreadySaid(assistantId, text, parts, titleStripper)
             store.updateMessage(assistantId, text = text.toString(), status = MessageStatus.CANCELLED)
             store.finishRun(runId, status, errorCode = errorCode, errorMessage = errorMessage)
-            emit(RunEventType.MESSAGE_COMPLETED, payload("messageId" to assistantId))
-            emit(RunEventType.RUN_CANCELLED, payload("runId" to runId))
+            emit(
+                RunEventType.MESSAGE_COMPLETED,
+                EventPayloads.messageCompleted(
+                    messageId = assistantId,
+                    text = text.toString(),
+                    reasoning = reasoning.toString().takeIf { it.isNotEmpty() },
+                    finishReason = null,
+                    elapsedMs = System.currentTimeMillis() - startedAtMs,
+                    reasoningEffort = request.reasoningEffort?.wire,
+                    steps = 0,
+                    parts = store.listParts(assistantId),
+                    usage = usageTotal,
+                ),
+            )
+            emit(RunEventType.RUN_CANCELLED, EventPayloads.runCancelled(runId))
         } catch (e: Throwable) {
             val (code, message) = when (e) {
                 is UpstreamFailure -> e.code to (e.message ?: "上游调用失败")
@@ -497,8 +529,21 @@ class HarnessRunner(
             rescueAlreadySaid(assistantId, text, parts, titleStripper)
             store.updateMessage(assistantId, text = text.toString(), status = MessageStatus.FAILED)
             store.finishRun(runId, status, errorCode = code, errorMessage = message)
-            emit(RunEventType.MESSAGE_COMPLETED, payload("messageId" to assistantId))
-            emit(RunEventType.RUN_FAILED, payload("runId" to runId, "errorCode" to code, "error" to message))
+            emit(
+                RunEventType.MESSAGE_COMPLETED,
+                EventPayloads.messageCompleted(
+                    messageId = assistantId,
+                    text = text.toString(),
+                    reasoning = reasoning.toString().takeIf { it.isNotEmpty() },
+                    finishReason = null,
+                    elapsedMs = System.currentTimeMillis() - startedAtMs,
+                    reasoningEffort = request.reasoningEffort?.wire,
+                    steps = 0,
+                    parts = store.listParts(assistantId),
+                    usage = usageTotal,
+                ),
+            )
+            emit(RunEventType.RUN_FAILED, EventPayloads.runFailed(runId, code, message))
         } finally {
             // P1 的纪律：事件批量落库，收尾（正常/失败/取消三条路都汇进这里）时 ①flush ②裁剪
             events.flush()
@@ -547,9 +592,17 @@ class HarnessRunner(
         return userMessageCount <= 1 && (conversation.title.isBlank() || conversation.title == DEFAULT_TITLE)
     }
 
-    private fun applyConversationTitle(conversationId: String, title: String, emit: (String, JsonObject) -> Unit) {
+    private fun applyConversationTitle(
+        runId: String,
+        conversationId: String,
+        title: String,
+        emit: (String, JsonObject) -> Unit,
+    ) {
         store.renameConversation(conversationId, title)
-        emit(RunEventType.CONVERSATION_UPDATED, payload("conversationId" to conversationId, "title" to title))
+        emit(
+            RunEventType.CONVERSATION_UPDATED,
+            payload("runId" to runId, "conversationId" to conversationId, "title" to title),
+        )
     }
 
     private fun buildReasoningRequest(request: RunRequest, model: com.comfyhub.harness.kit.KitModel?): ReasoningRequest {

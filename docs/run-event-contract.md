@@ -42,17 +42,17 @@ data: <payload 的 JSON 单行>
 | `message.started` | `MESSAGE_STARTED` | `messageId` | 助手气泡建立（前端据此挂占位） |
 | `reasoning.delta` | `REASONING_DELTA` | `text` | 思维链增量（**与正文分流**） |
 | `text.delta` | `TEXT_DELTA` | `text` | 正文增量（**逐字**） |
-| `tool.requested` | `TOOL_REQUESTED` | `callId`, `name`, `args` | 模型要调工具；**需审批的工具在发它之前必须先 `AskGate.open(callId)`**（红线 R8） |
-| `tool.started` | `TOOL_STARTED` | `callId` | 批准后真正开始执行 |
-| `tool.completed` | `TOOL_COMPLETED` | `callId`, `result`（内含 `mediaIds`） | 工具成功 |
-| `tool.failed` | `TOOL_FAILED` | `callId`, `error` | 工具失败 |
+| `tool.requested` | `TOOL_REQUESTED` | `runId`, `callId`, `name`, **`arguments`**, `approval` | 模型要调工具；**需审批的工具在发它之前必须先 `AskGate.open(callId)`**（红线 R8）。⚠ 键名是 `arguments`（不是 `args`）：桌面 `HarnessRunner.kt:724` 与 Flutter 的 `AiRunEvent.arguments` 都读这个键 —— 发错了工具卡里就看不到参数（2026-09-23 手机侧落地时发现文档这一列写错，已按代码改正） |
+| `tool.started` | `TOOL_STARTED` | `callId`, `name` | 批准后真正开始执行 |
+| `tool.completed` | `TOOL_COMPLETED` | `callId`, `name`, `elapsedMs`, `preview`, `result`（内含 `mediaIds`） | 工具成功 |
+| `tool.failed` | `TOOL_FAILED` | `callId`, `name`, `code`, `message`, `approval`, `elapsedMs` | 工具失败 |
 | `user.question` | `USER_QUESTION` | `questionId`, `question`, `options?` | **AI 问用户**（不是审批，见 §3） |
 | `user.question.answered` | `USER_QUESTION_ANSWERED` | `questionId`, `answer` | 用户答完了 |
-| `usage.updated` | `USAGE_UPDATED` | `promptTokens`, `completionTokens` … | token 用量 |
-| `message.completed` | `MESSAGE_COMPLETED` | `messageId` | 一条助手消息收口（**落块时机**） |
-| `conversation.updated` | `CONVERSATION_UPDATED` | `conversationId`, `title` | 标题被总结出来了，前端刷新列表 |
-| `run.completed` | `RUN_COMPLETED` | `runId` | Run 正常结束 |
-| `run.failed` | `RUN_FAILED` | `runId`, `error` | Run 失败（**R6：已说出去的话一个字都不能丢**） |
+| `usage.updated` | `USAGE_UPDATED` | `inputTokens`, `outputTokens`, `cachedTokens`, `reasoningTokens` | token 用量 |
+| `message.completed` | `MESSAGE_COMPLETED` | `messageId`, `text`, `reasoning`, `finishReason`, `elapsedMs`, `reasoningEffort`, `steps`, **`parts`**, `usage` | 一条助手消息收口（**落块时机**）。⚠ `parts` 是**权威**：界面在 parts 非空时只渲染 parts |
+| `conversation.updated` | `CONVERSATION_UPDATED` | `runId`, `conversationId`, `title` | 标题被总结出来了，前端刷新列表 |
+| `run.completed` | `RUN_COMPLETED` | `runId`, `elapsedMs` | Run 正常结束 |
+| `run.failed` | `RUN_FAILED` | `runId`, **`code`**, **`message`** | Run 失败（**R6：已说出去的话一个字都不能丢**）。⚠ 键是 `code` / `message`（不是 `errorCode` / `error`），Flutter 的 `AiRunEvent.code` 就读 `code` |
 | `run.cancelled` | `RUN_CANCELLED` | `runId` | 用户取消（**R6 同样适用**） |
 | `heartbeat` | `HEARTBEAT` | — | 保活；**不参与业务渲染**，前端必须能忽略未知类型 |
 
