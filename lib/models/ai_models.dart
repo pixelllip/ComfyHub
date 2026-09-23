@@ -1503,6 +1503,29 @@ class AiQuestion {
   final String? answer;
   final int? optionIndex;
 
+  /// 同一张提问卡里的第几题（0 基）与总题数；单问时是 `0 / 1`。
+  ///
+  /// 2026-09-22 用户拍板的形态（照 DeepSeek Harness）：**一张卡装多个问题、分页、
+  /// 可逐题跳过、最后一页按钮变「提交」、答案可为空**。同一次 `ask_user_question`
+  /// 调用生成的多条共享 [groupId]，界面按它把这几条画成同一张卡的 N 页。
+  final int index;
+  final int total;
+
+  /// 这张卡的分组号（单问时是空串 —— 用 [key] 归一）。
+  final String groupId;
+
+  /// 多选题：选项可以多选（界面画复选框）。后端上限 5 个选项。
+  final bool multiSelect;
+
+  /// 多选题用户勾了哪几个（自己敲的自由文本仍走 [answer]）。
+  final List<int> optionIndexes;
+
+  /// 分组键：老数据 / 单问没有 `groupId`，就用 `questionId` 归一组。
+  String get key => groupId.isNotEmpty ? groupId : questionId;
+
+  /// 这张卡不止一题（界面要画分页与进度）。
+  bool get isPaged => total > 1;
+
   const AiQuestion({
     required this.questionId,
     this.runId = '',
@@ -1515,6 +1538,11 @@ class AiQuestion {
     this.answered = false,
     this.answer,
     this.optionIndex,
+    this.index = 0,
+    this.total = 1,
+    this.groupId = '',
+    this.multiSelect = false,
+    this.optionIndexes = const [],
   });
 
   factory AiQuestion.fromJson(Map<String, dynamic> json) => AiQuestion(
@@ -1529,9 +1557,22 @@ class AiQuestion {
         answered: json['answered'] == true,
         answer: json['answer']?.toString(),
         optionIndex: (json['optionIndex'] as num?)?.toInt(),
+        index: (json['index'] as num?)?.toInt() ?? 0,
+        total: (json['total'] as num?)?.toInt() ?? 1,
+        groupId: (json['groupId'] ?? '').toString(),
+        multiSelect: json['multiSelect'] == true,
+        optionIndexes: (json['optionIndexes'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ??
+            const [],
       );
 
-  AiQuestion copyWith({String? callId, bool? answered, String? answer, int? optionIndex}) => AiQuestion(
+  AiQuestion copyWith({
+    String? callId,
+    bool? answered,
+    String? answer,
+    int? optionIndex,
+    List<int>? optionIndexes,
+  }) =>
+      AiQuestion(
         questionId: questionId,
         runId: runId,
         conversationId: conversationId,
@@ -1543,6 +1584,11 @@ class AiQuestion {
         answered: answered ?? this.answered,
         answer: answer ?? this.answer,
         optionIndex: optionIndex ?? this.optionIndex,
+        index: index,
+        total: total,
+        groupId: groupId,
+        multiSelect: multiSelect,
+        optionIndexes: optionIndexes ?? this.optionIndexes,
       );
 }
 
@@ -1612,6 +1658,27 @@ class AiToolCallState {
   /// 因为"等你回答"和"等你批准"是两件事，UI 不能混。
   final AiQuestion? question;
 
+  /// 同一张提问卡里的**所有**题（多问改造，2026-09-22）。
+  ///
+  /// 后端的 `user.question` 是**一题一条事件**、都挂在同一个 `callId` 上：
+  /// 只留 [question] 的话第 2 题起会把前一题顶掉（那张卡就只剩最后一题，
+  /// 而模型还在等那几题 —— Run 会一直挂到 30 分钟超时）。
+  /// [question] 仍是"第一条"：历史回放与旧用例照旧读它。
+  final List<AiQuestion> questions;
+
+  /// 这张卡要画几题：优先用 [questions]，没有就退回 [question]。
+  List<AiQuestion> get allQuestions =>
+      questions.isNotEmpty ? questions : (question == null ? const <AiQuestion>[] : [question!]);
+
+  /// 把新到的一条提问并进这张卡：同 `questionId` 覆盖，否则追加，按题号排。
+  static List<AiQuestion> mergeQuestions(List<AiQuestion> prev, AiQuestion next) {
+    final out = <AiQuestion>[
+      ...prev.where((q) => q.questionId != next.questionId),
+      next,
+    ]..sort((a, b) => a.index.compareTo(b.index));
+    return out;
+  }
+
   const AiToolCallState({
     required this.callId,
     required this.name,
@@ -1625,6 +1692,7 @@ class AiToolCallState {
     this.nsfwMediaIds = const [],
     this.promptId,
     this.question,
+    this.questions = const [],
   });
 
   factory AiToolCallState.fromJson(Map<String, dynamic> json) => AiToolCallState(
@@ -1643,7 +1711,17 @@ class AiToolCallState {
         question: json['question'] is Map
             ? AiQuestion.fromJson(Map<String, dynamic>.from(json['question'] as Map))
             : null,
+        questions: _questionsOf(json['questions']),
       );
+
+  /// 解析一组提问（`questions[]`；没有就是空表）。
+  static List<AiQuestion> _questionsOf(Object? raw) {
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((e) => AiQuestion.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
 
   /// 从工具结构化结果里取出产物 id（`comfy_submit` 的 `mediaIds`）。
   static List<int> mediaIdsOf(Object? resultJson) {
@@ -1700,6 +1778,14 @@ class AiToolCallState {
         final asked = map['question'] is Map
             ? AiQuestion.fromJson(Map<String, dynamic>.from(map['question'] as Map))
             : null;
+        // 整组提问（多问改造）：后端在工具结果里落 `askedAll`；
+        // 老结果只有 `asked` 一条 —— 那就退化成单题，界面照样画得出来。
+        final askedAll = _questionsOf(map['askedAll']);
+        final askedGroup = askedAll.isNotEmpty
+            ? askedAll
+            : (asked == null
+                ? (prev?.questions ?? const <AiQuestion>[])
+                : AiToolCallState.mergeQuestions(prev?.questions ?? const [], asked));
         final next = AiToolCallState(
           callId: id,
           name: (map['name'] ?? prev?.name ?? '').toString(),
@@ -1716,6 +1802,7 @@ class AiToolCallState {
           nsfwMediaIds: AiToolCallState.nsfwMediaIdsOf(map),
           promptId: AiToolCallState.promptIdOf(map),
           question: asked ?? prev?.question,
+          questions: askedGroup,
         );
         if (i == null) {
           indexOf[id] = out.length;
@@ -1740,6 +1827,7 @@ class AiToolCallState {
     List<int>? nsfwMediaIds,
     int? promptId,
     AiQuestion? question,
+    List<AiQuestion>? questions,
   }) =>
       AiToolCallState(
         callId: callId,
@@ -1754,6 +1842,7 @@ class AiToolCallState {
         nsfwMediaIds: nsfwMediaIds ?? this.nsfwMediaIds,
         promptId: promptId ?? this.promptId,
         question: question ?? this.question,
+        questions: questions ?? this.questions,
       );
 
   /// 待用户批准：气泡上要出「批准 / 拒绝」。

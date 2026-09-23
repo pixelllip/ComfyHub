@@ -262,46 +262,68 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 提问闸门是挂在 Run 里的（Run 还没结束），而 `sending` 只表示这次 Run 活着。
   AiQuestion? get pendingQuestion {
     AiQuestion? best;
-    void consider(AiToolCallState call) {
-      final q = call.question;
-      if (q == null || q.answered) return;
-      // 每轮只可能有一条在等（后端 `AskRegistry.pendingFor` 同语义）；取最后收到的那条。
-      best = q;
+    void consider(AiToolCallState call, {required bool byName}) {
+      // 名字只在流式那一条路上可靠（`tool.requested` 给的名字），历史消息里可能缺失 ——
+      // 所以第二遍兜底时**不看名字**，只看"有没有一条还没回答的提问"。
+      if (byName && call.name != 'ask_user_question') return;
+      for (final q in call.allQuestions) {
+        if (q.answered) continue;
+        // 同一张卡里取**题号最大**的那条（= 最后收到的一题）
+        if (best == null || q.index >= best!.index) best = q;
+      }
     }
 
     for (final list in _liveToolCalls.values) {
       for (final call in list) {
-        if (call.name == 'ask_user_question') consider(call);
+        consider(call, byName: true);
       }
     }
     if (best != null) return best;
     for (final m in messages) {
       for (final call in AiToolCallState.listFromParts(m.parts)) {
-        if (call.name == 'ask_user_question') consider(call);
+        consider(call, byName: true);
       }
     }
     if (best != null) return best;
     // 兜底：**不看名字**，只看"有没有一条还没回答的提问"。
-    // 名字只在流式那一条路上可靠（`tool.requested` 给的名字），历史消息里名字可能缺失 ——
     // 而"有没有问题"这个事实本身就够了（用户 bug 2026-09-21：输入区不接管）。
-    void considerAnywhere(AiToolCallState call) {
-      final q = call.question;
-      if (q == null || q.answered) return;
-      best = q;
-    }
-
     for (final list in _liveToolCalls.values) {
       for (final call in list) {
-        considerAnywhere(call);
+        consider(call, byName: false);
       }
     }
     if (best != null) return best;
     for (final m in messages) {
       for (final call in AiToolCallState.listFromParts(m.parts)) {
-        considerAnywhere(call);
+        consider(call, byName: false);
       }
     }
     return null;
+  }
+
+  /// **整张提问卡**：与 [pendingQuestion] 同一组（同 `groupId`）的所有题，按题号排。
+  ///
+  /// 多问改造（2026-09-22）之后，一次 `ask_user_question` 会生成 N 条同组的提问，
+  /// 后端的 `user.question` 也是**一题一条事件** —— 界面必须把这几条一起画成
+  /// "一张卡分 N 页"，否则第 2 题起就看不见，而模型那边要等**整组**答完（Run 挂到超时）。
+  List<AiQuestion> get pendingQuestions {
+    final one = pendingQuestion;
+    if (one == null) return const [];
+    List<AiQuestion> groupOf(AiToolCallState call) =>
+        call.allQuestions.where((q) => q.key == one.key).toList();
+    for (final list in _liveToolCalls.values) {
+      for (final call in list) {
+        final g = groupOf(call);
+        if (g.isNotEmpty) return g;
+      }
+    }
+    for (final m in messages) {
+      for (final call in AiToolCallState.listFromParts(m.parts)) {
+        final g = groupOf(call);
+        if (g.isNotEmpty) return g;
+      }
+    }
+    return [one];
   }
 
   // -----------------------------------------------------------------------
@@ -766,13 +788,12 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 拿不到 callId（历史消息里答过了）就退回 questionId。
       _patchToolCall(
         _liveAskCallIdHere() ?? questionId,
-        (call) => call.copyWith(
-          status: AiToolCallStatus.ok,
-          question: call.question?.copyWith(
-            answered: true,
-            answer: text ?? (optionIndex != null ? call.question?.options.elementAtOrNull(optionIndex) : null),
-            optionIndex: optionIndex,
-          ),
+        (call) => _applyLocalAnswer(
+          call,
+          questionId,
+          answer: text ??
+              (optionIndex != null ? call.question?.options.elementAtOrNull(optionIndex) : null),
+          optionIndex: optionIndex,
         ),
       );
       notifyListeners();
@@ -788,16 +809,49 @@ class AiWorkspaceStore extends ChangeNotifier {
       await _api.skipQuestion(questionId);
       _patchToolCall(
         _liveAskCallIdHere() ?? questionId,
-        (call) => call.copyWith(
-          status: AiToolCallStatus.ok,
-          question: call.question?.copyWith(answered: true, answer: ''),
-        ),
+        (call) => _applyLocalAnswer(call, questionId, answer: ''),
       );
       notifyListeners();
       return (ok: true, message: '已跳过');
     } catch (e) {
       return (ok: false, message: '跳过失败：$e');
     }
+  }
+
+  /// 本地把某**一题**标成"已回答"（同一张卡里别的题不动）。
+  ///
+  /// 多问改造（2026-09-22）：一张卡有 N 题，必须先全部答完 / 跳过才收卡片 ——
+  /// 所以整卡的 `status` 只在**最后一题**落定后才变 `ok`；提前变会让输入区
+  /// 在还剩几题没答的时候就让位给普通输入框（模型那边可还在等）。
+  static AiToolCallState _applyLocalAnswer(
+    AiToolCallState call,
+    String questionId, {
+    required String? answer,
+    int? optionIndex,
+  }) {
+    final group = call.allQuestions;
+    if (group.isEmpty) return call;
+    AiQuestion mark(AiQuestion q) => q.questionId == questionId
+        ? q.copyWith(answered: true, answer: answer, optionIndex: optionIndex)
+        : q;
+    final next = group.map(mark).toList();
+    final allDone = next.every((q) => q.answered);
+    return call.copyWith(
+      questions: next,
+      question: mark(call.question ?? next.first),
+      status: allDone ? AiToolCallStatus.ok : call.status,
+    );
+  }
+
+  /// 这个 `ask_user_question` 调用**还在等用户回答**吗。
+  ///
+  /// ⚠ 空 `questions` 也算"还在等"：`tool.requested` 先到、问题后到，那段窗口里
+  /// 卡片上还没有任何题 —— 把它算成"答完了"会让提问卡挂到 `questionId` 上另开一条
+  /// （用户 bug 2026-09-21 的根因，就这么复发的）。
+  static bool _askPending(AiToolCallState call) {
+    if (call.name != 'ask_user_question') return false;
+    final qs = call.allQuestions;
+    return qs.isEmpty || qs.any((q) => !q.answered);
   }
 
   /// 当前所有消息里那个"还在等回答"的 `ask_user_question` 调用号。
@@ -807,7 +861,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   String? _liveAskCallIdHere() {
     for (final list in _liveToolCalls.values) {
       for (final call in list) {
-        if (call.name == 'ask_user_question' && call.question?.answered != true) return call.callId;
+        if (_askPending(call)) return call.callId;
       }
     }
     return null;
@@ -1433,7 +1487,14 @@ class AiWorkspaceStore extends ChangeNotifier {
                 name: 'ask_user_question',
                 status: AiToolCallStatus.pendingApproval,
                 // 把调用号一起记进问题里：答题 / 切状态都要按它定位
-                question: q.copyWith(callId: askCallId),
+                // 多问（2026-09-22）：一题一条事件、都挂同一个 `callId`，
+                // 必须**并进同一张卡**；只留最后一条会把前面的题顶掉。
+                questions: AiToolCallState.mergeQuestions(
+                  prev?.questions ?? const [],
+                  q.copyWith(callId: askCallId),
+                ),
+                // `question` 仍是**第一条**（历史回放与旧用例照旧读它）
+                question: prev?.question ?? q.copyWith(callId: askCallId),
                 // 卡片要画在正确的位置：与工具卡一样，第一次见到就记进实时段
                 arguments: (prev?.arguments ?? '').isEmpty
                     ? '{"question":"${q.question}"}'
@@ -1446,13 +1507,11 @@ class AiWorkspaceStore extends ChangeNotifier {
             if (qid.isEmpty) break;
             final ans = event.data['answer']?.toString() ?? '';
             final idx = (event.data['optionIndex'] as num?)?.toInt();
-            // 提问卡按 **callId**（拿不到才退回 questionId）更新：答完 → 卡片切成"已回答"
+            // 提问卡按 **callId**（拿不到才退回 questionId）更新：答完 → 卡片切成"已回答"。
+            // 多问时只标**这一题**：整张卡要等最后一题答完才收（否则输入区会提前让位）。
             _patchToolCall(
               _liveAskCallId(assistantMessageId) ?? qid,
-              (call) => call.copyWith(
-                status: AiToolCallStatus.ok,
-                question: call.question?.copyWith(answered: true, answer: ans, optionIndex: idx),
-              ),
+              (call) => _applyLocalAnswer(call, qid, answer: ans, optionIndex: idx),
             );
             _notifyNow();
           case 'tool.completed':
@@ -1808,7 +1867,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 两个 id 不是一回事，混用就会出现"工具卡一直运行中、输入区不接管"。
   String? _liveAskCallId(String messageId) {
     for (final call in _liveToolCalls[messageId] ?? const <AiToolCallState>[]) {
-      if (call.name == 'ask_user_question' && call.question?.answered != true) return call.callId;
+      if (_askPending(call)) {
+        return call.callId;
+      }
     }
     return null;
   }

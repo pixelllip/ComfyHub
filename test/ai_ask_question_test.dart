@@ -31,6 +31,11 @@ const _questionId = 'q-1';
 const _question = '这次用哪张参考图？';
 const _options = ['用附件里的那张猫', '用上一轮的图'];
 
+/// 同一张卡里的第 2、3 题（多问改造，2026-09-22）。
+const _q2 = 'q-2';
+const _q3 = 'q-3';
+const _q2Options = ['1024x1536', '1536x1024'];
+
 /// 按真实 SSE 格式拼事件（冒号后必须有空格）。
 String _sse(int seq, String type, String dataJson) =>
     'id: $seq\nevent: $type\ndata: $dataJson\n\n';
@@ -68,6 +73,40 @@ String _askPayload({required bool nested}) {
 /// 与 `user.question` 里的 `questionId` **不是同一个值** ——
 /// 2026-09-21 的 bug 就出在这里：提问卡被挂在 `questionId` 这个键上，
 /// 于是 `pendingQuestion` 在 `callId` 那条上找不到问题，输入区永远不接管。
+/// 一卡多题（2026-09-22）：一次调用发**一题一条** `user.question`，都挂同一个 `callId`。
+String _pagedPayload() {
+  Map<String, dynamic> q(
+    String id,
+    String text, {
+    required int index,
+    List<String> options = const [],
+    bool multi = false,
+    String? header,
+  }) =>
+      {
+        'questionId': id,
+        'runId': 'r1',
+        'conversationId': 'c1',
+        'question': text,
+        if (header != null) 'header': header,
+        'options': options,
+        'allowFreeText': true,
+        'answered': false,
+        'askedAt': 1,
+        'index': index,
+        'total': 3,
+        'groupId': 'g-1',
+        'multiSelect': multi,
+      };
+
+  return _sse(3, 'user.question',
+          jsonEncode({'runId': 'r1', 'question': q(_questionId, _question, index: 0, options: _options, header: '参考图')})) +
+      _sse(4, 'user.question',
+          jsonEncode({'runId': 'r1', 'question': q(_q2, '出多大？', index: 1, options: _q2Options, multi: true, header: '输出尺寸')})) +
+      _sse(5, 'user.question',
+          jsonEncode({'runId': 'r1', 'question': q(_q3, '还有别的要交代的吗？', index: 2, header: '备注')}));
+}
+
 String _askToolEvents() => _sse(
       1,
       'tool.requested',
@@ -84,12 +123,12 @@ String _askToolEvents() => _sse(
 const _callId = 'call_00_w3oy2hgdwhoanKYvvw2Y8083';
 
 /// 事件体的拼装（抽出来是为了在用例里能断言"假后端真的发了这些事件"）。
-String _body({bool nested = true}) =>
+String _body({bool nested = true, bool paged = false}) =>
     _sse(0, 'run.started', '{"runId":"r1"}') +
     _sse(1, 'message.started', '{"messageId":"a1"}') +
     // 真事件的顺序：tool.requested → tool.started → user.question
     _askToolEvents() +
-    _sse(3, 'user.question', _askPayload(nested: nested)) +
+    (paged ? _pagedPayload() : _sse(3, 'user.question', _askPayload(nested: nested))) +
     _askCompleted();
 
 /// Run 收尾时的落库形态（parts 里那条 `tool_call` + `tool_result`）：
@@ -139,6 +178,9 @@ String _askCompleted() => _sse(
 class _Fake {
   /// true = 用**老的平铺形状**发 `user.question`（回归用）。
   bool flatQuestionPayload = false;
+
+  /// true = 一次问 **3 题**（一张卡分页；第 2 题是多选）。
+  bool paged = false;
 
   List<Map<String, dynamic>> _messages() => [
         {
@@ -219,16 +261,19 @@ class _Fake {
           // `_consumeRun` 在 `user.question` 那条上就挂住等用户回答了。
           return http.Response.bytes(
             utf8.encode(
-              _body(nested: !flatQuestionPayload),
+              _body(nested: !flatQuestionPayload, paged: paged),
             ),
             200,
             headers: {'content-type': 'text/event-stream; charset=utf-8'},
           );
-        } else if (path == '/api/ai/questions/$_questionId/answer') {
-          answered.add(jsonDecode(request.body) as Map<String, dynamic>);
+        } else if (path.startsWith('/api/ai/questions/') && path.endsWith('/answer')) {
+          answered.add({
+            'id': path.split('/')[4],
+            ...jsonDecode(request.body) as Map<String, dynamic>,
+          });
           body = {'accepted': true};
-        } else if (path == '/api/ai/questions/$_questionId/skip') {
-          skipped.add(_questionId);
+        } else if (path.startsWith('/api/ai/questions/') && path.endsWith('/skip')) {
+          skipped.add(path.split('/')[4]);
           body = {'accepted': true};
         } else if (path == '/api/ai/runs/r1/question') {
           body = {'pending': false};
@@ -247,6 +292,7 @@ Future<AiWorkspaceStore> _openAsk(
   WidgetTester tester,
   _Fake fake, {
   Size size = const Size(1400, 1200),
+  String expectedQuestionId = _questionId,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
@@ -270,7 +316,7 @@ Future<AiWorkspaceStore> _openAsk(
   unawaited(store.send('帮我生一张图'));
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 50));
-  expect(store.pendingQuestion?.questionId, _questionId, reason: '事件到了就该进"等你回答"状态');
+  expect(store.pendingQuestion?.questionId, expectedQuestionId, reason: '事件到了就该进"等你回答"状态');
   return store;
 }
 
@@ -292,7 +338,7 @@ void main() {
     expect(find.byKey(const Key('ask-composer-option-0')), findsOneWidget);
     expect(find.byKey(const Key('ask-composer-option-1')), findsOneWidget);
     expect(find.byKey(const Key('ask-answer-field')), findsOneWidget);
-    expect(find.text('跳过这个问题'), findsOneWidget);
+    expect(find.text('跳过本题'), findsOneWidget);
     // 注意：这里**不**断言「停止生成」——那条只在 Run 还活着时画，
     // 而这个假后端的流已经把它后面的 run.completed 一起给了（见 `_Fake` 的注释）。
   });
@@ -340,7 +386,7 @@ void main() {
 
     expect(find.text('自己输入答案（Enter 提交）'), findsOneWidget);
     expect(find.byKey(const Key('ask-answer-submit')), findsOneWidget);
-    expect(find.text('跳过这个问题'), findsOneWidget);
+    expect(find.text('跳过本题'), findsOneWidget);
   });
 
   testWidgets('点选项即答：POST 带 optionIndex，答完输入区让位', (tester) async {
@@ -382,10 +428,10 @@ void main() {
     expect(find.byKey(const Key('ask-answer-field')), findsOneWidget);
   });
 
-  testWidgets('跳过这个问题：POST .../skip', (tester) async {
+  testWidgets('跳过本题：POST .../skip', (tester) async {
     final store = await _openAsk(tester, _Fake());
 
-    await tester.tap(find.text('跳过这个问题').first);
+    await tester.tap(find.byKey(const Key('ask-skip-current')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
@@ -400,6 +446,92 @@ void main() {
 
     expect(find.byKey(const Key('ask-answer-field')), findsOneWidget);
     expect(find.byKey(const Key('ask-answer-submit')), findsOneWidget);
-    expect(find.text('跳过这个问题'), findsWidgets);
+    expect(find.text('跳过本题'), findsWidgets);
+  });
+
+  // ---- 多问改造（2026-09-22，用户给的 DSH 形态）--------------------------------
+  // 一张卡装多题、分页、「最后一页按钮变提交」、多选题画复选框、
+  // 答案可为空（空着的那题按"跳过"发 = 告诉模型"用户没回答"）。
+
+  testWidgets('一卡三题：分页「第 N/M 题」，最后一页按钮变「提交」，逐题作答', (tester) async {
+    final store = await _openAsk(tester, _Fake()..paged = true,
+        size: const Size(1400, 1400), expectedQuestionId: _q3);
+
+    // 第 1 题（单选）
+    expect(find.text('第 1/3 题'), findsOneWidget);
+    expect(find.text('下一题'), findsOneWidget, reason: '中间页的按钮是「下一题」，不是「提交」');
+    await tester.tap(find.byKey(const Key('ask-composer-option-1')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('ask-answer-submit')));
+    await tester.pump();
+
+    // 第 2 题（多选）
+    expect(find.text('第 2/3 题'), findsOneWidget);
+    expect(find.text('可多选（选完按「下一题」）'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('ask-composer-option-0')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('ask-composer-option-1')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('ask-answer-submit')));
+    await tester.pump();
+
+    // 第 3 题（没有选项、什么都不填）→ 最后一页
+    expect(find.text('第 3/3 题'), findsOneWidget);
+    expect(find.text('提交'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('ask-answer-submit')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // 逐题发回：第 1 题 optionIndex、第 2 题多选拼成文字、第 3 题空答案 → skip
+    expect(answered.map((e) => e['id']).toList(), [_questionId, _q2]);
+    expect(answered[0]['optionIndex'], 1);
+    expect(answered[1]['answer'], '1024x1536、1536x1024');
+    expect(skipped, [_q3], reason: '空答案按"跳过"发 —— 模型要知道"用户没回答"，不是"没问过"');
+    expect(store.pendingQuestion, isNull, reason: '整卡答完才收起；只答一题就收会让模型白等');
+  });
+
+  testWidgets('上一题：翻回去还能改，答案跟着题走', (tester) async {
+    await _openAsk(tester, _Fake()..paged = true,
+        size: const Size(1400, 1400), expectedQuestionId: _q3);
+
+    await tester.tap(find.byKey(const Key('ask-answer-submit'))); // 到第 2 题
+    await tester.pump();
+    expect(find.text('第 2/3 题'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('ask-prev-page')));
+    await tester.pump();
+    expect(find.text('第 1/3 题'), findsOneWidget);
+
+    // 第 1 题选一个再往前走：第 1 题答的是选项、第 2 题什么都不选
+    await tester.tap(find.byKey(const Key('ask-composer-option-0')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('ask-answer-submit')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('ask-answer-submit')));
+    await tester.pump();
+    expect(find.text('第 3/3 题'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('ask-answer-submit')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(answered.single['id'], _questionId);
+    expect(answered.single['optionIndex'], 0);
+    // 第 2 题没作答 → 跳过
+    expect(skipped, contains(_q2));
+    expect(skipped, contains(_q3));
+  });
+
+  testWidgets('逐题跳过：跳过本题只收当前那一题，卡片继续等下一题', (tester) async {
+    final store = await _openAsk(tester, _Fake()..paged = true,
+        size: const Size(1400, 1400), expectedQuestionId: _q3);
+
+    expect(find.text('第 1/3 题'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('ask-skip-current')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(skipped, [_questionId]);
+    expect(store.pendingQuestion, isNotNull, reason: '还有两题没答，卡片不能收');
+    expect(find.text('第 2/3 题'), findsOneWidget, reason: '跳完自动翻到下一道没作答的题');
   });
 }

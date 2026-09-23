@@ -447,10 +447,10 @@ class _Thread extends StatelessWidget {
         // 底下这块整个换成提问卡（选项 + 自己输入 + 跳过），而不是在普通输入框
         // 上面再摞一张卡 —— 那样用户会不知道"该往哪儿打字"。
         // 答完（或跳过）`pendingQuestion` 变 null，普通输入框自动回来。
-        if (store.pendingQuestion case final question?)
+        if (store.pendingQuestions case final questions when questions.isNotEmpty)
           _AskComposer(
             store: store,
-            question: question,
+            questions: questions,
             onSubmit: (text) => onSubmitted(store, text),
           )
         else
@@ -1115,10 +1115,11 @@ class _MessageBubble extends StatelessWidget {
         padding: const EdgeInsets.only(top: 8),
         // 提问（用户建议 ⑥）画的**不是工具卡而是提问卡**：一个是"等你批准"，
         // 一个是"等你回答"，混在一起用户会以为点了就等于批准。
-        child: call.question != null
+        child: call.allQuestions.isNotEmpty
             ? _AskCard(
                 key: ValueKey('${message.id}-${call.callId}'),
-                question: call.question!,
+                // 整张卡（同组的所有题）——多问改造后只给一题会让别的题在界面上消失
+                questions: call.allQuestions,
                 onAnswer: onAnswerQuestion,
                 onSkip: onSkipQuestion,
                 // "自己输入答案"那一行把焦点交给底部被接管的输入框（用户 bug 2026-09-21）
@@ -1383,7 +1384,11 @@ class _MessageBubble extends StatelessWidget {
 /// 用户答完之后卡片**不消失**，而是切成"已回答"—— 历史里一眼能看出这一轮
 /// 是基于什么信息做的（与工具卡一样，都是这条回复的上下文）。
 class _AskCard extends StatefulWidget {
-  final AiQuestion question;
+  /// **整张卡**：同一次 `ask_user_question` 问的所有题（至少一条，按题号排）。
+  ///
+  /// 多问改造（2026-09-22）之前这里只有一条；只画第一条会让剩下的题在界面上
+  /// 凭空消失（用户以为只问了一件事，模型却在等 N 个答案）。
+  final List<AiQuestion> questions;
   final Future<bool> Function(String questionId, {int? optionIndex, String? text}) onAnswer;
   final Future<bool> Function(String questionId) onSkip;
 
@@ -1392,11 +1397,14 @@ class _AskCard extends StatefulWidget {
 
   const _AskCard({
     super.key,
-    required this.question,
+    required this.questions,
     required this.onAnswer,
     required this.onSkip,
     required this.onFocusAnswer,
   });
+
+  /// 第一条：单题形态与标题都读它。
+  AiQuestion get question => questions.first;
 
   @override
   State<_AskCard> createState() => _AskCardState();
@@ -1451,8 +1459,11 @@ class _AskCardState extends State<_AskCard> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final q = widget.question;
-    final answered = q.answered;
+    // 整张卡都答完了才算"已回答"（一卡多题时逐题答，只答一题还写着已回答会误导）
+    final answered = widget.questions.every((x) => x.answered);
     final color = answered ? theme.colorScheme.primary : theme.colorScheme.tertiary;
+    // 一卡多题：气泡里这张卡只当**记录**（题目 + 答案），作答入口是底部那块。
+    final paged = widget.questions.length > 1;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -1480,7 +1491,9 @@ class _AskCardState extends State<_AskCard> {
                 const SizedBox(width: 6),
                 Flexible(
                   child: Text(
-                    q.header?.isNotEmpty == true ? q.header! : 'AI 想确认一件事',
+                    q.header?.isNotEmpty == true
+                        ? q.header!
+                        : (paged ? 'AI 想问 ${widget.questions.length} 件事' : 'AI 想确认一件事'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.labelMedium?.copyWith(color: color),
@@ -1510,12 +1523,22 @@ class _AskCardState extends State<_AskCard> {
           ),
           ),
           const SizedBox(height: 6),
-          Text(q.question, style: theme.textTheme.bodyMedium),
           // 折叠态 = 图二那种"一条记录"：头部 + 问题（+ 答案）就够，
           // **不再把选项画一遍** —— 提问期间能点的那份在底部被接管的输入区里。
-          if (!_expanded) ...[
-            if (answered) ...[
-              const SizedBox(height: 6),
+          // 一卡多题时**逐题**列出来（题号 + 文字，答过的把答案跟在后面）：
+          // 折起来也不能让某一题消失，否则用户根本不知道模型问了 N 件事。
+          for (var i = 0; i < widget.questions.length; i++) ...[
+            if (i > 0) const SizedBox(height: 6),
+            if (paged) ...[
+              Text(
+                '第 ${i + 1} 题',
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+              const SizedBox(height: 2),
+            ],
+            Text(widget.questions[i].question, style: theme.textTheme.bodyMedium),
+            if (widget.questions[i].answered) ...[
+              const SizedBox(height: 2),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1523,14 +1546,25 @@ class _AskCardState extends State<_AskCard> {
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      (q.answer ?? '').isEmpty ? '（已跳过，没有回答）' : q.answer!,
+                      (widget.questions[i].answer ?? '').isEmpty
+                          ? '（已跳过，没有回答）'
+                          : widget.questions[i].answer!,
                       style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
                     ),
                   ),
                 ],
               ),
             ],
-          ] else ...[
+          ],
+          if (_expanded && paged) ...[
+            const SizedBox(height: 6),
+            // 多题卡不在气泡里再画一遍选项：作答入口只有底部那一块（一张卡分页），
+            // 两边都放会让人不知道该往哪儿点（用户 bug 2026-09-21 的原话）。
+            Text(
+              '在下面的答题卡里按「第 N/M 题」逐题作答，也可以逐题跳过。',
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+          ] else if (_expanded) ...[
             // 展开态（只放**慢答案**：选项按钮 + 跳过）。
             // 打字那条路永远在底部输入区，这里不重复放输入框。
             for (var i = 0; i < q.options.length; i++) ...[
@@ -1681,19 +1715,29 @@ class _AskOptionRow extends StatelessWidget {
 /// 底下给"跳过 / 停止"。它是**唯一的**作答入口，所以不会出现
 /// "气泡里一个输入框、底下又一个输入框，不知道往哪儿写"。
 ///
+/// 多问改造（2026-09-22，用户拍板的形态）：一次 `ask_user_question` 可以问**最多 5 题**，
+/// 界面是**一张卡分页**：
+///  · 顶上一行写「第 N/M 题」；
+///  · 底行是「上一题 / 跳过本题 / 下一题」，**最后一页**那个按钮变成「提交」；
+///  · `multiSelect` 的题画复选框（选项上限 5），每题都保留"自己输入"；
+///  · **答案可以为空**：整卡提交时没作答的题按"跳过"发（= 告诉模型"用户没回答"，
+///    不是"没问过"）。一题一页地答完才收卡片 —— 只答一题就走会让模型白等剩下的。
+///
 /// 与气泡里那张提问卡的分工：
 ///  · 卡片 = 记录（问过什么、答了什么，跟着这条回复走）；
 ///  · 这里 = 作答（现在就要做的决定，问完自动让位给普通输入框）。
 class _AskComposer extends StatefulWidget {
   final AiWorkspaceStore store;
-  final AiQuestion question;
+
+  /// 整张卡：同一组（同 `groupId`）的**所有**题，按题号排。至少一条。
+  final List<AiQuestion> questions;
 
   /// 答完之后把这句当普通消息发出去（可选题外补充）；返回是否真的发出去了。
   final Future<void> Function(String text) onSubmit;
 
   const _AskComposer({
     required this.store,
-    required this.question,
+    required this.questions,
     required this.onSubmit,
   });
 
@@ -1702,51 +1746,132 @@ class _AskComposer extends StatefulWidget {
 }
 
 class _AskComposerState extends State<_AskComposer> {
-  final TextEditingController _controller = TextEditingController();
+  /// 每一题一个文本框（翻页来回切也不丢已打的字）。
+  final Map<String, TextEditingController> _texts = {};
+
+  /// 单选题选了第几个（按 questionId）。
+  final Map<String, int> _single = {};
+
+  /// 多选题勾了哪几个（按 questionId）。
+  final Map<String, Set<int>> _multi = {};
+
+  /// 当前第几页（0 基）。
+  int _page = 0;
   bool _busy = false;
+
+  /// **本地**这一轮已经处理过的题（跳过 / 提交过的）。
+  ///
+  /// 父层拿新状态重建本组件要到下一帧；`_skipCurrent` 里立刻问 `widget.questions`
+  /// 会读到**还没更新**的那份（刚跳过的那题还写着"没答"），于是"下一道没作答的题"
+  /// 又算回它自己 —— 实测就是这个：跳完停在原页不动。所以自己记一份。
+  final Set<String> _done = {};
 
   @override
   void dispose() {
-    _controller.dispose();
+    for (final c in _texts.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
-  Future<void> _answer({int? optionIndex, String? text}) async {
+  TextEditingController _controllerOf(AiQuestion q) =>
+      _texts.putIfAbsent(q.questionId, TextEditingController.new);
+
+  /// 当前页（自动夹在当前题数里：跳过的题会让整卡变短，`_page` 可能越界）。
+  int get _pageIndex => _page.clamp(0, widget.questions.length - 1);
+
+  bool get _isLast => _pageIndex >= widget.questions.length - 1;
+
+  /// 多选题的答案拼成一段文字发回去。
+  ///
+  /// 后端那条回答接口只收**一个** `optionIndex`（多选的 `optionIndexes` 还没开在 HTTP 上），
+  /// 而模型拿到的本来就是"用户说了什么"这段文字 —— 所以多选拼成「A、B」发，
+  /// 不为了一个结构化字段去改已经跑通的后端合同。
+  String _joinedOptions(AiQuestion q, Set<int> picked) {
+    final idx = picked.toList()..sort();
+    return idx.where((i) => i >= 0 && i < q.options.length).map((i) => q.options[i]).join('、');
+  }
+
+  /// 单问时点选项**当场作答**（保持 2026-09-21 定下的手感，也是老用例钉住的）。
+  Future<void> _answerNow(AiQuestion q, {int? optionIndex, String? text}) async {
     if (_busy) return;
     setState(() => _busy = true);
-    final r = await widget.store.answerQuestion(
-      widget.question.questionId,
-      optionIndex: optionIndex,
-      text: text,
-    );
+    final r = await widget.store.answerQuestion(q.questionId, optionIndex: optionIndex, text: text);
     if (!mounted) return;
     setState(() => _busy = false);
     if (!r.ok) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r.message)));
       return;
     }
-    _controller.clear();
     widget.store.pendingQuestionFocus.unfocus();
   }
 
-  Future<void> _skip() async {
+  /// 跳过**当前这一题**（后端当作"用户没有回答"放行，模型基于已有信息继续）。
+  Future<void> _skipCurrent() async {
     if (_busy) return;
+    final q = widget.questions[_pageIndex];
     setState(() => _busy = true);
-    final r = await widget.store.skipQuestion(widget.question.questionId);
+    final r = await widget.store.skipQuestion(q.questionId);
     if (!mounted) return;
     setState(() => _busy = false);
     if (!r.ok) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r.message)));
+      return;
     }
+    // 跳到下一道**还没作答**的题；没有了就停在原地（整卡答完时这块会被收起）
+    _done.add(q.questionId);
+    final next = widget.questions
+        .indexWhere((x) => !x.answered && !_done.contains(x.questionId));
+    if (next >= 0) setState(() => _page = next);
   }
 
-  Future<void> _submitTyped() async {
-    final text = _controller.text.trim();
-    if (text.isEmpty || _busy) return;
-    await _answer(text: text);
+  /// 翻页。
+  void _go(int delta) {
+    final next = (_pageIndex + delta).clamp(0, widget.questions.length - 1);
+    if (next != _pageIndex) setState(() => _page = next);
   }
 
-  /// Enter 直接提交，Shift+Enter 换行。
+  /// 提交整张卡：逐题把答案发回去；**没作答的题按"跳过"发**（答案可以为空）。
+  ///
+  /// 顺序发（不并发）：后端那几题的等待是同一组，逐条发才有"已答 / 已跳过"的确定顺序，
+  /// 出了错也知道停在哪一题。
+  Future<void> _submit() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final store = widget.store;
+    String? failed;
+    for (final q in widget.questions) {
+      if (q.answered) continue; // 之前已经跳过 / 答过的题不再发一遍
+      final text = (_texts[q.questionId]?.text ?? '').trim();
+      final picked = _multi[q.questionId] ?? const <int>{};
+      final single = _single[q.questionId];
+      final bool ok;
+      if (text.isNotEmpty) {
+        ok = (await store.answerQuestion(q.questionId, text: text)).ok;
+      } else if (q.multiSelect && picked.isNotEmpty) {
+        ok = (await store.answerQuestion(q.questionId, text: _joinedOptions(q, picked))).ok;
+      } else if (single != null) {
+        ok = (await store.answerQuestion(q.questionId, optionIndex: single)).ok;
+      } else {
+        // 这一题用户什么也没选：按"跳过"发 —— 模型会如实说缺什么，不会假装他答了
+        ok = (await store.skipQuestion(q.questionId)).ok;
+      }
+      if (!ok) {
+        failed ??= '有一条回答没有被采纳（超时或本次回答已停止）。';
+      } else {
+        _done.add(q.questionId);
+      }
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (failed != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(failed)));
+      return;
+    }
+    store.pendingQuestionFocus.unfocus();
+  }
+
+  /// Enter：**最后一页**提交整卡，中间页翻到下一题；Shift+Enter 换行。
   ///
   /// 必须拦在**文本字段外面**：多行 `TextField` 自己没有"Enter 提交"这个动作
   /// （`onSubmitted` 在 `maxLines > 1` 时根本不会触发），而用户对答题框的直觉
@@ -1758,7 +1883,11 @@ class _AskComposerState extends State<_AskComposer> {
     if (!isEnter) return KeyEventResult.ignored;
     final shift = HardwareKeyboard.instance.isShiftPressed;
     if (shift) return KeyEventResult.ignored; // Shift+Enter：交给文本框换行
-    unawaited(_submitTyped());
+    if (_isLast) {
+      unawaited(_submit());
+    } else {
+      _go(1);
+    }
     return KeyEventResult.handled;
   }
 
@@ -1766,8 +1895,19 @@ class _AskComposerState extends State<_AskComposer> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final store = widget.store;
-    final q = widget.question;
-    final hasText = _controller.text.trim().isNotEmpty;
+    final qs = widget.questions;
+    final page = _pageIndex;
+    final q = qs[page];
+    final total = qs.length;
+    final paged = total > 1;
+    final answered = q.answered;
+    final picked = _multi[q.questionId] ?? const <int>{};
+    final single = _single[q.questionId];
+    final controller = _controllerOf(q);
+    final hasText = controller.text.trim().isNotEmpty;
+    // 最后一页那个按钮：多题卡**随时可交**（没作答的题按跳过发，答案可以为空）；
+    // 单题卡保持老手感 —— 得先打点字 / 勾一个才让它变亮。
+    final canSubmit = paged ? true : (hasText || (q.multiSelect && picked.isNotEmpty));
     // "自己输入答案"那一行本身就是个输入框：点它 = 把焦点给它。
     final focus = store.pendingQuestionFocus;
 
@@ -1812,8 +1952,10 @@ class _AskComposerState extends State<_AskComposer> {
                       ),
                     ),
                     const Spacer(),
+                    // 多题卡要一眼看出"还有几题"（用户给的 DSH 形态就是「第 N/M 题」）
                     Text(
-                      '等你回答',
+                      paged ? '第 ${page + 1}/$total 题' : '等你回答',
+                      key: const Key('ask-page-indicator'),
                       style: theme.textTheme.labelSmall
                           ?.copyWith(color: theme.colorScheme.tertiary),
                     ),
@@ -1821,6 +1963,23 @@ class _AskComposerState extends State<_AskComposer> {
                 ),
                 const SizedBox(height: 6),
                 Text(q.question, style: theme.textTheme.bodyMedium),
+                if (q.multiSelect)
+                  Text(
+                    '可多选${q.options.isEmpty ? '' : '（选完按「${paged ? (_isLast ? '提交' : '下一题') : '提交'}」）'}',
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: theme.colorScheme.outline),
+                  ),
+                if (answered)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      (q.answer ?? '').isEmpty
+                          ? '（这一题已跳过：模型会当作"用户没有回答"）'
+                          : '已作答：${q.answer}',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.primary),
+                    ),
+                  ),
                 // 选项多 / 问题长时**只有选项那段**内部滚动（240 上限），
                 // "自己输入答案"排在它下面、永远看得见
                 ConstrainedBox(
@@ -1837,9 +1996,38 @@ class _AskComposerState extends State<_AskComposer> {
                             key: Key('ask-composer-option-$i'),
                             index: i,
                             label: q.options[i],
-                            selected: q.optionIndex == i,
-                            enabled: !_busy,
-                            onTap: () => _answer(optionIndex: i),
+                            // 多选题画复选框（勾了哪几个），单选画单选高亮
+                            selected: q.multiSelect ? picked.contains(i) : single == i,
+                            enabled: !_busy && !answered,
+                            trailing: q.multiSelect
+                                ? Icon(
+                                    picked.contains(i)
+                                        ? Icons.check_box
+                                        : Icons.check_box_outline_blank,
+                                    size: 18,
+                                    color: picked.contains(i)
+                                        ? theme.colorScheme.primary
+                                        : theme.colorScheme.outline,
+                                  )
+                                : null,
+                            onTap: () {
+                              // 单问单选的**老手感**：点一下即答，不再要求按提交
+                              if (!paged && !q.multiSelect) {
+                                unawaited(_answerNow(q, optionIndex: i));
+                                return;
+                              }
+                              setState(() {
+                                if (q.multiSelect) {
+                                  final set = _multi.putIfAbsent(q.questionId, () => <int>{});
+                                  set.contains(i) ? set.remove(i) : set.add(i);
+                                  // 多选题：勾了选项就把手打的字清掉（两条路只能走一条）
+                                  _controllerOf(q).clear();
+                                } else {
+                                  _single[q.questionId] = i;
+                                  _controllerOf(q).clear();
+                                }
+                              });
+                            },
                           ),
                         ],
                       ],
@@ -1848,23 +2036,35 @@ class _AskComposerState extends State<_AskComposer> {
                 ),
                 // --- 最后一行：固定"自己输入答案"（用户 bug 2026-09-21）---
                 const SizedBox(height: 6),
-                _customAnswerRow(theme, focus, hasText),
+                _customAnswerRow(theme, focus, controller, q, paged),
               ],
             ),
           ),
           const SizedBox(height: 8),
-          // 底行：左"跳过这个问题"，右"停止生成"。
+          // 底行：左"跳过本题"（多题卡再加"上一题"），右"下一题 / 提交" + "停止生成"。
           // 两条退路都必须有：跳过让模型带着已有信息继续；停止则直接收掉这一轮。
           Row(
             children: [
+              if (paged)
+                TextButton(
+                  key: const Key('ask-prev-page'),
+                  onPressed: (_busy || page == 0) ? null : () => _go(-1),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 32),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('上一题'),
+                ),
               TextButton(
-                onPressed: _busy ? null : _skip,
+                key: const Key('ask-skip-current'),
+                onPressed: _busy ? null : _skipCurrent,
                 style: TextButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   minimumSize: const Size(0, 32),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                child: const Text('跳过这个问题'),
+                child: const Text('跳过本题'),
               ),
               const Spacer(),
               if (store.running)
@@ -1878,6 +2078,27 @@ class _AskComposerState extends State<_AskComposer> {
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                 ),
+              const SizedBox(width: 4),
+              // 最后一页就是「提交」（用户给的形态）；中间页是「下一题」。
+              // ⚠ key 固定为 `ask-answer-submit`：它在单题卡上仍然就是"提交"那个按钮。
+              FilledButton(
+                key: const Key('ask-answer-submit'),
+                onPressed: (_busy || !canSubmit)
+                    ? null
+                    : () {
+                        if (_isLast) {
+                          unawaited(_submit());
+                        } else {
+                          _go(1);
+                        }
+                      },
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  minimumSize: const Size(0, 36),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(_isLast ? '提交' : '下一题'),
+              ),
             ],
           ),
         ],
@@ -1886,7 +2107,13 @@ class _AskComposerState extends State<_AskComposer> {
   }
 
   /// 最后一行：序号接着选项往下数，标签固定"自己输入答案"。
-  Widget _customAnswerRow(ThemeData theme, FocusNode focus, bool hasText) {
+  Widget _customAnswerRow(
+    ThemeData theme,
+    FocusNode focus,
+    TextEditingController controller,
+    AiQuestion q,
+    bool paged,
+  ) {
     final outline = theme.colorScheme.outline;
     return Material(
       color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
@@ -1912,7 +2139,7 @@ class _AskComposerState extends State<_AskComposer> {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                '${widget.question.options.length + 1}',
+                '${q.options.length + 1}',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                   fontWeight: FontWeight.w600,
@@ -1926,33 +2153,20 @@ class _AskComposerState extends State<_AskComposer> {
                 onKeyEvent: _onKey,
                 child: TextField(
                   key: const Key('ask-answer-field'),
-                  controller: _controller,
+                  controller: controller,
                   focusNode: focus,
-                  enabled: !_busy,
+                  enabled: !_busy && !q.answered,
                   minLines: 1,
                   maxLines: 4,
                   onChanged: (_) => setState(() {}),
                   decoration: InputDecoration(
                     isDense: true,
                     border: InputBorder.none,
-                    hintText: '自己输入答案（Enter 提交）',
+                    // 单题卡与最后一页都是"Enter 提交"；中间页是"Enter 下一题"
+                    hintText: _isLast ? '自己输入答案（Enter 提交）' : '自己输入答案（Enter 下一题）',
                     hintStyle: theme.textTheme.bodyMedium?.copyWith(color: outline),
                   ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: FilledButton(
-                key: const Key('ask-answer-submit'),
-                onPressed: (_busy || !hasText) ? null : () => unawaited(_submitTyped()),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  minimumSize: const Size(0, 36),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: const Text('回答'),
               ),
             ),
           ],
