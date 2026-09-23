@@ -53,23 +53,26 @@ fun main(args: Array<String>) {
             force = force,
         )
 
+        // ⚠ 这一段用**ASCII**输出：JavaExec 的原始 stdout 是字节流直通，
+        // 中文在中文 Windows 控制台上会被按 GBK 解码成乱码（Gradle 自己打的日志没这个问题）。
+        // 报告是给人核对用的，"表名 + 两个数字 + 结论"全是 ASCII 反而更稳。
         println()
-        println("%-18s %10s %10s  %s".format("表", "来源行数", "目标行数", "核对"))
+        println("%-18s %10s %10s  %s".format("table", "source", "target", "verify"))
         report.tables.forEach { r ->
             val mark = when {
-                r.skipped -> "跳过（${r.note}）"
+                r.skipped -> "SKIPPED (${r.note})"
                 r.matched -> "OK  (${r.hash.take(12)})"
-                else -> "**不一致**"
+                else -> "**MISMATCH**"
             }
             println("%-18s %10d %10d  %s".format(r.table, r.sourceRows, r.targetRows, mark))
         }
         println()
-        println("合计 ${report.totalRows} 行；结果：${if (report.ok) "全部一致 ✅" else "有不一致 ❌"}")
+        println("TOTAL ${report.totalRows} rows; result: ${if (report.ok) "ALL MATCH" else "MISMATCH"}")
         if (!report.ok) {
             kotlin.system.exitProcess(2)
         }
     } catch (e: Exception) {
-        System.err.println("搬迁失败：${e.message}")
+        System.err.println("migrate failed: ${e.message}")
         e.printStackTrace()
         kotlin.system.exitProcess(1)
     } finally {
