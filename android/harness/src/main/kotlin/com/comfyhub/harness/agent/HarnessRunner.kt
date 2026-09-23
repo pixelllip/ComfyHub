@@ -182,6 +182,10 @@ class HarnessRunner(
             promptVersion = request.kit.promptVersion,
             reasoningEffort = request.reasoningEffort?.wire,
         )
+        // 事件总线**在这里就 open**（不是等 execute 跑起来）：
+        // 平台通道那侧 `startRun` 一返回，Dart 立刻就会订阅这个 runId ——
+        // 若总线还没开，那次订阅会落到"从库里回放"的分支上，于是**一个实时事件都收不到**。
+        bus.open(run.id)
         return Prepared(run.id, request.copy(conversationId = conversation.id), assistant.id)
     }
 
@@ -195,7 +199,6 @@ class HarnessRunner(
         val assistantId = prepared.assistantMessageId
         val conversationId = request.conversationId
 
-        bus.open(runId)
         val events = store.EventBatcher(runId)
         fun emit(type: String, body: JsonObject) {
             val event: RunEvent = bus.emit(runId, type, body) ?: return

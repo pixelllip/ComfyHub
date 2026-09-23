@@ -249,3 +249,17 @@ object RunKitCodec {
 
     private fun JsonElement.strValue(): String? = (this as? JsonPrimitive)?.contentOrNull
 }
+/**
+ * 跨模块的 JSON 入口（**只暴露解析**，不暴露内部那个 `Json` 实例）。
+ *
+ * 为什么需要：`ProtocolJson` 是 harness 模块的实现细节（`internal`），
+ * 而 app 模块的 platform channel 桥要把 kit / 事件 payload 转成 Dart 能收的形状。
+ * 与其把内部实例放出去，不如给一个只有一个方法的门面 —— 边界更清楚。
+ */
+object HarnessJson {
+    fun parse(text: String): JsonElement =
+        com.comfyhub.harness.protocol.ProtocolJson.parseToJsonElement(text)
+
+    fun toObject(text: String): JsonObject =
+        parse(text) as? JsonObject ?: throw RunKitCodec.KitParseFailure("期望 JSON 对象，实际是：${text.take(80)}")
+}

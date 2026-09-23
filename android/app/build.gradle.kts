@@ -52,3 +52,15 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // 手机端 harness（M3）：纯逻辑 + 本地 bundled SQLite 都在 :harness 里（可跑 JVM 单测）。
+    // 平台胶水（platform channel / Android Keystore）留在 app 模块 —— 它们要 Flutter 的
+    // embedding，而 :harness 刻意**不依赖 Flutter**（`docs/mobile-harness-design.md` §2.1
+    // 的"为将来的 KMP 留门"：纯逻辑不许碰 Android/Flutter API）。
+    implementation(project(":harness"))
+    // :harness 把它们当 implementation（不外泄），app 的桥自己要用就显式声明：
+    // JSON 对象在公开 API 里出现（run-kit / 事件 payload），协程用于事件泵。
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+}
