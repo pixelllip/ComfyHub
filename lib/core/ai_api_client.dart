@@ -272,6 +272,31 @@ class AiApiClient {
       AiBuiltinCatalogStatus.fromJson(Map<String, dynamic>.from(
           await _send('POST', '/api/ai/builtin/sync', {'mode': mode}) as Map));
 
+  // --- 模型能力目录（在线更新 / 实测校准，2026-09-23） ----------------------
+
+  /// 能力目录状态（内置表 + 在线目录的新鲜度 + 校准开关）。
+  Future<AiCapabilityStatus> capabilityStatus() async => AiCapabilityStatus.fromJson(
+      Map<String, dynamic>.from(await _get('/api/ai/capabilities/status') as Map));
+
+  /// 立即从在线数据集（models.dev）刷新能力目录。失败不抛错：返回体里
+  /// `lastMessage` 带着如实的原因（旧目录原样保留），界面照常显示。
+  Future<AiCapabilityStatus> refreshCapabilityCatalog() async => AiCapabilityStatus.fromJson(
+      Map<String, dynamic>.from(await _send('POST', '/api/ai/capabilities/refresh', const {}) as Map));
+
+  /// 开/关「实测校准」（校准会发真实请求，默认关）。
+  Future<AiCapabilityStatus> setProbeEnabled({required bool enabled}) async =>
+      AiCapabilityStatus.fromJson(Map<String, dynamic>.from(
+          await _send('PUT', '/api/ai/capabilities/probe-toggle', {'enabled': enabled}) as Map));
+
+  /// 校准思考档位：真发极小请求从最高档往下试，把网关实际接受的档位写回。
+  /// `providerId` 缺省 = 所有启用的 Provider；`modelId` 缺省 = 该 Provider 全部推理模型。
+  Future<AiCapabilityProbeResponse> probeCapabilities({String? providerId, String? modelId}) async =>
+      AiCapabilityProbeResponse.fromJson(Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/capabilities/probe', {
+            'providerId': ?providerId,
+            'modelId': ?modelId,
+          }) as Map));
+
   // --- 附件（M3） --------------------------------------------------------
 
   /// 上传附件（multipart，字段名 `files`）。

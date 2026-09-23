@@ -272,6 +272,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('本机网关'));
     await tester.pumpAndSettle();
+    // 页面上方压着两张目录卡：列表的懒构建表头（Provider/密钥区）比视口高，
+    // 模型行要拖一下才进视口 —— 与 model_list_scroll_test 的同一约定。
+    await tester.drag(find.byType(CustomScrollView).first, const Offset(0, -400));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('手动添加'));
     await tester.pumpAndSettle();
@@ -281,6 +285,8 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('添加'));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(CustomScrollView).first, const Offset(0, -400));
     await tester.pumpAndSettle();
 
     // 界面里出现新模型

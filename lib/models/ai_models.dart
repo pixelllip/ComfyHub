@@ -1983,3 +1983,139 @@ class AiComfyJobs {
 }
 
 
+
+
+// ---------------------------------------------------------------------------
+//  模型能力目录的在线更新（2026-09-23"全做了"）
+//
+//  链路：custom.json（手工）> remote.json（models.dev 拉取）> 内置表，逐维度合并。
+//  状态 / 手动刷新 / 实测校准开关与触发都从后端读 —— 前端不存一份自己的，
+//  否则就会出现"界面说更新了、后端其实没刷新"（与 NSFW 开关同一条纪律）。
+// ---------------------------------------------------------------------------
+
+/// `GET /api/ai/capabilities/status`（也用于刷新 / 开关的回读）。
+class AiCapabilityStatus {
+  final String version;
+  final int builtinRules;
+  final String? customSource;
+  final String? customFetchedAt;
+  final int? customEntries;
+  final String? remoteSource;
+  final String? remoteFetchedAt;
+  final int? remoteEntries;
+
+  /// 在线目录的年龄（小时）；null = 没有 remote.json
+  final int? remoteAgeHours;
+  final bool remoteStale;
+  final int refreshIntervalDays;
+
+  /// 是否允许实测校准（发真实请求；默认关）
+  final bool probeEnabled;
+
+  /// 最近一次（手动）操作的人话结果
+  final String? lastMessage;
+
+  /// 拉状态失败时的原因（界面如实显示，不静默）
+  final String? error;
+
+  const AiCapabilityStatus({
+    this.version = '',
+    this.builtinRules = 0,
+    this.customSource,
+    this.customFetchedAt,
+    this.customEntries,
+    this.remoteSource,
+    this.remoteFetchedAt,
+    this.remoteEntries,
+    this.remoteAgeHours,
+    this.remoteStale = false,
+    this.refreshIntervalDays = 7,
+    this.probeEnabled = false,
+    this.lastMessage,
+    this.error,
+  });
+
+  factory AiCapabilityStatus.fromJson(Map<String, dynamic> json) => AiCapabilityStatus(
+        version: json['version'] as String? ?? '',
+        builtinRules: (json['builtinRules'] as num?)?.toInt() ?? 0,
+        customSource: json['customSource'] as String?,
+        customFetchedAt: json['customFetchedAt'] as String?,
+        customEntries: (json['customEntries'] as num?)?.toInt(),
+        remoteSource: json['remoteSource'] as String?,
+        remoteFetchedAt: json['remoteFetchedAt'] as String?,
+        remoteEntries: (json['remoteEntries'] as num?)?.toInt(),
+        remoteAgeHours: (json['remoteAgeHours'] as num?)?.toInt(),
+        remoteStale: json['remoteStale'] == true,
+        refreshIntervalDays: (json['refreshIntervalDays'] as num?)?.toInt() ?? 7,
+        probeEnabled: json['probeEnabled'] == true,
+        lastMessage: json['lastMessage'] as String?,
+      );
+
+  /// 在线目录的一句话描述（界面直接显示）。
+  String get remoteLabel {
+    if (remoteSource == null) return '还没有在线目录';
+    final h = remoteAgeHours;
+    final age = h == null ? '' : (h < 24 ? '$h小时前' : '${(h / 24).round()}天前');
+    return '$remoteSource · $remoteEntries 条 · $age';
+  }
+}
+
+/// 单个模型的校准结果（`POST /api/ai/capabilities/probe`）。
+class AiCapabilityProbeOutcome {
+  final String providerId;
+  final String modelId;
+  final bool ok;
+  final String? acceptedTop;
+  final Map<String, String>? ladder;
+  final bool written;
+  final bool skipped;
+  final String message;
+
+  const AiCapabilityProbeOutcome({
+    required this.providerId,
+    required this.modelId,
+    required this.ok,
+    this.acceptedTop,
+    this.ladder,
+    this.written = false,
+    this.skipped = false,
+    required this.message,
+  });
+
+  factory AiCapabilityProbeOutcome.fromJson(Map<String, dynamic> json) =>
+      AiCapabilityProbeOutcome(
+        providerId: json['providerId'] as String? ?? '',
+        modelId: json['modelId'] as String? ?? '',
+        ok: json['ok'] == true,
+        acceptedTop: json['acceptedTop'] as String?,
+        ladder: (json['ladder'] as Map?)
+            ?.map((k, v) => MapEntry(k.toString(), v.toString())),
+        written: json['written'] == true,
+        skipped: json['skipped'] == true,
+        message: json['message'] as String? ?? '',
+      );
+}
+
+class AiCapabilityProbeResponse {
+  final bool ok;
+  final String message;
+  final List<AiCapabilityProbeOutcome> outcomes;
+
+  const AiCapabilityProbeResponse({
+    required this.ok,
+    required this.message,
+    this.outcomes = const [],
+  });
+
+  factory AiCapabilityProbeResponse.fromJson(Map<String, dynamic> json) =>
+      AiCapabilityProbeResponse(
+        ok: json['ok'] == true,
+        message: json['message'] as String? ?? '',
+        outcomes: (json['outcomes'] as List?)
+                ?.whereType<Map>()
+                .map((e) =>
+                    AiCapabilityProbeOutcome.fromJson(Map<String, dynamic>.from(e)))
+                .toList() ??
+            const [],
+      );
+}

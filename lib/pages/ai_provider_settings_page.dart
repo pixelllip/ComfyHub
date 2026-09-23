@@ -37,6 +37,11 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   AiBuiltinCatalogStatus? _builtin;
   bool _builtinBusy = false;
 
+  /// 模型能力目录的在线更新状态（custom > remote > 内置，2026-09-23）。
+  AiCapabilityStatus? _cap;
+  bool _capBusy = false;
+  bool _probeBusy = false;
+
   @override
   void initState() {
     super.initState();
@@ -44,6 +49,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       _api = widget.api ?? AiApiClient(context.read<SettingsStore>().baseUrl);
       _reload();
       _loadBuiltin();
+      _loadCapabilityCatalog();
     });
   }
 
@@ -62,6 +68,131 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         setState(() => _builtin = AiBuiltinCatalogStatus(error: '$e'));
       }
     }
+  }
+
+  /// 能力目录状态：拉不到如实显示在卡上。
+  Future<void> _loadCapabilityCatalog() async {
+    try {
+      final status = await _api.capabilityStatus();
+      if (mounted) setState(() => _cap = status);
+    } catch (e) {
+      if (mounted) setState(() => _cap = AiCapabilityStatus(error: '$e'));
+    }
+  }
+
+  /// 立即更新在线能力目录（models.dev）。失败不是异常：后端会把原因放在 lastMessage。
+  Future<void> _refreshCapabilityCatalog() async {
+    setState(() => _capBusy = true);
+    try {
+      final status = await _api.refreshCapabilityCatalog();
+      if (!mounted) return;
+      setState(() => _cap = status);
+      _notify(status.lastMessage ?? '已请求更新能力目录。');
+    } catch (e) {
+      if (mounted) _notify('更新能力目录失败：$e', error: true);
+    } finally {
+      if (mounted) setState(() => _capBusy = false);
+    }
+  }
+
+  /// 开/关实测校准。
+  Future<void> _toggleProbe(bool on) async {
+    setState(() => _capBusy = true);
+    try {
+      final status = await _api.setProbeEnabled(enabled: on);
+      if (!mounted) return;
+      setState(() => _cap = status);
+      _notify(status.lastMessage ?? (on ? '已允许实测校准' : '已关闭实测校准'));
+    } catch (e) {
+      if (mounted) _notify('更新校准开关失败：$e', error: true);
+    } finally {
+      if (mounted) setState(() => _capBusy = false);
+    }
+  }
+
+  /// 校准思考档位：**先确认再发请求**（校准发真实请求，可能产生少量费用）。
+  Future<void> _probeThinkingLadders() async {
+    if (_cap?.probeEnabled != true) {
+      _notify('实测校准未开启（先打开下面的开关）。', error: true);
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('校准思考档位？'),
+        content: const Text(
+          '会对每个 Provider 最多 8 个支持推理的模型，从最高档往下发极小的真实请求'
+          '（"ping" + reasoning_effort），直到网关接受为止，并把**实际接受**的档位写回。\n\n'
+          '单次请求很小，但仍可能产生少量费用；手工声明（manual）的模型不会被覆盖。',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('开始校准')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _probeBusy = true);
+    try {
+      final response = await _api.probeCapabilities();
+      if (!mounted) return;
+      await _showProbeResults(response);
+      if (!response.ok) _notify(response.message, error: true);
+    } catch (e) {
+      if (mounted) _notify('校准失败：$e', error: true);
+    } finally {
+      if (mounted) setState(() => _probeBusy = false);
+    }
+  }
+
+  /// 校准结果逐行摆出来（成功 / 跳过 / 失败都说清楚，不美化）。
+  Future<void> _showProbeResults(AiCapabilityProbeResponse response) async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('思考档位校准结果'),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(response.message, style: Theme.of(ctx).textTheme.bodySmall),
+                const SizedBox(height: 8),
+                for (final o in response.outcomes)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          o.skipped
+                              ? Icons.skip_next_outlined
+                              : (o.ok ? Icons.check_circle_outline : Icons.error_outline),
+                          size: 15,
+                          color: o.skipped
+                              ? Theme.of(ctx).colorScheme.outline
+                              : (o.ok ? Colors.green.shade600 : Theme.of(ctx).colorScheme.error),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '${o.modelId.isEmpty ? o.providerId : o.modelId} — ${o.message}'
+                            '${o.acceptedTop == null ? '' : '（最高 ${o.acceptedTop}）'}',
+                            style: Theme.of(ctx).textTheme.bodySmall,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('好的'))],
+      ),
+    );
   }
 
   Future<void> _reload() async {
@@ -187,6 +318,16 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
             onRefresh: _loading ? null : _loadBuiltin,
             onAlignCapabilities: _alignBuiltinCapabilities,
             onAddMissing: _addMissingBuiltinModels,
+          ),
+          // 模型能力目录（2026-09-23）：在线更新（models.dev）+ 实测校准入口
+          _CapabilityCatalogCard(
+            status: _cap,
+            busy: _capBusy,
+            probeBusy: _probeBusy,
+            onRefreshStatus: _loading ? null : _loadCapabilityCatalog,
+            onUpdateRemote: _refreshCapabilityCatalog,
+            onProbeToggle: _toggleProbe,
+            onProbe: _probeThinkingLadders,
           ),
           Expanded(
             child: wide
@@ -1649,10 +1790,154 @@ class _BuiltinCatalogCard extends StatelessWidget {
   }
 }
 
+/// 「模型能力目录」卡片（2026-09-23"全做了"）。
+///
+/// 展示三层目录（手工 custom > 在线 remote > 内置）的新鲜度；「立即更新」拉
+/// models.dev；实测校准默认关，打开后才能发真实请求校准思考档位。
+/// 所有状态都从后端读（`/api/ai/capabilities/*`），前端不存一份自己的。
+class _CapabilityCatalogCard extends StatelessWidget {
+  final AiCapabilityStatus? status;
+  final bool busy;
+  final bool probeBusy;
+  final VoidCallback? onRefreshStatus;
+  final VoidCallback? onUpdateRemote;
+  final ValueChanged<bool>? onProbeToggle;
+  final VoidCallback? onProbe;
+
+  const _CapabilityCatalogCard({
+    required this.status,
+    required this.busy,
+    required this.probeBusy,
+    required this.onRefreshStatus,
+    required this.onUpdateRemote,
+    required this.onProbeToggle,
+    required this.onProbe,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final s = status;
+    final remoteStale = s?.remoteStale ?? false;
+    // 闭包里访问可空函数字段无法被 Dart 的流分析提升，先取局部变量
+    final update = onUpdateRemote;
+    final probe = onProbe;
+
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.auto_awesome_motion_outlined, size: 18, color: theme.colorScheme.primary),
+                const SizedBox(width: 6),
+                Text('模型能力目录', style: theme.textTheme.titleSmall),
+                if (busy || probeBusy) ...[
+                  const SizedBox(width: 10),
+                  const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ],
+                const Spacer(),
+                IconButton(
+                  tooltip: '刷新目录状态',
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  padding: EdgeInsets.zero,
+                  onPressed: busy ? null : onRefreshStatus,
+                  icon: const Icon(Icons.refresh, size: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '预填来源：手工目录 > 在线目录（models.dev 自动更新）> 内置规则；接口自己声明的永远优先。',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+            const SizedBox(height: 6),
+            if (s == null)
+              Text('正在读取能力目录状态…', style: theme.textTheme.bodySmall)
+            else if (s.error != null)
+              Text('读取失败：${s.error}',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error))
+            else ...[
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _Tag('内置 v${s.version}（${s.builtinRules} 条规则）'),
+                  if (s.customEntries != null) _Tag('手工 ${s.customEntries} 条'),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: remoteStale
+                          ? theme.colorScheme.errorContainer
+                          : theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      s.remoteLabel + (s.remoteStale ? ' · 已过期' : ''),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: remoteStale
+                            ? theme.colorScheme.onErrorContainer
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  if (s.lastMessage != null) _Tag(s.lastMessage!),
+                ],
+              ),
+            ],
+            const SizedBox(height: 6),
+            // 单行放完：开关 + 两个动作。这张卡上面已经压着内置目录卡，
+            // 高度能省则省 —— 模型列表的懒构建表头本来就快一屏高。
+            Row(
+              children: [
+                Switch(
+                  value: s?.probeEnabled ?? false,
+                  onChanged: busy ? null : (v) => onProbeToggle?.call(v),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                const SizedBox(width: 2),
+                Flexible(
+                  child: Text(
+                    '允许实测校准（发真实请求，可能产生少量费用）',
+                    style: theme.textTheme.bodySmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: (busy || update == null) ? null : () => update(),
+                  icon: const Icon(Icons.cloud_download_outlined, size: 16),
+                  label: const Text('立即更新'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: (busy || probeBusy || probe == null || s?.probeEnabled != true)
+                      ? null
+                      : () => probe(),
+                  icon: const Icon(Icons.fact_check_outlined, size: 16),
+                  label: const Text('校准思考档位'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _Tag extends StatelessWidget {
   final String text;
   const _Tag(this.text);
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
