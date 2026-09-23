@@ -1,0 +1,73 @@
+# 🔒 run-kit 契约：工件下发（冻结，M0）
+
+> **状态：已冻结（2026-09-23）。** 依据 `docs/implementation-master-plan.md` §3.4 与
+> **红线 R13**（两端都不许硬编码系统提示 / 工具描述 / 安全文案）。
+>
+> 实现落在 **M1**（`GET /api/ai/run-kit{,/status}`），本文件先冻结**形状**：
+> 手机 harness 的所有"规则类"输入都从这份工件来，所以它必须先定下来，
+> 手机侧才能"不硬编码任何提示串"地写。
+
+---
+
+## 1. 两条端点
+
+```
+GET /api/ai/run-kit         → 见 §2
+GET /api/ai/run-kit/status  → { current: "2026-09-23.1", revoked: ["2026-09-22.1"] }
+```
+
+`/status` 是**吊销**用的：手机拿本地缓存的 kit 跑之前先问一句，
+命中 `revoked` 就**必须联网重新拉一份**再跑（换掉有问题的规则，比如某版系统提示教错了用法）。
+
+---
+
+## 2. `GET /api/ai/run-kit` 的字段
+
+| 字段 | 类型 | 真源（**唯一**） | 说明 |
+| --- | --- | --- | --- |
+| `kitVersion` | string | 见 §3 | 每次 Run 记进运行快照（对应今天 `promptVersion` 的可追溯性） |
+| `schemaVersion` | int | `PRAGMA user_version` | 与 `/api/sync/manifest` 同一个数（同步契约 §1） |
+| `systemPrompt` | string | `SystemPrompt.render(...)`（`HarnessRunner.kt:1313`） | **整段渲染好的正文**，不是片段 |
+| `promptVersion` | string | `SystemPrompt.VERSION` | 改系统提示**必须 bump 它**（R12） |
+| `nsfwEnabled` | bool | `app_settings` 的 `ai.nsfw` | 决定 `systemPrompt` 里有没有注入 `NsfwPrompt` 那段 |
+| `tools[]` | array | `ToolRegistry`（R12） | 每项 `{ name, description, inputSchema, scope }`。**已按端过滤**（ToolScope 契约） |
+| `untrustedBanner` | string | `SystemPrompt` / 注入防线文案 | 工具结果与网页内容的**不可信横幅**（R7）。⚠ **两端不许各写一份** |
+| `models[]` | array | 模型目录（`AiSeedCatalog` + 在线覆盖） | 手机能选哪些模型；**不含密钥** |
+| `inlineBudget` | object | `InlineBudget` | 历史图片内联预算（单图 8MB / 合计 20MB） |
+
+### 手机侧的硬纪律（R13）
+
+- **手机上不许出现任何提示串字面量**：系统提示、工具描述、安全/不可信文案，
+  一律来自这份工件。M3 的验收里有一条"扫描手机源码无提示串"的检查。
+- 拿到的 `tools[]` 里的 `scope` 必须是 `MOBILE` 或 `BOTH`
+  （桌面专属的那些**不该出现在手机清单里** —— 这正是 ToolScope 契约 §3 的作用）。
+- `kitVersion` / `promptVersion` 都要**随 Run 记录**，否则事后无法回答"这次回答是哪版规则"。
+
+---
+
+## 3. `kitVersion` 怎么定（冻结规则）
+
+`<日期>.<当日序号>`，例如 `2026-09-23.1`。**只要下列任一项变了就 bump**：
+
+1. `systemPrompt` 正文（= `SystemPrompt.VERSION` 变了）；
+2. `tools[]` 的**结构**（增删工具、改 `inputSchema`）；
+3. `untrustedBanner` 文案；
+4. `inlineBudget` 的数值。
+
+> ⚠ 与 `SystemPrompt.VERSION` 的关系：后者是"规则正文的版本"、前者是"**整份工件**的版本"。
+> 工具 schema 变了而提示词没变时，只有 `kitVersion` 会动 ——
+> 所以**别用 `promptVersion` 代替 `kitVersion`**。
+
+---
+
+## 4. 现在就有、别重写的东西
+
+| 已有实现 | 在哪 |
+| --- | --- |
+| 系统提示正文 + `VERSION` | `HarnessRunner.kt` 的 `object SystemPrompt`（`PROMPT_VERSION` 别名在 `HarnessRunner`） |
+| NSFW 段（开关决定注不注入，正文一个字不许改） | `ai/NsfwPrompt.kt`（`VERSION = "nsfw-v2"`） |
+| 工具清单唯一真源 | `ai/tools/ToolRegistry.kt` 的 `tools` 列表（+ 新的 `toolsFor(scope)`） |
+| 不可信数据注入防线 | `HarnessRunner` 的提示拼装（RSK-004）、`ToolRegistry.MAX_RESULT_CHARS` 截断 |
+| 内联预算 | `InlineBudget`（单图 8MB / 合计 20MB） |
+
+**M1 要做的是"把它们组装成一份 JSON 发出去"**，不是重新实现其中任何一条。
