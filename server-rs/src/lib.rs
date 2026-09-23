@@ -15,6 +15,7 @@
 pub mod db;
 pub mod inputs;
 pub mod media;
+pub mod media_write;
 pub mod models;
 pub mod repo;
 pub mod routes;

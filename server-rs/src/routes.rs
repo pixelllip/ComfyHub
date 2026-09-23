@@ -87,6 +87,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/tags/categories", get(list_tag_categories))
         .route("/api/prompts", get(list_prompts))
         .route("/api/prompts/{id}", get(get_prompt))
+        .route("/api/stats", get(get_stats))
         // 产物（P4 第 3 步）：列表 / 详情 / **原件文件流**（Range + ETag）
         .route("/api/media", get(list_media))
         .route("/api/media/{id}", get(get_media))
@@ -124,6 +125,11 @@ async fn media_file(
     headers: axum::http::HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     crate::media::media_file(state, id, headers).await
+}
+
+/// 顶部那几个数字（`GET /api/stats`）。
+async fn get_stats(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::media_write::stats(&state)?))
 }
 
 async fn media_thumb(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, ApiError> {

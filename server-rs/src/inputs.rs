@@ -114,3 +114,26 @@ pub struct FavoriteResult {
     pub id: i64,
     pub favorite: bool,
 }
+/// `PATCH /api/media/{id}` 的请求体（与 Kotlin `MediaUpdate` 逐字一致）。
+///
+/// ⚠ `clearPrompt` 与 `promptId: null` 语义不同：前者是"**明确解除关联**"（把列写成 NULL），
+/// 后者是"这次不动这一列"。少了 `clearPrompt`，界面就永远解绑不了一条产物。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaUpdate {
+    #[serde(default)]
+    pub prompt_id: Option<i64>,
+    #[serde(default)]
+    pub clear_prompt: bool,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub favorite: Option<bool>,
+    #[serde(default)]
+    pub source: Option<String>,
+    /// 手动标记 / 取消标记成人内容（只影响预览图打不打码）
+    #[serde(default)]
+    pub nsfw: Option<bool>,
+}

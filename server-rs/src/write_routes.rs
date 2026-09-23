@@ -25,7 +25,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use rusqlite::{params, OptionalExtension};
@@ -47,8 +47,26 @@ pub fn write_router() -> Router<AppState> {
         .route("/api/prompts/{id}/duplicate", post(duplicate))
         .route("/api/prompts/{id}/tags", post(add_tags))
         .route("/api/prompts/{id}/tags/{tag_id}", delete(remove_tag))
-        // `get` 在这里只为把路由表凑齐（读端点那个 router 已经注册过同一个路径的 GET）
+        .route("/api/media/{id}", patch(patch_media).delete(delete_media))
         .route("/api/prompts/{id}/media", get(list_media_stub))
+}
+
+/// `PATCH /api/media/{id}`：改标题 / 关联提示词 / 收藏 / 备注 / NSFW 标记。
+async fn patch_media(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<crate::inputs::MediaUpdate>,
+) -> Result<Json<crate::models::MediaDto>, ApiError> {
+    Ok(Json(crate::media_write::update(&state, id, &body)?))
+}
+
+/// `DELETE /api/media/{id}`：删库 + 删磁盘文件（回 `{"deleted": id}`）。
+async fn delete_media(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Deleted>, ApiError> {
+    crate::media_write::delete(&state, id)?;
+    Ok(Json(Deleted { deleted: id }))
 }
 
 /// 产物列表还没搬（`/api/media` 属于后面几批）；**明确 501**，不要给个空数组假装成功。

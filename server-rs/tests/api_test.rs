@@ -767,3 +767,104 @@ async fn media_thumb_poster_upload_are_explicitly_501() {
     let (status, _) = send_json(router_for(state.clone()), "POST", "/api/media/upload", serde_json::json!({})).await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 }
+// ===========================================================================
+//  产物写侧 + /api/stats（P4 第 4 步）
+// ===========================================================================
+
+#[tokio::test]
+async fn patch_media_updates_fields_and_rejects_empty_body() {
+    let state = state();
+    // 一个字段都不给 → 404（Kotlin 的 `update` 返回 false，路由翻成"不存在或无字段需要更新"）
+    let empty = send_json(router_for(state.clone()), "PATCH", "/api/media/100", serde_json::json!({})).await;
+    assert_eq!(empty.0, StatusCode::NOT_FOUND, "空 body 不许静默成功");
+
+    let patched = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        "/api/media/100",
+        serde_json::json!({"title": "改过的标题", "favorite": true, "nsfw": true, "notes": "备注"}),
+    )
+    .await;
+    assert_eq!(patched.0, StatusCode::OK, "body={}", patched.1);
+    assert_eq!(patched.1["title"], "改过的标题");
+    assert_eq!(patched.1["favorite"], true);
+    assert_eq!(patched.1["nsfw"], true, "手动标记 NSFW（只影响预览打码）");
+    assert_eq!(patched.1["notes"], "备注");
+    assert_eq!(patched.1["promptId"], 10, "没提这一列就不该动它");
+
+    // clearPrompt：明确解除关联（与 promptId=null 不是一回事）
+    let cleared = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        "/api/media/100",
+        serde_json::json!({"clearPrompt": true}),
+    )
+    .await;
+    assert_eq!(cleared.0, StatusCode::OK);
+    assert_eq!(cleared.1["promptId"], serde_json::Value::Null, "clearPrompt 必须真的置空");
+    assert_eq!(cleared.1["promptTags"], serde_json::json!([]), "解绑后标签也不该再带上提示词的");
+
+    // 指向不存在的提示词 → 400（不是静默忽略）
+    let bogus = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        "/api/media/100",
+        serde_json::json!({"promptId": 9999}),
+    )
+    .await;
+    assert_eq!(bogus.0, StatusCode::BAD_REQUEST);
+    assert!(bogus.1["message"].as_str().unwrap().contains("9999"));
+
+    let missing = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        "/api/media/9999",
+        serde_json::json!({"title": "x"}),
+    )
+    .await;
+    assert_eq!(missing.0, StatusCode::NOT_FOUND);
+}
+
+/// 删产物：库、原件、缩略图一起清；标签计数跟着重算。
+#[tokio::test]
+async fn delete_media_removes_row_file_and_thumb() {
+    let state = state();
+    let media_dir = state.media_dir().to_path_buf();
+    let thumb_dir = media_dir.parent().unwrap().join("thumbs");
+    std::fs::create_dir_all(&thumb_dir).unwrap();
+    std::fs::write(thumb_dir.join("100.jpg"), b"thumb").unwrap();
+    std::fs::write(thumb_dir.join("100.poster.png"), b"poster").unwrap();
+    assert!(media_dir.join("a.png").exists());
+
+    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/media/100").await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(body, serde_json::json!({"deleted": 100}));
+
+    let rows: i64 = state
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM media_assets WHERE id = 100", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(rows, 0);
+    assert!(!media_dir.join("a.png").exists(), "原件必须一起删（只删库会留下磁盘孤儿）");
+    assert!(!thumb_dir.join("100.jpg").exists());
+    assert!(!thumb_dir.join("100.poster.png").exists());
+
+    let again = send_empty(router_for(state.clone()), "DELETE", "/api/media/100").await;
+    assert_eq!(again.0, StatusCode::NOT_FOUND, "删第二次要 404");
+}
+
+#[tokio::test]
+async fn stats_counts_match_the_fixture() {
+    let (status, body) = get_json(router_for(state()), "/api/stats").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        keys(&body),
+        vec!["byKind", "byMediaKind", "favoriteMedia", "favoritePrompts", "media", "prompts", "tags"]
+    );
+    assert_eq!(body["prompts"], 2);
+    assert_eq!(body["media"], 1);
+    assert_eq!(body["tags"], 2);
+    assert_eq!(body["favoritePrompts"], 1, "夹具里 id=10 是收藏的");
+    assert_eq!(body["favoriteMedia"], 0);
+    assert_eq!(body["byKind"], serde_json::json!({"IMAGE": 2}));
+    assert_eq!(body["byMediaKind"], serde_json::json!({"IMAGE": 1}));
+}
