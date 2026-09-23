@@ -54,6 +54,9 @@ app.*.map.json
 # 本地 MySQL 便携版的数据目录 / 配置 / 日志（体积大且是机器相关数据）
 /.mysql/
 
+# SQLite 运行库（P2 起的默认库）：comfyhub.db 与它的 -wal / -shm 一起，属于运行期数据
+/.db/
+
 # MySQL 存储位置指针（每台机器不一样，比如 D:\mysql\comfyhub）
 /.mysql-location.json
 

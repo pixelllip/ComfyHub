@@ -382,10 +382,12 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 
 ---
 
-## 11. ⚠ 目标架构（方案已敲定，实施进行中：P0/P0.5/P1/M0/M1 ✅，P2 / M3+ / P4 未动）
+## 11. ⚠ 目标架构（方案已敲定，实施进行中：P0/P0.5/P1/M0/M1 ✅，P2 进行中＝数据层已换 SQLite，M3+ / P4 未动）
 
 **2026-09-23 敲定**：`SQLite + 桌面 Rust + 移动 Kotlin + Flutter（两端）`。
-**当前代码仍是 MySQL + Kotlin/Ktor + 纯 Flutter** —— 第 1~10 节写的都是**现状**，仍然有效。
+**当前后端是 SQLite + Kotlin/Ktor**（P2 第 1 步已落，2026-09-23）。第 1~10 节写的仍是**现状**
+（脚本 / 发布包要等 P2 收尾才切），但凡提到 **MySQL / `mysql.ps1` / `my.ini` / `.mysql`** 的地方，
+现在是**历史知识与"一次性搬迁的只读来源"**，别在那条路上加新东西。
 
 **动手之前先读 [`docs/implementation-master-plan.md`](docs/implementation-master-plan.md)**
 （实施总纲：冻结的接口契约、**14 条红线**、分阶段验收判据、回归防线归属、文档地图）。

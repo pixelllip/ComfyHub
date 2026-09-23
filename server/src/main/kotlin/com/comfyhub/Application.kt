@@ -211,18 +211,25 @@ private fun waitForDatabase(cfg: AppConfig, attempts: Int = 20, delayMs: Long = 
         val attempt = i + 1
         try {
             if (!Db.isInitialized) Db.init(cfg)
-            // 真正打一次查询，确认库和表都在
-            Db.withConnection { conn ->
-                conn.queryOne("SELECT COUNT(*) FROM prompts") { it.getLong(1) }
-            }
+            // 只探**连通性**：表结构由紧随其后的 [Migrate.run] 负责建/补（SQLite 是全新库时
+            // 这里连 `prompts` 表都还不存在 —— 早先那句 `SELECT COUNT(*) FROM prompts`
+            // 会让首次启动连试 20 次然后退出，正是迁库时踩到的坑）。
+            Db.withConnection { conn -> conn.queryOne("SELECT 1") { it.getInt(1) } }
             if (attempt > 1) log.info("数据库已就绪（第 {} 次尝试）", attempt)
             return true
         } catch (e: Exception) {
             lastError = e
+            // Hikari 只会说 "Connection is not available"，真正的根因（驱动抛的
+            // `unable to open database file` / `no such table` …）在 cause 链里 ——
+            // 不打出来就只能靠猜，首次启动踩过一次。
+            val why = generateSequence(e as Throwable?) { it.cause }
+                .mapNotNull { it.message }
+                .distinct()
+                .joinToString(" ← ")
             if (attempt == 1) {
-                log.warn("数据库暂时不可用，开始重试（最多 {} 次，每次间隔 {}ms）：{}", attempts, delayMs, e.message)
+                log.warn("数据库暂时不可用，开始重试（最多 {} 次，每次间隔 {}ms）：{}", attempts, delayMs, why)
             } else {
-                log.warn("第 {}/{} 次连接数据库失败: {}", attempt, attempts, e.message)
+                log.warn("第 {}/{} 次连接数据库失败: {}", attempt, attempts, why)
             }
             Db.close()
             Thread.sleep(delayMs)

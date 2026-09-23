@@ -136,11 +136,13 @@ object TagRepo {
     }
 
     fun refreshUseCounts(conn: Connection) {
+        // ⚠ 这里**不能**写 `UPDATE tags t SET t.use_count = …`：MySQL 认这个别名写法，
+        // SQLite 不认（报 `near "t": syntax error`）。去掉别名、用表名引用最稳。
         conn.execute(
             """
-            UPDATE tags t SET t.use_count = (
-                (SELECT COUNT(*) FROM prompt_tags pt WHERE pt.tag_id = t.id)
-              + (SELECT COUNT(*) FROM media_tags  mt WHERE mt.tag_id = t.id)
+            UPDATE tags SET use_count = (
+                (SELECT COUNT(*) FROM prompt_tags pt WHERE pt.tag_id = tags.id)
+              + (SELECT COUNT(*) FROM media_tags  mt WHERE mt.tag_id = tags.id)
             )
             """.trimIndent()
         )
@@ -157,7 +159,7 @@ object TagRepo {
 
     fun addPromptTags(conn: Connection, promptId: Long, tagNames: List<String>) {
         tagNames.mapNotNull { ensure(conn, it) }.distinct().forEach { tagId ->
-            conn.execute("INSERT IGNORE INTO prompt_tags (prompt_id, tag_id) VALUES (?, ?)", promptId, tagId)
+            conn.execute("INSERT OR IGNORE INTO prompt_tags (prompt_id, tag_id) VALUES (?, ?)", promptId, tagId)
         }
     }
 
@@ -168,7 +170,7 @@ object TagRepo {
     fun setMediaTags(conn: Connection, mediaId: Long, tagNames: List<String>) {
         conn.execute("DELETE FROM media_tags WHERE media_id = ?", mediaId)
         tagNames.mapNotNull { ensure(conn, it) }.distinct().forEach { tagId ->
-            conn.execute("INSERT IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?)", mediaId, tagId)
+            conn.execute("INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?)", mediaId, tagId)
         }
     }
 

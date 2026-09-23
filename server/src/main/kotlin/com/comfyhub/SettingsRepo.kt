@@ -25,7 +25,7 @@ object SettingsRepo {
         conn.execute(
             """
             INSERT INTO app_settings (k, v) VALUES (?, ?)
-            ON DUPLICATE KEY UPDATE v = VALUES(v)
+            ON CONFLICT(k) DO UPDATE SET v = excluded.v
             """.trimIndent(), key, value
         )
         Unit

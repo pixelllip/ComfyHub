@@ -15,6 +15,19 @@ import java.nio.file.StandardCopyOption
 object CaptureRepo {
     private val log = LoggerFactory.getLogger(CaptureRepo::class.java)
 
+    /**
+     * "这一行离现在多少秒"的 SQL 表达式（僵尸 Run 的超时判定用）。
+     *
+     * 时间是 ISO-8601 UTC 文本，两种方言的 `julianday` 都认；差别只在"现在"怎么写：
+     * SQLite 用 `'now'`，MySQL 用 `NOW(3)`。
+     */
+    private fun ageSecondsExpr(): String =
+        if (Db.isSqlite) {
+            "CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER)"
+        } else {
+            "TIMESTAMPDIFF(SECOND, created_at, NOW(3))"
+        }
+
     /** 单次导入的结果 */
     sealed interface Imported {
         data class Created(val mediaId: Long, val kind: String) : Imported
@@ -162,13 +175,15 @@ object CaptureRepo {
             val rawText = raw?.let { runCatching { AppJson.encodeToString(JsonObject.serializer(), it) }.getOrNull() }
 
             val inserted = conn.execute(
-                "INSERT IGNORE INTO capture_runs (run_key, source, status, raw) VALUES (?,?,?,?)",
+                "INSERT OR IGNORE INTO capture_runs (run_key, source, status, raw) VALUES (?,?,?,?)",
                 runKey, source, "running", rawText
             )
             if (inserted > 0) return@withConnection RunClaim(true)
 
             val existing = conn.queryOne(
-                "SELECT prompt_id, status, TIMESTAMPDIFF(SECOND, created_at, NOW(3)) AS age FROM capture_runs WHERE run_key = ?",
+                // 僵尸 Run 的年龄：`julianday` 是 SQLite 的（老 MySQL 那条分支见 Db.dialect）。
+                // 时间列都是 ISO-8601 UTC 文本，两种方言下 julianday 都能解析。
+                "SELECT prompt_id, status, ${ageSecondsExpr()} AS age FROM capture_runs WHERE run_key = ?",
                 runKey
             ) { Triple(it.longOrNull("prompt_id"), it.strOr("status"), it.intOrNull("age") ?: 0) }
 
@@ -177,7 +192,7 @@ object CaptureRepo {
             if (!canReclaim(status, age, force)) return@withConnection RunClaim(false, promptId, status)
 
             conn.execute(
-                "UPDATE capture_runs SET status = 'running', error = NULL, created_at = CURRENT_TIMESTAMP(3) WHERE run_key = ?",
+                "UPDATE capture_runs SET status = 'running', error = NULL, created_at = ${Db.now} WHERE run_key = ?",
                 runKey
             )
             RunClaim(true)

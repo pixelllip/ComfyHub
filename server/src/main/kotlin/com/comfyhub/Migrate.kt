@@ -6,17 +6,124 @@ import java.sql.Connection
 /**
  * 轻量级自动迁移。
  *
- * `db/schema.sql` 用的是 `CREATE TABLE IF NOT EXISTS`，对**已经存在**的库不会补新列；
- * 而 MySQL 8.4 又不支持 `ADD COLUMN IF NOT EXISTS`。所以这里先查 information_schema
- * 再决定是否执行 DDL —— 幂等、可重复执行，后端每次启动都会把结构补齐。
+ * ## 两条路（P2，2026-09-23）
  *
- * 这样「App 自动拉起后端」这条路上就不需要用户手动跑任何 SQL。
- * 同样的 DDL 也放在 `db/migrate.sql` 里，供命令行单独使用。
+ * - **SQLite（现在的运行库）**：DDL 的真源是 `db/schema.sqlite.sql`（构建时打进 jar），
+ *   启动时**逐句幂等执行** + 用 `PRAGMA table_info` 补列，最后把 `PRAGMA user_version`
+ *   设成 [com.comfyhub.ai.RunKit.SCHEMA_VERSION]（两类接口都拿它当 schemaVersion）。
+ * - **MySQL（只留给一次性数据搬迁）**：原来的 information_schema 探测那套，一个字没改。
+ *   新代码不要再往这条路上加东西。
+ *
+ * 为什么要"先探测再改"而不能只靠 `CREATE TABLE IF NOT EXISTS`：对**已经存在**的表，
+ * `IF NOT EXISTS` 不会补新列（MySQL 8.4 也不支持 `ADD COLUMN IF NOT EXISTS`）。
  */
 object Migrate {
     private val log = LoggerFactory.getLogger(Migrate::class.java)
 
-    fun run(): Int = Db.withConnection { conn ->
+    /** SQLite DDL 的 classpath 位置（`server/build.gradle.kts` 从 `<根>/db/` 拷进来）。 */
+    const val SQLITE_SCHEMA_RESOURCE = "db/schema.sqlite.sql"
+
+    fun run(): Int {
+        val changed = if (Db.isSqlite) runSqlite() else runMysql()
+        // --- 工具预算的一次性抬起（用户建议 ③，2026-09-22） ---
+        // 走**设置项**而不是 DDL：库里那份 ai.tools.policy 冻着旧出厂值（8 轮 / 16 次），
+        // 而这两项是用户可改的，normalizeStored 不许覆盖 —— 只能按值识别旧默认值再抬。
+        // 两种方言都要跑（搬迁完第一次启动也得抬）。
+        runCatching { com.comfyhub.ai.tools.ToolPolicy.bumpLegacyBudgets() }
+            .onFailure { log.warn("工具预算抬起失败（不影响启动）: {}", it.message) }
+        return changed
+    }
+
+    // -----------------------------------------------------------------------
+    //  SQLite
+    // -----------------------------------------------------------------------
+
+    private fun runSqlite(): Int {
+        val ddl = readSqliteSchema()
+        val statements = SqlScript.split(ddl)
+        check(statements.isNotEmpty()) { "SQLite schema 解析出 0 句，检查 $SQLITE_SCHEMA_RESOURCE" }
+
+        var changed = 0
+        Db.tx { conn ->
+            val before = userVersion(conn)
+            statements.forEach { stmt ->
+                // 触发器必须"先删再建"：`CREATE TRIGGER IF NOT EXISTS` 对**已存在**的同名触发器
+                // 什么都不做，改了触发器体的迁移就会静默不生效（这是 SQLite 侧的收敛式迁移陷阱）。
+                triggerName(stmt)?.let { name ->
+                    conn.execute("DROP TRIGGER IF EXISTS $name")
+                }
+                conn.execute(stmt)
+                changed++
+            }
+            // 收敛式补列（新加列时在这里登记；老结构也能被补齐）
+            changed += addColumnSqlite(conn, "prompts", "source", "TEXT NULL DEFAULT 'Manual'")
+            changed += addColumnSqlite(conn, "prompts", "source_ref", "TEXT NULL")
+            changed += addColumnSqlite(conn, "prompts", "workflow_json", "TEXT NULL")
+            changed += addColumnSqlite(conn, "media_assets", "source_ref", "TEXT NULL")
+            changed += addColumnSqlite(
+                conn, "media_assets", "nsfw",
+                "INTEGER NOT NULL DEFAULT 0 CHECK (nsfw IN (0,1))"
+            )
+            changed += addColumnSqlite(conn, "ai_models", "thinking_efforts", "TEXT NULL")
+            changed += addColumnSqlite(conn, "ai_models", "thinking_format", "TEXT NULL")
+            changed += addColumnSqlite(conn, "ai_runs", "reasoning_effort", "TEXT NULL")
+
+            // 版本号与 DDL 在**同一个事务**里落，崩在中间也不会出现"版本说到了、结构没到"
+            conn.execute("PRAGMA user_version = ${com.comfyhub.ai.RunKit.SCHEMA_VERSION}")
+            if (before != com.comfyhub.ai.RunKit.SCHEMA_VERSION) {
+                log.info(
+                    "SQLite schema 版本 {} → {}（执行 {} 句 DDL）",
+                    before, com.comfyhub.ai.RunKit.SCHEMA_VERSION, statements.size,
+                )
+            }
+        }
+        log.info("SQLite 结构已就绪（{} 句 DDL，{} 项补列）", statements.size, changed - statements.size)
+        return changed
+    }
+
+    /** 读 SQLite DDL：优先 classpath（jar 里有），退回源码树里的 `db/schema.sqlite.sql`。 */
+    private fun readSqliteSchema(): String {
+        Migrate::class.java.classLoader.getResourceAsStream(SQLITE_SCHEMA_RESOURCE)?.use { input ->
+            return input.readBytes().toString(Charsets.UTF_8)
+        }
+        // 兜底：某些运行方式（IDE 直接跑 main、没走 processResources）classpath 里没有
+        val cwd = java.nio.file.Paths.get("").toAbsolutePath().normalize()
+        listOf(cwd.resolve("../db/schema.sqlite.sql"), cwd.resolve("db/schema.sqlite.sql"))
+            .firstOrNull { java.nio.file.Files.isRegularFile(it) }
+            ?.let { return java.nio.file.Files.readString(it) }
+        error(
+            "找不到 SQLite schema（classpath:$SQLITE_SCHEMA_RESOURCE）。" +
+                "重跑一次 `gradle installDist` 会把它打进产物。"
+        )
+    }
+
+    private fun userVersion(conn: Connection): Int =
+        conn.queryOne("PRAGMA user_version") { it.getInt(1) } ?: 0
+
+    /** 从 `CREATE TRIGGER IF NOT EXISTS <名字>` / `CREATE TRIGGER <名字>` 里取名字。 */
+    private fun triggerName(statement: String): String? {
+        val m = Regex(
+            """^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)""",
+            RegexOption.IGNORE_CASE,
+        ).find(statement) ?: return null
+        return m.groupValues[1]
+    }
+
+    private fun columnExistsSqlite(conn: Connection, table: String, column: String): Boolean =
+        conn.queryList("PRAGMA table_info($table)") { it.getString("name") }
+            .any { it.equals(column, ignoreCase = true) }
+
+    private fun addColumnSqlite(conn: Connection, table: String, column: String, ddl: String): Int {
+        if (columnExistsSqlite(conn, table, column)) return 0
+        log.info("新增列 {}.{}", table, column)
+        return conn.execute("ALTER TABLE $table ADD COLUMN $column $ddl")
+    }
+
+    // -----------------------------------------------------------------------
+    //  MySQL（历史路径，只给一次性搬迁）
+    // -----------------------------------------------------------------------
+
+    private fun runMysql(): Int = Db.withConnection { conn ->
         var changed = 0
 
         // --- prompts：来源标记 + 工作流快照 ---
@@ -350,13 +457,7 @@ object Migrate {
             """.trimIndent()
         )
 
-        // --- 工具预算的一次性抬起（用户建议 ③，2026-09-22） ---
-        // 走**设置项**而不是 DDL：库里那份 ai.tools.policy 冻着旧出厂值（8 轮 / 16 次），
-        // 而这两项是用户可改的，normalizeStored 不许覆盖 —— 只能按值识别旧默认值再抬。
-        runCatching { com.comfyhub.ai.tools.ToolPolicy.bumpLegacyBudgets() }
-            .onFailure { log.warn("工具预算抬起失败（不影响启动）: {}", it.message) }
-
-        if (changed > 0) log.info("数据库结构已补齐（{} 项变更）", changed) else log.info("数据库结构已是最新")
+        if (changed > 0) log.info("MySQL 结构已补齐（{} 项变更）", changed) else log.info("MySQL 结构已是最新")
         changed
     }
 

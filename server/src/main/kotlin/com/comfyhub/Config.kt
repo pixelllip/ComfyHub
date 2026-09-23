@@ -37,6 +37,19 @@ data class AppConfig(
      */
     val projectRoot: Path = storageDir.parent ?: storageDir,
 ) {
+    /**
+     * 底层库方言 —— **从 JDBC URL 派生**（唯一真源，别再加一个会跟它漂移的字段）。
+     *
+     * P2（2026-09-23）之后默认是 SQLite（`jdbc:sqlite:<根>\.db\comfyhub.db`）；
+     * `jdbc:mysql://…` 只在"把老库搬进 SQLite"时作为**只读来源**出现。
+     */
+    val dbDialect: DbDialect
+        get() = if (jdbcUrl.startsWith("jdbc:sqlite:", ignoreCase = true)) {
+            DbDialect.SQLITE
+        } else {
+            DbDialect.MYSQL
+        }
+
     /** 是否只监听回环地址 */
     val loopbackOnly: Boolean get() = host == "127.0.0.1" || host == "::1" || host == "localhost"
 
@@ -61,6 +74,9 @@ data class AppConfig(
                 .map { it.trim().trimEnd('/') }
                 .filter { it.isNotBlank() }
 
+            // 项目根要先算出来：SQLite 库文件的默认位置就在它下面（`<根>\.db\comfyhub.db`）。
+            val projectRoot = resolveProjectRoot(storage)
+
             return AppConfig(
                 host = host,
                 // 端口默认 **0 = 让操作系统挑一个空闲端口**（用户 2026-09-22）。
@@ -72,12 +88,7 @@ data class AppConfig(
                 // 没给就让 OS 挑；挑不到候选端口时 [startServer] 还会回落一次随机端口。
                 // 真实端口写进 `.run\api.json`，前端 / 脚本 / ComfyUI 扩展都读那一份。
                 port = parsePort(env["COMFYHUB_PORT"]),
-                jdbcUrl = get(
-                    "COMFYHUB_JDBC_URL",
-                    "jdbc:mysql://127.0.0.1:3307/comfy_hub" +
-                        "?useUnicode=true&characterEncoding=UTF-8" +
-                        "&allowPublicKeyRetrieval=true&useSSL=false&rewriteBatchedStatements=true"
-                ),
+                jdbcUrl = defaultJdbcUrl(projectRoot),
                 dbUser = get("COMFYHUB_DB_USER", "comfyhub"),
                 dbPassword = get("COMFYHUB_DB_PASSWORD", "comfyhub"),
                 storageDir = storage,
@@ -86,7 +97,7 @@ data class AppConfig(
                 comfyOutputDir = get("COMFYHUB_COMFY_OUTPUT", "").takeIf { it.isNotBlank() },
                 allowRemote = allowRemote,
                 corsOrigins = corsOrigins,
-                projectRoot = resolveProjectRoot(storage),
+                projectRoot = projectRoot,
             )
         }
 
@@ -129,6 +140,24 @@ data class AppConfig(
             }
         }
 
+        /**
+         * 默认的数据库 URL（P2 起是 **SQLite**）。
+         *
+         * 位置：`<项目根>\.db\comfyhub.db` —— 与老的 `.mysql\` 同一个约定（点开头、在根目录下、
+         * 属于"可写运行数据"，打包脚本的清理清单不许动它）。同目录还会有 SQLite 自己产生的
+         * `-wal` / `-shm`，**一起拷才算一份完整备份**。
+         *
+         * `COMFYHUB_JDBC_URL` 显式给值就原样用它 —— 搬迁时就是靠它指向老 MySQL 库
+         * （`jdbc:mysql://127.0.0.1:3307/comfy_hub?...`）。路径统一成正斜杠：
+         * xerial 在 Windows 上认 `D:/x/y.db` 这种写法，反斜杠形式的容错没保证。
+         */
+        internal fun defaultJdbcUrl(projectRoot: Path): String {
+            val explicit = System.getenv("COMFYHUB_JDBC_URL")?.takeIf { it.isNotBlank() }
+            if (explicit != null) return explicit
+            val file = projectRoot.resolve(".db").resolve("comfyhub.db").toAbsolutePath().normalize()
+            return "jdbc:sqlite:" + file.toString().replace('\\', '/')
+        }
+
         private fun defaultStorageDir(): String {
             // 优先：运行目录（server/）下的 storage/
             val cwd = Paths.get("").toAbsolutePath().normalize()
@@ -160,8 +189,9 @@ data class AppConfig(
         append("host=$host port=$port\n")
         append("监听范围=${if (loopbackOnly) "仅本机回环" else "对外（局域网可达）"}\n")
         if (corsOrigins.isNotEmpty()) append("CORS 白名单=${corsOrigins.joinToString(",")}\n")
+        append("数据库=${if (dbDialect == DbDialect.SQLITE) "SQLite" else "MySQL（仅搬迁用）"}\n")
         append("jdbcUrl=$jdbcUrl\n")
-        append("dbUser=$dbUser\n")
+        if (dbDialect == DbDialect.MYSQL) append("dbUser=$dbUser\n")
         append("storage=$storageDir\n")
         append("maxUploadMB=${maxUploadBytes / 1024 / 1024}\n")
         append("projectRoot=$projectRoot\n")

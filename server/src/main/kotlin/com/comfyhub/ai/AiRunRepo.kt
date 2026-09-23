@@ -90,7 +90,7 @@ object AiRunRepo {
                   (id, conversation_id, status, provider_id, model_id, user_message_id, assistant_message_id,
                    provider_snapshot, model_snapshot, skill_snapshot, prompt_version, retry_of_run_id,
                    reasoning_effort, started_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP(3))
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, ${Db.now})
                 """.trimIndent(),
                 id, conversationId, RUNNING, providerId, modelId, userMessageId, assistantMessageId,
                 AppJson.encodeToString(JsonObject.serializer(), providerSnapshot),
@@ -121,7 +121,7 @@ object AiRunRepo {
                 """
                 UPDATE ai_runs
                    SET status = ?, error_code = ?, error_message = ?, usage_json = ?,
-                       completed_at = CURRENT_TIMESTAMP(3)
+                       completed_at = ${Db.now}
                  WHERE id = ?
                 """.trimIndent(),
                 status, errorCode, errorMessage,
@@ -136,7 +136,7 @@ object AiRunRepo {
         conn.execute(
             """
             UPDATE ai_runs
-               SET status = ?, error_code = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP(3)
+               SET status = ?, error_code = ?, error_message = ?, completed_at = ${Db.now}
              WHERE status = ?
             """.trimIndent(),
             FAILED, AiErrorCode.PROTOCOL_ERROR, reason, RUNNING,
@@ -159,11 +159,11 @@ object AiRunRepo {
                     INSERT INTO ai_tool_calls
                       (id, run_id, provider_call_id, name, arguments_json, approval, status,
                        result_json, content, error, elapsed_ms, started_at, completed_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
-                    ON DUPLICATE KEY UPDATE status = VALUES(status), result_json = VALUES(result_json),
-                       content = VALUES(content), error = VALUES(error),
-                       approval = VALUES(approval), elapsed_ms = VALUES(elapsed_ms),
-                       completed_at = CURRENT_TIMESTAMP(3)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?, ${Db.now}, ${Db.now})
+                    ON CONFLICT(id) DO UPDATE SET status = excluded.status, result_json = excluded.result_json,
+                       content = excluded.content, error = excluded.error,
+                       approval = excluded.approval, elapsed_ms = excluded.elapsed_ms,
+                       completed_at = ${Db.now}
                     """.trimIndent(),
                     rec.id, rec.runId, rec.callId, rec.name, rec.argumentsJson.take(16_000),
                     rec.approval, rec.status,
@@ -211,7 +211,7 @@ object AiRunRepo {
                     """
                     INSERT INTO ai_tool_calls
                       (id, run_id, provider_call_id, name, arguments_json, approval, status, started_at)
-                    VALUES (?,?,?,?,?,'pending','pending', CURRENT_TIMESTAMP(3))
+                    VALUES (?,?,?,?,?,'pending','pending', ${Db.now})
                     """.trimIndent(),
                     UUID.randomUUID().toString(), runId, callId, name, argumentsJson.take(16_000),
                 )
@@ -229,7 +229,7 @@ object AiRunRepo {
                 """
                 UPDATE ai_tool_calls
                    SET approval = ?, status = ?, result_json = ?, content = ?, error = ?,
-                       elapsed_ms = ?, completed_at = CURRENT_TIMESTAMP(3)
+                       elapsed_ms = ?, completed_at = ${Db.now}
                  WHERE run_id = ? AND provider_call_id = ? AND status = 'pending'
                 """.trimIndent(),
                 rec.approval, rec.status,
@@ -283,7 +283,7 @@ object AiRunRepo {
                 UPDATE ai_tool_calls
                    SET approval = 'denied', status = 'denied',
                        error = '后端重启，审批等待被打断（按拒绝处理）',
-                       completed_at = CURRENT_TIMESTAMP(3)
+                       completed_at = ${Db.now}
                  WHERE status = 'pending'
                 """.trimIndent(),
             )
@@ -296,7 +296,7 @@ object AiRunRepo {
         runCatching {
             Db.withConnection { conn ->
                 conn.execute(
-                    "INSERT IGNORE INTO ai_run_events (run_id, seq, event_type, payload_json) VALUES (?,?,?,?)",
+                    "INSERT OR IGNORE INTO ai_run_events (run_id, seq, event_type, payload_json) VALUES (?,?,?,?)",
                     runId, seq, type, AppJson.encodeToString(JsonObject.serializer(), payload),
                 )
             }
@@ -342,7 +342,7 @@ object AiRunRepo {
                     try {
                         batch.forEach { (seq, type, payload) ->
                             conn.execute(
-                                "INSERT IGNORE INTO ai_run_events (run_id, seq, event_type, payload_json) VALUES (?,?,?,?)",
+                                "INSERT OR IGNORE INTO ai_run_events (run_id, seq, event_type, payload_json) VALUES (?,?,?,?)",
                                 runId, seq, type, AppJson.encodeToString(JsonObject.serializer(), payload),
                             )
                         }

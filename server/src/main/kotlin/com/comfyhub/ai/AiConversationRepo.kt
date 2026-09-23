@@ -233,7 +233,7 @@ object AiConversationRepo {
                 )
             }
             // 会话列表按 updated_at 排序；发消息必须把它顶上去
-            conn.execute("UPDATE ai_conversations SET updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?", conversationId)
+            conn.execute("UPDATE ai_conversations SET updated_at = ${Db.now} WHERE id = ?", conversationId)
         }
         return listMessages(conversationId).first { it.id == id }
     }
@@ -253,7 +253,7 @@ object AiConversationRepo {
                 INSERT INTO ai_message_parts
                   (message_id, ordinal, type, text, attachment_id, tool_call_id, json_payload)
                 VALUES (?,?,?,?,?,?,?)
-                ON DUPLICATE KEY UPDATE text = VALUES(text), json_payload = VALUES(json_payload)
+                ON CONFLICT(message_id, ordinal) DO UPDATE SET text = excluded.text, json_payload = excluded.json_payload
                 """.trimIndent(),
                 messageId, ordinal, part.type, part.text, part.attachmentId, part.toolCallId,
                 part.jsonPayload?.let { AppJson.encodeToString(JsonElement.serializer(), it) },

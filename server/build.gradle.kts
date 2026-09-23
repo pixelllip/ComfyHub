@@ -46,8 +46,15 @@ dependencies {
     // --- JSON ---
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
 
-    // --- MySQL + 连接池（原生 JDBC，直接用 MySQL 方言特性） ---
+    // --- 数据库 + 连接池（原生 JDBC + 手写 SQL，刻意不用 ORM） ---
+    //
+    // P2（2026-09-23，总纲 §3.1）：
+    //   · **SQLite 是现在的运行库**（xerial 自带 SQLite 3.53.x，不依赖系统库）；
+    //   · MySQL 驱动**只留给一次性数据搬迁**（把老库读出来写进 SQLite，见 MigrateData.kt），
+    //     搬完就能删。
+    // 别在 server/ 里继续堆只对 MySQL 成立的东西（新方言 / information_schema 探测）。
     implementation("com.zaxxer:HikariCP:6.3.3")
+    implementation("org.xerial:sqlite-jdbc:3.53.4.0")
     implementation("com.mysql:mysql-connector-j:9.4.0")
 
     // --- 图片解码：给 JVM 的 ImageIO 补一个 **纯 Java** 的 WebP 读取器 ---
@@ -101,6 +108,14 @@ application {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+// SQLite schema 的真源在 `<根>\db\schema.sqlite.sql`（人看的、也能用 sqlite3 CLI 手工建库），
+// 后端启动时从 classpath 读出逐句执行 —— 所以它必须进 jar。
+// 这样源码树与发布包两种布局都只有**一份** DDL，不会出现"两份建表语句各改各的"。
+tasks.processResources {
+    from(rootProject.file("../db/schema.sqlite.sql")) { into("db") }
+    // 搬迁/核对用的 MySQL 侧只读 DDL 不打包：它只在源码树里跑
 }
 
 // 打包成可直接运行的 fat jar: build/libs/comfy-hub-server-1.0.0-all.jar

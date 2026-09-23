@@ -78,7 +78,7 @@ object AiQuestionRepo : QuestionStore {
                     """
                     UPDATE ai_questions
                        SET status = ?, answer = ?, option_index = ?, option_indexes = ?,
-                           answered_at = CURRENT_TIMESTAMP(3)
+                           answered_at = ${Db.now}
                      WHERE question_id = ?
                     """.trimIndent(),
                     status, answer, optionIndex,
@@ -97,7 +97,7 @@ object AiQuestionRepo : QuestionStore {
         runCatching {
             Db.withConnection { conn ->
                 conn.execute(
-                    "UPDATE ai_questions SET status = ?, answered_at = CURRENT_TIMESTAMP(3) WHERE question_id = ? AND status = 'pending'",
+                    "UPDATE ai_questions SET status = ?, answered_at = ${Db.now} WHERE question_id = ? AND status = 'pending'",
                     status, questionId,
                 )
             }
@@ -108,7 +108,7 @@ object AiQuestionRepo : QuestionStore {
         runCatching {
             Db.withConnection { conn ->
                 conn.execute(
-                    "UPDATE ai_questions SET status = ?, answered_at = CURRENT_TIMESTAMP(3) WHERE run_id = ? AND status = 'pending'",
+                    "UPDATE ai_questions SET status = ?, answered_at = ${Db.now} WHERE run_id = ? AND status = 'pending'",
                     status, runId,
                 )
             }
@@ -132,7 +132,7 @@ object AiQuestionRepo : QuestionStore {
     fun expireStalePending(): Int = runCatching {
         Db.withConnection { conn ->
             conn.execute(
-                "UPDATE ai_questions SET status = 'expired', answered_at = CURRENT_TIMESTAMP(3) WHERE status = 'pending'",
+                "UPDATE ai_questions SET status = 'expired', answered_at = ${Db.now} WHERE status = 'pending'",
             )
         }
     }.getOrDefault(0)
