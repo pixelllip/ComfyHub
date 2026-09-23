@@ -129,6 +129,43 @@ OBJECT_INFO = {
             "optional": {"filename_prefix": ["STRING", {"default": "ComfyUI"}]},
         }
     },
+    # ---------------------------------------------------------------
+    #  库里真实捕获的工作流常用的加载器 / 基础节点（2026-09-23 补）。
+    #
+    #  P1 的提交前审核（WorkflowAudit[CHECK_UNKNOWN_NODE]）会拿
+    #  `/object_info` 对账"本机没有的节点类"，而这张表只有上面 7 个基础类 ——
+    #  于是 e2e-submit 挑中一条用了 UNET/CLIP/VAE Loader 的真实捕获工作流时
+    #  必然被审核拦下（[FAIL] MODEL_NOT_LOADABLE）。这里补上最常见的那几类，
+    #  让"假 ComfyUI"对库里的真实工作流说得过去；schema 只求存在，
+    #  假的 /prompt 本来就不校验参数。
+    # ---------------------------------------------------------------
+    "CLIPLoader": {
+        "input": {"required": {
+            "clip_name": [["clip/fake_clip.safetensors"]],
+            "type": [["stable_diffusion", "flux", "mochi", "ltxv"]],
+        }}
+    },
+    "UNETLoader": {
+        "input": {"required": {
+            "unet_name": [["diffusion_models/fake_unet.safetensors"]],
+            "weight_dtype": [["default", "fp8_e4m3fn", "fp8_e5m2"]],
+        }}
+    },
+    "VAELoader": {
+        "input": {"required": {"vae_name": [["vae/fake_vae.safetensors"]]}}
+    },
+    "ConditioningZeroOut": {
+        "input": {"required": {"conditioning": ["CONDITIONING"]}}
+    },
+    "LoadImage": {
+        "input": {"required": {
+            "image": [["example.png", {"image_upload": True}]],
+        }}
+    },
+    # 用户实机装的 KJ 自定义节点（捕获图里就是这个拼法，照抄）
+    "PathchSageAttentionKJ": {
+        "input": {"required": {"model": ["MODEL"], "bypass": [["off", "on"]]}}
+    },
 }
 
 

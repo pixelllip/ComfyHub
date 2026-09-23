@@ -26,12 +26,15 @@
                                     这一幕验：只读接口列得出它们、AI 的 `comfy_list_workflows` 也看得见、
                                     一键导入真的入库且幂等（用户 bug ⑤）
 
-    前置条件：MySQL + 后端在跑（scripts\comfyhub.ps1 up），本机有 python，
-    库里至少有 1 条**带 API 节点图**的提示词（runnable=true）。
+    前置条件：MySQL + 后端在跑（scripts\comfyhub.ps1 up），本机有 python。
+    **目标工作流是脚本自己推送的一条合成捕获**（节点类 / 模型名全部来自
+    `fake_comfy.py` 的 `/object_info`），所以**不依赖用户库里有什么** ——
+    2026-09-23 之前它是从库里挑真实捕获的，那会同时被 P1 的提交前审核
+    （unknownNodes）与提交前模型预检拦住，红得莫名其妙。
 
 .EXAMPLE
     pwsh -File scripts\e2e-submit-test.ps1
-    pwsh -File scripts\e2e-submit-test.ps1 -PromptId 82 -KeepData
+    pwsh -File scripts\e2e-submit-test.ps1 -KeepData
 #>
 [CmdletBinding()]
 param(
@@ -40,7 +43,6 @@ param(
     [string]$ApiBase = '',
     [int]$ComfyPort = 8189,
     [int]$GatewayPort = 8798,
-    [int]$PromptId = 0,
     [switch]$KeepData
 )
 
@@ -209,49 +211,9 @@ try {
         Say "  已清掉上一轮遗留的 $stale 条测试提示词 / $staleConvs 个测试会话与运行记录" 'DarkGray'
     }
 
-    # --- 0. 找一条能跑的工作流 -------------------------------------------
-    # `hasWorkflow` 只说明存过工作流（可能是界面格式），提交需要的是 **API 节点图**，
-    # 所以这里逐个试到真的拿得到 api-graph 为止（老数据只有界面格式，跑不了）。
-    $prompts = Invoke-Api 'GET' '/api/prompts?size=50' $null
-    $target = $null
-    $apiGraph = $null
-    $candidates = if ($PromptId -gt 0) {
-        @($prompts.items | Where-Object { $_.id -eq $PromptId })
-    } else {
-        @($prompts.items)
-    }
-    foreach ($c in $candidates) {
-        $g = $null
-        try { $g = Invoke-Api 'GET' "/api/prompts/$($c.id)/api-graph" $null } catch { $g = $null }
-        if ($g) { $target = $c; $apiGraph = $g; break }
-    }
-    if (-not $target) {
-        Say '  库里没有「带 API 节点图」的提示词（老数据只有界面格式工作流）。' 'Yellow'
-        Say '  先在 ComfyUI 里正常跑一次让它被捕获，再重跑这个脚本。' 'Yellow'
-        exit 1
-    }
-    Say ("  用提示词 id={0}「{1}」" -f $target.id, $target.title) 'DarkGray'
-
-    $overridePath = $null
-    $overrideValue = $null
-    foreach ($field in @('steps', 'noise_seed', 'seed', 'denoise')) {
-        foreach ($nodeId in $apiGraph.PSObject.Properties.Name) {
-            $inputs = $apiGraph.$nodeId.inputs
-            if ($inputs -and $inputs.PSObject.Properties.Name -contains $field) {
-                $overridePath = "$nodeId.$field"
-                $overrideValue = if ($field -eq 'steps' -or $field -eq 'seed' -or $field -eq 'noise_seed') { '13' } else { '0.9' }
-                break
-            }
-        }
-        if ($overridePath) { break }
-    }
-    if (-not $overridePath) {
-        Say '  这条工作流里找不到可覆盖的标量参数（steps / seed / denoise），换一条再试。' 'Yellow'
-        exit 1
-    }
-    Say ("  将覆盖参数 {0} = {1}" -f $overridePath, $overrideValue) 'DarkGray'
-
-    # --- 1. 起假 ComfyUI + 假网关，并把捕获配置指向假 ComfyUI --------------
+    # --- 0. 起假 ComfyUI + 假网关，并把捕获配置指向假 ComfyUI --------------
+    # （必须先于"挑目标工作流"：下一步要拿假 ComfyUI 的 /object_info 对账
+    #   候选工作流的节点类，见下面的 unknownNodes 说明。）
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
     Get-ChildItem $OutDir -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     # 每次都给一张**内容一定不同**的图：入库靠 SHA-256 去重，撞上旧文件会走"重复"分支，
@@ -284,6 +246,83 @@ try {
         enabled = $false; comfyUrl = "http://127.0.0.1:$ComfyPort"; outputDir = $OutDir
         pollSeconds = 4; autoTag = 'ComfyUI'; maxPerPoll = 20; downloadFallback = $true
     } | Out-Null
+
+    # 假 ComfyUI 自己声明的节点定义：后面合成目标工作流要用它嘴里的模型名
+    # （P1 起提交前审核拿 `/object_info` 对账"本机没有的节点类"、提交前模型预检
+    #   对账"实例能不能加载这些文件" —— 两个闸门都吃这份表，见 fake_comfy.py）。
+    $fakeInfo = Invoke-RestMethod "http://127.0.0.1:$ComfyPort/object_info" -TimeoutSec 5
+    $fakeCkpt = $fakeInfo.CheckpointLoaderSimple.input.required.ckpt_name[0][0]
+
+    # --- 1. 推送一条**合成捕获**当目标工作流 ---------------------------------
+    #
+    # 为什么不再从库里挑真实捕获（2026-09-23 教训）：那条路同时依赖
+    #   ① 库里有带 API 节点图的提示词；
+    #   ② 假 fixture 认识它引用的每个节点类（否则 P1 审核的 unknownNodes 必拦）；
+    #   ③ 假实例"加载得了"它引用的每个模型文件（否则模型预检必拦）。
+    # 库里进了几条真实捕获（UNET/CLIP/VAE Loader + 真模型名）之后 ②③ 必红 ——
+    # 表现是第 2 幕报 MODEL_NOT_LOADABLE，而脚本根本没打算验审核。
+    # 改成**自己造目标**：节点类与模型名全部来自 fake_comfy.py 自己的 /object_info，
+    # 审核 / 预检 / 真提交 / 入库全链路都跑在这条合成工作流上，与用户库无关。
+    $graph = @{
+        '4' = @{ class_type = 'CheckpointLoaderSimple'; inputs = @{ ckpt_name = $fakeCkpt } }
+        '6' = @{ class_type = 'CLIPTextEncode'; inputs = @{ text = 'e2e submit 合成工作流'; clip = @('4', 0) } }
+        '7' = @{ class_type = 'CLIPTextEncode'; inputs = @{ text = 'negative'; clip = @('4', 0) } }
+        '5' = @{ class_type = 'EmptyLatentImage'; inputs = @{ width = 512; height = 512; batch_size = 1 } }
+        '3' = @{ class_type = 'KSampler'; inputs = @{
+                    model = @('4', 0); seed = 123456; steps = 20; cfg = 7.0
+                    sampler_name = 'euler'; scheduler = 'normal'; denoise = 1.0
+                    positive = @('6', 0); negative = @('7', 0); latent_image = @('5', 0) } }
+        '8' = @{ class_type = 'VAEDecode'; inputs = @{ samples = @('3', 0); vae = @('4', 2) } }
+        '9' = @{ class_type = 'SaveImage'; inputs = @{ images = @('8', 0); filename_prefix = 'e2e_submit' } }
+    }
+    # capture_runs.raw 要存成 /history 条目的形状（HistoryEntry.parse 从中取 API 图）
+    $rawEntry = @{ prompt = @{ prompt = $graph } }
+    # 合成捕获的产物**单独生成一张内容不同的图**：入库靠 SHA-256 判重，
+    # 后面第 2 幕提交后捕获用的也是这张目录里的 png —— 共用同一张的话，
+    # 提交链路的入库会全部判成"与已有文件相同"，mediaIds=[]，第 2 幕必红
+    # （AGENTS 记过同样的坑：每次都要给一张内容一定不同的图）。
+    $synthPng = Join-Path $OutDir 'e2e_submit_synth_00001_.png'
+    & $python (Join-Path $E2eDir 'make_png.py') $synthPng `
+        --size (Get-Random -Minimum 200 -Maximum 520) `
+        --color "$(Get-Random -Minimum 20 -Maximum 230),$(Get-Random -Minimum 20 -Maximum 230),$(Get-Random -Minimum 20 -Maximum 230)" | Out-Null
+    $synth = Invoke-Api 'POST' '/api/ingest/comfyui' @{
+        runKey    = 'e2e-submit-synth-0001'
+        source    = 'ComfyUI'
+        status    = 'success'
+        comfyUrl  = "http://127.0.0.1:$ComfyPort"
+        outputDir = $OutDir
+        prompt    = $graph
+        raw       = $rawEntry
+        outputs   = @(@{ filename = 'e2e_submit_synth_00001_.png'; subfolder = ''; type = 'output'; kind = 'IMAGE'; nodeType = 'SaveImage' })
+        extra     = @{ title = 'e2e-submit 合成工作流' }
+    }
+    Check '合成工作流推送入库' ($synth.created -eq $true -and $synth.promptId) ($synth | ConvertTo-Json -Compress)
+    $script:CreatedSynthPromptId = if ($synth.promptId) { [long]$synth.promptId } else { 0 }
+    if ($synth.mediaIds) { $createdMediaIds += @($synth.mediaIds) }
+    $target = Invoke-Api 'GET' "/api/prompts/$($script:CreatedSynthPromptId)" $null
+    $apiGraph = $null
+    try { $apiGraph = Invoke-Api 'GET' "/api/prompts/$($script:CreatedSynthPromptId)/api-graph" $null } catch { $apiGraph = $null }
+    Check '合成工作流带 API 节点图' ($null -ne $apiGraph) 'api-graph 为空（raw 的形状不对，comfy_submit 没法提交）'
+    if (-not $apiGraph) { exit 1 }
+
+    $overridePath = $null
+    $overrideValue = $null
+    foreach ($field in @('steps', 'noise_seed', 'seed', 'denoise')) {
+        foreach ($nodeId in $apiGraph.PSObject.Properties.Name) {
+            $inputs = $apiGraph.$nodeId.inputs
+            if ($inputs -and $inputs.PSObject.Properties.Name -contains $field) {
+                $overridePath = "$nodeId.$field"
+                $overrideValue = if ($field -eq 'steps' -or $field -eq 'seed' -or $field -eq 'noise_seed') { '13' } else { '0.9' }
+                break
+            }
+        }
+        if ($overridePath) { break }
+    }
+    if (-not $overridePath) {
+        Say '  这条工作流里找不到可覆盖的标量参数（steps / seed / denoise），换一条再试。' 'Yellow'
+        exit 1
+    }
+    Say ("  将覆盖参数 {0} = {1}" -f $overridePath, $overrideValue) 'DarkGray'
 
     # 权限档先存一份并**临时钉成 ask**：第 1 幕验的就是"没人批准就不提交"，
     # 而用户平时可能把档位切成了「自动允许（无需批准）」—— 那时 comfy_submit 会立刻执行，
