@@ -594,10 +594,19 @@ async fn delete_prompt_keeps_media_and_logs_delete() {
     assert_eq!(deletes, 1);
 }
 
-/// 还没搬的端点要**明确 501**，不许拿空数组假装成功。
+/// 还没搬的端点要**明确 501**，不许拿空数组假装成功；搬过来的则必须真的能用。
 #[tokio::test]
-async fn unmigrated_endpoints_answer_501() {
-    let (status, body) = send_empty(router_for(state()), "GET", "/api/prompts/10/media").await;
+async fn unmigrated_endpoints_answer_501_and_migrated_ones_work() {
+    // 搬过来了：提示词下的产物列表（200 + 数组，提示词不存在也是空数组——与 Kotlin 同）
+    let (status, body) = get_json(router_for(state()), "/api/prompts/10/media").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    let (status, body) = get_json(router_for(state()), "/api/prompts/9999/media").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!([]));
+
+    // 还没搬：视频封面要 ffmpeg 抽帧
+    let (status, body) = get_json(router_for(state()), "/api/media/100/poster").await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
     assert_eq!(body["error"], "NOT_IMPLEMENTED");
 }
@@ -834,11 +843,15 @@ async fn media_thumb_generates_a_cached_jpeg_and_falls_back_honestly() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     // 还没搬的仍然是 501（别让"缩略图能用了"顺手把 poster/upload 也变成假成功）
-    for uri in ["/api/media/100/poster", "/api/media/100/prompt"] {
+    for uri in ["/api/media/100/poster"] {
         let (status, body) = get_json(router_for(state.clone()), uri).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "uri={uri}");
         assert_eq!(body["error"], "NOT_IMPLEMENTED");
     }
+    // 产物关联的完整提示词也搬过来了（204 = 没关联）
+    let (status, _) = get_json(router_for(state.clone()), "/api/media/101/prompt").await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "视频产物没关联提示词 → 204");
+
     // 上传已经搬过来了：空 multipart 是 400（不再是 501）
     let empty = multipart_body("----comfyhubtest", &[], &[]);
     let (status, _) = post_multipart(router_for(state.clone()), "/api/media/upload", empty).await;
@@ -1162,5 +1175,60 @@ async fn workflow_endpoints_distinguish_404_from_204() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let (status, _) = get_json(router_for(state.clone()), "/api/media/9999/workflow").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+#[tokio::test]
+async fn media_prompt_has_three_outcomes() {
+    let state = state();
+    // 有关联 → 200 + 完整提示词（含标签与产物计数）
+    let (status, body) = get_json(router_for(state.clone()), "/api/media/100/prompt").await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(body["id"], 10);
+    assert_eq!(body["title"], "赛博朋克少女");
+    assert_eq!(body["tags"][0]["name"], "赛博朋克");
+
+    // 没关联 → 204（Dart 的 `mediaPrompt` 把 204 当 null，界面退化成"没有提示词"）
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO media_assets (id, kind, original_name, stored_name) VALUES (103, 'IMAGE', 'z.png', 'z.png')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+    let (status, _) = get_json(router_for(state.clone()), "/api/media/103/prompt").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // 正常路径下**根本不会出现悬挂引用**：R1 生效时 `prompt_id` 是 ON DELETE SET NULL，
+    // 删提示词只会把它解绑 → 下一条查询变成 204（产物照样留着，这正是"删提示词保产物"）
+    state
+        .with(|conn| conn.execute("DELETE FROM prompts WHERE id = 10", []).map(|_| ()))
+        .unwrap();
+    let (status, _) = get_json(router_for(state.clone()), "/api/media/100/prompt").await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "删提示词后产物被解绑（不是悬挂）");
+
+    // 悬挂引用只在"外键没生效时写进去的库"里才会出现 —— 把 FK 关掉造一个，验证 404 分支
+    // （Kotlin 那条路由这里回的是 200 + {"error":…}，前端会把它解析成一条空提示词；
+    //  我们回 404，Dart 的 mediaPrompt 对非 2xx 是抛异常 —— 这是有意的行为差异）
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO media_assets (id, prompt_id, kind, original_name, stored_name)
+                 VALUES (104, 11, 'IMAGE', 'd.png', 'd.png')",
+                [],
+            )?;
+            conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+            conn.execute("DELETE FROM prompts WHERE id = 11", [])?;
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            Ok(())
+        })
+        .unwrap();
+    let (status, body) = get_json(router_for(state.clone()), "/api/media/104/prompt").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body["message"].as_str().unwrap().contains("已被删除"));
+
+    // 产物本身不存在 → 404
+    let (status, _) = get_json(router_for(state.clone()), "/api/media/9999/prompt").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }

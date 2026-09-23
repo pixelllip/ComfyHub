@@ -25,7 +25,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, patch, post, put},
+    routing::{delete, patch, post, put},
     Json, Router,
 };
 use rusqlite::{params, OptionalExtension};
@@ -48,7 +48,6 @@ pub fn write_router() -> Router<AppState> {
         .route("/api/prompts/{id}/tags", post(add_tags))
         .route("/api/prompts/{id}/tags/{tag_id}", delete(remove_tag))
         .route("/api/media/{id}", patch(patch_media).delete(delete_media))
-        .route("/api/prompts/{id}/media", get(list_media_stub))
 }
 
 /// `PATCH /api/media/{id}`：改标题 / 关联提示词 / 收藏 / 备注 / NSFW 标记。
@@ -69,10 +68,6 @@ async fn delete_media(
     Ok(Json(Deleted { deleted: id }))
 }
 
-/// 产物列表还没搬（`/api/media` 属于后面几批）；**明确 501**，不要给个空数组假装成功。
-async fn list_media_stub(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, ApiError> {
-    Err(ApiError::not_implemented("产物端点还没搬到 Rust（灰度中，先走 Kotlin 的 8080）"))
-}
 
 impl From<WriteError> for ApiError {
     fn from(e: WriteError) -> Self {

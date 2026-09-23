@@ -525,3 +525,62 @@ pub async fn media_thumb(state: AppState, id: i64) -> Result<Response, ApiError>
     }
     Ok(builder.body(Body::from(bytes)).unwrap())
 }
+/// `GET /api/prompts/{id}/media` —— 某个提示词下的全部产物（按创建时间倒序）。
+///
+/// ⚠ 与 Kotlin 一致：**提示词不存在也回 200 + `[]`**（不做存在性检查）。
+/// 这不是"忘了"，而是那条路由本来就没查 —— 详情页拿空列表渲染，比弹一个 404 更合适。
+pub fn list_by_prompt(state: &AppState, prompt_id: i64) -> Result<Vec<MediaDto>, ApiError> {
+    state.with(|conn| {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {COLS} {FROM} WHERE m.prompt_id = ?1 ORDER BY m.created_at DESC"
+        ))?;
+        let rows = stmt.query_map(params![prompt_id], |row| media_from_row(row))?;
+        let mut items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        for item in items.iter_mut() {
+            item.prompt_tags = merged_tags(conn, item)?;
+        }
+        Ok(items)
+    })
+}
+
+/// `GET /api/media/{id}/prompt` —— 这条产物关联的**完整提示词**。
+///
+/// 三种结果：
+///  - 产物不存在 → 404；
+///  - 产物没关联提示词（`prompt_id IS NULL`）→ **204**（Dart 那边 `mediaPrompt` 就是把 204 当 null）；
+///  - 有关联但那条提示词**已经不在了**（悬挂引用）→ **404**，说明是"关联的提示词已被删除"。
+///
+/// ⚠ 这里与 Kotlin 有一处**有意的行为差异**：Kotlin 那条路由用的是
+/// `PromptRepo.get(pid) ?: ApiError("关联的提示词已被删除")` —— 也就是**200 + `{"error":…}`**。
+/// 前端 `Prompt.fromJson` 会把这个 body 解析成一条空提示词（弹窗里显示空字段），
+/// 而不是报错。我们回 404：Dart 的 `mediaPrompt` 对非 2xx 是抛异常（界面显示失败），
+/// 至少不会假装"拿到了一条提示词"。**切流时这条要在验收清单上过一遍。**
+pub fn prompt_of_media(state: &AppState, media_id: i64) -> Result<Option<crate::models::PromptDto>, ApiError> {
+    let media = get(state, media_id)?;
+    let Some(prompt_id) = media.prompt_id else {
+        return Ok(None);
+    };
+    state
+        .with(|conn| {
+            let prompt = conn
+                .query_row(
+                    "SELECT * FROM prompts WHERE id = ?1",
+                    params![prompt_id],
+                    |row| crate::models::prompt_from_row(row),
+                )
+                .optional()?;
+            match prompt {
+                Some(mut p) => {
+                    p.tags = crate::routes::tags_of(conn, p.id)?;
+                    p.media_count = crate::routes::media_count_of(conn, p.id)?;
+                    Ok(Some(Some(p)))
+                }
+                None => Ok(Some(None)),
+            }
+        })?
+        .flatten()
+        .map_or_else(
+            || Err(ApiError::not_found("关联的提示词已被删除")),
+            |p| Ok(Some(p)),
+        )
+}

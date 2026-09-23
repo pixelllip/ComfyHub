@@ -96,6 +96,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/media/{id}/thumb", get(media_thumb))
         .route("/api/media/{id}/poster", get(media_poster))
         .route("/api/media/{id}/prompt", get(media_prompt))
+        .route("/api/prompts/{id}/media", get(prompt_media))
         .route("/api/media/upload", axum::routing::post(media_upload))
         // 捕获配置（本地那一半：读写 app_settings 里的一行 JSON）
         .route("/api/capture/config", get(capture_config).put(put_capture_config))
@@ -148,8 +149,26 @@ async fn media_poster(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, A
     Err(crate::media::not_migrated("视频封面"))
 }
 
-async fn media_prompt(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, ApiError> {
-    Err(crate::media::not_migrated("产物关联的完整提示词"))
+/// `GET /api/media/{id}/prompt`：204 = 这条产物没关联提示词（Dart 的 `mediaPrompt` 把 204 当 null）。
+async fn media_prompt(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<axum::response::Response, ApiError> {
+    match crate::media::prompt_of_media(&state, id)? {
+        None => Ok(axum::response::Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(axum::body::Body::empty())
+            .unwrap()),
+        Some(prompt) => Ok(Json(prompt).into_response()),
+    }
+}
+
+/// `GET /api/prompts/{id}/media`：这条提示词下的全部产物。
+async fn prompt_media(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<crate::models::MediaDto>>, ApiError> {
+    Ok(Json(crate::media::list_by_prompt(&state, id)?))
 }
 
 /// `GET /api/capture/config`
