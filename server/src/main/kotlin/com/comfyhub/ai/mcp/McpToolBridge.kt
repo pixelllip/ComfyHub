@@ -17,17 +17,18 @@ import org.slf4j.LoggerFactory
  *
  * 三条判据（2026-09-21 与用户确认的方向：用官方 MCP 的能力，但**不把它的全部权力交出去**）：
  *
- *  1. **碰进程 / 改用户安装的，一律 [ToolAccess.DENY]**：`stop_comfyui` /
- *     `restart_comfyui` / `update_comfyui` / `switch_comfyui_version` / `install_node` /
- *     `download_model`。理由：AGENTS §10 明写"没有 shell / 进程类工具"（AIH-045），
- *     而且起停 ComfyUI 在本项目里是 `scripts\comfyhub.ps1` 的活（AGENTS §5：脚本是唯一入口）。
+ *  1. **改用户安装的，一律 [ToolAccess.DENY]**：`update_comfyui` / `switch_comfyui_version` /
+ *     `install_node` / `download_model`。理由：装自定义节点是跑第三方代码、下模型是多 GB 出网写入，
+ *     这类"动用户安装"的事不该由模型发起（AGENTS §10：没有 shell / 进程类工具，AIH-045）。
  *     **这不是"少给点方便"，是权限模型的边界** —— 用户要在设置里显式打开才会生效。
  *
- *     例外（2026-09-22 用户拍板）：**`launch_comfyui` 默认 [ToolAccess.ASK]** ——
- *     用户原话："权限跟随当前对话的权限设置，默认是 ask，我设置了 allow 那就 allow"。
- *     场景：ComfyUI 没在跑时，模型自己能把它拉起来（走 comfy-cli 已设置的工作区），
- *     但每次要用户点一下批准；用户逐项改成 allow（或全局「自动允许」档）后就不再等。
- *     stop / restart / update / switch 仍然 deny：停掉正在跑的队列、动用户的安装，不该由模型发起。
+ *     起停类走 [ToolAccess.ASK]（`launch_comfyui` 2026-09-22、`stop_comfyui` / `restart_comfyui`
+ *     2026-09-23，都是用户拍板："权限跟随当前对话的权限设置，默认是 ask，我设置了 allow 那就 allow"）：
+ *     - `launch_comfyui`：ComfyUI 没在跑时，模型自己能把它拉起来（走 comfy-cli 已设置的工作区）；
+ *     - `stop_comfyui` / `restart_comfyui`：实例起错了（没挂共享模型 / 端口不对）时，模型必须能
+ *       **停下再重新拉**，否则只能原地打转 —— 会话 `7c1e7ecd`（2026-09-23）里模型明知实例没挂
+ *       Shared 却被 deny 挡死，烧掉半小时。起停都只影响"正在跑的队列"，不动用户安装；
+ *     - update / switch / install / download 仍然 deny。
  *  2. **会写盘 / 会消耗显卡时间的，默认 [ToolAccess.ASK]**：`run_workflow` / `run_template` /
  *     `generate_image` / `upload_file` / `partner_generate`（后者还会真的花钱）。
  *  3. **其余的只读查询，默认 [ToolAccess.ALLOW]**：查显存、列模型、列节点、看队列、
@@ -42,10 +43,8 @@ object McpToolPolicy {
 
     /** 明确不允许（除非用户在设置里显式改） */
     val DENIED: Set<String> = setOf(
-        // 起停 / 更新 / 换版本的本地 ComfyUI 进程（AGENTS §10：没有进程类工具）。
-        // 2026-09-22 起 `launch_comfyui` 移到 [ASK]（见类注释），其余仍然 deny：
-        // 停掉正在跑的队列 / 动用户的安装，不该由模型发起。
-        "stop_comfyui", "restart_comfyui", "update_comfyui", "switch_comfyui_version",
+        // 动用户的安装 / 跑第三方代码 / 多 GB 出网下载 —— 起停类已挪到 [ASK]（见类注释）。
+        "update_comfyui", "switch_comfyui_version",
         // 装自定义节点（跑第三方代码）
         "install_node",
         // 下载模型进用户磁盘（多 GB、要出网）
@@ -54,10 +53,10 @@ object McpToolPolicy {
         "auth_status", "auth_login", "billing_status",
     )
 
-    /** 要用户点批准的（写盘 / 消耗显卡时间 / 花钱 / 启动本地 ComfyUI） */
+    /** 要用户点批准的（起停本地进程 / 写盘 / 消耗显卡时间 / 花钱） */
     val ASK: Set<String> = setOf(
-        // 启动本机 ComfyUI（2026-09-22 用户拍板：默认 ask，设置里可逐项改成 allow）
-        "launch_comfyui",
+        // 起停本机 ComfyUI 进程（launch 2026-09-22、stop/restart 2026-09-23 用户拍板：默认 ask）
+        "launch_comfyui", "stop_comfyui", "restart_comfyui",
         "run_workflow", "run_template", "generate_image", "upload_file",
         "partner_generate", "emit_partner_workflow",
     )
@@ -72,7 +71,9 @@ object McpToolPolicy {
     fun reasonFor(name: String): String = when {
         name == "launch_comfyui" ->
             "要启动本机的 ComfyUI 进程（走 comfy-cli 已设置的工作区）；默认要你点批准，设置里可改成 allow / deny"
-        name in DENIED -> "会起/停本地进程、装节点或下载模型 —— 本项目默认不允许（可在设置里逐项打开）"
+        name == "stop_comfyui" || name == "restart_comfyui" ->
+            "要停掉本机正在跑的 ComfyUI（会打断队列，不动安装）；实例起错时模型必须能停下重拉，默认要你点批准"
+        name in DENIED -> "会动用户的安装 / 跑第三方代码 / 多 GB 下载 —— 本项目默认不允许（可在设置里逐项打开）"
         name in ASK -> "会写盘或消耗显卡时间（partner_* 还会花钱），默认要你点批准"
         else -> "只读查询"
     }

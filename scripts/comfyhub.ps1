@@ -549,6 +549,63 @@ function Show-AppStaleWarning {
     Say '    重新构建：pwsh -File scripts\autorun-app.ps1（Release）或 pwsh -File scripts\dev-app.ps1（debug 热重载）' 'DarkGray'
 }
 
+function Get-ServerBuildStaleness {
+    <#
+      后端 jar 的"旧构建"体检 —— App 那套的 Kotlin 版。
+
+      为什么要查：dev-app.ps1 / up -SkipBuild 都是"installDist 产物存在就直接用"，
+      于是"昨晚改了 server\、今早起的是昨天下班前编的 jar"完全无声。
+      2026-09-23 现场：P0 的补挂 shared / comfy_env_report / 提交前预检全都没在跑，
+      AI 对着一台没挂共享模型的 ComfyUI 烧掉半小时 —— 症状看着像功能 bug，其实是旧 jar。
+
+      返回 $null（发布包没有 server\build、或没有源码 → 判断不了，静默跳过）或
+      @{ Jar; Source; Newer }。与 App 的体检同样按 LastWriteTime 比（git 换分支会把源码
+      mtime 刷新，可能误报一次"旧构建"—— 重新 installDist 即消）。
+    #>
+    $installRoot = Join-Path $ProjectRoot 'server\build\install'
+    if (-not (Test-Path $installRoot)) { return $null }
+    # jar 名 = installDist 目录名（settings.gradle.kts 的 rootProject.name），别把版本号写死
+    $jar = Get-ChildItem $installRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        Get-ChildItem (Join-Path $_.FullName 'lib') -Filter "$($_.Name)-*.jar" -File -ErrorAction SilentlyContinue
+    } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $jar) { return $null }
+
+    $items = @()
+    $src = Join-Path $ProjectRoot 'server\src'
+    if (Test-Path $src) {
+        $items += Get-ChildItem $src -Recurse -File -ErrorAction SilentlyContinue
+    }
+    foreach ($f in @('server\build.gradle.kts', 'server\settings.gradle.kts')) {
+        $p = Join-Path $ProjectRoot $f
+        if (Test-Path $p) { $items += Get-Item $p }
+    }
+    if ($items.Count -eq 0) { return $null }   # 没有源码可比（发布包），静默跳过
+
+    $newest = $items | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    return [pscustomobject]@{
+        Jar    = $jar
+        Source = $newest
+        Newer  = ($newest.LastWriteTime -gt $jar.LastWriteTime)
+    }
+}
+
+function Get-RunningServerProcess {
+    <# 正在跑的那个后端 java 进程（按 classpath 里的 comfy-hub-server 识别；拿不到返回 $null） #>
+    Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'comfy-hub-server' } |
+        Sort-Object CreationDate | Select-Object -First 1
+}
+
+function Show-ServerStaleWarning {
+    param($Stale, $Running)
+    Say "  ⚠ 后端 jar 是旧构建：$($Stale.Jar.Name) 编于 $($Stale.Jar.LastWriteTime.ToString('MM-dd HH:mm'))，" 'Yellow'
+    Say "    而 server\ 源码（$($Stale.Source.Name)）已改到 $($Stale.Source.LastWriteTime.ToString('MM-dd HH:mm')) —— 后端跑的是旧代码。" 'Yellow'
+    Say '    重建 + 重启：pwsh -File scripts\comfyhub.ps1 restart（不要带 -SkipBuild），或先 gradle -p server installDist' 'DarkGray'
+    if ($Running) {
+        Say "    ⚠ 另外正在跑的后端进程启动于 $($Running.CreationDate.ToString('MM-dd HH:mm'))——即使现在重建 jar，它也吃不到，必须重启。" 'Yellow'
+    }
+}
+
 function Get-RunningAppExe {
     <# 正在跑的那个 viewer.exe（拿不到路径就返回 $null，不抛错） #>
     $running = Get-AppProcess | Select-Object -First 1
@@ -922,6 +979,25 @@ function Do-Doctor {
     if ($runningExe) {
         $rs = Get-AppBuildStaleness -Exe $runningExe
         Say ("  {0,-16} {1}" -f '运行中的 App', "$($runningExe.FullName) — $(Format-AppFreshness -Exe $runningExe)") $(if ($rs -and $rs.Newer) { 'Yellow' } else { 'Gray' })
+    }
+
+    # 后端 jar 的构建新鲜度：dev-app / up -SkipBuild 都是"有产物就直接用"，
+    # 旧 jar 上场完全无声（2026-09-23 现场：昨晚的 P0 修复全没参与运行）。
+    $srvStale = Get-ServerBuildStaleness
+    if ($srvStale) {
+        $runningSrv = Get-RunningServerProcess
+        $built = $srvStale.Jar.LastWriteTime.ToString('MM-dd HH:mm')
+        $text = if ($srvStale.Newer) {
+            "旧构建：$($srvStale.Jar.Name) 编于 $built，源码已改到 $($srvStale.Source.LastWriteTime.ToString('MM-dd HH:mm'))"
+        } else {
+            "最新（$($srvStale.Jar.Name) 编于 $built）"
+        }
+        Say ("  {0,-16} {1}" -f '后端构建', $text) $(if ($srvStale.Newer) { 'Yellow' } else { 'Gray' })
+        if ($srvStale.Newer) { Show-ServerStaleWarning -Stale $srvStale -Running $runningSrv }
+        elseif ($runningSrv -and $runningSrv.CreationDate -lt $srvStale.Jar.LastWriteTime) {
+            # 第二种旧法：jar 是新的，但跑着的进程是在这次构建**之前**拉起来的。
+            Say ("  {0,-16} {1}" -f '运行中的后端', "进程启动于 $($runningSrv.CreationDate.ToString('MM-dd HH:mm'))，早于 jar 的 $built —— 跑的还是旧类，restart 才能吃上") 'Yellow'
+        }
     }
 
     $mysqld = Resolve-MysqlBin 'mysqld.exe'
