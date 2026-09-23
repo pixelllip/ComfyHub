@@ -830,6 +830,81 @@ fun Route.aiRoutes(
             call.respond(capabilityStatusDto(capabilitiesDir, lastMessage = result.message))
         }
 
+        // 实测校准开关（默认关：校准要发真实请求，虽然极小也是花钱）
+        put("/capabilities/probe-toggle") {
+            val body = call.receive<CapabilityProbeToggleRequest>()
+            ThinkingProbe.setEnabled(body.enabled)
+            call.respond(capabilityStatusDto(capabilitiesDir, lastMessage = if (body.enabled) "已允许实测校准" else "已关闭实测校准"))
+        }
+
+        /**
+         * 校准思考档位：真发极小请求从最高档往下试，把网关**实际接受**的档位写回。
+         * `providerId` 缺省 = 所有启用的 Provider；`modelId` 缺省 = 该 Provider 下全部
+         * 支持推理的模型（每个 Provider 最多 [ThinkingProbe.MAX_MODELS_PER_PROVIDER] 个）。
+         * manual 行跳过、无密钥跳过、失败如实回报 —— 不美化、不静默。
+         */
+        post("/capabilities/probe") {
+            if (!ThinkingProbe.enabled()) {
+                call.respond(
+                    CapabilityProbeResponse(
+                        ok = false,
+                        message = "实测校准未开启（设置页先打开「允许实测校准」——校准会发真实请求，可能产生少量费用）",
+                        outcomes = emptyList(),
+                    )
+                )
+                return@post
+            }
+            val body = call.receive<CapabilityProbeRequest>()
+            val providers = if (!body.providerId.isNullOrBlank()) {
+                listOf(requireProvider(body.providerId))
+            } else {
+                AiRepo.listProviders().filter { it.enabled }
+            }
+            if (providers.isEmpty()) {
+                call.respond(CapabilityProbeResponse(false, "没有可校准的 Provider", emptyList()))
+                return@post
+            }
+            val outcomes = mutableListOf<CapabilityProbeOutcomeDto>()
+            for (provider in providers) {
+                val secret = credentials.resolve(provider.credentialRef)
+                if (provider.credentialRef != null && secret.isNullOrEmpty()) {
+                    outcomes += CapabilityProbeOutcomeDto(
+                        providerId = provider.id, modelId = "", ok = false, skipped = true,
+                        message = "凭据 ${provider.credentialRef} 未配置，跳过整个 Provider",
+                    )
+                    continue
+                }
+                val models = AiRepo.listModels(provider.id)
+                    .filter { it.enabled && it.reasoning }
+                    .let { list ->
+                        if (!body.modelId.isNullOrBlank()) list.filter { it.id == body.modelId } else list
+                    }
+                    .take(ThinkingProbe.MAX_MODELS_PER_PROVIDER)
+                for (model in models) {
+                    val o = ThinkingProbe.probeOne(provider, model, secret)
+                    outcomes += CapabilityProbeOutcomeDto(
+                        providerId = o.providerId,
+                        modelId = o.modelId,
+                        ok = o.ok,
+                        acceptedTop = o.acceptedTop,
+                        ladder = o.ladder,
+                        written = o.written,
+                        skipped = o.skipped,
+                        message = o.message,
+                    )
+                }
+            }
+            val okCount = outcomes.count { it.ok }
+            val failCount = outcomes.count { !it.ok && !it.skipped }
+            call.respond(
+                CapabilityProbeResponse(
+                    ok = failCount == 0 && outcomes.isNotEmpty(),
+                    message = "校准完成：成功 $okCount、失败 $failCount、跳过 ${outcomes.count { it.skipped }}（每个 Provider 最多 ${ThinkingProbe.MAX_MODELS_PER_PROVIDER} 个）",
+                    outcomes = outcomes,
+                )
+            )
+        }
+
         /** 工具卡上的「批准」（AIH-035 / AIH-049）。 */
         post("/tool-calls/{callId}/approve") {            val callId = call.parameters["callId"].orEmpty()
             call.respond(ToolApprovalResult(callId, approved = true, accepted = runner.resolveApproval(callId, true)))
@@ -1464,6 +1539,8 @@ data class CapabilityStatusDto(
     val remoteAgeHours: Long? = null,
     val remoteStale: Boolean,
     val refreshIntervalDays: Long,
+    /** 是否允许实测校准（发真实请求；默认关） */
+    val probeEnabled: Boolean = false,
     /** 最近一次（手动）刷新的人话结果；状态接口不产生这句话时为 null */
     val lastMessage: String? = null,
 )
@@ -1482,9 +1559,35 @@ private fun capabilityStatusDto(dir: java.nio.file.Path, lastMessage: String? = 
         remoteAgeHours = CapabilityRefresh.remoteAgeHours(dir),
         remoteStale = CapabilityRefresh.isStale(dir),
         refreshIntervalDays = CapabilityRefresh.REFRESH_INTERVAL_DAYS,
+        probeEnabled = ThinkingProbe.enabled(),
         lastMessage = lastMessage,
     )
 }
+
+@kotlinx.serialization.Serializable
+data class CapabilityProbeToggleRequest(val enabled: Boolean)
+
+@kotlinx.serialization.Serializable
+data class CapabilityProbeRequest(val providerId: String? = null, val modelId: String? = null)
+
+@kotlinx.serialization.Serializable
+data class CapabilityProbeOutcomeDto(
+    val providerId: String,
+    val modelId: String,
+    val ok: Boolean,
+    val acceptedTop: String? = null,
+    val ladder: Map<String, String>? = null,
+    val written: Boolean = false,
+    val skipped: Boolean = false,
+    val message: String,
+)
+
+@kotlinx.serialization.Serializable
+data class CapabilityProbeResponse(
+    val ok: Boolean,
+    val message: String,
+    val outcomes: List<CapabilityProbeOutcomeDto>,
+)
 
 /**
  * 协议适配器"实际实现"的传输方式（AIH-028）。

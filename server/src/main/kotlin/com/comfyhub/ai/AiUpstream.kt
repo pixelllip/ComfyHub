@@ -5,6 +5,7 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.charset.StandardCharsets
 import java.time.Duration
 import kotlinx.serialization.json.contentOrNull
 
@@ -565,5 +566,184 @@ object AiUpstream {
             last = attempt
         }
         return last ?: UpstreamResponse(false, null, AiErrorCode.CONFIG_ERROR, "Base URL 无法解析", "")
+    }
+
+    // -------------------------------------------------------------------------
+    //  思考档位实测校准（2026-09-23"全做了"：CapabilitySource.TESTED）
+    //
+    //  档位阶梯的**线上表达**没有标准接口可查（数据集只给布尔），唯一可靠的来源是
+    //  真发一次极小的请求看网关收不收。发 `reasoning_effort=<档位>`（openai / deepseek /
+    //  zai / qwen 方言都以它为等级字段，见 Reasoning.kt 的表），从最高档往下试：
+    //  2xx = 网关认；4xx 且错误**看着像思考参数问题** → 降档再试；其余错误如实中止 ——
+    //  绝不把"模型名不对"误判成"不支持 max"。
+    // -------------------------------------------------------------------------
+
+    data class ThinkingProbeOutcome(
+        val ok: Boolean,
+        /** 不带思考参数的基准请求是否通过（false = 连这个端点/模型都请求不了，别下结论） */
+        val baselineOk: Boolean = false,
+        /** 网关接受的最高档（等级键，如 "xhigh"）；null = 一个都没认 */
+        val acceptedTop: String? = null,
+        /** 建议写回的等级表（含 off→none）；ok 且 acceptedTop 为 null 时是空表（建议清档位） */
+        val ladder: Map<String, String>? = null,
+        val message: String,
+        val attempts: Int = 0,
+    )
+
+    private val EFFORT_ORDER = listOf(
+        com.comfyhub.ai.protocol.ReasoningEffort.OFF,
+        com.comfyhub.ai.protocol.ReasoningEffort.MINIMAL,
+        com.comfyhub.ai.protocol.ReasoningEffort.LOW,
+        com.comfyhub.ai.protocol.ReasoningEffort.MEDIUM,
+        com.comfyhub.ai.protocol.ReasoningEffort.HIGH,
+        com.comfyhub.ai.protocol.ReasoningEffort.XHIGH,
+        com.comfyhub.ai.protocol.ReasoningEffort.MAX,
+    )
+
+    /** chat 端点候选：Base URL 填不填 `/v1` 两种写法都试（与 /models 同一条规则）。 */
+    fun chatUrlCandidates(baseURL: String): List<String> {
+        val base = baseURL.trimEnd('/')
+        val hasV1 = base.endsWith("/v1")
+        val stripped = if (hasV1) base.dropLast(3) else "$base/v1"
+        return listOf("$base/chat/completions", "$stripped/chat/completions").distinct()
+    }
+
+    private fun probeBody(modelId: String, effort: String?, tokenField: String): String {
+        val obj = kotlinx.serialization.json.buildJsonObject {
+            put("model", kotlinx.serialization.json.JsonPrimitive(modelId))
+            put("messages", kotlinx.serialization.json.buildJsonArray {
+                add(kotlinx.serialization.json.buildJsonObject {
+                    put("role", kotlinx.serialization.json.JsonPrimitive("user"))
+                    put("content", kotlinx.serialization.json.JsonPrimitive("ping"))
+                })
+            })
+            put(tokenField, kotlinx.serialization.json.JsonPrimitive(256))
+            if (effort != null) put("reasoning_effort", kotlinx.serialization.json.JsonPrimitive(effort))
+        }
+        return com.comfyhub.AppJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), obj)
+    }
+
+    private fun probePost(
+        url: String,
+        secret: String?,
+        trust: EndpointTrust,
+        body: String,
+        timeoutSeconds: Long,
+    ): Probe {
+        val uri = runCatching { URI(url) }.getOrNull()
+            ?: return Probe(false, null, AiErrorCode.CONFIG_ERROR, "URL 无法解析")
+        val host = uri.host ?: return Probe(false, null, AiErrorCode.CONFIG_ERROR, "URL 缺少主机名")
+        runCatching { EndpointGuard.resolveAndCheck(host, trust) }.getOrElse { e ->
+            return Probe(false, null, AiErrorCode.CONFIG_ERROR, e.message ?: "目标地址不被允许")
+        }
+        val builder = HttpRequest.newBuilder(uri)
+            .timeout(Duration.ofSeconds(timeoutSeconds))
+            .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+        if (!secret.isNullOrEmpty()) builder.header("Authorization", "Bearer $secret")
+        return try {
+            val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString())
+            val status = response.statusCode()
+            val text = response.body().orEmpty()
+            val base = classifyStatus(status)
+            if (base == null) {
+                Probe(true, status, "", "")
+            } else {
+                Probe(false, status, base, explain(base, status) + "｜上游返回：" + redact(text, secret))
+            }
+        } catch (e: java.net.http.HttpTimeoutException) {
+            Probe(false, null, AiErrorCode.PROVIDER_UNREACHABLE, "连接超时（${timeoutSeconds}秒）")
+        } catch (e: Exception) {
+            Probe(false, null, AiErrorCode.PROVIDER_UNREACHABLE, "无法连接：${e::class.simpleName}")
+        }
+    }
+
+    fun probeThinkingLadder(
+        provider: AiProviderDto,
+        model: AiModelDto,
+        secret: String?,
+        timeoutSeconds: Long = 30L,
+    ): ThinkingProbeOutcome {
+        val api = AiApi.parse(provider.api)
+            ?: return ThinkingProbeOutcome(false, message = "未知协议：${provider.api}")
+        if (api != AiApi.OPENAI_COMPLETIONS) {
+            return ThinkingProbeOutcome(false, message = "思考校准只支持 OpenAI 兼容 chat 端点（该 Provider 是 ${provider.api}）")
+        }
+        val trust = EndpointTrust.parse(provider.endpointTrust) ?: EndpointTrust.PUBLIC
+
+        // ① 找出真正可用的 chat 端点（404 = 拼写不对，换候选；其它错误就认这个端点）
+        var endpoint: String? = null
+        var last: Probe? = null
+        var tokenField = "max_tokens"
+        for (url in chatUrlCandidates(provider.baseURL)) {
+            val r = probePost(url, secret, trust, probeBody(model.id, null, tokenField), timeoutSeconds)
+            last = r
+            if (r.ok || r.status != 404) { endpoint = url; break }
+        }
+        val ep = endpoint
+            ?: return ThinkingProbeOutcome(false, message = "找不到可用的 chat 端点：${last?.detail ?: "没有候选地址"}")
+        var baseline = last!!
+        // 有些严格网关只认 max_completion_tokens；错误文案点到了 max_tokens 就换字段重试一次
+        if (!baseline.ok && baseline.status == 400 && baseline.detail.contains("max_tokens", ignoreCase = true)) {
+            tokenField = "max_completion_tokens"
+            baseline = probePost(ep, secret, trust, probeBody(model.id, null, tokenField), timeoutSeconds)
+        }
+        if (!baseline.ok) {
+            return ThinkingProbeOutcome(false, message = "基准请求（不带思考参数）失败：${baseline.detail}", attempts = 1)
+        }
+
+        // ② 要试的档位：模型声明了等级表就只试表内的（从高到低）；没声明就试全阶梯
+        val declared = AiValidation.parseThinkingEfforts(model.thinkingEfforts)
+            .sortedByDescending { EFFORT_ORDER.indexOf(it) }
+        val rungs = declared.ifEmpty {
+            EFFORT_ORDER.filter { it != com.comfyhub.ai.protocol.ReasoningEffort.OFF }
+        }
+        if (rungs.isEmpty()) {
+            return ThinkingProbeOutcome(false, baselineOk = true, message = "模型没有可校准的思考档位")
+        }
+
+        var attempts = 1
+        var acceptedIdx = -1
+        var abort: String? = null
+        for ((idx, rung) in rungs.withIndex()) {
+            val r = probePost(ep, secret, trust, probeBody(model.id, rung.wire, tokenField), timeoutSeconds)
+            attempts++
+            if (r.ok) { acceptedIdx = idx; break }
+            if (r.status in 400..499 &&
+                !r.detail.contains("effort", ignoreCase = true) &&
+                !r.detail.contains("reasoning", ignoreCase = true) &&
+                !r.detail.contains("thinking", ignoreCase = true)
+            ) {
+                // 400 但跟思考参数无关（模型不存在 / 别的参数错）：再降档只会得到同样的错
+                abort = "档位 ${rung.wire} 被拒，但错误看起来与思考参数无关：${r.detail}"
+                break
+            }
+            if (r.status !in 400..499) {
+                abort = "档位 ${rung.wire} 请求失败：${r.detail}"
+                break
+            }
+            // 400 且错误提到 effort/reasoning/thinking → 网关不认这一档，降档再试
+        }
+
+        return if (acceptedIdx >= 0) {
+            val top = rungs[acceptedIdx]
+            // 阶梯 = off + 已接受档**及其以下**（被拒的高档绝不写回）
+            val ladder = buildMap {
+                put("off", "none")
+                rungs.subList(acceptedIdx, rungs.size).forEach { put(it.wire, it.wire) }
+            }
+            ThinkingProbeOutcome(
+                true, baselineOk = true, acceptedTop = top.wire, ladder = ladder,
+                message = "最高接受档位：${top.wire}（共 $attempts 次请求）", attempts = attempts,
+            )
+        } else if (abort != null) {
+            ThinkingProbeOutcome(false, baselineOk = true, message = abort, attempts = attempts)
+        } else {
+            ThinkingProbeOutcome(
+                true, baselineOk = true, acceptedTop = null, ladder = emptyMap(),
+                message = "网关拒绝了全部 ${rungs.size} 个声明档位（多半不认 reasoning_effort 参数）——建议清空档位表", attempts = attempts,
+            )
+        }
     }
 }

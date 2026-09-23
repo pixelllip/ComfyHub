@@ -194,6 +194,33 @@ object AiRepo {
         getModel(m.providerId, m.id) ?: error("模型更新后读不到: ${m.providerId}/${m.id}")
     }
 
+    /**
+     * 实测校准写回（ThinkingProbe 专用）：只动 `thinking_efforts` + 能力来源 +
+     * `capability_verified_at`，**绝不碰**模态 / 附件 / 显示名 —— 那些是别的事实，
+     * 校准档位没有资格捎带着改。
+     */
+    fun updateThinkingCalibration(
+        providerId: String,
+        modelId: String,
+        efforts: Map<String, String>,
+        capabilitySource: String,
+        verifiedAtIso: String,
+    ): AiModelDto = Db.withConnection { conn ->
+        conn.execute(
+            """
+            UPDATE ai_models
+               SET thinking_efforts = ?, capability_source = ?, capability_verified_at = ?
+             WHERE provider_id = ? AND model_id = ?
+            """.trimIndent(),
+            encodeStringMap(efforts),
+            capabilitySource,
+            // DATETIME(3) 直接绑 Timestamp，别跟 MySQL 的字符串日期格式较劲
+            java.sql.Timestamp.from(java.time.Instant.parse(verifiedAtIso)),
+            providerId, modelId
+        )
+        getModel(providerId, modelId) ?: error("模型更新后读不到: $providerId/$modelId")
+    }
+
     // JSON 列编码（insertModel / updateModelCapabilities 用；replaceModels 的历史写法保持不动）
 
     private fun encodeStringArray(values: List<String>): String =
