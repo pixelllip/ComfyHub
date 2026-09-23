@@ -1000,6 +1000,27 @@ function Do-Doctor {
         }
     }
 
+    # 模型能力目录（模态/思考档位自动更新链）：内置表随版本发，在线目录由后端
+    # 每 7 天拉一次 models.dev（或设置页手动）。过期太久 = 新模型预填不到，黄牌提醒。
+    $capFile = Join-Path $ProjectRoot 'storage\ai\capabilities\remote.json'
+    if (Test-Path $capFile) {
+        try {
+            $cap = Get-Content $capFile -Raw -Encoding utf8 | ConvertFrom-Json
+            $entryCount = ($cap.entries.PSObject.Properties | Measure-Object).Count
+            $ageDays = $null
+            if ($cap.fetchedAt) {
+                $ageDays = [int]([datetimeoffset]::Now - [datetimeoffset]::Parse($cap.fetchedAt)).TotalDays
+            }
+            $ageText = if ($null -ne $ageDays) { "，$ageDays 天前" } else { '' }
+            $stale = ($null -ne $ageDays) -and ($ageDays -gt 7)
+            Say ("  {0,-16} {1}" -f '能力目录', "在线 $($cap.source) 更新于 $($cap.fetchedAt)$ageText（$entryCount 条模型声明）") $(if ($stale) { 'Yellow' } else { 'Gray' })
+        } catch {
+            Say ("  {0,-16} {1}" -f '能力目录', "remote.json 解析失败：$($_.Exception.Message)") 'Yellow'
+        }
+    } else {
+        Say ("  {0,-16} {1}" -f '能力目录', '还没有在线目录（后端每 7 天自动拉取 models.dev；也可在设置页点「立即更新」）') 'Gray'
+    }
+
     $mysqld = Resolve-MysqlBin 'mysqld.exe'
     Say ("  {0,-16} {1}" -f 'mysqld.exe', $(if ($mysqld) { $mysqld } else { '找不到，设置 COMFYHUB_MYSQL_HOME' })) $(if ($mysqld) { 'Green' } else { 'Red' })
 

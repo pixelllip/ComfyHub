@@ -269,6 +269,15 @@ fun Application.module(ctx: AppContext) {
     // 长期记忆（M6）：一个人类可读的 memory.md，注入系统提示 + AI 可用 remember 追加
     val memory = MemoryStore(ctx.cfg.storageDir.resolve("ai"))
 
+    // 能力目录覆盖层（2026-09-23"全做了"）：custom/remote.json 在 <storage>\ai\capabilities，
+    // 启动时读一次让 lookup 立刻生效；后台 daemon 每小时看一眼 remote.json 过没过期
+    // （>7 天才真出网拉 models.dev，COMFYHUB_NO_DOWNLOAD=1 一刀关）。
+    val capabilitiesDir = ctx.cfg.storageDir.resolve("ai").resolve("capabilities")
+    runCatching { com.comfyhub.ai.ModelCapabilityCatalog.reload(capabilitiesDir) }
+        .onFailure { log.warn("能力覆盖层读不了（只用内置表）：{}", it.message) }
+    com.comfyhub.ai.CapabilityRefresh.startBackground(capabilitiesDir)
+    monitor.subscribe(ApplicationStopped) { com.comfyhub.ai.CapabilityRefresh.stopBackground() }
+
     // AI 附件（M3）：原件与缩略图都落在 storage 下（与画廊产物分开），
     // 视频预览帧复用画廊那套 Windows 缩略图管线（不引入 ffmpeg）。
     val aiAttachments = AiAttachmentStore(ctx.storage, ctx.cfg.projectRoot)
@@ -601,7 +610,7 @@ fun Application.module(ctx: AppContext) {
             tagRoutes()
             mediaRoutes(ctx)
             captureRoutes(ctx, capture, submitter)
-            aiRoutes(credentials, runner, runBus, skills, memory, toolRegistry, approvals, ctx.cfg.projectRoot, aiAttachments, asks)
+            aiRoutes(credentials, runner, runBus, skills, memory, toolRegistry, approvals, ctx.cfg.projectRoot, aiAttachments, capabilitiesDir, asks)
         }
     }
 }

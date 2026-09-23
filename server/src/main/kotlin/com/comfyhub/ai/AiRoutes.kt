@@ -70,6 +70,8 @@ fun Route.aiRoutes(
     projectRoot: Path,
     /** AI 附件（M3）：上传 / 缩略图 / 删 / 读成内联附件都走它 */
     attachments: AiAttachmentStore,
+    /** 能力目录覆盖层所在目录（custom.json / remote.json），状态接口与手动刷新用 */
+    capabilitiesDir: Path,
     /**
      * 提问登记表（用户建议 ⑥）：界面重连时查"还在等用户回答什么"、
      * 以及用户答完之后把回答递给还在等的那个协程。
@@ -810,6 +812,24 @@ fun Route.aiRoutes(
             call.respond(AiSeeder.syncBuiltinProvider(mode).toDto())
         }
 
+        // -------------------------------------------------------------------
+        //  能力目录在线更新（2026-09-23 用户拍板"全做了"）
+        //
+        //  模型模态 / 思考档位的"自动更新"链：custom.json（手工）> remote.json
+        //  （这里刷出来的 models.dev 数据）> 内置表。状态接口给设置页看新鲜度，
+        //  刷新接口给「立即更新」按钮 —— 失败返回 ok=false + 如实的原因，不抛 5xx
+        //  （刷新失败不是服务器坏了，旧目录原样保留，界面照常能用）。
+        // -------------------------------------------------------------------
+
+        get("/capabilities/status") {
+            call.respond(capabilityStatusDto(capabilitiesDir))
+        }
+
+        post("/capabilities/refresh") {
+            val result = CapabilityRefresh.refresh(capabilitiesDir, force = true)
+            call.respond(capabilityStatusDto(capabilitiesDir, lastMessage = result.message))
+        }
+
         /** 工具卡上的「批准」（AIH-035 / AIH-049）。 */
         post("/tool-calls/{callId}/approve") {            val callId = call.parameters["callId"].orEmpty()
             call.respond(ToolApprovalResult(callId, approved = true, accepted = runner.resolveApproval(callId, true)))
@@ -1428,6 +1448,42 @@ private fun validateModel(m: AiModelDto) {
         throw AiException(AiErrorCode.CONFIG_ERROR, "非法的能力来源: ${m.capabilitySource}")
     }
     AiValidation.validateThinkingEfforts(m)
+}
+
+/** 能力目录的新鲜度快照（设置页 / doctor 显示用）；字段拍平，前端不用再拼。 */
+@kotlinx.serialization.Serializable
+data class CapabilityStatusDto(
+    val version: String,
+    val builtinRules: Int,
+    val customSource: String? = null,
+    val customFetchedAt: String? = null,
+    val customEntries: Int? = null,
+    val remoteSource: String? = null,
+    val remoteFetchedAt: String? = null,
+    val remoteEntries: Int? = null,
+    val remoteAgeHours: Long? = null,
+    val remoteStale: Boolean,
+    val refreshIntervalDays: Long,
+    /** 最近一次（手动）刷新的人话结果；状态接口不产生这句话时为 null */
+    val lastMessage: String? = null,
+)
+
+private fun capabilityStatusDto(dir: java.nio.file.Path, lastMessage: String? = null): CapabilityStatusDto {
+    val s = ModelCapabilityCatalog.status()
+    return CapabilityStatusDto(
+        version = s.version,
+        builtinRules = s.builtinRules,
+        customSource = s.custom?.source,
+        customFetchedAt = s.custom?.fetchedAt,
+        customEntries = s.custom?.entryCount,
+        remoteSource = s.remote?.source,
+        remoteFetchedAt = s.remote?.fetchedAt,
+        remoteEntries = s.remote?.entryCount,
+        remoteAgeHours = CapabilityRefresh.remoteAgeHours(dir),
+        remoteStale = CapabilityRefresh.isStale(dir),
+        refreshIntervalDays = CapabilityRefresh.REFRESH_INTERVAL_DAYS,
+        lastMessage = lastMessage,
+    )
 }
 
 /**
