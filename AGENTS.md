@@ -26,8 +26,8 @@
   为了用掉 import 而写的占位用例、同一行为的两种写法 —— 这类**该删就删**（用户提过"减少一些
   已经通过、不太重要的测试项"）。判断方法只有一句：**删了以后出错还能不能被测试抓住**。
   真正的防线（零上游请求、审批顺序、越界写被拒、内联预算、滚动条与懒构建…）一条都不能删。
-  本机实测的耗时（别凭感觉说"测试太慢"，2026-09-19 重新量过）：`flutter test` 196 例 ≈ 23s、
-  `gradle test` 364 例 ≈ 7s（热构建；首跑要编译）、`e2e-ai-tools-test.ps1` 111 项 ≈ 5~15s、
+  本机实测的耗时（别凭感觉说"测试太慢"，2026-09-23 重新量过）：`flutter test` 196 例 ≈ 23s、
+  `gradle test` 597 例 ≈ 25s（热构建；首跑要编译）、`e2e-ai-tools-test.ps1` 111 项 ≈ 5~15s、
   `e2e-capture-test.ps1` / `e2e-submit-test.ps1` 各 ≈ 20~35s（后者含"工作流文件直接提交"那一幕）。
 - 产物目录：debug 在 `build\windows\...\runner\Debug\`、Release 在 `...\Release\`；
   `autorun-app.ps1` / `comfyhub.ps1 up -WithApp` 启动 App 时**优先挑 Release**。
@@ -382,7 +382,7 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 
 ---
 
-## 11. ⚠ 目标架构（方案已敲定，**尚未实施**）
+## 11. ⚠ 目标架构（方案已敲定，实施进行中：P0/P0.5/P1/M0/M1 ✅，P2 / M3+ / P4 未动）
 
 **2026-09-23 敲定**：`SQLite + 桌面 Rust + 移动 Kotlin + Flutter（两端）`。
 **当前代码仍是 MySQL + Kotlin/Ktor + 纯 Flutter** —— 第 1~10 节写的都是**现状**，仍然有效。

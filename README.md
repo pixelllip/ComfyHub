@@ -505,6 +505,12 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `GET` | `/api/ai/tools` | 工具清单 + 生效权限（`allow / ask / deny`）与是否被用户覆盖 |
 | `GET/PUT` | `/api/ai/tools/policy` | 读 / 改工具权限：写白名单、读白名单、逐工具覆盖、`maxToolSteps`、`maxCallsPerRun`、**`permissionMode`（`ask` / `full` 权限两档，非法值 400）** |
 | `POST` | `/api/ai/tool-calls/{callId}/approve` \| `/deny` | 工具卡上的「批准 / 拒绝」；返回 `{callId, approved, accepted}`（`accepted=false` 表示这次调用已经超时或不在等待） |
+| `GET` | `/api/ai/runs/{id}/question` | 这个 Run 还在等用户回答的提问卡（断线重连补卡用）；**整张多问卡一起回**（按 `groupId` 归组） |
+| `GET` | `/api/ai/questions/{questionId}` | 单条提问状态。后端重启后回落 `ai_questions` 表 —— 问过什么 / 答了什么 / 什么结局（`status: pending/answered/skipped/expired`）不再 404 消失 |
+| `POST` | `/api/ai/questions/{questionId}/answer` \| `/skip` | 回答（`optionIndex` 或自由文本）/ 跳过（按"没回答"放行）；`accepted=false` 如实表示没被采纳 |
+| `GET` | `/api/ai/pending` | **跨端待办总览（M1）**：全后端还在等人的 `{asks[], approvals[]}` —— 手机 / 第二个窗口连上来不靠 SSE 也能把所有挂着的卡补出来。审批来自 `ai_tool_calls` 的 pending 行（Run 还在 running 才算） |
+| `GET` | `/api/ai/run-kit` | 🔒 **run-kit 工件（M1，契约 `docs/run-kit-contract.md`）**：手机 harness 的规则类输入全部从这份 JSON 来（R13，两端都不许硬编码提示串）——`kitVersion`（签名变了才 bump）/`systemPrompt`（整段渲染）/`tools[]`（按 ToolScope 过滤成手机可执行子集）/`untrustedBanner`/`models[]`（**不含任何密钥**）/`inlineBudget`；`?providerId=&modelId=` 按选定模型取环境头（不存在则 400，不静默回落） |
+| `GET` | `/api/ai/run-kit/status` | `{current, revoked[]}`：手机拿到本地缓存 kit 准备跑之前问一句，**命中吊销版本必须联网重取再跑** |
 | `GET/PUT/DELETE` | `/api/ai/web-search/credential` | 联网搜索（Keenable）的**可选**密钥：状态 / 保存 / 移除。同一套凭据纪律——值只进 DPAPI，接口只回状态不回值；环境变量 `COMFYHUB_CRED_keenable` 提供时只读 |
 
 **重试**：失败或被取消的回复上会出现「重试」按钮 —— 它是**新开一个 Run**（用 `retryOfRunId`
@@ -753,7 +759,8 @@ MiMo、Step、Hy、Inkling、LongCat、Nemotron 等），连**同系列里的视
 | `ai_conversations` / `ai_messages` / `ai_message_parts` | 会话 / 消息 / **有序消息块**（text · reasoning · attachment · tool_call · tool_result，按 `ordinal` 无损恢复，工具卡与附件缩略图就靠它渲染） |
 | `ai_attachments` | **AI 附件**（M3）：原件落 `storage/ai-attachments`、缩略图/视频预览帧落 `storage/ai-thumbs`；类型由签名判定，`status` 记 `ready / rejected / deleted`。**刻意不对 `ai_message_parts.attachment_id` 加外键**：附件是用户可删的临时对象，删掉后消息块还要能如实显示"这个附件不在了" |
 | `ai_runs` / `ai_run_events` | 每次 Run 的快照（Provider / 模型 / Skills digest / `promptVersion`，**不含密钥**）与统一事件流（单调 `seq`，可断线续传） |
-| `ai_tool_calls` | ★ 工具调用审计：`approval`（not_required / pending / approved / denied）与 `status` 分开记 —— **被用户拒绝的调用也留痕** |
+| `ai_tool_calls` | ★ 工具调用审计：`approval`（not_required / pending / approved / denied）与 `status` 分开记 —— **被用户拒绝的调用也留痕**。M1 起审批**等待开始时**就落一行 pending（跨端可见 + 审计不再空白），invoke 返回后原地更新；后端重启时还挂着的 pending 按"超时=拒绝"收尾 |
+| `ai_questions` | ★ 提问卡落库（M1）：`ask_user_question` 开卡即落（status = pending → answered / skipped / expired），回答与结局可跨端查（`GET /api/ai/questions/{id}`、`GET /api/ai/pending`），后端重启后卡片不再凭空消失。**不进同步范围**（手机看实时提问走 API，历史卡片从 parts 还原） |
 | `v_media_full` | 视图：产物 + 关联提示词 + 聚合标签名 |
 
 ### 8.1 数据库放在哪（可以指定）

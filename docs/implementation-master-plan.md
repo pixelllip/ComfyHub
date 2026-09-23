@@ -192,7 +192,7 @@ GET /api/ai/run-kit/status  → { current, revoked:[...] }   ← 命中吊销则
 | **P1** | 事件日志治跑飞 | 接上 `pruneEvents`、事件批量写、`RunEventBus` 改环形缓冲 | DB 从 112.9MB 降到个位数；单 Run 写入量降 1~2 个数量级；**断线重连续传仍完整**（R5） | 无 |
 | **P2** | **MySQL → SQLite（保留 Kotlin/Ktor）** | 新 schema（🔒3.1）、迁移工具（MySQL→SQLite）、17 个文件的数据层改方言、迁移探测改 `PRAGMA` | 逐表 `COUNT(*)` 与抽样字段哈希一致；364 个 Gradle 测试全绿；**R1/R2/R3/R4 各有用例**；发布包去掉 `mysql/` 后能起 | P1 |
 | **M0** | **冻结 5 份契约** —— ✅ **全部落文件（2026-09-23）**：① RunEvent 协议（`docs/run-event-contract.md`）② SQLite schema 约定（`docs/sqlite-schema-contract.md`）③ 同步 API 4 条端点（`docs/sync-api-contract.md`）④ ToolScope 清单（`docs/tool-scope-contract.md`，**代码也已落地**：`ToolScope`/`toolsFor`/`ToolScopeTest`）⑤ run-kit 工件（`docs/run-kit-contract.md`，形状已冻结，端点实现归 M1） | 两端"事件类型清单一致"用例（**桌面侧已做**：`RunEventContractTest`；手机侧待 harness 落地）；契约文件评审通过 | **无（可立刻做）** |
-| **M1** | 桌面侧支撑 | `AskGate` **落库** + 可跨端查询 + 超时恢复；`/api/ai/run-kit{,/status}`；`ToolScope` 过滤 | 手机发起的 Run 的审批在另一端也能看到并批准；后端重启后 pending 不丢 | M0 |
+| **M1** ✅ | **桌面侧支撑** —— **已完成 2026-09-23**（`7f3a351`，e2e 修复 `3030d93`）：① 提问落库（新表 `ai_questions` + `AiQuestionRepo`，`AskRegistry` 状态变迁写穿：track 即落 / answer 写终值 / 收尾只动 pending / 重启后 `GET /questions/{id}` 回落查库）；② 审批落库（`ToolApprovalGate.open` 同一刻落 `ai_tool_calls` pending 行，invoke 后原地更新；启动恢复把 pending 审批按"超时=拒绝"落 denied、pending 提问落 expired）；③ `GET /api/ai/pending` 跨端待办总览（asks + approvals，另一台设备不靠 SSE 也能发现"有东西在等人"）；④ `GET /api/ai/run-kit{,/status}`（kitVersion 签名哈希变了才 bump、`tools[]` 按 ToolScope 过滤成手机子集、`untrustedBanner` 模板真源进 ToolRegistry 常量、models[] 无密钥、inlineBudget） | 手机发起的 Run 的审批在另一端也能看到并批准（`/api/ai/pending` + 落库行）；后端重启后 pending 不丢（提问卡可回放、审批行有终态）；**AskPersistenceTest 7 例 + RunKitVersionTest 6 例**，gradle 597 例全绿，三条 e2e 全绿 | M0 |
 | **M3** | **移动 Kotlin harness** | `android/app/src/main/kotlin/`：LLM 调用 + SSE + 工具循环 + 本地 SQLite + 三条失败纪律（R6）+ platform channel | 离线（桌面不在线）能完成一次 prompt 设计对话；UI 用**与桌面相同的事件流**渲染，UI 代码零分叉 | M0、M1 |
 | **M4** | 上行通道 | `_outbox` + `/api/sync/push` + 幂等 apply + 服务端赢 LWW | 手机产生的会话在桌面可见可续写；重复推送不产生重复行 | M3 |
 | **M5** | 排队提交 | 手机 `comfy_queue_submit` + 桌面 outbox 消费（**走现有 `comfy_submit` 全链路**） | 手机排队 → 桌面在线后自动提交 → 产物入库画廊 → `mediaIds` 回到手机；**桌面侧审批/幂等/入库一条不少（R10/R11）** | M4 |
@@ -268,7 +268,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 | R5 重连续传 | `e2e-ai-tools-test.ps1` 部分覆盖 | 补"长 Run + 断线重连"用例；`pruneEvents` 真的被调用 |
 | R6 失败不丢内容 | `e2e-ai-tools-test.ps1` 第 13 幕（15 项）+ `ai_retry_keep_content_test.dart` | 手机 harness 侧**照搬同一组用例** |
 | R7 注入防线 | `SystemPromptNsfwTest`、`ToolRegistryTest` | 文案改由 run-kit 下发后，补"两端拿到的是同一份"的用例 |
-| R8 审批顺序 | `AskGateTest` | 落库后补"跨端可见 + 后端重启不丢" |
+| R8 审批顺序 | `AskGateTest` | ✅ **已落（M1）**：pending 行落库 + `AskPersistenceTest`（写穿 / 收尾守卫 / 重启回落 / 跨端口径）+ `GET /api/ai/pending`；手机侧发起 Run 时也要过 |
 | R9 附件三层准入 | `e2e-ai-tools-test.ps1` 第 9 幕 | 手机侧发起 Run 时也要过 |
 | R10 提交链路 | `e2e-submit-test.ps1`、`e2e-capture-test.ps1` | Rust 侧重建 |
 | R11 不复用提交名字 | 无 | **新增**：ToolRegistry 断言不存在移动端 `comfy_submit` |
