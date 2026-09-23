@@ -43,11 +43,21 @@ use crate::models::{prompt_from_row, tag_from_row, Paged, PromptDto, TagDto};
 pub struct AppState {
     pub conn: Arc<Mutex<Connection>>,
     pub db_path: String,
+    /// 产物原件目录（`<storage>/media`）——文件流端点要它。
+    media_dir: Arc<std::path::PathBuf>,
 }
 
 impl AppState {
-    pub fn new(conn: Connection, db_path: impl Into<String>) -> Self {
-        Self { conn: Arc::new(Mutex::new(conn)), db_path: db_path.into() }
+    pub fn new(conn: Connection, db_path: impl Into<String>, media_dir: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+            db_path: db_path.into(),
+            media_dir: Arc::new(media_dir.into()),
+        }
+    }
+
+    pub fn media_dir(&self) -> &std::path::Path {
+        self.media_dir.as_path()
     }
 
     pub fn with<F, T>(&self, f: F) -> Result<T, ApiError>
@@ -77,8 +87,59 @@ pub fn router(state: AppState) -> Router {
         .route("/api/tags/categories", get(list_tag_categories))
         .route("/api/prompts", get(list_prompts))
         .route("/api/prompts/{id}", get(get_prompt))
+        // 产物（P4 第 3 步）：列表 / 详情 / **原件文件流**（Range + ETag）
+        .route("/api/media", get(list_media))
+        .route("/api/media/{id}", get(get_media))
+        .route("/api/media/{id}/file", get(media_file))
+        // 还没搬的：缩略图要图像解码器、封面要 ffmpeg 抽帧、上传要 multipart —— 一律 501
+        .route("/api/media/{id}/thumb", get(media_thumb))
+        .route("/api/media/{id}/poster", get(media_poster))
+        .route("/api/media/{id}/prompt", get(media_prompt))
+        .route("/api/media/upload", axum::routing::post(media_upload))
         .merge(crate::write_routes::write_router())
         .with_state(state)
+}
+
+// ---------------------------------------------------------------------------
+//  产物（列表 / 详情 / 文件流）
+// ---------------------------------------------------------------------------
+
+async fn list_media(
+    State(state): State<AppState>,
+    Query(q): Query<crate::media::MediaQuery>,
+) -> Result<Json<Paged<crate::models::MediaDto>>, ApiError> {
+    Ok(Json(crate::media::search(&state, &q)?))
+}
+
+async fn get_media(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<crate::models::MediaDto>, ApiError> {
+    Ok(Json(crate::media::get(&state, id)?))
+}
+
+async fn media_file(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    crate::media::media_file(state, id, headers).await
+}
+
+async fn media_thumb(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, ApiError> {
+    Err(crate::media::not_migrated("缩略图"))
+}
+
+async fn media_poster(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, ApiError> {
+    Err(crate::media::not_migrated("视频封面"))
+}
+
+async fn media_prompt(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, ApiError> {
+    Err(crate::media::not_migrated("产物关联的完整提示词"))
+}
+
+async fn media_upload() -> Result<Json<serde_json::Value>, ApiError> {
+    Err(crate::media::not_migrated("上传"))
 }
 
 // ---------------------------------------------------------------------------

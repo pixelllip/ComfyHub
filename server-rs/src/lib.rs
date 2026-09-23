@@ -14,6 +14,7 @@
 
 pub mod db;
 pub mod inputs;
+pub mod media;
 pub mod models;
 pub mod repo;
 pub mod routes;

@@ -60,8 +60,19 @@ fn app() -> axum::Router {
 }
 
 /// 共享状态的库（写端点用例要在**同一条连接**上断言写完之后的样子）。
+///
+/// 顺带把产物目录准备好：夹具里 `media_assets.id=100` 的 `stored_name` 是 `a.png`，
+/// 文件流端点要真的能在磁盘上找到它（内容已知，便于断言 Range 的字节）。
 fn state() -> comfyhub_server_rs::routes::AppState {
-    comfyhub_server_rs::routes::AppState::new(test_conn(), ":memory:")
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("comfyhub-test-{}-{unique}", std::process::id()));
+    let media = root.join("media");
+    std::fs::create_dir_all(&media).unwrap();
+    std::fs::write(media.join("a.png"), b"0123456789abcdef").unwrap();
+    comfyhub_server_rs::routes::AppState::new(test_conn(), ":memory:", media)
 }
 
 fn router_for(state: comfyhub_server_rs::routes::AppState) -> axum::Router {
@@ -589,4 +600,170 @@ async fn unmigrated_endpoints_answer_501() {
     let (status, body) = send_empty(router_for(state()), "GET", "/api/prompts/10/media").await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
     assert_eq!(body["error"], "NOT_IMPLEMENTED");
+}
+// ===========================================================================
+//  产物（P4 第 3 步）：列表 / 详情 / 原件文件流
+// ===========================================================================
+
+#[tokio::test]
+async fn media_list_uses_the_same_keys_and_filters() {
+    let state = state();
+    let (status, body) = get_json(router_for(state.clone()), "/api/media?size=10").await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(keys(&body), vec!["items", "page", "pages", "size", "total"]);
+    assert_eq!(body["total"], 1);
+    let item = &body["items"][0];
+    assert_eq!(
+        keys(item),
+        vec![
+            "checkpoint", "createdAt", "durationMs", "favorite", "fileUrl", "hasWorkflow", "height",
+            "id", "kind", "mimeType", "notes", "nsfw", "originalName", "promptId", "promptNegative",
+            "promptPositive", "promptTags", "promptTitle", "seed", "sha256", "sizeBytes", "source",
+            "storedName", "thumbUrl", "title", "updatedAt", "width",
+        ],
+        "少一个键 = 画廊里少一块内容（缩略图 URL 也在这里）"
+    );
+    // 关联提示词摘要是直出的（列表不必二次请求）
+    assert_eq!(item["promptTitle"], "赛博朋克少女");
+    assert_eq!(item["promptTags"], serde_json::json!(["赛博朋克"]), "产物自身标签 ∪ 提示词标签");
+    assert_eq!(item["fileUrl"], "/api/media/100/file");
+    assert_eq!(item["thumbUrl"], "/api/media/100/thumb");
+
+    // 过滤：kind / promptId / untagged / favorite
+    let (_, by_kind) = get_json(router_for(state.clone()), "/api/media?kind=VIDEO").await;
+    assert_eq!(by_kind["total"], 0);
+    let (_, by_prompt) = get_json(router_for(state.clone()), "/api/media?promptId=10").await;
+    assert_eq!(by_prompt["total"], 1);
+    let (_, untagged) = get_json(router_for(state.clone()), "/api/media?untagged=true").await;
+    assert_eq!(untagged["total"], 0);
+    // 标签过滤是**精确匹配 normalized**（与 Kotlin `TagRepo.promptTagFilter` 一致，
+    // 不是 LIKE）：所以要么给全名，要么筛不到 —— 这里给全名「赛博朋克」
+    let (_, by_tag) =
+        get_json(router_for(state.clone()), "/api/media?tags=%E8%B5%9B%E5%8D%9A%E6%9C%8B%E5%85%8B").await;
+    assert_eq!(by_tag["total"], 1, "按提示词的标签也能筛到产物");
+    // 给半截名字筛不到（这条防的是"某天有人顺手把 IN 改成 LIKE"）
+    let (_, partial) = get_json(router_for(state.clone()), "/api/media?tags=%E8%B5%9B%E5%8D%9A").await;
+    assert_eq!(partial["total"], 0, "标签是精确匹配，不是前缀/模糊匹配");
+
+    let (status, body) = get_json(router_for(state.clone()), "/api/media/100").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["storedName"], "a.png");
+    let (status, _) = get_json(router_for(state.clone()), "/api/media/999").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn media_file_serves_bytes_with_etag_and_range() {
+    let state = state();
+    // 给夹具补一个内容哈希：ETag 直接用 sha256（内容寻址）
+    state
+        .with(|conn| {
+            conn.execute("UPDATE media_assets SET sha256 = 'deadbeef' WHERE id = 100", [])
+                .map(|_| ())
+        })
+        .unwrap();
+    let app = router_for(state.clone());
+
+    // 200 全量
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri("/api/media/100/file").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("etag").unwrap(), "\"deadbeef\"");
+    assert_eq!(response.headers().get("accept-ranges").unwrap(), "bytes");
+    assert_eq!(response.headers().get("content-length").unwrap(), "16");
+    assert!(response
+        .headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("inline;"));
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], b"0123456789abcdef");
+
+    // If-None-Match 命中 → 304（省掉整段视频的流量）
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/media/100/file")
+                .header("if-none-match", "\"deadbeef\"")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+
+    // Range → 206 + Content-Range（视频拖动进度条靠它）
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/media/100/file")
+                .header("range", "bytes=4-7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(response.headers().get("content-range").unwrap(), "bytes 4-7/16");
+    assert_eq!(response.headers().get("content-length").unwrap(), "4");
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], b"4567", "Range 要给的是那一段字节，不是从头开始");
+
+    // 多段 Range 不支持 → 回 200 全量（**不是**格式不对的 206）
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/media/100/file")
+                .header("range", "bytes=0-1,4-5")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn media_file_rejects_path_traversal_and_missing_files() {
+    let state = state();
+    // 把库里的 stored_name 改成一条越界路径（库被人手改过就是这个样子）
+    state
+        .with(|conn| {
+            conn.execute("UPDATE media_assets SET stored_name = '../secret.txt' WHERE id = 100", [])
+                .map(|_| ())
+        })
+        .unwrap();
+    let (status, _) = get_json(router_for(state.clone()), "/api/media/100/file").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "目录穿越必须被挡住");
+
+    // 文件不在磁盘上（比如被用户删了）
+    state
+        .with(|conn| {
+            conn.execute("UPDATE media_assets SET stored_name = 'gone.png' WHERE id = 100", [])
+                .map(|_| ())
+        })
+        .unwrap();
+    let (status, body) = get_json(router_for(state.clone()), "/api/media/100/file").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body["message"].as_str().unwrap().contains("文件已丢失"));
+}
+
+#[tokio::test]
+async fn media_thumb_poster_upload_are_explicitly_501() {
+    let state = state();
+    for uri in ["/api/media/100/thumb", "/api/media/100/poster", "/api/media/100/prompt"] {
+        let (status, body) = get_json(router_for(state.clone()), uri).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "uri={uri}");
+        assert_eq!(body["error"], "NOT_IMPLEMENTED");
+    }
+    let (status, _) = send_json(router_for(state.clone()), "POST", "/api/media/upload", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 }

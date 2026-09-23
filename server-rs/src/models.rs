@@ -154,3 +154,76 @@ pub fn parse_json_object(raw: Option<&str>) -> serde_json::Value {
         _ => serde_json::json!({}),
     }
 }
+/// 产物（对应 `MediaRepo.mapMedia` 的输出）。
+///
+/// 三条"照抄"的地方别改：
+///  - `promptTags` 是**产物自身标签 ∪ 关联提示词标签**（去重排序）——画廊里筛选看到的集合；
+///  - `fileUrl` / `thumbUrl` 是**后端算好的路径**，前端不许自己拼（AGENTS §10.1）；
+///  - `promptTitle` / `promptPositive` / `promptNegative` / `checkpoint` / `seed` 是
+///    **关联提示词摘要**（列表直出，省一次请求）。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaDto {
+    pub id: i64,
+    pub prompt_id: Option<i64>,
+    pub kind: String,
+    pub title: String,
+    pub original_name: String,
+    pub stored_name: String,
+    pub mime_type: Option<String>,
+    pub size_bytes: i64,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub sha256: Option<String>,
+    pub source: Option<String>,
+    pub favorite: bool,
+    pub notes: Option<String>,
+    /// NSFW 标记：**只影响预览图打不打码**（默认 false = 不糊）
+    pub nsfw: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub has_workflow: bool,
+    pub prompt_title: Option<String>,
+    pub prompt_positive: Option<String>,
+    pub prompt_negative: Option<String>,
+    pub checkpoint: Option<String>,
+    pub seed: Option<i64>,
+    pub prompt_tags: Vec<String>,
+    pub file_url: String,
+    pub thumb_url: String,
+}
+
+/// 从一行 `media_assets LEFT JOIN prompts` 读 DTO（标签与 URL 由调用方/本函数补齐）。
+pub fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaDto> {
+    let id: i64 = row.get("id")?;
+    Ok(MediaDto {
+        id,
+        prompt_id: row.get("prompt_id")?,
+        kind: row.get("kind").unwrap_or_else(|_| "IMAGE".to_string()),
+        title: row.get("title")?,
+        original_name: row.get("original_name")?,
+        stored_name: row.get("stored_name")?,
+        mime_type: row.get("mime_type")?,
+        size_bytes: row.get::<_, Option<i64>>("size_bytes")?.unwrap_or(0),
+        width: row.get("width")?,
+        height: row.get("height")?,
+        duration_ms: row.get("duration_ms")?,
+        sha256: row.get("sha256")?,
+        source: row.get("source")?,
+        favorite: row.get::<_, i64>("favorite").unwrap_or(0) != 0,
+        notes: row.get("notes")?,
+        nsfw: row.get::<_, i64>("nsfw").unwrap_or(0) != 0,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+        has_workflow: row.get::<_, i64>("has_workflow").unwrap_or(0) != 0,
+        prompt_title: row.get("prompt_title")?,
+        prompt_positive: row.get("prompt_positive")?,
+        prompt_negative: row.get("prompt_negative")?,
+        checkpoint: row.get("checkpoint")?,
+        seed: row.get("seed")?,
+        prompt_tags: Vec::new(),
+        file_url: format!("/api/media/{id}/file"),
+        thumb_url: format!("/api/media/{id}/thumb"),
+    })
+}

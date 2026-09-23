@@ -37,12 +37,15 @@ const DEFAULT_PORT: u16 = 8081;
 
 struct Args {
     db: PathBuf,
+    /// 产物目录（`<storage>/media` 的父目录）。默认在库文件旁边的 `storage/`。
+    storage: PathBuf,
     host: String,
     port: u16,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut db: Option<PathBuf> = None;
+    let mut storage: Option<PathBuf> = None;
     let mut host = "127.0.0.1".to_string();
     let mut port = DEFAULT_PORT;
 
@@ -50,6 +53,7 @@ fn parse_args() -> Result<Args, String> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--db" => db = it.next().map(PathBuf::from),
+            "--storage" => storage = it.next().map(PathBuf::from),
             "--host" => host = it.next().unwrap_or(host),
             "--port" => {
                 port = it
@@ -58,7 +62,9 @@ fn parse_args() -> Result<Args, String> {
                     .ok_or("--port 需要一个数字")?
             }
             "--help" | "-h" => {
-                println!("用法: comfyhub-server-rs [--db <路径>] [--host <地址>] [--port <端口>]");
+                println!(
+                    "用法: comfyhub-server-rs [--db <路径>] [--storage <目录>] [--host <地址>] [--port <端口>]"
+                );
                 std::process::exit(0);
             }
             other => return Err(format!("未知参数：{other}")),
@@ -73,7 +79,14 @@ fn parse_args() -> Result<Args, String> {
             .unwrap_or_else(|| PathBuf::from("."));
         exe_dir.join("..").join(".db").join("comfyhub.db")
     });
-    Ok(Args { db, host, port })
+    // 缺省产物目录：与库同级的 `storage/`（发布包布局，AGENTS §7）
+    let storage = storage.unwrap_or_else(|| {
+        db.parent()
+            .and_then(|p| p.parent())
+            .map(|root| root.join("storage"))
+            .unwrap_or_else(|| PathBuf::from("storage"))
+    });
+    Ok(Args { db, storage, host, port })
 }
 
 #[tokio::main]
@@ -108,8 +121,9 @@ async fn main() {
     let engine = db::engine_info(&conn).unwrap_or_else(|_| serde_json::json!({}));
     let schema = db::schema_version(&conn).unwrap_or(-1);
     println!(
-        "comfyhub-server-rs 启动：db={} schemaVersion={} engine={}",
+        "comfyhub-server-rs 启动：db={} storage={} schemaVersion={} engine={}",
         args.db.display(),
+        args.storage.display(),
         schema,
         engine
     );
@@ -117,7 +131,19 @@ async fn main() {
         eprintln!("⚠ FTS5 不可用：bundled 引擎本应带它，请检查 rusqlite 的 features");
     }
 
-    let state = routes::AppState::new(conn, args.db.to_string_lossy().to_string());
+    let media_dir = args.storage.join("media");
+    if !media_dir.is_dir() {
+        // 不自己建目录：写路径还没搬过来，建空目录只会掩盖"storage 指错了"
+        eprintln!(
+            "⚠ 产物目录不存在：{}（文件流端点会回 404；用 --storage 指定正确的 storage 目录）",
+            media_dir.display()
+        );
+    }
+    let state = routes::AppState::new(
+        conn,
+        args.db.to_string_lossy().to_string(),
+        media_dir.clone(),
+    );
     let app = routes::router(state)
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http());
