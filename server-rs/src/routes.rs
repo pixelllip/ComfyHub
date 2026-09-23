@@ -97,6 +97,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/media/{id}/poster", get(media_poster))
         .route("/api/media/{id}/prompt", get(media_prompt))
         .route("/api/media/upload", axum::routing::post(media_upload))
+        // 捕获配置（本地那一半：读写 app_settings 里的一行 JSON）
+        .route("/api/capture/config", get(capture_config).put(put_capture_config))
+        // 工作流原文（前端按需拉：详情页的「查看工作流」弹窗）
+        .route("/api/prompts/{id}/workflow", get(prompt_workflow))
+        .route("/api/media/{id}/workflow", get(media_workflow))
         .merge(crate::write_routes::write_router())
         .with_state(state)
 }
@@ -145,6 +150,50 @@ async fn media_poster(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, A
 
 async fn media_prompt(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, ApiError> {
     Err(crate::media::not_migrated("产物关联的完整提示词"))
+}
+
+/// `GET /api/capture/config`
+async fn capture_config(State(state): State<AppState>) -> Result<Json<crate::capture::CaptureConfig>, ApiError> {
+    Ok(Json(crate::capture::get_config(&state)?))
+}
+
+/// `PUT /api/capture/config`（整体覆盖 + 归一化，与 Kotlin 同语义）
+async fn put_capture_config(
+    State(state): State<AppState>,
+    Json(body): Json<crate::capture::CaptureConfig>,
+) -> Result<Json<crate::capture::CaptureConfig>, ApiError> {
+    Ok(Json(crate::capture::put_config(&state, body)?))
+}
+
+/// `GET /api/prompts/{id}/workflow` —— 有就原样吐 `application/json`，没有就 **204**。
+async fn prompt_workflow(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<axum::response::Response, ApiError> {
+    workflow_response(crate::capture::prompt_workflow(&state, id)?)
+}
+
+/// `GET /api/media/{id}/workflow`
+async fn media_workflow(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<axum::response::Response, ApiError> {
+    workflow_response(crate::capture::media_workflow(&state, id)?)
+}
+
+/// 工作流原文的响应：**原样文本**（不重新序列化：可能有几百 KB，前端按原样塞进弹窗）
+fn workflow_response(text: Option<String>) -> Result<axum::response::Response, ApiError> {
+    match text {
+        None => Ok(axum::response::Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(axum::body::Body::empty())
+            .unwrap()),
+        Some(json) => Ok(axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(json))
+            .unwrap()),
+    }
 }
 
 async fn media_upload(

@@ -1072,3 +1072,95 @@ async fn upload_rejects_empty_and_bad_prompt_id() {
     let leftovers = std::fs::read_dir(&tmp).map(|d| d.count()).unwrap_or(0);
     assert_eq!(leftovers, 0, "校验失败要清掉临时文件");
 }
+// ===========================================================================
+//  捕获配置与工作流原文（P4 第 7 步）
+// ===========================================================================
+
+#[tokio::test]
+async fn capture_config_round_trips_and_normalizes() {
+    let state = state();
+    let (status, body) = get_json(router_for(state.clone()), "/api/capture/config").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        keys(&body),
+        vec!["autoTag", "comfyUrl", "downloadFallback", "enabled", "maxPerPoll", "outputDir", "pollSeconds"]
+    );
+    assert_eq!(body["comfyUrl"], "http://127.0.0.1:8188", "库里没配过就是环境默认值");
+    assert_eq!(body["autoTag"], "ComfyUI");
+    assert_eq!(body["pollSeconds"], 4);
+
+    // PUT 是**整体覆盖 + 归一化**：尾斜杠去掉、空白目录当 NULL、越界数值夹住
+    let (status, saved) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/capture/config",
+        serde_json::json!({
+            "enabled": false,
+            "comfyUrl": "  http://127.0.0.1:8188/  ",
+            "outputDir": "   ",
+            "pollSeconds": 99999,
+            "autoTag": "  ComfyUI  ",
+            "maxPerPoll": 0,
+            "downloadFallback": false
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={saved}");
+    assert_eq!(saved["comfyUrl"], "http://127.0.0.1:8188");
+    assert_eq!(saved["outputDir"], serde_json::Value::Null);
+    assert_eq!(saved["pollSeconds"], 600, "夹到上限：轮询太快会把 ComfyUI 问崩");
+    assert_eq!(saved["maxPerPoll"], 1);
+    assert_eq!(saved["comfyUrl"].as_str().unwrap().ends_with('/'), false);
+
+    // 再读一次：落库的确实是归一化后的那份（GET 与 PUT 的响应必须一致）
+    let (_, again) = get_json(router_for(state.clone()), "/api/capture/config").await;
+    assert_eq!(again, saved);
+
+    // 缺字段的 body 也要能收（每个字段都有默认值：前端版本不一致时不该整条 400）
+    let (status, partial) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/capture/config",
+        serde_json::json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(partial["enabled"], true);
+    assert_eq!(partial["autoTag"], "ComfyUI", "缺的字段走默认值");
+}
+
+#[tokio::test]
+async fn workflow_endpoints_distinguish_404_from_204() {
+    let state = state();
+    // 夹具里 id=10 有 workflow_json、id=11 没有
+    let response = router_for(state.clone())
+        .oneshot(Request::builder().uri("/api/prompts/10/workflow").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-type").unwrap(), "application/json");
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], br#"{"nodes":[]}"#, "原文直出，不重新序列化");
+
+    let (status, _) = get_json(router_for(state.clone()), "/api/prompts/11/workflow").await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "有这条提示词但没有工作流 → 204（不是 404）");
+
+    let (status, body) = get_json(router_for(state.clone()), "/api/prompts/9999/workflow").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "提示词不存在才是 404");
+    assert!(body["message"].as_str().unwrap().contains("9999"));
+
+    // 产物侧同一套语义
+    state
+        .with(|conn| {
+            conn.execute("UPDATE media_assets SET workflow_json = '{\"a\":1}' WHERE id = 100", [])
+                .map(|_| ())
+        })
+        .unwrap();
+    let response = router_for(state.clone())
+        .oneshot(Request::builder().uri("/api/media/100/workflow").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let (status, _) = get_json(router_for(state.clone()), "/api/media/9999/workflow").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
