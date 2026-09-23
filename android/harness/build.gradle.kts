@@ -38,5 +38,14 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
 
+    // ★ R14：本地库必须用 **bundled** SQLite（Android 13 的系统 SQLite 还是 3.32a、无 FTS5）。
+    // sqlite-bundled 自带 native 引擎；sqlite 提供 SQLiteConnection/Statement 那层 API。
+    // ⚠ 刻意**不用 Room**：Room 的注解处理要 KSP（又一个 KGP 家族插件），见上面那条注释。
+    implementation("androidx.sqlite:sqlite:2.7.1")
+    implementation("androidx.sqlite:sqlite-bundled:2.7.1")
+
     testImplementation("junit:junit:4.13.2")
+    // 单元测试跑在 JVM 上，装不了 Android 的 JNI 库 → 用 xerial 的 sqlite-jdbc 跑**同一份 DDL/SQL**。
+    // 它同样是"带引擎"（自带 SQLite 3.53），所以测的是真 SQL，不是假实现。
+    testImplementation("org.xerial:sqlite-jdbc:3.53.4.0")
 }
