@@ -37,3 +37,8 @@ plugins {
 }
 
 include(":app")
+
+// 手机端 harness（M3）：纯 Kotlin 逻辑 + 本地 bundled SQLite + platform channel。
+// 它是一个普通的 com.android.library（不是 Flutter 插件），所以 Flutter 的插件扫描不会碰它。
+// 设计边界见 docs/mobile-harness-design.md §2.1 / §4。
+include(":harness")
