@@ -198,7 +198,7 @@ GET /api/ai/run-kit/status  → { current, revoked:[...] }   ← 命中吊销则
 | **M4** | 上行通道 | `_outbox` + `/api/sync/push` + 幂等 apply + 服务端赢 LWW | 手机产生的会话在桌面可见可续写；重复推送不产生重复行 | M3 |
 | **M5** | 排队提交 | 手机 `comfy_queue_submit` + 桌面 outbox 消费（**走现有 `comfy_submit` 全链路**） | 手机排队 → 桌面在线后自动提交 → 产物入库画廊 → `mediaIds` 回到手机；**桌面侧审批/幂等/入库一条不少（R10/R11）** | M4 |
 | **M6** | 凭据 | `ai_providers` 下行（**不含密钥**）+ 手机 Android Keystore + `flutter_secure_storage` | 手机能独立调用 LLM；密钥不出本机；界面明确告知"需在手机上单独填 Key" | M3 |
-| **P4** | **桌面 Rust 重写** | 🔵 **进行中（第 1 步已落地 2026-09-23，`afcf395`）**：`server-rs/`（axum 0.8 + tokio + **rusqlite 0.40 bundled** + serde + tower-http）—— `db.rs`（连接工厂 + PRAGMA 读回自检 R1 / `BEGIN IMMEDIATE` R2 / FTS5·user_version 自检）、`models.rs`（Tag/Prompt/Paged 的 JSON 形状与 Kotlin 逐字一致）、`routes.rs`（**只读** `GET /api/health`、`/api/tags`(+categories)、`/api/prompts`、`/api/prompts/{id}`）、11 个 Rust 用例；默认端口 **8081** 与 Kotlin 的 8080 并存灰度 | ① `cargo test` 11 例全绿（键集合精确断言 / 分页信封 / R1 自检抓 fk=0 / R2 回滚 / R14 FTS5 / 删标签级联）；② **对真实 `.db/comfyhub.db` 起服务并抽查**（sqlite **3.53.2**、fts5 true、schema 1、27 提示词分 14 页、详情字段正常）。**未搬**：写端点、`/api/media`、`/api/ai/*`、`/api/sync/*`、`/api/capture/*`；**未重建**：R6~R10（AI/工具层最后搬，§6 要求逐条对照重建）；RSS ≤30MB 待量 | P2、M0 |
+| **P4** | **桌面 Rust 重写** | 🔵 **进行中（第 1~2 步已落地 2026-09-23：`afcf395` / `bf955bb`）**：`server-rs/`（axum 0.8 + tokio + **rusqlite 0.40 bundled** + serde + tower-http）。**第 1 步（只读）**：`db.rs`（连接工厂 + PRAGMA **读回自检** R1 / `BEGIN IMMEDIATE` R2 / FTS5·user_version 自检）、`models.rs`、`routes.rs`（`/api/health`、`/api/tags`(+categories)、`/api/prompts`、`/api/prompts/{id}`）。**第 2 步（写）**：`inputs.rs`（输入形状与 Kotlin 同形）、`repo.rs`（标签/提示词写仓储，逐条对照 `TagRepo`/`PromptRepo`）、`write_routes.rs`（标签 CRUD；提示词 CRUD/收藏/复制/标签追加移除；未搬的端点**明确 501**）。默认端口 **8081** 与 Kotlin 的 8080 并存灰度 | ① `cargo test` **23 例**全绿（键集合精确断言 / 分页信封 / R1 自检 / R2 回滚 / R14 FTS5 / 级联 / **写操作点亮 `_sync_log`** / 501 语义）；② **对真实 `.db/comfyhub.db` 的副本跑通完整写回环**（建标签→建提示词→收藏→复制→改→删副本；`use_count` 与标签关联都对；400/404/501 语义正确；真库未被触碰）。**未搬**：`/api/media`（含文件流）、`/api/settings`、`/api/capture/*`、`/api/ai/*`、`/api/sync/*`；**未重建**：R6~R10（AI/工具层最后搬）；RSS ≤30MB 待量 | P2、M0 |
 
 ### 轨道依赖的关键判断
 
@@ -350,8 +350,12 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ② 手机侧 `web_search` / `civitai_search` 两个工具（未实现就**不宣称**：`declaredTo` = kit ∩ 本地实现，
 > 模型看不见它们，所以不会"调了必然失败"）。
 >
-> ✅ **P4 第 1 步落地（2026-09-23，`afcf395`）**：Rust 版起了骨架并**跑通了只读灰度**
-> （`server-rs/`，默认 8081，与 Kotlin 的 8080 并存）。三条纪律在 Rust 侧已经重建：
-> 连接工厂 + PRAGMA **读回自检**（R1）、`BEGIN IMMEDIATE` 写事务（R2）、FTS5/user_version 自检（R14）。
-> 形状纪律用**精确键集合**断言盯住（"少一个键 = 界面上少一块内容"）。
-> 下一步按 §5.1 的灰度顺序继续搬写端点，最后才是 `/api/ai/*` 与 R6~R10 的重建。
+> ✅ **P4 第 1~2 步落地（2026-09-23：`afcf395` 只读 / `bf955bb` 写）**：Rust 版起了骨架并跑通
+> **读 + 写**两个灰度批次（`server-rs/`，默认 8081，与 Kotlin 的 8080 并存）。
+> 三条纪律在 Rust 侧已经重建：连接工厂 + PRAGMA **读回自检**（R1）、`BEGIN IMMEDIATE` 写事务（R2，
+> 错误类型泛型化但**只有一处实现**）、FTS5/user_version 自检（R14）。
+> 形状纪律用**精确键集合**断言盯住（"少一个键 = 界面上少一块内容"）；
+> 写路径额外盯两件事：**"建提示词+建标签+重算 use_count" 在同一事务里**、**写操作要点亮 `_sync_log`**。
+> 踩到并记进 `docs/pitfalls.md` 的坑：① serde 漏 `rename_all=camelCase` → 所有字段静默落默认值；
+> ② rusqlite 的 bundled 构建**默认就开** `foreign_keys`（所以防线是自检而不是默认值）。
+> 下一步按 §5.1 继续搬 `/api/media`（含 Range/ETag 的文件流），最后才是 `/api/ai/*` 与 R6~R10 的重建。
