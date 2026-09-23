@@ -1,5 +1,6 @@
 package com.comfyhub.ai.tools
 
+import com.comfyhub.ai.QuestionStore
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
@@ -240,10 +241,20 @@ class AskGate(private val timeoutMs: Long = 30 * 60 * 1000) {
  *  2. `ask_user_question` 用它挡掉"同一个问题问两遍"（卡片重复弹出很烦人）；
  *  3. Run 收尾时按 runId 把挂着的提问一次放掉（否则协程要等 30 分钟才回收）。
  *
- * 内存态、**不落库**：提问是"当前这次 Run 的状态"，进程重启后这次 Run 本身就已经
- * 被标成失败了（`AiRunRepo.failStaleRunning`），不存在"重启后还有人在等你答"。
+ * ## 落库（M1，2026-09-23）
+ *
+ * 上面三条都只活在内存里，后端一重启就什么都没了。M1 起所有状态变迁**写穿**到
+ * [QuestionStore]（真实现 `AiQuestionRepo`，即 `ai_questions` 表）：
+ *
+ *  - [track] 时就落一行 pending（不等 Run 收尾 —— 那个窗口正是要防的）；
+ *  - [answer] 被采纳时写回答；
+ *  - [clear] / [discardRun] 收尾时把还在 pending 的行标成失效（**已经 answered /
+ *    skipped 的不许被覆盖**，store 侧有状态守卫）；
+ *  - [get] 在内存查不到时回落查库 —— 这就是"后端重启后 pending 不丢"的查询面。
+ *
+ * store 传 null = 不落库（老行为，测试里用；线上由 Application 传入真实现）。
  */
-class AskRegistry(private val gate: AskGate) {
+class AskRegistry(private val gate: AskGate, private val store: QuestionStore? = null) {
     private val byRun = ConcurrentHashMap<String, MutableList<String>>()
     private val questions = ConcurrentHashMap<String, PendingQuestion>()
 
@@ -252,14 +263,28 @@ class AskRegistry(private val gate: AskGate) {
         questions[question.questionId] = question
         gate.open(question.questionId)
         byRun.computeIfAbsent(question.runId) { mutableListOf() }.add(question.questionId)
+        store?.insert(question)
     }
 
-    fun get(questionId: String): PendingQuestion? = questions[questionId]
+    /** 内存里的（活的）提问 —— 提问闸门的即时状态以它为准。 */
+    fun getLive(questionId: String): PendingQuestion? = questions[questionId]
+
+    /**
+     * 按 questionId 查提问：先内存（这次进程里开出来的），查不到回落 [QuestionStore.find]
+     * （后端重启后内存是空的，但"问过什么、答了什么"必须还查得到 —— M1 落库的意义所在）。
+     */
+    fun get(questionId: String): PendingQuestion? =
+        questions[questionId] ?: store?.find(questionId)?.question
 
     /** 这个 Run 现在还在等用户回答的提问（最新的那条）。 */
     fun pendingFor(runId: String): PendingQuestion? = byRun[runId].orEmpty()
         .lastOrNull { id -> questions[id]?.let { gate.isWaiting(id) && !it.answered } == true }
         ?.let { questions[it] }
+
+    /** 所有 Run 现在还在等用户回答的提问（跨端查询 `GET /api/ai/pending` 用）。 */
+    fun allPending(): List<PendingQuestion> = questions.values
+        .filter { gate.isWaiting(it.questionId) && !it.answered }
+        .sortedBy { it.askedAtMs }
 
     /**
      * 这个 Run 现在还挂着的**整张卡**（同一 groupId 的那几条，按题号排）。
@@ -308,6 +333,7 @@ class AskRegistry(private val gate: AskGate) {
                 optionIndex = optionIndex,
                 optionIndexes = optionIndexes,
             )
+            store?.recordAnswer(questionId, answer, optionIndex, optionIndexes)
         }
         return accepted
     }
@@ -317,13 +343,18 @@ class AskRegistry(private val gate: AskGate) {
      *
      * **保留 [questions] 里的记录**：`user.question.answered` 事件与
      * `GET /api/ai/questions/{id}` 还要靠它回答"这条问过什么、答了什么"。
+     *
+     * [storeStatus] 给了就把库里还挂着的 pending 行按它收尾（skip 传 "skipped"、
+     * Run 收尾传 "expired"）—— 只动 pending，已 answered 的不受影响。
      */
-    fun clear(questionId: String) {
+    fun clear(questionId: String, storeStatus: String? = null) {
         gate.discard(questionId)
+        if (storeStatus != null) store?.finalizeIfPending(questionId, storeStatus)
     }
 
-    /** Run 收尾：把这个 Run 上所有还挂着的提问放掉。 */
+    /** Run 收尾：把这个 Run 上所有还挂着的提问放掉，库里按失效收尾。 */
     fun discardRun(runId: String) {
         byRun.remove(runId).orEmpty().forEach { gate.discard(it) }
+        store?.finalizeRun(runId, "expired")
     }
 }

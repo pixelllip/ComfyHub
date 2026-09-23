@@ -707,7 +707,12 @@ class HarnessRunner(
                         // 需要审批的工具：**先开闸门、再发事件**。反过来的话，用户手快在事件到达界面后
                         // 立刻点批准，会打在"还没开的闸门"上（resolve 返回 false），然后 await 一直等到超时。
                         val needsApproval = access == ToolAccess.ASK
-                        if (needsApproval) approvals?.open(draft.callId)
+                        if (needsApproval) {
+                            approvals?.open(draft.callId)
+                            // M1：等待一开始就落一行 pending —— 在用户点按钮的这几分钟里
+                            // "AI 曾想调用什么"必须查得到（跨端发现 + 审计，R8 的落库防线）。
+                            AiRunRepo.insertPendingToolCall(runId, draft.callId, draft.name, draft.arguments)
+                        }
 
                     emit(
                         RunEventType.TOOL_REQUESTED,
@@ -741,7 +746,8 @@ class HarnessRunner(
                         },
                     )
 
-                    AiRunRepo.insertToolCall(record)
+                    // M1：有 pending 行就原地更新成终态，没有（非审批调用）按老路径插入
+                    AiRunRepo.recordToolCall(record)
 
                     parts.add(
                         "tool_result",

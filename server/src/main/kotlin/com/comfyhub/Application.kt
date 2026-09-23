@@ -284,9 +284,10 @@ fun Application.module(ctx: AppContext) {
 
     // 工具层（M4）：出厂只能写 <根>\comfyui，只读 <根>\comfyui + <根>\storage（见 ToolPolicy）
     val approvals = ToolApprovalGate()
-    // 提问闸门（用户建议 ⑥）：AI 可以当场问一句、**不中断**这一次回答
+    // 提问闸门（用户建议 ⑥）：AI 可以当场问一句、**不中断**这一次回答。
+    // M1 起状态变迁写穿到 `ai_questions` 表（跨端可查、重启不丢 —— 见 AiQuestionRepo）。
     val askGate = com.comfyhub.ai.tools.AskGate()
-    val asks = com.comfyhub.ai.tools.AskRegistry(askGate)
+    val asks = com.comfyhub.ai.tools.AskRegistry(askGate, com.comfyhub.ai.AiQuestionRepo)
     // 提交任务（用户建议 ①）：AI 可以把库里的工作流真的送进 ComfyUI 队列
     val submitter = ComfySubmitter(ctx.cfg, capture)
 
@@ -484,6 +485,15 @@ fun Application.module(ctx: AppContext) {
     // 上次进程退出时还在 running 的 Run 不可能再继续：标成失败，而不是让界面永远转圈
     runCatching { AiRunRepo.failStaleRunning() }
         .onSuccess { if (it > 0) log.warn("有 {} 个 Run 因后端重启被标记为失败", it) }
+
+    // M1「超时恢复」：等待中的审批与提问也一起收尾。内存里的闸门随进程消失了，
+    // 库里还挂着 pending 的行永远等不到那个"点批准 / 答题"的人 ——
+    // 审批按既有语义（超时 = 拒绝）落成 denied，提问按"没有回答"落成 expired。
+    // 不收尾的话它们会永远挂在 `GET /api/ai/pending` 的口径外，却把审计搅成一锅粥。
+    runCatching { AiRunRepo.expireStalePendingToolCalls() }
+        .onSuccess { if (it > 0) log.warn("有 {} 条等待审批的工具调用因后端重启按拒绝收尾", it) }
+    runCatching { com.comfyhub.ai.AiQuestionRepo.expireStalePending() }
+        .onSuccess { if (it > 0) log.warn("有 {} 张提问卡因后端重启被标记为失效", it) }
 
     if (!ctx.cfg.loopbackOnly) {
         log.warn(

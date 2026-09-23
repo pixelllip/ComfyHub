@@ -44,6 +44,9 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
@@ -947,12 +950,87 @@ fun Route.aiRoutes(
             )
         }
 
-        /** 单条提问的状态（界面按 questionId 校验"我这张卡还作数吗"）。 */
+        /**
+         * 单条提问的状态（界面按 questionId 校验"我这张卡还作数吗"）。
+         *
+         * M1 起先查内存（活的），查不到回落 `ai_questions` 表 —— 后端重启后
+         * 这里依然回答"问过什么、答了什么、什么结局"，而不是 404 把卡片抹掉。
+         */
         get("/questions/{questionId}") {
             val id = call.parameters["questionId"].orEmpty()
             val q = asks.get(id)
                 ?: throw AiException(AiErrorCode.CONFIG_ERROR, "提问不存在或已过期: $id")
             call.respond(q.toJson())
+        }
+
+        /**
+         * 跨端待办总览（M1）：现在**全后端**还有哪些东西在等人 —— 提问卡 + 工具审批。
+         *
+         * 给"另一台设备刚连上来"用（手机 / 第二个窗口）：它没经历那条 SSE 事件流，
+         * 靠这一个接口就能把所有还挂着的卡补出来，而不是逐个 Run 去问。
+         * 审批来自 `ai_tool_calls` 的 pending 行（Run 还在 running 才算数），
+         * 提问来自内存闸门（活着才需要人答）。
+         */
+        get("/pending") {
+            call.respond(
+                buildJsonObject {
+                    put(
+                        "asks",
+                        buildJsonArray { asks.allPending().forEach { add(it.toJson()) } },
+                    )
+                    put(
+                        "approvals",
+                        buildJsonArray {
+                            AiRunRepo.listPendingApprovals().forEach { entry ->
+                                add(
+                                    buildJsonObject {
+                                        put("callId", (entry["callId"] as String?) ?: "")
+                                        put("runId", (entry["runId"] as String?) ?: "")
+                                        put("conversationId", (entry["conversationId"] as String?) ?: "")
+                                        put("name", (entry["name"] as String?) ?: "")
+                                        put("argumentsJson", (entry["argumentsJson"] as String?) ?: "")
+                                        put("askedAt", (entry["askedAt"] as String?))
+                                    },
+                                )
+                            }
+                        },
+                    )
+                },
+            )
+        }
+
+        // -------------------------------------------------------------------
+        //  run-kit（M1 / 🔒 docs/run-kit-contract.md）
+        //
+        //  手机 harness 的"规则类"输入全部从这份工件来（R13：两端都不许硬编码
+        //  系统提示 / 工具描述 / 安全文案）。`tools[]` 按 ToolScope 过滤成手机
+        //  可执行子集（总纲 §3.5）；`untrustedBanner` 是桌面那份模板的原样下发（R7）。
+        //
+        //  `?providerId=&modelId=`：手机按它选好的模型取对应的环境头（可选；
+        //  缺省用桌面当前默认，指定了但库里没有 → 400，不静默回落）。
+        // -------------------------------------------------------------------
+
+        get("/run-kit") {
+            call.respond(
+                RunKit.build(
+                    toolRegistry = toolRegistry,
+                    skills = skills,
+                    memory = memory,
+                    projectRoot = projectRoot,
+                    providerOverride = call.request.queryParameters["providerId"],
+                    modelOverride = call.request.queryParameters["modelId"],
+                ),
+            )
+        }
+
+        get("/run-kit/status") {
+            call.respond(
+                buildJsonObject {
+                    // 顺手把版本号起出来（幂等）：status 的 current 永远有值
+                    put("current", RunKit.ensureCurrentVersion(toolRegistry, projectRoot))
+                    put("revoked", buildJsonArray { RunKit.revoked().forEach { add(JsonPrimitive(it)) } })
+                },
+            )
         }
 
         /**
@@ -964,7 +1042,7 @@ fun Route.aiRoutes(
         post("/questions/{questionId}/answer") {
             val questionId = call.parameters["questionId"].orEmpty()
             val body = call.receive<QuestionAnswerRequest>()
-            val q = asks.get(questionId)
+            val q = asks.getLive(questionId)
                 ?: throw AiException(AiErrorCode.CONFIG_ERROR, "提问不存在或已过期: $questionId")
 
             val index = body.optionIndex
@@ -1000,9 +1078,10 @@ fun Route.aiRoutes(
          */
         post("/questions/{questionId}/skip") {
             val questionId = call.parameters["questionId"].orEmpty()
-            val q = asks.get(questionId)
+            val q = asks.getLive(questionId)
                 ?: throw AiException(AiErrorCode.CONFIG_ERROR, "提问不存在或已过期: $questionId")
-            asks.clear(questionId)
+            // M1：库里那条也按"用户跳过"收尾（下一轮 Run 收尾的兜底不会再覆盖它）
+            asks.clear(questionId, "skipped")
             bus.emit(
                 q.runId,
                 RunEventType.USER_QUESTION_ANSWERED,

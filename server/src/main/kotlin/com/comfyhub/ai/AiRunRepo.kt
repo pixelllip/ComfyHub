@@ -193,6 +193,103 @@ object AiRunRepo {
         }
     }
 
+    // --- 待审批的调用也要留痕（M1，2026-09-23） -----------------------------
+    //
+    // 旧行为是"invoke 返回后才落 ai_tool_calls"，于是存在一个盲区：
+    // **审批正在等用户点按钮的那几分钟里，库里什么都没有**。后端在这中间重启，
+    // "AI 曾想调用什么、审批没被处理"就凭空消失 —— 既没法跨端查（另一台设备
+    // 连上来不知道有东西在等它批），审计上也是空白（R8 落库防线）。
+    //
+    // 现在的做法：`ToolApprovalGate.open()` 的同一刻就落一行 `status='pending'`，
+    // invoke 返回时**原地更新**那一行（找不到 pending 行再按老路径插入）。
+
+    /** 审批等待开始时落一行 pending（只在 `needsApproval` 时调，R8）。 */
+    fun insertPendingToolCall(runId: String, callId: String, name: String, argumentsJson: String) {
+        runCatching {
+            Db.withConnection { conn ->
+                conn.execute(
+                    """
+                    INSERT INTO ai_tool_calls
+                      (id, run_id, provider_call_id, name, arguments_json, approval, status, started_at)
+                    VALUES (?,?,?,?,'pending','pending', CURRENT_TIMESTAMP(3))
+                    """.trimIndent(),
+                    UUID.randomUUID().toString(), runId, callId, name, argumentsJson.take(16_000),
+                )
+            }
+        }.onFailure { log.warn("待审批工具调用落库失败（审批期间跨端将看不到它）: {}", it.message) }
+    }
+
+    /**
+     * invoke 返回后把**同一行** pending 落成终态。
+     * 返回 false 表示没有 pending 行可更新（老路径 / 非审批调用）—— 调用方改走 [insertToolCall]。
+     */
+    private fun resolvePendingToolCall(rec: com.comfyhub.ai.tools.ToolCallRecord): Boolean = runCatching {
+        Db.withConnection { conn ->
+            conn.execute(
+                """
+                UPDATE ai_tool_calls
+                   SET approval = ?, status = ?, result_json = ?, content = ?, error = ?,
+                       elapsed_ms = ?, completed_at = CURRENT_TIMESTAMP(3)
+                 WHERE run_id = ? AND provider_call_id = ? AND status = 'pending'
+                """.trimIndent(),
+                rec.approval, rec.status,
+                rec.resultJson?.let { AppJson.encodeToString(JsonObject.serializer(), it) },
+                rec.content.take(64_000), rec.error?.take(2000), rec.elapsedMs,
+                rec.runId, rec.callId,
+            ) > 0
+        }
+    }.getOrDefault(false)
+
+    /** 工具调用落库的统一入口：有 pending 行就原地更新，没有就按老路径插入。 */
+    fun recordToolCall(rec: com.comfyhub.ai.tools.ToolCallRecord) {
+        if (resolvePendingToolCall(rec)) return
+        insertToolCall(rec)
+    }
+
+    /** 现在还在等用户批准的调用（跨端查询 `GET /api/ai/pending` 用）。 */
+    fun listPendingApprovals(): List<Map<String, Any?>> = runCatching {
+        Db.withConnection { conn ->
+            conn.queryList(
+                """
+                SELECT tc.provider_call_id, tc.run_id, r.conversation_id, tc.name,
+                       tc.arguments_json, tc.started_at
+                  FROM ai_tool_calls tc
+                  JOIN ai_runs r ON r.id = tc.run_id
+                 WHERE tc.status = 'pending' AND r.status = 'running'
+                 ORDER BY tc.started_at, tc.id
+                """.trimIndent(),
+            ) { rs ->
+                mapOf(
+                    "callId" to rs.getString("provider_call_id"),
+                    "runId" to rs.getString("run_id"),
+                    "conversationId" to rs.getString("conversation_id"),
+                    "name" to rs.getString("name"),
+                    "argumentsJson" to rs.getString("arguments_json"),
+                    "askedAt" to rs.isoTime("started_at"),
+                )
+            }
+        }
+    }.getOrDefault(emptyList())
+
+    /**
+     * 后端重启恢复：库里还挂着 pending 的审批行都是"永远不会有人点批准"的了
+     * （内存里的闸门随进程消失，Run 也已被 [failStaleRunning] 标失败）。
+     * 与审批闸门的既有语义一致 —— **超时 / 取消都算拒绝**，重启是最彻底的超时。
+     */
+    fun expireStalePendingToolCalls(): Int = runCatching {
+        Db.withConnection { conn ->
+            conn.execute(
+                """
+                UPDATE ai_tool_calls
+                   SET approval = 'denied', status = 'denied',
+                       error = '后端重启，审批等待被打断（按拒绝处理）',
+                       completed_at = CURRENT_TIMESTAMP(3)
+                 WHERE status = 'pending'
+                """.trimIndent(),
+            )
+        }
+    }.getOrDefault(0)
+
     // --- 事件 ---------------------------------------------------------------
 
     fun appendEvent(runId: String, seq: Int, type: String, payload: JsonObject) {

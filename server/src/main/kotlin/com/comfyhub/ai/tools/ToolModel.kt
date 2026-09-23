@@ -35,23 +35,23 @@ enum class ToolAccess(val wire: String) {
  * 后果是"手机上少一个工具"（看得见、能发现），而不是"手机上多一个调不到的工具"
  * （看不见、只表现为模型一本正经地胡说）。同理，MCP 拉来的 39 个工具也自动落在 DESKTOP。
  */
-enum class ToolScope {
+enum class ToolScope(val wire: String) {
     /**
      * "两端合起来"的全集 —— **只在桌面自己跑 Run 时用**（`specs(policy)` 的默认值）。
      *
      * 它的存在是为了让 `ToolScope` 这一步**纯加字段、零行为变化**：桌面今天的 Run
      * 拿到的清单与加这个枚举之前逐字相同。手机侧传 [MOBILE]。
      */
-    ALL,
+    ALL("ALL"),
 
     /** 只有桌面能履行：comfy_*、MCP 的 39 个、本机文件读写、skill 注册/删除 */
-    DESKTOP,
+    DESKTOP("DESKTOP"),
 
     /** 手机 harness 自己能做（移植过去的那一套），桌面也能做 */
-    BOTH,
+    BOTH("BOTH"),
 
     /** 只有手机有（例如手机独有的 `comfy_queue_submit`，R11） */
-    MOBILE,
+    MOBILE("MOBILE"),
 }
 
 /** 工具分类，仅用于界面分组与文档。 */

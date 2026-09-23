@@ -279,6 +279,47 @@ object Migrate {
             """.trimIndent()
         )
 
+        // --- 提问闸门落库（M1，2026-09-23） ---
+        // 提问卡的历史形状已经随 tool_result 落在 ai_message_parts / ai_tool_calls 里，
+        // 但"问过什么、答没答、有没有人在等"一直没有一个能按 questionId 直接查的地方：
+        // 重启后 `GET /api/ai/questions/{id}` 只能 404，跨端也只能查"某个 Run 还在等什么"。
+        // 状态机：pending → answered（用户答了）/ skipped（用户跳过）/ expired（超时、
+        // Run 收尾、后端重启 —— 都按"没有回答就失效"收尾，语义一致）。
+        // ⚠ 这张表**不进同步范围**（手机看实时提问走 `GET /api/ai/pending`，历史卡片从
+        // parts 还原）—— 别把它加进 sqlite-schema-contract.md §6 的同步真源表。
+        changed += createTable(
+            conn, "ai_questions",
+            """
+            CREATE TABLE IF NOT EXISTS ai_questions (
+              question_id     CHAR(36)     NOT NULL,
+              run_id          CHAR(36)     NOT NULL,
+              conversation_id CHAR(36)     NOT NULL,
+              group_id        CHAR(36)     NOT NULL COMMENT '同一张提问卡的分组号',
+              card_index      INT          NOT NULL DEFAULT 0 COMMENT '卡内第几题（0 基）',
+              total           INT          NOT NULL DEFAULT 1,
+              question        MEDIUMTEXT   NOT NULL,
+              options_json    JSON         NULL,
+              allow_free_text TINYINT(1)   NOT NULL DEFAULT 1,
+              multi_select    TINYINT(1)   NOT NULL DEFAULT 0,
+              header          VARCHAR(255) NULL,
+              status          VARCHAR(16)  NOT NULL DEFAULT 'pending'
+                                           COMMENT 'pending / answered / skipped / expired',
+              answer          MEDIUMTEXT   NULL,
+              option_index    INT          NULL,
+              option_indexes  JSON         NULL COMMENT '多选题勾了哪几个',
+              asked_at        DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+              answered_at     DATETIME(3)  NULL,
+              PRIMARY KEY (question_id),
+              KEY idx_ai_questions_run (run_id),
+              KEY idx_ai_questions_status (status),
+              CONSTRAINT fk_ai_questions_run FOREIGN KEY (run_id)
+                REFERENCES ai_runs (id) ON DELETE CASCADE,
+              CONSTRAINT fk_ai_questions_conv FOREIGN KEY (conversation_id)
+                REFERENCES ai_conversations (id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """.trimIndent()
+        )
+
         // --- 思考强度（AIH-056）：老库补列，模型目录声明可选等级与网关方言 ---
         changed += addColumn(conn, "ai_models", "thinking_efforts", "JSON NULL COMMENT '可选的思考等级：等级 -> 过线拼写/预算'")
         changed += addColumn(conn, "ai_models", "thinking_format", "VARCHAR(16) NULL COMMENT '思考方言：openai/deepseek/qwen/openrouter/zai'")
