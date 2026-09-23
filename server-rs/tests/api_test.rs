@@ -839,8 +839,10 @@ async fn media_thumb_generates_a_cached_jpeg_and_falls_back_honestly() {
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "uri={uri}");
         assert_eq!(body["error"], "NOT_IMPLEMENTED");
     }
-    let (status, _) = send_json(router_for(state.clone()), "POST", "/api/media/upload", serde_json::json!({})).await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    // 上传已经搬过来了：空 multipart 是 400（不再是 501）
+    let empty = multipart_body("----comfyhubtest", &[], &[]);
+    let (status, _) = post_multipart(router_for(state.clone()), "/api/media/upload", empty).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 // ===========================================================================
 //  产物写侧 + /api/stats（P4 第 4 步）
@@ -942,4 +944,131 @@ async fn stats_counts_match_the_fixture() {
     assert_eq!(body["favoriteMedia"], 0);
     assert_eq!(body["byKind"], serde_json::json!({"IMAGE": 2}));
     assert_eq!(body["byMediaKind"], serde_json::json!({"IMAGE": 1}));
+}
+// ===========================================================================
+//  上传（P4 第 6 步）：multipart 多文件 + sha256 判重
+// ===========================================================================
+
+/// 造一个 multipart 体（省得引第三方 crate：这一小段手工拼就够，且**结构与 curl 一致**）。
+fn multipart_body(boundary: &str, fields: &[(&str, &str)], files: &[(&str, &str, &[u8])]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (name, value) in fields {
+        out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        out.extend_from_slice(format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes());
+        out.extend_from_slice(value.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    for (name, filename, bytes) in files {
+        out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        out.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n").as_bytes(),
+        );
+        out.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+        out.extend_from_slice(bytes);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    out
+}
+
+async fn post_multipart(app: axum::Router, uri: &str, body: Vec<u8>) -> (StatusCode, Value) {
+    let boundary = "----comfyhubtest";
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", format!("multipart/form-data; boundary={boundary}"))
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.oneshot(request).await.expect("请求");
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
+}
+
+#[tokio::test]
+async fn upload_stores_files_with_tags_and_dedupes_by_sha256() {
+    let state = state();
+    let media_dir = state.media_dir().to_path_buf();
+
+    // 一张真 PNG + 一个重复（同样内容、不同文件名）+ 一段"音频"
+    let mut img = image::RgbImage::new(64, 32);
+    for (_, _, px) in img.enumerate_pixels_mut() {
+        *px = image::Rgb([1, 2, 3]);
+    }
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let png_bytes = png.into_inner();
+
+    let boundary = "----comfyhubtest";
+    let body = multipart_body(
+        boundary,
+        &[("promptId", "10"), ("tags", "上传标签, 第二个"), ("title", "上传的图")],
+        &[
+            ("files", "shot.png", &png_bytes),
+            ("files", "copy.png", &png_bytes),
+            ("files", "voice.mp3", b"ID3fakeaudio"),
+        ],
+    );
+    let (status, body) = post_multipart(router_for(state.clone()), "/api/media/upload", body).await;
+    assert_eq!(status, StatusCode::CREATED, "body={body}");
+    assert_eq!(keys(&body), vec!["duplicates", "failed", "items", "promptId"]);
+    assert_eq!(body["promptId"], 10);
+    assert_eq!(body["failed"], serde_json::json!([]));
+
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "两个**不同内容**的文件入库；重复那份只记 duplicates");
+    let kinds: Vec<&str> = items.iter().map(|i| i["kind"].as_str().unwrap()).collect();
+    assert!(kinds.contains(&"IMAGE") && kinds.contains(&"AUDIO"), "kind={kinds:?}");
+    let image_item = items.iter().find(|i| i["kind"] == "IMAGE").unwrap();
+    assert_eq!(image_item["title"], "上传的图", "给了 title 就用它");
+    assert_eq!(image_item["width"], 64, "图片要探出尺寸");
+    assert_eq!(image_item["height"], 32);
+    assert_eq!(image_item["promptId"], 10);
+    // promptTags = 产物自身标签 ∪ 关联提示词(10)的标签「赛博朋克」，合并排序去重
+    assert_eq!(image_item["promptTags"], serde_json::json!(["上传标签", "第二个", "赛博朋克"]));
+    assert!(image_item["sha256"].as_str().unwrap().len() == 64, "sha256 要落库（判重键）");
+
+    assert_eq!(body["duplicates"].as_array().unwrap().len(), 1);
+    assert_eq!(body["duplicates"][0]["fileName"], "copy.png");
+
+    // 缩略图跟着生成（图片入库时就写）
+    let thumb = media_dir.parent().unwrap().join("thumbs").join(format!("{}.jpg", image_item["id"]));
+    assert!(thumb.is_file(), "图片入库要顺手写缩略图：{}", thumb.display());
+
+    // 落盘名是 32 位 hex + 扩展名（与 Kotlin 同一套命名）
+    let stored = image_item["storedName"].as_str().unwrap();
+    assert!(stored.ends_with(".png") && stored.len() == 36, "storedName={stored}");
+
+    // 判重是**内容**判重：换个名字再传一次仍然是 duplicate
+    let again = multipart_body(boundary, &[], &[("files", "another.png", &png_bytes)]);
+    let (status, body2) = post_multipart(router_for(state.clone()), "/api/media/upload", again).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(body2["items"].as_array().unwrap().is_empty());
+    assert_eq!(body2["duplicates"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn upload_rejects_empty_and_bad_prompt_id() {
+    let state = state();
+    // 一个文件都没有 → 400（不静默成功）
+    // ⚠ boundary 必须与 `post_multipart` 里的那一个一致（不一致的话解析就失败了，
+    // 测到的不是"没有文件"那条分支）
+    let empty = multipart_body("----comfyhubtest", &[("title", "只有字段")], &[]);
+    let (status, body) = post_multipart(router_for(state.clone()), "/api/media/upload", empty).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["message"].as_str().unwrap().contains("files"));
+
+    // promptId 不存在 → 400
+    let body = multipart_body("----comfyhubtest", &[("promptId", "9999")], &[("files", "a.png", b"x")]);
+    let (status, body) = post_multipart(router_for(state.clone()), "/api/media/upload", body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["message"].as_str().unwrap().contains("9999"));
+
+    // 校验失败时**临时文件不许留在盘上**（tmp 目录要干净）
+    let tmp = state.media_dir().parent().unwrap().join("tmp");
+    let leftovers = std::fs::read_dir(&tmp).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(leftovers, 0, "校验失败要清掉临时文件");
 }

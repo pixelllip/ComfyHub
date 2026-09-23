@@ -385,3 +385,22 @@ pub fn in_tx<T>(
 ) -> Result<T, WriteError> {
     crate::db::tx_immediate(conn, f)
 }
+/// 设置产物的标签（整体替换；与 Kotlin `TagRepo.setMediaTags` 同义）。
+pub fn add_media_tags(conn: &Connection, media_id: i64, names: &[String]) -> Result<(), WriteError> {
+    conn.execute("DELETE FROM media_tags WHERE media_id = ?1", params![media_id])?;
+    let mut seen: Vec<i64> = Vec::new();
+    for name in names {
+        if let Some(id) = ensure_tag(conn, name, None, None)? {
+            if !seen.contains(&id) {
+                seen.push(id);
+            }
+        }
+    }
+    for tag_id in seen {
+        conn.execute(
+            "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)",
+            params![media_id, tag_id],
+        )?;
+    }
+    Ok(())
+}

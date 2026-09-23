@@ -147,8 +147,11 @@ async fn media_prompt(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, A
     Err(crate::media::not_migrated("产物关联的完整提示词"))
 }
 
-async fn media_upload() -> Result<Json<serde_json::Value>, ApiError> {
-    Err(crate::media::not_migrated("上传"))
+async fn media_upload(
+    State(state): State<AppState>,
+    multipart: axum::extract::Multipart,
+) -> Result<(axum::http::StatusCode, Json<crate::media_upload::UploadResult>), ApiError> {
+    crate::media_upload::upload(state, multipart).await
 }
 
 // ---------------------------------------------------------------------------

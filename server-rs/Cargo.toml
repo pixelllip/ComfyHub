@@ -11,11 +11,13 @@ path = "src/main.rs"
 
 [dependencies]
 # 与 docs/implementation-master-plan.md §5.1 的选型一致（版本按当时最新 stable）
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "io-util"] }
 # ★ bundled：SQLite 编进二进制 → 发布包不再需要 MySQL / JRE / VC++ 运行时
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
+# 上传去重键：按文件内容的 SHA-256（与 Kotlin `MediaFiles.sha256` 同一个口径）
+sha2 = "0.10"
 serde_json = "1"
 tower-http = { version = "0.7", features = ["cors", "trace"] }
 # 文件流：`ReaderStream` 把 `tokio::fs::File` 变成 `Body::from_stream` 能吃的东西
