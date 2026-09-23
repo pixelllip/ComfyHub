@@ -350,6 +350,32 @@ CREATE TABLE _outbox (
 | **M1** | 桌面：`AskGate` 落库 + 跨端可见 + 超时可恢复（`cross-device-sync-design.md` §2.4 缺口 ①②④） | M0 |
 | **M2** | **RunEvent 契约文件** + 两端"事件类型清单一致"用例 | M0 |
 | **M3** | 手机 harness：LLM 调用 + SSE + 工具循环 + 本地存储 + 三条失败纪律 | M0/M2 |
+
+> ## ✅ M3 落地备注（2026-09-23）
+>
+> **代码位置**（动之前先看这几条边界）：
+>
+> | 东西 | 在哪 | 为什么放这儿 |
+> | --- | --- | --- |
+> | harness 纯逻辑 + 本地库 | `android/harness/src/main/kotlin/com/comfyhub/harness/` | 一个 `com.android.library`；**不依赖 Android/Flutter API**（§2.1 的"为将来 KMP 留门"：抽 `commonMain` 是搬文件，不是重写） |
+> | 平台胶水（通道 / Keystore） | `android/app/src/main/kotlin/com/comfyhub/harness/bridge/` | 它们要 Flutter embedding，只能放 app 模块 |
+> | Flutter 侧抽象 | `lib/core/run_event_source.dart` | `RunEventSource` 两个实现（远端 SSE / 本地通道），UI 代码零分叉（§5） |
+>
+> **三处与本文档原描述的偏差**（都是有意的，改回去要先想清楚）：
+>
+> 1. **不引 Room / KSP**：Room 要注解处理（KSP 是 KGP 家族的编译器插件，与 AGP 内建 Kotlin 没成熟路径）。
+>    改用 `androidx.sqlite` 的 `BundledSQLiteDriver` + 自己那层 `SqlSession`（R14 仍然满足：**引擎是 bundled 的**）。
+> 2. **不引 kotlinx-serialization 编译器插件**：只做 `JsonElement` 层面的读写，运行时库就够（同上理由）。
+> 3. **`web_search` / `civitai_search` 本版未实现**：ToolScope 说手机"可执行"这 7 个，
+>    但这一版只实现了 6 个；没实现的**不对外宣称**（`MobileToolRegistry.declaredTo` = kit ∩ 本地实现）——
+>    宁可让模型少看见一个工具，也不让它看见一个"调了必然失败"的工具。
+>
+> **规则文案一个字都没上手机**：连"起标题指令"和"接着写指令"都由桌面 run-kit 下发
+> （顺带给桌面 run-kit 补了这两个字段）；防线是 `R13NoPromptLiteralsTest`（扫描生产源码，
+> 豁免清单只有 `[标题]`/`[/标题]` 两个**摘取协议标记**）。
+>
+> **还没验的**：真机（本机无模拟器/真机）—— `flutter build apk --debug` 只证明"能编出来"，
+> "离线能完成一次 prompt 设计对话"这条 DoD 必须在设备上走一遍才算数。
 | **M4** | 上行通道：outbox + 幂等 apply + 服务端赢 LWW | M3 |
 | **M5** | `comfy_queue_submit` + 桌面 outbox 消费（走现有 `comfy_submit` 全链路） | M4 |
 | **M6** | 凭据：`flutter_secure_storage` + `ai_providers` 下行同步 | M3 |

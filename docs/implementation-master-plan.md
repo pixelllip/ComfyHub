@@ -191,9 +191,10 @@ GET /api/ai/run-kit/status  → { current, revoked:[...] }   ← 命中吊销则
 | **P0.5** | binlog | ✅ **已完成**（2026-09-23）：`skip-log-bin` 落在 `Write-Ini` + 活 my.ini，释放 4.27GB | `@@log_bin=0` | — |
 | **P1** | 事件日志治跑飞 | 接上 `pruneEvents`、事件批量写、`RunEventBus` 改环形缓冲 | DB 从 112.9MB 降到个位数；单 Run 写入量降 1~2 个数量级；**断线重连续传仍完整**（R5） | 无 |
 | **P2** ✅ | **MySQL → SQLite（保留 Kotlin/Ktor）** —— **已完成（2026-09-23，4 个提交）**。① schema：`db/schema.sqlite.sql`（🔒3.1 全表 + `_sync_log` / `sync_clients` + 22 个 `_sync_log` 触发器 + 8 个 `updated_at` 触发器，`user_version=1`）；② `Db` 方言化（PRAGMA 拼进 JDBC URL 并按连接读回自检、`BEGIN IMMEDIATE`、时间一律 ISO-8601 UTC 文本、自动建库目录）；③ `Migrate` 走 `PRAGMA table_info` 探测 + 触发器"先删再建"的收敛式迁移；④ 数据层 17 个文件改方言；⑤ **默认库 = `<根>\.db\comfyhub.db`**；⑥ 搬迁工具 `MigrateData` + `gradle migrateData`（`scripts\server.ps1 migrate`）；⑦ 脚本与打包去掉 MySQL：`up` 不再起库、老用户**零动作升级**（检测到老库有数据而新库没建时自动搬一次）、`pack-release.ps1` 不再携带 `mysql/`（实测装配 36MB）、`runtime-deps.ps1` 把 MySQL/VC++ 降级成 `Required=$false` | ① R1/R2/R3/R4 各有真库用例（`SqliteFoundationTest` 12 例 + `SqlScriptTest` 2 例 + `MigrateDataTest` 6 例；Gradle 617 例全绿）；② **逐表 `COUNT(*)` + 全表行哈希**双向核对：本机真实数据 16 张表 2778 行**全部一致**（`ai_run_events` 按 §7 待定项 5 丢弃）；③ 搬完用 API 抽查（27 提示词 / 23 产物 / 22 会话 / 196 个消息块 / 缩略图直出 200）；④ 去掉 `mysql/` 后能起：`up` 在 MySQL 停止的情况下起后端并报 `db=ok`，三条 e2e 全绿（submit 41 项 / capture / ai-tools 111 项）、`flutter test` 248 例全绿 | P1 |
-| **M0** | **冻结 5 份契约** —— ✅ **全部落文件（2026-09-23）**：① RunEvent 协议（`docs/run-event-contract.md`）② SQLite schema 约定（`docs/sqlite-schema-contract.md`）③ 同步 API 4 条端点（`docs/sync-api-contract.md`）④ ToolScope 清单（`docs/tool-scope-contract.md`，**代码也已落地**：`ToolScope`/`toolsFor`/`ToolScopeTest`）⑤ run-kit 工件（`docs/run-kit-contract.md`，形状已冻结，端点实现归 M1） | 两端"事件类型清单一致"用例（**桌面侧已做**：`RunEventContractTest`；手机侧待 harness 落地）；契约文件评审通过 | **无（可立刻做）** |
+| **M0** | **冻结 5 份契约** —— ✅ **全部落文件（2026-09-23）**：① RunEvent 协议（`docs/run-event-contract.md`）② SQLite schema 约定（`docs/sqlite-schema-contract.md`）③ 同步 API 4 条端点（`docs/sync-api-contract.md`）④ ToolScope 清单（`docs/tool-scope-contract.md`，**代码也已落地**：`ToolScope`/`toolsFor`/`ToolScopeTest`）⑤ run-kit 工件（`docs/run-kit-contract.md`，形状已冻结，端点实现归 M1） | 两端"事件类型清单一致"用例：桌面 `RunEventContractTest` ✅ + **手机 `RunEventContractTest` ✅（M3 落地时补上）**；契约文件评审通过 | **无（可立刻做）** |
 | **M1** ✅ | **桌面侧支撑** —— **已完成 2026-09-23**（`7f3a351` + 补丁 `1e3ce01`，e2e 修复 `3030d93`）：① 提问落库（新表 `ai_questions` + `AiQuestionRepo`，`AskRegistry` 状态变迁写穿：track 即落 / answer 写终值 / 收尾只动 pending / 重启后 `GET /questions/{id}` 回落查库）；② 审批落库（`ToolApprovalGate.open` 同一刻落 `ai_tool_calls` pending 行，invoke 后原地更新；启动恢复把 pending 审批按"超时=拒绝"落 denied、pending 提问落 expired）；③ `GET /api/ai/pending` 跨端待办总览（asks + approvals，另一台设备不靠 SSE 也能发现"有东西在等人"）；④ `GET /api/ai/run-kit{,/status}`（kitVersion 签名哈希变了才 bump、`tools[]` 按 ToolScope 过滤成手机子集、`untrustedBanner` 模板真源进 ToolRegistry 常量、models[] 无密钥、inlineBudget）；⑤ 闸门类事件（tool.requested / user.question）立即落库（P1 批量化的缺口，见 pitfalls） | 手机发起的 Run 的审批在另一端也能看到并批准（`/api/ai/pending` + 落库行）；后端重启后 pending 不丢（提问卡可回放、审批行有终态）；**AskPersistenceTest 7 例 + RunKitVersionTest 6 例**，gradle 597 例全绿，三条 e2e 全绿 | M0 |
-| **M3** | **移动 Kotlin harness** | `android/app/src/main/kotlin/`：LLM 调用 + SSE + 工具循环 + 本地 SQLite + 三条失败纪律（R6）+ platform channel | 离线（桌面不在线）能完成一次 prompt 设计对话；UI 用**与桌面相同的事件流**渲染，UI 代码零分叉 | M0、M1 |
+| **M3** | **移动 Kotlin harness** | ✅ **代码已落地（2026-09-23，9 个提交）**：`android/harness/`（`com.android.library`，AGP 内建 Kotlin，**不引 KMP/KSP/序列化编译器插件**）＋ `android/app/.../bridge/`（`MethodChannel` + `EventChannel` + Android Keystore）＋ `lib/core/run_event_source.dart`（`RunEventSource` 抽象两个实现）。内容：① 事件契约（17 类型 + 环形缓冲 + 与契约文档比对的用例）；② 协议层（SSE 分帧 / 三家适配器 / 思考方言 / 工具分片）；③ 标题摘取 + 内联预算；④ 本地库（bundled SQLite：10 张镜像表逐列同形 + 本机表 + `_outbox`，PRAGMA 自检 R1/R14，**不建账本不挂触发器**）；⑤ 仓储层（会话/消息/块/Run/事件/outbox，业务行与 outbox **同事务**，`listUnfinishedRuns` 供崩溃恢复）；⑥ run-kit 客户端（取/缓存/吊销判定）；⑦ 工具层（`remember` / `list_skills` / `load_skill` / `ask_user_question` / `comfy_queue_submit` / `web_fetch`）；⑧ harness 主循环（流式 + 工具往返 + **R6 三条失败纪律** + 截断续写去重）；⑨ event payload 与桌面逐字对齐（**顺带改正契约文档 §2 的 4 处键名错**） | ① **145 个 Kotlin 用例**（`:harness:testDebugUnitTest`，含 R6 三条 / R8 审批顺序 / R11 不复用提交名字 / R13 无规则文案 / R14 FTS5）+ **7 个 Dart 用例**（`test/run_event_source_test.dart`）+ `flutter test` 255 例全绿；② `flutter build apk --debug` 出包；③ 桌面侧 run-kit 补下发 `titleInstruction` / `continueInstruction`（R13：手机零提示串） | M0、M1 |
+| **M3.1** | 真机验收（**未做，需设备**） | 装 `app-debug.apk` 跑一次真实对话：离线（桌面不在线）出方案 → 切后台再回来事件不丢 → 排队提交后桌面在线消费 | 手机上会话列表/标题/工具卡/产物入口卡与桌面同一套渲染；无设备则无法验收（本机无模拟器 + 无真机） | M3 |
 | **M4** | 上行通道 | `_outbox` + `/api/sync/push` + 幂等 apply + 服务端赢 LWW | 手机产生的会话在桌面可见可续写；重复推送不产生重复行 | M3 |
 | **M5** | 排队提交 | 手机 `comfy_queue_submit` + 桌面 outbox 消费（**走现有 `comfy_submit` 全链路**） | 手机排队 → 桌面在线后自动提交 → 产物入库画廊 → `mediaIds` 回到手机；**桌面侧审批/幂等/入库一条不少（R10/R11）** | M4 |
 | **M6** | 凭据 | `ai_providers` 下行（**不含密钥**）+ 手机 Android Keystore + `flutter_secure_storage` | 手机能独立调用 LLM；密钥不出本机；界面明确告知"需在手机上单独填 Key" | M3 |
@@ -261,20 +262,20 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 
 | 红线 | 现有防线 | 迁移后要补/重建 |
 | --- | --- | --- |
-| R1 foreign_keys | 无（MySQL 强制） | **新增**：连接工厂单测 + 删标签级联的集成测试 |
-| R2 BEGIN IMMEDIATE | 无 | **新增**：并发写测试 |
-| R3 upsert 不产假 delete | 无 | **新增**：`_sync_log` 断言 |
-| R4 seq 不复用 | 无 | **新增**：删后插的 seq 断言 |
-| R5 重连续传 | `e2e-ai-tools-test.ps1` 部分覆盖 | 补"长 Run + 断线重连"用例；`pruneEvents` 真的被调用 |
-| R6 失败不丢内容 | `e2e-ai-tools-test.ps1` 第 13 幕（15 项）+ `ai_retry_keep_content_test.dart` | 手机 harness 侧**照搬同一组用例** |
-| R7 注入防线 | `SystemPromptNsfwTest`、`ToolRegistryTest` | 文案改由 run-kit 下发后，补"两端拿到的是同一份"的用例 |
-| R8 审批顺序 | `AskGateTest` | ✅ **已落（M1）**：pending 行落库 + `AskPersistenceTest`（写穿 / 收尾守卫 / 重启回落 / 跨端口径）+ `GET /api/ai/pending`；手机侧发起 Run 时也要过 |
-| R9 附件三层准入 | `e2e-ai-tools-test.ps1` 第 9 幕 | 手机侧发起 Run 时也要过 |
-| R10 提交链路 | `e2e-submit-test.ps1`、`e2e-capture-test.ps1` | Rust 侧重建 |
-| R11 不复用提交名字 | 无 | **新增**：ToolRegistry 断言不存在移动端 `comfy_submit` |
-| R12 工具单一真源 | `ToolRegistryTest` | 加 `ToolScope` 过滤用例 |
-| R13 不硬编码规则 | 无 | **新增**：扫描手机源码无提示串 |
-| R14 bundled SQLite | 无 | **新增**：启动自检 FTS5 可用 |
+| R1 foreign_keys | 无（MySQL 强制） | ✅ **已补（M3）**：`MobilePragmas` 连接工厂 + `HarnessDatabaseTest`（含"另开一条没上 PRAGMA 的连接 fk=0"的实据 + 级联删除） |
+| R2 BEGIN IMMEDIATE | 无 | ✅ **已补（M3）**：`SqlSession.transaction` 唯一实现 + 回滚用例 |
+| R3 upsert 不产假 delete | 无 | ✅ **已补（M3）**：手机侧**不建账本**（契约 §3.1），且 `appendPart` 用 `ON CONFLICT DO UPDATE`；桌面侧 P2 已有用例 |
+| R4 seq 不复用 | 无 | ✅ 桌面 P2 已补；手机侧不建 `_sync_log`（无此风险），事件 seq 由 `RunEventBus` 单调发号并有用例 |
+| R5 重连续传 | `e2e-ai-tools-test.ps1` 部分覆盖 | ✅ **手机侧已补（M3）**：`RunEventBusTest`（截断只丢最老、seq 不回退）+ `HarnessStoreTest`（裁剪留尾部）+ 事件批量写 |
+| R6 失败不丢内容 | `e2e-ai-tools-test.ps1` 第 13 幕（15 项）+ `ai_retry_keep_content_test.dart` | ✅ **手机侧已补（M3）**：`HarnessRunnerTest` 三例（429 半截 / 首字被压住 / 取消）+ `HarnessStoreTest` 两例 |
+| R7 注入防线 | `SystemPromptNsfwTest`、`ToolRegistryTest` | ✅ **手机侧已补（M3）**：横幅文案只做 `{kind}`/`{query}` 替换（`MobileToolsTest` 断言前缀来自 kit） |
+| R8 审批顺序 | `AskGateTest` | ✅ 桌面（M1）+ **手机侧（M3）**：`MobileAskGate` 先 open 再发事件，`MobileToolsTest` 有两例（手快先答不落空 / 没人答如实报） |
+| R9 附件三层准入 | `e2e-ai-tools-test.ps1` 第 9 幕 | ✅ **手机侧已补（M3）**：`InlineBudgetTest` + 适配器未实现模态直接抛（`ProtocolAdapterTest`） |
+| R10 提交链路 | `e2e-submit-test.ps1`、`e2e-capture-test.ps1` | Rust 侧重建（P4，**未动**） |
+| R11 不复用提交名字 | 无 | ✅ **已补（M3）**：手机侧工具名 `comfy_queue_submit`，`MobileToolsTest` 断言不返回 `mediaIds`、不说"已提交" |
+| R12 工具单一真源 | `ToolRegistryTest` | ✅ 桌面有 `ToolScopeTest`；手机侧**不维护自己的规则清单**（`declaredTo` = kit ∩ 本地实现） |
+| R13 不硬编码规则 | 无 | ✅ **已补（M3）**：`R13NoPromptLiteralsTest` 扫描手机生产源码（豁免清单只有两个摘取标记常量）；桌面 run-kit 补下发 `titleInstruction` / `continueInstruction` |
+| R14 bundled SQLite | 无 | ✅ **已补（M3）**：`sqlite-bundled` 依赖 + `MobilePragmas.problems` 的 FTS5 探针（启动自检，失败直接抛） |
 
 > ⚠ 跑 e2e 的既有纪律：**别在跑完前 Ctrl+C**（清理在 finally 里，中断会留下 `e2e-submit-*`
 > 记录把下一次的 SHA-256 判重弄乱）；`e2e-submit-test.ps1` 会自己把权限档临时钉成 `ask` 再还原。
@@ -330,3 +331,21 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ✅ **两处登记已同步（2026-09-23）**：
 > ① `AGENTS.md` §11 已加"目标架构与实施总纲"指向本文；
 > ② `README.md` 的架构/目录表已补一句"目标架构"指引（**不改现状描述** —— 现在跑的还是 MySQL + Kotlin）。
+>
+> ✅ **M3 落地登记（2026-09-23，9 个提交）**：
+> | 提交 | 内容 |
+> | --- | --- |
+> | 第 1 步 | `android/harness` 模块骨架 + RunEvent 契约（17 常量 + 环形缓冲 + 契约比对用例） |
+> | 第 2 步 | 协议层（SSE 分帧 / 三家适配器 / 思考方言 / 工具分片） |
+> | 第 3 步 | 标题摘取状态机 + 内联预算（含 R6 的 flush 纪律） |
+> | 第 4 步 | 本地库地基（bundled SQLite + PRAGMA 自检 + 镜像表与桌面逐列同形） |
+> | 第 5 步 | 仓储层（会话/消息/块/Run/事件/outbox + 崩溃恢复） |
+> | 第 6a/6b 步 | run-kit 客户端（取/缓存/吊销）+ 工具层（6 个工具，`web_search`/`civitai_search` 待补） |
+> | 第 7 步 | **主循环**（流式 + 工具往返 + R6 三条失败纪律 + 截断续写去重） |
+> | 第 8a/8b 步 | event payload 与桌面逐字对齐（**改正契约文档 4 处键名**）+ platform channel 桥 + Flutter `RunEventSource` |
+> | 第 9 步 | **R13 防线**（扫描手机源码无规则文案） |
+>
+> **还没做的两件事**（诚实清单）：
+> ① **真机验收**（M3.1）—— 本机没有模拟器/真机，`app-debug.apk` 只验证到"能编出来"；
+> ② 手机侧 `web_search` / `civitai_search` 两个工具（未实现就**不宣称**：`declaredTo` = kit ∩ 本地实现，
+> 模型看不见它们，所以不会"调了必然失败"）。
