@@ -110,6 +110,17 @@ tasks.test {
     useJUnitPlatform()
 }
 
+// 一次性数据搬迁：MySQL（只读来源）→ SQLite（P2，总纲 §4）。
+// 用法：pwsh -File scripts\server.ps1 migrate（来源/开关都走环境变量，见 MigrateDataCli.kt）
+tasks.register<JavaExec>("migrateData") {
+    group = "application"
+    description = "把老 MySQL 库的业务数据搬进 SQLite，并逐表核对行数与行哈希"
+    mainClass.set("com.comfyhub.MigrateDataCliKt")
+    classpath = sourceSets.main.get().runtimeClasspath
+    // 与后端同一组代理参数：来源只可能是本机 MySQL，但保持一致免得以后搬远端库时踩坑
+    jvmArgs("-Dfile.encoding=UTF-8", "-Djava.net.useSystemProxies=true")
+}
+
 // SQLite schema 的真源在 `<根>\db\schema.sqlite.sql`（人看的、也能用 sqlite3 CLI 手工建库），
 // 后端启动时从 classpath 读出逐句执行 —— 所以它必须进 jar。
 // 这样源码树与发布包两种布局都只有**一份** DDL，不会出现"两份建表语句各改各的"。
