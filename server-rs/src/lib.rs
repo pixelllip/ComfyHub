@@ -13,5 +13,8 @@
 //! | [`routes`] | `TagRoutes.kt` / `PromptRoutes.kt` / `…Repo` 的读端点 |
 
 pub mod db;
+pub mod inputs;
 pub mod models;
+pub mod repo;
 pub mod routes;
+pub mod write_routes;

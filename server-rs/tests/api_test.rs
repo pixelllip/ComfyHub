@@ -56,10 +56,49 @@ fn test_conn() -> Connection {
 }
 
 fn app() -> axum::Router {
-    comfyhub_server_rs::routes::router(comfyhub_server_rs::routes::AppState::new(
-        test_conn(),
-        ":memory:",
-    ))
+    router_for(state())
+}
+
+/// 共享状态的库（写端点用例要在**同一条连接**上断言写完之后的样子）。
+fn state() -> comfyhub_server_rs::routes::AppState {
+    comfyhub_server_rs::routes::AppState::new(test_conn(), ":memory:")
+}
+
+fn router_for(state: comfyhub_server_rs::routes::AppState) -> axum::Router {
+    comfyhub_server_rs::routes::router(state)
+}
+
+/// 发一个带 JSON body 的请求（写端点用）。
+async fn send_json(
+    app: axum::Router,
+    method: &str,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.oneshot(request).await.expect("请求");
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
+}
+
+async fn send_empty(app: axum::Router, method: &str, uri: &str) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.expect("请求");
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
 }
 
 async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
@@ -208,4 +247,346 @@ async fn foreign_keys_cascade_is_really_on() {
         .query_row("SELECT COUNT(*) FROM prompt_tags WHERE tag_id = 1", [], |r| r.get(0))
         .unwrap();
     assert_eq!(left, 0, "R1 没生效：删标签留下了孤儿关联行");
+}
+
+// ===========================================================================
+//  写端点（P4 第 2 步）
+// ===========================================================================
+
+/// 建标签 → 201 + TagDto；同名（忽略大小写）**不重复建**，返回同一个 id。
+#[tokio::test]
+async fn post_tags_is_idempotent_by_normalized_name() {
+    let state = state();
+    let first = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/tags",
+        serde_json::json!({"name": "赛博朋克", "category": "风格", "color": "#ff00ff"}),
+    )
+    .await;
+    assert_eq!(first.0, StatusCode::CREATED, "body={}", first.1);
+    assert_eq!(first.1["name"], "赛博朋克");
+    let id = first.1["id"].as_i64().unwrap();
+
+    // 第二次用不同大小写/空格：normalized 相同 → 还是那一条
+    let again = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/tags",
+        serde_json::json!({"name": " 赛博朋克 "}),
+    )
+    .await;
+    assert_eq!(again.0, StatusCode::CREATED);
+    assert_eq!(again.1["id"].as_i64().unwrap(), id, "同名标签不许建出第二条");
+
+    let count: i64 = state
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM tags WHERE normalized = '赛博朋克'", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn post_tags_with_blank_name_is_400() {
+    let (status, body) = send_json(
+        router_for(state()),
+        "POST",
+        "/api/tags",
+        serde_json::json!({"name": "   "}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "BAD_REQUEST");
+}
+
+/// 改名撞上另一个标签 → 400（**不是**静默合并成一条）。
+#[tokio::test]
+async fn put_tag_conflict_is_400_and_missing_is_404() {
+    let state = state();
+    let a = send_json(router_for(state.clone()), "POST", "/api/tags", serde_json::json!({"name": "国风"})).await;
+    let b = send_json(router_for(state.clone()), "POST", "/api/tags", serde_json::json!({"name": "赛博"})).await;
+    let (id_a, id_b) = (a.1["id"].as_i64().unwrap(), b.1["id"].as_i64().unwrap());
+
+    let clash = send_json(
+        router_for(state.clone()),
+        "PUT",
+        &format!("/api/tags/{id_b}"),
+        serde_json::json!({"name": "国风", "description": "画风"}),
+    )
+    .await;
+    assert_eq!(clash.0, StatusCode::BAD_REQUEST);
+    assert!(clash.1["message"].as_str().unwrap().contains("已存在"), "body={}", clash.1);
+
+    let renamed = send_json(
+        router_for(state.clone()),
+        "PUT",
+        &format!("/api/tags/{id_a}"),
+        serde_json::json!({"name": "国风画", "category": "风格"}),
+    )
+    .await;
+    assert_eq!(renamed.0, StatusCode::OK);
+    assert_eq!(renamed.1["name"], "国风画");
+
+    let missing = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/tags/9999",
+        serde_json::json!({"name": "随便"}),
+    )
+    .await;
+    assert_eq!(missing.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_tag_returns_deleted_and_cascades() {
+    let state = state();
+    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/tags/1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({"deleted": 1}));
+
+    // R1：关联行被级联删掉
+    let left: i64 = state
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM prompt_tags WHERE tag_id = 1", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(left, 0);
+
+    let again = send_empty(router_for(state.clone()), "DELETE", "/api/tags/1").await;
+    assert_eq!(again.0, StatusCode::NOT_FOUND, "删第二次要 404，不许假装成功");
+}
+
+/// 建提示词：自动起名 + 标签自动创建 + `use_count` 重算 + **同步账本被点亮**。
+#[tokio::test]
+async fn post_prompts_creates_with_tags_and_writes_sync_log() {
+    let state = state();
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/prompts",
+        serde_json::json!({
+            "positivePrompt": "1girl, cyberpunk city",
+            "titles": "前端多带一个无用键不该炸",
+            "cfgScale": 4.5,
+            "tags": ["新标签A", "新标签B", "新标签A"],
+            "extraParams": {"steps": "30"}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body={body}");
+    assert_eq!(body["title"], "1girl", "标题为空时按正文第一段自动起名");
+    assert_eq!(body["cfgScale"], 4.5);
+    assert_eq!(body["extraParams"], serde_json::json!({"steps": "30"}));
+    let new_id = body["id"].as_i64().unwrap();
+
+    // 标签自动建出来并去重（"新标签A" 说两遍只关联一次）
+    let tag_names: Vec<String> = body["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(tag_names, vec!["新标签A", "新标签B"]);
+    let use_count: i64 = state
+        .with(|conn| conn.query_row("SELECT use_count FROM tags WHERE name = '新标签A'", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(use_count, 1, "use_count 必须重算");
+
+    // 同步账本：这条写操作要能被手机看到（触发器自动写的，不需要额外代码）
+    let logged: i64 = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM _sync_log WHERE tbl = 'prompts' AND pk = ?1 AND op = 'upsert'",
+                rusqlite::params![new_id.to_string()],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(logged, 1, "写提示词必须点亮 _sync_log（同步契约 §2）");
+}
+
+#[tokio::test]
+async fn post_prompts_blank_is_400() {
+    let (status, body) = send_json(
+        router_for(state()),
+        "POST",
+        "/api/prompts",
+        serde_json::json!({"title": "  ", "positivePrompt": ""}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["message"].as_str().unwrap().contains("不能为空"));
+}
+
+#[tokio::test]
+async fn put_prompt_replaces_tags_and_missing_is_404() {
+    let state = state();
+    let updated = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/prompts/10",
+        serde_json::json!({
+            "title": "改过的标题",
+            "kind": "VIDEO",
+            "positivePrompt": "1girl, cyberpunk",
+            "tags": ["只留这一个"]
+        }),
+    )
+    .await;
+    assert_eq!(updated.0, StatusCode::OK, "body={}", updated.1);
+    assert_eq!(updated.1["title"], "改过的标题");
+    assert_eq!(updated.1["kind"], "VIDEO");
+    let tags: Vec<String> = updated.1["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(tags, vec!["只留这一个"], "PUT 是整体替换标签");
+
+    let missing = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/prompts/9999",
+        serde_json::json!({"positivePrompt": "x"}),
+    )
+    .await;
+    assert_eq!(missing.0, StatusCode::NOT_FOUND);
+
+    // 非法 kind 回落到 IMAGE（与 Kotlin 一致），而不是 400
+    let fallback = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/prompts/11",
+        serde_json::json!({"positivePrompt": "x", "kind": "NOPE"}),
+    )
+    .await;
+    assert_eq!(fallback.1["kind"], "IMAGE");
+}
+
+/// 收藏回执是 `{id, favorite}` 两个键（Kotlin 侧踩过"混类型 map → 500"的坑）。
+#[tokio::test]
+async fn favorite_returns_id_and_flag() {
+    let (status, body) = send_json(
+        router_for(state()),
+        "POST",
+        "/api/prompts/11/favorite",
+        serde_json::json!({"favorite": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(keys(&body), vec!["favorite", "id"]);
+    assert_eq!(body["id"], 11);
+    assert_eq!(body["favorite"], true);
+
+    let missing = send_json(
+        router_for(state()),
+        "POST",
+        "/api/prompts/9999/favorite",
+        serde_json::json!({"favorite": true}),
+    )
+    .await;
+    assert_eq!(missing.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn duplicate_creates_a_copy_and_keeps_tags() {
+    let state = state();
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/prompts/10/duplicate",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body={body}");
+    assert_ne!(body["id"].as_i64().unwrap(), 10);
+    assert_eq!(body["title"], "赛博朋克少女 副本");
+    assert_eq!(body["favorite"], false, "副本不继承收藏状态（与 Kotlin 一致）");
+    assert_eq!(body["positivePrompt"], "1girl, cyberpunk");
+    assert_eq!(body["loras"][0]["name"], "anima");
+    assert_eq!(body["tags"][0]["name"], "赛博朋克");
+
+    let missing = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/prompts/9999/duplicate",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(missing.0, StatusCode::NOT_FOUND);
+}
+
+/// 追加 / 移除标签（两个端点都回整条 PromptDto，界面据此刷新）。
+#[tokio::test]
+async fn add_and_remove_prompt_tags() {
+    let state = state();
+    let added = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/prompts/11/tags",
+        serde_json::json!({"tags": ["追加的标签"]}),
+    )
+    .await;
+    assert_eq!(added.0, StatusCode::OK);
+    let names: Vec<String> = added.1["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(names.contains(&"追加的标签".to_string()), "body={}", added.1);
+
+    let tag_id = state
+        .with(|conn| {
+            conn.query_row("SELECT id FROM tags WHERE name = '追加的标签'", [], |r| r.get::<_, i64>(0))
+        })
+        .unwrap();
+    let removed = send_empty(
+        router_for(state.clone()),
+        "DELETE",
+        &format!("/api/prompts/11/tags/{tag_id}"),
+    )
+    .await;
+    assert_eq!(removed.0, StatusCode::OK);
+    // 11 上原本还有"国风"（夹具），所以断言"被移除的那个不在了"
+    let names: Vec<String> = removed.1["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(!names.contains(&"追加的标签".to_string()));
+}
+
+/// 删提示词：产物**保留但解除关联**（FK `ON DELETE SET NULL`）+ 账本记 delete。
+#[tokio::test]
+async fn delete_prompt_keeps_media_and_logs_delete() {
+    let state = state();
+    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/prompts/10").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({"deleted": 10}));
+
+    let prompt_id: Option<i64> = state
+        .with(|conn| {
+            conn.query_row("SELECT prompt_id FROM media_assets WHERE id = 100", [], |r| r.get(0))
+        })
+        .unwrap();
+    assert_eq!(prompt_id, None, "产物必须保留、只解除关联（R1 生效才有 ON DELETE SET NULL）");
+
+    let deletes: i64 = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM _sync_log WHERE tbl = 'prompts' AND pk = '10' AND op = 'delete'",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(deletes, 1);
+}
+
+/// 还没搬的端点要**明确 501**，不许拿空数组假装成功。
+#[tokio::test]
+async fn unmigrated_endpoints_answer_501() {
+    let (status, body) = send_empty(router_for(state()), "GET", "/api/prompts/10/media").await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(body["error"], "NOT_IMPLEMENTED");
 }

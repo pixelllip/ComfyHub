@@ -57,6 +57,17 @@ impl AppState {
         let guard = self.conn.lock().map_err(|_| ApiError::internal("连接锁已中毒"))?;
         f(&guard).map_err(ApiError::from)
     }
+
+    /// 写路径：**一律过 `BEGIN IMMEDIATE`**（红线 R2）。
+    ///
+    /// 事务纪律只有 `db::tx_immediate` 一处实现 —— 端点里别自己拼 `BEGIN`/`COMMIT`。
+    pub fn write<F, T>(&self, f: F) -> Result<T, ApiError>
+    where
+        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<T, crate::repo::WriteError>,
+    {
+        let mut guard = self.conn.lock().map_err(|_| ApiError::internal("连接锁已中毒"))?;
+        db::tx_immediate(&mut guard, f).map_err(ApiError::from)
+    }
 }
 
 pub fn router(state: AppState) -> Router {
@@ -66,6 +77,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/tags/categories", get(list_tag_categories))
         .route("/api/prompts", get(list_prompts))
         .route("/api/prompts/{id}", get(get_prompt))
+        .merge(crate::write_routes::write_router())
         .with_state(state)
 }
 
@@ -88,6 +100,15 @@ impl ApiError {
 
     pub fn internal(message: impl Into<String>) -> Self {
         Self { status: StatusCode::INTERNAL_SERVER_ERROR, error: "INTERNAL".into(), message: message.into() }
+    }
+
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self { status: StatusCode::BAD_REQUEST, error: "BAD_REQUEST".into(), message: message.into() }
+    }
+
+    /// 还没搬到 Rust 的端点：**明确 501**，不要拿空数组假装成功（那会让界面以为"真的没有"）。
+    pub fn not_implemented(message: impl Into<String>) -> Self {
+        Self { status: StatusCode::NOT_IMPLEMENTED, error: "NOT_IMPLEMENTED".into(), message: message.into() }
     }
 }
 
@@ -243,7 +264,7 @@ async fn get_prompt(
 }
 
 /// 一个提示词的标签（按名字排序，与 Kotlin 侧一致）。
-fn tags_of(conn: &Connection, prompt_id: i64) -> rusqlite::Result<Vec<TagDto>> {
+pub(crate) fn tags_of(conn: &Connection, prompt_id: i64) -> rusqlite::Result<Vec<TagDto>> {
     let mut stmt = conn.prepare(
         "SELECT t.* FROM tags t
            JOIN prompt_tags pt ON pt.tag_id = t.id
@@ -254,7 +275,7 @@ fn tags_of(conn: &Connection, prompt_id: i64) -> rusqlite::Result<Vec<TagDto>> {
     rows.collect()
 }
 
-fn media_count_of(conn: &Connection, prompt_id: i64) -> rusqlite::Result<i64> {
+pub(crate) fn media_count_of(conn: &Connection, prompt_id: i64) -> rusqlite::Result<i64> {
     conn.query_row(
         "SELECT COUNT(*) FROM media_assets WHERE prompt_id = ?1",
         rusqlite::params![prompt_id],

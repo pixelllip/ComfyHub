@@ -90,10 +90,17 @@ pub fn schema_version(conn: &Connection) -> rusqlite::Result<i64> {
 }
 
 /// 写事务：**`BEGIN IMMEDIATE`**（R2）+ 出错自动回滚。
-pub fn tx_immediate<T>(
+///
+/// 错误类型做成泛型（`E: From<rusqlite::Error>`）：仓储层有自己的错误分类
+/// （[`crate::repo::WriteError`]：400 / 404 / 500），但**事务纪律只有这一处实现** ——
+/// 别为了换个错误类型就在别处再拼一遍 `BEGIN IMMEDIATE`。
+pub fn tx_immediate<T, E>(
     conn: &mut Connection,
-    f: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<T>,
-) -> rusqlite::Result<T> {
+    f: impl FnOnce(&Transaction<'_>) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<rusqlite::Error>,
+{
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let out = f(&tx)?;
     tx.commit()?;
