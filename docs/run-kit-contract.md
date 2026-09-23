@@ -32,6 +32,7 @@ GET /api/ai/run-kit/status  → { current: "2026-09-23.1", revoked: ["2026-09-22
 | `nsfwEnabled` | bool | `app_settings` 的 `ai.nsfw` | 决定 `systemPrompt` 里有没有注入 `NsfwPrompt` 那段 |
 | `tools[]` | array | `ToolRegistry`（R12） | 每项 `{ name, description, inputSchema, scope }`。**已按端过滤**（ToolScope 契约） |
 | `untrustedBanner` | string | `SystemPrompt` / 注入防线文案 | 工具结果与网页内容的**不可信横幅**（R7）。⚠ **两端不许各写一份** |
+| `titleInstruction` | string | `SystemPrompt.TITLE_INSTRUCTION` | **起标题的按轮附加指令原样下发**（M3 补）：手机 harness 也要自动起会话名，而它不许自己写一份（R13）。手机按轮附加它、再用与桌面同一套 `TitleStripper` 摘掉标记 |
 | `models[]` | array | 模型目录（`AiSeedCatalog` + 在线覆盖） | 手机能选哪些模型；**不含密钥** |
 | `inlineBudget` | object | `InlineBudget` | 历史图片内联预算（单图 8MB / 合计 20MB） |
 
@@ -52,7 +53,8 @@ GET /api/ai/run-kit/status  → { current: "2026-09-23.1", revoked: ["2026-09-22
 1. `systemPrompt` 正文（= `SystemPrompt.VERSION` 变了）；
 2. `tools[]` 的**结构**（增删工具、改 `inputSchema`）；
 3. `untrustedBanner` 文案；
-4. `inlineBudget` 的数值。
+4. `inlineBudget` 的数值；
+5. `titleInstruction` 文案（M3 补：手机侧照它摘标题，改措辞不 bump 会让手机一直用旧的）。
 
 > ⚠ 与 `SystemPrompt.VERSION` 的关系：后者是"规则正文的版本"、前者是"**整份工件**的版本"。
 > 工具 schema 变了而提示词没变时，只有 `kitVersion` 会动 ——
@@ -79,7 +81,8 @@ GET /api/ai/run-kit/status  → { current: "2026-09-23.1", revoked: ["2026-09-22
 形状按 §1/§2 逐字实现，另有四个**实现层决定**是手机侧（M3）必须知道的：
 
 1. **`kitVersion` 怎么 bump**：签名 = `promptVersion` + `nsfwEnabled`（含 `nsfwPromptVersion`）+
-   `tools[]` 结构（name/description/inputSchema，按名排序）+ `untrustedBanner` + `inlineBudget`，
+   `tools[]` 结构（name/description/inputSchema，按名排序）+ `untrustedBanner` + `inlineBudget` +
+   `titleInstruction`（M3 补），
    取 SHA-256 与 `app_settings`（`ai.runkit.hash`）比对，变了才 bump（同日 +1、跨日从 .1 起），
    版本持久化在 `ai.runkit.version`。**provider/model / Skills / 长期记忆不进签名** ——
    它们是环境与数据，不是规则（数据走同步通道）。

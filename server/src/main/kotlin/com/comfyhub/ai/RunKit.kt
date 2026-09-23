@@ -67,7 +67,7 @@ object RunKit {
     private const val KEY_HASH = "ai.runkit.hash"
     private const val KEY_REVOKED = "ai.runkit.revoked"
 
-    /** 参与版本号的内容签名（契约 §3 的四类触发器 + NSFW 注入状态）。 */
+    /** 参与版本号的内容签名（契约 §3 的四类触发器 + NSFW 注入状态 + 起标题指令）。 */
     data class Signature(
         val promptVersion: String,
         val nsfwEnabled: Boolean,
@@ -76,6 +76,14 @@ object RunKit {
         val toolsJson: String,
         val untrustedBanner: String,
         val inlineBudgetJson: String,
+        /**
+         * 起标题那条按轮附加指令（`SystemPrompt.TITLE_INSTRUCTION`）。
+         *
+         * ⚠ 它**也属于"规则"**：手机 harness 要自己摘标题（`TitleStripper`），
+         * 而 R13 明令"两端都不许硬编码系统提示 / 工具描述 / 安全文案" ——
+         * 手机上的那句指令只能来自这里。改它必须 bump（不然手机会一直用旧措辞）。
+         */
+        val titleInstruction: String,
     ) {
         fun canonical(): String =
             listOf(
@@ -85,6 +93,7 @@ object RunKit {
                 "tools=$toolsJson",
                 "banner=$untrustedBanner",
                 "budget=$inlineBudgetJson",
+                "titleInstruction=$titleInstruction",
             ).joinToString("\n")
     }
 
@@ -174,6 +183,7 @@ object RunKit {
         val budget: JsonObject,
         val budgetJson: String,
         val banner: String,
+        val titleInstruction: String,
         val signature: Signature,
     )
 
@@ -205,6 +215,8 @@ object RunKit {
         }
         val budgetJson = budget.toString()
         val banner = ToolRegistry.UNTRUSTED_BANNER_TEMPLATE + ToolRegistry.UNTRUSTED_BANNER_QUERY_LINE
+        // 起标题指令：手机 harness 也要自动起会话名，而它**不许自己写一份**（R13）
+        val titleInstruction = SystemPrompt.TITLE_INSTRUCTION
 
         val signature = Signature(
             promptVersion = SystemPrompt.VERSION,
@@ -213,9 +225,10 @@ object RunKit {
             toolsJson = toolsJson,
             untrustedBanner = banner,
             inlineBudgetJson = budgetJson,
+            titleInstruction = titleInstruction,
         )
         return KitParts(
-            mobileTools, toolsArray, toolsJson, budget, budgetJson, banner, signature,
+            mobileTools, toolsArray, toolsJson, budget, budgetJson, banner, titleInstruction, signature,
         )
     }
 
@@ -264,6 +277,8 @@ object RunKit {
             put("nsfwEnabled", nsfw.enabled)
             put("tools", parts.toolsArray)
             put("untrustedBanner", parts.banner)
+            // 起标题指令（M3）：手机 harness 按轮附加它、再用同一套 TitleStripper 摘掉标记
+            put("titleInstruction", parts.titleInstruction)
             put("models", buildJsonArray { modelsJson(providerOverride).forEach { add(it) } })
             put("inlineBudget", parts.budget)
         }

@@ -27,6 +27,7 @@ class RunKitVersionTest {
         toolsJson: String = """[{"name":"web_search"}]""",
         banner: String = "横幅",
         budget: String = """{"perImageBytes":8388608,"totalBytes":20971520}""",
+        titleInstruction: String = "起标题指令",
     ) = RunKit.Signature(
         promptVersion = promptVersion,
         nsfwEnabled = nsfw,
@@ -34,6 +35,7 @@ class RunKitVersionTest {
         toolsJson = toolsJson,
         untrustedBanner = banner,
         inlineBudgetJson = budget,
+        titleInstruction = titleInstruction,
     )
 
     @Test
@@ -93,6 +95,12 @@ class RunKitVersionTest {
         )
         // NSFW 注入状态随开关变化，也算规则变了
         assertNotEquals(base, RunKit.hashOf(signature(nsfw = true)), "NSFW 开关注入状态变了必须 bump")
+        // 起标题指令（M3）：手机侧要照它摘标题，改措辞也必须 bump
+        assertNotEquals(
+            base,
+            RunKit.hashOf(signature(titleInstruction = "换个说法起标题")),
+            "titleInstruction 变了必须 bump（不然手机一直用旧措辞）",
+        )
     }
 
     @Test
@@ -103,9 +111,10 @@ class RunKitVersionTest {
         assertTrue(a.length == 64, "SHA-256 十六进制应是 64 位")
 
         val canonical = signature().canonical()
-        listOf("promptVersion=", "nsfw=", "nsfwPromptVersion=", "tools=", "banner=", "budget=")
-            .forEach { key ->
-                assertTrue(canonical.contains(key), "canonical() 缺了触发器 $key —— 新增签名字段时要同步进来")
-            }
+        listOf(
+            "promptVersion=", "nsfw=", "nsfwPromptVersion=", "tools=", "banner=", "budget=", "titleInstruction=",
+        ).forEach { key ->
+            assertTrue(canonical.contains(key), "canonical() 缺了触发器 $key —— 新增签名字段时要同步进来")
+        }
     }
 }
