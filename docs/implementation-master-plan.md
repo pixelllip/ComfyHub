@@ -198,7 +198,7 @@ GET /api/ai/run-kit/status  → { current, revoked:[...] }   ← 命中吊销则
 | **M4** | 上行通道 | `_outbox` + `/api/sync/push` + 幂等 apply + 服务端赢 LWW | 手机产生的会话在桌面可见可续写；重复推送不产生重复行 | M3 |
 | **M5** | 排队提交 | 手机 `comfy_queue_submit` + 桌面 outbox 消费（**走现有 `comfy_submit` 全链路**） | 手机排队 → 桌面在线后自动提交 → 产物入库画廊 → `mediaIds` 回到手机；**桌面侧审批/幂等/入库一条不少（R10/R11）** | M4 |
 | **M6** | 凭据 | `ai_providers` 下行（**不含密钥**）+ 手机 Android Keystore + `flutter_secure_storage` | 手机能独立调用 LLM；密钥不出本机；界面明确告知"需在手机上单独填 Key" | M3 |
-| **P4** | **桌面 Rust 重写** | axum + rusqlite/bundled；**逐一实现现有 `/api/...`，Flutter 一行不改**；按端点灰度（先 `/api/tags`、`/api/prompts`） | 灰度期两端点并存；Rust 侧内存 RSS 目标 ≤30MB；**R6/R7/R8/R9/R10/R12 在 Rust 侧重建**（11,103 行 Kotlin 测试要重写成 Rust 测试） | P2、M0 |
+| **P4** | **桌面 Rust 重写** | 🔵 **进行中（第 1 步已落地 2026-09-23，`afcf395`）**：`server-rs/`（axum 0.8 + tokio + **rusqlite 0.40 bundled** + serde + tower-http）—— `db.rs`（连接工厂 + PRAGMA 读回自检 R1 / `BEGIN IMMEDIATE` R2 / FTS5·user_version 自检）、`models.rs`（Tag/Prompt/Paged 的 JSON 形状与 Kotlin 逐字一致）、`routes.rs`（**只读** `GET /api/health`、`/api/tags`(+categories)、`/api/prompts`、`/api/prompts/{id}`）、11 个 Rust 用例；默认端口 **8081** 与 Kotlin 的 8080 并存灰度 | ① `cargo test` 11 例全绿（键集合精确断言 / 分页信封 / R1 自检抓 fk=0 / R2 回滚 / R14 FTS5 / 删标签级联）；② **对真实 `.db/comfyhub.db` 起服务并抽查**（sqlite **3.53.2**、fts5 true、schema 1、27 提示词分 14 页、详情字段正常）。**未搬**：写端点、`/api/media`、`/api/ai/*`、`/api/sync/*`、`/api/capture/*`；**未重建**：R6~R10（AI/工具层最后搬，§6 要求逐条对照重建）；RSS ≤30MB 待量 | P2、M0 |
 
 ### 轨道依赖的关键判断
 
@@ -349,3 +349,9 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ① **真机验收**（M3.1）—— 本机没有模拟器/真机，`app-debug.apk` 只验证到"能编出来"；
 > ② 手机侧 `web_search` / `civitai_search` 两个工具（未实现就**不宣称**：`declaredTo` = kit ∩ 本地实现，
 > 模型看不见它们，所以不会"调了必然失败"）。
+>
+> ✅ **P4 第 1 步落地（2026-09-23，`afcf395`）**：Rust 版起了骨架并**跑通了只读灰度**
+> （`server-rs/`，默认 8081，与 Kotlin 的 8080 并存）。三条纪律在 Rust 侧已经重建：
+> 连接工厂 + PRAGMA **读回自检**（R1）、`BEGIN IMMEDIATE` 写事务（R2）、FTS5/user_version 自检（R14）。
+> 形状纪律用**精确键集合**断言盯住（"少一个键 = 界面上少一块内容"）。
+> 下一步按 §5.1 的灰度顺序继续搬写端点，最后才是 `/api/ai/*` 与 R6~R10 的重建。
