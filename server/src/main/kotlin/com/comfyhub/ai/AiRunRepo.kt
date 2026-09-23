@@ -211,7 +211,7 @@ object AiRunRepo {
                     """
                     INSERT INTO ai_tool_calls
                       (id, run_id, provider_call_id, name, arguments_json, approval, status, started_at)
-                    VALUES (?,?,?,?,'pending','pending', CURRENT_TIMESTAMP(3))
+                    VALUES (?,?,?,?,?,'pending','pending', CURRENT_TIMESTAMP(3))
                     """.trimIndent(),
                     UUID.randomUUID().toString(), runId, callId, name, argumentsJson.take(16_000),
                 )

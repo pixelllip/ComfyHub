@@ -308,6 +308,12 @@ class HarnessRunner(
         fun emit(type: String, payload: JsonObject) {
             val event = bus.emit(runId, type, payload) ?: return
             events.add(event.seq, type, payload)
+            // M1：**闸门类事件立刻落库**。"有东西在等人"这个事实必须当场可查 ——
+            // e2e / 另一端 / 审计都是等在 `ai_run_events` 上的第三方；等 200 条一批
+            // 或 Run 收尾的话，审批挂着的几分钟里谁也看不到它（e2e-submit 第 1 幕
+            // 实测抓到）。这两类事件天生低频（都要用户点头），立即刷不构成 P1
+            // 要解决的写入压力。
+            if (type == RunEventType.TOOL_REQUESTED || type == RunEventType.USER_QUESTION) events.flush()
         }
 
         // 已说出的正文 / 思考：**声明在 try 外面**，失败分支要用它把已经产生的部分保留下来
