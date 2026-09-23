@@ -28,6 +28,7 @@ class RunKitVersionTest {
         banner: String = "横幅",
         budget: String = """{"perImageBytes":8388608,"totalBytes":20971520}""",
         titleInstruction: String = "起标题指令",
+        continueInstruction: String = "接着写指令",
     ) = RunKit.Signature(
         promptVersion = promptVersion,
         nsfwEnabled = nsfw,
@@ -36,6 +37,7 @@ class RunKitVersionTest {
         untrustedBanner = banner,
         inlineBudgetJson = budget,
         titleInstruction = titleInstruction,
+        continueInstruction = continueInstruction,
     )
 
     @Test
@@ -101,6 +103,11 @@ class RunKitVersionTest {
             RunKit.hashOf(signature(titleInstruction = "换个说法起标题")),
             "titleInstruction 变了必须 bump（不然手机一直用旧措辞）",
         )
+        assertNotEquals(
+            base,
+            RunKit.hashOf(signature(continueInstruction = "换个说法接着写")),
+            "continueInstruction 变了必须 bump",
+        )
     }
 
     @Test
@@ -112,7 +119,7 @@ class RunKitVersionTest {
 
         val canonical = signature().canonical()
         listOf(
-            "promptVersion=", "nsfw=", "nsfwPromptVersion=", "tools=", "banner=", "budget=", "titleInstruction=",
+            "promptVersion=", "nsfw=", "nsfwPromptVersion=", "tools=", "banner=", "budget=", "titleInstruction=", "continueInstruction=",
         ).forEach { key ->
             assertTrue(canonical.contains(key), "canonical() 缺了触发器 $key —— 新增签名字段时要同步进来")
         }

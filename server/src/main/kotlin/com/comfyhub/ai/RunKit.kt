@@ -84,6 +84,13 @@ object RunKit {
          * 手机上的那句指令只能来自这里。改它必须 bump（不然手机会一直用旧措辞）。
          */
         val titleInstruction: String,
+        /**
+         * "输出被长度上限截断时接着写"的那条指令（`HarnessRunner.CONTINUE_INSTRUCTION`）。
+         *
+         * 与 titleInstruction 同理：它是**发给模型的话**，手机 harness 也要用（用户要求
+         * "不要强行截断 AI 回复"），而 R13 不许两端各写一份。
+         */
+        val continueInstruction: String,
     ) {
         fun canonical(): String =
             listOf(
@@ -94,6 +101,7 @@ object RunKit {
                 "banner=$untrustedBanner",
                 "budget=$inlineBudgetJson",
                 "titleInstruction=$titleInstruction",
+                "continueInstruction=$continueInstruction",
             ).joinToString("\n")
     }
 
@@ -184,6 +192,7 @@ object RunKit {
         val budgetJson: String,
         val banner: String,
         val titleInstruction: String,
+        val continueInstruction: String,
         val signature: Signature,
     )
 
@@ -217,6 +226,8 @@ object RunKit {
         val banner = ToolRegistry.UNTRUSTED_BANNER_TEMPLATE + ToolRegistry.UNTRUSTED_BANNER_QUERY_LINE
         // 起标题指令：手机 harness 也要自动起会话名，而它**不许自己写一份**（R13）
         val titleInstruction = SystemPrompt.TITLE_INSTRUCTION
+        // "接着写"指令：手机上同样会撞输出上限，措辞也只能有一份（R13）
+        val continueInstruction = HarnessRunner.CONTINUE_INSTRUCTION
 
         val signature = Signature(
             promptVersion = SystemPrompt.VERSION,
@@ -226,9 +237,11 @@ object RunKit {
             untrustedBanner = banner,
             inlineBudgetJson = budgetJson,
             titleInstruction = titleInstruction,
+            continueInstruction = continueInstruction,
         )
         return KitParts(
-            mobileTools, toolsArray, toolsJson, budget, budgetJson, banner, titleInstruction, signature,
+            mobileTools, toolsArray, toolsJson, budget, budgetJson, banner,
+            titleInstruction, continueInstruction, signature,
         )
     }
 
@@ -279,6 +292,8 @@ object RunKit {
             put("untrustedBanner", parts.banner)
             // 起标题指令（M3）：手机 harness 按轮附加它、再用同一套 TitleStripper 摘掉标记
             put("titleInstruction", parts.titleInstruction)
+            // "接着写"指令（M3）：手机撞到输出上限时同样要说同一句话
+            put("continueInstruction", parts.continueInstruction)
             put("models", buildJsonArray { modelsJson(providerOverride).forEach { add(it) } })
             put("inlineBudget", parts.budget)
         }

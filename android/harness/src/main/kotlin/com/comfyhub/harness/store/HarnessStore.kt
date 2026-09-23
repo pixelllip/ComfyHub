@@ -59,10 +59,15 @@ class HarnessStore(private val session: SqlSession) {
         modelId: String? = null,
         promptVersion: String = "v1",
         queue: Boolean = true,
+        /**
+         * 显式主键。默认自己生成 UUID；调用方**已经有会话 id**时（重试 / 恢复 / 手机侧先建后补）
+         * 必须把它传进来，否则会另起一个空会话。
+         */
+        id: String = Timestamps.newId(),
     ): ConversationRecord {
         val now = Timestamps.now()
         val record = ConversationRecord(
-            id = Timestamps.newId(),
+            id = id,
             title = title,
             providerId = providerId,
             modelId = modelId,

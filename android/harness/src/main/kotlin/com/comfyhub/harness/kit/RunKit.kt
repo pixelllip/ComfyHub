@@ -45,6 +45,12 @@ data class RunKit(
      * 会话名留在本地默认值 —— 少一个功能，好过两端规则不一致。
      */
     val titleInstruction: String?,
+    /**
+     * "输出被长度上限截断时接着写"的指令（**原样下发**，同样不许手机自己写一份）。
+     *
+     * 为 `null` 时**不做续写**（撞到上限就如实结束），而不是自己编一句。
+     */
+    val continueInstruction: String?,
     val models: List<KitModel>,
     val inlineBudget: InlineBudget.Limits,
 ) {
@@ -163,6 +169,7 @@ object RunKitCodec {
             tools = tools,
             untrustedBanner = root.str("untrustedBanner").orEmpty(),
             titleInstruction = root.str("titleInstruction")?.takeIf { it.isNotBlank() },
+            continueInstruction = root.str("continueInstruction")?.takeIf { it.isNotBlank() },
             models = models,
             inlineBudget = limits,
         )
@@ -192,6 +199,7 @@ object RunKitCodec {
         })
         put("untrustedBanner", kit.untrustedBanner)
         kit.titleInstruction?.let { put("titleInstruction", it) }
+        kit.continueInstruction?.let { put("continueInstruction", it) }
         put("models", buildJsonArray {
             kit.models.forEach { m ->
                 add(buildJsonObject {
