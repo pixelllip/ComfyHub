@@ -191,7 +191,7 @@ GET /api/ai/run-kit/status  → { current, revoked:[...] }   ← 命中吊销则
 | **P0.5** | binlog | ✅ **已完成**（2026-09-23）：`skip-log-bin` 落在 `Write-Ini` + 活 my.ini，释放 4.27GB | `@@log_bin=0` | — |
 | **P1** | 事件日志治跑飞 | 接上 `pruneEvents`、事件批量写、`RunEventBus` 改环形缓冲 | DB 从 112.9MB 降到个位数；单 Run 写入量降 1~2 个数量级；**断线重连续传仍完整**（R5） | 无 |
 | **P2** | **MySQL → SQLite（保留 Kotlin/Ktor）** | 新 schema（🔒3.1）、迁移工具（MySQL→SQLite）、17 个文件的数据层改方言、迁移探测改 `PRAGMA` | 逐表 `COUNT(*)` 与抽样字段哈希一致；364 个 Gradle 测试全绿；**R1/R2/R3/R4 各有用例**；发布包去掉 `mysql/` 后能起 | P1 |
-| **M0** | **冻结 5 份契约** | `docs/run-event-contract.md`、schema 文件、同步 API 的 OpenAPI 片段、run-kit JSON Schema、ToolScope 清单 | 两端"事件类型清单一致"用例；契约文件评审通过 | **无（可立刻做）** |
+| **M0** | **冻结 5 份契约** —— **进度 4/5（2026-09-23）**：✅ RunEvent 协议（`docs/run-event-contract.md` + `RunEventContractTest` 6 断言里 2 条已实现：清单逐项相等 / SSE 帧格式）✅ SQLite schema 约定（`docs/sqlite-schema-contract.md`）✅ 同步 API 4 条端点（`docs/sync-api-contract.md`）✅ ToolScope 清单（`docs/tool-scope-contract.md` + 代码里 `ToolScope`/`toolsFor`/`ToolScopeTest` 6 例）⏳ run-kit JSON Schema（待补：`docs/run-kit-contract.md`，与 M1 的 `/api/ai/run-kit` 同一批做） | 两端"事件类型清单一致"用例（桌面侧已做，手机侧待 harness 落地）；契约文件评审通过 | **无（可立刻做）** |
 | **M1** | 桌面侧支撑 | `AskGate` **落库** + 可跨端查询 + 超时恢复；`/api/ai/run-kit{,/status}`；`ToolScope` 过滤 | 手机发起的 Run 的审批在另一端也能看到并批准；后端重启后 pending 不丢 | M0 |
 | **M3** | **移动 Kotlin harness** | `android/app/src/main/kotlin/`：LLM 调用 + SSE + 工具循环 + 本地 SQLite + 三条失败纪律（R6）+ platform channel | 离线（桌面不在线）能完成一次 prompt 设计对话；UI 用**与桌面相同的事件流**渲染，UI 代码零分叉 | M0、M1 |
 | **M4** | 上行通道 | `_outbox` + `/api/sync/push` + 幂等 apply + 服务端赢 LWW | 手机产生的会话在桌面可见可续写；重复推送不产生重复行 | M3 |
@@ -310,6 +310,10 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 | 文档 | 看它学什么 |
 | --- | --- |
 | **本文** | **实施总纲：契约、红线、阶段、验收** |
+| 🔒 [`docs/run-event-contract.md`](run-event-contract.md) | **RunEvent 协议**（信封 / 17 个类型 / SSE 帧格式 / tool.requested≠user.question / 保留窗口边界）—— M0 已冻结 |
+| 🔒 [`docs/sqlite-schema-contract.md`](sqlite-schema-contract.md) | **SQLite 约定**（四个 PRAGMA / 类型映射 / `_sync_log`+`sync_clients`+`_outbox` DDL / R1~R4 的具体形态）—— M0 已冻结 |
+| 🔒 [`docs/sync-api-contract.md`](sync-api-contract.md) | **同步 API 4 条端点**（manifest/changes/bootstrap/push、游标语义、410 分支、幂等与 LWW）—— M0 已冻结 |
+| 🔒 [`docs/tool-scope-contract.md`](tool-scope-contract.md) | **工具分端 ToolScope**（四值语义、MOBILE 那 7 个、R11 为什么不许复用 `comfy_submit`）—— M0 已冻结 |
 | `docs/memory-and-storage-evaluation.md` | 为什么要换（实测内存数据 §3.2）、MySQL 方言逐条可移植性（§5.2.2）、发布包收益（§5.2.4） |
 | `docs/cross-device-sync-design.md` | 同步机制细节（变更账本、游标、墓碑、bootstrap、SQLite 坑 §6）、安卓客户端现状（§6.5） |
 | `docs/mobile-harness-design.md` | 手机 harness 的范围与边界（§4）、为什么 Kotlin 而非 Dart/Rust（§2）、run-kit（§3） |
@@ -322,6 +326,6 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 | `docs/android-agp9-builtin-kotlin-migration.md` | **动 `android/` 之前必读** |
 | `docs/pitfalls.md` | 50+ 条踩坑记录 |
 
-> ⚠ **实施开始时建议同步两处登记**（本轮未改，等你确认）：
-> ① `AGENTS.md` 加一节"目标架构与实施总纲"指向本文；
-> ② `README.md` 的架构/目录表更新（MySQL→SQLite、JVM→Rust 会改变目录树与运行时依赖）。
+> ✅ **两处登记已同步（2026-09-23）**：
+> ① `AGENTS.md` §11 已加"目标架构与实施总纲"指向本文；
+> ② `README.md` 的架构/目录表已补一句"目标架构"指引（**不改现状描述** —— 现在跑的还是 MySQL + Kotlin）。
