@@ -9,6 +9,8 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * 提示词相关接口
@@ -84,7 +86,16 @@ fun Route.promptRoutes() {
                 val body = call.receive<FavoriteInput>()
                 val ok = Db.withConnection { conn -> PromptRepo.setFavorite(conn, id, body.favorite) }
                 if (!ok) return@post call.respondNotFound("提示词 $id 不存在")
-                call.respond(mapOf("id" to id, "favorite" to body.favorite))
+                // ⚠ 这里**不能**写 `mapOf("id" to id, "favorite" to body.favorite)`：
+                // 值是 Long + Boolean 两种类型，kotlinx 序列化会抛
+                // "Serializing collections of different element types is not yet supported"
+                // → 库已经改好了、响应却是 500（点收藏看不出问题，排查很费劲，2026-09-23 实测）。
+                call.respond(
+                    buildJsonObject {
+                        put("id", id)
+                        put("favorite", body.favorite)
+                    }
+                )
             }
 
             post("/tags") {
