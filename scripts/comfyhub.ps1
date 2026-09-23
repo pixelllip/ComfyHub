@@ -235,6 +235,46 @@ function Test-MySqlAlive {
     return ($LASTEXITCODE -eq 0)
 }
 
+# ---------------------------------------------------------------------------
+#  SQLite（P2 起的默认库）
+# ---------------------------------------------------------------------------
+# MySQL 现在是**可选的**：只有"老库里有数据、新库还没建"时才会被拉起来做一次性搬迁。
+# 发布包里连 mysql/ 目录都没有（packaging\manifest.json 已去掉那个组件），
+# 所以下面所有涉及 MySQL 的判断都必须容得下"它根本不存在"。
+$Script:SqliteDir = Join-Path $ProjectRoot '.db'
+$Script:SqliteDb = Join-Path $Script:SqliteDir 'comfyhub.db'
+
+function Test-LegacyMysqlData {
+    # 老库的实例目录里到底有没有数据（没有就不必谈搬迁）
+    Test-Path (Join-Path $MysqlDataPath 'mysql')
+}
+
+function Test-LegacyMigrationNeeded {
+    # 需要一次性搬迁：新库还没建 **且** 老库里有真实数据
+    (-not (Test-Path $Script:SqliteDb)) -and (Test-LegacyMysqlData)
+}
+
+function Invoke-LegacyMigration {
+    <#  把老 MySQL 数据搬进新的 SQLite 库（走 server.ps1 migrate）。
+        失败**不拦 up**：宁可让用户看到一个空的新库，也不能因为搬迁问题连后端都起不来。  #>
+    Say '  检测到老的 MySQL 数据、而且还没有 SQLite 库 —— 先做一次性搬迁（P2）…' 'Cyan'
+    if (-not (Start-MySqlPart)) {
+        Say '  MySQL 没能起来，跳过搬迁：后端会用空的新库启动（老数据仍在 .mysql 里，没动过）' 'Yellow'
+        return $false
+    }
+    $migrateScript = Join-Path $Scripts 'server.ps1'
+    # ⚠ 必须 `| Out-Host`：不加的话子进程的 stdout 会变成**这个函数的返回值**，
+    # 调用点那个 `| Out-Null` 会把搬迁报告整段吃掉（报告看不到 = 不知道搬没搬对）；
+    # 而且返回值被数组污染后 `-not (Invoke-LegacyMigration)` 之类的判断永远不对（AGENTS §5）。
+    & pwsh -NoProfile -File $migrateScript migrate | Out-Host
+    $migrateCode = $LASTEXITCODE
+    if ($migrateCode -ne 0) {
+        Say "  搬迁失败（退出码 $migrateCode，详见上面的输出）：后端会用空的新库启动，老数据仍在 .mysql 里，没动过" 'Yellow'
+        return $false
+    }
+    return $true
+}
+
 function Get-ApiProcess {
     Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -and $_.CommandLine -like '*com.comfyhub.ApplicationKt*' }
@@ -319,15 +359,16 @@ function Show-Status {
     Say '  ComfyHub 服务状态' 'White'
     Say '  ────────────────────────────────────────────────────────────'
 
-    # MySQL
-    # 注意：MySQL 8 在 Windows 上会有一个父进程 + 一个真正干活并占端口的子进程，
-    # 所以这里把 PID 列表整个打出来，不要只打进程个数（以前会显示成 "PID 2"，很误导）。
-    if ($s.MysqlAlive) {
-        Say (Format-Row 'MySQL' '运行中' "127.0.0.1:$MysqlPort  (PID $(($s.MysqlPids) -join ','))") 'Green'
-    } elseif ($s.MysqlProcess -gt 0) {
-        Say (Format-Row 'MySQL' '启动中' '进程在但还连不上，稍等或看日志') 'Yellow'
+    # 数据库：P2 起是 SQLite 文件（后端自己建 / 自己迁移），不再需要 MySQL 先就绪
+    if (Test-Path $Script:SqliteDb) {
+        $sizeMb = [math]::Round((Get-Item $Script:SqliteDb).Length / 1MB, 2)
+        Say (Format-Row '数据库' 'SQLite' "$Script:SqliteDb  ($sizeMb MB)") 'Green'
     } else {
-        Say (Format-Row 'MySQL' '未运行' '执行: pwsh -File scripts\comfyhub.ps1 up') 'Red'
+        Say (Format-Row '数据库' '待建' "$Script:SqliteDb（后端首次启动会建；有老 MySQL 数据时会先自动搬迁）") 'Yellow'
+    }
+    # 老 MySQL 只在搬迁时有用：它在跑就报一句，不在跑也**不算异常**
+    if ($s.MysqlAlive) {
+        Say (Format-Row '旧库' 'MySQL 运行中' "127.0.0.1:$MysqlPort  (PID $(($s.MysqlPids) -join ','))，只有 migrate 会读它") 'DarkGray'
     }
 
     # 后端（报的是端到端健康，包含数据库连通性）
@@ -342,7 +383,7 @@ function Show-Status {
         }
     } elseif ($s.ApiProcess -gt 0) {
         $db = if ($s.ApiHealth) { $s.ApiHealth.database } else { '无响应' }
-        Say (Format-Row '后端' '不健康' "进程在跑但 db=$db —— 多半是 MySQL 掉了") 'Red'
+        Say (Format-Row '后端' '不健康' "进程在跑但 db=$db —— 看 .run\server.out.log，多半是库文件不可写/被占") 'Red'
         Say (Format-Row '' '' '修复: pwsh -File scripts\comfyhub.ps1 restart') 'Yellow'
     } else {
         Say (Format-Row '后端' '未运行' '修复: pwsh -File scripts\comfyhub.ps1 up') 'Red'
@@ -403,7 +444,7 @@ function Start-ApiPart {
         Start-Sleep 1
     }
 
-    Say '  [2/3] 启动 Kotlin 后端…' 'Cyan'
+    Say '  [1/2] 启动 Kotlin 后端…' 'Cyan'
     # ⚠️ 端口必须**透传**给 server.ps1：过去两个脚本各写各的 8080、互不知道，
     # 于是"后端在跑、脚本却说没起来"。`-Port 0` 表示"自动"，由后端挑好写进 .run\api.json。
     $apiArgs = @('-Port', "$Script:ApiPort") + $DataDirArgs
@@ -637,7 +678,7 @@ function Start-AppPart {
     $stale = Get-AppBuildStaleness -Exe $exe
     if ($stale -and $stale.Newer) { Show-AppStaleWarning -Label '选中的 App' -Stale $stale }
 
-    Say '  [3/3] 启动桌面 App…' 'Cyan'
+    Say '  [2/2] 启动桌面 App…' 'Cyan'
     $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
         CommandLine      = "`"$($exe.FullName)`""
         CurrentDirectory = $exe.DirectoryName
@@ -755,7 +796,7 @@ function Show-RuntimeHintsIfAvailable {
 }
 
 function Do-Up {
-    $chain = if ($WithApp) { 'MySQL → 后端 → App' } else { 'MySQL → 后端' }
+    $chain = if ($WithApp) { '数据库 → 后端 → App' } else { '数据库 → 后端' }
     Say ''
     Say "  ComfyHub 启动中（$chain）" 'White'
     Trace 'Do-Up 开始'
@@ -794,7 +835,14 @@ function Do-Up {
         }
     }
 
-    if (-not (Start-MySqlPart)) { Show-Status | Out-Null; Show-RuntimeHintsIfAvailable; exit 1 }
+    # 数据库：SQLite 由后端自己建。**唯一**会用到 MySQL 的情形是"老库有数据、新库还没建"
+    # （P2 换库的一次性过渡）—— 那时先拉起来搬一次，搬完照旧只跑 SQLite。
+    if (Test-LegacyMigrationNeeded) {
+        Invoke-LegacyMigration | Out-Null
+    } else {
+        Say "  数据库: SQLite $Script:SqliteDb（不需要 MySQL）" 'DarkGray'
+    }
+
     if (-not (Start-ApiPart))   { Show-Status | Out-Null; Show-RuntimeHintsIfAvailable; exit 1 }
     if ($WithApp) { Start-AppPart | Out-Null }
 
@@ -817,25 +865,29 @@ function Do-Up {
 
 function Do-Down {
     Say ''
-    Say '  ComfyHub 停止中（App → 后端 → MySQL）' 'White'
+    Say '  ComfyHub 停止中（App → 后端 → 老库）' 'White'
 
     # 手工停了就别让 watchdog 再补一刀
     Clear-OwnerWatchdog
 
     if (Get-AppProcess) {
-        Say '  [1/3] 关闭桌面 App…' 'Cyan'
+        Say '  [1/2] 关闭桌面 App…' 'Cyan'
         Get-AppProcess | Stop-Process -Force -ErrorAction SilentlyContinue
     } else { Say '  桌面 App 未运行。' 'DarkGray' }
 
-    Say '  [2/3] 停止后端…' 'Cyan'
+    Say '  [2/2] 停止后端…' 'Cyan'
     & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop -Port $Script:ApiPort @DataDirArgs
 
     # 必须等后端真的退出再停库，否则它会一边报错一边重连
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline -and @(Get-ApiProcess).Count -gt 0) { Start-Sleep -Milliseconds 400 }
 
-    Say '  [3/3] 停止 MySQL…' 'Cyan'
-    & pwsh -NoProfile -File (Join-Path $Scripts 'mysql.ps1') stop @DataDirArgs
+    # 老库只在搬迁时才会被拉起来：没在跑就跳过 —— 发布包里连 mysql/ 都没有，
+    # 无条件调 mysql.ps1 stop 会当场抛"找不到 mysqld"（Do-Down 后半截全断）。
+    if (@(Get-MysqldProcess).Count -gt 0) {
+        Say '  （老库 MySQL 还在跑，顺手停掉）' 'Cyan'
+        & pwsh -NoProfile -File (Join-Path $Scripts 'mysql.ps1') stop @DataDirArgs
+    }
 
     Say ''
     Show-Status | Out-Null
@@ -843,14 +895,14 @@ function Do-Down {
 
 function Do-Release {
     <#
-      App 退出时**自己**调用的：只停后端 + MySQL，绝不碰 App 进程。
+      App 退出时**自己**调用的：只停后端 + 老库（若在跑），绝不碰 App 进程。
       和 Do-Down 的区别只有一条，但很关键 —— Do-Down 会按进程名 `viewer` 杀 App，
       在"App 自己还活着、正等我们停完服务"的时候调用它等于自杀。
 
-      顺序和 down 一致：后端 → 等 java 真的退出 → MySQL（反过来的话后端会一直对着死库重连报错）。
+      顺序和 down 一致：后端 → 等 java 真的退出 → 老库（反过来的话后端会一直对着死库重连报错）。
     #>
     Say ''
-    Say '  ComfyHub 停止中（后端 → MySQL，App 不动）' 'White'
+    Say '  ComfyHub 停止中（后端 → 老库，App 不动）' 'White'
 
     # 手工/App 主动停了就别让 watchdog 再补一刀（它可能和我们同时动手）
     Clear-OwnerWatchdog
@@ -862,8 +914,12 @@ function Do-Release {
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline -and @(Get-ApiProcess).Count -gt 0) { Start-Sleep -Milliseconds 400 }
 
-    Say '  [2/2] 停止 MySQL…' 'Cyan'
-    & pwsh -NoProfile -File (Join-Path $Scripts 'mysql.ps1') stop @DataDirArgs
+    if (@(Get-MysqldProcess).Count -gt 0) {
+        Say '  [2/2] 停止 MySQL（老库）…' 'Cyan'
+        & pwsh -NoProfile -File (Join-Path $Scripts 'mysql.ps1') stop @DataDirArgs
+    } else {
+        Say '  [2/2] MySQL 没在跑（P2 起默认用 SQLite），跳过。' 'DarkGray'
+    }
 
     Say ''
     Show-Status | Out-Null
@@ -957,16 +1013,32 @@ function Do-Doctor {
     foreach ($p in @(
             @{ n = '项目根目录';    v = $ProjectRoot },
             @{ n = 'db\schema.sql'; v = (Join-Path $ProjectRoot 'db\schema.sql') },
-            @{ n = 'MySQL 实例目录'; v = $MysqlInstanceDir },
-            @{ n = 'MySQL 数据目录'; v = (Join-Path $MysqlDataPath 'mysql') },
-            @{ n = 'MySQL 错误日志'; v = $MysqlErrorLog },
+            @{ n = 'db\schema.sqlite.sql'; v = (Join-Path $ProjectRoot 'db\schema.sqlite.sql') },
             @{ n = '后端启动脚本';   v = $batToShow },
             @{ n = '桌面 App';      v = $(if ($appExe) { $appExe.FullName } else { (Join-Path $ProjectRoot 'viewer.exe') }) }
         )) {
         $ok = Test-Path $p.v
         Say ("  {0,-16} {1}" -f $p.n, $(if ($ok) { 'OK' } else { "缺失: $($p.v)" })) $(if ($ok) { 'Green' } else { 'Yellow' })
     }
-    Say ("  {0,-16} {1}" -f '位置来源', $(if ($DataDir) { "-DataDir 参数" } elseif ($env:COMFYHUB_MYSQL_DIR) { '环境变量 COMFYHUB_MYSQL_DIR' } elseif (Test-Path (Join-Path $ProjectRoot '.mysql-location.json')) { '.mysql-location.json' } else { '默认 .mysql' })) 'Gray'
+
+    # 库：P2 起是 SQLite 文件（后端自建）。老 MySQL 只是搬迁来源，**不存在也不算异常**。
+    if (Test-Path $Script:SqliteDb) {
+        $sizeMb = [math]::Round((Get-Item $Script:SqliteDb).Length / 1MB, 2)
+        $wal = Join-Path $Script:SqliteDir 'comfyhub.db-wal'
+        $walText = if (Test-Path $wal) { "，WAL $([math]::Round((Get-Item $wal).Length / 1KB, 1)) KB" } else { '' }
+        Say ("  {0,-16} {1}" -f 'SQLite 库', "$Script:SqliteDb  ($sizeMb MB$walText)") 'Green'
+    } else {
+        Say ("  {0,-16} {1}" -f 'SQLite 库', "还没建：$Script:SqliteDb（后端首次启动会建）") 'Gray'
+    }
+    if (Test-LegacyMysqlData) {
+        $legacyNote = if (Test-Path $Script:SqliteDb) { '老库在，但新库已存在（不会再自动搬迁）' } else { '下次 up 会自动搬迁进 SQLite' }
+        Say ("  {0,-16} {1}" -f '旧库 MySQL', "$MysqlDataPath（$legacyNote）") 'Gray'
+        Say ("  {0,-16} {1}" -f '位置来源', $(if ($DataDir) { "-DataDir 参数" } elseif ($env:COMFYHUB_MYSQL_DIR) { '环境变量 COMFYHUB_MYSQL_DIR' } elseif (Test-Path (Join-Path $ProjectRoot '.mysql-location.json')) { '.mysql-location.json' } else { '默认 .mysql' })) 'Gray'
+        $mysqld = Resolve-MysqlBin 'mysqld.exe'
+        Say ("  {0,-16} {1}" -f 'mysqld.exe', $(if ($mysqld) { $mysqld } else { '找不到（要搬迁就得先装/指定 COMFYHUB_MYSQL_HOME）' })) $(if ($mysqld) { 'Gray' } else { 'Yellow' })
+    } else {
+        Say ("  {0,-16} {1}" -f '旧库 MySQL', '没有老库数据（P2 起用 SQLite，不需要 MySQL）') 'Gray'
+    }
 
     # 构建新鲜度：App 的产物比 lib\ 旧时，界面上看到的是旧代码。
     # 这类"改了没生效"最容易被误报成功能 bug（2026-09-17 视频预览图踩过一次），
@@ -1021,9 +1093,6 @@ function Do-Doctor {
         Say ("  {0,-16} {1}" -f '能力目录', '还没有在线目录（后端每 7 天自动拉取 models.dev；也可在设置页点「立即更新」）') 'Gray'
     }
 
-    $mysqld = Resolve-MysqlBin 'mysqld.exe'
-    Say ("  {0,-16} {1}" -f 'mysqld.exe', $(if ($mysqld) { $mysqld } else { '找不到，设置 COMFYHUB_MYSQL_HOME' })) $(if ($mysqld) { 'Green' } else { 'Red' })
-
     # ComfyUI 在哪（其他建议第 3 条）：发布包里这块最容易出问题，
     # 所以 doctor 里直接把它指出来 —— 找不到时给出该怎么填，而不是让用户自己猜。
     if (Get-Command Resolve-ComfyHome -ErrorAction SilentlyContinue) {
@@ -1054,7 +1123,9 @@ function Do-Doctor {
     }
 
     $mysqlListen = Get-NetTCPConnection -State Listen -LocalPort $MysqlPort -ErrorAction SilentlyContinue
-    Say ("  {0,-16} {1}" -f "端口 $MysqlPort", $(if ($mysqlListen) { "被 PID $($mysqlListen[0].OwningProcess) 占用" } else { '空闲' })) 'Gray'
+    if ($mysqlListen) {
+        Say ("  {0,-16} {1}" -f "端口 $MysqlPort", "被 PID $($mysqlListen[0].OwningProcess) 占用（老 MySQL 在跑，只有 migrate 用它）") 'Gray'
+    }
 
     $excluded = Get-ExcludedTcpPortRange -Port $apiPortNow
     if ($excluded) {

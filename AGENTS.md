@@ -9,7 +9,7 @@
 - **只动 `lib/` 下的 Dart 代码**（页面 / 组件 / 主题 / 状态）→ 用 debug 版，跑起来后按 `r` 热重载，1~2 秒见效：
 
   ```powershell
-  pwsh -File scripts\dev-app.ps1        # 确保 MySQL + 后端在跑 → flutter run -d windows --debug
+  pwsh -File scripts\dev-app.ps1        # 确保后端在跑（数据库是本地 SQLite，P2 起不用起库）→ flutter run -d windows --debug
   ```
 
   它会先 `comfyhub.ps1 up -SkipBuild`，再 `flutter run -d windows --debug`；
@@ -42,9 +42,10 @@
 
 ## 2. 本地服务必须"静默"启动（不弹命令行窗口）
 
-MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控制台窗口**。三件事都要记住：
+后端由 App 启动时自动拉起（**数据库是 SQLite 文件，P2 起不用起数据库服务**），
+**不允许出现任何 cmd / 控制台窗口**。三件事都要记住：
 
-1. **不能用 `Start-Process`** 起 mysqld / 后端：进程属于当前 PowerShell 的进程树，
+1. **不能用 `Start-Process`** 起后端（以及搬迁老库时的 mysqld）：进程属于当前 PowerShell 的进程树，
    命令行一结束就可能被一起回收。要用 WMI `Win32_Process.Create` 脱离进程树。
 2. **WMI 默认会给控制台程序分配一个可见的控制台窗口**（就是那个 cmd 黑框），
    所以必须传 `Win32_ProcessStartup{ ShowWindow = 0 }`（SW_HIDE）。
@@ -146,7 +147,8 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 | --- | --- | --- |
 | 根目录怎么定 | 往上找 `scripts\comfyhub.ps1` | 同上（发布包的 `viewer.exe` 就铺在根目录，深度 0 就命中） |
 | 后端启动脚本 | `server\build\install\comfy-hub-server\bin\` | `<根>\server\bin\` |
-| `mysqld.exe` / `mysqladmin.exe` | `D:\tools\mysql\...` | `<根>\mysql\bin\` |
+| 数据库 | `<根>\.db\comfyhub.db`（SQLite 单文件 + 它的 `-wal` / `-shm`） | 同一份约定（`<根>\.db\`，装配时预建空目录） |
+| `mysqld.exe` / `mysqladmin.exe`（**仅搬迁用**） | `D:\tools\mysql\...` | **不再随包携带**（P2 起数据库是 SQLite）；要搬迁就设 `COMFYHUB_MYSQL_HOME` |
 | Java | 本机 JDK 21~23 | `<根>\jre` |
 | `viewer.exe` | `build\windows\...\runner\Release\` | `<根>\viewer.exe` |
 
@@ -155,34 +157,35 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 - **发布包里必须跳过 Gradle**：`server.ps1` 看到 `<根>\server\bin\comfy-hub-server.bat` 就直接用它，
   不再 `gradle installDist`（包里既没有源码也没有 gradle）。Dart 侧同理，
   `backend_launcher.dart` 的 `_hasBuiltServer()` 要认两种路径，否则会给脚本加 `-SkipBuild` 加错。
-- **发布包自带的 MySQL / JRE 必须排在"开发机绝对路径"前面**：`mysql.ps1` 的 `Resolve-MySqlHome`、
-  `comfyhub.ps1` 的 `Resolve-MysqlBin`、`server.ps1` 的 `Resolve-MysqlAdmin` 和 `Resolve-Jdk`
-  都是同一个顺序（显式参数 → 环境变量 → `<根>\...` → 本机 `D:\tools\...`）。
-  漏掉一处，换台机器就会出现"库在跑但报数据库不可用"或者"找不到 mysqld.exe"。
+- **发布包自带的 JRE 必须排在"开发机绝对路径"前面**：`server.ps1` 的 `Resolve-Jdk`
+  顺序是显式参数 → 环境变量 → `<根>\jre` → 本机 `D:\tools\...`。
+  漏掉 `<根>\jre` 这一档，发布包就会去用开发机那份 JDK（换台机器直接找不到）。
+  （老 MySQL 那三处 `Resolve-MySqlHome` / `Resolve-MysqlBin` / `Resolve-MysqlAdmin` 现在只剩搬迁用途。）
 - **`comfyhub.ps1 doctor` 会打印当前是哪种布局**（`运行布局: 发布包（便携式）/ 源码树`），
   路径类问题先看它。
-- **发布包是便携式的**：可写数据（数据库 `<根>\.mysql`、产物 `<根>\storage`、日志 `<根>\.run`）
+- **发布包是便携式的**：可写数据（数据库 `<根>\.db`、产物 `<根>\storage`、日志 `<根>\.run`）
   都在包内，`packaging\manifest.json` 里 `runtimeLayout` 记着这份约定；改存放位置要先改那里和 README 9.2。
 - **发布包默认"就地装配"**：`pack-release.ps1` 的 `-OutDir` 默认就是
   `build\windows\x64\runner\Release`，装完那个目录本身就是完整发布包（App 认根目录时往上找
   `scripts\comfyhub.ps1`，正好命中它自己的那一份）。三个连带后果别踩：
   ① `flutter clean` / 重新构建会把它整个清空（又变回只有 App），要重跑脚本；
   ② `-Clean` **不能**整个 `Remove-Item $OutDir`，否则把 `viewer.exe` 一起删了 ——
-     只能清清单里那些 target（`server` / `mysql` / `jre` / `scripts` / `db` / `comfyui` …）+
-     `packaging` / `BUILD-INFO.txt`；运行期数据（`.mysql` / `storage` / `.run`）**不要动**；
+     只能清清单里那些 target（`server` / `jre` / `scripts` / `db` / `comfyui` …）+ `mysql`（P2 之前的老组件）
+     + `packaging` / `BUILD-INFO.txt`；运行期数据（`.db` / `storage` / `.run`）**不要动**；
   ③ `flutter_release` 组件此时**源和目标是同一个目录**，必须跳过拷贝
      （`Copy-Item` 会报 "Cannot copy item to itself"）。
 - 想要一份不随 `build\` 消失的长期副本，用 `-OutDir D:\dist\ComfyHub`。
-- MySQL 分发目录**接近 1GB**，其中 `bin\mysqld.pdb` 一个就 368MB —— 裁剪规则写在清单的
-  `prune` 字段里（glob 支持 `**`），拷贝约 400MB。改裁剪规则务必带上 `-Clean` 重装并看自检。
-- **发布包只能带走 Java 和 MySQL 本体**：`pwsh` 和 VC++ 运行时带不走。缺 VC++ 运行时的时候
-  `mysqld.exe` 只是起不来，原因只写进 `mysql-error.log`，命令行上只看到"启动超时"，非常难查。
-  所以有 `scripts\runtime-deps.ps1`：`comfyhub.ps1` dot-source 它（跟 `silent-process.ps1` 一样），
-  `up` 失败时按需提示、`doctor` 里逐项列出；清单在 `packaging\manifest.json` 的
-  `runtimeRequirements`。**改启动流程时别把这块提示丢了。**
-- **首次运行必须能自动建库**：`mysql.ps1` 的 `Do-Start` 发现 `<实例目录>\data\mysql` 不存在时，
-  会先跑一次 `Do-Init -SkipSeed` 再启动（发布包解压出来没有数据目录，少了这一步首次启动必然失败）。
-  自动初始化**故意不灌演示数据**（不能往用户库里塞演示提示词），只有手敲 `mysql.ps1 init` 才灌。
+- **P2 起发布包不再携带 MySQL**（原来 `mysql/` 约 400MB，裁剪规则在清单的 `prune` 字段里）：
+  数据库是 SQLite，驱动自带引擎。老 MySQL 只在"搬一次旧数据"时才用得到 —— 因此
+  **VC++ 运行时与 mysqld 都降级成可选项**（`runtime-deps.ps1` 里 `Required = $false`）。
+- **`runtime-deps.ps1` 的 `Required` 字段决定"缺了算不算问题"**：`Show-RuntimeReport` /
+  `Show-RuntimeFailureHints` 只把 **必需项** 缺失当红。
+  改启动流程时别把这块提示丢了（`comfyhub.ps1` dot-source 它，跟 `silent-process.ps1` 一样）。
+- **首次运行必须能自动建库**（P2 起是后端自己建 SQLite 文件），
+  而且是**零动作升级**：`comfyhub.ps1 up` 发现"`<根>\.db\comfyhub.db` 还没有 **且** `.mysql\data\mysql` 存在"
+  → 先 `mysql.ps1 start` + `server.ps1 migrate` 搬一次（逐表核对行数与行哈希）→ 再起后端。
+  搬迁失败**不拦 up**（宁可给一个空的新库，也不能连后端都起不来），老库一个字节都不动。
+  自动建的库**故意不灌演示数据**（不能往用户库里塞演示提示词），只有手敲 `mysql.ps1 init` 才灌。
 
 ## 8. 运行时自动补齐 + 一个血泪教训
 
@@ -207,7 +210,8 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
   ⚠ **venv 的解释器就在 `Scripts\` 里**，所以"pip 启动器在哪个目录"必须分两种情况
   （`Get-PythonScriptsDir` / Kotlin 的 `scriptsDirOf`）—— 一律 `父目录\Scripts` 会拼出
   `venv\Scripts\Scripts`，表现是"明明装好了却报缺 comfy-mcp.exe"。
-- **pwsh / VC++**：系统级安装，走 winget；`up` 阶段不碰（免得启动弹 UAC），只由 `ensure-runtime.ps1` 显式装。
+- **pwsh / VC++ / MySQL**：系统级安装，走 winget；`up` 阶段不碰（免得启动弹 UAC），只由 `ensure-runtime.ps1` 显式装。
+  **VC++ 与 MySQL 现在只对"搬迁老库"有意义**（`Get-RuntimeChecks` 里 `Required = $false`）。
 
 > **⚠ 参数改名的坑（2026-09-21 踩到）：非高级函数（没写 `[CmdletBinding()]`）收到不存在的命名参数时
 > 不报错，而是丢进 `$args`。** `mcp-runtime.ps1` 把参数从 `$Proxy`/`$Force` 改成 `$McpProxy`/`$McpForce`
@@ -404,8 +408,9 @@ MySQL + 后端由 App 启动时自动拉起，**不允许出现任何 cmd / 控�
 3. **移动端 harness 用 Android Kotlin**（Flutter UI 通过 platform channel 调用），
    不是 Dart、不是 Rust。**手机端不许硬编码系统提示 / 工具描述 / 安全文案** ——
    它们由桌面的 `/api/ai/run-kit` 版本化下发。
-4. **发布包与运行时会变**：`mysql/`（304MB）、`jre/`、VC++ 运行时依赖都将消失。
-   `packaging\manifest.json` 与第 7 节的"两套运行布局"届时都要改 —— **改之前先看总纲**。
+4. **发布包与运行时已经在变**：`mysql/`（304MB）与 VC++ 运行时依赖**已经去掉**（P2 落地），
+   剩下 `jre/` 也会在 P4（Rust）之后消失。`packaging\manifest.json` 与第 7 节的"两套运行布局"
+   改之前**先看总纲**；`runtimeRequirements` 里的 `required` 字段决定"缺了算不算问题"。
 
 
 

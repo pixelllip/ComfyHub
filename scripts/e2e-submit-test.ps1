@@ -118,15 +118,40 @@ function Find-MysqlExe {
     return ($cands | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1)
 }
 
+# ---------------------------------------------------------------------------
+#  直接查库
+#  P2（2026-09-23）起后端写的是 **SQLite 单文件** `<项目根>\.db\comfyhub.db`；
+#  还去问 mysql.exe 只会得到"什么都没有"，症状是"没等到 tool.requested"。
+#  用 python 的 sqlite3（本脚本本来就把 python 当前置条件），读 + 删都走它。
+# ---------------------------------------------------------------------------
+$script:SqliteDb = Join-Path $ProjectRoot '.db\comfyhub.db'
+
+function Invoke-Sqlite([string]$Sql) {
+    if (-not $script:Python -or -not (Test-Path $script:SqliteDb)) { return @() }
+    $py = @'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("PRAGMA busy_timeout=5000")
+for row in con.execute(sys.argv[2]):
+    print("\t".join("" if v is None else str(v) for v in row))
+con.commit()
+con.close()
+'@
+    $out = & $script:Python -c $py $script:SqliteDb $Sql 2>$null
+    return @($out)
+}
+
+function Test-SqliteAccess { [bool]$script:Python -and (Test-Path $script:SqliteDb) }
+
 # 待批准期间 ai_tool_calls 还没有行（那是"调用结束"的记录），
 # 但 tool.requested 事件在发出去之前就落库了 —— callId 从那里取。
 function Get-PendingCallId([string]$RunId) {
-    if (-not $script:Mysql) { return $null }
-    $q = "SELECT payload_json FROM ai_run_events WHERE run_id='$RunId' AND event_type='tool.requested' ORDER BY seq DESC LIMIT 1;"
-    $out = & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub --database=comfy_hub -N -B -e $q 2>$null
+    if (-not (Test-SqliteAccess)) { return $null }
+    $q = "SELECT payload_json FROM ai_run_events WHERE run_id='$RunId' AND event_type='tool.requested' ORDER BY seq DESC LIMIT 1"
+    $out = Invoke-Sqlite $q
     if (-not $out) { return $null }
     # 别整段 ConvertFrom-Json：arguments 里是转义后的 JSON，容易在管道里被吃掉引号
-    if ($out -match '"callId"\s*:\s*"([^"]+)"') { return $Matches[1] }
+    if ("$out" -match '"callId"\s*:\s*"([^"]+)"') { return $Matches[1] }
     return $null
 }
 
@@ -136,18 +161,16 @@ function Get-PendingCallId([string]$RunId) {
 # 开头也要清一次（不只是结尾）：`CaptureRepo.beginRun` 对 `success` 的记录永远不再抢占
 # —— 那是幂等的正确行为，但脚本被 Ctrl+C 打断时清理跑不到，残留就会攒下来。
 function Clear-SubmitTestCaptures {
-    if (-not $script:Mysql) { return 0 }
+    if (-not (Test-SqliteAccess)) { return 0 }
     $done = 0
-    $ids = & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
-        --database=comfy_hub -N -B -e "SELECT GROUP_CONCAT(id) FROM prompts WHERE source_ref LIKE 'e2e-submit-%';" 2>$null
+    $ids = Invoke-Sqlite "SELECT group_concat(id) FROM prompts WHERE source_ref LIKE 'e2e-submit-%'"
     if ($ids -and "$ids" -ne 'NULL') {
         foreach ($id in ("$ids" -split ',')) {
             if (-not $id) { continue }
             try { Invoke-Api 'DELETE' "/api/prompts/$id" $null | Out-Null; $done++ } catch { }
         }
     }
-    & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
-        --database=comfy_hub -e "DELETE FROM capture_runs WHERE run_key LIKE 'e2e-submit-%';" 2>&1 | Out-Null
+    Invoke-Sqlite "DELETE FROM capture_runs WHERE run_key LIKE 'e2e-submit-%'" | Out-Null
     return $done
 }
 
@@ -158,17 +181,15 @@ function Clear-SubmitTestCaptures {
 # （跑完会把它删掉），比"在正文里找关键词"准得多 —— 第一幕那种"提交 126 3.steps=13"
 # 的会话正文里根本没有 e2e 字样。
 function Clear-SubmitTestConversations {
-    if (-not $script:Mysql) { return 0 }
-    $ids = & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
-        --database=comfy_hub -N -B -e "SELECT id FROM ai_conversations WHERE provider_id LIKE 'e2e-submit%';" 2>$null
+    if (-not (Test-SqliteAccess)) { return 0 }
+    $ids = Invoke-Sqlite "SELECT id FROM ai_conversations WHERE provider_id LIKE 'e2e-submit%'"
     $done = 0
     foreach ($id in @($ids)) {
         if (-not $id -or "$id" -eq 'NULL') { continue }
         try { Invoke-Api 'DELETE' "/api/ai/conversations/$id" $null | Out-Null; $done++ } catch { }
     }
     # 上一版靠"正文里有 e2e 临时路径"认的那种，一并收掉（历史遗留）
-    $old = & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
-        --database=comfy_hub -N -B -e "SELECT DISTINCT c.id FROM ai_conversations c JOIN ai_messages m ON m.conversation_id = c.id WHERE m.text LIKE '%comfyhub-e2e-submit-wf-%';" 2>$null
+    $old = Invoke-Sqlite "SELECT DISTINCT c.id FROM ai_conversations c JOIN ai_messages m ON m.conversation_id = c.id WHERE m.text LIKE '%comfyhub-e2e-submit-wf-%'"
     foreach ($id in @($old)) {
         if (-not $id -or "$id" -eq 'NULL') { continue }
         try { Invoke-Api 'DELETE' "/api/ai/conversations/$id" $null | Out-Null; $done++ } catch { }
@@ -184,7 +205,10 @@ Say '  ────────────────────────�
 
 $python = Find-Python
 if (-not $python) { Say '  找不到 python（可用环境变量 COMFYHUB_PYTHON 指定）。' 'Red'; exit 1 }
-$script:Mysql = Find-MysqlExe
+$script:Python = $python
+if (-not (Test-SqliteAccess)) {
+    Say "  警告: 查不到 SQLite 库 $script:SqliteDb —— 与库相关的断言会取不到数据" 'Yellow'
+}
 Say "  python: $python" 'DarkGray'
 
 $fakeComfy = $null
@@ -781,16 +805,14 @@ try {
                 $fileRunKeys += "'file:$sha'"
             }
         }
-        if ($script:Mysql -and $fileRunKeys.Count -gt 0) {
-            & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
-                --database=comfy_hub -e "DELETE FROM capture_runs WHERE run_key IN ($($fileRunKeys -join ','))" 2>&1 | Out-Null
+        if ((Test-SqliteAccess) -and $fileRunKeys.Count -gt 0) {
+            Invoke-Sqlite "DELETE FROM capture_runs WHERE run_key IN ($($fileRunKeys -join ','))" | Out-Null
         }
-        if ($script:Mysql) {
+        if (Test-SqliteAccess) {
             $keys = @()
             if ($createdRunKey) { $keys += "'$createdRunKey'" }
             if ($keys.Count -gt 0) {
-                & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
-                    --database=comfy_hub -e "DELETE FROM capture_runs WHERE run_key IN ($($keys -join ','))" 2>&1 | Out-Null
+                Invoke-Sqlite "DELETE FROM capture_runs WHERE run_key IN ($($keys -join ','))" | Out-Null
             }
         }
         Say ("  已删除 {0} 个产物 / {1} 条提示词 / 运行记录" -f `

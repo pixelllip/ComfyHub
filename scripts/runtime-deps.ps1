@@ -3,20 +3,21 @@
     ComfyHub 运行时依赖体检：发布包/源码树跑起来到底还需要目标机器装什么。
 
 .DESCRIPTION
-    发布包（scripts\pack-release.ps1）只带了**两样**能带走的东西：
+    发布包（scripts\pack-release.ps1）只带了**一样**能带走的东西：
       · Java 运行时   <根>\jre        —— 后端是 Kotlin/JVM 程序
-      · 便携版 MySQL  <根>\mysql      —— 数据库本体
-    这两样之外，还有几样**必须目标机器自己装**，缺一个服务就起不来，
-    而失败现场往往只是一句没头没尾的报错（"mysqld 启动超时" / "不是内部或外部命令"）。
+    （P2/2026-09-23 起数据库是 **SQLite**：xerial 驱动自带引擎，不再需要 MySQL 本体、
+     也不再需要它依赖的 VC++ 运行时 —— 发布包因此少了 300MB。）
+    这之外还有几样**必须目标机器自己装**，缺一个服务就起不来，
+    而失败现场往往只是一句没头没尾的报错（"不是内部或外部命令"）。
     这个文件把它们列清楚，并在启动失败时给出可操作的安装提示。
 
     本文件被 comfyhub.ps1 dot-source（跟 silent-process.ps1 同一套路，不做独立模块）。
 
     依赖清单：
-      1. PowerShell 7 (pwsh)            —— 必需，且 **Windows 自带的 powershell.exe 5.1 不算数**
-      2. VC++ 2015-2022 x64 可再发行组件 —— mysqld.exe 依赖 vcruntime140.dll / msvcp140.dll
-      3. Java 21 运行时                  —— 发布包自带 <根>\jre；源码树里要装 JDK 21~23
-      4. MySQL 本体                      —— 发布包自带 <根>\mysql；源码树里靠 COMFYHUB_MYSQL_HOME
+      1. PowerShell 7 (pwsh)            —— **必需**，且 Windows 自带的 powershell.exe 5.1 不算数
+      2. Java 21 运行时                  —— **必需**，发布包自带 <根>\jre；源码树里要装 JDK 21~23
+      3. VC++ 2015-2022 x64 可再发行组件 —— 可选：只有搬迁老 MySQL 库时才用得上
+      4. MySQL 本体                      —— 可选：同上，只有 `comfyhub.ps1 up` 遇到老库自动搬迁时才拉起来
 #>
 
 function Test-VcRuntime {
@@ -55,21 +56,26 @@ function Get-RuntimeChecks {
     # server.ps1 互相调用），Windows 自带的 powershell.exe(5.1) 满足不了这些调用。
     $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
     $checks += [pscustomobject]@{
-        Name   = 'PowerShell 7 (pwsh)'
-        Ok     = [bool]$pwshCmd
-        Detail = $(if ($pwshCmd) { $pwshCmd.Source } else { 'PATH 里找不到 pwsh' })
-        Why    = 'App 用它执行 scripts\comfyhub.ps1；脚本之间也互相调 pwsh（Windows 自带的 5.1 不够）'
-        Hint   = 'winget install --id Microsoft.PowerShell --source winget    （或 https://aka.ms/powershell）'
+        Name     = 'PowerShell 7 (pwsh)'
+        Ok       = [bool]$pwshCmd
+        Required = $true
+        Detail   = $(if ($pwshCmd) { $pwshCmd.Source } else { 'PATH 里找不到 pwsh' })
+        Why      = 'App 用它执行 scripts\comfyhub.ps1；脚本之间也互相调 pwsh（Windows 自带的 5.1 不够）'
+        Hint     = 'winget install --id Microsoft.PowerShell --source winget    （或 https://aka.ms/powershell）'
     }
 
-    # ---- 2) VC++ 运行时（mysqld 的硬依赖）--------------------------------
+    # ---- 2) VC++ 运行时（**只有搬迁老 MySQL 库那一步**才需要）-------------
+    # P2（2026-09-23）起后端用 SQLite（xerial 自带引擎，纯 Java + 自带的本地库），
+    # 发布包里连 mysql/ 都没有了 —— 所以这一项**不再是必需项**，
+    # 只在"老库还在、还想搬迁"的时候才有意义。缺了它不该报红。
     $vcOk = Test-VcRuntime -MySqlBinDir $MySqlBinDir
     $checks += [pscustomobject]@{
-        Name   = 'VC++ 2015-2022 x64 运行时'
-        Ok     = $vcOk
-        Detail = $(if ($vcOk) { 'vcruntime140 / msvcp140 都在' } else { '缺 vcruntime140.dll / msvcp140.dll' })
-        Why    = 'mysqld.exe 是 MSVC 编的，缺这几个 DLL 会直接起不来（错误只写在 mysql-error.log 里）'
-        Hint   = '装 "Microsoft Visual C++ 2015-2022 Redistributable (x64)"：winget install --id Microsoft.VCRedist.2015+.x64'
+        Name     = 'VC++ 2015-2022 x64 运行时'
+        Ok       = $vcOk
+        Required = $false
+        Detail   = $(if ($vcOk) { 'vcruntime140 / msvcp140 都在' } else { '缺 vcruntime140.dll / msvcp140.dll（只有搬迁老 MySQL 库才用得上）' })
+        Why      = 'mysqld.exe 是 MSVC 编的，缺这几个 DLL 会直接起不来（错误只写在 mysql-error.log 里）。P2 起后端用 SQLite，只有 `comfyhub.ps1 up` 遇到老库数据要自动搬迁时才需要它'
+        Hint     = '装 "Microsoft Visual C++ 2015-2022 Redistributable (x64)"：winget install --id Microsoft.VCRedist.2015+.x64'
     }
 
     # ---- 3) Java 运行时 --------------------------------------------------
@@ -121,21 +127,23 @@ function Get-RuntimeChecks {
         } catch { }
     }
     $checks += [pscustomobject]@{
-        Name   = 'Java 21 运行时'
-        Ok     = $javaOk
-        Detail = $javaDetail
-        Why    = 'Kotlin 后端跑在 JVM 上'
-        Hint   = '发布包自带 <根>\jre；源码树里请装 JDK 21~23，或用 -JdkHome / COMFYHUB_JDK_HOME 指定'
+        Name     = 'Java 21 运行时'
+        Ok       = $javaOk
+        Required = $true
+        Detail   = $javaDetail
+        Why      = 'Kotlin 后端跑在 JVM 上'
+        Hint     = '发布包自带 <根>\jre；源码树里请装 JDK 21~23，或用 -JdkHome / COMFYHUB_JDK_HOME 指定'
     }
 
-    # ---- 4) MySQL 本体 ---------------------------------------------------
+    # ---- 4) MySQL 本体（**只有搬迁老库那一步**才需要）--------------------
     $mysqldOk = $MySqlBinDir -and (Test-Path -LiteralPath (Join-Path $MySqlBinDir 'mysqld.exe'))
     $checks += [pscustomobject]@{
-        Name   = 'MySQL 服务端 (mysqld.exe)'
-        Ok     = [bool]$mysqldOk
-        Detail = $(if ($mysqldOk) { Join-Path $MySqlBinDir 'mysqld.exe' } else { '找不到 mysqld.exe' })
-        Why    = '数据库本体，免安装但必须存在'
-        Hint   = '发布包自带 <根>\mysql；源码树里设 COMFYHUB_MYSQL_HOME 指向 MySQL 解压目录'
+        Name     = 'MySQL 服务端 (mysqld.exe)'
+        Ok       = [bool]$mysqldOk
+        Required = $false
+        Detail   = $(if ($mysqldOk) { Join-Path $MySqlBinDir 'mysqld.exe' } else { '找不到 mysqld.exe（只有搬迁老库才用得上）' })
+        Why      = 'P2 起后端用 SQLite 文件（<根>\.db\comfyhub.db），不再需要 MySQL。只有把老 MySQL 数据搬进新库那一次（scripts\server.ps1 migrate）才需要它'
+        Hint     = '要搬迁就设 COMFYHUB_MYSQL_HOME 指向 MySQL 解压目录；全新安装不需要装 MySQL'
     }
 
     return $checks
@@ -152,12 +160,13 @@ function Show-RuntimeReport {
     )
 
     $checks = Get-RuntimeChecks -ProjectRoot $ProjectRoot -MySqlBinDir $MySqlBinDir -MySqlHome $MySqlHome -Jdk $Jdk
-    $bad = @($checks | Where-Object { -not $_.Ok })
+    # 只有**必需项**缺失才算"问题"：MySQL / VC++ 现在是"只给搬迁旧库用"的可选项
+    $bad = @($checks | Where-Object { -not $_.Ok -and $_.Required })
 
     foreach ($c in $checks) {
         if ($OnlyProblems -and $c.Ok) { continue }
-        $mark = if ($c.Ok) { 'OK  ' } else { '缺失' }
-        $color = if ($c.Ok) { 'Green' } else { 'Red' }
+        $mark = if ($c.Ok) { 'OK  ' } elseif ($c.Required) { '缺失' } else { '可选' }
+        $color = if ($c.Ok) { 'Green' } elseif ($c.Required) { 'Red' } else { 'DarkGray' }
         Write-Host ("  {0,-28} {1}  {2}" -f $c.Name, $mark, $c.Detail) -ForegroundColor $color
     }
 
@@ -186,7 +195,7 @@ function Show-RuntimeFailureHints {
     )
 
     $checks = Get-RuntimeChecks -ProjectRoot $ProjectRoot -MySqlBinDir $MySqlBinDir -MySqlHome $MySqlHome -Jdk $Jdk
-    $bad = @($checks | Where-Object { -not $_.Ok })
+    $bad = @($checks | Where-Object { -not $_.Ok -and $_.Required })
     if ($bad.Count -eq 0) { return $false }
 
     Write-Host ''

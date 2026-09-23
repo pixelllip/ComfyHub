@@ -86,17 +86,30 @@ function Find-Python {
     return $null
 }
 
-function Find-MysqlExe {
-    $cands = @()
-    if ($env:COMFYHUB_MYSQL_HOME) { $cands += (Join-Path $env:COMFYHUB_MYSQL_HOME 'bin\mysql.exe') }
-    foreach ($root in @('D:\tools\mysql', 'C:\tools\mysql')) {
-        if (-not (Test-Path $root)) { continue }
-        $cands += (Join-Path $root 'bin\mysql.exe')
-        Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue |
-            ForEach-Object { $cands += (Join-Path $_.FullName 'bin\mysql.exe') }
-    }
-    return ($cands | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1)
+# ---------------------------------------------------------------------------
+#  直接查库
+#  P2（2026-09-23）起后端写的是 **SQLite 单文件** `<项目根>\.db\comfyhub.db`；
+#  还去问 mysql.exe 只会得到"什么都没有"（老库停在搬迁那一刻的样子）。
+#  用 python 的 sqlite3（本脚本本来就把 python 当前置条件），读 + 删都走它。
+# ---------------------------------------------------------------------------
+$script:SqliteDb = Join-Path $ProjectRoot '.db\comfyhub.db'
+
+function Invoke-Sqlite([string]$Sql) {
+    if (-not $script:Python -or -not (Test-Path $script:SqliteDb)) { return @() }
+    $py = @'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("PRAGMA busy_timeout=5000")
+for row in con.execute(sys.argv[2]):
+    print("\t".join("" if v is None else str(v) for v in row))
+con.commit()
+con.close()
+'@
+    $out = & $script:Python -c $py $script:SqliteDb $Sql 2>$null
+    return @($out)
 }
+
+function Test-SqliteAccess { [bool]$script:Python -and (Test-Path $script:SqliteDb) }
 
 # ---------------------------------------------------------------------------
 
@@ -109,6 +122,10 @@ $python = Find-Python
 if (-not $python) {
     Say '  找不到 python（可用环境变量 COMFYHUB_PYTHON 指定）。' 'Red'
     exit 1
+}
+$script:Python = $python
+if (-not (Test-SqliteAccess)) {
+    Say "  警告: 查不到 SQLite 库 $script:SqliteDb —— 遗留数据清理会跳过" 'Yellow'
 }
 Say "  python: $python" 'DarkGray'
 
@@ -137,8 +154,8 @@ Get-ChildItem $OutDir -File -ErrorAction SilentlyContinue | Remove-Item -Force -
 # 于是只要上一轮被 Ctrl+C 打断过（清理在 finally 里，没跑到），这一轮的第 1 幕就会
 # 「/history 明明有一条、轮询却 checked=0」—— 表现为"捕获全挂"，但根因只是一个残留行。
 # 这个坑在 `docs/pitfalls.md` 里记着，脚本自己先兜住它。
-$script:Mysql = Find-MysqlExe
-if ($script:Mysql) {
+$script:SqliteReady = Test-SqliteAccess
+if ($script:SqliteReady) {
     $ownKeys = "'e2e-capture-0001'", "'e2e-push-0001'"
     # 三张测试图先按同样的方式生成一遍，算出 hash —— 判重是按 **sha256** 走的
     # （`media_assets.sha256`），上一轮没清干净的产物会让这一轮的"目录导入"全都判成重复：
@@ -157,8 +174,7 @@ if ($script:Mysql) {
     }
     $staleMedia = 0
     if ($staleHashes.Count -gt 0) {
-        $ids = & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
-            --database=comfy_hub -N -B -e "SELECT GROUP_CONCAT(id) FROM media_assets WHERE sha256 IN ($($staleHashes -join ','));" 2>$null
+        $ids = Invoke-Sqlite "SELECT group_concat(id) FROM media_assets WHERE sha256 IN ($($staleHashes -join ','))"
         if ($ids -and "$ids" -ne 'NULL') {
             foreach ($id in ("$ids" -split ',')) {
                 if (-not $id) { continue }
@@ -167,8 +183,7 @@ if ($script:Mysql) {
         }
     }
     $keyList = $ownKeys -join ','
-    $stalePrompts = & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
-        --database=comfy_hub -N -B -e "SELECT GROUP_CONCAT(id) FROM prompts WHERE source_ref IN ($keyList);" 2>$null
+    $stalePrompts = Invoke-Sqlite "SELECT group_concat(id) FROM prompts WHERE source_ref IN ($keyList)"
     $staleCount = 0
     if ($stalePrompts -and "$stalePrompts" -ne 'NULL') {
         foreach ($id in ("$stalePrompts" -split ',')) {
@@ -176,8 +191,7 @@ if ($script:Mysql) {
             try { Invoke-Api 'DELETE' "/api/prompts/$id" $null | Out-Null; $staleCount++ } catch { }
         }
     }
-    & $script:Mysql --host=127.0.0.1 --port=3307 --user=comfyhub --password=comfyhub `
-        --database=comfy_hub -e "DELETE FROM capture_runs WHERE run_key IN ($keyList);" 2>&1 | Out-Null
+    Invoke-Sqlite "DELETE FROM capture_runs WHERE run_key IN ($keyList)" | Out-Null
     if ($staleCount -gt 0 -or $staleMedia -gt 0) {
         Say "  已清掉上一轮遗留的 $staleCount 条测试提示词 / $staleMedia 个产物与运行记录" 'DarkGray'
     }
@@ -373,8 +387,7 @@ try {
         Say ("  已删除 {0} 个产物 / {1} 条提示词" -f ($script:CreatedMediaIds | Select-Object -Unique).Count, ($script:CreatedPromptIds | Select-Object -Unique).Count) 'DarkGray'
 
         # 运行记录只能从库里删（顺便清掉导入产生的 import:<sha> 记录）
-        $mysql = Find-MysqlExe
-        if ($mysql) {
+        if (Test-SqliteAccess) {
             $keys = @("'e2e-capture-0001'", "'e2e-push-0001'")
             foreach ($f in @($capturePng, $importPng, $pushPng)) {
                 if (Test-Path $f) {
@@ -382,8 +395,7 @@ try {
                     $keys += "'import:$($sha.Substring(0, 40))'"
                 }
             }
-            $sql = "DELETE FROM capture_runs WHERE run_key IN ($($keys -join ','))"
-            & $mysql --protocol=TCP -h 127.0.0.1 -P 3307 -u comfyhub --password=comfyhub comfy_hub -e $sql 2>&1 | Out-Null
+            Invoke-Sqlite "DELETE FROM capture_runs WHERE run_key IN ($($keys -join ','))" | Out-Null
             Say '  已清理测试产生的运行记录' 'DarkGray'
         }
         Remove-Item $OutDir -Recurse -Force -ErrorAction SilentlyContinue

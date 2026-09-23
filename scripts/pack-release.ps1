@@ -1,13 +1,12 @@
 <#
 .SYNOPSIS
-    ComfyHub 发布包打包：把 Flutter App + Kotlin 后端 + 便携版 MySQL + JRE 装配成一个可以直接给别人的目录。
+    ComfyHub 发布包打包：把 Flutter App + Kotlin 后端 + JRE 装配成一个可以直接给别人的目录。
 
 .DESCRIPTION
     之前「出正式产物」只有 scripts\autorun-app.ps1：它只跑 flutter build windows --release，
-    产物就是 build\windows\x64\runner\Release\ ——里面**只有 App**，缺两样要紧的东西：
+    产物就是 build\windows\x64\runner\Release\ ——里面**只有 App**，缺一件要紧的东西：
 
-      · Kotlin 后端：在 server\build\install\ 下，是 Gradle 的构建中间产物，不会跟着 Release 目录走；
-      · MySQL：mysqld.exe 只在 D:\tools\mysql 这种**本机绝对路径**下找，换台机器直接崩。
+      · Kotlin 后端：在 server\build\install\ 下，是 Gradle 的构建中间产物，不会跟着 Release 目录走。
 
     结果就是"把 Release 目录拷给别人"跑不起来。本脚本按 packaging\manifest.json 这份
     **软件打包清单**把它们装配到同一个目录里。
@@ -22,20 +21,23 @@
 
     发布包是便携式的（免安装、免管理员）：整个目录就是运行时根目录，可整体搬走。
     可写数据都在根目录内：
-      · 数据库实例  <根>\.mysql     （可用 mysql.ps1 move / -DataDir 搬走）
+      · 数据库      <根>\.db       （SQLite 单文件 comfyhub.db + 它自己的 -wal / -shm）
       · 生成产物    <根>\storage    （后端按 COMFYHUB_STORAGE 写这里）
       · 日志 / PID  <根>\.run
     只读的运行时件：
       · 后端        <根>\server     （gradle installDist 的 bin\ + lib\）
-      · MySQL       <根>\mysql
       · JRE         <根>\jre        （后端是 JVM 程序，目标机器不假设装了 JDK）
       · 脚本        <根>\scripts    （App 启动时调它拉起服务）
-      · SQL         <根>\db         （首次初始化要导入 schema.sql）
+      · SQL         <根>\db         （schema.sqlite.sql 是现在的真源）
+
+    注意（P2，2026-09-23）：数据库是 **SQLite**（驱动自带引擎），
+    所以发布包**不再携带便携版 MySQL**（少约 300MB），也不再需要 VC++ 运行时。
+    老 MySQL 只在"把老库数据搬进 SQLite"那一步（scripts\server.ps1 migrate）才用得到。
 
 .EXAMPLE
     pwsh -File scripts\pack-release.ps1
     pwsh -File scripts\pack-release.ps1 -Zip
-    pwsh -File scripts\pack-release.ps1 -SkipApp -SkipJre -Clean      # 只重装后端 + MySQL，快速迭代
+    pwsh -File scripts\pack-release.ps1 -SkipApp -SkipJre -Clean      # 只重装后端，快速迭代
     pwsh -File scripts\pack-release.ps1 -OutDir 'D:\dist\ComfyHub'    # 另存一份干净的独立副本
 #>
 [CmdletBinding()]
@@ -47,21 +49,19 @@ param(
     # 装配完再打一个 zip（几百 MB，会慢一会儿）
     [switch]$Zip,
 
-    # 跳过某几件（迭代时用：MySQL / JRE 一次装好后不用每次重拷）
+    # 跳过某几件（迭代时用：JRE 一次装好后不用每次重拷）
     [switch]$SkipApp,
     [switch]$SkipBackend,
-    [switch]$SkipMysql,
     [switch]$SkipJre,
 
-    # 不裁剪（MySQL 全量拷 = 约 990MB；默认裁剪后约 400MB）
+    # 不裁剪（留给还带 prune 规则的组件：目前是 jre 之外的可选组件）
     [switch]$NoPrune,
 
     # 装配前清空输出目录（默认只增量覆盖；改裁剪规则后建议带上）
     [switch]$Clean,
 
-    # 显式指定工具链位置（默认按 scripts\server.ps1 / mysql.ps1 同一套顺序解析）
-    [string]$JdkHome = $env:COMFYHUB_JDK_HOME,
-    [string]$MySqlHome = $env:COMFYHUB_MYSQL_HOME
+    # 显式指定工具链位置（默认按 scripts\server.ps1 同一套顺序解析）
+    [string]$JdkHome = $env:COMFYHUB_JDK_HOME
 )
 
 $ErrorActionPreference = 'Stop'
@@ -97,9 +97,8 @@ function Get-DirSize([string]$Path) {
 
 # ---------------------------------------------------------------------------
 #  工具链解析
-#  与 scripts\server.ps1 的 Resolve-Jdk、scripts\mysql.ps1 的 Resolve-MySqlHome
-#  保持同一套顺序（本项目刻意不引共享模块，见 mysql.ps1 顶部的说明）。
-#  差别只有一处：**发布包内自带的 <根>\jre、<根>\mysql 优先**，
+#  与 scripts\server.ps1 的 Resolve-Jdk 保持同一套顺序（本项目刻意不引共享模块）。
+#  差别只有一处：**发布包内自带的 <根>\jre 优先**，
 #  这样脚本在装配好的发布包里跑时用的就是包里那份，而不是开发机的 D:\tools。
 # ---------------------------------------------------------------------------
 
@@ -136,24 +135,6 @@ function Resolve-Jdk {
             $ok = Test-Jdk $p.Path
             if ($ok) { return $ok }
         }
-    }
-    return $null
-}
-
-function Resolve-MySqlHome {
-    param([string]$Explicit)
-
-    if ($Explicit -and (Test-Path (Join-Path $Explicit 'bin\mysqld.exe'))) { return $Explicit }
-
-    $candidates = @(
-        (Join-Path $ProjectRoot 'mysql'),        # 发布包自带的便携版
-        'D:\tools\mysql\mysql-8.4.3-winx64',
-        'C:\tools\mysql\mysql-8.4.3-winx64'
-    ) + @(Get-ChildItem -Path 'D:\tools\mysql', 'C:\tools\mysql' -Directory -ErrorAction SilentlyContinue |
-            ForEach-Object { $_.FullName })
-
-    foreach ($c in $candidates) {
-        if ($c -and (Test-Path (Join-Path $c 'bin\mysqld.exe'))) { return $c }
     }
     return $null
 }
@@ -350,7 +331,7 @@ Say "  输出: $OutDir" 'DarkGray'
 # -Clean 只清掉"我们自己装进去的东西"。
 # 默认输出目录就是 flutter 的产物目录，整个 Remove-Item 会把 viewer.exe /
 # flutter_windows.dll 一起删掉 —— 那不叫清理，那叫把 App 弄没了。
-# 运行期数据（.mysql 库、storage 产物、.run 日志）**不动**：那是用户的数据，不是装配产物。
+# 运行期数据（.db 库、storage 产物、.run 日志）**不动**：那是用户的数据，不是装配产物。
 if ($Clean) {
     Say '  清理上次装进去的东西（Flutter 自己的产物保留不动）…' 'DarkGray'
     $owned = New-Object System.Collections.ArrayList
@@ -359,6 +340,9 @@ if ($Clean) {
     }
     [void]$owned.Add('packaging')
     [void]$owned.Add('BUILD-INFO.txt')
+    # P2 之前清单里有 `mysql` 组件，老发布目录里还留着那 300MB —— 清单里已经没有它了，
+    # 只按清单清会把它永久留下来。这里显式补一刀（就地装配时那些目录本来就是我们装的）。
+    [void]$owned.Add('mysql')
     foreach ($e in ($owned | Select-Object -Unique)) {
         $p = Join-Path $OutDir $e
         if (Test-Path -LiteralPath $p) {
@@ -369,7 +353,7 @@ if ($Clean) {
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-$skipped = @{ app = $SkipApp; backend = $SkipBackend; mysql = $SkipMysql; jre = $SkipJre }
+$skipped = @{ app = $SkipApp; backend = $SkipBackend; jre = $SkipJre }
 $results = @()
 
 foreach ($c in $manifest.components) {
@@ -411,14 +395,9 @@ foreach ($c in $manifest.components) {
                 $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = (Get-DirSize $target); dropped = 0 }
             }
             'mysql_portable' {
-                # 别把变量起名 $home：PowerShell 里 $HOME 是只读自动变量（大小写不敏感），
-                # 赋值会直接抛 "Cannot overwrite variable HOME because it is read-only or constant"。
-                $mysqlSrc = Resolve-MySqlHome -Explicit $MySqlHome
-                if (-not $mysqlSrc) { throw '找不到便携版 MySQL。用 -MySqlHome / COMFYHUB_MYSQL_HOME 指定解压目录。' }
-                Say "  来源: $mysqlSrc" 'DarkGray'
-                $prune = if ($NoPrune) { @() } else { @($c.prune) }
-                $r = Copy-Tree -Source $mysqlSrc -Dest $target -Prune $prune
-                $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = $r.Bytes; dropped = $r.DroppedBytes }
+                # P2（2026-09-23）起清单里已经没有这个组件（数据库换成 SQLite）。
+                # 分支保留成一句明确报错：万一有人把清单改回去，这里要能说清为什么不该有。
+                throw '清单里不该再有 mysql_portable：P2 起数据库是 SQLite，发布包不再携带 MySQL。要搬迁老库请用 scripts\server.ps1 migrate。'
             }
             'copy_tree' {
                 $src = Join-Path $ProjectRoot $c.source
@@ -454,12 +433,10 @@ Step '自检（发布包里的关键文件）'
 $requiredFiles = @(
     @{ p = 'viewer.exe';                          what = 'Flutter App' },
     @{ p = 'scripts\comfyhub.ps1';                what = '统一入口脚本' },
-    @{ p = 'scripts\mysql.ps1';                   what = 'MySQL 脚本' },
     @{ p = 'scripts\server.ps1';                  what = '后端脚本' },
     @{ p = 'server\bin\comfy-hub-server.bat';     what = 'Kotlin 后端启动脚本' },
-    @{ p = 'mysql\bin\mysqld.exe';                what = 'MySQL 服务端' },
     @{ p = 'jre\bin\java.exe';                    what = 'Java 运行时' },
-    @{ p = 'db\schema.sql';                       what = '库表结构 SQL' }
+    @{ p = 'db\schema.sqlite.sql';                what = 'SQLite 库表结构（P2 起的真源）' }
 )
 
 $missing = @()
@@ -478,8 +455,8 @@ $jarCount = @(Get-ChildItem (Join-Path $OutDir 'server\lib') -Filter '*.jar' -Er
 if ($jarCount -gt 0) { Say ("  {0,-34} OK ({1} 个 jar)" -f 'server\lib\*.jar', $jarCount) 'Green' }
 else { Say ("  {0,-34} 缺失" -f 'server\lib\*.jar') 'Red'; $missing += 'server\lib\*.jar' }
 
-# 可写目录要预先建好，但里面不留东西
-foreach ($d in @('.mysql', 'storage', '.run')) {
+# 可写目录要预先建好，但里面不留东西（P2 起数据库是 .db\ 下的 SQLite 单文件）
+foreach ($d in @('.db', 'storage', '.run')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $OutDir $d) | Out-Null
 }
 
@@ -509,7 +486,7 @@ if ([System.IO.Path]::GetFullPath($OutDir).TrimEnd('\') -eq [System.IO.Path]::Ge
     $inPlaceNote = @"
 
 注意       : 本目录就是 flutter build 的产物目录（默认就地装配）。
-             跑 flutter clean / 重新构建会把它整个清空，后端、MySQL、JRE 会一起没，
+             跑 flutter clean / 重新构建会把它整个清空，后端、JRE 会一起没，
              那时重新执行一次 scripts\pack-release.ps1 即可。
 "@
 }
@@ -523,15 +500,15 @@ ComfyHub 发布包
 运行时布局 : 便携式 —— 整个目录即根目录，可整体移动，免安装、免管理员
 $reqLines
 可写数据（都在根目录内）:
-  .mysql\     数据库实例（data\ + my.ini + 日志）
+  .db\        数据库（SQLite 单文件 comfyhub.db + 它自己的 -wal / -shm）
   storage\    生成产物（后端按 COMFYHUB_STORAGE 写入）
   .run\       后端日志 / PID
 
 怎么用:
-  1. 双击 viewer.exe —— 它会自动把 MySQL + 后端拉起来（首次会自动初始化数据库，稍等一会儿）
+  1. 双击 viewer.exe —— 它会自动把后端拉起来（首次启动会自己建库，稍等一会儿）
   2. 或命令行: pwsh -File scripts\comfyhub.ps1 up -WithApp
   3. 起不来先体检: pwsh -File scripts\comfyhub.ps1 doctor
-  4. 换数据库存放位置: pwsh -File scripts\mysql.ps1 move -DataDir <新位置>
+  4. 备份数据库: 停掉后端，把 .db 整个目录拷走（-wal / -shm 要一起）
 $inPlaceNote
 "@
 Set-Content -Path (Join-Path $OutDir 'BUILD-INFO.txt') -Value $buildInfo -Encoding utf8

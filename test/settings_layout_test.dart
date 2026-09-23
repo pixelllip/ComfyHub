@@ -115,7 +115,7 @@ void main() {
     await _pumpSettings(tester);
 
     // 1) 分列：自动捕获排到了右边那一列
-    final left = tester.getTopLeft(find.text('本地服务（MySQL + 后端）'));
+    final left = tester.getTopLeft(find.text('本地服务（后端 + 数据库）'));
     final right = tester.getTopLeft(find.text('ComfyUI 自动捕获'));
     expect(right.dx, greaterThan(left.dx + 100), reason: '宽窗口应该分两列');
 
@@ -141,7 +141,7 @@ void main() {
 
     await _pumpSettings(tester);
 
-    final local = tester.getTopLeft(find.text('本地服务（MySQL + 后端）'));
+    final local = tester.getTopLeft(find.text('本地服务（后端 + 数据库）'));
     final ai = tester.getTopLeft(find.text('AI 模型与凭据'));
     final capture = tester.getTopLeft(find.text('ComfyUI 自动捕获'));
 
@@ -190,7 +190,7 @@ void main() {
   // 用户 bug（窄窗口）："控件显示不全"。
   //
   // 本地服务那张卡片里有三组**按钮**（原来是裸 `Row`）：[自动探测][保存]、
-  // [保存][迁移现有数据到该目录…]、[保存并测试连接][恢复默认]。320px 窗口下
+  // [保存][迁移老库到该目录…]、[保存并测试连接][恢复默认]。320px 窗口下
   // 卡片内容宽 288，最宽的那组自然宽度就有 ~295 → `Row` 直接
   // `RenderFlex overflowed`（实测溢出 7.1px），右边那枚按钮被裁掉一半。
   // 现在换 `Wrap`：放不下就折行，按钮一个都不少。
@@ -205,7 +205,7 @@ void main() {
     expect(tester.takeException(), isNull, reason: '窄窗口下设置页不许 RenderFlex overflow');
     for (final label in const [
       '自动探测',
-      '迁移现有数据到该目录…',
+      '迁移老库到该目录…',
       '保存并测试连接',
       '恢复默认',
     ]) {

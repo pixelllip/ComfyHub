@@ -237,7 +237,7 @@ class _StartupView extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '正在自动准备本地服务：MySQL（127.0.0.1:3307）→ Kotlin 后端（127.0.0.1:8080）。'
+                  '正在自动准备本地服务：数据库（本地 SQLite 文件）→ Kotlin 后端。'
                   '首次启动或需要构建后端时会慢一些。',
                   style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
                 ),
