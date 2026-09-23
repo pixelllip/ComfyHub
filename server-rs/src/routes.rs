@@ -132,8 +132,11 @@ async fn get_stats(State(state): State<AppState>) -> Result<Json<serde_json::Val
     Ok(Json(crate::media_write::stats(&state)?))
 }
 
-async fn media_thumb(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, ApiError> {
-    Err(crate::media::not_migrated("缩略图"))
+async fn media_thumb(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<axum::response::Response, ApiError> {
+    crate::media::media_thumb(state, id).await
 }
 
 async fn media_poster(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, ApiError> {

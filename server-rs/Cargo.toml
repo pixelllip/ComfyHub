@@ -20,7 +20,13 @@ serde_json = "1"
 tower-http = { version = "0.7", features = ["cors", "trace"] }
 # 文件流：`ReaderStream` 把 `tokio::fs::File` 变成 `Body::from_stream` 能吃的东西
 tokio-util = { version = "0.7", features = ["io"] }
+# 缩略图：替掉 Kotlin 的 ImageIO + TwelveMonkeys(WebP)。
+# 只开真正要用的解码器 —— 每多一个 feature 就多一份编译时间与潜在 CVE 面；
+# avif 刻意不开：没有解码器时按"回退原图"处理（与 Kotlin 的行为一致）。
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+# 集成测试要自己造一张真图（缩略图那条链路的输入必须真能解码）
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

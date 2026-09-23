@@ -469,3 +469,59 @@ mod tests {
         assert!(parse_tag_param(None).is_empty());
     }
 }
+// ---------------------------------------------------------------------------
+//  缩略图（P4 第 5 步）
+// ---------------------------------------------------------------------------
+
+/// `GET /api/media/{id}/thumb` —— 图片缩略图（生成后缓存；**失败回退原图**）。
+///
+/// 与 Kotlin `MediaRoutes` 的 `/thumb` 分支逐条对齐：
+///  1. **非图片 → 204**（前端据此不放缩略图，而不是显示破图）；
+///  2. 缩略图不存在就现生成（`<storage>/thumbs/<id>.jpg`）；生成器**不放大**、铺深灰底；
+///  3. 生成失败（没有解码器 / 文件坏了）→ **回退原图**（宁可给大图，也不要破图或 500）；
+///  4. 命中缓存时带 `X-Thumbnail: 1`（与 Kotlin 同一个头，前端/e2e 都认它）。
+pub async fn media_thumb(state: AppState, id: i64) -> Result<Response, ApiError> {
+    let media = get(&state, id)?;
+    if media.kind != "IMAGE" {
+        return Ok(Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(Body::empty())
+            .unwrap());
+    }
+    let source = resolve_media(state.media_dir(), &media.stored_name)
+        .ok_or_else(|| ApiError::not_found("文件已丢失"))?;
+
+    let thumb = crate::thumbs::thumb_path(state.media_dir(), id);
+    let mut from_cache = true;
+    if !thumb.is_file() {
+        from_cache = false;
+        // 生成失败不算错：下面回退原图（与 Kotlin 的 `if (!writeThumbnail(...))` 分支一致）
+        let _ = crate::thumbs::write_thumbnail(&source, &thumb);
+    }
+
+    let hit_thumb = thumb.is_file();
+    let (path, mime, name) = if hit_thumb {
+        (thumb, "image/jpeg".to_string(), format!("thumb-{id}.jpg"))
+    } else {
+        let mime = media
+            .mime_type
+            .clone()
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        (source, mime, media.original_name.clone())
+    };
+
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|e| ApiError::internal(format!("读取缩略图失败：{e}")))?;
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::CONTENT_LENGTH, bytes.len().to_string())
+        .header(header::CONTENT_DISPOSITION, inline_disposition(&name));
+    if hit_thumb {
+        // 命中缓存 = 1（这是"这次没现生成"的意思，与 Kotlin 的 `X-Thumbnail: 1` 同义）
+        builder = builder.header("X-Thumbnail", if from_cache { "1" } else { "0" });
+    }
+    Ok(builder.body(Body::from(bytes)).unwrap())
+}

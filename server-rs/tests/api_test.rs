@@ -756,10 +756,85 @@ async fn media_file_rejects_path_traversal_and_missing_files() {
     assert!(body["message"].as_str().unwrap().contains("文件已丢失"));
 }
 
+/// 缩略图：真图能生成 JPEG 并缓存；非图片 204；坏图回退原图；poster/upload 仍是 501。
 #[tokio::test]
-async fn media_thumb_poster_upload_are_explicitly_501() {
+async fn media_thumb_generates_a_cached_jpeg_and_falls_back_honestly() {
     let state = state();
-    for uri in ["/api/media/100/thumb", "/api/media/100/poster", "/api/media/100/prompt"] {
+    let media_dir = state.media_dir().to_path_buf();
+
+    // 夹具换成一张**真图**（800×400），不然测的是"坏图回退"那条分支
+    let mut img = image::RgbImage::new(800, 400);
+    for (_, _, px) in img.enumerate_pixels_mut() {
+        *px = image::Rgb([10, 200, 30]);
+    }
+    img.save(media_dir.join("a.png")).unwrap();
+
+    let response = router_for(state.clone())
+        .oneshot(Request::builder().uri("/api/media/100/thumb").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
+    assert!(response.headers().get("x-thumbnail").is_some(), "命中缓存的标记要带上");
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..2], &[0xFF, 0xD8], "JPEG 魔数（说明真的编码过，不是把原图透传）");
+
+    // 落盘缓存 + 最长边压到 512
+    let thumb_path = media_dir.parent().unwrap().join("thumbs").join("100.jpg");
+    assert!(thumb_path.is_file(), "缩略图要落盘（否则每次都重算）");
+    let out = image::open(&thumb_path).unwrap();
+    assert_eq!((out.width(), out.height()), (512, 256));
+
+    // 非图片 → 204（前端据此不放缩略图）
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO media_assets (id, kind, original_name, stored_name, mime_type)
+                 VALUES (101, 'VIDEO', 'v.mp4', 'v.mp4', 'video/mp4')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+    std::fs::write(media_dir.join("v.mp4"), b"not really a video").unwrap();
+    let (status, _) = get_json(router_for(state.clone()), "/api/media/101/thumb").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // 坏图（后缀是 png、内容不是）→ **回退原图**（200 + 原 MIME + 原字节），不是 500
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO media_assets (id, kind, original_name, stored_name, mime_type)
+                 VALUES (102, 'IMAGE', 'broken.png', 'broken.png', 'image/png')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+    std::fs::write(media_dir.join("broken.png"), b"definitely not a png").unwrap();
+    let response = router_for(state.clone())
+        .oneshot(Request::builder().uri("/api/media/102/thumb").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+    assert!(response.headers().get("x-thumbnail").is_none());
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], b"definitely not a png");
+
+    // 文件丢了 → 404（不是 500，也不是空白图）
+    state
+        .with(|conn| {
+            conn.execute("UPDATE media_assets SET stored_name = 'gone.png' WHERE id = 100", [])
+                .map(|_| ())
+        })
+        .unwrap();
+    std::fs::remove_file(&thumb_path).unwrap();
+    let (status, _) = get_json(router_for(state.clone()), "/api/media/100/thumb").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // 还没搬的仍然是 501（别让"缩略图能用了"顺手把 poster/upload 也变成假成功）
+    for uri in ["/api/media/100/poster", "/api/media/100/prompt"] {
         let (status, body) = get_json(router_for(state.clone()), uri).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "uri={uri}");
         assert_eq!(body["error"], "NOT_IMPLEMENTED");
