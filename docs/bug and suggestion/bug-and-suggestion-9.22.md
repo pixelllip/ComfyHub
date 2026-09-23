@@ -442,3 +442,46 @@
    本机已有同名的就不要再搜了。
 5. `sha256` 的第二用途：用户手下完之后，可以用来判断"盘上那份是不是同一个模型"
    —— 现在 `ModelName.similarity` 只是**字面**相似，正是误判之源。
+
+### L. P3 已做（2026-09-23，提交 `ebf931f`，528 → 556 例全绿）
+
+`find_model` 一条工具，K 节五条全部落地（`FindModel.kt` + 22 例离线回归）：
+
+- **"绝不代下"是形状上的事实，不是自觉**：窄接口 `ModelFinder` **只有 `search` 一个方法**，
+  执行体里一条 `Files.*` 都没有；`download_model` 保持 deny。
+- **先本机后外网**：与 `comfy_env_report` / `comfy_fit_workflow` 同一份清单
+  （`/object_info` ∪ 盘扫）。本机命中 → **一个外部请求都不发**，三源标 `skipped`、`online=false`。
+  判据是"分词后同名"或"文件名完全相同"，**刻意不用纯子串** —— `anima` 命中 `anima-turbo`
+  的代价是用户手里少一个真需要的模型（有用例钉这条边界）。
+- **三个源一条不少**：失败也占一行并带原因，状态 `ok` / `needs_proxy` / `needs_login`(401) /
+  `gated`(403) / `error`(429/404/5xx) / `skipped`；单源不可达不影响其它源。
+- `installInto` 按实测改成三段推断（文件名 → 仓库名 / 路径 → pipeline_tag）；
+  diffusers 整包（`krea/Krea-2-Turbo` 24.48GB）→ `installInto=null` + 明说"里面没有能直接放进
+  ComfyUI 的整包 safetensors"。
+- `find_model` **没有** `allowNsfw`：NSFW 只留 `civitai_search`（系统提示 v28 里写明这条分工）。
+- 系统提示 **v28**（第 12.1 / 17 条，两份副本同步）；`Application.kt` 让两条工具**共用同一个**
+  Civitai 客户端。
+
+**出网实测（唯一一次，探针已删）抓到三个真 bug**：① HF 返回的是 **JSON 数组**（按对象解 →
+每次都被误判成"HF 挂了"）；② 魔搭检索是 **`PUT /api/v1/dolphin/models`**（GET/POST 一律 404）；
+③ 魔搭仓库全名 = `Path` + `/` + `Name`（只拿 `Path` → 每个候选都悄悄丢文件名 / 直链 / sha256）。
+
+**本机环境事实**：HF 与魔搭可达；**Civitai 直连 ConnectException → 如实报 `needs_proxy`**。
+后端 JVM 必须带 `-Djava.net.useSystemProxies=true`（或 `COMFYHUB_HTTPS_PROXY`），
+否则那一源永远是 `needs_proxy` —— 环境问题，不是代码问题。
+
+### M. P2 前端已做（2026-09-23，提交 `349e3f9`，前端 248 例全绿）
+
+提问卡改成**一卡多题分页**（I 节前端那四条）：`第 N/M 题` + `上一题 / 跳过本题 / 下一题`，
+**最后一页按钮变「提交」**；`multiSelect` 画复选框；每题保留"自己输入"；**答案可为空** ——
+空着的那题按"跳过"发（= 告诉模型"用户没回答"，不是"没问过"）。单题卡保持点选项即答的老手感。
+
+- `AiToolCallState.questions[]` + `mergeQuestions`：`user.question` 是**一题一条事件**、同 `callId`，
+  只留最后一条会把前面的题顶掉（那张卡只剩一题，而模型在等整组 → Run 挂到 30 分钟超时）。
+- 整卡的 `status` 只在**最后一题**落定时才转 `ok`：提前转会让人还没答完，输入区就交还给普通输入框。
+- 顺带修一处会复发的旧根因：判"还在等"时**空 `questions` 也算在等**
+  （`tool.requested` 先到、问题后到那段窗口），否则提问卡会又挂到 `questionId` 上另开一条。
+- 多选答案**拼成「A、B」当文本发**：HTTP 那条回答接口只收一个 `optionIndex`
+  （`optionIndexes` 只在 `AskGate` 里），不值得为它改已经跑通的后端合同。
+- **还没做**：debug 版重建 + 截图确认（AGENTS 第 1 节对界面改动的要求），
+  以及扩 `e2e-ai-tools-test.ps1` 的多问那一幕。
