@@ -95,3 +95,7 @@ __pycache__/
 
 # 本机用 anima 跑批留下的任务文件（不属于工程产物）
 /comfyui/anima_jobs/
+
+# Rust（server-rs）构建产物：621MB，绝不进版本库
+/server-rs/target/
+
