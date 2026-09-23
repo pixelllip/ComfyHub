@@ -206,6 +206,62 @@ object AiRunRepo {
         }
     }
 
+    /**
+     * **批量**写事件（P1，2026-09-23）。
+     *
+     * 为什么需要它：流式 Run 的 `text.delta` 是逐字来的，实测**单 Run 4.7 万个事件**，
+     * 而旧写法是"每发一个事件就单独开一条连接 + 一个隐式事务 + 一次 fsync"
+     * —— 4.7 万次，这正是 `ai_run_events` 涨到 62 万行 / 112.9MB 的直接原因（总纲 P1）。
+     *
+     * 改进有两条，**都不改变可观测行为**：
+     *  1. 攒够 [batchSize] 条（或调用方主动 [flush]）**在一个事务里**写下去；
+     *  2. 事件在 Run 期间**不落库也不丢** —— 它同时还在 `RunEventBus` 的内存缓冲里，
+     *     SSE 订阅者拿到的是内存那份（不是这一份）。落库只为"断线重连 + 后端重启后回放"。
+     *
+     * ⚠ 调用方**必须在 Run 收尾时 `flush()`**（正常 / 失败 / 取消三条路都要）：
+     * 否则最后那不足一批的 `run.completed` / `run.failed` 会丢，断线重连就补不回来了。
+     */
+    class EventBatcher(private val runId: String, private val batchSize: Int = 200) {
+        private val pending = ArrayList<Triple<Int, String, JsonObject>>(batchSize)
+
+        @Synchronized
+        fun add(seq: Int, type: String, payload: JsonObject) {
+            pending += Triple(seq, type, payload)
+            if (pending.size >= batchSize) flushLocked()
+        }
+
+        /** 把剩下的写下去；返回本次写入的条数（0 表示没有待写）。 */
+        @Synchronized
+        fun flush(): Int = flushLocked()
+
+        private fun flushLocked(): Int {
+            if (pending.isEmpty()) return 0
+            val batch = pending.toList()
+            pending.clear()
+            runCatching {
+                Db.withConnection { conn ->
+                    val prev = conn.autoCommit
+                    conn.autoCommit = false
+                    try {
+                        batch.forEach { (seq, type, payload) ->
+                            conn.execute(
+                                "INSERT IGNORE INTO ai_run_events (run_id, seq, event_type, payload_json) VALUES (?,?,?,?)",
+                                runId, seq, type, AppJson.encodeToString(JsonObject.serializer(), payload),
+                            )
+                        }
+                        conn.commit()
+                    } catch (e: Exception) {
+                        runCatching { conn.rollback() }
+                        throw e
+                    } finally {
+                        conn.autoCommit = prev
+                    }
+                }
+            }
+            return batch.size
+        }
+    }
+
     fun events(runId: String, after: Int = 0): List<RunEvent> = Db.withConnection { conn ->
         conn.queryList(
             "SELECT seq, event_type, payload_json FROM ai_run_events WHERE run_id = ? AND seq > ? ORDER BY seq",

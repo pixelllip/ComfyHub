@@ -110,6 +110,18 @@ class HarnessRunner(
         const val OVERLAP_WINDOW = 80
 
         /**
+         * 单个 Run 在 `ai_run_events` 里保留的事件条数上限（P1 / AIH-018 的保留策略）。
+         *
+         * 4000 是"够手机断线重连补齐"与"别把库撑爆"之间的折中：流式 Run 的 `text.delta`
+         * 一分钟能上万条，一条 Run 全留实测 4.7 万条 —— 那是 `ai_run_events` 涨到 62 万行
+         * / 112.9MB 的直接原因（总纲 P1）。
+         *
+         * ⚠ 这是**库里的**上限，不是内存里的：`RunEventBus` 仍保留全量，
+         * 所以同一个 Run 内在前端滚动回看不受影响；被裁掉的只是"重启后回放得到的最老那一段"。
+         */
+        const val EVENT_KEEP = 4000
+
+        /**
          * "接着写"的指令。**必须说清三件事**：这是被截断的续写、不要重复已说过的、
          * 不要重新开头 —— 少一条模型就会把上一条的结尾再念一遍。
          */
@@ -288,9 +300,14 @@ class HarnessRunner(
         val conversationId = run.conversationId
         val assistantId = run.assistantMessageId ?: return
 
+        // P1（2026-09-23）：事件**批量**落库。旧写法每个事件开一条连接 + 一次 fsync，
+        // 而流式 Run 实测有 4.7 万个 `text.delta` —— 那是 ai_run_events 涨到 62 万行的直接原因。
+        // 批量只影响"什么时候写"，不影响"写了什么"：SSE 订阅者拿的始终是 RunEventBus 的内存那份。
+        val events = AiRunRepo.EventBatcher(runId)
+
         fun emit(type: String, payload: JsonObject) {
             val event = bus.emit(runId, type, payload) ?: return
-            AiRunRepo.appendEvent(runId, event.seq, type, payload)
+            events.add(event.seq, type, payload)
         }
 
         // 已说出的正文 / 思考：**声明在 try 外面**，失败分支要用它把已经产生的部分保留下来
@@ -859,7 +876,14 @@ class HarnessRunner(
             // 提问（用户建议 ⑥）：Run 都结束了，还挂着的 `ask_user_question` 不能继续等 ——
             // 放掉它们，界面那张卡片也会随终态事件一起收起来。
             askRegistry?.discardRun(runId)
+            // ★ P1：**先 flush 再 close**。三条收尾路（正常 / 失败 / 取消）都汇进这个 finally，
+            // 所以这里就是那个"最后一批不足 batchSize 的事件"唯一有保障的落库点 ——
+            // 漏了它，断线重连时最后那几个 `run.completed` / `run.failed` 就永远补不回来（R5）。
+            val written = events.flush()
             bus.close(runId)
+            // ★ P1：保留窗口真的会被调用（以前 pruneEvents 是死代码，没有任何调用点）。
+            // 放在 close 之后、用"本 Run 写完的总量"判断要不要裁：没超上限就一次 DELETE 都不发。
+            if (written > 0) runCatching { AiRunRepo.pruneEvents(runId, EVENT_KEEP) }
         }
     }
 
