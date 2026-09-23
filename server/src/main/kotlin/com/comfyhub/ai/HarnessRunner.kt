@@ -1349,8 +1349,15 @@ object SystemPrompt {
      *     **三项都过才许问**，而且**每轮最多开一张卡**（不问是常态）；
      *     优先级是"意图/审美/取舍优先，技术方案（Sage Attention / 加速 LoRA）排后面但也可以问"，
      *     这类偏好答完要 `remember` 落一条。另有第 13 条补"抽卡就换 seed、别换前缀"。
+     * v28（2026-09-22）：P3 定向查询上线 —— 新增 `find_model`（Civitai → HuggingFace →
+     *     ModelScope 顺序查、**每个源都报可达性**：ok / needs_proxy / needs_login / gated /
+     *     error / skipped）。第 12.1 条与第 17 条都改成"先 `find_model`"，
+     *     并把三条纪律写死：① **先查本机再查外网**（本机已有同名就别去搜）；
+     *     ② **绝不代下** —— 只把链接 + sha256 + 目标目录给用户、让他自己下；
+     *     ③ **sha256 的第二用途**是确认盘上那份是不是同一个模型
+     *     （`comfy_fit_workflow` 的字面相似度**不足以**确认身份）。
      */
-    const val VERSION = "v27"
+    const val VERSION = "v28"
 
     /**
      * 第一问时追加的一段：让模型在正文最前面带一行 `[标题]…[/标题]`，

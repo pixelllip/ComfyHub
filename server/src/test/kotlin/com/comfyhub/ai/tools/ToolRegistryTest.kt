@@ -240,6 +240,9 @@ class ToolRegistryTest {
         // 2026-09-22（用户：让 AI 具有审核本地工作流的能力）：七项固定检查
         // （前端节点 / 版本不兼容 / seed·前缀撞名 / 参数档位 / 显存 / 提示词风格 / 加载器目录）
         "comfy_audit_workflow",
+        // P3（2026-09-22 用户拍板）：定向查询 —— Civitai → HF → ModelScope 顺序查、
+        // **先查本机再查外网**、每个源都报可达性、**绝不代下**（只给链接 + sha256 + 目标目录）
+        "find_model",
     )
 
     // --- 清单 / 权限 --------------------------------------------------------
@@ -1396,7 +1399,12 @@ class ToolRegistryTest {
         // v24（2026-09-22）：第 12.1 条补第四档 onDiskOnly —— "硬盘上有同名文件，但当前实例
         // 枚举不到它"（= 实例的模型根没挂全）：**先重启 / 修挂载，不要去下载**。
         // 起因是会话 0bedb3f5：anima-base-v1.0 就在 ComfyUI-Shared 里，却被报成"本机没有"。
-        assertEquals("v27", SystemPrompt.VERSION)
+        // v25（2026-09-22）：comfy_env_report（三套根对账 + 本机模型清单，取代手搓 list_dir）
+        // v26（2026-09-22）：comfy_audit_workflow（用户："让 AI 具有审核本地工作流的能力"）
+        // v27（2026-09-22）：提问改成"一张卡最多 5 问"的阈值制（用户第 1~3 条）
+        // v28（2026-09-22）：P3 定向查询 `find_model` —— 三源顺序查 + 逐个报可达性 +
+        // **先查本机再查外网** + **绝不代下**（只给链接 + sha256 + 目标目录）
+        assertEquals("v28", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
@@ -1507,6 +1515,25 @@ class ToolRegistryTest {
             nsfw = true,
         )
         assertTrue(withNsfw.contains("civitai_search"), "第 17 条要点名 Civitai 搜索这条工具")
+        // v28（2026-09-22，P3）：定向查询 `find_model` 要进第 17 条，并写死三条纪律 ——
+        // 先查本机再查外网、每个源报可达性、**绝不代下**（只给链接 + sha256 + 目标目录）
+        assertTrue(withNsfw.contains("find_model"), "第 17 条要点名定向查询这条工具")
+        assertTrue(
+            withNsfw.contains("先查本机"),
+            "顺序纪律（先查本机再查外网）要写进提示词 —— 那是用户拍板的顺序",
+        )
+        assertTrue(
+            withNsfw.contains("Civitai → HuggingFace → ModelScope"),
+            "三源的查询顺序要写清楚（用户拍板：Civitai → HF → ModelScope）",
+        )
+        assertTrue(
+            withNsfw.contains("绝不代下"),
+            "**绝不代下**（用户拍板）必须进提示词：只给链接 + sha256 + 目标目录，让用户自己下",
+        )
+        assertTrue(
+            withNsfw.contains("sha256"),
+            "sha256 的第二用途（确认盘上那份是不是同一个模型）要写进提示词",
+        )
         assertTrue(
             withNsfw.contains("没配令牌也照搜") && withNsfw.contains("匿名通道"),
             "v19 起：缺令牌不许再说\"搜不了\"，要说清匿名通道这件事",

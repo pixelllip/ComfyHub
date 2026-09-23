@@ -281,6 +281,10 @@ fun Application.module(ctx: AppContext) {
     // 提交任务（用户建议 ①）：AI 可以把库里的工作流真的送进 ComfyUI 队列
     val submitter = ComfySubmitter(ctx.cfg, capture)
 
+    // Civitai 客户端：`civitai_search` 与 `find_model`（P3）**共用同一个实例** ——
+    // 域名切换 / 令牌 / 错误映射都在它里面，两处各造一个只会漂移。
+    val civitaiSearch = CivitaiSearch(credentials)
+
     // 官方 comfy-mcp（用户建议 ④，2026-09-21 拍板接入）：把它的 39 个工具当成
     // **第二来源**接进工具表 —— 工作流执行、节点/模型查询、显存这些交给它，
     // 我们的 comfy_* 保留"产物必须入库"的那条链路（同名时我们的胜出，见 ToolRegistry.tools）。
@@ -423,7 +427,16 @@ fun Application.module(ctx: AppContext) {
         // Civitai 模型库搜索（用户建议 ④/⑦）：安全档免令牌走 civitai.com；
         // NSFW 档走 civitai.red 且必须令牌（设置页里的凭据名 civitai，
         // 或环境变量 CIVITAI_API_KEY）。工具默认 ask —— 用户原话就是"这种情况可以询问用户"。
-        civitai = CivitaiSearch(credentials),
+        civitai = civitaiSearch,
+        // 定向查询（用户建议 P3，2026-09-22）：一条 `find_model` 内部按
+        // Civitai → HuggingFace → ModelScope 顺序查，每个源都报可达性；
+        // **绝不代下** —— 只贴链接 + sha256 + 目标目录（`download_model` 保持 deny）。
+        // Civitai 那一半**复用上面同一个客户端**；HF 与 ModelScope 是这里的真实检索实现，
+        // 全部走 OutboundProxy（公网走代理、本机/内网强制直连）。
+        finder = com.comfyhub.ai.tools.HttpModelFinder(
+            civitai = civitaiSearch,
+            credentials = credentials,
+        ),
         // 提问（用户建议 ⑥）：把问题递到用户面前、在原地等回答，
         // 答完作为工具结果喂回模型，**同一个 Run 接着做**。
         ask = askGate,

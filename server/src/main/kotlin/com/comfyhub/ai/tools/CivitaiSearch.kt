@@ -307,6 +307,11 @@ class CivitaiSearch(
         val sizeKb = primary?.get("sizeKB")?.jsonPrimitive?.let { p ->
             runCatching { p.content.toDouble() }.getOrNull()
         }
+        // sha256（P3 `find_model` 要的第二个字段，2026-09-22）：线上形如
+        // `files[primary].hashes = {"SHA256":"<64位>","AutoV2":"…"}`，大小写不定（实测就是大写）。
+        // 只在 `hashes` 里找 SHA256 —— 别把 `AutoV2`（Civitai 自己的短码）当成 sha256 报出去：
+        // 用户拿它去校验盘上那份文件永远对不上。
+        val sha256 = primary?.get("hashes")?.let { runCatching { it.jsonObject }.getOrNull() }
         val stats = obj["stats"]?.let { runCatching { it.jsonObject }.getOrNull() }
         return CivitaiModel(
             id = id,
@@ -328,7 +333,25 @@ class CivitaiSearch(
             trainedWords = trainedWords,
             sizeBytes = sizeKb?.let { (it * 1024).toLong() },
             downloadUrl = primary?.str("downloadUrl")?.takeIf { it.isNotBlank() },
+            fileName = primary?.str("name")?.takeIf { it.isNotBlank() },
+            sha256 = primarySha256(sha256),
         )
+    }
+
+    /**
+     * 从 `files[primary].hashes` 里取 SHA256。
+     *
+     * 键名大小写不敏感（线上给的是 `SHA256`，别的实现可能写 `sha256`）；
+     * **只认 64 位十六进制**，别把 `AutoV2` 那种短码当 sha256 ——
+     * 用户拿短码去校验盘上的文件永远对不上，那比"不知道"更糟。
+     */
+    private fun primarySha256(hashes: JsonObject?): String? {
+        val raw = hashes?.entries
+            ?.firstOrNull { it.key.equals("SHA256", ignoreCase = true) }
+            ?.value?.jsonPrimitive?.contentOrNull
+            ?: return null
+        val v = raw.trim()
+        return v.takeIf { it.length == 64 && it.all { c -> c.isDigit() || c in 'a'..'f' || c in 'A'..'F' } }
     }
 
     // -----------------------------------------------------------------------
@@ -485,6 +508,17 @@ data class CivitaiModel(
     val sizeBytes: Long? = null,
     /** 主文件直链（有就给出来，方便用户自己下或让脚本下）。 */
     val downloadUrl: String? = null,
+    /** 主文件名（上游 `files[primary].name`；拿不到就是 null）。 */
+    val fileName: String? = null,
+    /**
+     * 主文件的 **sha256**（上游 `files[primary].hashes.SHA256`，P3 `find_model` 要的）。
+     *
+     * 用途不是"好看"：用户手动下完之后，拿它比对盘上那份文件，判断"是不是同一个模型"。
+     * 今天 `ModelName.similarity` 只是**字面**相似（`sd_xl_base_1.0` 与 `sd_xl_refiner_1.0`
+     * 能到 0.63 分却是两份不同的模型），所以字面相似不足以确认身份，sha256 才是。
+     * 上游没给就是 null —— **不编**。
+     */
+    val sha256: String? = null,
 ) {
     /**
      * 给人看的体积标签。
@@ -540,6 +574,10 @@ data class CivitaiOutcome(
                                 put("sizeLabel", m.sizeLabel())
                             }
                             m.downloadUrl?.let { put("downloadUrl", it) }
+                            // sha256（P3）：结构化字段给界面 / 模型都能直接用；
+                            // 拿不到就**不写这个键**（比写一个 null 更不容易被当成"校验过了"）
+                            m.fileName?.let { put("fileName", it) }
+                            m.sha256?.let { put("sha256", it) }
                             if (m.trainedWords.isNotEmpty()) {
                                 put(
                                     "trainedWords",
