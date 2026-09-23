@@ -1,5 +1,11 @@
 package com.comfyhub.ai
 
+import com.comfyhub.AppJson
+import kotlinx.serialization.Serializable
+import org.slf4j.LoggerFactory
+import java.nio.file.Files
+import java.nio.file.Path
+
 /**
  * 能力来源（AIH-011）。**每一项都会显示给用户**，绝不把来源藏在后台。
  */
@@ -15,9 +21,9 @@ enum class CapabilitySource(val wire: String, val label: String) {
 }
 
 /**
- * 内置模型能力目录。
+ * 内置模型能力目录 + 可热更新的覆盖层。
  *
- * 需求里明确"不能根据 model id 猜能力"，这条依然成立：这里**不是猜**，而是一张
+ * 需求里明确"不能根据 model id 猜能力"，这条依然成立：内置表**不是猜**，而是一张
  * 按厂商公开文档整理的、带版本的**离线表**，并且：
  *
  *  - 只在接口没有给出能力信息时才使用（接口声明永远优先）；
@@ -25,11 +31,34 @@ enum class CapabilitySource(val wire: String, val label: String) {
  *  - **表里没有的模型一律按"仅文本"处理**，绝不用"名字看着像"去推断图片能力；
  *  - 表可能过期（新模型层出不穷），过期只影响"默认勾选"，用户改一下就覆盖。
  *
- * 登记三样东西：输入模态、工具、推理（含可选的**思考档位**）。
+ * ## 覆盖层（2026-09-23：让目录能不换构建就更新）
+ *
+ * 内置表编进 jar，只有发版才能改 —— 新模型层出不穷，这不够。所以 [lookup] 现在
+ * 按**逐个维度**合并三层（与 [com.comfyhub.ai.AiUpstream] 的"接口声明 > 目录"同一哲学，
+ * 只是目录内部再分两层）：
+ *
+ * | 层 | 文件 | 谁写 | 定位 |
+ * | --- | --- | --- | --- |
+ * | custom | `<storage>\ai\capabilities\custom.json` | 用户 / 界面导出 | 手工修正，最高优先 |
+ * | remote | `<storage>\ai\capabilities\remote.json` | [com.comfyhub.ai.CapabilityRefresh] 定期拉取 | 在线数据集（models.dev），主力更新源 |
+ * | builtin | 代码里的 [rules] | 随版本发布 | 家族级兜底（模糊匹配、含思考档位与方言） |
+ *
+ * 匹配方式：custom / remote 按**精确 id**（大小写不敏感；网关 id 带 `org/` 前缀而数据集
+ * 不带、或反过来时，做**去前缀**匹配，但要求结果唯一 —— 有歧义就宁可不命中）；
+ * builtin 沿用**包含匹配**。同一维度三层都有时取上层；某层没给这一维度就落到下一层。
+ *
+ * 登记四样东西：输入模态、工具、推理（含可选的**思考档位**）、思考方言。
  * 视频 / 音频不做预填：适配器还不支持这些传输方式，勾了也只会被正确阻断。
  */
 object ModelCapabilityCatalog {
+    private val log = LoggerFactory.getLogger(ModelCapabilityCatalog::class.java)
+
     const val VERSION = "2026-09b"
+
+    /** 覆盖层文件放 `<storage>\ai\capabilities\` 下（与 skills / memory 同一个 ai 子目录约定）。 */
+    const val DIR_NAME = "capabilities"
+    const val CUSTOM_FILE = "custom.json"
+    const val REMOTE_FILE = "remote.json"
 
     data class Capability(
         val modalities: List<String>,
@@ -47,6 +76,155 @@ object ModelCapabilityCatalog {
         /** 预填的思考方言（网关字段差异）；null = 按协议默认。 */
         val thinkingFormat: String? = null,
     )
+
+    // -----------------------------------------------------------------------
+    //  覆盖层：磁盘上的 custom.json / remote.json（@Serializable，条目全维度可选）
+    // -----------------------------------------------------------------------
+
+    /** 覆盖层里的一条模型声明。每个维度都可省 —— 省了就落到下一层，**绝不发明默认值**。 */
+    @Serializable
+    data class OverlayEntry(
+        val modalities: List<String>? = null,
+        val tools: Boolean? = null,
+        val reasoning: Boolean? = null,
+        val thinkingEfforts: Map<String, String>? = null,
+        val thinkingFormat: String? = null,
+    )
+
+    @Serializable
+    data class OverlayFile(
+        /** 数据集出处（remote 固定 "models.dev"；custom 默认 "custom"），只作展示 */
+        val source: String = "custom",
+        val version: String? = null,
+        /** remote：拉取时间（ISO-8601）；custom 可空 */
+        val fetchedAt: String? = null,
+        /** key = 模型 id（加载时统一小写） */
+        val entries: Map<String, OverlayEntry> = emptyMap(),
+    )
+
+    /** 给状态接口 / 设置页看的目录概况。 */
+    data class OverlayMeta(val source: String, val fetchedAt: String?, val entryCount: Int)
+
+    data class CatalogStatus(
+        val version: String,
+        val builtinRules: Int,
+        val custom: OverlayMeta?,
+        val remote: OverlayMeta?,
+    )
+
+    @Volatile private var custom: OverlayFile? = null
+    @Volatile private var remote: OverlayFile? = null
+
+    /**
+     * 从磁盘重读覆盖层。启动时与每次刷新成功后调用；`null` 清空（测试用）。
+     * 文件坏 / 不合法**不抛异常**：记日志、该层当不存在 —— 目录坏了不能让对话也起不来。
+     */
+    fun reload(dir: Path?) {
+        custom = if (dir == null) null else load(dir.resolve(CUSTOM_FILE), "custom")
+        remote = if (dir == null) null else load(dir.resolve(REMOTE_FILE), "remote")
+    }
+
+    private fun load(file: Path, label: String): OverlayFile? {
+        if (!Files.isRegularFile(file)) return null
+        return runCatching {
+            val parsed = AppJson.decodeFromString(OverlayFile.serializer(), Files.readString(file))
+            parsed.copy(entries = parsed.entries.mapKeys { it.key.trim().lowercase() })
+        }.onFailure { log.warn("能力覆盖层 {} 读不了（忽略该层）：{} —— {}", label, file, it.message) }
+            .getOrNull()
+    }
+
+    fun status(): CatalogStatus = CatalogStatus(
+        version = VERSION,
+        builtinRules = rules.size,
+        custom = custom?.let { OverlayMeta(it.source, it.fetchedAt, it.entries.size) },
+        remote = remote?.let { OverlayMeta(it.source, it.fetchedAt, it.entries.size) },
+    )
+
+    // -----------------------------------------------------------------------
+    //  查表：custom > remote > builtin，逐维度合并
+    // -----------------------------------------------------------------------
+
+    /** 查表；返回 null 表示"未知"，调用方必须按保守默认处理。 */
+    fun lookup(modelId: String): Capability? {
+        val id = modelId.lowercase().trim()
+        val builtinHit = lookupBuiltin(id)
+        val remoteHit = resolveOverlay(remote, id)
+        val customHit = resolveOverlay(custom, id)
+        if (builtinHit == null && remoteHit == null && customHit == null) return null
+
+        // 逐维度：custom > remote > builtin；某层没给这一维度才落到下一层
+        val modalities = customHit?.modalities
+            ?: remoteHit?.modalities
+            ?: builtinHit?.second?.modalities
+            ?: TEXT_ONLY
+        val tools = customHit?.tools
+            ?: remoteHit?.tools
+            ?: builtinHit?.second?.tools
+            ?: true
+        val reasoning = customHit?.reasoning
+            ?: remoteHit?.reasoning
+            ?: builtinHit?.second?.reasoning
+            ?: false
+        // 档位/方言必须与"支持推理"一致（validateThinkingEfforts 的纪律）：
+        // 最终 reasoning=false 时一律清空，不管哪层给过
+        val efforts = if (!reasoning) emptyMap() else {
+            customHit?.thinkingEfforts
+                ?: remoteHit?.thinkingEfforts
+                ?: builtinHit?.second?.thinkingEfforts
+                ?: emptyMap()
+        }
+        val format = if (!reasoning) null else {
+            customHit?.thinkingFormat?.takeIf { it.isNotBlank() }
+                ?: remoteHit?.thinkingFormat?.takeIf { it.isNotBlank() }
+                ?: builtinHit?.second?.thinkingFormat
+        }
+        return Capability(
+            modalities = modalities,
+            tools = tools,
+            reasoning = reasoning,
+            matchedBy = matchedBy(customHit, remoteHit, builtinHit),
+            thinkingEfforts = efforts,
+            thinkingFormat = format,
+        )
+    }
+
+    /** 来源说明（单行，进界面 / capabilityNote）。 */
+    private fun matchedBy(
+        customHit: OverlayEntry?,
+        remoteHit: OverlayEntry?,
+        builtinHit: Pair<String, Capability>?,
+    ): String = listOfNotNull(
+        if (customHit != null) "手工目录 custom.json" else null,
+        if (remoteHit != null) "在线目录 ${remote?.source ?: "remote.json"}" else null,
+        builtinHit?.let { "内置规则「${it.first}」" },
+    ).joinToString(" + ").ifBlank { "unknown" }
+
+    /** builtin 的包含匹配（先命中先用；宽前缀规则排在后面，避免 `gpt-4` 抢走 `gpt-4o`）。 */
+    private fun lookupBuiltin(id: String): Pair<String, Capability>? {
+        for ((pattern, cap) in rules) {
+            if (id.contains(pattern)) return pattern to cap
+        }
+        return null
+    }
+
+    /**
+     * 覆盖层匹配：**精确 id** → **去前缀**（网关带 `org/`、数据集不带，或反过来），
+     * 去前缀要求**唯一命中** —— 两个条目都叫 `…/dup` 时宁可不命中，绝不猜。
+     */
+    private fun resolveOverlay(overlay: OverlayFile?, id: String): OverlayEntry? {
+        if (overlay == null) return null
+        overlay.entries[id]?.let { return it }
+        // 数据集带前缀（"z-ai/xxx"）、网关 id 不带（"xxx"）
+        val byDatasetSuffix = overlay.entries.filterKeys { it != id && it.substringAfterLast('/') == id }
+        if (byDatasetSuffix.size == 1) return byDatasetSuffix.values.first()
+        // 网关 id 带前缀（"org/xxx"）、数据集条目不带（"xxx"）
+        val bare = id.substringAfterLast('/')
+        if (bare != id) {
+            val byBare = overlay.entries.filterKeys { it == bare }
+            if (byBare.size == 1) return byBare.values.first()
+        }
+        return null
+    }
 
     private val TEXT_ONLY = listOf("text")
     private val TEXT_IMAGE = listOf("text", "image")
@@ -78,7 +256,7 @@ object ModelCapabilityCatalog {
         mapOf("off" to "none", "low" to "low", "medium" to "medium", "xhigh" to "xhigh")
 
     /** 前缀/包含匹配的规则表；顺序从上到下，先命中先用。 */
-    private val rules: List<Triple<String, Capability, Boolean>> = buildList {
+    private val rules: List<Pair<String, Capability>> = buildList {
         fun rule(
             pattern: String,
             modalities: List<String>,
@@ -88,12 +266,8 @@ object ModelCapabilityCatalog {
             format: String? = null,
         ) {
             add(
-                Triple(
-                    pattern,
-                    Capability(modalities, tools, reasoning, matchedBy = pattern,
-                        thinkingEfforts = efforts, thinkingFormat = format),
-                    true,
-                )
+                pattern to Capability(modalities, tools, reasoning, matchedBy = pattern,
+                    thinkingEfforts = efforts, thinkingFormat = format),
             )
         }
 
@@ -261,16 +435,6 @@ object ModelCapabilityCatalog {
         rule("claude", TEXT_ONLY, tools = true)
         rule("gemini", TEXT_IMAGE, tools = true, reasoning = true, efforts = EFFORT_LOW_MED_HIGH_MAX)
         rule("grok", TEXT_ONLY, tools = true, reasoning = true, efforts = EFFORT_LOW_MED_HIGH)
-    }
-
-    /** 查表；返回 null 表示"未知"，调用方必须按保守默认处理。 */
-    fun lookup(modelId: String): Capability? {
-        val id = modelId.lowercase()
-        // 包含匹配：宽前缀规则排在后面，避免 `gpt-4` 抢走 `gpt-4o`
-        for ((pattern, cap, contains) in rules) {
-            if (contains && id.contains(pattern)) return cap
-        }
-        return null
     }
 
     /**
