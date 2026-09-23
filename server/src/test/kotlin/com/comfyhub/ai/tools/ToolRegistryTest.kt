@@ -37,7 +37,7 @@ import java.nio.file.Path
  */
 class ToolRegistryTest {
 
-    private class Env(
+    internal class Env(
         val root: Path,
         /**
          * 库里搜工作流的结果（默认"一条都没有"）。用户 bug ⑤ 的回落那条路要用：

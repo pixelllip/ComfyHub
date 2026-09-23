@@ -24,6 +24,36 @@ enum class ToolAccess(val wire: String) {
     }
 }
 
+/**
+ * 🔒 工具分端（总纲 §3.5 / 红线 R11/R12）。**冻结契约，改它要同时改两端。**
+ *
+ * ⚠ 这**不是安全边界**（安全边界仍然是 [ToolPolicy]），它回答的是另一个问题：
+ * **"别让模型看见一个它根本调不到的工具"** —— 手机上摆着 `comfy_submit`，
+ * 模型就会以为它能提交，然后如实汇报"我提交了"，而实际上桌面根本不在线。
+ *
+ * 默认值刻意是 [DESKTOP]（**不是 BOTH**）：新增一个工具时忘了写 scope，
+ * 后果是"手机上少一个工具"（看得见、能发现），而不是"手机上多一个调不到的工具"
+ * （看不见、只表现为模型一本正经地胡说）。同理，MCP 拉来的 39 个工具也自动落在 DESKTOP。
+ */
+enum class ToolScope {
+    /**
+     * "两端合起来"的全集 —— **只在桌面自己跑 Run 时用**（`specs(policy)` 的默认值）。
+     *
+     * 它的存在是为了让 `ToolScope` 这一步**纯加字段、零行为变化**：桌面今天的 Run
+     * 拿到的清单与加这个枚举之前逐字相同。手机侧传 [MOBILE]。
+     */
+    ALL,
+
+    /** 只有桌面能履行：comfy_*、MCP 的 39 个、本机文件读写、skill 注册/删除 */
+    DESKTOP,
+
+    /** 手机 harness 自己能做（移植过去的那一套），桌面也能做 */
+    BOTH,
+
+    /** 只有手机有（例如手机独有的 `comfy_queue_submit`，R11） */
+    MOBILE,
+}
+
 /** 工具分类，仅用于界面分组与文档。 */
 enum class ToolCategory(val wire: String) {
     SKILL("skill"),
@@ -224,6 +254,11 @@ class AgentTool(
     val mutating: Boolean,
     /** 出厂默认权限档；用户设置里的覆盖优先（见 [ToolPolicy.accessFor]） */
     val defaultAccess: ToolAccess,
+    /**
+     * 这个工具在哪一端可达（🔒 [ToolScope]，总纲 §3.5）。
+     * 默认 [ToolScope.DESKTOP] —— 见枚举上的注释：宁可手机上少一个，也不能多一个调不到的。
+     */
+    val scope: ToolScope = ToolScope.DESKTOP,
     val handler: suspend (JsonObject, ToolContext) -> ToolOutput,
 )
 

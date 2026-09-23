@@ -275,6 +275,8 @@ class ToolRegistry(
         // ------------------------------------------------------------------
         AgentTool(
             name = "list_skills",
+            // 🔒 ToolScope：手机 harness 自己有一份 skills 目录真源，能自己列举（总纲 §3.5）
+            scope = ToolScope.BOTH,
             description = "列出本机已安装的 Skills（名称 + 描述 + 是否可用）。做任务前先看这里，别凭记忆假设有某个 Skill。",
             parameters = ToolSpec.EMPTY_PARAMS,
             category = ToolCategory.SKILL,
@@ -307,6 +309,8 @@ class ToolRegistry(
 
         AgentTool(
             name = "load_skill",
+            // 🔒 ToolScope：skill 正文从本地磁盘读，手机不需要桌面在场（总纲 §3.5）
+            scope = ToolScope.BOTH,
             description = "加载某个 Skill 的完整正文。任务与某个 Skill 匹配时**先加载它再动手**，" +
                 "不要只根据目录摘要臆造规则。同一次回复里同一个 Skill 只会返回一次。",
             parameters = schema(
@@ -382,6 +386,8 @@ class ToolRegistry(
         // ------------------------------------------------------------------
         AgentTool(
             name = "remember",
+            // 🔒 ToolScope：长期记忆是本地文件，两端各有一份（总纲 §3.5）
+            scope = ToolScope.BOTH,
             description = "把一条**长期有效**的信息写进长期记忆（用户偏好、固定约定、称呼、常用参数等），" +
                 "以后每次对话都会带上它。只记用户明确说过、且跨对话仍然成立的事；一次只写一条。" +
                 "写进去的每条会自动带上 `[日期]` 前缀；**一次回复最多新增 ${MemoryStore.MAX_ENTRIES_PER_RUN} 条**，" +
@@ -1303,6 +1309,8 @@ class ToolRegistry(
         // ------------------------------------------------------------------
         AgentTool(
             name = "web_search",
+            // 🔒 ToolScope：纯出网调用，手机自己能做（总纲 §3.5）
+            scope = ToolScope.BOTH,
             description = "联网搜索（实时网页）。**用一句自然语言描述你想要的那一页**" +
                 "（例：\"对比 SDXL 与 Flux 出图速度的实测博客\"），不要堆关键词 —— 它是语义索引，" +
                 "描述得越像一篇文章，结果越准。" +
@@ -1344,6 +1352,8 @@ class ToolRegistry(
 
         AgentTool(
             name = "web_fetch",
+            // 🔒 ToolScope：纯出网调用，手机自己能做（总纲 §3.5）
+            scope = ToolScope.BOTH,
             description = "把一个公开网页取回来读全文（已去掉导航/广告，转成 markdown）。" +
                 "**搜索只给片段、你需要读完整篇时才用**，别拿它当浏览器到处逛。" +
                 "\n只接受公开网络地址：内网、本机（127.0.0.1 / localhost）与云元数据地址一律被拒绝。" +
@@ -1397,6 +1407,8 @@ class ToolRegistry(
         // ------------------------------------------------------------------
         AgentTool(
             name = "ask_user_question",
+            // 🔒 ToolScope：提问走的是本端事件流（user.question / .answered），手机自己能做（总纲 §3.5）
+            scope = ToolScope.BOTH,
             description = "**向用户提问，并在原地等他回答**（不用结束这一轮）。" +
                 "一次可以问**最多 ${ToolContext.MAX_QUESTIONS_PER_CARD} 个**问题 —— " +
                 "界面是一张卡分页（上一题 / 下一题 / 跳过本题，最后一页按钮变「提交」），答案可以为空。" +
@@ -1634,6 +1646,8 @@ class ToolRegistry(
         // ------------------------------------------------------------------
         AgentTool(
             name = "civitai_search",
+            // 🔒 ToolScope：纯出网调用，手机自己能做（总纲 §3.5）
+            scope = ToolScope.BOTH,
             description = "搜索 Civitai 的模型 / LoRA 库，拿到**带简短说明**的结果：" +
                 "名字、类型（Checkpoint / LORA / …）、底模、它是拿来做什么的、触发词、下载量与链接。" +
                 "\n什么时候用：用户问\"某个效果该配哪个模型 / LoRA\"、\"XX 风格的模型叫什么\"、" +
@@ -1779,8 +1793,22 @@ class ToolRegistry(
 
     fun find(name: String): AgentTool? = byName[name]
 
-    /** 下发给模型的工具定义：`deny` 的直接不出现。 */
-    fun specs(policy: ToolPolicy): List<ToolSpec> = tools
+    /**
+     * 🔒 按端过滤工具清单（总纲 §3.5 / R12）。
+     *
+     * 这里过滤的是**"下发给模型的清单"**，不是执行时的闸门 ——
+     * 执行侧的可达性仍由 [ToolPolicy] 说了算（这条不是安全边界，是"别让模型看见调不到的工具"）。
+     *
+     * [ToolScope.ALL] 是"两端合起来"的全集，用于桌面自己跑 Run（**行为与今天完全一致**，
+     * 所以这一步是纯加字段、不改行为）；手机侧传 [ToolScope.MOBILE]。
+     */
+    fun toolsFor(scope: ToolScope): List<AgentTool> = when (scope) {
+        ToolScope.ALL -> tools
+        else -> tools.filter { it.scope == scope || it.scope == ToolScope.BOTH }
+    }
+
+    /** 下发给模型的工具定义：先按端过滤，`deny` 的直接不出现。 */
+    fun specs(policy: ToolPolicy, scope: ToolScope = ToolScope.ALL): List<ToolSpec> = toolsFor(scope)
         .filter { policy.accessFor(it) != ToolAccess.DENY }
         .map { ToolSpec(it.name, it.description, it.parameters) }
 
