@@ -663,6 +663,28 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >
 > ---
 >
+> ✅ **M3.3：手机 harness 的**真 HTTP** 端到端（`HarnessHttpEndToEndTest`，4 例）** ——
+> `HarnessRunnerTest` 用的是**脚本化的假 transport**，它证明的是"主循环逻辑对"，
+> 但**手机真正在跑的那条 I/O 路径一行都没被走过**（M3.1 只验到"harness 能在真机上起来"）。
+> 现在这条用例用**真 socket + 真 `UrlConnectionTransport` + 真 SQLite + 真事件总线**
+> （唯一假的是一台绑在 `127.0.0.1` 临时端口的 `com.sun.net.httpserver` 网关，**不出网**）：
+> ① 一轮纯文本从 socket 一路走到库里（逐字增量、落库、事件次序、请求体里真有 kit 的系统提示）；
+> ② 工具往返两轮（`tool_call → tool_result → text` 的块顺序、第二轮最后一条是 tool 结果）；
+> ③ 401 → `MISSING_CREDENTIAL` 且消息/Run 都落 failed；④ 连不上 → `PROVIDER_UNREACHABLE`。
+>
+> ★ **它当场抓到一个真机路径上的 bug**：`UrlConnectionTransport` 让 `IOException`
+> （连不上 / DNS 失败 / 读超时）**直接冒出去**，而上层只接 `HttpFailure` / `ProtocolFailure`
+> —— 于是落到通用的 `PROTOCOL_ERROR`，用户看到的是
+> **「端点或协议不匹配（HTTP null）」**：明明是手机没网，却被指去查 Base URL 与协议。
+> `UpstreamClient.classify(null) → PROVIDER_UNREACHABLE` 那一档**一直是死代码**
+> （假 transport 直接抛 `HttpFailure`，所以这条转换从来没被走过）。
+> 现在三层 `netGuard` 把网络层异常统一翻成 `HttpFailure(status = null)`。
+> **这就是"只跑单测"永远看不到的那类问题**——它只在真 socket 上出现。
+>
+> `:harness:testDebugUnitTest` **152 例全绿**（148 + 4）。
+>
+> ---
+>
 > **📅 2026-09-24 第四轮（本轮）**：先补上"环境能不能真的跑起来"这件事 ——
 
 ---

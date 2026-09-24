@@ -25,16 +25,16 @@ class UrlConnectionTransport(
     private val readTimeoutMs: Int = 120_000,
 ) : HttpTransport {
 
-    override fun get(url: String, headers: Map<String, String>): HttpReply {
+    override fun get(url: String, headers: Map<String, String>): HttpReply = netGuard {
         val conn = open(url, "GET", headers)
-        return read(conn)
+        read(conn)
     }
 
-    override fun postJson(url: String, body: String, headers: Map<String, String>): HttpReply {
+    override fun postJson(url: String, body: String, headers: Map<String, String>): HttpReply = netGuard {
         val conn = open(url, "POST", headers + mapOf("Content-Type" to "application/json"))
         conn.doOutput = true
         conn.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
-        return read(conn)
+        read(conn)
     }
 
     override fun postJsonStreaming(
@@ -42,7 +42,7 @@ class UrlConnectionTransport(
         body: String,
         headers: Map<String, String>,
         onLine: (String) -> Unit,
-    ): Int {
+    ): Int = netGuard {
         val conn = open(url, "POST", headers + mapOf(
             "Content-Type" to "application/json",
             "Accept" to "text/event-stream",
@@ -64,7 +64,28 @@ class UrlConnectionTransport(
             }
         }
         conn.disconnect()
-        return status
+        status
+    }
+
+    /**
+     * 把**网络层**的 `IOException`（连不上 / DNS 失败 / 读超时 / 连接被重置）翻成
+     * `HttpFailure(status = null)`。
+     *
+     * 为什么非翻不可：`UpstreamClient.classify(null)` 那一档就是为它准备的
+     * （→ `PROVIDER_UNREACHABLE`，人话是"上游不可达"）。让 `IOException` 直接冒出去的话，
+     * 上层只接得到 `HttpFailure` / `ProtocolFailure`，于是落到通用的 `PROTOCOL_ERROR`，
+     * 用户看到的是**「端点或协议不匹配（HTTP null）」** ——
+     * 明明是手机没网，却被指去查 Base URL / 协议。（M3.1 真机验收留下的缺口之一：
+     * 假 transport 直接抛 `HttpFailure`，所以这条转换从来没被走过。）
+     *
+     * 真机上这条路径很常见：切飞行模式、弱网、上游域名解析不了。
+     */
+    private inline fun <T> netGuard(block: () -> T): T = try {
+        block()
+    } catch (e: HttpFailure) {
+        throw e
+    } catch (e: java.io.IOException) {
+        throw HttpFailure(null, "连不上上游：${e::class.simpleName}: ${e.message}")
     }
 
     private fun open(url: String, method: String, headers: Map<String, String>): HttpURLConnection {
