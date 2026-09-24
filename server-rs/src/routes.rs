@@ -197,6 +197,8 @@ pub fn router(state: AppState) -> Router {
         // run-kit 工件（P4 第 22 步）：手机 harness 的**全部规则类输入**（R12/R13 的第一次重建）
         .route("/api/ai/run-kit", get(ai_run_kit))
         .route("/api/ai/run-kit/status", get(ai_run_kit_status))
+        // 跨端待办总览（P4 第 25 步，M1 定的契约）：另一台设备刚连上来时一次补齐所有"在等人"的卡片
+        .route("/api/ai/pending", get(ai_pending))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -391,6 +393,14 @@ async fn ai_run_kit(
 /// `GET /api/ai/run-kit/status` —— `{current, revoked}`（手机跑之前先问一句吊销）。
 async fn ai_run_kit_status(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::run_kit::status(&state)?))
+}
+
+/// `GET /api/ai/pending` —— **跨端待办总览**（P4 第 25 步，M1 定的契约）。
+///
+/// 另一台设备（手机 / 第二个窗口 / 刚重启的桌面 App）没经历那条 SSE 事件流，
+/// 靠这一个接口把所有"在等人"的卡片一次补齐：AI 的提问 + 需要批准的工具调用。
+async fn ai_pending(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::pending::pending(&state)?))
 }
 
 /// `GET /api/capture/locate` —— 探测 ComfyUI 装在哪（用户"其他建议"第 3 条）。

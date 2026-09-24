@@ -3765,6 +3765,104 @@ async fn claim_attempts_are_rate_limited_per_source_address() {
 }
 
 // ---------------------------------------------------------------------------
+//  跨端待办总览（P4 第 25 步）
+// ---------------------------------------------------------------------------
+
+/// `GET /api/ai/pending`：**只列"真的还在等人"的**，两个 `askedAt` 类型不同也别改。
+#[tokio::test]
+async fn pending_lists_only_what_is_really_waiting() {
+    let state = state();
+    // 夹具：一条 pending 提问、一条已答提问；一个 running Run 上的 pending 审批、
+    // 一个已收尾 Run 上的 pending 审批（那是"永远等不到人"的残留）、
+    // 以及一个 approved 的调用（不该出现）
+    state
+        .with(|conn| {
+            conn.execute_batch(
+                r#"
+                INSERT INTO ai_runs (id, conversation_id, status, started_at)
+                VALUES ('run-live', 'conv-0', 'running', '2026-09-24T14:00:00.000Z'),
+                       ('run-done', 'conv-0', 'failed',  '2026-09-24T13:00:00.000Z');
+
+                INSERT INTO ai_questions
+                  (question_id, run_id, conversation_id, group_id, card_index, total,
+                   question, options_json, allow_free_text, multi_select, header,
+                   status, answer, option_index, option_indexes, asked_at)
+                VALUES
+                  ('q-1', 'run-live', 'conv-0', 'g-1', 1, 2, '要几张图？', '["1","2","4"]', 1, 0, '张数',
+                   'pending', NULL, NULL, NULL, '2026-09-24T14:00:05.647Z'),
+                  ('q-2', 'run-live', 'conv-0', 'g-1', 2, 2, '要什么风格？', NULL, 0, 1, NULL,
+                   'pending', '国风', 0, '[0,2]', '2026-09-24T14:00:06.000Z'),
+                  ('q-3', 'run-live', 'conv-0', 'g-1', 1, 1, '已经答过了', NULL, 1, 0, NULL,
+                   'answered', '好的', NULL, NULL, '2026-09-24T13:59:00.000Z');
+
+                INSERT INTO ai_tool_calls
+                  (id, run_id, provider_call_id, name, arguments_json, approval, status, started_at)
+                VALUES
+                  ('tc-1', 'run-live', 'call-live', 'comfy_submit', '{"promptId":3}', 'pending', 'pending', '2026-09-24T14:00:10.000Z'),
+                  ('tc-2', 'run-done', 'call-dead', 'write_file', '{}', 'pending', 'pending', '2026-09-24T13:00:10.000Z'),
+                  ('tc-3', 'run-live', 'call-ok', 'read_file', '{}', 'approved', 'success', '2026-09-24T14:00:11.000Z');
+                "#,
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/pending").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(keys(&body), vec!["approvals", "asks"], "顶层就两个键");
+
+    // 提问：只回那两条 pending（已答的 q-3 不在），顺序按 asked_at
+    let asks = body["asks"].as_array().unwrap();
+    assert_eq!(asks.len(), 2, "只列还没答的：{asks:?}");
+    assert_eq!(asks[0]["questionId"], "q-1");
+    assert_eq!(asks[1]["questionId"], "q-2");
+
+    // 第一条：带 header、没有 answer / optionIndex / optionIndexes（可空键不出现）
+    assert_eq!(
+        keys(&asks[0]),
+        vec!["allowFreeText", "answered", "askedAt", "conversationId", "groupId", "header",
+             "index", "multiSelect", "options", "question", "questionId", "runId", "total"]
+    );
+    assert_eq!(asks[0]["askedAt"], 1_790_258_405_647_i64, "⚠ 提问的 askedAt 是**毫秒数**");
+    assert_eq!(asks[0]["options"], serde_json::json!(["1", "2", "4"]));
+    assert_eq!(asks[0]["answered"], false);
+    assert_eq!(asks[0]["index"], 1);
+    assert_eq!(asks[0]["total"], 2);
+    assert_eq!(asks[0]["groupId"], "g-1");
+
+    // 第二条：有 answer / optionIndex / optionIndexes，没有 header
+    assert_eq!(asks[1]["answer"], "国风");
+    assert_eq!(asks[1]["optionIndex"], 0);
+    assert_eq!(asks[1]["optionIndexes"], serde_json::json!([0, 2]));
+    assert_eq!(asks[1]["multiSelect"], true);
+    assert_eq!(asks[1]["allowFreeText"], false);
+    assert!(asks[1].get("header").is_none(), "NULL 的 header 整个键不出现");
+    assert!(asks[1].get("options").is_some(), "options 一定是数组（空也是 []）");
+    assert_eq!(asks[1]["options"], serde_json::json!([]));
+
+    // 审批：只回 running Run 上那条 pending；已收尾 Run 的残留与 approved 的都不算
+    let approvals = body["approvals"].as_array().unwrap();
+    assert_eq!(approvals.len(), 1, "只列真的还在等的：{approvals:?}");
+    assert_eq!(
+        keys(&approvals[0]),
+        vec!["argumentsJson", "askedAt", "callId", "conversationId", "name", "runId"]
+    );
+    assert_eq!(approvals[0]["callId"], "call-live");
+    assert_eq!(approvals[0]["name"], "comfy_submit");
+    // ⚠ 这一份是 **ISO 文本**（与提问那份的毫秒数不同 —— Kotlin 侧就是这样，别"统一"）
+    assert_eq!(approvals[0]["askedAt"], "2026-09-24T14:00:10Z");
+}
+
+/// 库里没有待办时回**两个空数组**（不是 null、也不是 404）—— 另一台设备据此说"没有在等的"。
+#[tokio::test]
+async fn pending_is_empty_arrays_when_nothing_waits() {
+    let (status, body) = get_json(app(), "/api/ai/pending").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["asks"], serde_json::json!([]));
+    assert_eq!(body["approvals"], serde_json::json!([]));
+}
+
+// ---------------------------------------------------------------------------
 //  会话与消息的写侧（P4 第 24 步）
 // ---------------------------------------------------------------------------
 

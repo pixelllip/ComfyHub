@@ -27,6 +27,7 @@ pub mod memory;
 pub mod mobile_tools;
 pub mod models;
 pub mod nsfw_prompt;
+pub mod pending;
 pub mod policy;
 pub mod repo;
 pub mod routes;

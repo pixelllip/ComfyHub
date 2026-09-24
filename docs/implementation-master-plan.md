@@ -810,6 +810,31 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   **真机那把 key 真的解开了** —— 对着真实 `storage\ai\credentials.dpapi.json`
 >   取回 `COMMAND_CODE_GOAT` / `DEEPSEEK_API_KEY`（**只报长度，不打印值**）。
 >
+> ✅ **P4 第 25 步（`pending.rs`，2026-09-24）：`GET /api/ai/pending`（跨端待办总览）** ——
+> M1 定的契约，Rust 侧一直缺。它是"**另一台设备刚连上来**"（手机 / 第二个窗口 / 刚重启的
+> 桌面 App）用的：那台设备没经历 SSE 事件流，靠这一个接口把**所有"在等人"的卡片**一次补齐
+> （AI 的提问 + 需要批准的工具调用），而不是逐个 Run 去问。
+>
+> ★ **与 Kotlin 的一处差异必须说清**：Kotlin 的 `asks` 来自**内存里的提问闸门**
+> （`AskRegistry.allPending()`）；Rust 没有 Run 执行器、也就没有那个闸门 ——
+> 所以这里直接读 **`ai_questions` 表里 `status='pending'` 的行**。
+> 这不是"退一步"，而是同一件事：M1 的纪律就是 **`track()` 当场落一行 pending**
+> （正是为了"界面还没挂上 / 后端重启了，卡也不能丢"），收尾只把 pending 改成终态；
+> 于是"表里还 pending" ≡ "闸门里还活着"。**"内存里活着但库里没有"这种状态 M1 起就不存在**。
+>
+> 两处形状细节**刻意不统一**（谁"顺手统一"谁就制造两端差异）：
+> `asks[].askedAt` 是 **epoch 毫秒数**（Kotlin `askedAtMs`），
+> `approvals[].askedAt` 是 **ISO 文本**（Kotlin `rs.isoTime`）；
+> 可空键（`header` / `answer` / `optionIndex` / 空的 `optionIndexes`）**整个键不出现**。
+> 另外**只列真的还在等的**：Run 已收尾的 pending 审批行是"永远等不到人来点"的残留
+> （后端重启恢复会按拒绝收尾），列出来会让另一台设备冒出一张点了也没用的审批卡。
+>
+> **验收**：`cargo test` **158 例全绿**（82 lib + 74 api_test + 2 shape_lint），新增 4 例
+> （2 条纯函数：毫秒换算与脏 JSON；2 条集成：只列真的在等的 + 没有待办时回两个空数组）；
+> **真库副本抽查**：真库此刻没有待办（`ai_questions` 一行都没有、pending 审批 0 条），
+> 接口如实回 `{"approvals":[],"asks":[]}`；往副本里**注入**一条 pending 提问 + 一个
+> running Run 上的 pending 审批之后，回出来的形状与时间类型都对（毫秒 / ISO 各一份）。
+
 > ✅ **P4 第 24 步（`7a02d1f`，2026-09-24）：会话与消息的写侧** —— 第 21 步只搬了读侧：
 > 指向 Rust 后端能**看见**全部历史却动不了它。这一批补上 `POST/PATCH/DELETE conversations`
 > 与 `POST conversations/{id}/messages`，`/api/ai/conversations*` 至此读写齐了。
