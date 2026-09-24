@@ -374,7 +374,10 @@ fn os_random(buf: &mut [u8]) -> Result<(), String> {
 ///
 /// ⚠ 取不到**就报错**，不退化成一个"时间戳 + pid"拼出来的假随机数：
 /// 那会让令牌看起来正常、实际可预测，而且没有任何测试会红。
-fn random_bytes(len: usize) -> Result<Vec<u8>, ApiError> {
+///
+/// `pub(crate)`：会话 / 消息的主键（`conversations::uuid_v4`）也走这一条 ——
+/// 随机数只留一处实现，就只留一处"取不到随机数"的处理。
+pub(crate) fn random_bytes(len: usize) -> Result<Vec<u8>, ApiError> {
     let mut buf = vec![0u8; len];
     os_random(&mut buf).map_err(|e| {
         ApiError::internal(format!("系统的随机数发生器不可用（{e}）：拒绝生成可预测的令牌"))

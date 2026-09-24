@@ -56,7 +56,10 @@ pub struct AiConversationDto {
 }
 
 /// 一条消息的一个有序块。
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize` 是为了 `POST .../messages` 的 `parts[]`（写侧与读侧**同一份结构**：
+/// 分开写两份就会出现"写进去的键名与读出来的不一样"，而那种错在界面上只是少一块内容）。
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiMessagePartDto {
     /// text / reasoning / attachment / tool_call / tool_result
@@ -241,6 +244,243 @@ pub fn part_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiMessagePartD
         tool_call_id: row.get("tool_call_id")?,
         json_payload: parse_json_any(row.get::<_, Option<String>>("json_payload")?.as_deref()),
     })
+}
+
+// ---------------------------------------------------------------------------
+//  写侧（P4 第 24 步）
+// ---------------------------------------------------------------------------
+
+/// 允许的角色 / 状态 —— **与 Kotlin `AiConversationRepo.ROLES / STATUSES` 同一个集合**。
+///
+/// 少一个值 = 一次合法的追加被判 400（比如手机上 `system_note` 用不了）；
+/// 多一个值 = 库里出现界面渲染不出来的行。两边的集合必须逐字一致。
+pub const ROLES: [&str; 4] = ["user", "assistant", "tool", "system_note"];
+pub const STATUSES: [&str; 5] = ["pending", "streaming", "complete", "failed", "cancelled"];
+
+/// `POST /api/ai/conversations` 的入参（`AiConversationCreate`）。
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationCreate {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+}
+
+/// `PATCH /api/ai/conversations/{id}` 的入参（`AiConversationPatch`）。
+///
+/// ⚠ **`null` 与"没给这个键"同义 = 不改**（Kotlin 是 `req.x ?: current.x`）。
+/// 想清空 providerId 现在做不到 —— 那不是这个端点的能力，别在这里"顺手支持一下"。
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationPatch {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub archived: Option<bool>,
+}
+
+/// `POST /api/ai/conversations/{id}/messages` 的入参（`AiMessageAppend`）。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageAppend {
+    pub role: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default = "default_status")]
+    pub status: String,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// 调用方指定的消息 id（界面按它认自己插的那条气泡）；不给就自己生成一个。
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub parts: Vec<AiMessagePartDto>,
+}
+
+fn default_status() -> String {
+    "complete".to_string()
+}
+
+/// 标准 UUID v4（小写带横线，与 Kotlin `UUID.randomUUID()` 同形）。
+///
+/// 用 `auth` 里那份系统 CSPRNG（随机数只留一处实现）：主键撞车在这里是**静默**
+/// 的数据覆盖（`INSERT` 会撞主键、`ON CONFLICT` 会就地改写别人的消息），
+/// 所以宁可复用一条已经被单测盯住的取随机数路径。
+fn uuid_v4() -> Result<String, ApiError> {
+    let mut bytes = crate::auth::random_bytes(16)?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10xx
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    ))
+}
+
+/// `POST /api/ai/conversations` → **201** + 新会话。
+///
+/// 标题：trim 后为空就用 `"新对话"`（Kotlin 的 `?:`），并截到 255 字符
+/// （那一列在 MySQL 时代是 `VARCHAR(255)`，SQLite 不拦，界面也不拦）。
+pub fn create(state: &AppState, req: &ConversationCreate) -> Result<AiConversationDto, ApiError> {
+    let id = uuid_v4()?;
+    let title = req
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or("新对话")
+        .chars()
+        .take(255)
+        .collect::<String>();
+
+    state.write(|tx| {
+        tx.execute(
+            "INSERT INTO ai_conversations (id, title, provider_id, model_id) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, title, req.provider_id, req.model_id],
+        )?;
+        Ok(())
+    })?;
+    get(state, &id)
+}
+
+/// `PATCH /api/ai/conversations/{id}`。
+pub fn patch(state: &AppState, id: &str, req: &ConversationPatch) -> Result<AiConversationDto, ApiError> {
+    let current = get(state, id)?;
+    // 空标题 = 不改（不是"改成空"）：Kotlin 是 `?.takeIf { it.isNotEmpty() } ?: current.title`
+    let title = req
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(|t| t.chars().take(255).collect::<String>())
+        .unwrap_or(current.title);
+    let provider_id = req.provider_id.clone().or(current.provider_id);
+    let model_id = req.model_id.clone().or(current.model_id);
+    let archived = req.archived.unwrap_or(current.archived);
+
+    state.write(|tx| {
+        tx.execute(
+            "UPDATE ai_conversations
+                SET title = ?1, provider_id = ?2, model_id = ?3, archived = ?4
+              WHERE id = ?5",
+            rusqlite::params![title, provider_id, model_id, if archived { 1 } else { 0 }, id],
+        )?;
+        Ok(())
+    })?;
+    get(state, id)
+}
+
+/// `DELETE /api/ai/conversations/{id}` —— 消息与有序块由**外键级联**清理（AIH-018）。
+///
+/// ⚠ 级联真的生效靠的是 R1（每条连接都 `PRAGMA foreign_keys=ON`）：
+/// 漏了那条 PRAGMA，这里会**静默留下孤儿消息**，而且删除本身"成功"。
+pub fn delete(state: &AppState, id: &str) -> Result<bool, ApiError> {
+    let removed = state.write(|tx| {
+        let n = tx.execute("DELETE FROM ai_conversations WHERE id = ?1", rusqlite::params![id])?;
+        Ok(n > 0)
+    })?;
+    if !removed {
+        return Err(conversation_missing(id));
+    }
+    Ok(true)
+}
+
+/// `POST /api/ai/conversations/{id}/messages` → **201** + 落库后的那条消息（带块）。
+///
+/// # 三条纪律
+///
+/// ① **校验在事务之前**：角色 / 状态非法与"会话不存在"都是 `AiException` 那一档
+///    （`error` = 稳定码 + `detail` = 人话），而 `AppState::write` 的错误通道只认
+///    `WriteError`（普通错误 = 人话）。Kotlin 也是这个顺序（`get()` → `Db.tx {}`）。
+/// ② **`seq` 由服务端分配**（`COALESCE(MAX(seq),0)+1`）：调用方自己算的话，
+///    两台设备同时追加就会拿到同一个序号，而消息顺序是"恢复顺序稳定"的唯一依据。
+/// ③ **消息与其有序块同一个事务**：分开写就会出现"有消息没片段"的半截状态，
+///    界面上表现为一条空回复（正是 R6 要防的那种"已经说出去的话丢了"）。
+pub fn append_message(
+    state: &AppState,
+    conversation_id: &str,
+    req: &MessageAppend,
+) -> Result<AiMessageDto, ApiError> {
+    if !ROLES.contains(&req.role.as_str()) {
+        return Err(ApiError::ai("CONFIG_ERROR", format!("非法角色: {}", req.role)));
+    }
+    if !STATUSES.contains(&req.status.as_str()) {
+        return Err(ApiError::ai("CONFIG_ERROR", format!("非法状态: {}", req.status)));
+    }
+    // 存在性检查（不存在 → `CONFIG_ERROR`，与 Kotlin 同）
+    get(state, conversation_id)?;
+
+    let id = match req.id.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        Some(given) => given.to_string(),
+        None => uuid_v4()?,
+    };
+    let id_for_tx = id.clone();
+    let conversation = conversation_id.to_string();
+    let role = req.role.clone();
+    let status = req.status.clone();
+    let text = req.text.clone();
+    let provider_id = req.provider_id.clone();
+    let model_id = req.model_id.clone();
+    let parts: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>)> = req
+        .parts
+        .iter()
+        .map(|p| {
+            (
+                p.r#type.clone(),
+                p.text.clone(),
+                p.attachment_id.clone(),
+                p.tool_call_id.clone(),
+                p.json_payload.as_ref().map(|v| v.to_string()),
+            )
+        })
+        .collect();
+
+    state.write(move |tx| {
+        let seq: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM ai_messages WHERE conversation_id = ?1",
+            rusqlite::params![conversation],
+            |row| row.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO ai_messages
+               (id, conversation_id, seq, role, status, text, provider_id, model_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![id_for_tx, conversation, seq, role, status, text, provider_id, model_id],
+        )?;
+        for (ordinal, part) in parts.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO ai_message_parts
+                   (message_id, ordinal, type, text, attachment_id, tool_call_id, json_payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![id_for_tx, ordinal as i64, part.0, part.1, part.2, part.3, part.4],
+            )?;
+        }
+        // 会话列表按 updated_at 排序：发一条消息必须把它顶上去，否则这次对话会沉底
+        tx.execute(
+            "UPDATE ai_conversations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+            rusqlite::params![conversation],
+        )?;
+        Ok(())
+    })?;
+
+    // 读回**落库后的那一行**（而不是把入参拼回去）：seq / 时间戳 / 块顺序都以库为准
+    list_messages(state, conversation_id)?
+        .into_iter()
+        .find(|m| m.id == id)
+        .ok_or_else(|| ApiError::internal(format!("消息写入后读不到: {id}")))
 }
 
 /// 坏 JSON **不能让整个接口 500**（Kotlin 那边是 `runCatching { … }.getOrNull()`）：

@@ -185,9 +185,15 @@ pub fn router(state: AppState) -> Router {
         // 模型目录（P4 第 20 步 = Task 2）：能力声明的唯一真源（AIH-011），附件/思考强度都读它
         .route("/api/ai/providers/{id}/models", get(ai_provider_models))
         // 会话与消息的**读**侧（P4 第 21 步）：AI 工作台打开第一件事就是这三条
-        .route("/api/ai/conversations", get(ai_conversations))
-        .route("/api/ai/conversations/{id}", get(ai_conversation))
-        .route("/api/ai/conversations/{id}/messages", get(ai_conversation_messages))
+        .route("/api/ai/conversations", get(ai_conversations).post(create_conversation))
+        .route(
+            "/api/ai/conversations/{id}",
+            get(ai_conversation).patch(patch_conversation).delete(delete_conversation),
+        )
+        .route(
+            "/api/ai/conversations/{id}/messages",
+            get(ai_conversation_messages).post(append_message),
+        )
         // run-kit 工件（P4 第 22 步）：手机 harness 的**全部规则类输入**（R12/R13 的第一次重建）
         .route("/api/ai/run-kit", get(ai_run_kit))
         .route("/api/ai/run-kit/status", get(ai_run_kit_status))
@@ -545,6 +551,49 @@ struct BootstrapQuery {
     page: Option<i64>,
     #[serde(rename = "pageSize")]
     page_size: Option<i64>,
+}
+
+// ---------------------------------------------------------------------------
+//  会话与消息的**写**侧（P4 第 24 步）
+// ---------------------------------------------------------------------------
+//
+// 为什么这一批重要：手机的 M4 上行只推它**自己产生的行**（`/api/sync/push`），
+// 而"桌面在手机那条会话上接着聊"必须由桌面自己写 —— 写侧不搬，指向 Rust 后端时
+// 能看见历史却**动不了它**（界面会拿着 404/501 一脸茫然）。
+
+/// `POST /api/ai/conversations` → **201 Created**（Kotlin 也是 201）。
+async fn create_conversation(
+    State(state): State<AppState>,
+    Json(body): Json<crate::conversations::ConversationCreate>,
+) -> Result<(StatusCode, Json<crate::conversations::AiConversationDto>), ApiError> {
+    Ok((StatusCode::CREATED, Json(crate::conversations::create(&state, &body)?)))
+}
+
+/// `PATCH /api/ai/conversations/{id}` —— 改标题 / 换模型 / 归档（缺的字段一律不改）。
+async fn patch_conversation(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<crate::conversations::ConversationPatch>,
+) -> Result<Json<crate::conversations::AiConversationDto>, ApiError> {
+    Ok(Json(crate::conversations::patch(&state, &id, &body)?))
+}
+
+/// `DELETE /api/ai/conversations/{id}` —— 消息与块靠外键级联（R1 是它的前提）。
+async fn delete_conversation(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    crate::conversations::delete(&state, &id)?;
+    Ok(Json(serde_json::json!({ "deleted": true, "id": id })))
+}
+
+/// `POST /api/ai/conversations/{id}/messages` → **201 Created** + 落库后的那条消息。
+async fn append_message(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<crate::conversations::MessageAppend>,
+) -> Result<(StatusCode, Json<crate::conversations::AiMessageDto>), ApiError> {
+    Ok((StatusCode::CREATED, Json(crate::conversations::append_message(&state, &id, &body)?)))
 }
 
 // ---------------------------------------------------------------------------

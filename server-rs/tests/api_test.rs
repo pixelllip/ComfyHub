@@ -3694,3 +3694,255 @@ async fn pair_start_is_explicitly_not_implemented() {
         "要说清是哪条路没修：{body}"
     );
 }
+
+// ---------------------------------------------------------------------------
+//  会话与消息的写侧（P4 第 24 步）
+// ---------------------------------------------------------------------------
+
+/// 建会话 / 改会话 / 删会话：**三种"没有"分清**，且删掉之后消息与块一起没。
+#[tokio::test]
+async fn conversation_write_side_creates_patches_and_deletes() {
+    let state = state();
+
+    // 空标题 / 全空白 → 「新对话」（Kotlin 的 `?:`，不是空串）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations",
+        serde_json::json!({ "title": "   " }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "建会话是 201（Kotlin 同）");
+    assert_eq!(body["title"], "新对话");
+    assert_eq!(body["archived"], false);
+    assert_eq!(body["messageCount"], 0);
+    assert_eq!(body["systemPromptVersion"], "v1");
+    assert!(body["id"].as_str().unwrap().len() >= 32, "id 是 UUID：{}", body["id"]);
+
+    let (status, created) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations",
+        serde_json::json!({ "title": "手机来的会话", "providerId": "p1", "modelId": "m1" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["providerId"], "p1");
+    assert_eq!(created["modelId"], "m1");
+
+    // PATCH：给了的字段才改
+    let (status, patched) = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        &format!("/api/ai/conversations/{id}"),
+        serde_json::json!({ "title": "改过的标题", "archived": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(patched["title"], "改过的标题");
+    assert_eq!(patched["archived"], true);
+    assert_eq!(patched["providerId"], "p1", "没给的字段不许被清掉");
+
+    // 空 body 的 PATCH = 什么都不改（`null` 与"没给"同义）
+    let (status, same) = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        &format!("/api/ai/conversations/{id}"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(same["title"], "改过的标题");
+    assert_eq!(same["archived"], true);
+
+    // 空标题 = 不改（不是改成空）
+    let (_, same) = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        &format!("/api/ai/conversations/{id}"),
+        serde_json::json!({ "title": "  " }),
+    )
+    .await;
+    assert_eq!(same["title"], "改过的标题");
+
+    // 不存在的会话：PATCH / DELETE 都是 **400 CONFIG_ERROR + detail**
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        "/api/ai/conversations/nope",
+        serde_json::json!({ "title": "x" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert_eq!(body["detail"], "会话不存在: nope");
+
+    // DELETE：先给夹具那条会话挂一条消息 + 一个块，验级联真的清了（R1 是前提）
+    let (_, msg) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/messages",
+        serde_json::json!({ "role": "user", "text": "删我试试" }),
+    )
+    .await;
+    assert!(msg["id"].is_string());
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "DELETE",
+        "/api/ai/conversations/conv-0",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["deleted"], true);
+    assert_eq!(body["id"], "conv-0");
+    let (messages, parts): (i64, i64) = state
+        .with(|conn| {
+            Ok((
+                conn.query_row("SELECT COUNT(*) FROM ai_messages WHERE conversation_id = 'conv-0'", [], |r| r.get(0))?,
+                conn.query_row("SELECT COUNT(*) FROM ai_message_parts WHERE message_id = 'msg-0'", [], |r| r.get(0))?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(messages, 0, "删会话要连消息一起删（外键级联）");
+    assert_eq!(parts, 0, "…连有序块一起删");
+    // 再删一次 → 400（不是静默成功）
+    let (status, _) = send_json(
+        router_for(state.clone()),
+        "DELETE",
+        "/api/ai/conversations/conv-0",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// 追加消息：`seq` 由服务端分配、消息与块**同一个事务**、非法角色/状态一律 400 带稳定码。
+#[tokio::test]
+async fn append_message_assigns_seq_and_writes_parts_atomically() {
+    let state = state();
+
+    // 量的是"这次追加带来几条"：夹具插的那条消息**本身**就会点亮一次账本
+    // （触发器挂在表上，裸 INSERT 同样会触发），所以不能拿总数比。
+    let before: i64 = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM _sync_log WHERE tbl = 'ai_messages' AND op = 'upsert'",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+
+    // 调用方给 id（界面按它认自己插的那条气泡）+ 两个块（正文 + 工具卡）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/messages",
+        serde_json::json!({
+            "id": "msg-mine",
+            "role": "assistant",
+            "text": "好的",
+            "parts": [
+                { "type": "text", "text": "好的" },
+                { "type": "tool_call", "toolCallId": "call-1",
+                  "jsonPayload": { "name": "web_search", "arguments": { "query": "x" } } }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "追加消息是 201：{body}");
+    assert_eq!(body["id"], "msg-mine", "认调用方给的 id");
+    assert_eq!(body["seq"], 2, "夹具里已有 seq=1 的那条");
+    assert_eq!(body["status"], "complete");
+    assert_eq!(body["parts"].as_array().unwrap().len(), 2);
+    assert_eq!(body["parts"][0]["type"], "text");
+    assert_eq!(body["parts"][1]["type"], "tool_call");
+    assert_eq!(body["parts"][1]["jsonPayload"]["name"], "web_search");
+    assert!(body["parts"][1]["jsonPayload"].is_object(), "jsonPayload 是对象，不是字符串");
+    // 块里没值的键**不出现**（形状纪律）
+    assert!(body["parts"][0].get("toolCallId").is_none());
+
+    // 第二条 → seq 递增；没给 id 就自己生成一个
+    let (_, second) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/messages",
+        serde_json::json!({ "role": "user", "text": "第二条" }),
+    )
+    .await;
+    assert_eq!(second["seq"], 3);
+    assert_ne!(second["id"], "msg-mine");
+
+    // 发消息要**把会话顶上去**（列表按 updated_at 排序，不顶就沉底）
+    let (_, conversation) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0").await;
+    assert_eq!(conversation["messageCount"], 3, "夹具 1 条 + 新加的 2 条");
+
+    // 非法角色 / 非法状态 / 不存在的会话 → 400 + 稳定码 + 人话
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/messages",
+        serde_json::json!({ "role": "wizard", "text": "x" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert_eq!(body["detail"], "非法角色: wizard");
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/messages",
+        serde_json::json!({ "role": "user", "text": "x", "status": "sleeping" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["detail"], "非法状态: sleeping");
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/nope/messages",
+        serde_json::json!({ "role": "user", "text": "x" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["detail"], "会话不存在: nope");
+
+    // 非法的那几次**一行都没写进去**（校验在事务之前）
+    let (_, conversation) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0").await;
+    assert_eq!(conversation["messageCount"], 3, "被拒的追加不许留下半截数据");
+
+    // 读回来时块是**按 ordinal 升序**的（工具卡位置不能乱）
+    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let mine = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "msg-mine")
+        .expect("刚追加的那条要在列表里");
+    assert_eq!(mine["parts"][0]["text"], "好的");
+    assert_eq!(mine["parts"][1]["toolCallId"], "call-1");
+
+    // 写侧**点亮同步账本**（手机靠它增量收到桌面写的会话）—— R3：不许出现假的 delete
+    let (upserts, deletes): (i64, i64) = state
+        .with(|conn| {
+            Ok((
+                conn.query_row(
+                    "SELECT COUNT(*) FROM _sync_log WHERE tbl = 'ai_messages' AND op = 'upsert'",
+                    [],
+                    |r| r.get(0),
+                )?,
+                conn.query_row(
+                    "SELECT COUNT(*) FROM _sync_log WHERE tbl = 'ai_messages' AND op = 'delete'",
+                    [],
+                    |r| r.get(0),
+                )?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(upserts - before, 2, "两次成功追加 = 两条 upsert");
+    assert_eq!(deletes, 0, "**不许**出现假 delete（R3）");
+}
