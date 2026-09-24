@@ -109,6 +109,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/manifest", get(sync_manifest))
         .route("/api/sync/changes", get(sync_changes))
         .route("/api/sync/push", axum::routing::post(sync_push))
+        .route("/api/sync/bootstrap", get(sync_bootstrap))
         .merge(crate::write_routes::write_router())
         .with_state(state)
 }
@@ -279,6 +280,40 @@ async fn sync_push(
     Json(body): Json<crate::sync::PushRequest>,
 ) -> Result<Json<crate::sync::PushResult>, ApiError> {
     Ok(Json(crate::sync::push(&state, body)?))
+}
+
+/// `GET /api/sync/bootstrap?table=<表>&page=N` —— 首次全量（契约 §3）。
+///
+/// ⚠ `table` 是**实现时补的必填参数**（契约 §3 的留白，理由写在 `sync::bootstrap` 的注释里）。
+async fn sync_bootstrap(
+    State(state): State<AppState>,
+    Query(q): Query<BootstrapQuery>,
+) -> Result<Json<crate::sync::BootstrapPage>, ApiError> {
+    let table = q
+        .table
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "缺 table 参数；合法值：{}",
+                crate::sync::SYNCED.join(", ")
+            ))
+        })?;
+    Ok(Json(crate::sync::bootstrap(
+        &state,
+        table,
+        q.page.unwrap_or(1),
+        q.page_size.unwrap_or(200),
+    )?))
+}
+
+#[derive(Debug, Deserialize)]
+struct BootstrapQuery {
+    table: Option<String>,
+    page: Option<i64>,
+    #[serde(rename = "pageSize")]
+    page_size: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------

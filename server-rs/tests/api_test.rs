@@ -1866,6 +1866,95 @@ async fn sync_push_lights_up_the_sync_log_without_fake_deletes() {
         .unwrap();
     assert!(upserts >= 2, "插入与更新都要进账本，实际 {upserts}");
 }
+
+// ---------------------------------------------------------------------------
+//  GET /api/sync/bootstrap
+// ---------------------------------------------------------------------------
+
+/// 全量分页：形状自洽 + **翻完所有页不重不漏** + 只发同步范围内的表。
+#[tokio::test]
+async fn sync_bootstrap_pages_without_gaps_or_duplicates() {
+    let state = state();
+    // 夹具里 tags 有 2 行；再补 3 行凑成 5 行，pageSize=2 → 3 页
+    for i in 0..3 {
+        state
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO tags (name, normalized, category, use_count, created_at)
+                     VALUES (?1, ?1, '风格', 0, '2026-09-24T00:00:00.000Z')",
+                    [format!("全量{i}")],
+                )
+                .map(|_| ())
+            })
+            .unwrap();
+    }
+
+    let (status, page1) = get_json(
+        router_for(state.clone()),
+        "/api/sync/bootstrap?table=tags&page=1&pageSize=2",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        keys(&page1),
+        vec!["page", "pageSize", "rows", "table", "totalPages"],
+        "bootstrap 的键集合就是契约 §3",
+    );
+    assert_eq!(page1["table"], "tags");
+    assert_eq!(page1["page"], 1);
+    assert_eq!(page1["pageSize"], 2);
+    assert_eq!(page1["totalPages"], 3, "5 行 / 每页 2 = 3 页");
+    assert_eq!(page1["rows"].as_array().unwrap().len(), 2);
+
+    // ★ 翻完所有页：id 一个不重、一个不漏
+    let mut ids: Vec<i64> = Vec::new();
+    for page in 1..=3 {
+        let (_, body) = get_json(
+            router_for(state.clone()),
+            &format!("/api/sync/bootstrap?table=tags&page={page}&pageSize=2"),
+        )
+        .await;
+        for row in body["rows"].as_array().unwrap() {
+            ids.push(row["id"].as_i64().unwrap());
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 5, "翻完所有页要正好 5 条（重复/漏掉都是 bug）：{ids:?}");
+}
+
+/// **绝不发 `.db` 文件**：`app_settings` 里有配对令牌明文，bootstrap 一张表都不许多发。
+#[tokio::test]
+async fn sync_bootstrap_refuses_tables_outside_the_scope() {
+    let state = state();
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO app_settings (k, v, updated_at) VALUES ('auth.pairToken','SECRET-TOKEN','x')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+
+    // 凭据/令牌表一律 400，而且错误信息里**列出合法表名**（自解释）
+    for forbidden in ["app_settings", "ai_providers", "ai_models", "ai_run_events"] {
+        let (status, body) = get_json(
+            router_for(state.clone()),
+            &format!("/api/sync/bootstrap?table={forbidden}&page=1"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{forbidden} 不该能全量导出");
+        let msg = body["message"].as_str().unwrap();
+        assert!(msg.contains("prompts"), "错误信息要列出合法表名：{msg}");
+        assert!(!body.to_string().contains("SECRET-TOKEN"), "令牌绝不能出现：{body}");
+    }
+
+    // 缺 table 也是 400（必填，理由见 sync::bootstrap 的注释）
+    let (status, body) = get_json(router_for(state.clone()), "/api/sync/bootstrap?page=1").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["message"].as_str().unwrap().contains("table"));
+}
 #[tokio::test]
 async fn media_prompt_has_three_outcomes() {
     let state = state();

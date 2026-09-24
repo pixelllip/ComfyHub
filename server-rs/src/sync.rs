@@ -583,6 +583,67 @@ fn json_to_sql(value: &serde_json::Value) -> Box<dyn rusqlite::ToSql> {
     }
 }
 
+// ---------------------------------------------------------------------------
+//  GET /api/sync/bootstrap
+// ---------------------------------------------------------------------------
+
+/// 一页全量数据（契约 §3 的形状）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapPage {
+    pub table: String,
+    pub page: i64,
+    pub page_size: i64,
+    /// 总页数（手机靠它知道什么时候走完这张表）。
+    pub total_pages: i64,
+    pub rows: Vec<serde_json::Value>,
+}
+
+/// `GET /api/sync/bootstrap?table=<表>&page=1&pageSize=200`
+///
+/// 首次全量：手机刚装上 / `schemaVersion` 变了 / 收到 **410** 之后走这条。
+///
+/// # ⚠ 关于 `table` 参数：这是实现时**补上的一处契约留白**（2026-09-24）
+///
+/// 契约 §3 原文只写了 `?page=N` 与响应形状 `{table, page, pageSize, totalPages, rows[]}`，
+/// **没说 `table` 怎么给**。两种读法都说得通，但只有一种能同时满足 §3 的响应形状：
+///
+/// | 读法 | 后果 |
+/// | --- | --- |
+/// | `?page=N` 顺序遍历所有同步表（把 14 张表"拍平"成一串页） | ❌ 响应里的 `totalPages` **没有意义**（是全部数据的页数还是这张表的？），而且"第 N 页是哪张表"要靠客户端自己算 —— 契约却让**服务端**回 `table` 字段 |
+/// | `?table=<表>&page=N`（**本实现**） | ✅ 每页恰好属于一张表，`table` / `totalPages` / `rows` 三者自洽；客户端的外层循环就是"按 [BootstrapPage 的 table 顺序] 逐表拉到底" |
+///
+/// 所以这里把 `table` 定为**必填**，缺了就回 `400` 并**列出合法表名**（自解释，
+/// 免得写手机侧的人去看源码猜）。实现选择已同步写进 `docs/sync-api-contract.md` §3。
+///
+/// # 两条不能破的纪律
+///
+/// 1. **绝不发 `.db` 文件**：`app_settings` 里有配对令牌明文，发整库等于把令牌送到
+///    "可能已经丢了"的手机上。这里只发 [SYNCED] 里的表，一张都不多。
+/// 2. 手机侧走完全量后把游标置为 `manifest.cursor`（**不是** bootstrap 自己的页号）。
+pub fn bootstrap(state: &AppState, table: &str, page: i64, page_size: i64) -> Result<BootstrapPage, ApiError> {
+    if !SYNCED.contains(&table) {
+        return Err(ApiError::bad_request(format!(
+            "table 不在同步范围内：{table}；合法值：{}",
+            SYNCED.join(", ")
+        )));
+    }
+    let page = page.max(1);
+    let page_size = page_size.clamp(1, 1000);
+
+    state.with(|conn| {
+        let total: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))?;
+        let total_pages = if total == 0 { 1 } else { (total + page_size - 1) / page_size };
+        // 排序要**稳定**：按主键排，否则翻页时行会重复/漏掉（SQLite 不保证无 ORDER BY 的顺序）
+        let sql = format!("SELECT * FROM {table} ORDER BY rowid ASC LIMIT ?1 OFFSET ?2");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map([page_size, (page - 1) * page_size], |row| row_to_json(row))?
+            .collect::<rusqlite::Result<Vec<serde_json::Value>>>()?;
+        Ok(BootstrapPage { table: table.to_string(), page, page_size, total_pages, rows })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
