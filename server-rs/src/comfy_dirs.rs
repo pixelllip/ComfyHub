@@ -17,7 +17,6 @@
 //! `scripts\comfy-path.ps1`、这里）。改判据要同时改三处，否则会出现
 //! "App 说找到了、脚本说找不到"（AGENTS §10.1）。
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -215,11 +214,41 @@ fn env_path(name: &str) -> Option<PathBuf> {
 //  ComfyLocator.find 的 home 那一半（P4 只用它）
 // ---------------------------------------------------------------------------
 
-/// 按"最可能命中"的顺序找 ComfyUI 的**根目录**（每个候选都要过 [`looks_like_comfy`]）。
+/// 探测结果（与 Kotlin `ComfyLocation` 逐字同形）。
 ///
-/// 与 Kotlin `ComfyLocator.find(cfg).home` 同一套顺序；这里只要 home
-/// （`candidates` / `source` 那些是给设置页看的，`/api/capture/locate` 还没搬）。
-pub fn find_home(project_root: &Path, configured_output: Option<&str>) -> Option<PathBuf> {
+/// 探测是**只读**的，结果**不会自动生效**：`find` 只回答"在哪"，
+/// 是否用它由用户点「使用这个目录」决定（`POST /api/capture/locate/apply`）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComfyLocation {
+    /// 探测到的 ComfyUI 根目录（找不到时为 null）。
+    pub home: Option<String>,
+    /// 大概率能直接读产物的输出目录（`<home>\output`）。
+    pub output_dir: Option<String>,
+    /// 从哪里找到的（给用户看的一句话）。
+    pub source: Option<String>,
+    /// 当前设置里**已经**生效的输出目录（没设置时为 null）。
+    pub configured_output_dir: Option<String>,
+    /// 探测到的候选（含被否决的原因），排错用。
+    pub candidates: Vec<ComfyCandidate>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComfyCandidate {
+    pub path: String,
+    pub kind: String,
+    /// 这个目录看起来是不是一个 ComfyUI 安装（有特征文件）。
+    pub looks_like_comfy: bool,
+    /// 判定依据 / 否决原因（只读展示）。
+    pub reason: Option<String>,
+}
+
+/// 按"最可能命中"的顺序找 ComfyUI（每个候选都要过 [`looks_like_comfy`] 这一关）。
+pub fn locate(project_root: &Path, configured_output: Option<&str>) -> ComfyLocation {
+    let mut candidates: Vec<ComfyCandidate> = Vec::new();
+
     // 1) 用户已经配过：尊重它，不再探（配错了由用户自己改）
     if let Some(configured) = configured_output.map(str::trim).filter(|s| !s.is_empty()) {
         let dir = Path::new(configured);
@@ -232,31 +261,98 @@ pub fn find_home(project_root: &Path, configured_output: Option<&str>) -> Option
         } else {
             Some(dir.to_path_buf())
         };
-        return home;
+        return ComfyLocation {
+            home: home.map(|p| p.to_string_lossy().to_string()),
+            output_dir: Some(configured.to_string()),
+            source: Some("已经配置过了（就按这个用）".into()),
+            configured_output_dir: Some(configured.to_string()),
+            candidates,
+            note: None,
+        };
     }
+
+    // `consider`：目录存在才记候选，过不过特征判定都记（被否决的原因正是给用户看的）
+    let consider = |path: Option<PathBuf>, kind: &str, candidates: &mut Vec<ComfyCandidate>| {
+        let path = path?;
+        if !path.is_dir() {
+            return None;
+        }
+        let (ok, reason) = looks_like_comfy(&path);
+        candidates.push(ComfyCandidate {
+            path: path.to_string_lossy().to_string(),
+            kind: kind.to_string(),
+            looks_like_comfy: ok,
+            reason: Some(reason),
+        });
+        if ok {
+            Some(path)
+        } else {
+            None
+        }
+    };
 
     // 2) 显式环境变量（脚本 / 高级用户）
-    for key in ENV_KEYS {
-        if let Some(p) = env_path(key) {
-            if looks_like_comfy(&p).0 {
-                return Some(p);
-            }
-        }
-    }
+    let env_home = [
+        ("COMFYHUB_COMFY_HOME", "环境变量 COMFYHUB_COMFY_HOME"),
+        ("COMFYUI_HOME", "环境变量 COMFYUI_HOME"),
+        ("COMFYUI_PATH", "环境变量 COMFYUI_PATH"),
+    ]
+    .into_iter()
+    .find_map(|(key, kind)| consider(env_path(key), kind, &mut candidates));
 
     // 3) 项目根下的 comfyui（源码树 / 发布包都能带上这一份）
-    let local = project_root.join("comfyui");
-    if local.is_dir() && looks_like_comfy(&local).0 {
-        return Some(plain_path(local.canonicalize().unwrap_or(local)));
-    }
+    let local = consider(Some(project_root.join("comfyui")), "项目内的 comfyui 目录", &mut candidates);
 
     // 4) 常见安装位置
-    for candidate in [PathBuf::from("D:\\ComfyUI"), PathBuf::from("D:\\ComfyUI_windows_portable\\ComfyUI")] {
-        if candidate.is_dir() && looks_like_comfy(&candidate).0 {
-            return Some(plain_path(candidate.canonicalize().unwrap_or(candidate)));
-        }
+    let located = env_home
+        .or(local)
+        .or_else(|| consider(Some(PathBuf::from("D:\\ComfyUI")), "常见位置 D:\\ComfyUI", &mut candidates))
+        .or_else(|| {
+            consider(
+                Some(PathBuf::from("D:\\ComfyUI_windows_portable\\ComfyUI")),
+                "免安装包 D:\\ComfyUI_windows_portable",
+                &mut candidates,
+            )
+        })
+        .or_else(search_user_profile)
+        .or_else(search_desktop_installs)
+        .or_else(search_desktop_packages);
+
+    let Some(located) = located else {
+        return ComfyLocation {
+            home: None,
+            output_dir: None,
+            source: None,
+            configured_output_dir: None,
+            candidates,
+            note: Some(
+                "没找到 ComfyUI。可以手工把它的 output 目录填到「ComfyUI 自动捕获」里\
+                 （ComfyUI 界面里点齿轮 → 看「输出目录」），或者设一个 COMFYHUB_COMFY_HOME 环境变量。"
+                    .into(),
+            ),
+        };
+    };
+
+    // 输出目录：有就用真的，没有也照样把 `<home>\output` 写出去（用户可能还没跑过 ComfyUI）
+    let output = located.join("output");
+    let source = candidates
+        .iter()
+        .rev()
+        .find(|c| c.looks_like_comfy)
+        .map(|c| c.kind.clone());
+    ComfyLocation {
+        home: Some(plain_path(located.clone()).to_string_lossy().to_string()),
+        output_dir: Some(plain_path(output).to_string_lossy().to_string()),
+        source,
+        configured_output_dir: None,
+        candidates,
+        note: None,
     }
-    search_user_profile().or_else(search_desktop_installs).or_else(search_desktop_packages)
+}
+
+/// 按"最可能命中"的顺序找 ComfyUI 的**根目录**（[`locate`] 只要 home 那一半）。
+pub fn find_home(project_root: &Path, configured_output: Option<&str>) -> Option<PathBuf> {
+    locate(project_root, configured_output).home.map(PathBuf::from)
 }
 
 /// `%USERPROFILE%\Documents\ComfyUI`（ComfyUI Desktop 的默认安装位置）。
@@ -354,7 +450,7 @@ fn search_desktop_packages() -> Option<PathBuf> {
 /// 用户可能根本没装 ComfyUI）。
 pub fn auto_read_roots(project_root: &Path, configured_output: Option<&str>) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
-    let mut push = |p: PathBuf, out: &mut Vec<PathBuf>| {
+    let push = |p: PathBuf, out: &mut Vec<PathBuf>| {
         if !out.contains(&p) {
             out.push(p);
         }
@@ -567,6 +663,13 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 pub struct WorkflowQuery {
     pub q: Option<String>,
     pub limit: Option<usize>,
+}
+
+/// `GET /api/capture/locate` 的处理体。
+pub fn locate_json(state: &crate::routes::AppState) -> Result<ComfyLocation, crate::routes::ApiError> {
+    // 读配置失败不该让探测整个失败：那只是"有没有配过"这一个输入（Kotlin 用的是 runCatching）
+    let configured = crate::capture::capture_config(state).unwrap_or_default().output_dir;
+    Ok(locate(&state.project_root(), configured.as_deref()))
 }
 
 /// `GET /api/capture/workflows` 的处理体。

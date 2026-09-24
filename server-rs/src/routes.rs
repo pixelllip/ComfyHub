@@ -127,6 +127,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/capture/config", get(capture_config).put(put_capture_config))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
+        // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
+        .route("/api/capture/locate", get(capture_locate))
+        .route("/api/capture/locate/apply", axum::routing::post(capture_locate_apply))
         // 工作流原文（前端按需拉：详情页的「查看工作流」弹窗）
         .route("/api/prompts/{id}/workflow", get(prompt_workflow))
         .route("/api/media/{id}/workflow", get(media_workflow))
@@ -227,6 +230,41 @@ async fn capture_workflows(
     Query(query): Query<crate::comfy_dirs::WorkflowQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::comfy_dirs::workflows_json(&state, query)?))
+}
+
+/// `GET /api/capture/locate` —— 探测 ComfyUI 装在哪（用户"其他建议"第 3 条）。
+///
+/// **只读**：探测结果不会自动生效，用户点「使用这个目录」才会写进配置（下一个端点）。
+async fn capture_locate(
+    State(state): State<AppState>,
+) -> Result<Json<crate::comfy_dirs::ComfyLocation>, ApiError> {
+    Ok(Json(crate::comfy_dirs::locate_json(&state)?))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocateApplyRequest {
+    output_dir: Option<String>,
+}
+
+/// `POST /api/capture/locate/apply` —— 把探测到的输出目录写进配置。
+///
+/// 两条准入照抄 Kotlin：目录**不能为空**、**必须真的存在**（都要 400 说清楚），
+/// 不然会把一个打不开的路径写进配置，之后"捕获一条也收不到"而用户不知道为什么。
+async fn capture_locate_apply(
+    State(state): State<AppState>,
+    Json(body): Json<LocateApplyRequest>,
+) -> Result<Json<crate::capture::CaptureConfig>, ApiError> {
+    let dir = body.output_dir.unwrap_or_default().trim().to_string();
+    if dir.is_empty() {
+        return Err(ApiError::bad_request("outputDir 不能为空"));
+    }
+    if !std::path::Path::new(&dir).is_dir() {
+        return Err(ApiError::bad_request(format!("目录不存在：{dir}")));
+    }
+    let mut current = crate::capture::capture_config(&state)?;
+    current.output_dir = Some(dir);
+    Ok(Json(crate::capture::put_config(&state, current)?))
 }
 
 /// `GET /api/prompts/{id}/workflow` —— 有就原样吐 `application/json`，没有就 **204**。

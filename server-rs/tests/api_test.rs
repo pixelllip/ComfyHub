@@ -670,7 +670,7 @@ fn state_with_workflow_files() -> (comfyhub_server_rs::routes::AppState, std::pa
     )
     .unwrap();
 
-    (comfyhub_server_rs::routes::AppState::new(conn, ":memory:", media), workflows)
+    (comfyhub_server_rs::routes::AppState::new(conn, ":memory:", media), home)
 }
 
 #[tokio::test]
@@ -706,6 +706,84 @@ async fn capture_workflows_query_filters_by_file_name() {
     assert_eq!(miss["count"], 0);
     // 没命中时要说清楚"共有几份、可以不带 query 再列一次"，而不是干巴巴一个空数组
     assert!(miss["message"].as_str().unwrap().contains("文件名匹配"));
+}
+
+#[tokio::test]
+async fn capture_locate_reports_the_home_and_never_writes_on_its_own() {
+    let (state, home) = state_with_workflow_files();
+    let (status, body) = get_json(router_for(state.clone()), "/api/capture/locate").await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let mut shape = keys(&body);
+    shape.sort();
+    assert_eq!(
+        shape,
+        vec!["candidates", "configuredOutputDir", "home", "note", "outputDir", "source"],
+        "与 Kotlin `ComfyLocation` 同形"
+    );
+    // 夹具把 ComfyUI 摆在项目根下的 `comfyui`（源码形态：main.py + comfy/）
+    assert_eq!(body["home"].as_str().unwrap(), home.to_string_lossy(), "body={body}");
+    assert_eq!(
+        body["outputDir"].as_str().unwrap(),
+        home.join("output").to_string_lossy(),
+        "输出目录 = <home>\\output（还没跑过 ComfyUI 也照样给）"
+    );
+    assert_eq!(body["configuredOutputDir"], Value::Null, "没配过就是 null，不编一个");
+    // 候选里记了"项目内的 comfyui 目录"这一条，且带判定依据（用户排错要看）
+    let candidates = body["candidates"].as_array().unwrap();
+    let hit = candidates
+        .iter()
+        .find(|c| c["kind"].as_str().unwrap().contains("项目内的 comfyui"))
+        .expect("项目内的 comfyui 必须在候选里");
+    assert_eq!(hit["looksLikeComfy"], true);
+    assert!(hit["reason"].as_str().unwrap().contains("main.py"));
+
+    // **只读**：探测一遍之后配置里不该多出任何东西
+    let (_, config) = get_json(router_for(state), "/api/capture/config").await;
+    assert_eq!(config["outputDir"], Value::Null, "探测不许自动生效（要用户点「使用这个目录」）");
+}
+
+#[tokio::test]
+async fn locate_apply_validates_the_dir_and_then_persists_it() {
+    let (state, home) = state_with_workflow_files();
+    let output = home.join("output");
+    std::fs::create_dir_all(&output).unwrap();
+
+    // 空 → 400；不存在 → 400（这两条都会把"捕获一条也收不到"的配置写进去，必须先挡住）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/capture/locate/apply",
+        serde_json::json!({"outputDir": "   "}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body={body}");
+    let (status, _) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/capture/locate/apply",
+        serde_json::json!({"outputDir": "D:\\comfyhub-not-here-98765"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // 真的存在 → 写进配置，并且**回读得到**（返回的就是归一化后的那份配置）
+    let (status, saved) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/capture/locate/apply",
+        serde_json::json!({"outputDir": output.to_string_lossy()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={saved}");
+    assert_eq!(saved["outputDir"].as_str().unwrap(), output.to_string_lossy());
+    let (_, config) = get_json(router_for(state.clone()), "/api/capture/config").await;
+    assert_eq!(config["outputDir"].as_str().unwrap(), output.to_string_lossy());
+
+    // 配上之后 locate 就"就按这个用"（尊重用户配置，不再探）
+    let (_, again) = get_json(router_for(state), "/api/capture/locate").await;
+    assert_eq!(again["configuredOutputDir"].as_str().unwrap(), output.to_string_lossy());
+    assert!(again["source"].as_str().unwrap().contains("已经配置过了"));
+    assert_eq!(again["home"].as_str().unwrap(), home.to_string_lossy());
 }
 
 // ===========================================================================
