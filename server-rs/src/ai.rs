@@ -190,7 +190,9 @@ fn read_credential_refs(state: &AppState) -> Vec<String> {
 }
 
 /// `<storage>\ai\credentials.dpapi.json`（`media_dir = <storage>\media`）。
-fn credential_store_path(state: &AppState) -> std::path::PathBuf {
+///
+/// `pub(crate)`：`auth.rs` 的**密钥下行**要读同一份文件（那边会真的解 DPAPI）。
+pub(crate) fn credential_store_path(state: &AppState) -> std::path::PathBuf {
     let storage = state.media_dir().parent().unwrap_or(state.media_dir());
     storage.join("ai").join("credentials.dpapi.json")
 }

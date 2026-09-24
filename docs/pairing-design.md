@@ -381,3 +381,91 @@ comfyhub://pair?v=1&t=<ticket>&e=<expiresAt>&u=<base64url(urls 用 \n 连接)>
 - [`sync-api-contract.md`](sync-api-contract.md) §0（`X-ComfyHub-Token` 与"连接鉴权 ≠ 操作审批"）
 - [`implementation-master-plan.md`](implementation-master-plan.md) §1（桌面唯一真源）、§3.4（run-kit）、`:748-753`（两端分居的阻塞点）
 - [`android-client-plan.md`](android-client-plan.md) §4（第 1 步鉴权、第 5 步局域网发现）
+
+---
+
+## 11. 实施补充（2026-09-24 落地时冻结的**实际形状**）
+
+> 这一节是**实现契约**：§1~§9 是设计与理由，形状以本节为准（两端 + 脚本 + 用例都照它写）。
+> 落点在 **Rust 后端**（§5.4：手机只连一个后端），Kotlin 侧**不加** `/api/auth`。
+
+### 11.1 ★ 两条配对通道，本轮只做 B（**当场拍板**）
+
+| | A. 扫码通道（**本轮未做**，形状已留） | B. 手机发起通道（**本轮落地**） |
+| --- | --- | --- |
+| 谁先动 | 桌面 `pair/start` 出 ticket + 二维码 | 手机 `pair/request` 先举一次手 |
+| 手机怎么知道 ticket | 扫二维码 | **不需要 ticket**（服务端留在自己手里） |
+| 桌面怎么把码给人 | 屏幕上直接显示 | 屏幕上的**待配对列表**里显示 |
+| 卡在哪 | 手机要相机扫码（一个 Flutter 插件 + 相机权限）；桌面要画二维码（另一个包） | 零新依赖 |
+| 安全属性 | 人必须看到屏幕上的 6 位码 | **同一条**：码只出现在桌面屏幕上 |
+
+**为什么 B 不与 §3 冲突**：§3 的安全增量只有一句 —— **"拿手机的人此刻看得到这台桌面的屏幕"**。
+B 通道把这个属性完整保留（码由桌面算出并显示，手机只能提交、不能计算）；
+它让掉的只是"手机自动知道连哪"（用户手填一次桌面地址，这件事在 §2 的手机侧本来就要做）。
+A 通道留到"真的要做扫码"时再加，**到时候不需要动本节任何已冻结的形状**（只是多一条 `pair/start`）。
+
+> ⚠ **一条绝对不能破的实现纪律**：B 通道里 `requestId` **必须与 ticket 相互独立**。
+> 若把 `requestId` 就当成 ticket 发给手机，手机自己就能算出 6 位码 ——
+> "必须看到屏幕"这件事**当场失效**，而且**任何测试都不会红**（流程照样跑通）。
+> 形状上体现为：`pair/request` 的响应里**只有 `requestId`，没有 `ticket`**。
+
+### 11.2 端点形状（全部在 Rust 后端）
+
+```
+GET  /api/auth                            仅回环 → {enabled, hasToken, schema, devices[], pending[]}
+PUT  /api/auth                            {enabled}  仅回环 → 同上（开开关时若没有令牌就顺手生成一个）
+POST /api/auth/rotate                     仅回环 → {ok, hasToken}
+GET  /api/auth/devices                    回环 或 带令牌 → {devices:[{id,name,pairedAt,lastSeenAt,lastIp,allowCredentials}]}
+POST /api/auth/devices/{id}/revoke        仅回环 → {ok, revoked}
+POST /api/auth/devices/{id}/credentials   {allow}  仅回环 → {ok, id, allowCredentials}
+
+POST /api/auth/pair/request               匿名（限速）{deviceId, deviceName} → {requestId, expiresAt, codeExpiresAt, serverTime}
+GET  /api/auth/pair/pending               仅回环 → {pending:[{requestId, ip, deviceName, code, codeExpiresAt, expiresAt}]}
+POST /api/auth/pair/claim                 匿名（限速）{requestId|ticket, code, deviceId, deviceName}
+                                          → {deviceId, token, schemaVersion, serverTime}
+
+GET  /api/ai/credentials?refs=a,b         回环 或 **已配对且 allowCredentials=true 的设备**
+                                          → {credentials:{a:"…"}}   （未授权的 ref 不出现，不报错）
+```
+
+**错误码（不能混）**：
+
+| 场景 | 状态码 | body |
+| --- | --- | --- |
+| 非回环、闸门开着、**没带**令牌 | `403` | `{"error":"需要配对令牌（X-ComfyHub-Token）"}` |
+| 带了令牌但**不对/已吊销** | `401` | `{"error":"令牌无效或已被吊销"}` |
+| 配对失败（ticket/requestId 不在、码错） | `400` | `{"error":"配对失败"}` —— **不区分**是哪一个错（§5.2） |
+| 会话过期 / 已用过 / 试错 5 次作废 | `410` | `{"error":"配对会话已失效，请在电脑上重新发起"}` |
+| 限速命中 | `429` | `{"error":"请求太频繁，请稍后再试"}` |
+| 凭据端点：非回环**且没带令牌** | `403` | `{"error":"需要配对令牌（X-ComfyHub-Token）"}` |
+| 凭据端点：带了令牌但**不是"已授权设备"**（含全局令牌） | `403` | `{"error":"这台设备没有被允许读取密钥"}`（**与闸门开关无关**） |
+| 非回环打**仅回环**的管理端点（`GET/PUT /api/auth`、`pair/pending`、`devices/{id}/revoke`、`.../credentials`、`rotate`） | `403` | `{"error":"<动作> 只允许在本机（127.0.0.1）调用"}` |
+
+### 11.3 状态：`app_settings.k = 'auth.pairing'`（承 §4.6）
+
+```jsonc
+{ "schema": "comfyhub-inbound-auth/2", "enabled": false, "token": "…43…",
+  "createdAt": "…", "rotatedAt": null,
+  "devices": [ { "id": "phone-…", "name": "OnePlus 8T", "token": "…43…",
+                 "pairedAt": "…", "lastSeenAt": "…", "lastIp": "10.44.33.71",
+                 "allowCredentials": false } ] }
+```
+
+- `devices` / `allowCredentials` 缺失一律按空数组 / `false` 读（**不是**坏 JSON）。
+- **`allowCredentials` 是"密钥下行"的唯一开关**，默认 `false`：手机配对成功 ≠ 能拿密钥。
+- ticket / 滚动码 / pending 请求**只在内存**，永不落库、永不进日志。
+
+### 11.4 闸门的判定顺序（纯函数，一处实现）
+
+1. `/api/auth/pair/request` 与 `/api/auth/pair/claim` → **放行**（它们本来就是给未配对设备用的，内部限速）；
+2. 来源是回环 → **放行**（桌面 App 与脚本都走这条）；
+3. `/api/ai/credentials` → 只认"已配对 + 已授权"的**设备**令牌（`enabled` 关着也一样，**永不对匿名开放**）；
+4. `enabled == false` → **放行**（今天的行为；三条既有 e2e 不带任何头，必须全绿）；
+5. 有令牌 → 放行并记 `lastSeenAt` / `lastIp`；没令牌 → `403`；令牌不对 → `401`。
+
+### 11.5 本轮**不做**的（诚实清单，别当成已完成）
+
+- 二维码（`pair/start`）与手机扫码：见 §11.1 的取舍；
+- `devicePublicKey` 请求签名（§8 已声明不做）；
+- HTTPS / 公网暴露（§8）；
+- 手机侧的前台服务与后台长时间 Run（归总纲 §7 风险表，与本轮无关）。

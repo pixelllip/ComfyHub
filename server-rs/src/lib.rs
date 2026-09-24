@@ -13,6 +13,7 @@
 //! | [`routes`] | `TagRoutes.kt` / `PromptRoutes.kt` / `…Repo` 的读端点 |
 
 pub mod ai;
+pub mod auth;
 pub mod capture;
 pub mod comfy_dirs;
 pub mod conversations;

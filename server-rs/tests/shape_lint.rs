@@ -30,7 +30,20 @@ use std::path::{Path, PathBuf};
 /// 同步 API 是 Rust 侧新定的（Kotlin 没有对应端点），契约 §1 与 `api_test` 都写死了
 /// "没写过就回 null"（手机据此判断桌面还没有工件版本）。**它不是 Kotlin 镜像 DTO**，
 /// 所以不适用"省略键"那条规则。
-const ALLOWED_NULLS: [(&str, &str); 1] = [("sync.rs", "kit_version")];
+///
+/// 第二组豁免：`auth.rs` 的配对状态（`app_settings.k = 'auth.pairing'`）。
+/// 它同样**不是对外 DTO**：没有任何客户端读它（`app_settings` 不在同步范围内，
+/// 手机永远拿不到这一行），形状由 🔒 `docs/pairing-design.md` §11.3 定，
+/// 而那份例子写的正是 `"rotatedAt": null`。**别照着这条去豁免真正的响应结构**。
+const ALLOWED_NULLS: [(&str, &str); 7] = [
+    ("sync.rs", "kit_version"),
+    ("auth.rs", "token"),
+    ("auth.rs", "created_at"),
+    ("auth.rs", "rotated_at"),
+    ("auth.rs", "paired_at"),
+    ("auth.rs", "last_seen_at"),
+    ("auth.rs", "last_ip"),
+];
 
 /// 这个 struct 的字段里，哪些 `Option<…>` 没带 `skip_serializing_if`。
 ///

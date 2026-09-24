@@ -207,6 +207,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/push", axum::routing::post(sync_push))
         .route("/api/sync/bootstrap", get(sync_bootstrap))
         .merge(crate::write_routes::write_router())
+        // 配对闸门（P4 第 23 步）：`/api/auth*` + **密钥下行** + 令牌校验中间件。
+        // ⚠ 顺序要紧：`.layer()` 只作用于**它之前**加进来的路由，所以这里必须排在
+        // 所有 `.route()` / `.merge()` 之后（排在前面就会漏掉一半端点，而且不报错）。
+        .merge(crate::auth::router())
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::auth::gate))
         // 未知路径也要给**同样形状**的错误体（默认 fallback 是空 body，界面只会显示 "HTTP 404"）
         .fallback(fallback_route)
         .with_state(state)
@@ -630,6 +635,25 @@ impl ApiError {
     /// **它不进错误响应体**（响应体只有 `error` / `detail` 两个键）。
     pub fn human(&self) -> &str {
         self.detail.as_deref().unwrap_or(&self.error)
+    }
+
+    /// **`403`：没带令牌**（或这台设备没被授权做这件事）。
+    ///
+    /// ⚠ 与 `401` 的语义**不能混**（`docs/pairing-design.md` §7）：
+    /// `403` = "你还没证明自己是谁"，`401` = "你证明了自己，但钥匙不对/已被吊销"。
+    /// 混了以后用户看到的那句话会指向错误的排查方向（该去配对，却跑去重新配对）。
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::FORBIDDEN, message, None)
+    }
+
+    /// **`401`：带了令牌但不对 / 已被吊销**。
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, message, None)
+    }
+
+    /// **`429`：配对请求太频繁**（按来源地址限速）。
+    pub fn new_rate_limited(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, message, None)
     }
 }
 

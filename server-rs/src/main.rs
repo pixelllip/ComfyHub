@@ -32,6 +32,8 @@
 //! | `GET /api/ai/providers`（不含密钥）、`GET /api/ai/providers/{id}/models` | ✅ |
 //! | `GET /api/ai/conversations`、`/{id}`、`/{id}/messages`（**读侧**：历史会话与有序块） | ✅ |
 //! | **`GET /api/ai/run-kit{,/status}`**（手机 harness 的全部规则类输入；R12/R13 的第一次重建） | ✅ |
+//! | **`/api/auth*` 配对闸门 + `GET /api/ai/credentials` 密钥下行**（inbound auth P0 + 配对第 2 步） | ✅ |
+//! | 扫码配对（`POST /api/auth/pair/start`） | ⛔ **501**（本轮只做"手机发起 + 桌面显示 6 位码"，见 `docs/pairing-design.md` §11.1） |
 //! | `/api/ai/*` 的其余部分（会话写侧 / Run / SSE / 工具 / 审批 / 附件） | ⛔ **未搬**（Kotlin 那边继续服务） |
 //! | `/api/capture/{status,jobs,poll,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功） |
 //! | R6~R10 的安全防线 | ⛔ **未重建**（AI/工具层是最后一批，总纲 §6 要求逐条对照重建） |
@@ -175,7 +177,10 @@ async fn main() {
             std::process::exit(5);
         }
     };
-    if let Err(e) = axum::serve(listener, app)
+    // ⚠ **必须带 connect info**：配对闸门就是靠"来源地址是不是回环"决定放不放行的
+    // （`docs/pairing-design.md` §11.4）。漏了它，每一个请求都会走"拿不到来源 = 非回环"
+    // 那条保守分支 —— 闸门一开，本机的桌面 App 也会被自己关在门外。
+    if let Err(e) = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
             println!("收到停止信号，正在退出");

@@ -184,6 +184,15 @@ class HarnessBridge(private val context: Context) :
                 "hasCredential" -> result.success(
                     credentials.has(call.argument<String>("ref").orEmpty()),
                 )
+                // 唯一一个"把密钥取出来"的动作。它存在的理由只有一个：
+                // **请求头要放配对令牌**（`X-ComfyHub-Token`），而令牌就存在这个密钥库里
+                // （`docs/pairing-design.md` §3.2 第 13 步）。值只回给 Dart 的内存，不进日志。
+                "getCredential" -> result.success(
+                    credentials.get(call.argument<String>("ref").orEmpty()),
+                )
+                // 配对付给桌面的身份：deviceId 必须与上行同步用的**同一个**
+                // （`SyncPushClient.deviceId` 的纪律：生成两次 = 桌面当成两台设备）。
+                "pairingIdentity" -> result.success(pairingIdentity())
                 "putCredential" -> {
                     val ref = call.argument<String>("ref").orEmpty()
                     val value = call.argument<String>("value").orEmpty()
@@ -291,6 +300,22 @@ class HarnessBridge(private val context: Context) :
     }
 
     private fun kitJsonOrEmpty(kit: RunKit): String = com.comfyhub.harness.kit.RunKitCodec.toJson(kit)
+
+    /**
+     * 配对时报给桌面的身份：`{deviceId, deviceName}`（🔒 `docs/pairing-design.md` §11.2）。
+     *
+     * `deviceId` 走 [SyncPushClient.deviceId]（与上行同步同一个），
+     * `deviceName` 用 `Build.MODEL`（桌面上那一行"哪台手机"要给人看）。
+     */
+    private fun pairingIdentity(): String {
+        val s = ensureInitialized()
+        val id = SyncPushClient(s, transport).deviceId()
+        val name = android.os.Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android 设备"
+        return buildJsonObject {
+            put("deviceId", id)
+            put("deviceName", name)
+        }.toString()
+    }
 
     private fun cachedKitJson(): String? = store?.let { RunKitCache(it).load()?.let(::kitJsonOrEmpty) }
 
