@@ -334,22 +334,39 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
               ),
             ),
           // 内置模型目录（M6）：冻结副本 → 库里的对齐入口，永远可见
-          _BuiltinCatalogCard(
-            status: _builtin,
-            busy: _builtinBusy,
-            onRefresh: _loading ? null : _loadBuiltin,
-            onAlignCapabilities: _alignBuiltinCapabilities,
-            onAddMissing: _addMissingBuiltinModels,
-          ),
-          // 模型能力目录（2026-09-23）：在线更新（models.dev）+ 实测校准入口
-          _CapabilityCatalogCard(
-            status: _cap,
-            busy: _capBusy,
-            probeBusy: _probeBusy,
-            onRefreshStatus: _loading ? null : _loadCapabilityCatalog,
-            onUpdateRemote: _refreshCapabilityCatalog,
-            onProbeToggle: _toggleProbe,
-            onProbe: _probeThinkingLadders,
+          //
+          // ⚠ 这两张卡（+ 上面的错误横幅）在手机上会占掉大半屏。它们**不是**弹性子项，
+          // 一旦加起来超过可用高度，外层的 `Column` 就没有余量可分 ——
+          // 真机验收（OnePlus 8T）实测直接画成 `BOTTOM OVERFLOWED BY 57 PIXELS`。
+          // 所以给这一坨一个**高度上限**并让它自己滚：屏幕小就在这块里滚，
+          // 而不是把整页挤爆（桌面窗口够高时上限用不到，布局与以前一样）。
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * 0.42,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  _BuiltinCatalogCard(
+                    status: _builtin,
+                    busy: _builtinBusy,
+                    onRefresh: _loading ? null : _loadBuiltin,
+                    onAlignCapabilities: _alignBuiltinCapabilities,
+                    onAddMissing: _addMissingBuiltinModels,
+                  ),
+                  // 模型能力目录（2026-09-23）：在线更新（models.dev）+ 实测校准入口
+                  _CapabilityCatalogCard(
+                    status: _cap,
+                    busy: _capBusy,
+                    probeBusy: _probeBusy,
+                    onRefreshStatus: _loading ? null : _loadCapabilityCatalog,
+                    onUpdateRemote: _refreshCapabilityCatalog,
+                    onProbeToggle: _toggleProbe,
+                    onProbe: _probeThinkingLadders,
+                  ),
+                ],
+              ),
+            ),
           ),
           Expanded(
             child: wide
@@ -1935,19 +1952,18 @@ class _CapabilityCatalogCard extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 6),
-            // 开关 + 说明 + 两个动作。
+            // 开关 + 说明一行，两个动作一行（窄屏换行）。
             //
-            // ⚠ 用 `Wrap` 而不是 `Row`（2026-09-24 真机验收，OnePlus 8T / 1080x2400）：
-            // 这一行在手机上**放不下**，`Row` 会画成 `RIGHT OVERFLOWED BY 2 PIXELS`
-            // （用户报的就是那道黄黑斜纹）。窄了就该换行，不能硬挤 —— 两个按钮
-            // 换到第二行比"右边两个像素画到屏幕外"好得多。
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              crossAxisAlignment: WrapCrossAlignment.center,
+            // ⚠ 这里踩了两次（2026-09-24 真机验收）：
+            //   ① 原来是一个 `Row` 塞四样东西 → `RIGHT OVERFLOWED BY 2 PIXELS`；
+            //   ② 改成 `Wrap([Row(Switch+Text), 按钮…])` 之后**还是**溢出 10px ——
+            //      因为里层那个 `Row` 自己是 `mainAxisSize.min` + 不换行的 `Text`，
+            //      它一宽就顶出去了。所以文字必须是 `Expanded` + 省略号，
+            //      动作按钮才是那个"窄了就换行"的 `Wrap`。
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Switch(
                       value: s?.probeEnabled ?? false,
@@ -1955,20 +1971,33 @@ class _CapabilityCatalogCard extends StatelessWidget {
                       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     const SizedBox(width: 2),
-                    Text('允许实测校准（发真实请求，可能产生少量费用）', style: theme.textTheme.bodySmall),
+                    Expanded(
+                      child: Text(
+                        '允许实测校准（发真实请求，可能产生少量费用）',
+                        style: theme.textTheme.bodySmall,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                   ],
                 ),
-                FilledButton.icon(
-                  onPressed: (busy || update == null) ? null : () => update(),
-                  icon: const Icon(Icons.cloud_download_outlined, size: 16),
-                  label: const Text('立即更新'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: (busy || probeBusy || probe == null || s?.probeEnabled != true)
-                      ? null
-                      : () => probe(),
-                  icon: const Icon(Icons.fact_check_outlined, size: 16),
-                  label: const Text('校准思考档位'),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: (busy || update == null) ? null : () => update(),
+                      icon: const Icon(Icons.cloud_download_outlined, size: 16),
+                      label: const Text('立即更新'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: (busy || probeBusy || probe == null || s?.probeEnabled != true)
+                          ? null
+                          : () => probe(),
+                      icon: const Icon(Icons.fact_check_outlined, size: 16),
+                      label: const Text('校准思考档位'),
+                    ),
+                  ],
                 ),
               ],
             ),

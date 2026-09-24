@@ -1,0 +1,82 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:provider/provider.dart';
+import 'package:viewer/core/ai_api_client.dart';
+import 'package:viewer/core/settings_store.dart';
+import 'package:viewer/pages/ai_provider_settings_page.dart';
+
+/// **手机上不许画到屏幕外面去**（2026-09-24 真机验收抓到的两条溢出）。
+///
+/// # 这条用例在防什么
+///
+/// 真机（OnePlus 8T）实测「AI 模型与凭据」页上有两道黄黑斜纹：
+///
+/// * `RIGHT OVERFLOWED BY 2 PIXELS` —— "开关 + 说明 + 立即更新 + 校准思考档位"
+///   挤在一个 `Row` 里；
+/// * `BOTTOM OVERFLOWED BY 57 PIXELS` —— 两张目录卡 + 错误横幅都是**非弹性**子项，
+///   加起来超过可用高度时外层 `Column` 没有余量可分。
+///
+/// 这两条在桌面上（窗口宽、高度够）**永远看不到**，而 `flutter analyze` 一个字都不说；
+/// 所以防线只能是"**用手机尺寸把它挂起来**"。
+///
+/// # 为什么这样写
+
+/// Flutter 在溢出时**会抛异常**（`A RenderFlex overflowed by …`），而 widget 用例
+/// 里任何未捕获异常都会让用例红 —— 于是"有没有溢出"根本不用自己断言。
+///
+/// 视口取真机那一组：`1080x2400` 物理像素 / `2.8125` 缩放 = 逻辑 `384x853`
+/// （`adb shell wm size` + `wm density 450`），刻意**不**用桌面尺寸，
+/// 否则这个用例就只剩下"点得动"这一层保障了。
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  /// 一个"什么都没搬过来"的后端：每个请求都回 `404 {error}`。
+  ///
+  /// 这正好复现真机上的状态 —— 灰度期的 Rust 后端对 `/api/ai/builtin/status` /
+  /// `/api/ai/capabilities/status` 就是回这个（页面会把两句"读取失败"画在卡上，
+  /// 而**那两行文字正是把高度顶爆的那部分**）。
+  MockClient emptyBackend() => MockClient((request) async {
+        final body = jsonEncode({'error': '接口不存在: ${request.url.path}'});
+        return http.Response(body, 404, headers: {'content-type': 'application/json'});
+      });
+
+  Future<void> pumpProviderPage(WidgetTester tester, {required Size logical}) async {
+    tester.view.physicalSize = Size(logical.width * 2.8125, logical.height * 2.8125);
+    tester.view.devicePixelRatio = 2.8125;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final settings = SettingsStore();
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [ChangeNotifierProvider<SettingsStore>.value(value: settings)],
+        child: MaterialApp(
+          home: AiProviderSettingsPage(
+            api: AiApiClient('http://127.0.0.1:8081', client: emptyBackend()),
+          ),
+        ),
+      ),
+    );
+    // 让 initState 里那三发请求都落地（它们失败，正是要看的那个状态）
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('手机尺寸下「AI 模型与凭据」页不溢出、也不抛异常（两道斜纹的防线）', (tester) async {
+    await pumpProviderPage(tester, logical: const Size(384, 853));
+    // 页面的三块承重内容都在（没有因为溢出被裁掉）
+    expect(find.text('AI 模型与凭据'), findsOneWidget);
+    expect(find.text('内置模型目录'), findsOneWidget);
+    expect(find.text('模型能力目录'), findsOneWidget);
+    // 卡片上如实写着失败原因（灰度期后端没这条接口）—— 不许静默
+    expect(find.textContaining('接口不存在'), findsWidgets);
+  });
+
+  testWidgets('更窄的屏幕（320dp）同样不溢出', (tester) async {
+    await pumpProviderPage(tester, logical: const Size(320, 640));
+    expect(find.text('模型能力目录'), findsOneWidget);
+  });
+}
