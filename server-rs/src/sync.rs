@@ -26,7 +26,7 @@
 use std::collections::BTreeMap;
 
 use rusqlite::OptionalExtension;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::routes::{ApiError, AppState};
 
@@ -351,6 +351,236 @@ fn row_to_json(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
         map.insert(name.to_string(), value);
     }
     Ok(serde_json::Value::Object(map))
+}
+
+// ---------------------------------------------------------------------------
+//  POST /api/sync/push
+// ---------------------------------------------------------------------------
+
+/// 手机 `kind` → 桌面表名（**单数 kind、复数表**，与契约 §4 的例子同形）。
+fn table_of_kind(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "ai_conversation" => "ai_conversations",
+        "ai_message" => "ai_messages",
+        "ai_message_part" => "ai_message_parts",
+        "ai_attachment" => "ai_attachments",
+        _ => return None,
+    })
+}
+
+/// **手机不许创建的表**（总纲 §3.3：那些由桌面在提交时产生）。
+///
+/// 推上来只能是 `rejected`，而且要给出**永久性**的错误码 —— 手机据此把 outbox 那行丢掉
+/// （若回一个"暂时失败"，手机就会永远重试，每次都被拒）。
+const PHONE_FORBIDDEN: &[&str] = &[
+    "prompts",
+    "media_assets",
+    "tags",
+    "prompt_tags",
+    "media_tags",
+    "capture_runs",
+];
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushRequest {
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[serde(default)]
+    pub batch: Vec<PushItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushItem {
+    pub kind: String,
+    pub ref_id: String,
+    #[serde(default)]
+    pub op: Option<String>,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushResult {
+    pub applied: Vec<String>,
+    pub rejected: Vec<Rejected>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Rejected {
+    pub ref_id: String,
+    /// **逐条给码**（契约 §4）：手机要能区分"永远不可能成功"（丢掉）与"暂时失败"（重试）
+    pub code: String,
+    pub message: String,
+}
+
+/// `POST /api/sync/push` —— 上行：把手机 `_outbox` 里攒的东西推上来（契约 §4）。
+///
+/// # 三条纪律
+///
+/// 1. **幂等**：重复推送**不许**产生重复行。靠"主键是 UUID + `ON CONFLICT DO UPDATE`"。
+///    第二次推同一条会落到 LWW 分支被记 `STALE_IGNORED`（不是插入第二行）。
+/// 2. **服务端赢（LWW）**：只有 `updated_at` **比桌面新**才覆盖；否则丢弃并记 `rejected`。
+///    桌面是唯一真源（架构纪律 1），不能让手机把桌面改过的行回退成旧值。
+/// 3. **`rejected` 逐条给 `code`**，而且**永久性失败与暂时失败要分清** ——
+///    给一个"暂时"的码会让手机永远重试一条永远不会成功的行。
+///
+/// 每条 item **各自一个事务**：坏行不该挡住同批里其它行，手机也才能逐条清 outbox。
+pub fn push(state: &AppState, request: PushRequest) -> Result<PushResult, ApiError> {
+    if request.batch.len() > 500 {
+        return Err(ApiError::bad_request(format!(
+            "单批最多 500 行，收到 {}",
+            request.batch.len()
+        )));
+    }
+    let mut result = PushResult { applied: Vec::new(), rejected: Vec::new() };
+    for item in &request.batch {
+        match apply_one(state, item) {
+            Ok(()) => result.applied.push(item.ref_id.clone()),
+            Err(reject) => result.rejected.push(reject),
+        }
+    }
+    Ok(result)
+}
+
+/// 应用一条上行：**每条一个事务**（`BEGIN IMMEDIATE`，R2）。
+fn apply_one(state: &AppState, item: &PushItem) -> Result<(), Rejected> {
+    let reject = |code: &str, message: String| Rejected {
+        ref_id: item.ref_id.clone(),
+        code: code.to_string(),
+        message,
+    };
+
+    // ① 允许的表（先看是不是"手机根本不配创建的"
+    if PHONE_FORBIDDEN.contains(&item.kind.as_str()) {
+        return Err(reject(
+            "FORBIDDEN_KIND",
+            format!("{} 由桌面在提交时产生，手机不许创建（总纲 §3.3）", item.kind),
+        ));
+    }
+    let Some(table) = table_of_kind(&item.kind) else {
+        return Err(reject("UNKNOWN_KIND", format!("未知的上行类型：{}", item.kind)));
+    };
+    // ② op：目前只支持 upsert（delete 是"手机删桌面数据"，还没定策略）
+    if let Some(op) = item.op.as_deref() {
+        if op != "upsert" {
+            return Err(reject("UNSUPPORTED_OP", format!("暂不支持的操作：{op}")));
+        }
+    }
+    let Some(obj) = item.payload.as_object() else {
+        return Err(reject("BAD_PAYLOAD", "payload 必须是对象（完整行）".to_string()));
+    };
+
+    state
+        .write(|tx| {
+            // ③ 列清单**从 PRAGMA 现查**（不维护手写清单：漂移了就会静默少写一列）。
+            //    列名验证过字符集之后再拼进 SQL —— payload 的键来自手机，这里是注入面。
+            let columns = table_columns(tx, table)?;
+            if columns.is_empty() {
+                return Ok(Err(reject("UNKNOWN_TABLE", format!("桌面没有 {table} 这张表"))));
+            }
+            if !columns.iter().any(|c| c == "id") {
+                return Ok(Err(reject("SCHEMA_MISMATCH", format!("{table} 没有 id 列"))));
+            }
+
+            let mut cols: Vec<String> = Vec::new();
+            let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            for (key, value) in obj {
+                if !columns.iter().any(|c| c == key) {
+                    // 未知列 = 两端 schema 对不上，**永久性失败**（别让手机死循环重试）
+                    return Ok(Err(reject(
+                        "SCHEMA_MISMATCH",
+                        format!("{table} 没有列 {key}"),
+                    )));
+                }
+                cols.push(key.clone());
+                values.push(json_to_sql(value));
+            }
+            if !cols.iter().any(|c| c == "id") {
+                return Ok(Err(reject("BAD_PAYLOAD", "payload 缺 id".to_string())));
+            }
+            // ref_id 与 payload.id 必须一致，否则 outbox 的引用就是错的
+            if obj.get("id").and_then(|v| v.as_str()) != Some(item.ref_id.as_str()) {
+                return Ok(Err(reject(
+                    "REF_MISMATCH",
+                    format!("refId ({}) 与 payload.id 不一致", item.ref_id),
+                )));
+            }
+
+            // ④ LWW：只有比桌面新才覆盖
+            if let Some(incoming) = obj.get("updated_at").and_then(|v| v.as_str()) {
+                let existing: Option<String> = tx
+                    .query_row(
+                        &format!("SELECT updated_at FROM {table} WHERE id = ?1"),
+                        [item.ref_id.as_str()],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .optional()?
+                    .flatten();
+                if let Some(current) = existing {
+                    if incoming <= current.as_str() {
+                        return Ok(Err(reject(
+                            "STALE_IGNORED",
+                            format!("桌面的那一行不更旧（{current} >= {incoming}），服务端赢"),
+                        )));
+                    }
+                }
+            }
+
+            // ⑤ 幂等 upsert：**绝不能用 INSERT OR REPLACE**
+            //    （R3：它内部是 DELETE+INSERT，会点亮 DELETE 触发器往 _sync_log 写**假的 delete**）
+            let quoted = cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+            let holders = vec!["?"; cols.len()].join(", ");
+            let updates = cols
+                .iter()
+                .filter(|c| c.as_str() != "id")
+                .map(|c| format!("{0} = excluded.{0}", quote_ident(c)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "INSERT INTO {table} ({quoted}) VALUES ({holders})
+                 ON CONFLICT(id) DO UPDATE SET {updates}"
+            );
+            let refs: Vec<&dyn rusqlite::ToSql> = values.iter().map(|v| v.as_ref()).collect();
+            tx.execute(&sql, rusqlite::params_from_iter(refs))?;
+            Ok(Ok(()))
+        })
+        .map_err(|e: ApiError| reject("DB_ERROR", format!("落库失败：{}", e.message)))?
+}
+
+/// 表有哪些列（`PRAGMA table_info`，与 P2 的收敛式迁移同一个取数方式）。
+fn table_columns(tx: &rusqlite::Transaction<'_>, table: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = tx.prepare(&format!("PRAGMA table_info({})", quote_ident(table)))?;
+    let names = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(names)
+}
+
+/// 列名只允许 `[A-Za-z0-9_]`，然后加双引号 —— 双保险（键来自手机，是注入面）。
+fn quote_ident(name: &str) -> String {
+    let safe: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+    format!("\"{safe}\"")
+}
+
+/// JSON 值 → SQLite 参数。对象/数组按 JSON 文本存（schema 里 JSON 列就是 TEXT）。
+fn json_to_sql(value: &serde_json::Value) -> Box<dyn rusqlite::ToSql> {
+    match value {
+        serde_json::Value::Null => Box::new(Option::<String>::None),
+        serde_json::Value::Bool(b) => Box::new(if *b { 1i64 } else { 0i64 }),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Box::new(i)
+            } else {
+                Box::new(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        serde_json::Value::String(s) => Box::new(s.clone()),
+        other => Box::new(other.to_string()),
+    }
 }
 
 #[cfg(test)]

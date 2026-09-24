@@ -1592,6 +1592,280 @@ async fn sync_changes_paginates_and_advances_the_cursor() {
     }
     assert_eq!(seen, 5, "翻完所有页要正好收到 5 条（多一条/少一条都是 bug）");
 }
+
+// ---------------------------------------------------------------------------
+//  POST /api/sync/push（M4 的 DoD 就在这里）
+// ---------------------------------------------------------------------------
+
+/// ⚠ 信封是 camelCase（`kind` / `refId` / `deviceId`），但 **payload 里是数据库列名（snake_case）**
+/// —— 契约 §2 的例子就是 `{ "id": 12, "text": "…", "updated_at": "…" }`。
+/// payload 走的是"完整行直接覆盖本地行"，所以它必须与列名同形，不能再转一道驼峰。
+fn conv_payload(id: &str, title: &str, updated_at: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "title": title,
+        "system_prompt_version": "v1",
+        "archived": 0,
+        "created_at": "2026-09-24T00:00:00.000Z",
+        "updated_at": updated_at,
+    })
+}
+
+fn push_item(kind: &str, ref_id: &str, payload: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "kind": kind, "refId": ref_id, "op": "upsert", "payload": payload })
+}
+
+async fn push(state: &comfyhub_server_rs::routes::AppState, batch: Vec<serde_json::Value>) -> (StatusCode, Value) {
+    send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/sync/push",
+        serde_json::json!({ "deviceId": "phone-test", "batch": batch }),
+    )
+    .await
+}
+
+/// ★ **M4 的 DoD：手机产生的会话在桌面可见；重复推送不产生重复行。**
+#[tokio::test]
+async fn sync_push_applies_and_is_idempotent() {
+    let state = state();
+    let item = push_item(
+        "ai_conversation",
+        "conv-phone-1",
+        conv_payload("conv-phone-1", "手机上起的会话", "2026-09-24T10:00:00.000Z"),
+    );
+
+    // 第一次：applied
+    let (status, body) = push(&state, vec![item.clone()]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["applied"], serde_json::json!(["conv-phone-1"]));
+    assert_eq!(body["rejected"], serde_json::json!([]));
+
+    // 桌面看得见（这是 M4 DoD 的前半句）
+    let (status, row) = get_json(router_for(state.clone()), "/api/sync/changes?since=0").await;
+    assert_eq!(status, StatusCode::OK);
+    let titles: Vec<&str> = row["upserts"]["ai_conversations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["title"].as_str())
+        .collect();
+    assert!(titles.contains(&"手机上起的会话"), "上行之后的会话应当在同步流里：{titles:?}");
+
+    // ★ 第二次推**同一条**：不许产生重复行
+    let (status, body) = push(&state, vec![item.clone()]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["applied"], serde_json::json!([]), "第二次不该再 applied");
+    assert_eq!(body["rejected"][0]["code"], "STALE_IGNORED", "LWW：同一条再推→服务端赢");
+    assert_eq!(body["rejected"][0]["refId"], "conv-phone-1");
+
+    let n: i64 = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM ai_conversations WHERE id = 'conv-phone-1'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+        })
+        .unwrap();
+    assert_eq!(n, 1, "重复推送**只能有一行**（就地更新，绝不新增）");
+    let title: String = state
+        .with(|conn| {
+            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-phone-1'", [], |r| r.get(0))
+                .map_err(Into::into)
+        })
+        .unwrap();
+    assert_eq!(title, "手机上起的会话", "被拒的那次不该改动内容");
+}
+
+/// **服务端赢（LWW）**：`updated_at` 不比桌面新就不许覆盖。
+#[tokio::test]
+async fn sync_push_keeps_the_desktop_value_when_the_push_is_older() {
+    let state = state();
+    // 桌面先有一行（更新的时间）
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_conversations (id,title,archived,created_at,updated_at)
+                 VALUES ('conv-lww','桌面改过的名字',0,'2026-09-24T00:00:00.000Z','2026-09-24T12:00:00.000Z')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+
+    // 手机推一份**更旧**的 → 被拒，桌面值原封不动
+    let (status, body) = push(
+        &state,
+        vec![push_item(
+            "ai_conversation",
+            "conv-lww",
+            conv_payload("conv-lww", "手机上的旧名字", "2026-09-24T09:00:00.000Z"),
+        )],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["rejected"][0]["code"], "STALE_IGNORED");
+    let title: String = state
+        .with(|conn| {
+            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-lww'", [], |r| r.get(0))
+                .map_err(Into::into)
+        })
+        .unwrap();
+    assert_eq!(title, "桌面改过的名字", "旧的推送不许把桌面的行回退");
+
+    // 手机推一份**更新**的 → 覆盖（桌面已经在别处改过，这是正常接力）
+    let (_, body) = push(
+        &state,
+        vec![push_item(
+            "ai_conversation",
+            "conv-lww",
+            conv_payload("conv-lww", "手机上的新名字", "2026-09-24T13:00:00.000Z"),
+        )],
+    )
+    .await;
+    assert_eq!(body["applied"], serde_json::json!(["conv-lww"]));
+    let title: String = state
+        .with(|conn| {
+            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-lww'", [], |r| r.get(0))
+                .map_err(Into::into)
+        })
+        .unwrap();
+    assert_eq!(title, "手机上的新名字");
+}
+
+/// `rejected` 必须**逐条给 code**，而且**永久性失败与暂时失败要分清**。
+#[tokio::test]
+async fn sync_push_rejects_with_per_item_codes() {
+    let state = state();
+    let (status, body) = push(
+        &state,
+        vec![
+            // 手机不许创建的表（总纲 §3.3）
+            push_item("prompts", "p1", serde_json::json!({"id":"p1","updated_at":"2026-09-24T10:00:00.000Z"})),
+            push_item("media_assets", "m1", serde_json::json!({"id":"m1"})),
+            push_item("tags", "t1", serde_json::json!({"id":"t1"})),
+            // 未知类型
+            push_item("whatever", "x1", serde_json::json!({"id":"x1"})),
+            // 列对不上（永久性：手机死循环重试也没用）
+            push_item(
+                "ai_conversation",
+                "conv-badcol",
+                serde_json::json!({"id":"conv-badcol","不存在的列": 1, "updated_at":"2026-09-24T10:00:00.000Z"}),
+            ),
+            // refId 与 payload.id 不一致
+            push_item("ai_conversation", "conv-ref", conv_payload("别的id", "x", "2026-09-24T10:00:00.000Z")),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let codes: Vec<&str> = body["rejected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["code"].as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        vec![
+            "FORBIDDEN_KIND",
+            "FORBIDDEN_KIND",
+            "FORBIDDEN_KIND",
+            "UNKNOWN_KIND",
+            "SCHEMA_MISMATCH",
+            "REF_MISMATCH",
+        ],
+        "每个被拒项都要有自己的 code（不能只回一个总数）：{body}",
+    );
+    assert_eq!(body["applied"], serde_json::json!([]), "这批一条都不该成功");
+
+    // 不支持的操作（delete 是"手机删桌面数据"，策略还没定）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/sync/push",
+        serde_json::json!({"batch":[{"kind":"ai_conversation","refId":"c-del","op":"delete","payload":{"id":"c-del"}}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["rejected"][0]["code"], "UNSUPPORTED_OP");
+
+    // 一行都没落库
+    let n: i64 = state
+        .with(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM ai_conversations", [], |r| r.get(0)).map_err(Into::into)
+        })
+        .unwrap();
+    assert_eq!(n, 0, "被拒的行一条都不许落库");
+}
+
+/// 单批上限 500（契约 §4：别让一次请求扛几万行）。
+#[tokio::test]
+async fn sync_push_rejects_oversized_batches() {
+    let state = state();
+    let batch: Vec<serde_json::Value> = (0..501)
+        .map(|i| push_item("ai_conversation", &format!("c{i}"), serde_json::json!({"id": format!("c{i}")})))
+        .collect();
+    let (status, body) = push(&state, batch).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["message"].as_str().unwrap().contains("500"), "{body}");
+}
+
+/// 上行点亮 `_sync_log`（否则手机上产生的会话**永远同步不回其它设备**）。
+#[tokio::test]
+async fn sync_push_lights_up_the_sync_log_without_fake_deletes() {
+    let state = state();
+    let (_, before) = get_json(router_for(state.clone()), "/api/sync/manifest").await;
+    let since = before["cursor"].as_i64().unwrap();
+
+    push(
+        &state,
+        vec![push_item(
+            "ai_conversation",
+            "conv-log",
+            conv_payload("conv-log", "会点亮账本", "2026-09-24T10:00:00.000Z"),
+        )],
+    )
+    .await;
+    // 再推一次更新的（走 UPDATE 分支）
+    push(
+        &state,
+        vec![push_item(
+            "ai_conversation",
+            "conv-log",
+            conv_payload("conv-log", "改名了", "2026-09-24T11:00:00.000Z"),
+        )],
+    )
+    .await;
+
+    // ★ R3：upsert 绝不能产生 **delete** 条目
+    //   （`INSERT OR REPLACE` 内部是 DELETE+INSERT，会点亮 DELETE 触发器写假 delete）
+    let fake_deletes: i64 = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM _sync_log WHERE seq > ?1 AND tbl='ai_conversations' AND op='delete'",
+                [since],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+        })
+        .unwrap();
+    assert_eq!(fake_deletes, 0, "upsert 不许写假 delete（R3）");
+
+    let upserts: i64 = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM _sync_log WHERE seq > ?1 AND tbl='ai_conversations' AND op='upsert'",
+                [since],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+        })
+        .unwrap();
+    assert!(upserts >= 2, "插入与更新都要进账本，实际 {upserts}");
+}
 #[tokio::test]
 async fn media_prompt_has_three_outcomes() {
     let state = state();

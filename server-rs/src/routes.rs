@@ -108,6 +108,7 @@ pub fn router(state: AppState) -> Router {
         // 同步 API（P4 第 10 步）：手机连上来的第一件事（契约 §1）
         .route("/api/sync/manifest", get(sync_manifest))
         .route("/api/sync/changes", get(sync_changes))
+        .route("/api/sync/push", axum::routing::post(sync_push))
         .merge(crate::write_routes::write_router())
         .with_state(state)
 }
@@ -270,6 +271,14 @@ async fn sync_changes(
 struct SyncChangesQuery {
     since: Option<i64>,
     limit: Option<i64>,
+}
+
+/// `POST /api/sync/push` —— 上行（契约 §4）。幂等 + 服务端赢 LWW。
+async fn sync_push(
+    State(state): State<AppState>,
+    Json(body): Json<crate::sync::PushRequest>,
+) -> Result<Json<crate::sync::PushResult>, ApiError> {
+    Ok(Json(crate::sync::push(&state, body)?))
 }
 
 // ---------------------------------------------------------------------------
