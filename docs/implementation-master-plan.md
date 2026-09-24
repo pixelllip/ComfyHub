@@ -437,3 +437,31 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > 反过来说：**"空的一页"不等于"没有变更"**，`hasMore` 与 `cursor` 才是判据。
 > 真实库验收：`since=5` → **410**（真库的账本确实已被裁剪，正好证明这个分支是必需的）；
 > `cargo test` **64 例全绿**（25 lib + 39 集成，新增 5 例覆盖上述四条约束）。
+>
+> ✅ **P4 第 12 步（`7b169c7`，2026-09-24）**：`POST /api/sync/push`（契约 §4）—— **M4 的 DoD
+> 就在这里**。三条纪律：**幂等**（重复推同一条靠"主键 UUID + `ON CONFLICT DO UPDATE`"就地更新，
+> 第二次落 `STALE_IGNORED`，绝不新增行）、**服务端赢 LWW**（只有 `updated_at` 比桌面新才覆盖，
+> 否则丢弃并记 `rejected` —— 不能让手机把桌面改过的行回退成旧值）、**`rejected` 逐条给 `code`**
+> 且**永久性/暂时性分清**（给个"暂时"的码会让手机永远重试一条永远不会成功的行）。
+> 另外 `prompts` / `media_assets` / `tags` / `prompt_tags` / `media_tags` / `capture_runs`
+> 一律 `FORBIDDEN_KIND`（总纲 §3.3：那些由桌面在提交时产生）。
+>
+> 实现上两条选择：**列清单从 `PRAGMA table_info` 现查**（不维护手写清单 —— 漂移了就会静默少写
+> 一列），列名先过字符集再引号包裹（payload 的键来自手机，这里是注入面）；**每条 item 各自一个
+> 事务**（`BEGIN IMMEDIATE`，R2），坏行不挡同批其它行，手机才能逐条清 outbox。
+>
+> ★ **一处契约细节当场定下来**：**信封是 camelCase**（`kind` / `refId` / `deviceId`），
+> 但 **payload 里是数据库列名（snake_case）** —— 契约 §2 的例子本来就是
+> `{"id":12,"text":"…","updated_at":"…"}`。payload 的语义是"完整行直接覆盖本地行"，
+> 再转一道驼峰就会与列名对不上（第一版测试就是这么写错的，被 `SCHEMA_MISMATCH` 抓出来）。
+>
+> **验收**：`cargo test` **69 例全绿**（25 lib + 44 集成），新增 push 5 例（幂等 / LWW 双向 /
+> 逐条 code 6 种 / 单批上限 500→400 / **上行点亮账本且不写假 delete（R3）**）。
+> **真实库副本抽查**（8085，只写副本）：`cursor` 3328 → push 一次 `applied=[conv-real-1]` →
+> **再推同一条 `applied=0` + `STALE_IGNORED`** → `cursor` = **3329**（两次推送只多了 **1** 条账本
+> —— 幂等在真实数据上成立）。
+>
+> 📌 `sync` 只剩 **`/api/sync/bootstrap`** 未做。⚠ 它有一处**契约留白需要先拍板**：§3 只说
+> `?page=N` 与响应形状 `{table, page, pageSize, totalPages, rows[]}`，但**没说 `table` 怎么给**
+> （是 `?table=prompts&page=1`，还是"page 的顺序遍历所有同步表"）。这决定手机侧的重建循环怎么写，
+> **别猜着实现**——先定契约再写两端（M4 上线前必须定）。
