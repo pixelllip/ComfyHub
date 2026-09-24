@@ -67,6 +67,14 @@ const MAX_PENDING: usize = 8;
 /// 未配对设备每分钟能举几次手（按来源地址）。
 const RATE_MAX_PER_MIN: usize = 12;
 
+/// 未配对设备每分钟能兑几次码（按来源地址）。
+///
+/// 为什么**两条都要限**（设计 §5.2 的"来源地址 + ticket 双口径"）：
+/// 会话本身有"错 5 次作废"，但那条只挡得住**同一个 ticket** ——
+/// 一个同 LAN 的攻击者可以不停地举手（每个新 ticket 又送 5 次机会），
+/// 于是"每人 5 次"变成"每分钟 60 次"。按来源地址再压一道，才是设计要的那个强度。
+const CLAIM_MAX_PER_MIN: usize = 20;
+
 /// 一次能下行的 ref 数上限（挡住"把整库 ref 一次要走"）。
 const MAX_CREDENTIAL_REFS: usize = 32;
 
@@ -296,8 +304,10 @@ struct Session {
 #[derive(Default)]
 struct Sessions {
     list: Vec<Session>,
-    /// 来源地址 → 最近一分钟内的举手时刻（限速用）。
+    /// 来源地址 → 最近一分钟内的**举手**时刻（限速用）。
     hits: HashMap<String, Vec<u64>>,
+    /// 来源地址 → 最近一分钟内的**兑码**时刻（限速用，与举手分开计数）。
+    claim_hits: HashMap<String, Vec<u64>>,
     /// deviceId → (lastSeenAt, lastIp)：**攒在内存里**，由 `GET /api/auth` 顺手落库
     /// （D3 的纪律：别每个请求写一次库）。
     seen: HashMap<String, (String, String)>,
@@ -939,15 +949,19 @@ async fn pair_start() -> Result<Json<Value>, ApiError> {
 //  手机侧端点（匿名 + 限速）
 // ---------------------------------------------------------------------------
 
-/// 限速：同一个来源地址一分钟内最多举手 [RATE_MAX_PER_MIN] 次。
-fn check_rate(ip: Option<IpAddr>, unix: u64) -> Result<(), ApiError> {
+/// 限速：同一个来源地址一分钟内最多举手 [RATE_MAX_PER_MIN] 次 / 兑码 [CLAIM_MAX_PER_MIN] 次。
+fn check_rate(ip: Option<IpAddr>, unix: u64, claim: bool) -> Result<(), ApiError> {
     let key = ip.map(|v| v.to_string()).unwrap_or_else(|| "unknown".to_string());
     let Ok(mut state) = sessions().lock() else {
         return Err(ApiError::internal("配对状态锁已中毒"));
     };
-    let hits = state.hits.entry(key).or_default();
+    let (hits, max) = if claim {
+        (state.claim_hits.entry(key).or_default(), CLAIM_MAX_PER_MIN)
+    } else {
+        (state.hits.entry(key).or_default(), RATE_MAX_PER_MIN)
+    };
     hits.retain(|t| unix.saturating_sub(*t) < CODE_WINDOW_SECS);
-    if hits.len() >= RATE_MAX_PER_MIN {
+    if hits.len() >= max {
         return Err(ApiError::new_rate_limited("配对请求太频繁，请稍后再试"));
     }
     hits.push(unix);
@@ -963,7 +977,7 @@ async fn pair_request(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     let unix = now_unix();
-    check_rate(remote, unix)?;
+    check_rate(remote, unix, false)?;
 
     let device_id = payload.get("deviceId").and_then(Value::as_str).unwrap_or("").trim().to_string();
     if device_id.is_empty() {
@@ -1036,6 +1050,8 @@ async fn pair_claim(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     let unix = now_unix();
+    // 兑码也要限速（理由见 CLAIM_MAX_PER_MIN）：只靠"错 5 次作废"挡不住"换一个 ticket 再来 5 次"
+    check_rate(remote, unix, true)?;
     let request_id = payload.get("requestId").and_then(Value::as_str).unwrap_or("").trim().to_string();
     let ticket = payload.get("ticket").and_then(Value::as_str).unwrap_or("").trim().to_string();
     let code = payload.get("code").and_then(Value::as_str).unwrap_or("").trim().to_string();

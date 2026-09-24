@@ -3695,6 +3695,53 @@ async fn pair_start_is_explicitly_not_implemented() {
     );
 }
 
+/// 兑码**也要限速**：只靠"错 5 次作废"挡不住"再举一次手换 5 次机会"。
+#[tokio::test]
+async fn claim_attempts_are_rate_limited_per_source_address() {
+    let state = state();
+    seed_auth(&state, false);
+    // 同一来源、对着一个不存在的会话反复兑：前若干次是 400，之后必须出现 429
+    let mut saw_rate_limited = false;
+    let mut bodies: Vec<String> = Vec::new();
+    for _ in 0..40 {
+        let (status, body) = send_as(
+            router_for(state.clone()),
+            "POST",
+            "/api/auth/pair/claim",
+            Some(serde_json::json!({
+                "requestId": "deadbeef", "code": "000000", "deviceId": "phone-flood"
+            })),
+            "10.9.6.1",
+            None,
+        )
+        .await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            saw_rate_limited = true;
+            bodies.push(body.to_string());
+            break;
+        }
+        assert_eq!(status, StatusCode::BAD_REQUEST, "限速之前只能是「配对失败」");
+    }
+    assert!(saw_rate_limited, "同一个来源反复兑码必须被限速（设计 §5.2 的来源地址口径）");
+    // 429 的响应里**不回显任何凭据**（ticket / code / 会话 id）
+    let text = bodies.join(" ");
+    assert!(!text.contains("000000"), "429 不许回显码：{text}");
+    assert!(!text.contains("deadbeef"), "429 连会话 id 都不必回：{text}");
+    // 另一个来源不受影响（限速是按来源地址分桶的）
+    let (status, _) = send_as(
+        router_for(state.clone()),
+        "POST",
+        "/api/auth/pair/claim",
+        Some(serde_json::json!({
+            "requestId": "deadbeef", "code": "000000", "deviceId": "phone-other"
+        })),
+        "10.9.6.2",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "限速按 IP 分桶，不该误伤别的来源");
+}
+
 // ---------------------------------------------------------------------------
 //  会话与消息的写侧（P4 第 24 步）
 // ---------------------------------------------------------------------------

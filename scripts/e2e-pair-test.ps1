@@ -296,7 +296,26 @@ try {
         Assert-That '轮换后仍有令牌' ($newGlobal.hasToken -eq $true)
         Assert-That '轮换后设备清空' (@($newGlobal.devices).Count -eq 0)
 
-        Write-Host "`n[9] 关回去（这台机器上的真实验收别被脚本开着闸门）" -ForegroundColor Cyan
+        Write-Host "`n[9] 兑码限速（按来源地址）" -ForegroundColor Cyan
+        # 只靠"错 5 次作废"挡不住"再举一次手换 5 次机会" —— 所以要按来源地址压一道。
+        # 前面那一串真实兑码也占同一个桶，所以这里一路打到出现 429 为止（上限给足）。
+        $rateLimited = $false
+        $echoed = ''
+        for ($i = 1; $i -le 60; $i++) {
+            $flood = Invoke-Api -Method POST -Uri "$baseLan/api/auth/pair/claim" `
+                -Body @{ requestId = 'deadbeef'; code = '000000'; deviceId = 'phone-flood' }
+            if ($flood.status -eq 429) {
+                $rateLimited = $true
+                $echoed = $flood.raw
+                break
+            }
+        }
+        Assert-That '反复兑码最终被限速（429）' $rateLimited "第 $i 次仍是 $($flood.status)"
+        Assert-That '429 的响应里不回显码 / 会话 id' (
+            $echoed -notlike '*000000*' -and $echoed -notlike '*deadbeef*'
+        ) $echoed
+
+        Write-Host "`n[10] 关回去（这台机器上的真实验收别被脚本开着闸门）" -ForegroundColor Cyan
         $off = Invoke-Api -Method PUT -Uri "$baseLoopback/api/auth" -Body @{ enabled = $false }
         Assert-That '关掉闸门 200' ($off.status -eq 200) "$($off.status)"
         $back = Invoke-Api -Method GET -Uri "$baseLan/api/prompts"
