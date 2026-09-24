@@ -204,6 +204,42 @@ void main() {
     expect(remoteCalls, isEmpty, reason: '本地源一个远端请求都不该打：$remoteCalls');
   });
 
+  test('手机冷启动：桌面离线也能进聊天页（会话来自本地库，不报"连接后端失败"）', () async {
+    // 远端全部 500（= 桌面不在线）
+    final api = AiApiClient(
+      'http://127.0.0.1:8080',
+      client: MockClient((request) async => http.Response('offline', 500)),
+    );
+    final source = _FakeLocalSource();
+    final store = AiWorkspaceStore(api: api, source: source);
+
+    await store.load();
+
+    expect(store.loaded, isTrue, reason: '本地库拿得到会话，就不算"加载失败"');
+    // 本地那条空会话被复用（不是新建的）
+    expect(store.conversation?.id, 'local-conv-1');
+    expect(source.calls, isNot(contains('createConversation')));
+    // 模型清单拿不到要**如实说**，但不能说成"连接后端失败"（用户会以为整个 App 坏了）
+    expect(store.error, contains('桌面不在线'));
+    expect(store.error, isNot(contains('连接后端失败')));
+  });
+
+  test('手机冷启动：本地库一条会话都没有时，新会话建在本地', () async {
+    final source = _EmptyLocalSource();
+    final store = AiWorkspaceStore(
+      api: AiApiClient(
+        'http://127.0.0.1:8080',
+        client: MockClient((request) async => http.Response('offline', 500)),
+      ),
+      source: source,
+    );
+
+    await store.load();
+
+    expect(source.calls, contains('createConversation'), reason: '新会话要落在本地库');
+    expect(store.conversation?.id, 'local-conv-new');
+  });
+
   test('切会话时从本地库拉消息（不是远端 HTTP）', () async {
     final source = _FakeLocalSource();
     final store = AiWorkspaceStore(
@@ -240,4 +276,21 @@ class _BrokenSource extends _FakeLocalSource {
   @override
   Future<RunHandles> startRun(RunStartRequest request) async =>
       RunHandles(runId: 'r1', conversationId: request.conversationId);
+}
+
+/// 本地库空库（第一次装 App）：冷启动必须**在本地**建一条新会话。
+class _EmptyLocalSource extends _FakeLocalSource {
+  @override
+  Future<List<AiConversation>> listConversations() async => const [];
+
+  @override
+  Future<AiConversation> createConversation({
+    String? conversationId,
+    String? title,
+    String? providerId,
+    String? modelId,
+  }) async {
+    calls.add('createConversation');
+    return AiConversation(id: 'local-conv-new', title: title ?? '新对话');
+  }
 }

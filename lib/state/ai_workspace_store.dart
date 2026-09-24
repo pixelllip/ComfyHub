@@ -944,13 +944,19 @@ class AiWorkspaceStore extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      providers = await _api.listProviders();
-      await _restoreRememberedModel();
-      conversations = await _api.listConversations();
-      // 冷启动落在一条**空会话**上（用户明确要求：开 App 就能直接开聊，
-      // 而不是重新打开上一条）。但"落在空会话上"不等于"每次都造一条新的" ——
-      // 见 [_startFreshConversation]。
-      await _startFreshConversation();
+      // 冷启动的"东西从哪来"分两种（M3.2 ③）：
+      //   桌面：会话在**后端库**里 → 后端连不上就如实报"连接后端失败"（不能自己编数据）；
+      //   手机：会话在**本地库**里 → 桌面不在线也必须能进聊天页。
+      // 以前这里不分叉，第一条就是 `GET /api/ai/providers`，于是手机上桌面一离线
+      // 整页就是"连接后端失败" —— 手里明明有历史会话，却一个字都看不到。
+      if (_source.isLocal) {
+        await _loadLocalStartup();
+      } else {
+        providers = await _api.listProviders();
+        await _restoreRememberedModel();
+        conversations = await _api.listConversations();
+        await _startFreshConversation();
+      }
       _loaded = true;
     } catch (e) {
       error = '连接后端失败：$e';
@@ -966,6 +972,24 @@ class AiWorkspaceStore extends ChangeNotifier {
     await reloadTools();
     await loadMemory();
     await loadPermissionMode();
+  }
+
+  /// 手机（本地 harness）的冷启动。
+  ///
+  /// **会话与消息只认本地库**，所以这一段不需要桌面在场；provider / 模型清单是
+  /// 桌面版本化下发的工件（M6 才真正下行），拿不到时**只把这件事说出来**，
+  /// 绝不让整页起不来 —— 用户至少还能翻历史会话。
+  Future<void> _loadLocalStartup() async {
+    conversations = await _source.listConversations();
+    try {
+      providers = await _api.listProviders();
+      await _restoreRememberedModel();
+      error = null;
+    } catch (e) {
+      // 说得具体一点：不是"后端挂了"，而是"这次拿不到模型清单"
+      error = '桌面不在线，暂时拿不到模型清单（历史会话仍可查看；要发新消息请先连一次桌面）：$e';
+    }
+    await _startFreshConversation();
   }
 
   /// 挑一条现成的空会话接着用；一条都没有才真的新建。
