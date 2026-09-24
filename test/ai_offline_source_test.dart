@@ -46,6 +46,27 @@ class _FakeLocalSource implements RunEventSource {
     return unfinished;
   }
 
+  /// 上行（M4）：默认"推上去 N 条"，用例可改。
+  int outboxApplied = 0;
+  int outboxPending = 0;
+  String? outboxError;
+  final List<String?> syncedBaseUrls = [];
+
+  @override
+  Future<({bool ok, int applied, int pending, String? error})> syncNow({
+    String? baseUrl,
+    String? token,
+  }) async {
+    calls.add('syncNow');
+    syncedBaseUrls.add(baseUrl);
+    return (
+      ok: outboxError == null,
+      applied: outboxApplied,
+      pending: outboxPending,
+      error: outboxError,
+    );
+  }
+
   @override
   Future<({bool ok, String? kitVersion, String? reason})> ensureRunKit({
     String? baseUrl,
@@ -390,6 +411,67 @@ void main() {
     // 顺序：收尾必须在拉会话**之前**（否则界面上先出现一个永远转圈的幽灵气泡）
     final order = source.calls.where((c) => c == 'recoverUnfinishedRuns' || c == 'listConversations');
     expect(order.first, 'recoverUnfinishedRuns');
+  });
+
+  // -------------------------------------------------------------------------
+  //  M4：上行 —— 手机产生的会话/消息要能到桌面
+  // -------------------------------------------------------------------------
+
+  test('手机冷启动会推一次上行，并把"推了几条"如实说出来', () async {
+    final source = _FakeLocalSource()
+      ..outboxApplied = 3
+      ..outboxPending = 1;
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    await store.load();
+
+    expect(source.calls, contains('syncNow'), reason: '冷启动要把本机攒的东西推给桌面（M4）');
+    expect(store.syncedToDesktop, 3);
+    expect(store.pushNotice, contains('3 条'));
+    expect(store.pushNotice, contains('还有 1 条待同步'), reason: '"还剩几条"必须说出来');
+  });
+
+  test('上行失败不拦聊天页（离线是手机的常态）', () async {
+    final source = _FakeLocalSource()
+      ..outboxPending = 2
+      ..outboxError = '连不上上游：ConnectException';
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    await store.load();
+
+    // 页面照常可用，只是如实记一句"还有几条没上去"
+    expect(store.loaded, isTrue);
+    expect(store.pushNotice, contains('2 条'));
+    expect(store.pushNotice, contains('ConnectException'));
+  });
+
+  test('一轮跑完之后也会顺手推一次（那时内容才定稿）', () async {
+    final source = _FakeLocalSource()..outboxApplied = 2;
+    final store = AiWorkspaceStore(
+      api: AiApiClient('http://127.0.0.1:8080'),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    )
+      ..providers = [_provider()]
+      ..selectedProvider = _provider()
+      ..selectedModel = _model();
+
+    await store.send('画一只猫');
+
+    expect(
+      source.calls.where((c) => c == 'syncNow').length,
+      greaterThanOrEqualTo(1),
+      reason: 'Run 收尾是"内容定稿"的时刻，这时推上去桌面才看得到完整回复',
+    );
+    expect(store.syncedToDesktop, greaterThan(0));
   });
 }
 

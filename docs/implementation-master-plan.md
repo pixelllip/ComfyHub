@@ -685,6 +685,36 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >
 > ---
 >
+> ✅ **M4 第 1 步：上行通道（`_outbox` → `POST /api/sync/push`）** —— 手机产生的会话终于**能到桌面**了。
+> 在此之前 `_outbox` 只在写本地行时入队，**没有任何东西把它推上去**（`pendingOutbox`
+> 是死代码），也就是说"手机上能聊、桌面上什么都看不到"，而两端都不报错。
+>
+> - 新模块 `android/harness/.../sync/SyncPush.kt`：`SyncPushClient.push(baseUrl, token)`，
+>   真 HTTP（生产用的 `UrlConnectionTransport`）。三条纪律写在文件头：
+>   ① **payload 是"推送时现读的完整行"**，不是入队时的快照 —— 助手消息的正文是流式追加的，
+>   入队那一刻的快照必然是半截的，推上去桌面看到的就是**一条空回复**；
+>   ② **只有 `applied` 才清 outbox**；`rejected` 按**永久 / 暂时**分开
+>   （判据只有一条：**重推一次结果会不一样吗** —— 只有 `DB_ERROR` 是暂时的）；
+>   ③ 按 `(kind, refId)` 去重（同一条本地行在 Run 期间会入队好几次）。
+> - **kind 有两套名字，刻意不合并**：本地队列是 `conversation` / `message` / `part`，
+>   线上一律是**单数表名**（`ai_conversation` / `ai_message` / `ai_message_part`）——
+>   混用就会"推上去说 `UNKNOWN_KIND`"（对照 Rust `table_of_kind`）。
+> - **payload 的列清单从行本身来**（`Row.asMap()`），不手写一份：
+>   手写的那份一旦与 schema 漂移就会静默少推一列，而"桌面上少了一列"看不出来。
+>   NULL 一律**不发**（可空列不发 = 不覆盖桌面那一列；发 null 反而会把桌面已有的值抹掉）。
+> - 接线：桥新增 `syncNow`；`RunEventSource` 补 `syncNow()`；store 在**冷启动**与
+>   **每轮 Run 收尾**时各推一次（收尾那一刻内容才定稿）。离线时只记一句
+>   "本机还有 N 条没同步到桌面：原因"，**绝不拦聊天页**。
+> - **验收**：`:harness:testDebugUnitTest` **161 例全绿**（152 + 9，`SyncPushTest` 走真 socket）；
+>   `flutter test` **283 例全绿**；并且**对着真 Rust 后端实测**（8091 + 真库副本，只写副本）：
+>   把客户端组装的同一份 payload 推上去 →
+>   第一次 `applied=[conv, msg, part]`；**第二次 `applied=0` + 两条 `STALE_IGNORED`**
+>   （服务端赢 LWW），库里三张表各 **1 行**、`_sync_log` 4 条 —— **幂等在真实数据上成立**。
+> - 还没做：上行目前只在冷启动与 Run 收尾触发（没有前台定时/网络恢复触发），
+>   以及 `run` / `submit_job` 两种 kind 还没有上行通道（归 M5 排队提交）。
+>
+> ---
+>
 > **📅 2026-09-24 第四轮（本轮）**：先补上"环境能不能真的跑起来"这件事 ——
 
 ---

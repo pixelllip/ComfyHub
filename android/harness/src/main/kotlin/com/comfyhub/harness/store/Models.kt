@@ -70,6 +70,19 @@ data class OutboxRecord(
     val lastError: String?,
 )
 
+/**
+ * 一条 outbox 记录对应的**上行实体**（[HarnessStore.outboxTarget] 的返回值）。
+ *
+ * [wireKind] 是**线上**的 kind（单数、与桌面表名同形：`ai_conversation` / `ai_message` /
+ * `ai_message_part`）—— 刻意与本地 [OutboxKind] 分开：本地 kind 是"队列里排的是什么"，
+ * 线上 kind 是"桌面往哪张表写"，两者混用就会出现"推上去说 UNKNOWN_KIND"这种哑巴故障。
+ */
+data class OutboxTarget(
+    val wireKind: String,
+    /** 完整一行（列清单来自行本身，见 `Row.asMap`）。 */
+    val payload: Map<String, Any?>,
+)
+
 /** Run 状态：与桌面 `AiRunRepo` 的四个常量同值（决策/审计两边要能对上）。 */
 object RunStatus {
     const val RUNNING = "running"
@@ -113,7 +126,12 @@ object KvKey {
     /** 同步游标（契约 §2 的 `cursor`）。 */
     const val SYNC_CURSOR = "sync.cursor"
 
-    /** 设备号（契约 §4 的 `deviceId`，配对时生成一次）。 */
+    /**
+     * 设备号（契约 §4 的 `deviceId`）。
+     *
+     * 首次上行时生成一次并落库 —— 生成两次会让桌面把同一台手机当成两台设备，
+     * 而 `sync_clients` 是按 device_id 记游标的。
+     */
     const val DEVICE_ID = "sync.deviceId"
 
     /** run-kit 的版本号（🔒 §3.4，每次 Run 要记进快照）。 */

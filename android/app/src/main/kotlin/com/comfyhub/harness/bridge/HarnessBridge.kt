@@ -18,6 +18,7 @@ import com.comfyhub.harness.protocol.ReasoningEffort
 import com.comfyhub.harness.store.HarnessDatabase
 import com.comfyhub.harness.store.HarnessStore
 import com.comfyhub.harness.store.MessageStatus
+import com.comfyhub.harness.sync.SyncPushClient
 import com.comfyhub.harness.tools.BuiltinTools
 import com.comfyhub.harness.tools.DefaultHarnessFiles
 import com.comfyhub.harness.tools.MobileAskGate
@@ -191,6 +192,7 @@ class HarnessBridge(private val context: Context) :
                     result.success(true)
                 }
                 "recoverUnfinished" -> result.success(recoverUnfinished())
+                "syncNow" -> result.success(syncNow(call))
                 else -> result.notImplemented()
             }
         } catch (e: Throwable) {
@@ -400,6 +402,42 @@ class HarnessBridge(private val context: Context) :
             )
         }
         return unfinished.size
+    }
+
+    // -----------------------------------------------------------------------
+    //  上行（M4）：把本机 `_outbox` 推到桌面
+    // -----------------------------------------------------------------------
+
+    /**
+     * 推一批本机产生的会话 / 消息 / 块到桌面（契约 §4）。
+     *
+     * 只推**一批**（默认 200 条）：调用方想推完就再调一次 ——
+     * 这样"还剩多少"永远是真实读数，中途被打断也不会丢东西。
+     *
+     * 拿不到后端地址时**如实回 `ok=false`**（不是静默成功）：界面上"已同步"是假的，
+     * 用户会以为桌面上已经有了。
+     */
+    private fun syncNow(call: MethodCall): String {
+        val s = ensureInitialized()
+        val baseUrl = call.argument<String>("baseUrl").orEmpty().trim()
+        val token = call.argument<String>("token")
+        if (baseUrl.isEmpty()) {
+            return buildJsonObject {
+                put("ok", false)
+                put("reason", "还不知道桌面地址（本机没有连过桌面）")
+            }.toString()
+        }
+        val outcome = SyncPushClient(s, transport).push(baseUrl.trimEnd('/'), token)
+        return buildJsonObject {
+            // `ok` 的口径：这一批**没有留下暂时性失败**才算成功
+            put("ok", outcome.error == null && outcome.rejectedTransient == 0)
+            put("applied", outcome.applied)
+            put("rejectedPermanent", outcome.rejectedPermanent)
+            put("rejectedTransient", outcome.rejectedTransient)
+            put("pending", outcome.pending)
+            put("droppedLocal", outcome.droppedLocal)
+            outcome.error?.let { put("error", it) }
+        }.toString()
     }
 
     // -----------------------------------------------------------------------

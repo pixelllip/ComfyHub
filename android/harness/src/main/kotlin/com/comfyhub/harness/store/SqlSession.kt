@@ -51,6 +51,16 @@ class Row(private val values: Map<String, Any?>) {
     fun isNull(name: String): Boolean = values[name] == null
     fun contains(name: String): Boolean = values.containsKey(name)
 
+    /**
+     * 这一行的**全部列**（列名 → 值）。
+     *
+     * 上行 payload 要靠它：[`SyncPushClient`] 组装"完整行"时列清单**从行本身来**，
+     * 不手写一份 —— 手写的那份一旦与 schema 漂移，就会静默少推一列，
+     * 而"桌面上少了一列"是看不出来的（Rust 侧 `sync_push` 出于同一个理由
+     * 用 `PRAGMA table_info` 现查）。
+     */
+    fun asMap(): Map<String, Any?> = values
+
     fun text(name: String): String? = when (val v = values[name]) {
         null -> null
         is String -> v

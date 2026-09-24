@@ -434,6 +434,44 @@ class HarnessStore(private val session: SqlSession) {
         session.update("DELETE FROM _outbox WHERE id = ?", listOf(id))
     }
 
+    /**
+     * 一条 outbox 记录指向的**本地行**（上行 payload 的真源，契约 §4）。
+     *
+     * 为什么不在 `enqueue` 的那一刻把 payload 存好：这些行在 Run 期间**一直在变**
+     * （助手消息的正文是流式追加的、块是一条条来的、状态从 streaming 变 complete），
+     * 入队那一刻的快照必然是半截的 —— 推上去桌面就会看到一条空回复。
+     * **推送时现读**才拿得到终值；`_outbox.payload` 那一列从此只是排查用的痕迹。
+     *
+     * 返回 `null` 的两种情况都要**如实**：① 这个 kind 还没有上行通道
+     * （`run` / `submit_job` 归 M5）；② 本地那一行已经没了（推送前被删了）。
+     */
+    fun outboxTarget(kind: String, refId: String): OutboxTarget? {
+        val wireKind: String
+        val row: Row?
+        when (kind) {
+            OutboxKind.CONVERSATION -> {
+                wireKind = "ai_conversation"
+                row = session.queryOne("SELECT * FROM ai_conversations WHERE id = ?", listOf(refId))
+            }
+            OutboxKind.MESSAGE -> {
+                wireKind = "ai_message"
+                row = session.queryOne("SELECT * FROM ai_messages WHERE id = ?", listOf(refId))
+            }
+            OutboxKind.PART -> {
+                // refId 的形状是 `<messageId>#<ordinal>`（与桌面触发器写账本的编码同形）
+                val messageId = refId.substringBeforeLast('#')
+                val ordinal = refId.substringAfterLast('#').toLongOrNull() ?: return null
+                wireKind = "ai_message_part"
+                row = session.queryOne(
+                    "SELECT * FROM ai_message_parts WHERE message_id = ? AND ordinal = ?",
+                    listOf(messageId, ordinal),
+                )
+            }
+            else -> return null
+        }
+        return row?.let { OutboxTarget(wireKind, it.asMap()) }
+    }
+
     // -----------------------------------------------------------------------
     //  零散状态
     // -----------------------------------------------------------------------

@@ -149,6 +149,17 @@ abstract class RunEventSource {
   /// 桌面：后端进程自己管这件事，恒回 0（手机冷启动时调它，不会造成任何远端请求）。
   Future<int> recoverUnfinishedRuns();
 
+  /// 把本机 `_outbox` 里攒的东西推到桌面（**M4**，契约 🔒 §4）。
+  ///
+  /// 手机上产生的会话 / 消息 / 块会落在本地库并进队列，桌面在线时推上去才"桌面可见可续写"。
+  /// 只推**一批**；`pending` 是推完之后还剩几条（想推完就再调一次）。
+  ///
+  /// ⚠ `ok=false` 时**不许**在界面上说"已同步"：那会让用户以为桌面上已经有了。
+  Future<({bool ok, int applied, int pending, String? error})> syncNow({
+    String? baseUrl,
+    String? token,
+  });
+
   /// 回答 `user.question`（提问闸门；桌面是 HTTP，手机是本地闸门）。
   ///
   /// [answer] 与 [optionIndex] **至少给一个**，另一个留 null：点了选项就用 `optionIndex`，
@@ -227,6 +238,11 @@ class RemoteRunEventSource implements RunEventSource {
   /// 桌面：Run 的收尾归后端进程自己管，手机冷启动不该因此打任何请求。
   @override
   Future<int> recoverUnfinishedRuns() async => 0;
+
+  /// 桌面：上行队列在**手机**手上（`_outbox` 是手机侧的东西），这里没什么可推的。
+  @override
+  Future<({bool ok, int applied, int pending, String? error})> syncNow({String? baseUrl, String? token}) async =>
+      (ok: true, applied: 0, pending: 0, error: null);
 }
 
 /// 手机实现：`MethodChannel`（调用）+ `EventChannel`（事件流）。
@@ -307,6 +323,26 @@ class LocalHarnessRunEventSource implements RunEventSource {
 
   @override
   Future<int> recoverUnfinishedRuns() => recoverUnfinished();
+
+  /// 推一批本机产生的会话 / 消息 / 块到桌面（M4）。桥那边已经分好了"永久 / 暂时"。
+  @override
+  Future<({bool ok, int applied, int pending, String? error})> syncNow({
+    String? baseUrl,
+    String? token,
+  }) async {
+    final raw = await _method.invokeMethod<String>('syncNow', {
+      'baseUrl': ?baseUrl,
+      'token': ?token,
+    });
+    final map = _map(raw ?? '{}');
+    return (
+      ok: map['ok'] == true,
+      applied: (map['applied'] as num?)?.toInt() ?? 0,
+      pending: (map['pending'] as num?)?.toInt() ?? 0,
+      // `reason`（还不知道桌面地址）与 `error`（这次为什么没推成）都要能显示出来
+      error: (map['error'] ?? map['reason'])?.toString(),
+    );
+  }
 
   /// 本地会话列表（`_consumeRun` 收尾对齐时用；桥回的是 JSON 字符串）。
   @override

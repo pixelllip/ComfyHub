@@ -1054,6 +1054,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     // 这一步以前根本没被调用过，所以手机上第一条消息必然 `NO_RUN_KIT`。
     await ensureRunKit();
     await _startFreshConversation();
+    // 上行（M4）：把本机攒的会话/消息推给桌面。**放在最后**且失败不抛 ——
+    // 离线是手机的常态，同步不上去绝不该让聊天页起不来。
+    await syncOutbox();
     // ⚠ 这句必须放在 `_startFreshConversation()` **之后**：它内部会 `_openEmptyConversation()`，
     // 而那里会把 notice 清成 null（"切到空会话要清干净"）—— 放在前面等于白写。
     if (fromCache && providers.isNotEmpty) {
@@ -1087,6 +1090,35 @@ class AiWorkspaceStore extends ChangeNotifier {
       kitIssue = '取规则工件失败：$e';
     }
   }
+
+  /// 把本机产生的会话 / 消息推到桌面（**M4**）。
+  ///
+  /// 桌面在线才有意义，所以**失败不抛**（离线是常态）—— 但成功推上去几条要**说出来**，
+  /// 否则用户不知道"手机上聊的东西桌面能不能看到"。返回推上去的条数。
+  Future<int> syncOutbox() async {
+    if (!_source.isLocal) return 0;
+    try {
+      final r = await _source.syncNow(baseUrl: baseUrlProvider?.call());
+      if (r.ok && r.applied > 0) {
+        syncedToDesktop += r.applied;
+        pushNotice = '已把本机 ${r.applied} 条记录同步到桌面'
+            '${r.pending > 0 ? '（还有 ${r.pending} 条待同步）' : ''}。';
+      } else if (!r.ok && r.error != null && r.pending > 0) {
+        // 离线时不吵人：只在**确实有东西没推上去**时记一句
+        pushNotice = '本机还有 ${r.pending} 条没同步到桌面：${r.error}';
+      }
+      return r.applied;
+    } catch (e) {
+      pushNotice = '同步到桌面失败：$e';
+      return 0;
+    }
+  }
+
+  /// 本次会话累计推上桌面的条数（界面可以据此显示"已同步"）。
+  int syncedToDesktop = 0;
+
+  /// 上行的如实说明（推成功 / 还有几条没上去 / 为什么没上去）。
+  String? pushNotice;
 
   /// 把每条 provider 的凭据状态换成**本机**的（手机专有）。
   ///
@@ -1852,6 +1884,9 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 与服务端对齐一次（seq、状态、usage 都以库为准）
       await _reloadMessages(conversationId);
       conversations = await _safeListConversations();
+      // 一轮跑完是"内容定稿"的时刻：顺手把本机的会话/消息推给桌面（M4）。
+      // 桌面不在线时它只记一句"还有几条没上去"，不拦任何东西。
+      await syncOutbox();
       _notifyNow();
     }
   }
