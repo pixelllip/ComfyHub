@@ -105,6 +105,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/media/{id}/workflow", get(media_workflow))
         // API 格式节点图（"当时真正跑的东西"：comfy_submit 与端到端自测都读它，R10）
         .route("/api/prompts/{id}/api-graph", get(prompt_api_graph))
+        // 同步 API（P4 第 10 步）：手机连上来的第一件事（契约 §1）
+        .route("/api/sync/manifest", get(sync_manifest))
         .merge(crate::write_routes::write_router())
         .with_state(state)
 }
@@ -244,6 +246,13 @@ async fn media_upload(
     multipart: axum::extract::Multipart,
 ) -> Result<(axum::http::StatusCode, Json<crate::media_upload::UploadResult>), ApiError> {
     crate::media_upload::upload(state, multipart).await
+}
+
+/// `GET /api/sync/manifest` —— 手机连上来的第一件事（🔒 `docs/sync-api-contract.md` §1）。
+async fn sync_manifest(
+    State(state): State<AppState>,
+) -> Result<Json<crate::sync::SyncManifest>, ApiError> {
+    Ok(Json(crate::sync::manifest(&state)?))
 }
 
 // ---------------------------------------------------------------------------

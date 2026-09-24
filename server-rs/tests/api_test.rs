@@ -1242,6 +1242,98 @@ async fn api_graph_distinguishes_404_from_204_from_200() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body["message"].as_str().unwrap().contains("9999"));
 }
+
+/// `GET /api/sync/manifest` —— 手机连上来的第一件事（🔒 契约 §1）。
+///
+/// 最要紧的一条：**带凭据/令牌的表绝不能出现在 `synced: true` 里**。
+/// `_sync_log` 的触发器其实覆盖了 `app_settings`，所以"从触发器派生同步范围"这个
+/// 看起来很自然的写法会把**配对令牌明文**推给手机。这条用例盯着那份显式白名单。
+#[tokio::test]
+async fn sync_manifest_lists_scope_and_never_offers_credentials() {
+    let state = state();
+    let (status, body) = get_json(router_for(state.clone()), "/api/sync/manifest").await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 形状：契约 §1 的五个键一个都不能少/改名
+    assert_eq!(
+        keys(&body),
+        vec!["cursor", "kitVersion", "schemaVersion", "serverTime", "tables"],
+        "manifest 的键集合就是契约",
+    );
+    assert_eq!(body["schemaVersion"].as_i64(), Some(1), "= PRAGMA user_version");
+    // 夹具是**直接 SQL 插的行** —— 触发器照常点亮 `_sync_log`，所以游标已经往前走了。
+    // （这正是"游标 = MAX(seq)、不是自己数的行数"的一个活证据）
+    let fixture_cursor = body["cursor"].as_i64().unwrap();
+    assert!(fixture_cursor > 0, "夹具插过行，_sync_log 就不该是空的");
+    let max_seq: i64 = state
+        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)).map_err(Into::into))
+        .unwrap();
+    assert_eq!(fixture_cursor, max_seq, "游标 = MAX(_sync_log.seq)");
+    assert!(
+        body["serverTime"].as_str().unwrap().ends_with('Z'),
+        "时间一律 ISO-8601 UTC：{}",
+        body["serverTime"],
+    );
+
+    // 同步表：带 rowCount
+    assert_eq!(body["tables"]["prompts"]["synced"], true);
+    assert_eq!(body["tables"]["prompts"]["rowCount"].as_i64(), Some(2));
+    assert_eq!(body["tables"]["tags"]["rowCount"].as_i64(), Some(2));
+
+    // ★ 安全：令牌/凭据/模型目录一律 synced:false，而且**连行数都不给**
+    for dangerous in ["app_settings", "ai_providers", "ai_models", "ai_run_events"] {
+        let entry = &body["tables"][dangerous];
+        assert_eq!(entry["synced"], false, "{dangerous} 绝不能被当成可同步的表");
+        assert!(entry["reason"].as_str().is_some_and(|r| !r.is_empty()), "{dangerous} 要给理由");
+        assert!(entry["rowCount"].is_null(), "{dangerous} 连行数都不该外发（行数本身也是信息）");
+    }
+
+    // kitVersion：Kotlin 侧没写过就是 null —— **不编一个**
+    assert!(body["kitVersion"].is_null(), "没写过版本号就得如实回 null");
+
+    // Kotlin 侧写过之后就取得到（键名 `ai.runkit.version` 与 RunKit.KEY_VERSION 同值）
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO app_settings (k, v, updated_at) VALUES ('ai.runkit.version','2026-09-24.1','x')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+    let (_, body) = get_json(router_for(state.clone()), "/api/sync/manifest").await;
+    assert_eq!(body["kitVersion"].as_str(), Some("2026-09-24.1"));
+}
+
+/// `cursor` 必须跟着 `_sync_log` 走（手机靠它判断"我的游标还有效吗"）。
+#[tokio::test]
+async fn sync_manifest_cursor_follows_the_sync_log() {
+    let state = state();
+    let (_, before_body) = get_json(router_for(state.clone()), "/api/sync/manifest").await;
+    let before = before_body["cursor"].as_i64().unwrap();
+
+    // 写一行被同步的表 → 触发器点亮 `_sync_log` → 游标必须跟着走
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO tags (name, normalized, category, use_count, created_at)
+                 VALUES ('游标用例','游标用例','风格',0,'2026-09-24T00:00:00.000Z')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+
+    let (_, body) = get_json(router_for(state.clone()), "/api/sync/manifest").await;
+    let cursor = body["cursor"].as_i64().unwrap();
+    assert!(cursor > before, "写过之后游标必须往前走：{before} -> {cursor}");
+
+    // 与账本里的最大值**同源**（不能是"自己数的行数"）
+    let max_seq: i64 = state
+        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)).map_err(Into::into))
+        .unwrap();
+    assert_eq!(cursor, max_seq, "游标 = MAX(_sync_log.seq)");
+}
 #[tokio::test]
 async fn media_prompt_has_three_outcomes() {
     let state = state();
