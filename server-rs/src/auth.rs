@@ -771,6 +771,12 @@ fn pending_json(session: &Session, unix: u64) -> Value {
 }
 
 /// 把内存里攒的 `lastSeen` 落库（最多每 30 秒一次；`GET /api/auth` 顺手调）。
+///
+/// 这是 D3 那条纪律的落点：**每台设备每个请求写一次库**是不行的（那是"每次刷新都写盘"），
+/// 但用户在看这张卡片时又必须看到"刚刚活跃过"。所以分两层：
+/// [flush_seen] 负责**落库**（节流 30 秒、清空内存），[merge_seen] 负责**让响应准确**
+/// （把还没落库的那几笔叠加到响应上）。少了后一层，界面上"最后活跃"会停在 30 秒前 ——
+/// 那种"数据其实没错、只是旧了"的显示最容易被当成 bug 去查后端。
 fn flush_seen(file: &mut AuthFile) {
     let drained = {
         let Ok(mut state) = sessions().lock() else { return };
@@ -789,6 +795,17 @@ fn flush_seen(file: &mut AuthFile) {
     }
 }
 
+/// 把**还没落库**的那几笔活跃记录叠加到响应上（原样读内存，不清空）。
+fn merge_seen(file: &mut AuthFile) {
+    let Ok(state) = sessions().lock() else { return };
+    for (id, (at, ip)) in state.seen.iter() {
+        if let Some(device) = file.devices.iter_mut().find(|d| &d.id == id) {
+            device.last_seen_at = Some(at.clone());
+            device.last_ip = Some(ip.clone());
+        }
+    }
+}
+
 /// `GET /api/auth`（**仅回环**）。
 async fn get_auth(
     State(state): State<AppState>,
@@ -799,6 +816,8 @@ async fn get_auth(
     let body = state.with(|conn| {
         let mut file = load(conn);
         flush_seen(&mut file);
+        // 落库那一步被 30 秒节流挡下时，响应里仍然要显示"刚刚活跃过"（见 flush_seen 的注释）
+        merge_seen(&mut file);
         save(conn, &file)?;
         Ok(status_json(&file, unix))
     })?;

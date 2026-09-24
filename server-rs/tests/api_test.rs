@@ -3425,6 +3425,20 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
     let (status, _) = send_as(router_for(state.clone()), "GET", "/api/ai/conversations", None, "10.9.2.1", Some(&token)).await;
     assert_eq!(status, StatusCode::OK);
 
+    // ⑥′ "最后活跃"要**立刻**看得到（内存里那笔还没落库的活跃也要叠加上来）。
+    // 少了叠加这一层，界面上的"最后活跃"会停在上一次落库的时刻（30 秒前），
+    // 表现是"数据没错、只是旧了" —— 那种最容易被当成 bug 去查后端。
+    let (_, status_body) = send_as(router_for(state.clone()), "GET", "/api/auth", None, "127.0.0.1", None).await;
+    let just_seen = status_body["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == "phone-e2e-1")
+        .expect("刚配的设备")
+        .clone();
+    assert_eq!(just_seen["lastIp"], "10.9.2.1", "最后来源地址就是刚打过来的那个");
+    assert!(just_seen["lastSeenAt"].is_string(), "最后活跃不必等 30 秒落库");
+
     // ⑦ 设备列表：**有这台设备、但绝不含令牌**（连前缀都不回）
     let (status, body) = send_as(
         router_for(state.clone()),
@@ -3443,11 +3457,19 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
         .find(|d| d["id"] == "phone-e2e-1")
         .expect("新配的设备应当在列表里")
         .clone();
-    assert_eq!(
-        keys(&device),
-        vec!["allowCredentials", "id", "lastIp", "name", "pairedAt"],
-        "设备行只有这些事实（lastSeenAt 还没落库时不出现）"
-    );
+    // 设备行只该有那几个**事实**键：必有的四个 + 两个随时间才出现的
+    // （`lastSeenAt` / `lastIp` 有没有取决于活跃记录落库没有，所以这里逐条算，
+    //  不写成"键一定等于某四个" —— 那会随"谁先跑了 GET /api/auth"而红）
+    let device_keys = keys(&device);
+    for required in ["allowCredentials", "id", "name", "pairedAt"] {
+        assert!(device_keys.iter().any(|k| k == required), "设备行少了 {required}：{device_keys:?}");
+    }
+    for key in &device_keys {
+        assert!(
+            ["allowCredentials", "id", "lastIp", "lastSeenAt", "name", "pairedAt"].contains(&key.as_str()),
+            "设备行冒出一个不该有的键：{key}"
+        );
+    }
     assert_eq!(device["allowCredentials"], false, "配对成功 ≠ 允许下行密钥");
     assert!(
         !body.to_string().contains(&token),
