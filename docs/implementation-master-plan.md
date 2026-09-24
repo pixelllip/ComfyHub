@@ -593,6 +593,51 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > 把两个实现逐条比"才摆出来的**（键集合、错误体、`null` vs 缺键、`modifiedAt` 精度）。
 > 下一批（`/api/ai/models` 起）同样要留一次这种对照 —— 夹具只覆盖你**想到**的行。
 
+> ✅ **P4 第 20 步（Task 2）：`GET /api/ai/providers/{id}/models`（模型目录）** ——
+> 第 17/18 步那两条基线（错误体 `{error,detail?}`、可空字段省略键）就是为它准备的，
+> **照单子做，没有照着 DTO 猜**。
+> - **形状基线是真库副本上量出来的**（Kotlin 8090 / Rust 8091，同一份库）：
+>   `command-code-goat` **81 条** + `deepseek` **2 条**模型 ——
+>   **12 个键永远在**（`providerId` `id` `displayName` `inputModalities` `attachmentTransports`
+>   `mimeAllowlist` `tools` `parallelTools` `reasoning` `thinkingEfforts` `capabilitySource` `enabled`），
+>   **6 个可空键一个都不能自己冒出来**（`thinkingFormat` 81 条里 10 条没有、
+>   `maxOutputTokens` / `maxAttachmentBytes` / `maxAttachmentCount` / `capabilityVerifiedAt`
+>   85/85 全都没有、`contextWindow` 时有时无）。用例把这条**逐条算**着写，不写"键一定都在"。
+> - **错误语义分三层，一层都不能混**：provider 不存在 → **400 `CONFIG_ERROR`
+>   + `detail:"Provider 不存在: xx"`**（是 `AiException`，不是 404 —— 写成 404 就没有 `detail` 了，
+>   界面又一次显示不出人话）；provider 在但目录为空 → **200 `[]`**；坏 JSON → 按空处理**不许 500**。
+> - **一个静默的坑当场抓住**：`enabled` 为 NULL 时我第一版按"启用"处理，
+>   而 Kotlin 的裸 `getBoolean("enabled")` 在 NULL 上给的是 **false**。本 schema 里它是
+>   `NOT NULL DEFAULT 1`，所以只有老 MySQL 脏行才走得到 —— 但"NULL 当成启用"会让一条
+>   用户关掉的模型悄悄可用（那是**能花钱的**）。同类的还有 `display_name` → `model_id`
+>   与 `capability_source` → `manual` 两条回落，都用一条"对着计算出来的行"的用例钉住了
+>   （真 schema 上构造不出 NULL，夹具里测不到）。
+> - **验收**：`cargo test` **96 例全绿**（37 lib + 57 api_test + 2 shape_lint）；
+>   **真库副本 canon 逐条比**：`command-code-goat` / `deepseek` 两个 provider 的模型目录
+>   **canon 后零差异**（31014 / 638 字节逐字一致），缺 provider 的 400 错误体也一致。
+> - 📌 **顺带把全部已搬端点又扫了一遍**（18 条）—— 只有三处不同，**都不是回归**：
+>   ① `/api/sync/*` 三条 Kotlin 侧本来就没有（M0 新契约，Rust 才是实现方）；
+>   ② `/api/media/{id}/prompt` 在**产物不存在**时两边都是 404，但 Kotlin 的 body 被
+>   StatusPages 的 404 处理器**改写成了 `{"error":"接口不存在: <路径>"}`**
+>   （路由里那句 `respondNotFound("产物 $id 不存在")` 被吃掉了）；
+>   Rust 给的是原话 `{"error":"产物 100 不存在"}`。Dart 只判 `204` / 2xx，**行为无差异**，
+>   而且 Rust 那句更有信息量 —— **不改**，但记在这里免得下次有人当回归去"修"。
+>
+> ---
+>
+> **📅 2026-09-24 第四轮（本轮）**：先补上"环境能不能真的跑起来"这件事 ——
+> 本机 `JAVA_HOME` 指向的是 **JDK 25**，而后端用的 **Gradle 8.12 不支持 24/25**，
+> 于是 `gradle installDist` 直接失败（`* What went wrong: 25.0.1`）。
+> 机器上其实有一份 **JDK 21**（`D:\Program Files\Android Studio\jbr`，`flutter doctor` 用的就是它），
+> 只是 `server.ps1` 的 `Resolve-Jdk` 没往那儿找。要跑 Kotlin 基线时：
+> ```powershell
+> $env:JAVA_HOME = 'D:\Program Files\Android Studio\jbr'   # 21.0.10
+> cd server; gradle installDist
+> ```
+> **这条值得记进 pitfalls**：`server.ps1` 的候选表里有 `$env:JAVA_HOME` 与
+> `$env:ProgramFiles\Java\jdk-2*`，恰恰没有 Android Studio 的 JBR —— 而**这台机器上唯一的
+> 21/22/23 就是 JBR**。手敲 gradle 时先设 `JAVA_HOME`，别用系统的 JDK 25。
+
 ---
 
 ## 9. 下一轮从哪起手
@@ -608,8 +653,14 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > | `e6d9947` | P4 第 19 步：`/api/health` 补齐 Dart 读的三个键 + `modifiedAt` 精度 |
 > | `2b4f7d2` | Flutter：`api_error_envelope_test.dart`（读取点钉死）+ 修过期注释 |
 >
-> **下一件该做的事：`/api/ai/models`（Task 2）** —— 形状基线已经用第 17/18 步的结论钉住了
-> （见下面 ③ 的"models 起手笔记"），**照那张单子做，别照着 DTO 猜**。
+> **下一件该做的事：`/api/ai/*` 的第三批 = `run-kit`** —— Task 2（`/api/ai/models`）已做掉
+> （见 §8 "P4 第 20 步"）。但 **`run-kit` 不是"再搬一个只读端点"**：它要把
+> `ToolRegistry`（工具清单 + `inputSchema` + `UNTRUSTED_BANNER_TEMPLATE`）、
+> `SystemPrompt`（含 `VERSION`）/ `NsfwPrompt`、`InlineBudget` / `AttachmentPolicy`
+> 一起搬过来，`kitVersion` 还要写 `app_settings`（`/api/sync/manifest` 读的就是它）。
+> 也就是说它是 **R12 / R13 的第一次正面重建**，量和 `/api/ai/models` 不是一个档。
+> 想先要一个"小而稳"的第三批的话，顺序是：**会话 / 消息 CRUD**（只读 + 追加，
+> 形状与 `AiConversationRepo` 逐条对照）→ 再啃 run-kit → 最后才是 Run/SSE 与工具层。
 >
 > ---
 >
@@ -684,7 +735,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 > "少一个键 = 界面上少一块内容"栽过好几次（见 `api_test.rs` 里那些精确键集合断言）。
 
 > 🔎 **`/api/ai/models` 的起手笔记（Task 2，2026-09-24 写在第 17/18 步之后 ——
-> 这两条基线就是为它准备的）**
+> ✅ 已照此做完，见 §8 "P4 第 20 步"；下面留作"下一个只读 AI 端点"的模板）**
 >
 > 1. **错误体用 `ApiError::ai(code, 人话)`**，别用 `bad_request(人话)`：
 >    `/api/ai/*` 抛的是 `AiException`，Kotlin 侧一律回 **400 + `{error: 稳定码, detail: 人话}`**

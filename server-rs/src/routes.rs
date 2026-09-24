@@ -1,4 +1,7 @@
-//! P4 灰度第一批端点：`/api/health`、`/api/tags`、`/api/prompts`（**只读**）。
+//! P4 灰度端点：业务读/写（`health` / `tags` / `prompts` / `media` / `stats` / 捕获配置）、
+//! 同步 4 条、以及 `/api/ai/*` 的**只读前两批**（`providers` / 模型目录）。
+//!
+//! 各批次清单见 `src/main.rs` 的文件头表（那里是**诚实清单**：没搬的一律 501）。
 //!
 //! # 为什么从这三个开始
 //!
@@ -179,6 +182,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/capture/config", get(capture_config).put(put_capture_config))
         // AI 端点第一批（P4 第 16 步）：provider 清单 —— **不含任何密钥**（AIH-012）
         .route("/api/ai/providers", get(ai_providers))
+        // 模型目录（P4 第 20 步 = Task 2）：能力声明的唯一真源（AIH-011），附件/思考强度都读它
+        .route("/api/ai/providers/{id}/models", get(ai_provider_models))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -291,6 +296,18 @@ async fn capture_workflows(
 /// `GET /api/ai/providers` —— provider 清单（不含密钥，AIH-012）。
 async fn ai_providers(State(state): State<AppState>) -> Result<Json<Vec<crate::ai::AiProviderDto>>, ApiError> {
     Ok(Json(crate::ai::list_providers(&state)?))
+}
+
+/// `GET /api/ai/providers/{id}/models` —— 模型目录（P4 第 20 步 = Task 2）。
+///
+/// provider 不存在 → **400 `{error:"CONFIG_ERROR", detail:"Provider 不存在: xx"}`**
+/// （不是 404：客户端按 `error` 分支、按 `detail` 给人看，形状必须与 Kotlin 的
+/// `AiException` 一致 —— Task 1 那个"界面显示机器码"的 bug 就是这么来的）。
+async fn ai_provider_models(
+    State(state): State<AppState>,
+    Path(provider_id): Path<String>,
+) -> Result<Json<Vec<crate::ai::AiModelDto>>, ApiError> {
+    Ok(Json(crate::ai::list_models(&state, &provider_id)?))
 }
 
 /// `GET /api/capture/locate` —— 探测 ComfyUI 装在哪（用户"其他建议"第 3 条）。

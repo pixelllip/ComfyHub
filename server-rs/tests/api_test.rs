@@ -964,6 +964,142 @@ async fn ai_providers_shape_and_never_leaks_a_secret_value() {
 }
 
 // ===========================================================================
+//  模型目录（P4 第 20 步 = Task 2）：GET /api/ai/providers/{id}/models
+// ===========================================================================
+
+/// 模型目录：**12 个键永远在、6 个可空键一个都不许自己冒出来**，且坏 JSON 不能让整页打不开。
+///
+/// 这条用例是照着**真库副本上 Kotlin（8090）的实测**写的，不是照着 DTO 猜的：
+/// 81 条 `command-code-goat` 模型里 `thinkingFormat` 有 10 条不出现、
+/// `maxOutputTokens` / `maxAttachmentBytes` / `maxAttachmentCount` / `capabilityVerifiedAt`
+/// 81/81 全都不出现（NULL → `explicitNulls = false`）。
+/// 写成"所有键一定都在"就等于**用测试把错误的形状钉住**（第 18 步刚栽过这一次）。
+#[tokio::test]
+async fn ai_models_distinguish_missing_provider_from_an_empty_catalog() {
+    let state = state();
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_providers
+                 (id, display_name, api, base_url, endpoint_trust, enabled, revision)
+                 VALUES ('p-models', '模型目录', 'openai-completions', 'http://127.0.0.1:1234/v1',
+                         'loopback', 1, 1),
+                        ('p-empty', '空目录', 'openai-completions', 'http://127.0.0.1:1235/v1',
+                         'loopback', 1, 1)",
+                [],
+            )?;
+            conn.execute(
+                r#"INSERT INTO ai_models
+                   (provider_id, model_id, display_name, input_modalities, attachment_transports,
+                    mime_allowlist, tools, parallel_tools, reasoning, thinking_efforts, thinking_format,
+                    context_window, max_output_tokens, max_attachment_bytes, max_attachment_count,
+                    capability_source, capability_verified_at, enabled)
+                   VALUES
+                   -- ① 样样都有：18 个键一个不少
+                   ('p-models', 'm-a', 'A 模型', '["text","image"]', '{"image":["inline_base64"]}',
+                    '["image/png"]', 1, 0, 1, '{"high":"high","max":4096}', 'openai',
+                    200000, 8192, 8388608, 4, 'builtin', '2026-09-23T05:00:00.000Z', 1),
+                   -- ② 可空列全 NULL：6 个可空键**一个都不许出现**
+                   --    （display_name / capability_source 是 NOT NULL，给真值）
+                   ('p-models', 'm-b', 'm-b', NULL, NULL, NULL, 0, 0, 0, NULL, NULL,
+                    NULL, NULL, NULL, NULL, 'manual', NULL, 0),
+                   -- ③ 坏 JSON：解析不出来就按空处理，**不能让整个端点 500**
+                   ('p-models', 'm-c', 'B 模型', 'not json', '[1,2]', '{oops}',
+                    1, 0, 0, '{"off":null,"low":"low"}', '   ',
+                    NULL, NULL, 0, 0, 'manual', NULL, 1)"#,
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/providers/p-models/models").await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let list = body.as_array().unwrap();
+    // 顺序照抄 Kotlin 的 `ORDER BY display_name, model_id`（**默认 BINARY 排序**）：
+    // 大写 ASCII 在前、小写在后 → A 模型 / B 模型 / m-b
+    assert_eq!(
+        list.iter().map(|m| m["id"].as_str().unwrap()).collect::<Vec<_>>(),
+        vec!["m-a", "m-c", "m-b"],
+        "顺序换了在界面上就是「列表位置变了」：{body}"
+    );
+
+    // ① 全字段那行：精确键集合（18 个）
+    assert_eq!(
+        keys(&list[0]),
+        vec![
+            "attachmentTransports", "capabilitySource", "capabilityVerifiedAt", "contextWindow",
+            "displayName", "enabled", "id", "inputModalities", "maxAttachmentBytes",
+            "maxAttachmentCount", "maxOutputTokens", "mimeAllowlist", "parallelTools", "providerId",
+            "reasoning", "thinkingEfforts", "thinkingFormat", "tools",
+        ],
+        "少一个键 = 界面上少一块内容（附件准入与思考强度选择器全靠它们）"
+    );
+    assert_eq!(list[0]["providerId"], "p-models");
+    assert_eq!(list[0]["id"], "m-a");
+    assert_eq!(list[0]["displayName"], "A 模型");
+    assert_eq!(list[0]["inputModalities"], serde_json::json!(["text", "image"]));
+    assert_eq!(
+        list[0]["attachmentTransports"],
+        serde_json::json!({"image": ["inline_base64"]}),
+        "附件传输方式的唯一真源（AGENTS §10）"
+    );
+    assert_eq!(list[0]["mimeAllowlist"], serde_json::json!(["image/png"]));
+    assert_eq!(list[0]["tools"], true);
+    assert_eq!(list[0]["reasoning"], true);
+    // 数字必须还是数字（写成字符串前端 `as num?` 就取不到）
+    assert_eq!(list[0]["contextWindow"], 200000);
+    assert_eq!(list[0]["maxOutputTokens"], 8192);
+    assert_eq!(list[0]["maxAttachmentBytes"], 8388608);
+    assert_eq!(list[0]["maxAttachmentCount"], 4);
+    // thinking_efforts 的值**可能是数字**（Anthropic 的思考预算，AIH-056）→ 统一按字面文本
+    assert_eq!(list[0]["thinkingEfforts"]["max"], "4096");
+    assert_eq!(list[0]["capabilityVerifiedAt"], "2026-09-23T05:00:00.000Z");
+
+    // ② 全 NULL 那行：**只有 12 个键**
+    assert_eq!(
+        keys(&list[2]),
+        vec![
+            "attachmentTransports", "capabilitySource", "displayName", "enabled", "id",
+            "inputModalities", "mimeAllowlist", "parallelTools", "providerId", "reasoning",
+            "thinkingEfforts", "tools",
+        ],
+        "可空列为 NULL 时 Kotlin 连键都不发（explicitNulls = false）"
+    );
+    assert_eq!(list[2]["displayName"], "m-b");
+    assert_eq!(list[2]["capabilitySource"], "manual");
+    assert_eq!(list[2]["inputModalities"], serde_json::json!([]));
+    assert_eq!(list[2]["attachmentTransports"], serde_json::json!({}), "空表不是 null");
+    assert_eq!(list[2]["thinkingEfforts"], serde_json::json!({}));
+    assert_eq!(list[2]["enabled"], false);
+
+    // ③ 坏 JSON 那行：不炸，按空处理；空白 thinking_format 也算"没声明"
+    assert_eq!(list[1]["inputModalities"], serde_json::json!([]));
+    assert_eq!(list[1]["attachmentTransports"], serde_json::json!({}));
+    assert_eq!(list[1]["mimeAllowlist"], serde_json::json!([]));
+    assert_eq!(
+        list[1]["thinkingEfforts"],
+        serde_json::json!({"low": "low"}),
+        "JSON null 的值要丢掉（Kotlin contentOrNull 也是这个口径）"
+    );
+    let m_c = list[1].as_object().unwrap();
+    assert!(!m_c.contains_key("thinkingFormat"), "空白串 = 没声明：{body}");
+    assert!(!m_c.contains_key("contextWindow"));
+
+    // ★ 三种"没有模型"必须分清：provider 存在但目录为空 → 200 `[]`
+    let (status, empty) = get_json(router_for(state.clone()), "/api/ai/providers/p-empty/models").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty, serde_json::json!([]));
+
+    // ★ provider 不存在 → **400 `{error:"CONFIG_ERROR", detail: 人话}`**（不是 404、不是 500）
+    let (status, missing) = get_json(router_for(state), "/api/ai/providers/nope/models").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(keys(&missing), vec!["detail", "error"]);
+    assert_eq!(missing["error"], "CONFIG_ERROR");
+    assert_eq!(missing["detail"], "Provider 不存在: nope");
+}
+
+// ===========================================================================
 //  产物（P4 第 3 步）：列表 / 详情 / 原件文件流
 // ===========================================================================
 

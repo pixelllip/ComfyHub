@@ -24,7 +24,14 @@
 //! | `GET /api/health`（含 SQLite 版本 / FTS5 自检 / schemaVersion） | ✅ |
 //! | `GET /api/tags`、`/api/tags/categories` | ✅ |
 //! | `GET /api/prompts`（搜索 / 分页 / 排序）、`/api/prompts/{id}` | ✅ |
-//! | 写端点（POST/PUT/DELETE）、`/api/media`、`/api/ai/*`、`/api/sync/*`、`/api/capture/*` | ⛔ **未搬**（Kotlin 那边继续服务） |
+//! | `/api/media`（列表 / 详情 / **原件文件流** / 缩略图 / 上传 / PATCH / DELETE） | ✅ |
+//! | `GET /api/stats`、`/api/capture/config` | ✅ |
+//! | `GET /api/capture/workflows`、`/api/capture/locate{,/apply}` | ✅ |
+//! | `GET /api/{prompts,media}/{id}/workflow`、`GET /api/prompts/{id}/api-graph` | ✅ |
+//! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ |
+//! | `GET /api/ai/providers`（不含密钥）、`GET /api/ai/providers/{id}/models` | ✅ |
+//! | `/api/ai/*` 的其余部分（会话 / 消息 / Run / SSE / 工具 / 审批 / 附件） | ⛔ **未搬**（Kotlin 那边继续服务） |
+//! | `/api/capture/{status,jobs,poll,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功） |
 //! | R6~R10 的安全防线 | ⛔ **未重建**（AI/工具层是最后一批，总纲 §6 要求逐条对照重建） |
 
 use comfyhub_server_rs::{db, routes};
