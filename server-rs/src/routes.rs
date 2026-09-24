@@ -20,8 +20,8 @@
 //! | `GET /api/prompts/{id}` | — |
 
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{FromRequestParts, Path, Query, State},
+    http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
@@ -105,6 +105,58 @@ impl AppState {
     }
 }
 
+/// 路径里的数字 id（`/api/prompts/{id}`、`/api/media/{id}` …）。
+///
+/// # 为什么不用 `Path<i64>`
+///
+/// 变量不是数字时 axum 自己回的是 **400 + 纯文本**
+/// （`Invalid URL: Cannot parse "abc" to a i64`）—— Dart 的 `jsonDecode` 直接失败，
+/// 界面只显示 "HTTP 400"。Kotlin 那边是 `call.requireId() ?: respondBadRequest("非法的 id")`
+/// → `{"error":"非法的 id"}`（实测）。
+///
+/// 这个包装把"路径参数解析失败"也塞回**同一个信封**（`{error, detail?}`）：
+/// **Rust 侧任何一个 4xx 都是 JSON**，客户端永远有 `error` 可以给人看。
+/// 用法：`Id(id): Id`（元组模式直接解出 `i64`，处理函数里该怎么写还怎么写）。
+pub struct Id(pub i64);
+
+impl<S> FromRequestParts<S> for Id
+where
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let raw = Path::<String>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| ApiError::bad_request("非法的 id"))?;
+        raw.0
+            .trim()
+            .parse::<i64>()
+            .map(Id)
+            .map_err(|_| ApiError::bad_request("非法的 id"))
+    }
+}
+
+/// 路径里的**两个**数字 id（`/api/prompts/{id}/tags/{tagId}`）。
+///
+/// 与 [`Id`] 同理：`Path<(i64, i64)>` 解析失败时是纯文本 400，这里同样塞回信封。
+pub struct IdPair(pub i64, pub i64);
+
+impl<S> FromRequestParts<S> for IdPair
+where
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let raw = Path::<(String, String)>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| ApiError::bad_request("非法的 id"))?;
+        let parse = |s: &str| s.trim().parse::<i64>().map_err(|_| ApiError::bad_request("非法的 id"));
+        Ok(IdPair(parse(&raw.0 .0)?, parse(&raw.0 .1)?))
+    }
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
@@ -143,6 +195,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/push", axum::routing::post(sync_push))
         .route("/api/sync/bootstrap", get(sync_bootstrap))
         .merge(crate::write_routes::write_router())
+        // 未知路径也要给**同样形状**的错误体（默认 fallback 是空 body，界面只会显示 "HTTP 404"）
+        .fallback(fallback_route)
         .with_state(state)
 }
 
@@ -159,14 +213,14 @@ async fn list_media(
 
 async fn get_media(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<Json<crate::models::MediaDto>, ApiError> {
     Ok(Json(crate::media::get(&state, id)?))
 }
 
 async fn media_file(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
     headers: axum::http::HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     crate::media::media_file(state, id, headers).await
@@ -179,19 +233,19 @@ async fn get_stats(State(state): State<AppState>) -> Result<Json<serde_json::Val
 
 async fn media_thumb(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<axum::response::Response, ApiError> {
     crate::media::media_thumb(state, id).await
 }
 
-async fn media_poster(Path(_id): Path<i64>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn media_poster(Id(_id): Id) -> Result<Json<serde_json::Value>, ApiError> {
     Err(crate::media::not_migrated("视频封面"))
 }
 
 /// `GET /api/media/{id}/prompt`：204 = 这条产物没关联提示词（Dart 的 `mediaPrompt` 把 204 当 null）。
 async fn media_prompt(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<axum::response::Response, ApiError> {
     match crate::media::prompt_of_media(&state, id)? {
         None => Ok(axum::response::Response::builder()
@@ -205,7 +259,7 @@ async fn media_prompt(
 /// `GET /api/prompts/{id}/media`：这条提示词下的全部产物。
 async fn prompt_media(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<Json<Vec<crate::models::MediaDto>>, ApiError> {
     Ok(Json(crate::media::list_by_prompt(&state, id)?))
 }
@@ -277,7 +331,7 @@ async fn capture_locate_apply(
 /// `GET /api/prompts/{id}/workflow` —— 有就原样吐 `application/json`，没有就 **204**。
 async fn prompt_workflow(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<axum::response::Response, ApiError> {
     workflow_response(crate::capture::prompt_workflow(&state, id)?)
 }
@@ -285,7 +339,7 @@ async fn prompt_workflow(
 /// `GET /api/media/{id}/workflow`
 async fn media_workflow(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<axum::response::Response, ApiError> {
     workflow_response(crate::capture::media_workflow(&state, id)?)
 }
@@ -296,7 +350,7 @@ async fn media_workflow(
 /// 这里是 `source_ref → capture_runs.raw → HistoryEntry`（见 `capture::prompt_api_graph`）。
 async fn prompt_api_graph(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<axum::response::Response, ApiError> {
     match crate::capture::prompt_api_graph(&state, id)? {
         // 没有 API 图 → 204：调用方据此如实说"这条跑不了"，而不是当成"提示词不存在"
@@ -403,25 +457,51 @@ struct BootstrapQuery {
 //  错误
 // ---------------------------------------------------------------------------
 
-/// 统一错误响应（形状对齐 Kotlin 侧的 `ApiError`：`{error, message}`）。
+/// 统一错误响应（形状**逐字对齐 Kotlin 侧的 `ApiError`**：`{error, detail?}`）。
+///
+/// # 两种形态（Kotlin `Application.kt` 的 StatusPages 就是这么分的）
+///
+/// | 来源 | `error` | `detail` | 例子 |
+/// | --- | --- | --- | --- |
+/// | 普通错误（`respondError` / `respondNotFound` / `respondBadRequest`） | **人话** | 不出现 | `{"error":"非法的 id"}` |
+/// | AI 领域错误（`AiException`，AIH-024） | **稳定码** | 人话 | `{"error":"CONFIG_ERROR","detail":"会话不存在: 9"}` |
+///
+/// # ⚠ 为什么键名是 `error` 而不是 `message`（2026-09-24 对齐）
+///
+/// Dart 侧 `ApiClient._decode`（`lib/core/api_client.dart:50`）读的是 `error` 当人话、
+/// `detail` 当附加说明；`AiApiClient._decode` 反过来**先读 `detail` 再读 `error`**。
+/// 早先这里写的是 `{error:"NOT_FOUND", message:"提示词 999 不存在"}` ——
+/// 那两个客户端都读不到人话，界面显示的是 `NOT_FOUND` 这个机器码。
+///
+/// # ⚠ `detail == None` 时**整键省略**（不是 `"detail": null`）
+///
+/// Kotlin 的 `AppJson` 是 `explicitNulls = false`（`server/src/main/kotlin/com/comfyhub/Json.kt:12`），
+/// 实测：`GET /api/prompts/abc` → `{"error":"非法的 id"}`，**没有 `detail` 键**。
+/// 见 `tests/shape_lint.rs` —— 那里有一条"镜像 DTO 不许吐 null"的防线。
 #[derive(Debug)]
 pub struct ApiError {
     pub status: StatusCode,
+    /// 响应体 `error` 键的值（普通错误 = 人话；AI 错误 = 稳定码）。
     pub error: String,
-    pub message: String,
+    /// 响应体 `detail` 键的值；`None` = 这个键**根本不出现**。
+    pub detail: Option<String>,
 }
 
 impl ApiError {
+    fn new(status: StatusCode, error: impl Into<String>, detail: Option<String>) -> Self {
+        Self { status, error: error.into(), detail }
+    }
+
     pub fn not_found(message: impl Into<String>) -> Self {
-        Self { status: StatusCode::NOT_FOUND, error: "NOT_FOUND".into(), message: message.into() }
+        Self::new(StatusCode::NOT_FOUND, message, None)
     }
 
     pub fn internal(message: impl Into<String>) -> Self {
-        Self { status: StatusCode::INTERNAL_SERVER_ERROR, error: "INTERNAL".into(), message: message.into() }
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, message, None)
     }
 
     pub fn bad_request(message: impl Into<String>) -> Self {
-        Self { status: StatusCode::BAD_REQUEST, error: "BAD_REQUEST".into(), message: message.into() }
+        Self::new(StatusCode::BAD_REQUEST, message, None)
     }
 
     /// **`410 Gone`** —— 同步游标落在保留窗口之外（契约 §2）。
@@ -429,13 +509,38 @@ impl ApiError {
     /// 手机收到它就丢弃镜像、改走 `/api/sync/bootstrap`。
     /// ⚠ 这个分支**不是可选项**：缺了它，手机少掉的那几百条**永远补不回来**
     /// （增量接口照着旧游标往后扫，永远扫不到那些被裁掉的洞）。
+    ///
+    /// `error` 照样是**人话**（信封规则对同步端点一视同仁）；手机判 410 认的是**状态码**。
     pub fn gone(message: impl Into<String>) -> Self {
-        Self { status: StatusCode::GONE, error: "GONE".into(), message: message.into() }
+        Self::new(StatusCode::GONE, message, None)
     }
 
     /// 还没搬到 Rust 的端点：**明确 501**，不要拿空数组假装成功（那会让界面以为"真的没有"）。
     pub fn not_implemented(message: impl Into<String>) -> Self {
-        Self { status: StatusCode::NOT_IMPLEMENTED, error: "NOT_IMPLEMENTED".into(), message: message.into() }
+        Self::new(StatusCode::NOT_IMPLEMENTED, message, None)
+    }
+
+    /// **AI 领域错误**（`AiException` 的对应物，AIH-024）：`error` = 稳定码、`detail` = 人话。
+    ///
+    /// 状态码照 Kotlin 的 StatusPages 固定 **400**（`UNSUPPORTED_CONTENT` / `UNKNOWN_MODEL` /
+    /// `CONFIG_ERROR` … 都是 400），客户端拿 `error` 分支、拿 `detail` 给用户看。
+    /// 空的人话回落到"只给码"（Kotlin 那边 `cause.message` 为 null 时 `detail` 就是不出现）。
+    pub fn ai(code: impl Into<String>, message: impl Into<String>) -> Self {
+        let message = message.into();
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            code,
+            (!message.trim().is_empty()).then_some(message),
+        )
+    }
+
+    /// **只给内部用**的人类可读说明（普通错误 = `error`，AI 错误 = `detail`）。
+    ///
+    /// 用在"把这个错误当成一句话塞进另一个结构"的地方，例如
+    /// `sync.push` 的 `rejected[].message`、上传时单个文件失败的原因。
+    /// **它不进错误响应体**（响应体只有 `error` / `detail` 两个键）。
+    pub fn human(&self) -> &str {
+        self.detail.as_deref().unwrap_or(&self.error)
     }
 }
 
@@ -447,8 +552,25 @@ impl From<rusqlite::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": self.error, "message": self.message }))).into_response()
+        // 手拼对象而**不用 json!({"detail": self.detail})**：那样 `None` 会变成 `"detail": null`，
+        // 与 `explicitNulls = false` 的 Kotlin 响应不是同一个形状（多一个键就是多一块差异）。
+        let mut obj = serde_json::Map::with_capacity(2);
+        obj.insert("error".into(), serde_json::Value::String(self.error));
+        if let Some(detail) = self.detail {
+            obj.insert("detail".into(), serde_json::Value::String(detail));
+        }
+        (self.status, Json(serde_json::Value::Object(obj))).into_response()
     }
+}
+
+/// 没匹配到任何路由 → `404 {"error":"接口不存在: <路径>"}`。
+///
+/// Kotlin 的 StatusPages 对未知路径也给这句话（`Application.kt:589`），
+/// 但它**把状态码写成了 200**（`call.respond` 在 status 处理器里会重置状态）——
+/// 那是 Kotlin 侧的 bug，这里**只对齐 body、不对齐那个 200**：
+/// 未知路径必须仍是 404，否则任何"路径写错"都会被界面当成成功。
+async fn fallback_route(uri: axum::http::Uri) -> ApiError {
+    ApiError::not_found(format!("接口不存在: {}", uri.path()))
 }
 
 // ---------------------------------------------------------------------------
@@ -570,7 +692,7 @@ async fn list_prompts(
 
 async fn get_prompt(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<Json<PromptDto>, ApiError> {
     let prompt = state.with(|conn| {
         let mut stmt = conn.prepare("SELECT * FROM prompts WHERE id = ?1")?;

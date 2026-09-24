@@ -628,7 +628,7 @@ fn apply_one(state: &AppState, item: &PushItem) -> Result<(), Rejected> {
             tx.execute(&sql, rusqlite::params_from_iter(refs))?;
             Ok(Ok(()))
         })
-        .map_err(|e: ApiError| reject("DB_ERROR", format!("落库失败：{}", e.message)))?
+        .map_err(|e: ApiError| reject("DB_ERROR", format!("落库失败：{}", e.human())))?
 }
 
 /// 表有哪些列（`PRAGMA table_info`，与 P2 的收敛式迁移同一个取数方式）。

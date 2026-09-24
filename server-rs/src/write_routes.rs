@@ -23,7 +23,7 @@
 //! 顺带：同一个事务也让 `_sync_log` 的触发器行与业务行**一起提交**（同步不会看到半截）。
 
 use axum::{
-    extract::{Path, State},
+    extract::State,
     http::StatusCode,
     routing::{delete, patch, post, put},
     Json, Router,
@@ -33,7 +33,7 @@ use rusqlite::{params, OptionalExtension};
 use crate::inputs::{Deleted, FavoriteInput, FavoriteResult, PromptInput, TagInput, TagNamesInput};
 use crate::models::{prompt_from_row, tag_from_row, PromptDto, TagDto};
 use crate::repo::{self, WriteError};
-use crate::routes::{ApiError, AppState};
+use crate::routes::{ApiError, AppState, Id, IdPair};
 
 /// 写端点的路由表（**不在这里 `with_state`**：要和读端点那份 merge 之后再统一上状态，
 /// 否则两份 `Router` 的状态类型对不上 —— axum 的 `merge` 要求两侧同状态）。
@@ -53,7 +53,7 @@ pub fn write_router() -> Router<AppState> {
 /// `PATCH /api/media/{id}`：改标题 / 关联提示词 / 收藏 / 备注 / NSFW 标记。
 async fn patch_media(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
     Json(body): Json<crate::inputs::MediaUpdate>,
 ) -> Result<Json<crate::models::MediaDto>, ApiError> {
     Ok(Json(crate::media_write::update(&state, id, &body)?))
@@ -62,7 +62,7 @@ async fn patch_media(
 /// `DELETE /api/media/{id}`：删库 + 删磁盘文件（回 `{"deleted": id}`）。
 async fn delete_media(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<Json<Deleted>, ApiError> {
     crate::media_write::delete(&state, id)?;
     Ok(Json(Deleted { deleted: id }))
@@ -129,7 +129,7 @@ async fn create_tag(
 
 async fn update_tag(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
     Json(input): Json<TagInput>,
 ) -> Result<Json<TagDto>, ApiError> {
     let ok = state.write(|tx| repo::update_tag(tx, id, &input))?;
@@ -141,7 +141,7 @@ async fn update_tag(
 
 async fn delete_tag(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<Json<Deleted>, ApiError> {
     let ok = state.write(|tx| repo::delete_tag(tx, id))?;
     if !ok {
@@ -165,7 +165,7 @@ async fn create_prompt(
 
 async fn update_prompt(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
     Json(input): Json<PromptInput>,
 ) -> Result<Json<PromptDto>, ApiError> {
     let ok = state.write(|tx| repo::update_prompt(tx, id, &input))?;
@@ -177,7 +177,7 @@ async fn update_prompt(
 
 async fn delete_prompt(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<Json<Deleted>, ApiError> {
     let ok = state.write(|tx| repo::delete_prompt(tx, id))?;
     if !ok {
@@ -191,7 +191,7 @@ async fn delete_prompt(
 /// ⚠ 响应是 `{"id", "favorite"}` 两个键（Kotlin 侧这里踩过"混类型 map 让序列化抛 500"的坑）。
 async fn favorite(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
     Json(body): Json<FavoriteInput>,
 ) -> Result<Json<FavoriteResult>, ApiError> {
     let ok = state.write(|tx| repo::set_favorite(tx, id, body.favorite))?;
@@ -203,7 +203,7 @@ async fn favorite(
 
 async fn duplicate(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
 ) -> Result<(StatusCode, Json<PromptDto>), ApiError> {
     // 先把源读齐（DTO + 标签），再在**一个写事务里**建副本
     let source = state.with(|conn| {
@@ -228,7 +228,7 @@ async fn duplicate(
 
 async fn add_tags(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Id(id): Id,
     Json(body): Json<TagNamesInput>,
 ) -> Result<Json<PromptDto>, ApiError> {
     let exists = state.with(|conn| {
@@ -249,7 +249,7 @@ async fn add_tags(
 
 async fn remove_tag(
     State(state): State<AppState>,
-    Path((id, tag_id)): Path<(i64, i64)>,
+    IdPair(id, tag_id): IdPair,
 ) -> Result<Json<PromptDto>, ApiError> {
     let exists = state.with(|conn| {
         Ok(conn

@@ -265,7 +265,7 @@ pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::
                         })
                         .optional_present()?)
                 })
-                .map_err(|e| e.message)?;
+                .map_err(|e| e.human().to_string())?;
             if let Some(existing_id) = existing {
                 let _ = std::fs::remove_file(&moved);
                 duplicates.push(DuplicateInfo { file_name: item.original_name.clone(), existing_media_id: existing_id });
@@ -306,7 +306,7 @@ pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::
                     repo::refresh_use_counts(tx)?;
                     Ok(id)
                 })
-                .map_err(|e| e.message)?;
+                .map_err(|e| e.human().to_string())?;
 
             if kind == "IMAGE" {
                 let thumb = crate::thumbs::thumb_path(&media_dir, new_id);
@@ -318,7 +318,7 @@ pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::
         match result {
             Ok(Some(new_id)) => match media::get(&state, new_id) {
                 Ok(dto) => created.push(dto),
-                Err(e) => failed.push(FailedInfo { file_name: item.original_name, reason: e.message }),
+                Err(e) => failed.push(FailedInfo { file_name: item.original_name, reason: e.human().to_string() }),
             },
             Ok(None) => {}
             Err(reason) => {

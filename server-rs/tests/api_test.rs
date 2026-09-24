@@ -268,8 +268,9 @@ async fn prompt_search_and_favorite_and_missing() {
 
     let (status, body) = get_json(app(), "/api/prompts/999").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(keys(&body), vec!["error", "message"]);
-    assert!(body["message"].as_str().unwrap().contains("999"));
+    // 错误体是 `{error, detail?}`：普通错误**人话就写在 `error` 里**（`detail` 不出现）
+    assert_eq!(keys(&body), vec!["error"]);
+    assert!(body["error"].as_str().unwrap().contains("999"), "body={body}");
 }
 
 #[tokio::test]
@@ -281,6 +282,69 @@ async fn foreign_keys_cascade_is_really_on() {
         .query_row("SELECT COUNT(*) FROM prompt_tags WHERE tag_id = 1", [], |r| r.get(0))
         .unwrap();
     assert_eq!(left, 0, "R1 没生效：删标签留下了孤儿关联行");
+}
+
+// ===========================================================================
+//  错误体形状（2026-09-24 对齐）：`{error, detail?}` —— **没有 `message` 这个键**
+// ===========================================================================
+
+/// `error` 是不是一个"机器码"（`NOT_FOUND` / `BAD_REQUEST` / `SCHEMA_MISMATCH` 那种全大写）。
+fn looks_like_a_machine_code(text: &str) -> bool {
+    !text.is_empty()
+        && text.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+}
+
+/// **普通错误**：`error` 就是人话，`detail` 不出现，`message` 这个键根本不存在。
+///
+/// 为什么这条必须有用例：Dart 的 `ApiClient._decode`（`lib/core/api_client.dart:50`）
+/// 把 `error` 当人话读；`AiApiClient._decode` 先读 `detail`、再读 `error`。
+/// 早先这里是 `{error:"NOT_FOUND", message:"提示词 999 不存在"}` ——
+/// 两个客户端都读不到人话，界面显示的是 `NOT_FOUND`。**形状错不报错，只显示机器码。**
+#[tokio::test]
+async fn ordinary_errors_put_the_human_text_in_error() {
+    for (uri, expected) in [
+        ("/api/prompts/999", StatusCode::NOT_FOUND),
+        ("/api/prompts/abc", StatusCode::BAD_REQUEST),
+        ("/api/media/9999", StatusCode::NOT_FOUND),
+        ("/api/nope", StatusCode::NOT_FOUND), // 未知路径也要同一个信封（默认 fallback 是空 body）
+    ] {
+        let (status, body) = get_json(app(), uri).await;
+        assert_eq!(status, expected, "uri={uri} body={body}");
+        assert_eq!(keys(&body), vec!["error"], "普通错误只有 `error` 一个键：{body}");
+        let text = body["error"].as_str().unwrap();
+        assert!(!looks_like_a_machine_code(text), "`error` 必须是给人看的话：{text}");
+        assert!(!body.to_string().contains("message"), "`message` 这个键不许再出现：{body}");
+    }
+}
+
+/// **AI 领域错误**（`AiException` 的对应物，AIH-024）：`error` = 稳定码，`detail` = 人话。
+///
+/// 形状基线是实测出来的（真库副本 + Kotlin 8090）：
+/// `GET /api/ai/conversations/999999` → `400 {"error":"CONFIG_ERROR","detail":"会话不存在: 999999"}`。
+#[tokio::test]
+async fn ai_errors_put_the_stable_code_in_error_and_the_human_text_in_detail() {
+    use axum::response::IntoResponse;
+
+    let body_of = |error: comfyhub_server_rs::routes::ApiError| async move {
+        let response = error.into_response();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+    };
+
+    let (status, body) = body_of(comfyhub_server_rs::routes::ApiError::ai(
+        "CONFIG_ERROR",
+        "会话不存在: 999999",
+    ))
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "AI 异常照 Kotlin 固定 400");
+    assert_eq!(keys(&body), vec!["detail", "error"]);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert_eq!(body["detail"], "会话不存在: 999999");
+
+    // 没有人类可读说明时 `detail` **整键省略**（Kotlin 那边 `cause.message == null` 就是这个形状）
+    let (_, body) = body_of(comfyhub_server_rs::routes::ApiError::ai("CONFIG_ERROR", "   ")).await;
+    assert_eq!(keys(&body), vec!["error"], "`detail` 必须是**不出现**，不是 null：{body}");
 }
 
 // ===========================================================================
@@ -329,7 +393,7 @@ async fn post_tags_with_blank_name_is_400() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"], "BAD_REQUEST");
+    assert!(body["error"].as_str().unwrap().contains("不能为空"), "body={body}");
 }
 
 /// 改名撞上另一个标签 → 400（**不是**静默合并成一条）。
@@ -348,7 +412,7 @@ async fn put_tag_conflict_is_400_and_missing_is_404() {
     )
     .await;
     assert_eq!(clash.0, StatusCode::BAD_REQUEST);
-    assert!(clash.1["message"].as_str().unwrap().contains("已存在"), "body={}", clash.1);
+    assert!(clash.1["error"].as_str().unwrap().contains("已存在"), "body={}", clash.1);
 
     let renamed = send_json(
         router_for(state.clone()),
@@ -446,7 +510,7 @@ async fn post_prompts_blank_is_400() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("不能为空"));
+    assert!(body["error"].as_str().unwrap().contains("不能为空"), "body={body}");
 }
 
 #[tokio::test]
@@ -631,7 +695,10 @@ async fn unmigrated_endpoints_answer_501_and_migrated_ones_work() {
     // 还没搬：视频封面要 ffmpeg 抽帧
     let (status, body) = get_json(router_for(state()), "/api/media/100/poster").await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(body["error"], "NOT_IMPLEMENTED");
+    assert!(
+        body["error"].as_str().unwrap().contains("还没搬到 Rust"),
+        "501 的 error 也是人话（不是 NOT_IMPLEMENTED 这种机器码）：{body}"
+    );
 }
 // ===========================================================================
 //  本机工作流文件（P4 第 14 步）：GET /api/capture/workflows
@@ -1004,7 +1071,7 @@ async fn media_file_rejects_path_traversal_and_missing_files() {
         .unwrap();
     let (status, body) = get_json(router_for(state.clone()), "/api/media/100/file").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert!(body["message"].as_str().unwrap().contains("文件已丢失"));
+    assert!(body["error"].as_str().unwrap().contains("文件已丢失"), "body={body}");
 }
 
 /// 缩略图：真图能生成 JPEG 并缓存；非图片 204；坏图回退原图；poster/upload 仍是 501。
@@ -1088,7 +1155,7 @@ async fn media_thumb_generates_a_cached_jpeg_and_falls_back_honestly() {
     for uri in ["/api/media/100/poster"] {
         let (status, body) = get_json(router_for(state.clone()), uri).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "uri={uri}");
-        assert_eq!(body["error"], "NOT_IMPLEMENTED");
+        assert!(body["error"].as_str().unwrap().contains("还没搬到 Rust"), "uri={uri} body={body}");
     }
     // 产物关联的完整提示词也搬过来了（204 = 没关联）
     let (status, _) = get_json(router_for(state.clone()), "/api/media/101/prompt").await;
@@ -1145,7 +1212,7 @@ async fn patch_media_updates_fields_and_rejects_empty_body() {
     )
     .await;
     assert_eq!(bogus.0, StatusCode::BAD_REQUEST);
-    assert!(bogus.1["message"].as_str().unwrap().contains("9999"));
+    assert!(bogus.1["error"].as_str().unwrap().contains("9999"));
 
     let missing = send_json(
         router_for(state.clone()),
@@ -1314,13 +1381,13 @@ async fn upload_rejects_empty_and_bad_prompt_id() {
     let empty = multipart_body("----comfyhubtest", &[("title", "只有字段")], &[]);
     let (status, body) = post_multipart(router_for(state.clone()), "/api/media/upload", empty).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("files"));
+    assert!(body["error"].as_str().unwrap().contains("files"));
 
     // promptId 不存在 → 400
     let body = multipart_body("----comfyhubtest", &[("promptId", "9999")], &[("files", "a.png", b"x")]);
     let (status, body) = post_multipart(router_for(state.clone()), "/api/media/upload", body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("9999"));
+    assert!(body["error"].as_str().unwrap().contains("9999"));
 
     // 校验失败时**临时文件不许留在盘上**（tmp 目录要干净）
     let tmp = state.media_dir().parent().unwrap().join("tmp");
@@ -1402,7 +1469,7 @@ async fn workflow_endpoints_distinguish_404_from_204() {
 
     let (status, body) = get_json(router_for(state.clone()), "/api/prompts/9999/workflow").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "提示词不存在才是 404");
-    assert!(body["message"].as_str().unwrap().contains("9999"));
+    assert!(body["error"].as_str().unwrap().contains("9999"));
 
     // 产物侧同一套语义
     state
@@ -1474,7 +1541,7 @@ async fn api_graph_distinguishes_404_from_204_from_200() {
     // ⑥ 提示词根本不存在才是 404
     let (status, body) = get_json(router_for(state.clone()), "/api/prompts/9999/api-graph").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert!(body["message"].as_str().unwrap().contains("9999"));
+    assert!(body["error"].as_str().unwrap().contains("9999"));
 }
 
 /// `GET /api/sync/manifest` —— 手机连上来的第一件事（🔒 契约 §1）。
@@ -1762,9 +1829,10 @@ async fn sync_changes_returns_410_when_the_cursor_fell_out_of_the_window() {
     // 老游标（1）早于窗口 → 410
     let (status, body) = get_json(router_for(state.clone()), "/api/sync/changes?since=1").await;
     assert_eq!(status, StatusCode::GONE, "窗口外的游标必须 410，实际 {status} {body}");
-    assert_eq!(body["error"], "GONE");
+    // 410 的信封与别处一致：`error` 是**人话**（手机判 410 认的是状态码，不是 `error` 的值）
+    assert_eq!(keys(&body), vec!["error"]);
     assert!(
-        body["message"].as_str().unwrap().contains("bootstrap"),
+        body["error"].as_str().unwrap().contains("bootstrap"),
         "错误信息要告诉手机改走 bootstrap：{body}",
     );
 
@@ -2210,7 +2278,7 @@ async fn sync_push_rejects_oversized_batches() {
         .collect();
     let (status, body) = push(&state, batch).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("500"), "{body}");
+    assert!(body["error"].as_str().unwrap().contains("500"), "{body}");
 }
 
 /// 上行点亮 `_sync_log`（否则手机上产生的会话**永远同步不回其它设备**）。
@@ -2345,7 +2413,7 @@ async fn sync_bootstrap_refuses_tables_outside_the_scope() {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{forbidden} 不该能全量导出");
-        let msg = body["message"].as_str().unwrap();
+        let msg = body["error"].as_str().unwrap();
         assert!(msg.contains("prompts"), "错误信息要列出合法表名：{msg}");
         assert!(!body.to_string().contains("SECRET-TOKEN"), "令牌绝不能出现：{body}");
     }
@@ -2353,7 +2421,7 @@ async fn sync_bootstrap_refuses_tables_outside_the_scope() {
     // 缺 table 也是 400（必填，理由见 sync::bootstrap 的注释）
     let (status, body) = get_json(router_for(state.clone()), "/api/sync/bootstrap?page=1").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("table"));
+    assert!(body["error"].as_str().unwrap().contains("table"));
 }
 #[tokio::test]
 async fn media_prompt_has_three_outcomes() {
@@ -2404,7 +2472,7 @@ async fn media_prompt_has_three_outcomes() {
         .unwrap();
     let (status, body) = get_json(router_for(state.clone()), "/api/media/104/prompt").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert!(body["message"].as_str().unwrap().contains("已被删除"));
+    assert!(body["error"].as_str().unwrap().contains("已被删除"));
 
     // 产物本身不存在 → 404
     let (status, _) = get_json(router_for(state.clone()), "/api/media/9999/prompt").await;
