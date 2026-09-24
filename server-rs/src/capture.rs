@@ -216,6 +216,158 @@ pub fn put_config(state: &AppState, config: CaptureConfig) -> Result<CaptureConf
 /// 路由层要的 JSON 响应类型（工作流原文用 `Response` 直出，不走这里）。
 pub type ConfigJson = axum::Json<CaptureConfig>;
 
+// ---------------------------------------------------------------------------
+//  API 格式节点图（P4 第 9 步）
+// ---------------------------------------------------------------------------
+
+/// **API 格式**节点图 `/api/prompts/{id}/api-graph`。
+///
+/// 这是"当时真正跑的东西"（提交给 ComfyUI `/prompt` 的那一份），
+/// 与 `/workflow`（界面格式，能拖回 ComfyUI 复现）**不是一回事**。
+///
+/// 取数链条与 Kotlin `ComfyCapture.apiGraphOf` 逐字一致：
+/// `prompts.source_ref`（= `run_key`）→ `capture_runs.raw` → `HistoryEntry.parse(entry).graph`。
+///
+/// # 三种结果，一种都不能少（R10 的前提）
+///
+/// | 情况 | 应答 |
+/// | --- | --- |
+/// | 提示词不存在 | **404** |
+/// | 存在但没有 `source_ref` / 没有 `capture_runs` 行 / 解析不出节点图 | **204** |
+/// | 有 | **200** + 节点图 JSON |
+///
+/// ⚠ 老数据没有 API 图时回 204 而不是"猜着转换"：界面/模型据此如实说"这条跑不了"
+/// （AGENTS §10.1 的 `NO_API_GRAPH`）。**204 与 404 混在一起就等于把"缺数据"说成"没这条提示词"**。
+pub fn prompt_api_graph(state: &AppState, id: i64) -> Result<Option<serde_json::Value>, ApiError> {
+    let lookup = state.with(|conn| {
+        let prompt: Option<Option<String>> = conn
+            .query_row("SELECT source_ref FROM prompts WHERE id = ?1", params![id], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .optional()?;
+        let Some(source_ref) = prompt else {
+            return Ok(GraphLookup::Missing);
+        };
+        // source_ref 是"这把工作流是从哪来的"：空/空白当没有（别拿空串去查出别的行）
+        let Some(run_key) = source_ref.filter(|s| !s.trim().is_empty()) else {
+            return Ok(GraphLookup::NoRun);
+        };
+        let raw: Option<String> = conn
+            .query_row("SELECT raw FROM capture_runs WHERE run_key = ?1", params![run_key], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .optional()?
+            .flatten();
+        Ok(match raw.filter(|t| !t.trim().is_empty()) {
+            Some(text) => GraphLookup::Raw(text),
+            None => GraphLookup::NoRun,
+        })
+    })?;
+
+    match lookup {
+        GraphLookup::Missing => Err(ApiError::not_found(format!("提示词 {id} 不存在"))),
+        GraphLookup::NoRun => Ok(None),
+        GraphLookup::Raw(text) => {
+            // 解析不了（脏数据 / 截断的 raw）也只是 204 —— 与 Kotlin 的 runCatching 同语义
+            let entry: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(_) => return Ok(None),
+            };
+            Ok(history::parse(&entry).graph)
+        }
+    }
+}
+
+enum GraphLookup {
+    Missing,
+    NoRun,
+    Raw(String),
+}
+
+/// `HistoryEntry` 的逐行移植（Kotlin `ComfyCapture.kt` 的 `internal object HistoryEntry`）。
+///
+/// ComfyUI 的 `/history/{id}` 条目里，"节点图"藏在三层不同的形状里，历史上三种都出现过：
+///
+/// 1. `{prompt: {<节点id>: {class_type, inputs}}}` —— 最常见（`prompt` 就是图）；
+/// 2. `{prompt: {prompt: <图>, extra_data: {...}}}` —— 具名形式；
+/// 3. `{prompt: [<图>, <extra_data>]}` —— 数组形式。
+///
+/// 判据是**结构特征**而不是键名：图 = 每个值都是带 `class_type` 的对象；`extra_data` = 带
+/// `extra_pnginfo` / `client_id` / `create_time` 之一。**不要改成按键名猜** ——
+/// 猜错的后果是把 `extra_data` 当成节点图发给 ComfyUI（提交必炸，且报错信息毫无线索）。
+pub mod history {
+    use serde_json::{Map, Value};
+
+    #[derive(Debug, Default, PartialEq)]
+    pub struct Parsed {
+        pub graph: Option<Value>,
+        pub extra_data: Option<Value>,
+        pub workflow: Option<Value>,
+    }
+
+    pub fn parse(entry: &Value) -> Parsed {
+        let Some(field) = entry.get("prompt") else {
+            return Parsed::default();
+        };
+        match field {
+            Value::Object(obj) => {
+                // `(field["prompt"] as? JsonObject) ?: field.takeIf { isNodeGraph(it) }`
+                let graph = obj
+                    .get("prompt")
+                    .filter(|v| v.is_object())
+                    .cloned()
+                    .or_else(|| is_node_graph(obj).then(|| Value::Object(obj.clone())));
+                let extra_data = obj
+                    .get("extra_data")
+                    .filter(|v| v.is_object())
+                    .cloned()
+                    .or_else(|| looks_like_extra_data(obj).then(|| Value::Object(obj.clone())));
+                Parsed {
+                    workflow: workflow_of(extra_data.as_ref()),
+                    graph,
+                    extra_data,
+                }
+            }
+            Value::Array(items) => {
+                let objects: Vec<&Map<String, Value>> =
+                    items.iter().filter_map(|v| v.as_object()).collect();
+                // Kotlin 用的是 `it !== graph`（引用比较），这里换成**下标比较**，
+                // 避免同一个对象既是图又像 extra_data 时两处指向同一行
+                let graph_idx = objects.iter().position(|o| is_node_graph(o));
+                let graph = graph_idx.map(|i| Value::Object(objects[i].clone()));
+                let extra_data = objects
+                    .iter()
+                    .enumerate()
+                    .find(|(i, o)| Some(*i) != graph_idx && looks_like_extra_data(o))
+                    .map(|(_, o)| Value::Object((*o).clone()));
+                Parsed {
+                    workflow: workflow_of(extra_data.as_ref()),
+                    graph,
+                    extra_data,
+                }
+            }
+            _ => Parsed::default(),
+        }
+    }
+
+    /// API 格式节点图：非空，且**每个值**都是带 `class_type` 的对象
+    pub fn is_node_graph(obj: &Map<String, Value>) -> bool {
+        !obj.is_empty()
+            && obj
+                .values()
+                .all(|v| v.as_object().is_some_and(|o| o.contains_key("class_type")))
+    }
+
+    fn looks_like_extra_data(obj: &Map<String, Value>) -> bool {
+        obj.contains_key("extra_pnginfo") || obj.contains_key("client_id") || obj.contains_key("create_time")
+    }
+
+    /// 界面格式工作流藏在 `extra_data.extra_pnginfo.workflow` 里
+    pub fn workflow_of(extra_data: Option<&Value>) -> Option<Value> {
+        extra_data?.get("extra_pnginfo")?.get("workflow").cloned()
+    }
+}
+
 /// 让 `Path` 与 `State` 的导入在只用到一处时不报 unused。
 #[allow(dead_code)]
 type UnusedImports = (Path<i64>, State<AppState>);
@@ -259,5 +411,67 @@ mod tests {
         }
         let back: CaptureConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back, CaptureConfig::default());
+    }
+
+    // -----------------------------------------------------------------------
+    //  HistoryEntry（api-graph 的取数核心）
+    // -----------------------------------------------------------------------
+
+    fn graph(id: &str) -> serde_json::Value {
+        serde_json::json!({ id: { "class_type": "KSampler", "inputs": { "seed": 1 } } })
+    }
+
+    #[test]
+    fn history_parses_the_flat_form() {
+        // {prompt: <图>}：最常见的那种
+        let entry = serde_json::json!({ "prompt": graph("3") });
+        let parsed = history::parse(&entry);
+        assert_eq!(parsed.graph, Some(graph("3")));
+        assert!(parsed.extra_data.is_none(), "整张图不是 extra_data");
+        assert!(parsed.workflow.is_none());
+    }
+
+    #[test]
+    fn history_parses_the_named_form_and_pulls_out_the_workflow() {
+        // {prompt: {prompt: <图>, extra_data: {extra_pnginfo: {workflow: {...}}}}}
+        let entry = serde_json::json!({
+            "prompt": {
+                "prompt": graph("3"),
+                "extra_data": { "extra_pnginfo": { "workflow": { "nodes": [] } }, "client_id": "abc" }
+            }
+        });
+        let parsed = history::parse(&entry);
+        // ⚠ 这里最容易错：把**外层**当成图（外层每个值都是对象，但它们的值里没有 class_type）
+        assert_eq!(parsed.graph, Some(graph("3")), "具名形式要取里层那一份");
+        assert_eq!(parsed.workflow, Some(serde_json::json!({ "nodes": [] })), "界面格式工作流在 extra_pnginfo.workflow");
+    }
+
+    #[test]
+    fn history_parses_the_array_form() {
+        // {prompt: [<图>, <extra_data>]}：数组形式，两个元素都要认出来
+        let entry = serde_json::json!({ "prompt": [graph("3"), { "client_id": "abc", "create_time": 1 }] });
+        let parsed = history::parse(&entry);
+        assert_eq!(parsed.graph, Some(graph("3")));
+        assert_eq!(parsed.extra_data, Some(serde_json::json!({ "client_id": "abc", "create_time": 1 })));
+    }
+
+    #[test]
+    fn history_refuses_to_guess_when_there_is_no_graph() {
+        // 没有 prompt 字段 / 形状不认识 → 一律 None（**绝不猜**：猜错就是拿 extra_data 去提交）
+        assert_eq!(history::parse(&serde_json::json!({ "outputs": {} })).graph, None);
+        assert_eq!(history::parse(&serde_json::json!({ "prompt": "oops" })).graph, None);
+        assert_eq!(history::parse(&serde_json::json!({ "prompt": {} })).graph, None, "空对象不是节点图");
+        // 值是对象但没有 class_type → 不是图
+        assert_eq!(history::parse(&serde_json::json!({ "prompt": { "a": { "inputs": {} } } })).graph, None);
+    }
+
+    #[test]
+    fn extra_data_is_not_mistaken_for_a_node_graph() {
+        // extra_data 的每个值常常也是对象，但它绝不该被当成节点图
+        let extra = serde_json::json!({ "extra_pnginfo": { "workflow": { "nodes": [] } } });
+        assert!(!history::is_node_graph(extra.as_object().unwrap()));
+        let entry = serde_json::json!({ "prompt": { "prompt": graph("3"), "extra_data": extra } });
+        let parsed = history::parse(&entry);
+        assert_ne!(parsed.graph, Some(extra.clone()), "图不能取成 extra_data");
     }
 }

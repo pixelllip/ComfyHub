@@ -103,6 +103,8 @@ pub fn router(state: AppState) -> Router {
         // 工作流原文（前端按需拉：详情页的「查看工作流」弹窗）
         .route("/api/prompts/{id}/workflow", get(prompt_workflow))
         .route("/api/media/{id}/workflow", get(media_workflow))
+        // API 格式节点图（"当时真正跑的东西"：comfy_submit 与端到端自测都读它，R10）
+        .route("/api/prompts/{id}/api-graph", get(prompt_api_graph))
         .merge(crate::write_routes::write_router())
         .with_state(state)
 }
@@ -198,6 +200,28 @@ async fn media_workflow(
     Path(id): Path<i64>,
 ) -> Result<axum::response::Response, ApiError> {
     workflow_response(crate::capture::media_workflow(&state, id)?)
+}
+
+/// `GET /api/prompts/{id}/api-graph` —— **API 格式**节点图（提交给 ComfyUI 的那一份）。
+///
+/// 与 `/workflow` 的三分（404 / 204 / 200）形状相同，但取数链条完全不同：
+/// 这里是 `source_ref → capture_runs.raw → HistoryEntry`（见 `capture::prompt_api_graph`）。
+async fn prompt_api_graph(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<axum::response::Response, ApiError> {
+    match crate::capture::prompt_api_graph(&state, id)? {
+        // 没有 API 图 → 204：调用方据此如实说"这条跑不了"，而不是当成"提示词不存在"
+        None => Ok(axum::response::Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(axum::body::Body::empty())
+            .unwrap()),
+        Some(graph) => Ok(axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(graph.to_string()))
+            .unwrap()),
+    }
 }
 
 /// 工作流原文的响应：**原样文本**（不重新序列化：可能有几百 KB，前端按原样塞进弹窗）

@@ -47,6 +47,14 @@ fn test_conn() -> Connection {
 
         INSERT INTO prompt_tags (prompt_id, tag_id) VALUES (10, 1), (11, 2);
 
+        -- prompt 11 的来源指向一次真实捕获：它的 **API 图**从 capture_runs.raw 里取。
+        -- prompt 10 的 source_ref 是 NULL → 那条走"没有 API 图"的 204 分支。
+        UPDATE prompts SET source_ref = 'run:abc' WHERE id = 11;
+        INSERT INTO capture_runs (run_key, status, media_count, raw, created_at)
+        VALUES ('run:abc', 'success', 0,
+                '{"prompt":{"3":{"class_type":"KSampler","inputs":{"seed":1}}}}',
+                '2026-09-23T02:00:00.000Z');
+
         INSERT INTO media_assets (id, prompt_id, kind, original_name, stored_name, size_bytes)
         VALUES (100, 10, 'IMAGE', 'a.png', 'a.png', 1234);
         "#,
@@ -1176,6 +1184,63 @@ async fn workflow_endpoints_distinguish_404_from_204() {
     assert_eq!(response.status(), StatusCode::OK);
     let (status, _) = get_json(router_for(state.clone()), "/api/media/9999/workflow").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// `GET /api/prompts/{id}/api-graph` —— **API 格式**节点图。
+///
+/// 这条是 R10 的前提：`comfy_submit` 只认 API 图，而它的唯一来源就是这里。
+/// 所以三种结局必须分得清清楚楚 —— **把 204 说成 404，界面就会以为"提示词没了"**。
+#[tokio::test]
+async fn api_graph_distinguishes_404_from_204_from_200() {
+    let state = state();
+
+    // ① 有来源、有 raw、raw 里是节点图 → 200 + 图本体
+    let (status, body) = get_json(router_for(state.clone()), "/api/prompts/11/api-graph").await;
+    assert_eq!(status, StatusCode::OK, "夹具 id=11 的来源指向 run:abc");
+    assert_eq!(body["3"]["class_type"], "KSampler");
+    assert_eq!(body["3"]["inputs"]["seed"], 1);
+
+    // ② 有这条提示词但没来源 → 204（不是 404、也不是空对象）
+    let (status, _) = get_json(router_for(state.clone()), "/api/prompts/10/api-graph").await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "source_ref 为空 → 204");
+
+    // ③ 来源指向一次**没有 raw** 的捕获 → 还是 204（"这条跑不了"，而不是"没这条提示词"）
+    state
+        .with(|conn| {
+            conn.execute("UPDATE prompts SET source_ref = 'run:gone' WHERE id = 11", []).map(|_| ())
+        })
+        .unwrap();
+    let (status, _) = get_json(router_for(state.clone()), "/api/prompts/11/api-graph").await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "来源悬空 → 204");
+
+    // ④ raw 是脏数据（解析不了）也只回 204 —— **绝不猜着转换**
+    state
+        .with(|conn| {
+            conn.execute("UPDATE capture_runs SET raw = '{not json' WHERE run_key = 'run:abc'", [])
+                .map(|_| ())?;
+            conn.execute("UPDATE prompts SET source_ref = 'run:abc' WHERE id = 11", []).map(|_| ())
+        })
+        .unwrap();
+    let (status, _) = get_json(router_for(state.clone()), "/api/prompts/11/api-graph").await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "脏 raw 不猜，回 204");
+
+    // ⑤ raw 里没有节点图（只有 outputs 之类的壳）→ 204
+    state
+        .with(|conn| {
+            conn.execute(
+                "UPDATE capture_runs SET raw = '{\"outputs\":{}}' WHERE run_key = 'run:abc'",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+    let (status, _) = get_json(router_for(state.clone()), "/api/prompts/11/api-graph").await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "没有图就是没有图");
+
+    // ⑥ 提示词根本不存在才是 404
+    let (status, body) = get_json(router_for(state.clone()), "/api/prompts/9999/api-graph").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body["message"].as_str().unwrap().contains("9999"));
 }
 #[tokio::test]
 async fn media_prompt_has_three_outcomes() {
