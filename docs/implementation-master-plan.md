@@ -483,3 +483,57 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > `/api/capture/{status,jobs,poll,locate*,import*,workflows}`、`/api/ingest/comfyui`（都要 ComfyUI 在场）、
 > `/api/ai/*`（**R6~R10 的 Rust 侧重建一点没动** —— 这是 P4 剩下的最大一块，也是 §7 风险表里
 > "11,103 行 Kotlin 测试要重写"那块）。
+
+---
+
+## 9. 下一轮从哪起手（2026-09-24 收工时留的交接）
+
+> 本轮（2026-09-24）共 **10 个提交**，全部测试在当前 HEAD 上是绿的：
+> `cargo test` **71 例**（25 lib + 46 集成）、`:harness:testDebugUnitTest` **147 例**、
+> `flutter test` **255 例**。下面三件事按"价值 ÷ 风险"排好，照顺序做即可。
+
+### ① M3.2 ② —— 让手机**离线真的能用**（最高优先）
+
+现在只到"harness **能被调到**"（`cba4016` 把桥的消息主键补齐了），但 `ai_workspace_store.dart`
+在离线时仍会走 `_api.createConversation` / `listMessages` 打远端。所以**桌面不在线时手机还是发不出东西**。
+
+要动的三处（顺序不能倒）：
+
+1. `HarnessBridge` 补 `createConversation` / `listMessages` / `listParts` 的**本地**实现（`listMessages` /
+   `listParts` 已经有，缺 `createConversation`）。
+2. `ai_workspace_store.dart` 的**持久化分叉**：`send()` 里 `conversation == null` 那条分支与
+   `_consumeRun()` 收尾的"与服务端对齐"都要按"本地源 / 远端源"分路。
+3. 补一条 Dart 用例：**Android 上 `send()` 走的确实是本地源**（`openRunEventSource` 的返回值类型）。
+
+> ⚠ 别做成"只把事件流换个来源"：那样离线时**事件是有的、界面上却不长东西**（会话/消息都查不到），
+> 而两端都不报错 —— 和 `cba4016` 修掉的那个坑是同一类。
+
+### ② P4：`/api/capture/workflows` + `/import-workflows`（用户可见，但有个陷阱）
+
+这两个端点背后是 `ComfyWorkflowFiles.kt`（411 行）+ `ComfyLocator.kt`（235 行）。**必须整体搬**：
+
+> ⚠ **只搬一半 = 静默少结果**。`dirs(cfg)` 的目录来源有三条（配置里生效的输出目录的父目录 →
+> `ComfyLocator.find()` 探到的 home → `ComfyRoots.autoReadRoots()`）。少搬任何一条，接口都会
+> **正常返回、只是少了几个目录** —— 表现就是 AGENTS §10 那条"别把'库里没有'当成'这条工作流用不了'"
+> 的复发：用户机器上明明有工作流，界面却说"没找到"。
+>
+> 另外 `ComfyLocator` 的判据**已经有两份实现**（`ComfyLocator.kt` 与 `scripts\comfy-path.ps1`），
+> Rust 版是**第三份**。判据必须三边一致：源码形态 = `main.py` + `comfy/`；任何形态 = `output/` +
+> `models/` 或 `input/`。改判据要同时改三处，否则会出现"App 说找到了、脚本说找不到"。
+
+`sha2` 已经在依赖里（上传判重用着），列文件时要的 `file:<sha256>` 与
+`comfy_load_workflow` 是**同一把钥匙**（所以导入天然幂等）。
+必测：临时目录里摆几种形状的文件（正常界面格式 / API 格式 / 坏 JSON / 空文件 / 非 `.json`），
+断言"只列真的能用的" + 目录发现覆盖三条来源。
+
+### ③ P4：`/api/ai/*` 与 **R6~R10 的 Rust 侧重建**（最大的一块，别低估）
+
+这是 §7 风险表里"11,103 行 Kotlin 测试要重写"那块，**一点没动**。按 §6 的归属表逐条对照重建，
+**先灰度非 AI 端点**（已经做完），AI 与工具层最后搬。顺序建议：
+`/api/ai/providers`（不含密钥）→ `/api/ai/models` → `/api/ai/run-kit`（把 `kitVersion` 的
+`app_settings` 写入逻辑一起搬，`/api/sync/manifest` 现在读的就是它）→ 会话/消息 CRUD →
+Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层与审批（**R8**）→ 附件（**R9**）。
+
+> ✅ 可以在 Rust 侧直接复用的已有地基：`db.rs` 的 PRAGMA 读回自检（R1）、`BEGIN IMMEDIATE`（R2）、
+> `sync.rs` 的行 → JSON 泛型映射与列清单现查（PRAGMA `table_info`），以及 `sync.rs` 里那套
+> "永久性 / 暂时性错误要分清"的 `Rejected{code}` 形状 —— R6~R9 的错误码可以沿用同一套写法。
