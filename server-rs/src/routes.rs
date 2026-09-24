@@ -107,6 +107,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/prompts/{id}/api-graph", get(prompt_api_graph))
         // 同步 API（P4 第 10 步）：手机连上来的第一件事（契约 §1）
         .route("/api/sync/manifest", get(sync_manifest))
+        .route("/api/sync/changes", get(sync_changes))
         .merge(crate::write_routes::write_router())
         .with_state(state)
 }
@@ -255,6 +256,22 @@ async fn sync_manifest(
     Ok(Json(crate::sync::manifest(&state)?))
 }
 
+/// `GET /api/sync/changes?since=<cursor>&limit=500` —— 增量（契约 §2）。
+///
+/// ⚠ 游标落在保留窗口之外时**必须**回 `410 Gone`（见 `ApiError::gone`）。
+async fn sync_changes(
+    State(state): State<AppState>,
+    Query(q): Query<SyncChangesQuery>,
+) -> Result<Json<crate::sync::SyncChanges>, ApiError> {
+    Ok(Json(crate::sync::changes(&state, q.since.unwrap_or(0), q.limit.unwrap_or(500))?))
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncChangesQuery {
+    since: Option<i64>,
+    limit: Option<i64>,
+}
+
 // ---------------------------------------------------------------------------
 //  错误
 // ---------------------------------------------------------------------------
@@ -278,6 +295,15 @@ impl ApiError {
 
     pub fn bad_request(message: impl Into<String>) -> Self {
         Self { status: StatusCode::BAD_REQUEST, error: "BAD_REQUEST".into(), message: message.into() }
+    }
+
+    /// **`410 Gone`** —— 同步游标落在保留窗口之外（契约 §2）。
+    ///
+    /// 手机收到它就丢弃镜像、改走 `/api/sync/bootstrap`。
+    /// ⚠ 这个分支**不是可选项**：缺了它，手机少掉的那几百条**永远补不回来**
+    /// （增量接口照着旧游标往后扫，永远扫不到那些被裁掉的洞）。
+    pub fn gone(message: impl Into<String>) -> Self {
+        Self { status: StatusCode::GONE, error: "GONE".into(), message: message.into() }
     }
 
     /// 还没搬到 Rust 的端点：**明确 501**，不要拿空数组假装成功（那会让界面以为"真的没有"）。

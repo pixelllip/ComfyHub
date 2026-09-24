@@ -1334,6 +1334,264 @@ async fn sync_manifest_cursor_follows_the_sync_log() {
         .unwrap();
     assert_eq!(cursor, max_seq, "游标 = MAX(_sync_log.seq)");
 }
+
+/// `GET /api/sync/changes` —— 增量。契约 §2 的硬约束逐条验。
+#[tokio::test]
+async fn sync_changes_returns_full_rows_and_scalar_or_array_keys() {
+    let state = state();
+    let (_, before) = get_json(router_for(state.clone()), "/api/sync/manifest").await;
+    let since = before["cursor"].as_i64().unwrap();
+
+    // 一张整数主键表 + 一张**TEXT 主键**表 + 一张**复合主键**表
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO tags (name, normalized, category, use_count, created_at)
+                 VALUES ('增量A','增量a','风格',0,'2026-09-24T00:00:00.000Z')",
+                [],
+            )
+            .map(|_| ())?;
+            conn.execute(
+                "INSERT INTO ai_conversations (id,title,archived,created_at,updated_at)
+                 VALUES ('conv-uuid-1','增量会话',0,'2026-09-24T00:00:00.000Z','2026-09-24T00:00:00.000Z')",
+                [],
+            )
+            .map(|_| ())?;
+            conn.execute("INSERT INTO prompt_tags (prompt_id, tag_id) VALUES (10, 2)", [])
+                .map(|_| ())
+        })
+        .unwrap();
+
+    let (status, body) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={since}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        keys(&body),
+        vec!["cursor", "deletes", "hasMore", "upserts"],
+        "changes 的键集合就是契约",
+    );
+    assert_eq!(body["hasMore"], false);
+    assert!(body["cursor"].as_i64().unwrap() >= since);
+
+    // upserts 给的是**完整行**（不是 diff）：标签那行连 use_count / created_at 都在
+    let tag = &body["upserts"]["tags"][0];
+    assert_eq!(tag["name"], "增量A");
+    assert!(tag["use_count"].is_number(), "完整行要带齐所有列：{tag}");
+    assert!(tag["created_at"].is_string(), "完整行要带齐所有列：{tag}");
+    // TEXT 主键（UUID）原样是字符串，没有被数字化
+    assert_eq!(body["upserts"]["ai_conversations"][0]["id"], "conv-uuid-1");
+
+    // 复合主键的 insert 也会进 upserts，且取得到整行
+    assert_eq!(body["upserts"]["prompt_tags"][0]["prompt_id"], 10);
+    assert_eq!(body["upserts"]["prompt_tags"][0]["tag_id"], 2);
+}
+
+/// **`deletes` 必须独立成组**，且复合主键要发成数组（契约 §2「主键表示」）。
+#[tokio::test]
+async fn sync_changes_groups_deletes_separately_with_array_keys() {
+    let state = state();
+    let (_, before) = get_json(router_for(state.clone()), "/api/sync/manifest").await;
+    let since = before["cursor"].as_i64().unwrap();
+
+    // 删一条单列主键的 + 一条复合主键的
+    state
+        .with(|conn| {
+            conn.execute("DELETE FROM tags WHERE id = 2", []).map(|_| ())?;
+            conn.execute("DELETE FROM prompt_tags WHERE prompt_id = 10 AND tag_id = 1", [])
+                .map(|_| ())
+        })
+        .unwrap();
+
+    let (_, body) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={since}")).await;
+
+    // 单列 → 标量数字；绝不能混进 upserts
+    assert_eq!(body["deletes"]["tags"][0], 2, "单列主键发标量");
+    assert!(body["upserts"]["tags"].is_null(), "删掉的行不该出现在 upserts 里");
+    // 复合 → 数组（不是 '10:1' 字符串）
+    //
+    // ⚠ 这里**不断言顺序**：删 tag 2 会经外键级联掉 prompt_tags(11,2)，
+    // 那条级联删除的账本条目排在显式删 (10,1) 的前面。两条都要在，顺序由 seq 决定。
+    let deleted = body["deletes"]["prompt_tags"].as_array().unwrap();
+    assert!(
+        deleted.contains(&serde_json::json!([10, 1])),
+        "显式删的复合主键要发数组：{deleted:?}",
+    );
+    assert!(
+        deleted.contains(&serde_json::json!([11, 2])),
+        "★ 外键级联删掉的行也要进 deletes（否则手机永远留着幽灵行）：{deleted:?}",
+    );
+}
+
+/// ★ 凭据/令牌表**一条都不许出现在同步响应里**。
+///
+/// 分两层验，两层都是真的：
+///
+/// ① **schema 现状**：`app_settings` / `ai_providers` 只有 `updated_at` 的 `touch` 触发器，
+///    **没有** `_sync_log` 触发器 —— 所以写它们根本不会进账本。
+///    （⚠ 别把 `trg_x_touch` 看成 `trg_x_sync_*`：当初就是这么误判过一次。）
+/// ② **实现在被"将来扩宽触发器"时的表现**：手工往账本里插一条 `tbl='app_settings'` 的条目
+///    （模拟"哪天有人给设置表补了同步触发器"），`changes` **必须**把它挡在门外，
+///    而且游标要照常跨过去（否则手机永远推不动）。
+#[tokio::test]
+async fn sync_changes_never_leaks_settings_or_providers() {
+    let state = state();
+    let (_, before) = get_json(router_for(state.clone()), "/api/sync/manifest").await;
+    let since = before["cursor"].as_i64().unwrap();
+
+    // ① 写一行令牌表 + 一行凭据表，再看账本 —— **不该有任何条目**
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO app_settings (k, v, updated_at) VALUES ('auth.pairToken','SECRET-TOKEN','x')",
+                [],
+            )
+            .map(|_| ())?;
+            conn.execute(
+                "INSERT INTO ai_providers (id,display_name,api,base_url,created_at,updated_at)
+                 VALUES ('p-secret','秘密供应商','openai','https://x','2026-09-24T00:00:00.000Z','2026-09-24T00:00:00.000Z')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+
+    let touched: i64 = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM _sync_log WHERE seq > ?1 AND tbl IN ('app_settings','ai_providers')",
+                [since],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+        })
+        .unwrap();
+    assert_eq!(
+        touched, 0,
+        "这两张表**不该有** _sync_log 触发器（touch 触发器不是 sync 触发器）",
+    );
+
+    // ② 手工注入两条账本条目（模拟将来触发器被扩宽）
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO _sync_log (tbl, pk, op, at) VALUES ('app_settings','auth.pairToken','upsert','x')",
+                [],
+            )
+            .map(|_| ())?;
+            conn.execute(
+                "INSERT INTO _sync_log (tbl, pk, op, at) VALUES ('ai_providers','p-secret','upsert','x')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+
+    let (status, body) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={since}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // ★ 一条都不能漏出去（响应体里连那个令牌字符串都不该出现）
+    let raw = body.to_string();
+    assert!(!raw.contains("SECRET-TOKEN"), "配对令牌明文绝不能出现在同步响应里：{raw}");
+    assert!(body["upserts"]["app_settings"].is_null(), "app_settings 不同步");
+    assert!(body["upserts"]["ai_providers"].is_null(), "ai_providers 不同步");
+    assert!(body["deletes"]["app_settings"].is_null());
+    assert!(body["deletes"]["ai_providers"].is_null());
+
+    // 但游标要能跨过这些**不属于同步范围**的条目（否则手机永远推不动）
+    let cursor = body["cursor"].as_i64().unwrap();
+    let max_seq: i64 = state
+        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)).map_err(Into::into))
+        .unwrap();
+    assert_eq!(cursor, max_seq, "扫完了就跳到账本末尾，跨过不同步的条目");
+}
+
+/// ★ **游标落在保留窗口之外 → `410 Gone`**（契约 §2：这个分支不是可选项）。
+///
+/// 缺了它的表现是"手机少了几百条，而且**永远补不回来**" ——
+/// 增量接口照着旧游标往后扫，永远扫不到被裁掉的那些洞。
+#[tokio::test]
+async fn sync_changes_returns_410_when_the_cursor_fell_out_of_the_window() {
+    let state = state();
+
+    // 模拟日志裁剪：把账本清空，再写一行 → 此时 MIN(seq) 已经是个很大的数
+    state
+        .with(|conn| {
+            conn.execute("DELETE FROM _sync_log", []).map(|_| ())?;
+            conn.execute(
+                "INSERT INTO tags (name, normalized, category, use_count, created_at)
+                 VALUES ('裁剪后','裁剪后','风格',0,'2026-09-24T00:00:00.000Z')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+
+    // 老游标（1）早于窗口 → 410
+    let (status, body) = get_json(router_for(state.clone()), "/api/sync/changes?since=1").await;
+    assert_eq!(status, StatusCode::GONE, "窗口外的游标必须 410，实际 {status} {body}");
+    assert_eq!(body["error"], "GONE");
+    assert!(
+        body["message"].as_str().unwrap().contains("bootstrap"),
+        "错误信息要告诉手机改走 bootstrap：{body}",
+    );
+
+    // 贴着窗口左沿（min - 1）是**安全**的，不该 410
+    let min: i64 = state
+        .with(|conn| conn.query_row("SELECT MIN(seq) FROM _sync_log", [], |r| r.get(0)).map_err(Into::into))
+        .unwrap();
+    let (status, _) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={}", min - 1)).await;
+    assert_eq!(status, StatusCode::OK, "刚好贴着左沿应当正常返回（不多报一次全量）");
+
+    // 空账本不该 410（新手机本来就没有游标）
+    state.with(|conn| conn.execute("DELETE FROM _sync_log", []).map(|_| ())).unwrap();
+    let (status, body) = get_json(router_for(state.clone()), "/api/sync/changes?since=99999").await;
+    assert_eq!(status, StatusCode::OK, "空账本不 410：{body}");
+    assert_eq!(body["hasMore"], false);
+}
+
+/// 分页：`hasMore: true` 时游标只能停在**扫到的最后一条**（手机必须接着拉）。
+#[tokio::test]
+async fn sync_changes_paginates_and_advances_the_cursor() {
+    let state = state();
+    let (_, before) = get_json(router_for(state.clone()), "/api/sync/manifest").await;
+    let mut cursor = before["cursor"].as_i64().unwrap();
+
+    for i in 0..5 {
+        state
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO tags (name, normalized, category, use_count, created_at)
+                     VALUES (?1, ?1, '风格', 0, '2026-09-24T00:00:00.000Z')",
+                    [format!("分页{i}")],
+                )
+                .map(|_| ())
+            })
+            .unwrap();
+    }
+
+    // limit=2：第一页应当 hasMore=true，且游标**没有**跳到账本末尾
+    let (_, page1) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={cursor}&limit=2")).await;
+    assert_eq!(page1["hasMore"], true, "还有下一页");
+    let c1 = page1["cursor"].as_i64().unwrap();
+    assert!(c1 > cursor, "游标要往前走");
+    let max_seq: i64 = state
+        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)).map_err(Into::into))
+        .unwrap();
+    assert!(c1 < max_seq, "没扫完就不能跳到末尾（否则中间那几条永远丢）：c1={c1} max={max_seq}");
+    assert_eq!(page1["upserts"]["tags"].as_array().unwrap().len(), 2, "一页就是 limit 条");
+
+    // 接着拉，最后把所有标签都收全（一页都不许漏）
+    cursor = c1;
+    let mut seen = page1["upserts"]["tags"].as_array().unwrap().len();
+    for _ in 0..10 {
+        let (_, page) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={cursor}&limit=2")).await;
+        seen += page["upserts"]["tags"].as_array().map(|a| a.len()).unwrap_or(0);
+        cursor = page["cursor"].as_i64().unwrap();
+        if page["hasMore"] == false {
+            break;
+        }
+    }
+    assert_eq!(seen, 5, "翻完所有页要正好收到 5 条（多一条/少一条都是 bug）");
+}
 #[tokio::test]
 async fn media_prompt_has_three_outcomes() {
     let state = state();
