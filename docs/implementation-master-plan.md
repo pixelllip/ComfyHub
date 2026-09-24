@@ -409,5 +409,31 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   `schemaVersion=1`、`kitVersion=2026-09-23.3`（Kotlin 侧写过的那个值）、`cursor=3328`、
 >   `serverTime=2026-09-24T00:14:06Z`；10 张同步表行数与已知事实一致（prompts 27 /
 >   media_assets 24 / ai_conversations 23），7 张不同步表带理由；真库只读未改。
-> - `sync` 剩下三条未做：`/api/sync/changes`（游标 + `deletes` 独立成组 + **410 Gone**）、
->   `/api/sync/bootstrap`（按表分页）、`/api/sync/push`（幂等 + LWW）。
+> - `sync` 剩下两条未做：`/api/sync/bootstrap`（按表分页）、`/api/sync/push`（幂等 + LWW）。
+>
+> ✅ **P4 第 11 步（`c1277fb`，2026-09-24）**：`GET /api/sync/changes`（契约 §2）。四条硬约束
+> 逐条落地：**游标** = 本次扫描到的最大 `seq`（没扫完停在最后一条，扫完了才跳到账本末尾）；
+> **`deletes` 独立成组**，单列主键发标量、复合主键（`prompt_tags`/`media_tags`）发数组 `[a,b]`；
+> **窗口外 → `410 Gone`**；`upserts` 给**完整行**（行 → JSON 的泛型映射，**不维护每张表的列清单**
+> —— 列清单一漂移就会静默少发一列，而界面上少一列是看不出来的）。
+>
+> ⚠ **更正第 10 步里的一个错误结论**：第 10 步曾说"触发器覆盖了 `app_settings`，所以从触发器
+> 派生同步范围会把配对令牌发出去" —— **那是错的**。核对 `db/schema.sqlite.sql` 后确认：真正挂
+> `_sync_log` 触发器的表**正好就是**那 10 张；`app_settings` / `ai_providers` / `ai_models` /
+> `ai_runs` 上只有 `trg_*_touch`（维护 `updated_at` 的 `AFTER UPDATE`），**当初把 `touch` 当成了
+> `sync`**（一个 grep 匹配到了错误的触发器族）。白名单照样保留，但理由改成如实的那一条：
+> 这条路径的失败模式**静默且严重**（哪天有人给设置表补一个同步触发器，派生式实现会立刻开始发
+> 令牌，而且没有任何测试会变红），外加契约指定"总纲 §3.3 那张表"为唯一真源。
+> 用例也重写成两层：① 断言这两张表**没有**账本触发器；② 手工注入一条假的 `app_settings`
+> 账本条目，断言 `changes` 把它挡在门外、且游标照样跨过去。
+>
+> 📌 **实测记一条"为什么第一页可以是空的"**：真库副本上 `changes?since=0&limit=3` 返回
+> `{cursor:2068, hasMore:true, upserts:{}, deletes:{}}` —— 一开始怀疑是 bug，用 Python 直接查
+> 账本才看清：真库的 `_sync_log` **已被裁剪**（`MIN(seq)=2066`、`MAX=3328`、1263 行），
+> 而 seq 2066/2067/2068 那三条是 `capture_runs 136776` / `prompts 311` / `prompt_tags 311:18`
+> 的 **upsert，且这些行后来已经被删掉了**（`rowExists=0`），它们的 delete 条目落在被裁掉的区间里。
+> 所以"跳过查不到的行"正是对的行为：手机若从窗口左沿之后开始，它本就不该有这些行；
+> 而**已经持有这些行的手机必然游标更老 → 走 410 → bootstrap**，这条链正好闭合。
+> 反过来说：**"空的一页"不等于"没有变更"**，`hasMore` 与 `cursor` 才是判据。
+> 真实库验收：`since=5` → **410**（真库的账本确实已被裁剪，正好证明这个分支是必需的）；
+> `cargo test` **64 例全绿**（25 lib + 39 集成，新增 5 例覆盖上述四条约束）。
