@@ -399,61 +399,77 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   Widget _buildNarrow(ThemeData theme) {
     // 详情面板的前提是"有一个选中的 Provider"：删掉之后自动退回列表
     final pane = (_selected == null && _pane == _NarrowPane.detail) ? _NarrowPane.list : _pane;
+    // 子面板上**接管系统返回**（用户实测报的 bug：划一下返回手势，整页直接退回设置首页了）。
+    // 面板是同一个 State 里换 enum，不是路由 —— 所以系统返回默认弹的是"整个页面"。
+    // `canPop: false` 把这一层拦住，由我们退回列表；在列表上时照旧放行（返回 = 退出这一页）。
+    final interceptBack = pane != _NarrowPane.list;
+    Widget withBackGuard(Widget child) => PopScope(
+          canPop: !interceptBack,
+          onPopInvokedWithResult: (didPop, _) {
+            if (didPop) return;
+            setState(() => _pane = _NarrowPane.list);
+          },
+          child: child,
+        );
 
     switch (pane) {
       case _NarrowPane.maintenance:
-        return Scaffold(
-          appBar: AppBar(
-            leading: IconButton(
-              tooltip: '返回',
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => setState(() => _pane = _NarrowPane.list),
+        return withBackGuard(
+          Scaffold(
+            appBar: AppBar(
+              leading: IconButton(
+                tooltip: '返回',
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => setState(() => _pane = _NarrowPane.list),
+              ),
+              title: const Text('模型目录维护'),
             ),
-            title: const Text('模型目录维护'),
-          ),
-          body: SingleChildScrollView(
-            child: Column(
-              children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
-                  child: Text('这两件事都在电脑上做更合适：给模型补能力声明、实测校准思考档位（后者会发真实请求、可能产生少量费用）。'),
-                ),
-                _builtinCard(),
-                _capabilityCard(),
-              ],
+            body: SingleChildScrollView(
+              child: Column(
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
+                    child: Text('这两件事都在电脑上做更合适：给模型补能力声明、实测校准思考档位（后者会发真实请求、可能产生少量费用）。'),
+                  ),
+                  _builtinCard(),
+                  _capabilityCard(),
+                ],
+              ),
             ),
           ),
         );
       case _NarrowPane.detail:
         final provider = _selected!;
-        return Scaffold(
-          appBar: AppBar(
-            leading: IconButton(
-              tooltip: '返回',
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => setState(() => _pane = _NarrowPane.list),
-            ),
-            title: Text(provider.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
-          ),
-          body: Column(
-            children: [
-              if (_error != null) _errorBanner(theme),
-              Expanded(
-                child: _ProviderDetail(
-                  key: ValueKey(provider.id + provider.revision.toString()),
-                  api: _api,
-                  credentials: _credentials,
-                  provider: provider,
-                  models: _models,
-                  info: _info,
-                  error: _error,
-                  onChanged: (msg) async {
-                    setState(() => _info = msg);
-                    await _reload();
-                  },
-                ),
+        return withBackGuard(
+          Scaffold(
+            appBar: AppBar(
+              leading: IconButton(
+                tooltip: '返回',
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => setState(() => _pane = _NarrowPane.list),
               ),
-            ],
+              title: Text(provider.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+            body: Column(
+              children: [
+                if (_error != null) _errorBanner(theme),
+                Expanded(
+                  child: _ProviderDetail(
+                    key: ValueKey(provider.id + provider.revision.toString()),
+                    api: _api,
+                    credentials: _credentials,
+                    provider: provider,
+                    models: _models,
+                    info: _info,
+                    error: _error,
+                    onChanged: (msg) async {
+                      setState(() => _info = msg);
+                      await _reload();
+                    },
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       case _NarrowPane.list:

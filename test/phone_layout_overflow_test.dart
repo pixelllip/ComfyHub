@@ -136,9 +136,12 @@ void main() {
     expect(find.text('Command Code Goat'), findsWidgets);
     expect(find.text('新建 Provider'), findsNothing, reason: '进了详情就不该还留着列表');
 
-    await tester.tap(find.byTooltip('返回'));
+    // ★ **系统返回**（手势 / 实体返回键）必须退回列表，而不是把这整页弹掉
+    //   （用户实测报的就是这个：划一下手势直接回到设置首页了）。
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(find.text('新建 Provider'), findsOneWidget);
+    expect(find.text('新建 Provider'), findsOneWidget, reason: '系统返回只该退一层，不该退出整个页面');
+    expect(find.byTooltip('返回'), findsNothing);
   });
 
   testWidgets('更窄的屏幕（320dp）同样不溢出', (tester) async {
