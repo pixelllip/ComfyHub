@@ -125,6 +125,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/media/upload", axum::routing::post(media_upload))
         // 捕获配置（本地那一半：读写 app_settings 里的一行 JSON）
         .route("/api/capture/config", get(capture_config).put(put_capture_config))
+        // AI 端点第一批（P4 第 16 步）：provider 清单 —— **不含任何密钥**（AIH-012）
+        .route("/api/ai/providers", get(ai_providers))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -230,6 +232,11 @@ async fn capture_workflows(
     Query(query): Query<crate::comfy_dirs::WorkflowQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::comfy_dirs::workflows_json(&state, query)?))
+}
+
+/// `GET /api/ai/providers` —— provider 清单（不含密钥，AIH-012）。
+async fn ai_providers(State(state): State<AppState>) -> Result<Json<Vec<crate::ai::AiProviderDto>>, ApiError> {
+    Ok(Json(crate::ai::list_providers(&state)?))
 }
 
 /// `GET /api/capture/locate` —— 探测 ComfyUI 装在哪（用户"其他建议"第 3 条）。

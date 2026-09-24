@@ -12,6 +12,7 @@
 //! | [`models`] | `Models.kt` 的 DTO（JSON 形状逐字一致） |
 //! | [`routes`] | `TagRoutes.kt` / `PromptRoutes.kt` / `…Repo` 的读端点 |
 
+pub mod ai;
 pub mod capture;
 pub mod comfy_dirs;
 pub mod db;

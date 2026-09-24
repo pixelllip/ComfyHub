@@ -787,6 +787,72 @@ async fn locate_apply_validates_the_dir_and_then_persists_it() {
 }
 
 // ===========================================================================
+//  AI 端点第一批（P4 第 16 步）：GET /api/ai/providers
+// ===========================================================================
+
+/// provider 清单：**形状要逐字对齐**，而且**一个字节的密钥都不许出去**（AIH-012）。
+#[tokio::test]
+async fn ai_providers_shape_and_never_leaks_a_secret_value() {
+    let state = state();
+    // 托管凭据文件里放一把"密钥"：它**只该被读键名**，值绝不能出现在响应里
+    let store = state.media_dir().parent().unwrap().join("ai");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(
+        store.join("credentials.dpapi.json"),
+        r#"{"MANAGED_KEY":"DPAPI-SEALED-SECRET-VALUE"}"#,
+    )
+    .unwrap();
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_providers
+                 (id, display_name, api, base_url, credential_ref, endpoint_trust, enabled, revision)
+                 VALUES ('p-managed', '本机网关', 'openai-completions',
+                         'http://127.0.0.1:11434/v1', 'MANAGED_KEY', 'loopback', 1, 3),
+                        ('p-none', '没配过的', 'anthropic-messages',
+                         'https://api.anthropic.com/v1', 'MISSING_KEY', 'public', 0, 1)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let (status, body) = get_json(router_for(state), "/api/ai/providers").await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let list = body.as_array().unwrap();
+    assert_eq!(list.len(), 2, "按 display_name, id 排序");
+    assert_eq!(list[0]["id"], "p-managed");
+
+    let mut shape = keys(&list[0]);
+    shape.sort();
+    assert_eq!(
+        shape,
+        vec![
+            "api", "baseURL", "createdAt", "credential", "credentialRef", "displayName", "enabled",
+            "endpointTrust", "id", "revision", "updatedAt",
+        ],
+        "`credential` 与两个时间戳最容易漏（Kotlin 那边 encodeDefaults = true，一定会序列化）"
+    );
+    assert_eq!(list[0]["baseURL"], "http://127.0.0.1:11434/v1");
+    assert_eq!(list[0]["enabled"], true);
+    assert_eq!(list[0]["revision"], 3);
+
+    // 凭据状态：三个键、**没有值**；托管文件里有 → managed 且可写
+    assert_eq!(keys(&list[0]["credential"]), vec!["configured", "source", "writable"]);
+    assert_eq!(list[0]["credential"]["configured"], true);
+    assert_eq!(list[0]["credential"]["source"], "managed");
+    assert_eq!(list[0]["credential"]["writable"], true);
+    // 没配过的那条：none，但**仍可写**（界面要能给它写一把新的）
+    assert_eq!(list[1]["credential"]["configured"], false);
+    assert_eq!(list[1]["credential"]["source"], "none");
+    assert_eq!(list[1]["credential"]["writable"], true);
+
+    // ★ 红线（AIH-012）：响应里**不许出现那把密钥的值**
+    let raw = serde_json::to_string(&body).unwrap();
+    assert!(!raw.contains("DPAPI-SEALED-SECRET-VALUE"), "凭据值绝不能出库/出网：{raw}");
+}
+
+// ===========================================================================
 //  产物（P4 第 3 步）：列表 / 详情 / 原件文件流
 // ===========================================================================
 
