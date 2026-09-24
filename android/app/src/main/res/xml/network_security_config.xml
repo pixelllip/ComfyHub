@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  明文（http://）出网策略 —— **安卓侧真正能跑起来的关键一条**。
+
+  ## 为什么必须放开
+
+  Android 9（API 28）起默认**禁止明文 HTTP**。手机 harness 直连的恰恰是
+  `http://` 的上游：
+
+  · 本机 / 局域网的自建网关（LM Studio、Ollama、llama.cpp、one-api…）；
+  · 桌面的 ComfyHub 后端（局域网 http + 配对令牌，见 docs/inbound-auth-design.md）；
+  · 自己搭的反向代理。
+
+  2026-09-24 真机验收实测：`HttpURLConnection` 被系统拦下，报
+  `IOException: Cleartext HTTP traffic to 127.0.0.1 not permitted` ——
+  **表现是"手机上能聊、桌面上什么都看不到"**（上行队列每一条都记一次失败），
+  而界面上一个字都不提。同一台机器上**Flutter 那一侧却是通的**（`dart:io` 自己实现
+  socket，不走 Java 网络栈，所以不受这条策略约束）—— 于是"模型清单拉得到、上游一条也发不出去"，
+  是最难猜的一种半通状态。
+
+  ## 为什么放开成"全局允许"而不是只列几个域名
+
+  `<domain>` 只能写**主机名**，写不了 `192.168.*` / `10.*` 这样的网段，
+  而"用户自己填的局域网地址"正是主用例（AIH-016）。所以这里放开明文，
+  **策略由上一层把关**：
+
+  · `AiValidation.normalizeBaseUrl`：`endpointTrust = public` 时**必须 https**，
+    只有本机 / 内网才允许 http（桌面与手机同一套校验）；
+  · 界面上填公网 http 地址会当场被拒。
+
+  也就是说：**这一层只负责"别把内网 http 拦死"，"公网必须 https"在应用层**。
+  改这里之前先读 `docs/inbound-auth-design.md` 与 `AiDomain.kt` 的 endpointTrust。
+
+  ⚠ 别删这个文件、也别把 manifest 里的 `android:networkSecurityConfig` 去掉：
+  删了以后**单测全绿、真机上一条消息都发不出去**（这条就是那么被发现的）。
+  防线：`harness` 的 `AndroidCleartextPolicyTest`（扫 manifest + 这份配置）。
+-->
+<network-security-config>
+    <!-- 本机 / 局域网 / Tailscale 一律允许明文（用户自己的网关基本都是 http） -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- 回环地址显式再声明一次：语义更清楚，也免得哪天 base-config 被收紧 -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

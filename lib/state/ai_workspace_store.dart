@@ -1089,6 +1089,9 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 连通道都炸了也要如实说，不能让"没有规则"变成一条静默的失败
       kitIssue = '取规则工件失败：$e';
     }
+    // 拿不到规则 = **发不出去**（按钮会一直是灰的）。这条日志是给排查用的：
+    // 手机上"按钮点了没反应"最常见的原因就是它，而界面上没有别的地方会说。
+    if (kitIssue != null) debugPrint('[M3] run-kit 不可用，已拦住发送：$kitIssue');
   }
 
   /// 把本机产生的会话 / 消息推到桌面（**M4**）。
@@ -1111,6 +1114,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     } catch (e) {
       pushNotice = '同步到桌面失败：$e';
       return 0;
+    } finally {
+      // 上行是"看不见的"那条路（离线时本来就会失败）：只留一条可查的日志
+      debugPrint('[M4] 上行：$pushNotice');
     }
   }
 

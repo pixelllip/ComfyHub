@@ -32,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -132,7 +133,13 @@ class HarnessBridge(private val context: Context) :
             when (call.method) {
                 "initialize" -> result.success(capabilities())
                 "capabilities" -> result.success(capabilities())
-                "fetchRunKit" -> fetchRunKit(call, result)
+                // ⚠ 这两个**要出网**，必须离开主线程 ——
+                // Android 禁止在主线程做网络 I/O，直接调会抛
+                // `NetworkOnMainThreadException`：表现是 run-kit 永远取不到
+                // （于是发送按钮一直是灰的）、上行永远推不上去，
+                // 而两端都不报错。2026-09-24 真机验收就是这么抓到的。
+                "fetchRunKit" -> offMain(result) { fetchRunKit(call) }
+                "syncNow" -> offMain(result) { syncNow(call) }
                 "cachedRunKit" -> result.success(cachedKitJson())
                 "startRun" -> startRun(call, result)
                 "cancelRun" -> result.success(runner?.cancel(call.argument<String>("runId").orEmpty()) ?: false)
@@ -192,11 +199,31 @@ class HarnessBridge(private val context: Context) :
                     result.success(true)
                 }
                 "recoverUnfinished" -> result.success(recoverUnfinished())
-                "syncNow" -> result.success(syncNow(call))
                 else -> result.notImplemented()
             }
         } catch (e: Throwable) {
             result.error("HARNESS_ERROR", "${e::class.simpleName}: ${e.message}", null)
+        }
+    }
+
+    /**
+     * 把**会出网**的桥方法挪到后台线程，结果再回主线程交给 [result]。
+     *
+     * `MethodChannel.Result` **只能在主线程回调**（Flutter 的规定），
+     * 而 Android 又不许在主线程做网络 I/O —— 两头都要顾，所以是
+     * "后台算 → `withContext(Main)` 回"。
+     */
+    private fun offMain(result: MethodChannel.Result, block: () -> String) {
+        scope.launch {
+            val outcome = runCatching { block() }
+            withContext(Dispatchers.Main) {
+                outcome.fold(
+                    onSuccess = { result.success(it) },
+                    onFailure = {
+                        result.error("HARNESS_ERROR", "${it::class.simpleName}: ${it.message}", null)
+                    },
+                )
+            }
         }
     }
 
@@ -210,12 +237,12 @@ class HarnessBridge(private val context: Context) :
     )
 
     /**
-     * 取 run-kit（规则工件）并缓存。
+     * 取 run-kit（规则工件）并缓存。**返回 JSON 字符串**，由 [offMain] 回给 Dart。
      *
      * 拿不到就用缓存（B 方案的定义就是"桌面不在线也能继续出方案"）——
      * 判定逻辑在 [RunKitGuard]，**没规则就不许跑**（宁可不跑，也不给模型一套瞎编的规则）。
      */
-    private fun fetchRunKit(call: MethodCall, result: MethodChannel.Result) {
+    private fun fetchRunKit(call: MethodCall): String {
         val s = ensureInitialized()
         val baseUrl = call.argument<String>("baseUrl").orEmpty()
         val token = call.argument<String>("token")
@@ -237,35 +264,29 @@ class HarnessBridge(private val context: Context) :
                 .onFailure { fetchError = it.message }
         }
 
-        when (val decision = RunKitGuard.decide(fetched ?: cache.load(), status)) {
-            is Decision.Run -> result.success(
-                buildJsonObject {
-                    put("ok", true)
-                    put("fresh", fetched != null)
-                    put("kitVersion", decision.kit.kitVersion)
-                    decision.warning?.let { put("warning", it) }
-                    put(
-                        "kit",
-                        com.comfyhub.harness.kit.HarnessJson.parse(
-                            kitJsonOrEmpty(fetched ?: decision.kit)
-                        ),
-                    )
-                }.toString(),
-            )
-            is Decision.Refresh -> result.success(
-                buildJsonObject {
-                    put("ok", false)
-                    put("reason", decision.reason)
-                    fetchError?.let { put("error", it) }
-                }.toString(),
-            )
-            Decision.Blocked -> result.success(
-                buildJsonObject {
-                    put("ok", false)
-                    put("reason", "本地还没有规则工件（run-kit），且当前连不上桌面")
-                    fetchError?.let { put("error", it) }
-                }.toString(),
-            )
+        return when (val decision = RunKitGuard.decide(fetched ?: cache.load(), status)) {
+            is Decision.Run -> buildJsonObject {
+                put("ok", true)
+                put("fresh", fetched != null)
+                put("kitVersion", decision.kit.kitVersion)
+                decision.warning?.let { put("warning", it) }
+                put(
+                    "kit",
+                    com.comfyhub.harness.kit.HarnessJson.parse(
+                        kitJsonOrEmpty(fetched ?: decision.kit)
+                    ),
+                )
+            }.toString()
+            is Decision.Refresh -> buildJsonObject {
+                put("ok", false)
+                put("reason", decision.reason)
+                fetchError?.let { put("error", it) }
+            }.toString()
+            Decision.Blocked -> buildJsonObject {
+                put("ok", false)
+                put("reason", "本地还没有规则工件（run-kit），且当前连不上桌面")
+                fetchError?.let { put("error", it) }
+            }.toString()
         }
     }
 
@@ -471,22 +492,46 @@ class HarnessBridge(private val context: Context) :
             if (channel == null) {
                 // 总线里没有（进程重启过 / Run 已收尾并被清理）→ 从**本地库**回放（R5）
                 store?.listEvents(runId, after)?.forEach { (seq, type) ->
-                    sink?.success(mapOf("seq" to seq, "type" to type, "payloadJson" to "{}"))
+                    emitToSink(seq, type, "{}")
                 }
-                sink?.endOfStream()
+                endSink()
                 return@launch
             }
             for (event in channel) {
-                sink?.success(
-                    mapOf(
-                        "seq" to event.seq,
-                        "type" to event.type,
-                        "payloadJson" to event.payload.toString(),
-                    )
-                )
+                emitToSink(event.seq, event.type, event.payload.toString())
             }
-            sink?.endOfStream()
+            endSink()
         }
+    }
+
+    /**
+     * 往事件通道送一帧 —— **必须在主线程**。
+     *
+     * `EventChannel.EventSink` 是 `@UiThread` API（`FlutterJNI.dispatchPlatformMessage`
+     * 里有 `ensureRunningOnMainThread()`）。以前这里在 `Dispatchers.Default` 的协程里
+     * 直接 `sink.success(...)`，真机上**第一条事件就崩**：
+     *
+     * ```
+     * FATAL EXCEPTION: DefaultDispatcher-worker-1
+     * java.lang.RuntimeException: Methods marked with @UiThread must be executed on the main thread.
+     *   at io.flutter.embedding.engine.FlutterJNI.ensureRunningOnMainThread
+     *   at io.flutter.plugin.common.EventChannel$IncomingStreamRequestHandler$EventSinkImplementation.success
+     *   at com.comfyhub.harness.bridge.HarnessBridge$startPump$1.invokeSuspend
+     * ```
+     *
+     * 表现就是"**一发消息 App 就闪退**"。假 transport 的 JVM 单测抓不到它
+     * （那条约束是 Android 运行时的），只有在真机上发第一条消息才看得见 ——
+     * 2026-09-24 真机验收抓到。
+     */
+    private suspend fun emitToSink(seq: Int, type: String, payloadJson: String) {
+        withContext(Dispatchers.Main) {
+            sink?.success(mapOf("seq" to seq, "type" to type, "payloadJson" to payloadJson))
+        }
+    }
+
+    /** 收尾同理：`endOfStream()` 也是 `@UiThread`。 */
+    private suspend fun endSink() {
+        withContext(Dispatchers.Main) { sink?.endOfStream() }
     }
 
     companion object {

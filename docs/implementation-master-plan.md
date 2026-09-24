@@ -715,6 +715,45 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >
 > ---
 >
+> ✅✅ **M3.2 ④ 真机回归：安卓侧终于**真的能跑**（2026-09-24，OnePlus 8T / KB2000 实测）** ——
+> APK 装上、点发送、**收到真回复**，一路走的是生产代码：
+> ```
+> Flutter UI → MethodChannel → Kotlin harness → run-kit（桌面下发）
+>            → HTTP 上游（经 adb reverse 打到开发机的假网关）→ SSE 流式 → EventChannel → 界面 + 本地 SQLite
+> ```
+> 真机证据（都在这一轮里量到的，不是推断）：
+> ① 界面上**真的出现了一问一答**（`hello` → `（假网关）收到：hello`，AppBar「假模型 · 6 条消息」）；
+> ② 手机本地库 `ai_messages` 里那两条 `complete`、`ai_runs` 两条 `completed`；
+> ③ `mobile_kv.runKit.version = 2026-09-24.1` —— **run-kit 真的从桌面取下来并缓存了**。
+>
+> ★ **为了走到这一步，抓出并修掉三个"只在真机上出现"的阻断级问题**（每一个都会让
+> "安卓那一半"完全不可用，而**单测全绿**、桌面侧也一切正常）：
+>
+> | # | 现象 | 根因 | 修法 |
+> | --- | --- | --- | --- |
+> | 1 | 上行每条都失败：`IOException: Cleartext HTTP traffic to 127.0.0.1 not permitted`；**但模型清单却拉得到**（Flutter 那一侧是通的） | Android 9+ 默认**禁止明文 http**，而手机 harness 直连的恰恰是用户自己的 `http://` 网关。`HttpURLConnection`（Kotlin 侧）走 Java 网络栈 → 被拦；`dart:io` 自己实现 socket → **不受这条策略约束** —— 于是"清单拉得到、上游一条也发不出去" | 新增 `res/xml/network_security_config.xml` + manifest 挂上 `android:networkSecurityConfig`（还补了漏掉的 `INTERNET` 权限）。**"公网必须 https"仍在应用层**（`AiValidation.endpointTrust`）。防线：`AndroidCleartextPolicyTest` 扫真文件 |
+> | 2 | run-kit **永远取不到**（→ 发送按钮一直是灰的）、上行永远推不上去；报 `NetworkOnMainThreadException` | 桥的 `fetchRunKit` / `syncNow` 在 `onMethodCall` 里**同步**做网络 I/O —— Android 禁止主线程网络 | 桥新增 `offMain { … }`：后台算 + `withContext(Main)` 回（`MethodChannel.Result` 只能在主线程回调）。`fetchRunKit` 顺手从"自己 result.success"改成"返回 JSON" |
+> | 3 | **一发消息 App 就闪退**：`RuntimeException: Methods marked with @UiThread must be executed on the main thread`（栈指向 `HarnessBridge.startPump`） | `EventChannel.EventSink` 是 `@UiThread` API，而事件泵在 `Dispatchers.Default` 的协程里直接 `sink.success(...)` —— **第一条事件就崩**。这是 M3 就写下的代码，假 transport 的 JVM 单测抓不到（那条约束是 Android 运行时的） | `emitToSink` / `endSink` 把每一帧与收尾都 `withContext(Dispatchers.Main)` |
+>
+> ⚠ **三条都属于同一类**：**"平台约束"只在真机上生效**，而我们的单测跑在 JVM 上。
+> M3.1 当时只验到"能起来"，这三条就都躲在那道缝里。**结论：安卓侧每加一条
+> 会出网/会碰平台 API 的路径，就得真机跑一次**（`adb reverse tcp:8090 tcp:8090`
+> 把手机的回环打到开发机，是最省事的做法）。
+>
+> 📌 顺带记两条真机操作事实（省下一次重踩）：`adb shell input tap` 在这台机器上
+> **坐标与截图对不齐**（同一目标要 +445 才命中，键盘弹出后又变回 1:1），
+> 所以**别用固定坐标驱动界面**——用"点输入框→`input text`→`keyevent 66`"这条键盘路径最稳。
+> 另外装大 APK 前先 `adb shell svc power stayon usb`，否则传输中途设备会掉线。
+>
+> 🔶 仍未做：**上行（M4）在真机上还没验通过** —— 它需要桌面有 `/api/sync/push`，
+> 而**Kotlin 后端根本没有这条**（它是 M0/M1 的新契约，`POST /api/sync/push` 在 Kotlin 上
+> 回 `200 {"error":"接口不存在: …"}`，被客户端当成"没收到回执"→ 记暂时失败）。
+> 也就是说：**手机上行只能对着 Rust 后端跑** —— 而 `/api/ai/run-kit` 又只在 Kotlin 侧有。
+> 真机上"发得出去"与"推得回去"目前各需要一台不同的后端，**这正是 P4 要把
+> `/api/ai/run-kit` 搬到 Rust 的理由**（§9 ③ 的下一件大事）。
+>
+> ---
+>
 > **📅 2026-09-24 第四轮（本轮）**：先补上"环境能不能真的跑起来"这件事 ——
 
 ---
