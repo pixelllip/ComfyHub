@@ -3026,9 +3026,9 @@ class _ComposerState extends State<_Composer> {
             ),
           ),
           const SizedBox(height: 8),
-          // 底行排版。三条用户反馈累积到这里，规矩已经收敛成两句：
+          // 底行排版。四条用户反馈累积到这里，规矩已经收敛成两句：
           //   · **一条放不下就折行**，绝不横向滚动；
-          //   · **token 汇总 + 发送永远贴紧最后一行右侧**。
+          //   · **操作控件靠左；只有发送（宽屏再加 token 汇总）贴右**。
           //
           //   ① token 汇总被挤没 + 发送按钮不贴右（2026-09-20）：汇总当时是 loose 的
           //      `Flexible`，用不满的那截空白落在**按钮右边**，按钮就不贴右；它和
@@ -3044,34 +3044,50 @@ class _ComposerState extends State<_Composer> {
           //      **同宽的图标按钮**（各 ~48px）：一行放得下就一行，放不下再折行，
           //      每一行都是整齐的等宽图标。
           //
-          // 无论哪种布局，右侧那两件都走同一个 `Wrap`（end 对齐 = 整体贴右，
+          //   ④ 整排贴右（用户 2026-09-24，手机）：窄屏那一排曾经是**一个
+          //      `Wrap(alignment: end)`**（四枚控件 + 发送挤在一起），于是整排一起贴右，
+          //      "附件"左边空出一大片。→ 窄屏也拆成 `Row`：左 `Expanded`（start 对齐）、
+          //      右发送，见下面那个分支的注释。
+          //
+          // 宽屏右侧那两件（token 汇总 + 发送）走同一个 `Wrap`（end 对齐 = 整体贴右，
           // 换行后最后一行也贴右）。
           LayoutBuilder(
             builder: (context, constraints) {
               if (constraints.maxWidth < _twoRowWidth) {
-                return Column(
+                // 窄屏（手机）底行：**操作控件靠左、只有发送靠右**。
+                //
+                // 用户 2026-09-24 的反馈："输入框下方所有控件都是靠右 —— 我原来说，
+                // 除了发送按钮和 token 用量靠右，其他都靠左。" 老写法把四枚控件和
+                // 发送按钮塞进**同一个 `Wrap(alignment: end)`**，于是整排一起贴右：
+                // 屏幕稍宽一点就在"附件"左边空出一大片，看着像所有控件都被甩到右边。
+                //
+                // 现在拆成 `Row`：左边 `Expanded(Wrap(start))`、右边发送按钮。
+                // 发送**不参与压缩**（既不是 `Expanded`、也不在 `Wrap` 里），
+                // 所以它永远贴右；操作控件放不下时**自己往下折行**，每一行都从左边起排
+                // （`WrapAlignment.start`），不会再出现"整排贴右"。
+                //
+                // **token 汇总在窄屏仍然不显示**（用户 2026-09-21："宽度太窄的时候可以
+                // 不显示对话 token 用量"）：它是纯展示项，一行放不下时优先保住"能操作的
+                // 控件"（省下 ~140px，四枚图标 + 发送正好一行）。留在消息卡 / 详情里
+                // 照样看得到。
+                //
+                // 实测（320 逻辑宽 = 输入区内容 296）：发送 94 + 间距 4 +
+                // 附件 48 + 权限 50 + 模型 38 + 思考 38 + 3×4 间距 = 284 —— 五枚一排放得下。
+                return Row(
                   key: const Key('ai-composer-two-row'),
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    FilterChipRow(
-                      key: const Key('ai-composer-actions'),
-                      // 发送按钮**并进这一排**（用户 2026-09-21："发送按钮是不是给设计成
-                      // 固定大小而且有字了？所以融不进一排"）—— 它就是个固定宽的按钮，
-                      // 本来没必要为它单开一行。
-                      //
-                      // **token 汇总在窄的时候不显示**（同一条反馈："宽度太窄的时候可以
-                      // 不显示对话 token 用量"）：它是个纯展示项，而这里是输入区 ——
-                      // 一行放不下时优先保住"能操作的控件"。留在详情/消息卡里照样看得到。
-                      // 省下这 ~140px，四枚图标 + 发送正好一行。
-                      //
-                      // 实测（320 逻辑宽 = 输入区内容 296）：发送 94 + 附件 48 +
-                      // 权限 50 + 模型 38 + 思考 38 + 4×4 间距 = 284 —— 五枚一排放得下，
-                      // 发送收在最右。比宽屏省下的正是 token 汇总那 ~140px。
-                      alignment: WrapAlignment.end,
-                      spacing: 4,
-                      runSpacing: 4,
-                      children: [..._composerActions(compact: true), _sendButton(store)],
+                    Expanded(
+                      child: FilterChipRow(
+                        key: const Key('ai-composer-actions'),
+                        alignment: WrapAlignment.start,
+                        spacing: 4,
+                        runSpacing: 4,
+                        children: _composerActions(compact: true),
+                      ),
                     ),
+                    const SizedBox(width: 4),
+                    _sendButton(store),
                   ],
                 );
               }

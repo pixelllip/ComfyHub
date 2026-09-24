@@ -696,9 +696,28 @@ class AiTokenUsage {
     return parts.join(' · ');
   }
 
-  /// 大数字压缩成 `1.2k` / `15k`，聊天里不占地方。
-  static String compact(int n) =>
-      n < 1000 ? '$n' : '${(n / 1000).toStringAsFixed(n < 10000 ? 1 : 0)}k';
+  /// 大数字压缩成 `1.2K` / `15K` / `2.5M` / `1.1B`，聊天里不占地方。
+  ///
+  /// **单位逐级上台阶 K → M → B**（用户 2026-09-24："当数 token 用量字过大时，
+  /// 切换 K/M/B 的单位"）。老实现只有 `k` 一档，`1_500_000` 会写成 **`1500k`** ——
+  /// 四位数还带单位，比不压缩还长，正是用户看到的那一幕。
+  ///
+  /// 小数位口径沿用老实现：**换算后整数位不到两位才留一位小数**（`1.2K` / `15K`），
+  /// 正好整数的尾巴（`2.0K`）去掉，别写成 `2.0K` 白占一个字。
+  static String compact(int n) {
+    final abs = n.abs();
+    final (double scaled, String unit) = abs < 1000
+        ? (n.toDouble(), '')
+        : abs < 1000000
+            ? (n / 1000, 'K')
+            : abs < 1000000000
+                ? (n / 1000000, 'M')
+                : (n / 1000000000, 'B');
+    if (unit.isEmpty) return '$n';
+    final digits = scaled.abs() < 10 ? scaled.toStringAsFixed(1) : scaled.toStringAsFixed(0);
+    final trimmed = digits.endsWith('.0') ? digits.substring(0, digits.length - 2) : digits;
+    return '$trimmed$unit';
+  }
 }
 
 /// 会话级的 token 汇总（AIH-057）：列表里一眼看出"这个对话花了多少"。

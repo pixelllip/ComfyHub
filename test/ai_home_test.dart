@@ -605,6 +605,11 @@ void main() {
     // 整排贴着输入区右边缘收尾（收在发送按钮上）
     expect(send.right, closeTo(input.right, 1),
         reason: '这一排的右边界就是发送按钮 / 输入区右边缘');
+    // 操作控件**从左边起排**（用户 2026-09-24：除了发送按钮和 token 用量，其他都靠左）：
+    // 老写法整排 `Wrap(alignment: end)`，附件左边空着一大片，所有控件都被甩到右边。
+    // 容差 5px 是 `IconButton` 自己的内缩（48 的命中区里那 40 宽的可见盒居中，左缩 4）。
+    expect(tester.getRect(find.byTooltip('添加附件')).left, closeTo(input.left, 5),
+        reason: '第一枚操作控件（添加附件）必须贴在输入区左边缘，不能整排靠右');
     expect(find.byTooltip('不支持思考 —— 该模型未声明推理能力，请到「设置 → AI 模型」声明'),
         findsWidgets);
     // 窄屏不再显示 token 用量（用户：宽度太窄的时候可以不显示）
@@ -644,6 +649,8 @@ void main() {
     expect((send.center.dy - attach.center.dy).abs(), lessThan(6),
         reason: '发送必须和操作控件同一排');
     expect(attach.left, greaterThanOrEqualTo(input.left - 0.5));
+    expect(attach.left, closeTo(input.left, 5),
+        reason: '最窄档下操作控件同样从左边起排（用户：除了发送，其他都靠左）');
     expect(tester.takeException(), isNull, reason: '320 宽下不许 overflow');
 
     // 操作控件全都排在发送按钮**左边**（发送仍然是最右那一枚）
@@ -915,6 +922,22 @@ void main() {
 
   // --- token 统计（AIH-057） ---------------------------------------------
 
+  // 用户 2026-09-24："当数 token 用量字过大时，切换 K/M/B 的单位。"
+  // 老实现只有 `k` 一档 → 150 万会写成 `1500k`（四位数还带单位，比原来还长）。
+  test('token 用量按数量级切 K / M / B 单位', () {
+    expect(AiTokenUsage.compact(0), '0');
+    expect(AiTokenUsage.compact(999), '999');
+    expect(AiTokenUsage.compact(1000), '1K', reason: '正好整数不留 .0');
+    expect(AiTokenUsage.compact(1200), '1.2K');
+    expect(AiTokenUsage.compact(12167), '12K', reason: '换算后整数位到两位就不留小数');
+    expect(AiTokenUsage.compact(999499), '999K', reason: '不到 M 就不上台阶');
+    expect(AiTokenUsage.compact(1000000), '1M');
+    expect(AiTokenUsage.compact(1500000), '1.5M', reason: '1500k 就是这条要修掉的样子');
+    expect(AiTokenUsage.compact(25000000), '25M');
+    expect(AiTokenUsage.compact(1000000000), '1B');
+    expect(AiTokenUsage.compact(1234567890), '1.2B');
+  });
+
   testWidgets('助手消息显示归一化后的 token 用量，输入区显示本对话汇总', (tester) async {
     tester.view.physicalSize = const Size(1200, 1100);
     tester.view.devicePixelRatio = 1.0;
@@ -932,10 +955,10 @@ void main() {
     await tester.tap(find.text('发送'));
     await tester.pumpAndSettle();
 
-    // 单条消息：↑1.2k ↓300
-    expect(find.text('↑1.2k ↓300'), findsOneWidget);
+    // 单条消息：↑1.2K ↓300
+    expect(find.text('↑1.2K ↓300'), findsOneWidget);
     // 本对话汇总（输入区）
-    expect(find.textContaining('本对话 ↑1.2k ↓300'), findsOneWidget);
+    expect(find.textContaining('本对话 ↑1.2K ↓300'), findsOneWidget);
     expect(store.usageSummary.totalTokens, 1500);
     expect(store.usageSummary.cachedTokens, 400);
     expect(store.usageSummary.requests, 1);
@@ -1010,7 +1033,7 @@ void main() {
     );
     final input = tester.getRect(find.byType(TextField));
     expect(send.right, closeTo(input.right, 1), reason: '宽裕时按钮右边也不该留一截空白');
-    expect(find.textContaining('本对话 ↑1.2k ↓300'), findsOneWidget);
+    expect(find.textContaining('本对话 ↑1.2K ↓300'), findsOneWidget);
   });
 
   // --- 重试（AIH-024） ---------------------------------------------------
