@@ -188,6 +188,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/conversations", get(ai_conversations))
         .route("/api/ai/conversations/{id}", get(ai_conversation))
         .route("/api/ai/conversations/{id}/messages", get(ai_conversation_messages))
+        // run-kit 工件（P4 第 22 步）：手机 harness 的**全部规则类输入**（R12/R13 的第一次重建）
+        .route("/api/ai/run-kit", get(ai_run_kit))
+        .route("/api/ai/run-kit/status", get(ai_run_kit_status))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -348,6 +351,35 @@ async fn ai_conversation_messages(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<crate::conversations::AiMessageDto>>, ApiError> {
     Ok(Json(crate::conversations::list_messages(&state, &id)?))
+}
+
+/// `GET /api/ai/run-kit` 的查询参数（手机按它选好的模型取环境头；两个都可选）。
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct RunKitQuery {
+    provider_id: Option<String>,
+    model_id: Option<String>,
+}
+
+/// `GET /api/ai/run-kit` —— **手机 harness 的全部"规则类"输入**（P4 第 22 步，R13）。
+///
+/// `?providerId=&modelId=` 缺省时用桌面第一个启用的 Provider 与它的第一个启用模型；
+/// 指定了但库里没有 / 没启用 → **400 `CONFIG_ERROR`**（不静默回落 —— 那会让手机拿着
+/// 一份"提示词里写的模型和它要用的不一样"的 kit 还不自知）。
+async fn ai_run_kit(
+    State(state): State<AppState>,
+    Query(q): Query<RunKitQuery>,
+) -> Result<Json<crate::run_kit::RunKitDto>, ApiError> {
+    Ok(Json(crate::run_kit::build(
+        &state,
+        q.provider_id.as_deref(),
+        q.model_id.as_deref(),
+    )?))
+}
+
+/// `GET /api/ai/run-kit/status` —— `{current, revoked}`（手机跑之前先问一句吊销）。
+async fn ai_run_kit_status(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::run_kit::status(&state)?))
 }
 
 /// `GET /api/capture/locate` —— 探测 ComfyUI 装在哪（用户"其他建议"第 3 条）。

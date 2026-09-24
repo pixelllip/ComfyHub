@@ -31,9 +31,16 @@
 //! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ |
 //! | `GET /api/ai/providers`（不含密钥）、`GET /api/ai/providers/{id}/models` | ✅ |
 //! | `GET /api/ai/conversations`、`/{id}`、`/{id}/messages`（**读侧**：历史会话与有序块） | ✅ |
-//! | `/api/ai/*` 的其余部分（会话写侧 / Run / SSE / run-kit / 工具 / 审批 / 附件） | ⛔ **未搬**（Kotlin 那边继续服务） |
+//! | **`GET /api/ai/run-kit{,/status}`**（手机 harness 的全部规则类输入；R12/R13 的第一次重建） | ✅ |
+//! | `/api/ai/*` 的其余部分（会话写侧 / Run / SSE / 工具 / 审批 / 附件） | ⛔ **未搬**（Kotlin 那边继续服务） |
 //! | `/api/capture/{status,jobs,poll,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功） |
 //! | R6~R10 的安全防线 | ⛔ **未重建**（AI/工具层是最后一批，总纲 §6 要求逐条对照重建） |
+//!
+//! ## 手机现在可以只对着**这一个后端**干活了（2026-09-24，第 22 步之后）
+//!
+//! 在此之前手机上那两条路各需要一台不同的后端：`GET /api/ai/run-kit` 只在 Kotlin，
+//! `POST /api/sync/push` 只在 Rust —— 手机"发得出去"与"推得回去"没法同时成立。
+//! `/api/ai/run-kit` 搬过来之后，**Rust 侧同时有这两条**，真机回归才有意义。
 
 use comfyhub_server_rs::{db, routes};
 

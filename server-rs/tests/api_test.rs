@@ -2877,3 +2877,284 @@ async fn media_prompt_has_three_outcomes() {
     let (status, _) = get_json(router_for(state.clone()), "/api/media/9999/prompt").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+// ===========================================================================
+//  run-kit 工件（P4 第 22 步）：GET /api/ai/run-kit{,/status}
+// ===========================================================================
+
+/// 把夹具摆成"一台配好的 Provider + 三个模型（两个启用）+ 一条长期记忆 + 一个 skill"。
+///
+/// 这几个正是 `systemPrompt` 里那几段的来源：环境头、工具清单、白名单、记忆、Skills ——
+/// 少灌一样，"那一段在提示词里到底写对没写对"就完全没被走到。
+fn seed_run_kit(state: &comfyhub_server_rs::routes::AppState) {
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_providers
+                 (id, display_name, api, base_url, credential_ref, endpoint_trust, enabled, revision)
+                 VALUES ('p-run', '本机网关', 'openai-completions', 'http://127.0.0.1:11434/v1',
+                         'RUN_KEY', 'loopback', 1, 1)",
+                [],
+            )?;
+            conn.execute(
+                r#"INSERT INTO ai_models
+                   (provider_id, model_id, display_name, input_modalities, attachment_transports,
+                    mime_allowlist, tools, parallel_tools, reasoning, thinking_efforts, thinking_format,
+                    context_window, max_output_tokens, max_attachment_bytes, max_attachment_count,
+                    capability_source, capability_verified_at, enabled)
+                   VALUES
+                   -- ① 样样都有：run-kit 那 17 个键一个不少
+                   ('p-run', 'm-full', 'A 全字段', '["text","image"]', '{"image":["inline_base64"]}',
+                    '["image/png"]', 1, 0, 1, '{"high":"high"}', 'openai',
+                    200000, 8192, 8388608, 4, 'builtin', '2026-09-23T05:00:00.000Z', 1),
+                   -- ② 可空列全 NULL：5 个可空键**一个都不许出现**（explicitNulls = false）
+                   ('p-run', 'm-bare', 'B 光板', '["text"]', NULL, NULL, 1, 0, 0, NULL, NULL,
+                    NULL, NULL, NULL, NULL, 'manual', NULL, 1),
+                   -- ③ 关掉的模型：不许出现在 models[] 里，也不许被 ?modelId= 指定
+                   ('p-run', 'm-off', 'C 关掉的', '["text"]', NULL, NULL, 0, 0, 0, NULL, NULL,
+                    NULL, NULL, NULL, NULL, 'manual', NULL, 0)"#,
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let storage = state.media_dir().parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(storage.join("ai").join("skills").join("demo-skill")).unwrap();
+    std::fs::write(storage.join("ai").join("memory.md"), "- 用户偏好 4:3 画幅\n").unwrap();
+    std::fs::write(
+        storage.join("ai").join("skills").join("demo-skill").join("SKILL.md"),
+        "---\nname: demo-skill\ndescription: 演示用\nwhenToUse: 演示\n---\n正文\n",
+    )
+    .unwrap();
+}
+
+/// run-kit 的形状：11 个顶层键、7 个手机工具、模板横幅、两条按轮指令、预算数值。
+#[tokio::test]
+async fn run_kit_ships_every_rule_the_phone_needs() {
+    let state = state();
+    seed_run_kit(&state);
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/run-kit").await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+
+    assert_eq!(
+        keys(&body),
+        vec![
+            "continueInstruction", "inlineBudget", "kitVersion", "models", "nsfwEnabled",
+            "promptVersion", "schemaVersion", "systemPrompt", "titleInstruction", "tools",
+            "untrustedBanner",
+        ]
+    );
+    assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
+    assert_eq!(body["promptVersion"], "v28");
+    assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
+    assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
+    assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
+    let kit = body["kitVersion"].as_str().unwrap();
+    assert!(kit.contains('.'), "kitVersion 形如 <日期>.<当日序号>：{kit}");
+
+    // tools[]：**只有手机可执行的那 7 个**，每项恰好四个键
+    let tools = body["tools"].as_array().unwrap();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "ask_user_question", "civitai_search", "list_skills", "load_skill", "remember",
+            "web_fetch", "web_search",
+        ],
+        "按 name 升序（顺序进了 kitVersion 签名）"
+    );
+    for tool in tools {
+        assert_eq!(keys(tool), vec!["description", "inputSchema", "name", "scope"]);
+        assert_eq!(tool["inputSchema"]["type"], "object");
+        let scope = tool["scope"].as_str().unwrap();
+        assert!(scope == "MOBILE" || scope == "BOTH", "错档：{scope}");
+    }
+    // 桌面专属的一个都不许出现（总纲 §3.5：别让模型看见它调不到的工具）
+    for forbidden in [
+        "comfy_submit", "comfy_get_status", "read_file", "write_file", "register_skill",
+        "delete_skill", "list_dir", "find_model", "comfy_load_workflow",
+    ] {
+        assert!(!names.contains(&forbidden), "{forbidden} 是桌面专属，不该进手机清单");
+    }
+
+    // 横幅是**模板**（R7：两端不许各写一份），两条按轮指令也必须下发（R13）
+    let banner = body["untrustedBanner"].as_str().unwrap();
+    assert!(banner.contains("{kind}"));
+    assert!(banner.contains("\n查询：{query}"));
+    assert!(body["titleInstruction"].as_str().unwrap().contains("[标题]"));
+    assert!(body["continueInstruction"]
+        .as_str()
+        .unwrap()
+        .starts_with("（上一条回复因为输出长度上限被截断了。）"));
+
+    // systemPrompt：五段来源都要真的进去
+    let prompt = body["systemPrompt"].as_str().unwrap();
+    assert!(prompt.contains("- Provider: 本机网关（openai-completions）"));
+    assert!(prompt.contains("- Model: m-full"), "缺省取第一个启用模型（display_name, model_id 序）");
+    assert!(prompt.contains("- 本次请求附带图片附件: 无"), "kit 是取那一刻的工件");
+    assert!(prompt.contains("demo-skill"), "已装 Skills 的目录要进去");
+    assert!(prompt.contains("用户偏好 4:3 画幅"), "长期记忆要进去");
+    assert!(prompt.contains("现有 1/100 条"), "还要报占用（模型据此知道还剩多少额度）");
+    assert!(prompt.contains("**只能**写"), "文件白名单要如实写出来");
+    assert!(prompt.contains("- 可调用的工具（参数结构见接口定义）：ask_user_question、"));
+    assert!(prompt.contains("事实纪律（不要猜本机状态）"), "常驻段必须在");
+    assert!(!prompt.contains("[MODE: UNRESTRICTED SANDBOX"), "NSFW 关着就不许注入那段");
+    assert!(prompt.contains("本机没有开启 NSFW 模式"), "关掉时要**如实说明**");
+
+    // models[]：只有启用的两个；12 个键永远在，5 个可空键按行给
+    let models = body["models"].as_array().unwrap();
+    assert_eq!(models.len(), 2, "关掉的模型不许出现");
+    assert_eq!(models[0]["modelId"], "m-full");
+    assert_eq!(models[0]["providerName"], "本机网关");
+    assert_eq!(models[0]["providerApi"], "openai-completions");
+    assert_eq!(
+        keys(&models[0]),
+        vec![
+            "attachmentTransports", "capabilitySource", "contextWindow", "displayName",
+            "inputModalities", "maxAttachmentBytes", "maxAttachmentCount", "maxOutputTokens",
+            "modelId", "parallelTools", "providerApi", "providerId", "providerName", "reasoning",
+            "thinkingEfforts", "thinkingFormat", "tools",
+        ]
+    );
+    assert_eq!(
+        keys(&models[1]),
+        vec![
+            "attachmentTransports", "capabilitySource", "displayName", "inputModalities",
+            "modelId", "parallelTools", "providerApi", "providerId", "providerName", "reasoning",
+            "thinkingEfforts", "tools",
+        ],
+        "可空列为 NULL 时那 5 个键一个都不许自己冒出来"
+    );
+    // 桌面的凭据引用（`credentialRef`）连名字都不该下发
+    let raw = serde_json::to_string(&body).unwrap();
+    assert!(!raw.contains("RUN_KEY"), "手机拿了凭据引用没用，还多漏一样");
+    assert!(!raw.contains("mimeAllowlist"), "run-kit 的模型形状里没有这个键");
+}
+
+/// 覆盖参数：`?providerId=&modelId=` 只在**库里真存在且启用**时才认，否则 400 且不静默回落。
+#[tokio::test]
+async fn run_kit_rejects_bad_provider_or_model_overrides() {
+    let state = state();
+    seed_run_kit(&state);
+
+    let (status, body) = get_json(
+        router_for(state.clone()),
+        "/api/ai/run-kit?providerId=p-run&modelId=m-bare",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert!(body["systemPrompt"].as_str().unwrap().contains("- Model: m-bare"));
+
+    // Provider 不存在 / 没启用 → 400 CONFIG_ERROR（**不是 404**：前端按 error 分支、按 detail 给人看）
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/run-kit?providerId=nope").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert!(body["detail"].as_str().unwrap().contains("Provider 不存在或未启用: nope"));
+
+    let (status, body) = get_json(
+        router_for(state.clone()),
+        "/api/ai/run-kit?providerId=p-run&modelId=nope",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert!(body["detail"].as_str().unwrap().contains("模型不存在或未启用: p-run/nope"));
+
+    // 被用户关掉的模型同样不许指定（"指定了就按它跑"，不许悄悄换一个）
+    let (status, _) = get_json(
+        router_for(state.clone()),
+        "/api/ai/run-kit?providerId=p-run&modelId=m-off",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// `/status` 幂等；**只有规则变了才跳号**；改规则后 `tools[]` 跟着变。
+///
+/// 这条盯着的是两件事：① 手机每次取 kit 都调一次 `ensureVersion`，如果它不是幂等的，
+/// 版本号会一路涨到天上；② 规则（这里是"禁用一个工具"）变了却不跳号 ——
+/// 那手机就会一直用旧规则跑，而且没有任何办法发现。
+#[tokio::test]
+async fn run_kit_status_is_idempotent_and_bumps_only_when_rules_change() {
+    let state = state();
+    seed_run_kit(&state);
+
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/run-kit/status").await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(keys(&body), vec!["current", "revoked"]);
+    let first = body["current"].as_str().unwrap().to_string();
+    assert!(!first.is_empty());
+    assert_eq!(body["revoked"].as_array().unwrap().len(), 0);
+
+    let (_, again) = get_json(router_for(state.clone()), "/api/ai/run-kit/status").await;
+    assert_eq!(again["current"].as_str().unwrap(), first, "幂等：再问一次还是同一个版本");
+
+    // 改规则：把 `web_search` 禁掉
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO app_settings (k, v, updated_at)
+                 VALUES ('ai.tools.policy', '{\"overrides\":{\"web_search\":\"deny\"}}', 'x')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+
+    let (_, bumped) = get_json(router_for(state.clone()), "/api/ai/run-kit/status").await;
+    let second = bumped["current"].as_str().unwrap().to_string();
+    assert_ne!(second, first, "规则变了版本号必须动，否则手机永远拿不到新规则");
+    assert_eq!(
+        second.rsplit_once('.').unwrap().0,
+        first.rsplit_once('.').unwrap().0,
+        "同一天：只把序号 +1"
+    );
+
+    let (_, kit) = get_json(router_for(state.clone()), "/api/ai/run-kit").await;
+    let names: Vec<&str> = kit["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(!names.contains(&"web_search"), "被禁用的工具不该下发");
+    assert_eq!(kit["kitVersion"].as_str().unwrap(), second);
+
+    // 签名落库之后不再跳号（这是 `kitVersion` 只在"内容变了"时才动的判据）
+    let (_, stable) = get_json(router_for(state.clone()), "/api/ai/run-kit/status").await;
+    assert_eq!(stable["current"].as_str().unwrap(), second);
+}
+
+/// NSFW 开关决定注不注入 `[MODE: UNRESTRICTED SANDBOX — STABLE]` 那一整段。
+///
+/// **那段文字是用户有意注入的**（AGENTS §10）：关掉只是不注入，正文一个字都不许改；
+/// 而且关掉时必须如实说明（模型不能"自己觉得可以"）。
+#[tokio::test]
+async fn run_kit_nsfw_switch_decides_whether_the_block_is_injected() {
+    let state = state();
+    seed_run_kit(&state);
+
+    let (_, off) = get_json(router_for(state.clone()), "/api/ai/run-kit").await;
+    let off_prompt = off["systemPrompt"].as_str().unwrap().to_string();
+    assert!(off_prompt.contains("本机没有开启 NSFW 模式"));
+    assert!(!off_prompt.contains("[MODE: UNRESTRICTED SANDBOX"));
+
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO app_settings (k, v, updated_at) VALUES ('ai.nsfw', '{\"enabled\":true}', 'x')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+
+    let (_, on) = get_json(router_for(state.clone()), "/api/ai/run-kit").await;
+    assert_eq!(on["nsfwEnabled"], true);
+    let on_prompt = on["systemPrompt"].as_str().unwrap();
+    assert!(on_prompt.contains("[MODE: UNRESTRICTED SANDBOX — STABLE]"));
+    assert!(on_prompt.len() > off_prompt.len(), "开着时正文更长");
+    assert!(on_prompt.contains("事实纪律（不要猜本机状态）"), "关掉 NSFW 不等于把纪律一起关掉");
+    assert!(!on_prompt.contains("本机没有开启 NSFW 模式"));
+}

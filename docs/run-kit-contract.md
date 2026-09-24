@@ -102,3 +102,21 @@ GET /api/ai/run-kit/status  → { current: "2026-09-23.1", revoked: ["2026-09-22
 
 已知边界（M3 收口）：`systemPrompt` 是"取 kit 那一刻"渲染的正文，附件说明按"无"渲染；
 手机发起 Run 时应现取一份 kit（局域网内一次 GET），带图的那次 Run 在用户轮里如实说明。
+
+---
+
+## 6. Rust 侧实现（P4 第 22 步，2026-09-24）
+
+Rust 也实现了这两条端点（`server-rs/src/run_kit.rs` + `system_prompt.rs` +
+`nsfw_prompt.rs` + `mobile_tools.rs` + `policy.rs` + `skills.rs` + `memory.rs`）。
+**手机从此可以只对着一个后端干活**：以前 `run-kit` 只在 Kotlin、`/api/sync/push` 只在 Rust，
+"发得出去"与"推得回去"需要两台后端。
+
+- 正文与工具 schema 是**生成**的（`server-rs/tools/gen_prompts.py` / `gen_mobile_tools.py`），
+  不是手抄 —— 5 万多字符手抄一个字的差错就是"两端规则不一致"，而且**看不出来**。
+  生成器的两个坑与用法见 `server-rs/tools/README.md`。
+- **已知边界（Rust 侧，与 Kotlin 一致）**：`systemPrompt` 是取 kit 那一刻渲染的，
+  附件说明按"无"；会话写侧 / Run 与 SSE / 工具层与审批 / 附件仍未搬。
+- **验收判据**（别用"cargo test 绿了"代替）：同一份库 + 同一份 storage 上，
+  Rust 与 Kotlin 的响应 **canon 后零差异**（本机实测 `systemPrompt` 50664 字符逐字一致、
+  83 条 `models[]` 一致），并且 **`kitVersion` 不跳号**（= 两端内容签名 hash 相同）。

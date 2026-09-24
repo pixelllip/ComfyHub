@@ -509,12 +509,14 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   没有解密、也没有把值带出去。
 > - **验收**：`cargo test` **88 例全绿**（34 lib + 54 集成），新增 2 例（凭据三分支 +
 >   端点形状与"密钥值一个字都不许出"：夹具往托管文件塞哨兵串，断言响应里搜不到）。
->> 📊 **P4 至此的端点覆盖**：业务 `tags` / `prompts` / `media`（列表·详情·文件流·缩略图·上传·写侧）/
-> `stats` / 捕获配置 / **本机工作流文件 + 位置探测（第 14·15 步）** / **`/api/ai/providers`（第 16 步）** / 工作流原文 / `api-graph`
-> + **同步 4 条**全部可用。
+>> 📊 **P4 至此的端点覆盖（截至第 22 步）**：业务 `tags` / `prompts` / `media`（列表·详情·文件流·缩略图·上传·写侧）/
+> `stats` / 捕获配置 / **本机工作流文件 + 位置探测（第 14·15 步）** / 工作流原文 / `api-graph`
+> / **`/api/ai/providers`（第 16 步）** / **模型目录（第 20 步）** / **会话与消息读侧（第 21 步）** /
+> **`run-kit`（第 22 步）** + **同步 4 条**全部可用。
 > 仍未搬：`/api/capture/{status,jobs,poll,import,import-workflows}`（`status`/`jobs`/`poll` 要 ComfyUI 在场；
 > `import-workflows` 要整套 `WorkflowConvert` + `AiWorkflowSearch` 转换栈，是**下一个大块**）、
-> `/api/ingest/comfyui`、`/api/ai/*` 的**其余部分**（**R6~R10 的 Rust 侧重建一点没动** —— 这是 P4 剩下的最大一块，
+> `/api/ingest/comfyui`、`/api/ai/*` 的**其余部分**（会话写侧 / Run 与 SSE / 工具层与审批 / 附件 ——
+> **R6~R10 的 Rust 侧重建仍未开始**，那是 P4 剩下的最大一块，
 > 也是 §7 风险表里 "11,103 行 Kotlin 测试要重写"那块）。
 >
 > ✅ **P4 第 14 步（`1108673`，2026-09-24）**：`GET /api/capture/workflows` —— 用户 bug ⑤ 那条路
@@ -752,6 +754,41 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > 真机上"发得出去"与"推得回去"目前各需要一台不同的后端，**这正是 P4 要把
 > `/api/ai/run-kit` 搬到 Rust 的理由**（§9 ③ 的下一件大事）。
 >
+> ✅ **那条理由已经落地了** —— 见下面这条登记（P4 第 22 步）。
+>
+> ---
+>
+> ✅ **P4 第 22 步（2026-09-24）：`GET /api/ai/run-kit{,/status}`** ——
+> **R12 / R13 的第一次正面重建**，也是**手机只对着一个后端干活**的前提
+> （Rust 侧现在同时有 `/api/ai/run-kit` 与 `/api/sync/push`）。
+>
+> | 字段 | Rust 侧落点 |
+> | --- | --- |
+> | `systemPrompt` | `system_prompt.rs`（`render` 的逐行对照）+ `nsfw_prompt.rs`（正文，**生成**） |
+> | `promptVersion` / `nsfwEnabled` | `nsfw_prompt::PROMPT_VERSION` / `app_settings` 的 `ai.nsfw` |
+> | `tools[]` | `mobile_tools.rs`（7 个 `MOBILE`/`BOTH` 工具，**从 Kotlin 的真实 schema 生成**） |
+> | `untrustedBanner` | `mobile_tools::UNTRUSTED_BANNER_TEMPLATE` + `..._QUERY_LINE`（R7） |
+> | `models[]` | `ai_providers` / `ai_models`（12 个键永远在、5 个可空键按行给，**连 `credentialRef` 都不下发**） |
+> | 白名单 / 权限档 | `policy.rs`（**只搬 run-kit 要的那一半**：展开白名单 + `ask`/`full` + 逐工具覆盖） |
+> | Skills / 记忆 | `skills.rs`（扫描 + frontmatter + 校验，非法项不进提示词）+ `memory.rs`（读 + 截断） |
+>
+> ★ **两个"看起来没事、其实很严重"的坑**（都真踩到，已写进 `server-rs/tools/README.md`）：
+> ① **Rust raw string 的 `#` 在开引号之前**（`r#"…"#`），而且开引号与正文之间**不能有换行**
+> —— 那是字符串的一部分；第一版生成器写成 `r"#` + 换行，结果是每段正文都以换行开头
+> （下发的 JSON Schema 直接非法）。
+> ② **`kitVersion` 的签名必须逐字节一致**：canonical 里含 `tools[]` 的序列化文本（键序 + 紧凑分隔符），
+> 用 `serde_json::to_string(&Value)` 会因为 `serde_json::Map` **按键排序**而与 Kotlin 不同 ——
+> 于是两端各自认为"规则变了"→ **互相把版本号顶上去**。所以那份 `tools_json` 是手工拼的，
+> 并用 `server-rs/tools/check_signature.py` 在真库上核对公式（实测与库里 `ai.runkit.hash` 逐字符相同）。
+>
+> **验收**：① `cargo test` **134 例全绿**（69 lib + 63 api_test + 2 shape_lint；4 条新集成用例：
+> 形状与 7 个工具 / 覆盖参数与 400 语义 / `/status` 幂等且只在规则变了才跳号 / NSFW 开关）；
+> ② **真库副本 + 真 storage 上 canon 逐字比**：Rust（8091）与 Kotlin（8090）的响应**零差异**
+> —— `systemPrompt` **50664 字符**逐字一致、83 条 `models[]` 一致、`tools[]` 一致、
+> 横幅与两条按轮指令一致、`inlineBudget` 一致；
+> ③ **`kitVersion` 停在 `2026-09-24.1` 没跳号** —— 这条最关键，它证明两端算出的签名 hash 相同。
+> 未搬：会话写侧 / Run 与 SSE（R5/R6）/ 工具层与审批（R8）/ 附件（R9）。
+
 > ---
 >
 > **📅 2026-09-24 第四轮（本轮）**：先补上"环境能不能真的跑起来"这件事 ——
@@ -760,6 +797,30 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 
 ## 9. 下一轮从哪起手
 
+> **2026-09-24 第五轮（本轮，3 个提交）**：一个 Flutter 界面修复 + 一份配对设计 + **P4 第 22 步**。
+>
+> | 提交 | 内容 |
+> | --- | --- |
+> | `5dbc6f8` | 手机 AI 工作台输入区：**操作控件靠左、只有发送贴右** + token 用量按数量级切 K/M/B |
+> | （本轮）| **`docs/pairing-design.md`**：配对流程（扫码 + 滚动 6 位码）、接口形状、防线、三步落地 |
+> | （本轮）| **P4 第 22 步：`GET /api/ai/run-kit{,/status}`**（见 §8 那条登记，R12/R13 的第一次重建） |
+>
+> **下一件该做的事：把真机回归（M3.2 ④ / M4）改成对着 Rust 后端跑。**
+> 现在 Rust 侧同时有 `/api/ai/run-kit` 与 `/api/sync/push`，手机上
+> "发得出去"+"推得回去"第一次能在**同一台后端**上完成 —— 这正是上一轮卡住的地方
+> （§8 M3.2 ④ 的"仍未做"）。做法照 M3.2 ④ 记的那套真机手法：
+> `adb reverse` 或局域网地址 + `flutter build apk --debug` + 实测一次"发一条 → 桌面看得到"。
+>
+> 之后按价值排：
+> 1. **会话写侧**（`POST /api/ai/conversations`、追加消息 / 块）—— 手机上行真正落地的前提
+>    （现在只有读侧，手机能推的只有它自己产生的行，桌面侧一旦要"就地续写"就还得走 Kotlin）；
+> 2. **Run 与 SSE**（R5 保留窗口 + R6 失败不丢内容）—— 这是 P4 剩下最大的一块；
+> 3. **工具层与审批（R8）/ 附件（R9）**；
+> 4. **配对落地**（`docs/pairing-design.md` 三步里的第 ① 步：`InboundAuth` 闸门 + `auth.pairing`）——
+>    它是"开远程"的前置条件，也是手机令牌的唯一来源（现在手机**从来不传令牌**）。
+>
+> ---
+>
 > **2026-09-24 第三轮（错误体/形状对齐这一轮）共 4 个提交**，全部测试在当前 HEAD 上是绿的：
 > `cargo test` **93 例**（35 lib + 56 api_test + 2 shape_lint）、`flutter test` **269 例**
 > （`:harness:testDebugUnitTest` 148 例未动）。
