@@ -391,3 +391,23 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > 界面按自己生成的 id 插好气泡、harness 另起 UUID 落库 → 事件齐全但界面一个字都不长，两端都不报错。
 > 防线是 `HarnessRunnerTest` 的两例（含 `ai_runs` 外键与 `message.started` 的 `messageId`
 > 必须都指向同一对）；`harness` 147 例、`flutter test` 255 例全绿。
+>
+> ✅ **P4 第 10 步（`7fd2fb0`，2026-09-24）**：`GET /api/sync/manifest`（契约 §1）—— 手机连上来的
+> **第一件事**（"我该不该走 bootstrap？我的游标还有效吗？"）。返回 `{schemaVersion, kitVersion,
+> cursor, serverTime, tables}`。
+> - ⚠ **查出一个有安全后果的坑**：直觉上"被同步的表 = 挂了 `_sync_log` 触发器的表"，
+>   但这份 schema 实际建出来的触发器覆盖了 **`app_settings` / `ai_providers` / `ai_models`**
+>   （见 `db/schema.sqlite.sql`），而总纲 §3.3 的同步范围**明确排除**它们 ——
+>   `app_settings` 里存着**配对令牌明文**。按触发器派生 `synced` 的话，手机第一次连上来就会看到
+>   `app_settings` 是"可同步的表"，随后的 `changes` / `bootstrap` 就把令牌送出去了
+>   （正是契约 §3"绝不发 .db 文件"要防的事）。
+>   所以范围**写死成两张显式清单**（`SYNCED` / `NOT_SYNCED`+理由），且不同步的表**连行数都不给**
+>   （行数本身也是信息）。防线：`manifest_never_offers_credentials`（改成触发器派生就红）。
+> - 两条如实语义：`kitVersion` 没有就回 **null**（不编一个）；`cursor` 一律 = `MAX(_sync_log.seq)`
+>   同源，**不是自己数的行数**。
+> - **验收**：`cargo test` **59 例**全绿（25 lib + 34 集成）；真实库副本抽查（8083）：
+>   `schemaVersion=1`、`kitVersion=2026-09-23.3`（Kotlin 侧写过的那个值）、`cursor=3328`、
+>   `serverTime=2026-09-24T00:14:06Z`；10 张同步表行数与已知事实一致（prompts 27 /
+>   media_assets 24 / ai_conversations 23），7 张不同步表带理由；真库只读未改。
+> - `sync` 剩下三条未做：`/api/sync/changes`（游标 + `deletes` 独立成组 + **410 Gone**）、
+>   `/api/sync/bootstrap`（按表分页）、`/api/sync/push`（幂等 + LWW）。
