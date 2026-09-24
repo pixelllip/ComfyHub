@@ -488,9 +488,36 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 
 ## 9. 下一轮从哪起手（2026-09-24 收工时留的交接）
 
-> 本轮（2026-09-24）共 **10 个提交**，全部测试在当前 HEAD 上是绿的：
-> `cargo test` **71 例**（25 lib + 46 集成）、`:harness:testDebugUnitTest` **147 例**、
-> `flutter test` **255 例**。下面三件事按"价值 ÷ 风险"排好，照顺序做即可。
+> 本轮（2026-09-24）共 **13 个提交**，全部测试在当前 HEAD 上是绿的：
+> `cargo test` **71 例**（25 lib + 46 集成）、`:harness:testDebugUnitTest` **148 例**、
+> `flutter test` **257 例**（`test/run_event_source_test.dart` 单文件 9 例）。
+> 下面三件事按"价值 ÷ 风险"排好，照顺序做即可。
+
+### 0. 收工前做的一次**全端点真库巡检**（结论：没有发现形状错）
+
+用真实库副本（`--port 8086`）把**所有只读端点扫了一遍**，逐个核对状态码与形状 ——
+这一步的价值是抓"某个字段名拼错导致整条链路 500"那类静默错误（P4 第 3 步就抓到过
+`positive_prompt` 写成 `prompt_positive`）。本次结果全部符合文档：
+
+| 端点 | 实测 |
+| --- | --- |
+| `health` / `tags` / `tags/categories` / `stats` | 200，形状与字段齐全 |
+| `prompts`（含 `q=` 搜索）/ `prompts/{id}` / `prompts/{id}/media` | 200；不存在的 id → 404 |
+| `media`（含 `kind=` 过滤）/ `media/{id}` | 200 |
+| `media/{id}/file` | 200 `image/png`，**ETag = sha256**；`Range: bytes=0-9` → **206** + `Content-Range: bytes 0-9/2665`；`If-None-Match` → **304** |
+| `media/{id}/thumb` | 200 `image/jpeg`（真生成，3129 字节） |
+| `media/{id}/prompt` | **204**（这条产物没关联提示词 —— 三分语义正确） |
+| `media/{id}/poster` | **501**（要 ffmpeg 抽帧，如实不假装） |
+| `capture/config` / `prompts/{id}/workflow` / `api-graph` / `sync/*` | 200；`bootstrap?table=app_settings` → **400 且列出合法表名** |
+
+> 📌 **顺带查清一件事（不是 bug，但要知道）**：`prompts.workflow_json` 里 **15/20 条是
+> API 格式**（带 `class_type`）、只有 5 条是界面格式（带 `nodes`）—— 因为用户 `comfyui\*.json`
+> 里本来就有一批是 API 格式的（文件名直接叫 `*_api.json`），导入时原文存进去了。
+> `/workflow` 与 `/api-graph` **确实返回不同的东西**（20 条里 0 条相同，只是 310 那条恰好
+> 一样长 2827 字节，差点被误判成"两个端点返回了同一份"）。
+> ⚠ 但**界面格式的工作流查看器**遇到 API 格式的 `workflow_json` 会画不出图 ——
+> 这是 **Kotlin 侧今天就有的行为**（Rust 只是原样读同一列，没有回归）。
+> 要不要在查看器里识别 API 格式并降级提示，是个**待定项**（别当成 Rust 的 bug 去"修"）。
 
 ### ① M3.2 ② —— 让手机**离线真的能用**（最高优先）
 
