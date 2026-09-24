@@ -76,6 +76,63 @@ void main() {
     expect(handles.kitVersion, '2026-09-23.1');
   });
 
+  test('startRun 把界面生成的两个消息 id 送下去，并读回 Kotlin 的回显（M3.2）', () async {
+    mockMethods((call) async {
+      expect(call.method, 'startRun');
+      final args = Map<String, dynamic>.from(call.arguments as Map);
+      // 界面生成的 id 必须**真的送到** Kotlin（否则 harness 会另起 UUID，
+      // 界面手里的 id 就永远查不到库里那条 —— 事件齐全但界面一个字都不长）
+      expect(args['userMessageId'], 'ui-user-1');
+      expect(args['assistantMessageId'], 'ui-assistant-1');
+      return jsonEncode({
+        'runId': 'r1',
+        'conversationId': 'c1',
+        'userMessageId': 'ui-user-1',
+        'assistantMessageId': 'ui-assistant-1',
+        'kitVersion': 'k1',
+        'promptVersion': 'v1',
+      });
+    });
+
+    final handles = await source().startRun(const RunStartRequest(
+      conversationId: 'c1',
+      text: '你好',
+      userMessageId: 'ui-user-1',
+      assistantMessageId: 'ui-assistant-1',
+    ));
+
+    expect(handles.userMessageId, 'ui-user-1');
+    expect(handles.assistantMessageId, 'ui-assistant-1');
+  });
+
+  test('createConversation 在本地库建会话，并带回那条会话（M3.2 ② 的第一步）', () async {
+    mockMethods((call) async {
+      expect(call.method, 'createConversation');
+      final args = Map<String, dynamic>.from(call.arguments as Map);
+      expect(args['conversationId'], 'conv-ui-1');
+      expect(args['title'], '手机上起的');
+      expect(args['providerId'], 'p1');
+      return jsonEncode({
+        'id': 'conv-ui-1',
+        'title': '手机上起的',
+        'providerId': 'p1',
+        'modelId': 'm1',
+        'updatedAt': '2026-09-24T10:00:00.000Z',
+      });
+    });
+
+    final conv = await source().createConversation(
+      conversationId: 'conv-ui-1',
+      title: '手机上起的',
+      providerId: 'p1',
+      modelId: 'm1',
+    );
+
+    expect(conv['id'], 'conv-ui-1');
+    expect(conv['title'], '手机上起的');
+    expect(conv['modelId'], 'm1');
+  });
+
   test('fetchRunKit 把 {ok=false, reason} 原样带回来（拿不到规则就不许开跑）', () async {
     mockMethods((call) async {
       expect(call.method, 'fetchRunKit');

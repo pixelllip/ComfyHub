@@ -253,4 +253,52 @@ class HarnessStoreTest {
         assertTrue(a < b)
         assertTrue(Regex("""^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$""").matches(Timestamps.now()))
     }
+
+    // --- 本地建会话（M3.2 ② 的第一块砖） ------------------------------------
+
+    /**
+     * 桥上新增的 `createConversation` 走的就是这条路，钉住三件事：
+     *
+     * 1. **用调用方给的 id**（界面按同一个 id 认自己插的那条会话；另起 UUID 就对不上）；
+     * 2. 建完立刻能在 `listConversations` 里查到（离线时界面靠它渲染列表）；
+     * 3. **进 `_outbox`** —— 这是 M4 的前提：本地建的会话要能在桌面在线时上行，
+     *    否则"手机产生的会话在桌面可见"永远不成立。
+     */
+    @Test
+    fun `本地建会话：认调用方给的 id、能立刻查到、并进 outbox`() {
+        val before = store.pendingOutbox().size
+        val created = store.createConversation(
+            id = "conv-ui-1",
+            title = "手机上起的",
+            providerId = "p1",
+            modelId = "m1",
+        )
+
+        assertEquals("必须用调用方给的 id", "conv-ui-1", created.id)
+        assertEquals("手机上起的", created.title)
+
+        // 立刻查得到（离线渲染列表靠它）
+        val listed = store.listConversations()
+        assertTrue("建完要能在列表里查到：${listed.map { it.id }}", listed.any { it.id == "conv-ui-1" })
+        assertEquals("m1", store.getConversation("conv-ui-1")!!.modelId)
+
+        // 进 outbox：等桌面在线时由 /api/sync/push 上行（幂等靠 UUID 主键）
+        val pending = store.pendingOutbox()
+        assertTrue("本地建的会话必须排队等上行，否则桌面永远看不到", pending.size > before)
+        assertTrue(
+            "outbox 里要有一条指向这条会话：${pending.map { it.kind to it.refId }}",
+            pending.any { it.kind == OutboxKind.CONVERSATION && it.refId == "conv-ui-1" },
+        )
+
+        // 同一个 id 建两次要报错（主键冲突），**不许静默覆盖** ——
+        // 静默覆盖会把用户正在写的那条会话连标题一起改掉
+        var threw = false
+        try {
+            store.createConversation(id = "conv-ui-1", title = "覆盖试试")
+        } catch (e: Throwable) {
+            threw = true
+        }
+        assertTrue("重复 id 建会话必须报错，不许静默覆盖", threw)
+        assertEquals("标题不该被改掉", "手机上起的", store.getConversation("conv-ui-1")!!.title)
+    }
 }

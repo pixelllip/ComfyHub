@@ -195,6 +195,29 @@ class LocalHarnessRunEventSource implements RunEventSource {
   Future<List<Map<String, dynamic>>> listConversations() async =>
       _list(await _method.invokeMethod<String>('listConversations') ?? '[]');
 
+  /// 在**本地库**建一条会话（M3.2 ②：离线也要能开会话）。
+  ///
+  /// `conversationId` 由界面生成并传下去（理由同 `startRun` 的那一对消息 id：
+  /// 界面要拿同一个 id 去认自己插的那条会话）。
+  ///
+  /// ⚠ 本地建的会话会**进 `_outbox`**（`HarnessStore.createConversation` 默认 `queue=true`），
+  /// 等桌面在线时由 `/api/sync/push` 上行 —— 这正是 M4 要的那种"手机产生的会话在桌面可见"。
+  Future<Map<String, dynamic>> createConversation({
+    required String conversationId,
+    required String title,
+    String? providerId,
+    String? modelId,
+    String? promptVersion,
+  }) async =>
+      _map(await _method.invokeMethod<String>('createConversation', {
+        'conversationId': conversationId,
+        'title': title,
+        'providerId': ?providerId,
+        'modelId': ?modelId,
+        'promptVersion': ?promptVersion,
+      }) ??
+      '{}');
+
   Future<List<Map<String, dynamic>>> listMessages(String conversationId) async =>
       _list(await _method.invokeMethod<String>('listMessages', {'conversationId': conversationId}) ?? '[]');
 

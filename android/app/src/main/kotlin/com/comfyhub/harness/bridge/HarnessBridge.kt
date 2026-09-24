@@ -143,6 +143,27 @@ class HarnessBridge(private val context: Context) :
                     ) ?: false,
                 )
                 "listConversations" -> result.success(listConversations())
+                "createConversation" -> {
+                    val s = ensureInitialized()
+                    val id = call.argument<String>("conversationId")
+                        ?: com.comfyhub.harness.store.Timestamps.newId()
+                    val record = s.createConversation(
+                        id = id,
+                        title = call.argument<String>("title") ?: "新对话",
+                        providerId = call.argument<String>("providerId"),
+                        modelId = call.argument<String>("modelId"),
+                        promptVersion = call.argument<String>("promptVersion") ?: "v1",
+                    )
+                    result.success(
+                        buildJsonObject {
+                            put("id", record.id)
+                            put("title", record.title)
+                            put("providerId", record.providerId)
+                            put("modelId", record.modelId)
+                            put("updatedAt", record.updatedAt)
+                        }.toString(),
+                    )
+                }
                 "listMessages" -> result.success(listMessages(call.argument<String>("conversationId").orEmpty()))
                 "listParts" -> result.success(listParts(call.argument<String>("messageId").orEmpty()))
                 "conversationTitle" -> result.success(
