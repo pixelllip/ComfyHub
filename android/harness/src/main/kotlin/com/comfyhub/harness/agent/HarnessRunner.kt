@@ -62,6 +62,30 @@ data class RunRequest(
     val reasoningEffort: ReasoningEffort? = null,
     val maxSteps: Int = 8,
     val maxContinuations: Int = 2,
+    /**
+     * 调用方（平台通道 / 界面）**自己指定**的消息主键。
+     *
+     * 为什么要有这两个字段：界面在"发出请求"的同一刻就会乐观插一条用户气泡 + 一条空的
+     * 助手流式气泡，随后的 `text.delta` 事件要靠 `messageId` **找到**那条气泡往上写。
+     * 所以这里必须用调用方给的 id 落库，否则界面手里那个 id 与库里对不上，
+     * 表现是"事件一条不少，界面上却一个字都不长"。
+     * 传 null 就自己生成（单测与"不用乐观渲染"的调用方）。
+     */
+    val userMessageId: String? = null,
+    val assistantMessageId: String? = null,
+)
+
+/**
+ * [HarnessRunner.start] 的返回值：一次 Run 的**全部句柄**。
+ *
+ * 只给 `runId` 是不够的 —— 界面还要拿 [assistantMessageId] 去订阅 / 关联重试
+ * （桌面侧对应 `AiRunStart.assistantMessageId`），拿 [userMessageId] 去认自己乐观插的那条。
+ */
+data class StartedRun(
+    val runId: String,
+    val conversationId: String,
+    val userMessageId: String,
+    val assistantMessageId: String,
 )
 
 /** 一次 Run 的结果摘要（给平台通道回话用）。 */
@@ -112,11 +136,23 @@ class HarnessRunner(
     //  生命周期
     // -----------------------------------------------------------------------
 
-    /** 后台起一次 Run（平台通道用这个；事件从 [bus] 走 EventChannel）。 */
-    fun start(request: RunRequest): String {
+    /**
+     * 后台起一次 Run（平台通道用这个；事件从 [bus] 走 EventChannel）。
+     *
+     * 返回 [StartedRun]（不是光一个 `runId`）：界面在同一刻就要用
+     * `conversationId` + 两个 `messageId` 去认自己乐观插的那些气泡。
+     * 建库与 `bus.open` 都在返回**之前**完成 —— 所以 Dart 拿到返回值再订阅，
+     * 一定来得及收到第一个事件。
+     */
+    fun start(request: RunRequest): StartedRun {
         val prepared = prepare(request)
         jobs[prepared.runId] = scope.launch { execute(prepared) }
-        return prepared.runId
+        return StartedRun(
+            runId = prepared.runId,
+            conversationId = prepared.request.conversationId,
+            userMessageId = prepared.userMessageId,
+            assistantMessageId = prepared.assistantMessageId,
+        )
     }
 
     /**
@@ -151,7 +187,12 @@ class HarnessRunner(
     //  建会话 / 建 Run（写库与事件都在这里，execute 只管跑）
     // -----------------------------------------------------------------------
 
-    private data class Prepared(val runId: String, val request: RunRequest, val assistantMessageId: String)
+    private data class Prepared(
+        val runId: String,
+        val request: RunRequest,
+        val userMessageId: String,
+        val assistantMessageId: String,
+    )
 
     private fun prepare(request: RunRequest): Prepared {
         // 会话不存在就按**调用方给的 id** 建（不是另起一个，否则界面拿的 id 与库里对不上）
@@ -163,8 +204,14 @@ class HarnessRunner(
                 promptVersion = request.kit.promptVersion,
             )
 
-        // 用户轮先落库（它是历史的一部分），再建助手占位（状态 streaming）
-        store.appendMessage(conversation.id, "user", request.userText)
+        // 用户轮先落库（它是历史的一部分），再建助手占位（状态 streaming）。
+        // 两条都用**调用方给的 id**（给了的话）：界面已经按这两个 id 插好气泡了
+        val user = store.appendMessage(
+            conversationId = conversation.id,
+            role = "user",
+            text = request.userText,
+            id = request.userMessageId ?: Timestamps.newId(),
+        )
         val assistant = store.appendMessage(
             conversationId = conversation.id,
             role = "assistant",
@@ -172,12 +219,13 @@ class HarnessRunner(
             status = MessageStatus.STREAMING,
             providerId = request.providerId,
             modelId = request.modelId,
+            id = request.assistantMessageId ?: Timestamps.newId(),
         )
         val run = store.createRun(
             conversationId = conversation.id,
             providerId = request.providerId,
             modelId = request.modelId,
-            userMessageId = null,
+            userMessageId = user.id,
             assistantMessageId = assistant.id,
             promptVersion = request.kit.promptVersion,
             reasoningEffort = request.reasoningEffort?.wire,
@@ -186,7 +234,7 @@ class HarnessRunner(
         // 平台通道那侧 `startRun` 一返回，Dart 立刻就会订阅这个 runId ——
         // 若总线还没开，那次订阅会落到"从库里回放"的分支上，于是**一个实时事件都收不到**。
         bus.open(run.id)
-        return Prepared(run.id, request.copy(conversationId = conversation.id), assistant.id)
+        return Prepared(run.id, request.copy(conversationId = conversation.id), user.id, assistant.id)
     }
 
     // -----------------------------------------------------------------------

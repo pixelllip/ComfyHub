@@ -284,16 +284,22 @@ class HarnessBridge(private val context: Context) :
             userText = call.argument<String>("text").orEmpty(),
             reasoningEffort = ReasoningEffort.parse(call.argument<String>("reasoningEffort")),
             maxSteps = call.argument<Int>("maxSteps") ?: 8,
+            // 界面自己生成的 id：它已经按这两个 id 插好气泡了，库里必须用同一对
+            userMessageId = call.argument<String>("userMessageId"),
+            assistantMessageId = call.argument<String>("assistantMessageId"),
         )
-        val runId = runner?.start(request)
+        val started = runner?.start(request)
             ?: run {
                 result.error("NOT_INITIALIZED", "harness 还没初始化", null)
                 return
             }
         result.success(
             buildJsonObject {
-                put("runId", runId)
-                put("conversationId", request.conversationId)
+                put("runId", started.runId)
+                put("conversationId", started.conversationId)
+                // 这两个是 M3.2 补的：只回 runId 的话，界面手里那两条乐观气泡找不到主人
+                put("userMessageId", started.userMessageId)
+                put("assistantMessageId", started.assistantMessageId)
                 put("kitVersion", kit.kitVersion)
                 put("promptVersion", kit.promptVersion)
             }.toString(),

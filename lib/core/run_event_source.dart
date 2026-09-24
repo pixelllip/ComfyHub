@@ -19,6 +19,8 @@ class RunStartRequest {
     this.credentialRef,
     this.reasoningEffort,
     this.maxSteps,
+    this.userMessageId,
+    this.assistantMessageId,
   });
 
   final String conversationId;
@@ -32,6 +34,17 @@ class RunStartRequest {
   final String? credentialRef;
   final String? reasoningEffort;
   final int? maxSteps;
+
+  /// 调用方**自己生成**的会话 / 消息主键（M3.2）。
+  ///
+  /// 为什么要由界面给：界面在"发出请求"的同一刻就乐观插好一条用户气泡 + 一条空的助手
+  /// 流式气泡，随后靠事件里的 `messageId` 找到那条气泡往上写字。若本地 harness 自己另起
+  /// UUID，界面手里那个 id 就永远对不上库里那条 —— 表现是**事件一条不少、界面上却一个
+  /// 字都不长**，而且两端都不报错，极难查。
+  ///
+  /// 远端（桌面）后端自己生成这两个 id 并**回传**，所以走远端时这几个字段留 null。
+  final String? userMessageId;
+  final String? assistantMessageId;
 }
 
 /// 一次 Run 的发起结果。
@@ -39,12 +52,21 @@ class RunHandles {
   const RunHandles({
     required this.runId,
     required this.conversationId,
+    this.userMessageId,
+    this.assistantMessageId,
     this.kitVersion,
     this.promptVersion,
   });
 
   final String runId;
   final String conversationId;
+
+  /// 用户消息 / 助手消息的主键。
+  ///
+  /// 远端：后端生成并回传；本地 harness：**就是请求里传进去的那一对**（回显）。
+  /// 界面用它认自己乐观插的那两条气泡，也用它把"助手消息 → Run"记下来供重试用。
+  final String? userMessageId;
+  final String? assistantMessageId;
   final String? kitVersion;
   final String? promptVersion;
 }
@@ -93,7 +115,13 @@ class RemoteRunEventSource implements RunEventSource {
       modelId: request.modelId ?? '',
       reasoningEffort: request.reasoningEffort,
     );
-    return RunHandles(runId: run.runId, conversationId: request.conversationId);
+    // 远端这两个 id 由后端生成：**回传什么就用什么**（不要拿请求里那份，远端才是真源）
+    return RunHandles(
+      runId: run.runId,
+      conversationId: request.conversationId,
+      userMessageId: run.userMessageId,
+      assistantMessageId: run.assistantMessageId,
+    );
   }
 
   @override
@@ -206,11 +234,18 @@ class LocalHarnessRunEventSource implements RunEventSource {
       'credentialRef': ?request.credentialRef,
       'reasoningEffort': ?request.reasoningEffort,
       'maxSteps': ?request.maxSteps,
+      // 界面生成的一对 id 传下去：harness 按它们落库，**回显**回来给界面认气泡
+      'userMessageId': ?request.userMessageId,
+      'assistantMessageId': ?request.assistantMessageId,
     });
     final map = _map(raw ?? '{}');
     return RunHandles(
       runId: (map['runId'] ?? '').toString(),
       conversationId: (map['conversationId'] ?? request.conversationId).toString(),
+      // harness 回显的就是库里那条；拿不到才回落到本地那份（两者应当相等，
+      // 不相等说明桥没把 id 透下去 —— 那时界面会画不出字，所以别在这里悄悄兜住）
+      userMessageId: (map['userMessageId'] ?? request.userMessageId)?.toString(),
+      assistantMessageId: (map['assistantMessageId'] ?? request.assistantMessageId)?.toString(),
       kitVersion: map['kitVersion']?.toString(),
       promptVersion: map['promptVersion']?.toString(),
     );

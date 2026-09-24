@@ -373,7 +373,8 @@ class HarnessRunnerTest {
         }
         val bus = com.comfyhub.harness.event.RunEventBus()
         val runner = runner(transport, bus)
-        val runId = runner.start(request())
+        val handles = runner.start(request())
+        val runId = handles.runId
         assertTrue("等 Run 真的开始流", started.await(5, TimeUnit.SECONDS))
         assertTrue(runner.cancel(runId))
         blockForever.countDown()
@@ -503,5 +504,71 @@ class HarnessRunnerTest {
         assertEquals(RunStatus.FAILED, outcome.status)
         assertEquals(UpstreamErrorCode.MISSING_CREDENTIAL, outcome.errorCode)
         assertNotNull(store.getMessage(outcome.assistantMessageId))
+    }
+
+    // --- 调用方给的 id（M3.2：界面乐观插入的那两条气泡） --------------------
+
+    /**
+     * **界面手里的 id 必须就是库里那条**。
+     *
+     * 界面在发出请求的同一刻就按自己生成的 id 插好"用户气泡 + 空助手气泡"，
+     * 随后靠 `text.delta` 的 `messageId` 找到那条气泡往上写字。
+     * 如果 harness 自己另起 UUID，界面那个 id 永远查不到那条消息 ——
+     * 表现是**事件一条不少、界面上却一个字都不长**，而且很难查（两边都没报错）。
+     */
+    @Test
+    fun `调用方给的 userMessageId 与 assistantMessageId 就是库里那条`() = runBlocking {
+        val transport = ScriptedTransport()
+        transport.script(*(sse(textFrame("好"), doneFrame("stop"))).toTypedArray())
+        val bus = com.comfyhub.harness.event.RunEventBus()
+        val runner = runner(transport, bus)
+
+        val started = runner.start(
+            request().copy(
+                conversationId = "c-opt",
+                userMessageId = "ui-user-1",
+                assistantMessageId = "ui-assistant-1",
+            ),
+        )
+
+        // 返回值（桥把它交给 Dart）与传进去的一模一样
+        assertEquals("ui-user-1", started.userMessageId)
+        assertEquals("ui-assistant-1", started.assistantMessageId)
+        assertEquals("c-opt", started.conversationId)
+
+        // 库里也真的是这两个 id，而且**不是**新生成的（查得到 = 界面认得）
+        val user = store.getMessage("ui-user-1")
+        assertNotNull("库里必须有调用方那个用户消息 id", user)
+        assertEquals("user", user!!.role)
+        assertEquals("你好", user.text)
+        assertNotNull("库里必须有调用方那个助手消息 id", store.getMessage("ui-assistant-1"))
+
+        // Run 的两个外键也要指向这一对（重试/恢复靠它找回消息）
+        val deadline = System.currentTimeMillis() + 5_000
+        while (store.getRun(started.runId)!!.status == RunStatus.RUNNING && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20)
+        }
+        val run = store.getRun(started.runId)!!
+        assertEquals("ui-user-1", run.userMessageId)
+        assertEquals("ui-assistant-1", run.assistantMessageId)
+
+        // 事件流里的 messageId 也必须是同一个 —— 界面就是拿它找气泡的
+        val startedEvent = events(bus, started.runId).first { it.type == RunEventType.MESSAGE_STARTED }
+        assertEquals("ui-assistant-1", startedEvent.payload["messageId"]?.toString()?.trim('"'))
+    }
+
+    /** 不给 id 时照旧自己生成（单测与"不做乐观渲染"的调用方走这条）。 */
+    @Test
+    fun `不给 id 时自己生成一对，且两条不重复`() = runBlocking {
+        val transport = ScriptedTransport()
+        transport.script(*(sse(textFrame("好"), doneFrame("stop"))).toTypedArray())
+        val handles = runner(transport).start(request().copy(conversationId = "c-gen"))
+        assertTrue(handles.userMessageId.isNotBlank())
+        assertTrue(handles.assistantMessageId.isNotBlank())
+        assertTrue(
+            "用户消息与助手消息不能撞同一个 id",
+            handles.userMessageId != handles.assistantMessageId,
+        )
+        assertNotNull(store.getMessage(handles.userMessageId))
     }
 }

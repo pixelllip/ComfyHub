@@ -127,10 +127,18 @@ class HarnessStore(private val session: SqlSession) {
         providerId: String? = null,
         modelId: String? = null,
         queue: Boolean = true,
+        /**
+         * 显式主键。默认自己生成 UUID。
+         *
+         * ⚠ 与 [createConversation] 的 `id` 同一个理由：界面在发出请求的**同一刻**就会
+         * 乐观插一条占位气泡（它得先有 id 才能被流式增量找到）。如果这里另起一个 UUID，
+         * 界面手里那个 id 就永远查不到这条消息 —— 表现是"事件都在，界面上却不长字"。
+         */
+        id: String = Timestamps.newId(),
     ): MessageRecord {
         val now = Timestamps.now()
         val record = MessageRecord(
-            id = Timestamps.newId(),
+            id = id,
             conversationId = conversationId,
             seq = nextMessageSeq(conversationId),
             role = role,
