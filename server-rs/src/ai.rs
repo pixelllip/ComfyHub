@@ -53,13 +53,17 @@ pub struct AiProviderDto {
     /// 这条就是这么被自己的用例抓出来的（断言精确键集合就是为了它）。
     #[serde(rename = "baseURL")]
     pub base_url: String,
+    /// Kotlin 是 `credentialRef: String? = null` → 为 null 时**键不出现**（`explicitNulls = false`）
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_ref: Option<String>,
     pub endpoint_trust: String,
     pub enabled: bool,
     pub revision: i64,
     /// 只写凭据的状态，**绝不包含值**（AIH-012）
     pub credential: CredentialStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
 }
 

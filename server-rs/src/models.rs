@@ -6,22 +6,41 @@
 //!
 //! `#[serde(rename_all = "camelCase")]` 负责把 snake_case 的 Rust 字段映射过去；
 //! 每个结构体都有一条"键集合"用例（见 `tests/api_test.rs`），改字段会红。
+//!
+//! # ⚠ 可空字段：**不是 `null`，而是"这个键不出现"**（2026-09-24）
+//!
+//! Kotlin 的 `AppJson` 是 `explicitNulls = false`（`server/src/main/kotlin/com/comfyhub/Json.kt:12`），
+//! 所以 `TagDto.category == null` 时发出去的是 `{...}`，**里面没有 `category` 这个键**。
+//! 真库副本上实测（Kotlin 8090 vs Rust 8091，同一份数据）：
+//! `GET /api/tags` → Kotlin `{"id":18,"name":"ComfyUI","useCount":44,"createdAt":"…"}`，
+//! Rust 当时是 `{…,"normalized":"comfyui","category":null,"color":null,"description":null,…}`。
+//!
+//! 因此**每一个对应 Kotlin 可空字段的 `Option<T>` 都要带** `skip_serializing_if = "Option::is_none"`。
+//! 防线是 `tests/shape_lint.rs`（源码扫描，漏了直接红）——加新 DTO（例如 `/api/ai/models`）时照做。
+//!
+//! 顺带一条 2026-09-24 的更正：`TagDto` 曾经多写了一个 **`normalized`** 字段 ——
+//! Kotlin 的 `TagDto`（`Models.kt:11`）与 `TagRepo.mapTag` 里**根本没有它**，
+//! Dart 的 `Tag.fromJson` 也不读。多一个键和少一个键一样，都是"与 Kotlin 不一致"。
 
 use rusqlite::Row;
 use serde::Serialize;
 
-/// 标签（对应 `TagRepo.list` 的输出）。
+/// 标签（对应 `TagRepo.mapTag` 的输出）。
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TagDto {
     pub id: i64,
     pub name: String,
-    pub normalized: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub use_count: i64,
-    pub created_at: String,
+    /// Kotlin 是 `createdAt: String? = null`：库里为 NULL 时**键不出现**（不是 `null`）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 /// 提示词（对应 `PromptRepo.get` / `search` 的 `items[]`）。
@@ -35,26 +54,41 @@ pub struct PromptDto {
     pub title: String,
     pub kind: String,
     pub positive_prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub negative_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub checkpoint: Option<String>,
     pub loras: Vec<LoraRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sampler: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scheduler: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub steps: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cfg_scale: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub batch_size: Option<i64>,
     pub extra_params: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     pub favorite: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source_ref: Option<String>,
     /// 库里存的是整份 `workflow_json`；接口**只给"有没有"**（整份在工作流弹窗里单独取）
     pub has_workflow: bool,
-    pub created_at: String,
-    pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
     pub tags: Vec<TagDto>,
     pub media_count: i64,
 }
@@ -120,7 +154,6 @@ pub fn tag_from_row(row: &Row<'_>) -> rusqlite::Result<TagDto> {
     Ok(TagDto {
         id: row.get("id")?,
         name: row.get("name")?,
-        normalized: row.get("normalized")?,
         category: row.get("category")?,
         color: row.get("color")?,
         description: row.get("description")?,
@@ -165,32 +198,48 @@ pub fn parse_json_object(raw: Option<&str>) -> serde_json::Value {
 #[serde(rename_all = "camelCase")]
 pub struct MediaDto {
     pub id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_id: Option<i64>,
     pub kind: String,
     pub title: String,
     pub original_name: String,
     pub stored_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     pub size_bytes: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     pub favorite: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     /// NSFW 标记：**只影响预览图打不打码**（默认 false = 不糊）
     pub nsfw: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
     pub has_workflow: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_positive: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_negative: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub checkpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<i64>,
     pub prompt_tags: Vec<String>,
     pub file_url: String,
+    /// Kotlin 是 `thumbUrl: String? = null`；这里**总是算得出来**，所以键总是在（值不会是 null）
     pub thumb_url: String,
 }
 

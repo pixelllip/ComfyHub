@@ -123,6 +123,8 @@ pub struct UploadResult {
     pub items: Vec<MediaDto>,
     pub duplicates: Vec<DuplicateInfo>,
     pub failed: Vec<FailedInfo>,
+    /// Kotlin `UploadResultDto.promptId: Long? = null` → 请求里没带 promptId 时**键不出现**
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_id: Option<i64>,
 }
 

@@ -34,7 +34,7 @@ pub struct CaptureConfig {
     pub enabled: bool,
     #[serde(default = "default_comfy_url")]
     pub comfy_url: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
     #[serde(default = "default_poll_seconds")]
     pub poll_seconds: i64,
@@ -406,10 +406,20 @@ mod tests {
     fn config_round_trips_with_camel_case_keys() {
         let json = serde_json::to_string(&CaptureConfig::default()).unwrap();
         // 前端读的是驼峰键（Kotlin 的 @Serializable 也是驼峰默认名）
-        for key in ["comfyUrl", "outputDir", "pollSeconds", "autoTag", "maxPerPoll", "downloadFallback"] {
+        for key in ["enabled", "comfyUrl", "pollSeconds", "autoTag", "maxPerPoll", "downloadFallback"] {
             assert!(json.contains(key), "缺键 {key}：{json}");
         }
+        // ⚠ `outputDir` 是 `String?`：没配时**键不出现**（Kotlin `explicitNulls = false`），
+        // 配了才出现 —— 与真库副本上两个实现的对照结果一致。
+        assert!(!json.contains("outputDir"), "没配输出目录时不该有 outputDir 键：{json}");
+        let with_dir = CaptureConfig { output_dir: Some("D:\\out".into()), ..CaptureConfig::default() };
+        let json = serde_json::to_string(&with_dir).unwrap();
+        assert!(json.contains("outputDir"), "配了就要有：{json}");
+
         let back: CaptureConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, with_dir);
+        // 缺 `outputDir` 键也要能解析回 None（`#[serde(default)]`，手机/老版本客户端都认）
+        let back: CaptureConfig = serde_json::from_str(&serde_json::to_string(&CaptureConfig::default()).unwrap()).unwrap();
         assert_eq!(back, CaptureConfig::default());
     }
 

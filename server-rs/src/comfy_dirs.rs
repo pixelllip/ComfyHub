@@ -49,6 +49,7 @@ pub struct WorkflowFile {
     pub name: String,
     pub path: String,
     pub bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub modified_at: Option<String>,
     /// `ui` = 界面格式（nodes/links）；`api` =「导出（API）」的节点图；`unknown` = 读不出来
     pub format: String,
@@ -221,16 +222,21 @@ fn env_path(name: &str) -> Option<PathBuf> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComfyLocation {
-    /// 探测到的 ComfyUI 根目录（找不到时为 null）。
+    /// 探测到的 ComfyUI 根目录（找不到时为 null → **键不出现**，Kotlin `explicitNulls = false`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub home: Option<String>,
     /// 大概率能直接读产物的输出目录（`<home>\output`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
     /// 从哪里找到的（给用户看的一句话）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     /// 当前设置里**已经**生效的输出目录（没设置时为 null）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub configured_output_dir: Option<String>,
     /// 探测到的候选（含被否决的原因），排错用。
     pub candidates: Vec<ComfyCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
@@ -242,6 +248,7 @@ pub struct ComfyCandidate {
     /// 这个目录看起来是不是一个 ComfyUI 安装（有特征文件）。
     pub looks_like_comfy: bool,
     /// 判定依据 / 否决原因（只读展示）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 

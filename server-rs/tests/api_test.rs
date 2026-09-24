@@ -180,13 +180,20 @@ async fn tags_use_the_same_keys_as_the_kotlin_server() {
     assert_eq!(items.len(), 2);
     // popular：使用次数降序
     assert_eq!(items[0]["name"], "国风");
+    // 键集合**逐条照 Kotlin 算**（`explicitNulls = false`，真库副本上实测过）：
+    //  · `normalized` **不存在** —— Kotlin 的 `TagDto`（`Models.kt:11`）里根本没这个字段；
+    //  · `color` / `description` 在库里是 NULL → **键不出现**（不是 `"color": null`）。
     assert_eq!(
         keys(&items[0]),
-        vec![
-            "category", "color", "createdAt", "description", "id", "name", "normalized", "useCount"
-        ],
-        "Tag 的键必须与 Kotlin / Dart 一致（Dart 读 useCount / createdAt）"
+        vec!["category", "createdAt", "id", "name", "useCount"],
+        "国风那条 color/description 是 NULL，键就该不出现（Kotlin 实测形状）"
     );
+    assert_eq!(
+        keys(&items[1]),
+        vec!["category", "color", "createdAt", "id", "name", "useCount"],
+        "赛博朋克那条有 color，于是正好多这一个键"
+    );
+    assert!(!items[0].as_object().unwrap().contains_key("color"), "NULL 不等于 null");
     assert_eq!(items[0]["useCount"], 9);
 }
 
@@ -228,16 +235,22 @@ async fn prompts_paged_envelope_matches_dart_paged() {
 async fn prompt_object_has_every_key_dart_reads() {
     let (status, body) = get_json(app(), "/api/prompts/10").await;
     assert_eq!(status, StatusCode::OK);
+    // 这一条（prompt 10）**填满了**大部分字段，所以键几乎都在；NULL 的那些键不出现（Kotlin 形状）
     assert_eq!(
         keys(&body),
         vec![
-            "batchSize", "cfgScale", "checkpoint", "createdAt", "extraParams", "favorite",
-            "hasWorkflow", "height", "id", "kind", "loras", "mediaCount", "negativePrompt",
-            "notes", "positivePrompt", "sampler", "scheduler", "seed", "source", "sourceRef",
-            "steps", "tags", "title", "updatedAt", "width",
+            "cfgScale", "checkpoint", "createdAt", "extraParams", "favorite", "hasWorkflow", "id",
+            "kind", "loras", "mediaCount", "negativePrompt", "positivePrompt", "seed", "source",
+            "tags", "title", "updatedAt",
         ],
-        "少一个键 = 界面上少一块内容"
+        "少一个键 = 界面上少一块内容；多一个键 = 与 Kotlin 不一致"
     );
+    for absent in ["sampler", "scheduler", "steps", "width", "height", "batchSize", "notes", "sourceRef"] {
+        assert!(
+            !body.as_object().unwrap().contains_key(absent),
+            "`{absent}` 在库里是 NULL，Kotlin 那边**整个键都不发**（不是 null）：{body}"
+        );
+    }
     assert_eq!(body["positivePrompt"], "1girl, cyberpunk");
     assert_eq!(body["cfgScale"], 3.5);
     assert_eq!(body["favorite"], true, "favorite 是布尔（库里是 0/1）");
@@ -247,6 +260,18 @@ async fn prompt_object_has_every_key_dart_reads() {
     assert_eq!(body["extraParams"], serde_json::json!({}), "NULL 当空对象");
     assert_eq!(body["tags"][0]["name"], "赛博朋克");
     assert_eq!(body["mediaCount"], 1);
+
+    // prompt 11 几乎全空：键集合缩到最小 —— 这条专门盯"NULL 字段不许冒出来"
+    let (status, bare) = get_json(app(), "/api/prompts/11").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        keys(&bare),
+        vec![
+            "createdAt", "extraParams", "favorite", "hasWorkflow", "id", "kind", "loras",
+            "mediaCount", "positivePrompt", "source", "sourceRef", "tags", "title", "updatedAt",
+        ],
+        "全空的那条只剩这些键：{bare}"
+    );
 }
 
 #[tokio::test]
@@ -784,8 +809,8 @@ async fn capture_locate_reports_the_home_and_never_writes_on_its_own() {
     shape.sort();
     assert_eq!(
         shape,
-        vec!["candidates", "configuredOutputDir", "home", "note", "outputDir", "source"],
-        "与 Kotlin `ComfyLocation` 同形"
+        vec!["candidates", "home", "outputDir", "source"],
+        "与 Kotlin `ComfyLocation` 同形（`configuredOutputDir` / `note` 是 null → 键不出现）"
     );
     // 夹具把 ComfyUI 摆在项目根下的 `comfyui`（源码形态：main.py + comfy/）
     assert_eq!(body["home"].as_str().unwrap(), home.to_string_lossy(), "body={body}");
@@ -794,7 +819,10 @@ async fn capture_locate_reports_the_home_and_never_writes_on_its_own() {
         home.join("output").to_string_lossy(),
         "输出目录 = <home>\\output（还没跑过 ComfyUI 也照样给）"
     );
-    assert_eq!(body["configuredOutputDir"], Value::Null, "没配过就是 null，不编一个");
+    assert!(
+        !body.as_object().unwrap().contains_key("configuredOutputDir"),
+        "没配过就是 null → 这个键不出现，也不编一个：{body}"
+    );
     // 候选里记了"项目内的 comfyui 目录"这一条，且带判定依据（用户排错要看）
     let candidates = body["candidates"].as_array().unwrap();
     let hit = candidates
@@ -806,7 +834,10 @@ async fn capture_locate_reports_the_home_and_never_writes_on_its_own() {
 
     // **只读**：探测一遍之后配置里不该多出任何东西
     let (_, config) = get_json(router_for(state), "/api/capture/config").await;
-    assert_eq!(config["outputDir"], Value::Null, "探测不许自动生效（要用户点「使用这个目录」）");
+    assert!(
+        !config.as_object().unwrap().contains_key("outputDir"),
+        "探测不许自动生效（要用户点「使用这个目录」）；没配时 outputDir 键也不出现：{config}"
+    );
 }
 
 #[tokio::test]
@@ -934,13 +965,20 @@ async fn media_list_uses_the_same_keys_and_filters() {
     assert_eq!(
         keys(item),
         vec![
-            "checkpoint", "createdAt", "durationMs", "favorite", "fileUrl", "hasWorkflow", "height",
-            "id", "kind", "mimeType", "notes", "nsfw", "originalName", "promptId", "promptNegative",
-            "promptPositive", "promptTags", "promptTitle", "seed", "sha256", "sizeBytes", "source",
-            "storedName", "thumbUrl", "title", "updatedAt", "width",
+            "checkpoint", "createdAt", "favorite", "fileUrl", "hasWorkflow", "id", "kind", "nsfw",
+            "originalName", "promptId", "promptNegative", "promptPositive", "promptTags",
+            "promptTitle", "seed", "sizeBytes", "source", "storedName", "thumbUrl", "title",
+            "updatedAt",
         ],
         "少一个键 = 画廊里少一块内容（缩略图 URL 也在这里）"
     );
+    // 夹具里这些列是 NULL → Kotlin（`explicitNulls = false`）**整个键都不发**
+    for absent in ["mimeType", "width", "height", "durationMs", "sha256", "notes"] {
+        assert!(
+            !item.as_object().unwrap().contains_key(absent),
+            "`{absent}` 是 NULL 就不该有这个键（不是 null）：{item}"
+        );
+    }
     // 关联提示词摘要是直出的（列表不必二次请求）
     assert_eq!(item["promptTitle"], "赛博朋克少女");
     assert_eq!(item["promptTags"], serde_json::json!(["赛博朋克"]), "产物自身标签 ∪ 提示词标签");
@@ -1200,7 +1238,11 @@ async fn patch_media_updates_fields_and_rejects_empty_body() {
     )
     .await;
     assert_eq!(cleared.0, StatusCode::OK);
-    assert_eq!(cleared.1["promptId"], serde_json::Value::Null, "clearPrompt 必须真的置空");
+    assert!(
+        !cleared.1.as_object().unwrap().contains_key("promptId"),
+        "clearPrompt 必须真的置空；Kotlin 那边 null 就是**这个键不出现**：{}",
+        cleared.1
+    );
     assert_eq!(cleared.1["promptTags"], serde_json::json!([]), "解绑后标签也不该再带上提示词的");
 
     // 指向不存在的提示词 → 400（不是静默忽略）
@@ -1370,6 +1412,9 @@ async fn upload_stores_files_with_tags_and_dedupes_by_sha256() {
     assert_eq!(status, StatusCode::CREATED);
     assert!(body2["items"].as_array().unwrap().is_empty());
     assert_eq!(body2["duplicates"].as_array().unwrap().len(), 1);
+    // 这次没带 promptId → Kotlin（`promptId: Long? = null` + `explicitNulls = false`）那边
+    // **整个键都不出现**（上面那次带了 promptId=10，所以那次有）
+    assert_eq!(keys(&body2), vec!["duplicates", "failed", "items"], "body={body2}");
 }
 
 #[tokio::test]
@@ -1405,7 +1450,8 @@ async fn capture_config_round_trips_and_normalizes() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         keys(&body),
-        vec!["autoTag", "comfyUrl", "downloadFallback", "enabled", "maxPerPoll", "outputDir", "pollSeconds"]
+        vec!["autoTag", "comfyUrl", "downloadFallback", "enabled", "maxPerPoll", "pollSeconds"],
+        "没配过输出目录 → `outputDir` 这个键**根本不出现**（Kotlin 实测形状）：{body}"
     );
     assert_eq!(body["comfyUrl"], "http://127.0.0.1:8188", "库里没配过就是环境默认值");
     assert_eq!(body["autoTag"], "ComfyUI");
@@ -1429,7 +1475,10 @@ async fn capture_config_round_trips_and_normalizes() {
     .await;
     assert_eq!(status, StatusCode::OK, "body={saved}");
     assert_eq!(saved["comfyUrl"], "http://127.0.0.1:8188");
-    assert_eq!(saved["outputDir"], serde_json::Value::Null);
+    assert!(
+        !saved.as_object().unwrap().contains_key("outputDir"),
+        "空白目录归一化成 NULL → 键不出现（Kotlin `explicitNulls = false`）：{saved}"
+    );
     assert_eq!(saved["pollSeconds"], 600, "夹到上限：轮询太快会把 ComfyUI 问崩");
     assert_eq!(saved["maxPerPoll"], 1);
     assert_eq!(saved["comfyUrl"].as_str().unwrap().ends_with('/'), false);
