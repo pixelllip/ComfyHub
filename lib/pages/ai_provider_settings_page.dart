@@ -24,6 +24,11 @@ class AiProviderSettingsPage extends StatefulWidget {
   State<AiProviderSettingsPage> createState() => _AiProviderSettingsPageState();
 }
 
+/// 窄屏（手机）上这一页的三块内容 —— **一次只显示一块、各自整屏**。
+///
+/// 理由见 `_buildNarrow` 的注释：手机上不做上下分屏，点进去就是子界面。
+enum _NarrowPane { list, detail, maintenance }
+
 class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   late AiApiClient _api;
 
@@ -49,6 +54,13 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   AiCapabilityStatus? _cap;
   bool _capBusy = false;
   bool _probeBusy = false;
+
+  /// **窄屏（手机）当前显示哪一块**。桌面用不上它（那边是左右分栏）。
+  ///
+  /// 见 [`_buildNarrow`]：手机上"列表 / 详情 / 维护"各自整屏，一次只显示一块 ——
+  /// 用 `enum` 而不是 `Navigator.push`，是为了让三块共用同一份 `State`
+  /// （推成独立路由的话，父级 `setState` 不会重建它，卡片状态会停在推入那一刻）。
+  _NarrowPane _pane = _NarrowPane.list;
 
   @override
   void initState() {
@@ -255,6 +267,8 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final wide = MediaQuery.sizeOf(context).width >= 900;
+    // 手机上**不做上下分屏**（用户反馈原话："上下分屏难受，而且有些东西在手机上应该表现为子界面"）
+    if (!wide) return _buildNarrow(theme);
 
     final list = _ProviderList(
       providers: _providers,
@@ -309,95 +323,179 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       body: Column(
         children: [
           // 没有选中 Provider 时，错误也要看得见（新建失败最常发生在这种情况下）
-          if (_error != null)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              color: theme.colorScheme.errorContainer,
-              child: Row(
-                children: [
-                  Icon(Icons.error_outline, size: 18, color: theme.colorScheme.onErrorContainer),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _error!,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.onErrorContainer),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: '关闭',
-                    icon: const Icon(Icons.close, size: 16),
-                    onPressed: () => setState(() => _error = null),
-                  ),
-                ],
-              ),
-            ),
+          if (_error != null) _errorBanner(theme),
           // 内置模型目录（M6）：冻结副本 → 库里的对齐入口，永远可见
           //
-          // ⚠ 这两张卡（+ 上面的错误横幅）在手机上会占掉大半屏。它们**不是**弹性子项，
-          // 一旦加起来超过可用高度，外层的 `Column` 就没有余量可分 ——
-          // 真机验收（OnePlus 8T）实测直接画成 `BOTTOM OVERFLOWED BY 57 PIXELS`。
-          // 所以给这一坨一个**高度上限**并让它自己滚：屏幕小就在这块里滚，
-          // 而不是把整页挤爆（桌面窗口够高时上限用不到，布局与以前一样）。
-          //
-          // 2026-09-24 用户反馈（原话："手机端这个排版的实用性极差"）：这两张卡是
-          // **电脑上的维护工具**（内置目录是"补能力声明"、能力目录是"真发请求实测校准"，
-          // 后者还要花钱），手机上既用不到又挡住正事。所以**窄屏默认折叠**：
-          // 想用点开就有，不想用就一行字。桌面照旧平铺（那里的"维护"正是主用例）。
+          // ⚠ 这两张卡（+ 上面的错误横幅）在手机上会占掉大半屏。桌面窗口够高，
+          // 但为了不让"窗口被拖小"时也画到屏幕外，这里给一个**高度上限**并让它自己滚
+          // （真机验收实测过 `BOTTOM OVERFLOWED BY 57 PIXELS` 就是这么来的）。
           ConstrainedBox(
             constraints: BoxConstraints(
               maxHeight: MediaQuery.sizeOf(context).height * 0.42,
             ),
             child: SingleChildScrollView(
-              child: wide
-                  ? Column(
-                      children: [
-                        _builtinCard(),
-                        _capabilityCard(),
-                      ],
-                    )
-                  : ExpansionTile(
-                      // 折叠起来只有这一行：手机上先把地方让给 Provider 与模型列表
-                      leading: const Icon(Icons.tune, size: 20),
-                      title: const Text('模型目录维护（内置目录 / 能力目录）'),
-                      subtitle: const Text('电脑上的活：补模型能力声明、实测校准思考档位'),
-                      tilePadding: const EdgeInsets.symmetric(horizontal: 16),
-                      childrenPadding: const EdgeInsets.only(bottom: 8),
-                      children: [_builtinCard(), _capabilityCard()],
-                    ),
+              child: Column(
+                children: [
+                  _builtinCard(),
+                  _capabilityCard(),
+                ],
+              ),
             ),
           ),
           Expanded(
-            child: wide
-                ? Row(
-                    children: [
-                      SizedBox(width: 280, child: list),
-                      const VerticalDivider(width: 1),
-                      Expanded(child: detail),
-                    ],
-                  )
-                : LayoutBuilder(
-                    builder: (context, constraints) {
-                      // 手机上：上面是 Provider 列表、下面是选中那条的详情。
-                      // 列表高度按可用高度**取四成**（180~420 之间），不再写死 200 ——
-                      // 用户反馈"实用性极差"里有一部分就是被那个固定值挤的：
-                      // 屏幕高一点也不会多给列表一行，矮一点又会把详情压没。
-                      final listHeight =
-                          (constraints.maxHeight * 0.38).clamp(180.0, 420.0);
-                      return Column(
-                        children: [
-                          SizedBox(height: listHeight, child: list),
-                          const Divider(height: 1),
-                          Expanded(child: detail),
-                        ],
-                      );
-                    },
-                  ),
+            child: Row(
+              children: [
+                SizedBox(width: 280, child: list),
+                const VerticalDivider(width: 1),
+                Expanded(child: detail),
+              ],
+            ),
           ),
         ],
       ),
     );
+  }
+
+  /// 顶部那条错误横幅（窄屏三个面板共用同一份渲染）。
+  Widget _errorBanner(ThemeData theme) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        color: theme.colorScheme.errorContainer,
+        child: Row(
+          children: [
+            Icon(Icons.error_outline, size: 18, color: theme.colorScheme.onErrorContainer),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _error!,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onErrorContainer),
+              ),
+            ),
+            IconButton(
+              tooltip: '关闭',
+              icon: const Icon(Icons.close, size: 16),
+              onPressed: () => setState(() => _error = null),
+            ),
+          ],
+        ),
+      );
+
+  /// **手机上的这一页**：三块内容各自**整屏**，带返回箭头，一次只显示一块。
+  ///
+  /// 用户反馈原话："上下分屏难受，而且有些东西在手机上应该表现为子界面。"
+  /// 所以：
+  ///
+  /// | 面板 | 里面是什么 | 怎么进出 |
+  /// | --- | --- | --- |
+  /// | `list` | Provider 一览（主界面）+ 新建 | 点某一条 → `detail` |
+  /// | `detail` | 密钥 / 模型目录 / 连接测试 | 左上角返回 |
+  /// | `maintenance` | 「模型目录维护」那两张卡 | 右上角扳手 → 返回 |
+  ///
+  /// ⚠ **刻意不 `Navigator.push` 开新路由**：三块共用同一份 `State`
+  /// （`_builtin` / `_cap` / `_models` / `_error` 全在这里）。推成独立路由之后，
+  /// 父级 `setState` **不会**重建那个路由 —— 卡片上的状态会停在推入那一刻，
+  /// 表现是"东西明明加载完了却还显示空的、改完不回显"。一个 `enum` 就没有这个缝。
+  Widget _buildNarrow(ThemeData theme) {
+    // 详情面板的前提是"有一个选中的 Provider"：删掉之后自动退回列表
+    final pane = (_selected == null && _pane == _NarrowPane.detail) ? _NarrowPane.list : _pane;
+
+    switch (pane) {
+      case _NarrowPane.maintenance:
+        return Scaffold(
+          appBar: AppBar(
+            leading: IconButton(
+              tooltip: '返回',
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => setState(() => _pane = _NarrowPane.list),
+            ),
+            title: const Text('模型目录维护'),
+          ),
+          body: SingleChildScrollView(
+            child: Column(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Text('这两件事都在电脑上做更合适：给模型补能力声明、实测校准思考档位（后者会发真实请求、可能产生少量费用）。'),
+                ),
+                _builtinCard(),
+                _capabilityCard(),
+              ],
+            ),
+          ),
+        );
+      case _NarrowPane.detail:
+        final provider = _selected!;
+        return Scaffold(
+          appBar: AppBar(
+            leading: IconButton(
+              tooltip: '返回',
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => setState(() => _pane = _NarrowPane.list),
+            ),
+            title: Text(provider.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          body: Column(
+            children: [
+              if (_error != null) _errorBanner(theme),
+              Expanded(
+                child: _ProviderDetail(
+                  key: ValueKey(provider.id + provider.revision.toString()),
+                  api: _api,
+                  credentials: _credentials,
+                  provider: provider,
+                  models: _models,
+                  info: _info,
+                  error: _error,
+                  onChanged: (msg) async {
+                    setState(() => _info = msg);
+                    await _reload();
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      case _NarrowPane.list:
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('AI 模型与凭据'),
+            actions: [
+              IconButton(
+                tooltip: '模型目录维护',
+                icon: const Icon(Icons.tune),
+                onPressed: () => setState(() => _pane = _NarrowPane.maintenance),
+              ),
+              IconButton(
+                tooltip: 'AI 工具权限',
+                icon: const Icon(Icons.shield_outlined),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const AiToolsSettingsPage()),
+                ),
+              ),
+            ],
+          ),
+          body: Column(
+            children: [
+              if (_error != null) _errorBanner(theme),
+              Expanded(
+                child: _ProviderList(
+                  providers: _providers,
+                  selectedId: _selected?.id,
+                  loading: _loading,
+                  onSelect: (p) async {
+                    await _select(p);
+                    // 手机上点一条 = **进子界面**（不是"在下面换个详情"）
+                    if (mounted && p != null) setState(() => _pane = _NarrowPane.detail);
+                  },
+                  onCreate: _createProvider,
+                  onDelete: _deleteProvider,
+                ),
+              ),
+            ],
+          ),
+        );
+    }
   }
 
   /// 「内置模型目录」卡片（桌面平铺 / 手机折叠项里都用这一个，免得两处漂移）。
@@ -529,6 +627,10 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       });
       await _reload();
       await _select(created);
+      // 手机上建完直接进它的详情（不然用户还得在列表里再找一遍刚建的那条）
+      if (mounted && MediaQuery.sizeOf(context).width < 900) {
+        setState(() => _pane = _NarrowPane.detail);
+      }
       _notify('已创建 Provider「${created.displayName}」，接下来可以填 API Key 和模型目录。');
     } catch (e) {
       if (mounted) setState(() => _error = '$e');

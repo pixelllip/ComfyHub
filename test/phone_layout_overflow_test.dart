@@ -44,7 +44,37 @@ void main() {
         return http.Response(body, 404, headers: {'content-type': 'application/json'});
       });
 
-  Future<void> pumpProviderPage(WidgetTester tester, {required Size logical}) async {
+  /// 有**一条** Provider 的后端：用来验"手机上点一条 = 进子界面"。
+  MockClient oneProviderBackend() => MockClient((request) async {
+        Object body;
+        if (request.url.path == '/api/ai/providers') {
+          body = [
+            {
+              'id': 'command-code-goat',
+              'displayName': 'Command Code Goat',
+              'api': 'openai-completions',
+              'baseURL': 'https://api.commandcode.ai/provider/v1',
+              'credentialRef': 'COMMAND_CODE_GOAT',
+              'endpointTrust': 'public',
+              'enabled': true,
+              'revision': 1,
+              'credential': {'configured': true, 'source': 'keystore', 'writable': true},
+            }
+          ];
+        } else {
+          body = {'error': '接口不存在: ${request.url.path}'};
+          return http.Response(jsonEncode(body), 404,
+              headers: {'content-type': 'application/json'});
+        }
+        return http.Response(jsonEncode(body), 200,
+            headers: {'content-type': 'application/json'});
+      });
+
+  Future<void> pumpProviderPage(
+    WidgetTester tester, {
+    required Size logical,
+    MockClient? backend,
+  }) async {
     tester.view.physicalSize = Size(logical.width * 2.8125, logical.height * 2.8125);
     tester.view.devicePixelRatio = 2.8125;
     addTearDown(tester.view.resetPhysicalSize);
@@ -56,7 +86,7 @@ void main() {
         providers: [ChangeNotifierProvider<SettingsStore>.value(value: settings)],
         child: MaterialApp(
           home: AiProviderSettingsPage(
-            api: AiApiClient('http://127.0.0.1:8081', client: emptyBackend()),
+            api: AiApiClient('http://127.0.0.1:8081', client: backend ?? emptyBackend()),
           ),
         ),
       ),
@@ -67,27 +97,54 @@ void main() {
 
   testWidgets('手机尺寸下「AI 模型与凭据」页不溢出、也不抛异常（两道斜纹的防线）', (tester) async {
     await pumpProviderPage(tester, logical: const Size(384, 853));
-    // 页面的承重内容都在（没有因为溢出被裁掉）
+
+    // 手机上是**三级面板**（用户原话："上下分屏难受，而且有些东西在手机上应该表现为子界面"）：
+    // 一级 = Provider 列表，维护那两张卡**不在主屏上**，而是一个子界面。
     expect(find.text('AI 模型与凭据'), findsOneWidget);
+    expect(find.text('新建 Provider'), findsOneWidget);
+    expect(find.text('内置模型目录'), findsNothing, reason: '维护卡不该占主屏');
+    expect(find.text('模型能力目录'), findsNothing);
 
-    // 两张维护卡在手机上**折叠**（用户原话："手机端这个排版的实用性极差"）——
-    // 它们是电脑上的活（补能力声明 / 实测校准，后者还花钱），手机上只留一行入口。
-    expect(find.text('模型目录维护（内置目录 / 能力目录）'), findsOneWidget);
-    expect(find.text('内置模型目录'), findsNothing, reason: '折叠时不渲染，把地方让给 Provider 与模型列表');
-
-    // 展开之后照样能用，而且展开态**也不许溢出**（那道 BOTTOM OVERFLOW 就是它们顶出来的）
-    await tester.tap(find.text('模型目录维护（内置目录 / 能力目录）'));
+    // 右上角扳手 → 维护子界面（整屏 + 返回箭头），展开的两张卡**照样不许溢出**
+    await tester.tap(find.byTooltip('模型目录维护'));
     await tester.pumpAndSettle();
+    expect(find.text('模型目录维护'), findsOneWidget);
+    expect(find.byTooltip('返回'), findsOneWidget);
     expect(find.text('内置模型目录'), findsOneWidget);
     expect(find.text('模型能力目录'), findsOneWidget);
-    // 卡片上如实写着失败原因（灰度期后端没这几条接口）—— 不许静默
-    expect(find.textContaining('接口不存在'), findsWidgets);
+    expect(find.textContaining('接口不存在'), findsWidgets); // 如实写失败原因，不许静默
+
+    // 返回 → 主屏
+    await tester.tap(find.byTooltip('返回'));
+    await tester.pumpAndSettle();
+    expect(find.text('新建 Provider'), findsOneWidget);
+  });
+
+  testWidgets('手机上点一条 Provider = 进它的详情子界面（不是上下分屏）', (tester) async {
+    await pumpProviderPage(
+      tester,
+      logical: const Size(384, 853),
+      backend: oneProviderBackend(),
+    );
+
+    expect(find.text('Command Code Goat'), findsOneWidget);
+    await tester.tap(find.text('Command Code Goat'));
+    await tester.pumpAndSettle();
+
+    // 子界面：标题就是那条 Provider，带返回箭头；列表已经不在屏幕上
+    expect(find.byTooltip('返回'), findsOneWidget);
+    expect(find.text('Command Code Goat'), findsWidgets);
+    expect(find.text('新建 Provider'), findsNothing, reason: '进了详情就不该还留着列表');
+
+    await tester.tap(find.byTooltip('返回'));
+    await tester.pumpAndSettle();
+    expect(find.text('新建 Provider'), findsOneWidget);
   });
 
   testWidgets('更窄的屏幕（320dp）同样不溢出', (tester) async {
     await pumpProviderPage(tester, logical: const Size(320, 640));
-    expect(find.text('模型目录维护（内置目录 / 能力目录）'), findsOneWidget);
-    await tester.tap(find.text('模型目录维护（内置目录 / 能力目录）'));
+    expect(find.text('新建 Provider'), findsOneWidget);
+    await tester.tap(find.byTooltip('模型目录维护'));
     await tester.pumpAndSettle();
     expect(find.text('内置模型目录'), findsOneWidget);
   });
