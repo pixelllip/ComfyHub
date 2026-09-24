@@ -195,7 +195,7 @@ GET /api/ai/run-kit/status  → { current, revoked:[...] }   ← 命中吊销则
 | **M1** ✅ | **桌面侧支撑** —— **已完成 2026-09-23**（`7f3a351` + 补丁 `1e3ce01`，e2e 修复 `3030d93`）：① 提问落库（新表 `ai_questions` + `AiQuestionRepo`，`AskRegistry` 状态变迁写穿：track 即落 / answer 写终值 / 收尾只动 pending / 重启后 `GET /questions/{id}` 回落查库）；② 审批落库（`ToolApprovalGate.open` 同一刻落 `ai_tool_calls` pending 行，invoke 后原地更新；启动恢复把 pending 审批按"超时=拒绝"落 denied、pending 提问落 expired）；③ `GET /api/ai/pending` 跨端待办总览（asks + approvals，另一台设备不靠 SSE 也能发现"有东西在等人"）；④ `GET /api/ai/run-kit{,/status}`（kitVersion 签名哈希变了才 bump、`tools[]` 按 ToolScope 过滤成手机子集、`untrustedBanner` 模板真源进 ToolRegistry 常量、models[] 无密钥、inlineBudget）；⑤ 闸门类事件（tool.requested / user.question）立即落库（P1 批量化的缺口，见 pitfalls） | 手机发起的 Run 的审批在另一端也能看到并批准（`/api/ai/pending` + 落库行）；后端重启后 pending 不丢（提问卡可回放、审批行有终态）；**AskPersistenceTest 7 例 + RunKitVersionTest 6 例**，gradle 597 例全绿，三条 e2e 全绿 | M0 |
 | **M3** | **移动 Kotlin harness** | ✅ **代码已落地（2026-09-23，9 个提交）**：`android/harness/`（`com.android.library`，AGP 内建 Kotlin，**不引 KMP/KSP/序列化编译器插件**）＋ `android/app/.../bridge/`（`MethodChannel` + `EventChannel` + Android Keystore）＋ `lib/core/run_event_source.dart`（`RunEventSource` 抽象两个实现）。内容：① 事件契约（17 类型 + 环形缓冲 + 与契约文档比对的用例）；② 协议层（SSE 分帧 / 三家适配器 / 思考方言 / 工具分片）；③ 标题摘取 + 内联预算；④ 本地库（bundled SQLite：10 张镜像表逐列同形 + 本机表 + `_outbox`，PRAGMA 自检 R1/R14，**不建账本不挂触发器**）；⑤ 仓储层（会话/消息/块/Run/事件/outbox，业务行与 outbox **同事务**，`listUnfinishedRuns` 供崩溃恢复）；⑥ run-kit 客户端（取/缓存/吊销判定）；⑦ 工具层（`remember` / `list_skills` / `load_skill` / `ask_user_question` / `comfy_queue_submit` / `web_fetch`）；⑧ harness 主循环（流式 + 工具往返 + **R6 三条失败纪律** + 截断续写去重）；⑨ event payload 与桌面逐字对齐（**顺带改正契约文档 §2 的 4 处键名错**） | ① **145 个 Kotlin 用例**（`:harness:testDebugUnitTest`，含 R6 三条 / R8 审批顺序 / R11 不复用提交名字 / R13 无规则文案 / R14 FTS5）+ **7 个 Dart 用例**（`test/run_event_source_test.dart`）+ `flutter test` 255 例全绿；② `flutter build apk --debug` 出包；③ 桌面侧 run-kit 补下发 `titleInstruction` / `continueInstruction`（R13：手机零提示串） | M0、M1 |
 | **M3.1** | 真机验收（**进行中：设备已到位，2026-09-24**） | 🔶 **本次只验到"harness 能在真机上起来"，UI 侧还是断的**。设备 = OnePlus 8T（KB2000，arm64-v8a，transport 752e8d2f），`build\app\outputs\flutter-apk\app-debug.apk`（168MB）装得上、起得来。**真机证据**：① logcat 里 `libsqliteJni.so` 从 APK 的 `lib/arm64-v8a` 加载成功 → **bundled SQLite 真的是自带的**（R14 在真机上成立，而不是只在单测里）；② `run-as com.example.viewer ls files/` 看到 `comfyhub-harness.db` + `.db-wal`(828KB) + `.db-shm` → 桥在 `attach()` 里建库成功，**PRAGMA 读回自检与 FTS5 探针在真机上没炸**（炸了就是 FATAL，logcat 里没有）；③ `flutter build apk --debug` 的产物在 arm64 上跑 Impeller/Vulkan 正常。**但没验到"真实对话"**：见下面那条阻断项 | M3 |
-| **M3.2** | **把 harness 接进 UI**（分步做，**①② 已落地**） | ⚠ 起点：**`RunEventSource` 曾是死代码** —— `openRunEventSource` 在 Android 上本该返回 `LocalHarnessRunEventSource`，但全仓没有一个消费者，`lib/state/ai_workspace_store.dart` 在 `send()` / `_consumeRun()` 里仍直接调 `_api.startRun()` / `_api.runEvents()`（`:1355`、`:1423`、`:1670`）。后果：手机上那套 Kotlin harness 根本调不到，桌面离线时手机什么也发不出去。<br>✅ **① 桥能交回消息主键了（`cba4016`）**：`RunRequest` 新增 `userMessageId` / `assistantMessageId`（可空），`HarnessStore.appendMessage` 支持显式主键，`prepare()` 用调用方给的 id 落两条消息并写进 `ai_runs` 两个外键，`start()` 返回值从 `String` 改成 `StartedRun`；桥把两个 id 回给 Dart，`RunStartRequest` / `RunHandles` 补上对应字段（远端实现改用后端回传的那一对 —— 远端才是真源）。**为什么这是硬前提**：界面在发出请求的同一刻就按自己生成的 id 插好"用户气泡 + 空助手气泡"，然后靠事件里的 `messageId` 找到那条气泡往上写字；harness 自己另起 UUID 的话界面那个 id 永远查不到库里那条，表现是**事件一条不少、界面上却一个字都不长**，两端都不报错。<br>✅ **② 本地建会话的桥 + Dart 接线（`39ad4b7`）**：桥新增 `createConversation`（认调用方给的 id、落本地库、回那条会话），Dart `LocalHarnessRunEventSource.createConversation` 两端接上。注意它默认 `queue=true` → **进 `_outbox`**，等桌面在线时由 `/api/sync/push` 上行，正是 M4 那条"手机产生的会话在桌面可见"的前提。防线：`HarnessStoreTest` 一例（认调用方给的 id / 建完立刻查得到 / 进了 outbox / **同一 id 再建要报错，不许静默覆盖**）+ Dart 两例（两个消息 id 真的送到 Kotlin 并读回、`createConversation` 走本地库）。<br>⬜ **③ `ai_workspace_store.dart` 的持久化分叉还没做**：`send()` / `_consumeRun()` 仍走 `_api`，所以现在只到"**能被调到 + 本地能开会话**"，还没到"离线能用"。**下一步就是它**（详见文末 §9 ①）。 | M3.1 |
+| **M3.2** | **把 harness 接进 UI**（分步做，**①②③ 已落地**） | ⚠ 起点：**`RunEventSource` 曾是死代码** —— `openRunEventSource` 在 Android 上本该返回 `LocalHarnessRunEventSource`，但全仓没有一个消费者，`lib/state/ai_workspace_store.dart` 在 `send()` / `_consumeRun()` 里仍直接调 `_api.startRun()` / `_api.runEvents()`（`:1355`、`:1423`、`:1670`）。后果：手机上那套 Kotlin harness 根本调不到，桌面离线时手机什么也发不出去。<br>✅ **① 桥能交回消息主键了（`cba4016`）**：`RunRequest` 新增 `userMessageId` / `assistantMessageId`（可空），`HarnessStore.appendMessage` 支持显式主键，`prepare()` 用调用方给的 id 落两条消息并写进 `ai_runs` 两个外键，`start()` 返回值从 `String` 改成 `StartedRun`；桥把两个 id 回给 Dart，`RunStartRequest` / `RunHandles` 补上对应字段（远端实现改用后端回传的那一对 —— 远端才是真源）。**为什么这是硬前提**：界面在发出请求的同一刻就按自己生成的 id 插好"用户气泡 + 空助手气泡"，然后靠事件里的 `messageId` 找到那条气泡往上写字；harness 自己另起 UUID 的话界面那个 id 永远查不到库里那条，表现是**事件一条不少、界面上却一个字都不长**，两端都不报错。<br>✅ **② 本地建会话的桥 + Dart 接线（`39ad4b7`）**：桥新增 `createConversation`（认调用方给的 id、落本地库、回那条会话），Dart `LocalHarnessRunEventSource.createConversation` 两端接上。注意它默认 `queue=true` → **进 `_outbox`**，等桌面在线时由 `/api/sync/push` 上行，正是 M4 那条"手机产生的会话在桌面可见"的前提。防线：`HarnessStoreTest` 一例（认调用方给的 id / 建完立刻查得到 / 进了 outbox / **同一 id 再建要报错，不许静默覆盖**）+ Dart 两例（两个消息 id 真的送到 Kotlin 并读回、`createConversation` 走本地库）。<br>✅ **③ 持久化分叉 + 冷启动分叉都做了（`613531f` / `85b0acc`）**：`send()` / `retry()` / `openConversation()` / `_consumeRun()` / `stop()` / `answerQuestion()` / `_reloadMessages()` 一律走 `RunEventSource`（本地库还是远端 HTTP 由它分路）；`_doLoad()` 也分组 —— 手机走 `_loadLocalStartup()`，**会话只认本地库**，桌面离线也能进聊天页（provider / 模型清单拿不到只如实说一句，不让整页起不来）。防线：`test/ai_offline_source_test.dart` 6 例。**仍未完成**：provider / 模型清单离线可用要等 **M6**；本地空壳会话清理还缺桥上的 `deleteConversation`（两条坑都记在 §9 ①）。<br>⬜ **④ 真机回归**：M3.1 只验到"harness 能在真机上起来"，**离线对话一次都还没在真机上跑过**。 | M3.1 |
 | **M4** | 上行通道 | `_outbox` + `/api/sync/push` + 幂等 apply + 服务端赢 LWW | 手机产生的会话在桌面可见可续写；重复推送不产生重复行 | M3 |
 | **M5** | 排队提交 | 手机 `comfy_queue_submit` + 桌面 outbox 消费（**走现有 `comfy_submit` 全链路**） | 手机排队 → 桌面在线后自动提交 → 产物入库画廊 → `mediaIds` 回到手机；**桌面侧审批/幂等/入库一条不少（R10/R11）** | M4 |
 | **M6** | 凭据 | `ai_providers` 下行（**不含密钥**）+ 手机 Android Keystore + `flutter_secure_storage` | 手机能独立调用 LLM；密钥不出本机；界面明确告知"需在手机上单独填 Key" | M3 |
@@ -479,21 +479,93 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   （不重不漏）+ 键集合就是契约 §3；凭据/令牌表一律 400 且响应里不含令牌字符串；缺 `table` 也是 400。
 >
 > 📊 **P4 至此的端点覆盖**：业务 `tags` / `prompts` / `media`（列表·详情·文件流·缩略图·上传·写侧）/
-> `stats` / 捕获配置 / 工作流原文 / `api-graph` + **同步 4 条**全部可用。仍未搬：
-> `/api/capture/{status,jobs,poll,locate*,import*,workflows}`、`/api/ingest/comfyui`（都要 ComfyUI 在场）、
-> `/api/ai/*`（**R6~R10 的 Rust 侧重建一点没动** —— 这是 P4 剩下的最大一块，也是 §7 风险表里
-> "11,103 行 Kotlin 测试要重写"那块）。
+> `stats` / 捕获配置 / **本机工作流文件（第 14 步）** / 工作流原文 / `api-graph` + **同步 4 条**全部可用。
+> 仍未搬：`/api/capture/{status,jobs,poll,locate*,import*}`（`status`/`jobs`/`poll` 要 ComfyUI 在场；
+> `import-workflows` 要整套 `WorkflowConvert` + `AiWorkflowSearch` 转换栈，是**下一个大块**）、
+> `/api/ingest/comfyui`、`/api/ai/*`（**R6~R10 的 Rust 侧重建一点没动** —— 这是 P4 剩下的最大一块，
+> 也是 §7 风险表里 "11,103 行 Kotlin 测试要重写"那块）。
+>
+> ✅ **P4 第 14 步（`1108673`，2026-09-24）**：`GET /api/capture/workflows` —— 用户 bug ⑤ 那条路
+> （`prompts` 库里没有 ≠ 用户机器上没有）。新模块 `comfy_dirs.rs` 逐条对照
+> `ComfyWorkflowFiles.kt` + `ComfyLocator.kt` + `ComfyRoots.kt`，**三个目录来源一条不少**：
+> ① 配置里生效的输出目录的父目录 ② `ComfyLocator.find()` 探到的 home ③ `ComfyRoots.autoReadRoots()`。
+> 少任何一条都是"正常返回、只是少了几个目录"这种**静默**故障（§9 ② 那条警告）。
+> `scan` 只列真的能用的（坏 JSON / 空 / 非 `.json` / 格式认不出来的一律跳过）；
+> `sha256` 与 `comfy_load_workflow` 的 `run_key = file:<sha256>` 是**同一把钥匙**，
+> 所以 `inLibrary` / `promptId` 天然幂等。`/api/capture/import-workflows` **仍是 501**（没有假装成功）。
+> - ★ **真库副本抽查又抓到一个输出形状回归（已修）**：`std::fs::canonicalize()` 在 Windows 上
+>   返回**逐字前缀** `\\?\D:\Comfy-Desktop\…`，而 Kotlin 的 `toRealPath()` 返回 `D:\Comfy-Desktop\…`。
+>   这个前缀会原样出现在 `dirs` 与每个文件的 `path` 里（用户和 AI 都看得到，还会被贴进对话当参数），
+>   是"同一个目录、两种写法"那类最难查的不一致 —— 与第 11 步"空的一页不等于没有变更"一样，
+>   **只有真库/真目录才摆得出来**。现在所有 `canonicalize` 站点统一过 `plain_path()`，并有用例盯住。
+>   同批抽查顺带确认 FK 真的在生效（夹具里塞不存在的 `prompt_id` → 当场 `FOREIGN KEY constraint failed`）。
+> - **验收**：`cargo test` **84 例全绿**（33 lib + 51 集成）；真库副本 + 真 ComfyUI 目录（8087）
+>   探到 `D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows`，15 份列出 3 份，
+>   其中 `krea2SFWNSFWUncensoredImageTo_v10.json` → `inLibrary=true, promptId=305`
+>   （**正是用户 bug ⑤ 里那份工作流**）；真库只读未改。
 
 ---
 
-## 9. 下一轮从哪起手（2026-09-24 收工时留的交接）
+## 9. 下一轮从哪起手
 
-> 本轮（2026-09-24）共 **13 个提交**，全部测试在当前 HEAD 上是绿的：
-> `cargo test` **71 例**（25 lib + 46 集成）、`:harness:testDebugUnitTest` **148 例**、
-> `flutter test` **257 例**（`test/run_event_source_test.dart` 单文件 9 例）。
-> 下面三件事按"价值 ÷ 风险"排好，照顺序做即可。
+> **2026-09-24 第二轮（13:06~13:55 这一段）共 3 个提交**，全部测试在当前 HEAD 上是绿的：
+> `cargo test` **84 例**（33 lib + 51 集成）、`flutter test` **264 例**
+> （`:harness:testDebugUnitTest` 148 例未动）。
+> 这一轮做掉了旧交接单里的 **①（M3.2 ② 离线可用）** 与 **② 的一半（工作流文件列出来）**；
+> 下面按"价值 ÷ 风险"重排剩下的部分。
+>
+> | 提交 | 内容 |
+> | --- | --- |
+> | `613531f` | M3.2 第 3 步：持久化分叉（`send()` 全程走 `RunEventSource`） |
+> | `85b0acc` | M3.2 第 4 步：手机冷启动分叉（桌面离线也能进聊天页） |
+> | `1108673` | P4 第 14 步：`GET /api/capture/workflows` |
 
-### 0. 收工前做的一次**全端点真库巡检**（结论：没有发现形状错）
+### ① ✅ 已做：M3.2 ② —— 手机离线能用（`613531f` + `85b0acc`）
+
+三处都落地了：桥的 `createConversation`（上一轮的 `39ad4b7`）、
+`ai_workspace_store.dart` 的持久化分叉（`send()` / `retry()` / `openConversation()` /
+`_consumeRun()` / `stop()` / `answerQuestion()` / `_reloadMessages()` 一律走 `_source`）、
+以及**冷启动分叉**（`_doLoad()` 分组：桌面照旧；手机走 `_loadLocalStartup()`，会话只认本地库）。
+
+> ⚠ 下一轮容易踩的两点（都留了坑，别当成"已经全好了"）：
+> 1. **provider / 模型清单在离线时仍然是空的**（`_loadLocalStartup` 里 best-effort 拉一次桌面，
+>    失败就如实写进 `error`："桌面不在线，暂时拿不到模型清单…"）。所以**离线只能看历史会话**，
+>    发新消息仍会被 `sendBlockReason()` 挡住 —— 要让离线真能发，得等 **M6**（凭据下行 + Android Keystore）。
+> 2. 本地库的**空壳会话清理**走的是 `_api.deleteConversation`（桥还没有这个动作），
+>    手机会攒下空壳。补法：桥加 `deleteConversation` + `RunEventSource` 加一个方法。
+
+### ② 🔶 已做一半：P4 `/api/capture/workflows`（`1108673`）
+
+**列出来**这一半已完成并过了真库验收（见 §8 那条登记）。**`/import-workflows` 仍是 501**，
+它是下一个大块：`importAll` 依赖 `AiWorkflowSearch.loadWorkflowFromFile` + `WorkflowConvert` +
+`ComfySubmitter`（界面格式 → API 图的转换、`tolerateUnsupported` 摘纯前端节点、`run_key` 幂等）——
+这条链是 `comfy_submit` 的地基，**别为它抄一条捷径**（抄了就出现"列表说能跑、提交却报错"）。
+搬它之前先想清楚：它要 ComfyUI 在场（界面格式转换靠 `/object_info`），
+所以要么连 `/api/capture/*` 那一批一起搬，要么等 AI 层。
+
+#### ③ P4：`/api/ai/*` 与 **R6~R10 的 Rust 侧重建**（最大的一块，别低估）
+
+**一点没动**（旧交接单里的 ③，原样保留）。按 §6 的归属表逐条对照重建，
+**先灰度非 AI 端点**（已经做完），AI 与工具层最后搬。顺序建议：
+`/api/ai/providers`（不含密钥）→ `/api/ai/models` → `/api/ai/run-kit`（把 `kitVersion` 的
+`app_settings` 写入逻辑一起搬，`/api/sync/manifest` 现在读的就是它）→ 会话/消息 CRUD →
+Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层与审批（**R8**）→ 附件（**R9**）。
+
+> ✅ 可以直接复用的地基：`db.rs` 的 PRAGMA 读回自检（R1）、`BEGIN IMMEDIATE`（R2）、
+> `sync.rs` 的行 → JSON 泛型映射与列清单现查（`PRAGMA table_info`）、
+> `sync.rs` 里"永久性 / 暂时性错误要分清"的 `Rejected{code}` 形状（R6~R9 的错误码可沿用），
+> 以及第 14 步刚铺好的 `comfy_dirs::looks_like_comfy`（`/api/capture/locate*` 直接用它）。
+
+### ④ 两个小的、可以顺手做掉的
+
+- **`/api/capture/locate` + `/locate/apply`**：探测那半边已经在 `comfy_dirs.rs` 里了
+  （`find_home` / `looks_like_comfy`），缺的是 `candidates` / `source` / `note` 那几个字段
+  与 `apply` 的写配置；两者都是用户可见的（设置页 → ComfyUI 自动捕获）。
+- **`ai_run_events` 的保留窗口（R5）**：`pruneEvents` 在 Kotlin 侧仍是死代码，Rust 侧更没有。
+
+---
+
+### 0. 上一轮收工前做的一次**全端点真库巡检**（结论：没有发现形状错）
 
 用真实库副本（`--port 8086`）把**所有只读端点扫了一遍**，逐个核对状态码与形状 ——
 这一步的价值是抓"某个字段名拼错导致整条链路 500"那类静默错误（P4 第 3 步就抓到过
@@ -545,7 +617,13 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > > 夹具只覆盖你想到的行；真库会把你没想到的表、没料到的编码一次性摆出来。
 > > 每个 P4 批次收尾时那次"真库副本抽查"不是走过场，**这次它挡下了一个会永久丢数据的 bug**。
 
-### ① M3.2 ② —— 让手机**离线真的能用**（最高优先）
+### 📜 上一轮（2026-09-24 第一轮）的交接单原文 — 保留作为对照
+
+> 下面这三条是**上一轮留下的**，现在 ① ② 已完成/做了一半（见本节开头）。
+> **原文一字未改**：里面那些"为什么非这么做"的论证（尤其"只搬一半 = 静默少结果"）
+> 在第 14 步里就是照着执行的，删掉它们 = 下一轮有人把三份目录来源里的某一份"顺手简化掉"。
+
+#### ① M3.2 ② —— 让手机**离线真的能用**（最高优先）
 
 现在只到"harness **能被调到**"（`cba4016` 把桥的消息主键补齐了），但 `ai_workspace_store.dart`
 在离线时仍会走 `_api.createConversation` / `listMessages` 打远端。所以**桌面不在线时手机还是发不出东西**。
@@ -561,7 +639,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ⚠ 别做成"只把事件流换个来源"：那样离线时**事件是有的、界面上却不长东西**（会话/消息都查不到），
 > 而两端都不报错 —— 和 `cba4016` 修掉的那个坑是同一类。
 
-### ② P4：`/api/capture/workflows` + `/import-workflows`（用户可见，但有个陷阱）
+#### ② P4：`/api/capture/workflows` + `/import-workflows`（用户可见，但有个陷阱）
 
 这两个端点背后是 `ComfyWorkflowFiles.kt`（411 行）+ `ComfyLocator.kt`（235 行）。**必须整体搬**：
 
@@ -579,7 +657,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 必测：临时目录里摆几种形状的文件（正常界面格式 / API 格式 / 坏 JSON / 空文件 / 非 `.json`），
 断言"只列真的能用的" + 目录发现覆盖三条来源。
 
-### ③ P4：`/api/ai/*` 与 **R6~R10 的 Rust 侧重建**（最大的一块，别低估）
+#### ③ P4：`/api/ai/*` 与 **R6~R10 的 Rust 侧重建**（最大的一块，别低估）
 
 这是 §7 风险表里"11,103 行 Kotlin 测试要重写"那块，**一点没动**。按 §6 的归属表逐条对照重建，
 **先灰度非 AI 端点**（已经做完），AI 与工具层最后搬。顺序建议：
