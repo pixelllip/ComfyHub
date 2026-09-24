@@ -478,9 +478,26 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > - **验收**：`cargo test` **71 例全绿**（25 lib + 46 集成），新增 2 例：翻完所有页去重后**正好 5 条**
 >   （不重不漏）+ 键集合就是契约 §3；凭据/令牌表一律 400 且响应里不含令牌字符串；缺 `table` 也是 400。
 >
+> ✅ **P4 第 15 步（`e3d7f7d`，2026-09-24）**：`GET /api/capture/locate` + `POST /api/capture/locate/apply`
+> （用户"其他建议"第 3 条）。`ComfyLocation` 与 Kotlin 逐字同形（home / outputDir / source /
+> configuredOutputDir / candidates[] / note）；**探测只读**（用例里专门断言"探一遍之后配置里什么都没多"），
+> 是否生效由用户点「使用这个目录」决定。候选顺序照抄 `ComfyLocator.find`，**被否决的候选也记下来**
+> （带原因）—— 那几行正是用户排错时要看的。`apply` 的两条准入照抄：不能为空 / 必须真的存在（都 400），
+> 不然会写进一个打不开的路径，之后"捕获一条也收不到"而用户不知道为什么。
+> 实现上把 `find_home` 改成 `locate(...).home` 的**薄包装**：探测逻辑只有一份，
+> "列工作流"与"设置页探测"不可能漂移。
+> - **真实验收**（真库副本，8088）：`home=D:\Comfy-Desktop\ComfyUI-Shared`、
+>   `source=已经配置过了（就按这个用）`、`candidates=[]`（配过就不再探，与 Kotlin 同）。
+> - 📌 **顺带印证了第 14 步"三份来源一条都不能少"**：真机上配置指向 `ComfyUI-Shared`，
+>   而工作流文件在 `ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows` 下 ——
+>   正是 ComfyUI Desktop"程序与共享数据分家"那种布局，**只按配置的输出目录推是推不到的**。
+> - **验收**：`cargo test` **86 例全绿**（33 lib + 53 集成），新增 2 例（locate 形状/只读/候选与依据 +
+>   apply 的 400 两个分支与"写入并回读 → 再 locate 变成'已经配置过了'"）。
+>
 > 📊 **P4 至此的端点覆盖**：业务 `tags` / `prompts` / `media`（列表·详情·文件流·缩略图·上传·写侧）/
-> `stats` / 捕获配置 / **本机工作流文件（第 14 步）** / 工作流原文 / `api-graph` + **同步 4 条**全部可用。
-> 仍未搬：`/api/capture/{status,jobs,poll,locate*,import*}`（`status`/`jobs`/`poll` 要 ComfyUI 在场；
+> `stats` / 捕获配置 / **本机工作流文件 + 位置探测（第 14·15 步）** / 工作流原文 / `api-graph`
+> + **同步 4 条**全部可用。
+> 仍未搬：`/api/capture/{status,jobs,poll,import,import-workflows}`（`status`/`jobs`/`poll` 要 ComfyUI 在场；
 > `import-workflows` 要整套 `WorkflowConvert` + `AiWorkflowSearch` 转换栈，是**下一个大块**）、
 > `/api/ingest/comfyui`、`/api/ai/*`（**R6~R10 的 Rust 侧重建一点没动** —— 这是 P4 剩下的最大一块，
 > 也是 §7 风险表里 "11,103 行 Kotlin 测试要重写"那块）。
@@ -509,9 +526,9 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 ## 9. 下一轮从哪起手
 
 > **2026-09-24 第二轮（13:06~13:55 这一段）共 3 个提交**，全部测试在当前 HEAD 上是绿的：
-> `cargo test` **84 例**（33 lib + 51 集成）、`flutter test` **264 例**
+> `cargo test` **86 例**（33 lib + 53 集成）、`flutter test` **264 例**
 > （`:harness:testDebugUnitTest` 148 例未动）。
-> 这一轮做掉了旧交接单里的 **①（M3.2 ② 离线可用）** 与 **② 的一半（工作流文件列出来）**；
+> 这一轮做掉了旧交接单里的 **①（M3.2 ② 离线可用）**、**② 的一半（工作流文件列出来）**，
 > 下面按"价值 ÷ 风险"重排剩下的部分。
 >
 > | 提交 | 内容 |
@@ -519,6 +536,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > | `613531f` | M3.2 第 3 步：持久化分叉（`send()` 全程走 `RunEventSource`） |
 > | `85b0acc` | M3.2 第 4 步：手机冷启动分叉（桌面离线也能进聊天页） |
 > | `1108673` | P4 第 14 步：`GET /api/capture/workflows` |
+> | `e3d7f7d` | P4 第 15 步：`/api/capture/locate` + `/locate/apply` |
 
 ### ① ✅ 已做：M3.2 ② —— 手机离线能用（`613531f` + `85b0acc`）
 
@@ -556,12 +574,11 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 > `sync.rs` 里"永久性 / 暂时性错误要分清"的 `Rejected{code}` 形状（R6~R9 的错误码可沿用），
 > 以及第 14 步刚铺好的 `comfy_dirs::looks_like_comfy`（`/api/capture/locate*` 直接用它）。
 
-### ④ 两个小的、可以顺手做掉的
+### ④ 三个小的、可以顺手做掉的
 
-- **`/api/capture/locate` + `/locate/apply`**：探测那半边已经在 `comfy_dirs.rs` 里了
-  （`find_home` / `looks_like_comfy`），缺的是 `candidates` / `source` / `note` 那几个字段
-  与 `apply` 的写配置；两者都是用户可见的（设置页 → ComfyUI 自动捕获）。
-- **`ai_run_events` 的保留窗口（R5）**：`pruneEvents` 在 Kotlin 侧仍是死代码，Rust 侧更没有。
+- ✅ **`/api/capture/locate` + `/locate/apply`**：已做（第 15 步，`e3d7f7d`）。
+- **手机侧的空壳会话清理**：桥缺 deleteConversation，于是本地库会攒下空壳（M3.2 ③ 留下的那条坑）。
+- **i_run_events 的保留窗口（R5）**：pruneEvents 在 Kotlin 侧仍是死代码，Rust 侧更没有。
 
 ---
 
