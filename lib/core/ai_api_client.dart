@@ -34,11 +34,13 @@ class AiApiClient {
       }
     }
     if (res.statusCode >= 200 && res.statusCode < 300) return json;
+    // 顺序是有讲究的：AI 领域错误的**人话在 `detail` 里**（`error` 是稳定码，AIH-024），
+    // 普通错误的**人话在 `error` 里**（`detail` 不出现）。两条路都得能拿到人话。
     final message = (json is Map && json['detail'] != null)
         ? json['detail'].toString()
         : (json is Map && json['error'] != null
             ? json['error'].toString()
-            // 后端的统一错误体是 {code, message}：带上它，用户才看得懂为什么失败
+            // 最后的兜底：`message` 是老形状（Rust 侧 2026-09-24 已对齐成 {error, detail?}）
             : (json is Map && json['message'] != null ? json['message'].toString() : '请求失败'));
     throw AiApiException(res.statusCode, message);
   }
