@@ -494,12 +494,27 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > - **验收**：`cargo test` **86 例全绿**（33 lib + 53 集成），新增 2 例（locate 形状/只读/候选与依据 +
 >   apply 的 400 两个分支与"写入并回读 → 再 locate 变成'已经配置过了'"）。
 >
-> 📊 **P4 至此的端点覆盖**：业务 `tags` / `prompts` / `media`（列表·详情·文件流·缩略图·上传·写侧）/
-> `stats` / 捕获配置 / **本机工作流文件 + 位置探测（第 14·15 步）** / 工作流原文 / `api-graph`
+> ✅ **P4 第 16 步（`0ddecbc`，2026-09-24）**：`GET /api/ai/providers` —— **`/api/ai/*` 的第一批**
+> （总纲 §9 ③ 的顺序：只读、且不含密钥的清单起手）。新模块 `ai.rs`；`credential` 只有
+> `{configured, source, writable}`、**没有值**（AIH-012）；判定照抄 `CredentialService.describe`
+> 三分支并抽成纯函数（环境变量与托管文件都注入，所以每档都能单测），托管文件
+> `<storage>\ai\credentials.dpapi.json` **只读键名**（DPAPI 的值不解、也不该解；
+> 写"永远 false"就是假装没配过）。
+> - ★ **用例抓出一个真会静默的错**：`rename_all = "camelCase"` 把 `base_url` 变成了 `baseUrl`，
+>   而 Kotlin 的字段**就叫 `baseURL`** —— 差一个大小写，界面读到的 URL 就是空的。
+>   精确键集合断言当场抓住，改成 `#[serde(rename = "baseURL")]`。
+>   **这就是 §9 ③ 那条"别照着 DTO 猜"的实证**（而且这次猜错的正是最不容易怀疑的那一个）。
+> - **真实验收**（真库副本 + 真凭据文件，8089）：2 条 provider，`baseURL` 正常，
+>   `credential={configured:true, source:"managed", writable:true}` —— 从真的 DPAPI 文件读出键名，
+>   没有解密、也没有把值带出去。
+> - **验收**：`cargo test` **88 例全绿**（34 lib + 54 集成），新增 2 例（凭据三分支 +
+>   端点形状与"密钥值一个字都不许出"：夹具往托管文件塞哨兵串，断言响应里搜不到）。
+>> 📊 **P4 至此的端点覆盖**：业务 `tags` / `prompts` / `media`（列表·详情·文件流·缩略图·上传·写侧）/
+> `stats` / 捕获配置 / **本机工作流文件 + 位置探测（第 14·15 步）** / **`/api/ai/providers`（第 16 步）** / 工作流原文 / `api-graph`
 > + **同步 4 条**全部可用。
 > 仍未搬：`/api/capture/{status,jobs,poll,import,import-workflows}`（`status`/`jobs`/`poll` 要 ComfyUI 在场；
 > `import-workflows` 要整套 `WorkflowConvert` + `AiWorkflowSearch` 转换栈，是**下一个大块**）、
-> `/api/ingest/comfyui`、`/api/ai/*`（**R6~R10 的 Rust 侧重建一点没动** —— 这是 P4 剩下的最大一块，
+> `/api/ingest/comfyui`、`/api/ai/*` 的**其余部分**（**R6~R10 的 Rust 侧重建一点没动** —— 这是 P4 剩下的最大一块，
 > 也是 §7 风险表里 "11,103 行 Kotlin 测试要重写"那块）。
 >
 > ✅ **P4 第 14 步（`1108673`，2026-09-24）**：`GET /api/capture/workflows` —— 用户 bug ⑤ 那条路
@@ -525,8 +540,8 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 
 ## 9. 下一轮从哪起手
 
-> **2026-09-24 第二轮（13:06~13:55 这一段）共 3 个提交**，全部测试在当前 HEAD 上是绿的：
-> `cargo test` **86 例**（33 lib + 53 集成）、`flutter test` **264 例**
+> **2026-09-24 第二轮（13:06~13:55 这一段）共 9 个提交（5 个代码 + 4 个文档）**，全部测试在当前 HEAD 上是绿的：
+> `cargo test` **88 例**（34 lib + 54 集成）、`flutter test` **264 例**
 > （`:harness:testDebugUnitTest` 148 例未动）。
 > 这一轮做掉了旧交接单里的 **①（M3.2 ② 离线可用）**、**② 的一半（工作流文件列出来）**，
 > 下面按"价值 ÷ 风险"重排剩下的部分。
@@ -537,6 +552,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > | `85b0acc` | M3.2 第 4 步：手机冷启动分叉（桌面离线也能进聊天页） |
 > | `1108673` | P4 第 14 步：`GET /api/capture/workflows` |
 > | `e3d7f7d` | P4 第 15 步：`/api/capture/locate` + `/locate/apply` |
+> | `0ddecbc` | P4 第 16 步：`GET /api/ai/providers`（`/api/ai/*` 的第一批） |
 
 ### ① ✅ 已做：M3.2 ② —— 手机离线能用（`613531f` + `85b0acc`）
 
@@ -563,7 +579,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 
 #### ③ P4：`/api/ai/*` 与 **R6~R10 的 Rust 侧重建**（最大的一块，别低估）
 
-**一点没动**（旧交接单里的 ③，原样保留）。按 §6 的归属表逐条对照重建，
+🔶 **起手了**：第 16 步做掉了 `GET /api/ai/providers`（见 §8）；**其余一点没动**。按 §6 的归属表逐条对照重建，
 **先灰度非 AI 端点**（已经做完），AI 与工具层最后搬。顺序建议：
 `/api/ai/providers`（不含密钥）→ `/api/ai/models` → `/api/ai/run-kit`（把 `kitVersion` 的
 `app_settings` 写入逻辑一起搬，`/api/sync/manifest` 现在读的就是它）→ 会话/消息 CRUD →
@@ -574,7 +590,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 > `sync.rs` 里"永久性 / 暂时性错误要分清"的 `Rejected{code}` 形状（R6~R9 的错误码可沿用），
 > 以及第 14 步刚铺好的 `comfy_dirs::looks_like_comfy`（`/api/capture/locate*` 直接用它）。
 
-> 🔎 **`/api/ai/providers` 的起手笔记（2026-09-24 现场查过，别重复查）** ——
+> 🔎 **`/api/ai/providers` 的起手笔记（2026-09-24：**已经照着做完，见 §8 第 16 步**；下面这四条已实测，留着给 `/api/ai/models` 与 run-kit 当模板）** ——
 > 它就是 `AiRepo.listProviders().map { it.withCredential(credentials) }`，看着简单，
 > 但有 **4 个会让键集合静默对不上**的点：
 > 1. `AiProviderDto` 的字段是 `id / displayName / api / baseURL / credentialRef / endpointTrust /
@@ -584,8 +600,9 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 >    判定顺序照抄 `CredentialService.describe`：`ref` 为空 → `(false, "none", false)`；
 >    环境变量命中 → `(值非空, "env", **false**)`；否则看托管凭据文件里有没有这个 ref →
 >    `(有, "managed" / 没有 "none", **true**)`。
-> 3. `envValue(ref)` 认**两个**名字：`<ref>` 与 `COMFYHUB_KEY_<ref>`（前缀常量在
->    `CredentialService.ENV_PREFIX`）。
+> 3. `envValue(ref)` 认**两个**名字：`<ref>` 与 `COMFYHUB_CRED_<ref>`（前缀常量是
+>    `CredentialService.ENV_PREFIX = "COMFYHUB_CRED_"` —— **不是** `COMFYHUB_KEY_`，写错了
+>    就变成"永远读不到环境变量里的那把 key"）。
 > 4. 托管凭据文件是 `<storage>\ai\credentials.dpapi.json`，**值由 DPAPI 加密**。
 >    Rust 侧只要"有没有这个 ref"就能如实回答 `configured` / `source`（**不需要、也不该解密**）；
 >    写成"永远 false"就是**假装没配过** —— 那属于 R13 那条"不许硬编码 / 不许假装"的范畴。
