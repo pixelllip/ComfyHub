@@ -21,6 +21,8 @@ class RunStartRequest {
     this.maxSteps,
     this.userMessageId,
     this.assistantMessageId,
+    this.attachmentIds = const [],
+    this.retryOfRunId,
   });
 
   final String conversationId;
@@ -34,6 +36,13 @@ class RunStartRequest {
   final String? credentialRef;
   final String? reasoningEffort;
   final int? maxSteps;
+
+  /// 这次要发给模型的附件（M3）。**准入判定在创建 Run 之前完成**：
+  /// 远端不通过会直接 400 且不产生任何上游请求（AIH-030）。
+  final List<String> attachmentIds;
+
+  /// 这次 Run 是重放哪一次失败的（AIH-024），远端用它把两次 Run 关联起来。
+  final String? retryOfRunId;
 
   /// 调用方**自己生成**的会话 / 消息主键（M3.2）。
   ///
@@ -90,11 +99,40 @@ abstract class RunEventSource {
 
   Future<void> cancelRun(String runId);
 
+  /// 落一条新会话。
+  ///
+  /// **它必须在这个抽象里**（M3.2 ②）：只把"事件流"换个来源是不够的 ——
+  /// 离线时事件有了、会话却查不到，界面照样一个字都长不出来，而两端都不报错。
+  /// 所以"会话 / 消息的持久化"与"事件流"**走同一个来源**：
+  /// 手机落本地库（Kotlin `HarnessStore`），桌面走 HTTP。
+  ///
+  /// [conversationId] 只有本地实现认（界面自己生成、要拿同一个 id 认自己插的那条）；
+  /// 远端由后端生成并回传，传进来也忽略。
+  Future<AiConversation> createConversation({
+    String? conversationId,
+    String? title,
+    String? providerId,
+    String? modelId,
+  });
+
+  /// 拉一条会话的消息（**含有序块 `parts`** —— 工具卡 / 思考段全靠它）。
+  Future<List<AiMessage>> listMessages(String conversationId);
+
+  /// 会话列表（`_consumeRun` 收尾的"与服务端对齐"要用它）。
+  Future<List<AiConversation>> listConversations();
+
   /// 事件流（`after` 用于断线续传，语义与 SSE 的 `?after=<seq>` 一致）。
   Stream<AiRunEvent> events(String runId, {int after = 0});
 
   /// 回答 `user.question`（提问闸门；桌面是 HTTP，手机是本地闸门）。
-  Future<void> answerQuestion(String questionId, String answer, {int? optionIndex});
+  ///
+  /// [answer] 与 [optionIndex] **至少给一个**，另一个留 null：点了选项就用 `optionIndex`，
+  /// 手打文字就用 `answer`。⚠ 别把 null 写成空串 —— 那会让"点选项"的请求里多出一个
+  /// `answer: ""`，后端会当成用户答了一段空文字（选项那半边就白点了）。
+  ///
+  /// 返回**是否真的被采纳**：`false` = 这条提问已经结束（超时 / Run 停了），
+  /// 界面要如实说出来，不能假装收到。
+  Future<bool> answerQuestion(String questionId, String? answer, {int? optionIndex});
 }
 
 /// 桌面实现：转发给 `AiApiClient`（远端 SSE）。
@@ -114,6 +152,8 @@ class RemoteRunEventSource implements RunEventSource {
       providerId: request.providerId ?? '',
       modelId: request.modelId ?? '',
       reasoningEffort: request.reasoningEffort,
+      attachmentIds: request.attachmentIds,
+      retryOfRunId: request.retryOfRunId,
     );
     // 远端这两个 id 由后端生成：**回传什么就用什么**（不要拿请求里那份，远端才是真源）
     return RunHandles(
@@ -125,13 +165,29 @@ class RemoteRunEventSource implements RunEventSource {
   }
 
   @override
+  Future<AiConversation> createConversation({
+    String? conversationId,
+    String? title,
+    String? providerId,
+    String? modelId,
+  }) =>
+      // 远端由后端生成主键：请求里那份（如果有）不是真源，**回传什么就用什么**
+      _api.createConversation(title: title, providerId: providerId, modelId: modelId);
+
+  @override
+  Future<List<AiMessage>> listMessages(String conversationId) => _api.listMessages(conversationId);
+
+  @override
+  Future<List<AiConversation>> listConversations() => _api.listConversations();
+
+  @override
   Future<void> cancelRun(String runId) => _api.cancelRun(runId);
 
   @override
   Stream<AiRunEvent> events(String runId, {int after = 0}) => _api.runEvents(runId, after: after);
 
   @override
-  Future<void> answerQuestion(String questionId, String answer, {int? optionIndex}) =>
+  Future<bool> answerQuestion(String questionId, String? answer, {int? optionIndex}) =>
       _api.answerQuestion(questionId, answer: answer, optionIndex: optionIndex);
 }
 
@@ -192,37 +248,65 @@ class LocalHarnessRunEventSource implements RunEventSource {
   Future<int> recoverUnfinished() async =>
       await _method.invokeMethod<int>('recoverUnfinished') ?? 0;
 
-  Future<List<Map<String, dynamic>>> listConversations() async =>
+  /// 本地会话列表（`_consumeRun` 收尾对齐时用；桥回的是 JSON 字符串）。
+  @override
+  Future<List<AiConversation>> listConversations() async =>
+      (await listConversationRows()).map(AiConversation.fromJson).toList();
+
+  Future<List<Map<String, dynamic>>> listConversationRows() async =>
       _list(await _method.invokeMethod<String>('listConversations') ?? '[]');
 
   /// 在**本地库**建一条会话（M3.2 ②：离线也要能开会话）。
   ///
-  /// `conversationId` 由界面生成并传下去（理由同 `startRun` 的那一对消息 id：
-  /// 界面要拿同一个 id 去认自己插的那条会话）。
+  /// [conversationId] 由界面生成并传下去（理由同 `startRun` 的那一对消息 id：
+  /// 界面要拿同一个 id 去认自己插的那条会话）；不传则由 Kotlin 侧生成并**回传**
+  /// （两种都支持：真源永远是**返回的那条记录**，不是请求里那份）。
   ///
   /// ⚠ 本地建的会话会**进 `_outbox`**（`HarnessStore.createConversation` 默认 `queue=true`），
   /// 等桌面在线时由 `/api/sync/push` 上行 —— 这正是 M4 要的那种"手机产生的会话在桌面可见"。
-  Future<Map<String, dynamic>> createConversation({
-    required String conversationId,
-    required String title,
+  @override
+  Future<AiConversation> createConversation({
+    String? conversationId,
+    String? title,
     String? providerId,
     String? modelId,
-    String? promptVersion,
-  }) async =>
-      _map(await _method.invokeMethod<String>('createConversation', {
-        'conversationId': conversationId,
-        'title': title,
-        'providerId': ?providerId,
-        'modelId': ?modelId,
-        'promptVersion': ?promptVersion,
-      }) ??
-      '{}');
+  }) async {
+    final raw = await _method.invokeMethod<String>('createConversation', {
+      'conversationId': ?conversationId,
+      'title': title ?? '新对话',
+      'providerId': ?providerId,
+      'modelId': ?modelId,
+    });
+    return AiConversation.fromJson(_map(raw ?? '{}'));
+  }
 
-  Future<List<Map<String, dynamic>>> listMessages(String conversationId) async =>
+  /// 消息行（不含 `parts`）。
+  Future<List<Map<String, dynamic>>> listMessageRows(String conversationId) async =>
       _list(await _method.invokeMethod<String>('listMessages', {'conversationId': conversationId}) ?? '[]');
 
+  /// 一条消息的有序块。
   Future<List<Map<String, dynamic>>> listParts(String messageId) async =>
       _list(await _method.invokeMethod<String>('listParts', {'messageId': messageId}) ?? '[]');
+
+  /// 拉一条会话的消息，**把 `parts` 并进来**。
+  ///
+  /// ⚠ 这里显式做一次合并：桥的 `listMessages` 只回消息行（Kotlin 侧的消息表与块表是两张表），
+  /// 要是就这么交给 `AiMessage.fromJson`，每条消息的 `parts` 都是空的 —— 表现是
+  /// **工具卡、思考段、产物入口卡全不见**（正文还在，所以看起来"只是少了点东西"）。
+  ///
+  /// 为什么不改成"桥一次把 parts 带上"：那要动 Kotlin 侧协议；这里先按**逐条补齐**做，
+  /// 键名与桌面 `GET /api/ai/conversations/{id}/messages` 逐字一致。
+  @override
+  Future<List<AiMessage>> listMessages(String conversationId) async {
+    final rows = await listMessageRows(conversationId);
+    final out = <AiMessage>[];
+    for (final row in rows) {
+      final id = row['id']?.toString() ?? '';
+      final parts = id.isEmpty ? const <Map<String, dynamic>>[] : await listParts(id);
+      out.add(AiMessage.fromJson({...row, 'parts': parts}));
+    }
+    return out;
+  }
 
   Future<int> pendingOutbox() async => await _method.invokeMethod<int>('pendingOutbox') ?? 0;
 
@@ -279,12 +363,14 @@ class LocalHarnessRunEventSource implements RunEventSource {
       _method.invokeMethod<bool>('cancelRun', {'runId': runId});
 
   @override
-  Future<void> answerQuestion(String questionId, String answer, {int? optionIndex}) =>
-      _method.invokeMethod<bool>('answerQuestion', {
+  Future<bool> answerQuestion(String questionId, String? answer, {int? optionIndex}) async =>
+      await _method.invokeMethod<bool>('answerQuestion', {
         'questionId': questionId,
-        'answer': answer,
+        // Kotlin 侧 `argument<String>("answer").orEmpty()`：null 与空串等价，这里如实传
+        'answer': ?answer,
         'optionIndex': ?optionIndex,
-      });
+      }) ??
+      false;
 
   /// 订阅本地事件流。
   ///

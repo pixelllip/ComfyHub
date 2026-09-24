@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart' show FocusNode;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/ai_api_client.dart';
+import '../core/run_event_source.dart';
 import '../models/ai_models.dart';
 
 /// AI 工作台状态。
@@ -13,17 +14,26 @@ import '../models/ai_models.dart';
 /// 单独一个 Store，**不塞进 LibraryStore**：画廊 / 提示词的刷新不应该让聊天页整体 rebuild。
 class AiWorkspaceStore extends ChangeNotifier {
   /// [baseUrl] 每次取当前后端地址（设置里改地址后无需重建 store）；
-  /// [api] 仅供测试注入；[prefs] 仅供测试注入（默认走 SharedPreferences）。
-  AiWorkspaceStore({this.baseUrlProvider, AiApiClient? api, SharedPreferences? prefs})
-      : _injected = api,
-        _injectedPrefs = prefs;
+  /// [api] 仅供测试注入；[prefs] 仅供测试注入（默认走 SharedPreferences）；
+  /// [source] 仅供测试注入（默认按平台选：Android → 本地 harness，其余 → 远端 HTTP）。
+  AiWorkspaceStore({
+    this.baseUrlProvider,
+    AiApiClient? api,
+    SharedPreferences? prefs,
+    RunEventSource? source,
+  })  : _injected = api,
+        _injectedPrefs = prefs,
+        _injectedSource = source;
 
   final String Function()? baseUrlProvider;
   final AiApiClient? _injected;
   final SharedPreferences? _injectedPrefs;
+  final RunEventSource? _injectedSource;
   SharedPreferences? _prefs;
   AiApiClient? _cached;
   String? _cachedFor;
+  RunEventSource? _cachedSource;
+  AiApiClient? _cachedSourceFor;
 
   // --- 本地记忆（只用 SharedPreferences，绝不碰密钥） ---
   static const _kLastProvider = 'comfyhub.ai.lastProviderId';
@@ -147,6 +157,26 @@ class AiWorkspaceStore extends ChangeNotifier {
       _cachedFor = base;
     }
     return _cached!;
+  }
+
+  /// **Run 与持久化的来源**（M3.2 ②）。
+  ///
+  /// 手机（Android）上它指向**本地 Kotlin harness**：会话、消息、事件全在手机本地库，
+  /// 桌面不在线也照样能聊；其余平台转发给 HTTP 后端。
+  ///
+  /// ⚠ 分叉只在这一处：`send()` / `_consumeRun()` / `openConversation()` 等**一律走 `_source`**，
+  /// 不许再直接调 `_api.startRun` / `_api.runEvents` —— 只换事件流、持久化仍打远端的话，
+  /// 离线时是"事件有、会话查不到"，界面一个字都不长，两端还都不报错。
+  RunEventSource get _source {
+    final injected = _injectedSource;
+    if (injected != null) return injected;
+    final api = _api;
+    // 与 `_api` 一样按后端地址缓存：设置里改了地址要换一个新的来源
+    if (_cachedSource == null || !identical(_cachedSourceFor, api)) {
+      _cachedSource = openRunEventSource(api: api);
+      _cachedSourceFor = api;
+    }
+    return _cachedSource!;
   }
 
   // --- Provider / 模型 ---
@@ -778,7 +808,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     String? text,
   }) async {
     try {
-      final accepted = await _api.answerQuestion(questionId, optionIndex: optionIndex, answer: text);
+      final accepted = await _source.answerQuestion(questionId, text, optionIndex: optionIndex);
       if (!accepted) {
         // 提问已经结束（超时 / Run 停了）：如实说，不能假装收到
         return (ok: false, message: '这条提问已经结束了（超时或本次回答已停止），这次回答没有被采纳。');
@@ -1062,8 +1092,10 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   /// 真正落库一条新会话，并切过去（新建 / 冷启动都走这里）。
+  ///
+  /// 落库的地点由 [_source] 决定：桌面落后端库，手机落**本地库**（桌面离线也能开新对话）。
   Future<void> _createConversation() async {
-    final conv = await _api.createConversation(
+    final conv = await _source.createConversation(
       providerId: selectedProvider?.id,
       modelId: selectedModel?.id,
     );
@@ -1090,7 +1122,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       await _stashAttachments();
       await _cleanupEmptyConversation();
       conversation = conversations.firstWhere((c) => c.id == id);
-      messages = await _api.listMessages(id);
+      messages = await _source.listMessages(id);
       _syncConversationStats();
       await _applyDraftAttachments(id);
       _pruneLiveState();
@@ -1332,7 +1364,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
     try {
       if (conversation == null) {
-        final conv = await _api.createConversation(
+        final conv = await _source.createConversation(
           title: body.length > 20 ? body.substring(0, 20) : body,
           providerId: provider.id,
           modelId: model.id,
@@ -1352,18 +1384,31 @@ class AiWorkspaceStore extends ChangeNotifier {
       final effort = (model.supportsReasoningEffort && reasoningEffort.isThinking)
           ? reasoningEffort.wire
           : null;
-      final start = await _api.startRun(
-        conv.id,
-        text: body,
-        providerId: provider.id,
-        modelId: model.id,
-        reasoningEffort: effort,
-        attachmentIds: ids,
+      final start = await _source.startRun(
+        RunStartRequest(
+          conversationId: conv.id,
+          text: body,
+          providerId: provider.id,
+          modelId: model.id,
+          reasoningEffort: effort,
+          // 手机本地 harness 要用这三样自己发上游请求（桌面那侧由后端查库，传了也不用）
+          api: provider.api,
+          baseUrl: provider.baseURL,
+          credentialRef: provider.credentialRef,
+          attachmentIds: ids,
+        ),
       );
       _activeRunId = start.runId;
+      // 事件源必须把**库里那条**助手消息的 id 给回来：界面靠它认自己插的流式气泡。
+      // 拿不到就当场失败 —— 悄悄兜一个本地 id 会让"事件一条不少、界面一个字都不长"，
+      // 而那正是最难查的一类故障（M3.2 ① 修的就是它）。
+      final assistantId = start.assistantMessageId;
+      if (assistantId == null || assistantId.isEmpty) {
+        throw StateError('事件源没有回传助手消息 id（${_source.isLocal ? "本地 harness" : "远端后端"}）');
+      }
       // 记下"助手消息 → Run"的关联：失败后的「重试」要把它作为 retryOfRunId 带回去（AIH-024）。
       // 在请求返回时就记，而不是等 `run.started` 事件 —— 后者在流中断时根本收不到。
-      _runIds[start.assistantMessageId] = start.runId;
+      _runIds[assistantId] = start.runId;
 
       // 乐观插入：用户消息 + 空的助手流式消息，收到 delta 就地增长。
       // 用户消息也带上 attachment 块：气泡里立刻就能看到缩略图，不用等重新拉历史。
@@ -1383,7 +1428,7 @@ class AiWorkspaceStore extends ChangeNotifier {
           ],
         ),
         AiMessage(
-          id: start.assistantMessageId,
+          id: assistantId,
           conversationId: conv.id,
           seq: messages.length + 2,
           role: 'assistant',
@@ -1401,7 +1446,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 但也绝不能省掉上面那次：顺序错了就会把刚发出去的话灌回输入框。
       notifyListeners();
 
-      await _consumeRun(start.runId, start.assistantMessageId, conv.id);
+      await _consumeRun(start.runId, assistantId, conv.id);
     } on AiApiException catch (e) {
       error = '启动失败：${e.message}';
       sending = false;
@@ -1420,7 +1465,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     _liveSegments.remove(assistantMessageId);
     _liveToolCalls.remove(assistantMessageId);
     try {
-      await for (final event in _api.runEvents(runId)) {
+      await for (final event in _source.events(runId)) {
         switch (event.type) {
           case 'text.delta':
             streamed += event.text ?? '';
@@ -1618,7 +1663,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     final runId = _activeRunId;
     if (runId == null) return;
     try {
-      await _api.cancelRun(runId);
+      await _source.cancelRun(runId);
       notice = '已请求停止…';
     } catch (e) {
       error = '停止失败：$e';
@@ -1667,20 +1712,30 @@ class AiWorkspaceStore extends ChangeNotifier {
       final effort = (m.supportsReasoningEffort && reasoningEffort.isThinking)
           ? reasoningEffort.wire
           : null;
-      final start = await _api.startRun(
-        conv.id,
-        text: ask.text,
-        providerId: p.id,
-        modelId: m.id,
-        reasoningEffort: effort,
-        retryOfRunId: _runIdOf(assistantMessageId),
+      final start = await _source.startRun(
+        RunStartRequest(
+          conversationId: conv.id,
+          text: ask.text,
+          providerId: p.id,
+          modelId: m.id,
+          reasoningEffort: effort,
+          api: p.api,
+          baseUrl: p.baseURL,
+          credentialRef: p.credentialRef,
+          retryOfRunId: _runIdOf(assistantMessageId),
+        ),
       );
       _activeRunId = start.runId;
+      // 理由同 `send()`：拿不到就当场失败，不悄悄兜底
+      final freshAssistantId = start.assistantMessageId;
+      if (freshAssistantId == null || freshAssistantId.isEmpty) {
+        throw StateError('事件源没有回传助手消息 id（${_source.isLocal ? "本地 harness" : "远端后端"}）');
+      }
       // 这次 Run 与助手消息的关联就地记下（不依赖事件流，刷新消息也不会丢）
-      _runIds[start.assistantMessageId] = start.runId;
+      _runIds[freshAssistantId] = start.runId;
 
       AiMessage streamingPlaceholder(int seq) => AiMessage(
-            id: start.assistantMessageId,
+            id: freshAssistantId,
             conversationId: conv.id,
             seq: seq,
             role: 'assistant',
@@ -1690,7 +1745,7 @@ class AiWorkspaceStore extends ChangeNotifier {
             reasoningEffort: effort,
           );
 
-      if (start.assistantMessageId == assistantMessageId) {
+      if (freshAssistantId == assistantMessageId) {
         // 后端**就地复用**了那条失败气泡（它是空的）→ 同样就地换成流式占位，不新增气泡
         messages = [
           for (final msg in messages)
@@ -1705,7 +1760,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       }
       _syncConversationStats();
       notifyListeners();
-      await _consumeRun(start.runId, start.assistantMessageId, conv.id);
+      await _consumeRun(start.runId, freshAssistantId, conv.id);
     } on AiApiException catch (e) {
       error = '重试失败：${e.message}';
       sending = false;
@@ -1940,7 +1995,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   Future<void> _reloadMessages(String conversationId) async {
     try {
-      final fresh = await _api.listMessages(conversationId);
+      final fresh = await _source.listMessages(conversationId);
       // 后端可能还没落 parts（消息仍在写库）：保留事件里拿到的那些，别把工具卡擦掉
       final known = {for (final m in messages) m.id: m.parts};
       messages = [
@@ -1959,7 +2014,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   Future<List<AiConversation>> _safeListConversations() async {
     try {
-      return await _api.listConversations();
+      return await _source.listConversations();
     } catch (_) {
       return conversations;
     }

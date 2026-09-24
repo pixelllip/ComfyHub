@@ -4,6 +4,8 @@
 /// 前端能拿到的只有 [AiCredentialStatus]。
 library;
 
+import 'dart:convert';
+
 /// 凭据状态：只有"有没有 / 从哪来 / 能不能改"，没有值。
 class AiCredentialStatus {
   final bool configured;
@@ -712,10 +714,26 @@ class AiMessagePart {
         text: json['text']?.toString(),
         attachmentId: json['attachmentId']?.toString(),
         toolCallId: json['toolCallId']?.toString(),
-        payload: json['jsonPayload'] is Map
-            ? Map<String, dynamic>.from(json['jsonPayload'] as Map)
-            : null,
+        // `jsonPayload` 有**两种来路**，必须都认：
+        // ① 桌面后端（Kotlin/JSON 对象）→ 直接就是 Map；
+        // ② 手机桥（`MethodChannel` 的字符串载荷）→ 是一段 JSON 文本。
+        // 只认 Map 的话，手机上每条 `tool_call` 的 `payload` 都是 null，
+        // 表现是**工具卡上的工具名与参数永远空着**（正文还在，所以看着像"只是没显示全"）。
+        payload: _payloadOf(json['jsonPayload']),
       );
+
+  static Map<String, dynamic>? _payloadOf(Object? raw) {
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      } catch (_) {
+        // 坏 payload 不能影响整条消息的解析
+      }
+    }
+    return null;
+  }
 
   /// `tool_call` 部分里模型给的工具名（其它类型返回 null）。
   String? get toolName {

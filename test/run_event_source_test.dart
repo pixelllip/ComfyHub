@@ -128,9 +128,44 @@ void main() {
       modelId: 'm1',
     );
 
-    expect(conv['id'], 'conv-ui-1');
-    expect(conv['title'], '手机上起的');
-    expect(conv['modelId'], 'm1');
+    // 真源是**返回的那条记录**（`AiConversation`），不是请求里那份
+    expect(conv.id, 'conv-ui-1');
+    expect(conv.title, '手机上起的');
+    expect(conv.modelId, 'm1');
+    // 桥给的是 UTC 带 Z：解析后要落到本地时区，否则"最近一次对话"整体偏一个时差
+    expect(conv.updatedAt!.isUtc, isFalse);
+  });
+
+  test('listMessages 把 listParts 的块并进每条消息（少了它工具卡 / 思考段全不见）', () async {
+    mockMethods((call) async {
+      switch (call.method) {
+        case 'listMessages':
+          return jsonEncode([
+            {'id': 'm1', 'conversationId': 'c1', 'seq': 1, 'role': 'user', 'status': 'complete', 'text': '画一只猫'},
+            {'id': 'm2', 'conversationId': 'c1', 'seq': 2, 'role': 'assistant', 'status': 'complete', 'text': '好'},
+          ]);
+        case 'listParts':
+          final id = (call.arguments as Map)['messageId'];
+          if (id != 'm2') return '[]';
+          // ⚠ 桥的 jsonPayload 是**一段 JSON 文本**（桌面后端给的是对象）——
+          // 只认对象的话工具名 / 参数永远空着
+          return jsonEncode([
+            {'type': 'reasoning', 'text': '想一下', 'jsonPayload': null},
+            {'type': 'tool_call', 'text': null, 'toolCallId': 'call-1', 'jsonPayload': '{"name":"comfy_submit","arguments":"{}"}'},
+            {'type': 'text', 'text': '好'},
+          ]);
+        default:
+          return null;
+      }
+    });
+
+    final messages = await source().listMessages('c1');
+    expect(messages, hasLength(2));
+    expect(messages.first.parts, isEmpty);
+    final assistant = messages.last;
+    expect(assistant.parts.map((p) => p.type).toList(), ['reasoning', 'tool_call', 'text']);
+    expect(assistant.parts[1].toolName, 'comfy_submit');
+    expect(assistant.parts[1].toolArguments, '{}');
   });
 
   test('fetchRunKit 把 {ok=false, reason} 原样带回来（拿不到规则就不许开跑）', () async {
@@ -198,12 +233,12 @@ void main() {
     expect(answerArgs['optionIndex'], 1);
   });
 
-  test('本地会话列表：Kotlin 给 JSON 字符串，这里解成 Map 列表', () async {
+  test('本地会话列表：Kotlin 给 JSON 字符串，这里解成会话对象列表', () async {
     mockMethods((call) async => jsonEncode([
           {'id': 'c1', 'title': '离线时起的会话', 'updatedAt': '2026-09-23T05:30:00.000Z'},
         ]));
     final list = await source().listConversations();
     expect(list, hasLength(1));
-    expect(list.single['title'], '离线时起的会话');
+    expect(list.single.title, '离线时起的会话');
   });
 }
