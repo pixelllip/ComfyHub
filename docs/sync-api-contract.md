@@ -78,6 +78,11 @@
 **主键表示**：单列主键 → 标量（`9`）；复合主键 → 数组（`[4, 7]`，如 `prompt_tags` / `media_tags`）。
 `upserts` 里给的是**完整行**（不是 diff），手机直接覆盖本地行。
 
+> 📌 **错误体一律是 `{error, detail?}`**（2026-09-24 与 Kotlin 对齐，P4 第 17 步）：
+> `error` 是**人话**、`detail` 可选且**为空时整个键不出现**（Kotlin `explicitNulls = false`）。
+> **`410 Gone` 的 `error` 也照此** —— 手机判 410 认的是**状态码**，不要去比对 `error` 的值
+> （早先实现里的 `"GONE"` / `"NOT_FOUND"` 这类稳定码已经废弃，见 `server-rs/src/routes.rs` 的 `ApiError`）。
+
 ---
 
 ## 3. `GET /api/sync/bootstrap?page=N`

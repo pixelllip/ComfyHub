@@ -536,13 +536,85 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   其中 `krea2SFWNSFWUncensoredImageTo_v10.json` → `inLibrary=true, promptId=305`
 >   （**正是用户 bug ⑤ 里那份工作流**）；真库只读未改。
 
+> ✅ **P4 第 17 步（`0f4552e`，2026-09-24）：错误体对齐 `{error, detail?}`（Task 1）** ——
+> **"指向 Rust 时界面显示机器码"那个 bug 的根**。基线是把 Kotlin（8090）与 Rust（8091）
+> 挂在同一份真库副本上**逐条 curl** 出来的：
+>
+> | 场景 | Kotlin 实测 | Rust（改前） |
+> | --- | --- | --- |
+> | `GET /api/prompts/abc` | `400 {"error":"非法的 id"}` | `400 {"error":"BAD_REQUEST","message":"非法的 id"}` |
+> | `GET /api/ai/conversations/999999` | `400 {"error":"CONFIG_ERROR","detail":"会话不存在: 999999"}` | （未搬） |
+>
+> 两种形态（`Application.kt:567` 的 StatusPages 就是这么分的）：**普通错误 `error` = 人话**；
+> **`AiException` 是 `error` = 稳定码 + `detail` = 人话**（AIH-024）。
+> 而 Dart 读的是 `error`（`ApiClient._decode`）/ **先读 `detail`**（`AiApiClient._decode`）——
+> 键名一错，两个客户端都读不到人话，**而且不报错**。
+> - `ApiError` 改成 `{status, error, detail: Option<String>}`：`detail == None` 时**整键省略**
+>   （手拼 `Map`，用 `json!` 会写出 `"detail": null`）；新增 `ApiError::ai(code, message)`；
+>   内部取人话统一走 `e.human()`（`sync.push` 的 `rejected[].message`、上传失败原因）。
+> - 顺手堵两个静默点：未知路径的默认 fallback 是**空 body** → 补 `{"error":"接口不存在: …"}`；
+>   `Path<i64>` 解析失败时 axum 回**纯文本** 400 → 新增 `Id` / `IdPair` 提取器。
+> - 防线：`api_test` 两例（普通错误只有 `error` 一个键且是人话 / AI 错误两键、`detail` 空则省略）
+>   + Dart 侧 `test/api_error_envelope_test.dart` 5 例（两个客户端的读取顺序各钉一遍）。
+>
+> ✅ **P4 第 18 步（`99026a2`，2026-09-24）：可空字段一律省略键（`explicitNulls = false`）** ——
+> Kotlin 的 `AppJson` 是 `explicitNulls = false`（`Json.kt:12`），真库副本上同一个
+> `/api/prompts?size=100` 一比：**27 条里 24 条形状不一致**（Rust 侧的 `notes` / `negativePrompt` /
+> `batchSize` / `cfgScale` / `width` / `height` / `sampler` / `scheduler` / `sourceRef` 全是 `null`，
+> Kotlin 侧**连键都没有**）；`TagDto` 还私加了一个 Kotlin 根本没定义过的 `normalized`。
+> 更糟的是 `api_test` 里那些"精确键集合"断言当初照着**错的形状**写，等于**用测试把错误钉住了**。
+> - 所有对应 Kotlin 可空字段的 `Option<T>` 补 `skip_serializing_if = "Option::is_none"`
+>   （`models.rs` / `ai.rs` / `capture.rs` / `comfy_dirs.rs` / `media_upload.rs`），删掉私加的 `normalized`；
+> - 键集合断言改成**按夹具的 NULL 情况逐条算**（并显式断言 `!contains_key`）；
+> - **防新 DTO 复发**：`server-rs/tests/shape_lint.rs` 扫全仓源码 ——
+>   `#[derive(… Serialize …)]` 的 `pub struct` 里 `Option<…>` 字段必须有 skip，
+>   唯一豁免是契约写死回 null 的 `sync.rs::kit_version`；另有一例专测扫描器**会不会漏报/误报**。
+>   ⚠ 下一个 `/api/ai/models` 就靠这条防线（它有一堆 `thinkingFormat` / `maxOutputTokens` /
+>   `capabilityVerifiedAt` 这样的可空字段）。
+> - **验收判据**：真库副本上 Kotlin 8090 与 Rust 8091 的 **13 个数据端点 canon 后零差异**
+>   （tags / prompts 列表与详情 / media 列表与详情 / media prompt / providers / capture config /
+>   locate / workflows / stats / categories / prompts-media）。
+>
+> ✅ **P4 第 19 步（`e6d9947`，2026-09-24）：对照时顺手抓到的另外两处形状/取值不一致** ——
+> 1. **`/api/health` 少了 Dart 承重读的三个键**（`database` / `version` / `storageDir`）：
+>    `lib/core/backend_launcher.dart:271/379/426` 把 **`health['database'] == "ok"`** 当作
+>    "后端已就绪"的**唯一判据** —— 少了它，**P4 切流那天 App 会认为后端没起来**、一直等/去"修复"。
+>    现在与 Kotlin `HealthDto` 同形（`database` 是真跑一次 `SELECT 1` 的结果，不是常量），
+>    `impl` / `db` / `schemaVersion` / `engine` 作为 Rust 侧诊断**多给**（客户端按 key 取值）。
+> 2. **`modifiedAt` 精度**：`chrono_lite` 的注释写着"与 Java `Instant.toString()` 同形"、
+>    实现却写死 3 位小数 —— 真机上 Kotlin 是 `…:33.917303200Z`、Rust 是 `…:33.917Z`。
+>    改成 Java 的规则（小数位 0/3/6/9，按三位一组去尾零），并补一例把规则钉死。
+>
+> ✅ **Flutter 侧收口（`2b4f7d2`，2026-09-24）**：新增 `test/api_error_envelope_test.dart` 5 例
+> （`ApiClient` 读 `error`、`AiApiClient` 先读 `detail`、只剩 `message` 的老形状读不到），
+> 并修掉 `ai_api_client.dart` 里那句"后端的统一错误体是 `{code, message}`"的**过期注释**。
+>
+> 📌 **这一轮最值钱的教训**：`cargo test` 全绿 ≠ 形状对。**这些差异全是"对着同一份真库副本
+> 把两个实现逐条比"才摆出来的**（键集合、错误体、`null` vs 缺键、`modifiedAt` 精度）。
+> 下一批（`/api/ai/models` 起）同样要留一次这种对照 —— 夹具只覆盖你**想到**的行。
+
 ---
 
 ## 9. 下一轮从哪起手
 
-> **2026-09-24 第二轮（13:06~13:55 这一段）共 9 个提交（5 个代码 + 4 个文档）**，全部测试在当前 HEAD 上是绿的：
-> `cargo test` **88 例**（34 lib + 54 集成）、`flutter test` **264 例**
+> **2026-09-24 第三轮（错误体/形状对齐这一轮）共 4 个提交**，全部测试在当前 HEAD 上是绿的：
+> `cargo test` **93 例**（35 lib + 56 api_test + 2 shape_lint）、`flutter test` **269 例**
 > （`:harness:testDebugUnitTest` 148 例未动）。
+>
+> | 提交 | 内容 |
+> | --- | --- |
+> | `0f4552e` | P4 第 17 步：错误体对齐 `{error, detail?}`（**Task 1**） |
+> | `99026a2` | P4 第 18 步：可空字段一律省略键 + `shape_lint` 源码扫描防线 |
+> | `e6d9947` | P4 第 19 步：`/api/health` 补齐 Dart 读的三个键 + `modifiedAt` 精度 |
+> | `2b4f7d2` | Flutter：`api_error_envelope_test.dart`（读取点钉死）+ 修过期注释 |
+>
+> **下一件该做的事：`/api/ai/models`（Task 2）** —— 形状基线已经用第 17/18 步的结论钉住了
+> （见下面 ③ 的"models 起手笔记"），**照那张单子做，别照着 DTO 猜**。
+>
+> ---
+>
+> **2026-09-24 第二轮（13:06~13:55 这一段）共 9 个提交（5 个代码 + 4 个文档）**：
+> `cargo test` **88 例**、`flutter test` **264 例**。
 > 这一轮做掉了旧交接单里的 **①（M3.2 ② 离线可用）**、**② 的一半（工作流文件列出来）**，
 > 下面按"价值 ÷ 风险"重排剩下的部分。
 >
@@ -611,11 +683,34 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 > `comfyhub.ps1 up` 对着 8080 抄键集合），**别照着 DTO 猜** —— 这个仓库已经因为
 > "少一个键 = 界面上少一块内容"栽过好几次（见 `api_test.rs` 里那些精确键集合断言）。
 
-### ④ 三个小的、可以顺手做掉的
+> 🔎 **`/api/ai/models` 的起手笔记（Task 2，2026-09-24 写在第 17/18 步之后 ——
+> 这两条基线就是为它准备的）**
+>
+> 1. **错误体用 `ApiError::ai(code, 人话)`**，别用 `bad_request(人话)`：
+>    `/api/ai/*` 抛的是 `AiException`，Kotlin 侧一律回 **400 + `{error: 稳定码, detail: 人话}`**
+>    （`CONFIG_ERROR` / `UNKNOWN_MODEL` / `UNSUPPORTED_CONTENT` / `PROVIDER_UNREACHABLE` …，
+>    见 `AiDomain.kt` 的 `AiErrorCode`），前端拿 `error` 分支、拿 `detail` 给用户看。
+>    **普通错误反过来**（`error` 就是人话）—— 混了不会报错，只会让界面显示机器码（Task 1 那个 bug）。
+> 2. **可空字段一律省略键**（`explicitNulls = false`）——**模型目录正是这条被实测出来时用的样本**：
+>    真库副本上 Kotlin 的 `/api/ai/models` 里，`claude-opus-5-5` **没有 `thinkingFormat` 键**，
+>    而且**所有模型都没有 `maxOutputTokens` / `capabilityVerifiedAt` 键**（`AiRepo.kt:253/254/274`
+>    用 `isoTime(...)`，NULL → `null` → 键不出现）。
+>    Rust 侧每写一个 `Option<T>` 就顺手加 `#[serde(skip_serializing_if = "Option::is_none")]`，
+>    否则 `server-rs/tests/shape_lint.rs` 会红（那正是它的用途）。
+> 3. **别对着 DTO 猜键名**：第 16 步就栽过一次 `base_url` → `baseURL`（差一个大小写、
+>    界面读到的 URL 是空的）。做法照旧：真库副本起 Kotlin（8090）/ Rust（8091）、
+>    **canon 后逐条比**（第 18 步收尾时那 13 个数据端点已经零差异，models 加进去应当仍是零差异），
+>    键集合断言按"哪些字段在真库里有值"逐条算，**不要**写成"所有键一定都在"。
+> 4. 顺带把 **`capabilityVerifiedAt` 这类时间戳**的取值口径统一：库里是 ISO-8601 UTC 文本，
+>    照 `isoTime` 直出（别自己格式化）。
+
+### ④ 可以顺手做掉的几个小的
 
 - ✅ **`/api/capture/locate` + `/locate/apply`**：已做（第 15 步，`e3d7f7d`）。
 - **手机侧的空壳会话清理**：桥缺 deleteConversation，于是本地库会攒下空壳（M3.2 ③ 留下的那条坑）。
 - **i_run_events 的保留窗口（R5）**：pruneEvents 在 Kotlin 侧仍是死代码，Rust 侧更没有。
+- ✅ **错误体 / 可空字段形状对齐**：已做（第 17~19 步 + Flutter 收口，见本节开头那张提交表）——
+  这是 **Task 1**；**Task 2 = `/api/ai/models`**，上面那张起手笔记就是给它写的。
 
 ---
 
