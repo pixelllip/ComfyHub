@@ -465,3 +465,21 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > `?page=N` 与响应形状 `{table, page, pageSize, totalPages, rows[]}`，但**没说 `table` 怎么给**
 > （是 `?table=prompts&page=1`，还是"page 的顺序遍历所有同步表"）。这决定手机侧的重建循环怎么写，
 > **别猜着实现**——先定契约再写两端（M4 上线前必须定）。
+>
+> ✅ **P4 第 13 步（`f08d973`，2026-09-24）**：`GET /api/sync/bootstrap` —— **上面那条留白当场拍板了**，
+> 四条同步端点**全部落地**（manifest / changes / push / bootstrap）。
+> - 决定：**`?table=<表>&page=N&pageSize=N`，`table` 必填**，缺了回 `400` 并**列出合法表名**。
+>   理由：只给 `?page=N`（把十几张表"拍平"成一串页）会让响应里的 **`totalPages` 失去意义**
+>   （是全部数据还是这张表的？），而"第 N 页是哪张表"又要客户端自己算 —— 可契约偏偏让**服务端**
+>   回 `table` 字段。`?table=` 让 `table` / `totalPages` / `rows` 三者自洽。
+>   **这条决定已写进 🔒 `docs/sync-api-contract.md` §3**（标注"实现时定"），不是悄悄改行为。
+> - 两条纪律：**绝不发 `.db` 文件**（只发那 10 张表，`app_settings` 等一律 400 —— 那里有配对令牌
+>   明文）；**按主键稳定升序**（SQLite 不保证无 `ORDER BY` 的顺序，翻页顺序不稳就会重复或漏掉行）。
+> - **验收**：`cargo test` **71 例全绿**（25 lib + 46 集成），新增 2 例：翻完所有页去重后**正好 5 条**
+>   （不重不漏）+ 键集合就是契约 §3；凭据/令牌表一律 400 且响应里不含令牌字符串；缺 `table` 也是 400。
+>
+> 📊 **P4 至此的端点覆盖**：业务 `tags` / `prompts` / `media`（列表·详情·文件流·缩略图·上传·写侧）/
+> `stats` / 捕获配置 / 工作流原文 / `api-graph` + **同步 4 条**全部可用。仍未搬：
+> `/api/capture/{status,jobs,poll,locate*,import*,workflows}`、`/api/ingest/comfyui`（都要 ComfyUI 在场）、
+> `/api/ai/*`（**R6~R10 的 Rust 侧重建一点没动** —— 这是 P4 剩下的最大一块，也是 §7 风险表里
+> "11,103 行 Kotlin 测试要重写"那块）。
