@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../models/models.dart';
+import 'pairing_token.dart';
 
 /// 后端返回的错误
 class ApiException implements Exception {
@@ -25,12 +26,18 @@ class ApiClient {
 
   /// **配对令牌**（`X-ComfyHub-Token`）的取值回调（`docs/pairing-design.md` §11）。
   ///
-  /// 默认 `null` = **一个字节都不变**：以前这些请求一律不带任何自定义头，
-  /// 桌面与回环场景本来就不需要令牌。只有**给了回调、且回调回了非空值**时才加上这个头。
+  /// **默认就是"每次现取进程内那一份"**（[PairingTokenCache.read]）—— 这是刻意的：
+  /// 闸门一开，不带令牌的请求在局域网上一律 403，而"某个页面忘了接线"这种漏法
+  /// 2026-09-24 真机验收真的发生过（「AI 模型与凭据」页一条红横幅 `需要配对令牌`，
+  /// 而同一个 App 里的 AI 工作台带着令牌跑得好好的）。
+  /// 做成默认值之后，**新增页面什么都不用记得**。
+  ///
+  /// 桌面侧它恒为 `null`（没有任何东西会写那个缓存）→ 请求与以前**逐字节相同**。
   final String? Function()? tokenProvider;
 
-  ApiClient(this.baseUrl, {http.Client? client, this.tokenProvider})
-      : _client = client ?? http.Client();
+  ApiClient(this.baseUrl, {http.Client? client, String? Function()? tokenProvider})
+      : tokenProvider = tokenProvider ?? PairingTokenCache.read,
+        _client = client ?? http.Client();
 
   void dispose() => _client.close();
 

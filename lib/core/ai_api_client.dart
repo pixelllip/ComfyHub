@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/ai_models.dart';
+import 'pairing_token.dart';
 
 /// AI 工作台的后端客户端（AIH-006 / AIH-012 / AIH-018 / AIH-029）。
 ///
@@ -14,15 +15,20 @@ class AiApiClient {
 
   /// **配对令牌**（`X-ComfyHub-Token`）的取值回调（`docs/pairing-design.md` §11）。
   ///
-  /// 默认 `null` = **一个字节都不变**：不带头时后端照旧按"闸门没开 / 回环"放行，
-  /// 桌面三条 e2e 与既有用例都走这条（它们一个头都不带）。
+  /// **默认就是"每次现取进程内那一份"**（[PairingTokenCache.read]）—— 这是刻意的：
+  /// 闸门一开，不带令牌的请求在局域网上一律 403，而"某个页面忘了接线"这种漏法
+  /// 2026-09-24 真机验收真的发生过（「AI 模型与凭据」页自己造了个客户端，
+  /// 一条红横幅 `需要配对令牌`，而同一个 App 的 AI 工作台带着令牌跑得好好的）。
+  /// 做成默认值之后**新增页面什么都不用记得**；桌面侧那个缓存恒为 `null`，
+  /// 所以桌面请求与以前**逐字节相同**（三条既有 e2e 一个头都不带，靠的就是这条）。
   ///
-  /// 做成回调而不是构造时取一次值：手机配对成功那一刻令牌才出现在内存里
-  /// （`AiWorkspaceStore.pairingToken`），缓存一份头会让它要等 client 重建才生效。
+  /// 做成回调而不是构造时取一次值：配对成功那一刻令牌才出现在内存里，
+  /// 缓存一份头会让它要等 client 重建才生效。
   final String? Function()? tokenProvider;
 
-  AiApiClient(this.baseUrl, {http.Client? client, this.tokenProvider})
-      : _client = client ?? http.Client();
+  AiApiClient(this.baseUrl, {http.Client? client, String? Function()? tokenProvider})
+      : tokenProvider = tokenProvider ?? PairingTokenCache.read,
+        _client = client ?? http.Client();
 
   void dispose() => _client.close();
 

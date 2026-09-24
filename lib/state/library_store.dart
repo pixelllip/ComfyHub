@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 
 import '../core/api_client.dart';
-import '../core/inbound_auth_api.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
 
@@ -17,12 +16,9 @@ class LibraryStore extends ChangeNotifier {
 
   /// 库这一侧（画廊 / 提示词 / 标签）的 HTTP 客户端。
   ///
-  /// 手机连桌面时**要带配对令牌**：闸门一开，这些端点对匿名请求一律 403
-  /// （`docs/pairing-design.md` §11.4）。令牌真源在 Android Keystore，
-  /// 这里读的是 [`PairingTokenStore.cached`]（进程内那一份，桌面侧恒为 null）。
-  /// 读的是**回调**而不是值：配对成功之后那些已经造好的客户端不必重建。
-  static ApiClient _libraryClient(String baseUrl) =>
-      ApiClient(baseUrl, tokenProvider: () => PairingTokenStore.cached);
+  /// 令牌**不用在这里接**：`ApiClient` 默认就去读进程内那一份配对令牌
+  /// （[PairingTokenCache]）。手机连桌面时它是真值，桌面侧恒为 `null` ⇒ 桌面行为不变。
+  static ApiClient _libraryClient(String baseUrl) => ApiClient(baseUrl);
 
   final SettingsStore _settings;
 

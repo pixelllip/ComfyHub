@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 
 import '../core/ai_api_client.dart';
-import '../core/inbound_auth_api.dart';
 import '../models/ai_models.dart';
 
 /// NSFW 内容开关（2026-09-20 用户要求）。
@@ -31,9 +30,8 @@ class NsfwStore extends ChangeNotifier {
     final base = baseUrlProvider!();
     if (_cached == null || _cachedFor != base) {
       _cached?.dispose();
-      // 与 `LibraryStore` 同一条理由：手机连桌面时闸门一开就要带配对令牌，
-      // 否则 NSFW 开关在手机上永远 403（`docs/pairing-design.md` §11.4）
-      _cached = AiApiClient(base, tokenProvider: () => PairingTokenStore.cached);
+      // 令牌由 `AiApiClient` 默认带上（进程内那一份配对令牌）—— 见 `PairingTokenCache`
+      _cached = AiApiClient(base);
       _cachedFor = base;
     }
     return _cached!;

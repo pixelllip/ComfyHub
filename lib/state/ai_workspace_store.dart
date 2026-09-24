@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/ai_api_client.dart';
 import '../core/credential_store.dart';
 import '../core/inbound_auth_api.dart';
+import '../core/pairing_token.dart';
 import '../core/run_event_source.dart';
 import '../models/ai_models.dart';
 
@@ -173,8 +174,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     final base = baseUrlProvider!();
     if (_cached == null || _cachedFor != base) {
       _cached?.dispose();
-      // 令牌**现取**（配对成功那一刻内存里的值就变了，见 [pairingToken]）
-      _cached = AiApiClient(base, tokenProvider: () => pairingToken);
+      // 令牌**不用显式接**：`AiApiClient` 默认就读进程内那一份（[PairingTokenCache]），
+      // 于是"某个页面忘了带令牌"这类漏法从根上没有了 —— 2026-09-24 真机验收真踩过
+      _cached = AiApiClient(base);
       _cachedFor = base;
     }
     return _cached!;
@@ -1081,9 +1083,13 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// （取规则工件 / 上行同步 / 取密钥）在闸门打开后一律 403 —— 这正是"手机侧看起来
   /// 全都接好了、却一条都跑不通"的原因（以前这里根本没有这个字段，`token` 恒 null）。
   ///
-  /// ⚠ **只在内存里缓存，绝不落 SharedPreferences**：它和 API Key 同级，
-  /// 真源是 Android Keystore（[PairingTokenStore]），落明文偏好文件等于白存密钥库。
-  String? pairingToken;
+  /// ⚠ **只在内存里、且只有一份**：真源是 Android Keystore（[PairingTokenStore]），
+  /// 这份读的是进程内缓存 [`PairingTokenCache`]（**HTTP 客户端也默认读它**，见
+  /// `ApiClient` 的构造函数）。
+  /// 2026-09-24 真机验收踩过一次"两份令牌"的坑：AI 工作台这一路带着令牌跑得好好的，
+  /// 而「AI 模型与凭据」页自己造的客户端没带 → 那边一条红横幅 `需要配对令牌`。
+  /// 所以这里**只留一个来源**，别再加第二个字段。
+  String? get pairingToken => PairingTokenCache.value;
 
   /// 冷启动时**尽力**把令牌读进内存。
   ///
@@ -1091,10 +1097,11 @@ class AiWorkspaceStore extends ChangeNotifier {
   Future<void> _loadPairingToken() async {
     if (!_source.isLocal) return; // 桌面没有密钥库：配对令牌只存在于手机
     try {
-      pairingToken = await PairingTokenStore().read();
+      // 读出来的值由 `PairingTokenStore.read()` 写进进程内缓存（上面那个 getter 读的就是它）
+      await PairingTokenStore().read();
     } catch (_) {
       // 桥不可用 / 密钥库读不动：当作"还没配对"，用户去设置页配一次即可
-      pairingToken = null;
+      PairingTokenCache.set(null);
     }
   }
 

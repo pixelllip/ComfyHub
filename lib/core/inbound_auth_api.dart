@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_client.dart' show ApiException;
+import 'pairing_token.dart';
 
 /// 桌面 `/api/auth*` 与 `/api/ai/credentials` 的客户端（配对闸门，🔒 `docs/pairing-design.md` §11）。
 ///
@@ -351,19 +352,16 @@ class PairingTokenStore {
 
   final MethodChannel _method;
 
-  /// **内存里的那一份令牌**（进程内共享，不落盘）。
+  /// **内存里的那一份令牌**（进程内共享，不落盘）—— 见 [`PairingTokenCache`]。
   ///
-  /// 为什么要有它：`X-ComfyHub-Token` 不止 AI 工作台要用 —— 手机上的画廊 / 提示词 /
-  /// 标签 / NSFW 开关走的是 `ApiClient`，闸门一开它们**全都会 403**。
-  /// 把令牌从 `AiWorkspaceStore` 引到那几个 store 又要跨 provider 接线，
-  /// 所以这里留一个进程内缓存：谁能拿到它谁就能带令牌（桌面侧永远是 `null`）。
-  static String? cached;
+  /// 保留这个 getter 是为了读起来顺：`PairingTokenStore.cached` 就是"这台机器现在拿着什么"。
+  static String? get cached => PairingTokenCache.value;
 
   /// 读回令牌（**手机上唯一会"取出密钥"的地方**：它要放进请求头）。
   Future<String?> read() async {
     final v = await _method.invokeMethod<String>('getCredential', {'ref': ref});
-    cached = (v == null || v.isEmpty) ? null : v;
-    return cached;
+    PairingTokenCache.set(v);
+    return PairingTokenCache.value;
   }
 
   /// 存令牌。存失败**必须让调用方看见**（存不下去的令牌 = 每次启动都要重配）。
@@ -372,12 +370,12 @@ class PairingTokenStore {
       throw StateError('令牌为空，拒绝写入密钥库');
     }
     await _method.invokeMethod<bool>('putCredential', {'ref': ref, 'value': token});
-    cached = token;
+    PairingTokenCache.set(token);
   }
 
   Future<void> clear() async {
     await _method.invokeMethod<bool>('removeCredential', {'ref': ref});
-    cached = null;
+    PairingTokenCache.set(null);
   }
 
   /// 配对时要报给桌面的身份。

@@ -452,7 +452,11 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       ..clearSnackBars()
       ..showSnackBar(
         SnackBar(
-          content: Text(message),
+          // 长错误（比如"更新能力目录失败：接口不存在: /api/ai/capabilities/refresh"）
+          // 在手机上会超出浮层允许的高度，画成 `BOTTOM OVERFLOWED BY 14 PIXELS`
+          // （2026-09-24 真机验收用户报的就是它）。套一层滚动容器：
+          // 高度不够就**滚动**，而不是把内容画到框外面去。消息一个字都不改。
+          content: SingleChildScrollView(child: Text(message)),
           behavior: SnackBarBehavior.floating,
           duration: Duration(seconds: error ? 8 : 3),
           backgroundColor: error ? Theme.of(context).colorScheme.errorContainer : null,
@@ -1931,30 +1935,34 @@ class _CapabilityCatalogCard extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 6),
-            // 单行放完：开关 + 两个动作。这张卡上面已经压着内置目录卡，
-            // 高度能省则省 —— 模型列表的懒构建表头本来就快一屏高。
-            Row(
+            // 开关 + 说明 + 两个动作。
+            //
+            // ⚠ 用 `Wrap` 而不是 `Row`（2026-09-24 真机验收，OnePlus 8T / 1080x2400）：
+            // 这一行在手机上**放不下**，`Row` 会画成 `RIGHT OVERFLOWED BY 2 PIXELS`
+            // （用户报的就是那道黄黑斜纹）。窄了就该换行，不能硬挤 —— 两个按钮
+            // 换到第二行比"右边两个像素画到屏幕外"好得多。
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Switch(
-                  value: s?.probeEnabled ?? false,
-                  onChanged: busy ? null : (v) => onProbeToggle?.call(v),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Switch(
+                      value: s?.probeEnabled ?? false,
+                      onChanged: busy ? null : (v) => onProbeToggle?.call(v),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    const SizedBox(width: 2),
+                    Text('允许实测校准（发真实请求，可能产生少量费用）', style: theme.textTheme.bodySmall),
+                  ],
                 ),
-                const SizedBox(width: 2),
-                Flexible(
-                  child: Text(
-                    '允许实测校准（发真实请求，可能产生少量费用）',
-                    style: theme.textTheme.bodySmall,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 8),
                 FilledButton.icon(
                   onPressed: (busy || update == null) ? null : () => update(),
                   icon: const Icon(Icons.cloud_download_outlined, size: 16),
                   label: const Text('立即更新'),
                 ),
-                const SizedBox(width: 8),
                 OutlinedButton.icon(
                   onPressed: (busy || probeBusy || probe == null || s?.probeEnabled != true)
                       ? null
