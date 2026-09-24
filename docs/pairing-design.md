@@ -469,3 +469,117 @@ GET  /api/ai/credentials?refs=a,b         回环 或 **已配对且 allowCredent
 - `devicePublicKey` 请求签名（§8 已声明不做）；
 - HTTPS / 公网暴露（§8）；
 - 手机侧的前台服务与后台长时间 Run（归总纲 §7 风险表，与本轮无关）。
+
+---
+
+## 12. 真机怎么验（可复现的操作手册）
+
+> 这一节是**给下一个人照做的**：不写"我验过了"，写"怎么验、看什么才算通过"。
+> 桌面与手机在同一台 Wi-Fi 下（本机实测：PC `10.44.130.232` / 手机 `10.44.33.71`）。
+
+### 12.1 前置：谁在跑
+
+配对端点**只在 Rust 后端上**（§5.4）。所以要把 Rust 后端**听在局域网上**：
+
+```powershell
+.\server-rs\target\debug\comfyhub-server-rs.exe --db .db\comfyhub.db --storage storage --host 0.0.0.0 --port 8081
+curl.exe http://127.0.0.1:8081/api/health          # → {"database":"ok","impl":"rust",…}
+```
+
+**两个容易卡住的点**（都实测过）：
+
+1. **Windows 防火墙**：非交互式启动的未知程序会被系统**自动建一条 Block 规则**
+   （实测 `comfyhub-server-rs.exe` 上有两条 `Inbound/Block/Public`，而 WLAN 正是 Public 档）。
+   防火墙里 **Block 优先于 Allow**，所以只加一条放行规则是没用的，得先把 Block 删掉：
+   ```powershell
+   Get-NetFirewallRule -DisplayName 'comfyhub-server-rs.exe' | Remove-NetFirewallRule
+   New-NetFirewallRule -DisplayName 'ComfyHub 手机配对' -Direction Inbound -Action Allow `
+     -Protocol TCP -LocalPort 8081 -RemoteAddress 10.44.33.71 -Profile Any
+   ```
+   **验完把它删掉**（只留这一条、且只允许那一台手机的地址）。
+2. **手机能不能连上**：安卓有 `toybox`，用它发一个原始 HTTP 请求最省事：
+   ```powershell
+   adb shell "echo GET /api/health | toybox nc 10.44.130.232 8081"
+   # 回 HTTP/1.1 400 Bad Request 就说明**通了**（400 是因为没写请求路径，不是失败）
+   ```
+
+### 12.2 手机侧
+
+```powershell
+flutter build apk --debug
+adb install -r build\app\outputs\flutter-apk\app-debug.apk
+adb shell svc power stayon usb      # 大包传输中途设备别掉线
+```
+
+手机上：**设置 → 远程访问与配对** → 把「桌面地址」填成 `http://10.44.130.232:8081` → 点「配对新电脑」。
+
+### 12.3 桌面侧（两种都行）
+
+- **有界面**：桌面 App 的地址也要指向 Rust（灰度期默认连的是 Kotlin 的 8080，
+  而 `/api/auth` 只在 Rust 上）→ 设置 → 远程访问与配对 → 打开「允许移动端连接」→
+  展开「配对新手机」→ 卡片上会出现 **6 位码**；
+- **没界面**（脚本 / 远程）：全是回环端点，本机 curl 即可：
+  ```powershell
+  curl.exe -X PUT http://127.0.0.1:8081/api/auth -H 'content-type: application/json' -d '{\"enabled\":true}'
+  curl.exe http://127.0.0.1:8081/api/auth/pair/pending        # → pending[].code 就是屏幕上那组码
+  ```
+
+把码敲进手机 → 配对成功。**通过判据**（少一条都不算过）：
+
+1. `GET /api/auth/devices`（回环）里多出那台设备，`allowCredentials=false`；
+2. 手机上再点一次发送不再被拦（说明令牌真的进了请求头）；
+3. **把防火墙那条规则删掉之后**，手机上报 `403`（而不是"连不上"）——
+   那证明它连的是后端、只是没带令牌。
+
+### 12.4 密钥下行（用户问的"API Key 设置互传"）
+
+1. 桌面上勾那台设备的「允许把密钥发给这台设备」（默认关，**这是唯一的开关**）；
+2. 手机上点「从桌面同步密钥」；
+3. 通过判据：手机上该 Provider 的凭据状态变成 `keystore`（不是 `none`），
+   而且**发送一条消息能收到真回复**（上游 401 会当场露馅）。
+
+> ⚠ 桌面上没勾就点同步：手机拿到的是"未授权"，界面要如实说"这把还得自己填" ——
+> 那不是失败，是默认就该这样（§11.3）。
+
+### 12.5 ✅ 实测记录（2026-09-24，OnePlus 8T / KB2000 + Windows 本机）
+
+**结论：电脑 → 手机（provider 配置 + API Key）与 手机 → 电脑（会话 / 消息 / 有序块）
+两个方向都通了**，而且是在**闸门打开**的状态下走的（不是"局域网裸奔"那条路）。
+
+| # | 验的是什么 | 实测证据 |
+| --- | --- | --- |
+| 1 | 手机连得上电脑（局域网 + 防火墙） | `adb shell "echo GET /api/health \| toybox nc 10.44.130.232 8081"` → `HTTP/1.1 400 Bad Request`（400 是因为没写请求路径） |
+| 2 | 闸门开着时局域网匿名被挡 | 手机上没带令牌打 `/api/prompts` → **`403`**（不是连不上） |
+| 3 | 手机举手 → 桌面出码 → 兑码 | `pair/pending` 里出现 `requestId=7d930b8a…`、`ip=10.44.33.71`、`deviceName=KB2000`、`code=575340`；手机敲完码提示"已配对" |
+| 4 | 设备令牌**落库**且是专属于这台设备的 | `app_settings.auth.pairing`：`schema=/2`、全局令牌 43 字符、`devices[0].token` **43 字符**、`allowCredentials=false` |
+| 5 | 配对之后手机**真的在带令牌** | `lastSeenAt` 在配对后立刻跳动（没有令牌的请求不会被记这一笔） |
+| 6 | **API Key 下行** | 手机 `shared_prefs/comfyhub_credentials.xml` 里出现 `auth.pairing` / `COMMAND_CODE_GOAT` / `DEEPSEEK_API_KEY` 三条（值都是 AES/GCM 密文）；界面提示"取回了几把密钥" |
+| 7 | **用下行来的 Key 真的聊通一轮** | 手机上收到真回复（上游就是 `api.commandcode.ai`，用的是桌面上那一把 key） |
+| 8 | **数据回传到桌面** | `_sync_log` 在 `14:41:29` / `14:42:02` 记下手机的 `ai_messages` + `ai_message_parts` 上行；桌面库里那条会话是 `provider_id=command-code-goat`、`model_id=deepseek/deepseek-v4.1-flash`（**正是手机上选的那个**，桌面 App 自己记的是"假模型"，而且它当时根本没开） |
+
+> 📌 **这一步抓住的坑（都已修，见 §13）**：`adb install -r` 会卡死（要 `push` + `pm install`）、
+> `input tap` 坐标与截图对不上（最后是**请用户点**）、「AI 模型与凭据」页自己造了个不带令牌的客户端
+> （真机上一打开就是红横幅 `需要配对令牌`，而配对明明是成功的）、以及手机上两处 `RenderFlex` 溢出。
+
+### 12.6 手机与桌面的地址不一致（灰度期的事实，别当 bug）
+
+手机上只需填**一个**地址，而它必须指向**同时有 `/api/auth` 与 `/api/sync/push` 的那个后端** ——
+今天就是 **Rust（8081）**。桌面 App 默认连的是 Kotlin（8080，它没有 `/api/auth`），
+所以：
+
+* 想用桌面上的**配对卡片**，得把桌面 App 的地址也改成 Rust 的 8081（设置 → 远程访问与配对）；
+* 不改也行 —— 桌面那几个管理端点全是**回环**的，本机 `curl` 一样能开闸门、看码、勾授权（§12.3）。
+
+这也是 P4 收口时要消掉的那条缝：等 Rust 把 `/api/capture/*` 与 `/api/ai/*` 剩下的搬完，
+两端就都只连一个后端了。
+
+---
+
+## 13. 这一轮真机验收改掉的东西（都在 `docs/pitfalls.md` 有台账）
+
+| 改动 | 为什么非改不可 |
+| --- | --- |
+| **令牌只留一份，且由客户端默认带上**（`lib/core/pairing_token.dart`） | 真机上「AI 模型与凭据」页一条红横幅 `需要配对令牌`，而同一个 App 的 AI 工作台跑得好好的 —— 因为那个页面自己 `new` 了一个不带令牌的客户端。"哪个页面忘了接线"这种漏法不可能靠人眼守住，所以做成客户端的默认值 |
+| 配对**兑码也按来源地址限速**（20/分） | 设计 §5.2 要的是"来源地址 + ticket"双口径；只有"错 5 次作废"的话，攻击者换个 ticket 就又有 5 次 |
+| 「AI 模型与凭据」页在**手机上**：两张维护卡折叠、列表高度按可用高度取四成、两处溢出修掉 | 用户原话"手机端这个排版的实用性极差"：那两张卡是**电脑上的维护活**（补能力声明 / 真发请求实测校准，后者花钱），手机上只会挡住 Provider 与模型列表 |
+| `adb install -r` → `push` + `pm install`；debug 包只带 `android-arm64` | streamed install 在这台机器上会卡住（几十秒能做完的事拖成几分钟） |
