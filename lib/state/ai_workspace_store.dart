@@ -1016,6 +1016,15 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 桌面版本化下发的工件（M6 才真正下行），拿不到时**只把这件事说出来**，
   /// 绝不让整页起不来 —— 用户至少还能翻历史会话。
   Future<void> _loadLocalStartup() async {
+    // 先给上一轮"没跑完"的 Run 收尾（被系统杀掉是手机的常态）：
+    // 必须在拉会话/消息**之前**做，否则界面上会先出现一个永远转圈的幽灵气泡。
+    // 收尾只改状态与错误说明，已经说出去的话一个字不动（R6）。
+    try {
+      recoveredRuns = await _source.recoverUnfinishedRuns();
+    } catch (_) {
+      // 收尾失败不该拦住整个聊天页
+      recoveredRuns = 0;
+    }
     conversations = await _source.listConversations();
     // 清单优先问桌面（它才是真源）；问不到就用**上次缓存的那一份**。
     // 手机若连一次都连不上桌面，就如实说"本机还没有缓存过"，而不是给一个空列表
@@ -1060,6 +1069,12 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 当前缓存的 kit 版本（可追溯性，契约 §3.4）。
   String? kitVersion;
+
+  /// 上一次冷启动给几条"没跑完的 Run"收了尾（0 = 没有）。
+  ///
+  /// 界面据此可以如实说一句"上次那条回复被中断了"，而不是让用户对着一个
+  /// 永远转圈的助手气泡猜（手机被系统杀掉是常态，见总纲 §7 风险表）。
+  int recoveredRuns = 0;
 
   /// 取/刷新一次规则工件。桌面源恒成功（规则在后端手上）。
   Future<void> ensureRunKit() async {

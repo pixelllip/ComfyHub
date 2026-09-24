@@ -37,6 +37,15 @@ class _FakeLocalSource implements RunEventSource {
   /// 本地源要不要"有规则工件"（默认有：多数用例不关心这件事）。
   bool hasKit = true;
 
+  /// 上一次进程被杀时留下的"没跑完的 Run"有几条。
+  int unfinished = 0;
+
+  @override
+  Future<int> recoverUnfinishedRuns() async {
+    calls.add('recoverUnfinishedRuns');
+    return unfinished;
+  }
+
   @override
   Future<({bool ok, String? kitVersion, String? reason})> ensureRunKit({
     String? baseUrl,
@@ -347,8 +356,7 @@ void main() {
     expect(offline.notice, contains('缓存'));
   });
 
-  test('手机：没有规则工件（run-kit）时**不许开跑**，而且要说清为什么', () async {
-    final source = _FakeLocalSource()..hasKit = false;
+  test('手机：没有规则工件（run-kit）时**不许开跑**，而且要说清为什么', () async {    final source = _FakeLocalSource()..hasKit = false;
     final store = AiWorkspaceStore(
       api: _okApi(),
       source: source,
@@ -365,6 +373,23 @@ void main() {
     // 真的发不出去（不是只有提示、实际照发）
     await store.send('画一只猫');
     expect(source.calls, isNot(contains('startRun')));
+  });
+
+  test('手机冷启动：先给上次没跑完的 Run 收尾（被系统杀掉是常态）', () async {
+    final source = _FakeLocalSource()..unfinished = 1;
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    await store.load();
+
+    expect(source.calls, contains('recoverUnfinishedRuns'));
+    expect(store.recoveredRuns, 1);
+    // 顺序：收尾必须在拉会话**之前**（否则界面上先出现一个永远转圈的幽灵气泡）
+    final order = source.calls.where((c) => c == 'recoverUnfinishedRuns' || c == 'listConversations');
+    expect(order.first, 'recoverUnfinishedRuns');
   });
 }
 

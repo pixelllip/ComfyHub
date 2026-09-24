@@ -140,6 +140,15 @@ abstract class RunEventSource {
     String? token,
   });
 
+  /// 把**上次没跑完的 Run** 老实收尾（返回收尾了几条）。
+  ///
+  /// 手机上前台服务有 6h/24h 配额、后台随时被系统杀（总纲 §7 风险表），所以进程重启后
+  /// 必须能认出"有一个 Run 没跑完"，而不是留一个永远 `running` 的幽灵；
+  /// 收尾只改状态与错误说明，**已经落库的正文与块一个字不动**（R6）。
+  ///
+  /// 桌面：后端进程自己管这件事，恒回 0（手机冷启动时调它，不会造成任何远端请求）。
+  Future<int> recoverUnfinishedRuns();
+
   /// 回答 `user.question`（提问闸门；桌面是 HTTP，手机是本地闸门）。
   ///
   /// [answer] 与 [optionIndex] **至少给一个**，另一个留 null：点了选项就用 `optionIndex`，
@@ -214,6 +223,10 @@ class RemoteRunEventSource implements RunEventSource {
     String? token,
   }) async =>
       (ok: true, kitVersion: null, reason: null);
+
+  /// 桌面：Run 的收尾归后端进程自己管，手机冷启动不该因此打任何请求。
+  @override
+  Future<int> recoverUnfinishedRuns() async => 0;
 }
 
 /// 手机实现：`MethodChannel`（调用）+ `EventChannel`（事件流）。
@@ -291,6 +304,9 @@ class LocalHarnessRunEventSource implements RunEventSource {
   /// 把上次没跑完的 Run 按 R6 收尾，返回收尾了几条。
   Future<int> recoverUnfinished() async =>
       await _method.invokeMethod<int>('recoverUnfinished') ?? 0;
+
+  @override
+  Future<int> recoverUnfinishedRuns() => recoverUnfinished();
 
   /// 本地会话列表（`_consumeRun` 收尾对齐时用；桥回的是 JSON 字符串）。
   @override
