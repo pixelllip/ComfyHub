@@ -23,9 +23,23 @@ class ApiClient {
   final String baseUrl;
   final http.Client _client;
 
-  ApiClient(this.baseUrl, {http.Client? client}) : _client = client ?? http.Client();
+  /// **配对令牌**（`X-ComfyHub-Token`）的取值回调（`docs/pairing-design.md` §11）。
+  ///
+  /// 默认 `null` = **一个字节都不变**：以前这些请求一律不带任何自定义头，
+  /// 桌面与回环场景本来就不需要令牌。只有**给了回调、且回调回了非空值**时才加上这个头。
+  final String? Function()? tokenProvider;
+
+  ApiClient(this.baseUrl, {http.Client? client, this.tokenProvider})
+      : _client = client ?? http.Client();
 
   void dispose() => _client.close();
+
+  /// 只有"确实有令牌"时才该加的那个头；没有就回 `null`（= 与以前逐字节相同）。
+  Map<String, String>? _authHeaders() {
+    final token = tokenProvider?.call();
+    if (token == null || token.isEmpty) return null;
+    return {'X-ComfyHub-Token': token};
+  }
 
   Uri _uri(String path, [Map<String, dynamic>? query]) {
     final q = <String, String>{};
@@ -68,7 +82,7 @@ class ApiClient {
 
   Future<dynamic> _get(String path, [Map<String, dynamic>? query]) async {
     try {
-      return _decode(await _client.get(_uri(path, query)));
+      return _decode(await _client.get(_uri(path, query), headers: _authHeaders()));
     } on SocketException catch (e) {
       throw ApiException(0, '无法连接后端 $baseUrl', e.message);
     }
@@ -76,7 +90,8 @@ class ApiClient {
 
   Future<dynamic> _send(String method, String path, Object? body) async {
     final req = http.Request(method, _uri(path))
-      ..headers.addAll(_jsonHeaders);
+      ..headers.addAll(_jsonHeaders)
+      ..headers.addAll(_authHeaders() ?? const {});
     if (body != null) req.body = jsonEncode(body);
     try {
       final streamed = await _client.send(req);
@@ -237,7 +252,7 @@ class ApiClient {
   String mediaPosterUrl(int id) => '$baseUrl/api/media/$id/poster';
 
   Future<Prompt?> mediaPrompt(int id) async {
-    final res = await _client.get(_uri('/api/media/$id/prompt'));
+    final res = await _client.get(_uri('/api/media/$id/prompt'), headers: _authHeaders());
     if (res.statusCode == 204) return null;
     if (res.statusCode >= 200 && res.statusCode < 300) {
       return Prompt.fromJson(
@@ -282,6 +297,7 @@ class ApiClient {
     List<String> tags = const [],
   }) async {
     final req = http.MultipartRequest('POST', _uri('/api/media/upload'));
+    req.headers.addAll(_authHeaders() ?? const {});
     if (promptId != null) req.fields['promptId'] = promptId.toString();
     if (kind != null) req.fields['kind'] = kind;
     if (title != null && title.isNotEmpty) req.fields['title'] = title;
@@ -367,7 +383,8 @@ class ApiClient {
 
   Future<String?> _workflowText(String path) async {
     try {
-      final res = await _client.get(_uri(path)).timeout(const Duration(seconds: 30));
+      final res = await _client.get(_uri(path), headers: _authHeaders())
+          .timeout(const Duration(seconds: 30));
       if (res.statusCode == 204 || res.statusCode == 404) return null;
       if (res.statusCode >= 200 && res.statusCode < 300) {
         return utf8.decode(res.bodyBytes);

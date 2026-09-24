@@ -88,7 +88,7 @@ String _pagedPayload() {
         'runId': 'r1',
         'conversationId': 'c1',
         'question': text,
-        if (header != null) 'header': header,
+        'header': ?header,
         'options': options,
         'allowFreeText': true,
         'answered': false,

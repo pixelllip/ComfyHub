@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/ai_api_client.dart';
 import '../core/credential_store.dart';
+import '../core/inbound_auth_api.dart';
 import '../core/run_event_source.dart';
 import '../models/ai_models.dart';
 
@@ -17,23 +18,27 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// [baseUrl] 每次取当前后端地址（设置里改地址后无需重建 store）；
   /// [api] 仅供测试注入；[prefs] 仅供测试注入（默认走 SharedPreferences）；
   /// [source] 仅供测试注入（默认按平台选：Android → 本地 harness，其余 → 远端 HTTP）；
-  /// [credentials] 仅供测试注入（默认按平台选：Android → 本机密钥库，其余 → 后端托管）。
+  /// [credentials] 仅供测试注入（默认按平台选：Android → 本机密钥库，其余 → 后端托管）；
+  /// [authApiFactory] 仅供测试注入（`syncCredentialsFromDesktop` 用的那个客户端）。
   AiWorkspaceStore({
     this.baseUrlProvider,
     AiApiClient? api,
     SharedPreferences? prefs,
     RunEventSource? source,
     CredentialStore? credentials,
+    InboundAuthApi Function(String baseUrl)? authApiFactory,
   })  : _injected = api,
         _injectedPrefs = prefs,
         _injectedSource = source,
-        _injectedCredentials = credentials;
+        _injectedCredentials = credentials,
+        _injectedAuthApi = authApiFactory;
 
   final String Function()? baseUrlProvider;
   final AiApiClient? _injected;
   final SharedPreferences? _injectedPrefs;
   final RunEventSource? _injectedSource;
   final CredentialStore? _injectedCredentials;
+  final InboundAuthApi Function(String baseUrl)? _injectedAuthApi;
   SharedPreferences? _prefs;
   AiApiClient? _cached;
   String? _cachedFor;
@@ -168,7 +173,8 @@ class AiWorkspaceStore extends ChangeNotifier {
     final base = baseUrlProvider!();
     if (_cached == null || _cachedFor != base) {
       _cached?.dispose();
-      _cached = AiApiClient(base);
+      // 令牌**现取**（配对成功那一刻内存里的值就变了，见 [pairingToken]）
+      _cached = AiApiClient(base, tokenProvider: () => pairingToken);
       _cachedFor = base;
     }
     return _cached!;
@@ -980,6 +986,11 @@ class AiWorkspaceStore extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
+      // 先尽力把配对令牌读进内存（手机专有）：下面 ensureRunKit / syncOutbox 都要带它。
+      // ⚠ 必须 **await**：不等它回来就往下走，`ensureRunKit` / `syncOutbox` 拿到的还是
+      // null —— 那就等于这个洞没补（真的踩过：`unawaited` 与"令牌恒 null"是同一个现象）。
+      // 它内部吞掉所有异常，所以这一步绝不会拦住启动。
+      await _loadPairingToken();
       // 冷启动的"东西从哪来"分两种（M3.2 ③）：
       //   桌面：会话在**后端库**里 → 后端连不上就如实报"连接后端失败"（不能自己编数据）；
       //   手机：会话在**本地库**里 → 桌面不在线也必须能进聊天页。
@@ -1064,6 +1075,41 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
+  /// **配对令牌**（`X-ComfyHub-Token`，`docs/pairing-design.md` §11）。
+  ///
+  /// 手机上它是"这台手机等于这台桌面的主人"的凭据：没有它，上面那些要连桌面的路
+  /// （取规则工件 / 上行同步 / 取密钥）在闸门打开后一律 403 —— 这正是"手机侧看起来
+  /// 全都接好了、却一条都跑不通"的原因（以前这里根本没有这个字段，`token` 恒 null）。
+  ///
+  /// ⚠ **只在内存里缓存，绝不落 SharedPreferences**：它和 API Key 同级，
+  /// 真源是 Android Keystore（[PairingTokenStore]），落明文偏好文件等于白存密钥库。
+  String? pairingToken;
+
+  /// 冷启动时**尽力**把令牌读进内存。
+  ///
+  /// 三条纪律：只在手机（本地 harness）上问、失败**绝不拦启动**、读不到就当没配对。
+  Future<void> _loadPairingToken() async {
+    if (!_source.isLocal) return; // 桌面没有密钥库：配对令牌只存在于手机
+    try {
+      pairingToken = await PairingTokenStore().read();
+    } catch (_) {
+      // 桥不可用 / 密钥库读不动：当作"还没配对"，用户去设置页配一次即可
+      pairingToken = null;
+    }
+  }
+
+  /// 配对成功（或「忘记这台电脑」）之后调一次：重新读令牌，再把要带令牌的两条路各走一遍。
+  ///
+  /// 为什么必须当场重取 run-kit：冷启动时 `ensureRunKit` 很可能正是**因为没有令牌**
+  /// 才失败的（闸门开着时匿名取规则工件会被挡下），而"没有规则就不许发"是硬闸门
+  /// （[sendBlockReason]）—— 不重试的话，用户配完对还得重启 App 才能聊天。
+  Future<void> reloadPairingToken() async {
+    await _loadPairingToken();
+    notifyListeners();
+    await ensureRunKit();
+    await syncOutbox();
+  }
+
   /// **规则工件（run-kit）**：当前是否可用（不可用时是给人看的原因）。
   ///
   /// 它同时是界面的准入依据（[sendBlockReason]）：没有规则就不能开跑 ——
@@ -1082,7 +1128,11 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 取/刷新一次规则工件。桌面源恒成功（规则在后端手上）。
   Future<void> ensureRunKit() async {
     try {
-      final r = await _source.ensureRunKit(baseUrl: baseUrlProvider?.call());
+      final r = await _source.ensureRunKit(
+        baseUrl: baseUrlProvider?.call(),
+        // 手机要连的桌面在闸门打开后只认这个头；不传的话这里必然 403
+        token: pairingToken,
+      );
       kitVersion = r.kitVersion;
       kitIssue = r.ok ? null : (r.reason ?? '本机还没有规则工件（run-kit）');
     } catch (e) {
@@ -1101,7 +1151,11 @@ class AiWorkspaceStore extends ChangeNotifier {
   Future<int> syncOutbox() async {
     if (!_source.isLocal) return 0;
     try {
-      final r = await _source.syncNow(baseUrl: baseUrlProvider?.call());
+      final r = await _source.syncNow(
+        baseUrl: baseUrlProvider?.call(),
+        // 同 ensureRunKit：上行也是连桌面，闸门开着时没有这个头就是 403
+        token: pairingToken,
+      );
       if (r.ok && r.applied > 0) {
         syncedToDesktop += r.applied;
         pushNotice = '已把本机 ${r.applied} 条记录同步到桌面'
@@ -1125,6 +1179,99 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 上行的如实说明（推成功 / 还有几条没上去 / 为什么没上去）。
   String? pushNotice;
+
+  /// **从桌面取密钥**（`GET /api/ai/credentials?refs=…`，`docs/pairing-design.md` §11.2）。
+  ///
+  /// 返回的是**给人看的一句话**（拿到几把、哪几把没拿到），不是异常也不是布尔 ——
+  /// 这件事的失败方式是"一部分拿到、一部分没有"，只回 ok/失败 就没法如实说。
+  ///
+  /// 四条纪律：
+  ///  ① 只在手机（本地 harness）上做：桌面自己就是密钥的真源，没有"从别处取"这回事；
+  ///  ② ref 只从 provider 的 `credentialRef` 来（"这把密钥叫什么名字"只有它有）；
+  ///  ③ 值只经手一次：从响应直接写进**本机密钥库**，**绝不**进返回句、日志或界面状态
+  ///     （AIH-012：值不回读、不回显）；
+  ///  ④ 未授权的 ref **后端不返回也不报错**，所以"没拿到"要由调用方按差集如实说出来。
+  Future<String> syncCredentialsFromDesktop() async {
+    if (!_source.isLocal) {
+      return '这台设备上的密钥就在本机后端，不需要从桌面同步。';
+    }
+    final token = pairingToken?.trim() ?? '';
+    if (token.isEmpty) {
+      return '还没有配对令牌：先在设置 →「远程访问与配对」里和桌面配一次对，再来取密钥。';
+    }
+    final base = baseUrlProvider?.call().trim() ?? '';
+    if (base.isEmpty) return '还不知道桌面地址：先在设置里填上桌面的地址。';
+
+    final refs = <String>{};
+    for (final p in providers) {
+      final ref = p.credentialRef?.trim();
+      if (ref != null && ref.isNotEmpty) refs.add(ref);
+    }
+    if (refs.isEmpty) return '模型清单里没有任何需要密钥的 Provider，没有可同步的东西。';
+
+    final api = _injectedAuthApi?.call(base) ?? InboundAuthApi(base);
+    try {
+      final got = await api.fetchCredentials(refs.toList(), token: token);
+      // 空值等于没拿到：后端对"桌面没配过"与"没授权"都不给这个 ref
+      final delivered = <String, String>{
+        for (final e in got.entries)
+          if (e.value.trim().isNotEmpty) e.key: e.value,
+      };
+      final missing = refs.where((r) => !delivered.containsKey(r)).toList();
+      final written = <String>[];
+      final failed = <String>[];
+      for (final entry in delivered.entries) {
+        final provider = _providerForRef(entry.key);
+        if (provider == null || !credentials.isLocal) {
+          failed.add(entry.key);
+          continue;
+        }
+        try {
+          // 值在这里**只出现这一次**（写进 Keystore 之后本进程不再持有它）
+          await credentials.save(provider, entry.value);
+          written.add(entry.key);
+        } catch (_) {
+          failed.add(entry.key);
+        }
+      }
+      if (written.isNotEmpty) await _refreshCredentialStatus();
+      final parts = <String>[
+        written.isEmpty
+            ? '桌面没有下发任何密钥'
+            : '已从桌面取得并写入本机密钥库 ${written.length} 把：${written.join('、')}',
+      ];
+      if (missing.isNotEmpty) {
+        parts.add('${missing.length} 把没拿到（桌面没配过，或这台设备还没被允许下行密钥）：'
+            '${missing.join('、')}');
+      }
+      if (failed.isNotEmpty) {
+        parts.add('${failed.length} 把写不进本机密钥库：${failed.join('、')}');
+      }
+      return '${parts.join('；')}。';
+    } catch (e) {
+      return '从桌面同步密钥失败：$e';
+    } finally {
+      api.dispose();
+    }
+  }
+
+  /// 找这个 ref 属于哪条 provider（密钥下行只回 ref，"怎么存"要按 provider 走）。
+  AiProvider? _providerForRef(String ref) {
+    for (final p in providers) {
+      if ((p.credentialRef ?? '').trim() == ref) return p;
+    }
+    return null;
+  }
+
+  /// 取完密钥把清单上的"有没有 key"重新对齐到**本机**（不然界面上还是"未配置"）。
+  Future<void> _refreshCredentialStatus() async {
+    try {
+      providers = await _overlayDeviceCredentials(providers);
+      notifyListeners();
+    } catch (_) {
+      // 只是显示没跟上，不改变"已经写进密钥库"这个事实
+    }
+  }
 
   /// 把每条 provider 的凭据状态换成**本机**的（手机专有）。
   ///

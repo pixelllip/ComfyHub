@@ -7,10 +7,12 @@ import '../core/backend_launcher.dart';
 import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
+import '../state/ai_workspace_store.dart';
 import '../state/library_store.dart';
 import '../state/nsfw_store.dart';
 import '../widgets/adaptive_layout.dart';
 import 'ai_provider_settings_page.dart';
+import 'pairing_section.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -468,6 +470,30 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   // -------------------------------------------------------------------------
+  //  远程访问与配对（`docs/pairing-design.md` §11）
+  // -------------------------------------------------------------------------
+
+  /// 手机上配对成功 / 忘记这台电脑之后：让 AI 工作台**重新读一次令牌**，
+  /// 再取一次规则工件（配对前那次失败很可能就是因为没有令牌）。
+  ///
+  /// `context.read<AiWorkspaceStore?>()`（可空）而不是必填：设置页既有的用例
+  /// （`settings_layout_test`）不注册这个 store —— 取不到就什么也不做，
+  /// 配对本身照样成功，不该因为"状态没挂上"就报错。
+  Future<void> _reloadPairingToken() async {
+    if (!mounted) return;
+    final store = context.read<AiWorkspaceStore?>();
+    await store?.reloadPairingToken();
+  }
+
+  /// 「从桌面同步密钥」：真活在 `AiWorkspaceStore` 里（值只经手一次，界面不碰它）。
+  Future<String> _syncCredentialsFromDesktop() async {
+    if (!mounted) return '设置页已经关掉了，这次同步没有执行。';
+    final store = context.read<AiWorkspaceStore?>();
+    if (store == null) return 'AI 工作台还没准备好，稍后再试一次。';
+    return store.syncCredentialsFromDesktop();
+  }
+
+  // -------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -512,6 +538,23 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               estimatedHeight: 120,
+            ),
+            // 紧跟「AI 模型与凭据」：「配对」与「凭据」是同一件事的两半 ——
+            // 配对换来的是"这台手机能不能用桌面的东西"的令牌，而令牌正是
+            // 密钥下行（`/api/ai/credentials`）的准入凭据。两块挨着看，用户才知道
+            // "配完对还要在桌面上允许这台设备取密钥"。
+            AdaptiveSection(
+              _section(
+                theme,
+                '远程访问与配对',
+                PairingSection(
+                  baseUrl: settings.baseUrl,
+                  onPaired: _reloadPairingToken,
+                  onSyncCredentials: _syncCredentialsFromDesktop,
+                  onSaveBaseUrl: settings.setBaseUrl,
+                ),
+              ),
+              estimatedHeight: 560,
             ),
             AdaptiveSection(
               _section(theme, 'NSFW 内容', _nsfwCard(theme)),

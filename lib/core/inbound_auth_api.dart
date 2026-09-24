@@ -55,6 +55,19 @@ class InboundAuthApi {
         json = null;
       }
     }
+    // ⚠ **2xx 也可能是错误**：Kotlin 后端对未知路径也会回 `200 {"error":"接口不存在: …"}`
+    // （它那个 StatusPages 的 404 处理器会把状态码重置成 200 —— Rust 侧刻意只对齐 body、
+    // 不对齐那个 200）。灰度期桌面 App 连的还是 Kotlin（8080），所以这一条会真的发生：
+    // 不认它的话，`PUT /api/auth` 会"成功"返回一个 enabled=false 的状态，
+    // 界面上的表现为**开关弹回去、一个字都不解释**。
+    if (json is Map && json['error'] != null) {
+      final detail = json['detail']?.toString();
+      throw ApiException(
+        res.statusCode,
+        json['error'].toString(),
+        detail,
+      );
+    }
     if (res.statusCode >= 200 && res.statusCode < 300) return json;
     final msg = (json is Map && json['error'] != null) ? json['error'].toString() : 'HTTP ${res.statusCode}';
     final detail = (json is Map && json['detail'] != null) ? json['detail'].toString() : null;
@@ -159,8 +172,10 @@ class InboundAuthApi {
         'code': code,
         'deviceId': deviceId,
         'deviceName': deviceName,
-        if (requestId != null) 'requestId': requestId,
-        if (ticket != null) 'ticket': ticket,
+        // `?x` 是"值非空才带这个键"（与本仓其它地方同一写法）：
+        // 带一个 null 上去会被后端当成"给了个空 ticket"，两种失败就分不清了
+        'requestId': ?requestId,
+        'ticket': ?ticket,
       })));
 
   /// `GET /api/ai/credentials?refs=a,b` —— **密钥下行**（仅"已授权设备"或本机回环）。
@@ -336,10 +351,19 @@ class PairingTokenStore {
 
   final MethodChannel _method;
 
+  /// **内存里的那一份令牌**（进程内共享，不落盘）。
+  ///
+  /// 为什么要有它：`X-ComfyHub-Token` 不止 AI 工作台要用 —— 手机上的画廊 / 提示词 /
+  /// 标签 / NSFW 开关走的是 `ApiClient`，闸门一开它们**全都会 403**。
+  /// 把令牌从 `AiWorkspaceStore` 引到那几个 store 又要跨 provider 接线，
+  /// 所以这里留一个进程内缓存：谁能拿到它谁就能带令牌（桌面侧永远是 `null`）。
+  static String? cached;
+
   /// 读回令牌（**手机上唯一会"取出密钥"的地方**：它要放进请求头）。
   Future<String?> read() async {
     final v = await _method.invokeMethod<String>('getCredential', {'ref': ref});
-    return (v == null || v.isEmpty) ? null : v;
+    cached = (v == null || v.isEmpty) ? null : v;
+    return cached;
   }
 
   /// 存令牌。存失败**必须让调用方看见**（存不下去的令牌 = 每次启动都要重配）。
@@ -348,10 +372,12 @@ class PairingTokenStore {
       throw StateError('令牌为空，拒绝写入密钥库');
     }
     await _method.invokeMethod<bool>('putCredential', {'ref': ref, 'value': token});
+    cached = token;
   }
 
   Future<void> clear() async {
     await _method.invokeMethod<bool>('removeCredential', {'ref': ref});
+    cached = null;
   }
 
   /// 配对时要报给桌面的身份。

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../core/api_client.dart';
+import '../core/inbound_auth_api.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
 
@@ -9,10 +10,19 @@ class LibraryStore extends ChangeNotifier {
   /// [api] 只用于测试时注入假的 HTTP 客户端；生产代码传 null 即可。
   LibraryStore(this._settings, {ApiClient? api}) {
     _apiInjected = api != null;
-    this.api = api ?? ApiClient(_settings.baseUrl);
+    this.api = api ?? _libraryClient(_settings.baseUrl);
     _apiBaseUrl = _settings.baseUrl;
     _settings.addListener(_onSettingsChanged);
   }
+
+  /// 库这一侧（画廊 / 提示词 / 标签）的 HTTP 客户端。
+  ///
+  /// 手机连桌面时**要带配对令牌**：闸门一开，这些端点对匿名请求一律 403
+  /// （`docs/pairing-design.md` §11.4）。令牌真源在 Android Keystore，
+  /// 这里读的是 [`PairingTokenStore.cached`]（进程内那一份，桌面侧恒为 null）。
+  /// 读的是**回调**而不是值：配对成功之后那些已经造好的客户端不必重建。
+  static ApiClient _libraryClient(String baseUrl) =>
+      ApiClient(baseUrl, tokenProvider: () => PairingTokenStore.cached);
 
   final SettingsStore _settings;
 
@@ -77,7 +87,7 @@ class LibraryStore extends ChangeNotifier {
     if (_apiInjected) return;
     if (_settings.baseUrl != _apiBaseUrl) {
       api.dispose();
-      api = ApiClient(_settings.baseUrl);
+      api = _libraryClient(_settings.baseUrl);
       _apiBaseUrl = _settings.baseUrl;
       refreshAll();
     }

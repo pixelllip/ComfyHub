@@ -21,6 +21,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:viewer/core/ai_api_client.dart';
 import 'package:viewer/core/credential_store.dart';
+import 'package:viewer/core/inbound_auth_api.dart';
 import 'package:viewer/core/run_event_source.dart';
 import 'package:viewer/models/ai_models.dart';
 import 'package:viewer/state/ai_workspace_store.dart';
@@ -52,6 +53,9 @@ class _FakeLocalSource implements RunEventSource {
   String? outboxError;
   final List<String?> syncedBaseUrls = [];
 
+  /// 每次 `syncNow` 带上来的**配对令牌**（配对那条线的回归就盯它）。
+  final List<String?> syncedTokens = [];
+
   @override
   Future<({bool ok, int applied, int pending, String? error})> syncNow({
     String? baseUrl,
@@ -59,6 +63,7 @@ class _FakeLocalSource implements RunEventSource {
   }) async {
     calls.add('syncNow');
     syncedBaseUrls.add(baseUrl);
+    syncedTokens.add(token);
     return (
       ok: outboxError == null,
       applied: outboxApplied,
@@ -67,12 +72,16 @@ class _FakeLocalSource implements RunEventSource {
     );
   }
 
+  /// 每次 `ensureRunKit` 带上来的配对令牌。
+  final List<String?> kitTokens = [];
+
   @override
   Future<({bool ok, String? kitVersion, String? reason})> ensureRunKit({
     String? baseUrl,
     String? token,
   }) async {
     calls.add('ensureRunKit');
+    kitTokens.add(token);
     return hasKit
         ? (ok: true, kitVersion: '2026-09-24.1', reason: null)
         : (ok: false, kitVersion: null, reason: '本地还没有规则工件（run-kit），且当前连不上桌面');
@@ -473,7 +482,161 @@ void main() {
     );
     expect(store.syncedToDesktop, greaterThan(0));
   });
+
+  // -------------------------------------------------------------------------
+  //  配对令牌这条线（`docs/pairing-design.md` §11）
+  //
+  //  以前 Dart 侧调 `ensureRunKit` / `syncNow` 时 `token` **恒为 null**：
+  //  闸门一开，这两条路就都是 403 —— 而界面上只会说"取不到规则工件"，
+  //  看不出是"没带令牌"还是"桌面不在"。所以这里钉住"读到就必须带上去"。
+  // -------------------------------------------------------------------------
+
+  test('冷启动读到的配对令牌，必须带在 ensureRunKit / syncNow 上', () async {
+    mockPairingChannel(token: 'tok-phone-1', deviceId: 'phone-1', deviceName: 'OnePlus 8T');
+
+    final source = _FakeLocalSource();
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+      baseUrlProvider: () => 'http://10.0.0.5:8081',
+    );
+
+    await store.load();
+
+    expect(store.pairingToken, 'tok-phone-1', reason: '令牌在内存里，真源是 Android Keystore');
+    expect(source.kitTokens, ['tok-phone-1'], reason: '取规则工件不带令牌 = 闸门一开就 403');
+    expect(source.syncedTokens, contains('tok-phone-1'), reason: '上行同步同理');
+    expect(source.syncedBaseUrls.last, 'http://10.0.0.5:8081');
+  });
+
+  test('没配对（密钥库里没有令牌）时照旧传 null，且不拦启动', () async {
+    final source = _FakeLocalSource();
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    // 这条通道在测试进程里没人应答（抛 MissingPluginException）：必须被吞掉
+    await store.load();
+
+    expect(store.loaded, isTrue, reason: '读不到令牌绝不能拦住启动');
+    expect(store.pairingToken, isNull);
+    expect(source.kitTokens, [null]);
+  });
+
+  test('从桌面同步密钥：写进本机密钥库，并如实说"拿到几把、哪几把没拿到"', () async {
+    mockPairingChannel(token: 'tok-phone-1');
+    final creds = _FakeDeviceCredentials(configured: false);
+    late Uri url;
+
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: _FakeLocalSource(),
+      credentials: creds,
+      baseUrlProvider: () => 'http://10.0.0.5:8081',
+      authApiFactory: (base) => InboundAuthApi(
+        base,
+        client: MockClient((request) async {
+          url = request.url;
+          // 桌面只下发被允许的那一把；另一把**不出现也不报错**（§11.2）
+          return http.Response(
+            jsonEncode({
+              'credentials': {'A_KEY': 'sk-secret-a'}
+            }),
+            200,
+            headers: const {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      ),
+    );
+    await store.load();
+    // 清单里两条 provider，各自一把密钥（ref 是它俩的 credentialRef）
+    store.providers = [_providerWithRef('p1', 'A_KEY'), _providerWithRef('p2', 'B_KEY')];
+
+    final text = await store.syncCredentialsFromDesktop();
+
+    expect(creds.saved['A_KEY'], 'sk-secret-a', reason: '值要写进本机密钥库（手机才发得出去）');
+    expect(creds.saved.containsKey('B_KEY'), isFalse, reason: '桌面没给的那把不能凭空编一个');
+    expect(url.queryParameters['refs'], 'A_KEY,B_KEY');
+    expect(url.path, '/api/ai/credentials');
+    expect(text, contains('A_KEY'));
+    expect(text, contains('B_KEY'), reason: '"哪几把没拿到"必须说出来，否则用户以为都拿到了');
+    // 密钥值**绝不能**进返回句 / 日志 / 界面状态（AIH-012）
+    expect(text, isNot(contains('sk-secret-a')));
+    expect(store.providers.first.credential.source, 'keystore', reason: '取完要把"已配置"对齐到本机');
+  });
+
+  test('从桌面同步密钥：没配对 / 非手机时不打请求，只回一句人话', () async {
+    var requested = false;
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: _FakeLocalSource(),
+      credentials: _FakeDeviceCredentials(configured: false),
+      baseUrlProvider: () => 'http://10.0.0.5:8081',
+      authApiFactory: (base) => InboundAuthApi(
+        base,
+        client: MockClient((request) async {
+          requested = true;
+          return http.Response('{}', 200);
+        }),
+      ),
+    );
+    await store.load();
+    store.providers = [_providerWithRef('p1', 'A_KEY')];
+
+    // 本机密钥库里没有配对令牌 → 不去问桌面（问也是 403，白白制造一次失败）
+    final noToken = await store.syncCredentialsFromDesktop();
+    expect(noToken, contains('配对令牌'));
+    expect(requested, isFalse);
+
+    // 桌面自己就是密钥的真源：这条路径在桌面上没有意义
+    final desktop = AiWorkspaceStore(
+      api: _okApi(),
+      source: RemoteRunEventSource(AiApiClient('http://127.0.0.1:8080')),
+      credentials: _FakeDeviceCredentials(configured: false),
+      baseUrlProvider: () => 'http://127.0.0.1:8080',
+    );
+    desktop.providers = [_providerWithRef('p1', 'A_KEY')];
+    final onDesktop = await desktop.syncCredentialsFromDesktop();
+    expect(onDesktop, contains('不需要'));
+    expect(requested, isFalse);
+  });
 }
+
+/// 把配对令牌 / 设备身份灌进假的本机密钥库（真身是 Android Keystore，走桥）。
+void mockPairingChannel({
+  String? token,
+  String deviceId = 'phone-1',
+  String deviceName = 'OnePlus 8T',
+}) {
+  const channel = MethodChannel('comfyhub/harness');
+  final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(channel, (call) async {
+    final args = Map<String, dynamic>.from((call.arguments as Map?) ?? const {});
+    switch (call.method) {
+      case 'getCredential':
+        return args['ref'] == PairingTokenStore.ref ? token : null;
+      case 'pairingIdentity':
+        return jsonEncode({'deviceId': deviceId, 'deviceName': deviceName});
+    }
+    return null;
+  });
+  addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+}
+
+AiProvider _providerWithRef(String id, String ref) => AiProvider(
+      id: id,
+      displayName: id,
+      api: 'openai-completions',
+      baseURL: 'http://127.0.0.1:11434/v1',
+      credentialRef: ref,
+      endpointTrust: 'loopback',
+      enabled: true,
+      revision: 1,
+      credential: const AiCredentialStatus(configured: false, source: 'none', writable: true),
+    );
 
 /// 桌面在线：provider 清单 + 模型目录都正常返回（用来灌"本机缓存"）。
 ///
@@ -535,6 +698,9 @@ class _FakeDeviceCredentials implements CredentialStore {
 
   bool configured;
 
+  /// 写进"密钥库"的值（ref → 值）。真身是 Android Keystore，只写不读。
+  final Map<String, String> saved = {};
+
   @override
   bool get isLocal => true;
 
@@ -553,6 +719,7 @@ class _FakeDeviceCredentials implements CredentialStore {
 
   @override
   Future<AiCredentialStatus> save(AiProvider provider, String value) async {
+    saved[provider.credentialRef?.trim() ?? ''] = value;
     configured = true;
     return statusOf(provider);
   }

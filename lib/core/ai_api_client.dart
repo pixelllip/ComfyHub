@@ -12,16 +12,32 @@ class AiApiClient {
   final String baseUrl;
   final http.Client _client;
 
-  AiApiClient(this.baseUrl, {http.Client? client}) : _client = client ?? http.Client();
+  /// **配对令牌**（`X-ComfyHub-Token`）的取值回调（`docs/pairing-design.md` §11）。
+  ///
+  /// 默认 `null` = **一个字节都不变**：不带头时后端照旧按"闸门没开 / 回环"放行，
+  /// 桌面三条 e2e 与既有用例都走这条（它们一个头都不带）。
+  ///
+  /// 做成回调而不是构造时取一次值：手机配对成功那一刻令牌才出现在内存里
+  /// （`AiWorkspaceStore.pairingToken`），缓存一份头会让它要等 client 重建才生效。
+  final String? Function()? tokenProvider;
+
+  AiApiClient(this.baseUrl, {http.Client? client, this.tokenProvider})
+      : _client = client ?? http.Client();
 
   void dispose() => _client.close();
 
   Uri _uri(String path) => Uri.parse('$baseUrl$path');
 
-  static const _headers = {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Accept': 'application/json',
-  };
+  /// 每个请求的公共头（令牌**现取**；空令牌不发这个头，理由见
+  /// `InboundAuthApi._headers`：空串会被当成"带了个错的令牌"）。
+  Map<String, String> get _headers {
+    final token = tokenProvider?.call();
+    return {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Accept': 'application/json',
+      if (token != null && token.isNotEmpty) 'X-ComfyHub-Token': token,
+    };
+  }
 
   dynamic _decode(http.Response res) {
     final body = utf8.decode(res.bodyBytes);
@@ -461,6 +477,10 @@ class AiApiClient {
   Stream<AiRunEvent> runEvents(String runId, {int after = 0}) async* {
     final req = http.Request('GET', _uri('/api/ai/runs/$runId/events?after=$after'))
       ..headers['Accept'] = 'text/event-stream';
+    // 事件流也是这个后端的一个请求：手机带令牌连桌面时才不会被闸门挡在 403
+    // （不传 tokenProvider 时这里与以前完全一样，只有 Accept 一个头）
+    final token = tokenProvider?.call();
+    if (token != null && token.isNotEmpty) req.headers['X-ComfyHub-Token'] = token;
     final res = await _client.send(req);
     if (res.statusCode != 200) {
       final body = await res.stream.bytesToString();
