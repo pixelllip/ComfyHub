@@ -30,7 +30,8 @@
 //! | `GET /api/{prompts,media}/{id}/workflow`、`GET /api/prompts/{id}/api-graph` | ✅ |
 //! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ |
 //! | `GET /api/ai/providers`（不含密钥）、`GET /api/ai/providers/{id}/models` | ✅ |
-//! | `/api/ai/*` 的其余部分（会话 / 消息 / Run / SSE / 工具 / 审批 / 附件） | ⛔ **未搬**（Kotlin 那边继续服务） |
+//! | `GET /api/ai/conversations`、`/{id}`、`/{id}/messages`（**读侧**：历史会话与有序块） | ✅ |
+//! | `/api/ai/*` 的其余部分（会话写侧 / Run / SSE / run-kit / 工具 / 审批 / 附件） | ⛔ **未搬**（Kotlin 那边继续服务） |
 //! | `/api/capture/{status,jobs,poll,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功） |
 //! | R6~R10 的安全防线 | ⛔ **未重建**（AI/工具层是最后一批，总纲 §6 要求逐条对照重建） |
 

@@ -15,8 +15,10 @@
 pub mod ai;
 pub mod capture;
 pub mod comfy_dirs;
+pub mod conversations;
 pub mod db;
 pub mod inputs;
+pub mod iso_time;
 pub mod media;
 pub mod media_upload;
 pub mod media_write;

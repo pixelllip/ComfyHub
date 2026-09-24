@@ -1054,7 +1054,11 @@ async fn ai_models_distinguish_missing_provider_from_an_empty_catalog() {
     assert_eq!(list[0]["maxAttachmentCount"], 4);
     // thinking_efforts 的值**可能是数字**（Anthropic 的思考预算，AIH-056）→ 统一按字面文本
     assert_eq!(list[0]["thinkingEfforts"]["max"], "4096");
-    assert_eq!(list[0]["capabilityVerifiedAt"], "2026-09-23T05:00:00.000Z");
+    // 时间列**不是透传**：Kotlin 先解析、再按 Java `Instant.toString()` 重排 ——
+    // 库里那个 `.000` 在这里被吃掉（`…:00.000Z` → `…:00Z`）。
+    // 这条断言就是 `iso_time` 存在的理由：透传版本在真库上"恰好"是对的，
+    // 直到某一行的时间戳毫秒位真的是 000（1/1000）。
+    assert_eq!(list[0]["capabilityVerifiedAt"], "2026-09-23T05:00:00Z");
 
     // ② 全 NULL 那行：**只有 12 个键**
     assert_eq!(
@@ -1097,6 +1101,203 @@ async fn ai_models_distinguish_missing_provider_from_an_empty_catalog() {
     assert_eq!(keys(&missing), vec!["detail", "error"]);
     assert_eq!(missing["error"], "CONFIG_ERROR");
     assert_eq!(missing["detail"], "Provider 不存在: nope");
+}
+
+// ===========================================================================
+//  会话与消息的读侧（P4 第 21 步）
+// ===========================================================================
+
+/// 会话 / 消息 / **有序块**：形状、顺序、以及"会话不存在"与"会话为空"的分野。
+///
+/// 夹具里 `conv-0` 只有一条消息（`msg-0` + 一个块）。这里再补一条归档会话、
+/// 一条多块消息（text → tool_call → tool_result），把三件最容易静默做错的事钉住：
+/// ① 每一条消息内部的块必须按 **ordinal 升序**（工具卡会插在正文之间，乱了看不出来）；
+/// ② 消息按 `seq, created_at` 排（同毫秒发的两条只靠 seq）；
+/// ③ `includeArchived` 只认 `1` / `true`（别的值当 false），默认不列归档的。
+#[tokio::test]
+async fn ai_conversations_and_messages_keep_order_and_block_shape() {
+    let state = state();
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_conversations (id, title, provider_id, model_id, archived, created_at, updated_at)
+                 VALUES ('conv-1', '未命名', 'p1', 'm1', 0, '2026-09-23T04:00:00.000Z', '2026-09-23T04:30:00.000Z'),
+                        ('conv-arch', '归档的', NULL, NULL, 1, '2026-09-23T02:00:00.000Z', '2026-09-23T02:00:00.000Z')",
+                [],
+            )?;
+            // 三条消息：seq 故意与插入顺序不同，验证排序真的按 seq
+            conn.execute(
+                "INSERT INTO ai_messages (id, conversation_id, seq, role, status, text, provider_id, model_id,
+                                          provider_response_id, usage_json, created_at, updated_at)
+                 VALUES ('msg-b', 'conv-1', 2, 'assistant', 'complete', '好的', 'p1', 'm1', 'resp-1',
+                         '{\"total_tokens\":12}', '2026-09-23T04:10:00.000Z', '2026-09-23T04:10:05.000Z'),
+                        ('msg-a', 'conv-1', 1, 'user', 'complete', '画一只猫', NULL, NULL, NULL, NULL,
+                         '2026-09-23T04:10:00.000Z', '2026-09-23T04:10:00.000Z')",
+                [],
+            )?;
+            // 块**故意倒序插入**：取出来必须仍是 ordinal 升序
+            conn.execute(
+                "INSERT INTO ai_message_parts (message_id, ordinal, type, text, attachment_id, tool_call_id, json_payload)
+                 VALUES ('msg-b', 2, 'tool_result', '工具回来了', NULL, 'call-1', '{\"mediaIds\":[7]}'),
+                        ('msg-b', 0, 'text', '先看看', NULL, NULL, NULL),
+                        ('msg-b', 1, 'tool_call', NULL, NULL, 'call-1', '{\"name\":\"comfy_submit\"}')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    // ---- 列表：默认不列归档，顺序按 updated_at DESC ----
+    let (status, list) = get_json(router_for(state.clone()), "/api/ai/conversations").await;
+    assert_eq!(status, StatusCode::OK, "body={list}");
+    let ids: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["conv-1", "conv-0"], "按 updated_at DESC，且归档的默认不出现：{list}");
+
+    let first = &list[0];
+    assert_eq!(
+        keys(first),
+        vec![
+            "archived", "createdAt", "id", "messageCount", "modelId", "providerId",
+            "systemPromptVersion", "title", "updatedAt",
+        ],
+        "`systemPromptVersion` / `archived` / `messageCount` 最容易漏（Kotlin encodeDefaults = true）"
+    );
+    assert_eq!(first["messageCount"], 2);
+    assert_eq!(first["archived"], false);
+    assert_eq!(first["systemPromptVersion"], "v1");
+    // 标题是原样读出来的（NULL → 「新对话」那条回落见 `conversations.rs` 的单元用例：
+    // 真 schema 上 `title` 是 NOT NULL，夹具里构造不出 NULL）
+    assert_eq!(first["title"], "未命名");
+    assert_eq!(first["createdAt"], "2026-09-23T04:00:00Z", "`.000Z` 要按 Java 规则收成整秒");
+    assert_eq!(first["updatedAt"], "2026-09-23T04:30:00Z");
+
+    // `includeArchived=1` / `=true` 才列归档的
+    let (_, with_arch) = get_json(router_for(state.clone()), "/api/ai/conversations?includeArchived=1").await;
+    assert_eq!(with_arch.as_array().unwrap().len(), 3);
+    let (_, with_arch2) = get_json(router_for(state.clone()), "/api/ai/conversations?includeArchived=true").await;
+    assert_eq!(with_arch2.as_array().unwrap().len(), 3);
+    let (_, not_arch) = get_json(router_for(state.clone()), "/api/ai/conversations?includeArchived=yes").await;
+    assert_eq!(not_arch.as_array().unwrap().len(), 2, "别的值一律当 false（Kotlin 只认 1/true）");
+
+    // ---- 详情 ----
+    let (status, one) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-1").await;
+    assert_eq!(status, StatusCode::OK, "body={one}");
+    assert_eq!(one["id"], "conv-1");
+    assert_eq!(one["providerId"], "p1");
+    assert_eq!(one["messageCount"], 2);
+    // 没有 provider_id 的会话：可空键**不出现**
+    let (_, bare) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-arch").await;
+    assert!(!bare.as_object().unwrap().contains_key("providerId"), "{bare}");
+    assert!(!bare.as_object().unwrap().contains_key("modelId"));
+
+    // ---- 消息 + 有序块 ----
+    let (status, msgs) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-1/messages").await;
+    assert_eq!(status, StatusCode::OK, "body={msgs}");
+    let msgs = msgs.as_array().unwrap();
+    assert_eq!(
+        msgs.iter().map(|m| m["id"].as_str().unwrap()).collect::<Vec<_>>(),
+        vec!["msg-a", "msg-b"],
+        "必须按 seq 排，不是插入顺序"
+    );
+    assert_eq!(
+        keys(&msgs[1]),
+        vec![
+            "conversationId", "createdAt", "id", "modelId", "parts", "providerId",
+            "providerResponseId", "role", "seq", "status", "text", "updatedAt", "usage",
+        ]
+    );
+    // 没有 provider / usage 的那条：可空键一个都不出现，但 `parts` 一定在（空数组）
+    let user_msg = &msgs[0];
+    for absent in ["providerId", "modelId", "providerResponseId", "usage"] {
+        assert!(!user_msg.as_object().unwrap().contains_key(absent), "{absent}：{user_msg}");
+    }
+    assert_eq!(user_msg["parts"], serde_json::json!([]));
+
+    // ★ 块顺序：插入顺序是 2,0,1，取出来必须是 0,1,2 —— 工具卡要插在正文之间
+    let parts = msgs[1]["parts"].as_array().unwrap();
+    assert_eq!(
+        parts.iter().map(|p| p["type"].as_str().unwrap()).collect::<Vec<_>>(),
+        vec!["text", "tool_call", "tool_result"],
+        "块顺序乱了 = 工具卡位置不对（而正文还在，看起来只是『有点怪』）"
+    );
+    // 每个块：只带自己有的键
+    assert_eq!(keys(&parts[0]), vec!["text", "type"]);
+    assert_eq!(keys(&parts[1]), vec!["jsonPayload", "toolCallId", "type"]);
+    assert_eq!(parts[1]["jsonPayload"], serde_json::json!({"name": "comfy_submit"}));
+    assert_eq!(parts[2]["jsonPayload"], serde_json::json!({"mediaIds": [7]}));
+    // usage 是**对象**，不是字符串
+    assert_eq!(msgs[1]["usage"], serde_json::json!({"total_tokens": 12}));
+    assert_eq!(msgs[1]["providerResponseId"], "resp-1");
+    assert_eq!(msgs[1]["createdAt"], "2026-09-23T04:10:00Z");
+    assert_eq!(msgs[1]["updatedAt"], "2026-09-23T04:10:05Z");
+
+    // ---- 三种"没有"必须分清 ----
+    // 会话存在但没有消息 → 200 []
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_conversations (id, title, archived, created_at, updated_at)
+                 VALUES ('conv-empty', '空的', 0, '2026-09-23T06:00:00.000Z', '2026-09-23T06:00:00.000Z')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let (status, empty) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-empty/messages").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty, serde_json::json!([]));
+
+    // 会话不存在 → 400 CONFIG_ERROR（不是 404、不是空数组）
+    for path in ["/api/ai/conversations/nope", "/api/ai/conversations/nope/messages"] {
+        let (status, err) = get_json(router_for(state.clone()), path).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path} body={err}");
+        assert_eq!(keys(&err), vec!["detail", "error"]);
+        assert_eq!(err["error"], "CONFIG_ERROR");
+        assert_eq!(err["detail"], "会话不存在: nope");
+    }
+}
+
+/// 坏 JSON 不许把整段历史打成 500（Kotlin 那边是 `runCatching { … }.getOrNull()`）。
+#[tokio::test]
+async fn ai_messages_survive_broken_json_columns() {
+    let state = state();
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_conversations (id, title, archived, created_at, updated_at)
+                 VALUES ('conv-bad', '脏数据', 0, '2026-09-23T07:00:00.000Z', '2026-09-23T07:00:00.000Z')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO ai_messages (id, conversation_id, seq, role, status, text, usage_json, created_at, updated_at)
+                 VALUES ('msg-bad', 'conv-bad', 1, 'assistant', 'complete', '正文', '{oops',
+                         '2026-09-23T07:00:01.000Z', '2026-09-23T07:00:01.000Z')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO ai_message_parts (message_id, ordinal, type, json_payload)
+                 VALUES ('msg-bad', 0, 'tool_call', 'not json')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let (status, msgs) = get_json(router_for(state), "/api/ai/conversations/conv-bad/messages").await;
+    assert_eq!(status, StatusCode::OK, "一条脏 json 不该连累整段历史：{msgs}");
+    let msg = &msgs[0];
+    assert_eq!(msg["text"], "正文");
+    assert!(!msg.as_object().unwrap().contains_key("usage"), "坏 usage_json 当『没有』：{msg}");
+    assert_eq!(
+        keys(&msg["parts"][0]),
+        vec!["type"],
+        "坏 json_payload 的那一块只留 type（键不出现，不是 null）：{msg}"
+    );
 }
 
 // ===========================================================================

@@ -184,6 +184,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/providers", get(ai_providers))
         // 模型目录（P4 第 20 步 = Task 2）：能力声明的唯一真源（AIH-011），附件/思考强度都读它
         .route("/api/ai/providers/{id}/models", get(ai_provider_models))
+        // 会话与消息的**读**侧（P4 第 21 步）：AI 工作台打开第一件事就是这三条
+        .route("/api/ai/conversations", get(ai_conversations))
+        .route("/api/ai/conversations/{id}", get(ai_conversation))
+        .route("/api/ai/conversations/{id}/messages", get(ai_conversation_messages))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -308,6 +312,42 @@ async fn ai_provider_models(
     Path(provider_id): Path<String>,
 ) -> Result<Json<Vec<crate::ai::AiModelDto>>, ApiError> {
     Ok(Json(crate::ai::list_models(&state, &provider_id)?))
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ConversationQuery {
+    /// Kotlin 只认 `1` 与 `true`（不区分大小写），别的值一律当 false。
+    #[serde(rename = "includeArchived")]
+    include_archived: Option<String>,
+}
+
+/// `GET /api/ai/conversations?includeArchived=1|true`。
+async fn ai_conversations(
+    State(state): State<AppState>,
+    Query(q): Query<ConversationQuery>,
+) -> Result<Json<Vec<crate::conversations::AiConversationDto>>, ApiError> {
+    let include = q
+        .include_archived
+        .as_deref()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    Ok(Json(crate::conversations::list(&state, include, None)?))
+}
+
+/// `GET /api/ai/conversations/{id}`（不存在 → 400 CONFIG_ERROR + detail）。
+async fn ai_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::conversations::AiConversationDto>, ApiError> {
+    Ok(Json(crate::conversations::get(&state, &id)?))
+}
+
+/// `GET /api/ai/conversations/{id}/messages` —— 消息 + **有序块**（工具卡 / 思考段全靠它）。
+async fn ai_conversation_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::conversations::AiMessageDto>>, ApiError> {
+    Ok(Json(crate::conversations::list_messages(&state, &id)?))
 }
 
 /// `GET /api/capture/locate` —— 探测 ComfyUI 装在哪（用户"其他建议"第 3 条）。

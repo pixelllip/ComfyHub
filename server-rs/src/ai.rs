@@ -143,6 +143,9 @@ pub fn list_providers(state: &AppState) -> Result<Vec<AiProviderDto>, ApiError> 
                 |name| std::env::var(name).ok(),
                 |reference| stored.iter().any(|r| r == reference),
             );
+            // 时间列不是透传：Kotlin 先解析再按 Java 规则重排（见 `iso_time.rs` 头注）
+            let row_created_at = row.created_at.clone();
+            let row_updated_at = row.updated_at.clone();
             AiProviderDto {
                 id: row.id,
                 display_name: row.display_name,
@@ -153,8 +156,8 @@ pub fn list_providers(state: &AppState) -> Result<Vec<AiProviderDto>, ApiError> 
                 enabled: row.enabled,
                 revision: row.revision,
                 credential,
-                created_at: row.created_at,
-                updated_at: row.updated_at,
+                created_at: crate::iso_time::iso_time(row_created_at.as_deref()),
+                updated_at: crate::iso_time::iso_time(row_updated_at.as_deref()),
             }
         })
         .collect())
@@ -313,7 +316,9 @@ pub fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiModelDto> {
         max_attachment_bytes: row.get("max_attachment_bytes")?,
         max_attachment_count: row.get("max_attachment_count")?,
         capability_source: capability_source.unwrap_or_else(|| "manual".into()),
-        capability_verified_at: row.get("capability_verified_at")?,
+        capability_verified_at: crate::iso_time::iso_time(
+            row.get::<_, Option<String>>("capability_verified_at")?.as_deref(),
+        ),
         // ⚠ NULL → **false**（Kotlin 的裸 `getBoolean("enabled")` 在 NULL 上就给 false）。
         // 本 schema 里是 NOT NULL DEFAULT 1，所以只在脏行上才走得到 ——
         // 但"NULL 当成启用"会让一条本该被用户关掉的模型悄悄可用（那是能花钱的）。

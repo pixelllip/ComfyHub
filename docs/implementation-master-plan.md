@@ -623,8 +623,6 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   Rust 给的是原话 `{"error":"产物 100 不存在"}`。Dart 只判 `204` / 2xx，**行为无差异**，
 >   而且 Rust 那句更有信息量 —— **不改**，但记在这里免得下次有人当回归去"修"。
 >
-> ---
->
 > **📅 2026-09-24 第四轮（本轮）**：先补上"环境能不能真的跑起来"这件事 ——
 > 本机 `JAVA_HOME` 指向的是 **JDK 25**，而后端用的 **Gradle 8.12 不支持 24/25**，
 > 于是 `gradle installDist` 直接失败（`* What went wrong: 25.0.1`）。
@@ -637,6 +635,35 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > **这条值得记进 pitfalls**：`server.ps1` 的候选表里有 `$env:JAVA_HOME` 与
 > `$env:ProgramFiles\Java\jdk-2*`，恰恰没有 Android Studio 的 JBR —— 而**这台机器上唯一的
 > 21/22/23 就是 JBR**。手敲 gradle 时先设 `JAVA_HOME`，别用系统的 JDK 25。
+>
+> ✅ **P4 第 21 步：会话与消息的读侧（`GET /api/ai/conversations{,/{id},/{id}/messages}`）** ——
+> 界面打开 AI 工作台的第一件事就是这三条（列历史 → 点进去 → 画消息与**有序块**）。
+> 搬完之后**指向 Rust 后端也能看到全部历史**，而不是整页 `接口不存在`。
+> - 新模块 `conversations.rs` 逐条对照 `AiConversationRepo`；三条最容易静默做错的地方写进了文件头：
+>   ① **块必须按 ordinal 升序**（Kotlin 是按 `message_id, ordinal` 取出来再分组 ——
+>   顺序乱了的表现是"工具卡位置不对"，而正文还在，看着只是"有点怪"）；
+>   ② 消息按 **`seq, created_at`** 排（同毫秒的两条只靠 seq）；
+>   ③ `includeArchived` **只认 `1` / `true`**，列表 `LIMIT` 夹在 1..500。
+> - 三种"没有"分清：会话在但没消息 → 200 `[]`；会话不存在 → **400 `CONFIG_ERROR` + `detail`**；
+>   坏 `json_payload` / `usage_json` → 那一块少个键，**不连累整段历史**。
+> - ★ **顺手拆掉一颗定时炸弹（新增 `iso_time.rs`）**：Kotlin 的时间列走
+>   `isoTime()` = **先解析再按 Java `Instant.toString()` 重排**，不是原样透传 ——
+>   库里 `…:00.000Z` 在那边发出来**没有小数点**（`…:00Z`）。
+>   Rust 侧前几批都是直接透传那一列，本机真库上"恰好"零差异（实测 27 提示词 / 24 产物 /
+>   23 会话 / 144 消息里**没有一个** `.000Z`），但 `strftime('%Y-%m-%dT%H:%M:%fZ','now')`
+>   的毫秒位是 `000` 的概率是 1/1000 —— 撞上就两端悄悄差一个字符串。
+>   现在时间列**只有一个出口**（`iso_time::iso_time`），prompts / media / providers / models
+>   全部改走它，`comfy_dirs` 那份私有的 `chrono_lite` 也并了进来（一处实现、一处用例）。
+>   用例把 `.000Z → 不带小数`、空格文本按 UTC、带偏移换算、以及"认不出来 → **键不出现**"
+>   全钉住了。**这条改动的判据就是"改完 18 个端点仍然零差异"** —— 实测确实零差异。
+> - **验收**：`cargo test` **104 例全绿**（43 lib + 59 api_test + 2 shape_lint）；
+>   **真库副本 canon 逐条比**：13 条路径零差异，其中包括**消息数最多的那条会话**
+>   （16 条消息 / 61 个块，含 23 个 `tool_call` + 23 个 `tool_result` 带 `jsonPayload`）
+>   —— **158154 字节逐字一致**。
+>
+> ---
+>
+> **📅 2026-09-24 第四轮（本轮）**：先补上"环境能不能真的跑起来"这件事 ——
 
 ---
 

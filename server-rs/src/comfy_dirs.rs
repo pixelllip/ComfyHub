@@ -611,10 +611,7 @@ pub fn scan(dirs: &[PathBuf], query: Option<&str>, limit: usize) -> Vec<Workflow
                 continue;
             }
             let Ok(bytes) = std::fs::read(&path) else { continue };
-            let modified_at = meta.modified().ok().map(|t| {
-                let dt: chrono_lite::DateTime = t.into();
-                dt.to_iso8601()
-            });
+            let modified_at = meta.modified().ok().map(crate::iso_time::from_system_time);
             let format = format_of(&bytes);
             // 解析不出来、或者既不是界面格式也不是 API 格式的一律不列：
             // 它们 `comfy_load_workflow` 一定失败（NOT_A_WORKFLOW）
@@ -786,65 +783,6 @@ pub fn list_json(
         obj.insert("message".into(), serde_json::json!(message));
     }
     serde_json::Value::Object(obj)
-}
-
-/// 只做 ISO-8601 UTC 格式化（不引 `chrono`：整个 crate 只为这一个用途加依赖不值）。
-mod chrono_lite {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    pub struct DateTime {
-        secs: u64,
-        nanos: u32,
-    }
-
-    impl From<SystemTime> for DateTime {
-        fn from(t: SystemTime) -> Self {
-            let d = t.duration_since(UNIX_EPOCH).unwrap_or_default();
-            Self { secs: d.as_secs(), nanos: d.subsec_nanos() }
-        }
-    }
-
-    impl DateTime {
-        /// `2026-09-24T10:00:00.000Z` —— **与 Java `Instant.toString()` 逐字同形**。
-        ///
-        /// Java 的规则是"小数位按 3 位一组给，最少 0 位"：
-        /// 整秒不带小数（`…:00Z`）、毫秒 3 位、微秒 6 位、纳秒 9 位，且**按三位一组去掉尾部零**。
-        /// Windows 的 `FileTime` 精度是 100ns → 实测常见 9 位
-        /// （`…:33.917303200Z`）。
-        ///
-        /// ⚠ 这里原来**写死 3 位**（注释却声称与 Java 同形）：真库副本上对着 Kotlin 比 `/api/capture/workflows`
-        /// 就能看见 `modifiedAt` 差一截（`…917303200Z` vs `…917Z`）。前端 `DateTime.parse` 两个都吃，
-        /// 但"逐字一致"是这个仓库的纪律，而 DLL 精度本来就拿得到纳秒，没理由丢。
-        pub fn to_iso8601(&self) -> String {
-            let days = (self.secs / 86_400) as i64;
-            let rem = self.secs % 86_400;
-            let (h, mi, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-            let (y, m, d) = civil_from_days(days);
-            if self.nanos == 0 {
-                return format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z");
-            }
-            let mut frac = format!("{:09}", self.nanos);
-            // 三位一组去尾零（Java 只输出 3/6/9 位，不会给出 1~2 位或 4~5 位）
-            while frac.len() > 3 && frac.ends_with("000") {
-                frac.truncate(frac.len() - 3);
-            }
-            format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{frac}Z")
-        }
-    }
-
-    /// 天数 → 公历（Howard Hinnant 的 `civil_from_days`，无闰秒、无时区表）。
-    fn civil_from_days(z: i64) -> (i64, u32, u32) {
-        let z = z + 719_468;
-        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-        let doe = (z - era * 146_097) as u64;
-        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-        let y = yoe as i64 + era * 400;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-        let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-        (if m <= 2 { y + 1 } else { y }, m, d)
-    }
 }
 
 #[cfg(test)]
@@ -1023,12 +961,14 @@ mod tests {
         assert!(matches!(frac.len(), 0 | 3 | 6 | 9), "小数位只能是 0/3/6/9：{ts}");
     }
 
-    /// Java `Instant.toString()` 的小数位规则（三位一组去尾零），直接钉死在这条用例上。
+    /// 小数位规则（三位一组去尾零）现在住在 [`crate::iso_time`] —— 那里有用例专门钉它。
+    /// 这里只留"文件时间戳真的走了那条路"的接线检查。
     #[test]
-    fn java_instant_fraction_digits_are_grouped_by_three() {
-        use chrono_lite::DateTime;
+    fn 文件时间戳走的是共享的_iso_时间格式化() {
         use std::time::{Duration, UNIX_EPOCH};
-        let at = |nanos: u64| DateTime::from(UNIX_EPOCH + Duration::new(1_774_512_000, nanos as u32)).to_iso8601();
+        let at = |nanos: u64| {
+            crate::iso_time::from_system_time(UNIX_EPOCH + Duration::new(1_774_512_000, nanos as u32))
+        };
         // 整秒：**没有小数点**
         assert_eq!(at(0), "2026-03-26T08:00:00Z");
         assert_eq!(at(1_000_000), "2026-03-26T08:00:00.001Z", "1ms → 3 位");
