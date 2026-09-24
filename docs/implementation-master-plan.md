@@ -574,6 +574,26 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 > `sync.rs` 里"永久性 / 暂时性错误要分清"的 `Rejected{code}` 形状（R6~R9 的错误码可沿用），
 > 以及第 14 步刚铺好的 `comfy_dirs::looks_like_comfy`（`/api/capture/locate*` 直接用它）。
 
+> 🔎 **`/api/ai/providers` 的起手笔记（2026-09-24 现场查过，别重复查）** ——
+> 它就是 `AiRepo.listProviders().map { it.withCredential(credentials) }`，看着简单，
+> 但有 **4 个会让键集合静默对不上**的点：
+> 1. `AiProviderDto` 的字段是 `id / displayName / api / baseURL / credentialRef / endpointTrust /
+>    enabled / revision / credential / createdAt / updatedAt` —— **后三个别漏**：
+>    `Json.kt` 里 `encodeDefaults = true`，所以 `credential`（对象）与两个时间戳**一定会序列化**。
+> 2. `credential` 是 `{configured, source, writable}` 三个键，**不含值**（AIH-012）。
+>    判定顺序照抄 `CredentialService.describe`：`ref` 为空 → `(false, "none", false)`；
+>    环境变量命中 → `(值非空, "env", **false**)`；否则看托管凭据文件里有没有这个 ref →
+>    `(有, "managed" / 没有 "none", **true**)`。
+> 3. `envValue(ref)` 认**两个**名字：`<ref>` 与 `COMFYHUB_KEY_<ref>`（前缀常量在
+>    `CredentialService.ENV_PREFIX`）。
+> 4. 托管凭据文件是 `<storage>\ai\credentials.dpapi.json`，**值由 DPAPI 加密**。
+>    Rust 侧只要"有没有这个 ref"就能如实回答 `configured` / `source`（**不需要、也不该解密**）；
+>    写成"永远 false"就是**假装没配过** —— 那属于 R13 那条"不许硬编码 / 不许假装"的范畴。
+>
+> ⚠ 因此这一步**先在真库副本上把 Kotlin 版的响应抓一份当形状基线**（或跑一次
+> `comfyhub.ps1 up` 对着 8080 抄键集合），**别照着 DTO 猜** —— 这个仓库已经因为
+> "少一个键 = 界面上少一块内容"栽过好几次（见 `api_test.rs` 里那些精确键集合断言）。
+
 ### ④ 三个小的、可以顺手做掉的
 
 - ✅ **`/api/capture/locate` + `/locate/apply`**：已做（第 15 步，`e3d7f7d`）。
