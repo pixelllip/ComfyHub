@@ -194,7 +194,8 @@ GET /api/ai/run-kit/status  → { current, revoked:[...] }   ← 命中吊销则
 | **M0** | **冻结 5 份契约** —— ✅ **全部落文件（2026-09-23）**：① RunEvent 协议（`docs/run-event-contract.md`）② SQLite schema 约定（`docs/sqlite-schema-contract.md`）③ 同步 API 4 条端点（`docs/sync-api-contract.md`）④ ToolScope 清单（`docs/tool-scope-contract.md`，**代码也已落地**：`ToolScope`/`toolsFor`/`ToolScopeTest`）⑤ run-kit 工件（`docs/run-kit-contract.md`，形状已冻结，端点实现归 M1） | 两端"事件类型清单一致"用例：桌面 `RunEventContractTest` ✅ + **手机 `RunEventContractTest` ✅（M3 落地时补上）**；契约文件评审通过 | **无（可立刻做）** |
 | **M1** ✅ | **桌面侧支撑** —— **已完成 2026-09-23**（`7f3a351` + 补丁 `1e3ce01`，e2e 修复 `3030d93`）：① 提问落库（新表 `ai_questions` + `AiQuestionRepo`，`AskRegistry` 状态变迁写穿：track 即落 / answer 写终值 / 收尾只动 pending / 重启后 `GET /questions/{id}` 回落查库）；② 审批落库（`ToolApprovalGate.open` 同一刻落 `ai_tool_calls` pending 行，invoke 后原地更新；启动恢复把 pending 审批按"超时=拒绝"落 denied、pending 提问落 expired）；③ `GET /api/ai/pending` 跨端待办总览（asks + approvals，另一台设备不靠 SSE 也能发现"有东西在等人"）；④ `GET /api/ai/run-kit{,/status}`（kitVersion 签名哈希变了才 bump、`tools[]` 按 ToolScope 过滤成手机子集、`untrustedBanner` 模板真源进 ToolRegistry 常量、models[] 无密钥、inlineBudget）；⑤ 闸门类事件（tool.requested / user.question）立即落库（P1 批量化的缺口，见 pitfalls） | 手机发起的 Run 的审批在另一端也能看到并批准（`/api/ai/pending` + 落库行）；后端重启后 pending 不丢（提问卡可回放、审批行有终态）；**AskPersistenceTest 7 例 + RunKitVersionTest 6 例**，gradle 597 例全绿，三条 e2e 全绿 | M0 |
 | **M3** | **移动 Kotlin harness** | ✅ **代码已落地（2026-09-23，9 个提交）**：`android/harness/`（`com.android.library`，AGP 内建 Kotlin，**不引 KMP/KSP/序列化编译器插件**）＋ `android/app/.../bridge/`（`MethodChannel` + `EventChannel` + Android Keystore）＋ `lib/core/run_event_source.dart`（`RunEventSource` 抽象两个实现）。内容：① 事件契约（17 类型 + 环形缓冲 + 与契约文档比对的用例）；② 协议层（SSE 分帧 / 三家适配器 / 思考方言 / 工具分片）；③ 标题摘取 + 内联预算；④ 本地库（bundled SQLite：10 张镜像表逐列同形 + 本机表 + `_outbox`，PRAGMA 自检 R1/R14，**不建账本不挂触发器**）；⑤ 仓储层（会话/消息/块/Run/事件/outbox，业务行与 outbox **同事务**，`listUnfinishedRuns` 供崩溃恢复）；⑥ run-kit 客户端（取/缓存/吊销判定）；⑦ 工具层（`remember` / `list_skills` / `load_skill` / `ask_user_question` / `comfy_queue_submit` / `web_fetch`）；⑧ harness 主循环（流式 + 工具往返 + **R6 三条失败纪律** + 截断续写去重）；⑨ event payload 与桌面逐字对齐（**顺带改正契约文档 §2 的 4 处键名错**） | ① **145 个 Kotlin 用例**（`:harness:testDebugUnitTest`，含 R6 三条 / R8 审批顺序 / R11 不复用提交名字 / R13 无规则文案 / R14 FTS5）+ **7 个 Dart 用例**（`test/run_event_source_test.dart`）+ `flutter test` 255 例全绿；② `flutter build apk --debug` 出包；③ 桌面侧 run-kit 补下发 `titleInstruction` / `continueInstruction`（R13：手机零提示串） | M0、M1 |
-| **M3.1** | 真机验收（**未做，需设备**） | 装 `app-debug.apk` 跑一次真实对话：离线（桌面不在线）出方案 → 切后台再回来事件不丢 → 排队提交后桌面在线消费 | 手机上会话列表/标题/工具卡/产物入口卡与桌面同一套渲染；无设备则无法验收（本机无模拟器 + 无真机） | M3 |
+| **M3.1** | 真机验收（**进行中：设备已到位，2026-09-24**） | 🔶 **本次只验到"harness 能在真机上起来"，UI 侧还是断的**。设备 = OnePlus 8T（KB2000，arm64-v8a，transport 752e8d2f），`build\app\outputs\flutter-apk\app-debug.apk`（168MB）装得上、起得来。**真机证据**：① logcat 里 `libsqliteJni.so` 从 APK 的 `lib/arm64-v8a` 加载成功 → **bundled SQLite 真的是自带的**（R14 在真机上成立，而不是只在单测里）；② `run-as com.example.viewer ls files/` 看到 `comfyhub-harness.db` + `.db-wal`(828KB) + `.db-shm` → 桥在 `attach()` 里建库成功，**PRAGMA 读回自检与 FTS5 探针在真机上没炸**（炸了就是 FATAL，logcat 里没有）；③ `flutter build apk --debug` 的产物在 arm64 上跑 Impeller/Vulkan 正常。**但没验到"真实对话"**：见下面那条阻断项 | M3 |
+| **M3.2** | **把 harness 接进 UI（新发现，未做）** | ⚠ **`RunEventSource` 目前是死代码**：`lib/core/run_event_source.dart` 定义得好好的（`openRunEventSource` 在 Android 上返回 `LocalHarnessRunEventSource`），但**全仓没有一个消费者** —— `lib/state/ai_workspace_store.dart` 在 `send()` / `_consumeRun()` 里仍然直接调 `_api.startRun()` / `_api.runEvents()`（`ai_workspace_store.dart:1355`、`:1423`、`:1670`）。后果：**手机上那套 Kotlin harness 根本调不到**，UI 一律走远端后端；桌面的 8080 不在线时手机什么也发不出去。这正是 M3.1 验收要抓的东西。要做的事（按依赖排序）：① Kotlin `startRun` 要**多吐 `userMessageId` / `assistantMessageId`**（现在只回 `runId`/`conversationId`/`kitVersion`/`promptVersion`，而 `ai_workspace_store.dart` 的乐观插入和 `_runIds[assistantMessageId]` 关联都靠它们）—— `RunRequest` 相应接受 Dart 侧生成的 UUID；② 会话与消息的**本地持久化**也要分叉（`_api.createConversation` / `listMessages` 在离线时必须落到本地库），否则只是"事件流换了个来源"，离线仍然画不出东西；③ 再补一条"Android 上 `send()` 走的是本地源"的 Dart 用例 | M3.1 |
 | **M4** | 上行通道 | `_outbox` + `/api/sync/push` + 幂等 apply + 服务端赢 LWW | 手机产生的会话在桌面可见可续写；重复推送不产生重复行 | M3 |
 | **M5** | 排队提交 | 手机 `comfy_queue_submit` + 桌面 outbox 消费（**走现有 `comfy_submit` 全链路**） | 手机排队 → 桌面在线后自动提交 → 产物入库画廊 → `mediaIds` 回到手机；**桌面侧审批/幂等/入库一条不少（R10/R11）** | M4 |
 | **M6** | 凭据 | `ai_providers` 下行（**不含密钥**）+ 手机 Android Keystore + `flutter_secure_storage` | 手机能独立调用 LLM；密钥不出本机；界面明确告知"需在手机上单独填 Key" | M3 |
@@ -365,3 +366,21 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > `prompt_positive`（列不存在 → 整个列表 500）、`Vec::dedup()` 只去相邻重复（标签参数要的是全局去重）。
 > 下一步：`/api/media` 的写侧（upload 要 multipart、thumb 要图像解码器、poster 要 ffmpeg 抽帧），
 > 然后是 `/api/capture/*`，最后才是 `/api/ai/*` 与 R6~R10 的重建。
+>
+> ✅ **P4 第 9 步（`3f10f19`，2026-09-24）**：`/api/prompts/{id}/api-graph` —— **API 格式节点图**。
+> 这是 **R10 的前提**：`comfy_submit` 只认 API 图，而它在整个系统里的唯一来源就是这个端点
+> （`/workflow` 是界面格式，两个不是一回事）。取数链条照抄 Kotlin `ComfyCapture.apiGraphOf`：
+> `prompts.source_ref`(= `run_key`) → `capture_runs.raw` → `HistoryEntry.parse(entry).graph`。
+> - **三分语义一条都不能混**（把 204 说成 404，界面就会以为"提示词没了"）：
+>   提示词不存在 → **404**；没有 `source_ref` / 没有 `capture_runs` 行 / `raw` 是脏数据 /
+>   `raw` 里没有图 → **204**；有 → **200** + 图本体。
+> - `HistoryEntry` **逐行移植**（ComfyUI `/history` 条目有三种历史形状：`{prompt:<图>}` 扁平 /
+>   `{prompt:{prompt:<图>, extra_data:{…}}}` 具名 / `{prompt:[<图>, <extra>]}` 数组）。
+>   判据是**结构特征**（非空且每个值都是带 `class_type` 的对象）而**不是键名** ——
+>   猜错的后果是把 `extra_data` 当成节点图发给 ComfyUI，提交必炸且报错毫无线索。
+> - **验收**：`cargo test` **54 例**全绿（22 lib + 32 集成），其中 `history` 5 例（三种形状 +
+>   不肯猜 + `extra_data` 不被误认成图）、`api_graph_distinguishes_404_from_204_from_200` 走满 6 个分支；
+>   **真实库副本起服务抽查**（8082）：id=310/309/308/307/306 **全部 200**，吐的确实是真节点图
+>   （`1:LoraLoader` / `1:CheckpointLoaderSimple`，带 `class_type`），`999999` 回 404；真库只读未改。
+> - 仍未搬：`/api/capture/{status,jobs,poll,locate*,import*,workflows}`、`/api/ingest/comfyui`
+>   （都要 ComfyUI 在场）、`/api/ai/*`、`/api/sync/*`；**R6~R10 的 Rust 侧重建仍未开始**。
