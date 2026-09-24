@@ -67,16 +67,28 @@ void main() {
 
   testWidgets('手机尺寸下「AI 模型与凭据」页不溢出、也不抛异常（两道斜纹的防线）', (tester) async {
     await pumpProviderPage(tester, logical: const Size(384, 853));
-    // 页面的三块承重内容都在（没有因为溢出被裁掉）
+    // 页面的承重内容都在（没有因为溢出被裁掉）
     expect(find.text('AI 模型与凭据'), findsOneWidget);
+
+    // 两张维护卡在手机上**折叠**（用户原话："手机端这个排版的实用性极差"）——
+    // 它们是电脑上的活（补能力声明 / 实测校准，后者还花钱），手机上只留一行入口。
+    expect(find.text('模型目录维护（内置目录 / 能力目录）'), findsOneWidget);
+    expect(find.text('内置模型目录'), findsNothing, reason: '折叠时不渲染，把地方让给 Provider 与模型列表');
+
+    // 展开之后照样能用，而且展开态**也不许溢出**（那道 BOTTOM OVERFLOW 就是它们顶出来的）
+    await tester.tap(find.text('模型目录维护（内置目录 / 能力目录）'));
+    await tester.pumpAndSettle();
     expect(find.text('内置模型目录'), findsOneWidget);
     expect(find.text('模型能力目录'), findsOneWidget);
-    // 卡片上如实写着失败原因（灰度期后端没这条接口）—— 不许静默
+    // 卡片上如实写着失败原因（灰度期后端没这几条接口）—— 不许静默
     expect(find.textContaining('接口不存在'), findsWidgets);
   });
 
   testWidgets('更窄的屏幕（320dp）同样不溢出', (tester) async {
     await pumpProviderPage(tester, logical: const Size(320, 640));
-    expect(find.text('模型能力目录'), findsOneWidget);
+    expect(find.text('模型目录维护（内置目录 / 能力目录）'), findsOneWidget);
+    await tester.tap(find.text('模型目录维护（内置目录 / 能力目录）'));
+    await tester.pumpAndSettle();
+    expect(find.text('内置模型目录'), findsOneWidget);
   });
 }

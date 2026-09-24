@@ -340,32 +340,32 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           // 真机验收（OnePlus 8T）实测直接画成 `BOTTOM OVERFLOWED BY 57 PIXELS`。
           // 所以给这一坨一个**高度上限**并让它自己滚：屏幕小就在这块里滚，
           // 而不是把整页挤爆（桌面窗口够高时上限用不到，布局与以前一样）。
+          //
+          // 2026-09-24 用户反馈（原话："手机端这个排版的实用性极差"）：这两张卡是
+          // **电脑上的维护工具**（内置目录是"补能力声明"、能力目录是"真发请求实测校准"，
+          // 后者还要花钱），手机上既用不到又挡住正事。所以**窄屏默认折叠**：
+          // 想用点开就有，不想用就一行字。桌面照旧平铺（那里的"维护"正是主用例）。
           ConstrainedBox(
             constraints: BoxConstraints(
               maxHeight: MediaQuery.sizeOf(context).height * 0.42,
             ),
             child: SingleChildScrollView(
-              child: Column(
-                children: [
-                  _BuiltinCatalogCard(
-                    status: _builtin,
-                    busy: _builtinBusy,
-                    onRefresh: _loading ? null : _loadBuiltin,
-                    onAlignCapabilities: _alignBuiltinCapabilities,
-                    onAddMissing: _addMissingBuiltinModels,
-                  ),
-                  // 模型能力目录（2026-09-23）：在线更新（models.dev）+ 实测校准入口
-                  _CapabilityCatalogCard(
-                    status: _cap,
-                    busy: _capBusy,
-                    probeBusy: _probeBusy,
-                    onRefreshStatus: _loading ? null : _loadCapabilityCatalog,
-                    onUpdateRemote: _refreshCapabilityCatalog,
-                    onProbeToggle: _toggleProbe,
-                    onProbe: _probeThinkingLadders,
-                  ),
-                ],
-              ),
+              child: wide
+                  ? Column(
+                      children: [
+                        _builtinCard(),
+                        _capabilityCard(),
+                      ],
+                    )
+                  : ExpansionTile(
+                      // 折叠起来只有这一行：手机上先把地方让给 Provider 与模型列表
+                      leading: const Icon(Icons.tune, size: 20),
+                      title: const Text('模型目录维护（内置目录 / 能力目录）'),
+                      subtitle: const Text('电脑上的活：补模型能力声明、实测校准思考档位'),
+                      tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+                      childrenPadding: const EdgeInsets.only(bottom: 8),
+                      children: [_builtinCard(), _capabilityCard()],
+                    ),
             ),
           ),
           Expanded(
@@ -377,18 +377,48 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
                       Expanded(child: detail),
                     ],
                   )
-                : Column(
-                    children: [
-                      SizedBox(height: 200, child: list),
-                      const Divider(height: 1),
-                      Expanded(child: detail),
-                    ],
+                : LayoutBuilder(
+                    builder: (context, constraints) {
+                      // 手机上：上面是 Provider 列表、下面是选中那条的详情。
+                      // 列表高度按可用高度**取四成**（180~420 之间），不再写死 200 ——
+                      // 用户反馈"实用性极差"里有一部分就是被那个固定值挤的：
+                      // 屏幕高一点也不会多给列表一行，矮一点又会把详情压没。
+                      final listHeight =
+                          (constraints.maxHeight * 0.38).clamp(180.0, 420.0);
+                      return Column(
+                        children: [
+                          SizedBox(height: listHeight, child: list),
+                          const Divider(height: 1),
+                          Expanded(child: detail),
+                        ],
+                      );
+                    },
                   ),
           ),
         ],
       ),
     );
   }
+
+  /// 「内置模型目录」卡片（桌面平铺 / 手机折叠项里都用这一个，免得两处漂移）。
+  Widget _builtinCard() => _BuiltinCatalogCard(
+        status: _builtin,
+        busy: _builtinBusy,
+        onRefresh: _loading ? null : _loadBuiltin,
+        onAlignCapabilities: _alignBuiltinCapabilities,
+        onAddMissing: _addMissingBuiltinModels,
+      );
+
+  /// 「模型能力目录」卡片（同上）。
+  Widget _capabilityCard() => _CapabilityCatalogCard(
+        status: _cap,
+        busy: _capBusy,
+        probeBusy: _probeBusy,
+        onRefreshStatus: _loading ? null : _loadCapabilityCatalog,
+        onUpdateRemote: _refreshCapabilityCatalog,
+        onProbeToggle: _toggleProbe,
+        onProbe: _probeThinkingLadders,
+      );
 
   /// 内置模型目录（M6）。
   ///
