@@ -60,6 +60,31 @@ impl AppState {
         self.media_dir.as_path()
     }
 
+    /// 项目根（工具权限与 ComfyUI 探测的基准，AGENTS §7）。
+    ///
+    /// 与 Kotlin `Config.resolveProjectRoot` **同一套算法**：环境变量 →
+    /// `<storage>` 的父目录 → 兜底到 storage 自己。发布包/源码树两种布局都认
+    /// （`<根>\.db\comfyhub.db` + `<根>\storage\media`）。
+    pub fn project_root(&self) -> std::path::PathBuf {
+        if let Ok(raw) = std::env::var("COMFYHUB_PROJECT_ROOT") {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                return std::path::PathBuf::from(trimmed);
+            }
+        }
+        let media = self.media_dir();
+        let storage = media.parent().unwrap_or(media);
+        let is_storage = storage
+            .file_name()
+            .map(|n| n.to_string_lossy().eq_ignore_ascii_case("storage"))
+            .unwrap_or(false);
+        if is_storage {
+            storage.parent().unwrap_or(storage).to_path_buf()
+        } else {
+            storage.to_path_buf()
+        }
+    }
+
     pub fn with<F, T>(&self, f: F) -> Result<T, ApiError>
     where
         F: FnOnce(&Connection) -> rusqlite::Result<T>,
@@ -100,6 +125,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/media/upload", axum::routing::post(media_upload))
         // 捕获配置（本地那一半：读写 app_settings 里的一行 JSON）
         .route("/api/capture/config", get(capture_config).put(put_capture_config))
+        // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
+        .route("/api/capture/workflows", get(capture_workflows))
         // 工作流原文（前端按需拉：详情页的「查看工作流」弹窗）
         .route("/api/prompts/{id}/workflow", get(prompt_workflow))
         .route("/api/media/{id}/workflow", get(media_workflow))
@@ -189,6 +216,17 @@ async fn put_capture_config(
     Json(body): Json<crate::capture::CaptureConfig>,
 ) -> Result<Json<crate::capture::CaptureConfig>, ApiError> {
     Ok(Json(crate::capture::put_config(&state, body)?))
+}
+
+/// `GET /api/capture/workflows?q=&limit=` —— 本机 ComfyUI 已保存的工作流文件（**只读**）。
+///
+/// 用户 bug ⑤：`prompts` 库只收"捕获过的运行"与"手动读进来的文件"，所以首次使用时库里是空的，
+/// 而用户机器上早就存着工作流 —— 这个端点把它们摆出来（不写库、不动用户的文件）。
+async fn capture_workflows(
+    State(state): State<AppState>,
+    Query(query): Query<crate::comfy_dirs::WorkflowQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::comfy_dirs::workflows_json(&state, query)?))
 }
 
 /// `GET /api/prompts/{id}/workflow` —— 有就原样吐 `application/json`，没有就 **204**。

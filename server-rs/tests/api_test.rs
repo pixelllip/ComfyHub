@@ -634,6 +634,81 @@ async fn unmigrated_endpoints_answer_501_and_migrated_ones_work() {
     assert_eq!(body["error"], "NOT_IMPLEMENTED");
 }
 // ===========================================================================
+//  本机工作流文件（P4 第 14 步）：GET /api/capture/workflows
+// ===========================================================================
+
+/// 起一个"磁盘上真有工作流文件"的环境，并把它接进 `AppState`。
+///
+/// 目录布局照**发布包/源码树的真实形状**摆：`<根>\storage\media` 是产物目录，
+/// 于是 `AppState::project_root()` 算出来就是 `<根>`（与脚本传的 `COMFYHUB_PROJECT_ROOT` 等价）。
+fn state_with_workflow_files() -> (comfyhub_server_rs::routes::AppState, std::path::PathBuf) {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("comfyhub-wf-{}-{unique}", std::process::id()));
+
+    // 项目内的 comfyui（三份目录来源里的第 ② 份）
+    let home = root.join("comfyui");
+    std::fs::create_dir_all(home.join("comfy")).unwrap();
+    std::fs::write(home.join("main.py"), "print(1)").unwrap();
+    let workflows = home.join("user").join("default").join("workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    std::fs::write(workflows.join("krea2_hd.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
+    std::fs::write(workflows.join("broken.json"), "{ 不是 json").unwrap();
+
+    let media = root.join("storage").join("media");
+    std::fs::create_dir_all(&media).unwrap();
+
+    let conn = test_conn();
+    // 其中一份已经在库里（`comfy_load_workflow` 用的就是 `run_key = file:<sha256>`）
+    let sha = comfyhub_server_rs::comfy_dirs::sha256_hex(br#"{"nodes":[],"links":[]}"#);
+    conn.execute(
+        "INSERT INTO capture_runs (run_key, status, media_count, raw, prompt_id, created_at)
+         VALUES (?1, 'success', 0, NULL, 10, '2026-09-24T00:00:00.000Z')",
+        rusqlite::params![format!("file:{sha}")],
+    )
+    .unwrap();
+
+    (comfyhub_server_rs::routes::AppState::new(conn, ":memory:", media), workflows)
+}
+
+#[tokio::test]
+async fn capture_workflows_lists_files_with_the_same_keys() {
+    let (state, _dir) = state_with_workflow_files();
+    let (status, body) = get_json(router_for(state), "/api/capture/workflows").await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(keys(&body), vec!["count", "dirs", "files", "hint", "total"], "少一个键 = 界面上少一块内容");
+    // 只列真的能用的：坏 JSON 不列（列了 AI 会白跑一趟 comfy_load_workflow）
+    assert_eq!(body["total"], 1, "body={body}");
+    let file = &body["files"][0];
+    let mut file_keys = keys(file);
+    file_keys.sort();
+    assert_eq!(
+        file_keys,
+        vec!["bytes", "format", "inLibrary", "modifiedAt", "name", "path", "promptId"],
+        "file 的键集合"
+    );
+    assert_eq!(file["name"], "krea2_hd.json");
+    assert_eq!(file["format"], "ui");
+    // `file:<sha256>` 是**同一把钥匙**：在库里就得如实说，并且给出可以直接提交的 promptId
+    assert_eq!(file["inLibrary"], true);
+    assert_eq!(file["promptId"], 10);
+    assert!(body["dirs"].as_array().unwrap().len() >= 1, "三份来源里的项目内 comfyui 必须被认出来");
+}
+
+#[tokio::test]
+async fn capture_workflows_query_filters_by_file_name() {
+    let (state, _dir) = state_with_workflow_files();
+    let (_, hit) = get_json(router_for(state.clone()), "/api/capture/workflows?q=KREA2").await;
+    assert_eq!(hit["count"], 1, "query 是文件名的**不区分大小写**子串");
+    let (_, miss) = get_json(router_for(state), "/api/capture/workflows?q=%E6%B2%A1%E6%9C%89").await;
+    assert_eq!(miss["count"], 0);
+    // 没命中时要说清楚"共有几份、可以不带 query 再列一次"，而不是干巴巴一个空数组
+    assert!(miss["message"].as_str().unwrap().contains("文件名匹配"));
+}
+
+// ===========================================================================
 //  产物（P4 第 3 步）：列表 / 详情 / 原件文件流
 // ===========================================================================
 
