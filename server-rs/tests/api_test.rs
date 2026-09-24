@@ -170,6 +170,19 @@ async fn health_reports_engine_and_schema_version() {
         "engine={}",
         body["engine"]
     );
+    // ★ 这四个键是 **Dart 在读的**（Kotlin `HealthDto` 同形）：
+    //   `backend_launcher.dart:271` 用 `database == "ok"` 判断"后端已就绪"，
+    //   缺了它启动流程会以为库坏了；设置页显示 `version` / `storageDir`。
+    for key in ["version", "database", "storageDir", "serverTime"] {
+        assert!(body.get(key).is_some(), "缺了 Dart 会读的键 `{key}`：{body}");
+    }
+    assert_eq!(body["database"], "ok", "库里真能跑通 SELECT 1 才叫 ok");
+    assert_eq!(body["version"], "1.0.0", "Kotlin 的 APP_VERSION");
+    // `storageDir` 是 `<storage>`（media 的父目录），不是 media 目录本身
+    let storage = body["storageDir"].as_str().unwrap();
+    assert!(!storage.replace('\\', "/").ends_with("/media"), "storageDir 不该指向 media：{storage}");
+    assert!(storage.contains("comfyhub-test"), "夹具的 storage 就在临时目录下：{storage}");
+    assert!(body["serverTime"].as_str().unwrap().contains('T'), "{body}");
 }
 
 #[tokio::test]

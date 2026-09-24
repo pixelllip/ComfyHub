@@ -577,15 +577,56 @@ async fn fallback_route(uri: axum::http::Uri) -> ApiError {
 //  /api/health
 // ---------------------------------------------------------------------------
 
+/// Kotlin 的 `APP_VERSION`（`Application.kt:56`）—— 一个字都别改，设置页会显示它。
+const APP_VERSION: &str = "1.0.0";
+
+/// `GET /api/health`。
+///
+/// # ⚠ 四个键是**承重的**，不是装饰（2026-09-24 对齐时抓到）
+///
+/// `lib/core/backend_launcher.dart:271/379/426` 把 **`health['database'] == "ok"`** 当作
+/// "后端已就绪"的唯一判据：拿不到这个键，它会一直认为库坏了，去走"修复"那条路
+/// （表现是启动时反复重试 —— 而这不是"少显示一个字段"那么轻）。
+/// 设置页还读 `version`（连接成功那句）与 `storageDir`（显示 + 「打开目录」按钮）。
+///
+/// 也就是说 P4 切流那天，`{status, db, impl, schemaVersion, engine}` 这份形状会让
+/// **App 认为后端没起来**。现在与 Kotlin 的 `HealthDto` 对齐：`status` / `version` /
+/// `database` / `storageDir` / `serverTime`；另外三样是 Rust 侧多给的诊断信息
+/// （`doctor`、灰度期分辨"是哪一版后端"用），客户端按 key 取值，多给不影响。
 async fn health(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let storage_dir = storage_dir_of(&state);
     let (engine, schema) = state.with(|conn| Ok((db::engine_info(conn)?, db::schema_version(conn)?)))?;
+
+    // `database` 就是 Kotlin 那句 "SELECT 1" 的结果（ok / error: …），不是常量
+    let database = match state.with(|conn| Ok(conn.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?)) {
+        Ok(_) => "ok".to_string(),
+        Err(e) => format!("error: {}", e.human()),
+    };
+    let server_time: String =
+        state.with(|conn| Ok(conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')", [], |r| r.get(0))?))?;
+
     Ok(Json(json!({
-        "status": "ok",
+        "status": if database == "ok" { "ok" } else { "degraded" },
+        "version": APP_VERSION,
+        "database": database,
+        "storageDir": storage_dir,
+        "serverTime": server_time,
+        // ↓ Rust 侧多给的（不影响任何客户端；灰度期用来认"这是哪一版后端"）
         "impl": "rust",
         "db": state.db_path,
         "schemaVersion": schema,
         "engine": engine,
     })))
+}
+
+/// `<storage>`（`media_dir` 的父目录）—— Kotlin `cfg.storageDir` 的对应物。
+fn storage_dir_of(state: &AppState) -> String {
+    let media = state.media_dir();
+    media
+        .parent()
+        .unwrap_or(media)
+        .to_string_lossy()
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
