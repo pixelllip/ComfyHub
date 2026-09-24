@@ -143,37 +143,60 @@ pub fn manifest(state: &AppState) -> Result<SyncManifest, ApiError> {
 // ---------------------------------------------------------------------------
 
 /// 主键的形态 —— 决定 `deletes` 里那个键怎么表示（契约 §2「主键表示」）。
+///
+/// ⚠ **这份表必须与 `db/schema.sqlite.sql` 里触发器的写法逐字对齐**，因为账本里的
+/// `pk` 文本就是触发器拼出来的，两处不一致就会出错。踩过一次：`ai_message_parts` 的
+/// 主键是 `(message_id, ordinal)`、分隔符是 **`#`**（不是 `:`）、而且**第一段是 UUID 文本**
+/// （不是数字）—— 当初按"单列 + id"实现，结果真库上 `/api/sync/changes` 直接 500：
+/// `no such column: id`。**夹具里当时没有这张表的行，所以测试全绿也没抓住它。**
+/// 现在的防线是 [`tests::pk_shapes_match_the_schema_triggers`]：它去读真实的
+/// `schema.sqlite.sql`，把每张表的触发器 pk 表达式与这张表对一遍。
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum PkKind {
     /// 单列整数主键（`prompts` / `tags` / `media_assets` / `capture_runs`）→ 标量数字
     Int,
-    /// 单列文本主键（会话 / 消息 / 块 / 附件都是 UUID）→ 字符串
+    /// 单列文本主键（会话 / 消息 / 附件都是 UUID）→ 字符串
     Text,
-    /// 复合主键（`prompt_tags` / `media_tags`），账本里是 `a:b` → 数组 `[a, b]`
-    Composite(&'static str, &'static str),
+    /// 复合主键：账本里是 `a<sep>b`，`deletes` 里要发成**数组**（契约 §2）
+    Composite { sep: char, parts: &'static [PkPart] },
 }
 
-/// 每张同步表的**主键列**。表名与列名都是编译期常量 → 下面拼 SQL 不是注入面。
+/// 复合主键的一个分量（列名 + 它在账本字符串里是数字还是文本）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PkPart {
+    Int(&'static str),
+    Text(&'static str),
+}
+
+impl PkPart {
+    fn column(&self) -> &'static str {
+        match self {
+            PkPart::Int(c) | PkPart::Text(c) => c,
+        }
+    }
+}
+
+/// 每张同步表的**主键列**（与触发器的 `pk` 表达式一一对应）。
+/// 表名与列名都是编译期常量 → 下面拼 SQL 不是注入面。
 fn pk_kind(table: &str) -> Option<PkKind> {
     Some(match table {
         "prompts" | "tags" | "media_assets" | "capture_runs" => PkKind::Int,
-        "ai_conversations" | "ai_messages" | "ai_message_parts" | "ai_attachments" => PkKind::Text,
-        "prompt_tags" => PkKind::Composite("prompt_id", "tag_id"),
-        "media_tags" => PkKind::Composite("media_id", "tag_id"),
+        "ai_conversations" | "ai_messages" | "ai_attachments" => PkKind::Text,
+        "prompt_tags" => PkKind::Composite {
+            sep: ':',
+            parts: &[PkPart::Int("prompt_id"), PkPart::Int("tag_id")],
+        },
+        "media_tags" => PkKind::Composite {
+            sep: ':',
+            parts: &[PkPart::Int("media_id"), PkPart::Int("tag_id")],
+        },
+        // ★ 主键是 (message_id, ordinal)，触发器写的是 message_id||'#'||ordinal
+        "ai_message_parts" => PkKind::Composite {
+            sep: '#',
+            parts: &[PkPart::Text("message_id"), PkPart::Int("ordinal")],
+        },
         _ => return None,
     })
-}
-
-/// 单列主键表的取行/取键列（复合表由 [PkKind::Composite] 自己带）。
-fn single_pk_column(table: &str) -> &'static str {
-    match table {
-        "prompts" | "tags" | "media_assets" | "capture_runs" => "id",
-        "ai_conversations" => "id",
-        "ai_messages" => "id",
-        "ai_message_parts" => "id",
-        "ai_attachments" => "id",
-        _ => "id",
-    }
 }
 
 #[derive(Debug, Serialize)]
@@ -303,12 +326,37 @@ fn delete_key(kind: PkKind, pk: &str) -> Option<serde_json::Value> {
     match kind {
         PkKind::Int => pk.parse::<i64>().ok().map(|n| serde_json::json!(n)),
         PkKind::Text => Some(serde_json::json!(pk)),
-        PkKind::Composite(_, _) => {
-            let mut parts = pk.splitn(2, ':');
-            let a = parts.next()?.parse::<i64>().ok()?;
-            let b = parts.next()?.parse::<i64>().ok()?;
-            Some(serde_json::json!([a, b]))
+        PkKind::Composite { sep, parts } => {
+            // 按分隔符切**正好 parts.len() 段**（第一段可能是 UUID，里面不会有分隔符）
+            let raw: Vec<&str> = pk.splitn(parts.len(), sep).collect();
+            if raw.len() != parts.len() {
+                return None;
+            }
+            let mut out = Vec::with_capacity(parts.len());
+            for (value, part) in raw.iter().zip(parts) {
+                out.push(match part {
+                    PkPart::Int(_) => serde_json::json!(value.parse::<i64>().ok()?),
+                    PkPart::Text(_) => serde_json::json!(*value),
+                });
+            }
+            Some(serde_json::Value::Array(out))
         }
+    }
+}
+
+/// 账本里那个 `pk` 文本 → SQL 的 `WHERE` 条件（触发器怎么拼，这里就怎么拆）。
+fn pk_where(table: &str, kind: PkKind) -> String {
+    match kind {
+        PkKind::Composite { sep, parts } => {
+            let parts_sql = parts
+                .iter()
+                .map(|p| format!("CAST({} AS TEXT)", quote_ident(p.column())))
+                .collect::<Vec<_>>()
+                .join(&format!(" || '{sep}' || "));
+            format!("SELECT * FROM {table} WHERE {parts_sql} = ?1")
+        }
+        // 单列：CAST 成文本比对，整数与 UUID 两种主键都能用同一条 SQL
+        _ => format!("SELECT * FROM {table} WHERE CAST(id AS TEXT) = ?1"),
     }
 }
 
@@ -320,12 +368,7 @@ fn fetch_row(
     kind: PkKind,
     pk: &str,
 ) -> rusqlite::Result<Option<serde_json::Value>> {
-    let sql = match kind {
-        PkKind::Composite(a, b) => format!(
-            "SELECT * FROM {table} WHERE CAST({a} AS TEXT) || ':' || CAST({b} AS TEXT) = ?1"
-        ),
-        _ => format!("SELECT * FROM {table} WHERE CAST({} AS TEXT) = ?1", single_pk_column(table)),
-    };
+    let sql = pk_where(table, kind);
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query([pk])?;
     match rows.next()? {
@@ -482,8 +525,12 @@ fn apply_one(state: &AppState, item: &PushItem) -> Result<(), Rejected> {
             if columns.is_empty() {
                 return Ok(Err(reject("UNKNOWN_TABLE", format!("桌面没有 {table} 这张表"))));
             }
-            if !columns.iter().any(|c| c == "id") {
-                return Ok(Err(reject("SCHEMA_MISMATCH", format!("{table} 没有 id 列"))));
+            // ★ 主键**从 schema 现查**（`PRAGMA table_info` 的 pk 字段），不要假定叫 `id`：
+            //   `ai_message_parts` 的主键是 `(message_id, ordinal)`，假定 `id` 会让
+            //   **手机推上来的消息块全被拒**（表现是"手机上能聊、桌面看不到内容"）。
+            let pk_cols = table_pk_columns(tx, table)?;
+            if pk_cols.is_empty() {
+                return Ok(Err(reject("SCHEMA_MISMATCH", format!("{table} 没有主键"))));
             }
 
             let mut cols: Vec<String> = Vec::new();
@@ -499,23 +546,50 @@ fn apply_one(state: &AppState, item: &PushItem) -> Result<(), Rejected> {
                 cols.push(key.clone());
                 values.push(json_to_sql(value));
             }
-            if !cols.iter().any(|c| c == "id") {
-                return Ok(Err(reject("BAD_PAYLOAD", "payload 缺 id".to_string())));
+            for pk in &pk_cols {
+                if !cols.iter().any(|c| c == pk) {
+                    return Ok(Err(reject("BAD_PAYLOAD", format!("payload 缺主键列 {pk}"))));
+                }
             }
-            // ref_id 与 payload.id 必须一致，否则 outbox 的引用就是错的
-            if obj.get("id").and_then(|v| v.as_str()) != Some(item.ref_id.as_str()) {
-                return Ok(Err(reject(
-                    "REF_MISMATCH",
-                    format!("refId ({}) 与 payload.id 不一致", item.ref_id),
-                )));
+            // refId 与 payload 里的主键必须一致，否则 outbox 的引用就是错的
+            {
+                let encoded = pk_cols
+                    .iter()
+                    .map(|c| {
+                        obj.get(c)
+                            .map(|v| match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            })
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>();
+                let sep = match pk_kind(table) {
+                    Some(PkKind::Composite { sep, .. }) => sep.to_string(),
+                    _ => String::new(),
+                };
+                let actual = encoded.join(&sep);
+                if actual != item.ref_id {
+                    return Ok(Err(reject(
+                        "REF_MISMATCH",
+                        format!("refId ({}) 与 payload 的主键 ({actual}) 不一致", item.ref_id),
+                    )));
+                }
             }
 
             // ④ LWW：只有比桌面新才覆盖
             if let Some(incoming) = obj.get("updated_at").and_then(|v| v.as_str()) {
+                let where_pk = pk_cols
+                    .iter()
+                    .map(|c| format!("{} = ?", quote_ident(c)))
+                    .collect::<Vec<_>>()
+                    .join(" AND ");
                 let existing: Option<String> = tx
                     .query_row(
-                        &format!("SELECT updated_at FROM {table} WHERE id = ?1"),
-                        [item.ref_id.as_str()],
+                        &format!("SELECT updated_at FROM {table} WHERE {where_pk}"),
+                        rusqlite::params_from_iter(
+                            pk_cols.iter().map(|c| payload_to_sql(obj.get(c))),
+                        ),
                         |row| row.get::<_, Option<String>>(0),
                     )
                     .optional()?
@@ -534,15 +608,21 @@ fn apply_one(state: &AppState, item: &PushItem) -> Result<(), Rejected> {
             //    （R3：它内部是 DELETE+INSERT，会点亮 DELETE 触发器往 _sync_log 写**假的 delete**）
             let quoted = cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
             let holders = vec!["?"; cols.len()].join(", ");
+            let conflict = pk_cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
             let updates = cols
                 .iter()
-                .filter(|c| c.as_str() != "id")
+                .filter(|c| !pk_cols.contains(c))
                 .map(|c| format!("{0} = excluded.{0}", quote_ident(c)))
                 .collect::<Vec<_>>()
                 .join(", ");
+            // 只有主键列时没有可更新的列（DO NOTHING），否则 SQL 语法不通
+            let action = if updates.is_empty() {
+                "DO NOTHING".to_string()
+            } else {
+                format!("DO UPDATE SET {updates}")
+            };
             let sql = format!(
-                "INSERT INTO {table} ({quoted}) VALUES ({holders})
-                 ON CONFLICT(id) DO UPDATE SET {updates}"
+                "INSERT INTO {table} ({quoted}) VALUES ({holders}) ON CONFLICT({conflict}) {action}"
             );
             let refs: Vec<&dyn rusqlite::ToSql> = values.iter().map(|v| v.as_ref()).collect();
             tx.execute(&sql, rusqlite::params_from_iter(refs))?;
@@ -558,6 +638,30 @@ fn table_columns(tx: &rusqlite::Transaction<'_>, table: &str) -> rusqlite::Resul
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<rusqlite::Result<Vec<String>>>()?;
     Ok(names)
+}
+
+/// 表的主键列（按 `PRAGMA table_info` 的 `pk` 序号排好）。
+///
+/// **不要假定主键叫 `id`**：`ai_message_parts` 是 `(message_id, ordinal)`，
+/// `prompt_tags` / `media_tags` 也都是复合的。
+fn table_pk_columns(tx: &rusqlite::Transaction<'_>, table: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = tx.prepare(&format!("PRAGMA table_info({})", quote_ident(table)))?;
+    let mut pairs: Vec<(i64, String)> = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(5)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    pairs.retain(|(pos, _)| *pos > 0);
+    pairs.sort_by_key(|(pos, _)| *pos);
+    Ok(pairs.into_iter().map(|(_, name)| name).collect())
+}
+
+/// payload 里的一个值 → SQLite 参数（主键比较用；与 [json_to_sql] 同口径）。
+fn payload_to_sql(value: Option<&serde_json::Value>) -> Box<dyn rusqlite::ToSql> {
+    match value {
+        Some(v) => json_to_sql(v),
+        None => Box::new(Option::<String>::None),
+    }
 }
 
 /// 列名只允许 `[A-Za-z0-9_]`，然后加双引号 —— 双保险（键来自手机，是注入面）。

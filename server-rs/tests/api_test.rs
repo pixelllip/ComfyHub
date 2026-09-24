@@ -57,6 +57,21 @@ fn test_conn() -> Connection {
 
         INSERT INTO media_assets (id, prompt_id, kind, original_name, stored_name, size_bytes)
         VALUES (100, 10, 'IMAGE', 'a.png', 'a.png', 1234);
+
+        -- ★ 每张**被同步的表**都放一行。
+        -- 为什么非要这样：真库上 /api/sync/changes 曾经 500（`no such column: id`），
+        -- 根因是 ai_message_parts 的主键是 (message_id, ordinal) 而不是 id ——
+        -- 而当时夹具里**这张表一行都没有**，所以测试全绿也抓不到。
+        -- 少放一张表 = 那条链路在夹具里根本没被走到。
+        INSERT INTO ai_conversations (id, title, archived, created_at, updated_at)
+        VALUES ('conv-0', '夹具会话', 0, '2026-09-23T03:00:00.000Z', '2026-09-23T03:00:00.000Z');
+        INSERT INTO ai_messages (id, conversation_id, seq, role, status, text, created_at, updated_at)
+        VALUES ('msg-0', 'conv-0', 1, 'user', 'complete', '夹具消息',
+                '2026-09-23T03:00:00.000Z', '2026-09-23T03:00:00.000Z');
+        INSERT INTO ai_message_parts (message_id, ordinal, type, text, created_at)
+        VALUES ('msg-0', 0, 'text', '夹具块', '2026-09-23T03:00:00.000Z');
+        INSERT INTO ai_attachments (id, original_name, stored_name, kind, mime_type, created_at)
+        VALUES ('att-0', 'a.png', 'att-0.png', 'IMAGE', 'image/png', '2026-09-23T03:00:00.000Z');
         "#,
     )
     .expect("灌测试数据");
@@ -1792,13 +1807,179 @@ async fn sync_push_rejects_with_per_item_codes() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["rejected"][0]["code"], "UNSUPPORTED_OP");
 
-    // 一行都没落库
-    let n: i64 = state
+    // 被拒的那几条**一条都不许落库**
+    // （夹具里本来就有一条 conv-0，所以按 id 查而不是数总数）
+    let bad: i64 = state
         .with(|conn| {
-            conn.query_row("SELECT COUNT(*) FROM ai_conversations", [], |r| r.get(0)).map_err(Into::into)
+            conn.query_row(
+                "SELECT COUNT(*) FROM ai_conversations WHERE id IN ('p1','m1','t1','x1','conv-badcol','conv-ref')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
         })
         .unwrap();
-    assert_eq!(n, 0, "被拒的行一条都不许落库");
+    assert_eq!(bad, 0, "被拒的行一条都不许落库");
+}
+
+/// ★ **`changes` 要能扫过每一张被同步的表**（真库上曾经在这里 500）。
+///
+/// 现场：真实库副本上 `/api/sync/changes?since=0&limit=500` 回
+/// `INTERNAL: no such column: id in SELECT * FROM ai_message_parts ...` ——
+/// `ai_message_parts` 的主键是 `(message_id, ordinal)`，当初按"单列 id"实现。
+/// 夹具里没有这张表的行，所以当时**全绿也没抓住**。
+/// 这条用例的做法是：夹具里给每张同步表都塞一行，然后要求 `changes` 一次扫完都不出错，
+/// 且 **10 张表一张不少地出现在 upserts 里**（少一张就是那条链路没被走到）。
+#[tokio::test]
+async fn sync_changes_covers_every_synced_table_without_error() {
+    let state = state();
+    // `media_tags` 不放公共夹具里：`patch_media_...` 那条用例依赖"产物 100 没有自己的标签"，
+    // 共享夹具里塞一行会把那条用例弄红。所以**在这条用例里**补，`since=0` 照样能扫到它。
+    state
+        .with(|conn| {
+            conn.execute("INSERT INTO media_tags (media_id, tag_id) VALUES (100, 1)", []).map(|_| ())
+        })
+        .unwrap();
+
+    let (status, body) = get_json(router_for(state.clone()), "/api/sync/changes?since=0&limit=500").await;
+    assert_eq!(status, StatusCode::OK, "扫过所有同步表不该出错：{body}");
+
+    let all: Vec<&str> = [
+        "prompts",
+        "tags",
+        "prompt_tags",
+        "media_assets",
+        "media_tags",
+        "ai_conversations",
+        "ai_messages",
+        "ai_message_parts",
+        "ai_attachments",
+        "capture_runs",
+    ]
+    .to_vec();
+    for table in &all {
+        let rows = body["upserts"][table].as_array();
+        assert!(
+            rows.is_some_and(|r| !r.is_empty()),
+            "夹具里每张同步表都有一行，所以 {table} 必须出现在 upserts 里：{}",
+            body["upserts"],
+        );
+    }
+
+    // 复合主键那张表要给出**完整行**（含 message_id / ordinal / type）
+    let part = &body["upserts"]["ai_message_parts"][0];
+    assert_eq!(part["message_id"], "msg-0");
+    assert_eq!(part["ordinal"], 0);
+    assert_eq!(part["type"], "text");
+}
+
+/// 复合主键的 `deletes` 要按**各自的编码**发数组 ——
+/// `ai_message_parts` 用的是 `message_id#ordinal`（`#`，且第一段是 UUID 文本），
+/// 与 `prompt_tags` 的 `prompt_id:tag_id`（`:`，两段都是数字）**不是一回事**。
+#[tokio::test]
+async fn sync_changes_deletes_use_each_tables_own_pk_encoding() {
+    let state = state();
+    let (_, before) = get_json(router_for(state.clone()), "/api/sync/manifest").await;
+    let since = before["cursor"].as_i64().unwrap();
+
+    state
+        .with(|conn| {
+            // 删一条消息块（复合主键，`#` 分隔，第一段是 UUID）
+            conn.execute("DELETE FROM ai_message_parts WHERE message_id='msg-0' AND ordinal=0", [])
+                .map(|_| ())?;
+            // 删一条附件（单列 UUID 主键）
+            conn.execute("DELETE FROM ai_attachments WHERE id='att-0'", []).map(|_| ())
+        })
+        .unwrap();
+
+    let (status, body) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={since}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["deletes"]["ai_message_parts"][0],
+        serde_json::json!(["msg-0", 0]),
+        "复合主键发数组，第一段是**字符串**（UUID）不是数字",
+    );
+    assert_eq!(
+        body["deletes"]["ai_attachments"][0],
+        serde_json::json!("att-0"),
+        "单列文本主键发字符串",
+    );
+}
+
+/// ★ 手机推**消息块**上来（复合主键、没有 `id` 列）必须能成功。
+///
+/// 真库上曾经因为"假定表有 `id` 列"而把这类上行**全判 SCHEMA_MISMATCH** ——
+/// 表现是"手机上能聊、桌面看不到内容"，而且错误码还写着"永远不可能成功"，
+/// 手机照做就会把 outbox 那行丢掉（**永久丢数据**）。
+#[tokio::test]
+async fn sync_push_accepts_composite_key_tables_without_an_id_column() {
+    let state = state();
+    let (status, body) = push(
+        &state,
+        vec![push_item(
+            "ai_message_part",
+            "msg-0#1",
+            serde_json::json!({
+                "message_id": "msg-0",
+                "ordinal": 1,
+                "type": "text",
+                "text": "手机推上来的块",
+                "created_at": "2026-09-24T10:00:00.000Z",
+            }),
+        )],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["applied"], serde_json::json!(["msg-0#1"]), "被拒了：{body}");
+
+    let text: String = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT text FROM ai_message_parts WHERE message_id='msg-0' AND ordinal=1",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+        })
+        .unwrap();
+    assert_eq!(text, "手机推上来的块");
+
+    // 再推同一条（内容一样）→ **幂等**：不管 applied 里有没有它，结果必须还是同一行。
+    //
+    // ⚠ 注意 `ai_message_parts` **没有 `updated_at` 列**，所以走不到 LWW 分支 ——
+    //   它会老老实实再做一次 `ON CONFLICT DO UPDATE`（于是 `applied` 里又有它）。
+    //   这不是 bug：契约 §4 要的是"同一条推两次**结果相同**"，而结果确实相同（一行、内容不变）。
+    //   有 `updated_at` 的表（会话 / 消息）才会在第二次落到 `STALE_IGNORED`。
+    let (_, body) = push(
+        &state,
+        vec![push_item(
+            "ai_message_part",
+            "msg-0#1",
+            serde_json::json!({
+                "message_id": "msg-0",
+                "ordinal": 1,
+                "type": "text",
+                "text": "手机推上来的块",
+                "created_at": "2026-09-24T10:00:00.000Z",
+            }),
+        )],
+    )
+    .await;
+    assert!(
+        body["rejected"].as_array().unwrap().is_empty(),
+        "重复推不该被拒（它只是幂等地再写一次）：{body}",
+    );
+    let n: i64 = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM ai_message_parts WHERE message_id='msg-0' AND ordinal=1",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+        })
+        .unwrap();
+    assert_eq!(n, 1, "幂等：同一块推两次**只有一行**");
 }
 
 /// 单批上限 500（契约 §4：别让一次请求扛几万行）。
