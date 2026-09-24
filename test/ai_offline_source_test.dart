@@ -20,6 +20,7 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:viewer/core/ai_api_client.dart';
+import 'package:viewer/core/credential_store.dart';
 import 'package:viewer/core/run_event_source.dart';
 import 'package:viewer/models/ai_models.dart';
 import 'package:viewer/state/ai_workspace_store.dart';
@@ -32,6 +33,20 @@ class _FakeLocalSource implements RunEventSource {
 
   @override
   bool get isLocal => true;
+
+  /// 本地源要不要"有规则工件"（默认有：多数用例不关心这件事）。
+  bool hasKit = true;
+
+  @override
+  Future<({bool ok, String? kitVersion, String? reason})> ensureRunKit({
+    String? baseUrl,
+    String? token,
+  }) async {
+    calls.add('ensureRunKit');
+    return hasKit
+        ? (ok: true, kitVersion: '2026-09-24.1', reason: null)
+        : (ok: false, kitVersion: null, reason: '本地还没有规则工件（run-kit），且当前连不上桌面');
+  }
 
   @override
   Future<AiConversation> createConversation({
@@ -269,6 +284,177 @@ void main() {
     // 悄悄兜底的话：事件一条不少、界面上一个字都不长，两端还都不报错
     expect(store.error, contains('没有回传助手消息 id'));
   });
+
+  // -------------------------------------------------------------------------
+  //  M6：手机侧的凭据 / 清单缓存 / 规则工件 —— "安卓真正能发出去" 的三块砖
+  // -------------------------------------------------------------------------
+
+  test('手机：清单里"有没有 key"以**本机密钥库**为准，不是桌面那一份', () async {
+    // 桌面说"已配置"（那是桌面托管文件里的 key，**不会下发到手机**）
+    final source = _FakeLocalSource();
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: false),
+    );
+
+    await store.load();
+
+    expect(store.providers, isNotEmpty, reason: 'error=${store.error}');
+    // 桌面那份是 managed/true —— 手机必须换成**本机**的答案，绝不能借它冒充
+    expect(store.providers.first.credential.source, 'none');
+    expect(store.providers.first.credential.source, isNot('managed'));
+    expect(store.providers.first.credential.configured, isFalse);
+    expect(store.providers.first.credential.label, '未配置');
+    expect(store.providers.first.credentialRef, 'PHONE_KEY', reason: '引用名照旧来自桌面');
+
+    // 本机填过 key 之后，状态立刻翻成 keystore（界面据此显示"已配置（本机密钥库）"）
+    final filled = AiWorkspaceStore(
+      api: _okApi(),
+      source: _FakeLocalSource(),
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+    await filled.load();
+    expect(filled.providers.first.credential.source, 'keystore');
+    expect(filled.providers.first.credential.label, '已配置（本机密钥库）');
+  });
+
+  test('手机：连过一次桌面之后，离线冷启动用本机缓存的清单', () async {
+    final creds = _FakeDeviceCredentials(configured: true);
+
+    // 第一次：桌面在线 —— 顺便把清单缓存下来
+    final online = AiWorkspaceStore(api: _okApi(), source: _FakeLocalSource(), credentials: creds);
+    await online.load();
+    expect(online.providers.single.id, 'p1');
+    expect(online.models.single.id, 'm-text');
+
+    // 第二次：桌面离线 —— 仍然拿得到 provider 与模型（否则手机连"发"的资格都没有）
+    final offline = AiWorkspaceStore(
+      api: AiApiClient(
+        'http://127.0.0.1:8080',
+        client: MockClient((request) async => http.Response('offline', 500)),
+      ),
+      source: _FakeLocalSource(),
+      credentials: creds,
+    );
+    await offline.load();
+
+    expect(offline.providers.single.id, 'p1',
+        reason: 'provider 清单是桌面下发的工件，手机要把它留在本机（M6）');
+    expect(offline.models.single.id, 'm-text', reason: '模型目录也一样');
+    expect(offline.models.single.tools, isTrue, reason: '缓存不能丢能力声明：丢了工具就没了');
+    expect(offline.kitIssue, isNull, reason: '假源有 kit，不该被拦');
+    expect(offline.notice, contains('缓存'));
+  });
+
+  test('手机：没有规则工件（run-kit）时**不许开跑**，而且要说清为什么', () async {
+    final source = _FakeLocalSource()..hasKit = false;
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    await store.load();
+
+    expect(source.calls, contains('ensureRunKit'), reason: '冷启动就该去取/刷新规则工件');
+    final reason = store.sendBlockReason();
+    expect(reason, isNotNull);
+    expect(reason, contains('run-kit'));
+
+    // 真的发不出去（不是只有提示、实际照发）
+    await store.send('画一只猫');
+    expect(source.calls, isNot(contains('startRun')));
+  });
+}
+
+/// 桌面在线：provider 清单 + 模型目录都正常返回（用来灌"本机缓存"）。
+///
+/// ⚠ 响应必须带 `charset=utf-8`：`http.Response` 默认按 **Latin-1** 编码 body，
+/// 中文显示名会在 `http` 层就抛 "Contains invalid characters"（看起来像后端挂了）。
+AiApiClient _okApi() => AiApiClient(
+      'http://127.0.0.1:8080',
+      client: MockClient((request) async {
+        const json = {'content-type': 'application/json; charset=utf-8'};
+        if (request.url.path == '/api/ai/providers') {
+          return http.Response(
+            jsonEncode([
+              {
+                'id': 'p1',
+                'displayName': '本机网关',
+                'api': 'openai-completions',
+                'baseURL': 'http://127.0.0.1:11434/v1',
+                'credentialRef': 'PHONE_KEY',
+                'endpointTrust': 'loopback',
+                'enabled': true,
+                'revision': 1,
+                // 桌面侧说"已配置" —— 手机必须用自己的状态覆盖它
+                'credential': {'configured': true, 'source': 'managed', 'writable': true},
+              }
+            ]),
+            200,
+            headers: json,
+          );
+        }
+        if (request.url.path == '/api/ai/providers/p1/models') {
+          return http.Response(
+            jsonEncode([
+              {
+                'providerId': 'p1',
+                'id': 'm-text',
+                'displayName': '纯文本模型',
+                'inputModalities': ['text'],
+                'attachmentTransports': <String, dynamic>{},
+                'mimeAllowlist': <String>[],
+                'tools': true,
+                'parallelTools': false,
+                'reasoning': false,
+                'thinkingEfforts': <String, dynamic>{},
+                'capabilitySource': 'manual',
+                'enabled': true,
+              }
+            ]),
+            200,
+            headers: json,
+          );
+        }
+        return http.Response(jsonEncode(<String, dynamic>{}), 200, headers: json);
+      }),
+    );
+
+/// 假的本机密钥库（手机上真身是 Android Keystore，走桥）。
+class _FakeDeviceCredentials implements CredentialStore {
+  _FakeDeviceCredentials({required this.configured});
+
+  bool configured;
+
+  @override
+  bool get isLocal => true;
+
+  @override
+  Future<AiCredentialStatus> statusOf(AiProvider provider) async {
+    final ref = provider.credentialRef?.trim();
+    if (ref == null || ref.isEmpty) {
+      return const AiCredentialStatus(configured: false, source: 'none', writable: false);
+    }
+    return AiCredentialStatus(
+      configured: configured,
+      source: configured ? 'keystore' : 'none',
+      writable: true,
+    );
+  }
+
+  @override
+  Future<AiCredentialStatus> save(AiProvider provider, String value) async {
+    configured = true;
+    return statusOf(provider);
+  }
+
+  @override
+  Future<AiCredentialStatus> clear(AiProvider provider) async {
+    configured = false;
+    return statusOf(provider);
+  }
 }
 
 /// 只回 `runId`、不回消息 id 的事件源（模拟桥漏传那一对主键）。

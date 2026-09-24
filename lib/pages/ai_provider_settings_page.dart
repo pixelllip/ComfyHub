@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/ai_api_client.dart';
+import '../core/credential_store.dart';
 import '../core/settings_store.dart';
 import '../models/ai_models.dart';
 import 'ai_tools_settings_page.dart';
@@ -26,6 +27,13 @@ class AiProviderSettingsPage extends StatefulWidget {
 class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   late AiApiClient _api;
 
+  /// 凭据的读写来源（M6）：桌面 = 后端托管；手机 = **本机密钥库**。
+  ///
+  /// 以前这里清一色打 `PUT /api/ai/providers/{id}/credentials`，于是手机上
+  /// **没有任何入口**把 key 放进 Keystore —— harness 再完整也发不出消息，而界面还说
+  /// "密钥已保存"（保存的是桌面那一份）。
+  late CredentialStore _credentials;
+
   List<AiProvider> _providers = const [];
   List<AiModel> _models = const [];
   AiProvider? _selected;
@@ -47,6 +55,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _api = widget.api ?? AiApiClient(context.read<SettingsStore>().baseUrl);
+      _credentials = openCredentialStore(api: _api);
       _reload();
       _loadBuiltin();
       _loadCapabilityCatalog();
@@ -202,6 +211,18 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     });
     try {
       _providers = await _api.listProviders();
+      // 手机上"这台设备有没有 key"只有本机密钥库知道：不覆盖就会显示桌面那份状态
+      if (_credentials.isLocal) {
+        final out = <AiProvider>[];
+        for (final p in _providers) {
+          try {
+            out.add(p.withCredential(await _credentials.statusOf(p)));
+          } catch (_) {
+            out.add(p);
+          }
+        }
+        _providers = out;
+      }
       if (_selected != null) {
         _selected = _providers.where((p) => p.id == _selected!.id).firstOrNull;
       }
@@ -259,6 +280,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         : _ProviderDetail(
             key: ValueKey(_selected!.id + _selected!.revision.toString()),
             api: _api,
+            credentials: _credentials,
             provider: _selected!,
             models: _models,
             info: _info,
@@ -572,6 +594,7 @@ class _CredentialDot extends StatelessWidget {
 
 class _ProviderDetail extends StatefulWidget {
   final AiApiClient api;
+  final CredentialStore credentials;
   final AiProvider provider;
   final List<AiModel> models;
   final String? info;
@@ -581,6 +604,7 @@ class _ProviderDetail extends StatefulWidget {
   const _ProviderDetail({
     super.key,
     required this.api,
+    required this.credentials,
     required this.provider,
     required this.models,
     required this.info,
@@ -723,6 +747,17 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         Text('该凭据由环境变量 ${p.credentialRef} 提供，是只读的，不能在应用内修改或移除。',
             style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline))
       else ...[
+        // 手机上密钥存在**本机**（Android Keystore），桌面那份不会同步过来 ——
+        // 不说清楚，用户会以为"桌面配过就够了"，然后每发一条都失败（M6）
+        if (widget.credentials.isLocal)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              '这一条保存在**本机密钥库**（Android Keystore），只在这台手机上生效：'
+              '桌面的密钥不会下发到手机（凭据明文永不出桌面）。换手机要重新填一次。',
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+          ),
         TextField(
           controller: _key,
           obscureText: true,
@@ -945,10 +980,11 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     }
     setState(() => _busy = true);
     try {
-      final status = await widget.api.setCredential(widget.provider.id, value);
+      final status = await widget.credentials.save(widget.provider, value);
       _key.clear(); // 立刻丢弃，不在内存里多留一秒
-      await widget.onChanged('密钥已保存（${status.source}）。值不会再被读回。');
-      _toast('密钥已保存（${status.source}），值不会再被读回。');
+      final where = widget.credentials.isLocal ? '本机密钥库' : status.source;
+      await widget.onChanged('密钥已保存（$where）。值不会再被读回。');
+      _toast('密钥已保存（$where），值不会再被读回。');
     } catch (e) {
       _toast('保存密钥失败：$e', error: true);
     } finally {
@@ -959,7 +995,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
   Future<void> _removeKey() async {
     setState(() => _busy = true);
     try {
-      await widget.api.removeCredential(widget.provider.id);
+      await widget.credentials.clear(widget.provider);
       await widget.onChanged('密钥已移除。');
       _toast('密钥已移除。');
     } catch (e) {

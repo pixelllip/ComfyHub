@@ -124,6 +124,22 @@ abstract class RunEventSource {
   /// 事件流（`after` 用于断线续传，语义与 SSE 的 `?after=<seq>` 一致）。
   Stream<AiRunEvent> events(String runId, {int after = 0});
 
+  /// 确保**规则工件**（run-kit）可用（M3，🔒 `docs/run-kit-contract.md` §3.4）。
+  ///
+  /// 手机：先向桌面取一次（顺便刷新缓存），取不到就用缓存；**一份都没有 → `ok:false`**，
+  /// 界面必须据此**拦住发送** —— 系统提示 / 工具描述 / 安全横幅只有这一份来源（R13），
+  /// 没有任何规则时"先跑起来再说"就是把一份瞎编的规则交给模型。
+  ///
+  /// 桌面：不需要（规则在后端手上），恒回 `ok:true`。
+  ///
+  /// ⚠ 这个方法是 M3.2 里漏掉的一环：桥的 `startRun` 没有 kit 时会回 `NO_RUN_KIT`，
+  /// 而在此之前**没有任何一处调用过它** —— 也就是说手机上第一条消息必然失败，
+  /// 报错还是 `NO_RUN_KIT` 这种机器码。
+  Future<({bool ok, String? kitVersion, String? reason})> ensureRunKit({
+    String? baseUrl,
+    String? token,
+  });
+
   /// 回答 `user.question`（提问闸门；桌面是 HTTP，手机是本地闸门）。
   ///
   /// [answer] 与 [optionIndex] **至少给一个**，另一个留 null：点了选项就用 `optionIndex`，
@@ -189,6 +205,15 @@ class RemoteRunEventSource implements RunEventSource {
   @override
   Future<bool> answerQuestion(String questionId, String? answer, {int? optionIndex}) =>
       _api.answerQuestion(questionId, answer: answer, optionIndex: optionIndex);
+
+  /// 桌面不需要本地规则工件：系统提示 / 工具清单本来就在后端手里
+  /// （每一次 Run 由后端现拼），所以这里恒 true。
+  @override
+  Future<({bool ok, String? kitVersion, String? reason})> ensureRunKit({
+    String? baseUrl,
+    String? token,
+  }) async =>
+      (ok: true, kitVersion: null, reason: null);
 }
 
 /// 手机实现：`MethodChannel`（调用）+ `EventChannel`（事件流）。
@@ -242,6 +267,25 @@ class LocalHarnessRunEventSource implements RunEventSource {
     final raw = await _method.invokeMethod<String>('cachedRunKit');
     if (raw == null || raw.isEmpty) return null;
     return _map(raw);
+  }
+
+  /// 取一次（拿不到就用缓存）；**一份都没有就是 `ok:false`**，界面据此拦住发送。
+  ///
+  /// 只看 `ok`：`reason` / `error` 是给人看的话（桥那边已经分好了
+  /// "本地还没有规则工件"与"这次请求为什么失败"）。
+  @override
+  Future<({bool ok, String? kitVersion, String? reason})> ensureRunKit({
+    String? baseUrl,
+    String? token,
+  }) async {
+    final r = await fetchRunKit(baseUrl: baseUrl, token: token);
+    if (r['ok'] == true) {
+      final version = r['kitVersion']?.toString();
+      return (ok: true, kitVersion: version, reason: r['warning']?.toString());
+    }
+    // `reason` 优先：那是"缺规则"这件事本身；`error` 才是我这次为什么没取到
+    final reason = (r['reason'] ?? r['error'] ?? '拿不到规则工件（run-kit）').toString();
+    return (ok: false, kitVersion: null, reason: reason);
   }
 
   /// 把上次没跑完的 Run 按 R6 收尾，返回收尾了几条。

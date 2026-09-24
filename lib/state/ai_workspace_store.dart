@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart' show FocusNode;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/ai_api_client.dart';
+import '../core/credential_store.dart';
 import '../core/run_event_source.dart';
 import '../models/ai_models.dart';
 
@@ -15,25 +16,31 @@ import '../models/ai_models.dart';
 class AiWorkspaceStore extends ChangeNotifier {
   /// [baseUrl] 每次取当前后端地址（设置里改地址后无需重建 store）；
   /// [api] 仅供测试注入；[prefs] 仅供测试注入（默认走 SharedPreferences）；
-  /// [source] 仅供测试注入（默认按平台选：Android → 本地 harness，其余 → 远端 HTTP）。
+  /// [source] 仅供测试注入（默认按平台选：Android → 本地 harness，其余 → 远端 HTTP）；
+  /// [credentials] 仅供测试注入（默认按平台选：Android → 本机密钥库，其余 → 后端托管）。
   AiWorkspaceStore({
     this.baseUrlProvider,
     AiApiClient? api,
     SharedPreferences? prefs,
     RunEventSource? source,
+    CredentialStore? credentials,
   })  : _injected = api,
         _injectedPrefs = prefs,
-        _injectedSource = source;
+        _injectedSource = source,
+        _injectedCredentials = credentials;
 
   final String Function()? baseUrlProvider;
   final AiApiClient? _injected;
   final SharedPreferences? _injectedPrefs;
   final RunEventSource? _injectedSource;
+  final CredentialStore? _injectedCredentials;
   SharedPreferences? _prefs;
   AiApiClient? _cached;
   String? _cachedFor;
   RunEventSource? _cachedSource;
   AiApiClient? _cachedSourceFor;
+  CredentialStore? _cachedCredentials;
+  AiApiClient? _cachedCredentialsFor;
 
   // --- 本地记忆（只用 SharedPreferences，绝不碰密钥） ---
   static const _kLastProvider = 'comfyhub.ai.lastProviderId';
@@ -41,6 +48,14 @@ class AiWorkspaceStore extends ChangeNotifier {
   static const _kLastEffort = 'comfyhub.ai.lastReasoningEffort';
   static const _kDraftTextPrefix = 'comfyhub.ai.draft.';
   static const _kDraftAttachPrefix = 'comfyhub.ai.draftAttachments.';
+
+  /// 手机专有的**清单缓存**（M6）。
+  ///
+  /// provider 与模型目录是桌面**版本化下发**的工件（总纲 🔒3.4），手机把它们落在本地，
+  /// 于是"连过一次桌面"之后，桌面不在线也能自己发消息（配合本机密钥库里的那把 key）。
+  /// ⚠ 缓存的只是**能力声明与端点**，**绝不含密钥**（AIH-012）。
+  static const _kProvidersCache = 'comfyhub.ai.cachedProviders';
+  static const _kModelsCachePrefix = 'comfyhub.ai.cachedModels.';
 
   Future<SharedPreferences> get _store async =>
       _injectedPrefs ?? (_prefs ??= await SharedPreferences.getInstance());
@@ -177,6 +192,22 @@ class AiWorkspaceStore extends ChangeNotifier {
       _cachedSourceFor = api;
     }
     return _cachedSource!;
+  }
+
+  /// **凭据的来源**（M6）。
+  ///
+  /// 与 [_source] 同一个判据、同一个理由：手机上 Run 由本地 harness 执行、会话落在本地库，
+  /// 那"这把 key 在不在手上"也必须问**本机** —— 桌面的 key 不下行（总纲 §3.3），
+  /// 用桌面的状态显示"已配置"只会让用户点发送然后撞 401。
+  CredentialStore get credentials {
+    final injected = _injectedCredentials;
+    if (injected != null) return injected;
+    final api = _api;
+    if (_cachedCredentials == null || !identical(_cachedCredentialsFor, api)) {
+      _cachedCredentials = openCredentialStore(api: api);
+      _cachedCredentialsFor = api;
+    }
+    return _cachedCredentials!;
   }
 
   // --- Provider / 模型 ---
@@ -425,6 +456,11 @@ class AiWorkspaceStore extends ChangeNotifier {
   String? sendBlockReason() {
     if (sending) return '正在生成中：先点「停止」，或等这一轮结束再发。你打的字还在输入框里。';
     if (uploadingAttachments) return '附件还在上传，等它传完再发（免得只发出去一半）。';
+    // 手机：规则工件（系统提示 / 工具描述 / 安全横幅）只有桌面能产出（R13）。
+    // 一份都没有时**不许开跑** —— 否则模型会拿着一套瞎编的规则回答（R13 的另一面）。
+    if (_source.isLocal && kitIssue != null) {
+      return '本机还没有可用的规则工件（run-kit）：$kitIssue';
+    }
     if (!(preflight?.allowed ?? true)) {
       return '有附件未通过准入，已阻断发送：${preflight!.blockers.join('；')}';
     }
@@ -981,15 +1017,129 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 绝不让整页起不来 —— 用户至少还能翻历史会话。
   Future<void> _loadLocalStartup() async {
     conversations = await _source.listConversations();
+    // 清单优先问桌面（它才是真源）；问不到就用**上次缓存的那一份**。
+    // 手机若连一次都连不上桌面，就如实说"本机还没有缓存过"，而不是给一个空列表
+    // 让用户去猜"为什么没有模型可选"。
+    var fromCache = false;
     try {
       providers = await _api.listProviders();
-      await _restoreRememberedModel();
+      await _writeProvidersCache(providers);
       error = null;
     } catch (e) {
-      // 说得具体一点：不是"后端挂了"，而是"这次拿不到模型清单"
-      error = '桌面不在线，暂时拿不到模型清单（历史会话仍可查看；要发新消息请先连一次桌面）：$e';
+      final cached = await _readProvidersCache();
+      if (cached.isEmpty) {
+        providers = const [];
+        error = '桌面不在线，本机也还没缓存过模型清单：先连一次桌面（局域网内同一 Wi-Fi 即可），'
+            '之后本机就能自己发消息了。原因：$e';
+      } else {
+        providers = cached;
+        fromCache = true;
+        error = null;
+      }
     }
+    // ★ 清单来自桌面，但"这台手机有没有 key"只有本机密钥库知道：
+    //   不覆盖的话手机上会显示"已配置"（那是桌面那份），点发送必然 401。
+    providers = await _overlayDeviceCredentials(providers);
+    await _restoreRememberedModel();
+    // 规则工件（run-kit）：手机必须先拿到它才能开跑（R13）。
+    // 这一步以前根本没被调用过，所以手机上第一条消息必然 `NO_RUN_KIT`。
+    await ensureRunKit();
     await _startFreshConversation();
+    // ⚠ 这句必须放在 `_startFreshConversation()` **之后**：它内部会 `_openEmptyConversation()`，
+    // 而那里会把 notice 清成 null（"切到空会话要清干净"）—— 放在前面等于白写。
+    if (fromCache && providers.isNotEmpty) {
+      notice = '桌面不在线：用的是本机缓存的模型清单（能力声明可能不是最新的）。';
+    }
+  }
+
+  /// **规则工件（run-kit）**：当前是否可用（不可用时是给人看的原因）。
+  ///
+  /// 它同时是界面的准入依据（[sendBlockReason]）：没有规则就不能开跑 ——
+  /// 系统提示 / 工具描述 / 安全横幅只有这一份来源（R13）。
+  String? kitIssue;
+
+  /// 当前缓存的 kit 版本（可追溯性，契约 §3.4）。
+  String? kitVersion;
+
+  /// 取/刷新一次规则工件。桌面源恒成功（规则在后端手上）。
+  Future<void> ensureRunKit() async {
+    try {
+      final r = await _source.ensureRunKit(baseUrl: baseUrlProvider?.call());
+      kitVersion = r.kitVersion;
+      kitIssue = r.ok ? null : (r.reason ?? '本机还没有规则工件（run-kit）');
+    } catch (e) {
+      // 连通道都炸了也要如实说，不能让"没有规则"变成一条静默的失败
+      kitIssue = '取规则工件失败：$e';
+    }
+  }
+
+  /// 把每条 provider 的凭据状态换成**本机**的（手机专有）。
+  ///
+  /// 拿不到就原样保留桌面那份，并且**不抛** —— 这里失败不该让整个列表消失
+  /// （用户至少还能看见 provider 与模型）。
+  Future<List<AiProvider>> _overlayDeviceCredentials(List<AiProvider> list) async {
+    if (!credentials.isLocal) return list;
+    final out = <AiProvider>[];
+    for (final p in list) {
+      try {
+        out.add(p.withCredential(await credentials.statusOf(p)));
+      } catch (_) {
+        out.add(p);
+      }
+    }
+    return out;
+  }
+
+  // --- 手机专有的清单缓存（M6）------------------------------------------
+
+  Future<void> _writeProvidersCache(List<AiProvider> list) async {
+    if (!credentials.isLocal) return; // 桌面不需要缓存（它本来就是真源）
+    final prefs = await _store;
+    await prefs.setString(_kProvidersCache, jsonEncode(list.map((p) => p.toJson()).toList()));
+  }
+
+  Future<List<AiProvider>> _readProvidersCache() async {
+    final prefs = await _store;
+    final raw = prefs.getString(_kProvidersCache);
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final list = jsonDecode(raw);
+      if (list is! List) return const [];
+      return list
+          .whereType<Map>()
+          .map((e) => AiProvider.fromJson(Map<String, dynamic>.from(e)))
+          .where((p) => p.id.isNotEmpty)
+          .toList();
+    } catch (_) {
+      // 缓存坏了当没有：它只是加速，不是真源
+      return const [];
+    }
+  }
+
+  Future<void> _writeModelsCache(String providerId, List<AiModel> list) async {
+    if (!credentials.isLocal) return;
+    final prefs = await _store;
+    await prefs.setString(
+      '$_kModelsCachePrefix$providerId',
+      jsonEncode(list.map((m) => m.toJson()).toList()),
+    );
+  }
+
+  Future<List<AiModel>> _readModelsCache(String providerId) async {
+    final prefs = await _store;
+    final raw = prefs.getString('$_kModelsCachePrefix$providerId');
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final list = jsonDecode(raw);
+      if (list is! List) return const [];
+      return list
+          .whereType<Map>()
+          .map((e) => AiModel.fromJson(Map<String, dynamic>.from(e)))
+          .where((m) => m.id.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// 挑一条现成的空会话接着用；一条都没有才真的新建。
@@ -1044,7 +1194,16 @@ class AiWorkspaceStore extends ChangeNotifier {
       selectedModel = null;
       return;
     }
-    models = await _api.listModels(p.id);
+    try {
+      models = await _api.listModels(p.id);
+      await _writeModelsCache(p.id, models);
+    } catch (e) {
+      // 手机：桌面不在线时用上次缓存的那份目录（能力声明是发得出去的前提 ——
+      // 没有它，附件与工具在准入那一步就会被挡下，用户看到的却是"模型不可用"）
+      final cached = credentials.isLocal ? await _readModelsCache(p.id) : const <AiModel>[];
+      if (cached.isEmpty) rethrow;
+      models = cached;
+    }
     if (selectedModel != null && !models.any((m) => m.id == selectedModel!.id)) {
       selectedModel = null;
     }

@@ -9,7 +9,13 @@ import 'dart:convert';
 /// 凭据状态：只有"有没有 / 从哪来 / 能不能改"，没有值。
 class AiCredentialStatus {
   final bool configured;
-  final String source; // env / managed / none
+
+  /// `env` / `managed` / `none`（桌面）与 `keystore`（手机本机密钥库）。
+  ///
+  /// ⚠ `keystore` **只在手机上出现**，而且它绝不能与 `managed` 混为一谈：
+  /// 桌面的密钥**不下行**（总纲 §3.3：`ai_providers` 不同步），
+  /// 混了用户就会以为"桌面配过、手机也能用" —— 而手机上其实一把都没有。
+  final String source;
   final bool writable;
 
   const AiCredentialStatus({
@@ -29,6 +35,7 @@ class AiCredentialStatus {
   String get label => switch (source) {
         'env' => configured ? '已配置（环境变量，只读）' : '未配置（环境变量）',
         'managed' => '已配置',
+        'keystore' => '已配置（本机密钥库）',
         _ => '未配置',
       };
 }
@@ -196,6 +203,36 @@ class AiProvider {
 
   AiApi? get apiEnum => AiApi.parse(api);
   String get apiLabel => apiEnum?.label ?? api;
+
+  /// 落本地缓存用（M6）。`credential` **不进缓存**：它是"这台机器上有没有 key"的
+  /// 即时状态，缓存下来的那一刻就可能已经过期了（手机上是本机密钥库说了算）。
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'displayName': displayName,
+        'api': api,
+        'baseURL': baseURL,
+        if (credentialRef != null) 'credentialRef': credentialRef,
+        'endpointTrust': endpointTrust,
+        'enabled': enabled,
+        'revision': revision,
+      };
+
+  /// 只换凭据状态。
+  ///
+  /// 手机上清单来自**桌面**（`GET /api/ai/providers`），而"这台手机有没有 key"这件事
+  /// 只有本机密钥库知道 —— 所以拿到的清单要用本机状态**覆盖** `credential` 再交给界面，
+  /// 否则手机上会显示"已配置"，点发送却 401（而界面从头到尾没说过一句实话）。
+  AiProvider withCredential(AiCredentialStatus status) => AiProvider(
+        id: id,
+        displayName: displayName,
+        api: api,
+        baseURL: baseURL,
+        credentialRef: credentialRef,
+        endpointTrust: endpointTrust,
+        enabled: enabled,
+        revision: revision,
+        credential: status,
+      );
 }
 
 class AiModel {
@@ -267,6 +304,30 @@ class AiModel {
         capabilitySource: (json['capabilitySource'] ?? 'manual').toString(),
         enabled: json['enabled'] != false,
       );
+
+  /// 落本地缓存用（M6：手机把桌面下发的模型目录存下来，离线时接着用）。
+  ///
+  /// **键名与后端逐字一致**，所以缓存读回来走的还是 [AiModel.fromJson] 这一条路 ——
+  /// 另写一套"缓存格式"就会与后端漂移，而漂移的表现是"离线时能力声明少了几项"
+  /// （附件发不出去、工具卡不显示），且没有任何东西会报错。
+  Map<String, dynamic> toJson() => {
+        'providerId': providerId,
+        'id': id,
+        'displayName': displayName,
+        'inputModalities': inputModalities,
+        'attachmentTransports': attachmentTransports,
+        'mimeAllowlist': mimeAllowlist,
+        'tools': tools,
+        'parallelTools': parallelTools,
+        'reasoning': reasoning,
+        'thinkingEfforts': thinkingEfforts,
+        if (thinkingFormat != null) 'thinkingFormat': thinkingFormat,
+        if (contextWindow != null) 'contextWindow': contextWindow,
+        if (maxOutputTokens != null) 'maxOutputTokens': maxOutputTokens,
+        if (maxAttachmentCount != null) 'maxAttachmentCount': maxAttachmentCount,
+        'capabilitySource': capabilitySource,
+        'enabled': enabled,
+      };
 
   /// 模型选择器上的能力徽标（AIH-048）：只显示能力目录里的声明，不猜测。
   List<AiModality> get modalities =>
