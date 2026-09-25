@@ -15,6 +15,7 @@
 pub mod ai;
 pub mod ai_settings;
 pub mod auth;
+pub mod builtin;
 pub mod capture;
 pub mod comfy_dirs;
 pub mod conversations;

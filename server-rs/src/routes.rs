@@ -262,6 +262,10 @@ pub fn router(state: AppState) -> Router {
         // 单条 / 批量删除用 POST 而不是带 body 的 DELETE：Ktor 对 DELETE 带请求体的处理
         // 在各客户端上并不一致（Kotlin 侧就是这么注释的）—— 形状照抄，别"顺手改成 DELETE"。
         .route("/api/ai/memory/delete", axum::routing::post(delete_memory_entries))
+        // 界面端点第五批（P4 第 38 步）：**内置模型目录**的状态与同步。
+        // 它是"出厂默认值"的唯一来源（冻结副本编译进二进制），用户改过的行**永不覆盖**。
+        .route("/api/ai/builtin/status", get(ai_builtin_status))
+        .route("/api/ai/builtin/sync", axum::routing::post(ai_builtin_sync))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -1379,6 +1383,36 @@ async fn delete_memory_entries(
 /// `DELETE /api/ai/memory` —— 清空。
 async fn clear_memory(State(state): State<AppState>) -> Result<Json<crate::memory::MemoryDto>, ApiError> {
     Ok(Json(crate::memory::clear(&memory_dir(&state)).map_err(memory_failed)?))
+}
+
+// ---------------------------------------------------------------------------
+//  界面端点第五批（P4 第 38 步）：内置模型目录
+// ---------------------------------------------------------------------------
+
+/// `POST /api/ai/builtin/sync` 的请求体（`BuiltinSyncRequest`，只有 `mode`）。
+#[derive(Debug, Default, Deserialize)]
+struct BuiltinSyncRequest {
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+/// `GET /api/ai/builtin/status` —— **只读预览**（界面拿它弹确认框："将新增 N 个模型"）。
+async fn ai_builtin_status(
+    State(state): State<AppState>,
+) -> Result<Json<crate::builtin::BuiltinSyncResult>, ApiError> {
+    Ok(Json(crate::builtin::preview(&state)))
+}
+
+/// `POST /api/ai/builtin/sync` —— 真正登记（**幂等**，绝不对用户改过的行下手）。
+///
+/// ⚠ 失败**不抛 5xx**：把原因放进 `error` 字段回 200 —— 与 Kotlin 同
+/// （登记失败不该让整个设置页报错，用户要能看到"为什么没同步上"）。
+async fn ai_builtin_sync(
+    State(state): State<AppState>,
+    Json(body): Json<BuiltinSyncRequest>,
+) -> Result<Json<crate::builtin::BuiltinSyncResult>, ApiError> {
+    let mode = crate::builtin::SeedMode::parse(body.mode.as_deref())?;
+    Ok(Json(crate::builtin::sync(&state, mode)))
 }
 
 // ---------------------------------------------------------------------------

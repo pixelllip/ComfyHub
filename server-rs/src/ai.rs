@@ -996,6 +996,92 @@ pub fn replace_models(
     list_models(state, provider_id)
 }
 
+/// **只插一条**模型（`AiRepo.insertModel`，内置目录"补齐"用）。
+///
+/// 与 [`replace_models`] 的区别就在这：主键是 `(provider_id, model_id)`，所以"库里已经有
+/// 同 id 的行"时会直接主键冲突 —— 调用方必须先查库、只把**缺失**的那些传进来。
+/// 那正是"绝不覆盖用户改过的行"所需要的保护（`builtin.rs` 就是这么用的）。
+pub fn insert_model(state: &AppState, model: &AiModelDto) -> Result<AiModelDto, ApiError> {
+    state.write(|tx| {
+        tx.execute(
+            "INSERT INTO ai_models
+               (provider_id, model_id, display_name, input_modalities, attachment_transports,
+                mime_allowlist, tools, parallel_tools, reasoning, thinking_efforts, thinking_format,
+                context_window, max_output_tokens,
+                max_attachment_bytes, max_attachment_count, capability_source,
+                capability_verified_at, enabled)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+            rusqlite::params![
+                model.provider_id,
+                model.id,
+                model.display_name,
+                to_json_array(&model.input_modalities),
+                to_json_list_map(&model.attachment_transports),
+                to_json_array(&model.mime_allowlist),
+                model.tools as i64,
+                model.parallel_tools as i64,
+                model.reasoning as i64,
+                to_json_string_map(&model.thinking_efforts),
+                model.thinking_format.as_deref().map(str::trim).filter(|f| !f.is_empty()),
+                model.context_window,
+                model.max_output_tokens,
+                model.max_attachment_bytes,
+                model.max_attachment_count,
+                model.capability_source,
+                model.capability_verified_at,
+                model.enabled as i64,
+            ],
+        )?;
+        Ok(())
+    })?;
+    read_back_model(state, &model.provider_id, &model.id)
+}
+
+/// **只更新"能力声明"相关的列**（`AiRepo.updateModelCapabilities`，内置目录对齐用）。
+///
+/// 刻意不碰 `display_name` / `enabled` / 附件相关列 / `capability_verified_at`：
+/// 用户改过的显示名、用户关掉的模型、用户的实测时间，都不是"对齐能力"该动的东西。
+pub fn update_model_capabilities(state: &AppState, model: &AiModelDto) -> Result<AiModelDto, ApiError> {
+    state.write(|tx| {
+        tx.execute(
+            "UPDATE ai_models
+                SET input_modalities = ?1, tools = ?2, parallel_tools = ?3, reasoning = ?4,
+                    thinking_efforts = ?5, thinking_format = ?6, context_window = ?7,
+                    capability_source = ?8
+              WHERE provider_id = ?9 AND model_id = ?10",
+            rusqlite::params![
+                to_json_array(&model.input_modalities),
+                model.tools as i64,
+                model.parallel_tools as i64,
+                model.reasoning as i64,
+                to_json_string_map(&model.thinking_efforts),
+                model.thinking_format.as_deref().map(str::trim).filter(|f| !f.is_empty()),
+                model.context_window,
+                model.capability_source,
+                model.provider_id,
+                model.id,
+            ],
+        )?;
+        Ok(())
+    })?;
+    read_back_model(state, &model.provider_id, &model.id)
+}
+
+/// 写完立刻回读（返回库里的那份，不是我们手上这份）。
+fn read_back_model(state: &AppState, provider_id: &str, model_id: &str) -> Result<AiModelDto, ApiError> {
+    let found = state.with(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT * FROM ai_models WHERE provider_id = ?1 AND model_id = ?2",
+        )?;
+        let mut rows = stmt.query_map(rusqlite::params![provider_id, model_id], model_from_row)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    })?;
+    found.ok_or_else(|| ApiError::internal(format!("模型写入后读不到: {provider_id}/{model_id}")))
+}
+
 /// 写完立刻回读（**返回的是库里的那份**，不是我们手上这份）——
 /// `revision` / `updated_at` 都是库算的，回我们那份就会给出一组过期的数字。
 fn read_back_provider(state: &AppState, id: &str) -> Result<AiProviderDto, ApiError> {

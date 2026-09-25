@@ -6813,6 +6813,193 @@ async fn provider_models_put_replaces_the_catalog_and_validates_every_field() {
     assert_eq!(body["detail"], "Provider 不存在: nope");
 }
 
+// ---------------------------------------------------------------------------
+//  内置模型目录的状态与同步（P4 第 38 步）
+// ---------------------------------------------------------------------------
+
+/// 预览 → 同步 → 再预览：**幂等**，而且**用户改过的行一个字节都不许动**。
+///
+/// 这条链的失败模式全是静默的：把用户改过的能力冲掉、把用户自己加的模型删掉、
+/// 或者"第二次同步又新增了 69 个"。判据只有"库里那几行还是不是原样"。
+#[tokio::test]
+async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_edits() {
+    let state = state();
+
+    // ① 预览：provider 不存在 → 整份目录都要插，`providerCreated=true`
+    let (status, preview) = get_json(router_for(state.clone()), "/api/ai/builtin/status").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        keys(&preview),
+        vec![
+            "added", "divergent", "kept", "mode", "modelCount", "providerCreated", "providerId",
+            "updated", "version"
+        ],
+        "`providerId` **在**（它是目录里那个 provider 的 id），`error` 不在（成功时是 null）"
+    );
+    assert_eq!(preview["providerId"].as_str().unwrap().is_empty(), false);
+    assert_eq!(preview["mode"], "add-missing");
+    assert_eq!(preview["providerCreated"], true);
+    assert!(preview["added"].as_i64().unwrap() > 0);
+    assert_eq!(preview["updated"], 0, "预览从不刷新");
+    assert_eq!(preview["divergent"], serde_json::json!([]));
+    let total = preview["added"].as_i64().unwrap();
+    assert_eq!(preview["modelCount"], total);
+    let version = preview["version"].as_str().unwrap().to_string();
+
+    // ② 预览**不写库**：一个 provider / 模型都不该多出来
+    let providers = state
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM ai_providers", [], |r| r.get::<_, i64>(0)))
+        .unwrap();
+    assert_eq!(providers, 0, "只读预览绝不许写库");
+    let seeded_version: Option<String> = state
+        .with(|conn| {
+            Ok(conn
+                .query_row("SELECT v FROM app_settings WHERE k = 'ai.builtin.seed.version'", [], |r| r.get(0))
+                .ok())
+        })
+        .unwrap();
+    assert!(seeded_version.is_none(), "预览也不许写版本号");
+
+    // ③ 同步（默认 add-missing）：整份插进去
+    let (status, sync) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/builtin/sync",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sync["error"], serde_json::Value::Null, "同步不该失败");
+    assert_eq!(sync["providerCreated"], true);
+    assert_eq!(sync["added"], total);
+    assert_eq!(sync["modelCount"], total);
+    // 版本号记进 app_settings（下次启动/同步据此判断目录有没有变）
+    let stored: String = state
+        .with(|conn| conn.query_row("SELECT v FROM app_settings WHERE k='ai.builtin.seed.version'", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(stored, version);
+
+    // ④ 再预览：现在一条都不缺
+    let (_, preview) = get_json(router_for(state.clone()), "/api/ai/builtin/status").await;
+    assert_eq!(preview["added"], 0);
+    assert_eq!(preview["providerCreated"], false);
+    assert_eq!(preview["modelCount"], total);
+    assert_eq!(preview["kept"].as_i64().unwrap() + preview["divergent"].as_array().unwrap().len() as i64, total);
+
+    // ⑤ 再同步一次：**幂等**（added=0、模型总数不变）
+    let (_, again) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/builtin/sync",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(again["added"], 0, "第二次同步不该再新增");
+    assert_eq!(again["modelCount"], total);
+
+    // ⑥ 用户改过的行：显示名 / 启用 / 附件上限 —— 同步**一个字节都不许动**
+    let (provider_id, model_id) = state
+        .with(|conn| {
+            let p: String = conn.query_row("SELECT id FROM ai_providers LIMIT 1", [], |r| r.get(0))?;
+            let m: String = conn.query_row(
+                "SELECT model_id FROM ai_models WHERE provider_id=?1 ORDER BY model_id LIMIT 1",
+                [&p],
+                |r| r.get(0),
+            )?;
+            Ok((p, m))
+        })
+        .unwrap();
+    state
+        .with(|conn| {
+            conn.execute(
+                "UPDATE ai_models SET display_name='用户改的名字', enabled=0, max_attachment_bytes=123
+                  WHERE provider_id=?1 AND model_id=?2",
+                rusqlite::params![provider_id, model_id],
+            )?;
+            // 用户自己加的模型（不在目录里）——同步**永远不删**
+            conn.execute(
+                "INSERT INTO ai_models (provider_id, model_id, display_name, capability_source)
+                 VALUES (?1, 'user-added-model', '用户自己加的', 'manual')",
+                rusqlite::params![provider_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let (_, sync) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/builtin/sync",
+        serde_json::json!({ "mode": "add-missing" }),
+    )
+    .await;
+    assert_eq!(sync["added"], 0);
+    assert_eq!(sync["modelCount"], total + 1, "用户自己加的那个还在");
+    let (name, enabled, max_bytes): (String, i64, Option<i64>) = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT display_name, enabled, max_attachment_bytes FROM ai_models
+                  WHERE provider_id=?1 AND model_id=?2",
+                rusqlite::params![provider_id, model_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(name, "用户改的名字", "补齐模式绝不碰用户改过的显示名");
+    assert_eq!(enabled, 0, "用户关掉的模型不许被打开");
+    assert_eq!(max_bytes, Some(123));
+
+    // ⑦ 对齐模式（用户点按钮）：会把**目录里已有的那些**能力对齐回来，
+    //    但显示名 / enabled / 附件上限仍然不碰
+    let (_, refreshed) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/builtin/sync",
+        serde_json::json!({ "mode": "refresh-capabilities" }),
+    )
+    .await;
+    assert_eq!(refreshed["added"], 0, "对齐模式绝不新增");
+    assert!(refreshed["updated"].as_i64().unwrap() >= 0);
+    let (name, enabled, max_bytes): (String, i64, Option<i64>) = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT display_name, enabled, max_attachment_bytes FROM ai_models
+                  WHERE provider_id=?1 AND model_id=?2",
+                rusqlite::params![provider_id, model_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(name, "用户改的名字");
+    assert_eq!(enabled, 0);
+    assert_eq!(max_bytes, Some(123));
+
+    // ⑧ 未知 mode → 400（**不静默按默认走**：用户点了「对齐能力」却只补了缺的模型，
+    //    而界面会显示"成功"）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/builtin/sync",
+        serde_json::json!({ "mode": "whatever" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert_eq!(body["detail"], "未知的同步模式：whatever（可选 add-missing / refresh-capabilities）");
+}
+
+/// `GET /api/ai/builtin/status` 在"provider 已在"时**要带 `providerId`**（键出现与否是形状的一部分）。
+#[tokio::test]
+async fn builtin_status_shape_changes_when_the_provider_exists() {
+    let state = state();
+    add_provider(&state, "p-shape", None);
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/builtin/status").await;
+    assert_eq!(status, StatusCode::OK);
+    // 库里没有内置目录那个 provider → 仍然按"整份插入"算，但 `providerCreated=true` 且带 id
+    assert_eq!(body["providerCreated"], true);
+    assert_eq!(body["providerId"].as_str().unwrap().is_empty(), false);
+    assert!(keys(&body).contains(&"providerId".to_string()));
+}
+
 /// `id` / `event` / `data` 三元组（`id` 缺席的心跳帧给 `None`）。
 fn parse_sse(body: &str) -> Vec<(Option<i64>, String, Value)> {
     let mut out = Vec::new();

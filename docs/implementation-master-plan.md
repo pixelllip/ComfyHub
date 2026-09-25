@@ -960,6 +960,33 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > | **Skills 六条** | **P4 第 35 步**（见下） |
 > | **长期记忆五条** | **P4 第 36 步**（见下） |
 > | **Provider 写侧** | **P4 第 37 步**（见下） |
+> | **内置目录** | **P4 第 38 步**（见下） |
+>
+> ✅ **P4 第 38 步（2026-09-25）：内置模型目录的状态与同步（`/api/ai/builtin/{status,sync}`）** ——
+> 设置页那张「内置模型目录」卡至此能预览、能同步（在此之前指向 Rust 时是「接口不存在」）。
+> - 新模块 `builtin.rs`（`AiSeedCatalog` + `AiSeeder` 的逐条对照）：冻结副本的解析、
+>   `plan_seed`（缺的 / 一致的 / **不一致但保持用户设置**的三分）、`capability_differs`
+>   （**只比能力那八样**，不比 displayName / enabled / 附件上限 —— 那些是用户的地盘）、
+>   `decide_actions`（ADD_MISSING 只插入、REFRESH 只刷新）、`preview` / `sync`。
+> - ⚠ **灰渡期刻意做法**：Rust 侧没有 classpath，用 `include_str!` 指向 Kotlin 的**同一个**
+>   `builtin-catalog.json`（31KB），而**不是**在 `server-rs/` 下再放一份拷贝 ——
+>   两份拷贝迟早漂移，而漂移的表现是"Kotlin 登记了 69 个、Rust 只登记了 67 个"，没人会立刻发现。
+>   P4 收尾（Kotlin 退役）时把文件搬进 `server-rs/`，路径就地改一行（注释里写了）。
+> - 顺手补上 `ai.rs` 的 `insert_model` / `update_model_capabilities`（内置目录"补齐 / 对齐"两条路，
+>   后者**刻意不碰** `display_name` / `enabled` / 附件列 / `capability_verified_at`）。
+> - **真库副本双端对照 10/10**：`/api/ai/builtin/status` canon 后**零差异** ——
+>   真数据上两边都算出 `added=0 / kept=69 / divergent=0 / modelCount=81`（81 条里 12 条是
+>   用户自己的，两边都不碰）；未知 `mode` 两端同码同文案；Rust `add-missing` 与
+>   Kotlin `refresh-capabilities` 各跑一次，两端看到的库状态一致、模型目录 canon 零差异、
+>   **模型总数一次都没变**（不新增不删除）；真机两条 provider 一个字节没动。
+> - 验收：`cargo test` **251 例全绿**（143 lib + 106 api_test + 2 shape_lint）。
+>
+> **本轮收工（第八轮共 5 个提交，全部真库副本 + 双端对照验穿）**：
+> 凭据写侧 → Skills 六条 → 长期记忆五条 → Provider 写侧 → 内置目录。界面端点这一批
+> **只剩 `/api/ai/capabilities/*`**（状态 / 刷新 / 实测校准开关与执行）——
+> 其中"状态 + 开关"不出网就能验，"刷新（要 models.dev）"与"校准（要真上游）"留给人配合。
+> 之后按 §9 的排序是**联网三工具**（`web_search` / `web_fetch` / `civitai_search`，
+> 现在 `EndpointGuard` 已经在了）与**桌面专属工具**（`comfy_*` / 文件工具，R10 的落点）。
 >
 > ✅ **P4 第 37 步（2026-09-25）：Provider 写侧（`POST/PUT/DELETE /api/ai/providers` + `PUT …/models`）** ——
 > 设置页那张「AI 模型与凭据」卡至此能建、能改、能删（在此之前 Rust 侧只读）。
