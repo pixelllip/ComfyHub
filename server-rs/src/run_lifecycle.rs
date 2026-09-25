@@ -91,6 +91,9 @@ pub struct CancelResult {
 }
 
 /// 模型目录里与"起一次 Run"相关的几列（`ai_models`）。
+///
+/// `Clone`：执行器把它搬进后台任务（`spawn` 不能在请求的生命周期里借东西）。
+#[derive(Debug, Clone)]
 pub struct ModelRow {
     pub id: String,
     pub display_name: String,

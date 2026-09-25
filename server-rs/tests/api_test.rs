@@ -4126,11 +4126,15 @@ async fn append_message_assigns_seq_and_writes_parts_atomically() {
 fn seed_provider_and_model(state: &comfyhub_server_rs::routes::AppState) {
     state
         .write(|tx| {
+            // `credential_ref` 刻意留 NULL：这样执行器**不会**在"解析密钥"那一步就失败，
+            // 而是真的往 `127.0.0.1:9` 发一次请求（没人监听 → `PROVIDER_UNREACHABLE`）。
+            // 夹具里塞一个假的 ref 会让这条用例断在 `MISSING_CREDENTIAL` 上 ——
+            // 那测的是凭据解析，不是"Run 会失败而不是永远转圈"。
             tx.execute(
                 "INSERT INTO ai_providers (id, display_name, api, base_url, credential_ref,
                                            endpoint_trust, enabled, revision)
                  VALUES ('goat', '山羊', 'openai-completions', 'http://127.0.0.1:9/v1',
-                         'GOAT_KEY', 'public', 1, 1)",
+                         NULL, 'loopback', 1, 1)",
                 [],
             )?;
             tx.execute(
@@ -4414,8 +4418,245 @@ async fn startup_recovery_fails_stale_runs_and_denies_pending_approvals() {
 }
 
 // ---------------------------------------------------------------------------
-//  Run 的生命周期端点（P4 第 28 步）
+//  执行器主循环（P4 第 30 步）：对着**真 socket 上的假网关**跑一遍
 // ---------------------------------------------------------------------------
+
+/// 假网关：`127.0.0.1:<临时端口>`，只认 `POST /v1/chat/completions?upstream=…`。
+///
+/// 为什么要一个真 socket 服务器（而不是 mock 掉 `stream_chat`）：
+/// **"逐字增量 → SSE 分帧 → 适配器 → 落库"这条链的每一段都在真 I/O 上**，
+/// mock 掉就只剩"我以为" —— M3.3 那条教训（`IOException` 只翻了一半）就是这么来的。
+///
+/// 三个行为分岔（用查询参数选，默认 `ok`）：
+/// * `upstream=ok`：正常流（思考 → 三段正文 → finish_reason → usage → `[DONE]`）；
+/// * `upstream=http429`：直接 429（测"上游明确拒绝"那一档）；
+/// * `upstream=partial`：**先正常吐出两段正文，然后把连接掐掉** ——
+///   R6"已经说出去的话一个字都不能丢"的现场（真·中途断流，而不是事后报错）。
+async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { break };
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 16 * 1024];
+                let Ok(n) = socket.read(&mut buf).await else { return };
+                let request_line = String::from_utf8_lossy(&buf[..n])
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                if request_line.contains("upstream=http429") {
+                    let body = r#"{"error":"rate limited"}"#;
+                    let head = format!(
+                        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(body.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                    return;
+                }
+                let partial = request_line.contains("upstream=partial");
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
+                    .await;
+                let mut frames: Vec<&str> = vec![
+                    r#"{"id":"chatcmpl-1","choices":[{"delta":{"reasoning_content":"先想一下"}}]}"#,
+                    r#"{"choices":[{"delta":{"content":"你"}}]}"#,
+                    r#"{"choices":[{"delta":{"content":"好"}}]}"#,
+                ];
+                if !partial {
+                    frames.push(r#"{"choices":[{"delta":{"content":"呀"}}]}"#);
+                    frames.push(r#"{"choices":[{"finish_reason":"stop"}]}"#);
+                    frames.push(r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}"#);
+                    frames.push("[DONE]");
+                }
+                for frame in frames {
+                    let payload = format!("data: {frame}\n\n");
+                    if socket.write_all(payload.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let _ = socket.flush().await;
+                }
+                // `partial`：**不说 DONE、直接断** —— 上游中途死掉的样子
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{addr}/v1"), handle)
+}
+
+/// 把夹具 provider 的 Base URL 指到假网关。
+fn point_at_gateway(state: &comfyhub_server_rs::routes::AppState, base_url: &str) {
+    state
+        .write(|tx| {
+            tx.execute(
+                "UPDATE ai_providers SET base_url = ?1 WHERE id = 'goat'",
+                rusqlite::params![base_url],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// 一次完整的流式 Run：正文逐字到达、有序块按序落库、usage 与终态都对。
+#[tokio::test]
+async fn executor_streams_a_reply_and_persists_parts_in_order() {
+    let (base_url, gateway) = fake_gateway().await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "打个招呼", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+
+    let run = wait_for_run(&state, &run_id).await;
+    assert_eq!(run["status"], "completed", "{run}");
+    assert!(run["completedAt"].is_string());
+
+    // 助手消息：正文是**三段拼起来的**，状态 complete
+    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let assistant = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == assistant_id.as_str())
+        .unwrap();
+    assert_eq!(assistant["text"], "你好呀", "三段增量拼成完整正文");
+    assert_eq!(assistant["status"], "complete");
+    assert_eq!(assistant["providerResponseId"], "chatcmpl-1", "上游给的响应 id 要记下来");
+    assert_eq!(assistant["usage"]["prompt_tokens"], 7, "usage 原样落库（{assistant}）");
+    assert_eq!(assistant["usage"]["total_tokens"], 10);
+
+    // 有序块：**思考在前、正文在后**（顺序乱了工具卡位置就错，而正文还在）
+    let parts = assistant["parts"].as_array().unwrap();
+    assert_eq!(parts.len(), 2, "{assistant}");
+    assert_eq!(parts[0]["type"], "reasoning");
+    assert_eq!(parts[0]["text"], "先想一下");
+    assert_eq!(parts[1]["type"], "text");
+    assert_eq!(parts[1]["text"], "你好呀");
+
+    // 事件：run.started → … → message.completed → run.completed（seq 连续、不跳号）
+    let types = event_types(&state, &run_id);
+    assert_eq!(types.first().unwrap(), "run.started");
+    assert_eq!(types.get(1).unwrap(), "message.started");
+    assert!(types.contains(&"reasoning.delta".to_string()));
+    assert_eq!(
+        types.iter().filter(|t| *t == "text.delta").count(),
+        3,
+        "三段正文 → 三条事件（逐字流式）：{types:?}"
+    );
+    assert!(types.contains(&"usage.updated".to_string()));
+    assert_eq!(types.last().unwrap(), "run.completed");
+    let seqs = state
+        .with(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT seq FROM ai_run_events WHERE run_id = ?1 ORDER BY seq")?;
+            let rows = stmt
+                .query_map(rusqlite::params![run_id], |row| row.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .unwrap();
+    assert_eq!(
+        seqs,
+        (1..=seqs.len() as i64).collect::<Vec<_>>(),
+        "seq 从 1 起、连续递增（红线 R5 的「绝不跳号」）"
+    );
+
+    gateway.abort();
+}
+
+/// **R6 的现场**：上游说了两段之后**连接被掐断** —— 已经说出去的话一个字都不能丢。
+#[tokio::test]
+async fn executor_keeps_what_was_already_said_when_the_stream_breaks() {
+    let (base_url, gateway) = fake_gateway().await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &format!("{base_url}?upstream=partial"));
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "写一段", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+
+    let run = wait_for_run(&state, &run_id).await;
+    assert_eq!(run["status"], "failed", "{run}");
+    assert!(run["errorCode"].is_string());
+
+    // ★ 这一条就是 R6：**已经说出去的两段话必须还在**（正文 + 有序块都得有）
+    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let assistant = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == assistant_id.as_str())
+        .unwrap();
+    assert_eq!(assistant["status"], "failed");
+    assert_eq!(assistant["text"], "你好", "断流前已经说出去的话不许丢（R6）：{assistant}");
+    let parts = assistant["parts"].as_array().unwrap();
+    assert!(
+        parts.iter().any(|p| p["type"] == "text" && p["text"] == "你好"),
+        "正文必须**同时**落进有序块（前端在 parts 非空时只渲染 parts）：{assistant}"
+    );
+    assert!(
+        parts.iter().any(|p| p["type"] == "reasoning"),
+        "思考段也要留着：{assistant}"
+    );
+
+    // 事件序列同样以终态事件收尾（断线重连能从库里补完）
+    let types = event_types(&state, &run_id);
+    assert_eq!(types.last().unwrap(), "run.failed");
+    assert_eq!(types.first().unwrap(), "run.started");
+
+    gateway.abort();
+}
+
+/// 上游**明确拒绝**（429）：错误码要归到 `RATE_LIMIT`，而不是笼统的"失败了"。
+#[tokio::test]
+async fn executor_reports_the_stable_code_for_an_upstream_rejection() {
+    let (base_url, gateway) = fake_gateway().await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &format!("{base_url}?upstream=http429"));
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "写一段", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run_id = body["runId"].as_str().unwrap().to_string();
+
+    let run = wait_for_run(&state, &run_id).await;
+    assert_eq!(run["status"], "failed");
+    assert_eq!(run["errorCode"], "RATE_LIMIT", "{run}");
+    assert!(
+        run["errorMessage"].as_str().unwrap().contains("rate limited"),
+        "上游的原话（已脱敏、已截断）要带出来，否则用户只看到「配置有误」：{run}"
+    );
+
+    gateway.abort();
+}
 
 /// `POST /api/ai/conversations/{id}/runs` 的完整一条链（Kotlin 顺序照抄）。
 #[tokio::test]
@@ -4486,17 +4727,20 @@ async fn start_run_validates_then_creates_messages_and_run() {
     assert_eq!(user["seq"], 2);
     assert_eq!(assistant["role"], "assistant");
     assert_eq!(assistant["seq"], 3);
-    // ⚠ 此刻它已经是 `failed` 了：执行器在**同一个请求里**就跑完了（端点没搬完 → 如实失败）。
-    // 第 30 步接上真执行器之后，这里会是 `streaming`（后台任务在跑）——
-    // 判据是"**不是** pending、且与 run.status 一致"，别把 `streaming` 写死。
-    assert_eq!(assistant["status"], "failed");
 
-    // Run 的形状：`reasoningEffort` 记的是**生效值** `off`（没传也是这样）
-    let (status, run) = get_json(router_for(state.clone()), &format!("/api/ai/runs/{run_id}")).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(run["status"], "failed", "上游客户端还没搬 → 如实失败（不是永远 running）");
-    assert_eq!(run["errorCode"], "EXECUTOR_UNAVAILABLE");
-    assert!(run["errorMessage"].as_str().unwrap().contains("上游 LLM 客户端"));
+    // 执行器是**后台任务**：真实上游是 `127.0.0.1:9`（没人监听），所以它很快会失败。
+    // 这条断言钉的是**语义**：Run 绝不会永远停在 running（那会让界面一直转圈）
+    let mut run = serde_json::Value::Null;
+    for _ in 0..60 {
+        let (_, value) = get_json(router_for(state.clone()), &format!("/api/ai/runs/{run_id}")).await;
+        run = value;
+        if run["status"] != "running" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(run["status"], "failed", "连不上上游要如实失败：{run}");
+    assert_eq!(run["errorCode"], "PROVIDER_UNREACHABLE");
     assert_eq!(run["reasoningEffort"], "off");
     assert_eq!(run["userMessageId"], user_id.as_str());
     assert_eq!(run["assistantMessageId"], assistant_id.as_str());
@@ -4513,21 +4757,14 @@ async fn start_run_validates_then_creates_messages_and_run() {
     assert_eq!(assistant["status"], "failed");
 
     // 事件：run.started / message.started / run.failed **都落了库**（断线重连补得回来）
-    let events = state
-        .with(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT seq, event_type FROM ai_run_events WHERE run_id = ?1 ORDER BY seq",
-            )?;
-            let rows = stmt
-                .query_map(rusqlite::params![run_id], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        })
-        .unwrap();
-    let types: Vec<&str> = events.iter().map(|(_, t)| t.as_str()).collect();
-    assert_eq!(types, vec!["run.started", "message.started", "run.failed"], "seq 从 1 起、顺序固定");
+    let types = event_types(&state, &run_id);
+    assert_eq!(types[0], "run.started");
+    assert_eq!(types[1], "message.started");
+    assert_eq!(types.last().unwrap(), "run.failed", "终态事件在最后：{types:?}");
+    assert!(
+        types.iter().all(|t| !t.is_empty()),
+        "seq 从 1 起、连续递增（不许跳号）"
+    );
 
     // 不存在 / 已收尾的 Run 上点取消：**200 + cancelled:false**（不是错误）
     let (status, body) = send_json(
@@ -4552,6 +4789,35 @@ async fn start_run_validates_then_creates_messages_and_run() {
     assert_eq!(body["detail"], "Run 不存在: nope");
 }
 
+/// 某个 Run 落库的事件类型（按 seq 升序）。
+fn event_types(state: &comfyhub_server_rs::routes::AppState, run_id: &str) -> Vec<String> {
+    state
+        .with(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT event_type FROM ai_run_events WHERE run_id = ?1 ORDER BY seq")?;
+            let rows = stmt
+                .query_map(rusqlite::params![run_id], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .unwrap()
+}
+
+/// 等一次 Run 收尾（执行器是**后台任务**：它不可能在 `POST /runs` 的响应里就跑完）。
+///
+/// 上游是 `127.0.0.1:9`（没人监听），所以失败得很快；这里给足 3 秒并在超时后断言失败，
+/// 而不是"睡固定时长碰运气"。
+async fn wait_for_run(state: &comfyhub_server_rs::routes::AppState, run_id: &str) -> serde_json::Value {
+    for _ in 0..60 {
+        let run = comfyhub_server_rs::runs::get(state, run_id).expect("Run 在库里");
+        if run.status != comfyhub_server_rs::runs::RUNNING {
+            return serde_json::to_value(&run).unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("Run {run_id} 三秒内还没收尾（执行器可能卡住了）");
+}
+
 /// 重试：**复用原来那条用户消息**、空壳就地复用、有内容另起一条（AIH-024 / R6）。
 #[tokio::test]
 async fn retry_reuses_the_user_message_and_never_wipes_a_reply_with_content() {
@@ -4568,6 +4834,10 @@ async fn retry_reuses_the_user_message_and_never_wipes_a_reply_with_content() {
     let first_run = first["runId"].as_str().unwrap().to_string();
     let first_user = first["userMessageId"].as_str().unwrap().to_string();
     let first_assistant = first["assistantMessageId"].as_str().unwrap().to_string();
+
+    // ⚠ 等第一次 Run 收尾：执行器是后台任务，而"重试"的准入判定读的是**库里那条的状态**。
+    // 不等的话会撞上 `streaming`（那条回复还没结束）——那是**对的行为**，只是测试没等它。
+    wait_for_run(&state, &first_run).await;
 
     // ① 空壳（正文空）→ **就地复用**同一条助手消息，不新增气泡
     let (status, retry) = send_json(
@@ -4589,9 +4859,11 @@ async fn retry_reuses_the_user_message_and_never_wipes_a_reply_with_content() {
     );
     let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
     assert_eq!(messages.as_array().unwrap().len(), 3, "重试**不新增**任何消息");
+    // 第二次 Run 也在后台跑（上游是 127.0.0.1:9，会失败）—— 等它收尾再往下走
+    let second_run = retry["runId"].as_str().unwrap().to_string();
+    wait_for_run(&state, &second_run).await;
 
     // ② 有内容的失败回复 → 原样留着，重试**另起一条**（不许把用户看到过的东西抹掉）
-    let second_run = retry["runId"].as_str().unwrap().to_string();
     state
         .write(|tx| {
             tx.execute(

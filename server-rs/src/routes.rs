@@ -53,6 +53,8 @@ pub struct AppState {
     /// **它不是事件的真源**（库才是）：SSE 从库里按 `?after=` 拉，
     /// 总线只保证"号不重、号不退"与"攒批落库"。
     pub bus: Arc<crate::events::RunEventBus>,
+    /// 正在跑的 Run 与它们的取消旗标（P4 第 30 步）。
+    pub executor: Arc<crate::executor::Executor>,
 }
 
 impl AppState {
@@ -62,6 +64,7 @@ impl AppState {
             db_path: db_path.into(),
             media_dir: Arc::new(media_dir.into()),
             bus: Arc::new(crate::events::RunEventBus::new()),
+            executor: Arc::new(crate::executor::Executor::new()),
         }
     }
 
