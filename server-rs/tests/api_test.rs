@@ -4738,11 +4738,15 @@ async fn scripted_tool_gateway(
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    // 调用号**跨轮连续**（call_1 / call_2 / …）：真实上游的 id 也是全局唯一的，
+    // 每轮都从 call_1 重新数会让"按 callId 找那一条"的断言张冠李戴（实测踩过）
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let handle = tokio::spawn(async move {
         let mut round = 0usize;
         loop {
             let Ok((mut socket, _)) = listener.accept().await else { break };
             let calls = script.get(round).cloned();
+            let counter = counter.clone();
             round += 1;
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 256 * 1024];
@@ -4754,9 +4758,9 @@ async fn scripted_tool_gateway(
                     Some(calls) if !calls.is_empty() => {
                         let mut out = Vec::new();
                         for (index, (tool, arguments)) in calls.iter().enumerate() {
+                            let call_id = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                             out.push(format!(
-                                r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":{index},"id":"call_{}","function":{{"name":"{tool}","arguments":""}}}}]}}}}]}}"#,
-                                index + 1
+                                r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":{index},"id":"call_{call_id}","function":{{"name":"{tool}","arguments":""}}}}]}}}}]}}"#
                             ));
                             out.push(format!(
                                 r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":{index},"function":{{"arguments":{}}}}}]}}}}]}}"#,
@@ -5186,6 +5190,35 @@ async fn tool_budget_exceeded_is_reported_per_call() {
         2,
         "额度用尽之后不许再执行"
     );
+
+    gateway.abort();
+}
+
+/// **失败的调用不消耗额度**（Kotlin `spendCall` 只在 handler 返回之后调）：
+/// 额度只有 1 次时，先撞一个"工具不存在"的失败，后面那次**仍然跑得动**。
+///
+/// 反过来的表现是用户抱怨过的那句原话：**"什么都没干就说预算不足"**。
+#[tokio::test]
+async fn failed_calls_do_not_spend_the_budget() {
+    let (base_url, gateway) = scripted_tool_gateway(vec![
+        vec![("read_file", r#"{"path":"a.png"}"#)],
+        vec![("list_skills", "{}")],
+    ])
+    .await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+    set_policy(&state, serde_json::json!({ "maxToolSteps": 16, "maxCallsPerRun": 1 }));
+
+    let (run_id, _, run) = start_run_and_wait(&state, "先失败一次再查技能").await;
+    assert_eq!(run["status"], "completed", "{run}");
+
+    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    let failed = calls.iter().find(|c| c["callId"] == "call_1").unwrap();
+    let ok = calls.iter().find(|c| c["callId"] == "call_2").unwrap();
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(ok["status"], "ok", "失败那次不该把额度吃掉：{ok}");
 
     gateway.abort();
 }

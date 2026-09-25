@@ -441,14 +441,20 @@ async fn run_once(
                 max_calls,
             )
             .await?;
-            calls_made += 1;
+            // ⚠ **只有真的跑成功才消耗额度**（Kotlin `spendCall` 只在 handler 返回之后调）：
+            // 越界被拒、参数不对、用户点拒绝、工具自己报错 —— 那些调用"连世界都没碰到"，
+            // 让它们占额度就是用户抱怨过的那种"什么都没干就说预算不足"。
+            if outcome.ok {
+                calls_made += 1;
+            }
             // 工具结果作为下一轮的 `role = tool`
             trailing.push(ChatTurn {
                 role: "tool".into(),
                 content: outcome.content,
                 tool_calls: Vec::new(),
                 tool_call_id: Some(call_id.clone()),
-            });        }
+            });
+        }
 
         step += 1;
         if calls_made >= max_calls || calls_made >= crate::tools::ABSOLUTE_CALL_CAP {
