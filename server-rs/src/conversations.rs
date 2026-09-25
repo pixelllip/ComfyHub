@@ -315,7 +315,8 @@ fn default_status() -> String {
 /// 用 `auth` 里那份系统 CSPRNG（随机数只留一处实现）：主键撞车在这里是**静默**
 /// 的数据覆盖（`INSERT` 会撞主键、`ON CONFLICT` 会就地改写别人的消息），
 /// 所以宁可复用一条已经被单测盯住的取随机数路径。
-fn uuid_v4() -> Result<String, ApiError> {
+/// ⚠ **不要在这个文件之外再写第二份**：`runs.rs` 也用它（Run 的主键与消息主键同一档风险）。
+pub fn uuid_v4() -> Result<String, ApiError> {
     let mut bytes = crate::auth::random_bytes(16)?;
     bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
     bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10xx

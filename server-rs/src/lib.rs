@@ -32,6 +32,7 @@ pub mod policy;
 pub mod repo;
 pub mod routes;
 pub mod run_kit;
+pub mod runs;
 pub mod skills;
 pub mod sync;
 pub mod system_prompt;

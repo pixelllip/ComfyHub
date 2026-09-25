@@ -4113,3 +4113,303 @@ async fn append_message_assigns_seq_and_writes_parts_atomically() {
     assert_eq!(upserts - before, 2, "两次成功追加 = 两条 upsert");
     assert_eq!(deletes, 0, "**不许**出现假 delete（R3）");
 }
+
+// ---------------------------------------------------------------------------
+//  Run 持久化（P4 第 26 步）—— 事件流的**两条读法**共用同一份事实
+// ---------------------------------------------------------------------------
+
+/// 夹具会话的 provider / 模型（这两行是 Run 的外键目标）。
+///
+/// ⚠ 必须真的插进 `ai_providers` / `ai_models`：`ai_runs.provider_id` 没有外键，
+/// 但 `run_kit` 与模型目录要它们；而"夹具里没有 provider"正是那种
+/// "测试全绿、真库才炸"的缝（`/api/sync/changes` 那次 500 的教训）。
+fn seed_provider_and_model(state: &comfyhub_server_rs::routes::AppState) {
+    state
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO ai_providers (id, display_name, api, base_url, credential_ref,
+                                           endpoint_trust, enabled, revision)
+                 VALUES ('goat', '山羊', 'openai-completions', 'http://127.0.0.1:9/v1',
+                         'GOAT_KEY', 'public', 1, 1)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO ai_models (provider_id, model_id, display_name, tools, reasoning,
+                                        input_modalities, attachment_transports, mime_allowlist,
+                                        parallel_tools, thinking_efforts, capability_source, enabled)
+                 VALUES ('goat', 'm1', '模型一', 1, 0, '[\"text\"]', '{}', '[]', 0, '[]', 'manual', 1)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// Run 的一生：建 → 落事件 → 终态；键集合与 SQL 里的时间列都要对。
+#[tokio::test]
+async fn run_persistence_round_trips_shape_and_terminal_state() {
+    use comfyhub_server_rs::runs;
+    let state = state();
+    seed_provider_and_model(&state);
+
+    let run = runs::create(
+        &state,
+        runs::NewRun {
+            conversation_id: "conv-0".into(),
+            provider_id: "goat".into(),
+            model_id: "m1".into(),
+            provider_snapshot: serde_json::json!({
+                "id": "goat", "displayName": "山羊", "api": "openai-completions",
+                "baseURL": "http://127.0.0.1:9/v1", "endpointTrust": "public",
+                "credentialRef": "GOAT_KEY"
+            }),
+            model_snapshot: serde_json::json!({
+                "id": "m1", "displayName": "模型一", "tools": true, "reasoning": false,
+                "capabilitySource": "manual", "nsfw": false, "nsfwPromptVersion": "v1"
+            }),
+            prompt_version: "v13".into(),
+            user_message_id: Some("msg-0".into()),
+            assistant_message_id: "assistant-1".into(),
+            retry_of_run_id: None,
+            reasoning_effort: Some("off".into()),
+            skill_snapshot: Some(serde_json::json!({"count": 0, "skills": []})),
+        },
+    )
+    .expect("建 Run");
+
+    assert_eq!(run.status, "running");
+    assert_eq!(run.conversation_id, "conv-0");
+    assert_eq!(run.assistant_message_id.as_deref(), Some("assistant-1"));
+    assert_eq!(run.user_message_id.as_deref(), Some("msg-0"));
+    assert_eq!(run.reasoning_effort.as_deref(), Some("off"));
+    assert_eq!(run.prompt_version.as_deref(), Some("v13"));
+    assert!(run.started_at.is_some(), "started_at 由 SQL 侧 strftime 写，读完要有值");
+    assert!(run.completed_at.is_none());
+    // 可空键的**键集合**（少一个 = 界面少一块；多一个 = 前端拿不到类型）
+    let value = serde_json::to_value(&run).unwrap();
+    let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec![
+            "assistantMessageId",
+            "conversationId",
+            "createdAt",
+            "id",
+            "modelId",
+            "promptVersion",
+            "providerId",
+            "reasoningEffort",
+            "startedAt",
+            "status",
+            "userMessageId",
+        ],
+        "Run 的键集合（Kotlin AiRunDto 的 11 个非空键）"
+    );
+    assert!(value.get("completedAt").is_none(), "还没结束 → 键不出现");
+    assert!(value.get("errorCode").is_none() && value.get("retryOfRunId").is_none());
+
+    // 快照真的落了库（事后追溯"当时用的是哪版规则 / 带没带 NSFW"靠它）
+    let snapshots: (String, String, String) = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT provider_snapshot, model_snapshot, skill_snapshot FROM ai_runs WHERE id = ?1",
+                rusqlite::params![run.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?)
+        })
+        .unwrap();
+    assert!(snapshots.0.contains("\"credentialRef\":\"GOAT_KEY\""), "快照里只有引用名");
+    assert!(!snapshots.0.contains("sk-"), "快照里**绝不能**有密钥值（AIH-023）");
+    assert!(snapshots.1.contains("\"nsfwPromptVersion\":\"v1\""));
+    assert_eq!(snapshots.2, r#"{"count":0,"skills":[]}"#);
+
+    // 非终态不许当终态写（写了僵死 Run 就收不走）
+    let bad = runs::finish(&state, &run.id, "running", None, None, None);
+    assert!(bad.is_err(), "running 不是终态");
+
+    runs::finish(
+        &state,
+        &run.id,
+        "completed",
+        None,
+        None,
+        Some(&serde_json::json!({"inputTokens": 12, "outputTokens": 34})),
+    )
+    .expect("落终态");
+    let done = runs::get(&state, &run.id).unwrap();
+    assert_eq!(done.status, "completed");
+    assert!(done.completed_at.is_some());
+    let value = serde_json::to_value(&done).unwrap();
+    assert!(value.get("errorCode").is_none(), "成功时 errorCode 键不出现");
+
+    // 不存在的 Run → 400 + 稳定码 + 人话（**不是** 404：前端按 error 分支）
+    let missing = runs::get(&state, "nope").unwrap_err();
+    assert_eq!(missing.status, StatusCode::BAD_REQUEST);
+    assert_eq!(missing.error, "CONFIG_ERROR");
+    assert_eq!(missing.detail.as_deref(), Some("Run 不存在: nope"));
+}
+
+/// 事件：批量写 → `?after=` 续传 → **保留窗口留尾部**（红线 R5）。
+#[tokio::test]
+async fn run_events_replay_after_seq_and_prune_keeps_the_tail() {
+    use comfyhub_server_rs::runs;
+    let state = state();
+    seed_provider_and_model(&state);
+    let run = runs::create(
+        &state,
+        runs::NewRun {
+            conversation_id: "conv-0".into(),
+            provider_id: "goat".into(),
+            model_id: "m1".into(),
+            provider_snapshot: serde_json::json!({}),
+            model_snapshot: serde_json::json!({}),
+            prompt_version: "v13".into(),
+            user_message_id: None,
+            assistant_message_id: "assistant-1".into(),
+            retry_of_run_id: None,
+            reasoning_effort: None,
+            skill_snapshot: None,
+        },
+    )
+    .unwrap();
+
+    // 批量写：batch_size=3，塞 7 条 → 中途写 2 批（6 条），flush 补最后 1 条
+    let mut batcher = runs::EventBatcher::new(&state, run.id.clone(), 3);
+    for seq in 1..=7 {
+        batcher
+            .add(seq, "text.delta", &serde_json::json!({ "text": format!("t{seq}") }))
+            .unwrap();
+    }
+    assert_eq!(
+        runs::events(&state, &run.id, 0).unwrap().len(),
+        6,
+        "满一批就写：7 条里前 6 条已经落库"
+    );
+    assert_eq!(batcher.flush().unwrap(), 1, "收尾必须 flush（否则最后那条 run.completed 会丢）");
+    assert_eq!(runs::events(&state, &run.id, 0).unwrap().len(), 7);
+
+    // 断线续传：`?after=5` 只拿 6 / 7（游标语义的唯一读法）
+    let tail = runs::events(&state, &run.id, 5).unwrap();
+    assert_eq!(tail.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![6, 7]);
+    assert_eq!(tail[0].to_sse(), "id: 6\nevent: text.delta\ndata: {\"text\":\"t6\"}\n\n");
+
+    // 幂等：同 (run_id, seq) 再写一遍不产生第二行
+    runs::append_event(&state, &run.id, 7, "text.delta", &serde_json::json!({"text": "again"}))
+        .unwrap();
+    let again = runs::events(&state, &run.id, 0).unwrap();
+    assert_eq!(again.len(), 7);
+    assert_eq!(again[6].payload["text"], "t7", "重放不许改写已有的那一行");
+
+    // 保留窗口（R5）：keep=3 → 只留最后 3 条，**删的是最老的**
+    assert_eq!(runs::prune_events(&state, &run.id, 3).unwrap(), 4);
+    let kept = runs::events(&state, &run.id, 0).unwrap();
+    assert_eq!(kept.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![5, 6, 7]);
+    assert_eq!(
+        runs::events(&state, &run.id, 4).unwrap().len(),
+        3,
+        "窗口左沿之后仍然完整（这正是 R5 要的：重连能拿到最新的一段）"
+    );
+
+    // 坏 payload 不让整条回放 500
+    state
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO ai_run_events (run_id, seq, event_type, payload_json) VALUES (?1, 8, 'x', 'not json')",
+                rusqlite::params![run.id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let events = runs::events(&state, &run.id, 7).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].payload, serde_json::json!({}), "脏 payload 当空对象");
+}
+
+/// 启动恢复：还在 `running` 的 Run 收成 failed、pending 审批按拒绝收尾。
+///
+/// 两者是**同一次重启**的两半：内存里的 run 与闸门一起消失，
+/// 库里留着它们就是"界面永远转圈 + 永远等不到人点的审批卡"。
+#[tokio::test]
+async fn startup_recovery_fails_stale_runs_and_denies_pending_approvals() {
+    use comfyhub_server_rs::runs;
+    let state = state();
+    seed_provider_and_model(&state);
+
+    let make = |assistant: &str| {
+        runs::create(
+            &state,
+            runs::NewRun {
+                conversation_id: "conv-0".into(),
+                provider_id: "goat".into(),
+                model_id: "m1".into(),
+                provider_snapshot: serde_json::json!({}),
+                model_snapshot: serde_json::json!({}),
+                prompt_version: "v13".into(),
+                user_message_id: None,
+                assistant_message_id: assistant.into(),
+                retry_of_run_id: None,
+                reasoning_effort: None,
+                skill_snapshot: None,
+            },
+        )
+        .unwrap()
+    };
+    let running = make("assistant-1");
+    let done = make("assistant-2");
+    runs::finish(&state, &done.id, "completed", None, None, None).unwrap();
+
+    // 一个等审批的工具调用（R8：open 的同一刻就落 pending）
+    runs::insert_pending_tool_call(&state, &running.id, "call-1", "comfy_submit", r#"{"x":1}"#)
+        .unwrap();
+    let listing = runs::list_tool_calls(&state, &running.id).unwrap();
+    assert_eq!(listing.len(), 1);
+    assert_eq!(listing[0]["status"], "pending");
+    assert_eq!(listing[0]["approval"], "pending");
+
+    // invoke 返回 → **原地更新那一行**（不新增）
+    runs::record_tool_call(
+        &state,
+        &runs::ToolCallRecord {
+            id: "tc-1".into(),
+            run_id: running.id.clone(),
+            call_id: "call-1".into(),
+            name: "comfy_submit".into(),
+            arguments_json: r#"{"x":1}"#.into(),
+            approval: "approved".into(),
+            status: "ok".into(),
+            result_json: Some(serde_json::json!({"mediaIds": [7]})),
+            content: Some("已提交".into()),
+            error: None,
+            elapsed_ms: 12,
+        },
+    )
+    .unwrap();
+    let listing = runs::list_tool_calls(&state, &running.id).unwrap();
+    assert_eq!(listing.len(), 1, "有 pending 行就原地更新，不再插一行");
+    assert_eq!(listing[0]["status"], "ok");
+    assert_eq!(listing[0]["approval"], "approved");
+
+    // 再挂一个 pending，然后走"后端重启"
+    runs::insert_pending_tool_call(&state, &running.id, "call-2", "read_file", "{}").unwrap();
+    assert_eq!(runs::fail_stale_running(&state, "后端重启导致 Run 中断").unwrap(), 1);
+    assert_eq!(runs::expire_stale_pending_tool_calls(&state).unwrap(), 1);
+
+    let stale = runs::get(&state, &running.id).unwrap();
+    assert_eq!(stale.status, "failed");
+    assert_eq!(stale.error_code.as_deref(), Some("PROTOCOL_ERROR"));
+    assert!(stale.completed_at.is_some());
+    assert_eq!(
+        runs::get(&state, &done.id).unwrap().status,
+        "completed",
+        "已经收尾的 Run 不许被重启恢复改写"
+    );
+    let denied = runs::list_tool_calls(&state, &running.id)
+        .unwrap()
+        .into_iter()
+        .find(|c| c["callId"] == "call-2")
+        .unwrap();
+    assert_eq!(denied["status"], "denied", "重启 = 最彻底的超时，按拒绝处理");
+    assert!(denied["error"].as_str().unwrap().contains("重启"));
+}
+
