@@ -150,6 +150,65 @@ async fn real_db_spot_check_replay_ingest() {
     }
 }
 
+/// **读真机上那些工作流文件**（第 44 步）：API 格式的应当零转换直接入库；
+/// 界面格式的要问 ComfyUI 的 `/object_info`，此刻它没在跑 → **如实**报 `COMFY_UNREACHABLE`。
+///
+/// 这条抽查的价值在"**格式识别**"这一半：真实文件里两种格式混着（用户目录里既有
+/// ComfyUI 保存的界面格式，也有「导出（API）」的节点图），认错了会走到完全不同的分支。
+#[tokio::test]
+#[ignore = "真库副本抽查：需要 COMFYHUB_SPOT_DB / COMFYHUB_SPOT_STORAGE"]
+async fn real_db_spot_check_load_workflow_files() {
+    let Some((state, root)) = spot_state() else { return };
+    let policy = comfyhub_server_rs::policy::ToolPolicy::load(&state).expect("读策略");
+    let config = comfyhub_server_rs::capture::capture_config(&state).expect("读配置");
+    let dirs = comfyhub_server_rs::comfy_dirs::workflow_dirs(&root, config.output_dir.as_deref());
+    let files = comfyhub_server_rs::comfy_dirs::scan(&dirs, None, 5);
+    println!("真机上扫到 {} 个候选（列前 {} 个）", files.len(), 5.min(files.len()));
+    let mut api_loaded = 0;
+    let mut ui_refused = 0;
+    for file in &files {
+        // 路径准入：真实 ComfyUI 目录应当被自动放行（用户 bug ④）
+        let resolved = match policy.resolve_read(&file.path) {
+            Ok(path) => path,
+            Err(e) => {
+                println!("  × {} 被路径准入拒了：{}", file.name, e.message);
+                continue;
+            }
+        };
+        match comfyhub_server_rs::workflow_load::load_from_file(
+            &state,
+            &resolved,
+            None,
+            false,
+            false,
+            true,
+        )
+        .await
+        {
+            Ok(json) => {
+                api_loaded += 1;
+                println!(
+                    "  ✓ {}（{}）→ promptId={} runnable={} 节点 {}",
+                    file.name, file.format, json["promptId"], json["runnable"], json["nodeCount"]
+                );
+            }
+            Err(failure) => {
+                // 界面格式 + ComfyUI 没在跑 → 必须正好是这个码（别的码说明认错了格式）
+                assert_eq!(
+                    failure.code, "COMFY_UNREACHABLE",
+                    "{} 的失败码不对（格式识别错了？）：{}",
+                    file.name, failure.message
+                );
+                ui_refused += 1;
+                println!("  · {}（{}）→ 如实拒绝：{}", file.name, file.format, failure.message);
+            }
+        }
+    }
+    // 至少要有文件被正确判成两种格式之一（一个文件都没有说明抽查没生效）
+    assert!(api_loaded + ui_refused > 0, "一个文件都没读到 —— 抽查没生效");
+    println!("API 直接入库 {api_loaded} 个；界面格式按「ComfyUI 没在跑」如实拒绝 {ui_refused} 个");
+}
+
 /// `comfy_list_workflows` + `comfy_get_run` + 图解析对账：真库 + 真 ComfyUI 目录上抽查。
 #[tokio::test]
 #[ignore = "真库副本抽查：需要 COMFYHUB_SPOT_DB / COMFYHUB_SPOT_STORAGE"]

@@ -65,6 +65,23 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "comfy_load_workflow",
+        description: r#"把**一份本机工作流文件**（ComfyUI 保存的 .json，或「导出（API）」得到的节点图）读进库里，换成一个能提交的 promptId。用户甩给你一个工作流文件路径时用它 —— 别再回答"我只能提交库里的 promptId"。
+界面格式（nodes/links）会按 ComfyUI 的 /object_info 转成 API 节点图：普通节点、Reroute / Set-Get、旁路都会等价展开或改写。
+剩下的纯前端节点默认**如实报错**；带 tolerateUnsupported=true 再来一次，我会把它们摘掉并给出**缺口清单**：`unresolvedInputs`（哪个输入还悬着）、`openInputs`（哪些连线型输入空着，缺的是什么类型）、`unsupportedNodes`（摘掉了哪些类）—— 照着清单用 comfy_submit(connections=…) 补线即可。
+返回里有 promptId、runnable（能不能直接跑）与每个节点的 id / 可覆盖的输入名。
+只读用户机器上的文件，不改它。"#,
+        // ⚠ 这段 schema 是 `ToolRegistry.kt` 那一条的**逐字**拷贝（R12/R13）——
+        //   `emulateFrontend` 的描述里写着"默认开着、会照前端行为等价改写"，而本后端
+        //   **还没实现它**：所以结果是**在返回值里**如实补一句 warning（见 `workflow_load.rs`），
+        //   而不是偷偷改描述。描述走 `r##"…"##` 是因为正文里有 `##`
+        //   （`r#"…"#` 会在 `"##` 处提前收尾，编译期报一串看不懂的 token 错）。
+        input_schema: r###"{"type":"object","properties":{"path":{"type":"string","description":"工作流文件的完整路径（绝对路径最稳）"},"title":{"type":"string","description":"库里显示的名字（可选，默认取文件名）"},"includeGraph":{"type":"boolean","description":"是否连完整 API 节点图一起返回（默认 false，只有要手写参数路径时才需要）"},"tolerateUnsupported":{"type":"boolean","description":"转换不了的前端节点不报错，改成摘掉并给出缺口清单（默认 false）"},"emulateFrontend":{"type":"boolean","description":"## 模拟用户行为 ##：默认 true = 照 ComfyUI 前端排队前的行为等价改写纯前端节点（广播填空 / 丢显示节点 / 补 SaveImage），改了什么都如实列出来；false = 一个字都不改、只如实报缺口"}},"required":["path"],"additionalProperties":false}"###,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "comfy_sync_history",
         description: r#"立刻同步一次 ComfyUI /history（**会往本项目库里写数据**，属于轻度写操作）。需要用户批准；用之前先说明你想同步什么。"#,
         input_schema: r#"{"type":"object","properties":{"reason":{"type":"string","description":"为什么要同步（给用户看的）"}},"additionalProperties":false}"#,
@@ -157,6 +174,7 @@ mod tests {
                 "comfy_get_run",
                 "comfy_get_status",
                 "comfy_list_workflows",
+                "comfy_load_workflow",
                 "comfy_sync_history",
                 "delete_skill",
                 "list_dir",
@@ -167,7 +185,6 @@ mod tests {
         );
         for absent in [
             "comfy_submit",
-            "comfy_load_workflow",
             "comfy_find_workflow",
             "comfy_env_report",
             "find_model",

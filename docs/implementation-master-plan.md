@@ -1214,8 +1214,40 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   claim 先被幂等键挡住 → 清掉后重收 → **建出的提示词标题与 Kotlin 当年那条逐字相同**
 >   （`"Krea2_sage_t2i · seed 20260922"`、seed 对）→ 产物文件已不在盘上且 ComfyUI 没在跑，
 >   于是**如实** `imported=0 / failed=1`（不假装收进来了）。
-> - 仍未搬：`/api/capture/{import,import-workflows}`、`/api/ingest/comfyui`（后者是 ComfyUI
->   自定义节点推送那条路）、后台定时轮询（现在是"端点/工具触发一次"，`up` 里的轮询器还没搬）。
+> ✅ **P4 第 44 步（2026-09-25）：`WorkflowConvert` 核心 + `comfy_load_workflow`** ——
+> 用户 bug ③ 的正面解法：用户甩过来一个 `.json` 路径，别再回答"我只能提交库里的 promptId"。
+> - `workflow_convert.rs`（Kotlin `WorkflowConvert` 逐行对照）：界面格式（`nodes`/`links`）→
+>   API 节点图。**能等价改写的都改写**：`Note`/`MarkdownNote`/`PrimitiveNode` 丢掉、
+>   `Reroute`/`SetNode`/`GetNode` 穿透到真正的上游、**旁路（`mode=4`）按同类型接过去**
+>   （真机一份存档里 61/91 个节点是旁路，直接拒会让功能对真实文件完全不可用）、
+>   静音（`mode=2`）如实警告下游、控件值按 `/object_info` 的声明顺序贴回名字
+>   （`widgets_values_named` 优先、`control_after_generate` 多占的槽位照跳、`forceInput` 不算控件）。
+>   **缺口清单**：`unresolvedInputs`（悬挂引用）/ `openInputs`（空着的连线型输入，正好是补线的作业本）。
+> - `workflow_load.rs` + 工具 `comfy_load_workflow`：读文件（过**读白名单**）→ 认格式
+>   （API 原样 / 界面格式按 `/object_info` 转）→ 入库拿 `promptId` → 返回节点摘要与缺口清单。
+>   幂等靠 **`file:<sha256>`**（与 `GET /api/capture/workflows` 的 `inLibrary` 判定同一把钥匙）。
+> - ★ 两处**只在真机上才出现**的细节照抄 Kotlin 的解法：
+>   ① **"抢不到 + `success` 但 `prompt_id` 已空"要带 force 重抢** —— 用户把提示词删了之后，
+>   `run_key` 是文件内容算的，这份文件否则**再也导不进来**、只会永远回"正在被另一次调用加载"；
+>   ② 引用里的节点 id **数字发数字、非数字发字符串**（Kotlin `WorkflowNodeKeys.refOf`）——
+>   图的键永远是字符串，全都写字符串虽然也符合 ComfyUI 规范，但会让"两端转同一份文件"
+>   的产物逐字节不同，而这类差异不报错、只会让人怀疑。
+> - ⚠ **两处欠账，绝不假装**：**组节点（subgraph）不展开**、**「模拟用户行为」
+>   （`emulateFrontend`）没实现**。两者都让节点进 `unsupportedNodes`（默认档直接
+>   `UNSUPPORTED_NODES` 拒绝、`tolerateUnsupported=true` 则摘掉并给缺口清单）。
+>   工具的描述是从 Kotlin **逐字**搬的（R12/R13，里面写着"模拟用户行为默认开着"），
+>   所以 `workflow_load` **在结果里主动补一句 warning** 说明这一步没做 ——
+>   不说这句，用户会以为那些前端节点已经被照前端的做法接好了。
+> - 验收：`cargo test` **315 例全绿**（192 lib + 121 api_test + 2 shape_lint），
+>   新增 8 例转换单测（含**两份逐字抄自 Kotlin `WorkflowConvertTest` 的用例**：
+>   经典六节点图与 `forceInput`，断言也照它写）+ 2 例端到端（API 文件幂等 + 删掉后能重导；
+>   界面格式 + 假 `/object_info`：默认档如实拒绝、`tolerateUnsupported` 给缺口清单）
+>   + 3 例 `workflow_load` 自检；**真机抽查**：真 ComfyUI 目录里那 5 份工作流全部被正确
+>   认成 `ui`，且因 ComfyUI 没在跑而**如实**回 `COMFY_UNREACHABLE`（带人话"连接被拒绝 ——
+>   ComfyUI 没在运行？"），同时证明路径准入确实放行了用户自己的工作流目录（用户 bug ④）。
+> - 仍未搬：`comfy_find_workflow`（库内搜索 + 参数摘要）、`comfy_submit`（R10）、
+>   `check_inputs`/`fit_workflow`/`env_report`（要本机模型清单）、`audit`/`prune`、
+>   comfy-mcp 39 个、以及上面那两处欠账。
 
 > **📅 2026-09-25 这一轮的交接单**（上一轮留下的，按价值排序；① 的前半已落地）：
 > 1. ✅ **工具层与审批（R8）+ 提问闸门**：第 31 / 32 步已落地（四个本机工具 + 闸门 + 两条端点批次）。

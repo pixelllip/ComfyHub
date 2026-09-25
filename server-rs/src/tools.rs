@@ -7,7 +7,7 @@
 //! | `list_skills` / `load_skill` / `remember` / `ask_user_question` | `BOTH` | 第 31/32 步（只碰本机） |
 //! | `list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill` | `DESKTOP` | 第 40 步，路径准入在 [`crate::policy`] |
 //! | `comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` | `DESKTOP` | 第 41/42 步；前两条只碰本机库与磁盘，`get_status` 会真问一次 ComfyUI 的 `/queue` |
-//! | `comfy_sync_history` | `DESKTOP` | 第 43 步；**会写库**（建提示词 + 产物入库），出厂档 `ASK` |
+//! | `comfy_sync_history` | `DESKTOP` | 第 43 步；**会写库**（建提示词 + 产物入库），出厂档 `ASK` |`r`n//! | `comfy_load_workflow` | `DESKTOP` | 第 44 步；把本机工作流文件读进库（界面格式按 `/object_info` 转 API 图）。⚠ 组节点不展开、"模拟用户行为"未实现，两者都如实报 |
 //!
 //! 还没搬的：联网三个（要 Keenable / Civitai 客户端 + `EndpointGuard`）、
 //! `comfy_get_status` / `sync_history` / `find_workflow` / `load_workflow` / `submit` /
@@ -286,11 +286,12 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + comfy 查询两件（`comfy_get_run` / `comfy_list_workflows`，P4 第 41 步）。
 /// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
 /// `comfy_submit` 那一批要 ComfyUI 在场与整套转换栈（R10 的落点），各自另起批次。
-pub const IMPLEMENTED: [&str; 13] = [
+pub const IMPLEMENTED: [&str; 14] = [
     "ask_user_question",
     "comfy_get_run",
     "comfy_get_status",
     "comfy_list_workflows",
+    "comfy_load_workflow",
     "comfy_sync_history",
     "delete_skill",
     "list_dir",
@@ -369,6 +370,7 @@ pub async fn execute(
         "comfy_list_workflows" => comfy_list_workflows(state, arguments),
         "comfy_get_status" => comfy_get_status(state, arguments).await,
         "comfy_sync_history" => comfy_sync_history(state).await,
+        "comfy_load_workflow" => comfy_load_workflow(state, policy, arguments).await,
         // 清单里没有的（模型幻觉出一个名字 / 这一批还没搬的）——
         // 码与 Kotlin `TOOL_NOT_FOUND` 一致，模型的分支行为才不会两端不同。
         _ => Err(ToolFailure::new(
@@ -904,6 +906,45 @@ async fn comfy_sync_history(state: &AppState) -> Result<ToolOutcome, ToolFailure
     Ok(ToolOutcome::new(text, result))
 }
 
+/// `comfy_load_workflow`：把一份**本机工作流文件**读进库，换成能提交的 `promptId`（用户 bug ③）。
+///
+/// 路径走**读白名单**（[`crate::policy::ToolPolicy::resolve_read`]）：本机 ComfyUI 的目录
+/// 已经被自动放行（用户 bug ④），用户的工作流一般就躺在它下面的 `user\<用户>\workflows` 里。
+///
+/// ⚠ `emulateFrontend` **收下但不改变行为**（本后端还没实现"模拟用户行为"）——
+/// 这正是 `workflow_load` 会在结果里补一句 warning 的原因：工具描述是从 Kotlin 逐字搬的、
+/// 里面写着这个能力，**不说明就等于默认它做了**（那会让用户以为前端节点已经被接好）。
+async fn comfy_load_workflow(
+    state: &AppState,
+    policy: &crate::policy::ToolPolicy,
+    arguments: &Value,
+) -> Result<ToolOutcome, ToolFailure> {
+    let raw = string_arg(arguments, "path")?;
+    let file = policy.resolve_read(&raw)?;
+    let title = arguments
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
+    let include_graph = arguments.get("includeGraph").and_then(Value::as_bool).unwrap_or(false);
+    let tolerate = arguments
+        .get("tolerateUnsupported")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let emulate = arguments.get("emulateFrontend").and_then(Value::as_bool).unwrap_or(true);
+    let json = crate::workflow_load::load_from_file(
+        state,
+        &file,
+        title,
+        include_graph,
+        tolerate,
+        emulate,
+    )
+    .await
+    .map_err(|failure| ToolFailure::new(&failure.code, failure.message))?;
+    Ok(ToolOutcome::new(json.to_string(), json))
+}
+
 /// `ApiError` → 工具失败（只让**这一次调用**失败，不打断整个 Run）。
 fn capture_failure(error: crate::routes::ApiError) -> ToolFailure {
     ToolFailure::new("TOOL_ERROR", format!("本机数据查询出错：{}", error.human()))
@@ -1388,7 +1429,7 @@ mod tests {
         assert!(!is_mutating("read_file"));
         assert!(!is_mutating("list_dir"));
         // comfy 查询 / 同步四件（P4 第 41~43 步）
-        for name in ["comfy_get_run", "comfy_get_status", "comfy_list_workflows"] {
+        for name in ["comfy_get_run", "comfy_get_status", "comfy_list_workflows", "comfy_load_workflow"] {
             assert!(is_implemented(name), "{name} 应当已实现");
             assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
             assert!(!is_mutating(name), "{name} 是只读的");
@@ -1400,7 +1441,6 @@ mod tests {
         // 还没搬的一个都不许说"实现了"
         for name in [
             "comfy_submit",
-            "comfy_load_workflow",
             "comfy_find_workflow",
             "comfy_env_report",
             "find_model",

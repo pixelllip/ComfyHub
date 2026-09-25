@@ -5584,6 +5584,7 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_get_run",
             "comfy_get_status",
             "comfy_list_workflows",
+            "comfy_load_workflow",
             "comfy_sync_history",
             "delete_skill",
             "list_dir",
@@ -7641,6 +7642,7 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "comfy_get_run",
         "comfy_get_status",
         "comfy_list_workflows",
+        "comfy_load_workflow",
         "comfy_sync_history",
     ] {
         assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
@@ -7652,7 +7654,6 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     // 没实现的**一个都不许出现**
     for absent in [
         "comfy_submit",
-        "comfy_load_workflow",
         "comfy_find_workflow",
         "comfy_env_report",
         "web_search",
@@ -7950,6 +7951,15 @@ async fn fake_comfy(
     history: &'static str,
     view_body: &'static [u8],
 ) -> (String, tokio::task::JoinHandle<()>) {
+    fake_comfy_full(history, view_body, r#"{}"#).await
+}
+
+/// 同上，但 `/object_info` 也由我们控制（界面格式工作流的转换要用它）。
+async fn fake_comfy_full(
+    history: &'static str,
+    view_body: &'static [u8],
+    object_info: &'static str,
+) -> (String, tokio::task::JoinHandle<()>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -7961,7 +7971,15 @@ async fn fake_comfy(
                 let Ok(read) = socket.read(&mut buf).await else { return };
                 let request = String::from_utf8_lossy(&buf[..read]).to_string();
                 let head = request.lines().next().unwrap_or("").to_string();
-                if head.contains("/history") {
+                if head.contains("/object_info") {
+                    let body = object_info;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                } else if head.contains("/history") {
                     let body = history;
                     let response = format!(
                         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -8250,4 +8268,200 @@ async fn capture_poll_endpoint_returns_the_kotlin_shape() {
     assert!(out.content.contains("连不上 ComfyUI"), "{}", out.content);
 
     std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+// ===========================================================================
+//  comfy_load_workflow（P4 第 44 步）：把一份本机工作流文件读进库
+//
+//  这条路是用户 bug ③ 的正面解法：用户甩过来一个 .json 路径，别再回答
+//  "我只能提交库里的 promptId"。幂等靠 `file:<sha256>`（与 /api/capture/workflows
+//  的 inLibrary 判定同一把钥匙）。
+// ===========================================================================
+
+/// 一份 API 格式节点图（原样提交，**零转换、不需要 ComfyUI 在场**）。
+fn api_workflow_file() -> String {
+    serde_json::json!({
+        "3": {"class_type":"KSampler","inputs":{"seed":11,"steps":9,"cfg":1.5,
+              "sampler_name":"euler","scheduler":"normal",
+              "positive":["6",0],"latent_image":["5",0]}},
+        "5": {"class_type":"EmptyLatentImage","inputs":{"width":640,"height":960}},
+        "6": {"class_type":"CLIPTextEncode","inputs":{"text":"api format prompt"}},
+        "9": {"class_type":"SaveImage","inputs":{"filename_prefix":"api"}}
+    })
+    .to_string()
+}
+
+/// 一份**界面格式**工作流（nodes/links + 位置式 widgets_values）。
+fn ui_workflow_file() -> String {
+    serde_json::json!({
+        "nodes": [
+            {"id": 1, "type": "CLIPTextEncode", "widgets_values": ["ui format prompt"]},
+            {"id": 2, "type": "EmptyLatentImage", "widgets_values": [512, 512, 1]},
+            {"id": 3, "type": "KSampler",
+             "inputs": [
+               {"name":"positive","type":"CONDITIONING","link":1},
+               {"name":"latent_image","type":"LATENT","link":2}],
+             "widgets_values": [777, "fixed", 6, 2.0, "euler", "normal"]},
+            {"id": 4, "type": "Weird Frontend Thing", "widgets_values": []}
+        ],
+        "links": [[1,1,0,3,0,"CONDITIONING"],[2,2,0,3,1,"LATENT"]]
+    })
+    .to_string()
+}
+
+/// 界面格式转换需要的 `/object_info`（三个节点）。
+fn object_info_json() -> String {
+    serde_json::json!({
+        "CLIPTextEncode": {"input": {"required": {"text": ["STRING"], "clip": ["CLIP"]}}},
+        "EmptyLatentImage": {"input": {"required": {"width": ["INT"], "height": ["INT"], "batch_size": ["INT"]}}},
+        "KSampler": {"input": {"required": {
+            "model": ["MODEL"],
+            "seed": ["INT", {"control_after_generate": true}],
+            "steps": ["INT"], "cfg": ["FLOAT"],
+            "sampler_name": [["euler"]], "scheduler": [["normal"]],
+            "positive": ["CONDITIONING"], "negative": ["CONDITIONING"], "latent_image": ["LATENT"]
+        }}}
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn load_api_workflow_file_is_idempotent_and_feeds_api_graph() {
+    let state = state();
+    let root = state.project_root();
+    std::fs::create_dir_all(root.join("comfyui")).unwrap();
+    let file = root.join("comfyui").join("api_flow.json");
+    std::fs::write(&file, api_workflow_file()).unwrap();
+
+    let out = call_tool(&state, "comfy_load_workflow", serde_json::json!({ "path": file.display().to_string() }))
+        .await
+        .unwrap();
+    assert_eq!(out.payload["format"], "api");
+    assert_eq!(out.payload["runnable"], true, "{:?}", out.payload);
+    assert_eq!(out.payload["nodeCount"], 4);
+    assert!(out.payload["runKey"].as_str().unwrap().starts_with("file:"), "{:?}", out.payload);
+    let prompt_id = out.payload["promptId"].as_i64().unwrap();
+    // 解析出来的字段真的进了库（第一半那份 GraphParse）
+    let (source, source_ref, seed): (Option<String>, Option<String>, Option<i64>) = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT source, source_ref, seed FROM prompts WHERE id = ?1",
+                [prompt_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(source.as_deref(), Some("ComfyUI-File"));
+    assert!(source_ref.as_deref().unwrap().starts_with("file:"));
+    assert_eq!(seed, Some(11));
+    // `nodes` 摘要把"能覆盖的参数"与"连线"分开（键顺序 = 文件里的文档顺序）
+    assert_eq!(out.payload["nodes"][0]["classType"], "KSampler");
+    let latent = out.payload["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["classType"] == "EmptyLatentImage")
+        .unwrap();
+    assert_eq!(latent["widgets"], serde_json::json!(["width", "height"]));
+    assert_eq!(latent["linked"], serde_json::json!([]));
+    // **同一个路径再读一次：幂等**（不重复建提示词、promptId 不变）
+    let again = call_tool(&state, "comfy_load_workflow", serde_json::json!({ "path": file.display().to_string() }))
+        .await
+        .unwrap();
+    assert_eq!(again.payload["promptId"], prompt_id, "同一份文件必须复用同一条提示词");
+    let count: i64 = state
+        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM prompts WHERE source='ComfyUI-File'", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(count, 1);
+
+    // 库里那条提示词的 **API 图**能取回来（comfy_submit 只认它，R10 的前提）
+    let (status, graph) = get_json(router_for(state.clone()), &format!("/api/prompts/{prompt_id}/api-graph")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(graph["3"]["class_type"], "KSampler");
+
+    // 用户把这条提示词删掉之后**必须还能重新导入**（`prompt_id` 被置空那条路）
+    state
+        .with(|conn| {
+            conn.execute("DELETE FROM prompts WHERE id = ?1", [prompt_id])?;
+            Ok(())
+        })
+        .unwrap();
+    let reloaded = call_tool(&state, "comfy_load_workflow", serde_json::json!({ "path": file.display().to_string() }))
+        .await
+        .unwrap();
+    assert_ne!(reloaded.payload["promptId"], prompt_id, "删掉之后要重新建一条（不是永远说「正在加载」）");
+    assert_eq!(reloaded.payload["runnable"], true);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn load_ui_workflow_uses_object_info_and_reports_gaps() {
+    let state = state();
+    let root = state.project_root();
+    let output = root.join("comfyui");
+    std::fs::create_dir_all(&output).unwrap();
+    let file = output.join("ui_flow.json");
+    std::fs::write(&file, ui_workflow_file()).unwrap();
+
+    let history: &'static str = Box::leak(r#"{}"#.to_string().into_boxed_str());
+    let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
+    let info: &'static str = Box::leak(object_info_json().into_boxed_str());
+    let (url, handle) = fake_comfy_full(history, view, info).await;
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = url.clone();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+
+    // ① 默认档：撞上不认识的前端节点 → **如实拒绝**（UNSUPPORTED_NODES），不许猜着提交
+    let refused = call_tool(
+        &state,
+        "comfy_load_workflow",
+        serde_json::json!({ "path": file.display().to_string() }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.code, "UNSUPPORTED_NODES", "{}", refused.message);
+    assert!(refused.message.contains("Weird Frontend Thing"), "{}", refused.message);
+
+    // ② tolerateUnsupported=true：摘掉它、把缺口清单给出来
+    let out = call_tool(
+        &state,
+        "comfy_load_workflow",
+        serde_json::json!({ "path": file.display().to_string(), "tolerateUnsupported": true, "includeGraph": true }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["format"], "ui");
+    assert_eq!(out.payload["nodeCount"], 3, "前端节点被摘掉：{:?}", out.payload);
+    assert_eq!(out.payload["runnable"], false, "有缺口就不算能跑");
+    assert!(
+        out.payload["unsupportedNodes"].as_array().unwrap().iter().any(|v| v.as_str().unwrap().contains("Weird")),
+        "{:?}",
+        out.payload
+    );
+    // 描述里写着「模拟用户行为」默认开着，而本后端没实现 → **必须自己说出来**
+    assert!(
+        out.payload["warnings"].as_array().unwrap().iter().any(|v| v.as_str().unwrap().contains("还没实现")),
+        "不许默认用户以为前端节点已经被接好：{:?}",
+        out.payload["warnings"]
+    );
+    // 转换后的图里控件是按声明顺序贴回去的
+    let graph = &out.payload["apiGraph"];
+    assert_eq!(graph["3"]["class_type"], "KSampler");
+    assert_eq!(graph["3"]["inputs"]["seed"], 777);
+    assert_eq!(graph["3"]["inputs"]["positive"], serde_json::json!([1, 0]));
+    assert_eq!(graph["2"]["inputs"]["width"], 512);
+    // 缺口清单：正面提示词那一路接上了，但 `negative` / `model` 还空着
+    assert!(
+        out.payload["openInputs"].as_array().unwrap().iter().any(|v| v.as_str().unwrap().contains("3.negative")),
+        "{:?}",
+        out.payload["openInputs"]
+    );
+    let prompt_id = out.payload["promptId"].as_i64().unwrap();
+    let (status, api_graph) = get_json(router_for(state.clone()), &format!("/api/prompts/{prompt_id}/api-graph")).await;
+    assert_eq!(status, StatusCode::OK, "{api_graph}");
+    assert_eq!(api_graph["3"]["inputs"]["steps"], 6, "转化后的图要真的存进 capture_runs.raw");
+
+    handle.abort();
+    std::fs::remove_dir_all(&root).ok();
 }

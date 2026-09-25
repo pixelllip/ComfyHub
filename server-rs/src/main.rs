@@ -48,9 +48,10 @@
 //! | `POST /api/ai/capabilities/{refresh,probe}` | ⛔ **501**：要 models.dev 在线数据集 / 要真上游请求（会花钱），不满足"不需要人工校验"这条 |
 //! | **上游 LLM 客户端 / 协议适配器**（第 29 步）与**主循环**（第 30 步） | ✅ 已落地（不带工具、不带附件）；工具层已搬四个本机工具 + 两个闸门（第 31/32 步） |
 //! | **桌面文件工具五件**（`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`）+ **路径准入**（`resolve_read` / `resolve_write`：禁段、真实路径、目录根不可写） | ✅（P4 第 40 步；`desktop_tools.rs` + `policy.rs`，桌面提示词与下发的 `tools[]` 现在含它们） |
-//! | **comfy 查询/同步四件**：`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` / `comfy_sync_history`（最后一条会写库：建提示词 + 产物入库） | ✅（P4 第 41~43 步） |
+//! | **comfy 五件**：`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` / `comfy_sync_history`（写库：建提示词 + 产物入库）/ `comfy_load_workflow`（把本机工作流文件读进库，界面格式按 `/object_info` 转换） | ✅（P4 第 41~44 步） |
 //! | **联网三工具**（`web_search` / `web_fetch` / `civitai_search`） | ⛔ **未搬**（系统提示里那一节暂时指向没下发的工具，见 `tools.rs` 的诚实清单） |
-//! | **`comfy_*` 其余九件**（`find_workflow` / `load_workflow` / `submit` / `use_attachment` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow`）+ `find_model` / 官方 comfy-mcp 39 个 | ⛔ **未搬**（要 ComfyUI 在场 / 要 `WorkflowConvert` 转换栈 / 要模型清单，见 `tools.rs` 的诚实清单） |
+//! | **`comfy_*` 其余八件**（`find_workflow` / `submit` / `use_attachment` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow`）+ `find_model` / 官方 comfy-mcp 39 个 | ⛔ **未搬**（要 ComfyUI 在场 / 要模型清单 / 要 `McpStdioClient`，见 `tools.rs` 的诚实清单） |
+//! | **`WorkflowConvert` 的两处欠账** | ⚠ **组节点（subgraph）不展开**、**「模拟用户行为」（`emulateFrontend`）没实现** —— 两者都**如实报 `unsupportedNodes`**（不猜）；工具描述是从 Kotlin 逐字搬的，所以结果里**主动补一句 warning** 说明这一步没做 |
 //! | 附件（R9）：`/api/ai/attachments*` 与内联预算 | ⛔ **未搬**（有附件直接 `UNSUPPORTED_CONTENT`，不假装发得出去） |
 //! | `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功；`import-workflows` 要整套 `WorkflowConvert` 转换栈，`ingest` 要 ComfyUI 推送那条路） |
 //! | R6~R10 的安全防线 | ⛔ **部分重建**（R5 的保留窗口与 seq 纪律已在 `runs.rs`/`events.rs`，R6/R8 已在执行器与工具层，R9/R10 未动） |

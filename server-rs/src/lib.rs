@@ -55,4 +55,6 @@ pub mod system_prompt;
 pub mod thumbs;
 pub mod tools;
 pub mod upstream;
+pub mod workflow_convert;
+pub mod workflow_load;
 pub mod write_routes;
