@@ -13,20 +13,21 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
 /**
- * 工作流配方接口（W2，2026-09-26）。
+ * 工作流配方接口（W2/W3，2026-09-26）。
  *
  * ```
  *  GET    /api/ai/workflow-recipes           列表（?q= &task= &skeleton= &complete=true &limit=）
  *  POST   /api/ai/workflow-recipes           学一份工作流（path / promptId / graph 三选一）
  *  GET    /api/ai/workflow-recipes/{id}      详情（含配方正文与 render 文本）
+ *  POST   /api/ai/workflow-recipes/{id}/bind 把配方绑到一个（新）模型上（**只报不改**）
  *  DELETE /api/ai/workflow-recipes/{id}      删除
  * ```
  *
  * 路径挂在 `/api/ai/` 下、错误体是 `{error, detail}`（AI 域口径）：读写它的两方都是 AI 域的东西
- * —— 界面（`AiApiClient`，先读 `detail`）与 AI 工具（`comfy_learn_workflow`）。
+ * —— 界面（`AiApiClient`，先读 `detail`）与 AI 工具（`comfy_learn_workflow` / `comfy_bind_recipe`）。
  *
- * **`POST` 就是 `comfy_learn_workflow` 的那条实现**（[WorkflowRecipeLearner]），
- * 两者共用一份代码：分头写必然漂移，而漂移的表现是"AI 学出来的配方和界面看到的不一样"（不报错）。
+ * **学习与绑定都走传进来的那两个 lambda**（`Application` 里建的那一份），
+ * 与 AI 工具**是同一个实例**：分头写必然漂移，而漂移的表现是"AI 学出来的配方和界面看到的不一样"（不报错）。
  *
  * ⚠ 文件路径走 [ToolPolicy.resolveRead]（与 `comfy_load_workflow` 同一条准入）：
  * 界面 / AI 都不能借这个端点读白名单以外的文件。
@@ -54,6 +55,29 @@ data class WorkflowRecipeDetailDto(
     val render: String,
 )
 
+/** 绑定的请求体（与 `comfy_bind_recipe` 工具的参数一一对应）。 */
+@Serializable
+data class WorkflowRecipeBindInput(
+    /** 要绑上去的模型文件名 */
+    val model: String,
+    /** 可选：绑到哪一类槽位（不给就按清单里该文件所在的目录推） */
+    val role: String? = null,
+    /** 可选：直接点名槽位的覆盖键（最准） */
+    val overrideKey: String? = null,
+    /** 默认 false：没验证过的名字不写进覆盖键 */
+    val force: Boolean = false,
+    /** 可选：还要一起绑的其它槽位，键是 role */
+    val extra: Map<String, String> = emptyMap(),
+)
+
+/** 绑定响应：报告 JSON + 给模型/界面看的那段正文。 */
+@Serializable
+data class WorkflowRecipeBindDto(
+    val recipeId: Long,
+    val report: kotlinx.serialization.json.JsonObject,
+    val render: String,
+)
+
 /**
  * 读路径准入：走工具层同一条白名单（本机 ComfyUI 的目录自动在里面），
  * 并把工具层的 `ToolFailure` 翻成 AI 域的 `AiException`（400 + 稳定码，而不是 500 + 类名）。
@@ -64,7 +88,11 @@ private fun resolveReadPath(ctx: AppContext, raw: String): java.nio.file.Path = 
     throw com.comfyhub.ai.AiException(e.code, e.message ?: "这个路径不允许读")
 }
 
-fun Route.workflowRecipeRoutes(ctx: AppContext, deps: WorkflowRecipeLearner.Deps) {
+fun Route.workflowRecipeRoutes(
+    ctx: AppContext,
+    learnRecipe: (WorkflowRecipeLearner.LearnArgs) -> Pair<Long, WorkflowRecipeLearner.Learned>,
+    bindRecipe: (Long, List<WorkflowRecipeBinder.Request>, Boolean) -> WorkflowRecipeBinder.Report?,
+) {
     route("/ai/workflow-recipes") {
 
         get {
@@ -95,8 +123,8 @@ fun Route.workflowRecipeRoutes(ctx: AppContext, deps: WorkflowRecipeLearner.Deps
                 emulateFrontend = input.emulateFrontend,
                 notes = input.notes,
             )
-            val learned = WorkflowRecipeLearner.learn(args, deps)
-            val (id, _) = WorkflowRecipeLearner.learnAndSave(learned, input.notes)
+            // 学 + 落库都在这个 lambda 里（与 comfy_learn_workflow 同一个实例）
+            val (id, learned) = learnRecipe(args)
             call.respond(HttpStatusCode.Created, learned.toJson(id))
         }
 
@@ -114,6 +142,26 @@ fun Route.workflowRecipeRoutes(ctx: AppContext, deps: WorkflowRecipeLearner.Deps
                 val ok = Db.tx { conn -> WorkflowRecipeRepo.delete(conn, id) }
                 if (!ok) return@delete call.respondNotFound("配方 $id 不存在")
                 call.respond(mapOf("deleted" to id))
+            }
+
+            // 绑定：**只报不改**（与 comfy_bind_recipe 同一个实现）。
+            // 界面上"这条骨架能不能换这个新模型"就是问这个端点。
+            post("/bind") {
+                val id = call.requireId() ?: return@post call.respondBadRequest("非法的 id")
+                val input = call.receive<WorkflowRecipeBindInput>()
+                val requests = buildList {
+                    add(
+                        WorkflowRecipeBinder.Request(
+                            fileName = input.model,
+                            role = input.role,
+                            overrideKey = input.overrideKey,
+                        ),
+                    )
+                    input.extra.forEach { (role, name) -> add(WorkflowRecipeBinder.Request(fileName = name, role = role)) }
+                }
+                val report = bindRecipe(id, requests, input.force)
+                    ?: return@post call.respondNotFound("配方 $id 不存在")
+                call.respond(WorkflowRecipeBindDto(recipeId = id, report = report.toJson(), render = report.render()))
             }
         }
     }

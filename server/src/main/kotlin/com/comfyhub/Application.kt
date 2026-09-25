@@ -357,13 +357,43 @@ fun Application.module(ctx: AppContext) {
     }
 
     // 工作流配方（W3，2026-09-26）的依赖：三种来源（文件 / 库里提示词 / 直接给图）的读入口。
-    // `comfy_learn_workflow` 与 `POST /api/ai/workflow-recipes` **共用这一份**。
+    // `comfy_learn_workflow`、`comfy_bind_recipe` 与 `POST /api/ai/workflow-recipes*`
+    // **共用这一份**（各写一遍必然漂移）。
     val recipeDeps = WorkflowRecipeLearner.Deps(
         objectInfo = { runCatching { submitter.objectInfo() }.getOrNull() },
         apiGraphOf = { promptId -> capture.apiGraphOf(promptId) },
         promptName = { promptId -> runCatching { PromptRepo.get(promptId)?.title }.getOrNull() },
         findPromptIdByRunKey = { runKey -> runCatching { CaptureRepo.findRun(runKey)?.promptId }.getOrNull() },
     )
+
+    /** 学一份工作流并落库（工具与端点共用这**一个**实例）。 */
+    val learnRecipe: (WorkflowRecipeLearner.LearnArgs) -> Pair<Long, WorkflowRecipeLearner.Learned> = { a ->
+        WorkflowRecipeLearner.learnAndSave(WorkflowRecipeLearner.learn(a, recipeDeps), a.notes)
+    }
+
+    /**
+     * 把配方绑到模型上（工具与端点共用这**一个**实例）。
+     *
+     * 清单用的是 `modelInventory` —— 与 `comfy_fit_workflow` / 提交前预检**同一份**：
+     * 两处判据分家就会出现"fit 说能用、bind 说没有"这种自相矛盾。
+     */
+    val bindRecipe: (Long, List<WorkflowRecipeBinder.Request>, Boolean) -> WorkflowRecipeBinder.Report? =
+        { recipeId, requests, force ->
+            val row = WorkflowRecipeRepo.get(recipeId)
+            if (row == null) {
+                null
+            } else {
+                WorkflowRecipeBinder.bind(
+                    recipe = row.toRecipe(),
+                    requests = requests,
+                    inventory = modelInventory(runCatching { submitter.objectInfo() }.getOrNull()),
+                    recipeId = row.id,
+                    recipeName = row.name,
+                    complete = row.complete,
+                    force = force,
+                )
+            }
+        }
 
     val toolRegistry = ToolRegistry(
         projectRoot = ctx.cfg.projectRoot,
@@ -454,30 +484,13 @@ fun Application.module(ctx: AppContext) {
         },
         comfyMakeMask = { args -> AiImageEdit.makeMask(ctx.cfg, args) },
         // 工作流配方（W3，2026-09-26）：学 / 列 / 绑。设计见 docs/workflow-recipe-design.md。
-        // 与 `POST /api/ai/workflow-recipes` **共用同一份实现**（`WorkflowRecipeLearner` /
-        // `WorkflowRecipeBinder`）—— 分头写必然漂移，而漂移的表现是"AI 学出来的配方和界面看到的不一样"。
-        comfyLearnWorkflow = { a -> WorkflowRecipeLearner.learnAndSave(WorkflowRecipeLearner.learn(a, recipeDeps), a.notes) },
+        // 学与绑都走**同一份实现**（下面那两个 lambda），`POST /api/ai/workflow-recipes*`
+        // 用的是同一个实例 —— 分头写必然漂移，而漂移的表现是"AI 学出来的配方和界面看到的不一样"。
+        comfyLearnWorkflow = learnRecipe,
         comfyListRecipes = { q, task, skeleton, onlyComplete, limit ->
             WorkflowRecipeRepo.list(q = q, task = task, skeletonHash = skeleton, onlyComplete = onlyComplete, limit = limit)
         },
-        comfyBindRecipe = { recipeId, requests, force ->
-            val row = WorkflowRecipeRepo.get(recipeId)
-            if (row == null) {
-                null
-            } else {
-                WorkflowRecipeBinder.bind(
-                    recipe = row.toRecipe(),
-                    requests = requests,
-                    // 与 comfy_fit_workflow 用的是**同一份清单**（`modelInventory`）：
-                    // 两处判据分家就会出现"fit 说能用、bind 说没有"这种自相矛盾
-                    inventory = modelInventory(runCatching { submitter.objectInfo() }.getOrNull()),
-                    recipeId = row.id,
-                    recipeName = row.name,
-                    complete = row.complete,
-                    force = force,
-                )
-            }
-        },
+        comfyBindRecipe = bindRecipe,
         // 联网搜索（2026-09-20，用户定的规则：只用通用方案）：本项目**唯一**会出网的工具类别。
         // 免密钥默认可用；可选 key 走 CredentialService（DPAPI），设置页里填。
         search = KeenableSearch(credentials),
@@ -671,7 +684,7 @@ fun Application.module(ctx: AppContext) {
             promptRoutes()
             tagRoutes()
             characterCardRoutes()
-            workflowRecipeRoutes(ctx, recipeDeps)
+            workflowRecipeRoutes(ctx, learnRecipe, bindRecipe)
             mediaRoutes(ctx)
             captureRoutes(ctx, capture, submitter)
             aiRoutes(credentials, runner, runBus, skills, memory, toolRegistry, approvals, ctx.cfg.projectRoot, aiAttachments, capabilitiesDir, asks)
