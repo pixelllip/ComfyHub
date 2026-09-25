@@ -33,6 +33,7 @@ pub mod outbound;
 pub mod pending;
 pub mod policy;
 pub mod protocol;
+pub mod questions;
 pub mod repo;
 pub mod routes;
 pub mod run_kit;

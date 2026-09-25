@@ -218,6 +218,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/run-kit/status", get(ai_run_kit_status))
         // 跨端待办总览（P4 第 25 步，M1 定的契约）：另一台设备刚连上来时一次补齐所有"在等人"的卡片
         .route("/api/ai/pending", get(ai_pending))
+        // 提问（P4 第 32 步，用户建议 ⑥）—— 与审批是**两件事**：
+        // 审批回"允不允许"，提问回的是一段**文字**，而且那股文字作为工具结果喂回模型、
+        // 同一个 Run 接着往下做（所以这里没有"取消"以外的分支，也不改 Run 的状态）。
+        .route("/api/ai/runs/{id}/question", get(run_question))
+        .route("/api/ai/questions/{questionId}", get(get_question))
+        .route("/api/ai/questions/{questionId}/answer", axum::routing::post(answer_question))
+        .route("/api/ai/questions/{questionId}/skip", axum::routing::post(skip_question))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -713,6 +720,169 @@ async fn deny_tool_call(
 ) -> Result<Json<ToolApprovalResult>, ApiError> {
     let accepted = crate::runs::resolve_approval(&state, &call_id, false)?;
     Ok(Json(ToolApprovalResult { call_id, approved: false, accepted }))
+}
+
+// ---------------------------------------------------------------------------
+//  提问（P4 第 32 步，用户建议 ⑥）
+// ---------------------------------------------------------------------------
+
+/// `GET /api/ai/runs/{id}/question` 的响应（Kotlin `PendingQuestionResponse`）。
+///
+/// `pending=false` 时 `question` / `questions` 两个键**都不出现**（`explicitNulls = false`）。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunQuestionResponse {
+    pending: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    question: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    questions: Option<Vec<serde_json::Value>>,
+}
+
+/// 这个 Run 现在还在等用户回答的提问（没有就 `pending=false`）。
+///
+/// 给"界面重开 / 断线重连"用：SSE 里那条 `user.question` 可能是在界面没挂着的时候发的。
+/// `questions` 是**整张卡**（一次 `ask_user_question` 最多 5 题）—— 只回第一条的话，
+/// 用户看到的是一张缺了几题的卡。
+async fn run_question(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<RunQuestionResponse>, ApiError> {
+    let group = crate::questions::pending_group_for(&state, &id)?;
+    let first = group.first().cloned();
+    Ok(Json(RunQuestionResponse {
+        pending: first.is_some(),
+        question: first,
+        questions: if group.is_empty() { None } else { Some(group) },
+    }))
+}
+
+/// 单条提问的状态（界面按 questionId 校验"我这张卡还作数吗"）。
+///
+/// 查的是**库**（不是内存闸门）：后端重启后这里依然回答"问过什么、答了什么、什么结局"，
+/// 而不是 404 把卡片抹掉 —— M1 落库的意义就在这里。
+async fn get_question(
+    State(state): State<AppState>,
+    axum::extract::Path(question_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    match crate::questions::find(&state, &question_id)? {
+        Some(value) => Ok(Json(value)),
+        // 与 Kotlin 同一档错误：`AiException(CONFIG_ERROR, "提问不存在或已过期: id")`
+        None => Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("提问不存在或已过期: {question_id}"),
+        )),
+    }
+}
+
+/// `POST /api/ai/questions/{questionId}/answer` 的请求体（Kotlin `QuestionAnswerRequest`）。
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct QuestionAnswerRequest {
+    answer: Option<String>,
+    option_index: Option<i64>,
+    /// 多选题勾了哪几个（2026-09-22 的多选改造）
+    option_indexes: Option<Vec<i64>>,
+}
+
+/// `POST /api/ai/questions/{questionId}/answer` 的响应（Kotlin `QuestionAnswerResult`）。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuestionAnswerResult {
+    question_id: String,
+    accepted: bool,
+    answer: String,
+}
+
+/// 用户回答了：`optionIndex` 给了就是"点了第几个按钮"，否则用 `answer` 的自由文本。
+///
+/// ⚠ `accepted=false` 时界面**必须如实告诉用户**"这次回答没被采纳"（这条提问已经
+/// 超时 / Run 已停）—— 假装成功的话，用户以为他答了，而模型那边什么都没收到。
+async fn answer_question(
+    State(state): State<AppState>,
+    axum::extract::Path(question_id): axum::extract::Path<String>,
+    Json(body): Json<QuestionAnswerRequest>,
+) -> Result<Json<QuestionAnswerResult>, ApiError> {
+    let Some(row) = crate::questions::find_stored(&state, &question_id)? else {
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("提问不存在或已过期: {question_id}"),
+        ));
+    };
+    let index = body.option_index.filter(|i| *i >= 0 && (*i as usize) < row.options.len());
+    let text = match (index, body.answer.as_deref().map(str::trim).filter(|t| !t.is_empty())) {
+        // 点了按钮：答案就是那个选项的原文（不信任前端传来的文字 —— 它可能是改过的）
+        (Some(i), _) => row.options[i as usize].clone(),
+        (None, Some(text)) => text.to_string(),
+        (None, None) => {
+            let hint = if row.options.is_empty() {
+                "这一题没有选项，只能给 answer 文本".to_string()
+            } else {
+                format!("要么给 optionIndex（0~{}），要么给 answer 文本", row.options.len() - 1)
+            };
+            return Err(ApiError::ai(
+                "CONFIG_ERROR",
+                format!("要给出回答：{hint}"),
+            ));
+        }
+    };
+    let indexes = body
+        .option_indexes
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| *i >= 0 && (*i as usize) < row.options.len())
+        .collect::<Vec<_>>();
+    let accepted = crate::questions::record_answer(
+        &state,
+        &question_id,
+        &crate::questions::Answer { answer: text.clone(), option_index: index, option_indexes: indexes },
+    )?;
+    if accepted {
+        // 事件让**所有**开着这条会话的界面都切成"已回答"（不只是点的那一个窗口）
+        let mut payload = serde_json::Map::new();
+        payload.insert("questionId".into(), serde_json::json!(question_id));
+        payload.insert("answer".into(), serde_json::json!(text));
+        if let Some(i) = index {
+            payload.insert("optionIndex".into(), serde_json::json!(i));
+        }
+        state.bus.emit(
+            &state,
+            &row.run_id,
+            crate::events::event_type::USER_QUESTION_ANSWERED,
+            &serde_json::Value::Object(payload),
+        )?;
+    }
+    Ok(Json(QuestionAnswerResult { question_id, accepted, answer: text }))
+}
+
+/// 用户跳过这条提问：**当作"没有回答"**放行。
+///
+/// 与"不回答就永远挂着"相比，模型拿到的是"用户没有回答"—— 它据此基于已有信息继续，
+/// 而不是卡死在这里。
+async fn skip_question(
+    State(state): State<AppState>,
+    axum::extract::Path(question_id): axum::extract::Path<String>,
+) -> Result<Json<QuestionAnswerResult>, ApiError> {
+    let Some(row) = crate::questions::find_stored(&state, &question_id)? else {
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("提问不存在或已过期: {question_id}"),
+        ));
+    };
+    // 库里那条按"用户跳过"收尾（状态守卫保证：已经 answered 的不被覆盖）
+    crate::questions::finalize_if_pending(&state, &question_id, "skipped")?;
+    state.bus.emit(
+        &state,
+        &row.run_id,
+        crate::events::event_type::USER_QUESTION_ANSWERED,
+        &serde_json::json!({ "questionId": question_id, "answer": "", "skipped": true }),
+    )?;
+    Ok(Json(QuestionAnswerResult {
+        question_id,
+        accepted: true,
+        answer: String::new(),
+    }))
 }
 
 // ---------------------------------------------------------------------------

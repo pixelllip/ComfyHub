@@ -299,7 +299,6 @@ async fn run_once(
     let mut total_usage: Option<Value> = None;
     let mut last_provider_response_id: Option<String> = None;
     let mut step = 0usize;
-    let mut calls_made = 0i64;
     let mut budget_exhausted = false;
 
     loop {
@@ -401,7 +400,7 @@ async fn run_once(
                 "\n\n（{}）",
                 crate::tools::budget_exceeded_note(
                     max_calls,
-                    calls_made < crate::tools::ABSOLUTE_CALL_CAP
+                    session.calls < crate::tools::ABSOLUTE_CALL_CAP
                 )
             );
             push_note(state, run_id, &assistant_id, &sink, &note)?;
@@ -437,7 +436,7 @@ async fn run_once(
                 call_id,
                 call,
                 &sink,
-                calls_made,
+                &conversation_id,
                 max_calls,
             )
             .await?;
@@ -445,7 +444,8 @@ async fn run_once(
             // 越界被拒、参数不对、用户点拒绝、工具自己报错 —— 那些调用"连世界都没碰到"，
             // 让它们占额度就是用户抱怨过的那种"什么都没干就说预算不足"。
             if outcome.ok {
-                calls_made += 1;
+                // **只有真的跑成功才消耗额度**（Kotlin spendCall 的时点）
+                session.spend_call();
             }
             // 工具结果作为下一轮的 `role = tool`
             trailing.push(ChatTurn {
@@ -457,9 +457,8 @@ async fn run_once(
         }
 
         step += 1;
-        if calls_made >= max_calls || calls_made >= crate::tools::ABSOLUTE_CALL_CAP {
-            budget_exhausted = true;
-        }
+        // 每一轮之后重新算：用户刚答完提问的话额度已经被重置（Kotlin 同）
+        budget_exhausted = !session.has_calls_left(max_calls);
     }
 
     // ---- 落库 --------------------------------------------------------------
@@ -565,7 +564,7 @@ async fn handle_call(
     call_id: &str,
     call: &crate::protocol::ToolCallRef,
     sink: &Arc<Mutex<Sink>>,
-    calls_made: i64,
+    conversation_id: &str,
     max_calls: i64,
 ) -> Result<CallOutcome, ApiError> {
     let arguments: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
@@ -629,7 +628,7 @@ async fn handle_call(
         )
         .await;
     }
-    if calls_made >= max_calls || calls_made >= crate::tools::ABSOLUTE_CALL_CAP {
+    if !session.has_calls_left(max_calls) {
         return finish_failure(
             state,
             run_id,
@@ -641,7 +640,7 @@ async fn handle_call(
                 "TOOL_BUDGET_EXCEEDED",
                 &crate::tools::budget_exceeded_note(
                     max_calls,
-                    calls_made < crate::tools::ABSOLUTE_CALL_CAP,
+                    session.calls < crate::tools::ABSOLUTE_CALL_CAP,
                 ),
                 "denied",
                 0,
@@ -686,7 +685,8 @@ async fn handle_call(
 
     // ⑥ 执行
     let started = std::time::Instant::now();
-    let result = crate::tools::execute(state, &call.name, &arguments, session);
+    let result =
+        crate::tools::execute(state, run_id, conversation_id, &call.name, &arguments, session).await;
     let elapsed_ms = started.elapsed().as_millis() as i64;
     let outcome = match result {
         Ok(out) => {

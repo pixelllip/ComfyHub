@@ -165,6 +165,30 @@ async fn main() {
         args.db.to_string_lossy().to_string(),
         media_dir.clone(),
     );
+
+    // ---- 启动恢复（与 Kotlin `Application.module` 的三步同序）----------------
+    //
+    // 这三步都是"上次进程死得不明不白"留下的残局，**少一步就是界面永远转圈**：
+    // ① 还挂在 `running` 的 Run → `failed`（否则 SSE 一直等一条永远不来的终态事件）；
+    // ② 还挂着 `pending` 的审批行 → `denied`（内存闸门随进程消失，那些审批
+    //    "永远不会有人点"，而 `/api/ai/pending` 会一直把它们列出来）；
+    // ③ 还挂着 `pending` 的提问行 → `expired`（同上）。
+    match comfyhub_server_rs::runs::fail_stale_running(&state, "后端重启导致 Run 中断") {
+        Ok(n) if n > 0 => println!("启动恢复：{n} 个僵死 Run 已标为 failed"),
+        Ok(_) => {}
+        Err(e) => eprintln!("启动恢复：收尾僵死 Run 失败（{}）", e.human()),
+    }
+    match comfyhub_server_rs::runs::expire_stale_pending_tool_calls(&state) {
+        Ok(n) if n > 0 => println!("启动恢复：{n} 条待审批调用按拒绝收尾"),
+        Ok(_) => {}
+        Err(e) => eprintln!("启动恢复：收尾待审批调用失败（{}）", e.human()),
+    }
+    match comfyhub_server_rs::questions::expire_stale(&state) {
+        Ok(n) if n > 0 => println!("启动恢复：{n} 条待回答提问按失效收尾"),
+        Ok(_) => {}
+        Err(e) => eprintln!("启动恢复：收尾待回答提问失败（{}）", e.human()),
+    }
+
     let app = routes::router(state)
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http());

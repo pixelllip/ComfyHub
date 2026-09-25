@@ -562,6 +562,13 @@ pub fn finish_run(
     // 而结束流，那条终态事件就永远发不出去了。
     bus.emit(state, run_id, event, &payload)?;
     runs::finish(state, run_id, status, error_code, error_message, usage)?;
+    // 这个 Run 上还没人回答的提问一律按失效收尾（Kotlin `AskRegistry.discardRun`）。
+    // ⚠ 少了这一步，那些行会永远停在 pending：`/api/ai/pending` 一直把它们列出来，
+    // 而点进去谁也答不了（Run 已经结束）—— 那就是一张"点了也没用"的卡。
+    // 放在这里是因为它是**收尾的唯一入口**（正常 / 失败 / 取消三条路都走它）。
+    if let Err(e) = crate::questions::finalize_run(state, run_id, "expired") {
+        eprintln!("收尾提问失败（Run {run_id} 上还挂着 pending 行）：{}", e.human());
+    }
     bus.close(state, run_id)?;
     Ok(())
 }

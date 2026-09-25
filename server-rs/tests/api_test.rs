@@ -5250,6 +5250,238 @@ async fn unknown_tool_is_reported_as_tool_not_found() {
     gateway.abort();
 }
 
+/// **提问闸门**（P4 第 32 步，用户建议 ⑥）：模型当场问两张卡里的一整张（2 题），
+/// 用户答完，**同一个 Run 接着往下做** —— 不结束、不重开。
+///
+/// 这一条盯四件事：① `user.question` 的形状是**嵌套**的 `question` 对象
+/// （平铺过一次，界面就解不出提问）；② `GET /api/ai/runs/{id}/question` 能把整张卡补回来；
+/// ③ 答完写库 + 落块（`asked` / `askedAll`）；④ 答案真的喂回了模型。
+#[tokio::test]
+async fn ask_user_question_waits_then_continues_the_same_run() {
+    let arguments = serde_json::json!({
+        "questions": [
+            { "question": "要哪个画幅？", "options": ["4:3", "16:9"], "header": "输出尺寸" },
+            { "question": "要几张？", "options": ["1", "4"], "multiSelect": true }
+        ]
+    })
+    .to_string();
+    let (base_url, gateway) = scripted_tool_gateway(vec![vec![(
+        "ask_user_question",
+        Box::leak(arguments.into_boxed_str()),
+    )]])
+    .await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+    set_policy(&state, serde_json::json!({ "permissionMode": "ask", "overrides": {} }));
+
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "出张图", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+
+    // ② 等提问卡出现（Run 挂在这里等，**不收尾**）
+    let mut card: Vec<serde_json::Value> = Vec::new();
+    for _ in 0..200 {
+        let (status, q) =
+            get_json(router_for(state.clone()), &format!("/api/ai/runs/{run_id}/question")).await;
+        assert_eq!(status, StatusCode::OK, "{q}");
+        if q["pending"] == true {
+            card = q["questions"].as_array().cloned().unwrap_or_default();
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert_eq!(card.len(), 2, "整张卡要一次补回来：{card:?}");
+    // ① 事件形状：`question` 必须是**对象**（不是问题文字）
+    let question_event = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT payload_json FROM ai_run_events
+                  WHERE run_id = ?1 AND event_type = 'user.question' ORDER BY seq LIMIT 1",
+                rusqlite::params![run_id],
+                |row| row.get::<_, String>(0),
+            )?)
+        })
+        .unwrap();
+    let question_event: serde_json::Value = serde_json::from_str(&question_event).unwrap();
+    assert!(
+        question_event["question"].is_object(),
+        "客户端读的是 event.data['question'] 这个**对象**：{question_event}"
+    );
+    assert_eq!(question_event["question"]["questionId"], card[0]["questionId"]);
+    assert_eq!(question_event["question"]["index"], 0);
+    assert_eq!(question_event["question"]["total"], 2);
+    assert_eq!(question_event["runId"], run_id.as_str());
+
+    // 闸门类事件**立刻落库**（另一台设备靠它发现"有东西在等人"）
+    let types = event_types(&state, &run_id);
+    assert!(types.contains(&"user.question".to_string()), "{types:?}");
+
+    // ③ 回答：第一题点按钮（`optionIndex`），第二题给自由文本
+    let first_id = card[0]["questionId"].as_str().unwrap().to_string();
+    let second_id = card[1]["questionId"].as_str().unwrap().to_string();
+    let (status, answered) = send_json(
+        router_for(state.clone()),
+        "POST",
+        &format!("/api/ai/questions/{first_id}/answer"),
+        serde_json::json!({ "optionIndex": 1 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answered}");
+    assert_eq!(answered["accepted"], true);
+    assert_eq!(answered["answer"], "16:9", "点了按钮，答案就是那个选项的原文");
+    let (status, answered) = send_json(
+        router_for(state.clone()),
+        "POST",
+        &format!("/api/ai/questions/{second_id}/answer"),
+        serde_json::json!({ "answer": "两张就行" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(answered["answer"], "两张就行");
+
+    // Run 收尾（**同一个 Run**，不是另起一条）
+    let run = wait_for_run(&state, &run_id).await;
+    assert_eq!(run["status"], "completed", "{run}");
+
+    // 库里两行都是 answered，且记着答了什么（`GET /api/ai/questions/{id}` 据此回放）
+    let (status, stored) =
+        get_json(router_for(state.clone()), &format!("/api/ai/questions/{first_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["answered"], true);
+    assert_eq!(stored["answer"], "16:9");
+    assert_eq!(stored["optionIndex"], 1);
+    assert_eq!(stored["header"], "输出尺寸");
+    assert_eq!(stored["total"], 2);
+
+    // ④ 答案喂回了模型（正文是 Kotlin 那两句的逐字形状），而且落进了有序块
+    let messages = comfyhub_server_rs::conversations::list_messages(&state, "conv-0").unwrap();
+    let assistant = messages.iter().find(|m| m.id == assistant_id).unwrap();
+    assert_eq!(assistant.text, "收口了");
+    let result_part = assistant
+        .parts
+        .iter()
+        .find(|p| p.r#type == "tool_result")
+        .expect("工具结果块");
+    let text = result_part.text.clone().unwrap_or_default();
+    assert!(text.contains("【用户回答了这张卡（共 2 题）】"), "{text}");
+    assert!(text.contains("「要哪个画幅？」 → 16:9"), "{text}");
+    assert!(text.contains("「要几张？」 → 两张就行"), "{text}");
+    let payload = result_part.json_payload.clone().unwrap();
+    // 块上的 payload 是**契约那一小撮键**（Kotlin `HarnessRunner:762`）：历史回放靠
+    // `question` 这一条把提问卡照原样画出来（问了什么、答了什么）
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["approval"], "not_required");
+    assert_eq!(payload["question"]["questionId"], first_id.as_str());
+    assert_eq!(payload["question"]["answer"], "16:9");
+    assert_eq!(payload["question"]["options"][0], "4:3");
+
+    // 工具的结构化结果（`tool.completed` 的 `result`）才是预算 / 整组答案那一份
+    let completed = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT payload_json FROM ai_run_events
+                  WHERE run_id = ?1 AND event_type = 'tool.completed' ORDER BY seq LIMIT 1",
+                rusqlite::params![run_id],
+                |row| row.get::<_, String>(0),
+            )?)
+        })
+        .unwrap();
+    let completed: serde_json::Value = serde_json::from_str(&completed).unwrap();
+    let result = &completed["result"];
+    assert_eq!(result["askedCount"], 2);
+    assert_eq!(result["answeredCount"], 2);
+    assert_eq!(result["answers"][0]["optionIndex"], 1);
+    assert_eq!(result["answers"][1]["answer"], "两张就行");
+    assert_eq!(result["askedAll"][1]["answer"], "两张就行");
+    assert_eq!(result["budgetReset"], true, "用户真的答了 → 这一窗的工具额度重置");
+    assert_eq!(result["callsUsedInWindow"], 0);
+    assert!(result["groupId"].is_string());
+
+    // 答完之后 `/api/ai/pending` 不该再列出这张卡
+    let (_, pending) = get_json(router_for(state.clone()), "/api/ai/pending").await;
+    assert!(pending["asks"].as_array().unwrap().is_empty(), "{pending}");
+
+    gateway.abort();
+}
+
+/// 用户**跳过**整张卡：模型拿到的是"用户没回答"（不是卡死），Run 照样收口 ——
+/// 而且不许假装用户答了。
+#[tokio::test]
+async fn skipped_questions_are_reported_as_unanswered() {
+    let arguments = serde_json::json!({ "question": "要 NSFW 吗？", "options": ["要", "不要"] }).to_string();
+    let (base_url, gateway) = scripted_tool_gateway(vec![vec![(
+        "ask_user_question",
+        Box::leak(arguments.into_boxed_str()),
+    )]])
+    .await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "出张图", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+
+    let mut question_id = String::new();
+    for _ in 0..200 {
+        let (_, q) =
+            get_json(router_for(state.clone()), &format!("/api/ai/runs/{run_id}/question")).await;
+        if q["pending"] == true {
+            question_id = q["question"]["questionId"].as_str().unwrap().to_string();
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(!question_id.is_empty(), "提问卡没出现");
+
+    let (status, skipped) = send_json(
+        router_for(state.clone()),
+        "POST",
+        &format!("/api/ai/questions/{question_id}/skip"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(skipped["accepted"], true);
+
+    // 跳过**立刻**放行（不等到 30 分钟超时）—— 这一条就是"别把 Run 挂死"的防线
+    let run = wait_for_run(&state, &run_id).await;
+    assert_eq!(run["status"], "completed", "{run}");
+
+    let messages = comfyhub_server_rs::conversations::list_messages(&state, "conv-0").unwrap();
+    let assistant = messages.iter().find(|m| m.id == assistant_id).unwrap();
+    let text = assistant
+        .parts
+        .iter()
+        .find(|p| p.r#type == "tool_result")
+        .and_then(|p| p.text.clone())
+        .unwrap_or_default();
+    assert!(text.contains("【用户未回答】"), "{text}");
+    assert!(!text.contains("回答：要"), "不许假装用户答了：{text}");
+
+    // 库里那行是 skipped（不是 pending —— 否则 `/api/ai/pending` 会一直列着它）
+    let (_, stored) =
+        get_json(router_for(state.clone()), &format!("/api/ai/questions/{question_id}")).await;
+    assert_eq!(stored["answered"], false);
+    let (_, pending) = get_json(router_for(state.clone()), "/api/ai/pending").await;
+    assert!(pending["asks"].as_array().unwrap().is_empty(), "{pending}");
+
+    gateway.abort();
+}
+
 /// 上游明确拒绝（429）：错误码要归到 `RATE_LIMIT`，而不是笼统的"失败了"。
 #[tokio::test]
 async fn executor_reports_the_stable_code_for_an_upstream_rejection() {

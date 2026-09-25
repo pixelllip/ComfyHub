@@ -44,79 +44,12 @@ use crate::routes::{ApiError, AppState};
 
 /// `GET /api/ai/pending`。
 pub fn pending(state: &AppState) -> Result<Value, ApiError> {
-    let asks = state.with(list_pending_asks)?;
+    let asks = state.with(crate::questions::list_pending)?;
     let approvals = state.with(list_pending_approvals)?;
     let mut body = Map::new();
     body.insert("asks".into(), Value::Array(asks));
     body.insert("approvals".into(), Value::Array(approvals));
     Ok(Value::Object(body))
-}
-
-/// 还在等回答的提问（`ai_questions.status = 'pending'`）。
-///
-/// 排序照抄 Kotlin 那边的可预期顺序：先按问的时间、再按 question_id
-/// （同一毫秒落两行时靠 id 才稳定 —— 卡片顺序乱了用户看到的是"题号跳来跳去"）。
-fn list_pending_asks(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
-    let mut stmt = conn.prepare(
-        "SELECT question_id, run_id, conversation_id, group_id, card_index, total,
-                question, options_json, allow_free_text, multi_select, header,
-                status, answer, option_index, option_indexes, asked_at
-           FROM ai_questions
-          WHERE status = 'pending'
-          ORDER BY asked_at, question_id",
-    )?;
-    let rows = stmt
-        .query_map([], |row| {
-            let question_id: String = row.get("question_id")?;
-            let asked_at: Option<String> = row.get("asked_at")?;
-            let answer: Option<String> = row.get("answer")?;
-            let option_index: Option<i64> = row.get("option_index")?;
-            let option_indexes = parse_int_array(row.get::<_, Option<String>>("option_indexes")?.as_deref());
-
-            let mut out = Map::new();
-            out.insert("questionId".into(), Value::String(question_id.clone()));
-            out.insert("runId".into(), Value::String(row.get::<_, Option<String>>("run_id")?.unwrap_or_default()));
-            out.insert(
-                "conversationId".into(),
-                Value::String(row.get::<_, Option<String>>("conversation_id")?.unwrap_or_default()),
-            );
-            out.insert(
-                "question".into(),
-                Value::String(row.get::<_, Option<String>>("question")?.unwrap_or_default()),
-            );
-            out.insert("allowFreeText".into(), Value::Bool(row.get::<_, Option<i64>>("allow_free_text")?.unwrap_or(1) != 0));
-            // 表里只有 pending 的行；`answered` 就按"有没有答案"算（与 Kotlin 同义）
-            out.insert("answered".into(), Value::Bool(answer.is_some()));
-            out.insert("options".into(), Value::Array(parse_string_array(row.get::<_, Option<String>>("options_json")?.as_deref())));
-            out.insert("askedAt".into(), Value::from(asked_at_ms(asked_at.as_deref())));
-            out.insert("index".into(), Value::from(row.get::<_, Option<i64>>("card_index")?.unwrap_or(0)));
-            out.insert("total".into(), Value::from(row.get::<_, Option<i64>>("total")?.unwrap_or(1)));
-            out.insert(
-                "groupId".into(),
-                Value::String(
-                    row.get::<_, Option<String>>("group_id")?
-                        .filter(|v| !v.is_empty())
-                        .unwrap_or(question_id),
-                ),
-            );
-            out.insert("multiSelect".into(), Value::Bool(row.get::<_, Option<i64>>("multi_select")?.unwrap_or(0) != 0));
-            // 以下是可空键：**没有就整个键不出现**（explicitNulls = false）
-            if let Some(header) = row.get::<_, Option<String>>("header")? {
-                out.insert("header".into(), Value::String(header));
-            }
-            if let Some(answer) = answer {
-                out.insert("answer".into(), Value::String(answer));
-            }
-            if let Some(index) = option_index {
-                out.insert("optionIndex".into(), Value::from(index));
-            }
-            if !option_indexes.is_empty() {
-                out.insert("optionIndexes".into(), Value::Array(option_indexes));
-            }
-            Ok(Value::Object(out))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
 }
 
 /// 还在等批准的调用：`ai_tool_calls.status='pending'` **且 Run 还在 running**。
@@ -164,66 +97,18 @@ fn list_pending_approvals(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
     Ok(rows)
 }
 
-/// ISO 文本 → epoch **毫秒**（解析不出来回 0，与 Kotlin `askedAtMs ?: 0L` 同）。
-fn asked_at_ms(raw: Option<&str>) -> i64 {
-    match crate::iso_time::parse(raw.unwrap_or("")) {
-        Some((secs, nanos)) => secs.saturating_mul(1000) + (nanos / 1_000_000) as i64,
-        None => 0,
-    }
-}
-
-fn parse_string_array(raw: Option<&str>) -> Vec<Value> {
-    let Some(text) = raw.map(str::trim).filter(|t| !t.is_empty()) else {
-        return Vec::new();
-    };
-    match serde_json::from_str::<Value>(text) {
-        Ok(Value::Array(items)) => items
-            .into_iter()
-            .filter_map(|v| match v {
-                Value::String(s) => Some(Value::String(s)),
-                Value::Number(n) => Some(Value::String(n.to_string())),
-                _ => None,
-            })
-            .collect(),
-        // 脏 JSON 当没有（与 Kotlin `parseStringArray` 的 `runCatching` 同）
-        _ => Vec::new(),
-    }
-}
-
-fn parse_int_array(raw: Option<&str>) -> Vec<Value> {
-    parse_string_array(raw)
-        .into_iter()
-        .filter_map(|v| match v {
-            Value::String(s) => s.trim().parse::<i64>().ok().map(Value::from),
-            _ => None,
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
+    //! ⚠ 提问那半边（形状 / ISO→毫秒 / 脏 JSON）的用例跟着实现搬到了
+    //! [`crate::questions::tests`] —— 形状只有一份，用例也就不该有两份。
+
     use super::*;
 
     #[test]
-    fn asked_at_是毫秒而脏数据回零() {
-        // `2026-09-24T14:41:29.647Z`（本机真机验收那一刻）
-        assert_eq!(asked_at_ms(Some("2026-09-24T14:41:29.647Z")), 1_790_260_889_647);
-        // 整秒（没有小数点）也要算对 —— 这正是 `iso_time` 那一课
-        assert_eq!(asked_at_ms(Some("2026-09-24T14:41:29Z")), 1_790_260_889_000);
-        assert_eq!(asked_at_ms(Some("")), 0);
-        assert_eq!(asked_at_ms(Some("不是时间")), 0);
-        assert_eq!(asked_at_ms(None), 0);
-    }
-
-    #[test]
-    fn 脏的_options_json_当没有() {
-        assert!(parse_string_array(Some("not json")).is_empty());
-        assert!(parse_string_array(Some("  ")).is_empty());
-        assert!(parse_string_array(None).is_empty());
-        assert_eq!(parse_string_array(Some(r#"["a","b"]"#)).len(), 2);
-        // optionIndexes 那一列是**数字数组的 JSON**
-        let idx = parse_int_array(Some("[0,2]"));
-        assert_eq!(idx, vec![Value::from(0), Value::from(2)]);
-        assert!(parse_int_array(Some(r#"["x"]"#)).is_empty(), "认不出来的分量要丢掉，不是编一个 0");
+    fn 没有待办时也是两个空数组() {
+        let mut body = Map::new();
+        body.insert("asks".into(), Value::Array(Vec::new()));
+        body.insert("approvals".into(), Value::Array(Vec::new()));
+        assert_eq!(body.len(), 2, "两个键都要在（不是 null、也不是少一个）");
     }
 }
