@@ -354,6 +354,49 @@ CREATE TABLE IF NOT EXISTS ai_questions (
 CREATE INDEX IF NOT EXISTS idx_ai_questions_run    ON ai_questions(run_id);
 CREATE INDEX IF NOT EXISTS idx_ai_questions_status ON ai_questions(status);
 
+-- ---------------------------------------------------------------------
+-- 角色卡（O8，2026-09-25）：一个角色的**规范 tag 栈 + 来源 + 配哪条 LoRA**
+--
+-- 为什么是一张表而不是长期记忆：记忆是"一行一条文本"、有 100 条上限、超限**直接报错**
+-- （MemoryStore），而角色卡是结构化字段（tag 栈 / LoRA / 权重 / 别名 / 来源），
+-- 还要按名字幂等地反复覆盖（同名 = 同一张卡，不许攒出三四份）。
+--
+-- `normalized` = name 的小写，是幂等 upsert 的键（照 tags.normalized 的写法）。
+-- `tags` / `aliases` 是 JSON 数组文本（与 prompts.loras 同一约定）。
+-- `tags_verified_at` 记"最后一次跟 danbooru 核对过 tag"的时间 —— "查没查过"是个事实，
+-- 不能靠模型嘴上说"我查了"。
+--
+-- ⚠ **不进同步范围**（总纲 §3.3 的白名单里没有它）：手机侧目前没有角色卡的读写界面。
+--   要同步时 schema 的 3 条 `_sync_log` 触发器、`server-rs/src/sync.rs` 的 `SYNCED` /
+--   `pk_kind` / `PHONE_FORBIDDEN`、`MobileSchema.kt` 的两份清单、两份契约文档**要一起改**。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS character_cards (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  name               TEXT    NOT NULL,          -- 用户叫的名字（中文 / 原名）
+  normalized         TEXT    NOT NULL,          -- name 的小写（幂等 upsert 的键）
+  name_en            TEXT    NULL,              -- 罗马字 / 英文写法（danbooru 上的样子）
+  aliases            TEXT    NULL,              -- JSON 数组文本：别名 / 其他叫法
+  character_tag      TEXT    NULL,              -- danbooru 角色 tag（形如 shinku_(nte)）
+  series_tag         TEXT    NULL,              -- 作品 tag（形如 neverness_to_everness）
+  tags               TEXT    NULL,              -- JSON 数组文本：规范 tag 栈（外观 / 服装 / 动作基线）
+  negative           TEXT    NULL,              -- 这个角色常踩的负面词
+  lora_name          TEXT    NULL,              -- 角色 LoRA 文件名（ComfyUI models/loras 下）
+  lora_weight        REAL    NULL,              -- 建议权重
+  lora_trigger       TEXT    NULL,              -- LoRA 触发词（多个用逗号分隔）
+  checkpoint         TEXT    NULL,              -- 建议底模
+  reference_media_id INTEGER NULL,              -- 参考图（画廊里的产物 id）
+  source             TEXT    NULL,              -- 来源：链接 / "用户口述" / "danbooru" …
+  tags_verified_at   TEXT    NULL,              -- 最后一次跟 danbooru 核对 tag 的时间
+  notes              TEXT    NULL,
+  created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  FOREIGN KEY (reference_media_id) REFERENCES media_assets(id) ON DELETE SET NULL
+);
+-- 幂等 upsert 的键：同名 = 同一张卡（`ON CONFLICT(normalized) DO UPDATE`，R3 不许用 OR REPLACE）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_character_cards_norm ON character_cards(normalized);
+CREATE INDEX IF NOT EXISTS idx_character_cards_char_tag ON character_cards(character_tag);
+CREATE INDEX IF NOT EXISTS idx_character_cards_created  ON character_cards(created_at);
+
 -- =====================================================================
 --  同步账本（🔒 sqlite-schema-contract.md §3）—— 桌面是唯一真源
 -- =====================================================================
@@ -428,6 +471,12 @@ CREATE TRIGGER IF NOT EXISTS trg_ai_runs_touch AFTER UPDATE ON ai_runs FOR EACH 
 WHEN NEW.updated_at IS OLD.updated_at
 BEGIN
   UPDATE ai_runs SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_character_cards_touch AFTER UPDATE ON character_cards FOR EACH ROW
+WHEN NEW.updated_at IS OLD.updated_at
+BEGIN
+  UPDATE character_cards SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id;
 END;
 
 -- ---------------------------------------------------------------------

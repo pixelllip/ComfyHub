@@ -27,6 +27,68 @@ data class TagInput(
 )
 
 // ===========================================================================
+//  角色卡（O8，2026-09-25）
+// ===========================================================================
+
+/**
+ * 一个角色的"规范 tag 栈 + 来源 + 配哪条 LoRA"。
+ *
+ * 为什么要有它（现场证据，总纲 §10.3 O8）：iroi 的规范 tag（绿发 / 黑卷羊角 / 羊耳 /
+ * 白蓝荷叶边裙）是从 Civitai 上**专为 Anima 训练**的 iroi LoRA 触发词里拿到的；
+ * 而同一场对话里 AI 把 shinku 当 iroi 写了两版废图 —— 那两版的 tag 栈其实
+ * **库里就有**（prompts 261 / 310）。所以"先查再写"要有一个能存下来的地方：
+ * 查过之后的结果不落到某个地方，下一轮对话又得重新查一遍。
+ *
+ * `tagsVerifiedAt` 是"最后一次跟 danbooru 核对过"的时间：它是**事实**，
+ * 不是模型嘴上的"我查过了"（两者在界面上要能分开看）。
+ */
+@Serializable
+data class CharacterCardDto(
+    val id: Long,
+    val name: String,
+    val nameEn: String? = null,
+    val aliases: List<String> = emptyList(),
+    /** danbooru 角色 tag（形如 `shinku_(nte)`） */
+    val characterTag: String? = null,
+    /** 作品 tag（形如 `neverness_to_everness`） */
+    val seriesTag: String? = null,
+    /** 规范 tag 栈（外观 / 服装 / 动作基线），一个 tag 一项 */
+    val tags: List<String> = emptyList(),
+    val negative: String? = null,
+    val loraName: String? = null,
+    val loraWeight: Double? = null,
+    val loraTrigger: String? = null,
+    val checkpoint: String? = null,
+    /** 参考图（画廊里的产物 id） */
+    val referenceMediaId: Long? = null,
+    /** 来源：链接 / "用户口述" / "danbooru" …（**如实写**，不许编） */
+    val source: String? = null,
+    val tagsVerifiedAt: String? = null,
+    val notes: String? = null,
+    val createdAt: String? = null,
+    val updatedAt: String? = null,
+)
+
+@Serializable
+data class CharacterCardInput(
+    val name: String = "",
+    val nameEn: String? = null,
+    val aliases: List<String> = emptyList(),
+    val characterTag: String? = null,
+    val seriesTag: String? = null,
+    val tags: List<String> = emptyList(),
+    val negative: String? = null,
+    val loraName: String? = null,
+    val loraWeight: Double? = null,
+    val loraTrigger: String? = null,
+    val checkpoint: String? = null,
+    val referenceMediaId: Long? = null,
+    val source: String? = null,
+    val tagsVerifiedAt: String? = null,
+    val notes: String? = null,
+)
+
+// ===========================================================================
 //  提示词
 // ===========================================================================
 
