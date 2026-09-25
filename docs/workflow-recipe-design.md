@@ -84,16 +84,22 @@
 | --- | --- | --- |
 | 1 | 有 `SaveAudio*` / 音频节点 | `audio` |
 | 2 | 有 `SaveVideo` / `VHS_VideoCombine` / 视频采样节点（`MiniMaxH3*` / `Wan*` / `SVD*`） | `video` |
-| 3 | 有遮罩链（`LoadImageMask` / `ImageToMask` / `SetLatentNoiseMask` / `InpaintModelConditioning` / `GrowMask`） | `inpaint` |
-| 4 | 有"参考图编辑"链（`Krea2EditModelPatch` / `Krea2OstrisEditModelPatch` / `TextEncodeKrea2OstrisEdit*` / `ReferenceLatent` / `FluxKontext*`）且图像输入 ≥1 | `edit` |
+| 3 | 有"参考图编辑"链（`Krea2EditModelPatch` / `Krea2OstrisEditModelPatch` / `Krea2EditGroundedEncode` / `TextEncodeKrea2OstrisEdit` / `ReferenceLatent` / `FluxKontext*`）且图像输入 ≥1 | `edit` |
+| 4 | 有遮罩链（`LoadImageMask` / `ImageToMask` / `SetLatentNoiseMask` / `InpaintModelConditioning` / `GrowMask`，或任何节点上真的连着一个 `mask` 输入） | `inpaint` |
 | 5 | 只有一个放大模型、没有采样器 | `upscale` |
 | 6 | 图像输入 ≥1 | `i2i` |
 | 7 | 其余 | `t2i` |
 | — | 一个都没命中（空图 / 认不出） | `unknown`（**如实说**，不硬塞一档） |
 
-> ⚠ 任务分类是**提示**不是结论：它进 `warnings` 的地方一律写"按节点形状判的，可能不准"。
-> 关键判据（有遮罩 / 有视频输出）是**事实**，所以 `inpaint` / `video` / `audio` 三档可信度最高；
-> `edit` 与 `i2i` 的边界（有参考图但没有 mask）本身就是连续谱，认错只影响提示词，不影响可执行性。
+> ⚠ 顺序里有两处**不能换**（换了就静默判错，且看起来一切正常）：
+> ① `audio` / `video` 在最前 —— 输出即事实；
+> ② **`edit` 在 `inpaint` 前** —— Krea 2 的 Identity Edit 两条链都有
+> （实测：那两份工作流里既有 `Krea2Edit*` 又有 `ImageToMask` / `GrowMask`），
+> 把它判成 `inpaint` 的话 `comfy_list_recipes(task="edit")` 就永远找不到用户的图像编辑工作流。
+>
+> ⚠ 任务分类是**提示**不是结论：关键判据（有视频输出 / 有音频输出 / 有遮罩）是**事实**，
+> 所以 `video` / `audio` / `inpaint` 三档可信度最高；`edit` 与 `i2i` 的边界
+> （有参考图但没有遮罩）本身就是连续谱，认错只影响提示词，不影响可执行性。
 
 ---
 
@@ -147,9 +153,9 @@
 
 | 步 | 内容 | 验收判据 | 依赖 |
 | --- | --- | --- | --- |
-| **W1** | `WorkflowRecipe` 纯解析核心：任务分类 + 骨架指纹 + 槽位 + 旋钮 + 输出节点 + `render()` | 单测覆盖四种任务的**真形状夹具**（t2i / i2i+遮罩 / edit / video）；骨架指纹对"同形不同 id / 不同文件名"稳定、对"多一个采样器"敏感 | 无 |
-| **W2** | `workflow_recipes` 表 + 仓储 + `GET/POST/DELETE /api/ai/workflow-recipes` | 幂等（同一份文件学两次只有一行）；`ON DELETE SET NULL` 保住配方；**不进同步白名单**（与角色卡同理，理由写明） | W1 |
-| **W3** | 三条工具 `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + 接线 | `ToolRegistryTest` 补清单/权限/分类；`comfy_bind_recipe` 对"缺模型"必须给 `missing` 而不是编一个名字 | W2 |
+| **W1** ✅ | `WorkflowRecipe` 纯解析核心：任务分类 + 骨架指纹 + 槽位（含 `roleGuessed`）+ 旋钮 + 输出节点 + `render()` / `toJson()` —— **已落地（`WorkflowRecipe.kt` + 11 例单测）** | 单测覆盖四种任务的**真形状夹具**（t2i / i2i+遮罩 / edit / video）；骨架指纹对"同形不同 id / 不同文件名 / 界面节点"稳定、对"多一个结构节点 / 多一个 LoRA"敏感；仓库里两份真 inpaint 工作流能归纳出槽位与遮罩（`gradle test` 655 例全绿） | 无 |
+| **W2** | `workflow_recipes` 表 + 仓储 + `GET/POST/DELETE /api/ai/workflow-recipes` | 幂等（同一份文件学两次只有一行）；`ON DELETE SET NULL` 保住配方；**不进同步白名单**（与角色卡同理，理由写明）；配方上带 `complete` 与 `gaps`（见 §5.1 ③） | W1 |
+| **W3** | 三条工具 `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + 接线 | `ToolRegistryTest` 补清单/权限/分类；`comfy_learn_workflow` **默认拒学"被摘过节点的图"**（§5.1 ③）、把转换警告带进配方；`comfy_bind_recipe` 对"缺模型"必须给 `missing` 而不是编一个名字 | W2 |
 | **W4** | 系统提示 v31 第 20 条 + skill `workflow-recipe` + e2e 脚本 + 文档登记 | `SystemPromptNsfwTest` 盯第 20 条；e2e 对着**真工作流文件**跑一遍"学 → 列 → 绑" | W3 |
 | **W5**（下一项，未做） | **骨架改写**：unet+clip+vae ↔ 整包 checkpoint 的节点增删与重连线（要 `/object_info` 的输出槽位 + 重连线后过 `comfy_submit` 的预检） | 真 ComfyUI 上跑通一次"整包 checkpoint 接进编辑骨架" | W3 |
 
@@ -172,6 +178,19 @@
 
 > 用户点名的 krea2 图像编辑那两份**都在**这个目录里 —— 所以"学习入口是文件"这条路，
 > 在用户的机器上现在就能立刻跑通（不需要他再导出一次 API 格式）。
+
+### 5.1 W1 落地时那次真机抽查（16 份文件全扫了一遍，抓出三件事）
+
+`WorkflowRecipe.analyze` 写完之后，用一个**临时探针**（跑完就删）把上面那个目录里
+**全部 16 份**文件都过了一遍：UI 格式的经 `WorkflowConvert` 转成 API 图，
+再用 `/object_info`（本机实例当时有 2817 个节点类）现算模型槽位。
+16 份全部归纳成功（任务分别为 t2i / i2i / inpaint / edit / video / audio），三件事是**只有真文件才摆得出来**的：
+
+| 发现 | 现象 | 落点 |
+| --- | --- | --- |
+| **① 统计表把"次数"写成了类名** | 我第一版的 `EDIT_NODES` 里写着 `TextEncodeKrea2OstrisEditx2` —— 那不是类名，是我自己那张统计表里"出现 2 次"的**后缀**。于是 Krea 2 的两份图像编辑工作流被判成 `inpaint` / `i2i` | 类名**逐字对着真文件的 `class_type` 抄**（`Krea2EditGroundedEncode` / `TextEncodeKrea2OstrisEdit`）。⚠ 教训：**别拿"汇总过的统计"当原始事实**（汇总已经把 key 和值混在一起了） |
+| **② 自定义加载器的"目录名"是猜的** | `UltralyticsDetectorProvider.model_name` 被标成 `diffusion_models`，而它的真身是 `models/ultralytics/bbox` 下的检测器权重 —— 一个会把人指到错地方的结论（8 个槽位全这样） | `Slot.roleGuessed`：拿"只走内置确定表"的那一遍与"含 `/object_info` 现算"的那一遍做**差集**，差出来的就是猜的；`render()` 里用一句话如实说明。**不许**硬塞目录名 |
+| **③「学到一条缺了节点的骨架」是静默的** | 那几个 Krea2 编辑节点（`Krea2EditModelPatch` 等）**不在当前跑着的这个实例里**（2817 个类里一个都没有）→ `WorkflowConvert` 把它们当"前端节点"**摘掉**，转换结果是 19 个节点、编辑链整个没了。如果就这么学下去，配方会是一条**看着像、其实缺了编辑链**的骨架，而**没有任何报错** | 学习入口必须**先看转换报告**：有 `unsupportedNodes` / `unresolvedInputs` 时**默认拒学**，并把"本机这个实例没有这些节点类"说清楚（正确动作是让用户装/启用那几个自定义节点，或换实例）；显式 `tolerateUnsupported=true` 才学，且配方上标"骨架缺 N 个节点类"。另：转换时"控件值个数与输入声明对不上"的警告（真机上 10 个节点命中）也要带进配方的 `warnings` —— 那种节点的参数是**错位**的（实测 `42.steps = 105496379526884`） |
 
 ---
 
