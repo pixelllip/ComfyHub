@@ -3,15 +3,17 @@
 //! # 为什么只有一半
 //!
 //! 完整的 `ToolPolicy`（`resolveRead` / `resolveWrite`、`FORBIDDEN_SEGMENTS` 禁写段、
-//! 真实路径判定、越界拒绝）属于**工具层**（R8/R9 那一批），还没搬。
-//! 这里只做 run-kit 真正读到的三件事：
+//! 真实路径判定、越界拒绝）属于**文件工具**（`read_file` / `write_file`，还没搬）。
+//! 这里做的是 run-kit 与**工具循环**真正读到的这几件事：
 //!
 //! 1. **白名单展开**（`writeRoots` / `readRoots` → 绝对路径）—— 系统提示里要如实写出
 //!    "只能写哪、只能读哪"，那是模型判断"能不能动这个文件"的唯一依据（Kotlin `render:1483`）；
 //! 2. **权限档**（`ask` / `full`）—— `full` 时提示词要多一段"这次不必等批准"，
 //!    并且 `ask` 的工具在渲染时**不再标「需要用户批准」**；
 //! 3. **逐工具覆盖**（`overrides`）—— 标「已被禁用」（`deny`）以及"可调用的工具"清单里
-//!    被策略剔除的那些。
+//!    被策略剔除的那些；
+//! 4. **两条预算**（`maxToolSteps` / `maxCallsPerRun`）—— 工具循环的轮数与调用数上限
+//!    （P4 第 31 步起真的生效，见 `executor` 的 `step` / `calls`）。
 //!
 //! ⚠ **别在这里补一个"半份的路径判定"**：`resolveWrite` 的语义是"越界一律拒绝"，
 //! 抄一半（比如只看前缀、不做真实路径）会让写操作通过一个比 Kotlin 松的闸门 ——
@@ -69,9 +71,9 @@ impl ToolAccess {
 
 /// `app_settings` 里那一行 JSON（`ai.tools.policy`）。
 ///
-/// 只声明 run-kit 用得到的字段：Kotlin 那边还有 `maxToolSteps` / `maxCallsPerRun` /
-/// `maxReadBytes` …（工具层才读，见文件头）。宽松解析照抄 `AppJson`（`ignoreUnknownKeys`），
-/// 所以这里**不能**用 `deny_unknown_fields`。
+/// 只声明**现在真的读**的字段：Kotlin 那边还有 `maxComfyQueriesPerRun` / `maxReadBytes` /
+/// `maxWriteBytes` …（要 ComfyUI / 文件工具的那些批次才读，见文件头）。宽松解析照抄
+/// `AppJson`（`ignoreUnknownKeys`），所以这里**不能**用 `deny_unknown_fields`。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ToolPolicyConfig {
@@ -79,6 +81,15 @@ pub struct ToolPolicyConfig {
     pub read_roots: Vec<String>,
     pub overrides: BTreeMap<String, String>,
     pub permission_mode: String,
+    /// 单次回复最多**工具轮数**（Kotlin `ToolPolicyConfig.maxToolSteps`，出厂 16）。
+    ///
+    /// ⚠ 到顶**不是失败**：那一轮不执行工具、如实告诉用户"已达轮数上限、再发一条就能接着做"
+    /// （Kotlin `HarnessRunner` 的原话就是这句）。写成 `TOOL_LOOP_LIMIT` 把整轮 Run 弄失败，
+    /// 用户已经看到的那段回答就会挂上一个红叉 —— 而那件事本来只是"这轮到此为止"。
+    pub max_tool_steps: i64,
+    /// 单个 Run 最多**工具调用次数**（出厂 48）——与轮数是两条线，见
+    /// [`crate::tools::budget_exceeded_note`] 里为什么措辞必须分开。
+    pub max_calls_per_run: i64,
 }
 
 impl Default for ToolPolicyConfig {
@@ -89,9 +100,16 @@ impl Default for ToolPolicyConfig {
             overrides: BTreeMap::new(),
             // 空串 = 没配 → `permission_mode()` 回落到 ask
             permission_mode: String::new(),
+            max_tool_steps: DEFAULT_MAX_TOOL_STEPS,
+            max_calls_per_run: DEFAULT_MAX_CALLS_PER_RUN,
         }
     }
 }
+
+/// 单次回复的工具轮数上限（`ToolPolicyConfig.DEFAULT_MAX_TOOL_STEPS`）。
+pub const DEFAULT_MAX_TOOL_STEPS: i64 = 16;
+/// 单个 Run 的工具调用次数上限（`ToolPolicyConfig.DEFAULT_MAX_CALLS_PER_RUN`）。
+pub const DEFAULT_MAX_CALLS_PER_RUN: i64 = 48;
 
 /// 生效的策略（白名单已展开成绝对路径）。
 #[derive(Debug, Clone)]
@@ -262,5 +280,21 @@ mod tests {
         // 覆盖值写坏了 → 回落出厂档（不是"随便给一个"）
         let broken = policy(r#"{"overrides":{"web_search":"nope"}}"#);
         assert_eq!(broken.access_for("web_search", "ASK"), ToolAccess::Ask);
+    }
+
+    /// 两条预算与 Kotlin 的出厂值一致，而且**老配置（没这两个键）走默认**。
+    #[test]
+    fn 工具预算的出厂值与_kotlin_一致() {
+        let p = policy("{}");
+        assert_eq!(p.config.max_tool_steps, 16);
+        assert_eq!(p.config.max_calls_per_run, 48);
+        // 老库里冻着的配置没有这两个键 → 必须落到出厂值，不是 0
+        let legacy = policy(r#"{"writeRoots":["comfyui"],"permissionMode":"full"}"#);
+        assert_eq!(legacy.config.max_tool_steps, DEFAULT_MAX_TOOL_STEPS);
+        assert_eq!(legacy.config.max_calls_per_run, DEFAULT_MAX_CALLS_PER_RUN);
+        // 用户自己调过的值要生效
+        let custom = policy(r#"{"maxToolSteps":8,"maxCallsPerRun":16}"#);
+        assert_eq!(custom.config.max_tool_steps, 8);
+        assert_eq!(custom.config.max_calls_per_run, 16);
     }
 }

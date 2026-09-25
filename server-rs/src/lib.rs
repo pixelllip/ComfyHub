@@ -42,5 +42,6 @@ pub mod skills;
 pub mod sync;
 pub mod system_prompt;
 pub mod thumbs;
+pub mod tools;
 pub mod upstream;
 pub mod write_routes;

@@ -87,11 +87,18 @@ fn app() -> axum::Router {
 /// 顺带把产物目录准备好：夹具里 `media_assets.id=100` 的 `stored_name` 是 `a.png`，
 /// 文件流端点要真的能在磁盘上找到它（内容已知，便于断言 Range 的字节）。
 fn state() -> comfyhub_server_rs::routes::AppState {
+    // ⚠ 唯一性靠"**纳秒 + 进程内计数器**"，只靠纳秒**撞过**：Windows 上
+    // `SystemTime` 的粒度约 100ns，并行用例里两个 `state()` 拿到同一个值，
+    // 于是两个用例共用同一个临时根 —— 一个写进去的长期记忆被另一个读到，
+    // 表现是"拒绝了的调用居然写进了记忆"这种莫名其妙的红（2026-09-25 实测）。
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("comfyhub-test-{}-{unique}", std::process::id()));
+    let root = std::env::temp_dir()
+        .join(format!("comfyhub-test-{}-{unique}-{seq}", std::process::id()));
     let media = root.join("media");
     std::fs::create_dir_all(&media).unwrap();
     std::fs::write(media.join("a.png"), b"0123456789abcdef").unwrap();
@@ -3250,12 +3257,25 @@ fn seed_auth(state: &comfyhub_server_rs::routes::AppState, allow_credentials: bo
     put_setting(state, "auth.pairing", &file.to_string());
 }
 
+/// 配对用例的**串行闸门**。
+///
+/// 为什么必须串行：`auth.rs` 里那份"每台设备刚刚活跃过"的 `seen` 是**进程级全局**
+/// （`sessions()`），而 `POST /api/auth/rotate` 会把它整张清掉（轮换 = 所有设备立刻 401，
+/// 语义上就该清）。两个 auth 用例并行时，一个 rotate 会把另一个刚记下的活跃抹掉 ——
+/// 表现是「最后活跃不必等 30 秒落库」偶发变红（2026-09-25 实测，跑单条永远绿）。
+/// 这不是产品缺陷，是**测试之间共用全局态**；所以把它们串起来，防线一条都不动。
+fn auth_test_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 /// **默认行为一个字节都不许变**：闸门关着时，非回环不带令牌也照样通。
 ///
 /// 这条是三条既有 e2e（capture / submit / ai-tools）与桌面 App 的代言人：
 /// 它们全都不带任何头，闸门一开就得全绿 —— 红了就说明默认被改了。
 #[tokio::test]
 async fn auth_gate_is_off_by_default_and_blocks_only_when_enabled() {
+    let _serial = auth_test_lock().lock().await;
     let state = state();
     // （一）没有 auth.pairing 这一行 = 今天的行为
     let (status, _) = send_as(router_for(state.clone()), "GET", "/api/prompts", None, "10.9.1.1", None).await;
@@ -3311,6 +3331,7 @@ async fn auth_gate_is_off_by_default_and_blocks_only_when_enabled() {
 /// 手机发起配对的完整一幕：举手 → 桌面看到 6 位码 → 兑码拿令牌 → 令牌真的能用。
 #[tokio::test]
 async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
+    let _serial = auth_test_lock().lock().await;
     let state = state();
     seed_auth(&state, false);
 
@@ -3508,6 +3529,7 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
 /// 6 位码只有 10^6 种：错 5 次就把这次配对**当场作废**（不是锁一会儿）。
 #[tokio::test]
 async fn auth_claim_voids_the_session_after_five_wrong_codes() {
+    let _serial = auth_test_lock().lock().await;
     let state = state();
     seed_auth(&state, false);
     let (_, body) = send_as(
@@ -3635,6 +3657,7 @@ async fn credentials_downlink_requires_an_authorized_device() {
 /// 开关与轮换：打开开关顺手发令牌；轮换 = 全局令牌换新 + **所有设备立刻失效**。
 #[tokio::test]
 async fn auth_switch_and_rotate_behave_as_documented() {
+    let _serial = auth_test_lock().lock().await;
     let state = state();
     // 打开开关（还没有任何状态）
     let (status, body) = send_as(
@@ -4629,7 +4652,572 @@ async fn executor_keeps_what_was_already_said_when_the_stream_breaks() {
     gateway.abort();
 }
 
-/// 上游**明确拒绝**（429）：错误码要归到 `RATE_LIMIT`，而不是笼统的"失败了"。
+/// 假网关的第二形态：**先要求调一个工具，拿到结果后再答**（工具往返两轮）。
+///
+/// `tool` 是模型要调的工具名；`arguments` 是它给的参数 JSON。
+/// 第二次请求（带上工具结果的那一轮）回一段正文。
+async fn fake_tool_gateway(tool: &'static str, arguments: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let mut round = 0;
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { break };
+            round += 1;
+            tokio::spawn(async move {
+                // 只读一次：Content-Length 那一批够我们判断"这是第几轮"（测试用的请求体很小）
+                let mut buf = vec![0u8; 256 * 1024];
+                let _ = socket.read(&mut buf).await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
+                    .await;
+                let frames: Vec<String> = if round == 1 {
+                    // 工具调用的分片是**分开来**的（第一片带 id/name，之后只有参数片段）
+                    vec![
+                        format!(
+                            r#"{{"id":"chatcmpl-tool","choices":[{{"delta":{{"tool_calls":[{{"index":0,"id":"call_1","function":{{"name":"{tool}","arguments":""}}}}]}}}}]}}"#
+                        ),
+                        format!(
+                            r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"function":{{"arguments":{}}}}}]}}}}]}}"#,
+                            serde_json::to_string(arguments).unwrap()
+                        ),
+                        r#"{"choices":[{"finish_reason":"tool_calls"}]}"#.to_string(),
+                        "[DONE]".to_string(),
+                    ]
+                } else {
+                    vec![
+                        r#"{"choices":[{"delta":{"content":"工具用完了"}}]}"#.to_string(),
+                        r#"{"choices":[{"finish_reason":"stop"}]}"#.to_string(),
+                        r#"{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":5}}"#.to_string(),
+                        "[DONE]".to_string(),
+                    ]
+                };
+                for frame in frames {
+                    let payload = if frame == "[DONE]" {
+                        "data: [DONE]\n\n".to_string()
+                    } else {
+                        format!("data: {frame}\n\n")
+                    };
+                    if socket.write_all(payload.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let _ = socket.flush().await;
+                }
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{addr}/v1"), handle)
+}
+
+/// 写工具权限策略（与 Kotlin `ToolPolicyConfig` 同一份 JSON）。
+fn set_policy(state: &comfyhub_server_rs::routes::AppState, json: serde_json::Value) {
+    state
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO app_settings (k, v) VALUES ('ai.tools.policy', ?1)
+                 ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                rusqlite::params![json.to_string()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// 脚本化假网关：**第 r 轮回 `script[r]` 里那几个工具调用**，脚本用完就回一段正文收口。
+///
+/// 为什么要它（而不是只有 `fake_tool_gateway`）：轮数上限、调用额度、一轮多个调用
+/// 这几条纪律都需要"模型**一直**要工具"或"一轮要两个"的形态 ——
+/// `fake_tool_gateway` 第二轮就给正文，永远走不到那些分支。
+async fn scripted_tool_gateway(
+    script: Vec<Vec<(&'static str, &'static str)>>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let mut round = 0usize;
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let calls = script.get(round).cloned();
+            round += 1;
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 256 * 1024];
+                let _ = socket.read(&mut buf).await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
+                    .await;
+                let frames: Vec<String> = match calls {
+                    Some(calls) if !calls.is_empty() => {
+                        let mut out = Vec::new();
+                        for (index, (tool, arguments)) in calls.iter().enumerate() {
+                            out.push(format!(
+                                r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":{index},"id":"call_{}","function":{{"name":"{tool}","arguments":""}}}}]}}}}]}}"#,
+                                index + 1
+                            ));
+                            out.push(format!(
+                                r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":{index},"function":{{"arguments":{}}}}}]}}}}]}}"#,
+                                serde_json::to_string(arguments).unwrap()
+                            ));
+                        }
+                        out.push(r#"{"choices":[{"finish_reason":"tool_calls"}]}"#.to_string());
+                        out.push("[DONE]".to_string());
+                        out
+                    }
+                    _ => vec![
+                        r#"{"choices":[{"delta":{"content":"收口了"}}]}"#.to_string(),
+                        r#"{"choices":[{"finish_reason":"stop"}]}"#.to_string(),
+                        "[DONE]".to_string(),
+                    ],
+                };
+                for frame in frames {
+                    let payload = if frame == "[DONE]" {
+                        "data: [DONE]\n\n".to_string()
+                    } else {
+                        format!("data: {frame}\n\n")
+                    };
+                    if socket.write_all(payload.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let _ = socket.flush().await;
+                }
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{addr}/v1"), handle)
+}
+
+/// 起一个 Run 并等它收尾（工具类用例的公共开头）。
+async fn start_run_and_wait(
+    state: &comfyhub_server_rs::routes::AppState,
+    text: &str,
+) -> (String, String, serde_json::Value) {
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": text, "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+    let run = wait_for_run(state, &run_id).await;
+    (run_id, assistant_id, run)
+}
+
+/// 助手那条消息的正文（历史视图里看到的东西）。
+fn assistant_text(state: &comfyhub_server_rs::routes::AppState, assistant_id: &str) -> String {
+    let messages = comfyhub_server_rs::conversations::list_messages(state, "conv-0").unwrap();
+    messages
+        .iter()
+        .find(|m| m.id == assistant_id)
+        .map(|m| m.text.clone())
+        .unwrap_or_default()
+}
+
+/// 工具往返：模型调 `list_skills`（ALLOW，不需审批）→ 执行 → 结果回填 → 模型收口。
+#[tokio::test]
+async fn executor_runs_a_tool_round_trip_and_orders_the_parts() {
+    let (base_url, gateway) = fake_tool_gateway("list_skills", "{}").await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "看看有哪些技能", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+
+    let run = wait_for_run(&state, &run_id).await;
+    assert_eq!(run["status"], "completed", "{run}");
+
+    // 有序块：**工具卡在前、工具结果在中、两轮正文按顺序**
+    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let assistant = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == assistant_id.as_str())
+        .unwrap();
+    assert_eq!(assistant["text"], "工具用完了", "最终正文是**第二轮**的：{assistant}");
+    let kinds: Vec<&str> = assistant["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, vec!["tool_call", "tool_result", "text"], "块顺序 = 事情发生的顺序");
+    assert_eq!(assistant["parts"][0]["jsonPayload"]["name"], "list_skills");
+    assert_eq!(assistant["parts"][0]["toolCallId"], "call_1");
+    // ⚠ 参数是**模型给的原文**（字符串），不是解析后的对象 —— Dart 侧 `map['arguments']`
+    // 读的就是它；存成对象会变成 `{query: x}` 这种既不是 JSON、也没法回填的东西。
+    assert_eq!(assistant["parts"][0]["jsonPayload"]["arguments"], "{}");
+    assert_eq!(assistant["parts"][1]["toolCallId"], "call_1");
+    // `list_skills` 的结果是 JSON 文本（含 count / skills）
+    assert!(
+        assistant["parts"][1]["text"].as_str().unwrap().contains("skills"),
+        "工具结果要落进块里（R6）：{assistant}"
+    );
+    // 结果块的 payload 键集合**就是历史回放的契约**（Kotlin `HarnessRunner:762`）：
+    // 少了 `ok`，一条成功的调用在重开 App 之后会被画成失败。
+    let result_payload = &assistant["parts"][1]["jsonPayload"];
+    assert_eq!(
+        keys(result_payload),
+        vec!["approval", "code", "elapsedMs", "name", "ok"],
+        "{result_payload}"
+    );
+    assert_eq!(result_payload["ok"], true);
+    assert_eq!(result_payload["approval"], "not_required");
+    assert_eq!(result_payload["name"], "list_skills");
+
+    // 事件：`tool.requested` **每一个调用都发**（只读工具带 `approval:not_required`）——
+    // 界面靠它给工具卡排位置（用户 bug⑥：流式期间"思考 → 工具 → 正文"的交错）
+    let types = event_types(&state, &run_id);
+    assert!(types.contains(&"tool.started".to_string()), "{types:?}");
+    assert!(types.contains(&"tool.completed".to_string()), "{types:?}");
+    let requested = types
+        .iter()
+        .position(|t| t == "tool.requested")
+        .unwrap_or_else(|| panic!("只读工具也要发 requested（带 not_required）：{types:?}"));
+    let started = types.iter().position(|t| t == "tool.started").unwrap();
+    assert!(requested < started, "先 requested 再 started：{types:?}");
+    assert_eq!(types.last().unwrap(), "run.completed");
+    assert_eq!(types.first().unwrap(), "run.started");
+
+    // `tool.completed` 的键集合也是契约的一部分（`preview` 是工具卡上的那一行小字）
+    let completed = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT payload_json FROM ai_run_events
+                  WHERE run_id = ?1 AND event_type = 'tool.completed' ORDER BY seq LIMIT 1",
+                rusqlite::params![run_id],
+                |row| row.get::<_, String>(0),
+            )?)
+        })
+        .unwrap();
+    let completed: serde_json::Value = serde_json::from_str(&completed).unwrap();
+    assert_eq!(keys(&completed), vec!["callId", "elapsedMs", "name", "preview", "result"]);
+
+    // 审计表里留了痕
+    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["name"], "list_skills");
+    assert_eq!(calls[0]["status"], "ok");
+    assert_eq!(calls[0]["approval"], "not_required");
+
+    gateway.abort();
+}
+
+/// **R8 的顺序**：需要审批的工具 —— **先落 pending 行**，再发 `tool.requested`，
+/// 然后用户在**任何一条路径**上都能点批准（跨端）。
+#[tokio::test]
+async fn approval_gate_opens_before_the_user_can_click() {
+    // 用 `remember`（只写本机那份长期记忆文件、**不出网**）：它出厂是 ALLOW，
+    // 这里用**逐工具覆盖**把它变成 ASK。这样这一条测的纯粹是闸门 ——
+    // 用 `civitai_search` 那种要出网的工具会让用例因为网络抖动而红。
+    let (base_url, gateway) = fake_tool_gateway("remember", r#"{"content":"用户偏好 4:3 画幅"}"#).await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+    set_policy(&state, serde_json::json!({ "permissionMode": "ask", "overrides": { "remember": "ask" } }));
+
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "记一下我的画幅偏好", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    let run_id = body["runId"].as_str().unwrap().to_string();
+
+    // ★ R8 的防线：**点批准的那一刻，库里必须已经有那一行 pending**
+    //
+    // 这里刻意**不等事件**：用户在界面上手有多快我们不知道，而"点下去落空、
+    // 只能干等超时"正是这条红线要防的事。所以判据是"立刻点也能被接受"。
+    let mut accepted = false;
+    for _ in 0..80 {
+        let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+        if calls.is_empty() || calls[0]["status"] != "pending" {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            continue;
+        }
+        // 库里有 pending 了 → **马上**点批准（这就是用户手快那条路径）
+        let (status, result) = send_json(
+            router_for(state.clone()),
+            "POST",
+            "/api/ai/tool-calls/call_1/approve",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        assert_eq!(result["approved"], true);
+        assert_eq!(result["callId"], "call_1");
+        accepted = result["accepted"].as_bool().unwrap_or(false);
+        break;
+    }
+    assert!(accepted, "手快那一下**必须**被接受（否则用户只能等超时）——R8");
+
+    // 再点一次：没有 pending 行可改了 → `accepted:false`（那不是错误）
+    let (status, again) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/tool-calls/call_1/approve",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again["accepted"], false);
+    assert_eq!(again["approved"], true, "重复点也是「批准」这个答复本身");
+
+    // Run 继续跑完（**这一轮真的执行了那个工具**）
+    let run = wait_for_run(&state, &run_id).await;
+    assert_eq!(run["status"], "completed", "{run}");
+
+    // 落库的行：`approval` 记用户的决定、`status` 记执行结果，**而且只有一行** ——
+    // 顺手把 `status` 也写成 `approved`（或让两列互相顶替）会让原地更新匹配不上，
+    // 同一次调用在库里变成两行，而 `/api/ai/pending` 又会把它当成"还在等人批"。
+    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    assert_eq!(calls.len(), 1, "同一次调用只许一行（两列分开记，不是插新行）：{calls:?}");
+    assert_eq!(calls[0]["approval"], "approved");
+    assert_eq!(calls[0]["status"], "ok");
+
+    // 事件：`tool.requested` 要在，而且排在 `tool.started` **之前**（先"请批准"，再"开始执行"）
+    let types = event_types(&state, &run_id);
+    let requested = types
+        .iter()
+        .position(|t| t == "tool.requested")
+        .unwrap_or_else(|| panic!("需要审批的工具必须发 tool.requested：{types:?}"));
+    let started = types
+        .iter()
+        .position(|t| t == "tool.started")
+        .unwrap_or_else(|| panic!("批准之后要发 tool.started：{types:?}"));
+    assert!(requested < started, "顺序反了（先暴露工具、再等批准）：{types:?}");
+    assert_eq!(types.last().unwrap(), "run.completed");
+
+    // 闸门类事件**立刻落库**（不是攒批）：另一台设备连上来时它必须已经在库里，
+    // 否则那边就是"白等一场"（M1 的纪律）。
+    let requested_seq = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT MIN(seq) FROM ai_run_events WHERE run_id = ?1 AND event_type = 'tool.requested'",
+                rusqlite::params![run_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )?)
+        })
+        .unwrap()
+        .expect("tool.requested 已经在库里");
+    assert!(requested_seq > 0);
+
+    // 工具**真的执行了**：本机那份长期记忆里出现了这一条
+    let memory = state.media_dir().parent().unwrap().join("ai").join("memory.md");
+    let text = std::fs::read_to_string(&memory).unwrap_or_default();
+    assert!(text.contains("用户偏好 4:3 画幅"), "批准后要真的执行：{text}");
+
+    gateway.abort();
+}
+
+/// **拒绝那条路**：点了「拒绝」之后 —— 工具**没有被执行**、库里那行记 `denied`/`denied`
+/// （一行，不重复）、Run 照样收口，而且模型收到的是"未执行"的如实说明（**不许假装跑过**）。
+#[tokio::test]
+async fn a_denied_call_is_recorded_and_never_runs() {
+    let (base_url, gateway) = fake_tool_gateway("remember", r#"{"content":"用户偏好 4:3 画幅"}"#).await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+    set_policy(&state, serde_json::json!({ "permissionMode": "ask", "overrides": { "remember": "ask" } }));
+
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "记一下我的画幅偏好", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    let run_id = body["runId"].as_str().unwrap().to_string();
+
+    let mut denied = false;
+    for _ in 0..80 {
+        let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+        if calls.is_empty() || calls[0]["status"] != "pending" {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            continue;
+        }
+        let (status, result) = send_json(
+            router_for(state.clone()),
+            "POST",
+            "/api/ai/tool-calls/call_1/deny",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        assert_eq!(result["approved"], false);
+        denied = result["accepted"].as_bool().unwrap_or(false);
+        break;
+    }
+    assert!(denied, "拒绝也必须能落到那一行上（R8）");
+
+    let run = wait_for_run(&state, &run_id).await;
+    assert_eq!(run["status"], "completed", "拒绝不代表整轮 Run 失败：{run}");
+
+    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    // 两列的分工（与 Kotlin `ToolRegistry.failure` 逐字一致）：`approval` 记用户的决定，
+    // `status` 记执行结果 —— 被拒绝的那次**没有执行**，所以状态是 `failed` 而不是 `ok`；
+    // 界面靠 `approval == "denied"` 把它画成「已拒绝」而不是「出错」。
+    assert_eq!(calls[0]["approval"], "denied");
+    assert_eq!(calls[0]["status"], "failed");
+    assert_eq!(calls[0]["error"], "用户没有批准这次工具调用（或等待超时）；不要重试同一件事，如实说明即可");
+
+    // **没有执行**：记忆文件里不该出现那一条
+    let memory = state.media_dir().parent().unwrap().join("ai").join("memory.md");
+    let text = std::fs::read_to_string(&memory).unwrap_or_default();
+    assert!(!text.contains("用户偏好 4:3 画幅"), "被拒绝的调用不许真的跑：{text}");
+
+    // 事件：`tool.failed` 带稳定码 `code`（界面按 `approval=denied` 画"已拒绝"），
+    // 而且**不发 tool.started**（拒绝的调用没开始过）
+    let types = event_types(&state, &run_id);
+    assert!(types.contains(&"tool.failed".to_string()), "{types:?}");
+    assert!(!types.contains(&"tool.started".to_string()), "拒绝的调用没开始过：{types:?}");
+    let denied_event = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT payload_json FROM ai_run_events
+                  WHERE run_id = ?1 AND event_type = 'tool.failed' ORDER BY seq LIMIT 1",
+                rusqlite::params![run_id],
+                |row| row.get::<_, String>(0),
+            )?)
+        })
+        .unwrap();
+    let denied_event: serde_json::Value = serde_json::from_str(&denied_event).unwrap();
+    assert_eq!(denied_event["code"], "APPROVAL_DENIED");
+    assert_eq!(denied_event["approval"], "denied");
+    assert_eq!(
+        keys(&denied_event),
+        vec!["approval", "callId", "code", "elapsedMs", "message", "name"]
+    );
+
+    gateway.abort();
+}
+
+/// **轮数上限**（`maxToolSteps`）：到顶那一轮**不执行**工具，而是把"为什么没继续"
+/// 如实补进正文 —— 而且这一轮 Run **照样正常收尾**（不是 `run.failed`）。
+///
+/// 判据来自 Kotlin `HarnessRunner:657`：`outOfSteps` 时那句
+/// 「已达到本次回复的工具轮数上限 N，这次要调用的工具没有执行；再发一条消息它就能接着做。」
+/// 写成"整轮失败"的后果是用户已经看到的那段回答挂上一个红叉，而那件事本来只是"这轮到此为止"。
+#[tokio::test]
+async fn tool_round_limit_wraps_up_instead_of_failing_the_run() {
+    // 模型**每一轮都要工具**（第二轮也会要到）→ 正好撞上限
+    let (base_url, gateway) =
+        scripted_tool_gateway(vec![vec![("list_skills", "{}")], vec![("list_skills", "{}")]]).await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+    set_policy(&state, serde_json::json!({ "maxToolSteps": 1, "maxCallsPerRun": 48 }));
+
+    let (run_id, assistant_id, run) = start_run_and_wait(&state, "看看技能").await;
+    assert_eq!(run["status"], "completed", "轮数到顶不是 Run 失败：{run}");
+
+    // 只执行了一次（第 2 轮那批被挡在闸门外），而且**如实说了**
+    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    assert_eq!(calls.len(), 1, "到顶那一轮不许执行：{calls:?}");
+    assert_eq!(calls[0]["status"], "ok");
+    let text = assistant_text(&state, &assistant_id);
+    assert!(text.contains("工具轮数上限 1"), "要如实说明：{text}");
+    assert!(text.contains("这次要调用的工具没有执行"), "{text}");
+    // 那句话要**同时**落进有序块（前端在 parts 非空时只渲染 parts）
+    let messages = comfyhub_server_rs::conversations::list_messages(&state, "conv-0").unwrap();
+    let parts = &messages.iter().find(|m| m.id == assistant_id).unwrap().parts;
+    assert!(
+        parts.iter().any(|p| p.r#type == "text" && p.text.as_deref().unwrap_or("").contains("工具轮数上限")),
+        "补的说明也要落块：{parts:?}"
+    );
+
+    gateway.abort();
+}
+
+/// **调用额度**（`maxCallsPerRun`）：一轮要两个工具、额度只剩一个 ——
+/// 第二个回 `TOOL_BUDGET_EXCEEDED`（**不是**整轮失败），第一个照常执行并落库。
+#[tokio::test]
+async fn tool_budget_exceeded_is_reported_per_call() {
+    let (base_url, gateway) = scripted_tool_gateway(vec![
+        vec![("list_skills", "{}"), ("list_skills", "{}")],
+        // 额度用尽之后**还在要工具** —— 这时才该把"额度用尽"如实补进正文
+        // （模型自己收口的话就不补了：Kotlin 同）
+        vec![("list_skills", "{}")],
+    ])
+    .await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+    set_policy(&state, serde_json::json!({ "maxToolSteps": 16, "maxCallsPerRun": 1 }));
+
+    let (run_id, assistant_id, run) = start_run_and_wait(&state, "两次技能").await;
+    assert_eq!(run["status"], "completed", "{run}");
+
+    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    assert_eq!(calls.len(), 2, "两次调用都要留痕：{calls:?}");
+    // ⚠ 按 `callId` 找，**不要**按下标：同一毫秒里的两行，`ORDER BY started_at, id`
+    // 的 tie-break 是随机 UUID（实测踩过：断言写在下标上，红得莫名其妙）
+    let first = calls.iter().find(|c| c["callId"] == "call_1").unwrap();
+    let second = calls.iter().find(|c| c["callId"] == "call_2").unwrap();
+    assert_eq!(first["status"], "ok", "额度之内的那次要真的执行：{first}");
+    assert_eq!(second["status"], "failed");
+    assert!(
+        second["error"].as_str().unwrap().contains("工具调用次数已达上限"),
+        "第二次要如实说清是额度拦住的：{}",
+        second["error"]
+    );
+    // 收口时也要把"额度用尽"补进正文（Kotlin `HarnessRunner:644`）
+    let text = assistant_text(&state, &assistant_id);
+    assert!(text.contains("工具调用次数已达上限（1 次）"), "{text}");
+    // 第 3 次那个调用**没有执行**（额度已经用尽）→ 库里只有两行
+    assert_eq!(
+        comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap().len(),
+        2,
+        "额度用尽之后不许再执行"
+    );
+
+    gateway.abort();
+}
+
+/// 模型幻觉出一个清单里没有的工具（或这一批还没搬的）：如实回 `TOOL_NOT_FOUND`，
+/// **不许静默**、也不许假装跑过 —— 记录照样落库，模型拿到一句能改变做法的话。
+#[tokio::test]
+async fn unknown_tool_is_reported_as_tool_not_found() {
+    let (base_url, gateway) =
+        scripted_tool_gateway(vec![vec![("read_file", r#"{"path":"a.png"}"#)]]).await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+
+    let (run_id, _, run) = start_run_and_wait(&state, "读个文件").await;
+    assert_eq!(run["status"], "completed", "{run}");
+
+    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0]["status"], "failed");
+    assert_eq!(calls[0]["approval"], "denied");
+    assert!(calls[0]["error"].as_str().unwrap().contains("没有名为「read_file」的工具"));
+
+    // 失败那次**不进 tool.started**（没有开始过），但要有一条 `tool.failed`
+    let types = event_types(&state, &run_id);
+    assert!(types.contains(&"tool.failed".to_string()), "{types:?}");
+    assert!(!types.contains(&"tool.started".to_string()), "{types:?}");
+
+    gateway.abort();
+}
+
+/// 上游明确拒绝（429）：错误码要归到 `RATE_LIMIT`，而不是笼统的"失败了"。
 #[tokio::test]
 async fn executor_reports_the_stable_code_for_an_upstream_rejection() {
     let (base_url, gateway) = fake_gateway().await;

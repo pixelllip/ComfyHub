@@ -208,6 +208,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/runs/{id}", get(get_run))
         .route("/api/ai/runs/{id}/events", get(run_events))
         .route("/api/ai/runs/{id}/cancel", axum::routing::post(cancel_run))
+        // 工具审批（P4 第 31 步，R8）：界面上的「批准 / 拒绝」两个按钮。
+        // ⚠ 顺序要紧：执行器**先落 pending 行再发 `tool.requested`**，
+        // 所以用户手快也点得到（否则那一次点击落空，只能等超时）。
+        .route("/api/ai/tool-calls/{callId}/approve", axum::routing::post(approve_tool_call))
+        .route("/api/ai/tool-calls/{callId}/deny", axum::routing::post(deny_tool_call))
         // run-kit 工件（P4 第 22 步）：手机 harness 的**全部规则类输入**（R12/R13 的第一次重建）
         .route("/api/ai/run-kit", get(ai_run_kit))
         .route("/api/ai/run-kit/status", get(ai_run_kit_status))
@@ -682,6 +687,32 @@ async fn cancel_run(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<crate::run_lifecycle::CancelResult>, ApiError> {
     Ok(Json(crate::run_lifecycle::cancel(&state, &id)?))
+}
+
+/// `POST /api/ai/tool-calls/{callId}/approve|deny` 的响应（Kotlin `ToolApprovalResult`）。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolApprovalResult {
+    call_id: String,
+    approved: bool,
+    /// **确实改到了一行 pending**。手快先点 / 已经超时收尾 → `false`（那不是错误）
+    accepted: bool,
+}
+
+async fn approve_tool_call(
+    State(state): State<AppState>,
+    axum::extract::Path(call_id): axum::extract::Path<String>,
+) -> Result<Json<ToolApprovalResult>, ApiError> {
+    let accepted = crate::runs::resolve_approval(&state, &call_id, true)?;
+    Ok(Json(ToolApprovalResult { call_id, approved: true, accepted }))
+}
+
+async fn deny_tool_call(
+    State(state): State<AppState>,
+    axum::extract::Path(call_id): axum::extract::Path<String>,
+) -> Result<Json<ToolApprovalResult>, ApiError> {
+    let accepted = crate::runs::resolve_approval(&state, &call_id, false)?;
+    Ok(Json(ToolApprovalResult { call_id, approved: false, accepted }))
 }
 
 // ---------------------------------------------------------------------------

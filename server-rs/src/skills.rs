@@ -21,12 +21,15 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// 进系统提示的一个 skill（只用得到这三个字段）。
+/// 进系统提示的一个 skill（提示词只用得到前三个字段）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillEntry {
     pub name: String,
     pub description: String,
     pub when_to_use: Option<String>,
+    /// frontmatter 里的 `version`（可选）—— `load_skill` 把它写进
+    /// `<skill_content name="…" version="…">`，与 Kotlin 同形。
+    pub version: Option<String>,
 }
 
 impl SkillEntry {
@@ -253,6 +256,7 @@ fn parse_one(file: &Path, fallback_name: &str, source: &'static str) -> Option<P
             name,
             description,
             when_to_use: meta.get("whentouse").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            version: meta.get("version").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         },
         valid,
         source,
@@ -373,6 +377,109 @@ pub fn snapshot(state: &crate::routes::AppState) -> Result<serde_json::Value, cr
         })
         .collect();
     Ok(serde_json::json!({ "count": skills.len(), "skills": skills }))
+}
+
+/// 一个 skill 的**正文文件位置**与来源（`load_skill` 要读它）。
+///
+/// 返回 `(路径, source)`。与 [`catalog`] 走**同一次扫描**：分开扫两次会出现
+/// "目录里有它、load 说找不到"这种自相矛盾。
+pub fn file_of(builtin_root: &Path, user_root: &Path, name: &str) -> Option<(PathBuf, &'static str)> {
+    let trimmed = name.trim();
+    // 走 `scan_root` 而不是 `scan`：要连**不合法**的那条也找得到，
+    // 这样 `load_skill` 才能区分"没有这个 skill"与"有这个 skill 但它不合法"
+    for (root, source) in [(user_root, "user"), (builtin_root, "builtin")] {
+        // 目录形态优先（bundle 胜出，与 `scan_root` 同一条规则）
+        let bundle = root.join(trimmed).join("SKILL.md");
+        if bundle.is_file() {
+            return Some((bundle, source));
+        }
+        let lower = root.join(trimmed).join("skill.md");
+        if lower.is_file() {
+            return Some((lower, source));
+        }
+        let flat = root.join(format!("{trimmed}.md"));
+        if flat.is_file() {
+            return Some((flat, source));
+        }
+    }
+    None
+}
+
+/// 一个 skill 的正文（**去掉 frontmatter**）—— `load_skill` 返回给模型的就是它。
+pub struct SkillBody {
+    pub entry: SkillEntry,
+    pub body: String,
+    /// 校验通过没有（`valid=false` 的不许加载 —— 与 `catalog` 用的是同一个 `parse_one`）
+    pub valid: bool,
+    /// 文件原文 sha256 的前 16 位（`load_skill` 的结构化结果里要带上它）
+    pub digest: String,
+}
+
+/// 读一个 skill 的正文。
+///
+/// `None` = 没有这个名字的 skill。**不缓存**：AI 刚注册完，下一次 `load_skill` 就要读到新的。
+pub fn read_body(builtin_root: &Path, user_root: &Path, name: &str) -> Option<SkillBody> {
+    let (file, _) = file_of(builtin_root, user_root, name)?;
+    let raw = std::fs::read_to_string(&file).ok()?;
+    let (_, body) = parse_front_matter(&raw);
+    let fallback = file
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| name.trim().to_string());
+    let parsed = parse_one(&file, &fallback, "user")?;
+    Some(SkillBody {
+        entry: parsed.entry,
+        body: body.trim().to_string(),
+        valid: parsed.valid,
+        digest: parsed.digest,
+    })
+}
+
+/// 扫全量（**含非法项**）—— 给 `list_skills` 工具用。
+///
+/// 为什么不复用 [`catalog`]：那个**刻意**只给能用的（它进系统提示），
+/// 而 `list_skills` 要的是"装了但有问题"的那些 —— 静默过滤掉正是 AIH-038 要防的事
+/// （用户看到"装了个 skill 却没生效"而没有任何线索）。
+pub fn scan_all(builtin_root: &Path, user_root: &Path) -> Vec<ScannedSkill> {
+    scan(builtin_root, user_root)
+        .into_iter()
+        .map(|s| {
+            // 先算错误再搬字段（`entry.when_to_use` 是 move，之后不能再借 `s`）
+            let error = if s.valid { String::new() } else { validation_error(&s) };
+            ScannedSkill {
+                name: s.entry.name,
+                description: s.entry.description,
+                when_to_use: s.entry.when_to_use,
+                source: s.source,
+                valid: s.valid,
+                error,
+            }
+        })
+        .collect()
+}
+
+/// 一个 skill 的全量信息（`list_skills` 的返回项）。
+pub struct ScannedSkill {
+    pub name: String,
+    pub description: String,
+    pub when_to_use: Option<String>,
+    pub source: &'static str,
+    pub valid: bool,
+    /// 非空 = 不合格，内容是给人看的原因
+    pub error: String,
+}
+
+/// 不合格的原因（与 Kotlin `parseOne` 里那几条 `fail(...)` 一一对应）。
+fn validation_error(skill: &ParsedSkill) -> String {
+    let name = &skill.entry.name;
+    if !valid_name(name) {
+        return "name 必须是 kebab-case（小写字母 / 数字 / 连字符，≤64）".to_string();
+    }
+    if skill.entry.description.trim().is_empty() {
+        return "缺少 description".to_string();
+    }
+    "正文为空或超过 256KB".to_string()
 }
 
 /// `Files.isDirectory(path, NOFOLLOW_LINKS)`：**不看符号链接指向什么**。

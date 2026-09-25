@@ -617,6 +617,93 @@ pub fn list_tool_calls(state: &AppState, run_id: &str) -> Result<Vec<Value>, Api
     })
 }
 
+/// 一次审批等待的**当前状态**（桌面执行器的审批闸门轮询它）。
+///
+/// 为什么闸门读库而不是读内存：这个仓库的既有纪律是
+/// **"内存里活着但库里没有"这种状态不许存在**（M1：`track()` 当场落一行 pending）。
+/// 读库顺带买到三件事：后端重启后审批不丢、另一台设备（手机 / 第二个窗口）
+/// 点的批准能生效、以及**不需要在进程里维护第二个真源**。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApprovalState {
+    /// 还在等（没人点）
+    Pending,
+    /// 批准了
+    Approved,
+    /// 拒绝了（含超时 / 取消 —— 与 Kotlin 的"超时与取消都算拒绝"同语义）
+    Denied,
+}
+
+/// 查一次调用的审批状态。找不到那一行 → `None`（调用方按"拒绝"处理，**不假设通过**）。
+///
+/// ⚠ **先看 `approval` 再看 `status`**：批准之后那一行的 `status` **仍然是 `pending`**
+/// （它要等 invoke 返回才落终态，见 [`resolve_approval`]）。反过来判会把"已经批过"读成
+/// "还在等"——而那个分支的后果是**永远等下去**，直到 5 分钟超时按拒绝处理，
+/// 用户明明点了批准却什么都没发生。
+pub fn approval_state(state: &AppState, call_id: &str) -> Result<Option<ApprovalState>, ApiError> {
+    let row: Option<(String, String)> = state.with(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT approval, status FROM ai_tool_calls
+              WHERE provider_call_id = ?1
+              ORDER BY started_at DESC, id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(rusqlite::params![call_id], |row| {
+            Ok((row.get::<_, Option<String>>(0)?.unwrap_or_default(), row.get::<_, Option<String>>(1)?.unwrap_or_default()))
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    })?;
+    let Some((approval, status)) = row else { return Ok(None) };
+    Ok(Some(match approval.as_str() {
+        "approved" => ApprovalState::Approved,
+        // `not_required` 的行不该出现在闸门里；真出现了按批准处理（**不是**按拒绝 ——
+        // 那会把一个本来不需要审批的调用拦下来，而它已经在库里留了痕）
+        "not_required" => ApprovalState::Approved,
+        "denied" => ApprovalState::Denied,
+        "pending" => ApprovalState::Pending,
+        // 认不出来的 `approval`：按 `status` 判。已经终态的一律按拒绝
+        // （宁可拦下来，也不能让一个来历不明的关系跑起来）
+        _ => match status.as_str() {
+            "pending" => ApprovalState::Pending,
+            _ => ApprovalState::Denied,
+        },
+    }))
+}
+
+/// 用户点了「批准」/「拒绝」（`POST /api/ai/tool-calls/{callId}/approve|deny`）。
+///
+/// 返回 `true` 表示**确实改到了一行 pending**（界面据此回答 `accepted`：
+/// 手快先点了、或者这个调用已经超时收尾了，都是 `accepted=false` —— 那不是错误）。
+///
+/// # 只改 `approval`，**不动 `status`**
+///
+/// 两列的分工与 Kotlin 逐字一致（`AiRunRepo.insertPendingToolCall` / `resolvePendingToolCall`）：
+/// **`approval` 记用户的决定，`status` 记这次调用最终跑成什么样**。
+/// 批准之后 `status` 仍是 `pending`（正在执行），invoke 返回时由
+/// [`record_tool_call`] 在**同一行**上落成 `ok` / `failed` / `denied`。
+///
+/// ⚠ 顺手把 `status` 也写成 `approved` 看起来更"整齐"，实际会**掰断那条原地更新的路**：
+/// [`resolve_pending_tool_call`] 认的是 `status = 'pending'`，改完之后它再也匹配不到那一行，
+/// 于是**同一次调用在库里变成两行**（一行 approved、一行 ok），
+/// 而 `/api/ai/pending` 又会把它当成"还在等人批"。
+///
+/// `WHERE approval = 'pending'` 那一句是**"决定只能下一次"**（Kotlin 的内存闸门同语义：
+/// `resolve` 完那一条就没了）：重复点返回 `false`，而且**没人能把已经批过的调用改成拒绝**
+/// —— 否则运行中的那种"我点错了、快撤"会撤回一个已经在跑的命令。
+pub fn resolve_approval(state: &AppState, call_id: &str, approved: bool) -> Result<bool, ApiError> {
+    let call_id = call_id.to_string();
+    state.write(move |tx| {
+        let n = tx.execute(
+            "UPDATE ai_tool_calls
+                SET approval = ?1
+              WHERE provider_call_id = ?2 AND status = 'pending' AND approval = 'pending'",
+            rusqlite::params![if approved { "approved" } else { "denied" }, call_id],
+        )?;
+        Ok(n > 0)
+    })
+}
+
 /// `payload_json` 坏掉时**当空对象**，绝不连累整个回放（Kotlin 同）。
 fn parse_payload(raw: Option<&str>) -> Value {
     let Some(text) = raw.map(str::trim).filter(|t| !t.is_empty()) else {
