@@ -267,10 +267,10 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 | R2 BEGIN IMMEDIATE | 无 | ✅ **已补（M3）**：`SqlSession.transaction` 唯一实现 + 回滚用例 |
 | R3 upsert 不产假 delete | 无 | ✅ **已补（M3）**：手机侧**不建账本**（契约 §3.1），且 `appendPart` 用 `ON CONFLICT DO UPDATE`；桌面侧 P2 已有用例 |
 | R4 seq 不复用 | 无 | ✅ 桌面 P2 已补；手机侧不建 `_sync_log`（无此风险），事件 seq 由 `RunEventBus` 单调发号并有用例 |
-| R5 重连续传 | `e2e-ai-tools-test.ps1` 部分覆盖 | ✅ **手机侧已补（M3）**：`RunEventBusTest`（截断只丢最老、seq 不回退）+ `HarnessStoreTest`（裁剪留尾部）+ 事件批量写 |
-| R6 失败不丢内容 | `e2e-ai-tools-test.ps1` 第 13 幕（15 项）+ `ai_retry_keep_content_test.dart` | ✅ **手机侧已补（M3）**：`HarnessRunnerTest` 三例（429 半截 / 首字被压住 / 取消）+ `HarnessStoreTest` 两例 |
+| R5 重连续传 | `e2e-ai-tools-test.ps1` 部分覆盖 | ✅ **手机侧已补（M3）**：`RunEventBusTest`（截断只丢最老、seq 不回退）+ `HarnessStoreTest`（裁剪留尾部）+ 事件批量写。✅ **Rust 侧已补（P4 第 26/27 步）**：`events` 环形缓冲 2000 与库里 4000 **刻意不同数**、`prune_events` 留尾部、`resume_from` 把号接上 `max(seq)+1` |
+| R6 失败不丢内容 | `e2e-ai-tools-test.ps1` 第 13 幕（15 项）+ `ai_retry_keep_content_test.dart` | ✅ **手机侧已补（M3）**：`HarnessRunnerTest` 三例（429 半截 / 首字被压住 / 取消）+ `HarnessStoreTest` 两例。✅ **Rust 侧已补（P4 第 30 步）**：执行器三条收尾路都 `sink_now`（失败/取消也把已说出去的话落块）+ `middle-cut-stream` 用例 |
 | R7 注入防线 | `SystemPromptNsfwTest`、`ToolRegistryTest` | ✅ **手机侧已补（M3）**：横幅文案只做 `{kind}`/`{query}` 替换（`MobileToolsTest` 断言前缀来自 kit） |
-| R8 审批顺序 | `AskGateTest` | ✅ 桌面（M1）+ **手机侧（M3）**：`MobileAskGate` 先 open 再发事件，`MobileToolsTest` 有两例（手快先答不落空 / 没人答如实报） |
+| R8 审批顺序 | `AskGateTest` | ✅ 桌面（M1）+ **手机侧（M3）**：`MobileAskGate` 先 open 再发事件，`MobileToolsTest` 有两例（手快先答不落空 / 没人答如实报）。✅ **Rust 侧已补（P4 第 31 步）**：`approval_gate_opens_before_the_user_can_click`（**不等事件**，库里有 pending 就立刻点，必须 `accepted=true`）+ `a_denied_call_is_recorded_and_never_runs`（拒绝**不许执行**、只许一行、`approval=denied` + `status=failed`）|
 | R9 附件三层准入 | `e2e-ai-tools-test.ps1` 第 9 幕 | ✅ **手机侧已补（M3）**：`InlineBudgetTest` + 适配器未实现模态直接抛（`ProtocolAdapterTest`） |
 | R10 提交链路 | `e2e-submit-test.ps1`、`e2e-capture-test.ps1` | Rust 侧重建（P4，**未动**） |
 | R11 不复用提交名字 | 无 | ✅ **已补（M3）**：手机侧工具名 `comfy_queue_submit`，`MobileToolsTest` 断言不返回 `mediaIds`、不说"已提交" |
