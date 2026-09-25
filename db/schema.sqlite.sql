@@ -397,6 +397,63 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_character_cards_norm ON character_cards(nor
 CREATE INDEX IF NOT EXISTS idx_character_cards_char_tag ON character_cards(character_tag);
 CREATE INDEX IF NOT EXISTS idx_character_cards_created  ON character_cards(created_at);
 
+-- ---------------------------------------------------------------------
+-- 工作流配方（W2，2026-09-26）：把一份**具体**工作流归纳成
+-- 「任务 + 骨架指纹 + 模型槽位 + 参数旋钮」，让"新模型该接哪条骨架"不必每次重新推。
+-- 设计与判据在 docs/workflow-recipe-design.md，解析真源是 WorkflowRecipe.analyze（纯函数）。
+--
+-- `source_ref` 是幂等 upsert 的键，三种来源各有前缀：
+--   `file:<sha256>`（本机工作流文件，与 comfy_load_workflow 的 run_key 同一把钥匙）、
+--   `prompt:<id>`（库里已有 API 图的提示词）、`graph:<sha256>`（直接给的节点图）。
+-- `skeleton_hash` 是**泛用**的键：同一族工作流（换底模 / 换节点编号 / 换参数）指纹相同，
+--   `comfy_list_recipes` 按它分组。配方规则一改指纹就该变 —— 规则版本进哈希（WorkflowRecipe.VERSION）。
+-- `complete` = 这张图**没有**转换缺口（没被摘掉节点、没有悬空输入）。
+--   为 0 的配方照样保留，但读的时候必须如实说"骨架缺件"，别拿它当完整骨架用
+--   （现场：当前跑着的实例里没有 Krea2 那几个自定义节点，转换会把整条编辑链摘掉而不报错）。
+-- `prompt_id` 指回 `prompts`：**ON DELETE SET NULL** —— 用户删掉那条提示词，配方还在
+--   （配方是"这一族长什么样"的知识，不依赖某一条具体记录）。
+--
+-- ⚠ **不进同步范围**（总纲 §3.3 的白名单里没有它）：手机提交走 `comfy_queue_submit`（R11），
+--   拿到一份它自己跑不了的配方只会误导模型。要同步时与 character_cards 一样，
+--   schema 的 `_sync_log` 触发器、`server-rs/src/sync.rs` 的 `SYNCED` / `pk_kind`、
+--   `MobileSchema.kt` 的两份清单、两份契约文档**要一起改**。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS workflow_recipes (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  name            TEXT    NOT NULL,          -- 给用户/模型看的名字（文件名或提示词标题）
+  task            TEXT    NOT NULL,          -- t2i / i2i / edit / inpaint / upscale / video / audio / unknown
+  skeleton_hash   TEXT    NOT NULL,          -- 骨架指纹（同一族 = 同一个值）
+  recipe_version  INTEGER NOT NULL DEFAULT 1,-- WorkflowRecipe.VERSION（解析规则版本）
+  source_kind     TEXT    NOT NULL DEFAULT 'file',  -- file / prompt / graph
+  source_ref      TEXT    NULL,              -- 幂等键（见文件头三种前缀）
+  source_path     TEXT    NULL,              -- 本机文件路径（只有 file 来源有）
+  prompt_id       INTEGER NULL,              -- 能提交的那条提示词（有就是指向 prompts.id）
+  node_count      INTEGER NOT NULL DEFAULT 0,
+  class_count     INTEGER NOT NULL DEFAULT 0,
+  image_inputs    INTEGER NOT NULL DEFAULT 0,
+  has_mask        INTEGER NOT NULL DEFAULT 0 CHECK (has_mask IN (0,1)),
+  complete        INTEGER NOT NULL DEFAULT 1 CHECK (complete IN (0,1)),
+  slots_json      TEXT    NOT NULL DEFAULT '[]',  -- 模型槽位（角色 / 覆盖键 / 文件名）
+  knobs_json      TEXT    NOT NULL DEFAULT '[]',  -- 可覆盖的旋钮
+  classes_json    TEXT    NOT NULL DEFAULT '[]',  -- 执行相关节点类（带重数）
+  edges_json      TEXT    NOT NULL DEFAULT '[]',  -- 类级连线（进指纹）
+  outputs_json    TEXT    NOT NULL DEFAULT '[]',  -- 输出节点
+  warnings_json   TEXT    NOT NULL DEFAULT '[]',
+  gaps_json       TEXT    NOT NULL DEFAULT '[]',  -- 转换缺口（摘掉的节点类 / 悬空输入）
+  notes           TEXT    NULL,
+  created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE SET NULL
+);
+-- 幂等 upsert 的键：同一份来源 = 同一条配方（`ON CONFLICT(source_ref) DO UPDATE`，R3 不许用 OR REPLACE）。
+--   部分索引（`WHERE source_ref IS NOT NULL`）：SQLite 的唯一索引允许多个 NULL，
+--   但把"没有来源"的那些也纳进来只会白白多一个索引项。
+CREATE UNIQUE INDEX IF NOT EXISTS uk_workflow_recipes_source ON workflow_recipes(source_ref)
+  WHERE source_ref IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_workflow_recipes_skeleton ON workflow_recipes(skeleton_hash);
+CREATE INDEX IF NOT EXISTS idx_workflow_recipes_task     ON workflow_recipes(task);
+CREATE INDEX IF NOT EXISTS idx_workflow_recipes_created  ON workflow_recipes(created_at);
+
 -- =====================================================================
 --  同步账本（🔒 sqlite-schema-contract.md §3）—— 桌面是唯一真源
 -- =====================================================================
@@ -479,11 +536,18 @@ BEGIN
   UPDATE character_cards SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id;
 END;
 
+CREATE TRIGGER IF NOT EXISTS trg_workflow_recipes_touch AFTER UPDATE ON workflow_recipes FOR EACH ROW
+WHEN NEW.updated_at IS OLD.updated_at
+BEGIN
+  UPDATE workflow_recipes SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id;
+END;
+
 -- ---------------------------------------------------------------------
 -- _sync_log 触发器（只挂**同步范围内**的表，🔒 sqlite-schema-contract.md §6）
 --   ⚠ 同步范围的真源就是这一节：`/api/sync/{bootstrap,changes}` 也从它派生。
 --   不同步：ai_run_events（62 万行调试日志）、ai_providers / ai_models /
---   app_settings（含凭据引用与令牌明文）、ai_runs / ai_tool_calls / ai_questions。
+--   app_settings（含凭据引用与令牌明文）、ai_runs / ai_tool_calls / ai_questions /
+--   character_cards / workflow_recipes（桌面侧的知识，手机提交走 comfy_queue_submit）。
 --
 --   pk 用的都是**各表自己的稳定标识**（INTEGER 主键转文本；两处复合主键用
 --   `a:b` 拼，块用 `message#ordinal`），手机侧按同一约定删本地投影行。

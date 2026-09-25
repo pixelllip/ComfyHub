@@ -154,7 +154,7 @@
 | 步 | 内容 | 验收判据 | 依赖 |
 | --- | --- | --- | --- |
 | **W1** ✅ | `WorkflowRecipe` 纯解析核心：任务分类 + 骨架指纹 + 槽位（含 `roleGuessed`）+ 旋钮 + 输出节点 + `render()` / `toJson()` —— **已落地（`WorkflowRecipe.kt` + 11 例单测）** | 单测覆盖四种任务的**真形状夹具**（t2i / i2i+遮罩 / edit / video）；骨架指纹对"同形不同 id / 不同文件名 / 界面节点"稳定、对"多一个结构节点 / 多一个 LoRA"敏感；仓库里两份真 inpaint 工作流能归纳出槽位与遮罩（`gradle test` 655 例全绿） | 无 |
-| **W2** | `workflow_recipes` 表 + 仓储 + `GET/POST/DELETE /api/ai/workflow-recipes` | 幂等（同一份文件学两次只有一行）；`ON DELETE SET NULL` 保住配方；**不进同步白名单**（与角色卡同理，理由写明）；配方上带 `complete` 与 `gaps`（见 §5.1 ③） | W1 |
+| **W2** ✅ | `workflow_recipes` 表 + 仓储 + `GET/POST/DELETE /api/ai/workflow-recipes` —— **已落地（2026-09-26）**：幂等靠 `source_ref`（`file:<sha>` / `prompt:<id>` / `graph:<sha>`，与 `comfy_load_workflow` 同一把钥匙）；`prompt_id` 是 `ON DELETE SET NULL`；**不进同步白名单**；`complete` 与 `gaps` 如实记"骨架缺件" | 单测 9 例（幂等 / 整行更新 / 删提示词后配方还在 / 不进账本 / complete 过滤 / 详情还原出可渲染的配方 / 报错不截断 / 真文件学一遍再读回）；**真库副本 + 真 ComfyUI 抽查**（见总纲 §12） | W1 |
 | **W3** | 三条工具 `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + 接线 | `ToolRegistryTest` 补清单/权限/分类；`comfy_learn_workflow` **默认拒学"被摘过节点的图"**（§5.1 ③）、把转换警告带进配方；`comfy_bind_recipe` 对"缺模型"必须给 `missing` 而不是编一个名字 | W2 |
 | **W4** | 系统提示 v31 第 20 条 + skill `workflow-recipe` + e2e 脚本 + 文档登记 | `SystemPromptNsfwTest` 盯第 20 条；e2e 对着**真工作流文件**跑一遍"学 → 列 → 绑" | W3 |
 | **W5**（下一项，未做） | **骨架改写**：unet+clip+vae ↔ 整包 checkpoint 的节点增删与重连线（要 `/object_info` 的输出槽位 + 重连线后过 `comfy_submit` 的预检） | 真 ComfyUI 上跑通一次"整包 checkpoint 接进编辑骨架" | W3 |

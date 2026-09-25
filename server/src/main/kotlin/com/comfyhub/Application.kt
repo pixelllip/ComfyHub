@@ -637,6 +637,7 @@ fun Application.module(ctx: AppContext) {
             promptRoutes()
             tagRoutes()
             characterCardRoutes()
+            workflowRecipeRoutes(ctx, submitter, capture)
             mediaRoutes(ctx)
             captureRoutes(ctx, capture, submitter)
             aiRoutes(credentials, runner, runBus, skills, memory, toolRegistry, approvals, ctx.cfg.projectRoot, aiAttachments, capabilitiesDir, asks)

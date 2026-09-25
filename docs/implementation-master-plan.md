@@ -1831,7 +1831,24 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | 提交 | 内容 |
 | --- | --- |
 | `b12ee5d` | **工作流配方 1/5：设计**（`docs/workflow-recipe-design.md`：骨架/槽位/档位三层 + 学习闭环六步 + 新模型的三种情形 + W1~W5） |
-| （本行随下一项落地替换） | **2/5：W1 解析核心**（`WorkflowRecipe.kt` + 11 例单测） |
+| `0b4177b` | **工作流配方 2/5：W1 解析核心**（`WorkflowRecipe.kt`：任务七档 + 骨架指纹 + 槽位 + 旋钮 + 输出 + `render`；11 例单测；真机 16 份文件抽查抓出三件事） |
+| （本行随下一项落地替换） | **3/5：W2 配方表 + 仓储 + 四条端点**（`workflow_recipes` 表 + `WorkflowRecipeRepo` + `WorkflowRecipeLearner` + `/api/ai/workflow-recipes`） |
+
+**W2 的真机验收（真库副本 + 真 ComfyUI，2026-09-26）**：
+- 临时用 `<根>\.db\comfyhub.db` 的副本起后端（8095），**没动真库**；DDL 迁移在真库副本上自动建表
+  （`user_version` 仍是 1、`workflow_recipes` 只有 1 个 `trg_*_touch` 触发器、`_sync_log` 里 0 行）。
+- `POST /api/ai/workflow-recipes {path: …comfyui\workflows\comfyhub_inpaint_krea2.json}` →
+  `recipeId=1 / task=inpaint / complete=true / 3 个槽位 / 26 个旋钮`，`render` 正文直接能照抄 overrides。
+- `POST {path: …\user\default\workflows\krea2ImageEditingAnd_v10.json}`（用户真实那份 UI 格式）→
+  **400 `UNSUPPORTED_NODES`**，逐条列出摘掉的 4 个类（`TextEncodeKrea2OstrisEdit`×2 /
+  `Krea2OstrisEditModelPatch` / `CR Simple Image Compare`）与 4 条悬空输入 ——
+  因为**当前跑着的实例里没有那几个 Krea2 自定义节点**（`/object_info` 里没有）。
+  这正是"不许学一条缺了链的骨架"那条纪律的现场版。
+- 同一条带 `tolerateUnsupported=true` → 照样学，但 `complete=false` + 8 条缺口；
+  `task=edit`（判据落在核心节点 `FluxKontextMultiReferenceLatentMethod` 上，没被缺件带跑）。
+- 错误分支：`promptId=999999` → `NO_API_GRAPH`、`README.md` → `NOT_A_WORKFLOW`、
+  空 body → `INVALID_ARGUMENT`、白名单外的路径 → **400 + 人话**（原来会落成 500 + `ToolFailure`，已修）。
+- `GET`（task/q/skeleton 过滤）、`GET /{id}`（带 `render`）、`DELETE` 全部走通。
 
 **这一轮还没做的（诚实清单）**：
 
