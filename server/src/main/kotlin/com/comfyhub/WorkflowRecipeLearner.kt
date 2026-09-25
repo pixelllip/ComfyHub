@@ -70,6 +70,22 @@ object WorkflowRecipeLearner {
         val findPromptIdByRunKey: (String) -> Long?,
     )
 
+    /**
+     * 一次学习请求（工具 / 端点把参数摊平到这里）。
+     *
+     * [path] 是**已经过 `ToolPolicy.resolveRead` 的绝对路径字符串**（准入在执行方那一步做，
+     * 这一层不碰策略、也不读环境变量）。
+     */
+    data class LearnArgs(
+        val path: String? = null,
+        val promptId: Long? = null,
+        val graph: JsonObject? = null,
+        val name: String? = null,
+        val tolerateUnsupported: Boolean = false,
+        val emulateFrontend: Boolean = true,
+        val notes: String? = null,
+    )
+
     /** 学习结果（还没落库）。 */
     data class Learned(
         val recipe: WorkflowRecipe.Recipe,
@@ -111,8 +127,7 @@ object WorkflowRecipeLearner {
     // -----------------------------------------------------------------------
 
     /** 从本机工作流文件学（界面格式要 `/object_info` 才转得动）。 */
-    fun learnFile(
-        path: Path,
+    fun learnFile(        path: Path,
         name: String? = null,
         tolerateUnsupported: Boolean = false,
         emulateFrontend: Boolean = true,
@@ -228,10 +243,33 @@ object WorkflowRecipeLearner {
         return analyze(graph, name2, "graph", ref, null, deps.objectInfo()).copy(format = "api")
     }
 
+    /**
+     * 按参数分发（工具与端点共用；少一处分头写就少一处漂移）。
+     *
+     * 三种来源**必须给且只给一个**：都给时会按 path → promptId → graph 的顺序取第一个 ——
+     * 与 `comfy_submit`（promptId / workflowPath 二选一）同一个取向：**不猜调用方的意图**，
+     * 而是按固定顺序取，并在返回值里带上 `sourceKind` 让它自己看得见用的是哪一个。
+     */
+    fun learn(args: LearnArgs, deps: Deps): Learned = when {
+        args.path != null -> learnFile(
+            path = java.nio.file.Paths.get(args.path),
+            name = args.name,
+            tolerateUnsupported = args.tolerateUnsupported,
+            emulateFrontend = args.emulateFrontend,
+            deps = deps,
+        )
+        args.promptId != null -> learnPrompt(args.promptId, args.name, deps)
+        args.graph != null -> learnGraph(args.graph, args.name, deps)
+        else -> throw AiException(
+            "INVALID_ARGUMENT",
+            "要么给 path（本机工作流文件），要么给 promptId（库里已有 API 图的提示词），" +
+                "要么给 graph（API 格式节点图）。",
+        )
+    }
+
     // -----------------------------------------------------------------------
     //  落库
     // -----------------------------------------------------------------------
-
     /**
      * 学完顺手落库（幂等：同一来源只有一行）。返回 `(id, created)`。
      *

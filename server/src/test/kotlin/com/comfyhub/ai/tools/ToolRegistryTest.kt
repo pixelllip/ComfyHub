@@ -75,6 +75,16 @@ class ToolRegistryTest {
          * 真 HTTP（含 User-Agent 必须带、403/429 映射）在 `DanbooruSearchTest` 里用本机假服务钉。
          */
         val danbooru: DanbooruClient? = null,
+        /**
+         * 工作流配方（W3，2026-09-26）：学 / 列 / 绑三条链的假实现。
+         *
+         * 默认 null → 走 `COMFY_DISABLED` / 空列表 / `NOT_FOUND`（证明"没接这条能力时**不假装**"）。
+         * 真归纳与真绑定逻辑在 `WorkflowRecipeTest` / `WorkflowRecipeBinderTest` 里钉，
+         * 这里只钉**接线与参数下传**。
+         */
+        val learnWorkflow: ((com.comfyhub.WorkflowRecipeLearner.LearnArgs) -> Pair<Long, com.comfyhub.WorkflowRecipeLearner.Learned>)? = null,
+        val listRecipes: ((String?, String?, String?, Boolean, Int) -> List<com.comfyhub.WorkflowRecipeRepo.WorkflowRecipeDto>)? = null,
+        val bindRecipe: ((Long, List<com.comfyhub.WorkflowRecipeBinder.Request>, Boolean) -> com.comfyhub.WorkflowRecipeBinder.Report?)? = null,
     ) {
         val skills = SkillStore(root.resolve("skills-builtin"), root.resolve("skills-user"))
         val memory = MemoryStore(root.resolve("storage").resolve("ai"))
@@ -106,6 +116,11 @@ class ToolRegistryTest {
             comfySubmit = submit ?: { _, _, _, _, _, _ ->
                 throw ToolFailure("COMFY_DISABLED", "本次运行没有启用 ComfyUI 提交能力")
             },
+            comfyLearnWorkflow = learnWorkflow ?: { _ ->
+                throw ToolFailure("COMFY_DISABLED", "本次运行没有启用工作流配方能力")
+            },
+            comfyListRecipes = listRecipes ?: { _, _, _, _, _ -> emptyList() },
+            comfyBindRecipe = bindRecipe ?: { _, _, _ -> null },
         )
 
         val policy = ToolPolicy(root, ToolPolicyConfig())
@@ -260,6 +275,9 @@ class ToolRegistryTest {
         // 图像编辑（2026-09-26，用户："保持背景不变，更换有具体动作的人物并保持画风"）：
         // 画廊产物进 ComfyUI input + 生成重绘遮罩
         "comfy_use_media", "comfy_make_mask",
+        // 工作流配方（2026-09-26，用户："如果以后出了新的模型，如何让 AI 自主学习新模型
+        // 泛用/特定工作流的搭建？"）：学一份工作流 → 列已学的 → 把配方绑到新模型上
+        "comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe",
     )
 
     // --- 清单 / 权限 --------------------------------------------------------
@@ -323,6 +341,15 @@ class ToolRegistryTest {
         assertTrue(defaults["comfy_use_media"]!!.mutating)
         assertEquals("ask", defaults["comfy_make_mask"]!!.access)
         assertTrue(defaults["comfy_make_mask"]!!.mutating)
+        // 工作流配方三件：学是**写本机配方库**（如实标 mutating，但与 comfy_load_workflow 同档不拦），
+        // 列与绑都只读（绑**只报不改**：它不提交、不写文件）
+        assertEquals("comfy", defaults["comfy_learn_workflow"]!!.category)
+        assertEquals("allow", defaults["comfy_learn_workflow"]!!.access)
+        assertTrue(defaults["comfy_learn_workflow"]!!.mutating, "它会往本机配方库写一行")
+        assertEquals("allow", defaults["comfy_list_recipes"]!!.access)
+        assertTrue(!defaults["comfy_list_recipes"]!!.mutating)
+        assertEquals("allow", defaults["comfy_bind_recipe"]!!.access)
+        assertTrue(!defaults["comfy_bind_recipe"]!!.mutating, "绑定只报不改")
 
         val overridden = ToolPolicy(
             e.root,
@@ -1788,6 +1815,224 @@ class ToolRegistryTest {
         // 缺参数要报参数错（不是去查一个空 tag）
         val bad = e.registry.invoke("c3", "danbooru_lookup", args(), ctx)
         assertEquals("INVALID_ARGUMENT", bad.errorCode)
+    }
+
+    // -----------------------------------------------------------------------
+    //  工作流配方三件（W3，2026-09-26）
+    //
+    //  真归纳 / 真绑定的逻辑在 WorkflowRecipeTest 与 WorkflowRecipeBinderTest 里钉；
+    //  这里只钉三件**接线**上的事：参数有没有原样下传（含路径准入）、
+    //  学习层的稳定错误码有没有翻成工具失败码、没接这条能力时**不假装**。
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `学工作流会把参数原样下传 并把 AI 域的稳定码翻成工具失败码`() = runBlocking {
+        val root = Files.createTempDirectory("comfyhub-learn-recipe").toRealPath()
+        listOf("comfyui", "storage").forEach { Files.createDirectories(root.resolve(it)) }
+        Files.writeString(root.resolve("comfyui").resolve("wf.json"), """{"1":{"class_type":"SaveImage","inputs":{}}}""")
+
+        var seen: com.comfyhub.WorkflowRecipeLearner.LearnArgs? = null
+        val e = Env(
+            root,
+            learnWorkflow = { a ->
+                seen = a
+                val recipe = com.comfyhub.WorkflowRecipe.analyze(
+                    com.comfyhub.AppJson.parseToJsonElement("""{"1":{"class_type":"SaveImage","inputs":{"filename_prefix":"x"}}}""")
+                        as JsonObject,
+                )
+                3L to com.comfyhub.WorkflowRecipeLearner.Learned(
+                    recipe = recipe,
+                    name = a.name ?: "wf",
+                    sourceKind = "file",
+                    sourceRef = "file:abc",
+                    sourcePath = a.path,
+                    promptId = null,
+                    complete = true,
+                    gaps = emptyList(),
+                    format = "api",
+                    warnings = emptyList(),
+                )
+            },
+        )
+        val ctx = e.ctx()
+        val ok = e.registry.invoke(
+            "c1",
+            "comfy_learn_workflow",
+            args("path" to "comfyui/wf.json", "name" to "我的编辑流"),
+            ctx,
+        )
+        assertEquals("ok", ok.status, ok.error ?: ok.content)
+        // 路径过了准入（变成绝对路径）、默认档原样下传
+        val a = seen!!
+        assertTrue(a.path!!.endsWith("wf.json"), a.path!!)
+        assertTrue(Path.of(a.path!!).isAbsolute, "下传的应当是过完准入的绝对路径：${a.path}")
+        assertEquals("我的编辑流", a.name)
+        assertEquals(false, a.tolerateUnsupported, "默认必须拒学有缺口的图")
+        assertEquals(true, a.emulateFrontend)
+        // 回给模型的是配方正文（能直接照抄 overrides），JSON 里带 recipeId
+        assertTrue(ok.content.contains("【工作流配方】我的编辑流"), ok.content)
+        assertEquals(3L, (ok.resultJson!!["recipeId"] as JsonPrimitive).content.toLong())
+
+        // 白名单外的路径：当场拒（不许借学习去读任意文件）
+        val bad = e.registry.invoke("c2", "comfy_learn_workflow", args("path" to "../outside.json"), ctx)
+        assertEquals("failed", bad.status)
+        assertEquals("PATH_DENIED", bad.errorCode)
+    }
+
+    @Test
+    fun `学工作流被拒时把稳定码翻出来 而不是吞成一句失败`() = runBlocking {
+        val e = Env(
+            Files.createTempDirectory("comfyhub-learn-reject").toRealPath(),
+            learnWorkflow = { _ ->
+                throw com.comfyhub.ai.AiException(
+                    "UNSUPPORTED_NODES",
+                    "这份工作流转出来有缺口：摘掉节点类：Krea2EditModelPatch —— 先确认本机实例有没有它。",
+                )
+            },
+        )
+        val rec = e.registry.invoke("c1", "comfy_learn_workflow", args("promptId" to "42"), e.ctx())
+        assertEquals("failed", rec.status)
+        assertEquals("UNSUPPORTED_NODES", rec.errorCode)
+        assertTrue(rec.content.contains("Krea2EditModelPatch"), rec.content)
+    }
+
+    @Test
+    fun `列配方空库要指到学习入口 有货时把槽位与缺件标出来`() = runBlocking {
+        // 没接这条能力（默认）→ 空列表 → NOT_FOUND 并指到 comfy_list_workflows / comfy_learn_workflow
+        val empty = env()
+        val miss = empty.registry.invoke("c1", "comfy_list_recipes", args(), empty.ctx())
+        assertEquals("NOT_FOUND", miss.errorCode)
+        assertTrue(miss.content.contains("comfy_learn_workflow"), miss.content)
+        assertTrue(miss.content.contains("comfy_list_workflows"), miss.content)
+
+        val root = Files.createTempDirectory("comfyhub-list-recipes").toRealPath()
+        val e = Env(
+            root,
+            listRecipes = { q, task, _, onlyComplete, limit ->
+                assertEquals("edit", task)
+                assertTrue(!onlyComplete)
+                assertEquals(5, limit)
+                listOf(
+                    com.comfyhub.WorkflowRecipeRepo.WorkflowRecipeDto(
+                        id = 7,
+                        name = "krea2$q 编辑",
+                        task = "edit",
+                        skeletonHash = "100a4d67195e3f22",
+                        recipeVersion = 1,
+                        sourceKind = "file",
+                        sourceRef = "file:abc",
+                        sourcePath = "D:/wf/krea2.json",
+                        nodeCount = 14,
+                        classCount = 11,
+                        imageInputs = 1,
+                        hasMask = false,
+                        complete = false,
+                        slots = kotlinx.serialization.json.JsonArray(
+                            listOf(
+                                buildJsonObject {
+                                    put("role", "diffusion_models")
+                                    put("overrideKey", "55.unet_name")
+                                    put("fileName", "krea2_turbo_nvfp4.safetensors")
+                                },
+                            ),
+                        ),
+                        knobs = kotlinx.serialization.json.JsonArray(emptyList()),
+                        classes = kotlinx.serialization.json.JsonArray(emptyList()),
+                        edges = kotlinx.serialization.json.JsonArray(emptyList()),
+                        outputs = kotlinx.serialization.json.JsonArray(emptyList()),
+                        gaps = listOf("摘掉节点类：Krea2EditModelPatch"),
+                        warnings = emptyList(),
+                    ),
+                )
+            },
+        )
+        val hit = e.registry.invoke("c2", "comfy_list_recipes", args("q" to "krea2", "task" to "edit", "limit" to "5"), e.ctx())
+        assertEquals("ok", hit.status, hit.error ?: hit.content)
+        assertTrue(hit.content.contains("100a4d67195e3f22"), hit.content)
+        assertTrue(hit.content.contains("55.unet_name(diffusion_models)=krea2_turbo_nvfp4.safetensors"), hit.content)
+        assertTrue(hit.content.contains("缺件"), "complete=false 必须一眼看得见：${hit.content}")
+        assertTrue(hit.content.contains("comfy_bind_recipe"), "下一步要指到绑定：${hit.content}")
+    }
+
+    @Test
+    fun `绑配方缺参数与找不到配方都要如实报`() = runBlocking {
+        val e = env()
+        val noId = e.registry.invoke("c1", "comfy_bind_recipe", args("model" to "x.safetensors"), e.ctx())
+        assertEquals("INVALID_ARGUMENT", noId.errorCode)
+        assertTrue(noId.content.contains("recipeId"), noId.content)
+
+        val noModel = e.registry.invoke("c2", "comfy_bind_recipe", args("recipeId" to "7"), e.ctx())
+        assertEquals("INVALID_ARGUMENT", noModel.errorCode)
+        assertTrue(noModel.content.contains("model"), noModel.content)
+
+        // 默认（没接绑定能力）→ null → NOT_FOUND 并指到列配方
+        val notFound = e.registry.invoke(
+            "c3",
+            "comfy_bind_recipe",
+            args("recipeId" to "7", "model" to "x.safetensors"),
+            e.ctx(),
+        )
+        assertEquals("NOT_FOUND", notFound.errorCode)
+        assertTrue(notFound.content.contains("comfy_list_recipes"), notFound.content)
+    }
+
+    @Test
+    fun `绑配方把 role 与 extra 都翻成请求 并把报告原样回给模型`() = runBlocking {
+        var seen: List<com.comfyhub.WorkflowRecipeBinder.Request>? = null
+        var seenForce: Boolean? = null
+        val root = Files.createTempDirectory("comfyhub-bind-recipe").toRealPath()
+        val e = Env(
+            root,
+            bindRecipe = { recipeId, requests, force ->
+                assertEquals(7L, recipeId)
+                seen = requests
+                seenForce = force
+                com.comfyhub.WorkflowRecipeBinder.Report(
+                    recipeId = recipeId,
+                    recipeName = "krea2 编辑",
+                    task = "edit",
+                    skeletonHash = "100a4d67195e3f22",
+                    ready = true,
+                    overrides = mapOf("55.unet_name" to "krea2_v11.safetensors"),
+                    bindings = listOf(
+                        com.comfyhub.WorkflowRecipeBinder.Binding(
+                            overrideKey = "55.unet_name",
+                            role = "diffusion_models",
+                            from = "krea2_turbo_bf16.safetensors",
+                            to = "krea2_v11.safetensors",
+                            status = com.comfyhub.WorkflowRecipeBinder.Status.EXACT,
+                            note = "本机有同名文件，当前实例能加载 —— 直接绑。",
+                        ),
+                    ),
+                    untouched = listOf("56.clip_name（text_encoders）= qwen3vl.safetensors"),
+                    knobHints = listOf("81.text", "82.steps"),
+                    hints = listOf("绑完用 comfy_submit(promptId=…, overrides={…}) 提交。"),
+                    warnings = emptyList(),
+                )
+            },
+        )
+        val rec = e.registry.invoke(
+            "c1",
+            "comfy_bind_recipe",
+            jsonArgs(
+                "recipeId" to JsonPrimitive(7),
+                "model" to JsonPrimitive("krea2_v11.safetensors"),
+                "force" to JsonPrimitive(true),
+                "extra" to buildJsonObject { put("vae", "new_vae.safetensors") },
+            ),
+            e.ctx(),
+        )
+        assertEquals("ok", rec.status, rec.error ?: rec.content)
+        assertEquals(true, seenForce)
+        assertEquals(2, seen!!.size, "model + extra 里的 vae 都要变成请求")
+        assertEquals("vae", seen!![1].role)
+        assertEquals("new_vae.safetensors", seen!![1].fileName)
+        assertTrue(rec.content.contains("55.unet_name"), rec.content)
+        assertTrue(rec.content.contains("可以直接跑"), rec.content)
+        assertEquals(
+            "krea2_v11.safetensors",
+            ((rec.resultJson!!["overrides"] as JsonObject)["55.unet_name"] as JsonPrimitive).content,
+        )
     }
 }
 

@@ -1832,7 +1832,15 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | --- | --- |
 | `b12ee5d` | **工作流配方 1/5：设计**（`docs/workflow-recipe-design.md`：骨架/槽位/档位三层 + 学习闭环六步 + 新模型的三种情形 + W1~W5） |
 | `0b4177b` | **工作流配方 2/5：W1 解析核心**（`WorkflowRecipe.kt`：任务七档 + 骨架指纹 + 槽位 + 旋钮 + 输出 + `render`；11 例单测；真机 16 份文件抽查抓出三件事） |
-| （本行随下一项落地替换） | **3/5：W2 配方表 + 仓储 + 四条端点**（`workflow_recipes` 表 + `WorkflowRecipeRepo` + `WorkflowRecipeLearner` + `/api/ai/workflow-recipes`） |
+| `f567bbe` | **工作流配方 3/5：W2 配方表 + 仓储 + 四条端点**（`workflow_recipes` 表 + `WorkflowRecipeRepo` + `WorkflowRecipeLearner` + `/api/ai/workflow-recipes`；9 例 + 真库副本抽查） |
+| （本行随下一项落地替换） | **4/5：W3 三件工具**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `WorkflowRecipeBinder`） |
+
+**W3 的验收（2026-09-26）**：`WorkflowRecipeBinderTest` 11 例（exact 才自动绑 / onDiskOnly 说"重启别下载" /
+substitute 说"先问用户" / missing 说"不许编名字"、force 才写 / 没有清单说"没验证过" /
+同角色多槽位报 ambiguous、点明 overrideKey 就绑得上 / 整包 checkpoint ↔ 分离式骨架明说"改写骨架、本轮不做" /
+底模兜底要把假设说出来 / sidecar 不算模型）；`ToolRegistryTest` 新增 5 例（参数与路径准入下传、
+AI 域稳定码翻成工具失败码、空库指到学习入口、缺参数、`extra` 也翻成请求）。
+`gradle test` **680 例全绿**。
 
 **W2 的真机验收（真库副本 + 真 ComfyUI，2026-09-26）**：
 - 临时用 `<根>\.db\comfyhub.db` 的副本起后端（8095），**没动真库**；DDL 迁移在真库副本上自动建表

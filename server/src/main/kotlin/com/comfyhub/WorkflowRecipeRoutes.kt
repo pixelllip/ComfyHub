@@ -64,15 +64,7 @@ private fun resolveReadPath(ctx: AppContext, raw: String): java.nio.file.Path = 
     throw com.comfyhub.ai.AiException(e.code, e.message ?: "这个路径不允许读")
 }
 
-fun Route.workflowRecipeRoutes(ctx: AppContext, submitter: ComfySubmitter, capture: ComfyCapture) {
-    val deps = WorkflowRecipeLearner.Deps(
-        // 拿不到就是 null（绝不假装拿到了：界面格式转换与自定义加载器识别都依赖它）
-        objectInfo = { runCatching { submitter.objectInfo() }.getOrNull() },
-        apiGraphOf = { promptId -> capture.apiGraphOf(promptId) },
-        promptName = { promptId -> runCatching { PromptRepo.get(promptId)?.title }.getOrNull() },
-        findPromptIdByRunKey = { runKey -> runCatching { CaptureRepo.findRun(runKey)?.promptId }.getOrNull() },
-    )
-
+fun Route.workflowRecipeRoutes(ctx: AppContext, deps: WorkflowRecipeLearner.Deps) {
     route("/ai/workflow-recipes") {
 
         get {
@@ -90,29 +82,20 @@ fun Route.workflowRecipeRoutes(ctx: AppContext, submitter: ComfySubmitter, captu
 
         post {
             val input = call.receive<WorkflowRecipeLearnInput>()
-            val learned = when {
-                input.path != null ->
-                    WorkflowRecipeLearner.learnFile(
-                        // 与 comfy_load_workflow 同一条准入：只读白名单（本机 ComfyUI 的目录已在里面）。
-                        // ⚠ `resolveRead` 抛的是工具层的 `ToolFailure` —— 不转成 AiException 的话
-                        // 它会落到 StatusPages 的通用分支，变成 **500 + error:"ToolFailure"**
-                        // （人话还在 detail 里，但状态码说成"服务器错误"会把人往错方向带）。
-                        path = resolveReadPath(ctx, input.path),
-                        name = input.name,
-                        tolerateUnsupported = input.tolerateUnsupported,
-                        emulateFrontend = input.emulateFrontend,
-                        deps = deps,
-                    )
-                input.promptId != null ->
-                    WorkflowRecipeLearner.learnPrompt(input.promptId, input.name, deps)
-                input.graph != null ->
-                    WorkflowRecipeLearner.learnGraph(input.graph, input.name, deps)
-                else -> throw com.comfyhub.ai.AiException(
-                    "INVALID_ARGUMENT",
-                    "要么给 path（本机工作流文件），要么给 promptId（库里已有 API 图的提示词），" +
-                        "要么给 graph（API 格式节点图）。",
-                )
-            }
+            // 与 comfy_load_workflow 同一条准入：只读白名单（本机 ComfyUI 的目录已在里面）。
+            // ⚠ `resolveRead` 抛的是工具层的 `ToolFailure` —— 不转成 AiException 的话
+            // 它会落到 StatusPages 的通用分支，变成 **500 + error:"ToolFailure"**
+            // （人话还在 detail 里，但状态码说成"服务器错误"会把人往错方向带）。
+            val args = WorkflowRecipeLearner.LearnArgs(
+                path = input.path?.let { resolveReadPath(ctx, it).toString() },
+                promptId = input.promptId,
+                graph = input.graph,
+                name = input.name,
+                tolerateUnsupported = input.tolerateUnsupported,
+                emulateFrontend = input.emulateFrontend,
+                notes = input.notes,
+            )
+            val learned = WorkflowRecipeLearner.learn(args, deps)
             val (id, _) = WorkflowRecipeLearner.learnAndSave(learned, input.notes)
             call.respond(HttpStatusCode.Created, learned.toJson(id))
         }

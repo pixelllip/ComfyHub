@@ -13,6 +13,9 @@ import com.comfyhub.PromptRepo
 import com.comfyhub.SettingsRepo
 import com.comfyhub.WorkflowAudit
 import com.comfyhub.WorkflowFit
+import com.comfyhub.WorkflowRecipeBinder
+import com.comfyhub.WorkflowRecipeLearner
+import com.comfyhub.WorkflowRecipeRepo
 import com.comfyhub.ai.RunEventType
 import com.comfyhub.ai.protocol.ToolSpec
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -177,6 +180,24 @@ class ToolRegistry(
      */
     private val comfyMakeMask: (JsonObject) -> JsonObject =
         { _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用遮罩生成能力") },
+    /**
+     * **学一份工作流**（W3，2026-09-26）：三种来源任选一，归纳 + 落库，返回 `(配方 id, 学习结果)`。
+     *
+     * 为 null / 抛 `COMFY_DISABLED` = 本次部署没有这条能力（与 `comfySubmit` 一个路子：
+     * 工具仍在清单里，但**不假装**自己学过）。
+     */
+    private val comfyLearnWorkflow: (WorkflowRecipeLearner.LearnArgs) -> Pair<Long, WorkflowRecipeLearner.Learned> =
+        { _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用工作流配方能力") },
+    /** 列配方（`q` / `task` / `skeleton` / `onlyComplete` / `limit`）。 */
+    private val comfyListRecipes: (String?, String?, String?, Boolean, Int) -> List<WorkflowRecipeRepo.WorkflowRecipeDto> =
+        { _, _, _, _, _ -> emptyList() },
+    /**
+     * 把配方绑到模型上（W3）：返回 null = 没有这条配方（由工具报 NOT_FOUND）。
+     *
+     * **只报不改**：它只产出"该写哪几个 overrides"，不提交、不写文件（见 `WorkflowRecipeBinder`）。
+     */
+    private val comfyBindRecipe: (Long, List<WorkflowRecipeBinder.Request>, Boolean) -> WorkflowRecipeBinder.Report? =
+        { _, _, _ -> null },
     /**
      * 联网搜索客户端（`web_search` / `web_fetch`，2026-09-20）。
      *
@@ -936,6 +957,199 @@ class ToolRegistry(
         ) { args, _ ->
             val result = comfyMakeMask(args)
             ToolOutput(AppJson.encodeToString(JsonElement.serializer(), result), result)
+        },
+
+        // ------------------------------------------------------------------
+        //  工作流配方（W3，2026-09-26）：学 → 列 → 绑
+        //
+        //  用户的问题："如果以后出了新的模型，如何让 AI 自主学习新模型泛用/特定工作流的搭建？"
+        //  设计与判据在 docs/workflow-recipe-design.md。三件工具对应闭环的三步：
+        //  **学**（把一份具体工作流归纳成配方并落库）/ **列**（已经学过哪些、同一族有几条）/
+        //  **绑**（把配方接到一个新模型上，拿到 overrides）—— 跑仍然是 comfy_submit（R10 不动）。
+        // ------------------------------------------------------------------
+        AgentTool(
+            name = "comfy_learn_workflow",
+            description = "**把一份工作流学成「配方」**（任务 + 骨架指纹 + 模型槽位 + 参数旋钮 + 输出）" +
+                "并存进本机配方库 —— 下次换个模型只要「绑」（comfy_bind_recipe），不用重搭工作流。" +
+                "\n三种来源**任选一个**：`path`（本机工作流文件，界面格式也行，会用 ComfyUI 的 /object_info 转）、" +
+                "`promptId`（库里已有 API 图的提示词）、`graph`（API 格式节点图）。" +
+                "\n**学到的东西是什么**：`task`（t2i/i2i/edit/inpaint/upscale/video/audio，按节点形状判的）、" +
+                "`skeletonHash`（**同一族骨架 = 同一个值**，与模型无关 —— 这就是「泛用」）、" +
+                "`slots`（模型槽位：该改哪个键、原来是什么文件）、`knobs`（能覆盖的提示词/采样/尺寸键）。" +
+                "\n⚠ **默认拒学「转换有缺口」的图**：界面格式里有节点转不出来（多半是**本机这个实例没装/没启用" +
+                "那几个自定义节点**）时，学下来的会是一条**看着像、其实缺了链**的骨架，而且不报错。" +
+                "被拒时照返回的那几条去查：先确认实例有没有那些节点类，别去改用户的工作流；" +
+                "确实只想学个大概就带 `tolerateUnsupported=true`（配方会标 `complete=false` + 缺口清单，" +
+                "**不许**拿它当完整骨架用）。" +
+                "\n同一个来源学两次只有一行（幂等，按文件 sha256 / promptId / 图哈希）。只读用户的文件，" +
+                "也不往提示词库里塞行。",
+            parameters = schema(
+                """{"type":"object","properties":{"path":{"type":"string","description":"本机工作流文件的完整路径（.json；界面格式也行）"},"promptId":{"type":"integer","description":"或者：库里已有 API 图的提示词 id"},"graph":{"type":"object","description":"或者：直接给 API 格式节点图"},"name":{"type":"string","description":"配方名（默认取文件名 / 提示词标题）"},"tolerateUnsupported":{"type":"boolean","description":"转换有缺口时是否照样学（默认 false = 拒学，见描述里那一段）"},"emulateFrontend":{"type":"boolean","description":"界面格式转换时照 ComfyUI 前端行为等价改写（默认 true）"},"notes":{"type":"string","description":"可选备注：这份配方是干什么用的、从哪来的"}},"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            // 它会往本机配方库写一行（不是用户的文件），所以如实标 mutating，
+            // 但与 comfy_load_workflow 同档：不拦（知识积累不该每一步都等批准）
+            mutating = true,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, ctx ->
+            // 路径准入在这一步做（Run 开始时快照的策略，见 AGENTS §10）
+            val args2 = WorkflowRecipeLearner.LearnArgs(
+                path = args.str("path")?.let { ctx.policy.resolveRead(it).toString() },
+                promptId = args.int("promptId")?.toLong()
+                    ?: args["promptId"]?.let { (it as? JsonPrimitive)?.contentOrNull?.toLongOrNull() },
+                graph = args.obj("graph"),
+                name = args.str("name"),
+                tolerateUnsupported = args.bool("tolerateUnsupported") ?: false,
+                emulateFrontend = args.bool("emulateFrontend") ?: true,
+                notes = args.str("notes"),
+            )
+            val (id, learned) = try {
+                comfyLearnWorkflow(args2)
+            } catch (e: com.comfyhub.ai.AiException) {
+                // 学习层抛的是 AI 域的稳定码（界面直接读它），这里翻成工具失败码
+                throw ToolFailure(e.code, e.message ?: "学习工作流失败")
+            }
+            val json = learned.toJson(id)
+            ToolOutput(learned.recipe.render(learned.name), json)
+        },
+
+        AgentTool(
+            name = "comfy_list_recipes",
+            description = "列**已经学过的配方**（`comfy_learn_workflow` 学下来的那些）。" +
+                "每条带：任务、骨架指纹、模型槽位（覆盖键 + 原来的文件名）、节点/旋钮数、" +
+                "`complete`（false = 学的时候这张图就缺件，**别拿它开跑**）。" +
+                "\n**同一族骨架 = 同一个 `skeletonHash`**：看到两条同指纹的就是「同一套结构、不同底模/参数」，" +
+                "换模型时优先挑同任务的那一族。" +
+                "\n什么时候用它：① 用户说「用某个新模型做 XX」—— 先看这里有没有现成的骨架，别从零搭；" +
+                "② 想知道「这个模型我配过哪条工作流」（用 `q=` 搜模型文件名）；" +
+                "③ `comfy_load_workflow` 之前先看有没有人已经学过它。",
+            parameters = schema(
+                """{"type":"object","properties":{"q":{"type":"string","description":"关键字：配方名 / 骨架指纹 / 路径 / 槽位里的模型文件名"},"task":{"type":"string","description":"按任务过滤：t2i / i2i / edit / inpaint / upscale / video / audio / unknown"},"skeleton":{"type":"string","description":"只看某一族（骨架指纹，从别处的 skeletonHash 拿）"},"onlyComplete":{"type":"boolean","description":"true = 只列没有转换缺口的（默认 false，缺件的也列，只是带标记）"},"limit":{"type":"integer","description":"最多几条，默认 20，上限 100"}},"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = false,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, _ ->
+            val rows = comfyListRecipes(
+                args.str("q"),
+                args.str("task"),
+                args.str("skeleton"),
+                args.bool("onlyComplete") ?: false,
+                (args.int("limit") ?: 20).coerceIn(1, 100),
+            )
+            if (rows.isEmpty()) {
+                throw ToolFailure(
+                    "NOT_FOUND",
+                    "还没有学过任何配方" +
+                        (if (args.str("q") != null || args.str("task") != null) "匹配这些条件的" else "") +
+                        "。先 `comfy_list_workflows` 看本机有哪些工作流文件，再用 " +
+                        "comfy_learn_workflow(path=…) 学一份 —— 学过的会留在这里，下次换模型直接绑。",
+                )
+            }
+            val text = buildString {
+                appendLine("配方库：命中 ${rows.size} 条")
+                rows.forEach { r ->
+                    appendLine()
+                    appendLine("── [${r.id}] ${r.name}" + if (r.complete) "" else "　⚠ **缺件（complete=false）**")
+                    appendLine(
+                        "   ${r.task} · 骨架 ${r.skeletonHash} · 节点 ${r.nodeCount} · 槽位 ${r.slots.size} · " +
+                            "来源 ${r.sourceRef ?: r.sourceKind}" +
+                            (r.promptId?.let { " · promptId=$it" } ?: ""),
+                    )
+                    if (r.slots.isNotEmpty()) {
+                        appendLine(
+                            "   槽位：" + r.slots.joinToString("、") { s ->
+                                val o = s as? JsonObject
+                                val role = (o?.get("role") as? JsonPrimitive)?.contentOrNull ?: "?"
+                                val key = (o?.get("overrideKey") as? JsonPrimitive)?.contentOrNull ?: "?"
+                                val file = (o?.get("fileName") as? JsonPrimitive)?.contentOrNull ?: "?"
+                                "$key($role)=$file"
+                            },
+                        )
+                    }
+                    if (!r.complete && r.gaps.isNotEmpty()) {
+                        appendLine("   缺口：" + r.gaps.take(3).joinToString("；"))
+                    }
+                    r.sourcePath?.let { appendLine("   路径：$it") }
+                }
+                appendLine()
+                appendLine(
+                    "要换模型就直接 `comfy_bind_recipe(recipeId=<上面的 id>, model=\"新模型.safetensors\")` —— " +
+                        "它会算出该写哪几个 overrides，**只报不改**（真提交仍走 comfy_submit）。",
+                )
+            }
+            val json = buildJsonObject {
+                put("count", rows.size)
+                put(
+                    "recipes",
+                    buildJsonArray {
+                        rows.forEach { r ->
+                            add(
+                                buildJsonObject {
+                                    put("id", r.id)
+                                    put("name", r.name)
+                                    put("task", r.task)
+                                    put("skeletonHash", r.skeletonHash)
+                                    put("complete", r.complete)
+                                    put("nodeCount", r.nodeCount)
+                                    put("slots", r.slots)
+                                    put("gaps", buildJsonArray { r.gaps.forEach { g -> add(JsonPrimitive(g)) } })
+                                    r.sourcePath?.let { put("sourcePath", it) }
+                                    r.sourceRef?.let { put("sourceRef", it) }
+                                    r.promptId?.let { put("promptId", it) }
+                                },
+                            )
+                        }
+                    },
+                )
+            }
+            ToolOutput(text, json)
+        },
+
+        AgentTool(
+            name = "comfy_bind_recipe",
+            description = "**把一条配方绑到一个（新）模型上**：算出该写进 `comfy_submit(overrides=…)` 的键。" +
+                "这是「出了新模型不用重搭工作流」的那一步 —— 骨架不变，只换底模 / 文本编码器 / VAE / LoRA。" +
+                "\n**只报不改**：它不提交、不写文件、不改工作流；真正动手的是那次 comfy_submit（还要过审批与提交前预检）。" +
+                "\n怎么用：`recipeId` + `model`（新模型文件名）。角色不用自己猜 —— 会给清单里那个文件" +
+                "所在的目录去对槽位；不确定或同名多义（两条 LoRA）时用 `role`（diffusion_models / text_encoders / " +
+                "vae / loras / checkpoints…）或 `overrideKey`（最准，形如 `55.unet_name`）点明。" +
+                "\n四种结论：`exact`（本机有同名**且当前实例能加载** —— 唯一能自动绑的一档）/ " +
+                "`onDiskOnly`（盘上有但实例枚举不到 → 让用户重启 ComfyUI / 修模型根，**别下载**）/ " +
+                "`substitute`（只是字面相似 → **先问用户**）/ `missing`（本机没有 → 去 `find_model` / " +
+                "`civitai_search` 查，**绝对不要编文件名**）。" +
+                "\n⚠ 有一种**结构上接不上**：配方是分离式加载（unet + clip + vae 三个槽位），而你给的是**整包 " +
+                "checkpoint**（或反过来）—— 那要增删节点并重连线（本版不做），报告会写明，**别硬写覆盖键**。" +
+                "`force=true` 才会把没验证过的名字写进去（最后仍由提交前预检守门）。",
+            parameters = schema(
+                """{"type":"object","properties":{"recipeId":{"type":"integer","description":"配方 id（comfy_list_recipes / comfy_learn_workflow 给的）"},"model":{"type":"string","description":"要绑上去的模型文件名（形如 krea2_turbo_v11.safetensors）"},"role":{"type":"string","description":"可选：绑到哪一类槽位（diffusion_models / text_encoders / vae / loras / checkpoints…）；不给就按清单里该文件所在的目录推"},"overrideKey":{"type":"string","description":"可选：直接点名槽位的覆盖键（形如 55.unet_name），最准"},"force":{"type":"boolean","description":"默认 false：没验证过（本机清单里没有）的名字不写进覆盖键；true = 照写并附警告（提交前预检仍会再查一次）"},"extra":{"type":"object","description":"可选：还要一起绑的其它槽位，形如 {\"text_encoders\":\"qwen3vl.safetensors\",\"vae\":\"vae.safetensors\"}（键是 role）","additionalProperties":true}},"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = false,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, _ ->
+            val recipeId = args.int("recipeId")?.toLong()
+                ?: args["recipeId"]?.let { (it as? JsonPrimitive)?.contentOrNull?.toLongOrNull() }
+                ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 recipeId（先用 comfy_list_recipes 拿）")
+            val model = args.str("model")
+                ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 model（要绑上去的模型文件名）")
+            val requests = mutableListOf(WorkflowRecipeBinder.Request(
+                fileName = model,
+                role = args.str("role"),
+                overrideKey = args.str("overrideKey"),
+            ))
+            args.obj("extra")?.forEach { (role, value) ->
+                val name = (value as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                    ?: throw ToolFailure("INVALID_ARGUMENT", "extra 里的 $role 不是字符串文件名")
+                requests += WorkflowRecipeBinder.Request(fileName = name, role = role)
+            }
+            val report = comfyBindRecipe(recipeId, requests, args.bool("force") ?: false)
+                ?: throw ToolFailure(
+                    "NOT_FOUND",
+                    "配方库里没有 id=$recipeId。先用 comfy_list_recipes 看有哪些" +
+                        "（也可以用 comfy_learn_workflow 现学一份）。",
+                )
+            ToolOutput(report.render(), report.toJson())
         },
 
         // ------------------------------------------------------------------
