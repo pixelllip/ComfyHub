@@ -190,9 +190,16 @@ pub fn router(state: AppState) -> Router {
         // 捕获配置（本地那一半：读写 app_settings 里的一行 JSON）
         .route("/api/capture/config", get(capture_config).put(put_capture_config))
         // AI 端点第一批（P4 第 16 步）：provider 清单 —— **不含任何密钥**（AIH-012）
-        .route("/api/ai/providers", get(ai_providers))
+        .route("/api/ai/providers", get(ai_providers).post(create_provider))
+        .route(
+            "/api/ai/providers/{id}",
+            get(ai_provider).put(update_provider).delete(delete_provider),
+        )
         // 模型目录（P4 第 20 步 = Task 2）：能力声明的唯一真源（AIH-011），附件/思考强度都读它
-        .route("/api/ai/providers/{id}/models", get(ai_provider_models))
+        .route(
+            "/api/ai/providers/{id}/models",
+            get(ai_provider_models).put(put_provider_models),
+        )
         // 会话与消息的**读**侧（P4 第 21 步）：AI 工作台打开第一件事就是这三条
         .route("/api/ai/conversations", get(ai_conversations).post(create_conversation))
         .route(
@@ -374,6 +381,143 @@ async fn ai_providers(State(state): State<AppState>) -> Result<Json<Vec<crate::a
     Ok(Json(crate::ai::list_providers(&state)?))
 }
 
+/// `GET /api/ai/providers/{id}` —— 单个 provider（不存在 → 400 CONFIG_ERROR + detail）。
+async fn ai_provider(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::ai::AiProviderDto>, ApiError> {
+    let row = crate::ai::require_provider_row(&state, &id)?;
+    let stored = crate::credentials::read_store(&crate::ai::credential_store_path(&state));
+    let refs: Vec<String> = stored.keys().cloned().collect();
+    Ok(Json(row.into_dto(&refs)))
+}
+
+/// `POST /api/ai/providers` —— 新建（**201 Created**，与 Kotlin 同）。
+///
+/// 判定顺序照抄 `AiRoutes`：**ID 形态 → 重名 → 协议 → 信任档 → URL/凭据引用**。
+/// ⚠ `endpointTrust` 留空时按 baseURL 的主机**推断**（`EndpointTrust.infer`）——
+/// 少了这一步，界面不选信任档就会撞上"端点信任级别 public 不允许回环"。
+async fn create_provider(
+    State(state): State<AppState>,
+    Json(body): Json<crate::ai::AiProviderUpsert>,
+) -> Result<(StatusCode, Json<crate::ai::AiProviderDto>), ApiError> {
+    let id = crate::ai::require_provider_id(body.id.as_deref())?;
+    if crate::ai::get_provider_row(&state, &id)?.is_some() {
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("Provider ID 已存在: {id}（ID 创建后不可修改）"),
+        ));
+    }
+    let api = parse_api(body.api.as_deref())?;
+    let trust = crate::endpoint_guard::parse_trust(body.endpoint_trust.as_deref().unwrap_or(""))
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            crate::endpoint_guard::infer_trust(&crate::ai::host_of(body.base_url.as_deref().unwrap_or("")))
+                .to_string()
+        });
+    let dto = crate::ai::AiProviderDto {
+        id,
+        display_name: crate::ai::require_display_name(body.display_name.as_deref())?,
+        api: api.to_string(),
+        base_url: crate::ai::normalize_base_url(body.base_url.as_deref(), &trust)?,
+        credential_ref: crate::ai::require_credential_ref(body.credential_ref.as_deref())?,
+        endpoint_trust: trust,
+        enabled: body.enabled,
+        // 下面四个是**回读之后才算得出来**的（库给 revision，凭据状态现查）
+        revision: 0,
+        credential: crate::ai::describe_credential(None, |_| None, |_| false),
+        created_at: None,
+        updated_at: None,
+    };
+    Ok((StatusCode::CREATED, Json(crate::ai::insert_provider(&state, &dto)?)))
+}
+
+/// `PUT /api/ai/providers/{id}` —— 乐观锁更新（AIH-007）。
+///
+/// 三条：路径 ID 形态 → body 里的 ID **不许改** → `revision` **必填**。
+/// 少了最后一条，两个窗口就能互相覆盖设置（而"覆盖了"这件事现场看不出来）。
+async fn update_provider(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<crate::ai::AiProviderUpsert>,
+) -> Result<Json<crate::ai::AiProviderDto>, ApiError> {
+    let id = crate::ai::require_provider_id(Some(&id))?;
+    if let Some(body_id) = body.id.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        if body_id != id {
+            return Err(ApiError::ai("CONFIG_ERROR", "Provider ID 创建后不可修改"));
+        }
+    }
+    let api = parse_api(body.api.as_deref())?;
+    let trust = crate::endpoint_guard::parse_trust(body.endpoint_trust.as_deref().unwrap_or(""))
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            crate::endpoint_guard::infer_trust(&crate::ai::host_of(body.base_url.as_deref().unwrap_or("")))
+                .to_string()
+        });
+    let revision = body
+        .revision
+        .ok_or_else(|| ApiError::ai("CONFIG_ERROR", "缺少 revision，请刷新后重试"))?;
+    let dto = crate::ai::AiProviderDto {
+        id,
+        display_name: crate::ai::require_display_name(body.display_name.as_deref())?,
+        api: api.to_string(),
+        base_url: crate::ai::normalize_base_url(body.base_url.as_deref(), &trust)?,
+        credential_ref: crate::ai::require_credential_ref(body.credential_ref.as_deref())?,
+        endpoint_trust: trust,
+        enabled: body.enabled,
+        revision,
+        credential: crate::ai::describe_credential(None, |_| None, |_| false),
+        created_at: None,
+        updated_at: None,
+    };
+    Ok(Json(crate::ai::update_provider(&state, &dto, revision)?))
+}
+
+/// `DELETE /api/ai/providers/{id}` —— 不存在 → 400 CONFIG_ERROR（**不是 404**）。
+async fn delete_provider(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !crate::ai::delete_provider(&state, &id)? {
+        return Err(ApiError::ai("CONFIG_ERROR", format!("Provider 不存在: {id}")));
+    }
+    Ok(Json(json!({ "deleted": true, "id": id })))
+}
+
+/// 三种协议（`AiApi.parse`）：认不出来要**列出合法值**（人话）。
+fn parse_api(raw: Option<&str>) -> Result<&'static str, ApiError> {
+    let text = raw.unwrap_or("").trim();
+    crate::ai::API_WIRE_VALUES
+        .iter()
+        .copied()
+        .find(|wire| *wire == text)
+        .ok_or_else(|| {
+            ApiError::ai(
+                "CONFIG_ERROR",
+                format!(
+                    "不支持的协议 {text}；首期仅支持 {}",
+                    crate::ai::API_WIRE_VALUES.join(" / ")
+                ),
+            )
+        })
+}
+
+/// `PUT /api/ai/providers/{id}/models` —— 全量替换模型目录（AIH-011）。
+///
+/// **先 provider 存在、再逐条校验、最后一个事务里删旧插新** ——
+/// 顺序反了会出现"校验失败却已经把旧目录删了"。
+async fn put_provider_models(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<crate::ai::AiModelUpsert>,
+) -> Result<Json<Vec<crate::ai::AiModelDto>>, ApiError> {
+    crate::ai::require_provider_row(&state, &id)?;
+    for model in &body.models {
+        crate::ai::validate_model(model)?;
+    }
+    Ok(Json(crate::ai::replace_models(&state, &id, &body.models)?))
+}
+
 /// `GET /api/ai/providers/{id}/models` —— 模型目录（P4 第 20 步 = Task 2）。
 ///
 /// provider 不存在 → **400 `{error:"CONFIG_ERROR", detail:"Provider 不存在: xx"}`**
@@ -384,9 +528,7 @@ async fn ai_provider_models(
     Path(provider_id): Path<String>,
 ) -> Result<Json<Vec<crate::ai::AiModelDto>>, ApiError> {
     Ok(Json(crate::ai::list_models(&state, &provider_id)?))
-}
-
-#[derive(Debug, Deserialize, Default)]
+}#[derive(Debug, Deserialize, Default)]
 struct ConversationQuery {
     /// Kotlin 只认 `1` 与 `true`（不区分大小写），别的值一律当 false。
     #[serde(rename = "includeArchived")]

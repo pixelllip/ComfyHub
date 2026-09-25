@@ -6497,6 +6497,322 @@ async fn memory_written_from_the_ui_shows_up_in_the_run_kit_prompt() {
     assert!(prompt.contains("用户喜欢国风"), "刚写的记忆必须立刻进提示词（刻意不缓存）");
 }
 
+// ---------------------------------------------------------------------------
+//  Provider 写侧 + 模型目录替换（P4 第 37 步）
+// ---------------------------------------------------------------------------
+
+/// provider 的新建 / 更新 / 删除完整一轮，以及**每一条校验的稳定码与人话**。
+///
+/// 这里盯的是"用户能不能把设置填对"：校验顺序写反（比如先判 URL 再判重名）会让
+/// 用户在一个根本没写错的字段上看到报错；`revision` 少判一次，两个窗口就会互相覆盖设置
+/// （而"被覆盖了"这件事现场完全看不出来）。
+#[tokio::test]
+async fn provider_crud_round_trip_with_revision_and_validation() {
+    let state = state();
+
+    // 新建：201 + **11 个键** + revision 由库给 1
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/providers",
+        serde_json::json!({
+            "id": "my-gateway",
+            "displayName": "我的网关",
+            "api": "openai-completions",
+            "baseURL": "http://127.0.0.1:1234/v1/",
+            "credentialRef": "MY_GATEWAY_KEY"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        keys(&body),
+        vec![
+            "api", "baseURL", "createdAt", "credential", "credentialRef", "displayName", "enabled",
+            "endpointTrust", "id", "revision", "updatedAt"
+        ]
+    );
+    assert_eq!(body["revision"], 1);
+    assert_eq!(body["enabled"], true);
+    assert_eq!(
+        body["baseURL"], "http://127.0.0.1:1234/v1",
+        "只去掉末尾的 `/`，路径一个字都不许改"
+    );
+    assert_eq!(
+        body["endpointTrust"], "loopback",
+        "没传 endpointTrust → 按主机**推断**（否则回环地址会撞上 public 档）"
+    );
+    assert_eq!(body["credential"], serde_json::json!({"configured": false, "source": "none", "writable": true}));
+
+    // 重名：CONFIG_ERROR + 明确说"ID 创建后不可修改"
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/providers",
+        serde_json::json!({ "id": "my-gateway", "displayName": "x", "api": "openai-completions", "baseURL": "https://api.example.com" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert_eq!(body["detail"], "Provider ID 已存在: my-gateway（ID 创建后不可修改）");
+
+    // 三条校验：ID 形态 / 协议 / 凭据引用名 —— 文案都是给人看的
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/providers",
+        serde_json::json!({ "id": "Bad_ID", "displayName": "x", "api": "openai-completions", "baseURL": "https://api.example.com" }),
+    )
+    .await;
+    assert_eq!(body["detail"], "Provider ID 只能是小写 kebab-case（如 my-gateway），且创建后不可修改");
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/providers",
+        serde_json::json!({ "id": "p1", "displayName": "x", "api": "openai", "baseURL": "https://api.example.com" }),
+    )
+    .await;
+    assert_eq!(
+        body["detail"],
+        "不支持的协议 openai；首期仅支持 openai-completions / openai-responses / anthropic-messages"
+    );
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/providers",
+        serde_json::json!({ "id": "p1", "displayName": "x", "api": "openai-completions", "baseURL": "https://api.example.com", "credentialRef": "lower_case" }),
+    )
+    .await;
+    assert_eq!(body["detail"], "凭据引用名只能是大写字母、数字和下划线，且以字母开头");
+
+    // URL 与信任档：公网必须 https；public 档不许指向回环
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/providers",
+        serde_json::json!({ "id": "p1", "displayName": "x", "api": "openai-completions", "baseURL": "http://api.example.com", "endpointTrust": "public" }),
+    )
+    .await;
+    assert_eq!(body["detail"], "公网端点必须使用 https");
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/providers",
+        serde_json::json!({ "id": "p1", "displayName": "x", "api": "openai-completions", "baseURL": "https://127.0.0.1:9", "endpointTrust": "public" }),
+    )
+    .await;
+    assert_eq!(
+        body["detail"],
+        "端点信任级别 public 不允许访问主机 127.0.0.1（当前判定：LOOPBACK）"
+    );
+
+    // 更新：缺 revision / revision 过期 —— 两条都要 400 且说清怎么办
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/my-gateway",
+        serde_json::json!({ "displayName": "改了", "api": "openai-completions", "baseURL": "http://127.0.0.1:1234" }),
+    )
+    .await;
+    assert_eq!(body["detail"], "缺少 revision，请刷新后重试");
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/my-gateway",
+        serde_json::json!({ "displayName": "改了", "api": "openai-completions", "baseURL": "http://127.0.0.1:1234", "revision": 9 }),
+    )
+    .await;
+    assert_eq!(
+        body["detail"],
+        "配置已被其他窗口修改（当前 revision=1，提交的=9），请刷新后重试"
+    );
+
+    // 更新成功：revision +1，返回值是**回读的那份**
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/my-gateway",
+        serde_json::json!({
+            "displayName": "我的网关（改）",
+            "api": "openai-responses",
+            "baseURL": "http://127.0.0.1:1234",
+            "revision": 1,
+            "enabled": false
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["revision"], 2);
+    assert_eq!(body["displayName"], "我的网关（改）");
+    assert_eq!(body["api"], "openai-responses");
+    assert_eq!(body["enabled"], false);
+    assert_eq!(body["credentialRef"], serde_json::Value::Null, "没传就是清掉（Kotlin 同）");
+
+    // ID 不许改（body 里带一个不一样的）
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/my-gateway",
+        serde_json::json!({ "id": "other", "displayName": "x", "api": "openai-completions", "baseURL": "http://127.0.0.1:1234", "revision": 2 }),
+    )
+    .await;
+    assert_eq!(body["detail"], "Provider ID 创建后不可修改");
+
+    // 单个读 / 读不到
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/providers/my-gateway").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["id"], "my-gateway");
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/providers/nope").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["detail"], "Provider 不存在: nope");
+
+    // 删除：连锁把模型目录一起带走（R1 的 ON DELETE CASCADE）
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_models (provider_id, model_id, display_name) VALUES ('my-gateway', 'm', 'M')",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("插模型");
+    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/my-gateway").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({ "deleted": true, "id": "my-gateway" }));
+    let left: i64 = state
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM ai_models WHERE provider_id='my-gateway'", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(left, 0, "删 provider 要连模型一起删（外键 ON DELETE CASCADE）");
+    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/my-gateway").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["detail"], "Provider 不存在: my-gateway");
+}
+
+/// `PUT /providers/{id}/models`：全量替换 + 逐条校验（AIH-011）。
+///
+/// 模型目录是**附件准入与思考强度的唯一真源** —— 少校验一条，用户就能存进去一个
+/// "看着配好了、一用就 400"的模型。
+#[tokio::test]
+async fn provider_models_put_replaces_the_catalog_and_validates_every_field() {
+    let state = state();
+    add_provider(&state, "p-models", Some("MODELS_KEY"));
+
+    let model = serde_json::json!({
+        "providerId": "p-models",
+        "id": "vendor/model-1",
+        "displayName": "模型一号",
+        "inputModalities": ["text", "image"],
+        "attachmentTransports": { "image": ["inline_base64"] },
+        "mimeAllowlist": ["image/png"],
+        "tools": true,
+        "parallelTools": true,
+        "reasoning": true,
+        "thinkingEfforts": { "low": "low", "max": "32768" },
+        "thinkingFormat": "deepseek",
+        "contextWindow": 128000,
+        "enabled": true
+    });
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/p-models/models",
+        serde_json::json!({ "models": [model] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    let saved = &body[0];
+    assert_eq!(saved["inputModalities"], serde_json::json!(["text", "image"]));
+    assert_eq!(saved["attachmentTransports"], serde_json::json!({ "image": ["inline_base64"] }));
+    assert_eq!(saved["thinkingEfforts"], serde_json::json!({ "low": "low", "max": "32768" }));
+    assert_eq!(saved["thinkingFormat"], "deepseek");
+    assert_eq!(saved["contextWindow"], 128000);
+    assert!(!saved.as_object().unwrap().contains_key("maxOutputTokens"), "没给的可空键不许冒出来");
+
+    // 全量替换：旧的没了、新的在（同一个事务里）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/p-models/models",
+        serde_json::json!({ "models": [{
+            "id": "vendor/model-2", "displayName": "模型二号", "capabilitySource": "discovered", "enabled": false
+        }] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["id"], "vendor/model-2");
+    assert_eq!(body[0]["enabled"], false);
+    assert_eq!(body[0]["capabilitySource"], "discovered");
+    // body 里没写 providerId → 以**路径**为准（信 body 会出现"给 A 存了一堆写着 B 的模型"）
+    assert_eq!(body[0]["providerId"], "p-models");
+    // 缺省值走 Kotlin 的那套
+    assert_eq!(body[0]["tools"], false);
+    assert_eq!(body[0]["inputModalities"], serde_json::json!([]));
+
+    // 六条校验各一发
+    let cases: Vec<(serde_json::Value, &str)> = vec![
+        (
+            serde_json::json!({ "id": "m", "displayName": "M", "inputModalities": ["hologram"] }),
+            "未知的输入模态: hologram",
+        ),
+        (
+            serde_json::json!({ "id": "m", "displayName": "M", "attachmentTransports": { "smell": ["inline_base64"] } }),
+            "未知的传输方式键: smell",
+        ),
+        (
+            serde_json::json!({ "id": "m", "displayName": "M", "attachmentTransports": { "image": ["telepathy"] } }),
+            "未知的传输方式: telepathy",
+        ),
+        (
+            serde_json::json!({ "id": "m", "displayName": "M", "capabilitySource": "guessed" }),
+            "非法的能力来源: guessed",
+        ),
+        (
+            serde_json::json!({ "id": "m", "displayName": "M", "reasoning": true, "thinkingEfforts": { "ultra": "x" } }),
+            "未知的思考等级: ultra",
+        ),
+        (
+            serde_json::json!({ "id": "m", "displayName": "M", "reasoning": true, "thinkingEfforts": { "high": "0" } }),
+            "思考等级 high 的表达不能为空",
+        ),
+        (
+            serde_json::json!({ "id": "m", "displayName": "M", "thinkingEfforts": { "high": "high" } }),
+            "声明了思考等级却没勾选「支持推理」，两者必须一致",
+        ),
+        (
+            serde_json::json!({ "id": "m", "displayName": "M", "thinkingFormat": "telepathy" }),
+            "未知的思考方言: telepathy（可选 openai / deepseek / qwen / openrouter / zai）",
+        ),
+    ];
+    for (bad, expected) in cases {
+        let (status, body) = send_json(
+            router_for(state.clone()),
+            "PUT",
+            "/api/ai/providers/p-models/models",
+            serde_json::json!({ "models": [bad] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{expected}");
+        assert_eq!(body["error"], "CONFIG_ERROR", "{expected}");
+        assert_eq!(body["detail"], expected);
+        // 校验失败**不许动**已有目录（先校验、再删旧插新）
+        let (_, body) = get_json(router_for(state.clone()), "/api/ai/providers/p-models/models").await;
+        assert_eq!(body[0]["id"], "vendor/model-2", "校验失败时旧目录必须原地不动");
+    }
+
+    // provider 不存在 → 400 CONFIG_ERROR（不是 404）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/nope/models",
+        serde_json::json!({ "models": [] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["detail"], "Provider 不存在: nope");
+}
+
 /// `id` / `event` / `data` 三元组（`id` 缺席的心跳帧给 `None`）。
 fn parse_sse(body: &str) -> Vec<(Option<i64>, String, Value)> {
     let mut out = Vec::new();

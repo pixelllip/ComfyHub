@@ -959,6 +959,35 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > | **凭据写侧** | **P4 第 34 步**（见上）+ `scripts\e2e-credential-test.ps1` |
 > | **Skills 六条** | **P4 第 35 步**（见下） |
 > | **长期记忆五条** | **P4 第 36 步**（见下） |
+> | **Provider 写侧** | **P4 第 37 步**（见下） |
+>
+> ✅ **P4 第 37 步（2026-09-25）：Provider 写侧（`POST/PUT/DELETE /api/ai/providers` + `PUT …/models`）** ——
+> 设置页那张「AI 模型与凭据」卡至此能建、能改、能删（在此之前 Rust 侧只读）。
+> - 新模块 `endpoint_guard.rs`（**SSRF 防护**，AIH-017）：`AddressScope.of` + `EndpointGuard.assertAllowed`
+>   逐条照 Kotlin 写（含 IPv6 的 `fec0::/10` 是 site-local 而 `fc00::/7` 不是这种反直觉细节），
+>   四档 × 各类地址的**完整真值表**一条用例钉住，云元数据 / `0.0.0.0` 在**任何档位**都拒绝
+>   （这条错了就是 SSRF）。
+> - `ai.rs` 补 `AiValidation`（provider id / 显示名 / 凭据引用名 / 模型 ID）与**写侧仓储**
+>   （`insert_provider` 给 revision=1、`update_provider` 乐观锁 AIH-007、`delete_provider`、
+>   `replace_models` 一个事务里删旧插新）；`AiModelDto` 加上 `Deserialize`（**读写共用同一个形状**
+>   —— 另写一个入参迟早会出现"GET 给的键 PUT 不认"）。
+> - ★ **`normalize_base_url` 没有用 `url` crate 当裁判**：真 Kotlin 基线（8098）逐条问出来一张
+>   真值表，`url` crate 与 Java `URI` 有**四处**不一致（`:99999` 端口、`http://` 抛 vs 空 host、
+>   `http:/foo` 的 host 为 null、`%zz` 与 `a b` 这类非法字符），
+>   光用它就会"放过一批 Java 拒绝的、拒掉一批 Java 接受的"。现在按 Java 的规则自己解析，
+>   **37 条探针两个后端逐字一致**（含 `https://[zzz]:9`、`api.example.com:-1`、
+>   非 ASCII 路径要放行这些边界）。
+> - **真库副本双端对照 35/35**：11 条校验错误**两端同码同文案**；Rust 建 → Kotlin 读（canon 零差异）；
+>   Kotlin 改 → Rust 读（revision 语义两端一致，含"过期 revision"那句人话）；模型目录跨端可见、
+>   8 条模型校验文案一致、**校验失败后旧目录原地不动**；删除两端同步且模型级联；
+>   真机原有两条 provider（`command-code-goat` / `deepseek`）一个字节没动。
+> - 📌 **一处有意保留的行为差异**（写在代码注释里）：body 里少写 `providerId` 时 Kotlin 回
+>   `400 {"error":"BadRequestException", …}`（机器码，界面显示不出人话），这里按路径参数覆盖、
+>   缺了也收下 —— 真实客户端永远是把 GET 到的那份改几个字段传回来，走不到这条岔路。
+> - 验收：`cargo test` **243 例全绿**（137 lib + 104 api_test + 2 shape_lint）。
+>
+> **下一项（本轮继续）**：`/api/ai/builtin/*`（状态 + 同步）与 `/api/ai/capabilities/*`
+> （状态 / 刷新 / 实测校准开关与执行）—— 后者的"状态 + 开关"不出网就能验，刷新与校准要真上游。
 >
 > ✅ **P4 第 36 步（2026-09-25）：长期记忆五条端点**（`GET/PUT/DELETE /api/ai/memory`、
 > `POST /api/ai/memory/entries`、`POST /api/ai/memory/delete`）—— 界面上那张「长期记忆」卡

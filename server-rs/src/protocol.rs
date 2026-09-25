@@ -110,6 +110,27 @@ impl ThinkingFormat {
             _ => None,
         }
     }
+
+    /// 线上的拼写（Kotlin `ThinkingFormat.wire`）—— **保存模型目录时给用户看的那串**
+    /// （"未知的思考方言: x（可选 openai / deepseek / qwen / openrouter / zai）"）。
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::DeepSeek => "deepseek",
+            Self::Qwen => "qwen",
+            Self::OpenRouter => "openrouter",
+            Self::Zai => "zai",
+        }
+    }
+
+    /// 全部方言（顺序与 Kotlin 的 `entries` 一致，**文案里的那一串就是它**）。
+    pub const ALL: [ThinkingFormat; 5] = [
+        ThinkingFormat::OpenAi,
+        ThinkingFormat::DeepSeek,
+        ThinkingFormat::Qwen,
+        ThinkingFormat::OpenRouter,
+        ThinkingFormat::Zai,
+    ];
 }
 
 /// 一次请求的思考强度（`ReasoningRequest`）。
