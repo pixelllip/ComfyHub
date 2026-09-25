@@ -205,6 +205,34 @@ class AiApiClient {
   Future<AiMemory> clearMemory() async =>
       AiMemory.fromJson(Map<String, dynamic>.from(await _send('DELETE', '/api/ai/memory') as Map));
 
+  // --- 角色卡（O8，2026-09-26）-------------------------------------------
+  //
+  // 与「长期记忆」同一套形状（列表 / 新建 / 编辑 / 删除）。
+  // **AI 也用同一张表**（`save_character_card` / `search_character_cards`），
+  // 所以界面上看到的卡就是模型"先查三处"里查的那一份。
+
+  Future<List<CharacterCard>> listCharacterCards({String? query}) async {
+    final q = (query ?? '').trim();
+    final path = q.isEmpty
+        ? '/api/ai/character-cards'
+        : '/api/ai/character-cards?q=${Uri.encodeQueryComponent(q)}';
+    final raw = await _get(path);
+    return (raw as List)
+        .whereType<Map>()
+        .map((e) => CharacterCard.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<CharacterCard> createCharacterCard(Map<String, dynamic> body) async => CharacterCard.fromJson(
+      Map<String, dynamic>.from(await _send('POST', '/api/ai/character-cards', body) as Map));
+
+  /// 全量替换（弹窗里所有字段都在 —— 清空一个字段就真的清掉）。
+  Future<CharacterCard> updateCharacterCard(int id, Map<String, dynamic> body) async =>
+      CharacterCard.fromJson(Map<String, dynamic>.from(
+          await _send('PUT', '/api/ai/character-cards/$id', body) as Map));
+
+  Future<void> deleteCharacterCard(int id) async => _send('DELETE', '/api/ai/character-cards/$id');
+
   // --- 工具与权限（M4） --------------------------------------------------
 
   Future<List<AiToolInfo>> listTools() async {

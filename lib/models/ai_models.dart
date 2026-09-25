@@ -1361,6 +1361,119 @@ class AiMemory {
 }
 
 // ---------------------------------------------------------------------------
+//  角色卡（O8，2026-09-26）
+// ---------------------------------------------------------------------------
+
+/// 一个角色的**规范 tag 栈 + 配哪条 LoRA / 权重 + 来源**。
+///
+/// 为什么要有它：写角色提示词时模型最容易凭印象编 tag（现场：shinku 被当成 iroi
+/// 写了两版废图），而"查过一遍"的结果不落到某个地方，下一轮又得重查。
+/// `tagsVerifiedAt` 是"最后一次跟 danbooru 核对过"的**事实**（由后端的 danbooru 工具写，
+/// 不是模型自称）—— 界面上要和"没核对过"分开显示。
+class CharacterCard {
+  final int id;
+  final String name;
+  final String? nameEn;
+  final List<String> aliases;
+  final String? characterTag;
+  final String? seriesTag;
+  final List<String> tags;
+  final String? negative;
+  final String? loraName;
+  final double? loraWeight;
+  final String? loraTrigger;
+  final String? checkpoint;
+  final int? referenceMediaId;
+  final String? source;
+  final String? tagsVerifiedAt;
+  final String? notes;
+  final String? updatedAt;
+
+  const CharacterCard({
+    required this.id,
+    required this.name,
+    this.nameEn,
+    this.aliases = const [],
+    this.characterTag,
+    this.seriesTag,
+    this.tags = const [],
+    this.negative,
+    this.loraName,
+    this.loraWeight,
+    this.loraTrigger,
+    this.checkpoint,
+    this.referenceMediaId,
+    this.source,
+    this.tagsVerifiedAt,
+    this.notes,
+    this.updatedAt,
+  });
+
+  static List<String> _list(dynamic raw) =>
+      raw is List ? raw.map((e) => e.toString()).where((e) => e.isNotEmpty).toList() : const [];
+
+  static String? _text(dynamic raw) {
+    final s = raw?.toString().trim();
+    return (s == null || s.isEmpty) ? null : s;
+  }
+
+  factory CharacterCard.fromJson(Map<String, dynamic> json) => CharacterCard(
+        id: (json['id'] as num?)?.toInt() ?? 0,
+        name: (json['name'] ?? '').toString(),
+        nameEn: _text(json['nameEn']),
+        aliases: _list(json['aliases']),
+        characterTag: _text(json['characterTag']),
+        seriesTag: _text(json['seriesTag']),
+        tags: _list(json['tags']),
+        negative: _text(json['negative']),
+        loraName: _text(json['loraName']),
+        loraWeight: (json['loraWeight'] as num?)?.toDouble(),
+        loraTrigger: _text(json['loraTrigger']),
+        checkpoint: _text(json['checkpoint']),
+        referenceMediaId: (json['referenceMediaId'] as num?)?.toInt(),
+        source: _text(json['source']),
+        tagsVerifiedAt: _text(json['tagsVerifiedAt']),
+        notes: _text(json['notes']),
+        updatedAt: _text(json['updatedAt']),
+      );
+
+  /// 发给后端的字段（不带 id / 时间戳）。
+  ///
+  /// ⚠ 后端的 `PUT` 是**全量替换**：这里把空字段一并发出去（`null` / `[]`），
+  /// 用户在编辑弹窗里清空一个字段才会真的清掉。别"只发非空字段" —— 那样清空永远不生效。
+  Map<String, dynamic> toPayload() => {
+        'name': name,
+        'nameEn': nameEn,
+        'aliases': aliases,
+        'characterTag': characterTag,
+        'seriesTag': seriesTag,
+        'tags': tags,
+        'negative': negative,
+        'loraName': loraName,
+        'loraWeight': loraWeight,
+        'loraTrigger': loraTrigger,
+        'checkpoint': checkpoint,
+        'referenceMediaId': referenceMediaId,
+        'source': source,
+        // 核对时间是后端工具写的，界面不改它 → 编辑保存时**原样带回**
+        'tagsVerifiedAt': tagsVerifiedAt,
+        'notes': notes,
+      };
+
+  /// 一行摘要（列表卡片上给用户看的那句）。
+  String get summary {
+    final bits = <String>[];
+    if (characterTag != null) bits.add(characterTag!);
+    if (seriesTag != null) bits.add(seriesTag!);
+    if (aliases.isNotEmpty) bits.add('别名 ${aliases.take(3).join('、')}');
+    if (loraName != null) {
+      bits.add('LoRA $loraName${loraWeight == null ? '' : ' @$loraWeight'}');
+    }
+    return bits.join(' · ');
+  }
+}
+
+// ---------------------------------------------------------------------------
 //  工具与权限（M4 / AIH-031 ~ AIH-036 / AIH-049）
 // ---------------------------------------------------------------------------
 

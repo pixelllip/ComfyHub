@@ -7,6 +7,7 @@ import '../state/library_store.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common.dart';
 import '../widgets/tag_editor.dart';
+import 'character_cards_page.dart';
 import 'prompt_detail_page.dart';
 import 'prompt_edit_page.dart';
 
@@ -79,6 +80,16 @@ class _PromptsPageState extends State<PromptsPage> {
                   ),
               ]
             : [
+                IconButton(
+                  tooltip: '角色卡',
+                  icon: const Icon(Icons.badge_outlined),
+                  // 角色卡与提示词是同一件事的两半：写角色前先看卡里存的规范 tag 栈
+                  // （AI 也读同一张表）。做成子页面而不是第六个一级导航项 —— 手机窄屏
+                  // 塞不下六个图标，而且系统返回手势天然正确（见 `9480278`）。
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const CharacterCardsPage()),
+                  ),
+                ),
                 IconButton(
                   tooltip: '批量管理',
                   icon: const Icon(Icons.checklist),
