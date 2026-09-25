@@ -1,9 +1,15 @@
 package com.comfyhub.ai.tools
 
 import com.comfyhub.AppJson
+import com.comfyhub.CharacterCardDto
+import com.comfyhub.CharacterCardInput
+import com.comfyhub.CharacterCardRepo
 import com.comfyhub.ComfyEnv
 import com.comfyhub.ComfyModels
+import com.comfyhub.Db
 import com.comfyhub.FitReport
+import com.comfyhub.PromptDto
+import com.comfyhub.PromptRepo
 import com.comfyhub.SettingsRepo
 import com.comfyhub.WorkflowAudit
 import com.comfyhub.WorkflowFit
@@ -15,6 +21,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -25,6 +32,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -179,6 +187,14 @@ class ToolRegistry(
      * 工具只贴链接 + sha256 + 目标目录，文件由用户自己下。`download_model` 保持 deny。
      */
     private val finder: ModelFinder? = null,
+    /**
+     * Danbooru 查询（O8，2026-09-25，用户要求："对于支持 tag 的模型（比如 Anima），
+     * 除了专门 LoRA 内置的提示词外**也要查查 danbooru**"）。
+     *
+     * 与 [search] / [civitai] / [finder] 同一个路子：null = 本次部署没有这条能力，
+     * 工具仍在清单里，一调用就报 `DANBOORU_DISABLED`（测试里就是这么构造的）。
+     */
+    private val danbooru: DanbooruClient? = null,
     /**
      * 提问闸门（用户建议 ⑥，2026-09-20："让 AI 像 deepseek harness 一样支持提问功能，
      * 回答结束时不中断当前对话"）。
@@ -1311,6 +1327,198 @@ class ToolRegistry(
         },
 
         // ------------------------------------------------------------------
+        //  本机资料库（O7/O8，2026-09-25）：搜自己的提示词库 + 角色卡读写
+        //
+        //  现场（总纲 §10.3）：AI 没有"搜我自己的库"这条路，只能凭印象编 tag，
+        //  于是把 shinku 当 iroi 写了两版废图 —— 而库里 id 261 / 310 就有
+        //  `shinku_(nte), neverness_to_everness, pink streaks, purple horns…` 的完整 tag 栈。
+        //  角色卡解决的是另一半：**查过的结果要能存下来**，否则下一轮又得重查。
+        // ------------------------------------------------------------------
+        AgentTool(
+            name = "search_prompts",
+            description = "搜**本机的提示词库**（自己生成 / 导入过的提示词），或按 id 取一条完整的。" +
+                "写角色、复刻风格、换模型之前**先查这里**：库里很可能已经有那个角色的完整 tag 栈" +
+                "（例：`shinku_(nte)` 的 tag 栈就在某条提示词的正向里），照抄比凭印象编 tag 靠谱。" +
+                "返回 id / 标题 / 正负提示词 / LoRA / 参数 / tag / 产物数；要按某条工作流出图就把它的 id 给 `comfy_submit(promptId=…)`。",
+            parameters = schema(
+                """{"type":"object","properties":{"query":{"type":"string","description":"关键字：角色名 / tag / 标题片段；多个词用空格分开（都要命中）"},"id":{"type":"integer","description":"直接取某一条提示词（与 query 二选一）"},"limit":{"type":"integer","description":"最多几条，默认 5，上限 20"},"includePrompt":{"type":"boolean","description":"是否带上正/负提示词正文，默认 true；只想看列表就传 false"}},"additionalProperties":false}"""
+            ),
+            category = ToolCategory.LIBRARY,
+            mutating = false,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, _ ->
+            val id = args["id"]?.let { (it as? JsonPrimitive)?.contentOrNull?.toLongOrNull() }
+            val includePrompt = args["includePrompt"]?.let { (it as? JsonPrimitive)?.contentOrNull } != "false"
+            val limit = (args.int("limit") ?: 5).coerceIn(1, MAX_LIBRARY_RESULTS)
+
+            val items: List<PromptDto> = if (id != null) {
+                listOf(
+                    PromptRepo.get(id)
+                        ?: throw ToolFailure("NOT_FOUND", "库里没有 id=$id 的提示词；用 query 搜一下角色名或 tag 片段")
+                )
+            } else {
+                val query = args.str("query")
+                PromptRepo.search(
+                    PromptRepo.SearchArgs(q = query, size = limit, sort = "newest")
+                ).items
+            }
+
+            if (items.isEmpty()) {
+                throw ToolFailure(
+                    "NOT_FOUND",
+                    "库里没有匹配的提示词（关键字：${args.str("query") ?: "（空）"}）。" +
+                        "换个词再搜（角色名 / 作品名 / 一个 tag），或者换 `comfy_find_workflow` 找本机的工作流文件 —— " +
+                        "**不要**因为库里没有就自己编 tag。",
+                )
+            }
+
+            val text = buildString {
+                appendLine("提示词库：命中 ${items.size} 条" + (id?.let { "（id=$it）" } ?: ""))
+                items.forEach { p ->
+                    appendLine()
+                    appendLine("── [${p.id}] ${p.title.ifBlank { "(无标题)" }}")
+                    appendLine(
+                        "   ${p.kind} · 来源 ${p.source ?: "?"} · 产物 ${p.mediaCount} 张 · ${p.createdAt ?: "?"}"
+                    )
+                    val loras = p.loras.joinToString("、") { "${it.name}@${it.weight}" }.ifBlank { "（无）" }
+                    appendLine("   LoRA: $loras")
+                    val size = if (p.width != null && p.height != null) "${p.width}x${p.height} " else ""
+                    appendLine(
+                        "   参数: $size" +
+                            "steps=${p.steps ?: "?"} cfg=${p.cfgScale ?: "?"} " +
+                            "sampler=${p.sampler ?: "?"} seed=${p.seed ?: "?"} 底模=${p.checkpoint ?: "?"}"
+                    )
+                    if (p.tags.isNotEmpty()) appendLine("   tag: " + p.tags.joinToString("、") { it.name })
+                    if (includePrompt) {
+                        appendLine("   正面: " + clip(p.positivePrompt, MAX_PROMPT_CHARS))
+                        p.negativePrompt?.takeIf { it.isNotBlank() }
+                            ?.let { appendLine("   负面: " + clip(it, MAX_PROMPT_CHARS / 2)) }
+                    }
+                }
+                appendLine()
+                appendLine(
+                    "用法：照抄角色那段 tag 栈（或整条正向）；要按这条工作流出图就用 comfy_submit(promptId=<上面的 id>)。"
+                )
+            }
+            ToolOutput(
+                text,
+                buildJsonObject {
+                    put("count", items.size)
+                    put("items", buildJsonArray {
+                        items.forEach { p ->
+                            add(
+                                buildJsonObject {
+                                    put("id", p.id)
+                                    put("title", p.title)
+                                    put("kind", p.kind)
+                                    put("source", p.source ?: "")
+                                    put("mediaCount", p.mediaCount)
+                                    put("checkpoint", p.checkpoint ?: "")
+                                    put("loras", buildJsonArray { p.loras.forEach { l -> add(l.name) } })
+                                    put("tags", buildJsonArray { p.tags.forEach { t -> add(t.name) } })
+                                    if (includePrompt) {
+                                        put("positivePrompt", p.positivePrompt)
+                                        put("negativePrompt", p.negativePrompt ?: "")
+                                    }
+                                }
+                            )
+                        }
+                    })
+                },
+            )
+        },
+
+        AgentTool(
+            name = "search_character_cards",
+            description = "查本机存下来的**角色卡**（角色的规范 tag 栈 + 配哪条 LoRA / 权重 + 别名 + 来源 + " +
+                "最后一次跟 danbooru 核对的时间）。**写某个角色之前先查这里**：有卡就照卡写，不用重新查一遍。" +
+                "查不到再去 `danbooru_lookup` 核对 tag / 找同现 tag，然后 `save_character_card` 存下来。",
+            parameters = schema(
+                """{"type":"object","properties":{"query":{"type":"string","description":"关键字：角色名 / 别名 / 角色 tag / LoRA 名；不传就是列全部"},"limit":{"type":"integer","description":"最多几条，默认 5，上限 20"}},"additionalProperties":false}"""
+            ),
+            category = ToolCategory.LIBRARY,
+            mutating = false,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, _ ->
+            val query = args.str("query")
+            val limit = (args.int("limit") ?: 5).coerceIn(1, MAX_LIBRARY_RESULTS)
+            val cards = CharacterCardRepo.list(query, limit)
+            if (cards.isEmpty()) {
+                throw ToolFailure(
+                    "NOT_FOUND",
+                    "本机没有匹配的角色卡（关键字：${query ?: "（空）"}）。" +
+                        "下一步：`danbooru_lookup(query=\"角色名\")` 核对 tag 与同现 tag，" +
+                        "再用 `save_character_card` 存成卡；**不要**凭印象编 tag。",
+                )
+            }
+            val text = buildString {
+                appendLine("角色卡：命中 ${cards.size} 张")
+                cards.forEach { c -> appendLine(); appendLine(renderCard(c)) }
+            }
+            ToolOutput(
+                text,
+                buildJsonObject {
+                    put("count", cards.size)
+                    put("items", buildJsonArray { cards.forEach { add(cardJson(it)) } })
+                },
+            )
+        },
+
+        AgentTool(
+            name = "save_character_card",
+            description = "把一个角色的**规范 tag 栈 / LoRA / 权重 / 别名 / 来源**存成角色卡。" +
+                "同名 = 同一张卡（**合并保存**：只有你这次给了值的字段会被覆盖，`tags` 是**追加去重**，不会抹掉已有的）。" +
+                "写卡前先 `danbooru_lookup` 核对：**只有本轮真的查过的 tag 才会被记上核对时间**，" +
+                "没查过就如实留空（别自己编一个时间）。删除或清空字段请让用户去界面上做。",
+            parameters = schema(
+                """{"type":"object","properties":{"name":{"type":"string","description":"角色名（用户叫的名字；同名视为同一张卡）"},"nameEn":{"type":"string","description":"英文 / 罗马字写法"},"aliases":{"type":"string","description":"别名，逗号分隔（danbooru 的 other names 可以照抄）"},"characterTag":{"type":"string","description":"danbooru 角色 tag，形如 shinku_(nte)"},"seriesTag":{"type":"string","description":"作品 tag，形如 neverness_to_everness"},"tags":{"type":"string","description":"规范 tag 栈，逗号或换行分隔（外观 / 服装 / 动作基线；danbooru 的同现 tag 就是它）"},"negative":{"type":"string","description":"这个角色常踩的负面词"},"loraName":{"type":"string","description":"角色 LoRA 文件名（ComfyUI models/loras 下的那个名字）"},"loraWeight":{"type":"number","description":"建议权重（没把握就用工作流里的值）"},"loraTrigger":{"type":"string","description":"LoRA 触发词（可能多个，逗号分隔）"},"checkpoint":{"type":"string","description":"建议底模"},"referenceMediaId":{"type":"integer","description":"参考图（画廊里的产物 id）"},"source":{"type":"string","description":"来源：链接 / \"用户口述\" / \"danbooru\" —— 如实写，不许编"},"notes":{"type":"string","description":"备注（这个角色怎么画才对）"}},"required":["name"],"additionalProperties":false}"""
+            ),
+            category = ToolCategory.LIBRARY,
+            mutating = true,
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, ctx ->
+            val name = args.str("name") ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 name")
+            val characterTag = args.str("characterTag")
+            // 核对时间**只认这一轮真查过的 tag**（见 ToolContext.danbooruVerified）
+            val verifiedKey = DanbooruSearch.normalizeTag(characterTag ?: name)
+            val verified = ctx.danbooruVerified.contains(verifiedKey)
+            val input = CharacterCardInput(
+                name = name,
+                nameEn = args.str("nameEn"),
+                aliases = CharacterCardRepo.splitTags(args.str("aliases").orEmpty()),
+                characterTag = characterTag,
+                seriesTag = args.str("seriesTag"),
+                tags = CharacterCardRepo.splitTags(args.str("tags").orEmpty()),
+                negative = args.str("negative"),
+                loraName = args.str("loraName"),
+                loraWeight = args["loraWeight"]?.let { (it as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull() },
+                loraTrigger = args.str("loraTrigger"),
+                checkpoint = args.str("checkpoint"),
+                referenceMediaId = args["referenceMediaId"]?.let { (it as? JsonPrimitive)?.contentOrNull?.toLongOrNull() },
+                source = args.str("source"),
+                tagsVerifiedAt = if (verified) Instant.now().toString() else null,
+                notes = args.str("notes"),
+            )
+            val (id, created) = Db.tx { conn -> CharacterCardRepo.save(conn, input) }
+            val card = CharacterCardRepo.get(id)
+                ?: throw ToolFailure("TOOL_ERROR", "角色卡已保存但读不回来（id=$id）；这是本机的 bug，请如实告诉用户")
+            val text = buildString {
+                appendLine("已保存角色卡 #$id「${card.name}」（${if (created) "新建" else "合并更新"}）")
+                appendLine(renderCard(card))
+                appendLine()
+                if (verified) {
+                    appendLine("danbooru 核对时间已记上：${card.tagsVerifiedAt}")
+                } else {
+                    appendLine(
+                        "⚠ 这张卡**没有** danbooru 核对记录（本轮没有查过 `$verifiedKey`）—— " +
+                            "想标上核对时间就先 `danbooru_lookup`，再回来保存一次；**不要**自己编时间。"
+                    )
+                }
+            }
+            ToolOutput(text, cardJson(card))
+        },
+
+        // ------------------------------------------------------------------
         //  联网搜索（2026-09-20，用户定的规则：只用通用方案，不碰各家原生内置搜索）
         //
         //  **这是本项目里唯一会把数据送出本机的工具类别**（[ToolCategory.WEB]），
@@ -1405,9 +1613,41 @@ class ToolRegistry(
             )
         },
 
+        AgentTool(
+            name = "danbooru_lookup",
+            description = "查 danbooru 上 tag 的**规范写法**（Anima / SD 这类 Danbooru tag 模型的正源）：" +
+                "给角色名返回它的角色 tag、别名、wiki 简介、同角色的**换装版本 tag**，以及**同现 tag**" +
+                "（danbooru 上这个角色最常用的外观 / 服装 tag，按频率排序）。" +
+                "写 tag 模型的角色提示词之前，除了 LoRA 触发词**还要查这里**核对写法" +
+                "（是 `shinku_(nte)` 而不是 `shinku` 或中文名）；查完用 `save_character_card` 存成角色卡。",
+            parameters = schema(
+                """{"type":"object","properties":{"query":{"type":"string","description":"角色名 / tag（中文、罗马字、带不带括号都行；空格会被当成下划线）"},"limit":{"type":"integer","description":"候选 tag 最多几条，默认 12，上限 20"},"relatedLimit":{"type":"integer","description":"同现 tag 最多几条，默认 20，上限 50"}},"required":["query"],"additionalProperties":false}"""
+            ),
+            category = ToolCategory.WEB,
+            mutating = false,
+            // 公开 wiki 的只读查询、没有凭据也没有费用，而且"先查再写"这条纪律**必须能随手做**；
+            // 出网次数仍受联网预算约束（`ToolPolicyConfig.DEFAULT_MAX_WEB_QUERIES_PER_RUN`），
+            // 用户也可以把整类 WEB 工具改成 deny。
+            defaultAccess = ToolAccess.ALLOW,
+        ) { args, ctx ->
+            val client = danbooru
+                ?: throw ToolFailure("DANBOORU_DISABLED", "本次运行没有启用 danbooru 查询能力")
+            val query = args.str("query") ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 query")
+            val outcome = client.lookup(
+                query = query,
+                limit = args.int("limit") ?: 12,
+                relatedLimit = args.int("relatedLimit") ?: 20,
+            )
+            // 记下"这一轮真的查过这个 tag"：`save_character_card` 靠它决定写不写核对时间
+            ctx.danbooruVerified += DanbooruSearch.normalizeTag(query)
+            outcome.meta.obj("character")?.str("tag")?.let {
+                ctx.danbooruVerified += DanbooruSearch.normalizeTag(it)
+            }
+            ToolOutput(untrustedBanner("danbooru 页面", query) + "\n\n" + outcome.text, outcome.meta)
+        },
+
         // ------------------------------------------------------------------
-        //  提问（用户建议 ⑥，2026-09-20）
-        //
+        //  提问（用户建议 ⑥，2026-09-20）        //
         //  用户的原话："让 AI 像 deepseek harness 一样支持提问功能，回答结束时不中断当前对话"。
         //  所以这个工具的语义**不是**"把这一轮结束掉、等用户下一条消息"，
         //  而是"挂在这里等，答完把答案当工具结果喂回模型，同一个 Run 接着往下做"。
@@ -2316,6 +2556,71 @@ private fun untrustedBanner(kind: String, query: String?): String = buildString 
     if (!query.isNullOrBlank()) {
         append(ToolRegistry.UNTRUSTED_BANNER_QUERY_LINE.replace("{query}", query))
     }
+}
+
+// ---------------------------------------------------------------------------
+//  本机资料库（O7/O8）：截断与渲染
+// ---------------------------------------------------------------------------
+
+/**
+ * 一条提示词的正向正文最多回给模型多少字符。
+ *
+ * 1500 的依据：实测库里最长的正向是 Krea 2 那种整段自然语言（约 1.2k 字符），
+ * 而 Anima 的 tag 栈一般不到 500 —— 1500 装得下"完整照抄"这件事。
+ * 一次最多回 [MAX_LIBRARY_RESULTS] 条，所以单条结果整块远在 `MAX_RESULT_CHARS` 之内。
+ */
+private const val MAX_PROMPT_CHARS = 1500
+
+/** 资料库类查询一次最多回几条（给模型看的，不是分页）。 */
+private const val MAX_LIBRARY_RESULTS = 20
+
+private fun clip(text: String, max: Int): String =
+    if (text.length <= max) text else text.take(max) + "…（已截断，共 ${text.length} 字符）"
+
+/** 角色卡在工具结果里的正文形状（模型要能一眼看出"卡里已经有什么"）。 */
+private fun renderCard(card: CharacterCardDto): String = buildString {
+    appendLine("  #${card.id}「${card.name}」${card.nameEn?.let { "（$it）" } ?: ""}")
+    card.characterTag?.let { appendLine("  角色 tag: $it") }
+    card.seriesTag?.let { appendLine("  作品 tag: $it") }
+    if (card.aliases.isNotEmpty()) appendLine("  别名: " + card.aliases.joinToString("、"))
+    if (card.tags.isNotEmpty()) {
+        appendLine("  tag 栈(${card.tags.size}): " + card.tags.take(40).joinToString("、"))
+    }
+    val lora = listOfNotNull(
+        card.loraName,
+        card.loraWeight?.let { "权重 $it" },
+        card.loraTrigger?.let { "触发词 $it" },
+    )
+    if (lora.isNotEmpty()) appendLine("  LoRA: " + lora.joinToString(" · "))
+    card.checkpoint?.let { appendLine("  底模: $it") }
+    card.referenceMediaId?.let { appendLine("  参考图: 产物 $it") }
+    card.negative?.let { appendLine("  负面: " + clip(it, 300)) }
+    card.source?.let { appendLine("  来源: $it") }
+    appendLine("  danbooru 核对: " + (card.tagsVerifiedAt ?: "（没有——这些 tag 未经 danbooru 核对）"))
+    card.notes?.let { appendLine("  备注: " + clip(it, 300)) }
+    appendLine("  更新于 ${card.updatedAt ?: "?"}")
+}
+
+/** 角色卡的结构化形状（界面 / 后续工具要用时从这里拿）。 */
+private fun cardJson(card: CharacterCardDto): JsonObject = buildJsonObject {
+    put("id", card.id)
+    put("name", card.name)
+    card.nameEn?.let { put("nameEn", it) }
+    put("aliases", buildJsonArray { card.aliases.forEach { add(it) } })
+    card.characterTag?.let { put("characterTag", it) }
+    card.seriesTag?.let { put("seriesTag", it) }
+    put("tags", buildJsonArray { card.tags.forEach { add(it) } })
+    card.negative?.let { put("negative", it) }
+    card.loraName?.let { put("loraName", it) }
+    card.loraWeight?.let { put("loraWeight", it) }
+    card.loraTrigger?.let { put("loraTrigger", it) }
+    card.checkpoint?.let { put("checkpoint", it) }
+    card.referenceMediaId?.let { put("referenceMediaId", it) }
+    card.source?.let { put("source", it) }
+    card.tagsVerifiedAt?.let { put("tagsVerifiedAt", it) }
+    card.notes?.let { put("notes", it) }
+    card.createdAt?.let { put("createdAt", it) }
+    card.updatedAt?.let { put("updatedAt", it) }
 }
 
 // ---------------------------------------------------------------------------

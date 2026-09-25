@@ -558,6 +558,8 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                           'memory' => Icons.push_pin_outlined,
                           // 联网搜索（2026-09-20）：地球仪，一眼区分"这个工具出网"
                           'web' => Icons.travel_explore_outlined,
+                          // 资料库（O7/O8，2026-09-25）：提示词库 / 角色卡
+                          'library' => Icons.menu_book_outlined,
                           _ => Icons.dns_outlined,
                         },
                         size: 16,

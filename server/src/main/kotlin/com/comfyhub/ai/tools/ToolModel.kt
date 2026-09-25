@@ -77,6 +77,16 @@ enum class ToolCategory(val wire: String) {
      * （见 `_AskCard`），否则用户会把"等你回答"误当成"等你批准"。
      */
     ASK("ask"),
+
+    /**
+     * **本机资料库**查询（O7/O8，2026-09-25）：搜自己的提示词库、读写角色卡。
+     *
+     * 单独一类而不是塞进 [MEMORY]：记忆是"一行一条文本"、有 100 条上限、
+     * 超限直接报错，而这里的东西是**结构化**的（角色卡有 tag 栈 / LoRA / 权重 / 来源，
+     * 提示词库有正负提示词与参数）。分开的另一个理由：用户可能想整体关掉
+     * "别再翻我的库"，而保留长期记忆。
+     */
+    LIBRARY("library"),
     ;
 
     companion object {
@@ -165,6 +175,17 @@ class ToolContext(
      * `ask_user_question` 靠它把提问送到界面；测试里可以传一个只记下来不真发的实现。
      */
     val emit: ((String, JsonObject) -> Unit)? = null,
+    /**
+     * **本 Run 里真的跟 danbooru 核对过的 tag**（O8，2026-09-25）。
+     *
+     * `danbooru_lookup` 查到一个角色 tag 就往这里记一笔；`save_character_card` 只在这个
+     * 集合里有对应 tag 时才写 `tags_verified_at`。
+     *
+     * 为什么要有它：`tags_verified_at` 的语义是"这张卡的 tag 跟 danbooru 核对过" ——
+     * 如果让模型自己填一个时间戳，那它就成了模型的一句**自称**（与"我查过了"没有区别）。
+     * 这里把它变成**这一轮的事实**：没查过就写不出核对时间，卡片上也就看得见差别。
+     */
+    val danbooruVerified: MutableSet<String> = mutableSetOf(),
 ) {
     /** 本 Run 还能不能再动一次工具（窗内额度与绝对天花板都没到）。 */
     val hasCallsLeft: Boolean get() = callsInWindow < windowLimit && calls < ToolRegistry.ABSOLUTE_CALL_CAP

@@ -454,6 +454,11 @@ fun Application.module(ctx: AppContext) {
             civitai = civitaiSearch,
             credentials = credentials,
         ),
+        // Danbooru 查询（O8，2026-09-25，用户要求："对于支持 tag 的模型（比如 Anima），
+        // 除了专门 LoRA 内置的提示词外也要查查 danbooru"）。
+        // 公开只读 wiki → 默认 allow（但算 WEB 类，受联网预算约束；整类可被用户 deny）。
+        // ⚠ 本机 danbooru 直连不稳，必须经 OutboundProxy 走系统代理（客户端内部已挂选择器）。
+        danbooru = com.comfyhub.ai.tools.DanbooruSearch(),
         // 提问（用户建议 ⑥）：把问题递到用户面前、在原地等回答，
         // 答完作为工具结果喂回模型，**同一个 Run 接着做**。
         ask = askGate,
