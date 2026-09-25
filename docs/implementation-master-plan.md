@@ -903,7 +903,23 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   `/api/ai/pending` 形状不变、`/api/ai/questions/<不存在>` 回 400 `{error,detail}`、
 >   `/api/ai/runs/<不存在>/question` 回 `{"pending":false}`（两个可选键都**不出现**）。
 > - 仍未做：联网三工具（`web_search` / `web_fetch` / `civitai_search`）、附件（R9）、
->   那批界面端点、桌面专属工具（`comfy_*` / 文件工具）。
+>   界面端点**其余几批**、桌面专属工具（`comfy_*` / 文件工具）。
+>
+> ✅ **P4 第 33 步（`cde2e52`，2026-09-25）：界面端点第一批（`tools` / `tools/policy` / `nsfw`）** ——
+> 交接单第 3 条的第一刀，也是第 31 步那个审批闸门**能不能被用起来**的前提：
+> 少了「权限档」这一条，用户**连"自动允许"都切不了**，`ToolAccess::Ask` 的工具永远拦着等人点。
+> - `GET /api/ai/tools`：这台后端**能跑**的工具（只列 `tools::IMPLEMENTED`）。
+>   ⚠ 列一个跑不了的工具等于告诉用户"AI 能改文件"，而调用会回 `TOOL_NOT_FOUND`。
+> - `GET /api/ai/tools/policy`：11 个键与 `ToolPolicyDto` 逐字对齐；`writeRoots` / `readRoots`
+>   回的是**展开后的绝对路径**；`autoReadRoots` **每次现算**（真库副本上真的探到用户那 4 个
+>   ComfyUI 目录 —— 这条正是用户 bug ④ 要的行为）。
+> - `PUT /api/ai/tools/policy`：只改传了的字段；权限档非法 **400**（悄悄回落成 `ask` 看着更"安全"，
+>   实际是把用户的意图静默改成另一种行为）；两条预算夹在 1..24 / 1..100（与 Kotlin `coerceIn` 同）；
+>   写库是**合并**不是整份覆盖 —— 同一行里还有 `maxReadBytes` 等字段，覆盖会悄悄删掉它们。
+> - `GET/PUT /api/ai/nsfw`：`enabled` / `blur` / `effectiveBlur` / `promptVersion`；缺省一律按**关**
+>   （漏传一个字段绝不能让那段越狱提示词被悄悄打开），且与 run-kit 读**同一行**
+>   （`run_kit::KEY_NSFW` 改成 `pub`：各写一份键名就会出现"界面里开了、提示词没注入"）。
+> - 验收：`cargo test` **223 例全绿**（128 lib + 93 api + 2 shape_lint）+ 真库副本抽查（8098）。
 
 > **📅 2026-09-25 这一轮的交接单**（按价值排序，下一轮从这儿起手）：
 > 1. ✅ **工具层与审批（R8）+ 提问闸门**：第 31 / 32 步已落地（四个本机工具 + 闸门 + 两条端点批次）。
@@ -967,6 +983,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > | **`0f91b9f`** | **P4 第 31 步：工具层地基 + R8 审批闸门**（`tools.rs` + 工具往返循环 + 两条预算，见 §8） |
 > | `30725e6` | 第 31 步补丁：**只有真跑成功才消耗额度**（`spendCall` 的时点） |
 > | **`557ab76`** | **P4 第 32 步：提问闸门 `ask_user_question`** + 四条界面端点 + `ai_questions` 写侧（见 §8） |
+> | **`cde2e52`** | **P4 第 33 步：界面端点第一批**（`/api/ai/tools` + `/tools/policy` + `/nsfw`）—— 设置页那两张卡的地基 |
 >
 > **这一轮最值钱的三条教训**（都写进了 §8 的登记与 `docs/pitfalls.md`）：
 > ① **"形状"要逐条对着 Kotlin 抄，不能照着 DTO 猜** —— 这一批抓出四处偏差（`tool.requested`
@@ -980,12 +997,17 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > 两条都修了，防线一条没动。
 >
 > **下一轮从这三件起手**（按价值）：
-> 1. **联网三工具**（`web_search` / `web_fetch` / `civitai_search`）—— 系统提示里那一整节
->    "联网搜索的纪律"现在指向三个**没下发**的工具（模型会尝试、拿到 `TOOL_NOT_FOUND` 后换路，
->    功能上不缺，但提示词与工具清单不一致）；
-> 2. **桌面专属工具**（`comfy_submit` / `comfy_*` 39 个 MCP / 文件工具）—— 这才是
->    "AI 能不能真的生图"那一档，也是 R10 在 Rust 侧的落点（`capture.captureRun()` 那条链）；
-> 3. **附件（R9）**：`/api/ai/attachments*` + 内联预算。
+> 1. **界面端点剩下那几批**（`skills` / `memory` / `builtin` / `capabilities` / providers 写侧
+>    + `web-search/credential`）—— 第 33 步只做了 `tools` / `tools/policy` / `nsfw` 三条，
+>    设置页其余几张卡今天指向 Rust 仍是「接口不存在」；
+> 2. **联网三工具**（`web_search` / `web_fetch` / `civitai_search`）—— 系统提示里那一整节
+>    "联网搜索的纪律"现在指向三个**没下发**的工具；`web-search/credential` 那三条端点
+>    也要一起搬（Keenable 那把 key 就存在那里）；
+> 3. **桌面专属工具**（`comfy_submit` / `comfy_*` 39 个 MCP / 文件工具）—— 这才是
+>    "AI 能不能真的生图"那一档，也是 R10 在 Rust 侧的落点。
+>
+> 用户已拍板（2026-09-25）：**这三件都要做**，并且**可以用真 provider 跑一两条真上游验收**；
+> 真机回归由用户按屏幕配合（`adb reverse` + 假网关那套先由我把不花钱的部分准备好）。
 
 > **2026-09-24 第六轮**：用户要求"继续按总纲实施，每实现一项就 git 保存；
 > 并**测试电脑与手机之间的数据与部分设置（含 API Key 设置）互传**"。
