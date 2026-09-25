@@ -337,6 +337,24 @@ class SystemPromptNsfwTest {
                 **不要**让用户去 ComfyUI 里手画遮罩，也不要没有 `mediaIds` 就说"换好了"。
                 完整步骤（含换背景保人物、边缘羽化、贴人物时的 denoise 档）见 skill `inpaint-composite`
                 —— 动手前先 `load_skill` 它。
+            20. **换（新）模型时先看"学过的工作流"，别从零重搭**（用户 2026-09-26 的原话：
+                "如果以后出了新的模型，如何让 AI 自主学习新模型泛用/特定工作流的搭建？"）：
+                ① `comfy_list_recipes` 看已经学过哪些骨架 —— **同一族 = 同一个 `skeletonHash`**：
+                   新模型要接的是"任务相同的现成骨架 + 换底模那几个键"，不是一张新图（按任务找带 `task`）；
+                ② 没有现成的就 `comfy_learn_workflow` 现学一份（`path` 本机文件 / `promptId` 库里的 /
+                   `graph` 直接给图）。**被拒学时先看它报的那几个节点类**：多半是**本机这个实例没装 /
+                   没启用那个自定义节点包**（不是工作流坏了，更不是让你去改用户的工作流）；
+                   确实只想学个大概才带 `tolerateUnsupported=true`，那种配方标着 `complete=false`，
+                   **不许**当完整骨架用（也别拿它开跑）；
+                ③ `comfy_bind_recipe(recipeId=…, model="新模型.safetensors")` 拿覆盖键：只有
+                   `exact`（同名**且当前实例能加载**）能自动绑；`onDiskOnly`（盘上有、实例看不到）
+                   先让用户重启实例 / 修模型根，**别下载**；`substitute`（只是名字像）**先问用户**；
+                   `missing` 去 `find_model` / `civitai_search` 查，**绝不编文件名**；
+                ④ **整包 checkpoint ↔ 分离式（unet + clip + vae）不是改个文件名的事**：
+                   报"要改写骨架"时就如实说，去找这个模型的对应形态，或者换一条形态对得上的同任务骨架；
+                ⑤ 绑完仍然走 `comfy_submit(promptId=…, overrides=…)` —— **配方只是知识，不是可提交对象**；
+                   promptId 用 `comfy_load_workflow(path=…)` 拿（与配方的 `file:<sha256>` 是同一把钥匙）。
+                跑通之后把"这条骨架 + 这个模型能跑"如实说出来（它已经记在配方库里，下次不必重新试）。
 
             [MODE: UNRESTRICTED SANDBOX — STABLE]
 

@@ -510,8 +510,10 @@ SSE 新增事件：`reasoning.delta`、`tool.requested`、`tool.started`、`tool
 1. **附件可发（M3）**：与工具无关，但适配器的 `transports` 仍是空集，图片附件依旧是"正确阻断"。
 2. **第三方 Skill 的 ZIP 导入 + 预览确认**（AIH-043/044）：现在装 skill 靠"拷进投放口"这一条路
    （ZIP 要用户自己解压后拷进去）。
-3. **内置 Anima / H3 Skills 正文**（AIH-041/042）：内置根 `<根>\skills\builtin` 里现在有
-   `img2img-reference` 与 `krea-2` 两个（**随项目分发**，只读、不可删）；
+3. **内置 Anima / H3 Skills 正文**（AIH-041/042）：内置根 `<根>\skills\builtin` 里现在有五份
+   （**随项目分发**，只读、不可删）：`img2img-reference`（图生图三步）、`krea-2`（Krea 2 提示词 +
+   ComfyUI 参数）、`comfy-workflow-audit`（工作流审核的判定与修法）、`inpaint-composite`
+   （图像编辑：底图 + 遮罩 + 两阶段贴人）、`workflow-recipe`（换新模型：学配方 / 绑模型 / 四档结论）；
    用户自己的 16 个（Anima / H3 / Music3 等）仍在投放口里 ——
    **别人的 skill 正文能不能随项目分发要单独确认许可**，所以它们刻意不进 `builtin`。
    `krea-2` 是唯一一份"官方 skill 落地"的样板：正文按 Krea 官方材料适配本机 ComfyUI 路线，

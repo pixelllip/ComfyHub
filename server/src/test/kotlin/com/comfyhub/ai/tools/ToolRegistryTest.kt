@@ -1469,6 +1469,35 @@ class ToolRegistryTest {
         assertTrue(text.contains("核对时间由工具记"), "核对时间不许让模型自己编")
     }
 
+    /**
+     * v31（2026-09-26）：第 20 条 —— 换新模型时先看"学过的工作流"。
+     *
+     * 它是用户这次问题的落点（"如果以后出了新的模型，如何让 AI 自主学习新模型
+     * 泛用/特定工作流的搭建？"）。这条纪律里那四句最容易在后续改动里被"顺手简化掉"，
+     * 而简化掉的后果都是**静默**的（模型会直接去从零搭图 / 拿缺件的骨架开跑 / 编一个模型名）：
+     * ① 被拒学时先怀疑"实例没装那个节点包"；② `complete=false` 不许当完整骨架；
+     * ③ 整包 ↔ 分离式要如实说"要改写骨架"；④ 配方不是可提交对象。
+     */
+    @Test
+    fun `第 20 条 换新模型先看学过的配方 且不许拿缺件骨架开跑`() {
+        val text = com.comfyhub.ai.NsfwPrompt.PERSONA_BLOCK
+        assertTrue(text.contains("20. **换（新）模型时先看"), "第 20 条不在了")
+        for (tool in listOf("comfy_list_recipes", "comfy_learn_workflow", "comfy_bind_recipe", "comfy_submit")) {
+            assertTrue(text.contains(tool), "第 20 条要指名 `$tool`，否则模型不会去用它")
+        }
+        for (line in listOf(
+            "skeletonHash",
+            "本机这个实例没装",
+            "不许**当完整骨架用",
+            "先问用户",
+            "绝不编文件名",
+            "要改写骨架",
+            "配方只是知识，不是可提交对象",
+        )) {
+            assertTrue(text.contains(line), "第 20 条缺了一句关键约束：$line")
+        }
+    }
+
     @Test
     fun `提示词版本 查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份`() {
         // v21（2026-09-20 晚）：删掉 render 里重复的那一整份常驻纪律
@@ -1489,7 +1518,9 @@ class ToolRegistryTest {
         // + 顺手删掉 NSFW 段尾部那份陈旧纪律副本（用户："纪律只留一份"）
         // v30（2026-09-26）：第 19 条 —— 图像编辑（底图 + 遮罩 + 只描述遮罩区）
         // + comfy_use_media / comfy_make_mask + 两条自带 inpaint 工作流 + skill inpaint-composite
-        assertEquals("v30", SystemPrompt.VERSION)
+        // v31（2026-09-26）：第 20 条 —— 换新模型时先看"学过的工作流"
+        // + comfy_learn_workflow / comfy_list_recipes / comfy_bind_recipe + skill workflow-recipe
+        assertEquals("v31", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(

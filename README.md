@@ -26,6 +26,7 @@
 | **图生图 / 参考图** | 用户上传的图片可以直接进工作流：AI 先用 `comfy_use_attachment` 把附件投放进 ComfyUI 的 `input/` 目录拿到真实文件名，再用 `comfy_submit` 覆盖 `LoadImage` 节点的 `image` 输入（例 `{"89.image":"…"}`）。工作流被捕获时绑定的那个旧文件名**改不了也不用改** —— 内置 skill `img2img-reference` 与系统提示 v7 都写清了这三步 |
 | **角色卡 / 先查再写**（2026-09-26） | 写角色提示词前的**三处查证**（系统提示 v29 第 18 条）：① `search_prompts` 搜自己的提示词库（库里可能已经有那个角色的完整 tag 栈）；② `search_character_cards` 查角色卡；③ `danbooru_lookup` 核对**写法**并拿**同现 tag**（用户原话："对于支持 tag 的模型（比如 Anima），除了专门 LoRA 内置的提示词外也要查查 danbooru"）。角色卡（`/api/ai/character-cards`，App 里从**提示词页右上角**进）存的是"规范 tag 栈 + 别名 + 配哪条 LoRA/权重 + 来源 + 最后一次跟 danbooru 核对的时间"；**同名 = 同一张卡**（保存是合并、`tags` 追加去重），而 `tagsVerifiedAt` 只由 danbooru 那条工具写 —— 没查过就写不出来（界面上会明说"这些 tag 没跟 danbooru 核对过"） |
 | **图像编辑 / 局部重绘**（2026-09-26） | "**保持背景不变、换上指定动作的人物、保住画风**"这件事现在是**能跑的**：项目自带两条 inpaint 工作流（`comfyui\workflows\comfyhub_inpaint_anima.json` / `_krea2.json`）+ 两件工具（`comfy_use_media` 把**画廊产物**投放进 ComfyUI 的 input、`comfy_make_mask` 生成**白=重绘区**的遮罩）+ 内置 skill `inpaint-composite`（系统提示 v30 第 19 条）。两种需求**用同一份工作流**：保背景换人物 = 人物那块遮罩；**换背景保人物** = 同一块遮罩 `invert=true`；**"先生成人物再换上去"** = 把阶段一产物填进 `20.image` 并把 `denoise` 降到 0.4~0.6 融合（保画风 = 两个阶段同底模 + 同画风 LoRA）。活实例实测（896x1152 底图）：**遮罩内平均像素差 100.5/255、遮罩外 0.73/255** —— 该换的换了、该保的一个像素没动（脚本 `scripts\e2e-inpaint-test.ps1` 可重跑） |
+| **工作流配方：换（新）模型不用重搭**（2026-09-26） | 出了新模型（比如 Krea 2 出了新版、或者视频模型被拿来当图像编辑的基底）时，**不必从零搭一张图**。AI 先把一份具体工作流"学"成**配方**：`comfy_learn_workflow`（本机文件 / 库里的 promptId / 直接给节点图三种来源）归纳出 **任务**（t2i / i2i / edit / inpaint / upscale / video / audio，按节点形状判）、**骨架指纹**（`skeletonHash` —— 同一族 = 同一个值，与模型无关，这就是"泛用"那一层）、**模型槽位**（该改哪个键、原来是哪个文件）与**参数旋钮**（提示词 / 采样 / 尺寸）；配方落进 `workflow_recipes` 表（同一来源学两次只有一行）。换模型时 `comfy_bind_recipe(recipeId=…, model="新模型.safetensors")` 给出该写进 `comfy_submit(overrides=…)` 的键，**只报不改**：只有 `exact`（同名且当前实例能加载）能自动绑，`onDiskOnly`（盘上有、实例看不到）先重启 / 修模型根、**别下载**，`substitute`（只是名字像）**先问用户**，`missing` 去 `find_model` / `civitai_search` 查、**绝不编文件名**。两条硬纪律：**默认拒学"转换有缺口"的图**（真机上最常见的原因是本机实例没装那几个自定义节点 —— 直接学会得到一条看着像、其实缺了链的骨架，而且不报错），以及**配方不是可提交对象**（提交永远只有 `comfy_submit` 一条路）。设计见 [docs/workflow-recipe-design.md](docs/workflow-recipe-design.md)，系统提示 v31 第 20 条 + 内置 skill `workflow-recipe`；端到端见 `scripts\e2e-recipe-test.ps1`（35 项）|
 | **工作流文件直接提交** | 用户甩过来一个工作流 `.json` 路径时，AI 不再回"我只能提交库里的 promptId"：`comfy_load_workflow` 读那份文件 → **API 格式原样用**；**界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图** → 入库拿 `promptId` → `comfy_submit` 正常提交（也可以 `comfy_submit(workflowPath=…)` 一步到位）。转换器现在能等价处理的比过去多得多：**组节点（subgraph）按 `definitions.subgraphs` 展开**、旁路 / Reroute / Set-Get 照旧、**`widgets_values_named`（带参数名的那份）优先**（不必再按位置猜）。剩下纯粹的**前端**节点（`Anything Everywhere`、rgthree 的显示节点…）现在由 **## 模拟用户行为 ##**（2026-09-21，用户建议 ②）挡在前面：`comfy_load_workflow` 默认开着 `emulateFrontend`，**照 ComfyUI 前端排队前的行为等价改写**——广播型节点按它声明的 `Input Type` 把上游那一路灌进全图**同类型且空着**的输入、纯显示节点丢掉、一个输出节点都没有时补一个 `SaveImage`；**改了什么逐条列在 `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里**（模型必须转述给你，不许默默改图），说不清类型的**不猜**、照旧报 `UNSUPPORTED_NODES`。要"一个字都别动我的工作流"就带 `emulateFrontend=false` 再读一次，那时**不再是死路**：带 `tolerateUnsupported=true` 会把这些节点摘掉并给出**缺口清单**（`openInputs` = 哪些连线型输入空着、缺什么类型；`unresolvedInputs` = 哪个输入还悬着），AI 照着用 `comfy_submit(promptId=…, connections={"8.vae":["1",2]})` 把线补上就能跑 —— 猜的那部分仍然由 ComfyUI 自己的校验兜底。顺带：**本机 ComfyUI 的目录现在是自动放行的只读白名单**（`ComfyRoots` 每次现探），所以 AI 能直接读你自己的工作流文件；写仍然只允许 `<项目根>\comfyui`。 |
 | **本机工作流看得见**（2026-09-18） | **"库里搜不到"不再等于"这条工作流用不了"**。库里的工作流只有两个来源（自动捕获 = 只收"本进程活着的时候跑过的"、以及手动按路径读），所以**首次使用时库里必然是空的** —— 而你机器上早就存着一堆工作流（`…\ComfyUI\user\<用户>\workflows\*.json`）。现在：① `comfy_list_workflows`（只读）直接列出本机已保存的工作流文件（路径 / 格式 / 是否已入库），`comfy_find_workflow` 在库里搜不到时**自动带上**它们；② 系统提示 v13 写清顺序（find → list → `comfy_load_workflow(path=…)` → submit），并**禁止**再说"得先在 ComfyUI 里跑一次才会被捕获"；③ 设置页 →「ComfyUI 自动捕获」多一颗**「导入本机工作流」**：把目录里的工作流批量读进库（幂等，重复点没关系；转换不了的也入库并如实标 `runnable=false`）。对应的只读接口 `GET /api/capture/workflows?q=` 与导入接口 `POST /api/capture/import-workflows`（实测本机 11 份一把列全）。 |
 | **联网搜索**（2026-09-20） | AI 会**真的上网查资料**：`web_search`（用一句自然语言描述"你想要的那一页"，返回带编号与链接的网页正文，引用时给编号 + URL）与 `web_fetch`（把搜索结果里的某篇取回来读全文，服务端已去样板转 markdown）。后端是 **Keenable**（用户定的规则：只用通用方案，不碰各家原生内置搜索），**出厂免密钥可用**（按来源限速约 1000 次/小时），想要提额在「设置 → AI 工具权限 → 联网搜索」里填可选密钥（DPAPI 加密，只写不读）。三条安全线：① 两个工具出厂都是**「询问」档**——查询词会离开本机；② 一次回复最多联网 8 次（独立预算）；③ 抓取目标只接受公开网址（内网 / 本机 / 云元数据地址出网前就拒），搜到的正文一律按**不可信数据**交给模型（注入防线）。搜索不到会如实说"没搜到"，不许编。 |
@@ -307,6 +308,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
 | `scripts\install-comfy-node.ps1` | （可选）把捕获节点装进 ComfyUI，实现「跑完立刻捕获」 |
 | `scripts\anima-gen.ps1` | **Anima 生图执行器**：向本机 ComfyUI 提交一次文生图并等落盘（`-PromptFile/-NegativeFile/-Width/-Height/-Seed/-Prefix`） |
 | `scripts\e2e-inpaint-test.ps1`（2026-09-26） | **图像编辑的活实例端到端**：取一张真底图（默认画廊里最新的一张图）→ 造遮罩 → 提交**项目自带**的 inpaint 工作流 → 取产物 → **量化验收**：遮罩内平均像素差要大（真的重画了）、遮罩外要小（背景保住了，实测 0.73/255）。`-Model anima\|krea2`、`-Region x,y,w,h`、`-Feather`、`-Prompt`。⚠ 它只读画廊（底图是拷出去的），产物落在 ComfyUI 的 output；跑之前先确认 ComfyUI 在跑（`comfyhub.ps1 doctor`） |
+| `scripts\e2e-recipe-test.ps1`（2026-09-26） | **工作流配方端到端**（Kotlin 后端，35 项，不花钱不出网）：学一份 API 格式工作流 → 幂等 → 从库里提示词学 → 界面格式（连不上要如实报 `COMFY_UNREACHABLE`；ComfyUI 在场时验"有缺口就拒学"）→ 列表 / 详情 → **绑定**（四档结论 + "非 exact 一个键都不许写"）→ 四条错误分支 → 删除。真库副本 + 自动挑空闲端口，跑完删掉（`-KeepData` 留着看现场、`-UiWorkflow` 指定那份界面格式文件）。**它自带两条防线**：产物比源码旧就 exit 2（改了源码没重编会得到一堆假红），以及起停都按进程**树**（`.bat` 是 cmd 包 java，只杀 cmd 会留下 JVM 占着库副本） |
 | `scripts\gen-builtin-catalog.ps1` | **开发期工具**：把 `%USERPROFILE%\.dsh\settings.yaml` 里的模型目录抄成我们自己的冻结副本 `server\src\main\resources\ai\builtin-catalog.json`（运行时只读这份副本，**绝不读 YAML**；解析到少于 60 个模型就拒绝写盘） |
 
 > **关 App 的时候，后端 / MySQL 会不会跟着停？**
@@ -513,6 +515,11 @@ pwsh -File scripts\e2e-capture-test.ps1
 | `DELETE` | `/api/ai/skills/{name}` | 删除（**只允许用户来源**；内置的返回 400 拒绝） |
 | `GET` | `/api/ai/skills/roots` | Skills **投放口**位置（`userRoot` = `<storage>\ai\skills`、`builtinRoot`）；界面显示它让用户知道往哪儿拷 |
 | `POST` | `/api/ai/skills/rescan` | 重新扫描投放口：给"拷进来但没写 frontmatter"的 skill **自动补 frontmatter 登记**，返回 `{registered, names, errors, skills}` |
+| `GET` | `/api/ai/workflow-recipes` | **工作流配方**列表（`?q=` 关键字（配方名 / 骨架 / 路径 / 槽位里的模型文件名）/ `?task=`（`t2i`/`i2i`/`edit`/`inpaint`/`upscale`/`video`/`audio`）/ `?skeleton=` 骨架指纹 / `?complete=true` 只列没有转换缺口的 / `?limit=`） |
+| `POST` | `/api/ai/workflow-recipes` | **学一份工作流**（AI 走 `comfy_learn_workflow`）：`{path}`（本机文件，界面格式也行）/ `{promptId}`（库里已有 API 图）/ `{graph}` 三选一；有 `tolerateUnsupported` / `emulateFrontend` / `name` / `notes`。**默认拒学"转换有缺口"的图**（400 `UNSUPPORTED_NODES` + 逐条缺口）。幂等：同一来源只有一行（`file:<sha256>` / `prompt:<id>` / `graph:<sha256>`） |
+| `GET` | `/api/ai/workflow-recipes/{id}` | 详情：配方本体 + `render` 正文（任务 / 骨架指纹 / 槽位覆盖键 / 参数旋钮 / 输出 / 缺口） |
+| `POST` | `/api/ai/workflow-recipes/{id}/bind` | **把配方绑到（新）模型上**（AI 走 `comfy_bind_recipe`）：`{model, role?, overrideKey?, force?, extra?}` → 该写进 `comfy_submit(overrides=…)` 的键 + 四档结论（`exact` / `onDiskOnly` / `substitute` / `missing`…）。**只报不改** |
+| `DELETE` | `/api/ai/workflow-recipes/{id}` | 删除一条配方（删除不影响 `prompts`；配方指向的提示词被删时它照旧留着） |
 | `GET/PUT/DELETE` | `/api/ai/memory` | **长期记忆**（真源 `<storage>\ai\memory.md`）：读 / 整篇替换 / 清空 |
 | `POST` | `/api/ai/memory/entries` | 追加一条记忆（界面「添加」用；AI 走 `remember` 工具）。界面手敲的**不加日期前缀** |
 | `POST` | `/api/ai/memory/delete` | 按下标删除若干条记忆 `{indices:[0,2]}`（界面的单条 / 批量删除；越界下标忽略） |
@@ -1271,12 +1278,15 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 
 - **Skills 是运行期数据，不是仓库源码**：后端只在启动时与 `POST /api/ai/skills/rescan`
   扫投放口（`<storage>\ai\skills`），所以上面这些 skill 的升级走各自上游仓库、重新投放即可生效，
-  **不用重编 App**；本仓库自带的只有 `skills\builtin\img2img-reference`、`skills\builtin\inpaint-composite`
-  与 `skills\builtin\krea-2` 三个（只读、不可删）。`inpaint-composite` 是**图像编辑**那条路的操作手册
+  **不用重编 App**；本仓库自带的只有 `skills\builtin\img2img-reference`、`skills\builtin\inpaint-composite`、
+  `skills\builtin\krea-2` 与 `skills\builtin\workflow-recipe` 四个（只读、不可删）。
+  `inpaint-composite` 是**图像编辑**那条路的操作手册
   （三步工具序列 / 两阶段贴人 / 换背景保人物 / 保画风四条 / 边缘羽化与 denoise 档位），
   配套工作流见 `comfyui\workflows\comfyhub_inpaint_*.json`。`krea-2` 是按 Krea 官方材料整理的
   **Krea 2 提示词 + ComfyUI 参数** skill（官方原文另存 `<根>\skills\builtin\krea-2\references\`，
-  来源与许可见那里的 `SOURCES.md`）。
+  来源与许可见那里的 `SOURCES.md`）。`workflow-recipe` 是**换新模型**那条路的操作手册
+  （三层分解 / 四步顺序 / 四档绑定结论的处置 / 接不上时怎么判断 / 怎么沉淀），
+  设计文档 [docs/workflow-recipe-design.md](docs/workflow-recipe-design.md)。
 - **破甲那段系统提示词是用户有意注入的**（2026-09-17 明确指示"那是我的意图，不许删除"）：
   它在 `HarnessRunner.kt` 里有独立注释、`ToolRegistryTest` 里有"必须还在"的断言，
   **别当误粘贴清理掉**；要改先问用户（见 `AGENTS.md` 第 10 节）。
