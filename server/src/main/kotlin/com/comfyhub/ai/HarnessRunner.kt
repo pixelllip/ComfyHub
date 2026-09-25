@@ -1398,8 +1398,14 @@ object SystemPrompt {
      *     也要查查 danbooru"，以及现场那次 shinku 被当成 iroi 写了两版废图
      *     （库里 261/310 就有它完整的 tag 栈）。同一版顺手删掉 NSFW 段尾部那份
      *     **陈旧的纪律重复**（用户拍板"纪律只留一份"，见 `NsfwPrompt.VERSION` 的 nsfw-v3）。
+     * v30（2026-09-26）：新增第 19 条 —— **图像编辑**（底图 + 遮罩 + 只描述遮罩区）。
+     *     两件新工具 `comfy_use_media`（画廊产物进 ComfyUI input）/ `comfy_make_mask`
+     *     （白=重绘区的遮罩）+ 项目自带两条 inpaint 工作流 + skill `inpaint-composite`。
+     *     起因是用户的需求："保持背景不变，更换有具体动作的人物并保持画风" ——
+     *     做法是**先生成人物，再用图像编辑把人换上去**；反过来"换背景保留人物"
+     *     用同一份工作流、遮罩取反。
      */
-    const val VERSION = "v29"
+    const val VERSION = "v30"
 
     /**
      * 第一问时追加的一段：让模型在正文最前面带一行 `[标题]…[/标题]`，

@@ -257,6 +257,9 @@ class ToolRegistryTest {
         // O8（用户原话："对于支持 tag 的模型（比如 Anima），除了专门 LoRA 内置的提示词外
         // **也要查查 danbooru**"）
         "danbooru_lookup",
+        // 图像编辑（2026-09-26，用户："保持背景不变，更换有具体动作的人物并保持画风"）：
+        // 画廊产物进 ComfyUI input + 生成重绘遮罩
+        "comfy_use_media", "comfy_make_mask",
     )
 
     // --- 清单 / 权限 --------------------------------------------------------
@@ -314,6 +317,12 @@ class ToolRegistryTest {
         assertEquals("web", defaults["danbooru_lookup"]!!.category)
         assertEquals("allow", defaults["danbooru_lookup"]!!.access)
         assertTrue(!defaults["danbooru_lookup"]!!.mutating, "danbooru 只读")
+        // 图像编辑两件都往 ComfyUI 的 input 目录写文件 → 与 comfy_use_attachment 同档（要批准）
+        assertEquals("comfy", defaults["comfy_use_media"]!!.category)
+        assertEquals("ask", defaults["comfy_use_media"]!!.access)
+        assertTrue(defaults["comfy_use_media"]!!.mutating)
+        assertEquals("ask", defaults["comfy_make_mask"]!!.access)
+        assertTrue(defaults["comfy_make_mask"]!!.mutating)
 
         val overridden = ToolPolicy(
             e.root,
@@ -1451,7 +1460,9 @@ class ToolRegistryTest {
         // **先查本机再查外网** + **绝不代下**（只给链接 + sha256 + 目标目录）
         // v29（2026-09-26）：第 18 条 —— 写角色前先查三处（自己的库 / 角色卡 / danbooru）
         // + 顺手删掉 NSFW 段尾部那份陈旧纪律副本（用户："纪律只留一份"）
-        assertEquals("v29", SystemPrompt.VERSION)
+        // v30（2026-09-26）：第 19 条 —— 图像编辑（底图 + 遮罩 + 只描述遮罩区）
+        // + comfy_use_media / comfy_make_mask + 两条自带 inpaint 工作流 + skill inpaint-composite
+        assertEquals("v30", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(

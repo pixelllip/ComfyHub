@@ -1,0 +1,18 @@
+{
+  "1": {"_meta": {"title": "底模 Krea 2 Turbo int8"}, "inputs": {"ckpt_name": "krea2TurboOfficialComfy_krea2TurboInt8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
+  "5": {"_meta": {"title": "外挂 CLIP（Qwen3VL-4B，type=krea2）"}, "inputs": {"clip_name": "qwen3VL4BAbliteratedComfyui_v10_full_bf16.safetensors", "type": "krea2", "device": "default"}, "class_type": "CLIPLoader"},
+  "6": {"_meta": {"title": "外挂 VAE"}, "inputs": {"vae_name": "qwen_image_vae.safetensors"}, "class_type": "VAELoader"},
+  "10": {"_meta": {"title": "底图（要保留的那张）"}, "inputs": {"image": "example.png"}, "class_type": "LoadImage"},
+  "11": {"_meta": {"title": "缩放到画布尺寸（必须与遮罩一致）"}, "inputs": {"image": ["10", 0], "upscale_method": "area", "width": 1024, "height": 1024, "crop": "disabled"}, "class_type": "ImageScale"},
+  "12": {"_meta": {"title": "遮罩（comfy_make_mask 生成；白=重绘区）"}, "inputs": {"image": "example_mask.png", "channel": "red"}, "class_type": "LoadImageMask"},
+  "20": {"_meta": {"title": "人物图（纯重绘时填底图自己；贴阶段一产物时填人物图）"}, "inputs": {"image": "example.png"}, "class_type": "LoadImage"},
+  "21": {"_meta": {"title": "人物图缩放到画布尺寸"}, "inputs": {"image": ["20", 0], "upscale_method": "area", "width": 1024, "height": 1024, "crop": "disabled"}, "class_type": "ImageScale"},
+  "22": {"_meta": {"title": "按遮罩把人物图贴到底图上（白区生效）"}, "inputs": {"destination": ["11", 0], "source": ["21", 0], "x": 0, "y": 0, "resize_source": false, "mask": ["12", 0]}, "class_type": "ImageCompositeMasked"},
+  "23": {"_meta": {"title": "VAE 编码"}, "inputs": {"pixels": ["22", 0], "vae": ["6", 0]}, "class_type": "VAEEncode"},
+  "24": {"_meta": {"title": "只给遮罩区加噪（非遮罩区原样保留）"}, "inputs": {"samples": ["23", 0], "mask": ["12", 0]}, "class_type": "SetLatentNoiseMask"},
+  "13": {"_meta": {"title": "正面提示词（Krea 2 要**自然语言**，别堆 tag；写遮罩区里应该出现什么）"}, "inputs": {"clip": ["5", 0], "text": "A photograph of a person standing in the same place as the original subject, matching the scene's lighting and color, sharp focus, clean skin texture, 35mm film look."}, "class_type": "CLIPTextEncode"},
+  "14": {"_meta": {"title": "负面提示词（Turbo cfg=1 时作用很弱，主要靠正面描述排除）"}, "inputs": {"clip": ["5", 0], "text": ""}, "class_type": "CLIPTextEncode"},
+  "15": {"_meta": {"title": "K采样器（denoise=1 只重绘遮罩区；贴人物图时降到 0.4~0.6 融合）"}, "inputs": {"model": ["1", 0], "seed": 20260926, "steps": 8, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "positive": ["13", 0], "negative": ["14", 0], "latent_image": ["24", 0], "denoise": 1.0}, "class_type": "KSampler"},
+  "16": {"_meta": {"title": "VAE 解码"}, "inputs": {"samples": ["15", 0], "vae": ["6", 0]}, "class_type": "VAEDecode"},
+  "17": {"_meta": {"title": "保存图像（换 seed 抽卡，别换前缀）"}, "inputs": {"images": ["16", 0], "filename_prefix": "comfyhub_inpaint_krea2"}, "class_type": "SaveImage"}
+}

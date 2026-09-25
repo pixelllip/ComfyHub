@@ -162,6 +162,22 @@ class ToolRegistry(
     private val comfyUseAttachment: suspend (String, String?) -> JsonObject =
         { _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用图片投放能力") },
     /**
+     * 把**画廊里的图片产物**放进 ComfyUI 的 `input/` 目录（2026-09-26，两阶段图像编辑）。
+     *
+     * 与 [comfyUseAttachment] 是同一个池子的两个来源：那条走用户消息里的附件，
+     * 这条走画廊（阶段一生成的人物图天然在画廊里）。返回 `{mediaId, filename, width, height, …}`。
+     */
+    private val comfyUseMedia: (Long, String?) -> JsonObject =
+        { _, _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用画廊产物投放能力") },
+    /**
+     * 生成局部重绘用的**遮罩**（白 = 重绘区）并放进 ComfyUI 的 `input/` 目录。
+     *
+     * 参数原样传（`baseFilename` / `region` / `invert` / `feather`…），由
+     * `AiImageEdit.makeMask` 解析 —— 见那个文件的注释里那张"两种需求怎么用同一个遮罩"的表。
+     */
+    private val comfyMakeMask: (JsonObject) -> JsonObject =
+        { _ -> throw ToolFailure("COMFY_DISABLED", "本次运行没有启用遮罩生成能力") },
+    /**
      * 联网搜索客户端（`web_search` / `web_fetch`，2026-09-20）。
      *
      * 为 null = 本次部署没有联网能力（测试里就是这么构造的）：工具仍然出现在清单里，
@@ -866,6 +882,59 @@ class ToolRegistry(
             val attachmentId = args.str("attachmentId")
                 ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 attachmentId（见用户消息里的附件说明）")
             val result = comfyUseAttachment(attachmentId, args.str("filename"))
+            ToolOutput(AppJson.encodeToString(JsonElement.serializer(), result), result)
+        },
+
+        // ------------------------------------------------------------------
+        //  图像编辑（2026-09-26）：画廊产物投放 + 遮罩生成
+        //
+        //  用户需求原话："保持背景不变，更换有具体动作的人物并保持画风" —— 做法是
+        //  **先生成人物、再用图像编辑把人换上去**；反过来"换背景保留人物"用同一个工作流，
+        //  只是遮罩取反。这两件工具是那条路的地基：LoadImage / LoadImageMask 只能读
+        //  ComfyUI 的 input 目录，而阶段一的产物在画廊里、遮罩在手机上也画不出来。
+        // ------------------------------------------------------------------
+        AgentTool(
+            name = "comfy_use_media",
+            description = "把**画廊里的一个图片产物**放进 ComfyUI 的 input 目录，返回它在那边真实可用的文件名与尺寸。" +
+                "两阶段图像编辑的地基：阶段一生成的人物图、要保留的背景图都在画廊里，" +
+                "而 LoadImage 只能读 input 目录里的文件。" +
+                "拿到 filename 与 width/height 之后：底图用 comfy_submit 覆盖 `节点id.image`；" +
+                "要遮罩就用 `comfy_make_mask(baseFilename=…, region=…)`。" +
+                "（用户随消息**发来**的图走 `comfy_use_attachment`，别混。）",
+            parameters = schema(
+                """{"type":"object","properties":{"mediaId":{"type":"integer","description":"画廊里的图片产物 id（用 media 列表 / 刚生成的 mediaIds 里拿）"},"filename":{"type":"string","description":"可选：希望它在 ComfyUI 里叫什么（不填就用原名；会自动加一段 id 后缀防重名）"}},"required":["mediaId"],"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = true,
+            // 要往用户机器上写文件（ComfyUI input 目录）→ 与 comfy_use_attachment 同一条纪律
+            defaultAccess = ToolAccess.ASK,
+        ) { args, _ ->
+            val mediaId = args.int("mediaId")?.toLong()
+                ?: args["mediaId"]?.let { (it as? JsonPrimitive)?.contentOrNull?.toLongOrNull() }
+                ?: throw ToolFailure("INVALID_ARGUMENT", "缺少参数 mediaId（画廊里的图片产物 id）")
+            val result = comfyUseMedia(mediaId, args.str("filename"))
+            ToolOutput(AppJson.encodeToString(JsonElement.serializer(), result), result)
+        },
+
+        AgentTool(
+            name = "comfy_make_mask",
+            description = "生成一张**局部重绘用的遮罩**放进 ComfyUI 的 input 目录（**白 = 要重新生成的地方**）。" +
+                "两种需求用同一个工作流，只是遮罩反过来：" +
+                "**保背景换人物** = 人物那块 region；**换背景保人物** = 同一个 region 再加 `invert=true`。" +
+                "给了 baseFilename（input 目录里的底图）就照它尺寸生成，**推荐**这么用。" +
+                "region 支持 full / left / right / top / bottom / center / person，" +
+                "或归一化的 \"x,y,w,h\"（例如 \"0.3,0.05,0.4,0.9\"）；" +
+                "`feather` 羽化边缘（把人物贴进新背景时 8~24 明显更自然）。" +
+                "**框是估的**：工具会回 approximate=true 与它实际用的框，不准就报新坐标重做 —— " +
+                "不要指望它做分割，也不要让用户去 ComfyUI 里手画。",
+            parameters = schema(
+                """{"type":"object","properties":{"baseFilename":{"type":"string","description":"input 目录里的底图文件名（先用 comfy_use_media / comfy_use_attachment 投放）；给了就用它的尺寸"},"width":{"type":"integer","description":"没给 baseFilename 时的画布宽"},"height":{"type":"integer","description":"没给 baseFilename 时的画布高"},"region":{"type":"string","description":"重绘区：full（默认）/ left / right / top / bottom / center / person / \"x,y,w,h\"（归一化 0~1）"},"shape":{"type":"string","description":"rect（默认）或 ellipse"},"invert":{"type":"boolean","description":"反选：只保留这块、其它全重绘（换背景保人物用这个）"},"feather":{"type":"integer","description":"边缘羽化像素，默认 0；8~24 常用于把人物贴进新背景"},"filename":{"type":"string","description":"可选：固定的遮罩文件名（不给自己按参数算一个，重复调用得到同一个文件）"}},"additionalProperties":false}"""
+            ),
+            category = ToolCategory.COMFY,
+            mutating = true,
+            defaultAccess = ToolAccess.ASK,
+        ) { args, _ ->
+            val result = comfyMakeMask(args)
             ToolOutput(AppJson.encodeToString(JsonElement.serializer(), result), result)
         },
 

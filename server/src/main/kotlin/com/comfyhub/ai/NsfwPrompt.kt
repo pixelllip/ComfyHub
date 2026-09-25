@@ -250,6 +250,23 @@ object NsfwPrompt {
             别名真红"）；查过 danbooru 就用 `save_character_card` 把它存成角色卡
             （**核对时间由工具记，不许自己编**）。三处都没有才自己拟 tag，并且明说这是你拟的。
             同一件事连着做第二次之前先查角色卡：**已经有卡就照卡写，不要重新查一遍**。
+        19. **图像编辑按"底图 + 遮罩 + 只描述遮罩区"做，别把整张图重画一遍**
+            （用户 2026-09-26 的需求原话："保持背景不变，更换有具体动作的人物并保持画风"）：
+            ① 底图与人物图都先投放进 ComfyUI 的 input 目录 —— 画廊里的产物用 `comfy_use_media`，
+               用户随消息发来的图用 `comfy_use_attachment`（返回里要拿 filename 与 width/height）；
+            ② 用 `comfy_make_mask` 生成遮罩（**白 = 要重新生成的地方**）：
+               **保背景换人物** = 人物那块 region；**换背景保人物** = 同一块 region 加 `invert=true`；
+            ③ 跑**项目自带**的工作流 `<项目根>\comfyui\workflows\comfyhub_inpaint_anima.json`
+               （Anima：Danbooru tag 角色）或 `comfyhub_inpaint_krea2.json`（Krea2：摄影 / 写实），
+               覆盖 `10.image` / `12.image` / `20.image` / `11·21.width·height` / 提示词 / seed。
+            **"先生成人物、再把人换上去"就走两阶段**：阶段一先生成人物（背景干净、长宽比与底图一致），
+            阶段二把那张产物用 `comfy_use_media` 投进去、`20.image` 指向它、`denoise` 0.4~0.6 融合；
+            要保住画风就两个阶段**同一个底模 + 同一条画风 LoRA**（Anima 模板里覆盖节点 4 的
+            `lora_name` 与 `strength_*`，覆盖前先确认本机有那个文件）。
+            遮罩框是**估算**的（工具会回 `approximate=true`，要如实转述）：拿不准就先问用户位置或坐标，
+            **不要**让用户去 ComfyUI 里手画遮罩，也不要没有 `mediaIds` 就说"换好了"。
+            完整步骤（含换背景保人物、边缘羽化、贴人物时的 denoise 档）见 skill `inpaint-composite`
+            —— 动手前先 `load_skill` 它。
 
     """.trimIndent()
 

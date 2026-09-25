@@ -1,0 +1,21 @@
+{
+  "1": {"_meta": {"title": "底模 anima-base-v1.0"}, "inputs": {"unet_name": "anima-base-v1.0.safetensors", "weight_dtype": "default"}, "class_type": "UNETLoader"},
+  "2": {"_meta": {"title": "Sage Attention（KJ）"}, "inputs": {"model": ["1", 0], "sage_attention": "auto", "allow_compile": false}, "class_type": "PathchSageAttentionKJ"},
+  "3": {"_meta": {"title": "加速 LoRA（anima-turbo-lora-v0.2，非画风；10 步 cfg1 靠它）"}, "inputs": {"model": ["2", 0], "clip": ["5", 0], "lora_name": "anima-turbo-lora-v0.2.safetensors", "strength_model": 1.0, "strength_clip": 1.0}, "class_type": "LoraLoader"},
+  "4": {"_meta": {"title": "可选：画风 / 角色 LoRA（默认强度 0 = 不生效。要用就覆盖 lora_name 与 strength_model / strength_clip）"}, "inputs": {"model": ["3", 0], "clip": ["3", 1], "lora_name": "anima-turbo-lora-v0.2.safetensors", "strength_model": 0.0, "strength_clip": 0.0}, "class_type": "LoraLoader"},
+  "5": {"_meta": {"title": "外挂 CLIP（qwen3-0.6B）"}, "inputs": {"clip_name": "qwen_3_06b_base.safetensors", "type": "qwen_image", "device": "default"}, "class_type": "CLIPLoader"},
+  "6": {"_meta": {"title": "外挂 VAE"}, "inputs": {"vae_name": "qwen_image_vae.safetensors"}, "class_type": "VAELoader"},
+  "10": {"_meta": {"title": "底图（要保留的那张）"}, "inputs": {"image": "example.png"}, "class_type": "LoadImage"},
+  "11": {"_meta": {"title": "缩放到画布尺寸（必须与遮罩一致）"}, "inputs": {"image": ["10", 0], "upscale_method": "area", "width": 896, "height": 1152, "crop": "disabled"}, "class_type": "ImageScale"},
+  "12": {"_meta": {"title": "遮罩（comfy_make_mask 生成；白=重绘区）"}, "inputs": {"image": "example_mask.png", "channel": "red"}, "class_type": "LoadImageMask"},
+  "20": {"_meta": {"title": "人物图（纯重绘时填**底图自己**；贴阶段一产物时填人物图）"}, "inputs": {"image": "example.png"}, "class_type": "LoadImage"},
+  "21": {"_meta": {"title": "人物图缩放到画布尺寸"}, "inputs": {"image": ["20", 0], "upscale_method": "area", "width": 896, "height": 1152, "crop": "disabled"}, "class_type": "ImageScale"},
+  "22": {"_meta": {"title": "按遮罩把人物图贴到底图上（白区生效）"}, "inputs": {"destination": ["11", 0], "source": ["21", 0], "x": 0, "y": 0, "resize_source": false, "mask": ["12", 0]}, "class_type": "ImageCompositeMasked"},
+  "23": {"_meta": {"title": "VAE 编码"}, "inputs": {"pixels": ["22", 0], "vae": ["6", 0]}, "class_type": "VAEEncode"},
+  "24": {"_meta": {"title": "只给遮罩区加噪（非遮罩区原样保留）"}, "inputs": {"samples": ["23", 0], "mask": ["12", 0]}, "class_type": "SetLatentNoiseMask"},
+  "15": {"_meta": {"title": "正面提示词（Anima 是 Danbooru tag 模型；只写**遮罩区里应该出现什么**）"}, "inputs": {"clip": ["4", 1], "text": "masterpiece, best quality, newest, 1girl, solo, looking at viewer, upper body"}, "class_type": "CLIPTextEncode"},
+  "16": {"_meta": {"title": "负面提示词"}, "inputs": {"clip": ["4", 1], "text": "worst quality, low quality, blurry, jpeg artifacts, bad anatomy, bad hands, extra digits, watermark, signature, text"}, "class_type": "CLIPTextEncode"},
+  "17": {"_meta": {"title": "K采样器（denoise=1 只重绘遮罩区；贴人物图时降到 0.4~0.6 融合）"}, "inputs": {"model": ["4", 0], "seed": 20260926, "steps": 12, "cfg": 1.0, "sampler_name": "er_sde", "scheduler": "simple", "positive": ["15", 0], "negative": ["16", 0], "latent_image": ["24", 0], "denoise": 1.0}, "class_type": "KSampler"},
+  "18": {"_meta": {"title": "VAE 解码"}, "inputs": {"samples": ["17", 0], "vae": ["6", 0]}, "class_type": "VAEDecode"},
+  "19": {"_meta": {"title": "保存图像（换 seed 抽卡，别换前缀）"}, "inputs": {"images": ["18", 0], "filename_prefix": "comfyhub_inpaint_anima"}, "class_type": "SaveImage"}
+}

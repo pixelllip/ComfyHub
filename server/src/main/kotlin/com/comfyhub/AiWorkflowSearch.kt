@@ -565,7 +565,7 @@ object AiWorkflowSearch {
      * 这是 ComfyUI 的固定布局）；推不出来再走 [ComfyLocator] 的探测。
      * 探测**只读**，找不到就返回 null（绝不在随机位置建目录）。
      */
-    private fun resolveComfyInputDir(cfg: AppConfig): Path? {
+    internal fun resolveComfyInputDir(cfg: AppConfig): Path? {
         val configured = runCatching { SettingsRepo.captureConfig(cfg).outputDir }.getOrNull()
             ?.takeIf { it.isNotBlank() }
             ?.let { runCatching { Paths.get(it) }.getOrNull() }

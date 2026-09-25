@@ -438,6 +438,12 @@ fun Application.module(ctx: AppContext) {
         comfyUseAttachment = { attachmentId, filename ->
             AiWorkflowSearch.useAttachment(ctx.cfg, aiAttachments, attachmentId, filename)
         },
+        // 图像编辑（2026-09-26，用户需求"保持背景不变、更换有具体动作的人物并保持画风"）：
+        // 画廊产物投放 + 遮罩生成。两条都写 ComfyUI 的 input 目录（与上面那条同一个池子）。
+        comfyUseMedia = { mediaId, filename ->
+            AiImageEdit.useMedia(ctx.cfg, ctx.storage.mediaDir, mediaId, filename)
+        },
+        comfyMakeMask = { args -> AiImageEdit.makeMask(ctx.cfg, args) },
         // 联网搜索（2026-09-20，用户定的规则：只用通用方案）：本项目**唯一**会出网的工具类别。
         // 免密钥默认可用；可选 key 走 CredentialService（DPAPI），设置页里填。
         search = KeenableSearch(credentials),
