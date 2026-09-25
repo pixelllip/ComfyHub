@@ -18,6 +18,7 @@ pub mod auth;
 pub mod capture;
 pub mod comfy_dirs;
 pub mod conversations;
+pub mod credentials;
 pub mod db;
 pub mod events;
 pub mod executor;

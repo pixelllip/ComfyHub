@@ -434,6 +434,15 @@ pub fn base64url(bytes: &[u8]) -> String {
     base64_with(B64URL, bytes, false)
 }
 
+/// base64（**标准字母表 + 填充**）：托管凭据文件里密文的编码形状。
+///
+/// ⚠ 与 [`base64url`] **不是一回事**：Kotlin 的 `CredentialService` 用的是
+/// `Base64.getEncoder()`（`+/` 字母表、带 `=`）。写成 url-safe 的话文件照样能写出去，
+/// 但**Kotlin 侧读不懂** —— 那正是"两端共用一份凭据文件"最怕的那种静默不一致。
+pub fn base64_std(bytes: &[u8]) -> String {
+    base64_with(B64STD, bytes, true)
+}
+
 /// base64 **解码**（标准与 url-safe 都认，容忍填充）—— 读 Kotlin 写的 DPAPI 密文用它。
 pub fn base64_decode(text: &str) -> Result<Vec<u8>, String> {
     let mut acc: u32 = 0;
@@ -570,9 +579,11 @@ mod dpapi {
         Ok(plain)
     }
 
-    /// 只给用例用：**从 Rust 加密一次**，证明我们的 `unprotect` 与 Kotlin 那份是同一套
-    /// （自己写的 FFI 若把熵/scope 弄错，只有"能解开 Kotlin 写的东西"才算证明）。
-    #[allow(dead_code)]
+    /// **加密**：托管凭据库的**写侧**（`credentials.rs` 的 `set`）用它。
+    ///
+    /// 与 `unprotect` 同一档参数（空熵 + CurrentUser + `CRYPTPROTECT_UI_FORBIDDEN`）——
+    /// 两端（Kotlin 的 `ProtectedData.Protect` 与这里）必须写出**对方解得开**的密文，
+    /// 而 DPAPI 的作用域就藏在这三个参数里，改一个就是"换台机器/换个用户解不开"。
     pub fn protect(plain: &[u8]) -> Result<Vec<u8>, String> {
         let mut buf = plain.to_vec();
         let input = DataBlob { cb_data: buf.len() as u32, pb_data: buf.as_mut_ptr() };
@@ -602,10 +613,34 @@ mod dpapi {
     pub fn unprotect(_sealed: &[u8]) -> Result<Vec<u8>, String> {
         Err("DPAPI 只在 Windows 上可用（托管凭据库不解密）".to_string())
     }
+
+    /// 非 Windows：**必须失败**，不许退化成明文落盘 ——
+    /// `CredentialService.set` 的纪律（AIH-015）就是这一条：
+    /// 把明文当"加密存储"写下去，比明文存文件更坏（用户以为它是加密的）。
+    pub fn protect(_plain: &[u8]) -> Result<Vec<u8>, String> {
+        Err("DPAPI 只在 Windows 上可用（拒绝以明文保存密钥）".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  DPAPI 的两个公开入口（`dpapi` 模块本身不外露）
+// ---------------------------------------------------------------------------
+
+/// 明文 → DPAPI 密文（`CurrentUser` + **空熵** + 禁 UI）。
+///
+/// 托管凭据库的**写侧**入口（`credentials::set`）。为什么要有包装：`dpapi` 是实现细节，
+/// 而"空熵 + CurrentUser"这两个参数是**两端共用一份文件**的全部依据 ——
+/// 它们只应该出现在一处，也就是这里。
+pub fn protect_secret(plain: &[u8]) -> Result<Vec<u8>, String> {
+    dpapi::protect(plain)
+}
+
+/// DPAPI 密文 → 明文（密钥下行、上游调用、以及"我们自己写的密文解得开吗"的用例都用它）。
+pub fn unprotect_secret(sealed: &[u8]) -> Result<Vec<u8>, String> {
+    dpapi::unprotect(sealed)
 }
 
 /// 解析一个 ref 的明文：**环境变量优先**（与 Kotlin `resolve` 同顺序），再托管文件。
-///
 /// 环境变量认两个名字：`<ref>` 与 `COMFYHUB_CRED_<ref>`（前缀常量在 `ai.rs`，
 /// 写错就是"永远读不到环境变量里那把 key"）。
 ///
@@ -631,7 +666,7 @@ pub fn resolve_credential(state: &AppState, reference: &str) -> Result<String, A
         .ok_or_else(|| ApiError::not_found(format!("桌面上没有配置凭据 {reference}")))?;
 
     let blob = base64_decode(sealed).map_err(|e| ApiError::internal(format!("凭据密文不是合法 base64：{e}")))?;
-    let plain = dpapi::unprotect(&blob).map_err(|e| {
+    let plain = unprotect_secret(&blob).map_err(|e| {
         ApiError::ai("MISSING_CREDENTIAL", format!("凭据 {reference} {e}"))
     })?;
     String::from_utf8(plain).map_err(|_| ApiError::internal(format!("凭据 {reference} 解密后不是 UTF-8")))

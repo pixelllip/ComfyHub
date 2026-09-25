@@ -230,6 +230,17 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/tools", get(ai_tools))
         .route("/api/ai/tools/policy", get(ai_tool_policy).put(put_tool_policy))
         .route("/api/ai/nsfw", get(ai_nsfw).put(put_nsfw))
+        // 界面端点第二批（P4 第 34 步）：**凭据的写侧**。三条纪律见 `credentials.rs`：
+        // DPAPI 不可用就失败（不落明文）/ 空值 = 不修改（清空只能 DELETE）/ env 来源只读。
+        .route(
+            "/api/ai/providers/{id}/credentials",
+            get(ai_provider_credential).put(put_provider_credential).delete(delete_provider_credential),
+        )
+        // 联网搜索（Keenable）的可选密钥：出厂免密钥可用，这里只是给想提额的用户一个只写入口
+        .route(
+            "/api/ai/web-search/credential",
+            get(ai_web_search_credential).put(put_web_search_credential).delete(delete_web_search_credential),
+        )
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -923,6 +934,126 @@ async fn put_nsfw(
     Json(body): Json<crate::ai_settings::NsfwUpdate>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::ai_settings::save_nsfw(&state, body)?))
+}
+
+// ---------------------------------------------------------------------------
+//  界面端点第二批（P4 第 34 步）：凭据的写侧
+// ---------------------------------------------------------------------------
+
+/// 明文密钥的请求体（`CredentialSetRequest`，**只有一个键** `value`）。
+///
+/// `#[serde(default)]`：空 body / 缺 `value` 都按**空串**处理 —— 那正是
+/// `CredentialSetRequest(val value: String = "")` 的默认值，语义是"不修改"（AIH-012）。
+#[derive(Debug, Default, Deserialize)]
+struct CredentialSetRequest {
+    #[serde(default)]
+    value: String,
+}
+
+/// `GET /api/ai/providers/{id}/credentials` —— 只有状态，**没有值**（AIH-012）。
+async fn ai_provider_credential(
+    State(state): State<AppState>,
+    Path(provider_id): Path<String>,
+) -> Result<Json<crate::ai::CredentialStatus>, ApiError> {
+    let provider = crate::ai::require_provider_row(&state, &provider_id)?;
+    Ok(Json(describe_provider_credential(&state, provider.credential_ref.as_deref())))
+}
+
+/// `PUT /api/ai/providers/{id}/credentials`。
+///
+/// ⚠ 顺序要紧（照抄 Kotlin）：先 `requireProvider` → 再"有没有 credentialRef" →
+/// 再"是不是 env 来源（只读）" → 最后才看 body 空不空。
+/// 把 body 判空提到前面的话，"没配 ref 的 provider 传了空值"会被当成成功的 no-op，
+/// 而界面明明该看到一句"该 Provider 未设置凭据引用名"。
+async fn put_provider_credential(
+    State(state): State<AppState>,
+    Path(provider_id): Path<String>,
+    Json(body): Json<CredentialSetRequest>,
+) -> Result<Json<crate::ai::CredentialStatus>, ApiError> {
+    let provider = crate::ai::require_provider_row(&state, &provider_id)?;
+    let reference = provider.credential_ref.ok_or_else(|| {
+        ApiError::ai("CONFIG_ERROR", "该 Provider 未设置凭据引用名（credentialRef）")
+    })?;
+    if crate::credentials::env_source(&reference).is_some() {
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("凭据 {reference} 由环境变量提供，是只读的；请改用受管凭据引用名"),
+        ));
+    }
+    if body.value.trim().is_empty() {
+        // 留空 = 不修改（AIH-012）；清除请用 DELETE
+        return Ok(Json(crate::credentials::describe_now(&state, &reference)));
+    }
+    Ok(Json(crate::credentials::set(&state, &reference, &body.value)?))
+}
+
+/// `DELETE /api/ai/providers/{id}/credentials`（env 来源与 Kotlin 一样**拒绝**）。
+async fn delete_provider_credential(
+    State(state): State<AppState>,
+    Path(provider_id): Path<String>,
+) -> Result<Json<crate::ai::CredentialStatus>, ApiError> {
+    let provider = crate::ai::require_provider_row(&state, &provider_id)?;
+    let reference = provider.credential_ref.ok_or_else(|| {
+        ApiError::ai("CONFIG_ERROR", "该 Provider 未设置凭据引用名（credentialRef）")
+    })?;
+    if crate::credentials::env_source(&reference).is_some() {
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("凭据 {reference} 由环境变量提供，无法在应用内移除"),
+        ));
+    }
+    Ok(Json(crate::credentials::unset(&state, &reference)?))
+}
+
+/// `GET /api/ai/web-search/credential` —— 联网搜索那把可选 key 的状态。
+async fn ai_web_search_credential(
+    State(state): State<AppState>,
+) -> Result<Json<crate::ai::CredentialStatus>, ApiError> {
+    Ok(Json(crate::credentials::describe_now(&state, crate::credentials::KEENABLE_REF)))
+}
+
+/// `PUT /api/ai/web-search/credential`（报错文案与 provider 那条**刻意不同**：
+/// 这里会告诉用户具体的环境变量名 `COMFYHUB_CRED_keenable`，因为那是唯一的解除办法）。
+async fn put_web_search_credential(
+    State(state): State<AppState>,
+    Json(body): Json<CredentialSetRequest>,
+) -> Result<Json<crate::ai::CredentialStatus>, ApiError> {
+    let reference = crate::credentials::KEENABLE_REF;
+    if crate::credentials::env_source(reference).is_some() {
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!(
+                "密钥 {reference} 由环境变量（COMFYHUB_CRED_{reference}）提供，是只读的；\
+                 请先移除环境变量再在应用内填写"
+            ),
+        ));
+    }
+    if body.value.trim().is_empty() {
+        return Ok(Json(crate::credentials::describe_now(&state, reference)));
+    }
+    Ok(Json(crate::credentials::set(&state, reference, &body.value)?))
+}
+
+/// `DELETE /api/ai/web-search/credential`。
+async fn delete_web_search_credential(
+    State(state): State<AppState>,
+) -> Result<Json<crate::ai::CredentialStatus>, ApiError> {
+    let reference = crate::credentials::KEENABLE_REF;
+    if crate::credentials::env_source(reference).is_some() {
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("密钥 {reference} 由环境变量提供，无法在应用内移除"),
+        ));
+    }
+    Ok(Json(crate::credentials::unset(&state, reference)?))
+}
+
+/// provider 的凭据状态：`credentialRef` 为空时是 `(false, "none", false)`（Kotlin 的 `describe(null)`）。
+fn describe_provider_credential(state: &AppState, reference: Option<&str>) -> crate::ai::CredentialStatus {
+    match reference {
+        Some(reference) => crate::credentials::describe_now(state, reference),
+        None => crate::ai::describe_credential(None, |_| None, |_| false),
+    }
 }
 
 // ---------------------------------------------------------------------------

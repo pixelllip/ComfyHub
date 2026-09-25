@@ -6064,3 +6064,216 @@ fn parse_sse(body: &str) -> Vec<(Option<i64>, String, Value)> {
     out
 }
 
+// ---------------------------------------------------------------------------
+//  凭据的**写侧**（P4 第 34 步）
+// ---------------------------------------------------------------------------
+
+/// 往夹具里加一个 provider（凭据端点的三段判定里第一段就是 `requireProvider`）。
+fn add_provider(state: &comfyhub_server_rs::routes::AppState, id: &str, reference: Option<&str>) {
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_providers
+                   (id, display_name, api, base_url, credential_ref, endpoint_trust, enabled,
+                    revision, created_at, updated_at)
+                 VALUES (?1, ?2, 'openai', 'https://api.example.com', ?3, 'public', 1, 1,
+                         '2026-09-25T00:00:00.000Z', '2026-09-25T00:00:00.000Z')",
+                rusqlite::params![id, format!("夹具 {id}"), reference],
+            )?;
+            Ok(())
+        })
+        .expect("插 provider");
+}
+
+/// 凭据端点（`/api/ai/providers/{id}/credentials`）的完整一轮：状态 → 校验 → 写入 → 删除。
+///
+/// 这一组盯的是**三件会静默做错的事**：
+/// ① 响应里混进了明文（AIH-012：任何 DTO 都不含密钥值）—— 用哨兵串在响应与文件里各搜一次；
+/// ② 空值被当成"清空"而不是"不修改"（AIH-013）—— 空值那一步之后状态必须**不变**；
+/// ③ 写进去的密文对方解不开（字母表/作用域错了照样能写出一个文件）——
+///    这里用**自己的** DPAPI 反解一次（真机交叉验证在真库副本那一轮做）。
+#[tokio::test]
+async fn provider_credentials_round_trip_without_ever_returning_the_value() {
+    let state = state();
+    // ref 里带 pid：万一哪台机器上真设了同名环境变量，也只影响这一条用例
+    let reference = format!("FIXTURE_KEY_{}", std::process::id());
+    add_provider(&state, "p-cred", Some(&reference));
+
+    // ① 初始：没有值 + 可写（`none` 档，界面能写一把新的）
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/providers/p-cred/credentials").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(keys(&body), vec!["configured", "source", "writable"]);
+    assert_eq!(body["configured"], false);
+    assert_eq!(body["source"], "none");
+    assert_eq!(body["writable"], true);
+
+    // ② 输入校验：粘贴整行 NAME=value 要**报错**，而不是把它当密钥存下来
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/p-cred/credentials",
+        serde_json::json!({ "value": "OPENAI_API_KEY=sk-sentinel-1234567890" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR", "AI 错误：error 是稳定码");
+    assert_eq!(
+        body["detail"],
+        "请只粘贴密钥的值，不要粘贴 NAME=value 这种整行"
+    );
+    assert_eq!(keys(&body), vec!["detail", "error"], "detail 不许为空值");
+
+    // ③ 空值 = 不修改（不是清空）：回状态、且库里仍然没有这个 ref
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/p-cred/credentials",
+        serde_json::json!({ "value": "   " }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["configured"], false);
+    let store_file = state.media_dir().parent().unwrap().join("ai").join("credentials.dpapi.json");
+    assert!(
+        comfyhub_server_rs::credentials::read_store(&store_file).is_empty(),
+        "留空必须**一个字节都不写**（AIH-012）"
+    );
+
+    // ④ 真写一把：状态翻转成 managed，且**明文不出现在响应里、也不出现在文件里**
+    let sentinel = "sk-sentinel-1234567890";
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/p-cred/credentials",
+        serde_json::json!({ "value": sentinel }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["configured"], true);
+    assert_eq!(body["source"], "managed");
+    assert_eq!(body["writable"], true);
+    assert!(!body.to_string().contains(sentinel), "响应里不许出现明文");
+
+    let raw_file = std::fs::read_to_string(&store_file).expect("凭据文件应当已经落盘");
+    assert!(!raw_file.contains(sentinel), "文件里不许出现明文（AIH-015）");
+    let store = comfyhub_server_rs::credentials::read_store(&store_file);
+    let sealed_text = store.get(&reference).expect("这个 ref 应当已入库").clone();
+    // 字母表绊线：Kotlin 用的是 `Base64.getEncoder()`（标准 `+/`），写成 url-safe 的话
+    // Kotlin 侧解不开 —— 随机密文里出现 `-`/`_` 是必然事件，所以这条能真的挡住改错的那天。
+    assert!(
+        !sealed_text.contains('-') && !sealed_text.contains('_'),
+        "必须是**标准** base64（`+/`），不能是 url-safe：{sealed_text}"
+    );
+    assert_eq!(sealed_text.len() % 4, 0, "标准 base64 的长度一定是 4 的倍数（带填充）");
+    // 编码路径只有一处：`base64_std` 出来的东西必须就是库里那份（改字母表/去掉填充都会红）
+    let decoded = comfyhub_server_rs::auth::base64_decode(&sealed_text).expect("base64");
+    assert_eq!(comfyhub_server_rs::auth::base64_std(&decoded), sealed_text);
+
+    // 自己反解一次：证明写出去的确实是"本机 DPAPI 能解开的密文"
+    #[cfg(windows)]
+    {
+        let bytes = comfyhub_server_rs::auth::base64_decode(&sealed_text).expect("base64");
+        let plain = comfyhub_server_rs::auth::unprotect_secret(&bytes).expect("DPAPI 解密");
+        assert_eq!(String::from_utf8(plain).unwrap(), sentinel);
+    }
+
+    // ⑤ 再读一次：状态是"现场算的"（不是把上一次的响应缓存下来）
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/providers/p-cred/credentials").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["configured"], true);
+    assert_eq!(body["source"], "managed");
+
+    // ⑥ 删除：状态回到 none，文件里那把 key 真的没了（不留空壳）
+    let (status, body) = send_empty(
+        router_for(state.clone()),
+        "DELETE",
+        "/api/ai/providers/p-cred/credentials",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["configured"], false);
+    assert_eq!(body["source"], "none");
+    assert!(!comfyhub_server_rs::credentials::read_store(&store_file).contains_key(&reference));
+}
+
+/// 凭据端点的**三段前置判定**：provider 不存在 / 没配 credentialRef —— 都必须是
+/// `400 CONFIG_ERROR + detail`（人话），**不是 404**（写成 404 就没有 detail，
+/// 界面又一次显示不出人话，P4 第 17 步那条对齐）。
+#[tokio::test]
+async fn credential_endpoints_report_config_errors_as_ai_errors() {
+    let state = state();
+    add_provider(&state, "p-no-ref", None);
+
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/providers/nope/credentials").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert_eq!(body["detail"], "Provider 不存在: nope");
+
+    for method in ["PUT", "DELETE"] {
+        let (status, body) = if method == "PUT" {
+            send_json(
+                router_for(state.clone()),
+                "PUT",
+                "/api/ai/providers/p-no-ref/credentials",
+                serde_json::json!({ "value": "sk-x" }),
+            )
+            .await
+        } else {
+            send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/p-no-ref/credentials").await
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{method}");
+        assert_eq!(body["error"], "CONFIG_ERROR", "{method}");
+        assert_eq!(
+            body["detail"], "该 Provider 未设置凭据引用名（credentialRef）",
+            "{method}"
+        );
+    }
+}
+
+/// 联网搜索那把 key 的三条端点（免密钥出厂可用，这里只是个可选入口）。
+///
+/// ⚠ 这台机器上若设了 `keenable` / `COMFYHUB_CRED_keenable`，那"这一档只读"就是唯一正确的行为 ——
+/// 用例按环境**两条路都钉住**，不然它在有环境变量的机器上必然红（而那不是 bug）。
+#[tokio::test]
+async fn web_search_credential_is_write_only_and_read_only_when_env_provides_it() {
+    let state = state();
+    let from_env = comfyhub_server_rs::credentials::env_source(comfyhub_server_rs::credentials::KEENABLE_REF)
+        .is_some();
+
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/web-search/credential").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(keys(&body), vec!["configured", "source", "writable"]);
+    assert_eq!(body["source"], if from_env { "env" } else { "none" });
+    assert_eq!(body["writable"], !from_env, "env 来源只读（AIH-013）");
+
+    let put = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/web-search/credential",
+        serde_json::json!({ "value": "k-sentinel-abc" }),
+    )
+    .await;
+    if from_env {
+        assert_eq!(put.0, StatusCode::BAD_REQUEST);
+        assert_eq!(put.1["error"], "CONFIG_ERROR");
+        assert_eq!(
+            put.1["detail"],
+            "密钥 keenable 由环境变量（COMFYHUB_CRED_keenable）提供，是只读的；请先移除环境变量再在应用内填写"
+        );
+        let del = send_empty(router_for(state.clone()), "DELETE", "/api/ai/web-search/credential").await;
+        assert_eq!(del.0, StatusCode::BAD_REQUEST);
+        assert_eq!(del.1["detail"], "密钥 keenable 由环境变量提供，无法在应用内移除");
+        return;
+    }
+
+    assert_eq!(put.0, StatusCode::OK);
+    assert_eq!(put.1["configured"], true);
+    assert_eq!(put.1["source"], "managed");
+    assert!(!put.1.to_string().contains("k-sentinel-abc"));
+
+    let del = send_empty(router_for(state.clone()), "DELETE", "/api/ai/web-search/credential").await;
+    assert_eq!(del.0, StatusCode::OK);
+    assert_eq!(del.1["configured"], false);
+    assert_eq!(del.1["source"], "none");
+}
+

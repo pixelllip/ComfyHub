@@ -921,7 +921,49 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   （`run_kit::KEY_NSFW` 改成 `pub`：各写一份键名就会出现"界面里开了、提示词没注入"）。
 > - 验收：`cargo test` **223 例全绿**（128 lib + 93 api + 2 shape_lint）+ 真库副本抽查（8098）。
 
-> **📅 2026-09-25 这一轮的交接单**（按价值排序，下一轮从这儿起手）：
+> ✅ **P4 第 34 步（2026-09-25）：凭据写侧（`/api/ai/providers/{id}/credentials` + `/api/ai/web-search/credential`）** ——
+> 交接单第 1 条之外的"界面端点剩下那几批"里的第一刀，也是**设置页那两张卡能不能用**的分水岭：
+> 在此之前状态读得到、**一把 key 都存不进去**（写侧一条都没搬）。
+> - 新模块 `credentials.rs`（`sanitize` / 读写库 / `set` / `unset`），形状与判定顺序逐条对照
+>   `CredentialService`：**空值 = 不修改**（清空只能 `DELETE`，AIH-012/013）、
+>   **env 来源只读**（写进去也读不出来，界面只会显示"已配置"而不生效）、
+>   **粘贴 `NAME=value` / 带引号 / 带空白一律 400**（在界面上看着都"填好了"，直到上游回 401）。
+> - **DPAPI 写侧**：`auth.rs` 的 `dpapi` 模块原来只有 `unprotect`（密钥下行用），现在把 `protect`
+>   也接了出来（`protect_secret` / `unprotect_secret` 两个公开入口），作用域**空熵 + CurrentUser**，
+>   与 Kotlin 的 `ProtectedData.Protect(bytes, null, CurrentUser)` 同档；非 Windows 上**故意失败**
+>   （AIH-015：绝不许退化成明文落盘）。编码用**标准 base64**（新加 `base64_std`）——
+>   写成 url-safe 的话文件照样写出去，Kotlin 却读不懂。
+> - 落盘照抄 Kotlin：先写 `*.tmp` → 收紧权限 → `rename` 覆盖；读坏文件一律当"没有"（**不 500**）。
+> - **真库副本双端交叉验收**（Kotlin 8102 / Rust 8101，同一份库与凭据副本）：
+>   Rust 写 → Kotlin 状态翻成 managed **且解得开**（`POST /providers/{id}/test` 走到 `PROVIDER_UNREACHABLE`
+>   而不是 `MISSING_CREDENTIAL`）；Kotlin 写 → Rust `GET /api/ai/credentials?refs=` 拿回**逐字相等**的明文；
+>   删除两端同步；真机原有的 4 把 key（`COMMAND_CODE_GOAT` / `DEEPSEEK_API_KEY` / 两个 e2e 的）**一个都没被动**。
+> - ★ **这条"一端写、另一端解"的判据被固化成了 `scripts\e2e-credential-test.ps1`（23 项）** ——
+>   因为**单测永远证明不了它**（单测里两边都是我们自己）。脚本会让两边都真起、同一份副本；
+>   Kotlin 那半可选，起不来时**大声报"跳过 N 项"**（退出码 2），不假装通过。
+> - 验收：`cargo test` **228 例全绿**（130 lib + 96 api_test + 2 shape_lint，新增 2 例 lib 单测
+>   + 3 例集成）；`scripts\e2e-credential-test.ps1` **23/23 通过、0 跳过**。
+> - 顺手抓到的三个坑（已进 `docs/pitfalls.md`）：① `exit` 写在 `finally` 里会把异常一起吞掉
+>   （脚本"什么都没说就报通过 0 失败 0"）；② 拿 `/test` 当判据时被**更早返回**的分支挡住
+>   （协议 wire 值写错 / 信任档不允许回环），红绿都可能来自另一个原因；③ Kotlin 对未知路径回的是
+>   **200** + `{"error":"接口不存在: …"}`，拿 Rust 独有的新契约端点去问它会得到"看起来正常"的响应。
+> - 仍未做：`/api/ai/{skills,memory,builtin,capabilities}/*`（下一个批次，见下）、
+>   联网三工具、附件（R9）、桌面专属工具（`comfy_*`）。
+>
+> **📅 2026-09-25 第八轮**：用户要求"继续按总纲实施，**先做不需要人校验的部分**，每完成一项就 git 保存"。
+> 于是把 §9 交接单里的三件按"能不能自己验"重新排序：**界面端点批次**排前（真库副本 + 双端对照
+> 就能验穿），联网三工具与桌面专属工具排后（前者要真 key、后者要 ComfyUI 在场）。
+>
+> | 提交 | 内容 |
+> | --- | --- |
+> | **凭据写侧** | **P4 第 34 步**（见上）+ `scripts\e2e-credential-test.ps1` |
+>
+> **下一项（本轮继续）**：`/api/ai/skills/*` 六条（list / read / save / delete / roots / rescan）——
+> 磁盘真源那一套（`scan` / `read` / `save` / `delete` / `autoRegister`）在 Rust 侧只搬了 run-kit 要的
+> "扫描 + 校验"，**写侧一条都没有**。
+>
+
+> **📅 2026-09-25 这一轮的交接单**（上一轮留下的，按价值排序；① 的前半已落地）：
 > 1. ✅ **工具层与审批（R8）+ 提问闸门**：第 31 / 32 步已落地（四个本机工具 + 闸门 + 两条端点批次）。
 >    **还剩**：联网三工具（`web_search` / `web_fetch` / `civitai_search`，要 Keenable / Civitai
 >    客户端 + `EndpointGuard`）与**桌面专属**工具（`comfy_*` 39 个 MCP、`read_file` / `write_file`

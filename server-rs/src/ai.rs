@@ -78,7 +78,7 @@ pub struct AiProviderDto {
 }
 
 /// 环境变量名的前缀（`CredentialService.ENV_PREFIX`，**改了要同时改两边**）。
-const ENV_PREFIX: &str = "COMFYHUB_CRED_";
+pub(crate) const ENV_PREFIX: &str = "COMFYHUB_CRED_";
 
 /// 凭据状态的判定 —— **纯逻辑 + 注入两个查询**，这样三分支都能单测。
 ///
@@ -135,45 +135,89 @@ pub fn list_providers(state: &AppState) -> Result<Vec<AiProviderDto>, ApiError> 
     })?;
 
     let stored = read_credential_refs(state);
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let credential = describe_credential(
-                row.credential_ref.as_deref(),
-                |name| std::env::var(name).ok(),
-                |reference| stored.iter().any(|r| r == reference),
-            );
-            // 时间列不是透传：Kotlin 先解析再按 Java 规则重排（见 `iso_time.rs` 头注）
-            let row_created_at = row.created_at.clone();
-            let row_updated_at = row.updated_at.clone();
-            AiProviderDto {
-                id: row.id,
-                display_name: row.display_name,
-                api: row.api,
-                base_url: row.base_url,
-                credential_ref: row.credential_ref,
-                endpoint_trust: row.endpoint_trust,
-                enabled: row.enabled,
-                revision: row.revision,
-                credential,
-                created_at: crate::iso_time::iso_time(row_created_at.as_deref()),
-                updated_at: crate::iso_time::iso_time(row_updated_at.as_deref()),
-            }
-        })
-        .collect())
+    Ok(rows.into_iter().map(|row| row.into_dto(&stored)).collect())
 }
 
-struct AiProviderRow {
-    id: String,
-    display_name: String,
-    api: String,
-    base_url: String,
-    credential_ref: Option<String>,
-    endpoint_trust: String,
-    enabled: bool,
-    revision: i64,
-    created_at: Option<String>,
-    updated_at: Option<String>,
+pub struct AiProviderRow {
+    pub id: String,
+    pub display_name: String,
+    pub api: String,
+    pub base_url: String,
+    pub credential_ref: Option<String>,
+    pub endpoint_trust: String,
+    pub enabled: bool,
+    pub revision: i64,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+/// 查一条 provider（`AiRepo.getProvider` 的对应物）。`None` = 没有这个 id。
+///
+/// 为什么单列一条：**凭据端点与写侧都要"先确认这个 provider 在不在"**，
+/// 而 `list_providers` 那条路会顺手把整表读出来（写侧用它做存在性判断就会
+/// "为了问一句在不在，把 80 个模型的行全拉一遍"）。
+pub fn get_provider_row(state: &AppState, id: &str) -> Result<Option<AiProviderRow>, ApiError> {
+    state.with(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, display_name, api, base_url, credential_ref, endpoint_trust, enabled,
+                    revision, created_at, updated_at
+             FROM ai_providers WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map([id], |row| {
+            Ok(AiProviderRow {
+                id: row.get(0)?,
+                display_name: row.get(1)?,
+                api: row.get(2)?,
+                base_url: row.get(3)?,
+                credential_ref: row.get(4)?,
+                endpoint_trust: row.get(5)?,
+                enabled: row.get::<_, i64>(6)? != 0,
+                revision: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    })
+}
+
+/// `AiRoutes.requireProvider` 的逐字对应物：不存在 → **400 `CONFIG_ERROR` + `detail`**。
+///
+/// ⚠ 是 `AiException(CONFIG_ERROR, …)` 而**不是** 404 —— Kotlin 那边就是这么抛的，
+/// 写成 404 就没有 `detail`，界面上又一次显示不出人话（P4 第 17 步那条对齐）。
+pub fn require_provider_row(state: &AppState, id: &str) -> Result<AiProviderRow, ApiError> {
+    let trimmed = id.trim();
+    get_provider_row(state, trimmed)?.ok_or_else(|| provider_missing(trimmed))
+}
+
+impl AiProviderRow {
+    /// 行 → DTO（`credential` 是**只写凭据的状态**，绝不带值）。
+    pub fn into_dto(self, stored_refs: &[String]) -> AiProviderDto {
+        let credential = describe_credential(
+            self.credential_ref.as_deref(),
+            |name| std::env::var(name).ok(),
+            |reference| stored_refs.iter().any(|r| r == reference),
+        );
+        // 时间列不是透传：Kotlin 先解析再按 Java 规则重排（见 `iso_time.rs` 头注）
+        let created_at = crate::iso_time::iso_time(self.created_at.as_deref());
+        let updated_at = crate::iso_time::iso_time(self.updated_at.as_deref());
+        AiProviderDto {
+            id: self.id,
+            display_name: self.display_name,
+            api: self.api,
+            base_url: self.base_url,
+            credential_ref: self.credential_ref,
+            endpoint_trust: self.endpoint_trust,
+            enabled: self.enabled,
+            revision: self.revision,
+            credential,
+            created_at,
+            updated_at,
+        }
+    }
 }
 
 /// 托管凭据文件里的**键名**（`<storage>\ai\credentials.dpapi.json`）。

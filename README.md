@@ -179,6 +179,7 @@ viewer/
 │   ├── dev-app.ps1               # ★ 前端开发用：服务 → flutter run --debug（热重载）
 │   ├── e2e-capture-test.ps1      # ★ 自动捕获端到端自测（用假 ComfyUI，不跑真实生成）
 │   ├── e2e-pair-test.ps1         # ★ 配对闸门 + 密钥下行端到端自测（打 Rust 后端，不需要真手机）
+│   ├── e2e-credential-test.ps1   # ★ 托管凭据双端互操作自测（Kotlin ⇄ Rust 写同一份 DPAPI 文件）
 │   ├── check-silent-start.ps1    # ★ 静默启动自测：启动服务时盯屏，确认没有弹窗
 │   ├── install-comfy-node.ps1    # ★（可选）把捕获节点装进 ComfyUI
 │   ├── e2e/                      # 自测用的假 ComfyUI 与测试 PNG 生成器
@@ -300,6 +301,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
 | `scripts\e2e-submit-test.ps1` | **AI 提交任务端到端自测**（假网关 + 假 ComfyUI）：批准闸门 / 真的提交 / 参数覆盖 / 产物入库 / 工作流文件直接提交 / **前端节点缺口补线**，32 项断言，不出网不花钱 |
 | `scripts\e2e-ai-tools-test.ps1` | **AI 工具循环 + Skills + 附件端到端自测**（假 OpenAI 流式网关 `scripts\e2e\fake_openai.py`，不需要真 API Key、不出网：注册 / 按需加载 / 越界写被拒 / 目录内写成功 / 审批闸门 / 只读工具 / 长期记忆 / **附件上传·缩略图·图片内联·零上游请求** / 重试不重复提问 / 截断续写 / 首尾干净 / **429 与中途断流之后内容不丢**） |
 | `scripts\e2e-pair-test.ps1` | **配对闸门 + 密钥下行端到端自测**（打的是 **Rust 后端**，因为 `/api/auth*` 只在它上面；不需要真手机 —— 用一台"假装是手机"的 HTTP 客户端走完 举手 → 桌面显示 6 位码 → 兑码 → 令牌可用 → 授权后下行密钥 → 吊销 → 轮换，另含"闸门默认关着"那条反向回归。真库副本 + 真端口 + 真"非回环"来源，跑完真库一个字节没动） |
+| `scripts\e2e-credential-test.ps1` | **托管凭据双端互操作自测**（`<storage>\ai\credentials.dpapi.json` 是**一份**文件，Kotlin 与 Rust 两个实现都可能写它 —— 判据是"**一端写进去的密文另一端解得开**"，这是单测永远证明不了的：单测里两边都是我们自己。两边都真起、同一份真库/凭据副本，验 Rust 写→Kotlin 解、Kotlin 写→Rust 解、删除两端同步、响应与文件都不含明文、原有 key 一个没被动。Kotlin 那半可选，起不来会**大声报跳过**而不是假装通过） |
 | `scripts\install-comfy-node.ps1` | （可选）把捕获节点装进 ComfyUI，实现「跑完立刻捕获」 |
 | `scripts\anima-gen.ps1` | **Anima 生图执行器**：向本机 ComfyUI 提交一次文生图并等落盘（`-PromptFile/-NegativeFile/-Width/-Height/-Seed/-Prefix`） |
 | `scripts\gen-builtin-catalog.ps1` | **开发期工具**：把 `%USERPROFILE%\.dsh\settings.yaml` 里的模型目录抄成我们自己的冻结副本 `server\src\main\resources\ai\builtin-catalog.json`（运行时只读这份副本，**绝不读 YAML**；解析到少于 60 个模型就拒绝写盘） |
