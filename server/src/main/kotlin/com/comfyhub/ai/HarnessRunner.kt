@@ -1392,8 +1392,14 @@ object SystemPrompt {
      *     ② **绝不代下** —— 只把链接 + sha256 + 目标目录给用户、让他自己下；
      *     ③ **sha256 的第二用途**是确认盘上那份是不是同一个模型
      *     （`comfy_fit_workflow` 的字面相似度**不足以**确认身份）。
+     * v29（2026-09-26）：新增第 18 条 —— **写角色之前先查三处**（`search_prompts` 自己的库 /
+     *     `search_character_cards` 角色卡 / `danbooru_lookup` 核对写法 + 同现 tag），
+     *     起因是用户原话"对于支持 tag 的模型（比如 Anima），除了专门 LoRA 内置的提示词外
+     *     也要查查 danbooru"，以及现场那次 shinku 被当成 iroi 写了两版废图
+     *     （库里 261/310 就有它完整的 tag 栈）。同一版顺手删掉 NSFW 段尾部那份
+     *     **陈旧的纪律重复**（用户拍板"纪律只留一份"，见 `NsfwPrompt.VERSION` 的 nsfw-v3）。
      */
-    const val VERSION = "v28"
+    const val VERSION = "v29"
 
     /**
      * 第一问时追加的一段：让模型在正文最前面带一行 `[标题]…[/标题]`，

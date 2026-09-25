@@ -1408,10 +1408,29 @@ class ToolRegistryTest {
 
         assertEquals(1, Regex("必须遵守：").findAll(prompt(false)).count(),
             "关掉 NSFW 时纪律只能有一份（NsfwPrompt.PERSONA_BLOCK）")
-        // 打开 NSFW 时是 2：`NSFW_BLOCK` 自己尾部还带着一份副本（那是那段不许动的越狱
-        // 提示词的一部分，用户明令"不许动"）—— 留给以后单独处理，但**不许再变成 3**。
-        assertEquals(2, Regex("必须遵守：").findAll(prompt(true)).count(),
-            "NSFW 开着时只该有 PERSONA + NSFW_BLOCK 各一份，不许再多")
+        // 2026-09-26（用户拍板"纪律只留一份"）：`NSFW_BLOCK` 尾部那份**陈旧副本**已删 ——
+        // 它在 NSFW 开着时会被读到、而且**排在后面占上风**（还写着 civitai 要先配令牌这种
+        // 早就推翻的话）。现在两种模式都只该有 1 份。
+        assertEquals(1, Regex("必须遵守：").findAll(prompt(true)).count(),
+            "打开 NSFW 也只该有 PERSONA 那一份纪律（越狱段收在 Behavioral rules）")
+    }
+
+    /**
+     * v29（2026-09-26）：第 18 条 —— 写角色之前先查三处。
+     *
+     * 它是用户这次要求的落点（"对于支持 tag 的模型（比如 Anima），除了专门 LoRA 内置的
+     * 提示词外也要查查 danbooru"），也是那次 shinku 被当成 iroi 写了两版废图的防线。
+     * 删掉这条纪律 = 工具还在、但模型没有理由去用它们，所以这条用例值得单独存在。
+     */
+    @Test
+    fun `第 18 条 写角色前先查三处 且指名四个工具`() {
+        val text = com.comfyhub.ai.NsfwPrompt.PERSONA_BLOCK
+        assertTrue(text.contains("18. **写某个角色之前先查三处"), "第 18 条不在了")
+        for (tool in listOf("search_prompts", "search_character_cards", "danbooru_lookup", "save_character_card")) {
+            assertTrue(text.contains(tool), "第 18 条要指名 `$tool`，否则模型不会去用它")
+        }
+        assertTrue(text.contains("不能只看触发词"), "要写明 LoRA 触发词只是来源之一")
+        assertTrue(text.contains("核对时间由工具记"), "核对时间不许让模型自己编")
     }
 
     @Test
@@ -1430,7 +1449,9 @@ class ToolRegistryTest {
         // v27（2026-09-22）：提问改成"一张卡最多 5 问"的阈值制（用户第 1~3 条）
         // v28（2026-09-22）：P3 定向查询 `find_model` —— 三源顺序查 + 逐个报可达性 +
         // **先查本机再查外网** + **绝不代下**（只给链接 + sha256 + 目标目录）
-        assertEquals("v28", SystemPrompt.VERSION)
+        // v29（2026-09-26）：第 18 条 —— 写角色前先查三处（自己的库 / 角色卡 / danbooru）
+        // + 顺手删掉 NSFW 段尾部那份陈旧纪律副本（用户："纪律只留一份"）
+        assertEquals("v29", SystemPrompt.VERSION)
 
         val e = env()
         val text = SystemPrompt.render(
