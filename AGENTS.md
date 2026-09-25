@@ -319,6 +319,15 @@
 - **任何运行期代码都不许依赖 `%USERPROFILE%\.dsh`** —— 装我们项目的人可能根本没装 DSH
   （模型目录同理，见 `AiSeedCatalog` 的 classpath 冻结副本）。这条以前是"只在点导入时读一次"，
   现在连那个按钮都删了：DSH 与本项目再无运行期关系。
+- **工作流配方（2026-09-26）**：`workflow_recipes` 表 + 三条工具（`comfy_learn_workflow` /
+  `comfy_list_recipes` / `comfy_bind_recipe`）+ `/api/ai/workflow-recipes`。改这块先读
+  [`docs/workflow-recipe-design.md`](docs/workflow-recipe-design.md) 与 `WorkflowRecipe.kt` 的文件头。四条别踩：
+  ① **配方不是可提交对象** —— 提交永远走 `comfy_submit`（红线 R10 一个字不改），配方只提供 overrides；
+  ② **默认拒学"转换有缺口"的图**（`UNSUPPORTED_NODES`）：缺了节点的骨架看着像、其实缺链，而且**不报错**；
+     真机上最常见的原因是"本机这个实例没装那个自定义节点包"——正确动作是让用户启停/换实例，**不是改他的工作流**；
+  ③ **绑定只报不改**：只有 `exact`（同名且实例能加载）能自动写键，其余四档各有各的处置（见设计 §4）；
+  ④ 学习与绑定**只有一份实现**（`Application.kt` 里那两个 lambda，工具与端点共用）；
+  表**不进同步白名单**（手机提交走 `comfy_queue_submit`）。端到端：`scripts\e2e-recipe-test.ps1`。
 
 ### 10.1 提交任务与实时进度（2026-09-17 起）
 

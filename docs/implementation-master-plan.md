@@ -1830,39 +1830,37 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | 提交 | 内容 |
 | --- | --- |
-| `b12ee5d` | **工作流配方 1/5：设计**（`docs/workflow-recipe-design.md`：骨架/槽位/档位三层 + 学习闭环六步 + 新模型的三种情形 + W1~W5） |
-| `0b4177b` | **工作流配方 2/5：W1 解析核心**（`WorkflowRecipe.kt`：任务七档 + 骨架指纹 + 槽位 + 旋钮 + 输出 + `render`；11 例单测；真机 16 份文件抽查抓出三件事） |
-| `f567bbe` | **工作流配方 3/5：W2 配方表 + 仓储 + 四条端点**（`workflow_recipes` 表 + `WorkflowRecipeRepo` + `WorkflowRecipeLearner` + `/api/ai/workflow-recipes`；9 例 + 真库副本抽查） |
-| （本行随下一项落地替换） | **4/5：W3 三件工具**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `WorkflowRecipeBinder`） |
+| `b12ee5d` | **工作流配方 1/5：设计**（`docs/workflow-recipe-design.md`：骨架/槽位/档位三层 + 学习闭环六步 + 新模型的三种情形 + W1~W5 + 明确不做 + 真文件抽查 §5.1） |
+| `0b4177b` | **W1 解析核心**（`WorkflowRecipe.kt`：任务七档 + 骨架指纹 + 模型槽位 + 参数旋钮 + 输出 + `render`/`toJson`；11 例单测；真机 16 份文件抽查抓出三件事） |
+| `f567bbe` | **W2 配方表 + 仓储 + 四条端点**（`workflow_recipes` 表 + `WorkflowRecipeRepo` + `WorkflowRecipeLearner` + `/api/ai/workflow-recipes`；9 例 + 真库副本抽查） |
+| `164b94a` | **W3 三件工具 + 绑定层**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `WorkflowRecipeBinder`；11+5 例） |
+| `394461c` | **绑定端 + e2e 脚本**（`POST /api/ai/workflow-recipes/{id}/bind`，与工具共用同一份实现；`scripts\e2e-recipe-test.ps1` 35 项 + 两条脚本自带防线） |
+| `37f3c42` | **系统提示 v31 第 20 条 + 内置 skill `workflow-recipe` + README/文档** |
 
-**W3 的验收（2026-09-26）**：`WorkflowRecipeBinderTest` 11 例（exact 才自动绑 / onDiskOnly 说"重启别下载" /
-substitute 说"先问用户" / missing 说"不许编名字"、force 才写 / 没有清单说"没验证过" /
-同角色多槽位报 ambiguous、点明 overrideKey 就绑得上 / 整包 checkpoint ↔ 分离式骨架明说"改写骨架、本轮不做" /
-底模兜底要把假设说出来 / sidecar 不算模型）；`ToolRegistryTest` 新增 5 例（参数与路径准入下传、
-AI 域稳定码翻成工具失败码、空库指到学习入口、缺参数、`extra` 也翻成请求）。
-`gradle test` **680 例全绿**。
+**这一轮的硬证据（不是"跑过了"，是量出来的）**
 
-**W2 的真机验收（真库副本 + 真 ComfyUI，2026-09-26）**：
-- 临时用 `<根>\.db\comfyhub.db` 的副本起后端（8095），**没动真库**；DDL 迁移在真库副本上自动建表
-  （`user_version` 仍是 1、`workflow_recipes` 只有 1 个 `trg_*_touch` 触发器、`_sync_log` 里 0 行）。
-- `POST /api/ai/workflow-recipes {path: …comfyui\workflows\comfyhub_inpaint_krea2.json}` →
-  `recipeId=1 / task=inpaint / complete=true / 3 个槽位 / 26 个旋钮`，`render` 正文直接能照抄 overrides。
-- `POST {path: …\user\default\workflows\krea2ImageEditingAnd_v10.json}`（用户真实那份 UI 格式）→
-  **400 `UNSUPPORTED_NODES`**，逐条列出摘掉的 4 个类（`TextEncodeKrea2OstrisEdit`×2 /
-  `Krea2OstrisEditModelPatch` / `CR Simple Image Compare`）与 4 条悬空输入 ——
-  因为**当前跑着的实例里没有那几个 Krea2 自定义节点**（`/object_info` 里没有）。
-  这正是"不许学一条缺了链的骨架"那条纪律的现场版。
-- 同一条带 `tolerateUnsupported=true` → 照样学，但 `complete=false` + 8 条缺口；
-  `task=edit`（判据落在核心节点 `FluxKontextMultiReferenceLatentMethod` 上，没被缺件带跑）。
-- 错误分支：`promptId=999999` → `NO_API_GRAPH`、`README.md` → `NOT_A_WORKFLOW`、
-  空 body → `INVALID_ARGUMENT`、白名单外的路径 → **400 + 人话**（原来会落成 500 + `ToolFailure`，已修）。
-- `GET`（task/q/skeleton 过滤）、`GET /{id}`（带 `render`）、`DELETE` 全部走通。
+- `gradle test` **681 例全绿**（新增 `WorkflowRecipeTest` 11 + `WorkflowRecipeRepoTest` 9 +
+  `WorkflowRecipeBinderTest` 11 + `ToolRegistryTest` 6 + 系统提示版本/第 20 条 1）。
+- `pwsh -File scripts\e2e-recipe-test.ps1` → **35 项全部通过**（真库副本 + 真端口，跑完删掉）。
+- **真机抽查 16 份工作流文件**（用户在 `…\user\default\workflows` 里那批）：
+  任务分档全中（t2i / i2i / inpaint / edit / video / audio），`edit` 那两份正是用户点名的
+  Krea 2 图像编辑；抓出三件事（见设计 §5.1）——**其中一条直接定下了"默认拒学缺件图"这条纪律**。
+- **真库副本 + 真 ComfyUI 抽查**（W2 那次，8095 只写副本）：项目自带的 API 格式 inpaint 工作流
+  学成 `recipeId=1 / inpaint / complete=true / 3 槽位 / 26 旋钮`；用户真实那份 UI 格式的 Krea 2
+  编辑工作流 → **400 `UNSUPPORTED_NODES`**（逐条列出摘掉的 4 个类与 4 条悬空输入 ——
+  因为**当前跑着的实例里没有那几个 Krea2 自定义节点**）；`tolerateUnsupported=true` 才学，
+  `task=edit`、`complete=false`；四条错误分支与 list/detail/delete 全对；
+  真库副本上 `user_version` 仍是 1、`workflow_recipes` 只有 1 个 touch 触发器、`_sync_log` 里 0 行。
+- 内置 skill `workflow-recipe` **真机验过能被加载**（`/api/ai/skills` 里 `source=builtin`、无 `validationError`）。
 
-**这一轮还没做的（诚实清单）**：
+**这一轮没做的（诚实清单）**：
 
 | 项 | 状态 |
 | --- | --- |
-| Rust 侧的对照实现（配方三条工具 + 表） | ⛔ 未做（沿用本轮 Kotlin 优先：App 连的是 Kotlin；Rust 侧按老规矩随后逐条搬） |
-| **骨架改写**（unet+clip+vae ↔ 整包 checkpoint 的节点增删与重连线） | ⛔ 未做（设计 §4 W5；本轮只如实报"现有骨架接不上"） |
+| Rust 侧的对照实现（配方三条工具 + `workflow_recipes` 表 + `bind` 端点） | ⛔ 未做（沿用本轮 Kotlin 优先：App 连的是 Kotlin；Rust 侧按老规矩随后逐条搬，"不进同步白名单"这条也要一起搬） |
+| **骨架改写**（unet+clip+vae ↔ 整包 checkpoint 的节点增删与重连线） | ⛔ 未做（设计 §4 W5；本轮只**如实报**"现有骨架接不上、要改写骨架，本轮不做"并给两条路） |
 | 配方同步到手机 | ⛔ 未做（**有意**：手机提交走 `comfy_queue_submit`，R11；拿到它跑不了的配方只会误导模型） |
+| 界面上看配方 / 绑定的页面 | ⛔ 未做（列表 / 详情 / 绑定端点已就绪，界面按需再接；AI 那侧已经全通） |
+| "跑通之后自动回写配方"（把 `capture_runs` 里真跑过的模型与档位标到配方上） | ⛔ 未做（现在靠模型自己如实转述 + `notes`；要自动化得从提交后的最终图反推骨架指纹） |
+| 真机上第 4 幕（"有缺口就拒学"）的**自动**回归 | 🔶 半自动：ComfyUI 不在跑时脚本自动改验"连不上要如实报 `COMFY_UNREACHABLE`"；"有缺口就拒学"那条本轮是**手动**跑出来的（当时 ComfyUI 在场、而实例里没有那几个 Krea2 节点） |
 
