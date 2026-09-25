@@ -1249,6 +1249,22 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   `check_inputs`/`fit_workflow`/`env_report`（要本机模型清单）、`audit`/`prune`、
 >   comfy-mcp 39 个、以及上面那两处欠账。
 
+> 📅 **2026-09-25 MCP 真机探针（第 45 步的准备，用户要求"让 AI 试试调 comfy mcp 做点具体任务"）** ——
+> 用户机器上把整条链走了一遍，**结论是"能用，但有两处必须先补"**，全部记进了 `docs/pitfalls.md`。
+>
+> | 事实 | 细节 |
+> | --- | --- |
+> | 39 个工具**真的拉得到** | `python comfy-mcp.exe` + `initialize` → `notifications/initialized` → `tools/list`（与 Kotlin `McpStdioClient` 文件头记的协议逐字一致）。工具覆盖：`run_workflow` / `generate_image` / `run_template` / `job` / `validate_workflow` / `list_workflow_slots` / `set_workflow_slot` / `vary_workflow` / `fetch_outputs` / `launch_comfyui` / `stop_comfyui` / `restart_comfyui` / `system_stats` / `free_memory` / `nodes` / `search_models` / `download_model` / `upload_file` / `install_node` / `get_logs` / `discover` / `which` / `project` / 模板与模型检索若干 |
+> | **必须给 `COMFY_BIN`** | 少这一个环境变量，**任何**工具都只回 `Error executing tool xxx`（真因是 comfy-cli 调不起来，被 rich 的方框排版埋在 stderr 里）。子进程环境要给 `COMFY_BIN=<绝对 comfy.exe>` + `PYTHONUTF8=1` + `PYTHONIOENCODING=utf-8`。⚠ 排错捷径：`comfy.exe <子命令> --json` 手敲，1.20 起一律回结构化信封（`error.code/message/hint`） |
+> | **`launch_comfyui` 不挂共享模型根** | 起的是安装目录里那个裸实例 → 用户工作流全部预检失败（`workflow_unknown_nodes`：`anima-base-v1.0` / `anima-turbo-lora-v0.2` / `qwen_3_06b_base` 不在已知选项）。这几个文件**就在盘上**（`ComfyUI-Shared\models`）。补 `extra_args=["--extra-model-paths-config","<%APPDATA%>\Comfy Desktop\shared_model_paths.yaml","--input-directory",…,"--output-directory",…]` 之后：unet 2→5、clip 2→5、lora 13→14，用户的 Anima 工作流立刻能跑。**这正是 `ComfyEnv.prepareLaunch` 干的那三个参数** —— MCP 那条路没有，得调用方自己带 |
+> | **`/history` 是进程内的** | 关掉旧实例重开之后，重启前那次运行从 `/history` 里**消失了**（只剩重启后跑的那条）。所以"提交完靠轮询补收"只在**同一个实例生命周期内**成立 → `comfy_submit`（第 46 步）**必须自带"提交后自己等结果并立即入库"**，轮询只作兜底（Kotlin `ComfySubmitter` + `captureRun` 就是这么设计的） |
+> | 实测耗时（RTX 4060 Laptop 8GB / 24GB RAM） | Krea2 Turbo int8 8 步 1024×1360 = **52.0s**；Anima base + turbo LoRA 10 步 896×1152 = **17.8s**（含加载） |
+> | **全链路真的通了** | MCP `run_workflow` 出图 → `POST /api/capture/poll`（Rust，第 43 步）在**真 ComfyUI 上**收下这一次运行：`checked=1 / newRuns=1 / newMedia=1`，`capture_runs` 记 `success media=1 title=anima_base_turbo_sage · seed 20260922`，`media_assets` 那条带上 `896×1152` / `sha256` / `promptId` / `hasWorkflow=true`，并回填 `promptTitle` 与 `promptPositive`。**这是第 43 步第一次对着活实例验收**（此前 ComfyUI 没在跑，只能验"连不上"那一支） |
+>
+> 第 45 步（Rust 侧 MCP 桥）据此的设计要点：传输层做成**泛型 `AsyncRead+AsyncWrite`**（生产接子进程 stdio、测试用 `tokio::io::duplex` 的脚本化假服务器），
+> 子进程环境照上表给；工具声明**原样透传** `inputSchema`（不改写），`run_workflow` / `run_template` / `generate_image` / `download*` 给长超时；
+> `launch_comfyui` 由我们**替用户带上共享模型根三个参数**（否则"AI 起来了实例却跑不了用户的工作流"）。
+
 > **📅 2026-09-25 这一轮的交接单**（上一轮留下的，按价值排序；① 的前半已落地）：
 > 1. ✅ **工具层与审批（R8）+ 提问闸门**：第 31 / 32 步已落地（四个本机工具 + 闸门 + 两条端点批次）。
 >    **还剩**：联网三工具（`web_search` / `web_fetch` / `civitai_search`，要 Keenable / Civitai
