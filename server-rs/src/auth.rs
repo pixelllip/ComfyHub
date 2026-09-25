@@ -608,7 +608,10 @@ mod dpapi {
 ///
 /// 环境变量认两个名字：`<ref>` 与 `COMFYHUB_CRED_<ref>`（前缀常量在 `ai.rs`，
 /// 写错就是"永远读不到环境变量里那把 key"）。
-fn resolve_credential(state: &AppState, reference: &str) -> Result<String, ApiError> {
+///
+/// `pub`：**上游 LLM 调用也要它**（P4 第 29 步）。密钥解析只留这一处实现 ——
+/// 在别处再写一份"读托管文件 + DPAPI"就会出现"能下行、不能用来聊天"这种半截状态。
+pub fn resolve_credential(state: &AppState, reference: &str) -> Result<String, ApiError> {
     let from_env = std::env::var(reference)
         .ok()
         .filter(|v| !v.is_empty())

@@ -29,6 +29,15 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # SSE 事件流：`Body::from_stream` 要一个 `Stream`，手写 `poll_next` 不如直接用现成的 trait。
 # 只开 `std`（`Stream` / `StreamExt` 都在里面）—— 不引整个 futures 生态。
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# 出网 HTTP 客户端（上游 LLM 调用，P4 第 29 步）。
+# ★ **只开 rustls-tls**：不用 OpenSSL —— 发布包要便携，不能要求用户装一个
+#   系统 TLS 库，而 ring/rustls 是编进二进制的。
+# `stream` 给 SSE 的逐块读用；`http2` 关掉（Anthropic/OpenAI 用 1.1 就够，
+#   少一个协议实现少一份 CVE 面）。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+# 日志里的端点要**只留 scheme://host:port/path**（不带 query / 凭据，规则 1）。
+# 手写字符串切分比拉一个 URL 解析器更容易出错，而它本来就是 reqwest 的依赖。
+url = "2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
