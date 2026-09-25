@@ -9,6 +9,7 @@
 | `gen_mobile_tools.py` | 从 Kotlin `/api/ai/run-kit` 的**真实响应**里取手机工具（name / description / inputSchema） | `src/mobile_tools.rs` |
 | `check_signature.py` | 按 Kotlin `RunKit.Signature.canonical()` 重算 `kitVersion` 的内容签名，与库里 `app_settings['ai.runkit.hash']` 比对 | 只打印结论 |
 | `compare_run_kit.py` | 同一份库 + 同一份 storage 上，canon 比较 Rust 与 Kotlin 的 `/api/ai/run-kit`（只归一化「当前时间」那一行） | 只打印结论 |
+| `gen_capability_rules.py` | 从 Kotlin `ModelCapabilityCatalog.kt` 的 `rules` 表**机械提取** 118 条内置能力规则（模式 / 模态 / 工具 / 推理 / 思考档位 / 思考方言，**顺序即语义**） | `src/capability_rules.rs`（`--check` 只校验不写） |
 
 ## 为什么要"生成"而不是手抄
 

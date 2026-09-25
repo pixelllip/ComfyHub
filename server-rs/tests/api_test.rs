@@ -7000,6 +7000,121 @@ async fn builtin_status_shape_changes_when_the_provider_exists() {
     assert!(keys(&body).contains(&"providerId".to_string()));
 }
 
+// ---------------------------------------------------------------------------
+//  能力目录的状态与实测校准开关（P4 第 39 步）
+// ---------------------------------------------------------------------------
+
+/// `GET /api/ai/capabilities/status` 的形状 + `PUT .../probe-toggle` 的开关语义。
+///
+/// 两个承重事实：**`builtinRules` 必须与 Kotlin 相同**（118 条 —— 生成器漏规则就从这儿露馅），
+/// 以及**开关只认 "1"**（认不出来的值一律按关：那是"会花钱发真请求"的开关）。
+#[tokio::test]
+async fn capabilities_status_reports_the_three_layers_and_toggles_probe() {
+    let state = state();
+
+    // ① 一层都没有时：只出现必有的键（三层概况与 remote 年龄**都不出现**）
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/capabilities/status").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        keys(&body),
+        vec!["builtinRules", "probeEnabled", "refreshIntervalDays", "remoteStale", "version"],
+        "没拉过在线目录时 remote 那几项**整个键不出现**（写成 0 小时会让界面显示『刚刚更新过』）"
+    );
+    assert_eq!(body["version"], "2026-09b");
+    assert_eq!(body["builtinRules"], 118, "与 Kotlin 的 rules.size 相同（生成表的条数）");
+    assert_eq!(body["refreshIntervalDays"], 7);
+    assert_eq!(body["remoteStale"], true, "没拉过就算过期");
+    assert_eq!(body["probeEnabled"], false, "实测校准默认关（会花钱）");
+
+    // ② 开关：打开 / 关闭 —— 回的都是**刚回读**的那份状态 + 一句人话
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/capabilities/probe-toggle",
+        serde_json::json!({ "enabled": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["probeEnabled"], true);
+    assert_eq!(body["lastMessage"], "已允许实测校准");
+    let stored: String = state
+        .with(|conn| conn.query_row("SELECT v FROM app_settings WHERE k='ai.capabilities.probe'", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(stored, "1", "线上值就是 \"1\" / \"0\"（ThinkingProbe 认的就是这个）");
+
+    let (_, off) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/capabilities/probe-toggle",
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(off["probeEnabled"], false);
+    assert_eq!(off["lastMessage"], "已关闭实测校准");
+    let stored: String = state
+        .with(|conn| conn.query_row("SELECT v FROM app_settings WHERE k='ai.capabilities.probe'", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(stored, "0");
+
+    // 认不出来的值一律按**关**（手改库成 "yes" 也不许让花钱的开关被打开）
+    state
+        .with(|conn| {
+            conn.execute(
+                "UPDATE app_settings SET v='yes' WHERE k='ai.capabilities.probe'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let (_, body) = get_json(router_for(state.clone()), "/api/ai/capabilities/status").await;
+    assert_eq!(body["probeEnabled"], false, "只有 \"1\" 算开");
+
+    // ③ 两层覆盖层都在时：三层概况 + remote 的年龄与新鲜度
+    let dir = state.media_dir().parent().unwrap().join("ai").join("capabilities");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("custom.json"),
+        r#"{"source":"custom","entries":{"a":{},"b":{}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("remote.json"),
+        r#"{"source":"models.dev","fetchedAt":"2026-09-25T00:00:00.000Z","entries":{"a":{}}}"#,
+    )
+    .unwrap();
+    let (_, body) = get_json(router_for(state.clone()), "/api/ai/capabilities/status").await;
+    assert_eq!(body["customSource"], "custom");
+    assert_eq!(body["customEntries"], 2);
+    assert_eq!(body["remoteSource"], "models.dev");
+    assert_eq!(body["remoteEntries"], 1);
+    assert_eq!(
+        body["remoteFetchedAt"], "2026-09-25T00:00:00Z",
+        "时间列要走 `Instant.toString()` 重排（`.000Z` 的小数点整个不出现）"
+    );
+    let age = body["remoteAgeHours"].as_i64().unwrap();
+    assert!(age > 0, "拉取时间在过去 → 年龄是正数，实际 {age}");
+    assert_eq!(body["remoteStale"], age > 7 * 24, "未过期时不许说它过期");
+
+    // ④ 坏 JSON 当"该层不存在"，**不许 500**（目录坏了不能让设置页也打不开）
+    std::fs::write(dir.join("custom.json"), "{ 这不是 JSON").unwrap();
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/capabilities/status").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.get("customSource").is_none(), "坏的那层整个键都不出现");
+    assert_eq!(body["remoteSource"], "models.dev", "另一层不受影响");
+}
+
+/// 还没搬的两条端点必须**明确 501**（拿空数组/假成功假装，比 501 坏得多）。
+#[tokio::test]
+async fn capability_refresh_and_probe_are_honest_501() {
+    let state = state();
+    for path in ["/api/ai/capabilities/refresh", "/api/ai/capabilities/probe"] {
+        let (status, body) = send_json(router_for(state.clone()), "POST", path, serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{path}");
+        let message = body["error"].as_str().unwrap();
+        assert!(message.contains("还没搬到 Rust"), "{path}: {message}");
+    }
+}
+
 /// `id` / `event` / `data` 三元组（`id` 缺席的心跳帧给 `None`）。
 fn parse_sse(body: &str) -> Vec<(Option<i64>, String, Value)> {
     let mut out = Vec::new();

@@ -961,6 +961,29 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > | **长期记忆五条** | **P4 第 36 步**（见下） |
 > | **Provider 写侧** | **P4 第 37 步**（见下） |
 > | **内置目录** | **P4 第 38 步**（见下） |
+> | **能力目录状态** | **P4 第 39 步**（见下） |
+>
+> ✅ **P4 第 39 步（2026-09-25）：能力目录的状态与实测校准开关**
+> （`GET /api/ai/capabilities/status` + `PUT /api/ai/capabilities/probe-toggle`）——
+> 设置页那张「模型能力目录」卡至此能看新鲜度、能切"允许实测校准"。
+> - 新模块 `capability_catalog.rs`（`ModelCapabilityCatalog` 的逐条对照）：三层覆盖层
+>   （custom > remote > builtin）的加载与**逐维度合并**、查表 `lookup`、`status`、
+>   `remoteAgeHours` / `isStale`（7 天）；`ai_settings.rs` 补 `capability_status` 与
+>   `probe_enabled` / `save_probe_enabled`（`ai.capabilities.probe`，**只有 `"1"` 算开**）。
+> - ★ **118 条内置规则是生成的，不是手抄的**：新工具 `server-rs/tools/gen_capability_rules.py`
+>   从 Kotlin 的 `rules` 表机械提取（`--check` 只校验）。理由同 `mobile_tools.rs`：
+>   手抄必然漏几条，而漏掉的表现是"某个模型图片输入没预填"，**界面上完全看不出来**。
+>   绊线：`cargo test` 里断言条数与首尾顺序，真机上有"两端 `builtinRules` 相等"。
+> - 两条容易做错的地方都按 Kotlin 抄了：**最终 `reasoning=false` 时档位与方言一律清空**
+>   （留着会与 `validate_model` 打架 → "导入的模型存不进去"）；**去前缀匹配要求唯一**
+>   （两个候选时宁可不命中，猜错就是给模型勾错模态）。
+> - `refresh`（要 models.dev 在线数据集）与 `probe`（要真上游请求、会花钱）**明确 501**
+>   —— 它们不满足"不需要人工/真机校验"这条，如实不假装（用例钉住两个 501 的文案）。
+> - **真库副本双端对照 13/13**：`/api/ai/capabilities/status` 的**键集合与取值 canon 后零差异**，
+>   含 `builtinRules` **两端都是 118**（生成表没漏规则）、`remoteFetchedAt` 的时间重排一致；
+>   开关跨端可见（Rust 打开 → Kotlin 看到 true；Kotlin 关掉 → Rust 看到 false，
+>   连那句人话都一样）；真机两条 provider 与 81 个模型一个字节没动。
+> - 验收：`cargo test` **258 例全绿**（148 lib + 108 api_test + 2 shape_lint）。
 >
 > ✅ **P4 第 38 步（2026-09-25）：内置模型目录的状态与同步（`/api/ai/builtin/{status,sync}`）** ——
 > 设置页那张「内置模型目录」卡至此能预览、能同步（在此之前指向 Rust 时是「接口不存在」）。
@@ -981,12 +1004,12 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   **模型总数一次都没变**（不新增不删除）；真机两条 provider 一个字节没动。
 > - 验收：`cargo test` **251 例全绿**（143 lib + 106 api_test + 2 shape_lint）。
 >
-> **本轮收工（第八轮共 5 个提交，全部真库副本 + 双端对照验穿）**：
-> 凭据写侧 → Skills 六条 → 长期记忆五条 → Provider 写侧 → 内置目录。界面端点这一批
-> **只剩 `/api/ai/capabilities/*`**（状态 / 刷新 / 实测校准开关与执行）——
-> 其中"状态 + 开关"不出网就能验，"刷新（要 models.dev）"与"校准（要真上游）"留给人配合。
+> **本轮收工（第八轮共 6 个提交，全部真库副本 + 双端对照验穿）**：
+> 凭据写侧 → Skills 六条 → 长期记忆五条 → Provider 写侧 → 内置目录 → 能力目录状态。
+> **界面端点这一批做完了**（`/api/ai/{tools,nsfw,skills,memory,builtin,capabilities,providers,credentials,web-search}/*`；
+> 只剩 `capabilities/{refresh,probe}` 两条 501，理由写在用例与上面的登记里）。
 > 之后按 §9 的排序是**联网三工具**（`web_search` / `web_fetch` / `civitai_search`，
-> 现在 `EndpointGuard` 已经在了）与**桌面专属工具**（`comfy_*` / 文件工具，R10 的落点）。
+> 现在 `EndpointGuard` 与能力目录都已经在了）与**桌面专属工具**（`comfy_*` / 文件工具，R10 的落点）。
 >
 > ✅ **P4 第 37 步（2026-09-25）：Provider 写侧（`POST/PUT/DELETE /api/ai/providers` + `PUT …/models`）** ——
 > 设置页那张「AI 模型与凭据」卡至此能建、能改、能删（在此之前 Rust 侧只读）。

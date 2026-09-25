@@ -20,6 +20,7 @@
 
 use std::path::PathBuf;
 
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::policy::{ToolPolicy, ToolPolicyConfig};
@@ -301,6 +302,101 @@ fn nsfw_config(state: &AppState) -> Result<(bool, bool), ApiError> {
             .unwrap_or(false)
     };
     Ok((flag("enabled"), flag("blur")))
+}
+
+// ---------------------------------------------------------------------------
+//  能力目录的状态（P4 第 39 步）
+// ---------------------------------------------------------------------------
+
+/// `ai.capabilities.probe`（`ThinkingProbe.SETTING_KEY`）：是否允许实测校准（发真实请求）。
+pub const KEY_PROBE: &str = "ai.capabilities.probe";
+
+/// 实测校准开着没有（`ThinkingProbe.enabled()`：**只有 `"1"` 算开**）。
+///
+/// ⚠ 与 NSFW 那些开关同一条纪律：认不出来的值一律按**关**（漏一个字段绝不能让
+/// "会花钱发真请求"这件事被悄悄打开）。
+pub fn probe_enabled(state: &AppState) -> Result<bool, ApiError> {
+    Ok(setting(state, KEY_PROBE)?.as_deref() == Some("1"))
+}
+
+/// `PUT /api/ai/capabilities/probe-toggle` 的请求体。
+#[derive(Debug, Deserialize)]
+pub struct ProbeToggle {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// 写"是否允许实测校准"（`ThinkingProbe.setEnabled`：写 `"1"` / `"0"`）。
+pub fn save_probe_enabled(state: &AppState, enabled: bool) -> Result<(), ApiError> {
+    let value = if enabled { "1" } else { "0" };
+    state.write(|tx| {
+        tx.execute(
+            "INSERT INTO app_settings (k, v) VALUES (?1, ?2)
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+            rusqlite::params![KEY_PROBE, value],
+        )?;
+        Ok(())
+    })
+}
+
+/// 读一行 `app_settings`（认不出来 / 没有 → `None`）。
+fn setting(state: &AppState, key: &str) -> Result<Option<String>, ApiError> {
+    state.with(|conn| {
+        Ok(conn
+            .query_row("SELECT v FROM app_settings WHERE k = ?1", [key], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .ok()
+            .flatten())
+    })
+}
+
+/// `GET /api/ai/capabilities/status` —— 目录新鲜度快照（设置页 / doctor 显示用）。
+///
+/// 字段**拍平**（前端不用再拼）：三层各自的 source / fetchedAt / entries +
+/// remote 的年龄与是否过期 + 是否允许实测校准 + 最近一次刷新的那句话。
+///
+/// ⚠ 三件事**不能"顺手统一"**：
+/// 1. `remoteAgeHours` / `remoteStale` **与 `remote.json` 同源**（没拉过 → `remoteAgeHours`
+///    整个键不出现、`remoteStale=true`）—— 写成"没拉过就 0 小时"会让界面显示"刚刚更新过"；
+/// 2. `remoteFetchedAt` 是**时间列**，要走 `iso_time` 重排（Kotlin `Instant.toString()`），
+///    不能原样透传；
+/// 3. `lastMessage` **由调用方给**：状态接口本身不产生这句话，**键就不出现**
+///    （手动刷新那条路才有话要说）。
+pub fn capability_status(
+    state: &AppState,
+    last_message: Option<String>,
+) -> Result<Value, ApiError> {
+    let dir =
+        crate::capability_catalog::dir_of(state.media_dir().parent().unwrap_or(state.media_dir()));
+    let status = crate::capability_catalog::status(&dir);
+    let now = state.with(|conn| {
+        conn.query_row("SELECT CAST(strftime('%s','now') AS INTEGER)", [], |row| {
+            row.get::<_, i64>(0)
+        })
+    })?;
+    let dto = crate::capability_catalog::CatalogStatusDto {
+        version: status.version,
+        builtin_rules: status.builtin_rules,
+        custom_source: status.custom.as_ref().map(|m| m.source.clone()),
+        custom_fetched_at: status
+            .custom
+            .as_ref()
+            .and_then(|m| crate::iso_time::iso_time(m.fetched_at.as_deref())),
+        custom_entries: status.custom.as_ref().map(|m| m.entry_count),
+        remote_source: status.remote.as_ref().map(|m| m.source.clone()),
+        remote_fetched_at: status
+            .remote
+            .as_ref()
+            .and_then(|m| crate::iso_time::iso_time(m.fetched_at.as_deref())),
+        remote_entries: status.remote.as_ref().map(|m| m.entry_count),
+        remote_age_hours: crate::capability_catalog::remote_age_hours(&dir, now),
+        remote_stale: crate::capability_catalog::is_stale(&dir, now),
+        refresh_interval_days: crate::capability_catalog::REFRESH_INTERVAL_DAYS,
+        probe_enabled: probe_enabled(state)?,
+        last_message,
+    };
+    serde_json::to_value(dto).map_err(|e| ApiError::internal(format!("状态序列化失败：{e}")))
 }
 
 #[cfg(test)]

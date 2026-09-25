@@ -266,6 +266,19 @@ pub fn router(state: AppState) -> Router {
         // 它是"出厂默认值"的唯一来源（冻结副本编译进二进制），用户改过的行**永不覆盖**。
         .route("/api/ai/builtin/status", get(ai_builtin_status))
         .route("/api/ai/builtin/sync", axum::routing::post(ai_builtin_sync))
+        // 界面端点第六批（P4 第 39 步）：**能力目录的状态与实测校准开关**。
+        // `refresh`（要 models.dev 在线数据集）与 `probe`（要真上游请求）**仍是 501** ——
+        // 它们不满足"不需要人工/真机校验"这条，见 `main.rs` 的诚实清单。
+        .route("/api/ai/capabilities/status", get(ai_capabilities_status))
+        .route(
+            "/api/ai/capabilities/probe-toggle",
+            axum::routing::put(put_capabilities_probe_toggle),
+        )
+        .route(
+            "/api/ai/capabilities/refresh",
+            axum::routing::post(ai_capabilities_refresh),
+        )
+        .route("/api/ai/capabilities/probe", axum::routing::post(ai_capabilities_probe))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -1413,6 +1426,46 @@ async fn ai_builtin_sync(
 ) -> Result<Json<crate::builtin::BuiltinSyncResult>, ApiError> {
     let mode = crate::builtin::SeedMode::parse(body.mode.as_deref())?;
     Ok(Json(crate::builtin::sync(&state, mode)))
+}
+
+// ---------------------------------------------------------------------------
+//  界面端点第六批（P4 第 39 步）：能力目录
+// ---------------------------------------------------------------------------
+
+/// `GET /api/ai/capabilities/status` —— 目录新鲜度（三层各自的来源 / 条数 / 过期与否）。
+///
+/// 状态接口本身**不产生** `lastMessage`，所以那个键不出现（形状的一部分）。
+async fn ai_capabilities_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::ai_settings::capability_status(&state, None)?))
+}
+
+/// `PUT /api/ai/capabilities/probe-toggle` —— 允许/禁止**实测校准**（校准会发真实请求、花钱）。
+async fn put_capabilities_probe_toggle(
+    State(state): State<AppState>,
+    Json(body): Json<crate::ai_settings::ProbeToggle>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    crate::ai_settings::save_probe_enabled(&state, body.enabled)?;
+    let message = if body.enabled { "已允许实测校准" } else { "已关闭实测校准" }.to_string();
+    Ok(Json(crate::ai_settings::capability_status(&state, Some(message))?))
+}
+
+/// `POST /api/ai/capabilities/refresh` —— **501**：要 models.dev 的在线数据集。
+///
+/// 如实不假装：刷新那条路的验收判据是"真的改了 `remote.json`"，本机不一定连得上
+/// models.dev —— 那种"跑完不报错但什么都没变"的实现比 501 更坏。
+async fn ai_capabilities_refresh() -> ApiError {
+    ApiError::not_implemented(
+        "能力目录在线刷新还没搬到 Rust（要 models.dev 的在线数据集；先用 Kotlin 后端或手工写 custom.json）",
+    )
+}
+
+/// `POST /api/ai/capabilities/probe` —— **501**：要真上游请求（会花钱）。
+async fn ai_capabilities_probe() -> ApiError {
+    ApiError::not_implemented(
+        "实测校准还没搬到 Rust（会对每个模型发真实请求、产生费用）",
+    )
 }
 
 // ---------------------------------------------------------------------------
