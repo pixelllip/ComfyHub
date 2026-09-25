@@ -284,9 +284,18 @@ fn provider_exists(state: &AppState, provider_id: &str) -> Result<bool, ApiError
     })
 }
 
+/// `thinking_efforts` 那一列 → 等级表（`run_lifecycle` 起 Run 时要复核请求的强度）。
+///
+/// 与 [`model_from_row`] 走**同一个**解析函数：两处各写一份 `parse_string_map` 调用，
+/// 迟早会出现"目录页显示有的等级、起 Run 时说没声明"这种自相矛盾。
+pub fn thinking_efforts_of(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<std::collections::BTreeMap<String, String>> {
+    Ok(parse_string_map(row.get::<_, Option<String>>("thinking_efforts")?.as_deref()))
+}
+
 /// 一行 `ai_models` → DTO（列名按 `db/schema.sqlite.sql`）。
-pub fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiModelDto> {
-    let model_id: String = row.get("model_id")?;
+pub fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiModelDto> {    let model_id: String = row.get("model_id")?;
     // `display_name` 为 NULL 时回落成 model_id（Kotlin `toModel` 就是这么写的）——
     // 回落成空串会让列表里出现一行没有名字的模型
     let display_name: Option<String> = row.get("display_name")?;

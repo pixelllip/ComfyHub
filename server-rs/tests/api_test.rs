@@ -4413,3 +4413,376 @@ async fn startup_recovery_fails_stale_runs_and_denies_pending_approvals() {
     assert!(denied["error"].as_str().unwrap().contains("重启"));
 }
 
+// ---------------------------------------------------------------------------
+//  Run 的生命周期端点（P4 第 28 步）
+// ---------------------------------------------------------------------------
+
+/// `POST /api/ai/conversations/{id}/runs` 的完整一条链（Kotlin 顺序照抄）。
+#[tokio::test]
+async fn start_run_validates_then_creates_messages_and_run() {
+    let state = state();
+    seed_provider_and_model(&state);
+
+    // ① 空正文（且没附件）→ 400，**一个字节都不写库**
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "   ", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert_eq!(body["detail"], "消息内容不能为空");
+    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    assert_eq!(messages.as_array().unwrap().len(), 1, "被拒的请求不许留下半条消息");
+
+    // ② 会话不存在 → 400
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/nope/runs",
+        serde_json::json!({ "text": "你好", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["detail"], "会话不存在: nope");
+
+    // ③ 模型不在目录里 → `UNKNOWN_MODEL`（**不是** CONFIG_ERROR：前端按码分支）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "你好", "providerId": "goat", "modelId": "nope" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "UNKNOWN_MODEL");
+    assert_eq!(body["detail"], "模型不在目录中: nope");
+
+    // ④ 合法的请求 → **202** + 三个主键
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "你好", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+    let user_id = body["userMessageId"].as_str().unwrap().to_string();
+    assert!(!run_id.is_empty() && !assistant_id.is_empty() && !user_id.is_empty());
+    assert_eq!(body.as_object().unwrap().len(), 3, "响应只有这三个键");
+
+    // 用户消息 + 助手占位都落了库，且**用户在前**（顺序是界面的依据）
+    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let list = messages.as_array().unwrap();
+    assert_eq!(list.len(), 3, "夹具 1 条 + 用户 + 助手占位");
+    let user = list.iter().find(|m| m["id"] == user_id.as_str()).expect("用户消息在");
+    let assistant = list.iter().find(|m| m["id"] == assistant_id.as_str()).expect("助手占位在");
+    assert_eq!(user["role"], "user");
+    assert_eq!(user["text"], "你好");
+    assert_eq!(user["seq"], 2);
+    assert_eq!(assistant["role"], "assistant");
+    assert_eq!(assistant["seq"], 3);
+    // ⚠ 此刻它已经是 `failed` 了：执行器在**同一个请求里**就跑完了（端点没搬完 → 如实失败）。
+    // 第 30 步接上真执行器之后，这里会是 `streaming`（后台任务在跑）——
+    // 判据是"**不是** pending、且与 run.status 一致"，别把 `streaming` 写死。
+    assert_eq!(assistant["status"], "failed");
+
+    // Run 的形状：`reasoningEffort` 记的是**生效值** `off`（没传也是这样）
+    let (status, run) = get_json(router_for(state.clone()), &format!("/api/ai/runs/{run_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(run["status"], "failed", "上游客户端还没搬 → 如实失败（不是永远 running）");
+    assert_eq!(run["errorCode"], "EXECUTOR_UNAVAILABLE");
+    assert!(run["errorMessage"].as_str().unwrap().contains("上游 LLM 客户端"));
+    assert_eq!(run["reasoningEffort"], "off");
+    assert_eq!(run["userMessageId"], user_id.as_str());
+    assert_eq!(run["assistantMessageId"], assistant_id.as_str());
+    assert_eq!(run["providerId"], "goat");
+
+    // 失败的助手消息也落了如实的状态（留在 streaming 会让界面一直转圈）
+    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let assistant = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == assistant_id.as_str())
+        .unwrap();
+    assert_eq!(assistant["status"], "failed");
+
+    // 事件：run.started / message.started / run.failed **都落了库**（断线重连补得回来）
+    let events = state
+        .with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT seq, event_type FROM ai_run_events WHERE run_id = ?1 ORDER BY seq",
+            )?;
+            let rows = stmt
+                .query_map(rusqlite::params![run_id], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .unwrap();
+    let types: Vec<&str> = events.iter().map(|(_, t)| t.as_str()).collect();
+    assert_eq!(types, vec!["run.started", "message.started", "run.failed"], "seq 从 1 起、顺序固定");
+
+    // 不存在 / 已收尾的 Run 上点取消：**200 + cancelled:false**（不是错误）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        &format!("/api/ai/runs/{run_id}/cancel"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["cancelled"], false);
+    assert_eq!(body["status"], "failed");
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/runs/nope/cancel",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["detail"], "Run 不存在: nope");
+}
+
+/// 重试：**复用原来那条用户消息**、空壳就地复用、有内容另起一条（AIH-024 / R6）。
+#[tokio::test]
+async fn retry_reuses_the_user_message_and_never_wipes_a_reply_with_content() {
+    let state = state();
+    seed_provider_and_model(&state);
+
+    let (_, first) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "再来一张", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    let first_run = first["runId"].as_str().unwrap().to_string();
+    let first_user = first["userMessageId"].as_str().unwrap().to_string();
+    let first_assistant = first["assistantMessageId"].as_str().unwrap().to_string();
+
+    // ① 空壳（正文空）→ **就地复用**同一条助手消息，不新增气泡
+    let (status, retry) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({
+            "text": "再来一张", "providerId": "goat", "modelId": "m1",
+            "retryOfRunId": first_run
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{retry}");
+    assert_eq!(retry["userMessageId"].as_str().unwrap(), first_user, "复用原来那条用户消息");
+    assert_eq!(
+        retry["assistantMessageId"].as_str().unwrap(),
+        first_assistant,
+        "空的失败气泡就地复用（会话里不留空壳）"
+    );
+    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    assert_eq!(messages.as_array().unwrap().len(), 3, "重试**不新增**任何消息");
+
+    // ② 有内容的失败回复 → 原样留着，重试**另起一条**（不许把用户看到过的东西抹掉）
+    let second_run = retry["runId"].as_str().unwrap().to_string();
+    state
+        .write(|tx| {
+            tx.execute(
+                "UPDATE ai_messages SET text = '我已经说了很多话', status = 'failed' WHERE id = ?1",
+                rusqlite::params![first_assistant],
+            )?;
+            tx.execute(
+                "INSERT INTO ai_message_parts (message_id, ordinal, type, text)
+                 VALUES (?1, 0, 'text', '我已经说了很多话')",
+                rusqlite::params![first_assistant],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let (_, retry2) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({
+            "text": "再来一张", "providerId": "goat", "modelId": "m1",
+            "retryOfRunId": second_run
+        }),
+    )
+    .await;
+    assert_ne!(
+        retry2["assistantMessageId"].as_str().unwrap(),
+        first_assistant,
+        "有内容的失败回复**不许**被就地重置"
+    );
+    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let kept = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == first_assistant.as_str())
+        .unwrap();
+    assert_eq!(kept["text"], "我已经说了很多话", "用户看到过的话一个字都不能丢（R6）");
+    assert_eq!(kept["parts"].as_array().unwrap().len(), 1, "它的工具卡/正文块也留着");
+
+    // ③ 已经答完的回复**不允许**重试（直接发新消息即可）
+    state
+        .write(|tx| {
+            tx.execute(
+                "UPDATE ai_messages SET status = 'complete' WHERE id = ?1",
+                rusqlite::params![first_assistant],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({
+            "text": "再来一张", "providerId": "goat", "modelId": "m1",
+            "retryOfRunId": second_run
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert!(body["detail"].as_str().unwrap().contains("不需要（也不能）重试"));
+}
+
+/// SSE：`?after=` 续传、帧形状、以及"收尾之后把库里的都发完再结束"。
+#[tokio::test]
+async fn run_events_stream_replays_and_resumes() {
+    let state = state();
+    seed_provider_and_model(&state);
+    let run = comfyhub_server_rs::runs::create(
+        &state,
+        comfyhub_server_rs::runs::NewRun {
+            conversation_id: "conv-0".into(),
+            provider_id: "goat".into(),
+            model_id: "m1".into(),
+            provider_snapshot: serde_json::json!({}),
+            model_snapshot: serde_json::json!({}),
+            prompt_version: "v28".into(),
+            user_message_id: None,
+            assistant_message_id: "assistant-1".into(),
+            retry_of_run_id: None,
+            reasoning_effort: Some("off".into()),
+            skill_snapshot: None,
+        },
+    )
+    .unwrap();
+
+    // 一次真实的流式：三段正文 + 收尾（总线负责发号，收尾走 finish_run）
+    state.bus.open(&run.id);
+    for text in ["你", "好", "呀"] {
+        state
+            .bus
+            .emit(&state, &run.id, "text.delta", &serde_json::json!({ "messageId": "assistant-1", "text": text }))
+            .unwrap();
+    }
+    comfyhub_server_rs::run_lifecycle::finish_run(
+        &state.bus,
+        &state,
+        &run.id,
+        "completed",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // 全量回放：4 条事件、`seq` 从 1 连续到 4、终态在最后
+    let body = read_sse(router_for(state.clone()), &format!("/api/ai/runs/{}/events", run.id), "").await;
+    let frames = parse_sse(&body);
+    assert_eq!(frames.len(), 4, "三段正文 + run.completed：{body}");
+    assert_eq!(frames[0].0, Some(1));
+    assert_eq!(frames[0].1, "text.delta");
+    assert_eq!(frames[0].2["text"], "你");
+    assert_eq!(frames[3].1, "run.completed");
+    assert_eq!(frames[3].2["runId"], run.id.as_str());
+    assert!(!body.contains("event: heartbeat"), "收尾之后立刻结束，不发心跳");
+
+    // 断线续传：`?after=2` 只拿后两条
+    let body = read_sse(
+        router_for(state.clone()),
+        &format!("/api/ai/runs/{}/events", run.id),
+        "?after=2",
+    )
+    .await;
+    let frames = parse_sse(&body);
+    assert_eq!(frames.iter().map(|f| f.0.unwrap()).collect::<Vec<_>>(), vec![3, 4]);
+
+    // 浏览器 `EventSource` 自动重连带的是 `Last-Event-ID` 头（不认它就永远从 0 重放）
+    let body = read_sse_with_headers(
+        router_for(state.clone()),
+        &format!("/api/ai/runs/{}/events", run.id),
+        "",
+        &[("last-event-id", "3")],
+    )
+    .await;
+    let frames = parse_sse(&body);
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].1, "run.completed");
+
+    // Run 不存在 → 400（**在建立流之前**判：SSE 一旦开始就没法改状态码了）
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/runs/nope/events").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["detail"], "Run 不存在: nope");
+}
+
+/// 读一个 SSE 响应体（它自己会结束 —— 收尾的 Run 发完就关流）。
+async fn read_sse(app: axum::Router, uri: &str, query: &str) -> String {
+    read_sse_with_headers(app, uri, query, &[]).await
+}
+
+async fn read_sse_with_headers(
+    app: axum::Router,
+    uri: &str,
+    query: &str,
+    headers: &[(&str, &str)],
+) -> String {
+    let mut builder = Request::builder().uri(format!("{uri}{query}")).header("accept", "text/event-stream");
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let response = app
+        .oneshot(builder.body(Body::empty()).unwrap())
+        .await
+        .expect("请求");
+    assert_eq!(response.status(), StatusCode::OK, "SSE 必须是 200");
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/event-stream"
+    );
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+/// `id` / `event` / `data` 三元组（`id` 缺席的心跳帧给 `None`）。
+fn parse_sse(body: &str) -> Vec<(Option<i64>, String, Value)> {
+    let mut out = Vec::new();
+    for frame in body.split("\n\n").filter(|f| !f.trim().is_empty()) {
+        let mut id = None;
+        let mut event = String::new();
+        let mut data = Value::Null;
+        for line in frame.lines() {
+            if let Some(rest) = line.strip_prefix("id: ") {
+                id = rest.trim().parse::<i64>().ok();
+            } else if let Some(rest) = line.strip_prefix("event: ") {
+                event = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("data: ") {
+                data = serde_json::from_str(rest.trim()).unwrap_or(Value::Null);
+            }
+        }
+        out.push((id, event, data));
+    }
+    out
+}
+

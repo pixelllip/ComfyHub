@@ -204,11 +204,25 @@ fn split_lines(text: &str) -> Vec<String> {
 struct ParsedSkill {
     entry: SkillEntry,
     valid: bool,
+    /// builtin / user（Run 的 Skills 快照要如实记下来源，AIH-047）
+    source: &'static str,
+    /// 正文 `sha256` 的**前 16 位十六进制**（与 Kotlin `SkillStore.sha256` 同一个口径：
+    /// 对**文件原文**取哈希，不是对解析后的 body）
+    digest: String,
+}
+
+/// `sha256(原文)` 的前 16 位（Kotlin `SkillStore.sha256` 的逐字对应物）。
+fn short_digest(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    let out = hasher.finalize();
+    out.iter().map(|b| format!("{b:02x}")).collect::<String>().chars().take(16).collect()
 }
 
 const MAX_BODY_BYTES: usize = 256 * 1024;
 
-fn parse_one(file: &Path, fallback_name: &str) -> Option<ParsedSkill> {
+fn parse_one(file: &Path, fallback_name: &str, source: &'static str) -> Option<ParsedSkill> {
     let raw = std::fs::read_to_string(file).ok()?;
     let (meta, body) = parse_front_matter(&raw);
     let name = meta
@@ -241,11 +255,13 @@ fn parse_one(file: &Path, fallback_name: &str) -> Option<ParsedSkill> {
             when_to_use: meta.get("whentouse").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         },
         valid,
+        source,
+        digest: short_digest(&raw),
     })
 }
 
 /// 扫一个根目录（同名时 **bundle（`<name>/SKILL.md`）胜出**）。
-fn scan_root(root: &Path) -> Vec<(String, ParsedSkill)> {
+fn scan_root(root: &Path, source: &'static str) -> Vec<(String, ParsedSkill)> {
     if !is_dir_no_follow(root) {
         return Vec::new();
     }
@@ -280,7 +296,7 @@ fn scan_root(root: &Path) -> Vec<(String, ParsedSkill)> {
             .or_else(|| file_name.strip_suffix(".MD"))
             .unwrap_or(&file_name)
             .to_string();
-        let Some(parsed) = parse_one(&file, &fallback) else { continue };
+        let Some(parsed) = parse_one(&file, &fallback, source) else { continue };
         let name = parsed.entry.name.clone();
         match by_name.iter_mut().find(|(n, _, _)| *n == name) {
             Some(slot) => {
@@ -297,8 +313,8 @@ fn scan_root(root: &Path) -> Vec<(String, ParsedSkill)> {
 
 /// 全量扫描（内置 + 用户），同名冲突 **用户胜出**（AIH-037）。
 fn scan(builtin_root: &Path, user_root: &Path) -> Vec<ParsedSkill> {
-    let builtin = scan_root(builtin_root);
-    let user = scan_root(user_root);
+    let builtin = scan_root(builtin_root, "builtin");
+    let user = scan_root(user_root, "user");
     let mut out: Vec<ParsedSkill> = Vec::new();
     for (name, dto) in &builtin {
         match user.iter().find(|(n, _)| n == name) {
@@ -326,6 +342,37 @@ pub fn catalog(builtin_root: &Path, user_root: &Path) -> Vec<SkillEntry> {
         .filter(|s| s.valid)
         .map(|s| s.entry)
         .collect()
+}
+
+/// 一次 Run 的 **Skills 快照**（AIH-047）：`{count, skills:[{name, digest, source}]}`。
+///
+/// 为什么 Run 里要存这一份：事后才回答得了"这条回答当时用的是哪版规则"。
+/// 没有它，用户改了 skill 之后再问"为什么它当时那么做"就永远查不清。
+///
+/// 形状与 Kotlin `AiRunRepo.create(skillSnapshot = …)` **逐字一致**：
+/// `count` 是**这次生效的**条数（校验不过的与 `user-invocable=false` 的不算），
+/// 每条三个键 `name` / `digest` / `source`，按 name 升序。
+///
+/// ⚠ `digest` 是**文件原文** sha256 的前 16 位（不是解析后的 body）——
+/// 与 Kotlin `SkillStore.sha256(raw)` 同一个口径，改一个字就不同。
+pub fn snapshot(state: &crate::routes::AppState) -> Result<serde_json::Value, crate::routes::ApiError> {
+    let storage = state.media_dir().parent().unwrap_or(state.media_dir()).to_path_buf();
+    let entries = scan(
+        &state.project_root().join("skills").join("builtin"),
+        &storage.join("ai").join("skills"),
+    );
+    let skills: Vec<serde_json::Value> = entries
+        .into_iter()
+        .filter(|s| s.valid)
+        .map(|s| {
+            serde_json::json!({
+                "name": s.entry.name,
+                "digest": s.digest,
+                "source": s.source,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "count": skills.len(), "skills": skills }))
 }
 
 /// `Files.isDirectory(path, NOFOLLOW_LINKS)`：**不看符号链接指向什么**。

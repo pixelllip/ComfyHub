@@ -26,6 +26,9 @@ tokio-util = { version = "0.7", features = ["io"] }
 # 只开真正要用的解码器 —— 每多一个 feature 就多一份编译时间与潜在 CVE 面；
 # avif 刻意不开：没有解码器时按"回退原图"处理（与 Kotlin 的行为一致）。
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
+# SSE 事件流：`Body::from_stream` 要一个 `Stream`，手写 `poll_next` 不如直接用现成的 trait。
+# 只开 `std`（`Stream` / `StreamExt` 都在里面）—— 不引整个 futures 生态。
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

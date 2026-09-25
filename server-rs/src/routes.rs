@@ -48,6 +48,11 @@ pub struct AppState {
     pub db_path: String,
     /// 产物原件目录（`<storage>/media`）——文件流端点要它。
     media_dir: Arc<std::path::PathBuf>,
+    /// Run 事件总线（P4 第 27 步）：`seq` 分配 + 写穿到 `ai_run_events`。
+    ///
+    /// **它不是事件的真源**（库才是）：SSE 从库里按 `?after=` 拉，
+    /// 总线只保证"号不重、号不退"与"攒批落库"。
+    pub bus: Arc<crate::events::RunEventBus>,
 }
 
 impl AppState {
@@ -56,6 +61,7 @@ impl AppState {
             conn: Arc::new(Mutex::new(conn)),
             db_path: db_path.into(),
             media_dir: Arc::new(media_dir.into()),
+            bus: Arc::new(crate::events::RunEventBus::new()),
         }
     }
 
@@ -194,6 +200,11 @@ pub fn router(state: AppState) -> Router {
             "/api/ai/conversations/{id}/messages",
             get(ai_conversation_messages).post(append_message),
         )
+        // Run 的生命周期（P4 第 28 步）：创建 202 → 事件流（SSE）→ 取消（AIH-020/021/022）
+        .route("/api/ai/conversations/{id}/runs", axum::routing::post(start_run))
+        .route("/api/ai/runs/{id}", get(get_run))
+        .route("/api/ai/runs/{id}/events", get(run_events))
+        .route("/api/ai/runs/{id}/cancel", axum::routing::post(cancel_run))
         // run-kit 工件（P4 第 22 步）：手机 harness 的**全部规则类输入**（R12/R13 的第一次重建）
         .route("/api/ai/run-kit", get(ai_run_kit))
         .route("/api/ai/run-kit/status", get(ai_run_kit_status))
@@ -604,6 +615,70 @@ async fn append_message(
     Json(body): Json<crate::conversations::MessageAppend>,
 ) -> Result<(StatusCode, Json<crate::conversations::AiMessageDto>), ApiError> {
     Ok((StatusCode::CREATED, Json(crate::conversations::append_message(&state, &id, &body)?)))
+}
+
+// ---------------------------------------------------------------------------
+//  Run 的生命周期（P4 第 28 步）
+// ---------------------------------------------------------------------------
+
+/// `POST /api/ai/conversations/{id}/runs` → **202 Accepted** + `{runId, assistantMessageId, userMessageId?}`。
+///
+/// 202 的语义是"收下了、真正在后台跑"（AIH-020）。界面拿到这一对消息主键之后，
+/// **立刻**按自己生成的 id 插好"用户气泡 + 空助手气泡"，再靠 SSE 里的 `messageId`
+/// 找到那条气泡往上写字 —— 所以这三个键少一个都会让界面显示不出来。
+async fn start_run(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<crate::run_lifecycle::RunStartRequest>,
+) -> Result<(StatusCode, Json<crate::run_lifecycle::RunStartResponse>), ApiError> {
+    let response = crate::run_lifecycle::start(&state, &id, &body)?;
+    Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+/// `GET /api/ai/runs/{id}` —— 刷新页面 / 另一台设备连上来时问"这次 Run 到哪了"。
+async fn get_run(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<crate::runs::AiRunDto>, ApiError> {
+    Ok(Json(crate::runs::get(&state, &id)?))
+}
+
+/// `GET /api/ai/runs/{id}/events?after=N` —— **SSE 事件流**。
+///
+/// ⚠ `after` 也认 `Last-Event-ID` 头（浏览器 `EventSource` 自动重连时会带它）：
+/// 只看查询参数的话，浏览器那条自动重连路径**永远从 0 重放**，
+/// 表现是"重连之后整段回复又长了一遍"。
+async fn run_events(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Query(q): Query<RunEventsQuery>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    // Run 不存在 → 400 + 稳定码（**在建立流之前**判断：SSE 一旦开始就没法改状态码了）
+    crate::runs::get(&state, &id)?;
+    let after = q
+        .after
+        .or_else(|| {
+            headers
+                .get("last-event-id")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<i64>().ok())
+        })
+        .unwrap_or(0);
+    Ok(crate::run_lifecycle::sse(state, id, after))
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RunEventsQuery {
+    after: Option<i64>,
+}
+
+/// `POST /api/ai/runs/{id}/cancel` —— 取消（Run 已经收尾时回 `{cancelled:false, status}`）。
+async fn cancel_run(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<crate::run_lifecycle::CancelResult>, ApiError> {
+    Ok(Json(crate::run_lifecycle::cancel(&state, &id)?))
 }
 
 // ---------------------------------------------------------------------------

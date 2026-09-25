@@ -172,7 +172,10 @@ fn json_string(text: &str) -> String {
 }
 
 /// `app_settings` 的 `ai.nsfw`（读坏 / 没有 → **关闭**，与 Kotlin `NsfwConfig.load` 同口径）。
-fn nsfw_enabled(state: &AppState) -> Result<bool, ApiError> {
+///
+/// `pub`：起一次 Run 时要把**当时**的开关写进 `model_snapshot`（"这一轮有没有注入那段"
+/// 必须事后可查），那处的调用方在 `run_lifecycle.rs`。
+pub fn nsfw_enabled(state: &AppState) -> Result<bool, ApiError> {
     let raw: Option<String> = state.with(|conn| {
         Ok(conn
             .query_row("SELECT v FROM app_settings WHERE k = ?1", [KEY_NSFW], |row| {

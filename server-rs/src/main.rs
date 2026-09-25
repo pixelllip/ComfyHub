@@ -31,13 +31,16 @@
 //! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ |
 //! | `GET /api/ai/providers`（不含密钥）、`GET /api/ai/providers/{id}/models` | ✅ |
 //! | `GET /api/ai/conversations`、`/{id}`、`/{id}/messages`（**读侧**：历史会话与有序块） | ✅ |
+//! | `POST/PATCH/DELETE /api/ai/conversations`、`POST …/messages`（**写侧**） | ✅ |
+//! | **Run 生命周期**：`POST …/runs`（202）/ `GET /runs/{id}` / `GET /runs/{id}/events`（**SSE**）/ `POST /runs/{id}/cancel` | ✅（事件流按 `?after=` 从库里拉，见 `run_lifecycle.rs`） |
 //! | **`GET /api/ai/run-kit{,/status}`**（手机 harness 的全部规则类输入；R12/R13 的第一次重建） | ✅ |
 //! | **`/api/ai/pending`**（跨端待办总览：还在等人的提问与工具审批） | ✅ |
 //! | **`/api/auth*` 配对闸门 + `GET /api/ai/credentials` 密钥下行**（inbound auth P0 + 配对第 2 步） | ✅ |
 //! | 扫码配对（`POST /api/auth/pair/start`） | ⛔ **501**（本轮只做"手机发起 + 桌面显示 6 位码"，见 `docs/pairing-design.md` §11.1） |
-//! | `/api/ai/*` 的其余部分（会话写侧 / Run / SSE / 工具 / 审批 / 附件） | ⛔ **未搬**（Kotlin 那边继续服务） |
+//! | **上游 LLM 客户端 / 协议适配器**（第 29 步）与**主循环**（第 30 步） | ⛔ **未搬**：`POST /runs` 会**如实**以 `EXECUTOR_UNAVAILABLE` 收尾，而不是留一个永远转圈的 Run |
+//! | `/api/ai/*` 的其余部分（工具层与审批 R8 / 附件 R9 / skills / memory / tools / nsfw / builtin / capabilities） | ⛔ **未搬**（Kotlin 那边继续服务） |
 //! | `/api/capture/{status,jobs,poll,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功） |
-//! | R6~R10 的安全防线 | ⛔ **未重建**（AI/工具层是最后一批，总纲 §6 要求逐条对照重建） |
+//! | R6~R10 的安全防线 | ⛔ **部分重建**（R5 的保留窗口与 seq 纪律已在 `runs.rs`/`events.rs` 落地；R8/R9 未动） |
 //!
 //! ## 手机现在可以只对着**这一个后端**干活了（2026-09-24，第 22 步之后）
 //!
