@@ -317,6 +317,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 | 🔒 [`docs/sync-api-contract.md`](sync-api-contract.md) | **同步 API 4 条端点**（manifest/changes/bootstrap/push、游标语义、410 分支、幂等与 LWW）—— M0 已冻结 |
 | 🔒 [`docs/tool-scope-contract.md`](tool-scope-contract.md) | **工具分端 ToolScope**（四值语义、MOBILE 那 7 个、R11 为什么不许复用 `comfy_submit`）—— M0 已冻结 |
 | 🔒 [`docs/run-kit-contract.md`](run-kit-contract.md) | **run-kit 工件**（两条端点、字段真源、`kitVersion` 的 bump 规则、R13 "两端不许硬编码规则"）—— M0 已冻结（实现归 M1） |
+| [`docs/workflow-recipe-design.md`](workflow-recipe-design.md) | **工作流配方**（骨架 / 模型槽位 / 参数档位三层分解、学习闭环六步、新模型的三种情形、落地分步 W1~W5、明确不做）—— 见 §12 |
 | `docs/memory-and-storage-evaluation.md` | 为什么要换（实测内存数据 §3.2）、MySQL 方言逐条可移植性（§5.2.2）、发布包收益（§5.2.4） |
 | `docs/cross-device-sync-design.md` | 同步机制细节（变更账本、游标、墓碑、bootstrap、SQLite 坑 §6）、安卓客户端现状（§6.5） |
 | `docs/mobile-harness-design.md` | 手机 harness 的范围与边界（§4）、为什么 Kotlin 而非 Dart/Rust（§2）、run-kit（§3） |
@@ -1812,4 +1813,30 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | "抠人保背景"要**干净的边缘**（带 alpha 的 matting / rembg） | ⛔ 未做：现在只有"框 + 羽化"，边缘一圈会被一起重绘。用户要"抠得干净"就得有分割模型 —— 有没有先用 `comfy_env_report` 查，没有如实说 |
 | `comfy_audit_workflow` 里加一条"角色 tag 与角色卡/danbooru 是否一致"的检查 | ⛔ 未做（现在只在系统提示与工具描述里约束） |
 | 真实 App 的人手验收（打开页面、让 AI 真跑一遍两阶段） | 🔶 本轮已构建 debug 版并截图确认角色卡页可用（见下）；**让 AI 真跑一遍两阶段**需要真 provider（会花钱）与用户的 ComfyUI，留给用户按屏幕确认 |
+
+---
+
+## 12. 2026-09-26 这一轮：工作流配方（让 AI 学会"新模型该怎么接上去"）
+
+> **用户这一轮的原话**：「我想可能很多模型都有 image edit 工作流，比如我刚在
+> `D:\Comfy-Desktop\...\user\default\workflows` 里导入了 krea2 的图像编辑工作流。
+> 甚至视频模型都有作为 image edit 基底模型的资质。**如果以后出了新的模型，
+> 如何让 AI 自主学习新模型泛用/特定工作流的搭建？** 继续完成，每完成一项就 git 保存。」
+>
+> **设计（为什么这么做）在 [`docs/workflow-recipe-design.md`](workflow-recipe-design.md)**：
+> 工作流拆成**任务骨架（泛用）+ 模型槽位（特定）+ 参数档位（特定）**三层，
+> AI 从磁盘上已有的具体工作流里把前两层**归纳**出来、**落库沉淀**，新模型只需"绑到槽位"。
+> 本节只登记**落地进度与硬证据**。
+
+| 提交 | 内容 |
+| --- | --- |
+| （本节随每项落地追加） | W1 解析核心 / W2 配方表与端点 / W3 三条工具 / W4 系统提示与 skill / W5 骨架改写 |
+
+**这一轮没做的（诚实清单）**：
+
+| 项 | 状态 |
+| --- | --- |
+| Rust 侧的对照实现（配方三条工具 + 表） | ⛔ 未做（沿用本轮 Kotlin 优先：App 连的是 Kotlin；Rust 侧按老规矩随后逐条搬） |
+| **骨架改写**（unet+clip+vae ↔ 整包 checkpoint 的节点增删与重连线） | ⛔ 未做（设计 §4 W5；本轮只如实报"现有骨架接不上"） |
+| 配方同步到手机 | ⛔ 未做（**有意**：手机提交走 `comfy_queue_submit`，R11；拿到它跑不了的配方只会误导模型） |
 
