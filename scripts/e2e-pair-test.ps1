@@ -140,6 +140,18 @@ try {
             if (Test-Path $side) { Copy-Item $side "$dbCopy$suffix" -Force }
         }
         Write-Host "库副本：$dbCopy（真库只读未动）" -ForegroundColor DarkGray
+
+        # ① 把闸门拨回**出厂态**：第 1 幕验的就是"默认关着、没有令牌"。
+        #    操作员的真库里很可能**已经配过手机**（`auth.pairing` enabled=true ——
+        #    那是正常使用状态，不是脏数据），照原样拷过来会让第 1 幕必红 ——
+        #    2026-09-25 实测（本机真机验收之后就一直红在这里，而代码一行没错）。
+        #    只动**副本**，真库一个字节都不碰。
+        #    ⚠ 这里曾经写成双引号 + `\"` 转义（PowerShell 不认那种转义）→ python 直接
+        #    SyntaxError，而输出被 `Out-Null` 吞掉，于是"复位过了"却照样红。
+        $resetPy = 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("DELETE FROM app_settings WHERE k = ''auth.pairing''"); c.commit(); c.close()'
+        & python -c $resetPy $dbCopy
+        if ($LASTEXITCODE -ne 0) { throw "复位副本的配对状态失败（python 退出码 $LASTEXITCODE）" }
+        Write-Host "副本上的配对状态已复位（第 1 幕验的是出厂态）" -ForegroundColor DarkGray
     } else {
         throw "没有 $realDb：Rust 后端不建表，先让 Kotlin 后端起一次库"
     }
