@@ -515,9 +515,10 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > **`run-kit`（第 22 步）** / **`/api/auth*` + 密钥下行（第 23 步）** + **同步 4 条**全部可用。
 > 仍未搬：`/api/capture/{status,jobs,poll,import,import-workflows}`（`status`/`jobs`/`poll` 要 ComfyUI 在场；
 > `import-workflows` 要整套 `WorkflowConvert` + `AiWorkflowSearch` 转换栈，是**下一个大块**）、
-> `/api/ingest/comfyui`、`/api/ai/*` 的**其余部分**（Run 与 SSE / 工具层与审批 / 附件 ——
-> **R6~R9 的 Rust 侧重建仍未开始**，那是 P4 剩下的最大一块，
-> 也是 §7 风险表里 "11,103 行 Kotlin 测试要重写"那块）。
+> `/api/ingest/comfyui`、**工具层与审批（R8）/ 附件（R9）**、
+> `/api/ai/{skills,memory,tools,nsfw,builtin,capabilities}/*`（界面维护用）。
+> ✅ **Run 与 SSE 已落地**（第 26~30 步，见本节上半部分）—— 也就是说
+> **桌面执行器已经能真的聊**（不带工具、不带附件），**R5/R6 已在 Rust 侧重建**。
 >
 > ✅ **P4 第 14 步（`1108673`，2026-09-24）**：`GET /api/capture/workflows` —— 用户 bug ⑤ 那条路
 > （`prompts` 库里没有 ≠ 用户机器上没有）。新模块 `comfy_dirs.rs` 逐条对照
@@ -809,6 +810,61 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   **`scripts\e2e-pair-test.ps1` 48 项全绿**（真库副本 + 真端口 + 真"非回环"来源）；
 >   **真机那把 key 真的解开了** —— 对着真实 `storage\ai\credentials.dpapi.json`
 >   取回 `COMMAND_CODE_GOAT` / `DEEPSEEK_API_KEY`（**只报长度，不打印值**）。
+>
+> ✅ **P4 第 26 步（`343b6d9`，2026-09-25）：Run 持久化**（`server-rs/src/runs.rs`）—— 事件流
+> **两条读法**（进程内 / 断线重连回放）共用的同一份事实，所以先把"落库与读回"这半边钉死。
+> `AiRunDto` 11 个键、`create`（14 列，`started_at` 走 SQL 侧 `strftime`）/ `finish`（终态只认三个）/
+> `fail_stale_running` + `expire_stale_pending_tool_calls`（后端重启恢复的两半）/
+> `EventBatcher`（P1 批量写）+ `events(?after=)` + `prune_events`（留尾部 4000，红线 R5）/
+> 工具调用一族（`insert_pending_tool_call` 是 R8 的落点、`record_tool_call` 原地更新）。
+> 三条容易静默做错的地方写进了文件头：**`ai_conversations.updated_at` 是承重的**（改的是
+> `ai_messages`，触发器不会替我们点火）；**`prune` 留的是尾部**（写成 `>=` 就是"刚发的消息
+> 一刷新就没了"）；**`reset_assistant_for_retry` 必须连有序块一起清**。
+> 验收：`cargo test` 177 例全绿（当轮）+ **真库副本抽查**（真会话/真 provider 上建 Run，
+> `after=4`/`keep=3`/pending 原地更新/终态全部走通）。
+>
+> ✅ **P4 第 27+28 步（`effbe30`，2026-09-25）：事件总线 + 生命周期端点** ——
+> **指向 Rust 后端时 AI 工作台的「发送」按钮第一次真的有了反应**。
+> `events.rs`（seq 分配器 + 写穿 + 环形缓冲 2000 与库里 4000 **刻意不同数** + `resume_from`）；
+> `run_lifecycle.rs`（`POST …/runs` 的校验顺序**照抄 Kotlin**、`GET /runs/{id}`、`cancel`、
+> **`GET /runs/{id}/events` 的 SSE**）。
+> ★ **事件流从库里拉**（不是内存订阅通道）：Kotlin 那种做法有一条缝 —— 环形缓冲只留 2000 条，
+> `after` 更老时取不到那段历史，而库里那份是批量写的、可能还没 flush。按 `?after=` 直接拉库，
+> **顺序 / 去重 / 续传 / 重启回放全由 `(run_id, seq)` 主键保证**；代价是 120ms 轮询延迟
+> （对逐字流式够用），空闲 15s 一条 `heartbeat`。`after` 也认 `Last-Event-ID` 头。
+> 验收：真库副本 + 真端口（8093）抽查 POST/GET/SSE/`Last-Event-ID`/cancel 全对。
+>
+> ✅ **P4 第 29 步（`e9b903e`，2026-09-25）：上游 LLM 客户端 + 协议适配器** ——
+> 拆成**纯协议**（`protocol.rs`：三家适配器 / SSE 分帧 / 工具分片按 index 归位 / `chat_url` 的
+> `/v1` 三家刻意不一样）与**纯 I/O**（`upstream.rs`：reqwest **只开 rustls-tls**、不跟随重定向、
+> 状态码→稳定错误码、上游正文**先脱敏再截断**、usage 跨轮累加），外加 `outbound.rs`
+> （AGENTS §4：**公网走代理、本机/内网强制直连**，Windows 系统代理读注册表）。
+> ★ 用例当场抓到一个真会静默的错：**Anthropic 的定位键叫 `index`**（`output_index` 是 Responses 的）
+> —— 读错键会让工具名与参数分片落到不同 index，参数张冠李戴。
+> ★ 新增一条 Kotlin 侧没有的**诚实性防线**：**中途断流必须变成错误**
+> （既没有 `finish_reason` 也没有 `[DONE]` → `PROTOCOL_ERROR`）。漏了它，网线一拔、代理一掐，
+> 库里就是一条 `complete` 的半截回复，而界面上没有任何异常标记。
+>
+> ✅ **P4 第 30 步（`f235ec3`，2026-09-25）：桌面执行器主循环** ——
+> **指向 Rust 后端时 AI 工作台真的能聊了**（真机真上游实测：`assistant text="好"`、
+> `providerResponseId=gen_01M3B6…`、usage 17758/2、事件 seq 1..6 以 `run.completed` 收尾）。
+> `executor.rs`：上下文拼装（思考段不进上下文；**工具结果必须带 `tool_call_id` 单独成轮**，
+> 否则 OpenAI 直接 400 且错误指不到这里）+ 起标题指令**只按轮带、插在第 2 条**（AGENTS §10.1）+
+> 流式攒批 + **R6 三条**（正文必须落块 / 失败与取消也要把已经说出去的话落下来 / 收尾只有
+> `finish_run` 一条路）+ 取消走旗标（安全点收尾，不是强杀协程）。
+> ⚠ **这一版不下发工具**（第 31 步才搬工具层），系统提示里也**不说**有工具 —— 前后一致；
+> 反过来会让模型去调一个必然失败的工具。
+> 验收：真 socket 假网关三条用例（正常流 / **中途断流 R6** / 429）+ 真机真上游两条
+> （deepseek 余额不足如实回 `QUOTA_EXCEEDED`；command-code-goat 真回复）。
+
+> **📅 2026-09-25 这一轮的交接单**（按价值排序，下一轮从这儿起手）：
+> 1. **工具层与审批（R8）+ 提问闸门** —— 现在桌面执行器的工具清单是**空的**，
+>    系统提示也如实说"没有工具"。这决定 AI 能不能真的生图（`comfy_submit` 在桌面专属那一档）；
+> 2. **附件（R9）**：`/api/ai/attachments*` 那几条 + 内联预算（现在有附件直接 `UNSUPPORTED_CONTENT`）；
+> 3. `/api/ai/{skills,memory,tools,nsfw,builtin,capabilities}/*` 这批**界面端点** ——
+>    今天指向 Rust 时设置页那几张卡会说"接口不存在"（**不是错误，是没搬**）；
+> 4. 话题标签 / 提问闸门的**跨端**部分（`ai_questions` 的写侧：现在 `GET /api/ai/pending` 能读，
+>    但手机/另一台设备答完要能落回来）。
 >
 > ✅ **P4 第 25 步（`pending.rs`，2026-09-24）：`GET /api/ai/pending`（跨端待办总览）** ——
 > M1 定的契约，Rust 侧一直缺。它是"**另一台设备刚连上来**"（手机 / 第二个窗口 / 刚重启的
