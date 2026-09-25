@@ -28,6 +28,7 @@ pub mod desktop_tools;
 pub mod endpoint_guard;
 pub mod events;
 pub mod executor;
+pub mod graph_parse;
 pub mod inputs;
 pub mod iso_time;
 pub mod media;

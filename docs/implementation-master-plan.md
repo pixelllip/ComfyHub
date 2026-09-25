@@ -1168,6 +1168,30 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   comfyUrl=http://127.0.0.1:8188 / outputDir=D:\Comfy-Desktop\ComfyUI-Shared\output`，
 >   此刻 ComfyUI 没在跑 → `comfyReachable=false` 且队列 0（如实），`recent` 20 条真实记录。
 
+> ✅ **P4 第 43 步（第一半，2026-09-25）：`GraphParse` 移植 + 真库逐字段对账** ——
+> 捕获入库（`/api/capture/poll` → 建提示词与产物行）的前置件：**一份 API 节点图 → 提示词字段**
+> 的启发式解析。它判错的表现是"画廊里那条记录的参数是错的"，而且**不报错**。
+> - `graph_parse.rs`（Kotlin `GraphParse` 逐行对照，420 行）：采样器定位五档判据、
+>   模型链收集 LoRA / checkpoint、条件链穿透转发与原始值节点、宽高批量、产物类型
+>   （图 / 视频 / 音频 / MIXED）、`extra_params`（上限与 Kotlin 一致：`>= 60` 就停，
+>   而那条 `__node_id` 不经过检查 → **实际最多 61**）、标题线索。
+> - ★ **`serde_json` 打开了 `preserve_order`**（本轮唯一的依赖改动）：Kotlin 的 `JsonObject`
+>   是插入序，而 serde_json 默认是 **BTreeMap（按键排序）**，而这些启发式全是"文档顺序里第一个
+>   命中的节点"——顺序一变，多候选图上解析出的 seed / 提示词就与 Kotlin 不同，**而且不报错**。
+>   实测副作用为零：`kitVersion` 仍是 `2026-09-24.1`、`systemPrompt` 仍是 50664 字符逐字不变。
+> - ★★ **真库逐字段对账抓到一个静默 bug**：`capture_runs.raw` 里的连线引用**可以是数字**
+>   （`"negative": [76, 0]`，而图的键是字符串 `"76"`）。Kotlin 的 `asRef` 走 `contentOrNull`
+>   所以读得到，Rust 第一版只 `as_str()` → **负向提示词 / LoRA 链 / checkpoint / 尺寸整条链静默断掉**。
+>   修完 **25 条真实记录逐字段零差异**（`positive` / `negative` / `checkpoint` / `sampler` /
+>   `scheduler` / `steps` / `cfg` / `seed` / `width` / `height` / `batch` / `kind`）。
+> - 另两处语义坑写进了用例：`maxByOrNull`（并列取第一个）vs Rust `max_by_key`（并列取最后一个）；
+>   大 seed（> i64）在 Kotlin 是**饱和**成 `i64::MAX`（第二档 `toDoubleOrNull()?.toLong()` 先命中），
+>   不是双曲回绕 —— 第一版按回绕写，被用例当场抓住。
+> - 验收：`cargo test` **291 例全绿**（173 lib + 116 api_test + 2 shape_lint；新增 11 例解析单测，
+>   含一份"真机形状"的固化夹具）+ **真库对账 25/25 零差异**（`tests/spot_check.rs`，默认 `#[ignore]`）。
+> - 第二半（下一步）：`CaptureRepo.beginRun/finishRun/importFile` + `pollOnce` + `/api/capture/poll`
+>   + `comfy_sync_history` 工具 —— 也就是"产物真的进画廊"。
+
 > **📅 2026-09-25 这一轮的交接单**（上一轮留下的，按价值排序；① 的前半已落地）：
 > 1. ✅ **工具层与审批（R8）+ 提问闸门**：第 31 / 32 步已落地（四个本机工具 + 闸门 + 两条端点批次）。
 >    **还剩**：联网三工具（`web_search` / `web_fetch` / `civitai_search`，要 Keenable / Civitai
