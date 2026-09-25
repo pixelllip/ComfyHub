@@ -1755,3 +1755,61 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | 活实例端到端脚本（O18） | ⛔ 缺（这次是临时拼的） |
 | `e2e-submit` / `e2e-capture` / `e2e-ai-tools` / `e2e-pair` 四条脚本 + `flutter test` + harness 用例**对着 Rust** 跑一遍 | ⛔ 未做（**切流前必须**；现在它们验的还是 Kotlin） |
 | 文档随切流更新（README 的"现状"描述、AGENTS §11 的阶段标记） | 🔶 本轮已补 §4 的 P4 行与本节 |
+
+---
+
+## 11. 2026-09-26 这一轮：角色卡（含 danbooru）+ 图像编辑（5 个提交）
+
+> **用户这一轮的三句话**：① "我觉得人物卡那块还有得优化：对于支持 tag 的模型（比如 Anima），
+> 除了专门 LoRA 内置的提示词外**也要查查 danbooru**"；② "目前我们的项目还不会自己做图像编辑
+> 工作流。然而我之前有'保持背景不变，更换有具体动作的人物并保持画风'的需求，这时候就应该
+> **先生成人物，然后再用图像编辑把人换上去**吧？"；③ "继续做下去。每完成一项就 git 保存。
+> **最好能让我在真实 app 而不只是后端上测试**"。
+>
+> 落点与 §10 的 O7/O8/O9 对齐，**Kotlin 优先**（App 现在连的就是 Kotlin，这样第 ③ 条才成立；
+> Rust 侧按老规矩随后逐条对照搬）。
+
+| 提交 | 内容 |
+| --- | --- |
+| `9e96135` | **角色卡数据层**：`character_cards` 表（`normalized` 唯一索引做幂等 upsert 的键、R3 不用 `INSERT OR REPLACE`、**刻意不进同步范围**）+ `CharacterCardRepo` + `/api/ai/character-cards` 五条端点。`save` 是**同名合并**（`tags` 追加去重）—— 全量替换会把上一轮存的 tag 栈悄悄抹掉；超长字段与不存在的参考图一律**报错**（400 + 人话），不静默截断。8 例仓储回归 + 真后端逐条 curl（含 6 个错误分支） |
+| `3b78fc9` | **AI 工具四件**：`search_prompts`（搜自己的库 / 按 id 取一条）、`search_character_cards` / `save_character_card`（**没查过 danbooru 就写不出 `tags_verified_at`** —— `ToolContext.danbooruVerified` 记"这一轮真查过的 tag"，核对时间是**事实**不是模型的自称）、`danbooru_lookup`（一次 ≤4 个请求：精确 tag → 模糊 tag（换装版本）→ wiki（别名 + 简介）→ **同现 tag**（按 frequency 排序 = 规范 tag 栈的来源））。新 `ToolCategory.LIBRARY` |
+| `e665e10` | **系统提示 v29 第 18 条**（写角色前先查三处，并写明"LoRA 触发词只是来源之一"）+ **删掉 `NSFW_BLOCK` 尾部那份陈旧的纪律重复**（用户拍板"纪律只留一份"）—— 它在 NSFW 开着时会被读第二遍、而且**排在后面占上风**（还写着 v19 已推翻的"civitai 要先配令牌"、v18 已改掉的"以问句收尾"）。越狱正文一个字没动；两个版本号一起 bump（`nsfw-v2` → `nsfw-v3`），生成物重跑（金标 739→575 行、`nsfw_prompt.rs` 69KB→35KB） |
+| `2800eda` | **App 里的角色卡页面**（用户第 ③ 条）：从「提示词」页右上角进（**不做第六个一级导航项** —— 手机窄屏六个图标会挤成两行，而 `Navigator.push` 的系统返回天然正确）。搜索 + 多列卡片 + 编辑弹窗 + 删除确认；**"没跟 danbooru 核对过"是一行显式提示**；编辑保存**原样带回 `tagsVerifiedAt`**（弹窗不给改，但漏带就把事实抹了）。4 例 widget 用例（含真机尺寸 384x853 不溢出） |
+| `ef8af86` | **图像编辑**：`AiImageEdit`（`comfy_use_media` 把**画廊产物**投放进 ComfyUI input；`comfy_make_mask` 生成**白=重绘区**的遮罩，region 支持 `full`/`left`/`right`/`top`/`bottom`/`center`/`person`/归一化 `x,y,w,h`，`invert` 反选、`feather` 羽化，文件名按参数指纹算）+ **项目自带两条 inpaint 工作流** + skill `inpaint-composite` + 系统提示 v30 第 19 条 + `scripts\e2e-inpaint-test.ps1` |
+
+**这一轮的硬证据**（不是"跑过了"，是量出来的）：
+
+- `gradle test` **642 例全绿**（新增 8 例角色卡 + 9 例 danbooru + 6 例图像编辑 + 若干纪律断言）；
+  `cargo test` **315 例全绿**（192 lib + 121 api_test + 2 shape_lint，含 run-kit 签名与 promptVersion v30 的更新）；
+  `flutter test` **302 例全绿**、`flutter analyze` 无问题。
+- **图像编辑在活实例上验穿**（真 ComfyUI + 真画廊底图 896x1152，区域 `0.58,0.26,0.36,0.74`、羽化 16）：
+  **遮罩内平均像素差 100.5/255、遮罩外 0.73/255** —— 该换的真的换了、该保的一个像素都没动。
+  工作流先过 `GET /object_info/<class>` 逐节点校验（类型 / 必填输入 / 连线）再真跑
+  （校验脚本在 `.run/validate-workflows.py`，可重建）。
+- **danbooru 真站抽查**（opt-in：`COMFYHUB_LIVE_DANBOORU=1`）在 JVM + 代理上跑通：
+  拿到 `shinku_(nte)`、别名"真红"、同现 tag（`horns` 等）、wiki 正文。
+
+**顺带记进 [`docs/pitfalls.md`](pitfalls.md) 的四条真坑**（都是这一轮实际撞的）：
+
+1. **PowerShell 变量名大小写不敏感**：`$W`（画布）与 `$w`（区域）是同一个变量 —— e2e 脚本里
+   画布被区域尺寸覆盖，提交上去的 `ImageScale` 变成 323x852（产物尺寸"莫名其妙"就是这么来的）。
+2. **ComfyUI Desktop 的安装目录与共享目录是两处**：实例真正读写的是 `…\ComfyUI-Shared\{input,output}`
+   （判据要按**配置里生效的输出目录**推；`comfy-path.ps1` 的 `Resolve-ComfyOutputDir` 给的是安装形态，
+   拿它的父目录推 input 会写错地方 → `Invalid image file`）。
+3. **danbooru 前面有 Cloudflare managed challenge，按 UA 形状挑人**（同一 URL 只换 UA 实测 6 种：
+   短 UA 200、描述型/Mozilla 403）。所以 `DANBOORU_CLOUDFLARE` 单列错误码 +
+   `COMFYHUB_DANBOORU_UA` 口子，**绝不说成"没有这个角色"**。
+4. **`LatentComposite` 没有 mask 输入**（潜空间整块合成会把背景一起覆盖）—— 要按"白=重绘区"
+   贴人得用**图像空间**的 `ImageCompositeMasked(destination, source, x, y, resize_source, mask)`，
+   之后再 `VAEEncode → SetLatentNoiseMask → KSampler`。写工作流必须对着 `object_info` 核必填输入。
+
+**这一轮没做的（诚实清单）**：
+
+| 项 | 状态 |
+| --- | --- |
+| 这四件工具 / 五条端点在 **Rust 侧**的对照实现 | ⛔ 未做（本轮 Kotlin 优先：App 连的是 Kotlin，用户第 ③ 条才成立）。搬的时候注意 `character_cards` **不在同步白名单**里（总纲 §3.3） |
+| 角色卡同步到手机（`/api/sync/*` 加表） | ⛔ 未做（要连 `sync.rs` 的 `SYNCED` / `pk_kind` / `PHONE_FORBIDDEN`、`MobileSchema.kt` 两份清单、测试夹具一起改） |
+| "抠人保背景"要**干净的边缘**（带 alpha 的 matting / rembg） | ⛔ 未做：现在只有"框 + 羽化"，边缘一圈会被一起重绘。用户要"抠得干净"就得有分割模型 —— 有没有先用 `comfy_env_report` 查，没有如实说 |
+| `comfy_audit_workflow` 里加一条"角色 tag 与角色卡/danbooru 是否一致"的检查 | ⛔ 未做（现在只在系统提示与工具描述里约束） |
+| 真实 App 的人手验收（打开页面、让 AI 真跑一遍两阶段） | 🔶 本轮已构建 debug 版并截图确认角色卡页可用（见下）；**让 AI 真跑一遍两阶段**需要真 provider（会花钱）与用户的 ComfyUI，留给用户按屏幕确认 |
+

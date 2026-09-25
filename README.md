@@ -24,6 +24,8 @@
 | **长期记忆** | 右侧栏「长期记忆」面板 + `remember` 工具：真源是一个**人能看、能手改**的 `<storage>\ai\memory.md`（一行一条）。每次 Run 都会**现读并注入系统提示**，所以"以后每次对话都带上它"是自然结果。**条数是受控的**（2026-09-18 按用户要求加的三道闸）：AI 一轮最多新增 4 条、总量硬上限 100 条（满了**报错并请用户清理**，不许静默丢、也不许模型自己删别人的条目）、AI 写的每条自动带 `[日期]` 前缀方便按时间查。编辑器是**列表视图**：搜索框过滤 + 每行一个删除 + 勾选后批量删除（要确认），也保留「整篇编辑」直接改全文。记忆与工具输出一样是**数据不是指令**（系统提示 v12 明写），单条 / 总量超限**报错**而不是悄悄截断 |
 | **AI 工具权限** | 设置页新增「AI 工具权限」：默认**只能写 `<项目根>\comfyui`**，只读 `comfyui` + `storage`；`.git` / `.mysql` / `.run` / `node_modules` 永远禁写（即使用户把白名单放宽到项目根）。每个工具可以单独设成 允许 / 需批准 / 禁用，禁用后**根本不下发给模型**。聊天输入区底部还有**权限两档**开关（附件按钮与模型选择之间）：「询问」（默认）与「自动允许（无需批准）」—— 后者让 AI 不必等批准，**只免掉"问一下"，`deny` 与目录白名单一点都不放宽**；后端每次 Run 现读策略，切完下一次回复立刻生效 |
 | **图生图 / 参考图** | 用户上传的图片可以直接进工作流：AI 先用 `comfy_use_attachment` 把附件投放进 ComfyUI 的 `input/` 目录拿到真实文件名，再用 `comfy_submit` 覆盖 `LoadImage` 节点的 `image` 输入（例 `{"89.image":"…"}`）。工作流被捕获时绑定的那个旧文件名**改不了也不用改** —— 内置 skill `img2img-reference` 与系统提示 v7 都写清了这三步 |
+| **角色卡 / 先查再写**（2026-09-26） | 写角色提示词前的**三处查证**（系统提示 v29 第 18 条）：① `search_prompts` 搜自己的提示词库（库里可能已经有那个角色的完整 tag 栈）；② `search_character_cards` 查角色卡；③ `danbooru_lookup` 核对**写法**并拿**同现 tag**（用户原话："对于支持 tag 的模型（比如 Anima），除了专门 LoRA 内置的提示词外也要查查 danbooru"）。角色卡（`/api/ai/character-cards`，App 里从**提示词页右上角**进）存的是"规范 tag 栈 + 别名 + 配哪条 LoRA/权重 + 来源 + 最后一次跟 danbooru 核对的时间"；**同名 = 同一张卡**（保存是合并、`tags` 追加去重），而 `tagsVerifiedAt` 只由 danbooru 那条工具写 —— 没查过就写不出来（界面上会明说"这些 tag 没跟 danbooru 核对过"） |
+| **图像编辑 / 局部重绘**（2026-09-26） | "**保持背景不变、换上指定动作的人物、保住画风**"这件事现在是**能跑的**：项目自带两条 inpaint 工作流（`comfyui\workflows\comfyhub_inpaint_anima.json` / `_krea2.json`）+ 两件工具（`comfy_use_media` 把**画廊产物**投放进 ComfyUI 的 input、`comfy_make_mask` 生成**白=重绘区**的遮罩）+ 内置 skill `inpaint-composite`（系统提示 v30 第 19 条）。两种需求**用同一份工作流**：保背景换人物 = 人物那块遮罩；**换背景保人物** = 同一块遮罩 `invert=true`；**"先生成人物再换上去"** = 把阶段一产物填进 `20.image` 并把 `denoise` 降到 0.4~0.6 融合（保画风 = 两个阶段同底模 + 同画风 LoRA）。活实例实测（896x1152 底图）：**遮罩内平均像素差 100.5/255、遮罩外 0.73/255** —— 该换的换了、该保的一个像素没动（脚本 `scripts\e2e-inpaint-test.ps1` 可重跑） |
 | **工作流文件直接提交** | 用户甩过来一个工作流 `.json` 路径时，AI 不再回"我只能提交库里的 promptId"：`comfy_load_workflow` 读那份文件 → **API 格式原样用**；**界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图** → 入库拿 `promptId` → `comfy_submit` 正常提交（也可以 `comfy_submit(workflowPath=…)` 一步到位）。转换器现在能等价处理的比过去多得多：**组节点（subgraph）按 `definitions.subgraphs` 展开**、旁路 / Reroute / Set-Get 照旧、**`widgets_values_named`（带参数名的那份）优先**（不必再按位置猜）。剩下纯粹的**前端**节点（`Anything Everywhere`、rgthree 的显示节点…）现在由 **## 模拟用户行为 ##**（2026-09-21，用户建议 ②）挡在前面：`comfy_load_workflow` 默认开着 `emulateFrontend`，**照 ComfyUI 前端排队前的行为等价改写**——广播型节点按它声明的 `Input Type` 把上游那一路灌进全图**同类型且空着**的输入、纯显示节点丢掉、一个输出节点都没有时补一个 `SaveImage`；**改了什么逐条列在 `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里**（模型必须转述给你，不许默默改图），说不清类型的**不猜**、照旧报 `UNSUPPORTED_NODES`。要"一个字都别动我的工作流"就带 `emulateFrontend=false` 再读一次，那时**不再是死路**：带 `tolerateUnsupported=true` 会把这些节点摘掉并给出**缺口清单**（`openInputs` = 哪些连线型输入空着、缺什么类型；`unresolvedInputs` = 哪个输入还悬着），AI 照着用 `comfy_submit(promptId=…, connections={"8.vae":["1",2]})` 把线补上就能跑 —— 猜的那部分仍然由 ComfyUI 自己的校验兜底。顺带：**本机 ComfyUI 的目录现在是自动放行的只读白名单**（`ComfyRoots` 每次现探），所以 AI 能直接读你自己的工作流文件；写仍然只允许 `<项目根>\comfyui`。 |
 | **本机工作流看得见**（2026-09-18） | **"库里搜不到"不再等于"这条工作流用不了"**。库里的工作流只有两个来源（自动捕获 = 只收"本进程活着的时候跑过的"、以及手动按路径读），所以**首次使用时库里必然是空的** —— 而你机器上早就存着一堆工作流（`…\ComfyUI\user\<用户>\workflows\*.json`）。现在：① `comfy_list_workflows`（只读）直接列出本机已保存的工作流文件（路径 / 格式 / 是否已入库），`comfy_find_workflow` 在库里搜不到时**自动带上**它们；② 系统提示 v13 写清顺序（find → list → `comfy_load_workflow(path=…)` → submit），并**禁止**再说"得先在 ComfyUI 里跑一次才会被捕获"；③ 设置页 →「ComfyUI 自动捕获」多一颗**「导入本机工作流」**：把目录里的工作流批量读进库（幂等，重复点没关系；转换不了的也入库并如实标 `runnable=false`）。对应的只读接口 `GET /api/capture/workflows?q=` 与导入接口 `POST /api/capture/import-workflows`（实测本机 11 份一把列全）。 |
 | **联网搜索**（2026-09-20） | AI 会**真的上网查资料**：`web_search`（用一句自然语言描述"你想要的那一页"，返回带编号与链接的网页正文，引用时给编号 + URL）与 `web_fetch`（把搜索结果里的某篇取回来读全文，服务端已去样板转 markdown）。后端是 **Keenable**（用户定的规则：只用通用方案，不碰各家原生内置搜索），**出厂免密钥可用**（按来源限速约 1000 次/小时），想要提额在「设置 → AI 工具权限 → 联网搜索」里填可选密钥（DPAPI 加密，只写不读）。三条安全线：① 两个工具出厂都是**「询问」档**——查询词会离开本机；② 一次回复最多联网 8 次（独立预算）；③ 抓取目标只接受公开网址（内网 / 本机 / 云元数据地址出网前就拒），搜到的正文一律按**不可信数据**交给模型（注入防线）。搜索不到会如实说"没搜到"，不许编。 |
@@ -304,6 +306,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
 | `scripts\e2e-credential-test.ps1` | **托管凭据双端互操作自测**（`<storage>\ai\credentials.dpapi.json` 是**一份**文件，Kotlin 与 Rust 两个实现都可能写它 —— 判据是"**一端写进去的密文另一端解得开**"，这是单测永远证明不了的：单测里两边都是我们自己。两边都真起、同一份真库/凭据副本，验 Rust 写→Kotlin 解、Kotlin 写→Rust 解、删除两端同步、响应与文件都不含明文、原有 key 一个没被动。Kotlin 那半可选，起不来会**大声报跳过**而不是假装通过） |
 | `scripts\install-comfy-node.ps1` | （可选）把捕获节点装进 ComfyUI，实现「跑完立刻捕获」 |
 | `scripts\anima-gen.ps1` | **Anima 生图执行器**：向本机 ComfyUI 提交一次文生图并等落盘（`-PromptFile/-NegativeFile/-Width/-Height/-Seed/-Prefix`） |
+| `scripts\e2e-inpaint-test.ps1`（2026-09-26） | **图像编辑的活实例端到端**：取一张真底图（默认画廊里最新的一张图）→ 造遮罩 → 提交**项目自带**的 inpaint 工作流 → 取产物 → **量化验收**：遮罩内平均像素差要大（真的重画了）、遮罩外要小（背景保住了，实测 0.73/255）。`-Model anima\|krea2`、`-Region x,y,w,h`、`-Feather`、`-Prompt`。⚠ 它只读画廊（底图是拷出去的），产物落在 ComfyUI 的 output；跑之前先确认 ComfyUI 在跑（`comfyhub.ps1 doctor`） |
 | `scripts\gen-builtin-catalog.ps1` | **开发期工具**：把 `%USERPROFILE%\.dsh\settings.yaml` 里的模型目录抄成我们自己的冻结副本 `server\src\main\resources\ai\builtin-catalog.json`（运行时只读这份副本，**绝不读 YAML**；解析到少于 60 个模型就拒绝写盘） |
 
 > **关 App 的时候，后端 / MySQL 会不会跟着停？**
@@ -1268,9 +1271,12 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 
 - **Skills 是运行期数据，不是仓库源码**：后端只在启动时与 `POST /api/ai/skills/rescan`
   扫投放口（`<storage>\ai\skills`），所以上面这些 skill 的升级走各自上游仓库、重新投放即可生效，
-  **不用重编 App**；本仓库自带的只有 `skills\builtin\img2img-reference` 与 `skills\builtin\krea-2`
-  两个（只读、不可删）。`krea-2` 是按 Krea 官方材料整理的 **Krea 2 提示词 + ComfyUI 参数** skill
-  （官方原文另存 `<根>\skills\builtin\krea-2\references\`，来源与许可见那里的 `SOURCES.md`）。
+  **不用重编 App**；本仓库自带的只有 `skills\builtin\img2img-reference`、`skills\builtin\inpaint-composite`
+  与 `skills\builtin\krea-2` 三个（只读、不可删）。`inpaint-composite` 是**图像编辑**那条路的操作手册
+  （三步工具序列 / 两阶段贴人 / 换背景保人物 / 保画风四条 / 边缘羽化与 denoise 档位），
+  配套工作流见 `comfyui\workflows\comfyhub_inpaint_*.json`。`krea-2` 是按 Krea 官方材料整理的
+  **Krea 2 提示词 + ComfyUI 参数** skill（官方原文另存 `<根>\skills\builtin\krea-2\references\`，
+  来源与许可见那里的 `SOURCES.md`）。
 - **破甲那段系统提示词是用户有意注入的**（2026-09-17 明确指示"那是我的意图，不许删除"）：
   它在 `HarnessRunner.kt` 里有独立注释、`ToolRegistryTest` 里有"必须还在"的断言，
   **别当误粘贴清理掉**；要改先问用户（见 `AGENTS.md` 第 10 节）。
