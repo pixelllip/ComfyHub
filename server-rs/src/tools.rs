@@ -1,21 +1,21 @@
-//! 桌面工具层（P4 第 31 步）—— 先搬 **`MOBILE` / `BOTH` 那一档里不碰网络的三个**，
-//! 桌面专属的（`comfy_*` 39 个 MCP + `read_file` / `write_file` / `register_skill` …）
-//! 与联网三个另起批次。
+//! 桌面工具层（P4 第 31 步建地基，第 40 步补桌面文件工具五件）。
 //!
-//! # 为什么先搬这一批
+//! # 现在这一层有什么
 //!
-//! 桌面专属的加起来上万行：`WorkflowConvert` / `WorkflowInputs` / `WorkflowPrune` /
-//! `McpStdioClient` 每一块都是独立的大工程。而 `ToolScope = MOBILE|BOTH` 那 7 个
-//! （见 🔒 `docs/tool-scope-contract.md`）是**两端都能执行**的，它们的定义
-//! （名字 / 描述 / inputSchema）**已经在 `mobile_tools.rs` 里**（run-kit 那一步
-//! 从 Kotlin 真实 schema 生成过），所以搬它们不会出现"两端描述不一致"。
+//! | 工具 | 端 | 说明 |
+//! | --- | --- | --- |
+//! | `list_skills` / `load_skill` / `remember` / `ask_user_question` | `BOTH` | 第 31/32 步（只碰本机） |
+//! | `list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill` | `DESKTOP` | 第 40 步，路径准入在 [`crate::policy`] |
 //!
-//! 这一批（[`IMPLEMENTED`]）先落地三个**只碰本机**的：查技能、加载技能、记长期记忆。
-//! 于是这一批之后的**桌面也能真的用工具**，而且这批的每一步都是可测的（不依赖网络、
-//! 不依赖 ComfyUI、不依赖用户凭据）。联网那三个与 `ask_user_question` 留下一步：
-//! `web_fetch` / `web_search` 要 Keenable 客户端与 `EndpointGuard`，
-//! `civitai_search` 要 Civitai 客户端（含 NSFW 专线），`ask_user_question` 要提问闸门
-//! （`ai_questions` 的写侧 + 跨端回答）。**没搬的绝不下发**（`declaredTo = kit ∩ 本地实现`）。
+//! 还没搬的：联网三个（要 Keenable / Civitai 客户端 + `EndpointGuard`）、`comfy_*` 十三件
+//! （要 ComfyUI 在场，含 R10 的落点 `comfy_submit`）、官方 comfy-mcp 那 39 个（要
+//! `McpStdioClient`）、`find_model`。**没搬的绝不下发**（`declaredTo = 清单 ∩ 本地实现`）。
+//!
+//! # 两个清单的差别（别混用）
+//!
+//! - [`catalog`]：**下发给模型**的（剔除 `deny`）—— `specs` 与系统提示都从它派生；
+//! - [`implemented`]：**设置页**看的（含被 `deny` 的）—— 剔掉的话用户点过一次禁用
+//!   就再也开不回来。
 //!
 //! # 与 Kotlin 的对应物
 //!
@@ -23,22 +23,21 @@
 //! | --- | --- |
 //! | [`execute`] | `ToolRegistry.invoke` |
 //! | [`is_mutating`] / [`default_access`] | `AgentTool.mutating` / `defaultAccess` |
-//! | [`ToolFailure`] | `ToolFailure(code, message)` |
 //! | [`list_skills`] / [`load_skill`] / [`remember`] | 那三条同名工具 |
+//! | [`list_dir`] / [`read_file`] / [`write_file`] | 那三条同名工具（含字符边界与分段读） |
 //!
 //! # 两条纪律
 //!
 //! 1. **工具结果一律当不可信数据**（R7 / RSK-004）：它进的是"工具结果"那一轮，
 //!    **不是**系统提示的指令区 —— 这里只负责产出文本，别在别处把它拼进指令。
 //! 2. **失败要带稳定码**（`ToolFailure.code`）：界面与模型按码分支，
-//!    `INVALID_ARGUMENT` / `SKILL_NOT_FOUND` / `MEMORY_FULL` 各有各的下一步。
+//!    `INVALID_ARGUMENT` / `SKILL_NOT_FOUND` / `MEMORY_FULL` / `PATH_DENIED` 各有各的下一步。
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use crate::mobile_tools::MOBILE_TOOLS;
 use crate::routes::AppState;
 
 /// 工具失败（Kotlin `ToolFailure`）。
@@ -180,53 +179,141 @@ impl ToolSession {
     }
 }
 
-/// 工具清单（**只含这一批真的实现了的**）。
+/// 工具清单（**只含真的实现了的**）。
 ///
-/// ⚠ 与 `mobile_tools.rs` 的交集：只有在这里实现过的才下发给模型 ——
-/// `declaredTo = kit ∩ 本地实现`（M3 的纪律）。把没实现的也发下去，
-/// 模型就会去调一个必然失败的调用。
+/// ⚠ 两个来源合并：手机可执行的（[`MOBILE_TOOLS`]，两端都能跑的那 7 个）与
+/// **桌面专属**的（[`crate::desktop_tools::DESKTOP_TOOLS`]，P4 第 40 步起是文件工具五件）。
+/// 合并之后仍按 name 升序 —— 系统提示里那两行与下发的 `tools[]` 顺序都从这里来。
+///
+/// ⚠ 只有 [`is_implemented`] 为真的才下发（`declaredTo = 清单 ∩ 本地实现`，M3 的纪律）：
+/// 把没实现的也发下去，模型就会去调一个必然失败的调用。
 pub fn specs(policy: &crate::policy::ToolPolicy) -> Vec<crate::protocol::ToolSpec> {
-    MOBILE_TOOLS
-        .iter()
-        .filter(|tool| IMPLEMENTED.contains(&tool.name))
-        // deny 的工具根本不下发（与 run-kit 同一条规则）
-        .filter(|tool| {
-            policy.access_for(tool.name, tool.access) != crate::policy::ToolAccess::Deny
-        })
+    catalog(policy)
+        .into_iter()
         .map(|tool| crate::protocol::ToolSpec {
             name: tool.name.to_string(),
             description: tool.description.to_string(),
-            parameters: serde_json::from_str(tool.input_schema).unwrap_or_else(|_| json!({"type":"object"})),
+            parameters: serde_json::from_str(tool.input_schema)
+                .unwrap_or_else(|_| json!({"type":"object"})),
         })
         .collect()
+}
+
+/// 一个工具在"清单"这一层的借用视图（两种来源的公共形状）。
+///
+/// 为什么要有它：`system_prompt::render` 要的是"名字 / 描述 / 出厂档 / 是否写数据"这四样，
+/// 而它拿到的可能是手机清单（run-kit 那条路，必须与 Kotlin 逐字一致）也可能是合并清单
+/// （桌面执行器那条路）。**别在 render 里分叉**，那会让两端提示词的拼法慢慢走偏。
+#[derive(Debug, Clone, Copy)]
+pub struct ToolView<'a> {
+    pub name: &'a str,
+    pub description: &'a str,
+    pub input_schema: &'a str,
+    pub access: &'a str,
+    pub mutating: bool,
+}
+
+impl<'a> From<&'a crate::mobile_tools::MobileToolSpec> for ToolView<'a> {
+    fn from(tool: &'a crate::mobile_tools::MobileToolSpec) -> Self {
+        Self {
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.input_schema,
+            access: tool.access,
+            mutating: tool.mutating,
+        }
+    }
+}
+
+impl<'a> From<&'a crate::desktop_tools::DesktopToolSpec> for ToolView<'a> {
+    fn from(tool: &'a crate::desktop_tools::DesktopToolSpec) -> Self {
+        Self {
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.input_schema,
+            access: tool.access,
+            mutating: tool.mutating,
+        }
+    }
+}
+
+/// 下发给模型的工具清单（已实现 ∩ 未被 `deny`），**按 name 升序**。
+///
+/// `specs` 与 `system_prompt::render` 都从这里派生 —— 两边各拼一份的话，
+/// "提示词里说能调、请求里没有这个工具"这种不一致会**静默**存在。
+pub fn catalog(policy: &crate::policy::ToolPolicy) -> Vec<ToolView<'static>> {
+    let mut out = implemented();
+    out.retain(|tool| {
+        policy.access_for(tool.name, tool.access) != crate::policy::ToolAccess::Deny
+    });
+    out
+}
+
+/// 这台后端**真的能跑**的工具（含被 `deny` 的那些），按 name 升序。
+///
+/// ⚠ 与 [`catalog`] 的差别只有一条：**这里不剔 `deny`**。设置页的权限表要能看见
+/// "哪些被禁用了"并把它改回来 —— 剔掉的话用户一旦点过一次禁用，那个工具就从界面上
+/// 消失、再也开不回来（界面按 `access == "deny"` 画灰）。
+/// 而**下发给模型**的那份必须剔（`catalog`）—— 两份别混用。
+pub fn implemented() -> Vec<ToolView<'static>> {
+    let mut out: Vec<ToolView<'static>> = Vec::new();
+    for tool in crate::mobile_tools::MOBILE_TOOLS.iter() {
+        if is_implemented(tool.name) {
+            out.push(ToolView::from(tool));
+        }
+    }
+    for tool in crate::desktop_tools::DESKTOP_TOOLS.iter() {
+        if is_implemented(tool.name) {
+            out.push(ToolView::from(tool));
+        }
+    }
+    out.sort_by_key(|tool| tool.name);
+    out
 }
 
 /// 这一批真的实现了的工具（**唯一真源**，`specs` 与 `execute` 都从它派生）。
 ///
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
-/// 本批是四个**只碰本机**的工具（Skills 两个 + 长期记忆一个 + 提问一个）：
-/// 联网那三个（`web_search` / `web_fetch` / `civitai_search`，出厂档都是 `ASK`）
-/// 要 Keenable / Civitai 客户端与 `EndpointGuard`，在下一批。
-pub const IMPLEMENTED: [&str; 4] =
-    ["ask_user_question", "list_skills", "load_skill", "remember"];
+///
+/// 当前九个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）。
+/// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端，
+/// `comfy_*` 十三件要 ComfyUI 在场，各自另起批次。
+pub const IMPLEMENTED: [&str; 9] = [
+    "ask_user_question",
+    "delete_skill",
+    "list_dir",
+    "list_skills",
+    "load_skill",
+    "read_file",
+    "register_skill",
+    "remember",
+    "write_file",
+];
 
 /// 这个工具会不会写数据（系统提示里"（会写数据）"那个标记的真源）。
 pub fn is_mutating(name: &str) -> bool {
-    MOBILE_TOOLS
-        .iter()
-        .find(|tool| tool.name == name)
-        .map(|tool| tool.mutating)
-        .unwrap_or(false)
+    spec_of(name).map(|tool| tool.mutating).unwrap_or(false)
 }
 
 /// 出厂权限档（`ALLOW` / `ASK` / `DENY`）。
 pub fn default_access(name: &str) -> &'static str {
-    MOBILE_TOOLS
+    spec_of(name).map(|tool| tool.access).unwrap_or("ASK")
+}
+
+/// 在两个来源里找一条（找不到 → `None`，调用方按"没这个工具"处理）。
+fn spec_of(name: &str) -> Option<ToolView<'static>> {
+    crate::mobile_tools::MOBILE_TOOLS
         .iter()
         .find(|tool| tool.name == name)
-        .map(|tool| tool.access)
-        .unwrap_or("ASK")
+        .map(ToolView::from)
+        .or_else(|| {
+            crate::desktop_tools::DESKTOP_TOOLS
+                .iter()
+                .find(|tool| tool.name == name)
+                .map(ToolView::from)
+        })
 }
 
 /// 工具是否已实现（没实现的**不许下发**，也不许执行）。
@@ -247,6 +334,7 @@ pub fn is_implemented(name: &str) -> bool {
 /// （Run 不结束）—— 其余工具都是纯本地同步逻辑，包在 async 里不改变行为。
 pub async fn execute(
     state: &AppState,
+    policy: &crate::policy::ToolPolicy,
     run_id: &str,
     conversation_id: &str,
     name: &str,
@@ -260,6 +348,12 @@ pub async fn execute(
         "ask_user_question" => {
             ask_user_question(state, run_id, conversation_id, arguments, session).await
         }
+        // ---- 桌面文件工具五件（P4 第 40 步）--------------------------------
+        "list_dir" => list_dir(policy, arguments),
+        "read_file" => read_file(policy, arguments),
+        "write_file" => write_file(policy, arguments),
+        "register_skill" => register_skill(state, arguments),
+        "delete_skill" => delete_skill(state, arguments),
         // 清单里没有的（模型幻觉出一个名字 / 这一批还没搬的）——
         // 码与 Kotlin `TOOL_NOT_FOUND` 一致，模型的分支行为才不会两端不同。
         _ => Err(ToolFailure::new(
@@ -394,6 +488,301 @@ fn remember(
         ),
         payload,
     ))
+}
+
+// ---------------------------------------------------------------------------
+//  桌面文件工具五件（P4 第 40 步）
+// ---------------------------------------------------------------------------
+
+/// 整数参数（Kotlin `JsonObject.int`：数字与**数字字符串**都认，认不出 → `None`）。
+fn int_arg(arguments: &Value, key: &str) -> Option<i64> {
+    let raw = arguments.get(key)?;
+    if let Some(n) = raw.as_i64() {
+        return Some(n);
+    }
+    raw.as_str().and_then(|s| s.trim().parse::<i64>().ok())
+}
+
+/// `list_dir`：列目录（默认 = 写白名单第一个，出厂是 `<根>\comfyui`）。
+///
+/// 两条与 Kotlin 一致的行为：
+/// - 默认路径取自 **`write_roots` 的第一个**（不是读白名单）—— 那是"用户最可能想看的那个目录"；
+/// - 超过 200 条**明说截断**（静默截断会让模型以为目录里就这么多东西）。
+///
+/// ⚠ 一处**有意**与 Kotlin 不同：条目按名字排序。Java 的 `Files.walk` 走的是
+/// `DirectoryStream` 的**文件系统顺序**（同一目录两次跑可能不一样），而这份输出会进上下文，
+/// 顺序飘会让模型的复述与用例都变得不稳；排序不改内容、只改次序，所以这里选确定性。
+fn list_dir(
+    policy: &crate::policy::ToolPolicy,
+    arguments: &Value,
+) -> Result<ToolOutcome, ToolFailure> {
+    let raw = arguments
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            policy.write_roots.first().map(|p| p.display().to_string()).unwrap_or_default()
+        });
+    let dir = policy.resolve_read(&raw)?;
+    if !dir.is_dir() {
+        return Err(ToolFailure::new("NOT_A_DIRECTORY", format!("不是目录：{}", dir.display())));
+    }
+    let depth = int_arg(arguments, "depth").unwrap_or(1).clamp(1, 2);
+    let max_entries = 200usize;
+    let mut lines: Vec<String> = Vec::new();
+    let mut truncated = false;
+    for path in walk_limited(&dir, depth as usize) {
+        if path == dir {
+            continue;
+        }
+        if lines.len() >= max_entries {
+            truncated = true;
+            break;
+        }
+        let rel = path
+            .strip_prefix(&dir)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| path.display().to_string());
+        if path.is_dir() {
+            lines.push(format!("dir  {rel}"));
+        } else {
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            lines.push(format!("file {rel} {size}B"));
+        }
+    }
+    let mut text = dir.display().to_string();
+    text.push('\n');
+    let listing = lines.join("\n");
+    text.push_str(if lines.is_empty() { "(空目录)" } else { listing.as_str() });
+    if truncated {
+        text.push_str(&format!("\n…（超过 {max_entries} 条已截断）"));
+    }
+    Ok(ToolOutcome::new(text, Value::Null))
+}
+
+/// 有界遍历（Kotlin `Files.walk(dir, depth)` 的对应物）：**含** `dir` 自身，
+/// 每个目录内的条目按名字排序（见 [`list_dir`] 里那条说明）。
+fn walk_limited(dir: &std::path::Path, max_depth: usize) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = vec![dir.to_path_buf()];
+    let mut frontier: Vec<(PathBuf, usize)> = vec![(dir.to_path_buf(), 0)];
+    while let Some((current, level)) = frontier.pop() {
+        if level >= max_depth {
+            continue;
+        }
+        let mut entries: Vec<PathBuf> = match std::fs::read_dir(&current) {
+            Ok(iter) => iter.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
+            // 读不了的目录（权限 / 竞态）**跳过**，不让整个 list_dir 失败
+            Err(_) => continue,
+        };
+        entries.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
+        for path in entries {
+            out.push(path.clone());
+            if path.is_dir() {
+                frontier.push((path, level + 1));
+            }
+        }
+    }
+    out
+}
+
+/// `read_file`：分段读一个文本文件，**切点落在字符边界上**。
+///
+/// ⚠ 描述里写着"返回里会给出 nextOffset"，但 Kotlin 的实现**从没给过这个键**
+/// （`ToolOutput(text)` 的 meta 是 null）—— 真正给模型的是正文末尾那句
+/// "接着读请再调一次 read_file，path 不变、offset=N"。这里保持逐字一致，
+/// **不自己发明一个 `nextOffset`**：多一个键就多一处两端不一致。
+fn read_file(
+    policy: &crate::policy::ToolPolicy,
+    arguments: &Value,
+) -> Result<ToolOutcome, ToolFailure> {
+    let raw = string_arg(arguments, "path")?;
+    let file = policy.resolve_read(&raw)?;
+    if !file.is_file() {
+        return Err(ToolFailure::new("NOT_A_FILE", format!("不是文件：{}", file.display())));
+    }
+    let limit = int_arg(arguments, "maxBytes")
+        .unwrap_or(crate::policy::DEFAULT_MAX_READ_BYTES)
+        .clamp(1, crate::policy::DEFAULT_MAX_READ_BYTES);
+    let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+    let start = int_arg(arguments, "offset").unwrap_or(0).clamp(0, size as i64) as u64;
+
+    // 只读这一窗（不把整个文件读进内存：`maxBytes` 2MB，而文件可能是几百 MB 的视频）
+    let window = read_window(&file, start, limit as usize)?;
+    let from = snap_to_char_start(&window);
+    let to = from + complete_utf8_prefix(&window, from);
+    let text = String::from_utf8_lossy(&window[from..to]).to_string();
+    let read_start = start as i64 + from as i64;
+    let end = start as i64 + to as i64;
+    let note = if size as i64 > end {
+        format!(
+            "\n…（文件共 {size} 字节，本次是 [{read_start}, {end})；接着读请再调一次 read_file，\
+             path 不变、offset={end}）"
+        )
+    } else {
+        String::new()
+    };
+    Ok(ToolOutcome::new(format!("{}\n{text}{note}", file.display()), Value::Null))
+}
+
+/// 读文件的 `[start, start+limit)` 这一段（短读是正常的：文件可能就到头了）。
+fn read_window(file: &std::path::Path, start: u64, limit: usize) -> Result<Vec<u8>, ToolFailure> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut handle = std::fs::File::open(file)
+        .map_err(|e| ToolFailure::new("IO_ERROR", format!("打不开文件（{}）：{e}", file.display())))?;
+    if start > 0 {
+        handle
+            .seek(SeekFrom::Start(start))
+            .map_err(|e| ToolFailure::new("IO_ERROR", format!("定位失败（{start}）：{e}")))?;
+    }
+    let mut buffer = Vec::with_capacity(limit.min(64 * 1024));
+    let mut chunk = handle.take(limit as u64);
+    chunk
+        .read_to_end(&mut buffer)
+        .map_err(|e| ToolFailure::new("IO_ERROR", format!("读文件失败：{e}")))?;
+    Ok(buffer)
+}
+
+/// 起始点落在**字符边界**上（Kotlin `snapToCharStart`）：跳过多达 3 个续字节 `10xxxxxx`。
+fn snap_to_char_start(bytes: &[u8]) -> usize {
+    let mut i = 0;
+    while i < bytes.len() && i < 4 && (bytes[i] & 0xC0) == 0x80 {
+        i += 1;
+    }
+    i
+}
+
+/// 从 `from` 起、**完整** UTF-8 字符覆盖的字节数（Kotlin `completeUtf8Prefix`）。
+///
+/// 这是"按字节分段读中文"的命门：切点大概率落在一个汉字中间，直接解码会在页尾留一个
+/// U+FFFD（乱码），模型照着改回去就把文件写坏了。退回上一个字符边界即可，**一个字都不丢**。
+fn complete_utf8_prefix(bytes: &[u8], from: usize) -> usize {
+    if from >= bytes.len() {
+        return 0;
+    }
+    let mut i = bytes.len();
+    let mut back = 0;
+    while i > from && back < 4 {
+        if (bytes[i - 1] & 0xC0) != 0x80 {
+            break;
+        }
+        i -= 1;
+        back += 1;
+    }
+    if i == from {
+        // 整段都是续字节：交给解码器兜底（Kotlin 同）
+        return bytes.len() - from;
+    }
+    let lead = bytes[i - 1];
+    let need = if lead & 0x80 == 0x00 {
+        1
+    } else if lead & 0xE0 == 0xC0 {
+        2
+    } else if lead & 0xF0 == 0xE0 {
+        3
+    } else if lead & 0xF8 == 0xF0 {
+        4
+    } else {
+        1
+    };
+    let have = bytes.len() - (i - 1);
+    if have >= need {
+        bytes.len() - from
+    } else {
+        (i - 1) - from
+    }
+}
+
+/// `write_file`：**默认只允许写 ComfyUI 目录**（`comfyui/`）。
+///
+/// 三条与 Kotlin 逐字一致：超限报 `TOO_LARGE` 并**告诉模型怎么分段写**（不是干巴巴一句失败）、
+/// 路径过 [`crate::policy::ToolPolicy::resolve_write`]、`mode="append"` 才追加。
+fn write_file(
+    policy: &crate::policy::ToolPolicy,
+    arguments: &Value,
+) -> Result<ToolOutcome, ToolFailure> {
+    let raw = string_arg(arguments, "path")?;
+    let content = string_arg(arguments, "content")?;
+    let bytes = content.as_bytes();
+    if bytes.len() as i64 > crate::policy::DEFAULT_MAX_WRITE_BYTES {
+        return Err(ToolFailure::new(
+            "TOO_LARGE",
+            format!(
+                "内容太大（{} > {} 字节）：拆成多次写（第一次 overwrite、之后用 mode=\"append\"），\
+                 别因为一次写不下就放弃",
+                bytes.len(),
+                crate::policy::DEFAULT_MAX_WRITE_BYTES
+            ),
+        ));
+    }
+    let target = policy.resolve_write(&raw)?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| ToolFailure::new("IO_ERROR", format!("建不了目录（{}）：{e}", parent.display())))?;
+    }
+    let append = arguments.get("mode").and_then(Value::as_str) == Some("append");
+    let result = if append {
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&target)
+            .and_then(|mut f| f.write_all(bytes))
+    } else {
+        std::fs::write(&target, bytes)
+    };
+    result.map_err(|e| ToolFailure::new("IO_ERROR", format!("写不了文件（{}）：{e}", target.display())))?;
+    Ok(ToolOutcome::new(
+        format!(
+            "已写入 {}（{} 字节，{}）。",
+            target.display(),
+            bytes.len(),
+            if append { "追加" } else { "覆盖" }
+        ),
+        json!({ "path": target.display().to_string(), "bytes": bytes.len() }),
+    ))
+}
+
+/// `register_skill`：把一个新 Skill 写进用户根（磁盘是真源，写完立刻生效）。
+fn register_skill(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
+    let name = string_arg(arguments, "name")?;
+    let description = string_arg(arguments, "description")?;
+    let content = string_arg(arguments, "content")?;
+    let when_to_use = arguments.get("whenToUse").and_then(Value::as_str);
+    let dto = crate::skills::save(state, &name, &description, when_to_use, &content)
+        .map_err(skill_failure)?;
+    let payload = serde_json::to_value(&dto).unwrap_or(Value::Null);
+    Ok(ToolOutcome::new(
+        format!(
+            "已注册 skill「{}」（{} 字节，digest {}）。\
+             下一次回复即可用 load_skill 加载它；用户也能在右侧栏看到并删除。",
+            dto.name,
+            dto.size_bytes,
+            dto.digest.clone().unwrap_or_default()
+        ),
+        payload,
+    ))
+}
+
+/// `delete_skill`：只允许删**用户来源**的（内置受保护，AIH-037）。
+fn delete_skill(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
+    let name = string_arg(arguments, "name")?;
+    let deleted = crate::skills::delete(state, &name).map_err(skill_failure)?;
+    if !deleted {
+        return Err(ToolFailure::new(
+            "SKILL_NOT_FOUND",
+            format!("没有名为「{name}」的 skill"),
+        ));
+    }
+    Ok(ToolOutcome::new(
+        format!("已删除 skill「{name}」。"),
+        json!({ "name": name, "deleted": true }),
+    ))
+}
+
+/// `SkillFailure{code, message}` → 工具失败（**码原样透传**：`SKILL_READONLY` /
+/// `INVALID_ARGUMENT` 各有各的下一步，改写成 `TOOL_ERROR` 会让模型分不清该怎么办）。
+fn skill_failure(failure: crate::skills::SkillFailure) -> ToolFailure {
+    ToolFailure::new(failure.code, failure.message)
 }
 
 /// 一条提问的规格（`questions[]` 与单问的 `question` 都归一成它）。
@@ -858,5 +1247,44 @@ mod tests {
         assert!(!is_implemented("web_search"));
         assert!(!is_implemented("civitai_search"));
         assert!(is_implemented("remember"));
+    }
+
+    /// 桌面文件工具五件（P4 第 40 步）：出厂档 / 写标记必须与 Kotlin 逐条一致
+    /// （档位错了的后果是"删 skill 不问一声"或者"写文件被静默禁掉"）。
+    #[test]
+    fn file_tool_defaults_match_the_kotlin_registry() {
+        for name in ["list_dir", "read_file", "write_file", "register_skill"] {
+            assert!(is_implemented(name), "{name} 应当已实现");
+            assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
+        }
+        assert_eq!(default_access("delete_skill"), "ASK", "删 skill 要用户点头");
+        assert!(is_mutating("write_file"));
+        assert!(is_mutating("register_skill"));
+        assert!(is_mutating("delete_skill"));
+        assert!(!is_mutating("read_file"));
+        assert!(!is_mutating("list_dir"));
+        // 还没搬的一个都不许说"实现了"
+        for name in ["comfy_submit", "comfy_list_workflows", "find_model", "web_fetch"] {
+            assert!(!is_implemented(name), "{name} 还没搬");
+        }
+    }
+
+    /// 设置页那份清单（`implemented`）与下发那份（`catalog`）的差别只有 `deny` 一条。
+    #[test]
+    fn deny_hides_a_tool_from_the_model_but_not_from_the_settings_page() {
+        let mut config = crate::policy::ToolPolicyConfig::default();
+        config.overrides.insert("write_file".into(), "deny".into());
+        let policy = crate::policy::ToolPolicy::new(std::path::PathBuf::from(r"D:\proj"), config);
+
+        let sent: Vec<&str> = catalog(&policy).iter().map(|t| t.name).collect();
+        assert!(!sent.contains(&"write_file"), "被禁用的工具不该下发给模型：{sent:?}");
+        let listed: Vec<&str> = implemented().iter().map(|t| t.name).collect();
+        assert!(
+            listed.contains(&"write_file"),
+            "设置页必须能看见被禁用的工具，否则再也开不回来：{listed:?}"
+        );
+        // 两份都只含已实现的
+        assert_eq!(sent.len() + 1, listed.len());
+        assert!(listed.contains(&"read_file") && sent.contains(&"read_file"));
     }
 }

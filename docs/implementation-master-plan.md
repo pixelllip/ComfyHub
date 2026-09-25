@@ -1085,11 +1085,42 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > **下一项（本轮继续）**：`/api/ai/memory*` 五条 + `/api/ai/builtin/*` 与 `/api/ai/capabilities/*`。
 >
 
+> ✅ **P4 第 40 步（2026-09-25）：桌面文件工具五件 + 路径准入（`resolve_read` / `resolve_write`）** ——
+> 交接单第 1 条后半的第一刀，也是"AI 能不能真的动文件"那一档：在此之前 Rust 侧
+> **一个桌面专属工具都没有**，模型在桌面上只知道那 7 个手机可执行的工具。
+> - 新模块 `desktop_tools.rs`（`ToolScope = DESKTOP`）：`list_dir` / `read_file` / `write_file`
+>   / `register_skill` / `delete_skill`，`description` 与 `input_schema` **逐字来自 `ToolRegistry.kt`**。
+>   ⚠ 它**不能**生成：`run-kit` 只下发手机可执行的（🔒 §3.5），桌面专属的那些在
+>   `GET /api/ai/run-kit` 里根本取不到（`gen_mobile_tools.py` 的数据源就是它）。
+> - `policy.rs` 补齐**路径准入**（Kotlin `resolve` 逐行对照）：空/非法字符 → 词法归一 →
+>   **禁段**（`.git`/`.mysql`/`.run`/`node_modules`，与用户白名单无关）→ **真实路径**
+>   （存在就解符号链接；不存在就沿父目录找到第一个存在的祖先再拼回来 —— `write_file` 的目标
+>   通常还不存在，只判词法路径就能被一个符号链接骗过）→ 白名单前缀 → **目录根本身不可写**。
+>   顺带把 `comfy_dirs::plain_path` 提成 `pub(crate)`：`canonicalize` 的 `\\?\` 逐字前缀
+>   以前只在接口返回里去过一次，工具结果里会**第二次**冒出来（模型还会把它贴进下一次调用）。
+> - `auto_read_roots` 挂到 `ToolPolicy::load` 上：**只放宽读**（用户 bug ④）——
+>   用户自己的 ComfyUI 工作流文件读得到，写仍然只认 `comfyui/`。
+> - **两个清单的差别被打成用例**：`catalog`（下发给模型，剔 `deny`）与 `implemented`
+>   （设置页看的，**含**被 `deny` 的 —— 剔掉的话用户点过一次禁用就再也开不回来）。
+>   `/api/ai/tools` 从后者取：第 40 步之前它只遍历手机清单，于是文件工具实现了界面也看不见。
+> - **run-kit 的 `kitVersion` 一个字符都没动**（真库副本实测仍是 `2026-09-24.1`、`tools[]` 仍是 7 个）
+>   —— 桌面专属工具**不许**漏进手机清单（R11 / §3.5）。
+> - 一条**有意**与 Kotlin 不同：`list_dir` 的条目按名字排序（Java 的 `Files.walk` 走
+>   `DirectoryStream` 的文件系统顺序，同一目录两次跑可能不一样；这份输出会进上下文，
+>   顺序飘会让模型的复述与断言都不稳）。内容不变，只改次序。
+> - `read_file` 的 `nextOffset`：Kotlin 的描述里写着它、实现里**从没给过这个键**
+>   （正文末尾那句"offset=N"才是真给模型的）—— 这里保持逐字一致，**不自己发明一个键**。
+> - 验收：`cargo test` **274 例全绿**（159 lib + 113 api_test + 2 shape_lint；新增 6 例路径准入
+>   单测 + 5 例工具集成 + 2 例清单差别单测 + 2 例桌面清单自检）；**真库副本抽查**（8096）：
+>   `/api/ai/tools` **9 条**（categories `ask`/`skill`×3/`files`×3/`memory`）、
+>   `kitVersion=2026-09-24.1`、`tools[]` 7 个，真库只读未改。
+> - 仍未搬：联网三工具、`comfy_*` 十三件（R10 的落点 `comfy_submit`）、comfy-mcp 39 个、`find_model`。
+
 > **📅 2026-09-25 这一轮的交接单**（上一轮留下的，按价值排序；① 的前半已落地）：
 > 1. ✅ **工具层与审批（R8）+ 提问闸门**：第 31 / 32 步已落地（四个本机工具 + 闸门 + 两条端点批次）。
 >    **还剩**：联网三工具（`web_search` / `web_fetch` / `civitai_search`，要 Keenable / Civitai
->    客户端 + `EndpointGuard`）与**桌面专属**工具（`comfy_*` 39 个 MCP、`read_file` / `write_file`
->    —— 那才是"AI 能不能真的生图"那一档）；
+>    客户端 + `EndpointGuard`）与**桌面专属**工具（`comfy_*` 十三件 + comfy-mcp 39 个
+>    —— 那才是"AI 能不能真的生图"那一档）。**文件工具五件已落地（第 40 步）**；
 > 2. **附件（R9）**：`/api/ai/attachments*` 那几条 + 内联预算（现在有附件直接 `UNSUPPORTED_CONTENT`）；
 > 3. `/api/ai/{skills,memory,tools,nsfw,builtin,capabilities}/*` 这批**界面端点** ——
 >    今天指向 Rust 时设置页那几张卡会说"接口不存在"（**不是错误，是没搬**）；
@@ -1162,13 +1193,14 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >
 > **下一轮从这三件起手**（按价值）：
 > 1. **界面端点剩下那几批**（`skills` / `memory` / `builtin` / `capabilities` / providers 写侧
->    + `web-search/credential`）—— 第 33 步只做了 `tools` / `tools/policy` / `nsfw` 三条，
->    设置页其余几张卡今天指向 Rust 仍是「接口不存在」；
+>    + `web-search/credential`）—— ✅ **已全部落地**（第 33~39 步，只剩 `capabilities/{refresh,probe}`
+>    两条如实 501）；
 > 2. **联网三工具**（`web_search` / `web_fetch` / `civitai_search`）—— 系统提示里那一整节
 >    "联网搜索的纪律"现在指向三个**没下发**的工具；`web-search/credential` 那三条端点
->    也要一起搬（Keenable 那把 key 就存在那里）；
-> 3. **桌面专属工具**（`comfy_submit` / `comfy_*` 39 个 MCP / 文件工具）—— 这才是
->    "AI 能不能真的生图"那一档，也是 R10 在 Rust 侧的落点。
+>    也已落地（Keenable 那把 key 就存在那里）；
+> 3. **桌面专属工具**（`comfy_submit` / `comfy_*` 十三件 / comfy-mcp 39 个 / `find_model`）——
+>    这才是"AI 能不能真的生图"那一档，也是 R10 在 Rust 侧的落点。
+>    ✅ **文件工具五件已落地**（第 40 步，含路径准入）；剩下的是 `comfy_*` 那一批。
 >
 > 用户已拍板（2026-09-25）：**这三件都要做**，并且**可以用真 provider 跑一两条真上游验收**；
 > 真机回归由用户按屏幕配合（`adb reverse` + 假网关那套先由我把不花钱的部分准备好）。

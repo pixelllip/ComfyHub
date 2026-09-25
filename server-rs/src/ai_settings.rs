@@ -28,9 +28,12 @@ use crate::routes::{ApiError, AppState};
 
 /// `DEFAULT_MAX_READ_BYTES`（Kotlin `ToolPolicyConfig`，2MB）—— 这两项界面上不可改，
 /// Kotlin 那边 `normalizeStored` 也是**强制回落**到代码常量（实测库里冻着老值对老用户无效）。
-const DEFAULT_MAX_READ_BYTES: i64 = 2 * 1024 * 1024;
+///
+/// 真源已挪进 [`crate::policy`]（P4 第 40 步起文件工具真的按它截断）—— 这里只做转出，
+/// **别在本地再写一遍数字**：两份常量漂移的表现是"界面显示 2MB、工具实际读 256KB"。
+const DEFAULT_MAX_READ_BYTES: i64 = crate::policy::DEFAULT_MAX_READ_BYTES;
 /// `DEFAULT_MAX_WRITE_BYTES`（Kotlin `ToolPolicyConfig`，4MB）。
-const DEFAULT_MAX_WRITE_BYTES: i64 = 4 * 1024 * 1024;
+const DEFAULT_MAX_WRITE_BYTES: i64 = crate::policy::DEFAULT_MAX_WRITE_BYTES;
 
 /// `GET /api/ai/tools`：这台后端**能跑**的工具（界面用它画权限表）。
 ///
@@ -40,9 +43,14 @@ const DEFAULT_MAX_WRITE_BYTES: i64 = 4 * 1024 * 1024;
 /// （`AiToolInfo.fromJson` 读的就是这六个）。
 pub fn list_tools(state: &AppState) -> Result<Value, ApiError> {
     let policy = ToolPolicy::load(state)?;
-    let tools = crate::mobile_tools::MOBILE_TOOLS
-        .iter()
-        .filter(|tool| crate::tools::is_implemented(tool.name))
+    // ⚠ 从 `tools::implemented()` 取（手机 + 桌面专属的**合并**清单，含被 `deny` 的），
+    // 不是只遍历 `MOBILE_TOOLS`、也不是 `catalog`：
+    // ① 第 40 步之前这条路只看手机清单，于是文件工具实现了界面也看不见 ——
+    //    用户会以为"这台后端不能改文件"；
+    // ② `catalog` 会把 `deny` 的剔掉，而设置页的权限表**必须能看见**被禁用的工具
+    //    （剔掉的话用户点过一次禁用就再也开不回来）。
+    let tools = crate::tools::implemented()
+        .into_iter()
         .map(|tool| {
             let mut out = Map::new();
             out.insert("name".into(), Value::String(tool.name.to_string()));
@@ -51,9 +59,7 @@ pub fn list_tools(state: &AppState) -> Result<Value, ApiError> {
             out.insert("mutating".into(), Value::Bool(tool.mutating));
             out.insert(
                 "access".into(),
-                Value::String(
-                    access_wire(policy.access_for(tool.name, tool.access)).to_string(),
-                ),
+                Value::String(access_wire(policy.access_for(tool.name, tool.access)).to_string()),
             );
             // 「被用户覆盖过」= 设置里有这一项（没覆盖 = 出厂默认，界面据此标"改过"）
             out.insert(
@@ -67,13 +73,18 @@ pub fn list_tools(state: &AppState) -> Result<Value, ApiError> {
 }
 
 /// 工具类别（Kotlin `ToolCategory.wire`）—— 界面按它选图标与分组标题。
+///
+/// ⚠ `deny` 的工具**不在**这份清单里（`catalog` 就把它剔了），所以"界面能整类关掉"
+/// 这件事只体现在 `overrides` 上，不体现在这里。
 fn category_of(name: &str) -> &'static str {
     match name {
         "ask_user_question" => "ask",
-        "list_skills" | "load_skill" => "skill",
+        "list_skills" | "load_skill" | "register_skill" | "delete_skill" => "skill",
         "remember" => "memory",
         "web_search" | "web_fetch" => "web",
         "civitai_search" => "web",
+        // 文件三件（Kotlin `ToolCategory.FILES`）
+        "list_dir" | "read_file" | "write_file" => "files",
         _ => "comfy",
     }
 }
@@ -230,7 +241,9 @@ fn save_config(state: &AppState, next: &ToolPolicyConfig) -> Result<(), ApiError
 }
 
 /// 配置里生效的输出目录（`auto_read_roots` 用它推"ComfyUI 在哪"）。
-fn configured_output_dir(state: &AppState) -> Result<Option<String>, ApiError> {
+///
+/// `pub(crate)`：`ToolPolicy::load` 也要用它挂"自动发现的只读目录"（P4 第 40 步）。
+pub fn configured_output_dir(state: &AppState) -> Result<Option<String>, ApiError> {
     Ok(crate::capture::capture_config(state)?.output_dir)
 }
 

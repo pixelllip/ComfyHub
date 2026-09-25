@@ -191,7 +191,10 @@ fn real_dir(p: &Path) -> Option<PathBuf> {
 /// 这个前缀会**原样出现在接口返回里**（`dirs` / 每个文件的 `path`），用户和 AI 都会看到；
 /// 它还会被贴进对话里当参数用 —— 那是"同一个目录、两种写法"，最难查的那类不一致。
 /// 实测这条：真库副本上第一次跑出来就是 `\\?\D:\Comfy-Desktop\…\workflows`。
-fn plain_path(p: PathBuf) -> PathBuf {
+///
+/// `pub(crate)`：`ToolPolicy::real_path` 也要过它（P4 第 40 步）—— 同一件事只留一处实现，
+/// 否则"工具结果里的路径"与"接口返回里的路径"会各去掉一次前缀、也可能各漏一次。
+pub(crate) fn plain_path(p: PathBuf) -> PathBuf {
     let text = p.to_string_lossy().to_string();
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
         return PathBuf::from(format!(r"\\{rest}"));

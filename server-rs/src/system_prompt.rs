@@ -22,10 +22,10 @@
 use std::time::SystemTime;
 
 use crate::memory;
-use crate::mobile_tools::MobileToolSpec;
 use crate::nsfw_prompt;
 use crate::policy::{ToolAccess, ToolPolicy};
 use crate::skills::SkillEntry;
+use crate::tools::ToolView;
 
 /// 至少一份"当前时间"来源可被测试替换：`Instant.now()` 在 Kotlin 那边就是现取的。
 fn now_iso() -> String {
@@ -49,14 +49,16 @@ fn mark_of(access: ToolAccess, mutating: bool) -> &'static str {
 
 /// 渲染整段系统提示。
 ///
-/// `mobile_tools`：**已按 name 升序、已剔除 `deny`** 的手机工具清单（见文件头第 3 条）。
+/// `tools`：**已按 name 升序、已剔除 `deny`** 的工具清单（见文件头第 3 条）。
+/// 手机（run-kit）传的是那 7 个可执行工具，桌面执行器传的是"手机 + 桌面专属"的合并清单
+/// —— **两边都只是把借来的清单递进来**，拼法与标记只有这一处实现。
 /// `memory`：`memory::prompt_text()` 的结果（空串 = 没有记忆，那段整个不出现）。
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     provider_display_name: &str,
     provider_api: &str,
     model_id: &str,
-    mobile_tools: &[&MobileToolSpec],
+    tools: &[ToolView<'_>],
     skills: &[SkillEntry],
     policy: &ToolPolicy,
     memory_text: &str,
@@ -101,14 +103,14 @@ pub fn render(
         }
     }
 
-    if mobile_tools.is_empty() {
+    if tools.is_empty() {
         out.push_str("- 本次没有可调用的工具。\n");
     } else {
         out.push_str("- 可调用的工具（参数结构见接口定义）：");
-        let names: Vec<&str> = mobile_tools.iter().map(|t| t.name).collect();
+        let names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         out.push_str(&names.join("、"));
         out.push('\n');
-        for tool in mobile_tools {
+        for tool in tools {
             let mark = mark_of(policy.access_for(tool.name, tool.access), tool.mutating);
             out.push_str("  · ");
             out.push_str(tool.name);
@@ -191,7 +193,7 @@ mod tests {
     }
 
     fn render_with(policy: &ToolPolicy, nsfw: bool, memory_text: &str) -> String {
-        let tools: Vec<&MobileToolSpec> = MOBILE_TOOLS.iter().collect();
+        let tools: Vec<ToolView<'_>> = MOBILE_TOOLS.iter().map(ToolView::from).collect();
         render(
             "Command Code Goat",
             "openai-completions",

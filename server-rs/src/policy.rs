@@ -1,10 +1,13 @@
-//! 工具权限策略 —— **run-kit 需要的那一半**（P4 第 22 步，`/api/ai/run-kit`）。
+//! 工具权限策略（P4 第 22 步建 run-kit 需要的那一半，**第 40 步补齐路径准入**）。
 //!
-//! # 为什么只有一半
+//! # 两条腿
 //!
-//! 完整的 `ToolPolicy`（`resolveRead` / `resolveWrite`、`FORBIDDEN_SEGMENTS` 禁写段、
-//! 真实路径判定、越界拒绝）属于**文件工具**（`read_file` / `write_file`，还没搬）。
-//! 这里做的是 run-kit 与**工具循环**真正读到的这几件事：
+//! 1. **权限档 / 白名单展开 / 逐工具覆盖 / 两条预算**（第 22 步）：run-kit 与工具循环读的；
+//! 2. **路径准入**（第 40 步）：[`ToolPolicy::resolve_read`] / [`ToolPolicy::resolve_write`]
+//!    —— 文件工具（`read_file` / `write_file` / `list_dir`）的**唯一**闸门。
+//!
+//! ⚠ 第 2 条是**安全边界**，不是"要不要问一下"：Kotlin `ToolPolicy.resolve` 的语义是
+//! "越界一律拒绝"，这里逐行对照搬过来（禁写段、真实路径、目录根本身不可写）。
 //!
 //! 1. **白名单展开**（`writeRoots` / `readRoots` → 绝对路径）—— 系统提示里要如实写出
 //!    "只能写哪、只能读哪"，那是模型判断"能不能动这个文件"的唯一依据（Kotlin `render:1483`）；
@@ -15,7 +18,7 @@
 //! 4. **两条预算**（`maxToolSteps` / `maxCallsPerRun`）—— 工具循环的轮数与调用数上限
 //!    （P4 第 31 步起真的生效，见 `executor` 的 `step` / `calls`）。
 //!
-//! ⚠ **别在这里补一个"半份的路径判定"**：`resolveWrite` 的语义是"越界一律拒绝"，
+//! ⚠ **别在这里补一个"半份的路径判定"**：`resolve_write` 的语义是"越界一律拒绝"，
 //! 抄一半（比如只看前缀、不做真实路径）会让写操作通过一个比 Kotlin 松的闸门 ——
 //! 那比"还没搬"危险得多。
 //!
@@ -31,6 +34,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::Deserialize;
 
 use crate::routes::{ApiError, AppState};
+use crate::tools::ToolFailure;
 
 /// `app_settings` 里策略 JSON 的键（Kotlin `ToolPolicyConfig.KEY`）。
 pub const KEY: &str = "ai.tools.policy";
@@ -42,6 +46,26 @@ pub const PERMISSION_FULL: &str = "full";
 pub const DEFAULT_WRITE_DIR: &str = "comfyui";
 /// 出厂读白名单（产物目录只读）。
 pub const DEFAULT_READ_DIRS: &[&str] = &["comfyui", "storage"];
+
+/// **任何工具都不许读也不许写**的路径段（Kotlin `ToolPolicyConfig.FORBIDDEN_SEGMENTS`）。
+///
+/// 这些是运行期数据与依赖：`.git`（版本库）、`.mysql`（老库，现在只剩搬迁来源）、
+/// `.run`（日志 / 探测脚本）、`node_modules`。**与用户白名单无关** ——
+/// 用户就算把白名单放宽到项目根，这几段照样拒绝。
+pub const FORBIDDEN_SEGMENTS: [&str; 4] = [".git", ".mysql", ".run", "node_modules"];
+
+/// 单次读取上限：**2MB**（Kotlin `ToolPolicyConfig.DEFAULT_MAX_READ_BYTES`）。
+///
+/// 以前是 256KB —— 一份界面格式的工作流 JSON 轻轻松松就超过它，`read_file`
+/// 只能读到前面一截，模型自然改不动。
+pub const DEFAULT_MAX_READ_BYTES: i64 = 2 * 1024 * 1024;
+/// 单次写入上限：**4MB**（同上 `DEFAULT_MAX_WRITE_BYTES`）。
+///
+/// ⚠ 这两项与 `maxComfyQueriesPerRun` / `maxWebQueriesPerRun` 一样，在 Kotlin 侧是
+/// **界面上不可改、由 `normalizeStored` 强制回落到代码常量**的：老库里冻着
+/// `maxReadBytes:262144`，只改代码默认值对老用户完全无效。所以这里**根本不读配置**，
+/// 直接用常量（读了反而会与 Kotlin 不一致）。
+pub const DEFAULT_MAX_WRITE_BYTES: i64 = 4 * 1024 * 1024;
 
 /// 一次回复里最多主动查 ComfyUI 几次（**提示词里那个数字的真源**）。
 pub const MAX_COMFY_QUERIES_PER_RUN: i64 = 9;
@@ -120,6 +144,13 @@ pub struct ToolPolicy {
     pub write_roots: Vec<PathBuf>,
     /// 用户配的读白名单（空 → `<根>\comfyui` + `<根>\storage`）。
     pub read_roots: Vec<PathBuf>,
+    /// **自动发现的**只读目录（Kotlin `ToolPolicy.autoReadRoots`）。
+    ///
+    /// 与 `read_roots` 刻意分开两件事：`read_roots` 是**用户配过的**（落库、界面可改）；
+    /// 这一份是**每次现算的探测结果**（[`crate::comfy_dirs::auto_read_roots`]），不落库 ——
+    /// 用户换了 ComfyUI 的安装位置、或者头一次装上 ComfyUI，下一次工具调用就自动认得
+    /// （用户 bug ④）。它**只影响读**，写仍然只认 [`Self::write_roots`]。
+    pub auto_read_roots: Vec<PathBuf>,
     pub permission_mode: String,
 }
 
@@ -142,7 +173,24 @@ impl ToolPolicy {
             PERMISSION_FULL => PERMISSION_FULL.to_string(),
             _ => PERMISSION_ASK.to_string(),
         };
-        Self { project_root, config, write_roots, read_roots, permission_mode }
+        Self { project_root, config, write_roots, read_roots, auto_read_roots: Vec::new(), permission_mode }
+    }
+
+    /// 挂上"自动发现的只读目录"（Kotlin 构造参数 `autoReadRoots`）。
+    pub fn with_auto_read_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.auto_read_roots = roots;
+        self
+    }
+
+    /// 实际生效的读白名单 = 用户配的 + 自动发现的（**去重、保持顺序**，Kotlin `distinct()`）。
+    pub fn effective_read_roots(&self) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::with_capacity(self.read_roots.len() + self.auto_read_roots.len());
+        for root in self.read_roots.iter().chain(self.auto_read_roots.iter()) {
+            if !out.contains(root) {
+                out.push(root.clone());
+            }
+        }
+        out
     }
 
     /// 自动允许（无需批准）档：`ask` 的工具不必再等批准。
@@ -163,6 +211,9 @@ impl ToolPolicy {
     }
 
     /// 读配置（读失败 / JSON 坏 → 出厂默认，**绝不因为设置坏了就放开权限**）。
+    ///
+    /// 顺带把**自动发现的只读目录**挂上：`read_file` 能不能读用户自己的 ComfyUI 工作流
+    /// 文件，全靠这一条（用户 bug ④ 要的正是"读放宽、写不放宽"）。
     pub fn load(state: &AppState) -> Result<Self, ApiError> {
         let raw: Option<String> = state.with(|conn| {
             Ok(conn
@@ -178,7 +229,145 @@ impl ToolPolicy {
             .filter(|text| !text.is_empty())
             .and_then(|text| serde_json::from_str::<ToolPolicyConfig>(text).ok())
             .unwrap_or_default();
-        Ok(Self::new(state.project_root(), config))
+        let project_root = state.project_root();
+        // 探测失败 / 配置里没有输出目录 → 空表，**不是错误**（读白名单照常只有用户配的那些）
+        let configured_output = crate::ai_settings::configured_output_dir(state).ok().flatten();
+        let auto_read =
+            crate::comfy_dirs::auto_read_roots(&project_root, configured_output.as_deref());
+        Ok(Self::new(project_root, config).with_auto_read_roots(auto_read))
+    }
+
+    // ------------------------------------------------------------------
+    //  路径准入（Kotlin `resolveRead` / `resolveWrite`，P4 第 40 步）
+    // ------------------------------------------------------------------
+
+    /// 读路径：必须落在**生效读白名单**内（用户配的 + 自动发现的 ComfyUI 目录）。
+    pub fn resolve_read(&self, raw: &str) -> Result<PathBuf, ToolFailure> {
+        let roots = self.effective_read_roots();
+        self.resolve(raw, &roots, "读")
+    }
+
+    /// 写路径：必须落在 `write_roots` 内，且不能落在禁写段。
+    ///
+    /// ⚠ 自动发现的目录**不在**这条路上（那只放宽读）。
+    pub fn resolve_write(&self, raw: &str) -> Result<PathBuf, ToolFailure> {
+        self.resolve(raw, &self.write_roots, "写")
+    }
+
+    /// 准入的完整过程（Kotlin `resolve` 逐行对照）：
+    /// 空 / 非法字符 → 归一化 → 禁段 → **真实路径** → 白名单前缀 → "目录根不能当写目标"。
+    ///
+    /// 顺序不能改：先判禁段再取真实路径是可以的（禁段只看词法路径），但**白名单判定必须在
+    /// 真实路径之后** —— 在真实路径之前判，符号链接就能把越界写伪装成合法写。
+    fn resolve(&self, raw: &str, roots: &[PathBuf], verb: &str) -> Result<PathBuf, ToolFailure> {
+        let text = raw.trim();
+        if text.is_empty() {
+            return Err(ToolFailure::new("INVALID_ARGUMENT", "路径不能为空"));
+        }
+        if text.contains('\u{0}') {
+            return Err(ToolFailure::new("PATH_DENIED", "路径包含非法字符"));
+        }
+        let candidate = self.candidate_path(text)?;
+
+        self.reject_forbidden(&candidate, verb)?;
+
+        let real = self
+            .real_path(&candidate)
+            .ok_or_else(|| ToolFailure::new("PATH_DENIED", format!("{verb} 路径不可解析：{text}")))?;
+
+        let hit = roots.iter().find(|root| real.starts_with(root)).ok_or_else(|| {
+            ToolFailure::new(
+                "PATH_DENIED",
+                format!(
+                    "拒绝{verb} {text}：只允许在 {} 之内（可在「设置 → AI 工具权限」里调整）",
+                    roots.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("、")
+                ),
+            )
+        })?;
+
+        // Java 侧同一条：把**目录根本身**当写入目标会让下一次 list_dir / 覆盖语义变得毫无
+        // 意义（实测踩过：一次 write_file 的 path 传成白名单目录，结果"写成功了"）
+        if real == *hit && verb == "写" {
+            return Err(ToolFailure::new(
+                "PATH_DENIED",
+                format!("拒绝把目录根本身当作写入目标：{text}"),
+            ));
+        }
+        Ok(real)
+    }
+
+    /// 配置里的原始路径 → 绝对 + 词法归一化（Kotlin `Paths.get(...).normalize().toAbsolutePath()`）。
+    fn candidate_path(&self, text: &str) -> Result<PathBuf, ToolFailure> {
+        // Java 的 `Paths.get` 在 Windows 上会为 `<>:"|?*` 与控制字符抛 `InvalidPathException`。
+        // Rust 的 `PathBuf` 什么都收，所以这一层要自己挡 —— 不挡的话这些路径会一路走到
+        // `create_dir_all` 才报一个看不懂的 IO 错误（而 Kotlin 那边回的是 `PATH_DENIED`）。
+        let invalid = text.chars().any(|c| {
+            c.is_control() || matches!(c, '<' | '>' | '"' | '|' | '?' | '*')
+        });
+        if invalid {
+            return Err(ToolFailure::new("PATH_DENIED", format!("路径无法解析：{text}")));
+        }
+        let path = Path::new(text);
+        let joined = if path.is_absolute() { path.to_path_buf() } else { self.project_root.join(path) };
+        Ok(normalize_lexical(&joined))
+    }
+
+    /// 禁段判定（Kotlin `rejectForbidden`）：**大小写不敏感**（Windows 上 `.GIT` 一样要拒）。
+    ///
+    /// 路径不在项目根之内时 Kotlin 的 `relativize` 会给出 `..` 开头的相对路径 ——
+    /// 那里面不可能命中禁段，所以这里 `strip_prefix` 失败就直接放行到白名单判定。
+    fn reject_forbidden(&self, path: &Path, verb: &str) -> Result<(), ToolFailure> {
+        let Ok(relative) = path.strip_prefix(&self.project_root) else { return Ok(()) };
+        let hit = relative
+            .components()
+            .filter_map(|c| match c {
+                Component::Normal(name) => Some(name.to_string_lossy().to_lowercase()),
+                _ => None,
+            })
+            .find(|seg| FORBIDDEN_SEGMENTS.contains(&seg.as_str()));
+        let Some(hit) = hit else { return Ok(()) };
+        Err(ToolFailure::new(
+            "PATH_DENIED",
+            // 措辞要跟 verb 对上：这些段读写都不许碰，写成"不可改"会让一次**读取**被拒
+            // 看起来像"我能读、只是不能改"（Kotlin 那边实测被这条消息误导过一次）
+            format!(
+                "拒绝{verb} {}：{hit} 是本项目的运行期数据 / 依赖目录，\
+                 任何工具都不许读也不许写（与用户白名单无关）",
+                path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            ),
+        ))
+    }
+
+    /// 真实路径（Kotlin `realPath`）：存在就解掉符号链接；
+    /// 不存在就**沿父目录往上找到第一个存在的祖先**，再拼回剩余部分。
+    ///
+    /// 为什么"不存在"也要解：`write_file` 的目标多半还不存在，只判词法路径的话
+    /// 一个指向白名单之外的符号链接就能骗过闸门。
+    fn real_path(&self, path: &Path) -> Option<PathBuf> {
+        if path.exists() {
+            // ⚠ Windows 的 `canonicalize` 返回逐字前缀 `\\?\D:\…`，而 Kotlin 的
+            // `toRealPath()` 返回 `D:\…` —— 这个前缀会原样出现在工具结果里（还会被模型
+            // 贴进下一次调用），是"同一个目录、两种写法"那类最难查的不一致（P4 第 14 步
+            // 的实测）。统一过 `plain_path`。
+            return std::fs::canonicalize(path).ok().map(crate::comfy_dirs::plain_path);
+        }
+        let mut tail: Vec<String> = Vec::new();
+        let mut cursor = Some(path);
+        let mut base: Option<PathBuf> = None;
+        while let Some(current) = cursor {
+            if current.exists() {
+                base = std::fs::canonicalize(current).ok().map(crate::comfy_dirs::plain_path);
+                break;
+            }
+            let name = current.file_name()?.to_string_lossy().to_string();
+            tail.push(name);
+            cursor = current.parent();
+        }
+        let mut out = base?;
+        for name in tail.iter().rev() {
+            out.push(name);
+        }
+        Some(normalize_lexical(&out))
     }
 }
 
@@ -296,5 +485,132 @@ mod tests {
         let custom = policy(r#"{"maxToolSteps":8,"maxCallsPerRun":16}"#);
         assert_eq!(custom.config.max_tool_steps, 8);
         assert_eq!(custom.config.max_calls_per_run, 16);
+    }
+
+    // ------------------------------------------------------------------
+    //  路径准入（P4 第 40 步）
+    // ------------------------------------------------------------------
+
+    /// 每个用例一个**真实存在**的临时根（路径准入要解真实路径，光有字符串不够）。
+    fn temp_root(tag: &str) -> PathBuf {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("comfyhub-policy-{tag}-{unique}-{seq}"));
+        std::fs::create_dir_all(root.join("comfyui")).unwrap();
+        std::fs::create_dir_all(root.join("storage")).unwrap();
+        root
+    }
+
+    fn policy_at(root: &Path, json: &str) -> ToolPolicy {
+        ToolPolicy::new(root.to_path_buf(), serde_json::from_str(json).unwrap())
+    }
+
+    #[test]
+    fn 写只能在写白名单里读只能在读白名单里() {
+        let root = temp_root("roots");
+        let p = policy_at(&root, "{}");
+        // 写：出厂只有 comfyui
+        let inside = p.resolve_write("comfyui/a/b.txt").unwrap();
+        assert!(inside.starts_with(root.join("comfyui")), "{}", inside.display());
+        // 不存在也照样解析（write_file 的目标通常还不存在）
+        assert!(inside.ends_with("b.txt"));
+        // storage 是**读**白名单，不是写白名单
+        let denied = p.resolve_write("storage/x.txt").unwrap_err();
+        assert_eq!(denied.code, "PATH_DENIED");
+        assert!(denied.message.contains("只允许在"), "{}", denied.message);
+        // 读：comfyui 与 storage 都行
+        assert!(p.resolve_read("storage/x.txt").is_ok());
+        assert!(p.resolve_read("comfyui/x.txt").is_ok());
+        // 项目根之外
+        assert_eq!(p.resolve_read("../outside.txt").unwrap_err().code, "PATH_DENIED");
+        // 空路径是参数错，不是越界
+        assert_eq!(p.resolve_write("   ").unwrap_err().code, "INVALID_ARGUMENT");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn 禁段与用户白名单无关() {
+        let root = temp_root("forbidden");
+        // 用户把白名单放宽到**项目根**（最宽的一种写法）
+        let p = policy_at(&root, r#"{"writeRoots":["."],"readRoots":["."]}"#);
+        assert!(p.resolve_write("comfyui/ok.txt").is_ok());
+        for bad in [".git/config", ".run/x.log", "node_modules/a/b.js", ".mysql/data/x"] {
+            let err = p.resolve_write(bad).unwrap_err();
+            assert_eq!(err.code, "PATH_DENIED", "{bad} 竟然放行了");
+            assert!(err.message.contains("运行期数据 / 依赖目录"), "{}", err.message);
+            // 读也一样拒（措辞要跟 verb 对上，别让"读被拒"看起来像"能读不能改"）
+            let read_err = p.resolve_read(bad).unwrap_err();
+            assert!(read_err.message.contains("拒绝读"), "{}", read_err.message);
+        }
+        // 大小写不敏感（Windows 上 `.GIT` 一样要拒）
+        assert_eq!(p.resolve_write(".GIT/config").unwrap_err().code, "PATH_DENIED");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn 目录根本身不能当写入目标() {
+        let root = temp_root("dirroot");
+        let p = policy_at(&root, "{}");
+        let err = p.resolve_write("comfyui").unwrap_err();
+        assert_eq!(err.code, "PATH_DENIED");
+        assert!(err.message.contains("目录根本身"), "{}", err.message);
+        // 带尾斜杠写法归一到同一个目录，照样拒
+        assert!(p.resolve_write("comfyui/").is_err());
+        // **读**目录根本身是允许的（list_dir 的默认路径就是它）
+        assert!(p.resolve_read("comfyui").is_ok());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn 自动发现的目录只放宽读() {
+        let root = temp_root("auto");
+        let outside = root.join("ComfyUI-Installs").join("ComfyUI");
+        std::fs::create_dir_all(outside.join("user").join("default").join("workflows")).unwrap();
+        let p = policy_at(&root, "{}").with_auto_read_roots(vec![outside.clone()]);
+        // 读：自动发现的目录可以（用户 bug ④）
+        assert!(p
+            .resolve_read(&outside.join("user").join("default").join("workflows").join("a.json").display().to_string())
+            .is_ok());
+        // 写：**一点都没放宽**（那只放宽读）
+        let err = p.resolve_write(&outside.join("x.json").display().to_string()).unwrap_err();
+        assert_eq!(err.code, "PATH_DENIED");
+        // 去重 + 保序（Kotlin `.distinct()`）
+        let dup = policy_at(&root, "{}").with_auto_read_roots(vec![root.join("storage"), outside.clone()]);
+        assert_eq!(dup.effective_read_roots(), vec![root.join("comfyui"), root.join("storage"), outside]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn 真实路径解掉符号链接与逐字前缀() {
+        let root = temp_root("real");
+        let p = policy_at(&root, "{}");
+        std::fs::create_dir_all(root.join("comfyui").join("sub")).unwrap();
+        std::fs::write(root.join("comfyui").join("sub").join("a.txt"), b"x").unwrap();
+        let resolved = p.resolve_write("comfyui/sub/a.txt").unwrap();
+        // Windows 的 canonicalize 会给 `\\?\D:\…`，闸门内部必须已经去掉那个前缀
+        assert!(!resolved.to_string_lossy().starts_with(r"\\?\"), "{}", resolved.display());
+        // 词法上的 `..` 要被消掉（`comfyui/../comfyui/a.txt` 仍然合法）
+        assert!(p.resolve_write("comfyui/../comfyui/b.txt").is_ok());
+        // 但消完落在白名单外就要拒
+        assert!(p.resolve_write("comfyui/../storage/x.txt").is_err());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 非法字符这一档：Java 的 `Paths.get` 会抛 `InvalidPathException`，
+    /// Rust 的 `PathBuf` **什么都收** —— 不自己挡就会一路走到 `create_dir_all` 才报一个
+    /// 看不懂的 IO 错误（而 Kotlin 那边回的是 `PATH_DENIED`）。
+    #[test]
+    fn 非法字符按无法解析拒绝() {
+        let root = temp_root("badchars");
+        let p = policy_at(&root, "{}");
+        let err = p.resolve_write("comfyui/a\u{0}b.txt").unwrap_err();
+        assert_eq!(err.code, "PATH_DENIED");
+        assert!(p.resolve_write("comfyui/a?b.txt").is_err());
+        assert!(p.resolve_write("comfyui/a|b.txt").is_err());
+        std::fs::remove_dir_all(&root).ok();
     }
 }

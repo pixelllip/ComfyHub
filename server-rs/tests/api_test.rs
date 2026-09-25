@@ -5227,8 +5227,11 @@ async fn failed_calls_do_not_spend_the_budget() {
 /// **不许静默**、也不许假装跑过 —— 记录照样落库，模型拿到一句能改变做法的话。
 #[tokio::test]
 async fn unknown_tool_is_reported_as_tool_not_found() {
+    // ⚠ 这里**故意**挑一个还没搬的工具（`comfy_submit` 要 ComfyUI 在场，归后面的批次）：
+    // 第 40 步之前这条用例用的是 `read_file`，而它已经实现了 —— 继续拿它当"不存在的工具"
+    // 会变成"撞审批闸门"，红的原因完全变成另一个（实测过）。
     let (base_url, gateway) =
-        scripted_tool_gateway(vec![vec![("read_file", r#"{"path":"a.png"}"#)]]).await;
+        scripted_tool_gateway(vec![vec![("comfy_submit", r#"{"path":"a.png"}"#)]]).await;
     let state = state();
     seed_provider_and_model(&state);
     point_at_gateway(&state, &base_url);
@@ -5240,7 +5243,7 @@ async fn unknown_tool_is_reported_as_tool_not_found() {
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert_eq!(calls[0]["status"], "failed");
     assert_eq!(calls[0]["approval"], "denied");
-    assert!(calls[0]["error"].as_str().unwrap().contains("没有名为「read_file」的工具"));
+    assert!(calls[0]["error"].as_str().unwrap().contains("没有名为「comfy_submit」的工具"));
 
     // 失败那次**不进 tool.started**（没有开始过），但要有一条 `tool.failed`
     let types = event_types(&state, &run_id);
@@ -5567,20 +5570,41 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（4 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（9 个），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, vec!["ask_user_question", "list_skills", "load_skill", "remember"]);
+    // ⚠ 第 40 步起桌面文件工具五件也在这份清单里（在此之前只看手机清单，
+    // 实现了界面也看不见 —— 用户会以为"这台后端不能改文件"）
+    assert_eq!(
+        names,
+        vec![
+            "ask_user_question",
+            "delete_skill",
+            "list_dir",
+            "list_skills",
+            "load_skill",
+            "read_file",
+            "register_skill",
+            "remember",
+            "write_file",
+        ]
+    );
     assert_eq!(
         keys(&tools[0]),
         vec!["access", "category", "description", "mutating", "name", "overridden"]
     );
     assert_eq!(tools[0]["category"], "ask");
     assert_eq!(tools[0]["access"], "allow");
-    assert_eq!(tools[3]["category"], "memory");
-    assert_eq!(tools[3]["mutating"], true, "`remember` 会写盘");
+    let by_name = |name: &str| tools.iter().find(|t| t["name"] == name).unwrap();
+    assert_eq!(by_name("remember")["category"], "memory");
+    assert_eq!(by_name("remember")["mutating"], true, "`remember` 会写盘");
+    assert_eq!(by_name("read_file")["category"], "files");
+    assert_eq!(by_name("write_file")["mutating"], true, "`write_file` 会写盘");
+    // 这一次策略已经被前面切成了 `full`，所以 `delete_skill` 的出厂档 ASK 被放宽成 allow
+    // （出厂档本身在 `tools::tests::mutating_flags_come_from_the_generated_catalog` 里钉住）
+    assert_eq!(by_name("delete_skill")["access"], "allow", "full 档下 ask → allow");
     assert_eq!(tools[0]["overridden"], false);
     // 覆盖过之后界面要能标出来
     let (_, saved) = send_json(
@@ -7349,3 +7373,302 @@ async fn web_search_credential_is_write_only_and_read_only_when_env_provides_it(
     assert_eq!(del.1["source"], "none");
 }
 
+
+// ===========================================================================
+//  桌面文件工具五件（P4 第 40 步）
+//
+//  这一批的判据是**真的落盘 / 真的拒绝**：写进去的文件要真的在磁盘上、
+//  越界写要拿到 `PATH_DENIED`（而不是"写成功了但写到别处"）。
+// ===========================================================================
+
+/// 直接调工具层（不起 HTTP）：`execute` 就是执行器的入口，
+/// 这一层的用例不该为了调一个工具去搭假网关。
+async fn call_tool(
+    state: &comfyhub_server_rs::routes::AppState,
+    name: &str,
+    arguments: serde_json::Value,
+) -> Result<comfyhub_server_rs::tools::ToolOutcome, comfyhub_server_rs::tools::ToolFailure> {
+    let policy = comfyhub_server_rs::policy::ToolPolicy::load(state).unwrap();
+    let mut session = comfyhub_server_rs::tools::ToolSession::default();
+    comfyhub_server_rs::tools::execute(state, &policy, "run-x", "conv-x", name, &arguments, &mut session)
+        .await
+}
+
+#[tokio::test]
+async fn desktop_file_tools_stay_inside_the_whitelist() {
+    let state = state();
+    let root = state.project_root();
+
+    // ① 白名单内：真的写下去，结构化负载给 path/bytes
+    let out = call_tool(
+        &state,
+        "write_file",
+        serde_json::json!({ "path": "comfyui/sub/工作流.json", "content": "{\"hello\":\"世界\"}" }),
+    )
+    .await
+    .unwrap();
+    let written = root.join("comfyui").join("sub").join("工作流.json");
+    assert!(written.is_file(), "文件没落盘：{}", written.display());
+    assert_eq!(std::fs::read_to_string(&written).unwrap(), "{\"hello\":\"世界\"}");
+    assert_eq!(out.payload["bytes"], std::fs::metadata(&written).unwrap().len() as i64);
+    assert_eq!(out.payload["path"], written.display().to_string());
+
+    // ② 越界写：`storage` 是读白名单，不是写白名单
+    let denied = call_tool(
+        &state,
+        "write_file",
+        serde_json::json!({ "path": "storage/x.txt", "content": "nope" }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(denied.code, "PATH_DENIED");
+    assert!(!root.join("storage").join("x.txt").exists(), "越界写被拒了却落了盘");
+
+    // ③ 禁写段：即使用户把白名单放宽到项目根也不行
+    let mut config: comfyhub_server_rs::policy::ToolPolicyConfig =
+        serde_json::from_str(r#"{"writeRoots":["."]}"#).unwrap();
+    config.write_roots = vec![".".to_string()];
+    let wide = comfyhub_server_rs::policy::ToolPolicy::new(root.clone(), config);
+    let mut session = comfyhub_server_rs::tools::ToolSession::default();
+    let forbidden = comfyhub_server_rs::tools::execute(
+        &state,
+        &wide,
+        "run-x",
+        "conv-x",
+        "write_file",
+        &serde_json::json!({ "path": ".git/hooks/x", "content": "boom" }),
+        &mut session,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(forbidden.code, "PATH_DENIED");
+    assert!(forbidden.message.contains("运行期数据 / 依赖目录"), "{}", forbidden.message);
+
+    // ④ append 模式：第一次覆盖、第二次追加
+    let first = call_tool(&state, "write_file", serde_json::json!({ "path": "comfyui/a.txt", "content": "甲" }))
+        .await
+        .unwrap();
+    assert!(first.content.contains("覆盖"), "{}", first.content);
+    let second = call_tool(
+        &state,
+        "write_file",
+        serde_json::json!({ "path": "comfyui/a.txt", "content": "乙", "mode": "append" }),
+    )
+    .await
+    .unwrap();
+    assert!(second.content.contains("追加"), "{}", second.content);
+    assert_eq!(std::fs::read_to_string(root.join("comfyui").join("a.txt")).unwrap(), "甲乙");
+
+    // ⑤ 超过单次上限：**告诉模型怎么分段写**，不是干巴巴一句失败
+    let huge = "x".repeat(comfyhub_server_rs::policy::DEFAULT_MAX_WRITE_BYTES as usize + 1);
+    let too_large = call_tool(&state, "write_file", serde_json::json!({ "path": "comfyui/big.txt", "content": huge }))
+        .await
+        .unwrap_err();
+    assert_eq!(too_large.code, "TOO_LARGE");
+    assert!(too_large.message.contains("mode=\"append\""), "{}", too_large.message);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// 按字节分段读中文：**切点必须落在字符边界上**，而且续读要能拼回原文。
+///
+/// 这是"模型照着改一份中文工作流"的命门：页尾留一个 U+FFFD，它就会把乱码写回文件。
+#[tokio::test]
+async fn read_file_splits_chinese_on_character_boundaries() {
+    let state = state();
+    let root = state.project_root();
+    let original = "工作流节点一：加载模型；节点二：正向提示词；节点三：采样器。".repeat(6);
+    std::fs::create_dir_all(root.join("comfyui")).unwrap();
+    let file = root.join("comfyui").join("flow.json");
+    std::fs::write(&file, original.as_bytes()).unwrap();
+
+    // 用小窗口（10 字节）逼出"落在汉字中间"的切点
+    let first = call_tool(&state, "read_file", serde_json::json!({ "path": "comfyui/flow.json", "maxBytes": 10 }))
+        .await
+        .unwrap();
+    assert!(!first.content.contains('\u{FFFD}'), "页尾出现乱码：{}", first.content);
+    let restart = first
+        .content
+        .rsplit("offset=")
+        .next()
+        .unwrap()
+        .trim_end_matches('）')
+        .parse::<usize>()
+        .expect("续读提示里必须给出 offset=N");
+    assert!(restart > 0 && restart < original.len());
+
+    // 从 offset 接着读，一直读到尾：拼起来必须与原文**逐字相等**
+    let mut assembled = first.content.lines().nth(1).unwrap().to_string();
+    let mut cursor = restart;
+    loop {
+        let chunk = call_tool(
+            &state,
+            "read_file",
+            serde_json::json!({ "path": "comfyui/flow.json", "maxBytes": 10, "offset": cursor }),
+        )
+        .await
+        .unwrap();
+        let body = chunk.content.lines().nth(1).unwrap().to_string();
+        assembled.push_str(&body);
+        if let Some(pos) = chunk.content.rfind("offset=") {
+            cursor = chunk.content[pos + 7..].trim_end_matches('）').parse().unwrap();
+        } else {
+            break;
+        }
+    }
+    assert_eq!(assembled, original, "分段读拼回来与原文不一致");
+    // 读文件不给结构化负载（Kotlin 那边 meta 也是 null）—— 别自己发明键
+    assert!(first.payload.is_null(), "{:?}", first.payload);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn list_dir_defaults_to_the_write_root_and_reports_truncation() {
+    let state = state();
+    let root = state.project_root();
+    std::fs::create_dir_all(root.join("comfyui").join("models")).unwrap();
+    std::fs::write(root.join("comfyui").join("a.json"), b"{}").unwrap();
+    std::fs::write(root.join("comfyui").join("models").join("b.safetensors"), b"xx").unwrap();
+
+    // 不带 path：默认就是写白名单的第一个（出厂 = comfyui）
+    let out = call_tool(&state, "list_dir", serde_json::json!({})).await.unwrap();
+    let expected_dir = root.join("comfyui").display().to_string();
+    assert!(out.content.starts_with(&expected_dir), "{}", out.content);
+    assert!(out.content.contains("file a.json 2B"), "{}", out.content);
+    assert!(out.content.contains("dir  models"), "{}", out.content);
+    // depth=1 不递归：子目录里的文件不出现
+    assert!(!out.content.contains("b.safetensors"), "{}", out.content);
+    // depth=2 才列到
+    let deep = call_tool(&state, "list_dir", serde_json::json!({ "depth": 2 })).await.unwrap();
+    assert!(deep.content.contains("b.safetensors"), "{}", deep.content);
+
+    // 超过 200 条：明说截断（静默截断会让模型以为目录里就这么多东西）
+    for i in 0..205 {
+        std::fs::write(root.join("comfyui").join(format!("many-{i:03}.txt")), b"x").unwrap();
+    }
+    let many = call_tool(&state, "list_dir", serde_json::json!({})).await.unwrap();
+    assert!(many.content.contains("超过 200 条已截断"), "{}", many.content);
+
+    // 不是目录 → NOT_A_DIRECTORY（码与 Kotlin 一致）
+    let not_dir = call_tool(&state, "list_dir", serde_json::json!({ "path": "comfyui/a.json" }))
+        .await
+        .unwrap_err();
+    assert_eq!(not_dir.code, "NOT_A_DIRECTORY");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Skills 两个写侧工具：注册 → 立刻出现在列表里 → 删除；再删报 `SKILL_NOT_FOUND`。
+#[tokio::test]
+async fn skill_tools_register_then_delete() {
+    let state = state();
+    let storage = state.media_dir().parent().unwrap().to_path_buf();
+
+    let out = call_tool(
+        &state,
+        "register_skill",
+        serde_json::json!({
+            "name": "e2e-helper",
+            "description": "给第 40 步的用例用",
+            "whenToUse": "只在用例里",
+            "content": "## 步骤\n1. 别把它当真的规则"
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(out.content.contains("已注册 skill「e2e-helper」"), "{}", out.content);
+    // 结构化负载是完整的 SkillDto（界面按它画卡片）
+    assert_eq!(out.payload["name"], "e2e-helper");
+    assert_eq!(out.payload["source"], "user");
+    assert!(out.payload["digest"].is_string(), "{:?}", out.payload);
+    // 磁盘是真源：文件真的在
+    assert!(storage
+        .join("ai")
+        .join("skills")
+        .join("e2e-helper")
+        .join("SKILL.md")
+        .is_file());
+
+    // 同一个名字再注册一次 = 覆盖（不报错，与 Kotlin 同）
+    let again = call_tool(
+        &state,
+        "register_skill",
+        serde_json::json!({ "name": "e2e-helper", "description": "覆盖一版", "content": "新正文" }),
+    )
+    .await
+    .unwrap();
+    assert!(again.content.contains("已注册"), "{}", again.content);
+
+    let deleted = call_tool(&state, "delete_skill", serde_json::json!({ "name": "e2e-helper" }))
+        .await
+        .unwrap();
+    assert_eq!(deleted.payload["deleted"], true);
+    assert!(!storage.join("ai").join("skills").join("e2e-helper").exists());
+
+    let missing = call_tool(&state, "delete_skill", serde_json::json!({ "name": "e2e-helper" }))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code, "SKILL_NOT_FOUND");
+
+    // 内置 skill 受保护（码原样透传，别改写成 TOOL_ERROR）
+    let builtin = call_tool(&state, "delete_skill", serde_json::json!({ "name": "no-such-builtin" }))
+        .await
+        .unwrap_err();
+    assert_eq!(builtin.code, "SKILL_NOT_FOUND");
+
+    std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+/// **R11 / 总纲 §3.5**：桌面专属工具进**桌面**的清单，但**不许**进 run-kit 的 `tools[]`。
+#[tokio::test]
+async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
+    let state = state();
+    let policy = comfyhub_server_rs::policy::ToolPolicy::load(&state).unwrap();
+
+    let specs = comfyhub_server_rs::tools::specs(&policy);
+    let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+    for expected in ["list_dir", "read_file", "write_file", "register_skill", "delete_skill"] {
+        assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
+    }
+    // 手机那四个也还在
+    for expected in ["ask_user_question", "list_skills", "load_skill", "remember"] {
+        assert!(names.contains(&expected), "{expected} 丢了：{names:?}");
+    }
+    // 没实现的**一个都不许出现**
+    for absent in ["comfy_submit", "comfy_list_workflows", "web_search", "web_fetch", "civitai_search", "find_model"] {
+        assert!(!names.contains(&absent), "{absent} 还没实现却下发了：{names:?}");
+    }
+    // 系统提示里那段"可调用的工具"必须与下发的清单**同一份**
+    let catalog = comfyhub_server_rs::tools::catalog(&policy);
+    assert_eq!(
+        catalog.iter().map(|t| t.name).collect::<Vec<_>>(),
+        names,
+        "提示词与请求里的工具清单漂移了"
+    );
+
+    // run-kit（手机）仍然只有那 7 个手机可执行的
+    let (status, kit) = get_json(router_for(state.clone()), "/api/ai/run-kit").await;
+    assert_eq!(status, StatusCode::OK, "body={kit}");
+    let kit_tools: Vec<&str> = kit["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(kit_tools.len(), 7, "{kit_tools:?}");
+    for absent in ["list_dir", "read_file", "write_file", "register_skill", "delete_skill"] {
+        assert!(!kit_tools.contains(&absent), "桌面工具漏进了手机 run-kit：{kit_tools:?}");
+    }
+
+    // deny 的工具连描述都不下发（与 Kotlin `kitParts` 同一条规则）
+    let mut config: comfyhub_server_rs::policy::ToolPolicyConfig = serde_json::from_str("{}").unwrap();
+    config.overrides.insert("write_file".into(), "deny".into());
+    let denied = comfyhub_server_rs::policy::ToolPolicy::new(state.project_root(), config);
+    let denied_names: Vec<String> =
+        comfyhub_server_rs::tools::specs(&denied).into_iter().map(|s| s.name).collect();
+    assert!(!denied_names.contains(&"write_file".to_string()), "{denied_names:?}");
+    assert!(denied_names.contains(&"read_file".to_string()));
+
+    std::fs::remove_dir_all(state.project_root()).ok();
+}

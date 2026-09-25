@@ -213,13 +213,15 @@ async fn run_once(
     );
     let memory_text = crate::memory::prompt_text(&storage.join("ai"));
 
-    // 工具清单：**只下发这一批真的实现了的**（`declaredTo = kit ∩ 本地实现`），
+    // 工具清单：**只下发这一批真的实现了的**（`declaredTo = 清单 ∩ 本地实现`），
     // 并且按权限策略把 `deny` 的剔掉 —— 系统提示里那段"可调用的工具"读的是**同一个**清单。
+    //
+    // ⚠ 桌面执行器用 [`crate::tools::catalog`]（手机 + **桌面专属**），不是只取手机清单：
+    // Kotlin 的桌面提示词列的是**全量**工具（含 `read_file` / `write_file` / `comfy_*`）。
+    // 只取手机那 7 个的话，模型在桌面上永远不知道自己能动文件（P4 第 40 步修）。
     let tools = crate::tools::specs(&policy);
-    let tool_refs: Vec<&crate::mobile_tools::MobileToolSpec> = crate::mobile_tools::MOBILE_TOOLS
-        .iter()
-        .filter(|t| tools.iter().any(|spec| spec.name == t.name))
-        .collect();
+    let tool_refs: Vec<crate::tools::ToolView<'static>> = crate::tools::catalog(&policy);
+    debug_assert_eq!(tool_refs.len(), tools.len());
     let system_prompt = crate::system_prompt::render(
         &provider.display_name,
         &provider.api,
@@ -685,8 +687,16 @@ async fn handle_call(
 
     // ⑥ 执行
     let started = std::time::Instant::now();
-    let result =
-        crate::tools::execute(state, run_id, conversation_id, &call.name, &arguments, session).await;
+    let result = crate::tools::execute(
+        state,
+        policy,
+        run_id,
+        conversation_id,
+        &call.name,
+        &arguments,
+        session,
+    )
+    .await;
     let elapsed_ms = started.elapsed().as_millis() as i64;
     let outcome = match result {
         Ok(out) => {

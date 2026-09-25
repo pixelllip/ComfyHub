@@ -23,6 +23,7 @@ pub mod comfy_dirs;
 pub mod conversations;
 pub mod credentials;
 pub mod db;
+pub mod desktop_tools;
 pub mod endpoint_guard;
 pub mod events;
 pub mod executor;

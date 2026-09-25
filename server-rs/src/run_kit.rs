@@ -316,7 +316,10 @@ pub fn build(
         &provider.display_name,
         &provider.api,
         &model_id,
-        &parts.tools,
+        // ⚠ 这里传的是**手机工具**那一份（`parts.tools`）：run-kit 的 systemPrompt 必须与
+        // Kotlin 的 `toolsFor(MOBILE)` 逐字一致 —— 桌面专属工具（`read_file` 等）
+        // 手机调不到，不许出现在手机的系统提示里（R11 / 总纲 §3.5）。
+        &parts.tools.iter().map(|t| crate::tools::ToolView::from(*t)).collect::<Vec<_>>(),
         &skill_catalog,
         &policy,
         &memory_text,
