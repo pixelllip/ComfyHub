@@ -389,7 +389,10 @@ fn expand(entries: &[String], project_root: &Path) -> Vec<PathBuf> {
 }
 
 /// 词法归一化（`Path.normalize()` 的对应物）：去掉 `.`、就地消掉 `..`，**不碰文件系统**。
-fn normalize_lexical(path: &Path) -> PathBuf {
+///
+/// `pub(crate)`：捕获入库解析 ComfyUI 给的 `subfolder` 时也要它（P4 第 43 步）——
+/// 那条路径来自远端返回值，不能直接拼了就用。
+pub(crate) fn normalize_lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for comp in path.components() {
         match comp {

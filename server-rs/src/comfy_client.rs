@@ -45,7 +45,9 @@ pub async fn queue(comfy_url: &str) -> Result<QueueSnapshot, String> {
 }
 
 /// 一次 GET：超时 20 秒（Kotlin `fetchJson` 同），非 2xx 当错误。
-async fn get_json(url: &str) -> Result<serde_json::Value, String> {
+///
+/// `pub`：捕获轮询（`/history`）也走它 —— ComfyUI 的地址与代理纪律只有这一处实现。
+pub async fn get_json(url: &str) -> Result<serde_json::Value, String> {
     let host = host_of(url);
     let client = crate::upstream::client_for(&host)
         .map_err(|e| format!("HTTP 客户端创建失败：{}", e.human()))?;
@@ -62,6 +64,27 @@ async fn get_json(url: &str) -> Result<serde_json::Value, String> {
     }
     let text = response.text().await.map_err(|e| format!("读响应失败：{e}"))?;
     serde_json::from_str(&text).map_err(|e| format!("响应不是 JSON：{e}"))
+}
+
+/// 取一段二进制（产物下载兜底 `GET /view`）。
+///
+/// `timeout_secs` 由调用方给：`/view` 可能是一段几百 MB 的视频，用查询端点那 20 秒会
+/// 把慢盘上的大文件判成失败（Kotlin 那边给的是 5 分钟）。
+pub async fn get_bytes(url: &str, timeout_secs: u64) -> Result<Vec<u8>, String> {
+    let host = host_of(url);
+    let client = crate::upstream::client_for(&host)
+        .map_err(|e| format!("HTTP 客户端创建失败：{}", e.human()))?;
+    let response = client
+        .get(url)
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .send()
+        .await
+        .map_err(|e| friendly_error(&e, url))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {}", status.as_u16()));
+    }
+    response.bytes().await.map(|b| b.to_vec()).map_err(|e| format!("读响应失败：{e}"))
 }
 
 /// URL → 主机名（给 [`crate::outbound::route`] 判"公网还是本机"用）。

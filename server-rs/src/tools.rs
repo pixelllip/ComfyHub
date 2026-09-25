@@ -7,6 +7,7 @@
 //! | `list_skills` / `load_skill` / `remember` / `ask_user_question` | `BOTH` | 第 31/32 步（只碰本机） |
 //! | `list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill` | `DESKTOP` | 第 40 步，路径准入在 [`crate::policy`] |
 //! | `comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` | `DESKTOP` | 第 41/42 步；前两条只碰本机库与磁盘，`get_status` 会真问一次 ComfyUI 的 `/queue` |
+//! | `comfy_sync_history` | `DESKTOP` | 第 43 步；**会写库**（建提示词 + 产物入库），出厂档 `ASK` |
 //!
 //! 还没搬的：联网三个（要 Keenable / Civitai 客户端 + `EndpointGuard`）、
 //! `comfy_get_status` / `sync_history` / `find_workflow` / `load_workflow` / `submit` /
@@ -285,11 +286,12 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + comfy 查询两件（`comfy_get_run` / `comfy_list_workflows`，P4 第 41 步）。
 /// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
 /// `comfy_submit` 那一批要 ComfyUI 在场与整套转换栈（R10 的落点），各自另起批次。
-pub const IMPLEMENTED: [&str; 12] = [
+pub const IMPLEMENTED: [&str; 13] = [
     "ask_user_question",
     "comfy_get_run",
     "comfy_get_status",
     "comfy_list_workflows",
+    "comfy_sync_history",
     "delete_skill",
     "list_dir",
     "list_skills",
@@ -366,6 +368,7 @@ pub async fn execute(
         "comfy_get_run" => comfy_get_run(state, arguments),
         "comfy_list_workflows" => comfy_list_workflows(state, arguments),
         "comfy_get_status" => comfy_get_status(state, arguments).await,
+        "comfy_sync_history" => comfy_sync_history(state).await,
         // 清单里没有的（模型幻觉出一个名字 / 这一批还没搬的）——
         // 码与 Kotlin `TOOL_NOT_FOUND` 一致，模型的分支行为才不会两端不同。
         _ => Err(ToolFailure::new(
@@ -889,6 +892,18 @@ async fn comfy_get_status(state: &AppState, arguments: &Value) -> Result<ToolOut
     Ok(ToolOutcome::new(text, status))
 }
 
+/// `comfy_sync_history`：立刻同步一次 `/history`（**会写库**：建提示词 + 产物入库）。
+///
+/// 与 `POST /api/capture/poll` **同一个实现**（[`crate::capture_ingest::poll_once`]）——
+/// 两处各写一份的后果是"界面上收不到的、AI 说收到了"（或反过来）。
+/// 它是 `mutating = true` + 出厂档 `ASK`：动手前必须用户点一次批准（R8 的闸门在调用方）。
+async fn comfy_sync_history(state: &AppState) -> Result<ToolOutcome, ToolFailure> {
+    let config = crate::capture::capture_config(state).map_err(capture_failure)?;
+    let result = crate::capture_ingest::poll_once(state, &config).await;
+    let text = result.to_string();
+    Ok(ToolOutcome::new(text, result))
+}
+
 /// `ApiError` → 工具失败（只让**这一次调用**失败，不打断整个 Run）。
 fn capture_failure(error: crate::routes::ApiError) -> ToolFailure {
     ToolFailure::new("TOOL_ERROR", format!("本机数据查询出错：{}", error.human()))
@@ -1372,16 +1387,19 @@ mod tests {
         assert!(is_mutating("delete_skill"));
         assert!(!is_mutating("read_file"));
         assert!(!is_mutating("list_dir"));
-        // comfy 查询三件（P4 第 41/42 步）：只读，出厂 ALLOW（与 Kotlin 同）
+        // comfy 查询 / 同步四件（P4 第 41~43 步）
         for name in ["comfy_get_run", "comfy_get_status", "comfy_list_workflows"] {
             assert!(is_implemented(name), "{name} 应当已实现");
             assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
             assert!(!is_mutating(name), "{name} 是只读的");
         }
+        // `comfy_sync_history` 会写库 → 出厂 ASK（用户点头才动）
+        assert!(is_implemented("comfy_sync_history"));
+        assert_eq!(default_access("comfy_sync_history"), "ASK");
+        assert!(is_mutating("comfy_sync_history"));
         // 还没搬的一个都不许说"实现了"
         for name in [
             "comfy_submit",
-            "comfy_sync_history",
             "comfy_load_workflow",
             "comfy_find_workflow",
             "comfy_env_report",

@@ -68,7 +68,89 @@ async fn call(state: &AppState, name: &str, arguments: serde_json::Value) -> ser
     }
 }
 
-/// `comfy_list_workflows` + `comfy_get_run`：真库 + 真 ComfyUI 目录上抽查。
+/// **重放一次真实运行**（第 43 步第二半）：拿真库里那条 `capture_runs.raw`，
+/// 在**副本**上重新走一遍入库链（解析 → 建提示词 → 收产物 → 收尾）。
+///
+/// 为什么值得单独跑：单测里的 `/history` 是手写的，而真库里的那条 raw 带着
+/// **真实节点的怪癖**（数字引用、字符串 steps、共享模型根……）。这条路能证明
+/// "解析 + 入库"两半在真数据上真的合得起来。
+#[tokio::test]
+#[ignore = "真库副本抽查：需要 COMFYHUB_SPOT_DB / COMFYHUB_SPOT_STORAGE"]
+async fn real_db_spot_check_replay_ingest() {
+    let Some((state, _root)) = spot_state() else { return };
+    // 挑一条**有产物**的真记录（最近的那条）
+    let picked: Option<(String, String)> = state
+        .with(|conn| {
+            use rusqlite::OptionalExtension;
+            Ok(conn
+                .query_row(
+                    "SELECT run_key, raw FROM capture_runs \
+                      WHERE raw IS NOT NULL AND media_count > 0 ORDER BY id DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?)
+        })
+        .unwrap();
+    let Some((run_key, raw)) = picked else {
+        println!("副本里没有带产物的记录 —— 跳过");
+        return;
+    };
+    let entry: serde_json::Value = serde_json::from_str(&raw).expect("raw 是 JSON");
+    let config = comfyhub_server_rs::capture::capture_config(&state).expect("读配置");
+    let request = comfyhub_server_rs::capture_ingest::build_ingest_request(&run_key, &entry, &config, false);
+    println!(
+        "重放 {run_key}：产物条目 {} 个，输出目录 {:?}，下载兜底 {}",
+        request.outputs.len(),
+        config.output_dir,
+        config.download_fallback
+    );
+
+    // ⚠ 先把这条记录与它建的提示词从**副本**里清掉，否则 claim 会被幂等键挡住
+    //    （这正是"同一次生成只建一条提示词"的实证）
+    let claim_first = comfyhub_server_rs::capture_ingest::begin_run(&state, &run_key, "ComfyUI", Some(&entry), false)
+        .expect("claim");
+    println!("先抢一次（副本里已有 success 行）→ claimed={}", claim_first.claimed);
+    assert!(!claim_first.claimed, "success 是终态，不该被重抢");
+
+    state
+        .write(|tx| {
+            let prompt_id: Option<i64> = tx
+                .query_row("SELECT prompt_id FROM capture_runs WHERE run_key = ?1", [&run_key], |r| r.get(0))
+                .ok()
+                .flatten();
+            if let Some(id) = prompt_id {
+                tx.execute("DELETE FROM media_assets WHERE prompt_id = ?1", [id])?;
+                tx.execute("DELETE FROM prompts WHERE id = ?1", [id])?;
+            }
+            tx.execute("DELETE FROM capture_runs WHERE run_key = ?1", [&run_key])?;
+            Ok(())
+        })
+        .unwrap();
+
+    let claim = comfyhub_server_rs::capture_ingest::begin_run(&state, &run_key, "ComfyUI", Some(&entry), false)
+        .expect("重新抢");
+    assert!(claim.claimed, "清掉之后必须能重新抢");
+    let outcome = comfyhub_server_rs::capture_ingest::ingest_claimed(&state, &request, &config).await;
+    println!("结果：{}", outcome.to_json());
+    // 产物文件可能早被用户删了 —— 那是**如实**的 failed，不是错误；但提示词一定要建出来
+    assert!(outcome.created || outcome.message.is_some(), "要么建了提示词、要么如实说为什么没建");
+    if let Some(prompt_id) = outcome.prompt_id {
+        let (title, positive, seed): (String, String, Option<i64>) = state
+            .with(|conn| {
+                Ok(conn.query_row(
+                    "SELECT title, positive_prompt, seed FROM prompts WHERE id = ?1",
+                    [prompt_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?)
+            })
+            .unwrap();
+        println!("提示词 {prompt_id}：title={title:?} seed={seed:?} positive[:60]={:?}", &positive.chars().take(60).collect::<String>());
+        assert!(!title.trim().is_empty());
+    }
+}
+
+/// `comfy_list_workflows` + `comfy_get_run` + 图解析对账：真库 + 真 ComfyUI 目录上抽查。
 #[tokio::test]
 #[ignore = "真库副本抽查：需要 COMFYHUB_SPOT_DB / COMFYHUB_SPOT_STORAGE"]
 async fn real_db_spot_check_comfy_queries() {

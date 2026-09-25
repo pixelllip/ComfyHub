@@ -284,6 +284,8 @@ pub fn router(state: AppState) -> Router {
         // 捕获状态与实时进度（第 42 步）：真的去问一次 ComfyUI 的 /queue
         .route("/api/capture/status", get(capture_status))
         .route("/api/capture/jobs", get(capture_jobs))
+        // 立刻同步一次 /history 并入库（第 43 步）：**这条路会写库**（建提示词 + 产物）
+        .route("/api/capture/poll", axum::routing::post(capture_poll))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
         .route("/api/capture/locate", get(capture_locate))
         .route("/api/capture/locate/apply", axum::routing::post(capture_locate_apply))
@@ -407,6 +409,15 @@ async fn capture_status(State(state): State<AppState>) -> Result<Json<serde_json
 /// `GET /api/capture/jobs` —— 实时进度（AI 工作台右侧栏轮询它）。
 async fn capture_jobs(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::capture::jobs_json(&state).await?))
+}
+
+/// `POST /api/capture/poll` —— 立刻同步一次 `/history`（**会写库**：建提示词 + 产物入库）。
+///
+/// ⚠ 与 `/status`、`/jobs` 的分工：那两条**只读**（只问队列），这一条是"把跑完的东西收进来"。
+/// Kotlin 那边它同时是后台轮询与 `comfy_sync_history` 工具的实现。
+async fn capture_poll(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let config = crate::capture::capture_config(&state)?;
+    Ok(Json(crate::capture_ingest::poll_once(&state, &config).await))
 }
 
 /// `GET /api/ai/providers` —— provider 清单（不含密钥，AIH-012）。

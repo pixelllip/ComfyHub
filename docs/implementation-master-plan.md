@@ -1189,8 +1189,33 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   不是双曲回绕 —— 第一版按回绕写，被用例当场抓住。
 > - 验收：`cargo test` **291 例全绿**（173 lib + 116 api_test + 2 shape_lint；新增 11 例解析单测，
 >   含一份"真机形状"的固化夹具）+ **真库对账 25/25 零差异**（`tests/spot_check.rs`，默认 `#[ignore]`）。
-> - 第二半（下一步）：`CaptureRepo.beginRun/finishRun/importFile` + `pollOnce` + `/api/capture/poll`
->   + `comfy_sync_history` 工具 —— 也就是"产物真的进画廊"。
+> - 第二半（**已落地**）：见下面第 43 步第二半那条登记。
+>
+> ✅ **P4 第 43 步（第二半，2026-09-25）：捕获入库 —— `POST /api/capture/poll` + `comfy_sync_history`** ——
+> **"产物真的进画廊"** 就是这一步：从 ComfyUI 的 `/history` 把跑完的运行收进库（建提示词 →
+> 产物落盘入库 → 收尾运行记录）。它是 `comfy_submit`（R10）的直接地基 ——
+> 提交完的产物**必须**走这同一条路入库，否则就是"AI 出的图不在画廊里"。
+> - 新模块 `capture_ingest.rs`：`begin_run` / `can_reclaim` / `finish_run`（Kotlin `CaptureRepo`）
+>   + `import_file`（内容 sha256 判重、图片顺手写缩略图、`move`/`copy` 两种语义）
+>   + `create_captured_prompt`（Kotlin `PromptRepo.createCaptured`）+ `poll_once` / `ingest_claimed`
+>   + HTTP 下载兜底（`GET /view`，本地 output 目录里没有那份文件时才走）。
+> - 四条纪律逐条落地：**`empty` / `error` 可重试**（`success` 才是唯一终态；把 `empty` 当终态
+>   就是"AI 说生成了、画廊里却没有"）／**卡住的 `running` 能重抢**（后端被杀过）／
+>   **一次运行只建一条提示词**（`run_key` 唯一 + `prompts.source_ref`）／**产物按 sha256 判重**。
+> - ★ 两处**只有真库才摆得出来**的细节：① 空集合的写法 —— Kotlin 存 `loras = "[]"` /
+>   `extra_params = "{}"`（真库实测 ComfyUI 来源的行全是这两个），写真 NULL 会让"这一列什么形状"
+>   两端分叉；② `extra_params` 的**键顺序**是节点图的文档顺序，所以是手工按序拼对象
+>   （`BTreeMap`/`json!(map)` 会改成键排序）。
+> - **验收**：`cargo test` **300 例全绿**（179 lib + 119 api_test + 2 shape_lint），
+>   新增 6 例纯函数单测（`canReclaim` 真值表 / 产物条目收集与过滤 / kind 判定 / 百分号编码 /
+>   `IngestResult` 键集合）+ **3 例端到端**（真 socket 假 ComfyUI：本地 output 直接收、
+>   下载兜底 + `empty` 重试、端点形状）；以及 `tests/spot_check.rs` 的
+>   **真库重放**：拿真库里那条 `fba277c5…`（成功、1 个产物）在副本上重放一遍 →
+>   claim 先被幂等键挡住 → 清掉后重收 → **建出的提示词标题与 Kotlin 当年那条逐字相同**
+>   （`"Krea2_sage_t2i · seed 20260922"`、seed 对）→ 产物文件已不在盘上且 ComfyUI 没在跑，
+>   于是**如实** `imported=0 / failed=1`（不假装收进来了）。
+> - 仍未搬：`/api/capture/{import,import-workflows}`、`/api/ingest/comfyui`（后者是 ComfyUI
+>   自定义节点推送那条路）、后台定时轮询（现在是"端点/工具触发一次"，`up` 里的轮询器还没搬）。
 
 > **📅 2026-09-25 这一轮的交接单**（上一轮留下的，按价值排序；① 的前半已落地）：
 > 1. ✅ **工具层与审批（R8）+ 提问闸门**：第 31 / 32 步已落地（四个本机工具 + 闸门 + 两条端点批次）。

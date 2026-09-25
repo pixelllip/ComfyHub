@@ -65,6 +65,14 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "comfy_sync_history",
+        description: r#"立刻同步一次 ComfyUI /history（**会往本项目库里写数据**，属于轻度写操作）。需要用户批准；用之前先说明你想同步什么。"#,
+        input_schema: r#"{"type":"object","properties":{"reason":{"type":"string","description":"为什么要同步（给用户看的）"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ASK",
+        mutating: true,
+    },
+    DesktopToolSpec {
         name: "delete_skill",
         description: r#"删除一个**用户来源**的 Skill。内置 skill 不能删。这是不可逆操作，用户确认后再调用。"#,
         input_schema: r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}"#,
@@ -149,6 +157,7 @@ mod tests {
                 "comfy_get_run",
                 "comfy_get_status",
                 "comfy_list_workflows",
+                "comfy_sync_history",
                 "delete_skill",
                 "list_dir",
                 "read_file",
@@ -158,7 +167,6 @@ mod tests {
         );
         for absent in [
             "comfy_submit",
-            "comfy_sync_history",
             "comfy_load_workflow",
             "comfy_find_workflow",
             "comfy_env_report",

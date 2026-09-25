@@ -5584,6 +5584,7 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_get_run",
             "comfy_get_status",
             "comfy_list_workflows",
+            "comfy_sync_history",
             "delete_skill",
             "list_dir",
             "list_skills",
@@ -7640,6 +7641,7 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "comfy_get_run",
         "comfy_get_status",
         "comfy_list_workflows",
+        "comfy_sync_history",
     ] {
         assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
     }
@@ -7650,7 +7652,6 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     // 没实现的**一个都不许出现**
     for absent in [
         "comfy_submit",
-        "comfy_sync_history",
         "comfy_load_workflow",
         "comfy_find_workflow",
         "comfy_env_report",
@@ -7924,5 +7925,329 @@ async fn capture_status_and_jobs_ask_the_real_queue() {
     assert!(small.payload.get("submissions").is_some(), "工具带上 submissions（与 Kotlin 同）");
 
     handle.abort();
+    std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+// ===========================================================================
+//  捕获入库（P4 第 43 步第二半）：poll → 建提示词 → 产物进画廊
+//
+//  用**真 socket** 的假 ComfyUI（不出网）+ 真文件系统 + 真库：
+//  这一层是"AI 说生成了、画廊里却没有"那个最难查的问题的最后一道防线。
+// ===========================================================================
+
+/// 一张真的小 PNG（缩略图与宽高探测那条链必须真能解码，不然等于没测）。
+fn tiny_png(width: u32, height: u32) -> Vec<u8> {
+    use image::{ImageBuffer, Rgb};
+    let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+        ImageBuffer::from_pixel(width, height, Rgb([10, 20, 30]));
+    let mut out = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+    out
+}
+
+/// 假 ComfyUI：认 `/history`、`/queue`、`/view` 三条（真 socket，不出网）。
+async fn fake_comfy(
+    history: &'static str,
+    view_body: &'static [u8],
+) -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { break };
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 16 * 1024];
+                let Ok(read) = socket.read(&mut buf).await else { return };
+                let request = String::from_utf8_lossy(&buf[..read]).to_string();
+                let head = request.lines().next().unwrap_or("").to_string();
+                if head.contains("/history") {
+                    let body = history;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                } else if head.contains("/view") {
+                    let mut response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: image/png\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        view_body.len()
+                    )
+                    .into_bytes();
+                    response.extend_from_slice(view_body);
+                    let _ = socket.write_all(&response).await;
+                } else {
+                    let body = r#"{"queue_running":[],"queue_pending":[]}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                }
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{addr}"), handle)
+}
+
+/// 一条"跑完了、有一个 png 产物"的 /history 条目（API 图 + outputs + status）。
+fn history_with_image(filename: &str, run_key: &str) -> String {
+    serde_json::json!({
+        run_key: {
+            "prompt": {
+                "3": {"class_type":"KSampler","inputs":{"seed":4242,"steps":12,"cfg":2.5,
+                      "sampler_name":"euler","scheduler":"normal",
+                      "positive":["6",0],"negative":["7",0],"latent_image":["5",0]}},
+                "5": {"class_type":"EmptyLatentImage","inputs":{"width":768,"height":1024}},
+                "6": {"class_type":"CLIPTextEncode","inputs":{"text":"1girl, ink painting"}},
+                "7": {"class_type":"CLIPTextEncode","inputs":{"text":"lowres"}},
+                "9": {"class_type":"SaveImage","inputs":{"filename_prefix":"krea2/t2i"}}
+            },
+            "outputs": {
+                "9": {"images":[{"filename": filename, "subfolder":"", "type":"output"}]}
+            },
+            "status": {"completed": true, "status_str": "success"}
+        }
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn poll_captures_a_run_into_prompts_and_media() {
+    use comfyhub_server_rs::capture_ingest;
+    let state = state();
+    let root = state.project_root();
+    // ① 本地 output 目录里**真的有**那份产物（这条路不下载，直接收）
+    let output_dir = root.join("comfyui").join("output");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let media_bytes = tiny_png(8, 6);
+    std::fs::write(output_dir.join("krea2_00001_.png"), &media_bytes).unwrap();
+
+    let history: &'static str =
+        Box::leak(history_with_image("krea2_00001_.png", "uuid-run-1").into_boxed_str());
+    let view: &'static [u8] = Box::leak(media_bytes.clone().into_boxed_slice());
+    let (url, handle) = fake_comfy(history, view).await;
+
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = url.clone();
+    config.output_dir = Some(output_dir.display().to_string());
+    config.auto_tag = "ComfyUI".to_string();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+
+    // ② 轮询一次：应当收下 1 次运行、1 个产物
+    let config = comfyhub_server_rs::capture::capture_config(&state).unwrap();
+    let result = capture_ingest::poll_once(&state, &config).await;
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["checked"], 1, "{result}");
+    assert_eq!(result["newRuns"], 1, "{result}");
+    assert_eq!(result["newMedia"], 1, "{result}");
+
+    // ③ 运行记录：success + prompt_id + media_count + 标题（seed 进标题）
+    let (status, prompt_id, media_count, title): (String, i64, i64, String) = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT status, prompt_id, media_count, title FROM capture_runs WHERE run_key = 'uuid-run-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(status, "success");
+    assert_eq!(media_count, 1);
+    assert!(title.contains("seed 4242"), "标题要带 seed：{title}");
+
+    // ④ 提示词：字段真的解析进去了（这条链就是第 43 步第一半的产物）
+    let (positive, negative, checkpoint, seed, steps, width): (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    ) = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT positive_prompt, negative_prompt, checkpoint, seed, steps, width FROM prompts WHERE id = ?1",
+                [prompt_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(positive, "1girl, ink painting");
+    assert_eq!(negative.as_deref(), Some("lowres"));
+    assert_eq!(checkpoint, None, "这张图里没有 checkpoint 节点");
+    assert_eq!(seed, Some(4242));
+    assert_eq!(steps, Some(12));
+    assert_eq!(width, Some(768));
+    // source / source_ref 是"同一次生成只建一条提示词"的钥匙
+    let (source, source_ref, loras, extra): (Option<String>, Option<String>, Option<String>, Option<String>) = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT source, source_ref, loras, extra_params FROM prompts WHERE id = ?1",
+                [prompt_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(source.as_deref(), Some("ComfyUI"));
+    assert_eq!(source_ref.as_deref(), Some("uuid-run-1"));
+    // ⚠ 空集合的写法必须与 Kotlin 一致：loras = `[]`、extra = `{}`（不是 NULL）
+    assert_eq!(loras.as_deref(), Some("[]"), "空 LoRA 列表要写 []（真库实测如此）");
+    assert!(extra.as_deref().unwrap_or("").starts_with('{'), "{extra:?}");
+
+    // ⑤ 产物：真的落进 storage/media、挂在提示词上、带了标签与 sha256
+    let asset: (i64, String, i64, Option<i64>, String) = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT id, kind, size_bytes, prompt_id, stored_name FROM media_assets ORDER BY id DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(asset.1, "IMAGE");
+    assert_eq!(asset.2, media_bytes.len() as i64);
+    assert_eq!(asset.3, Some(prompt_id), "产物必须挂在这次运行的提示词上");
+    assert!(state.media_dir().join(&asset.4).is_file(), "产物要真的落进 storage/media");
+    // 图片顺手写缩略图（画廊列表用它）
+    assert!(comfyhub_server_rs::thumbs::thumb_path(state.media_dir(), asset.0).is_file());
+    let tag_count: i64 = state
+        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM media_tags WHERE media_id = ?1", [asset.0], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(tag_count, 1, "autoTag（ComfyUI）要挂上");
+
+    // ⑥ 幂等：再轮询一次**什么都不该变**（success 是终态）
+    let prompts_before: i64 =
+        state.with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM prompts", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(prompts_before, 3, "夹具 2 条 + 这次捕获 1 条");
+    let again = capture_ingest::poll_once(&state, &config).await;
+    assert_eq!(again["checked"], 0, "{again}");
+    assert_eq!(again["newRuns"], 0, "{again}");
+    let prompts_after: i64 =
+        state.with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM prompts", [], |r| r.get(0))?)).unwrap();
+    let media_after: i64 =
+        state.with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM media_assets", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(prompts_after, prompts_before, "不该重复建提示词");
+    // 夹具里本来就有 1 条产物（`a.png`）+ 这次捕获的 1 条
+    assert_eq!(media_after, 2, "不该重复入库产物");
+
+    handle.abort();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// 产物**本地没有**时走 HTTP 下载兜底（`GET /view`），而且 `empty` 能重试。
+#[tokio::test]
+async fn poll_downloads_missing_outputs_and_retries_empty_runs() {
+    use comfyhub_server_rs::capture_ingest;
+    let state = state();
+    let root = state.project_root();
+    let output_dir = root.join("comfyui").join("output");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let media_bytes = tiny_png(4, 4);
+    let view: &'static [u8] = Box::leak(media_bytes.clone().into_boxed_slice());
+
+    // 第一轮：/history 有记录但没有 outputs → 收成 `empty`（**可重试**，不是终态）
+    let empty_history: &'static str = Box::leak(
+        serde_json::json!({
+            "uuid-run-2": {
+                "prompt": {"1":{"class_type":"KSampler","inputs":{"seed":7,"steps":4,"cfg":1}}},
+                "outputs": {},
+                "status": {"completed": true, "status_str": "success"}
+            }
+        })
+        .to_string()
+        .into_boxed_str(),
+    );
+    let (url, handle) = fake_comfy(empty_history, view).await;
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = url.clone();
+    // ⚠ 故意把 outputDir 指向一个**没有那份文件**的目录 → 逼出 HTTP 下载兜底
+    config.output_dir = Some(output_dir.display().to_string());
+    config.auto_tag = "ComfyUI".to_string();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+
+    let config = comfyhub_server_rs::capture::capture_config(&state).unwrap();
+    let first = capture_ingest::poll_once(&state, &config).await;
+    assert_eq!(first["checked"], 1, "{first}");
+    assert_eq!(first["newRuns"], 0, "没有产物 → 不算新运行");
+    let status: String = state
+        .with(|conn| Ok(conn.query_row("SELECT status FROM capture_runs WHERE run_key='uuid-run-2'", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(status, "empty");
+    // 产物晚到之后**必须能重收**（当终态就会出现"AI 说生成了、画廊里却没有"）
+    let claim = capture_ingest::can_reclaim("empty", 1, false);
+    assert!(claim, "empty 必须可重试");
+
+    // 第二轮：同一个 run 现在有产物了（且本地没有 → 走 /view 下载）
+    handle.abort();
+    let late_history: &'static str = Box::leak(
+        serde_json::json!({
+            "uuid-run-2": {
+                "prompt": {
+                    "3": {"class_type":"KSampler","inputs":{"seed":99,"steps":8,"cfg":3,
+                          "positive":["6",0],"latent_image":["5",0]}},
+                    "5": {"class_type":"EmptyLatentImage","inputs":{"width":512,"height":512}},
+                    "6": {"class_type":"CLIPTextEncode","inputs":{"text":"late arrival"}},
+                    "9": {"class_type":"SaveImage","inputs":{"filename_prefix":"x"}}
+                },
+                "outputs": {"9": {"images":[{"filename":"late.png","type":"output"}]}},
+                "status": {"completed": true, "status_str": "success"}
+            }
+        })
+        .to_string()
+        .into_boxed_str(),
+    );
+    let (url2, handle2) = fake_comfy(late_history, view).await;
+    let mut config2 = comfyhub_server_rs::capture::capture_config(&state).unwrap();
+    config2.comfy_url = url2.clone();
+    comfyhub_server_rs::capture::save_capture_config(&state, config2).unwrap();
+
+    let config2 = comfyhub_server_rs::capture::capture_config(&state).unwrap();
+    let second = capture_ingest::poll_once(&state, &config2).await;
+    assert_eq!(second["checked"], 1, "empty 的运行必须能被重新抢占：{second}");
+    assert_eq!(second["newMedia"], 1, "下载兜底要真的把产物收进来：{second}");
+    let (status, media_count): (String, i64) = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT status, media_count FROM capture_runs WHERE run_key='uuid-run-2'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(status, "success");
+    assert_eq!(media_count, 1);
+    // 下载来的那份是临时文件，收完必须清掉（别在 storage/tmp 里攒垃圾）
+    let tmp_left = std::fs::read_dir(root.join("tmp"))
+        .map(|iter| iter.filter_map(|e| e.ok()).count())
+        .unwrap_or(0);
+    assert_eq!(tmp_left, 0, "下载的临时文件收完要删掉");
+
+    handle2.abort();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// `POST /api/capture/poll` 的形状（Kotlin `CapturePollResult`：5 个键、message 可空）。
+#[tokio::test]
+async fn capture_poll_endpoint_returns_the_kotlin_shape() {
+    let state = state();
+    // ComfyUI 不在 → ok=false + 一句人话（**不是 500**）
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = "http://127.0.0.1:1".to_string();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    let (status, body) = send_json(router_for(state.clone()), "POST", "/api/capture/poll", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(keys(&body), vec!["checked", "message", "newMedia", "newRuns", "ok"]);
+    assert_eq!(body["ok"], false);
+    assert!(body["message"].as_str().unwrap().contains("连不上 ComfyUI"), "{body}");
+
+    // 工具层是**同一个实现**（别再写一份）
+    let out = call_tool(&state, "comfy_sync_history", serde_json::json!({})).await.unwrap();
+    assert_eq!(out.payload["ok"], false);
+    assert!(out.content.contains("连不上 ComfyUI"), "{}", out.content);
+
     std::fs::remove_dir_all(state.project_root()).ok();
 }
