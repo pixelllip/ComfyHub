@@ -30,7 +30,7 @@ use axum::{
     Json, Router,
 };
 use rusqlite::Connection;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
@@ -241,6 +241,13 @@ pub fn router(state: AppState) -> Router {
             "/api/ai/web-search/credential",
             get(ai_web_search_credential).put(put_web_search_credential).delete(delete_web_search_credential),
         )
+        // 界面端点第三批（P4 第 35 步）：**Skills 六条**。磁盘是真源、刻意不缓存 ——
+        // "AI 注册完下一次回复就能用、用户删掉立刻消失"是需求（AGENTS §10）。
+        // ⚠ `/skills/roots` 与 `/skills/{name}` 由 matchit 的静态优先规则分开，不会互相吃。
+        .route("/api/ai/skills", get(ai_skills).post(create_skill))
+        .route("/api/ai/skills/roots", get(ai_skill_roots))
+        .route("/api/ai/skills/rescan", axum::routing::post(ai_skill_rescan))
+        .route("/api/ai/skills/{name}", get(ai_skill_detail).delete(delete_skill))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -1054,6 +1061,101 @@ fn describe_provider_credential(state: &AppState, reference: Option<&str>) -> cr
         Some(reference) => crate::credentials::describe_now(state, reference),
         None => crate::ai::describe_credential(None, |_| None, |_| false),
     }
+}
+
+// ---------------------------------------------------------------------------
+//  界面端点第三批（P4 第 35 步）：Skills
+// ---------------------------------------------------------------------------
+
+/// skill 详情：元数据 + 正文（正文只在打开详情时读，列表不读）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillDetailDto {
+    skill: crate::skills::SkillDto,
+    content: String,
+}
+
+/// 注册 / 覆盖一个 skill（`SkillUpsertRequest`）。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillUpsertRequest {
+    name: String,
+    description: String,
+    /// 可选（Kotlin 是 `String? = null`）
+    #[serde(default)]
+    when_to_use: Option<String>,
+    content: String,
+}
+
+/// 工具层失败 → AI 错误（`AiRoutes.toolGuard` 的对应物：**码要原样传出去**）。
+fn skill_failed(failure: crate::skills::SkillFailure) -> ApiError {
+    failure.into_api_error()
+}
+
+/// `GET /api/ai/skills` —— 全量清单（**含非法项**：带 `validationError` 的照样列出来，AIH-038）。
+async fn ai_skills(State(state): State<AppState>) -> Result<Json<Vec<crate::skills::SkillDto>>, ApiError> {
+    Ok(Json(crate::skills::list(&state)))
+}
+
+/// `GET /api/ai/skills/{name}` —— 元数据 + 正文（去 frontmatter）。
+///
+/// 三档"没有"分清：没有这个名字 → **400 `CONFIG_ERROR` + "没有名为 X 的 skill"**；
+/// 有但不合法 → `SKILL_INVALID`；有合法但正文文件找不到 → `SKILL_NOT_FOUND`。
+async fn ai_skill_detail(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<SkillDetailDto>, ApiError> {
+    match crate::skills::read_detail(&state, &name).map_err(skill_failed)? {
+        Some((skill, content)) => Ok(Json(SkillDetailDto { skill, content })),
+        None => Err(ApiError::ai("CONFIG_ERROR", format!("没有名为 {name} 的 skill"))),
+    }
+}
+
+/// `POST /api/ai/skills` —— 注册 / 覆盖（**201 Created**，与 Kotlin 同）。
+async fn create_skill(
+    State(state): State<AppState>,
+    Json(body): Json<SkillUpsertRequest>,
+) -> Result<(StatusCode, Json<crate::skills::SkillDto>), ApiError> {
+    let dto = crate::skills::save(
+        &state,
+        &body.name,
+        &body.description,
+        body.when_to_use.as_deref(),
+        &body.content,
+    )
+    .map_err(skill_failed)?;
+    Ok((StatusCode::CREATED, Json(dto)))
+}
+
+/// `DELETE /api/ai/skills/{name}` —— 只许删用户来源；没有这个名字回 `{deleted:false}`（**不是 404**）。
+async fn delete_skill(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let deleted = crate::skills::delete(&state, &name).map_err(skill_failed)?;
+    Ok(Json(json!({ "deleted": deleted, "id": name })))
+}
+
+/// `GET /api/ai/skills/roots` —— 投放口位置（界面要显示绝对路径，用户得知道往哪拷）。
+async fn ai_skill_roots(
+    State(state): State<AppState>,
+) -> Result<Json<crate::skills::SkillRootsDto>, ApiError> {
+    Ok(Json(crate::skills::roots_dto(&state)))
+}
+
+/// `POST /api/ai/skills/rescan` —— 给"拷进来但没写 frontmatter"的补上并登记，再回最新清单。
+async fn ai_skill_rescan(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = crate::skills::auto_register(&state);
+    let skills = crate::skills::list(&state);
+    // 键顺序与 Kotlin `SkillRescanDto` 一致：registered / names / errors / skills
+    Ok(Json(json!({
+        "registered": result.registered,
+        "names": result.names,
+        "errors": result.errors,
+        "skills": skills,
+    })))
 }
 
 // ---------------------------------------------------------------------------

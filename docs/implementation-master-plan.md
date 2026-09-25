@@ -957,10 +957,28 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > | 提交 | 内容 |
 > | --- | --- |
 > | **凭据写侧** | **P4 第 34 步**（见上）+ `scripts\e2e-credential-test.ps1` |
+> | **Skills 六条** | **P4 第 35 步**（见下） |
 >
-> **下一项（本轮继续）**：`/api/ai/skills/*` 六条（list / read / save / delete / roots / rescan）——
-> 磁盘真源那一套（`scan` / `read` / `save` / `delete` / `autoRegister`）在 Rust 侧只搬了 run-kit 要的
-> "扫描 + 校验"，**写侧一条都没有**。
+> ✅ **P4 第 35 步（2026-09-25）：Skills 六条端点**（list / read / save / delete / roots / rescan）——
+> 磁盘是真源、刻意不缓存（"AI 注册完下一次回复就能用、用户删掉立刻消失"是需求，AGENTS §10）。
+> 在此之前 Rust 侧只搬了 run-kit 要的"扫描 + 校验"：**设置页那张 Skills 卡只能看**。
+> - `skills.rs` 补齐写侧与界面 DTO：`SkillDto` **15 个键**（可空的那 7 个一个都不许自己冒出来）、
+>   `SkillRootsDto`、`SkillAutoRegisterResult`、`SkillFailure{code, message}`；`save` 走
+>   `render()` 的**逐字**格式（`version: 1` 是写死的）、路径先过 `safe_child`
+>   （`Path::join` 遇绝对路径会整段替换 —— 必须先挡）；`delete` 只许删用户来源、bundle 目录整个删；
+>   `auto_register` **只补没有 frontmatter 的文件**（已有的一个字节都不改）。
+> - **`ParsedSkill` 扩了 6 个字段**（userInvocable / modelInvocable / sizeBytes / fileCount /
+>   updatedAt / validationError），`validationError` 改成 `parse_one` 里那条**原话**
+>   （以前是 `scan_all` 按 `valid` 反推一句概括 —— 而"不合法"有五种原因，概括出来的话
+>   与界面看到的不一样）；`scan_all` 的 `error` 随之改成原话，`list_skills` 工具的文案更准了。
+> - **真库副本双端对照 14/14**：`/api/ai/skills`（真机上 **19 条** = 16 用户 + 3 内置）与
+>   `/api/ai/skills/roots` canon 后**零差异**；4 条详情逐键一致；"没有这个名字"两端同码同文案；
+>   **跨端可见性两个方向都通**（Rust 写 → Kotlin 读到逐字相等的正文；Kotlin 覆盖 → Rust 读到 Kotlin 那版）；
+>   删除两端同步；内置删除两端都是 `SKILL_READONLY` 同一句人话；`rescan` 在真数据上两端一致
+>   （`registered=0`、无 errors）。真机 `storage\ai\skills` 一个字节没动。
+> - 验收：`cargo test` **232 例全绿**（130 lib + 100 api_test + 2 shape_lint，新增 4 例集成）。
+>
+> **下一项（本轮继续）**：`/api/ai/memory*` 五条 + `/api/ai/builtin/*` 与 `/api/ai/capabilities/*`。
 >
 
 > **📅 2026-09-25 这一轮的交接单**（上一轮留下的，按价值排序；① 的前半已落地）：

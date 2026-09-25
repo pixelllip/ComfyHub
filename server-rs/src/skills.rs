@@ -1,12 +1,11 @@
-//! Skills 的**读侧**（run-kit 要把目录拼进系统提示，红线 R13：正文只在磁盘上）。
+//! Skills 的**读写两侧**（run-kit 拼系统提示 + `/api/ai/skills/*` 界面端点）。
 //!
 //! 真源是磁盘（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`），**刻意不做缓存**：
 //! "AI 注册完下一次回复就能用、用户删掉立刻消失"是需求（AGENTS §10）。
 //!
-//! 这里只搬 run-kit 用得到的那一半：**扫描 + frontmatter 解析 + 校验**，
-//! 拼出 `catalog()`（进提示词的那份）。**没搬**：`save()` / `autoRegister()` /
-//! `read()`（正文加载）/ `digest` / `fileCount` —— 那些属于工具层（`register_skill` /
-//! `delete_skill` / `load_skill`），等搬工具时再逐条对照。
+//! P4 第 22 步先搬了 run-kit 用得到的那一半（扫描 + frontmatter 解析 + 校验 + 读正文），
+//! P4 第 35 步补齐**写侧**（`save` / `delete` / `autoRegister`）与**界面 DTO**（`SkillDto`
+//! 的 15 个键）—— 在此之前设置页那张卡只能看、什么也做不了。
 //!
 //! # 三条容易做错的地方（都照抄 Kotlin）
 //!
@@ -17,9 +16,19 @@
 //!    不认就读出字面量 `|`，等于这个 skill 在目录里"没有描述"。
 //! 3. **同名时"用户 > 内置"、同根内"bundle（`<name>/SKILL.md`）> 平铺 `<name>.md`"**
 //!    —— 与 `fileOf` 的查找顺序保持一致。
+//!
+//! # 写侧的四条纪律（错了都不报错，只是"用户的 skill 不见了"）
+//!
+//! * **自动登记只补没有 frontmatter 的文件**：已经有 frontmatter 的**一个字节都不许改**
+//!   （哪怕它不合法 —— 那是用户写的内容，按既有规则"列出来 + 带 validationError"）；
+//! * **内置 skill 只能停用不能删除**（`SKILL_READONLY`），删的是**用户**那份；
+//! * `save` 写的永远是 `<用户根>/<name>/SKILL.md`（不存在"写进内置目录"这条路）；
+//! * 路径先过 `safe_child`（`..` 之类不许逃出用户根）。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use serde::Serialize;
 
 /// 进系统提示的一个 skill（提示词只用得到前三个字段）。
 #[derive(Debug, Clone, PartialEq)]
@@ -204,14 +213,41 @@ fn split_lines(text: &str) -> Vec<String> {
 
 /// 一个 skill 文件 → 条目；**校验不过也返回**（`valid=false`），由调用方决定怎么处理。
 #[derive(Debug, Clone)]
-struct ParsedSkill {
-    entry: SkillEntry,
-    valid: bool,
+pub struct ParsedSkill {
+    pub entry: SkillEntry,
+    pub valid: bool,
     /// builtin / user（Run 的 Skills 快照要如实记下来源，AIH-047）
-    source: &'static str,
+    pub source: &'static str,
     /// 正文 `sha256` 的**前 16 位十六进制**（与 Kotlin `SkillStore.sha256` 同一个口径：
     /// 对**文件原文**取哈希，不是对解析后的 body）
-    digest: String,
+    pub digest: String,
+    /// `user-invocable`（缺省 true）—— 界面显示 + `snapshot` 里"能不能被用户点"
+    pub user_invocable: bool,
+    /// `disable-model-invocation` 取反（缺省 true）
+    pub model_invocable: bool,
+    /// 文件原文的字节数
+    pub size_bytes: i64,
+    /// bundle 目录里的文件数（平铺 `.md` 恒为 1）—— 与 Kotlin `Files.walk(parent, 3)` 同口径
+    pub file_count: i64,
+    /// 文件 mtime（Java `Instant.toString()` 同形）；拿不到就退回"现在"
+    pub updated_at: String,
+    /// **第一条**没过的校验（Kotlin `parseOne` 里 `fail()` 只记第一条）—— 非空 = 不合法
+    pub validation_error: Option<String>,
+}
+
+impl ParsedSkill {
+    pub fn name(&self) -> &str {
+        &self.entry.name
+    }
+}
+
+/// `String.toBooleanStrictOrNull()`：只认全小写的 `true` / `false`，别的一律 `None`。
+fn strict_bool(value: Option<&String>) -> Option<bool> {
+    match value.map(|v| v.as_str()) {
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        _ => None,
+    }
 }
 
 /// `sha256(原文)` 的前 16 位（Kotlin `SkillStore.sha256` 的逐字对应物）。
@@ -223,9 +259,45 @@ fn short_digest(text: &str) -> String {
     out.iter().map(|b| format!("{b:02x}")).collect::<String>().chars().take(16).collect()
 }
 
-const MAX_BODY_BYTES: usize = 256 * 1024;
+/// description 的**安全上限**（只约束 `save()` 这条写入路径，扫描已有 skill 时不判它）。
+pub const MAX_DESCRIPTION: usize = 4000;
+pub const MAX_BODY_BYTES: usize = 256 * 1024;
 
-fn parse_one(file: &Path, fallback_name: &str, source: &'static str) -> Option<ParsedSkill> {
+/// 自动登记时描述的兜底长度（取正文第一行的前若干字）。
+const AUTO_DESCRIPTION_CHARS: usize = 160;
+
+/// `Files.walk(parent, 3)` 里的最大深度（Kotlin `SkillStore.parseOne`）。
+const FILE_COUNT_MAX_DEPTH: usize = 3;
+
+/// `bundle 目录里的文件数`：`parent.fileName == name` 时数到 3 层，否则 1。
+fn count_files_under(parent: &Path, name: &str) -> i64 {
+    let is_bundle = parent
+        .file_name()
+        .map(|n| n.to_string_lossy() == name)
+        .unwrap_or(false);
+    if !is_bundle {
+        return 1;
+    }
+    fn walk(dir: &Path, depth: usize, count: &mut i64) {
+        if depth > FILE_COUNT_MAX_DEPTH {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            match std::fs::symlink_metadata(&path) {
+                Ok(meta) if meta.is_dir() => walk(&path, depth + 1, count),
+                Ok(meta) if meta.is_file() => *count += 1,
+                _ => {}
+            }
+        }
+    }
+    let mut count = 0i64;
+    walk(parent, 1, &mut count);
+    count
+}
+
+pub fn parse_one(file: &Path, fallback_name: &str, source: &'static str) -> Option<ParsedSkill> {
     let raw = std::fs::read_to_string(file).ok()?;
     let (meta, body) = parse_front_matter(&raw);
     let name = meta
@@ -234,22 +306,43 @@ fn parse_one(file: &Path, fallback_name: &str, source: &'static str) -> Option<P
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| fallback_name.to_string());
 
-    let mut valid = true;
+    // `fail(msg)`：**只记第一条**（Kotlin 的 `if (error == null) error = msg`）——
+    // 顺序也是 Kotlin 那个顺序，界面上的诊断文案才对得上。
+    let mut error: Option<String> = None;
+    let mut fail = |msg: String| {
+        if error.is_none() {
+            error = Some(msg);
+        }
+    };
     if !valid_name(&name) {
-        valid = false;
+        fail("name 必须是 kebab-case（小写字母 / 数字 / 连字符，≤64）".to_string());
     }
     // frontmatter 的 name 与目录名不一致 → 非法（同一个 skill 两个名字，加载时会打架）
-    if name != fallback_name {
-        if let Some(parent) = file.parent() {
-            if parent.file_name().map(|n| n.to_string_lossy() == fallback_name).unwrap_or(false) {
-                valid = false;
-            }
-        }
+    if name != fallback_name
+        && file
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy() == fallback_name)
+            .unwrap_or(false)
+    {
+        fail(format!("frontmatter 的 name「{name}」与目录名「{fallback_name}」不一致"));
     }
     let description = meta.get("description").cloned().unwrap_or_default();
-    if description.trim().is_empty() || body.trim().is_empty() || body.len() > MAX_BODY_BYTES {
-        valid = false;
+    if description.trim().is_empty() {
+        fail("缺少 description".to_string());
     }
+    if body.trim().is_empty() {
+        fail("正文为空".to_string());
+    } else if body.len() > MAX_BODY_BYTES {
+        fail(format!("正文超过 {MAX_BODY_BYTES} 字节"));
+    }
+
+    let parent = file.parent().unwrap_or(Path::new("."));
+    let file_count = count_files_under(parent, &name);
+    let updated_at = std::fs::metadata(file)
+        .and_then(|m| m.modified())
+        .map(crate::iso_time::from_system_time)
+        .unwrap_or_else(|_| crate::iso_time::from_system_time(std::time::SystemTime::now()));
 
     Some(ParsedSkill {
         entry: SkillEntry {
@@ -258,9 +351,15 @@ fn parse_one(file: &Path, fallback_name: &str, source: &'static str) -> Option<P
             when_to_use: meta.get("whentouse").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
             version: meta.get("version").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         },
-        valid,
+        valid: error.is_none(),
         source,
         digest: short_digest(&raw),
+        user_invocable: strict_bool(meta.get("user-invocable")).unwrap_or(true),
+        model_invocable: !strict_bool(meta.get("disable-model-invocation")).unwrap_or(false),
+        size_bytes: raw.len() as i64,
+        file_count,
+        updated_at,
+        validation_error: error,
     })
 }
 
@@ -316,24 +415,435 @@ fn scan_root(root: &Path, source: &'static str) -> Vec<(String, ParsedSkill)> {
 }
 
 /// 全量扫描（内置 + 用户），同名冲突 **用户胜出**（AIH-037）。
-fn scan(builtin_root: &Path, user_root: &Path) -> Vec<ParsedSkill> {
+///
+/// 返回 `(条目, conflict)`：`conflict` 非空 = 这份是**覆盖了同名内置版**的用户版
+/// （Kotlin `SkillDto.conflict` 的来源；`save()` 那条路径也会用 `origin` 记来源，
+/// 我们这边**只有界面的 upsert 一种来源**，所以 `origin` 恒为 null）。
+fn scan_with_conflict(builtin_root: &Path, user_root: &Path) -> Vec<(ParsedSkill, Option<String>)> {
     let builtin = scan_root(builtin_root, "builtin");
     let user = scan_root(user_root, "user");
-    let mut out: Vec<ParsedSkill> = Vec::new();
+    let mut out: Vec<(ParsedSkill, Option<String>)> = Vec::new();
     for (name, dto) in &builtin {
         match user.iter().find(|(n, _)| n == name) {
-            // 用户那份胜出（`conflict` 只是提示，不影响可用性）
-            Some((_, override_dto)) => out.push(override_dto.clone()),
-            None => out.push(dto.clone()),
+            // 用户那份胜出；`conflict` 只是提示，不影响可用性
+            Some((_, override_dto)) => out.push((override_dto.clone(), Some("覆盖了同名内置 skill".to_string()))),
+            None => out.push((dto.clone(), None)),
         }
     }
     for (name, dto) in &user {
         if !builtin.iter().any(|(n, _)| n == name) {
-            out.push(dto.clone());
+            out.push((dto.clone(), None));
         }
     }
-    out.sort_by(|a, b| a.entry.name.cmp(&b.entry.name));
+    out.sort_by(|a, b| a.0.entry.name.cmp(&b.0.entry.name));
     out
+}
+
+/// 全量扫描（丢掉 `conflict`）—— `catalog` / `snapshot` / `scan_all` 用。
+fn scan(builtin_root: &Path, user_root: &Path) -> Vec<ParsedSkill> {
+    scan_with_conflict(builtin_root, user_root).into_iter().map(|(s, _)| s).collect()
+}
+
+// ---------------------------------------------------------------------------
+//  界面 DTO（`/api/ai/skills/*`）—— 15 个键与 Kotlin `SkillDto` 逐字对齐
+// ---------------------------------------------------------------------------
+
+/// 界面上的一个 skill（与 Kotlin `SkillDto` 同形）。
+///
+/// ⚠ **可空键一个都不能自己冒出来**（`explicitNulls = false`）：`whenToUse` / `version` /
+/// `digest` / `updatedAt` / `validationError` / `conflict` / `origin` 都是"没有就整个键不出现"。
+/// `shape_lint.rs` 会替我们盯住这条。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillDto {
+    pub name: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub when_to_use: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// builtin / user
+    pub source: String,
+    pub enabled: bool,
+    pub user_invocable: bool,
+    pub model_invocable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    pub size_bytes: i64,
+    pub file_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// 非空表示这个 skill 不合法：列表里显示诊断，且不参与对话
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validation_error: Option<String>,
+    /// 非空的"提示"类信息（例如覆盖了同名内置 skill）：不影响可用性
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+}
+
+impl SkillDto {
+    fn of(parsed: &ParsedSkill, conflict: Option<String>) -> Self {
+        Self {
+            name: parsed.entry.name.clone(),
+            description: parsed.entry.description.clone(),
+            when_to_use: parsed.entry.when_to_use.clone(),
+            version: parsed.entry.version.clone(),
+            source: parsed.source.to_string(),
+            // `enabled` 是界面上的"停用"开关，扫描这条路上恒为 true（Kotlin 同）
+            enabled: true,
+            user_invocable: parsed.user_invocable,
+            model_invocable: parsed.model_invocable,
+            digest: Some(parsed.digest.clone()),
+            size_bytes: parsed.size_bytes,
+            file_count: parsed.file_count,
+            updated_at: Some(parsed.updated_at.clone()),
+            validation_error: parsed.validation_error.clone(),
+            conflict,
+            origin: None,
+        }
+    }
+}
+
+/// 两个根目录（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`）。
+///
+/// **只有这一处拼路径**：端点的 `roots` / `scan` / `save` 全从它来 ——
+/// 分开拼的话，发布包（便携式）与源码树两种布局就会有一处拼错。
+pub fn roots_of(state: &crate::routes::AppState) -> (PathBuf, PathBuf) {
+    let storage = state.media_dir().parent().unwrap_or(state.media_dir()).to_path_buf();
+    (
+        state.project_root().join("skills").join("builtin"),
+        storage.join("ai").join("skills"),
+    )
+}
+
+/// `GET /api/ai/skills` —— 全量清单（**含非法项**，AIH-038）。
+pub fn list(state: &crate::routes::AppState) -> Vec<SkillDto> {
+    let (builtin, user) = roots_of(state);
+    scan_with_conflict(&builtin, &user)
+        .iter()
+        .map(|(parsed, conflict)| SkillDto::of(parsed, conflict.clone()))
+        .collect()
+}
+
+/// 投放口的位置（`SkillRootsDto`）：界面要显示绝对路径，用户得知道往哪个文件夹拷。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillRootsDto {
+    pub user_root: String,
+    pub builtin_root: String,
+    pub user_root_exists: bool,
+}
+
+pub fn roots_dto(state: &crate::routes::AppState) -> SkillRootsDto {
+    let (builtin, user) = roots_of(state);
+    SkillRootsDto {
+        user_root: user.to_string_lossy().to_string(),
+        builtin_root: builtin.to_string_lossy().to_string(),
+        user_root_exists: user.is_dir(),
+    }
+}
+
+/// 工具层的稳定错误码（Kotlin `ToolFailure(code, message)`，经 `toolGuard` 变成
+/// `AiException` → **400 + `{error: 稳定码, detail: 人话}`**）。
+///
+/// 为什么单列一个类型：这三档（非法名 / 只读 / 不合法）**必须**原样把码传出去 ——
+/// 一律写成 `CONFIG_ERROR` 的话，界面就没法按码分支（"这个名字不能用"与"内置的不能删"
+/// 是两种完全不同的处置）。
+pub struct SkillFailure {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl SkillFailure {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self { code, message: message.into() }
+    }
+
+    pub fn into_api_error(self) -> crate::routes::ApiError {
+        crate::routes::ApiError::ai(self.code, self.message)
+    }
+}
+
+/// `SkillStore.validateName`。
+pub fn validate_name(name: &str) -> Result<(), SkillFailure> {
+    if valid_name(name) {
+        return Ok(());
+    }
+    Err(SkillFailure::new(
+        "INVALID_SKILL_NAME",
+        format!("非法 skill 名「{name}」：只允许小写字母 / 数字 / 连字符，且以字母或数字开头（≤64 字符）"),
+    ))
+}
+
+/// `safeChild`：把 `<name>` 拼到用户根下，**并确认没逃出去**（`..` / 绝对路径都不行）。
+fn safe_child(root: &Path, name: &str) -> Result<PathBuf, SkillFailure> {
+    // `Path::join` 遇到绝对路径会**整段替换**（`join("D:\\x")` = `D:\x`）—— 先挡掉
+    if Path::new(name).is_absolute() || name.contains(['/', '\\']) {
+        return Err(SkillFailure::new("PATH_DENIED", format!("非法 skill 路径：{name}")));
+    }
+    let child = root.join(name);
+    if !child.starts_with(root) {
+        return Err(SkillFailure::new("PATH_DENIED", format!("非法 skill 路径：{name}")));
+    }
+    Ok(child)
+}
+
+/// 读一个 skill 的**详情**（元数据 + 正文）：`(dto, 去 frontmatter 的正文)`。
+///
+/// 三档"没有"分清（照抄 Kotlin）：没有这个名字 → `None`（路由翻成 `CONFIG_ERROR`）；
+/// 有但不合法 → `SKILL_INVALID`；有合法但正文文件找不到 → `SKILL_NOT_FOUND`。
+pub fn read_detail(
+    state: &crate::routes::AppState,
+    name: &str,
+) -> Result<Option<(SkillDto, String)>, SkillFailure> {
+    let found = list(state).into_iter().find(|dto| dto.name == name);
+    let Some(dto) = found else { return Ok(None) };
+    if let Some(error) = &dto.validation_error {
+        return Err(SkillFailure::new(
+            "SKILL_INVALID",
+            format!("skill「{name}」不合法，不能加载：{error}"),
+        ));
+    }
+    let (builtin, user) = roots_of(state);
+    let file = file_of(&builtin, &user, name)
+        .map(|(path, _)| path)
+        .ok_or_else(|| SkillFailure::new("SKILL_NOT_FOUND", format!("找不到 skill「{name}」的正文文件")))?;
+    let raw = std::fs::read_to_string(&file)
+        .map_err(|e| SkillFailure::new("IO_ERROR", format!("读不了 skill「{name}」的正文：{e}")))?;
+    let (_, body) = parse_front_matter(&raw);
+    Ok(Some((dto, body.trim().to_string())))
+}
+
+/// `SkillStore.render`：写盘的格式（**逐字**，包括 `version: 1` 那个固定值）。
+fn render(name: &str, description: &str, when_to_use: Option<&str>, body: &str) -> String {
+    let mut out = String::new();
+    out.push_str("---\n");
+    out.push_str(&format!("name: {name}\n"));
+    out.push_str(&format!("description: {}\n", description.replace('\n', " ")));
+    if let Some(when) = when_to_use.map(str::trim).filter(|w| !w.is_empty()) {
+        out.push_str(&format!("whenToUse: {}\n", when.replace('\n', " ")));
+    }
+    out.push_str("version: 1\n");
+    out.push_str("---\n\n");
+    out.push_str(body.trim());
+    out.push('\n');
+    out
+}
+
+/// `POST /api/ai/skills` —— 注册 / 覆盖一个 skill（**永远写用户根**）。
+pub fn save(
+    state: &crate::routes::AppState,
+    name: &str,
+    description: &str,
+    when_to_use: Option<&str>,
+    content: &str,
+) -> Result<SkillDto, SkillFailure> {
+    validate_name(name)?;
+    let desc = description.trim();
+    if desc.is_empty() {
+        return Err(SkillFailure::new("INVALID_ARGUMENT", "description 必填：说明这个 skill 什么时候用"));
+    }
+    // Kotlin 的 `String.length` 是 **UTF-16 码元**数
+    let desc_len = desc.encode_utf16().count();
+    if desc_len > MAX_DESCRIPTION {
+        return Err(SkillFailure::new(
+            "INVALID_ARGUMENT",
+            format!("description 太长（{desc_len} > {MAX_DESCRIPTION} 字符）"),
+        ));
+    }
+    let body = content.trim();
+    if body.is_empty() {
+        return Err(SkillFailure::new("INVALID_ARGUMENT", "skill 正文不能为空"));
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(SkillFailure::new(
+            "INVALID_ARGUMENT",
+            format!("skill 正文太大（{} > {MAX_BODY_BYTES} 字节）", body.len()),
+        ));
+    }
+
+    let (_, user_root) = roots_of(state);
+    std::fs::create_dir_all(&user_root)
+        .map_err(|e| SkillFailure::new("IO_ERROR", format!("建不了 skill 目录（{}）：{e}", user_root.display())))?;
+    let dir = safe_child(&user_root, name)?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| SkillFailure::new("IO_ERROR", format!("建不了 skill 目录（{}）：{e}", dir.display())))?;
+    let file = dir.join("SKILL.md");
+    std::fs::write(&file, render(name, desc, when_to_use, body))
+        .map_err(|e| SkillFailure::new("IO_ERROR", format!("写不了 skill 文件（{}）：{e}", file.display())))?;
+
+    list(state)
+        .into_iter()
+        .find(|dto| dto.name == name)
+        .ok_or_else(|| SkillFailure::new("IO_ERROR", format!("写入后读不到 skill「{name}」")))
+}
+
+/// `DELETE /api/ai/skills/{name}` —— **只允许删用户来源**（内置受保护，AIH-037）。
+///
+/// 返回 `Ok(false)` = 没有这个名字（Kotlin 回 `{deleted:false}`，**不是 404**）；
+/// 删目录时连 `references/` 一起删（那是 bundle 的一部分）。
+pub fn delete(state: &crate::routes::AppState, name: &str) -> Result<bool, SkillFailure> {
+    validate_name(name)?;
+    let found = list(state).into_iter().find(|dto| dto.name == name);
+    let Some(dto) = found else { return Ok(false) };
+    if dto.source != "user" {
+        return Err(SkillFailure::new(
+            "SKILL_READONLY",
+            format!("「{name}」是内置 skill，只能停用不能删除"),
+        ));
+    }
+    let (builtin, user_root) = roots_of(state);
+    let Some((file, _)) = file_of(&builtin, &user_root, name) else { return Ok(false) };
+    let _ = std::fs::remove_file(&file);
+    // bundle 目录：整个删掉（含 references/）；平铺 `<name>.md` 只删文件
+    if let Some(parent) = file.parent() {
+        if parent != user_root && parent.starts_with(&user_root) {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
+    Ok(true)
+}
+
+/// `SkillAutoRegisterResult`：这次补了哪些、哪些放进来也没法用。
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillAutoRegisterResult {
+    pub registered: i64,
+    pub names: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+/// 名字兜底：把文件名 / 目录名收敛成 kebab-case（`SkillStore.slugOf`）。
+pub fn slug_of(raw: &str) -> Option<String> {
+    let mut slug = String::new();
+    let mut last_dash = true; // 前导的连字符要去掉
+    for ch in raw.trim().to_lowercase().chars() {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            slug.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let slug: String = slug.trim_matches('-').chars().take(64).collect();
+    let slug = slug.trim_matches('-').to_string();
+    if !slug.is_empty() && valid_name(&slug) {
+        Some(slug)
+    } else {
+        None
+    }
+}
+
+/// 没有 description 时，用正文第一行（去掉标题井号之类的标记）兜一个。
+fn describe(body: &str, label: &str) -> String {
+    let first = body
+        .lines()
+        .map(|line| line.trim().trim_start_matches(['#', '>', '-', '*', ' ', '\t']).trim())
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let text = if first.is_empty() { format!("从 {label} 自动登记") } else { first.to_string() };
+    // Kotlin `take(160)` 是 UTF-16 码元
+    crate::memory::take_utf16(&text, AUTO_DESCRIPTION_CHARS)
+}
+
+/// 目录项 → (正文文件, 名字兜底)；不是 skill 条目返回 `None`（`SkillStore.entryOf`）。
+fn entry_of(entry: &Path) -> Option<(PathBuf, String)> {
+    let label = entry.file_name()?.to_string_lossy().to_string();
+    if is_dir_no_follow(entry) {
+        for candidate in ["SKILL.md", "skill.md"] {
+            let file = entry.join(candidate);
+            if file.is_file() {
+                return Some((file, label));
+            }
+        }
+        return None;
+    }
+    if label.to_lowercase().ends_with(".md") {
+        let stem = label
+            .strip_suffix(".md")
+            .or_else(|| label.strip_suffix(".MD"))
+            .unwrap_or(&label)
+            .to_string();
+        return Some((entry.to_path_buf(), stem));
+    }
+    None
+}
+
+/// `POST /api/ai/skills/rescan` —— 把丢进用户目录、**还没有 frontmatter** 的 skill 自动登记。
+///
+/// 为什么需要它：用户目录就是"把 skill 拷进来就算装好"的投放口，而从别处拷来的 `.md`
+/// 通常不带 frontmatter，按 AIH-038 的规矩那属于非法、不能加载 —— 用户会以为"拷进去没用"。
+///
+/// **已经有 frontmatter 的文件一律不碰**（哪怕它不合法）：那是用户自己写的内容。
+pub fn auto_register(state: &crate::routes::AppState) -> SkillAutoRegisterResult {
+    let (_, user_root) = roots_of(state);
+    if let Err(e) = std::fs::create_dir_all(&user_root) {
+        return SkillAutoRegisterResult {
+            registered: 0,
+            names: Vec::new(),
+            errors: vec![format!("建不了投放口（{}）：{e}", user_root.display())],
+        };
+    }
+    let mut names: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    let mut entries: Vec<PathBuf> = match std::fs::read_dir(&user_root) {
+        Ok(read) => read.flatten().map(|e| e.path()).collect(),
+        Err(e) => {
+            return SkillAutoRegisterResult {
+                registered: 0,
+                names: Vec::new(),
+                errors: vec![format!("扫描投放口失败：{e}")],
+            }
+        }
+    };
+    // Kotlin 是 `Files.list(userRoot).sorted()` —— 按**整个路径**排，这里同样
+    entries.sort();
+
+    for entry in entries {
+        let label = entry
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let Some((file, fallback)) = entry_of(&entry) else { continue };
+        let Ok(raw) = std::fs::read_to_string(&file) else {
+            errors.push(format!("{label}：读不了"));
+            continue;
+        };
+        // 已经有 frontmatter：用户（或 AI）自己写过了，不碰
+        if !parse_front_matter(&raw).0.is_empty() {
+            continue;
+        }
+        let Some(name) = slug_of(&fallback) else {
+            errors.push(format!(
+                "{label}：文件名转不成 kebab-case 的 skill 名（中文名请在里面写 frontmatter 的 name）"
+            ));
+            continue;
+        };
+        let body = raw.trim();
+        if body.is_empty() {
+            errors.push(format!("{label}：正文为空"));
+            continue;
+        }
+        if body.len() > MAX_BODY_BYTES {
+            errors.push(format!("{label}：正文超过 {MAX_BODY_BYTES} 字节"));
+            continue;
+        }
+        match std::fs::write(&file, render(&name, &describe(body, &label), None, body)) {
+            Ok(()) => names.push(name),
+            Err(e) => errors.push(format!("{label}：写入失败（{e}）")),
+        }
+    }
+
+    errors.truncate(20);
+    SkillAutoRegisterResult {
+        registered: names.len() as i64,
+        names,
+        errors,
+    }
 }
 
 /// 可以进系统提示的 skills（校验不过的**不进**，但也不是"没看见"——见文件头第 1 条）。
@@ -445,8 +955,9 @@ pub fn scan_all(builtin_root: &Path, user_root: &Path) -> Vec<ScannedSkill> {
     scan(builtin_root, user_root)
         .into_iter()
         .map(|s| {
-            // 先算错误再搬字段（`entry.when_to_use` 是 move，之后不能再借 `s`）
-            let error = if s.valid { String::new() } else { validation_error(&s) };
+            // `validation_error` 现在就是 `parse_one` 里那条**原话**（以前这里是按 `valid`
+            // 反推一句概括，而 `valid=false` 的原因有五种，概括出来的话与界面看到的不一样）
+            let error = s.validation_error.clone().unwrap_or_default();
             ScannedSkill {
                 name: s.entry.name,
                 description: s.entry.description,
@@ -468,18 +979,6 @@ pub struct ScannedSkill {
     pub valid: bool,
     /// 非空 = 不合格，内容是给人看的原因
     pub error: String,
-}
-
-/// 不合格的原因（与 Kotlin `parseOne` 里那几条 `fail(...)` 一一对应）。
-fn validation_error(skill: &ParsedSkill) -> String {
-    let name = &skill.entry.name;
-    if !valid_name(name) {
-        return "name 必须是 kebab-case（小写字母 / 数字 / 连字符，≤64）".to_string();
-    }
-    if skill.entry.description.trim().is_empty() {
-        return "缺少 description".to_string();
-    }
-    "正文为空或超过 256KB".to_string()
 }
 
 /// `Files.isDirectory(path, NOFOLLOW_LINKS)`：**不看符号链接指向什么**。

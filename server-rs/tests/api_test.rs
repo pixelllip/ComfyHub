@@ -6043,6 +6043,298 @@ async fn read_sse_with_headers(
     String::from_utf8_lossy(&bytes).to_string()
 }
 
+// ---------------------------------------------------------------------------
+//  Skills 六条（P4 第 35 步）
+// ---------------------------------------------------------------------------
+
+/// 夹具里的两个 skill 根：`<root>/skills/builtin`（只读）与 `<root>/ai/skills`（投放口）。
+fn skill_dirs(state: &comfyhub_server_rs::routes::AppState) -> (std::path::PathBuf, std::path::PathBuf) {
+    let storage = state.media_dir().parent().unwrap().to_path_buf();
+    (state.project_root().join("skills").join("builtin"), storage.join("ai").join("skills"))
+}
+
+/// `GET /skills/roots` 报的两个路径必须**就是**读写实际用的那两个（拼错一处就是
+/// "界面让你往 A 拷、程序去 B 找"，而这种错不报任何错）。
+#[tokio::test]
+async fn skills_roots_points_at_the_directories_the_endpoints_really_use() {
+    let state = state();
+    let (builtin, user) = skill_dirs(&state);
+
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/skills/roots").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(keys(&body), vec!["builtinRoot", "userRoot", "userRootExists"]);
+    assert_eq!(body["userRoot"], user.to_string_lossy().to_string());
+    assert_eq!(body["builtinRoot"], builtin.to_string_lossy().to_string());
+    assert_eq!(body["userRootExists"], false, "还没建过投放口");
+
+    // 写一个进去之后 `userRootExists` 要翻成 true（**现场算**，不是缓存）
+    let (status, _) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/skills",
+        serde_json::json!({ "name": "demo", "description": "演示", "content": "正文" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (_, body) = get_json(router_for(state.clone()), "/api/ai/skills/roots").await;
+    assert_eq!(body["userRootExists"], true);
+}
+
+/// 注册 → 列表 → 详情 → 删除的完整一轮，以及三档失败（非法名 / 缺字段 / 不存在的名字）。
+///
+/// 盯的是**形状与稳定错误码**：`{error: 稳定码, detail: 人话}` 的码写错，界面就没法按码
+/// 分支（"这个名字不能用"与"内置的不能删"是两种完全不同的处置）。
+#[tokio::test]
+async fn skills_crud_round_trip_with_stable_error_codes() {
+    let state = state();
+    let (_, user_root) = skill_dirs(&state);
+
+    // 空清单（没有内置目录、投放口也还没建）
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/skills").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!([]));
+
+    // 注册：201 + **15 个键**（可空的那 7 个一个都不许自己冒出来）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/skills",
+        serde_json::json!({
+            "name": "demo-skill",
+            "description": "演示用",
+            "whenToUse": "用户说'演示'时",
+            "content": "正文第一行\n正文第二行"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        keys(&body),
+        vec![
+            "description", "digest", "enabled", "fileCount", "modelInvocable", "name", "sizeBytes",
+            "source", "updatedAt", "userInvocable", "version", "whenToUse"
+        ],
+        "version: 1 是 render 写死的 → 会读回来；conflict / validationError / origin 不该出现"
+    );
+    assert_eq!(body["name"], "demo-skill");
+    assert_eq!(body["source"], "user");
+    assert_eq!(body["enabled"], true);
+    assert_eq!(body["userInvocable"], true);
+    assert_eq!(body["modelInvocable"], true);
+    assert_eq!(body["version"], "1");
+    assert_eq!(body["fileCount"], 1);
+    assert!(body["sizeBytes"].as_i64().unwrap() > 0);
+    assert_eq!(body["digest"].as_str().unwrap().len(), 16, "sha256 前 16 位");
+
+    // 落盘的格式（render 逐字）：frontmatter + 空行 + 正文 + 结尾换行
+    let file = user_root.join("demo-skill").join("SKILL.md");
+    let raw = std::fs::read_to_string(&file).expect("文件应当写出来了");
+    assert_eq!(
+        raw,
+        "---\nname: demo-skill\ndescription: 演示用\nwhenToUse: 用户说'演示'时\nversion: 1\n---\n\n正文第一行\n正文第二行\n"
+    );
+
+    // 列表里就一条
+    let (_, body) = get_json(router_for(state.clone()), "/api/ai/skills").await;
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["name"], "demo-skill");
+
+    // 详情：元数据 + **去 frontmatter 的正文**
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/skills/demo-skill").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(keys(&body), vec!["content", "skill"]);
+    assert_eq!(body["content"], "正文第一行\n正文第二行");
+    assert_eq!(body["skill"]["name"], "demo-skill");
+
+    // 不存在的名字 → 400 CONFIG_ERROR（**不是 404**：Dart 按 detail 给人看）
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/skills/nope").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert_eq!(body["detail"], "没有名为 nope 的 skill");
+
+    // 非法名 → 稳定码 INVALID_SKILL_NAME
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/skills",
+        serde_json::json!({ "name": "Bad_Name", "description": "x", "content": "y" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "INVALID_SKILL_NAME");
+    assert_eq!(
+        body["detail"],
+        "非法 skill 名「Bad_Name」：只允许小写字母 / 数字 / 连字符，且以字母或数字开头（≤64 字符）"
+    );
+
+    // 缺 description / 空正文 → INVALID_ARGUMENT（两条不同的文案）
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/skills",
+        serde_json::json!({ "name": "demo2", "description": "   ", "content": "y" }),
+    )
+    .await;
+    assert_eq!(body["error"], "INVALID_ARGUMENT");
+    assert_eq!(body["detail"], "description 必填：说明这个 skill 什么时候用");
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/skills",
+        serde_json::json!({ "name": "demo2", "description": "x", "content": "   " }),
+    )
+    .await;
+    assert_eq!(body["detail"], "skill 正文不能为空");
+
+    // 删除 → `{deleted:true, id}`；再删一次是 `{deleted:false}`（**不是 404**，幂等）
+    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/skills/demo-skill").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({ "deleted": true, "id": "demo-skill" }));
+    assert!(!file.exists(), "bundle 目录要整个删掉（含 references/）");
+    let (_, body) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/skills/demo-skill").await;
+    assert_eq!(body, serde_json::json!({ "deleted": false, "id": "demo-skill" }));
+}
+
+/// 内置 skill：**只能停用不能删除**；同名时用户版胜出并带上 `conflict`（AIH-037）。
+///
+/// 这两条合起来才是"用户能覆盖内置的、但删不掉项目自带的那份"。
+#[tokio::test]
+async fn skills_builtin_is_readonly_and_user_override_wins_with_a_conflict_hint() {
+    let state = state();
+    let (builtin, user_root) = skill_dirs(&state);
+    std::fs::create_dir_all(builtin.join("native")).unwrap();
+    std::fs::write(
+        builtin.join("native").join("SKILL.md"),
+        "---\nname: native\ndescription: 内置版\n---\n内置正文",
+    )
+    .unwrap();
+
+    let (_, body) = get_json(router_for(state.clone()), "/api/ai/skills").await;
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["source"], "builtin");
+    assert!(body[0].get("conflict").is_none(), "没被覆盖时不该有 conflict 键");
+
+    // 删内置 → SKILL_READONLY（且文件还在）
+    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/skills/native").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "SKILL_READONLY");
+    assert_eq!(body["detail"], "「native」是内置 skill，只能停用不能删除");
+    assert!(builtin.join("native").join("SKILL.md").exists());
+
+    // 用户在投放口放同名 → 用户版胜出，带 conflict 提示，且 source = user
+    std::fs::create_dir_all(user_root.join("native")).unwrap();
+    std::fs::write(
+        user_root.join("native").join("SKILL.md"),
+        "---\nname: native\ndescription: 用户版\n---\n用户正文",
+    )
+    .unwrap();
+    let (_, body) = get_json(router_for(state.clone()), "/api/ai/skills").await;
+    assert_eq!(body.as_array().unwrap().len(), 1, "同名只留一条");
+    assert_eq!(body[0]["source"], "user");
+    assert_eq!(body[0]["description"], "用户版");
+    assert_eq!(body[0]["conflict"], "覆盖了同名内置 skill");
+
+    // 详情读到的也是用户那份正文
+    let (_, body) = get_json(router_for(state.clone()), "/api/ai/skills/native").await;
+    assert_eq!(body["content"], "用户正文");
+
+    // 非法项（目录名与 frontmatter 的 name 不一致）照样列出来 + 带 validationError，
+    // 但**详情读不了**（SKILL_INVALID）—— AIH-038 的两半
+    std::fs::create_dir_all(user_root.join("broken")).unwrap();
+    std::fs::write(
+        user_root.join("broken").join("SKILL.md"),
+        "---\nname: other-name\ndescription: x\n---\n正文",
+    )
+    .unwrap();
+    let (_, body) = get_json(router_for(state.clone()), "/api/ai/skills").await;
+    let broken = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|dto| dto["name"] == "other-name")
+        .expect("非法项也要列出来");
+    assert_eq!(
+        broken["validationError"],
+        "frontmatter 的 name「other-name」与目录名「broken」不一致"
+    );
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/skills/other-name").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "SKILL_INVALID");
+    assert_eq!(
+        body["detail"],
+        "skill「other-name」不合法，不能加载：frontmatter 的 name「other-name」与目录名「broken」不一致"
+    );
+}
+
+/// 投放口自动登记（`POST /skills/rescan`）：**只补没有 frontmatter 的文件**，
+/// 已经有 frontmatter 的一个字节都不许改（那是用户自己写的内容）。
+#[tokio::test]
+async fn skills_rescan_registers_plain_files_and_never_touches_frontmatter() {
+    let state = state();
+    let (_, user_root) = skill_dirs(&state);
+    std::fs::create_dir_all(&user_root).unwrap();
+
+    // ① 平铺 `.md`，没有 frontmatter → 补 name（文件名兜底）+ description（正文第一行）
+    std::fs::write(user_root.join("flat-one.md"), "# 大标题\n这是正文。\n第二行").unwrap();
+    // ② 已经有 frontmatter（而且**不合法**：缺 description）→ 一个字节都不许改
+    let already = "---\nname: already-there\n---\n正文\n";
+    std::fs::write(user_root.join("already-there.md"), already).unwrap();
+    // ③ 中文文件名 → 收敛不出 kebab-case，如实报错（别静默跳过）
+    std::fs::write(user_root.join("中文名.md"), "正文").unwrap();
+    // ④ 空正文
+    std::fs::write(user_root.join("empty-one.md"), "   \n").unwrap();
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/skills/rescan",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(keys(&body), vec!["errors", "names", "registered", "skills"]);
+    assert_eq!(body["registered"], 1);
+    assert_eq!(body["names"], serde_json::json!(["flat-one"]));
+    let errors: Vec<String> = body["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(errors.len(), 2, "两件放进来也没法用的东西要**都**说出来：{errors:?}");
+    assert!(errors.iter().any(|e| e.contains("中文名.md") && e.contains("kebab-case")), "{errors:?}");
+    assert!(errors.iter().any(|e| e.contains("empty-one.md") && e.contains("正文为空")), "{errors:?}");
+
+    // 补出来的 frontmatter：name 来自文件名、description 来自正文第一行（去掉了 `#`）
+    let raw = std::fs::read_to_string(user_root.join("flat-one.md")).unwrap();
+    assert_eq!(
+        raw,
+        "---\nname: flat-one\ndescription: 大标题\nversion: 1\n---\n\n# 大标题\n这是正文。\n第二行\n"
+    );
+    // 已经有 frontmatter 的**一个字节都没变**
+    assert_eq!(std::fs::read_to_string(user_root.join("already-there.md")).unwrap(), already);
+
+    // rescan 的 `skills` 是**扫描后的完整清单**（含那条非法的 already-there）
+    let names: Vec<&str> = body["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|dto| dto["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"flat-one"), "{names:?}");
+    assert!(names.contains(&"already-there"), "{names:?}");
+
+    // 再跑一次：没有可登记的了（幂等 —— `flat-one` 现在已经有 frontmatter）
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/skills/rescan",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(body["registered"], 0);
+}
+
 /// `id` / `event` / `data` 三元组（`id` 缺席的心跳帧给 `None`）。
 fn parse_sse(body: &str) -> Vec<(Option<i64>, String, Value)> {
     let mut out = Vec::new();
