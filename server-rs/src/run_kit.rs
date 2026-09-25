@@ -47,7 +47,11 @@ pub const SCHEMA_VERSION: i64 = 1;
 const KEY_VERSION: &str = "ai.runkit.version";
 const KEY_HASH: &str = "ai.runkit.hash";
 const KEY_REVOKED: &str = "ai.runkit.revoked";
-const KEY_NSFW: &str = "ai.nsfw";
+/// `app_settings` 里 NSFW 两档开关那一行的键。
+///
+/// `pub` 是为了让界面端点（`ai_settings.rs` 的 `GET/PUT /api/ai/nsfw`）读写**同一行** ——
+/// 各写一份键名就会出现"界面里开了、run-kit 说没开"这种两端不一致。
+pub const KEY_NSFW: &str = "ai.nsfw";
 
 /// 单图内联上限（Kotlin `AttachmentPolicy.MAX_INLINE_BYTES`，8MB）。
 pub const MAX_INLINE_BYTES: i64 = 8 * 1024 * 1024;

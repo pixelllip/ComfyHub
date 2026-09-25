@@ -5482,6 +5482,159 @@ async fn skipped_questions_are_reported_as_unanswered() {
     gateway.abort();
 }
 
+/// **权限档与 NSFW 开关**（P4 第 33 步，界面端点第一批）：设置页那两张卡的地基。
+///
+/// 这一条盯四件事：① `GET /api/ai/tools/policy` 的键集合就是 Kotlin 那 11 个；
+/// ② `PUT` **只改传了的字段**、并把权限档真的写进库（下一轮 Run 读的就是它）；
+/// ③ 非法权限档 **400**（不静默回落 —— 那会把用户的意图改成另一种行为）；
+/// ④ NSFW 的 `effectiveBlur` 是"两个都开"的结论，**不是**前端再算一遍。
+#[tokio::test]
+async fn tool_policy_and_nsfw_endpoints() {
+    let state = state();
+
+    // ① 出厂态：11 个键、权限档 ask、白名单是展开后的绝对路径
+    let (status, policy) = get_json(router_for(state.clone()), "/api/ai/tools/policy").await;
+    assert_eq!(status, StatusCode::OK, "{policy}");
+    assert_eq!(
+        keys(&policy),
+        vec![
+            "autoReadRoots",
+            "defaultWriteRoot",
+            "maxCallsPerRun",
+            "maxComfyQueriesPerRun",
+            "maxReadBytes",
+            "maxToolSteps",
+            "maxWriteBytes",
+            "overrides",
+            "permissionMode",
+            "readRoots",
+            "writeRoots",
+        ]
+    );
+    assert_eq!(policy["permissionMode"], "ask");
+    assert_eq!(policy["maxToolSteps"], 16);
+    assert_eq!(policy["maxCallsPerRun"], 48);
+    assert!(
+        policy["writeRoots"][0].as_str().unwrap().ends_with("comfyui"),
+        "回的是展开后的绝对路径：{policy}"
+    );
+
+    // ② 切到「自动允许（无需批准）」→ 写进库、回读就是 full
+    let (status, saved) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/tools/policy",
+        serde_json::json!({ "permissionMode": "full" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["permissionMode"], "full");
+    assert_eq!(saved["writeRoots"], policy["writeRoots"], "没传的字段照旧");
+    let stored: String = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT v FROM app_settings WHERE k = 'ai.tools.policy'",
+                [],
+                |row| row.get::<_, String>(0),
+            )?)
+        })
+        .unwrap();
+    assert!(stored.contains("\"permissionMode\":\"full\""), "{stored}");
+
+    // ③ 非法权限档 → 400 且 `detail` 是人话（AI 错误那一档）
+    let (status, err) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/tools/policy",
+        serde_json::json!({ "permissionMode": "whatever" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
+    assert_eq!(err["error"], "CONFIG_ERROR");
+    assert!(err["detail"].as_str().unwrap().contains("未知的权限档"), "{err}");
+    // 真的没被改动（"拒绝"不能变成"悄悄按 ask 存下来"）
+    let (_, after) = get_json(router_for(state.clone()), "/api/ai/tools/policy").await;
+    assert_eq!(after["permissionMode"], "full", "被拒的请求不许改库");
+    // 大小写与空白按 Kotlin 的口径**先 trim + lowercase**（"FULL " 是合法的 full，
+    // 存进去的是规范化之后的值 —— 库里别留一个带空格的权限档）
+    let (status, saved) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/tools/policy",
+        serde_json::json!({ "permissionMode": " FULL " }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["permissionMode"], "full");
+
+    // ④ 工具清单：只列这台后端能跑的（4 个），六个键与 `AiToolInfo` 对齐
+    let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
+    assert_eq!(status, StatusCode::OK);
+    let tools = tools.as_array().unwrap();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["ask_user_question", "list_skills", "load_skill", "remember"]);
+    assert_eq!(
+        keys(&tools[0]),
+        vec!["access", "category", "description", "mutating", "name", "overridden"]
+    );
+    assert_eq!(tools[0]["category"], "ask");
+    assert_eq!(tools[0]["access"], "allow");
+    assert_eq!(tools[3]["category"], "memory");
+    assert_eq!(tools[3]["mutating"], true, "`remember` 会写盘");
+    assert_eq!(tools[0]["overridden"], false);
+    // 覆盖过之后界面要能标出来
+    let (_, saved) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/tools/policy",
+        serde_json::json!({ "overrides": { "remember": "deny" } }),
+    )
+    .await;
+    assert_eq!(saved["permissionMode"], "full", "没传权限档 → 照旧");
+    assert_eq!(saved["overrides"]["remember"], "deny");
+    let (_, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
+    let remember = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "remember")
+        .unwrap()
+        .clone();
+    assert_eq!(remember["access"], "deny");
+    assert_eq!(remember["overridden"], true);
+
+    // ⑤ NSFW：出厂两档都关、版本号在；PUT 之后 effectiveBlur 才是 true
+    let (status, nsfw) = get_json(router_for(state.clone()), "/api/ai/nsfw").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(keys(&nsfw), vec!["blur", "effectiveBlur", "enabled", "promptVersion"]);
+    assert_eq!(nsfw["enabled"], false);
+    assert_eq!(nsfw["effectiveBlur"], false);
+    assert!(nsfw["promptVersion"].as_str().unwrap().starts_with('v'), "{nsfw}");
+
+    // 只开 enabled（不传 blur）→ blur 按**关**处理（漏传不能让打码被悄悄打开）
+    let (_, saved) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/nsfw",
+        serde_json::json!({ "enabled": true }),
+    )
+    .await;
+    assert_eq!(saved["enabled"], true);
+    assert_eq!(saved["blur"], false);
+    assert_eq!(saved["effectiveBlur"], false, "两个都开才生效");
+    // 两档都开 → effectiveBlur
+    let (_, saved) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/nsfw",
+        serde_json::json!({ "enabled": true, "blur": true }),
+    )
+    .await;
+    assert_eq!(saved["effectiveBlur"], true);
+    // run-kit 读的是**同一行**（各写一份键名就会出现"界面开了、提示词没注入"）
+    assert_eq!(comfyhub_server_rs::run_kit::nsfw_enabled(&state).unwrap(), true);
+}
+
 /// 上游明确拒绝（429）：错误码要归到 `RATE_LIMIT`，而不是笼统的"失败了"。
 #[tokio::test]
 async fn executor_reports_the_stable_code_for_an_upstream_rejection() {

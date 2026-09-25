@@ -225,6 +225,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/questions/{questionId}", get(get_question))
         .route("/api/ai/questions/{questionId}/answer", axum::routing::post(answer_question))
         .route("/api/ai/questions/{questionId}/skip", axum::routing::post(skip_question))
+        // 界面端点第一批（P4 第 33 步）：权限档 + 工具清单 + NSFW 开关。
+        // 权限档决定"需审批的工具要不要等人点"，界面切不到它 = 第 31 步的闸门永远拦着。
+        .route("/api/ai/tools", get(ai_tools))
+        .route("/api/ai/tools/policy", get(ai_tool_policy).put(put_tool_policy))
+        .route("/api/ai/nsfw", get(ai_nsfw).put(put_nsfw))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -883,6 +888,41 @@ async fn skip_question(
         accepted: true,
         answer: String::new(),
     }))
+}
+
+// ---------------------------------------------------------------------------
+//  界面端点第一批（P4 第 33 步）：工具 / 权限档 / NSFW
+// ---------------------------------------------------------------------------
+
+/// `GET /api/ai/tools` —— 这台后端**能跑**的工具（界面用它画权限表）。
+async fn ai_tools(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::ai_settings::list_tools(&state)?))
+}
+
+/// `GET /api/ai/tools/policy` —— 生效的策略（展开后的绝对路径 + 两条预算 + 权限档）。
+async fn ai_tool_policy(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::ai_settings::policy_json(&state)?))
+}
+
+/// `PUT /api/ai/tools/policy` —— 只改传了的字段；非法权限档 400（**不静默回落**）。
+async fn put_tool_policy(
+    State(state): State<AppState>,
+    Json(body): Json<crate::ai_settings::PolicyUpdate>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::ai_settings::save_policy(&state, body)?))
+}
+
+/// `GET /api/ai/nsfw` —— 两档开关 + 生效的打码结论 + 提示词版本号。
+async fn ai_nsfw(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::ai_settings::nsfw_json(&state)?))
+}
+
+/// `PUT /api/ai/nsfw` —— 缺省一律按**关**（漏传一个字段不能让那段提示词被悄悄打开）。
+async fn put_nsfw(
+    State(state): State<AppState>,
+    Json(body): Json<crate::ai_settings::NsfwUpdate>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::ai_settings::save_nsfw(&state, body)?))
 }
 
 // ---------------------------------------------------------------------------
