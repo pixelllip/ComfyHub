@@ -30,6 +30,12 @@
 //! | `GET /api/{prompts,media}/{id}/workflow`、`GET /api/prompts/{id}/api-graph` | ✅ |
 //! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ |
 //! | `GET /api/ai/providers`（不含密钥）、`GET /api/ai/providers/{id}/models` | ✅ |
+//! | **Provider 写侧**：`POST/PUT/DELETE /api/ai/providers`（乐观锁 AIH-007）、`PUT …/models` | ✅（P4 第 37 步） |
+//! | **凭据写侧**：`GET/PUT/DELETE /api/ai/providers/{id}/credentials`、`/api/ai/web-search/credential` | ✅（P4 第 34 步，DPAPI 与 Kotlin 共用一份文件） |
+//! | **Skills 六条**：`/api/ai/skills{,/roots,/rescan,/{name}}` | ✅（P4 第 35 步） |
+//! | **长期记忆五条**：`GET/PUT/DELETE /api/ai/memory`、`POST …/entries`、`POST …/delete` | ✅（P4 第 36 步） |
+//! | **内置模型目录**：`GET /api/ai/builtin/status`、`POST /api/ai/builtin/sync` | ✅（P4 第 38 步） |
+//! | **能力目录状态**：`GET /api/ai/capabilities/status`、`PUT …/probe-toggle` | ✅（P4 第 39 步） |
 //! | `GET /api/ai/conversations`、`/{id}`、`/{id}/messages`（**读侧**：历史会话与有序块） | ✅ |
 //! | `POST/PATCH/DELETE /api/ai/conversations`、`POST …/messages`（**写侧**） | ✅ |
 //! | **Run 生命周期**：`POST …/runs`（202）/ `GET /runs/{id}` / `GET /runs/{id}/events`（**SSE**）/ `POST /runs/{id}/cancel` | ✅（事件流按 `?after=` 从库里拉，见 `run_lifecycle.rs`） |
@@ -37,10 +43,12 @@
 //! | **`/api/ai/pending`**（跨端待办总览：还在等人的提问与工具审批） | ✅ |
 //! | **`/api/auth*` 配对闸门 + `GET /api/ai/credentials` 密钥下行**（inbound auth P0 + 配对第 2 步） | ✅ |
 //! | 扫码配对（`POST /api/auth/pair/start`） | ⛔ **501**（本轮只做"手机发起 + 桌面显示 6 位码"，见 `docs/pairing-design.md` §11.1） |
-//! | **上游 LLM 客户端 / 协议适配器**（第 29 步）与**主循环**（第 30 步） | ⛔ **未搬**：`POST /runs` 会**如实**以 `EXECUTOR_UNAVAILABLE` 收尾，而不是留一个永远转圈的 Run |
-//! | `/api/ai/*` 的其余部分（工具层与审批 R8 / 附件 R9 / skills / memory / tools / nsfw / builtin / capabilities） | ⛔ **未搬**（Kotlin 那边继续服务） |
+//! | `POST /api/ai/capabilities/{refresh,probe}` | ⛔ **501**：要 models.dev 在线数据集 / 要真上游请求（会花钱），不满足"不需要人工校验"这条 |
+//! | **上游 LLM 客户端 / 协议适配器**（第 29 步）与**主循环**（第 30 步） | ✅ 已落地（不带工具、不带附件）；工具层已搬四个本机工具 + 两个闸门（第 31/32 步） |
+//! | **联网三工具**（`web_search` / `web_fetch` / `civitai_search`）与**桌面专属工具**（`comfy_*` / 文件工具） | ⛔ **未搬**（系统提示里那一节暂时指向没下发的工具，见 `tools.rs` 的诚实清单） |
+//! | 附件（R9）：`/api/ai/attachments*` 与内联预算 | ⛔ **未搬**（有附件直接 `UNSUPPORTED_CONTENT`，不假装发得出去） |
 //! | `/api/capture/{status,jobs,poll,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功） |
-//! | R6~R10 的安全防线 | ⛔ **部分重建**（R5 的保留窗口与 seq 纪律已在 `runs.rs`/`events.rs` 落地；R8/R9 未动） |
+//! | R6~R10 的安全防线 | ⛔ **部分重建**（R5 的保留窗口与 seq 纪律已在 `runs.rs`/`events.rs`，R6/R8 已在执行器与工具层，R9/R10 未动） |
 //!
 //! ## 手机现在可以只对着**这一个后端**干活了（2026-09-24，第 22 步之后）
 //!
