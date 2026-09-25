@@ -1,0 +1,115 @@
+//! **真库副本抽查**（工具层专用）—— 默认 `#[ignore]`，只在显式指定时跑。
+//!
+//! # 为什么需要它
+//!
+//! 端点类的批次可以"起服务 + curl"在真库副本上抽查（P4 前 40 步都是那么做的）。
+//! 但**工具层**没有 HTTP 入口：`comfy_get_run` / `comfy_list_workflows` /
+//! 以后的 `comfy_submit` 都是"从执行器里被调到的"。只跑内存夹具的话，
+//! 恰好会漏掉真库上那些"夹具里没有的行与列"（P4 第 40 步之前就栽过一次：
+//! `ai_message_parts` 的复合主键在夹具里根本没有行）。
+//!
+//! 所以这里给工具层留一条**可复用的真库入口**：把库**副本**（绝不要对着真库跑，
+//! 下面的工具里有会写盘的）与真实的 storage / 项目根指进来，直接调 `tools::execute`。
+//!
+//! # 怎么跑
+//!
+//! ```powershell
+//! $spot = Join-Path $env:TEMP 'comfyhub-spot'          # 先建好并拷一份库进去
+//! Copy-Item .db\comfyhub.db "$spot\comfyhub.db"
+//! $env:COMFYHUB_SPOT_DB = "$spot\comfyhub.db"
+//! $env:COMFYHUB_SPOT_STORAGE = "$PWD\storage"          # 只读用途；写类工具请指向副本
+//! $env:COMFYHUB_SPOT_PROJECT_ROOT = "$PWD"
+//! cargo test --manifest-path server-rs\Cargo.toml --test spot_check -- --ignored --nocapture
+//! ```
+//!
+//! 没有设 `COMFYHUB_SPOT_DB` 时**直接跳过**（打印一句），不假装通过。
+
+use comfyhub_server_rs::routes::AppState;
+use comfyhub_server_rs::tools::{self, ToolSession};
+
+/// 打开真库副本 + 真实 storage（没设环境变量就跳过）。
+fn spot_state() -> Option<(AppState, std::path::PathBuf)> {
+    let db = std::env::var("COMFYHUB_SPOT_DB").ok()?;
+    if db.trim().is_empty() || !std::path::Path::new(&db).is_file() {
+        eprintln!("跳过：COMFYHUB_SPOT_DB 没指向一个库文件（{db}）");
+        return None;
+    }
+    let media = match std::env::var("COMFYHUB_SPOT_STORAGE") {
+        Ok(storage) if !storage.trim().is_empty() => std::path::PathBuf::from(storage).join("media"),
+        _ => std::path::Path::new(&db)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("storage")
+            .join("media"),
+    };
+    let conn = comfyhub_server_rs::db::open(std::path::Path::new(&db)).expect("打开库副本");
+    let state = AppState::new(conn, db.clone(), media);
+    // 项目根决定白名单与"三份目录来源"里的第一份，必须与真机一致
+    let root = std::env::var("COMFYHUB_SPOT_PROJECT_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| state.project_root());
+    Some((state, root))
+}
+
+/// 调一个工具并把结果打出来（真库抽查的价值在**看得见的输出**，用例只做基本断言）。
+async fn call(state: &AppState, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+    let policy = comfyhub_server_rs::policy::ToolPolicy::load(state).expect("读策略");
+    let mut session = ToolSession::default();
+    match tools::execute(state, &policy, "spot-run", "spot-conv", name, &arguments, &mut session).await
+    {
+        Ok(out) => {
+            println!("── {name} OK ──\n{}", out.content);
+            out.payload
+        }
+        Err(failure) => {
+            println!("── {name} 失败 ──\n{}：{}", failure.code, failure.message);
+            panic!("真库抽查里 {name} 报错了");
+        }
+    }
+}
+
+/// `comfy_list_workflows` + `comfy_get_run`：真库 + 真 ComfyUI 目录上抽查。
+#[tokio::test]
+#[ignore = "真库副本抽查：需要 COMFYHUB_SPOT_DB / COMFYHUB_SPOT_STORAGE"]
+async fn real_db_spot_check_comfy_queries() {
+    let Some((state, root)) = spot_state() else { return };
+    println!("项目根={}（库=COMFYHUB_SPOT_DB）", root.display());
+
+    // ① 列本机工作流：真机上应当能探到用户 ComfyUI 的 workflows 目录
+    let listed = call(&state, "comfy_list_workflows", serde_json::json!({ "limit": 5 })).await;
+    println!(
+        "目录来源 {} 个，命中 {} 份（total {}）",
+        listed["dirs"].as_array().map(Vec::len).unwrap_or(0),
+        listed["count"],
+        listed["total"]
+    );
+    assert!(listed["files"].is_array());
+
+    // ② 按 runKey 查一条**真库里存在**的捕获记录
+    let run_key: Option<String> = state
+        .with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT run_key FROM capture_runs WHERE run_key IS NOT NULL ORDER BY id DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten())
+        })
+        .unwrap();
+    match run_key {
+        Some(key) => {
+            let found = call(&state, "comfy_get_run", serde_json::json!({ "runKey": key })).await;
+            assert_eq!(found["runKey"], key);
+            assert!(found["status"].is_string());
+            // 可空键**整个不出现**（Kotlin `explicitNulls = false`）
+            for nullable in ["title", "error", "capturedAt", "promptId"] {
+                if found.get(nullable).is_some() {
+                    assert!(!found[nullable].is_null(), "{nullable} 出现了却是 null：{found}");
+                }
+            }
+        }
+        None => println!("真库里一条 capture_runs 都没有 —— 跳过这一半"),
+    }
+}

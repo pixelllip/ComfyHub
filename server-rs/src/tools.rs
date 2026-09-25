@@ -1,4 +1,4 @@
-//! 桌面工具层（P4 第 31 步建地基，第 40 步补桌面文件工具五件）。
+//! 桌面工具层（P4 第 31 步建地基，第 40 步补桌面文件工具五件，第 41 步补 comfy 查询两件）。
 //!
 //! # 现在这一层有什么
 //!
@@ -6,10 +6,14 @@
 //! | --- | --- | --- |
 //! | `list_skills` / `load_skill` / `remember` / `ask_user_question` | `BOTH` | 第 31/32 步（只碰本机） |
 //! | `list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill` | `DESKTOP` | 第 40 步，路径准入在 [`crate::policy`] |
+//! | `comfy_get_run` / `comfy_list_workflows` | `DESKTOP` | 第 41 步，只碰本机库与磁盘（不需要 ComfyUI 在场） |
 //!
-//! 还没搬的：联网三个（要 Keenable / Civitai 客户端 + `EndpointGuard`）、`comfy_*` 十三件
-//! （要 ComfyUI 在场，含 R10 的落点 `comfy_submit`）、官方 comfy-mcp 那 39 个（要
-//! `McpStdioClient`）、`find_model`。**没搬的绝不下发**（`declaredTo = 清单 ∩ 本地实现`）。
+//! 还没搬的：联网三个（要 Keenable / Civitai 客户端 + `EndpointGuard`）、
+//! `comfy_get_status` / `sync_history` / `find_workflow` / `load_workflow` / `submit` /
+//! `use_attachment` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` /
+//! `prune_workflow`（要 ComfyUI 在场、要 `WorkflowConvert` 转换栈、要本机模型清单）、
+//! 官方 comfy-mcp 那 39 个（要 `McpStdioClient`）、`find_model`。
+//! **没搬的绝不下发**（`declaredTo = 清单 ∩ 本地实现`）。
 //!
 //! # 两个清单的差别（别混用）
 //!
@@ -276,12 +280,15 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前九个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
-/// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）。
-/// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端，
-/// `comfy_*` 十三件要 ComfyUI 在场，各自另起批次。
-pub const IMPLEMENTED: [&str; 9] = [
+/// 当前十一个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
+/// + comfy 查询两件（`comfy_get_run` / `comfy_list_workflows`，P4 第 41 步）。
+/// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
+/// `comfy_submit` 那一批要 ComfyUI 在场与整套转换栈（R10 的落点），各自另起批次。
+pub const IMPLEMENTED: [&str; 11] = [
     "ask_user_question",
+    "comfy_get_run",
+    "comfy_list_workflows",
     "delete_skill",
     "list_dir",
     "list_skills",
@@ -354,6 +361,9 @@ pub async fn execute(
         "write_file" => write_file(policy, arguments),
         "register_skill" => register_skill(state, arguments),
         "delete_skill" => delete_skill(state, arguments),
+        // ---- comfy 查询两件（P4 第 41 步，只碰本机库与磁盘）----------------
+        "comfy_get_run" => comfy_get_run(state, arguments),
+        "comfy_list_workflows" => comfy_list_workflows(state, arguments),
         // 清单里没有的（模型幻觉出一个名字 / 这一批还没搬的）——
         // 码与 Kotlin `TOOL_NOT_FOUND` 一致，模型的分支行为才不会两端不同。
         _ => Err(ToolFailure::new(
@@ -783,6 +793,64 @@ fn delete_skill(state: &AppState, arguments: &Value) -> Result<ToolOutcome, Tool
 /// `INVALID_ARGUMENT` 各有各的下一步，改写成 `TOOL_ERROR` 会让模型分不清该怎么办）。
 fn skill_failure(failure: crate::skills::SkillFailure) -> ToolFailure {
     ToolFailure::new(failure.code, failure.message)
+}
+
+/// `comfy_get_run`：按 runKey 查一次已捕获运行（Kotlin `comfyFindRun`）。
+///
+/// 两个入口都认（Kotlin 那边为这个专门加了 `findRunByPromptId`）：UUID 形式的 `run_key`，
+/// 以及**数字**的 `capture_runs.prompt_id`。只认 UUID 的话，模型拿 `comfy_submit` 结果里的
+/// 数字来查就会"刚提交完却说没这次运行"（真实对话里发生过）。
+fn comfy_get_run(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
+    let key = string_arg(arguments, "runKey")?;
+    let trimmed = key.trim();
+    let found = crate::capture::find_run(state, trimmed).map_err(capture_failure)?;
+    let found = match found {
+        Some(info) => Some(info),
+        None => match trimmed.parse::<i64>() {
+            Ok(prompt_id) => {
+                crate::capture::find_run_by_prompt_id(state, prompt_id).map_err(capture_failure)?
+            }
+            Err(_) => None,
+        },
+    };
+    let Some(info) = found else {
+        return Err(ToolFailure::new(
+            "NOT_FOUND",
+            format!(
+                "没有 runKey={trimmed} 的捕获记录（可能还没被轮询到，或不属于本机）。\
+                 注意 comfy_submit 的结果里 `runKey` 是 ComfyUI 的 UUID、\
+                 `capturedPromptId` 是捕获记录的编号，两者都能查。"
+            ),
+        ));
+    };
+    let payload = info.to_json();
+    Ok(ToolOutcome::new(payload.to_string(), payload))
+}
+
+/// `comfy_list_workflows`：列本机 ComfyUI 里已保存的工作流文件（只读）。
+///
+/// 与 `GET /api/capture/workflows` **同一个实现**（[`crate::comfy_dirs::workflows_json`]）——
+/// 三份目录来源、`file:<sha256>` 那把幂等钥匙、`inLibrary` 判定全都不另写一份。
+/// 各写一份的后果是"界面里列得出来、AI 却说没有"（用户 bug ⑤ 的复发形态）。
+fn comfy_list_workflows(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
+    let query = arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let limit = int_arg(arguments, "limit").unwrap_or(20).clamp(1, 100) as usize;
+    let json = crate::comfy_dirs::workflows_json(
+        state,
+        crate::comfy_dirs::WorkflowQuery { q: query, limit: Some(limit) },
+    )
+    .map_err(capture_failure)?;
+    Ok(ToolOutcome::new(json.to_string(), json))
+}
+
+/// `ApiError` → 工具失败（只让**这一次调用**失败，不打断整个 Run）。
+fn capture_failure(error: crate::routes::ApiError) -> ToolFailure {
+    ToolFailure::new("TOOL_ERROR", format!("本机数据查询出错：{}", error.human()))
 }
 
 /// 一条提问的规格（`questions[]` 与单问的 `question` 都归一成它）。
@@ -1263,8 +1331,23 @@ mod tests {
         assert!(is_mutating("delete_skill"));
         assert!(!is_mutating("read_file"));
         assert!(!is_mutating("list_dir"));
+        // comfy 查询两件（P4 第 41 步）：只读，出厂 ALLOW（与 Kotlin 同）
+        for name in ["comfy_get_run", "comfy_list_workflows"] {
+            assert!(is_implemented(name), "{name} 应当已实现");
+            assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
+            assert!(!is_mutating(name), "{name} 是只读的");
+        }
         // 还没搬的一个都不许说"实现了"
-        for name in ["comfy_submit", "comfy_list_workflows", "find_model", "web_fetch"] {
+        for name in [
+            "comfy_submit",
+            "comfy_get_status",
+            "comfy_sync_history",
+            "comfy_load_workflow",
+            "comfy_find_workflow",
+            "comfy_env_report",
+            "find_model",
+            "web_fetch",
+        ] {
             assert!(!is_implemented(name), "{name} 还没搬");
         }
     }

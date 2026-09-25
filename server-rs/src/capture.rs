@@ -217,6 +217,101 @@ pub fn put_config(state: &AppState, config: CaptureConfig) -> Result<CaptureConf
 pub type ConfigJson = axum::Json<CaptureConfig>;
 
 // ---------------------------------------------------------------------------
+//  capture_runs 的查询（`comfy_get_run` 工具用，P4 第 41 步）
+// ---------------------------------------------------------------------------
+
+/// 一条捕获记录（Kotlin `CaptureRunInfo`，7 个键、可空的**省略键**）。
+///
+/// 三个"id"必须分清（Kotlin 那边为此专门加了一个查询入口）：
+/// `run_key` 是 ComfyUI 的 prompt_id（UUID）**或** `file:<sha256>` / `import:<sha256>`；
+/// `prompt_id` 是 `capture_runs` 表的数字主键。模型很容易拿数字那个来查，
+/// 所以 [`find_run`] 两个都认。
+#[derive(Debug, Clone)]
+pub struct CaptureRunInfo {
+    pub run_key: String,
+    pub prompt_id: Option<i64>,
+    pub status: String,
+    pub media_count: i64,
+    pub title: Option<String>,
+    pub error: Option<String>,
+    pub captured_at: Option<String>,
+}
+
+impl CaptureRunInfo {
+    /// Kotlin 的 `AppJson`（`explicitNulls = false`）：可空键**整个不出现**。
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut out = serde_json::Map::new();
+        out.insert("runKey".into(), serde_json::json!(self.run_key));
+        out.insert("status".into(), serde_json::json!(self.status));
+        out.insert("mediaCount".into(), serde_json::json!(self.media_count));
+        if let Some(id) = self.prompt_id {
+            out.insert("promptId".into(), serde_json::json!(id));
+        }
+        if let Some(title) = &self.title {
+            out.insert("title".into(), serde_json::json!(title));
+        }
+        if let Some(error) = &self.error {
+            out.insert("error".into(), serde_json::json!(error));
+        }
+        if let Some(at) = &self.captured_at {
+            out.insert("capturedAt".into(), serde_json::json!(at));
+        }
+        serde_json::Value::Object(out)
+    }
+}
+
+/// 按 runKey 查一条捕获记录（Kotlin `CaptureRepo.findRun`）。
+pub fn find_run(state: &AppState, run_key: &str) -> Result<Option<CaptureRunInfo>, ApiError> {
+    let key = run_key.to_string();
+    state.with(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT run_key, prompt_id, status, media_count, title, error, created_at \
+                 FROM capture_runs WHERE run_key = ?1",
+                rusqlite::params![key],
+                row_to_run_info,
+            )
+            .ok())
+    })
+}
+
+/// 按**数字 prompt_id** 查一条捕获记录（Kotlin `CaptureRepo.findRunByPromptId`）。
+///
+/// `ORDER BY id DESC LIMIT 1`：同一个 ComfyUI prompt_id 理论上唯一，但老库里有重复行，
+/// 取最新那条与 Kotlin 一致。
+pub fn find_run_by_prompt_id(
+    state: &AppState,
+    prompt_id: i64,
+) -> Result<Option<CaptureRunInfo>, ApiError> {
+    state.with(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT run_key, prompt_id, status, media_count, title, error, created_at \
+                 FROM capture_runs WHERE prompt_id = ?1 ORDER BY id DESC LIMIT 1",
+                rusqlite::params![prompt_id],
+                row_to_run_info,
+            )
+            .ok())
+    })
+}
+
+fn row_to_run_info(row: &rusqlite::Row<'_>) -> rusqlite::Result<CaptureRunInfo> {
+    let created: Option<String> = row.get(6)?;
+    Ok(CaptureRunInfo {
+        run_key: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+        prompt_id: row.get(1)?,
+        // 老库里 status 可能是 NULL：Kotlin 的 `strOr("status", "success")` 回落到 success
+        status: row.get::<_, Option<String>>(2)?.unwrap_or_else(|| "success".to_string()),
+        media_count: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+        title: row.get(4)?,
+        error: row.get(5)?,
+        // ⚠ 时间列走 `iso_time`（Kotlin 是"先解析再按 Java `Instant.toString()` 重排"），
+        // 不是原样透传：`.000Z` 在那边发出来是**没有小数点**的（P4 第 21 步实测）
+        captured_at: crate::iso_time::iso_time(created.as_deref()),
+    })
+}
+
+// ---------------------------------------------------------------------------
 //  API 格式节点图（P4 第 9 步）
 // ---------------------------------------------------------------------------
 

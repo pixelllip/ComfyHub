@@ -5581,6 +5581,8 @@ async fn tool_policy_and_nsfw_endpoints() {
         names,
         vec![
             "ask_user_question",
+            "comfy_get_run",
+            "comfy_list_workflows",
             "delete_skill",
             "list_dir",
             "list_skills",
@@ -7628,7 +7630,15 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
 
     let specs = comfyhub_server_rs::tools::specs(&policy);
     let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
-    for expected in ["list_dir", "read_file", "write_file", "register_skill", "delete_skill"] {
+    for expected in [
+        "list_dir",
+        "read_file",
+        "write_file",
+        "register_skill",
+        "delete_skill",
+        "comfy_get_run",
+        "comfy_list_workflows",
+    ] {
         assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
     }
     // 手机那四个也还在
@@ -7636,7 +7646,18 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         assert!(names.contains(&expected), "{expected} 丢了：{names:?}");
     }
     // 没实现的**一个都不许出现**
-    for absent in ["comfy_submit", "comfy_list_workflows", "web_search", "web_fetch", "civitai_search", "find_model"] {
+    for absent in [
+        "comfy_submit",
+        "comfy_get_status",
+        "comfy_sync_history",
+        "comfy_load_workflow",
+        "comfy_find_workflow",
+        "comfy_env_report",
+        "web_search",
+        "web_fetch",
+        "civitai_search",
+        "find_model",
+    ] {
         assert!(!names.contains(&absent), "{absent} 还没实现却下发了：{names:?}");
     }
     // 系统提示里那段"可调用的工具"必须与下发的清单**同一份**
@@ -7657,7 +7678,15 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         .map(|t| t["name"].as_str().unwrap())
         .collect();
     assert_eq!(kit_tools.len(), 7, "{kit_tools:?}");
-    for absent in ["list_dir", "read_file", "write_file", "register_skill", "delete_skill"] {
+    for absent in [
+        "list_dir",
+        "read_file",
+        "write_file",
+        "register_skill",
+        "delete_skill",
+        "comfy_get_run",
+        "comfy_list_workflows",
+    ] {
         assert!(!kit_tools.contains(&absent), "桌面工具漏进了手机 run-kit：{kit_tools:?}");
     }
 
@@ -7671,4 +7700,130 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     assert!(denied_names.contains(&"read_file".to_string()));
 
     std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+// ===========================================================================
+//  comfy 查询两件（P4 第 41 步）：comfy_get_run / comfy_list_workflows
+// ===========================================================================
+
+/// `comfy_get_run`：**两个入口都认**（UUID 形式的 run_key 与数字 prompt_id），
+/// 且 `capturedAt` 要过 `iso_time`（Kotlin 是"先解析再按 Java Instant.toString() 重排"，
+/// 库里 `…:00.000Z` 在那边发出来是**没有小数点**的 —— 原样透传就会两端差一个字符串）。
+#[tokio::test]
+async fn comfy_get_run_accepts_both_keys_and_reformats_time() {
+    let state = state();
+    // 夹具里已经有一条 capture_runs（run_key = 'run:abc'，见 test_conn）
+    let out = call_tool(&state, "comfy_get_run", serde_json::json!({ "runKey": "run:abc" }))
+        .await
+        .unwrap();
+    assert_eq!(out.payload["runKey"], "run:abc");
+    assert_eq!(out.payload["status"], "success");
+    assert_eq!(out.payload["mediaCount"], 0);
+    assert_eq!(
+        out.payload["capturedAt"], "2026-09-23T02:00:00Z",
+        "时间必须按 Java 的规则重排（.000Z → 不带小数）：{}",
+        out.payload
+    );
+    // 可空键**整个不出现**（Kotlin 的 explicitNulls = false）
+    assert!(out.payload.get("title").is_none(), "{}", out.payload);
+    assert!(out.payload.get("error").is_none(), "{}", out.payload);
+    // 正文就是同一份 JSON（模型读正文、界面读 meta，两边形状一致）
+    assert_eq!(out.content, out.payload.to_string());
+
+    // 数字 prompt_id 那个入口也认（模型很自然会把 capturedPromptId 拿来查）。
+    // ⚠ `capture_runs.prompt_id` 上有外键 → 只能指向真实存在的提示词（夹具里是 10/11）；
+    // 这也顺手是"外键真的在生效"的又一次实据（第一版写成指向 capture_runs 自己的 id，当场被拒）。
+    state
+        .with(|conn| {
+            conn.execute("UPDATE capture_runs SET prompt_id = 10 WHERE run_key = 'run:abc'", [])?;
+            Ok(())
+        })
+        .unwrap();
+    let by_number = call_tool(&state, "comfy_get_run", serde_json::json!({ "runKey": "10" }))
+        .await
+        .unwrap();
+    assert_eq!(by_number.payload["runKey"], "run:abc");
+    assert_eq!(by_number.payload["promptId"], 10);
+
+    // 查不到：NOT_FOUND + 那句能把人引到正确 id 的人话
+    let missing = call_tool(&state, "comfy_get_run", serde_json::json!({ "runKey": "nope" }))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code, "NOT_FOUND");
+    assert!(missing.message.contains("capturedPromptId"), "{}", missing.message);
+    // 缺参数是 INVALID_ARGUMENT（不是 NOT_FOUND）
+    assert_eq!(
+        call_tool(&state, "comfy_get_run", serde_json::json!({})).await.unwrap_err().code,
+        "INVALID_ARGUMENT"
+    );
+
+    std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+/// `comfy_list_workflows`：与 `GET /api/capture/workflows` **同一个实现**
+/// （三份目录来源 + `file:<sha256>` 那把幂等钥匙），只是搬到了工具层。
+#[tokio::test]
+async fn comfy_list_workflows_reads_the_same_dirs_as_the_endpoint() {
+    let state = state();
+    let root = state.project_root();
+    // 目录来源 ①：配置里生效的输出目录 → 它的父目录就是 ComfyUI 的根
+    let workflows = root.join("comfyui").join("user").join("default").join("workflows");
+    std::fs::create_dir_all(root.join("comfyui").join("output")).unwrap();
+    std::fs::create_dir_all(&workflows).unwrap();
+    std::fs::write(workflows.join("krea2_demo.json"), br#"{"nodes":[],"links":[]}"#).unwrap();
+    // 坏 JSON / 非 .json / 空文件：**一份都不许列**（列出来只会让 AI 白跑一趟）
+    std::fs::write(workflows.join("broken.json"), b"{ not json").unwrap();
+    std::fs::write(workflows.join("empty.json"), b"").unwrap();
+    std::fs::write(workflows.join("note.txt"), b"{}").unwrap();
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.output_dir = Some(root.join("comfyui").join("output").display().to_string());
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+
+    let out = call_tool(&state, "comfy_list_workflows", serde_json::json!({})).await.unwrap();
+    assert_eq!(out.payload["count"], 1, "{}", out.payload);
+    assert_eq!(out.payload["files"][0]["name"], "krea2_demo.json");
+    assert_eq!(out.payload["files"][0]["format"], "ui");
+    assert_eq!(out.payload["files"][0]["inLibrary"], false);
+    assert!(out.payload["files"][0].get("promptId").is_none(), "{}", out.payload);
+
+    // 按文件名过滤（用户说"krea2 那条"）
+    let hit = call_tool(&state, "comfy_list_workflows", serde_json::json!({ "query": "KREA2" }))
+        .await
+        .unwrap();
+    assert_eq!(hit.payload["count"], 1, "大小写不敏感：{}", hit.payload);
+
+    // 入库判定用的是 `file:<sha256>` 这把**与 comfy_load_workflow 相同的**钥匙。
+    // 塞一行进去之后 inLibrary 必须翻成 true 并带上 promptId（幂等的前提）。
+    let bytes = std::fs::read(workflows.join("krea2_demo.json")).unwrap();
+    let sha = comfyhub_server_rs::comfy_dirs::sha256_hex(&bytes);
+    state
+        .with(|conn| {
+            // `capture_runs.prompt_id` 有外键 → 指向夹具里真实的提示词 10
+            conn.execute(
+                "INSERT INTO capture_runs (run_key, prompt_id, status, media_count) VALUES (?1, 10, 'success', 0)",
+                [format!("file:{sha}")],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let again = call_tool(&state, "comfy_list_workflows", serde_json::json!({})).await.unwrap();
+    assert_eq!(again.payload["files"][0]["inLibrary"], true, "{}", again.payload);
+    assert_eq!(again.payload["files"][0]["promptId"], 10);
+
+    // 与端点是同一条路：形状逐键相等（各写一份实现就会出现"界面列得出来、AI 说没有"）
+    let (status, endpoint) = get_json(router_for(state.clone()), "/api/capture/workflows").await;
+    assert_eq!(status, StatusCode::OK);
+    let mut via_tool = again.payload.clone();
+    let mut via_endpoint = endpoint.clone();
+    // 端点默认 limit=50、工具默认 20：这里只有一份，两份都该给同一份
+    assert_eq!(via_tool["dirs"], via_endpoint["dirs"], "目录来源必须完全一致");
+    assert_eq!(
+        via_tool["files"].as_array().unwrap().len(),
+        via_endpoint["files"].as_array().unwrap().len()
+    );
+    via_tool["count"] = serde_json::json!(0);
+    via_endpoint["count"] = serde_json::json!(0);
+    assert_eq!(via_tool, via_endpoint, "工具与端点的响应形状必须逐键一致");
+
+    std::fs::remove_dir_all(&root).ok();
 }

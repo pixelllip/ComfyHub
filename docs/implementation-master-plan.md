@@ -1116,6 +1116,34 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   `kitVersion=2026-09-24.1`、`tools[]` 7 个，真库只读未改。
 > - 仍未搬：联网三工具、`comfy_*` 十三件（R10 的落点 `comfy_submit`）、comfy-mcp 39 个、`find_model`。
 
+> ✅ **P4 第 41 步（2026-09-25）：comfy 查询两件（`comfy_get_run` / `comfy_list_workflows`）** ——
+> 第 40 步之后的第二刀，挑的是**只碰本机库与磁盘、不需要 ComfyUI 在场**的那两条：
+> 于是"AI 知道自己刚提交的那次跑到哪了"和"首次使用时把用户机器上早就有工作流列出来"
+> （用户 bug ⑤）这两件事在 Rust 侧第一次成立。
+> - `comfy_get_run`：**两个入口都认** —— UUID 形式的 `run_key`，以及**数字**的
+>   `capture_runs.prompt_id`（Kotlin 为此专门加了 `findRunByPromptId`：模型很自然地会拿
+>   `comfy_submit` 结果里的数字来查，只认 UUID 就会"刚提交完却说没这次运行"，真实对话里发生过）。
+>   `capturedAt` 走 `iso_time`（Java `Instant.toString()` 的规则：`.000Z` → 不带小数）——
+>   原样透传就会两端差一个字符串，而这是**只有真库才摆得出来**的那类差异。
+> - `comfy_list_workflows`：与 `GET /api/capture/workflows` **同一个实现**
+>   （[`crate::comfy_dirs::workflows_json`]）—— 三份目录来源、`file:<sha256>` 那把幂等钥匙、
+>   `inLibrary` 判定都不另写一份。用例里把"工具的输出"与"端点的输出"逐键比了一遍：
+>   各写一份的后果正是用户 bug ⑤ 的复发形态（界面列得出来、AI 却说没有）。
+> - 新增 **`server-rs/tests/spot_check.rs`（真库副本抽查入口，默认 `#[ignore]`）**：
+>   端点类批次可以"起服务 + curl"抽查，但**工具层没有 HTTP 入口**，
+>   只跑内存夹具恰好会漏掉"夹具里没有的行与列"。现在把库副本 + 真 storage + 真项目根
+>   指进去，直接调 `tools::execute`（以后的 `comfy_submit` 也走它）。
+> - **真库副本实测**（本机 2026-09-25）：`comfy_list_workflows` 探到
+>   `D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows`（**1 份目录来源**）、
+>   15 份里列出 5 份，其中 `krea2SFWNSFWUncensoredImageTo_v10.json` → `inLibrary=true, promptId=305`
+>   （**正是用户 bug ⑤ 里那份**）；`comfy_get_run("file:ebff341d…")` →
+>   `status=success / promptId=310 / title=anima_shinku_nte_school / capturedAt=2026-09-23T01:02:26.566Z`。
+> - 验收：`cargo test` **276 例全绿**（159 lib + 115 api_test + 2 shape_lint；新增 2 例工具用例：
+>   两个入口 + 时间重排 + 可空键省略；工具与端点形状逐键相等）。
+> - 仍未搬：`comfy_get_status`（要 ComfyUI HTTP + 队列）、`sync_history`（要 capture 入库）、
+>   `find_workflow` / `load_workflow`（要 `WorkflowConvert` 转换栈）、`submit`（R10）、
+>   `check_inputs` / `fit_workflow` / `env_report`（要本机模型清单）、`audit` / `prune`。
+
 > **📅 2026-09-25 这一轮的交接单**（上一轮留下的，按价值排序；① 的前半已落地）：
 > 1. ✅ **工具层与审批（R8）+ 提问闸门**：第 31 / 32 步已落地（四个本机工具 + 闸门 + 两条端点批次）。
 >    **还剩**：联网三工具（`web_search` / `web_fetch` / `civitai_search`，要 Keenable / Civitai

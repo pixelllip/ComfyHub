@@ -46,8 +46,9 @@
 //! | `POST /api/ai/capabilities/{refresh,probe}` | ⛔ **501**：要 models.dev 在线数据集 / 要真上游请求（会花钱），不满足"不需要人工校验"这条 |
 //! | **上游 LLM 客户端 / 协议适配器**（第 29 步）与**主循环**（第 30 步） | ✅ 已落地（不带工具、不带附件）；工具层已搬四个本机工具 + 两个闸门（第 31/32 步） |
 //! | **桌面文件工具五件**（`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`）+ **路径准入**（`resolve_read` / `resolve_write`：禁段、真实路径、目录根不可写） | ✅（P4 第 40 步；`desktop_tools.rs` + `policy.rs`，桌面提示词与下发的 `tools[]` 现在含它们） |
+//! | **comfy 查询两件**：`comfy_get_run`（按 runKey / 数字 promptId 查捕获记录）、`comfy_list_workflows`（列本机工作流文件，与 `/api/capture/workflows` 同一个实现） | ✅（P4 第 41 步；只碰本机库与磁盘，不需要 ComfyUI 在场） |
 //! | **联网三工具**（`web_search` / `web_fetch` / `civitai_search`） | ⛔ **未搬**（系统提示里那一节暂时指向没下发的工具，见 `tools.rs` 的诚实清单） |
-//! | **`comfy_*` 十三件**（含 `comfy_submit`，R10 的落点）与 `find_model` / 官方 comfy-mcp 39 个 | ⛔ **未搬**（要 ComfyUI 在场 / 要 `McpStdioClient`，各自另起批次） |
+//! | **`comfy_*` 其余十一件**（`get_status` / `sync_history` / `find_workflow` / `load_workflow` / `submit` / `use_attachment` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow`）+ `find_model` / 官方 comfy-mcp 39 个 | ⛔ **未搬**（要 ComfyUI 在场 / 要 `WorkflowConvert` 转换栈 / 要模型清单，见 `tools.rs` 的诚实清单） |
 //! | 附件（R9）：`/api/ai/attachments*` 与内联预算 | ⛔ **未搬**（有附件直接 `UNSUPPORTED_CONTENT`，不假装发得出去） |
 //! | `/api/capture/{status,jobs,poll,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功） |
 //! | R6~R10 的安全防线 | ⛔ **部分重建**（R5 的保留窗口与 seq 纪律已在 `runs.rs`/`events.rs`，R6/R8 已在执行器与工具层，R9/R10 未动） |
