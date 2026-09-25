@@ -5582,6 +5582,7 @@ async fn tool_policy_and_nsfw_endpoints() {
         vec![
             "ask_user_question",
             "comfy_get_run",
+            "comfy_get_status",
             "comfy_list_workflows",
             "delete_skill",
             "list_dir",
@@ -7637,6 +7638,7 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "register_skill",
         "delete_skill",
         "comfy_get_run",
+        "comfy_get_status",
         "comfy_list_workflows",
     ] {
         assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
@@ -7648,7 +7650,6 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     // 没实现的**一个都不许出现**
     for absent in [
         "comfy_submit",
-        "comfy_get_status",
         "comfy_sync_history",
         "comfy_load_workflow",
         "comfy_find_workflow",
@@ -7826,4 +7827,102 @@ async fn comfy_list_workflows_reads_the_same_dirs_as_the_endpoint() {
     assert_eq!(via_tool, via_endpoint, "工具与端点的响应形状必须逐键一致");
 
     std::fs::remove_dir_all(&root).ok();
+}
+
+// ===========================================================================
+//  /api/capture/{status,jobs} + comfy_get_status（P4 第 42 步）
+//
+//  用**真 socket** 的假 ComfyUI（不出网）：不这么做就只能测"连不上"那一支，
+//  而"连上了、队列里有几个、队首叫什么"才是这个端点真正要回答的。
+// ===========================================================================
+
+/// 假 ComfyUI：只认 `/queue`，回一份队列（形状与真 ComfyUI 一致：
+/// `[number, prompt_id, graph, extra_data, outputs]`，标题在
+/// `extra_data.extra_pnginfo.workflow.extra.title`）。
+async fn fake_comfy_queue(queue_json: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { break };
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 8 * 1024];
+                let _ = socket.read(&mut buf).await;
+                let body = queue_json;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{addr}"), handle)
+}
+
+fn queue_body() -> &'static str {
+    // 运行中 1 条（带标题）、等待中 2 条
+    r#"{"queue_running":[[1,"uuid-1",{},{"extra_pnginfo":{"workflow":{"extra":{"title":"krea2 出图"}}}} ,{}]],
+        "queue_pending":[[2,"uuid-2",{},{},{}],[3,"uuid-3",{},{},{}]]}"#
+}
+
+#[tokio::test]
+async fn capture_status_and_jobs_ask_the_real_queue() {
+    let state = state();
+    // ① ComfyUI 不在：如实回 comfyReachable=false，**不是 500**（状态查询失败会让整个页面挂掉）
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = "http://127.0.0.1:1".to_string();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    let (status_code, down) = get_json(router_for(state.clone()), "/api/capture/status").await;
+    assert_eq!(status_code, StatusCode::OK, "{down}");
+    assert_eq!(down["comfyReachable"], false);
+    assert_eq!(down["queueRunning"], 0);
+    assert_eq!(down["queuePending"], 0);
+    assert_eq!(down["capturedRuns"], 1, "夹具里有一条 capture_runs");
+    assert!(down["recent"].as_array().unwrap().len() <= 20);
+    // `comfyUrl` / `enabled` / 统计键都在
+    assert_eq!(down["enabled"], true);
+    assert_eq!(down["comfyUrl"], "http://127.0.0.1:1");
+
+    // ② ComfyUI 在：队列数与队首标题都要真的读到
+    let (url, handle) = fake_comfy_queue(queue_body()).await;
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = url.clone();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+
+    let (status_code, up) = get_json(router_for(state.clone()), "/api/capture/status").await;
+    assert_eq!(status_code, StatusCode::OK, "{up}");
+    assert_eq!(up["comfyReachable"], true, "{up}");
+    assert_eq!(up["queueRunning"], 1, "{up}");
+    assert_eq!(up["queuePending"], 2, "{up}");
+
+    // /jobs 是右侧栏轮询用的那一份：5 个键、队首标题、submissions（Rust 侧还没提交过 → 空数组）
+    let (status_code, jobs) = get_json(router_for(state.clone()), "/api/capture/jobs").await;
+    assert_eq!(status_code, StatusCode::OK, "{jobs}");
+    assert_eq!(
+        keys(&jobs),
+        vec!["comfyReachable", "queuePending", "queueRunning", "runningLabel", "submissions"]
+    );
+    assert_eq!(jobs["queueRunning"], 1);
+    assert_eq!(jobs["queuePending"], 2);
+    assert_eq!(jobs["runningLabel"], "krea2 出图");
+    assert_eq!(jobs["submissions"].as_array().unwrap().len(), 0, "还没搬 comfy_submit → 如实为空");
+
+    // ③ 工具层：`comfy_get_status` 按描述真的裁 recent（Kotlin 那边读了但没用），且如实说裁了多少
+    let none = call_tool(&state, "comfy_get_status", serde_json::json!({ "recentLimit": 0 }))
+        .await
+        .unwrap();
+    assert!(none.payload.get("recent").is_none(), "recentLimit=0 → 不带 recent：{:?}", none.payload);
+    assert!(none.content.contains("最近捕获记录已省略"), "{}", none.content);
+    let small = call_tool(&state, "comfy_get_status", serde_json::json!({ "recentLimit": 5 }))
+        .await
+        .unwrap();
+    assert_eq!(small.payload["comfyReachable"], true);
+    assert!(small.payload.get("submissions").is_some(), "工具带上 submissions（与 Kotlin 同）");
+
+    handle.abort();
+    std::fs::remove_dir_all(state.project_root()).ok();
 }

@@ -27,6 +27,7 @@
 //! | `/api/media`（列表 / 详情 / **原件文件流** / 缩略图 / 上传 / PATCH / DELETE） | ✅ |
 //! | `GET /api/stats`、`/api/capture/config` | ✅ |
 //! | `GET /api/capture/workflows`、`/api/capture/locate{,/apply}` | ✅ |
+//! | **`GET /api/capture/status` / `/jobs`**（真的去问一次 ComfyUI 的 `/queue`） | ✅（P4 第 42 步） |
 //! | `GET /api/{prompts,media}/{id}/workflow`、`GET /api/prompts/{id}/api-graph` | ✅ |
 //! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ |
 //! | `GET /api/ai/providers`（不含密钥）、`GET /api/ai/providers/{id}/models` | ✅ |
@@ -50,7 +51,7 @@
 //! | **联网三工具**（`web_search` / `web_fetch` / `civitai_search`） | ⛔ **未搬**（系统提示里那一节暂时指向没下发的工具，见 `tools.rs` 的诚实清单） |
 //! | **`comfy_*` 其余十一件**（`get_status` / `sync_history` / `find_workflow` / `load_workflow` / `submit` / `use_attachment` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow`）+ `find_model` / 官方 comfy-mcp 39 个 | ⛔ **未搬**（要 ComfyUI 在场 / 要 `WorkflowConvert` 转换栈 / 要模型清单，见 `tools.rs` 的诚实清单） |
 //! | 附件（R9）：`/api/ai/attachments*` 与内联预算 | ⛔ **未搬**（有附件直接 `UNSUPPORTED_CONTENT`，不假装发得出去） |
-//! | `/api/capture/{status,jobs,poll,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功） |
+//! | `/api/capture/{poll,import,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功；`poll` 要整套捕获入库） |
 //! | R6~R10 的安全防线 | ⛔ **部分重建**（R5 的保留窗口与 seq 纪律已在 `runs.rs`/`events.rs`，R6/R8 已在执行器与工具层，R9/R10 未动） |
 //!
 //! ## 手机现在可以只对着**这一个后端**干活了（2026-09-24，第 22 步之后）

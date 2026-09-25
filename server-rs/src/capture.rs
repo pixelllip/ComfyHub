@@ -1,16 +1,13 @@
-//! 捕获配置与工作流原文（P4 第 7 步）。
+//! 捕获配置与工作流原文（P4 第 7 步）；查询类在 P4 第 41/42 步补齐。
 //!
-//! 这一批刻意**只搬"本地、不依赖 ComfyUI 在线"的端点**：
-//!
-//! | 端点 | 为什么能先搬 |
+//! | 端点 | 状态 |
 //! | --- | --- |
-//! | `GET/PUT /api/capture/config` | 就是 `app_settings` 的一行 JSON（设置页读写它） |
-//! | `GET /api/prompts/{id}/workflow` | 读库里的 `workflow_json` 文本 |
-//! | `GET /api/media/{id}/workflow` | 同上（产物自身的快照） |
-//!
-//! **没搬**（都需要 ComfyUI 在场，属于下一批）：`/capture/status`、`/capture/jobs`（要真的去问队列）、
-//! `/capture/poll`、`/capture/locate{,/apply}`、`/capture/import*`、`/ingest/comfyui`、
-//! `/prompts/{id}/api-graph`（要从 `capture_runs.raw` 里取 API 图，还要跑一遍图解析）。
+//! | `GET/PUT /api/capture/config` | ✅ 就是 `app_settings` 的一行 JSON（设置页读写它） |
+//! | `GET /api/prompts/{id}/workflow` / `/media/{id}/workflow` | ✅ 读库里的 `workflow_json` 文本 |
+//! | `GET /api/prompts/{id}/api-graph` | ✅ 从 `capture_runs.raw` 取 API 图（第 9 步） |
+//! | `GET /api/capture/status` / `/jobs` | ✅ 第 42 步（真的去问 ComfyUI 的 `/queue`） |
+//! | `/api/capture/poll` | ⛔ 未搬（要整套捕获入库：Claim → 下载产物 → 建提示词与产物行） |
+//! | `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | ⛔ 未搬（要转换栈 / ComfyUI 在场） |
 //!
 //! # 两条容易写错的语义
 //!
@@ -25,6 +22,7 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::routes::{ApiError, AppState};
+use serde_json::{json, Map, Value};
 
 /// 自动捕获配置（与 Kotlin `CaptureConfig` 逐字同形）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -309,6 +307,97 @@ fn row_to_run_info(row: &rusqlite::Row<'_>) -> rusqlite::Result<CaptureRunInfo> 
         // 不是原样透传：`.000Z` 在那边发出来是**没有小数点**的（P4 第 21 步实测）
         captured_at: crate::iso_time::iso_time(created.as_deref()),
     })
+}
+
+/// 最近若干条捕获记录（Kotlin `CaptureRepo.recentRuns`，`ORDER BY id DESC`）。
+pub fn recent_runs(state: &AppState, limit: i64) -> Result<Vec<CaptureRunInfo>, ApiError> {
+    let limit = limit.clamp(1, 200);
+    state.with(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT run_key, prompt_id, status, media_count, title, error, created_at \
+             FROM capture_runs ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], row_to_run_info)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    })
+}
+
+/// 捕获统计 `(运行数, 产物数)`（Kotlin `CaptureRepo.stats`）。
+pub fn stats(state: &AppState) -> Result<(i64, i64), ApiError> {
+    state.with(|conn| {
+        let runs: i64 = conn.query_row("SELECT COUNT(*) FROM capture_runs", [], |row| row.get(0))?;
+        let media: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(media_count), 0) FROM capture_runs",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok((runs, media))
+    })
+}
+
+// ---------------------------------------------------------------------------
+//  GET /api/capture/status 与 /jobs（P4 第 42 步）
+// ---------------------------------------------------------------------------
+
+/// 一次队列探测的结果：`(ComfyUI 可达吗, 快照)`。
+///
+/// 不可达时快照是**零值**（不是错误）—— 与 Kotlin `status()` 一样：连不上就如实说
+/// `comfyReachable=false`，而不是让整个状态查询 500。
+pub async fn probe_queue(state: &AppState) -> (bool, crate::comfy_client::QueueSnapshot) {
+    let empty = crate::comfy_client::QueueSnapshot { running: 0, pending: 0, running_label: None };
+    let Ok(config) = capture_config(state) else { return (false, empty) };
+    match crate::comfy_client::queue(&config.comfy_url).await {
+        Ok(snapshot) => (true, snapshot),
+        Err(_) => (false, empty),
+    }
+}
+
+/// `GET /api/capture/status`（Kotlin `CaptureStatus`，11 个键，可空键省略）。
+///
+/// ⚠ `lastPollAt` / `lastError` 在 Kotlin 那边是 **`@Volatile` 的内存字段**
+/// （只有本进程的轮询会写它们）。Rust 侧还没有轮询器，所以这里**如实回 null**
+/// （键不出现），而不是编一个时间戳 —— 等 `pollOnce` 搬过来（第 43 步）它会跟上来。
+pub async fn status_json(state: &AppState) -> Result<Value, ApiError> {
+    let config = capture_config(state)?;
+    let (runs, media) = stats(state).unwrap_or((0, 0));
+    let (reachable, snapshot) = probe_queue(state).await;
+    let recent = recent_runs(state, 20).unwrap_or_default();
+
+    let mut out = Map::new();
+    out.insert("enabled".into(), json!(config.enabled));
+    out.insert("comfyUrl".into(), json!(config.comfy_url));
+    if let Some(dir) = &config.output_dir {
+        out.insert("outputDir".into(), json!(dir));
+    }
+    out.insert("comfyReachable".into(), json!(reachable));
+    out.insert("queueRunning".into(), json!(snapshot.running));
+    out.insert("queuePending".into(), json!(snapshot.pending));
+    out.insert("capturedRuns".into(), json!(runs));
+    out.insert("capturedMedia".into(), json!(media));
+    out.insert("recent".into(), Value::Array(recent.iter().map(|r| r.to_json()).collect()));
+    Ok(Value::Object(out))
+}
+
+/// `GET /api/capture/jobs`（Kotlin `CaptureJobSnapshot`，5 个键）。
+///
+/// `submissions` 是**本进程提交过的任务**：Rust 侧 `comfy_submit` 还没搬，
+/// 所以这里是空数组 —— 那不是"假装没事"，而是**如实**（此刻确实一个都没提交过）。
+/// `comfy_submit` 落地时会维护同一份内存清单。
+pub async fn jobs_json(state: &AppState) -> Result<Value, ApiError> {
+    let (reachable, snapshot) = probe_queue(state).await;
+    let mut out = Map::new();
+    out.insert("queueRunning".into(), json!(snapshot.running));
+    out.insert("queuePending".into(), json!(snapshot.pending));
+    out.insert("comfyReachable".into(), json!(reachable));
+    if let Some(label) = snapshot.running_label {
+        out.insert("runningLabel".into(), json!(label));
+    }
+    out.insert("submissions".into(), Value::Array(Vec::new()));
+    Ok(Value::Object(out))
 }
 
 // ---------------------------------------------------------------------------

@@ -281,6 +281,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/capabilities/probe", axum::routing::post(ai_capabilities_probe))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
+        // 捕获状态与实时进度（第 42 步）：真的去问一次 ComfyUI 的 /queue
+        .route("/api/capture/status", get(capture_status))
+        .route("/api/capture/jobs", get(capture_jobs))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
         .route("/api/capture/locate", get(capture_locate))
         .route("/api/capture/locate/apply", axum::routing::post(capture_locate_apply))
@@ -391,6 +394,19 @@ async fn capture_workflows(
     Query(query): Query<crate::comfy_dirs::WorkflowQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::comfy_dirs::workflows_json(&state, query)?))
+}
+
+/// `GET /api/capture/status` —— 捕获状态（含**真的问一次** ComfyUI 队列）。
+///
+/// ⚠ 与 `/jobs` 的分工照抄 Kotlin：这一条是"设置页 / 首屏"用的（带统计与最近 20 条记录），
+/// `/jobs` 是"右侧栏轮询"用的（只要队列与最近提交）。两条都真的去问一次 `/queue`。
+async fn capture_status(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::capture::status_json(&state).await?))
+}
+
+/// `GET /api/capture/jobs` —— 实时进度（AI 工作台右侧栏轮询它）。
+async fn capture_jobs(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::capture::jobs_json(&state).await?))
 }
 
 /// `GET /api/ai/providers` —— provider 清单（不含密钥，AIH-012）。

@@ -49,6 +49,14 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "comfy_get_status",
+        description: r#"查询 ComfyUI 的连通性、队列（运行中 / 等待中）与最近的捕获记录。地址由应用配置决定，不接受任意 URL。"#,
+        input_schema: r#"{"type":"object","properties":{"includeRecent":{"type":"boolean","description":"默认 true"},"recentLimit":{"type":"integer","description":"默认 5，最多 20"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "comfy_list_workflows",
         description: r#"列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`），带完整路径、格式（ui/api）与是否已经在本项目库里（inLibrary / promptId）。**首次使用、或者 comfy_find_workflow 什么都搜不到时，先看这里** —— 这些工作流不需要在 ComfyUI 里跑过一次才可用：拿到 path 直接 comfy_load_workflow(path=…) 读进库，再用返回的 promptId 提交。只读，不改用户的文件。"#,
         input_schema: r#"{"type":"object","properties":{"query":{"type":"string","description":"按**文件名**过滤（大小写不敏感的子串，例如 krea2）；不填就列最近修改的若干份"},"limit":{"type":"integer","description":"最多列几份，默认 20，最多 100"}},"additionalProperties":false}"#,
@@ -139,6 +147,7 @@ mod tests {
             names,
             vec![
                 "comfy_get_run",
+                "comfy_get_status",
                 "comfy_list_workflows",
                 "delete_skill",
                 "list_dir",
@@ -149,7 +158,6 @@ mod tests {
         );
         for absent in [
             "comfy_submit",
-            "comfy_get_status",
             "comfy_sync_history",
             "comfy_load_workflow",
             "comfy_find_workflow",

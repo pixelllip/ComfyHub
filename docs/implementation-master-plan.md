@@ -1144,6 +1144,30 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   `find_workflow` / `load_workflow`（要 `WorkflowConvert` 转换栈）、`submit`（R10）、
 >   `check_inputs` / `fit_workflow` / `env_report`（要本机模型清单）、`audit` / `prune`。
 
+> ✅ **P4 第 42 步（2026-09-25）：ComfyUI 队列客户端 + `/api/capture/{status,jobs}` + `comfy_get_status`** ——
+> 这一批第一次"真的去问 ComfyUI"，也是**桌面 App 的捕获状态卡**能不能指向 Rust 的分水岭。
+> - 新模块 `comfy_client.rs`：`GET {comfyUrl}/queue` → 运行中 / 等待中条数 + **队首的任务名**
+>   （Kotlin `refreshQueue` + `labelOfQueueItem` 逐行对照：标题藏在
+>   `extra_data.extra_pnginfo.workflow.extra.title`，取不到就**不编一个名字**）。
+>   三条纪律写在文件头：地址只能来自配置（不接受模型给的 URL，否则就是 SSRF 入口）、
+>   本机/内网**强制直连**（复用 `upstream::client_for`，否则打开系统代理就连不上 ComfyUI）、
+>   网络异常翻成人话（`ConnectionRefused` → "连接被拒绝 —— ComfyUI 没在运行？"）。
+> - `/api/capture/status`（11 个键）与 `/api/capture/jobs`（5 个键）**从 501 变实现**：
+>   连不上时**如实** `comfyReachable=false` + 队列 0，而不是 500（状态查询失败会把整页拖垮）。
+>   `lastPollAt` / `lastError` 在 Kotlin 那边是 `@Volatile` 的**进程内**字段，Rust 还没有轮询器
+>   → 如实回 null（键不出现），等第 43 步的 `pollOnce` 搬过来会跟上来。
+>   `jobs.submissions` 是"本进程提交过的任务"：`comfy_submit` 还没搬 → **如实空数组**。
+> - 工具 `comfy_get_status` 复用同一份 `status_json`，并**带上一处有意的行为修正**：
+>   `recentLimit` 在 Kotlin 那边**读了但没用**（永远给 20 条，只影响末尾那句提示），
+>   这里按描述真的裁（正文与 meta 一起裁，并说出还有几条没列）——描述与行为不一致比
+>   "和 Kotlin 差几个元素"更坏。端点仍是 20 条（那是**形状**对齐，别一起裁）。
+> - **验收**：`cargo test` **280 例全绿**（162 lib + 116 api_test + 2 shape_lint），
+>   新增用例用**真 socket 的假 ComfyUI**（不出网）覆盖"连不上 / 连得上 + 队列数 + 队首标题"
+>   两支，以及 `recentLimit` 的裁剪；`comfy_client` 自带 3 例单测（URL 解析、标题只认那一个位置、空地址报错不 panic）。
+> - **真库副本实测**：`/api/capture/status` → `capturedRuns=144 / capturedMedia=99 /
+>   comfyUrl=http://127.0.0.1:8188 / outputDir=D:\Comfy-Desktop\ComfyUI-Shared\output`，
+>   此刻 ComfyUI 没在跑 → `comfyReachable=false` 且队列 0（如实），`recent` 20 条真实记录。
+
 > **📅 2026-09-25 这一轮的交接单**（上一轮留下的，按价值排序；① 的前半已落地）：
 > 1. ✅ **工具层与审批（R8）+ 提问闸门**：第 31 / 32 步已落地（四个本机工具 + 闸门 + 两条端点批次）。
 >    **还剩**：联网三工具（`web_search` / `web_fetch` / `civitai_search`，要 Keenable / Civitai

@@ -85,7 +85,18 @@ async fn real_db_spot_check_comfy_queries() {
     );
     assert!(listed["files"].is_array());
 
-    // ② 按 runKey 查一条**真库里存在**的捕获记录
+    // ③ 捕获状态（第 42 步）：真机上 ComfyUI 可能在也可能不在 —— **两种都要如实**
+    let status = comfyhub_server_rs::capture::status_json(&state).await.expect("状态");
+    println!("── /api/capture/status ──\n{status}");
+    assert!(status["comfyReachable"].is_boolean());
+    assert!(status["capturedRuns"].as_i64().unwrap_or(0) >= 0);
+    // 连不上时队列数必须是 0（不许编一个数出来）
+    if status["comfyReachable"] == false {
+        assert_eq!(status["queueRunning"], 0);
+        assert_eq!(status["queuePending"], 0);
+    }
+
+    // ④ 按 runKey 查一条**真库里存在**的捕获记录
     let run_key: Option<String> = state
         .with(|conn| {
             Ok(conn

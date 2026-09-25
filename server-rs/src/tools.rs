@@ -6,7 +6,7 @@
 //! | --- | --- | --- |
 //! | `list_skills` / `load_skill` / `remember` / `ask_user_question` | `BOTH` | 第 31/32 步（只碰本机） |
 //! | `list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill` | `DESKTOP` | 第 40 步，路径准入在 [`crate::policy`] |
-//! | `comfy_get_run` / `comfy_list_workflows` | `DESKTOP` | 第 41 步，只碰本机库与磁盘（不需要 ComfyUI 在场） |
+//! | `comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` | `DESKTOP` | 第 41/42 步；前两条只碰本机库与磁盘，`get_status` 会真问一次 ComfyUI 的 `/queue` |
 //!
 //! 还没搬的：联网三个（要 Keenable / Civitai 客户端 + `EndpointGuard`）、
 //! `comfy_get_status` / `sync_history` / `find_workflow` / `load_workflow` / `submit` /
@@ -285,9 +285,10 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + comfy 查询两件（`comfy_get_run` / `comfy_list_workflows`，P4 第 41 步）。
 /// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
 /// `comfy_submit` 那一批要 ComfyUI 在场与整套转换栈（R10 的落点），各自另起批次。
-pub const IMPLEMENTED: [&str; 11] = [
+pub const IMPLEMENTED: [&str; 12] = [
     "ask_user_question",
     "comfy_get_run",
+    "comfy_get_status",
     "comfy_list_workflows",
     "delete_skill",
     "list_dir",
@@ -361,9 +362,10 @@ pub async fn execute(
         "write_file" => write_file(policy, arguments),
         "register_skill" => register_skill(state, arguments),
         "delete_skill" => delete_skill(state, arguments),
-        // ---- comfy 查询两件（P4 第 41 步，只碰本机库与磁盘）----------------
+        // ---- comfy 查询三件（P4 第 41/42 步）--------------------------------
         "comfy_get_run" => comfy_get_run(state, arguments),
         "comfy_list_workflows" => comfy_list_workflows(state, arguments),
+        "comfy_get_status" => comfy_get_status(state, arguments).await,
         // 清单里没有的（模型幻觉出一个名字 / 这一批还没搬的）——
         // 码与 Kotlin `TOOL_NOT_FOUND` 一致，模型的分支行为才不会两端不同。
         _ => Err(ToolFailure::new(
@@ -846,6 +848,45 @@ fn comfy_list_workflows(state: &AppState, arguments: &Value) -> Result<ToolOutco
     )
     .map_err(capture_failure)?;
     Ok(ToolOutcome::new(json.to_string(), json))
+}
+
+/// `comfy_get_status`：ComfyUI 连通性 + 队列 + 最近捕获记录（Kotlin `comfyStatus`）。
+///
+/// ★ **与 Kotlin 的一处有意不同**：`recentLimit` 在 Kotlin 那边**读了但没用**
+/// （`comfyStatus()` 永远给 `recentRuns(20)`，`limit` 只影响末尾那句"已省略"的提示）。
+/// 工具描述写的是"默认 5，最多 20"，所以这里**按描述真的裁**（正文与 meta 一起裁，
+/// 裁掉多少也说出来）—— 描述与行为不一致比"和 Kotlin 差几个元素"更坏，
+/// 模型会照着描述去数。端点 `/api/capture/status` 仍是 20 条（那是与 Kotlin 的**形状**对齐，
+/// 别一起裁）。
+async fn comfy_get_status(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
+    let limit = int_arg(arguments, "recentLimit").unwrap_or(5).clamp(0, 20);
+    let include_recent = arguments
+        .get("includeRecent")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let mut status = crate::capture::status_json(state).await.map_err(capture_failure)?;
+    // 最近提交过的任务：Rust 侧 `comfy_submit` 还没搬 → 如实给空数组（此刻确实一个都没有）
+    if let Some(obj) = status.as_object_mut() {
+        obj.insert("submissions".into(), Value::Array(Vec::new()));
+    }
+
+    let mut omitted = 0usize;
+    if include_recent && limit > 0 {
+        if let Some(list) = status.get_mut("recent").and_then(Value::as_array_mut) {
+            omitted = list.len().saturating_sub(limit as usize);
+            list.truncate(limit as usize);
+        }
+    } else if let Some(obj) = status.as_object_mut() {
+        obj.remove("recent");
+    }
+    let text = if omitted > 0 {
+        format!("{status}\n（最近捕获记录只列了 {limit} 条，还有 {omitted} 条没列；要看全部就用 recentLimit 放大它，上限 20）")
+    } else if !include_recent || limit == 0 {
+        format!("{status}\n（最近捕获记录已省略）")
+    } else {
+        status.to_string()
+    };
+    Ok(ToolOutcome::new(text, status))
 }
 
 /// `ApiError` → 工具失败（只让**这一次调用**失败，不打断整个 Run）。
@@ -1331,8 +1372,8 @@ mod tests {
         assert!(is_mutating("delete_skill"));
         assert!(!is_mutating("read_file"));
         assert!(!is_mutating("list_dir"));
-        // comfy 查询两件（P4 第 41 步）：只读，出厂 ALLOW（与 Kotlin 同）
-        for name in ["comfy_get_run", "comfy_list_workflows"] {
+        // comfy 查询三件（P4 第 41/42 步）：只读，出厂 ALLOW（与 Kotlin 同）
+        for name in ["comfy_get_run", "comfy_get_status", "comfy_list_workflows"] {
             assert!(is_implemented(name), "{name} 应当已实现");
             assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
             assert!(!is_mutating(name), "{name} 是只读的");
@@ -1340,7 +1381,6 @@ mod tests {
         // 还没搬的一个都不许说"实现了"
         for name in [
             "comfy_submit",
-            "comfy_get_status",
             "comfy_sync_history",
             "comfy_load_workflow",
             "comfy_find_workflow",
