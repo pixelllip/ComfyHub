@@ -6335,6 +6335,168 @@ async fn skills_rescan_registers_plain_files_and_never_touches_frontmatter() {
     assert_eq!(body["registered"], 0);
 }
 
+// ---------------------------------------------------------------------------
+//  长期记忆五条（P4 第 36 步）
+// ---------------------------------------------------------------------------
+
+/// `<storage>\ai` —— 记忆文件的目录（端点内部就是这么拼的）。
+fn memory_dir(state: &comfyhub_server_rs::routes::AppState) -> std::path::PathBuf {
+    state.media_dir().parent().unwrap().join("ai")
+}
+
+/// 读 / 整篇替换 / 加一条 / 删几条 / 清空的完整一轮。
+///
+/// 三条纪律各有一条断言：**超限报错（不静默截断）/ 用户手敲的不加日期前缀 /
+/// 越界下标忽略掉（不整批失败）**。
+#[tokio::test]
+async fn memory_endpoints_round_trip_and_report_stable_codes() {
+    let state = state();
+    let dir = memory_dir(&state);
+
+    // 初始：空 + 两个上限（界面显示 "N / 100 条" 用）
+    let (status, body) = get_json(router_for(state.clone()), "/api/ai/memory").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(keys(&body), vec!["content", "entryCount", "maxChars", "maxEntries", "path", "updatedAt"]);
+    assert_eq!(body["content"], "");
+    assert_eq!(body["entryCount"], 0);
+    assert_eq!(body["maxChars"], 8000);
+    assert_eq!(body["maxEntries"], 100);
+    assert!(body["path"].as_str().unwrap().ends_with("memory.md"));
+
+    // 整篇替换
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/memory",
+        serde_json::json!({ "content": "- 甲\n- 乙\n" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["content"], "- 甲\n- 乙", "读回来去掉首尾空白（幂等往返）");
+    assert_eq!(body["entryCount"], 2);
+    assert_eq!(std::fs::read_to_string(dir.join("memory.md")).unwrap(), "- 甲\n- 乙\n");
+
+    // 加一条：**用户手敲的不带日期前缀**（日期前缀只有 AI 的 remember 加）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/memory/entries",
+        serde_json::json!({ "content": "丙" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["content"], "- 甲\n- 乙\n- 丙");
+    assert!(!body["content"].as_str().unwrap().contains('['), "不许给用户的话加日期前缀");
+
+    // 再说一遍不算新增（判重）
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/memory/entries",
+        serde_json::json!({ "content": "丙" }),
+    )
+    .await;
+    assert_eq!(body["entryCount"], 3);
+
+    // 按下标删：1 = 乙；99 越界 → **忽略**（界面手里的列表可能只差一瞬间）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/memory/delete",
+        serde_json::json!({ "indices": [1, 99] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["content"], "- 甲\n- 丙");
+
+    // 空下标 = 原样返回（不清空！）
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/memory/delete",
+        serde_json::json!({ "indices": [] }),
+    )
+    .await;
+    assert_eq!(body["content"], "- 甲\n- 丙");
+
+    // 超限：**报错而不是静默截断**（悄悄截断 = 悄悄丢用户的话）
+    let too_long = "字".repeat(8001);
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/memory",
+        serde_json::json!({ "content": too_long }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "MEMORY_TOO_LARGE");
+    assert_eq!(body["detail"], "记忆太长（8001 > 8000 字符），请删掉一些再保存");
+    // 失败之后**原内容还在**（没有半截写坏）
+    let (_, body) = get_json(router_for(state.clone()), "/api/ai/memory").await;
+    assert_eq!(body["content"], "- 甲\n- 丙");
+
+    // 一条太长 → INVALID_ARGUMENT（**与上一档不同的码**：一个该拆短、一个该去清理）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/memory/entries",
+        serde_json::json!({ "content": "字".repeat(501) }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "INVALID_ARGUMENT");
+    assert_eq!(body["detail"], "一条记忆太长（501 > 500 字符），拆成几条");
+
+    // 空内容 → INVALID_ARGUMENT
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/memory/entries",
+        serde_json::json!({ "content": "   " }),
+    )
+    .await;
+    assert_eq!(body["error"], "INVALID_ARGUMENT");
+    assert_eq!(body["detail"], "记的内容不能为空");
+
+    // 清空
+    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/memory").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["content"], "");
+    assert_eq!(body["entryCount"], 0);
+    assert_eq!(std::fs::read_to_string(dir.join("memory.md")).unwrap(), "");
+}
+
+/// 长期记忆**也进系统提示与 run-kit**：写完立刻在 `run-kit` 里读得到（不做缓存）。
+///
+/// 这条把"界面写的"与"模型看到的"接上 —— 少这一环，用户会以为"我写了它却记不住"。
+#[tokio::test]
+async fn memory_written_from_the_ui_shows_up_in_the_run_kit_prompt() {
+    let state = state();
+    add_provider(&state, "p-kit", Some("KIT_KEY"));
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_models (provider_id, model_id, display_name, enabled, tools, reasoning)
+                 VALUES ('p-kit', 'm-1', '夹具模型', 1, 1, 0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("插模型");
+    let (_, _) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/memory",
+        serde_json::json!({ "content": "- 用户喜欢国风" }),
+    )
+    .await;
+
+    let (status, kit) = get_json(router_for(state.clone()), "/api/ai/run-kit?providerId=p-kit&modelId=m-1").await;
+    assert_eq!(status, StatusCode::OK);
+    let prompt = kit["systemPrompt"].as_str().unwrap();
+    assert!(prompt.contains("用户喜欢国风"), "刚写的记忆必须立刻进提示词（刻意不缓存）");
+}
+
 /// `id` / `event` / `data` 三元组（`id` 缺席的心跳帧给 `None`）。
 fn parse_sse(body: &str) -> Vec<(Option<i64>, String, Value)> {
     let mut out = Vec::new();

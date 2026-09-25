@@ -378,8 +378,10 @@ fn remember(
     }
     let before = crate::memory::count_entries(&crate::memory::read(&dir));
     let today = today(state)?;
+    // ⚠ 失败是**结构化**的（`code` + 人话），不要拿人话去 `contains("上限 100")` 反推码 ——
+    // 那种猜法在新增一条错误文案时静默失效（猜错档 → 模型/界面拿到指错方向的码）。
     let (count, max, path) = crate::memory::append(&dir, &content, &today)
-        .map_err(|message| ToolFailure::new(code_of_memory_error(&message), message))?;
+        .map_err(|e| ToolFailure::new(e.code, e.message))?;
     if count > before {
         session.memory_writes += 1;
     }
@@ -797,19 +799,6 @@ fn today(state: &AppState) -> Result<String, ToolFailure> {
         .map_err(|e| ToolFailure::new("MEMORY_WRITE_FAILED", format!("拿不到本机日期：{}", e.human())))
 }
 
-/// 记忆写入的失败文本 → 稳定码（按 Kotlin 的那几个码分档）。
-fn code_of_memory_error(message: &str) -> &'static str {
-    if message.contains("上限 100") {
-        "MEMORY_FULL"
-    } else if message.contains("字符上限") {
-        "MEMORY_TOO_LARGE"
-    } else if message.contains("太长") || message.contains("不能为空") {
-        "INVALID_ARGUMENT"
-    } else {
-        "MEMORY_WRITE_FAILED"
-    }
-}
-
 /// 扫全量（含非法项）—— `list_skills` 用它。
 ///
 /// 为什么不复用 `skills::catalog`：那个**刻意**只给能用的（它进系统提示），
@@ -856,14 +845,6 @@ mod tests {
         assert!(string_arg(&json!({"name": 7}), "name").is_err());
         assert!(string_arg(&json!({"name": null}), "name").is_err());
         assert_eq!(string_arg(&json!({"name": "x"}), "name").unwrap(), "x");
-    }
-
-    #[test]
-    fn memory_error_codes_are_stable() {
-        assert_eq!(code_of_memory_error("长期记忆已经有 100 条（上限 100 条）。"), "MEMORY_FULL");
-        assert_eq!(code_of_memory_error("长期记忆已满（8000 字符上限）"), "MEMORY_TOO_LARGE");
-        assert_eq!(code_of_memory_error("一条记忆太长（501 > 500 字符）"), "INVALID_ARGUMENT");
-        assert_eq!(code_of_memory_error("写记忆文件失败：拒绝访问"), "MEMORY_WRITE_FAILED");
     }
 
     #[test]

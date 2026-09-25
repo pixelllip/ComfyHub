@@ -958,6 +958,31 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > | --- | --- |
 > | **凭据写侧** | **P4 第 34 步**（见上）+ `scripts\e2e-credential-test.ps1` |
 > | **Skills 六条** | **P4 第 35 步**（见下） |
+> | **长期记忆五条** | **P4 第 36 步**（见下） |
+>
+> ✅ **P4 第 36 步（2026-09-25）：长期记忆五条端点**（`GET/PUT/DELETE /api/ai/memory`、
+> `POST /api/ai/memory/entries`、`POST /api/ai/memory/delete`）—— 界面上那张「长期记忆」卡
+> 至此能存、能加、能删、能清空（在此之前只有 `remember` 工具那条 AI 写入的路）。
+> - `memory.rs` 补 `MemoryDto` / `write` / `append_user` / `delete_entries` / `clear` / `entries`；
+>   AI 的 `remember` 与界面的「+ 添加一条」**共用同一个 `push()`**，区别只有一个参数：
+>   `today` 是 `Some(日期)` 才加 `[日期] ` 前缀 —— **用户手敲的东西不许被我们改写**。
+> - ★ **顺手拆掉一处"靠人话猜码"的地基**：原来 `tools.rs` 有个
+>   `code_of_memory_error(message)`，用 `contains("上限 100")` / `contains("太长")` 反推稳定码。
+>   界面写入的 `记忆太长（N > 8000 字符）` 里**也有"太长"**，但那一档该是 `MEMORY_TOO_LARGE`
+>   （单条 501 字符才是 `INVALID_ARGUMENT`）—— 靠字符串猜必然把这两档混掉，而
+>   "去清理记忆"与"把这条拆短"是两种处置。现在 `memory.rs` 直接返回
+>   `MemoryFailure{code, message}`（Kotlin `ToolFailure` 的同形物），猜码那一段连同它的用例一起删了。
+> - **`updatedAt` 的一处形状对齐**：文件不存在时 Kotlin 回的是 **`Instant.now()`**（不是 null，
+>   键一定在）；写成"文件不在就没有这个键"会让新装机器的界面显示成"从未更新过"。
+> - **真库副本双端对照 10/10**：`/api/ai/memory`（真机 4 条记忆）canon 后**零差异**；
+>   跨端可见性两个方向都通（Rust 整篇替换 → Kotlin 读到同一份；Kotlin 删一条 → Rust 也看不到）；
+>   三档超限错误**两端同码同文案**；界面加的那条不带日期前缀；跑完副本恢复原样、真机那份 1321 字节没动。
+> - 验收：`cargo test` **235 例全绿**（131 lib + 102 api_test + 2 shape_lint，新增 2 例 lib 单测
+>   + 2 例集成，删掉 1 例"猜码"用例）。
+>
+> **下一项（本轮继续）**：`/api/ai/builtin/*`（状态 + 同步）与 `/api/ai/capabilities/*`
+> （状态 / 刷新 / 实测校准开关与执行）—— 后者有一条**不出网就能验**的路径（状态与开关），
+> 刷新与校准要真上游，留给人配合。
 >
 > ✅ **P4 第 35 步（2026-09-25）：Skills 六条端点**（list / read / save / delete / roots / rescan）——
 > 磁盘是真源、刻意不缓存（"AI 注册完下一次回复就能用、用户删掉立刻消失"是需求，AGENTS §10）。

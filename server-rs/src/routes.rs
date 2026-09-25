@@ -248,6 +248,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/skills/roots", get(ai_skill_roots))
         .route("/api/ai/skills/rescan", axum::routing::post(ai_skill_rescan))
         .route("/api/ai/skills/{name}", get(ai_skill_detail).delete(delete_skill))
+        // 界面端点第四批（P4 第 36 步）：**长期记忆五条**。真源是 `<storage>\ai\memory.md`
+        // （一行一条、用户能手改），界面上的保存 / 加一条 / 删几条 / 清空都打这里。
+        .route("/api/ai/memory", get(ai_memory).put(put_memory).delete(clear_memory))
+        .route("/api/ai/memory/entries", axum::routing::post(add_memory_entry))
+        // 单条 / 批量删除用 POST 而不是带 body 的 DELETE：Ktor 对 DELETE 带请求体的处理
+        // 在各客户端上并不一致（Kotlin 侧就是这么注释的）—— 形状照抄，别"顺手改成 DELETE"。
+        .route("/api/ai/memory/delete", axum::routing::post(delete_memory_entries))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
@@ -1156,6 +1163,80 @@ async fn ai_skill_rescan(
         "errors": result.errors,
         "skills": skills,
     })))
+}
+
+// ---------------------------------------------------------------------------
+//  界面端点第四批（P4 第 36 步）：长期记忆
+// ---------------------------------------------------------------------------
+
+/// 记忆目录（`<storage>\ai`）—— **只有这一处拼路径**。
+fn memory_dir(state: &AppState) -> std::path::PathBuf {
+    let storage = state.media_dir().parent().unwrap_or(state.media_dir());
+    storage.join("ai")
+}
+
+/// 写入类失败的稳定码 → AI 错误（`AiRoutes.toolGuard` 的对应物，**码原样传出去**）。
+fn memory_failed(failure: crate::memory::MemoryFailure) -> ApiError {
+    ApiError::ai(failure.code, failure.message)
+}
+
+/// 整篇替换的请求体（`MemoryUpdateRequest`，缺省空串 = 清空，与 Kotlin 同）。
+#[derive(Debug, Default, Deserialize)]
+struct MemoryUpdateRequest {
+    #[serde(default)]
+    content: String,
+}
+
+/// 追加一条的请求体（`MemoryEntryRequest`）。
+#[derive(Debug, Default, Deserialize)]
+struct MemoryEntryRequest {
+    #[serde(default)]
+    content: String,
+}
+
+/// 按下标删若干条的请求体（`MemoryDeleteRequest`）。
+#[derive(Debug, Default, Deserialize)]
+struct MemoryDeleteRequest {
+    #[serde(default)]
+    indices: Vec<i64>,
+}
+
+/// `GET /api/ai/memory` —— 整篇（一行一条）+ 条数上限 + 文件路径。
+async fn ai_memory(State(state): State<AppState>) -> Result<Json<crate::memory::MemoryDto>, ApiError> {
+    Ok(Json(crate::memory::read_dto(&memory_dir(&state))))
+}
+
+/// `PUT /api/ai/memory` —— 整篇替换（界面上的「保存」）。**超限报错，不静默截断**。
+async fn put_memory(
+    State(state): State<AppState>,
+    Json(body): Json<MemoryUpdateRequest>,
+) -> Result<Json<crate::memory::MemoryDto>, ApiError> {
+    Ok(Json(crate::memory::write(&memory_dir(&state), &body.content).map_err(memory_failed)?))
+}
+
+/// `POST /api/ai/memory/entries` —— 追加一条（界面的「+ 添加一条」，**不加日期前缀**）。
+async fn add_memory_entry(
+    State(state): State<AppState>,
+    Json(body): Json<MemoryEntryRequest>,
+) -> Result<Json<crate::memory::MemoryDto>, ApiError> {
+    Ok(Json(
+        crate::memory::append_user(&memory_dir(&state), &body.content).map_err(memory_failed)?,
+    ))
+}
+
+/// `POST /api/ai/memory/delete` —— 按下标删（下标是 `entries` 的顺序，越界忽略）。
+async fn delete_memory_entries(
+    State(state): State<AppState>,
+    Json(body): Json<MemoryDeleteRequest>,
+) -> Result<Json<crate::memory::MemoryDto>, ApiError> {
+    Ok(Json(
+        crate::memory::delete_entries(&memory_dir(&state), &body.indices).map_err(memory_failed)?,
+    ))
+}
+
+/// `DELETE /api/ai/memory` —— 清空。
+async fn clear_memory(State(state): State<AppState>) -> Result<Json<crate::memory::MemoryDto>, ApiError> {
+    Ok(Json(crate::memory::clear(&memory_dir(&state)).map_err(memory_failed)?))
 }
 
 // ---------------------------------------------------------------------------
