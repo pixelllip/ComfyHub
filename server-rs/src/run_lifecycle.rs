@@ -110,6 +110,21 @@ pub struct ModelRow {
     pub input_modalities: Vec<String>,
 }
 
+/// 这条助手消息有没有**有序块**（Kotlin `AiConversationRepo.hasParts()`）。
+///
+/// 重试判"空壳"时必须问它：一次失败的回复里，内容可能只在块里（工具卡 / 半段正文），
+/// 只看 `text` 就会把有内容的回复当空壳清掉。
+fn assistant_has_parts(state: &AppState, message_id: &str) -> Result<bool, ApiError> {
+    state.with(|conn| {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM ai_message_parts WHERE message_id = ?1",
+            rusqlite::params![message_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    })
+}
+
 /// 读 provider（不存在 → 400 `CONFIG_ERROR`，与 Kotlin `requireProvider` 同一个信封）。
 pub fn provider(state: &AppState, id: &str) -> Result<ModelRow, ApiError> {
     let row = state.with(|conn| {
@@ -388,8 +403,14 @@ pub fn start(state: &AppState, conversation_id: &str, req: &RunStartRequest) -> 
     };
 
     // ⑦ 助手消息：空的失败气泡**就地复用**；有内容的**原样留着**、另起一条
+    //
+    // ⚠ "空"的判据是 **`isEmptyReply()` 的两条同时成立**（正文空 **且** 一个块都没有）——
+    // 只看正文会把"说了半句话 + 一张工具卡"的失败回复当成空壳，重试时**就地清掉**：
+    // 用户报过的"429 之后看不到已经回复完的内容"正是这么丢的（R6 第三条纪律）。
     let assistant_message_id = match retry_assistant {
-        Some((message_id, text)) if text.trim().is_empty() => {
+        Some((message_id, text))
+            if text.trim().is_empty() && !assistant_has_parts(state, &message_id)? =>
+        {
             runs::reset_assistant_for_retry(state, &message_id, &provider.id, &model.id)?;
             message_id
         }

@@ -201,6 +201,9 @@ async fn run_once(
     let run = crate::runs::get(state, run_id)?;
     let assistant_id = run.assistant_message_id.clone().unwrap_or_default();
     let conversation_id = run.conversation_id.clone();
+    // `message.completed` 要报"这一轮跑了多久 / 用的是哪档思考"（与 Kotlin 同一个载荷）
+    let started = std::time::Instant::now();
+    let effort_stored = run.reasoning_effort.clone().unwrap_or_else(|| "off".to_string());
 
     // ---- 上下文（在发请求之前一次取齐）--------------------------------------
     let history = crate::conversations::list_messages(state, &conversation_id)?;
@@ -247,14 +250,17 @@ async fn run_once(
     // 起标题的附加指令：**只按轮带、且插在系统提示之后（第 2 条）**。
     // 两条理由都踩过（AGENTS §10.1）：常驻会让后面每一轮都再吐一次标记（漏进正文）；
     // 挂末尾会挡住"最后一条消息是工具结果"这个事实（模型以为还没干活）。
+    //
+    // ⚠ **"还在起标题"这个条件是逐轮重算的**（不是开头算一次）：第一轮摘到标题之后，
+    // 后面的工具轮就不该再提醒模型吐标记 —— 那正是"标记漏进正文"的来源。
+    // Kotlin 的 `shouldSummarizeTitle`：会话标题还是空的 / 「新对话」，且用户消息 ≤ 1 条。
     let user_count = history.iter().filter(|m| m.role == "user").count();
-    if user_count <= 1 {
-        turns.push(ChatTurn {
-            role: "system".into(),
-            content: crate::nsfw_prompt::TITLE_INSTRUCTION.to_string(),
-            ..Default::default()
-        });
-    }
+    let title_wanted = user_count <= 1 && conversation_needs_title(state, &conversation_id);
+    // 摘标记的状态机：只有真要起标题时才开（关掉时原样透传）。
+    // ⚠ 放在 `Arc<Mutex<…>>` 里：流式回调（同步闭包）与轮循环都要用它。
+    let stripper = Arc::new(Mutex::new(crate::title_strip::TitleStripper::new(title_wanted)));
+    let mut title_applied = false;
+    let mut continuations = 0usize;
 
     // 历史（**不含**当前那条助手占位）：只带正文与工具轮，备注类不进上下文
     for message in history.iter().filter(|m| m.id != assistant_id) {
@@ -310,10 +316,18 @@ async fn run_once(
     let mut last_provider_response_id: Option<String> = None;
     let mut step = 0usize;
     let mut budget_exhausted = false;
+    // 上游这一轮是怎么结束的（`length` = 被输出长度上限截断 → 要接着写）
+    // 初值只为让编译器看清"每轮都会赋值"；`unused_assignments` 在这里是误报。
+    #[allow(unused_assignments)]
+    let mut finish_reason: Option<String> = None;
 
     loop {
         if state.executor.is_cancelled(run_id) {
-            let sink = sink.lock().unwrap_or_else(|e| e.into_inner());
+            let pending = stripper.lock().unwrap_or_else(|e| e.into_inner()).flush();
+            let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
+            if !pending.is_empty() {
+                sink.push_text(&pending);
+            }
             sink_now(state, &assistant_id, &sink)?;
             crate::runs::update_message(state, &assistant_id, &sink.text_body(), "cancelled", None, None)?;
             drop(sink);
@@ -322,10 +336,27 @@ async fn run_once(
         }
 
         let mut turns_now = turns.clone();
+        // 起标题的指令**按轮决定**：还没摘到标题的那些轮次才带（摘到了就不再提，
+        // 否则模型会在后面的轮次里把标记再吐一遍 —— 那行标记就漏进正文了）。
+        // 位置固定在系统提示之后（第 2 条）：挂末尾会挡住"最后一条消息是工具结果"这个事实。
+        let still_want_title = title_wanted
+            && !title_applied
+            && stripper.lock().unwrap_or_else(|e| e.into_inner()).title().is_none();
+        if still_want_title {
+            turns_now.insert(
+                1,
+                ChatTurn {
+                    role: "system".into(),
+                    content: crate::nsfw_prompt::TITLE_INSTRUCTION.to_string(),
+                    ..Default::default()
+                },
+            );
+        }
         turns_now.extend(trailing.iter().cloned());
 
         let outcome = {
             let sink = sink.clone();
+            let stripper = stripper.clone();
             let state_for_cb = state.clone();
             let run = run_id.to_string();
             let assistant = assistant_id.clone();
@@ -351,8 +382,15 @@ async fn run_once(
                     };
                     match event {
                         StreamEvent::TextDelta(chunk) => {
-                            sink.push_text(&chunk);
-                            emit(json!({ "messageId": assistant, "text": chunk }), event_type::TEXT_DELTA)?;
+                            // 摘掉 `[标题]…[/标题]`（回声也摘）：喂给界面的**只有**摘过之后的文本
+                            let visible = stripper
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .push(&chunk);
+                            if !visible.is_empty() {
+                                sink.push_text(&visible);
+                                emit(json!({ "messageId": assistant, "text": visible }), event_type::TEXT_DELTA)?;
+                            }
                         }
                         StreamEvent::ReasoningDelta(chunk) => {
                             sink.push_reasoning(&chunk);
@@ -378,13 +416,32 @@ async fn run_once(
             Err(e) => {
                 // **失败也要把已经说出去的话落下来**（R6 第 2 条）——
                 // 一次 429 不该让用户已经看到的那段话凭空消失。
-                let sink = sink.lock().unwrap_or_else(|e| e.into_inner());
+                // 摘标题的缓冲里可能还压着开头那一段（还没确认是不是标记），失败时也要放出来。
+                let pending = stripper.lock().unwrap_or_else(|e| e.into_inner()).flush();
+                let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
+                if !pending.is_empty() {
+                    sink.push_text(&pending);
+                }
                 sink_now(state, &assistant_id, &sink)?;
                 crate::runs::update_message(state, &assistant_id, &sink.text_body(), "failed", None, None)?;
                 return Err(e);
             }
         };
 
+        finish_reason = idle.finish_reason.clone();
+        // 摘到标题就**立刻**写进会话并广播（界面左侧列表马上改名）；
+        // 只有第一次算数 —— 后面那些是回声（`TitleStripper` 里已经只认第一次）。
+        if !title_applied {
+            let extracted = stripper
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .title()
+                .map(|t| t.to_string());
+            if let Some(title) = extracted {
+                apply_conversation_title(state, run_id, &conversation_id, &title)?;
+                title_applied = true;
+            }
+        }
         total_usage = Some(crate::upstream::merge_usage(
             total_usage,
             idle.usage.as_ref().unwrap_or(&json!({})),
@@ -400,6 +457,29 @@ async fn run_once(
         }
         let calls = accumulator.finish();
         if calls.is_empty() {
+            // **被输出长度上限截断**：再要一轮把话补完，而不是把半句当结尾（Kotlin `MAX_CONTINUATIONS`）。
+            // 上限 3 次是个折中：常见模型一轮 4096 tokens（≈3000 汉字），3 次够写完一篇长回答；
+            // 再多就是"模型陷在长回复里出不来"，用户等到的是账单和一直转圈的页面。
+            if is_truncated_by_output_limit(finish_reason.as_deref()) && continuations < MAX_CONTINUATIONS {
+                continuations += 1;
+                // ⚠ 续写请求里要带上**已经说过的那半段**（作为最后一条 assistant 轮）：
+                // 少了它，模型看到的上下文是"用户突然说'接着写'"，它会从头再讲一遍
+                // （Kotlin 那边同样把这一轮的正文留在 turns 里）。
+                let partial = sink.lock().unwrap_or_else(|e| e.into_inner()).text.clone();
+                if !partial.trim().is_empty() {
+                    trailing.push(ChatTurn {
+                        role: "assistant".into(),
+                        content: partial,
+                        ..Default::default()
+                    });
+                }
+                trailing.push(ChatTurn {
+                    role: "user".into(),
+                    content: crate::nsfw_prompt::CONTINUE_INSTRUCTION.to_string(),
+                    ..Default::default()
+                });
+                continue;
+            }
             break;
         }
 
@@ -426,8 +506,18 @@ async fn run_once(
             break;
         }
 
-        // 助手这一轮的正文 + 工具调用，作为**下一轮的上下文**
-        let round_text = sink.lock().unwrap_or_else(|e| e.into_inner()).take_text();
+        // 助手这一轮的正文 + 工具调用，作为**下一轮的上下文**。
+        //
+        // ⚠ **封段之后才 take**（R6 的关键一处）：`take_text()` 会把这段正文从 sink 里**拿走**，
+        // 而这段正文同时必须留在 `parts` 里 —— 否则"这一轮说完话、下一轮撞 429"时，
+        // 已经说出去的正文在库里**一个字都没有**（界面上那半段凭空消失）。
+        // Kotlin 那边是"先 `parts.add("text", …)` 再起工具轮"，顺序完全一样。
+        let round_text = {
+            let mut guard = sink.lock().unwrap_or_else(|e| e.into_inner());
+            let text = guard.text.clone();
+            guard.seal_text();
+            text
+        };
         trailing.push(ChatTurn {
             role: "assistant".into(),
             content: round_text,
@@ -474,10 +564,15 @@ async fn run_once(
     }
 
     // ---- 落库 --------------------------------------------------------------
-    let body = {
-        let sink = sink.lock().unwrap_or_else(|e| e.into_inner());
+    // 摘标题的缓冲兜底放行（模型没按格式给标题时，开头那一段一个字都不能少）
+    let pending = stripper.lock().unwrap_or_else(|e| e.into_inner()).flush();
+    let (body, completed_parts, reasoning_text) = {
+        let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
+        if !pending.is_empty() {
+            sink.push_text(&pending);
+        }
         sink_now(state, &assistant_id, &sink)?;
-        sink.text_body()
+        (sink.text_body(), parts_json(&sink), sink.reasoning.clone())
     };
 
     // usage 事件的形状：归一到 OpenAI 形状（界面读的是它）
@@ -503,8 +598,16 @@ async fn run_once(
         event_type::MESSAGE_COMPLETED,
         &json!({
             "messageId": assistant_id,
-            "status": "complete",
             "text": body,
+            // 键集合与 Kotlin `HarnessRunner:838` **逐字对齐**（界面与 e2e 都读它们）：
+            // `parts` 是**有序块**（少了它，重开会话/另一台设备画不出工具卡），
+            // `finishReason` / `elapsedMs` / `steps` 是界面上的"这一轮怎么结束的"。
+            "reasoning": if reasoning_text.is_empty() { Value::Null } else { json!(reasoning_text) },
+            "finishReason": finish_reason.clone().unwrap_or_else(|| "stop".to_string()),
+            "elapsedMs": started.elapsed().as_millis() as i64,
+            "reasoningEffort": effort_stored,
+            "steps": step,
+            "parts": completed_parts,
             "usage": total_usage,
         }),
     )?;
@@ -515,6 +618,80 @@ async fn run_once(
 
 /// 审批等待的上限（秒）。超时 = 拒绝（与 Kotlin 的 `ToolApprovalGate` 同语义）。
 pub const APPROVAL_TIMEOUT_SECONDS: u64 = 300;
+
+/// "接着写"最多来几轮（Kotlin `HarnessRunner.MAX_CONTINUATIONS`）。
+pub const MAX_CONTINUATIONS: usize = 3;
+
+/// 上游给的结束原因里，哪些表示"是被输出长度上限截断的"
+/// （与 Kotlin `isTruncatedByOutputLimit` 逐字一致）。
+pub fn is_truncated_by_output_limit(finish_reason: Option<&str>) -> bool {
+    matches!(
+        finish_reason.map(|r| r.to_lowercase()).as_deref(),
+        Some("length") | Some("max_tokens") | Some("max_output_tokens") | Some("max_output_token")
+    )
+}
+
+/// 这个会话还该不该让模型**起标题**（Kotlin `shouldSummarizeTitle`）。
+///
+/// 标题不是空的、也不是「新对话」→ 说明用户自己改过（或已经起过）→ **尊重用户，不再覆盖**。
+/// "绝不拿正文的第一句话去糊弄一个标题"（那才是"看起来总结过了"的假象）。
+fn conversation_needs_title(state: &AppState, conversation_id: &str) -> bool {
+    let title = state
+        .with(|conn| {
+            use rusqlite::OptionalExtension;
+            Ok(conn
+                .query_row(
+                    "SELECT title FROM ai_conversations WHERE id = ?1",
+                    rusqlite::params![conversation_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten())
+        })
+        .ok()
+        .flatten();
+    match title.as_deref().map(str::trim) {
+        None | Some("") | Some("新对话") => true,
+        _ => false,
+    }
+}
+
+/// 把模型给的标题写进会话，并**如实广播**给界面（`conversation.updated`）。
+///
+/// 写失败只记日志、**不打断 Run**：一个自动标题不值得让整轮回答失败（Kotlin 同）。
+fn apply_conversation_title(
+    state: &AppState,
+    run_id: &str,
+    conversation_id: &str,
+    title: &str,
+) -> Result<(), ApiError> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    let updated = state.write(|tx| {
+        tx.execute(
+            "UPDATE ai_conversations SET title = ?1 WHERE id = ?2",
+            rusqlite::params![trimmed.chars().take(255).collect::<String>(), conversation_id],
+        )?;
+        Ok(())
+    });
+    if let Err(error) = updated {
+        eprintln!("[title] 写自动标题失败 conversation={conversation_id}：{}", error.human());
+        return Ok(());
+    }
+    state.bus.emit(
+        state,
+        run_id,
+        event_type::CONVERSATION_UPDATED,
+        &json!({
+            "runId": run_id,
+            "conversationId": conversation_id,
+            "title": trimmed,
+        }),
+    )?;
+    Ok(())
+}
 /// 审批轮询间隔（毫秒）—— 闸门读的是**库**（跨端可见），所以是轮询而不是通道。
 pub const APPROVAL_POLL_MS: u64 = 150;
 
@@ -983,13 +1160,6 @@ impl Sink {
         ));
     }
 
-    /// 取走**当前这一段**正文（工具往返时它要作为助手轮的内容回传给上游）。
-    ///
-    /// 只取"还没封段的那一段"：已经封好的那些块代表更早的轮次，它们**已经**在
-    /// `trailing` 里回传过了（重复回传会让上游看到两遍同样的话）。
-    fn take_text(&mut self) -> String {
-        std::mem::take(&mut self.text)
-    }
 
     /// 落库用的完整正文（所有正文段拼起来）—— `ai_messages.text` 那一列。
     fn text_body(&self) -> String {
@@ -1008,15 +1178,15 @@ impl Sink {
     }
 }
 
-/// 把攒下来的内容落成有序块（**收尾的每一条路都要调**）。
-fn sink_now(state: &AppState, assistant_id: &str, sink: &Sink) -> Result<(), ApiError> {
-    if assistant_id.is_empty() || sink.is_empty() {
-        return Ok(());
-    }
-    let reasoning = sink.reasoning.clone();
+/// 把攒下来的内容整理成**有序块列表**（`(type, text, tool_call_id, json_payload)` 文本）。
+///
+/// 抽出来是为了让"落库"与"`message.completed` 事件里的 `parts`"用**同一份**列表 ——
+/// 两处各拼一次，迟早出现"库里有的块、事件里没有"（界面读的是事件，重开会话读的是库，
+/// 于是同一段回复在两处长得不一样）。
+fn parts_of(sink: &Sink) -> Vec<(String, String, Option<String>, Option<String>)> {
     let mut parts: Vec<(String, String, Option<String>, Option<String>)> = Vec::new();
-    if !reasoning.is_empty() {
-        parts.push(("reasoning".into(), reasoning, None, None));
+    if !sink.reasoning.is_empty() {
+        parts.push(("reasoning".into(), sink.reasoning.clone(), None, None));
     }
     for (kind, text, tool_call_id, payload) in &sink.parts {
         parts.push((kind.clone(), text.clone(), tool_call_id.clone(), payload.as_ref().map(|v| v.to_string())));
@@ -1024,6 +1194,36 @@ fn sink_now(state: &AppState, assistant_id: &str, sink: &Sink) -> Result<(), Api
     if !sink.text.is_empty() {
         parts.push(("text".into(), sink.text.clone(), None, None));
     }
+    parts
+}
+
+/// [`parts_of`] → `message.completed` 里的 `parts`（形状 = `AiMessagePartDto`，可空键省略）。
+fn parts_json(sink: &Sink) -> Vec<Value> {
+    parts_of(sink)
+        .into_iter()
+        .map(|(kind, text, tool_call_id, payload)| {
+            let mut out = serde_json::Map::new();
+            out.insert("type".into(), json!(kind));
+            if !text.is_empty() {
+                out.insert("text".into(), json!(text));
+            }
+            if let Some(call_id) = tool_call_id.filter(|c| !c.is_empty()) {
+                out.insert("toolCallId".into(), json!(call_id));
+            }
+            if let Some(payload) = payload.and_then(|p| serde_json::from_str::<Value>(&p).ok()) {
+                out.insert("jsonPayload".into(), payload);
+            }
+            Value::Object(out)
+        })
+        .collect()
+}
+
+/// 把攒下来的内容落成有序块（**收尾的每一条路都要调**）。
+fn sink_now(state: &AppState, assistant_id: &str, sink: &Sink) -> Result<(), ApiError> {
+    if assistant_id.is_empty() || sink.is_empty() {
+        return Ok(());
+    }
+    let parts = parts_of(sink);
     state.write(move |tx| {
         // 重试复用同一条消息时可能已经有块了：先删再按当前内容重建（幂等）
         tx.execute("DELETE FROM ai_message_parts WHERE message_id = ?1", rusqlite::params![assistant_id])?;
@@ -1157,6 +1357,20 @@ fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
                 content: body,
                 tool_calls: calls,
                 tool_call_id: None,
+                images: Vec::new(),
+            });
+        }
+        // ⚠ **助手消息里的工具结果也要作为独立的一轮回填**（`role = "tool"`）。
+        // 一次失败/中断的助手消息会把"这一轮的正文 + 工具卡 + 工具结果"落在**同一条**消息里；
+        // 只发助手那一轮、把工具结果丢掉，上游看到的最后一条就是 assistant ——
+        // 而假网关（以及真实模型）靠"最后一条是不是工具结果"判断"工具跑完了、该收口"，
+        // 于是它会**再调一次同一个工具**（实测：重试时多跑了一轮工具）。
+        for part in message.parts.iter().filter(|p| p.r#type == "tool_result") {
+            out.push(ChatTurn {
+                role: "tool".into(),
+                content: part.text.clone().unwrap_or_default(),
+                tool_calls: Vec::new(),
+                tool_call_id: part.tool_call_id.clone(),
                 images: Vec::new(),
             });
         }

@@ -64,6 +64,7 @@ pub mod strict_intake;
 pub mod sync;
 pub mod system_prompt;
 pub mod thumbs;
+pub mod title_strip;
 pub mod tools;
 pub mod upstream;
 pub mod workflow_convert;
