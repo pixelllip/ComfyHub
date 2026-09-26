@@ -283,13 +283,33 @@ pub async fn media_file(state: AppState, id: i64, headers: HeaderMap) -> Result<
     let media = get(&state, id)?;
     let path = resolve_media(state.media_dir(), &media.stored_name)
         .ok_or_else(|| ApiError::not_found(format!("文件已丢失: {}", media.stored_name)))?;
+    let mime = media
+        .mime_type
+        .clone()
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    serve_path(&path, media.sha256.as_deref(), &mime, &media.original_name, &headers).await
+}
 
-    // ETag 直接用内容哈希：`media_assets.sha256` 本来就有（没有就退回 size-mtime）
-    let meta = tokio::fs::metadata(&path)
+/// 把磁盘上的一个文件流出去：**ETag（内容寻址）+ `If-None-Match` 304 + 单段 Range 206**。
+///
+/// 抽成公共函数是为了让**附件原件**（`GET /api/ai/attachments/{id}/file`）与画廊产物**共用同一份实现**：
+/// 视频拖动进度条靠的就是 Range，两处各写一份必然漂移（一处支持 Range、另一处不支持，
+/// 表现是"画廊里的视频能拖、聊天里的拖不动"）。
+///
+/// `etag` 给内容 sha256；没有就退回 `len-mtime`（与画廊那条路同一个口径）。
+pub async fn serve_path(
+    path: &std::path::Path,
+    etag: Option<&str>,
+    mime: &str,
+    name: &str,
+    headers: &HeaderMap,
+) -> Result<Response, ApiError> {
+    let meta = tokio::fs::metadata(path)
         .await
         .map_err(|e| ApiError::internal(format!("读取文件失败：{e}")))?;
     let len = meta.len();
-    let etag = match media.sha256.clone().filter(|s| !s.is_empty()) {
+    let etag = match etag.filter(|s| !s.is_empty()) {
         Some(sha) => format!("\"{sha}\""),
         None => format!(
             "\"len{}-{:x}\"",
@@ -313,17 +333,13 @@ pub async fn media_file(state: AppState, id: i64, headers: HeaderMap) -> Result<
         }
     }
 
-    let mime = media
-        .mime_type
-        .clone()
-        .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| "application/octet-stream".to_string());
-    let disposition = inline_disposition(&media.original_name);
+    let mime = if mime.trim().is_empty() { "application/octet-stream" } else { mime };
+    let disposition = inline_disposition(name);
 
     // Range：视频拖动进度条就靠它
     if let Some(raw) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
         if let Some((start, end)) = parse_range(raw, len) {
-            let mut file = tokio::fs::File::open(&path)
+            let mut file = tokio::fs::File::open(path)
                 .await
                 .map_err(|e| ApiError::internal(format!("打开文件失败：{e}")))?;
             file.seek(std::io::SeekFrom::Start(start))
@@ -344,7 +360,7 @@ pub async fn media_file(state: AppState, id: i64, headers: HeaderMap) -> Result<
         }
     }
 
-    let file = tokio::fs::File::open(&path)
+    let file = tokio::fs::File::open(path)
         .await
         .map_err(|e| ApiError::internal(format!("打开文件失败：{e}")))?;
     Ok(Response::builder()

@@ -14,6 +14,7 @@
 
 pub mod ai;
 pub mod ai_settings;
+pub mod attachments;
 pub mod auth;
 pub mod builtin;
 pub mod capability_catalog;
@@ -31,6 +32,7 @@ pub mod db;
 pub mod desktop_tools;
 pub mod endpoint_guard;
 pub mod events;
+pub mod file_kind;
 pub mod executor;
 pub mod graph_parse;
 pub mod inputs;
