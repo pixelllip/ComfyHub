@@ -55,6 +55,11 @@ pub struct AppState {
     pub bus: Arc<crate::events::RunEventBus>,
     /// 正在跑的 Run 与它们的取消旗标（P4 第 30 步）。
     pub executor: Arc<crate::executor::Executor>,
+    /// MCP 桥（P4 第 45 步）：官方 comfy-mcp 那 39 个工具的注册表。
+    ///
+    /// **懒启动**：只有"问工具清单"或"调 MCP 工具"才会真的去起 Python 子进程 ——
+    /// 于是集成测试构造的 AppState 永远不会去拉一个外部进程。
+    pub mcp: Arc<crate::mcp::McpRegistry>,
 }
 
 impl AppState {
@@ -65,6 +70,7 @@ impl AppState {
             media_dir: Arc::new(media_dir.into()),
             bus: Arc::new(crate::events::RunEventBus::new()),
             executor: Arc::new(crate::executor::Executor::new()),
+            mcp: Arc::new(crate::mcp::McpRegistry::new()),
         }
     }
 

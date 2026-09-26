@@ -219,8 +219,9 @@ async fn run_once(
     // ⚠ 桌面执行器用 [`crate::tools::catalog`]（手机 + **桌面专属**），不是只取手机清单：
     // Kotlin 的桌面提示词列的是**全量**工具（含 `read_file` / `write_file` / `comfy_*`）。
     // 只取手机那 7 个的话，模型在桌面上永远不知道自己能动文件（P4 第 40 步修）。
-    let tools = crate::tools::specs(&policy);
-    let tool_refs: Vec<crate::tools::ToolView<'static>> = crate::tools::catalog(&policy);
+    let mcp_views = state.mcp.tools();
+    let tools = crate::tools::specs_with(&policy, &mcp_views);
+    let tool_refs: Vec<crate::tools::ToolView<'static>> = crate::tools::catalog_with(&policy, &mcp_views);
     debug_assert_eq!(tool_refs.len(), tools.len());
     let system_prompt = crate::system_prompt::render(
         &provider.display_name,
@@ -570,7 +571,14 @@ async fn handle_call(
     max_calls: i64,
 ) -> Result<CallOutcome, ApiError> {
     let arguments: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
-    let access = policy.access_for(&call.name, crate::tools::default_access(&call.name));
+    // 出厂权限档：静态清单里没有的名字，可能是运行时拉到的 MCP 工具（第 45 步）——
+    // 那一批的档位由 `McpToolPolicy` 决定（`run_workflow` = ASK、`update_comfyui` = DENY…）。
+    // 两个来源都没这个工具时回 `ASK`（保守：宁可多问一次，也不默默放开一个写操作）。
+    let fallback = state
+        .mcp
+        .access_of(&call.name)
+        .unwrap_or_else(|| crate::tools::default_access(&call.name));
+    let access = policy.access_for(&call.name, fallback);
     let needs_approval = access == crate::policy::ToolAccess::Ask;
     // 工具卡（界面按它画"正在调用 / 已拒绝"）：先落调用块，再落结果块。
     // 参数用**原文**（不是解析后的对象）：Dart 侧 `map['arguments']` 读的就是这个字符串。
@@ -609,7 +617,7 @@ async fn handle_call(
     }
 
     // ④ 三道预检，顺序照抄 Kotlin `ToolRegistry.invoke`（找不到 → 额度 → 策略）
-    if !crate::tools::is_implemented(&call.name) {
+    if !crate::tools::is_implemented(&call.name) && !state.mcp.has(&call.name) {
         return finish_failure(
             state,
             run_id,

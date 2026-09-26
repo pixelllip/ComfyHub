@@ -48,8 +48,17 @@ pub fn list_tools(state: &AppState) -> Result<Value, ApiError> {
     // ① 第 40 步之前这条路只看手机清单，于是文件工具实现了界面也看不见 ——
     //    用户会以为"这台后端不能改文件"；
     // ② `catalog` 会把 `deny` 的剔掉，而设置页的权限表**必须能看见**被禁用的工具
-    //    （剔掉的话用户点过一次禁用就再也开不回来）。
-    let tools = crate::tools::implemented()
+    //    （剔掉的话用户点过一次禁用就再也开不回来）；
+    // ③ 第 45 步起还要并上**运行时拉到的 MCP 工具**（Kotlin 那边列的就是它们，
+    //    漏了的话用户在设置里根本看不到 `run_workflow` 这些能生图的工具）。
+    let mut views = crate::tools::implemented();
+    for view in state.mcp.tools() {
+        if !views.iter().any(|tool| tool.name == view.name) {
+            views.push(view);
+        }
+    }
+    views.sort_by_key(|tool| tool.name);
+    let tools = views
         .into_iter()
         .map(|tool| {
             let mut out = Map::new();

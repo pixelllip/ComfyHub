@@ -12,7 +12,9 @@ path = "src/main.rs"
 [dependencies]
 # 与 docs/implementation-master-plan.md §5.1 的选型一致（版本按当时最新 stable）
 axum = { version = "0.8", features = ["multipart"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "io-util"] }
+# `process` / `sync` / `time` 是 MCP 桥（P4 第 45 步）要的：把 comfy-mcp 当子进程驱动，
+# 用 oneshot 把 JSON-RPC 回包送到等在 `request()` 里的那一侧，并按工具给不同超时。
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "io-util", "process", "sync", "time"] }
 # ★ bundled：SQLite 编进二进制 → 发布包不再需要 MySQL / JRE / VC++ 运行时
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

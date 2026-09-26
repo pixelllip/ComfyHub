@@ -195,13 +195,20 @@ impl ToolSession {
 pub fn specs(policy: &crate::policy::ToolPolicy) -> Vec<crate::protocol::ToolSpec> {
     catalog(policy)
         .into_iter()
-        .map(|tool| crate::protocol::ToolSpec {
-            name: tool.name.to_string(),
-            description: tool.description.to_string(),
-            parameters: serde_json::from_str(tool.input_schema)
-                .unwrap_or_else(|_| json!({"type":"object"})),
-        })
+        .map(|tool| spec_of_view(&tool))
         .collect()
+}
+
+/// 一条工具视图 → 下发给上游的 `ToolSpec`。
+///
+/// `input_schema` 是**原样透传**的那份 JSON Schema（MCP 的也一样，见 `mcp.rs` 模块头 §2）：
+/// 解析不出来时退化成空对象 schema，**不编一份我们自己的形状**（改错了模型就调不对参数）。
+pub fn spec_of_view(view: &ToolView<'_>) -> crate::protocol::ToolSpec {
+    crate::protocol::ToolSpec {
+        name: view.name.to_string(),
+        description: view.description.to_string(),
+        parameters: serde_json::from_str(view.input_schema).unwrap_or_else(|_| json!({"type":"object"})),
+    }
 }
 
 /// 一个工具在"清单"这一层的借用视图（两种来源的公共形状）。
@@ -328,8 +335,48 @@ fn spec_of(name: &str) -> Option<ToolView<'static>> {
 }
 
 /// 工具是否已实现（没实现的**不许下发**，也不许执行）。
+///
+/// ⚠ **不含运行时才拉到的 MCP 工具**：那一批的名单在 [`crate::mcp::McpRegistry`] 里，
+/// 只有拿着 `AppState` 的调用方（执行器 / 界面端点）才问得到 —— 见
+/// [`crate::mcp::McpRegistry::has`]。这里保持纯静态，是为了让"这一批真的实现了哪些"
+/// 在源码里一眼可数（`IMPLEMENTED`）。
 pub fn is_implemented(name: &str) -> bool {
     IMPLEMENTED.contains(&name)
+}
+
+/// 与 [`catalog`] 同一套判据，但**并上运行时拉到的 MCP 工具**（P4 第 45 步）。
+///
+/// 为什么要有它：`comfy-mcp` 的 39 个工具是运行时从子进程拉来的（清单在
+/// [`crate::mcp::McpRegistry`] 里），静态的 [`catalog`] 看不见它们。桌面执行器与
+/// `/api/ai/tools` 都要用"全量"（否则模型看不见能起实例 / 能跑工作流的那些工具，
+/// 而 Kotlin 那边是看得见的 —— 两端行为会悄悄分叉）。
+///
+/// ⚠ 合并之后仍**按 name 升序**（系统提示里那两行与下发的 `tools[]` 顺序都从这里来）。
+pub fn catalog_with(
+    policy: &crate::policy::ToolPolicy,
+    extra: &[ToolView<'static>],
+) -> Vec<ToolView<'static>> {
+    let mut out = catalog(policy);
+    for view in extra {
+        if policy.access_for(view.name, view.access) == crate::policy::ToolAccess::Deny {
+            continue;
+        }
+        // 同名以静态清单为准（真出现同名说明两个来源漂移了，取先来的那个更稳）
+        if out.iter().any(|tool| tool.name == view.name) {
+            continue;
+        }
+        out.push(*view);
+    }
+    out.sort_by_key(|tool| tool.name);
+    out
+}
+
+/// [`catalog_with`] 的 `ToolSpec` 版本（请求体里 `tools[]` 用的就是它）。
+pub fn specs_with(
+    policy: &crate::policy::ToolPolicy,
+    extra: &[ToolView<'static>],
+) -> Vec<crate::protocol::ToolSpec> {
+    catalog_with(policy, extra).iter().map(spec_of_view).collect()
 }
 
 /// 执行一次工具调用。
@@ -371,6 +418,11 @@ pub async fn execute(
         "comfy_get_status" => comfy_get_status(state, arguments).await,
         "comfy_sync_history" => comfy_sync_history(state).await,
         "comfy_load_workflow" => comfy_load_workflow(state, policy, arguments).await,
+        // ---- 官方 comfy-mcp 的 39 个工具（P4 第 45 步）------------------------
+        //
+        // 名字是**运行时**拉来的（`tools/list`），所以这里用"注册表里有没有"来兜底，
+        // 而不是往 `IMPLEMENTED` 里塞 39 个字符串 —— 那会变成两份会漂移的清单。
+        _ if state.mcp.has(name) => state.mcp.call(&state.project_root(), name, arguments).await,
         // 清单里没有的（模型幻觉出一个名字 / 这一批还没搬的）——
         // 码与 Kotlin `TOOL_NOT_FOUND` 一致，模型的分支行为才不会两端不同。
         _ => Err(ToolFailure::new(

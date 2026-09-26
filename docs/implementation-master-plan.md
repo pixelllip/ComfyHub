@@ -521,6 +521,48 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ✅ **Run 与 SSE 已落地**（第 26~30 步，见本节上半部分）—— 也就是说
 > **桌面执行器已经能真的聊**（不带工具、不带附件），**R5/R6 已在 Rust 侧重建**。
 >
+> ✅ **P4 第 45 步（2026-09-26）：MCP 桥（官方 comfy-mcp 的 39 个工具）** —— 第 45 步本来是
+> §9 起手顺序里的第 3 件（"AI 能不能真的生图"那一档），也是 §10.1 的 O1/O2 与 §10.5 的 O12 的落点。
+> 新模块 `server-rs/src/mcp.rs` 逐条对照 Kotlin 的三份实现 + `ComfyEnv.prepareLaunch`。
+>
+> - **协议层**（`McpClient`）：`initialize` → `notifications/initialized` → `tools/list` → `tools/call`，
+>   把 `comfy-mcp` 当子进程驱动。传输层做成**读一半 / 写一半的泛型**（`from_io`）：
+>   生产接子进程 stdio，测试用 `tokio::io::duplex` 接一台脚本化假服务器 ——
+>   于是协议每一处（噪音行、通知、超时、`isError`、stderr 尾部）都能在**不起 Python** 的前提下测到。
+>   五条纪律逐条落地：**进程只起一次**（注册表缓存客户端与清单）、**不弹控制台窗口**
+>   （`creation_flags(CREATE_NO_WINDOW)` —— 这条路 Rust 是正规的，Kotlin 只能借 Swing 把 JVM 变成
+>   GUI 子系统）、**stdout 只认 JSON-RPC**（噪音行跳过但留痕）、**stderr 单独排空并留尾部 N 行**、
+>   **超时按工具区分**（`run_workflow` 那一档 15 分钟，其余 120 秒）。
+> - **O12/O13（失败要能看到真因）**：`call_tool` 失败或服务端 `isError` 时，把
+>   **子进程 stderr 末尾 12 行**拼进 `ToolFailure.message` —— 少 `COMFY_BIN` 时 MCP 只回
+>   `Error executing tool xxx`，真因（`ComfyCliError: …`）一直埋在 stderr 里。
+> - **O1/O2（起实例要挂共享模型根）**：`prepare_launch` 是 `ComfyEnv.prepareLaunch` 的 Rust 版 ——
+>   `launch_comfyui` 的参数由**我们**补上 `--extra-model-paths-config` / `--input-directory` /
+>   `--output-directory`（值来自 `%APPDATA%\Comfy Desktop\settings.json` + `shared_model_paths.yaml`），
+>   **模型自己写过的参数一律不覆盖**，补了什么如实回给模型；拿不到 Desktop 配置就**如实警告**
+>   （"这次启动的实例看不到共享模型，别据此断言本机没有某个模型"），绝不编参数。
+>   `extra_args` 三种形状都认（数组 / JSON 字符串 / 空格分隔）—— 现场实测模型爱写字符串那种。
+> - **R12 的接法**：MCP 工具是**运行时**拉来的，而 `ToolView`/`IMPLEMENTED` 是静态的。
+>   刻意**不重构工具层**：拉到清单后把 name/description/schema 一次性 `Box::leak` 成 `&'static`
+>   （39 条、几十 KB，进程生命周期内固定），于是 `/api/ai/tools`、系统提示、下发的 `tools[]`
+>   继续走同一条既有管线；新增 `tools::catalog_with` / `specs_with` 把两个来源合并后仍**按 name 升序**。
+>   权限档照 Kotlin `McpToolPolicy`：`update_comfyui` / `install_node` / `download*` = `DENY`，
+>   `launch_comfyui` / `run_workflow` / `generate_image` 那一批 = `ASK`，"其余的只读查询" = `ALLOW`。
+>   **拿不到 MCP 运行时不算错**：清单里就是空的（与 Kotlin "注册不上就没有这些工具"一致），
+>   绝不"下发一个必然失败的调用"。
+> - **验收**：`cargo test` **331 例全绿**（208 lib + 121 api_test + 2 shape_lint；新增 16 例：
+>   握手与清单 / 结果按块拼起来且非文本块留占位 / `isError` 如实带回 / 噪音行跳过 /
+>   不回复就是 `MCP_TIMEOUT` / 服务端报错翻稳定码 / 服务端主动请求收到 `-32601` /
+>   stderr 尾部保留 / 读循环结束让在等的调用当场失败 / 权限档 / `scripts` 目录两种布局 /
+>   `extra_args` 三种形状 / 没有 Desktop 配置如实警告 / 补挂三参数 / 不覆盖模型自己写的 / 不存在的目录不补）。
+> - **真机验收（对着本机真的 comfy-mcp 0.10.0 + comfy-cli 1.20.0）**：起 Rust 后端（8096、**真库副本**、
+>   `COMFYHUB_PROJECT_ROOT` 指向真项目根）→ `GET /api/ai/tools` 回来 **53 个**工具
+>   （14 个静态 + 39 个 MCP），其中 `system_stats` / `nodes` / `run_workflow` / `launch_comfyui` /
+>   `get_logs` 等 28 个特征名字都在，`category=comfy`。
+>   也就是说**起子进程 + 握手 + 拉清单这条真路径是通的**（Python 3.12.10 便携版、`state.json` 里那份）。
+>   ⚠ 诚实边界：这一步只验到**工具清单**，还没有"让 AI 真的调一次 `run_workflow` 出图"的端到端
+>   （那需要真 provider 走一轮 Run，留给下一次真机验收）。
+>
 > ✅ **P4 第 14 步（`1108673`，2026-09-24）**：`GET /api/capture/workflows` —— 用户 bug ⑤ 那条路
 > （`prompts` 库里没有 ≠ 用户机器上没有）。新模块 `comfy_dirs.rs` 逐条对照
 > `ComfyWorkflowFiles.kt` + `ComfyLocator.kt` + `ComfyRoots.kt`，**三个目录来源一条不少**：
@@ -1665,8 +1707,8 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | # | 优化 | 现场证据 | 落点 |
 | --- | --- | --- | --- |
-| O1 | **ComfyHub 自己拥有"起实例"这条路**：Rust 侧搬 `ComfyEnv.prepareLaunch` 的三个参数（`--extra-model-paths-config` / `--input-directory` / `--output-directory`）+ 一个「带共享根重启」的动作 | `launch_comfyui` 起的**裸实例**让用户三条主工作流全部预检失败（`workflow_unknown_nodes`）；补上三参数后 unet 2→5、clip 2→5、lora 13→14，Anima 立刻能跑 | P4 新批次（`ComfyEnv` 的 Rust 版） |
-| O2 | **MCP 桥若下发 `launch_comfyui`，必须替用户带上那三个参数** —— 不能指望模型自己知道这台机器有共享模型根 | 同上（模型只会调 `launch_comfyui()`，然后所有工作流"缺模型"） | 第 45 步（MCP 桥） |
+| O1 | **ComfyHub 自己拥有"起实例"这条路**：Rust 侧搬 `ComfyEnv.prepareLaunch` 的三个参数（`--extra-model-paths-config` / `--input-directory` / `--output-directory`）+ 一个「带共享根重启」的动作 | `launch_comfyui` 起的**裸实例**让用户三条主工作流全部预检失败（`workflow_unknown_nodes`）；补上三参数后 unet 2→5、clip 2→5、lora 13→14，Anima 立刻能跑 | ✅ **已做（P4 第 45 步）**：`mcp.rs::prepare_launch` —— `launch_comfyui` 的参数由我们补，模型自己写过的一律不覆盖 |
+| O2 | **MCP 桥若下发 `launch_comfyui`，必须替用户带上那三个参数** —— 不能指望模型自己知道这台机器有共享模型根 | 同上（模型只会调 `launch_comfyui()`，然后所有工作流"缺模型"） | ✅ **已做（P4 第 45 步）**（桥接层统一补，工具描述一个字没改） |
 | O3 | **搬 `comfy_env_report`（+ `ComfyModels.inventory`）**：回答"实例能加载几个 / 盘上有几个 / 盘上有但实例看不到几个 → **重启实例，别下载**" | 这次的现场正是它要拦的那一类：`anima-base-v1.0` 明明在 `ComfyUI-Shared\models`（3.89GB），实例却看不到 | 优先于 `comfy_submit` 做 |
 
 ### 10.2 捕获与提交的时序（🔴）
@@ -1696,7 +1738,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | # | 优化 | 现场证据 | 落点 |
 | --- | --- | --- | --- |
-| O12 | **MCP 桥必须抓子进程 stderr，失败时把最后 N 行放进错误的 `detail` 返回** | 少 `COMFY_BIN` 时，MCP 只回 `Error executing tool xxx` —— 真因被 rich 的方框排版埋在 stderr 里，Kotlin 侧也只记 debug 日志 | 第 45 步 |
+| O12 | **MCP 桥必须抓子进程 stderr，失败时把最后 N 行放进错误的 `detail` 返回** | 少 `COMFY_BIN` 时，MCP 只回 `Error executing tool xxx` —— 真因被 rich 的方框排版埋在 stderr 里，Kotlin 侧也只记 debug 日志 | ✅ **已做（P4 第 45 步）**：stderr 单独排空留尾 40 行，失败时把末尾 12 行拼进 `ToolFailure.message` |
 | O13 | 我们的工具错误统一带"最后几行原始输出"（`detail`），不只给稳定码 | 同上（外部进程失败时，码+人话不够定位） | 工具层（`ToolFailure` 的约定） |
 | O14 | 把**排错捷径**写进 pitfalls 与系统提示：`comfy.exe <子命令> --json` 手敲 → 结构化信封（`error.code/message/hint`） | 这次就是靠它一眼看出"缺哪个模型、有哪些候选"（比我们自己的预检还清楚） | 文档 + 系统提示 |
 
@@ -1720,7 +1762,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | 项 | 状态 |
 | --- | --- |
-| **MCP 桥（官方 comfy-mcp 39 个工具）** | ⛔ 未做（协议与环境变量已摸清，见 §9 的探针表） |
+| **MCP 桥（官方 comfy-mcp 39 个工具）** | ✅ **已做（P4 第 45 步，2026-09-26）**：`server-rs/src/mcp.rs`（stdio JSON-RPC + 注册表 + 权限档 + `prepare_launch`）；真机验到 `/api/ai/tools` 回 53 个（39 个 MCP） |
 | **`comfy_submit`**（R10：审核 → 审批 → 提交 → 等 → 入库 → `mediaIds`） | ⛔ 未做 |
 | `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ 未做（前四个要 `ComfyModels` 本机清单） |
 | `comfy_use_attachment`（把附件投进 ComfyUI `input\`） | ⛔ 未做（依赖 R9） |

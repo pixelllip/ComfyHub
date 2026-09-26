@@ -50,7 +50,8 @@
 //! | **桌面文件工具五件**（`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`）+ **路径准入**（`resolve_read` / `resolve_write`：禁段、真实路径、目录根不可写） | ✅（P4 第 40 步；`desktop_tools.rs` + `policy.rs`，桌面提示词与下发的 `tools[]` 现在含它们） |
 //! | **comfy 五件**：`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` / `comfy_sync_history`（写库：建提示词 + 产物入库）/ `comfy_load_workflow`（把本机工作流文件读进库，界面格式按 `/object_info` 转换） | ✅（P4 第 41~44 步） |
 //! | **联网三工具**（`web_search` / `web_fetch` / `civitai_search`） | ⛔ **未搬**（系统提示里那一节暂时指向没下发的工具，见 `tools.rs` 的诚实清单） |
-//! | **`comfy_*` 其余八件**（`find_workflow` / `submit` / `use_attachment` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow`）+ `find_model` / 官方 comfy-mcp 39 个 | ⛔ **未搬**（要 ComfyUI 在场 / 要模型清单 / 要 `McpStdioClient`，见 `tools.rs` 的诚实清单） |
+//! | **官方 comfy-mcp 那 39 个工具**（`system_stats` / `nodes` / `run_workflow` / `launch_comfyui` / `get_logs` …） | ✅（P4 第 45 步：`mcp.rs` 起 `comfy-mcp` 子进程走 JSON-RPC，清单进 `/api/ai/tools` 与下发的 `tools[]`；`launch_comfyui` 由我们**替用户补上共享模型根那三个参数**，失败时把 stderr 尾部带进 `detail`） |
+//! | **`comfy_*` 其余八件**（`find_workflow` / `submit` / `use_attachment` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow`）+ `find_model` | ⛔ **未搬**（要 ComfyUI 在场 / 要模型清单，见 `tools.rs` 的诚实清单） |
 //! | **`WorkflowConvert` 的两处欠账** | ⚠ **组节点（subgraph）不展开**、**「模拟用户行为」（`emulateFrontend`）没实现** —— 两者都**如实报 `unsupportedNodes`**（不猜）；工具描述是从 Kotlin 逐字搬的，所以结果里**主动补一句 warning** 说明这一步没做 |
 //! | 附件（R9）：`/api/ai/attachments*` 与内联预算 | ⛔ **未搬**（有附件直接 `UNSUPPORTED_CONTENT`，不假装发得出去） |
 //! | `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功；`import-workflows` 要整套 `WorkflowConvert` 转换栈，`ingest` 要 ComfyUI 推送那条路） |
@@ -201,6 +202,19 @@ async fn main() {
         Ok(n) if n > 0 => println!("启动恢复：{n} 条待回答提问按失效收尾"),
         Ok(_) => {}
         Err(e) => eprintln!("启动恢复：收尾待回答提问失败（{}）", e.human()),
+    }
+
+    // ---- MCP 桥预热（P4 第 45 步）------------------------------------------
+    //
+    // 与 Kotlin `Application.module` 起 comfy-mcp 子进程同一件事：**在后台**拉起并拉清单，
+    // 不阻塞端口监听（握手实测约 3 秒，等它会让 App 的"等待后端"多等三秒）。
+    // 拉不到只记一句 —— 少一批工具也比后端起不来强。
+    {
+        let registry = state.mcp.clone();
+        let project_root = state.project_root();
+        tokio::spawn(async move {
+            comfyhub_server_rs::mcp::warmup(&registry, &project_root).await;
+        });
     }
 
     let app = routes::router(state)

@@ -32,6 +32,7 @@ pub mod executor;
 pub mod graph_parse;
 pub mod inputs;
 pub mod iso_time;
+pub mod mcp;
 pub mod media;
 pub mod media_upload;
 pub mod media_write;
