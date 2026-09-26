@@ -1407,6 +1407,11 @@ pub fn relight_and_shadow(
                 if alpha <= 0.02 {
                     continue;
                 }
+                // ⚠ **影子不许盖住人物自己**：模糊会把影子扩进剪影内部，不收这一下就把人物的
+                //   像素整块换成"压暗的背景"（实测：`lit-*.png` 里那块是人形的一片街景）
+                if source[y * w + x] > 127 {
+                    continue;
+                }
                 let darken = 1.0 - shadow.clamp(0.0, 1.0) * alpha;
                 let background = *base.get_pixel(x as u32, y as u32);
                 let pixel = person.get_pixel_mut(x as u32, y as u32);
