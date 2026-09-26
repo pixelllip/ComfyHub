@@ -521,6 +521,48 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ✅ **Run 与 SSE 已落地**（第 26~30 步，见本节上半部分）—— 也就是说
 > **桌面执行器已经能真的聊**（不带工具、不带附件），**R5/R6 已在 Rust 侧重建**。
 >
+> ✅ **P4 第 55 步（2026-09-26）：切流 C-1~C-4 —— 脚本与发布包真的指向 Rust 了**（4 个提交）
+>
+> **C-1/C-2：`server.ps1` 默认起 Rust**（`bb2354d`）
+> - 新增共享选择器 `scripts\backend.ps1`（`server.ps1` 与 `comfyhub.ps1 doctor` **共读一份**）：
+>   `-Backend auto|rust|kotlin` > `COMFYHUB_BACKEND` > `auto`；`auto` 的事实依据只有一条 ——
+>   **Rust 二进制在不在**（发布包 `<根>\server\comfyhub-server-rs.exe` → 源码树 release → debug）；
+>   找不到时**不报错、回退 Kotlin 并显式说一句**（回退绝不静默）。
+> - **JDK 改成懒解析**：以前脚本开头就 `Resolve-Jdk`，找不到直接 throw ——
+>   而"没装 JDK 21~23 的机器"正是发布包要支持的那一类，等于 **Rust 后端在一台没 JDK 的机器上起不来**。
+>   现在只有真的要跑 Kotlin / Gradle 时才找它。
+> - `Do-Stop` / `Do-Start` 的"已在运行"判断改成**认两个后端**：切流期间两边都可能在场，
+>   只停"当前选中的那个"会让旧的继续占端口（表现是"健康检查打到旧进程上"）。
+> - `doctor` 新增两行：**后端实现**（Rust/Kotlin + 正在跑的是谁）与**后端构建新鲜度**
+>   （exe 比源码旧就黄牌 —— 与 AGENTS §1 那条"界面类修复先查构建新鲜度"同一个判据）。
+> - **实测**：`pwsh -File scripts\comfyhub.ps1 up -SkipBuild` → 起的是
+>   `server-rs\target\release\comfyhub-server-rs.exe`（port 4606，`db=ok`），
+>   `.run\api.json` 写的是真实端口，**12 个关键端点逐个抽查全通**
+>   （health / tags / prompts / media / stats / ai.providers / ai.tools(56) / run-kit /
+>   conversations / sync.manifest / capture.status / providers.models）。
+>   ⚠ 过程中抓到一个真 bug：`$Script:Backend` 与参数 `$Backend` **同名**，
+>   作用域赋值把 Hashtable 塞进了带 `[ValidateSet]` 的参数 → `server.ps1` 当场抛
+>   "The variable cannot be validated…"。改名成 `$Script:BackendInfo` 解决。
+>
+> **C-3：打包只装 Rust 二进制**（`5671e31`）
+> - `packaging\manifest.json`：`backend` 组件换成 **`rust_binary`**（装配到 `<根>\server\comfyhub-server-rs.exe`）；
+>   `jre` 组件 `required: false` + `optional: true` + **默认不装**（要回退旧后端才 `-WithJre`）；
+>   `runtimeRequirements` 里 Java 那条标成 `legacy`。
+> - `pack-release.ps1`：新增 `rust_binary` 分支 + `Build-RustRelease`（**构建新鲜度优先**：
+>   源码比 exe 新才编，免得每次打包白等三分钟）+ 自检项换成 Rust exe（jar / java.exe 只在 `-WithJre` 时要求）。
+> - **实测**：`pack-release.ps1 -SkipApp` 装配出 **13.8MB**（Rust exe 12.8MB），旧的 jre(40MB)+jar(20MB) 全没了。
+>
+> **C-4：建表/迁移归 Rust（切流里最容易漏的一条）**（同一个提交）
+> - 原实现遇到缺库直接 `exit 3`（"先让 Kotlin 起一次库"）—— 那**在发布包里等于永远起不来**
+>   （包里根本没有 Kotlin）。新增 `db::open_or_create`：库缺/空 → 建父目录 + 建库 + 跑
+>   `db/schema.sqlite.sql`（**编译期 `include_str!` 嵌进二进制**，与 Kotlin 从 jar 里读同一性质）
+>   + 写 `user_version`；`user_version == 0` 的老库 → 收敛式跑一遍 DDL；已最新 → **绝不重跑**；
+>   库比后端新 → **只警告不拦**（拦了就没法回退版本）。
+> - **验收**：`cargo test` **423 例全绿**（279 lib + 121 api_test + 4 attachments + 3 import_folder
+>   + 7 provider_probe + 2 shape_lint + 6 submit_test；新增 4 例：全新库 / 已最新不动数据 /
+>   无版本号老库收敛 / 更新的库只警告）；**全新目录实测**：`.db` 不存在 → 自己建库建表
+>   （schemaVersion=1）→ 写端口文件 → `health.database=ok`；**发布包里的 exe 单独跑同样成立**。
+>
 > ✅ **P4 第 53 步（2026-09-26）：Provider 连接测试 + 模型发现（A2，设置页那两个按钮）** ——
 > 新模块 `server-rs/src/provider_probe.rs`，外加 `upstream::refine_from_body`（Kotlin `AiUpstream`
 > 那一段的移植，**与 LLM 调用共用一份**）。A 组（App 直接调用的端点）**至此清零**。
@@ -1930,9 +1972,18 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
    `server-rs\target\release\comfyhub-server-rs.exe` 两种布局）—— ✅ **端口文件那一半已经好了**（见 C-0），
    剩下的是脚本侧的路径解析与启动参数（传 `--port 0` 让后端自己挑，与 Kotlin 的自动端口同义）；
 2. `comfyhub.ps1 doctor`：报"当前是哪种后端 / 二进制构建新鲜度"；
-3. `pack-release.ps1` + `packaging\manifest.json`：`server` 组件换成 Rust 二进制（**不再需要 `jre/`**，
-   发布包从 36MB 再降）；`runtimeRequirements` 删掉 Java 那一条；
-4. `db/schema.sqlite.sql` 的建表/迁移归 Rust（现在建库仍由 Kotlin `Migrate` 干）；
+3. ✅ **已做（第 55 步，2026-09-26）**：`pack-release.ps1` + `packaging\manifest.json` 的 `backend`
+   组件换成 **`rust_binary`**（装配 `<根>\server\comfyhub-server-rs.exe`），`jre` 组件降级成
+   `required: false` + **默认不装**（要回退旧 Kotlin 后端才加 `-WithJre`），
+   `runtimeRequirements` 里 Java 那条也标成 `legacy`。**实测**：`pack-release.ps1 -SkipApp` 装配出
+   **13.8MB**（Rust exe 12.8MB；旧的 jre 40MB + jar 20MB 全没了），发布包里的 exe 在**全新目录**
+   （无库、无 JRE）里直接起来：自己建库（schemaVersion=1）→ 写端口文件 → `db=ok` + 17 个工具。
+4. ✅ **已做（第 55 步）**：**建表/迁移归 Rust** —— 新增 `db::open_or_create`：
+   ① 库文件不存在（或空）→ 建父目录 + 建库 + 跑 `db/schema.sqlite.sql`（**编译期嵌进二进制**，
+   与 Kotlin 从 jar 里读同一性质）+ 写 `user_version`；② `user_version == 0` 的老库 → 收敛式跑一遍 DDL；
+   ③ 已是最新 → 什么都不做（**绝不重跑 DDL**）；④ 库比后端新 → **只警告不拦**（拦了就没法回退版本）。
+   ⚠ 这是切流里被漏掉的一条硬要求：以前缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
+   **在发布包里等于永远起不来**（包里根本没有 Kotlin）。4 条用例 + 全新目录实测都过了。
 5. **四条 e2e 脚本 + `flutter test` + harness 用例对着 Rust 跑一遍**（§10.8 最后一行，切流前必须）；
 6. Kotlin 退役：删 `server/`（或移到 `legacy/`）、删 Gradle 相关文档段落、README/AGENTS 的"现状"描述更新。
 
