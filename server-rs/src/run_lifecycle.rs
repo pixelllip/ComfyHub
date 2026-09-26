@@ -256,13 +256,63 @@ pub fn start(state: &AppState, conversation_id: &str, req: &RunStartRequest) -> 
     let (effort_stored, effort_wire) = thinking_effort(&model, req.reasoning_effort.as_deref())?;
 
     // ④ 附件准入（R9）：**创建 Run 之前**用库里的事实再验一次。
-    //    现在 `ai_attachments` 的读写还没搬（P4 第 32 步），所以有附件就先如实拒绝 ——
-    //    "静默丢掉附件再假装发成功"是 R9 明令禁止的那件事。
-    if !attachment_ids.is_empty() {
-        return Err(ApiError::ai(
-            "UNSUPPORTED_CONTENT",
-            "附件功能还没搬到 Rust 后端（P4 第 32 步）；请先切回 Kotlin 后端，或去掉附件再发",
-        ));
+    //
+    // 三条纪律（AIH-030）：
+    //  ① 判定在这里、在 append 用户消息**之前**完成 —— 不通过就直接返回，**上游请求数为 0**；
+    //  ② 事实取自**库里**（`ai_attachments`），前端声明只是线索（AIH-027）；
+    //  ③ 不许把 blocker 降级成占位符再继续发（"看起来发出去了、其实没有"是明令禁止的）。
+    //
+    // 顺序也要紧：去重是**保序**的（Kotlin `distinct()` 同）——
+    // `currentAttachmentCount` 按序号传，顺序一变"第几个超了数量上限"就变了。
+    let mut unique_ids: Vec<String> = Vec::new();
+    for id in &attachment_ids {
+        if !unique_ids.contains(id) {
+            unique_ids.push(id.clone());
+        }
+    }
+    if !unique_ids.is_empty() {
+        // 准入要的是模型的**能力声明**（模态 / 传输 / 白名单 / 上限），
+        // 那是 `AiModelDto` 才有的字段（`ModelRow` 只带执行要用的那几个）。
+        // 目录里找不到就如实报 —— 绝不"读不到声明就当它什么都支持"。
+        let admission_model = crate::ai::list_models(state, &req.provider_id)?
+            .into_iter()
+            .find(|m| m.id == req.model_id)
+            .ok_or_else(|| {
+                ApiError::ai("UNKNOWN_MODEL", format!("模型不在目录中: {}", req.model_id))
+            })?;
+        let mut blockers: Vec<String> = Vec::new();
+        for (index, id) in unique_ids.iter().enumerate() {
+            let dto = crate::attachments::get(state, id)?
+                .ok_or_else(|| ApiError::ai("CONFIG_ERROR", format!("附件不存在或已被删除: {id}")))?;
+            let fact = crate::strict_intake::AttachmentFact {
+                name: dto.name.clone(),
+                modality: Some(dto.modality.clone()),
+                mime_type: dto.mime_type.clone(),
+                size_bytes: dto.size_bytes,
+                pixels: match (dto.width, dto.height) {
+                    (Some(w), Some(h)) => Some(w * h),
+                    _ => None,
+                },
+            };
+            let transports = crate::strict_intake::adapter_transports(
+                &provider.api,
+                fact.modality.as_deref().unwrap_or_default(),
+            );
+            let result =
+                crate::strict_intake::evaluate(&admission_model, &fact, &transports, index as i64);
+            for blocker in result.blockers {
+                blockers.push(format!("{}：{blocker}", dto.name));
+            }
+        }
+        if !blockers.is_empty() {
+            return Err(ApiError::ai(
+                "UNSUPPORTED_CONTENT",
+                format!(
+                    "有附件未通过准入，已阻断发送（未产生任何上游请求）：{}",
+                    blockers.join("；")
+                ),
+            ));
+        }
     }
 
     // ⑤ 重试的三种情况（AIH-024）：旧 Run 必须属于这条会话；旧助手消息只有
@@ -297,13 +347,24 @@ pub fn start(state: &AppState, conversation_id: &str, req: &RunStartRequest) -> 
     let user_message_id = match retry_of.as_ref().and_then(|r| r.user_message_id.clone()) {
         Some(id) => Some(id),
         None => {
-            let parts = vec![crate::conversations::AiMessagePartDto {
+            // 正文 + **每个附件一个有序块**（Kotlin 同）：块是附件与消息之间唯一的关联，
+            // 少了它界面画不出缩略图、执行器也不知道"这条消息带了图"（R9 的"不许静默丢弃"）。
+            let mut parts = vec![crate::conversations::AiMessagePartDto {
                 r#type: "text".into(),
                 text: Some(req.text.clone()),
                 attachment_id: None,
                 tool_call_id: None,
                 json_payload: None,
             }];
+            for id in unique_ids.iter() {
+                parts.push(crate::conversations::AiMessagePartDto {
+                    r#type: "attachment".into(),
+                    text: None,
+                    attachment_id: Some(id.clone()),
+                    tool_call_id: None,
+                    json_payload: None,
+                });
+            }
             let appended = crate::conversations::append_message(
                 state,
                 conversation_id,

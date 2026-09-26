@@ -250,11 +250,15 @@ async fn run_once(
     }
 
     // 历史（**不含**当前那条助手占位）：只带正文与工具轮，备注类不进上下文
+    //
+    // 附件块要显示成人能看懂的名字，所以先把历史里出现过的附件 id 一次查好
+    // （一次查完，避免在 `turns_of` 里碰数据库）。
+    let attachment_names = attachment_names_of(state, &history);
     for message in history.iter().filter(|m| m.id != assistant_id) {
         if message.role == "system_note" {
             continue;
         }
-        turns.extend(turns_of(message));
+        turns.extend(turns_of(message, &attachment_names));
     }
     // 当前助手那条：把**已经说出去的部分**作为上下文（重试时的续写依据）
     if let Some(current) = history.iter().find(|m| m.id == assistant_id) {
@@ -1029,14 +1033,37 @@ fn sink_now(state: &AppState, assistant_id: &str, sink: &Sink) -> Result<(), Api
     })
 }
 
+/// 历史里出现过的附件 id → 名字（给"未随本次请求发送"那句用）。
+///
+/// 查不到的**如实留 id**（附件可能在会话之后被删了）—— 不许静默抹掉那一项。
+fn attachment_names_of(state: &AppState, history: &[AiMessageDto]) -> std::collections::HashMap<String, String> {
+    let mut names = std::collections::HashMap::new();
+    for message in history {
+        for part in message.parts.iter().filter(|p| p.r#type == "attachment") {
+            let Some(id) = part.attachment_id.as_ref() else { continue };
+            if names.contains_key(id) {
+                continue;
+            }
+            if let Ok(Some(dto)) = crate::attachments::get(state, id) {
+                names.insert(id.clone(), dto.name);
+            }
+        }
+    }
+    names
+}
+
 /// 一条历史消息 → 上游的轮次（`HarnessRunner.turnsFromHistory` 的精简版）。
 ///
 /// 规则：
 /// * `user` / `assistant` 的**正文**进上下文；正文空但有工具调用的助手轮也要进
 ///   （否则上游看到的工具结果**没有对应的调用**，OpenAI 会直接 400）；
 /// * `tool_result` 块变成 `role = "tool"` 的一轮（带 `tool_call_id`）；
-/// * 思考段**不进**上下文（它是本地展示用的；上游各家都不接受回传思考）。
-fn turns_of(message: &AiMessageDto) -> Vec<ChatTurn> {
+/// * 思考段**不进**上下文（它是本地展示用的；上游各家都不接受回传思考）；
+/// * **附件块**（R9 / AIH-030）：Rust 侧的适配器**还没有实现把附件内联进请求体**
+///   （Kotlin 也只有图片的 `inline_base64`）。所以这里**必须**在那一轮正文后面附一句
+///   "以下附件未随本次请求发送：…" —— 既不能静默丢弃，也不能因为消息里带了图就把请求打成 400。
+///   `names` 是附件 id → 名字的映射（调用方一次查好，避免在这里碰数据库）。
+fn turns_of(message: &AiMessageDto, names: &std::collections::HashMap<String, String>) -> Vec<ChatTurn> {
     let mut out = Vec::new();
     if message.role == "assistant" {
         let body: String = message
@@ -1069,6 +1096,29 @@ fn turns_of(message: &AiMessageDto) -> Vec<ChatTurn> {
             .filter(|p| p.r#type == "text")
             .filter_map(|p| p.text.clone())
             .collect()
+    };
+    // 附件块：这一版一个都发不出去，所以**全部**进"未随本次请求发送"那一句
+    let unsent: Vec<String> = message
+        .parts
+        .iter()
+        .filter(|p| p.r#type == "attachment")
+        .filter_map(|p| p.attachment_id.clone())
+        .map(|id| match names.get(&id) {
+            Some(name) => format!("{name}（id={id}）"),
+            None => id,
+        })
+        .collect();
+    let body = if unsent.is_empty() {
+        body
+    } else {
+        let mut text = body;
+        if !text.trim().is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str("（以下附件未随本次请求发送：");
+        text.push_str(&unsent.join("、"));
+        text.push_str("；这个后端还没有把附件内联进请求体的能力。）");
+        text
     };
     if !body.trim().is_empty() {
         out.push(ChatTurn {
@@ -1165,7 +1215,7 @@ mod tests {
             ],
         );
         m.text = "答案".into();
-        let turns = turns_of(&m);
+        let turns = turns_of(&m, &std::collections::HashMap::new());
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].content, "答案");
         assert!(!turns[0].content.contains("我一直在想"));
@@ -1185,7 +1235,7 @@ mod tests {
                 json_payload: None,
             }],
         );
-        let turns = turns_of(&m);
+        let turns = turns_of(&m, &std::collections::HashMap::new());
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].role, "tool");
         assert_eq!(turns[0].tool_call_id.as_deref(), Some("call_1"));
@@ -1205,7 +1255,7 @@ mod tests {
                 json_payload: Some(json!({ "name": "web_search", "arguments": { "q": "x" } })),
             }],
         );
-        let turns = turns_of(&m);
+        let turns = turns_of(&m, &std::collections::HashMap::new());
         assert_eq!(turns.len(), 1, "正文空但有工具调用 → 助手轮仍要进上下文");
         assert_eq!(turns[0].tool_calls.len(), 1);
         assert_eq!(turns[0].tool_calls[0].id, "call_9");
@@ -1218,13 +1268,13 @@ mod tests {
     fn messages_without_parts_fall_back_to_text() {
         let mut m = message("user", Vec::new());
         m.text = "你好".into();
-        let turns = turns_of(&m);
+        let turns = turns_of(&m, &std::collections::HashMap::new());
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].content, "你好");
         // 完全空的（既没有块也没有正文）→ 不产生空轮
         let mut empty = message("user", Vec::new());
         empty.text = "   ".into();
-        assert!(turns_of(&empty).is_empty());
+        assert!(turns_of(&empty, &std::collections::HashMap::new()).is_empty());
     }
 
     /// 取消旗标：**立起来 ≠ 立刻停**（主循环在安全点自己收尾，R6 要求它先把话说完）。

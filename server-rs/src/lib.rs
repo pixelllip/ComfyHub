@@ -56,6 +56,7 @@ pub mod run_kit;
 pub mod run_lifecycle;
 pub mod runs;
 pub mod skills;
+pub mod strict_intake;
 pub mod sync;
 pub mod system_prompt;
 pub mod thumbs;

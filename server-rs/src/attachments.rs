@@ -177,16 +177,16 @@ pub fn thumb_path(state: &AppState, id: &str) -> PathBuf {
 }
 
 /// 附件 id 只允许 UUID / 十六进制那种（防穿越：它会被直接拼进路径）。
-fn safe_id(id: &str) -> Result<&str, ApiError> {
+///
+/// ⚠ **查库时不拿它当错误**：Kotlin 的 `AiAttachmentRepo.get(id)` 对一个奇形怪状的 id
+/// 只是"查不到"，于是调用方给的是 `附件不存在: xxx`。把非法 id 单独报成另一个错
+/// （`非法的附件 id`）会让预检的逐条结论对不上号 —— 所以这里只在**拼路径**的地方用它。
+fn safe_path_id(id: &str) -> Option<&str> {
     let trimmed = id.trim();
     let ok = !trimmed.is_empty()
         && trimmed.len() <= 64
         && trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if ok {
-        Ok(trimmed)
-    } else {
-        Err(ApiError::bad_request("非法的附件 id"))
-    }
+    ok.then_some(trimmed)
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +241,8 @@ fn row_to_dto(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttachmentDto> {
 }
 
 pub fn get(state: &AppState, id: &str) -> Result<Option<AttachmentDto>, ApiError> {
-    let id = safe_id(id)?;
+    // 非法 id 与"库里没有"一样回 None（见 `safe_path_id` 的注释）
+    let Some(id) = safe_path_id(id) else { return Ok(None) };
     state.with(|conn| {
         Ok(conn
             .query_row("SELECT * FROM ai_attachments WHERE id = ?1", params![id], row_to_dto)
@@ -275,7 +276,7 @@ pub fn list(state: &AppState, ids: &[String]) -> Result<Vec<AttachmentDto>, ApiE
 }
 
 pub fn stored_name(state: &AppState, id: &str) -> Result<Option<String>, ApiError> {
-    let id = safe_id(id)?;
+    let Some(id) = safe_path_id(id) else { return Ok(None) };
     state.with(|conn| {
         Ok(conn
             .query_row("SELECT stored_name FROM ai_attachments WHERE id = ?1", params![id], |row| {
@@ -287,8 +288,8 @@ pub fn stored_name(state: &AppState, id: &str) -> Result<Option<String>, ApiErro
 }
 
 pub fn delete_row(state: &AppState, id: &str) -> Result<bool, ApiError> {
-    let id = safe_id(id)?;
-    state.write(|conn| Ok(conn.execute("DELETE FROM ai_attachments WHERE id = ?1", params![id])? > 0))
+    // 参数化查询，id 原样交给 SQLite（查不到就是 0 行）
+    state.write(|conn| Ok(conn.execute("DELETE FROM ai_attachments WHERE id = ?1", params![id.trim()])? > 0))
 }
 
 // ---------------------------------------------------------------------------
@@ -442,7 +443,10 @@ pub fn delete(state: &AppState, id: &str) -> Result<bool, ApiError> {
             let _ = std::fs::remove_file(path);
         }
     }
-    let _ = std::fs::remove_file(thumb_path(state, id.trim()));
+    // 缩略图只在 id 形状合法时拼路径（防穿越）
+    if let Some(safe) = safe_path_id(id) {
+        let _ = std::fs::remove_file(thumb_path(state, safe));
+    }
     Ok(removed)
 }
 
@@ -545,6 +549,171 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/ai/attachments/{id}/file", axum::routing::get(get_file))
         .route("/api/ai/attachments/{id}/thumb", axum::routing::get(get_thumb))
+        // 附件准入预检（AIH-029）：**纯计算**，不产生任何上游请求
+        .route("/api/ai/preflight", axum::routing::post(preflight))
+}
+
+// ---------------------------------------------------------------------------
+//  准入预检（AIH-029 / AIH-030）
+// ---------------------------------------------------------------------------
+
+/// `POST /api/ai/preflight` 的请求体（Kotlin `PreflightRequest`）。
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PreflightRequest {
+    pub provider_id: String,
+    pub model_id: String,
+    /// 前端直接给的线索（可含文件头）；有 `attachmentIds` 时以库里的为准
+    pub attachments: Vec<FactInput>,
+    /// 已上传附件的 id（M3）：**服务端以库里的事实为准**，前端声明只是线索
+    pub attachment_ids: Vec<String>,
+}
+
+/// 前端给的附件线索（Kotlin `AttachmentFactDto`）。
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FactInput {
+    pub name: String,
+    pub modality: Option<String>,
+    pub mime_type: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub pixels: Option<i64>,
+    /// 文件头（base64，最多 [`crate::strict_intake::MAX_HEAD_BYTES`] 字节）
+    pub head_base64: Option<String>,
+}
+
+fn fact_of(dto: &AttachmentDto) -> crate::strict_intake::AttachmentFact {
+    crate::strict_intake::AttachmentFact {
+        name: dto.name.clone(),
+        modality: Some(dto.modality.clone()),
+        mime_type: dto.mime_type.clone(),
+        size_bytes: dto.size_bytes,
+        pixels: match (dto.width, dto.height) {
+            (Some(w), Some(h)) => Some(w * h),
+            _ => None,
+        },
+    }
+}
+
+/// `POST /api/ai/preflight`：逐个附件的准入结论（界面用它给缩略图打红框 / 显示原因）。
+pub async fn preflight_json(state: &AppState, body: &PreflightRequest) -> Result<Value, ApiError> {
+    let provider = crate::ai::require_provider_row(state, &body.provider_id)?;
+    let model = crate::ai::list_models(state, &body.provider_id)?
+        .into_iter()
+        .find(|m| m.id == body.model_id)
+        .ok_or_else(|| {
+            ApiError::ai("UNKNOWN_MODEL", format!("模型不存在于目录中: {}", body.model_id))
+        })?;
+
+    // 与 Kotlin `attachmentIds.distinct()` 一样**保序去重**
+    let mut ids: Vec<String> = Vec::new();
+    for id in &body.attachment_ids {
+        let trimmed = id.trim().to_string();
+        if !trimmed.is_empty() && !ids.contains(&trimmed) {
+            ids.push(trimmed);
+        }
+    }
+
+    struct Item {
+        fact: crate::strict_intake::AttachmentFact,
+        resolver_blockers: Vec<String>,
+        attachment_id: Option<String>,
+    }
+    let mut items: Vec<Item> = Vec::new();
+    for id in &ids {
+        match get(state, id)? {
+            Some(dto) => items.push(Item {
+                fact: fact_of(&dto),
+                resolver_blockers: Vec::new(),
+                attachment_id: Some(id.clone()),
+            }),
+            None => items.push(Item {
+                fact: crate::strict_intake::AttachmentFact {
+                    name: id.clone(),
+                    modality: None,
+                    mime_type: "application/octet-stream".to_string(),
+                    size_bytes: 0,
+                    pixels: None,
+                },
+                resolver_blockers: vec![format!("附件不存在或已被删除：{id}")],
+                attachment_id: Some(id.clone()),
+            }),
+        }
+    }
+    for input in &body.attachments {
+        let head = input.head_base64.as_deref().and_then(base64_decode);
+        if let Some(bytes) = head.as_ref() {
+            if bytes.len() > crate::strict_intake::MAX_HEAD_BYTES {
+                return Err(ApiError::bad_request(format!(
+                    "文件头太大（{} 字节 > {}）",
+                    bytes.len(),
+                    crate::strict_intake::MAX_HEAD_BYTES
+                )));
+            }
+        }
+        let name = if input.name.trim().is_empty() { "附件" } else { input.name.trim() };
+        let mime = input
+            .mime_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let resolved = crate::strict_intake::resolve(
+            name,
+            input.modality.as_deref(),
+            &mime,
+            input.size_bytes.unwrap_or(0),
+            input.pixels,
+            head.as_deref(),
+        );
+        items.push(Item {
+            resolver_blockers: resolved.blockers,
+            fact: resolved.fact,
+            attachment_id: None,
+        });
+    }
+
+    let mut out_items: Vec<Value> = Vec::new();
+    let mut all_blockers: Vec<String> = Vec::new();
+    let mut allowed_all = true;
+    for (index, item) in items.iter().enumerate() {
+        // 严格分类器都在这一层跑：前端谎报 image 骗不过准入（AIH-027）
+        let transports = crate::strict_intake::adapter_transports(
+            &provider.api,
+            item.fact.modality.as_deref().unwrap_or_default(),
+        );
+        let admission = crate::strict_intake::evaluate(&model, &item.fact, &transports, index as i64);
+        // 文件头判定失败的阻断理由必须一起带出来（AIH-027/030）
+        let mut blockers = item.resolver_blockers.clone();
+        blockers.extend(admission.blockers);
+        if !blockers.is_empty() {
+            allowed_all = false;
+        }
+        all_blockers.extend(blockers.iter().cloned());
+        let mut entry = Map::new();
+        entry.insert("index".into(), Value::Number((index as i64).into()));
+        entry.insert("name".into(), Value::String(item.fact.name.clone()));
+        entry.insert("allowed".into(), Value::Bool(blockers.is_empty()));
+        entry.insert("blockers".into(), Value::Array(blockers.into_iter().map(Value::String).collect()));
+        if let Some(id) = item.attachment_id.as_ref() {
+            entry.insert("attachmentId".into(), Value::String(id.clone()));
+        }
+        out_items.push(Value::Object(entry));
+    }
+
+    let mut out = Map::new();
+    out.insert("allowed".into(), Value::Bool(allowed_all));
+    out.insert(
+        "blockers".into(),
+        Value::Array(all_blockers.into_iter().map(Value::String).collect()),
+    );
+    out.insert("items".into(), Value::Array(out_items));
+    Ok(Value::Object(out))
+}
+
+async fn preflight(
+    State(state): State<AppState>,
+    Json(body): Json<PreflightRequest>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(preflight_json(&state, &body).await?))
 }
 
 const FIELD_HINT: &str = "没有收到文件（表单字段名请用 files）";
@@ -838,7 +1007,10 @@ mod tests {
     #[test]
     fn 非法_id_与目录穿越都挡住() {
         let (state, dir) = state("safe");
-        assert!(get(&state, "../../etc/passwd").is_err());
+        // 非法 id 与"查不到"同一条路（Kotlin 同）：**不是**另一个错误
+        assert!(get(&state, "../../etc/passwd").unwrap().is_none());
+        assert!(stored_name(&state, "../../etc/passwd").unwrap().is_none());
+        assert!(delete(&state, "../../etc/passwd").unwrap() == false);
         assert!(resolve_attachment(&state, "../media/x.png").is_none());
         assert!(resolve_attachment(&state, "sub/x.png").is_none());
         std::fs::remove_dir_all(dir).ok();

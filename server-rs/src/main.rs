@@ -59,7 +59,7 @@
 //! | **官方 comfy-mcp 那 39 个工具**（`system_stats` / `nodes` / `run_workflow` / `launch_comfyui` / `get_logs` …） | ✅（P4 第 45 步：`mcp.rs` 起 `comfy-mcp` 子进程走 JSON-RPC，清单进 `/api/ai/tools` 与下发的 `tools[]`；`launch_comfyui` 由我们**替用户补上共享模型根那三个参数**，失败时把 stderr 尾部带进 `detail`） |
 //! | **`comfy_*` 其余八件**（`find_workflow` / `submit` / `use_attachment` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow`）+ `find_model` | ⛔ **未搬**（要 ComfyUI 在场 / 要模型清单，见 `tools.rs` 的诚实清单） |
 //! | **`WorkflowConvert` 的两处欠账** | ⚠ **组节点（subgraph）不展开**、**「模拟用户行为」（`emulateFrontend`）没实现** —— 两者都**如实报 `unsupportedNodes`**（不猜）；工具描述是从 Kotlin 逐字搬的，所以结果里**主动补一句 warning** 说明这一步没做 |
-//! | 附件（R9）：`/api/ai/attachments*` 与内联预算 | ⛔ **未搬**（有附件直接 `UNSUPPORTED_CONTENT`，不假装发得出去） |
+//! | 附件（R9）：`/api/ai/attachments*` 与内联预算 | ✅ **五条端点已搬（P4 第 50 步）**：上传（multipart，字段 `files`）/ 详情 / 原件（ETag+Range）/ 缩略图 / 删除 + **严格签名判定**；`POST /api/ai/preflight` 与 `POST /runs` 前的三层准入判定（`strict_intake.rs`）也已在位 —— **R9 的第三层（创建 Run 前用库里的事实验一次）成立**。⚠ 仍缺：**把附件内联进请求体**（三家适配器都只实现了图片的 `inline_base64`，Rust 侧还没做）→ 现在那一轮正文后面**如实附一句"以下附件未随本次请求发送：…"**（不许静默丢掉）；视频预览帧同样未搬（`/thumb` 回 204） |
 //! | `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功；`import-workflows` 要整套 `WorkflowConvert` 转换栈，`ingest` 要 ComfyUI 推送那条路） |
 //! | R6~R10 的安全防线 | ⛔ **部分重建**（R5 的保留窗口与 seq 纪律已在 `runs.rs`/`events.rs`，R6/R8 已在执行器与工具层，R9/R10 未动） |
 //!
