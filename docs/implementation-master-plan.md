@@ -1984,7 +1984,28 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
    ③ 已是最新 → 什么都不做（**绝不重跑 DDL**）；④ 库比后端新 → **只警告不拦**（拦了就没法回退版本）。
    ⚠ 这是切流里被漏掉的一条硬要求：以前缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
    **在发布包里等于永远起不来**（包里根本没有 Kotlin）。4 条用例 + 全新目录实测都过了。
-5. **四条 e2e 脚本 + `flutter test` + harness 用例对着 Rust 跑一遍**（§10.8 最后一行，切流前必须）；
+5. ✅ **已做（第 56 步，2026-09-26）：四条 e2e + `flutter test` 全部对着 Rust 跑通了** —— 这就是 C-5。
+   **过程本身就是价值**：第一次跑 `e2e-ai-tools-test.ps1` 是 **108 项 / 13 红**，13 条红全是 Rust 侧
+   **真的漏了东西**（不是脚本的锅），逐条修完才全绿：
+   * **`message.completed` 少 `parts`**（还少了 `finishReason` / `elapsedMs` / `reasoningEffort` / `steps` / `reasoning`）——
+     按 Kotlin `HarnessRunner:838` 的键集合补齐；`parts` 与落库**共用同一份**列表（`parts_of`），
+     免得"库里有的块、事件里没有"；
+   * **没有标题状态机**（`[标题]…[/标题]` 既不摘、也不写会话名，标记直接漏进正文）——
+     新增 `title_strip.rs`（`ConversationTitle.kt` 逐条移植：四个状态、回声只摘标记不改名、
+     绝不吞内容 / 绝不重复），并改成**按轮**决定要不要带那条指令（摘到就不再提）；
+   * **R6 在 429 上不成立**（说出去的正文一个字都没留、重试还把有内容的失败回复就地重置）——
+     两处真因：① 起工具轮时 `take_text()` 把正文从 sink 里**拿走**了（现在先 `seal_text` 再 take，
+     正文同时留在 `parts` 里）；② 重试判"空壳"只看 `text`、不看 `parts`（`isEmptyReply()` 是两条都要成立）；
+   * **截断续写没实现**（`finish_reason=length` 把半句当结尾）—— 按 Kotlin 补上 `MAX_CONTINUATIONS = 3`
+     + `isTruncatedByOutputLimit` + 续写请求里带上"已经说过的那半段"；
+   * **助手消息里的 `tool_result` 没回填成 `role = tool`** —— 模型看到最后一条是 assistant，
+     **又调了一次同一个工具**（实测抓到"重试多跑一轮工具"）；
+   * **模型预检那一档过严**（只按 `/object_info` 的候选判，误拦了 e2e 第 4/5 幕的合法提交）——
+     改成**只警告不拦**（盘扫还没搬；"误拦比白跑更糟"，与 Kotlin 一侧的实际行为一致），
+     节点类那一档照旧拦，警告进 `preflightWarnings` 回给模型。
+   **结果**：`e2e-ai-tools-test.ps1` **111 项全绿**、`e2e-submit-test.ps1` 全绿、
+   `e2e-capture-test.ps1` 全绿、`e2e-pair-test.ps1` **50 项全绿**、`flutter test` **302 例全绿**、
+   `cargo test` **429 例全绿**。
 6. Kotlin 退役：删 `server/`（或移到 `legacy/`）、删 Gradle 相关文档段落、README/AGENTS 的"现状"描述更新。
 
 > **结论（2026-09-26，更新到第 54 步）**：**App 直接调用的 A 组已经清零**（A1~A5、A7 全部搬完；
