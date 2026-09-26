@@ -91,6 +91,15 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
    - **贴人物图就用剪影遮罩**：`comfy_make_mask(mode="subject", baseFilename=<底图>, subjectFilename=<人物图>, ring=14, feather=…)`
      —— 照人物形状抠（矩形遮罩会把人物图那块矩形连背景一起贴进去 = 一圈白框）；
      `region` 在 subject 档下**只有裁切作用，别传**（默认 full 才是"只按人物形状"）；
+   - **`shrink`（choke，默认 2 像素）**：把剪影往里收一刀，扔掉**主体与背景交界那圈溢色**
+     （绿幕上是一圈绿边、白底上是一圈白边）—— 不收的话它们会跟着被贴进去，看着就是
+     "人物冒背景的泛光"（用户 2026-09-26 现场看到的那圈）。一般不用改；要极干净的硬边贴图可以 `shrink=3`。
+   - ⚠ **`ring` 那一圈的提示词必须写"背景"，绝不能写人物**：实测拿人物提示词
+     （`1girl, silver hair, white dress…`）去重绘那一圈，模型会在人物周围**又画一圈"白裙子似的东西"**
+     → 泛光更重。写背景（`night city street, asphalt, grass, buildings`）才干净。
+     但要有心理准备：anima 是**角色模型**，cfg=1 时"no humans"几乎不起作用，那一圈里**可能又冒出一个角色**；
+     所以最稳的三档是 ①`denoise 0`（纯合成，不重绘 → 没有泛光也没有乱画）；②ring 细一点（6~10）；
+     ③`ring` + 背景提示词 + `denoise 0.3~0.45`。
    - **想让人物一个像素都不被重画（画风不变）就用 `ring`**：它产出"只圈人物外面 N 像素"的
      第二张遮罩，配合 `comfyhub_paste_person_anima.json`（**它有两个 LoadImageMask**）：
      `12.image` ← 剪影（合成用）、`26.image` ← ring（重绘区）。

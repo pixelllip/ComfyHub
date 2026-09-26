@@ -68,6 +68,9 @@ pub const SUBJECT_TOLERANCE_DEFAULT: f64 = 0.12;
 /// 于是"要不要填内部空洞"能自动分档（见 subject_mask_from_image 的 ③）。
 pub const CHROMA_MIN_SATURATION: i32 = 40;
 
+/// `mode="subject"` 默认往里收几像素（choke）—— 扔掉主体与背景交界那圈溢色。
+pub const DEFAULT_SUBJECT_SHRINK: i64 = 2;
+
 // ---------------------------------------------------------------------------
 //  ComfyUI 的 input 目录
 // ---------------------------------------------------------------------------
@@ -416,6 +419,8 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     // 背景色根本不会出现在主体身上，判据就干净了（见 subject_mask_from_image 的 ③）。
     let explicit_background = str_arg(args, "bgColor").and_then(|raw| parse_color(&raw));
     let mut subject_info: Option<(String, [u8; 3], f64)> = None;
+    // 收缩前的剪影：ring 要把"被收掉的那条边"也盖住，否则会留一条没被重绘的接缝
+    let mut subject_before_shrink: Option<Vec<u8>> = None;
     let mut pixels = if mode == "subject" {
         let subject = subject_filename
             .as_deref()
@@ -436,9 +441,17 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
             ));
         }
         let use_region = region_text != "full";
-        let (mask, background, ratio) =
+        let (mut mask, background, ratio) =
             subject_mask(&subject_path, w as usize, h as usize, tolerance, &region, use_region, explicit_background)?;
         subject_info = Some((subject, background, ratio));
+        // **收一刀**（choke）：把主体与背景交界那圈抗锯齿/溢色（绿边、白边）扔掉 ——
+        // 不收的话它们会被当成主体贴进去，再被 ring 一晕就是绕着人的一圈泛光。
+        // 默认 2 像素（几乎无感）；`shrink=0` 可关掉。
+        let shrink = int_arg(args, "shrink").unwrap_or(DEFAULT_SUBJECT_SHRINK).clamp(0, 32) as usize;
+        if shrink > 0 {
+            subject_before_shrink = Some(mask.clone());
+            mask = erode_mask(&mask, w as usize, h as usize, shrink);
+        }
         mask
     } else {
         draw_mask(w as usize, h as usize, &region, &shape)
@@ -525,7 +538,19 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     let ring = int_arg(args, "ring").unwrap_or(0).clamp(0, MAX_FEATHER) as usize;
     let mut ring_filename: Option<String> = None;
     if mode == "subject" && ring > 0 {
-        let ring_pixels = ring_mask(&pixels, w as usize, h as usize, ring);
+        let mut ring_pixels = match subject_before_shrink.as_ref() {
+            // 用**收缩前**的剪影算外面那一圈，再把"被收掉的那条边"并回来 ——
+            // 于是重绘区正好盖住 人物外 N 像素 + 交界那一圈溢色
+            Some(orig) => ring_mask(orig, w as usize, h as usize, ring),
+            None => ring_mask(&pixels, w as usize, h as usize, ring),
+        };
+        if let Some(orig) = subject_before_shrink.as_ref() {
+            for index in 0..ring_pixels.len() {
+                if orig[index] > 127 && pixels[index] <= 127 {
+                    ring_pixels[index] = 255;
+                }
+            }
+        }
         let ring_name = format!("ring-{filename}");
         write_mask_png(&ring_pixels, w as u32, h as u32, &input_dir.join(&ring_name))?;
         ring_filename = Some(ring_name);
@@ -556,6 +581,9 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         out["subjectFilename"] = json!(subject);
         out["background"] = json!(format!("#{:02x}{:02x}{:02x}", background[0], background[1], background[2]));
         out["subjectRatio"] = json!((ratio * 1000.0).round() / 1000.0);
+        if mode == "subject" {
+            out["shrink"] = json!(int_arg(args, "shrink").unwrap_or(DEFAULT_SUBJECT_SHRINK));
+        }
         let saturation = background.iter().max().copied().unwrap_or(0) as i32
             - background.iter().min().copied().unwrap_or(0) as i32;
         let chroma = saturation >= CHROMA_MIN_SATURATION;
@@ -1118,6 +1146,45 @@ pub fn parse_color(raw: &str) -> Option<[u8; 3]> {
     }
 }
 
+/// 把遮罩**往里收** `radius` 个像素（腐蚀 / choke）。
+///
+/// 为什么贴人物图必须收一刀（用户 2026-09-26 问的"人物怎么冒背景的泛光"）：
+/// 主体与背景交界那一圈是**抗锯齿 / 溢色**像素 —— 绿幕上就是一圈绿边、白底上就是一圈白边。
+/// 它们与背景色的差刚好超过容差，于是被判成"主体"贴进画面，再被 ring 那道重绘一晕，
+/// 就成了绕着人物的一圈泛光。收 1~3 像素把这圈扔掉，接缝交给 ring 去融。
+///
+/// 方形的结构元够用（这一刀是"宁少勿多"，不需要圆的精确形状）。
+pub fn erode_mask(mask: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
+    if radius == 0 {
+        return mask.to_vec();
+    }
+    let r = radius as i64;
+    let mut out = vec![0u8; w * h];
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            let mut keep = true;
+            'outer: for dy in -r..=r {
+                let ny = y + dy;
+                if ny < 0 || ny >= h as i64 {
+                    keep = false;
+                    break;
+                }
+                for dx in -r..=r {
+                    let nx = x + dx;
+                    if nx < 0 || nx >= w as i64 || mask[ny as usize * w + nx as usize] <= 127 {
+                        keep = false;
+                        break 'outer;
+                    }
+                }
+            }
+            if keep {
+                out[y as usize * w + x as usize] = 255;
+            }
+        }
+    }
+    out
+}
+
 /// 遮罩里"有内容"的那块矩形（`(x0, y0, x1, y1)`，右/下开区间）；全黑时回 `None`。
 pub fn mask_bbox(mask: &[u8], w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
@@ -1619,6 +1686,29 @@ mod tests {
         assert_eq!(parse_color("white"), Some([255, 255, 255]));
         assert_eq!(parse_color("浅蓝"), None, "认不出来就回落成「从边框估」，不猜");
     }
+    /// **收缩（choke）**：把主体与背景交界那圈抗锯齿 / 溢色扔掉 ——
+    /// 用户 2026-09-26 问的"人物怎么冒背景的泛光"就是没收这一刀（绿边被当主体贴进去）。
+    #[test]
+    fn 收缩把交界那圈溢色扔掉() {
+        let mut mask = vec![0u8; 100 * 100];
+        for y in 20..80 {
+            for x in 20..80 {
+                mask[y * 100 + x] = 255;
+            }
+        }
+        let eroded = erode_mask(&mask, 100, 100, 2);
+        assert_eq!(eroded[50 * 100 + 50], 255, "内部保留");
+        assert_eq!(eroded[20 * 100 + 50], 0, "原来那条边（y=20）被扔掉");
+        assert_eq!(eroded[21 * 100 + 50], 0);
+        assert_eq!(eroded[22 * 100 + 50], 255, "往里收 2 像素");
+        assert_eq!(eroded[79 * 100 + 79], 0, "右下角也收");
+        // radius=0 不动
+        assert_eq!(erode_mask(&mask, 100, 100, 0), mask);
+        // 收没了就是空的（别 panic）
+        let tiny = erode_mask(&mask, 100, 100, 40);
+        assert!(tiny.iter().all(|v| *v == 0));
+    }
+
     /// **摆放**（用户 2026-09-26 要的能力）：缩放到一半、搬到左下角 ——
     /// 遮罩与人物像素必须落在**同一个**位置（只动一个就是「人在这儿、遮罩在那儿」的错位）。
     #[test]

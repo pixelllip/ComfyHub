@@ -476,7 +476,11 @@ try {
             $ringImage.Dispose()
             $ringRatio = [Math]::Round($white / [Math]::Max(1, $total), 4)
             Say ("  环形遮罩占比：$([Math]::Round($ringRatio * 100, 1))%（只该是人物边缘那一圈）") 'White'
-            Check '环形遮罩是薄薄一圈（< 25% 画面）' ($ringRatio -gt 0 -and $ringRatio -lt 0.25) $ringRatio
+            # 环的大小取决于**剪影的周长**（尖发/大裙子的剪影周长很长，12px 环就大），
+            # 所以判据是"比剪影大、但不到离谱" —— 绝对值卡死会在正常图上假红
+            Check '环形遮罩是绕在剪影外面的一圈' `
+                ($ringRatio -gt 0 -and $ringRatio -lt ($mask.subjectRatio * 3 + 0.05)) `
+                "ring=$ringRatio silhouette=$($mask.subjectRatio)"
         }
     }
 
@@ -540,6 +544,13 @@ try {
         #   （比矩形宽/窄都可能），拿矩形当判据会得到"遮罩外变了 68.95"这种假红（实测踩过）。
         #   这也正是这个特性唯一的不变量：**白 = 重绘区、黑 = 原样保留**。
         $maskBitmap = [System.Drawing.Bitmap]::FromFile($maskPath)
+        # ⚠ 有 ring 时**重绘区 = 剪影 ∪ 环**：只用剪影分内外，环里那些被重画的地方
+        #   会被算成"外"（实测假红：遮罩外 12.2/255）。所以把环也并进来。
+        $ringBitmap = $null
+        if ($Ring -gt 0 -and $mask.ringFilename) {
+            $ringPathForMetric = Join-Path $instanceInput $mask.ringFilename
+            if (Test-Path $ringPathForMetric) { $ringBitmap = [System.Drawing.Bitmap]::FromFile($ringPathForMetric) }
+        }
         $stride = 3
         $inSum = 0.0; $inN = 0; $outSum = 0.0; $outN = 0
         for ($py = 0; $py -lt $cmpH; $py += $stride) {
@@ -549,10 +560,13 @@ try {
                 $d = ([Math]::Abs($a.R - $b.R) + [Math]::Abs($a.G - $b.G) + [Math]::Abs($a.B - $b.B)) / 3.0
                 # 羽化带（遮罩里的中间值）既不算内也不算外
                 $mv = $maskBitmap.GetPixel($px, $py).R
-                if ($mv -ge 200) { $inSum += $d; $inN++ } elseif ($mv -le 30) { $outSum += $d; $outN++ }
+                $rv = if ($ringBitmap) { $ringBitmap.GetPixel($px, $py).R } else { 0 }
+                $repaint = [Math]::Max($mv, $rv)
+                if ($mv -ge 200) { $inSum += $d; $inN++ } elseif ($repaint -le 30) { $outSum += $d; $outN++ }
             }
         }
         $maskBitmap.Dispose()
+        if ($ringBitmap) { $ringBitmap.Dispose() }
         $inAvg = if ($inN) { [Math]::Round($inSum / $inN, 2) } else { -1 }
         $outAvg = if ($outN) { [Math]::Round($outSum / $outN, 2) } else { -1 }
         Say ("  遮罩内平均像素差：$inAvg / 255（采样步长 $stride）") 'White'
