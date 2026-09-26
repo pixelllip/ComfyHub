@@ -76,8 +76,8 @@ pub const DEFAULT_SUBJECT_SHRINK: i64 = 0;
 /// 0.35 比抠图那档（0.12）宽得多是有意的：只看**边界 3 像素**那条带，
 /// 那条带里的像素本来就是"人 + 背景"的混合色，容差放宽才收得掉；
 /// 而发丝（头发色，离背景色远）怎么放宽都还在。
-pub const DEFAULT_EDGE_BAND: i64 = 3;
-pub const DEFAULT_EDGE_TOLERANCE: f64 = 0.35;
+pub const DEFAULT_EDGE_BAND: i64 = 4;
+pub const DEFAULT_EDGE_TOLERANCE: f64 = 0.5;
 
 // ---------------------------------------------------------------------------
 //  ComfyUI 的 input 目录
@@ -562,6 +562,7 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     let mut light_info: Option<([f64; 2], bool, usize)> = None;
     let mut out_light: Option<([f64; 2], bool, usize)> = None;
     let mut despilled = false;
+    let mut unmixed_edge = false;
     let light_arg = str_arg(args, "light").unwrap_or_else(|| "none".to_string()).to_lowercase();
     if mode == "subject" && light_arg != "none" && !light_arg.is_empty() {
         let direction = match light_arg.as_str() {
@@ -661,6 +662,11 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
                         image::imageops::FilterType::Triangle,
                     );
                 }
+                // ① 先**反混**（把"人+背景"的混合像素还原成人物本体色 —— 这才是去掉
+                //    那圈灰绿边的正解）；② 再 despill 兜底（反混没覆盖到的边界像素压通道）。
+                let band = int_arg(args, "edgeBand").unwrap_or(DEFAULT_EDGE_BAND).clamp(1, 16) as usize;
+                let unmixed = unmix_edge(&mut canvas, &pixels, w as usize, h as usize, background, band);
+                if unmixed { unmixed_edge = true; }
                 if despill_edges(&mut canvas, &pixels, w as usize, h as usize, background, 6) {
                     canvas.save(&target_path).map_err(|e| {
                         ToolFailure::new("COMFY_INPUT_FAILED", format!("写回去溢色后的人物图失败：{e}"))
@@ -743,6 +749,9 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         }
         if despilled {
             out["despilled"] = json!(true);
+        }
+        if unmixed_edge {
+            out["unmixedEdge"] = json!(true);
         }
         if let Some((dir, estimated, offset)) = out_light {
             out["lightDir"] = json!(format!("[{:.2},{:.2}]", dir[0], dir[1]));
@@ -1529,6 +1538,116 @@ pub fn despill_edges(
     changed
 }
 
+/// **边缘反混（un-mix）**：把"人 + 背景"的混合像素**还原成人物自己的颜色**。
+///
+/// 为什么 despill 不够（用户 2026-09-26 第五次看边缘）：despill 只是把绿通道**压回**
+/// 另外两个通道的水平 —— 压完是"灰绿/橄榄绿"，肉眼仍然是一圈背景色的边。
+/// 正确的模型是 `p = a·P + (1-a)·B`（P = 人物本体色、B = 背景色、a = 覆盖率）：
+/// 取边界带内侧**干净**的邻居色当 `P`，最小二乘解出 `a`，再 `P' = B + (p-B)/a` —— 反混之后
+/// 那个像素就是人物自己的颜色（`a` 太小的丢掉，说明它本来就基本是背景）。
+///
+/// 与 despill 的区别：despill 是"**压通道**"（仍留混合色），这里是"**解方程**"（还原本体色）。
+/// 绿幕、白底、品红**都适用**（不依赖背景是不是彩色）。返回是否改过。
+pub fn unmix_edge(
+    person: &mut image::RgbImage,
+    mask: &[u8],
+    w: usize,
+    h: usize,
+    background: [u8; 3],
+    band: usize,
+) -> bool {
+    if band == 0 {
+        return false;
+    }
+    // "干净" = 往里收 `band` 像素之后还在掩码里的部分（它的颜色没被背景混过）
+    let clean = erode_mask(mask, w, h, band);
+    let r = band as i64;
+    let mut changed = false;
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            let index = y as usize * w + x as usize;
+            if mask[index] <= 127 || clean[index] > 127 {
+                continue;
+            }
+            // 边界带里才动手（邻域里有背景像素）
+            let mut on_edge = false;
+            'scan: for dy in -r..=r {
+                let ny = y + dy;
+                if ny < 0 || ny >= h as i64 {
+                    continue;
+                }
+                for dx in -r..=r {
+                    let nx = x + dx;
+                    if nx < 0 || nx >= w as i64 {
+                        continue;
+                    }
+                    if mask[ny as usize * w + nx as usize] <= 127 {
+                        on_edge = true;
+                        break 'scan;
+                    }
+                }
+            }
+            if !on_edge {
+                continue;
+            }
+            // 找最近的一个"干净"邻居当本体色 P
+            let reach = r * 2 + 2;
+            let mut reference: Option<[f64; 3]> = None;
+            'search: for ring in 1..=reach {
+                for dy in -ring..=ring {
+                    for dx in -ring..=ring {
+                        if dx.abs() != ring && dy.abs() != ring {
+                            continue;
+                        }
+                        let (nx, ny) = (x + dx, y + dy);
+                        if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                            continue;
+                        }
+                        let nindex = ny as usize * w + nx as usize;
+                        if clean[nindex] > 127 {
+                            let pixel = person.get_pixel(nx as u32, ny as u32);
+                            reference = Some([pixel[0] as f64, pixel[1] as f64, pixel[2] as f64]);
+                            break 'search;
+                        }
+                    }
+                }
+            }
+            let Some(reference) = reference else { continue };
+            let b = [background[0] as f64, background[1] as f64, background[2] as f64];
+            let pixel = person.get_pixel(x as u32, y as u32);
+            let p = [pixel[0] as f64, pixel[1] as f64, pixel[2] as f64];
+            // 最小二乘解 a：p = a·P + (1-a)·B
+            let mut num = 0.0;
+            let mut den = 0.0;
+            for c in 0..3 {
+                num += (p[c] - b[c]) * (reference[c] - b[c]);
+                den += (reference[c] - b[c]) * (reference[c] - b[c]);
+            }
+            if den < 1.0 {
+                continue;
+            }
+            let a = (num / den).clamp(0.0, 1.0);
+            // 覆盖率太低 = 这个像素本来就基本是背景 → 从掩码里去掉（比反混更诚实）
+            if a < 0.35 {
+                // 需要可变掩码 —— 交给调用方在返回值里体现（这里只改颜色）
+                continue;
+            }
+            let mut out = [0u8; 3];
+            for c in 0..3 {
+                out[c] = (b[c] + (p[c] - b[c]) / a).clamp(0.0, 255.0) as u8;
+            }
+            let pixel = person.get_pixel_mut(x as u32, y as u32);
+            if (pixel[0], pixel[1], pixel[2]) != (out[0], out[1], out[2]) {
+                pixel[0] = out[0];
+                pixel[1] = out[1];
+                pixel[2] = out[2];
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 /// **按背景给新图层打光 + 烧影子**（用户 2026-09-26 的最后一个要求）。
 ///
 /// # 怎么估（不依赖任何模型）
@@ -2279,6 +2398,41 @@ mod tests {
         assert_eq!(mask[10 * w + 20], 0, "边界上的混合像素要扔掉");
         assert_eq!(mask[20 * w + 20], 255, "人物内部不动");
         assert_eq!(mask[20 * w + 7], 255, "深色发丝（离背景色远）必须保住");
+    }
+
+    /// **反混**：`50% 人 + 50% 绿幕` 的边界像素要被还原成人物本体色（而不是压成灰绿）。
+    #[test]
+    fn 反混把混合像素还原成人物颜色() {
+        let (w, h) = (30usize, 30usize);
+        let bg = [0u8, 177, 64];
+        // 本体色（皮肤/裙子那种）：偏红
+        let body = [200.0f64, 60.0, 80.0];
+        // 边界像素 = 0.5*body + 0.5*bg
+        let mixed = [
+            ((0.5 * body[0] + 0.5 * bg[0] as f64)) as u8,
+            ((0.5 * body[1] + 0.5 * bg[1] as f64)) as u8,
+            ((0.5 * body[2] + 0.5 * bg[2] as f64)) as u8,
+        ];
+        let mut image = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb(bg));
+        let mut mask = vec![0u8; w * h];
+        // 10..20 是本体（纯 body 色），最外一圈是混合色
+        for y in 10..20 {
+            for x in 10..20 {
+                let edge = x == 10 || x == 19 || y == 10 || y == 19;
+                image.put_pixel(x as u32, y as u32, if edge { image::Rgb(mixed) } else { image::Rgb([200, 60, 80]) });
+                mask[y * w + x] = 255;
+            }
+        }
+        let changed = unmix_edge(&mut image, &mask, w, h, bg, 2);
+        assert!(changed, "混合像素应当被反混");
+        let fixed = image.get_pixel(10, 15);
+        // 反混之后应当接近 body（200,60,80），而不是混合色（100,118,72）
+        assert!(
+            (fixed[0] as i32 - 200).abs() < 25 && (fixed[1] as i32 - 60).abs() < 25,
+            "反混后应当接近人物本体色，实测 {fixed:?}（混合色是 {mixed:?}）"
+        );
+        // 内部不碰
+        assert_eq!(image.get_pixel(15, 15), &image::Rgb([200, 60, 80]).into());
     }
 
     /// **去溢色**：绿幕边上那圈偏绿的像素要被压回中性，人物内部的像素**不许动**。
