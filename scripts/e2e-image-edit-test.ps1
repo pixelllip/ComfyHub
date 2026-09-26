@@ -80,6 +80,8 @@ param(
     [string]$BgColor = '',
     # 阶段一提示词里要写的背景描述（默认按 -BgColor 推）
     [string]$PersonBackground = '',
+    # **按背景环境改新图层的光照/阴影方向**（`auto` = 从底图估；也可 `left`/`right`/`top`/`bottom`/`none`）
+    [string]$Light = 'none',
     # 阶段一的提示词（要人物 + 干净背景）
     [string]$PersonPrompt = '',
     # 贴人物图时的融合档（0.4~0.6；高了人物会变样，低了接缝明显）
@@ -381,7 +383,7 @@ try {
     $cfgField = if ($Cfg -gt 0) { "$Cfg" } else { '' }
     $placeXField = if ($PlaceX -ge 0) { "$PlaceX" } else { '' }
     $placeYField = if ($PlaceY -ge 0) { "$PlaceY" } else { '' }
-    $runText = "编辑图片 $($script:AttachmentId)|$workflowField|$effectiveDenoise|$Region|$Feather|$Prompt|$PersonMediaId|$cfgField|$Ring|$PlaceScale|$placeXField|$placeYField|$BgColor"
+    $runText = "编辑图片 $($script:AttachmentId)|$workflowField|$effectiveDenoise|$Region|$Feather|$Prompt|$PersonMediaId|$cfgField|$Ring|$PlaceScale|$placeXField|$placeYField|$BgColor|$Light"
     $run = Invoke-Api 'POST' "/api/ai/conversations/$($conv.id)/runs" @{
         text = $runText; providerId = $ProviderId; modelId = 'fake-edit-model'
     }

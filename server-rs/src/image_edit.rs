@@ -511,9 +511,97 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
             }
             pixels = scaled_mask;
             placed_image = Some(scaled_person);
+            // ⚠ 剪影**位置变了**：ring 必须按搬家后的剪影算，
+            //   否则重绘区还留在原地（实测：人被搬到左下角，模型却在画面正中重画了一遍）
+            subject_before_shrink = None;
         }
     }
     let _ = placed_image;
+
+    // **按背景环境改新图层的光照与阴影**（用户 2026-09-26 的最后一个要求）：
+    // 光向/色温从 `baseFilename` 那张底图上估（`light=\"auto\"`，也可以用 `lightDir=\"left\"` 等显式给），
+    // 结果烘进人物图的像素 + 烧一层投影（影子落在遮罩里，于是跟着一起贴上去 —— 不改工作流）。
+    let mut light_info: Option<([f64; 2], bool, usize)> = None;
+    let mut out_light: Option<([f64; 2], bool, usize)> = None;
+    let light_arg = str_arg(args, "light").unwrap_or_else(|| "none".to_string()).to_lowercase();
+    if mode == "subject" && light_arg != "none" && !light_arg.is_empty() {
+        let direction = match light_arg.as_str() {
+            "auto" => None,
+            "left" => Some([-1.0, 0.0]),
+            "right" => Some([1.0, 0.0]),
+            "top" | "up" => Some([0.0, -1.0]),
+            "bottom" | "down" => Some([0.0, 1.0]),
+            "topleft" | "left-top" => Some([-0.7, -0.7]),
+            "topright" | "right-top" => Some([0.7, -0.7]),
+            other => {
+                return Err(ToolFailure::new(
+                    "INVALID_ARGUMENT",
+                    format!("light 只支持 auto / left / right / top / bottom / topleft / topright / none，收到「{other}」"),
+                ))
+            }
+        };
+        let base_path = base_filename
+            .as_deref()
+            .map(file_name_only)
+            .map(|name| input_dir.join(name))
+            .filter(|path| path.is_file())
+            .ok_or_else(|| {
+                ToolFailure::new(
+                    "INVALID_ARGUMENT",
+                    "light 要用**底图**去估光向与色温，所以必须给 baseFilename（input 目录里那张）",
+                )
+            })?;
+        let mut person_image = placed_image
+            .take()
+            .or_else(|| {
+                subject_info
+                    .as_ref()
+                    .and_then(|info| image::open(input_dir.join(&info.0)).ok())
+                    .map(|image| {
+                        image::imageops::resize(
+                            &image.to_rgb8(),
+                            w as u32,
+                            h as u32,
+                            image::imageops::FilterType::Triangle,
+                        )
+                    })
+            })
+            .ok_or_else(|| ToolFailure::new("COMFY_INPUT_FAILED", "读不出人物图（打光要用它的像素）"))?;
+        let base_image = image::open(&base_path)
+            .map_err(|e| ToolFailure::new("INVALID_ARGUMENT", format!("读不出底图：{e}")))?
+            .to_rgb8();
+        let base_image = image::imageops::resize(&base_image, w as u32, h as u32, image::imageops::FilterType::Triangle);
+        let light = args.get("lightStrength").and_then(Value::as_f64).unwrap_or(0.35);
+        let shadow = args.get("shadowStrength").and_then(Value::as_f64).unwrap_or(0.45);
+        let offset = int_arg(args, "shadowOffset")
+            .unwrap_or_else(|| (w.min(h) as f64 * 0.04).round() as i64)
+            .clamp(0, 400) as usize;
+        let (dir, estimated) =
+            relight_and_shadow(&mut person_image, &mut pixels, &base_image, w as usize, h as usize, direction, light, shadow, offset);
+        let placed_name = format!("lit-{}", subject_info.as_ref().map(|i| i.0.clone()).unwrap_or_default());
+        person_image
+            .save(input_dir.join(&placed_name))
+            .map_err(|e| ToolFailure::new("COMFY_INPUT_FAILED", format!("写打好光的人物图失败：{e}")))?;
+        if let Some((_, bbox)) = placed_subject.as_mut() {
+            if let Some((x0, y0, x1, y1)) = mask_bbox(&pixels, w as usize, h as usize) {
+                *bbox = [
+                    (x0 + x1) as f64 / 2.0 / w as f64,
+                    (y0 + y1) as f64 / 2.0 / h as f64,
+                    (x1 - x0) as f64 / w as f64,
+                    (y1 - y0) as f64 / h as f64,
+                ];
+            }
+        } else {
+            placed_subject = Some((placed_name.clone(), [0.0, 0.0, 0.0, 0.0]));
+        }
+        // 打光后的人物图**换了文件名**（`lit-…`），使用方必须拿它覆盖 `20.image`
+        placed_subject = Some((
+            placed_name,
+            placed_subject.map(|(_, bbox)| bbox).unwrap_or([0.0, 0.0, 0.0, 0.0]),
+        ));
+        light_info = Some((dir, estimated, offset));
+        out_light = Some((dir, estimated, offset));
+    }
     if invert {
         for value in pixels.iter_mut() {
             *value = 255 - *value;
@@ -583,6 +671,17 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         out["subjectRatio"] = json!((ratio * 1000.0).round() / 1000.0);
         if mode == "subject" {
             out["shrink"] = json!(int_arg(args, "shrink").unwrap_or(DEFAULT_SUBJECT_SHRINK));
+        }
+        if let Some((dir, estimated, offset)) = out_light {
+            out["lightDir"] = json!(format!("[{:.2},{:.2}]", dir[0], dir[1]));
+            // 光向是**从底图估的**还是调用方给的 —— 如实说（估的就别吹成"打光模型"）
+            out["lightEstimated"] = json!(estimated);
+            out["shadowOffset"] = json!(offset);
+            out["lightNote"] = json!(
+                "光照是按**底图**估的方向梯度 + 色偏烘进人物图的（近似，不是重打光模型）；\
+                 影子沿光向**反方向**烧在了 `placedSubjectFilename` 里并落进了遮罩 —— \
+                 提交时**必须**用新的 `placedSubjectFilename` 覆盖 `20.image`（像素已经变了）。"
+            );
         }
         let saturation = background.iter().max().copied().unwrap_or(0) as i32
             - background.iter().min().copied().unwrap_or(0) as i32;
@@ -1185,6 +1284,194 @@ pub fn erode_mask(mask: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
     out
 }
 
+/// **按背景给新图层打光 + 烧影子**（用户 2026-09-26 的最后一个要求）。
+///
+/// # 怎么估（不依赖任何模型）
+///
+/// ① **光向**：拿背景（遮罩之外）在剪影包围盒四周的**亮度差**估 ——
+///    `右半 - 左半` 给水平分量、`下半 - 上半` 给垂直分量（还带一点"光从哪来"的常识兜底：
+///    差太小就按左上）。这与"影子朝光源反方向"是同一条物理直觉。
+/// ② **色温 / 色偏**：背景（剪影附近）的平均色 ÷ 人物的平均色 —— 夜景就把人压冷压暗、
+///    暖灯下就把人拉暖（乘法，夹在 0.75~1.3，别把人拉爆）。
+/// ③ **方向梯度**：沿光向的线性 ramp 乘上去（亮面亮、暗面暗），强度 `light`（0~1）。
+/// ④ **投影**：把剪影沿**光向的反方向**平移 `offset` 并糊一遍当影子，按 `shadow`（0~1）
+///    把**背景色**压暗，写进人物图的像素里、并让那几像素落进遮罩 —— 于是合成时影子跟着一起
+///    贴上去（不用改工作流）。
+///
+/// ⚠ 它是**近似**，不是重打光模型（ComfyUI 里要真重打光得有 IC-Light 那类节点）。
+/// 如实写在返回值里（`lightDir` / `lightEstimated` / `shadowOffset`），别吹成"重打光"。
+pub fn relight_and_shadow(
+    person: &mut image::RgbImage,
+    mask: &mut [u8],
+    base: &image::RgbImage,
+    w: usize,
+    h: usize,
+    direction: Option<[f64; 2]>,
+    light: f64,
+    shadow: f64,
+    shadow_offset: usize,
+) -> ([f64; 2], bool) {
+    let bbox = mask_bbox(mask, w, h);
+    // ① 光向：显式给了就用给的；没给就从背景的四周亮度差里估
+    let (mut dir, estimated) = match direction {
+        Some(d) => (normalize2(d), false),
+        None => (estimate_light_dir(base, mask, w, h, bbox), true),
+    };
+    if dir == [0.0, 0.0] {
+        dir = normalize2([-0.7, -0.7]); // 兜底：光从左上来（影子朝右下）
+    }
+
+    // ② 色偏：背景（遮罩外）与人物（遮罩内）的平均色之比
+    let mut bg = [0.0f64; 3];
+    let mut fg = [0.0f64; 3];
+    let (mut bg_n, mut fg_n) = (0.0f64, 0.0f64);
+    for y in 0..h {
+        for x in 0..w {
+            let index = y * w + x;
+            if mask[index] > 127 {
+                // 人物那一侧只统计**真有像素**的地方（画布其余部分是黑底，算进去会把色偏估反）
+                let pixel = *person.get_pixel(x as u32, y as u32);
+                if pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32 > 0 {
+                    for c in 0..3 {
+                        fg[c] += pixel[c] as f64;
+                    }
+                    fg_n += 1.0;
+                }
+            } else {
+                let pixel = *base.get_pixel(x as u32, y as u32);
+                for c in 0..3 {
+                    bg[c] += pixel[c] as f64;
+                }
+                bg_n += 1.0;
+            }
+        }
+    }
+    let tint = if fg_n > 0.0 && bg_n > 0.0 {
+        let mut out = [1.0f64; 3];
+        for c in 0..3 {
+            let bg_mean = bg[c] / bg_n.max(1.0);
+            let fg_mean = fg[c] / fg_n.max(1.0);
+            out[c] = if fg_mean > 1.0 { (bg_mean / fg_mean).clamp(0.75, 1.3) } else { 1.0 };
+        }
+        out
+    } else {
+        [1.0, 1.0, 1.0]
+    };
+
+    // ③ 方向梯度：以包围盒中心为原点，沿光向线性增减
+    let (cx, cy, span) = match bbox {
+        Some((x0, y0, x1, y1)) => (
+            (x0 + x1) as f64 / 2.0,
+            (y0 + y1) as f64 / 2.0,
+            (((x1 - x0).max(y1 - y0)) as f64 / 2.0).max(1.0),
+        ),
+        None => (w as f64 / 2.0, h as f64 / 2.0, (w.max(h) as f64) / 2.0),
+    };
+    let light = light.clamp(0.0, 1.0);
+    for y in 0..h {
+        for x in 0..w {
+            if mask[y * w + x] <= 127 {
+                continue;
+            }
+            let ramp = (((x as f64 - cx) * dir[0] + (y as f64 - cy) * dir[1]) / span).clamp(-1.0, 1.0);
+            let factor = (1.0 + light * ramp) * 1.0;
+            let pixel = person.get_pixel_mut(x as u32, y as u32);
+            for c in 0..3 {
+                let value = pixel[c] as f64 * factor * tint[c];
+                pixel[c] = value.clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+
+    // ④ 投影：剪影往光的**反方向**挪、糊一遍，压在背景色上（写进人物图 + 扩遮罩）
+    if shadow > 0.0 && shadow_offset > 0 {
+        let source = mask.to_vec();
+        let dx = (-dir[0] * shadow_offset as f64).round() as i64;
+        let dy = (-dir[1] * shadow_offset as f64).round() as i64;
+        let mut shadow_mask = vec![0u8; w * h];
+        for y in 0..h as i64 {
+            for x in 0..w as i64 {
+                let (sx, sy) = (x - dx, y - dy);
+                if sx < 0 || sy < 0 || sx >= w as i64 || sy >= h as i64 {
+                    continue;
+                }
+                if source[sy as usize * w + sx as usize] > 127 {
+                    shadow_mask[y as usize * w + x as usize] = 255;
+                }
+            }
+        }
+        let blurred = box_blur(&shadow_mask, w, h, 24);
+        for y in 0..h {
+            for x in 0..w {
+                let alpha = blurred[y * w + x] as f64 / 255.0;
+                if alpha <= 0.02 {
+                    continue;
+                }
+                let darken = 1.0 - shadow.clamp(0.0, 1.0) * alpha;
+                let background = *base.get_pixel(x as u32, y as u32);
+                let pixel = person.get_pixel_mut(x as u32, y as u32);
+                for c in 0..3 {
+                    pixel[c] = (background[c] as f64 * darken).clamp(0.0, 255.0) as u8;
+                }
+                mask[y * w + x] = 255; // 影子也要跟着贴上去
+            }
+        }
+    }
+
+    (dir, estimated)
+}
+
+/// 从背景的四周亮度差估光向（`[dx, dy]`，未归一化时为 0 表示"看不出方向"）。
+fn estimate_light_dir(base: &image::RgbImage, mask: &[u8], w: usize, h: usize, bbox: Option<(usize, usize, usize, usize)>) -> [f64; 2] {
+    let (x0, y0, x1, y1) = bbox.unwrap_or((0, 0, w, h));
+    let (mut left, mut right, mut top, mut bottom) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let (mut ln, mut rn, mut tn, mut bn) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let (cx, cy) = ((x0 + x1) as f64 / 2.0, (y0 + y1) as f64 / 2.0);
+    for y in 0..h {
+        for x in 0..w {
+            if mask[y * w + x] > 127 {
+                continue;
+            }
+            let pixel = base.get_pixel(x as u32, y as u32);
+            let luma = (pixel[0] as f64 * 0.299 + pixel[1] as f64 * 0.587 + pixel[2] as f64 * 0.114) / 255.0;
+            if (x as f64) < cx {
+                left += luma;
+                ln += 1.0;
+            } else {
+                right += luma;
+                rn += 1.0;
+            }
+            if (y as f64) < cy {
+                top += luma;
+                tn += 1.0;
+            } else {
+                bottom += luma;
+                bn += 1.0;
+            }
+        }
+    }
+    if ln == 0.0 || rn == 0.0 || tn == 0.0 || bn == 0.0 {
+        return [0.0, 0.0];
+    }
+    // 亮的一侧就是"光来的方向"
+    let dx = right / rn - left / ln;
+    let dy = bottom / bn - top / tn;
+    if dx.abs() < 0.01 && dy.abs() < 0.01 {
+        return [0.0, 0.0];
+    }
+    [dx, dy]
+}
+
+/// 单位化（长度 0 时回 `[0,0]`）。
+fn normalize2(v: [f64; 2]) -> [f64; 2] {
+    let len = (v[0] * v[0] + v[1] * v[1]).sqrt();
+    if len < 1e-6 {
+        [0.0, 0.0]
+    } else {
+        [v[0] / len, v[1] / len]
+    }
+}
+
 /// 遮罩里"有内容"的那块矩形（`(x0, y0, x1, y1)`，右/下开区间）；全黑时回 `None`。
 pub fn mask_bbox(mask: &[u8], w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
@@ -1685,6 +1972,63 @@ mod tests {
         assert_eq!(parse_color("#0b0"), Some([0, 187, 0]));
         assert_eq!(parse_color("white"), Some([255, 255, 255]));
         assert_eq!(parse_color("浅蓝"), None, "认不出来就回落成「从边框估」，不猜");
+    }
+    /// **按背景打光 + 烧影子**：背景亮的一侧 = 光来的方向；影子落在**反方向**。
+    #[test]
+    fn 按背景估光向并烧出反向影子() {
+        let (w, h) = (120usize, 120usize);
+        // 背景：左暗右亮（光从右边来）
+        let mut base = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([20, 20, 20]));
+        for y in 0..h as u32 {
+            for x in (w as u32 / 2)..w as u32 {
+                base.put_pixel(x, y, image::Rgb([220, 210, 200]));
+            }
+        }
+        // 人物：中间一个白方块（有像素）
+        let mut person = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([0, 0, 0]));
+        let mut mask = vec![0u8; w * h];
+        for y in 50..70 {
+            for x in 50..70 {
+                person.put_pixel(x as u32, y as u32, image::Rgb([180, 180, 180]));
+                mask[y * w + x] = 255;
+            }
+        }
+        let (dir, estimated) =
+            relight_and_shadow(&mut person, &mut mask, &base, w, h, None, 0.5, 0.5, 6);
+        assert!(estimated, "没给方向时应当是从背景估的");
+        assert!(dir[0] > 0.5, "光应当从**右**边来（右半更亮），实测 dir={dir:?}");
+
+        // 亮面在右、暗面在左（方向梯度生效）
+        let left = person.get_pixel(52, 60)[0] as i32;
+        let right = person.get_pixel(67, 60)[0] as i32;
+        assert!(right > left, "受光面应当更亮：左 {left} / 右 {right}");
+
+        // 影子落在**反方向**（左边）：左边应当是"压暗后的背景色"且落进了遮罩
+        let shadow_x = 46;
+        assert_eq!(mask[60 * w + shadow_x], 255, "影子那几像素要落进遮罩（否则贴不上去）");
+        let shadow_pixel = person.get_pixel(shadow_x as u32, 60)[0];
+        // 左半背景是 20，压暗之后只会更暗
+        assert!(shadow_pixel < 25, "影子应当是压暗后的背景色，实测 {shadow_pixel}");
+    }
+
+    /// 显式给方向就不去估（`light="left"` 之类）。
+    #[test]
+    fn 显式光向不再从背景估() {
+        let (w, h) = (60usize, 60usize);
+        let base = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([128, 128, 128]));
+        let mut person = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([0, 0, 0]));
+        let mut mask = vec![0u8; w * h];
+        for y in 20..40 {
+            for x in 20..40 {
+                person.put_pixel(x as u32, y as u32, image::Rgb([200, 200, 200]));
+                mask[y * w + x] = 255;
+            }
+        }
+        let (dir, estimated) =
+            relight_and_shadow(&mut person, &mut mask, &base, w, h, Some([0.0, -1.0]), 0.6, 0.0, 0);
+        assert!(!estimated);
+        assert_eq!(dir, [0.0, -1.0]);
+        assert!(person.get_pixel(30, 22)[0] > person.get_pixel(30, 38)[0], "光从上面来 → 上面更亮");
     }
     /// **收缩（choke）**：把主体与背景交界那圈抗锯齿 / 溢色扔掉 ——
     /// 用户 2026-09-26 问的"人物怎么冒背景的泛光"就是没收这一刀（绿边被当主体贴进去）。

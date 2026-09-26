@@ -176,7 +176,7 @@ class Handler(BaseHTTPRequestHandler):
         # 把人换上去"）：给了就多一轮 `comfy_use_media` 把阶段一的产物投进去，
         # 并把 `20.image` 指向它、`denoise` 降到 0.4~0.6 融合（不给就是"纯提示词重绘"）。
         if "编辑图片" in user_text:
-            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 12)
+            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 13)
             attachment_id = fields[0].strip() if fields else ""
             workflow_path = fields[1].strip() if len(fields) > 1 else ""
             denoise = float(fields[2].strip()) if len(fields) > 2 and fields[2].strip() else 1.0
@@ -201,6 +201,8 @@ class Handler(BaseHTTPRequestHandler):
             place_y = float(tail[3].strip()) if len(tail) > 3 and tail[3].strip() else None
             # 第 13 个字段：bgColor（`#00b140` / `green` / `magenta`；空 = 从边框估）
             bg_color = tail[4].strip() if len(tail) > 4 and tail[4].strip() else ""
+            # 第 14 个字段：light（auto / left / right / top / bottom / none）
+            light = tail[5].strip() if len(tail) > 5 and tail[5].strip() else ""
             tool_msgs = [m for m in messages if m.get("role") == "tool"]
             rounds = 0
             if len(tool_msgs) == 0:
@@ -241,6 +243,10 @@ class Handler(BaseHTTPRequestHandler):
                     # 这是"嵌进去会改变画风"的正解 —— 人物像素原样贴上去，模型只融接缝。
                     if ring > 0:
                         mask_args["ring"] = ring
+                    if light:
+                        # ★ 按背景环境改新图层的光照/阴影方向（用户最后一个要求）：
+                        #   工具从底图估光向+色偏烘进人物图，并按反方向烧影子
+                        mask_args["light"] = light
                     if bg_color:
                         # ★ 用户 2026-09-26 指出的正解：**背景色与主体不同**（绿幕/品红），
                         #   显式告诉工具背景是什么色，抠图就不用猜边框、也没有"白底 vs 白裙子"的二义。
