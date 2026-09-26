@@ -24,6 +24,11 @@ param(
 
     [string]$JdkHome = $env:COMFYHUB_JDK_HOME,
 
+    # 后端实现：auto（默认：有 Rust 二进制就用 Rust，否则 Kotlin）/ rust / kotlin。
+    # 也可以不传参数、用环境变量 COMFYHUB_BACKEND —— 两者同义，命令行优先。
+    [ValidateSet('auto', 'rust', 'kotlin')]
+    [string]$Backend = $env:COMFYHUB_BACKEND,
+
     # API 端口。**默认 0 = 交给操作系统自动挑**（用户 2026-09-22）。
     # 解析顺序由 scripts\api-port.ps1 统一定：-Port > COMFYHUB_PORT > .run\api.json > 0。
     [int]$Port = 0,
@@ -173,9 +178,27 @@ function Resolve-Jdk {
 "@
 }
 
-$Jdk = Resolve-Jdk -Explicit $JdkHome
-$env:JAVA_HOME = $Jdk
-Trace "JDK 已选定: $Jdk"
+$JdkResolved = $null
+<#  懒解析 JDK：**只有真的要跑 Kotlin / Gradle 时才找它**。
+
+    为什么不能像以前那样在脚本开头就 `Resolve-Jdk`（找不到直接 throw）：切流之后
+    Rust 后端**完全不需要 JDK**，而"没装 JDK 21~23 的机器"正是发布包要支持的那一类 ——
+    开头就抛等于"Rust 后端在一台没 JDK 的机器上根本起不来"。
+    这台机器上唯一那份 21 就是 Android Studio 的 JBR，历史上也确实因为找不到而卡过（pitfalls 有记）。  #>
+function Get-Jdk {
+    if ($Script:JdkResolved) { return $Script:JdkResolved }
+    $Script:JdkResolved = Resolve-Jdk -Explicit $JdkHome
+    $env:JAVA_HOME = $Script:JdkResolved
+    Trace "JDK 已选定: $Script:JdkResolved"
+    return $Script:JdkResolved
+}
+
+# 后端选择（Rust / Kotlin）住在公共文件里：`comfyhub.ps1 doctor` 读的是同一条规则
+$BackendHelper = Join-Path $PSScriptRoot 'backend.ps1'
+if (Test-Path $BackendHelper) { . $BackendHelper }
+$Script:BackendInfo = Resolve-Backend -Preference $Backend -ProjectRoot $ProjectRoot
+$Script:BackendKind = $Script:BackendInfo.Kind
+Trace ("后端: {0}（{1}）" -f $Script:BackendKind, $Script:BackendInfo.Note)
 
 function Invoke-Gradle {
     param([string[]]$Tasks, [switch]$Quiet)
@@ -189,8 +212,8 @@ function Invoke-Gradle {
 }
 
 function Get-ServerProcess {
-    Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -like '*com.comfyhub.ApplicationKt*' }
+    # 认**当前选中的那个后端**（两个都可能在跑，见 `Get-AnyBackendProcess`）
+    Get-BackendProcess -Kind $Script:BackendKind
 }
 
 function Test-Api {
@@ -242,9 +265,11 @@ function Wait-Api([int]$Seconds = 90) {
 }
 
 function Do-Stop {
-    $procs = Get-ServerProcess
+    # ⚠ **两个后端都要停**（切流期间尤其）：只停"当前选中的那个"会让旧的另一个继续占着端口，
+    # 表现是"新后端起来了、健康检查却打到旧进程上"或干脆 bind 失败。
+    $procs = Get-AnyBackendProcess
     if (-not $procs) { Write-Host '后端未运行。' -ForegroundColor Yellow; return }
-    Trace "停止：找到 $(@($procs).Count) 个后端进程"
+    Trace "停止：找到 $(@($procs).Count) 个后端进程（Rust+Kotlin 一起停）"
     $procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
     # ⚠️ **必须等它真的死透并放开端口**，否则 restart 会撞进一个空窗：
@@ -252,8 +277,8 @@ function Do-Stop {
     # 表现是"重启偶尔报『后端不健康』，但过几秒又好了"（2026-09-22 实测，restart 三次错两次）。
     # 这里等两件事：进程消失 + 端口释放。都是轮询，最多 20 秒。
     $deadline = (Get-Date).AddSeconds(20)
-    while ((Get-Date) -lt $deadline -and @(Get-ServerProcess).Count -gt 0) { Start-Sleep -Milliseconds 200 }
-    Trace "停止：进程已消失（剩余 $(@(Get-ServerProcess).Count)）"
+    while ((Get-Date) -lt $deadline -and @(Get-AnyBackendProcess).Count -gt 0) { Start-Sleep -Milliseconds 200 }
+    Trace "停止：进程已消失（剩余 $(@(Get-AnyBackendProcess).Count)）"
     if ($Port -gt 0) {
         $deadline = (Get-Date).AddSeconds(20)
         while ((Get-Date) -lt $deadline -and (Test-TcpPort '127.0.0.1' $Port -TimeoutMs 200)) {
@@ -281,14 +306,15 @@ function Start-Detached {
     #>
     param([string]$BatchFile, [string]$WorkDir, [string]$StdOut, [string]$StdErr, [string]$StorageDir, [int]$Port)
 
+    $jdk = Get-Jdk
     $launcher = Join-Path $LogDir 'start-server.cmd'
     $lines = @(
         '@echo off',
         "cd /d `"$WorkDir`"",
         "set `"COMFYHUB_STORAGE=$StorageDir`"",
         "set `"COMFYHUB_PORT=$Port`"",
-        "set `"JAVA_HOME=$Jdk`"",
-        "set `"PATH=$Jdk\bin;%PATH%`"",
+        "set `"JAVA_HOME=$jdk`"",
+        "set `"PATH=$jdk\bin;%PATH%`"",
         "`"$BatchFile`" > `"$StdOut`" 2> `"$StdErr`""
     )
     Set-Content -Path $launcher -Value $lines -Encoding ascii
@@ -298,6 +324,40 @@ function Start-Detached {
         return Start-SilentProcess -CommandLine $cmdline -WorkingDirectory $WorkDir -Tag 'server'
     }
 
+    Write-Host '  警告: 找不到 scripts\silent-process.ps1，启动时可能会弹一个控制台窗口。' -ForegroundColor Yellow
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdline }
+    if ($r.ReturnValue -ne 0) { throw "创建进程失败 (ReturnValue=$($r.ReturnValue))" }
+    return 'wmi-plain'
+}
+
+function Start-DetachedRust {
+    <#
+      启动 **Rust 后端**：与 [Start-Detached] 同一条纪律（WMI 脱离进程树 + SW_HIDE 不留黑框），
+      只是把 `.bat` 换成 exe + 参数。
+
+      参数与 Kotlin 那边**逐个对应**，好让两条路的行为一样：
+        · `--db` / `--storage`：与 Kotlin 同一个库文件与产物目录；
+        · `--port`：`0` 表示让后端自己挑（真实端口由**后端**写进 `.run\api.json`，见 `api_port_file.rs`）；
+        · `COMFYHUB_PROJECT_ROOT`：显式给根目录 —— 端口文件必须落在项目根，
+          绝不能靠"以子目录为 cwd 跑"时的兜底（pitfalls 里那条"搬迁工具把数据写到 server\.db"就是它）。
+    #>
+    param([string]$Exe, [string]$WorkDir, [string]$StdOut, [string]$StdErr, [string]$StorageDir, [int]$Port)
+
+    $launcher = Join-Path $LogDir 'start-server.cmd'
+    $dbFile = Join-Path $ProjectRoot '.db\comfyhub.db'
+    $lines = @(
+        '@echo off',
+        "cd /d `"$WorkDir`"",
+        "set `"COMFYHUB_PROJECT_ROOT=$ProjectRoot`"",
+        "set `"COMFYHUB_STORAGE=$StorageDir`"",
+        "`"$Exe`" --db `"$dbFile`" --storage `"$StorageDir`" --host 127.0.0.1 --port $Port > `"$StdOut`" 2> `"$StdErr`""
+    )
+    Set-Content -Path $launcher -Value $lines -Encoding ascii
+
+    $cmdline = "cmd.exe /c `"$launcher`""
+    if (Get-Command Start-SilentProcess -ErrorAction SilentlyContinue) {
+        return Start-SilentProcess -CommandLine $cmdline -WorkingDirectory $WorkDir -Tag 'server'
+    }
     Write-Host '  警告: 找不到 scripts\silent-process.ps1，启动时可能会弹一个控制台窗口。' -ForegroundColor Yellow
     $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdline }
     if ($r.ReturnValue -ne 0) { throw "创建进程失败 (ReturnValue=$($r.ReturnValue))" }
@@ -369,7 +429,7 @@ function Do-Start {
     # 由后端自己按需创建 / 迁移（`Migrate.run`）。老 MySQL 只在 `migrate` 那一步当只读来源。
     # 以前这里"库没起来就抛"的闸门保留在 `migrate` 动作里。
 
-    if (Get-ServerProcess) {
+    if (Get-AnyBackendProcess) {
         Trace 'CIM 查到后端进程'
         $h = Test-Api
         if ($h -and $h.database -eq 'ok') {
@@ -382,31 +442,56 @@ function Do-Start {
         Start-Sleep 1
     }
 
-    Write-Host "==> 使用 JDK: $Jdk" -ForegroundColor DarkGray
-    if (Test-Path $PackagedServerBat) {
-        # 发布包布局：没有 Gradle 源码也没有 gradle 可跑，别去 attempt 构建
-        $bat = $PackagedServerBat
-        Write-Host '==> 发布包布局：直接用自带的 server\bin，跳过 Gradle 构建' -ForegroundColor DarkGray
-    } else {
-        if ($SkipBuild) {
-            Write-Host '==> 跳过构建（-SkipBuild）' -ForegroundColor DarkGray
-        } else {
-            Write-Host '==> gradle installDist' -ForegroundColor Cyan
-            Invoke-Gradle @('installDist')
-        }
-        $bat = $GradleServerBat
-    }
-    Trace '构建阶段结束（SkipBuild 则跳过）'
-
-    if (-not (Test-Path $bat)) {
-        throw "找不到后端启动脚本: $bat`n（开发布局去掉 -SkipBuild 重新构建；发布包布局请重新执行 scripts\pack-release.ps1）"
-    }
-
-    Write-Host "==> 后台启动后端 (port $Port)" -ForegroundColor Cyan
     $storageDir = Join-Path $ProjectRoot 'storage'
     New-Item -ItemType Directory -Force -Path $storageDir | Out-Null
-    $how = Start-Detached -BatchFile $bat -WorkDir $ServerDir -StdOut $OutLog -StdErr $ErrLog -StorageDir $storageDir -Port $Port
-    Trace "启动方式=$how，开始等后端健康"
+
+    # ---- 起哪一个后端（Rust / Kotlin，见 scripts\backend.ps1 的规则）------------
+    if ($Script:BackendKind -eq 'rust') {
+        Write-Host ("==> 后端实现: Rust（{0}）" -f $Script:BackendInfo.Note) -ForegroundColor Cyan
+        $exe = $Script:BackendInfo.Exe
+        if (-not (Test-Path $exe) -and -not $SkipBuild) {
+            Write-Host '==> cargo build --release（第一次会比较久）' -ForegroundColor Cyan
+            & cargo build --release --manifest-path (Join-Path $ProjectRoot 'server-rs\Cargo.toml')
+            $exe = Resolve-RustExe -ProjectRoot $ProjectRoot
+        }
+        if (-not $exe -or -not (Test-Path $exe)) {
+            throw @"
+找不到 Rust 后端二进制（也不在发布包里）。
+  构建：cargo build --release --manifest-path server-rs\Cargo.toml
+  或者用旧后端：pwsh -File scripts\server.ps1 start -Backend kotlin
+"@
+        }
+        Write-Host "==> 后台启动后端 (port $Port)  exe=$exe" -ForegroundColor Cyan
+        # SQLite 不替我们建目录（`<根>\.db` 不存在时驱动的报错完全指不到这里）
+        New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot '.db') | Out-Null
+        $how = Start-DetachedRust -Exe $exe -WorkDir $ProjectRoot -StdOut $OutLog -StdErr $ErrLog -StorageDir $storageDir -Port $Port
+        Trace "启动方式=$how，开始等后端健康"
+    } else {
+        Write-Host ("==> 后端实现: Kotlin（{0}）" -f $Script:BackendInfo.Note) -ForegroundColor DarkGray
+        Write-Host "==> 使用 JDK: $(Get-Jdk)" -ForegroundColor DarkGray
+        if (Test-Path $PackagedServerBat) {
+            # 发布包布局：没有 Gradle 源码也没有 gradle 可跑，别去 attempt 构建
+            $bat = $PackagedServerBat
+            Write-Host '==> 发布包布局：直接用自带的 server\bin，跳过 Gradle 构建' -ForegroundColor DarkGray
+        } else {
+            if ($SkipBuild) {
+                Write-Host '==> 跳过构建（-SkipBuild）' -ForegroundColor DarkGray
+            } else {
+                Write-Host '==> gradle installDist' -ForegroundColor Cyan
+                Invoke-Gradle @('installDist')
+            }
+            $bat = $GradleServerBat
+        }
+        Trace '构建阶段结束（SkipBuild 则跳过）'
+
+        if (-not (Test-Path $bat)) {
+            throw "找不到后端启动脚本: $bat`n（开发布局去掉 -SkipBuild 重新构建；发布包布局请重新执行 scripts\pack-release.ps1）"
+        }
+
+        Write-Host "==> 后台启动后端 (port $Port)" -ForegroundColor Cyan
+        $how = Start-Detached -BatchFile $bat -WorkDir $ServerDir -StdOut $OutLog -StdErr $ErrLog -StorageDir $storageDir -Port $Port
+        Trace "启动方式=$how，开始等后端健康"
+    }
 
     # `-Port 0` 时脚本事先不知道后端会绑到哪：先给它一点时间把真实端口写进
     # `.run\api.json`（正常 4~10 秒），再开始探健康 —— 否则头几轮探测根本没有候选端口，
@@ -482,9 +567,9 @@ function Do-Status {
 }
 
 switch ($Action) {
-    'build'  { Write-Host "==> JDK: $Jdk" -ForegroundColor DarkGray; Invoke-Gradle @('build'); Write-Host '构建完成' -ForegroundColor Green }
-    'test'   { Write-Host "==> JDK: $Jdk" -ForegroundColor DarkGray; Invoke-Gradle @('test'); Write-Host '测试完成' -ForegroundColor Green }
-    'fatjar' { Write-Host "==> JDK: $Jdk" -ForegroundColor DarkGray; Invoke-Gradle @('fatJar'); Get-ChildItem (Join-Path $ServerDir 'build\libs') | Select-Object Name, Length }
+    'build'  { Write-Host "==> JDK: $(Get-Jdk)" -ForegroundColor DarkGray; Invoke-Gradle @('build'); Write-Host '构建完成' -ForegroundColor Green }
+    'test'   { Write-Host "==> JDK: $(Get-Jdk)" -ForegroundColor DarkGray; Invoke-Gradle @('test'); Write-Host '测试完成' -ForegroundColor Green }
+    'fatjar' { Write-Host "==> JDK: $(Get-Jdk)" -ForegroundColor DarkGray; Invoke-Gradle @('fatJar'); Get-ChildItem (Join-Path $ServerDir 'build\libs') | Select-Object Name, Length }
     'migrate' {
         # 一次性数据搬迁（P2）：老 MySQL（只读来源）→ SQLite 目标库。
         # 这一步是**唯一**还需要 MySQL 的地方；来源地址走 COMFYHUB_MIGRATE_SOURCE，
@@ -516,7 +601,7 @@ switch ($Action) {
     'status' { Do-Status }
     'logs'   { if (Test-Path $OutLog) { Get-Content $OutLog -Tail 80 }; if (Test-Path $ErrLog) { Write-Host '--- stderr ---'; Get-Content $ErrLog -Tail 40 } }
     'run' {
-        Write-Host "==> 使用 JDK: $Jdk" -ForegroundColor DarkGray
+        Write-Host "==> 使用 JDK: $(Get-Jdk)" -ForegroundColor DarkGray
         Write-Host "==> 前台运行（Ctrl+C 停止），监听 $Port" -ForegroundColor Cyan
         Push-Location $ServerDir
         try { & gradle -p $ServerDir --console=plain run } finally { Pop-Location }

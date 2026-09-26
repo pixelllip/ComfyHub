@@ -33,6 +33,12 @@ param(
     [switch]$WithApp,
     [switch]$SkipBuild,
 
+    # 后端实现：auto（默认：有 Rust 二进制就用 Rust）/ rust / kotlin。
+    # 与 server.ps1 的 -Backend 同义（也认环境变量 COMFYHUB_BACKEND），并且**透传**下去 ——
+    # 不透传就会出现"up 说用 Rust、server.ps1 自己去起 Kotlin"这种两端不一致。
+    [ValidateSet('auto', 'rust', 'kotlin')]
+    [string]$Backend = $env:COMFYHUB_BACKEND,
+
     # MySQL 实例目录；留空则走默认解析链
     [string]$DataDir,
 
@@ -372,6 +378,30 @@ function Show-Status {
     }
 
     # 后端（报的是端到端健康，包含数据库连通性）
+    # 实现（Rust / Kotlin）由 `scripts\backend.ps1` 的**同一条规则**判定 —— 与 server.ps1 共读一份，
+    # 免得"doctor 说 Kotlin 在跑、server.ps1 去停 Rust"这种自相矛盾（切流期间两个都可能在场）。
+    $backendHelper = Join-Path $Scripts 'backend.ps1'
+    if (Test-Path $backendHelper) {
+        . $backendHelper
+        $backend = Resolve-Backend -Preference $Backend -ProjectRoot $ProjectRoot
+        $running = Get-AnyBackendProcess
+        $runningKind = if (@(Get-RustServerProcess).Count -gt 0) { 'Rust' }
+            elseif (@(Get-KotlinServerProcess).Count -gt 0) { 'Kotlin' }
+            else { 'none' }
+        $implNote = "实现 {0}（{1}）" -f $backend.Kind, $backend.Note
+        if ($runningKind -ne 'none') { $implNote += "；正在跑的是 $runningKind" }
+        Say (Format-Row '后端实现' $backend.Kind $implNote) $(if ($runningKind -eq 'none' -or $runningKind -eq $backend.Kind) { 'Green' } else { 'Yellow' })
+        if ($backend.Kind -eq 'rust') {
+            $fresh = Get-RustBuildFreshness -Exe $backend.Exe -ProjectRoot $ProjectRoot
+            if ($fresh) {
+                if ($fresh.Stale) {
+                    Say (Format-Row '后端构建' '已过期' ("$($backend.Exe) 早于源码 $($fresh.NewestSource.FullName) —— 重新构建：cargo build --release --manifest-path server-rs\Cargo.toml")) 'Yellow'
+                } else {
+                    Say (Format-Row '后端构建' '最新' ("$($backend.Exe)  $($fresh.ExeTime)") ) 'DarkGray'
+                }
+            }
+        }
+    }
     if ($s.ApiHealth -and $s.ApiHealth.database -eq 'ok') {
         # 端口从状态文件现读：`-Port 0` 时 `$ApiPort` 是 0，报它等于报了个假地址
         $livePort = Get-ApiPortNow
@@ -444,10 +474,13 @@ function Start-ApiPart {
         Start-Sleep 1
     }
 
-    Say '  [1/2] 启动 Kotlin 后端…' 'Cyan'
+    $backendLabel = if ($Backend -and $Backend -ne 'auto') { $Backend } else { 'auto（有 Rust 二进制就用 Rust）' }
+    Say "  [1/2] 启动后端（-Backend $backendLabel）…" 'Cyan'
     # ⚠️ 端口必须**透传**给 server.ps1：过去两个脚本各写各的 8080、互不知道，
     # 于是"后端在跑、脚本却说没起来"。`-Port 0` 表示"自动"，由后端挑好写进 .run\api.json。
-    $apiArgs = @('-Port', "$Script:ApiPort") + $DataDirArgs
+    # `-Backend` 要**透传**给 server.ps1：不透传就会出现"up 说用 Rust、server.ps1 自己起 Kotlin"
+    $backendArgs = if ($Backend) { @('-Backend', $Backend) } else { @() }
+    $apiArgs = @('-Port', "$Script:ApiPort") + $DataDirArgs + $backendArgs
     if ($SkipBuild) {
         & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') start -SkipBuild @apiArgs
     } else {
@@ -483,7 +516,7 @@ function Start-ApiPart {
     if ($Script:ApiPort -gt 0) {
         Say "  端口 $Script:ApiPort 起不来（旧进程没退干净 / 端口被保留）——改用随机端口重试一次…" 'Yellow'
         $script:ApiPort = 0
-        $retryArgs = @('-Port', '0') + $DataDirArgs
+        $retryArgs = @('-Port', '0') + $DataDirArgs + $backendArgs
         if ($SkipBuild) {
             & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') start -SkipBuild @retryArgs
         } else {
