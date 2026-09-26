@@ -563,7 +563,7 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
             "① 覆盖工作流里 LoadImageMask 节点的 image 输入：{{\"<节点id>.image\":\"{filename}\"}}；\
              ② ImageScale 的 width/height 覆盖成 {w}x{h}；\
              ③ 这张遮罩是照「{subject}」的**主体形状**抠的（背景色 {}，占画面 {:.1}%）。\
-             占比过大（>60%）说明那张图的背景不是纯色 —— 换个纯色背景重做阶段一，\
+             遮罩几乎盖满整张图（>90%）时多半是背景不纯（也可能是主体本来就占满画面）—— 那时改用矩形遮罩 + 更高的 denoise，或换一张纯色背景重做阶段一，\
              或者改用 mode=\"rect\" 的矩形遮罩 + 更高的 denoise。{placed_hint}",
             format!("#{:02x}{:02x}{:02x}", background[0], background[1], background[2]),
             ratio * 100.0

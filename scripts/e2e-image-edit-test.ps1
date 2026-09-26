@@ -444,8 +444,8 @@ try {
         if ($mask.mode -eq 'subject') {
             # 剪影档：形状由人物图决定，**不能**再按 region 矩形取点
             # （实测：拿矩形中心当"重绘区"，那里可能正好是剪影边缘 → 假红）
-            Check '剪影遮罩有内容（占比在 0.5%~60% 之间）' `
-                ($mask.subjectRatio -gt 0.005 -and $mask.subjectRatio -lt 0.6) "subjectRatio=$($mask.subjectRatio)"
+            Check '剪影遮罩有内容（占比在 0.5%~90% 之间）' `
+                ($mask.subjectRatio -gt 0.005 -and $mask.subjectRatio -lt 0.9) "subjectRatio=$($mask.subjectRatio)"
             Check '剪影遮罩如实报了背景色与来源图' `
                 ($mask.background -and $mask.subjectFilename) ($mask | ConvertTo-Json -Compress)
             Check '剪影遮罩在画布四角是黑的（白底没漏进来）' ($outsidePixel -lt 40) "角落像素值 $outsidePixel"
@@ -489,9 +489,21 @@ try {
             ($person -and $person.filename -and (Test-Path (Join-Path $instanceInput $person.filename))) `
             ($person | ConvertTo-Json -Compress)
         $applied = @($submitted.appliedOverrides)
-        # `appliedOverrides` 的形状是 **`键 ← 值`**（工具自己报的"我改了哪几个键"）
-        $personKey = @($applied | Where-Object { $_ -match ('^\d+\.image ← ' + [regex]::Escape($person.filename) + '$') })
+        # ⚠ **摆放之后人物图换文件名了**（工具把像素与遮罩一起搬，回了 `placedSubjectFilename`）：
+        #   断言要比这个新名字，拿原图名去比就是假红（实测踩过）。
+        $expectPerson = if ($mask.placedSubjectFilename) { $mask.placedSubjectFilename } else { $person.filename }
+        $personKey = @($applied | Where-Object { $_ -match ('^\d+\.image ← ' + [regex]::Escape($expectPerson) + '$') })
         Check '人物图覆盖写进了工作流（LoadImage 两份：底图 + 人物图）' ($personKey.Count -ge 1) ($applied -join ' | ')
+        if ($mask.placedSubjectFilename) {
+            Check '摆放用的是搬过的新人物图（不是原图）' `
+                (@($applied | Where-Object { $_ -match ('^\d+\.image ← ' + [regex]::Escape($mask.placedSubjectFilename) + '$') }).Count -ge 1) `
+                ($applied -join ' | ')
+        }
+        if ($Ring -gt 0) {
+            Check '重绘区用的是 ring 遮罩（第二个 LoadImageMask）' `
+                (@($applied | Where-Object { $_ -match ('^\d+\.image ← ' + [regex]::Escape($mask.ringFilename) + '$') }).Count -ge 1) `
+                ($applied -join ' | ')
+        }
         Check "denoise 被覆盖成 $PersonDenoise（贴人物图的融合档）" `
             (@($applied | Where-Object { $_ -match ('\.denoise ← ' + [regex]::Escape("$PersonDenoise") + '$') }).Count -ge 1) `
             ($applied -join ' | ')
