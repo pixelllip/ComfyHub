@@ -2380,7 +2380,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | 项 | 状态 |
 | --- | --- |
-| **krea2 那份自带 inpaint 工作流不跟随提示词** | ⛔ **发现但未解决**：两次实测（大 region + 小 region、两次不同提示词）都吐出**矩形色块**（像白门/灯箱），而 anima 那份正常。**工具链路与参数覆盖都验穿了**（`/history` 里提示词确实到了 `CLIPTextEncode`），问题在那份图自己的采样配置：Krea 2 Turbo 的官方参数是 **8 步 / cfg 0 / mu 1.15**，而图里写的是 `cfg 1.0 + euler/simple`。**别据此说"krea2 图像编辑能用"**；下一步要么按官方参数改那份图（可能还需要 Krea2 官方节点），要么改用用户自己的那份 Krea 2 编辑工作流（`krea2ImageEditingAnd_v10.json`，它要的 Krea2 自定义节点在本机实例里**缺失**，`comfy_learn_workflow` 会如实报 `UNSUPPORTED_NODES`） |
+| **krea2 那份自带 inpaint 工作流对 `seed` 明显更敏感** | 🔶 **查清了，属抽卡命中率问题**（不是接线问题）：第一轮两次都吐出矩形色块（像灯箱/白门），于是做了一次**控制变量探针**（`.run/krea2-clip-probe.py`：同一份底图 / 同一张遮罩 / 同一段提示词，只换 seed）：**3 个 seed 里 1 个画出了红裙女子、2 个把重绘区里的灯柱与围墙照旧渲染了一遍**（`seed 20260926` 成功；`111` / `222` 失败）。同日 anima 那份每次都跟随提示词。⚠ 探针顺带否掉了另一条猜想：**krea2 int8 那个 checkpoint 里没有文本编码器**（把 `CLIPTextEncode` 改接 checkpoint 自带的 CLIP 会报 `clip input is invalid: None`），所以外挂 `CLIPLoader(type=krea2)` 这条路是**必需的**、不能"简化掉"。处理：`inpaint-composite` skill 补了一条纪律（写实档一次不准**先换 seed 重抽 2~4 张**，别急着改工作流；对照时固定 seed 只改一个变量）。**别据此说"krea2 图像编辑不能用"，也别据此说它"稳定可用"** —— 真话是"要抽卡" |
 | 两阶段（"先生成人物 → 再 `20.image` + `denoise 0.4~0.6` 贴上去"）的**融合档** | 🔶 只验到"阶段一产物能被 `comfy_use_media` 投放进 input"（脚本的加演那一幕）；**0.4~0.6 的融合效果没跑过**（要真跑两阶段、花两次显卡时间） |
 | 角色卡四条端点 / `danbooru_lookup` / `search_prompts` 在 Rust 侧的对照实现 | ⛔ 未搬（§11 那张表里只剩这几条；`character_cards.rs` 的两件工具是第 46 步搬的） |
 | skill `inpaint-composite` 与系统提示 v30 第 19 条的**复核** | 🔶 文案里提到的三件工具现在真的都在 Rust 后端下发了（以前描述在、工具不在）；但"提示词里的步骤编号 / 参数建议是否要按这一轮的实测更新（比如 8GB 显存的长边上限、krea2 那一档先别用）"还没做 |

@@ -484,10 +484,14 @@ try {
         if ($script:AttachmentId) {
             try { Invoke-Api 'DELETE' "/api/ai/attachments/$($script:AttachmentId)" $null | Out-Null } catch { }
         }
-        # input 目录里那两个临时文件（遮罩 / 投放的底图）也清掉，别在用户的 ComfyUI 里攒垃圾
-        foreach ($name in @($script:PlacedFile, 'edit-mask.png', 'edit-stage1.png')) {
-            if ($name -and $script:InputDir) {
-                Remove-Item (Join-Path $script:InputDir $name) -Force -ErrorAction SilentlyContinue
+        # input 目录里那几个临时文件（投放的底图 / 遮罩 / 画廊产物）也清掉，别在用户的 ComfyUI 里攒垃圾。
+        # ⚠ 用通配：投放的文件名是 **`<我们想要的名字>-<来源 id 前 8 位>.png`**（防重名那一段后缀），
+        #   所以 `edit-bg.png` / `edit-stage1.png` 落盘之后叫 `edit-bg-00000000.png` /
+        #   `edit-stage1-m235.png` —— 只按"想要的名字"删会一个都删不掉（实测留了一地）。
+        foreach ($pattern in @('edit-bg*.png', 'edit-mask*.png', 'edit-stage1*.png')) {
+            if ($script:InputDir) {
+                Get-ChildItem -Path $script:InputDir -Filter $pattern -File -ErrorAction SilentlyContinue |
+                    Remove-Item -Force -ErrorAction SilentlyContinue
             }
         }
         Remove-Item $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
