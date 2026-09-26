@@ -29,6 +29,8 @@
 //! | `GET /api/capture/workflows`、`/api/capture/locate{,/apply}` | ✅ |
 //! | **`GET /api/capture/status` / `/jobs`**（真的去问一次 ComfyUI 的 `/queue`） | ✅（P4 第 42 步） |
 //! | **`POST /api/capture/poll`**（拉一次 `/history` 并**入库**：建提示词 + 产物进画廊） | ✅（P4 第 43 步） |
+//! | **`POST /api/ingest/comfyui`**（推送式捕获：外部把一条已跑完的运行推过来，幂等） | ✅（P4 第 49 步） |
+//! | **`POST /api/capture/import-workflows`**（把本机 ComfyUI 里已保存的工作流文件批量读进库；界面上的「导入本机工作流」按钮） | ✅（P4 第 49 步：`run_key = file:<sha256>` 判重，导两次只有一行） |
 //! | **后台捕获轮询器**（用户自己在 ComfyUI 里跑的东西也会被收）+ `/api/capture/status` 的 `lastPollAt` / `lastError` | ✅（P4 第 47 步：`capture_poller.rs`，逐条对齐 Kotlin `ComfyCapture.start()`；启动等 2.5 秒、停用 5 秒空转、间隔夹 1..600、同一时刻只跑一轮） |
 //! | `GET /api/{prompts,media}/{id}/workflow`、`GET /api/prompts/{id}/api-graph` | ✅ |
 //! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ |

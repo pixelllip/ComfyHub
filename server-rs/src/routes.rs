@@ -298,6 +298,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/capture/jobs", get(capture_jobs))
         // 立刻同步一次 /history 并入库（第 43 步）：**这条路会写库**（建提示词 + 产物）
         .route("/api/capture/poll", axum::routing::post(capture_poll))
+        // 推送式捕获（第 49 步）：ComfyUI 自定义节点 / e2e 脚本把一次已跑完的运行推过来
+        .route("/api/ingest/comfyui", axum::routing::post(ingest_comfyui))
+        // 把本机 ComfyUI 里已保存的工作流文件批量读进库（界面上的「导入本机工作流」按钮）
+        .route("/api/capture/import-workflows", axum::routing::post(capture_import_workflows))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
         .route("/api/capture/locate", get(capture_locate))
         .route("/api/capture/locate/apply", axum::routing::post(capture_locate_apply))
@@ -432,6 +436,22 @@ async fn capture_jobs(State(state): State<AppState>) -> Result<Json<serde_json::
 async fn capture_poll(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let config = crate::capture::capture_config(&state)?;
     Ok(Json(crate::capture_ingest::poll_once(&state, &config).await))
+}
+
+/// `POST /api/ingest/comfyui`（P4 第 49 步）：外部推一条已跑完的运行过来。
+async fn ingest_comfyui(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::capture_import::ingest_json(&state, &body).await?))
+}
+
+/// `POST /api/capture/import-workflows`（P4 第 49 步）：批量把本机工作流文件读进库。
+async fn capture_import_workflows(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::capture_import::import_workflows(&state, &body).await?))
 }
 
 /// `GET /api/ai/providers` —— provider 清单（不含密钥，AIH-012）。

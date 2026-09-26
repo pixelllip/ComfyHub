@@ -521,6 +521,32 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ✅ **Run 与 SSE 已落地**（第 26~30 步，见本节上半部分）—— 也就是说
 > **桌面执行器已经能真的聊**（不带工具、不带附件），**R5/R6 已在 Rust 侧重建**。
 >
+> ✅ **P4 第 49 步（2026-09-26）：推送式捕获 + 批量导入工作流**（`server-rs/src/capture_import.rs`）——
+> 这两条是"库里怎么才会有东西"的另一半：轮询与 `comfy_submit` 收的是"跑过的运行"，
+> 而它们收的是**外部推过来的运行**（ComfyUI 自定义节点 / e2e 脚本）与
+> **用户早就存在盘上的工作流文件**（用户 bug ⑤：首次使用时库必然是空的）。
+>
+> - **`POST /api/ingest/comfyui`**：请求体就是 Kotlin 的 `IngestRequest`（驼峰键，含 `extra.nsfw`），
+>   与轮询走**同一条路**（`begin_run` → `ingest_claimed`）：抢不到就**如实**回 `alreadyCaptured`
+>   + 已有的 `promptId`，绝不重复入库。⚠ 这层"驼峰 → 内部 snake_case"的映射就是两端形状的唯一接触点，
+>   写错了**不会报错**、只会"产物一条都收不进来"，所以键名逐个有用例钉住（`item["type"]` / `nodeId` 数字也要读）。
+> - **`POST /api/capture/import-workflows`**（`{dir?, limit?, query?}`）：`dir` 不填就按
+>   `comfy_dirs::workflow_dirs` 自动发现，填了就当它是那个目录本身（不存在 → 400 人话）。
+>   逐条结果如实分开：`imported` / `duplicates` / `failed` + 每条 `{name, path, status, promptId?, runnable?, reason?}`；
+>   **幂等靠 `run_key = file:<sha256>`**（与 `comfy_load_workflow` 同一把钥匙），批量一律
+>   `tolerateUnsupported = true` —— 批量时"转换不了"绝不能让整份工作流消失（它照样是用户库里的资产，
+>   能不能跑由 `runnable` 如实标出来）。
+> - **验收**：`cargo test` **362 例全绿**（233 lib + 121 api_test + 2 shape_lint + 6 submit_test；
+>   新增 4 例：驼峰映射逐键、`extra.nsfw` 与顶层 `nsfw` 都认、缺 `runKey` → 400 人话、目录不存在 → 400 人话）。
+> - **真库副本实测（8101，只写副本）**：
+>   ① 推一条合成运行（真 PNG + `extra.nsfw=true`）→ `{"promptId":333,"mediaIds":[228],"imported":1}`，
+>   库里 `media_assets.nsfw=1`、`prompts.source_ref='verify-push-0001'`；**再推一次** →
+>   `alreadyCaptured:true`（幂等）；缺 `runKey` → `400 {"error":"runKey 不能为空"}`。
+>   ② 批量导入**真的用户 workflows 目录**（17 份界面格式文件）：ComfyUI 没在跑时 **17 份全部如实报
+>   `COMFY_UNREACHABLE`**（"这是界面格式工作流，转换需要问 ComfyUI 要节点定义"）—— 不静默跳过、不假成功；
+>   接着起假实例把 `comfyUrl` 指过去，导入项目 `comfyui\` 那 11 份：**第一次 imported=11 / failed=0，
+>   第二次 duplicates=11 / imported=0**（`file:<sha256>` 判重成立）。
+>
 > ✅ **P4 第 48 步（2026-09-26）：`comfy_submit`（**R10 在 Rust 侧的落点**）** ——
 > 新模块 `server-rs/src/workflow_submit.rs` 逐条对照 `ComfySubmitter`（提交 + 等 + 状态）、
 > `ComfySubmitter.WorkflowEdit`（参数覆盖 / 补线）、`AiWorkflowSearch.submit`（工具层的编排与返回的键集合）。
@@ -1759,8 +1785,8 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | --- | --- | --- | --- |
 | A1 | `/api/ai/attachments{,/{id},/{id}/file,/{id}/thumb}` + `POST` 上传 + 创建 Run 前的三层准入（**R9**） | **贴图/参考图直接发不出去**（`400 UNSUPPORTED_CONTENT`），图像编辑那条链断 | 大（`AiAttachments.kt` 285 + 路由 + 内联预算） |
 | A2 | `/api/ai/providers/{id}/test`、`/{id}/discover-models` | 设置页那两个按钮报"接口不存在" | 中 |
-| A3 | `/api/capture/import`、`/api/capture/import-workflows` | 设置页「导入本机工作流 / 导入目录」不可用（`import-workflows` 要整套 `WorkflowConvert` 转换栈） | 中~大 |
-| A4 | `/api/ingest/comfyui` | 「把一次运行推进来」那条路不可用（e2e 脚本也用它） | 中 |
+| A3 | `/api/capture/import`（导入目录里的产物：含 PNG 内嵌工作流） | 设置页「导入目录」不可用 | 中（`import-workflows` ✅ 已搬、`ingest/comfyui` ✅ 已搬） |
+| A4 | ~~`/api/ingest/comfyui`~~ | ✅ **已搬（P4 第 49 步）** | — |
 | A5 | `/api/media/{id}/poster` | **视频产物没有预览帧**（`ffmpeg` 抽帧） | 小~中 |
 | A6 | `/api/ai/capabilities/{refresh,probe}` | 能力目录那两个按钮回 **501**（Kotlin 侧是实现的，要在线数据集 / 真上游） | 中（**会花钱**） |
 | A7 | `/api/ai/preflight` | 附件预检（选完文件那一刻的准入） | 随 A1 |
@@ -1925,7 +1951,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | **附件（R9）**：`/api/ai/attachments*` + 三层准入 + 内联预算 | ⛔ 未做（有附件直接 `UNSUPPORTED_CONTENT`，不假装发得出去） |
 | **截断续写**（`MAX_CONTINUATIONS` + `CONTINUE_INSTRUCTION`） | ⛔ 未做（输出被长度上限卡断时，现在把半句话当结尾） |
 | **后台捕获轮询器** + `lastPollAt` / `lastError` | ✅ **已做（P4 第 47 步，2026-09-26）**：`capture_poller.rs` + `/api/capture/status` 两个键真的维护；真机"什么都不点也收得到" |
-| `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | ⛔ 501 |
+| `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | 🔶 **一半已搬（P4 第 49 步）**：`import-workflows` 与 `ingest/comfyui` ✅（真库副本实测幂等）；**`/api/capture/import`（导入某个目录里已生成好的产物，含 PNG 内嵌工作流）仍 501** |
 | `/api/media/{id}/poster`（ffmpeg 抽帧） | ⛔ 501 |
 | `/api/ai/capabilities/{refresh,probe}` | ⛔ 501（要在线数据集 / 真上游，会花钱） |
 | `POST /api/auth/pair/start`（扫码配对） | ⛔ 501（**有意**：本轮只做"手机发起 + 桌面显示 6 位码"） |
