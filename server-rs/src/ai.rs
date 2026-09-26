@@ -383,6 +383,14 @@ fn provider_exists(state: &AppState, provider_id: &str) -> Result<bool, ApiError
 
 /// `thinking_efforts` 那一列 → 等级表（`run_lifecycle` 起 Run 时要复核请求的强度）。
 ///
+/// 一行 `ai_models` 的 `input_modalities`（附件准入与历史内联都要它）。
+///
+/// 与 [`model_from_row`] 走**同一个** `parse_string_array`：两处各写一份解析，
+/// 迟早出现"目录页说这模型能吃图、起 Run 时说它不能"这种自相矛盾。
+pub fn model_input_modalities_of(row: &rusqlite::Row<'_>) -> rusqlite::Result<Vec<String>> {
+    Ok(parse_string_array(row.get::<_, Option<String>>("input_modalities")?.as_deref()))
+}
+
 /// 与 [`model_from_row`] 走**同一个**解析函数：两处各写一份 `parse_string_map` 调用，
 /// 迟早会出现"目录页显示有的等级、起 Run 时说没声明"这种自相矛盾。
 pub fn thinking_efforts_of(

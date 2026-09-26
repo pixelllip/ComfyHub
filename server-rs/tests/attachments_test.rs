@@ -321,7 +321,7 @@ async fn 创建_run_之前拦住不支持的附件_上游零请求() {
 }
 
 #[tokio::test]
-async fn 支持的附件能建_run_但必须告诉模型它没被发出去() {
+async fn 支持的图片会被真的内联_发不出去的必须如实告知() {
     let (state, dir) = state("gate-allow");
     seed(&state, "[\"text\",\"image\"]"); // 这个模型吃图
     let (base_url, seen, gateway) = recording_gateway().await;
@@ -329,18 +329,26 @@ async fn 支持的附件能建_run_但必须告诉模型它没被发出去() {
 
     let (_, body) = upload(&state, &[("files", "参考图.png", png_bytes())]).await;
     let id = body["items"][0]["id"].as_str().unwrap().to_string();
+    // 顺带传一个**文本**附件：文案类附件模型/协议都还没有传输方式实现 → 只能如实说没发出去
+    let (_, body) = upload(&state, &[("files", "notes.md", b"# hello\n".to_vec())]).await;
+    let text_id = body["items"][0]["id"].as_str().unwrap().to_string();
 
     let (status, body) = send_json(
         &state,
         "POST",
         "/api/ai/conversations/conv-1/runs",
-        json!({ "text": "看看这张图", "providerId": "goat", "modelId": "m1", "attachmentIds": [id] }),
+        json!({
+            "text": "看看这张图",
+            "providerId": "goat",
+            "modelId": "m1",
+            "attachmentIds": [id, text_id]
+        }),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     let user_message_id = body["userMessageId"].as_str().unwrap().to_string();
 
-    // ① 附件块真的落进了用户消息（界面靠它画缩略图）
+    // ① 两个附件块都真的落进了用户消息（界面靠它画缩略图）
     let parts: Vec<(String, Option<String>)> = state
         .with(|conn| {
             let mut stmt = conn.prepare(
@@ -356,12 +364,9 @@ async fn 支持的附件能建_run_但必须告诉模型它没被发出去() {
             Ok(out)
         })
         .unwrap();
-    assert_eq!(parts.len(), 2, "{parts:?}");
-    assert_eq!(parts[0].0, "text");
-    assert_eq!(parts[1].0, "attachment");
-    assert_eq!(parts[1].1.as_deref(), Some(id.as_str()));
+    assert_eq!(parts.iter().filter(|p| p.0 == "attachment").count(), 2, "{parts:?}");
 
-    // ② 发出去的请求体里**必须**有一句"未随本次请求发送"（不许静默丢掉）
+    // ② 发出去的请求体：图片是**真的内联块**，文本附件在"未随本次请求发送"里
     let mut request = String::new();
     for _ in 0..40 {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -372,9 +377,14 @@ async fn 支持的附件能建_run_但必须告诉模型它没被发出去() {
         }
     }
     assert!(!request.is_empty(), "应当真的发出了一次上游请求");
-    assert!(request.contains("以下附件未随本次请求发送"), "{request}");
-    assert!(request.contains("参考图.png"), "要说清是哪一张：{request}");
-    assert!(request.contains(&id), "带上 id，后续工具才找得到它：{request}");
+    assert!(request.contains("\"type\":\"image_url\""), "图片要变成内联块：{request}");
+    assert!(request.contains("data:image/png;base64,"), "要带 data URL：{request}");
+    assert!(request.contains("data:image/png;base64,iVBORw0KGgo"), "PNG 的 base64 头要接在 data URL 后面：{request}");
+    assert!(request.contains("以下附件未随本次请求发送"), "文本附件要如实告知：{request}");
+    assert!(request.contains("notes.md"), "{request}");
+    assert!(!request.contains("参考图.png（id="), "发出了的图片**不该**出现在未发送名单里：{request}");
+    // ③ 系统提示里那句"附带图片附件"要与事实一致（内联了才说有）
+    assert!(request.contains("本次请求附带图片附件: 有"), "{request}");
 
     gateway.abort();
     let _ = std::fs::remove_dir_all(dir);

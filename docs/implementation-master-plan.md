@@ -271,7 +271,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 | R6 失败不丢内容 | `e2e-ai-tools-test.ps1` 第 13 幕（15 项）+ `ai_retry_keep_content_test.dart` | ✅ **手机侧已补（M3）**：`HarnessRunnerTest` 三例（429 半截 / 首字被压住 / 取消）+ `HarnessStoreTest` 两例。✅ **Rust 侧已补（P4 第 30 步）**：执行器三条收尾路都 `sink_now`（失败/取消也把已说出去的话落块）+ `middle-cut-stream` 用例 |
 | R7 注入防线 | `SystemPromptNsfwTest`、`ToolRegistryTest` | ✅ **手机侧已补（M3）**：横幅文案只做 `{kind}`/`{query}` 替换（`MobileToolsTest` 断言前缀来自 kit） |
 | R8 审批顺序 | `AskGateTest` | ✅ 桌面（M1）+ **手机侧（M3）**：`MobileAskGate` 先 open 再发事件，`MobileToolsTest` 有两例（手快先答不落空 / 没人答如实报）。✅ **Rust 侧已补（P4 第 31 步）**：`approval_gate_opens_before_the_user_can_click`（**不等事件**，库里有 pending 就立刻点，必须 `accepted=true`）+ `a_denied_call_is_recorded_and_never_runs`（拒绝**不许执行**、只许一行、`approval=denied` + `status=failed`）|
-| R9 附件三层准入 | `e2e-ai-tools-test.ps1` 第 9 幕 | ✅ **手机侧已补（M3）**：`InlineBudgetTest` + 适配器未实现模态直接抛（`ProtocolAdapterTest`） |
+| R9 附件三层准入 | `e2e-ai-tools-test.ps1` 第 9 幕 | ✅ **手机侧已补（M3）**：`InlineBudgetTest` + 适配器未实现模态直接抛（`ProtocolAdapterTest`）。✅ **Rust 侧已补（P4 第 50 步）**：`tests/attachments_test.rs` 4 例 —— **图片真的内联**（`image_url` / `input_image` / `source.base64` 三种形状逐条断言）+ 发不出去的**如实告知**（"以下附件未随本次请求发送"）+ 创建 Run 前拦下时**上游零请求且不落消息** |
 | R10 提交链路 | `e2e-submit-test.ps1`、`e2e-capture-test.ps1` | ✅ **Rust 侧已补（P4 第 48 步）**：`tests/submit_test.rs` 6 例（真 socket 假 ComfyUI：提交 → 等 → 入库 → `mediaIds`、nsfw 标记、预检拦截时**零请求**、超时如实报、`NO_API_GRAPH`、参数错误）；"拿 `e2e-submit-test.ps1` 对着 Rust 跑一遍"仍归切流前清单 |
 | R11 不复用提交名字 | 无 | ✅ **已补（M3）**：手机侧工具名 `comfy_queue_submit`，`MobileToolsTest` 断言不返回 `mediaIds`、不说"已提交" |
 | R12 工具单一真源 | `ToolRegistryTest` | ✅ 桌面有 `ToolScopeTest`；手机侧**不维护自己的规则清单**（`declaredTo` = kit ∩ 本地实现） |
@@ -520,6 +520,45 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > `/api/ai/{skills,memory,tools,nsfw,builtin,capabilities}/*`（界面维护用）。
 > ✅ **Run 与 SSE 已落地**（第 26~30 步，见本节上半部分）—— 也就是说
 > **桌面执行器已经能真的聊**（不带工具、不带附件），**R5/R6 已在 Rust 侧重建**。
+>
+> ✅ **P4 第 50 步（2026-09-26）：AI 附件（**R9 在 Rust 侧的落点**）** —— 两块，两个提交。
+>
+> **（上）地基**：`server-rs/src/file_kind.rs`（`FileKindDetector` 的逐条移植：**签名优先**、
+> ISO BMFF 按品牌分图片/视频、纯文本要扩展名 + 内容嗅探**同时**成立、认不出来就是 `Unknown`
+> 且**一律阻断** —— 绝不做"未知即图片"的乐观回退）+ `server-rs/src/attachments.rs`
+> （库 / 文件两层 + 五条端点）。原件落 `<storage>/ai-attachments`、缩略图落 `<storage>/ai-thumbs`，
+> 与画廊产物**分开**存（生命周期不同，混在一起以后清孤儿会互相误删）。
+> `/file` 复用画廊那份 `serve_path`（**ETag = sha256 + `If-None-Match` 304 + 单段 Range 206**）——
+> 抽成公共函数就是为了"聊天里的视频能拖、画廊里的也能拖"，两处各写一份必然漂移。
+> 缩略图两级降级（JPEG 缩略图 → 解不了就发原件）；**视频预览帧回 204**（还没搬，见 A5），
+> 界面按既有约定退化成文件图标，**不假装**抽过帧。
+>
+> **（下）三层准入 + 真内联**：`server-rs/src/strict_intake.rs`（`StrictIntake` / `AttachmentPolicy` /
+> `InlineBudget` / `AdapterCapabilities.transportsFor` 的逐条移植）+ `POST /api/ai/preflight` +
+> `POST /runs` 前的闸门 + **适配器真的把图片内联进请求体**：
+> * 三家适配器各按自己的形状铺开（`image_url` data URL / `input_image` / `source.base64`），
+>   新增用例 `image_blocks_shape_per_adapter` 逐条断言"发出去的 JSON 长什么样"
+>   （AGENTS §10 的纪律：加新模态就要有这条用例）；
+> * **模型没声明传输方式时回落到适配器实现的那种**（不回落的后果是内置目录里那些模型
+>   "图片永远发不出去"）；
+> * **内联预算**：单张 ≤ 8MB、合计 ≤ 20MB，贪心保序；
+> * 发不出去的那些（模态不支持 / 协议没实现 / 超预算 / 读不到文件）**一律**写进那一轮的
+>   "（以下附件未随本次请求发送：…）"——**不许静默丢掉**；系统提示里那句"附带图片附件"
+>   也只在**确实内联了**时才说"有"。
+> * **R9 的核心不变式**：创建 Run 之前用**库里的事实**再验一次，不通过 → `400 UNSUPPORTED_CONTENT`
+>   + **上游请求数为 0**（用例断言网关一个请求都没收到、会话里一条消息都没落）。
+>
+> ⚠ 与 Kotlin 的两处**诚实差距**（都写进了文件头）：① 视频 / 音频 / 文档的传输方式两家都没有
+> （三家适配器都只有图片的 `inline_base64`）；② 视频预览帧（Kotlin 走 Windows 缩略图管线）没搬。
+>
+> **验收**：`cargo test` **388 例全绿**（255 lib + 121 api_test + 4 attachments_test + 2 shape_lint
+> + 6 submit_test）；`file_kind` 6 例、`strict_intake` 6 例、`attachments` 7 例、协议形状 2 例、
+> R9 集成 4 例。**真机真 socket 实测**（真库副本，8102）：上传两张（PNG 13×9 / md）→ 201 +
+> 尺寸与 MIME 都对；假图（声称 png、内容是二进制）→ `400 {"error":"UNSUPPORTED_CONTENT","detail":
+> "evil.png：无法识别文件 evil.png 的真实类型（签名与声明的 image/png 不符），已拒绝上传"}`；
+> `/file` 回 200 + `ETag=sha256` + `inline` 头、`Range: bytes=0-9` → **206** + `Content-Range`、
+> `If-None-Match` → **304**；`/thumb` → 200 + `image/jpeg` + `X-Thumbnail: 1`（635 字节）；
+> 不存在的 id → `400 CONFIG_ERROR + detail`；`DELETE` → `{"deleted":true,...}`、再删 → 400。
 >
 > ✅ **P4 第 49 步（2026-09-26）：推送式捕获 + 批量导入工作流**（`server-rs/src/capture_import.rs`）——
 > 这两条是"库里怎么才会有东西"的另一半：轮询与 `comfy_submit` 收的是"跑过的运行"，
@@ -1783,7 +1822,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | # | 端点 | 用户会看到什么 | 规模 |
 | --- | --- | --- | --- |
-| A1 | `/api/ai/attachments{,/{id},/{id}/file,/{id}/thumb}` + `POST` 上传 + 创建 Run 前的三层准入（**R9**） | **贴图/参考图直接发不出去**（`400 UNSUPPORTED_CONTENT`），图像编辑那条链断 | 大（`AiAttachments.kt` 285 + 路由 + 内联预算） |
+| A1 | `/api/ai/attachments{,/{id},/{id}/file,/{id}/thumb}` + `POST` 上传 + 创建 Run 前的三层准入（**R9**） | ✅ **已搬（P4 第 50 步）**：五条端点 + `POST /api/ai/preflight` + 创建 Run 前的库里事实闸门 + **图片真的内联**（三家适配器）；⚠ 仍缺**视频预览帧**（`/thumb` 回 204，见 A5）与**视频/音频/文档的传输方式**（三家适配器都只有图片的 `inline_base64`） | — |
 | A2 | `/api/ai/providers/{id}/test`、`/{id}/discover-models` | 设置页那两个按钮报"接口不存在" | 中 |
 | A3 | `/api/capture/import`（导入目录里的产物：含 PNG 内嵌工作流） | 设置页「导入目录」不可用 | 中（`import-workflows` ✅ 已搬、`ingest/comfyui` ✅ 已搬） |
 | A4 | ~~`/api/ingest/comfyui`~~ | ✅ **已搬（P4 第 49 步）** | — |

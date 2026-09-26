@@ -154,6 +154,22 @@ pub struct ChatTurn {
     pub tool_calls: Vec<ToolCallRef>,
     /// 工具结果这一轮回填的调用 id（`role = "tool"` 时才有）
     pub tool_call_id: Option<String>,
+    /// **已经决定内联**的图片附件（M3 / R9）。
+    ///
+    /// ⚠ 只放**真的发得出去**的那些：判断（模态 / 传输方式 / 内联预算）在
+    /// [`crate::executor`] 那一层做完，没通过的不在这里、而是变成正文里的一句
+    /// "未随本次请求发送"（AIH-030：不许静默丢掉）。
+    pub images: Vec<ChatImage>,
+}
+
+/// 一张内联进请求体的图片（适配器只管按各家的形状铺开）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatImage {
+    pub mime_type: String,
+    /// 原始字节的 base64（**已经编码好**：适配器不做 IO）
+    pub base64: String,
+    /// 原始文件名（Anthropic 不写它，OpenAI 也不写；留着是为了排错与日志）
+    pub file_name: String,
 }
 
 /// 助手发起的一次工具调用（参数是**已经拼好的 JSON 文本**，原样回传）。
@@ -509,6 +525,21 @@ fn openai_message(turn: &ChatTurn) -> Value {
         );
         return Value::Object(message);
     }
+    // 带图片时 `content` 必须变成**有序块数组**（纯文本轮保持最朴素的字符串，兼容性最好）
+    if !turn.images.is_empty() {
+        let mut blocks: Vec<Value> = Vec::new();
+        if !turn.content.is_empty() {
+            blocks.push(json!({ "type": "text", "text": turn.content }));
+        }
+        for image in &turn.images {
+            blocks.push(json!({
+                "type": "image_url",
+                "image_url": { "url": format!("data:{};base64,{}", image.mime_type, image.base64) },
+            }));
+        }
+        message.insert("content".into(), Value::Array(blocks));
+        return Value::Object(message);
+    }
     message.insert("content".into(), json!(turn.content));
     Value::Object(message)
 }
@@ -626,11 +657,21 @@ impl Adapter for OpenAiResponsesAdapter {
                 }));
                 continue;
             }
-            if !turn.content.is_empty() {
+            if !turn.content.is_empty() || !turn.images.is_empty() {
+                let mut content: Vec<Value> = Vec::new();
+                if !turn.content.is_empty() {
+                    content.push(json!({ "type": "input_text", "text": turn.content }));
+                }
+                for image in &turn.images {
+                    content.push(json!({
+                        "type": "input_image",
+                        "image_url": format!("data:{};base64,{}", image.mime_type, image.base64),
+                    }));
+                }
                 input.push(json!({
                     "type": "message",
                     "role": turn.role,
-                    "content": [{ "type": "input_text", "text": turn.content }],
+                    "content": content,
                 }));
             }
             // 助手发起的工具调用要作为独立的 `function_call` 条目回传
@@ -847,6 +888,17 @@ impl Adapter for AnthropicMessagesAdapter {
                     if !turn.content.is_empty() {
                         blocks.push(json!({ "type": "text", "text": turn.content }));
                     }
+                    // 图片块：Anthropic 用 `source.media_type` + base64（**不用** data URL）
+                    for image in &turn.images {
+                        blocks.push(json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": image.mime_type,
+                                "data": image.base64,
+                            },
+                        }));
+                    }
                     for call in &turn.tool_calls {
                         // 参数在 Anthropic 这边是**对象**（completions 那边是字符串）
                         let input: Value = serde_json::from_str(&call.arguments)
@@ -999,6 +1051,72 @@ mod tests {
         ChatTurn { role: role.into(), content: content.into(), ..Default::default() }
     }
 
+    /// **附件协议的形状**（Kotlin `AttachmentProtocolTest` 的同一条纪律）：
+    /// 加了新模态 / 新传输方式，就要有一条"发出去的 JSON 到底长什么样"的用例 ——
+    /// 光断言"没报错"抓不到"'image_url' 写成 'image'"这种静默错（上游会当普通文本）。
+    #[test]
+    fn image_blocks_shape_per_adapter() {
+        let image = ChatImage {
+            mime_type: "image/png".into(),
+            base64: "AAA=".into(),
+            file_name: "参考图.png".into(),
+        };
+        let turns = vec![
+            turn("system", "规则"),
+            ChatTurn { role: "user".into(), content: "看看".into(), images: vec![image.clone()], ..Default::default() },
+        ];
+        let reasoning = ReasoningRequest::default();
+
+        // ① OpenAI 兼容：`content` 变成有序块数组，图片是 `image_url.url` 的 data URL
+        let openai = OpenAiCompletionsAdapter.build_body("m", &turns, &[], &reasoning, None);
+        let blocks = openai["messages"][1]["content"].as_array().expect("要变成数组");
+        assert_eq!(blocks[0], json!({ "type": "text", "text": "看看" }));
+        assert_eq!(blocks[1]["type"], json!("image_url"));
+        assert_eq!(blocks[1]["image_url"]["url"], json!("data:image/png;base64,AAA="));
+        // 纯文本轮仍然是字符串（兼容性最好）
+        let plain = OpenAiCompletionsAdapter.build_body("m", &[turn("user", "只有文字")], &[], &reasoning, None);
+        assert!(plain["messages"][0]["content"].is_string());
+
+        // ② Responses：`input[].content[]` 里是 `input_text` + `input_image`
+        let responses = OpenAiResponsesAdapter.build_body("m", &turns, &[], &reasoning, None);
+        let content = responses["input"][0]["content"].as_array().expect("content 数组");
+        assert_eq!(content[0]["type"], json!("input_text"));
+        assert_eq!(content[1]["type"], json!("input_image"));
+        assert_eq!(content[1]["image_url"], json!("data:image/png;base64,AAA="));
+
+        // ③ Anthropic：`content[]` 里的 `image` 块用 `source.media_type` + base64（**不是** data URL）
+        let anthropic = AnthropicMessagesAdapter.build_body("m", &turns, &[], &reasoning, None);
+        let blocks = anthropic["messages"][0]["content"].as_array().expect("content 数组");
+        assert_eq!(blocks[0]["type"], json!("text"));
+        assert_eq!(blocks[1]["type"], json!("image"));
+        assert_eq!(blocks[1]["source"]["type"], json!("base64"));
+        assert_eq!(blocks[1]["source"]["media_type"], json!("image/png"));
+        assert_eq!(blocks[1]["source"]["data"], json!("AAA="));
+        assert!(
+            !anthropic.to_string().contains("data:image/png"),
+            "Anthropic 不吃 data URL，必须是 source.base64"
+        );
+    }
+
+    /// 只有图片、没有正文的一轮也要发出去（`content` 空串 + 图片块）。
+    #[test]
+    fn image_only_turn_is_still_sent() {
+        let turns = vec![ChatTurn {
+            role: "user".into(),
+            content: String::new(),
+            images: vec![ChatImage { mime_type: "image/webp".into(), base64: "BBB=".into(), file_name: "a.webp".into() }],
+            ..Default::default()
+        }];
+        let body = OpenAiCompletionsAdapter.build_body("m", &turns, &[], &ReasoningRequest::default(), None);
+        let blocks = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1, "没有正文时就只有图片块：{body}");
+        assert_eq!(blocks[0]["type"], json!("image_url"));
+
+        let anthropic = AnthropicMessagesAdapter.build_body("m", &turns, &[], &ReasoningRequest::default(), None);
+        // Anthropic 那边照样是**一条消息**（blocks 非空就发）
+        assert_eq!(anthropic["messages"][0]["content"][0]["type"], json!("image"));
+    }
+
     /// SSE 分帧：多行 data 拼接、注释丢掉、`\r\n` 认、结尾无空行也能靠 flush 收尾。
     #[test]
     fn sse_framing_rules() {
@@ -1058,12 +1176,14 @@ mod tests {
                 arguments: "{\"query\":\"x\"}".into(),
             }],
             tool_call_id: None,
+            images: Vec::new(),
         };
         let result = ChatTurn {
             role: "tool".into(),
             content: "结果".into(),
             tool_calls: vec![],
             tool_call_id: Some("call_1".into()),
+            images: Vec::new(),
         };
         let body = adapter.build_body(
             "m",
@@ -1220,12 +1340,14 @@ mod tests {
                         arguments: "{}".into(),
                     }],
                     tool_call_id: None,
+                    images: Vec::new(),
                 },
                 ChatTurn {
                     role: "tool".into(),
                     content: "结果".into(),
                     tool_calls: vec![],
                     tool_call_id: Some("call_1".into()),
+                    images: Vec::new(),
                 },
             ],
             &[ToolSpec {
@@ -1311,6 +1433,7 @@ mod tests {
                     content: "结果".into(),
                     tool_calls: vec![],
                     tool_call_id: Some("toolu_1".into()),
+                    images: Vec::new(),
                 },
             ],
             &[ToolSpec {
@@ -1340,6 +1463,7 @@ mod tests {
                     arguments: "{\"q\":\"x\"}".into(),
                 }],
                 tool_call_id: None,
+                images: Vec::new(),
             }],
             &[],
             &ReasoningRequest::default(),

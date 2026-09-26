@@ -106,6 +106,8 @@ pub struct ModelRow {
     pub thinking_efforts: std::collections::BTreeMap<String, String>,
     pub thinking_format: Option<String>,
     pub max_output_tokens: Option<i64>,
+    /// `ai_models.input_modalities`（附件那一层要判"这个模型吃不吃图"）
+    pub input_modalities: Vec<String>,
 }
 
 /// 读 provider（不存在 → 400 `CONFIG_ERROR`，与 Kotlin `requireProvider` 同一个信封）。
@@ -150,6 +152,7 @@ pub fn provider(state: &AppState, id: &str) -> Result<ModelRow, ApiError> {
         thinking_efforts: Default::default(),
         thinking_format: None,
         max_output_tokens: None,
+        input_modalities: Vec::new(),
     })
 }
 
@@ -166,6 +169,7 @@ pub fn model(state: &AppState, provider_id: &str, model_id: &str) -> Result<Mode
                 row.get::<_, Option<String>>("thinking_format")?,
                 row.get::<_, Option<i64>>("max_output_tokens")?,
                 row.get::<_, Option<i64>>("enabled")?.unwrap_or(0) != 0,
+                crate::ai::model_input_modalities_of(row)?,
             ))
         })?;
         match rows.next() {
@@ -173,7 +177,7 @@ pub fn model(state: &AppState, provider_id: &str, model_id: &str) -> Result<Mode
             None => Ok(None),
         }
     })?;
-    let Some((tools, reasoning, efforts, format, max_out, enabled)) = found else {
+    let Some((tools, reasoning, efforts, format, max_out, enabled, modalities)) = found else {
         return Err(ApiError::ai("UNKNOWN_MODEL", format!("模型不在目录中: {model_id}")));
     };
     if !enabled {
@@ -185,6 +189,7 @@ pub fn model(state: &AppState, provider_id: &str, model_id: &str) -> Result<Mode
     row.thinking_efforts = efforts;
     row.thinking_format = format.filter(|s| !s.trim().is_empty());
     row.max_output_tokens = max_out;
+    row.input_modalities = modalities;
     Ok(row)
 }
 
@@ -651,6 +656,7 @@ mod tests {
             thinking_efforts: efforts.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             thinking_format: None,
             max_output_tokens: None,
+            input_modalities: Vec::new(),
         }
     }
 

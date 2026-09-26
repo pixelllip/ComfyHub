@@ -223,6 +223,13 @@ async fn run_once(
     let tools = crate::tools::specs_with(&policy, &mcp_views);
     let tool_refs: Vec<crate::tools::ToolView<'static>> = crate::tools::catalog_with(&policy, &mcp_views);
     debug_assert_eq!(tool_refs.len(), tools.len());
+
+    // 附件计划（R9）：哪些图片真的能内联、哪些只能如实说"没发出去"。
+    // ⚠ 必须在系统提示之前算出来：提示里那句"本次请求附带图片附件"只有**确实内联了**才说有
+    // （否则模型会以为自己看到了图 —— 那正是 AIH-030 要防的"看起来发出去了、其实没有"）。
+    let attachment_plan = attachment_plan_of(state, &history, &model, &provider.api);
+    let has_inlined_attachments = !attachment_plan.inline.is_empty();
+
     let system_prompt = crate::system_prompt::render(
         &provider.display_name,
         &provider.api,
@@ -231,7 +238,7 @@ async fn run_once(
         &skills,
         &policy,
         &memory_text,
-        false,
+        has_inlined_attachments,
         nsfw,
     );
 
@@ -250,15 +257,11 @@ async fn run_once(
     }
 
     // 历史（**不含**当前那条助手占位）：只带正文与工具轮，备注类不进上下文
-    //
-    // 附件块要显示成人能看懂的名字，所以先把历史里出现过的附件 id 一次查好
-    // （一次查完，避免在 `turns_of` 里碰数据库）。
-    let attachment_names = attachment_names_of(state, &history);
     for message in history.iter().filter(|m| m.id != assistant_id) {
         if message.role == "system_note" {
             continue;
         }
-        turns.extend(turns_of(message, &attachment_names));
+        turns.extend(turns_of(message, &attachment_plan));
     }
     // 当前助手那条：把**已经说出去的部分**作为上下文（重试时的续写依据）
     if let Some(current) = history.iter().find(|m| m.id == assistant_id) {
@@ -430,6 +433,7 @@ async fn run_once(
             content: round_text,
             tool_calls: calls.iter().map(|(_, call)| call.clone()).collect(),
             tool_call_id: None,
+            images: Vec::new(),
         });
 
         // 一个一个执行（**串行**：多个调用里只要有一个要用户点头，就得按顺序来）
@@ -460,6 +464,7 @@ async fn run_once(
                 content: outcome.content,
                 tool_calls: Vec::new(),
                 tool_call_id: Some(call_id.clone()),
+                images: Vec::new(),
             });
         }
 
@@ -1033,23 +1038,96 @@ fn sink_now(state: &AppState, assistant_id: &str, sink: &Sink) -> Result<(), Api
     })
 }
 
-/// 历史里出现过的附件 id → 名字（给"未随本次请求发送"那句用）。
+/// 一次 Run 的附件计划：哪些**内联**、哪些只能如实说"没发出去"。
 ///
-/// 查不到的**如实留 id**（附件可能在会话之后被删了）—— 不许静默抹掉那一项。
-fn attachment_names_of(state: &AppState, history: &[AiMessageDto]) -> std::collections::HashMap<String, String> {
-    let mut names = std::collections::HashMap::new();
+/// 判定顺序（与 Kotlin `HarnessRunner.turnsFromHistory` 同一套）：
+///  1. **当前模型声不声明这种模态**（不声明 → 不发）；
+///  2. **当前协议适配器实现了这种传输方式吗**（三家都只有图片的 `inline_base64`）；
+///  3. **内联预算**：单张 ≤ 8MB、合计 ≤ 20MB（贪心保序：装不下就跳过、继续试后面的小图）；
+///  4. 读得到文件吗（读不到就是"发不出去"，同样进未发送那一句）。
+///
+/// ⚠ 四条里任何一条不过，**都只是"不发"**，绝不让整条请求失败 —— 而且那一项必须出现在
+/// "以下附件未随本次请求发送"那句里（AIH-030：不许静默丢掉）。
+struct AttachmentPlan {
+    names: std::collections::HashMap<String, String>,
+    inline: std::collections::HashMap<String, crate::protocol::ChatImage>,
+}
+
+impl AttachmentPlan {
+    fn empty() -> Self {
+        Self { names: std::collections::HashMap::new(), inline: std::collections::HashMap::new() }
+    }
+
+    fn name_of(&self, id: &str) -> String {
+        self.names.get(id).cloned().unwrap_or_else(|| id.to_string())
+    }
+}
+
+fn attachment_plan_of(
+    state: &AppState,
+    history: &[AiMessageDto],
+    model: &crate::run_lifecycle::ModelRow,
+    api: &str,
+) -> AttachmentPlan {
+    // ① 历史里出现过的附件，按**首次出现顺序**列出来（保序：预算的"装不下"才有确定答案）
+    let mut ids: Vec<String> = Vec::new();
     for message in history {
         for part in message.parts.iter().filter(|p| p.r#type == "attachment") {
-            let Some(id) = part.attachment_id.as_ref() else { continue };
-            if names.contains_key(id) {
-                continue;
-            }
-            if let Ok(Some(dto)) = crate::attachments::get(state, id) {
-                names.insert(id.clone(), dto.name);
+            if let Some(id) = part.attachment_id.as_ref() {
+                if !id.trim().is_empty() && !ids.contains(id) {
+                    ids.push(id.clone());
+                }
             }
         }
     }
-    names
+    if ids.is_empty() {
+        return AttachmentPlan::empty();
+    }
+
+    // ② 查事实（名字 / 模态 / 大小）；查不到的**如实留 id**
+    let mut plan = AttachmentPlan::empty();
+    let mut facts: Vec<Option<crate::attachments::AttachmentDto>> = Vec::new();
+    for id in &ids {
+        let dto = crate::attachments::get(state, id).ok().flatten();
+        if let Some(dto) = dto.as_ref() {
+            plan.names.insert(id.clone(), dto.name.clone());
+        }
+        facts.push(dto);
+    }
+
+    // ③ 该协议的适配器实现了哪些传输方式（图片才可能内联）
+    let can_inline_image = crate::strict_intake::adapter_transports(api, "image")
+        .iter()
+        .any(|t| *t == "inline_base64");
+    let model_takes_image = model.input_modalities.iter().any(|m| m == "image");
+
+    // ④ 预算：只有"图片 + 适配器实现 + 模型声明了图片"的才参与
+    let mut sizes: Vec<i64> = Vec::new();
+    let mut eligible: Vec<bool> = Vec::new();
+    for dto in facts.iter() {
+        let ok = can_inline_image && model_takes_image && dto.as_ref().map(|d| d.modality == "image").unwrap_or(false);
+        eligible.push(ok);
+        sizes.push(if ok { dto.as_ref().map(|d| d.size_bytes).unwrap_or(0) } else { 0 });
+    }
+    let chosen = crate::strict_intake::inline_budget_plan(&sizes);
+
+    // ⑤ 决定内联的：现在就把 base64 读出来（读不到就**不发**，如实进未发送名单）
+    for (index, id) in ids.iter().enumerate() {
+        if !eligible[index] || !chosen[index] {
+            continue;
+        }
+        let Some(dto) = facts[index].as_ref() else { continue };
+        let Some(base64) = crate::attachments::inline_base64(state, dto) else { continue };
+        plan.inline.insert(
+            id.clone(),
+            crate::protocol::ChatImage {
+                mime_type: dto.mime_type.clone(),
+                base64,
+                file_name: dto.name.clone(),
+            },
+        );
+    }
+    plan
 }
 
 /// 一条历史消息 → 上游的轮次（`HarnessRunner.turnsFromHistory` 的精简版）。
@@ -1059,11 +1137,10 @@ fn attachment_names_of(state: &AppState, history: &[AiMessageDto]) -> std::colle
 ///   （否则上游看到的工具结果**没有对应的调用**，OpenAI 会直接 400）；
 /// * `tool_result` 块变成 `role = "tool"` 的一轮（带 `tool_call_id`）；
 /// * 思考段**不进**上下文（它是本地展示用的；上游各家都不接受回传思考）；
-/// * **附件块**（R9 / AIH-030）：Rust 侧的适配器**还没有实现把附件内联进请求体**
-///   （Kotlin 也只有图片的 `inline_base64`）。所以这里**必须**在那一轮正文后面附一句
-///   "以下附件未随本次请求发送：…" —— 既不能静默丢弃，也不能因为消息里带了图就把请求打成 400。
-///   `names` 是附件 id → 名字的映射（调用方一次查好，避免在这里碰数据库）。
-fn turns_of(message: &AiMessageDto, names: &std::collections::HashMap<String, String>) -> Vec<ChatTurn> {
+/// * **附件块**（R9 / AIH-030）：进得了 [`AttachmentPlan::inline`] 的变成真图片块
+///   （适配器各自铺开），其余的**必须**在那一轮正文后面附一句"以下附件未随本次请求发送：…"
+///   —— 既不能静默丢弃，也不能因为消息里带了附件就把请求打成 400。
+fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
     let mut out = Vec::new();
     if message.role == "assistant" {
         let body: String = message
@@ -1080,6 +1157,7 @@ fn turns_of(message: &AiMessageDto, names: &std::collections::HashMap<String, St
                 content: body,
                 tool_calls: calls,
                 tool_call_id: None,
+                images: Vec::new(),
             });
         }
         return out;
@@ -1097,17 +1175,20 @@ fn turns_of(message: &AiMessageDto, names: &std::collections::HashMap<String, St
             .filter_map(|p| p.text.clone())
             .collect()
     };
-    // 附件块：这一版一个都发不出去，所以**全部**进"未随本次请求发送"那一句
-    let unsent: Vec<String> = message
+    // 附件块：进得了计划的变成真图片块，其余**全部**进"未随本次请求发送"那一句
+    let mut images: Vec<crate::protocol::ChatImage> = Vec::new();
+    let mut unsent: Vec<String> = Vec::new();
+    for id in message
         .parts
         .iter()
         .filter(|p| p.r#type == "attachment")
         .filter_map(|p| p.attachment_id.clone())
-        .map(|id| match names.get(&id) {
-            Some(name) => format!("{name}（id={id}）"),
-            None => id,
-        })
-        .collect();
+    {
+        match plan.inline.get(&id) {
+            Some(image) => images.push(image.clone()),
+            None => unsent.push(format!("{}（id={id}）", plan.name_of(&id))),
+        }
+    }
     let body = if unsent.is_empty() {
         body
     } else {
@@ -1117,15 +1198,16 @@ fn turns_of(message: &AiMessageDto, names: &std::collections::HashMap<String, St
         }
         text.push_str("（以下附件未随本次请求发送：");
         text.push_str(&unsent.join("、"));
-        text.push_str("；这个后端还没有把附件内联进请求体的能力。）");
+        text.push_str("）");
         text
     };
-    if !body.trim().is_empty() {
+    if !body.trim().is_empty() || !images.is_empty() {
         out.push(ChatTurn {
             role: message.role.clone(),
             content: body,
             tool_calls: Vec::new(),
             tool_call_id: None,
+            images,
         });
     }
     // 工具结果：作为**独立的一轮**回填（`role = "tool"` + `tool_call_id`）
@@ -1135,6 +1217,7 @@ fn turns_of(message: &AiMessageDto, names: &std::collections::HashMap<String, St
             content: part.text.clone().unwrap_or_default(),
             tool_calls: Vec::new(),
             tool_call_id: part.tool_call_id.clone(),
+            images: Vec::new(),
         });
     }
     out
@@ -1215,7 +1298,7 @@ mod tests {
             ],
         );
         m.text = "答案".into();
-        let turns = turns_of(&m, &std::collections::HashMap::new());
+        let turns = turns_of(&m, &AttachmentPlan::empty());
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].content, "答案");
         assert!(!turns[0].content.contains("我一直在想"));
@@ -1235,7 +1318,7 @@ mod tests {
                 json_payload: None,
             }],
         );
-        let turns = turns_of(&m, &std::collections::HashMap::new());
+        let turns = turns_of(&m, &AttachmentPlan::empty());
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].role, "tool");
         assert_eq!(turns[0].tool_call_id.as_deref(), Some("call_1"));
@@ -1255,7 +1338,7 @@ mod tests {
                 json_payload: Some(json!({ "name": "web_search", "arguments": { "q": "x" } })),
             }],
         );
-        let turns = turns_of(&m, &std::collections::HashMap::new());
+        let turns = turns_of(&m, &AttachmentPlan::empty());
         assert_eq!(turns.len(), 1, "正文空但有工具调用 → 助手轮仍要进上下文");
         assert_eq!(turns[0].tool_calls.len(), 1);
         assert_eq!(turns[0].tool_calls[0].id, "call_9");
@@ -1268,13 +1351,13 @@ mod tests {
     fn messages_without_parts_fall_back_to_text() {
         let mut m = message("user", Vec::new());
         m.text = "你好".into();
-        let turns = turns_of(&m, &std::collections::HashMap::new());
+        let turns = turns_of(&m, &AttachmentPlan::empty());
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].content, "你好");
         // 完全空的（既没有块也没有正文）→ 不产生空轮
         let mut empty = message("user", Vec::new());
         empty.text = "   ".into();
-        assert!(turns_of(&empty, &std::collections::HashMap::new()).is_empty());
+        assert!(turns_of(&empty, &AttachmentPlan::empty()).is_empty());
     }
 
     /// 取消旗标：**立起来 ≠ 立刻停**（主循环在安全点自己收尾，R6 要求它先把话说完）。
