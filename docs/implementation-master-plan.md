@@ -1679,6 +1679,59 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 > > 夹具只覆盖你想到的行；真库会把你没想到的表、没料到的编码一次性摆出来。
 > > 每个 P4 批次收尾时那次"真库副本抽查"不是走过场，**这次它挡下了一个会永久丢数据的 bug**。
 
+### 10.9 切流盘点：**Kotlin 版 Windows 后端还差什么**（2026-09-26 逐条对账）
+
+> 做法：把 Flutter 侧**真的会调**的路径全 grep 出来（`lib/**/*.dart` 里的 `/api/...`），
+> 与 `server-rs/src/**/*.rs` 的路由表逐条比。**只有这张表清零，`server.ps1` / `pack-release.ps1` /
+> `packaging\manifest.json` 才能切到 Rust、Kotlin 才能退役** —— 否则表现是"某个页面/按钮说接口不存在"，
+> 而那不会有任何测试变红（e2e 与 flutter test 验的都是 Kotlin）。
+
+**A. App 直接调用、Rust 还没有的（阻断切流，按用户会撞到的顺序）**
+
+| # | 端点 | 用户会看到什么 | 规模 |
+| --- | --- | --- | --- |
+| A1 | `/api/ai/attachments{,/{id},/{id}/file,/{id}/thumb}` + `POST` 上传 + 创建 Run 前的三层准入（**R9**） | **贴图/参考图直接发不出去**（`400 UNSUPPORTED_CONTENT`），图像编辑那条链断 | 大（`AiAttachments.kt` 285 + 路由 + 内联预算） |
+| A2 | `/api/ai/providers/{id}/test`、`/{id}/discover-models` | 设置页那两个按钮报"接口不存在" | 中 |
+| A3 | `/api/capture/import`、`/api/capture/import-workflows` | 设置页「导入本机工作流 / 导入目录」不可用（`import-workflows` 要整套 `WorkflowConvert` 转换栈） | 中~大 |
+| A4 | `/api/ingest/comfyui` | 「把一次运行推进来」那条路不可用（e2e 脚本也用它） | 中 |
+| A5 | `/api/media/{id}/poster` | **视频产物没有预览帧**（`ffmpeg` 抽帧） | 小~中 |
+| A6 | `/api/ai/capabilities/{refresh,probe}` | 能力目录那两个按钮回 **501**（Kotlin 侧是实现的，要在线数据集 / 真上游） | 中（**会花钱**） |
+| A7 | `/api/ai/preflight` | 附件预检（选完文件那一刻的准入） | 随 A1 |
+| A8 | `/api/auth/pair/start` | 扫码配对（**有意 501**，本轮只做"手机发起 + 桌面显示 6 位码"） | 有意不做 |
+
+**B. AI 工具面（不阻断 App 启动，但"AI 能不能干活"会明显变窄）**
+
+| 工具 | 状态 |
+| --- | --- |
+| `comfy_submit`（**R10**：审核 → 审批 → 提交 → 自己等 → `captureRun()` 入库 → `mediaIds`） | ⛔ 未搬（第 46 步的下一件；**`/history` 是进程内的**，必须自带"等 + 收"，O4） |
+| `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ 未搬（都要 `ComfyModels` 本机清单；`env_report` 是 O3 —— "盘上有、实例看不到"的解药） |
+| `comfy_use_media` / `comfy_make_mask` / `comfy_use_attachment`（图像编辑三件） | ⛔ 未搬（后者依赖 A1） |
+| 联网三工具 `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（系统提示那一节仍指向没下发的工具；凭据端点已就绪） |
+| `search_prompts` / `search_character_cards` / `save_character_card` / `danbooru_lookup` | ⛔ 未搬（**仓储已就绪**：角色卡五条见第 46 步；`save()` 就是工具用的那条路） |
+| 工作流配方三件 `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表 | ⛔ 未搬（Kotlin 侧 `WorkflowRecipe.kt` 646 行解析核心是主体；**故意不进同步范围**） |
+| **后台捕获轮询器** + `lastPollAt` / `lastError`（O5/O6） | ⛔ 未做（现在只有端点/工具触发一次；用户自己在 ComfyUI 里跑的收不到） |
+| **截断续写**（`MAX_CONTINUATIONS` + `CONTINUE_INSTRUCTION`） | ⛔ 未做（输出被长度上限卡断时，现在把半句话当结尾） |
+| 官方 comfy-mcp 39 个 | ✅ **第 45 步已做** |
+
+**C. 切流动作本身（代码之外）**
+
+1. `server.ps1`：`Resolve-Backend` 认 Rust 二进制（`<根>\server\comfyhub-server-rs.exe` 与
+   `server-rs\target\release\comfyhub-server-rs.exe` 两种布局）+ **端口文件 `.run\api.json` 的写入**
+   （Rust 版本目前**不写**它，而 App 与脚本靠它发现端口 —— 切流前必须补，否则 App 会对着旧端口等）；
+2. `comfyhub.ps1 doctor`：报"当前是哪种后端 / 二进制构建新鲜度"；
+3. `pack-release.ps1` + `packaging\manifest.json`：`server` 组件换成 Rust 二进制（**不再需要 `jre/`**，
+   发布包从 36MB 再降）；`runtimeRequirements` 删掉 Java 那一条；
+4. `db/schema.sqlite.sql` 的建表/迁移归 Rust（现在建库仍由 Kotlin `Migrate` 干）；
+5. **四条 e2e 脚本 + `flutter test` + harness 用例对着 Rust 跑一遍**（§10.8 最后一行，切流前必须）；
+6. Kotlin 退役：删 `server/`（或移到 `legacy/`）、删 Gradle 相关文档段落、README/AGENTS 的"现状"描述更新。
+
+> **结论（2026-09-26，诚实版）**：**今天还不能切**。A 组 8 条里 A1（附件）与 A6（会花钱）没搬，
+> 一默认切过去用户就会撞到"参考图发不出去"；B 组里 `comfy_submit` 与后台轮询器没搬，
+> "AI 出图 → 画廊里有"这条链会变窄。已搬的 45/46 两步恰好是这两条链的另一半
+> （MCP 39 工具 = AI 能真的驱动 ComfyUI；角色卡 = AI 写角色不再靠印象）。
+
+
+
 ### 📜 上一轮（2026-09-24 第一轮）的交接单原文 — 保留作为对照
 
 > 下面这三条是**上一轮留下的**，现在 ① ② 已完成/做了一半（见本节开头）。
