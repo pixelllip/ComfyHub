@@ -2006,7 +2006,28 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
    **结果**：`e2e-ai-tools-test.ps1` **111 项全绿**、`e2e-submit-test.ps1` 全绿、
    `e2e-capture-test.ps1` 全绿、`e2e-pair-test.ps1` **50 项全绿**、`flutter test` **302 例全绿**、
    `cargo test` **429 例全绿**。
-6. Kotlin 退役：删 `server/`（或移到 `legacy/`）、删 Gradle 相关文档段落、README/AGENTS 的"现状"描述更新。
+6. ✅ **已做（第 57 步，2026-09-26）：Kotlin 后端退役** —— 这就是 C-6。
+   `git mv server legacy/server`（**保留历史**，源码留档当行为参照）；`.gitignore` 里
+   `/server/build`、`/server/storage` 的规则跟着搬到 `/legacy/server/...`（这一步踩到了：
+   `git mv` 会把**原本被忽略的构建产物与一份凭据文件**一起带进索引 —— 已 `git rm --cached` 清掉并补上忽略规则）。
+   脚本侧：
+   * `server.ps1` 的 Kotlin 路径指向 `legacy\server`，且**在 `-Backend kotlin` 时先检查源码在不在**，
+     不在就抛一句人话（"Kotlin 已退役，默认就是 Rust"）；
+   * `comfyhub.ps1` 的 `Get-ApiProcess` / `Get-ServerBuildStaleness` / `Get-RunningServerProcess`
+     **全部换成认两个后端**（旧构建体检从 jar 换成 **Rust exe**，与 doctor 那条同一判据）；
+   * **`up` 不再为 Rust 后端下 JRE**（只按需检查 Java 的旧路径整个跳过 —— 否则没装 JDK 的机器会白下 40MB）；
+   * `runtime-deps.ps1` 的 Java 从 `Required = $true` 降成 `$false`（legacy）；
+   * `pack-release.ps1` **删掉 `jre` 组件与 `-WithJre` / `-SkipJre`**，自检项只剩 Rust exe
+     （`gradle_install_dist` / `jdk_runtime` 两个分支保留但明确标注"已退役的 legacy 组件"）。
+   **文档**：README 的标题/现状/架构图/目录树/脚本表/环境表/打包说明、AGENTS 第 4/7/11 节与工具清单真源
+   （`server-rs/src/tools.rs`）全部改成 Rust 现状。
+   **验收**：`comfyhub.ps1 doctor` 报到 `后端二进制 … comfyhub-server-rs.exe`、`后端构建 最新`；
+   `restart` 正常（Rust、`db=ok`）；`pack-release.ps1 -SkipApp` 自检只剩 `viewer.exe`（因 `-SkipApp`），**合计 13.9MB**。
+   ⚠ **搬目录当场炸了一次**（值得记）：`server-rs/src/builtin.rs` 用
+   `include_str!("../../server/src/main/resources/ai/builtin-catalog.json")` 编译期读 Kotlin 那一份
+   冻结模型目录 —— 目录一搬，**cargo 直接编不过**。按该模块头注释里早就写好的计划办：
+   把 JSON **搬成 Rust 侧资产**（`server-rs/assets/ai/builtin-catalog.json`，31KB，运行期唯一真源），
+   老那份留 `legacy\` 当历史。**教训：退役一棵树之前，先 `grep include_str!|include_bytes!|Copy-Item.*<老路径>`**。
 
 > **结论（2026-09-26，更新到第 54 步）**：**App 直接调用的 A 组已经清零**（A1~A5、A7 全部搬完；
 > A6 要在线数据集/会花钱、A8 有意 501），所以"切过去之后界面报接口不存在"这一类**不会再发生**。

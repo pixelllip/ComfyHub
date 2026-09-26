@@ -4,15 +4,15 @@
 //!
 //! 用户原话："把 `.dsh/settings.yaml` 里的模型挨个抄过来，可以放在数据库里，
 //! **不要让程序直接读 settings.yaml**"。装了本项目、没装 DSH 的机器上根本没有那个文件，
-//! 所以那份 YAML 的信息被抄成 `server/src/main/resources/ai/builtin-catalog.json`（31KB），
-//! 进 jar、进发布包；运行期只读这份资源。
+//! 所以那份 YAML 的信息被抄成了一份 JSON（31KB），运行期只读这份资源。
 //!
-//! # ⚠ 灰渡期的一处刻意做法：**编译期 include 同一份 JSON**
+//! # 这份 JSON 在哪（P4 收尾起）
 //!
-//! Rust 侧没有 classpath。用 `include_str!` 指向 Kotlin 的**同一个文件**（而不是在
-//! `server-rs/` 下再放一份拷贝）是刻意的：**两份拷贝迟早会漂移**，而漂移的表现是
-//! "Kotlin 后端登记了 69 个模型、Rust 后端只登记 67 个"这种没人会立刻发现的事。
-//! P4 收尾（Kotlin 退役）时把这个文件搬进 `server-rs/`，路径就地改一行。
+//! `server-rs/assets/ai/builtin-catalog.json` —— **Rust 侧的唯一真源**。
+//! 灰度期它是"Kotlin 资源 + Rust 用 `include_str!` 指向同一个文件"（当时故意不复制，
+//! 怕两份拷贝漂移）；Kotlin 退役（2026-09-26）时按原计划**搬进 `server-rs/`**，
+//! 老那份留在 `legacy\server\src\main\resources\ai\` 里当历史，**不再被任何东西读**。
+//! ⚠ 改这份 JSON 要**重新编译**（编译期 `include_str!`）。
 //!
 //! # 两种模式（语义差别**必须严格**）
 //!
@@ -39,7 +39,7 @@ pub const VERSION_KEY: &str = "ai.builtin.seed.version";
 const UNKNOWN_VERSION: &str = "unknown";
 
 /// 冻结副本的正文（**编译期**读进来；见模块头的说明）。
-const CATALOG_JSON: &str = include_str!("../../server/src/main/resources/ai/builtin-catalog.json");
+const CATALOG_JSON: &str = include_str!("../assets/ai/builtin-catalog.json");
 
 /// 顶层结构（`BuiltinCatalog`）。
 #[derive(Debug, Deserialize)]
