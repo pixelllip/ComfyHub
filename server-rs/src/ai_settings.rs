@@ -92,6 +92,8 @@ fn category_of(name: &str) -> &'static str {
         "remember" => "memory",
         "web_search" | "web_fetch" => "web",
         "civitai_search" => "web",
+        // 资料库（Kotlin `ToolCategory.LIBRARY`）：查自己的提示词库 / 角色卡
+        "search_prompts" | "search_character_cards" | "save_character_card" | "danbooru_lookup" => "library",
         // 文件三件（Kotlin `ToolCategory.FILES`）
         "list_dir" | "read_file" | "write_file" => "files",
         _ => "comfy",

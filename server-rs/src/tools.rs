@@ -293,7 +293,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + comfy 查询两件（`comfy_get_run` / `comfy_list_workflows`，P4 第 41 步）。
 /// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
 /// `comfy_submit` 那一批要 ComfyUI 在场与整套转换栈（R10 的落点），各自另起批次。
-pub const IMPLEMENTED: [&str; 14] = [
+pub const IMPLEMENTED: [&str; 16] = [
     "ask_user_question",
     "comfy_get_run",
     "comfy_get_status",
@@ -307,6 +307,8 @@ pub const IMPLEMENTED: [&str; 14] = [
     "read_file",
     "register_skill",
     "remember",
+    "save_character_card",
+    "search_character_cards",
     "write_file",
 ];
 
@@ -418,6 +420,11 @@ pub async fn execute(
         "comfy_get_status" => comfy_get_status(state, arguments).await,
         "comfy_sync_history" => comfy_sync_history(state).await,
         "comfy_load_workflow" => comfy_load_workflow(state, policy, arguments).await,
+        // ---- 资料库两件（P4 第 46 步：角色卡）--------------------------------
+        // O7/O8 的落点：写角色之前**先查本机**（库里那张卡 / 那条提示词的 tag 栈），
+        // 而不是凭印象编 —— 现场教训是"把 shinku 当成 iroi 写了两版废图"。
+        "search_character_cards" => crate::character_cards::tool_search(state, arguments),
+        "save_character_card" => crate::character_cards::tool_save(state, arguments),
         // ---- 官方 comfy-mcp 的 39 个工具（P4 第 45 步）------------------------
         //
         // 名字是**运行时**拉来的（`tools/list`），所以这里用"注册表里有没有"来兜底，

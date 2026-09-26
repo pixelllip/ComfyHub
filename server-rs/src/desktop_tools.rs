@@ -40,6 +40,7 @@ pub struct DesktopToolSpec {
 
 /// ⚠ **按 name 升序**：与手机清单合并之后仍要保持有序（系统提示里那两行的顺序要稳定）。
 pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
+
     DesktopToolSpec {
         name: "comfy_get_run",
         description: r#"按 runKey 查一次已捕获运行的状态、错误与产物数。runKey 可以用三样中的任何一个：ComfyUI 的 prompt_id（UUID，comfy_submit 结果里的 runKey）、捕获记录里的数字 id（capturedPromptId），或 import:<sha256>。"#,
@@ -122,6 +123,23 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: true,
     },
     DesktopToolSpec {
+        name: "save_character_card",
+        description: r#"把一个角色的**规范 tag 栈 / LoRA / 权重 / 别名 / 来源**存成角色卡。同名 = 同一张卡（**合并保存**：只有你这次给了值的字段会被覆盖，`tags` 是**追加去重**，不会抹掉已有的）。写卡前先 `danbooru_lookup` 核对：**只有本轮真的查过的 tag 才会被记上核对时间**，没查过就如实留空（别自己编一个时间）。删除或清空字段请让用户去界面上做。"#,
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `save_character_card`（R12/R13）。
+        //   注意 `\"用户口述\"` 这种转义在**裸字符串**里也是字面量 —— 它本来就是 JSON 正文的一部分。
+        input_schema: r#"{"type":"object","properties":{"name":{"type":"string","description":"角色名（用户叫的名字；同名视为同一张卡）"},"nameEn":{"type":"string","description":"英文 / 罗马字写法"},"aliases":{"type":"string","description":"别名，逗号分隔（danbooru 的 other names 可以照抄）"},"characterTag":{"type":"string","description":"danbooru 角色 tag，形如 shinku_(nte)"},"seriesTag":{"type":"string","description":"作品 tag，形如 neverness_to_everness"},"tags":{"type":"string","description":"规范 tag 栈，逗号或换行分隔（外观 / 服装 / 动作基线；danbooru 的同现 tag 就是它）"},"negative":{"type":"string","description":"这个角色常踩的负面词"},"loraName":{"type":"string","description":"角色 LoRA 文件名（ComfyUI models/loras 下的那个名字）"},"loraWeight":{"type":"number","description":"建议权重（没把握就用工作流里的值）"},"loraTrigger":{"type":"string","description":"LoRA 触发词（可能多个，逗号分隔）"},"checkpoint":{"type":"string","description":"建议底模"},"referenceMediaId":{"type":"integer","description":"参考图（画廊里的产物 id）"},"source":{"type":"string","description":"来源：链接 / \"用户口述\" / \"danbooru\" —— 如实写，不许编"},"notes":{"type":"string","description":"备注（这个角色怎么画才对）"}},"required":["name"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: true,
+    },
+    DesktopToolSpec {
+        name: "search_character_cards",
+        description: r#"查本机存下来的**角色卡**（角色的规范 tag 栈 + 配哪条 LoRA / 权重 + 别名 + 来源 + 最后一次跟 danbooru 核对的时间）。**写某个角色之前先查这里**：有卡就照卡写，不用重新查一遍。查不到再去 `danbooru_lookup` 核对 tag / 找同现 tag，然后 `save_character_card` 存下来。"#,
+        input_schema: r#"{"type":"object","properties":{"query":{"type":"string","description":"关键字：角色名 / 别名 / 角色 tag / LoRA 名；不传就是列全部"},"limit":{"type":"integer","description":"最多几条，默认 5，上限 20"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },    DesktopToolSpec {
         name: "write_file",
         description: r#"写文件。**默认只允许写 ComfyUI 目录**（`comfyui/`）；写到别处会被权限策略直接拒绝，不要试图绕开。写前先想清楚路径，必要时先 list_dir 看一眼。"#,
         input_schema: r#"{"type":"object","properties":{"path":{"type":"string","description":"目标路径（相对项目根或绝对路径）"},"content":{"type":"string","description":"完整内容"},"mode":{"type":"string","enum":["overwrite","append"],"description":"默认 overwrite"}},"required":["path","content"],"additionalProperties":false}"#,
@@ -180,6 +198,8 @@ mod tests {
                 "list_dir",
                 "read_file",
                 "register_skill",
+                "save_character_card",
+                "search_character_cards",
                 "write_file",
             ]
         );

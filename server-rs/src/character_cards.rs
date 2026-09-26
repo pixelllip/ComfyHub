@@ -486,6 +486,264 @@ pub fn save(conn: &Connection, input: CharacterCardInput) -> Result<(i64, bool),
 }
 
 // ---------------------------------------------------------------------------
+//  AI 工具那两条（P4 第 46 步的尾巴）
+// ---------------------------------------------------------------------------
+
+/// 资料库类查询一次最多回几条（与 Kotlin `MAX_LIBRARY_RESULTS` 一致）。
+pub const MAX_LIBRARY_RESULTS: i64 = 20;
+
+fn clip(text: &str, max: usize) -> String {
+    let len = text.chars().count();
+    if len <= max {
+        text.to_string()
+    } else {
+        format!("{}…（已截断，共 {len} 字符）", take_chars(text, max))
+    }
+}
+
+/// 角色卡在工具结果里的正文形状（**逐字**照抄 Kotlin `renderCard`：模型要能一眼看出"卡里已经有什么"）。
+pub fn render_card(card: &CharacterCardDto) -> String {
+    let mut out = String::new();
+    let name_en = card
+        .name_en
+        .as_ref()
+        .map(|v| format!("（{v}）"))
+        .unwrap_or_default();
+    out.push_str(&format!("  #{}「{}」{}\n", card.id, card.name, name_en));
+    if let Some(tag) = card.character_tag.as_ref() {
+        out.push_str(&format!("  角色 tag: {tag}\n"));
+    }
+    if let Some(tag) = card.series_tag.as_ref() {
+        out.push_str(&format!("  作品 tag: {tag}\n"));
+    }
+    if !card.aliases.is_empty() {
+        out.push_str(&format!("  别名: {}\n", card.aliases.join("、")));
+    }
+    if !card.tags.is_empty() {
+        out.push_str(&format!(
+            "  tag 栈({}): {}\n",
+            card.tags.len(),
+            card.tags.iter().take(40).cloned().collect::<Vec<_>>().join("、")
+        ));
+    }
+    let mut lora: Vec<String> = Vec::new();
+    if let Some(name) = card.lora_name.as_ref() {
+        lora.push(name.clone());
+    }
+    if let Some(weight) = card.lora_weight {
+        lora.push(format!("权重 {weight}"));
+    }
+    if let Some(trigger) = card.lora_trigger.as_ref() {
+        lora.push(format!("触发词 {trigger}"));
+    }
+    if !lora.is_empty() {
+        out.push_str(&format!("  LoRA: {}\n", lora.join(" · ")));
+    }
+    if let Some(checkpoint) = card.checkpoint.as_ref() {
+        out.push_str(&format!("  底模: {checkpoint}\n"));
+    }
+    if let Some(media) = card.reference_media_id {
+        out.push_str(&format!("  参考图: 产物 {media}\n"));
+    }
+    if let Some(negative) = card.negative.as_ref() {
+        out.push_str(&format!("  负面: {}\n", clip(negative, 300)));
+    }
+    if let Some(source) = card.source.as_ref() {
+        out.push_str(&format!("  来源: {source}\n"));
+    }
+    out.push_str(&format!(
+        "  danbooru 核对: {}\n",
+        card.tags_verified_at
+            .as_deref()
+            .unwrap_or("（没有——这些 tag 未经 danbooru 核对）")
+    ));
+    if let Some(notes) = card.notes.as_ref() {
+        out.push_str(&format!("  备注: {}\n", clip(notes, 300)));
+    }
+    out.push_str(&format!("  更新于 {}\n", card.updated_at.as_deref().unwrap_or("?")));
+    out
+}
+
+/// 角色卡的结构化形状（**逐字**照抄 Kotlin `cardJson`：可空字段整键省略）。
+pub fn card_json(card: &CharacterCardDto) -> Value {
+    let mut out = Map::new();
+    out.insert("id".into(), Value::Number(card.id.into()));
+    out.insert("name".into(), Value::String(card.name.clone()));
+    let mut put = |key: &str, value: Value| {
+        out.insert(key.to_string(), value);
+    };
+    if let Some(v) = card.name_en.as_ref() {
+        put("nameEn", Value::String(v.clone()));
+    }
+    put(
+        "aliases",
+        Value::Array(card.aliases.iter().cloned().map(Value::String).collect()),
+    );
+    if let Some(v) = card.character_tag.as_ref() {
+        put("characterTag", Value::String(v.clone()));
+    }
+    if let Some(v) = card.series_tag.as_ref() {
+        put("seriesTag", Value::String(v.clone()));
+    }
+    put("tags", Value::Array(card.tags.iter().cloned().map(Value::String).collect()));
+    if let Some(v) = card.negative.as_ref() {
+        put("negative", Value::String(v.clone()));
+    }
+    if let Some(v) = card.lora_name.as_ref() {
+        put("loraName", Value::String(v.clone()));
+    }
+    if let Some(v) = card.lora_weight {
+        put("loraWeight", serde_json::json!(v));
+    }
+    if let Some(v) = card.lora_trigger.as_ref() {
+        put("loraTrigger", Value::String(v.clone()));
+    }
+    if let Some(v) = card.checkpoint.as_ref() {
+        put("checkpoint", Value::String(v.clone()));
+    }
+    if let Some(v) = card.reference_media_id {
+        put("referenceMediaId", Value::Number(v.into()));
+    }
+    if let Some(v) = card.source.as_ref() {
+        put("source", Value::String(v.clone()));
+    }
+    if let Some(v) = card.tags_verified_at.as_ref() {
+        put("tagsVerifiedAt", Value::String(v.clone()));
+    }
+    if let Some(v) = card.notes.as_ref() {
+        put("notes", Value::String(v.clone()));
+    }
+    if let Some(v) = card.created_at.as_ref() {
+        put("createdAt", Value::String(v.clone()));
+    }
+    if let Some(v) = card.updated_at.as_ref() {
+        put("updatedAt", Value::String(v.clone()));
+    }
+    Value::Object(out)
+}
+
+fn arg_str(arguments: &Value, key: &str) -> Option<String> {
+    arguments
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn arg_i64(arguments: &Value, key: &str) -> Option<i64> {
+    arguments.get(key).and_then(|v| match v {
+        Value::Number(n) => n.as_i64(),
+        Value::String(s) => s.trim().parse::<i64>().ok(),
+        _ => None,
+    })
+}
+
+fn arg_f64(arguments: &Value, key: &str) -> Option<f64> {
+    arguments.get(key).and_then(|v| match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    })
+}
+
+/// `search_character_cards`：查本机存下来的角色卡（写角色之前先查这里）。
+pub fn tool_search(state: &AppState, arguments: &Value) -> Result<crate::tools::ToolOutcome, crate::tools::ToolFailure> {
+    let query = arg_str(arguments, "query");
+    let limit = arg_i64(arguments, "limit").unwrap_or(5).clamp(1, MAX_LIBRARY_RESULTS);
+    let cards = state
+        .with(|conn| list(conn, query.as_deref(), limit as usize))
+        .map_err(api_failure)?;
+    if cards.is_empty() {
+        return Err(crate::tools::ToolFailure::new(
+            "NOT_FOUND",
+            format!(
+                "本机没有匹配的角色卡（关键字：{}）。下一步：`danbooru_lookup(query=\"角色名\")` 核对 tag 与同现 tag，\
+                 再用 `save_character_card` 存成卡；**不要**凭印象编 tag。",
+                query.unwrap_or_else(|| "（空）".to_string())
+            ),
+        ));
+    }
+    let mut text = format!("角色卡：命中 {} 张\n", cards.len());
+    for card in cards.iter() {
+        text.push('\n');
+        text.push_str(&render_card(card));
+    }
+    let payload = serde_json::json!({
+        "count": cards.len(),
+        "items": cards.iter().map(card_json).collect::<Vec<_>>(),
+    });
+    Ok(crate::tools::ToolOutcome::new(text, payload))
+}
+
+/// `save_character_card`：把一个角色的规范 tag 栈 / LoRA / 权重 / 别名 / 来源存成角色卡。
+///
+/// ⚠ **`tagsVerifiedAt` 这一轮一律留空**：它只认"本轮真查过 danbooru 的那个 tag"
+/// （Kotlin 走 `ToolContext.danbooruVerified`）。Rust 侧 `danbooru_lookup` 还没搬，
+/// 于是"没查过"这条**如实**写进正文里 —— **绝不许**自己编一个时间。
+/// 搬 `danbooru_lookup` 时必须把"这一轮查过的 tag 集合"接进 Run 上下文，
+/// 再把这里换成 `if verified { now } else { None }`（与 `HarnessRunner` 同一条纪律）。
+pub fn tool_save(state: &AppState, arguments: &Value) -> Result<crate::tools::ToolOutcome, crate::tools::ToolFailure> {
+    let name = arg_str(arguments, "name")
+        .ok_or_else(|| crate::tools::ToolFailure::new("INVALID_ARGUMENT", "缺少参数 name"))?;
+    let character_tag = arg_str(arguments, "characterTag");
+    let verified_key = normalize_tag(character_tag.as_deref().unwrap_or(&name));
+    let input = CharacterCardInput {
+        name: name.clone(),
+        name_en: arg_str(arguments, "nameEn"),
+        aliases: split_tags(arg_str(arguments, "aliases").unwrap_or_default().as_str()),
+        character_tag,
+        series_tag: arg_str(arguments, "seriesTag"),
+        tags: split_tags(arg_str(arguments, "tags").unwrap_or_default().as_str()),
+        negative: arg_str(arguments, "negative"),
+        lora_name: arg_str(arguments, "loraName"),
+        lora_weight: arg_f64(arguments, "loraWeight"),
+        lora_trigger: arg_str(arguments, "loraTrigger"),
+        checkpoint: arg_str(arguments, "checkpoint"),
+        reference_media_id: arg_i64(arguments, "referenceMediaId"),
+        source: arg_str(arguments, "source"),
+        tags_verified_at: None,
+        notes: arg_str(arguments, "notes"),
+    };
+    let (id, created) = state.write(|conn| save(conn, input)).map_err(api_failure)?;
+    let card = state
+        .with(|conn| get(conn, id))
+        .map_err(api_failure)?
+        .ok_or_else(|| {
+            crate::tools::ToolFailure::new(
+                "TOOL_ERROR",
+                format!("角色卡已保存但读不回来（id={id}）；这是本机的 bug，请如实告诉用户"),
+            )
+        })?;
+    let mut text = format!(
+        "已保存角色卡 #{id}「{}」（{}）\n",
+        card.name,
+        if created { "新建" } else { "合并更新" }
+    );
+    text.push_str(&render_card(&card));
+    text.push('\n');
+    text.push_str(&format!(
+        "⚠ 这张卡**没有** danbooru 核对记录（本轮没有查过 `{verified_key}`）—— \
+         想标上核对时间就先 `danbooru_lookup`，再回来保存一次；**不要**自己编时间。"
+    ));
+    Ok(crate::tools::ToolOutcome::new(text, card_json(&card)))
+}
+
+/// 把 `state.with` / `state.write` 折出来的 `ApiError` 翻成 `ToolFailure`。
+///
+/// ⚠ **一次工具调用失败不该打断整个 Run**（Kotlin `ToolRegistry.invoke` 的同一条纪律），
+/// 而 `state.write` 那层已经把仓储的 `WriteError` 折成 `ApiError`（`write_routes.rs` 的 `From`），
+/// 所以这里按**状态码**分档：400 = 参数不合法、404 = 没这条，其余一律 `TOOL_ERROR`。
+fn api_failure(error: crate::routes::ApiError) -> crate::tools::ToolFailure {
+    use axum::http::StatusCode;
+    let code = match error.status {
+        StatusCode::BAD_REQUEST => "INVALID_ARGUMENT",
+        StatusCode::NOT_FOUND => "NOT_FOUND",
+        _ => "TOOL_ERROR",
+    };
+    crate::tools::ToolFailure::new(code, error.human().to_string())
+}
+
+// ---------------------------------------------------------------------------
 //  路由
 // ---------------------------------------------------------------------------
 
@@ -733,6 +991,79 @@ mod tests {
         assert_eq!(list(&conn, Some("purple horns"), MAX_SEARCH).unwrap().len(), 1, "tag 栈要命中");
         assert_eq!(list(&conn, Some("everness"), MAX_SEARCH).unwrap().len(), 1, "备注要命中");
         assert!(list(&conn, Some("不存在的东西"), MAX_SEARCH).unwrap().is_empty());
+    }
+
+    #[test]
+    fn 工具_搜索查不到时不许编并且要说下一步() {
+        let state = test_state();
+        let err = tool_search(&state, &serde_json::json!({"query": "shinku"})).unwrap_err();
+        assert_eq!(err.code, "NOT_FOUND");
+        assert!(err.message.contains("shinku"), "{}", err.message);
+        assert!(err.message.contains("danbooru_lookup"), "{}", err.message);
+        assert!(err.message.contains("不要**因为") || err.message.contains("不要"), "{}", err.message);
+    }
+
+    #[test]
+    fn 工具_保存是合并保存且核对时间如实留空() {
+        let state = test_state();
+        let first = tool_save(
+            &state,
+            &serde_json::json!({
+                "name": "Shinku",
+                "characterTag": "shinku_(nte)",
+                "tags": "pink streaks, purple horns",
+                "source": "danbooru"
+            }),
+        )
+        .unwrap();
+        assert!(first.content.contains("已保存角色卡 #1「Shinku」（新建）"), "{}", first.content);
+        assert!(first.content.contains("角色 tag: shinku_(nte)"), "{}", first.content);
+        assert!(first.content.contains("tag 栈(2)"), "{}", first.content);
+        // Rust 侧还没有 danbooru_lookup：核对时间**必须**如实留空 + 明确提醒
+        assert!(first.content.contains("**没有** danbooru 核对记录"), "{}", first.content);
+        assert!(
+            !first.payload.as_object().unwrap().contains_key("tagsVerifiedAt"),
+            "没查过就不许出现核对时间键：{}",
+            first.payload
+        );
+
+        // 第二轮只说 LoRA —— 合并保存，tag 栈与来源都不许被抹掉
+        let second = tool_save(
+            &state,
+            &serde_json::json!({ "name": "shinku", "loraName": "shinku-anima", "loraWeight": 0.85 }),
+        )
+        .unwrap();
+        assert!(second.content.contains("（合并更新）"), "{}", second.content);
+        assert_eq!(second.payload["id"], 1);
+        assert_eq!(
+            second.payload["tags"],
+            serde_json::json!(["pink streaks", "purple horns"])
+        );
+        assert_eq!(second.payload["source"], "danbooru");
+        assert_eq!(second.payload["loraName"], "shinku-anima");
+        let count: i64 = state
+            .with(|conn| conn.query_row("SELECT COUNT(*) FROM character_cards", [], |r| r.get(0)))
+            .unwrap();
+        assert_eq!(count, 1, "同名不许攒出第二行");
+    }
+
+    #[test]
+    fn 工具_缺名字与超长都是参数错误() {
+        let state = test_state();
+        let err = tool_save(&state, &serde_json::json!({})).unwrap_err();
+        assert_eq!(err.code, "INVALID_ARGUMENT");
+        assert!(err.message.contains("name"), "{}", err.message);
+
+        let long = "x".repeat(MAX_NOTES_CHARS + 1);
+        let err = tool_save(&state, &serde_json::json!({ "name": "x", "notes": long })).unwrap_err();
+        assert_eq!(err.code, "INVALID_ARGUMENT");
+        assert!(err.message.contains("备注 超出上限"), "{}", err.message);
+    }
+
+    fn test_state() -> AppState {
+        // 内存库要自己灌真 DDL（`AppState::new` 只包连接，不建表）
+        let conn = conn();
+        AppState::new(conn, ":memory:", std::env::temp_dir())
     }
 
     #[test]

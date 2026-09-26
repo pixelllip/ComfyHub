@@ -554,9 +554,14 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   ② **请求体 JSON 不合法**时 axum 默认回**纯文本** 400（`Failed to parse the request body as JSON: …`），
 >   而 Kotlin 走 StatusPages 回 JSON 信封 —— 这是**所有** axum `Json` 端点共有的老行为（不是这一步引入的），
 >   界面自己发的永远是合法 JSON，所以只在手敲 curl 时看得见。
-> - 仍未搬（诚实清单）：**AI 侧那四件工具**（`search_prompts` / `search_character_cards` /
->   `save_character_card` / `danbooru_lookup`）—— 仓储已就绪（`save()` 就是给工具用的那条路），
->   工具描述与 schema 要按 R12 从 Kotlin 逐字搬，归下一批。
+> - 仍未搬（诚实清单）：**AI 侧那两件要联网 / 要提示词库的工具** ——
+>   ✅ 同批已搬 **`search_character_cards` + `save_character_card`**（`renderCard` / `cardJson` /
+>   `splitTags` 形状逐字对照；`save` 就是"同名合并 + 追加去重"那条路；
+>   ⚠ `tagsVerifiedAt` **一律留空并如实写一句** —— 它只认"本轮真查过 danbooru 的 tag"，
+>   而 `danbooru_lookup` 还没搬；搬它时必须把"本轮查过的 tag 集合"接进 Run 上下文，**不许自己编时间**）；
+>   ⛔ `search_prompts`（要提示词库搜索那几个参数：`query` / `id` / `limit` / `includePrompt`）
+>   与 `danbooru_lookup`（要 danbooru 客户端 + 短 UA + `DANBOORU_CLOUDFLARE` 那一档）归下一批。
+> - 这一批往后 `cargo test` **342 例全绿**（219 lib + 121 api_test + 2 shape_lint）。
 >
 > ✅ **P4 第 45 步（2026-09-26）：MCP 桥（官方 comfy-mcp 的 39 个工具）** —— 第 45 步本来是
 > §9 起手顺序里的第 3 件（"AI 能不能真的生图"那一档），也是 §10.1 的 O1/O2 与 §10.5 的 O12 的落点。

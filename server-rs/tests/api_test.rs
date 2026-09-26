@@ -5570,7 +5570,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（9 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（16 个），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
@@ -5593,6 +5593,9 @@ async fn tool_policy_and_nsfw_endpoints() {
             "read_file",
             "register_skill",
             "remember",
+            // 第 46 步：资料库两件（写角色之前先查本机，而不是凭印象编 tag）
+            "save_character_card",
+            "search_character_cards",
             "write_file",
         ]
     );
