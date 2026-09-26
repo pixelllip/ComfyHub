@@ -294,9 +294,74 @@ async fn prompt_object_has_every_key_dart_reads() {
     );
 }
 
+/// 关键字语义照抄 Kotlin `PromptRepo.buildWhere`：**按空白拆词、每个词都要命中（AND）**，
+/// 且匹配 **5 列**（title / positive / negative / notes / checkpoint）；
+/// `kind` 先大写、`ALL` 等于不过滤。
+///
+/// 为什么值得单列一条：`search_prompts`（工具）与 `/api/prompts`（界面）**共用这份实现**，
+/// 而"界面搜得到、AI 说没有"不会有任何用例变红。
 #[tokio::test]
-async fn prompt_search_and_favorite_and_missing() {
-    let (status, body) = get_json(app(), "/api/prompts?q=cyberpunk").await;
+async fn prompt_search_splits_terms_and_covers_five_columns() {
+    let state = state();
+    // 补一条带备注的：证明 `notes` 也在匹配列里（夹具里另外两条都没有 notes）
+    state
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO prompts (id, title, kind, positive_prompt, notes, favorite, created_at, updated_at) \
+                 VALUES (12, '备注专用', 'IMAGE', 'a quiet street', '参考 shinku 的构图', 0, \
+                         '2026-09-26T00:00:00.000Z', '2026-09-26T00:00:00.000Z')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    // ① 两个词分别命中**不同列**（标题里的「少女」+ 正向里的「cyberpunk」）→ 都要命中
+    let (_, body) = get_json(router_for(state.clone()), "/api/prompts?q=cyberpunk%20%E5%B0%91%E5%A5%B3").await;
+    assert_eq!(body["total"], 1, "两个词是 AND，跨列也要命中：{body}");
+    assert_eq!(body["items"][0]["id"], 10);
+    // 一个词命中不了 → 整条不命中（整串 LIKE 的实现会把它当成"cyberpunk 少女"一个子串）
+    let (_, body) = get_json(router_for(state.clone()), "/api/prompts?q=cyberpunk%20%E4%B8%8D%E5%AD%98%E5%9C%A8").await;
+    assert_eq!(body["total"], 0, "{body}");
+
+    // ② 五列都要能搜到
+    for (query, expected) in [
+        ("lowres", 10_i64),           // negative_prompt
+        ("krea2.safetensors", 10),    // checkpoint
+        ("%E5%8F%82%E8%80%83", 12),   // notes（「参考」）
+        ("quiet", 12),                // positive_prompt
+        ("%E5%A4%87%E6%B3%A8", 12),   // title（「备注」）
+    ] {
+        let (_, body) = get_json(router_for(state.clone()), &format!("/api/prompts?q={query}")).await;
+        assert_eq!(body["total"], 1, "q={query} 应该命中：{body}");
+        assert_eq!(body["items"][0]["id"], expected, "q={query} 命中了错的那条：{body}");
+    }
+
+    // ③ kind：大小写不敏感 + `ALL` 等于不过滤
+    let (_, body) = get_json(router_for(state.clone()), "/api/prompts?kind=image").await;
+    assert_eq!(body["total"], 3, "库里存的是大写 IMAGE，小写也该命中：{body}");
+    let (_, body) = get_json(router_for(state.clone()), "/api/prompts?kind=ALL").await;
+    assert_eq!(body["total"], 3, "ALL = 不过滤：{body}");
+    // `favorite=false` 按 Kotlin 的口径**不过滤**（只有 true 才筛）
+    let (_, body) = get_json(router_for(state.clone()), "/api/prompts?favorite=false").await;
+    assert_eq!(body["total"], 3, "{body}");
+
+    // 同一套语义在工具里也要成立（两边共用一份实现）
+    let out = call_tool(
+        &state,
+        "search_prompts",
+        serde_json::json!({ "query": "cyberpunk 少女" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["count"], 1, "{}", out.content);
+    assert_eq!(out.payload["items"][0]["id"], 10);
+
+    std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+#[tokio::test]
+async fn prompt_search_and_favorite_and_missing() {    let (status, body) = get_json(app(), "/api/prompts?q=cyberpunk").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["total"], 1);
     assert_eq!(body["items"][0]["id"], 10);
@@ -7957,7 +8022,8 @@ async fn search_prompts_搜不到时要说下一步而不是编() {
     std::fs::remove_dir_all(state.project_root()).ok();
 }
 
-/// Skills 两个写侧工具：注册 → 立刻出现在列表里 → 删除；再删报 `SKILL_NOT_FOUND`。#[tokio::test]
+/// Skills 两个写侧工具：注册 → 立刻出现在列表里 → 删除；再删报 `SKILL_NOT_FOUND`。
+#[tokio::test]
 async fn skill_tools_register_then_delete() {
     let state = state();
     let storage = state.media_dir().parent().unwrap().to_path_buf();

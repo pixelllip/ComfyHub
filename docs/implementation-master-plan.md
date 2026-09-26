@@ -1948,8 +1948,8 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | `comfy_submit`（**R10**：审核 → 审批 → 提交 → 自己等 → `captureRun()` 入库 → `mediaIds`） | ✅ **已搬（P4 第 48 步，2026-09-26）**：`workflow_submit.rs` + `tests/submit_test.rs` 6 例；预检只有"节点类 + 实例能不能加载这个模型"两道（七项 audit / 盘扫 / `env_report` 仍未搬） |
 | `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ 未搬（都要 `ComfyModels` 本机清单；`env_report` 是 O3 —— "盘上有、实例看不到"的解药） |
 | `comfy_use_media` / `comfy_make_mask` / `comfy_use_attachment`（图像编辑三件） | ✅ **已搬（第 58 步，2026-09-26）**：`server-rs/src/image_edit.rs` + 三条工具（出厂档 ASK）+ 16 例用例；**活实例验收**见 §13（AI 那条链路 30 项全绿、遮罩内 101.95/255 外 3.74/255） |
-| 联网三工具 `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（系统提示那一节仍指向没下发的工具；凭据端点已就绪） |
-| `search_prompts` / `search_character_cards` / `save_character_card` / `danbooru_lookup` | ⛔ 未搬（**仓储已就绪**：角色卡五条见第 46 步；`save()` 就是工具用的那条路） |
+| 联网三工具 `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（要 Keenable / Civitai 客户端；凭据端点已就绪）。⚠ **`danbooru_lookup` 已搬**（第 59 步，见 §14）—— 它是 Rust 侧第一条**联网**工具，顺带把"联网预算"这条只写在提示词里的规则变成真的拦得住 |
+| `search_prompts` / `search_character_cards` / `save_character_card` / `danbooru_lookup` | ✅ **已搬**：角色卡两件（第 46 步）+ **`search_prompts` / `danbooru_lookup`（第 59 步，见 §14）**。§11 的"写角色前先查三处"在 Rust 后端**已齐**；`save_character_card` 的核对时间也真的接上了（只有本轮真查过 danbooru 才写得进）。⚠ `character_cards` 那张表**不在同步白名单**里，这条纪律别丢 |
 | 工作流配方三件 `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表 | ⛔ 未搬（Kotlin 侧 `WorkflowRecipe.kt` 646 行解析核心是主体；**故意不进同步范围**） |
 | **后台捕获轮询器** + `lastPollAt` / `lastError`（O5/O6） | ✅ **已做（P4 第 47 步）**（用户自己在 ComfyUI 里跑的东西也会进画廊） |
 | **截断续写**（`MAX_CONTINUATIONS` + `CONTINUE_INSTRUCTION`） | ⛔ 未做（输出被长度上限卡断时，现在把半句话当结尾） |
@@ -2175,6 +2175,12 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 ### 10.8 还没做完的清单（截至 2026-09-25）
 
+> ⚠ **这是 2026-09-25 的快照**（保留下来是为了看当时的判断，别当现状读）。
+> 它下面这张 Rust 表里的多行**已经被后来的批次做掉了**：附件 R9 → 第 50 步；`/api/media/{id}/poster`
+> → 第 51 步；`/api/capture/import` → 第 52 步；`providers/{id}/test` 与 `discover-models` → 第 53 步；
+> **图像编辑三件 → 第 58 步（§13）**；**`search_prompts` / `danbooru_lookup` → 第 59 步（§14）**。
+> 最新状态一律看 §10.9 的 A/B 表与 §13/§14 的诚实清单。
+
 **桌面 Rust（P4 轨道）**
 
 | 项 | 状态 |
@@ -2397,3 +2403,62 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
    自定义节点里真有只差大小写的两个键，`ConvertFrom-Json` 默认那个大小写不敏感的对象建不出来。
    一律 `-AsHashTable`；坏的不是 ComfyUI 的 JSON，是 PowerShell 的解析器。
 
+
+---
+
+## 14. 2026-09-26 这一轮：资料库两件搬到 Rust（第 59 步）
+
+> **用户这一轮的原话**：「继续实施…每完成一项就 git 保存。」
+>
+> **起点**：§11 的"写角色前先查三处"（O7/O8）在 Kotlin 侧落地（`3b78fc9`），
+> 第 46 步把**角色卡**那一半搬到了 Rust，剩下的两条（`search_prompts` / `danbooru_lookup`）
+> 一直挂在 §10.9 的 B 组里 —— 而它们是那句纪律里**模型真正要调的两个工具**。
+
+| 提交 | 内容 |
+| --- | --- |
+| `a3470d6` | **资料库两件 + 联网预算**：`search_prompts`（与 `/api/prompts` 同一个实现）+ 新增 `server-rs/src/danbooru.rs`（四步有界查询 / 归一化 / 六种失败分开 / 挑战页单列）；`save_character_card` 的 `tagsVerifiedAt` 真的接上了（`ToolSession.danbooru_verified`）；**`MAX_WEB_QUERIES_PER_RUN` 从"只写在提示词里"变成执行器真的拦**，顺带修掉 `danbooru_lookup` 的分类漂移（Kotlin 是 WEB 档，Rust 表里写在 library） |
+| 本提交 | **顺手对齐提示词搜索的语义**（`routes::query_prompts` 按 Kotlin `PromptRepo.buildWhere` 重写：拆词 AND + 5 列 + `kind` 大写/`ALL` + `favorite` 只在 true 时筛）+ 文档登记（本节 + §10.8/§10.9 清单更新） |
+
+### 14.1 三个"为什么这么做"
+
+1. **`search_prompts` 与 `/api/prompts` 必须同一份实现**（`routes::query_prompts` / `get_prompt_dto`
+   抽成 `pub(crate)`）。各写一份 SQL 的后果是**"界面搜得到、AI 说没有"** —— 而那种不一致
+   不会有任何用例变红（两边各自都对）。这一条与第 41 步"`comfy_list_workflows` 与
+   `/api/capture/workflows` 同一个实现"是同一条纪律。
+2. **danbooru 的六种失败必须分开**：`CLOUDFLARE`（挑战页，**绝不说成"没有这个角色"**）/
+   `UA_REJECTED` / `NOT_FOUND` / `RATE_LIMIT` / `TIMEOUT` / `FAILED`。
+   判据不只是状态码：**403 要看 body 是不是挑战页**，2xx 也要看（Cloudflare 有时用 200 送挑战页）。
+   `wiki_pages` 与 `related_tag` 的 404 是**"没有这条增值信息"**，不许把已经拿到的角色 tag
+   一起丢掉；429 / 5xx 才是"没查成"。
+3. **核对时间是事实、不是自述**：`save_character_card` 的 `tagsVerifiedAt` 只由
+   "本轮 `danbooru_lookup` 真的成功返回过这个 tag"写（查到的角色 tag 也算，
+   归一之后进 `ToolSession.danbooru_verified`）。模型把 `source` 写成 `danbooru` 不算数 ——
+   假时间比没有时间更坏。
+
+### 14.2 硬证据
+
+- `cargo test` **463 例全绿**（307 lib + 126 api_test + 7 danbooru_test + 23 其他）。
+  新增用例里最要紧的几条：
+  * 假 danbooru（**真 socket**，不是"调了个假函数"）：模糊那一路的**通配符真的发出去了**
+    （`name_matches%5D=*shinku_%28nte%29*` —— 编码成 `%2A` 就再也搜不到换装版本，且不报错）、
+    UA 就是那一种短的、wiki 404 不丢主结果、403 挑战页走 `DANBOORU_CLOUDFLARE`、
+    429/5xx 与 404 分开、没解析出角色时**不发** wiki/related（一次查询最多 4 个请求）；
+  * `search_prompts` 与 `/api/prompts` 搜到的是**同一条**，且正文里带够"照抄"需要的东西
+    （正负提示词 / tag / LoRA@权重 / 参数 / 产物数）；
+  * 联网额度：只认联网类工具、只在成功时计数、答题时与总额度一起归零；
+  * 角色卡：查过 → 必须写核对时间；没查过（哪怕 `source` 写着 `danbooru`）→ 必须留空。
+- **真站抽查**（`COMFYHUB_LIVE_DANBOORU=1 cargo test --test spot_check -- --ignored --nocapture`）：
+  `shinku (nte)` → **`shinku_(nte)`（340 张）** + wiki 正文 + 别名 + 同现 tag
+  （`shirt` / `two-tone_hair` / `white_shirt` / `hair_between_eyes` / `black_hair` / `purple_hair`…），
+  5 秒内返回。这条证明的不是"代码能编译"，而是**本机这条链路真的通**
+  （短 UA 过得去 + 公网走代理）——假服务永远覆盖不到这两件事。
+
+### 14.3 这一轮没做的（诚实清单）
+
+| 项 | 状态 |
+| --- | --- |
+| `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（要 Keenable / Civitai 客户端 + `EndpointGuard`；`/api/ai/credentials` 已就绪）。⚠ **`danbooru_lookup` 是 Rust 侧第一条联网工具**，所以这一批把"联网预算"这条规则真的落地了 —— 后面三条搬过来时**直接复用**那份计数，别再各写一份 |
+| `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ 未搬（要 `ComfyModels` 本机模型清单） |
+| 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表） | ⛔ 未搬（`WorkflowRecipe.kt` 646 行的解析核心是主体；**故意不进同步范围**） |
+| **`comfy_query` 那一档的预算** | ⚠ 仍未执行（Kotlin 有 `maxComfyQueriesPerRun = 9`，Rust 执行器只拦了"总调用数"与这一批新加的"联网数"）。现在 ComfyUI 那侧还有 MCP 39 个工具兜着，实际不容易撞；但**它同样是"提示词里写了、代码里没有"** —— 补的时候照 `has_web_queries_left` 那一套写，别再发明第二种 |
+| `search_prompts` 的**多词 AND** 语义 | ✅ **顺手对齐了**（它本来是个静默漂移）：Rust 的 `query_prompts` 之前是**整串 LIKE + 3 列**（title / positive / negative），而 Kotlin `PromptRepo.buildWhere` 是**按空白拆词、每个词都要命中（AND，最多 8 个）+ 5 列**（多 `notes` / `checkpoint`）。工具描述里承诺的就是 AND 语义，所以这一批按 Kotlin 重写（`kind` 也补上 trim+uppercase 与 `ALL`=不过滤）。防线：一条"两个词跨列都要命中"的用例 + 一条"五列都要能搜到"的用例 —— 少了它俩，这个漂移下次还会悄悄回来 |

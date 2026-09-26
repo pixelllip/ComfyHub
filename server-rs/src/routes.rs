@@ -1858,20 +1858,62 @@ async fn list_prompts(
 }
 
 /// 提示词列表查询（**唯一实现**）。
+///
+/// # 关键字语义照抄 Kotlin `PromptRepo.buildWhere`（2026-09-26 对齐）
+///
+/// 三条判据，缺一条就是"界面搜得到、`search_prompts` 说没有"（或反过来）：
+/// ① **按空白拆词，每个词都要命中**（AND，最多 8 个）——
+///    `"cyberpunk 少女"` 是两个条件，不是一整串子串；工具描述里写的也是这句；
+/// ② 匹配 **5 列**：`title` / `positive_prompt` / `negative_prompt` / `notes` / `checkpoint`
+///    （少一列的表现是"按备注 / 底模搜不到"）；
+/// ③ `kind` 先 `trim + uppercase`，且 **`ALL`（或空）= 不过滤**
+///    （库里存的是大写 `IMAGE` / `VIDEO`，小写原样传下去会一条都搜不到）。
+///
+/// ⚠ `search_prompts`（工具）与 `/api/prompts`（界面）**共用这一份** —— 各写一份 SQL
+/// 的漂移不会有任何用例变红，只会让 AI 与界面看到两个不同的库。
 pub(crate) fn query_prompts(state: &AppState, q: &PromptQuery) -> Result<Paged<PromptDto>, ApiError> {
     let page = q.page.unwrap_or(1).max(1);
     let size = q.size.unwrap_or(20).clamp(1, 200);
     let offset = (page - 1) * size;
-    let keyword = q.q.as_ref().map(|s| format!("%{}%", s.trim()));
-    let favorite = q.favorite.map(|f| if f { 1_i64 } else { 0_i64 });
+
+    let terms: Vec<String> = q
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| text.split_whitespace().take(8).map(|term| format!("%{term}%")).collect())
+        .unwrap_or_default();
+
+    let mut where_sql = String::from("WHERE 1 = 1");
+    let mut params: Vec<rusqlite::types::Value> = Vec::new();
+    for term in terms {
+        where_sql.push_str(
+            " AND (title LIKE ? OR positive_prompt LIKE ? OR negative_prompt LIKE ? \
+               OR notes LIKE ? OR checkpoint LIKE ?)",
+        );
+        for _ in 0..5 {
+            params.push(rusqlite::types::Value::Text(term.clone()));
+        }
+    }
+    let kind = q
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("ALL"))
+        .map(str::to_uppercase);
+    if let Some(kind) = kind {
+        where_sql.push_str(" AND kind = ?");
+        params.push(rusqlite::types::Value::Text(kind));
+    }
+    // Kotlin 只在 `favorite == true` 时过滤（传 false 等于不过滤）
+    if q.favorite == Some(true) {
+        where_sql.push_str(" AND favorite = 1");
+    }
 
     state.with(|conn| {
-        let where_sql = "WHERE (?1 IS NULL OR title LIKE ?1 OR positive_prompt LIKE ?1 OR negative_prompt LIKE ?1)
-                           AND (?2 IS NULL OR kind = ?2)
-                           AND (?3 IS NULL OR favorite = ?3)";
         let total: i64 = conn.query_row(
             &format!("SELECT COUNT(*) FROM prompts {where_sql}"),
-            rusqlite::params![keyword, q.kind, favorite],
+            rusqlite::params_from_iter(params.iter()),
             |row| row.get(0),
         )?;
         let order = match q.sort.as_deref() {
@@ -1879,12 +1921,13 @@ pub(crate) fn query_prompts(state: &AppState, q: &PromptQuery) -> Result<Paged<P
             Some("title") => "title COLLATE NOCASE ASC, id ASC",
             _ => "created_at DESC, id DESC",
         };
-        let sql = format!("SELECT * FROM prompts {where_sql} ORDER BY {order} LIMIT ?4 OFFSET ?5");
+        let sql = format!("SELECT * FROM prompts {where_sql} ORDER BY {order} LIMIT ? OFFSET ?");
+        let mut list_params = params.clone();
+        list_params.push(rusqlite::types::Value::Integer(size));
+        list_params.push(rusqlite::types::Value::Integer(offset));
         let mut stmt = conn.prepare(&sql)?;
         let mut items = stmt
-            .query_map(rusqlite::params![keyword, q.kind, favorite, size, offset], |row| {
-                prompt_from_row(row)
-            })?
+            .query_map(rusqlite::params_from_iter(list_params.iter()), |row| prompt_from_row(row))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for item in items.iter_mut() {
             item.tags = tags_of(conn, item.id)?;
