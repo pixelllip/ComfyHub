@@ -1,6 +1,6 @@
 ---
 name: inpaint-composite
-description: 图像编辑的局部重绘工作流——保背景换人物 / 换背景保人物 / 把先生成好的人物贴进某张图。用 comfy_make_mask 生成遮罩、comfy_use_media 投放画廊里的底图与人物图，跑项目自带的 inpaint 工作流 comfyui/workflows/comfyhub_inpaint_anima.json（**图像编辑只用这一份**：krea2 那份实测不适合编辑——重绘不跟随提示词、贴人守不住，见正文开头那张实测表），两条都靠"白=重绘区"的遮罩决定保哪里。
+description: 图像编辑的局部重绘工作流（贴人物图用 comfyhub_paste_person_anima.json + comfy_make_mask(mode="subject", ring=N)：剪影遮罩 + 只融接缝，人物像素与画风原样保留）——保背景换人物 / 换背景保人物 / 把先生成好的人物贴进某张图。用 comfy_make_mask 生成遮罩、comfy_use_media 投放画廊里的底图与人物图，工作流用项目自带的 anima 两份（重绘 comfyhub_inpaint_anima.json / 贴人 comfyhub_paste_person_anima.json）；krea2 那两份实测不适合做编辑（重绘不跟随提示词、贴人守不住），别用。遮罩一律"白=重绘区"。
 whenToUse: 用户说"保持背景不变，换个人 / 换个动作 / 换身衣服"、"背景换掉但人物不变"、"把这张图里的人换成…"、"先生成人物再放进去"、局部重绘 / inpaint / 遮罩 / 贴人 / 合成人物时。
 version: 1
 ---
@@ -48,13 +48,17 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
    - 边缘要自然就 `feather=8~24`；把人物贴进新背景时几乎总要羽化。
 3. **提交**（工作流是项目自带的，路径固定，**别自己编节点**）：
    ```
-   comfy_load_workflow(path="<项目根>\\comfyui\\workflows\\comfyhub_inpaint_anima.json", includeGraph=true)
-     → 拿 promptId（**图像编辑就用这一份**；krea2 那份见开头的结论）
+   comfy_load_workflow(path="<项目根>\comfyui\workflows\comfyhub_inpaint_anima.json", includeGraph=true)
+     → 拿 promptId（**纯提示词重绘 / 换背景保人物用这份**）
+   comfy_load_workflow(path="<项目根>\comfyui\workflows\comfyhub_paste_person_anima.json", includeGraph=true)
+     → **贴人物图用这份**（它有两个 LoadImageMask：12 合成用剪影、26 重绘区用 ring）
+     （krea2 那两份见开头的结论：不适合做编辑）
 
    comfy_submit(promptId=…, overrides={
      "10.image":  "<底图 filename>",
      "20.image":  "<底图 filename 或 人物图 filename>",
-     "12.image":  "<遮罩 filename>",
+     "12.image":  "<遮罩 filename>",        // 贴人物图时是**剪影**（comfy_make_mask mode=subject）
+     "26.image":  "<ring filename>",        // 只有 paste 那份图有：只圈人物外面一圈
      "11.width": W, "11.height": H,      // 与底图**必须一致**
      "21.width": W, "21.height": H,
      "15.text":  "<只写遮罩区里应该出现什么>",
@@ -78,26 +82,34 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
    - 只认返回的 `mediaIds` —— 没拿到产物就别进入阶段二。
 2. **阶段二（局部重绘）**：
    - `comfy_use_media(mediaId=<阶段一产物>)` → 人物图的 `filename`；
-   - 遮罩框在**人物该出现的位置**（拿不准先问用户，或先用大一点的框 + 低 denoise）；
-   - 提交时 `20.image` = 人物图、`17.denoise` = **0.4~0.6**（高了人物会变样，低了接缝明显）。
-   - ⚠ **阶段二会把人物图那块"像素矩形"整块贴进去**（`ImageCompositeMasked` 只认遮罩形状，
-     不做抠图）——所以阶段一那张图的**背景也会一起进来**。2026-09-26 实测（白底人物 +
-     夜景底图，同一组参数只改一个变量）：
+   - **贴人物图就用剪影遮罩**：`comfy_make_mask(mode="subject", baseFilename=<底图>, subjectFilename=<人物图>, ring=14, feather=…)`
+     —— 照人物形状抠（矩形遮罩会把人物图那块矩形连背景一起贴进去 = 一圈白框）；
+     `region` 在 subject 档下**只有裁切作用，别传**（默认 full 才是"只按人物形状"）；
+   - **想让人物一个像素都不被重画（画风不变）就用 `ring`**：它产出"只圈人物外面 N 像素"的
+     第二张遮罩，配合 `comfyhub_paste_person_anima.json`（**它有两个 LoadImageMask**）：
+     `12.image` ← 剪影（合成用）、`26.image` ← ring（重绘区）。
+     实测（2026-09-26）：单遮罩 denoise 0.5 时**人物的裙子被模型换掉了**；
+     换成 ring=14 之后**同脸同发色同红裙原样保留**，只有接缝被融掉。
+   - **摆放**：`scale`（缩放倍数）+ `x`/`y`（剪影中心放到归一化坐标 0~1）。
+     工具会把**人物像素与遮罩一起搬**，并回一个 `placedSubjectFilename` ——
+     **必须拿它覆盖 `20.image`**（还用原图就是"人在这儿、遮罩在那儿"的错位）。
+   - `denoise`：纯合成（一个像素都不改）= **0**；只融接缝 = 0.3~0.5；整块重画 = 1.0。
+     **判据**：要"保住人物的样子/画风"就别超过 0.5，想稳就用 ring。
+   - ⚠ **用矩形遮罩（`mode` 默认的 rect）会把人物图那块"像素矩形"整块贴进去**
+     （`ImageCompositeMasked` 只认遮罩形状，**不做抠图**）——阶段一那张图的背景会一起进来。
+     2026-09-26 实测（白底人物 + 夜景底图，同一组参数只改一个变量）：
 
-     | 阶段一背景 | denoise | cfg | 结果 |
+     | 遮罩 | denoise | cfg | 结果 |
      | --- | --- | --- | --- |
-     | 白底 | 0.5 | 1.0（工作流原值） | 人物进去了，但**白底变成一圈亮框** |
-     | 白底 | 0.5 | **4.0** | 亮框**照旧**（→ 白框不是 cfg 的锅，别去调它） |
-     | 白底 | **0.85** | 1.0 | 亮框没了，但**人变成了另一个人**（身份/服装守不住） |
+     | 矩形 | 0.5 | 1.0（工作流原值） | 人物进去了，但**白底变成一圈亮框** |
+     | 矩形 | 0.5 | **4.0** | 亮框**照旧**（→ 白框不是 cfg 的锅，别去调它） |
+     | 矩形 | **0.85** | 1.0 | 亮框没了，但**人变成了另一个人**（身份/服装守不住） |
+     | **剪影** | 0.5 | 1.0 | **白框没了**，但人物被重画（裙子被换掉） |
+     | **剪影 + ring 14** | 0.5 | 1.0 | **人物原样保留、只融接缝**（推荐） |
 
-     结论：**白底人物图 + 两阶段这条路，靠 denoise/cfg 是修不出干净边缘的**。
-     三条真出路，按推荐顺序：
-     ① **阶段一的背景就用最终那套背景**（拿底图当 i2i 起点、或直接在同一场景里生成人物）——
-        贴进来的背景不违和，denoise 0.4~0.6 就能用；
-     ② 要"白底抠人"就得有**分割 / 抠图模型**（rembg 之类）：先用 `comfy_env_report`
-        查本机有没有，没有就**如实说做不到**，别吹；
-     ③ 接受"高 denoise 重画"（0.8+）——但那时人物的样子由提示词决定，
-        **阶段一基本白做**，不如直接走单阶段 inpaint。
+     结论：**白框靠 `mode="subject"` 修；"人物被重画/画风变了"靠 `ring` 修**；
+     两者都不是 denoise/cfg 能调的。要是本机有分割 / 抠图模型（`rembg` 之类，
+     先用 `comfy_env_report` 查）也能抠得更干净，没有就用 `mode="subject"`（纯色背景够用）。
 3. **保住画风的四条**（用户的原话是"保持画风"）：
    - 阶段一与阶段二**用同一个底模**（**都 Anima** —— 图像编辑这一档 krea2 不可靠，
      见开头那张表）与同一套 CLIP / VAE；
