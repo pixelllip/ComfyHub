@@ -71,6 +71,11 @@ app.*.map.json
 
 # Kotlin 后端构建产物
 /server/build/
+# Kotlin 后端已退役（P4 收尾）：源码在 legacy\server，但构建产物与它的 storage 一样**不进版本库**
+/legacy/server/build/
+/legacy/server/.gradle/
+/legacy/server/.kotlin/
+/legacy/server/storage/
 /server/.gradle/
 /server/storage/
 
