@@ -523,6 +523,7 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     // 结果烘进人物图的像素 + 烧一层投影（影子落在遮罩里，于是跟着一起贴上去 —— 不改工作流）。
     let mut light_info: Option<([f64; 2], bool, usize)> = None;
     let mut out_light: Option<([f64; 2], bool, usize)> = None;
+    let mut despilled = false;
     let light_arg = str_arg(args, "light").unwrap_or_else(|| "none".to_string()).to_lowercase();
     if mode == "subject" && light_arg != "none" && !light_arg.is_empty() {
         let direction = match light_arg.as_str() {
@@ -602,6 +603,36 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         light_info = Some((dir, estimated, offset));
         out_light = Some((dir, estimated, offset));
     }
+    // **去溢色**（despill）：choke 只扔掉了最外 2 像素，羽化那几像素仍是"人+背景"的混合色，
+    // 半透明贴上去就是外轮廓上残留的背景色。这里在边界带里把背景主色通道压回去。
+    // ⚠ 写回**同一个文件名**（人物图那个），所以工作流里 `20.image` 的覆盖一个字都不用改。
+    if mode == "subject" {
+        if let Some((subject_file, background, _)) = subject_info.clone() {
+            let target_name = placed_subject
+                .as_ref()
+                .map(|(name, _)| name.clone())
+                .unwrap_or(subject_file);
+            let target_path = input_dir.join(&target_name);
+            if let Ok(opened) = image::open(&target_path) {
+                let mut canvas = opened.to_rgb8();
+                if canvas.width() as usize != w as usize || canvas.height() as usize != h as usize {
+                    canvas = image::imageops::resize(
+                        &canvas,
+                        w as u32,
+                        h as u32,
+                        image::imageops::FilterType::Triangle,
+                    );
+                }
+                if despill_edges(&mut canvas, &pixels, w as usize, h as usize, background, 6) {
+                    canvas.save(&target_path).map_err(|e| {
+                        ToolFailure::new("COMFY_INPUT_FAILED", format!("写回去溢色后的人物图失败：{e}"))
+                    })?;
+                    despilled = true;
+                }
+            }
+        }
+    }
+
     if invert {
         for value in pixels.iter_mut() {
             *value = 255 - *value;
@@ -671,6 +702,9 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         out["subjectRatio"] = json!((ratio * 1000.0).round() / 1000.0);
         if mode == "subject" {
             out["shrink"] = json!(int_arg(args, "shrink").unwrap_or(DEFAULT_SUBJECT_SHRINK));
+        }
+        if despilled {
+            out["despilled"] = json!(true);
         }
         if let Some((dir, estimated, offset)) = out_light {
             out["lightDir"] = json!(format!("[{:.2},{:.2}]", dir[0], dir[1]));
@@ -1282,6 +1316,72 @@ pub fn erode_mask(mask: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
         }
     }
     out
+}
+
+/// **去掉边缘的溢色**（despill / de-fringe）——用户 2026-09-26 的收尾要求。
+///
+/// 光靠 choke 不够：羽化会让最外几像素**半透明**，而那几个像素本身是"人物 + 背景"的混合色
+/// （绿幕上偏绿、白底上偏白），半透明地贴上去就是绕着人的一圈背景色。
+/// 这里在**剪影边界往内 `radius` 像素**的那条带上把背景**主色通道**压回另外两个通道的水平：
+/// 绿幕（G 最大）→ `g = min(g, (r+b)/2)`；品红（R/B 最大）→ `r = min(r, g)`、`b = min(b, g)`。
+/// 这是绿幕合成的标准做法，**只动边缘那条带**，人物内部一个像素都不碰。
+///
+/// 返回是否真的改过（没改就别去覆盖文件）。
+pub fn despill_edges(
+    person: &mut image::RgbImage,
+    mask: &[u8],
+    w: usize,
+    h: usize,
+    background: [u8; 3],
+    radius: usize,
+) -> bool {
+    let saturation = background.iter().max().copied().unwrap_or(0) as i32
+        - background.iter().min().copied().unwrap_or(0) as i32;
+    // 背景不彩（白 / 浅灰）就没什么"溢色通道"可压 —— 那时靠 choke + 羽化小一点
+    if saturation < CHROMA_MIN_SATURATION || radius == 0 {
+        return false;
+    }
+    // 背景的主导通道 = 溢色方向
+    let dominant = (0..3).max_by_key(|c| background[*c]).unwrap_or(1);
+    let others: Vec<usize> = (0..3).filter(|c| *c != dominant).collect();
+    let r = radius as i64;
+    let mut changed = false;
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            let index = y as usize * w + x as usize;
+            if mask[index] <= 127 {
+                continue;
+            }
+            // 只在**边界带**上动手：邻域里只要有背景像素就算带内
+            let mut on_edge = false;
+            'scan: for dy in -r..=r {
+                let ny = y + dy;
+                if ny < 0 || ny >= h as i64 {
+                    continue;
+                }
+                for dx in -r..=r {
+                    let nx = x + dx;
+                    if nx < 0 || nx >= w as i64 {
+                        continue;
+                    }
+                    if mask[ny as usize * w + nx as usize] <= 127 {
+                        on_edge = true;
+                        break 'scan;
+                    }
+                }
+            }
+            if !on_edge {
+                continue;
+            }
+            let pixel = person.get_pixel_mut(x as u32, y as u32);
+            let limit = ((pixel[others[0]] as f64 + pixel[others[1]] as f64) / 2.0 * 1.06) as u8;
+            if pixel[dominant] > limit {
+                pixel[dominant] = limit;
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 /// **按背景给新图层打光 + 烧影子**（用户 2026-09-26 的最后一个要求）。
@@ -1978,6 +2078,40 @@ mod tests {
         assert_eq!(parse_color("white"), Some([255, 255, 255]));
         assert_eq!(parse_color("浅蓝"), None, "认不出来就回落成「从边框估」，不猜");
     }
+    /// **去溢色**：绿幕边上那圈偏绿的像素要被压回中性，人物内部的像素**不许动**。
+    #[test]
+    fn 去溢色只压边缘的绿并且不动内部() {
+        let (w, h) = (40usize, 40usize);
+        // 人：中间 20x20 的红块，但最外一圈被绿幕"污染"成偏绿
+        let mut person = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([0, 0, 0]));
+        let mut mask = vec![0u8; w * h];
+        for y in 10..30 {
+            for x in 10..30 {
+                let edge = x == 10 || x == 29 || y == 10 || y == 29;
+                // 边缘：红 + 绿（典型溢色）；内部：纯红
+                person.put_pixel(x as u32, y as u32, if edge { image::Rgb([200, 190, 60]) } else { image::Rgb([200, 40, 60]) });
+                mask[y * w + x] = 255;
+            }
+        }
+        let changed = despill_edges(&mut person, &mask, w, h, [0, 177, 64], 2);
+        assert!(changed, "绿幕背景应当触发去溢色");
+        let edge = person.get_pixel(10, 20);
+        assert!(edge[1] < 150, "边缘的绿要被压下来，实测 {edge:?}");
+        let inner = person.get_pixel(20, 20);
+        assert_eq!((inner[0], inner[1], inner[2]), (200, 40, 60), "人物内部一个像素都不许动");
+        // 白底（低饱和）没有"溢色通道"可压 → 一个像素都不动
+        let mut white_bg = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([0, 0, 0]));
+        for y in 10..30 {
+            for x in 10..30 {
+                let edge = x == 10 || x == 29 || y == 10 || y == 29;
+                white_bg.put_pixel(x as u32, y as u32, if edge { image::Rgb([200, 190, 60]) } else { image::Rgb([200, 40, 60]) });
+            }
+        }
+        assert!(!despill_edges(&mut white_bg, &mask, w, h, [252, 252, 250], 2), "白底不该触发去溢色");
+        let untouched = white_bg.get_pixel(10, 20);
+        assert_eq!((untouched[0], untouched[1], untouched[2]), (200, 190, 60), "白底那一档不许乱压");
+    }
+
     /// **按背景打光 + 烧影子**：背景亮的一侧 = 光来的方向；影子落在**反方向**。
     #[test]
     fn 按背景估光向并烧出反向影子() {
