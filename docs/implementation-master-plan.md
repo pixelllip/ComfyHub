@@ -558,7 +558,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   `db/schema.sqlite.sql`（**编译期 `include_str!` 嵌进二进制**，与 Kotlin 从 jar 里读同一性质）
 >   + 写 `user_version`；`user_version == 0` 的老库 → 收敛式跑一遍 DDL；已最新 → **绝不重跑**；
 >   库比后端新 → **只警告不拦**（拦了就没法回退版本）。
-> - **验收**：`cargo test` **423 例全绿**（279 lib + 121 api_test + 4 attachments + 3 import_folder
+> - **验收**：`cargo test` **422 例全绿**（279 lib + 121 api_test + 4 attachments + 3 import_folder
 >   + 7 provider_probe + 2 shape_lint + 6 submit_test；新增 4 例：全新库 / 已最新不动数据 /
 >   无版本号老库收敛 / 更新的库只警告）；**全新目录实测**：`.db` 不存在 → 自己建库建表
 >   （schemaVersion=1）→ 写端口文件 → `health.database=ok`；**发布包里的 exe 单独跑同样成立**。
