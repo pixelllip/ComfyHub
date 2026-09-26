@@ -1914,8 +1914,8 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | 官方 comfy-mcp 39 个 | ✅ **第 45 步已做** |
 
 **C. 切流动作本身（代码之外）**1. `server.ps1`：`Resolve-Backend` 认 Rust 二进制（`<根>\server\comfyhub-server-rs.exe` 与
-   `server-rs\target\release\comfyhub-server-rs.exe` 两种布局）+ **端口文件 `.run\api.json` 的写入**
-   （Rust 版本目前**不写**它，而 App 与脚本靠它发现端口 —— 切流前必须补，否则 App 会对着旧端口等）；
+   `server-rs\target\release\comfyhub-server-rs.exe` 两种布局）—— ✅ **端口文件那一半已经好了**
+   （P4 第 54 步，见上面 C-0），剩下的是脚本侧的路径解析与启动参数；
 2. `comfyhub.ps1 doctor`：报"当前是哪种后端 / 二进制构建新鲜度"；
 3. `pack-release.ps1` + `packaging\manifest.json`：`server` 组件换成 Rust 二进制（**不再需要 `jre/`**，
    发布包从 36MB 再降）；`runtimeRequirements` 删掉 Java 那一条；

@@ -232,27 +232,74 @@ async fn main() {
         });
     }
 
-    let app = routes::router(state)
+    let app = routes::router(state.clone())
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
-    let addr: SocketAddr = format!("{}:{}", args.host, args.port)
-        .parse()
-        .unwrap_or_else(|_| panic!("地址不合法：{}:{}", args.host, args.port));
-    println!("监听 http://{addr}（灰度期只提供已搬过来的只读端点）");
-
-    let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("绑定 {addr} 失败：{e}");
-            std::process::exit(5);
+    let requested_port = args.port;
+    // 候选端口被占 / 落在 Windows 保留段（Hyper-V/WSL 预留，netstat 都查不出来）时
+    // **不报错退出**，改成让操作系统挑一个（Kotlin `ApiPortFile` 的那条纪律）。
+    let parse_addr = |port: u16| -> SocketAddr {
+        format!("{}:{}", args.host, port)
+            .parse()
+            .unwrap_or_else(|_| panic!("地址不合法：{}:{}", args.host, port))
+    };
+    let mut fell_back = false;
+    let (addr, listener) = match tokio::net::TcpListener::bind(parse_addr(requested_port)).await {
+        Ok(listener) => {
+            // ⚠ **实际端口从 listener 读回来**，不能用 `requested_port`：
+            // 用户给 `--port 0`（"让系统挑一个"）时，那个 0 不是端口 ——
+            // 写进端口文件的是 0，App 就会去连 `http://127.0.0.1:0`（实测踩到）。
+            let addr = listener.local_addr().expect("本地地址");
+            (addr, listener)
+        }
+        Err(error) => {
+            eprintln!("绑定 {}:{} 失败（{error}），回落到系统分配的端口", args.host, requested_port);
+            fell_back = true;
+            match tokio::net::TcpListener::bind(parse_addr(0)).await {
+                Ok(listener) => {
+                    let addr = listener.local_addr().expect("本地地址");
+                    (addr, listener)
+                }
+                Err(error) => {
+                    eprintln!("回落到随机端口也失败：{error}");
+                    std::process::exit(5);
+                }
+            }
         }
     };
+    let actual_port = addr.port();
+    let url = comfyhub_server_rs::api_port_file::url_for(&args.host, actual_port);
+    println!("监听 {url}（pid={}）", std::process::id());
+
+    // **端口只有一个真源**：后端绑好之后写进 `<项目根>\.run\api.json`，
+    // 脚本（`scripts\api-port.ps1`）、App（`settings_store.dart`）与 ComfyUI 捕获扩展都只读它。
+    // ⚠ 这是"把 `server.ps1` 指向 Rust"的硬前提：不写它，App 会对着旧端口等 90 秒。
+    // `COMFYHUB_NO_PORT_FILE=1` 只给自己的验收脚本用（跑真库副本时别去覆盖真后端那份记录）。
+    let port_state = if std::env::var("COMFYHUB_NO_PORT_FILE").map(|v| v.trim() == "1").unwrap_or(false) {
+        eprintln!("[api-port] COMFYHUB_NO_PORT_FILE=1：跳过写端口文件（自测用）");
+        None
+    } else {
+        let project_root = state.project_root();
+        let state_for_file = comfyhub_server_rs::api_port_file::ApiPortState {
+            port: actual_port,
+            pid: std::process::id(),
+            host: args.host.clone(),
+            url: url.clone(),
+            started_at: comfyhub_server_rs::iso_time::from_system_time(std::time::SystemTime::now()),
+            requested_port,
+            fell_back,
+        };
+        let written = comfyhub_server_rs::api_port_file::write(&project_root, &state_for_file);
+        written.map(|_| (project_root, state_for_file))
+    };
+
     // ⚠ **必须带 connect info**：配对闸门就是靠"来源地址是不是回环"决定放不放行的
     // （`docs/pairing-design.md` §11.4）。漏了它，每一个请求都会走"拿不到来源 = 非回环"
     // 那条保守分支 —— 闸门一开，本机的桌面 App 也会被自己关在门外。
+    let shutdown_state = port_state.clone();
     if let Err(e) = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(async {
+        .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
             println!("收到停止信号，正在退出");
         })
@@ -260,5 +307,9 @@ async fn main() {
     {
         eprintln!("服务异常退出：{e}");
         std::process::exit(6);
+    }
+    // 优雅退出时清掉端口记录，但**只清自己那一份**（重启时新进程刚写的那份不能被旧进程删掉）
+    if let Some((project_root, state_for_file)) = shutdown_state {
+        comfyhub_server_rs::api_port_file::delete_if_owned(&project_root, state_for_file.pid);
     }
 }

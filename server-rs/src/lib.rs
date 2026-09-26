@@ -14,6 +14,7 @@
 
 pub mod ai;
 pub mod ai_settings;
+pub mod api_port_file;
 pub mod attachments;
 pub mod auth;
 pub mod builtin;
