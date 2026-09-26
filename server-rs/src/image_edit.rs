@@ -69,7 +69,15 @@ pub const SUBJECT_TOLERANCE_DEFAULT: f64 = 0.12;
 pub const CHROMA_MIN_SATURATION: i32 = 40;
 
 /// `mode="subject"` 默认往里收几像素（choke）—— 扔掉主体与背景交界那圈溢色。
-pub const DEFAULT_SUBJECT_SHRINK: i64 = 2;
+pub const DEFAULT_SUBJECT_SHRINK: i64 = 0;
+
+/// 按颜色收边的默认参数（`band` 像素 / 容差）。
+///
+/// 0.35 比抠图那档（0.12）宽得多是有意的：只看**边界 3 像素**那条带，
+/// 那条带里的像素本来就是"人 + 背景"的混合色，容差放宽才收得掉；
+/// 而发丝（头发色，离背景色远）怎么放宽都还在。
+pub const DEFAULT_EDGE_BAND: i64 = 3;
+pub const DEFAULT_EDGE_TOLERANCE: f64 = 0.35;
 
 // ---------------------------------------------------------------------------
 //  ComfyUI 的 input 目录
@@ -441,12 +449,42 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
             ));
         }
         let use_region = region_text != "full";
+        // 收边要按**人物图自己的颜色**判（发丝 vs 混合像素），所以先把它读成画布尺寸的一张图
+        let image_for_edges = {
+            let opened = image::open(&subject_path)
+                .map_err(|e| ToolFailure::new("COMFY_INPUT_FAILED", format!("读不出人物图：{e}")))?
+                .to_rgb8();
+            if opened.width() as usize == w as usize && opened.height() as usize == h as usize {
+                opened
+            } else {
+                image::imageops::resize(&opened, w as u32, h as u32, image::imageops::FilterType::Triangle)
+            }
+        };
         let (mut mask, background, ratio) =
             subject_mask(&subject_path, w as usize, h as usize, tolerance, &region, use_region, explicit_background)?;
         subject_info = Some((subject, background, ratio));
         // **收一刀**（choke）：把主体与背景交界那圈抗锯齿/溢色（绿边、白边）扔掉 ——
         // 不收的话它们会被当成主体贴进去，再被 ring 一晕就是绕着人的一圈泛光。
         // 默认 2 像素（几乎无感）；`shrink=0` 可关掉。
+        // ① **按颜色收边**（默认开）：扔掉边界那几个"人+背景"的混合像素 ——
+        //    比几何腐蚀强的地方是**不碰细发丝**（发丝是头发色，离背景色远）。
+        // ② 几何 `shrink` 默认 **0**（原来是 2，会把比 5 像素细的发丝整条吃掉）。
+        let edge_band = int_arg(args, "edgeBand").unwrap_or(DEFAULT_EDGE_BAND).clamp(0, 32) as usize;
+        let edge_tolerance = args
+            .get("edgeTolerance")
+            .and_then(Value::as_f64)
+            .unwrap_or(DEFAULT_EDGE_TOLERANCE);
+        if edge_band > 0 {
+            drop_blended_edge(
+                &mut mask,
+                &image_for_edges,
+                w as usize,
+                h as usize,
+                background,
+                edge_band,
+                edge_tolerance,
+            );
+        }
         let shrink = int_arg(args, "shrink").unwrap_or(DEFAULT_SUBJECT_SHRINK).clamp(0, 32) as usize;
         if shrink > 0 {
             subject_before_shrink = Some(mask.clone());
@@ -1059,8 +1097,54 @@ fn fill_enclosed(mask: &mut [u8], w: usize, h: usize) {
     }
 }
 
+/// 方形膨胀（结构元 `radius`）。
+fn dilate_box(mask: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
+    if radius == 0 {
+        return mask.to_vec();
+    }
+    let r = radius as i64;
+    let mut anywhere = vec![false; w * h];
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            if mask[y as usize * w + x as usize] <= 127 {
+                continue;
+            }
+            for dy in -r..=r {
+                let ny = y + dy;
+                if ny < 0 || ny >= h as i64 {
+                    continue;
+                }
+                for dx in -r..=r {
+                    let nx = x + dx;
+                    if nx < 0 || nx >= w as i64 {
+                        continue;
+                    }
+                    anywhere[ny as usize * w + nx as usize] = true;
+                }
+            }
+        }
+    }
+    anywhere.into_iter().map(|v| if v { 255 } else { 0 }).collect()
+}
+
 /// 只保留最大的一块 4 邻接连通区（其余清零）。
+///
+/// ⚠ **不能直接对原掩码取最大连通区**（2026-09-26 用户指出"细的头发也被你去掉了"）：
+/// 发梢与主体之间往往只隔着几个半透明（抗锯齿）像素，于是发丝是**独立的连通区**，
+/// 直接取最大就把它们整片当噪点删了。正确做法是先**膨胀 3 像素**把这种"细脖子"连上，
+/// 取最大连通区之后**再与原掩码取交集** —— 发丝保住，真正的噪点（孤立的远处碎块）照旧删掉。
 fn keep_largest_blob(mask: &mut [u8], w: usize, h: usize) {
+    let bridged = dilate_box(mask, w, h, 3);
+    let mut keep = bridged;
+    keep_largest_blob_raw(&mut keep, w, h);
+    for index in 0..w * h {
+        if mask[index] > 127 && keep[index] <= 127 {
+            mask[index] = 0;
+        }
+    }
+}
+
+fn keep_largest_blob_raw(mask: &mut [u8], w: usize, h: usize) {
     let mut seen = vec![false; w * h];
     let mut best: Vec<usize> = Vec::new();
     let mut stack: Vec<usize> = Vec::new();
@@ -1277,6 +1361,67 @@ pub fn parse_color(raw: &str) -> Option<[u8; 3]> {
         ]),
         _ => None,
     }
+}
+
+/// **按颜色扔掉边缘的"混合像素"**（替代几何腐蚀 —— 用户 2026-09-26：
+/// "细的头发也被你去掉了"）。
+///
+/// 与 `erode_mask` 的区别：腐蚀是**几何**的，比 `2*radius` 细的结构整条消失（发丝正好中招）；
+/// 这里是**按颜色**判 —— 边缘那几个像素是"人物 + 背景"的混合色，颜色离背景色**近**，扔掉；
+/// 发丝像素是头发色（离背景色远），**天然保住**。这才是绿幕抠图该有的"收边"。
+///
+/// 只在**边界往内 `band` 像素**这条带上动手；返回是否改过。
+pub fn drop_blended_edge(
+    mask: &mut [u8],
+    image: &image::RgbImage,
+    w: usize,
+    h: usize,
+    background: [u8; 3],
+    band: usize,
+    tolerance: f64,
+) -> bool {
+    let cutoff = (tolerance.clamp(0.01, 1.0) * 255.0).round() as i32;
+    let r = band as i64;
+    let mut changed = false;
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            let index = y as usize * w + x as usize;
+            if mask[index] <= 127 {
+                continue;
+            }
+            // 只在边界带里判
+            let mut on_edge = false;
+            'scan: for dy in -r..=r {
+                let ny = y + dy;
+                if ny < 0 || ny >= h as i64 {
+                    continue;
+                }
+                for dx in -r..=r {
+                    let nx = x + dx;
+                    if nx < 0 || nx >= w as i64 {
+                        continue;
+                    }
+                    if mask[ny as usize * w + nx as usize] <= 127 {
+                        on_edge = true;
+                        break 'scan;
+                    }
+                }
+            }
+            if !on_edge {
+                continue;
+            }
+            let pixel = image.get_pixel(x as u32, y as u32);
+            let distance = (0..3)
+                .map(|c| (pixel[c] as i32 - background[c] as i32).abs())
+                .max()
+                .unwrap_or(0);
+            if distance <= cutoff {
+                mask[index] = 0;
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 /// 把遮罩**往里收** `radius` 个像素（腐蚀 / choke）。
@@ -2078,6 +2223,64 @@ mod tests {
         assert_eq!(parse_color("white"), Some([255, 255, 255]));
         assert_eq!(parse_color("浅蓝"), None, "认不出来就回落成「从边框估」，不猜");
     }
+    /// **细发丝不许被删**（用户 2026-09-26："细的头发也被你去掉了"）：
+    /// 与主体只隔着几个半透明像素的细条，必须靠"膨胀后取最大连通区再取交集"保住。
+    #[test]
+    fn 与主体细连接的细发丝不会被当噪点删掉() {
+        let (w, h) = (80usize, 80usize);
+        let mut mask = vec![0u8; w * h];
+        // 主体：40x40 的方块
+        for y in 20..60 {
+            for x in 20..60 {
+                mask[y * w + x] = 255;
+            }
+        }
+        // 细化丝：从主体右侧伸出一条 1 像素宽的线，中间**断开 2 像素**（模拟被半透明像素隔开）
+        for x in 60..72 {
+            mask[40 * w + x] = 255;
+        }
+        for x in 74..80 {
+            mask[40 * w + x] = 255;
+        }
+        keep_largest_blob(&mut mask, w, h);
+        assert_eq!(mask[40 * w + 65], 255, "连着主体的发丝要保住");
+        assert_eq!(mask[40 * w + 76], 255, "断口只有 2 像素、膨胀 3 能连上 → 也要保住");
+        // 真正孤立的远处碎块（离主体 > 3 像素）照旧删掉
+        for y in 2..5 {
+            for x in 2..5 {
+                mask[y * w + x] = 255;
+            }
+        }
+        keep_largest_blob(&mut mask, w, h);
+        assert_eq!(mask[3 * w + 3], 0, "孤立的噪点还是要删");
+    }
+
+    /// **按颜色收边**：边界那几个"人+背景"的混合像素扔掉，发丝（头发色）保住。
+    #[test]
+    fn 按颜色收边不碰发丝只扔混合像素() {
+        let (w, h) = (40usize, 40usize);
+        let mut image = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([0, 0, 0]));
+        let mut mask = vec![0u8; w * h];
+        for y in 10..30 {
+            for x in 10..30 {
+                let edge = x == 10 || x == 29 || y == 10 || y == 29;
+                // 边界像素 = 人 + 绿幕的混合色（离背景色近）；内部与"发丝"是深色（离背景远）
+                image.put_pixel(x as u32, y as u32, if edge { image::Rgb([60, 150, 70]) } else { image::Rgb([180, 40, 50]) });
+                mask[y * w + x] = 255;
+            }
+        }
+        // 一条 1 像素宽的深色发丝（颜色离绿幕很远）横穿左侧边界
+        for x in 6..12 {
+            image.put_pixel(x as u32, 20, image::Rgb([120, 90, 110]));
+            mask[20 * w + x] = 255;
+        }
+        let changed = drop_blended_edge(&mut mask, &image, w, h, [0, 177, 64], 3, 0.35);
+        assert!(changed);
+        assert_eq!(mask[10 * w + 20], 0, "边界上的混合像素要扔掉");
+        assert_eq!(mask[20 * w + 20], 255, "人物内部不动");
+        assert_eq!(mask[20 * w + 7], 255, "深色发丝（离背景色远）必须保住");
+    }
+
     /// **去溢色**：绿幕边上那圈偏绿的像素要被压回中性，人物内部的像素**不许动**。
     #[test]
     fn 去溢色只压边缘的绿并且不动内部() {
