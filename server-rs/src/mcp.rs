@@ -1412,7 +1412,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn 服务端_isError_如实带回来() {
+    async fn 服务端_is_error_如实带回来() {
         let client = fake_server(|request| {
             let id = request.get("id")?.as_u64()?;
             (request.get("method")?.as_str()? == "tools/call").then(|| {

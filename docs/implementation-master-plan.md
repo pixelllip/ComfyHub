@@ -521,6 +521,43 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ✅ **Run 与 SSE 已落地**（第 26~30 步，见本节上半部分）—— 也就是说
 > **桌面执行器已经能真的聊**（不带工具、不带附件），**R5/R6 已在 Rust 侧重建**。
 >
+> ✅ **P4 第 46 步（2026-09-26）：角色卡五条端点**（`server-rs/src/character_cards.rs`）——
+> 界面上那个从「提示词」页右上角进的**角色卡页面**（2026-09-26 那一轮 `2800eda`）此前只对着 Kotlin
+> 能用，指向 Rust 就是"接口不存在"。这一步把它补上，**实现逐条对照 `CharacterCardRepo.kt` + `CharacterCardRoutes.kt`**：
+>
+> - 五条端点与状态码逐字同形：`GET`（`?q=` 关键字 / `?limit=`，默认 50、夹在 1..500）、
+>   `POST` → **201** + 卡、`GET /{id}`、`PUT /{id}`（**全量替换** —— 界面弹窗里所有字段都在）、
+>   `DELETE /{id}` → `{"deleted": id}`；不存在一律 404。
+> - **三条纪律一条不改**：① **同名 = 同一张卡**（靠 `normalized` 唯一索引 + 合并保存，
+>   **不用** `INSERT OR REPLACE` —— R3 会写假 delete）；② **来源必须如实**（`source` /
+>   `tagsVerifiedAt` 是"我查过 danbooru"还是"我按印象写的"的唯一凭据，核对时间由真去查的那条路写）；
+>   ③ **写不进去就报错、不许静默截断**（名字为空 / 任一字段超长 → 400 + 人话）。
+> - `merge()`（AI 的"按名字合并保存"）与 `save()` 一并搬了：**空字段保留上一轮的值**、
+>   `tags` / `aliases` **追加去重** —— 模型一次只说一件事，全量替换会把它上一轮存的 tag 栈悄悄抹掉。
+> - `list` 的搜索命中十个列（名字 / normalized / 英文名 / 别名 / 角色 tag / 作品 tag / tag 栈 /
+>   LoRA 名 / LoRA 触发词 / 备注），与 Kotlin 那份 `LIKE` 清单逐列对齐。
+> - ⚠ **可空列照样"整键省略"**（Kotlin 的 `explicitNulls = false`）：`negatives` / `seriesTag` 之类
+>   为 NULL 时键不出现，空数组（`aliases` / `tags`）**照样给键** —— `tests/shape_lint.rs` 盯着这条。
+> - **验收**：`cargo test` **339 例全绿**（216 lib + 121 api_test + 2 shape_lint；新增 8 例：
+>   建卡形状 / 同名合并不抹上一轮 / 全量替换清字段 / 超长报错 / 参考图不存在给人话 /
+>   tag 清洗与拆分 / 搜索命中十列 / 删除与不存在）。用例**灌的是真 DDL**（`db/schema.sqlite.sql`），
+>   所以 `normalized` 唯一索引这类承重约束真的在测。
+> - **真库副本抽查**（8097~8099，只写副本）：空列表 → 建卡（回 11 个键、无 `null`）→ 详情
+>   → 按别名"真红"搜得到 → `PUT` 全量替换（`characterTag` 键随之消失）→ 四个错误分支
+>   逐条对着 curl 看：`404 {"error":"角色卡 999999 不存在"}`、
+>   `400 {"error":"参考图（产物 999999）不存在；…"}`、
+>   `400 {"error":"备注 超出上限（4001 > 4000 字符）；请拆成多条，不要指望被悄悄截断"}`、
+>   `400 {"error":"角色名不能为空"}` → `DELETE` 回 `{"deleted":3}`、列表回到 1 条（用户真库里那张）。
+> - ⚠ 记一条**两端已知差异**（与第 20 步 `media/{id}/prompt` 同类，**不是回归**）：
+>   ① 404 的 body 在 Kotlin 会被 StatusPages 改写成 `{"error":"接口不存在: <路径>"}`，
+>   Rust 给原话（Dart 只判状态码，行为无差异，Rust 那句更有信息量）；
+>   ② **请求体 JSON 不合法**时 axum 默认回**纯文本** 400（`Failed to parse the request body as JSON: …`），
+>   而 Kotlin 走 StatusPages 回 JSON 信封 —— 这是**所有** axum `Json` 端点共有的老行为（不是这一步引入的），
+>   界面自己发的永远是合法 JSON，所以只在手敲 curl 时看得见。
+> - 仍未搬（诚实清单）：**AI 侧那四件工具**（`search_prompts` / `search_character_cards` /
+>   `save_character_card` / `danbooru_lookup`）—— 仓储已就绪（`save()` 就是给工具用的那条路），
+>   工具描述与 schema 要按 R12 从 Kotlin 逐字搬，归下一批。
+>
 > ✅ **P4 第 45 步（2026-09-26）：MCP 桥（官方 comfy-mcp 的 39 个工具）** —— 第 45 步本来是
 > §9 起手顺序里的第 3 件（"AI 能不能真的生图"那一档），也是 §10.1 的 O1/O2 与 §10.5 的 O12 的落点。
 > 新模块 `server-rs/src/mcp.rs` 逐条对照 Kotlin 的三份实现 + `ComfyEnv.prepareLaunch`。

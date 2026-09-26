@@ -39,6 +39,7 @@
 //! | **内置模型目录**：`GET /api/ai/builtin/status`、`POST /api/ai/builtin/sync` | ✅（P4 第 38 步） |
 //! | **能力目录状态**：`GET /api/ai/capabilities/status`、`PUT …/probe-toggle` | ✅（P4 第 39 步） |
 //! | `GET /api/ai/conversations`、`/{id}`、`/{id}/messages`（**读侧**：历史会话与有序块） | ✅ |
+//! | **角色卡五条**：`/api/ai/character-cards{,/{id}}`（列表 / 新建 201 / 详情 / 全量编辑 / 删除） | ✅（P4 第 46 步：`character_cards.rs` 逐条对照 Kotlin `CharacterCardRepo`；`save()` 的同名合并也在里面，AI 工具下一批接） |
 //! | `POST/PATCH/DELETE /api/ai/conversations`、`POST …/messages`（**写侧**） | ✅ |
 //! | **Run 生命周期**：`POST …/runs`（202）/ `GET /runs/{id}` / `GET /runs/{id}/events`（**SSE**）/ `POST /runs/{id}/cancel` | ✅（事件流按 `?after=` 从库里拉，见 `run_lifecycle.rs`） |
 //! | **`GET /api/ai/run-kit{,/status}`**（手机 harness 的全部规则类输入；R12/R13 的第一次重建） | ✅ |
