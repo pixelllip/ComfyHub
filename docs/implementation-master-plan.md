@@ -521,6 +521,21 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ✅ **Run 与 SSE 已落地**（第 26~30 步，见本节上半部分）—— 也就是说
 > **桌面执行器已经能真的聊**（不带工具、不带附件），**R5/R6 已在 Rust 侧重建**。
 >
+> ✅ **P4 第 51 步（2026-09-26）：视频封面 `GET /api/media/{id}/poster`（A5）** ——
+> `server-rs/src/poster.rs`：只做"找到脚本、起子进程、看结果"，**不重写抽帧逻辑** ——
+> 抽帧走 `scripts\video-poster.ps1`（Windows 资源管理器那条缩略图管线 / Media Foundation，
+> **不依赖 ffmpeg**），重写一份就等于两套行为，而用户看到的是"画廊里的视频有封面、聊天里的没有"。
+> 四种结果一条都不能混（Kotlin 同）：产物不存在 → **404**；不是视频 → **204**；
+> 视频但抽不出帧（脚本失败 / 没有 pwsh / 没有脚本）→ **204**（前端退化成"播放器转圈"，**不是破图**）；
+> 有封面 → 200 + `image/png` + `X-Poster: 1`。抽帧在阻塞线程池上跑（要起子进程，别占事件循环），
+> 缓存在 `<storage>/thumbs/<id>.poster.png`（与图片缩略图 `*.jpg` 分开存，互不覆盖）。
+> - **验收**：`cargo test` **392 例全绿**（258 lib + 121 api_test + 4 attachments_test + 2 shape_lint + 6 submit_test；
+>   `poster` 3 例 + 两处旧断言从"501 未搬"改成真实语义）。
+> - **真机实测（真库副本 8103 + 用户库里那条真 mp4）**：第一次请求 `/api/media/49/poster` →
+>   **200 + `image/png` + 322386 字节 + `X-Poster: 1`**，缓存目录里出现 `49.poster.png`；
+>   读 PNG 头确认尺寸 **640×366**（正好是脚本 `-Size 640` 的最长边）；第二次请求走缓存（同样的 322386 字节）；
+>   图片产物 → **204**；不存在的产物 → **404 + `{"error":"产物 999999 不存在"}`**。
+>
 > ✅ **P4 第 50 步（2026-09-26）：AI 附件（**R9 在 Rust 侧的落点**）** —— 两块，两个提交。
 >
 > **（上）地基**：`server-rs/src/file_kind.rs`（`FileKindDetector` 的逐条移植：**签名优先**、
@@ -1826,7 +1841,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | A2 | `/api/ai/providers/{id}/test`、`/{id}/discover-models` | 设置页那两个按钮报"接口不存在" | 中 |
 | A3 | `/api/capture/import`（导入目录里的产物：含 PNG 内嵌工作流） | 设置页「导入目录」不可用 | 中（`import-workflows` ✅ 已搬、`ingest/comfyui` ✅ 已搬） |
 | A4 | ~~`/api/ingest/comfyui`~~ | ✅ **已搬（P4 第 49 步）** | — |
-| A5 | `/api/media/{id}/poster` | **视频产物没有预览帧**（`ffmpeg` 抽帧） | 小~中 |
+| A5 | `/api/media/{id}/poster` | ✅ **已搬（P4 第 51 步）**：起 `scripts\video-poster.ps1`（Windows 缩略图管线，**不依赖 ffmpeg**）；真机实测真 mp4 → 640×366 PNG + 缓存命中 | — |
 | A6 | `/api/ai/capabilities/{refresh,probe}` | 能力目录那两个按钮回 **501**（Kotlin 侧是实现的，要在线数据集 / 真上游） | 中（**会花钱**） |
 | A7 | `/api/ai/preflight` | 附件预检（选完文件那一刻的准入） | 随 A1 |
 | A8 | `/api/auth/pair/start` | 扫码配对（**有意 501**，本轮只做"手机发起 + 桌面显示 6 位码"） | 有意不做 |

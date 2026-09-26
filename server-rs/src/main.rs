@@ -60,7 +60,8 @@
 //! | **`comfy_*` 其余八件**（`find_workflow` / `submit` / `use_attachment` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow`）+ `find_model` | ⛔ **未搬**（要 ComfyUI 在场 / 要模型清单，见 `tools.rs` 的诚实清单） |
 //! | **`WorkflowConvert` 的两处欠账** | ⚠ **组节点（subgraph）不展开**、**「模拟用户行为」（`emulateFrontend`）没实现** —— 两者都**如实报 `unsupportedNodes`**（不猜）；工具描述是从 Kotlin 逐字搬的，所以结果里**主动补一句 warning** 说明这一步没做 |
 //! | 附件（R9）：`/api/ai/attachments*`、`/api/ai/preflight` 与内联预算 | ✅ **已搬（P4 第 50 步）**：五条端点（上传 multipart 字段 `files` / 详情 / 原件 ETag+Range / 缩略图 / 删除）+ **严格签名判定**（`file_kind.rs`）+ 三层准入（`strict_intake.rs`，第三层在 `POST /runs` 之前、**上游零请求**）+ **图片真的内联进请求体**（三家适配器各自的形状）。⚠ 仍缺：**视频预览帧**（`/thumb` 回 204）与视频/音频/文档的传输方式（三家都只有图片的 `inline_base64`） |
-//! | `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | ⛔ **未搬**（回 **501**，不假装成功；`import-workflows` 要整套 `WorkflowConvert` 转换栈，`ingest` 要 ComfyUI 推送那条路） |
+//! | `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | 🔶 **一半已搬（P4 第 49 步）**：`import-workflows` 与 `ingest/comfyui` ✅；**`/api/capture/import`（导入目录里已生成好的产物）仍 501** |
+//! | **`/api/media/{id}/poster`**（视频第一帧封面） | ✅（P4 第 51 步：`poster.rs` 起 `scripts\video-poster.ps1`（Windows 缩略图管线，**不依赖 ffmpeg**）；抽不出帧如实回 204） |
 //! | R6~R10 的安全防线 | ⛔ **部分重建**（R5 的保留窗口与 seq 纪律已在 `runs.rs`/`events.rs`，R6/R8 已在执行器与工具层，R9/R10 未动） |
 //!
 //! ## 手机现在可以只对着**这一个后端**干活了（2026-09-24，第 22 步之后）

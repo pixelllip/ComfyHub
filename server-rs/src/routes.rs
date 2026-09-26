@@ -368,8 +368,56 @@ async fn media_thumb(
     crate::media::media_thumb(state, id).await
 }
 
-async fn media_poster(Id(_id): Id) -> Result<Json<serde_json::Value>, ApiError> {
-    Err(crate::media::not_migrated("视频封面"))
+/// `GET /api/media/{id}/poster` —— 视频的第一帧封面（P4 第 51 步）。
+///
+/// 三种结果一条都不能混（Kotlin `MediaRoutes` 的 `/poster` 同）：
+/// * 产物不存在 → **404**；
+/// * 不是视频（图片本来就有缩略图 / 音频没有画面）→ **204**；
+/// * 视频但抽不出帧（脚本失败 / 没有 pwsh）→ **204**（前端退化成"播放器转圈"，**不是破图**）；
+/// * 有封面 → 200 + `image/png` + `X-Poster: 1`（命中或现生成都给这个头）。
+///
+/// 抽帧是**起子进程**（`scripts\video-poster.ps1` 走 Windows 缩略图管线），
+/// 所以放到阻塞线程池上，别占着事件循环。
+async fn media_poster(
+    State(state): State<AppState>,
+    Id(id): Id,
+) -> Result<axum::response::Response, ApiError> {
+    let media = crate::media::get(&state, id)?;
+    if media.kind != "VIDEO" {
+        return Ok(axum::response::Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(axum::body::Body::empty())
+            .unwrap());
+    }
+    let poster = crate::poster::poster_path(state.media_dir(), id);
+    if !poster.is_file() {
+        let source = crate::media::resolve_media(state.media_dir(), &media.stored_name)
+            .ok_or_else(|| ApiError::not_found("文件已丢失"))?;
+        let root = state.project_root();
+        let dest = poster.clone();
+        let ok = tokio::task::spawn_blocking(move || {
+            crate::poster::write_video_poster(&root, &source, &dest, crate::poster::POSTER_SIZE)
+        })
+        .await
+        .map_err(|e| ApiError::internal(format!("抽帧任务失败：{e}")))?;
+        if !ok {
+            // 抽不出来就明确告诉前端"没有封面"（204）：播放器转圈，而不是显示破图
+            return Ok(axum::response::Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .body(axum::body::Body::empty())
+                .unwrap());
+        }
+    }
+    let bytes = tokio::fs::read(&poster)
+        .await
+        .map_err(|e| ApiError::internal(format!("读取封面失败：{e}")))?;
+    Ok(axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, "image/png")
+        .header(axum::http::header::CONTENT_LENGTH, bytes.len().to_string())
+        .header("X-Poster", "1")
+        .body(axum::body::Body::from(bytes))
+        .unwrap())
 }
 
 /// `GET /api/media/{id}/prompt`：204 = 这条产物没关联提示词（Dart 的 `mediaPrompt` 把 204 当 null）。

@@ -48,6 +48,7 @@ pub mod nsfw_prompt;
 pub mod outbound;
 pub mod pending;
 pub mod policy;
+pub mod poster;
 pub mod protocol;
 pub mod questions;
 pub mod repo;

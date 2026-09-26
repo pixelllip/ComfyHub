@@ -737,13 +737,10 @@ async fn unmigrated_endpoints_answer_501_and_migrated_ones_work() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, serde_json::json!([]));
 
-    // 还没搬：视频封面要 ffmpeg 抽帧
-    let (status, body) = get_json(router_for(state()), "/api/media/100/poster").await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert!(
-        body["error"].as_str().unwrap().contains("还没搬到 Rust"),
-        "501 的 error 也是人话（不是 NOT_IMPLEMENTED 这种机器码）：{body}"
-    );
+    // 搬过来了：视频封面（P4 第 51 步）。夹具里的 100 是 IMAGE 产物 → **204**（图片不用封面）；
+    // 视频分支要起 pwsh 抽帧，归 `tests/poster_test.rs` 那一层（真脚本 + 假视频文件）
+    let (status, _) = get_json(router_for(state()), "/api/media/100/poster").await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "图片产物不该有封面");
 }
 // ===========================================================================
 //  本机工作流文件（P4 第 14 步）：GET /api/capture/workflows
@@ -1546,15 +1543,15 @@ async fn media_thumb_generates_a_cached_jpeg_and_falls_back_honestly() {
     let (status, _) = get_json(router_for(state.clone()), "/api/media/100/thumb").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    // 还没搬的仍然是 501（别让"缩略图能用了"顺手把 poster/upload 也变成假成功）
-    for uri in ["/api/media/100/poster"] {
-        let (status, body) = get_json(router_for(state.clone()), uri).await;
-        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "uri={uri}");
-        assert!(body["error"].as_str().unwrap().contains("还没搬到 Rust"), "uri={uri} body={body}");
-    }
     // 产物关联的完整提示词也搬过来了（204 = 没关联）
     let (status, _) = get_json(router_for(state.clone()), "/api/media/101/prompt").await;
     assert_eq!(status, StatusCode::NO_CONTENT, "视频产物没关联提示词 → 204");
+
+    // 视频封面（P4 第 51 步）：101 是视频、文件也在，但这个夹具的项目根里**没有**
+    // `scripts\video-poster.ps1` → 抽不出帧 → **204**（前端退化成"播放器转圈"，不是破图）。
+    // "文件丢了 → 404" 那条分支由 `tests/poster_test.rs` 覆盖。
+    let (status, _) = get_json(router_for(state.clone()), "/api/media/101/poster").await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "抽不出帧要回 204，不许假装有封面");
 
     // 上传已经搬过来了：空 multipart 是 400（不再是 501）
     let empty = multipart_body("----comfyhubtest", &[], &[]);
