@@ -308,10 +308,52 @@ async fn nsfw_flag_travels_into_the_library() {
 }
 
 #[tokio::test]
-async fn preflight_refuses_before_anything_is_sent() {
-    // 实例只认 krea2，而这次 overrides 换成了 anima-base —— 必须在**提交之前**拒
+async fn preflight_blocks_unknown_node_classes_before_anything_is_sent() {
+    // 实例不认识 Krea2CustomNode（第 12 号节点）—— 必须在**提交之前**拒，
+    // 而且**一个字节都不许发出去**（节点类这一档 `/object_info` 是权威的）
     let (base, submitted, gateway) = fake_comfy(object_info(), history_with_output()).await;
     let fixture = Fixture::new("preflight", &base);
+    write_png(&fixture.dir.join("output").join("unit.png"), [1, 2, 3]);
+    // 图里塞一个实例不认识的节点类
+    fixture
+        .state
+        .write(|conn| {
+            let raw: String = conn.query_row(
+                "SELECT raw FROM capture_runs WHERE run_key = 'unit-run-1'",
+                [],
+                |row| row.get(0),
+            )?;
+            let mut entry: Value = serde_json::from_str(&raw).unwrap();
+            let mut graph = entry["prompt"]["prompt"].clone();
+            graph["12"] = json!({ "class_type": "Krea2CustomNode", "inputs": {} });
+            entry["prompt"]["prompt"] = graph;
+            conn.execute(
+                "UPDATE capture_runs SET raw = ?1 WHERE run_key = 'unit-run-1'",
+                rusqlite::params![entry.to_string()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let arguments = json!({ "promptId": 101, "waitSeconds": 20 });
+    let failure = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+        .await
+        .expect_err("节点类不认识的图必须拒");
+    assert_eq!(failure.code, "MODEL_NOT_LOADABLE");
+    assert!(failure.message.contains("实例里没有这些节点类"), "{}", failure.message);
+    assert!(failure.message.contains("Krea2CustomNode"), "{}", failure.message);
+    assert!(submitted.lock().unwrap().is_empty(), "预检拦下时**一个字节都不许发出去**");
+
+    gateway.abort();
+    fixture.finish();
+}
+
+#[tokio::test]
+async fn preflight_warns_about_models_it_cannot_see_but_still_submits() {
+    // 模型文件不在实例候选里 → **只警告不拦**（盘扫还没搬，见 `preflight_refusal` 的说明）。
+    // 这一条直接钉住"误拦比白跑更糟"这个口径：提交照常发生，警告如实带回。
+    let (base, submitted, gateway) = fake_comfy(object_info(), history_with_output()).await;
+    let fixture = Fixture::new("preflight-warn", &base);
     write_png(&fixture.dir.join("output").join("unit.png"), [1, 2, 3]);
 
     let arguments = json!({
@@ -319,14 +361,14 @@ async fn preflight_refuses_before_anything_is_sent() {
         "overrides": { "4.ckpt_name": "anima-base-v1.0.safetensors" },
         "waitSeconds": 20
     });
-    let failure = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+    let outcome = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
         .await
-        .expect_err("加载不了就必须拒");
-    assert_eq!(failure.code, "MODEL_NOT_LOADABLE");
-    assert!(failure.message.contains("实例看不到这些模型文件"), "{}", failure.message);
-    assert!(failure.message.contains("anima-base-v1.0.safetensors"), "{}", failure.message);
-    assert!(failure.message.contains("重启 ComfyUI"), "{}", failure.message);
-    assert!(submitted.lock().unwrap().is_empty(), "预检拦下时**一个字节都不许发出去**");
+        .expect("这一档现在不拦");
+    assert_eq!(submitted.lock().unwrap().len(), 1, "该提交还是要提交");
+    let warnings = outcome.payload["preflightWarnings"].as_array().expect("要带回警告");
+    let joined = warnings.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(joined.contains("anima-base-v1.0.safetensors"), "{joined}");
+    assert!(joined.contains("没有拦"), "{joined}");
 
     gateway.abort();
     fixture.finish();

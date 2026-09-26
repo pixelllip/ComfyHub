@@ -348,10 +348,24 @@ fn primitive_text(value: &Value) -> Option<String> {
 //  提交前的实例侧预检（纯函数版 + 取清单的薄包装）
 // ---------------------------------------------------------------------------
 
-/// 从 `/object_info` 判断这份图能不能跑；`None` = 放行。
+/// 从 `/object_info` 判断这份图的**节点类**能不能跑；`None` = 放行。
 ///
 /// 抽成纯函数就是为了**能测**：`info` 是 `/object_info` 的响应，注入一份夹具即可，
 /// 不必真的起一个 ComfyUI。
+///
+/// ⚠ **这里只拦"节点类在不在实例里"这一档**（`/object_info` 对节点类是权威的：
+/// 它列了哪些类，实例就能建哪些节点）。**模型文件那一档只警告、不拦**（[`preflight_warnings`]），
+/// 理由是实打实测出来的：
+///
+/// * Kotlin 的模型预检（`ModelPreflight` + `WorkflowFit`）靠 `ComfyModels` 的**并集清单**
+///   （`/object_info` ∪ **盘扫**），而**盘扫那一半 Rust 还没搬**（归 `comfy_env_report`）；
+/// * 只按 `/object_info` 的候选判，会把"文件名对不上但盘上真有 / 用户马上要换掉"的图**误拦**——
+///   `scripts\e2e-submit-test.ps1` 第 4/5 幕就是活证：那份界面格式工作流写的
+///   `e2e_model.safetensors` 不在假实例的候选里，而这在真实场景里只是一次正常的提交
+///   （Kotlin 那条链同样不拦：它的清单来源与判据都比"单个输入框的候选"宽）。
+///
+/// **误拦比白跑一次更糟**（Kotlin 那边也是这个口径），所以这一档现在是**警告**：
+/// 提交照常走，但把"实例看不到这些模型文件"如实回给模型与用户。
 pub fn preflight_refusal(graph: &Value, info: &Value) -> Option<String> {
     let info = info.as_object()?;
     let Some(nodes) = graph.as_object() else { return None };
@@ -360,21 +374,55 @@ pub fn preflight_refusal(graph: &Value, info: &Value) -> Option<String> {
     }
 
     let mut unknown: Vec<String> = Vec::new();
-    let mut invisible: Vec<(String, String, String)> = Vec::new(); // (overrideKey, 输入名, 值)
-
     for (node_id, node) in nodes {
         let Some(class_type) = node.get("class_type").and_then(Value::as_str) else { continue };
-        let Some(spec) = info.get(class_type) else {
+        if !info.contains_key(class_type) {
             unknown.push(format!("{node_id}: {class_type}"));
-            continue;
-        };
+        }
+    }
+    if unknown.is_empty() {
+        return None;
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "**没有提交**：这份工作流要的 {} 处东西当前这个 ComfyUI 实例加载不了 —— \
+         硬提交只会白跑一次（ComfyUI 只会回一句节点不存在）。\n",
+        unknown.len()
+    ));
+    out.push_str(&format!("\n【实例里没有这些节点类】{} 个：\n", unknown.len()));
+    for item in &unknown {
+        out.push_str(&format!("  · {item}\n"));
+    }
+    out.push_str(
+        "  → 多半是这个实例没装/没启用那几个自定义节点包：让用户在 ComfyUI Manager 里装、\
+         或启停/换一个装了它们的实例。**不要**改用户的工作流。\n",
+    );
+    Some(out)
+}
+
+/// 模型文件那一档的**警告**（不拦，见 [`preflight_refusal`] 的说明）。
+///
+/// 判据与 Kotlin 的模型预检同一类：类名含 `Loader` 的节点、输入是字符串、
+/// 而 `/object_info` 给该输入列的候选里有它没有 —— 那就**很可能**是"盘上有、实例看不到"
+/// （重启实例/改用带共享模型根的实例就能解决），也可能是名字确实写错了。
+/// 两种情形给的动作都是"先确认、别硬提交"，但**不替用户做决定**。
+pub fn preflight_warnings(graph: &Value, info: &Value) -> Vec<String> {
+    let Some(info) = info.as_object() else { return Vec::new() };
+    let Some(nodes) = graph.as_object() else { return Vec::new() };
+    let mut invisible: Vec<String> = Vec::new();
+    for (node_id, node) in nodes {
+        let Some(class_type) = node.get("class_type").and_then(Value::as_str) else { continue };
+        let Some(spec) = info.get(class_type) else { continue };
         // 只查**加载器**节点：模型文件（checkpoint / LoRA / VAE / unet / clip）都在这一类上，
-        // 而别的节点（采样器/图片输入/文件名前缀）的候选列表是动态的，拿它判会误拦。
+        // 而别的节点（采样器/图片输入/文件名前缀）的候选列表是动态的，拿它判会误报。
         if !class_type.to_ascii_lowercase().contains("loader") {
             continue;
         }
-        let required = spec.get("input").and_then(|v| v.get("required")).and_then(Value::as_object);
-        let Some(required) = required else { continue };
+        let Some(required) = spec.get("input").and_then(|v| v.get("required")).and_then(Value::as_object)
+        else {
+            continue;
+        };
         let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
         for (name, value) in inputs {
             let Some(text) = value.as_str() else { continue };
@@ -385,49 +433,38 @@ pub fn preflight_refusal(graph: &Value, info: &Value) -> Option<String> {
                 .filter(|list| !list.is_empty() && list.iter().all(Value::is_string));
             let Some(allowed) = allowed else { continue };
             if !allowed.iter().any(|candidate| candidate.as_str() == Some(text)) {
-                invisible.push((format!("{node_id}.{name}"), name.clone(), text.to_string()));
+                invisible.push(format!("{node_id}.{name} 要 {text}"));
             }
         }
     }
-
-    if unknown.is_empty() && invisible.is_empty() {
-        return None;
+    if invisible.is_empty() {
+        return Vec::new();
     }
-
-    let mut out = String::new();
-    let total = unknown.len() + invisible.len();
-    out.push_str(&format!(
-        "**没有提交**：这份工作流要的 {total} 处东西当前这个 ComfyUI 实例加载不了 —— \
-         硬提交只会白跑一次（ComfyUI 只会回一句文件不存在或节点不存在）。\n"
-    ));
-    if !unknown.is_empty() {
-        out.push_str(&format!("\n【实例里没有这些节点类】{} 个：\n", unknown.len()));
-        for item in &unknown {
-            out.push_str(&format!("  · {item}\n"));
-        }
-        out.push_str(
-            "  → 多半是这个实例没装/没启用那几个自定义节点包：让用户在 ComfyUI Manager 里装、\
-             或启停/换一个装了它们的实例。**不要**改用户的工作流。\n",
-        );
+    let mut out = vec![format!(
+        "⚠ 提交前的预检提示（**没有拦**）：这个实例的 /object_info 里看不到 {} 个模型文件 —— \
+         硬提交可能会失败。",
+        invisible.len()
+    )];
+    for item in &invisible {
+        out.push(format!("  · {item}"));
     }
-    if !invisible.is_empty() {
-        out.push_str(&format!("\n【实例看不到这些模型文件】{} 个：\n", invisible.len()));
-        for (key, _, value) in &invisible {
-            out.push_str(&format!("  · {key} 要 {value}\n"));
-        }
-        out.push_str(
-            "  → 让用户**重启 ComfyUI**（ComfyHub 起实例时会自动挂上 ComfyUI Desktop 的模型根与 \
-             input/output），或用 `comfy_get_status` 确认实例是不是这个；\
-             **文件很可能就在硬盘上，不要下载**，也不要改 overrides。\n",
-        );
-    }
-    Some(out)
+    out.push(
+        "  → 大概率是「盘上有、实例看不到」（让用户**重启 ComfyUI**——ComfyHub 起实例时会挂上 \
+         ComfyUI Desktop 的模型根；**别去下载**）；也可能是名字确实写错了。\
+         现在这一档只提示不拦（完整的模型清单要等 `comfy_env_report`/盘扫搬过来）。"
+            .to_string(),
+    );
+    out
 }
 
-/// 取一次 `/object_info` 再判；**拿不到清单就不拦**（Kotlin 同）。
-async fn preflight_from_instance(base: &str, graph: &Value) -> Option<String> {
-    let info = crate::comfy_client::get_json(&format!("{base}/object_info")).await.ok()?;
-    preflight_refusal(graph, &info)
+/// 取一次 `/object_info`：返回（**阻断性**的拒因，**提示性**的警告）。
+///
+/// **拿不到清单就一个都不拦**（Kotlin 同：误拦比白跑更糟）。
+async fn preflight_from_instance(base: &str, graph: &Value) -> (Option<String>, Vec<String>) {
+    let Ok(info) = crate::comfy_client::get_json(&format!("{base}/object_info")).await else {
+        return (None, Vec::new());
+    };
+    (preflight_refusal(graph, &info), preflight_warnings(graph, &info))
 }
 
 // ---------------------------------------------------------------------------
@@ -645,9 +682,17 @@ pub async fn tool_submit(
         return Err(ToolFailure::new("COMFY_DISABLED", "没有配置 ComfyUI 地址"));
     }
 
-    // 预检放在这里（overrides / connections **都应用完之后**）：检查的就是真正要提交的那张图
-    if let Some(refusal) = preflight_from_instance(&base, &patched).await {
+    // 预检放在这里（overrides / connections **都应用完之后**）：检查的就是真正要提交的那张图。
+    // 节点类那一档**拦**（`/object_info` 对它是权威的）；模型文件那一档只**警告**（见函数注释：
+    // 盘扫还没搬，只按候选判会误拦 —— e2e 第 4/5 幕实测）。
+    let (refusal, warnings) = preflight_from_instance(&base, &patched).await;
+    if let Some(refusal) = refusal {
         return Err(ToolFailure::new("MODEL_NOT_LOADABLE", refusal));
+    }
+    if !warnings.is_empty() {
+        for line in warnings.iter() {
+            eprintln!("[comfy_submit] {}", line.trim());
+        }
     }
 
     let label = title
@@ -794,6 +839,10 @@ pub async fn tool_submit(
     out.insert("mediaIds".into(), json!(submission.media_ids));
     out.insert("mediaCount".into(), json!(submission.media_ids.len()));
     out.insert("nsfw".into(), json!(nsfw));
+    // 预检的**提示**（不拦）：让模型/用户知道"实例可能看不到这几个模型文件"
+    if !warnings.is_empty() {
+        out.insert("preflightWarnings".into(), json!(warnings));
+    }
     out.insert(
         "nsfwMediaIds".into(),
         if nsfw { json!(submission.media_ids) } else { json!(Vec::<i64>::new()) },
@@ -945,10 +994,10 @@ mod tests {
     }
 
     #[test]
-    fn 预检_放行与两种拒绝() {
+    fn 预检_节点类拦_模型文件只警告() {
         assert!(preflight_refusal(&graph(), &object_info()).is_none(), "都对就必须放行");
 
-        // ① 实例不认识的节点类
+        // ① 实例不认识的节点类 → **拦**（`/object_info` 对节点类是权威的）
         let mut missing_node = graph();
         missing_node["12"] = json!({ "class_type": "Krea2CustomNode", "inputs": {} });
         let refusal = preflight_refusal(&missing_node, &object_info()).unwrap();
@@ -956,21 +1005,31 @@ mod tests {
         assert!(refusal.contains("12: Krea2CustomNode"), "{refusal}");
         assert!(refusal.contains("不要") && refusal.contains("改用户的工作流"), "{refusal}");
 
-        // ② 模型文件不在实例的候选里（盘上有、实例看不到那一类）
+        // ② 模型文件不在实例的候选里 → **只警告不拦**（见 `preflight_refusal` 的说明：
+        //    盘扫还没搬，只按候选判会误拦；e2e-submit 第 4/5 幕就是活证）
         let mut wrong_model = graph();
         wrong_model["4"]["inputs"]["ckpt_name"] = json!("anima-base-v1.0.safetensors");
-        let refusal = preflight_refusal(&wrong_model, &object_info()).unwrap();
-        assert!(refusal.contains("实例看不到这些模型文件"), "{refusal}");
-        assert!(refusal.contains("4.ckpt_name 要 anima-base-v1.0.safetensors"), "{refusal}");
-        assert!(refusal.contains("重启 ComfyUI"), "{refusal}");
-        assert!(refusal.contains("不要下载"), "{refusal}");
+        assert!(
+            preflight_refusal(&wrong_model, &object_info()).is_none(),
+            "模型文件那一档现在是提示，不许拦"
+        );
+        let warnings = preflight_warnings(&wrong_model, &object_info());
+        assert_eq!(warnings.len(), 3, "首行 + 一条明细 + 一条动作：{warnings:?}");
+        let joined = warnings.join("\n");
+        assert!(joined.contains("没有拦"), "{joined}");
+        assert!(joined.contains("4.ckpt_name 要 anima-base-v1.0.safetensors"), "{joined}");
+        assert!(joined.contains("重启 ComfyUI"), "{joined}");
+        assert!(joined.contains("别去下载"), "{joined}");
+        // 都对的时候没有警告
+        assert!(preflight_warnings(&graph(), &object_info()).is_empty());
 
-        // ③ 非加载器节点的候选列表**不参与**判定（图片输入那种动态列表会误拦）
+        // ③ 非加载器节点的候选列表**不参与**判定（图片输入那种动态列表会误报）
         let mut with_image = graph();
         with_image["9"] = json!({ "class_type": "LoadImage", "inputs": { "image": "not-in-list.png" } });
         let mut info = object_info();
         info["LoadImage"] = json!({ "input": { "required": { "image": [["a.png"], {}] } } });
         assert!(preflight_refusal(&with_image, &info).is_none(), "LoadImage 不是 Loader，不判它");
+        assert!(preflight_warnings(&with_image, &info).is_empty(), "也不该警告");
     }
 
     #[test]
