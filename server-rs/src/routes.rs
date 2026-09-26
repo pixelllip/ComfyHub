@@ -1839,26 +1839,33 @@ async fn list_tag_categories(State(state): State<AppState>) -> Result<Json<Vec<S
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize, Default)]
-struct PromptQuery {
-    q: Option<String>,
-    kind: Option<String>,
-    favorite: Option<bool>,
-    sort: Option<String>,
-    page: Option<i64>,
-    size: Option<i64>,
+/// `/api/prompts` 的查询参数（**不只是端点在用**：`search_prompts` 工具走同一个实现，
+/// 见 [`query_prompts`] —— 两份 SQL 的后果是"界面搜得到、AI 说没有"，而那不会有用例变红）。
+pub(crate) struct PromptQuery {
+    pub(crate) q: Option<String>,
+    pub(crate) kind: Option<String>,
+    pub(crate) favorite: Option<bool>,
+    pub(crate) sort: Option<String>,
+    pub(crate) page: Option<i64>,
+    pub(crate) size: Option<i64>,
 }
 
 async fn list_prompts(
     State(state): State<AppState>,
     Query(q): Query<PromptQuery>,
 ) -> Result<Json<Paged<PromptDto>>, ApiError> {
+    Ok(Json(query_prompts(&state, &q)?))
+}
+
+/// 提示词列表查询（**唯一实现**）。
+pub(crate) fn query_prompts(state: &AppState, q: &PromptQuery) -> Result<Paged<PromptDto>, ApiError> {
     let page = q.page.unwrap_or(1).max(1);
     let size = q.size.unwrap_or(20).clamp(1, 200);
     let offset = (page - 1) * size;
     let keyword = q.q.as_ref().map(|s| format!("%{}%", s.trim()));
     let favorite = q.favorite.map(|f| if f { 1_i64 } else { 0_i64 });
 
-    let paged = state.with(|conn| {
+    state.with(|conn| {
         let where_sql = "WHERE (?1 IS NULL OR title LIKE ?1 OR positive_prompt LIKE ?1 OR negative_prompt LIKE ?1)
                            AND (?2 IS NULL OR kind = ?2)
                            AND (?3 IS NULL OR favorite = ?3)";
@@ -1884,14 +1891,11 @@ async fn list_prompts(
             item.media_count = media_count_of(conn, item.id)?;
         }
         Ok(Paged::new(items, total, page, size))
-    })?;
-    Ok(Json(paged))
+    })
 }
 
-async fn get_prompt(
-    State(state): State<AppState>,
-    Id(id): Id,
-) -> Result<Json<PromptDto>, ApiError> {
+/// 单条提示词（含标签与产物数）—— `GET /api/prompts/{id}` 与 `search_prompts` 共用。
+pub(crate) fn get_prompt_dto(state: &AppState, id: i64) -> Result<PromptDto, ApiError> {
     let prompt = state.with(|conn| {
         let mut stmt = conn.prepare("SELECT * FROM prompts WHERE id = ?1")?;
         let mut rows = stmt.query_map(rusqlite::params![id], |row| prompt_from_row(row))?;
@@ -1905,9 +1909,14 @@ async fn get_prompt(
             None => Ok(None),
         }
     })?;
-    prompt
-        .map(Json)
-        .ok_or_else(|| ApiError::not_found(format!("提示词 {id} 不存在")))
+    prompt.ok_or_else(|| ApiError::not_found(format!("提示词 {id} 不存在")))
+}
+
+async fn get_prompt(
+    State(state): State<AppState>,
+    Id(id): Id,
+) -> Result<Json<PromptDto>, ApiError> {
+    Ok(Json(get_prompt_dto(&state, id)?))
 }
 
 /// 一个提示词的标签（按名字排序，与 Kotlin 侧一致）。

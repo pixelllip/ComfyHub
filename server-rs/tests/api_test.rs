@@ -5569,7 +5569,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（20 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（22 个），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
@@ -5590,6 +5590,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_sync_history",
             "comfy_use_attachment",
             "comfy_use_media",
+            // danbooru（唯一会把数据送出本机的工具；出厂档 allow，但受联网预算约束）
+            "danbooru_lookup",
             "delete_skill",
             "list_dir",
             "list_skills",
@@ -5597,9 +5599,10 @@ async fn tool_policy_and_nsfw_endpoints() {
             "read_file",
             "register_skill",
             "remember",
-            // 第 46 步：资料库两件（写角色之前先查本机，而不是凭印象编 tag）
+            // 第 46 步：资料库（写角色之前先查本机，而不是凭印象编 tag）
             "save_character_card",
             "search_character_cards",
+            "search_prompts",
             "write_file",
         ]
     );
@@ -7878,8 +7881,83 @@ async fn 图像编辑三件在真库夹具上串起来能用() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// Skills 两个写侧工具：注册 → 立刻出现在列表里 → 删除；再删报 `SKILL_NOT_FOUND`。
+// ===========================================================================
+//  资料库：`search_prompts`（O7 —— "写角色之前先查我自己的库"）
+//
+//  判据不是"能搜到"，而是**搜得到界面搜得到的那一份**：工具与 `/api/prompts`
+//  走同一个实现（`routes::query_prompts`），且返回里要带够"照抄"需要的东西
+//  （正负提示词 / tag / LoRA / 参数 / 产物数）。少了任何一样，模型就只能凭印象编。
+// ===========================================================================
+
 #[tokio::test]
+async fn search_prompts_搜得到库里的那一条并带够照抄需要的东西() {
+    let state = state();
+
+    // 关键字命中（与 `/api/prompts?q=` 同一条路：标题 / 正负提示词都能命中）
+    let out = call_tool(&state, "search_prompts", serde_json::json!({ "query": "cyberpunk" }))
+        .await
+        .unwrap();
+    assert!(out.content.contains("提示词库：命中 1 条"), "{}", out.content);
+    assert!(out.content.contains("── [10] 赛博朋克少女"), "{}", out.content);
+    assert!(out.content.contains("1girl, cyberpunk"), "要带上正向正文，模型才照抄得了：{}", out.content);
+    assert!(out.content.contains("lowres"), "{}", out.content);
+    assert!(out.content.contains("tag: 赛博朋克"), "{}", out.content);
+    assert!(out.content.contains("anima@0.8"), "{}", out.content);
+    assert!(out.content.contains("cfg=3.5"), "{}", out.content);
+    assert!(out.content.contains("产物 1 张"), "{}", out.content);
+    assert_eq!(out.payload["count"], 1);
+    assert_eq!(out.payload["items"][0]["id"], 10);
+    assert_eq!(out.payload["items"][0]["mediaCount"], 1);
+    assert_eq!(out.payload["items"][0]["tags"], serde_json::json!(["赛博朋克"]));
+    assert_eq!(out.payload["items"][0]["positivePrompt"], "1girl, cyberpunk");
+
+    // 按 id 取（与 query 二选一）：拿到的是**同一条**
+    let by_id = call_tool(&state, "search_prompts", serde_json::json!({ "id": 11 })).await.unwrap();
+    assert!(by_id.content.contains("（id=11）"), "{}", by_id.content);
+    assert!(by_id.content.contains("国风山水"), "{}", by_id.content);
+    assert_eq!(by_id.payload["items"][0]["positivePrompt"], "chinese ink painting");
+
+    // includePrompt=false：正文与结构化负载里都**不许**再出现提示词正文
+    let lean = call_tool(
+        &state,
+        "search_prompts",
+        serde_json::json!({ "id": 11, "includePrompt": "false" }),
+    )
+    .await
+    .unwrap();
+    assert!(!lean.content.contains("chinese ink painting"), "{}", lean.content);
+    assert!(
+        !lean.payload["items"][0].as_object().unwrap().contains_key("positivePrompt"),
+        "只想看列表时不该把正文也塞回来：{}",
+        lean.payload
+    );
+
+    std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+#[tokio::test]
+async fn search_prompts_搜不到时要说下一步而不是编() {
+    let state = state();
+
+    let missing = call_tool(&state, "search_prompts", serde_json::json!({ "query": "不存在的关键字" }))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code, "NOT_FOUND");
+    assert!(missing.message.contains("不存在的关键字"), "{}", missing.message);
+    assert!(missing.message.contains("不要"), "要明确禁止库里没有就自己编 tag：{}", missing.message);
+    assert!(missing.message.contains("comfy_list_workflows"), "要给另一条出路：{}", missing.message);
+
+    // 按 id 取不到 → 同一个码（`NOT_FOUND`），而不是 500
+    let bad_id = call_tool(&state, "search_prompts", serde_json::json!({ "id": 999999 }))
+        .await
+        .unwrap_err();
+    assert_eq!(bad_id.code, "NOT_FOUND");
+    assert!(bad_id.message.contains("999999"), "{}", bad_id.message);
+
+    std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+/// Skills 两个写侧工具：注册 → 立刻出现在列表里 → 删除；再删报 `SKILL_NOT_FOUND`。#[tokio::test]
 async fn skill_tools_register_then_delete() {
     let state = state();
     let storage = state.media_dir().parent().unwrap().to_path_buf();
@@ -7961,6 +8039,8 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "comfy_use_media",
         "comfy_use_attachment",
         "comfy_make_mask",
+        "search_prompts",
+        "danbooru_lookup",
     ] {
         assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
     }
@@ -7976,8 +8056,6 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "comfy_audit_workflow",
         "comfy_prune_workflow",
         "comfy_fit_workflow",
-        "search_prompts",
-        "danbooru_lookup",
         "web_search",
         "web_fetch",
         "civitai_search",

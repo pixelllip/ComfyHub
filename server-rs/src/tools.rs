@@ -92,6 +92,10 @@ impl ToolOutcome {
 
 /// 工具结果回给模型前的截断上限（Kotlin `ToolRegistry.MAX_RESULT_CHARS`）。
 pub const MAX_RESULT_CHARS: usize = 32_000;
+/// 资料库类工具一次最多回几条（Kotlin `MAX_LIBRARY_RESULTS`）。
+pub const MAX_LIBRARY_RESULTS: i64 = 20;
+/// 资料库类工具里"提示词正文"每一段的截断上限（Kotlin `MAX_PROMPT_CHARS`）。
+pub const MAX_PROMPT_CHARS: usize = 1500;
 /// 工具卡摘要长度（Kotlin `MAX_PREVIEW_CHARS`）。
 pub const MAX_PREVIEW_CHARS: usize = 400;
 /// 单个 Run 的工具调用**硬天花板**（Kotlin `ABSOLUTE_CALL_CAP`）：
@@ -118,6 +122,28 @@ pub fn preview_of(text: &str) -> String {
     }
     let head: String = chars[..MAX_PREVIEW_CHARS].iter().collect();
     format!("{head}…")
+}
+
+/// 逐字符截断（Kotlin `clip`）—— 资料库类工具给模型看的那份会很长，
+/// **按字符切**（按字节切会把中文切成半个字）。
+pub fn clip_text(text: &str, max: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max {
+        return text.to_string();
+    }
+    let head: String = chars[..max].iter().collect();
+    format!("{head}…（已截断，共 {} 字）", chars.len())
+}
+
+/// 资料库类工具的 `ApiError` → 工具失败（码与 Kotlin 那边一致：`NOT_FOUND` / `TOOL_ERROR`）。
+fn library_failure(error: crate::routes::ApiError) -> ToolFailure {
+    use axum::http::StatusCode;
+    let code = match error.status {
+        StatusCode::BAD_REQUEST => "INVALID_ARGUMENT",
+        StatusCode::NOT_FOUND => "NOT_FOUND",
+        _ => "TOOL_ERROR",
+    };
+    ToolFailure::new(code, error.human().to_string())
 }
 
 /// 额度用尽时回给模型的话（Kotlin `ToolRegistry.budgetExceededNote`）。
@@ -149,13 +175,38 @@ pub struct ToolSession {
     pub calls: i64,
     /// **当前这一窗**（一次回复）的调用数 —— 用户回答提问时归零（Kotlin `resetBudget`）
     pub calls_in_window: i64,
+    /// 这一窗里**真跑成功**的联网类工具的调用数（Kotlin `ToolContext.webInWindow`）。
+    ///
+    /// 与 [`crate::policy::MAX_WEB_QUERIES_PER_RUN`] 一起构成"不许拿外部服务当轮询器"这条线：
+    /// 每搜一次都是一次真实的外部请求 + 一份要烧 token 的正文，"再搜一下确认"很容易刹不住车。
+    pub web_queries_in_window: i64,
     /// 这一窗已经开过几张提问卡（阈值制：每窗最多 [`crate::questions::MAX_ASK_CARDS_PER_WINDOW`]）
     pub ask_cards_in_window: i64,
     /// 已经用掉几次"答题重置额度"（上限 [`crate::questions::MAX_BUDGET_RESETS`]）
     pub budget_resets: i64,
+    /// **这一轮真的查过 danbooru 的 tag**（Kotlin `ToolContext.danbooruVerified`）。
+    ///
+    /// 为什么要有它：`save_character_card` 的 `tagsVerifiedAt` 是"这些 tag 跟 danbooru
+    /// 核对过"的**唯一凭据** —— 它只能由"真去查过"这件事写，**绝不能由模型自称**
+    /// （否则那张卡会带着一个假的核对时间，而假时间比没有时间更坏）。
+    /// 键是 [`crate::danbooru::normalize_tag`] 归一之后的写法（`shinku_(nte)`）。
+    danbooru_verified: HashSet<String>,
 }
 
 impl ToolSession {
+    /// 记下"这一轮真查过这个 tag"（归一之后进集合；空串直接忽略）。
+    pub fn mark_danbooru_verified(&mut self, tag: &str) {
+        let key = crate::danbooru::normalize_tag(tag);
+        if !key.is_empty() {
+            self.danbooru_verified.insert(key);
+        }
+    }
+
+    /// 这一轮查过这个 tag 吗（`save_character_card` 的判据）。
+    pub fn danbooru_verified(&self, tag: &str) -> bool {
+        self.danbooru_verified.contains(&crate::danbooru::normalize_tag(tag))
+    }
+
     /// 还能不能再动一次工具（窗内额度与绝对天花板都没到）。
     pub fn has_calls_left(&self, max_calls: i64) -> bool {
         self.calls_in_window < max_calls.max(1) && self.calls < ABSOLUTE_CALL_CAP
@@ -166,9 +217,21 @@ impl ToolSession {
     /// ⚠ **只在成功之后调**：越界被拒 / 参数不对 / 用户点拒绝 / 工具自己报错
     /// 这些"连世界都没碰到"的调用不占额度，否则用户看到的是
     /// "什么都没干就说预算不足"。
-    pub fn spend_call(&mut self) {
+    ///
+    /// `name` 用来分开记"联网那几件"的次数（Kotlin `spendCall` 里按 `tool.category` 分档）——
+    /// 联网额度是**独立的一条线**（[`crate::policy::MAX_WEB_QUERIES_PER_RUN`]），
+    /// 不与总调用额度混在一个计数里。
+    pub fn spend_call(&mut self, name: &str) {
         self.calls += 1;
         self.calls_in_window += 1;
+        if crate::ai_settings::category_of(name) == "web" {
+            self.web_queries_in_window += 1;
+        }
+    }
+
+    /// 这一窗的联网额度还剩不剩（预检用；**扣费在真跑成功之后**）。
+    pub fn has_web_queries_left(&self) -> bool {
+        self.web_queries_in_window < crate::policy::MAX_WEB_QUERIES_PER_RUN
     }
 
     /// 用户**真的答了**提问 → 把这一窗的额度归零，让他接着把这件事做完
@@ -182,6 +245,8 @@ impl ToolSession {
         self.budget_resets += 1;
         self.calls_in_window = 0;
         self.ask_cards_in_window = 0;
+        // 联网额度也归零：与 Kotlin 的 `webInWindow` 同一档（用户答完接着做同一件事）
+        self.web_queries_in_window = 0;
         true
     }
 }
@@ -299,7 +364,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
 /// `comfy_find_workflow` 那一批要本机模型清单（`comfy_env_report` / `check_inputs` /
 /// `fit_workflow` / `audit_workflow` / `prune_workflow`），各自另起批次。
-pub const IMPLEMENTED: [&str; 20] = [
+pub const IMPLEMENTED: [&str; 22] = [
     "ask_user_question",
     "comfy_get_run",
     "comfy_get_status",
@@ -310,6 +375,7 @@ pub const IMPLEMENTED: [&str; 20] = [
     "comfy_sync_history",
     "comfy_use_attachment",
     "comfy_use_media",
+    "danbooru_lookup",
     "delete_skill",
     "list_dir",
     "list_skills",
@@ -319,6 +385,7 @@ pub const IMPLEMENTED: [&str; 20] = [
     "remember",
     "save_character_card",
     "search_character_cards",
+    "search_prompts",
     "write_file",
 ];
 
@@ -446,7 +513,27 @@ pub async fn execute(
         // O7/O8 的落点：写角色之前**先查本机**（库里那张卡 / 那条提示词的 tag 栈），
         // 而不是凭印象编 —— 现场教训是"把 shinku 当成 iroi 写了两版废图"。
         "search_character_cards" => crate::character_cards::tool_search(state, arguments),
-        "save_character_card" => crate::character_cards::tool_save(state, arguments),
+        "save_character_card" => crate::character_cards::tool_save(state, arguments, session),
+        // `search_prompts`：同一个落点的另一半 —— 库里可能已经有那个角色的完整 tag 栈
+        "search_prompts" => search_prompts(state, arguments),
+        // ---- danbooru（联网，唯一会把数据送出本机的工具）----------------------
+        // 查完必须把"这一轮真的查过哪个 tag"记进 session：`save_character_card`
+        // 靠它决定写不写 `tagsVerifiedAt`（**核对时间是事实，不是模型的自称**）。
+        "danbooru_lookup" => {
+            let outcome = crate::danbooru::tool_lookup(arguments).await;
+            if let Ok(outcome) = outcome.as_ref() {
+                session.mark_danbooru_verified(arguments.get("query").and_then(Value::as_str).unwrap_or(""));
+                if let Some(tag) = outcome
+                    .payload
+                    .get("character")
+                    .and_then(|c| c.get("tag"))
+                    .and_then(Value::as_str)
+                {
+                    session.mark_danbooru_verified(tag);
+                }
+            }
+            outcome
+        }
         // ---- 官方 comfy-mcp 的 39 个工具（P4 第 45 步）------------------------
         //
         // 名字是**运行时**拉来的（`tools/list`），所以这里用"注册表里有没有"来兜底，
@@ -593,7 +680,7 @@ fn remember(
 // ---------------------------------------------------------------------------
 
 /// 整数参数（Kotlin `JsonObject.int`：数字与**数字字符串**都认，认不出 → `None`）。
-fn int_arg(arguments: &Value, key: &str) -> Option<i64> {
+pub(crate) fn int_arg(arguments: &Value, key: &str) -> Option<i64> {
     let raw = arguments.get(key)?;
     if let Some(n) = raw.as_i64() {
         return Some(n);
@@ -915,7 +1002,148 @@ fn comfy_get_run(state: &AppState, arguments: &Value) -> Result<ToolOutcome, Too
     Ok(ToolOutcome::new(payload.to_string(), payload))
 }
 
-/// `comfy_list_workflows`：列本机 ComfyUI 里已保存的工作流文件（只读）。
+/// `search_prompts`：搜**本机的提示词库**，或按 id 取一条完整的（Kotlin `search_prompts`）。
+///
+/// 为什么非得有它（O7 的现场）：AI 以前**没有"搜我自己的库"这条路**，只能凭印象编 tag ——
+/// 于是把参考图里的 `shinku` 当成 `iroi` 写了两版废图，而库里 id 261/310 **就有**
+/// `shinku_(nte), neverness_to_everness, pink streaks, purple horns…` 的完整 tag 栈。
+///
+/// ⚠ 查询走 [`crate::routes::query_prompts`]（**与 `/api/prompts` 同一个实现**）：
+/// 各写一份 SQL 的后果是"界面上搜得到、AI 说没有"，而那种不一致不会有任何用例变红。
+fn search_prompts(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
+    let id = int_arg(arguments, "id");
+    let limit = int_arg(arguments, "limit").unwrap_or(5).clamp(1, MAX_LIBRARY_RESULTS);
+    // Kotlin：`includePrompt` 缺席或不是 "false" 都算 true（只显式写 false 才省掉正文）
+    let include_prompt = arguments.get("includePrompt").and_then(Value::as_str) != Some("false");
+    let query = arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .map(str::to_string);
+
+    let items = if let Some(id) = id {
+        // 按 id 取那一条（与 `/api/prompts/{id}` 同一个取法：标签 + 产物数一起补齐）
+        vec![crate::routes::get_prompt_dto(state, id).map_err(|_| {
+            ToolFailure::new(
+                "NOT_FOUND",
+                format!("库里没有 id={id} 的提示词；用 query 搜一下角色名或 tag 片段"),
+            )
+        })?]
+    } else {
+        crate::routes::query_prompts(
+            state,
+            &crate::routes::PromptQuery {
+                q: query.clone(),
+                kind: None,
+                favorite: None,
+                sort: Some("newest".to_string()),
+                page: Some(1),
+                size: Some(limit),
+            },
+        )
+        .map_err(library_failure)?
+        .items
+    };
+
+    if items.is_empty() {
+        return Err(ToolFailure::new(
+            "NOT_FOUND",
+            format!(
+                "库里没有匹配的提示词（关键字：{}）。换个词再搜（角色名 / 作品名 / 一个 tag），\
+                 或者换 `comfy_list_workflows` 找本机的工作流文件 —— **不要**因为库里没有就自己编 tag。",
+                query.as_deref().unwrap_or("（空）")
+            ),
+        ));
+    }
+
+    let mut text = String::new();
+    text.push_str(&format!(
+        "提示词库：命中 {} 条{}\n",
+        items.len(),
+        id.map(|i| format!("（id={i}）")).unwrap_or_default()
+    ));
+    for prompt in items.iter() {
+        text.push('\n');
+        text.push_str(&format!(
+            "── [{}] {}\n",
+            prompt.id,
+            if prompt.title.is_empty() { "(无标题)" } else { prompt.title.as_str() }
+        ));
+        text.push_str(&format!(
+            "   {} · 来源 {} · 产物 {} 张 · {}\n",
+            prompt.kind,
+            prompt.source.as_deref().unwrap_or("?"),
+            prompt.media_count,
+            prompt.created_at.as_deref().unwrap_or("?")
+        ));
+        let loras = if prompt.loras.is_empty() {
+            "（无）".to_string()
+        } else {
+            prompt
+                .loras
+                .iter()
+                .map(|l| format!("{}@{}", l.name, l.weight))
+                .collect::<Vec<_>>()
+                .join("、")
+        };
+        text.push_str(&format!("   LoRA: {loras}\n"));
+        let size = match (prompt.width, prompt.height) {
+            (Some(w), Some(h)) => format!("{w}x{h} "),
+            _ => String::new(),
+        };
+        text.push_str(&format!(
+            "   参数: {size}steps={} cfg={} sampler={} seed={} 底模={}\n",
+            prompt.steps.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
+            prompt.cfg_scale.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
+            prompt.sampler.as_deref().unwrap_or("?"),
+            prompt.seed.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
+            prompt.checkpoint.as_deref().unwrap_or("?")
+        ));
+        if !prompt.tags.is_empty() {
+            let names: Vec<&str> = prompt.tags.iter().map(|t| t.name.as_str()).collect();
+            text.push_str(&format!("   tag: {}\n", names.join("、")));
+        }
+        if include_prompt {
+            text.push_str(&format!("   正面: {}\n", clip_text(&prompt.positive_prompt, MAX_PROMPT_CHARS)));
+            if let Some(negative) = prompt.negative_prompt.as_deref().filter(|n| !n.trim().is_empty()) {
+                text.push_str(&format!("   负面: {}\n", clip_text(negative, MAX_PROMPT_CHARS / 2)));
+            }
+        }
+    }
+    text.push('\n');
+    text.push_str(
+        "用法：照抄角色那段 tag 栈（或整条正向）；要按这条工作流出图就用 comfy_submit(promptId=<上面的 id>)。",
+    );
+
+    let payload = json!({
+        "count": items.len(),
+        "items": items
+            .iter()
+            .map(|prompt| {
+                let mut out = serde_json::Map::new();
+                out.insert("id".into(), json!(prompt.id));
+                out.insert("title".into(), json!(prompt.title));
+                out.insert("kind".into(), json!(prompt.kind));
+                out.insert("source".into(), json!(prompt.source.clone().unwrap_or_default()));
+                out.insert("mediaCount".into(), json!(prompt.media_count));
+                out.insert("checkpoint".into(), json!(prompt.checkpoint.clone().unwrap_or_default()));
+                out.insert("loras".into(), json!(prompt.loras.iter().map(|l| l.name.clone()).collect::<Vec<_>>()));
+                out.insert("tags".into(), json!(prompt.tags.iter().map(|t| t.name.clone()).collect::<Vec<_>>()));
+                if include_prompt {
+                    out.insert("positivePrompt".into(), json!(prompt.positive_prompt));
+                    out.insert("negativePrompt".into(), json!(prompt.negative_prompt.clone().unwrap_or_default()));
+                }
+                Value::Object(out)
+            })
+            .collect::<Vec<_>>(),
+    });
+    Ok(ToolOutcome::new(text, payload))
+}
+
+/// 单条提示词（按 id 取，含标签与产物数）—— 与 `GET /api/prompts/{id}` 同一条路。
+
+
 ///
 /// 与 `GET /api/capture/workflows` **同一个实现**（[`crate::comfy_dirs::workflows_json`]）——
 /// 三份目录来源、`file:<sha256>` 那把幂等钥匙、`inLibrary` 判定全都不另写一份。
@@ -1469,6 +1697,40 @@ mod tests {
         assert!(!specs.iter().any(|s| s.name == "web_search"));
         assert!(!specs.iter().any(|s| s.name == "web_fetch"));
         assert!(!specs.iter().any(|s| s.name == "civitai_search"));
+    }
+
+    /// 联网额度是一条**独立的线**（Kotlin `ToolContext.webInWindow` +
+    /// `ToolPolicyConfig.DEFAULT_MAX_WEB_QUERIES_PER_RUN`）：只认联网类工具、
+    /// 只在**真跑成功**之后计数、用户答完提问时归零。
+    ///
+    /// 为什么单列一条用例：这份预算的唯一执行点在执行器里按**工具类别**判，
+    /// 而"哪些工具算联网"那份映射在 `ai_settings` —— 两处一漂移，
+    /// 系统提示里那句"一次回复最多联网 8 次"就变成空话，**且不会有任何用例变红**。
+    #[test]
+    fn 联网额度只认联网类工具且只在成功时计数() {
+        let mut session = ToolSession::default();
+        assert!(session.has_web_queries_left());
+
+        // 非联网工具不占联网额度（否则一次"搜自己的库"就把联网预算吃掉了）
+        session.spend_call("search_prompts");
+        session.spend_call("comfy_get_status");
+        assert_eq!(session.web_queries_in_window, 0);
+        assert_eq!(session.calls_in_window, 2, "总调用额度照旧要记");
+
+        session.spend_call("danbooru_lookup");
+        assert_eq!(session.web_queries_in_window, 1);
+
+        // 吃到上限 → 预检就该拦（执行器回 QUERY_BUDGET_EXCEEDED）
+        for _ in 1..crate::policy::MAX_WEB_QUERIES_PER_RUN {
+            session.spend_call("danbooru_lookup");
+        }
+        assert_eq!(session.web_queries_in_window, crate::policy::MAX_WEB_QUERIES_PER_RUN);
+        assert!(!session.has_web_queries_left());
+
+        // 用户真答了提问 → 联网额度也归零（与总调用额度同一档重置）
+        session.reset_budget();
+        assert!(session.has_web_queries_left());
+        assert_eq!(session.web_queries_in_window, 0);
     }
 
     #[test]

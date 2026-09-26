@@ -398,3 +398,35 @@ async fn real_db_spot_check_comfy_queries() {
         None => println!("真库里一条 capture_runs 都没有 —— 跳过这一半"),
     }
 }
+
+// ===========================================================================
+//  danbooru：**真站**抽查（要出网，默认不跑）
+//
+//  与 Kotlin 侧同一个口子（`COMFYHUB_LIVE_DANBOORU=1`）。它证明的不是"代码能编译"，
+//  而是这条链路在本机**真的通**：短 UA 过得去、公网走代理、四步查询拿全。
+//  假服务（tests/danbooru_test.rs）覆盖不了的就是这两条 —— 代理与 Cloudflare 的形状。
+// ===========================================================================
+
+#[tokio::test]
+#[ignore = "真站抽查（要出网）：COMFYHUB_LIVE_DANBOORU=1"]
+async fn live_danbooru_lookup() {
+    if std::env::var("COMFYHUB_LIVE_DANBOORU").ok().as_deref() != Some("1") {
+        eprintln!("跳过：没有设 COMFYHUB_LIVE_DANBOORU=1");
+        return;
+    }
+    // danbooru 这条工具不碰库，所以用内存库造一个最小的 state 就行
+    let conn = comfyhub_server_rs::db::open_memory().expect("内存库");
+    let media = std::env::temp_dir().join("comfyhub-live-danbooru").join("media");
+    std::fs::create_dir_all(&media).ok();
+    let state = AppState::new(conn, ":memory:", media);
+
+    let outcome = call(&state, "danbooru_lookup", serde_json::json!({ "query": "shinku (nte)" })).await;
+    println!("{}", serde_json::to_string_pretty(&outcome).unwrap_or_default());
+    assert_eq!(outcome["character"]["tag"], "shinku_(nte)", "角色 tag 要真的解析出来：{outcome}");
+    assert!(
+        outcome["character"]["relatedTags"].as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        "同现 tag 是规范 tag 栈的来源，不该是空的：{outcome}"
+    );
+    assert!(outcome["character"]["otherNames"].is_array(), "{outcome}");
+    assert!(outcome["verifiedAt"].as_str().unwrap_or("").ends_with('Z'), "{outcome}");
+}

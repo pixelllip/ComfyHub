@@ -545,8 +545,9 @@ async fn run_once(
             // 越界被拒、参数不对、用户点拒绝、工具自己报错 —— 那些调用"连世界都没碰到"，
             // 让它们占额度就是用户抱怨过的那种"什么都没干就说预算不足"。
             if outcome.ok {
-                // **只有真的跑成功才消耗额度**（Kotlin spendCall 的时点）
-                session.spend_call();
+                // **只有真的跑成功才消耗额度**（Kotlin spendCall 的时点）；
+                // 联网那一档另有一份计数（`MAX_WEB_QUERIES_PER_RUN`，见下面的预检）
+                session.spend_call(&call.name);
             }
             // 工具结果作为下一轮的 `role = tool`
             trailing.push(ChatTurn {
@@ -839,6 +840,30 @@ async fn handle_call(
                     session.calls < crate::tools::ABSOLUTE_CALL_CAP,
                 ),
                 "denied",
+                0,
+            ),
+        )
+        .await;
+    }
+    // 联网那档**另有一条独立预算**（Kotlin `ToolRegistry.invoke` 里 `ToolCategory.WEB` 那一段）：
+    // 每搜一次都是一次真实的外部请求 + 一份要烧 token 的正文，"再搜一下确认"很容易刹不住车。
+    // 系统提示里写着"一次回复最多联网 N 次"——**写了就必须真拦**，否则那句话是空的。
+    if crate::ai_settings::category_of(&call.name) == "web" && !session.has_web_queries_left() {
+        return finish_failure(
+            state,
+            run_id,
+            assistant_id,
+            call_id,
+            call,
+            sink,
+            CallOutcome::failure(
+                "QUERY_BUDGET_EXCEEDED",
+                &format!(
+                    "本次回复联网查询的次数已达上限（{} 次）；\
+                     请基于已有的搜索结果作答，需要更多资料时如实告诉用户",
+                    crate::policy::MAX_WEB_QUERIES_PER_RUN
+                ),
+                "not_required",
                 0,
             ),
         )

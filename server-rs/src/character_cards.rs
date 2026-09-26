@@ -677,16 +677,20 @@ pub fn tool_search(state: &AppState, arguments: &Value) -> Result<crate::tools::
 
 /// `save_character_card`：把一个角色的规范 tag 栈 / LoRA / 权重 / 别名 / 来源存成角色卡。
 ///
-/// ⚠ **`tagsVerifiedAt` 这一轮一律留空**：它只认"本轮真查过 danbooru 的那个 tag"
-/// （Kotlin 走 `ToolContext.danbooruVerified`）。Rust 侧 `danbooru_lookup` 还没搬，
-/// 于是"没查过"这条**如实**写进正文里 —— **绝不许**自己编一个时间。
-/// 搬 `danbooru_lookup` 时必须把"这一轮查过的 tag 集合"接进 Run 上下文，
-/// 再把这里换成 `if verified { now } else { None }`（与 `HarnessRunner` 同一条纪律）。
-pub fn tool_save(state: &AppState, arguments: &Value) -> Result<crate::tools::ToolOutcome, crate::tools::ToolFailure> {
+/// ⚠ **`tagsVerifiedAt` 只认"这一轮真查过 danbooru 的那个 tag"**（Kotlin 的
+/// `ToolContext.danbooruVerified`，Rust 侧是 [`crate::tools::ToolSession`] 里那个集合）——
+/// 判据是**事实**（`danbooru_lookup` 真的成功返回过），不是模型的自称。
+/// 没查过就如实留空并在正文里说明，**绝不许**自己编一个时间。
+pub fn tool_save(
+    state: &AppState,
+    arguments: &Value,
+    session: &crate::tools::ToolSession,
+) -> Result<crate::tools::ToolOutcome, crate::tools::ToolFailure> {
     let name = arg_str(arguments, "name")
         .ok_or_else(|| crate::tools::ToolFailure::new("INVALID_ARGUMENT", "缺少参数 name"))?;
     let character_tag = arg_str(arguments, "characterTag");
     let verified_key = normalize_tag(character_tag.as_deref().unwrap_or(&name));
+    let verified = session.danbooru_verified(&verified_key);
     let input = CharacterCardInput {
         name: name.clone(),
         name_en: arg_str(arguments, "nameEn"),
@@ -701,7 +705,7 @@ pub fn tool_save(state: &AppState, arguments: &Value) -> Result<crate::tools::To
         checkpoint: arg_str(arguments, "checkpoint"),
         reference_media_id: arg_i64(arguments, "referenceMediaId"),
         source: arg_str(arguments, "source"),
-        tags_verified_at: None,
+        tags_verified_at: if verified { Some(crate::danbooru::now_iso()) } else { None },
         notes: arg_str(arguments, "notes"),
     };
     let (id, created) = state.write(|conn| save(conn, input)).map_err(api_failure)?;
@@ -721,10 +725,17 @@ pub fn tool_save(state: &AppState, arguments: &Value) -> Result<crate::tools::To
     );
     text.push_str(&render_card(&card));
     text.push('\n');
-    text.push_str(&format!(
-        "⚠ 这张卡**没有** danbooru 核对记录（本轮没有查过 `{verified_key}`）—— \
-         想标上核对时间就先 `danbooru_lookup`，再回来保存一次；**不要**自己编时间。"
-    ));
+    if verified {
+        text.push_str(&format!(
+            "danbooru 核对时间已记上：{}\n",
+            card.tags_verified_at.as_deref().unwrap_or("")
+        ));
+    } else {
+        text.push_str(&format!(
+            "⚠ 这张卡**没有** danbooru 核对记录（本轮没有查过 `{verified_key}`）—— \
+             想标上核对时间就先 `danbooru_lookup`，再回来保存一次；**不要**自己编时间。"
+        ));
+    }
     Ok(crate::tools::ToolOutcome::new(text, card_json(&card)))
 }
 
@@ -1004,8 +1015,9 @@ mod tests {
     }
 
     #[test]
-    fn 工具_保存是合并保存且核对时间如实留空() {
+    fn 工具_保存是合并保存且没查过_danbooru_就如实留空() {
         let state = test_state();
+        let session = crate::tools::ToolSession::default();
         let first = tool_save(
             &state,
             &serde_json::json!({
@@ -1014,12 +1026,13 @@ mod tests {
                 "tags": "pink streaks, purple horns",
                 "source": "danbooru"
             }),
+            &session,
         )
         .unwrap();
         assert!(first.content.contains("已保存角色卡 #1「Shinku」（新建）"), "{}", first.content);
         assert!(first.content.contains("角色 tag: shinku_(nte)"), "{}", first.content);
         assert!(first.content.contains("tag 栈(2)"), "{}", first.content);
-        // Rust 侧还没有 danbooru_lookup：核对时间**必须**如实留空 + 明确提醒
+        // 这一轮**没查过** danbooru：核对时间必须如实留空 + 明确提醒
         assert!(first.content.contains("**没有** danbooru 核对记录"), "{}", first.content);
         assert!(
             !first.payload.as_object().unwrap().contains_key("tagsVerifiedAt"),
@@ -1031,6 +1044,7 @@ mod tests {
         let second = tool_save(
             &state,
             &serde_json::json!({ "name": "shinku", "loraName": "shinku-anima", "loraWeight": 0.85 }),
+            &session,
         )
         .unwrap();
         assert!(second.content.contains("（合并更新）"), "{}", second.content);
@@ -1047,15 +1061,47 @@ mod tests {
         assert_eq!(count, 1, "同名不许攒出第二行");
     }
 
+    /// **核对时间是事实、不是自述**：只有这一轮 `danbooru_lookup` 真的查过那个 tag
+    /// （`ToolSession.danbooru_verified` 里有归一之后的键）才写得进去。
+    ///
+    /// 两条方向都要盯：查过 → 必须写；没查过（哪怕模型把 `source` 写成 `danbooru`）→ 必须留空。
+    #[test]
+    fn 工具_查过_danbooru_才写得进核对时间() {
+        let state = test_state();
+        let mut session = crate::tools::ToolSession::default();
+        // 查的是 zh 写法 → 归一之后同一个键（`Shinku (NTE)` 与 `shinku_(nte)` 是一回事）
+        session.mark_danbooru_verified("Shinku (NTE)");
+        let saved = tool_save(
+            &state,
+            &serde_json::json!({ "name": "shinku", "characterTag": "shinku_(nte)" }),
+            &session,
+        )
+        .unwrap();
+        assert!(saved.content.contains("danbooru 核对时间已记上"), "{}", saved.content);
+        let verified_at = saved.payload["tagsVerifiedAt"].as_str().unwrap_or("");
+        assert!(verified_at.len() >= 20 && verified_at.ends_with('Z'), "核对时间要是 ISO：{verified_at}");
+
+        // 另一个 tag 没查过 → 再存一次不许有核对时间（合并保存也不会把它带出来）
+        let other = tool_save(
+            &state,
+            &serde_json::json!({ "name": "iroi", "characterTag": "iroi_(nte)", "source": "danbooru" }),
+            &session,
+        )
+        .unwrap();
+        assert!(other.content.contains("**没有** danbooru 核对记录"), "{}", other.content);
+        assert!(!other.payload.as_object().unwrap().contains_key("tagsVerifiedAt"), "{}", other.payload);
+    }
+
     #[test]
     fn 工具_缺名字与超长都是参数错误() {
         let state = test_state();
-        let err = tool_save(&state, &serde_json::json!({})).unwrap_err();
+        let session = crate::tools::ToolSession::default();
+        let err = tool_save(&state, &serde_json::json!({}), &session).unwrap_err();
         assert_eq!(err.code, "INVALID_ARGUMENT");
         assert!(err.message.contains("name"), "{}", err.message);
 
         let long = "x".repeat(MAX_NOTES_CHARS + 1);
-        let err = tool_save(&state, &serde_json::json!({ "name": "x", "notes": long })).unwrap_err();
+        let err = tool_save(&state, &serde_json::json!({ "name": "x", "notes": long }), &session).unwrap_err();
         assert_eq!(err.code, "INVALID_ARGUMENT");
         assert!(err.message.contains("备注 超出上限"), "{}", err.message);
     }

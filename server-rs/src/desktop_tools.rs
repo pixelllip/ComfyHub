@@ -130,6 +130,15 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: true,
     },
     DesktopToolSpec {
+        name: "danbooru_lookup",
+        description: r#"查 danbooru 上 tag 的**规范写法**（Anima / SD 这类 Danbooru tag 模型的正源）：给角色名返回它的角色 tag、别名、wiki 简介、同角色的**换装版本 tag**，以及**同现 tag**（danbooru 上这个角色最常用的外观 / 服装 tag，按频率排序）。写 tag 模型的角色提示词之前，除了 LoRA 触发词**还要查这里**核对写法（是 `shinku_(nte)` 而不是 `shinku` 或中文名）；查完用 `save_character_card` 存成角色卡。"#,
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `danbooru_lookup`（R12/R13）
+        input_schema: r#"{"type":"object","properties":{"query":{"type":"string","description":"角色名 / tag（中文、罗马字、带不带括号都行；空格会被当成下划线）"},"limit":{"type":"integer","description":"候选 tag 最多几条，默认 12，上限 20"},"relatedLimit":{"type":"integer","description":"同现 tag 最多几条，默认 20，上限 50"}},"required":["query"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "delete_skill",
         description: r#"删除一个**用户来源**的 Skill。内置 skill 不能删。这是不可逆操作，用户确认后再调用。"#,
         input_schema: r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}"#,
@@ -179,6 +188,15 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         access: "ALLOW",
         mutating: false,
     },    DesktopToolSpec {
+        name: "search_prompts",
+        description: r#"搜**本机的提示词库**（自己生成 / 导入过的提示词），或按 id 取一条完整的。写角色、复刻风格、换模型之前**先查这里**：库里很可能已经有那个角色的完整 tag 栈（例：`shinku_(nte)` 的 tag 栈就在某条提示词的正向里），照抄比凭印象编 tag 靠谱。返回 id / 标题 / 正负提示词 / LoRA / 参数 / tag / 产物数；要按某条工作流出图就把它的 id 给 `comfy_submit(promptId=…)`。"#,
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `search_prompts`（R12/R13）
+        input_schema: r#"{"type":"object","properties":{"query":{"type":"string","description":"关键字：角色名 / tag / 标题片段；多个词用空格分开（都要命中）"},"id":{"type":"integer","description":"直接取某一条提示词（与 query 二选一）"},"limit":{"type":"integer","description":"最多几条，默认 5，上限 20"},"includePrompt":{"type":"boolean","description":"是否带上正/负提示词正文，默认 true；只想看列表就传 false"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "write_file",
         description: r#"写文件。**默认只允许写 ComfyUI 目录**（`comfyui/`）；写到别处会被权限策略直接拒绝，不要试图绕开。写前先想清楚路径，必要时先 list_dir 看一眼。"#,
         input_schema: r#"{"type":"object","properties":{"path":{"type":"string","description":"目标路径（相对项目根或绝对路径）"},"content":{"type":"string","description":"完整内容"},"mode":{"type":"string","enum":["overwrite","append"],"description":"默认 overwrite"}},"required":["path","content"],"additionalProperties":false}"#,
@@ -237,12 +255,14 @@ mod tests {
                 "comfy_sync_history",
                 "comfy_use_attachment",
                 "comfy_use_media",
+                "danbooru_lookup",
                 "delete_skill",
                 "list_dir",
                 "read_file",
                 "register_skill",
                 "save_character_card",
                 "search_character_cards",
+                "search_prompts",
                 "write_file",
             ]
         );
@@ -253,8 +273,9 @@ mod tests {
             "comfy_env_report",
             "comfy_audit_workflow",
             "comfy_prune_workflow",
-            "search_prompts",
-            "danbooru_lookup",
+            "web_search",
+            "web_fetch",
+            "civitai_search",
             "comfy_learn_workflow",
             "find_model",
         ] {
