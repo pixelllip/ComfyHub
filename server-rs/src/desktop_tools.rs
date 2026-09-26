@@ -83,6 +83,15 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "comfy_make_mask",
+        description: r#"生成一张**局部重绘用的遮罩**放进 ComfyUI 的 input 目录（**白 = 要重新生成的地方**）。两种需求用同一个工作流，只是遮罩反过来：**保背景换人物** = 人物那块 region；**换背景保人物** = 同一个 region 再加 `invert=true`。给了 baseFilename（input 目录里的底图）就照它尺寸生成，**推荐**这么用。region 支持 full / left / right / top / bottom / center / person，或归一化的 "x,y,w,h"（例如 "0.3,0.05,0.4,0.9"）；`feather` 羽化边缘（把人物贴进新背景时 8~24 明显更自然）。**框是估的**：工具会回 approximate=true 与它实际用的框，不准就报新坐标重做 —— 不要指望它做分割，也不要让用户去 ComfyUI 里手画。"#,
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_make_mask`（R12/R13）
+        input_schema: r#"{"type":"object","properties":{"baseFilename":{"type":"string","description":"input 目录里的底图文件名（先用 comfy_use_media / comfy_use_attachment 投放）；给了就用它的尺寸"},"width":{"type":"integer","description":"没给 baseFilename 时的画布宽"},"height":{"type":"integer","description":"没给 baseFilename 时的画布高"},"region":{"type":"string","description":"重绘区：full（默认）/ left / right / top / bottom / center / person / \"x,y,w,h\"（归一化 0~1）"},"shape":{"type":"string","description":"rect（默认）或 ellipse"},"invert":{"type":"boolean","description":"反选：只保留这块、其它全重绘（换背景保人物用这个）"},"feather":{"type":"integer","description":"边缘羽化像素，默认 0；8~24 常用于把人物贴进新背景"},"filename":{"type":"string","description":"可选：固定的遮罩文件名（不给自己按参数算一个，重复调用得到同一个文件）"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ASK",
+        mutating: true,
+    },
+    DesktopToolSpec {
         name: "comfy_submit",
         description: r#"**把一个工作流提交给 ComfyUI 真的跑一次**（会消耗显卡时间，默认需要用户批准）。用 promptId 指定库里的工作流（先 comfy_find_workflow 或 comfy_load_workflow），或者直接用 workflowPath 指一份本机工作流文件（等价于先 comfy_load_workflow 再提交）。用 overrides 覆盖参数（键写成 节点id.输入名，例如 "3.steps"、"6.text"）。用 connections 补连线（键一样，值写成 ["上游节点id", 槽位]，例如 {"60.vae":["1",0]}）——comfy_load_workflow 报 runnable=false 时，照它给的 openInputs / unresolvedInputs 补。跑完后产物会自动入库到画廊。不要凭想象编造工作流；说不清要跑什么就先问用户。
 **提交前会先做一次模型预检**（用户 2026-09-22 拍板）：要的 checkpoint / LoRA / VAE 当前这个实例加载不了时会**当场拒**并告诉你该怎么办 —— 可能出现在硬盘上但实例看不到（重启 ComfyUI 就好，**别去下载**，见 `comfy_env_report`），也可能本机确实没有（去 `civitai_search` 查 + 问用户）。被拒时**不要改个名字重试**：预检看的是最终那张图（overrides / connections 应用之后），换个名字只会在下一次再被拒。
@@ -98,6 +107,24 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         name: "comfy_sync_history",
         description: r#"立刻同步一次 ComfyUI /history（**会往本项目库里写数据**，属于轻度写操作）。需要用户批准；用之前先说明你想同步什么。"#,
         input_schema: r#"{"type":"object","properties":{"reason":{"type":"string","description":"为什么要同步（给用户看的）"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ASK",
+        mutating: true,
+    },
+    DesktopToolSpec {
+        name: "comfy_use_attachment",
+        description: r#"把**用户随消息发来的图片附件**放进 ComfyUI 的 input 目录，返回它在那边的真实文件名。做图生图 / 参考图 / 结构参考 / 换脸时必须先用它：工作流里 LoadImage 的 image 输入**只能填 ComfyUI input 目录里真实存在的文件名**，你不能改也编不出一个。拿到 filename 之后再用 comfy_submit 覆盖 LoadImage 节点的输入，例如 overrides={"89.image":"<返回的 filename>"}。只接受图片附件；附件 id 见用户消息末尾的附件说明。"#,
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_use_attachment`（R12/R13）
+        input_schema: r#"{"type":"object","properties":{"attachmentId":{"type":"string","description":"用户消息里那张图片的附件 id（形如 att_xxx / 32 位十六进制）"},"filename":{"type":"string","description":"可选：希望它在 ComfyUI 里叫什么（不填就用原文件名；会自动加一段 id 后缀防重名）"}},"required":["attachmentId"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ASK",
+        mutating: true,
+    },
+    DesktopToolSpec {
+        name: "comfy_use_media",
+        description: r#"把**画廊里的一个图片产物**放进 ComfyUI 的 input 目录，返回它在那边真实可用的文件名与尺寸。两阶段图像编辑的地基：阶段一生成的人物图、要保留的背景图都在画廊里，而 LoadImage 只能读 input 目录里的文件。拿到 filename 与 width/height 之后：底图用 comfy_submit 覆盖 `节点id.image`；要遮罩就用 `comfy_make_mask(baseFilename=…, region=…)`。（用户随消息**发来**的图走 `comfy_use_attachment`，别混。）"#,
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_use_media`（R12/R13）
+        input_schema: r#"{"type":"object","properties":{"mediaId":{"type":"integer","description":"画廊里的图片产物 id（用 media 列表 / 刚生成的 mediaIds 里拿）"},"filename":{"type":"string","description":"可选：希望它在 ComfyUI 里叫什么（不填就用原名；会自动加一段 id 后缀防重名）"}},"required":["mediaId"],"additionalProperties":false}"#,
         scope: "DESKTOP",
         access: "ASK",
         mutating: true,
@@ -205,8 +232,11 @@ mod tests {
                 "comfy_get_status",
                 "comfy_list_workflows",
                 "comfy_load_workflow",
+                "comfy_make_mask",
                 "comfy_submit",
                 "comfy_sync_history",
+                "comfy_use_attachment",
+                "comfy_use_media",
                 "delete_skill",
                 "list_dir",
                 "read_file",
@@ -218,11 +248,31 @@ mod tests {
         );
         for absent in [
             "comfy_find_workflow",
+            "comfy_check_inputs",
+            "comfy_fit_workflow",
             "comfy_env_report",
-            "comfy_use_media",
+            "comfy_audit_workflow",
+            "comfy_prune_workflow",
+            "search_prompts",
+            "danbooru_lookup",
+            "comfy_learn_workflow",
             "find_model",
         ] {
             assert!(!names.contains(&absent), "{absent} 还没实现，不许提前列进来");
+        }
+    }
+
+    /// 图像编辑三件的出厂档：**都要用户批准**（前两件往用户机器上写文件、
+    /// `comfy_make_mask` 会覆盖 input 目录里同名的遮罩）。
+    ///
+    /// 这条盯的是"哪天有人顺手把它们改成 ALLOW"：写文件类工具静默变成无需批准，
+    /// 界面上不会有任何变化，用户只会在磁盘上发现多了几个文件。
+    #[test]
+    fn 图像编辑三件默认都要审批() {
+        for name in ["comfy_use_attachment", "comfy_use_media", "comfy_make_mask"] {
+            let tool = DESKTOP_TOOLS.iter().find(|t| t.name == name).expect(name);
+            assert_eq!(tool.access, "ASK", "{name} 的出厂档必须是 ASK");
+            assert!(tool.mutating, "{name} 会写文件，mutating 必须为 true");
         }
     }
 }

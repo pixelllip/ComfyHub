@@ -5569,7 +5569,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（16 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（20 个），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
@@ -5584,8 +5584,12 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_get_status",
             "comfy_list_workflows",
             "comfy_load_workflow",
+            // 图像编辑三件（投放 + 遮罩）：两阶段编辑的地基，出厂档都是 ask
+            "comfy_make_mask",
             "comfy_submit",
             "comfy_sync_history",
+            "comfy_use_attachment",
+            "comfy_use_media",
             "delete_skill",
             "list_dir",
             "list_skills",
@@ -7567,6 +7571,313 @@ async fn list_dir_defaults_to_the_write_root_and_reports_truncation() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+// ===========================================================================
+//  图像编辑三件（投放 + 遮罩）
+//
+//  判据是**真的落盘 + 真的按尺寸画**：投放上去的文件要在 ComfyUI 的 input 目录里、
+//  内容与来源**逐字节相同**；遮罩要在对的像素上是白的、尺寸与底图一致。
+//  为什么盯着这两条：ComfyUI 的 `LoadImage` / `LoadImageMask` 只认 input 目录里的
+//  裸文件名，写错目录（安装形态 vs 共享目录）的表现是 `Invalid image file` ——
+//  看着像"文件不存在"，其实是写进了另一个目录；而遮罩尺寸与底图不一致时采样直接炸。
+// ===========================================================================
+
+/// 造一张**真能解码**的 PNG（投放与遮罩两条链路都必须吃得下真图）。
+fn write_test_png(path: &std::path::Path, w: u32, h: u32) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    let mut img = image::RgbImage::new(w, h);
+    for (x, y, pixel) in img.enumerate_pixels_mut() {
+        *pixel = image::Rgb([(x % 251) as u8, (y % 241) as u8, 7]);
+    }
+    img.save(path).unwrap();
+}
+
+/// 往夹具里塞一条附件（盘上那份真图由调用方写）。
+fn seed_attachment(state: &comfyhub_server_rs::routes::AppState, id: &str, name: &str, kind: &str) {
+    let dto = comfyhub_server_rs::attachments::AttachmentDto {
+        id: id.to_string(),
+        name: name.to_string(),
+        kind: kind.to_string(),
+        modality: kind.to_string(),
+        mime_type: if kind == "image" { "image/png".into() } else { "video/mp4".into() },
+        size_bytes: 1024,
+        width: None,
+        height: None,
+        sha256: None,
+        status: "ready".to_string(),
+        created_at: Some("2026-09-26T00:00:00.000Z".to_string()),
+    };
+    comfyhub_server_rs::attachments::insert(state, &dto, &format!("{id}.png")).unwrap();
+}
+
+/// 把"当前生效的输出目录"钉到 `<root>/shared/output`（ComfyUI Desktop 那种
+/// 程序与共享数据分家的布局），并在旁边建出 `input`。
+fn configure_shared_output(state: &comfyhub_server_rs::routes::AppState, root: &std::path::Path) {
+    let shared = root.join("shared");
+    std::fs::create_dir_all(shared.join("input")).unwrap();
+    std::fs::create_dir_all(shared.join("output")).unwrap();
+    state
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO app_settings (k, v) VALUES ('capture.config', ?1) \
+                 ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                rusqlite::params![serde_json::json!({
+                    "enabled": false,
+                    "comfyUrl": "http://127.0.0.1:9",
+                    "outputDir": shared.join("output").display().to_string(),
+                    "pollSeconds": 4,
+                    "autoTag": "ComfyUI",
+                    "maxPerPoll": 20,
+                    "downloadFallback": true,
+                })
+                .to_string()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn 投放附件按配置的输出目录推_input_并真的落盘() {
+    let state = state();
+    let root = state.project_root();
+    configure_shared_output(&state, &root);
+    // 项目内也有一份"看起来像 ComfyUI"的目录：**配置优先**，不许写到这里来
+    std::fs::create_dir_all(root.join("comfyui").join("input")).unwrap();
+    std::fs::create_dir_all(root.join("comfyui").join("output")).unwrap();
+
+    let source = root.join("ai-attachments").join("att-abc.png");
+    write_test_png(&source, 64, 48);
+    seed_attachment(&state, "att-abc", "参考 图.png", "image");
+
+    let out = call_tool(&state, "comfy_use_attachment", serde_json::json!({ "attachmentId": "att-abc" }))
+        .await
+        .unwrap();
+    assert_eq!(out.payload["attachmentId"], "att-abc");
+    let filename = out.payload["filename"].as_str().unwrap().to_string();
+    // 名字里带来源 id 里的字母数字（`att-abc` → `attabc`），重复调用得到同一个文件
+    assert_eq!(filename, "参考_图-attabc.png");
+    assert_eq!(out.payload["inputDir"], root.join("shared").join("input").display().to_string());
+    let landed = root.join("shared").join("input").join(&filename);
+    assert!(landed.is_file(), "投放的图没落盘：{}", landed.display());
+    assert_eq!(std::fs::read(&landed).unwrap(), std::fs::read(&source).unwrap(), "投放的是另一个文件");
+    assert!(
+        !root.join("comfyui").join("input").join(&filename).exists(),
+        "配置里已经指定了输出目录，却写进了项目内的 comfyui"
+    );
+    assert!(out.payload["hint"].as_str().unwrap().contains(&filename), "提示里要带真实文件名");
+
+    // 非图片附件：如实报 NOT_AN_IMAGE（ComfyUI 读不了 mp4）
+    seed_attachment(&state, "att-vid", "clip.mp4", "video");
+    let not_image = call_tool(&state, "comfy_use_attachment", serde_json::json!({ "attachmentId": "att-vid" }))
+        .await
+        .unwrap_err();
+    assert_eq!(not_image.code, "NOT_AN_IMAGE");
+    assert!(not_image.message.contains("mp4"), "要说清是哪种类型不符：{}", not_image.message);
+
+    // 库里没有这个 id
+    let missing = call_tool(&state, "comfy_use_attachment", serde_json::json!({ "attachmentId": "att-none" }))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code, "ATTACHMENT_NOT_FOUND");
+
+    // 库里有行、盘上没文件：也如实说（别走到拷贝再报一个看不懂的 IO 错）
+    // ⚠ 文案是"原件已经不在了"而不是"文件不在"：`file_of` 找不到文件时回 None，
+    //   走的是前一条分支（与 Kotlin 同一套措辞）
+    seed_attachment(&state, "att-gone", "gone.png", "image");
+    let gone = call_tool(&state, "comfy_use_attachment", serde_json::json!({ "attachmentId": "att-gone" }))
+        .await
+        .unwrap_err();
+    assert_eq!(gone.code, "ATTACHMENT_NOT_FOUND");
+    assert!(gone.message.contains("原件"), "{}", gone.message);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn 投放画廊产物会带原图尺寸并拒绝非图片() {
+    let state = state();
+    let root = state.project_root();
+    configure_shared_output(&state, &root);
+
+    let stored = "real-pic.png";
+    write_test_png(&state.media_dir().join(stored), 320, 240);
+    state
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO media_assets (id, kind, title, original_name, stored_name, size_bytes) \
+                 VALUES (310, 'IMAGE', '阶段一的人物图', 'pic.png', ?1, 4096)",
+                rusqlite::params![stored],
+            )?;
+            tx.execute(
+                "INSERT INTO media_assets (id, kind, title, original_name, stored_name, size_bytes) \
+                 VALUES (311, 'VIDEO', '一段视频', 'clip.mp4', ?1, 4096)",
+                rusqlite::params![stored],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let out = call_tool(&state, "comfy_use_media", serde_json::json!({ "mediaId": 310 })).await.unwrap();
+    assert_eq!(out.payload["mediaId"], 310);
+    assert_eq!(out.payload["filename"], "pic-m310.png", "名字要带 mediaId 的前缀，防止两张同名图互相覆盖");
+    assert_eq!(out.payload["width"], 320, "遮罩要照原图尺寸生成，所以尺寸必须给出来");
+    assert_eq!(out.payload["height"], 240);
+    let landed = root.join("shared").join("input").join("pic-m310.png");
+    assert!(landed.is_file());
+
+    // 字符串形式的 id 也要认（模型经常把 id 写成 "310"）
+    let as_text = call_tool(&state, "comfy_use_media", serde_json::json!({ "mediaId": "310" })).await.unwrap();
+    assert_eq!(as_text.payload["filename"], "pic-m310.png");
+
+    let video = call_tool(&state, "comfy_use_media", serde_json::json!({ "mediaId": 311 })).await.unwrap_err();
+    assert_eq!(video.code, "NOT_AN_IMAGE");
+    assert!(video.message.contains("VIDEO"), "{}", video.message);
+
+    let missing = call_tool(&state, "comfy_use_media", serde_json::json!({ "mediaId": 999 })).await.unwrap_err();
+    assert_eq!(missing.code, "MEDIA_NOT_FOUND");
+
+    let no_arg = call_tool(&state, "comfy_use_media", serde_json::json!({})).await.unwrap_err();
+    assert_eq!(no_arg.code, "INVALID_ARGUMENT");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn 遮罩照底图尺寸画且白区就是重绘区() {
+    let state = state();
+    let root = state.project_root();
+    configure_shared_output(&state, &root);
+    let input = root.join("shared").join("input");
+    write_test_png(&input.join("bg.png"), 200, 100);
+
+    // ① 给了 baseFilename：尺寸照底图，白区在右半边
+    let out = call_tool(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({ "baseFilename": "bg.png", "region": "0.5,0,0.5,1", "filename": "m.png" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["width"], 200);
+    assert_eq!(out.payload["height"], 100);
+    assert_eq!(out.payload["filename"], "m.png");
+    assert_eq!(out.payload["whiteMeans"], "要重新生成的地方（重绘区）");
+    assert_eq!(out.payload["approximate"], false, "显式给了坐标就不算估的");
+    let mask = image::open(input.join("m.png")).unwrap().to_luma8();
+    assert_eq!((mask.width(), mask.height()), (200, 100));
+    assert_eq!(mask.get_pixel(150, 50)[0], 255, "右半边是重绘区");
+    assert_eq!(mask.get_pixel(10, 50)[0], 0, "左半边要原样保留");
+
+    // ② invert：把里外翻过来（"换背景保人物"就是这一档）
+    let inverted = call_tool(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({ "baseFilename": "bg.png", "region": "0.5,0,0.5,1", "invert": true, "filename": "mi.png" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(inverted.payload["invert"], true);
+    let mask = image::open(input.join("mi.png")).unwrap().to_luma8();
+    assert_eq!(mask.get_pixel(150, 50)[0], 0);
+    assert_eq!(mask.get_pixel(10, 50)[0], 255);
+
+    // ③ 不给 baseFilename 就按显式尺寸；**尺寸不合法要拦**（16~8192）
+    let explicit = call_tool(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({ "width": 64, "height": 32, "region": "person" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(explicit.payload["width"], 64);
+    assert_eq!(explicit.payload["approximate"], true, "预设 region 是粗框，必须如实说是估的");
+    let too_small = call_tool(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({ "width": 8, "height": 8, "region": "full" }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(too_small.code, "INVALID_ARGUMENT");
+    let neither = call_tool(&state, "comfy_make_mask", serde_json::json!({ "region": "full" }))
+        .await
+        .unwrap_err();
+    assert_eq!(neither.code, "INVALID_ARGUMENT");
+
+    // ④ baseFilename 里的路径要被剥掉（ComfyUI 只认裸文件名），剥完找不到就如实报
+    let traversal = call_tool(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({ "baseFilename": "../../../windows/system32/evil.png" }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(traversal.code, "INVALID_ARGUMENT");
+    assert!(traversal.message.contains("evil.png"), "{}", traversal.message);
+
+    // ⑤ 同一组参数重复调用得到**同一个文件**（不在 input 目录里堆垃圾）
+    let first = call_tool(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({ "baseFilename": "bg.png", "region": "center", "feather": 16 }),
+    )
+    .await
+    .unwrap();
+    let again = call_tool(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({ "baseFilename": "bg.png", "region": "center", "feather": 16 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.payload["filename"], again.payload["filename"]);
+    assert!(first.payload["filename"].as_str().unwrap().starts_with("comfyhub_mask_"));
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn 图像编辑三件在真库夹具上串起来能用() {
+    // ⚠ "找不到 ComfyUI"那一支**不在这里验**：这台开发机装着 ComfyUI，
+    //   `comfy_dirs::find_home` 一定探得到（连 Desktop 安装形态都认），
+    //   于是那条分支在集成用例里永远走不到 —— 而它恰恰是新用户第一次用时会撞上的那一支。
+    //   它由 `image_edit.rs` 的单测（`找不到_comfyui_时如实报错`）用纯函数直接钉住。
+    let state = state();
+    let root = state.project_root();
+    configure_shared_output(&state, &root);
+
+    // 一次完整的"投放底图 → 生成遮罩"：前一件产出的文件名要能直接喂给下一件
+    let source = root.join("ai-attachments").join("att-flow.png");
+    write_test_png(&source, 128, 96);
+    seed_attachment(&state, "att-flow", "ref.png", "image");
+    let placed = call_tool(&state, "comfy_use_attachment", serde_json::json!({ "attachmentId": "att-flow" }))
+        .await
+        .unwrap();
+    let filename = placed.payload["filename"].as_str().unwrap().to_string();
+
+    let mask = call_tool(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({ "baseFilename": filename, "region": "0.58,0.26,0.36,0.74", "feather": 16 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(mask.payload["width"], 128, "遮罩尺寸必须与投放进去的底图一致");
+    assert_eq!(mask.payload["height"], 96);
+    assert_eq!(mask.payload["regionNormalized"], "[0.58,0.26,0.36,0.74]");
+    let mask_file = root
+        .join("shared")
+        .join("input")
+        .join(mask.payload["filename"].as_str().unwrap());
+    assert!(mask_file.is_file(), "遮罩没落盘：{}", mask_file.display());
+    // 提示里要说清下一个节点该覆盖哪个输入（模型就是照这句话写 overrides 的）
+    assert!(mask.content.contains("LoadImageMask"), "{}", mask.content);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// Skills 两个写侧工具：注册 → 立刻出现在列表里 → 删除；再删报 `SKILL_NOT_FOUND`。
 #[tokio::test]
 async fn skill_tools_register_then_delete() {
@@ -7647,6 +7958,9 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "comfy_list_workflows",
         "comfy_load_workflow",
         "comfy_sync_history",
+        "comfy_use_media",
+        "comfy_use_attachment",
+        "comfy_make_mask",
     ] {
         assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
     }
@@ -7658,7 +7972,12 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     for absent in [
         "comfy_find_workflow",
         "comfy_env_report",
-        "comfy_use_media",
+        "comfy_check_inputs",
+        "comfy_audit_workflow",
+        "comfy_prune_workflow",
+        "comfy_fit_workflow",
+        "search_prompts",
+        "danbooru_lookup",
         "web_search",
         "web_fetch",
         "civitai_search",

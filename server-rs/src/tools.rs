@@ -7,13 +7,15 @@
 //! | `list_skills` / `load_skill` / `remember` / `ask_user_question` | `BOTH` | 第 31/32 步（只碰本机） |
 //! | `list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill` | `DESKTOP` | 第 40 步，路径准入在 [`crate::policy`] |
 //! | `comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` | `DESKTOP` | 第 41/42 步；前两条只碰本机库与磁盘，`get_status` 会真问一次 ComfyUI 的 `/queue` |
-//! | `comfy_sync_history` | `DESKTOP` | 第 43 步；**会写库**（建提示词 + 产物入库），出厂档 `ASK` |`r`n//! | `comfy_load_workflow` | `DESKTOP` | 第 44 步；把本机工作流文件读进库（界面格式按 `/object_info` 转 API 图）。⚠ 组节点不展开、"模拟用户行为"未实现，两者都如实报 |
+//! | `comfy_sync_history` | `DESKTOP` | 第 43 步；**会写库**（建提示词 + 产物入库），出厂档 `ASK` |
+//! | `comfy_load_workflow` | `DESKTOP` | 第 44 步；把本机工作流文件读进库（界面格式按 `/object_info` 转 API 图）。⚠ 组节点不展开、"模拟用户行为"未实现，两者都如实报 |
+//! | `comfy_use_media` / `comfy_use_attachment` / `comfy_make_mask` | `DESKTOP` | **图像编辑三件**（见 [`crate::image_edit`]）：把画廊产物 / 用户附件投放进 ComfyUI 的 `input` 目录，以及生成"白=重绘区"的遮罩。三件都要用户批准（会往用户机器上写文件） |
 //!
 //! 还没搬的：联网三个（要 Keenable / Civitai 客户端 + `EndpointGuard`）、
-//! `comfy_get_status` / `sync_history` / `find_workflow` / `load_workflow` / `submit` /
-//! `use_attachment` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` /
-//! `prune_workflow`（要 ComfyUI 在场、要 `WorkflowConvert` 转换栈、要本机模型清单）、
-//! 官方 comfy-mcp 那 39 个（要 `McpStdioClient`）、`find_model`。
+//! `find_model`、`find_workflow` / `check_inputs` / `fit_workflow` / `env_report` /
+//! `audit_workflow` / `prune_workflow`（要本机模型清单 `ComfyModels`）、
+//! 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`）、
+//! `search_prompts` / `danbooru_lookup`、官方 comfy-mcp 那 39 个（要 `McpStdioClient`）。
 //! **没搬的绝不下发**（`declaredTo = 清单 ∩ 本地实现`）。
 //!
 //! # 两个清单的差别（别混用）
@@ -288,19 +290,26 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前十一个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前二十个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
-/// + comfy 查询两件（`comfy_get_run` / `comfy_list_workflows`，P4 第 41 步）。
+/// + comfy 查询三件（`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status`）
+/// + `comfy_load_workflow` / `comfy_submit` / `comfy_sync_history`
+/// + 资料库两件（角色卡）+ **图像编辑三件**（`comfy_use_media` / `comfy_use_attachment` /
+/// `comfy_make_mask`，见 [`crate::image_edit`]）。
 /// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
-/// `comfy_submit` 那一批要 ComfyUI 在场与整套转换栈（R10 的落点），各自另起批次。
-pub const IMPLEMENTED: [&str; 17] = [
+/// `comfy_find_workflow` 那一批要本机模型清单（`comfy_env_report` / `check_inputs` /
+/// `fit_workflow` / `audit_workflow` / `prune_workflow`），各自另起批次。
+pub const IMPLEMENTED: [&str; 20] = [
     "ask_user_question",
     "comfy_get_run",
     "comfy_get_status",
     "comfy_list_workflows",
     "comfy_load_workflow",
+    "comfy_make_mask",
     "comfy_submit",
     "comfy_sync_history",
+    "comfy_use_attachment",
+    "comfy_use_media",
     "delete_skill",
     "list_dir",
     "list_skills",
@@ -425,6 +434,14 @@ pub async fn execute(
         // 「审核 → 审批 → 提交 → 自己等 → captureRun 入库 → mediaIds」这条链：
         // 审批由执行器（`default_access = ASK`）负责，其余都在 `workflow_submit` 里。
         "comfy_submit" => crate::workflow_submit::tool_submit(state, policy, arguments).await,
+        // ---- 图像编辑三件（图像编辑那一批：投放 + 遮罩）----------------------
+        // 两阶段编辑（"先出人物、再换上去" / "换背景保人物"）的地基：ComfyUI 的
+        // LoadImage / LoadImageMask **只能读它自己的 input 目录**，而画廊产物与用户附件
+        // 都不在那里 —— 这两件工具是唯一的投放通道，`comfy_make_mask` 则解决
+        // "手机 / 平板上画不出遮罩"这件事（与 Kotlin `AiImageEdit` 逐条对照）。
+        "comfy_use_media" => crate::image_edit::tool_use_media(state, arguments),
+        "comfy_use_attachment" => crate::image_edit::tool_use_attachment(state, arguments),
+        "comfy_make_mask" => crate::image_edit::tool_make_mask(state, arguments),
         // ---- 资料库两件（P4 第 46 步：角色卡）--------------------------------
         // O7/O8 的落点：写角色之前**先查本机**（库里那张卡 / 那条提示词的 tag 栈），
         // 而不是凭印象编 —— 现场教训是"把 shinku 当成 iroi 写了两版废图"。

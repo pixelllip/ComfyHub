@@ -36,6 +36,7 @@ pub mod events;
 pub mod file_kind;
 pub mod executor;
 pub mod graph_parse;
+pub mod image_edit;
 pub mod inputs;
 pub mod iso_time;
 pub mod mcp;
