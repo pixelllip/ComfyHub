@@ -1913,9 +1913,22 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | **截断续写**（`MAX_CONTINUATIONS` + `CONTINUE_INSTRUCTION`） | ⛔ 未做（输出被长度上限卡断时，现在把半句话当结尾） |
 | 官方 comfy-mcp 39 个 | ✅ **第 45 步已做** |
 
-**C. 切流动作本身（代码之外）**1. `server.ps1`：`Resolve-Backend` 认 Rust 二进制（`<根>\server\comfyhub-server-rs.exe` 与
-   `server-rs\target\release\comfyhub-server-rs.exe` 两种布局）—— ✅ **端口文件那一半已经好了**
-   （P4 第 54 步，见上面 C-0），剩下的是脚本侧的路径解析与启动参数；
+**C. 切流动作本身（代码之外）**
+
+0. ✅ **`<根>\.run\api.json`（端口状态文件）已由 Rust 写**（P4 第 54 步，2026-09-26）——
+   这是"把 `server.ps1` 指向 Rust"的**硬前提**：App、`scripts\api-port.ps1` 与 ComfyUI 捕获扩展
+   都只读这一个文件；不写它，切过去的表现是 **App 对着旧端口等 90 秒**（`docs/pitfalls.md` 记过现场）。
+   纪律逐条照 Kotlin `ApiPortFile`：只由后端写、原子替换 + 带退避重试（读侧是轮询的，半截 JSON 就是幽灵 bug）、
+   优雅退出时**只删自己那一份**（`pid` 对得上，否则重启时旧进程的收尾会删掉新进程的记录）、
+   候选端口被占/落在 Windows 保留段就**回落到系统挑的端口**，并把 `requestedPort` + `fellBack` 如实记下来。
+   **真机实测**：`--port 0` → 文件里写的是**真实端口**（13644，健康检查通）；
+   占住 8106 再起 → 回落到 13650 + `fellBack:true` + `requestedPort:8106`，服务照常可用；
+   `COMFYHUB_NO_PORT_FILE=1` 时一个字节都不写（只给我的验收脚本用，免得覆盖真后端那份记录）。
+   ⚠ 顺带记一个坑：第一版成功分支用的是**请求的**端口，`--port 0` 就把 `0` 写进了文件
+   （App 会去连 `http://127.0.0.1:0`）—— **实际端口必须从 `listener.local_addr()` 读回来**。
+1. `server.ps1`：`Resolve-Backend` 认 Rust 二进制（`<根>\server\comfyhub-server-rs.exe` 与
+   `server-rs\target\release\comfyhub-server-rs.exe` 两种布局）—— ✅ **端口文件那一半已经好了**（见 C-0），
+   剩下的是脚本侧的路径解析与启动参数（传 `--port 0` 让后端自己挑，与 Kotlin 的自动端口同义）；
 2. `comfyhub.ps1 doctor`：报"当前是哪种后端 / 二进制构建新鲜度"；
 3. `pack-release.ps1` + `packaging\manifest.json`：`server` 组件换成 Rust 二进制（**不再需要 `jre/`**，
    发布包从 36MB 再降）；`runtimeRequirements` 删掉 Java 那一条；
@@ -1923,10 +1936,14 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 5. **四条 e2e 脚本 + `flutter test` + harness 用例对着 Rust 跑一遍**（§10.8 最后一行，切流前必须）；
 6. Kotlin 退役：删 `server/`（或移到 `legacy/`）、删 Gradle 相关文档段落、README/AGENTS 的"现状"描述更新。
 
-> **结论（2026-09-26，诚实版）**：**今天还不能切**。A 组 8 条里 A1（附件）与 A6（会花钱）没搬，
-> 一默认切过去用户就会撞到"参考图发不出去"；B 组里 `comfy_submit` 与后台轮询器没搬，
-> "AI 出图 → 画廊里有"这条链会变窄。已搬的 45/46 两步恰好是这两条链的另一半
-> （MCP 39 工具 = AI 能真的驱动 ComfyUI；角色卡 = AI 写角色不再靠印象）。
+> **结论（2026-09-26，更新到第 54 步）**：**App 直接调用的 A 组已经清零**（A1~A5、A7 全部搬完；
+> A6 要在线数据集/会花钱、A8 有意 501），所以"切过去之后界面报接口不存在"这一类**不会再发生**。
+> 仍然不建议今天就默认切流，原因只剩两条：
+> ① **A6** `capabilities/{refresh,probe}` 还是 501（设置页两个按钮，**要联网数据集 / 会花钱**，要用户拍板）；
+> ② **B 组（AI 能力）还缺一块**：`comfy_*` 六件、图像编辑三件、联网三工具 + `find_model`、配方三件、
+> `search_prompts` / `danbooru_lookup` —— 切过去 AI 仍能干活（MCP 39 工具 + `comfy_submit` + 附件都在），
+> 但"AI 自己查模型 / 自己修工作流 / 自己上网找参考"这几条路会窄一截。
+> **下一步**：C-1~C-3（脚本与发布包指向 Rust）+ C-5（四条 e2e 对着 Rust 跑一遍）；A6 单独问用户。
 >
 > **2026-09-26 这一轮补上的（第 47~49 步，都已 git 保存 + 实测）**：
 > **后台捕获轮询器（O5/O6）** → **`comfy_submit`（R10）** → **推送式捕获 + 批量导入工作流**。
