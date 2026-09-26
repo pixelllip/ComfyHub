@@ -62,6 +62,8 @@ pub struct AppState {
     pub mcp: Arc<crate::mcp::McpRegistry>,
     /// 后台捕获轮询器（P4 第 47 步 = O5/O6）：`lastPollAt` / `lastError` 的真源。
     pub capture_poller: Arc<crate::capture_poller::CapturePoller>,
+    /// 最近提交给 ComfyUI 的运行（P4 第 48 步）：`/api/capture/jobs` 的 `submissions[]`。
+    pub submissions: Arc<crate::workflow_submit::Submissions>,
 }
 
 impl AppState {
@@ -74,6 +76,7 @@ impl AppState {
             executor: Arc::new(crate::executor::Executor::new()),
             mcp: Arc::new(crate::mcp::McpRegistry::new()),
             capture_poller: Arc::new(crate::capture_poller::CapturePoller::new()),
+            submissions: Arc::new(crate::workflow_submit::Submissions::new()),
         }
     }
 

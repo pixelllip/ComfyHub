@@ -83,6 +83,18 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "comfy_submit",
+        description: r#"**把一个工作流提交给 ComfyUI 真的跑一次**（会消耗显卡时间，默认需要用户批准）。用 promptId 指定库里的工作流（先 comfy_find_workflow 或 comfy_load_workflow），或者直接用 workflowPath 指一份本机工作流文件（等价于先 comfy_load_workflow 再提交）。用 overrides 覆盖参数（键写成 节点id.输入名，例如 "3.steps"、"6.text"）。用 connections 补连线（键一样，值写成 ["上游节点id", 槽位]，例如 {"60.vae":["1",0]}）——comfy_load_workflow 报 runnable=false 时，照它给的 openInputs / unresolvedInputs 补。跑完后产物会自动入库到画廊。不要凭想象编造工作流；说不清要跑什么就先问用户。
+**提交前会先做一次模型预检**（用户 2026-09-22 拍板）：要的 checkpoint / LoRA / VAE 当前这个实例加载不了时会**当场拒**并告诉你该怎么办 —— 可能出现在硬盘上但实例看不到（重启 ComfyUI 就好，**别去下载**，见 `comfy_env_report`），也可能本机确实没有（去 `civitai_search` 查 + 问用户）。被拒时**不要改个名字重试**：预检看的是最终那张图（overrides / connections 应用之后），换个名字只会在下一次再被拒。
+**成人内容**：这一跑出的是 NSFW / R18 内容时必须显式写 `nsfw=true` ——产物会带上 NSFW 标记，用户在设置里开了「预览图模糊」时画廊与回复里的缩略图就会打码。正常内容**不要**打开它（那会让正常的图也被糊住）；也**不要**因为用户没提就默认关闭——你比用户更清楚自己这次在生成什么。"#,
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_submit`（R12/R13）。
+        //   正文里的 `**` 与换行都是描述的一部分 —— 模型读的就是这份文本。
+        input_schema: r#"{"type":"object","properties":{"promptId":{"type":"integer","description":"库里提示词的 id（来自 comfy_find_workflow / comfy_load_workflow）"},"workflowPath":{"type":"string","description":"或者：本机工作流文件的完整路径（.json）"},"overrides":{"type":"object","description":"要覆盖的参数：{\"6.text\":\"新提示词\",\"3.steps\":30}","additionalProperties":true},"connections":{"type":"object","description":"要补的连线：{\"60.vae\":[\"1\",0]}（key 是 节点id.输入名，值是这个输入该接到哪个节点的哪个输出槽位）","additionalProperties":true},"title":{"type":"string","description":"这次运行的标题（给用户认，可选）"},"nsfw":{"type":"boolean","description":"可选：这一跑出的是成人内容（NSFW/R18）时填 true，产物会带标记、预览图会按用户设置打码；正常内容不要填"},"wait":{"type":"boolean","description":"是否等它跑完（默认 true；false 表示排上队就返回）"},"waitSeconds":{"type":"integer","description":"最长等多少秒，默认 240，最多 900"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ASK",
+        mutating: true,
+    },
+    DesktopToolSpec {
         name: "comfy_sync_history",
         description: r#"立刻同步一次 ComfyUI /history（**会往本项目库里写数据**，属于轻度写操作）。需要用户批准；用之前先说明你想同步什么。"#,
         input_schema: r#"{"type":"object","properties":{"reason":{"type":"string","description":"为什么要同步（给用户看的）"}},"additionalProperties":false}"#,
@@ -193,6 +205,7 @@ mod tests {
                 "comfy_get_status",
                 "comfy_list_workflows",
                 "comfy_load_workflow",
+                "comfy_submit",
                 "comfy_sync_history",
                 "delete_skill",
                 "list_dir",
@@ -204,9 +217,9 @@ mod tests {
             ]
         );
         for absent in [
-            "comfy_submit",
             "comfy_find_workflow",
             "comfy_env_report",
+            "comfy_use_media",
             "find_model",
         ] {
             assert!(!names.contains(&absent), "{absent} 还没实现，不许提前列进来");

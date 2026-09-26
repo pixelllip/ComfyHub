@@ -52,6 +52,7 @@
 //! | **上游 LLM 客户端 / 协议适配器**（第 29 步）与**主循环**（第 30 步） | ✅ 已落地（不带工具、不带附件）；工具层已搬四个本机工具 + 两个闸门（第 31/32 步） |
 //! | **桌面文件工具五件**（`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`）+ **路径准入**（`resolve_read` / `resolve_write`：禁段、真实路径、目录根不可写） | ✅（P4 第 40 步；`desktop_tools.rs` + `policy.rs`，桌面提示词与下发的 `tools[]` 现在含它们） |
 //! | **comfy 五件**：`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` / `comfy_sync_history`（写库：建提示词 + 产物入库）/ `comfy_load_workflow`（把本机工作流文件读进库，界面格式按 `/object_info` 转换） | ✅（P4 第 41~44 步） |
+//! | **`comfy_submit`（R10）**：审核 → 审批 → 提交 → **自己等** → `captureRun` 入库 → `mediaIds` | ✅（P4 第 48 步：`workflow_submit.rs`；参数覆盖 / 补线逐条移植，预检用 `/object_info` 拦"实例加载不了"，超时如实报 `timeout`；`/api/capture/jobs` 的 `submissions[]` 也由它维护） |
 //! | **联网三工具**（`web_search` / `web_fetch` / `civitai_search`） | ⛔ **未搬**（系统提示里那一节暂时指向没下发的工具，见 `tools.rs` 的诚实清单） |
 //! | **官方 comfy-mcp 那 39 个工具**（`system_stats` / `nodes` / `run_workflow` / `launch_comfyui` / `get_logs` …） | ✅（P4 第 45 步：`mcp.rs` 起 `comfy-mcp` 子进程走 JSON-RPC，清单进 `/api/ai/tools` 与下发的 `tools[]`；`launch_comfyui` 由我们**替用户补上共享模型根那三个参数**，失败时把 stderr 尾部带进 `detail`） |
 //! | **`comfy_*` 其余八件**（`find_workflow` / `submit` / `use_attachment` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow`）+ `find_model` | ⛔ **未搬**（要 ComfyUI 在场 / 要模型清单，见 `tools.rs` 的诚实清单） |

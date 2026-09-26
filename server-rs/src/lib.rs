@@ -60,4 +60,5 @@ pub mod tools;
 pub mod upstream;
 pub mod workflow_convert;
 pub mod workflow_load;
+pub mod workflow_submit;
 pub mod write_routes;

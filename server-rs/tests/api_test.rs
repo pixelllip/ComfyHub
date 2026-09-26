@@ -5227,11 +5227,13 @@ async fn failed_calls_do_not_spend_the_budget() {
 /// **不许静默**、也不许假装跑过 —— 记录照样落库，模型拿到一句能改变做法的话。
 #[tokio::test]
 async fn unknown_tool_is_reported_as_tool_not_found() {
-    // ⚠ 这里**故意**挑一个还没搬的工具（`comfy_submit` 要 ComfyUI 在场，归后面的批次）：
+    // ⚠ 这里**故意**挑一个还没搬的工具（`comfy_env_report` 要 `/object_info` 加盘扫，归后面的批次）：
     // 第 40 步之前这条用例用的是 `read_file`，而它已经实现了 —— 继续拿它当"不存在的工具"
     // 会变成"撞审批闸门"，红的原因完全变成另一个（实测过）。
+    // ⚠ 第 48 步起 `comfy_submit` 也**实现了**（厂档 ASK）：再拿它当"不存在的工具"会去真的提交，
+    // 于是这条用例会卡在等 ComfyUI 上 —— 换名字时请挑一个 `tools::IMPLEMENTED` 里真的没有的。
     let (base_url, gateway) =
-        scripted_tool_gateway(vec![vec![("comfy_submit", r#"{"path":"a.png"}"#)]]).await;
+        scripted_tool_gateway(vec![vec![("comfy_env_report", r#"{}"#)]]).await;
     let state = state();
     seed_provider_and_model(&state);
     point_at_gateway(&state, &base_url);
@@ -5243,7 +5245,7 @@ async fn unknown_tool_is_reported_as_tool_not_found() {
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert_eq!(calls[0]["status"], "failed");
     assert_eq!(calls[0]["approval"], "denied");
-    assert!(calls[0]["error"].as_str().unwrap().contains("没有名为「comfy_submit」的工具"));
+    assert!(calls[0]["error"].as_str().unwrap().contains("没有名为「comfy_env_report」的工具"));
 
     // 失败那次**不进 tool.started**（没有开始过），但要有一条 `tool.failed`
     let types = event_types(&state, &run_id);
@@ -5585,6 +5587,7 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_get_status",
             "comfy_list_workflows",
             "comfy_load_workflow",
+            "comfy_submit",
             "comfy_sync_history",
             "delete_skill",
             "list_dir",
@@ -7656,9 +7659,9 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     }
     // 没实现的**一个都不许出现**
     for absent in [
-        "comfy_submit",
         "comfy_find_workflow",
         "comfy_env_report",
+        "comfy_use_media",
         "web_search",
         "web_fetch",
         "civitai_search",

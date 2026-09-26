@@ -272,7 +272,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 | R7 注入防线 | `SystemPromptNsfwTest`、`ToolRegistryTest` | ✅ **手机侧已补（M3）**：横幅文案只做 `{kind}`/`{query}` 替换（`MobileToolsTest` 断言前缀来自 kit） |
 | R8 审批顺序 | `AskGateTest` | ✅ 桌面（M1）+ **手机侧（M3）**：`MobileAskGate` 先 open 再发事件，`MobileToolsTest` 有两例（手快先答不落空 / 没人答如实报）。✅ **Rust 侧已补（P4 第 31 步）**：`approval_gate_opens_before_the_user_can_click`（**不等事件**，库里有 pending 就立刻点，必须 `accepted=true`）+ `a_denied_call_is_recorded_and_never_runs`（拒绝**不许执行**、只许一行、`approval=denied` + `status=failed`）|
 | R9 附件三层准入 | `e2e-ai-tools-test.ps1` 第 9 幕 | ✅ **手机侧已补（M3）**：`InlineBudgetTest` + 适配器未实现模态直接抛（`ProtocolAdapterTest`） |
-| R10 提交链路 | `e2e-submit-test.ps1`、`e2e-capture-test.ps1` | Rust 侧重建（P4，**未动**） |
+| R10 提交链路 | `e2e-submit-test.ps1`、`e2e-capture-test.ps1` | ✅ **Rust 侧已补（P4 第 48 步）**：`tests/submit_test.rs` 6 例（真 socket 假 ComfyUI：提交 → 等 → 入库 → `mediaIds`、nsfw 标记、预检拦截时**零请求**、超时如实报、`NO_API_GRAPH`、参数错误）；"拿 `e2e-submit-test.ps1` 对着 Rust 跑一遍"仍归切流前清单 |
 | R11 不复用提交名字 | 无 | ✅ **已补（M3）**：手机侧工具名 `comfy_queue_submit`，`MobileToolsTest` 断言不返回 `mediaIds`、不说"已提交" |
 | R12 工具单一真源 | `ToolRegistryTest` | ✅ 桌面有 `ToolScopeTest`；手机侧**不维护自己的规则清单**（`declaredTo` = kit ∩ 本地实现） |
 | R13 不硬编码规则 | 无 | ✅ **已补（M3）**：`R13NoPromptLiteralsTest` 扫描手机生产源码（豁免清单只有两个摘取标记常量）；桌面 run-kit 补下发 `titleInstruction` / `continueInstruction` |
@@ -520,6 +520,44 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > `/api/ai/{skills,memory,tools,nsfw,builtin,capabilities}/*`（界面维护用）。
 > ✅ **Run 与 SSE 已落地**（第 26~30 步，见本节上半部分）—— 也就是说
 > **桌面执行器已经能真的聊**（不带工具、不带附件），**R5/R6 已在 Rust 侧重建**。
+>
+> ✅ **P4 第 48 步（2026-09-26）：`comfy_submit`（**R10 在 Rust 侧的落点**）** ——
+> 新模块 `server-rs/src/workflow_submit.rs` 逐条对照 `ComfySubmitter`（提交 + 等 + 状态）、
+> `ComfySubmitter.WorkflowEdit`（参数覆盖 / 补线）、`AiWorkflowSearch.submit`（工具层的编排与返回的键集合）。
+>
+> - **只认 API 格式节点图**（R10 一个字没松）：图从 `prompts.source_ref` → `capture_runs.raw` 那条链取
+>   （[`capture::prompt_api_graph`](第 9 步)）；取不到就报 `NO_API_GRAPH` 并说清"可以换一条 runnable=true 的，
+>   或先在 ComfyUI 里手跑一次让它被捕获"，**绝不猜着造一张**。`workflowPath` 那条路走
+>   `workflow_load::load_from_file(…, tolerateUnsupported=true, emulateFrontend=true)`（与 Kotlin 同一档）。
+> - **提交后自带"等 + 立即入库"**（O4 的同一条纪律）：`POST /prompt` → 每 1.5 秒查 `/history/<id>`
+>   → 跑完立刻 `captureRun`（= `begin_run` + `build_ingest_request` + `ingest_claimed`，与轮询**同一条路**，
+>   幂等靠 prompt_id + sha256）。为什么不能只靠轮询：ComfyUI 的 `/history` **是进程内的**，
+>   重启实例之后上一次运行就查不回来了。抢不到（轮询先收走了）**如实**回 `alreadyCaptured` + 已有的
+>   `promptId` / `mediaIds`（Kotlin `captureRun` 同）。
+> - **`overrides` / `connections`** 两个纯函数逐条移植：键是 `节点id.输入名`；覆盖**按原值类型转换**
+>   （"原来是整数就不能塞非整数"）、**只允许改本来就有的输入**、错了**抛人话**（绝不静默忽略）；
+>   补线允许写当前不存在的输入名（那正是要补的位置），但**上游节点必须在图里真的存在**。
+> - **超时不等于失败**：等满 `waitSeconds`（默认 240、上限 900）还没完就回 `timeout` +
+>   "跑完之后会自动被捕获，稍后可以在画廊里看到"，既不假装完成也不假装失败。
+> - **提交前的两道实例侧预检**（放在 overrides / connections **都应用完之后** —— 模型常常就是在这一次
+>   覆盖里把模型名换成能用的那个）：① `class_type` 不在 `/object_info` 里 → 拒；② 类名含 `Loader` 的节点、
+>   输入是字符串、而 `/object_info` 给该输入列的候选里有它没有 → 拒。两条都给"该干什么"（找用户装节点 /
+>   **重启 ComfyUI，别下载**）。**拿不到 `/object_info` 就一个都不拦**（Kotlin 同：误拦比白跑更糟）。
+>   ⚠ 与 Kotlin 的差别如实记在文件头：Kotlin 还做七项 `WorkflowAudit` 与盘扫（`ComfyModels.inventory`），
+>   Rust 这一版**只有这两道**，措辞也只说"实例看不到"—— 宁可比 Kotlin 少说，也不谎报检查过的范围。
+> - `/api/capture/jobs` 的 `submissions[]` 从此**真的有内容**（第 47 步时还是如实空数组）：
+>   记录按 `submittedAt` 倒序、同 `promptId` 就地更新、最多 30 条，形状与 Kotlin `ComfySubmission` 逐字一致
+>   （有默认值的键一律出现、可空键为 null 时整键省略）。
+> - **验收**：`cargo test` **358 例全绿**（229 lib + 121 api_test + 2 shape_lint + **6 条新的 R10 集成用例**）。
+>   新用例 `tests/submit_test.rs` 自带一台**进程内的假 ComfyUI**（axum，`127.0.0.1:0`，真 socket）：
+>   ① 提交→等→入库→`mediaIds` 整条链（并断言**提交出去的那张图**里确实有覆盖与补线、
+>   入库解析出的正向提示词来自**真正提交的图**、产物挂在新提示词上）；
+>   ② `nsfw=true` 一路走到 `media_assets.nsfw`，`nsfwMediaIds` 回给界面；
+>   ③ 预检拦截时**一个字节都不许发出去**（假实例记的提交列表为空）；
+>   ④ `/history` 永远空 → 如实报 `timeout` + `hint`；⑤ 没有 API 图 → `NO_API_GRAPH`；
+>   ⑥ 缺参数 / 覆盖了不存在的输入 → `INVALID_ARGUMENT` 且说清现有输入名。
+>   `tools` / `desktop_tools` / `api_test` 里那些"还没搬的名字"清单也一并更新
+>   （`comfy_submit` 从"不许出现"挪进"必须出现"）。
 >
 > ✅ **P4 第 47 步（2026-09-26）：后台捕获轮询器（O5 / O6）** —— `server-rs/src/capture_poller.rs`。
 > 此前 Rust 侧只有"端点/工具触发一次"的抓取，于是**用户自己在 ComfyUI 里跑的东西永远不会被收**，
@@ -1732,7 +1770,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | 工具 | 状态 |
 | --- | --- |
-| `comfy_submit`（**R10**：审核 → 审批 → 提交 → 自己等 → `captureRun()` 入库 → `mediaIds`） | ⛔ 未搬（第 46 步的下一件；**`/history` 是进程内的**，必须自带"等 + 收"，O4） |
+| `comfy_submit`（**R10**：审核 → 审批 → 提交 → 自己等 → `captureRun()` 入库 → `mediaIds`） | ✅ **已搬（P4 第 48 步，2026-09-26）**：`workflow_submit.rs` + `tests/submit_test.rs` 6 例；预检只有"节点类 + 实例能不能加载这个模型"两道（七项 audit / 盘扫 / `env_report` 仍未搬） |
 | `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ 未搬（都要 `ComfyModels` 本机清单；`env_report` 是 O3 —— "盘上有、实例看不到"的解药） |
 | `comfy_use_media` / `comfy_make_mask` / `comfy_use_attachment`（图像编辑三件） | ⛔ 未搬（后者依赖 A1） |
 | 联网三工具 `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（系统提示那一节仍指向没下发的工具；凭据端点已就绪） |
@@ -1742,9 +1780,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | **截断续写**（`MAX_CONTINUATIONS` + `CONTINUE_INSTRUCTION`） | ⛔ 未做（输出被长度上限卡断时，现在把半句话当结尾） |
 | 官方 comfy-mcp 39 个 | ✅ **第 45 步已做** |
 
-**C. 切流动作本身（代码之外）**
-
-1. `server.ps1`：`Resolve-Backend` 认 Rust 二进制（`<根>\server\comfyhub-server-rs.exe` 与
+**C. 切流动作本身（代码之外）**1. `server.ps1`：`Resolve-Backend` 认 Rust 二进制（`<根>\server\comfyhub-server-rs.exe` 与
    `server-rs\target\release\comfyhub-server-rs.exe` 两种布局）+ **端口文件 `.run\api.json` 的写入**
    （Rust 版本目前**不写**它，而 App 与脚本靠它发现端口 —— 切流前必须补，否则 App 会对着旧端口等）；
 2. `comfyhub.ps1 doctor`：报"当前是哪种后端 / 二进制构建新鲜度"；
@@ -1882,7 +1918,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | 项 | 状态 |
 | --- | --- |
 | **MCP 桥（官方 comfy-mcp 39 个工具）** | ✅ **已做（P4 第 45 步，2026-09-26）**：`server-rs/src/mcp.rs`（stdio JSON-RPC + 注册表 + 权限档 + `prepare_launch`）；真机验到 `/api/ai/tools` 回 53 个（39 个 MCP） |
-| **`comfy_submit`**（R10：审核 → 审批 → 提交 → 等 → 入库 → `mediaIds`） | ⛔ 未做 |
+| **`comfy_submit`**（R10：审核 → 审批 → 提交 → 等 → 入库 → `mediaIds`） | ✅ **已做（P4 第 48 步，2026-09-26）**：`workflow_submit.rs` + `tests/submit_test.rs` 6 例；预检只有"节点类 + 实例能不能加载这个模型"两道（七项 audit 与盘扫仍未搬） |
 | `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ 未做（前四个要 `ComfyModels` 本机清单） |
 | `comfy_use_attachment`（把附件投进 ComfyUI `input\`） | ⛔ 未做（依赖 R9） |
 | **联网三工具** `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未做（系统提示里那一节仍指向没下发的工具；凭据端点已就绪） |

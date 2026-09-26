@@ -44,6 +44,36 @@ pub async fn queue(comfy_url: &str) -> Result<QueueSnapshot, String> {
     })
 }
 
+/// 一次 POST JSON（`POST /prompt`）：超时 **30 秒**（Kotlin `postPrompt` 同）。
+///
+/// ⚠ 非 2xx 时**把响应体带进错误**：ComfyUI 的 400 会说清哪个节点的哪个参数不对，
+/// 那段话正是模型改图要用的（只说 "HTTP 400" 等于什么都没说）。
+pub async fn post_json(url: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let host = host_of(url);
+    let client = crate::upstream::client_for(&host)
+        .map_err(|e| format!("HTTP 客户端创建失败：{}", e.human()))?;
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .timeout(std::time::Duration::from_secs(30))
+        .body(body.to_string())
+        .send()
+        .await
+        .map_err(|e| friendly_error(&e, url))?;
+    let status = response.status();
+    let text = response.text().await.map_err(|e| format!("读响应失败：{e}"))?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}：{}", status.as_u16(), take_chars(&text, 600)));
+    }
+    serde_json::from_str(&text).map_err(|e| format!("响应不是 JSON：{e}（原文：{}）", take_chars(&text, 300)))
+}
+
+/// 按**字符**截断（别把 UTF-8 字符劈成两半）。
+fn take_chars(text: &str, max: usize) -> String {
+    text.chars().take(max).collect()
+}
+
 /// 一次 GET：超时 20 秒（Kotlin `fetchJson` 同），非 2xx 当错误。
 ///
 /// `pub`：捕获轮询（`/history`）也走它 —— ComfyUI 的地址与代理纪律只有这一处实现。

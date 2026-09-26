@@ -395,9 +395,8 @@ pub async fn status_json(state: &AppState) -> Result<Value, ApiError> {
 
 /// `GET /api/capture/jobs`（Kotlin `CaptureJobSnapshot`，5 个键）。
 ///
-/// `submissions` 是**本进程提交过的任务**：Rust 侧 `comfy_submit` 还没搬，
-/// 所以这里是空数组 —— 那不是"假装没事"，而是**如实**（此刻确实一个都没提交过）。
-/// `comfy_submit` 落地时会维护同一份内存清单。
+/// `submissions` 是**本进程提交过的任务**（P4 第 48 步起由 `comfy_submit` 维护，
+/// 与 `comfy_get_status` / 界面右侧栏读的是同一份内存清单）。
 pub async fn jobs_json(state: &AppState) -> Result<Value, ApiError> {
     let (reachable, snapshot) = probe_queue(state).await;
     let mut out = Map::new();
@@ -407,7 +406,7 @@ pub async fn jobs_json(state: &AppState) -> Result<Value, ApiError> {
     if let Some(label) = snapshot.running_label {
         out.insert("runningLabel".into(), json!(label));
     }
-    out.insert("submissions".into(), Value::Array(Vec::new()));
+    out.insert("submissions".into(), Value::Array(state.submissions.list(10)));
     Ok(Value::Object(out))
 }
 

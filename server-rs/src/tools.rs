@@ -293,12 +293,13 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + comfy 查询两件（`comfy_get_run` / `comfy_list_workflows`，P4 第 41 步）。
 /// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
 /// `comfy_submit` 那一批要 ComfyUI 在场与整套转换栈（R10 的落点），各自另起批次。
-pub const IMPLEMENTED: [&str; 16] = [
+pub const IMPLEMENTED: [&str; 17] = [
     "ask_user_question",
     "comfy_get_run",
     "comfy_get_status",
     "comfy_list_workflows",
     "comfy_load_workflow",
+    "comfy_submit",
     "comfy_sync_history",
     "delete_skill",
     "list_dir",
@@ -420,6 +421,10 @@ pub async fn execute(
         "comfy_get_status" => comfy_get_status(state, arguments).await,
         "comfy_sync_history" => comfy_sync_history(state).await,
         "comfy_load_workflow" => comfy_load_workflow(state, policy, arguments).await,
+        // ---- 提交（P4 第 48 步：**R10 的落点**）------------------------------
+        // 「审核 → 审批 → 提交 → 自己等 → captureRun 入库 → mediaIds」这条链：
+        // 审批由执行器（`default_access = ASK`）负责，其余都在 `workflow_submit` 里。
+        "comfy_submit" => crate::workflow_submit::tool_submit(state, policy, arguments).await,
         // ---- 资料库两件（P4 第 46 步：角色卡）--------------------------------
         // O7/O8 的落点：写角色之前**先查本机**（库里那张卡 / 那条提示词的 tag 栈），
         // 而不是凭印象编 —— 现场教训是"把 shinku 当成 iroi 写了两版废图"。
@@ -1497,9 +1502,12 @@ mod tests {
         assert!(is_implemented("comfy_sync_history"));
         assert_eq!(default_access("comfy_sync_history"), "ASK");
         assert!(is_mutating("comfy_sync_history"));
+        // `comfy_submit`（P4 第 48 步，R10）：**会烧显卡时间** → 出厂 ASK，一个字都不能松
+        assert!(is_implemented("comfy_submit"));
+        assert_eq!(default_access("comfy_submit"), "ASK", "提交必须默认要用户批准");
+        assert!(is_mutating("comfy_submit"));
         // 还没搬的一个都不许说"实现了"
         for name in [
-            "comfy_submit",
             "comfy_find_workflow",
             "comfy_env_report",
             "find_model",
