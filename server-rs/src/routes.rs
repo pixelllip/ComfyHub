@@ -322,6 +322,8 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::character_cards::router())
         // AI 附件五条（P4 第 50 步）：原件落在 `<storage>/ai-attachments`，缩略图在 `<storage>/ai-thumbs`。
         .merge(crate::attachments::router())
+        // Provider 连接测试 / 模型发现（P4 第 53 步）：设置页那两个按钮。
+        .merge(crate::provider_probe::router())
         // 配对闸门（P4 第 23 步）：`/api/auth*` + **密钥下行** + 令牌校验中间件。
         // ⚠ 顺序要紧：`.layer()` 只作用于**它之前**加进来的路由，所以这里必须排在
         // 所有 `.route()` / `.merge()` 之后（排在前面就会漏掉一半端点，而且不报错）。

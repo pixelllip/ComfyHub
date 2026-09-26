@@ -36,6 +36,7 @@
 //! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ |
 //! | `GET /api/ai/providers`（不含密钥）、`GET /api/ai/providers/{id}/models` | ✅ |
 //! | **Provider 写侧**：`POST/PUT/DELETE /api/ai/providers`（乐观锁 AIH-007）、`PUT …/models` | ✅（P4 第 37 步） |
+//! | **Provider 连接测试 / 模型发现**：`POST /api/ai/providers/{id}/{test,discover-models}` | ✅（P4 第 53 步：`provider_probe.rs`；`/models` 的两种 Base URL 写法都试、404 不算鉴权失败、密钥脱敏、能力**逐维度**合并内置目录） |
 //! | **凭据写侧**：`GET/PUT/DELETE /api/ai/providers/{id}/credentials`、`/api/ai/web-search/credential` | ✅（P4 第 34 步，DPAPI 与 Kotlin 共用一份文件） |
 //! | **Skills 六条**：`/api/ai/skills{,/roots,/rescan,/{name}}` | ✅（P4 第 35 步） |
 //! | **长期记忆五条**：`GET/PUT/DELETE /api/ai/memory`、`POST …/entries`、`POST …/delete` | ✅（P4 第 36 步） |

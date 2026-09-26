@@ -521,6 +521,34 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ✅ **Run 与 SSE 已落地**（第 26~30 步，见本节上半部分）—— 也就是说
 > **桌面执行器已经能真的聊**（不带工具、不带附件），**R5/R6 已在 Rust 侧重建**。
 >
+> ✅ **P4 第 53 步（2026-09-26）：Provider 连接测试 + 模型发现（A2，设置页那两个按钮）** ——
+> 新模块 `server-rs/src/provider_probe.rs`，外加 `upstream::refine_from_body`（Kotlin `AiUpstream`
+> 那一段的移植，**与 LLM 调用共用一份**）。A 组（App 直接调用的端点）**至此清零**。
+>
+> - **四条纪律逐条落地**：① **Base URL 带不带 `/v1` 的两种写法都试**，并把"实际可用的是哪个地址"
+>   回报给界面（填错一层就是"连接失败"，而 Key 其实是对的）；② **`/models` 回 404 不算鉴权失败** ——
+>   有些网关根本没有列表端点，只要不是 401/403 就认为连通（`MODEL_LIST_UNAVAILABLE` 是内部标记）；
+>   ③ **密钥绝不进日志、不进响应**（错误正文先 `redact` 再截断，AIH-051）；④ **能力逐维度合并、不猜**
+>   （AIH-011）：接口明确声明的维度用接口的，没声明的用内置目录，两边都没有才用保守默认
+>   （仅文本 + 工具默认给上）。
+> - ★ **移植时抓到两处"照着直觉写就会错"的地方**（都写进了代码注释与用例）：
+>   ① **两家的列表地址规则不一样**：OpenAI 兼容是"Base URL 后面直接拼 `/models`"，
+>      Anthropic 才把 `/v1` 归一化 —— 我第一版按"OpenAI 也补 `/v1`"写，候选序列整个反了；
+>   ② **混装数组 `capabilities: ["vision","tools"]` 里的 `"tools"` 是个副作用**：
+>      Kotlin 对**每个**候选键都真的解析一遍（只有"模态"的赋值带条件），
+>      我第一版写成"模态已定就跳过这个键"，于是接口声明的工具能力**静默丢失**（候选里是默认值，
+>      界面上完全看不出哪里错）。两条现在都有用例钉住。
+> - **验收**：`cargo test` **406 例全绿**（269 lib + 121 api_test + 4 attachments_test + 3 import_folder_test
+>   + 7 provider_probe_test + 2 shape_lint + 6 submit_test）；`provider_probe` 6 例纯函数
+>   （地址候选 / 数模型 / 细化错误码 / 逐维度声明 / 候选合并与来源 / 内置目录命中）+ 集成 7 例
+>   （真 socket 假上游：连通与 `modelCount`、**只有 `/v1/models` 通时的地址回退**、两个候选都 404 算连通、
+>   401 报 `MISSING_CREDENTIAL`、**缺凭据时连请求都不发**、发现**不落库**、provider 不存在给人话）。
+> - **真机实测（真库副本 8105 + 用户真凭据）**：`deepseek` → `{"ok":true,"message":"连接正常（HTTP 200）",
+>   "modelCount":2}`，发现 2 个候选（`contextWindow=1048576`、`maxOutputTokens=393216`、
+>   思考档位与方言 `deepseek` 来自内置目录）；`command-code-goat` → `HTTP 200 / modelCount=82`，
+>   发现 **82 个候选：接口声明 0 / 内置目录 77 / 未识别 5**（正是"接口不给能力 → 内置目录补"那条规则）；
+>   不存在的 provider → `400 {"error":"CONFIG_ERROR","detail":"Provider 不存在: nope"}`。
+>
 > ✅ **P4 第 52 步（2026-09-26）：`POST /api/capture/import`（导入目录里已生成好的产物，A3 的最后一格）** ——
 > 两个新模块：`server-rs/src/png_text.rs`（Kotlin `PngMeta` 的逐条移植：`tEXt` 明文 /
 > `zTXt` zlib / `iTXt`（含压缩）三种块全认，CRC 不校验、单块体积有上限）+ `capture_import.rs`
@@ -1863,7 +1891,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | # | 端点 | 用户会看到什么 | 规模 |
 | --- | --- | --- | --- |
 | A1 | `/api/ai/attachments{,/{id},/{id}/file,/{id}/thumb}` + `POST` 上传 + 创建 Run 前的三层准入（**R9**） | ✅ **已搬（P4 第 50 步）**：五条端点 + `POST /api/ai/preflight` + 创建 Run 前的库里事实闸门 + **图片真的内联**（三家适配器）；⚠ 仍缺**视频预览帧**（`/thumb` 回 204，见 A5）与**视频/音频/文档的传输方式**（三家适配器都只有图片的 `inline_base64`） | — |
-| A2 | `/api/ai/providers/{id}/test`、`/{id}/discover-models` | 设置页那两个按钮报"接口不存在" | 中 |
+| A2 | `/api/ai/providers/{id}/test`、`/{id}/discover-models` | ✅ **已搬（P4 第 53 步）**：真 deepseek / command-code-goat 实测 —— test 回 `HTTP 200` + `modelCount`，discover 回 2 / **82** 个候选（接口声明 0 / 内置目录 77 / 未识别 5，**逐维度合并**生效） | — |
 | A3 | `/api/capture/import`（导入目录里的产物：含 PNG 内嵌工作流） | ✅ **已搬（P4 第 52 步）**：真产物目录 306 张里导 3 张 → `imported=3 / promptsCreated=3`（内嵌 prompt 还原成参数），再导一次 `duplicates=3` | — |
 | A4 | ~~`/api/ingest/comfyui`~~ | ✅ **已搬（P4 第 49 步）** | — |
 | A5 | `/api/media/{id}/poster` | ✅ **已搬（P4 第 51 步）**：起 `scripts\video-poster.ps1`（Windows 缩略图管线，**不依赖 ffmpeg**）；真机实测真 mp4 → 640×366 PNG + 缓存命中 | — |

@@ -59,6 +59,38 @@ pub struct ChatRequest<'a> {
     pub max_output_tokens: Option<i64>,
 }
 
+/// 按正文里的关键字**细化**错误码（Kotlin `AiUpstream.refineFromBody`，AIH-024）。
+///
+/// 真实网关的 400/403 语义差别很大，只看状态码会把"套餐里没有这个模型"误报成"密钥不对"、
+/// 把"这个模型该走另一个端点"误报成"配置随便写错了"。`None` = 正文里没有更具体的线索。
+pub fn refine_from_body(body: &str) -> Option<&'static str> {
+    let b = body.to_lowercase();
+    let has = |needle: &str| b.contains(needle);
+    if has("not_in_plan")
+        || has("not in plan")
+        || has("quota")
+        || has("insufficient_quota")
+        || has("billing")
+        || has("credit")
+    {
+        return Some("QUOTA_EXCEEDED");
+    }
+    // 混合网关最常见的坑：模型不属于当前协议的端点
+    if has("not supported on this endpoint")
+        || has("unsupported_model")
+        || (has("use /") && has("provider/v1"))
+    {
+        return Some("PROTOCOL_ERROR");
+    }
+    if has("invalid api key") || has("authentication_error") || has("unauthorized") {
+        return Some("MISSING_CREDENTIAL");
+    }
+    if has("rate limit") || has("rate_limit") {
+        return Some("RATE_LIMIT");
+    }
+    None
+}
+
 /// 状态码 → 稳定错误码（**纯函数**，便于单测）。
 pub fn classify_status(status: u16) -> &'static str {
     match status {

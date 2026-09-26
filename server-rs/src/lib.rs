@@ -51,6 +51,7 @@ pub mod png_text;
 pub mod policy;
 pub mod poster;
 pub mod protocol;
+pub mod provider_probe;
 pub mod questions;
 pub mod repo;
 pub mod routes;
