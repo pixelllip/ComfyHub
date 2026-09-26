@@ -1,5 +1,5 @@
 {
-  "1": {"_meta": {"title": "底模 Krea 2 Turbo int8"}, "inputs": {"ckpt_name": "krea2TurboOfficialComfy_krea2TurboInt8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
+  "1": {"_meta": {"title": "⚠ 这份不适合做图像编辑（实测：重绘不跟随提示词 3 seed 只中 1；贴人物图 denoise 0.5 带白框、0.85 换人）—— 图像编辑用 comfyhub_inpaint_anima.json；这份留给文生图。底模 Krea 2 Turbo int8"}, "inputs": {"ckpt_name": "krea2TurboOfficialComfy_krea2TurboInt8.safetensors"}, "class_type": "CheckpointLoaderSimple"},
   "5": {"_meta": {"title": "外挂 CLIP（Qwen3VL-4B，type=krea2）"}, "inputs": {"clip_name": "qwen3VL4BAbliteratedComfyui_v10_full_bf16.safetensors", "type": "krea2", "device": "default"}, "class_type": "CLIPLoader"},
   "6": {"_meta": {"title": "外挂 VAE"}, "inputs": {"vae_name": "qwen_image_vae.safetensors"}, "class_type": "VAELoader"},
   "10": {"_meta": {"title": "底图（要保留的那张）"}, "inputs": {"image": "example.png"}, "class_type": "LoadImage"},

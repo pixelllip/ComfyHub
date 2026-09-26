@@ -54,6 +54,24 @@ param(
     [string]$Prompt = '',
     # 先投底图、再按遮罩重绘时用多大 denoise（1.0 = 遮罩区整块重画）
     [double]$Denoise = 1.0,
+    # **两阶段编辑的第二阶段**：阶段一生成的人物图（画廊里的产物 id）。
+    # 给了就多一轮 `comfy_use_media` 把人物图投进 ComfyUI，并把 `20.image` 指向它、
+    # 用 -PersonDenoise（默认 0.5）融合 —— 这就是用户原话里
+    # "保持背景不变，更换有具体动作的人物并保持画风"的那条路。
+    [int]$PersonMediaId = 0,
+    # **两阶段编辑的第一阶段**：先生成人物（t2i），再进第二阶段把它贴进底图。
+    # 用户原话："这时候就应该先生成人物，然后再用图像编辑把人换上去吧？"
+    [switch]$TwoStage,
+    # 阶段一用哪份 t2i 工作流（默认项目自带的 Krea2 turbo t2i，白底出图好贴）
+    [string]$PersonWorkflow = '',
+    # 阶段一的提示词（要人物 + 干净背景）
+    [string]$PersonPrompt = '',
+    # 贴人物图时的融合档（0.4~0.6；高了人物会变样，低了接缝明显）
+    [double]$PersonDenoise = 0.5,
+    # **cfg**（0 = 不动，用工作流自己写死的值）。
+    # ⚠ 两条自带工作流都写死 `cfg=1.0`（无引导档，Turbo 的常规跑法）——
+    #   此时提示词对画面的约束很弱，"贴进来的背景"很难被重画掉。要提高就得显式给。
+    [double]$Cfg = 0,
     [int]$GatewayPort = 8797,
     [int]$TimeoutSeconds = 900,
     # 跑完把测试产生的会话 / 产物 / 提示词 / input 里的临时文件删掉
@@ -296,12 +314,54 @@ try {
                       capabilitySource = 'manual'; enabled = $true })
     } | Out-Null
 
-    # --- 6. 发一次「编辑图片」，三轮工具调用都要批准 -----------------------
+    # --- 6. 两阶段：先生成人物（t2i）--------------------------------------
+    if ($TwoStage -and $PersonMediaId -le 0) {
+        if (-not $PersonWorkflow) { $PersonWorkflow = Join-Path $ProjectRoot 'comfyui\krea2_sage_turbo_t2i.json' }
+        if (-not (Test-Path $PersonWorkflow)) { Say "  阶段一的工作流不存在：$PersonWorkflow" 'Red'; exit 1 }
+        if (-not $PersonPrompt) {
+            $PersonPrompt = 'A photograph of a young woman with long black hair, wearing a red dress, ' +
+                'standing straight and waving her hand, full body, soft studio lighting, ' +
+                'clean flat white background, sharp focus, 35mm film look.'
+        }
+        Say ''
+        Say '  [阶段一] 先生成人物（t2i → 产物入库 → 拿到 mediaId）' 'Cyan'
+        $convA = Invoke-Api 'POST' '/api/ai/conversations' @{ providerId = $ProviderId; modelId = 'fake-edit-model' }
+        $script:CreatedConversationIds += $convA.id
+        $runA = Invoke-Api 'POST' "/api/ai/conversations/$($convA.id)/runs" @{
+            text = "生成人物 $PersonWorkflow|$PersonPrompt"; providerId = $ProviderId; modelId = 'fake-edit-model'
+        }
+        $assistantA = $null
+        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        while ((Get-Date) -lt $deadline) {
+            $null = Approve-PendingCalls $runA.runId -TimeoutSeconds 3
+            $msgsA = Invoke-Api 'GET' "/api/ai/conversations/$($convA.id)/messages" $null
+            $assistantA = @($msgsA | Where-Object { $_.id -eq $runA.assistantMessageId }) | Select-Object -First 1
+            if ($assistantA -and ($assistantA.status -eq 'complete' -or $assistantA.status -eq 'failed')) { break }
+            Start-Sleep -Milliseconds 700
+        }
+        Check '阶段一 Run 结束（complete）' ($assistantA -and $assistantA.status -eq 'complete') $assistantA.status
+        $submitA = @($assistantA.parts | Where-Object { $_.type -eq 'tool_result' -and $_.jsonPayload.name -eq 'comfy_submit' }) |
+            Select-Object -First 1
+        $stage1 = if ($submitA) { $submitA.text | ConvertFrom-Json } else { $null }
+        Check '阶段一产物入库（mediaIds 非空）' ($stage1 -and @($stage1.mediaIds).Count -ge 1) ($stage1 | ConvertTo-Json -Compress)
+        if ($stage1 -and $stage1.mediaIds) {
+            $PersonMediaId = [int]@($stage1.mediaIds)[0]
+            $script:CreatedMediaIds += @($stage1.mediaIds)
+            if ($stage1.capturedPromptId) { $script:CreatedPromptIds += $stage1.capturedPromptId }
+            Say "  阶段一产物：mediaId=$PersonMediaId" 'DarkGray'
+        } else {
+            Say '  阶段一没拿到产物 —— 第二阶段没法继续' 'Red'
+        }
+    }
+
+    # --- 7. 发一次「编辑图片」，三轮工具调用都要批准 -----------------------
     Say ''
     Say '  [1/3] AI 投放底图 → 生成遮罩 → 提交（每步都要用户批准）' 'Cyan'
     $conv = Invoke-Api 'POST' '/api/ai/conversations' @{ providerId = $ProviderId; modelId = 'fake-edit-model' }
     $script:CreatedConversationIds += $conv.id
-    $runText = "编辑图片 $($script:AttachmentId)|$workflowPath|$Denoise|$Region|$Feather|$Prompt"
+    # 两阶段模式下 denoise 用**融合档**（贴人物图），单阶段用 -Denoise（默认 1.0 纯重绘）
+    $effectiveDenoise = if ($PersonMediaId -gt 0) { $PersonDenoise } else { $Denoise }
+    $runText = "编辑图片 $($script:AttachmentId)|$workflowPath|$effectiveDenoise|$Region|$Feather|$Prompt|$PersonMediaId|$Cfg"
     $run = Invoke-Api 'POST' "/api/ai/conversations/$($conv.id)/runs" @{
         text = $runText; providerId = $ProviderId; modelId = 'fake-edit-model'
     }
@@ -317,15 +377,21 @@ try {
         Start-Sleep -Milliseconds 700
     }
     Check 'Run 结束（complete）' ($assistant -and $assistant.status -eq 'complete') $assistant.status
-    Check '三轮工具调用都经过审批闸门' ($approvals -eq 3) "批准了 $approvals 次"
+    $expectedTools = if ($PersonMediaId -gt 0) {
+        'comfy_use_attachment,comfy_use_media,comfy_make_mask,comfy_submit'
+    } else {
+        'comfy_use_attachment,comfy_make_mask,comfy_submit'
+    }
+    $expectedCount = if ($PersonMediaId -gt 0) { 4 } else { 3 }
+    Check "工具调用都经过审批闸门（$expectedCount 轮）" ($approvals -eq $expectedCount) "批准了 $approvals 次"
 
     # --- 7. 三个工具的结果 ------------------------------------------------
     Say ''
     Say '  [2/3] 工具结果与落盘的证据' 'Cyan'
     $results = @($assistant.parts | Where-Object { $_.type -eq 'tool_result' })
     $names = @($results | ForEach-Object { $_.jsonPayload.name })
-    Check '工具调用顺序 = 投放 → 遮罩 → 提交' `
-        (($names -join ',') -eq 'comfy_use_attachment,comfy_make_mask,comfy_submit') ($names -join ',')
+    Check '工具调用顺序 = 投放 →（人物图）→ 遮罩 → 提交' `
+        (($names -join ',') -eq $expectedTools) ($names -join ',')
 
     $byName = @{}
     foreach ($r in $results) { $byName[$r.jsonPayload.name] = $r }
@@ -368,6 +434,30 @@ try {
         ($byName['comfy_submit'].text)
     Check '提交结果里带 mediaIds（界面据此贴画廊入口卡）' `
         ($submitted -and @($submitted.mediaIds).Count -ge 1) ($submitted | ConvertTo-Json -Compress)
+
+    # 两阶段：人物图真的被投放了，而且 `20.image` / `denoise` 的覆盖**真的生效**
+    # （`appliedOverrides` 是工具自己报的"我改了哪几个键"，比正文里的叙述硬）
+    if ($PersonMediaId -gt 0) {
+        $person = $null
+        if ($byName.ContainsKey('comfy_use_media')) { $person = $byName['comfy_use_media'].text | ConvertFrom-Json }
+        Check '阶段一产物被投放进了 input 目录' `
+            ($person -and $person.filename -and (Test-Path (Join-Path $instanceInput $person.filename))) `
+            ($person | ConvertTo-Json -Compress)
+        $applied = @($submitted.appliedOverrides)
+        # `appliedOverrides` 的形状是 **`键 ← 值`**（工具自己报的"我改了哪几个键"）
+        $personKey = @($applied | Where-Object { $_ -match ('^\d+\.image ← ' + [regex]::Escape($person.filename) + '$') })
+        Check '人物图覆盖写进了工作流（LoadImage 两份：底图 + 人物图）' ($personKey.Count -ge 1) ($applied -join ' | ')
+        Check "denoise 被覆盖成 $PersonDenoise（贴人物图的融合档）" `
+            (@($applied | Where-Object { $_ -match ('\.denoise ← ' + [regex]::Escape("$PersonDenoise") + '$') }).Count -ge 1) `
+            ($applied -join ' | ')
+        if ($Cfg -gt 0) {
+            # ⚠ PowerShell 的 `"$Cfg"` 对 4.0 给的是 "4"（而工具回的是 "4.0"），
+            #   所以这里允许一个可选的小数尾巴
+            Check "cfg 被覆盖成 $Cfg（提示词约束变强）" `
+                (@($applied | Where-Object { $_ -match ('\.cfg ← ' + [regex]::Escape("$Cfg") + '(\.0+)?$') }).Count -ge 1) `
+                ($applied -join ' | ')
+        }
+    }
     if ($submitted -and $submitted.mediaIds) { $script:CreatedMediaIds += @($submitted.mediaIds) }
     if ($submitted -and $submitted.capturedPromptId) { $script:CreatedPromptIds += $submitted.capturedPromptId }
     $editMediaId = if ($submitted -and $submitted.mediaIds) { @($submitted.mediaIds)[0] } else { 0 }
@@ -488,7 +578,7 @@ try {
         # ⚠ 用通配：投放的文件名是 **`<我们想要的名字>-<来源 id 前 8 位>.png`**（防重名那一段后缀），
         #   所以 `edit-bg.png` / `edit-stage1.png` 落盘之后叫 `edit-bg-00000000.png` /
         #   `edit-stage1-m235.png` —— 只按"想要的名字"删会一个都删不掉（实测留了一地）。
-        foreach ($pattern in @('edit-bg*.png', 'edit-mask*.png', 'edit-stage1*.png')) {
+        foreach ($pattern in @('edit-bg*.png', 'edit-mask*.png', 'edit-person*.png', 'edit-stage1*.png')) {
             if ($script:InputDir) {
                 Get-ChildItem -Path $script:InputDir -Filter $pattern -File -ErrorAction SilentlyContinue |
                     Remove-Item -Force -ErrorAction SilentlyContinue

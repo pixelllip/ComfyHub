@@ -170,23 +170,44 @@ class Handler(BaseHTTPRequestHandler):
         #      遮罩 / ImageScale 尺寸 / 提示词 / seed / denoise）。
         #
         # 脚本给的格式（用 `|` 分隔，提示词放最后所以里面可以有空格）：
-        #   `编辑图片 <附件id>|<工作流路径>|<denoise>|<region>|<feather>|<提示词>`
+        #   `编辑图片 <附件id>|<工作流路径>|<denoise>|<region>|<feather>|<提示词>|<人物产物 id 或空>`
+        #
+        # 最后那个字段是**两阶段编辑的第二阶段**（用户的原话："先生成人物，然后再用图像编辑
+        # 把人换上去"）：给了就多一轮 `comfy_use_media` 把阶段一的产物投进去，
+        # 并把 `20.image` 指向它、`denoise` 降到 0.4~0.6 融合（不给就是"纯提示词重绘"）。
         if "编辑图片" in user_text:
-            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 5)
+            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 7)
             attachment_id = fields[0].strip() if fields else ""
             workflow_path = fields[1].strip() if len(fields) > 1 else ""
             denoise = float(fields[2].strip()) if len(fields) > 2 and fields[2].strip() else 1.0
             region = fields[3].strip() if len(fields) > 3 and fields[3].strip() else "0.58,0.26,0.36,0.74"
             feather = int(fields[4].strip()) if len(fields) > 4 and fields[4].strip() else 0
             prompt = fields[5].strip() if len(fields) > 5 else ""
+            person_id = fields[6].strip() if len(fields) > 6 and fields[6].strip() else ""
+            # 第 8 个字段：cfg（空 = 用工作流自己的值）。
+            # ⚠ 自带工作流都写死 `cfg=1.0`（无引导档，Turbo 的常规跑法），此时**提示词
+            #   对画面的约束很弱**；要"让模型重画掉贴进来的背景"就得把它提上去。
+            cfg = float(fields[7].strip()) if len(fields) > 7 and fields[7].strip() else None
             tool_msgs = [m for m in messages if m.get("role") == "tool"]
+            rounds = 0
             if len(tool_msgs) == 0:
                 self._stream_tool("comfy_use_attachment", {
                     "attachmentId": attachment_id, "filename": "edit-bg.png",
                 })
                 return
-            if len(tool_msgs) == 1:
-                placed = self._tool_json(tool_msgs[0])
+            rounds = 1
+            if person_id:
+                if len(tool_msgs) == rounds:
+                    self._stream_tool("comfy_use_media", {
+                        "mediaId": int(person_id), "filename": "edit-person.png",
+                    })
+                    return
+                rounds += 1
+            placed = self._tool_json(tool_msgs[0])
+            person = None
+            if person_id:
+                person = self._tool_json(tool_msgs[1]).get("filename")
+            if len(tool_msgs) == rounds:
                 self._stream_tool("comfy_make_mask", {
                     "baseFilename": placed.get("filename"),
                     "region": region,
@@ -194,20 +215,45 @@ class Handler(BaseHTTPRequestHandler):
                     "filename": "edit-mask.png",
                 })
                 return
-            if len(tool_msgs) == 2:
-                placed = self._tool_json(tool_msgs[0])
-                mask = self._tool_json(tool_msgs[1])
+            mask = self._tool_json(tool_msgs[rounds])
+            if len(tool_msgs) == rounds + 1:
                 self._stream_tool("comfy_submit", {
                     "workflowPath": workflow_path,
                     "overrides": self._inpaint_overrides(
                         workflow_path, placed.get("filename"), mask.get("filename"),
-                        mask.get("width"), mask.get("height"), prompt, denoise),
+                        mask.get("width"), mask.get("height"), prompt, denoise, person, cfg),
                     "title": "E2E 图像编辑验证",
                     "waitSeconds": 300,
                 })
                 return
             self._sse("图像编辑完成：先把底图投进 ComfyUI 的 input 目录、照它的尺寸生成了遮罩，"
-                      "再提交 inpaint 工作流覆盖了底图 / 遮罩 / 尺寸与提示词。产物已经入库。")
+                      + ("把阶段一的人物图也投了进去，" if person else "")
+                      + "再提交 inpaint 工作流覆盖了底图 / 遮罩 / 尺寸与提示词。产物已经入库。")
+            return
+        # 模板 I：**阶段一（t2i）** —— 先生成人物图（后面再把它贴进底图）。
+        # 脚本给的格式：`生成人物 <工作流路径>|<提示词>`
+        if "生成人物" in user_text and last.get("role") != "tool":
+            fields = user_text.split("生成人物", 1)[1].strip().split("|", 1)
+            workflow_path = fields[0].strip() if fields else ""
+            prompt = fields[1].strip() if len(fields) > 1 else ""
+            graph = json.loads(open(workflow_path, "r", encoding="utf-8").read())
+            overrides = {}
+            # 正负提示词：**第一个** CLIPTextEncode 是正向（与 comfyhub_inpaint_* 同一约定）
+            texts = [nid for nid, n in graph.items()
+                     if isinstance(n, dict) and n.get("class_type") == "CLIPTextEncode"]
+            if texts and prompt:
+                overrides[f"{texts[0]}.text"] = prompt
+            samplers = [nid for nid, n in graph.items()
+                        if isinstance(n, dict) and n.get("class_type") == "KSampler"]
+            if samplers:
+                overrides[f"{samplers[0]}.seed"] = random.randint(1, 2_000_000_000)
+                overrides[f"{samplers[0]}.denoise"] = 1.0
+            self._stream_tool("comfy_submit", {
+                "workflowPath": workflow_path,
+                "overrides": overrides,
+                "title": "E2E 阶段一：生成人物",
+                "waitSeconds": 300,
+            })
             return
         # 模板 H：把**画廊里的产物**投进 ComfyUI 的 input 目录（两阶段编辑的第二阶段
         # 就是"把阶段一那张图投进去"）。脚本给的格式：`投放产物 <mediaId>`
@@ -232,11 +278,15 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     @staticmethod
-    def _inpaint_overrides(workflow_path, bg, mask, width, height, prompt, denoise):
+    def _inpaint_overrides(workflow_path, bg, mask, width, height, prompt, denoise, person=None, cfg=None):
         """按**工作流自己的节点表**算 overrides（真实模型也是先看清图里有哪些节点）。
 
         刻意不写死节点 id：`comfyhub_inpaint_anima.json` 与 `..._krea2.json` 的编号不同，
         写死一个就只测得到那一份。判据是 class_type（ComfyUI 提交时也只认它）。
+
+        `person`（阶段一的人物图文件名）给了就填进**第二个** LoadImage、并且由调用方把
+        `denoise` 降到 0.4~0.6 —— 那是"贴人物图"而不是"纯提示词重绘"，两件事的档位不同。
+        `cfg` 给了才覆盖（默认不动：自带工作流都写死 `cfg=1.0`，那是 Turbo 的常规跑法）。
         """
         graph = json.loads(open(workflow_path, "r", encoding="utf-8").read())
         by_class = {}
@@ -247,8 +297,9 @@ class Handler(BaseHTTPRequestHandler):
         loaders = by_class.get("LoadImage", [])
         if loaders and bg:
             overrides[f"{loaders[0]}.image"] = bg          # 底图（要保留的那张）
-        if len(loaders) > 1 and bg:
-            overrides[f"{loaders[1]}.image"] = bg          # 人物图：纯重绘时填底图自己
+        if len(loaders) > 1:
+            # 人物图：纯重绘时填底图自己（合成是空操作），两阶段时填阶段一的产物
+            overrides[f"{loaders[1]}.image"] = person or bg
         if mask and by_class.get("LoadImageMask"):
             overrides[f"{by_class['LoadImageMask'][0]}.image"] = mask
         for node_id in by_class.get("ImageScale", []):
@@ -261,6 +312,8 @@ class Handler(BaseHTTPRequestHandler):
             sampler = by_class["KSampler"][0]
             overrides[f"{sampler}.seed"] = random.randint(1, 2_000_000_000)
             overrides[f"{sampler}.denoise"] = denoise
+            if cfg is not None:
+                overrides[f"{sampler}.cfg"] = cfg
         return overrides
 
     def _stream_tool(self, name, arguments):
