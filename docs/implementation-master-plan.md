@@ -521,6 +521,31 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ✅ **Run 与 SSE 已落地**（第 26~30 步，见本节上半部分）—— 也就是说
 > **桌面执行器已经能真的聊**（不带工具、不带附件），**R5/R6 已在 Rust 侧重建**。
 >
+> ✅ **P4 第 52 步（2026-09-26）：`POST /api/capture/import`（导入目录里已生成好的产物，A3 的最后一格）** ——
+> 两个新模块：`server-rs/src/png_text.rs`（Kotlin `PngMeta` 的逐条移植：`tEXt` 明文 /
+> `zTXt` zlib / `iTXt`（含压缩）三种块全认，CRC 不校验、单块体积有上限）+ `capture_import.rs`
+> 的 [`import_folder_json`]。
+>
+> - **为什么这块重要**：ComfyUI 把**这一次生成用的节点图**写进 PNG 的 `prompt` 文本块里 ——
+>   读出来，"一张图"就还原成"一条带参数的提示词"；读不出来，导进来只是一堆没有来历的图片。
+>   zlib 解压用 `miniz_oxide`（**纯 Rust**，不引 C 后端：发布包要便携）。
+> - **三条纪律逐条对齐 Kotlin `importFolder`**：① 按内容 sha256 判重（同一份文件重复导入 →
+>   `duplicates++`）；② **不许把自己 storage 里的文件再导一遍**（`media`/`thumbs`/`ai-attachments`/
+>   `ai-thumbs` 全跳过）；③ 单文件失败不整批失败（进 `errors`，**不静默跳过**）。
+>   幂等靠 `run_key = import:<sha 前 40 位>`，而且这条路**用 `force` 抢占**：上面刚用 sha256
+>   确认过文件不在库里，历史运行记录不该拦住重新导入；导入失败时把抢占到的行删掉
+>   （否则下次导入会被判成"正在处理中"）。
+> - **验收**：`cargo test` **399 例全绿**（263 lib + 121 api_test + 4 attachments_test + 3 import_folder_test
+>   + 2 shape_lint + 6 submit_test）；`png_text` 5 例（三种块 / 压过的 iTXt / 畸形文件不崩 / 同键留先到的）+
+>   `import_folder_test` 3 例。集成用例用 `png` crate 写**带真 tEXt 块的真 PNG**（CRC 由它算），
+>   所以"读内嵌图 → 还原参数"这条路是真跑过的；顺带抓到一个语义事实：
+>   **像素相同的两张图（不同文件名）会被判成同一份内容** → 用例夹具必须让每张图的像素不同。
+> - **真机实测（真库副本 8104，对着用户那个有 306 张 png 的产物目录）**：
+>   `{"scanned":3,"imported":3,"duplicates":0,"failed":0,"promptsCreated":3,"promptIds":[333,334,335]}`；
+>   再导一次 → `imported=0, duplicates=3`（幂等）。还原出来的提示词逐条对：
+>   `seed=875817230929465`、`checkpoint=anima-preview3-base.safetensors`、正向提示词正文、
+>   `source=ComfyUI-Import`、`source_ref=import:1e4f926b…`（40 位 sha 前缀）—— **都是内嵌图里的事实，不是猜的**。
+>
 > ✅ **P4 第 51 步（2026-09-26）：视频封面 `GET /api/media/{id}/poster`（A5）** ——
 > `server-rs/src/poster.rs`：只做"找到脚本、起子进程、看结果"，**不重写抽帧逻辑** ——
 > 抽帧走 `scripts\video-poster.ps1`（Windows 资源管理器那条缩略图管线 / Media Foundation，
@@ -1839,7 +1864,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | --- | --- | --- | --- |
 | A1 | `/api/ai/attachments{,/{id},/{id}/file,/{id}/thumb}` + `POST` 上传 + 创建 Run 前的三层准入（**R9**） | ✅ **已搬（P4 第 50 步）**：五条端点 + `POST /api/ai/preflight` + 创建 Run 前的库里事实闸门 + **图片真的内联**（三家适配器）；⚠ 仍缺**视频预览帧**（`/thumb` 回 204，见 A5）与**视频/音频/文档的传输方式**（三家适配器都只有图片的 `inline_base64`） | — |
 | A2 | `/api/ai/providers/{id}/test`、`/{id}/discover-models` | 设置页那两个按钮报"接口不存在" | 中 |
-| A3 | `/api/capture/import`（导入目录里的产物：含 PNG 内嵌工作流） | 设置页「导入目录」不可用 | 中（`import-workflows` ✅ 已搬、`ingest/comfyui` ✅ 已搬） |
+| A3 | `/api/capture/import`（导入目录里的产物：含 PNG 内嵌工作流） | ✅ **已搬（P4 第 52 步）**：真产物目录 306 张里导 3 张 → `imported=3 / promptsCreated=3`（内嵌 prompt 还原成参数），再导一次 `duplicates=3` | — |
 | A4 | ~~`/api/ingest/comfyui`~~ | ✅ **已搬（P4 第 49 步）** | — |
 | A5 | `/api/media/{id}/poster` | ✅ **已搬（P4 第 51 步）**：起 `scripts\video-poster.ps1`（Windows 缩略图管线，**不依赖 ffmpeg**）；真机实测真 mp4 → 640×366 PNG + 缓存命中 | — |
 | A6 | `/api/ai/capabilities/{refresh,probe}` | 能力目录那两个按钮回 **501**（Kotlin 侧是实现的，要在线数据集 / 真上游） | 中（**会花钱**） |

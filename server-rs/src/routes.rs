@@ -302,6 +302,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ingest/comfyui", axum::routing::post(ingest_comfyui))
         // 把本机 ComfyUI 里已保存的工作流文件批量读进库（界面上的「导入本机工作流」按钮）
         .route("/api/capture/import-workflows", axum::routing::post(capture_import_workflows))
+        // 把一个目录里已经生成好的产物导入画廊（PNG 内嵌的 prompt 会还原成提示词）
+        .route("/api/capture/import", axum::routing::post(capture_import_folder))
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
         .route("/api/capture/locate", get(capture_locate))
         .route("/api/capture/locate/apply", axum::routing::post(capture_locate_apply))
@@ -502,6 +504,14 @@ async fn capture_import_workflows(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::capture_import::import_workflows(&state, &body).await?))
+}
+
+/// `POST /api/capture/import`（P4 第 52 步）：导入一个目录里已生成好的产物。
+async fn capture_import_folder(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::capture_import::import_folder_json(&state, &body).await?))
 }
 
 /// `GET /api/ai/providers` —— provider 清单（不含密钥，AIH-012）。

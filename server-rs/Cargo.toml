@@ -47,9 +47,14 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # 日志里的端点要**只留 scheme://host:port/path**（不带 query / 凭据，规则 1）。
 # 手写字符串切分比拉一个 URL 解析器更容易出错，而它本来就是 reqwest 的依赖。
 url = "2"
+# PNG 文本块（zTXt / 压缩的 iTXt）要 zlib 解压。用 miniz_oxide（**纯 Rust**）。
+# 不引 flate2 的 C 后端：发布包要便携，不能为一个 PNG 元数据块带进构建需求。
+miniz_oxide = "0.8"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 # 集成测试要自己造一张真图（缩略图那条链路的输入必须真能解码）
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# 夹具要写**带 tEXt 文本块的真 PNG**（ComfyUI 就是把 prompt 写在那儿）——png 会自动算 CRC
+png = "0.17"

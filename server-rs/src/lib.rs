@@ -47,6 +47,7 @@ pub mod models;
 pub mod nsfw_prompt;
 pub mod outbound;
 pub mod pending;
+pub mod png_text;
 pub mod policy;
 pub mod poster;
 pub mod protocol;
