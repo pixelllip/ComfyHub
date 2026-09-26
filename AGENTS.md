@@ -81,7 +81,7 @@
 
 | 约束 | 说明 |
 | --- | --- |
-| JDK | **21~23**（后端用的 Gradle 8.12 不支持 24/25），`server.ps1` 会自己挑；可用 `COMFYHUB_JDK_HOME` 指定 |
+| JDK | **21~23**，但**只有回退旧 Kotlin 后端 / 跑 Gradle（含 `android/`）时才要**；Rust 后端不需要 JVM。`server.ps1` 只在真要用它时才解析（懒解析），可用 `COMFYHUB_JDK_HOME` 指定 |
 | MySQL | 免安装 zip 版，默认 `D:\tools\mysql\mysql-8.4.3-winx64`；实例目录默认 `<项目>\.mysql`，可用 `COMFYHUB_MYSQL_DIR` / `mysql.ps1 move` 换 |
 | pub 源 | 必须 `https://pub.dev`（国内镜像对个别包返回 424） |
 | 脚本 | 一律 `pwsh`（PowerShell 7）；脚本里的 WMI / CIM 调用依赖 Windows |
@@ -146,23 +146,28 @@
 | | 源码树（开发） | 发布包（`scripts\pack-release.ps1` 的产物） |
 | --- | --- | --- |
 | 根目录怎么定 | 往上找 `scripts\comfyhub.ps1` | 同上（发布包的 `viewer.exe` 就铺在根目录，深度 0 就命中） |
-| 后端启动脚本 | `server\build\install\comfy-hub-server\bin\` | `<根>\server\bin\` |
+| 后端二进制 | `server-rs\target\release\comfyhub-server-rs.exe` | `<根>\server\comfyhub-server-rs.exe` |
 | 数据库 | `<根>\.db\comfyhub.db`（SQLite 单文件 + 它的 `-wal` / `-shm`） | 同一份约定（`<根>\.db\`，装配时预建空目录） |
 | `mysqld.exe` / `mysqladmin.exe`（**仅搬迁用**） | `D:\tools\mysql\...` | **不再随包携带**（P2 起数据库是 SQLite）；要搬迁就设 `COMFYHUB_MYSQL_HOME` |
-| Java | 本机 JDK 21~23 | `<根>\jre` |
+| Java | **只有回退旧 Kotlin 后端时才要**（JDK 21~23） | **不再随包携带**（P4 收尾起后端是 Rust，不需要 JVM） |
+| 旧 Kotlin 后端（已退役） | `legacy\server\`（留档） | 不装 |
 | `viewer.exe` | `build\windows\...\runner\Release\` | `<根>\viewer.exe` |
 
 踩过的坑：
 
-- **发布包里必须跳过 Gradle**：`server.ps1` 看到 `<根>\server\bin\comfy-hub-server.bat` 就直接用它，
-  不再 `gradle installDist`（包里既没有源码也没有 gradle）。Dart 侧同理，
-  `backend_launcher.dart` 的 `_hasBuiltServer()` 要认两种路径，否则会给脚本加 `-SkipBuild` 加错。
-- **发布包自带的 JRE 必须排在"开发机绝对路径"前面**：`server.ps1` 的 `Resolve-Jdk`
-  顺序是显式参数 → 环境变量 → `<根>\jre` → 本机 `D:\tools\...`。
-  漏掉 `<根>\jre` 这一档，发布包就会去用开发机那份 JDK（换台机器直接找不到）。
-  （老 MySQL 那三处 `Resolve-MySqlHome` / `Resolve-MysqlBin` / `Resolve-MysqlAdmin` 现在只剩搬迁用途。）
-- **`comfyhub.ps1 doctor` 会打印当前是哪种布局**（`运行布局: 发布包（便携式）/ 源码树`），
-  路径类问题先看它。
+- **"用哪个后端"只有一个真源**：`scripts\backend.ps1` 的 `Resolve-Backend`
+  （`-Backend auto|rust|kotlin` > `COMFYHUB_BACKEND` > auto；auto 只看 Rust 二进制在不在）。
+  `server.ps1` 与 `comfyhub.ps1 doctor` **都读它那一份** —— 各写一份就会出现
+  "doctor 说 Kotlin 在跑、server.ps1 去停 Rust"（2026-09-26 切流时踩过）。
+- **JDK 必须懒解析**（`Get-Jdk`）：脚本开头就 `Resolve-Jdk` 会在**没装 JDK 的机器上直接抛**，
+  而那种机器正是发布包要支持的 —— Rust 后端根本不需要 JVM。
+- **P4 收尾（2026-09-26）起 Kotlin 已退役**：源码在 `legacy\server\`（`.gitignore` 里
+  `/legacy/server/build`、`/legacy/server/storage` 照样忽略），`pack-release.ps1` 不再有 `jre` / jar 组件。
+  要回退旧后端得先把 `legacy\server` 放回原位自己构建 —— 这条路只在灰度期有意义。
+- **`db::open_or_create` 是"第一次运行能起来"的关键**：以前缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
+  在发布包里等于**永远起不来**。现在库缺就自己建（DDL 编译期 `include_str!` 嵌在二进制里）。
+- **`comfyhub.ps1 doctor` 会打印当前是哪种布局**（`运行布局: 发布包（便携式）/ 源码树`）
+  与**后端实现/构建新鲜度**，路径类问题先看它。
 - **发布包是便携式的**：可写数据（数据库 `<根>\.db`、产物 `<根>\storage`、日志 `<根>\.run`）
   都在包内，`packaging\manifest.json` 里 `runtimeLayout` 记着这份约定；改存放位置要先改那里和 README 9.2。
 - **发布包默认"就地装配"**：`pack-release.ps1` 的 `-OutDir` 默认就是
@@ -170,7 +175,7 @@
   `scripts\comfyhub.ps1`，正好命中它自己的那一份）。三个连带后果别踩：
   ① `flutter clean` / 重新构建会把它整个清空（又变回只有 App），要重跑脚本；
   ② `-Clean` **不能**整个 `Remove-Item $OutDir`，否则把 `viewer.exe` 一起删了 ——
-     只能清清单里那些 target（`server` / `jre` / `scripts` / `db` / `comfyui` …）+ `mysql`（P2 之前的老组件）
+     只能清清单里那些 target（`server` / `scripts` / `db` / `comfyui` …）+ `jre` / `mysql`（P4/P2 之前的老组件）
      + `packaging` / `BUILD-INFO.txt`；运行期数据（`.db` / `storage` / `.run`）**不要动**；
   ③ `flutter_release` 组件此时**源和目标是同一个目录**，必须跳过拷贝
      （`Copy-Item` 会报 "Cannot copy item to itself"）。
@@ -252,7 +257,7 @@
 **功能说明见 [`docs/ai-tools-and-skills.md`](docs/ai-tools-and-skills.md)**（含"DSH 哪些工具抄了、哪些没抄"的对照表）。
 这里只记改动时容易踩的规矩。
 
-- 工具清单**只有一个真源**：`server/src/main/kotlin/com/comfyhub/ai/tools/ToolRegistry.kt` 的 `tools` 列表。
+- 工具清单**只有一个真源**：`server-rs/src/tools.rs` 的 `catalog`（桌面全量）与 `mobile_catalog`（手机 7 个）。旧 Kotlin 那份 `legacy/server/src/main/kotlin/com/comfyhub/ai/tools/ToolRegistry.kt` 只作**行为参照**。
   系统提示、`GET /api/ai/tools`、界面都从它派生 —— 加工具就在这里加一项 + 在 `ToolRegistryTest` 补用例，
   **别在别处再维护一份"可用工具"名单**。
 - **读白名单里会自动加上本机 ComfyUI 的目录**（`ComfyRoots` 每次现探、不落库，见用户 bug ④）：
@@ -395,21 +400,21 @@
 
 ---
 
-## 11. ⚠ 目标架构（方案已敲定，实施进行中：P0/P0.5/P1/M0/M1 ✅，P2 进行中＝数据层已换 SQLite，M3+ / P4 未动）
+## 11. ⚠ 目标架构（P0/P0.5/P1/M0/M1 ✅、P2 ✅、**P4 桌面 Rust 切流完成 2026-09-26**；剩 M3+/M4 的移动端）
 
 **2026-09-23 敲定**：`SQLite + 桌面 Rust + 移动 Kotlin + Flutter（两端）`。
-**当前后端是 SQLite + Kotlin/Ktor**（P2 第 1 步已落，2026-09-23）。第 1~10 节写的仍是**现状**
-（脚本 / 发布包要等 P2 收尾才切），但凡提到 **MySQL / `mysql.ps1` / `my.ini` / `.mysql`** 的地方，
-现在是**历史知识与"一次性搬迁的只读来源"**，别在那条路上加新东西。
+**2026-09-26 现状**：**桌面后端已是 Rust**（`server-rs/`，单文件 exe，无 JVM / 无 MySQL），
+脚本与发布包都切过去了，四条 e2e + `flutter test` 对着 Rust 全绿；旧 Kotlin 源码在 `legacy\server\`（留档）。
+第 1~10 节里凡是提到 **Kotlin 后端 / `gradle` / `installDist` / `jre` / `ToolRegistry.kt` / MySQL 搬迁**
+的地方，都按**历史（或"回退旧后端"）**理解 —— 运行期真源是 Rust。
 
 **动手之前先读 [`docs/implementation-master-plan.md`](docs/implementation-master-plan.md)**
 （实施总纲：冻结的接口契约、**14 条红线**、分阶段验收判据、回归防线归属、文档地图）。
 
 四条最容易踩的：
 
-1. **桌面要换 Rust、数据库要换 SQLite** —— 别在 `server/`（Kotlin）里继续堆只对 MySQL 成立的东西
-   （新的 MySQL 方言、`information_schema` 探测、`ON DUPLICATE KEY`）。能用标准 SQL 就用标准 SQL；
-   新增表结构时顺手想一句"它在 SQLite 里长什么样"。
+1. **桌面后端只改 `server-rs/`（Rust）**：别在 `legacy\server\`（Kotlin）里继续堆东西 ——
+   它已经不在运行路径上，改了也没有任何效果（除了灰度回退那一次）。旧代码只当**行为参照**读。
 2. **不要引入 KMP**（`kotlin.multiplatform`）。本工程已迁到 **AGP 9 内建 Kotlin**
    （`android.builtInKotlin=true`，任何模块都不 apply KGP），KMP 与这个刻意设计正面冲突 ——
    理由见 `docs/mobile-harness-design.md` §2.1。动 `android/` 前照旧先读
@@ -417,9 +422,9 @@
 3. **移动端 harness 用 Android Kotlin**（Flutter UI 通过 platform channel 调用），
    不是 Dart、不是 Rust。**手机端不许硬编码系统提示 / 工具描述 / 安全文案** ——
    它们由桌面的 `/api/ai/run-kit` 版本化下发。
-4. **发布包与运行时已经在变**：`mysql/`（304MB）与 VC++ 运行时依赖**已经去掉**（P2 落地），
-   剩下 `jre/` 也会在 P4（Rust）之后消失。`packaging\manifest.json` 与第 7 节的"两套运行布局"
-   改之前**先看总纲**；`runtimeRequirements` 里的 `required` 字段决定"缺了算不算问题"。
+4. **发布包与运行时**：`mysql/`（304MB）、`jre/`（~40MB）与 Kotlin jar（~20MB）**都已经去掉**，
+   装配实测约 **14MB**。`packaging\manifest.json` 与第 7 节的"两套运行布局"改之前**先看总纲**；
+   `runtimeRequirements` 里的 `required` 字段决定"缺了算不算问题"。
 
 
 
