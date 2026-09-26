@@ -75,6 +75,11 @@ param(
     # 摆放：人物剪影中心放到归一化坐标（0~1）；不给就保持原位
     [double]$PlaceX = -1,
     [double]$PlaceY = -1,
+    # 阶段一的**背景色**（`green` / `magenta` / `#00b140`）—— 抠图最稳的一档：
+    # 背景色与主体不同，判据干净（白底 + 白裙子在像素上无法区分，见 skill 里的实测）
+    [string]$BgColor = '',
+    # 阶段一提示词里要写的背景描述（默认按 -BgColor 推）
+    [string]$PersonBackground = '',
     # 阶段一的提示词（要人物 + 干净背景）
     [string]$PersonPrompt = '',
     # 贴人物图时的融合档（0.4~0.6；高了人物会变样，低了接缝明显）
@@ -376,7 +381,7 @@ try {
     $cfgField = if ($Cfg -gt 0) { "$Cfg" } else { '' }
     $placeXField = if ($PlaceX -ge 0) { "$PlaceX" } else { '' }
     $placeYField = if ($PlaceY -ge 0) { "$PlaceY" } else { '' }
-    $runText = "编辑图片 $($script:AttachmentId)|$workflowField|$effectiveDenoise|$Region|$Feather|$Prompt|$PersonMediaId|$cfgField|$Ring|$PlaceScale|$placeXField|$placeYField"
+    $runText = "编辑图片 $($script:AttachmentId)|$workflowField|$effectiveDenoise|$Region|$Feather|$Prompt|$PersonMediaId|$cfgField|$Ring|$PlaceScale|$placeXField|$placeYField|$BgColor"
     $run = Invoke-Api 'POST' "/api/ai/conversations/$($conv.id)/runs" @{
         text = $runText; providerId = $ProviderId; modelId = 'fake-edit-model'
     }

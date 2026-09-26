@@ -62,6 +62,12 @@ pub const MAX_FEATHER: i64 = 256;
 /// 实测 768x1024 的白底人物图上 0.12 两边都稳。
 pub const SUBJECT_TOLERANCE_DEFAULT: f64 = 0.12;
 
+/// 判定"背景是**彩色的**（绿幕 / 品红那种 chroma key）"的饱和度门槛（最大通道差）。
+///
+/// 白 / 浅灰背景的通道差只有几，绿幕 / 品红是 100+ —— 这条线把它们分开，
+/// 于是"要不要填内部空洞"能自动分档（见 subject_mask_from_image 的 ③）。
+pub const CHROMA_MIN_SATURATION: i32 = 40;
+
 // ---------------------------------------------------------------------------
 //  ComfyUI 的 input 目录
 // ---------------------------------------------------------------------------
@@ -405,6 +411,10 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         .and_then(Value::as_f64)
         .unwrap_or(SUBJECT_TOLERANCE_DEFAULT);
 
+    // gColor：**显式告诉工具背景是什么颜色**（"#00b140" / "green" / "magenta"）——
+    // 抠图最稳的一档：不用去猜边框、也不受"主体挨到边"影响。配合"阶段一用绿幕/品红背景"，
+    // 背景色根本不会出现在主体身上，判据就干净了（见 subject_mask_from_image 的 ③）。
+    let explicit_background = str_arg(args, "bgColor").and_then(|raw| parse_color(&raw));
     let mut subject_info: Option<(String, [u8; 3], f64)> = None;
     let mut pixels = if mode == "subject" {
         let subject = subject_filename
@@ -427,7 +437,7 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         }
         let use_region = region_text != "full";
         let (mask, background, ratio) =
-            subject_mask(&subject_path, w as usize, h as usize, tolerance, &region, use_region)?;
+            subject_mask(&subject_path, w as usize, h as usize, tolerance, &region, use_region, explicit_background)?;
         subject_info = Some((subject, background, ratio));
         mask
     } else {
@@ -546,6 +556,29 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         out["subjectFilename"] = json!(subject);
         out["background"] = json!(format!("#{:02x}{:02x}{:02x}", background[0], background[1], background[2]));
         out["subjectRatio"] = json!((ratio * 1000.0).round() / 1000.0);
+        let saturation = background.iter().max().copied().unwrap_or(0) as i32
+            - background.iter().min().copied().unwrap_or(0) as i32;
+        let chroma = saturation >= CHROMA_MIN_SATURATION;
+        out["chromaKey"] = json!(chroma);
+        // 显式给了 bgColor 但实际用的是另一个色 → 如实说明（模型那块绿/品红与写死的值不一样）
+        if let Some(requested) = explicit_background {
+            if requested != background {
+                out["bgColorIgnored"] = json!(format!(
+                    "#{:02x}{:02x}{:02x}",
+                    requested[0], requested[1], requested[2]
+                ));
+            }
+        }
+        if !chroma {
+            // ⚠ 低饱和背景（白 / 浅灰）与"人物身上的白"同色 —— 填洞只能靠连通性猜，
+            //   腿间/发丝之间的背景空白可能被当成主体（用户 2026-09-26 现场看到的那圈白）。
+            out["chromaAdvice"] = json!(
+                "⚠ 背景是白/浅色（低饱和）：它与人物身上的浅色（白裙子/白衬衫/高光）同色，\
+                 抠图存在二义 —— 腿间、发丝之间的背景空白可能被当成主体贴进画面。\
+                 要干净就把**阶段一的背景换成绿幕或品红**（提示词写 `green background` / \
+                 `chroma green background`，并把 `bgColor=\"#00b140\"` 传进来）。"
+            );
+        }
         let placed_hint = match placed_subject.as_ref() {
             Some((placed_name, bbox)) => format!(
                 "⚠ 这次做了**摆放**（scale={scale}，中心 x={:.2} y={:.2}）：\
@@ -671,6 +704,7 @@ pub fn subject_mask(
     tolerance: f64,
     region: &[f64; 4],
     use_region: bool,
+    explicit_background: Option<[u8; 3]>,
 ) -> Result<(Vec<u8>, [u8; 3], f64), ToolFailure> {
     let image = image::open(source)
         .map_err(|e| {
@@ -680,7 +714,7 @@ pub fn subject_mask(
             )
         })?
         .to_rgb8();
-    subject_mask_from_image(&image, out_w, out_h, tolerance, region, use_region)
+    subject_mask_from_image(&image, out_w, out_h, tolerance, region, use_region, explicit_background)
 }
 
 /// [`subject_mask`] 的**不落盘那一半**（用例直接喂一张内存图，不必造临时文件）。
@@ -691,6 +725,7 @@ pub fn subject_mask_from_image(
     tolerance: f64,
     region: &[f64; 4],
     use_region: bool,
+    explicit_background: Option<[u8; 3]>,
 ) -> Result<(Vec<u8>, [u8; 3], f64), ToolFailure> {
     let (w, h) = (image.width() as usize, image.height() as usize);
     if w < 16 || h < 16 {
@@ -700,46 +735,85 @@ pub fn subject_mask_from_image(
         ));
     }
 
-    // ① 背景色：四周一圈的**中位数**（对"人物挨到边"比均值稳）
-    let border = (w.min(h) / 50).max(2);
-    let mut samples: [Vec<u8>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-    for y in 0..h {
-        for x in 0..w {
-            if x >= border && x + border < w && y >= border && y + border < h {
-                continue;
-            }
-            let pixel = image.get_pixel(x as u32, y as u32);
-            for channel in 0..3 {
-                samples[channel].push(pixel[channel]);
-            }
-        }
-    }
-    let mut background = [0u8; 3];
-    for channel in 0..3 {
-        samples[channel].sort_unstable();
-        background[channel] = samples[channel][samples[channel].len() / 2];
-    }
-
-    // ② 距离阈值（`tolerance` 是归一化的 0~1；按"最大通道差"算，比欧氏距离好调）
+    // ① 背景色：显式给就用给的（**推荐**，见下面 chroma 那段），否则取四周一圈的**中位数**
+    //    （中位数对"人物挨到边"比均值稳）
     let cutoff = (tolerance.clamp(0.01, 1.0) * 255.0).round() as i32;
-    let mut raw = vec![0u8; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            let pixel = image.get_pixel(x as u32, y as u32);
-            let distance = (0..3)
-                .map(|c| (pixel[c] as i32 - background[c] as i32).abs())
-                .max()
-                .unwrap_or(0);
-            if distance > cutoff {
-                raw[y * w + x] = 255;
+    let estimated = {
+        let border = (w.min(h) / 50).max(2);
+        let mut samples: [Vec<u8>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+        for y in 0..h {
+            for x in 0..w {
+                if x >= border && x + border < w && y >= border && y + border < h {
+                    continue;
+                }
+                let pixel = image.get_pixel(x as u32, y as u32);
+                for channel in 0..3 {
+                    samples[channel].push(pixel[channel]);
+                }
             }
         }
+        let mut color = [0u8; 3];
+        for channel in 0..3 {
+            samples[channel].sort_unstable();
+            color[channel] = samples[channel][samples[channel].len() / 2];
+        }
+        color
+    };
+    // ⚠ **显式给的背景色不能盲信**：实测把 `bgColor=green`（写死的 `#00b140`）传给一张
+    //   模型自己生成的"绿底"图，出来的前景占比是 **100%**（模型那块绿不是这个绿）——
+    //   于是"整张图都成了主体"。所以这里先按显式色试一次，**占比离谱（>90%）就回落**成
+    //   边框估计的那份（并把实际用的颜色如实回给调用方）。
+    let key_with = |color: [u8; 3]| -> (Vec<u8>, f64) {
+        let mut mask = vec![0u8; w * h];
+        let mut foreground = 0usize;
+        for y in 0..h {
+            for x in 0..w {
+                let pixel = image.get_pixel(x as u32, y as u32);
+                let distance = (0..3)
+                    .map(|c| (pixel[c] as i32 - color[c] as i32).abs())
+                    .max()
+                    .unwrap_or(0);
+                if distance > cutoff {
+                    mask[y * w + x] = 255;
+                    foreground += 1;
+                }
+            }
+        }
+        let ratio = foreground as f64 / (w * h).max(1) as f64;
+        (mask, ratio)
+    };
+    let mut used_background = explicit_background.unwrap_or(estimated);
+    let (mut raw, mut foreground_ratio) = key_with(used_background);
+    if explicit_background.is_some() && foreground_ratio > 0.9 {
+        // 显式色对不上（占比离谱）→ 回落成边框估计的那份
+        used_background = estimated;
+        let (mask, ratio) = key_with(used_background);
+        raw = mask;
+        foreground_ratio = ratio;
     }
+    let background = used_background;
+    let _ = foreground_ratio;
 
-    // ③ 填内部空洞：**主体里与背景同色的部分**（白裙子 / 白衬衫 / 反光）会被②判成背景，
-    //    留下的窟窿就是"人变半透明"的原因。判据是**连通性**：从画面边框出发、
-    //    沿着"背景像素"能走到的才算真背景；走不到又被前景包住的，都是主体内部。
-    fill_enclosed(&mut raw, w, h);
+
+
+    // ③ 内部空洞：
+    //
+    // 这里有一条**必须记住的取舍**（用户 2026-09-26 指出的）：
+    // **背景色如果与主体自己的颜色一样**（白底 + 白裙子），"这块白是裙子还是背景"在像素上
+    // **根本无法区分** —— 填洞只能靠连通性猜，而"两腿之间 / 发丝之间"的背景空白与"裙子内部"
+    // 在几何上一模一样，猜错就是**把背景当主体贴进画面**（实测：贴出来一圈白晕）。
+    //
+    // 所以：**背景用与主体不同的颜色**（绿幕 / 品红）才是正解 —— 那时背景色根本不会出现在
+    // 主体身上，判据干净，**不需要填洞**。这里按背景色的**饱和度**自动分档：
+    //   · 高饱和（chroma，绿幕/品红那种）→ **不填洞**（背景色不会出现在主体上）；
+    //   · 低饱和（白 / 浅灰那种）→ 仍然填，但**只补针眼大的窟窿**（抗锯齿边上的小洞），
+    //     大块的一律当背景留着（宁可留背景，也不要把背景当人贴上去）。
+    let saturation = background.iter().max().copied().unwrap_or(0) as i32
+        - background.iter().min().copied().unwrap_or(0) as i32;
+    let chroma = saturation >= CHROMA_MIN_SATURATION;
+    if !chroma {
+        fill_enclosed(&mut raw, w, h);
+    }
 
     // ④ 只留最大的一块连通区（生成图的背景常带噪点 / 水印纹，不去掉就是一片麻子）
     keep_largest_blob(&mut raw, w, h);
@@ -1007,6 +1081,41 @@ pub fn ring_mask(mask: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
         }
     }
     out
+}
+
+/// 解析一个颜色（"#00b140" / "#0b0" / "green" / "magenta" / "white" / "black"）。
+///
+/// 只认这几种确定写法 —— **不猜**：认不出来就返回 None（调用方回落成"从边框估"）。
+pub fn parse_color(raw: &str) -> Option<[u8; 3]> {
+    let text = raw.trim().to_lowercase();
+    match text.as_str() {
+        "green" | "chroma" | "greenscreen" | "绿" | "绿幕" => return Some([0, 177, 64]),
+        "magenta" | "pink" | "品红" | "洋红" => return Some([255, 0, 255]),
+        "white" | "白" | "白色" => return Some([255, 255, 255]),
+        "black" | "黑" | "黑色" => return Some([0, 0, 0]),
+        _ => {}
+    }
+    let hex: Vec<char> = text.strip_prefix('#').unwrap_or(&text).chars().collect();
+    // ⚠ **按字符**判长度、**按字符**取位：按字节切片会在中文输入上 panic
+    //   （实测 `parse_color("浅蓝")` —— "浅蓝" 6 个字节、正好撞上 len==6 那一档，
+    //    而 `&hex[0..2]` 落在"浅"字中间 → `byte index 2 is not a char boundary`）。
+    if !hex.iter().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let nibble = |c: char| c.to_digit(16).unwrap_or(0);
+    match hex.len() {
+        3 => Some([
+            (nibble(hex[0]) * 17) as u8,
+            (nibble(hex[1]) * 17) as u8,
+            (nibble(hex[2]) * 17) as u8,
+        ]),
+        6 => Some([
+            (nibble(hex[0]) * 16 + nibble(hex[1])) as u8,
+            (nibble(hex[2]) * 16 + nibble(hex[3])) as u8,
+            (nibble(hex[4]) * 16 + nibble(hex[5])) as u8,
+        ]),
+        _ => None,
+    }
 }
 
 /// 遮罩里"有内容"的那块矩形（`(x0, y0, x1, y1)`，右/下开区间）；全黑时回 `None`。
@@ -1359,7 +1468,7 @@ mod tests {
         white_bg_with_block(400, 400, 150, 100, 250, 300).save(&path).unwrap();
 
         let (mask, background, ratio) =
-            subject_mask(&path, 400, 400, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+            subject_mask(&path, 400, 400, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
         assert_eq!(background, [252, 252, 250], "背景色要从四周一圈估出来");
         let at = |x: usize, y: usize| mask[y * 400 + x];
         assert_eq!(at(200, 200), 255, "方块里是白的（要重绘）");
@@ -1385,17 +1494,17 @@ mod tests {
         img.save(&path).unwrap();
 
         let (mask, _, _) =
-            subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+            subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
         assert_eq!(mask[15 * 300 + 15], 0, "孤立的小块要当噪点丢掉");
         assert_eq!(mask[150 * 300 + 150], 255);
 
         // 与 region 取交集：方块横跨 x=120..180，画布 300 → 中线在 150
         let (left, _, _) =
-            subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 0.5, 1.0], true).unwrap();
+            subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 0.5, 1.0], true, None).unwrap();
         assert_eq!(left[150 * 300 + 140], 255, "左半边里、方块内的点要留着");
         assert_eq!(left[150 * 300 + 160], 0, "region 之外必须清零");
         let (right, _, _) =
-            subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.5, 0.0, 0.5, 1.0], true).unwrap();
+            subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.5, 0.0, 0.5, 1.0], true, None).unwrap();
         assert_eq!(right[150 * 300 + 160], 255, "右半边里、方块内的点要留着");
         assert_eq!(right[150 * 300 + 130], 0, "region 之外必须清零");
         std::fs::remove_dir_all(&dir).ok();
@@ -1411,7 +1520,7 @@ mod tests {
         white_bg_with_block(400, 400, 150, 100, 250, 300).save(&path).unwrap();
 
         let (mask, _, ratio) =
-            subject_mask(&path, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+            subject_mask(&path, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
         assert_eq!(mask.len(), 200 * 200);
         assert_eq!(mask[100 * 200 + 100], 255, "缩放后方块中心仍是白的");
         assert_eq!(mask[10 * 200 + 10], 0);
@@ -1438,7 +1547,7 @@ mod tests {
         img.save(&path).unwrap();
 
         let (mask, _, ratio) =
-            subject_mask(&path, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+            subject_mask(&path, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
         assert_eq!(mask[100 * 200 + 100], 255, "被描边围住的白色内部必须算主体（否则人变半透明）");
         assert_eq!(mask[10 * 200 + 10], 0, "画面四角的真背景不许被填");
         // 实心方块 80x120 ≈ 24%（填洞前后都是这个数）
@@ -1446,6 +1555,70 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **绿幕背景**：主体不含背景色 → **不填内部空洞**，腿间/发丝之间的背景老实留着。
+    ///
+    /// 这是用户 2026-09-26 指出的正解："应该用不同于画面主体颜色的颜色作为背景" ——
+    /// 白底 + 白裙子在像素上无法区分，绿幕就完全没有这个二义性。
+    #[test]
+    fn 绿幕背景不填洞且腿间留空() {
+        let mut img = image::RgbImage::from_pixel(200, 200, image::Rgb([0, 177, 64]));
+        // 主体：两条"腿" + 上面一条"胯"把它们连成**一块**（模拟人形），
+        // 腿间留一条绿缝（就是用户看到的那圈白 —— 它必须留在背景里）
+        for y in 40..60 {
+            for x in 70..130 {
+                img.put_pixel(x, y, image::Rgb([30, 30, 40]));
+            }
+        }
+        for y in 60..160 {
+            for x in 70..95 {
+                img.put_pixel(x, y, image::Rgb([30, 30, 40]));
+            }
+            for x in 105..130 {
+                img.put_pixel(x, y, image::Rgb([30, 30, 40]));
+            }
+        }
+        let (mask, background, _) =
+            subject_mask_from_image(&img, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None)
+                .unwrap();
+        assert_eq!(background, [0, 177, 64], "绿幕要能从边框认出来");
+        let saturation = background.iter().max().unwrap() - background.iter().min().unwrap();
+        assert!(saturation as i32 >= CHROMA_MIN_SATURATION, "绿幕是高饱和 → 走不填洞那一档");
+        assert_eq!(mask[100 * 200 + 100], 0, "腿间那条绿缝必须留在背景里（这就是用户看到的那圈白）");
+        assert_eq!(mask[100 * 200 + 80], 255, "左边那条腿是主体");
+        assert_eq!(mask[100 * 200 + 115], 255, "右边那条腿是主体");
+        assert_eq!(mask[5 * 200 + 5], 0);
+    }
+
+    /// 白底 + 白裙子：仍然要填洞（否则人变半透明），但这正是**二义**所在 ——
+    /// 所以返回值里会带 `chromaAdvice` 提醒改用绿幕。
+    #[test]
+    fn 白底仍然填洞但会提醒改绿幕() {
+        let mut img = image::RgbImage::from_pixel(200, 200, image::Rgb([252, 252, 250]));
+        for y in 40..160 {
+            for x in 70..130 {
+                let edge = y < 44 || y >= 156 || x < 74 || x >= 126;
+                img.put_pixel(x, y, if edge { image::Rgb([20, 20, 24]) } else { image::Rgb([250, 250, 248]) });
+            }
+        }
+        let (mask, background, _) =
+            subject_mask_from_image(&img, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None)
+                .unwrap();
+        let saturation = background.iter().max().unwrap() - background.iter().min().unwrap();
+        assert!((saturation as i32) < CHROMA_MIN_SATURATION, "白底是低饱和 → 走填洞那一档");
+        assert_eq!(mask[100 * 200 + 100], 255, "被描边围住的白色内部要填回来");
+    }
+
+    /// `bgColor`：显式给就用给的（不再去猜边框），认不出来的写法**不猜**。
+    #[test]
+    fn 背景色解析只认确定写法() {
+        assert_eq!(parse_color("#00b140"), Some([0, 177, 64]));
+        assert_eq!(parse_color("green"), Some([0, 177, 64]));
+        assert_eq!(parse_color("绿幕"), Some([0, 177, 64]));
+        assert_eq!(parse_color("magenta"), Some([255, 0, 255]));
+        assert_eq!(parse_color("#0b0"), Some([0, 187, 0]));
+        assert_eq!(parse_color("white"), Some([255, 255, 255]));
+        assert_eq!(parse_color("浅蓝"), None, "认不出来就回落成「从边框估」，不猜");
+    }
     /// **摆放**（用户 2026-09-26 要的能力）：缩放到一半、搬到左下角 ——
     /// 遮罩与人物像素必须落在**同一个**位置（只动一个就是「人在这儿、遮罩在那儿」的错位）。
     #[test]
@@ -1457,7 +1630,7 @@ mod tests {
             }
         }
         let (mask, _, _) =
-            subject_mask_from_image(&img, 400, 400, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+            subject_mask_from_image(&img, 400, 400, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
         let bbox = mask_bbox(&mask, 400, 400).unwrap();
         assert_eq!(bbox, (150, 100, 250, 300));
 
@@ -1489,7 +1662,7 @@ mod tests {
             }
         }
         let (mask, _, _) =
-            subject_mask_from_image(&img, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+            subject_mask_from_image(&img, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
         assert_eq!(mask[100 * 200 + 100], 255);
 
         let ring = ring_mask(&mask, 200, 200, 5);
