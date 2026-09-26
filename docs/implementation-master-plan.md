@@ -1820,6 +1820,20 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 > 一默认切过去用户就会撞到"参考图发不出去"；B 组里 `comfy_submit` 与后台轮询器没搬，
 > "AI 出图 → 画廊里有"这条链会变窄。已搬的 45/46 两步恰好是这两条链的另一半
 > （MCP 39 工具 = AI 能真的驱动 ComfyUI；角色卡 = AI 写角色不再靠印象）。
+>
+> **2026-09-26 这一轮补上的（第 47~49 步，都已 git 保存 + 实测）**：
+> **后台捕获轮询器（O5/O6）** → **`comfy_submit`（R10）** → **推送式捕获 + 批量导入工作流**。
+> 也就是说 §10.9 的 B 组里"`comfy_submit` + 轮询器"这一对已经清零，A3/A4 的
+> `import-workflows` / `ingest/comfyui` 也清零；**剩下的排序不变**：
+>
+> 1. **A1 附件（R9）** —— 唯一一条"用户天天用"的阻断项（贴图 / 参考图 → 图像编辑链的地基）；
+> 2. **A3 剩下的 `/api/capture/import`** —— 已经量过：要补一个 `PngMeta.readTextChunks` 的 Rust 版
+>    （tEXt / iTXt / zTXt 三种块，~60 行）+ 目录遍历，其余全部现成
+>    （`begin_run(force=true)`、`create_captured_prompt`、`import_file` 都在）；
+> 3. **A2 设置页两个按钮**（`providers/{id}/test`、`/discover-models`）+ **A5 视频封面**（`media/{id}/poster`，要 ffmpeg）；
+> 4. **C 组脚本切流**（含"Rust 要开始写 `.run\api.json`"这一条，否则 App 会对着旧端口等）；
+> 5. 其余按 A/B 清单逐个清（B 组还有 `comfy_*` 六件、图像编辑三件、联网三工具 + `find_model`、
+>   配方三件、`search_prompts`/`danbooru_lookup`）。
 
 
 
