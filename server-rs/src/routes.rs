@@ -60,6 +60,8 @@ pub struct AppState {
     /// **懒启动**：只有"问工具清单"或"调 MCP 工具"才会真的去起 Python 子进程 ——
     /// 于是集成测试构造的 AppState 永远不会去拉一个外部进程。
     pub mcp: Arc<crate::mcp::McpRegistry>,
+    /// 后台捕获轮询器（P4 第 47 步 = O5/O6）：`lastPollAt` / `lastError` 的真源。
+    pub capture_poller: Arc<crate::capture_poller::CapturePoller>,
 }
 
 impl AppState {
@@ -71,6 +73,7 @@ impl AppState {
             bus: Arc::new(crate::events::RunEventBus::new()),
             executor: Arc::new(crate::executor::Executor::new()),
             mcp: Arc::new(crate::mcp::McpRegistry::new()),
+            capture_poller: Arc::new(crate::capture_poller::CapturePoller::new()),
         }
     }
 

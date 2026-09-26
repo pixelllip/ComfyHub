@@ -521,6 +521,30 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ✅ **Run 与 SSE 已落地**（第 26~30 步，见本节上半部分）—— 也就是说
 > **桌面执行器已经能真的聊**（不带工具、不带附件），**R5/R6 已在 Rust 侧重建**。
 >
+> ✅ **P4 第 47 步（2026-09-26）：后台捕获轮询器（O5 / O6）** —— `server-rs/src/capture_poller.rs`。
+> 此前 Rust 侧只有"端点/工具触发一次"的抓取，于是**用户自己在 ComfyUI 里跑的东西永远不会被收**，
+> 而 `/api/capture/status` 的 `lastPollAt` / `lastError` 只能如实回 null。现在两者都补上了，
+> 行为逐条对齐 Kotlin `ComfyCapture.start()`：启动先等 **2.5 秒**再跑第一轮、
+> `enabled=false` 时**每 5 秒空转但不退出**（用户在设置里打开就立刻生效，不必重启后端）、
+> 间隔 = `pollSeconds` 且**夹在 1..600**、**同一时刻只跑一轮**（上一轮没结束就让开）、
+> 成功写 `lastPollAt` 并**清空** `lastError`、失败写人话（`comfy_client::friendly_error`）**不假装成功**。
+> 一处刻意不同并写进了文件头：`lastPollAt` 存的是 **ISO-8601 文本**（与整库时间列同一个出口
+> `iso_time::from_system_time`），不是 Kotlin 那个内存 `Instant` —— 它要经 `/api/capture/status`
+> 出去给 Dart 解析，形状必须与别的可空时间键一致。
+> - **验收**：`cargo test` **346 例全绿**（223 lib + 121 api_test + 2 shape_lint；新增 4 例：
+>   停用时空转且不假装轮询过 / 连不上时如实记 `lastError`（且**不写** `lastPollAt`）/
+>   成功会清掉上一次的错误 / 间隔夹在 Kotlin 同一档）。
+> - **真机端到端（假 ComfyUI + 真库副本，8100）**：把副本的 `capture.config` 指向
+>   `scripts\e2e\fake_comfy.py`（18188）之后**什么都不点** —— 轮询器自己就在跑：
+>   ① 先收到 fixture 种下的那条运行（`capturedRuns` 152 → **153**，`lastPollAt` 落成
+>   `2026-09-26T00:28:45.052255200Z`，**9 位小数**，正是 Java `Instant.toString()` 的形状）；
+>   ② 再向假实例 `POST /prompt` 造一条新运行、把产物文件换成**内容不同**的真 PNG，
+>   轮询器**自己**把它收进了库：`media_assets` 26 → **27**、`capture_runs` 153 → **154**、
+>   `lastError` 保持为空 —— 这正是 O5 要的那件事（"用户自己跑的东西也要进画廊"）；
+>   ③ 把 `comfyUrl` 改成没人听的 `http://127.0.0.1:9`：7 秒后
+>   `comfyReachable=false` + `lastError="连不上 ComfyUI（http://127.0.0.1:9）：连接被拒绝 —— ComfyUI 没在运行？"`，
+>   而 `lastPollAt` **保留上一次成功的值**（Kotlin 只在成功时写）。
+>
 > ✅ **P4 第 46 步（2026-09-26）：角色卡五条端点**（`server-rs/src/character_cards.rs`）——
 > 界面上那个从「提示词」页右上角进的**角色卡页面**（2026-09-26 那一轮 `2800eda`）此前只对着 Kotlin
 > 能用，指向 Rust 就是"接口不存在"。这一步把它补上，**实现逐条对照 `CharacterCardRepo.kt` + `CharacterCardRoutes.kt`**：
@@ -1714,7 +1738,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | 联网三工具 `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（系统提示那一节仍指向没下发的工具；凭据端点已就绪） |
 | `search_prompts` / `search_character_cards` / `save_character_card` / `danbooru_lookup` | ⛔ 未搬（**仓储已就绪**：角色卡五条见第 46 步；`save()` 就是工具用的那条路） |
 | 工作流配方三件 `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表 | ⛔ 未搬（Kotlin 侧 `WorkflowRecipe.kt` 646 行解析核心是主体；**故意不进同步范围**） |
-| **后台捕获轮询器** + `lastPollAt` / `lastError`（O5/O6） | ⛔ 未做（现在只有端点/工具触发一次；用户自己在 ComfyUI 里跑的收不到） |
+| **后台捕获轮询器** + `lastPollAt` / `lastError`（O5/O6） | ✅ **已做（P4 第 47 步）**（用户自己在 ComfyUI 里跑的东西也会进画廊） |
 | **截断续写**（`MAX_CONTINUATIONS` + `CONTINUE_INSTRUCTION`） | ⛔ 未做（输出被长度上限卡断时，现在把半句话当结尾） |
 | 官方 comfy-mcp 39 个 | ✅ **第 45 步已做** |
 
@@ -1811,8 +1835,8 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | # | 优化 | 现场证据 | 落点 |
 | --- | --- | --- | --- |
 | O4 | **`comfy_submit` 自带"提交 → 自己等 → 立即 `captureRun()` 入库"**，轮询只作兜底 | 我关掉旧实例重开之后，**重启前那次运行从 `/history` 消失**（只剩重启后那条）—— ComfyUI 的 `/history` 是**进程内**的 | 第 46 步（R10） |
-| O5 | **Rust 补后台捕获轮询器**（Kotlin `capture.start()` 的对应物） | 现在只有端点/工具触发一次：App 开着但没人点按钮时，**用户自己在 ComfyUI 里跑的东西不会被收** —— "AI 说生成了、画廊里没有"的另一半 | P4 新批次 |
-| O6 | 启动时也 poll 一次，并且**真的维护 `lastPollAt` / `lastError`** | 现在这两项如实回 null（没有轮询器），`/api/capture/status` 的这两个键永远不出现 | 同上 |
+| O5 | **Rust 补后台捕获轮询器**（Kotlin `capture.start()` 的对应物） | 现在只有端点/工具触发一次：App 开着但没人点按钮时，**用户自己在 ComfyUI 里跑的东西不会被收** —— "AI 说生成了、画廊里没有"的另一半 | ✅ **已做（P4 第 47 步）**：`capture_poller.rs`；真机实测"什么都不点也收得到"（media 26→27 / runs 153→154） |
+| O6 | 启动时也 poll 一次，并且**真的维护 `lastPollAt` / `lastError`** | 现在这两项如实回 null（没有轮询器），`/api/capture/status` 的这两个键永远不出现 | ✅ **已做（P4 第 47 步）**（成功写时间并清空错误、失败写人话；失败**不写** `lastPollAt`） |
 
 ### 10.3 "先查再写"的角色一致性（🟠 高，直接决定出图能不能一次对）
 
@@ -1864,7 +1888,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | **联网三工具** `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未做（系统提示里那一节仍指向没下发的工具；凭据端点已就绪） |
 | **附件（R9）**：`/api/ai/attachments*` + 三层准入 + 内联预算 | ⛔ 未做（有附件直接 `UNSUPPORTED_CONTENT`，不假装发得出去） |
 | **截断续写**（`MAX_CONTINUATIONS` + `CONTINUE_INSTRUCTION`） | ⛔ 未做（输出被长度上限卡断时，现在把半句话当结尾） |
-| **后台捕获轮询器** + `lastPollAt` / `lastError` | ⛔ 未做（见 O5/O6） |
+| **后台捕获轮询器** + `lastPollAt` / `lastError` | ✅ **已做（P4 第 47 步，2026-09-26）**：`capture_poller.rs` + `/api/capture/status` 两个键真的维护；真机"什么都不点也收得到" |
 | `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | ⛔ 501 |
 | `/api/media/{id}/poster`（ffmpeg 抽帧） | ⛔ 501 |
 | `/api/ai/capabilities/{refresh,probe}` | ⛔ 501（要在线数据集 / 真上游，会花钱） |

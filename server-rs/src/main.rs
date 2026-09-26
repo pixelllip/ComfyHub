@@ -29,6 +29,7 @@
 //! | `GET /api/capture/workflows`、`/api/capture/locate{,/apply}` | ✅ |
 //! | **`GET /api/capture/status` / `/jobs`**（真的去问一次 ComfyUI 的 `/queue`） | ✅（P4 第 42 步） |
 //! | **`POST /api/capture/poll`**（拉一次 `/history` 并**入库**：建提示词 + 产物进画廊） | ✅（P4 第 43 步） |
+//! | **后台捕获轮询器**（用户自己在 ComfyUI 里跑的东西也会被收）+ `/api/capture/status` 的 `lastPollAt` / `lastError` | ✅（P4 第 47 步：`capture_poller.rs`，逐条对齐 Kotlin `ComfyCapture.start()`；启动等 2.5 秒、停用 5 秒空转、间隔夹 1..600、同一时刻只跑一轮） |
 //! | `GET /api/{prompts,media}/{id}/workflow`、`GET /api/prompts/{id}/api-graph` | ✅ |
 //! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ |
 //! | `GET /api/ai/providers`（不含密钥）、`GET /api/ai/providers/{id}/models` | ✅ |
@@ -205,6 +206,13 @@ async fn main() {
         Ok(_) => {}
         Err(e) => eprintln!("启动恢复：收尾待回答提问失败（{}）", e.human()),
     }
+
+    // ---- 后台捕获轮询器（P4 第 47 步 = O5/O6）-------------------------------
+    //
+    // 与 Kotlin `ComfyCapture.start()` 同一件事：**用户自己在 ComfyUI 里跑的东西也要被收**。
+    // 没有它时只有端点/工具触发一次，"AI 说生成了、画廊里却没有"就永远差这一半。
+    // 它同时是 `/api/capture/status` 里 `lastPollAt` / `lastError` 的真源。
+    state.capture_poller.clone().spawn(state.clone());
 
     // ---- MCP 桥预热（P4 第 45 步）------------------------------------------
     //

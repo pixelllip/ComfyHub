@@ -20,6 +20,7 @@ pub mod capability_catalog;
 pub mod capability_rules;
 pub mod capture;
 pub mod capture_ingest;
+pub mod capture_poller;
 pub mod character_cards;
 pub mod comfy_client;
 pub mod comfy_dirs;

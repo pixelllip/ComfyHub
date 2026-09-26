@@ -358,14 +358,19 @@ pub async fn probe_queue(state: &AppState) -> (bool, crate::comfy_client::QueueS
 
 /// `GET /api/capture/status`（Kotlin `CaptureStatus`，11 个键，可空键省略）。
 ///
-/// ⚠ `lastPollAt` / `lastError` 在 Kotlin 那边是 **`@Volatile` 的内存字段**
-/// （只有本进程的轮询会写它们）。Rust 侧还没有轮询器，所以这里**如实回 null**
-/// （键不出现），而不是编一个时间戳 —— 等 `pollOnce` 搬过来（第 43 步）它会跟上来。
+/// ⚠ `lastPollAt` / `lastError` 在 Kotlin 那边是 `@Volatile` 的内存字段，**只由后台轮询器写**。
+/// P4 第 47 步起 Rust 侧也有那个轮询器了（[`crate::capture_poller::CapturePoller`]），
+/// 所以这两个键**真的会跟着轮询走**：成功写时间并清空错误、失败写人话。
+/// 轮询器还没跑过第一轮（或配置停用）时它们**如实不出现** —— 不编一个时间戳。
+///
+/// ⚠ `runningLabel` **不在**这里（它在 `/api/capture/jobs` 里）：Kotlin 的 `CaptureStatus`
+/// 就 11 个键，多塞一个会让"两端的形状"从这一步开始漂。
 pub async fn status_json(state: &AppState) -> Result<Value, ApiError> {
     let config = capture_config(state)?;
     let (runs, media) = stats(state).unwrap_or((0, 0));
     let (reachable, snapshot) = probe_queue(state).await;
     let recent = recent_runs(state, 20).unwrap_or_default();
+    let (last_poll_at, last_error) = state.capture_poller.snapshot();
 
     let mut out = Map::new();
     out.insert("enabled".into(), json!(config.enabled));
@@ -376,6 +381,12 @@ pub async fn status_json(state: &AppState) -> Result<Value, ApiError> {
     out.insert("comfyReachable".into(), json!(reachable));
     out.insert("queueRunning".into(), json!(snapshot.running));
     out.insert("queuePending".into(), json!(snapshot.pending));
+    if let Some(at) = last_poll_at {
+        out.insert("lastPollAt".into(), json!(at));
+    }
+    if let Some(error) = last_error {
+        out.insert("lastError".into(), json!(error));
+    }
     out.insert("capturedRuns".into(), json!(runs));
     out.insert("capturedMedia".into(), json!(media));
     out.insert("recent".into(), Value::Array(recent.iter().map(|r| r.to_json()).collect()));
