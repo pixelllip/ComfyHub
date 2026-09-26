@@ -29,6 +29,75 @@ pub const PRAGMAS: &str = "
 ///
 /// `WAL` 允许读写并发，所以"一条写连接 + 若干只读连接"是安全的；
 /// Rust 侧不引连接池（`tokio-rusqlite` 的专属写线程在端点铺开后再加）。
+/// 建表用的 DDL（**编译期嵌进二进制**）。
+///
+/// 与 Kotlin 从 jar 里读 `db/schema.sqlite.sql` **同一性质**：真源是仓库里那份文件，
+/// 二进制自带一份副本。⚠ 改了 DDL 要**重新编译后端**（仓库里 `db\schema.sqlite.sql`
+/// 那份留给人和 sqlite3 CLI 手工建库用，运行期不读它）。
+pub const SCHEMA_SQL: &str = include_str!("../../db/schema.sqlite.sql");
+
+/// schema 版本（`PRAGMA user_version`，见 🔒 `docs/sqlite-schema-contract.md`）。
+pub const SCHEMA_VERSION: i64 = 1;
+
+/// **开库（必要时建库）**：切流之后 Rust 是唯一的后端，"第一次运行要能自己建库"这件事
+/// 必须在它这边成立 —— 以前那版遇到缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
+/// 那在发布包里等于**永远起不来**（包里根本没有 Kotlin）。
+///
+/// 三种情况：
+///  1. **文件不存在**（或存在但是空文件）→ 建父目录 → 建库 → 执行 [`SCHEMA_SQL`] → `user_version = SCHEMA_VERSION`；
+///  2. `user_version == 0`（老库 / 手工建的库）→ 执行一遍 DDL（脚本是**收敛式**的：
+///     `CREATE TABLE IF NOT EXISTS` + `DROP TRIGGER IF EXISTS` + `CREATE TRIGGER`，重跑安全）→ 写版本号；
+///  3. `user_version >= SCHEMA_VERSION` → 什么都不做（**绝不重跑 DDL**：那会重建触发器）。
+///
+/// ⚠ **`> SCHEMA_VERSION` 要如实报**：说明这个库是更新的后端建的，用旧二进制去写它可能丢列。
+/// 此时**只警告不拦**（拦了用户就没法回退版本），但一定要说出来 —— 静默继续才是真的危险。
+pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
+    let path = path.as_ref();
+    let fresh = !path.exists() || std::fs::metadata(path).map(|m| m.len() == 0).unwrap_or(true);
+    if fresh {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("建库目录失败（{}）：{e}", parent.display()))?;
+        }
+    }
+    let conn = open(path).map_err(|e| format!("开库失败（{}）：{e}", path.display()))?;
+    let version = schema_version(&conn).map_err(|e| format!("读 user_version 失败：{e}"))?;
+    if version >= SCHEMA_VERSION && !fresh {
+        if version > SCHEMA_VERSION {
+            eprintln!(
+                "⚠ 库的 schemaVersion={version} 比这个后端认识的（{SCHEMA_VERSION}）**新**：\
+                 它可能是更新的版本建的。继续用会有列对不上的风险，建议升级后端。"
+            );
+        }
+        return Ok(conn);
+    }
+    // 建表 / 收敛式迁移：整个 DDL 在一个事务里跑（中途失败不留半个 schema）
+    conn.execute_batch("BEGIN IMMEDIATE;")
+        .map_err(|e| format!("开事务失败：{e}"))?;
+    match conn.execute_batch(SCHEMA_SQL) {
+        Ok(()) => {
+            conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
+                .map_err(|e| format!("写 user_version 失败：{e}"))?;
+            conn.execute_batch("COMMIT;").map_err(|e| format!("提交失败：{e}"))?;
+            if fresh {
+                eprintln!("[db] 已建库并建表：{}（schemaVersion={SCHEMA_VERSION}）", path.display());
+            } else {
+                eprintln!("[db] 已把老库收敛到 schemaVersion={SCHEMA_VERSION}：{}", path.display());
+            }
+            Ok(conn)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(format!("执行 db/schema.sqlite.sql 失败：{e}"))
+        }
+    }
+}
+
+/// 建表用的 DDL 文本（给用例与"手工建库"用）。
+pub fn schema_sql() -> &'static str {
+    SCHEMA_SQL
+}
+
 pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch(PRAGMAS)?;
@@ -110,6 +179,98 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_path(label: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("comfyhub-db-{label}-{nanos}")).join("nested").join("comfyhub.db")
+    }
+
+    /// **首次运行要能自己建库**（切流的硬要求）：目录不存在、库文件不存在 → 建目录 + 建表 + 写版本号。
+    #[test]
+    fn open_or_create_makes_a_fresh_database() {
+        let path = temp_path("fresh");
+        assert!(!path.exists());
+        let conn = open_or_create(&path).expect("要能自己建库");
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        // 关键表都在（少一张 = 端点 500）
+        for table in ["prompts", "tags", "media_assets", "ai_conversations", "ai_attachments", "_sync_log"] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    rusqlite::params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "表 {table} 没建出来");
+        }
+        // PRAGMA 照样是自检过的（R1）
+        let fk: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        assert_eq!(fk, 1);
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+    }
+
+    /// 已经建好的库：**绝不重跑 DDL**（重跑会重建触发器；这个库现在还不算错，但很浪费）。
+    #[test]
+    fn open_or_create_leaves_a_current_database_alone() {
+        let path = temp_path("current");
+        let conn = open_or_create(&path).unwrap();
+        conn.execute(
+            "INSERT INTO tags (id, name, normalized, use_count, created_at) \
+             VALUES (1, '留着的', '留着的', 0, '2026-09-26T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let again = open_or_create(&path).unwrap();
+        let count: i64 = again.query_row("SELECT COUNT(*) FROM tags", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1, "重开不该动数据");
+        assert_eq!(schema_version(&again).unwrap(), SCHEMA_VERSION);
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+    }
+
+    /// 老库（`user_version = 0`，例如手工建的 / P2 之前留下的）：收敛式跑一遍 DDL 并写版本号。
+    #[test]
+    fn open_or_create_converges_an_unversioned_database() {
+        let path = temp_path("legacy");
+        // 先造一个"只有一张表、没有版本号"的库
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE legacy_marker (id INTEGER PRIMARY KEY);").unwrap();
+            assert_eq!(schema_version(&conn).unwrap(), 0);
+        }
+        let conn = open_or_create(&path).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        let marker: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='legacy_marker'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(marker, 1, "老库里的东西不许被清掉");
+        let prompts: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='prompts'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(prompts, 1, "缺的表要补上");
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+    }
+
+    /// 库比后端新：**只警告不拦**（拦了用户就没法回退版本）。
+    #[test]
+    fn open_or_create_warns_but_opens_a_newer_database() {
+        let path = temp_path("newer");
+        let conn = open_or_create(&path).unwrap();
+        conn.execute_batch("PRAGMA user_version = 99;").unwrap();
+        drop(conn);
+        let again = open_or_create(&path).expect("更新的库也要能打开（只警告）");
+        assert_eq!(schema_version(&again).unwrap(), 99, "不许把它降级写回去");
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+    }
 
     /// R1：读回来必须为 1（"写了就算"不算数）。
     #[test]

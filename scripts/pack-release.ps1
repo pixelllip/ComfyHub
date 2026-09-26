@@ -54,6 +54,10 @@ param(
     [switch]$SkipBackend,
     [switch]$SkipJre,
 
+    # 装上 JRE。**默认不装**：P4 起后端是 Rust 二进制，不需要 JVM；
+    # 只有"灰度期要能回退到旧 Kotlin 后端"时才加这个开关。
+    [switch]$WithJre,
+
     # 不裁剪（留给还带 prune 规则的组件：目前是 jre 之外的可选组件）
     [switch]$NoPrune,
 
@@ -270,6 +274,41 @@ function Get-ServerDistDir {
     return $null
 }
 
+function Get-RustReleaseExe {
+    $exe = Join-Path $ProjectRoot 'server-rs\target\release\comfyhub-server-rs.exe'
+    if (Test-Path $exe) { return $exe }
+    return $null
+}
+
+function Build-RustRelease {
+    <#  后端现在是 Rust 二进制（P4）：`cargo build --release`。
+
+        **构建新鲜度优先**：源码比 exe 新才编 —— 与 `comfyhub.ps1 doctor` 报的是同一条判据，
+        免得每打一次包都白等三分钟（首次全量 release 构建实测 2m41s）。  #>
+    $exe = Get-RustReleaseExe
+    $srcDir = Join-Path $ProjectRoot 'server-rs\src'
+    $need = $true
+    if ($exe -and (Test-Path $srcDir)) {
+        $exeTime = (Get-Item -LiteralPath $exe).LastWriteTime
+        $newest = Get-ChildItem -Path $srcDir -Recurse -Filter *.rs -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $cargoToml = Join-Path $ProjectRoot 'server-rs\Cargo.toml'
+        $tomlTime = if (Test-Path $cargoToml) { (Get-Item -LiteralPath $cargoToml).LastWriteTime } else { $null }
+        $need = ($newest -and $newest.LastWriteTime -gt $exeTime) -or ($tomlTime -and $tomlTime -gt $exeTime)
+    }
+    if (-not $need) {
+        Say '  Rust 二进制是最新的（源码没有更新），跳过 cargo build' 'DarkGray'
+        return
+    }
+    Step '构建 Rust 后端（cargo build --release）'
+    Push-Location $ProjectRoot
+    try {
+        & cargo build --release --manifest-path (Join-Path $ProjectRoot 'server-rs\Cargo.toml')
+        if ($LASTEXITCODE -ne 0) { throw "cargo build --release 失败（退出码 $LASTEXITCODE）" }
+    } finally { Pop-Location }
+    Say '  构建完成' 'DarkGray'
+}
+
 function Install-Jre {
     <#  <jdk> → <OutDir>\jre。有 jmods 就 jlink 出精简运行时，否则整份拷（剪掉开发用的东西）。  #>
     param([string]$Target)
@@ -353,7 +392,9 @@ if ($Clean) {
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-$skipped = @{ app = $SkipApp; backend = $SkipBackend; jre = $SkipJre }
+# `jre` 的默认值是**跳过**（P4 起 Rust 后端不需要 JVM）：
+# 只有显式 -WithJre 才装，显式 -SkipJre 仍然最优先（老命令行不失效）。
+$skipped = @{ app = $SkipApp; backend = $SkipBackend; jre = ($SkipJre -or -not $WithJre) }
 $results = @()
 
 foreach ($c in $manifest.components) {
@@ -380,6 +421,22 @@ foreach ($c in $manifest.components) {
                     $r = Copy-Tree -Source $src -Dest $target
                     $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = $r.Bytes; dropped = $r.DroppedBytes }
                 }
+            }
+            'rust_binary' {
+                # P4（2026-09-26）起后端就是**一个 exe**：SQLite 引擎编在里面，
+                # 所以这里既没有 installDist 也没有 jre —— 少了约 40MB（jre）+ 20MB（jar）。
+                Build-RustRelease
+                $exe = Get-RustReleaseExe
+                if (-not $exe) {
+                    throw '找不到 Rust 后端二进制。构建：cargo build --release --manifest-path server-rs\Cargo.toml'
+                }
+                Say "  来源: $($exe.Replace($ProjectRoot + '\', ''))" 'DarkGray'
+                New-Item -ItemType Directory -Force -Path $target | Out-Null
+                $dest = Join-Path $target 'comfyhub-server-rs.exe'
+                Copy-Item -LiteralPath $exe -Destination $dest -Force
+                $size = (Get-Item -LiteralPath $dest).Length
+                Say ("    已装 server\{0}  ({1:N1} MB)" -f 'comfyhub-server-rs.exe', ($size / 1MB)) 'DarkGray'
+                $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = $size; dropped = 0 }
             }
             'gradle_install_dist' {
                 Build-ServerDist
@@ -434,10 +491,19 @@ $requiredFiles = @(
     @{ p = 'viewer.exe';                          what = 'Flutter App' },
     @{ p = 'scripts\comfyhub.ps1';                what = '统一入口脚本' },
     @{ p = 'scripts\server.ps1';                  what = '后端脚本' },
-    @{ p = 'server\bin\comfy-hub-server.bat';     what = 'Kotlin 后端启动脚本' },
-    @{ p = 'jre\bin\java.exe';                    what = 'Java 运行时' },
+    @{ p = 'scripts\backend.ps1';                 what = '后端选择（Rust/Kotlin）' },
+    # P4（2026-09-26）起后端是**这一个 exe**（SQLite 引擎编在里面）；
+    # `scripts\backend.ps1` 的第一优先路径就是它。
+    @{ p = 'server\comfyhub-server-rs.exe';       what = 'Rust 后端二进制' },
     @{ p = 'db\schema.sqlite.sql';                what = 'SQLite 库表结构（P2 起的真源）' }
 )
+# 旧 Kotlin 后端的两件**只有 -WithJre 时才要求**（灰度期回退用；默认不装，缺了不算问题）
+if ($WithJre -and -not $SkipJre) {
+    $requiredFiles += @(
+        @{ p = 'server\bin\comfy-hub-server.bat'; what = 'Kotlin 后端启动脚本（-WithJre）' },
+        @{ p = 'jre\bin\java.exe';                what = 'Java 运行时（-WithJre）' }
+    )
+}
 
 $missing = @()
 foreach ($f in $requiredFiles) {
@@ -450,10 +516,14 @@ foreach ($f in $requiredFiles) {
     }
 }
 
-# 后端 jar 至少得有一个，否则 bin\*.bat 跑起来会 ClassNotFound
-$jarCount = @(Get-ChildItem (Join-Path $OutDir 'server\lib') -Filter '*.jar' -ErrorAction SilentlyContinue).Count
-if ($jarCount -gt 0) { Say ("  {0,-34} OK ({1} 个 jar)" -f 'server\lib\*.jar', $jarCount) 'Green' }
-else { Say ("  {0,-34} 缺失" -f 'server\lib\*.jar') 'Red'; $missing += 'server\lib\*.jar' }
+# 旧 Kotlin 后端的 jar：只有 -WithJre（要能回退）时才要求
+if ($WithJre -and -not $SkipJre) {
+    $jarCount = @(Get-ChildItem (Join-Path $OutDir 'server\lib') -Filter '*.jar' -ErrorAction SilentlyContinue).Count
+    if ($jarCount -gt 0) { Say ("  {0,-34} OK ({1} 个 jar)" -f 'server\lib\*.jar', $jarCount) 'Green' }
+    else { Say ("  {0,-34} 缺失" -f 'server\lib\*.jar') 'Red'; $missing += 'server\lib\*.jar' }
+} else {
+    Say ("  {0,-34} 跳过（Rust 后端不需要 jar；要回退旧后端加 -WithJre）" -f 'server\lib\*.jar') 'DarkGray'
+}
 
 # 可写目录要预先建好，但里面不留东西（P2 起数据库是 .db\ 下的 SQLite 单文件）
 foreach ($d in @('.db', 'storage', '.run')) {

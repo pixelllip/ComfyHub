@@ -143,21 +143,14 @@ async fn main() {
         }
     };
 
-    if !args.db.exists() {
-        // 不自己建库：schema 的真源在 Kotlin 侧（迁移/建表都归它）。
-        // 灰度期"库还没建"是配置问题，要说清楚而不是造一个空库出来。
-        eprintln!(
-            "找不到数据库文件：{}\n（Rust 版**不建表**：先让 Kotlin 版起一次库，或用 --db 指定已有的 comfyhub.db）",
-            args.db.display()
-        );
-        std::process::exit(3);
-    }
 
-    let conn = match db::open(&args.db) {
+    // 开库（**必要时建库**）：切流之后 Rust 是唯一的后端，"第一次运行能自己建库"必须成立 ——
+    // 以前的版本缺库直接 exit 3（"先让 Kotlin 起一次库"），那在发布包里等于永远起不来。
+    let conn = match db::open_or_create(&args.db) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("打开数据库失败：{e}");
-            std::process::exit(4);
+            eprintln!("打开/建库失败：{e}");
+            std::process::exit(3);
         }
     };
 
