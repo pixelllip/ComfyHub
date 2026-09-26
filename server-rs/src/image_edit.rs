@@ -76,8 +76,8 @@ pub const DEFAULT_SUBJECT_SHRINK: i64 = 0;
 /// 0.35 比抠图那档（0.12）宽得多是有意的：只看**边界 3 像素**那条带，
 /// 那条带里的像素本来就是"人 + 背景"的混合色，容差放宽才收得掉；
 /// 而发丝（头发色，离背景色远）怎么放宽都还在。
-pub const DEFAULT_EDGE_BAND: i64 = 4;
-pub const DEFAULT_EDGE_TOLERANCE: f64 = 0.5;
+pub const DEFAULT_EDGE_BAND: i64 = 3;
+pub const DEFAULT_EDGE_TOLERANCE: f64 = 0.25;
 
 // ---------------------------------------------------------------------------
 //  ComfyUI 的 input 目录
@@ -665,7 +665,7 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
                 // ① 先**反混**（把"人+背景"的混合像素还原成人物本体色 —— 这才是去掉
                 //    那圈灰绿边的正解）；② 再 despill 兜底（反混没覆盖到的边界像素压通道）。
                 let band = int_arg(args, "edgeBand").unwrap_or(DEFAULT_EDGE_BAND).clamp(1, 16) as usize;
-                let unmixed = unmix_edge(&mut canvas, &pixels, w as usize, h as usize, background, band);
+                let unmixed = unmix_edge(&mut canvas, &mut pixels, w as usize, h as usize, background, band);
                 if unmixed { unmixed_edge = true; }
                 if despill_edges(&mut canvas, &pixels, w as usize, h as usize, background, 6) {
                     canvas.save(&target_path).map_err(|e| {
@@ -1550,7 +1550,7 @@ pub fn despill_edges(
 /// 绿幕、白底、品红**都适用**（不依赖背景是不是彩色）。返回是否改过。
 pub fn unmix_edge(
     person: &mut image::RgbImage,
-    mask: &[u8],
+    mask: &mut [u8],
     w: usize,
     h: usize,
     background: [u8; 3],
@@ -1627,9 +1627,15 @@ pub fn unmix_edge(
                 continue;
             }
             let a = (num / den).clamp(0.0, 1.0);
-            // 覆盖率太低 = 这个像素本来就基本是背景 → 从掩码里去掉（比反混更诚实）
-            if a < 0.35 {
-                // 需要可变掩码 —— 交给调用方在返回值里体现（这里只改颜色）
+            // 判据是**覆盖率 a**，不是"颜色离背景多远"（2026-09-26 两次踩坑的结论）：
+            //   · 发丝：a≈1（纯人物色）；皮肤阴影：a≈0.69；混合边：a≈0.28。
+            //   · 用颜色距离判 → 中间调的皮肤和混合像素**分不开**：容差开大就把皮肤删掉
+            //     （人身上一块块变透明），开小就留一圈绿边。
+            //   · 用 a 判 → 一刀两断：a < 0.45 的（不到一半是人物）从掩码里去掉，
+            //     其余一律**反混修颜色**。绿边是 a 小的那批，发丝与皮肤都远高于 0.45。
+            if a < 0.45 {
+                mask[index] = 0;
+                changed = true;
                 continue;
             }
             let mut out = [0u8; 3];
@@ -2423,7 +2429,8 @@ mod tests {
                 mask[y * w + x] = 255;
             }
         }
-        let changed = unmix_edge(&mut image, &mask, w, h, bg, 2);
+        let mut mask2 = mask.clone();
+        let changed = unmix_edge(&mut image, &mut mask2, w, h, bg, 2);
         assert!(changed, "混合像素应当被反混");
         let fixed = image.get_pixel(10, 15);
         // 反混之后应当接近 body（200,60,80），而不是混合色（100,118,72）
@@ -2433,6 +2440,33 @@ mod tests {
         );
         // 内部不碰
         assert_eq!(image.get_pixel(15, 15), &image::Rgb([200, 60, 80]).into());
+    }
+
+    /// **中间调的像素不许被删**（用户 2026-09-26："人的某些部分变透明了"）。
+    ///
+    /// 皮肤的阴影色恰好"介于人物本体色与背景色之间" —— 用第二个阈值去删（曾经把收边容差
+    /// 开到 0.5）会把它们一起删掉，于是人身上一块块透出背景。现在的分工是：
+    /// **只有覆盖率 a < 0.2 的才删**（那本来基本就是背景），其余一律反混修颜色。
+    #[test]
+    fn 中间调的皮肤像素不会被当成混合色删掉() {
+        let (w, h) = (40usize, 40usize);
+        let bg = [0u8, 177, 64];
+        let mut image = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb(bg));
+        let mut mask = vec![0u8; w * h];
+        // 本体是深红，边界带里放"中间调的皮肤阴影"（介于本体与绿幕之间，但不是"基本是背景"）
+        let skin_mid = image::Rgb([150, 120, 90]);
+        for y in 10..30 {
+            for x in 10..30 {
+                let edge = x <= 12 || x >= 27 || y <= 12 || y >= 27;
+                image.put_pixel(x as u32, y as u32, if edge { skin_mid } else { image::Rgb([200, 60, 80]) });
+                mask[y * w + x] = 255;
+            }
+        }
+        let before = mask.iter().filter(|v| **v > 127).count();
+        let _ = unmix_edge(&mut image, &mut mask, w, h, bg, 3);
+        let after = mask.iter().filter(|v| **v > 127).count();
+        assert_eq!(mask[12 * w + 20], 255, "中间调的皮肤（覆盖率 > 0.2）不许被删");
+        assert!(after as f64 > before as f64 * 0.95, "掩码不该被大幅削掉：{before} → {after}");
     }
 
     /// **去溢色**：绿幕边上那圈偏绿的像素要被压回中性，人物内部的像素**不许动**。
