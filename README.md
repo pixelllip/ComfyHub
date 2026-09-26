@@ -1,12 +1,19 @@
 # ComfyHub
 
-> ComfyUI 提示词 & 生成产物管理器 —— **Flutter 前端 + Kotlin(Ktor) 后端 + 本地 SQLite**
+> ComfyUI 提示词 & 生成产物管理器 —— **Flutter 前端 + Rust 后端 + 本地 SQLite**
 
-> **2026-09-23（P2）：数据库已从 MySQL 换成 SQLite。** 后端不再需要 MySQL / JRE 之外的东西，
-> 数据是一个文件：**`<项目根>\.db\comfyhub.db`**（同目录还有它自己的 `-wal` / `-shm`，备份要三个一起拷）。
+> **2026-09-26（P4 收尾）：后端已从 Kotlin 换成 Rust。** 后端是**一个单文件二进制**
+> （`server-rs\target\release\comfyhub-server-rs.exe`，发布包里装配到 `<根>\server\comfyhub-server-rs.exe`），
+> SQLite 引擎编在里面 —— **不再需要 JVM、不再需要 MySQL**，发布包从 ~60MB 降到 **~14MB**。
+> 脚本与打包都已切过去（`scripts\backend.ps1` 是"用哪个后端"的唯一真源，`-Backend auto|rust|kotlin`）；
+> 旧 Kotlin 源码留在 `legacy\server\` 备查（灰度期可用 `COMFYHUB_BACKEND=kotlin` 回退，但要自己先把它建出来）。
+>
+> **2026-09-23（P2）：数据库已从 MySQL 换成 SQLite。** 数据是一个文件：
+> **`<项目根>\.db\comfyhub.db`**（同目录还有它自己的 `-wal` / `-shm`，备份要三个一起拷）。
+> 库的建表/收敛**现在由 Rust 后端自己干**（`db::open_or_create`：库缺就按 `db\schema.sqlite.sql` 建）。
 > 老库里的数据**没有丢**，也不会被自动删：`scripts\comfyhub.ps1 up` 在"新库还没建、老 `.mysql` 里却有数据"
-> 时会**先自动搬一次**（`scripts\server.ps1 migrate`，逐表行数与行哈希核对），搬完照旧只跑 SQLite。
-> 本文里没跟上这处改动的地方（尤其涉及 `mysql.ps1` / `.mysql\` / my.ini 的段落）一律按**历史**理解。
+> 时会**先自动搬一次**（那一步用的是旧 Kotlin 后端，见 `legacy\server\`），搬完照旧只跑 SQLite。
+> 本文里没跟上这两处改动的地方（尤其涉及 `mysql.ps1` / `.mysql\` / `my.ini` / `gradle` 的段落）一律按**历史**理解。
 
 把 ComfyUI 里跑通的提示词存起来、打上标签；把生成出来的图片 / 视频 / 音频导入进来并**关联到对应的提示词**。
 之后点开任何一张图，就能立刻看到当初用的完整提示词；想找"那种赛博朋克夜景风格是怎么调出来的"，点一下标签就全出来了。
@@ -56,12 +63,12 @@
 └──────────────────────────┘                                  │
                                                               ▼
                                     ┌──────────────────────────────────┐
-                                    │  Kotlin + Ktor (Netty, 端口自动)  │
-                                    │  ├─ 原生 JDBC + HikariCP          │
+                                    │  Rust (axum, 端口自动)            │
+                                    │  ├─ rusqlite（bundled，无 JVM）    │
                                     │  ├─ 文件存储 storage/media         │
                                     │  ├─ 缩略图 storage/thumbs          │
                                     │  ├─ AI 附件 storage/ai-attachments │
-                                    │  ├─ ImageIO 生成缩略图             │
+                                    │  ├─ image crate 生成缩略图         │
                                     │  └─ 自动捕获：轮询 /history ★      │
                                     └───────┬──────────────────┬────────┘
                                             │ JDBC             │ HTTP
@@ -73,11 +80,11 @@
                           └──────────────────────────┘  └──────────────────────────┘
 ```
 
-> ⚠ **上面这张图是"现状"**（SQLite + Kotlin/Ktor + 纯 Flutter 桌面）。
-> **目标架构已敲定、正在实施**：`SQLite + 桌面 Rust + 移动 Kotlin harness + Flutter（两端）`
-> —— 实施入口是 [`docs/implementation-master-plan.md`](docs/implementation-master-plan.md)
+> ⚠ **上面这张图现在是"事实"**（SQLite + **Rust/axum** + 纯 Flutter 桌面）—— 2026-09-26 切流完成：
+> 脚本默认起 Rust、发布包只装 Rust 二进制、库由 Rust 自己建，四条 e2e 与 `flutter test` 都对着 Rust 跑通。
+> **还没做完的那一半是移动端**：`移动 Kotlin harness + Flutter（两端）`（M3+ / M4 剩余部分）。
+> 实施入口是 [`docs/implementation-master-plan.md`](docs/implementation-master-plan.md)
 > （冻结契约、14 条红线、分阶段验收）；`AGENTS.md` §11 是干活时的注意事项。
-> 数据库那一半（P2）已经落地，桌面 Rust（P4）与移动端（M3+）还没动。
 
 **自动捕获是怎么接上的**（三种方式，默认只开第一种，都不需要改你的工作流）：
 
@@ -127,9 +134,20 @@ viewer/
 │   │   └── settings_page.dart        # ★ 设置：本地服务 / 自动捕获 / 统计 / 接口清单
 │   └── widgets/                  # 通用组件（标签胶囊、缩略图、播放器、上传面板、工作流查看器、大图查看器…）
 │
-├── server/                       # Kotlin 后端（Gradle 项目）
-│   ├── build.gradle.kts
-│   └── src/main/kotlin/com/comfyhub/
+├── server-rs/                    # ★ Rust 后端（P4 起就是它；cargo 项目）
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs               # 入口：解析参数 → 开库（缺就建）→ 写 .run\api.json → 起 axum
+│       ├── db.rs                 # 连接工厂（R1/R2 纪律）+ open_or_create（建表/收敛）
+│       ├── routes.rs             # 路由装配 + AppState
+│       ├── executor.rs           # ★ AI Run 主循环（工具往返 / 标题 / 续写 / R6 兜底）
+│       ├── mcp.rs                # ★ 官方 comfy-mcp 39 工具（stdio JSON-RPC）
+│       ├── workflow_submit.rs    # ★ comfy_submit（R10：提交 → 等 → 入库 → mediaIds）
+│       ├── attachments.rs        # ★ AI 附件（R9：严格签名判定 + 内联预算）
+│       └── …                     # capture / sync / skills / memory / provider_probe …
+│
+├── legacy/server/                # 旧 Kotlin 后端（**已退役**，留档备查；不再随发布包装）
+│   └── src/main/kotlin/com/comfyhub/   # 下面这些文件都在它里面（历史参考，运行期不再加载）
 │       ├── Application.kt        # main + Ktor 插件装配 + 路由挂载 + 启动自动捕获
 │       ├── Config.kt             # 环境变量配置
 │       ├── Db.kt                 # HikariCP + JDBC 小工具
@@ -177,7 +195,7 @@ viewer/
 │   ├── silent-process.ps1        # ★ 后台进程「无窗口 + 脱离进程树」启动（后端用；老 MySQL 搬迁时也用）
 │   ├── mysql.ps1                 # 老 MySQL 脚本（P2 后只剩搬迁用途：start/stop/init/…）
 │   ├── server.ps1                # ★ 只操作后端（自动挑选 JDK 21；`migrate` 动作做一次性搬库）
-│   ├── pack-release.ps1          # ★ 打包发布版：把后端 + JRE 就地装配进 Release 目录
+│   ├── pack-release.ps1          # ★ 打包发布版：把 Rust 后端二进制就地装配进 Release 目录
 │   ├── autorun-app.ps1           # 一键：服务 → 分析 → 构建（Release）→ 启动 App
 │   ├── dev-app.ps1               # ★ 前端开发用：服务 → flutter run --debug（热重载）
 │   ├── e2e-capture-test.ps1      # ★ 自动捕获端到端自测（用假 ComfyUI，不跑真实生成）
@@ -212,7 +230,7 @@ viewer/
 | 依赖 | 说明 |
 | --- | --- |
 | Flutter | 3.47+（本机 3.47.3） |
-| JDK | **21 ~ 23**（后端用的 Gradle 8.12 不支持 JDK 24/25，脚本会自动挑） |
+| JDK | **21 ~ 23**（**只有回退旧 Kotlin 后端 / 跑 Gradle 时才要**：Gradle 8.12 不支持 JDK 24/25，脚本会自动挑；Rust 后端**完全不需要 JVM**） |
 | Gradle（后端 `server/`） | 8.12 |
 | Android 构建（`android/`） | AGP **9.4.0** + Gradle **9.6.0** + **AGP 内建 Kotlin**（`android.builtInKotlin=true`，KGP 只用来钉版本、不 apply）；迁移与踩坑见 [docs/android-agp9-builtin-kotlin-migration.md](docs/android-agp9-builtin-kotlin-migration.md) |
 | MySQL | **P2 起不再需要**（数据库是 SQLite 单文件，驱动自带引擎）。只有"把老 MySQL 库搬进 SQLite"那一步才用得到：本仓库用免安装的 8.4.3 zip 版，放在 `D:\tools\mysql\mysql-8.4.3-winx64` |
@@ -280,7 +298,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
 | --- | --- |
 | **`scripts\comfyhub.ps1 up / down / status / restart / logs / doctor / release / watch / unwatch`** | **统一入口：把数据库 + 后端当成一个整体来起停和体检** |
 | `scripts\comfyhub.ps1 up -WithApp` | 顺带把桌面 App 也拉起来 |
-| `scripts\comfyhub.ps1 up -SkipBuild` | 跳过 gradle 构建，直接用上次的产物启动（App 自动启动时走的就是这个） |
+| `scripts\comfyhub.ps1 up -SkipBuild` | 跳过后端构建，直接用上次的产物启动（App 自动启动时走的就是这个；Rust 侧等于跳过 `cargo build`） |
 | `scripts\comfyhub.ps1 up -OwnerPid <pid>` | **App 自动启动时用的形式**：多挂一个「关 App 就停服务」的守护进程（见下面说明） |
 | `scripts\comfyhub.ps1 release` | **只停后端（+ 老 MySQL 若在跑），不动 App 自己**（App 关窗口时调的就是它；`down` 会按进程名杀 `viewer`，在 App 内部不能调） |
 | `scripts\comfyhub.ps1 watch -OwnerPid <pid>` | 给**已经在用本地服务**的 App 补挂「关 App 就停服务」的守护进程（App 启动时探到后端已健康、没跑 `up` 的那条路） |
@@ -295,8 +313,8 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
 | `scripts\server.ps1 run` | 后端前台运行（Ctrl+C 停） |
 | `scripts\server.ps1 fatjar` | 打成一个独立 jar |
 | `scripts\autorun-app.ps1` | 一键全流程：服务 → 分析 → 构建（Release）→ 启动 App |
-| `scripts\pack-release.ps1` | **打包发布版**：按 `packaging\manifest.json` 把 Kotlin 后端 + JRE **就地装配进** `build\windows\x64\runner\Release\`，装完那个目录就是完整发布包（`-OutDir` 可另存，`-Zip` 顺带压包）。**P2 起不再携带 MySQL**（少约 300MB） |
-| `scripts\ensure-runtime.ps1` | **运行时一键就绪**：检测不到的运行时自动下载安装（Java 下便携版塞进 `<根>\jre`；pwsh / VC++ 走 winget）。`-CheckOnly` 只检测 |
+| `scripts\pack-release.ps1` | **打包发布版**：按 `packaging\manifest.json` 把 **Rust 后端二进制**（+ 脚本 / DDL / Skills / 捕获扩展）**就地装配进** `build\windows\x64\runner\Release\`，装完那个目录就是完整发布包（`-OutDir` 可另存，`-Zip` 顺带压包）。**P2 起不携带 MySQL、P4 起不携带 JRE**（合计少约 340MB，实测这种装配约 **14MB**） |
+| `scripts\ensure-runtime.ps1` | **运行时一键就绪**：检测不到的运行时自动下载安装（pwsh / VC++ 走 winget；Java **只在回退旧 Kotlin 后端时才需要** —— P4 收尾起 `up` 不再为 Rust 后端下 JRE）。`-CheckOnly` 只检测 |
 | `scripts\mcp-runtime.ps1` | **MCP 运行时装配**（可选能力）：**先用机器上已有的 Python**（已有 comfy-mcp 就直接借；没有就借它建 venv），机器上没有才下便携版 Python；再装 `comfy-cli` + `comfy-mcp` 到 `<根>\storage\ai\mcp`，并把 `comfy-cli` 的工作区指向用户真实在用的 ComfyUI。`status` / `install [-Force] [-ComfyHome <目录>]`；`comfyhub.ps1 up` 会自动补、`doctor` 会报状态与"这份 Python 哪来的" |
 | `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
 | `scripts\check-silent-start.ps1` | **静默启动自测**：启动服务的同时盯屏，报告有没有弹出 cmd / 控制台窗口（加 `-Restart` 从零走一遍） |
@@ -867,7 +885,7 @@ pwsh -File scripts\dev-app.ps1
 | --- | --- | --- |
 | `lib/` 里的 Dart 代码 | `scripts\dev-app.ps1` → 之后按 `r` | 首次 30~60s，热重载 1~2s |
 | `pubspec.yaml` 依赖 / `windows/` 原生代码 | `scripts\dev-app.ps1`（会重新编译）/ `autorun-app.ps1` | 分钟级 |
-| 要出正式产物 / 交给别人用 | `scripts\pack-release.ps1`（Release + 后端 + JRE 装配成一个目录） | 几分钟 |
+| 要出正式产物 / 交给别人用 | `scripts\pack-release.ps1`（Release + Rust 后端装配成一个目录） | 几分钟 |
 
 - debug 产物在 `build\windows\...\runner\Debug\`，Release 在 `...\Release\`，两者互不影响；
   脚本启动 App 时**优先挑 Release**，所以做过 debug 调试也不会误启动一个 debug 版。
