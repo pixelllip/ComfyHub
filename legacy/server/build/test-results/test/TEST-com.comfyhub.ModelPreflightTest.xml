@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ModelPreflightTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:34" hostname="DESKTOP-J1L05N5" time="0.005">
+  <properties/>
+  <testcase name="拒绝文案里要写清是哪个键要哪个文件()" classname="com.comfyhub.ModelPreflightTest" time="0.001"/>
+  <testcase name="模型都在就放行()" classname="com.comfyhub.ModelPreflightTest" time="0.0"/>
+  <testcase name="空图与没有模型输入的图都放行()" classname="com.comfyhub.ModelPreflightTest" time="0.0"/>
+  <testcase name="盘上有但实例看不到时拒 并让用户重启而不是下载()" classname="com.comfyhub.ModelPreflightTest" time="0.0"/>
+  <testcase name="本机确实没有时拒 并指向搜索与提问()" classname="com.comfyhub.ModelPreflightTest" time="0.0"/>
+  <testcase name="清单不可信时一个都不拦()" classname="com.comfyhub.ModelPreflightTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

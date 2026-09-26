@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.WorkflowRecipeRepoTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:35" hostname="DESKTOP-J1L05N5" time="0.413">
+  <properties/>
+  <testcase name="真文件学一遍能落库并读回同一份配方()" classname="com.comfyhub.WorkflowRecipeRepoTest" time="0.053"/>
+  <testcase name="详情能从落库的形状还原出可渲染的配方()" classname="com.comfyhub.WorkflowRecipeRepoTest" time="0.028"/>
+  <testcase name="删掉提示词之后配方还在 只是 promptId 变空()" classname="com.comfyhub.WorkflowRecipeRepoTest" time="0.051"/>
+  <testcase name="写不进去就报错 不静默截断()" classname="com.comfyhub.WorkflowRecipeRepoTest" time="0.045"/>
+  <testcase name="缺件的配方照样存 但要能按 complete 过滤出来()" classname="com.comfyhub.WorkflowRecipeRepoTest" time="0.048"/>
+  <testcase name="同一份来源学两次只有一行 且 id 不变()" classname="com.comfyhub.WorkflowRecipeRepoTest" time="0.046"/>
+  <testcase name="配方不进同步账本()" classname="com.comfyhub.WorkflowRecipeRepoTest" time="0.048"/>
+  <testcase name="列表能按 task 与骨架过滤 关键字能搜到模型文件名()" classname="com.comfyhub.WorkflowRecipeRepoTest" time="0.043"/>
+  <testcase name="重新学一份会整行更新 不留旧槽位()" classname="com.comfyhub.WorkflowRecipeRepoTest" time="0.045"/>
+  <system-out><![CDATA[22:42:35.507 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:35.508 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:35.508 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:35.516 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:35.522 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:35.525 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:35.559 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown initiated...
+22:42:35.565 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown completed.
+22:42:35.566 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:35.567 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:35.567 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:35.575 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:35.581 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:35.585 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:35.590 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown initiated...
+22:42:35.617 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown completed.
+22:42:35.618 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:35.619 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:35.619 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:35.627 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:35.632 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:35.636 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:35.642 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown initiated...
+22:42:35.664 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown completed.
+22:42:35.665 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:35.666 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:35.666 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:35.673 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:35.679 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:35.683 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:35.687 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown initiated...
+22:42:35.710 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown completed.
+22:42:35.712 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:35.712 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:35.713 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:35.721 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:35.726 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:35.729 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:35.735 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown initiated...
+22:42:35.757 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown completed.
+22:42:35.758 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:35.759 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:35.759 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:35.767 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:35.775 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:35.778 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:35.783 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown initiated...
+22:42:35.805 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown completed.
+22:42:35.806 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:35.806 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:35.806 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:35.815 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:35.822 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:35.826 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:35.831 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown initiated...
+22:42:35.850 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown completed.
+22:42:35.851 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:35.851 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:35.851 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:35.859 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:35.865 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:35.869 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:35.874 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown initiated...
+22:42:35.896 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown completed.
+22:42:35.898 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:35.898 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:35.898 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:35.906 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:35.912 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:35.915 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:35.920 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown initiated...
+22:42:35.943 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown completed.
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

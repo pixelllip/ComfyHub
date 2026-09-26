@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.ToolCallHistoryTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.001">
+  <properties/>
+  <testcase name="缺结果的工具调用要补一条如实的占位结果()" classname="com.comfyhub.ai.ToolCallHistoryTest" time="0.001"/>
+  <testcase name="空调用号不补（补了也配不上 反而多一条无主结果）()" classname="com.comfyhub.ai.ToolCallHistoryTest" time="0.0"/>
+  <testcase name="已经有结果的调用一个字都不动()" classname="com.comfyhub.ai.ToolCallHistoryTest" time="0.0"/>
+  <testcase name="同一条助手轮里只缺一个时 只补缺的那一个()" classname="com.comfyhub.ai.ToolCallHistoryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

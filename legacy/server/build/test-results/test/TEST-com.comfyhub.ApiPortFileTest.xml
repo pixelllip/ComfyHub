@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ApiPortFileTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:33" hostname="DESKTOP-J1L05N5" time="0.033">
+  <properties/>
+  <testcase name="重复写入是覆盖 不是追加（重启后读到的是新端口）()" classname="com.comfyhub.ApiPortFileTest" time="0.008"/>
+  <testcase name="是纯 JSON 且键名固定——前端 脚本 Python 扩展都按这几个键读()" classname="com.comfyhub.ApiPortFileTest" time="0.01"/>
+  <testcase name="url 拼装：通配地址回落回环 端口必须带上()" classname="com.comfyhub.ApiPortFileTest" time="0.001"/>
+  <testcase name="文件不存在 或内容是半截 JSON 时 读出来是 null 而不是抛异常()" classname="com.comfyhub.ApiPortFileTest" time="0.004"/>
+  <testcase name="写进去再读出来 端口与来源都一致()" classname="com.comfyhub.ApiPortFileTest" time="0.002"/>
+  <testcase name="清理只删自己写的那一份()" classname="com.comfyhub.ApiPortFileTest" time="0.005"/>
+  <system-out><![CDATA[22:42:33.961 INFO  c.comfyhub.ApiPortFile - 已记录后端端口：C:\Users\Administrator\AppData\Local\Temp\comfyhub-port9600908153413808380\.run\api.json（port=40001 pid=4242）
+22:42:33.963 INFO  c.comfyhub.ApiPortFile - 已记录后端端口：C:\Users\Administrator\AppData\Local\Temp\comfyhub-port9600908153413808380\.run\api.json（port=40002 pid=4242）
+22:42:33.966 INFO  c.comfyhub.ApiPortFile - 已记录后端端口：C:\Users\Administrator\AppData\Local\Temp\comfyhub-port11862795300381632158\.run\api.json（port=43210 pid=4242）
+22:42:33.983 INFO  c.comfyhub.ApiPortFile - 已记录后端端口：C:\Users\Administrator\AppData\Local\Temp\comfyhub-port12113773749554087107\.run\api.json（port=51234 pid=77）
+22:42:33.987 INFO  c.comfyhub.ApiPortFile - 已记录后端端口：C:\Users\Administrator\AppData\Local\Temp\comfyhub-port3751008572523531419\.run\api.json（port=50001 pid=200）
+22:42:33.987 INFO  c.comfyhub.ApiPortFile - 端口状态文件不属于本进程（pid 不匹配），保留不删：C:\Users\Administrator\AppData\Local\Temp\comfyhub-port3751008572523531419\.run\api.json
+22:42:33.989 INFO  c.comfyhub.ApiPortFile - 已清理端口状态文件：C:\Users\Administrator\AppData\Local\Temp\comfyhub-port3751008572523531419\.run\api.json
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

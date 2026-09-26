@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ComfyEnvTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:34" hostname="DESKTOP-J1L05N5" time="0.044">
+  <properties/>
+  <testcase name="读得出两个模型根与共享的 input output()" classname="com.comfyhub.ComfyEnvTest" time="0.007"/>
+  <testcase name="模型写了 base-directory 时不补 input output 但仍挂模型根()" classname="com.comfyhub.ComfyEnvTest" time="0.006"/>
+  <testcase name="模型把 extra_args 写成 JSON 字符串时也能解析并补全()" classname="com.comfyhub.ComfyEnvTest" time="0.005"/>
+  <testcase name="目录不存在时不加那个参数()" classname="com.comfyhub.ComfyEnvTest" time="0.004"/>
+  <testcase name="没有 shared yaml 时退回实例级 yaml()" classname="com.comfyhub.ComfyEnvTest" time="0.006"/>
+  <testcase name="拿不到 Desktop 配置时如实警告 不编参数()" classname="com.comfyhub.ComfyEnvTest" time="0.001"/>
+  <testcase name="模型自己写过的参数一律不覆盖()" classname="com.comfyhub.ComfyEnvTest" time="0.005"/>
+  <testcase name="extra_args 的三种形状都认()" classname="com.comfyhub.ComfyEnvTest" time="0.001"/>
+  <testcase name="没装 Desktop 时读不到 不报异常()" classname="com.comfyhub.ComfyEnvTest" time="0.002"/>
+  <testcase name="模型没写参数时补上三件 并把 extra_args 归一成数组()" classname="com.comfyhub.ComfyEnvTest" time="0.004"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

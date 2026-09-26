@@ -37,7 +37,7 @@
 .EXAMPLE
     pwsh -File scripts\pack-release.ps1
     pwsh -File scripts\pack-release.ps1 -Zip
-    pwsh -File scripts\pack-release.ps1 -SkipApp -SkipJre -Clean      # 只重装后端，快速迭代
+    pwsh -File scripts\pack-release.ps1 -SkipApp -Clean               # 只重装后端，快速迭代
     pwsh -File scripts\pack-release.ps1 -OutDir 'D:\dist\ComfyHub'    # 另存一份干净的独立副本
 #>
 [CmdletBinding()]
@@ -49,14 +49,10 @@ param(
     # 装配完再打一个 zip（几百 MB，会慢一会儿）
     [switch]$Zip,
 
-    # 跳过某几件（迭代时用：JRE 一次装好后不用每次重拷）
+    # 跳过某几件（迭代时用）
     [switch]$SkipApp,
     [switch]$SkipBackend,
-    [switch]$SkipJre,
-
-    # 装上 JRE。**默认不装**：P4 起后端是 Rust 二进制，不需要 JVM；
-    # 只有"灰度期要能回退到旧 Kotlin 后端"时才加这个开关。
-    [switch]$WithJre,
+    # ⚠ `-SkipJre` / `-WithJre` 随 Kotlin 退役一起删了（P4 收尾）：发布包里已经没有 JRE 组件。
 
     # 不裁剪（留给还带 prune 规则的组件：目前是 jre 之外的可选组件）
     [switch]$NoPrune,
@@ -392,9 +388,7 @@ if ($Clean) {
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-# `jre` 的默认值是**跳过**（P4 起 Rust 后端不需要 JVM）：
-# 只有显式 -WithJre 才装，显式 -SkipJre 仍然最优先（老命令行不失效）。
-$skipped = @{ app = $SkipApp; backend = $SkipBackend; jre = ($SkipJre -or -not $WithJre) }
+$skipped = @{ app = $SkipApp; backend = $SkipBackend }
 $results = @()
 
 foreach ($c in $manifest.components) {
@@ -439,6 +433,10 @@ foreach ($c in $manifest.components) {
                 $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = $size; dropped = 0 }
             }
             'gradle_install_dist' {
+                # ⚠ Kotlin 后端已退役（P4 收尾，2026-09-26）：源码在 `legacy\server\`，
+                # 发布包不再装它。清单里已经**没有**这个组件；真有人改回去，这里照旧能装，
+                # 但请先确认"回退旧后端"确实是你想要的。
+                Write-Host '  ⚠ 装 Kotlin 后端（已退役的 legacy 组件）—— 只有回退旧后端时才该这么做' -ForegroundColor Yellow
                 Build-ServerDist
                 $src = Get-ServerDistDir
                 if (-not $src) { throw '找不到 installDist 产物（server\build\install\*\bin\comfy-hub-server.bat）。' }
@@ -447,6 +445,8 @@ foreach ($c in $manifest.components) {
                 $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = $r.Bytes; dropped = $r.DroppedBytes }
             }
             'jdk_runtime' {
+                # 同上：Rust 后端不需要 JVM，清单里已经没有这个组件
+                Write-Host '  ⚠ 装 Java 运行时（已退役的 legacy 组件）' -ForegroundColor Yellow
                 if (-not $NoPrune -and $c.prune) { } # jdk_runtime 的裁剪规则写在 Install-Jre 里
                 Install-Jre -Target $target
                 $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = (Get-DirSize $target); dropped = 0 }
@@ -497,13 +497,7 @@ $requiredFiles = @(
     @{ p = 'server\comfyhub-server-rs.exe';       what = 'Rust 后端二进制' },
     @{ p = 'db\schema.sqlite.sql';                what = 'SQLite 库表结构（P2 起的真源）' }
 )
-# 旧 Kotlin 后端的两件**只有 -WithJre 时才要求**（灰度期回退用；默认不装，缺了不算问题）
-if ($WithJre -and -not $SkipJre) {
-    $requiredFiles += @(
-        @{ p = 'server\bin\comfy-hub-server.bat'; what = 'Kotlin 后端启动脚本（-WithJre）' },
-        @{ p = 'jre\bin\java.exe';                what = 'Java 运行时（-WithJre）' }
-    )
-}
+
 
 $missing = @()
 foreach ($f in $requiredFiles) {
@@ -516,14 +510,7 @@ foreach ($f in $requiredFiles) {
     }
 }
 
-# 旧 Kotlin 后端的 jar：只有 -WithJre（要能回退）时才要求
-if ($WithJre -and -not $SkipJre) {
-    $jarCount = @(Get-ChildItem (Join-Path $OutDir 'server\lib') -Filter '*.jar' -ErrorAction SilentlyContinue).Count
-    if ($jarCount -gt 0) { Say ("  {0,-34} OK ({1} 个 jar)" -f 'server\lib\*.jar', $jarCount) 'Green' }
-    else { Say ("  {0,-34} 缺失" -f 'server\lib\*.jar') 'Red'; $missing += 'server\lib\*.jar' }
-} else {
-    Say ("  {0,-34} 跳过（Rust 后端不需要 jar；要回退旧后端加 -WithJre）" -f 'server\lib\*.jar') 'DarkGray'
-}
+
 
 # 可写目录要预先建好，但里面不留东西（P2 起数据库是 .db\ 下的 SQLite 单文件）
 foreach ($d in @('.db', 'storage', '.run')) {

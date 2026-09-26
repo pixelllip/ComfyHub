@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.tools.CivitaiSearchTest" tests="15" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:37" hostname="DESKTOP-J1L05N5" time="0.122">
+  <properties/>
+  <testcase name="安全档的正文里不写匿名通道提示()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.016"/>
+  <testcase name="NSFW 没令牌也照搜 成人站 并在正文里写明是匿名通道()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.009"/>
+  <testcase name="安全搜索不带令牌 且不写 nsfw 参数()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.009"/>
+  <testcase name="主文件体积与直链一路进到正文与结构化字段()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.009"/>
+  <testcase name="429 归到 CIVITAI_RATE_LIMIT 并提醒别连着搜()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.008"/>
+  <testcase name="作者没给体积时不编一个数：正文不写那一行 结构化字段也不写这个键()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.009"/>
+  <testcase name="type 与 limit 会进查询串 limit 有上限()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.008"/>
+  <testcase name="配置了令牌时 hasToken 为真()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.004"/>
+  <testcase name="结构化结果带 id 名字 说明 触发词与链接()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.008"/>
+  <testcase name="type 的大小写会被归一成官方拼写()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.008"/>
+  <testcase name="modelVersions 缺失时用顶层 baseModels 兜底()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.008"/>
+  <testcase name="空查询词当场报 INVALID_ARGUMENT 不发请求()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.004"/>
+  <testcase name="401 归到 CIVITAI_AUTH 且错误正文里绝不回显令牌()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.008"/>
+  <testcase name="NSFW 搜索走成人站 base 带令牌 且明写 nsfw 参数()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.008"/>
+  <testcase name="不认识的 type 当场报清楚 不发请求()" classname="com.comfyhub.ai.tools.CivitaiSearchTest" time="0.005"/>
+  <system-out><![CDATA[22:42:37.598 INFO  c.c.a.t.CivitaiSearch - Civitai NSFW 搜索走匿名通道（没配令牌）
+22:42:37.628 WARN  c.c.a.t.CivitaiSearch - Civitai 搜索失败: status=429 code=CIVITAI_RATE_LIMIT
+22:42:37.686 WARN  c.c.a.t.CivitaiSearch - Civitai 搜索失败: status=401 code=CIVITAI_AUTH
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

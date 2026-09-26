@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.tools.SkillStoreTest" tests="28" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:49" hostname="DESKTOP-J1L05N5" time="0.149">
+  <properties/>
+  <testcase name="同名时用户版本胜出并带冲突提示 目录里只剩一条()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.012"/>
+  <testcase name="description 写成块标量竖线时读出多行正文()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.004"/>
+  <testcase name="parseFrontMatter 认下划线写法与 BOM()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.001"/>
+  <testcase name="投放口：ensureUserRoot 会把目录建出来（发布包里首次启动就靠它）()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.003"/>
+  <testcase name="投放口：bundle 目录（名字_SKILL_md）同样自动登记()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.006"/>
+  <testcase name="投放口：中文文件名没法转成 kebab-case 时如实报错 而不是静默忽略()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.004"/>
+  <testcase name="parseFrontMatter 去引号 认注释 无围栏时整篇都是正文()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.0"/>
+  <testcase name="投放口：空文件与非 md 文件不会被当成 skill()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.004"/>
+  <testcase name="投放口：重复扫描是幂等的（第二次不会又登记一遍）()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.005"/>
+  <testcase name="描述为空或过长 正文为空或过大 都被拒()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.003"/>
+  <testcase name="投放口：已经有 frontmatter 的文件一个字节都不动（哪怕它不合法）()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.005"/>
+  <testcase name="delete 删掉用户 skill 的整个 bundle 但拒绝内置()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.008"/>
+  <testcase name="平铺 md 被识别 两个可调用开关都生效()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.01"/>
+  <testcase name="非法 skill 名一律拒绝 合法 kebab 名通过()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.007"/>
+  <testcase name="找不到的 skill 一律返回 null 而不是抛错()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.001"/>
+  <testcase name="只有内置时正常列出且不可删()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.005"/>
+  <testcase name="save 覆盖同名 skill 时不会残留旧正文()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.008"/>
+  <testcase name="parseFrontMatter 认 CRLF()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.0"/>
+  <testcase name="已有 skill 的描述很长仍然可用（长度不是错误）()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.006"/>
+  <testcase name="真实形态：description 块标量 + 后面还有列表型 key()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.005"/>
+  <testcase name="投放口：拷贝进来的平铺 md 没有 frontmatter 也会被自动登记()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.006"/>
+  <testcase name="正文为空也算非法()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.003"/>
+  <testcase name="正文变化时 digest 跟着变()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.011"/>
+  <testcase name="save 落盘到用户根 之后 scan find read 立刻能往返()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.01"/>
+  <testcase name="delete 平铺 md 只删文件 不误删用户根()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.004"/>
+  <testcase name="缺 description 的 skill 会被列出但不可用()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.006"/>
+  <testcase name="frontmatter 的 name 与目录名不一致算非法()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.004"/>
+  <testcase name="description 用折行符号时合成一行 去掉横杠时不留空行()" classname="com.comfyhub.ai.tools.SkillStoreTest" time="0.004"/>
+  <system-out><![CDATA[22:42:49.915 INFO  c.c.ai.tools.SkillStore - 自动登记 skill: scene-prompt（补写 frontmatter，来源 scene-prompt）
+22:42:49.930 INFO  c.c.ai.tools.SkillStore - 自动登记 skill: idempotent（补写 frontmatter，来源 idempotent.md）
+22:42:49.945 INFO  c.c.ai.tools.SkillStore - skill 已删除: bundle-one
+22:42:49.961 INFO  c.c.ai.tools.SkillStore - skill 已注册: good-name-1（6 字节，来源 ai）
+22:42:49.963 INFO  c.c.ai.tools.SkillStore - skill 已注册: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa（6 字节，来源 ai）
+22:42:49.976 INFO  c.c.ai.tools.SkillStore - skill 已注册: demo-skill（15 字节，来源 ai）
+22:42:49.978 INFO  c.c.ai.tools.SkillStore - skill 已注册: demo-skill（15 字节，来源 ai）
+22:42:49.995 INFO  c.c.ai.tools.SkillStore - 自动登记 skill: my-helper（补写 frontmatter，来源 my-helper.md）
+22:42:50.004 INFO  c.c.ai.tools.SkillStore - skill 已注册: demo-skill（15 字节，来源 ai）
+22:42:50.007 INFO  c.c.ai.tools.SkillStore - skill 已注册: demo-skill（15 字节，来源 ai）
+22:42:50.014 INFO  c.c.ai.tools.SkillStore - skill 已注册: demo-skill（19 字节，来源 ai）
+22:42:50.026 INFO  c.c.ai.tools.SkillStore - skill 已删除: flat-two
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.SystemPromptNsfwTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.009">
+  <properties/>
+  <testcase name="两段拼回去必须与拆分前一致()" classname="com.comfyhub.ai.SystemPromptNsfwTest" time="0.005"/>
+  <testcase name="关掉开关时越狱段一个字都不许出现 但常驻纪律还在()" classname="com.comfyhub.ai.SystemPromptNsfwTest" time="0.002"/>
+  <testcase name="打开开关时越狱段原样进入系统提示()" classname="com.comfyhub.ai.SystemPromptNsfwTest" time="0.0"/>
+  <testcase name="人格锚点与越狱机制都在越狱段 常驻段只有纪律()" classname="com.comfyhub.ai.SystemPromptNsfwTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

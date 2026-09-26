@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.WorkflowRecipeBinderTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:35" hostname="DESKTOP-J1L05N5" time="0.031">
+  <properties/>
+  <testcase name="一次绑好几个角色 缺件配方要提醒先补齐()" classname="com.comfyhub.WorkflowRecipeBinderTest" time="0.011"/>
+  <testcase name="整包 checkpoint 接分离式骨架要明说结构上接不上()" classname="com.comfyhub.WorkflowRecipeBinderTest" time="0.002"/>
+  <testcase name="配方连底模槽位都没有时要说清楚要带什么()" classname="com.comfyhub.WorkflowRecipeBinderTest" time="0.001"/>
+  <testcase name="没给 role 时按底模那一格兜底 但要把假设说出来()" classname="com.comfyhub.WorkflowRecipeBinderTest" time="0.001"/>
+  <testcase name="拿不到清单时如实说没验证过()" classname="com.comfyhub.WorkflowRecipeBinderTest" time="0.001"/>
+  <testcase name="同名且实例能加载才自动写覆盖键()" classname="com.comfyhub.WorkflowRecipeBinderTest" time="0.001"/>
+  <testcase name="sidecar 元数据不算模型 也不许混进候选()" classname="com.comfyhub.WorkflowRecipeBinderTest" time="0.002"/>
+  <testcase name="只有字面相似时给候选但先问用户()" classname="com.comfyhub.WorkflowRecipeBinderTest" time="0.001"/>
+  <testcase name="本机没有时绝不编文件名 force 才写得进去()" classname="com.comfyhub.WorkflowRecipeBinderTest" time="0.001"/>
+  <testcase name="同角色多槽位要报 ambiguous 不许一个文件写给两个槽位()" classname="com.comfyhub.WorkflowRecipeBinderTest" time="0.003"/>
+  <testcase name="盘上有但实例看不到 不许写键 也不许让人去下载()" classname="com.comfyhub.WorkflowRecipeBinderTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

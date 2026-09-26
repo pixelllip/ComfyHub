@@ -1,0 +1,59 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": { "ckpt_name": "krea2TurboOfficialComfy_krea2TurboInt8.safetensors" },
+    "_meta": { "title": "MODEL 源（本机 int8 一体包，仅取 MODEL）" }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3VL4BAbliteratedComfyui_v10_full_bf16.safetensors",
+      "type": "krea2",
+      "device": "default"
+    },
+    "_meta": { "title": "CLIP 源（外挂）" }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "qwen_image_vae.safetensors" },
+    "_meta": { "title": "VAE 源（外挂）" }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "A candid night photograph of a young woman wearing a cream beret and a burgundy sailor-collar dress with a fitted black jacket and red scarf, standing on the Bund promenade in Shanghai, the Oriental Pearl Tower glowing across the Huangpu River, Lujiazui skyline lit up, warm promenade lights reflecting on the water, medium shot, vertical framing, slight handheld shake, soft directional lighting from the left, photorealistic, cinematic night atmosphere.",
+      "clip": ["2", 0]
+    }
+  },
+  "5": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": { "conditioning": ["4", 0] }
+  },
+  "6": {
+    "class_type": "EmptyLatentImage",
+    "inputs": { "width": 1088, "height": 1920, "batch_size": 1 }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "seed": 20260921,
+      "steps": 8,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "positive": ["4", 0],
+      "negative": ["5", 0],
+      "latent_image": ["6", 0],
+      "denoise": 1.0
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["7", 0], "vae": ["3", 0] }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": { "images": ["8", 0], "filename_prefix": "Krea2_spine" }
+  }
+}

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.protocol.ToolProtocolTest" tests="20" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.011">
+  <properties/>
+  <testcase name="anthropic tools 用 input_schema 且空列表整体省略()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.001"/>
+  <testcase name="responses 助手工具调用是消息加顶层 function_call 项()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <testcase name="openai 工具结果渲染成 role=tool 加 tool_call_id()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <testcase name="responses tools 是扁平结构 空列表整体省略()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <testcase name="openai interpret 把 delta 里的 tool_calls 转成 ToolCallDelta()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.001"/>
+  <testcase name="累加器：callId 缺失时退回流内键 不丢这次调用()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.001"/>
+  <testcase name="累加器：两个并行调用互不串味且保持出现顺序()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <testcase name="anthropic 助手工具调用渲染成 content blocks 且 input 是解析后的对象()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <testcase name="anthropic interpret 处理 content_block_start 与 input_json_delta()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <testcase name="累加器：Responses 风格以 item_id 为键 callId 只给一次()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.001"/>
+  <testcase name="累加器：Anthropic 风格只有 start 块带 id()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <testcase name="累加器：OpenAI 风格按 index 归并()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.001"/>
+  <testcase name="openai tools 是 type=function 的嵌套结构 空列表则字段整体省略()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.001"/>
+  <testcase name="responses 工具结果渲染成 function_call_output()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <testcase name="responses interpret 处理 output_item-added 与 arguments-delta()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.001"/>
+  <testcase name="三种协议的适配器都升到 3 且都在 supported 名单里()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <testcase name="openai 助手轮的工具调用渲染成 tool_calls()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <testcase name="anthropic 连续的 tool 轮合并成一条 user 消息()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.001"/>
+  <testcase name="anthropic start 块已经给全 input 时直接当参数()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <testcase name="累加器：字符串里的花括号 换行 引号原样保留()" classname="com.comfyhub.ai.protocol.ToolProtocolTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

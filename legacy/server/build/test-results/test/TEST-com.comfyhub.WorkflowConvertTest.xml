@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.WorkflowConvertTest" tests="20" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:35" hostname="DESKTOP-J1L05N5" time="0.02">
+  <properties/>
+  <testcase name="没有节点定义的自定义节点也如实报错()" classname="com.comfyhub.WorkflowConvertTest" time="0.001"/>
+  <testcase name="组节点按定义展开：内部节点换新号 连线与控件值都接对 输出穿透到真正的产出节点()" classname="com.comfyhub.WorkflowConvertTest" time="0.004"/>
+  <testcase name="纯前端节点转换不了就如实报错 不猜()" classname="com.comfyhub.WorkflowConvertTest" time="0.001"/>
+  <testcase name="isUiWorkflow 只认带 nodes 的界面格式()" classname="com.comfyhub.WorkflowConvertTest" time="0.0"/>
+  <testcase name="控件值个数对不上时给警告 但仍然转出来()" classname="com.comfyhub.WorkflowConvertTest" time="0.001"/>
+  <testcase name="组节点里的组节点这一版不展开 如实报错（不猜）()" classname="com.comfyhub.WorkflowConvertTest" time="0.0"/>
+  <testcase name="带名字的 widgets_values_named 优先 且按输入声明过滤（用户 bug：参数对不齐）()" classname="com.comfyhub.WorkflowConvertTest" time="0.0"/>
+  <testcase name="空着的连线型输入列成清单（纯前端广播节点原来就是往这些地方灌值的）()" classname="com.comfyhub.WorkflowConvertTest" time="0.0"/>
+  <testcase name="静音的节点被摘掉 并且留下警告()" classname="com.comfyhub.WorkflowConvertTest" time="0.0"/>
+  <testcase name="旁路的输出找不到同类型输入时留警告 不静默()" classname="com.comfyhub.WorkflowConvertTest" time="0.0"/>
+  <testcase name="空工作流报错 而不是转出一张空图()" classname="com.comfyhub.WorkflowConvertTest" time="0.0"/>
+  <testcase name="forceInput 的输入不算控件 位置不会被它挤位()" classname="com.comfyhub.WorkflowConvertTest" time="0.001"/>
+  <testcase name="被旁路的节点把输出接到同类型的输入上 这是真实存档里最常见的状态()" classname="com.comfyhub.WorkflowConvertTest" time="0.001"/>
+  <testcase name="连线还原成上游节点与槽位 控件值按声明顺序贴回名字()" classname="com.comfyhub.WorkflowConvertTest" time="0.0"/>
+  <testcase name="备注与原始值节点被丢掉 不会进提示词()" classname="com.comfyhub.WorkflowConvertTest" time="0.0"/>
+  <testcase name="控件值存成对象时按名字取()" classname="com.comfyhub.WorkflowConvertTest" time="0.0"/>
+  <testcase name="新写法 links 对象也认()" classname="com.comfyhub.WorkflowConvertTest" time="0.002"/>
+  <testcase name="未知的节点状态明确拒绝()" classname="com.comfyhub.WorkflowConvertTest" time="0.001"/>
+  <testcase name="Reroute 与 SetNode GetNode 把连线接到真正的上游()" classname="com.comfyhub.WorkflowConvertTest" time="0.001"/>
+  <testcase name="静音节点留下的悬挂输入要点名报出来（不然 ComfyUI 只会说节点不存在）()" classname="com.comfyhub.WorkflowConvertTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

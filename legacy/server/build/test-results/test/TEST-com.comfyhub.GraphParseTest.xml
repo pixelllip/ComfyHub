@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.GraphParseTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:34" hostname="DESKTOP-J1L05N5" time="0.007">
+  <properties/>
+  <testcase name="没有正负向命名的图也能靠启发式认出文本()" classname="com.comfyhub.GraphParseTest" time="0.003"/>
+  <testcase name="自定义采样链（SamplerCustomAdvanced）也能解析出参数与提示词()" classname="com.comfyhub.GraphParseTest" time="0.002"/>
+  <testcase name="经典 KSampler 工作流能解析出全部字段()" classname="com.comfyhub.GraphParseTest" time="0.001"/>
+  <testcase name="空图或坏图不会抛异常()" classname="com.comfyhub.GraphParseTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

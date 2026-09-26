@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.ModelDiscoveryTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.003">
+  <properties/>
+  <testcase name="OpenAI 标准 data 数组()" classname="com.comfyhub.ai.ModelDiscoveryTest" time="0.0"/>
+  <testcase name="空的 capabilities 对象不再被当成接口声明()" classname="com.comfyhub.ai.ModelDiscoveryTest" time="0.001"/>
+  <testcase name="接口只声明一部分维度时 其余维度仍由内置目录补()" classname="com.comfyhub.ai.ModelDiscoveryTest" time="0.0"/>
+  <testcase name="兼容 models 对象与富信息字段()" classname="com.comfyhub.ai.ModelDiscoveryTest" time="0.0"/>
+  <testcase name="不认识的模型不会被猜能力：只给文本并标明未识别()" classname="com.comfyhub.ai.ModelDiscoveryTest" time="0.001"/>
+  <testcase name="按 id 去重 且忽略没有 id 的条目()" classname="com.comfyhub.ai.ModelDiscoveryTest" time="0.0"/>
+  <testcase name="接口只给 id 时回退到内置目录，而不是当成未识别()" classname="com.comfyhub.ai.ModelDiscoveryTest" time="0.0"/>
+  <testcase name="畸形或空响应不抛异常 只是没有候选()" classname="com.comfyhub.ai.ModelDiscoveryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

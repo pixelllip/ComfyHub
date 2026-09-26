@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.ModelCapabilityCatalogTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.02">
+  <properties/>
+  <testcase name="最终 reasoning=false 时档位与方言必须清空()" classname="com.comfyhub.ai.ModelCapabilityCatalogTest" time="0.003"/>
+  <testcase name="文件坏了解析失败该层当不存在，builtin 照常()" classname="com.comfyhub.ai.ModelCapabilityCatalogTest" time="0.002"/>
+  <testcase name="reload 后 status 带上来源与条目数()" classname="com.comfyhub.ai.ModelCapabilityCatalogTest" time="0.002"/>
+  <testcase name="remote 精确命中补模态、builtin 补档位与方言（逐维度合并）()" classname="com.comfyhub.ai.ModelCapabilityCatalogTest" time="0.002"/>
+  <testcase name="去前缀匹配在唯一时生效、有歧义时宁可不命中()" classname="com.comfyhub.ai.ModelCapabilityCatalogTest" time="0.003"/>
+  <testcase name="没有覆盖层时内置表照常工作且未知模型仍为 null()" classname="com.comfyhub.ai.ModelCapabilityCatalogTest" time="0.0"/>
+  <testcase name="custom 压过 remote 压过 builtin()" classname="com.comfyhub.ai.ModelCapabilityCatalogTest" time="0.003"/>
+  <testcase name="builtin 不认识的 id 只要 remote 有就命中，缺的维度保守回退()" classname="com.comfyhub.ai.ModelCapabilityCatalogTest" time="0.002"/>
+  <system-out><![CDATA[22:42:36.387 WARN  c.c.a.ModelCapabilityCatalog - 能力覆盖层 custom 读不了（忽略该层）：C:\Users\Administrator\AppData\Local\Temp\cap-test11279196696401528608\custom.json —— Unexpected JSON token at offset 6: Expected colon ':', but had 'J' instead at path: $
+JSON input: { 这不是 JSON 
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.ThinkingAndUsageTest" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.008">
+  <properties/>
+  <testcase name="旧消息里存的供应商原始对象也能回算()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.001"/>
+  <testcase name="模型没声明推理能力时拒绝任何强度()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.0"/>
+  <testcase name="列了档位时只允许列出来的那几个()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.0"/>
+  <testcase name="off 不算可选档位()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.001"/>
+  <testcase name="没有 usage 或坏数据都当成 0 而不是抛异常()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.0"/>
+  <testcase name="合法声明可以通过 数字表达也行()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.002"/>
+  <testcase name="openai 方言的 usage 被归一化()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.0"/>
+  <testcase name="未知等级或空表达在保存时就被拦下()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.001"/>
+  <testcase name="off 与空请求都返回 null 不发思考参数()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.0"/>
+  <testcase name="anthropic 方言的 usage 也能认出来()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.0"/>
+  <testcase name="声明了推理能力但没列档位时 允许标准档位()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.0"/>
+  <testcase name="只给 total 的网关不会把总数算丢()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.0"/>
+  <testcase name="声明了档位却没勾推理 两者必须一致()" classname="com.comfyhub.ai.ThinkingAndUsageTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

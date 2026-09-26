@@ -41,7 +41,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$ServerDir   = Join-Path $ProjectRoot 'server'
+$ServerDir   = Join-Path $ProjectRoot 'legacy\server'   # Kotlin 后端已退役（P4 收尾），源码留在 legacy\ 里备查
 $LogDir      = Join-Path $ProjectRoot '.run'
 $OutLog      = Join-Path $LogDir 'server.out.log'
 $ErrLog      = Join-Path $LogDir 'server.err.log'
@@ -468,6 +468,15 @@ function Do-Start {
         Trace "启动方式=$how，开始等后端健康"
     } else {
         Write-Host ("==> 后端实现: Kotlin（{0}）" -f $Script:BackendInfo.Note) -ForegroundColor DarkGray
+        # ⚠ P4 收尾（2026-09-26）：Kotlin 后端**已退役** —— 源码搬到 `legacy\server\`，
+        # 发布包也不再装它。这条路只剩"灰度期回退"一个用途，而且要先自己把它构建出来。
+        if (-not (Test-Path (Join-Path $ServerDir 'build.gradle.kts'))) {
+            throw @"
+Kotlin 后端已退役（P4 收尾）：legacy\server 里没有源码。
+  现在默认就是 Rust 后端：pwsh -File scripts\comfyhub.ps1 up
+  真要用旧后端：把 legacy\server 放回原位、pwsh -File scripts\server.ps1 build，再 -Backend kotlin。
+"@
+        }
         Write-Host "==> 使用 JDK: $(Get-Jdk)" -ForegroundColor DarkGray
         if (Test-Path $PackagedServerBat) {
             # 发布包布局：没有 Gradle 源码也没有 gradle 可跑，别去 attempt 构建
@@ -574,7 +583,7 @@ switch ($Action) {
         # 一次性数据搬迁（P2）：老 MySQL（只读来源）→ SQLite 目标库。
         # 这一步是**唯一**还需要 MySQL 的地方；来源地址走 COMFYHUB_MIGRATE_SOURCE，
         # 目标库走 COMFYHUB_JDBC_URL（缺省 <根>\.db\comfyhub.db）。
-        Write-Host '==> 一次性数据搬迁：MySQL → SQLite' -ForegroundColor Cyan
+        Write-Host '==> 一次性数据搬迁：MySQL → SQLite（旧 Kotlin 后端的能力；已退役，源码在 legacy\\server）' -ForegroundColor Cyan
         if (-not (Ensure-MySql)) {
             throw "老库（MySQL）不可用，没法搬迁。先执行: pwsh -File scripts\mysql.ps1 start $($DataDirArgs -join ' ')".TrimEnd()
         }

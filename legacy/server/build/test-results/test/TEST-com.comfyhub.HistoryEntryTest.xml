@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.HistoryEntryTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:34" hostname="DESKTOP-J1L05N5" time="0.005">
+  <properties/>
+  <testcase name="元组里的敏感数据不会被当成 extra_data()" classname="com.comfyhub.HistoryEntryTest" time="0.001"/>
+  <testcase name="老版本的三元组同样能取到()" classname="com.comfyhub.HistoryEntryTest" time="0.0"/>
+  <testcase name="坏数据不炸：空对象 缺字段 类型乱来()" classname="com.comfyhub.HistoryEntryTest" time="0.001"/>
+  <testcase name="节点图判定不会把 extra_data 或空对象误认成图()" classname="com.comfyhub.HistoryEntryTest" time="0.0"/>
+  <testcase name="0_34_2 的六元组能取到节点图与 extra_data()" classname="com.comfyhub.HistoryEntryTest" time="0.001"/>
+  <testcase name="六元组里带界面工作流时能取到()" classname="com.comfyhub.HistoryEntryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

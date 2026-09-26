@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ComfyLocatorTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:34" hostname="DESKTOP-J1L05N5" time="0.011">
+  <properties/>
+  <testcase name="源码形态 main_py 加 comfy 包算()" classname="com.comfyhub.ComfyLocatorTest" time="0.003"/>
+  <testcase name="系统目录不算（避免把 Windows 当工作目录的旧坑）()" classname="com.comfyhub.ComfyLocatorTest" time="0.001"/>
+  <testcase name="空目录不算()" classname="com.comfyhub.ComfyLocatorTest" time="0.001"/>
+  <testcase name="output 加 input 也算（Desktop 整合包常见）()" classname="com.comfyhub.ComfyLocatorTest" time="0.001"/>
+  <testcase name="任何形态 output 加 models 算()" classname="com.comfyhub.ComfyLocatorTest" time="0.002"/>
+  <testcase name="不存在的目录不算()" classname="com.comfyhub.ComfyLocatorTest" time="0.001"/>
+  <testcase name="只有空 output 目录不算（最容易误判的一种）()" classname="com.comfyhub.ComfyLocatorTest" time="0.001"/>
+  <testcase name="有 main_py 但没有 comfy 包不算()" classname="com.comfyhub.ComfyLocatorTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

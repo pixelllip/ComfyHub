@@ -4,7 +4,8 @@
 
 .DESCRIPTION
     发布包（scripts\pack-release.ps1）只带了**一样**能带走的东西：
-      · Java 运行时   <根>\jre        —— 后端是 Kotlin/JVM 程序
+      · Rust 后端     <根>\server\comfyhub-server-rs.exe  —— 单文件二进制，SQLite 引擎编在里面
+    （P4/2026-09-26 起后端是 Rust：**不再需要 JVM、不再需要 MySQL**，包从 ~60MB 降到 ~14MB。）
     （P2/2026-09-23 起数据库是 **SQLite**：xerial 驱动自带引擎，不再需要 MySQL 本体、
      也不再需要它依赖的 VC++ 运行时 —— 发布包因此少了 300MB。）
     这之外还有几样**必须目标机器自己装**，缺一个服务就起不来，
@@ -15,7 +16,8 @@
 
     依赖清单：
       1. PowerShell 7 (pwsh)            —— **必需**，且 Windows 自带的 powershell.exe 5.1 不算数
-      2. Java 21 运行时                  —— **必需**，发布包自带 <根>\jre；源码树里要装 JDK 21~23
+      2. Java 21 运行时                  —— **可选（legacy）**：只有回退旧 Kotlin 后端
+                                          （COMFYHUB_BACKEND=kotlin + legacy\server）时才需要
       3. VC++ 2015-2022 x64 可再发行组件 —— 可选：只有搬迁老 MySQL 库时才用得上
       4. MySQL 本体                      —— 可选：同上，只有 `comfyhub.ps1 up` 遇到老库自动搬迁时才拉起来
 #>
@@ -129,10 +131,10 @@ function Get-RuntimeChecks {
     $checks += [pscustomobject]@{
         Name     = 'Java 21 运行时'
         Ok       = $javaOk
-        Required = $true
+        Required = $false
         Detail   = $javaDetail
-        Why      = 'Kotlin 后端跑在 JVM 上'
-        Hint     = '发布包自带 <根>\jre；源码树里请装 JDK 21~23，或用 -JdkHome / COMFYHUB_JDK_HOME 指定'
+        Why      = 'legacy：只有回退旧 Kotlin 后端（-Backend kotlin + legacy\server）时才需要 —— P4 收尾起后端是 Rust，不需要 JVM'
+        Hint     = '回退旧后端时才装 JDK 21~23，或用 -JdkHome / COMFYHUB_JDK_HOME 指定'
     }
 
     # ---- 4) MySQL 本体（**只有搬迁老库那一步**才需要）--------------------

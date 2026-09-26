@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.tools.FindModelTest" tests="22" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:37" hostname="DESKTOP-J1L05N5" time="11.96">
+  <properties/>
+  <testcase name="默认要批准 没人批准就绝不出网()" classname="com.comfyhub.ai.tools.FindModelTest" time="2.03"/>
+  <testcase name="联网预算与 civitai_search 共用一条 不会两条路各来一份()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.005"/>
+  <testcase name="Civitai 只认 hashes 里的 SHA256 不认 AutoV2 短码()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.009"/>
+  <testcase name="HF 的 401 与 403 分别落到 needs_login 与 gated()" classname="com.comfyhub.ai.tools.FindModelTest" time="2.415"/>
+  <testcase name="上游没给 sha256 时不编 结构化与正文都如实说明()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.019"/>
+  <testcase name="空的 query 在真实实现那一层直接报 INVALID_ARGUMENT()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.003"/>
+  <testcase name="HF 非 LFS 文件不当成 sha256 报出去()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.751"/>
+  <testcase name="没有 finder 时报 FIND_MODEL_DISABLED 而不是假装没查到()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.002"/>
+  <testcase name="连不上时归到 needs_proxy 并写清出网路径与不要反复重试()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.754"/>
+  <testcase name="online=false 时只查本机 且不碰外网()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.002"/>
+  <testcase name="一个源连不上 另外两个照常出结果()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.014"/>
+  <testcase name="工具把 query 与 type 归一后交给 finder 并把本机清单一起传下去()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.003"/>
+  <testcase name="候选没有 sha256 时如实标注 下完没法校验()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.002"/>
+  <testcase name="三源按顺序查到 且 sha256 与 installInto 各自取对()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.022"/>
+  <testcase name="type 写错时当场列出可选值 而不是给一份空结果()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.002"/>
+  <testcase name="结构化结果里每个源都有一行 候选字段齐全 并带 downloadsModel=false()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.003"/>
+  <testcase name="该放哪个目录说不准时给说明而不是编一个目录()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.004"/>
+  <testcase name="缺少 query 当场报错()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.003"/>
+  <testcase name="本机清单来源会如实带进结果（object_info 与 scan 不是一回事）()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.003"/>
+  <testcase name="find_model 在工具清单里 只读 走联网类 默认要批准()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.002"/>
+  <testcase name="本机同名时一个请求都不发 并把三个源标成没去查()" classname="com.comfyhub.ai.tools.FindModelTest" time="5.907"/>
+  <testcase name="绝不代下 描述 结构化结果与接口形状三处都要挡住()" classname="com.comfyhub.ai.tools.FindModelTest" time="0.001"/>
+  <system-out><![CDATA[22:42:39.853 WARN  c.c.a.t.HttpModelFinder - huggingface 查询失败: status=401 state=needs_login
+22:42:41.494 WARN  c.c.a.t.HttpModelFinder - huggingface 查询失败: status=403 state=gated
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

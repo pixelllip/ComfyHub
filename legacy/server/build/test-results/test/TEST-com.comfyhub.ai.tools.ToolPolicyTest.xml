@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.tools.ToolPolicyTest" tests="14" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:50" hostname="DESKTOP-J1L05N5" time="0.047">
+  <properties/>
+  <testcase name="accessFor 认用户覆盖 isOverridden 如实报告()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.003"/>
+  <testcase name="被 deny 的工具不会出现在下发给模型的 specs 里()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.003"/>
+  <testcase name="库里冻着的旧查询预算不生效 一律以代码常量为准()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.002"/>
+  <testcase name="运行期数据目录即使白名单放宽到项目根也不能写()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.004"/>
+  <testcase name="自动发现的 ComfyUI 目录只放宽读 不放宽写()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.005"/>
+  <testcase name="comfyui 里指向外面的符号链接不能当成写通道()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.004"/>
+  <testcase name="默认写根就是 comfyui 内部放行 兄弟目录与别处的绝对路径都拒绝()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.005"/>
+  <testcase name="穿越路径 comfyui 上跳 other 会被拒()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.004"/>
+  <testcase name="空路径与非法字符报自己的错误码()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.002"/>
+  <testcase name="权限档取值非法时回落询问 绝不当成自动允许()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.003"/>
+  <testcase name="自动允许档只把 ask 变 allow deny 与路径白名单都不放宽()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.003"/>
+  <testcase name="写目录根本身不能当写入目标()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.003"/>
+  <testcase name="查 ComfyUI 的预算默认 9 次()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.0"/>
+  <testcase name="读根默认是 comfyui 加 storage 且 storage 只读()" classname="com.comfyhub.ai.tools.ToolPolicyTest" time="0.006"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

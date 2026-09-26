@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.ThinkingProbeHttpTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.036">
+  <properties/>
+  <testcase name="anthropic 协议诚实跳过()" classname="com.comfyhub.ai.ThinkingProbeHttpTest" time="0.001"/>
+  <testcase name="与思考参数无关的 400 会如实中止而不是降档()" classname="com.comfyhub.ai.ThinkingProbeHttpTest" time="0.009"/>
+  <testcase name="严格网关只认 max_completion_tokens 时按提示换字段重试()" classname="com.comfyhub.ai.ThinkingProbeHttpTest" time="0.01"/>
+  <testcase name="从最高档往下试，第一个通过的就是最高接受档()" classname="com.comfyhub.ai.ThinkingProbeHttpTest" time="0.01"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

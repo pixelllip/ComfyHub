@@ -1,0 +1,84 @@
+{
+  "79": {
+    "_meta": { "title": "底模 anima-base-v1.0（Shared/diffusion_models）" },
+    "class_type": "UNETLoader",
+    "inputs": { "unet_name": "anima-base-v1.0.safetensors", "weight_dtype": "default" }
+  },
+  "111": {
+    "_meta": { "title": "Sage Attention（KJ）" },
+    "class_type": "PathchSageAttentionKJ",
+    "inputs": { "model": ["79", 0], "sage_attention": "auto", "allow_compile": false }
+  },
+  "1": {
+    "_meta": { "title": "加速 LoRA（anima-turbo-lora-v0.2，非画风）" },
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["111", 0],
+      "clip": ["72", 0],
+      "lora_name": "anima-turbo-lora-v0.2.safetensors",
+      "strength_model": 1.0,
+      "strength_clip": 1.0
+    }
+  },
+  "72": {
+    "_meta": { "title": "外挂 CLIP（qwen3-0.6B）" },
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    }
+  },
+  "73": {
+    "_meta": { "title": "外挂 VAE" },
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "qwen_image_vae.safetensors" }
+  },
+  "78": {
+    "_meta": { "title": "正面提示词（Anima Danbooru tag）" },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "masterpiece, best quality, safe, highres, newest, anime coloring\nclose-up, upper body, vertical composition, from above, looking down, soft lighting, high-key lighting, simple background, white background\n1girl, short hair, blue hair, purple hair, blunt bangs, hair between eyes, hair ornament, flower, tassel, half-closed eyes, blush, smile, sweat, sweatdrop, white shirt, collared shirt, long sleeves, navy vest, vest, blue ribbon, bowtie, gold button, emblem, school uniform\n1boy, black hair, short hair, lying, on back, head tilt, blush, sweat, white shirt, collared shirt, open collar\nhand on another's head, leaning forward, face to face\nsemi-flat anime illustration, thin crisp linework, airbrushed skin shading, clean flat background\nevoking an intimate, tender, teasing atmosphere"
+    }
+  },
+  "76": {
+    "_meta": { "title": "负面提示词" },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "worst quality, low quality, artist name, blurry, jpeg artifacts, bad anatomy, bad hands, missing fingers, extra digits, fewer digits, fused fingers, watermark, signature, text, 3d, realistic, extra limbs, extra arms, cloned face, lowres, 2girls, 3boys"
+    }
+  },
+  "75": {
+    "_meta": { "title": "空 Latent（896x1152）" },
+    "class_type": "EmptyLatentImage",
+    "inputs": { "width": 896, "height": 1152, "batch_size": 1 }
+  },
+  "77": {
+    "_meta": { "title": "K采样器（Turbo 档：10 步 / cfg 1 / er_sde）" },
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["78", 0],
+      "negative": ["76", 0],
+      "latent_image": ["75", 0],
+      "seed": 20260922,
+      "steps": 10,
+      "cfg": 1.0,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "74": {
+    "_meta": { "title": "VAE 解码" },
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["77", 0], "vae": ["73", 0] }
+  },
+  "107": {
+    "_meta": { "title": "保存图像" },
+    "class_type": "SaveImage",
+    "inputs": { "images": ["74", 0], "filename_prefix": "anima_base_turbo_sage" }
+  }
+}

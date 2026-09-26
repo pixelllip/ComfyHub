@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+<meta http-equiv="x-ua-compatible" content="IE=edge"/>
+<title>Test results - FindModelTest</title>
+<link href="../css/base-style.css" rel="stylesheet" type="text/css"/>
+<link href="../css/style.css" rel="stylesheet" type="text/css"/>
+<script src="../js/report.js" type="text/javascript"></script>
+</head>
+<body>
+<div id="content">
+<h1>FindModelTest</h1>
+<div class="breadcrumbs">
+<a href="../index.html">all</a> &gt; 
+<a href="../packages/com.comfyhub.ai.tools.html">com.comfyhub.ai.tools</a> &gt; FindModelTest</div>
+<div id="summary">
+<table>
+<tr>
+<td>
+<div class="summaryGroup">
+<table>
+<tr>
+<td>
+<div class="infoBox" id="tests">
+<div class="counter">22</div>
+<p>tests</p>
+</div>
+</td>
+<td>
+<div class="infoBox" id="failures">
+<div class="counter">0</div>
+<p>failures</p>
+</div>
+</td>
+<td>
+<div class="infoBox" id="ignored">
+<div class="counter">0</div>
+<p>ignored</p>
+</div>
+</td>
+<td>
+<div class="infoBox" id="duration">
+<div class="counter">11.956s</div>
+<p>duration</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+</td>
+<td>
+<div class="infoBox success" id="successRate">
+<div class="percent">100%</div>
+<p>successful</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+<div id="tabs">
+<ul class="tabLinks">
+<li>
+<a href="#tab0">Tests</a>
+</li>
+<li>
+<a href="#tab1">Standard output</a>
+</li>
+</ul>
+<div id="tab0" class="tab">
+<h2>Tests</h2>
+<table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Duration</th>
+<th>Result</th>
+</tr>
+</thead>
+<tr>
+<td class="success">Civitai 只认 hashes 里的 SHA256 不认 AutoV2 短码()</td>
+<td class="success">0.009s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">HF 的 401 与 403 分别落到 needs_login 与 gated()</td>
+<td class="success">2.415s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">HF 非 LFS 文件不当成 sha256 报出去()</td>
+<td class="success">0.751s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">find_model 在工具清单里 只读 走联网类 默认要批准()</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">online=false 时只查本机 且不碰外网()</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">type 写错时当场列出可选值 而不是给一份空结果()</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">一个源连不上 另外两个照常出结果()</td>
+<td class="success">0.014s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">三源按顺序查到 且 sha256 与 installInto 各自取对()</td>
+<td class="success">0.022s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">上游没给 sha256 时不编 结构化与正文都如实说明()</td>
+<td class="success">0.019s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">候选没有 sha256 时如实标注 下完没法校验()</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">工具把 query 与 type 归一后交给 finder 并把本机清单一起传下去()</td>
+<td class="success">0.003s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">本机同名时一个请求都不发 并把三个源标成没去查()</td>
+<td class="success">5.907s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">本机清单来源会如实带进结果（object_info 与 scan 不是一回事）()</td>
+<td class="success">0.003s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">没有 finder 时报 FIND_MODEL_DISABLED 而不是假装没查到()</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">空的 query 在真实实现那一层直接报 INVALID_ARGUMENT()</td>
+<td class="success">0.003s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">结构化结果里每个源都有一行 候选字段齐全 并带 downloadsModel=false()</td>
+<td class="success">0.003s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">绝不代下 描述 结构化结果与接口形状三处都要挡住()</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">缺少 query 当场报错()</td>
+<td class="success">0.003s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">联网预算与 civitai_search 共用一条 不会两条路各来一份()</td>
+<td class="success">0.005s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">该放哪个目录说不准时给说明而不是编一个目录()</td>
+<td class="success">0.004s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">连不上时归到 needs_proxy 并写清出网路径与不要反复重试()</td>
+<td class="success">0.754s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">默认要批准 没人批准就绝不出网()</td>
+<td class="success">2.030s</td>
+<td class="success">passed</td>
+</tr>
+</table>
+</div>
+<div id="tab1" class="tab">
+<h2>Standard output</h2>
+<span class="code">
+<pre>22:42:39.853 WARN  c.c.a.t.HttpModelFinder - huggingface 查询失败: status=401 state=needs_login
+22:42:41.494 WARN  c.c.a.t.HttpModelFinder - huggingface 查询失败: status=403 state=gated
+</pre>
+</span>
+</div>
+</div>
+<div id="footer">
+<p>
+<div>
+<label class="hidden" id="label-for-line-wrapping-toggle" for="line-wrapping-toggle">Wrap lines
+<input id="line-wrapping-toggle" type="checkbox" autocomplete="off"/>
+</label>
+</div>Generated by 
+<a href="http://www.gradle.org">Gradle 8.12</a> at 2026年9月25日 22:42:51</p>
+</div>
+</div>
+</body>
+</html>

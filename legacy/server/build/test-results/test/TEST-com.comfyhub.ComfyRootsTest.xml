@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ComfyRootsTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:34" hostname="DESKTOP-J1L05N5" time="0.037">
+  <properties/>
+  <testcase name="名字里不带 comfy 的深目录不再下钻()" classname="com.comfyhub.ComfyRootsTest" time="0.005"/>
+  <testcase name="只有一个空 output 的目录不算 ComfyUI()" classname="com.comfyhub.ComfyRootsTest" time="0.003"/>
+  <testcase name="读白名单放行已知根的上一级()" classname="com.comfyhub.ComfyRootsTest" time="0.01"/>
+  <testcase name="桌面版布局里能找到工作流所在的那个安装目录()" classname="com.comfyhub.ComfyRootsTest" time="0.008"/>
+  <testcase name="盘根不会被放行()" classname="com.comfyhub.ComfyRootsTest" time="0.002"/>
+  <testcase name="共享目录也认但不会往里钻()" classname="com.comfyhub.ComfyRootsTest" time="0.007"/>
+  <testcase name="找不到就是空列表 不是异常()" classname="com.comfyhub.ComfyRootsTest" time="0.002"/>
+  <system-out><![CDATA[22:42:34.448 INFO  com.comfyhub.ComfyRoots - 自动放行只读的 ComfyUI 目录：C:\Users\Administrator\AppData\Local\Temp\comfyhub-roots5490265190259824021\comfyui（有 main.py 与 comfy/（源码形态））
+22:42:34.450 INFO  com.comfyhub.ComfyRoots - 自动放行只读的 ComfyUI 目录：C:\Users\Administrator\AppData\Local\Temp\comfyhub-roots5490265190259824021\ComfyUI-Installs\ComfyUI\ComfyUI（有 main.py 与 comfy/（源码形态））
+22:42:34.450 INFO  com.comfyhub.ComfyRoots - 自动放行只读的 ComfyUI 目录：C:\Users\Administrator\AppData\Local\Temp\comfyhub-roots5490265190259824021\ComfyUI-Shared（有 output/ 与 models/ 或 input/）
+22:42:34.458 INFO  com.comfyhub.ComfyRoots - 自动放行只读的 ComfyUI 目录：C:\Users\Administrator\AppData\Local\Temp\comfyhub-roots9076889281430308587\ComfyUI-Installs\ComfyUI\ComfyUI（有 main.py 与 comfy/（源码形态））
+22:42:34.459 INFO  com.comfyhub.ComfyRoots - 自动放行只读的 ComfyUI 目录：C:\Users\Administrator\AppData\Local\Temp\comfyhub-roots9076889281430308587\ComfyUI-Shared（有 output/ 与 models/ 或 input/）
+22:42:34.467 INFO  com.comfyhub.ComfyRoots - 自动放行只读的 ComfyUI 目录：C:\Users\Administrator\AppData\Local\Temp\comfyhub-roots13629010901686936648\ComfyUI-Installs\ComfyUI\ComfyUI（有 main.py 与 comfy/（源码形态））
+22:42:34.467 INFO  com.comfyhub.ComfyRoots - 自动放行只读的 ComfyUI 目录：C:\Users\Administrator\AppData\Local\Temp\comfyhub-roots13629010901686936648\ComfyUI-Shared（有 output/ 与 models/ 或 input/）
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

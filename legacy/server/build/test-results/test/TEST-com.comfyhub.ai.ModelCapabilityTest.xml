@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.ModelCapabilityTest" tests="14" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.006">
+  <properties/>
+  <testcase name="接口明确说没有的能力 优先于内置目录()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.001"/>
+  <testcase name="内置目录覆盖常见多模态与纯文本系列()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.001"/>
+  <testcase name="没有 max 档的模型只声明到 xhigh 不降级()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.0"/>
+  <testcase name="接口没说时回落到内置目录 并标明来源()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.0"/>
+  <testcase name="语料里混入未知字段不影响解析()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.0"/>
+  <testcase name="老格式的 data 数组依然照常解析()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.0"/>
+  <testcase name="本机 dsh settings 里登记的常用模型都能预填模态与思考档位()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.001"/>
+  <testcase name="布尔开关形态也能识别 含 capabilities 对象()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.0"/>
+  <testcase name="没声明推理的模型绝不带思考档位()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.001"/>
+  <testcase name="目录里没有的模型只给文本 绝不猜图片()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.0"/>
+  <testcase name="接口声明推理时 档位仍由内置目录预填()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.0"/>
+  <testcase name="内置目录会预填思考档位 并带上方言()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.001"/>
+  <testcase name="OpenRouter 的 architecture 声明优先于内置目录()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.0"/>
+  <testcase name="视觉变体不会被同系列的纯文本规则抢走()" classname="com.comfyhub.ai.ModelCapabilityTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -282,6 +282,12 @@ function Invoke-LegacyMigration {
 }
 
 function Get-ApiProcess {
+    # 认**两个后端**（P4 收尾后默认是 Rust；灰度期可能还有旧的 Kotlin 在跑）
+    $helper = Join-Path $Scripts 'backend.ps1'
+    if (Test-Path $helper) {
+        . $helper
+        return Get-AnyBackendProcess
+    }
     Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -and $_.CommandLine -like '*com.comfyhub.ApplicationKt*' }
 }
@@ -625,46 +631,45 @@ function Show-AppStaleWarning {
 
 function Get-ServerBuildStaleness {
     <#
-      后端 jar 的"旧构建"体检 —— App 那套的 Kotlin 版。
+      后端二进制的"旧构建"体检（P4 收尾：从 Kotlin jar 换成 **Rust exe** —— 现在默认就是它）。
 
-      为什么要查：dev-app.ps1 / up -SkipBuild 都是"installDist 产物存在就直接用"，
-      于是"昨晚改了 server\、今早起的是昨天下班前编的 jar"完全无声。
-      2026-09-23 现场：P0 的补挂 shared / comfy_env_report / 提交前预检全都没在跑，
-      AI 对着一台没挂共享模型的 ComfyUI 烧掉半小时 —— 症状看着像功能 bug，其实是旧 jar。
+      为什么要查：dev-app.ps1 / up -SkipBuild 都是"二进制存在就直接用"，
+      于是"昨晚改了 server-rs\、今早起的是昨天下班前编的 exe"完全无声。
+      2026-09-23 现场（当时还是 Kotlin jar）：P0 的补挂 shared / comfy_env_report / 提交前预检
+      全都没在跑，AI 对着一台没挂共享模型的 ComfyUI 烧掉半小时 —— 症状看着像功能 bug，
+      其实是旧构建。**这个体检与 doctor 里那条是同一个判据。**
 
-      返回 $null（发布包没有 server\build、或没有源码 → 判断不了，静默跳过）或
-      @{ Jar; Source; Newer }。与 App 的体检同样按 LastWriteTime 比（git 换分支会把源码
-      mtime 刷新，可能误报一次"旧构建"—— 重新 installDist 即消）。
+      返回 $null（发布包没有 server-rs\target、或没有源码 → 判断不了，静默跳过）或
+      @{ Jar; Source; Newer }。按 LastWriteTime 比（git 换分支会把源码 mtime 刷新，
+      可能误报一次"旧构建"—— 重新 cargo build 即消）。
     #>
-    $installRoot = Join-Path $ProjectRoot 'server\build\install'
-    if (-not (Test-Path $installRoot)) { return $null }
-    # jar 名 = installDist 目录名（settings.gradle.kts 的 rootProject.name），别把版本号写死
-    $jar = Get-ChildItem $installRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-        Get-ChildItem (Join-Path $_.FullName 'lib') -Filter "$($_.Name)-*.jar" -File -ErrorAction SilentlyContinue
-    } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if (-not $jar) { return $null }
+    $jar = Join-Path $ProjectRoot 'server-rs\target\release\comfyhub-server-rs.exe'
+    if (-not (Test-Path $jar)) { return $null }
 
     $items = @()
-    $src = Join-Path $ProjectRoot 'server\src'
+    $src = Join-Path $ProjectRoot 'server-rs\src'
     if (Test-Path $src) {
         $items += Get-ChildItem $src -Recurse -File -ErrorAction SilentlyContinue
     }
-    foreach ($f in @('server\build.gradle.kts', 'server\settings.gradle.kts')) {
-        $p = Join-Path $ProjectRoot $f
-        if (Test-Path $p) { $items += Get-Item $p }
-    }
+    $cargoToml = Join-Path $ProjectRoot 'server-rs\Cargo.toml'
+    if (Test-Path $cargoToml) { $items += Get-Item $cargoToml }
     if ($items.Count -eq 0) { return $null }   # 没有源码可比（发布包），静默跳过
 
     $newest = $items | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     return [pscustomobject]@{
-        Jar    = $jar
+        Jar    = (Get-Item $jar)
         Source = $newest
-        Newer  = ($newest.LastWriteTime -gt $jar.LastWriteTime)
+        Newer  = ($newest.LastWriteTime -gt (Get-Item $jar).LastWriteTime)
     }
 }
 
 function Get-RunningServerProcess {
-    <# 正在跑的那个后端 java 进程（按 classpath 里的 comfy-hub-server 识别；拿不到返回 $null） #>
+    <# 正在跑的后端进程（Rust 或旧 Kotlin 都认；拿不到返回 $null） #>
+    $helper = Join-Path $Scripts 'backend.ps1'
+    if (Test-Path $helper) {
+        . $helper
+        return (Get-AnyBackendProcess | Sort-Object CreationDate | Select-Object -First 1)
+    }
     Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match 'comfy-hub-server' } |
         Sort-Object CreationDate | Select-Object -First 1
@@ -672,9 +677,9 @@ function Get-RunningServerProcess {
 
 function Show-ServerStaleWarning {
     param($Stale, $Running)
-    Say "  ⚠ 后端 jar 是旧构建：$($Stale.Jar.Name) 编于 $($Stale.Jar.LastWriteTime.ToString('MM-dd HH:mm'))，" 'Yellow'
-    Say "    而 server\ 源码（$($Stale.Source.Name)）已改到 $($Stale.Source.LastWriteTime.ToString('MM-dd HH:mm')) —— 后端跑的是旧代码。" 'Yellow'
-    Say '    重建 + 重启：pwsh -File scripts\comfyhub.ps1 restart（不要带 -SkipBuild），或先 gradle -p server installDist' 'DarkGray'
+    Say "  ⚠ 后端二进制是旧构建：$($Stale.Jar.Name) 编于 $($Stale.Jar.LastWriteTime.ToString('MM-dd HH:mm'))，" 'Yellow'
+    Say "    而后端源码（$($Stale.Source.Name)）已改到 $($Stale.Source.LastWriteTime.ToString('MM-dd HH:mm')) —— 后端跑的是旧代码。" 'Yellow'
+    Say '    重建 + 重启：cargo build --release --manifest-path server-rs\Cargo.toml 然后 pwsh -File scripts\comfyhub.ps1 restart' 'DarkGray'
     if ($Running) {
         Say "    ⚠ 另外正在跑的后端进程启动于 $($Running.CreationDate.ToString('MM-dd HH:mm'))——即使现在重建 jar，它也吃不到，必须重启。" 'Yellow'
     }
@@ -837,14 +842,25 @@ function Do-Up {
     # 不带 -OwnerPid 的手工 up = 用户自己接管，撤掉之前 App 留下的守护
     if ($OwnerPid -le 0) { Clear-OwnerWatchdog }
 
-    # 后端是 JVM 程序：没有 Java 就先自动下一个便携版（免安装、免管理员）。
-    # 已经有 >=21 的 java 时这里只是几次文件检查 + 一次 java -version，不会联网。
-    # COMFYHUB_NO_DOWNLOAD=1 可以关掉这个行为（离线环境/不想让它自己下东西时）。
-    if ((Get-Command Ensure-JavaRuntime -ErrorAction SilentlyContinue) -and -not $env:COMFYHUB_NO_DOWNLOAD) {
-        try {
-            Ensure-JavaRuntime -ProjectRoot $ProjectRoot -Quiet | Out-Null
-        } catch {
-            Say "  提示: Java 运行时自动获取失败（$($_.Exception.Message)）" 'Yellow'
+    # Java：**只有跑旧 Kotlin 后端时才需要**（P4 收尾起默认是 Rust 单文件二进制，不需要 JVM）。
+    # 所以这里先问后端选择器：Rust 就完全跳过（连"检查一下 java 在不在"都不做）——
+    # 否则没装 JDK 的机器会在 up 时白下一个 40MB 的便携 JRE（谁也不用它）。
+    $backendKind = 'rust'
+    $backendHelper = Join-Path $Scripts 'backend.ps1'
+    if (Test-Path $backendHelper) {
+        . $backendHelper
+        $backendKind = (Resolve-Backend -Preference $Backend -ProjectRoot $ProjectRoot).Kind
+    }
+    if ($backendKind -eq 'kotlin') {
+        # 后端是 JVM 程序：没有 Java 就先自动下一个便携版（免安装、免管理员）。
+        # 已经有 >=21 的 java 时这里只是几次文件检查 + 一次 java -version，不会联网。
+        # COMFYHUB_NO_DOWNLOAD=1 可以关掉这个行为（离线环境/不想让它自己下东西时）。
+        if ((Get-Command Ensure-JavaRuntime -ErrorAction SilentlyContinue) -and -not $env:COMFYHUB_NO_DOWNLOAD) {
+            try {
+                Ensure-JavaRuntime -ProjectRoot $ProjectRoot -Quiet | Out-Null
+            } catch {
+                Say "  提示: Java 运行时自动获取失败（$($_.Exception.Message)）" 'Yellow'
+            }
         }
     }
 
@@ -1033,10 +1049,11 @@ function Do-Doctor {
     Say '  ComfyHub 环境体检' 'White'
     Say '  ────────────────────────────────────────────────────────────'
 
-    # 后端启动脚本 / App 的路径有两种布局（源码树 vs 装配好的发布包），这里都探一遍
-    $packagedBat = Join-Path $ProjectRoot 'server\bin\comfy-hub-server.bat'
-    $gradleBat   = Join-Path $ProjectRoot 'server\build\install\comfy-hub-server\bin\comfy-hub-server.bat'
-    $batToShow   = if (Test-Path $packagedBat) { $packagedBat } else { $gradleBat }
+    # 后端二进制 / App 的路径有两种布局（源码树 vs 装配好的发布包），这里都探一遍。
+    # P4 收尾（2026-09-26）起后端是**一个 Rust exe**；旧的 Kotlin bat 只在 legacy\ 里留档。
+    $packagedExe = Join-Path $ProjectRoot 'server\comfyhub-server-rs.exe'
+    $gradleExe   = Join-Path $ProjectRoot 'server-rs\target\release\comfyhub-server-rs.exe'
+    $batToShow   = if (Test-Path $packagedExe) { $packagedExe } else { $gradleExe }
     $appExe      = Resolve-AppExe
     $layout      = if (Test-Path (Join-Path $ProjectRoot 'viewer.exe')) { '发布包（便携式）' } else { '源码树' }
 
@@ -1047,7 +1064,7 @@ function Do-Doctor {
             @{ n = '项目根目录';    v = $ProjectRoot },
             @{ n = 'db\schema.sql'; v = (Join-Path $ProjectRoot 'db\schema.sql') },
             @{ n = 'db\schema.sqlite.sql'; v = (Join-Path $ProjectRoot 'db\schema.sqlite.sql') },
-            @{ n = '后端启动脚本';   v = $batToShow },
+            @{ n = '后端二进制';     v = $batToShow },
             @{ n = '桌面 App';      v = $(if ($appExe) { $appExe.FullName } else { (Join-Path $ProjectRoot 'viewer.exe') }) }
         )) {
         $ok = Test-Path $p.v

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.tools.ToolScopeTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:50" hostname="DESKTOP-J1L05N5" time="0.007">
+  <properties/>
+  <testcase name="桌面专属的工具一个都不许出现在手机清单里()" classname="com.comfyhub.ai.tools.ToolScopeTest" time="0.001"/>
+  <testcase name="桌面默认路径零变化：ALL 就是全量工具()" classname="com.comfyhub.ai.tools.ToolScopeTest" time="0.001"/>
+  <testcase name="新增工具时忘了写 scope 会落在桌面（宁可手机上少一个，也不能多一个调不到的）()" classname="com.comfyhub.ai.tools.ToolScopeTest" time="0.001"/>
+  <testcase name="契约文件在、且 §2 的 MOBILE 表与这里的断言是同一份清单()" classname="com.comfyhub.ai.tools.ToolScopeTest" time="0.0"/>
+  <testcase name="R11：手机侧不存在叫 comfy_submit 的工具()" classname="com.comfyhub.ai.tools.ToolScopeTest" time="0.001"/>
+  <testcase name="手机可执行的工具正好是契约里那 7 个()" classname="com.comfyhub.ai.tools.ToolScopeTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

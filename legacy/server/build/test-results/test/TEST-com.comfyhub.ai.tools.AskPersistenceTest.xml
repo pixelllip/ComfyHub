@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.tools.AskPersistenceTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:37" hostname="DESKTOP-J1L05N5" time="0.003">
+  <properties/>
+  <testcase name="跨端总览只含还在等的提问并按提问时间排序()" classname="com.comfyhub.ai.tools.AskPersistenceTest" time="0.001"/>
+  <testcase name="后端重启后 get 回落查库 内存与跨端口径清零()" classname="com.comfyhub.ai.tools.AskPersistenceTest" time="0.001"/>
+  <testcase name="Run 收尾只把还在 pending 的行按失效收尾()" classname="com.comfyhub.ai.tools.AskPersistenceTest" time="0.0"/>
+  <testcase name="用户跳过按 skipped 收尾()" classname="com.comfyhub.ai.tools.AskPersistenceTest" time="0.0"/>
+  <testcase name="track 时就落一行 pending 不等 Run 收尾()" classname="com.comfyhub.ai.tools.AskPersistenceTest" time="0.001"/>
+  <testcase name="回答写终值 之后的收尾不许覆盖它()" classname="com.comfyhub.ai.tools.AskPersistenceTest" time="0.0"/>
+  <system-out><![CDATA[22:42:37.575 INFO  c.c.ai.tools.AskGate - 用户回答了提问 q-done（3 字）
+22:42:37.576 INFO  c.c.ai.tools.AskGate - 用户回答了提问 q1（4 字）
+22:42:37.577 INFO  c.c.ai.tools.AskGate - 用户回答了提问 q1（3 字）
+22:42:37.577 INFO  c.c.ai.tools.AskGate - 用户回答了提问 q1（3 字）
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

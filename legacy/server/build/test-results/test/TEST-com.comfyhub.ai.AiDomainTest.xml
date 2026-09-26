@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.AiDomainTest" tests="20" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:35" hostname="DESKTOP-J1L05N5" time="0.033">
+  <properties/>
+  <testcase name="模型声明支持但适配器未实现 也要阻断()" classname="com.comfyhub.ai.AiDomainTest" time="0.004"/>
+  <testcase name="粘贴 NAME=value 或带引号要报格式错误()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="provider id 必须是 kebab-case()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="未配置的凭据状态为 none()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="公网端点必须 https 且不能内嵌账密()" classname="com.comfyhub.ai.AiDomainTest" time="0.002"/>
+  <testcase name="内联超过 8MB 的图先压缩再发 不把网关打成 413()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="base url 只去掉末尾斜杠 不改写路径()" classname="com.comfyhub.ai.AiDomainTest" time="0.002"/>
+  <testcase name="模型显式声明了传输方式就只认它 声明的没实现照样阻断()" classname="com.comfyhub.ai.AiDomainTest" time="0.0"/>
+  <testcase name="env 来源的凭据只读 且 describe 不含值()" classname="com.comfyhub.ai.AiDomainTest" time="0.003"/>
+  <testcase name="本机端点允许 http()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="附件内联预算：最新优先 装不下就跳过小的顶上()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="视频在未实现时被阻断 绝不静默抽帧()" classname="com.comfyhub.ai.AiDomainTest" time="0.005"/>
+  <testcase name="信任级别与地址范围必须匹配()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="能力未知默认拒绝()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="云元数据地址永远拒绝()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="text-only 模型必须阻断图片且给出原因()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="首期只认三种协议 且不含已淘汰的 completions()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="模型没声明传输方式时用协议实现的那种（内置目录只声明模态）()" classname="com.comfyhub.ai.AiDomainTest" time="0.0"/>
+  <testcase name="全部条件满足才放行()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <testcase name="IPv6 回环被识别为回环()" classname="com.comfyhub.ai.AiDomainTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

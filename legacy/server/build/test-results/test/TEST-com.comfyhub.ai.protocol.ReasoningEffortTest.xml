@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.protocol.ReasoningEffortTest" tests="16" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.005">
+  <properties/>
+  <testcase name="等级可以在模型目录里改名()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.001"/>
+  <testcase name="anthropic 关闭思考时不带 thinking 且 max_tokens 回到默认()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="等级解析大小写不敏感 未知值返回 null 而不是猜()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.001"/>
+  <testcase name="openai 方言关闭思考时什么都不发 不冒险发 none()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="等级表达可以是名字或正数 负数与空值都不接受()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="deepseek 方言同时发 thinking 与 reasoning_effort 关闭时发 disabled()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="消息体本身不受思考设置影响()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="模型没声明推理能力时退回 NONE 一个字段都不发()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="anthropic 用 thinking 预算 且 max_tokens 必须大于预算()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="openrouter 方言用 reasoning 对象 关闭时是 none()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="zai 方言带 clear_thinking 关闭时把 thinking 置为 disabled()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="anthropic 预算过小时被抬到最小值 避免上游直接拒绝()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.001"/>
+  <testcase name="请求 off 或 null 等于不思考 但保留方言信息()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="qwen 方言用 enable_thinking()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="默认等级表与实现一致()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.0"/>
+  <testcase name="openai 方言直接发 reasoning_effort()" classname="com.comfyhub.ai.protocol.ReasoningEffortTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

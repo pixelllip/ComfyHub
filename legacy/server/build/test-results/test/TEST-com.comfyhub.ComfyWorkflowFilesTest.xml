@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ComfyWorkflowFilesTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:34" hostname="DESKTOP-J1L05N5" time="0.052">
+  <properties/>
+  <testcase name="query 按文件名过滤（AI 说 krea2 就能直接命中）()" classname="com.comfyhub.ComfyWorkflowFilesTest" time="0.014"/>
+  <testcase name="一个目录都没有时如实说没有 而不是谎报空清单()" classname="com.comfyhub.ComfyWorkflowFilesTest" time="0.001"/>
+  <testcase name="非 json 空文件 坏 json 都不进列表()" classname="com.comfyhub.ComfyWorkflowFilesTest" time="0.008"/>
+  <testcase name="多个用户目录都认 没有 workflows 的目录不算()" classname="com.comfyhub.ComfyWorkflowFilesTest" time="0.006"/>
+  <testcase name="安装目录底下的 user workflows 能被找到()" classname="com.comfyhub.ComfyWorkflowFilesTest" time="0.005"/>
+  <testcase name="listJson 把已入库的那份标出来 并说明下一步怎么做()" classname="com.comfyhub.ComfyWorkflowFilesTest" time="0.009"/>
+  <testcase name="列出文件名 格式 修改时间 与内容指纹()" classname="com.comfyhub.ComfyWorkflowFilesTest" time="0.007"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

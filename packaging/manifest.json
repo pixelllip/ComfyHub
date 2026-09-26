@@ -144,15 +144,7 @@
       "produces": ["comfyhub-server-rs.exe"],
       "note": "P4（2026-09-26）起后端是 **Rust 单文件二进制**：SQLite 用 rusqlite 的 bundled 引擎编进去了，所以既不需要 JVM 也不需要 MySQL。装配到 <根>\\server\\comfyhub-server-rs.exe —— scripts\\backend.ps1 的第一优先路径就是它。"
     },
-    {
-      "id": "jre",
-      "title": "Java 运行时（**只在跑旧 Kotlin 后端时**才需要）",
-      "kind": "jdk_runtime",
-      "required": false,
-      "optional": true,
-      "target": "jre",
-      "note": "Rust 后端不需要 JVM，所以默认**不装**（要装加 -WithJre）。留着它只为一个场景：灰度期用 COMFYHUB_BACKEND=kotlin 回退到旧后端。老发布目录里那份 jre 由 -Clean 清掉。"
-    },
+
     {
       "id": "scripts",
       "title": "生命周期脚本（App 靠它拉起后端）",

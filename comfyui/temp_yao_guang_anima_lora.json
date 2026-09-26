@@ -1,0 +1,14 @@
+{
+  "79": {"class_type":"UNETLoader","inputs":{"unet_name":"anima-base-v1.0.safetensors","weight_dtype":"default"}},
+  "111": {"class_type":"PathchSageAttentionKJ","inputs":{"model":["79",0],"sage_attention":"auto","allow_compile":false}},
+  "72": {"class_type":"CLIPLoader","inputs":{"clip_name":"qwen_3_06b_base.safetensors","type":"qwen_image","device":"default"}},
+  "1": {"class_type":"LoraLoader","inputs":{"model":["111",0],"clip":["72",0],"lora_name":"@zzz style_anima.safetensors","strength_model":0.8,"strength_clip":0.8}},
+  "113": {"class_type":"LoraLoader","inputs":{"model":["1",0],"clip":["1",1],"lora_name":"starrail.safetensors","strength_model":0.75,"strength_clip":0.75}},
+  "73": {"class_type":"VAELoader","inputs":{"vae_name":"qwen_image_vae.safetensors"}},
+  "75": {"class_type":"EmptyLatentImage","inputs":{"width":896,"height":1152,"batch_size":1}},
+  "78": {"class_type":"CLIPTextEncode","inputs":{"clip":["113",1],"text":"masterpiece, best quality, nsfw, highres, newest, anime coloring\nfrom above, three-quarter view, full body, dynamic pose, shallow depth of field, cinematic lighting\n1girl, solo, adult woman, yao_guang_(honkai:_star_rail), honkai:_star_rail, long dark hair, detailed eyes, fair skin, curvy figure\nblack and gold form-fitting dress, high slit, garter belt, thighhighs, lace trim, detached sleeves, ornate gold accessories, exposed shoulders\nreclining on a luxurious bed, one leg bent, arched back, one hand beside her head, the other hand touching the garter belt\nhalf-closed eyes, heavy blush, parted lips, bedroom eyes, looking at the viewer\nluxurious bedroom, dark silk sheets, deep red curtains, warm candlelight, rose petals, crimson and gold palette\nevoking an intimate, seductive atmosphere"}},
+  "76": {"class_type":"CLIPTextEncode","inputs":{"clip":["113",1],"text":"worst quality, low quality, artist name, blurry, jpeg artifacts, bad anatomy, bad hands, missing fingers, extra digits, fewer digits, fused fingers, watermark, signature, text, 3d, realistic, extra limbs, mirror, reflection, duplicate, multiple views, comic, speech bubble, futanari, deformed, disfigured, young, minor, multiple people, 2girls, extra character, cloned face, censored, bar censor, mosaic censoring, lowres, extra hands, multiple hands, broken garter belt"}},
+  "77": {"class_type":"KSampler","inputs":{"model":["113",0],"positive":["78",0],"negative":["76",0],"latent_image":["75",0],"seed":935571105263085,"steps":30,"cfg":4.0,"sampler_name":"er_sde","scheduler":"simple","denoise":1.0}},
+  "74": {"class_type":"VAEDecode","inputs":{"samples":["77",0],"vae":["73",0]}},
+  "107": {"class_type":"SaveImage","inputs":{"images":["74",0],"filename_prefix":"yao_guang_anima_garter_belt"}}
+}

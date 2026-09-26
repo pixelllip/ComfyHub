@@ -1,0 +1,81 @@
+{
+  "6": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3VL4BAbliteratedComfyui_v10_full_bf16.safetensors",
+      "type": "krea2",
+      "device": "default"
+    }
+  },
+  "5": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "187": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "krea2TurboOfficialComfy_krea2TurboInt8.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "ComfyUI-Krea2T-Enhancer",
+    "inputs": {
+      "model": ["187", 0],
+      "enabled": true,
+      "strength": 1.5,
+      "debug": false
+    }
+  },
+  "197": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["6", 0],
+      "text": ""
+    }
+  },
+  "196": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": ["197", 0]
+    }
+  },
+  "11": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 768,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "201": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["4", 0],
+      "positive": ["197", 0],
+      "negative": ["196", 0],
+      "latent_image": ["11", 0],
+      "seed": 328180387983294,
+      "steps": 8,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "198": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["201", 0],
+      "vae": ["5", 0]
+    }
+  },
+  "215": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["198", 0],
+      "filename_prefix": "bund_krea2_outfit_change"
+    }
+  }
+}

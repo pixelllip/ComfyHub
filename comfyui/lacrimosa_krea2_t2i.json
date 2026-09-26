@@ -1,0 +1,80 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": { "title": "KREA2 TURBO INT8" },
+    "inputs": { "ckpt_name": "krea2TurboOfficialComfy_krea2TurboInt8.safetensors" }
+  },
+  "2": {
+    "class_type": "ComfyUI-Krea2T-Enhancer",
+    "inputs": { "model": ["1", 0], "enabled": true, "strength": 1.5, "debug": false }
+  },
+  "4": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3VL4BAbliteratedComfyui_v10_full_bf16.safetensors",
+      "type": "krea2",
+      "device": "default"
+    }
+  },
+  "3": {
+    "class_type": "LoraLoader",
+    "_meta": { "title": "NTE (krea2)" },
+    "inputs": {
+      "model": ["2", 0],
+      "clip": ["4", 0],
+      "lora_name": "NTE(krea2).safetensors",
+      "strength_model": 1,
+      "strength_clip": 1
+    }
+  },
+  "5": {
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "qwen_image_vae.safetensors" }
+  },
+  "6": {
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": { "title": "POSITIVE PROMPT" },
+    "inputs": {
+      "value": "An illustration of Lacrimosa from Neverness to Everness, a young woman with long split-color hair streaked in black, white and pink, her bangs falling across her brow, long eyelashes, an X-shaped hair ornament pinned at the side of her head, a black belt collar around her neck, and two-tone nails painted aqua on one hand and pink on the other. She wears an open red jacket printed with small insect motifs and round buttons over a white shirt, with a short skirt below. She sits on a wooden balcony floor in a wariza pose, both legs folded to one side beneath her, both arms raised behind her head as she gathers a strand of her long hair and winds it into a bun, a hair tie held between her fingers, her body turned toward the room, chin slightly lowered in a calm, absorbed expression. She sits facing the interior, the low balcony railing directly behind her, a lush garden stretching beyond it with flowering shrubs, hedges and layered green foliage catching the light, a glass door frame at the edge of the picture. Medium full-body framing at eye level, slight lens compression, shallow depth of field keeping her crisp against the soft garden background. Warm late-afternoon sunlight from the garden side, a gentle rim light along her hair and shoulders, soft shadow across the deck boards. Highly detailed modern anime illustration, clean crisp linework, luminous warm palette, soft airbrushed skin shading, glossy hair highlights, tall vertical composition."
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "clip": ["3", 1], "text": ["6", 0] }
+  },
+  "8": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": { "conditioning": ["7", 0] }
+  },
+  "9": {
+    "class_type": "EmptyLatentImage",
+    "inputs": { "width": 1088, "height": 1920, "batch_size": 1 }
+  },
+  "10": {
+    "class_type": "ClownsharKSampler_Beta",
+    "inputs": {
+      "model": ["3", 0],
+      "positive": ["7", 0],
+      "negative": ["8", 0],
+      "latent_image": ["9", 0],
+      "seed": 20260919,
+      "steps": 8,
+      "cfg": 1,
+      "denoise": 1,
+      "eta": 0,
+      "sampler_name": "linear/euler",
+      "scheduler": "simple",
+      "sampler_mode": "standard",
+      "steps_to_run": -1,
+      "bongmath": true
+    }
+  },
+  "11": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["10", 1], "vae": ["5", 0] }
+  },
+  "12": {
+    "class_type": "SaveImage",
+    "inputs": { "images": ["11", 0], "filename_prefix": "lacrimosa_krea2_v2" }
+  }
+}

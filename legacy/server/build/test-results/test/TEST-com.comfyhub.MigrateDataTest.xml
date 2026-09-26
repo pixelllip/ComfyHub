@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.MigrateDataTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:34" hostname="DESKTOP-J1L05N5" time="0.009">
+  <properties/>
+  <testcase name="DECIMAL 的 7_50 与 REAL 的 7_5 必须算成同一行（否则核对假红）()" classname="com.comfyhub.MigrateDataTest" time="0.002"/>
+  <testcase name="布尔与整数的规范文本一致：true 和 1 是同一个值()" classname="com.comfyhub.MigrateDataTest" time="0.001"/>
+  <testcase name="时间按 JVM 默认时区解释成 ISO-8601 UTC（与老代码 getTimestamp 同口径）()" classname="com.comfyhub.MigrateDataTest" time="0.002"/>
+  <testcase name="搬迁表清单与依赖顺序：父表在子表前面，且事件日志默认跳过()" classname="com.comfyhub.MigrateDataTest" time="0.001"/>
+  <testcase name="TINYINT(1) 布尔落成 1 0，JSON 的 byte 数组落成 UTF-8 文本()" classname="com.comfyhub.MigrateDataTest" time="0.0"/>
+  <testcase name="NULL 与空串要能区分（哨兵不能和合法值撞车）()" classname="com.comfyhub.MigrateDataTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

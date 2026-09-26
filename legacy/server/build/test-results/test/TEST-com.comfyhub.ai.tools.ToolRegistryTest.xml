@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.tools.ToolRegistryTest" tests="64" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:50" hostname="DESKTOP-J1L05N5" time="0.447">
+  <properties/>
+  <testcase name="register_skill 真的写盘 随后的 list_skills 与 load_skill 都能看到()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.014"/>
+  <testcase name="超过 maxCallsPerRun 之后一律 TOOL_BUDGET_EXCEEDED()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="web_fetch 把页面正文带回 并标出数据区来源()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="comfy_use_attachment 默认要批准 没人批准就绝不执行()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="civitai_search 一条都没搜到时报 NO_RESULTS 并要求如实说明()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="web_search 批准后返回编号可引用的结果 且标出数据区来源()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.048"/>
+  <testcase name="civitai_search 批准后返回用途说明与结构化条目 并标出数据区来源()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="绑配方缺参数与找不到配方都要如实报()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="read_file 只能读允许的目录()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.005"/>
+  <testcase name="info 报告生效权限与是否被用户覆盖()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="没有记忆存储时 remember 明确失败而不是假装成功()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="需要批准的工具在没人批准时直接失败且从不执行()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="remember 一轮最多新增 N 条 超了直接拒绝（用户要求：别让条数失控）()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.015"/>
+  <testcase name="学工作流被拒时把稳定码翻出来 而不是吞成一句失败()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="web_search 没有搜索客户端时报 SEARCH_DISABLED 而不是假装失败()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="remember 空内容报错 不会落一条空记忆()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="联网搜索的预算默认 8 次 第 9 次才 QUERY_BUDGET_EXCEEDED()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="web_search 一条都没搜到时报 NO_RESULTS 并要求如实说明()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="额度用尽之后 用户回答一次提问就重置这一窗的预算()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="超长结果截断到 MAX_RESULT_CHARS 并注明()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.005"/>
+  <testcase name="提示词版本 查询预算与记忆规则都与常量同源 且联网纪律写明预算与数据身份()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="civitai_search 没有客户端时报 CIVITAI_DISABLED 而不是假装没搜到()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.004"/>
+  <testcase name="未知工具给 TOOL_NOT_FOUND()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="civitai_search 默认要批准 没人批准就绝不出网()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="comfy_use_attachment 缺参数时报错 不会自己编一个附件 id()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="列配方空库要指到学习入口 有货时把槽位与缺件标出来()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.006"/>
+  <testcase name="库里冻着的旧出厂预算会被一次性抬到新出厂值()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.0"/>
+  <testcase name="comfy_find_workflow 库里搜不到时自动列出本机工作流文件()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="comfy_submit 的 nsfw 声明一路传到提交层 并在结果里回带标记()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.004"/>
+  <testcase name="civitai_search 的 type 写错时当场列出可选值 而不是给一份空结果()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="danbooru 真的查过之后 存的卡才带核对时间()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.027"/>
+  <testcase name="NSFW 默认关闭 越狱段不注入()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="第 20 条 换新模型先看学过的配方 且不许拿缺件骨架开跑()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.0"/>
+  <testcase name="查 ComfyUI 的预算默认 9 次 第 10 次才 QUERY_BUDGET_EXCEEDED()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="学工作流会把参数原样下传 并把 AI 域的稳定码翻成工具失败码()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.005"/>
+  <testcase name="常驻纪律不许再出现重复副本()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="系统提示 v9 写进事实纪律与表达风格 并禁嵌套列表()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="read_file 超过单次上限时按 offset 分段读 不会丢内容()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.016"/>
+  <testcase name="角色卡 同名合并不丢内容 且没查过 danbooru 就不写核对时间()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.027"/>
+  <testcase name="write_file 在 comfyui 内成功 越界被拒且不落盘()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.007"/>
+  <testcase name="系统提示词 v2 列出每个工具与 skill 与写根 且不再说尚未注册任何工具()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.006"/>
+  <testcase name="comfy_fit_workflow 报出本机有同名的、要装的、以及缺的节点类 且一个字都不改图()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.006"/>
+  <testcase name="用户点拒绝后同样不执行()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.036"/>
+  <testcase name="write_file 超限时报 TOO_LARGE 并指出用 append 分多次写()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="被 deny 的工具直接失败 不进审批()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="同一个 ToolContext 里同一个 skill 只加载一次()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.007"/>
+  <testcase name="第 18 条 写角色前先查三处 且指名四个工具()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.0"/>
+  <testcase name="comfy_fit_workflow 没接清单能力时报 COMFY_DISABLED 而不是假装查过()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="普通结果的记录形状齐全()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.004"/>
+  <testcase name="specs 含全部内置工具 deny 的整条消失()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="civitai_search 与 web_search 共用同一个联网预算 不会两条路各来一份()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.008"/>
+  <testcase name="load_skill 不存在的名称给出 SKILL_NOT_FOUND()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="web_search 默认要批准 没人批准就绝不出网()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="search_prompts 搜得到自己库里的提示词 并带上正向正文()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.037"/>
+  <testcase name="自动允许档下提示词明说本次不必等批准 且写明目录没有放宽()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="两个来源都没有时 NOT_FOUND 指向 comfy_list_workflows()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="comfy_list_workflows 只读、默认不需要批准()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.001"/>
+  <testcase name="被拒绝与失败的调用不消耗额度 只有真的跑了的才算()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.004"/>
+  <testcase name="绑配方把 role 与 extra 都翻成请求 并把报告原样回给模型()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.003"/>
+  <testcase name="web_fetch 与 civitai_search 的分工写在工具描述里（用户建议 ③）()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="单次读写上限的出厂值不会被库里冻住的旧值盖回去()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.001"/>
+  <testcase name="remember 真的写进 memory_md 并且可以连着写多条()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.007"/>
+  <testcase name="提问工具自己不消耗额度 也不需要批准()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.002"/>
+  <testcase name="用户点批准后执行恰好一次()" classname="com.comfyhub.ai.tools.ToolRegistryTest" time="0.038"/>
+  <system-out><![CDATA[22:42:50.093 INFO  c.c.ai.tools.SkillStore - skill 已注册: demo-skill（43 字节，来源 ai）
+22:42:50.161 INFO  c.c.a.t.ToolApprovalGate - 工具审批 call-web：批准
+22:42:50.185 INFO  c.c.ai.tools.MemoryStore - 长期记忆 +1 条（共 1 条）
+22:42:50.189 INFO  c.c.ai.tools.MemoryStore - 长期记忆 +1 条（共 2 条）
+22:42:50.191 INFO  c.c.ai.tools.MemoryStore - 长期记忆 +1 条（共 3 条）
+22:42:50.194 INFO  c.c.ai.tools.MemoryStore - 长期记忆 +1 条（共 4 条）
+22:42:50.252 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:50.253 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:50.253 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:50.261 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:50.267 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:50.270 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:50.311 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown initiated...
+22:42:50.315 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown completed.
+22:42:50.316 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:50.318 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:50.318 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:50.325 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:50.330 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:50.333 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:50.341 INFO  c.c.a.tools.ToolRegistry - 工具写文件: C:\Users\Administrator\AppData\Local\Temp\comfyhub-registry16331736581736026577\comfyui\note.txt（24 字节，append=false）
+22:42:50.348 INFO  c.c.ai.tools.SkillStore - skill 已注册: demo-skill（6 字节，来源 ai）
+22:42:50.394 INFO  c.c.a.t.ToolApprovalGate - 工具审批 call-ask：拒绝
+22:42:50.403 INFO  c.c.ai.tools.SkillStore - skill 已注册: demo-skill（6 字节，来源 ai）
+22:42:50.436 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown initiated...
+22:42:50.441 INFO  c.z.h.HikariDataSource - comfyhub-pool - Shutdown completed.
+22:42:50.442 INFO  c.z.h.HikariDataSource - comfyhub-pool - Starting...
+22:42:50.443 INFO  c.z.h.HikariDataSource - comfyhub-pool - Start completed.
+22:42:50.443 INFO  com.comfyhub.Db - SQLite 连接池已就绪: jdbc:sqlite:C:/Users/Administrator/AppData/Local/Temp/comfyhub-sqlite-test17172667423810347469/comfyhub.db?journal_mode=WAL&synchronous=NORMAL&busy_timeout=5000&foreign_keys=on&transaction_mode=IMMEDIATE
+22:42:50.452 INFO  com.comfyhub.Db - SQLite PRAGMA 自检通过: journal_mode=wal foreign_keys=1 busy_timeout=5000ms user_version=0 fts5=true
+22:42:50.457 INFO  com.comfyhub.Migrate - SQLite schema 版本 0 → 1（执行 95 句 DDL）
+22:42:50.461 INFO  com.comfyhub.Migrate - SQLite 结构已就绪（95 句 DDL，0 项补列）
+22:42:50.492 INFO  c.c.ai.tools.MemoryStore - 长期记忆 +1 条（共 1 条）
+22:42:50.494 INFO  c.c.ai.tools.MemoryStore - 长期记忆 +1 条（共 2 条）
+22:42:50.535 INFO  c.c.a.t.ToolApprovalGate - 工具审批 call-ask：批准
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

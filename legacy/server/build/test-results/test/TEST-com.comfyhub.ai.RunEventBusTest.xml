@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.RunEventBusTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.054">
+  <properties/>
+  <testcase name="重连时 after 早于窗口起点，拿到的是窗口内的（不假装全都有）()" classname="com.comfyhub.ai.RunEventBusTest" time="0.051"/>
+  <testcase name="超过内存上限只丢最老的、seq 绝不回退()" classname="com.comfyhub.ai.RunEventBusTest" time="0.001"/>
+  <testcase name="R5：发行中的 Run 断线重连能拿全 —— 订阅者拿到的是实时那份，不受环形上限影响()" classname="com.comfyhub.ai.RunEventBusTest" time="0.001"/>
+  <testcase name="Run 不在内存里时订阅返回 null，由调用方改从库里回放()" classname="com.comfyhub.ai.RunEventBusTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

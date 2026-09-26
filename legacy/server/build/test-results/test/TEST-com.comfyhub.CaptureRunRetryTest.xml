@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.CaptureRunRetryTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:33" hostname="DESKTOP-J1L05N5" time="0.004">
+  <properties/>
+  <testcase name="error 可以重试()" classname="com.comfyhub.CaptureRunRetryTest" time="0.001"/>
+  <testcase name="empty 可以重试（产物文件晚到也能补上）()" classname="com.comfyhub.CaptureRunRetryTest" time="0.0"/>
+  <testcase name="卡死超过十分钟的 running 可以重新抢（后端被杀过）()" classname="com.comfyhub.CaptureRunRetryTest" time="0.0"/>
+  <testcase name="正在处理的运行不能被抢()" classname="com.comfyhub.CaptureRunRetryTest" time="0.001"/>
+  <testcase name="success 不再重复收（幂等靠它）()" classname="com.comfyhub.CaptureRunRetryTest" time="0.0"/>
+  <testcase name="目录导入的 force 仍然能重导入()" classname="com.comfyhub.CaptureRunRetryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

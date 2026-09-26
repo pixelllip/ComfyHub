@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.AiSeederPlanTest" tests="16" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.015">
+  <properties/>
+  <testcase name="完全一致时不算不同()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.001"/>
+  <testcase name="预览- provider 不存在 报整份目录且标记会新建()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.001"/>
+  <testcase name="空库时目录里的模型全部进 added()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.001"/>
+  <testcase name="显示名 启用状态 附件上限属于用户地盘 不算能力不同()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.0"/>
+  <testcase name="库里已有且与目录一致 进 kept 不进 added()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.0"/>
+  <testcase name="库里已有但能力声明不同 进 divergent 不进 added 也不进 kept()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.0"/>
+  <testcase name="两种模式都不会碰用户的模型()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.003"/>
+  <testcase name="用户自己加的模型三列都不进 也就是永远不会被删()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.0"/>
+  <testcase name="预览- 全部一致时什么都不用做()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.001"/>
+  <testcase name="模态 工具 并行工具 推理 档位 方言 上下文 来源 任一不同都算不同()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.0"/>
+  <testcase name="REFRESH 的刷新目标就是与目录不一致的那些()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.0"/>
+  <testcase name="REFRESH_CAPABILITIES 只刷新不新增()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.0"/>
+  <testcase name="全库一致时没有新增也没有分歧()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.001"/>
+  <testcase name="模态顺序不同不算不同()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.0"/>
+  <testcase name="ADD_MISSING 只插入不刷新()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.0"/>
+  <testcase name="预览- provider 已存在时口径与 ADD_MISSING 的 plan 一致 且绝不刷新()" classname="com.comfyhub.ai.AiSeederPlanTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

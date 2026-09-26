@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.AiWorkflowSearchTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:33" hostname="DESKTOP-J1L05N5" time="0.005">
+  <properties/>
+  <testcase name="没有扩展名与用户指定名字都能用()" classname="com.comfyhub.AiWorkflowSearchTest" time="0.001"/>
+  <testcase name="空名字也有兜底 不会生成一个空文件名()" classname="com.comfyhub.AiWorkflowSearchTest" time="0.001"/>
+  <testcase name="文件名里的路径分隔符与怪字符一律清掉()" classname="com.comfyhub.AiWorkflowSearchTest" time="0.001"/>
+  <testcase name="同一个附件得到同样的名字 不同附件即使同名也不会撞()" classname="com.comfyhub.AiWorkflowSearchTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

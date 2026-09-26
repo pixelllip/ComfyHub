@@ -1,0 +1,69 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": { "ckpt_name": "krea2TurboOfficialComfy_krea2TurboInt8.safetensors" },
+    "_meta": { "title": "MODEL" }
+  },
+  "2": {
+    "class_type": "ComfyUI-Krea2T-Enhancer",
+    "inputs": { "model": ["1", 0], "enabled": true, "strength": 1.5, "debug": false }
+  },
+  "4": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3VL4BAbliteratedComfyui_v10_full_bf16.safetensors",
+      "type": "krea2",
+      "device": "default"
+    }
+  },
+  "5": {
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "qwen_image_vae.safetensors" }
+  },
+  "6": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": "Hatsune Miku, the VOCALOID virtual singer, a young woman with extremely long turquoise twin-tails tied with black square hair ties, her hair graduating from mint green at the roots to deep aqua at the tips, a straight blunt fringe across her forehead, large round white headphones with a thin silver microphone boom. She lies on her back in a dense bed of giant sunflowers, viewed from directly above, her body filling the frame edge to edge, both arms hugging one thick sunflower stem against her chest, eyes squeezed shut in a delighted open-mouthed smile, soft blush on her cheeks. She wears a layered white frilled dress with pale blue lace trim, a soft blue ribbon bow at the collar, and white lace gloves. Round sunflower heads crowd every edge of the frame, thick green leaves, a translucent pale-blue butterfly resting beside her left braid, scattered yellow petals and small square confetti drifting through the air. Direct summer backlight through the leaves, warm golden rim light along her hair and shoulders, dappled leaf shadows falling across the petals and her bare legs, the corners of the frame washed out to a pale near-white sky. A Japanese anime illustration painted like luminous digital watercolor, thin crisp ink linework over wet-on-wet colour washes that bleed into the background, soft pigment edges and a faint paper grain, airbrushed shading on the skin, glossy hair strands with sharp white specular highlights, gentle bloom and chromatic haze in the highlights, highly saturated turquoise against sunflower yellow, pale turquoise and lilac in the cast shadows, tall vertical composition, highly detailed."
+    },
+    "_meta": { "title": "POSITIVE PROMPT" }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "clip": ["4", 0], "text": ["6", 0] }
+  },
+  "8": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": { "conditioning": ["7", 0] }
+  },
+  "9": {
+    "class_type": "EmptyLatentImage",
+    "inputs": { "width": 1088, "height": 1920, "batch_size": 1 }
+  },
+  "10": {
+    "class_type": "ClownsharKSampler_Beta",
+    "inputs": {
+      "model": ["2", 0],
+      "positive": ["7", 0],
+      "negative": ["8", 0],
+      "latent_image": ["9", 0],
+      "steps": 8,
+      "denoise": 1.0,
+      "cfg": 1.0,
+      "seed": 328180387983294,
+      "eta": 0.0,
+      "sampler_name": "linear/euler",
+      "scheduler": "simple",
+      "steps_to_run": -1,
+      "sampler_mode": "standard",
+      "bongmath": true
+    }
+  },
+  "11": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["10", 1], "vae": ["5", 0] }
+  },
+  "12": {
+    "class_type": "SaveImage",
+    "inputs": { "images": ["11", 0], "filename_prefix": "Krea2_Miku" }
+  }
+}

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.comfyhub.ai.AuthAndModelsUrlTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-25T14:42:36" hostname="DESKTOP-J1L05N5" time="0.108">
+  <properties/>
+  <testcase name="Base URL 已带 v1 且网关只认不带 v1 的地址时也能连上()" classname="com.comfyhub.ai.AuthAndModelsUrlTest" time="0.056"/>
+  <testcase name="openai-responses 的 Run 请求发到 v1-responses 且只发一次()" classname="com.comfyhub.ai.AuthAndModelsUrlTest" time="0.013"/>
+  <testcase name="Key 不对时两个候选地址都报鉴权失败 且错误里不含密钥()" classname="com.comfyhub.ai.AuthAndModelsUrlTest" time="0.008"/>
+  <testcase name="网关没有 models 端点时 连接测试仍算连通()" classname="com.comfyhub.ai.AuthAndModelsUrlTest" time="0.007"/>
+  <testcase name="Base URL 不带 v1 时回退到带 v1 的列表地址()" classname="com.comfyhub.ai.AuthAndModelsUrlTest" time="0.01"/>
+  <testcase name="获取可用模型同样走回退，并带上 Bearer 头()" classname="com.comfyhub.ai.AuthAndModelsUrlTest" time="0.012"/>
+  <system-out><![CDATA[22:42:36.282 INFO  c.comfyhub.ai.AiUpstream - Provider 连接测试 provider=p endpoint=http://127.0.0.1:10288/v1/models status=404 code=MODEL_LIST_UNAVAILABLE
+22:42:36.284 INFO  c.comfyhub.ai.AiUpstream - Provider 连接测试 provider=p endpoint=http://127.0.0.1:10288/models status=200 code=
+22:42:36.291 INFO  c.comfyhub.ai.AiUpstream - Provider 连接测试 provider=p endpoint=http://127.0.0.1:10290/v1/models status=200 code=
+22:42:36.303 INFO  c.comfyhub.ai.AiUpstream - Provider 连接测试 provider=p endpoint=http://127.0.0.1:10293/models status=404 code=MODEL_LIST_UNAVAILABLE
+22:42:36.306 INFO  c.comfyhub.ai.AiUpstream - Provider 连接测试 provider=p endpoint=http://127.0.0.1:10293/v1/models status=401 code=MISSING_CREDENTIAL
+22:42:36.312 INFO  c.comfyhub.ai.AiUpstream - Provider 连接测试 provider=p endpoint=http://127.0.0.1:10295/models status=404 code=MODEL_LIST_UNAVAILABLE
+22:42:36.314 INFO  c.comfyhub.ai.AiUpstream - Provider 连接测试 provider=p endpoint=http://127.0.0.1:10295/v1/models status=404 code=MODEL_LIST_UNAVAILABLE
+22:42:36.321 INFO  c.comfyhub.ai.AiUpstream - Provider 连接测试 provider=p endpoint=http://127.0.0.1:10297/models status=404 code=MODEL_LIST_UNAVAILABLE
+22:42:36.324 INFO  c.comfyhub.ai.AiUpstream - Provider 连接测试 provider=p endpoint=http://127.0.0.1:10297/v1/models status=200 code=
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

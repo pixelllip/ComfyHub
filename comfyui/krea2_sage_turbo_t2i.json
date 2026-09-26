@@ -1,0 +1,70 @@
+{
+  "1": {
+    "_meta": { "title": "Krea2 Turbo int8 一体包（MODEL）" },
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": { "ckpt_name": "krea2TurboOfficialComfy_krea2TurboInt8.safetensors" }
+  },
+  "2": {
+    "_meta": { "title": "Sage Attention（KJ）" },
+    "class_type": "PathchSageAttentionKJ",
+    "inputs": { "model": ["1", 0], "sage_attention": "auto", "allow_compile": false }
+  },
+  "3": {
+    "_meta": { "title": "CLIP 源 qwen3vl 4B（type=krea2）" },
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3VL4BAbliteratedComfyui_v10_full_bf16.safetensors",
+      "type": "krea2",
+      "device": "default"
+    }
+  },
+  "4": {
+    "_meta": { "title": "VAE 源" },
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "qwen_image_vae.safetensors" }
+  },
+  "5": {
+    "_meta": { "title": "正面提示词（Krea2 自然语言）" },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["3", 0],
+      "text": "An anime illustration, vertical composition, close-up upper body on a plain white background. A young woman with short dark blue-purple hair in a neat bob with blunt bangs leans down over a young man, her right hand resting gently on the top of his head. She wears a small white flower hair ornament with a gold tassel hanging on the left side of her hair, a crisp white long-sleeved dress shirt, a navy blue vest dress layered over it, a light blue ribbon tied in a bow at the collar, a single round gold button, and a dark navy square school badge with a gold emblem stitched on the chest. Her eyes are half-closed with a soft, warm, teasing smile, a light blush across her cheeks and tiny beads of sweat on her forehead and cheek, and she gazes down at him. Below her a young man with short black hair lies on his back, his head tilted up toward her, wearing a white collared shirt left open at the neck, blushing with small drops of sweat on his cheek and neck as he looks back up at her. Soft high-key diffused lighting with gentle shadows, delicate cel-shaded anime coloring, thin crisp linework, luminous skin with subtle airbrushed shading, clean flat white background, romantic and slightly teasing intimacy."
+    }
+  },
+  "6": {
+    "_meta": { "title": "条件零化（Turbo cfg=1 的负分支）" },
+    "class_type": "ConditioningZeroOut",
+    "inputs": { "conditioning": ["5", 0] }
+  },
+  "7": {
+    "_meta": { "title": "空 Latent（1024x1360，16 的倍数）" },
+    "class_type": "EmptyLatentImage",
+    "inputs": { "width": 1024, "height": 1360, "batch_size": 1 }
+  },
+  "8": {
+    "_meta": { "title": "KSampler（Turbo 官方：8 步 / cfg 1 / euler / simple）" },
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["2", 0],
+      "positive": ["5", 0],
+      "negative": ["6", 0],
+      "latent_image": ["7", 0],
+      "seed": 20260922,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1
+    }
+  },
+  "9": {
+    "_meta": { "title": "VAE 解码" },
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["8", 0], "vae": ["4", 0] }
+  },
+  "10": {
+    "_meta": { "title": "保存图像" },
+    "class_type": "SaveImage",
+    "inputs": { "images": ["9", 0], "filename_prefix": "Krea2_sage_t2i" }
+  }
+}
