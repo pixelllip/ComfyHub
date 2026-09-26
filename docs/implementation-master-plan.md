@@ -1947,7 +1947,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | --- | --- |
 | `comfy_submit`（**R10**：审核 → 审批 → 提交 → 自己等 → `captureRun()` 入库 → `mediaIds`） | ✅ **已搬（P4 第 48 步，2026-09-26）**：`workflow_submit.rs` + `tests/submit_test.rs` 6 例；预检只有"节点类 + 实例能不能加载这个模型"两道（七项 audit / 盘扫 / `env_report` 仍未搬） |
 | `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ 未搬（都要 `ComfyModels` 本机清单；`env_report` 是 O3 —— "盘上有、实例看不到"的解药） |
-| `comfy_use_media` / `comfy_make_mask` / `comfy_use_attachment`（图像编辑三件） | ⛔ 未搬（后者依赖 A1） |
+| `comfy_use_media` / `comfy_make_mask` / `comfy_use_attachment`（图像编辑三件） | ✅ **已搬（第 58 步，2026-09-26）**：`server-rs/src/image_edit.rs` + 三条工具（出厂档 ASK）+ 16 例用例；**活实例验收**见 §13（AI 那条链路 30 项全绿、遮罩内 101.95/255 外 3.74/255） |
 | 联网三工具 `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（系统提示那一节仍指向没下发的工具；凭据端点已就绪） |
 | `search_prompts` / `search_character_cards` / `save_character_card` / `danbooru_lookup` | ⛔ 未搬（**仓储已就绪**：角色卡五条见第 46 步；`save()` 就是工具用的那条路） |
 | 工作流配方三件 `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表 | ⛔ 未搬（Kotlin 侧 `WorkflowRecipe.kt` 646 行解析核心是主体；**故意不进同步范围**） |
@@ -2049,8 +2049,13 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 >    （`begin_run(force=true)`、`create_captured_prompt`、`import_file` 都在）；
 > 3. **A2 设置页两个按钮**（`providers/{id}/test`、`/discover-models`）+ **A5 视频封面**（`media/{id}/poster`，要 ffmpeg）；
 > 4. **C 组脚本切流**（含"Rust 要开始写 `.run\api.json`"这一条，否则 App 会对着旧端口等）；
-> 5. 其余按 A/B 清单逐个清（B 组还有 `comfy_*` 六件、图像编辑三件、联网三工具 + `find_model`、
+> 5. 其余按 A/B 清单逐个清（B 组还有 `comfy_*` 六件、联网三工具 + `find_model`、
 >   配方三件、`search_prompts`/`danbooru_lookup`）。
+>
+> **📌 后记（第 55~58 步，2026-09-26 晚）**：上面这份结论里的第 1~5 条**已经全部落地**
+> （A1 附件 R9、A3 `capture/import`、A2 两个按钮、A5 视频封面、C 组切流 + Kotlin 退役），
+> **图像编辑三件也已搬到 Rust**（第 58 步，见 §13）—— 所以"B 组还缺哪几块"以 §13.3 的
+> 诚实清单为准（`comfy_*` 六件 / 联网三工具 / 配方三件 / `search_prompts` / `danbooru_lookup` 仍未搬）。
 
 
 
@@ -2262,7 +2267,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | 项 | 状态 |
 | --- | --- |
-| 这四件工具 / 五条端点在 **Rust 侧**的对照实现 | ⛔ 未做（本轮 Kotlin 优先：App 连的是 Kotlin，用户第 ③ 条才成立）。搬的时候注意 `character_cards` **不在同步白名单**里（总纲 §3.3） |
+| 这四件工具 / 五条端点在 **Rust 侧**的对照实现 | ✅ **已做（第 58 步，2026-09-26）**：图像编辑三件（`server-rs/src/image_edit.rs`，见 §13）。⚠ **角色卡那四条端点/两件工具与 `danbooru_lookup` / `search_prompts` 仍未搬** —— 搬的时候注意 `character_cards` **不在同步白名单**里（总纲 §3.3） |
 | 角色卡同步到手机（`/api/sync/*` 加表） | ⛔ 未做（要连 `sync.rs` 的 `SYNCED` / `pk_kind` / `PHONE_FORBIDDEN`、`MobileSchema.kt` 两份清单、测试夹具一起改） |
 | "抠人保背景"要**干净的边缘**（带 alpha 的 matting / rembg） | ⛔ 未做：现在只有"框 + 羽化"，边缘一圈会被一起重绘。用户要"抠得干净"就得有分割模型 —— 有没有先用 `comfy_env_report` 查，没有如实说 |
 | `comfy_audit_workflow` 里加一条"角色 tag 与角色卡/danbooru 是否一致"的检查 | ⛔ 未做（现在只在系统提示与工具描述里约束） |
@@ -2317,4 +2322,78 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | 界面上看配方 / 绑定的页面 | ⛔ 未做（列表 / 详情 / 绑定端点已就绪，界面按需再接；AI 那侧已经全通） |
 | "跑通之后自动回写配方"（把 `capture_runs` 里真跑过的模型与档位标到配方上） | ⛔ 未做（现在靠模型自己如实转述 + `notes`；要自动化得从提交后的最终图反推骨架指纹） |
 | 真机上第 4 幕（"有缺口就拒学"）的**自动**回归 | 🔶 半自动：ComfyUI 不在跑时脚本自动改验"连不上要如实报 `COMFY_UNREACHABLE`"；"有缺口就拒学"那条本轮是**手动**跑出来的（当时 ComfyUI 在场、而实例里没有那几个 Krea2 节点） |
+
+---
+
+## 13. 2026-09-26 这一轮：图像编辑三件搬到 Rust + 活实例验收（第 58 步）
+
+> **用户这一轮的原话**：「继续实施…你可以自行实测 AI 编辑图片功能，使用 `ref_photos/` 里的图片。
+> 每完成一项就 git 保存。」
+>
+> **起点**：§11 的图像编辑在 **Kotlin** 侧落地（`ef8af86`），但 Kotlin 已退役（C-6，`legacy\server`）——
+> 也就是说**当时运行的那个后端根本没有这三件工具**，AI 走不了"保背景换人物"这条路。
+> 缺口在 §10.9 的 B 组里写着"⛔ 未搬"。
+
+| 提交 | 内容 |
+| --- | --- |
+| `3fa1784` | **图像编辑三件（Rust）**：新增 `server-rs/src/image_edit.rs`（逐条对照 `AiImageEdit.kt` + `AiWorkflowSearch`）—— `resolve_input_dir` / `input_filename_for` / `use_media` / `use_attachment` / `make_mask`（region 七档 + rect/ellipse 抗锯齿 + invert + 羽化 + 参数指纹做文件名）；三条工具进 `desktop_tools`（描述与 schema **逐字**搬 Kotlin，R12/R13）与 `tools.rs` 的 `IMPLEMENTED`（17 → 20）；**12 例单测 + 4 例集成用例** |
+| `0c48c83` | **活实例验收资产**：`scripts\e2e-image-edit-test.ps1`（假网关驱动三轮工具调用 + 30 项断言 + 像素级判据）；`fake_title_gateway.py` 新增模板 G「编辑图片」/ H「投放产物」 |
+| 本提交 | 文档登记（本节 + README 脚本速查与功能表 + `docs/pitfalls.md` 两条真坑） |
+
+### 13.1 三个"为什么这么做"（改这块之前先读）
+
+1. **`resolve_input_dir` 拆成纯函数那一半**（`input_dir_from(configured, home)`）。
+   配置里生效的输出目录优先 → 探到的 home 兜底 → 都没有就如实报 `COMFY_NOT_FOUND`。
+   拆出来不是为了好看：**开发机装着 ComfyUI**（`find_home` 连 Desktop 安装形态都认），
+   于是"两处都没有"那一支在集成用例里**永远走不到** —— 而它恰恰是新用户第一次用时会撞上的那一支
+   （发布包里没有 ComfyUI 目录）。现在那一条由单测直接钉住。
+2. **投放的文件名必须确定、可重复**（`<原名>-<来源id前8位><扩展名>`）。
+   模型是**照着工具返回的 filename 写 `overrides`** 的，名字每次变一点就会出现
+   "重跑工作流指向一个已经不在的文件"，而报错文案是 `Invalid image file`（像"文件不存在"）。
+   单测盯的就是这条（同来源同名字、不同来源不互相覆盖、纯点号/无扩展名的边界）。
+3. **布尔参数只认 `true` / `false`**（不把 `"yes"` / `1` 猜成真）。整数参数则相反（认 `"768"`）。
+   判据是**猜错的代价不对称**：遮罩 `invert` 猜错方向 = 把整张图重画一遍（用户看到的是一张废图），
+   而 `width` 猜不出来只会得到一个人话报错。
+
+### 13.2 硬证据（不是"跑过了"，是量出来的）
+
+- `cargo test` **446 例全绿**（298 lib + 125 api_test + 23 其他；本轮新增 12 例单测 + 4 例集成用例）。
+  新用例同时挡住两处"清单漂移"：`/api/ai/tools` 与下发 `tools[]` 的顺序（20 个）、
+  `desktop_tools` 清单与 `IMPLEMENTED` 的交集。
+- **活实例（真 ComfyUI + RTX 4060 Laptop + 真照片）**：`scripts\e2e-image-edit-test.ps1`
+  对**两条自带工作流各 30 项检查全绿**。底图 = `ref_photos\ref_bg_1.jpg`（3072x4096）缩到
+  **768x1024**（长边 1024、向下取 16 的倍数 —— 8GB 显存上直接跑 3072x4096 会 OOM）：
+  | 工作流 | 遮罩内平均像素差 | 遮罩外 |
+  | --- | --- | --- |
+  | `comfyhub_inpaint_anima.json` | **101.95 / 255** | **3.74 / 255** |
+  | `comfyhub_inpaint_krea2.json` | **120.26 / 255** | **3.75 / 255** |
+  （遮罩外不是 0 是对的：非遮罩区也要过一遍 VAE 编码→解码，那一步有损。）
+- **只读 ComfyUI 的 `/history` 逐字核对过"执行的到底是哪张图"**（比工具自己的回包更硬）：
+  两份 `LoadImage` 都指向投放的文件名 `edit-bg-00000000.png`、`LoadImageMask` 指向 `edit-mask.png`、
+  两处 `ImageScale` 都是 768x1024、`CLIPTextEncode` 就是我们给的提示词、`KSampler.denoise = 1.0`
+  —— 覆盖参数真的落到了**执行的那张图**上，而不是只出现在工具回包里。
+- 端到端还盯住两件只有活实例才抓得住的事：**投放写进了实例真正在读的 `input` 目录**
+  （Desktop 把程序与共享数据分在两处，写错地方的表现是 `Invalid image file`），
+  以及**投放的文件与上传的附件逐字节相同**。
+
+### 13.3 这一轮没做的（诚实清单）
+
+| 项 | 状态 |
+| --- | --- |
+| **krea2 那份自带 inpaint 工作流不跟随提示词** | ⛔ **发现但未解决**：两次实测（大 region + 小 region、两次不同提示词）都吐出**矩形色块**（像白门/灯箱），而 anima 那份正常。**工具链路与参数覆盖都验穿了**（`/history` 里提示词确实到了 `CLIPTextEncode`），问题在那份图自己的采样配置：Krea 2 Turbo 的官方参数是 **8 步 / cfg 0 / mu 1.15**，而图里写的是 `cfg 1.0 + euler/simple`。**别据此说"krea2 图像编辑能用"**；下一步要么按官方参数改那份图（可能还需要 Krea2 官方节点），要么改用用户自己的那份 Krea 2 编辑工作流（`krea2ImageEditingAnd_v10.json`，它要的 Krea2 自定义节点在本机实例里**缺失**，`comfy_learn_workflow` 会如实报 `UNSUPPORTED_NODES`） |
+| 两阶段（"先生成人物 → 再 `20.image` + `denoise 0.4~0.6` 贴上去"）的**融合档** | 🔶 只验到"阶段一产物能被 `comfy_use_media` 投放进 input"（脚本的加演那一幕）；**0.4~0.6 的融合效果没跑过**（要真跑两阶段、花两次显卡时间） |
+| 角色卡四条端点 / `danbooru_lookup` / `search_prompts` 在 Rust 侧的对照实现 | ⛔ 未搬（§11 那张表里只剩这几条；`character_cards.rs` 的两件工具是第 46 步搬的） |
+| skill `inpaint-composite` 与系统提示 v30 第 19 条的**复核** | 🔶 文案里提到的三件工具现在真的都在 Rust 后端下发了（以前描述在、工具不在）；但"提示词里的步骤编号 / 参数建议是否要按这一轮的实测更新（比如 8GB 显存的长边上限、krea2 那一档先别用）"还没做 |
+| `scripts\e2e-image-edit-test.ps1` 进**常规**回归 | 🔶 它要真 ComfyUI 在跑（会花显卡时间），所以和 `e2e-inpaint-test.ps1` 一样属于"手动/按需"那一档，不进无网无卡的日常四连 |
+
+### 13.4 顺带记进 [`docs/pitfalls.md`](pitfalls.md) 的两条真坑
+
+1. **用独立进程起 ComfyUI 做活实例验收，日志一重定向就"跑一半没了"** ——
+   warning 正文里的 `✓` 撞 GBK，`UnicodeEncodeError` 直接把进程抛死（栈套在 `logging` 里，
+   看着像"某个自定义节点装坏了"）。**要带 `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`，
+   并用 `scripts\silent-process.ps1` 脱离进程树**（`Start-Process` 起的进程会被命令行结束一起回收，
+   症状一模一样：日志有头没有尾）。
+2. **PowerShell 读 ComfyUI 的 `/object_info` 会直接抛**（`keys with different casing`）——
+   自定义节点里真有只差大小写的两个键，`ConvertFrom-Json` 默认那个大小写不敏感的对象建不出来。
+   一律 `-AsHashTable`；坏的不是 ComfyUI 的 JSON，是 PowerShell 的解析器。
 
