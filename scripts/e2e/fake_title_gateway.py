@@ -8,6 +8,7 @@
 
 import argparse
 import json
+import random
 import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -159,10 +160,108 @@ class Handler(BaseHTTPRequestHandler):
                 "waitSeconds": 60,
             })
             return
+        # 模板 G：**图像编辑**（"保背景换人物"那条路）—— 投放 → 遮罩 → 提交。
+        #
+        # 三轮工具调用，与真实模型的做法逐轮对应（它就是照工具返回的 filename / 尺寸
+        # 写下一轮的参数，而不是自己编一个）：
+        #   ① `comfy_use_attachment` 把用户发来的底图投进 ComfyUI 的 input 目录；
+        #   ② `comfy_make_mask` 照**刚才那张图的尺寸**生成"白=重绘区"的遮罩；
+        #   ③ `comfy_submit` 提交项目自带的 inpaint 工作流，覆盖节点输入（底图 / 人物图 /
+        #      遮罩 / ImageScale 尺寸 / 提示词 / seed / denoise）。
+        #
+        # 脚本给的格式（用 `|` 分隔，提示词放最后所以里面可以有空格）：
+        #   `编辑图片 <附件id>|<工作流路径>|<denoise>|<region>|<feather>|<提示词>`
+        if "编辑图片" in user_text:
+            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 5)
+            attachment_id = fields[0].strip() if fields else ""
+            workflow_path = fields[1].strip() if len(fields) > 1 else ""
+            denoise = float(fields[2].strip()) if len(fields) > 2 and fields[2].strip() else 1.0
+            region = fields[3].strip() if len(fields) > 3 and fields[3].strip() else "0.58,0.26,0.36,0.74"
+            feather = int(fields[4].strip()) if len(fields) > 4 and fields[4].strip() else 0
+            prompt = fields[5].strip() if len(fields) > 5 else ""
+            tool_msgs = [m for m in messages if m.get("role") == "tool"]
+            if len(tool_msgs) == 0:
+                self._stream_tool("comfy_use_attachment", {
+                    "attachmentId": attachment_id, "filename": "edit-bg.png",
+                })
+                return
+            if len(tool_msgs) == 1:
+                placed = self._tool_json(tool_msgs[0])
+                self._stream_tool("comfy_make_mask", {
+                    "baseFilename": placed.get("filename"),
+                    "region": region,
+                    "feather": feather,
+                    "filename": "edit-mask.png",
+                })
+                return
+            if len(tool_msgs) == 2:
+                placed = self._tool_json(tool_msgs[0])
+                mask = self._tool_json(tool_msgs[1])
+                self._stream_tool("comfy_submit", {
+                    "workflowPath": workflow_path,
+                    "overrides": self._inpaint_overrides(
+                        workflow_path, placed.get("filename"), mask.get("filename"),
+                        mask.get("width"), mask.get("height"), prompt, denoise),
+                    "title": "E2E 图像编辑验证",
+                    "waitSeconds": 300,
+                })
+                return
+            self._sse("图像编辑完成：先把底图投进 ComfyUI 的 input 目录、照它的尺寸生成了遮罩，"
+                      "再提交 inpaint 工作流覆盖了底图 / 遮罩 / 尺寸与提示词。产物已经入库。")
+            return
+        # 模板 H：把**画廊里的产物**投进 ComfyUI 的 input 目录（两阶段编辑的第二阶段
+        # 就是"把阶段一那张图投进去"）。脚本给的格式：`投放产物 <mediaId>`
+        if "投放产物" in user_text and last.get("role") != "tool":
+            tail = "".join(ch for ch in user_text.split("投放产物", 1)[1].strip().split()[0] if ch.isdigit())
+            self._stream_tool("comfy_use_media", {"mediaId": int(tail or "0"), "filename": "edit-stage1.png"})
+            return
         # 模板 B：普通问答（顺带验标题）
         prefix = "[标题]赛博朋克少女[/标题]\n\n" if not has_assistant else ""
         text = prefix + "好的，我按赛博朋克少女的方向来。"
         self._sse(text)
+
+    @staticmethod
+    def _tool_json(message):
+        """工具消息的正文（就是工具回给模型的那份 JSON）。"""
+        raw = message.get("content")
+        if not isinstance(raw, str):
+            raw = json.dumps(raw, ensure_ascii=False)
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _inpaint_overrides(workflow_path, bg, mask, width, height, prompt, denoise):
+        """按**工作流自己的节点表**算 overrides（真实模型也是先看清图里有哪些节点）。
+
+        刻意不写死节点 id：`comfyhub_inpaint_anima.json` 与 `..._krea2.json` 的编号不同，
+        写死一个就只测得到那一份。判据是 class_type（ComfyUI 提交时也只认它）。
+        """
+        graph = json.loads(open(workflow_path, "r", encoding="utf-8").read())
+        by_class = {}
+        for node_id, node in graph.items():
+            if isinstance(node, dict) and node.get("class_type"):
+                by_class.setdefault(node["class_type"], []).append(node_id)
+        overrides = {}
+        loaders = by_class.get("LoadImage", [])
+        if loaders and bg:
+            overrides[f"{loaders[0]}.image"] = bg          # 底图（要保留的那张）
+        if len(loaders) > 1 and bg:
+            overrides[f"{loaders[1]}.image"] = bg          # 人物图：纯重绘时填底图自己
+        if mask and by_class.get("LoadImageMask"):
+            overrides[f"{by_class['LoadImageMask'][0]}.image"] = mask
+        for node_id in by_class.get("ImageScale", []):
+            # 尺寸必须与遮罩一致（不一致时采样直接炸）
+            overrides[f"{node_id}.width"] = width
+            overrides[f"{node_id}.height"] = height
+        if prompt and by_class.get("CLIPTextEncode"):
+            overrides[f"{by_class['CLIPTextEncode'][0]}.text"] = prompt
+        if by_class.get("KSampler"):
+            sampler = by_class["KSampler"][0]
+            overrides[f"{sampler}.seed"] = random.randint(1, 2_000_000_000)
+            overrides[f"{sampler}.denoise"] = denoise
+        return overrides
 
     def _stream_tool(self, name, arguments):
         self._sse_frames([
