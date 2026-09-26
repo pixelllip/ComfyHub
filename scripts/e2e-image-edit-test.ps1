@@ -64,6 +64,17 @@ param(
     [switch]$TwoStage,
     # 阶段一用哪份 t2i 工作流（默认项目自带的 Krea2 turbo t2i，白底出图好贴）
     [string]$PersonWorkflow = '',
+    # 第二阶段用哪份 inpaint 工作流（默认按 -Model 选；贴人物图推荐
+    # `comfyhub_paste_person_anima.json` —— 它有两个 LoadImageMask，能"只融接缝、不重画人物"）
+    [string]$Workflow = '',
+    # **只在人物外面一圈重绘**（像素）。>0 时必须用有两遮罩的那份工作流；
+    # 这一档人物像素与画风一个都不动，模型只融接缝 —— "嵌进去会改变画风"的正解。
+    [int]$Ring = 0,
+    # 摆放：人物剪影缩放多少倍（1 = 不缩放）
+    [double]$PlaceScale = 1.0,
+    # 摆放：人物剪影中心放到归一化坐标（0~1）；不给就保持原位
+    [double]$PlaceX = -1,
+    [double]$PlaceY = -1,
     # 阶段一的提示词（要人物 + 干净背景）
     [string]$PersonPrompt = '',
     # 贴人物图时的融合档（0.4~0.6；高了人物会变样，低了接缝明显）
@@ -361,7 +372,11 @@ try {
     $script:CreatedConversationIds += $conv.id
     # 两阶段模式下 denoise 用**融合档**（贴人物图），单阶段用 -Denoise（默认 1.0 纯重绘）
     $effectiveDenoise = if ($PersonMediaId -gt 0) { $PersonDenoise } else { $Denoise }
-    $runText = "编辑图片 $($script:AttachmentId)|$workflowPath|$effectiveDenoise|$Region|$Feather|$Prompt|$PersonMediaId|$Cfg"
+    $workflowField = if ($Workflow) { $Workflow } else { $workflowPath }
+    $cfgField = if ($Cfg -gt 0) { "$Cfg" } else { '' }
+    $placeXField = if ($PlaceX -ge 0) { "$PlaceX" } else { '' }
+    $placeYField = if ($PlaceY -ge 0) { "$PlaceY" } else { '' }
+    $runText = "编辑图片 $($script:AttachmentId)|$workflowField|$effectiveDenoise|$Region|$Feather|$Prompt|$PersonMediaId|$cfgField|$Ring|$PlaceScale|$placeXField|$placeYField"
     $run = Invoke-Api 'POST' "/api/ai/conversations/$($conv.id)/runs" @{
         text = $runText; providerId = $ProviderId; modelId = 'fake-edit-model'
     }
@@ -426,8 +441,38 @@ try {
         $insidePixel = $maskImage.GetPixel($inX, $inY).R
         $outsidePixel = $maskImage.GetPixel(2, 2).R
         $maskImage.Dispose()
-        Check '遮罩在重绘区是白的' ($insidePixel -gt 200) "重绘区像素值 $insidePixel"
-        Check '遮罩在保留区是黑的' ($outsidePixel -lt 40) "保留区像素值 $outsidePixel"
+        if ($mask.mode -eq 'subject') {
+            # 剪影档：形状由人物图决定，**不能**再按 region 矩形取点
+            # （实测：拿矩形中心当"重绘区"，那里可能正好是剪影边缘 → 假红）
+            Check '剪影遮罩有内容（占比在 0.5%~60% 之间）' `
+                ($mask.subjectRatio -gt 0.005 -and $mask.subjectRatio -lt 0.6) "subjectRatio=$($mask.subjectRatio)"
+            Check '剪影遮罩如实报了背景色与来源图' `
+                ($mask.background -and $mask.subjectFilename) ($mask | ConvertTo-Json -Compress)
+            Check '剪影遮罩在画布四角是黑的（白底没漏进来）' ($outsidePixel -lt 40) "角落像素值 $outsidePixel"
+        } else {
+            Check '遮罩在重绘区是白的' ($insidePixel -gt 200) "重绘区像素值 $insidePixel"
+            Check '遮罩在保留区是黑的' ($outsidePixel -lt 40) "保留区像素值 $outsidePixel"
+        }
+    }
+
+    # `ring`：只圈人物外面一圈（人物像素一个都不动）—— 文件要在，而且只能是**薄薄一圈**
+    if ($Ring -gt 0) {
+        $ringPath = Join-Path $instanceInput $mask.ringFilename
+        Check '环形遮罩文件真的在盘上' ($mask.ringFilename -and (Test-Path $ringPath)) "$($mask.ringFilename)"
+        if (Test-Path $ringPath) {
+            $ringImage = [System.Drawing.Bitmap]::FromFile($ringPath)
+            $white = 0; $total = 0
+            for ($py = 0; $py -lt $ringImage.Height; $py += 4) {
+                for ($px = 0; $px -lt $ringImage.Width; $px += 4) {
+                    if ($ringImage.GetPixel($px, $py).R -gt 127) { $white++ }
+                    $total++
+                }
+            }
+            $ringImage.Dispose()
+            $ringRatio = [Math]::Round($white / [Math]::Max(1, $total), 4)
+            Say ("  环形遮罩占比：$([Math]::Round($ringRatio * 100, 1))%（只该是人物边缘那一圈）") 'White'
+            Check '环形遮罩是薄薄一圈（< 25% 画面）' ($ringRatio -gt 0 -and $ringRatio -lt 0.25) $ringRatio
+        }
     }
 
     Check '提交成功（ok=true）' ($submitted -and $submitted.status -eq 'success') `
@@ -474,9 +519,10 @@ try {
             "产物 $($out.Width)x$($out.Height)"
         $cmpW = [Math]::Min($canvasW, $out.Width)
         $cmpH = [Math]::Min($canvasH, $out.Height)
-        $rParts = $Region.Split(',') | ForEach-Object { [double]$_.Trim() }
-        $regionX = [int]($rParts[0] * $canvasW); $regionY = [int]($rParts[1] * $canvasH)
-        $regionW = [int]($rParts[2] * $canvasW); $regionH = [int]($rParts[3] * $canvasH)
+        # ⚠ **按遮罩本身**分内外，不按 region 矩形：`mode="subject"` 的修改区是**人物剪影**
+        #   （比矩形宽/窄都可能），拿矩形当判据会得到"遮罩外变了 68.95"这种假红（实测踩过）。
+        #   这也正是这个特性唯一的不变量：**白 = 重绘区、黑 = 原样保留**。
+        $maskBitmap = [System.Drawing.Bitmap]::FromFile($maskPath)
         $stride = 3
         $inSum = 0.0; $inN = 0; $outSum = 0.0; $outN = 0
         for ($py = 0; $py -lt $cmpH; $py += $stride) {
@@ -484,14 +530,12 @@ try {
                 $a = $canvas.GetPixel($px, $py)
                 $b = $out.GetPixel($px, $py)
                 $d = ([Math]::Abs($a.R - $b.R) + [Math]::Abs($a.G - $b.G) + [Math]::Abs($a.B - $b.B)) / 3.0
-                # 羽化带（边界 ±Feather）既不算内也不算外
-                $inner = ($px -ge $regionX + $Feather) -and ($px -lt $regionX + $regionW - $Feather) -and
-                         ($py -ge $regionY + $Feather) -and ($py -lt $regionY + $regionH - $Feather)
-                $outer = ($px -lt $regionX - $Feather) -or ($px -ge $regionX + $regionW + $Feather) -or
-                         ($py -lt $regionY - $Feather) -or ($py -ge $regionY + $regionH + $Feather)
-                if ($inner) { $inSum += $d; $inN++ } elseif ($outer) { $outSum += $d; $outN++ }
+                # 羽化带（遮罩里的中间值）既不算内也不算外
+                $mv = $maskBitmap.GetPixel($px, $py).R
+                if ($mv -ge 200) { $inSum += $d; $inN++ } elseif ($mv -le 30) { $outSum += $d; $outN++ }
             }
         }
+        $maskBitmap.Dispose()
         $inAvg = if ($inN) { [Math]::Round($inSum / $inN, 2) } else { -1 }
         $outAvg = if ($outN) { [Math]::Round($outSum / $outN, 2) } else { -1 }
         Say ("  遮罩内平均像素差：$inAvg / 255（采样步长 $stride）") 'White'

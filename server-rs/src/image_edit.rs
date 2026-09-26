@@ -55,6 +55,13 @@ pub const MAX_MASK_EDGE: i64 = 8192;
 /// 羽化上限（像素）。
 pub const MAX_FEATHER: i64 = 256;
 
+/// `mode="subject"` 的默认容差（背景色距离的归一化阈值）。
+///
+/// 为什么要有这个旋钮：生成图的"白底"从来不是纯 255（有渐变、噪点、浅浅的圆形水印纹），
+/// 卡太死会把背景留成一片斑点；放大一点又会把人物的浅色部分吃掉。
+/// 实测 768x1024 的白底人物图上 0.12 两边都稳。
+pub const SUBJECT_TOLERANCE_DEFAULT: f64 = 0.12;
+
 // ---------------------------------------------------------------------------
 //  ComfyUI 的 input 目录
 // ---------------------------------------------------------------------------
@@ -323,6 +330,10 @@ pub fn use_attachment(
 /// `comfy_make_mask`：生成一张遮罩 PNG 放进 ComfyUI 的 `input` 目录（**白 = 要重新生成的地方**）。
 ///
 /// 参数（类型一律容错，与 Kotlin 的 `str` / `int` / `bool` 同义）：
+///  - `mode`：`rect`（默认，按框画）/ **`subject`（照某张图里主体的形状抠** —— 贴人物图必须用它，
+///    否则 `ImageCompositeMasked` 会把人物图那块矩形**连背景一起**贴进去 = 一圈白框）；
+///  - `subjectFilename`：`mode="subject"` 时要抠形状的那张图（input 目录里的裸文件名）；
+///  - `tolerance`：`mode="subject"` 的背景色容差（默认 0.12，越大越激进）；
 ///  - `baseFilename`：input 目录里的底图文件名 —— 给了就用**它的尺寸**（推荐，最不容易错）；
 ///  - `width` / `height`：没给 `baseFilename` 时的显式尺寸；
 ///  - `region`：`full`（默认）/ `x,y,w,h`（归一化 0~1）/ 预设 `left|right|top|bottom|center|person`；
@@ -380,8 +391,106 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     }
     let invert = bool_arg(args, "invert").unwrap_or(false);
     let feather = int_arg(args, "feather").unwrap_or(0).clamp(0, MAX_FEATHER);
+    // `mode`：`rect`（默认，框）/ `subject`（**照某张图里主体的形状抠** —— 贴人物图必须用这个）
+    let mode = str_arg(args, "mode").unwrap_or_else(|| "rect".to_string()).to_lowercase();
+    if mode != "rect" && mode != "subject" {
+        return Err(ToolFailure::new(
+            "INVALID_ARGUMENT",
+            format!("mode 只支持 rect / subject，收到「{mode}」"),
+        ));
+    }
+    let subject_filename = str_arg(args, "subjectFilename");
+    let tolerance = args
+        .get("tolerance")
+        .and_then(Value::as_f64)
+        .unwrap_or(SUBJECT_TOLERANCE_DEFAULT);
 
-    let mut pixels = draw_mask(w as usize, h as usize, &region, &shape);
+    let mut subject_info: Option<(String, [u8; 3], f64)> = None;
+    let mut pixels = if mode == "subject" {
+        let subject = subject_filename
+            .as_deref()
+            .map(file_name_only)
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| {
+                ToolFailure::new(
+                    "INVALID_ARGUMENT",
+                    "mode=\"subject\" 要给 subjectFilename（input 目录里那张**要抠形状**的图，\
+                     通常是 comfy_use_media / comfy_use_attachment 刚投进去的人物图）",
+                )
+            })?;
+        let subject_path = input_dir.join(&subject);
+        if !subject_path.is_file() {
+            return Err(ToolFailure::new(
+                "INVALID_ARGUMENT",
+                format!("input 目录里没有「{subject}」—— 先用 comfy_use_media 把它投进去"),
+            ));
+        }
+        let use_region = region_text != "full";
+        let (mask, background, ratio) =
+            subject_mask(&subject_path, w as usize, h as usize, tolerance, &region, use_region)?;
+        subject_info = Some((subject, background, ratio));
+        mask
+    } else {
+        draw_mask(w as usize, h as usize, &region, &shape)
+    };
+
+    // **摆放**（用户 2026-09-26 要的能力）：`scale` 缩放、`x`/`y` 把剪影中心搬到归一化坐标。
+    // 关键点：**人物图的像素与遮罩一起动**（只动一个就是"人在这儿、遮罩在那儿"的错位）。
+    // 实现方式是烘进文件（写一张 canvas 大小的新人物图 + 新遮罩），
+    // 这样**不用改工作流**：还是 `20.image` + `12.image` 两个覆盖。
+    let mut placed_subject: Option<(String, [f64; 4])> = None;
+    let mut placed_image: Option<image::RgbImage> = None;
+    let scale = args.get("scale").and_then(Value::as_f64).unwrap_or(1.0);
+    let center_x = args.get("x").and_then(Value::as_f64);
+    let center_y = args.get("y").and_then(Value::as_f64);
+    if mode == "subject" && (scale != 1.0 || center_x.is_some() || center_y.is_some()) {
+        if let Some((x0, y0, x1, y1)) = mask_bbox(&pixels, w as usize, h as usize) {
+            let subject_file = subject_info.as_ref().map(|info| info.0.clone()).unwrap_or_default();
+            let person_image = image::open(input_dir.join(&subject_file))
+                .map_err(|e| ToolFailure::new("COMFY_INPUT_FAILED", format!("读不出人物图：{e}")))?
+                .to_rgb8();
+            // 人物图要先缩到画布尺寸（与工作流里 `ImageScale` 同一个口径），再整体搬
+            let canvas_person = image::imageops::resize(
+                &person_image,
+                w as u32,
+                h as u32,
+                image::imageops::FilterType::Triangle,
+            );
+            let (scaled_person, scaled_mask) = place_patch(
+                &canvas_person,
+                &pixels,
+                w as usize,
+                h as usize,
+                (x0, y0, x1, y1),
+                scale,
+                center_x.unwrap_or(((x0 + x1) as f64 / 2.0) / w as f64),
+                center_y.unwrap_or(((y0 + y1) as f64 / 2.0) / h as f64),
+            );
+            let placed_name = format!("placed-{}", subject_file);
+            let placed_path = input_dir.join(&placed_name);
+            if let Some(parent) = placed_path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            scaled_person.save(&placed_path).map_err(|e| {
+                ToolFailure::new("COMFY_INPUT_FAILED", format!("写停放好的人物图失败：{e}"))
+            })?;
+            let new_bbox = mask_bbox(&scaled_mask, w as usize, h as usize);
+            if let Some((nx0, ny0, nx1, ny1)) = new_bbox {
+                placed_subject = Some((
+                    placed_name,
+                    [
+                        (nx0 + nx1) as f64 / 2.0 / w as f64,
+                        (ny0 + ny1) as f64 / 2.0 / h as f64,
+                        (nx1 - nx0) as f64 / w as f64,
+                        (ny1 - ny0) as f64 / h as f64,
+                    ],
+                ));
+            }
+            pixels = scaled_mask;
+            placed_image = Some(scaled_person);
+        }
+    }
+    let _ = placed_image;
     if invert {
         for value in pixels.iter_mut() {
             *value = 255 - *value;
@@ -394,16 +503,31 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     let filename = str_arg(args, "filename")
         .filter(|name| !name.trim().is_empty())
         .map(|name| file_name_only(&name))
-        .unwrap_or_else(|| format!("comfyhub_mask_{}.png", content_tag(w, h, &region, &shape, invert, feather)));
+        .unwrap_or_else(|| {
+            format!("comfyhub_mask_{}.png", content_tag(w, h, &region, &shape, invert, feather))
+        });
     let target = input_dir.join(&filename);
     write_mask_png(&pixels, w as u32, h as u32, &target)?;
 
+    // **只在人物外面一圈重绘**（`ring`，单位像素）：配合带第二个 LoadImageMask 的工作流
+    // `comfyhub_paste_person_anima.json`，人物像素就能"原样贴上去、一点不被重画"
+    // —— 这是"嵌进去会改变画风"那条的正解（详见 `ring_mask` 的注释）。
+    let ring = int_arg(args, "ring").unwrap_or(0).clamp(0, MAX_FEATHER) as usize;
+    let mut ring_filename: Option<String> = None;
+    if mode == "subject" && ring > 0 {
+        let ring_pixels = ring_mask(&pixels, w as usize, h as usize, ring);
+        let ring_name = format!("ring-{filename}");
+        write_mask_png(&ring_pixels, w as u32, h as u32, &input_dir.join(&ring_name))?;
+        ring_filename = Some(ring_name);
+    }
+
     let region_joined = region.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
-    Ok(json!({
+    let mut out = json!({
         "filename": filename,
         "inputDir": input_dir.to_string_lossy(),
         "width": w,
         "height": h,
+        "mode": mode,
         "region": region_text,
         "regionNormalized": format!("[{region_joined}]"),
         "shape": shape,
@@ -417,7 +541,50 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
              ② 若工作流有 ImageScale，把 width/height 也覆盖成 {w}x{h}（必须与底图一致）；\
              ③ 遮罩不准就报一组新的 region（x,y,w,h 归一化）重做 —— 不要让用户去 ComfyUI 里手画。"
         ),
-    }))
+    });
+    if let Some((subject, background, ratio)) = subject_info {
+        out["subjectFilename"] = json!(subject);
+        out["background"] = json!(format!("#{:02x}{:02x}{:02x}", background[0], background[1], background[2]));
+        out["subjectRatio"] = json!((ratio * 1000.0).round() / 1000.0);
+        let placed_hint = match placed_subject.as_ref() {
+            Some((placed_name, bbox)) => format!(
+                "⚠ 这次做了**摆放**（scale={scale}，中心 x={:.2} y={:.2}）：\
+                 `20.image` **必须**改成 `{placed_name}`（人物像素已经跟着一起搬过去了，\
+                 还用原图就是「人在这儿、遮罩在那儿」的错位）；剪影现在占画面 x {:.2}~{:.2} / y {:.2}~{:.2}。",
+                bbox[0], bbox[1],
+                bbox[0] - bbox[2] / 2.0,
+                bbox[0] + bbox[2] / 2.0,
+                bbox[1] - bbox[3] / 2.0,
+                bbox[1] + bbox[3] / 2.0
+            ),
+            None => String::new(),
+        };
+        out["hint"] = json!(format!(
+            "① 覆盖工作流里 LoadImageMask 节点的 image 输入：{{\"<节点id>.image\":\"{filename}\"}}；\
+             ② ImageScale 的 width/height 覆盖成 {w}x{h}；\
+             ③ 这张遮罩是照「{subject}」的**主体形状**抠的（背景色 {}，占画面 {:.1}%）。\
+             占比过大（>60%）说明那张图的背景不是纯色 —— 换个纯色背景重做阶段一，\
+             或者改用 mode=\"rect\" 的矩形遮罩 + 更高的 denoise。{placed_hint}",
+            format!("#{:02x}{:02x}{:02x}", background[0], background[1], background[2]),
+            ratio * 100.0
+        ));
+        if let Some((placed_name, _)) = placed_subject {
+            out["placedSubjectFilename"] = json!(placed_name);
+        }
+        if let Some(ring_name) = ring_filename.as_deref() {
+            out["ringFilename"] = json!(ring_name);
+            out["ring"] = json!(ring);
+            out["hint"] = json!(format!(
+                "① 合成用遮罩覆盖 `12.image`（或工作流里第一个 LoadImageMask）← `{filename}`；\
+                 ② **重绘区**覆盖第二个 LoadImageMask（`comfyhub_paste_person_anima.json` 里是 `26.image`）\
+                 ← `{ring_name}` —— 这一份只圈人物**外面 {ring} 像素**，于是人物自己的像素与画风一个都不动；\
+                 ③ ImageScale 的 width/height 覆盖成 {w}x{h}；\
+                 ④ 要用这条「只融接缝」的路，工作流必须是有两个 LoadImageMask 的那一份；\
+                 用的是单遮罩工作流时**别传 ring**（否则第二个遮罩没人接，人物会被重画）。"
+            ));
+        }
+    }
+    Ok(out)
 }
 
 /// `region` 解析成归一化的 `[x, y, w, h]`。
@@ -472,8 +639,397 @@ pub fn parse_region(raw: &str) -> Result<[f64; 4], ToolFailure> {
     Ok([x, y, w, h])
 }
 
-/// 画遮罩：黑底 + 白色区域（0 = 保留，255 = 重绘）。
+/// 从一张图里抠出**主体形状**的遮罩（`mode="subject"`）。
 ///
+/// # 为什么要有它（用户 2026-09-26 提的）
+///
+/// "贴人物图"那个用法里，`ImageCompositeMasked` 是**按遮罩把 source 的像素搬过去**的：
+/// 遮罩给矩形，就会把人物图**那块矩形连背景一起**贴进来 —— 白底人物图贴到夜景上
+/// 就是一圈亮框（实测：denoise 0.5 是白框、0.85 是换人、cfg 1.0/4.0 一个样）。
+/// 正确的遮罩是**人物的剪影**，于是尺子要按 person 图来量，不是按框来估。
+///
+/// # 算法（**刻意不依赖任何模型**）
+///
+/// ① 取**画面四周一圈**像素的中位数当背景色（中位数对"人物挨到边"比均值稳）；
+/// ② 每个像素到背景色的距离超过 `tolerance`（归一化 0~1）就是主体；
+/// ③ 只保留**最大的一块**连通区（生成图的背景常带噪点 / 水印纹，不去掉就是一片麻子）；
+/// ④ 尺寸与画布不一致时按**块平均**缩放（与工作流里 `ImageScale` 的口径一致，
+///    这样剪影和它缩放后的像素对得上）；
+/// ⑤ 给了 `region` 就与矩形取交集（把人物约束在某块区域里）。
+///
+/// # 局限（必须如实说，别假装是语义分割）
+///
+/// 它只认"**背景是纯色 / 浅色渐变**"这一档（棚拍白底、绿幕、纯色背景 ——
+/// 也就是阶段一 t2i 常见的产物）。复杂背景（照片里的街道、树林）它抠不出来，
+/// 那时**要么用矩形遮罩 + 高 denoise**，要么用户装一个分割 / 抠图模型
+/// （`rembg` / SAM 之类）。判定办法就在返回值里：`subjectRatio`
+/// 太大（> 0.6）基本就是"背景没抠干净"。
+pub fn subject_mask(
+    source: &Path,
+    out_w: usize,
+    out_h: usize,
+    tolerance: f64,
+    region: &[f64; 4],
+    use_region: bool,
+) -> Result<(Vec<u8>, [u8; 3], f64), ToolFailure> {
+    let image = image::open(source)
+        .map_err(|e| {
+            ToolFailure::new(
+                "INVALID_ARGUMENT",
+                format!("读不出「{}」的像素（抠主体要用它的形状）：{e}", source.display()),
+            )
+        })?
+        .to_rgb8();
+    subject_mask_from_image(&image, out_w, out_h, tolerance, region, use_region)
+}
+
+/// [`subject_mask`] 的**不落盘那一半**（用例直接喂一张内存图，不必造临时文件）。
+pub fn subject_mask_from_image(
+    image: &image::RgbImage,
+    out_w: usize,
+    out_h: usize,
+    tolerance: f64,
+    region: &[f64; 4],
+    use_region: bool,
+) -> Result<(Vec<u8>, [u8; 3], f64), ToolFailure> {
+    let (w, h) = (image.width() as usize, image.height() as usize);
+    if w < 16 || h < 16 {
+        return Err(ToolFailure::new(
+            "INVALID_ARGUMENT",
+            format!("这张图太小了（{w}x{h}）：抠主体至少要 16x16"),
+        ));
+    }
+
+    // ① 背景色：四周一圈的**中位数**（对"人物挨到边"比均值稳）
+    let border = (w.min(h) / 50).max(2);
+    let mut samples: [Vec<u8>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for y in 0..h {
+        for x in 0..w {
+            if x >= border && x + border < w && y >= border && y + border < h {
+                continue;
+            }
+            let pixel = image.get_pixel(x as u32, y as u32);
+            for channel in 0..3 {
+                samples[channel].push(pixel[channel]);
+            }
+        }
+    }
+    let mut background = [0u8; 3];
+    for channel in 0..3 {
+        samples[channel].sort_unstable();
+        background[channel] = samples[channel][samples[channel].len() / 2];
+    }
+
+    // ② 距离阈值（`tolerance` 是归一化的 0~1；按"最大通道差"算，比欧氏距离好调）
+    let cutoff = (tolerance.clamp(0.01, 1.0) * 255.0).round() as i32;
+    let mut raw = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let pixel = image.get_pixel(x as u32, y as u32);
+            let distance = (0..3)
+                .map(|c| (pixel[c] as i32 - background[c] as i32).abs())
+                .max()
+                .unwrap_or(0);
+            if distance > cutoff {
+                raw[y * w + x] = 255;
+            }
+        }
+    }
+
+    // ③ 填内部空洞：**主体里与背景同色的部分**（白裙子 / 白衬衫 / 反光）会被②判成背景，
+    //    留下的窟窿就是"人变半透明"的原因。判据是**连通性**：从画面边框出发、
+    //    沿着"背景像素"能走到的才算真背景；走不到又被前景包住的，都是主体内部。
+    fill_enclosed(&mut raw, w, h);
+
+    // ④ 只留最大的一块连通区（生成图的背景常带噪点 / 水印纹，不去掉就是一片麻子）
+    keep_largest_blob(&mut raw, w, h);
+
+    // ⑤ 缩放到画布尺寸（块平均 —— 与工作流里 ImageScale 的口径一致）
+    let scaled = if (w, h) == (out_w, out_h) {
+        raw
+    } else {
+        resize_mask(&raw, w, h, out_w, out_h)
+    };
+
+    // ⑥ 与 region 取交集
+    let mut mask = scaled;
+    if use_region {
+        let x = (region[0] * out_w as f64).round().clamp(0.0, out_w as f64) as usize;
+        let y = (region[1] * out_h as f64).round().clamp(0.0, out_h as f64) as usize;
+        let rw = (region[2] * out_w as f64).round().clamp(0.0, (out_w - x) as f64) as usize;
+        let rh = (region[3] * out_h as f64).round().clamp(0.0, (out_h - y) as f64) as usize;
+        for py in 0..out_h {
+            for px in 0..out_w {
+                if px < x || px >= x + rw || py < y || py >= y + rh {
+                    mask[py * out_w + px] = 0;
+                }
+            }
+        }
+    }
+
+    let white = mask.iter().filter(|v| **v > 0).count();
+    let ratio = white as f64 / (out_w * out_h).max(1) as f64;
+    Ok((mask, background, ratio))
+}
+
+/// 把**被主体包住的背景色窟窿**填成主体（4 邻接连通性，从画面边框出发）。
+///
+/// 为什么必须有它（2026-09-26 实测）：白底人物图里，**人物自己也是白的**
+/// （白裙子 / 白衬衫 / 高光），那些像素与背景同色 → 被判成背景 → 贴出来的人
+/// 像"半透明"（裙子那块透出底下的街景）。判据只能是连通性：
+/// 从边框沿背景像素走得到的才是真背景，被前景包住的窟窿属于主体。
+fn fill_enclosed(mask: &mut [u8], w: usize, h: usize) {
+    let mut reachable = vec![false; w * h];
+    let mut stack: Vec<usize> = Vec::new();
+    let seed = |index: usize, reachable: &mut Vec<bool>, stack: &mut Vec<usize>| {
+        if mask[index] == 0 && !reachable[index] {
+            reachable[index] = true;
+            stack.push(index);
+        }
+    };
+    for x in 0..w {
+        seed(x, &mut reachable, &mut stack);
+        seed((h - 1) * w + x, &mut reachable, &mut stack);
+    }
+    for y in 0..h {
+        seed(y * w, &mut reachable, &mut stack);
+        seed(y * w + w - 1, &mut reachable, &mut stack);
+    }
+    while let Some(index) = stack.pop() {
+        let (x, y) = (index % w, index / w);
+        let push = |nx: usize, ny: usize, reachable: &mut Vec<bool>, stack: &mut Vec<usize>| {
+            let next = ny * w + nx;
+            if mask[next] == 0 && !reachable[next] {
+                reachable[next] = true;
+                stack.push(next);
+            }
+        };
+        if x > 0 {
+            push(x - 1, y, &mut reachable, &mut stack);
+        }
+        if x + 1 < w {
+            push(x + 1, y, &mut reachable, &mut stack);
+        }
+        if y > 0 {
+            push(x, y - 1, &mut reachable, &mut stack);
+        }
+        if y + 1 < h {
+            push(x, y + 1, &mut reachable, &mut stack);
+        }
+    }
+    for index in 0..w * h {
+        if mask[index] == 0 && !reachable[index] {
+            mask[index] = 255;
+        }
+    }
+}
+
+/// 只保留最大的一块 4 邻接连通区（其余清零）。
+fn keep_largest_blob(mask: &mut [u8], w: usize, h: usize) {
+    let mut seen = vec![false; w * h];
+    let mut best: Vec<usize> = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    for start in 0..w * h {
+        if seen[start] || mask[start] == 0 {
+            continue;
+        }
+        let mut blob: Vec<usize> = Vec::new();
+        stack.push(start);
+        seen[start] = true;
+        while let Some(index) = stack.pop() {
+            blob.push(index);
+            let (x, y) = (index % w, index / w);
+            let push = |nx: usize, ny: usize, stack: &mut Vec<usize>, seen: &mut Vec<bool>| {
+                let next = ny * w + nx;
+                if !seen[next] && mask[next] > 0 {
+                    seen[next] = true;
+                    stack.push(next);
+                }
+            };
+            if x > 0 {
+                push(x - 1, y, &mut stack, &mut seen);
+            }
+            if x + 1 < w {
+                push(x + 1, y, &mut stack, &mut seen);
+            }
+            if y > 0 {
+                push(x, y - 1, &mut stack, &mut seen);
+            }
+            if y + 1 < h {
+                push(x, y + 1, &mut stack, &mut seen);
+            }
+        }
+        if blob.len() > best.len() {
+            best = blob;
+        }
+    }
+    for index in 0..w * h {
+        if mask[index] > 0 {
+            mask[index] = 0;
+        }
+    }
+    for index in best {
+        mask[index] = 255;
+    }
+}
+
+/// 遮罩缩放（块平均 → 二值化）：与 `ImageScale` 的"面积法"同一个口径，
+/// 缩完仍与缩放后的像素对得上。
+fn resize_mask(src: &[u8], w: usize, h: usize, out_w: usize, out_h: usize) -> Vec<u8> {
+    let mut out = vec![0u8; out_w * out_h];
+    for oy in 0..out_h {
+        let y0 = oy * h / out_h;
+        let y1 = (((oy + 1) * h + out_h - 1) / out_h).min(h).max(y0 + 1);
+        for ox in 0..out_w {
+            let x0 = ox * w / out_w;
+            let x1 = (((ox + 1) * w + out_w - 1) / out_w).min(w).max(x0 + 1);
+            let mut sum = 0u32;
+            let mut count = 0u32;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    sum += src[y * w + x] as u32;
+                    count += 1;
+                }
+            }
+            out[oy * out_w + ox] = if count > 0 && sum * 2 >= count * 255 { 255 } else { 0 };
+        }
+    }
+    out
+}
+
+/// 把 `image` 与 `mask` 的**同一块区域**（`bbox`）按 `scale` 缩放，再把它俩的中心搬到
+/// 归一化坐标 `(cx, cy)` 处 —— **图的像素与遮罩必须一起动**，不然贴上去的就是"人在这儿、
+/// 遮罩在那儿"，而那种错位在界面上看起来只是"贴歪了"（很难查）。
+///
+/// 返回 `(canvas 大小的新图, canvas 大小的新遮罩)`；`bbox` 之外的像素一律给黑 / 0
+/// （合成只看遮罩白的地方，图其余部分是死重，但一并搬到同一位置才对齐）。
+pub fn place_patch(
+    image: &image::RgbImage,
+    mask: &[u8],
+    w: usize,
+    h: usize,
+    bbox: (usize, usize, usize, usize),
+    scale: f64,
+    cx: f64,
+    cy: f64,
+) -> (image::RgbImage, Vec<u8>) {
+    let (x0, y0, x1, y1) = bbox;
+    let (bw, bh) = (x1.saturating_sub(x0).max(1), y1.saturating_sub(y0).max(1));
+    let scale = scale.clamp(0.05, 4.0);
+    let tw = ((bw as f64 * scale).round() as usize).max(1);
+    let th = ((bh as f64 * scale).round() as usize).max(1);
+
+    // 抠出这块区域（图与遮罩）
+    let mut patch_img = image::RgbImage::new(bw as u32, bh as u32);
+    let mut patch_mask = vec![0u8; bw * bh];
+    for y in 0..bh {
+        for x in 0..bw {
+            patch_img.put_pixel(x as u32, y as u32, *image.get_pixel((x0 + x) as u32, (y0 + y) as u32));
+            patch_mask[y * bw + x] = mask[(y0 + y) * w + x0 + x];
+        }
+    }
+    // 缩放（图用三角滤波、遮罩用最近邻再二值化 —— 遮罩只该是 0/255）
+    let scaled_img = image::imageops::resize(&patch_img, tw as u32, th as u32, image::imageops::FilterType::Triangle);
+    let mut scaled_mask = vec![0u8; tw * th];
+    for y in 0..th {
+        let sy = (y * bh / th).min(bh - 1);
+        for x in 0..tw {
+            let sx = (x * bw / tw).min(bw - 1);
+            scaled_mask[y * tw + x] = if patch_mask[sy * bw + sx] > 127 { 255 } else { 0 };
+        }
+    }
+
+    // 目标左上角（中心对到 cx/cy；越界就裁，允许贴到画布边外一半）
+    let left = (cx * w as f64).round() as i64 - tw as i64 / 2;
+    let top = (cy * h as f64).round() as i64 - th as i64 / 2;
+
+    let mut out_img = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([0, 0, 0]));
+    let mut out_mask = vec![0u8; w * h];
+    for y in 0..th {
+        let dy = top + y as i64;
+        if dy < 0 || dy >= h as i64 {
+            continue;
+        }
+        for x in 0..tw {
+            let dx = left + x as i64;
+            if dx < 0 || dx >= w as i64 {
+                continue;
+            }
+            out_img.put_pixel(dx as u32, dy as u32, *scaled_img.get_pixel(x as u32, y as u32));
+            out_mask[dy as usize * w + dx as usize] = scaled_mask[y * tw + x];
+        }
+    }
+    (out_img, out_mask)
+}
+
+/// **人物外面一圈**的遮罩（`dilate(r) 减去 原剪影`）—— 专门给 `SetLatentNoiseMask` 用。
+///
+/// 为什么需要它（用户 2026-09-26 问的"嵌进去的时候会改变画风怎么解决"）：
+/// 现在的自带工作流**一个遮罩两用**（既给 `ImageCompositeMasked` 贴像素、又给
+/// `SetLatentNoiseMask` 决定重绘区），于是"贴上去的人"必然被模型重画一遍 ——
+/// denoise 0.5 时她的画风就被模型的画风换掉了。
+/// 正确的合成做法是：**人物像素原样贴上去、只把她外面那一圈重画**（融接缝 / 补光影）。
+/// 这份 ring 遮罩就是那一圈；配合 `comfyhub_paste_person_anima.json`（它有两个
+/// `LoadImageMask`：`12` 给合成、`26` 给重绘）用。
+///
+/// 半径 `r` 建议 8~24：太小接缝明显，太大等于在人物周围重画一片背景（反而更假）。
+pub fn ring_mask(mask: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
+    if radius == 0 {
+        return mask.to_vec();
+    }
+    let r = radius as i64;
+    let dilate = |x: i64, y: i64| -> bool {
+        // 方形结构元（够用；圆形结构元在"融接缝"这件事上没有区别）
+        for dy in -r..=r {
+            let ny = y + dy;
+            if ny < 0 || ny >= h as i64 {
+                continue;
+            }
+            for dx in -r..=r {
+                let nx = x + dx;
+                if nx < 0 || nx >= w as i64 {
+                    continue;
+                }
+                if mask[ny as usize * w + nx as usize] > 127 {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+    let mut out = vec![0u8; w * h];
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            // 只在**原剪影之外**、且在膨胀范围内：人物自己的像素一个都不动
+            if mask[y as usize * w + x as usize] <= 127 && dilate(x, y) {
+                out[y as usize * w + x as usize] = 255;
+            }
+        }
+    }
+    out
+}
+
+/// 遮罩里"有内容"的那块矩形（`(x0, y0, x1, y1)`，右/下开区间）；全黑时回 `None`。
+pub fn mask_bbox(mask: &[u8], w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
+    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+    for y in 0..h {
+        for x in 0..w {
+            if mask[y * w + x] > 127 {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+            }
+        }
+    }
+    if x0 == usize::MAX {
+        None
+    } else {
+        Some((x0, y0, x1, y1))
+    }
+}
+
+/// 画遮罩：黑底 + 白色区域（0 = 保留，255 = 重绘）。///
 /// 椭圆做 **4×4 超采样**的覆盖率（Kotlin 用 `Graphics2D` 的抗锯齿，语义一致：
 /// 边缘一圈是灰的，所以贴人物时边界不会出现硬台阶）。矩形保持硬边（Kotlin 那边
 /// `fillRect` 在整数坐标下同样没有半像素）。
@@ -779,9 +1335,181 @@ mod tests {
         assert_eq!(str_arg(&args, "empty"), None);
     }
 
+    /// 造一张"白底 + 一个红方块"的图（模拟阶段一的白底产物）。
+    fn white_bg_with_block(w: u32, h: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> image::RgbImage {
+        let mut img = image::RgbImage::from_pixel(w, h, image::Rgb([252, 252, 250]));
+        for y in y0..y1 {
+            for x in x0..x1 {
+                img.put_pixel(x, y, image::Rgb([200, 30, 40]));
+            }
+        }
+        img
+    }
+
+    /// `mode="subject"`：白底上抠一个方块，遮罩就该是**那个方块的形状**（不是整块矩形画面）。
+    ///
+    /// 这是"贴人物图出一圈白框"那条现场的解法（用户 2026-09-26 提的）：
+    /// `ImageCompositeMasked` 按遮罩搬像素，遮罩是矩形就会把人物图那块矩形连背景一起搬进去。
     #[test]
-    fn 只取文件名挡目录穿越() {
-        assert_eq!(file_name_only(r"..\..\windows\system32\x.png"), "x.png");
+    fn 主体遮罩抠出的是形状不是整块矩形() {
+        let dir = std::env::temp_dir().join(format!("comfyhub-subject-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("person.png");
+        // 400x400 的白底，中间一个 100x200 的红方块（模拟站着的人）
+        white_bg_with_block(400, 400, 150, 100, 250, 300).save(&path).unwrap();
+
+        let (mask, background, ratio) =
+            subject_mask(&path, 400, 400, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+        assert_eq!(background, [252, 252, 250], "背景色要从四周一圈估出来");
+        let at = |x: usize, y: usize| mask[y * 400 + x];
+        assert_eq!(at(200, 200), 255, "方块里是白的（要重绘）");
+        assert_eq!(at(20, 20), 0, "白底是黑的（保留）—— 这一条就是白框的解药");
+        assert_eq!(at(390, 390), 0);
+        // 占比 ≈ 100*200/400*400 = 12.5%
+        assert!((ratio - 0.125).abs() < 0.02, "占比应当接近 12.5%，实测 {ratio}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn 主体遮罩只留最大的一块连通区并支持与矩形取交集() {
+        let dir = std::env::temp_dir().join(format!("comfyhub-subject2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("person.png");
+        let mut img = white_bg_with_block(300, 300, 120, 60, 180, 260);
+        // 角落里一个孤立的小红块：背景噪点 / 水印纹的替身 —— 必须被丢掉
+        for y in 10..20 {
+            for x in 10..20 {
+                img.put_pixel(x, y, image::Rgb([210, 40, 40]));
+            }
+        }
+        img.save(&path).unwrap();
+
+        let (mask, _, _) =
+            subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+        assert_eq!(mask[15 * 300 + 15], 0, "孤立的小块要当噪点丢掉");
+        assert_eq!(mask[150 * 300 + 150], 255);
+
+        // 与 region 取交集：方块横跨 x=120..180，画布 300 → 中线在 150
+        let (left, _, _) =
+            subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 0.5, 1.0], true).unwrap();
+        assert_eq!(left[150 * 300 + 140], 255, "左半边里、方块内的点要留着");
+        assert_eq!(left[150 * 300 + 160], 0, "region 之外必须清零");
+        let (right, _, _) =
+            subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.5, 0.0, 0.5, 1.0], true).unwrap();
+        assert_eq!(right[150 * 300 + 160], 255, "右半边里、方块内的点要留着");
+        assert_eq!(right[150 * 300 + 130], 0, "region 之外必须清零");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 尺寸不一致时遮罩要**按块平均缩放到画布**（与工作流里 `ImageScale` 的口径一致），
+    /// 否则剪影与缩放后的像素对不上，贴出来就是错位的。
+    #[test]
+    fn 主体遮罩会缩放到画布尺寸() {
+        let dir = std::env::temp_dir().join(format!("comfyhub-subject3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("person.png");
+        white_bg_with_block(400, 400, 150, 100, 250, 300).save(&path).unwrap();
+
+        let (mask, _, ratio) =
+            subject_mask(&path, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+        assert_eq!(mask.len(), 200 * 200);
+        assert_eq!(mask[100 * 200 + 100], 255, "缩放后方块中心仍是白的");
+        assert_eq!(mask[10 * 200 + 10], 0);
+        assert!((ratio - 0.125).abs() < 0.03, "缩放后占比不变：{ratio}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **主体自己也与背景同色**时（白裙子 / 白衬衫 / 高光）要能填回来 ——
+    /// 2026-09-26 现场：白底人物图贴进夜景后"人变成半透明"（裙子那块透出街景）。
+    /// 判据只能是连通性：被深色描边围住的白色窟窿属于主体。
+    #[test]
+    fn 主体遮罩要把被包住的同色窟窿填回来() {
+        let dir = std::env::temp_dir().join(format!("comfyhub-subject4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("person.png");
+        // 白底 + 一个**深色描边的空心方块**（方块内部也是白的 = 白裙子）
+        let mut img = image::RgbImage::from_pixel(200, 200, image::Rgb([252, 252, 250]));
+        for y in 40..160 {
+            for x in 60..140 {
+                let edge = y < 44 || y >= 156 || x < 64 || x >= 136;
+                img.put_pixel(x, y, if edge { image::Rgb([20, 20, 24]) } else { image::Rgb([250, 250, 248]) });
+            }
+        }
+        img.save(&path).unwrap();
+
+        let (mask, _, ratio) =
+            subject_mask(&path, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+        assert_eq!(mask[100 * 200 + 100], 255, "被描边围住的白色内部必须算主体（否则人变半透明）");
+        assert_eq!(mask[10 * 200 + 10], 0, "画面四角的真背景不许被填");
+        // 实心方块 80x120 ≈ 24%（填洞前后都是这个数）
+        assert!((ratio - 0.24).abs() < 0.03, "占比应当接近 24%，实测 {ratio}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **摆放**（用户 2026-09-26 要的能力）：缩放到一半、搬到左下角 ——
+    /// 遮罩与人物像素必须落在**同一个**位置（只动一个就是「人在这儿、遮罩在那儿」的错位）。
+    #[test]
+    fn 摆放要缩放并搬到位且图与遮罩不脱节() {
+        let mut img = image::RgbImage::from_pixel(400, 400, image::Rgb([250, 250, 250]));
+        for y in 100..300 {
+            for x in 150..250 {
+                img.put_pixel(x, y, image::Rgb([200, 30, 40]));
+            }
+        }
+        let (mask, _, _) =
+            subject_mask_from_image(&img, 400, 400, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+        let bbox = mask_bbox(&mask, 400, 400).unwrap();
+        assert_eq!(bbox, (150, 100, 250, 300));
+
+        let (placed_img, placed_mask) = place_patch(&img, &mask, 400, 400, bbox, 0.5, 0.25, 0.75);
+        let new_box = mask_bbox(&placed_mask, 400, 400).unwrap();
+        let (cx, cy) = ((new_box.0 + new_box.2) / 2, (new_box.1 + new_box.3) / 2);
+        assert_eq!((cx, cy), (100, 300), "中心要搬到 (0.25,0.75) x 400");
+        assert_eq!((new_box.2 - new_box.0, new_box.3 - new_box.1), (50, 100), "宽高各缩一半");
+
+        // 图与遮罩不脱节
+        let pixel = *placed_img.get_pixel(cx as u32, cy as u32);
+        assert!(pixel[0] > 150 && pixel[1] < 80, "新位置上的像素应当是人物（红），实测 {pixel:?}");
+        assert_eq!(placed_mask[cy * 400 + cx], 255);
+        assert_eq!(placed_mask[200 * 400 + 200], 0, "原位置必须清掉（否则老地方留个鬼影）");
+        let old = *placed_img.get_pixel(200, 200);
+        assert!(old[0] < 40 && old[1] < 40, "原位置的像素也要清掉，实测 {old:?}");
+    }
+
+    /// `ring`：**只在人物外面一圈**重绘（人物自己的像素一个都不动）。
+    ///
+    /// 2026-09-26 用户问的"嵌进去会改变画风怎么解决"的正解：自带工作流一个遮罩两用，
+    /// 于是贴上去的人必然被模型重画一遍（denoise 0.5 就把她的画风换掉了）。
+    #[test]
+    fn 环形遮罩只圈人物外面一圈() {
+        let mut img = image::RgbImage::from_pixel(200, 200, image::Rgb([252, 252, 250]));
+        for y in 60..140 {
+            for x in 80..120 {
+                img.put_pixel(x, y, image::Rgb([200, 30, 40]));
+            }
+        }
+        let (mask, _, _) =
+            subject_mask_from_image(&img, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false).unwrap();
+        assert_eq!(mask[100 * 200 + 100], 255);
+
+        let ring = ring_mask(&mask, 200, 200, 5);
+        // 人物自己（含边界）**一个像素都不许在重绘区里**
+        for y in 60..140 {
+            for x in 80..120 {
+                assert_eq!(ring[y * 200 + x], 0, "人物内部不该被重绘（({x},{y})）");
+            }
+        }
+        // 外面一圈 5 像素之内是白的（要重绘），再远就不是
+        assert_eq!(ring[100 * 200 + (80 - 3)], 255, "人物左边 3 像素处应当在环里");
+        assert_eq!(ring[(60 - 3) * 200 + 100], 255, "人物上方 3 像素处应当在环里");
+        assert_eq!(ring[100 * 200 + (80 - 20)], 0, "离得太远的背景不该被重绘");
+        assert_eq!(ring[10 * 200 + 10], 0);
+        // 半径 0 = 原样返回（不生成环）
+        assert_eq!(ring_mask(&mask, 200, 200, 0), mask);
+    }
+
+    #[test]
+    fn 只取文件名挡目录穿越() {        assert_eq!(file_name_only(r"..\..\windows\system32\x.png"), "x.png");
         assert_eq!(file_name_only("/etc/passwd"), "passwd");
         assert_eq!(file_name_only("  bg.png  "), "bg.png");
     }

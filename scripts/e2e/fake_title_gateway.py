@@ -176,18 +176,29 @@ class Handler(BaseHTTPRequestHandler):
         # 把人换上去"）：给了就多一轮 `comfy_use_media` 把阶段一的产物投进去，
         # 并把 `20.image` 指向它、`denoise` 降到 0.4~0.6 融合（不给就是"纯提示词重绘"）。
         if "编辑图片" in user_text:
-            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 7)
+            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 11)
             attachment_id = fields[0].strip() if fields else ""
             workflow_path = fields[1].strip() if len(fields) > 1 else ""
             denoise = float(fields[2].strip()) if len(fields) > 2 and fields[2].strip() else 1.0
             region = fields[3].strip() if len(fields) > 3 and fields[3].strip() else "0.58,0.26,0.36,0.74"
             feather = int(fields[4].strip()) if len(fields) > 4 and fields[4].strip() else 0
             prompt = fields[5].strip() if len(fields) > 5 else ""
-            person_id = fields[6].strip() if len(fields) > 6 and fields[6].strip() else ""
+            # ⚠ 空串 **与 `"0"`** 都算"没有人图"：脚本在单阶段模式下传的就是字面量 `0`，
+            #   而 Python 里 `"0"` 是**真值** —— 不排掉就会多调一次 comfy_use_media(mediaId=0)
+            #   （实测：单阶段那次多出一次"投放人物图"，工具调用顺序直接对不上）。
+            person_id = fields[6].strip() if len(fields) > 6 else ""
+            if person_id in ("", "0"):
+                person_id = ""
             # 第 8 个字段：cfg（空 = 用工作流自己的值）。
             # ⚠ 自带工作流都写死 `cfg=1.0`（无引导档，Turbo 的常规跑法），此时**提示词
             #   对画面的约束很弱**；要"让模型重画掉贴进来的背景"就得把它提上去。
-            cfg = float(fields[7].strip()) if len(fields) > 7 and fields[7].strip() else None
+            cfg = float(fields[7].strip()) if len(fields) > 7 and fields[7].strip() not in ('', '0') else None
+            # 第 9~12 个字段：ring（只融接缝的那一圈）/ scale / x / y（摆放）
+            tail = fields[8:] if len(fields) > 8 else []
+            ring = int(tail[0].strip()) if len(tail) > 0 and tail[0].strip() else 0
+            place_scale = float(tail[1].strip()) if len(tail) > 1 and tail[1].strip() not in ('', '0') else 1.0
+            place_x = float(tail[2].strip()) if len(tail) > 2 and tail[2].strip() else None
+            place_y = float(tail[3].strip()) if len(tail) > 3 and tail[3].strip() else None
             tool_msgs = [m for m in messages if m.get("role") == "tool"]
             rounds = 0
             if len(tool_msgs) == 0:
@@ -208,20 +219,46 @@ class Handler(BaseHTTPRequestHandler):
             if person_id:
                 person = self._tool_json(tool_msgs[1]).get("filename")
             if len(tool_msgs) == rounds:
-                self._stream_tool("comfy_make_mask", {
+                mask_args = {
                     "baseFilename": placed.get("filename"),
                     "region": region,
                     "feather": feather,
                     "filename": "edit-mask.png",
-                })
+                }
+                if person:
+                    # ★ 贴人物图时遮罩要**照人物的形状抠**（用户 2026-09-26 提的）：
+                    #   遮罩给矩形的话，ImageCompositeMasked 会把人物图那块矩形
+                    #   **连背景一起**贴进去 —— 白底人物图贴到夜景上就是一圈白框。
+                    # ⚠ 这里刻意传 `region="full"`：`mode=subject` 下 region 的作用是
+                    #   **裁切**（剪影超出框的部分被直边切掉），而人物已经在整张画布上了，
+                    #   再给矩形框只会把她切一刀 —— 不收窄就是"只按人物形状改"。
+                    mask_args["mode"] = "subject"
+                    mask_args["subjectFilename"] = person
+                    mask_args["region"] = "full"
+                    # ring：**只在人物外面一圈重绘**（工作流得有两个 LoadImageMask）。
+                    # 这是"嵌进去会改变画风"的正解 —— 人物像素原样贴上去，模型只融接缝。
+                    if ring > 0:
+                        mask_args["ring"] = ring
+                    # 摆放（缩放 + 位移）：工具会把人物像素与遮罩**一起**搬，并回一个新文件名，
+                    # 所以下面一定要用返回里的 `placedSubjectFilename` 覆盖 `20.image`。
+                    if place_scale != 1.0 or place_x is not None or place_y is not None:
+                        mask_args["scale"] = place_scale
+                        if place_x is not None:
+                            mask_args["x"] = place_x
+                        if place_y is not None:
+                            mask_args["y"] = place_y
+                self._stream_tool("comfy_make_mask", mask_args)
                 return
             mask = self._tool_json(tool_msgs[rounds])
             if len(tool_msgs) == rounds + 1:
+                # 摆放/抠形状之后的**人物图文件名**：工具把像素也一起搬了，这里必须跟着换
+                person_for_submit = mask.get("placedSubjectFilename") or person
                 self._stream_tool("comfy_submit", {
                     "workflowPath": workflow_path,
                     "overrides": self._inpaint_overrides(
                         workflow_path, placed.get("filename"), mask.get("filename"),
-                        mask.get("width"), mask.get("height"), prompt, denoise, person, cfg),
+                        mask.get("width"), mask.get("height"), prompt, denoise,
+                        person_for_submit, cfg, mask.get("ringFilename")),
                     "title": "E2E 图像编辑验证",
                     "waitSeconds": 300,
                 })
@@ -278,7 +315,7 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     @staticmethod
-    def _inpaint_overrides(workflow_path, bg, mask, width, height, prompt, denoise, person=None, cfg=None):
+    def _inpaint_overrides(workflow_path, bg, mask, width, height, prompt, denoise, person=None, cfg=None, ring=None):
         """按**工作流自己的节点表**算 overrides（真实模型也是先看清图里有哪些节点）。
 
         刻意不写死节点 id：`comfyhub_inpaint_anima.json` 与 `..._krea2.json` 的编号不同，
@@ -301,7 +338,12 @@ class Handler(BaseHTTPRequestHandler):
             # 人物图：纯重绘时填底图自己（合成是空操作），两阶段时填阶段一的产物
             overrides[f"{loaders[1]}.image"] = person or bg
         if mask and by_class.get("LoadImageMask"):
-            overrides[f"{by_class['LoadImageMask'][0]}.image"] = mask
+            masks = by_class["LoadImageMask"]
+            overrides[f"{masks[0]}.image"] = mask          # 合成遮罩（剪影）
+            if ring and len(masks) > 1:
+                # 第二个 LoadImageMask = **重绘区**（只圈人物外面一圈）：
+                # 人物自己的像素于是原样保留 —— 这就是"嵌进去不变画风"的那条路。
+                overrides[f"{masks[1]}.image"] = ring
         for node_id in by_class.get("ImageScale", []):
             # 尺寸必须与遮罩一致（不一致时采样直接炸）
             overrides[f"{node_id}.width"] = width
