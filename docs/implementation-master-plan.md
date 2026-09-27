@@ -210,7 +210,7 @@ GET /api/ai/run-kit/status  → { current, revoked:[...] }   ← 命中吊销则
 | **M4** | 上行通道 | `_outbox` + `/api/sync/push` + 幂等 apply + 服务端赢 LWW | 手机产生的会话在桌面可见可续写；重复推送不产生重复行 | M3 |
 | **M5** | 排队提交 | 手机 `comfy_queue_submit` + 桌面 outbox 消费（**走现有 `comfy_submit` 全链路**） | 手机排队 → 桌面在线后自动提交 → 产物入库画廊 → `mediaIds` 回到手机；**桌面侧审批/幂等/入库一条不少（R10/R11）** | M4 |
 | **M6** | 凭据 | `ai_providers` 下行（**不含密钥**）+ 手机 Android Keystore + `flutter_secure_storage` | 手机能独立调用 LLM；密钥不出本机；界面明确告知"需在手机上单独填 Key" | M3 |
-| **P4** | **桌面 Rust 重写** | 🔵 **进行中（截至 2026-09-25：第 1~44 步已落地，`cargo test` 315 例；工具层 14 个）**。**现状一句话**：非 AI 端点全通；`/api/ai/*` 的界面端点全通；Run 生命周期 / SSE / 执行器 / 工具层（含审批与提问闸门）**已能真的聊**；`/api/sync/*` 四条全通；捕获链（`status` / `jobs` / `poll`）已通并**在真 ComfyUI 上实测过**；界面格式工作流能转成 API 图。**剩下的**：**MCP 桥（39 工具）**、`comfy_submit`（R10）、`comfy_{find_workflow,check_inputs,fit_workflow,env_report,audit_workflow,prune_workflow}`、联网三工具 + `find_model`、附件（R9）、截断续写、**后台捕获轮询器**、`capture/{import,import-workflows}`、`ingest/comfyui`、`capabilities/{refresh,probe}`、`media/{id}/poster`、~~`WorkflowConvert` 的两处欠账（subgraph / 前端模拟）~~ ✅ 已清零（第 68 步，见 §22）、**切流收尾**（schema 归 Rust、脚本与发布包、Kotlin 退役）。**下面是逐批落地记录（历史）**：第 1 步（只读）：`server-rs/`（axum 0.8 + tokio + **rusqlite 0.40 bundled** + serde + tower-http）。**第 1 步（只读）**：`db.rs`（连接工厂 + PRAGMA **读回自检** R1 / `BEGIN IMMEDIATE` R2 / FTS5·user_version 自检）、`models.rs`、`routes.rs`（`/api/health`、`/api/tags`(+categories)、`/api/prompts`、`/api/prompts/{id}`）。**第 2 步（写）**：`inputs.rs`、`repo.rs`（逐条对照 `TagRepo`/`PromptRepo`）、`write_routes.rs`（标签 CRUD；提示词 CRUD/收藏/复制/标签维护）。**第 3 步（产物）**：`media.rs`（列表/详情/**原件文件流**：ETag = `sha256` 内容寻址 → `If-None-Match` 304；单段 `Range` → 206 + `Content-Range`；目录穿越双保险拦截）。**第 4 步（产物写侧 + 统计）**：`media_write.rs`（`PATCH`/`DELETE`：`clearPrompt` 与 `promptId=null` 语义分开、空 body 回 404、删除连磁盘原件与缩略图一起清；`GET /api/stats` 七个字段）。**第 5 步（缩略图）**：`thumbs.rs`（`image` crate 替掉 ImageIO + TwelveMonkeys：最长边 512 / 不放大 / 透明先铺 #1E1E22 / JPEG 0.82；失败回退原图）。**第 6 步（上传）**：`media_upload.rs`（multipart 多文件：落盘名 32 位 hex+扩展名、**按内容 sha256 判重**、单文件一个事务、图片顺手写缩略图、单文件失败不整批失败）。**第 7 步（捕获配置 + 工作流原文）**：`capture.rs`（`GET/PUT /api/capture/config` 整体覆盖+归一化；`GET /api/{prompts,media}/{id}/workflow` 的 **404/204/200 三分**与原文直出）。**第 8 步（关联查询）**：`/api/prompts/{id}/media`（提示词不存在也回 200 + `[]`，与 Kotlin 同）、`/api/media/{id}/prompt`（产物不存在 404 / 没关联 204 / 有 200）。未搬的一律 **501**。默认端口 **8081** 与 Kotlin 的 8080 并存灰度 | ① `cargo test` **48 例**全绿；② **对真实库副本 + 产物目录副本起服务抽查**：24 条产物 8 页、`file` 200 且 ETag=sha256、`Range: bytes=0-9` → 206、`If-None-Match` → **304**、`stats` 27/24/16 + 分组、`PATCH` 三个分支（含 `bogus promptId` 400 / 空 body 404）、`DELETE` → `{"deleted":215}` 且**临时副本文件被删、真实产物文件未被动**、`media` 24→23；真库只读未改。**未搬**：`/api/media` 的 poster（要 ffmpeg 抽帧）、需要 ComfyUI 在场的 `/api/capture/{status,jobs,poll,locate*,import*,workflows}`、`/api/ingest/comfyui`、`/api/prompts/{id}/api-graph`、`/api/ai/*`、`/api/sync/*`；**未重建**：R6~R10；RSS ≤30MB 待量。⚠ **已知的一处行为差异**（切流验收清单要过）：悬挂引用时 `/api/media/{id}/prompt` 我们回 404，Kotlin 回 200 + `{error:…}`（前端会解析成空提示词） | P2、M0 |
+| **P4** | **桌面 Rust 重写** | ✅ **桌面切流早已完成（2026-09-26，见 §10.9 的 C 组）；"还剩什么"一律看 §27.2。** ⚠ 下面这段是 **2026-09-25 的历史快照**（写着"第 1~44 步"已严重过期，留着只为看当时的推导）：🔵 **进行中（截至 2026-09-25：第 1~44 步已落地，`cargo test` 315 例；工具层 14 个）**。**现状一句话**：非 AI 端点全通；`/api/ai/*` 的界面端点全通；Run 生命周期 / SSE / 执行器 / 工具层（含审批与提问闸门）**已能真的聊**；`/api/sync/*` 四条全通；捕获链（`status` / `jobs` / `poll`）已通并**在真 ComfyUI 上实测过**；界面格式工作流能转成 API 图。**剩下的**：**MCP 桥（39 工具）**、`comfy_submit`（R10）、`comfy_{find_workflow,check_inputs,fit_workflow,env_report,audit_workflow,prune_workflow}`、联网三工具 + `find_model`、附件（R9）、截断续写、**后台捕获轮询器**、`capture/{import,import-workflows}`、`ingest/comfyui`、`capabilities/{refresh,probe}`、`media/{id}/poster`、~~`WorkflowConvert` 的两处欠账（subgraph / 前端模拟）~~ ✅ 已清零（第 68 步，见 §22）、**切流收尾**（schema 归 Rust、脚本与发布包、Kotlin 退役）。**下面是逐批落地记录（历史）**：第 1 步（只读）：`server-rs/`（axum 0.8 + tokio + **rusqlite 0.40 bundled** + serde + tower-http）。**第 1 步（只读）**：`db.rs`（连接工厂 + PRAGMA **读回自检** R1 / `BEGIN IMMEDIATE` R2 / FTS5·user_version 自检）、`models.rs`、`routes.rs`（`/api/health`、`/api/tags`(+categories)、`/api/prompts`、`/api/prompts/{id}`）。**第 2 步（写）**：`inputs.rs`、`repo.rs`（逐条对照 `TagRepo`/`PromptRepo`）、`write_routes.rs`（标签 CRUD；提示词 CRUD/收藏/复制/标签维护）。**第 3 步（产物）**：`media.rs`（列表/详情/**原件文件流**：ETag = `sha256` 内容寻址 → `If-None-Match` 304；单段 `Range` → 206 + `Content-Range`；目录穿越双保险拦截）。**第 4 步（产物写侧 + 统计）**：`media_write.rs`（`PATCH`/`DELETE`：`clearPrompt` 与 `promptId=null` 语义分开、空 body 回 404、删除连磁盘原件与缩略图一起清；`GET /api/stats` 七个字段）。**第 5 步（缩略图）**：`thumbs.rs`（`image` crate 替掉 ImageIO + TwelveMonkeys：最长边 512 / 不放大 / 透明先铺 #1E1E22 / JPEG 0.82；失败回退原图）。**第 6 步（上传）**：`media_upload.rs`（multipart 多文件：落盘名 32 位 hex+扩展名、**按内容 sha256 判重**、单文件一个事务、图片顺手写缩略图、单文件失败不整批失败）。**第 7 步（捕获配置 + 工作流原文）**：`capture.rs`（`GET/PUT /api/capture/config` 整体覆盖+归一化；`GET /api/{prompts,media}/{id}/workflow` 的 **404/204/200 三分**与原文直出）。**第 8 步（关联查询）**：`/api/prompts/{id}/media`（提示词不存在也回 200 + `[]`，与 Kotlin 同）、`/api/media/{id}/prompt`（产物不存在 404 / 没关联 204 / 有 200）。未搬的一律 **501**。默认端口 **8081** 与 Kotlin 的 8080 并存灰度 | ① `cargo test` **48 例**全绿；② **对真实库副本 + 产物目录副本起服务抽查**：24 条产物 8 页、`file` 200 且 ETag=sha256、`Range: bytes=0-9` → 206、`If-None-Match` → **304**、`stats` 27/24/16 + 分组、`PATCH` 三个分支（含 `bogus promptId` 400 / 空 body 404）、`DELETE` → `{"deleted":215}` 且**临时副本文件被删、真实产物文件未被动**、`media` 24→23；真库只读未改。**未搬**：`/api/media` 的 poster（要 ffmpeg 抽帧）、需要 ComfyUI 在场的 `/api/capture/{status,jobs,poll,locate*,import*,workflows}`、`/api/ingest/comfyui`、`/api/prompts/{id}/api-graph`、`/api/ai/*`、`/api/sync/*`；**未重建**：R6~R10；RSS ≤30MB 待量。⚠ **已知的一处行为差异**（切流验收清单要过）：悬挂引用时 `/api/media/{id}/prompt` 我们回 404，Kotlin 回 200 + `{error:…}`（前端会解析成空提示词） | P2、M0 |
 
 ### 轨道依赖的关键判断
 
@@ -2209,8 +2209,10 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 ### 10.8 还没做完的清单（截至 2026-09-25）
 
-> ⚠ **这是 2026-09-25 的快照**（保留下来是为了看当时的判断，别当现状读）。
-> 它下面这张 Rust 表里的多行**已经被后来的批次做掉了**：附件 R9 → 第 50 步；`/api/media/{id}/poster`
+> ⚠ **这是 2026-09-25 的快照**（保留下来是为了看当时的判断，**别当现状读、更别照它施工**）。
+> **"现在还剩什么"的唯一真源是 §27.2。**
+> 它下面这两张表里的多行**已经被后来的批次做掉了**，其中 `capabilities/{refresh,probe}` 那一行
+> **写反了**（它至今仍是 501）：附件 R9 → 第 50 步；`/api/media/{id}/poster`
 > → 第 51 步；`/api/capture/import` → 第 52 步；`providers/{id}/test` 与 `discover-models` → 第 53 步；
 > **图像编辑三件 → 第 58 步**；**`search_prompts` / `danbooru_lookup` → 第 59 步（§14）**。
 > 最新状态一律看 §10.9 的 A/B 表与 §14 的诚实清单（§13 那份已随颜色抠图档删除，只留墓碑）。
@@ -3070,3 +3072,58 @@ DELETE /api/prompts/457|459|461
 → 21/21 成功、0 失败**，清完 `prompts = 0 / convs = 0`（修前同一批是 500）。
 `cargo test` **688 全绿 / 0 failed / 7 ignored**、`cargo check --all-targets` 零 warning、
 `scripts\e2e-submit-test.ps1` **41 项全过**。
+
+---
+
+## 27. 2026-09-27（续）：用户点名的"真缺的都做"这一轮 —— 落地登记 + **当前真实剩余清单**
+
+> 用户这一轮的原话：**"把真缺的都做"**，外加五条点名（扫码配对 + 选择同步 API 设置、
+> §7 待定项 2/3/4 拍板、maxToolSteps 加到 25、"获取进度百分比和当前步骤"、
+> "怎么人工校验 AI 文案和批量修改他们"）。
+>
+> **本节是"还剩什么没做"的唯一真源** —— §10.8 那张 2026-09-25 的快照表已被后面各轮清零，
+> 但表里的行没有逐条改写（历史快照），**别再照它施工**。
+
+### 27.1 这一轮的提交（按时间）
+
+| 提交 | 内容 |
+| --- | --- |
+| `16c38bb` | **maxToolSteps 16 → 25**（上界 48；手机 harness 默认 8 → 25）—— §17.4 拍板 |
+| `9c0cea5` | **「同步与连接」页**：候选地址点选 + 真实测试连接（health + manifest）+ 上行读数（待推几条 / 立即同步） |
+| `6fe6763` / `e610442` / `c5e5fef` / `2241e76` | §7 待定项 **2/3/4 拍板**落档；`tool-scope-contract` §3.1（跨端发起：能力不砍、审批加强）；`pairing-design` §14（密钥**上行**：两个开关 + rev 等值语义）；`pairing-design` §9（二维码由 Dart 画、扫码不可用不算失败） |
+| `d8edd87` / `64fc612` | **安卓/iOS 内嵌视频**：官方 `video_player` + `PlatformVideoView` 分派（Windows 仍走打过补丁的 `video_player_win`） |
+| `40c8cb1` | 手机端三件：`ai_run`/`ai_tool_call` **上行** · 删会话本地镜像 + `local_deletions`（无 wire delete）· 手机 `web_search`/`civitai_search` |
+| `3e16cda` / `941b735` | **ComfyUI 生成进度**：常驻 WS（`comfy_progress.rs`）+ `/jobs`、`comfy_get_status` 的 `percent`/当前步骤 + 右侧栏进度条与"正在执行 KSampler（12/30）· 40%" |
+| `6565c53` | **`GET /api/net/urls`**：这台桌面的可达地址（回环/局域网/Tailscale），给「同步与连接」页当候选 |
+| `0c27ac1` / `fb577b5` / `1105cde` | **密钥双向**：客户端（`reveal` 是唯一读密钥的口子 + 「推给桌面」）+ 后端（`PUT /api/ai/credentials` + 每设备 `allowCredentialsUpload` + `rev` 等值 + 逐条拒）+ 桌面那两个开关的 UI |
+| `3e584d0` | **AI 文案台 Dart 侧**：清单/三态徽标/diff/批量面板/导入导出 + `ui.*` 覆盖层查表 |
+| `9c9ad3c` | **M4 下行半边**：`SyncPull`（manifest/changes/bootstrap/410）+ 桥 `syncPull` + 冷启动/回前台/Run 收尾三处触发；密钥"解不开"如实报码 |
+
+### 27.2 现在的真实剩余清单
+
+| # | 项 | 状态 |
+| --- | --- | --- |
+| 1 | **M5 排队提交**（`submit_job` 消费 + **强制桌面审批** + 产物/`mediaIds` 回手机） | ⛔ **未开始**（契约已冻结：`sync-api-contract` §4.1；手机侧工具与 outbox 入队早就在） |
+| 2 | **`capabilities/{refresh,probe}`** | ⛔ 仍 501（refresh 要 models.dev 在线数据集、probe 要真上游请求/会花钱；用户已拍板"两个都做、probe 受 probe-toggle 约束"） |
+| 3 | **附件非图片模态**（视频/音频/文档的传输方式）+ **视频附件缩略图**（`/thumb` 回 204） | ⛔ 未做（三家适配器目前只有图片 `inline_base64`） |
+| 4 | **扫码配对**（`POST /api/auth/pair/start` + 二维码 + 手机扫码） | ⛔ 未做（拍板见 `pairing-design` §9：Dart 画码、`mobile_scanner` 扫码、相机不可用退回手敲 6 位码） |
+| 5 | **跨端发起端的审批加强**（发起端 ≠ 执行端 → `mutating`/ASK 强制桌面审批；Run 带 `initiatedBy`） | ⛔ 契约已冻结（`tool-scope-contract` §3.1），执行器未落地 |
+| 6 | **文案台后端**（`copy_overrides` + 七个端点 + 运行时注入 + 机器校验） | 🔶 **正在做**（Dart 侧已交付 `3e584d0`；后端由本轮新起的 agent 实现） |
+| 7 | **配方**：W5 骨架改写 / 界面看配方页 / 跑通后回写 | ⛔ 未做（Kotlin 侧也没做；现在只如实报"接不上"） |
+| 8 | **角色卡同步到手机** | ⛔ 有意不做（不在同步白名单） |
+| 9 | **`comfy_audit_workflow` 加"角色 tag 与角色卡/danbooru 一致性"检查** | ⛔ 未做 |
+| 10 | **BEN2/RMBG 内部固定 1024** → >1024 长边人像发丝被降采样 | ⚠ 未处理 |
+| 11 | **M3.2 ④ 真机对着 Rust 的回归** | ⛔ 未做（本机无设备；M4 的 `syncPull` 与密钥"解不开"那两支只有宿主 JVM 用例） |
+| 12 | **总纲/文档的过期行**（本节的由来） | 🔶 这一节是"当前剩余"的真源；§10.8 那两张 2026-09-25 的快照表**保持历史原样**，别再照它施工 |
+
+### 27.3 顺手校正三处会误导人的旧记录
+
+* **§10.8 的 Rust 表**：里面写着"⛔ 未做"的 `comfy_*` 六件、联网三工具 + `find_model`、
+  `capture/{import,import-workflows}`、`poster`、后台轮询器、截图续写、附件（R9）**都已经落地**
+  （§18/§19/§22 各轮），而 `capabilities/{refresh,probe}` 那一行**写反了**（它至今是 501）。
+  → **以 §27.2 为准。**
+* **§9 ④ 里那两条**："手机侧的空壳会话清理（桥缺 `deleteConversation`）"与
+  "`ai_run_events` 的保留窗口……Rust 侧更没有" **都已完成**（移动端第 71 步；Rust 第 26/27 步）。
+  §9 ② 的"`/import-workflows` 仍是 501"也已完成（第 49 步）。
+* **`PROMPT_VERSION`**：§19.3 / §23 写的是 v33，而**代码里是 v34**（`server-rs/src/nsfw_prompt.rs:51`，
+  第 19 条按"贴人只有 matte 一条路"改写那次跟进的）。以代码为准。
