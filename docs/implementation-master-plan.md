@@ -3098,6 +3098,13 @@ DELETE /api/prompts/457|459|461
 | `0c27ac1` / `fb577b5` / `1105cde` | **密钥双向**：客户端（`reveal` 是唯一读密钥的口子 + 「推给桌面」）+ 后端（`PUT /api/ai/credentials` + 每设备 `allowCredentialsUpload` + `rev` 等值 + 逐条拒）+ 桌面那两个开关的 UI |
 | `3e584d0` | **AI 文案台 Dart 侧**：清单/三态徽标/diff/批量面板/导入导出 + `ui.*` 覆盖层查表 |
 | `9c9ad3c` | **M4 下行半边**：`SyncPull`（manifest/changes/bootstrap/410）+ 桥 `syncPull` + 冷启动/回前台/Run 收尾三处触发；密钥"解不开"如实报码 |
+| `cf03ded` / `04cc67a` | **扫码配对（通道 A）Dart 侧**：`pairing_payload.dart` 是 `comfyhub://pair?v=1&…` 的**唯一实现**（编与解都在这）+ 桌面出码（二维码/6 位码/地址/倒计时，过期就撤）+ 手机扫码（`mobile_scanner`，相机不可用退回手敲）；CAMERA 权限 `required=false` |
+
+> ⚠ 顺便记一个**这一轮才发现、之前以为已经成立的缺口**（已派活，见 §27.2 第 13 条）：
+> 用户说"手机完全可以独立配置 provider"，而**这一半不成立** ——
+> `ai_provider_settings_page.dart` 的 provider/模型 CRUD 一律打桌面 HTTP；
+> 本地库里 `ai_providers` / `ai_models` 明明是**本机表**，但桥上一个方法都没有。
+> 桌面离线时，手机上连"新建一个 provider"都做不到。
 
 ### 27.2 现在的真实剩余清单
 
@@ -3106,7 +3113,7 @@ DELETE /api/prompts/457|459|461
 | 1 | **M5 排队提交**（`submit_job` 消费 + **强制桌面审批** + 产物/`mediaIds` 回手机） | ⛔ **未开始**（契约已冻结：`sync-api-contract` §4.1；手机侧工具与 outbox 入队早就在） |
 | 2 | **`capabilities/{refresh,probe}`** | ⛔ 仍 501（refresh 要 models.dev 在线数据集、probe 要真上游请求/会花钱；用户已拍板"两个都做、probe 受 probe-toggle 约束"） |
 | 3 | **附件非图片模态**（视频/音频/文档的传输方式）+ **视频附件缩略图**（`/thumb` 回 204） | ⛔ 未做（三家适配器目前只有图片 `inline_base64`） |
-| 4 | **扫码配对**（`POST /api/auth/pair/start` + 二维码 + 手机扫码） | ⛔ 未做（拍板见 `pairing-design` §9：Dart 画码、`mobile_scanner` 扫码、相机不可用退回手敲 6 位码） |
+| 4 | **扫码配对** | 🔶 **Dart 侧已交付（`cf03ded`）**：二维码格式一份实现、桌面出码（含倒计时与过期撤码）、手机扫码、相机不可用退回手敲、CAMERA `required=false`；**仍缺后端 `POST /api/auth/pair/start`**（仅回环；回 ticket/code/urls/两个 expiresAt）—— 界面在它缺席时如实报"还没有扫码配对接口" |
 | 5 | **跨端发起端的审批加强**（发起端 ≠ 执行端 → `mutating`/ASK 强制桌面审批；Run 带 `initiatedBy`） | ⛔ 契约已冻结（`tool-scope-contract` §3.1），执行器未落地 |
 | 6 | **文案台后端**（`copy_overrides` + 七个端点 + 运行时注入 + 机器校验） | 🔶 **正在做**（Dart 侧已交付 `3e584d0`；后端由本轮新起的 agent 实现） |
 | 7 | **配方**：W5 骨架改写 / 界面看配方页 / 跑通后回写 | ⛔ 未做（Kotlin 侧也没做；现在只如实报"接不上"） |
@@ -3115,6 +3122,7 @@ DELETE /api/prompts/457|459|461
 | 10 | **BEN2/RMBG 内部固定 1024** → >1024 长边人像发丝被降采样 | ⚠ 未处理 |
 | 11 | **M3.2 ④ 真机对着 Rust 的回归** | ⛔ 未做（本机无设备；M4 的 `syncPull` 与密钥"解不开"那两支只有宿主 JVM 用例） |
 | 12 | **总纲/文档的过期行**（本节的由来） | 🔶 这一节是"当前剩余"的真源；§10.8 那两张 2026-09-25 的快照表**保持历史原样**，别再照它施工 |
+| 13 | **手机"独立配置 provider"**（用户拍板的第 4 条的**前半**） | 🔶 **正在做**：provider/模型 CRUD 现在一律打桌面 HTTP，而本地库里那两张表本来就是**本机表**（桥上一个方法都没有）→ 桌面离线时手机上连"新建 provider"都做不到。做法：桥补本地 CRUD + Dart 一个 `ProviderStore` 抽象（手机走桥、桌面走 HTTP），两端各一份清单、**不做自动合并**（§14.4） |
 
 ### 27.3 顺手校正三处会误导人的旧记录
 
