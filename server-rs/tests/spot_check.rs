@@ -475,3 +475,62 @@ async fn comfy_env_report_reads_the_real_machine() {
     );
     assert_eq!(only["instanceLoadable"], payload["instanceLoadable"], "两次问的是同一份清单");
 }
+
+// ===========================================================================
+//  comfy_find_workflow：两段式查找（库 → 本机文件）
+//
+//  真库的价值在这一条上特别直白：`runnable` 到底真不真，只有库里有**真的有 API 图**
+//  的提示词才测得出来（夹具里那两条要么都有图、要么都没图，掩盖不了）。
+// ===========================================================================
+
+#[tokio::test]
+#[ignore = "真库：COMFYHUB_SPOT_DB 指一份库副本"]
+async fn comfy_find_workflow_is_truthful_about_runnable() {
+    let Some((state, _root)) = spot_state() else { return };
+
+    // 先随便挑一个库里真有东西的关键词：拿第一条提示词的**正面提示词里一个词**试
+    let first = call(&state, "search_prompts", serde_json::json!({ "limit": 1 })).await;
+    let query = first["items"][0]["title"].as_str().unwrap_or("").trim().to_string();
+    println!("拿标题当关键词：{query:?}");
+    assert!(!query.is_empty(), "库里一条提示词都没有，这条抽查没法做：{first}");
+
+    let hit = call(&state, "comfy_find_workflow", serde_json::json!({ "query": query, "limit": 5 })).await;
+    println!("{}", serde_json::to_string_pretty(&hit).unwrap_or_default());
+    assert_eq!(hit["query"], query);
+    // 关键词就是库里的标题，所以**这一段必须命中**（命中不了说明两段式查询或搜索语义断了）
+    assert!(hit["count"].as_i64().unwrap_or(0) > 0, "库里有这条标题却搜不到：{hit}");
+    {
+        let items = hit["workflows"].as_array().unwrap();
+        assert!(items.len() <= 5, "{hit}");
+        // ★ 这一条就是"有意与 Kotlin 不同"的判据：默认档（不带图）下也必须**如实**
+        //   报 runnable —— Kotlin 那条 `if (includeGraph) … else null` 会让这里全是 false
+        let runnable = items.iter().filter(|w| w["runnable"] == true).count();
+        println!("命中 {} 条，runnable=true 的有 {} 条", items.len(), runnable);
+        assert!(runnable > 0, "真库上一条 runnable 都没有 —— 要么查询词不对，要么 runnable 又变回假话了：{hit}");
+        // 没带图时**不许**把图带出来（体积是当初想省的东西）
+        assert!(items.iter().all(|w| w.get("apiGraph").is_none()), "{hit}");
+        // runnable=true 的那几条**不许**带那句"没有 API 节点图"的 note（那是假话）
+        assert!(
+            items.iter().filter(|w| w["runnable"] == true).all(|w| w.get("note").is_none()),
+            "{hit}"
+        );
+        // 带上图时：runnable 必须还是同一个结论，且图真的在
+        let with_graph = call(
+            &state,
+            "comfy_find_workflow",
+            serde_json::json!({ "query": query, "limit": 5, "includeGraph": true }),
+        )
+        .await;
+        let g = with_graph["workflows"].as_array().unwrap();
+        assert_eq!(
+            g.iter().filter(|w| w["runnable"] == true).count(),
+            runnable,
+            "带不带图不该改变 runnable 的结论"
+        );
+        if runnable > 0 {
+            let some = g.iter().find(|w| w["runnable"] == true).unwrap();
+            assert!(some["apiGraph"].is_object(), "includeGraph=true 时图必须真的在：{some}");
+        }
+    }
+}
+

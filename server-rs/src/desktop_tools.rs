@@ -53,6 +53,14 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "comfy_find_workflow",
+        description: r#"找一个**能直接跑的工作流**。先在库里的提示词中搜（按标题/正文关键词）；库里没有时**自动回头看本机 ComfyUI 已保存的工作流文件**（`user\<用户>\workflows\*.json`，结果在 localWorkflows 里，带 path）—— 所以"库里搜不到"不等于"这份工作流用不了"。返回参数摘要（采样器 / steps / cfg / seed / 尺寸 / 提示词）与可覆盖的参数路径，然后就能用 comfy_submit 按同一个工作流再跑一次（改提示词或参数）。"#,
+        input_schema: r#"{"type":"object","properties":{"query":{"type":"string","description":"关键词：匹配库里的标题与正/负面提示词，也会匹配本机工作流文件名（如 krea2）"},"limit":{"type":"integer","description":"最多返回几条，默认 5，最多 20"},"includeGraph":{"type":"boolean","description":"是否带上完整 API 节点图（默认 false；要看节点编号与输入名时才带上）"}},"required":["query"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "comfy_get_run",
         description: r#"按 runKey 查一次已捕获运行的状态、错误与产物数。runKey 可以用三样中的任何一个：ComfyUI 的 prompt_id（UUID，comfy_submit 结果里的 runKey）、捕获记录里的数字 id（capturedPromptId），或 import:<sha256>。"#,
         input_schema: r#"{"type":"object","properties":{"runKey":{"type":"string","description":"ComfyUI prompt_id（UUID）/ 数字 prompt_id / import:<sha256>"}},"required":["runKey"],"additionalProperties":false}"#,
@@ -262,6 +270,7 @@ mod tests {
             names,
             vec![
                 "comfy_env_report",
+                "comfy_find_workflow",
                 "comfy_get_run",
                 "comfy_get_status",
                 "comfy_list_workflows",
@@ -283,7 +292,6 @@ mod tests {
             ]
         );
         for absent in [
-            "comfy_find_workflow",
             "comfy_check_inputs",
             "comfy_fit_workflow",
             "comfy_audit_workflow",

@@ -5289,14 +5289,17 @@ async fn failed_calls_do_not_spend_the_budget() {
 /// **不许静默**、也不许假装跑过 —— 记录照样落库，模型拿到一句能改变做法的话。
 #[tokio::test]
 async fn unknown_tool_is_reported_as_tool_not_found() {
-    // ⚠ 这里**故意**挑一个还没搬的工具（`comfy_find_workflow` 要库内搜索 + 本机文件，归后面的批次）：
-    // 第 40 步之前这条用例用的是 `read_file`，而它已经实现了 —— 继续拿它当"不存在的工具"
-    // 会变成"撞审批闸门"，红的原因完全变成另一个（实测过）。
-    // ⚠ 第 48 步起 `comfy_submit` 也**实现了**（厂档 ASK）：再拿它当"不存在的工具"会去真的提交，
-    // 于是这条用例会卡在等 ComfyUI 上；`comfy_env_report` 也在同一批之后实现了。
-    // **换名字时请挑一个 `tools::IMPLEMENTED` 里真的没有的。**
+    // ⚠ 这里用一个**永远不存在**的名字，而不是"还没搬的工具"。
+    //
+    // 历史上这条用例三次被"顺手搬走一件工具"弄红：第 40 步之前用 `read_file`（搬了），
+    // 后来用 `comfy_env_report`（§18 搬了），再后来用 `comfy_find_workflow`（同一轮搬了）——
+    // 每次红的原因都变成"撞上真的分支"（撞审批闸门 / 真的去提交 / 真的读库），
+    // 而那与"未知工具要回 TOOL_NOT_FOUND"一点关系都没有，白花一轮去查。
+    // 未知工具本来就不该是"某个真实工具"，所以**给它一个不属于任何工具的名字**，
+    // 这条用例从此与"又搬了哪一件"无关。
+    const UNKNOWN_TOOL: &str = "comfy_this_tool_never_existed";
     let (base_url, gateway) =
-        scripted_tool_gateway(vec![vec![("comfy_find_workflow", r#"{}"#)]]).await;
+        scripted_tool_gateway(vec![vec![(UNKNOWN_TOOL, r#"{}"#)]]).await;
     let state = state();
     seed_provider_and_model(&state);
     point_at_gateway(&state, &base_url);
@@ -5308,7 +5311,10 @@ async fn unknown_tool_is_reported_as_tool_not_found() {
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert_eq!(calls[0]["status"], "failed");
     assert_eq!(calls[0]["approval"], "denied");
-    assert!(calls[0]["error"].as_str().unwrap().contains("没有名为「comfy_find_workflow」的工具"));
+    assert!(calls[0]["error"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("没有名为「{UNKNOWN_TOOL}」的工具")));
 
     // 失败那次**不进 tool.started**（没有开始过），但要有一条 `tool.failed`
     let types = event_types(&state, &run_id);
@@ -5648,6 +5654,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             "ask_user_question",
             // 本机模型清单对账（O3）：只读，**不属于 COMFY 那一类**（不吃查询预算）
             "comfy_env_report",
+            // 两段式找工作流（用户 bug ⑤）：库里搜不到就回头看本机的工作流文件
+            "comfy_find_workflow",
             "comfy_get_run",
             "comfy_get_status",
             "comfy_list_workflows",
@@ -8229,7 +8237,6 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     }
     // 没实现的**一个都不许出现**
     for absent in [
-        "comfy_find_workflow",
         "comfy_check_inputs",
         "comfy_audit_workflow",
         "comfy_prune_workflow",
