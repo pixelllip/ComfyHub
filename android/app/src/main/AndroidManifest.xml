@@ -3,6 +3,12 @@
          ⚠ 与它配套的是 `res/xml/network_security_config.xml`（明文 http 策略）——
          少了那一条，真机上 `HttpURLConnection` 会被系统拦下，见那份文件的头注。 -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- 相机：只有「扫桌面上的二维码」那条路用（扫码配对，docs/pairing-design.md §9）。
+         ⚠ 它是**可选能力**：授权被拒 / 设备没相机时，配对仍然要走通 ——
+         界面上那条「手输地址 + 敲 6 位码」的路一个字都不能少（android:required="false"
+         就是"商店里没相机的设备也允许装"）。 -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <application
         android:label="viewer"
         android:name="${applicationName}"

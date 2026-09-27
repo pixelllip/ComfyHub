@@ -182,6 +182,14 @@ class InboundAuthApi {
 
   // --- 手机侧（匿名 + 限速）--------------------------------------------------
 
+  /// `POST /api/auth/pair/start` —— **扫码通道的桌面那一端**（§5.1，**仅回环**）。
+  ///
+  /// 回的是**事实**（ticket / 可达地址 / 滚动码 / 过期时间）：二维码那串文本由前端
+  /// 用 [`PairingPayload.encode`] 编 —— 格式只留一份实现（桌面编、手机解同一份），
+  /// 后端再编一遍就会出现"两端各写一份 URL 拼装"式的漂移。
+  Future<PairStart> startPairing({String? token}) async =>
+      PairStart.fromJson(_asMap(await _send('POST', '/api/auth/pair/start', const {}, token: token)));
+
   /// `POST /api/auth/pair/request` —— 手机举手，桌面屏幕上会出现 6 位码。
   ///
   /// ⚠ 响应里**没有 ticket**（设计 §11.1 的那条纪律）：手机拿不到算码的密钥，
@@ -233,6 +241,41 @@ class InboundAuthApi {
   static List<Map<String, dynamic>> _asList(dynamic raw) => raw is List
       ? raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
       : const [];
+}
+
+/// `POST /api/auth/pair/start` 的响应（§5.1）—— 桌面上那张二维码卡的全部素材。
+///
+/// ⚠ `ticket` 与 `code` 都**只在回环那次响应里出现**：前者编进二维码（手机扫码拿到），
+/// 后者由人念/敲。它们都不落库、不进日志（§4.1：只活在内存）。
+class PairStart {
+  const PairStart({
+    required this.ticket,
+    required this.code,
+    this.expiresAt,
+    this.codeExpiresAt,
+    this.urls = const [],
+  });
+
+  final String ticket;
+
+  /// 6 位十进制滚动码。
+  final String code;
+  final String? expiresAt;
+  final String? codeExpiresAt;
+
+  /// 桌面枚举出来的可达地址（可能为空：那种情况界面要如实说"手填地址"）。
+  final List<String> urls;
+
+  factory PairStart.fromJson(Map<String, dynamic> json) => PairStart(
+        ticket: (json['ticket'] ?? '').toString(),
+        code: (json['code'] ?? '').toString(),
+        expiresAt: json['expiresAt']?.toString(),
+        codeExpiresAt: json['codeExpiresAt']?.toString(),
+        urls: (json['urls'] as List?)?.map((e) => e.toString()).where((e) => e.isNotEmpty).toList() ??
+            const [],
+      );
+
+  bool get usable => ticket.isNotEmpty && code.isNotEmpty;
 }
 
 /// `POST /api/auth/pair/request` 的响应。

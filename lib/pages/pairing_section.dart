@@ -7,6 +7,10 @@ import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 import '../core/api_client.dart' show ApiException;
 import '../core/formatting.dart';
 import '../core/inbound_auth_api.dart';
+import '../core/pairing_payload.dart';
+import '../core/pairing_token.dart';
+import '../widgets/pairing_qr.dart';
+import 'scan_pairing_page.dart';
 
 /// 设置页里的「远程访问与配对」一块（形状见 `docs/pairing-design.md` §11）。
 ///
@@ -93,10 +97,20 @@ class _PairingSectionState extends State<PairingSection> {
   /// 本机局域网 IPv4（拼给用户照着往手机上敲）。
   List<String> _localIps = const [];
 
+  // --- 扫码配对（通道 A：桌面出二维码、手机扫；§9 拍板）---
+  /// 桌面上正在展示的那次配对（ticket + 滚动码 + 可达地址）。
+  PairStart? _qr;
+  String? _qrError;
+  bool _qrBusy = false;
+  Timer? _qrTimer;
+
   // --- 手机侧 ---
   late final TextEditingController _baseUrlController;
   final TextEditingController _codeController = TextEditingController();
   bool _paired = false;
+
+  /// 扫到的配对码（通道 A）：有它就不用"举手"那一趟 —— 桌面已经算好码了（§3.2）。
+  PairingPayload? _scanned;
   String? _pairedDeviceId;
   bool _pairing = false;
   bool _syncingKeys = false;
@@ -147,10 +161,170 @@ class _PairingSectionState extends State<PairingSection> {
   void dispose() {
     _pollTimer?.cancel();
     _pollTimer = null;
+    _qrTimer?.cancel();
+    _qrTimer = null;
     _api?.dispose();
     _baseUrlController.dispose();
     _codeController.dispose();
     super.dispose();
+  }
+
+  // -------------------------------------------------------------------------
+  //  扫码配对（通道 A）：桌面出二维码 → 手机扫 → 手机把码敲进来
+  // -------------------------------------------------------------------------
+
+  /// 让后端起一次扫码配对会话，并把二维码画出来（§5.1，**仅回环**）。
+  ///
+  /// 二维码那串文本由 [`PairingPayload.encode`] 编 —— 格式只有那一份实现。
+  Future<void> _startQrPairing() async {
+    final api = _api;
+    if (api == null) return;
+    setState(() {
+      _qrBusy = true;
+      _qrError = null;
+      _message = null;
+    });
+    try {
+      final start = await api.startPairing(token: PairingTokenCache.read());
+      if (!mounted) return;
+      if (!start.usable) {
+        setState(() => _qrError = '桌面回的配对信息不完整（缺 ticket 或 6 位码），没法画二维码。');
+        return;
+      }
+      setState(() => _qr = start);
+      _startQrTicker();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _qrError = switch (e.statusCode) {
+          404 || 501 => '这台后端还没有"扫码配对"接口（旧版本）—— 用上面那条「手机举手 + 敲码」的路。',
+          403 => '生成二维码只允许在桌面本机上操作（127.0.0.1）。',
+          _ => '生成二维码失败：${e.message}',
+        };
+      });
+    } catch (e) {
+      if (mounted) setState(() => _qrError = '生成二维码失败：$e');
+    } finally {
+      if (mounted) setState(() => _qrBusy = false);
+    }
+  }
+
+  /// 每秒重画一次倒计时；**过期就把二维码撤掉并说清**（别让用户对着一个失效的码扫半天）。
+  void _startQrTicker() {
+    _qrTimer?.cancel();
+    _qrTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (_remaining(_qr?.expiresAt) == Duration.zero) {
+        _qrTimer?.cancel();
+        _qrTimer = null;
+        setState(() {
+          _qr = null;
+          _qrError = '二维码已过期（120 秒有效）—— 点「生成二维码」再来一次。';
+        });
+        return;
+      }
+      setState(() {}); // 只为了让"剩余 mm:ss"跳秒
+    });
+  }
+
+  /// 到期时刻 → 剩余时长（解析不出来时回 null：**不编一个倒计时**）。
+  Duration? _remaining(String? iso) {
+    if (iso == null || iso.isEmpty) return null;
+    final at = DateTime.tryParse(iso);
+    if (at == null) return null;
+    final left = at.toLocal().difference(DateTime.now());
+    return left.isNegative ? Duration.zero : left;
+  }
+
+  String _remainingLabel(String? iso) {
+    final left = _remaining(iso);
+    if (left == null) return '';
+    final m = left.inMinutes;
+    final s = left.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '剩余 $m:$s';
+  }
+
+  /// 二维码 + 6 位码 + 地址列表（放在「配对新手机」展开区里：两件事本来就是同一条路）。
+  Widget _qrPairingArea(ThemeData theme) {
+    final qr = _qr;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '或者让手机**扫这个码**：地址会自己带过去，6 位码还是要敲。'
+          '二维码 120 秒有效 —— 被拍照转发出去时，那个码大概率已经过期。',
+          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+        ),
+        const SizedBox(height: 8),
+        if (qr == null)
+          Row(
+            children: [
+              FilledButton.icon(
+                onPressed: _qrBusy ? null : _startQrPairing,
+                icon: const Icon(Icons.qr_code_2, size: 18),
+                label: Text(_qr == null && _qrError != null ? '重新生成二维码' : '生成二维码'),
+              ),
+            ],
+          )
+        else ...[
+          // 二维码要**浅底**才扫得动 —— 白底那层在 `PairingQrImage` 里（两处 reason 见它的注释）
+          PairingQrImage(
+            payload: PairingPayload(
+              ticket: qr.ticket,
+              expiresAt: qr.expiresAt,
+              urls: qr.urls,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text('6 位码', style: theme.textTheme.labelLarge),
+              const SizedBox(width: 8),
+              SelectableText(
+                qr.code,
+                style: theme.textTheme.headlineSmall?.copyWith(letterSpacing: 4),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                _remainingLabel(qr.codeExpiresAt).isEmpty
+                    ? _remainingLabel(qr.expiresAt)
+                    : _remainingLabel(qr.codeExpiresAt),
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          if (qr.urls.isEmpty)
+            Text(
+              '桌面没枚举出可达地址 —— 手机上请手填地址（回环 / 局域网 IP / Tailscale 都行）。',
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error),
+            )
+          else
+            for (final u in qr.urls)
+              SelectableText(u, style: theme.textTheme.labelSmall),
+          TextButton.icon(
+            onPressed: _qrBusy ? null : _startQrPairing,
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('重新生成'),
+          ),
+        ],
+        if (_qrError != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.error_outline, size: 16, color: theme.colorScheme.error),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(_qrError!, style: theme.textTheme.labelSmall),
+                ),
+              ],
+            ),
+          ),
+        const Divider(height: 20),
+      ],
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -409,6 +583,22 @@ class _PairingSectionState extends State<PairingSection> {
     }
   }
 
+  /// 扫桌面上的二维码（通道 A，§3.2）：拿到 ticket（+ 地址）之后，
+  /// **6 位码仍要人来敲** —— 扫码解决"去哪、传什么"，输码解决"你是不是在旁边"。
+  Future<void> _scanQr() async {
+    final payload = await Navigator.of(context).push<PairingPayload>(
+      MaterialPageRoute(builder: (_) => const ScanPairingPage()),
+    );
+    if (payload == null || !mounted) return;
+    setState(() {
+      _error = null;
+      _scanned = payload;
+      _message = payload.urls.isEmpty
+          ? '扫到了配对码，但桌面没枚举出可达地址 —— 请手填桌面地址，再把桌面上那 6 位码敲进来。'
+          : '扫到了：地址已填好（${payload.urls.first}）。现在把桌面上那 6 位码敲进来。';
+    });
+  }
+
   /// 配对新电脑：举手 → 让人敲桌面上那 6 位码 → 换令牌 → **立刻存进密钥库**。
   Future<void> _pair() async {
     if (_pairing) return;
@@ -428,10 +618,17 @@ class _PairingSectionState extends State<PairingSection> {
       }
       // 身份必须与上行同步用的是**同一个** deviceId（生成两次 = 桌面当成两台手机）
       final identity = await PairingTokenStore().identity();
-      final req = await api.requestPairing(
-        deviceId: identity.deviceId,
-        deviceName: identity.deviceName,
-      );
+      final scanned = _scanned;
+      // 两条通道（§3.2）：**扫码那条桌面已经算好码了**，手机不用再举手；
+      // 手敲那条要先 requestPairing 让桌面把码显示出来。
+      String? requestId;
+      if (scanned == null) {
+        final req = await api.requestPairing(
+          deviceId: identity.deviceId,
+          deviceName: identity.deviceName,
+        );
+        requestId = req.requestId;
+      }
       if (!mounted) return;
       _codeController.clear();
       final code = await _askCode();
@@ -440,8 +637,9 @@ class _PairingSectionState extends State<PairingSection> {
         code: code,
         deviceId: identity.deviceId,
         deviceName: identity.deviceName,
-        // ticket 走不到手机上（§11.1）：`pair/request` 的响应里只有 requestId
-        requestId: req.requestId,
+        requestId: requestId,
+        // ticket 来自扫到的二维码；手敲那条走 requestId（ticket 到不了手机上）
+        ticket: scanned?.ticket,
       );
       // 令牌**只在这个响应里出现一次**：先存进密钥库，存下了才算配对成功。
       // 存失败就把它当场丢掉（它只活在这个局部变量里，不写进任何状态），并如实报错 ——
@@ -815,6 +1013,9 @@ class _PairingSectionState extends State<PairingSection> {
             )
           else
             for (final p in _pending) _pendingRow(theme, p),
+          const Divider(height: 20),
+          // 同一件事的第二条路（§9 拍板）：桌面出二维码，手机扫过去 —— 地址不用手抄
+          _qrPairingArea(theme),
         ],
       ),
     );
@@ -1003,6 +1204,12 @@ class _PairingSectionState extends State<PairingSection> {
                     icon: const Icon(Icons.link_off),
                     label: const Text('忘记这台电脑'),
                   ),
+                // 通道 A 的入口：桌面出二维码，手机扫过来（地址不用手抄）
+                OutlinedButton.icon(
+                  onPressed: _pairing ? null : _scanQr,
+                  icon: const Icon(Icons.qr_code_scanner),
+                  label: const Text('扫桌面上的二维码'),
+                ),
                 // 没接线时不显示：一颗点了没反应的按钮比没有按钮更糟
                 if (_paired && widget.onSyncCredentials != null)
                   OutlinedButton.icon(

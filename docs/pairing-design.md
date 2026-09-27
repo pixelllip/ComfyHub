@@ -370,7 +370,7 @@ comfyhub://pair?v=1&t=<ticket>&e=<expiresAt>&u=<base64url(urls 用 \n 连接)>
 | 2 | 码的 HMAC **以 ticket 为密钥**，不另存 secret | 另存一个 secret 多一处状态与一处泄漏面；以 ticket 为密钥则"作废 ticket"自动作废码 |
 | 3 | 手机密钥库**复用 `KeystoreCredentials`**（Kotlin 侧 AES/GCM + SharedPreferences），而不是 `flutter_secure_storage` | 总纲 M6 行（`implementation-master-plan.md:201`）写的是 `flutter_secure_storage`。选复用是因为它**已经在生产代码里**、且 Dart 侧不需要再碰密钥；代价是"自己写的加密"要在评审时单独看一遍。若评审更信任成熟库，改成 `flutter_secure_storage` 只影响第 3 步 |
 | 4 | 一机一令牌**在配对时就落地**（而不是 D10 的"以后再说"） | 代价是状态形状要升 `/2`；收益是吊销从第一天起就是"按设备"的 |
-| 5 | ✅ **已拍板（2026-09-27）：二维码由 Dart 侧画**（纯 Dart 包），后端只回 `qrPayload` 字符串 | 备选是后端出 PNG（少一个 Flutter 依赖、但后端多一条渲染路径，而且桌面之外的客户端拿不到）。选前端画的三条理由：① 前端自足、离线也能重画同一份 payload；② 后端只管"ticket + urls + 过期时间"这些**事实**，渲染失败不该是后端的锅；③ 渲染失败时**必须**退化成"把地址和 6 位码念给手机"的文本行（§3.1 第 6 步），这条退化路径本来就要写，交给前端最顺 |
+| 5 | ✅ **已拍板（2026-09-27）：二维码由 Dart 侧画**（`qr_flutter`，纯 Dart 包），后端**只回事实**（`ticket` / `urls[]` / `code` / 两个 `expiresAt`） | 备选是后端出 PNG，或后端直接回 `qrPayload` 字符串 —— **两种都否掉**：出 PNG 让后端多一条渲染路径；回 `qrPayload` 会把"格式"变成**两份实现**（Rust 编、Dart 解），而 §4.5 那串 URI 的字段（`v`/`t`/`e`/`u`）正是要靠**一份**实现守住的。现在编与解都在 `lib/core/pairing_payload.dart`，`PairingQrImage` 只负责画（白底那条纪律也在它里面）。渲染失败时**必须**退化成"把地址和 6 位码念给手机"的文本行（§3.1 第 6 步） |
 | 6 | ✅ **已拍板（2026-09-27）：手机扫码用 `mobile_scanner`，且相机不可用不算失败** | 相机是"锦上添花"的那条路：插件缺失 / 权限被拒 / 不是 ComfyHub 的码，一律**当场退回手敲 6 位码那条已经跑通的路**（B 通道），并说清原因。**不许**因为扫码不可用就让配对整条不可用 |
 
 ---

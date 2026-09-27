@@ -47,6 +47,8 @@ dependencies:
 
   # --- 用系统默认播放器打开（兜底） ---
   url_launcher: ^6.3.2
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^7.4.2
 
 dev_dependencies:
   flutter_test:

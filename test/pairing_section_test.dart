@@ -16,7 +16,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:viewer/core/inbound_auth_api.dart';
+import 'package:viewer/core/pairing_payload.dart';
 import 'package:viewer/pages/pairing_section.dart';
+import 'package:viewer/widgets/pairing_qr.dart';
 
 http.Response _json(Object? body) => http.Response(
       jsonEncode(body),
@@ -261,6 +263,89 @@ void main() {
 
     expect(tester.widget<SwitchListTile>(up).value, isFalse, reason: '回读为 false 就不许显示成开');
     expect(find.textContaining('这台后端还不支持'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  });
+
+  testWidgets('桌面：扫码配对的二维码里带的是 ticket + 地址，6 位码照样显示给人敲', (tester) async {
+    tester.view.physicalSize = const Size(900, 2200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    var expand = DateTime.now().toUtc().add(const Duration(minutes: 2)).toIso8601String();
+    final client = MockClient((request) async {
+      if (request.url.path == '/api/auth/pair/start') {
+        return _json({
+          'ticket': 'tk-42',
+          'code': '428193',
+          'expiresAt': expand,
+          'codeExpiresAt': expand,
+          'urls': ['http://192.168.1.23:51837', 'http://100.101.102.103:51837'],
+        });
+      }
+      if (request.url.path == '/api/auth/pair/pending') return _json({'pending': <Object>[]});
+      return _json({'enabled': true, 'hasToken': true, 'devices': <Object>[], 'pending': <Object>[]});
+    });
+
+    await tester.pumpWidget(_host(client: client));
+    await tester.pump();
+
+    // 二维码在「配对新手机」那张展开区里（收起时不该占位）
+    expect(find.byType(PairingQrImage), findsNothing);
+    await tester.tap(find.text('配对新手机'));
+    await tester.pump();
+
+    await tester.tap(find.text('生成二维码'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // ★ 画出来的二维码内容必须**能解回**同一份事实（不是随便画一个方块）
+    final qr = tester.widget<PairingQrImage>(find.byType(PairingQrImage));
+    final parsed = PairingPayload.parse(qr.payload.encode());
+    expect(parsed.ok, isTrue, reason: parsed.error);
+    expect(parsed.payload!.ticket, 'tk-42');
+    expect(parsed.payload!.urls, ['http://192.168.1.23:51837', 'http://100.101.102.103:51837']);
+    // 长期令牌不许出现在二维码里
+    expect(qr.payload.encode().contains('X-ComfyHub-Token'), isFalse);
+
+    // 6 位码 + 地址照样显示（人敲码那一步不能省）
+    expect(find.text('428193'), findsOneWidget);
+    expect(find.textContaining('192.168.1.23:51837'), findsWidgets);
+    expect(find.text('重新生成'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  });
+
+  testWidgets('桌面：旧后端没有扫码接口 → 如实说，并指向手敲码那条路', (tester) async {
+    tester.view.physicalSize = const Size(900, 2200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final client = MockClient((request) async {
+      if (request.url.path == '/api/auth/pair/start') {
+        return http.Response(
+          jsonEncode({'error': '接口不存在: /api/auth/pair/start'}),
+          501,
+          headers: const {'content-type': 'application/json; charset=utf-8'},
+        );
+      }
+      if (request.url.path == '/api/auth/pair/pending') return _json({'pending': <Object>[]});
+      return _json({'enabled': true, 'hasToken': true, 'devices': <Object>[], 'pending': <Object>[]});
+    });
+
+    await tester.pumpWidget(_host(client: client));
+    await tester.pump();
+    await tester.tap(find.text('配对新手机'));
+    await tester.pump();
+    await tester.tap(find.text('生成二维码'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.byType(PairingQrImage), findsNothing);
+    expect(find.textContaining('还没有"扫码配对"接口'), findsOneWidget);
+    expect(find.textContaining('手机举手'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
