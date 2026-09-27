@@ -176,7 +176,10 @@ class Handler(BaseHTTPRequestHandler):
         # 把人换上去"）：给了就多一轮 `comfy_use_media` 把阶段一的产物投进去，
         # 并把 `20.image` 指向它、`denoise` 降到 0.4~0.6 融合（不给就是"纯提示词重绘"）。
         if "编辑图片" in user_text:
-            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 13)
+            # ⚠ maxsplit 必须 >= 字段数-1：给少了，**最后一个字段会被并进前一个**里
+            #   （实测：matte 那个 `1` 被并进 light，工具收到 `light="none|1"` → INVALID_ARGUMENT）。
+            #   现在 15 个字段 → maxsplit=14。
+            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 14)
             attachment_id = fields[0].strip() if fields else ""
             workflow_path = fields[1].strip() if len(fields) > 1 else ""
             denoise = float(fields[2].strip()) if len(fields) > 2 and fields[2].strip() else 1.0
@@ -203,6 +206,14 @@ class Handler(BaseHTTPRequestHandler):
             bg_color = tail[4].strip() if len(tail) > 4 and tail[4].strip() else ""
             # 第 14 个字段：light（auto / left / right / top / bottom / none）
             light = tail[5].strip() if len(tail) > 5 and tail[5].strip() else ""
+            # 第 15 个字段：matte（`1` = 走 **AI 软遮罩**那一档，2026-09-27）
+            #   · `comfy_make_mask(matteSource="model")` —— 工具**不写遮罩**，只把人物图
+            #     那份像素洗干净（反混 + 两侧去溢色），回 `personFilename`；
+            #   · 工作流是 `comfyhub_paste_person_matte_anima.json`（抠图节点在**工作流里**，
+            #     ring 也由 GrowMask+MaskComposite 从同一份 alpha 现算）；
+            #   · 所以**一个 LoadImageMask 覆盖都不该写**（那份工作流没有 12 / 26）——
+            #     这正是这一档要验的事。
+            matte = bool(tail[6].strip()) if len(tail) > 6 and tail[6].strip() else False
             tool_msgs = [m for m in messages if m.get("role") == "tool"]
             rounds = 0
             if len(tool_msgs) == 0:
@@ -229,6 +240,12 @@ class Handler(BaseHTTPRequestHandler):
                     "feather": feather,
                     "filename": "edit-mask.png",
                 }
+                if matte:
+                    # ★ AI 软遮罩那一档：遮罩由**工作流里的抠图节点**现算。
+                    #   工具这一档**不写遮罩也不写 ring**，只把人物图那份像素洗干净
+                    #   （反混 + 两侧去溢色）——溢色像素在剪影**外面**，只往内压会留一圈淡背景色。
+                    mask_args.pop("filename", None)
+                    mask_args["matteSource"] = "model"
                 if person:
                     # ★ 贴人物图时遮罩要**照人物的形状抠**（用户 2026-09-26 提的）：
                     #   遮罩给矩形的话，ImageCompositeMasked 会把人物图那块矩形
@@ -241,7 +258,9 @@ class Handler(BaseHTTPRequestHandler):
                     mask_args["region"] = "full"
                     # ring：**只在人物外面一圈重绘**（工作流得有两个 LoadImageMask）。
                     # 这是"嵌进去会改变画风"的正解 —— 人物像素原样贴上去，模型只融接缝。
-                    if ring > 0:
+                    # ⚠ matte 那一档**不传** ring：那份工作流的 ring 由 GrowMask+MaskComposite
+                    #   从同一份 alpha 现算（传了也没人接）。
+                    if ring > 0 and not matte:
                         mask_args["ring"] = ring
                     if light:
                         # ★ 按背景环境改新图层的光照/阴影方向（用户最后一个要求）：
@@ -263,14 +282,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             mask = self._tool_json(tool_msgs[rounds])
             if len(tool_msgs) == rounds + 1:
-                # 摆放/抠形状之后的**人物图文件名**：工具把像素也一起搬了，这里必须跟着换
-                person_for_submit = mask.get("placedSubjectFilename") or person
+                # 摆放/抠形状之后的**人物图文件名**：工具把像素也一起搬了，这里必须跟着换。
+                # matte 那一档回的是 `personFilename`（**已经被洗过像素**的那一份）。
+                person_for_submit = (mask.get("personFilename")
+                                     or mask.get("placedSubjectFilename") or person)
                 self._stream_tool("comfy_submit", {
                     "workflowPath": workflow_path,
                     "overrides": self._inpaint_overrides(
-                        workflow_path, placed.get("filename"), mask.get("filename"),
+                        workflow_path, placed.get("filename"),
+                        None if matte else mask.get("filename"),
                         mask.get("width"), mask.get("height"), prompt, denoise,
-                        person_for_submit, cfg, mask.get("ringFilename")),
+                        person_for_submit, cfg,
+                        None if matte else mask.get("ringFilename")),
                     "title": "E2E 图像编辑验证",
                     "waitSeconds": 300,
                 })

@@ -82,6 +82,10 @@ param(
     [string]$PersonBackground = '',
     # **按背景环境改新图层的光照/阴影方向**（`auto` = 从底图估；也可 `left`/`right`/`top`/`bottom`/`none`）
     [string]$Light = 'none',
+    # **AI 软遮罩那一档**（2026-09-27）：贴人物图的首选路 —— 遮罩由工作流里的
+    # `easy imageRemBg` 现算（连续 alpha），Rust 侧只把人物图那份像素洗干净。
+    # 它**需要人物图**（没有 subjectFilename 就没得抠），所以必须走两阶段 / 给 -PersonMediaId。
+    [switch]$Matte,
     # 阶段一的提示词（要人物 + 干净背景）
     [string]$PersonPrompt = '',
     # 贴人物图时的融合档（0.4~0.6；高了人物会变样，低了接缝明显）
@@ -226,8 +230,19 @@ try {
         [math]::Round((($stats.devices | Select-Object -First 1).vram_free / 1GB), 1) + "GB") 'DarkGray'
 
     $workflowPath = Join-Path $ProjectRoot "comfyui\workflows\comfyhub_inpaint_$Model.json"
-    Check "自带 inpaint 工作流在（$Model）" (Test-Path $workflowPath) $workflowPath
+    if ($Matte) {
+        # **AI 软遮罩那一档**（2026-09-27）：贴人物图的首选路。
+        # 遮罩由工作流里的 `easy imageRemBg` 现算，所以这份工作流**没有** 12 / 26
+        # 两个 LoadImageMask —— 一个遮罩覆盖都不该写（这一档要验的正是这件事）。
+        $workflowPath = Join-Path $ProjectRoot 'comfyui\workflows\comfyhub_paste_person_matte_anima.json'
+    }
+    Check "自带工作流在（$(if ($Matte) { 'matte' } else { $Model })）" (Test-Path $workflowPath) $workflowPath
     if (-not (Test-Path $workflowPath)) { exit 1 }
+    if ($Matte -and -not $TwoStage -and $PersonMediaId -le 0) {
+        # matte 档要抠的就是**人物图** —— 没有它就没得抠（`comfy_make_mask` 会如实报缺 subjectFilename）
+        Say '  -Matte 要有人物图：加 -TwoStage（先生成人物）或 -PersonMediaId <画廊产物 id>' 'Red'
+        exit 1
+    }
 
     if (-not $RefPhoto) {
         # 默认用仓库里那份参考照片；没有就退回"画廊里最新的一张图片产物"
@@ -383,7 +398,8 @@ try {
     $cfgField = if ($Cfg -gt 0) { "$Cfg" } else { '' }
     $placeXField = if ($PlaceX -ge 0) { "$PlaceX" } else { '' }
     $placeYField = if ($PlaceY -ge 0) { "$PlaceY" } else { '' }
-    $runText = "编辑图片 $($script:AttachmentId)|$workflowField|$effectiveDenoise|$Region|$Feather|$Prompt|$PersonMediaId|$cfgField|$Ring|$PlaceScale|$placeXField|$placeYField|$BgColor|$Light"
+    $matteField = if ($Matte) { '1' } else { '' }
+    $runText = "编辑图片 $($script:AttachmentId)|$workflowField|$effectiveDenoise|$Region|$Feather|$Prompt|$PersonMediaId|$cfgField|$Ring|$PlaceScale|$placeXField|$placeYField|$BgColor|$Light|$matteField"
     $run = Invoke-Api 'POST' "/api/ai/conversations/$($conv.id)/runs" @{
         text = $runText; providerId = $ProviderId; modelId = 'fake-edit-model'
     }
@@ -435,35 +451,51 @@ try {
         Check '投放的文件与上传的底图**逐字节相同**' $same '拷贝过程改了内容'
     }
 
-    Check '遮罩尺寸 = 画布尺寸' ($mask -and $mask.width -eq $canvasW -and $mask.height -eq $canvasH) `
-        "遮罩 $($mask.width)x$($mask.height) / 画布 ${canvasW}x${canvasH}"
-    Check '遮罩如实报了白区语义（白 = 重绘区）' ($mask -and $mask.whiteMeans) $mask.whiteMeans
-    $maskPath = Join-Path $instanceInput $mask.filename
-    Check '遮罩文件真的在盘上' (Test-Path $maskPath) $maskPath
-    if (Test-Path $maskPath) {
-        $maskImage = [System.Drawing.Bitmap]::FromFile($maskPath)
-        $parts = $Region.Split(',') | ForEach-Object { [double]$_.Trim() }
-        $inX = [int]($parts[0] * $canvasW) + [int]($parts[2] * $canvasW / 2)
-        $inY = [int]($parts[1] * $canvasH) + [int]($parts[3] * $canvasH / 2)
-        $insidePixel = $maskImage.GetPixel($inX, $inY).R
-        $outsidePixel = $maskImage.GetPixel(2, 2).R
-        $maskImage.Dispose()
-        if ($mask.mode -eq 'subject') {
-            # 剪影档：形状由人物图决定，**不能**再按 region 矩形取点
-            # （实测：拿矩形中心当"重绘区"，那里可能正好是剪影边缘 → 假红）
-            Check '剪影遮罩有内容（占比在 0.5%~90% 之间）' `
-                ($mask.subjectRatio -gt 0.005 -and $mask.subjectRatio -lt 0.9) "subjectRatio=$($mask.subjectRatio)"
-            Check '剪影遮罩如实报了背景色与来源图' `
-                ($mask.background -and $mask.subjectFilename) ($mask | ConvertTo-Json -Compress)
-            Check '剪影遮罩在画布四角是黑的（白底没漏进来）' ($outsidePixel -lt 40) "角落像素值 $outsidePixel"
-        } else {
-            Check '遮罩在重绘区是白的' ($insidePixel -gt 200) "重绘区像素值 $insidePixel"
-            Check '遮罩在保留区是黑的' ($outsidePixel -lt 40) "保留区像素值 $outsidePixel"
+    if ($Matte) {
+        # ★ **AI 软遮罩那一档**（2026-09-27）：工具**不写遮罩** —— 真正的 alpha 由工作流里的
+        #   `easy imageRemBg` 现算，它只回 `personFilename`（那份像素已被反混 + 两侧去溢色洗过）。
+        #   所以这里一条遮罩文件断言都不该有，取而代之的是"它**没**写遮罩、给了洗过的人物图"。
+        Check 'matte 档如实报了 matteSource=model' ($mask -and $mask.matteSource -eq 'model') ($mask | ConvertTo-Json -Compress)
+        Check 'matte 档**不写**合成遮罩（maskGenerated=false）' ($mask.maskGenerated -eq $false) "$($mask.maskGenerated)"
+        Check 'matte 档不给遮罩文件名' (-not $mask.filename) "$($mask.filename)"
+        Check 'matte 档回了 personFilename（那才是 20.image 该填的）' ($mask.personFilename) "$($mask.personFilename)"
+        Check 'matte 档的 hint 指向 matte 工作流' ($mask.hint -match 'comfyhub_paste_person_matte_anima\.json') $mask.hint
+        Check 'matte 档的 hint 明说**不要**覆盖 LoadImageMask' ($mask.hint -match '不要' -and $mask.hint -match 'LoadImageMask') $mask.hint
+        Check 'matte 档尺寸 = 画布尺寸（ImageScale 照它覆盖）' `
+            ($mask.width -eq $canvasW -and $mask.height -eq $canvasH) "$($mask.width)x$($mask.height)"
+        Say "  遮罩来源：AI 软遮罩（工作流里的抠图节点）｜人物图（已洗过）：$($mask.personFilename)" 'White'
+    } else {
+        Check '遮罩尺寸 = 画布尺寸' ($mask -and $mask.width -eq $canvasW -and $mask.height -eq $canvasH) `
+            "遮罩 $($mask.width)x$($mask.height) / 画布 ${canvasW}x${canvasH}"
+        Check '遮罩如实报了白区语义（白 = 重绘区）' ($mask -and $mask.whiteMeans) $mask.whiteMeans
+        $maskPath = Join-Path $instanceInput $mask.filename
+        Check '遮罩文件真的在盘上' (Test-Path $maskPath) $maskPath
+        if (Test-Path $maskPath) {
+            $maskImage = [System.Drawing.Bitmap]::FromFile($maskPath)
+            $parts = $Region.Split(',') | ForEach-Object { [double]$_.Trim() }
+            $inX = [int]($parts[0] * $canvasW) + [int]($parts[2] * $canvasW / 2)
+            $inY = [int]($parts[1] * $canvasH) + [int]($parts[3] * $canvasH / 2)
+            $insidePixel = $maskImage.GetPixel($inX, $inY).R
+            $outsidePixel = $maskImage.GetPixel(2, 2).R
+            $maskImage.Dispose()
+            if ($mask.mode -eq 'subject') {
+                # 剪影档：形状由人物图决定，**不能**再按 region 矩形取点
+                # （实测：拿矩形中心当"重绘区"，那里可能正好是剪影边缘 → 假红）
+                Check '剪影遮罩有内容（占比在 0.5%~90% 之间）' `
+                    ($mask.subjectRatio -gt 0.005 -and $mask.subjectRatio -lt 0.9) "subjectRatio=$($mask.subjectRatio)"
+                Check '剪影遮罩如实报了背景色与来源图' `
+                    ($mask.background -and $mask.subjectFilename) ($mask | ConvertTo-Json -Compress)
+                Check '剪影遮罩在画布四角是黑的（白底没漏进来）' ($outsidePixel -lt 40) "角落像素值 $outsidePixel"
+            } else {
+                Check '遮罩在重绘区是白的' ($insidePixel -gt 200) "重绘区像素值 $insidePixel"
+                Check '遮罩在保留区是黑的' ($outsidePixel -lt 40) "保留区像素值 $outsidePixel"
+            }
         }
     }
 
     # `ring`：只圈人物外面一圈（人物像素一个都不动）—— 文件要在，而且只能是**薄薄一圈**
-    if ($Ring -gt 0) {
+    # ⚠ matte 那一档不传 ring（它的 ring 由工作流里的 GrowMask+MaskComposite 现算）
+    if ($Ring -gt 0 -and -not $Matte) {
         $ringPath = Join-Path $instanceInput $mask.ringFilename
         Check '环形遮罩文件真的在盘上' ($mask.ringFilename -and (Test-Path $ringPath)) "$($mask.ringFilename)"
         if (Test-Path $ringPath) {
@@ -502,15 +534,30 @@ try {
         $applied = @($submitted.appliedOverrides)
         # ⚠ **摆放之后人物图换文件名了**（工具把像素与遮罩一起搬，回了 `placedSubjectFilename`）：
         #   断言要比这个新名字，拿原图名去比就是假红（实测踩过）。
-        $expectPerson = if ($mask.placedSubjectFilename) { $mask.placedSubjectFilename } else { $person.filename }
+        #   matte 那一档回的是 `personFilename`（**已被洗过像素**的那一份）。
+        $expectPerson = if ($mask.personFilename) { $mask.personFilename }
+                        elseif ($mask.placedSubjectFilename) { $mask.placedSubjectFilename }
+                        else { $person.filename }
         $personKey = @($applied | Where-Object { $_ -match ('^\d+\.image ← ' + [regex]::Escape($expectPerson) + '$') })
         Check '人物图覆盖写进了工作流（LoadImage 两份：底图 + 人物图）' ($personKey.Count -ge 1) ($applied -join ' | ')
+        if ($Matte) {
+            # ★ 这一档的**核心断言**：matte 工作流里**没有 LoadImageMask**（遮罩是节点输出），
+            #   所以任何一条 `N.image ← …` 只允许落在 LoadImage 节点（10 / 20）上。
+            #   要是有人把 `12.image` / `26.image` 也写进 overrides，说明它还在走旧路。
+            $imageOverrides = @($applied | Where-Object { $_ -match '^\d+\.image ← ' })
+            $onlyLoadImage = @($imageOverrides | Where-Object { $_ -notmatch '^(10|20)\.image ← ' })
+            Check 'matte 档只覆盖 LoadImage（10 / 20），一个 LoadImageMask 都没覆盖' `
+                ($onlyLoadImage.Count -eq 0) ($imageOverrides -join ' | ')
+            Check "20.image 用的是**洗过**的人物图 $expectPerson" `
+                (@($applied | Where-Object { $_ -match ('^20\.image ← ' + [regex]::Escape($expectPerson) + '$') }).Count -ge 1) `
+                ($applied -join ' | ')
+        }
         if ($mask.placedSubjectFilename) {
             Check '摆放用的是搬过的新人物图（不是原图）' `
                 (@($applied | Where-Object { $_ -match ('^\d+\.image ← ' + [regex]::Escape($mask.placedSubjectFilename) + '$') }).Count -ge 1) `
                 ($applied -join ' | ')
         }
-        if ($Ring -gt 0) {
+        if ($Ring -gt 0 -and -not $Matte) {
             Check '重绘区用的是 ring 遮罩（第二个 LoadImageMask）' `
                 (@($applied | Where-Object { $_ -match ('^\d+\.image ← ' + [regex]::Escape($mask.ringFilename) + '$') }).Count -ge 1) `
                 ($applied -join ' | ')
@@ -542,6 +589,83 @@ try {
             "产物 $($out.Width)x$($out.Height)"
         $cmpW = [Math]::Min($canvasW, $out.Width)
         $cmpH = [Math]::Min($canvasH, $out.Height)
+        if ($Matte) {
+            # matte 档**没有遮罩文件**（真正的 alpha 在工作流里）—— 量尺跟着换，但仍然量化：
+            #   ① 用**人物图**现推一个近似剪影（同"颜色离背景多远"那套口径，**只当验收用**）；
+            #   ② 人物区域必须**明显变了**（人真的被贴上去了）；
+            #   ③ **远处背景**必须基本没动 —— ⚠ 近处背景本来就会变：这一档要重绘
+            #      人物外面 14 像素那圈（ring 由 GrowMask+MaskComposite 现算），拿近处当判据是假红。
+            $personPath = Join-Path $instanceInput $expectPerson
+            $personBmp = if (Test-Path $personPath) { [System.Drawing.Bitmap]::FromFile($personPath) } else { $null }
+            Check '人物图（洗过的那份）在盘上，能当量尺' ($null -ne $personBmp) $personPath
+            $bgCorner = if ($personBmp) { $personBmp.GetPixel(1, 1) } else { $null }
+            $stride = 4
+            $gw = [int][Math]::Ceiling($cmpW / $stride)
+            $gh = [int][Math]::Ceiling($cmpH / $stride)
+            # ① 近似剪影 + ② 把它**膨胀 24 像素**（> ring 的 14）——"远处背景"就是膨胀之外的地方。
+            # ⚠ **不能用"画面外圈 15%"当远处背景**：这个人物是**全长双马尾**，头发几乎顶到左右两边，
+            #   外圈那条带里有一大半其实是人物 / 环 —— 实测假红（远处背景 12.27）。
+            $sil = New-Object 'bool[,]' $gw, $gh
+            if ($personBmp) {
+                for ($gy = 0; $gy -lt $gh; $gy++) {
+                    for ($gx = 0; $gx -lt $gw; $gx++) {
+                        $px = [Math]::Min($cmpW - 1, $gx * $stride)
+                        $py = [Math]::Min($cmpH - 1, $gy * $stride)
+                        $pc = $personBmp.GetPixel($px, $py)
+                        $dist = [Math]::Abs($pc.R - $bgCorner.R) + [Math]::Abs($pc.G - $bgCorner.G) + [Math]::Abs($pc.B - $bgCorner.B)
+                        if ($dist -gt 90) { $sil[$gx, $gy] = $true }
+                    }
+                }
+            }
+            # 便宜的可分离膨胀（横一遍、竖一遍）：半径 R 格 = R*stride 像素
+            $R = [int][Math]::Ceiling(24 / $stride)
+            $tmp = New-Object 'bool[,]' $gw, $gh
+            for ($gy = 0; $gy -lt $gh; $gy++) {
+                for ($gx = 0; $gx -lt $gw; $gx++) {
+                    $hit = $false
+                    for ($k = -$R; $k -le $R -and -not $hit; $k++) {
+                        $nx = $gx + $k
+                        if ($nx -ge 0 -and $nx -lt $gw -and $sil[$nx, $gy]) { $hit = $true }
+                    }
+                    $tmp[$gx, $gy] = $hit
+                }
+            }
+            $near = New-Object 'bool[,]' $gw, $gh
+            for ($gx = 0; $gx -lt $gw; $gx++) {
+                for ($gy = 0; $gy -lt $gh; $gy++) {
+                    $hit = $false
+                    for ($k = -$R; $k -le $R -and -not $hit; $k++) {
+                        $ny = $gy + $k
+                        if ($ny -ge 0 -and $ny -lt $gh -and $tmp[$gx, $ny]) { $hit = $true }
+                    }
+                    $near[$gx, $gy] = $hit
+                }
+            }
+            $pSum = 0.0; $pN = 0; $farSum = 0.0; $farN = 0; $allSum = 0.0; $allN = 0
+            for ($py = 0; $py -lt $cmpH; $py += $stride) {
+                $gy = [int]($py / $stride)
+                for ($px = 0; $px -lt $cmpW; $px += $stride) {
+                    $gx = [int]($px / $stride)
+                    $a = $canvas.GetPixel($px, $py)
+                    $b = $out.GetPixel($px, $py)
+                    $d = ([Math]::Abs($a.R - $b.R) + [Math]::Abs($a.G - $b.G) + [Math]::Abs($a.B - $b.B)) / 3.0
+                    $allSum += $d; $allN++
+                    if ($sil[$gx, $gy]) { $pSum += $d; $pN++ }
+                    if (-not $near[$gx, $gy]) { $farSum += $d; $farN++ }
+                }
+            }
+            if ($personBmp) { $personBmp.Dispose() }
+            $allAvg = [Math]::Round($allSum / [Math]::Max(1, $allN), 2)
+            $pAvg = if ($pN) { [Math]::Round($pSum / $pN, 2) } else { -1 }
+            $farAvg = if ($farN) { [Math]::Round($farSum / $farN, 2) } else { -1 }
+            Say ("  人物区域平均像素差：$pAvg / 255（近似剪影 $pN 个采样）") 'White'
+            Say ("  远处背景平均像素差：$farAvg / 255（离剪影 >24 像素，$farN 个采样）") 'White'
+            Check '远处背景采样够多（判据不是空跑）' ($farN -gt 500) $farN
+            Check '产物与底图不同（真的跑了一遍）' ($allAvg -gt 0.5) $allAvg
+            Check '人物区域**真的被贴上去了**（平均差 > 12）' ($pAvg -gt 12) $pAvg
+            Check '远处背景**基本没动**（平均差 < 8；matte 只重绘人物外 14 像素那圈）' ($farAvg -ge 0 -and $farAvg -lt 8) $farAvg
+            $out.Dispose()
+        } else {
         # ⚠ **按遮罩本身**分内外，不按 region 矩形：`mode="subject"` 的修改区是**人物剪影**
         #   （比矩形宽/窄都可能），拿矩形当判据会得到"遮罩外变了 68.95"这种假红（实测踩过）。
         #   这也正是这个特性唯一的不变量：**白 = 重绘区、黑 = 原样保留**。
@@ -578,6 +702,7 @@ try {
         Check '遮罩外**基本没动**（平均差 < 8）' ($outAvg -ge 0 -and $outAvg -lt 8) $outAvg
         Check '内外差异拉开（遮罩内至少是遮罩外的 2 倍）' ($inAvg -gt $outAvg * 2) "内 $inAvg / 外 $outAvg"
         $out.Dispose()
+        }
     }
 
     # --- 9. 画廊产物也能投进 input（两阶段编辑的第二阶段）-----------------

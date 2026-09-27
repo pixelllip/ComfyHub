@@ -2629,11 +2629,11 @@ RMBG-1.4 最差但**快一个数量级**。**颜色抠图的软像素是 0** —
 
 | # | 做什么 | 关键点 / 坑 |
 | --- | --- | --- |
-| 1 | **新工作流** `comfyhub_paste_person_matte_anima.json` | ✅ **已建（2026-09-27）**：`21(ImageScale) → 27(easy imageRemBg, rem_mode=BEN2, image_output="Hide") → 22.mask ← 27.MASK`；**ring 也从同一份 alpha 现算**（`28 = GrowMask(expand=14)` → `29 = MaskComposite(subtract)` = 长出来的那圈 **减去** 遮罩本身），不再要 Rust 落盘 ring 文件。**静态核过**：节点名 / 输入名 / 链接都对着本机 ComfyUI 源码核了一遍（`scripts\matte-probe.ps1` 是另一把尺子）。⚠ **还没在活实例上端到端跑过** —— 第一次跑要如实回报结果；`comfy_check_inputs` 这类预检工具当前后端**没有** |
+| 1 | **新工作流** `comfyhub_paste_person_matte_anima.json` | ✅ **已建（2026-09-27）**：`21(ImageScale) → 27(easy imageRemBg, rem_mode=BEN2, image_output="Hide") → 22.mask ← 27.MASK`；**ring 也从同一份 alpha 现算**（`28 = GrowMask(expand=14)` → `29 = MaskComposite(subtract)` = 长出来的那圈 **减去** 遮罩本身），不再要 Rust 落盘 ring 文件。**静态核过 + 活实例跑通**（2026-09-27）：节点名 / 输入名 / 链接对着本机 ComfyUI 源码核了一遍，又在真实例（RTX 4060 / ComfyUI Desktop）上端到端跑通 —— `easy imageRemBg` 的四个必填 + 三个可选输入、`output=[IMAGE, MASK]`、`rem_mode` 含 `BEN2`、`image_output` 含 `Hide` **全部与工作流一致**（对着 `/object_info` 核的） |
 | 2 | **Rust `comfy_make_mask` 加 `matteSource`**（`color` 默认 / `model`） | ✅ **已做（2026-09-27）**：`model` 档**不写合成遮罩、不写 ring**（遮罩由工作流的抠图节点现算），颜色剪影只当**定位器**（所以跳过 `drop_blended_edge` / `shrink`，免得把定位器往里啃）；只做"洗人物图那一份像素"（反混 + **两侧**去溢色），回 `personFilename`。顺带把 `despill_edges` 改成**两侧带**（`despill_band`）—— 默认路径一起修，实测绿边 3.36/max 32 → **0.00/max 0**；并修掉"反混结果只在 despill 为真时才落盘"（白底那条路的反混被算出来又丢掉）。⚠ `mode="subject"` 照旧保留（实例上没有抠图节点时它仍是唯一近似） |
 | 2b | **`comfy_get_status` 报抠图模型在不在**（`mattingModels`） | ✅ **已做（2026-09-27）**：skill 原来让模型"自己找 ComfyUI 的 models 目录"，而它**找不到**（`comfy_env_report` 未搬、`inputDir` 指向的是**共享**那份、模型却在**安装**那份）。现在 `comfy_get_status` 返回 `mattingModels{usable, checked[每根各一行], download, note}` —— 真机实测：`ComfyUI-Shared\models\rembg` 空、`ComfyUI-Installs\ComfyUI\ComfyUI\models\rembg` 里两个模型都在，`usable=true`。⚠ 这个键**只加在工具返回里**，不加在 `/api/capture/status` 那个端点（它的键集合是界面契约，有用例钉着） |
 | 3 | **skill `inpaint-composite`** | ✅ **已改（2026-09-27，version 3）**：贴人物图**首选** matte 那份工作流；新增"**抠图：先查模型、缺了指引用户下载**"整节（下哪个 / 体积 / 目标路径 / 为什么不能让它静默下载）；把颜色抠图的实测代价（掉 18.4% 前景）写进去；并把两处**执行不了**的旧指引（`comfy_env_report` / `comfy_check_inputs`）换掉 —— 先换成 `list_dir` + 问用户，再在 2b 落地后换成 **`comfy_get_status` 的 `mattingModels`**。另补一节"**有两条路比抠图更稳**"（§15.3 那两条）放在抠图之前 |
-| 4 | **e2e 加一档 `-Matte`** | ⛔ **未做**：断言用 §16.3 的指标 —— **软像素占比 > 1%**、**平灰底边界溢色 ≈ 0**、**前景占比不低于纯合成档**。⚠ 它要**真 ComfyUI 在跑**才能写一版跑得通的（跑一次才知道从产物里能量到什么），所以留在"ComfyUI 起来之后"那一批 |
+| 4 | **e2e 加一档 `-Matte`** | ✅ **已做并跑通（2026-09-27）**：`scripts\e2e-image-edit-test.ps1 -Matte -PersonMediaId <id>` —— **39 项全绿**。它验的是"这一档**没有遮罩文件**"这件事本身：`matteSource=model` / `maskGenerated=false` / 不给 `filename` / 回了 `personFilename` / hint 指向 matte 工作流且明说别覆盖遮罩 / **`appliedOverrides` 里只有 `10.image` 与 `20.image`、一个 LoadImageMask 都没覆盖**。量化验收（真人真图，真例）：**人物区域 109.54/255**（人贴上去了）、**离剪影 >24 像素的远处背景 3.59/255**（底图没被动，与旧路的 3.74 同档）。⚠ 一个踩过的坑记在用例注释里：**不能用"画面外圈 15%"当远处背景** —— 这个人物是全长双马尾、头发几乎顶到左右两边，那条带里有一大半其实是人物/环（实测假红 12.27）；正确做法是把近似剪影**膨胀 24 像素**（> ring 的 14）再取外面 |
 
 ### 16.6 复现方式（这套尺子已经进版本库）
 
@@ -2662,4 +2662,4 @@ subject_mask_from_image(tolerance=0.12) → drop_blended_edge(band=3, tolerance=
 | 长边 > 1024 的人物图 | ⚠ 未处理：BEN2 / RMBG-1.4 内部都固定 1024 推理，发丝会被降采样 |
 | 跨画风（动画人 + 照片景）本身仍违和 | ⚠ 那是**阶段一底模**的事，不是抠图能解决的 |
 | **§15.3 那两条"不抠图"的路要写进 skill 当首选** | ⛔ 没做：① **阶段一就按最终背景生成**（同底模同场景，阶段二 `denoise 0.35~0.5` 直接融）—— **完全不需要抠图**，没有边缘问题；② **`denoise 0` 纯合成**（一个像素都不改，画风 100% 保留，前提是 alpha 要准 —— 软遮罩已解决）。skill v2 现在只是把 matte 提到首选，还**没**把这两条写成"能用就别抠" |
-| **matte 工作流的活实例验收** | ⛔ 没做：文件已在版本库、静态核过，但**一次都没在真实例上跑过**（写这段时 8188 没在跑）。第一次跑要如实回报 |
+| **matte 工作流的活实例验收** | ✅ **已做（2026-09-27）**：真实例（ComfyUI Desktop / RTX 4060）上 `scripts\e2e-image-edit-test.ps1 -Matte -PersonMediaId 301 -PersonDenoise 0.4 -BgColor green` → **39 项全绿**；产物在 `.run\matte-live\out.png`（夜景里那位双马尾，**细发丝与五官都在、没有绿边、没有白框**），变化图 `diff-heat.png` 上只有人物是红的、轮廓一圈亮边（ring 融接缝）、**其余整片深蓝**（背景没被动） |
