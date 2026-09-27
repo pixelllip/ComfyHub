@@ -593,9 +593,9 @@ pub async fn execute(
         // LoadImage / LoadImageMask **只能读它自己的 input 目录**，而画廊产物与用户附件
         // 都不在那里 —— 这两件工具是唯一的投放通道，`comfy_make_mask` 则解决
         // "手机 / 平板上画不出遮罩"这件事（与 Kotlin `AiImageEdit` 逐条对照）。
-        "comfy_use_media" => crate::image_edit::tool_use_media(state, arguments),
-        "comfy_use_attachment" => crate::image_edit::tool_use_attachment(state, arguments),
-        "comfy_make_mask" => crate::image_edit::tool_make_mask(state, arguments),
+        "comfy_use_media" => crate::image_edit::tool_use_media(state, arguments).await,
+        "comfy_use_attachment" => crate::image_edit::tool_use_attachment(state, arguments).await,
+        "comfy_make_mask" => crate::image_edit::tool_make_mask(state, arguments).await,
         // ---- 资料库两件（P4 第 46 步：角色卡）--------------------------------
         // O7/O8 的落点：写角色之前**先查本机**（库里那张卡 / 那条提示词的 tag 栈），
         // 而不是凭印象编 —— 现场教训是"把 shinku 当成 iroi 写了两版废图"。

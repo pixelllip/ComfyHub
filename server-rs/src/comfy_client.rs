@@ -44,6 +44,100 @@ pub async fn queue(comfy_url: &str) -> Result<QueueSnapshot, String> {
     })
 }
 
+/// `POST {comfy_url}/upload/image`：把一段字节交给 **ComfyUI 自己**写进它的 `input` 目录，
+/// 返回它在那边真实可用的**裸文件名**。
+///
+/// # 为什么必须有这条路（2026-09-28 用户 bug「comfy_use_attachment 总是失败」）
+///
+/// 直写 `input` 目录在真机上会拿到 `拒绝访问 (os error 5)`：后端进程没有那个目录的写权限，
+/// 而 **ComfyUI 自己是有的** —— 同一次会话里 MCP 的 `upload_file`（走的就是这条 HTTP）成功。
+/// 所以投放/写遮罩**一律先让 ComfyUI 自己写**，直写只当兜底（ComfyUI 没起来时要能用）。
+/// 顺带解决另外两件事：ComfyUI 不在本机、或它的 input 不在我们推出来的那个路径时，
+/// 直写根本无从谈起 —— 只有这条 HTTP 是永远成立的。
+///
+/// 手写 multipart 而不是开 `reqwest` 的 `multipart` feature：那个 feature 会多拖一个
+/// 依赖（`mime_guess`），而这里要发的形状是固定的四个字段，自己拼更省事也更好断言。
+pub async fn upload_image(
+    comfy_url: &str,
+    filename: &str,
+    subfolder: &str,
+    bytes: &[u8],
+) -> Result<String, String> {
+    let base = comfy_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err("ComfyUI 地址没配置".to_string());
+    }
+    // 边界串只要**不与正文撞**即可：用纳秒时间戳，够随机也够可读
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let boundary = format!("----comfyhub{stamp:x}");
+    // ⚠ 文件名只放 ASCII 安全字符（`input_filename_for` 已经保证）：multipart 头里的
+    // 非 ASCII 要么被服务端按 latin1 解出乱码，要么直接 400
+    let safe: String = filename
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .collect();
+    let safe = if safe.is_empty() { "image.png".to_string() } else { safe };
+
+    let mut body: Vec<u8> = Vec::with_capacity(bytes.len() + 512);
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"image\"; filename=\"{safe}\"\r\n").as_bytes(),
+    );
+    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(b"\r\n");
+    push_form_field(&mut body, &boundary, "type", "input");
+    push_form_field(&mut body, &boundary, "subfolder", subfolder);
+    push_form_field(&mut body, &boundary, "overwrite", "true");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let url = format!("{base}/upload/image");
+    let host = host_of(&url);
+    let client = crate::upstream::client_for(&host)
+        .map_err(|e| format!("HTTP 客户端创建失败：{}", e.human()))?;
+    let response = client
+        .post(&url)
+        .header("Content-Type", format!("multipart/form-data; boundary={boundary}"))
+        .header("Accept", "application/json")
+        // 几十 MB 的图在慢盘上要几十秒；20 秒会把正常情况判成失败
+        .timeout(std::time::Duration::from_secs(120))
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| friendly_error(&e, &url))?;
+    let status = response.status();
+    let text = response.text().await.map_err(|e| format!("读响应失败：{e}"))?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}：{}", status.as_u16(), take_chars(&text, 300)));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("响应不是 JSON：{e}（原文：{}）", take_chars(&text, 200)))?;
+    let name = parsed
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| format!("上传响应里没有 name：{}", take_chars(&text, 200)))?;
+    // 返回给模型的必须是 **LoadImage 认得的那串**：ComfyUI 把 subfolder 与原文件名分开回，
+    // 而 `LoadImage.image` 在有子目录时要写成 `子目录/文件名`。我们恒用空 subfolder，
+    // 但这条兜住"ComfyUI 自己给了子目录"的情况。
+    let sub = parsed.get("subfolder").and_then(|v| v.as_str()).unwrap_or("").trim();
+    Ok(if sub.is_empty() { name.to_string() } else { format!("{sub}/{name}") })
+}
+
+/// 往 multipart 体里追加一个普通字段（`upload_image` 用；抽成函数是为了能同时借用 `body`）。
+fn push_form_field(body: &mut Vec<u8>, boundary: &str, name: &str, value: &str) {
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+    );
+    body.extend_from_slice(value.as_bytes());
+    body.extend_from_slice(b"\r\n");
+}
+
 /// 一次 POST JSON（`POST /prompt`）：超时 **30 秒**（Kotlin `postPrompt` 同）。
 ///
 /// ⚠ 非 2xx 时**把响应体带进错误**：ComfyUI 的 400 会说清哪个节点的哪个参数不对，

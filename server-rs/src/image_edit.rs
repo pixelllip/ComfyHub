@@ -128,6 +128,80 @@ pub const REMOVED_ARGS: &[&str] = &[
 //  ComfyUI 的 input 目录
 // ---------------------------------------------------------------------------
 
+/// 直写 `input` 目录失败时**攒下来的投递任务**（2026-09-28 用户 bug
+/// 「comfy_use_attachment 总是失败」）。
+///
+/// 现场：真机上直写 `D:\Comfy-Desktop\ComfyUI-Shared\input` 一律
+/// `拒绝访问 (os error 5)`（后端进程没有那个目录的写权限），而**同一次会话里
+/// ComfyUI 自己写得进去** —— MCP 的 `upload_file` 走 `/upload/image` 就成功了。
+/// 所以：**先让 ComfyUI 自己写**（HTTP），直写只当"ComfyUI 不在"时的兜底。
+///
+/// 为什么做成"攒下来"而不是"当场报错"：这几个工具的业务函数是 **sync** 的
+/// （要能脱离运行时单测），而 HTTP 那条路是 async。所以 sync 侧把内容攒在这里、
+/// 照常把结果对象返回给模型，async 的工具入口再兑现它 —— 兑现失败才如实报错。
+#[derive(Default)]
+pub struct Delivery {
+    /// ComfyUI 的 input 目录（算 subfolder 用）
+    input_dir: PathBuf,
+    /// (目标位置, 内容)：要写进去的路径 + 字节
+    pending: Option<(PathBuf, Vec<u8>)>,
+}
+
+impl Delivery {
+    /// 绑定这次投放的目标 input 目录（算 subfolder 用）。
+    pub fn for_input_dir(input_dir: &Path) -> Self {
+        Delivery { input_dir: input_dir.to_path_buf(), pending: None }
+    }
+
+    /// 记下一次"直写没成功、改走 ComfyUI"的投递。
+    fn defer(&mut self, target: &Path, bytes: Vec<u8>) {
+        self.pending = Some((target.to_path_buf(), bytes));
+    }
+
+    /// 目标相对 input 目录的子目录（`pasted/mask.png` → `pasted`）。
+    fn subfolder_of(&self, target: &Path) -> String {
+        target
+            .parent()
+            .and_then(|parent| parent.strip_prefix(&self.input_dir).ok())
+            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_none()
+    }
+
+    /// 把攒下的那一份交给 ComfyUI 自己写（`/upload/image`），返回它给的文件名。
+    ///
+    /// 没攒下东西就 `Ok(None)`（说明直写本来就成功了）。
+    pub async fn flush(&mut self, state: &AppState) -> Result<Option<String>, ToolFailure> {
+        let Some((target, bytes)) = self.pending.take() else {
+            return Ok(None);
+        };
+        let filename = target
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "image.png".to_string());
+        let config = crate::capture::capture_config(state).map_err(|e| {
+            ToolFailure::new("COMFY_NOT_FOUND", format!("读不到 ComfyUI 配置：{}", e.human()))
+        })?;
+        let subfolder = self.subfolder_of(&target);
+        let uploaded =
+            crate::comfy_client::upload_image(&config.comfy_url, &filename, &subfolder, &bytes).await;
+        match uploaded {
+            Ok(name) => Ok(Some(name)),
+            Err(why) => Err(ToolFailure::new(
+                "COMFY_INPUT_FAILED",
+                format!(
+                    "放不进 ComfyUI 的 input 目录（{}）：直写被系统拒绝，改让 ComfyUI 自己收也没成功（{why}）。\
+                     确认 ComfyUI 在运行，或把它的 input 目录写权限给当前用户。",
+                    target.display()
+                ),
+            )),
+        }
+    }
+}
+
 /// ComfyUI 的 `input` 目录。
 ///
 /// 优先从**已经配置好的输出目录**推（capture 配置里的 outputDir 与 input 是兄弟目录，
@@ -227,26 +301,25 @@ fn file_name_only(raw: &str) -> String {
 }
 
 /// 拷贝进 input 目录（内容相同就跳过 —— 同一个图重复投放时省一次几 MB 的拷贝）。
-fn copy_if_needed(source: &Path, target: &Path) -> Result<(), ToolFailure> {
+///
+/// ⚠ 直写失败**不再当场报错**（2026-09-28）：真机上这条路本来就是被系统拒的，
+/// 记进 [Delivery] 交给 ComfyUI 自己写（`/upload/image`）—— 那条路才是永远成立的。
+fn copy_if_needed(source: &Path, target: &Path, delivery: &mut Delivery) -> Result<(), ToolFailure> {
+    let bytes = std::fs::read(source).map_err(|e| {
+        ToolFailure::new(
+            "COMFY_INPUT_FAILED",
+            format!("读不出要投放的原件（{}）：{}", source.display(), take_text(&e.to_string(), 200)),
+        )
+    })?;
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            ToolFailure::new(
-                "COMFY_INPUT_FAILED",
-                format!("写不进 ComfyUI 的 input 目录（{}）：{}", parent.display(), take_text(&e.to_string(), 200)),
-            )
-        })?;
+        std::fs::create_dir_all(parent).ok();
     }
     let same = match (std::fs::metadata(target), std::fs::metadata(source)) {
         (Ok(to), Ok(from)) => to.len() == from.len(),
         _ => false,
     };
-    if !same {
-        std::fs::copy(source, target).map_err(|e| {
-            ToolFailure::new(
-                "COMFY_INPUT_FAILED",
-                format!("写不进 ComfyUI 的 input 目录（{}）：{}", target.display(), take_text(&e.to_string(), 200)),
-            )
-        })?;
+    if !same && std::fs::write(target, &bytes).is_err() {
+        delivery.defer(target, bytes);
     }
     Ok(())
 }
@@ -274,7 +347,12 @@ fn read_size(file: &Path) -> Option<(i64, i64)> {
 /// 返回 `{mediaId, filename, inputDir, width?, height?, hint}`：`width/height` 是**原图尺寸**，
 /// 做遮罩时要照它给（遮罩与底图尺寸不一致 = 采样直接炸）。解不出来就不给这两个键，
 /// **但不拦**（模型可以显式给 width/height）。
-pub fn use_media(state: &AppState, media_id: i64, wanted_name: Option<&str>) -> Result<Value, ToolFailure> {
+pub fn use_media(
+    state: &AppState,
+    media_id: i64,
+    wanted_name: Option<&str>,
+    delivery: &mut Delivery,
+) -> Result<Value, ToolFailure> {
     let media = crate::media::get(state, media_id).map_err(|_| {
         ToolFailure::new(
             "MEDIA_NOT_FOUND",
@@ -305,7 +383,7 @@ pub fn use_media(state: &AppState, media_id: i64, wanted_name: Option<&str>) -> 
 
     let input_dir = resolve_input_dir(state)?;
     let filename = input_filename_for(&media.original_name, &format!("m{media_id}"), wanted_name);
-    copy_if_needed(&source, &input_dir.join(&filename))?;
+    copy_if_needed(&source, &input_dir.join(&filename), delivery)?;
 
     let mut out = json!({
         "mediaId": media_id,
@@ -333,6 +411,7 @@ pub fn use_attachment(
     state: &AppState,
     attachment_id: &str,
     wanted_name: Option<&str>,
+    delivery: &mut Delivery,
 ) -> Result<Value, ToolFailure> {
     let dto = crate::attachments::get(state, attachment_id)
         .ok()
@@ -372,7 +451,7 @@ pub fn use_attachment(
 
     let input_dir = resolve_input_dir(state)?;
     let filename = input_filename_for(&dto.name, attachment_id, wanted_name);
-    copy_if_needed(&source, &input_dir.join(&filename))?;
+    copy_if_needed(&source, &input_dir.join(&filename), delivery)?;
 
     Ok(json!({
         "attachmentId": attachment_id,
@@ -426,6 +505,17 @@ pub fn use_attachment(
 ///  - `scale` / `x` / `y`：**摆放**（把人物缩放并搬到归一化坐标；人物像素与定位掩码一起搬）；
 ///  - `filename`：想固定的文件名（不给自己按内容算一个，重复调用得到同一个文件）。
 pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
+    // 单测 / 老调用点：直写失败也不攒投递（那几个用例本来就在能写的机器上跑）
+    make_mask_with(state, args, &mut Delivery::default())
+}
+
+/// [`make_mask`] 的真实实现：多一个 [Delivery]，好让"直写被拒"的那份遮罩
+/// 由 async 的工具入口交给 ComfyUI 自己写（见 [Delivery] 的说明）。
+pub fn make_mask_with(
+    state: &AppState,
+    args: &Value,
+    delivery: &mut Delivery,
+) -> Result<Value, ToolFailure> {
     // ⚠ 先于 ComfyUI 探测：参数写错了就当场报，**别等去找实例**（也让它能单测）。
     reject_removed_args(args)?;
     let input_dir = resolve_input_dir(state)?;
@@ -602,7 +692,7 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     // （写一张没人用的文件只会在 input 目录里攒垃圾，还会让调用方以为该去覆盖 LoadImageMask）。
     let mask_written = mode != "subject";
     if mask_written {
-        write_mask_png(&pixels, w as u32, h as u32, &input_dir.join(&filename))?;
+        write_mask_png(&pixels, w as u32, h as u32, &input_dir.join(&filename), delivery)?;
     }
 
     let region_joined = region.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
@@ -1370,7 +1460,13 @@ fn content_tag(w: i64, h: i64, region: &[f64; 4], shape: &str, invert: bool, fea
 
 /// 写 PNG（**8 位灰度**：ComfyUI 的 `LoadImageMask(channel="red")` 直接取第一个通道，
 /// 与 Kotlin 的 `TYPE_BYTE_GRAY` 同一个形状）。
-fn write_mask_png(pixels: &[u8], w: u32, h: u32, target: &Path) -> Result<(), ToolFailure> {
+fn write_mask_png(
+    pixels: &[u8],
+    w: u32,
+    h: u32,
+    target: &Path,
+    delivery: &mut Delivery,
+) -> Result<(), ToolFailure> {
     let fail = |e: String| {
         ToolFailure::new(
             "COMFY_INPUT_FAILED",
@@ -1382,11 +1478,24 @@ fn write_mask_png(pixels: &[u8], w: u32, h: u32, target: &Path) -> Result<(), To
         )
     };
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| fail(e.to_string()))?;
+        std::fs::create_dir_all(parent).ok();
     }
     let buffer = image::GrayImage::from_raw(w, h, pixels.to_vec())
         .ok_or_else(|| fail("像素数与尺寸对不上".to_string()))?;
-    buffer.save(target).map_err(|e| fail(e.to_string()))
+    // 编成 PNG 字节**只做一次**：直写用它、直写被拒时也用它去走 ComfyUI 的 HTTP 上传
+    let mut bytes: Vec<u8> = Vec::new();
+    {
+        use image::ImageEncoder;
+        image::codecs::png::PngEncoder::new(&mut bytes)
+            .write_image(pixels, w, h, image::ExtendedColorType::L8)
+            .map_err(|e| fail(e.to_string()))?;
+    }
+    let _ = buffer;
+    if std::fs::write(target, &bytes).is_err() {
+        // 直写被系统拒（真机实测 Access denied）→ 攒给 ComfyUI 自己写
+        delivery.defer(target, bytes);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1430,7 +1539,10 @@ fn bool_arg(args: &Value, field: &str) -> Option<bool> {
 // ---------------------------------------------------------------------------
 
 /// `comfy_use_attachment` 的工具入口（参数从模型给的 JSON 里取，**当不可信数据**）。
-pub fn tool_use_attachment(state: &AppState, arguments: &Value) -> Result<crate::tools::ToolOutcome, ToolFailure> {
+pub async fn tool_use_attachment(
+    state: &AppState,
+    arguments: &Value,
+) -> Result<crate::tools::ToolOutcome, ToolFailure> {
     let attachment_id = arguments
         .get("attachmentId")
         .and_then(Value::as_str)
@@ -1439,24 +1551,49 @@ pub fn tool_use_attachment(state: &AppState, arguments: &Value) -> Result<crate:
         .ok_or_else(|| ToolFailure::new("INVALID_ARGUMENT", "缺少参数 attachmentId（见用户消息里的附件说明）"))?
         .to_string();
     let wanted = str_arg(arguments, "filename");
-    let result = use_attachment(state, &attachment_id, wanted.as_deref())?;
+    let input_dir = resolve_input_dir(state)?;
+    let mut delivery = Delivery::for_input_dir(&input_dir);
+    let mut result = use_attachment(state, &attachment_id, wanted.as_deref(), &mut delivery)?;
+    if let Some(name) = delivery.flush(state).await? {
+        result["filename"] = json!(name);
+        result["channel"] = json!("comfy-upload");
+    }
     Ok(crate::tools::ToolOutcome::new(result.to_string(), result))
 }
 
 /// `comfy_use_media` 的工具入口。
 ///
 /// `mediaId` 认**数字与字符串**（模型会把 id 写成 `"310"`）——与 Kotlin 那边同一条容错。
-pub fn tool_use_media(state: &AppState, arguments: &Value) -> Result<crate::tools::ToolOutcome, ToolFailure> {
+pub async fn tool_use_media(
+    state: &AppState,
+    arguments: &Value,
+) -> Result<crate::tools::ToolOutcome, ToolFailure> {
     let media_id = int_arg(arguments, "mediaId")
         .ok_or_else(|| ToolFailure::new("INVALID_ARGUMENT", "缺少参数 mediaId（画廊里的图片产物 id）"))?;
     let wanted = str_arg(arguments, "filename");
-    let result = use_media(state, media_id, wanted.as_deref())?;
+    let input_dir = resolve_input_dir(state)?;
+    let mut delivery = Delivery::for_input_dir(&input_dir);
+    let mut result = use_media(state, media_id, wanted.as_deref(), &mut delivery)?;
+    if let Some(name) = delivery.flush(state).await? {
+        result["filename"] = json!(name);
+        result["channel"] = json!("comfy-upload");
+    }
     Ok(crate::tools::ToolOutcome::new(result.to_string(), result))
 }
 
 /// `comfy_make_mask` 的工具入口。
-pub fn tool_make_mask(state: &AppState, arguments: &Value) -> Result<crate::tools::ToolOutcome, ToolFailure> {
-    let result = make_mask(state, arguments)?;
+pub async fn tool_make_mask(
+    state: &AppState,
+    arguments: &Value,
+) -> Result<crate::tools::ToolOutcome, ToolFailure> {
+    let input_dir = resolve_input_dir(state)?;
+    let mut delivery = Delivery::for_input_dir(&input_dir);
+    let mut result = make_mask_with(state, arguments, &mut delivery)?;
+    if let Some(name) = delivery.flush(state).await? {
+        // 遮罩文件名以 ComfyUI 收到的那份为准（`LoadImageMask.image` 填的就是它）
+        result["maskFilename"] = json!(name);
+        result["channel"] = json!("comfy-upload");
+    }
     Ok(crate::tools::ToolOutcome::new(result.to_string(), result))
 }
 
