@@ -180,6 +180,14 @@ pub struct ToolSession {
     /// 与 [`crate::policy::MAX_WEB_QUERIES_PER_RUN`] 一起构成"不许拿外部服务当轮询器"这条线：
     /// 每搜一次都是一次真实的外部请求 + 一份要烧 token 的正文，"再搜一下确认"很容易刹不住车。
     pub web_queries_in_window: i64,
+    /// 这一窗里**真跑成功**的 ComfyUI 类工具的调用数（Kotlin `ToolContext.comfyInWindow`）。
+    ///
+    /// 与 [`crate::policy::MAX_COMFY_QUERIES_PER_RUN`] 一起构成 **AIH-036「不许把 ComfyUI
+    /// 当轮询器」** 这条线：`comfy_get_status` / `comfy_list_workflows` / `comfy_get_run`
+    /// 这类查询便宜又顺手，模型很容易"再确认一下"刷十几次。
+    /// 判据是**类别**（[`crate::ai_settings::category_of`] 回 `"comfy"`），不是名字前缀 ——
+    /// 与界面分组、与联网那份预算都是同一份清单。
+    pub comfy_queries_in_window: i64,
     /// 这一窗已经开过几张提问卡（阈值制：每窗最多 [`crate::questions::MAX_ASK_CARDS_PER_WINDOW`]）
     pub ask_cards_in_window: i64,
     /// 已经用掉几次"答题重置额度"（上限 [`crate::questions::MAX_BUDGET_RESETS`]）
@@ -224,14 +232,21 @@ impl ToolSession {
     pub fn spend_call(&mut self, name: &str) {
         self.calls += 1;
         self.calls_in_window += 1;
-        if crate::ai_settings::category_of(name) == "web" {
-            self.web_queries_in_window += 1;
+        match crate::ai_settings::category_of(name) {
+            "web" => self.web_queries_in_window += 1,
+            "comfy" => self.comfy_queries_in_window += 1,
+            _ => {}
         }
     }
 
     /// 这一窗的联网额度还剩不剩（预检用；**扣费在真跑成功之后**）。
     pub fn has_web_queries_left(&self) -> bool {
         self.web_queries_in_window < crate::policy::MAX_WEB_QUERIES_PER_RUN
+    }
+
+    /// 这一窗的 ComfyUI 查询额度还剩不剩（同上；AIH-036）。
+    pub fn has_comfy_queries_left(&self) -> bool {
+        self.comfy_queries_in_window < crate::policy::MAX_COMFY_QUERIES_PER_RUN
     }
 
     /// 用户**真的答了**提问 → 把这一窗的额度归零，让他接着把这件事做完
@@ -247,6 +262,8 @@ impl ToolSession {
         self.ask_cards_in_window = 0;
         // 联网额度也归零：与 Kotlin 的 `webInWindow` 同一档（用户答完接着做同一件事）
         self.web_queries_in_window = 0;
+        // ComfyUI 那档同理（Kotlin `resetBudget` 清的也是同一批窗内计数）
+        self.comfy_queries_in_window = 0;
         true
     }
 }
@@ -1742,6 +1759,48 @@ mod tests {
         session.reset_budget();
         assert!(session.has_web_queries_left());
         assert_eq!(session.web_queries_in_window, 0);
+    }
+
+    /// **ComfyUI 查询额度**是另一条独立的线（AIH-036「不许把 ComfyUI 当轮询器」，
+    /// Kotlin `ToolContext.comfyInWindow` + `DEFAULT_MAX_COMFY_QUERIES_PER_RUN = 9`）。
+    ///
+    /// 为什么必须有这条用例：系统提示里写着"一次回复最多查 ComfyUI N 次"，
+    /// 而在 2026-09-25 那次审查里它**是空的**（Rust 执行器只拦了总调用数与联网数）——
+    /// "提示词里写了、代码里没有"这类缺口只有用例钉得住。
+    #[test]
+    fn comfy_查询额度只认_comfy_类工具且只在成功时计数() {
+        let mut session = ToolSession::default();
+        assert!(session.has_comfy_queries_left());
+
+        // 其它类别不占这份额度（否则"读一个文件"就把 ComfyUI 预算吃掉了）
+        session.spend_call("read_file");
+        session.spend_call("search_prompts");
+        session.spend_call("danbooru_lookup");
+        session.spend_call("load_skill");
+        assert_eq!(session.comfy_queries_in_window, 0);
+        assert_eq!(session.calls_in_window, 4, "总调用额度照旧要记");
+
+        // comfy_* 三件查询都算（它们是"顺手再确认一下"的重灾区）
+        session.spend_call("comfy_get_status");
+        session.spend_call("comfy_list_workflows");
+        session.spend_call("comfy_get_run");
+        assert_eq!(session.comfy_queries_in_window, 3);
+        assert_eq!(
+            session.web_queries_in_window, 1,
+            "danbooru_lookup 走的是**联网**那份额度，两份额度互不串味"
+        );
+
+        for _ in 3..crate::policy::MAX_COMFY_QUERIES_PER_RUN {
+            session.spend_call("comfy_get_status");
+        }
+        assert_eq!(session.comfy_queries_in_window, crate::policy::MAX_COMFY_QUERIES_PER_RUN);
+        assert!(!session.has_comfy_queries_left(), "到上限后预检必须拦得住");
+        assert!(session.has_web_queries_left(), "拦住 ComfyUI 那档不该连累联网额度");
+
+        // 用户真答了提问 → 与联网同一档归零
+        session.reset_budget();
+        assert!(session.has_comfy_queries_left());
+        assert_eq!(session.comfy_queries_in_window, 0);
     }
 
     #[test]

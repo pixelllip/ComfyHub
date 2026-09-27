@@ -102,6 +102,11 @@ pub(crate) fn category_of(name: &str) -> &'static str {
         "search_prompts" | "search_character_cards" | "save_character_card" => "library",
         // 文件三件（Kotlin `ToolCategory.FILES`）
         "list_dir" | "read_file" | "write_file" => "files",
+        // ⚠ **例外**：Kotlin 里 `comfy_env_report` 是 `ToolCategory.FILES`（它只是扫盘，
+        //   不碰 ComfyUI 服务）—— 所以**不能**靠下面那条 `_ => "comfy"` 兜底，
+        //   否则它一落地就会吃掉"不许把 ComfyUI 当轮询器"那 9 次额度（`MAX_COMFY_QUERIES_PER_RUN`）。
+        //   它还没搬过来，这里先钉住映射，免得日后静默漂移（Kotlin `ToolRegistry.kt` 那条写的就是 FILES）。
+        "comfy_env_report" => "files",
         _ => "comfy",
     }
 }

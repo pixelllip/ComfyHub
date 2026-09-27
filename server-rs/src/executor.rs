@@ -869,6 +869,31 @@ async fn handle_call(
         )
         .await;
     }
+    // **ComfyUI 那一档也有一条独立预算**（用户 AIH-036："不许把 ComfyUI 当轮询器"；
+    // Kotlin `ToolRegistry.invoke` 里 `ToolCategory.COMFY` 那一段）。系统提示里写着
+    // "一次回复最多查 ComfyUI N 次" —— **写了就必须真拦**，否则那句话是空的
+    // （这正是 2026-09-25 那次审查记下的"提示词里写了、代码里没有"）。
+    if crate::ai_settings::category_of(&call.name) == "comfy" && !session.has_comfy_queries_left() {
+        return finish_failure(
+            state,
+            run_id,
+            assistant_id,
+            call_id,
+            call,
+            sink,
+            CallOutcome::failure(
+                "QUERY_BUDGET_EXCEEDED",
+                &format!(
+                    "本次回复查询 ComfyUI 的次数已达上限（{} 次）；\
+                     请基于已有信息作答，或让用户稍后再问",
+                    crate::policy::MAX_COMFY_QUERIES_PER_RUN
+                ),
+                "not_required",
+                0,
+            ),
+        )
+        .await;
+    }
     if access == crate::policy::ToolAccess::Deny {
         return finish_failure(
             state,
