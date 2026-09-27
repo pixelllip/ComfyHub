@@ -2187,18 +2187,18 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | --- | --- |
 | **MCP 桥（官方 comfy-mcp 39 个工具）** | ✅ **已做（P4 第 45 步，2026-09-26）**：`server-rs/src/mcp.rs`（stdio JSON-RPC + 注册表 + 权限档 + `prepare_launch`）；真机验到 `/api/ai/tools` 回 53 个（39 个 MCP） |
 | **`comfy_submit`**（R10：审核 → 审批 → 提交 → 等 → 入库 → `mediaIds`） | ✅ **已做（P4 第 48 步，2026-09-26）**：`workflow_submit.rs` + `tests/submit_test.rs` 6 例；预检只有"节点类 + 实例能不能加载这个模型"两道（七项 audit 与盘扫仍未搬） |
-| `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ 未做（前四个要 `ComfyModels` 本机清单） |
-| `comfy_use_attachment`（把附件投进 ComfyUI `input\`） | ⛔ 未做（依赖 R9） |
+| `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ **未做（2026-09-27 复核：`tools.rs` 的 `IMPLEMENTED`（22 个）里确实没有它们）**（前四个要 `ComfyModels` 本机清单）。⚠ **这条现在有直接后果**：AI **查不了**"本机有哪些模型 / 这份工作流的输入齐不齐"，于是 `inpaint-composite` 里凡是写 `comfy_env_report` / `comfy_check_inputs` 的地方**都执行不了**，只能退化成 `list_dir` 或直接问用户（skill v2 已按这个事实改写） |
+| `comfy_use_attachment`（把附件投进 ComfyUI `input\`） | ✅ **已做（P4 第 58 步，2026-09-26）**：图像编辑三件之一（`image_edit.rs`，见 §13） |
 | **联网三工具** `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未做（系统提示里那一节仍指向没下发的工具；凭据端点已就绪） |
-| **附件（R9）**：`/api/ai/attachments*` + 三层准入 + 内联预算 | ⛔ 未做（有附件直接 `UNSUPPORTED_CONTENT`，不假装发得出去） |
-| **截断续写**（`MAX_CONTINUATIONS` + `CONTINUE_INSTRUCTION`） | ⛔ 未做（输出被长度上限卡断时，现在把半句话当结尾） |
+| **附件（R9）**：`/api/ai/attachments*` + 三层准入 + 内联预算 | ✅ **已做（P4 第 50 步）**：`attachments.rs`（`routes.rs:545~551`）+ `tests/attachments_test.rs` 4 例（见 §6） |
+| **截断续写**（`MAX_CONTINUATIONS` + `CONTINUE_INSTRUCTION`） | ✅ **已做**：`executor.rs:460~478` —— 被输出长度上限卡断时再要一轮把话补完，**不把半句当结尾** |
 | **后台捕获轮询器** + `lastPollAt` / `lastError` | ✅ **已做（P4 第 47 步，2026-09-26）**：`capture_poller.rs` + `/api/capture/status` 两个键真的维护；真机"什么都不点也收得到" |
-| `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | 🔶 **一半已搬（P4 第 49 步）**：`import-workflows` 与 `ingest/comfyui` ✅（真库副本实测幂等）；**`/api/capture/import`（导入某个目录里已生成好的产物，含 PNG 内嵌工作流）仍 501** |
-| `/api/media/{id}/poster`（ffmpeg 抽帧） | ⛔ 501 |
-| `/api/ai/capabilities/{refresh,probe}` | ⛔ 501（要在线数据集 / 真上游，会花钱） |
+| `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | ✅ **三条全搬（P4 第 49/52 步）**：`capture_import.rs`（`import` 会把 PNG 内嵌的 prompt 还原成提示词）+ `tests/import_folder_test.rs`；路由在 `routes.rs:302/304/306` |
+| `/api/media/{id}/poster`（视频首帧封面） | ✅ **已做（P4 第 51 步）**：`poster.rs` 起 `scripts\video-poster.ps1`（Windows 缩略图管线，**不依赖 ffmpeg**）；抽不出帧如实回 204 |
+| `/api/ai/capabilities/{refresh,probe}` | ✅ **已做**：`routes.rs:290/293`（另有 `probe-toggle`）；`tests/provider_probe_test.rs` |
 | `POST /api/auth/pair/start`（扫码配对） | ⛔ 501（**有意**：本轮只做"手机发起 + 桌面显示 6 位码"） |
 | **`WorkflowConvert` 两处欠账**：subgraph（组节点）展开、**`emulateFrontend`（模拟用户行为）** | ⚠ 都进 `unsupportedNodes` 如实报（默认档直接拒、`tolerateUnsupported` 摘掉给缺口清单）；工具描述是逐字搬的 → 结果里主动补一句 warning |
-| **切流收尾**：schema 建表/迁移归 Rust、`server.ps1` / `pack-release.ps1` / `manifest.json` 切到 Rust、Kotlin 退役 | ⛔ 未做 |
+| **切流收尾**：schema 建表/迁移归 Rust、`server.ps1` / `pack-release.ps1` / `manifest.json` 切到 Rust、Kotlin 退役 | ✅ **已完成（2026-09-26）**：桌面后端已是 Rust，脚本与发布包都切过去了，旧 Kotlin 源码在 `legacy\server\`（留档）—— 见 AGENTS §11 |
 | 已知行为差异（切流验收清单）：悬挂引用时 `/api/media/{id}/prompt` 回 404，Kotlin 回 200 + `{error:…}` | ⚠ 待确认（Dart 只判 204/2xx，行为无差异） |
 
 **移动（M 轨道）**
@@ -2217,10 +2217,10 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | 项 | 状态 |
 | --- | --- |
-| **R9 / R10 的 Rust 侧防线** | ⛔ 未重建（R5/R6/R8 已重建） |
-| 活实例端到端脚本（O18） | ⛔ 缺（这次是临时拼的） |
-| `e2e-submit` / `e2e-capture` / `e2e-ai-tools` / `e2e-pair` 四条脚本 + `flutter test` + harness 用例**对着 Rust** 跑一遍 | ⛔ 未做（**切流前必须**；现在它们验的还是 Kotlin） |
-| 文档随切流更新（README 的"现状"描述、AGENTS §11 的阶段标记） | 🔶 本轮已补 §4 的 P4 行与本节 |
+| **R9 / R10 的 Rust 侧防线** | ✅ **已重建**：`tests/attachments_test.rs` 4 例（R9）+ `tests/submit_test.rs` 6 例（R10）—— 见 §6 |
+| 活实例端到端脚本（O18） | ✅ 已有：`scripts\e2e-inpaint-test.ps1`（工作流本身）/ `e2e-image-edit-test.ps1`（AI 那条链路）/ `e2e-recipe-test.ps1` |
+| `e2e-submit` / `e2e-capture` / `e2e-ai-tools` / `e2e-pair` 四条脚本 + `flutter test` + harness 用例**对着 Rust** 跑一遍 | ✅ **已做（2026-09-26 切流）**：四条 e2e + `flutter test` 对着 Rust 全绿（AGENTS §11）。⚠ **抠图这一摊落地后要重跑**（`e2e-image-edit-test.ps1` 会加 `-Matte` 一档） |
+| 文档随切流更新（README 的"现状"描述、AGENTS §11 的阶段标记） | ✅ 已做；**§11 这张表本身在 2026-09-27 复核时校正过一遍**（原先有 8 行写着"⛔ 未做"而其实早已搬完） |
 
 ---
 
@@ -2465,13 +2465,17 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 ---
 
-## 15. 📌 下一轮待办（2026-09-26 收工时的拍板，**明天从这里开始**）
+## 15. 📌 上一轮待办（2026-09-26 收工时的拍板）—— **15.1 已调研完（2026-09-27），落点见 §16**
 
 > 用户收工前的原话：「**人变糊了**」+ 从两条路里选：「**上 matting 模型（rembg / BiRefNet 这类做软遮罩的）**」
 > 与「**绕开抠图：阶段一就按最终背景生成（同底模 + 同场景，denoise 0.35~0.5 直接融），或用 denoise 0 只做纯合成**」，
 > 并要求「**做标记，明天再做**」。
 >
 > 本节就是那份标记：**结论 + 待查 + 动手顺序**。上一轮的全部现场证据在 §13.3、§14 与 `docs/pitfalls.md`。
+>
+> ✅ **2026-09-27：本节已完成调研** —— 15.1 的"该不该上 AI 抠图"已用真图量出结论（**该上，而且模型早就在盘上**），
+> 15.2 的"人变糊"顺带查出了**真因（前景被删掉 18%）**。**全部数字、机制与新发现见 §16**；
+> 本节保留为当时的判断依据，**动手请以 §16 为准**。
 
 ### 15.1 拍板：抠图改用**软遮罩（matting）**，现有颜色抠图降级成近似
 
@@ -2534,3 +2538,127 @@ easy-use / SAM / LayerStyle 的模型目录也都是空的）。所以下一轮*
 | 绿边 | 🔶 **未清零**：1.11% 像素带绿（最大 37/255）—— 15.1 的软遮罩是它的正解 |
 | 边缘"糊" | ⛔ 未查（15.2） |
 | 本项目**没有**的：分割/抠图模型 | ✅ **用户已批准下载**（176MB），下一轮直接下 |
+
+---
+
+## 16. 抠图调研：**该上 AI 软遮罩，而且模型早就在盘上**（2026-09-27）
+
+> 用户这一轮的原话：「**继续。先调研抠图问题，用AI抠图比较好吧？**」
+>
+> 本节就是那份调研：**结论 + 硬证据 + 还没落地的部分**。尺子是 [`scripts\matte-probe.ps1`](../scripts/matte-probe.ps1)
+> （`run` 跑模型、`measure` 出对照表），**不需要 ComfyUI 在跑**。证据图在 `.run\matte-research\`。
+
+### 16.1 一句话结论
+
+**该上，而且比总纲 §15.1 预想的便宜得多**：本机 `ComfyUI\models\rembg\` 里**已经有**两个像样的抠图模型
+（BEN2 1.13GB + RMBG-1.4 176MB），而 ComfyUI 的 `comfyui-easy-use` 有个 `easy imageRemBg` 节点正好读这个目录
+—— 所以"换软遮罩"这件事**零下载**就能做。§15.1 里写的"要下 ~176MB"是**当时没看到盘上已有文件**得出的结论。
+
+**并且顺带查出了一个比"糊"更严重的问题**：现在的颜色抠图在这张绿幕人物图上**把 18.4% 的前景删掉了**
+（眼睛、发髻内部、颈部）—— 那才是用户看到的"人身上一块块变透明"。
+
+### 16.2 本机现成资产（决定了"要不要下"）
+
+| 节点 | 用的模型 | 本机能不能**零下载**用 |
+| --- | --- | --- |
+| **`easy imageRemBg`**（`comfyui-easy-use`，显示名 "Image Remove Bg"） | `rem_mode` ∈ `RMBG-2.0` / `RMBG-1.4` / `Inspyrenet` / **`BEN2`** | ✅ **RMBG-1.4**（`models\rembg\RMBG-1.4.pth`）与 **BEN2**（`models\rembg\BEN2_Base.pth`）**已在盘上**，`get_local_filepath` 按 URL 的 basename 找，正好命中。RMBG-2.0 / Inspyrenet 要下（本机 HF 缓存里 RMBG-2.0 **只有 refs、没有 blobs**） |
+| `Image Rembg (Remove Background)`（`was-ns`） | u2net / u2net_human_seg / **isnet-anime** / … | 🔶 走 `rembg` pip 包，模型在 `~/.rembg\models`（本机原本没有）。**isnet-anime 已于本次调研下好（176MB，用户已授权）** |
+| `easy humanSegmentation`（`comfyui-easy-use`） | selfie_multiclass / human_parsing_lip…（mediapipe） | ⛔ `models\mediapipe` 不存在 → 要下 |
+| `LayerMask: RemBgUltra`（`comfyui_layerstyle`） | 自带 `BriaRMBG` | ⛔ 它按 `models\rmbg\RMBG-1.4\model.pth` 或 `folder_names_and_paths['rmbg']` 找 —— **本机既没有这个目录，也没有任何节点注册 `rmbg` 这个文件夹**（grep 全仓只有一个读它的地方）→ 会静默失败 |
+| `LoadBackgroundRemovalModel` + `Image Remove Background (Alpha)`（**ComfyUI 原生**） | `models\background_removal\` | ⛔ 目录里只有一个占位文件 → 要下 |
+
+**环境（换机器要重新确认）**
+
+- 跑模型的那个 python 是 **`D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\.venv\Scripts\python.exe`**
+  （torch 2.10.0+cu130 / RTX 4060 Laptop / timm 1.0.28 / cv2 / einops / rembg 2.0.84 全齐）。
+  ⚠ **`standalone-env\python.exe` 里没有 torch 也没有 timm** —— `e2e-image-edit-test.ps1` 的 `Find-Python`
+  把它排在 `.venv` 前面，那是因为它只用来起假网关；**跑模型不能照抄那个顺序**。探针脚本是按
+  "**第一个真能 `import torch, timm` 的**"挑的。
+- 耗时（4060）：BEN2 加载 1.4~2.4s、推理 **0.86~3.46s**；RMBG-1.4 加载 0.7s、推理 **0.24~0.55s**。
+- ⚠ **两个模型的推理分辨率都是 1024×1024**（内部 resize 再 resize 回原图）——
+  长边明显大于 1024 的人物图，细发丝会在这一步被降采样抹掉。落地时留意。
+- 依赖（BEN2 要 `einops` / `timm` / `cv2`；RMBG-1.4 只要 torch）**本机都装好了**，不会触发节点的静默 pip/下载。
+
+### 16.3 实测数字（同一张真图，768×1024 绿幕动漫人物 + 夜景底图）
+
+素材：主体 `comfyhub_t2i_anima_00023_.png`（双马尾、极细飘发、绿幕）、底图 `ref_photos\ref_bg_1.jpg`。
+
+**① 模型本身的质量**（溢色 = 源图**半透明像素**上的绿分量超出，未做任何去溢色）
+
+| 模型 | 耗时s | 前景占比 | **软像素占比** | 溢色均值 | 溢色max | 细碎连通区 |
+| --- | --- | --- | --- | --- | --- | --- |
+| **BEN2** | 1.13~3.46 | 0.42565 | **0.03157** | **11.57** | 36 | 24 / 380px |
+| BEN2(`refine_foreground`) | 0.86~1.36 | 0.42566 | 0.02975 | 11.61 | 35 | 23 / 396px |
+| isnet-anime（动漫专用） | 0.97~1.13 | 0.42775 | 0.02703 | 12.87 | 35 | 4 / 313px |
+| RMBG-1.4 | 0.24~0.55 | 0.43132 | 0.02305 | 14.94 | 39 | 14 / 238px |
+| 现状 颜色抠图 | — | 0.35635 | **0.00000** | — | — | — |
+
+→ **BEN2 最好**（溢色最低、软像素最多）；isnet-anime 几乎相当（连通区更整、少"碎屑"）；
+RMBG-1.4 最差但**快一个数量级**。**颜色抠图的软像素是 0** —— 它是硬剪影，没有连续 alpha 可言。
+
+**② 前景到底掉了多少**（现状那条链，逐档量 —— 这才是"人身上一块块变透明"的实据）
+
+| 档 | 前景占比 | 相对上一档 |
+| --- | --- | --- |
+| `subject_mask_from_image(tolerance=0.12)` 原始 | 0.43651 | — |
+| + `drop_blended_edge(band=3, tolerance=0.35)` | **0.36295** | **−7.36 个百分点** |
+| + `unmix_edge(band=3)` | 0.35635 | −0.66 个百分点 |
+
+→ 合计 **−8.01 个百分点 = 前景的 18.4%**。差异图（`.run\matte-research\ab-diff.png`，蓝 = "只有 BEN2 认为是前景"）
+上那 50,306 个像素**正好落在眼睛、发髻内部、颈部、双手、小腿**上 —— 也就是**五官和身上成片的地方**。
+
+**③ 接同一套 Rust 后处理之后**（`unmix_edge` + `despill_edges`，参数两端一致 → 唯一变量是 alpha 的来源）
+
+| 方案 | 前景占比 | 平灰底边界溢色均值 | max |
+| --- | --- | --- | --- |
+| 现状 颜色抠图 | 0.35635 | 0.00（**无软像素 → 指标空转**，它的病是掉前景） | 0 |
+| 提议 BEN2 | 0.41496 | 2.56 | 16 |
+| 提议 isnet-anime | 0.41675 | 3.68 | 33 |
+
+### 16.4 换掉之后还剩的那点绿边：**despill 的作用域错了**
+
+上表 BEN2 还剩 2.56/16，根因不是模型：`despill_edges` 只处理"剪影**边界往内** radius 像素"，
+而**真正的溢色像素在掩码外面** —— 抗锯齿那几像素（人 + 绿幕的混合色）在颜色键里被判成了**背景**，
+于是"往内"那条带**一个都没盖到**，而软遮罩会把这些像素按 α>0 合成上去。
+
+实测（同一张图、同一个 BEN2 alpha）：把作用域换成"**半透明像素（α<0.98）**"或"**边界两侧各一圈**"，
+平灰底边界溢色 **3.36 → 0.00、max 32 → 0**；只扩内侧怎么调 radius 都留一线。
+→ 落地时 despill 的判据要从"**几何内带**"改成"**α<1 的那一圈（含掩码外）**"。
+
+### 16.5 落地清单（**还没做**）
+
+| # | 做什么 | 关键点 / 坑 |
+| --- | --- | --- |
+| 1 | **新工作流** `comfyhub_paste_person_matte_anima.json` | ✅ **已建（2026-09-27）**：`21(ImageScale) → 27(easy imageRemBg, rem_mode=BEN2, image_output="Hide") → 22.mask ← 27.MASK`；**ring 也从同一份 alpha 现算**（`28 = GrowMask(expand=14)` → `29 = MaskComposite(subtract)` = 长出来的那圈 **减去** 遮罩本身），不再要 Rust 落盘 ring 文件。**静态核过**：节点名 / 输入名 / 链接都对着本机 ComfyUI 源码核了一遍（`scripts\matte-probe.ps1` 是另一把尺子）。⚠ **还没在活实例上端到端跑过** —— 第一次跑要如实回报结果；`comfy_check_inputs` 这类预检工具当前后端**没有** |
+| 2 | **Rust `comfy_make_mask` 加 `matteSource`**（`color` 默认 / `model`） | ⛔ **未做**：`model` 档应**不生成合成遮罩**（不跑 `drop_blended_edge` / 不改遮罩），只做"定位 + 去溢色"，并按 §16.4 把 despill 作用域换成"**α<1 的那一圈（含掩码外）**"；返回值如实带 `matteSource`。⚠ 别把 `mode="subject"` 删掉 —— 实例上没有抠图节点时它仍是唯一近似 |
+| 3 | **skill `inpaint-composite`** | ✅ **已改（2026-09-27，version 2）**：贴人物图**首选** matte 那份工作流；新增"**抠图：先查模型、缺了指引用户下载**"整节（下哪个 / 体积 / 目标路径 / 为什么不能让它静默下载）；把颜色抠图的实测代价（掉 18.4% 前景）写进去；并把两处**执行不了**的旧指引（`comfy_env_report` / `comfy_check_inputs`）换成 `list_dir` + 问用户 |
+| 4 | **e2e 加一档 `-Matte`** | ⛔ **未做**：断言用 §16.3 的指标 —— **软像素占比 > 1%**、**平灰底边界溢色 ≈ 0**、**前景占比不低于纯合成档** |
+
+### 16.6 复现方式（这套尺子已经进版本库）
+
+```powershell
+# 跑模型（BEN2 / RMBG-1.4 零下载；isnet-anime 等走 rembg 会话，缺了会下）
+pwsh -File scripts\matte-probe.ps1 run -Subject <人物图> -Models BEN2,RMBG-1.4 -Refine -Background <底图>
+
+# 同一套尺子量整个目录（含"现状"那一份，用来出对照表与并排图）
+pwsh -File scripts\matte-probe.ps1 measure -Out .run\matte-research -Subject <人物图> -Comparison <底图>
+```
+
+"现状（颜色抠图）"那一份基线是**一次性**用 Rust 真实现落的（跑完已删），调用链与 `make_mask` 的 subject 分支同序：
+
+```
+subject_mask_from_image(tolerance=0.12) → drop_blended_edge(band=3, tolerance=0.35)
+→ shrink=0 → unmix_edge(band=3) → despill_edges(radius=6)
+```
+落盘成 `alpha-color.png` / `person-color.png`，再用 `measure` 与 AI 那几档同尺对比。
+
+### 16.7 仍未做的（诚实清单）
+
+| 项 | 状态 |
+| --- | --- |
+| `light`（按背景改光照/阴影） | ⛔ 仍**默认 `none`**，观感不合格（见 §15.4 / pitfalls 的 `light=auto` 那条） |
+| "人变糊"的**拉普拉斯方差**那把尺子 | ⛔ 没做。但本次已找出"糊"的一个主因（**无软 alpha + 前景被删**），§15.2 的三处怀疑里第 1、3 条（`unmix_edge` 除法 / `feather`）仍待单变量对照 |
+| 长边 > 1024 的人物图 | ⚠ 未处理：BEN2 / RMBG-1.4 内部都固定 1024 推理，发丝会被降采样 |
+| 跨画风（动画人 + 照片景）本身仍违和 | ⚠ 那是**阶段一底模**的事，不是抠图能解决的 |
+| **§15.3 那两条"不抠图"的路要写进 skill 当首选** | ⛔ 没做：① **阶段一就按最终背景生成**（同底模同场景，阶段二 `denoise 0.35~0.5` 直接融）—— **完全不需要抠图**，没有边缘问题；② **`denoise 0` 纯合成**（一个像素都不改，画风 100% 保留，前提是 alpha 要准 —— 软遮罩已解决）。skill v2 现在只是把 matte 提到首选，还**没**把这两条写成"能用就别抠" |
+| **matte 工作流的活实例验收** | ⛔ 没做：文件已在版本库、静态核过，但**一次都没在真实例上跑过**（写这段时 8188 没在跑）。第一次跑要如实回报 |
