@@ -149,4 +149,120 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
   });
+
+  testWidgets('桌面：密钥的两个开关分开 —— 勾上行不许把下行那个关掉，旧后端要如实说', (tester) async {
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // 下行已经开着、上行还关着（用户接着要勾的就是上行那一个）
+    var allow = true;
+    var allowUpload = false;
+    final bodies = <String>[];
+    // 旧后端：响应里**没有** allowCredentialsUpload 这个键
+    var oldBackend = false;
+
+    final client = MockClient((request) async {
+      if (request.url.path == '/api/auth/devices/phone-1/credentials') {
+        bodies.add(request.body);
+        final sent = jsonDecode(request.body) as Map<String, dynamic>;
+        allow = sent['allow'] as bool? ?? allow;
+        if (sent.containsKey('allowUpload')) allowUpload = sent['allowUpload'] as bool;
+        return _json({
+          'id': 'phone-1',
+          'name': 'OnePlus 8T',
+          'allowCredentials': allow,
+          if (!oldBackend) 'allowCredentialsUpload': allowUpload,
+        });
+      }
+      if (request.url.path == '/api/auth/pair/pending') return _json({'pending': <Object>[]});
+      return _json({
+        'enabled': true,
+        'hasToken': true,
+        'devices': [
+          {
+            'id': 'phone-1',
+            'name': 'OnePlus 8T',
+            'pairedAt': '2026-09-24T08:00:00Z',
+            'allowCredentials': allow,
+            if (!oldBackend) 'allowCredentialsUpload': allowUpload,
+          }
+        ],
+        'pending': <Object>[],
+      });
+    });
+
+    await tester.pumpWidget(_host(client: client));
+    await tester.pump();
+
+    Finder switchOf(String title) => find.ancestor(
+          of: find.text(title),
+          matching: find.byType(SwitchListTile),
+        );
+
+    final down = switchOf('允许把密钥发给这台设备');
+    final up = switchOf('允许这台设备改桌面上的密钥');
+    expect(tester.widget<SwitchListTile>(down).value, isTrue);
+    expect(tester.widget<SwitchListTile>(up).value, isFalse, reason: '上行默认关');
+
+    // 勾上行：请求里必须有 allowUpload，**且下行那个当前值也照样带着**（后端按"传了就改"处理）
+    await tester.tap(up);
+    await tester.pumpAndSettle();
+    expect(bodies.single, contains('"allowUpload":true'));
+    expect(bodies.single, contains('"allow":true'));
+    // ★ 本地重建设备行时**不许把下行那个开关擦掉**（漏了就是"点上行、下行被悄悄关掉"）
+    expect(tester.widget<SwitchListTile>(down).value, isTrue, reason: '勾上行不该动到下行');
+    expect(tester.widget<SwitchListTile>(up).value, isTrue);
+
+    // 收尾：销毁 State（连同 2 秒轮询的定时器）
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  });
+
+  testWidgets('桌面：旧后端不认识上行开关 → 不许假装开了，并说清为什么不生效', (tester) async {
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // 老后端：设备行与回执里**都没有** allowCredentialsUpload 这个键，
+    // 于是"用户点了开"与"回读是关"必然矛盾 —— 这时候唯一诚实的做法是
+    // 把开关画回"关"并说清是后端版本问题（而不是显示成开、让用户白等）。
+    final client = MockClient((request) async {
+      if (request.url.path == '/api/auth/devices/phone-1/credentials') {
+        return _json({'id': 'phone-1', 'name': 'OnePlus 8T', 'allowCredentials': false});
+      }
+      if (request.url.path == '/api/auth/pair/pending') return _json({'pending': <Object>[]});
+      return _json({
+        'enabled': true,
+        'hasToken': true,
+        'devices': [
+          {
+            'id': 'phone-1',
+            'name': 'OnePlus 8T',
+            'pairedAt': '2026-09-24T08:00:00Z',
+            'allowCredentials': false,
+          }
+        ],
+        'pending': <Object>[],
+      });
+    });
+
+    await tester.pumpWidget(_host(client: client));
+    await tester.pump();
+
+    final up = find.ancestor(
+      of: find.text('允许这台设备改桌面上的密钥'),
+      matching: find.byType(SwitchListTile),
+    );
+    expect(tester.widget<SwitchListTile>(up).value, isFalse);
+
+    await tester.tap(up);
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<SwitchListTile>(up).value, isFalse, reason: '回读为 false 就不许显示成开');
+    expect(find.textContaining('这台后端还不支持'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  });
 }

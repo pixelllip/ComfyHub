@@ -288,20 +288,25 @@ class _PairingSectionState extends State<PairingSection> {
     }
   }
 
-  Future<void> _setAllowCredentials(PairedDevice d, bool allow) async {
+  /// 改这台设备的凭据开关（**读与写是两个开关**，`docs/pairing-design.md` §14.1）。
+  ///
+  /// 只改一个时另一个**原样传当前值**（后端按"传了就改"处理）；本地重建设备行时
+  /// 必须把**两个**开关都带上 —— 漏掉一个就是"点下行、上行被悄悄关掉"，
+  /// 而用户下一次点「推给桌面」会拿到 403，还以为是手机坏了。
+  Future<void> _setDeviceCredentials(PairedDevice d, {bool? allow, bool? allowUpload}) async {
     final api = _api;
     if (api == null) return;
+    final wantAllow = allow ?? d.allowCredentials;
     setState(() {
       _busy = true;
       _error = null;
       _message = null;
     });
     try {
-      final updated = await api.setAllowCredentials(d.id, allow);
+      final updated = await api.setAllowCredentials(d.id, wantAllow, allowUpload: allowUpload);
       if (!mounted) return;
+      final name = d.name.isEmpty ? d.id : d.name;
       setState(() {
-        // ⚠ 后端只回 `{ok, id, allowCredentials}`（§11.2），**整条替换会把设备名
-        // 和最后活跃时间擦掉** —— 所以只取"是否允许"这一个字段，其余保持原样。
         _devices = [
           for (final x in _devices)
             if (x.id == d.id)
@@ -312,13 +317,26 @@ class _PairingSectionState extends State<PairingSection> {
                 lastSeenAt: x.lastSeenAt,
                 lastIp: x.lastIp,
                 allowCredentials: updated.allowCredentials,
+                allowCredentialsUpload: updated.allowCredentialsUpload,
               )
             else
               x,
         ];
-        _message = updated.allowCredentials
-            ? '已允许「${d.name.isEmpty ? d.id : d.name}」把桌面上的 API Key 取走。'
-            : '已禁止「${d.name.isEmpty ? d.id : d.name}」取密钥：手机拿不到桌面上的 API Key。';
+        if (allowUpload != null) {
+          if (allowUpload && !updated.allowCredentialsUpload) {
+            // 回读为 false = 这台后端**不认识**这个开关（旧版本）—— 如实说，别假装开了
+            _error = '这台后端还不支持"允许设备改密钥"（旧版本）：开关没有生效。'
+                '升级桌面后端之后再来勾这一项。';
+          } else {
+            _message = updated.allowCredentialsUpload
+                ? '已允许「$name」改桌面上的密钥：它推上来的那一把会写到桌面上（桌面必须联网且在线才会收到）。'
+                : '已禁止「$name」改桌面上的密钥：它只能读（如果也允许了下行）或完全拿不到。';
+          }
+        } else {
+          _message = updated.allowCredentials
+              ? '已允许「$name」把桌面上的 API Key 取走。'
+              : '已禁止「$name」取密钥：手机拿不到桌面上的 API Key。';
+        }
       });
     } catch (e) {
       if (mounted) setState(() => _error = '设置失败：$e');
@@ -882,7 +900,22 @@ class _PairingSectionState extends State<PairingSection> {
                   ? '已允许：这台手机可以「从桌面同步密钥」把 API Key 取到本机密钥库。'
                   : '未允许：**手机拿不到桌面上的 API Key**（配对成功不等于能取密钥）。',
               value: d.allowCredentials,
-              onChanged: _busy ? null : (v) => _setAllowCredentials(d, v),
+              onChanged: _busy ? null : (v) => _setDeviceCredentials(d, allow: v),
+            ),
+          ),
+          // ★ 第二个开关：**改**桌面上的密钥（上行，§14.1）。
+          //   与上面那个刻意分开：读和写不是同一种权力 —— 合成一个的后果是
+          //   用户为了图方便把读打开、顺手也把写打开了，而写能让下一次桌面自己
+          //   发请求用上别人塞进来的 key。
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: _switchRow(
+              title: '允许这台设备改桌面上的密钥',
+              subtitle: d.allowCredentialsUpload
+                  ? '已允许：手机上可以「推给桌面」，把它本机密钥库里的那一把写到桌面上。'
+                  : '未允许（默认）：手机推上来的密钥会被桌面拒绝（403）。',
+              value: d.allowCredentialsUpload,
+              onChanged: _busy ? null : (v) => _setDeviceCredentials(d, allowUpload: v),
             ),
           ),
         ],
