@@ -11,7 +11,7 @@ import '../widgets/audio_player_view.dart';
 import '../widgets/common.dart';
 import '../widgets/prompt_params.dart';
 import '../widgets/upload_sheet.dart';
-import '../widgets/win_video_view.dart';
+import '../widgets/video_view.dart';
 import '../widgets/workflow_viewer.dart';
 import '../widgets/zoomable_image_view.dart';
 import 'prompt_detail_page.dart';
@@ -426,8 +426,8 @@ class _Preview extends StatelessWidget {
         return Container(
           color: Colors.black,
           width: double.infinity,
-          child: WinVideoView.supported
-              ? WinVideoView(url: url, posterUrl: posterUrl)
+          child: PlatformVideoView.supported
+              ? PlatformVideoView(url: url, posterUrl: posterUrl)
               : _Unsupported(
                   icon: Icons.movie_outlined,
                   message: '当前平台不支持内嵌视频播放',
