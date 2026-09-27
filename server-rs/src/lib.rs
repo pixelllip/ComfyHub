@@ -51,6 +51,7 @@ pub mod media_write;
 pub mod memory;
 pub mod mobile_tools;
 pub mod models;
+pub mod net_urls;
 pub mod nsfw_prompt;
 pub mod outbound;
 pub mod pending;

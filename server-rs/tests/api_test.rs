@@ -9853,3 +9853,50 @@ async fn comfy_prune_workflow_only_prunes_when_the_instance_is_unreachable() {
     handle2.abort();
     std::fs::remove_dir_all(state.project_root()).ok();
 }
+
+// ---------------------------------------------------------------------------
+//  GET /api/net/urls（P4 第 73 步）：本机可达地址（「同步与连接」页的候选）
+// ---------------------------------------------------------------------------
+
+/// 测试里的 AppState **没有监听任何端口**（`port == 0`）→ 如实回空数组。
+///
+/// 这是刻意的"宁可什么都不说"：报一个我们其实没在听的地址，用户会以为是网络问题。
+#[tokio::test]
+async fn net_urls_is_empty_when_we_are_not_listening() {
+    let app = router_for(state());
+    let (status, body) = get_json(app, "/api/net/urls").await;
+    assert_eq!(status, 200);
+    assert_eq!(body["port"], 0, "没绑端口就报 0：{body}");
+    assert_eq!(body["urls"].as_array().unwrap().len(), 0, "宁可空，也不许编：{body}");
+}
+
+/// 真的在听的时候：回环那条一定在（不依赖这台机器有几张网卡），
+/// 每条都得是 `http://…:<我们实际听的端口>`，且 `kind` 只能是那四个值之一。
+#[tokio::test]
+async fn net_urls_lists_the_port_we_actually_listen_on() {
+    let st = state();
+    st.set_port(18081);
+    let app = router_for(st);
+    let (status, body) = get_json(app, "/api/net/urls").await;
+    assert_eq!(status, 200);
+    assert_eq!(body["port"], 18081);
+
+    let urls = body["urls"].as_array().expect("urls 数组");
+    assert!(!urls.is_empty(), "至少要有一条回环：{body}");
+    let mut saw_loopback = false;
+    for item in urls {
+        let kind = item["kind"].as_str().unwrap();
+        let url = item["url"].as_str().unwrap();
+        assert!(
+            ["loopback", "lan", "tailscale", "other"].contains(&kind),
+            "kind 只有这四种：{kind}"
+        );
+        assert!(url.starts_with("http://"), "候选地址必须是 http:// 开头：{url}");
+        assert!(url.ends_with(":18081"), "端口必须是我们实际听的那个：{url}");
+        if kind == "loopback" {
+            saw_loopback = true;
+            assert_eq!(url, "http://127.0.0.1:18081");
+        }
+    }
+    assert!(saw_loopback, "同机/模拟器那条路必须有：{body}");
+}

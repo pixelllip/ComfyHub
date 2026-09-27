@@ -57,6 +57,10 @@ miniz_oxide = "0.8"
 #   OpenSSL/native-tls 拖进发布包（AGENTS §11 第 4 条：便携性优先），
 #   而 ComfyUI 就在本机/内网，永远不需要 wss。
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
+# `GET /api/net/urls` 要**枚举本机网卡**（回环 / 局域网 / Tailscale 三条路的候选地址）。
+# std 没有这个能力，而这个小 crate 纯 Rust、不拖任何 TLS/系统库 ——
+# 与上面那条同一个判据：发布包要便携。
+if-addrs = "0.13"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

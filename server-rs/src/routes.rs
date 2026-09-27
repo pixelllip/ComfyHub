@@ -70,6 +70,12 @@ pub struct AppState {
     /// 所以它是"跑到哪一步了"的唯一来源；`/api/capture/{status,jobs}` 与
     /// `comfy_get_status` 三处读的都是这一份内存表。
     pub comfy_progress: Arc<crate::comfy_progress::ComfyProgress>,
+    /// 后端**实际**监听的端口（`--port 0` 时是系统挑的那个）。
+    ///
+    /// `GET /api/net/urls` 用它拼候选地址：不能拿请求里的 Host（那是**客户端**走过的路，
+    /// 手机问"这台机器还有哪些地址"时，Host 恰恰是它已经知道的那一条）。
+    /// 测试构造的 AppState 是 0（没监听任何端口）→ 那条端点如实回空列表。
+    port: Arc<std::sync::atomic::AtomicU16>,
 }
 
 impl AppState {
@@ -84,7 +90,18 @@ impl AppState {
             capture_poller: Arc::new(crate::capture_poller::CapturePoller::new()),
             submissions: Arc::new(crate::workflow_submit::Submissions::new()),
             comfy_progress: Arc::new(crate::comfy_progress::ComfyProgress::new()),
+            port: Arc::new(std::sync::atomic::AtomicU16::new(0)),
         }
+    }
+
+    /// 告诉 AppState "我们实际听在哪个端口上"（`main.rs` 绑好 listener 之后调一次）。
+    pub fn set_port(&self, port: u16) {
+        self.port.store(port, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 实际监听的端口（0 = 没监听，测试里就是这样）。
+    pub fn port(&self) -> u16 {
+        self.port.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn media_dir(&self) -> &std::path::Path {
@@ -256,6 +273,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/tools", get(ai_tools))
         .route("/api/ai/tools/policy", get(ai_tool_policy).put(put_tool_policy))
         .route("/api/ai/nsfw", get(ai_nsfw).put(put_nsfw))
+        // `GET /api/net/urls`（P4 第 73 步）：这台桌面上有哪些**可达地址** ——
+        // 「同步与连接」页的候选列表（回环 / 局域网 / Tailscale）。见 `net_urls.rs`。
+        .route("/api/net/urls", get(net_urls))
         // 界面端点第二批（P4 第 34 步）：**凭据的写侧**。三条纪律见 `credentials.rs`：
         // DPAPI 不可用就失败（不落明文）/ 空值 = 不修改（清空只能 DELETE）/ env 来源只读。
         .route(
@@ -1761,6 +1781,18 @@ const APP_VERSION: &str = "1.0.0";
 /// **App 认为后端没起来**。现在与 Kotlin 的 `HealthDto` 对齐：`status` / `version` /
 /// `database` / `storageDir` / `serverTime`；另外三样是 Rust 侧多给的诊断信息
 /// （`doctor`、灰度期分辨"是哪一版后端"用），客户端按 key 取值，多给不影响。
+/// `GET /api/net/urls` —— 这台桌面的可达地址（「同步与连接」页的候选列表）。
+///
+/// 形状：`{port, urls:[{kind,url}]}`；`kind ∈ loopback|lan|tailscale|other`（**只用于显示**，
+/// 不参与"连不连得上"的判断 —— 那条判断由客户端打一次真实请求给出）。
+///
+/// `port == 0`（测试构造的 AppState / 还没绑端口）→ `urls: []`：
+/// **宁可什么都不说，也不报一个连不上的地址**（那会让用户以为是自己的网络问题）。
+/// 实现与判据见 [`crate::net_urls`]。
+async fn net_urls(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::net_urls::urls_json(state.port())))
+}
+
 async fn health(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let storage_dir = storage_dir_of(&state);
     let (engine, schema) = state.with(|conn| Ok((db::engine_info(conn)?, db::schema_version(conn)?)))?;

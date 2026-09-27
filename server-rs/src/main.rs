@@ -57,6 +57,7 @@
 //! | **comfy 五件**：`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` / `comfy_sync_history`（写库：建提示词 + 产物入库）/ `comfy_load_workflow`（把本机工作流文件读进库，界面格式按 `/object_info` 转换） | ✅（P4 第 41~44 步） |
 //! | **`comfy_submit`（R10）**：审核 → 审批 → 提交 → **自己等** → `captureRun` 入库 → `mediaIds` | ✅（P4 第 48 步：`workflow_submit.rs`；参数覆盖 / 补线逐条移植，超时如实报 `timeout`；`/api/capture/jobs` 的 `submissions[]` 也由它维护。**第 70 步把闸门接全**：`workflow_audit::blocking_refusal` 那三项"必跑不了"（前端节点 / 版本不兼容 / 本机没有的节点类）当场拒（`MODEL_NOT_LOADABLE`，与 Kotlin 同码同措辞），参数 / 显存 / 提示词风格那些非阻断的走 `preflightWarnings` **只提醒不拦**） |
 //! | **生成任务的实时进度 + 当前步骤**（`comfy_progress.rs`：常驻 `ws://<comfyUrl>/ws` + 指数退避重连；`/api/capture/{status,jobs}` 的 `current` 与 `submissions[].progress`、`comfy_get_status` 的 `current` / `currentStep` / `progressConnected`） | ✅（P4 第 72 步。REST 拿不到进度 —— 2026-09-27 实测 `/queue` 没有、`/progress` 404、`/history` 只有跑完的，所以这是唯一来源。`percent` **只**来自 ComfyUI 自己发的 `value/max`（`progress` / `progress_state` 帧），**拿不到就是 `percent` 缺席（进度未知）**，绝不用"已执行节点数/总节点数"冒充；终态也不把 percent 抬到 100） |
+//! | **`GET /api/net/urls`**（这台桌面有哪些**可达地址**：回环 / 局域网 / Tailscale） | ✅（P4 第 73 步：`net_urls.rs`。给手机的「同步与连接」页当候选 —— 手机没法自己扫网段猜桌面地址，而"能不能连上"由客户端打一次真实请求决定，分类只用于显示。端口用**我们实际监听的**那个；`port == 0` 时如实回空数组，不编地址） |
 //! | **联网三工具 + 定向查询**（`web_search` / `web_fetch` / `civitai_search` / `find_model`） | ✅（P4 第 64 步：`web_tools.rs` / `civitai.rs` / `find_model.rs`。四件都是 **WEB 档**，共用 `MAX_WEB_QUERIES_PER_RUN` 那份预算、出厂全 `ASK`；`web_fetch` 的目标过 SSRF 闸门，`find_model` **先查本机再查外网**且**绝不代下**） |
 //! | **官方 comfy-mcp 那 39 个工具**（`system_stats` / `nodes` / `run_workflow` / `launch_comfyui` / `get_logs` …） | ✅（P4 第 45 步：`mcp.rs` 起 `comfy-mcp` 子进程走 JSON-RPC，清单进 `/api/ai/tools` 与下发的 `tools[]`；`launch_comfyui` 由我们**替用户补上共享模型根那三个参数**，失败时把 stderr 尾部带进 `detail`） |
 //! | **工作流审核 + 摘拼**：`comfy_audit_workflow`（七项确定性检查）/ `comfy_prune_workflow`（可达性摘除 + 按 `/object_info` 拼装） | ✅（P4 第 63 步：`workflow_audit.rs` / `workflow_prune.rs`；两件都**只报不改**，改好的图是**内联**返回的） |
@@ -274,6 +275,10 @@ async fn main() {
     let actual_port = addr.port();
     let url = comfyhub_server_rs::api_port_file::url_for(&args.host, actual_port);
     println!("监听 {url}（pid={}）", std::process::id());
+
+    // 把**实际**端口告诉 AppState：`GET /api/net/urls` 用它给手机拼候选地址
+    // （不能拿请求里的 Host —— 那是客户端走过的路，手机问的恰恰是"还有别的没有"）。
+    state.set_port(actual_port);
 
     // **端口只有一个真源**：后端绑好之后写进 `<项目根>\.run\api.json`，
     // 脚本（`scripts\api-port.ps1`）、App（`settings_store.dart`）与 ComfyUI 捕获扩展都只读它。
