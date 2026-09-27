@@ -3271,3 +3271,46 @@ Kotlin 的真源在 `Application.kt` 的 `preflight` lambda（`AiWorkflowSearch.
 
 
 
+
+---
+
+## 26. 2026-09-27：从"e2e 打印了一个没发生的成功"里挖出的真 bug（`temp_store` 依赖 `%TEMP%`）
+
+### 26.1 先修的是那个"假绿"
+
+`scripts/e2e-submit-test.ps1` 的收尾清理**按计划数打印**：`$createdMediaIds.Count` 与
+`1 + $filePromptIds.Count`。于是 API 删除整批失败时照样打印"已删除 4 个产物 / 4 条提示词"，
+而库里明明躺着 4 条 `source_ref=e2e-submit-*` —— 一个**没发生的成功**，而且两处数字对不上
+（查的人得从 e2e 一路倒查到 SQLite）。
+
+现在：**删前数一次、删后数一次**，打印两次之差；还有剩的黄字说出来；删除异常按
+`ok` / `404 本来就不存在` / `**真失败**` 三类**分别计数**（以前 `catch { }` 全吞），
+真失败连**原话**一起打印前 3 条。
+
+### 26.2 那个"真失败"一打印出来就是真 bug（本机 3/3 复现）
+
+```
+DELETE /api/prompts/457|459|461
+  修前 → 500 {"error":"数据库错误：unable to open database file"}   （三个都是）
+  修后 → 200 {"deleted":457} / 200 / 200
+```
+
+**根因不是库坏了**：同一条删除对着**同一份库的副本**（另一个进程）回 200。差别只有一个 ——
+那个进程的映像在**工作区**内、**不能在 `%TEMP%` 建文件**，而 SQLite 默认
+`temp_store = FILE` 会把排序 / 临时表溢出到 `%TEMP%` → 建不出文件 → 报的是
+"**打不开数据库文件**"，看着像库坏了，其实是**临时文件建不出来**。
+
+**修法一行**：连接工厂的 `PRAGMAS` 加 `PRAGMA temp_store = MEMORY;`。三处要点：
+
+1. 放在 `PRAGMAS` 而不是各处 —— 它是**连接级**的，而 `open_readonly` / `open_memory`
+   的 PRAGMA 批次各自独立，**只设一处必然漏**；
+2. 与 R1 同一种纪律：新增 `assert_temp_store_is_memory()` 挂在 `assert_ready()` 里
+   **读回来核对**（必须 == 2），"写了就算"不算数；
+3. 对**发布包**也是好事：便携包可能落在只读 / 受限目录里，不该再额外依赖 `%TEMP%` 可写。
+
+### 26.3 复验与收尾
+
+修完把真库里那批"删不掉"的 e2e 垃圾一次清干净：**21 条（2 条提示词 + 19 个测试会话）
+→ 21/21 成功、0 失败**，清完 `prompts = 0 / convs = 0`（修前同一批是 500）。
+`cargo test` **688 全绿 / 0 failed / 7 ignored**、`cargo check --all-targets` 零 warning、
+`scripts\e2e-submit-test.ps1` **41 项全过**。
