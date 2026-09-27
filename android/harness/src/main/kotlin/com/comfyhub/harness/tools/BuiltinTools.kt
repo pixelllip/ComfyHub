@@ -392,27 +392,50 @@ class AskUserQuestionTool(private val newId: () -> String = { com.comfyhub.harne
  *  - 工具叫 `comfy_queue_submit`（模型没法把两者混起来）；
  *  - **绝不返回 `mediaIds`**、绝不说"正在生成"；
  *  - 返回值里明确写"排队 ≠ 已提交"，并说明结果会怎么回来。
+ *
+ * ## ⚠ 入队前必须**摊平**（契约 §4.1，M5）
+ *
+ * 桌面只认**扁平的顶层键**（`promptId` / `sourceRef` / `overrides` / `nsfw` / `requestedAt`）；
+ * 整包塞在一个 `args` 子对象里推上去，桌面按**永久性** `MISSING_WORKFLOW` 拒，
+ * 手机再把永久失败那行丢掉 —— 用户看到的是"点了提交，**什么都没发生**"。
+ *
+ * 所以这里**摊不平就不排队**，并且当场把"该给什么"回给模型（[SubmitJobPayload.flatten]）：
+ *  - 工作流只能用 `promptId`（数字）或 `sourceRef`（`file:<sha256>` 那种运行键）指定 ——
+ *    手机这边没有那份工作流库（`prompts` 由桌面产生），**名字解析不出 id**；
+ *  - 想改参数要用 `overrides`（键 = `节点id.输入名`）—— 手机看不到节点图，
+ *    替模型猜一个键名就是编造；给自由文本 `prompt` 的也在这里当场退回。
  */
 class ComfyQueueSubmitTool : MobileTool {
     override val name = "comfy_queue_submit"
 
     override suspend fun invoke(args: JsonObject, ctx: ToolContext): ToolOutcome {
-        val intent = buildJsonObject {
-            put("runId", ctx.runId)
-            put("conversationId", ctx.conversationId)
-            put("args", args)
-            put("queuedAt", com.comfyhub.harness.store.Timestamps.now())
-        }
         val queueId = com.comfyhub.harness.store.Timestamps.newId()
-        ctx.store.enqueue(com.comfyhub.harness.store.OutboxKind.SUBMIT_JOB, queueId, intent.toString())
+        val requestedAt = com.comfyhub.harness.store.Timestamps.now()
+        // 摊平（与"推送那一刻"**共用同一份实现**：`SubmitJobPayload`）
+        val flattened = com.comfyhub.harness.store.SubmitJobPayload.flatten(
+            args = args,
+            queueId = queueId,
+            conversationId = ctx.conversationId,
+            runId = ctx.runId,
+            requestedAt = requestedAt,
+        )
+        val payload = when (flattened) {
+            is com.comfyhub.harness.store.SubmitJobPayload.Flattened.Bad ->
+                return ToolOutcome.failure("INVALID_ARGUMENT", flattened.reason)
+            is com.comfyhub.harness.store.SubmitJobPayload.Flattened.Ok -> flattened.payload
+        }
+        // 存进去的就是**线上形状**：`submit_job` 没有本地行，这行 outbox 的 payload 就是指令本体
+        // （推送时 `outboxTarget` 直接用它，只补一个 `requestedBy`）
+        ctx.store.enqueue(com.comfyhub.harness.store.OutboxKind.SUBMIT_JOB, queueId, payload.toString())
 
         // 产物入口**只认后端给的 mediaIds**（AGENTS §10.1）——这里明确"还没有"
         return ToolOutcome.success(
             buildString {
                 append("已排队（queueId=$queueId）。\n")
                 append("**排队 ≠ 已提交**：桌面不在线时这张图还没有开始生成。")
-                append("桌面在线后会自动走它那边的完整提交流程（含审批与入库），")
-                append("提交结果会作为工具结果回到这个会话。")
+                append("桌面在线后它**先弹一次审批**（手机上点的那一下不算批准），")
+                append("批准了才走它那边的完整提交流程（含审核与入库），")
+                append("结果会作为一条助手消息回到这个会话。")
                 append("现在**不要**告诉用户图已经在跑了，也不要说已经生成。")
             },
             jsonPayload = buildJsonObject {

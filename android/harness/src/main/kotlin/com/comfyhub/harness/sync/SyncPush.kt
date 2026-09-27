@@ -9,6 +9,7 @@ import com.comfyhub.harness.store.OutboxRecord
 import com.comfyhub.harness.store.Timestamps
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -67,11 +68,15 @@ class SyncPushClient(
                 continue
             }
             if (store.outboxTarget(record.kind, record.refId) == null) {
-                // `run` / `submit_job` 还没有上行通道（M5）→ **跳过但不清**（清了就是悄悄丢东西）。
-                // 其余两种情况都清掉：① 本地那行已经没了（推送前被删了）；
-                // ② `ai_run` / `ai_tool_call` 指向**桌面同步下来的**行 —— 入队那三处都判过
-                //    `local_runs`，真漏进来一条也是"这条本来就不该推"，留着只会每次白重试。
-                if (record.kind == OutboxKind.RUN || record.kind == OutboxKind.SUBMIT_JOB) continue
+                // `run` 这个**旧常量**还没有上行通道（手机自己的 Run 现在走 `ai_run`）→
+                // **跳过但不清**（清了就是悄悄丢东西）。
+                // 其余几种都清掉：① 本地那行已经没了（推送前被删了）；
+                // ② `ai_run` / `ai_tool_call` 指向**桌面同步下来的**行（入队那三处都判过
+                //    `local_runs`，真漏进来一条也是"这条本来就不该推"）；
+                // ③ `submit_job` 摊不平 —— 推上去必然被永久拒，留着只会永远卡在队首。
+                //    ⚠ 新排的队**入队那一刻就摊平**（摊不平的工具当场失败、不进队列），
+                //    所以 ③ 只可能是本批之前排下的老形状。
+                if (record.kind == OutboxKind.RUN) continue
                 store.removeOutbox(record.id)
                 droppedLocal++
                 continue
@@ -245,11 +250,52 @@ private fun rowToJson(row: Map<String, Any?>): JsonObject = buildJsonObject {
     for ((column, value) in row) {
         when (value) {
             null -> Unit
-            is Boolean -> put(column, if (value) 1 else 0)
+            // ⚠ **原样发 JSON 布尔**（不折成 0/1）：SQLite 那份 0/1 是**落库**的事，
+            //    桌面 `json_to_sql` 自己会把 Bool 折成 i64（`sync.rs`），所以镜像行不受影响；
+            //    而 `submit_job` 那类**指令**的 payload 必须给真布尔 ——
+            //    桌面 `submit_queue::parse_payload` 用的是 `as_bool()`，发 `1` 会被当成
+            //    "没给"→ `nsfw` 默认 false（用户勾了成人内容，静默变成没勾）。
+            is Boolean -> put(column, value)
             is Number -> put(column, value)
             is String -> put(column, value)
+            // 嵌套对象 / 数组：镜像行里一个都没有，但 **`submit_job` 的 payload 有**
+            // （`overrides` 是 `{节点id.输入名: 值}`）。不加这两档的话它会被**静默丢掉** ——
+            // 桌面照常受理，用户改的那两个参数却没生效。
+            is Map<*, *> -> put(column, nestedObject(value))
+            is List<*> -> put(column, nestedArray(value))
             // 这几张镜像表没有 BLOB 列；真出现了也不推（推一个错的形状比不推更糟）
             else -> Unit
         }
     }
 }
+
+/** 嵌套的 `Map` → JSON 对象（只认 JSON 真有的那几类；认不出的**当没给**，不编）。 */
+private fun nestedObject(map: Map<*, *>): JsonObject = buildJsonObject {
+    for ((key, value) in map) {
+        val name = key?.toString() ?: continue
+        when (value) {
+            null -> Unit
+            is Boolean -> put(name, value)
+            is Number -> put(name, value)
+            is String -> put(name, value)
+            is Map<*, *> -> put(name, nestedObject(value))
+            is List<*> -> put(name, nestedArray(value))
+            else -> Unit
+        }
+    }
+}
+
+private fun nestedArray(list: List<*>): kotlinx.serialization.json.JsonArray =
+    buildJsonArray {
+        for (value in list) {
+            when (value) {
+                null -> add(kotlinx.serialization.json.JsonNull)
+                is Boolean -> add(JsonPrimitive(value))
+                is Number -> add(JsonPrimitive(value))
+                is String -> add(JsonPrimitive(value))
+                is Map<*, *> -> add(nestedObject(value))
+                is List<*> -> add(nestedArray(value))
+                else -> Unit
+            }
+        }
+    }

@@ -222,4 +222,51 @@ class HarnessDatabaseTest {
             }
         }
     }
+
+    // --- 结构版本：必须与桌面同值 -------------------------------------------
+
+    /** 从桌面的 Rust 源里读 `SCHEMA_VERSION`（唯一真源 = `server-rs/src/db.rs`）。 */
+    private fun desktopSchemaVersion(): Int {
+        var dir: Path? = Path.of("").toAbsolutePath()
+        var file: Path? = null
+        while (dir != null) {
+            val candidate = dir.resolve("server-rs").resolve("src").resolve("db.rs")
+            if (Files.isRegularFile(candidate)) {
+                file = candidate
+                break
+            }
+            dir = dir.parent
+        }
+        val text = String(Files.readAllBytes(file!!), Charsets.UTF_8)
+        val match = Regex("""pub const SCHEMA_VERSION:\s*i64\s*=\s*(\d+)\s*;""").find(text)
+            ?: error("server-rs/src/db.rs 里找不到 SCHEMA_VERSION")
+        return match.groupValues[1].toInt()
+    }
+
+    /**
+     * **手机侧的结构版本必须与桌面同值**（2026-09-27 拍板；理由写在 `MobileSchema.VERSION`）。
+     *
+     * 这个数在手机侧**只有一个用处**：与 `/api/sync/manifest` 回的 `schemaVersion` 比一比 ——
+     * 不一致就丢镜像走全量。它要回答的是"桌面那份结构，我这套镜像还接得住吗"，
+     * 而那完全由桌面的 `user_version` 决定。
+     *
+     * ⚠ 曾经两边不同步（桌面 4、手机 1）：后果是**每一次 pull 都在丢镜像、全量重来**，
+     * 而且没有任何东西会报错。这条用例就是那次事故的防线 —— **改一边不改另一边当场变红**。
+     */
+    @Test
+    fun `SCHEMA_VERSION 与桌面 server-rs 里的那个数同值（改一处必须改两处）`() {
+        assertEquals(
+            "MobileSchema.VERSION 必须与 server-rs/src/db.rs 的 SCHEMA_VERSION 同值；" +
+                "两边不等会让每一次下行同步都走全量（丢镜像重来），而且是静默的",
+            desktopSchemaVersion(),
+            MobileSchema.VERSION,
+        )
+        // 顺带钉住"库里那个号与常量一致"（HarnessDatabase 幂等建表后写的就是它）
+        open().use {
+            assertEquals(
+                MobileSchema.VERSION,
+                it.session.queryOne("PRAGMA user_version")!!.int("user_version"),
+            )
+        }
+    }
 }

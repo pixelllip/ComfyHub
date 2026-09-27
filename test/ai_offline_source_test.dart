@@ -253,7 +253,12 @@ AiModel _model() => const AiModel(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    // 手机侧的 provider / 模型清单现在**只从本机库来**（走桥 → `ProviderStore`）：
+    // 每个用例都要有一个应答的假桥（默认：本机库是空的）。用例想塞几条就再调一次。
+    mockPairingChannel();
+  });
 
   test('平台默认值：Android 用本地 harness，其余平台用远端 SSE', () {
     final api = AiApiClient('http://127.0.0.1:8080');
@@ -322,8 +327,10 @@ void main() {
     // 本地那条空会话被复用（不是新建的）
     expect(store.conversation?.id, 'local-conv-1');
     expect(source.calls, isNot(contains('createConversation')));
-    // 模型清单拿不到要**如实说**，但不能说成"连接后端失败"（用户会以为整个 App 坏了）
-    expect(store.error, contains('桌面不在线'));
+    // 清单拿不到要**如实说**，但不能说成"连接后端失败"（用户会以为整个 App 坏了）。
+    // 手机侧清单来自本机库，所以这里的"拿不到"= 本机库还没配过（默认空）——
+    // 说的必须是**本机**这件事，而不是"桌面不在线"（桌面在不在都与它无关了）。
+    expect(store.error, contains('这台手机上还没有配置任何 Provider'));
     expect(store.error, isNot(contains('连接后端失败')));
   });
 
@@ -374,31 +381,36 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
-  //  M6：手机侧的凭据 / 清单缓存 / 规则工件 —— "安卓真正能发出去" 的三块砖
+  //  M6：手机侧的凭据 / **本机那份清单** / 规则工件 —— "安卓真正能发出去"的三块砖
   // -------------------------------------------------------------------------
 
-  test('手机：清单里"有没有 key"以**本机密钥库**为准，不是桌面那一份', () async {
-    // 桌面说"已配置"（那是桌面托管文件里的 key，**不会下发到手机**）
-    final source = _FakeLocalSource();
+  test('手机：清单来自**本机库**，"有没有 key"以本机密钥库为准（不借桌面那一份）', () async {
+    // 本机库里那条 provider：桥回的 DTO 里**没有** `credential` 键
+    mockPairingChannel(providers: [localProviderJson(credentialRef: 'PHONE_KEY')]);
+    final hits = <String>[];
     final store = AiWorkspaceStore(
-      api: _okApi(),
-      source: source,
+      api: offlineApiWith(hits),
+      source: _FakeLocalSource(),
       credentials: _FakeDeviceCredentials(configured: false),
     );
 
     await store.load();
 
     expect(store.providers, isNotEmpty, reason: 'error=${store.error}');
-    // 桌面那份是 managed/true —— 手机必须换成**本机**的答案，绝不能借它冒充
+    // 本机密钥库说"没有" —— 绝不能用别处的状态冒充
     expect(store.providers.first.credential.source, 'none');
-    expect(store.providers.first.credential.source, isNot('managed'));
     expect(store.providers.first.credential.configured, isFalse);
     expect(store.providers.first.credential.label, '未配置');
-    expect(store.providers.first.credentialRef, 'PHONE_KEY', reason: '引用名照旧来自桌面');
+    expect(store.providers.first.credentialRef, 'PHONE_KEY', reason: '引用名来自本机库那一行');
+    expect(
+      hits.where((h) => h.contains('/api/ai/providers')),
+      isEmpty,
+      reason: '手机侧清单只读本机库：桌面那条路一条请求都不许打（桌面离线正是常态）',
+    );
 
     // 本机填过 key 之后，状态立刻翻成 keystore（界面据此显示"已配置（本机密钥库）"）
     final filled = AiWorkspaceStore(
-      api: _okApi(),
+      api: offlineApiWith(<String>[]),
       source: _FakeLocalSource(),
       credentials: _FakeDeviceCredentials(configured: true),
     );
@@ -407,32 +419,47 @@ void main() {
     expect(filled.providers.first.credential.label, '已配置（本机密钥库）');
   });
 
-  test('手机：连过一次桌面之后，离线冷启动用本机缓存的清单', () async {
-    final creds = _FakeDeviceCredentials(configured: true);
-
-    // 第一次：桌面在线 —— 顺便把清单缓存下来
-    final online = AiWorkspaceStore(api: _okApi(), source: _FakeLocalSource(), credentials: creds);
-    await online.load();
-    expect(online.providers.single.id, 'p1');
-    expect(online.models.single.id, 'm-text');
-
-    // 第二次：桌面离线 —— 仍然拿得到 provider 与模型（否则手机连"发"的资格都没有）
-    final offline = AiWorkspaceStore(
-      api: AiApiClient(
-        'http://127.0.0.1:8080',
-        client: MockClient((request) async => http.Response('offline', 500)),
-      ),
+  test('手机：本机库为空时如实说一句（不静默给一个空选择器）', () async {
+    mockPairingChannel(); // 本机库是空的
+    final store = AiWorkspaceStore(
+      api: offlineApiWith(<String>[]),
       source: _FakeLocalSource(),
-      credentials: creds,
+      credentials: _FakeDeviceCredentials(configured: true),
     );
-    await offline.load();
 
-    expect(offline.providers.single.id, 'p1',
-        reason: 'provider 清单是桌面下发的工件，手机要把它留在本机（M6）');
-    expect(offline.models.single.id, 'm-text', reason: '模型目录也一样');
-    expect(offline.models.single.tools, isTrue, reason: '缓存不能丢能力声明：丢了工具就没了');
-    expect(offline.kitIssue, isNull, reason: '假源有 kit，不该被拦');
-    expect(offline.notice, contains('缓存'));
+    await store.load();
+
+    expect(store.providers, isEmpty);
+    expect(store.error, contains('还没有配置任何 Provider'), reason: '要如实说，而不是让用户对着空选择器猜');
+    expect(store.error, contains('不会自动合并'), reason: '顺带说清手机与桌面是两份清单');
+    expect(store.error, contains('AI 模型与凭据'), reason: '要说清去哪儿建');
+  });
+
+  test('手机：清单与模型只从**本机库**来 —— 桌面离线照样可用，不再有第二份缓存', () async {
+    mockPairingChannel(
+      providers: [localProviderJson()],
+      models: {
+        'p1': [localModelJson()],
+      },
+    );
+    final store = AiWorkspaceStore(
+      api: offlineApiWith(<String>[]), // 桌面永远 500
+      source: _FakeLocalSource(),
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    await store.load();
+
+    expect(store.providers.single.id, 'p1');
+    expect(store.models.single.id, 'm-text', reason: '模型目录也从本机库来');
+    expect(store.models.single.tools, isTrue, reason: '能力声明不能丢：丢了工具就没了');
+    expect(store.kitIssue, isNull, reason: '假源有 kit，不该被拦');
+
+    // ⚠ 那份 SharedPreferences 清单缓存**退役了**（理由见 `_loadLocalStartup` 的注释：
+    //   本机库已经是离线可用的真源，两份清单会打架）。这里把它钉死 —— 谁哪天读回来就红。
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('comfyhub.ai.cachedProviders'), isNull);
+    expect(prefs.getString('comfyhub.ai.cachedModels.p1'), isNull);
   });
 
   test('手机：没有规则工件（run-kit）时**不许开跑**，而且要说清为什么', () async {    final source = _FakeLocalSource()..hasKit = false;
@@ -828,76 +855,65 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
-  //  M6 剩余：离线时 provider / 模型清单可用（本地缓存）
+  //  手机那份清单：**本机库**（`ai_providers` / `ai_models`）是唯一真源
   // -------------------------------------------------------------------------
 
-  testWidgets('手机：provider 清单有缓存、模型目录没缓存过 → 仍进得了聊天页，并如实说原因', (tester) async {
-    mockPairingChannel(); // 见 [mockPairingChannel]：fakeAsync 里没人应答的通道会挂死
-    final creds = _FakeDeviceCredentials(configured: true);
-
-    // 第一次"桌面在线"，但模型目录那一路挂了 → 只缓存下 provider 清单
-    final partial = AiWorkspaceStore(
-      api: _okApi(modelsOk: false),
+  testWidgets('手机：本机库有 Provider、但没给它配模型 → 仍进得了聊天页，并如实说原因', (tester) async {
+    // 本机库里有 provider，模型目录空（用户还没在手机上为它加过模型）
+    mockPairingChannel(providers: [localProviderJson()]);
+    final store = AiWorkspaceStore(
+      api: offlineApiWith(<String>[]), // 桌面永远离线
       source: _FakeLocalSource(),
-      credentials: creds,
+      credentials: _FakeDeviceCredentials(configured: true),
     );
-    await partial.load();
-    expect(partial.providers.single.id, 'p1');
-    expect(partial.models, isEmpty);
-    expect(partial.modelsIssue, isNotNull, reason: '目录没拿到要说清楚，不能装作"这个 Provider 没模型"');
+    addTearDown(store.dispose);
 
-    // 离线冷启动：会话与 provider 清单都在本机 → 必须能进页面
-    final offline = AiWorkspaceStore(
-      api: AiApiClient(
-        'http://127.0.0.1:8080',
-        client: MockClient((request) async => http.Response('offline', 500)),
-      ),
-      source: _FakeLocalSource(),
-      credentials: creds,
-    );
-    await offline.load();
+    await store.load();
 
-    expect(offline.loaded, isTrue, reason: '目录没缓存过也不该让整页起不来（以前会冒成"连接后端失败"）');
-    expect(offline.providers.single.id, 'p1', reason: 'provider 清单是缓存的');
-    expect(offline.models, isEmpty);
-    expect(offline.error, contains('缓存过'), reason: '如实说"本机还没缓存过这个 Provider 的目录"');
-    expect(offline.error, isNot(contains('连接后端失败')));
+    expect(store.loaded, isTrue, reason: '模型没配过也不该让整页起不来（以前会冒成"连接后端失败"）');
+    expect(store.providers.single.id, 'p1', reason: 'provider 清单来自本机库');
+    expect(store.models, isEmpty);
+    expect(store.modelsIssue, isNotNull, reason: '空目录要说清楚，不能装作"这个 Provider 没模型"');
+    expect(store.error, contains('还没为'), reason: '如实说"本机还没给它配过模型清单"');
+    expect(store.error, contains('AI 模型与凭据'), reason: '要说清去哪儿配');
+    expect(store.error, isNot(contains('连接后端失败')));
     // 发不出去的原因照旧是一句人话（不是异常、不是空白）
-    expect(offline.sendBlockReason(), contains('Provider 与模型'));
+    expect(store.sendBlockReason(), contains('Provider 与模型'));
   });
 
-  testWidgets('手机：离线换一个本机没缓存过的 Provider → 不抛异常，当场说明原因', (tester) async {
-    mockPairingChannel(); // 见 [mockPairingChannel]：fakeAsync 里没人应答的通道会挂死
-    final creds = _FakeDeviceCredentials(configured: true);
-    await AiWorkspaceStore(
-      api: _okApi(),
-      source: _FakeLocalSource(),
-      credentials: creds,
-    ).load(); // 先在本机缓存下 p1
-
-    final offline = AiWorkspaceStore(
-      api: AiApiClient(
-        'http://127.0.0.1:8080',
-        client: MockClient((request) async => http.Response('offline', 500)),
-      ),
-      source: _FakeLocalSource(),
-      credentials: creds,
+  testWidgets('手机：换到一个本机没配模型的 Provider → 不抛异常，当场说明原因', (tester) async {
+    // 本机库里有两条 provider，但只给 p1 配了模型
+    mockPairingChannel(
+      providers: [
+        localProviderJson(id: 'p1', name: '网关一'),
+        localProviderJson(id: 'p2', name: '网关二', credentialRef: 'OTHER_KEY'),
+      ],
+      models: {
+        'p1': [localModelJson()],
+      },
     );
-    await offline.load();
+    final store = AiWorkspaceStore(
+      api: offlineApiWith(<String>[]),
+      source: _FakeLocalSource(),
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+    addTearDown(store.dispose);
+    await store.load();
+    expect(store.models, isNotEmpty);
 
-    // 换到 p2：本机从来没有缓存过它的目录
-    await offline.selectProvider(_providerWithRef('p2', 'OTHER_KEY'));
+    // 换到 p2：本机库里有这条 provider，但**没给它配过模型**
+    await store.selectProvider(store.providers.firstWhere((p) => p.id == 'p2'));
 
-    expect(offline.models, isEmpty);
-    expect(offline.modelsIssue, contains('p2'));
-    expect(offline.error, contains('p2'), reason: '换完 Provider 要当场说明，别让用户对着空选择器猜');
+    expect(store.models, isEmpty);
+    expect(store.modelsIssue, contains('网关二'));
+    expect(store.error, contains('网关二'), reason: '换完 Provider 要当场说明，别让用户对着空选择器猜');
   });
 
-  test('手机：清单缓存里**只有能力声明与端点**，密钥一个字节都不许进（AIH-012）', () async {
-    mockPairingChannel(token: 'tok-phone-1');
+  test('手机：那份 SharedPreferences 清单缓存**退役了**，密钥只进密钥库（AIH-012）', () async {
+    mockPairingChannel(token: 'tok-phone-1', providers: [localProviderJson()]);
     final creds = _FakeDeviceCredentials(configured: false);
     final store = AiWorkspaceStore(
-      api: _okApi(),
+      api: offlineApiWith(<String>[]),
       source: _FakeLocalSource(),
       credentials: creds,
       baseUrlProvider: () => 'http://10.0.0.5:8081',
@@ -915,29 +931,62 @@ void main() {
       ),
     );
 
-    await store.load(); // 缓存一份清单
-    await store.syncCredentialsFromDesktop(); // 再从桌面取一把密钥（值只进密钥库）
+    await store.load();
+    await store.syncCredentialsFromDesktop(); // 从桌面取一把密钥（值只进密钥库）
 
     final prefs = await SharedPreferences.getInstance();
-    final cached = '${prefs.getString('comfyhub.ai.cachedProviders')}'
-        '${prefs.getString('comfyhub.ai.cachedModels.p1')}';
-    expect(cached, isNotEmpty);
-    expect(cached, isNot(contains('sk-secret-a')), reason: '密钥只能进密钥库，绝不进清单缓存');
+    // ★ 清单缓存退役：手机侧清单只有**本机库**那一份（两份会打架，见 `_loadLocalStartup`）
+    expect(prefs.getString('comfyhub.ai.cachedProviders'), isNull);
+    expect(prefs.getString('comfyhub.ai.cachedModels.p1'), isNull);
+    // 密钥只进密钥库，本地任何一份盘上的东西都不许出现它
     expect(creds.saved['PHONE_KEY'], 'sk-secret-a');
-
-    // 缓存里的 provider 行**只有能力声明与端点**：`credential` 整个键都不许进去
-    // （它是"这台机器上有没有 key"的即时状态，缓存下来那一刻就可能过期；
-    //  更要紧的是它一旦进缓存，将来就有人往里塞值）。以后加字段时这条会红。
-    final rows = (jsonDecode(prefs.getString('comfyhub.ai.cachedProviders')!) as List).cast<Map>();
-    expect(rows.single.containsKey('credential'), isFalse);
-    expect(rows.single.keys.toSet(), {
-      'id', 'displayName', 'api', 'baseURL', 'credentialRef', 'endpointTrust', 'enabled', 'revision',
-    });
+    expect('${prefs.getString('comfyhub.ai.lastProviderId')}'.contains('sk-secret-a'), isFalse);
+    // （"清单里只有能力声明与端点、没有 `credential` 键"这条防线现在由**本机库**承载：
+    //   DTO 键集合由 harness 的 `ProviderStoreTest` 盯着；桥也不回 `credential`。）
   });
 
   // -------------------------------------------------------------------------
   //  M4：上行 —— 手机产生的会话/消息要能到桌面
   // -------------------------------------------------------------------------
+
+  test('桌面：清单与模型仍然走 HTTP；那份 SharedPreferences 缓存已退役（一个键都不写）', () async {
+    final calls = <String>[];
+    final api = AiApiClient(
+      'http://127.0.0.1:8080',
+      client: MockClient((request) async {
+        calls.add('${request.method} ${request.url.path}');
+        const json = {'content-type': 'application/json; charset=utf-8'};
+        if (request.url.path == '/api/ai/providers') {
+          return http.Response(jsonEncode([localProviderJson()]), 200, headers: json);
+        }
+        if (request.url.path == '/api/ai/providers/p1/models') {
+          return http.Response(jsonEncode([localModelJson()]), 200, headers: json);
+        }
+        return http.Response('[]', 200, headers: json);
+      }),
+    );
+    // 桌面源：远端事件源 + 远端凭据 + 远端 provider 库（`forceLocal: false` 那条路）
+    final store = AiWorkspaceStore(
+      api: api,
+      source: RemoteRunEventSource(api),
+      credentials: RemoteCredentialStore(api),
+    );
+
+    await store.load();
+
+    expect(calls, contains('GET /api/ai/providers'), reason: '桌面侧清单照旧来自后端（一个字未改）');
+    expect(calls, contains('GET /api/ai/providers/p1/models'));
+    expect(store.providers.single.id, 'p1');
+    expect(store.models, isNotEmpty, reason: '桌面的模型目录也照旧来自后端');
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getString('comfyhub.ai.cachedProviders'),
+      isNull,
+      reason: '那份缓存是**手机专有**的（旧代码里 `if (!credentials.isLocal) return`），'
+          '手机侧改读本机库之后它整体退役了 —— 桌面侧不该凭空多出一份缓存',
+    );
+    expect(prefs.getString('comfyhub.ai.cachedModels.p1'), isNull);
+  });
 
   test('手机冷启动会推一次上行，并把"推了几条"如实说出来', () async {
     final source = _FakeLocalSource()
@@ -1136,6 +1185,13 @@ void mockPairingChannel({
   String? token,
   String deviceId = 'phone-1',
   String deviceName = 'OnePlus 8T',
+  /// **本机库那份清单**（手机侧 provider 的唯一真源，`ProviderStore` → 桥）。
+  ///
+  /// 默认空 = "这台手机上还没配过"（就是用户第一次打开 App 时的样子）。
+  /// ⚠ 桥回的 DTO 里**没有** `credential` 键：那是"这台机器有没有 key"的即时状态，
+  /// 真源是本机密钥库（界面用 `CredentialStore.statusOf` 现问）。
+  List<Map<String, dynamic>> providers = const [],
+  Map<String, List<Map<String, dynamic>>> models = const {},
 }) {
   const channel = MethodChannel('comfyhub/harness');
   final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -1146,11 +1202,61 @@ void mockPairingChannel({
         return args['ref'] == PairingTokenStore.ref ? token : null;
       case 'pairingIdentity':
         return jsonEncode({'deviceId': deviceId, 'deviceName': deviceName});
+      // --- 本机库那份清单（ProviderStore 的五个方法）---
+      case 'listProviders':
+        return jsonEncode(providers);
+      case 'listModels':
+        return jsonEncode(models[args['providerId']?.toString()] ?? const []);
+      case 'saveProvider':
+        return args['provider']; // 回执 = 保存后的那一条（桥就是回显落库那一行）
+      case 'saveModels':
+        return args['models'];
+      case 'deleteProvider':
+        return true;
     }
     return null;
   });
   addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 }
+
+/// 本机库里的一条 provider（桥回的 DTO 形状；**不含 `credential`**）。
+Map<String, dynamic> localProviderJson({
+  String id = 'p1',
+  String name = '公司网关',
+  String credentialRef = 'PHONE_KEY',
+}) =>
+    {
+      'id': id,
+      'displayName': name,
+      'api': 'openai-completions',
+      'baseURL': 'https://api.example.com/v1',
+      'credentialRef': credentialRef,
+      'endpointTrust': 'public',
+      'enabled': true,
+      'revision': 1,
+      'createdAt': '2026-09-27T00:00:00.000Z',
+      'updatedAt': '2026-09-27T00:00:00.000Z',
+    };
+
+/// 本机库里的一个模型（能力声明是"发得出去"的前提）。
+Map<String, dynamic> localModelJson({String id = 'm-text', String name = '纯文本模型'}) => {
+      'providerId': 'p1',
+      'id': id,
+      'displayName': name,
+      'inputModalities': ['text'],
+      'tools': true,
+      'capabilitySource': 'manual',
+      'enabled': true,
+    };
+
+/// 一个**桌面永远离线**的客户端 + 命中记录：用来证明"手机侧清单一条网络请求都不打"。
+AiApiClient offlineApiWith(List<String> hits) => AiApiClient(
+      'http://127.0.0.1:8080',
+      client: MockClient((request) async {
+        hits.add('${request.method} ${request.url.path}');
+        return http.Response('offline', 500);
+      }),
+    );
 
 AiProvider _providerWithRef(String id, String ref) => AiProvider(
       id: id,

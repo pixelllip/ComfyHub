@@ -914,6 +914,33 @@ class HarnessStore(private val session: SqlSession) {
                 wireKind = "ai_tool_call"
                 row = session.queryOne("SELECT * FROM ai_tool_calls WHERE id = ?", listOf(refId))
             }
+            OutboxKind.SUBMIT_JOB -> {
+                // ★ **`submit_job` 不是"一张表的行"，是一条指令**（契约 §4.1）：桌面 `table_of_kind`
+                //   里没有它，`push` 单独一个分支受理。所以它的 payload **没有本地行可读** ——
+                //   指令本体就存在那行 outbox 的 `payload` 列里（这也是唯一一处"payload 列不是痕迹、
+                //   而是真源"的地方）。
+                //
+                //   ⚠ 形状必须是**摊平的**顶层键（`promptId` / `sourceRef` / …）：
+                //   整包塞在 `args` 子对象里推上去，桌面按永久性 `MISSING_WORKFLOW` 拒，
+                //   然后我们自己把永久失败那行丢掉 —— 用户看到"点了提交，什么都没发生"。
+                //   摊平（含老形状的补救）在 [SubmitJobPayload.forPush]，判据只有一份实现。
+                val stored = session.queryOne(
+                    """
+                    SELECT payload FROM _outbox
+                     WHERE kind = ? AND ref_id = ?
+                     ORDER BY created_at DESC LIMIT 1
+                    """.trimIndent(),
+                    listOf(OutboxKind.SUBMIT_JOB, refId),
+                )?.text("payload")
+                val wirePayload = SubmitJobPayload.forPush(
+                    storedPayloadJson = stored,
+                    refId = refId,
+                    requestedBy = getKv(KvKey.DEVICE_ID),
+                ) ?: return null // 摊不平 ⇒ 不推（推上去必然被永久拒）
+                // ⚠ 转成**普通值**再交出去：`SyncPush.rowToJson` 只认 null/Boolean/Number/String，
+                //   直接递 `JsonObject` 会把 `overrides` 那类嵌套对象静默丢掉（见 toPlainMap 的注释）
+                return OutboxTarget("submit_job", SubmitJobPayload.toPlainMap(wirePayload))
+            }
             else -> return null
         }
         return row?.let { OutboxTarget(wireKind, it.asMap()) }

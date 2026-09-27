@@ -9,6 +9,7 @@ import '../core/ai_api_client.dart';
 import '../core/credential_store.dart';
 import '../core/inbound_auth_api.dart';
 import '../core/pairing_token.dart';
+import '../core/provider_store.dart';
 import '../core/run_event_source.dart';
 import '../models/ai_models.dart';
 
@@ -20,6 +21,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// [api] 仅供测试注入；[prefs] 仅供测试注入（默认走 SharedPreferences）；
   /// [source] 仅供测试注入（默认按平台选：Android → 本地 harness，其余 → 远端 HTTP）；
   /// [credentials] 仅供测试注入（默认按平台选：Android → 本机密钥库，其余 → 后端托管）；
+  /// [providers] 仅供测试注入（默认按平台选：Android → **本机库**，其余 → 后端库）；
   /// [authApiFactory] 仅供测试注入（`syncCredentialsFromDesktop` 用的那个客户端）。
   AiWorkspaceStore({
     this.baseUrlProvider,
@@ -27,11 +29,13 @@ class AiWorkspaceStore extends ChangeNotifier {
     SharedPreferences? prefs,
     RunEventSource? source,
     CredentialStore? credentials,
+    ProviderStore? providers,
     InboundAuthApi Function(String baseUrl)? authApiFactory,
   })  : _injected = api,
         _injectedPrefs = prefs,
         _injectedSource = source,
         _injectedCredentials = credentials,
+        _injectedProviders = providers,
         _injectedAuthApi = authApiFactory;
 
   final String Function()? baseUrlProvider;
@@ -39,6 +43,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   final SharedPreferences? _injectedPrefs;
   final RunEventSource? _injectedSource;
   final CredentialStore? _injectedCredentials;
+  final ProviderStore? _injectedProviders;
   final InboundAuthApi Function(String baseUrl)? _injectedAuthApi;
   SharedPreferences? _prefs;
   AiApiClient? _cached;
@@ -47,6 +52,8 @@ class AiWorkspaceStore extends ChangeNotifier {
   AiApiClient? _cachedSourceFor;
   CredentialStore? _cachedCredentials;
   AiApiClient? _cachedCredentialsFor;
+  ProviderStore? _cachedProviders;
+  AiApiClient? _cachedProvidersFor;
 
   // --- 本地记忆（只用 SharedPreferences，绝不碰密钥） ---
   static const _kLastProvider = 'comfyhub.ai.lastProviderId';
@@ -55,13 +62,24 @@ class AiWorkspaceStore extends ChangeNotifier {
   static const _kDraftTextPrefix = 'comfyhub.ai.draft.';
   static const _kDraftAttachPrefix = 'comfyhub.ai.draftAttachments.';
 
-  /// 手机专有的**清单缓存**（M6）。
+  /// Provider 清单与模型目录的来源（M6 的另一半）：**手机 = 本机库**、桌面 = 后端库。
   ///
-  /// provider 与模型目录是桌面**版本化下发**的工件（总纲 🔒3.4），手机把它们落在本地，
-  /// 于是"连过一次桌面"之后，桌面不在线也能自己发消息（配合本机密钥库里的那把 key）。
-  /// ⚠ 缓存的只是**能力声明与端点**，**绝不含密钥**（AIH-012）。
-  static const _kProvidersCache = 'comfyhub.ai.cachedProviders';
-  static const _kModelsCachePrefix = 'comfyhub.ai.cachedModels.';
+  /// ⚠ `forceLocal` 用的是**事件源**那一位（`_source.isLocal`）—— 它与
+  /// `openRunEventSource` / `openCredentialStore` / `openProviderStore` 是**同一套平台判据**
+  /// （生产里都是 `Platform.isAndroid`；测试里注入本地源时它就是 true）。
+  /// 不这么接的话会出现一种很难查的错：**"手机"的用例偷偷去打 HTTP**
+  /// （测试进程里 `Platform.isAndroid` 恒为 false）。
+  ProviderStore get _providerStore {
+    final api = _api;
+    if (_cachedProviders == null || _cachedProvidersFor != api) {
+      _cachedProviders = _injectedProviders ?? openProviderStore(api: api, forceLocal: _source.isLocal);
+      _cachedProvidersFor = api;
+    }
+    return _cachedProviders!;
+  }
+
+  /// 这一台是不是**手机**（清单、模型目录、密钥都归本机管）。
+  bool get _isPhone => _source.isLocal;
 
   Future<SharedPreferences> get _store async =>
       _injectedPrefs ?? (_prefs ??= await SharedPreferences.getInstance());
@@ -1144,33 +1162,35 @@ class AiWorkspaceStore extends ChangeNotifier {
       recoveredRuns = 0;
     }
     conversations = await _source.listConversations();
-    // 清单优先问桌面（它才是真源）；问不到就用**上次缓存的那一份**。
-    // 手机若连一次都连不上桌面，就如实说"本机还没有缓存过"，而不是给一个空列表
-    // 让用户去猜"为什么没有模型可选"。
-    var fromCache = false;
+
+    // ★ **清单只读本机库**（2026-09-27 用户拍板"手机完全可以独立配置 provider"的收尾）。
+    //
+    // 在这之前这里打的是 `GET /api/ai/providers`（桌面 HTTP），离线时回落到
+    // SharedPreferences 里那份缓存 —— 而用户**在手机上新建的 provider 只写本机库**，
+    // 于是它永远不出现在聊天页的选择器里（"独立配置 provider"就还差这一段）。
+    //
+    // ## 那份 SharedPreferences 缓存**退役了**（不是"留着不用"）
+    //
+    // 它当年的用途是"桌面清单在离线时可读"，而那个位置现在由**本机库**占着
+    // （`ai_providers` / `ai_models` 本来就是本机表，离线可用，而且能写）。
+    // 两份都读就会出现同一个 provider 两套 baseURL / 能力声明 —— 谁赢看不出来，
+    // 而它决定"这条消息发得出去吗"。**一个端只留一份清单**（§14.4：两端各一份、
+    // 不做自动合并）；缓存代码与那两个键一并删掉，免得日后有人顺手读回来。
     try {
-      providers = await _api.listProviders();
-      await _writeProvidersCache(providers);
-      error = null;
+      providers = await _providerStore.listProviders();
+      // 空清单要**如实说**：不然用户只看到一个空选择器，只能猜"是不是模型全被删了"。
+      // 也顺带说清手机与桌面是两份清单（否则他会以为桌面配过就够了）。
+      error = providers.isEmpty ? _emptyLocalProvidersNotice : null;
     } catch (e) {
-      final cached = await _readProvidersCache();
-      if (cached.isEmpty) {
-        providers = const [];
-        error = '桌面不在线，本机也还没缓存过模型清单：先连一次桌面（局域网内同一 Wi-Fi 即可），'
-            '之后本机就能自己发消息了。原因：$e';
-      } else {
-        providers = cached;
-        fromCache = true;
-        error = null;
-      }
+      providers = const [];
+      error = '读本机那份 Provider 清单失败：$e';
     }
-    // ★ 清单来自桌面，但"这台手机有没有 key"只有本机密钥库知道：
-    //   不覆盖的话手机上会显示"已配置"（那是桌面那份），点发送必然 401。
+    // "这台手机有没有 key"只有本机密钥库知道：本机库那几行里**没有**凭据状态，
+    // 所以要现问一次（桌面路径由后端随清单下发，不需要这一步）。
     providers = await _overlayDeviceCredentials(providers);
     await _restoreRememberedModel();
-    // M6 剩余那一半：provider 清单有缓存、但**这个** Provider 的模型目录没缓存过时，
-    // 要在这里如实说出来。以前这种情形会在 `_loadModels` 里 rethrow 一路冒到 `_doLoad`，
-    // 整页变成"连接后端失败" —— 而手里的清单与历史会话明明都在。
+    // 模型目录同样是本机库：本机还没为这条 Provider 配过时要如实说（见 [_loadModels]）
+    await _loadModels();
     if (modelsIssue != null) error = modelsIssue;
     // 规则工件（run-kit）：手机必须先拿到它才能开跑（R13）。
     // 这一步以前根本没被调用过，所以手机上第一条消息必然 `NO_RUN_KIT`。
@@ -1182,12 +1202,12 @@ class AiWorkspaceStore extends ChangeNotifier {
     // 下行（M4 的另一半）：把桌面那份投影下来（首次会走全量 + 建游标）。
     // 同一套纪律：失败只记一句提示，绝不拦聊天页。
     await pullChanges();
-    // ⚠ 这句必须放在 `_startFreshConversation()` **之后**：它内部会 `_openEmptyConversation()`，
-    // 而那里会把 notice 清成 null（"切到空会话要清干净"）—— 放在前面等于白写。
-    if (fromCache && providers.isNotEmpty) {
-      notice = '桌面不在线：用的是本机缓存的模型清单（能力声明可能不是最新的）。';
-    }
   }
+
+  /// 本机库里一条 Provider 都没有时那句**人话**（手机上第一件事就是去建一条）。
+  static const _emptyLocalProvidersNotice =
+      '这台手机上还没有配置任何 Provider —— 手机与桌面各有一份清单，不会自动合并。'
+      '去「AI 模型与凭据」新建一条（填 Base URL 与 API Key），它就会出现在这里。';
 
   /// **配对令牌**（`X-ComfyHub-Token`，`docs/pairing-design.md` §11）。
   ///
@@ -1542,57 +1562,18 @@ class AiWorkspaceStore extends ChangeNotifier {
     return out;
   }
 
-  // --- 手机专有的清单缓存（M6）------------------------------------------
-
-  Future<void> _writeProvidersCache(List<AiProvider> list) async {
-    if (!credentials.isLocal) return; // 桌面不需要缓存（它本来就是真源）
-    final prefs = await _store;
-    await prefs.setString(_kProvidersCache, jsonEncode(list.map((p) => p.toJson()).toList()));
-  }
-
-  Future<List<AiProvider>> _readProvidersCache() async {
-    final prefs = await _store;
-    final raw = prefs.getString(_kProvidersCache);
-    if (raw == null || raw.isEmpty) return const [];
-    try {
-      final list = jsonDecode(raw);
-      if (list is! List) return const [];
-      return list
-          .whereType<Map>()
-          .map((e) => AiProvider.fromJson(Map<String, dynamic>.from(e)))
-          .where((p) => p.id.isNotEmpty)
-          .toList();
-    } catch (_) {
-      // 缓存坏了当没有：它只是加速，不是真源
-      return const [];
-    }
-  }
-
-  Future<void> _writeModelsCache(String providerId, List<AiModel> list) async {
-    if (!credentials.isLocal) return;
-    final prefs = await _store;
-    await prefs.setString(
-      '$_kModelsCachePrefix$providerId',
-      jsonEncode(list.map((m) => m.toJson()).toList()),
-    );
-  }
-
-  Future<List<AiModel>> _readModelsCache(String providerId) async {
-    final prefs = await _store;
-    final raw = prefs.getString('$_kModelsCachePrefix$providerId');
-    if (raw == null || raw.isEmpty) return const [];
-    try {
-      final list = jsonDecode(raw);
-      if (list is! List) return const [];
-      return list
-          .whereType<Map>()
-          .map((e) => AiModel.fromJson(Map<String, dynamic>.from(e)))
-          .where((m) => m.id.isNotEmpty)
-          .toList();
-    } catch (_) {
-      return const [];
-    }
-  }
+  // 手机侧那份 SharedPreferences **清单缓存已退役**（2026-09-27）。
+  //
+  // 它当年的用途是"桌面下发的清单在离线时可读"，而那个位置现在由**本机库**
+  // （`ai_providers` / `ai_models`，见 `lib/core/provider_store.dart`）占着：
+  // 既然是本机表，离线可读**又可写**，用户能在手机上独立配 provider。
+  // 两份都读就会出现同一个 provider 两套 baseURL / 能力声明 —— 谁赢看不出来，
+  // 而它决定"这条消息发得出去吗"。所以**一个端只留一份清单**（§14.4：两端各一份、
+  // 不做自动合并），缓存代码连同那两个键一并删掉，免得日后有人顺手读回来。
+  //
+  // ⚠ 与 AIH-012 的关系：那条纪律是"清单里不许有密钥"，它现在由**本机库**那份承载 ——
+  // `ai_providers` 表里只有 `credential_ref`（名字），值在本机密钥库；
+  // DTO 的键集合由 harness 的 `ProviderStoreTest` 盯着（`credential` 键都不许写）。
 
   /// 挑一条现成的空会话接着用；一条都没有才真的新建。
   ///
@@ -1654,28 +1635,26 @@ class AiWorkspaceStore extends ChangeNotifier {
       selectedModel = null;
       return;
     }
-    try {
-      models = await _api.listModels(p.id);
-      await _writeModelsCache(p.id, models);
-    } catch (e) {
-      // 手机：桌面不在线时用上次缓存的那份目录（能力声明是发得出去的前提 ——
-      // 没有它，附件与工具在准入那一步就会被挡下，用户看到的却是"模型不可用"）
-      final cached = credentials.isLocal ? await _readModelsCache(p.id) : const <AiModel>[];
-      if (cached.isEmpty) {
-        // ⚠ 本机**没缓存过这个 Provider** 时，以前是直接 `rethrow`。两个后果都不如实：
-        //   ① 冷启动那条路上它会一路冒到 `_doLoad`，整页变成"连接后端失败" ——
-        //      可用户手里的 provider 清单与历史会话明明都还在，只是这个目录没缓存；
-        //   ② 离线时在输入区换一个 Provider（[selectProvider]）会抛一个没人接的异常。
-        //   所以**只对手机**放行（`credentials.isLocal` 就是"本机有没有本地清单缓存"
-        //   那个判据）：目录如实留空 + 把原因说清楚；桌面照旧抛（它本来就该连得上后端）。
-        if (!credentials.isLocal) rethrow;
+    if (_isPhone) {
+      // 手机：模型目录也来自**本机库**（离线可用的真源）。
+      //
+      // 空目录要如实说：能力声明是"发得出去"的前提（附件与工具在准入那一步看它），
+      // 而这里一条都没有时用户只会看到一个空选择器 —— 得告诉他去哪儿加。
+      try {
+        models = await _providerStore.listModels(p.id);
+        if (models.isEmpty) {
+          modelsIssue = '本机还没为「${p.displayName}」配过模型清单：'
+              '去「AI 模型与凭据」里加一个模型（能力要显式声明，别指望它按名字猜），'
+              '加完这里就能选它了。';
+        }
+      } catch (e) {
         models = const [];
-        modelsIssue = '桌面不在线，本机也还没缓存过「${p.displayName}」的模型清单：'
-            '在联网时选一次这个 Provider（本机就会把它缓存下来），之后离线也能发消息。'
-            '原因：$e';
-      } else {
-        models = cached;
+        modelsIssue = '读本机那份模型清单失败：$e';
       }
+    } else {
+      // 桌面：后端是唯一真源，拿不到就**如实抛**（界面显示"连接后端失败"）——
+      // 给一个空目录会让人以为"模型都被删了"。
+      models = await _api.listModels(p.id);
     }
     if (selectedModel != null && !models.any((m) => m.id == selectedModel!.id)) {
       selectedModel = null;

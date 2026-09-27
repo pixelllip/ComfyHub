@@ -31,8 +31,30 @@ package com.comfyhub.harness.store
  */
 object MobileSchema {
 
-    /** 与桌面 `PRAGMA user_version` 是**两本账**：这里是本地库的结构版本。 */
-    const val VERSION = 1
+    /**
+     * 手机侧本地库的结构版本 —— ⚠ **它必须与桌面的 `SCHEMA_VERSION` 同值**
+     * （`server-rs/src/db.rs`，2026-09-27 M5 起是 **4**）。
+     *
+     * ## 这个数代表什么（2026-09-27 拍板；理由写在这里，免得两边各说各话）
+     *
+     * 它在手机侧**只有一个用处**：与 `/api/sync/manifest` 回的 `schemaVersion` 比一比
+     * （`com.comfyhub.harness.sync.SyncPullClient`）。那条判据要回答的是
+     * "**桌面那份结构，我这套镜像列形状还接得住吗**" —— 而那件事**完全由桌面决定**
+     * （桌面的 `user_version` 管表 / 列 / 触发器；手机的镜像 DDL 是从桌面 schema 抄来的子集）。
+     *
+     * 所以**不另立一个手机专属的号**：
+     *  - 两个号就要一张映射表（"桌面 4 ↔ 手机 2"），还得有人记得同时改 —— 而忘了的后果
+     *    **两个方向都是静默的**：要么每次 pull 都丢镜像重来（2026-09-27 之前正是如此：
+     *    桌面已经 4、手机还写 1，于是**每一次同步都在丢镜像全量重来**），要么接下一串
+     *    自己根本落不了库的增量；
+     *  - "跟着桌面一起 +1"的代价只是这段注释要跟着改 —— 防线是 `HarnessDatabaseTest` 里那条
+     *    **去读 `server-rs/src/db.rs` 现比**的用例：漏改一边当场变红。
+     *
+     * 顺带说清"加号"对手机侧意味着什么：手机**不照号做迁移**，而是**丢镜像 + 走全量**
+     * （`SyncPullClient.MODE_BOOTSTRAP`）；本地库自己的 `PRAGMA user_version` 只是同一个数的
+     * 记号（`HarnessDatabase.from` 幂等建完表之后写上它）。
+     */
+    const val VERSION = 4
 
     /** 镜像表的同步范围与主键形态（`/api/sync` 那三条读端点的 apply 也按它走）。 */
     enum class PkKind { SINGLE, COMPOSITE }

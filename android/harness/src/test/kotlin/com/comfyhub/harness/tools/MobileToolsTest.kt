@@ -152,8 +152,15 @@ class MobileToolsTest {
     @Test
     fun `R11：comfy_queue_submit 只排队，绝不返回 mediaIds、绝不说已提交`() = runBlocking {
         val registry = MobileToolRegistry(BuiltinTools.all())
+        // ⚠ 参数要给**能摊平**的形状（契约 §4.1）：`promptId` 或 `sourceRef`，
+        //    自由文本要放进 `overrides`（键 = 节点id.输入名）。只给工作流名字/裸 prompt
+        //    会被当场退回（见 `SubmitJobPayloadTest`）—— 那正是"点了提交什么都没发生"的正面防线。
         val out = registry.invoke(
-            ToolCallRequest("c1", "comfy_queue_submit", """{"workflow":"krea2_t2i","prompt":"赛博朋克"}"""),
+            ToolCallRequest(
+                "c1",
+                "comfy_queue_submit",
+                """{"promptId":310,"overrides":{"6.text":"赛博朋克"}}""",
+            ),
             context(conversationId = "c9"),
         )
         assertTrue(out.ok)
@@ -163,10 +170,12 @@ class MobileToolsTest {
         assertEquals("queued", out.jsonPayload!!["status"]!!.toString().trim('"'))
         assertFalse("jsonPayload 里也不许有 mediaIds", out.jsonPayload!!.containsKey("mediaIds"))
 
-        // 意图确实进了本地队列（桌面在线后由它消费）
+        // 意图确实进了本地队列，而且**已经是摊平的线上形状**（桌面在线后由它受理）
         val queued = store.pendingOutbox().single()
         assertEquals(OutboxKind.SUBMIT_JOB, queued.kind)
-        assertTrue(queued.payload.contains("krea2_t2i"))
+        assertTrue("要带上 promptId：${queued.payload}", queued.payload.contains("\"promptId\":310"))
+        assertFalse("不许留 args 包装：${queued.payload}", queued.payload.contains("\"args\""))
+        assertTrue("overrides 要在顶层", queued.payload.contains("\"overrides\""))
     }
 
     // --- R8：提问闸门 ------------------------------------------------------
