@@ -1183,6 +1183,17 @@ async fn comfy_get_status(state: &AppState, arguments: &Value) -> Result<ToolOut
     if let Some(obj) = status.as_object_mut() {
         obj.insert("submissions".into(), Value::Array(Vec::new()));
     }
+    // **抠图模型在不在**（2026-09-27）：`easy imageRemBg` 只读 `<ComfyUI 根>\models\rembg`，
+    // 而文件不在时它会自己去 HuggingFace 静默下载（表现是"点了按钮没反应"）。
+    // 这里一次报清，让模型"先查再跑、缺了就指引用户下"—— 免得它去猜路径或者干脆默默降级。
+    // ⚠ 这是**加在工具返回里**（不是加在 `/api/capture/status` 那个端点里）：那个端点的键集合
+    //   是界面契约（有用例钉着精确键集合），加一个键就会红。
+    if let Ok(config) = crate::capture::capture_config(state) {
+        let roots = crate::comfy_dirs::comfy_homes(&state.project_root(), config.output_dir.as_deref());
+        if let Some(obj) = status.as_object_mut() {
+            obj.insert("mattingModels".into(), crate::image_edit::matting_models(&roots));
+        }
+    }
 
     let mut omitted = 0usize;
     if include_recent && limit > 0 {

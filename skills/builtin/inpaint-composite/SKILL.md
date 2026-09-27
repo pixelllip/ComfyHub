@@ -2,7 +2,7 @@
 name: inpaint-composite
 description: 图像编辑的局部重绘工作流 —— 保背景换人物 / 换背景保人物 / 把先生成好的人物贴进某张图。**贴人物图首选 `comfyhub_paste_person_matte_anima.json`**（AI 软遮罩：`easy imageRemBg` 抠出连续 alpha + ring 只融接缝，人物像素与画风原样保留）——⚠ **用之前必须先查 ComfyUI 里有没有抠图模型，缺了要指引用户下载**（下哪个、放哪、多大都在正文；别让它静默下载、也别默默退回颜色抠图）。没有模型时才退到 `comfyhub_paste_person_anima.json` + `comfy_make_mask(mode="subject", ring=N)`（颜色抠图：纯色背景够用，但**会删掉五官**，见正文实测表）。纯重绘 / 换背景保人物用 `comfyhub_inpaint_anima.json`；底图与人物图用 `comfy_use_media` / `comfy_use_attachment` 投进 ComfyUI 的 input。krea2 那两份实测不适合做编辑（重绘不跟随提示词、贴人守不住），别用。遮罩一律"白=重绘区"。
 whenToUse: 用户说"保持背景不变，换个人 / 换个动作 / 换身衣服"、"背景换掉但人物不变"、"把这张图里的人换成…"、"先生成人物再放进去"、局部重绘 / inpaint / 遮罩 / 贴人 / 合成人物 / 抠图 / 抠人 / 抠出来时。
-version: 2
+version: 3
 ---
 
 # 图像编辑：局部重绘（保背景换人物 / 换背景保人物）
@@ -69,37 +69,55 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
 
 ### ① 先查本机有没有（**每次要用之前都查，别假设**）
 
-- **节点**：`easy imageRemBg`（`comfyui-easy-use` 自带，显示名 "Image Remove Bg"）。
-  用 `comfy_list_workflows` / 之前的调用结果能看到 ComfyUI 的位置；**节点在不在**可以直接跑一次看，
-  或者让用户确认 —— ⚠ **别指望 `comfy_env_report`**：它（连同 `comfy_check_inputs` /
-  `comfy_audit_workflow`）**在当前 Rust 后端还没下发**，模型看不到它们（见总纲 §16.5 的欠账）。
-- **模型文件**（节点**按文件名找**；文件不在，它就会**自己去 HuggingFace 下载**）：
-  - `<ComfyUI 安装目录>\ComfyUI\models\rembg\BEN2_Base.pth` —— 1.1GB，**质量最好（首选）**
-  - `<ComfyUI 安装目录>\ComfyUI\models\rembg\RMBG-1.4.pth` —— 169MB，**快一个数量级**，边缘略差
+**一条命令就够**：`comfy_get_status()` → 看返回里的 **`mattingModels`**：
 
-  用 **`list_dir`** 看这两个文件在不在。⚠ **两个坑别踩**：
-  1. `models\rembg\` 这个目录名是 easy-use 写死的（它读 `folder_paths.models_dir` + `rembg`），
-     **不是** ComfyUI 原生的 `models\background_removal\`（那是另一套节点，本机是空的）；
-  2. ComfyUI Desktop 把"程序"与"共享数据（input / output）"分在两处，`comfy_use_media` 返回的
-     `inputDir` 指向**共享**那一份，而**模型在安装目录那一份** —— 别拿 `inputDir` 的兄弟目录当模型目录。
-     两处都 `list_dir` 一下（安装目录优先），或者**直接问用户**。
+```json
+"mattingModels": {
+  "node": "easy imageRemBg",
+  "priority": ["BEN2_Base.pth", "RMBG-1.4.pth"],
+  "usable": true,                     // ← 这一条为 false 就是"缺模型"
+  "checked": [                        // 每个候选 ComfyUI 根**各有什么**（如实列，不合并）
+    {"root": "...\\ComfyUI-Shared",              "dir": "...\\models\\rembg", "files": []},
+    {"root": "...\\ComfyUI-Installs\\ComfyUI\\ComfyUI",
+                                                 "dir": "...\\models\\rembg",
+                                                 "files": ["BEN2_Base.pth", "RMBG-1.4.pth"]}
+  ],
+  "download": { ... },                // 缺了要下哪个、多大、放哪（照它转述给用户）
+  "note": "..."                       // 为什么不能硬跑
+}
+```
 
-  拿不准就这么问用户："你的 ComfyUI 装在哪个目录？`models\rembg\` 里有没有 `BEN2_Base.pth`
-  或 `RMBG-1.4.pth`？" —— 这比猜路径快，也比让它静默下载强。
+- **`usable=true`** → 可以走下面那条路（`checked` 里哪个 `files` 非空，就用那个 `dir`）。
+- **`usable=false`** → **别硬跑**，照 `download` 那两条**指引用户下载**（见 ②）。
+- ⚠ **别指望 `comfy_env_report` / `comfy_check_inputs` / `comfy_audit_workflow`**：
+  它们在当前 Rust 后端**还没下发**，模型看不到（见总纲 §16.5 的欠账）——
+  `comfy_get_status` 里的 `mattingModels` 就是为这件事补的。
+
+⚠ **两个坑别踩**（`mattingModels.checked` 已经替你把第一层排掉了，但要知道为什么）：
+
+1. `models\rembg\` 这个**目录名**是 easy-use 写死的（它读 `folder_paths.models_dir` + `rembg`），
+   **不是** ComfyUI 原生的 `models\background_removal\`（那是另一套节点 `LoadBackgroundRemovalModel`）；
+2. ComfyUI Desktop 把"程序"与"共享数据（input / output）"分在两处，而**模型在安装目录那一份**
+   —— 本机实测：`ComfyUI-Installs\ComfyUI\ComfyUI\models\rembg\` 里有两个模型，
+   而共享那份 `ComfyUI-Shared\models\rembg\` 是**空的**。所以**只查一处就会误报"缺"**
+   （这也是为什么 `checked` 是**每个根各报一行**，不是合并成一句"有/没有"）。
+   `comfy_use_media` 返回的 `inputDir` 指向**共享**那一份，**别拿它的兄弟目录当模型目录**。
 
 ### ② 缺了就**如实告诉用户下哪个**（别静默下载，也别默默降级）
 
-把这张表给用户，并说清"不下会怎样"：
+`mattingModels.usable=false` 时，把这张表给用户，并说清"不下会怎样"
+（`download` 那个键里就是同样的话，可以直接转述）：
 
 | 模型 | 体积 | 下到哪 | 从哪下 |
 | --- | --- | --- | --- |
-| **BEN2**（推荐） | 1.1GB | `<ComfyUI>\models\rembg\BEN2_Base.pth` | HuggingFace `PramaLLC/BEN2` 仓库里的 `BEN2_Base.pth` |
-| RMBG-1.4（够用 / 最快） | 169MB | `<ComfyUI>\models\rembg\RMBG-1.4.pth` | HuggingFace `briaai/RMBG-1.4` 仓库里的 `model.pth`（**要存成 `RMBG-1.4.pth`**） |
+| **BEN2**（推荐） | 1.1GB | `mattingModels.checked[].dir` 那个目录下（`…\models\rembg\`） | HuggingFace `PramaLLC/BEN2` 仓库里的 `BEN2_Base.pth` |
+| RMBG-1.4（够用 / 最快） | 169MB | 同上 | HuggingFace `briaai/RMBG-1.4` 仓库里的 `model.pth`（**要存成 `RMBG-1.4.pth`**） |
 
 ⚠ **为什么必须"先查再跑"**：那个节点在文件缺失时会**自己静默下载**（走 `torch.hub.download_url_to_file`），
 国内常常很慢或直接失败，表现就是"**点了按钮没反应**"（历史坑）。要么先按上表放好文件再跑，
 要么盯住 ComfyUI 控制台的下载行。easy-use 下载失败后会自动换 `hf-mirror.com` 再试一次。
-文件放好**不用重启**（节点每次现读文件）。
+文件放好**不用重启**（节点每次现读文件）。放好之后再 `comfy_get_status()` 确认一次 `usable=true`，
+**别只看用户说"下好了"**。
 
 ### ③ 模型确实没有时
 

@@ -1463,6 +1463,60 @@ pub fn parse_color(raw: &str) -> Option<[u8; 3]> {
     }
 }
 
+/// 抠图模型在不在 —— **"贴人物图"那条路的前置检查**（2026-09-27）。
+///
+/// # 为什么非报不可
+///
+/// `easy imageRemBg`（`comfyui-easy-use`）读的是 `folder_paths.models_dir` **再拼一个 `rembg`**，
+/// 也就是 **`<ComfyUI 根>\models\rembg\`** 这一个目录。三个容易搞错的地方：
+///
+/// 1. 它**不是** ComfyUI 原生的 `models\background_removal\`（那是另一套节点 `LoadBackgroundRemovalModel`）；
+/// 2. 它**不认** Desktop 那份"共享数据"里的 `rembg`（easy-use 用的是单个 `models_dir`，
+///    不是 ComfyUI 的多路径注册表）—— 所以"`inputDir` 的兄弟目录"是**错的**答案；
+/// 3. 文件不在时那个节点会**自己静默下载**（`torch.hub.download_url_to_file` → HuggingFace），
+///    国内常常很慢或直接失败 —— 表现就是用户说的「**点了按钮没反应**」。
+///
+/// 所以这里把"每个候选 ComfyUI 根底下的 `models\rembg` 里到底有什么"如实列出来，
+/// 让模型**先查再跑**；`usable=false` 时按 `download` 那两条指引用户放好文件。
+///
+/// 判据只有**文件名**（easy-use 的 `get_local_filepath` 按 URL 的 basename 找）：
+/// `BEN2_Base.pth`（1.1GB，质量最好）/ `RMBG-1.4.pth`（169MB，快一个数量级）。
+pub fn matting_models(roots: &[std::path::PathBuf]) -> Value {
+    const FILES: [&str; 2] = ["BEN2_Base.pth", "RMBG-1.4.pth"];
+    let mut checked: Vec<Value> = Vec::new();
+    let mut usable = false;
+    for root in roots {
+        // 只认"看起来真是 ComfyUI"的目录（auto_read_roots 里还混着我们自己的 comfyui / storage）
+        if !crate::comfy_dirs::looks_like_comfy(root).0 {
+            continue;
+        }
+        let dir = root.join("models").join("rembg");
+        let files: Vec<&str> = FILES.iter().copied().filter(|name| dir.join(name).is_file()).collect();
+        if !files.is_empty() {
+            usable = true;
+        }
+        checked.push(json!({
+            "root": root.to_string_lossy(),
+            "dir": dir.to_string_lossy(),
+            "files": files,
+        }));
+    }
+    json!({
+        "node": "easy imageRemBg",
+        "priority": FILES,
+        "usable": usable,
+        "checked": checked,
+        "download": {
+            "BEN2_Base.pth": "HuggingFace 仓库 PramaLLC/BEN2 里的 BEN2_Base.pth（1.1GB，首选，边缘最干净）",
+            "RMBG-1.4.pth": "HuggingFace 仓库 briaai/RMBG-1.4 里的 model.pth（169MB，快一个数量级；**要存成 RMBG-1.4.pth**）",
+            "dir": "<上面 checked 里那个 ComfyUI 根>\\models\\rembg\\"
+        },
+        "note": "usable=false 时**别硬跑**：那个节点会自己去 HuggingFace 静默下载（常常很慢或失败，\
+                 表现是「点了按钮没反应」）。要么按 download 那两条指引用户把文件放好，\
+                 要么如实说做不到、退回颜色抠图（mode=\"subject\"，纯色背景够用但**会删掉五官**）。"
+    })
+}
+
 /// **按颜色扔掉边缘的"混合像素"**（替代几何腐蚀 —— 用户 2026-09-26：
 /// "细的头发也被你去掉了"）。
 ///
@@ -2870,5 +2924,48 @@ mod tests {
         assert_eq!(blank, probed.join("input"));
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **抠图模型在不在**：`easy imageRemBg` 只读 `<ComfyUI 根>\models\rembg`，
+    /// 文件不在它会自己去 HuggingFace **静默下载**（表现是"点了按钮没反应"）——
+    /// 所以这个检查要如实，而且要把"**每个**根下面各有什么"都列出来
+    /// （真机上"装了模型的那个根"与"配置的输出目录那个根"是两处，只查一处就会误报"缺"）。
+    #[test]
+    fn 抠图模型检查只认_comfyui_根下的_rembg_且如实报缺() {
+        let base = std::env::temp_dir().join(format!("comfyhub-matte-{}", std::process::id()));
+        let with_model = base.join("install");
+        let without = base.join("shared");
+        let not_comfy = base.join("storage");
+        // ① 有模型的根：`output/` + `models/` 就够"看起来是 ComfyUI"，再放一个 BEN2
+        std::fs::create_dir_all(with_model.join("output")).unwrap();
+        std::fs::create_dir_all(with_model.join("models").join("rembg")).unwrap();
+        std::fs::write(with_model.join("models").join("rembg").join("BEN2_Base.pth"), b"x").unwrap();
+        // ② 同名的空目录（**本机 Shared 那份 rembg 就是空的** —— 只查它就会误报"缺"）
+        std::fs::create_dir_all(without.join("output")).unwrap();
+        std::fs::create_dir_all(without.join("models").join("rembg")).unwrap();
+        // ③ 根本不像 ComfyUI 的目录要跳过（候选里还混着我们自己的目录）
+        std::fs::create_dir_all(&not_comfy).unwrap();
+
+        let out = matting_models(&[with_model.clone(), without.clone(), not_comfy.clone()]);
+        assert_eq!(out["usable"], true);
+        let checked = out["checked"].as_array().unwrap();
+        assert_eq!(checked.len(), 2, "只该列真像 ComfyUI 的那两个根：{checked:?}");
+        assert!(
+            checked[0]["files"].as_array().unwrap().iter().any(|f| f == "BEN2_Base.pth"),
+            "有模型的那份要报出来：{checked:?}"
+        );
+        assert!(checked[1]["files"].as_array().unwrap().is_empty(), "空的那份要如实报空");
+        assert!(out["download"]["RMBG-1.4.pth"].as_str().unwrap().contains("RMBG-1.4.pth"));
+        assert!(
+            out["note"].as_str().unwrap().contains("静默下载"),
+            "要说清「别硬跑」的原因（那个节点会自己去下）"
+        );
+
+        // 一个都没有 → usable=false（调用方据此指引用户下载，而不是硬跑）
+        let none = matting_models(&[without.clone()]);
+        assert_eq!(none["usable"], false);
+        assert_eq!(none["checked"].as_array().unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&base).ok();
     }
 }

@@ -109,7 +109,16 @@ pub fn dirs_from_homes(homes: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// 本机可能装着 ComfyUI 的那些目录（三份来源，都可能为空）。
-fn comfy_homes(project_root: &Path, configured_output: Option<&str>) -> Vec<PathBuf> {
+/// 本机可能装着 ComfyUI 的那些**根**目录（去重、按"最可能命中"排序）。
+///
+/// 三份来源都要（少一份就会漏掉真机上的那种布局）：
+/// ① 配置里已生效的输出目录的父目录；② [`find_home`] 的探测结果（含 Desktop 的
+/// `ComfyUI-Installs\<实例>\ComfyUI` 那套嵌套）；③ [`auto_read_roots`]。
+///
+/// `pub` 是给 `image_edit::matting_models` 用的（2026-09-27）：抠图模型只认
+/// `<根>\models\rembg`，而**"配置的输出目录"那一份**与**安装目录那一份**是两个不同的根
+/// —— 真机上模型在安装目录、共享目录里那份是空的，两处都要查过才敢说"在不在"。
+pub fn comfy_homes(project_root: &Path, configured_output: Option<&str>) -> Vec<PathBuf> {
     let mut homes: Vec<PathBuf> = Vec::new();
     let push = |p: Option<PathBuf>, homes: &mut Vec<PathBuf>| {
         if let Some(p) = p {
