@@ -50,6 +50,13 @@ url = "2"
 # PNG 文本块（zTXt / 压缩的 iTXt）要 zlib 解压。用 miniz_oxide（**纯 Rust**）。
 # 不引 flate2 的 C 后端：发布包要便携，不能为一个 PNG 元数据块带进构建需求。
 miniz_oxide = "0.8"
+# ComfyUI 的**实时进度**只从 WebSocket 来（REST 的 /queue、/progress、/history 都没有进度，
+# 2026-09-27 本机实测）：`comfy_progress.rs` 常驻连 `<comfyUrl>/ws`。
+# ★ **default-features = false + 只开 connect/handshake**：这两个 feature 给的是明文
+#   `ws://` 的 `connect_async`，**不带任何 TLS 后端** —— 一开 native-tls 就会把
+#   OpenSSL/native-tls 拖进发布包（AGENTS §11 第 4 条：便携性优先），
+#   而 ComfyUI 就在本机/内网，永远不需要 wss。
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

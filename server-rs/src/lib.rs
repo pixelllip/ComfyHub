@@ -29,6 +29,7 @@ pub mod civitai;
 pub mod comfy_client;
 pub mod comfy_dirs;
 pub mod comfy_models;
+pub mod comfy_progress;
 pub mod conversations;
 pub mod credentials;
 pub mod danbooru;

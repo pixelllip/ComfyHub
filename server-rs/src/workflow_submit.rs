@@ -544,8 +544,12 @@ pub struct SubmitOutcome {
 }
 
 /// `POST /prompt`：把节点图放进队列，拿回 `prompt_id`。
-async fn post_prompt(base: &str, graph: &Value) -> Result<String, String> {
-    let client_id = uuid_like();
+///
+/// ⚠ `client_id` **必须**是 [`crate::comfy_progress::ComfyProgress::client_id`] 那个 ——
+/// ComfyUI 的 `execution_*` / `progress` 帧只发给 `extra_data.client_id` 对应的那个 WS socket
+/// （`execution.py:494`：`if server.client_id is not None: server.send_sync(…)`）。
+/// 这里自己现造一个 UUID 的后果是"进度 WS 明明连着，却一帧都收不到"。
+async fn post_prompt(base: &str, graph: &Value, client_id: &str) -> Result<String, String> {
     let body = json!({ "prompt": graph, "client_id": client_id });
     let root = crate::comfy_client::post_json(&format!("{base}/prompt"), &body).await?;
     root.get("prompt_id")
@@ -554,25 +558,6 @@ async fn post_prompt(base: &str, graph: &Value) -> Result<String, String> {
         .filter(|id| !id.is_empty())
         .map(|id| id.to_string())
         .ok_or_else(|| format!("ComfyUI 没有返回 prompt_id：{}", take(&root.to_string(), 300)))
-}
-
-/// 一个够用的 UUID v4（不引 `uuid` crate：提交只用它当 `client_id`）。
-fn uuid_like() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id() as u128;
-    let mixed = nanos ^ (pid << 64) ^ (nanos.rotate_left(17));
-    let hex = format!("{mixed:032x}");
-    format!(
-        "{}-{}-4{}-a{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[13..16],
-        &hex[17..20],
-        &hex[20..32]
-    )
 }
 
 fn take(text: &str, max: usize) -> String {
@@ -766,7 +751,7 @@ pub async fn tool_submit(
         .or_else(|| prompt_title(state, prompt_id))
         .unwrap_or_else(|| format!("prompt {prompt_id}"));
 
-    let run_key = post_prompt(&base, &patched).await.map_err(|message| {
+    let run_key = post_prompt(&base, &patched, state.comfy_progress.client_id()).await.map_err(|message| {
         ToolFailure::new(
             "COMFY_SUBMIT_FAILED",
             format!(
@@ -775,6 +760,11 @@ pub async fn tool_submit(
             ),
         )
     })?;
+
+    // 提交时手里就有 API 图 → 把 `节点 id → 可读名`（`_meta.title` / `class_type`）记下来。
+    // 进度 WS 的 `executing` / `progress` 帧只带节点 id，靠这份映射才能翻成
+    // "正在执行 KSampler"；**没有映射时如实只给节点 id，不编名字**。
+    state.comfy_progress.register_graph(&run_key, &patched);
 
     let mut submission = Submission {
         prompt_id: run_key.clone(),

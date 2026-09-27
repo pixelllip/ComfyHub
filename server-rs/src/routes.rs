@@ -64,6 +64,12 @@ pub struct AppState {
     pub capture_poller: Arc<crate::capture_poller::CapturePoller>,
     /// 最近提交给 ComfyUI 的运行（P4 第 48 步）：`/api/capture/jobs` 的 `submissions[]`。
     pub submissions: Arc<crate::workflow_submit::Submissions>,
+    /// ComfyUI 的**实时进度**（P4 第 72 步）：常驻 WS + 重连，见 [`crate::comfy_progress`]。
+    ///
+    /// ⚠ REST 拿不到进度（`/queue` 没有、`/progress` 404、`/history` 只有跑完的），
+    /// 所以它是"跑到哪一步了"的唯一来源；`/api/capture/{status,jobs}` 与
+    /// `comfy_get_status` 三处读的都是这一份内存表。
+    pub comfy_progress: Arc<crate::comfy_progress::ComfyProgress>,
 }
 
 impl AppState {
@@ -77,6 +83,7 @@ impl AppState {
             mcp: Arc::new(crate::mcp::McpRegistry::new()),
             capture_poller: Arc::new(crate::capture_poller::CapturePoller::new()),
             submissions: Arc::new(crate::workflow_submit::Submissions::new()),
+            comfy_progress: Arc::new(crate::comfy_progress::ComfyProgress::new()),
         }
     }
 

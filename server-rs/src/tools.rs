@@ -1464,7 +1464,17 @@ async fn comfy_get_status(state: &AppState, arguments: &Value) -> Result<ToolOut
     //   模型刚提交完就来查状态，看到 `[]` 会以为自己**根本没提交过**（正是 Kotlin 在那行旁边写下的
     //   "模型查状态时就能看到自己刚提交的那个跑到哪了"）。取最近 5 条，与 Kotlin 同。
     if let Some(obj) = status.as_object_mut() {
-        obj.insert("submissions".into(), Value::Array(state.submissions.list(5)));
+        obj.insert("submissions".into(), Value::Array(crate::capture::submissions_json(state, 5)));
+        // **跑到哪一步了**（P4 第 72 步）：模型必须能回答"现在跑到哪个节点、几成"。
+        //
+        // ⚠ 只有 WS 能给出这件事（REST 的 `/queue` 没有进度、`/progress` 404、`/history`
+        //   只有跑完的），所以这一项**拿不到就如实不给**：`percent` 缺失 = 进度未知，
+        //   绝不拿"已执行节点数/总节点数"凑一个数出来（[`crate::comfy_progress`] 文件头）。
+        if let Some(current) = state.comfy_progress.current() {
+            obj.insert("current".into(), current.to_json());
+            obj.insert("currentStep".into(), Value::String(current.human()));
+        }
+        obj.insert("progressConnected".into(), Value::Bool(state.comfy_progress.is_connected()));
     }
     // **抠图模型在不在**（2026-09-27）：`easy imageRemBg` 只读 `<ComfyUI 根>\models\rembg`，
     // 而文件不在时它会自己去 HuggingFace 静默下载（表现是"点了按钮没反应"）。

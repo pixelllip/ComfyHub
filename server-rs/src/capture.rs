@@ -390,13 +390,37 @@ pub async fn status_json(state: &AppState) -> Result<Value, ApiError> {
     out.insert("capturedRuns".into(), json!(runs));
     out.insert("capturedMedia".into(), json!(media));
     out.insert("recent".into(), Value::Array(recent.iter().map(|r| r.to_json()).collect()));
+    // 正在跑的那一条（P4 第 72 步）——**没有正在跑的就整键不出现**
+    // （与旁边 `lastPollAt` / `outputDir` 那些可空键同一条规则）。
+    if let Some(current) = state.comfy_progress.current() {
+        out.insert("current".into(), current.to_json());
+    }
     Ok(Value::Object(out))
 }
 
-/// `GET /api/capture/jobs`（Kotlin `CaptureJobSnapshot`，5 个键）。
+/// 提交记录 + 它们各自的**实时进度**（P4 第 72 步）。
+///
+/// 进度**嵌在每条 submission 里**（`progress` 子对象）而不是另起一个数组：
+/// 界面右侧栏本来就是按 `promptId` 把两条对起来显示，分成两个数组反而要前端自己 join，
+/// 而且两边一旦不同步就会出现"这条任务挂着别人的进度"。
+/// 没有这个 `promptId` 的进度时**一个字节都不加**（不塞空对象）。
+///
+/// ⚠ 三处（`/status`、`/jobs`、`comfy_get_status`）读的都是这一个函数 ——
+/// 各写一份的后果是"模型看到的进度与界面看到的不是一回事"。
+pub fn submissions_json(state: &AppState, limit: usize) -> Vec<Value> {
+    state
+        .submissions
+        .list(limit)
+        .iter()
+        .map(|item| state.comfy_progress.decorate(item))
+        .collect()
+}
+
+/// `GET /api/capture/jobs`（Kotlin `CaptureJobSnapshot`，5 个键 + 第 72 步的 `current`）。
 ///
 /// `submissions` 是**本进程提交过的任务**（P4 第 48 步起由 `comfy_submit` 维护，
-/// 与 `comfy_get_status` / 界面右侧栏读的是同一份内存清单）。
+/// 与 `comfy_get_status` / 界面右侧栏读的是同一份内存清单），
+/// 第 72 步起每条带上 `progress`（实时百分比 + 当前步骤）。
 pub async fn jobs_json(state: &AppState) -> Result<Value, ApiError> {
     let (reachable, snapshot) = probe_queue(state).await;
     let mut out = Map::new();
@@ -406,7 +430,12 @@ pub async fn jobs_json(state: &AppState) -> Result<Value, ApiError> {
     if let Some(label) = snapshot.running_label {
         out.insert("runningLabel".into(), json!(label));
     }
-    out.insert("submissions".into(), Value::Array(state.submissions.list(10)));
+    out.insert("submissions".into(), Value::Array(submissions_json(state, 10)));
+    // 正在跑的那一条提到**顶层**：界面右侧栏靠它置顶/高亮，不必自己挑
+    // （列表里也能找到，但"谁在跑"是服务端知道得更准的事实）
+    if let Some(current) = state.comfy_progress.current() {
+        out.insert("current".into(), current.to_json());
+    }
     Ok(Value::Object(out))
 }
 

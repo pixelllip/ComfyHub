@@ -56,6 +56,7 @@
 //! | **桌面文件工具五件**（`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`）+ **路径准入**（`resolve_read` / `resolve_write`：禁段、真实路径、目录根不可写） | ✅（P4 第 40 步；`desktop_tools.rs` + `policy.rs`，桌面提示词与下发的 `tools[]` 现在含它们） |
 //! | **comfy 五件**：`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` / `comfy_sync_history`（写库：建提示词 + 产物入库）/ `comfy_load_workflow`（把本机工作流文件读进库，界面格式按 `/object_info` 转换） | ✅（P4 第 41~44 步） |
 //! | **`comfy_submit`（R10）**：审核 → 审批 → 提交 → **自己等** → `captureRun` 入库 → `mediaIds` | ✅（P4 第 48 步：`workflow_submit.rs`；参数覆盖 / 补线逐条移植，超时如实报 `timeout`；`/api/capture/jobs` 的 `submissions[]` 也由它维护。**第 70 步把闸门接全**：`workflow_audit::blocking_refusal` 那三项"必跑不了"（前端节点 / 版本不兼容 / 本机没有的节点类）当场拒（`MODEL_NOT_LOADABLE`，与 Kotlin 同码同措辞），参数 / 显存 / 提示词风格那些非阻断的走 `preflightWarnings` **只提醒不拦**） |
+//! | **生成任务的实时进度 + 当前步骤**（`comfy_progress.rs`：常驻 `ws://<comfyUrl>/ws` + 指数退避重连；`/api/capture/{status,jobs}` 的 `current` 与 `submissions[].progress`、`comfy_get_status` 的 `current` / `currentStep` / `progressConnected`） | ✅（P4 第 72 步。REST 拿不到进度 —— 2026-09-27 实测 `/queue` 没有、`/progress` 404、`/history` 只有跑完的，所以这是唯一来源。`percent` **只**来自 ComfyUI 自己发的 `value/max`（`progress` / `progress_state` 帧），**拿不到就是 `percent` 缺席（进度未知）**，绝不用"已执行节点数/总节点数"冒充；终态也不把 percent 抬到 100） |
 //! | **联网三工具 + 定向查询**（`web_search` / `web_fetch` / `civitai_search` / `find_model`） | ✅（P4 第 64 步：`web_tools.rs` / `civitai.rs` / `find_model.rs`。四件都是 **WEB 档**，共用 `MAX_WEB_QUERIES_PER_RUN` 那份预算、出厂全 `ASK`；`web_fetch` 的目标过 SSRF 闸门，`find_model` **先查本机再查外网**且**绝不代下**） |
 //! | **官方 comfy-mcp 那 39 个工具**（`system_stats` / `nodes` / `run_workflow` / `launch_comfyui` / `get_logs` …） | ✅（P4 第 45 步：`mcp.rs` 起 `comfy-mcp` 子进程走 JSON-RPC，清单进 `/api/ai/tools` 与下发的 `tools[]`；`launch_comfyui` 由我们**替用户补上共享模型根那三个参数**，失败时把 stderr 尾部带进 `detail`） |
 //! | **工作流审核 + 摘拼**：`comfy_audit_workflow`（七项确定性检查）/ `comfy_prune_workflow`（可达性摘除 + 按 `/object_info` 拼装） | ✅（P4 第 63 步：`workflow_audit.rs` / `workflow_prune.rs`；两件都**只报不改**，改好的图是**内联**返回的） |
@@ -212,6 +213,14 @@ async fn main() {
     // 没有它时只有端点/工具触发一次，"AI 说生成了、画廊里却没有"就永远差这一半。
     // 它同时是 `/api/capture/status` 里 `lastPollAt` / `lastError` 的真源。
     state.capture_poller.clone().spawn(state.clone());
+
+    // ---- 实时进度 WebSocket（P4 第 72 步）----------------------------------
+    //
+    // REST 拿不到进度（2026-09-27 实测：`/queue` 没有、`/progress` 404、`/history`
+    // 只有跑完的），生成任务的 percent 与"当前步骤"全在这条 WS 上。
+    // **常驻 + 重连**，与上面的轮询器同一条纪律：绝不在每个请求里现连一次
+    // （那既收不到已经发出去的帧，也会把 ComfyUI 按 clientId 记的 socket 表撑爆）。
+    comfyhub_server_rs::comfy_progress::spawn(&state.comfy_progress, state.clone());
 
     // ---- MCP 桥预热（P4 第 45 步）------------------------------------------
     //

@@ -8515,7 +8515,9 @@ async fn capture_status_and_jobs_ask_the_real_queue() {
     assert_eq!(up["queueRunning"], 1, "{up}");
     assert_eq!(up["queuePending"], 2, "{up}");
 
-    // /jobs 是右侧栏轮询用的那一份：5 个键、队首标题、submissions（这一场没提交过 → 空数组）
+    // /jobs 是右侧栏轮询用的那一份：队首标题、submissions（这一场没提交过 → 空数组）。
+    // ⚠ 正在跑的那一条会多出第 6 个键 `current`（P4 第 72 步）—— 这里什么都没跑，
+    //   所以它**整键不出现**，键集合仍是这 5 个（可空键省略，与 `runningLabel` 同一规则）。
     let (status_code, jobs) = get_json(router_for(state.clone()), "/api/capture/jobs").await;
     assert_eq!(status_code, StatusCode::OK, "{jobs}");
     assert_eq!(
@@ -8556,6 +8558,123 @@ async fn capture_status_and_jobs_ask_the_real_queue() {
     assert_eq!(small.payload["submissions"][0]["promptId"], "comfy-run-status-1");
 
     handle.abort();
+    std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+// ===========================================================================
+//  生成任务的**进度百分比 + 当前步骤**（P4 第 72 步）
+//
+//  这里喂进去的帧分两类，注释里逐条标明：
+//   ★ 真帧 = 2026-09-27 在本机 ComfyUI 上抓到的原文（`ws://127.0.0.1:8188/ws`）；
+//   ✎ 手写帧 = 本机那条路径没走到的形状（抄 ComfyUI 源码里 `send_sync` 的那一行）。
+//  判据是"界面能被喂到的东西"：`current` + `submissions[].progress` 一起对。
+// ===========================================================================
+
+/// 那一次抓帧用的 `prompt_id`（真帧原文里的那个）。
+const PROGRESS_PROMPT_ID: &str = "3cf2b8f7-babe-4a75-9b1c-4d120af3bc19";
+
+/// ★ 真帧：`execution_start`（ComfyUI `execution.py:742`）。
+const REAL_EXECUTION_START: &str = r#"{"type": "execution_start", "data": {"prompt_id": "3cf2b8f7-babe-4a75-9b1c-4d120af3bc19", "timestamp": 1790510532242}}"#;
+/// ★ 真帧：`executing`（execution.py:496）—— 轮到节点 5 了。
+const REAL_EXECUTING: &str = r#"{"type": "executing", "data": {"node": "5", "display_node": "5", "prompt_id": "3cf2b8f7-babe-4a75-9b1c-4d120af3bc19"}}"#;
+/// ★ 真帧：`execution_success`（execution.py:824）。
+const REAL_EXECUTION_SUCCESS: &str = r#"{"type": "execution_success", "data": {"prompt_id": "3cf2b8f7-babe-4a75-9b1c-4d120af3bc19", "timestamp": 1790510888972}}"#;
+
+#[tokio::test]
+async fn capture_jobs_and_status_carry_real_progress_and_current_step() {
+    let state = state();
+    // ⚠ 把 ComfyUI 地址钉死在一个**没人听**的端口上：不钉的话这台机器上真跑着的
+    //   8188 会被问一句，队首真有任务时 `runningLabel` 冒出来、键集合就随环境变了
+    //   （与上面那条用例同一个理由）。
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = "http://127.0.0.1:1".to_string();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    // ① 什么都没跑、也没进度：`current` 与 `progress` **整键不出现**
+    //    （不做这一步就不知道"省略规则"有没有被写坏成 `null`）
+    let (code, jobs) = get_json(router_for(state.clone()), "/api/capture/jobs").await;
+    assert_eq!(code, StatusCode::OK);
+    assert!(jobs.get("current").is_none(), "没在跑就不该有 current：{jobs}");
+    let (_, status) = get_json(router_for(state.clone()), "/api/capture/status").await;
+    assert!(status.get("current").is_none(), "status 同：{status}");
+
+    // ② 提交时登记好"节点 id → 可读名"（`comfy_submit` 手里就有 API 图），并记一条提交
+    state.comfy_progress.register_graph(
+        PROGRESS_PROMPT_ID,
+        &serde_json::json!({
+            "3": { "class_type": "KSampler", "_meta": { "title": "采样 KSampler" } },
+            "5": { "class_type": "CLIPTextEncode" },
+        }),
+    );
+    state.submissions.record(serde_json::json!({
+        "promptId": PROGRESS_PROMPT_ID,
+        "submittedBy": "ai",
+        "status": "running",
+        "submittedAt": "2026-09-27T00:00:00Z",
+        "elapsedMs": 1200,
+        "mediaIds": [],
+    }));
+
+    // ③ ★ 真帧：开始 + 轮到节点 5（**没有** value/max）
+    state.comfy_progress.frame(REAL_EXECUTION_START);
+    state.comfy_progress.frame(REAL_EXECUTING);
+    let (_, jobs) = get_json(router_for(state.clone()), "/api/capture/jobs").await;
+    assert_eq!(
+        keys(&jobs),
+        vec!["comfyReachable", "current", "queuePending", "queueRunning", "submissions"],
+        "正在跑的时候多出 current：{jobs}"
+    );
+    assert_eq!(jobs["current"]["promptId"], PROGRESS_PROMPT_ID);
+    assert_eq!(jobs["current"]["state"], "running");
+    assert_eq!(jobs["current"]["nodeId"], "5");
+    assert_eq!(jobs["current"]["nodeName"], "CLIPTextEncode", "可读名来自提交时登记的图");
+    assert!(
+        jobs["current"].get("percent").is_none(),
+        "★ 没有 progress 帧就是**进度未知**，绝不拿'已执行节点数/总节点数'凑一个数：{jobs}"
+    );
+    assert_eq!(jobs["submissions"][0]["promptId"], PROGRESS_PROMPT_ID);
+    assert_eq!(jobs["submissions"][0]["progress"]["nodeId"], "5");
+    // `/api/capture/status` 也带上"正在跑的那条"
+    let (_, status) = get_json(router_for(state.clone()), "/api/capture/status").await;
+    assert_eq!(status["current"]["promptId"], PROGRESS_PROMPT_ID);
+
+    // ④ ✎ 手写帧：经典 `progress`（本机这个版本没走 `hijack_progress` 的 ProgressBar 钩子，
+    //    所以没抓到活帧；形状抄自 main.py:432 `{"value","max","prompt_id","node"}`）
+    let progress_frame = format!(
+        r#"{{"type": "progress", "data": {{"value": 12, "max": 30, "prompt_id": "{PROGRESS_PROMPT_ID}", "node": "3"}}}}"#
+    );
+    state.comfy_progress.frame(&progress_frame);
+    let (_, jobs) = get_json(router_for(state.clone()), "/api/capture/jobs").await;
+    assert_eq!(jobs["current"]["percent"], 40, "12/30 = 40%");
+    assert_eq!(jobs["current"]["value"], 12);
+    assert_eq!(jobs["current"]["max"], 30);
+    assert_eq!(jobs["current"]["nodeId"], "3");
+    assert_eq!(jobs["current"]["nodeName"], "采样 KSampler", "`_meta.title` 优先于 class_type");
+    assert_eq!(jobs["submissions"][0]["progress"]["percent"], 40, "提交条目上也要有同一份");
+
+    // ⑤ 模型那条路（`comfy_get_status`）：要说得出"跑到哪一步了"
+    let tool = call_tool(&state, "comfy_get_status", serde_json::json!({ "recentLimit": 0 }))
+        .await
+        .unwrap();
+    assert_eq!(tool.payload["current"]["percent"], 40, "{:?}", tool.payload);
+    let step = tool.payload["currentStep"].as_str().expect("要有一句人话的当前步骤");
+    assert!(step.contains("40%"), "{step}");
+    assert!(step.contains("采样 KSampler"), "{step}");
+    assert_eq!(tool.payload["progressConnected"], false, "WS 没连上就如实说没连上（这里没起它）");
+
+    // ⑥ ★ 真帧：`execution_success` → current 清掉、进度留痕但**不许抬到 100**
+    state.comfy_progress.frame(REAL_EXECUTION_SUCCESS);
+    let (_, jobs) = get_json(router_for(state.clone()), "/api/capture/jobs").await;
+    assert!(jobs.get("current").is_none(), "跑完之后就没有'正在跑的'了：{jobs}");
+    assert_eq!(jobs["submissions"][0]["progress"]["state"], "success");
+    assert_eq!(
+        jobs["submissions"][0]["progress"]["percent"], 40,
+        "★ 终态不把 percent 编成 100 —— 界面按 state 显示'已完成'"
+    );
+    assert!(
+        jobs["submissions"][0]["progress"].get("nodeId").is_none(),
+        "跑完了就不该还挂着某个节点"
+    );
+
     std::fs::remove_dir_all(state.project_root()).ok();
 }
 
