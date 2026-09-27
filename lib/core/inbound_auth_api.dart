@@ -130,18 +130,55 @@ class InboundAuthApi {
   Future<void> revoke(String deviceId, {String? token}) =>
       _send('POST', '/api/auth/devices/${Uri.encodeComponent(deviceId)}/revoke', const {}, token: token);
 
-  /// `POST /api/auth/devices/{id}/credentials` `{allow}` —— 是否允许这台设备**下行密钥**。
+  /// `POST /api/auth/devices/{id}/credentials` `{allow, allowUpload?}` ——
+  /// 这台设备能不能**下行**密钥 / 能不能**上行**（改桌面上的）密钥。
   ///
-  /// 默认 `false`：配对成功 ≠ 能拿到 API Key（用户明确勾选才开）。
-  Future<PairedDevice> setAllowCredentials(String deviceId, bool allow, {String? token}) async =>
+  /// 两个开关**分开**（`docs/pairing-design.md` §14.1）：读和写不是同一种权力，
+  /// 合成一个的后果是用户为了图方便把读打开、顺手也把写打开了 ——
+  /// 而写能让"下一次桌面自己发请求"用上别人塞进来的 key。
+  ///
+  /// [allowUpload] 传 `null` 表示"这次只动下行那个开关"（**不发这个键**）：
+  /// 旧后端不认识它，多发一个键不会报错但也不会生效，界面若要据此提示"旧版本"，
+  /// 就得看回读出来的 [PairedDevice.allowCredentialsUpload] 有没有变。
+  Future<PairedDevice> setAllowCredentials(
+    String deviceId,
+    bool allow, {
+    bool? allowUpload,
+    String? token,
+  }) async =>
       PairedDevice.fromJson(
         _asMap(await _send(
           'POST',
           '/api/auth/devices/${Uri.encodeComponent(deviceId)}/credentials',
-          {'allow': allow},
+          {
+            'allow': allow,
+            'allowUpload': ?allowUpload,
+          },
           token: token,
         )),
       );
+
+  /// `PUT /api/ai/credentials` —— **密钥上行**：把手机上配的 key 推给桌面（§14.2）。
+  ///
+  /// 三条纪律：
+  ///  · 走的是**已配对设备**令牌 + 设备上的 `allowCredentialsUpload`（默认关）；
+  ///  · 值只在请求体里出现一次，**不写日志、不回显**；
+  ///  · [rev] 是"我读到的那一版"（`ai.credentials.rev`）：落后于桌面就回
+  ///    `STALE_IGNORED`（**宁可让用户重试一次，也不许悄悄覆盖**）。
+  Future<CredentialUploadResult> uploadCredentials(
+    Map<String, String> values, {
+    int? rev,
+    String? token,
+  }) async =>
+      CredentialUploadResult.fromJson(_asMap(await _send(
+        'PUT',
+        '/api/ai/credentials',
+        {
+          'credentials': values,
+          'rev': ?rev,
+        },
+        token: token,
+      )));
 
   // --- 手机侧（匿名 + 限速）--------------------------------------------------
 
@@ -254,6 +291,7 @@ class PairedDevice {
     this.lastSeenAt,
     this.lastIp,
     this.allowCredentials = false,
+    this.allowCredentialsUpload = false,
   });
 
   final String id;
@@ -265,6 +303,12 @@ class PairedDevice {
   /// 是否允许**把桌面上的 API Key 下发给这台设备**（默认 `false`）。
   final bool allowCredentials;
 
+  /// 是否允许**这台设备改桌面上的 API Key**（上行，默认 `false`，§14.1）。
+  ///
+  /// 旧后端没有这个字段 → 恒 `false`。界面据此如实说"这台后端还不支持上行密钥"，
+  /// **别**把它当成"用户没开"（两者的处置完全不同）。
+  final bool allowCredentialsUpload;
+
   factory PairedDevice.fromJson(Map<String, dynamic> json) => PairedDevice(
         id: (json['id'] ?? '').toString(),
         name: (json['name'] ?? '').toString(),
@@ -272,7 +316,62 @@ class PairedDevice {
         lastSeenAt: json['lastSeenAt']?.toString(),
         lastIp: json['lastIp']?.toString(),
         allowCredentials: json['allowCredentials'] == true,
+        allowCredentialsUpload: json['allowCredentialsUpload'] == true,
       );
+}
+
+/// `PUT /api/ai/credentials` 的回执（§14.2）。
+///
+/// `rejected` **逐条带码**：手机要能区分"永远不可能成功"（`FORBIDDEN` / `BAD_PAYLOAD`）
+/// 与"桌面那份更新了、你重试也没用"（`STALE_IGNORED`），而不是只看到一个失败总数。
+class CredentialUploadResult {
+  const CredentialUploadResult({
+    this.applied = const [],
+    this.rejected = const [],
+    this.rev,
+  });
+
+  final List<String> applied;
+  final List<CredentialRejection> rejected;
+
+  /// 桌面写完之后的 `ai.credentials.rev`（下次上行要带它）。
+  final int? rev;
+
+  factory CredentialUploadResult.fromJson(Map<String, dynamic> json) => CredentialUploadResult(
+        applied: (json['applied'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        rejected: (json['rejected'] as List?)
+                ?.whereType<Map>()
+                .map((e) => CredentialRejection.fromJson(Map<String, dynamic>.from(e)))
+                .toList() ??
+            const [],
+        rev: (json['rev'] as num?)?.toInt(),
+      );
+}
+
+/// 一条被拒的凭据上行。
+class CredentialRejection {
+  const CredentialRejection({required this.ref, required this.code, this.message});
+
+  final String ref;
+
+  /// `FORBIDDEN`（开关没开/设备没授权）/ `STALE_IGNORED`（桌面那份更新）/
+  /// `BAD_PAYLOAD`（ref 形状不合法）。
+  final String code;
+  final String? message;
+
+  factory CredentialRejection.fromJson(Map<String, dynamic> json) => CredentialRejection(
+        ref: (json['ref'] ?? '').toString(),
+        code: (json['code'] ?? '').toString(),
+        message: json['message']?.toString(),
+      );
+
+  /// 给人看的一句话（界面直接显示它，别只显示码）。
+  String get hint => switch (code) {
+        'FORBIDDEN' => '桌面没有允许这台设备改密钥（要在桌面上的设备卡片里勾选）',
+        'STALE_IGNORED' => '桌面上这把更新过 —— 先从桌面同步一次，再推你改的这版',
+        'BAD_PAYLOAD' => message ?? '这把的名字（ref）不合法，桌面拒收了',
+        _ => message ?? '桌面拒收（$code）',
+      };
 }
 
 /// 桌面屏幕上正在等的那次配对（`GET /api/auth/pair/pending`）。

@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/ai_api_client.dart';
+import '../core/api_client.dart' show ApiException;
 import '../core/credential_store.dart';
+import '../core/inbound_auth_api.dart';
+import '../core/pairing_token.dart';
 import '../core/settings_store.dart';
 import '../models/ai_models.dart';
 import 'ai_tools_settings_page.dart';
@@ -18,7 +21,14 @@ class AiProviderSettingsPage extends StatefulWidget {
   /// [api] 仅供测试注入假后端；正式运行时按设置里的后端地址创建。
   final AiApiClient? api;
 
-  const AiProviderSettingsPage({super.key, this.api});
+  /// 凭据来源。正式运行时按平台选（手机 = 本机密钥库）；测试注入假的。
+  final CredentialStore? credentials;
+
+  /// `InboundAuthApi` 的工厂：**密钥上行**（「推给桌面」）要打 `/api/ai/credentials`。
+  /// 测试注入带 MockClient 的那个，正式运行时按后端地址现建。
+  final InboundAuthApi Function(String baseUrl)? authApiFactory;
+
+  const AiProviderSettingsPage({super.key, this.api, this.credentials, this.authApiFactory});
 
   @override
   State<AiProviderSettingsPage> createState() => _AiProviderSettingsPageState();
@@ -67,7 +77,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _api = widget.api ?? AiApiClient(context.read<SettingsStore>().baseUrl);
-      _credentials = openCredentialStore(api: _api);
+      _credentials = widget.credentials ?? openCredentialStore(api: _api);
       _reload();
       _loadBuiltin();
       _loadCapabilityCatalog();
@@ -295,6 +305,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
             key: ValueKey(_selected!.id + _selected!.revision.toString()),
             api: _api,
             credentials: _credentials,
+            authApiFactory: widget.authApiFactory,
             provider: _selected!,
             models: _models,
             info: _info,
@@ -458,6 +469,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
                     key: ValueKey(provider.id + provider.revision.toString()),
                     api: _api,
                     credentials: _credentials,
+                    authApiFactory: widget.authApiFactory,
                     provider: provider,
                     models: _models,
                     info: _info,
@@ -764,6 +776,7 @@ class _CredentialDot extends StatelessWidget {
 class _ProviderDetail extends StatefulWidget {
   final AiApiClient api;
   final CredentialStore credentials;
+  final InboundAuthApi Function(String baseUrl)? authApiFactory;
   final AiProvider provider;
   final List<AiModel> models;
   final String? info;
@@ -774,6 +787,7 @@ class _ProviderDetail extends StatefulWidget {
     super.key,
     required this.api,
     required this.credentials,
+    this.authApiFactory,
     required this.provider,
     required this.models,
     required this.info,
@@ -922,8 +936,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
-              '这一条保存在**本机密钥库**（Android Keystore），只在这台手机上生效：'
-              '桌面的密钥不会下发到手机（凭据明文永不出桌面）。换手机要重新填一次。',
+              '这一条保存在**本机密钥库**（Android Keystore），只在这台手机上生效。'
+              '想让桌面也用这一把，点下面的「推给桌面」（值会离开本机，桌面必须已允许这台设备改密钥）。'
+              '反过来「从桌面同步密钥」在「远程访问与配对」那张卡里。',
               style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
             ),
           ),
@@ -953,6 +968,16 @@ class _ProviderDetailState extends State<_ProviderDetail> {
               icon: const Icon(Icons.delete_outline, size: 18),
               label: const Text('移除密钥'),
             ),
+            // 密钥上行（§14.2）：只有"手机上、且有 ref、且本机真有这把"才出现。
+            // 桌面自己就是真源，没有"推给桌面"这回事（`RemoteCredentialStore.reveal` 直接抛）。
+            if (widget.credentials.isLocal && (p.credentialRef ?? '').trim().isNotEmpty) ...[
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _busy || !p.credential.configured ? null : _pushKeyToDesktop,
+                icon: const Icon(Icons.upload_outlined, size: 18),
+                label: const Text('推给桌面'),
+              ),
+            ],
           ],
         ),
       ],
@@ -1169,6 +1194,78 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       _toast('密钥已移除。');
     } catch (e) {
       _toast('移除失败：$e', error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// **把本机这一把推给桌面**（`docs/pairing-design.md` §14.2 密钥上行）。
+  ///
+  /// 四步，一步都不能省：
+  ///  ① **先问一次**：值会离开本机，这是用户该知情的事；
+  ///  ② `reveal` 取明文（**全仓唯一允许读密钥的地方**）：本机没有就如实说"没有可推的"，
+  ///     **绝不拿空串去覆盖桌面上那把好的**；
+  ///  ③ `PUT /api/ai/credentials`，带上配对令牌；`rev` **不带** = 用户显式点的强制覆盖
+  ///     （带 rev 才是"等值才应用"，见 §14.3）；
+  ///  ④ 回执**逐条如实**：`applied` 说成功、`rejected` 说清是哪一种（开关没开 / 桌面更新过 /
+  ///     名字不合法），旧后端（404/501）直说"还没有这条接口"。
+  Future<void> _pushKeyToDesktop() async {
+    final provider = widget.provider;
+    final ref = provider.credentialRef?.trim() ?? '';
+    if (ref.isEmpty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('把这一把密钥推给桌面？'),
+        content: Text(
+          '「$ref」这把 key 会离开本机，写到桌面那一份凭据里 —— 桌面以后就用它发请求。\n\n'
+          '桌面必须已经允许这台设备改密钥，否则会被拒（在桌面上的设备卡片里勾选）。',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('推上去')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    InboundAuthApi? owned;
+    try {
+      final value = await widget.credentials.reveal(provider);
+      if (value == null || value.isEmpty) {
+        _toast('本机没有这把密钥（没有可推的）—— 推空值会把桌面上那把好的覆盖掉，所以这里不发请求。',
+            error: true);
+        return;
+      }
+      final factory = widget.authApiFactory;
+      final auth = factory != null ? factory(widget.api.baseUrl) : (owned = InboundAuthApi(widget.api.baseUrl));
+      final CredentialUploadResult result;
+      try {
+        result = await auth.uploadCredentials({ref: value}, token: PairingTokenCache.read());
+      } finally {
+        // 自己建的客户端自己收；注入进来的（测试/MockClient）不许关
+        owned?.dispose();
+      }
+      if (result.applied.contains(ref)) {
+        await widget.onChanged('「$ref」已推到桌面。');
+        _toast('已推给桌面：$ref');
+      } else if (result.rejected.isNotEmpty) {
+        final r = result.rejected.firstWhere((e) => e.ref == ref, orElse: () => result.rejected.first);
+        _toast('桌面拒收「${r.ref}」：${r.hint}', error: true);
+      } else {
+        // 既没说成功也没说被拒 —— 如实说"桌面没回这一条"，别假装成功
+        _toast('桌面既没回成功也没回被拒（回执里没有 $ref）—— 别当它成了。', error: true);
+      }
+    } on ApiException catch (e) {
+      if (e.statusCode == 404 || e.statusCode == 501) {
+        _toast('这台后端还没有"上行密钥"的接口（旧版本）—— 升级桌面后端再试。', error: true);
+      } else {
+        _toast('推给桌面失败：${e.message}', error: true);
+      }
+    } catch (e) {
+      _toast('推给桌面失败：$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }

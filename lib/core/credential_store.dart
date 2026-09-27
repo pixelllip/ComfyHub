@@ -13,17 +13,19 @@ import 'run_event_source.dart';
 /// | | 真源 | 说明 |
 /// | --- | --- | --- |
 /// | 桌面 | 后端托管文件 / 环境变量（`CredentialService`） | 值不回读（AIH-012） |
-/// | 手机 | **本机 Android Keystore** | 桌面的 key **不下行**（总纲 §3.3：`ai_providers` 不同步），手机上必须单独填一把 |
+/// | 手机 | **本机 Android Keystore** | 桌面的 key 要么用户在手机上单独填，要么显式点「从桌面同步密钥」拉下来（§11.2），要么反过来把自己这把推上去（§14） |
 ///
 /// 这条分叉以前没有：界面清一色打 `PUT /api/ai/providers/{id}/credentials`，
 /// 于是手机上**根本没有任何入口**把 key 放进 Keystore —— 手机 harness 再完整也永远发不出
 /// 一条消息（上游 401），而界面只会说"密钥已保存"，保存的其实是桌面那一份。
 /// 这正是"安卓侧真正跑起来"缺的那一环。
 ///
-/// 两条纪律照旧：
-/// 1. **值只写不读**：这里没有任何"取出密钥"的方法，`statusOf` 只回"有没有 / 从哪来 / 能不能改"；
+/// 三条纪律照旧：
+/// 1. **值只写不读**：这里只有一个例外 [reveal]（见它的注释），别的一律只回
+///    "有没有 / 从哪来 / 能不能改"（`statusOf`）；
 /// 2. **空 ref 是合法状态**（不是错误）：它表示"这条 provider 压根不需要密钥"，
-///    与"配了但没有值"是两回事（桌面 `describe` 的三分支之一）。
+///    与"配了但没有值"是两回事（桌面 `describe` 的三分支之一）；
+/// 3. **上行是显式动作**：没有任何"自动互推"（那是静默改用户凭据）。
 abstract class CredentialStore {
   /// 手机（本机密钥库）还是桌面（后端托管）。
   bool get isLocal;
@@ -39,6 +41,17 @@ abstract class CredentialStore {
 
   /// 移除密钥，返回移除之后的状态。
   Future<AiCredentialStatus> clear(AiProvider provider);
+
+  /// ⚠ **全仓唯一一处允许把密钥明文读出来的地方**（`docs/pairing-design.md` §14.4）。
+  ///
+  /// 它存在的唯一理由：用户显式点「把本机密钥推给桌面」时，值必须离开本机。
+  /// 名字刻意**不叫** `read` / `get` —— 一出现就说明"有东西要出本机"，评审时能一眼看见。
+  ///
+  /// 三条不许破：
+  ///  · **只有那一个按钮会调它**（有一条扫生产源码的用例盯着，与 R13 同款做法）；
+  ///  · 值**不进日志、不进事件、不回显到界面**；
+  ///  · 远端实现**直接抛**：桌面自己就是真源，不存在"推给桌面"这回事。
+  Future<String?> reveal(AiProvider provider);
 }
 
 /// 桌面实现：转发给 `AiApiClient`（后端托管）。
@@ -59,6 +72,15 @@ class RemoteCredentialStore implements CredentialStore {
 
   @override
   Future<AiCredentialStatus> clear(AiProvider provider) => _api.removeCredential(provider.id);
+
+  /// 桌面自己就是密钥的真源 —— 没有"把桌面上的密钥推给桌面"这回事。
+  ///
+  /// 抛而不是回 `null`：回 null 会让调用方以为"这条没有值"，
+  /// 于是静默少推一把 key（而用户点的明明是"全推上去"）。
+  @override
+  Future<String?> reveal(AiProvider provider) => throw StateError(
+        '桌面自己就是密钥的真源（reveal 只在手机上、且只在"推给桌面"那一个动作里用）',
+      );
 }
 
 /// 手机实现：`MethodChannel` → 本地 Kotlin harness → Android Keystore。
@@ -115,6 +137,17 @@ class DeviceCredentialStore implements CredentialStore {
     }
     await _method.invokeMethod<bool>('removeCredential', {'ref': ref});
     return statusOf(provider);
+  }
+
+  /// 把本机密钥库里的明文取出来。**只给「推给桌面」那一个动作用**（见抽象类注释）。
+  ///
+  /// 桥那侧是 `getCredential(ref)`；返回 null = 本机没有这把（调用方要如实说"没有可推的"，
+  /// 而不是拿空串去覆盖桌面上那把好的）。
+  @override
+  Future<String?> reveal(AiProvider provider) async {
+    final ref = provider.credentialRef?.trim();
+    if (ref == null || ref.isEmpty) return null;
+    return _method.invokeMethod<String>('getCredential', {'ref': ref});
   }
 }
 
