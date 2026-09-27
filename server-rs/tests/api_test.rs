@@ -7906,6 +7906,117 @@ async fn 遮罩照底图尺寸画且白区就是重绘区() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// `matteSource="model"`（AI 抠图那一档，2026-09-27）：**不写遮罩、不写 ring**，
+/// 只把人物图那份像素清理干净，并把 `personFilename` 回给调用方。
+///
+/// 这一档存在的原因（总纲 §16）：合成用的软遮罩由工作流里的抠图节点 `easy imageRemBg` 现算，
+/// 而 `ImageCompositeMasked` 合的是**人物图那张的像素** —— 边界那圈"人 + 背景"的混合色不洗掉，
+/// 软遮罩按 alpha 贴上去就是绕着人的一圈淡背景色。
+#[tokio::test]
+async fn matte_档不写遮罩只把人物图清理干净() {
+    let state = state();
+    let root = state.project_root();
+    configure_shared_output(&state, &root);
+    let input = root.join("shared").join("input");
+    write_test_png(&input.join("bg.png"), 64, 48);
+
+    // 人物图：绿幕 + 中间一块"人"，**紧贴人外面那两圈是"人 + 绿幕"的混合色**
+    //（颜色离背景很近 → 颜色键把它判成背景 → 它落在掩码**外面**，正是只往内压盖不到的那批）
+    let (w, h) = (64u32, 48u32);
+    let mut person = image::RgbImage::from_pixel(w, h, image::Rgb([0, 177, 64]));
+    for y in 8..40u32 {
+        for x in 16..48u32 {
+            person.put_pixel(x, y, image::Rgb([200, 40, 60]));
+        }
+    }
+    for y in 6..42u32 {
+        for x in 14..50u32 {
+            if !(8..40).contains(&y) || !(16..48).contains(&x) {
+                person.put_pixel(x, y, image::Rgb([20, 170, 60]));
+            }
+        }
+    }
+    person.save(input.join("person.png")).unwrap();
+
+    let out = call_tool(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({
+            "mode": "subject",
+            "matteSource": "model",
+            "baseFilename": "bg.png",
+            "subjectFilename": "person.png",
+            "bgColor": "green"
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(out.payload["matteSource"], "model");
+    assert_eq!(out.payload["maskGenerated"], false, "matte 档不许写合成遮罩");
+    assert!(out.payload.get("filename").is_none(), "没有遮罩文件名可给：{:?}", out.payload["filename"]);
+    assert_eq!(
+        out.payload["personFilename"], "person.png",
+        "要把**清理过**的那份人物图文件名回给调用方（它才是 20.image 该填的）"
+    );
+    let hint = out.payload["hint"].as_str().unwrap();
+    assert!(hint.contains("comfyhub_paste_person_matte_anima.json"), "{hint}");
+    assert!(
+        hint.contains("不要") && hint.contains("LoadImageMask"),
+        "matte 档必须明确说「**不要**覆盖遮罩」：{hint}"
+    );
+    assert!(
+        !hint.contains("12.image"),
+        "matte 档不该出现「覆盖 12.image」那种指引（那份工作流没有 12 / 26）：{hint}"
+    );
+    assert!(out.payload["matteNote"].as_str().unwrap().contains("imageRemBg"));
+
+    // input 目录里**不许**多出遮罩 / ring（写一张没人用的文件只会在用户目录里攒垃圾）
+    let strays: Vec<String> = std::fs::read_dir(&input)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with("comfyhub_mask_") || n.starts_with("ring-"))
+        .collect();
+    assert!(strays.is_empty(), "matte 档在 input 目录里留了垃圾：{strays:?}");
+
+    // 人外面那圈溢色的绿要被压下去（只往内压时它是 170 —— 那就是那圈淡背景色）
+    let cleaned = image::open(input.join("person.png")).unwrap().to_rgb8();
+    assert!(
+        cleaned.get_pixel(14, 24)[1] < 100,
+        "掩码外那圈溢色要被压掉，实测 {:?}",
+        cleaned.get_pixel(14, 24)
+    );
+    assert_eq!(
+        cleaned.get_pixel(32, 24),
+        &image::Rgb([200, 40, 60]),
+        "人物本体像素不许被改颜色"
+    );
+
+    // 取值只认两个；而且必须跟 mode=subject 一起用
+    //（⚠ 尺寸校验排在参数枚举校验前面，所以这里要把 width/height 给全，否则报的是尺寸那条）
+    let bad_value = call_tool(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({ "width": 64, "height": 48, "region": "full", "matteSource": "nope" }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(bad_value.code, "INVALID_ARGUMENT");
+    assert!(bad_value.message.contains("matteSource"), "{}", bad_value.message);
+    let bad_mode = call_tool(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({ "width": 64, "height": 48, "region": "full", "matteSource": "model" }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(bad_mode.code, "INVALID_ARGUMENT");
+    assert!(bad_mode.message.contains("mode=\"subject\""), "{}", bad_mode.message);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 #[tokio::test]
 async fn 图像编辑三件在真库夹具上串起来能用() {
     // ⚠ "找不到 ComfyUI"那一支**不在这里验**：这台开发机装着 ComfyUI，

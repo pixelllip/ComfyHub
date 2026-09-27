@@ -79,6 +79,13 @@ pub const DEFAULT_SUBJECT_SHRINK: i64 = 0;
 pub const DEFAULT_EDGE_BAND: i64 = 3;
 pub const DEFAULT_EDGE_TOLERANCE: f64 = 0.25;
 
+/// `matteSource="model"` 档去溢色的**外侧**默认半径（像素）。
+///
+/// 为什么外侧要单独给一个（而不是沿用内侧那 6）：软遮罩的边界比颜色剪影**宽** ——
+/// 模型给的是连续 alpha，"人 + 背景"的混合像素有好几像素宽，且**整段都在剪影外面**
+/// （见 [`despill_band`] 的实测表）。8 是绿幕那档量出来"清零"的下界，再大只是浪费。
+pub const DEFAULT_OUTER_BAND: i64 = 8;
+
 // ---------------------------------------------------------------------------
 //  ComfyUI 的 input 目录
 // ---------------------------------------------------------------------------
@@ -417,6 +424,27 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         ));
     }
     let subject_filename = str_arg(args, "subjectFilename");
+    // `matteSource`：合成用的遮罩**从哪来**。
+    //   · `color`（默认）：今天的路 —— 本工具按颜色抠出剪影并**写一张遮罩文件**（`mode="subject"`），
+    //     或按 `region` 画一张（`mode="rect"`）。
+    //   · `model`：遮罩由**工作流里的抠图节点**现算（`easy imageRemBg`，
+    //     见 `comfyui\workflows\comfyhub_paste_person_matte_anima.json`）。这一档本工具**不写遮罩、不写 ring**，
+    //     只做一件事：把**人物图那一份像素**清理干净（反混 + 两侧去溢色）并把文件名回给调用方。
+    //     为什么非做不可：`ImageCompositeMasked` 合的是**那张图的像素**，边界那圈"人 + 背景"的混合色
+    //     不去掉，软遮罩按 alpha 贴上去就是绕着人的一圈淡背景色（实测 2.56 / max 16 → 清完 0.00 / max 0）。
+    let matte_source = str_arg(args, "matteSource").unwrap_or_else(|| "color".to_string()).to_lowercase();
+    if matte_source != "color" && matte_source != "model" {
+        return Err(ToolFailure::new(
+            "INVALID_ARGUMENT",
+            format!("matteSource 只支持 color / model，收到「{matte_source}」"),
+        ));
+    }
+    if matte_source == "model" && mode != "subject" {
+        return Err(ToolFailure::new(
+            "INVALID_ARGUMENT",
+            "matteSource=\"model\" 要跟 mode=\"subject\" 一起用：AI 抠图抠的就是 subjectFilename 那张人物图",
+        ));
+    }
     let tolerance = args
         .get("tolerance")
         .and_then(Value::as_f64)
@@ -469,12 +497,15 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         // ① **按颜色收边**（默认开）：扔掉边界那几个"人+背景"的混合像素 ——
         //    比几何腐蚀强的地方是**不碰细发丝**（发丝是头发色，离背景色远）。
         // ② 几何 `shrink` 默认 **0**（原来是 2，会把比 5 像素细的发丝整条吃掉）。
+        // ⚠ matte 档**不做这两步**：这一档的 `pixels` 只当**定位器**（真正的 alpha 在工作流里），
+        //    而"按颜色收边 / 几何收缩"都会把它往里啃 —— 啃完外带就从更里面起算，
+        //    反而盖不到软遮罩真正的边界。颜色档照旧（那两步是它的既定语义）。
         let edge_band = int_arg(args, "edgeBand").unwrap_or(DEFAULT_EDGE_BAND).clamp(0, 32) as usize;
         let edge_tolerance = args
             .get("edgeTolerance")
             .and_then(Value::as_f64)
             .unwrap_or(DEFAULT_EDGE_TOLERANCE);
-        if edge_band > 0 {
+        if edge_band > 0 && matte_source == "color" {
             drop_blended_edge(
                 &mut mask,
                 &image_for_edges,
@@ -486,7 +517,7 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
             );
         }
         let shrink = int_arg(args, "shrink").unwrap_or(DEFAULT_SUBJECT_SHRINK).clamp(0, 32) as usize;
-        if shrink > 0 {
+        if shrink > 0 && matte_source == "color" {
             subject_before_shrink = Some(mask.clone());
             mask = erode_mask(&mask, w as usize, h as usize, shrink);
         }
@@ -664,14 +695,36 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
                 }
                 // ① 先**反混**（把"人+背景"的混合像素还原成人物本体色 —— 这才是去掉
                 //    那圈灰绿边的正解）；② 再 despill 兜底（反混没覆盖到的边界像素压通道）。
+                //
+                // ⚠ `unmix_edge` 会**顺手啃掩码**（`a < 0.45` 的从掩码里去掉）。那是颜色档的
+                //    既定语义（下一步写出去的就是被啃过的那张）；但 matte 档的遮罩只当**定位器**
+                //    （真正的 alpha 在工作流里），啃掉就定位不到软边了 —— 所以那一档传**副本**进去，
+                //    `pixels` 原样留着给 despill 定边界。
                 let band = int_arg(args, "edgeBand").unwrap_or(DEFAULT_EDGE_BAND).clamp(1, 16) as usize;
-                let unmixed = unmix_edge(&mut canvas, &mut pixels, w as usize, h as usize, background, band);
+                let mut unmix_mask = pixels.clone();
+                let unmixed = unmix_edge(&mut canvas, &mut unmix_mask, w as usize, h as usize, background, band);
                 if unmixed { unmixed_edge = true; }
-                if despill_edges(&mut canvas, &pixels, w as usize, h as usize, background, 6) {
+                if matte_source == "color" {
+                    pixels = unmix_mask;
+                }
+                // ② 去溢色：**两侧**都要盖 —— 真正的溢色像素在掩码**外面**（交界那圈抗锯齿像素
+                //    颜色更靠近背景，被判成了背景），只往内压等于一个都没盖到（见 [`despill_band`]）。
+                //    matte 档的外带开大一点（软遮罩的边界比颜色剪影宽）。
+                let outer = if matte_source == "model" {
+                    int_arg(args, "outerBand").unwrap_or(DEFAULT_OUTER_BAND).clamp(0, 32) as usize
+                } else {
+                    6
+                };
+                let despilled_now =
+                    despill_band(&mut canvas, &pixels, w as usize, h as usize, background, 6, outer);
+                if despilled_now { despilled = true; }
+                // ⚠ 只要**动过像素**就要写回：反混在白 / 浅色背景下不触发 despill（没有溢色通道
+                //    可压），而**那一档恰恰只有反混能修**（把"人 + 白底"的混合像素还原成本体色）。
+                //    原来只在 despill 为真时才 save → 白底那条路的反混结果被算出来又丢掉（静默）。
+                if unmixed || despilled_now {
                     canvas.save(&target_path).map_err(|e| {
                         ToolFailure::new("COMFY_INPUT_FAILED", format!("写回去溢色后的人物图失败：{e}"))
                     })?;
-                    despilled = true;
                 }
             }
         }
@@ -692,15 +745,20 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         .unwrap_or_else(|| {
             format!("comfyhub_mask_{}.png", content_tag(w, h, &region, &shape, invert, feather))
         });
-    let target = input_dir.join(&filename);
-    write_mask_png(&pixels, w as u32, h as u32, &target)?;
+    // matte 档**不写合成遮罩**：真正的 alpha 由工作流里的抠图节点现算（写一张没人用的文件
+    // 只会在 input 目录里攒垃圾，还会让调用方以为该去覆盖 LoadImageMask）。
+    let mask_written = matte_source == "color";
+    if mask_written {
+        write_mask_png(&pixels, w as u32, h as u32, &input_dir.join(&filename))?;
+    }
 
     // **只在人物外面一圈重绘**（`ring`，单位像素）：配合带第二个 LoadImageMask 的工作流
     // `comfyhub_paste_person_anima.json`，人物像素就能"原样贴上去、一点不被重画"
     // —— 这是"嵌进去会改变画风"那条的正解（详见 `ring_mask` 的注释）。
+    // matte 档不要它：那份工作流用 `GrowMask` + `MaskComposite(subtract)` **从同一份 alpha 现算** ring。
     let ring = int_arg(args, "ring").unwrap_or(0).clamp(0, MAX_FEATHER) as usize;
     let mut ring_filename: Option<String> = None;
-    if mode == "subject" && ring > 0 {
+    if mode == "subject" && ring > 0 && mask_written {
         let mut ring_pixels = match subject_before_shrink.as_ref() {
             // 用**收缩前**的剪影算外面那一圈，再把"被收掉的那条边"并回来 ——
             // 于是重绘区正好盖住 人物外 N 像素 + 交界那一圈溢色
@@ -720,12 +778,18 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     }
 
     let region_joined = region.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+    // matte 档要告诉调用方"拿哪张人物图去覆盖 20.image"（它已经被清理过了）
+    let person_filename = placed_subject
+        .as_ref()
+        .map(|(name, _)| name.clone())
+        .or_else(|| subject_info.as_ref().map(|(name, _, _)| name.clone()));
     let mut out = json!({
-        "filename": filename,
         "inputDir": input_dir.to_string_lossy(),
         "width": w,
         "height": h,
         "mode": mode,
+        "matteSource": matte_source,
+        "maskGenerated": mask_written,
         "region": region_text,
         "regionNormalized": format!("[{region_joined}]"),
         "shape": shape,
@@ -734,12 +798,27 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         "whiteMeans": "要重新生成的地方（重绘区）",
         // 四个预设都是"粗框"，只有显式给坐标才不是估的（与 Kotlin 同一条判据）
         "approximate": region_text != "full" && !region_text.contains(','),
-        "hint": format!(
+    });
+    if mask_written {
+        out["filename"] = json!(filename);
+        out["hint"] = json!(format!(
             "① 覆盖工作流里 LoadImageMask 节点的 image 输入：{{\"<节点id>.image\":\"{filename}\"}}；\
              ② 若工作流有 ImageScale，把 width/height 也覆盖成 {w}x{h}（必须与底图一致）；\
              ③ 遮罩不准就报一组新的 region（x,y,w,h 归一化）重做 —— 不要让用户去 ComfyUI 里手画。"
-        ),
-    });
+        ));
+    } else {
+        out["personFilename"] = json!(person_filename.clone().unwrap_or_default());
+        out["hint"] = json!(format!(
+            "遮罩由**工作流里的抠图节点**现算，所以**不要**覆盖任何 LoadImageMask（也没有 12 / 26 可覆盖）。\
+             ① comfy_load_workflow(path=\"<项目根>\\comfyui\\workflows\\comfyhub_paste_person_matte_anima.json\")；\
+             ② 覆盖 10.image（底图）、20.image=\"{person}\"（**已被清理过**的人物图）、\
+             11.width={w}、11.height={h}、21.width={w}、21.height={h}、15.text（只写**人物外面那一圈**该出现什么，写背景）、17.seed；\
+             ③ 17.denoise 用 0.3~0.45（只融接缝；0 = 纯合成、一个像素都不改）。\
+             ⚠ 那张工作流要求 ComfyUI 里有抠图模型（models\\rembg\\BEN2_Base.pth 或 RMBG-1.4.pth）——\
+             没有就如实告诉用户下哪个，别让它静默下载。",
+            person = person_filename.unwrap_or_default(),
+        ));
+    }
     if let Some((subject, background, ratio)) = subject_info {
         out["subjectFilename"] = json!(subject);
         out["background"] = json!(format!("#{:02x}{:02x}{:02x}", background[0], background[1], background[2]));
@@ -752,6 +831,16 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         }
         if unmixed_edge {
             out["unmixedEdge"] = json!(true);
+        }
+        if matte_source == "model" {
+            // 如实报口径：这一档的遮罩不是我们给的，我们只清干净了人物图那一份像素
+            out["outerBand"] = json!(int_arg(args, "outerBand").unwrap_or(DEFAULT_OUTER_BAND));
+            out["matteNote"] = json!(
+                "matteSource=\"model\"：合成用的**软遮罩**由工作流里的抠图节点（`easy imageRemBg`）现算，\
+                 本工具只把 `personFilename` 那份像素做了反混 + **两侧**去溢色（掩码外那圈抗锯齿像素\
+                 才是真正的溢色像素 —— 只往内压会留一圈淡背景色）。\
+                 所以**不要**覆盖任何 LoadImageMask，用 `comfyhub_paste_person_matte_anima.json` 那份工作流。"
+            );
         }
         if let Some((dir, estimated, offset)) = out_light {
             out["lightDir"] = json!(format!("[{:.2},{:.2}]", dir[0], dir[1]));
@@ -800,16 +889,18 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
             ),
             None => String::new(),
         };
-        out["hint"] = json!(format!(
-            "① 覆盖工作流里 LoadImageMask 节点的 image 输入：{{\"<节点id>.image\":\"{filename}\"}}；\
-             ② ImageScale 的 width/height 覆盖成 {w}x{h}；\
-             ③ 这张遮罩是照「{subject}」的**主体形状**抠的（背景色 {}，占画面 {:.1}%）。\
-             遮罩几乎盖满整张图（>90%）时多半是背景不纯（也可能是主体本来就占满画面）—— 那时改用矩形遮罩 + 更高的 denoise，或换一张纯色背景重做阶段一，\
-             或者改用 mode=\"rect\" 的矩形遮罩 + 更高的 denoise。{placed_hint}",
-            format!("#{:02x}{:02x}{:02x}", background[0], background[1], background[2]),
-            ratio * 100.0
-        ));
-        if let Some((placed_name, _)) = placed_subject {
+        if mask_written {
+            out["hint"] = json!(format!(
+                "① 覆盖工作流里 LoadImageMask 节点的 image 输入：{{\"<节点id>.image\":\"{filename}\"}}；\
+                 ② ImageScale 的 width/height 覆盖成 {w}x{h}；\
+                 ③ 这张遮罩是照「{subject}」的**主体形状**抠的（背景色 {}，占画面 {:.1}%）。\
+                 遮罩几乎盖满整张图（>90%）时多半是背景不纯（也可能是主体本来就占满画面）—— 那时改用矩形遮罩 + 更高的 denoise，或换一张纯色背景重做阶段一，\
+                 或者改用 mode=\"rect\" 的矩形遮罩 + 更高的 denoise。{placed_hint}",
+                format!("#{:02x}{:02x}{:02x}", background[0], background[1], background[2]),
+                ratio * 100.0
+            ));
+        }
+        if let Some((placed_name, _)) = placed_subject.as_ref() {
             out["placedSubjectFilename"] = json!(placed_name);
         }
         if let Some(ring_name) = ring_filename.as_deref() {
@@ -1476,9 +1567,11 @@ pub fn erode_mask(mask: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
 ///
 /// 光靠 choke 不够：羽化会让最外几像素**半透明**，而那几个像素本身是"人物 + 背景"的混合色
 /// （绿幕上偏绿、白底上偏白），半透明地贴上去就是绕着人的一圈背景色。
-/// 这里在**剪影边界往内 `radius` 像素**的那条带上把背景**主色通道**压回另外两个通道的水平：
+/// 这里把背景**主色通道**压回另外两个通道的水平：
 /// 绿幕（G 最大）→ `g = min(g, (r+b)/2)`；品红（R/B 最大）→ `r = min(r, g)`、`b = min(b, g)`。
-/// 这是绿幕合成的标准做法，**只动边缘那条带**，人物内部一个像素都不碰。
+/// 这是绿幕合成的标准做法，**只动边界那条带**，人物内部一个像素都不碰。
+///
+/// 两侧各 `radius` 像素（= [`despill_band`] 的 `inner = outer = radius`）。
 ///
 /// 返回是否真的改过（没改就别去覆盖文件）。
 pub fn despill_edges(
@@ -1489,24 +1582,55 @@ pub fn despill_edges(
     background: [u8; 3],
     radius: usize,
 ) -> bool {
+    despill_band(person, mask, w, h, background, radius, radius)
+}
+
+/// [`despill_edges`] 的**两侧带**版本：掩码内 `inner` 像素 + 掩码**外** `outer` 像素。
+///
+/// # ⚠ 为什么必须有"外带"（2026-09-27 实测，总纲 §16.4）
+///
+/// 一直只有"往内"那一侧，而**真正的溢色像素在掩码外面**：主体与背景交界那圈抗锯齿像素是
+/// "人 + 背景"的混合色，颜色更靠近背景 → **被判成了背景**（不在掩码里）。于是"边界往内 radius
+/// 像素"那条带**一个真正的溢色像素都盖不到**，剩下的量正好就是用户看到的"边缘一圈淡淡的背景色"。
+///
+/// 量到的（768x1024 绿幕动漫人物，合成到**平灰底** —— 底不带绿，所以量到的绿只能来自人物自己）：
+///
+/// | 作用域 | 边界溢色均值 | max |
+/// | --- | --- | --- |
+/// | 只往内（旧） | 3.36 | 32 |
+/// | **两侧**（`inner=6, outer=6~8`） | **0.00** | **0** |
+///
+/// 触发条件没变（只有"背景主色通道真的压过另外两个通道"的像素才被压），所以**人物身上真正的
+/// 绿色内容不会被误压**；白 / 浅灰背景照旧整支跳过（没有溢色通道可压）。
+pub fn despill_band(
+    person: &mut image::RgbImage,
+    mask: &[u8],
+    w: usize,
+    h: usize,
+    background: [u8; 3],
+    inner: usize,
+    outer: usize,
+) -> bool {
     let saturation = background.iter().max().copied().unwrap_or(0) as i32
         - background.iter().min().copied().unwrap_or(0) as i32;
     // 背景不彩（白 / 浅灰）就没什么"溢色通道"可压 —— 那时靠 choke + 羽化小一点
-    if saturation < CHROMA_MIN_SATURATION || radius == 0 {
+    if saturation < CHROMA_MIN_SATURATION || (inner == 0 && outer == 0) {
         return false;
     }
     // 背景的主导通道 = 溢色方向
     let dominant = (0..3).max_by_key(|c| background[*c]).unwrap_or(1);
     let others: Vec<usize> = (0..3).filter(|c| *c != dominant).collect();
-    let r = radius as i64;
+    let (ri, ro) = (inner as i64, outer as i64);
     let mut changed = false;
     for y in 0..h as i64 {
         for x in 0..w as i64 {
             let index = y as usize * w + x as usize;
-            if mask[index] <= 127 {
+            let inside = mask[index] > 127;
+            let r = if inside { ri } else { ro };
+            if r == 0 {
                 continue;
             }
-            // 只在**边界带**上动手：邻域里只要有背景像素就算带内
+            // 在带内 = 掩码内的像素邻域里看得到背景、掩码外的像素邻域里看得到主体
             let mut on_edge = false;
             'scan: for dy in -r..=r {
                 let ny = y + dy;
@@ -1518,7 +1642,7 @@ pub fn despill_edges(
                     if nx < 0 || nx >= w as i64 {
                         continue;
                     }
-                    if mask[ny as usize * w + nx as usize] <= 127 {
+                    if (mask[ny as usize * w + nx as usize] > 127) != inside {
                         on_edge = true;
                         break 'scan;
                     }
@@ -2501,6 +2625,62 @@ mod tests {
         assert!(!despill_edges(&mut white_bg, &mask, w, h, [252, 252, 250], 2), "白底不该触发去溢色");
         let untouched = white_bg.get_pixel(10, 20);
         assert_eq!((untouched[0], untouched[1], untouched[2]), (200, 190, 60), "白底那一档不许乱压");
+    }
+
+    /// **去溢色必须盖到掩码外面那一圈**（2026-09-27 实测出来的那条：总纲 §16.4）。
+    ///
+    /// 真正的溢色像素在剪影**外面**：主体与背景交界那圈抗锯齿像素是"人 + 背景"的混合色，
+    /// 颜色更靠近背景 → 被判成了**背景**（不在掩码里）。只往内压 = 那条带里一个真正的
+    /// 溢色像素都盖不到，剩下的正好是用户看到的"外轮廓一圈很淡的背景色"。
+    #[test]
+    fn 去溢色要盖到掩码外面那一圈() {
+        let (w, h) = (40usize, 40usize);
+        let bg = [0u8, 177, 64];
+        // 底：一片绿幕
+        let mut person = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb(bg));
+        let mut mask = vec![0u8; w * h];
+        // 人：中间 20x20 的纯红块
+        for y in 10..30 {
+            for x in 10..30 {
+                person.put_pixel(x as u32, y as u32, image::Rgb([200, 40, 60]));
+                mask[y * w + x] = 255;
+            }
+        }
+        // 掩码**外面**紧挨着的那两圈 = "人 + 绿幕"的混合色（抗锯齿）：
+        // 颜色离背景很近（所以颜色键把它判成背景），但绿分量仍然压过另外两个通道（所以该压）
+        let mixed = image::Rgb([20u8, 170, 60]);
+        for y in 6..34 {
+            for x in 6..34 {
+                if mask[y * w + x] == 0 && x >= 8 && x < 32 && y >= 8 && y < 32 {
+                    person.put_pixel(x as u32, y as u32, mixed);
+                }
+            }
+        }
+
+        // ① 只往内（outer = 0）：外面那圈一个像素都盖不到 —— 这就是旧口径的失败模式
+        let mut only_inner = person.clone();
+        assert!(
+            !despill_band(&mut only_inner, &mask, w, h, bg, 2, 0),
+            "只往内压时，这个夹具上根本没什么可压的（正是问题的样子）"
+        );
+        assert_eq!(
+            only_inner.get_pixel(8, 20),
+            &mixed,
+            "掩码外那圈溢色像素必须原样留着 —— 这就是那条淡背景色"
+        );
+
+        // ② 两侧都盖：外面那圈的绿被压下去，人物内部一个像素都不动
+        let mut both = person.clone();
+        assert!(despill_band(&mut both, &mask, w, h, bg, 2, 4), "盖到外面那一圈时应当真的改过像素");
+        let fixed = both.get_pixel(8, 20);
+        assert!(fixed[1] < 130, "掩码外那圈溢色要被压下来，实测 {fixed:?}");
+        assert_eq!(
+            both.get_pixel(20, 20),
+            &image::Rgb([200, 40, 60]),
+            "人物内部一个像素都不许动"
+        );
+        // 远处（超出外带）的绿幕不该被动 —— 免得整张背景被压成灰
+        assert_eq!(both.get_pixel(35, 35), &image::Rgb(bg), "外带之外不许动");
     }
 
     /// **按背景打光 + 烧影子**：背景亮的一侧 = 光来的方向；影子落在**反方向**。
