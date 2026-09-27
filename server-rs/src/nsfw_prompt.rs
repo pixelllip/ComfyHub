@@ -25,7 +25,14 @@
 pub const VERSION: &str = "nsfw-v3";
 
 /// `SystemPrompt.VERSION`（系统提示正文的版本；改提示词**必须** bump —— 红线 R12）。
-pub const PROMPT_VERSION: &str = "v30";
+///
+/// ⚠ **为什么是 v32 而不是接着 Kotlin 的 v31**：两条线在第 20 条那里分了叉 ——
+/// Kotlin 的 v31 带"工作流配方"那一节（`comfy_learn_workflow` / `comfy_bind_recipe`…），
+/// 而那三件工具在 Rust 侧**还没搬**，所以这里**不能**写那一节（R13：不许描述没下发的工具）。
+/// 于是 Rust 从 v30 直接跳到 v32（跳过 v31 免得与 Kotlin 那版"同名不同内容"）。
+/// 2026-09-27 这一跳改的是第 19 条（图像编辑）：补上"先想能不能不抠"、贴人物图首选 AI 遮罩、
+/// 缺模型指引用户下载、以及"krea2 不适合做编辑"这条实测结论。
+pub const PROMPT_VERSION: &str = "v32";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】
@@ -250,18 +257,33 @@ const PERSONA_RAW: &str = r#"
             （用户 2026-09-26 的需求原话："保持背景不变，更换有具体动作的人物并保持画风"）：
             ① 底图与人物图都先投放进 ComfyUI 的 input 目录 —— 画廊里的产物用 `comfy_use_media`，
                用户随消息发来的图用 `comfy_use_attachment`（返回里要拿 filename 与 width/height）；
-            ② 用 `comfy_make_mask` 生成遮罩（**白 = 要重新生成的地方**）：
-               **保背景换人物** = 人物那块 region；**换背景保人物** = 同一块 region 加 `invert=true`；
-            ③ 跑**项目自带**的工作流 `<项目根>\comfyui\workflows\comfyhub_inpaint_anima.json`
-               （Anima：Danbooru tag 角色）或 `comfyhub_inpaint_krea2.json`（Krea2：摄影 / 写实），
-               覆盖 `10.image` / `12.image` / `20.image` / `11·21.width·height` / 提示词 / seed。
+            ② **先想能不能不抠**（2026-09-27 的实测结论，抠图不管多好的模型都要在边缘上做取舍）：
+               最优是**阶段一就按最终背景生成**（拿底图当 i2i 起点 / 同底模同场景，阶段二 `denoise 0.35~0.5`
+               直接融）；其次是 **`denoise 0` 纯合成**（一个像素都不改，靠 alpha 贴）。**这两条没有边缘问题**。
+            ③ 真要抠（场景已钉死 / 换大动作 / 要透明素材）才走下面；**贴人物图首选 AI 软遮罩**：
+               先 `comfy_get_status` 看 **`mattingModels.usable`** ——
+               · `true` → `comfy_make_mask(mode="subject", matteSource="model", bgColor=…)`
+                 （它**不写遮罩**，只把人物图那份像素洗干净，回 `personFilename`）
+                 ＋ 工作流 `comfyhub_paste_person_matte_anima.json`（**不要**覆盖任何 LoadImageMask）；
+               · `false` → **如实让用户下模型**（照返回里的 `download` 说清下哪个 / 多大 / 放哪），
+                 **别硬跑**（那个节点会自己去 HuggingFace 静默下载，表现是"点了没反应"），
+                 也**别默默降级**成颜色抠图 —— 实测它会把眼睛、发髻内部一起删掉（掉 18.4% 前景）。
+            ④ 没有抠图模型时才退到：`comfy_make_mask(mode="subject")` 生成**颜色剪影**遮罩
+               （**白 = 要重新生成的地方**；**保背景换人物** = 人物那块 region；
+               **换背景保人物** = 同一块 region 加 `invert=true`）＋ `comfyhub_paste_person_anima.json`，
+               覆盖 `10.image` / `12.image` / `20.image` / `11·21.width·height` / 提示词 / seed，
+               并在结果里**如实说明这一档的代价**（只对纯色背景够用）。
+            ⑤ 纯重绘 / 换背景保人物用 `comfyhub_inpaint_anima.json`。
+               ⚠ **图像编辑只用 anima 那份**：`comfyhub_inpaint_krea2.json` 实测**不适合做编辑**
+               （纯重绘 3 个 seed 只有 1 次跟随提示词；贴人物 denoise 0.5 带一圈白框、0.85 换人）——
+               它留给**文生图**；用户要写实风格就如实说明这条限制，**不许**硬用之后说"做好了"。
             **"先生成人物、再把人换上去"就走两阶段**：阶段一先生成人物（背景干净、长宽比与底图一致），
             阶段二把那张产物用 `comfy_use_media` 投进去、`20.image` 指向它、`denoise` 0.4~0.6 融合；
             要保住画风就两个阶段**同一个底模 + 同一条画风 LoRA**（Anima 模板里覆盖节点 4 的
             `lora_name` 与 `strength_*`，覆盖前先确认本机有那个文件）。
             遮罩框是**估算**的（工具会回 `approximate=true`，要如实转述）：拿不准就先问用户位置或坐标，
             **不要**让用户去 ComfyUI 里手画遮罩，也不要没有 `mediaIds` 就说"换好了"。
-            完整步骤（含换背景保人物、边缘羽化、贴人物时的 denoise 档）见 skill `inpaint-composite`
+            完整步骤（含换背景保人物、边缘羽化、贴人物时的 denoise 档、两阶段）见 skill `inpaint-composite`
             —— 动手前先 `load_skill` 它。
 "#;
 
@@ -689,5 +711,27 @@ mod tests {
         assert!(TITLE_INSTRUCTION.starts_with("【本次附加任务"));
         // 起标题指令里有那对标记（手机 harness 靠它摘标题）
         assert!(TITLE_INSTRUCTION.contains("[标题]"));
+    }
+
+    /// 第 19 条（图像编辑）在 2026-09-27 改过一次，改的是**实测结论**，不是措辞：
+    /// 这里把四件"少了就会退回错误行为"的话钉住。
+    ///
+    /// 为什么钉在系统提示这一侧：skill 是**按需加载**的（模型不 `load_skill` 就读不到），
+    /// 所以"贴人物图首选 AI 遮罩 / 缺模型要先问用户下 / krea2 别用来做编辑"这几条
+    /// **必须在常驻提示里也有一句**，否则模型在没加载 skill 的那一轮会直接选错路。
+    #[test]
+    fn 第19条钉住图像编辑的四条实测结论() {
+        let persona = persona_block();
+        // ① 贴人物图首选 AI 软遮罩那份工作流，且要先查模型在不在
+        assert!(persona.contains("comfyhub_paste_person_matte_anima.json"), "第 19 条少了 matte 工作流");
+        assert!(persona.contains("mattingModels.usable"), "少了「先查模型在不在」这一步");
+        assert!(persona.contains("matteSource=\"model\""), "少了洗人物图那一档");
+        // ② 缺模型要指引用户下载，且**不许**硬跑 / 默默降级
+        assert!(persona.contains("如实让用户下模型"), "少了「缺模型就指引用户下」");
+        assert!(persona.contains("静默下载"), "要写明为什么不能硬跑");
+        // ③ krea2 **不适合做编辑**（这条以前没写，提示里还在推荐它做编辑）
+        assert!(persona.contains("不适合做编辑"), "krea2 那条实测结论必须在常驻提示里");
+        // ④ 「先想能不能不抠」那两条路
+        assert!(persona.contains("先想能不能不抠"), "少了「不抠图更稳」那一步");
     }
 }
