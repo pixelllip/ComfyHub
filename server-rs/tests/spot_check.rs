@@ -430,3 +430,48 @@ async fn live_danbooru_lookup() {
     assert!(outcome["character"]["otherNames"].is_array(), "{outcome}");
     assert!(outcome["verifiedAt"].as_str().unwrap_or("").ends_with('Z'), "{outcome}");
 }
+
+// ===========================================================================
+//  comfy_env_report：真机环境对账（要一台真装了 ComfyUI 的机器）
+//
+//  它证明的是**盘扫那一半真的扫到了东西**：夹具里的临时目录永远长不出
+//  `models\checkpoints\*.safetensors` 那种真实布局，也长不出 ComfyUI Desktop
+//  把程序与共享数据分在两处的那种形状（那正是这个工具要回答的问题）。
+// ===========================================================================
+
+#[tokio::test]
+#[ignore = "真库 + 真 ComfyUI 目录：COMFYHUB_SPOT_DB 指一份库副本"]
+async fn comfy_env_report_reads_the_real_machine() {
+    let Some((state, root)) = spot_state() else { return };
+    let payload = call(&state, "comfy_env_report", serde_json::json!({ "limit": 5 })).await;
+    println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+
+    // 形状（这些键是模型据以判断"要不要让用户重启"的全部依据）
+    for key in ["instanceLoadable", "onDisk", "invisibleToInstance", "merged", "inventorySource"] {
+        assert!(payload.get(key).is_some(), "少了 {key}：{payload}");
+    }
+    assert!(
+        ["object_info", "scan", "none"].contains(&payload["inventorySource"].as_str().unwrap_or("")),
+        "{payload}"
+    );
+    assert!(payload["models"].is_array(), "{payload}");
+
+    // 真机上必须**扫到东西**（这台机器的 ComfyUI 根是探得到的；扫不到说明三份目录来源断了）
+    let on_disk = payload["onDisk"].as_i64().unwrap_or(0);
+    println!("project_root = {}", root.display());
+    println!("盘上扫到 {on_disk} 个模型，实例能加载 {} 个", payload["instanceLoadable"]);
+    assert!(on_disk > 0, "真机上扫不到任何模型 —— 三份目录来源或后缀表断了：{payload}");
+
+    // 带过滤再问一次：只列 checkpoints，且条数不许超过 limit
+    let only = call(&state, "comfy_env_report", serde_json::json!({ "folder": "checkpoints", "limit": 3 })).await;
+    assert!(only["models"].as_array().unwrap().len() <= 3, "{only}");
+    assert!(
+        only["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["folder"] == "checkpoints"),
+        "{only}"
+    );
+    assert_eq!(only["instanceLoadable"], payload["instanceLoadable"], "两次问的是同一份清单");
+}

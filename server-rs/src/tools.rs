@@ -387,8 +387,9 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
 /// `comfy_find_workflow` 那一批要本机模型清单（`comfy_env_report` / `check_inputs` /
 /// `fit_workflow` / `audit_workflow` / `prune_workflow`），各自另起批次。
-pub const IMPLEMENTED: [&str; 22] = [
+pub const IMPLEMENTED: [&str; 23] = [
     "ask_user_question",
+    "comfy_env_report",
     "comfy_get_run",
     "comfy_get_status",
     "comfy_list_workflows",
@@ -516,6 +517,8 @@ pub async fn execute(
         "delete_skill" => delete_skill(state, arguments),
         // ---- comfy 查询三件（P4 第 41/42 步）--------------------------------
         "comfy_get_run" => comfy_get_run(state, arguments),
+        // 本机模型清单（`ComfyModels` 的 Rust 版）：**只报不改**，回答"盘上有 / 实例看不到"
+        "comfy_env_report" => crate::comfy_models::tool_env_report(state, arguments).await,
         "comfy_list_workflows" => comfy_list_workflows(state, arguments),
         "comfy_get_status" => comfy_get_status(state, arguments).await,
         "comfy_sync_history" => comfy_sync_history(state).await,
@@ -1876,10 +1879,16 @@ mod tests {
         assert!(is_implemented("comfy_submit"));
         assert_eq!(default_access("comfy_submit"), "ASK", "提交必须默认要用户批准");
         assert!(is_mutating("comfy_submit"));
+        // `comfy_env_report`（本机模型清单对账）：**只读**，出厂 ALLOW ——
+        // 它不属于 COMFY 那一类（只扫盘 + 问一次 /object_info），不该吃掉查询预算
+        assert!(is_implemented("comfy_env_report"));
+        assert_eq!(default_access("comfy_env_report"), "ALLOW");
+        assert!(!is_mutating("comfy_env_report"));
         // 还没搬的一个都不许说"实现了"
         for name in [
             "comfy_find_workflow",
-            "comfy_env_report",
+            "comfy_check_inputs",
+            "comfy_fit_workflow",
             "find_model",
             "web_fetch",
         ] {

@@ -1946,7 +1946,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | 工具 | 状态 |
 | --- | --- |
 | `comfy_submit`（**R10**：审核 → 审批 → 提交 → 自己等 → `captureRun()` 入库 → `mediaIds`） | ✅ **已搬（P4 第 48 步，2026-09-26）**：`workflow_submit.rs` + `tests/submit_test.rs` 6 例；预检只有"节点类 + 实例能不能加载这个模型"两道（七项 audit / 盘扫 / `env_report` 仍未搬） |
-| `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ 未搬（都要 `ComfyModels` 本机清单；`env_report` 是 O3 —— "盘上有、实例看不到"的解药） |
+| `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | 🔶 **`comfy_env_report` 已搬（§18，2026-09-27）**：`server-rs/src/comfy_models.rs`（本机模型清单 `ComfyModels` + `ModelName`）—— 它正是 O3 那件"盘上有、实例看不到"的解药。其余五件仍未搬：`find_workflow` 要库内搜索、`check_inputs`/`fit_workflow` 要本机清单做配对、`audit_workflow`/`prune_workflow` 是纯图结构分析（现在**都可以从 §18 这份清单派生了**） |
 | `comfy_use_media` / `comfy_make_mask` / `comfy_use_attachment`（图像编辑三件） | ✅ **已搬（第 58 步，2026-09-26）**：`server-rs/src/image_edit.rs` + 三条工具（出厂档 ASK）+ 16 例用例；**活实例验收**见 §13（AI 那条链路 30 项全绿、遮罩内 101.95/255 外 3.74/255） |
 | 联网三工具 `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（要 Keenable / Civitai 客户端；凭据端点已就绪）。⚠ **`danbooru_lookup` 已搬**（第 59 步，见 §14）—— 它是 Rust 侧第一条**联网**工具，顺带把"联网预算"这条只写在提示词里的规则变成真的拦得住 |
 | `search_prompts` / `search_character_cards` / `save_character_card` / `danbooru_lookup` | ✅ **已搬**：角色卡两件（第 46 步）+ **`search_prompts` / `danbooru_lookup`（第 59 步，见 §14）**。§11 的"写角色前先查三处"在 Rust 后端**已齐**；`save_character_card` 的核对时间也真的接上了（只有本轮真查过 danbooru 才写得进）。⚠ `character_cards` 那张表**不在同步白名单**里，这条纪律别丢 |
@@ -2187,7 +2187,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | --- | --- |
 | **MCP 桥（官方 comfy-mcp 39 个工具）** | ✅ **已做（P4 第 45 步，2026-09-26）**：`server-rs/src/mcp.rs`（stdio JSON-RPC + 注册表 + 权限档 + `prepare_launch`）；真机验到 `/api/ai/tools` 回 53 个（39 个 MCP） |
 | **`comfy_submit`**（R10：审核 → 审批 → 提交 → 等 → 入库 → `mediaIds`） | ✅ **已做（P4 第 48 步，2026-09-26）**：`workflow_submit.rs` + `tests/submit_test.rs` 6 例；预检只有"节点类 + 实例能不能加载这个模型"两道（七项 audit 与盘扫仍未搬） |
-| `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ **未做（2026-09-27 复核：`tools.rs` 的 `IMPLEMENTED`（22 个）里确实没有它们）**（前四个要 `ComfyModels` 本机清单）。⚠ **这条现在有直接后果**：AI **查不了**"本机有哪些模型 / 这份工作流的输入齐不齐"，于是 `inpaint-composite` 里凡是写 `comfy_env_report` / `comfy_check_inputs` 的地方**都执行不了**，只能退化成 `list_dir` 或直接问用户（skill v2 已按这个事实改写） |
+| `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | 🔶 **`comfy_env_report` 已搬（§18，2026-09-27：`comfy_models.rs`，真机抽查 39/39、假警报清零）**；其余五件 ⛔ **未做（2026-09-27 复核：`tools.rs` 的 `IMPLEMENTED`（23 个）里确实没有它们）**（`find_workflow` 要库内搜索，`check_inputs`/`fit_workflow` 要拿 §18 那份清单做配对，`audit`/`prune` 是纯图结构分析）。⚠ **这条现在有直接后果**：AI **查不了**"本机有哪些模型 / 这份工作流的输入齐不齐"，于是 `inpaint-composite` 里凡是写 `comfy_env_report` / `comfy_check_inputs` 的地方**都执行不了** —— 前者**已解**（`comfy_env_report` 已在 Rust 后端下发，skill v3 也改成先读它的 `mattingModels`），后者仍只能退化成 `list_dir` 或直接问用户 |
 | `comfy_use_attachment`（把附件投进 ComfyUI `input\`） | ✅ **已做（P4 第 58 步，2026-09-26）**：图像编辑三件之一（`image_edit.rs`，见 §13） |
 | **联网三工具** `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未做（系统提示里那一节仍指向没下发的工具；凭据端点已就绪） |
 | **附件（R9）**：`/api/ai/attachments*` + 三层准入 + 内联预算 | ✅ **已做（P4 第 50 步）**：`attachments.rs`（`routes.rs:545~551`）+ `tests/attachments_test.rs` 4 例（见 §6） |
@@ -2726,3 +2726,47 @@ subject_mask_from_image(tolerance=0.12) → drop_blended_edge(band=3, tolerance=
   实测 AI 没被它带偏（工具清单里没有，它就直接用了 `comfy_list_workflows`），但**那句话目前是空的** —— 要么把那件工具搬过来，要么把①改成 `comfy_list_workflows`。
 - 这次任务**没有跑第二遍**（换个模型/换个提示），所以"稳不稳定"还没有数据；只有"能"这一个结论。
 - 产出的那份 `comfyui\anima_miaomiao16_rainneon_t2i.json` 是**测试产物**，留在 `comfyui\` 下（AI 写的文件属于用户，没删）。
+
+---
+
+## 18. 2026-09-27 这一轮：本机模型清单 `comfy_env_report` 搬到 Rust（B 组第一刀）
+
+> **起点**：§10.9 B 组里 `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` /
+> `audit_workflow` / `prune_workflow` 六件一直写着"⛔ 未搬（要 `ComfyModels` 本机清单）"。
+> 这一批把**地基**（`ComfyModels`）与**头一件**（`comfy_env_report`）搬过来 ——
+> 另外五件都从这一份清单派生，先有它才谈得上"配得上哪个模型"。
+> 顺带把 §17.4 那条"系统提示第 16 条① 指向一个没搬的工具"里的**另一件**（`comfy_env_report`）
+> 补实：它以前也是"提示里写着、工具清单里没有"。
+
+| 提交 | 内容 |
+| --- | --- |
+| 本提交 | **`ComfyModels` + `comfy_env_report`（Rust）**：新增 `server-rs/src/comfy_models.rs`（`ComfyModels.kt` + `ModelName` 逐条对照）—— `MODEL_INPUTS` 29 条 loader 判据 / `from_object_info`（枚举抠清单）/ `scan`（有界扫盘，深度 ≤3、不跟符号链接、30 秒缓存）/ **`merge` 并集**（"盘上有、实例看不到"的判据）/ `requirements`（图里点名了哪些模型）/ `enumerate_model_inputs`（第三方 loader 也能认）/ `ModelName`（分词 Dice 相似度 + `lookup_query`）；工具进 `desktop_tools`（描述与 schema **逐字**搬 Kotlin，R12/R13）与 `tools.rs` 的 `IMPLEMENTED`（22 → 23），出厂档 `ALLOW` / `mutating=false`（**不属于 COMFY 那一类**，不吃查询预算） |
+
+### 18.1 硬证据
+
+- `cargo test` **497 例全绿**（338 lib + 129 api_test + 其它），新增 9 例单测
+  （分词与相似度三个实测例子 / 查询词的归一化顺序 / `/object_info` 抠清单与去重 /
+  有界扫盘 / **并集把"实例看不到"单列** / 候选先本类再跨目录 / 只要字符串值不要连线 /
+  第三方 loader 的模型输入 / `lookup_query` 的停用词边界）。
+- **真库副本 + 真机抽查**（`tests/spot_check.rs` 新增 `comfy_env_report_reads_the_real_machine`，
+  默认 `#[ignore]`）：真机上回
+  `instanceLoadable=39 / onDisk=39 / invisibleToInstance=0 / inventorySource=object_info`，
+  `modelsDir=D:\Comfy-Desktop\ComfyUI-Shared\models`、`modelsDirs` 两条（Shared + `E:\ComfyUI\models`）、
+  `modelPathsConfig=…\Comfy Desktop\shared_model_paths.yaml`；带 `folder=checkpoints&limit=3` 再问一次，
+  命中 4 条只列 3 条、且两次的 `instanceLoadable` 相等（同一份清单）。
+
+### 18.2 ★ 真机抽查当场抓到一个**假警报**（已修，有意与 Kotlin 不同）
+
+第一次抽查回的是 `onDisk=42 / invisibleToInstance=3`，那 3 条是
+`diffusion_models/anima-base-v1.0.metadata.json` 这类 **ComfyUI/Civitai 的 sidecar**
+（762 字节 JSON，写着 sha256 / base_model / 预览图 URL；真的 `.safetensors` 4.18GB 就躺在旁边、
+实例看得到）。报告据此喊 **"这个实例没挂共享模型根 → 让用户重启 ComfyUI"** —— 纯属误导，
+而这正是这个工具存在的意义（用户 bug：明明有模型、AI 却说没有）。
+
+修法取**最窄的判据**：只排除 `.metadata.json` 这个明确后缀（大小写都算），别的 `json` / `yaml`
+照收。Kotlin 的 `MODEL_EXTS` 含 `json`，所以**这是有意保留的行为差异**，
+理由与实测写在 `is_model_file` 的注释与用例里（修完 42 → 39、假警报 3 → 0）。
+
+> 📌 记一条方法论：**夹具永远造不出这种文件**（临时目录里那 3 个 sidecar 是用户盘上的事实）。
+> 又一次印证 §9 那条"接口在夹具上绿 ≠ 在真机上能跑"。
+

@@ -27,6 +27,7 @@ pub mod capture_poller;
 pub mod character_cards;
 pub mod comfy_client;
 pub mod comfy_dirs;
+pub mod comfy_models;
 pub mod conversations;
 pub mod credentials;
 pub mod danbooru;

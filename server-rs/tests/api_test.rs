@@ -5289,13 +5289,14 @@ async fn failed_calls_do_not_spend_the_budget() {
 /// **不许静默**、也不许假装跑过 —— 记录照样落库，模型拿到一句能改变做法的话。
 #[tokio::test]
 async fn unknown_tool_is_reported_as_tool_not_found() {
-    // ⚠ 这里**故意**挑一个还没搬的工具（`comfy_env_report` 要 `/object_info` 加盘扫，归后面的批次）：
+    // ⚠ 这里**故意**挑一个还没搬的工具（`comfy_find_workflow` 要库内搜索 + 本机文件，归后面的批次）：
     // 第 40 步之前这条用例用的是 `read_file`，而它已经实现了 —— 继续拿它当"不存在的工具"
     // 会变成"撞审批闸门"，红的原因完全变成另一个（实测过）。
     // ⚠ 第 48 步起 `comfy_submit` 也**实现了**（厂档 ASK）：再拿它当"不存在的工具"会去真的提交，
-    // 于是这条用例会卡在等 ComfyUI 上 —— 换名字时请挑一个 `tools::IMPLEMENTED` 里真的没有的。
+    // 于是这条用例会卡在等 ComfyUI 上；`comfy_env_report` 也在同一批之后实现了。
+    // **换名字时请挑一个 `tools::IMPLEMENTED` 里真的没有的。**
     let (base_url, gateway) =
-        scripted_tool_gateway(vec![vec![("comfy_env_report", r#"{}"#)]]).await;
+        scripted_tool_gateway(vec![vec![("comfy_find_workflow", r#"{}"#)]]).await;
     let state = state();
     seed_provider_and_model(&state);
     point_at_gateway(&state, &base_url);
@@ -5307,7 +5308,7 @@ async fn unknown_tool_is_reported_as_tool_not_found() {
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert_eq!(calls[0]["status"], "failed");
     assert_eq!(calls[0]["approval"], "denied");
-    assert!(calls[0]["error"].as_str().unwrap().contains("没有名为「comfy_env_report」的工具"));
+    assert!(calls[0]["error"].as_str().unwrap().contains("没有名为「comfy_find_workflow」的工具"));
 
     // 失败那次**不进 tool.started**（没有开始过），但要有一条 `tool.failed`
     let types = event_types(&state, &run_id);
@@ -5634,7 +5635,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（22 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（23 个），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
@@ -5645,6 +5646,8 @@ async fn tool_policy_and_nsfw_endpoints() {
         names,
         vec![
             "ask_user_question",
+            // 本机模型清单对账（O3）：只读，**不属于 COMFY 那一类**（不吃查询预算）
+            "comfy_env_report",
             "comfy_get_run",
             "comfy_get_status",
             "comfy_list_workflows",
@@ -8227,7 +8230,6 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     // 没实现的**一个都不许出现**
     for absent in [
         "comfy_find_workflow",
-        "comfy_env_report",
         "comfy_check_inputs",
         "comfy_audit_workflow",
         "comfy_prune_workflow",

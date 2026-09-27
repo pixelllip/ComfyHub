@@ -42,6 +42,17 @@ pub struct DesktopToolSpec {
 pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
 
     DesktopToolSpec {
+        name: "comfy_env_report",
+        description: r#"**本机 ComfyUI 环境对账**：把三套根摆在一起 + 列出本机模型清单。
+什么时候用：① 用户抱怨"明明有这个模型、AI 却说没有"；② 你要判断"这份工作流能不能跑"之前；③ `comfy_fit_workflow` 报了 `missing` 或 `onDiskOnly`；④ 想知道本机到底有哪些 checkpoint / LoRA / VAE（用 folder 或 query 过滤）。
+它会回答：**当前跑着的实例能加载多少个模型**（= `/object_info` 的枚举）、**盘上实际有多少个**（用户的模型根，含 ComfyUI Desktop 的共享目录与别的盘）、**哪些是盘上有而实例看不到的**（大于 0 就说明实例没挂全模型根 → 重启一次就好，**别去下载**）、以及本 App 自动捕获盯着的 output / input 是哪个目录。
+它**只读**：不改任何文件、不提交、不下载。看到"盘上有但实例看不到"时的正确动作是**让用户重启 ComfyUI**（ComfyHub 起实例时会自动挂上 ComfyUI Desktop 的模型根），不是去下载。"#,
+        input_schema: r#"{"type":"object","properties":{"folder":{"type":"string","description":"可选：只看某一类目录，例如 checkpoints / loras / diffusion_models / text_encoders / vae"},"query":{"type":"string","description":"可选：模型文件名的关键词（子串匹配，大小写不敏感）"},"limit":{"type":"integer","description":"可选：最多列几条（默认 40，上限 200）"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "comfy_get_run",
         description: r#"按 runKey 查一次已捕获运行的状态、错误与产物数。runKey 可以用三样中的任何一个：ComfyUI 的 prompt_id（UUID，comfy_submit 结果里的 runKey）、捕获记录里的数字 id（capturedPromptId），或 import:<sha256>。"#,
         input_schema: r#"{"type":"object","properties":{"runKey":{"type":"string","description":"ComfyUI prompt_id（UUID）/ 数字 prompt_id / import:<sha256>"}},"required":["runKey"],"additionalProperties":false}"#,
@@ -250,6 +261,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "comfy_env_report",
                 "comfy_get_run",
                 "comfy_get_status",
                 "comfy_list_workflows",
@@ -274,7 +286,6 @@ mod tests {
             "comfy_find_workflow",
             "comfy_check_inputs",
             "comfy_fit_workflow",
-            "comfy_env_report",
             "comfy_audit_workflow",
             "comfy_prune_workflow",
             "web_search",
