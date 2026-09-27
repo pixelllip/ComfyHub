@@ -111,6 +111,21 @@ pub(crate) fn category_of(name: &str) -> &'static str {
     }
 }
 
+/// 这件工具算不算"**主动查询** ComfyUI"—— 也就是吃不吃
+/// [`crate::policy::MAX_COMFY_QUERIES_PER_RUN`] 那份额度。
+///
+/// ⚠ **`comfy_submit` 不算**。系统提示那条规则的原话是"查 ComfyUI 状态时不要无限轮询：
+/// 一次回复里最多主动**查询** ComfyUI 几次"，而提交是**动作**不是查询。
+///
+/// 为什么单列一条（2026-09-27 活实例实测）：把提交也算进去之后，"**让 AI 自己搭一份工作流**"
+/// 这条正路直接走不通 —— 它侦察本机（读权重索引 / 查节点契约 / 搜模型：实测一轮就用了 9 次）
+/// 把额度用光，等它写好工作流要提交时被 `QUERY_BUDGET_EXCEEDED` 挡住，**产物永远出不来**
+/// （当时它的原话是"提交不属于查询 —— 直接跑"，而代码把它算成了查询）。
+/// 反复提交本身由 `max_tool_steps` / `max_calls_per_run` 与审批闸门兜着，不需要这份额度。
+pub fn is_comfy_query(name: &str) -> bool {
+    category_of(name) == "comfy" && name != "comfy_submit"
+}
+
 /// 权限档 → 线上字（Kotlin `ToolAccess.wire`）。
 fn access_wire(access: crate::policy::ToolAccess) -> &'static str {
     match access {

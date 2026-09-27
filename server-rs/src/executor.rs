@@ -873,7 +873,7 @@ async fn handle_call(
     // Kotlin `ToolRegistry.invoke` 里 `ToolCategory.COMFY` 那一段）。系统提示里写着
     // "一次回复最多查 ComfyUI N 次" —— **写了就必须真拦**，否则那句话是空的
     // （这正是 2026-09-25 那次审查记下的"提示词里写了、代码里没有"）。
-    if crate::ai_settings::category_of(&call.name) == "comfy" && !session.has_comfy_queries_left() {
+    if crate::ai_settings::is_comfy_query(&call.name) && !session.has_comfy_queries_left() {
         return finish_failure(
             state,
             run_id,

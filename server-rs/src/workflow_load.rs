@@ -97,10 +97,15 @@ pub async fn load_from_file(
     let api_format = is_node_graph(&root);
     let ui_format = !api_format && workflow_convert::is_ui_workflow(&root);
     if !api_format && !ui_format {
+        // ⚠ 这条提示在 2026-09-27 的活实例测试里救过一次场：AI 自己搭的工作流**第一次被拒**，
+        //   原因是它在顶层与节点里加了 `_comment` / `_meta` 这类"给人看"的键 ——
+        //   API 格式的判据是"每个值都是带 class_type 的对象"，一个字符串就把整份图判死。
+        //   它自己改成纯净格式就好了，但那是**多花一轮**；把原因直接写进错误里就省下那一轮。
+        let hint = api_format_hint(&root);
         return Err(LoadFailure::new(
             "NOT_A_WORKFLOW",
             format!(
-                "这份 JSON 既不是 API 格式节点图，也不是界面格式工作流（没有 nodes / links）：{}",
+                "这份 JSON 既不是 API 格式节点图，也不是界面格式工作流（没有 nodes / links）：{}{hint}",
                 file.display()
             ),
         ));
@@ -327,6 +332,30 @@ fn is_node_graph(obj: &Map<String, Value>) -> bool {
         && obj.values().all(|v| v.as_object().is_some_and(|o| o.contains_key("class_type")))
 }
 
+/// 给 `NOT_A_WORKFLOW` 那条错误凑一句"**到底哪个顶层键不像节点**"的提示。
+///
+/// 为什么要有它（2026-09-27 活实例实测）：让 AI 自己搭一份工作流时，它**第一次写的那份被拒了** ——
+/// 因为它在顶层加了 `_comment`、在节点里也塞了注释键。API 格式的判据是"每个值都是带 `class_type`
+/// 的对象"，**一个字符串就把整份图判死**。它自己改成纯净格式就好了，但那是**白花一轮**；
+/// 把原因与改法直接写进错误里，模型下一轮就能一次写对。
+fn api_format_hint(root: &Map<String, Value>) -> String {
+    let offenders: Vec<String> = root
+        .iter()
+        .filter(|(_, v)| v.as_object().map(|o| !o.contains_key("class_type")).unwrap_or(true))
+        .map(|(k, _)| k.clone())
+        .take(5)
+        .collect();
+    if offenders.is_empty() {
+        return String::new();
+    }
+    format!(
+        "。⚠ 顶层这些键不是合法节点（值不是带 `class_type` 的对象）：{} —— \
+         自己写的 API 图要**纯净**：顶层只有节点 id，每个节点只有 `class_type` 与 `inputs`，\
+         把 `_comment` / `_meta` / `title` 这类注释键删掉再存一次",
+        offenders.join(", ")
+    )
+}
+
 /// 给模型看的节点摘要：`id` / 类型 / 标题 / 可覆盖的控件名 / 已连线的输入名。
 ///
 /// 为什么不直接把整张图丢过去：113 个节点的 API 图有 100+ KB，一次工具结果上限只有
@@ -392,6 +421,35 @@ mod tests {
         let mixed: Map<String, Value> =
             serde_json::from_str(r#"{"prompt":{},"extra_data":{}}"#).unwrap();
         assert!(!is_node_graph(&mixed));
+    }
+
+    /// **自己写的 API 图被拒时，错误要说清是哪个键不像节点**（2026-09-27 活实例踩出来的）。
+    ///
+    /// 现场：AI 搭的工作流第一版顶层带了 `_comment`、节点里也塞了注释 → `NOT_A_WORKFLOW`。
+    /// 它自己改成纯净格式才读进去（白花一轮）。这条用例钉住"提示里点得出那个键"。
+    #[test]
+    fn api_格式提示要点出哪个顶层键不像节点() {
+        // 顶层多了一个字符串键 —— 这正是 AI 第一版的样子
+        let polluted: Map<String, Value> = serde_json::from_str(
+            r#"{"_comment":"给人看的注释","1":{"class_type":"KSampler","inputs":{}}}"#,
+        )
+        .unwrap();
+        assert!(!is_node_graph(&polluted), "有一个非节点键就不算 API 图");
+        let hint = api_format_hint(&polluted);
+        assert!(hint.contains("_comment"), "要点出是哪个键：{hint}");
+        assert!(hint.contains("class_type"), "要说清合法节点长什么样：{hint}");
+
+        // 纯净的 API 图：不需要提示（正常情况下也走不到这条错误上）
+        let clean: Map<String, Value> =
+            serde_json::from_str(r#"{"1":{"class_type":"KSampler","inputs":{}}}"#).unwrap();
+        assert!(api_format_hint(&clean).is_empty());
+        // ⚠ 节点**内部**的 `_meta` 是允许的（项目自带的四份工作流每个节点都带它）
+        assert!(is_node_graph(&clean));
+        let with_meta: Map<String, Value> = serde_json::from_str(
+            r#"{"1":{"_meta":{"title":"采样"},"class_type":"KSampler","inputs":{}}}"#,
+        )
+        .unwrap();
+        assert!(is_node_graph(&with_meta), "节点内的 _meta 不该被判死（自带工作流都这么写）");
     }
 
     #[test]

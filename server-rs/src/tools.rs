@@ -234,7 +234,13 @@ impl ToolSession {
         self.calls_in_window += 1;
         match crate::ai_settings::category_of(name) {
             "web" => self.web_queries_in_window += 1,
-            "comfy" => self.comfy_queries_in_window += 1,
+            // ⚠ `comfy_submit` 不算"查询"（见 `ai_settings::is_comfy_query` 的注释：
+            //   把它算进去会让"AI 自己搭工作流"那条路走不通）
+            "comfy" => {
+                if crate::ai_settings::is_comfy_query(name) {
+                    self.comfy_queries_in_window += 1;
+                }
+            }
             _ => {}
         }
     }
@@ -1796,6 +1802,21 @@ mod tests {
         assert_eq!(session.comfy_queries_in_window, crate::policy::MAX_COMFY_QUERIES_PER_RUN);
         assert!(!session.has_comfy_queries_left(), "到上限后预检必须拦得住");
         assert!(session.has_web_queries_left(), "拦住 ComfyUI 那档不该连累联网额度");
+
+        // ★ **提交不算查询**（2026-09-27 活实例实测出来的那条）：
+        //   额度用光之后 `comfy_submit` 必须**照样能走** —— 否则"AI 自己搭一份工作流"这条
+        //   正路会在最后一步被挡住（当时它侦察花掉 9 次，工作流写好了却提交不出去）。
+        assert!(!crate::ai_settings::is_comfy_query("comfy_submit"));
+        assert_eq!(crate::ai_settings::category_of("comfy_submit"), "comfy", "界面分组照旧归 comfy");
+        let before = session.comfy_queries_in_window;
+        let calls_before = session.calls_in_window;
+        session.spend_call("comfy_submit");
+        assert_eq!(session.comfy_queries_in_window, before, "提交不占这份额度");
+        assert_eq!(session.calls_in_window, calls_before + 1, "但总调用额度照旧要记");
+        // 同理：`comfy_use_media` / `comfy_make_mask` 是**写**（投放像素/遮罩），也不算"查询"？
+        // —— 不，它们**算**（与 Kotlin 的 ToolCategory.COMFY 一致，而且它们会真的碰实例）。
+        assert!(crate::ai_settings::is_comfy_query("comfy_use_media"));
+        assert!(crate::ai_settings::is_comfy_query("comfy_make_mask"));
 
         // 用户真答了提问 → 与联网同一档归零
         session.reset_budget();

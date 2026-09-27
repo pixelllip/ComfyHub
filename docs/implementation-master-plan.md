@@ -2661,5 +2661,51 @@ subject_mask_from_image(tolerance=0.12) → drop_blended_edge(band=3, tolerance=
 | "人变糊"的**拉普拉斯方差**那把尺子 | ⛔ 没做。但本次已找出"糊"的一个主因（**无软 alpha + 前景被删**），§15.2 的三处怀疑里第 1、3 条（`unmix_edge` 除法 / `feather`）仍待单变量对照 |
 | 长边 > 1024 的人物图 | ⚠ 未处理：BEN2 / RMBG-1.4 内部都固定 1024 推理，发丝会被降采样 |
 | 跨画风（动画人 + 照片景）本身仍违和 | ⚠ 那是**阶段一底模**的事，不是抠图能解决的 |
-| **§15.3 那两条"不抠图"的路要写进 skill 当首选** | ⛔ 没做：① **阶段一就按最终背景生成**（同底模同场景，阶段二 `denoise 0.35~0.5` 直接融）—— **完全不需要抠图**，没有边缘问题；② **`denoise 0` 纯合成**（一个像素都不改，画风 100% 保留，前提是 alpha 要准 —— 软遮罩已解决）。skill v2 现在只是把 matte 提到首选，还**没**把这两条写成"能用就别抠" |
+| **§15.3 那两条"不抠图"的路写进 skill 当首选** | ✅ **已做（2026-09-27）**：skill v3 新增「★ 先想这一步：**有两条路比抠图更稳**」并放在"抠图"那一节**前面** —— ① 阶段一就按最终背景生成（`denoise 0.35~0.5` 直接融）；② `denoise 0` 纯合成。两条的代价（姿态受底图约束 / 光照不融合）也如实写上，并写明"什么时候才真的需要抠图" |
 | **matte 工作流的活实例验收** | ✅ **已做（2026-09-27）**：真实例（ComfyUI Desktop / RTX 4060）上 `scripts\e2e-image-edit-test.ps1 -Matte -PersonMediaId 301 -PersonDenoise 0.4 -BgColor green` → **39 项全绿**；产物在 `.run\matte-live\out.png`（夜景里那位双马尾，**细发丝与五官都在、没有绿边、没有白框**），变化图 `diff-heat.png` 上只有人物是红的、轮廓一圈亮边（ring 融接缝）、**其余整片深蓝**（背景没被动） |
+
+---
+
+## 17. 真模型能力测试：**没有可用工作流时，AI 能不能自己搭一份**（2026-09-27）
+
+> 用户的原话：「**顺便测试：如果一个可用工作流都没有，AI能否做出符合预期的工作流。**」
+>
+> 这是**真模型**（`command-code-goat` / `deepseek/deepseek-v4.1-flash`）跑出来的，不是假网关。
+> 结论：**能，而且搭得相当讲究** —— 但过程中暴露了两个真问题（一个是**我当天引入的**）。
+
+### 17.1 测试怎么造的"没有可用工作流"
+
+本机那几份自带工作流都是给 **anima-base（UNET + 外挂 CLIP/VAE）** 与 **krea2** 写的；
+`miaomiaoHarem_anima16.safetensors` 放在 `models\checkpoints` 里、名字像"整包 checkpoint"，
+**没有一份自带工作流是给它的** —— 套现成的必错。任务：用这个底模出 512x768 的雨夜霓虹女孩。
+
+### 17.2 它做了什么（22 次工具调用，全程真机）
+
+| 阶段 | 动作 | 结果 |
+| --- | --- | --- |
+| 侦察 | `server_info` / `search_models` / `comfy_list_workflows` / `list_dir` | 找到 17 份本机工作流、模型清单 |
+| 读磁盘 | `read_file` 用户那份 `MiaoMiao Harem.json`、`miaomiaoHarem_anima16.metadata.json`、项目里 `comfyhub_t2i_anima.json` | 摸清现有图的接法 |
+| **验底模** | **`read_file` 直接读 `.safetensors` 的权重索引** | 发现键**全是 `net.blocks.*`**、没有 `cond_stage_model` / `first_stage_model` → **这份"整包"其实只是把 Anima 的纯 UNET 权重放进了 checkpoints 目录，加载后 CLIP/VAE 输出是空的** |
+| 查契约 | MCP `nodes get CheckpointLoaderSimple` / `CLIPLoader` | 拿准必填输入与枚举值 |
+| **写图** | `write_file` → `comfyui\anima_miaomiao16_rainneon_t2i.json` | 9 节点：Checkpoint（只取 MODEL）+ 外挂 `qwen_3_06b_base`（`type=qwen_image`）+ 外挂 `qwen_image_vae` + 两个 CLIPTextEncode + EmptyLatentImage(512x768) + KSampler(30 步/cfg4/er_sde/simple) + VAEDecode + SaveImage |
+
+**第一轮卡住了**：`nodes get CLIPLoader` 与 `comfy_submit` 双双回 `QUERY_BUDGET_EXCEEDED`
+（侦察就把 9 次额度用光）→ 工作流写好了却**提交不出去**。它的原话是"提交不属于查询 —— 直接跑"。
+
+**第二轮（新的一窗）跑通**：`comfy_load_workflow` → `runnable=true`（9 节点全识别、无 `UNSUPPORTED_NODES`）
+→ `comfy_submit` → `status: success`（21.2 秒）→ **产物 mediaId=304，尺寸正好 512×768**。
+
+### 17.3 顺带查出的两个真问题（都已修）
+
+| # | 问题 | 修法 |
+| --- | --- | --- |
+| 1 | **`comfy_submit` 被算进"查询 ComfyUI"的额度** —— 于是"AI 自己搭工作流"这条正路在**最后一步**被挡住：侦察（读权重 / 查节点契约 / 搜模型）一轮就能用光 9 次，图写好了却没机会提交。⚠ 这是**当天早些时候我刚补的那条预算**引入的（Kotlin 也是这么分的，但**照着搬就把正路堵死了**） | 加 `ai_settings::is_comfy_query`：`comfy_submit` **不算查询**（系统提示那条规则的原话就是"主动**查询** ComfyUI 几次"）。执行器与 `spend_call` 都改用它；`comfy_use_media` / `comfy_make_mask` 照旧算（它们真的碰实例）。用例：`comfy_查询额度只认_comfy_类工具且只在成功时计数` 里那几条断言 |
+| 2 | **自己写的 API 图第一次被拒**：AI 在顶层加了 `_comment`、节点里也塞了注释 → `NOT_A_WORKFLOW`（"既不是 API 格式也不是界面格式"）。它自己改成纯净格式才读进去 —— 但那**白花了一轮** | `NOT_A_WORKFLOW` 的错误里现在**点出是哪个顶层键不像节点**，并给出改法（顶层只有节点 id、每个节点只有 `class_type` 与 `inputs`）。纯函数 `api_format_hint` + 用例 `api_格式提示要点出哪个顶层键不像节点`（顺带钉住"**节点内部**的 `_meta` 是合法的"—— 项目自带的四份工作流每个节点都带它） |
+
+### 17.4 诚实清单
+
+- **`maxToolSteps = 16` 对"自己搭一份"偏紧**：这轮 22 次调用里有一半是侦察。要不要为"搭图"放宽，**没有拍板** —— 先记着。
+- **系统提示第 16 条① 指向 `comfy_find_workflow`，而它在 Rust 侧还没搬**（§11 那张表的六件之一）。
+  实测 AI 没被它带偏（工具清单里没有，它就直接用了 `comfy_list_workflows`），但**那句话目前是空的** —— 要么把那件工具搬过来，要么把①改成 `comfy_list_workflows`。
+- 这次任务**没有跑第二遍**（换个模型/换个提示），所以"稳不稳定"还没有数据；只有"能"这一个结论。
+- 产出的那份 `comfyui\anima_miaomiao16_rainneon_t2i.json` 是**测试产物**，留在 `comfyui\` 下（AI 写的文件属于用户，没删）。
