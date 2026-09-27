@@ -3110,10 +3110,10 @@ DELETE /api/prompts/457|459|461
 
 | # | 项 | 状态 |
 | --- | --- | --- |
-| 1 | **M5 排队提交**（`submit_job` 消费 + **强制桌面审批** + 产物/`mediaIds` 回手机） | ⛔ **未开始**（契约已冻结：`sync-api-contract` §4.1；手机侧工具与 outbox 入队早就在） |
-| 2 | **`capabilities/{refresh,probe}`** | ⛔ 仍 501（refresh 要 models.dev 在线数据集、probe 要真上游请求/会花钱；用户已拍板"两个都做、probe 受 probe-toggle 约束"） |
+| 1 | **M5 排队提交**（`submit_job` 消费 + **强制桌面审批** + 产物/`mediaIds` 回手机） | 🔶 **进行中**（契约已冻结：`sync-api-contract` §4.1；agent 已落 `submit_queue.rs`：审批挂 pending / 租约看门狗 / 孤儿复起 / 回执投递与确定性 `reply_message_id`，**8 条新用例还在红**，等它收尾） |
+| 2 | **`capabilities/{refresh,probe}`** | 🔶 **`refresh` 已完成（`86d7e71`）**：拉 models.dev → 规范化 → 原子写 `remote.json`（不用重启不用发版），失败不抛错、旧文件原样保留；真机抽查两个方向都验了（NO_DOWNLOAD=1 如实跳过 / 真拉 3673 条）。**`probe`（实测校准，会对每个模型发真请求、花钱）仍是 501** |
 | 3 | **附件非图片模态**（视频/音频/文档的传输方式）+ **视频附件缩略图**（`/thumb` 回 204） | ⛔ 未做（三家适配器目前只有图片 `inline_base64`） |
-| 4 | **扫码配对** | 🔶 **Dart 侧已交付（`cf03ded`）**：二维码格式一份实现、桌面出码（含倒计时与过期撤码）、手机扫码、相机不可用退回手敲、CAMERA `required=false`；**仍缺后端 `POST /api/auth/pair/start`**（仅回环；回 ticket/code/urls/两个 expiresAt）—— 界面在它缺席时如实报"还没有扫码配对接口" |
+| 4 | **扫码配对** | ✅ **已完成**：Dart 侧 `cf03ded`（二维码格式一份实现 + 桌面出码含倒计时/过期撤码 + 手机 `mobile_scanner` 扫码 + 相机不可用退回手敲 + CAMERA `required=false`）；后端 `03c688f`（`POST /api/auth/pair/start`，**仅回环**，回 ticket/6 位码/可达地址/两个过期时刻；会话与"手机举手"共用一套，`pair/claim` 两条通道都认；扫码会话不进 `pair/pending`）。用例：整条扫码链路 + 非回环 403 + 用过的会话再兑是 `410 Gone` |
 | 5 | **跨端发起端的审批加强**（发起端 ≠ 执行端 → `mutating`/ASK 强制桌面审批；Run 带 `initiatedBy`） | ⛔ 契约已冻结（`tool-scope-contract` §3.1），执行器未落地 |
 | 6 | **AI 文案审校** | 🔄 **改形态（2026-09-27 用户拍板）**：**不做进主程序**，改成一个**独立的简单软件**；范围**只做 B**（skill 正文 + 界面注解可改；**系统提示词与工具描述只读**）。已经并进主程序的那一层**已全部撤掉**（Rust 侧未提交的 2209 行 + 15 个文件丢弃、Dart 侧 `aae813e` revert）。设计见 [`docs/copy-review-design.md`](copy-review-design.md) v2；**形态（CLI+HTML / 本地网页 / 独立 GUI）待用户挑** |
 | 7 | **配方**：W5 骨架改写 / 界面看配方页 / 跑通后回写 | ⛔ 未做（Kotlin 侧也没做；现在只如实报"接不上"） |
