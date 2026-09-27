@@ -1442,9 +1442,14 @@ async fn comfy_get_status(state: &AppState, arguments: &Value) -> Result<ToolOut
         .and_then(Value::as_bool)
         .unwrap_or(true);
     let mut status = crate::capture::status_json(state).await.map_err(capture_failure)?;
-    // 最近提交过的任务：Rust 侧 `comfy_submit` 还没搬 → 如实给空数组（此刻确实一个都没有）
+    // 最近提交过的任务（Kotlin `comfyStatus` = `CaptureStatus` + `submitter.submissions(5)`）。
+    //
+    // ⚠ **这里以前恒给空数组**（第 42 步写的注释是"Rust 侧 `comfy_submit` 还没搬 → 此刻确实一个都没有"）
+    //   —— 第 48 步 `comfy_submit` 搬来之后 `state.submissions` 真的有内容，那句注释就变成了**假话**：
+    //   模型刚提交完就来查状态，看到 `[]` 会以为自己**根本没提交过**（正是 Kotlin 在那行旁边写下的
+    //   "模型查状态时就能看到自己刚提交的那个跑到哪了"）。取最近 5 条，与 Kotlin 同。
     if let Some(obj) = status.as_object_mut() {
-        obj.insert("submissions".into(), Value::Array(Vec::new()));
+        obj.insert("submissions".into(), Value::Array(state.submissions.list(5)));
     }
     // **抠图模型在不在**（2026-09-27）：`easy imageRemBg` 只读 `<ComfyUI 根>\models\rembg`，
     // 而文件不在时它会自己去 HuggingFace 静默下载（表现是"点了按钮没反应"）。

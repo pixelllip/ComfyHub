@@ -8504,7 +8504,7 @@ async fn capture_status_and_jobs_ask_the_real_queue() {
     assert_eq!(up["queueRunning"], 1, "{up}");
     assert_eq!(up["queuePending"], 2, "{up}");
 
-    // /jobs 是右侧栏轮询用的那一份：5 个键、队首标题、submissions（Rust 侧还没提交过 → 空数组）
+    // /jobs 是右侧栏轮询用的那一份：5 个键、队首标题、submissions（这一场没提交过 → 空数组）
     let (status_code, jobs) = get_json(router_for(state.clone()), "/api/capture/jobs").await;
     assert_eq!(status_code, StatusCode::OK, "{jobs}");
     assert_eq!(
@@ -8514,7 +8514,7 @@ async fn capture_status_and_jobs_ask_the_real_queue() {
     assert_eq!(jobs["queueRunning"], 1);
     assert_eq!(jobs["queuePending"], 2);
     assert_eq!(jobs["runningLabel"], "krea2 出图");
-    assert_eq!(jobs["submissions"].as_array().unwrap().len(), 0, "还没搬 comfy_submit → 如实为空");
+    assert_eq!(jobs["submissions"].as_array().unwrap().len(), 0, "这一场没提交过 → 空");
 
     // ③ 工具层：`comfy_get_status` 按描述真的裁 recent（Kotlin 那边读了但没用），且如实说裁了多少
     let none = call_tool(&state, "comfy_get_status", serde_json::json!({ "recentLimit": 0 }))
@@ -8522,11 +8522,27 @@ async fn capture_status_and_jobs_ask_the_real_queue() {
         .unwrap();
     assert!(none.payload.get("recent").is_none(), "recentLimit=0 → 不带 recent：{:?}", none.payload);
     assert!(none.content.contains("最近捕获记录已省略"), "{}", none.content);
+
+    // ★ `submissions` 必须是**真的**：模型刚 `comfy_submit` 完就来查状态时，看到 `[]` 会以为
+    //   自己根本没提交过（Kotlin `comfyStatus` 给的是 `submitter.submissions(5)`）。
+    //   这一条就是那条"恒空数组"的防复发线。
+    state.submissions.record(serde_json::json!({
+        "promptId": "comfy-run-status-1",
+        "submittedAt": "2026-09-27T00:00:00Z",
+        "status": "running",
+    }));
     let small = call_tool(&state, "comfy_get_status", serde_json::json!({ "recentLimit": 5 }))
         .await
         .unwrap();
     assert_eq!(small.payload["comfyReachable"], true);
     assert!(small.payload.get("submissions").is_some(), "工具带上 submissions（与 Kotlin 同）");
+    assert_eq!(
+        small.payload["submissions"].as_array().unwrap().len(),
+        1,
+        "刚提交过就该看得到：{:?}",
+        small.payload["submissions"]
+    );
+    assert_eq!(small.payload["submissions"][0]["promptId"], "comfy-run-status-1");
 
     handle.abort();
     std::fs::remove_dir_all(state.project_root()).ok();

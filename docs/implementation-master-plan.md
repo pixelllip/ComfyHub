@@ -2807,3 +2807,61 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 现在那条用例用**一个永远不存在的名字**（`comfy_this_tool_never_existed`）——
 未知工具本来就不该是"某个真实工具"，从此与"又搬了哪一件"无关。
 
+---
+
+## 19. 2026-09-27 这一轮（续）：B 组的 `comfy_*` 六件 + 联网四件全部搬完
+
+> §18 之后连着三个批次，**§10.9 B 组里"要 `ComfyModels` 清单 / 要联网客户端"的那一批清零了**。
+> 每一批都是"逐条对照 Kotlin + 真库/真 socket 抽查 + 一个 git 提交"，`cargo test`
+> 从 497 一路涨到 **614**，全程 0 失败、`cargo check --all-targets` 零 warning。
+
+| 提交 | 内容 |
+| --- | --- |
+| `1ef6718` | **P4 第 62 步：`comfy_check_inputs` + `comfy_fit_workflow`**（`server-rs/src/workflow_fit.rs`，1476 行）—— 前者扫一份 API 图、把"还等着外部给输入的位置"逐个列清楚（用户建议 ⑤ 那个现场：没给参考图，工作流却用到参考图）；后者把图里点名的每个模型与**第 60 步那份本机清单**对一遍，给 `exact` / `substitute` / `onDiskOnly` / `missing` 四档 + 一份能直接贴进 `comfy_submit(overrides=…)` 的键。两件都**只报不改**。<br>★ 一处接线必须记住：Kotlin 的 `comfy_check_inputs` 读 `ctx.hasImageAttachment`（"本次带没带图"决定图片缺口算不算缺），Rust 没有 `ToolContext`，所以在 `ToolSession` 上加了 `has_image_attachment`，由执行器用**与系统提示那句「本次请求附带图片附件」同一个值**钉住 —— 两处不同源的话，模型会去要一张它已经收到的图 |
+| `155d356` | **P4 第 63 步：`comfy_audit_workflow` + `comfy_prune_workflow`**（`workflow_audit.rs` 1394 + `workflow_prune.rs` 1657）—— 前者七项检查（跑之前就能查出来那七类）、后者"给工作流做减法/加法"（`analyze=true` 只分析、`removeFrom` 摘分支并**把下游接回上游**、`injections` 插节点）。两件都**只报不改**：要改图用 `comfy_submit(overrides=…)`、要摘节点用它自己 |
+| `99423d9` | **P4 第 64 步：联网三工具 + `find_model`**（`web_tools.rs` 994 + `civitai.rs` 1156 + `find_model.rs` 2822）—— 系统提示第 17 条那一整节「联网搜索的纪律」至此指向的工具**真的存在了**（在此之前模型看不见它们）。`find_model` 是"先查本机、本机已有同名就一个请求都不发"的那条路，它的本机那一半就是第 60 步那份清单 |
+| 本提交 | **修掉 `comfy_get_status` 里一处"刚提交完却说没提交过"**（见下） |
+
+### 19.1 ★ `comfy_get_status` 的 `submissions` 一直是假的（已修）
+
+第 42 步搬 `comfy_get_status` 时，`comfy_submit` 还没搬，于是那一行写成
+**恒给空数组** + 一句注释"Rust 侧 `comfy_submit` 还没搬 → 此刻确实一个都没有"。
+第 48 步 `comfy_submit` 搬来之后 `state.submissions` 真的有内容了，**那句注释就变成了假话**：
+
+- Kotlin 的 `comfyStatus` = `CaptureStatus` + **`submitter.submissions(5)`**，
+  源码旁边那句注释写得清清楚楚：**"模型查状态时就能看到自己刚提交的那个跑到哪了"**；
+- 而 Rust 这边把它覆盖成 `[]` —— 模型提交完再来查状态，会以为自己**根本没提交过**，
+  于是重复提交（或反过来告诉用户"没提交成功"）。这正是 §17 那一类"AI 说没有、其实有"。
+
+现在改成 `state.submissions.list(5)`（与 Kotlin 同取 5 条），并把那条断言从
+"`submissions` 恒空"改成"**记一条进去就必须看得见**"（`api_test.rs` 里那一条）。
+
+### 19.2 三个批次里值得记下来的四件事（都写进了各自的代码注释）
+
+1. **`web_search` / `web_fetch` / `civitai_search` 在 Kotlin 侧是 `ToolScope.BOTH`**，
+   **已经在 `mobile_tools.rs` 那份（run-kit 机器抽取）里**；而 `tools::implemented()`
+   **不去重** —— 顺手往 `desktop_tools.rs` 再加一遍，就会让下发的 `tools[]` 与
+   `/api/ai/tools` 出现**重名**。所以这一批只把 `find_model`（Kotlin 默认 `DESKTOP`）
+   加进了桌面清单，并在钉子用例里先断言"桌面这份**没有**那三件"。
+2. **URL 三档判定不能用 WHATWG 解析器**（`find_model` / `web_fetch` 的准入）：
+   `url` crate 会把 `http:///path` 解析成 `host=path`，而 Java 的 `URI.getHost()` 是 `null`
+   —— 该报"没有主机名"的输入会**静默变成一次真请求**（SSRF 方向）。改成按 RFC 3986
+   自己拆 authority，判据对齐 `URI.getHost()`。
+3. **裸字符串里的换行就是正文**：工具描述是从 Kotlin 机器抽取的（求值 `"a" + "\n" + "b"`），
+   第一版给续行加了缩进 → 正文里多出 12 个空格。**抽取后必须把值从 Rust 清单里读回来
+   与 Kotlin 原文逐字 diff**（这一步两次抓到了错），这也是 R12/R13 唯一靠得住的验证方式。
+4. **Kotlin 的死代码不要照搬**：`ALWAYS_KEEP_CONDITION` / `consumersWithInputs` /
+   `pickCarryInput` 的 `classType` 参数 / `nearMissesFor` 的 `folder` 参数在 Kotlin 里
+   **声明了却一处都没用到**，Rust 侧直接不收（收了就是 `cargo check` 的 warning）。
+
+### 19.3 这一批之后，B 组还剩什么（诚实清单）
+
+| 项 | 状态 |
+| --- | --- |
+| `comfy_submit` 的提交闸门**没有**接 `workflow_audit::blocking_refusal` | ⛔ **未接**。工具描述（逐字搬自 Kotlin）里写着"提交时 `comfy_submit` 也会自动跑一次审核，但只拦'必跑不了'的那些（前端节点 / 版本不兼容 / 本机没有的节点类）"，而 Rust 的预检**只有两道实例侧检查**（节点类拦、模型文件只警告）—— `workflow_submit.rs` 的文件头已如实声明了这个差距。**接上去会改变 `comfy_submit` 的行为与 e2e 判据**，所以单独一批做 |
+| 系统提示第 17 条那句"`web_search`/`web_fetch`/`civitai_search` **共用这一个额度**"漏了 `find_model` | ⛔ **未改**：`find_model` 确实吃同一份预算（已加进 `category_of` 的 web 档并有断言），但改提示词要 **bump `PROMPT_VERSION`**（会动 `promptVersion` 的钉子与用户可见文案），单独一批做 |
+| 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`）+ `workflow_recipes` 表 + `bind` 端点 | ⛔ 未搬（`WorkflowRecipe.kt` 710 行 + Repo/Learner/Binder/Routes + 约 1000 行 Kotlin 测试断言） |
+| `WorkflowConvert` 的两处欠账（subgraph 展开 / `emulateFrontend`） | ⛔ 未做（仍如实进 `unsupportedNodes`） |
+| 桌面/手机两侧的剩余项（M4 补全 / M5 排队提交 / M6 离线模型清单 / 手机 `deleteConversation`） | ⛔ 未做（见 §10.8 的移动端那张表） |
+| 图像编辑的 `light=auto`、`>1024` 长边的人物图、"人变糊"的单变量对照 | ⛔ 未做（见 §15.4 / §16.7；`light` 那个死变量已清掉） |
+
