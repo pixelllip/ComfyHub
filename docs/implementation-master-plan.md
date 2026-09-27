@@ -1950,7 +1950,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | `comfy_use_media` / `comfy_make_mask` / `comfy_use_attachment`（图像编辑三件） | ✅ **已搬（第 58 步，2026-09-26）**：`server-rs/src/image_edit.rs` + 三条工具（出厂档 ASK）+ 16 例用例；**活实例验收**见 §13（AI 那条链路 30 项全绿、遮罩内 101.95/255 外 3.74/255） |
 | 联网三工具 `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（要 Keenable / Civitai 客户端；凭据端点已就绪）。⚠ **`danbooru_lookup` 已搬**（第 59 步，见 §14）—— 它是 Rust 侧第一条**联网**工具，顺带把"联网预算"这条只写在提示词里的规则变成真的拦得住 |
 | `search_prompts` / `search_character_cards` / `save_character_card` / `danbooru_lookup` | ✅ **已搬**：角色卡两件（第 46 步）+ **`search_prompts` / `danbooru_lookup`（第 59 步，见 §14）**。§11 的"写角色前先查三处"在 Rust 后端**已齐**；`save_character_card` 的核对时间也真的接上了（只有本轮真查过 danbooru 才写得进）。⚠ `character_cards` 那张表**不在同步白名单**里，这条纪律别丢 |
-| 工作流配方三件 `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表 | ⛔ 未搬（Kotlin 侧 `WorkflowRecipe.kt` 646 行解析核心是主体；**故意不进同步范围**） |
+| 工作流配方三件 `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表 | ✅ **已搬（P4 第 67 步，2026-09-27，见 §20）**：`server-rs/src/workflow_recipe.rs`（解析核心 + 仓储 + 学习 + 绑定 + 三条工具 + 五条端点）+ `tests/recipe_test.rs`。**故意不进同步范围**（手机提交走 `comfy_queue_submit`，R11）—— 这条纪律连用例一起搬了过来 |
 | **后台捕获轮询器** + `lastPollAt` / `lastError`（O5/O6） | ✅ **已做（P4 第 47 步）**（用户自己在 ComfyUI 里跑的东西也会进画廊） |
 | **截断续写**（`MAX_CONTINUATIONS` + `CONTINUE_INSTRUCTION`） | ⛔ 未做（输出被长度上限卡断时，现在把半句话当结尾） |
 | 官方 comfy-mcp 39 个 | ✅ **第 45 步已做** |
@@ -2459,7 +2459,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | --- | --- |
 | `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（要 Keenable / Civitai 客户端 + `EndpointGuard`；`/api/ai/credentials` 已就绪）。⚠ **`danbooru_lookup` 是 Rust 侧第一条联网工具**，所以这一批把"联网预算"这条规则真的落地了 —— 后面三条搬过来时**直接复用**那份计数，别再各写一份 |
 | `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ 未搬（要 `ComfyModels` 本机模型清单） |
-| 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表） | ⛔ 未搬（`WorkflowRecipe.kt` 646 行的解析核心是主体；**故意不进同步范围**） |
+| 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表） | ✅ **已搬（P4 第 67 步，2026-09-27，见 §20）**（`WorkflowRecipe.kt` 的解析核心 + Repo/Learner/Binder/Routes 逐条对照；**故意不进同步范围**） |
 | **`comfy_query` 那一档的预算** | ✅ **已补（2026-09-27）**：`ToolSession.comfy_queries_in_window` + `has_comfy_queries_left()`，执行器在**权限档之前**按**类别**（`ai_settings::category_of(..) == "comfy"`）拦，回 `QUERY_BUDGET_EXCEEDED`（文案与 Kotlin 逐字同义："本次回复查询 ComfyUI 的次数已达上限（9 次）；请基于已有信息作答，或让用户稍后再问"）。数字真源仍是 `policy::MAX_COMFY_QUERIES_PER_RUN = 9`（系统提示第 7 条 `«MAX_COMFY»` 就是替换它）。**没有另发明一套** —— 结构照 `has_web_queries_left` 那一条；用户答完提问时 `reset_budget` 与联网额度一起归零。用例：`comfy_查询额度只认_comfy_类工具且只在成功时计数`。⚠ 顺带钉住一个日后会漂移的点：Kotlin 里 **`comfy_env_report` 是 `FILES` 类**（只扫盘、不碰服务），所以不能靠 `_ => "comfy"` 兜底 —— 已在 `category_of` 里提前写好那一条 |
 | `search_prompts` 的**多词 AND** 语义 | ✅ **顺手对齐了**（它本来是个静默漂移）：Rust 的 `query_prompts` 之前是**整串 LIKE + 3 列**（title / positive / negative），而 Kotlin `PromptRe| 两阶段（"先生成人物 → 再 `20.image` + `denoise 0.4~0.6` 贴上去"）的**融合档** | ✅ **已实测并落地**（2026-09-26）：① **矩形遮罩 → 一圈白框**（`ImageCompositeMasked` 把人物图那块矩形连背景一起贴）→ 用 `comfy_make_mask(mode="subject")` 照**人物形状**抠剪影（背景色取四周中位数 + 只留最大连通区 + **填被包住的同色窟窿**，白裙子那种"人变半透明"就是靠填洞修的）；② **人物被重画/画风被换** → 新增 `comfyhub_paste_person_anima.json`（**两个 LoadImageMask**：`12` 合成用剪影、`26` 只给 `SetLatentNoiseMask`）+ `comfy_make_mask(..., ring=N)` 产出"只圈人物外面 N 像素"的环 —— 人物像素一个都不在重绘区里，实测 ring=14 **同脸同发色原样保留、只融接缝**；③ **摆放**（`scale` + `x`/`y`）已做，人物像素与遮罩**一起搬**（脱节就是"人在这儿、遮罩在那儿"）。⚠ 没做的：抠图仍是**颜色抠图**，只对纯色/浅色背景有效（要任意背景得装分割模型：本机 `rembg` 有包无模型、easy-use/SAM 目录是空的 → 真要就得下 ~176MB，**要先问用户**）；跨画风（动画人 + 照片景）本身仍违和，那是阶段一底模的事 |
 
@@ -2860,10 +2860,60 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 | --- | --- |
 | `comfy_submit` 的提交闸门**没有**接 `workflow_audit::blocking_refusal` | ⛔ **未接**。工具描述（逐字搬自 Kotlin）里写着"提交时 `comfy_submit` 也会自动跑一次审核，但只拦'必跑不了'的那些（前端节点 / 版本不兼容 / 本机没有的节点类）"，而 Rust 的预检**只有两道实例侧检查**（节点类拦、模型文件只警告）—— `workflow_submit.rs` 的文件头已如实声明了这个差距。**接上去会改变 `comfy_submit` 的行为与 e2e 判据**，所以单独一批做 |
 | 系统提示第 17 条那句"`web_search`/`web_fetch`/`civitai_search` **共用这一个额度**"漏了 `find_model` | ⛔ **未改**：`find_model` 确实吃同一份预算（已加进 `category_of` 的 web 档并有断言），但改提示词要 **bump `PROMPT_VERSION`**（会动 `promptVersion` 的钉子与用户可见文案），单独一批做 |
-| 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`）+ `workflow_recipes` 表 + `bind` 端点 | ⛔ 未搬（`WorkflowRecipe.kt` 710 行 + Repo/Learner/Binder/Routes + 约 1000 行 Kotlin 测试断言） |
+| 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`）+ `workflow_recipes` 表 + `bind` 端点 | ✅ **已搬（P4 第 67 步，2026-09-27，见 §20）**（`WorkflowRecipe.kt` 710 行 + Repo/Learner/Binder/Routes + 约 1000 行 Kotlin 测试断言逐条移植） |
 | `WorkflowConvert` 的两处欠账（subgraph 展开 / `emulateFrontend`） | ⛔ 未做（仍如实进 `unsupportedNodes`） |
 | 桌面/手机两侧的剩余项（M4 补全 / M5 排队提交 / M6 离线模型清单 / 手机 `deleteConversation`） | ⛔ 未做（见 §10.8 的移动端那张表） |
 | 图像编辑的 `light=auto`、`>1024` 长边的人物图、"人变糊"的单变量对照 | ⛔ 未做（见 §15.4 / §16.7；`light` 那个死变量已清掉） |
+
+---
+
+## 20. 2026-09-27 这一轮（续）：工作流配方三件搬到 Rust（**§19.3 那条 `⛔ 未搬` 清零**）
+
+> Kotlin 侧 2026-09-26 的 W1~W3（见 §12）在 Rust 后端逐条对照着搬完了：
+> 解析核心 + 仓储 + 学习闭环 + 绑定四档 + 三条工具 + 五条端点。
+> 设计（为什么是这三层、为什么默认拒学缺件的图）**一个字都没改**：
+> [`workflow-recipe-design.md`](workflow-recipe-design.md) 仍是权威，§12 仍是那次 Kotlin 落地的记录。
+
+| 提交 | 内容 |
+| --- | --- |
+| `本提交` | **P4 第 67 步：配方三件 + `workflow_recipes` 搬到 Rust**（`server-rs/src/workflow_recipe.rs`，约 2000 行；`tests/recipe_test.rs` 7 例）—— 学（`comfy_learn_workflow`）/ 列（`comfy_list_recipes`）/ 绑（`comfy_bind_recipe`）+ `GET/POST /api/ai/workflow-recipes`、`GET/DELETE /{id}`、`POST /{id}/bind` |
+
+### 20.1 这一批的三条"接线必须记住"
+
+1. **学习与绑定只有一份实现**：`workflow_recipe::learn_and_save` / `bind_and_report` 就是
+   AI 工具与 `POST /api/ai/workflow-recipes*` **共用的那两个函数**（Kotlin 是 `Application.kt`
+   里那两个 lambda）。两处各写一遍必然漂移，而漂移的表现是
+   "AI 学出来的配方和界面看到的不一样"——**不报错**。
+2. **默认拒学"转换有缺口"的图**（`UNSUPPORTED_NODES`）：界面格式转 API 图时会**摘掉**
+   转不出来的节点，学下来就是一条"看着像、其实缺了链"的骨架。真机现场是
+   "本机这个实例没装那几个 Krea2 自定义节点"——正确动作是让用户启停/换实例，
+   **不是改他的工作流**。`tests/recipe_test.rs` 第一条用例就是这条（假 `/object_info`
+   故意少一个类 → 拒学 → 带 `tolerateUnsupported=true` 才学，且 `complete=false` + 缺口清单）。
+3. **不进同步白名单**：`workflow_recipes` 不在 `sync.rs::SYNCED` / `pk_kind` 里，
+   手机 `MobileSchema.kt` 也不许动 —— 手机提交走 `comfy_queue_submit`（R11），
+   拿到一份它跑不了的配方只会误导模型。新增用例同时钉住"这张表不进 `_sync_log`"
+   与"三条配方工具不进手机 run-kit"。
+
+### 20.2 两处**有意与 Kotlin 不同**（都在代码里带 `⚠ 有意与 Kotlin 不同` 标记）
+
+| 处 | 差异 | 为什么 |
+| --- | --- | --- |
+| `workflow_recipe.rs` 的 `RecipeFailure::to_tool_failure` | 仓储的 400（名字太长 / `promptId` 不存在）在 Kotlin 工具层会落到包装层的兜底分支（`TOOL_ERROR` + "工具执行失败：IllegalArgumentException（…）"），Rust 侧翻成 `INVALID_ARGUMENT` | 人话一个字不变，只是码能告诉模型"是我参数给错了"。这是本仓库既有约定（第 46 步 `character_cards` 的 `api_failure`）；**端点那一侧仍与 Kotlin 完全同形**（`{error: 人话}`） |
+| 学习时多补一句"还没实现「模拟用户行为」" | 工具描述逐字搬自 Kotlin（写着 `emulateFrontend` 默认开着），而 `workflow_convert.rs` 还没实现它 —— 所以结果里**主动补一句**如实说明 | 与第 44 步 `workflow_load.rs` 同一条纪律、**同一份实现**（`workflow_convert::emulate_frontend_warning`）。Kotlin 那边这一步是真做了的，所以它没有这句话 |
+
+同时**顺手收掉两处重复实现**（不改变行为）：`is_node_graph` 从 `workflow_load.rs`
+搬进 `workflow_convert.rs`（学习链路与加载链路共用一份判据）；
+「模拟用户行为」那句诚实说明也抽成上面那个公共函数（两处共用一份文本）。
+
+### 20.3 没做到的 / 留给下一批
+
+| 项 | 状态 |
+| --- | --- |
+| 系统提示第 20 条（配方那条规则）+ skill `workflow-recipe` | ⛔ **未做**（与 §19.3 那条一样：改提示词要 **bump `PROMPT_VERSION`**，会动 `promptVersion` 的钉子与用户可见文案，单独一批做） |
+| `scripts\e2e-recipe-test.ps1`（对着真工作流文件跑"学 → 列 → 绑"） | ⛔ **未做**（Rust 侧的等价防线是 `tests/recipe_test.rs` 的假 ComfyUI + 真工作流文件夹具；端到端脚本按老规矩另起一批） |
+| W5 骨架改写（unet+clip+vae ↔ 整包 checkpoint 的增删与重连线） | ⛔ **未做**（Kotlin 侧也没做；绑定遇到这种结构时报告里**明说接不上**，这一条搬过来了） |
+| 界面上"看配方 / 绑定"的页面 | ⛔ **未做**（五条端点已就绪，界面按需再接；AI 那侧已经全通） |
+| 配方同步到手机 / 跑通之后自动回写配方 | ⛔ **未做**（**有意**，理由见设计 §6 与 §12 的诚实清单） |
 
 ---
 

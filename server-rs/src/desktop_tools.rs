@@ -22,7 +22,8 @@
 //! 只搬**不碰网络、不碰 ComfyUI** 的五件：`list_dir` / `read_file` / `write_file`
 //! （路径准入见 [`crate::policy::ToolPolicy::resolve_read`]）与 `register_skill` /
 //! `delete_skill`（磁盘真源在 [`crate::skills`]）。剩下的大块 —— `comfy_*` 十三件、
-//! 官方 comfy-mcp 那 39 个（要 `McpStdioClient`）、配方三件 —— 各自另起批次。
+//! 官方 comfy-mcp 那 39 个（要 `McpStdioClient`）—— 各自另起批次。
+//! **配方三件（P4 第 67 步）已经在这一批里了**（[`crate::workflow_recipe`]）。
 //!
 //! ⚠ 联网三件（`web_search` / `web_fetch` / `civitai_search`）**不在这份清单里**：
 //! Kotlin 给它们写的是 `scope = ToolScope.BOTH`，所以它们住在
@@ -63,6 +64,25 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         //   ⚠ 裸字符串里的换行**就是**正文的一部分，所以续行**不许缩进**
         //   （缩进会变成正文里的空格，两端就不一致了）。
         input_schema: r#"{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_load_workflow 的 apiGraph / comfy_get_run 的 raw 原样传进来）"}},"required":["graph"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+
+    DesktopToolSpec {
+        name: "comfy_bind_recipe",
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_bind_recipe`（R12/R13）：
+        //   description 与 schema 都是**机器抽取**的（不是手抄）—— Kotlin 那边是一串
+        //   `"…" + "…"` 拼接，正文里的换行与 `**` 一个字符都没走样。
+        //   ⚠ 裸字符串里的换行**就是**正文的一部分，所以续行**不许缩进**
+        //   （缩进会变成正文里的空格，两端就不一致了）。
+        description: r#"**把一条配方绑到一个（新）模型上**：算出该写进 `comfy_submit(overrides=…)` 的键。这是「出了新模型不用重搭工作流」的那一步 —— 骨架不变，只换底模 / 文本编码器 / VAE / LoRA。
+**只报不改**：它不提交、不写文件、不改工作流；真正动手的是那次 comfy_submit（还要过审批与提交前预检）。
+怎么用：`recipeId` + `model`（新模型文件名）。角色不用自己猜 —— 会给清单里那个文件所在的目录去对槽位；不确定或同名多义（两条 LoRA）时用 `role`（diffusion_models / text_encoders / vae / loras / checkpoints…）或 `overrideKey`（最准，形如 `55.unet_name`）点明。
+四种结论：`exact`（本机有同名**且当前实例能加载** —— 唯一能自动绑的一档）/ `onDiskOnly`（盘上有但实例枚举不到 → 让用户重启 ComfyUI / 修模型根，**别下载**）/ `substitute`（只是字面相似 → **先问用户**）/ `missing`（本机没有 → 去 `find_model` / `civitai_search` 查，**绝对不要编文件名**）。
+⚠ 有一种**结构上接不上**：配方是分离式加载（unet + clip + vae 三个槽位），而你给的是**整包 checkpoint**（或反过来）—— 那要增删节点并重连线（本版不做），报告会写明，**别硬写覆盖键**。`force=true` 才会把没验证过的名字写进去（最后仍由提交前预检守门）。"#,
+        // **只报不改**：不提交、不写文件、不改工作流 —— 所以只读、不拦（与 Kotlin 同）
+        input_schema: r#"{"type":"object","properties":{"recipeId":{"type":"integer","description":"配方 id（comfy_list_recipes / comfy_learn_workflow 给的）"},"model":{"type":"string","description":"要绑上去的模型文件名（形如 krea2_turbo_v11.safetensors）"},"role":{"type":"string","description":"可选：绑到哪一类槽位（diffusion_models / text_encoders / vae / loras / checkpoints…）；不给就按清单里该文件所在的目录推"},"overrideKey":{"type":"string","description":"可选：直接点名槽位的覆盖键（形如 55.unet_name），最准"},"force":{"type":"boolean","description":"默认 false：没验证过（本机清单里没有）的名字不写进覆盖键；true = 照写并附警告（提交前预检仍会再查一次）"},"extra":{"type":"object","description":"可选：还要一起绑的其它槽位，形如 {\"text_encoders\":\"qwen3vl.safetensors\",\"vae\":\"vae.safetensors\"}（键是 role）","additionalProperties":true}},"additionalProperties":false}"#,
         scope: "DESKTOP",
         access: "ALLOW",
         mutating: false,
@@ -130,6 +150,37 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         access: "ALLOW",
         mutating: false,
     },
+    DesktopToolSpec {
+        name: "comfy_learn_workflow",
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_learn_workflow`（R12/R13），
+        //   同样是机器抽取（续行不缩进的理由见上面 `comfy_audit_workflow` 那条）。
+        //   schema 走 `r#"…"#` 就够：正文里没有 `"#` 这个序列。
+        description: r#"**把一份工作流学成「配方」**（任务 + 骨架指纹 + 模型槽位 + 参数旋钮 + 输出）并存进本机配方库 —— 下次换个模型只要「绑」（comfy_bind_recipe），不用重搭工作流。
+三种来源**任选一个**：`path`（本机工作流文件，界面格式也行，会用 ComfyUI 的 /object_info 转）、`promptId`（库里已有 API 图的提示词）、`graph`（API 格式节点图）。
+**学到的东西是什么**：`task`（t2i/i2i/edit/inpaint/upscale/video/audio，按节点形状判的）、`skeletonHash`（**同一族骨架 = 同一个值**，与模型无关 —— 这就是「泛用」）、`slots`（模型槽位：该改哪个键、原来是什么文件）、`knobs`（能覆盖的提示词/采样/尺寸键）。
+⚠ **默认拒学「转换有缺口」的图**：界面格式里有节点转不出来（多半是**本机这个实例没装/没启用那几个自定义节点**）时，学下来的会是一条**看着像、其实缺了链**的骨架，而且不报错。被拒时照返回的那几条去查：先确认实例有没有那些节点类，别去改用户的工作流；确实只想学个大概就带 `tolerateUnsupported=true`（配方会标 `complete=false` + 缺口清单，**不许**拿它当完整骨架用）。
+同一个来源学两次只有一行（幂等，按文件 sha256 / promptId / 图哈希）。只读用户的文件，也不往提示词库里塞行。"#,
+        // 它会往本机配方库写一行（不是用户的文件），所以如实标 mutating，
+        // 但与 comfy_load_workflow 同档：不拦（知识积累不该每一步都等批准）
+        input_schema: r#"{"type":"object","properties":{"path":{"type":"string","description":"本机工作流文件的完整路径（.json；界面格式也行）"},"promptId":{"type":"integer","description":"或者：库里已有 API 图的提示词 id"},"graph":{"type":"object","description":"或者：直接给 API 格式节点图"},"name":{"type":"string","description":"配方名（默认取文件名 / 提示词标题）"},"tolerateUnsupported":{"type":"boolean","description":"转换有缺口时是否照样学（默认 false = 拒学，见描述里那一段）"},"emulateFrontend":{"type":"boolean","description":"界面格式转换时照 ComfyUI 前端行为等价改写（默认 true）"},"notes":{"type":"string","description":"可选备注：这份配方是干什么用的、从哪来的"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: true,
+    },
+
+    DesktopToolSpec {
+        name: "comfy_list_recipes",
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_list_recipes`（R12/R13）。
+        description: r#"列**已经学过的配方**（`comfy_learn_workflow` 学下来的那些）。每条带：任务、骨架指纹、模型槽位（覆盖键 + 原来的文件名）、节点/旋钮数、`complete`（false = 学的时候这张图就缺件，**别拿它开跑**）。
+**同一族骨架 = 同一个 `skeletonHash`**：看到两条同指纹的就是「同一套结构、不同底模/参数」，换模型时优先挑同任务的那一族。
+什么时候用它：① 用户说「用某个新模型做 XX」—— 先看这里有没有现成的骨架，别从零搭；② 想知道「这个模型我配过哪条工作流」（用 `q=` 搜模型文件名）；③ `comfy_load_workflow` 之前先看有没有人已经学过它。"#,
+        // **只读**：列已经学过的配方
+        input_schema: r#"{"type":"object","properties":{"q":{"type":"string","description":"关键字：配方名 / 骨架指纹 / 路径 / 槽位里的模型文件名"},"task":{"type":"string","description":"按任务过滤：t2i / i2i / edit / inpaint / upscale / video / audio / unknown"},"skeleton":{"type":"string","description":"只看某一族（骨架指纹，从别处的 skeletonHash 拿）"},"onlyComplete":{"type":"boolean","description":"true = 只列没有转换缺口的（默认 false，缺件的也列，只是带标记）"},"limit":{"type":"integer","description":"最多几条，默认 20，上限 100"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+
     DesktopToolSpec {
         name: "comfy_list_workflows",
         description: r#"列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`），带完整路径、格式（ui/api）与是否已经在本项目库里（inLibrary / promptId）。**首次使用、或者 comfy_find_workflow 什么都搜不到时，先看这里** —— 这些工作流不需要在 ComfyUI 里跑过一次才可用：拿到 path 直接 comfy_load_workflow(path=…) 读进库，再用返回的 promptId 提交。只读，不改用户的文件。"#,
@@ -356,8 +407,7 @@ mod tests {
         }
     }
 
-    /// 这一批**故意不做**的事，别顺手加回来（`comfy_*` 那一大票要 ComfyUI 在场或要转换栈，
-    /// 配方三件也还没搬，归后面的批次）。
+    /// 这一批**故意不做**的事，别顺手加回来（`comfy_*` 那一大票要 ComfyUI 在场或要转换栈）。
     ///
     /// ⚠ 联网三件（`web_search` / `web_fetch` / `civitai_search`）**不在这里出现**是**对的**：
     /// 它们是 `BOTH` 档，住在 `mobile_tools.rs`；这一条名单只描述**桌面专属**那份清单。
@@ -368,12 +418,17 @@ mod tests {
             names,
             vec![
                 "comfy_audit_workflow",
+                // 配方三件（P4 第 67 步）：学 → 列 → 绑。绑的那件按 name 升序排在体检之前
+                "comfy_bind_recipe",
                 "comfy_check_inputs",
                 "comfy_env_report",
                 "comfy_find_workflow",
                 "comfy_fit_workflow",
                 "comfy_get_run",
                 "comfy_get_status",
+                // 学（往本机配方库写一行）与列（只读）夹在 get_status 与 list_workflows 之间
+                "comfy_learn_workflow",
+                "comfy_list_recipes",
                 "comfy_list_workflows",
                 "comfy_load_workflow",
                 "comfy_make_mask",
@@ -399,12 +454,36 @@ mod tests {
         for elsewhere in ["web_search", "web_fetch", "civitai_search"] {
             assert!(!names.contains(&elsewhere), "{elsewhere} 是 BOTH 档，属于 mobile_tools.rs");
         }
-        for absent in [
-            "comfy_learn_workflow",
-            "comfy_list_recipes",
-            "comfy_bind_recipe",
-        ] {
-            assert!(!names.contains(&absent), "{absent} 还没实现，不许提前列进来");
+        // 配方三件（P4 第 67 步）已经搬过来了：**必须**在下发清单里
+        // （第 65/66 步那两条 `absent` 断言到这里就该反过来 —— 留着它等于把已实现的说成没实现）
+        for present in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
+            assert!(names.contains(&present), "{present} 已经搬过来了，不许漏：{names:?}");
+        }
+    }
+
+    /// 配方三件的出厂档（与 Kotlin `ToolRegistry.kt` 逐条一致）：
+    ///
+    /// `comfy_learn_workflow` **会往本机配方库写一行**（不是用户的文件）→ 如实标 `mutating`，
+    /// 但与 `comfy_load_workflow` 同档 `ALLOW`（知识积累不该每一步都等批准）；
+    /// 列与绑都**只读**（绑只产出"该改哪几个键"的报告，不提交、不写文件）。
+    /// 档位改成 `ASK` 的后果是"每学一份工作流都要用户点一下"，界面上看不出为什么变卡。
+    #[test]
+    fn 配方三件的出厂档与_kotlin_一致() {
+        for name in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
+            let tool = DESKTOP_TOOLS.iter().find(|t| t.name == name).expect(name);
+            assert_eq!(tool.access, "ALLOW", "{name} 的出厂档");
+        }
+        assert!(
+            DESKTOP_TOOLS
+                .iter()
+                .find(|t| t.name == "comfy_learn_workflow")
+                .unwrap()
+                .mutating,
+            "学会写本机配方库，mutating 必须为 true（Kotlin 也是这么标的）"
+        );
+        for name in ["comfy_list_recipes", "comfy_bind_recipe"] {
+            let tool = DESKTOP_TOOLS.iter().find(|t| t.name == name).expect(name);
+            assert!(!tool.mutating, "{name} 只报不改，mutating 必须为 false");
         }
     }
 

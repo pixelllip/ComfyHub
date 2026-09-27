@@ -13,12 +13,12 @@
 //! | `comfy_check_inputs` / `comfy_fit_workflow` | `DESKTOP` | 第 62 步的**体检两件**（见 [`crate::workflow_fit`]）：前者列"还等着外部给输入的位置"（用户没给参考图时的那个现场），后者把图里点名的模型与本机清单对一遍。两件都**只报不改**、出厂 `ALLOW` |
 //! | `comfy_audit_workflow` | `DESKTOP` | 第 63 步的**审核**（见 [`crate::workflow_audit`]）：七项检查只报事实，其中"必跑不了"的三项（前端节点 / 版本不兼容 / 本机没有的节点类）会被提交闸门拦下，参数/显存/提示词风格**只提醒**。出厂 `ALLOW` |
 //! | `comfy_prune_workflow` | `DESKTOP` | 第 63 步的**摘节点 / 拼节点**（见 [`crate::workflow_prune`]）：从输出节点反向做可达性分析摘掉无关分支并把下游的线接回上游，`analyze=true` 时一个字都不改。出厂 `ALLOW`（它不写盘、不提交，改好的图是**内联**返回的） |
+//! | `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` | `DESKTOP` | 第 67 步的**配方三件**（见 [`crate::workflow_recipe`]）：把一份具体工作流**归纳**成「任务 + 骨架指纹 + 模型槽位 + 参数旋钮」并存进本机配方库，新模型出现时只做"把骨架绑到新槽位"这一步。学与绑都与 `POST /api/ai/workflow-recipes*` **共用一份实现**；绑**只报不改**（真提交仍走 `comfy_submit`，R10 不动） |
 //! | `web_search` / `web_fetch` | `BOTH` | 第 64 步的**联网两件**（见 [`crate::web_tools`]）：Keenable 通用搜索（默认免密钥）+ 取公开网页正文。`web_fetch` 的目标过 SSRF 闸门，内网 / 本机 / 云元数据地址一个请求都不发。两件都出厂 `ASK` |
 //! | `civitai_search` | `BOTH` | 第 64 步的**模型库检索**（见 [`crate::civitai`]）：安全档走 `civitai.com`、`allowNsfw=true` 切到 `civitai.red`；没令牌也照搜，但正文里如实写明"本次是匿名通道"。出厂 `ASK` |
 //! | `find_model` | `DESKTOP` | 第 64 步的**定向查询**（见 [`crate::find_model`]）：先查本机（命中就一个外部请求都不发），再按 Civitai → HuggingFace → ModelScope 顺序查、逐源报可达性。**绝不代下**（只给链接 + sha256 + 目标目录）。出厂 `ASK` |
 //!
-//! 还没搬的：配方三件（`comfy_learn_workflow` / `comfy_list_recipes` /
-//! `comfy_bind_recipe`）、官方 comfy-mcp 那 39 个（要 `McpStdioClient`，运行时拉的，不进这份静态清单）。
+//! 还没搬的：官方 comfy-mcp 那 39 个（要 `McpStdioClient`，运行时拉的，不进这份静态清单）。
 //! **没搬的绝不下发**（`declaredTo = 清单 ∩ 本地实现`）。
 //!
 //! # 两个清单的差别（别混用）
@@ -388,7 +388,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前三十二个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前三十五个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
 /// + 联网三件（`web_search` / `web_fetch` / `civitai_search`，见 [`crate::web_tools`] 与
 /// [`crate::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
@@ -400,17 +400,23 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// P4 第 62 步）
 /// + **审核 + 摘拼两件**（`comfy_audit_workflow` / `comfy_prune_workflow`，见
 /// [`crate::workflow_audit`] 与 [`crate::workflow_prune`]，P4 第 63 步）
-/// + **定向查询**（`find_model`，见 [`crate::find_model`]，P4 第 64 步）。
-pub const IMPLEMENTED: [&str; 32] = [
+/// + **定向查询**（`find_model`，见 [`crate::find_model`]，P4 第 64 步）
+/// + **配方三件**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`，
+/// 见 [`crate::workflow_recipe`]，P4 第 67 步；学与绑都与
+/// `POST /api/ai/workflow-recipes*` 共用一份实现）。
+pub const IMPLEMENTED: [&str; 35] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
+    "comfy_bind_recipe",
     "comfy_check_inputs",
     "comfy_env_report",
     "comfy_find_workflow",
     "comfy_fit_workflow",
     "comfy_get_run",
     "comfy_get_status",
+    "comfy_learn_workflow",
+    "comfy_list_recipes",
     "comfy_list_workflows",
     "comfy_load_workflow",
     "comfy_make_mask",
@@ -569,6 +575,15 @@ pub async fn execute(
         "comfy_prune_workflow" => {
             crate::workflow_prune::tool_prune_workflow(state, arguments).await
         }
+        // ---- 配方三件（P4 第 67 步：用户"新模型该怎么接上已有骨架"）----------------
+        // 学（归纳 + 落库）与绑（只报不改地算出该改哪几个 overrides 键）都走
+        // `workflow_recipe` 里那两个函数 —— 与 `POST /api/ai/workflow-recipes*`
+        // **共用一份实现**：分头写必然漂移，而漂移的表现是"AI 学出来的配方和界面看到的不一样"（不报错）。
+        "comfy_learn_workflow" => {
+            crate::workflow_recipe::tool_learn_workflow(state, policy, arguments).await
+        }
+        "comfy_list_recipes" => crate::workflow_recipe::tool_list_recipes(state, arguments),
+        "comfy_bind_recipe" => crate::workflow_recipe::tool_bind_recipe(state, arguments).await,
         // ---- 提交（P4 第 48 步：**R10 的落点**）------------------------------
         // 「审核 → 审批 → 提交 → 自己等 → captureRun 入库 → mediaIds」这条链：
         // 审批由执行器（`default_access = ASK`）负责，其余都在 `workflow_submit` 里。
@@ -1978,9 +1993,10 @@ mod tests {
         for expected in ["web_search", "web_fetch", "civitai_search", "find_model"] {
             assert!(specs.iter().any(|s| s.name == expected), "{expected} 应当下发：{:?}", specs.iter().map(|s| &s.name).collect::<Vec<_>>());
         }
-        // 配方三件还没实现 → 不许出现（模型会去调一个必然失败的调用）
-        for absent in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
-            assert!(!specs.iter().any(|s| s.name == absent), "{absent} 还没实现");
+        // 配方三件（P4 第 67 步）已经实现 → 与桌面那两件一样，必须同时出现在提示词与请求里
+        // （在此之前那两条 `absent` 断言是对的：没实现的一律不许下发）
+        for expected in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
+            assert!(specs.iter().any(|s| s.name == expected), "{expected} 应当下发");
         }
     }
 
@@ -2163,10 +2179,16 @@ mod tests {
             assert_eq!(default_access(name), "ASK", "{name} 的出厂档必须是 ASK");
             assert!(!is_mutating(name), "{name} 是只读的（绝不代下）");
         }
-        // 还没搬的一个都不许说"实现了"
+        // 配方三件（P4 第 67 步）：学是**会写本机配方库**的（所以 mutating=true），
+        // 但出厂档与 Kotlin 一致是 ALLOW（知识积累不该每一步都等批准）；
+        // 列与绑只读（绑**只报不改**：它不提交、不写文件）。
         for name in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
-            assert!(!is_implemented(name), "{name} 还没搬");
+            assert!(is_implemented(name), "{name} 已经搬过来了");
+            assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
         }
+        assert!(is_mutating("comfy_learn_workflow"), "学会往本机配方库写一行");
+        assert!(!is_mutating("comfy_list_recipes"));
+        assert!(!is_mutating("comfy_bind_recipe"), "绑只报不改");
     }
 
     /// 设置页那份清单（`implemented`）与下发那份（`catalog`）的差别只有 `deny` 一条。

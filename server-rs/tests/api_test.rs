@@ -5649,7 +5649,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（32 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（35 个），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
@@ -5665,6 +5665,9 @@ async fn tool_policy_and_nsfw_endpoints() {
             "civitai_search",
             // 审核（P4 第 63 步）：七项检查只报事实，"必跑不了"的三项才进提交闸门
             "comfy_audit_workflow",
+            // 配方三件（P4 第 67 步）：学（会往本机配方库写一行）/ 列 / 绑（**只报不改**）。
+            // 学与绑都与 `POST /api/ai/workflow-recipes*` 共用一份实现 —— 按 name 升序排在这里
+            "comfy_bind_recipe",
             // 体检两件（P4 第 62 步）：列"还等着外部给输入的位置" / 跟本机模型清单对账，
             // 都**只报不改**（用户建议 ①/⑤）—— 按 name 升序排在这里
             "comfy_check_inputs",
@@ -5675,6 +5678,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_fit_workflow",
             "comfy_get_run",
             "comfy_get_status",
+            "comfy_learn_workflow",
+            "comfy_list_recipes",
             "comfy_list_workflows",
             "comfy_load_workflow",
             // 图像编辑三件（投放 + 遮罩）：两阶段编辑的地基，出厂档都是 ask
@@ -8263,6 +8268,11 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "web_fetch",
         "civitai_search",
         "find_model",
+        // 配方三件（P4 第 67 步）：`BOTH`/`DESKTOP` 都与 Kotlin 一致 —— 它们都是**桌面专属**，
+        // 所以进桌面清单、**不进** run-kit 的手机那份（下面那段断言）
+        "comfy_learn_workflow",
+        "comfy_list_recipes",
+        "comfy_bind_recipe",
     ] {
         assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
     }
@@ -8270,9 +8280,10 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     for expected in ["ask_user_question", "list_skills", "load_skill", "remember"] {
         assert!(names.contains(&expected), "{expected} 丢了：{names:?}");
     }
-    // 没实现的**一个都不许出现**
-    for absent in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
-        assert!(!names.contains(&absent), "{absent} 还没实现却下发了：{names:?}");
+    // 配方三件（P4 第 67 步）已经实现 → 它们**必须**出现在下发清单里
+    // （第 65/66 步那三条 `absent` 断言到这里就该反过来）
+    for present in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
+        assert!(names.contains(&present), "{present} 已经搬过来了，不许漏：{names:?}");
     }
     // 系统提示里那段"可调用的工具"必须与下发的清单**同一份**
     let catalog = comfyhub_server_rs::tools::catalog(&policy);

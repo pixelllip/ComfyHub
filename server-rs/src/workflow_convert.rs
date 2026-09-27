@@ -92,6 +92,40 @@ pub fn is_ui_workflow(obj: &Map<String, Value>) -> bool {
     obj.get("nodes").map(Value::is_array).unwrap_or(false)
 }
 
+/// 这份 JSON 是不是 **API 格式节点图**（非空，且**每个值**都是带 `class_type` 的对象）。
+///
+/// 判据只有这一条（Kotlin `HistoryEntry.isNodeGraph`）：**一个字符串键就把整份图判死** ——
+/// 2026-09-27 活实例上踩过：AI 自己搭的工作流在顶层加了 `_comment`，于是被判成"不是工作流"。
+///
+/// 三处共用这一份（`workflow_load` / `workflow_recipe` / 提交链路的取图），
+/// 各写一份的下场是"某一条路认、另一条不认"，而那种分叉不报错。
+pub fn is_node_graph(obj: &Map<String, Value>) -> bool {
+    !obj.is_empty()
+        && obj
+            .values()
+            .all(|v| v.as_object().is_some_and(|o| o.contains_key("class_type")))
+}
+
+/// 「模拟用户行为」（`emulateFrontend`）**本后端还没实现**时，调用方必须补的那句话。
+///
+/// 为什么它有资格占一个公共函数：工具描述（`comfy_load_workflow` / `comfy_learn_workflow`）
+/// 是从 Kotlin **逐字**搬的，里面写着"默认开着、会照前端行为等价改写" —— 不说这一句，
+/// 用户会以为那些纯前端节点已经被照前端的做法接好了。这份文本只有一个真源，
+/// 「欠账如实说」这条纪律才不会在第二次搬运时走样。
+pub fn emulate_frontend_warning(emulate_frontend: bool, has_unsupported: bool) -> Option<String> {
+    if emulate_frontend && has_unsupported {
+        Some(
+            "⚠ 本后端**还没实现**「模拟用户行为」（emulateFrontend）：上面那些纯前端节点\
+             没有被照 ComfyUI 前端的行为等价改写（描述里写的那个能力这一步不做）。"
+                .to_string(),
+        )
+    } else if !emulate_frontend {
+        Some("（emulateFrontend=false：一个字都不改，只如实报缺口 —— 与描述一致）".to_string())
+    } else {
+        None
+    }
+}
+
 /// 界面格式 → API 节点图（Kotlin `toApiGraph`，**不含**组节点展开与前端模拟）。
 pub fn to_api_graph(
     ui: &Map<String, Value>,

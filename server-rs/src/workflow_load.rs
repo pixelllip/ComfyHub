@@ -32,6 +32,9 @@ use serde_json::{json, Map, Value};
 use crate::capture_ingest;
 use crate::routes::AppState;
 use crate::workflow_convert;
+// ⚠ 判据只有一份（`workflow_convert::is_node_graph`，与学习链路共用）——
+//   以前这里抄过一份，两处一旦分叉就是"某一条路认、另一条不认"，而那种分叉不报错。
+use crate::workflow_convert::is_node_graph;
 
 /// 来源标记（Kotlin `AiWorkflowSearch.SOURCE`）。
 pub const SOURCE: &str = "ComfyUI-File";
@@ -177,16 +180,12 @@ pub async fn load_from_file(
         open_inputs = converted.open_inputs.iter().take(MAX_GAPS).cloned().collect();
         // ★ **诚实那一句**：工具描述里写着「模拟用户行为」默认开着，而本后端还没实现它。
         //   不说这句，用户会以为那些前端节点已经被照前端的做法接好了。
-        if emulate_frontend && !unsupported.is_empty() {
-            warnings.push(
-                "⚠ 本后端**还没实现**「模拟用户行为」（emulateFrontend）：上面那些纯前端节点\
-                 没有被照 ComfyUI 前端的行为等价改写（描述里写的那个能力这一步不做）。"
-                    .to_string(),
-            );
-        } else if !emulate_frontend {
-            warnings.push(
-                "（emulateFrontend=false：一个字都不改，只如实报缺口 —— 与描述一致）".to_string(),
-            );
+        //   ⚠ 文本只有一个真源（`workflow_convert::emulate_frontend_warning`）：
+        //     第 67 步的学习链路也要说同一句话，各写一份必然走样。
+        if let Some(note) =
+            workflow_convert::emulate_frontend_warning(emulate_frontend, !unsupported.is_empty())
+        {
+            warnings.push(note);
         }
         converted.graph
     };
@@ -324,12 +323,6 @@ pub async fn load_from_file(
         out.insert("apiGraph".into(), Value::Object(api_graph));
     }
     Ok(Value::Object(out))
-}
-
-/// API 格式节点图：非空，且**每个值**都是带 `class_type` 的对象。
-fn is_node_graph(obj: &Map<String, Value>) -> bool {
-    !obj.is_empty()
-        && obj.values().all(|v| v.as_object().is_some_and(|o| o.contains_key("class_type")))
 }
 
 /// 给 `NOT_A_WORKFLOW` 那条错误凑一句"**到底哪个顶层键不像节点**"的提示。

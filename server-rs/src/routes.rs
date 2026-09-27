@@ -320,6 +320,10 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::write_routes::write_router())
         // 角色卡五条（P4 第 46 步）：界面的角色卡页面 + AI 的 `save_character_card` 共用一份仓储。
         .merge(crate::character_cards::router())
+        // 工作流配方五条（P4 第 67 步）：列表 / 学一份 / 详情 / 绑定 / 删除。
+        // **学习与绑定走的是 AI 工具那两个函数**（`workflow_recipe::learn_and_save` /
+        // `bind_and_report`）—— 分头写必然漂移，而漂移的表现是"AI 学出来的配方和界面看到的不一样"。
+        .merge(crate::workflow_recipe::router())
         // AI 附件五条（P4 第 50 步）：原件落在 `<storage>/ai-attachments`，缩略图在 `<storage>/ai-thumbs`。
         .merge(crate::attachments::router())
         // Provider 连接测试 / 模型发现（P4 第 53 步）：设置页那两个按钮。
