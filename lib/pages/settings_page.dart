@@ -871,7 +871,7 @@ class _SettingsPageState extends State<SettingsPage> {
             _SwitchRow(
               title: 'NSFW 内容模糊显示',
               subtitle: !enabled
-                  ? '先开启上面的「NSFW 模式」才有意义 —— 没开时不存在"NSFW 内容"，打码只会让人以为应用坏了。'
+                  ? '先开启上面的「NSFW 模式」才有意义。'
                   : (blur
                       ? '已开启：画廊 / 提示词 / 标签页与 AI 回复里的预览图会打码，点一下看原图（只对本次运行有效）。'
                       : '未开启：预览图原样显示。'),
@@ -935,8 +935,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 if (!value) await launcher.disarmOwnerWatch();
               },
               title: '关闭 App 时一并停止本地服务',
-              subtitle: '开着时：关掉 App 就停掉本机的后端（包括启动 App 之前就已经在跑的），'
-                  '下次开 App 是冷启动。关掉时：服务常驻，下次开 App 是热启动。',
+              subtitle: '开着时：关掉 App 就停掉本机的后端（包括启动 App 之前就已经在跑的），下次开 App 是冷启动。\n关掉时：服务常驻，下次开 App 是热启动。',
             ),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -981,7 +980,7 @@ class _SettingsPageState extends State<SettingsPage> {
               decoration: InputDecoration(
                 labelText: '项目根目录',
                 hintText: BackendLauncher.detectProjectRoot() ?? r'例如 D:\myProject\FlutterProject\viewer',
-                helperText: '里面要有 scripts\\comfyhub.ps1；留空表示自动探测',
+                helperText: '目录需包含 scripts\\comfyhub.ps1；留空表示自动探测',
               ),
             ),
             const SizedBox(height: 6),
@@ -1137,8 +1136,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
             const SizedBox(height: 8),
             Text(
-              '后端每隔几秒读一次 ComfyUI 的 /history：跑完一次生成，就把「提示词 + 全部参数 + 工作流 + 生成的图片/视频/音频」'
-              '整条收进库里并互相关联。ComfyUI 开着就行，不需要改动你的工作流。',
+              '后端每隔几秒，就把「提示词 + 全部参数 + 工作流 + 生成的图片/视频/音频」整条收进库里并互相关联。ComfyUI 开着就行，不需要改动你的工作流。',
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
             ),
             const SizedBox(height: 12),
@@ -1161,7 +1159,7 @@ class _SettingsPageState extends State<SettingsPage> {
               decoration: const InputDecoration(
                 labelText: 'ComfyUI 输出目录（可选）',
                 hintText: r'例如 D:\Comfy-Desktop\ComfyUI-Shared\output',
-                helperText: '填了就直接读本地文件（快、不占带宽）；留空则通过 HTTP 下载',
+                helperText: '填了就直接读本地文件（快、不占带宽）；留空则通过 HTTP 下载。',
               ),
             ),
             const SizedBox(height: 4),

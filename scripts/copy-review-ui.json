@@ -48,7 +48,7 @@
     {
       "key": "ui.settings.project_root_helper",
       "file": "lib/pages/settings_page.dart",
-      "anchor": "里面要有 scripts",
+      "anchor": "目录需包含 scripts",
       "title": "设置页：项目根目录 helperText（认 scripts\\comfyhub.ps1）",
       "note": "解释性：这条就是 AGENTS §7 的根目录判据，别写成别的文件。"
     },
@@ -104,7 +104,7 @@
     {
       "key": "ui.pairing.code_security_note",
       "file": "lib/pages/pairing_section.dart",
-      "anchor": "手机拿不到算码的凭据",
+      "anchor": "配对时码由这台电脑算",
       "title": "配对：码由桌面算出、只显示在屏幕上",
       "note": "安全承诺：算码凭据不下行；写错了就是把安全属性说反了。"
     },
@@ -125,7 +125,7 @@
     {
       "key": "ui.pairing.downlink_partial_note",
       "file": "lib/pages/pairing_section.dart",
-      "anchor": "没允许的那几把不会下发",
+      "anchor": "只会同步「桌面已允许同步」",
       "title": "配对：下行密钥是按设备逐条允许的",
       "note": "安全承诺：没勾的那几把不会下发给这台设备。"
     },
@@ -139,21 +139,21 @@
     {
       "key": "ui.provider.key_write_only_note",
       "file": "lib/pages/ai_provider_settings_page.dart",
-      "anchor": "API Key 只写不读：填进去之后",
+      "anchor": "填入的 API KEY 将不会再次显示",
       "title": "模型与凭据页：空态说明（API Key 只写不读）",
       "note": "承诺：填进去之后界面 / 数据库普通字段 / 日志都不会再出现它。"
     },
     {
       "key": "ui.provider.secret_input_helper",
       "file": "lib/pages/ai_provider_settings_page.dart",
-      "anchor": "不要带引号",
+      "anchor": "粘贴您的**密钥**",
       "title": "模型与凭据页：粘贴密钥的 helperText（只粘值本身）",
       "note": "解释性：常见错误（带引号 / NAME=value）的预防。"
     },
     {
       "key": "ui.provider.test_connection_helper",
       "file": "lib/pages/ai_provider_settings_page.dart",
-      "anchor": "不跟随重定向、10 秒超时",
+      "anchor": "且密钥不进日志",
       "title": "模型与凭据页：连接测试的行为（一次 GET / 不跟随重定向 / 10 秒）",
       "note": "承诺：测试只发一次请求，且密钥不进日志。"
     },
@@ -174,7 +174,7 @@
     {
       "key": "ui.provider.capability_explicit_note",
       "file": "lib/pages/ai_provider_settings_page.dart",
-      "anchor": "这里填了什么就是什么",
+      "anchor": "本 harness 不按模型名字猜能力",
       "title": "模型与凭据页：能力必须显式声明（未知即不支持）",
       "note": "承诺：Harness 不按模型名字猜能力。"
     },
@@ -195,7 +195,7 @@
     {
       "key": "ui.provider.calibrate_warning",
       "file": "lib/pages/ai_provider_settings_page.dart",
-      "anchor": "手工声明（manual）的模型不会被覆盖",
+      "anchor": "手动声明过的模型不会被覆盖",
       "title": "模型与凭据页：思考档位校准的说明（会发真实请求 / 不改 manual）",
       "note": "承诺：会花钱、量很小；manual 模型不被覆盖。"
     },

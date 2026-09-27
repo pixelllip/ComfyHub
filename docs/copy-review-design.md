@@ -49,7 +49,10 @@
 | **(c) 独立的小 Flutter 桌面程序**（单独目录） | 一个真 GUI | 最重（新建一个 Flutter 工程 + 构建链），与"简单"矛盾 |
 
 **共同的内核**（三种形态都复用，所以先做它不会白做）：
-`list / show / verify / unverify / set / batch / export / import / report`。
+`list / show / verify / unverify / set / batch / apply / export / import / report / open / check`。
+（`apply` = 浏览器"导出改动"那份 JSON 的**唯一**落盘入口，默认 dry-run，`-Apply` 才写；
+`open` 生成自包含 HTML，`check` 只提示不改。2026-09-27 补：`apply` 在 ValidateSet/switch 里漏过，
+HTML 与 `open` 的提示却一直在教人敲它 —— 已接上并加自测。）
 
 ---
 

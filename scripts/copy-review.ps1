@@ -46,6 +46,11 @@
         **跨行**拼接、且锚点落在**第二行**时，只给得出后半句 —— 工具会照实标成
         "解析不出来"并转只读，**不会**拿半句冒充整句。真实三个设置页里没有这种写法。
       · `ui.*` 文本里含 Dart 插值（`$var` / `${expr}`）的条目一律转只读（工具不求值）。
+      · **锚点所在行的上一行如果还有同一段"相邻字面量链"里的一条**（`const Text('前一句'\n  '这一句')`），
+        解析会把上一行那条一起吞进来（判据见 `Resolve-DartCopyTarget` 的"从最左边那条开始"）——
+        于是**写回自检**会拿"上一句 + 新文本"跟新文本比，报"字面量往返不一致"并整条拒绝（2026-09-27
+        实测：`ui.provider.calibrate_warning` 就是这样没写成）。这是判据的必然结果，不是坏数据：
+        要么改成两条独立语句（前一条以 `,` 收尾），要么人工改这一条。
       · skill 正文里若出现 `'` 或 `\`，写回时会按 Dart 字面量转义，并做**往返自检**；
         自检不过就整条拒绝，绝不写坏源码。
 
@@ -80,7 +85,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('list', 'show', 'verify', 'unverify', 'set', 'batch', 'export', 'import', 'report', 'open', 'check', 'selftest')]
+    [ValidateSet('list', 'show', 'verify', 'unverify', 'set', 'batch', 'apply', 'export', 'import', 'report', 'open', 'check', 'selftest')]
     [string]$Action = 'list',
 
     # 条目 key（show / verify / unverify / set）
@@ -1752,9 +1757,14 @@ function Invoke-ApplyPayload {
         $k = [string]$v.key
         if (-not $byKey.ContainsKey($k)) { $notes += "跳过校验 $k：这个 key 现在不存在"; continue }
         if ($DoWrite) {
+            # ⚠ 标记必须绑**落盘后**的 sha：同一次 apply 里既改了文本、又标了"我读过"时，
+            #   $byKey 是**改前**枚举的快照 —— 用它记下来，刚写完就变成"文本变了要重看"
+            #   （2026-09-27 实测：一次 apply 16 条改动 + 16 条校验，14 条当场 stale）。
+            $justWritten = @($results | Where-Object { $_.key -eq $k -and $_.written }) | Select-Object -First 1
+            $shaForMark = if ($justWritten) { [string]$justWritten.newSha256 } else { [string]$byKey[$k].sha256 }
             $state[$k] = [pscustomobject]@{
                 Key        = $k
-                Sha256     = $byKey[$k].sha256
+                Sha256     = $shaForMark
                 VerifiedAt = (Get-Date).ToUniversalTime().ToString('o')
                 Note       = [string]$v.note
             }
@@ -2356,6 +2366,34 @@ function Invoke-SelfTest {
         $blocked = $false
         try { Assert-Editable -Entry $promptEntry } catch { $blocked = $true }
         Add-Result -Name '只读：Assert-Editable 对 prompt/tool 一律拦住' -Ok $blocked -Detail "拦住=$blocked"
+
+        # ⑮ apply：同一次落盘里"改文本 + 顺便标我读过"，标记必须绑**改后**的 sha
+        #    （改前快照会让这条刚写完就显示"文本变了要重看" —— 2026-09-27 实测 14 条当场 stale）
+        $markKey = 'ui.demo.secret_subtitle'
+        $markNew = '密钥只写不读（自测改过）'
+        $markPayload = [pscustomobject]@{
+            version = 1
+            edits   = @([pscustomobject]@{ key = $markKey; text = $markNew })
+            verify  = @([pscustomobject]@{ key = $markKey; note = '自测' })
+        }
+        Invoke-ApplyPayload -Payload $markPayload -Origin 'selftest' -DoWrite:$true | Out-Null
+        $afterMark = (Get-AllCopyEntries -State (Read-CopyReviewState)) | Where-Object { $_.key -eq $markKey } | Select-Object -First 1
+        $ck15 = ($afterMark.text -ceq $markNew) -and ($afterMark.state -eq 'verified')
+        Add-Result -Name 'apply：改文本 + 同时标"我读过" → 标记绑改后 sha（不当场 stale）' -Ok $ck15 -Detail "state=$($afterMark.state)（stale = 绑错了）"
+
+        # ⑯ 命令行动作 `apply` 真的注册上了：子进程照 HTML / open 的提示敲一遍。
+        #    2026-09-27 的坑：ValidateSet 与 switch 里**漏了 apply**，而 HTML、open 的提示、
+        #    文件头 .EXAMPLE 三处都在教你敲 apply —— 表现是"一敲就报不属于 ValidateSet"，
+        #    导出的改动永远落不了盘。旧自测直接调 Invoke-ApplyPayload，所以抓不到这个缺口。
+        $pwshExe = try { (Get-Process -Id $PID).Path } catch { 'pwsh' }
+        $cliEdits = Join-Path $tmp '.run\cli-edits.json'
+        Write-Utf8File -Path $cliEdits -Text (([ordered]@{
+                    version = 1
+                    edits   = @([ordered]@{ key = 'ui.demo.secret_subtitle'; text = '密钥只写不读（命令行自测）' })
+                } | ConvertTo-Json -Depth 6) + "`n")
+        $cliOut = (& $pwshExe -NoProfile -File $PSCommandPath apply -In $cliEdits -RootOverride $tmp 2>&1 | Out-String)
+        $ck16 = ($LASTEXITCODE -eq 0) -and ($cliOut -notmatch 'ValidateSet') -and ($cliOut -match '命中改动 1')
+        Add-Result -Name 'CLI：apply 动作已注册（照 HTML/提示敲 apply 不再报 ValidateSet）' -Ok $ck16 -Detail "exit=$LASTEXITCODE；命中行=$([bool]($cliOut -match '命中改动 1'))"
     } catch {
         Add-Result -Name '自测自身异常' -Ok $false -Detail ($_.Exception.Message + ' @ ' + $_.ScriptStackTrace)
     } finally {
@@ -2406,6 +2444,16 @@ try {
         'unverify' { Invoke-VerifyAction -State $state -Undo $true }
         'set' { Invoke-SetAction -State $state -DoWrite:$Apply }
         'batch' { Invoke-BatchAction -State $state -DoWrite:$Apply }
+        # apply：浏览器「导出改动」那份 JSON 的**唯一**落盘入口（edits + batch + verify 三段）。
+        # ⚠ 这个动作名被 HTML 与 open 的提示、以及上面的 .EXAMPLE 引用了三处，
+        #   2026-09-27 之前只在 ValidateSet / switch 里漏了它 —— 表现是"照提示敲 apply 直接报
+        #   'apply 不属于 ValidateSet'"，于是导出的改动永远落不了盘（引擎 Invoke-ApplyPayload
+        #   一直好着，只是没有入口；自测直接调函数，所以自测也发现不了）。
+        'apply' {
+            if (-not $In) { throw 'apply 需要 -In <json>（浏览器"导出改动"下载的那份 copy-review-edits.json）' }
+            $applyPath = Get-AbsPath $In
+            Invoke-ApplyPayload -Payload (Read-JsonFileOrNull -Path $applyPath) -Origin $In -DoWrite:$Apply
+        }
         'export' { Invoke-ExportAction -State $state }
         'import' { Invoke-ImportAction -State $state -DoWrite:$Apply }
         'report' { Invoke-ReportAction -State $state }

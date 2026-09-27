@@ -183,8 +183,8 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         title: const Text('校准思考档位？'),
         content: const Text(
           '会对每个 Provider 最多 8 个支持推理的模型，从最高档往下发极小的真实请求'
-          '（"ping" + reasoning_effort），直到网关接受为止，并把**实际接受**的档位写回。\n\n'
-          '单次请求很小，但仍可能产生少量费用；手工声明（manual）的模型不会被覆盖。',
+          '返回网关接受的实际挡位。\n\n'
+          '可能产生少量费用；手动声明过的模型不会被覆盖。',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
@@ -326,8 +326,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Text(
-                '选择一个 Provider 查看详情，或新建一个。\n'
-                'API Key 只写不读：填进去之后界面、数据库普通字段和日志都不会再出现它。',
+                '选择一个 **Provider** 查看详情，或新建一个。\n填入的 API KEY 将不会再次显示。',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.outline),
               ),
@@ -1029,7 +1028,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         )
       else
         Text(
-          '测试只发一次 GET 请求：不跟随重定向、10 秒超时，密钥不会出现在日志里。',
+          '测试只发一次请求，**10 秒**超时，且密钥不进日志。',
           style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
         ),
       if (_testResult != null) ...[
@@ -1057,9 +1056,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
-              '这一条保存在**本机密钥库**（Android Keystore），只在这台手机上生效。'
-              '想让桌面也用这一把，点下面的「推给桌面」（值会离开本机，桌面必须已允许这台设备改密钥）。'
-              '反过来「从桌面同步密钥」在「远程访问与配对」那张卡里。',
+              '这一条保存在本机密钥库，**只在这台手机上生效**。想让桌面也用这一把，点下面的「推给桌面」（值会离开本机，桌面必须已允许这台设备改密钥）。反过来「从桌面同步密钥」在「远程访问与配对」那张卡里。',
               style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
             ),
           ),
@@ -1069,8 +1066,8 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           autocorrect: false,
           enableSuggestions: false,
           decoration: const InputDecoration(
-            labelText: '粘贴密钥（留空表示不修改已有密钥）',
-            helperText: '只粘贴值本身：不要带引号，也不要粘贴 NAME=value',
+            labelText: '粘贴密钥（留空表示不修改已有密钥）。',
+            helperText: '粘贴您的**密钥**',
             border: OutlineInputBorder(),
             isDense: true,
           ),
@@ -1121,7 +1118,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         ],
       ),
       Text(
-        '能力必须显式声明：这里填了什么就是什么，Harness 不会根据模型名字猜（未知即不支持）。',
+        '本 harness 不按模型名字猜能力。',
         style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
       ),
       const SizedBox(height: 8),
@@ -1457,7 +1454,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         }
       });
       if (added == 0) {
-        _toast('这些候选已经在目录里了');
+        _toast('这些候选已经在目录里了。');
         return;
       }
       // 立刻落库：不要让用户以为"加了但没生效"

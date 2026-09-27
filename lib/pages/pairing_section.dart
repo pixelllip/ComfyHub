@@ -251,8 +251,7 @@ class _PairingSectionState extends State<PairingSection> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '或者让手机**扫这个码**：地址会自己带过去，6 位码还是要敲。'
-          '二维码 120 秒有效 —— 被拍照转发出去时，那个码大概率已经过期。',
+          '或者让手机**扫这个码**，地址会自己带过去，6 位码还是要敲。二维码 120 秒有效。',
           style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
         ),
         const SizedBox(height: 8),
@@ -887,8 +886,7 @@ class _PairingSectionState extends State<PairingSection> {
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
               child: Text(
-                '打开后，手机要带上配对令牌才能连这台电脑的 AI。'
-                '配对时码由这台电脑算出、只显示在下面 —— 手机拿不到算码的凭据，必须有人看着屏幕念一遍。',
+                '打开后，手机要带上配对令牌才能连这台电脑的 AI。配对时码由这台电脑算，只显示在下面。',
                 style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
               ),
             ),
@@ -1114,7 +1112,7 @@ class _PairingSectionState extends State<PairingSection> {
               title: '允许这台设备改桌面上的密钥',
               subtitle: d.allowCredentialsUpload
                   ? '已允许：手机上可以「推给桌面」，把它本机密钥库里的那一把写到桌面上。'
-                  : '未允许（默认）：手机推上来的密钥会被桌面拒绝（403）。',
+                  : '未允许（默认）：此时手机推上来的密钥会被桌面拒绝（403）。',
               value: d.allowCredentialsUpload,
               onChanged: _busy ? null : (v) => _setDeviceCredentials(d, allowUpload: v),
             ),
@@ -1229,8 +1227,7 @@ class _PairingSectionState extends State<PairingSection> {
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  '「从桌面同步密钥」只对**桌面已允许**「把密钥发给这台设备」的 Provider 有效；'
-                  '没允许的那几把不会下发。',
+                  '只会同步「桌面已允许同步」的密钥，没允许的不会下发。',
                   style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
                 ),
               ),
