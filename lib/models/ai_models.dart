@@ -2101,6 +2101,13 @@ class AiComfySubmission {
   final String? error;
   final String? message;
 
+  /// 这一次的**实时进度**（后端从 ComfyUI 的 WebSocket 帧里拿的）。
+  ///
+  /// 只在"我们自己提交、且进度 WS 连着"时才有；拿不到就是 `null`
+  /// （= **进度未知**，不是 0%）。别拿它跟 `status` 混：`status` 是"跑到哪一档"，
+  /// 这个是"这一档里面跑到哪一步了"。
+  final AiComfyProgress? progress;
+
   const AiComfySubmission({
     required this.promptId,
     this.submittedBy = 'ai',
@@ -2113,6 +2120,7 @@ class AiComfySubmission {
     this.capturedPromptId,
     this.error,
     this.message,
+    this.progress,
   });
 
   factory AiComfySubmission.fromJson(Map<String, dynamic> json) => AiComfySubmission(
@@ -2127,6 +2135,9 @@ class AiComfySubmission {
         capturedPromptId: (json['capturedPromptId'] as num?)?.toInt(),
         error: json['error']?.toString(),
         message: json['message']?.toString(),
+        progress: json['progress'] is Map
+            ? AiComfyProgress.fromJson(Map<String, dynamic>.from(json['progress'] as Map))
+            : null,
       );
 
   /// 还在跑（界面据此显示"实时进度"）。
@@ -2157,6 +2168,79 @@ class AiComfySubmission {
       : title!;
 }
 
+/// 一次生成的**实时进度**（后端 `comfy_progress.rs` 维护，来自 ComfyUI 的 WS 帧）。
+///
+/// 三个"不许骗人"的地方，模型这层就把它表达清楚：
+///  · [percent] 为空 = **进度未知**（ComfyUI 没发 `value/max`）—— 界面**不许**画成 0%，
+///    也不许自己拿"已执行节点数/总节点数"凑一个；
+///  · [nodeName] 为空时只有 [nodeId]：如实说"正在执行节点 9"，而不是编一个名字；
+///  · 终态的 [percent] 保持最后一次真实读数（后端刻意不抬到 100），
+///    "完成没完成"由 `status` 说，不由进度条说。
+class AiComfyProgress {
+  /// 这次提交在 ComfyUI 里的 prompt id。
+  final String promptId;
+
+  /// `queued` / `running` / `success` / `error` / `cancelled`（后端给的原值）。
+  final String state;
+
+  final double? value;
+  final double? max;
+
+  /// 0~100（整数，后端算好的高水位）；为空 = 未知。
+  final int? percent;
+
+  final String? nodeId;
+
+  /// 当前步骤的可读名（提交时登记过的 API 图里 `_meta.title` → `class_type`）。
+  final String? nodeName;
+
+  final String? error;
+  final String? updatedAt;
+
+  const AiComfyProgress({
+    required this.promptId,
+    this.state = 'queued',
+    this.value,
+    this.max,
+    this.percent,
+    this.nodeId,
+    this.nodeName,
+    this.error,
+    this.updatedAt,
+  });
+
+  factory AiComfyProgress.fromJson(Map<String, dynamic> json) => AiComfyProgress(
+        promptId: (json['promptId'] ?? '').toString(),
+        state: (json['state'] ?? 'queued').toString(),
+        value: (json['value'] as num?)?.toDouble(),
+        max: (json['max'] as num?)?.toDouble(),
+        percent: (json['percent'] as num?)?.toInt(),
+        nodeId: json['nodeId']?.toString(),
+        nodeName: json['nodeName']?.toString(),
+        error: json['error']?.toString(),
+        updatedAt: json['updatedAt']?.toString(),
+      );
+
+  bool get isRunning => state == 'running';
+
+  /// **当前步骤**那一句人话（没有名字就只说节点 id；什么都没有就说"进度未知"）。
+  ///
+  /// `value/max` 有值时附带 `12/30` —— 那是 ComfyUI 自己发的采样步数，
+  /// 不是我们数的节点数。
+  String get stepLabel {
+    final name = (nodeName != null && nodeName!.trim().isNotEmpty)
+        ? nodeName!.trim()
+        : (nodeId != null && nodeId!.trim().isNotEmpty ? '节点 ${nodeId!.trim()}' : null);
+    final steps = (value != null && max != null && max! > 0)
+        ? '${value!.round()}/${max!.round()}'
+        : null;
+    if (name == null && steps == null) return '进度未知';
+    if (name == null) return '步骤 $steps';
+    if (steps == null) return '正在执行 $name';
+    return '正在执行 $name（$steps）';
+  }
+}
+
 /// 实时进度快照（后端 `GET /api/capture/jobs`）。
 class AiComfyJobs {
   final int queueRunning;
@@ -2169,12 +2253,19 @@ class AiComfyJobs {
   /// 最近提交的任务（新的在前）。
   final List<AiComfySubmission> submissions;
 
+  /// 后端现在**正在跑**的那一条（没有就是 null）。
+  ///
+  /// 与 `submissions[].progress` 是同一份数据源（`comfy_progress` 的 `current`），
+  /// 放在顶层只是为了界面不必先找到"哪条在跑"。
+  final AiComfyProgress? current;
+
   const AiComfyJobs({
     this.queueRunning = 0,
     this.queuePending = 0,
     this.comfyReachable = false,
     this.runningLabel,
     this.submissions = const [],
+    this.current,
   });
 
   static const empty = AiComfyJobs();
@@ -2189,6 +2280,9 @@ class AiComfyJobs {
                 .map((e) => AiComfySubmission.fromJson(Map<String, dynamic>.from(e)))
                 .toList() ??
             const [],
+        current: json['current'] is Map
+            ? AiComfyProgress.fromJson(Map<String, dynamic>.from(json['current'] as Map))
+            : null,
       );
 
   /// 有没有"正在跑"的东西 —— 界面据此决定要不要显示进度块、要不要继续轮询。

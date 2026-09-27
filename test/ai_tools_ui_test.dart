@@ -782,6 +782,15 @@ void main() {
         'queuePending': 2,
         'comfyReachable': true,
         'runningLabel': '雨夜霓虹',
+        'current': {
+          'promptId': 'p-1',
+          'state': 'running',
+          'value': 12,
+          'max': 30,
+          'percent': 40,
+          'nodeId': '9',
+          'nodeName': 'KSampler',
+        },
         'submissions': [
           {
             'promptId': 'p-1',
@@ -790,6 +799,16 @@ void main() {
             'status': 'running',
             'elapsedMs': 12000,
             'mediaIds': <Object>[],
+            // 后端从 ComfyUI 的 WS 帧里拿到的真实进度（value/max 都是 ComfyUI 自己发的）
+            'progress': {
+              'promptId': 'p-1',
+              'state': 'running',
+              'value': 12,
+              'max': 30,
+              'percent': 40,
+              'nodeId': '9',
+              'nodeName': 'KSampler',
+            },
           },
         ],
       },
@@ -799,8 +818,51 @@ void main() {
     expect(find.text('实时进度'), findsOneWidget);
     expect(find.textContaining('正在生成：雨夜霓虹'), findsOneWidget);
     expect(find.textContaining('赛博朋克少女'), findsWidgets);
+    // ★ 用户要的"不只显示进行中"：**当前步骤 + 百分比**都得看得见
+    expect(find.textContaining('正在执行 KSampler（12/30）'), findsOneWidget);
+    expect(find.textContaining('40%'), findsOneWidget);
+    final bar = tester.widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator).first);
+    expect(bar.value, closeTo(0.4, 0.001));
     // 进度是真的打到了后端那个接口（不是界面自己编的）
     expect(rec.calls.any((c) => c.contains('/api/capture/jobs')), isTrue);
+  });
+
+  testWidgets('(e4b) 后端只给了节点、没给 value/max → 不画假百分比，如实说进度未知', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    await tester.pumpWidget(await _homePage(
+      rec,
+      comfyJobs: {
+        'queueRunning': 1,
+        'comfyReachable': true,
+        'submissions': [
+          {
+            'promptId': 'p-2',
+            'title': '没有采样步数的那种',
+            'status': 'running',
+            'mediaIds': <Object>[],
+            // 只有 executing 帧（知道在哪个节点），没有 progress/progress_state 帧
+            'progress': {'promptId': 'p-2', 'state': 'running', 'nodeId': '9'},
+          },
+        ],
+      },
+    ));
+    // ⚠ 这里**不能** pumpAndSettle：进度未知时界面用的是**不确定态**进度条，
+    // 它一直在动 —— pumpAndSettle 会等"再没有帧要画"，于是必然超时。
+    // 这不是产品缺陷，是用例得按"有持续动画的页面"来推进。
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // 节点名没登记过 → 只说节点 id，**不编名字**
+    expect(find.textContaining('正在执行 节点 9'), findsOneWidget);
+    // 百分比整键缺席 → 不确定态进度条（value == null），绝不当 0%
+    final bar = tester.widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator).first);
+    expect(bar.value, isNull);
+    expect(find.textContaining('0%'), findsNothing);
   });
 
   testWidgets('(c) approval=pending 时出「批准 / 拒绝」，批准 POST /api/ai/tool-calls/{id}/approve', (tester) async {

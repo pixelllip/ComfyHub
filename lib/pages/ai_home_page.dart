@@ -4019,25 +4019,50 @@ class _SubmissionRow extends StatelessWidget {
     final color = submission.isFailed
         ? theme.colorScheme.error
         : (highlight ? theme.colorScheme.primary : theme.colorScheme.outline);
-    return Row(
+    final p = submission.progress;
+    // 进度条只在"**正在跑** + 后端真的给了这一条的进度"时出现。
+    // 拿不到进度就不画（不画一条 0% 的假进度 —— 那会让人以为卡住了）。
+    final showProgress = highlight && submission.isActive && p != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Text(
-            submission.label,
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                submission.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(color: color),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              [
+                submission.statusLabel,
+                if (submission.elapsedLabel.isNotEmpty) submission.elapsedLabel,
+                if (submission.mediaIds.isNotEmpty) '${submission.mediaIds.length} 个产物',
+              ].join(' · '),
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+          ],
+        ),
+        if (showProgress) ...[
+          const SizedBox(height: 3),
+          // `percent` 为空 = **进度未知**（ComfyUI 没发 value/max）→ 不确定态进度条。
+          // 绝不拿"已执行节点数/总节点数"自己凑一个比例（后端也刻意不这么做）。
+          LinearProgressIndicator(
+            value: p.percent == null ? null : (p.percent!.clamp(0, 100)) / 100,
+            minHeight: 3,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            [p.stepLabel, if (p.percent != null) '${p.percent}%'].join(' · '),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.labelSmall?.copyWith(color: color),
+            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
           ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          [
-            submission.statusLabel,
-            if (submission.elapsedLabel.isNotEmpty) submission.elapsedLabel,
-            if (submission.mediaIds.isNotEmpty) '${submission.mediaIds.length} 个产物',
-          ].join(' · '),
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-        ),
+        ],
       ],
     );
   }
