@@ -4,6 +4,7 @@ import com.comfyhub.harness.net.HttpFailure
 import com.comfyhub.harness.net.HttpTransport
 import com.comfyhub.harness.store.HarnessStore
 import com.comfyhub.harness.store.KvKey
+import com.comfyhub.harness.store.OutboxKind
 import com.comfyhub.harness.store.OutboxRecord
 import com.comfyhub.harness.store.Timestamps
 import kotlinx.serialization.json.Json
@@ -66,8 +67,11 @@ class SyncPushClient(
                 continue
             }
             if (store.outboxTarget(record.kind, record.refId) == null) {
-                // `run` / `submit_job` 还没有上行通道（M5），其余是"本地那行已经没了"
-                if (record.kind == "run" || record.kind == "submit_job") continue
+                // `run` / `submit_job` 还没有上行通道（M5）→ **跳过但不清**（清了就是悄悄丢东西）。
+                // 其余两种情况都清掉：① 本地那行已经没了（推送前被删了）；
+                // ② `ai_run` / `ai_tool_call` 指向**桌面同步下来的**行 —— 入队那三处都判过
+                //    `local_runs`，真漏进来一条也是"这条本来就不该推"，留着只会每次白重试。
+                if (record.kind == OutboxKind.RUN || record.kind == OutboxKind.SUBMIT_JOB) continue
                 store.removeOutbox(record.id)
                 droppedLocal++
                 continue
@@ -216,7 +220,10 @@ data class SyncOutcome(
     val rejectedPermanent: Int,
     val rejectedTransient: Int,
     val pending: Int,
-    /** 本地那行已经没了、顺手清掉的条数。 */
+    /**
+     * 本地那行已经没了（顺手清掉）、或这条本就**不该推**（桌面同步下来的 Run / 工具明细）
+     * 的条数。两种都是"清掉是对的"，所以合成一个计数。
+     */
     val droppedLocal: Int = 0,
     val error: String? = null,
 ) {

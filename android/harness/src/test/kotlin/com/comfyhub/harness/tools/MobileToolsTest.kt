@@ -77,8 +77,11 @@ class MobileToolsTest {
                     """{"name":"web_fetch","description":"取网页","inputSchema":{"type":"object"},"scope":"BOTH"}""",
                     """{"name":"remember","description":"记一条","inputSchema":{"type":"object"},"scope":"BOTH"}""",
                     """{"name":"comfy_queue_submit","description":"排队","inputSchema":{"type":"object"},"scope":"MOBILE"}""",
-                    // 手机这一版**没有**实现它 → 声明清单里不该出现
+                    // ★ 2026-09-27 起这两件都**有实现**了 → 声明清单里必须出现它们
                     """{"name":"civitai_search","description":"搜站","inputSchema":{"type":"object"},"scope":"BOTH"}""",
+                    """{"name":"web_search","description":"搜网","inputSchema":{"type":"object"},"scope":"BOTH"}""",
+                    // 手机这一版**没有**实现它（桌面专属）→ 声明清单里不该出现
+                    """{"name":"find_model","description":"找模型","inputSchema":{"type":"object"},"scope":"DESKTOP"}""",
                 ).joinToString(",")
             )
         )
@@ -112,8 +115,15 @@ class MobileToolsTest {
     fun `R13：下发给模型的工具 = kit 清单 与 本地实现 的交集`() {
         val registry = MobileToolRegistry(BuiltinTools.all())
         val declared = registry.declaredTo(kit).map { it.name }.toSet()
-        assertTrue("实现了的要在清单里", declared.containsAll(listOf("web_fetch", "remember", "comfy_queue_submit")))
-        assertFalse("没实现的工具不许宣称（宁可少给一个，也不给它调不到的工具）", declared.contains("civitai_search"))
+        assertTrue(
+            "实现了的要在清单里",
+            declared.containsAll(listOf("web_fetch", "remember", "comfy_queue_submit")),
+        )
+        assertTrue(
+            "2026-09-27 补齐的两支也要在清单里（ToolScope 契约 §2 的 MOBILE 七个已经全部有实现）",
+            declared.containsAll(listOf("web_search", "civitai_search")),
+        )
+        assertFalse("没实现的工具不许宣称（宁可少给一个，也不给它调不到的工具）", declared.contains("find_model"))
     }
 
     @Test

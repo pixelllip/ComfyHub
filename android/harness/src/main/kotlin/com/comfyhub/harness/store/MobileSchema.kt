@@ -20,6 +20,9 @@ package com.comfyhub.harness.store
  *   （桌面也不带它：单 Run 上万条）；
  * - `local_runs`：**本机起过哪些 Run** 的标记（`ai_runs` 成了镜像表之后，崩溃恢复必须靠它
  *   把"桌面的 Run"排除掉，见 [HarnessStore.listUnfinishedRuns]）；
+ * - `local_deletions`：**本机删除标记**（用户在这台手机上删过的会话及其级联子行）——
+ *   下行 apply 要按它跳过，否则桌面那份会把删掉的会话**覆盖回来**（见
+ *   [HarnessStore.deleteConversation] 与 [HarnessStore.applyMirrorRow]）；
  * - `_outbox`：上行队列（契约 §4），每条本地写**在同一个事务里**同时写业务表和它；
  * - `mobile_kv`：同步游标 / 设备号 / run-kit 缓存版本这类零散状态。
  *
@@ -70,8 +73,23 @@ object MobileSchema {
 
     /** 手机自己写、当期**不上行**的表（事件流与凭据引用，外加"哪些 Run 是我起的"标记）。 */
     val LOCAL_ONLY_TABLES: List<String> = listOf(
-        "ai_providers", "ai_models", "ai_run_events", "local_runs", "_outbox", "mobile_kv",
+        "ai_providers", "ai_models", "ai_run_events", "local_runs", "local_deletions", "_outbox", "mobile_kv",
     )
+
+    /** 会话表的表名（镜子里的父表；删除标记与级联跳过多处要用它）。 */
+    const val CONVERSATIONS_TABLE = "ai_conversations"
+
+    /**
+     * 本机删除标记里用的[kind]就是**镜像表的表名**（不是 wire kind）。
+     *
+     * 为什么用表名而不是 `ai_conversation` 那种单数 wire kind：下行覆盖是**按表**做的
+     * （[MIRROR_TABLES] 就是那张清单），判据与被判定的对象同一套词汇，才不会出现
+     * "标记写在 `ai_conversation`、apply 查的是 `ai_conversations`"这种查不中的静默失效。
+     */
+    fun mirrorTable(name: String): MirrorTable? = MIRROR_TABLES.firstOrNull { it.name == name }
+
+    /** 这张表是不是镜像表（下行 apply 的第一道校验：不是就不许落）。 */
+    fun isMirrorTable(name: String): Boolean = mirrorTable(name) != null
 
     // -----------------------------------------------------------------------
     //  镜像表：与 db/schema.sqlite.sql 逐列同形（去掉了 _sync_log / 触发器）
@@ -392,6 +410,33 @@ object MobileSchema {
           run_id     TEXT NOT NULL,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
           PRIMARY KEY (run_id)
+        )
+        """.trimIndent(),
+
+        // ★ **本机删除标记**（2026-09-27，M4 §25.1 第三条留下的那个形状）。
+        //
+        //   手机上会话的真源是**本地库**：用户主动删一条会话时，本机把行删掉了（级联带走消息 /
+        //   块 / Run / 工具明细），可**桌面那份还在** —— 而且上行**只有 upsert**（R3，
+        //   手机不许发明一个 wire 上的 delete op）。于是下一次下行 apply 会把桌面那份
+        //   整行覆盖回来，"删掉的会话"当场**复活**，两端都不报错。
+        //
+        //   这张表就是那个标记：`kind` = 镜像表名（[MIRROR_TABLES] 的 `name`），
+        //   `id` = 该表主键列的值（单列表；parts 那种复合主键靠它所属的 message 行来标）。
+        //
+        //   ⚠ 三条形态纪律：
+        //    ① **不进镜像表**（[MIRROR_TABLES] 里没有它）、**不进同步白名单**（[LOCAL_ONLY_TABLES]）、
+        //       **不挂触发器** —— 它是"这台手机的意图"，不是要同步给别人的数据；
+        //    ② 判据**不参与 LWW**：桌面那份的 `updated_at` 永远比标记旧（手机删它时没改桌面那份），
+        //       所以拿"谁更新"去比是没有意义的。用户在这台手机上删掉 = **终局**（见
+        //       [HarnessStore.applyMirrorRow] 的注释）；
+        //    ③ 标记**只增不删**（id 是 UUID，永不复用）：一次会话一行、几十字节，
+        //       而"哪天把标记清了"这件事没有安全判据（桌面删了它？那就更不用复活了）。
+        """
+        CREATE TABLE IF NOT EXISTS local_deletions (
+          kind       TEXT NOT NULL,
+          id         TEXT NOT NULL,
+          deleted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          PRIMARY KEY (kind, id)
         )
         """.trimIndent(),
 

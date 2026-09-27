@@ -1716,20 +1716,68 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 用户主动删一条会话（会话列表的菜单）。
   ///
-  /// ⚠ 它**故意**仍然打后端，不走 [_deleteConversationQuietly] 那条本地清理：
-  /// 用户删的可能是一条**桌面创建、手机只是镜像**的会话，而手机侧没有、也不许有
-  /// "叫桌面删掉它"的上行 op（R3：上行只有 upsert）。所以这条路径上的
-  /// "本地镜像与桌面不一致"是**已知欠账**，不在这批里悄悄改（见本轮报告）。
+  /// ## 两半都要删，而且**如实**说清哪一半成了
+  ///
+  /// 手机上这条会话有两份：**本机镜像**（本地库 —— 界面上看到的就是它）与**桌面那份**
+  /// （桌面是唯一真源）。所以：
+  ///
+  ///  - **本机**：走 [_source] 的**本地实现**（Kotlin `HarnessStore.deleteConversation`）——
+  ///    删掉本地行（消息 / 块 / Run / 工具明细靠外键级联，R1）**并写一个本机删除标记**
+  ///    （`local_deletions`）。标记是必需的：上行**没有 delete op**，桌面那份不知道本机删过它，
+  ///    下一次下行同步就会把它整行覆盖回来、会话**当场复活**（总纲 §25.1 第三条的欠账）。
+  ///    在这之前这一步打的是**远端** `DELETE` —— 那条请求够不着本地镜像，
+  ///    于是"看起来删了、其实还在"，而本地那份还会在下一次同步时把界面上的行补齐；
+  ///  - **桌面**：远端删除**仍然调**（桌面是唯一真源，桌面那份也该删）。
+  ///    ⚠ 红线 R3 一个字没改：上行**只有 upsert**，这里没有、也不许有"叫桌面删掉它"的上行 op ——
+  ///    下面那句 DELETE 是界面直接打的**远端请求**，与 `_outbox` 无关。
+  ///
+  /// 两半可能**单独**失败（桌面离线是常态），所以不假装"两边都删了"：
+  /// 本机没删掉就把那条留在列表里并说清；桌面没删掉就明说"桌面那份还在"。
   Future<void> deleteConversation(String id) async {
+    // 桌面源：只有远端那一半（与改动前完全一致 —— 桌面就是它自己的真源）
+    if (!_source.isLocal) {
+      try {
+        await _api.deleteConversation(id);
+        conversations = conversations.where((c) => c.id != id).toList();
+        if (conversation?.id == id) {
+          conversation = null;
+          messages = const [];
+        }
+      } catch (e) {
+        error = '删除失败：$e';
+      }
+      notifyListeners();
+      return;
+    }
+
+    String? localFailure;
+    try {
+      await _source.deleteConversation(id);
+    } catch (e) {
+      localFailure = '$e';
+    }
+    String? remoteFailure;
     try {
       await _api.deleteConversation(id);
+    } catch (e) {
+      remoteFailure = '$e';
+    }
+
+    // 界面按**本机**那一半更新（手机上会话的真源是本地库）：本机删掉了才从列表里拿掉
+    if (localFailure == null) {
       conversations = conversations.where((c) => c.id != id).toList();
       if (conversation?.id == id) {
         conversation = null;
         messages = const [];
       }
-    } catch (e) {
-      error = '删除失败：$e';
+    }
+
+    if (localFailure != null && remoteFailure != null) {
+      error = '删除失败：本机 $localFailure；桌面 $remoteFailure';
+    } else if (localFailure != null) {
+      error = '桌面那份已删除，但本机没删掉：$localFailure';
+    } else if (remoteFailure != null) {
+      error = '已从本机删除，但桌面上那份还在（$remoteFailure）—— 桌面不在线时就是这样';
     }
     notifyListeners();
   }

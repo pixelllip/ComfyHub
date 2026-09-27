@@ -158,9 +158,13 @@ class _FakeLocalSource implements RunEventSource {
   /// 每次 `deleteConversation` 删掉的是哪条（M3.2 ③ 的第二块砖）。
   final List<String> deleted = [];
 
+  /// 本机删除要不要失败（用户主动删会话那条路的"如实报错"用例）。
+  bool failDelete = false;
+
   @override
   Future<void> deleteConversation(String conversationId) async {
     calls.add('deleteConversation');
+    if (failDelete) throw StateError('库坏了');
     deleted.add(conversationId);
     conversations.removeWhere((c) => c.id == conversationId);
   }
@@ -496,6 +500,70 @@ void main() {
     expect(source.deleted, ['local-old']);
     expect(source.conversations.map((c) => c.id), isNot(contains('local-old')));
     expect(store.conversations.map((c) => c.id), isNot(contains('local-old')));
+  });
+
+  // -------------------------------------------------------------------------
+  //  用户主动删会话（§25.1 第三条的欠账）：本机 + 远端两半，且如实说清哪一半成了
+  // -------------------------------------------------------------------------
+
+  /// 用户主动删会话的**本机**那一半必须走 [RunEventSource.deleteConversation]（本地库）。
+  ///
+  /// 在这之前这一步只打**远端** DELETE：那条请求够不着本地镜像，于是"看起来删了、
+  /// 其实还在"，而本地那份还带着一个本机删除标记（`local_deletions`）——
+  /// 没有标记的话，桌面那份会在下一次下行同步时把它整行覆盖回来、**会话当场复活**。
+  /// 标记的写在 Kotlin 侧（`HarnessStore.deleteConversation`，`SyncApplyTest` 盯着它）；
+  /// 这条 Dart 用例钉的是**接线**：本机那一半真的走了本地实现。
+  test('手机：用户主动删会话走**本地实现**（远端 DELETE 照旧打，但不假装两边都删了）', () async {
+    final remoteCalls = <String>[];
+    final source = _FakeLocalSource();
+    final store = AiWorkspaceStore(
+      api: AiApiClient(
+        'http://127.0.0.1:8080',
+        client: MockClient((request) async {
+          remoteCalls.add('${request.method} ${request.url.path}');
+          // 桌面离线（手机上这是常态）
+          return http.Response('offline', 500);
+        }),
+      ),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    await store.load();
+    remoteCalls.clear();
+
+    await store.deleteConversation('local-conv-1');
+
+    expect(source.deleted, contains('local-conv-1'), reason: '本机那一半要走本地库的删除');
+    expect(
+      remoteCalls,
+      contains('DELETE /api/ai/conversations/local-conv-1'),
+      reason: '远端仍然要调：桌面是唯一真源，桌面那份也该删（这不是上行 op，R3 不变）',
+    );
+    expect(store.conversations.map((c) => c.id), isNot(contains('local-conv-1')));
+    expect(store.conversation?.id, isNot('local-conv-1'));
+    expect(
+      store.error,
+      contains('桌面上那份还在'),
+      reason: '桌面没删掉就必须如实说 —— 不许假装"两边都删了"',
+    );
+  });
+
+  /// 本机那一半失败时：**不许**从列表里拿掉它（否则界面显示的"删掉了"是假的），
+  /// 而且错误里要指名道姓说是本机没删掉。
+  test('手机：本机没删掉时留在列表里，并如实说是本机那半失败', () async {
+    final source = _FakeLocalSource()..failDelete = true;
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    await store.load();
+    await store.deleteConversation('local-conv-1');
+
+    expect(store.conversations.map((c) => c.id), contains('local-conv-1'), reason: '本机还在，列表就不许少它');
+    expect(store.error, contains('本机没删掉'));
   });
 
   // -------------------------------------------------------------------------
@@ -1064,6 +1132,13 @@ class _FakeDeviceCredentials implements CredentialStore {
     configured = false;
     return statusOf(provider);
   }
+
+  /// 假的"取出来"（真身是桥的 `getCredential`）：**只有「推给桌面」那条路会用它**。
+  ///
+  /// 它回 `saved` 里那把（没存过就回 null —— 调用方要如实说"没有可推的"，
+  /// 而不是拿空串把桌面上那把好的覆盖掉）。
+  @override
+  Future<String?> reveal(AiProvider provider) async => saved[provider.credentialRef?.trim() ?? ''];
 }
 
 /// 只回 `runId`、不回消息 id 的事件源（模拟桥漏传那一对主键）。

@@ -272,4 +272,68 @@ class SyncPushTest {
         }
         assertFalse("DB_ERROR 是暂时的（重试有意义）", SyncPushClient.isPermanentReject("DB_ERROR"))
     }
+
+    /**
+     * **M4 的缺口回归**：手机自己那次 Run 与它的工具明细要能上行。
+     *
+     * 在此之前 `OutboxKind.RUN` 全仓一次都没被 enqueue 过（`ai_runs` 还是本机表），
+     * 而桌面的 `sync.rs::table_of_kind` **早就收** `ai_run` / `ai_tool_call` ——
+     * 表现是"手机跑过的 Run 与工具过程，桌面上永远看不到"，两端都不报错。
+     *
+     * 这条用例盯四件事：kind 是**线上名**、payload 是**推送那一刻现读的整行**、
+     * 桌面 `applied` 之后 outbox **清干净**、以及**桌面同步下来的 Run 不在这批里**（不许回声）。
+     */
+    @Test
+    fun `本机 Run 与工具明细上行：kind 是 ai_run ai_tool_call，推成功后 outbox 清干净`() {
+        val run = store.createRun(
+            conversationId = "conv-1", providerId = "p1", modelId = "m1",
+            userMessageId = "msg-user", assistantMessageId = "msg-a", promptVersion = "v28",
+        )
+        val call = store.startToolCall(run.id, "call_1", "web_search", """{"query":"水墨风"}""")
+        store.finishToolCall(
+            id = call, status = "completed", content = "搜到两条", resultJson = """{"count":2}""",
+            elapsedMs = 88,
+        )
+        store.finishRun(run.id, "completed")
+
+        // 桌面同步下来的一行（**不在 local_runs 里**）：手工塞进 outbox，证明它不会被推出去
+        db.session.exec(
+            """
+            INSERT INTO ai_runs (id, conversation_id, status, created_at, updated_at)
+            VALUES ('desktop-run', 'conv-1', 'completed', '2026-09-27T00:00:00.000Z', '2026-09-27T00:00:00.000Z')
+            """.trimIndent(),
+        )
+        store.enqueue("ai_run", "desktop-run", "{}")
+
+        // setUp 里那四条（会话 / 两条消息 / 一个块）也在这批里：回执要把它们一起认掉
+        desktop.next = 200 to
+            """{"applied":["conv-1","msg-user","msg-a","msg-a#0","${run.id}","$call"],"rejected":[]}"""
+        val outcome = client.push(desktop.baseUrl, token = null)
+
+        val kinds = batchOf().map { it["kind"]!!.jsonPrimitive.content }
+        assertTrue("本机 Run 要推上去：$kinds", kinds.contains("ai_run"))
+        assertTrue("工具明细要推上去：$kinds", kinds.contains("ai_tool_call"))
+        assertTrue(
+            "桌面同步下来的那一条**不许**出现在 batch 里（回声）",
+            batchOf().none { it["refId"]!!.jsonPrimitive.content == "desktop-run" },
+        )
+
+        // payload 是推送那一刻现读的完整行（不只是 refId）
+        val toolPayload = batchOf().first { it["kind"]!!.jsonPrimitive.content == "ai_tool_call" }["payload"]!!.jsonObject
+        assertEquals(call, toolPayload["id"]!!.jsonPrimitive.content)
+        assertEquals(run.id, toolPayload["run_id"]!!.jsonPrimitive.content)
+        assertEquals("completed", toolPayload["status"]!!.jsonPrimitive.content)
+        assertEquals("web_search", toolPayload["name"]!!.jsonPrimitive.content)
+        assertEquals(88, toolPayload["elapsed_ms"]!!.jsonPrimitive.content.toInt())
+        val runPayload = batchOf().first { it["kind"]!!.jsonPrimitive.content == "ai_run" }["payload"]!!.jsonObject
+        assertEquals(run.id, runPayload["id"]!!.jsonPrimitive.content)
+        assertEquals("completed", runPayload["status"]!!.jsonPrimitive.content)
+
+        assertEquals("六条（会话 / 两条消息 / 一个块 / Run / 工具明细）都推成功了", 6, outcome.applied)
+        assertTrue(
+            "推成功 + 那条本就不该推的 = 队列必须空：${store.pendingOutbox().map { it.kind to it.refId }}",
+            store.pendingOutbox().isEmpty(),
+        )
+        assertTrue("不该推的那条算 droppedLocal（如实记，不假装推过）", outcome.droppedLocal >= 1)
+    }
 }

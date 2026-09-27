@@ -396,4 +396,196 @@ class HarnessStoreTest {
         }
         assertTrue("库坏了必须抛出去：静默回 false = 界面以为删掉了，空壳还在", threw)
     }
+
+    // --- 本机删除标记（M4 §25.1 第三条）-------------------------------------
+
+    /**
+     * 删一条会话 = 三个动作**在同一个事务里**：删本地行（级联）、清待推行、写删除标记。
+     *
+     * 标记里除了会话本体，还要有**这次级联删掉的每一个 id** —— 下行 apply 时
+     * `ai_message_parts` / `ai_tool_calls` 自己不带 `conversation_id`，而它们的父行这会儿
+     * 在本机已经不存在了（[HarnessStore.applyMirrorRow] 判据 ③ 靠的就是这些标记）。
+     */
+    @Test
+    fun `删会话写删除标记：会话 + 级联的每个 id 都记上，且它不进镜像表`() {
+        val c = store.createConversation(id = "conv-mark")
+        val m = store.appendMessage(c.id, "assistant", "答一句")
+        store.appendPart(m.id, 0, PartType.TEXT, text = "答一句")
+        val run = store.createRun(c.id, "p1", "m1", null, m.id, "v1")
+        val call = store.startToolCall(run.id, "call_1", "remember", "{}")
+
+        assertTrue(store.deleteConversation(c.id))
+
+        val marks = store.listDeletions().toSet()
+        assertTrue(
+            "会话本体要有标记：$marks",
+            marks.contains("ai_conversations" to c.id),
+        )
+        assertTrue("级联删掉的消息也要标（子行靠它认出来）", marks.contains("ai_messages" to m.id))
+        assertTrue("Run 也要标", marks.contains("ai_runs" to run.id))
+        assertTrue("工具明细也要标（它挂在 Run 上，父行已经没了）", marks.contains("ai_tool_calls" to call))
+
+        assertTrue("查得到才算写得进去", store.isDeleted("ai_conversations", c.id))
+        assertFalse("没删过的 id 不许被标", store.isDeleted("ai_conversations", "conv-never"))
+
+        // 形态纪律：它是**本机表**，不进镜像表清单（否则下行会拿它当可覆盖的业务表）
+        assertFalse(
+            "local_deletions 不许出现在 MIRROR_TABLES 里",
+            MobileSchema.MIRROR_TABLES.any { it.name == "local_deletions" },
+        )
+        assertTrue(MobileSchema.LOCAL_ONLY_TABLES.contains("local_deletions"))
+    }
+
+    /** 重复删同一条是常态（界面切会话时每次都清一次）：标记是覆盖，不是插入第二行。 */
+    @Test
+    fun `重复删同一条会话：标记只有一行，id 不存在也照样留标记`() {
+        val c = store.createConversation(id = "conv-twice")
+        assertTrue(store.deleteConversation(c.id))
+        assertFalse("行已经没了 → 回 false（不是错误）", store.deleteConversation(c.id))
+        store.deleteConversation("conv-ghost")
+
+        assertEquals(1, store.listDeletions().count { it == "ai_conversations" to "conv-twice" })
+        assertTrue(
+            "用户点过删除这个意图不能因为'本机本来就没有'而丢掉（桌面那份还在，会复活）",
+            store.isDeleted("ai_conversations", "conv-ghost"),
+        )
+        // 空 id 不写标记（`deleteConversation("")` 直接回 false）
+        assertFalse(store.deleteConversation(""))
+        assertEquals(2, store.listDeletions().size)
+    }
+
+    // --- M4：本机 Run 与工具明细上行 ---------------------------------------
+
+    /**
+     * **本机 Run 收尾后 outbox 里有 `ai_run`**，而且 wire payload 指向的就是本机那个 run id。
+     *
+     * 这条是 M4 的洞：`OutboxKind.RUN` 全仓一次都没被 enqueue 过，而 `ai_run` 这个 wire kind
+     * 桌面**早就收**（`sync.rs::table_of_kind`）—— 结果是"手机自己跑的那次 Run 桌面上永远看不到"。
+     */
+    @Test
+    fun `本机 Run：建与收尾都入队，wire 形状指向本机 run id`() {
+        val c = store.createConversation(id = "conv-run")
+        val run = store.createRun(c.id, "p1", "m1", null, null, "v28")
+
+        val created = store.pendingOutbox().filter { it.kind == OutboxKind.AI_RUN }
+        assertEquals("建 Run 就要入队（漏了 = 这次 Run 桌面上永远看不到）", listOf(run.id), created.map { it.refId })
+
+        store.finishRun(run.id, RunStatus.COMPLETED)
+
+        val target = store.outboxTarget(OutboxKind.AI_RUN, run.id)
+        assertNotNull("wire 映射必须接上", target)
+        assertEquals("ai_run", target!!.wireKind)
+        assertEquals("payload 是**推送时现读的整行**：必须是本机那个 run id", run.id, target.payload["id"])
+        assertEquals("completed", target.payload["status"])
+        assertEquals(c.id, target.payload["conversation_id"])
+        assertTrue("整行要有 updated_at（桌面 LWW 按它比）", target.payload.containsKey("updated_at"))
+    }
+
+    /**
+     * ⚠ **桌面同步下来的 Run 不许入队**（回声）。
+     *
+     * `ai_runs` 自 2026-09-27 起是**镜像表**：桌面的 Run 也会整行落进来。它要是被推回去，
+     * 桌面就会收到一条自己刚发出来的行（而且 `updated_at` 是旧的 → 白搭一次往返）。
+     * 判据只有一条：**本机的 `local_runs` 标记**。
+     */
+    @Test
+    fun `桌面同步下来的 Run 不入队，也不许被推回去`() {
+        val c = store.createConversation(id = "conv-mirror")
+        val mine = store.createRun(c.id, null, null, null, null, "v1")
+
+        // 镜像 apply 的形状：整行覆盖，**不**写 local_runs
+        assertEquals(
+            MirrorApply.WRITTEN,
+            store.applyMirrorRow(
+                "ai_runs",
+                mapOf(
+                    "id" to "desktop-run-1", "conversation_id" to c.id, "status" to "running",
+                    "started_at" to "2026-09-27T00:00:00.000Z", "created_at" to "2026-09-27T00:00:00.000Z",
+                    "updated_at" to "2026-09-27T00:00:00.000Z",
+                ),
+            ),
+        )
+        assertFalse(store.isLocalRun("desktop-run-1"))
+
+        store.finishRun("desktop-run-1", RunStatus.COMPLETED)
+
+        val enqueued = store.pendingOutbox().filter { it.kind == OutboxKind.AI_RUN }.map { it.refId }
+        assertEquals("只有本机那次 Run 排队：$enqueued", listOf(mine.id), enqueued)
+        assertNull("桌面那条 Run 没有上行目标（第三道闸门）", store.outboxTarget(OutboxKind.AI_RUN, "desktop-run-1"))
+        assertNotNull(store.outboxTarget(OutboxKind.AI_RUN, mine.id))
+    }
+
+    /**
+     * **工具调用要落库并入队**（含 `status` / `approval` / `result`）。
+     *
+     * 桌面要能回答"手机那次 Run 跑过哪些工具、成没成、花了多久"（总纲 §3.3 的 2026-09-27 拍板）。
+     * 只靠消息块里的 `tool_call` / `tool_result` 块是不够的 —— 审批态、耗时、结构化结果都不在里面。
+     */
+    @Test
+    fun `工具调用落库并入队：开始 pending、结束带 status 与 result`() {
+        val c = store.createConversation(id = "conv-tool")
+        val run = store.createRun(c.id, "p1", "m1", null, null, "v1")
+        val id = store.startToolCall(run.id, "call_1", "web_search", """{"query":"水墨风"}""")
+
+        val started = store.getToolCall(id)!!
+        assertEquals(run.id, started.runId)
+        assertEquals("call_1", started.providerCallId)
+        assertEquals("web_search", started.name)
+        assertEquals("not_required", started.approval)
+        assertEquals(HarnessStore.STATUS_PENDING, started.status)
+        assertNotNull("开始就要有 started_at", started.startedAt)
+        assertTrue(
+            "开始也入队（否则审批挂着的中间态桌面上看不到）",
+            store.pendingOutbox().any { it.kind == OutboxKind.AI_TOOL_CALL && it.refId == id },
+        )
+
+        store.finishToolCall(
+            id = id,
+            status = HarnessStore.STATUS_FAILED,
+            content = "[工具失败:NO_RESULTS] 没搜到",
+            resultJson = """{"count":0}""",
+            error = "没搜到",
+            elapsedMs = 1234,
+        )
+
+        val done = store.getToolCall(id)!!
+        assertEquals(HarnessStore.STATUS_FAILED, done.status)
+        assertEquals("""{"count":0}""", done.resultJson)
+        assertTrue(done.content!!.contains("NO_RESULTS"))
+        assertEquals("没搜到", done.error)
+        assertEquals(1234L, done.elapsedMs)
+        assertNotNull("结束要有 completed_at", done.completedAt)
+        assertEquals(listOf(id), store.listToolCalls(run.id).map { it.id })
+
+        val target = store.outboxTarget(OutboxKind.AI_TOOL_CALL, id)
+        assertNotNull(target)
+        assertEquals("ai_tool_call", target!!.wireKind)
+        assertEquals(id, target.payload["id"])
+        assertEquals(run.id, target.payload["run_id"])
+        assertEquals(HarnessStore.STATUS_FAILED, target.payload["status"])
+        assertEquals("not_required", target.payload["approval"])
+
+        // 收尾再入队一条（同一条本地行重复入队由 SyncPush 合成一条，桌面靠主键幂等）
+        assertEquals(2, store.pendingOutbox().count { it.kind == OutboxKind.AI_TOOL_CALL })
+    }
+
+    /** 删会话时，Run 与工具明细的**待推行**也要一起清掉（它们是这个会话的）。 */
+    @Test
+    fun `删会话把 Run 与工具明细的待推行一并清掉`() {
+        val c = store.createConversation(id = "conv-clean")
+        val m = store.appendMessage(c.id, "assistant", "答")
+        val run = store.createRun(c.id, null, null, null, m.id, "v1")
+        store.startToolCall(run.id, "call_1", "remember", "{}")
+        store.finishRun(run.id, RunStatus.COMPLETED)
+        assertTrue("先确认队列里真有这些东西", store.pendingOutbox().any { it.kind == OutboxKind.AI_RUN })
+        assertTrue(store.pendingOutbox().any { it.kind == OutboxKind.AI_TOOL_CALL })
+
+        assertTrue(store.deleteConversation(c.id))
+
+        assertTrue(
+            "待推行要清干净（留着的话桌面会收到本机已经没有的东西）：" +
+                store.pendingOutbox().map { it.kind to it.refId },
+            store.pendingOutbox().isEmpty(),
+        )
+    }
 }

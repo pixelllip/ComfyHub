@@ -499,11 +499,37 @@ class HarnessRunner(
                     files = files,
                     askGate = askGate,
                     emit = { type, body -> emit(type, body) },
+                    // 出网工具（web_search / civitai_search）的 key 从这里取：
+                    // **同一个 lambda**，不另开一个口子（凭据只在 Run 开始时快照一次）。
+                    resolveSecret = resolveSecret,
                 )
                 calls.forEach { call ->
                     emit(RunEventType.TOOL_STARTED, EventPayloads.toolStarted(call.id, call.name))
                     val startedAt = System.currentTimeMillis()
+                    // ★ 工具调用**落库**（`ai_tool_calls`）：桌面要能回答"手机那次 Run 跑过哪些工具、
+                    //   成没成、花了多久"（总纲 §3.3 的 2026-09-27 拍板）。三条纪律：
+                    //   ① **开始与结束都落**（status: pending → completed / failed）——
+                    //      只落结束时那一次的话，"审批挂着 / 工具跑挂了"的中间态桌面永远看不到；
+                    //   ② **失败也落行**（失败的 error 就是这次调用的结果，不是"没发生"）；
+                    //   ③ 行的主键是本机 UUID（不是 `provider_call_id`：那个 id 跨 Run 会重）。
+                    //   两次写都顺手入队（AI_TOOL_CALL）—— 推的是**推送那一刻现读的整行**，
+                    //   所以入队只是"这一行变了"的提醒，不推半截快照。
+                    val toolRowId = store.startToolCall(
+                        runId = runId,
+                        providerCallId = call.id,
+                        name = call.name,
+                        argumentsJson = call.arguments,
+                    )
                     val outcome = tools.invoke(ToolCallRequest(call.id, call.name, call.arguments), ctx)
+                    val elapsed = System.currentTimeMillis() - startedAt
+                    store.finishToolCall(
+                        id = toolRowId,
+                        status = if (outcome.ok) HarnessStore.STATUS_COMPLETED else HarnessStore.STATUS_FAILED,
+                        content = outcome.content,
+                        resultJson = outcome.jsonPayload?.toString(),
+                        error = outcome.error,
+                        elapsedMs = elapsed,
+                    )
                     parts.add(
                         PartType.TOOL_RESULT,
                         text = outcome.content,
@@ -514,7 +540,7 @@ class HarnessRunner(
                         callId = call.id,
                         name = call.name,
                         outcome = outcome,
-                        elapsedMs = System.currentTimeMillis() - startedAt,
+                        elapsedMs = elapsed,
                     )
                     emit(type, body)
                     // 工具结果回填给模型：**当不可信数据**（横幅文案由 run-kit 下发，R7）

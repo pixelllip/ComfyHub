@@ -13,7 +13,7 @@ import java.util.Locale
 /**
  * 手机侧内置工具（移植自桌面 `ai/tools/` 的那几个**手机能履行**的）。
  *
- * ## 这一版实现了哪些、没实现哪些（诚实清单）
+ * ## 这一版实现了哪些（诚实清单 —— 与 ToolScope 契约 §2 的 MOBILE 七个**已经对齐**）
  *
  * | 工具 | 状态 | 说明 |
  * | --- | --- | --- |
@@ -22,11 +22,15 @@ import java.util.Locale
  * | `ask_user_question` | ✅ | 走本端事件流；**先 open 再发事件**（R8） |
  * | `comfy_queue_submit` | ✅ | 只写本地 outbox，**绝不返回 mediaIds**（R11） |
  * | `web_fetch` | ✅ | 纯出网 + 正文抽取；结果**当不可信数据**加横幅（R7） |
- * | `web_search` / `civitai_search` | ⏳ 未实现 | 需要桌面那套搜索端点的配置；**未实现就不对外宣称**（见 [MobileToolRegistry.declaredTo]） |
+ * | `web_search` | ✅ | Keenable 通用搜索（免密钥可跑）；结果**当不可信数据**加横幅（R7） |
+ * | `civitai_search` | ✅ | Civitai 模型库检索（结构化字段）；`allowNsfw` 切 `.red` 站 |
  *
- * ⚠ 最后一行是刻意的：ToolScope 契约说手机"可执行"这 7 个，那是**能力范围**；
- * 具体这一版手机 harness 只实现了一部分，于是下发给模型的清单里只出现实现了的那些。
- * 宁可让模型少看见一个工具，也不让它看见一个"调了必然失败"的工具。
+ * ⚠ 这条清单是**实现的现状**，不是规则的真源：下发给模型的清单由
+ * [MobileToolRegistry.declaredTo] 现算（= kit ∩ 本地实现），而"手机能做哪些"的真源是桌面
+ * （ToolScope 契约 §2、`server-rs/src/mobile_tools.rs`）—— 手机侧**不维护第二份规则**（R12/R13）。
+ *
+ * 最后补齐的两件（`web_search` / `civitai_search`）在 [WebTools.kt] 里，
+ * 与 `web_fetch` **共用同一条 HTTP 客户端与同一份联网预算**（[WebQueryBudget]）。
  */
 
 /** 工具结果正文的上限（与桌面 `ToolRegistry.MAX_RESULT_CHARS` 同值）。 */
@@ -429,6 +433,10 @@ class WebFetchTool : MobileTool {
     override val name = "web_fetch"
 
     override suspend fun invoke(args: JsonObject, ctx: ToolContext): ToolOutcome {
+        // ★ 联网预算：与 `web_search` / `civitai_search` **共用同一条**（`ToolContext.webQueries`），
+        //   预检在调用之前、计数只在成功之后 —— 与桌面执行器同一条纪律。
+        ctx.webBudgetFailure()?.let { return it }
+
         val url = args.str("url")
             ?: return ToolOutcome.failure("INVALID_ARGUMENT", "web_fetch 需要 url 参数")
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
@@ -441,6 +449,7 @@ class WebFetchTool : MobileTool {
         }
         val text = ToolResults.truncate(extractText(reply.body))
         val banner = ToolResults.untrustedBanner(ctx.kit.untrustedBanner, kind = "网页", query = url)
+        ctx.webQueries++
         return ToolOutcome.success("$banner\n$text", buildJsonObject { put("url", url) })
     }
 
@@ -478,10 +487,13 @@ object BuiltinTools {
         AskUserQuestionTool(),
         ComfyQueueSubmitTool(),
         WebFetchTool(),
+        // ★ 2026-09-27 补齐：ToolScope 契约 §2 的 MOBILE 七个到这一步**全部有实现**。
+        WebSearchTool(),
+        CivitaiSearchTool(),
     )
 
     /**
-     * **本版真正实现了的工具名**（`web_search` / `civitai_search` 还没有）。
+     * **本版真正实现了的工具名**。
      *
      * 这份清单只用来给单测断言"声明出去的工具都真的能跑"，**不是**规则的真源 ——
      * 规则的真源是桌面的 `ToolRegistry`（红线 R12）。

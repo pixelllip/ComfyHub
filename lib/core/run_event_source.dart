@@ -130,6 +130,18 @@ abstract class RunEventSource {
   /// 手机不许伪造删除）。没推上去的，桌面根本不知道它存在过；已经推上去的，
   /// 桌面那份留着 —— 这里不假装"两边都删了"。
   ///
+  /// ## ★ 手机上它还会留一个**本机删除标记**（2026-09-27）
+  ///
+  /// 只删本地行是不够的：桌面那份还在，下一次下行 apply 会把它整行覆盖回来、
+  /// **会话当场复活**（两端都不报错）。所以本地实现（Kotlin
+  /// `HarnessStore.deleteConversation`）在同一个事务里写一行 `local_deletions`，
+  /// 下行覆盖时按它跳过这一个 id（`SyncApply` / `HarnessStore.applyMirrorRow`）。
+  /// **它不是 wire 上的 delete**：标记不出本机、不进同步范围、不挂触发器。
+  ///
+  /// 用户主动删会话时，除了这里改走本地实现，界面**仍然会打一次远端 DELETE**
+  /// （桌面是唯一真源，桌面那份也该删）—— 那一句在 `AiWorkspaceStore.deleteConversation`
+  /// 里，不是这个抽象的一部分：本方法只负责"本端这一份"。
+  ///
   /// 幂等：删一个不存在的 id **不算失败**（重复清理是常态）。
   Future<void> deleteConversation(String conversationId);
 

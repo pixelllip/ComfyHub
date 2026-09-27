@@ -118,10 +118,41 @@ class ToolContext(
     val askGate: MobileAskGate,
     /** 事件出口：`emit(type, payload)` —— 与桌面同一套 RunEvent 协议。 */
     val emit: (String, JsonObject) -> Unit,
+    /**
+     * `credential_ref` → 密钥（Android Keystore 那条路由平台通道注入，见
+     * `HarnessBridge` 的 `resolveSecret`）。
+     *
+     * **出网工具的 key 只有这一个口子**：`web_search` 取 `keenable`、`civitai_search` 取
+     * `civitai`（ref 名与桌面 `credentials::KEENABLE_REF` / `civitai::CREDENTIAL_REF` 同名）。
+     * 工具 handler 不许自己去读环境变量或全局单例（与桌面同纪律：策略/凭据在 Run 开始时
+     * 快照一次，用户中途改设置不该影响在飞的请求）。
+     *
+     * 取不到（本机没配 / 密钥解不开）一律返回 `null` —— 调用方按"没有 key"处理，
+     * 而且**必须如实说出来**（Keenable 有免密钥通道、Civitai 匿名也照搜，
+     * 但哪一种是"没有登录态"必须让模型知道）。
+     */
+    val resolveSecret: (String?) -> String? = { null },
 ) {
     /** 一次 Run 里 AI 最多新增几条记忆（与桌面 `MemoryStore.MAX_ENTRIES_PER_RUN` 同值）。 */
     var memoryWrites: Int = 0
     var memoryWritesLimit: Int = 4
+
+    /**
+     * 一次 Run 里已经**成功**联网查询几次（`web_fetch` / `web_search` / `civitai_search`
+     * **共用这一条**，见 [WebQueryBudget]）。
+     *
+     * 与桌面执行器同一条纪律：**预检在调用之前、计数只在成功之后**（失败 / 参数错不占额度）。
+     */
+    var webQueries: Int = 0
+    var webQueriesLimit: Int = WebQueryBudget.MAX_QUERIES_PER_RUN
+
+    /**
+     * 联网预算的预检（三支出网工具**共用这一份**；各写一份的下场是"某一条工具的额度
+     * 悄悄不算数"，而系统提示里那句"一次回复最多联网 8 次"就变成了空话）。
+     */
+    fun webBudgetFailure(): ToolOutcome? =
+        if (webQueries < webQueriesLimit) null
+        else ToolOutcome.failure("QUERY_BUDGET_EXCEEDED", WebQueryBudget.exceededMessage(webQueriesLimit))
 }
 
 /**
