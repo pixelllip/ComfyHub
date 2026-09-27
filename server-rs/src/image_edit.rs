@@ -584,7 +584,6 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     // **按背景环境改新图层的光照与阴影**（用户 2026-09-26 的最后一个要求）：
     // 光向/色温从 `baseFilename` 那张底图上估（`light=\"auto\"`，也可以用 `lightDir=\"left\"` 等显式给），
     // 结果烘进人物图的像素 + 烧一层投影（影子落在遮罩里，于是跟着一起贴上去 —— 不改工作流）。
-    let mut light_info: Option<([f64; 2], bool, usize)> = None;
     let mut out_light: Option<([f64; 2], bool, usize)> = None;
     let mut despilled = false;
     let mut unmixed_edge = false;
@@ -664,7 +663,6 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
             placed_name,
             placed_subject.map(|(_, bbox)| bbox).unwrap_or([0.0, 0.0, 0.0, 0.0]),
         ));
-        light_info = Some((dir, estimated, offset));
         out_light = Some((dir, estimated, offset));
     }
     // **去溢色 / 反混**：只用于**颜色档**（`matteSource="color"`）——
