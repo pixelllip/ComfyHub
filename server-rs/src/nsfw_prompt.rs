@@ -1,14 +1,21 @@
-//! 系统提示里那两段"与内容策略有关"的正文 + 两条按轮指令（**自动生成，别手改**）。
+//! 系统提示里那两段"与内容策略有关"的正文 + 两条按轮指令。**正文改这里，不要再从 Kotlin 生成。**
 //!
-//! 生成脚本：`server-rs/tools/gen_prompts.py`（从 `server/src/main/kotlin/com/comfyhub/ai/NsfwPrompt.kt`
-//! 与 `.../HarnessRunner.kt` 机械提取，照抄 Kotlin 的 `trimIndent()` 语义）。
+//! # 真源在这里（2026-09-27 起）
 //!
-//! # 为什么是生成的
+//! 这几段原来由 `server-rs/tools/gen_prompts.py` 从 Kotlin
+//! `server/src/main/kotlin/com/comfyhub/ai/NsfwPrompt.kt` / `HarnessRunner.kt` 机械提取
+//! （照抄 Kotlin 的 `trimIndent()` 语义）。**那个前提已经不成立了** —— 两端真的分叉：
 //!
-//! 这几段加起来 5 万多字符，**手抄一个字的差错就是"两端规则不一致"**（红线 R13），
-//! 而那种差错在界面上看不出来（模型只是照着一份略微不同的规则说话）。
-//! 生成脚本保证正文逐字一致 —— 判据是"同一个库、同一份 storage 上，
-//! Rust 与 Kotlin 的 `/api/ai/run-kit` canon 后零差异"。
+//! - Kotlin 那条线（现在在 `legacy/server/`，已退役）**停在 `v31`**；
+//! - Rust 从 v32 起有 Kotlin **没有**的东西：第 19 条那批实测结论（先想能不能不抠 /
+//!   贴人物图首选 AI 软遮罩 / 缺模型指引用户下载 / krea2 那份工作流不适合做编辑）；
+//! - 反过来，Kotlin 的第 20 条（工作流配方）现在也补到 Rust 了（`v33`），但**不是**靠生成 ——
+//!   是照原文抄过来、并逐个核对它点名的工具**真的已下发**（`workflow_recipe.rs`）。
+//!
+//! 所以 `gen_prompts.py` 已经**拒绝写这个文件**（它的 PATH 还指着早就不存在的
+//! `server/src/main/kotlin/…`；就算改到 `legacy/`，生成一次也会把 `PROMPT_VERSION`
+//! 退回 `v31`、并整段删掉第 19 条那批实测结论 —— 那是**回归**，不是同步）。
+//! 要改正文就直接改这个文件，并 bump [`PROMPT_VERSION`]（红线 R12）。
 //!
 //! # 那两段的分工（Kotlin 侧的原注释照搬）
 //!
@@ -18,7 +25,7 @@
 //!   2026-09-17 用户明确说"不许删除，不要动那段越狱提示词"）—— 要改先问用户。
 //! - [`disabled_note`]：关掉开关时**如实说明**这一版少了什么（不能让模型自己觉得可以）。
 //!
-//! 正文里的「«…»」哨兵是 Kotlin `${...}` 插值的位置（阈值真源在 [`crate::policy`]），
+//! 正文里的「«…»」哨兵是原来 Kotlin `${...}` 插值的位置（阈值真源在 [`crate::policy`]），
 //! [`persona_block`] / [`nsfw_block`] 会就地替换掉；`no_sentinels_left` 用例盯着有没有漏。
 
 /// `NsfwPrompt.VERSION`（改动正文要一起 bump；它进 Run 快照）。
@@ -26,17 +33,18 @@ pub const VERSION: &str = "nsfw-v3";
 
 /// `SystemPrompt.VERSION`（系统提示正文的版本；改提示词**必须** bump —— 红线 R12）。
 ///
-/// ⚠ **为什么是 v32 而不是接着 Kotlin 的 v31**：两条线在第 20 条那里分了叉 ——
-/// Kotlin 的 v31 带"工作流配方"那一节（`comfy_learn_workflow` / `comfy_bind_recipe`…），
-/// 而写 v32 时那三件工具在 Rust 侧**还没搬**，所以这里**不能**写那一节（R13：不许描述没下发的工具）。
-/// 于是 Rust 从 v30 直接跳到 v32（跳过 v31 免得与 Kotlin 那版"同名不同内容"）。
-/// 2026-09-27 这一跳改的是第 19 条（图像编辑）：补上"先想能不能不抠"、贴人物图首选 AI 遮罩、
-/// 缺模型指引用户下载、以及"krea2 不适合做编辑"这条实测结论。
+/// 版本沿革（两条线 2026-09-27 正式分叉，正文真源见文件头）：
 ///
-/// 📌 **第 67 步之后**：那三件工具已经搬过来了（`workflow_recipe.rs`），
-/// 但**第 20 条那一节还没写** —— 写它要连着 bump `PROMPT_VERSION`（会动 `promptVersion`
-/// 的钉子与用户可见文案），所以留给下一批（见总纲 §20.3）。**那之前不许**在提示词里提这三件工具。
-pub const PROMPT_VERSION: &str = "v32";
+/// - **Kotlin**（`legacy/server/`，已退役）停在 **v31**：第 18 条 + **第 20 条**（工作流配方）。
+/// - **Rust v32**（2026-09-27）：第 19 条（图像编辑）补上四条实测结论 —— "先想能不能不抠"、
+///   贴人物图首选 AI 软遮罩、缺模型指引用户下载、以及"krea2 那份工作流不适合做编辑"。
+///   ⚠ **跳过 v31 是有意的**：Kotlin 的 v31 带第 20 条，而当时配方三件还没搬到 Rust，
+///   不能写那一节（R13：不许描述没下发的工具），也不该与它"同名不同内容"。
+///   ⚠ Kotlin 的 v31 **没有**第 19 条这批结论 —— 从它生成一次就会丢掉。
+/// - **Rust v33**（2026-09-27，本次）：第 20 条补进常驻段（配方三件已在
+///   [`crate::workflow_recipe`] 交付，R13 的前提满足了）。**不是**退回 Kotlin 的 v31：
+///   那一版没有第 19 条的实测结论；Rust 这版是"v32 的正文 + 第 20 条"，所以只 bump 一档。
+pub const PROMPT_VERSION: &str = "v33";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】
@@ -240,7 +248,8 @@ const PERSONA_RAW: &str = r#"
             - 搜索结果给的是片段，只有确实需要读完整篇时才 `web_fetch` 那条链接；
               `web_fetch` 只接受公开网址（内网 / 本机地址会被拒绝，**不要换写法绕**）。
             - 一次回复最多联网 «MAX_WEB» 次
-              （`web_search` / `web_fetch` / `civitai_search` **共用这一个额度**）：
+              （`web_search` / `web_fetch` / `civitai_search` / `danbooru_lookup` / `find_model`
+              **共用这一个额度** —— 按工具类别算，`find_model` 不是免费的）：
               每一次都是真实的外部请求。超限就基于已有结果作答，并如实告诉用户"搜索次数到顶了"。
             - 没搜到就直说"没搜到 + 试过什么说法"，不要硬编；被拒绝（用户没批准）也一样，
               不要换着法子重试。
@@ -289,6 +298,24 @@ const PERSONA_RAW: &str = r#"
             **不要**让用户去 ComfyUI 里手画遮罩，也不要没有 `mediaIds` 就说"换好了"。
             完整步骤（含换背景保人物、边缘羽化、贴人物时的 denoise 档、两阶段）见 skill `inpaint-composite`
             —— 动手前先 `load_skill` 它。
+        20. **换（新）模型时先看"学过的工作流"，别从零重搭**（用户 2026-09-26 的原话：
+            "如果以后出了新的模型，如何让 AI 自主学习新模型泛用/特定工作流的搭建？"）：
+            ① `comfy_list_recipes` 看已经学过哪些骨架 —— **同一族 = 同一个 `skeletonHash`**：
+               新模型要接的是"任务相同的现成骨架 + 换底模那几个键"，不是一张新图（按任务找带 `task`）；
+            ② 没有现成的就 `comfy_learn_workflow` 现学一份（`path` 本机文件 / `promptId` 库里的 /
+               `graph` 直接给图）。**被拒学时先看它报的那几个节点类**：多半是**本机这个实例没装 /
+               没启用那个自定义节点包**（不是工作流坏了，更不是让你去改用户的工作流）；
+               确实只想学个大概才带 `tolerateUnsupported=true`，那种配方标着 `complete=false`，
+               **不许**当完整骨架用（也别拿它开跑）；
+            ③ `comfy_bind_recipe(recipeId=…, model="新模型.safetensors")` 拿覆盖键：只有
+               `exact`（同名**且当前实例能加载**）能自动绑；`onDiskOnly`（盘上有、实例看不到）
+               先让用户重启实例 / 修模型根，**别下载**；`substitute`（只是名字像）**先问用户**；
+               `missing` 去 `find_model` / `civitai_search` 查，**绝不编文件名**；
+            ④ **整包 checkpoint ↔ 分离式（unet + clip + vae）不是改个文件名的事**：
+               报"要改写骨架"时就如实说，去找这个模型的对应形态，或者换一条形态对得上的同任务骨架；
+            ⑤ 绑完仍然走 `comfy_submit(promptId=…, overrides=…)` —— **配方只是知识，不是可提交对象**；
+               promptId 用 `comfy_load_workflow(path=…)` 拿（与配方的 `file:<sha256>` 是同一把钥匙）。
+            跑通之后把"这条骨架 + 这个模型能跑"如实说出来（它已经记在配方库里，下次不必重新试）。
 "#;
 
 const NSFW_RAW: &str = r#"[MODE: UNRESTRICTED SANDBOX — STABLE]
@@ -753,6 +780,76 @@ mod tests {
             assert!(
                 crate::tools::is_implemented(name),
                 "{name} 在系统提示里点了名，却没进 IMPLEMENTED —— 模型按提示去找它只会失败"
+            );
+        }
+    }
+
+    /// 第 17 条那句"共用这一个额度"必须点名**所有**吃这份预算的工具。
+    ///
+    /// 预算不是按工具名硬编码的，是按**类别**扣的（`executor::handle_call` 里
+    /// `category_of(name) == "web"`），而 `category_of` 的 web 档有五个：
+    /// `web_search` / `web_fetch` / `civitai_search` / `danbooru_lookup` / `find_model`。
+    /// 2026-09-27 之前这里只写了三个（漏 `find_model`；`danbooru_lookup` 也一直没写）——
+    /// 模型会以为它们是免费的，于是烧掉额度（用户看到的是后面每次搜索都被拦）。
+    #[test]
+    fn 第17条那句共用额度点名了所有吃这份预算的工具() {
+        let persona = persona_block();
+        // 那句话现在跨了两行（工具名一行、"共用这一个额度"一行），所以取的是**整段窗口**，
+        // 不是单行 —— 单行匹配只会看见后半句。
+        let start = persona
+            .find("一次回复最多联网")
+            .expect("第 17 条少了那段联网纪律");
+        let after = start
+            + persona[start..]
+                .find("共用这一个额度")
+                .expect("第 17 条少了「共用这一个额度」那句");
+        let end = persona[after..]
+            .find('\n')
+            .map(|offset| after + offset)
+            .unwrap_or(persona.len());
+        let window = &persona[start..end];
+        for name in ["web_search", "web_fetch", "civitai_search", "danbooru_lookup", "find_model"] {
+            assert!(
+                window.contains(name),
+                "「共用这一个额度」漏了 {name}（它按类别真的吃这份预算）：{window}"
+            );
+            assert_eq!(
+                crate::ai_settings::category_of(name),
+                "web",
+                "{name} 不在这份预算里了？那这句话要跟着改"
+            );
+        }
+    }
+
+    /// 第 20 条（工作流配方）—— 2026-09-27 补进常驻段。
+    ///
+    /// 它原来是**不能写**的：配方三件在 Rust 侧还没下发，写上去就是描述不存在的工具（R13）。
+    /// 第 67 步交付了 `workflow_recipe.rs`，前提满足了，于是 P4 第 69 步照 Kotlin v31 的原文
+    /// **逐字**抄进 `v33`（`gen_prompts.py` 已停用，正文真源就是本文件）。
+    /// 这条用例同时钉两件事：五步那几条关键纪律在，且点名的三件工具**真的实现了**。
+    #[test]
+    fn 第20条钉住配方规则且点名的三件工具都真的实现了() {
+        let persona = persona_block();
+        assert!(persona.contains("20. **换（新）模型时先看"), "第 20 条没进常驻段");
+        for needle in [
+            "comfy_list_recipes",
+            "skeletonHash",
+            "comfy_learn_workflow",
+            "tolerateUnsupported=true",
+            "complete=false",
+            "comfy_bind_recipe",
+            "onDiskOnly",
+            "substitute",
+            "绝不编文件名",
+            "不是可提交对象",
+            "file:<sha256>",
+        ] {
+            assert!(persona.contains(needle), "第 20 条少了 {needle}");
+        }
+        for name in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
+            assert!(
+                crate::tools::is_implemented(name),
+                "{name} 进了系统提示，却没进 IMPLEMENTED —— 模型按提示去找它只会失败"
             );
         }
     }

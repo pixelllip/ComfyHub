@@ -1,11 +1,20 @@
-"""从 Kotlin 源码里**机械提取**提示词正文，生成 Rust 常量（P4：run-kit 搬到 Rust）。
+"""⛔ **本脚本已停用：它拒绝写 `src/nsfw_prompt.rs`。**
 
-为什么要生成而不是手抄：这几段正文加起来 5 万多字符（PERSONA_BLOCK + NSFW_BLOCK），
-手抄一个字的差错就是"两端规则不一致"，而这类差错**看不出来**（红线 R13）。
-提取规则照抄 Kotlin 的 trimIndent() 语义，并把 ${...} 插值换成哨兵串，
-由 Rust 侧用**同一个常量**替换（阈值真源只有一处）。
+原本的用途：从 Kotlin 源码里**机械提取**提示词正文，生成 Rust 常量（P4：run-kit 搬到 Rust）。
+当初的理由成立 —— 这几段正文加起来 5 万多字符，手抄一个字的差错就是"两端规则不一致"（红线 R13），
+而且**看不出来**。判据是"同一个库、同一份 storage 上，Rust 与 Kotlin 的 `/api/ai/run-kit`
+canon 后零差异"。
 
-用法：python server-rs/tools/gen_prompts.py
+**但那个前提已经不成立了（2026-09-27 实测）**：两端真的分叉，Kotlin 不再是唯一真源。
+跑一次生成 = 一次回归，所以 `main()` 现在只打印理由并**非零退出**，一个字节都不写。
+正文的真源是 `server-rs/src/nsfw_prompt.rs`（见它的文件头）；要改正文就改那里，
+并 bump `PROMPT_VERSION`（红线 R12）。
+
+助手函数（`trim_indent` / `raw_block` / `extract_raw_string` …）留着，作为
+"这份正文当初是怎么从 Kotlin 抠出来的"的**参考实现**（当年的 `trimIndent()` 语义、
+插值换哨兵的写法都在这里），但要理解成**只读的历史**，不要再接回去生成。
+
+用法：`python server-rs/tools/gen_prompts.py` —— 预期结果就是**拒绝 + 非零退出**。
 """
 
 import re
@@ -13,6 +22,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+# ⚠ 这两条路径**已经不存在**（Kotlin 于 P4 C-6 退役时搬到 `legacy/server/`）。
+# 刻意不改：改了只会让人以为"跑一下就好"，而真正的问题不是路径，是两端内容已经分叉。
 NSFW_KT = ROOT / "server/src/main/kotlin/com/comfyhub/ai/NsfwPrompt.kt"
 RUNNER_KT = ROOT / "server/src/main/kotlin/com/comfyhub/ai/HarnessRunner.kt"
 OUT = ROOT / "server-rs/src/nsfw_prompt.rs"
@@ -81,6 +92,9 @@ def extract_note(src):
     return joined.replace("\\n", "\n").replace('\\"', '"')
 
 
+# ⚠ 这是**旧的**输出骨架（`main()` 已经不用它了）—— 留作历史参考。
+# 里面的文件头写着"自动生成，别手改"，那句话**已经作废**：真源就是 `src/nsfw_prompt.rs` 本身。
+# 别照抄这段模板去覆盖任何东西（它会把 `PROMPT_VERSION` 钉回生成时的版本）。
 TEMPLATE = '''//! 系统提示里那两段"与内容策略有关"的正文 + 两条按轮指令（**自动生成，别手改**）。
 //!
 //! 生成脚本：`server-rs/tools/gen_prompts.py`（从 `server/src/main/kotlin/com/comfyhub/ai/NsfwPrompt.kt`
@@ -178,30 +192,40 @@ mod tests {
 '''
 
 
+REFUSAL = """\
+⛔ 拒绝生成：{out}
+   这份文件现在是**系统提示正文的真源**，从 Kotlin 生成一次就是一次回归（2026-09-27 实测）。
+
+① 路径本身已经失效：Kotlin 树在 P4 C-6 退役时搬到了 `legacy/server/`，
+   本脚本读的 `{nsfw}` 不存在（就算改到 legacy/，下面两条也照样成立）。
+
+② `PROMPT_VERSION` 会**从 v33 退回 v31**（它从 legacy 的 `HarnessRunner.kt`
+   读版本号），并且模板会把"Rust 为什么从 v32 走到 v33"那段注释**整段删掉** ——
+   后人再也看不到"跳过 v31 / 第 19 条只存在于 Rust"这段缘由。
+
+③ 第 19 条（图像编辑）那批 **2026-09-27 的实测结论只在 Rust 侧**，
+   Kotlin 的 `NsfwPrompt.kt` 里一个字都没有（已 grep 确认：`mattingModels` /
+   `先想能不能不抠` / `别默默降级` / `krea2 不适合` 全部 absent）。生成一次，
+   下面这些结论就**整段消失**，模型会退回错误行为：
+     · 贴人物图首选 AI 软遮罩（先查 `mattingModels.usable`）；
+     · 缺模型要指引用户下载，别硬跑、也别默默降级成颜色抠图（实测掉 18.4% 前景）；
+     · `comfyhub_inpaint_krea2.json` **不适合做编辑**（只留给文生图）。
+
+（第 20 条配方规则曾经也是 Kotlin 独有；P4 第 69 步已按原文补进 Rust 的 v33，
+ 所以它不再构成差异 —— 但 ② ③ 已经足够让这个脚本不能写。）
+
+要改正文：直接改 `server-rs/src/nsfw_prompt.rs`，并 bump `PROMPT_VERSION`（红线 R12）。
+本脚本的提取助手只作**历史参考**（当年怎么从 Kotlin 抠出来、`trimIndent()` 什么语义）。
+"""
+
+
 def main():
-    nsfw_src = NSFW_KT.read_text(encoding="utf-8")
-    runner_src = RUNNER_KT.read_text(encoding="utf-8")
-
-    version = re.search(r'const val VERSION = "([^"]+)"', nsfw_src).group(1)
-    persona = extract_raw_string(nsfw_src, "val PERSONA_BLOCK")
-    nsfw_block = extract_raw_string(nsfw_src, "val NSFW_BLOCK")
-    disabled = extract_note(nsfw_src)
-    title = extract_raw_string(runner_src, "val TITLE_INSTRUCTION")
-    prompt_version = re.search(r'const val VERSION = "(v\d+)"', runner_src).group(1)
-
-    out = (
-        TEMPLATE.replace("__VERSION__", version)
-        .replace("__PROMPT_VERSION__", prompt_version)
-        .replace("__TITLE__", raw_block(title))
-        .replace("__CONTINUE__", raw_block(CONTINUE_INSTRUCTION))
-        .replace("__DISABLED__", raw_block(disabled))
-        .replace("__PERSONA__", raw_block(persona))
-        .replace("__NSFW__", raw_block(nsfw_block))
+    print(
+        REFUSAL.format(out=OUT.relative_to(ROOT), nsfw=NSFW_KT.relative_to(ROOT)),
+        file=sys.stderr,
     )
-    OUT.write_text(out, encoding="utf-8", newline="\n")
-    print("wrote %s (%d bytes); persona=%d nsfw=%d title=%d disabled=%d"
-          % (OUT, len(out), len(persona), len(nsfw_block), len(title), len(disabled)))
-    return 0
+    print("（退出码 2：一个字节都没写。）", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
