@@ -630,4 +630,9 @@ CREATE TRIGGER IF NOT EXISTS trg_ai_attachments_sync_ad AFTER DELETE ON ai_attac
 BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_attachments', OLD.id, 'delete', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
 
 -- schema 版本（`PRAGMA user_version` 是 SQLite 自带的，不建版本表）
-PRAGMA user_version = 1;
+--
+-- ⚠ 这里与 `server-rs/src/db.rs` 的 `SCHEMA_VERSION` **必须一致**（有用例
+--   `ddl_declared_version_matches_the_constant` 钉着 —— 两份漂了就是一整套静默故障）。
+--   Rust 侧写版本号时取的是 `max(库里的值, SCHEMA_VERSION)`：既不许把更新的库降级，
+--   也不会被这一行拖回去。**加表 / 改列就把两边一起 +1**。
+PRAGMA user_version = 2;

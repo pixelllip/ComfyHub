@@ -170,7 +170,11 @@ async fn health_reports_engine_and_schema_version() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "ok");
     assert_eq!(body["impl"], "rust");
-    assert_eq!(body["schemaVersion"], 1, "P2 建库时写进 user_version 的数");
+    assert_eq!(
+        body["schemaVersion"].as_i64(),
+        Some(comfyhub_server_rs::db::SCHEMA_VERSION),
+        "就是 PRAGMA user_version（真源是 db.rs 的 SCHEMA_VERSION，别写死数字）"
+    );
     assert_eq!(body["engine"]["fts5"], true, "R14：bundled 引擎必须带 FTS5");
     assert!(
         body["engine"]["sqliteVersion"].as_str().unwrap().starts_with("3."),
@@ -2029,7 +2033,11 @@ async fn sync_manifest_lists_scope_and_never_offers_credentials() {
         vec!["cursor", "kitVersion", "schemaVersion", "serverTime", "tables"],
         "manifest 的键集合就是契约",
     );
-    assert_eq!(body["schemaVersion"].as_i64(), Some(1), "= PRAGMA user_version");
+    assert_eq!(
+        body["schemaVersion"].as_i64(),
+        Some(comfyhub_server_rs::db::SCHEMA_VERSION),
+        "= PRAGMA user_version（真源是 db.rs 的 SCHEMA_VERSION，别写死数字）"
+    );
     // 夹具是**直接 SQL 插的行** —— 触发器照常点亮 `_sync_log`，所以游标已经往前走了。
     // （这正是"游标 = MAX(seq)、不是自己数的行数"的一个活证据）
     let fixture_cursor = body["cursor"].as_i64().unwrap();

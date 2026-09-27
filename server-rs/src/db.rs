@@ -37,20 +37,34 @@ pub const PRAGMAS: &str = "
 pub const SCHEMA_SQL: &str = include_str!("../../db/schema.sqlite.sql");
 
 /// schema 版本（`PRAGMA user_version`，见 🔒 `docs/sqlite-schema-contract.md`）。
-pub const SCHEMA_VERSION: i64 = 1;
+/// 这个后端认识的 schema 版本。
+///
+/// **加表 / 改列就要 +1**（2026-09-27 由 1 提到 2：`workflow_recipes` 的 DDL 早就在
+/// `db/schema.sqlite.sql` 里，而真库停在 1、**那张表根本不存在** —— 见 [`open_or_create`] 的 ⚠）。
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// **开库（必要时建库）**：切流之后 Rust 是唯一的后端，"第一次运行要能自己建库"这件事
 /// 必须在它这边成立 —— 以前那版遇到缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
 /// 那在发布包里等于**永远起不来**（包里根本没有 Kotlin）。
 ///
-/// 三种情况：
+/// 四种情况：
 ///  1. **文件不存在**（或存在但是空文件）→ 建父目录 → 建库 → 执行 [`SCHEMA_SQL`] → `user_version = SCHEMA_VERSION`；
 ///  2. `user_version == 0`（老库 / 手工建的库）→ 执行一遍 DDL（脚本是**收敛式**的：
 ///     `CREATE TABLE IF NOT EXISTS` + `DROP TRIGGER IF EXISTS` + `CREATE TRIGGER`，重跑安全）→ 写版本号；
-///  3. `user_version >= SCHEMA_VERSION` → 什么都不做（**绝不重跑 DDL**：那会重建触发器）。
+///  3. `version >= SCHEMA_VERSION` → **先核对 DDL 里声明的表是不是都在**：都在就什么都不做
+///     （**绝不重跑 DDL**：那会重建触发器），缺了就补一遍（见下面那条 ⚠）；
+///  4. `version > SCHEMA_VERSION` → **只警告不拦**（拦了用户就没法回退版本），
+///     并且**绝不把版本号往小写**（只往下写、不往回落）。
 ///
-/// ⚠ **`> SCHEMA_VERSION` 要如实报**：说明这个库是更新的后端建的，用旧二进制去写它可能丢列。
-/// 此时**只警告不拦**（拦了用户就没法回退版本），但一定要说出来 —— 静默继续才是真的危险。
+/// ⚠ **为什么第 3 类里那道"表都在吗"的检查一个字都不能省**（2026-09-27 真机实测抓到）：
+/// `db/schema.sqlite.sql` 是**两端共用**的一份文件，谁往里加一张表都行；而"加了表、
+/// 忘了 bump [`SCHEMA_VERSION`]"的表现是**静默的**：
+/// 老库停在旧版本号 → `version >= SCHEMA_VERSION` 直接早退 → **那张表永远不存在**，
+/// 直到某个端点报 `no such table`（而那时候没人会想到是迁移）。
+///
+/// 真机现场就是这样：库停在 `user_version=1`，schema 里**有** `workflow_recipes` 的完整 DDL，
+/// 而库里**没有这张表**（`character_cards` 有、它没有 —— 差别只在于 DDL 是什么时候加进去的）。
+/// 现在这条是**自愈**的：缺哪张补哪张，并且**打一行日志把补了什么说出来**（绝不静默）。
 pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
     let path = path.as_ref();
     let fresh = !path.exists() || std::fs::metadata(path).map(|m| m.len() == 0).unwrap_or(true);
@@ -62,6 +76,7 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
     }
     let conn = open(path).map_err(|e| format!("开库失败（{}）：{e}", path.display()))?;
     let version = schema_version(&conn).map_err(|e| format!("读 user_version 失败：{e}"))?;
+    let mut missing: Vec<&'static str> = Vec::new();
     if version >= SCHEMA_VERSION && !fresh {
         if version > SCHEMA_VERSION {
             eprintln!(
@@ -69,20 +84,48 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
                  它可能是更新的版本建的。继续用会有列对不上的风险，建议升级后端。"
             );
         }
-        return Ok(conn);
+        // ★ 自愈（见函数头那条 ⚠）：版本号够新**不等于**表都在
+        missing = missing_tables(&conn).map_err(|e| format!("查缺表失败：{e}"))?;
+        if missing.is_empty() {
+            return Ok(conn);
+        }
+        eprintln!(
+            "[db] 库里缺 {} 张 DDL 声明过的表（{}）—— 多半是**加了表没 bump SCHEMA_VERSION**。\
+             跑一遍收敛式 DDL 补上；已有数据不动。",
+            missing.len(),
+            missing.join("、")
+        );
     }
     // 建表 / 收敛式迁移：整个 DDL 在一个事务里跑（中途失败不留半个 schema）
     conn.execute_batch("BEGIN IMMEDIATE;")
         .map_err(|e| format!("开事务失败：{e}"))?;
     match conn.execute_batch(SCHEMA_SQL) {
         Ok(()) => {
-            conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
-                .map_err(|e| format!("写 user_version 失败：{e}"))?;
+            // ⚠ **版本号取 `max(现有, SCHEMA_VERSION)`**，两个方向都要照顾到：
+            //  * **只往下写、绝不往回落**：库比后端新时保留它自己的版本号
+            //    （写回 SCHEMA_VERSION 等于把用户的库降级，而那正是"用旧二进制写新库"最危险的事）；
+            //  * **但也不能被 DDL 里的那行拖回去**：`db/schema.sqlite.sql` 末尾自己也有一行
+            //    `PRAGMA user_version = N`（它是两端共用的文件、Kotlin 侧也读它），
+            //    而"库够新、只是缺张表"那条自愈路径里我们**刚跑过一遍 DDL** ——
+            //    如果照搬"DLL 里的值"，版本号就会从 2 **退回 1**（2026-09-27 实测踩到：
+            //    自愈成功、表补上了，`user_version` 却掉回 1）。
+            let target = version.max(SCHEMA_VERSION);
+            if target != version {
+                conn.execute_batch(&format!("PRAGMA user_version = {target};"))
+                    .map_err(|e| format!("写 user_version 失败：{e}"))?;
+            }
             conn.execute_batch("COMMIT;").map_err(|e| format!("提交失败：{e}"))?;
             if fresh {
                 eprintln!("[db] 已建库并建表：{}（schemaVersion={SCHEMA_VERSION}）", path.display());
-            } else {
+            } else if missing.is_empty() {
                 eprintln!("[db] 已把老库收敛到 schemaVersion={SCHEMA_VERSION}：{}", path.display());
+            } else {
+                eprintln!(
+                    "[db] 已补上 {} 张缺的表（{}）：{}",
+                    missing.len(),
+                    missing.join("、"),
+                    path.display()
+                );
             }
             Ok(conn)
         }
@@ -96,6 +139,43 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
 /// 建表用的 DDL 文本（给用例与"手工建库"用）。
 pub fn schema_sql() -> &'static str {
     SCHEMA_SQL
+}
+
+/// DDL 里**声明的**表名（`CREATE TABLE IF NOT EXISTS <name>`）。
+///
+/// 它是 [`open_or_create`] 那条自愈检查的判据，也是"加表忘了 bump 版本"这条静默故障的
+/// 唯一解药。⚠ 解析的是**我们自己的** DDL 文本，所以判据只能是"这一种写法"——
+/// 哪天有人用别的写法建表（换行 / 加引号 / `CREATE VIRTUAL TABLE`），
+/// `every_declared_table_is_actually_created` 会当场变红（那条用例盯的正是这个）。
+pub fn declared_tables() -> Vec<&'static str> {
+    const MARK: &str = "CREATE TABLE IF NOT EXISTS ";
+    let mut out: Vec<&'static str> = Vec::new();
+    let mut rest = SCHEMA_SQL;
+    while let Some(at) = rest.find(MARK) {
+        let tail = &rest[at + MARK.len()..];
+        let name = tail.split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("");
+        if !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+        rest = tail;
+    }
+    out
+}
+
+/// 库里**缺**哪些 DDL 声明过的表（空 = 一切正常）。
+fn missing_tables(conn: &Connection) -> rusqlite::Result<Vec<&'static str>> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for name in declared_tables() {
+        let found: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            rusqlite::params![name],
+            |row| row.get(0),
+        )?;
+        if found == 0 {
+            out.push(name);
+        }
+    }
+    Ok(out)
 }
 
 pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Connection> {
@@ -270,6 +350,89 @@ mod tests {
         let again = open_or_create(&path).expect("更新的库也要能打开（只警告）");
         assert_eq!(schema_version(&again).unwrap(), 99, "不许把它降级写回去");
         std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+    }
+
+    /// ★ **自愈**：库的版本号够新、但 DDL 里声明的一张表不存在 —— 必须把它补上。
+    ///
+    /// 这一条复刻的是 2026-09-27 的真机现场：库停在 `user_version=1`，`db/schema.sqlite.sql`
+    /// 里**有** `workflow_recipes` 的完整 DDL，而库里**没有这张表**（`character_cards` 有）。
+    /// 修之前 `open_or_create` 会在"版本号够新"处直接早退，于是那张表**永远不会被建出来**，
+    /// 直到某个端点报 `no such table` —— 而那时候没人会想到是迁移。
+    #[test]
+    fn open_or_create_heals_a_database_missing_a_declared_table() {
+        let path = temp_path("heal");
+        let conn = open_or_create(&path).unwrap();
+        // 装作这张表是**后加的 DDL**：删掉它，版本号原样留着（= "加了表没 bump 版本"的现场）
+        conn.execute_batch("DROP TABLE workflow_recipes;").unwrap();
+        let gone: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workflow_recipes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(gone, 0, "前提：这张表真的被删掉了");
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION, "版本号仍是新的");
+        drop(conn);
+
+        let again = open_or_create(&path).expect("要能自愈");
+        let healed: i64 = again
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workflow_recipes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(healed, 1, "DDL 声明过、库里没有的表必须被补上");
+        assert_eq!(schema_version(&again).unwrap(), SCHEMA_VERSION);
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+    }
+
+    /// DDL 末尾那行 `PRAGMA user_version = N` 与 [`SCHEMA_VERSION`] **必须是同一个数**。
+    ///
+    /// 它俩是两个真源（一份给两端共用的 DDL、一份给 Rust 的迁移逻辑），而漂了的表现是
+    /// 静默的：自愈路径会**跑一遍 DDL**，那行就把版本号写回旧值（2026-09-27 实测踩到：
+    /// 表补上了，`user_version` 从 2 退回 1）。Rust 侧现在取 `max(...)` 兜住这个方向，
+    /// 但"两个数本来就该相等"这件事仍然要用一条用例钉住。
+    #[test]
+    fn ddl_declared_version_matches_the_constant() {
+        let declared: i64 = SCHEMA_SQL
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("PRAGMA user_version = "))
+            .find_map(|value| value.trim_end_matches(';').trim().parse().ok())
+            .expect("DDL 末尾应当有一行 `PRAGMA user_version = N;`");
+        assert_eq!(
+            declared, SCHEMA_VERSION,
+            "db/schema.sqlite.sql 末尾的 user_version 与 db.rs 的 SCHEMA_VERSION 漂了 —— \
+             加表/改列时两个一起 +1"
+        );
+    }
+
+    /// 钉住那条解析器：**DDL 里声明的每一张表，灌完 DDL 之后都必须真的存在**。
+    ///
+    /// 少了它，`declared_tables()` 一旦漏读一张（换了写法 / 漏了 `CREATE TABLE IF NOT EXISTS`
+    /// 这个前缀），自愈检查就会**静默地不检查那一张** —— 而那正是它存在的全部意义。
+    #[test]
+    fn every_declared_table_is_actually_created() {
+        let conn = open_memory().unwrap();
+        conn.execute_batch(SCHEMA_SQL).unwrap();
+        let declared = declared_tables();
+        assert!(declared.contains(&"workflow_recipes"), "至少得认得出这张表：{declared:?}");
+        assert!(declared.contains(&"character_cards"), "{declared:?}");
+        assert!(declared.contains(&"_sync_log"), "{declared:?}");
+        for name in &declared {
+            let found: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                    rusqlite::params![name],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(found, 1, "{name} 在 DDL 里声明了却没建出来（解析器漏了？）");
+        }
+        // 反过来也要成立：库里建出来的表**一张都不许是**"声明之外"的
+        // （漏读一张 = 自愈检查会漏掉那一张，那是最危险的方向）
+        assert!(declared.len() >= 20, "表数明显变少说明解析器坏了：{}", declared.len());
     }
 
     /// R1：读回来必须为 1（"写了就算"不算数）。

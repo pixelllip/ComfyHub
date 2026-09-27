@@ -2865,3 +2865,87 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 | 桌面/手机两侧的剩余项（M4 补全 / M5 排队提交 / M6 离线模型清单 / 手机 `deleteConversation`） | ⛔ 未做（见 §10.8 的移动端那张表） |
 | 图像编辑的 `light=auto`、`>1024` 长边的人物图、"人变糊"的单变量对照 | ⛔ 未做（见 §15.4 / §16.7；`light` 那个死变量已清掉） |
 
+---
+
+## 20. 2026-09-27：一个**真机上正在发生**的静默故障 —— schema 加了表，库里没有
+
+> 这一节是一件**独立的 bug**，在准备搬配方三件（要用 `workflow_recipes`）时顺手查出来的。
+> 它比配方本身重要：**同一类故障对"以后任何一次加表"都成立**，而且**不报错**。
+
+### 20.1 现场
+
+真机库（`.db\comfyhub.db`）实测：
+
+```
+PRAGMA user_version        = 1
+sqlite_master 里有          character_cards, _sync_log            ← 有
+                            workflow_recipes                       ← **没有**
+```
+
+而 `db/schema.sqlite.sql` 里 `workflow_recipes` 的 DDL（含注释、索引、FK）**一字不缺**。
+差别只在于"那张表的 DDL 是什么时候加进文件的"：`character_cards` 加得早、
+`workflow_recipes`（W2，2026-09-26）加得晚。
+
+**为什么它永远建不出来**（`db.rs` 的 `open_or_create` 旧逻辑）：
+
+```
+version(1) >= SCHEMA_VERSION(1)  →  直接 return Ok(conn)   ← 早退，一辈子不跑 DDL
+```
+
+而"加表的人"以为版本号会自动管这件事 —— **`SCHEMA_VERSION` 从头到尾是 1，没人动过**。
+于是：表在 DDL 里、索引在 DDL 里、契约文档里也写着它，**库里就是没有**，
+一直要等到某个端点/工具第一次真去查它，才会以 `no such table` 的形式炸出来 ——
+而那时候**没有人会想到是迁移**（会去查 SQL、查权限、查库文件）。
+
+### 20.2 修法（两层，缺一不可）
+
+| # | 做什么 | 为什么不能省 |
+| --- | --- | --- |
+| 1 | `SCHEMA_VERSION` **1 → 2**，`db/schema.sqlite.sql` 末尾那行 `PRAGMA user_version` 一起改成 2 | 这是**设计好的**迁移闸门：老库（1 < 2）会走一遍收敛式 DDL，`workflow_recipes` 当场建出来 |
+| 2 | **自愈**：`version >= SCHEMA_VERSION` 时**先核对 DDL 里声明的表是不是都在**（`declared_tables()` vs `sqlite_master`），缺哪张补哪张，并且**打一行日志把补了什么说出来** | 第 1 条只修了"这一次"。它挡不住下一次"加了表忘了 bump 版本" —— 那是**同一类静默故障**，而自愈把它变成"自己就好了 + 日志里看得见" |
+
+顺带修掉一个**在写自愈时就踩到的**坑（值得记）：`db/schema.sqlite.sql` 末尾自己也有一行
+`PRAGMA user_version = N`，而自愈路径**会跑一遍 DDL** —— 第一版写的是
+"版本号比后端低才写回"，于是自愈成功、表补上了，**`user_version` 却从 2 退回 1**
+（用例 `open_or_create_heals_a_database_missing_a_declared_table` 当场抓到）。
+现在取 **`max(库里的值, SCHEMA_VERSION)`**：既不许把更新的库降级，也不会被 DDL 里那行拖回去；
+另加一条用例 `ddl_declared_version_matches_the_constant` 钉住"两个数本来就该相等"。
+
+### 20.3 硬证据（真库副本 + 真二进制，两次实测）
+
+**① 老库正常迁移路径**
+
+```
+BEFORE: user_version=1, has workflow_recipes = False
+起后端（--db <副本>）→ stderr: [db] 已把老库收敛到 schemaVersion=2
+                     → /api/health: db=ok schemaVersion=2
+AFTER : user_version=2, has workflow_recipes = True
+```
+
+**② 自愈路径**（把版本号留在 2、手工 `DROP TABLE workflow_recipes` 制造"加了表忘了 bump"的现场）
+
+```
+BEFORE: user_version=2, has workflow_recipes = False
+起后端 → stderr: [db] 库里缺 1 张 DDL 声明过的表（workflow_recipes）—— 多半是**加了表没 bump SCHEMA_VERSION**。
+                 跑一遍收敛式 DDL 补上；已有数据不动。
+                [db] 已补上 1 张缺的表（workflow_recipes）：…\comfyhub.db
+       → /api/health: db=ok schemaVersion=2
+AFTER : user_version=2（**没有退回 1**）, has workflow_recipes = True
+```
+
+`cargo test` **617 例全绿**（453 lib + 134 api_test + 其它；新增 3 例 db 用例），
+`cargo check --all-targets` 零 warning。
+
+> 📌 **用户那份真库我一个字都没动**（照仓库约定，抽查一律对着副本）。它停在
+> `user_version=1`、缺 `workflow_recipes` —— **下一次启动后端时上面那条"老库正常迁移路径"
+> 会自动把它修好**，不需要任何手工动作。
+
+### 20.4 这条教训该怎么用
+
+1. **`db/schema.sqlite.sql` 是两端共用的一份文件**，往里加表**不是**"只改一行 DDL"——
+   `SCHEMA_VERSION` 是那道闸门，两个数必须一起动（现在有用例钉着）。
+2. **"版本号够新"不等于"schema 是新的"**。任何"用版本号当代理指标、然后据此跳过动作"的
+   设计都有这一模一样的缝：代理指标与真实状态**可以不一致**，而跳过动作是静默的。
+3. 因此**凡是"据此跳过"的判据，都该顺手验一次真实状态**（这里验的就是 `sqlite_master`），
+   代价是每个连接开库时 21 次 `sqlite_master` 查询 —— 换掉一整类静默故障，值。
+
