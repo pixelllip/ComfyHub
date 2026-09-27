@@ -146,6 +146,38 @@
 
 ---
 
+## 4.1 `kind: "submit_job"` —— 手机排队、桌面真正提交（M5，2026-09-27 拍板）
+
+**它不是"一张表的行"**，而是一条**指令**：所以桌面 `push` 里单独一个分支，
+不走 `table_of_kind`；`refId` 是手机生成的 `queueId`（幂等键）。
+
+```json
+{ "kind": "submit_job", "refId": "<queueId>", "op": "upsert",
+  "payload": {
+    "queueId": "…", "conversationId": "…", "runId": "…",
+    "promptId": 310, "sourceRef": "file:<sha256>",
+    "overrides": { "6.text": "…" }, "nsfw": false,
+    "requestedAt": "2026-09-27T…Z", "requestedBy": "phone-7f3a…"
+  } }
+```
+
+四条硬约束：
+
+| 约束 | 为什么 |
+| --- | --- |
+| **桌面收到后不许直接提交**，必须先 `ToolApprovalGate.open(callId)` 再发 `tool.requested`，**在桌面上等人点批准** | R8 的顺序；**"手机点过提交"不算批准**（总纲 §7 待定项 2）。手机上那一下只是"排队" |
+| 批准后走**现有 `comfy_submit` 全链路**（审核 → 提交 → 等 → `capture.captureRun()` 入库），**一条捷径都不许抄** | R10。抄捷径的表现是"手机上排了队、画廊里没有" |
+| **结果走普通下行同步回手机**：桌面往**发起那条会话**追加一条助手消息（`role = assistant`，正文一句人话 + 一个 `tool_result` 块，`json_payload` 里带 `mediaIds`） | 不为 M5 另造第二条回传通道 —— 手机本来就在同步 `ai_conversations` / `ai_messages` / `ai_message_parts` |
+| **失败也要回一条**（`tool_result` 带 `ok=false` + 稳定码） | 手机上那条"已排队"永远停在排队中是最坏的表现：用户以为在跑，其实什么都没发生 |
+
+- **幂等**：`queueId` 已有终态 → 回 `applied` 且**不重复提交**（手机重试是常态）。
+- **排队 ≠ 已提交**：手机侧工具结果里**不许**出现 `mediaIds`、**不许**说"已提交"（R11）；
+  桌面那条回传消息才是唯一凭据。
+- 手机侧旧的 `OutboxKind.RUN` **不再需要**：手机自己的 Run 行走 `ai_run`（§4 那张表），
+  只有"排队提交"这条指令用 `submit_job`。
+
+---
+
 ## 5. 账本裁剪（桌面侧的后台任务）
 
 ```sql
