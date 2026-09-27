@@ -4068,6 +4068,179 @@ class _SubmissionRow extends StatelessWidget {
   }
 }
 
+/// 跨端待审批（M5）：**手机排上来的提交**在桌面上长出来的那张卡。
+///
+/// # 为什么要有它
+///
+/// 桌面上那张"等你批准"的卡平时是跟着 **Run 的 SSE** 长的，而手机排上来的提交
+/// （契约 §4.1 的 `submit_job`，`callId` 形如 `submit:<queueId>`）**不在任何本机 Run
+/// 的事件流里** —— 没有这张卡，"手机排的队"在桌面上既看不见也点不了，只能等它超时。
+/// 数据源只有 `GET /api/ai/pending` 一个（`asks` 那一份不在这里画：提问卡跟着会话走，
+/// 由消息列表里的 `_AskCard` 管）。
+///
+/// # 几条纪律
+///
+///  * **只有桌面画它**（手机上审批归桌面 —— 给一个点了没用的按钮不如不给）；
+///  * 一屏最多 [_PendingApprovals.maxVisible] 条 + 一行"还有 N 条"（右侧栏本来就窄，
+///    排队多了不能撑爆它）；
+///  * **列表为空时整块不占位**（与 [_ComfyProgress] 同一条纪律，连下面那道间距都不留）；
+///  * 拉不到列表**如实说一句**（一行小字），但别把整页搞得像坏了；
+///  * 点完**按返回值如实更新**：`accepted=false` 时那行不许消失，还要说清"桌面没接受"。
+class _PendingApprovals extends StatefulWidget {
+  final AiWorkspaceStore store;
+
+  /// 一屏最多画几条（剩下的折成一行"还有 N 条"）。
+  static const maxVisible = 5;
+
+  const _PendingApprovals({required this.store});
+
+  @override
+  State<_PendingApprovals> createState() => _PendingApprovalsState();
+}
+
+class _PendingApprovalsState extends State<_PendingApprovals> {
+  /// 正在处理的那一条（处理期间按钮禁用，防重复点）。
+  String? _busyCallId;
+
+  /// 上一次动作的结果（人话）。`accepted=false` 时用错误色显示 —— 不许悄悄吞掉。
+  String? _message;
+  bool _failed = false;
+
+  /// 参数按后端给的原文显示（**不解析、不猜**），压成一行免得把窄栏撑开。
+  static String _oneLineArgs(String raw) => raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final approvals = widget.store.pendingOverview.approvals;
+    final error = widget.store.pendingError;
+
+    // 没有待办、也没出错：整块不占位。
+    if (approvals.isEmpty && error == null) return const SizedBox.shrink();
+
+    final visible = approvals.take(_PendingApprovals.maxVisible).toList();
+    final hidden = approvals.length - visible.length;
+
+    return Padding(
+      // 间距放在这里面：空的时候整块（含间距）一起消失
+      padding: const EdgeInsets.only(bottom: 10),
+      child: _PanelCard(
+        key: const Key('ai-panel-card-pending'),
+        title: '待审批',
+        // 条数只在**真有**待办时显示：列表空着的时候这一行整块只因"拉不到"而存在，
+        // 那时写一个"0 条"既没意义，又和右侧栏别处的条数（长期记忆的"N 条"）撞脸。
+        trailing: approvals.isEmpty
+            ? null
+            : Text(
+                '${approvals.length} 项待批',
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+        children: [
+          if (error != null)
+            Text(
+              '待审批列表取不到：$error',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error),
+            ),
+          for (final a in visible) _row(theme, a),
+          if (hidden > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                '还有 $hidden 条（先处理上面这几条）',
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+            ),
+          if (visible.any((a) => a.isQueuedSubmit))
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                // 用户拍板过的那条规矩，写在卡片上：手机点过提交**不算**批准
+                '手机上点「提交」只是排队，真正提交要在这里点「批准」。',
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+            ),
+          if (_message != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                _message!,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: _failed ? theme.colorScheme.error : theme.colorScheme.primary,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 一行 = 固定行高的"这是什么 + 批准 / 拒绝"。
+  ///
+  /// 行高是常数（AGENTS §6）：右侧栏是懒构建的滚动区，行自己撑高会让滚动条越滚越短。
+  Widget _row(ThemeData theme, AiPendingApproval a) {
+    final label = a.isQueuedSubmit ? '手机排队的提交' : (a.name.isEmpty ? '未知工具' : a.name);
+    final detail = _oneLineArgs(a.argumentsJson);
+    final busy = _busyCallId != null;
+    const padding = EdgeInsets.symmetric(horizontal: 10);
+    const minSize = Size(0, 28);
+    const tapTarget = MaterialTapTargetSize.shrinkWrap;
+    return SizedBox(
+      height: 38,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              detail.isEmpty ? label : '$label · $detail',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall,
+            ),
+          ),
+          const SizedBox(width: 4),
+          FilledButton(
+            key: Key('ai-pending-approve-${a.callId}'),
+            onPressed: busy ? null : () => _resolve(a, approve: true),
+            style: FilledButton.styleFrom(
+              padding: padding,
+              minimumSize: minSize,
+              tapTargetSize: tapTarget,
+            ),
+            child: const Text('批准'),
+          ),
+          const SizedBox(width: 4),
+          OutlinedButton(
+            key: Key('ai-pending-deny-${a.callId}'),
+            onPressed: busy ? null : () => _resolve(a, approve: false),
+            style: OutlinedButton.styleFrom(
+              padding: padding,
+              minimumSize: minSize,
+              tapTargetSize: tapTarget,
+            ),
+            child: const Text('拒绝'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 点「批准 / 拒绝」：立刻发出去，**按返回值如实更新界面**。
+  Future<void> _resolve(AiPendingApproval a, {required bool approve}) async {
+    setState(() {
+      _busyCallId = a.callId;
+      _message = null;
+    });
+    final result = await widget.store.resolvePendingApproval(a.callId, approve: approve);
+    if (!mounted) return;
+    setState(() {
+      _busyCallId = null;
+      _failed = !result.accepted;
+      _message = result.message;
+    });
+  }
+}
+
 class _ContextPanel extends StatefulWidget {
   final AiWorkspaceStore store;
   const _ContextPanel({required this.store});
@@ -4107,12 +4280,17 @@ class _ContextPanelState extends State<_ContextPanel> {
       // 实时进度（用户"其他建议"第 1 条）：右侧栏一显示就开始轮询，
       // 这样"AI 刚提交的任务 / 用户自己在 ComfyUI 里点的任务"都能看到进度。
       widget.store.startWatchingComfy();
+      // 跨端待审批（M5）：手机排上来的提交在桌面上要看得见、点得动。
+      // 与实时进度**同一条纪律**（只在这一栏显示时轮询，dispose 里停），
+      // 外加一条：**手机上不轮询也不画那张卡** —— 审批一律归桌面。
+      if (!widget.store.isLocal) widget.store.startWatchingPending();
     });
   }
 
   @override
   void dispose() {
     widget.store.stopWatchingComfy();
+    widget.store.stopWatchingPending();
     _skillSearch.dispose();
     super.dispose();
   }
@@ -4154,7 +4332,12 @@ class _ContextPanelState extends State<_ContextPanel> {
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
           sliver: SliverList.list(children: [
-            // 实时进度（用户"其他建议"第 1 条）：AI 提交的任务 / ComfyUI 队列就显示在最上面，
+            // 跨端待审批（M5）：**有人等你点批准**放在最上面（比进度更需要动手），
+            // 手机排上来的提交就在这里露面。只有桌面画它：手机上审批归桌面，
+            // 给一个点了没用的按钮不如不给。
+            // 它自己负责"没有待办时整块不占位"（含下面那道间距），所以这里不另加 SizedBox。
+            if (!store.isLocal) _PendingApprovals(store: store),
+            // 实时进度（用户"其他建议"第 1 条）：AI 提交的任务 / ComfyUI 队列，
             // 用户在对话里说"帮我跑一张"之后，不用切到 ComfyUI 就能看到它跑到哪了。
             _ComfyProgress(store: store),
             const SizedBox(height: 10),

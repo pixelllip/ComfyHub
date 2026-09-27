@@ -785,9 +785,108 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
+  // -----------------------------------------------------------------------
+  //  跨端待审批（M5）：手机排上来的提交也在这一张卡上等桌面点批准
+  // -----------------------------------------------------------------------
+
+  /// 最近一次拿到的待批总览（`GET /api/ai/pending`）。
+  ///
+  /// 里面装的是**两类同形的东西**：桌面 Run 的待批工具调用，以及**手机排队的提交**
+  /// （`callId` 形如 `submit:<queueId>`，契约 §4.1）。后者不在任何本机 Run 的事件流里，
+  /// 所以只能靠这个接口让它露面 —— 否则"手机排的队"在桌面上看不见、点不了。
+  AiPendingOverview pendingOverview = AiPendingOverview.empty;
+
+  /// 拉待批清单失败的原因（成功为 null）。
+  ///
+  /// 界面**如实显示一行**，绝不把"拉不到"装成"没有待批"——那两句对用户的意思完全相反。
+  String? pendingError;
+
+  Timer? _pendingTimer;
+  bool _pendingInFlight = false;
+
+  /// 这台设备是不是"手机那一端"（本机 harness + 本机密钥库）。
+  ///
+  /// 审批一律归桌面（用户拍板："有关工作流的交给桌面审批处理"），所以界面靠它决定
+  /// **画不画那张待批卡**、要不要白轮询。
+  bool get isLocal => _source.isLocal;
+
+  /// 开始轮询待批清单（右侧栏开始显示时调；与 [startWatchingComfy] 同一条纪律）。
+  ///
+  /// 节奏是固定的 5 秒一次：这里没有"活动与否"可看，而"有人等你点批准"这件事
+  /// 慢一秒发现都算慢 —— 但也不能更勤，右侧栏一开着就每秒问后端一次是纯浪费。
+  void startWatchingPending() {
+    _pendingTimer?.cancel();
+    _pendingTimer = Timer.periodic(const Duration(seconds: 5), (_) => unawaited(refreshPending()));
+    unawaited(refreshPending());
+  }
+
+  void stopWatchingPending() {
+    _pendingTimer?.cancel();
+    _pendingTimer = null;
+  }
+
+  /// 拉一次待批清单。失败**只记在 [pendingError]**：不弹错、也不清空上一次拿到的列表
+  /// （清空就等于告诉用户"没人等你"，那是假话）。
+  Future<void> refreshPending() async {
+    if (_pendingInFlight) return;
+    _pendingInFlight = true;
+    try {
+      pendingOverview = await _api.pending();
+      pendingError = null;
+    } catch (e) {
+      pendingError = '$e';
+    } finally {
+      _pendingInFlight = false;
+      notifyListeners();
+    }
+  }
+
+  /// 批准 / 拒绝一条待批（工具调用与手机排队的提交**同一条通道**）。
+  ///
+  /// 返回的 `accepted` 是后端给的实话：`false` = 这一条已经结束 / 超时 / 早被人点过，
+  /// 界面**不许假装成功**（更不许把那行去掉）。
+  ///
+  /// 与 [approveToolCall] 的差别只在"这条不在本机任何 Run 的事件流里"：
+  /// 所以这里不 patch 气泡里的工具卡，而是**就地更新这张跨端列表**。
+  Future<({bool accepted, String message})> resolvePendingApproval(
+    String callId, {
+    required bool approve,
+  }) async {
+    try {
+      final accepted =
+          approve ? await _api.approveToolCall(callId) : await _api.denyToolCall(callId);
+      if (!accepted) {
+        return (
+          accepted: false,
+          message: '桌面没有接受这一条${approve ? '批准' : '拒绝'}：它可能已经结束或超时了，可以等下一次刷新确认。',
+        );
+      }
+      // 被接受了：后端那一刻确实把它移出了待办，就地摘掉（不靠下一次轮询刚好拉回来）。
+      pendingOverview = pendingOverview.withoutApproval(callId);
+      notifyListeners();
+      // 再拉一次与后端对齐：成功也要拉 —— 别的设备可能同时又排了新的。
+      unawaited(refreshPending());
+      // 说人话要分两类（同一张卡上两类的"批准"含义不同）：
+      // 排队提交走 R10 那条全链路，**跑完的产物不在这一句里许诺**（结果回发起那条会话）；
+      // 别的工具调用则是"模型接着往下做"。
+      final queued = callId.startsWith('submit:');
+      return (
+        accepted: true,
+        message: approve
+            ? (queued
+                ? '已批准：桌面会走 comfy_submit 那条链路真提交，跑完产物进画廊、结果回那条会话。'
+                : '已批准这次工具调用，模型会继续执行。')
+            : (queued ? '已拒绝这一条排队提交，桌面不会提交它。' : '已拒绝这次工具调用。'),
+      );
+    } catch (e) {
+      return (accepted: false, message: '${approve ? '批准' : '拒绝'}失败：$e');
+    }
+  }
+
   @override
   void dispose() {
     stopWatchingComfy();
+    stopWatchingPending();
     // 攒着的流式通知定时器要一起收掉，否则页面都销毁了还会被回调
     _streamFlush?.cancel();
     _streamFlush = null;

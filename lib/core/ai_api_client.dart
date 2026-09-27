@@ -260,6 +260,18 @@ class AiApiClient {
 
   bool _approvalAccepted(dynamic raw) => raw is Map && raw['accepted'] == true;
 
+  // --- 跨端待办总览（M1 契约；M5 起 approvals 里并进手机排队的提交） ----------
+
+  /// `GET /api/ai/pending`：**别的设备刚连上来**时一次补齐"正在等人"的清单
+  /// （AI 的提问 + 待批准的调用）。
+  ///
+  /// 为什么桌面也需要它：桌面的审批卡平时是跟着 **Run 的 SSE** 长的，而手机排上来的
+  /// 提交（契约 §4.1 的 `submit_job`）**不在任何本机 Run 的事件流里** ——
+  /// 没有这个接口，"手机排的队"在桌面上就看不见、点不了，只能等超时。
+  /// 批准 / 拒绝仍然走同一条通道（[approveToolCall] / [denyToolCall]）。
+  Future<AiPendingOverview> pending() async =>
+      AiPendingOverview.fromJson(Map<String, dynamic>.from(await _get('/api/ai/pending') as Map));
+
   // --- 提问（用户建议 ⑥）------------------------------------------------
 
   /// 这个 Run 现在还在等用户回答什么（没有就返回 null）。

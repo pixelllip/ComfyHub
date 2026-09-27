@@ -2426,3 +2426,177 @@ class AiCapabilityProbeResponse {
             const [],
       );
 }
+
+// ---------------------------------------------------------------------------
+//  跨端待办总览（`GET /api/ai/pending`，M1 定的契约；M5 起 approvals 里并进
+//  手机排队的提交）
+//
+//  它是给"另一台设备刚连上来"用的：手机、第二个窗口、刚重启完的桌面 App ——
+//  它们**没有经历**那条 SSE 事件流，所以"正在等人"的卡片（AI 的提问、需要批准的
+//  调用）靠这一个接口一次补齐，而不是逐个 Run 去问。
+//
+//  ⚠ 键名逐字对齐 `server-rs/src/pending.rs`（那里少一个键，界面上就少一块内容）：
+//    * `approvals[].askedAt` 是 **ISO 文本**；
+//    * `asks[].askedAt` 是 **epoch 毫秒**（数字）。
+//  两个 `askedAt` 类型不同，别想着"统一一下"。
+// ---------------------------------------------------------------------------
+
+/// `GET /api/ai/pending` 的响应体：`{ asks: [...], approvals: [...] }`。
+class AiPendingOverview {
+  /// AI 还在等的提问（Rust 侧直接读 `ai_questions` 里 `status='pending'` 的行）。
+  final List<AiPendingAsk> asks;
+
+  /// 还在等批准的调用 —— **两类合成一个列表**：[AiPendingApproval] 那一份注释写了为什么。
+  final List<AiPendingApproval> approvals;
+
+  const AiPendingOverview({this.asks = const [], this.approvals = const []});
+
+  static const empty = AiPendingOverview();
+
+  factory AiPendingOverview.fromJson(Map<String, dynamic> json) => AiPendingOverview(
+        asks: (json['asks'] as List?)
+                ?.whereType<Map>()
+                .map((e) => AiPendingAsk.fromJson(Map<String, dynamic>.from(e)))
+                .toList() ??
+            const [],
+        approvals: (json['approvals'] as List?)
+                ?.whereType<Map>()
+                .map((e) => AiPendingApproval.fromJson(Map<String, dynamic>.from(e)))
+                .toList() ??
+            const [],
+      );
+
+  /// 一件待办都没有（界面上"整块不占位"用得上）。
+  bool get isEmpty => asks.isEmpty && approvals.isEmpty;
+
+  /// 摘掉一条已被后端接受的审批（返回新对象，不改原对象）。
+  ///
+  /// 点了「批准 / 拒绝」且 `accepted=true` 之后就地摘掉它：后端那一刻**确实**
+  /// 把它移出了待办（`submit_jobs` / `ai_tool_calls` 的 `approval` 当场置位），
+  /// 不该等"下一次轮询刚好拉回来"才从界面上消失。
+  AiPendingOverview withoutApproval(String callId) => AiPendingOverview(
+        asks: asks,
+        approvals: approvals.where((a) => a.callId != callId).toList(),
+      );
+}
+
+/// `approvals[]` 的一条 —— 正在等人批准的调用。
+///
+/// **两类东西共用这一个形状**（`pending.rs` 的文件头）：
+///   1. 桌面 Run 的工具调用（`ai_tool_calls.status='pending'`）；
+///   2. **手机排队的提交**（M5，契约 §4.1）：`callId` 形如 `submit:<queueId>`，
+///      后端把 `name` 写成它真正要干的事（`comfy_submit`）。
+///
+/// 为什么并成一个列表：**审批在桌面上必须看得见**，而复用的是同一条通道
+/// （同一个 `POST /api/ai/tool-calls/{callId}/approve|deny`）——
+/// 客户端因此不必分两路处理。
+class AiPendingApproval {
+  final String callId;
+  final String runId;
+  final String conversationId;
+
+  /// 工具名。手机排队的提交这里是 `comfy_submit`。
+  final String name;
+
+  /// 参数原文（**JSON 文本**，不是对象）。界面只把它当一行字显示，不在这里解析。
+  final String argumentsJson;
+
+  /// **ISO 文本**（`rs.isoTime` 的口径）；后端拿不到时间时是 null。
+  ///
+  /// ⚠ 与 [AiPendingAsk.askedAt] 的类型不同，别互换。
+  final String? askedAt;
+
+  const AiPendingApproval({
+    required this.callId,
+    this.runId = '',
+    this.conversationId = '',
+    this.name = '',
+    this.argumentsJson = '',
+    this.askedAt,
+  });
+
+  factory AiPendingApproval.fromJson(Map<String, dynamic> json) => AiPendingApproval(
+        callId: (json['callId'] ?? '').toString(),
+        runId: (json['runId'] ?? '').toString(),
+        conversationId: (json['conversationId'] ?? '').toString(),
+        name: (json['name'] ?? '').toString(),
+        argumentsJson: (json['argumentsJson'] ?? '').toString(),
+        askedAt: json['askedAt']?.toString(),
+      );
+
+  /// 这条是不是**手机排上来的提交**（桌面 Run 的工具调用是 `call_00_…`）。
+  ///
+  /// 判据就是后端的 `call_id_for()`：`submit:<queueId>`（`submit_queue.rs`）。
+  /// 界面靠它说人话（"手机排队的提交"）并提醒"手机点的那一下只是排队"。
+  bool get isQueuedSubmit => callId.startsWith('submit:');
+}
+
+/// `asks[]` 的一条（提问）。
+///
+/// 形状与 `questions.rs::row_to_json` 逐字一致 —— 它与界面上的 [AiQuestion] 是
+/// **同一份 wire 形状的两个用处**：`AiQuestion` 是"气泡里那张正在被 SSE 打的卡"
+/// （会被 `copyWith` 就地改状态），而这一份是 `GET /api/ai/pending` 的**只读快照**
+/// （"另一台设备刚连上来"的补卡场景，还多带一个 `askedAt`）。
+class AiPendingAsk {
+  final String questionId;
+  final String runId;
+  final String conversationId;
+  final String question;
+  final List<String> options;
+  final bool allowFreeText;
+  final bool answered;
+
+  /// **epoch 毫秒**（数字）。别当成 ISO 文本 —— 审批那一份才是 ISO。
+  final int askedAt;
+
+  final int index;
+  final int total;
+  final String groupId;
+  final bool multiSelect;
+
+  /// 下面这几个是**可空键**：后端没有就整个键不出现（`explicitNulls = false`）。
+  final String? header;
+  final String? answer;
+  final int? optionIndex;
+  final List<int> optionIndexes;
+
+  const AiPendingAsk({
+    required this.questionId,
+    this.runId = '',
+    this.conversationId = '',
+    this.question = '',
+    this.options = const [],
+    this.allowFreeText = true,
+    this.answered = false,
+    this.askedAt = 0,
+    this.index = 0,
+    this.total = 1,
+    this.groupId = '',
+    this.multiSelect = false,
+    this.header,
+    this.answer,
+    this.optionIndex,
+    this.optionIndexes = const [],
+  });
+
+  factory AiPendingAsk.fromJson(Map<String, dynamic> json) => AiPendingAsk(
+        questionId: (json['questionId'] ?? '').toString(),
+        runId: (json['runId'] ?? '').toString(),
+        conversationId: (json['conversationId'] ?? '').toString(),
+        question: (json['question'] ?? '').toString(),
+        options: (json['options'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        allowFreeText: json['allowFreeText'] != false,
+        answered: json['answered'] == true,
+        askedAt: (json['askedAt'] as num?)?.toInt() ?? 0,
+        index: (json['index'] as num?)?.toInt() ?? 0,
+        total: (json['total'] as num?)?.toInt() ?? 1,
+        groupId: (json['groupId'] ?? '').toString(),
+        multiSelect: json['multiSelect'] == true,
+        header: json['header']?.toString(),
+        answer: json['answer']?.toString(),
+        optionIndex: (json['optionIndex'] as num?)?.toInt(),
+        optionIndexes:
+            (json['optionIndexes'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ??
+                const [],
+      );
+}
