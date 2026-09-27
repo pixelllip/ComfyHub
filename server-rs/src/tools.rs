@@ -11,11 +11,12 @@
 //! | `comfy_load_workflow` | `DESKTOP` | 第 44 步；把本机工作流文件读进库（界面格式按 `/object_info` 转 API 图）。⚠ 组节点不展开、"模拟用户行为"未实现，两者都如实报 |
 //! | `comfy_use_media` / `comfy_use_attachment` / `comfy_make_mask` | `DESKTOP` | **图像编辑三件**（见 [`crate::image_edit`]）：把画廊产物 / 用户附件投放进 ComfyUI 的 `input` 目录，以及生成"白=重绘区"的遮罩。三件都要用户批准（会往用户机器上写文件） |
 //! | `comfy_check_inputs` / `comfy_fit_workflow` | `DESKTOP` | 第 62 步的**体检两件**（见 [`crate::workflow_fit`]）：前者列"还等着外部给输入的位置"（用户没给参考图时的那个现场），后者把图里点名的模型与本机清单对一遍。两件都**只报不改**、出厂 `ALLOW` |
+//! | `comfy_audit_workflow` | `DESKTOP` | 第 63 步的**审核**（见 [`crate::workflow_audit`]）：七项检查只报事实，其中"必跑不了"的三项（前端节点 / 版本不兼容 / 本机没有的节点类）会被提交闸门拦下，参数/显存/提示词风格**只提醒**。出厂 `ALLOW` |
+//! | `comfy_prune_workflow` | `DESKTOP` | 第 63 步的**摘节点 / 拼节点**（见 [`crate::workflow_prune`]）：从输出节点反向做可达性分析摘掉无关分支并把下游的线接回上游，`analyze=true` 时一个字都不改。出厂 `ALLOW`（它不写盘、不提交，改好的图是**内联**返回的） |
 //!
 //! 还没搬的：联网两个（`web_search` / `web_fetch`，要 Keenable 客户端 + `EndpointGuard`）、
-//! `civitai_search` / `find_model`、`comfy_audit_workflow` / `comfy_prune_workflow`、
-//! 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`）、
-//! 官方 comfy-mcp 那 39 个（要 `McpStdioClient`，运行时拉的，不进这份静态清单）。
+//! `civitai_search` / `find_model`、配方三件（`comfy_learn_workflow` / `comfy_list_recipes` /
+//! `comfy_bind_recipe`）、官方 comfy-mcp 那 39 个（要 `McpStdioClient`，运行时拉的，不进这份静态清单）。
 //! **没搬的绝不下发**（`declaredTo = 清单 ∩ 本地实现`）。
 //!
 //! # 两个清单的差别（别混用）
@@ -385,18 +386,21 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前二十六个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前二十八个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
 /// + comfy 查询三件（`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status`）
 /// + `comfy_load_workflow` / `comfy_submit` / `comfy_sync_history`
 /// + 资料库两件（角色卡）+ **图像编辑三件**（`comfy_use_media` / `comfy_use_attachment` /
 /// `comfy_make_mask`，见 [`crate::image_edit`]）
 /// + **体检两件**（`comfy_check_inputs` / `comfy_fit_workflow`，见 [`crate::workflow_fit`]，
-/// P4 第 62 步）。
+/// P4 第 62 步）
+/// + **审核 + 摘拼两件**（`comfy_audit_workflow` / `comfy_prune_workflow`，见
+/// [`crate::workflow_audit`] 与 [`crate::workflow_prune`]，P4 第 63 步）。
 /// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
-/// `find_model` / `comfy_audit_workflow` / `comfy_prune_workflow` 各自另起批次。
-pub const IMPLEMENTED: [&str; 26] = [
+/// `find_model` 另起批次。
+pub const IMPLEMENTED: [&str; 28] = [
     "ask_user_question",
+    "comfy_audit_workflow",
     "comfy_check_inputs",
     "comfy_env_report",
     "comfy_find_workflow",
@@ -406,6 +410,7 @@ pub const IMPLEMENTED: [&str; 26] = [
     "comfy_list_workflows",
     "comfy_load_workflow",
     "comfy_make_mask",
+    "comfy_prune_workflow",
     "comfy_submit",
     "comfy_sync_history",
     "comfy_use_attachment",
@@ -547,6 +552,16 @@ pub async fn execute(
         "comfy_get_status" => comfy_get_status(state, arguments).await,
         "comfy_sync_history" => comfy_sync_history(state).await,
         "comfy_load_workflow" => comfy_load_workflow(state, policy, arguments).await,
+        // ---- 审核 + 摘拼两件（P4 第 63 步：用户 2026-09-22 的"审核本地工作流"）---------
+        // `audit` 是**只报事实**的确定性检查（"必跑不了"与"不推荐"分得很清）；
+        // `prune` 是它的对偶 —— 分析与摘除都走**同一套可达性判据**（从输出节点反向走不到
+        // 的才算无关分支），所以"分析说要摘的那几条"拿去执行一定是同一片。
+        "comfy_audit_workflow" => {
+            crate::workflow_audit::tool_audit_workflow(state, arguments).await
+        }
+        "comfy_prune_workflow" => {
+            crate::workflow_prune::tool_prune_workflow(state, arguments).await
+        }
         // ---- 提交（P4 第 48 步：**R10 的落点**）------------------------------
         // 「审核 → 审批 → 提交 → 自己等 → captureRun 入库 → mediaIds」这条链：
         // 审批由执行器（`default_access = ASK`）负责，其余都在 `workflow_submit` 里。
@@ -1920,8 +1935,15 @@ mod tests {
             assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
             assert!(!is_mutating(name), "{name} 只报不改");
         }
+        // 审核 + 摘拼两件（P4 第 63 步）：同样**只报不改**（摘出来的图是**内联**返回的，
+        // 真要落盘得由 write_file 或用户在 ComfyUI 里做）→ 出厂 ALLOW、mutating=false
+        for name in ["comfy_audit_workflow", "comfy_prune_workflow"] {
+            assert!(is_implemented(name), "{name} 应当已实现");
+            assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
+            assert!(!is_mutating(name), "{name} 只报不改");
+        }
         // 还没搬的一个都不许说"实现了"
-        for name in ["find_model", "comfy_audit_workflow", "comfy_prune_workflow", "web_fetch"] {
+        for name in ["find_model", "web_fetch", "comfy_learn_workflow"] {
             assert!(!is_implemented(name), "{name} 还没搬");
         }
     }

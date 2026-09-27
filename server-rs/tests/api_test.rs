@@ -5641,7 +5641,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（25 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（28 个），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
@@ -5652,6 +5652,8 @@ async fn tool_policy_and_nsfw_endpoints() {
         names,
         vec![
             "ask_user_question",
+            // 审核（P4 第 63 步）：七项检查只报事实，"必跑不了"的三项才进提交闸门
+            "comfy_audit_workflow",
             // 体检两件（P4 第 62 步）：列"还等着外部给输入的位置" / 跟本机模型清单对账，
             // 都**只报不改**（用户建议 ①/⑤）—— 按 name 升序排在这里
             "comfy_check_inputs",
@@ -5666,6 +5668,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_load_workflow",
             // 图像编辑三件（投放 + 遮罩）：两阶段编辑的地基，出厂档都是 ask
             "comfy_make_mask",
+            // 摘节点 / 拼节点（P4 第 63 步，用户建议 ②）：改好的图是**内联**返回的
+            "comfy_prune_workflow",
             "comfy_submit",
             "comfy_sync_history",
             "comfy_use_attachment",
@@ -8235,6 +8239,9 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         // 体检两件（P4 第 62 步）
         "comfy_check_inputs",
         "comfy_fit_workflow",
+        // 审核 + 摘拼两件（P4 第 63 步）
+        "comfy_audit_workflow",
+        "comfy_prune_workflow",
     ] {
         assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
     }
@@ -8244,12 +8251,11 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     }
     // 没实现的**一个都不许出现**
     for absent in [
-        "comfy_audit_workflow",
-        "comfy_prune_workflow",
         "web_search",
         "web_fetch",
         "civitai_search",
         "find_model",
+        "comfy_learn_workflow",
     ] {
         assert!(!names.contains(&absent), "{absent} 还没实现却下发了：{names:?}");
     }
@@ -9231,5 +9237,288 @@ async fn comfy_fit_workflow_pairs_graph_models_with_the_instance_inventory() {
     assert!(refused.message.contains("不是一份 API 格式节点图"), "{}", refused.message);
 
     handle.abort();
+    std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+// ===========================================================================
+//  审核 + 摘拼两件（P4 第 63 步）：comfy_audit_workflow / comfy_prune_workflow
+//
+//  这一对工具是用户 2026-09-22「让 AI 具有审核本地工作流的能力」的落点。
+//  端到端要盯的是两件**只能在这一层验**的事：
+//   ① `comfy_audit_workflow` 的"必跑不了"真的能进提交闸门（`blockingRefusal`），
+//      而参数 / 显存 / 提示词风格**只提醒不拦**；
+//   ② `comfy_prune_workflow` 拿不到 `/object_info` 时**只摘不拼**（乱接一根线的代价
+//      是 ComfyUI 回一句看不懂的报错，用户根本查不出来）。
+// ===========================================================================
+
+/// `comfy_audit_workflow`：七项检查只报事实；`/object_info` 拿不到时**不判**本机缺节点。
+#[tokio::test]
+async fn comfy_audit_workflow_reports_facts_and_gates_only_blocking_items() {
+    let state = state();
+    let history: &'static str = Box::leak(r#"{}"#.to_string().into_boxed_str());
+    let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
+    let info: &'static str = Box::leak(FIT_OBJECT_INFO.to_string().into_boxed_str());
+    let (url, handle) = fake_comfy_full(history, view, info).await;
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = url.clone();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+
+    // 一份"处处有问题"的图：前端节点 + 版本不兼容 + 本机没有的类 + 固定 seed/前缀 +
+    // 参数偏离官方档位（每一个都对应 `WorkflowAuditTest` 里那条现场）。
+    let graph = serde_json::json!({
+        "1": {"class_type": "CheckpointLoaderSimple",
+              "inputs": {"ckpt_name": "krea2_turbo_int8.safetensors"}},
+        "5": {"class_type": "KSampler",
+              "inputs": {"steps": 30, "cfg": 4.0, "sampler_name": "ddpm", "seed": 7}},
+        "7": {"class_type": "SaveImage", "inputs": {"filename_prefix": "same"}},
+        "10": {"class_type": "Label (rgthree)", "inputs": {}},
+        "94": {"class_type": "WidgetToString", "inputs": {}},
+        "9": {"class_type": "SomeMissingNode", "inputs": {}}
+    });
+    let out = call_tool(&state, "comfy_audit_workflow", serde_json::json!({ "graph": graph.clone() }))
+        .await
+        .unwrap();
+    let payload = &out.payload;
+    assert_eq!(payload["nodeCount"], 6, "{payload}");
+    assert_eq!(payload["block"], 3, "前端节点 / 版本不兼容 / 本机没有的类：{payload}");
+    assert_eq!(payload["warn"], 2, "固定 seed+前缀 / 参数档位：{payload}");
+    assert_eq!(payload["info"], 0);
+    let checks: Vec<&str> = payload["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["check"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        checks,
+        vec!["frontendNodes", "unknownNodes", "nodeVersions", "outputName", "params"],
+        "七项检查的**报出顺序**也要与 Kotlin 一致：{payload}"
+    );
+    // 正文：结论先行 + 修法跟着走（模型照它决定下一步）
+    assert!(out.content.contains("审核结论（6 个节点）"), "{}", out.content);
+    assert!(out.content.contains("**跑不起来 3 处**"), "{}", out.content);
+    assert!(out.content.contains("🔴 [frontendNodes]"), "{}", out.content);
+    assert!(out.content.contains("comfy_prune_workflow"), "要指路「摘节点」：{}", out.content);
+    assert!(out.content.contains("只报不改"), "{}", out.content);
+    // "必跑不了"那三条要能被提交闸门直接用（同一条判据的纯函数半边在
+    // `workflow_audit::Report::blocking_refusal` 上有单测）
+    let frontend = &payload["findings"][0];
+    assert_eq!(frontend["nodes"][0], "10");
+    assert!(frontend["detail"].as_str().unwrap().contains("0.01"), "{frontend}");
+
+    // 每个模型的检查都"拿不准就不说"：换掉 /object_info（ComfyUI 不在）→ **不判**本机缺节点
+    let mut down = comfyhub_server_rs::capture::CaptureConfig::default();
+    down.comfy_url = "http://127.0.0.1:1".to_string();
+    comfyhub_server_rs::capture::save_capture_config(&state, down).unwrap();
+    let offline = call_tool(&state, "comfy_audit_workflow", serde_json::json!({ "graph": graph.clone() }))
+        .await
+        .unwrap();
+    let checks: Vec<&str> = offline.payload["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["check"].as_str().unwrap())
+        .collect();
+    assert!(
+        !checks.contains(&"unknownNodes"),
+        "拿不到 /object_info 时不许说「本机没有这个节点类」：{checks:?}"
+    );
+    assert!(checks.contains(&"frontendNodes"), "纯前端节点是**图自己**的问题，照样要报：{checks:?}");
+
+    // 界面格式（nodes/links）不是 API 图：如实拒绝，并指路 comfy_load_workflow
+    let refused =
+        call_tool(&state, "comfy_audit_workflow", serde_json::json!({ "graph": {"nodes": []} }))
+            .await
+            .unwrap_err();
+    assert_eq!(refused.code, "INVALID_ARGUMENT");
+    assert!(refused.message.contains("comfy_load_workflow"), "{}", refused.message);
+    // 连 graph 都没给也是同一档
+    let missing = call_tool(&state, "comfy_audit_workflow", serde_json::json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code, "INVALID_ARGUMENT");
+
+    handle.abort();
+    std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+/// `comfy_prune_workflow` 的三条路：真摘（带审计清单）/ `analyze=true`（一个字都不改）/
+/// 什么都不要求（`INVALID_ARGUMENT` + 指路 analyze）。
+#[tokio::test]
+async fn comfy_prune_workflow_prunes_analyzes_and_refuses_empty_requests() {
+    let state = state();
+
+    // 一份"文生图 + 参考图分支"（Kotlin `WorkflowPruneTest.withReferenceBranch` 的搬运）
+    let with_reference = serde_json::json!({
+        "1": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"krea2.safetensors"}},
+        "4": {"class_type":"LoraLoader","inputs":{"model":["1",0],"clip":["1",1],"lora_name":"x.safetensors"}},
+        "6": {"class_type":"CLIPTextEncode","inputs":{"text":"a cat","clip":["4",1]}},
+        "7": {"class_type":"CLIPTextEncode","inputs":{"text":"bad","clip":["4",1]}},
+        "89": {"class_type":"LoadImage","inputs":{"image":"478952.jpg","upload":"image"}},
+        "92": {"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["6",0],"negative":["7",0],"control_net":["91",0],"image":["89",0],"strength":0.8}},
+        "91": {"class_type":"ControlNetLoader","inputs":{"control_net_name":"canny.safetensors"}},
+        "3": {"class_type":"KSampler","inputs":{"model":["4",0],"positive":["92",0],"negative":["92",1],"latent_image":["5",0],"seed":1,"steps":20,"cfg":7.0}},
+        "5": {"class_type":"EmptyLatentImage","inputs":{"width":768,"height":1024,"batch_size":1}},
+        "9": {"class_type":"VAEDecode","inputs":{"samples":["3",0],"vae":["1",2]}},
+        "10": {"class_type":"SaveImage","inputs":{"images":["9",0],"filename_prefix":"out"}}
+    });
+
+    // ① 真摘：返回改好的**内联图** + 审计清单；`runnable` 如实
+    let out = call_tool(
+        &state,
+        "comfy_prune_workflow",
+        serde_json::json!({ "graph": with_reference, "removeFrom": ["89.image"] }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["ok"], true, "{:?}", out.payload);
+    assert_eq!(out.payload["runnable"], true, "{:?}", out.payload);
+    assert!(!out.payload["removed"].as_array().unwrap().is_empty(), "摘了什么要如实列出来");
+    let graph_out = &out.payload["graph"];
+    assert!(graph_out.get("89").is_none(), "点名要摘的 LoadImage 没了");
+    assert!(graph_out.get("10").is_some(), "输出节点必须还在");
+    // 92 还在（它还有消费者）→ 采样器的线不动；这是"只摘那根线"的那条判据
+    assert_eq!(graph_out["3"]["inputs"]["positive"][0], "92");
+    assert_eq!(graph_out["92"]["inputs"].get("image"), None, "被摘的那根线要真的没了");
+    assert!(
+        out.payload["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("92.image")),
+        "哪根线断了要说清楚：{:?}",
+        out.payload["warnings"]
+    );
+    assert!(out.content.contains("内联"), "要如实说清 graph 是内联图：{}", out.content);
+
+    // ② `analyze=true`：**一个字都不改**（没有 graph 键），并且要求先问用户
+    let dead = serde_json::json!({
+        "1": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"krea2.safetensors"}},
+        "6": {"class_type":"CLIPTextEncode","inputs":{"text":"a cat","clip":["1",1]}},
+        "3": {"class_type":"KSampler","inputs":{"model":["1",0],"positive":["6",0],"latent_image":["5",0],"seed":1}},
+        "5": {"class_type":"EmptyLatentImage","inputs":{"width":768,"height":1024}},
+        "9": {"class_type":"VAEDecode","inputs":{"samples":["3",0],"vae":["1",2]}},
+        "10": {"class_type":"SaveImage","inputs":{"images":["9",0],"filename_prefix":"out"}},
+        "70": {"class_type":"UpscaleModelLoader","inputs":{"model_name":"4x.pth"}},
+        "71": {"class_type":"ImageUpscaleWithModel","inputs":{"upscale_model":["70",0],"image":["9",0]}},
+        "80": {"class_type":"FaceSwap","inputs":{"image":["71",0],"face":["81",0]}},
+        "81": {"class_type":"LoadImage","inputs":{"image":"face.png"}},
+        "99": {"class_type":"Note","inputs":{"text":"还没接完的备注"}}
+    });
+    let out = call_tool(
+        &state,
+        "comfy_prune_workflow",
+        serde_json::json!({ "graph": dead.clone(), "analyze": true }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["ok"], true);
+    assert!(out.payload.get("graph").is_none(), "analyze 绝不能带回改过的图：{}", out.payload);
+    assert_eq!(out.payload["totalUnused"], 4, "{}", out.payload);
+    assert_eq!(out.payload["branches"][0]["removeFrom"], "80");
+    assert_eq!(out.payload["isolated"][0]["id"], "99");
+    let hint = out.payload["hint"].as_str().unwrap();
+    assert!(hint.contains("先问用户"), "必须要求先确认：{hint}");
+    assert!(hint.contains("还没接完"), "孤立节点不要删：{hint}");
+    // 正文就是同一份 JSON（模型读正文、界面读 meta）
+    assert_eq!(out.content, out.payload.to_string());
+
+    // ③ 什么都不要求、也没开 analyze → `INVALID_ARGUMENT`，并且指路 analyze
+    let refused =
+        call_tool(&state, "comfy_prune_workflow", serde_json::json!({ "graph": with_reference }))
+            .await
+            .unwrap_err();
+    assert_eq!(refused.code, "INVALID_ARGUMENT");
+    assert!(refused.message.contains("analyze"), "要告诉模型下一步怎么走：{}", refused.message);
+
+    // ④ 界面格式同样要被挡回来
+    let refused = call_tool(&state, "comfy_prune_workflow", serde_json::json!({ "graph": {"nodes": []} }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, "INVALID_ARGUMENT");
+    assert!(refused.message.contains("不是一份 API 格式节点图"), "{}", refused.message);
+
+    std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+/// `comfy_prune_workflow` 的拼装：**拿不到 `/object_info` 就只摘不拼**（如实报原因），
+/// 拿得到就插在那根线上（`SageAttention` 插在 `3.model`，原来的上游接回它自己）。
+#[tokio::test]
+async fn comfy_prune_workflow_only_prunes_when_the_instance_is_unreachable() {
+    let state = state();
+    let graph = serde_json::json!({
+        "1": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"krea2.safetensors"}},
+        "4": {"class_type":"LoraLoader","inputs":{"model":["1",0],"clip":["1",1],"lora_name":"x.safetensors"}},
+        "3": {"class_type":"KSampler","inputs":{"model":["4",0],"steps":20}},
+        "9": {"class_type":"VAEDecode","inputs":{"samples":["3",0]}},
+        "10": {"class_type":"SaveImage","inputs":{"images":["9",0]}}
+    });
+    let inject = serde_json::json!([{"at":"3.model","classType":"SageAttention"}]);
+
+    // ① ComfyUI 不在 → `ok=false` + `COMFY_UNREACHABLE`，但**摘除部分照样给出来**
+    let mut down = comfyhub_server_rs::capture::CaptureConfig::default();
+    down.comfy_url = "http://127.0.0.1:1".to_string();
+    comfyhub_server_rs::capture::save_capture_config(&state, down).unwrap();
+    let out = call_tool(
+        &state,
+        "comfy_prune_workflow",
+        serde_json::json!({ "graph": graph.clone(), "removeFrom": ["1"], "injections": inject }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["ok"], false, "{:?}", out.payload);
+    assert_eq!(out.payload["reason"], "COMFY_UNREACHABLE");
+    assert!(out.payload.get("detachedGraph").is_some(), "摘除部分的结果要照样给出来");
+    assert!(out.payload.get("injected").is_none(), "没插就**不报** injected 键：{:?}", out.payload);
+    assert!(out.content.contains("不敢"), "要如实说清为什么没插：{}", out.content);
+
+    // ② ComfyUI 在（假实例的 /object_info 里没有 SageAttention）→ 也不硬插
+    let history: &'static str = Box::leak(r#"{}"#.to_string().into_boxed_str());
+    let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
+    let info: &'static str = Box::leak(FIT_OBJECT_INFO.to_string().into_boxed_str());
+    let (url, handle) = fake_comfy_full(history, view, info).await;
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = url.clone();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    let out = call_tool(
+        &state,
+        "comfy_prune_workflow",
+        serde_json::json!({ "graph": graph.clone(), "injections": inject }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["ok"], true);
+    assert!(out.payload["injected"].as_array().unwrap().is_empty(), "实例里没有的类不许硬插");
+    assert!(
+        out.payload["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("SageAttention")),
+        "要如实说明少了什么：{:?}",
+        out.payload["warnings"]
+    );
+
+    // ③ 实例里有这个类 → 真的插进去：采样器的 model 指向新节点，新节点的 model 接回 LoraLoader
+    let with_sage: &'static str = Box::leak(
+        r#"{"SageAttention": {"input":{"required":{"model":["MODEL"]}}}}"#.to_string().into_boxed_str(),
+    );
+    let (url, handle2) = fake_comfy_full(history, view, with_sage).await;
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = url.clone();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    let out = call_tool(
+        &state,
+        "comfy_prune_workflow",
+        serde_json::json!({ "graph": graph.clone(), "injections": inject }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["injected"].as_array().unwrap().len(), 1, "{:?}", out.payload);
+    let graph_out = &out.payload["graph"];
+    let new_id = out.payload["injected"][0].as_str().unwrap().split(' ').next().unwrap().to_string();
+    assert_eq!(graph_out["3"]["inputs"]["model"][0], serde_json::json!(new_id), "采样器挂到补丁上");
+    assert_eq!(graph_out[&new_id]["class_type"], "SageAttention");
+    assert_eq!(graph_out[&new_id]["inputs"]["model"][0], "4", "补丁的 model 接回原来的上游");
+    assert_eq!(out.payload["runnable"], true);
+
+    handle.abort();
+    handle2.abort();
     std::fs::remove_dir_all(state.project_root()).ok();
 }

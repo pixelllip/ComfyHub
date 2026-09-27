@@ -42,6 +42,26 @@ pub struct DesktopToolSpec {
 pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
 
     DesktopToolSpec {
+        name: "comfy_audit_workflow",
+        description: r#"**审一份工作流**：跑之前先看它有没有"跑不起来"或"大概率白跑"的问题。
+七项检查（全部只报事实，可复现）：① 纯前端节点（rgthree 的 Label / Bookmark / Fast Groups Bypasser、Set/Get、Anything Everywhere）—— 服务端没有这些类，带着它们会在验证阶段整片丢节点（0.01 秒空跑）；② 与当前节点包**版本不兼容**的节点（WidgetToString / SystemNotification 那类 IS_CHANGED 崩）；③ **输出前缀 + 固定 seed**：每次跑都落同一个文件名，会被去重吞掉（跑完 mediaCount: 0，白跑一轮）；④ 参数档位与该模型的官方档位不符（Krea2 Turbo 8 步/cfg 1、Anima er_sde）；⑤ 显存风险（大尺寸 / 放大节点 / 多 LoRA）；⑥ 提示词风格与模型不匹配（给 Krea 2 堆 Danbooru tag、给 Anima 写整段自然语言）；⑦ 加载器与目录不匹配（UNETLoader 去读 checkpoints/ 里的文件）。
+**什么时候必须用**：用户给了一份**没跑过**的工作流文件、或者你要改一份工作流之前（尤其用户抱怨"跑完没出图""白跑了"时）。
+怎么用：把 `comfy_load_workflow(includeGraph=true)` 的 `apiGraph`（或 `comfy_get_run` 的 `raw`）原样传给 `graph`。
+它**只报不改**：要摘节点用 `comfy_prune_workflow`，要改参数用 `comfy_submit(overrides=…)`。
+**边界**：它只看图的结构 —— 模型在不在本机用 `comfy_fit_workflow`，输入齐不齐用 `comfy_check_inputs`，三个根对不对用 `comfy_env_report`。
+提交时 `comfy_submit` 也会自动跑一次审核，但**只拦"必跑不了"的那些**（前端节点 / 版本不兼容 / 本机没有的节点类）；参数、显存、提示词风格**只提醒不拦**。"#,
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_audit_workflow`（R12/R13）：
+        //   description 与 schema 都是**机器抽取**的（不是手抄）—— Kotlin 那边是一串
+        //   `"…" + "…"` 拼接，正文里的换行与 `**` 一个字符都没走样。
+        //   ⚠ 裸字符串里的换行**就是**正文的一部分，所以续行**不许缩进**
+        //   （缩进会变成正文里的空格，两端就不一致了）。
+        input_schema: r#"{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_load_workflow 的 apiGraph / comfy_get_run 的 raw 原样传进来）"}},"required":["graph"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+
+    DesktopToolSpec {
         name: "comfy_check_inputs",
         description: r#"体检一份工作流：**哪些输入还等着外部给**（缺图 / 缺视频 / 空连线 / 没值的参数），每条带 节点id.输入名、节点类、缺什么类型、以及下一步该怎么办。
 **什么时候必须先用它**：① 用户说"用这张参考图"这类需要图生图 / 控制网的话，而这份工作流你还没跑过；② `comfy_submit` 之前你想确认"这份图是不是齐了"；③ 用户抱怨"提交了却没出图"。
@@ -141,6 +161,27 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         access: "ASK",
         mutating: true,
     },
+    DesktopToolSpec {
+        name: "comfy_prune_workflow",
+        description: r#"**给一份工作流做减法 / 加法**（用户建议 ②）。
+什么时候用：① 用户给的资料不齐 —— 比如**没给参考图**，但这份工作流有 LoadImage / ControlNet / IPAdapter 那条参考图分支，硬跑只会缺输入；② 显存不够 / 想让采样更快，要往模型链上补一个节点（Sage Attention 之类）；③ 只想留「出图的那条骨干」，把旁支摘干净。
+**两种用法**：
+· `analyze=true`（用户说"删掉没用的节点"时**先走这一条**）：只分析不修改，告诉你哪些分支从输出节点反向走不到（= 跟出图无关）、每条在做什么、一共几个节点。拿到结果**先问用户**（`ask_user_question`）确认要摘哪几条，再走下面那条。
+· 给 `removeFrom`（真正执行）：把它所在的那条分支一起摘掉、并**把下游的线接回它自己的上游**（比如 KSampler.positive 原本接在 ControlNet 上，摘掉之后接回文本编码器）。
+怎么用：把工作流的 API 节点图（`comfy_load_workflow(includeGraph=true)` 的 `apiGraph` 或 `comfy_get_run` 的 `raw`）原样传给 `graph`；`removeFrom` 写要摘掉的**位置**（`"89.image"` 或 `"89"`）。
+`injections` 写要补的节点：`{"at":"3.model","classType":"SageAttention"}` = 把这个节点插在 3.model 那根线上（它的输入定义由后端查 ComfyUI 的 /object_info 算）。
+返回里有改好的**完整图**（`graph`，直接给 comfy_submit 用不了 —— 它是内联图，要么用 `connections`/`overrides` 在库里复现，要么让用户「导出（API）」；详见返回里的 hint）、以及 `removed` / `rewired` / `injected` / `unresolved` / `openInputs` / `runnable`。
+**几条纪律**：不确定某个分支该不该摘就先问用户（`ask_user_question`）；`runnable=false` 时**不要**硬提交；摘掉的东西要如实告诉用户（那是他的工作流，不是你的）。"#,
+        // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_prune_workflow`（R12/R13），同样是
+        //   机器抽取（续行不缩进的理由见上面 `comfy_audit_workflow` 那条）；schema 里
+        //   `\"89.image\"` 那些转义是**裸字符串里的字面量** —— 它本来就是那段 JSON Schema
+        //   正文的一部分，所以这里不能"顺手 unescape"。
+        input_schema: r#"{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_load_workflow 的 apiGraph / comfy_get_run 的 raw 原样传进来）"},"analyze":{"type":"boolean","description":"true = 只分析「哪些分支用不上」，一个字都不改（用户说\"删掉无用节点\"时先走这条，拿到结果先问用户）"},"removeFrom":{"type":"array","items":{"type":"string"},"description":"要摘掉的输入或节点：[\"89.image\"] 或 [\"89\"]（摘的是它所在的那条分支；输出节点与上游共享节点不会被误摘）"},"keep":{"type":"array","items":{"type":"string"},"description":"可选：明确要求保留的节点 id（防止误伤）"},"injections":{"type":"array","description":"可选：要插进去的节点（典型：显存/加速补丁）","items":{"type":"object","properties":{"at":{"type":"string","description":"插在哪个输入上：节点id.输入名，例如 3.model"},"classType":{"type":"string","description":"节点类名，例如 SageAttention"},"inputs":{"type":"object","description":"可选：这个补丁节点自己的输入值（自动接上游的那个输入会由后端补上）","additionalProperties":true},"nodeId":{"type":"string","description":"可选：指定新节点编号"}},"required":["at","classType"],"additionalProperties":false}}},"required":["graph"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+
     DesktopToolSpec {
         name: "comfy_submit",
         description: r#"**把一个工作流提交给 ComfyUI 真的跑一次**（会消耗显卡时间，默认需要用户批准）。用 promptId 指定库里的工作流（先 comfy_find_workflow 或 comfy_load_workflow），或者直接用 workflowPath 指一份本机工作流文件（等价于先 comfy_load_workflow 再提交）。用 overrides 覆盖参数（键写成 节点id.输入名，例如 "3.steps"、"6.text"）。用 connections 补连线（键一样，值写成 ["上游节点id", 槽位]，例如 {"60.vae":["1",0]}）——comfy_load_workflow 报 runnable=false 时，照它给的 openInputs / unresolvedInputs 补。跑完后产物会自动入库到画廊。不要凭想象编造工作流；说不清要跑什么就先问用户。
@@ -296,6 +337,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "comfy_audit_workflow",
                 "comfy_check_inputs",
                 "comfy_env_report",
                 "comfy_find_workflow",
@@ -305,6 +347,7 @@ mod tests {
                 "comfy_list_workflows",
                 "comfy_load_workflow",
                 "comfy_make_mask",
+                "comfy_prune_workflow",
                 "comfy_submit",
                 "comfy_sync_history",
                 "comfy_use_attachment",
@@ -321,8 +364,6 @@ mod tests {
             ]
         );
         for absent in [
-            "comfy_audit_workflow",
-            "comfy_prune_workflow",
             "web_search",
             "web_fetch",
             "civitai_search",
