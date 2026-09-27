@@ -59,6 +59,23 @@ pub const MOBILE_TOOLS: &[MobileToolSpec] = &[
         mutating: false,
     },
     MobileToolSpec {
+        name: "comfy_queue_submit",
+        description: r#"把**提交意图**排进队列，等桌面在线时由**桌面**真正提交（R11：这条不是 `comfy_submit`）。
+**排队 ≠ 已提交**：桌面要过它自己的审批闸门、走完整提交链路（审核 → 提交 → 等生成 → 入库），
+产物与结果会以一条**回执消息**出现在这个会话里（那条消息里才有 mediaIds）。所以：
+① 调用成功后只如实说"已排队、等桌面";**不许**说"已提交""已生成"，也不要自己编 mediaIds；
+② 用户问"出图了吗"要用工具的返回值/后续回执回答，别猜；
+③ 桌面离线时队列会留在手机上（联网后自动上行），这不代表失败。
+至少要给 `promptId` 或 `sourceRef` 之一；**只给工作流名字是没用的**（手机看不到桌面的库，解析不出 id）。"#,
+        input_schema: r#"{"type":"object","properties":{"promptId":{"type":"integer","description":"库里那条提示词的 id（**手机上通常拿不到**，优先用 sourceRef）"},"sourceRef":{"type":"string","description":"运行键，形如 file:<sha256>（从 comfy_load_workflow / 工作流文件列表里拿）"},"overrides":{"type":"object","description":"参数覆盖：键 = 节点id.输入名（如 6.text），值 = 新值；空对象可省","additionalProperties":true},"nsfw":{"type":"boolean","description":"产物是否要标记为 NSFW（默认 false）"}},"anyOf":[{"required":["promptId"]},{"required":["sourceRef"]}],"additionalProperties":false}"#,
+        // 只有手机有这个名字（R11：桌面离线时它无法履行提交契约，所以**不复用** comfy_submit）
+        scope: "MOBILE",
+        // 排队要过一道本端审批（它会往本机队列里写东西）；**但真正的提交审批在桌面上**
+        // —— 用户拍板过："手机点过提交不算批准"。
+        access: "ASK",
+        mutating: true,
+    },
+    MobileToolSpec {
         name: "list_skills",
         description: r#"列出本机已安装的 Skills（名称 + 描述 + 是否可用）。做任务前先看这里，别凭记忆假设有某个 Skill。"#,
         input_schema: r#"{"type":"object","properties":{},"additionalProperties":false}"#,
@@ -139,6 +156,20 @@ mod tests {
             );
             assert!(!tool.name.starts_with("comfy_submit"), "R11：手机侧不许复用提交工具名");
         }
+    }
+
+    /// 排队提交**必须在**手机目录里：`declaredTo = kit ∩ 本地实现` —— 不在 kit 里的话，
+    /// 手机 harness 就算实现了它也**不会被宣称**，模型永远看不到它（M5 手机侧那次实测就是这样）。
+    #[test]
+    fn queue_submit_is_declared_and_the_desktop_catalog_does_not_have_it() {
+        assert!(
+            MOBILE_TOOLS.iter().any(|t| t.name == "comfy_queue_submit"),
+            "comfy_queue_submit 不在手机工具目录里 → 模型看不到它（M5 的端到端会断在这里）"
+        );
+        assert!(
+            !crate::tools::implemented().iter().any(|t| t.name == "comfy_queue_submit"),
+            "它是**手机专属**（R11）：桌面那份（已实现清单）里不许有这个名字"
+        );
     }
 
     #[test]

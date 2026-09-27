@@ -38,7 +38,7 @@
 
 ---
 
-## 2. MOBILE 可执行的工具（正好这 7 个，唯一真源 = `ToolRegistry` 里的 `scope =`）
+## 2. MOBILE 可执行的工具（正好这 8 个，唯一真源 = `ToolRegistry` 里的 `scope =`）
 
 | 工具 | 为什么手机能做 |
 | --- | --- |
@@ -49,9 +49,15 @@
 | `load_skill` | 同上（正文从本地读） |
 | `remember` | 长期记忆是本地文件（`memory.md`），两端各有一份 |
 | `ask_user_question` | 走**本端**事件流（`user.question` / `.answered`），不需要桌面在场 |
+| **`comfy_queue_submit`** | **只有手机有**（`scope = MOBILE`）：它只把"提交意图"排进本机 `_outbox`，**不是提交**（R11）。真正提交由桌面在它自己的审批通过后执行 —— 所以它**不进桌面的 `implemented()`**，但**必须在 run-kit 的手机清单里**：`declaredTo = kit ∩ 本地实现`，不在 kit 里的话手机 harness 实现了也**不会被宣称**，模型永远看不到它（2026-09-27 实测踩到过） |
 
 > `ToolScopeTest` 会**从这张表里读**名字去比对 `toolsFor(MOBILE)`，所以
 > **改这里必须同时改代码、改测试之外的任一处都会被拦下**（漏了哪边都红）。
+>
+> ⚠ 2026-09-27 补记：这张表原先漏了 `comfy_queue_submit`（只列了 7 个 `BOTH`），
+> 于是 Rust 侧的 `mobile_tools.rs` 与 run-kit 也跟着漏 —— 三处一起补上，
+> 并把 `api_test` 的两条清单断言（`/api/ai/tools` 的 `tools[]`、run-kit 的 `tools[]`）
+> 一起改成 8 个。
 
 ---
 

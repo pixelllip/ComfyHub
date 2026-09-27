@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn 工具清单按名字拼一行且描述截断到三百字() {
         let text = render_with(&policy("{}"), false, "");
-        assert!(text.contains("- 可调用的工具（参数结构见接口定义）：ask_user_question、civitai_search、list_skills、load_skill、remember、web_fetch、web_search\n"));
+        assert!(text.contains("- 可调用的工具（参数结构见接口定义）：ask_user_question、civitai_search、comfy_queue_submit、list_skills、load_skill、remember、web_fetch、web_search\n"));
         // 每个工具的标记都对
         assert!(text.contains("  · remember（会写数据）："));
         assert!(text.contains("  · list_skills（只读）："));

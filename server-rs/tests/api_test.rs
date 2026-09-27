@@ -3030,14 +3030,14 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     let kit = body["kitVersion"].as_str().unwrap();
     assert!(kit.contains('.'), "kitVersion 形如 <日期>.<当日序号>：{kit}");
 
-    // tools[]：**只有手机可执行的那 7 个**，每项恰好四个键
+    // tools[]：**只有手机可执行的那 8 个**（7 个 BOTH + 手机专属的 `comfy_queue_submit`），每项恰好四个键
     let tools = body["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
         vec![
-            "ask_user_question", "civitai_search", "list_skills", "load_skill", "remember",
-            "web_fetch", "web_search",
+            "ask_user_question", "civitai_search", "comfy_queue_submit", "list_skills", "load_skill",
+            "remember", "web_fetch", "web_search",
         ],
         "按 name 升序（顺序进了 kitVersion 签名）"
     );
@@ -8399,7 +8399,7 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "提示词与请求里的工具清单漂移了"
     );
 
-    // run-kit（手机）仍然只有那 7 个手机可执行的
+    // run-kit（手机）仍然只有手机可执行的那些（7 个 BOTH + 手机专属的 comfy_queue_submit）
     let (status, kit) = get_json(router_for(state.clone()), "/api/ai/run-kit").await;
     assert_eq!(status, StatusCode::OK, "body={kit}");
     let kit_tools: Vec<&str> = kit["tools"]
@@ -8408,7 +8408,11 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(kit_tools.len(), 7, "{kit_tools:?}");
+    assert_eq!(kit_tools.len(), 8, "{kit_tools:?}");
+    assert!(
+        kit_tools.contains(&"comfy_queue_submit"),
+        "排队提交必须在手机清单里：不在的话 declaredTo = kit ∩ 本地实现 会把它滤掉，模型看不到它：{kit_tools:?}"
+    );
     for absent in [
         "list_dir",
         "read_file",
