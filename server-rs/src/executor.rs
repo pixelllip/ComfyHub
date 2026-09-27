@@ -311,6 +311,9 @@ async fn run_once(
     let max_steps = policy.config.max_tool_steps.max(1) as usize;
     let max_calls = policy.config.max_calls_per_run.max(1);
     let mut session = crate::tools::ToolSession::default();
+    // 用户刚发了图：`comfy_check_inputs` 要能区分"投放一下就能解决"与"必须问用户要一张"
+    // （Kotlin `ToolContext.hasImageAttachment`，与上面喂给系统提示的是**同一个值**）
+    session.has_image_attachment = has_inlined_attachments;
     let mut trailing: Vec<ChatTurn> = Vec::new();
     let mut total_usage: Option<Value> = None;
     let mut last_provider_response_id: Option<String> = None;

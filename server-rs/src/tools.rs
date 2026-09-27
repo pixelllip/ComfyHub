@@ -10,12 +10,12 @@
 //! | `comfy_sync_history` | `DESKTOP` | 第 43 步；**会写库**（建提示词 + 产物入库），出厂档 `ASK` |
 //! | `comfy_load_workflow` | `DESKTOP` | 第 44 步；把本机工作流文件读进库（界面格式按 `/object_info` 转 API 图）。⚠ 组节点不展开、"模拟用户行为"未实现，两者都如实报 |
 //! | `comfy_use_media` / `comfy_use_attachment` / `comfy_make_mask` | `DESKTOP` | **图像编辑三件**（见 [`crate::image_edit`]）：把画廊产物 / 用户附件投放进 ComfyUI 的 `input` 目录，以及生成"白=重绘区"的遮罩。三件都要用户批准（会往用户机器上写文件） |
+//! | `comfy_check_inputs` / `comfy_fit_workflow` | `DESKTOP` | 第 62 步的**体检两件**（见 [`crate::workflow_fit`]）：前者列"还等着外部给输入的位置"（用户没给参考图时的那个现场），后者把图里点名的模型与本机清单对一遍。两件都**只报不改**、出厂 `ALLOW` |
 //!
-//! 还没搬的：联网三个（要 Keenable / Civitai 客户端 + `EndpointGuard`）、
-//! `find_model`、`find_workflow` / `check_inputs` / `fit_workflow` / `env_report` /
-//! `audit_workflow` / `prune_workflow`（要本机模型清单 `ComfyModels`）、
+//! 还没搬的：联网两个（`web_search` / `web_fetch`，要 Keenable 客户端 + `EndpointGuard`）、
+//! `civitai_search` / `find_model`、`comfy_audit_workflow` / `comfy_prune_workflow`、
 //! 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`）、
-//! `search_prompts` / `danbooru_lookup`、官方 comfy-mcp 那 39 个（要 `McpStdioClient`）。
+//! 官方 comfy-mcp 那 39 个（要 `McpStdioClient`，运行时拉的，不进这份静态清单）。
 //! **没搬的绝不下发**（`declaredTo = 清单 ∩ 本地实现`）。
 //!
 //! # 两个清单的差别（别混用）
@@ -199,6 +199,13 @@ pub struct ToolSession {
     /// （否则那张卡会带着一个假的核对时间，而假时间比没有时间更坏）。
     /// 键是 [`crate::danbooru::normalize_tag`] 归一之后的写法（`shinku_(nte)`）。
     danbooru_verified: HashSet<String>,
+    /// **本次请求是否带了图片附件**（Kotlin `ToolContext.hasImageAttachment`）。
+    ///
+    /// 与系统提示里那句"本次请求附带图片附件"**是同一个事实**（Kotlin 那边也是同一个
+    /// `hasInlineAttachments` 同时喂给两处），所以由执行器在建 session 时一次性钉住。
+    /// `comfy_check_inputs` 靠它区分"投放一下就能解决"与"必须问用户要一张"——
+    /// 少了这一位，模型会去要一张它已经收到的图。
+    pub has_image_attachment: bool,
 }
 
 impl ToolSession {
@@ -378,19 +385,22 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前二十个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前二十六个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
 /// + comfy 查询三件（`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status`）
 /// + `comfy_load_workflow` / `comfy_submit` / `comfy_sync_history`
 /// + 资料库两件（角色卡）+ **图像编辑三件**（`comfy_use_media` / `comfy_use_attachment` /
-/// `comfy_make_mask`，见 [`crate::image_edit`]）。
+/// `comfy_make_mask`，见 [`crate::image_edit`]）
+/// + **体检两件**（`comfy_check_inputs` / `comfy_fit_workflow`，见 [`crate::workflow_fit`]，
+/// P4 第 62 步）。
 /// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
-/// `comfy_find_workflow` 那一批要本机模型清单（`comfy_env_report` / `check_inputs` /
-/// `fit_workflow` / `audit_workflow` / `prune_workflow`），各自另起批次。
-pub const IMPLEMENTED: [&str; 24] = [
+/// `find_model` / `comfy_audit_workflow` / `comfy_prune_workflow` 各自另起批次。
+pub const IMPLEMENTED: [&str; 26] = [
     "ask_user_question",
+    "comfy_check_inputs",
     "comfy_env_report",
     "comfy_find_workflow",
+    "comfy_fit_workflow",
     "comfy_get_run",
     "comfy_get_status",
     "comfy_list_workflows",
@@ -522,6 +532,17 @@ pub async fn execute(
         "comfy_env_report" => crate::comfy_models::tool_env_report(state, arguments).await,
         // 两段式找工作流：先搜库；库里 0 条就回头看本机（用户 bug ⑤）
         "comfy_find_workflow" => crate::workflow_search::tool_find_workflow(state, arguments),
+        // ---- 体检两件（P4 第 62 步：用户建议 ①/⑤）----------------------------
+        // 两件都是**只报不改**：`check_inputs` 列"还等着外部给的位置"（用户没给参考图时
+        // 模型最容易硬提交），`fit_workflow` 把图里点名的模型与本机清单对一遍。
+        // ⚠ `check_inputs` 不碰 `state`，要的是"本次带没带图片附件"——
+        //   那个事实在 session 里（与喂给系统提示的是同一个值）。
+        "comfy_check_inputs" => {
+            crate::workflow_fit::tool_check_inputs(arguments, session.has_image_attachment)
+        }
+        "comfy_fit_workflow" => {
+            crate::workflow_fit::tool_fit_workflow(state, arguments).await
+        }
         "comfy_list_workflows" => comfy_list_workflows(state, arguments),
         "comfy_get_status" => comfy_get_status(state, arguments).await,
         "comfy_sync_history" => comfy_sync_history(state).await,
@@ -1892,13 +1913,15 @@ mod tests {
         assert!(is_implemented("comfy_find_workflow"));
         assert_eq!(default_access("comfy_find_workflow"), "ALLOW");
         assert!(!is_mutating("comfy_find_workflow"));
+        // 体检两件（P4 第 62 步）：**只报不改** → 出厂 ALLOW、mutating=false
+        // （Kotlin 那两条写的都是 `mutating = false, defaultAccess = ToolAccess.ALLOW`）
+        for name in ["comfy_check_inputs", "comfy_fit_workflow"] {
+            assert!(is_implemented(name), "{name} 应当已实现");
+            assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
+            assert!(!is_mutating(name), "{name} 只报不改");
+        }
         // 还没搬的一个都不许说"实现了"
-        for name in [
-            "comfy_check_inputs",
-            "comfy_fit_workflow",
-            "find_model",
-            "web_fetch",
-        ] {
+        for name in ["find_model", "comfy_audit_workflow", "comfy_prune_workflow", "web_fetch"] {
             assert!(!is_implemented(name), "{name} 还没搬");
         }
     }

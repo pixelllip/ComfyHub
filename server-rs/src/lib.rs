@@ -71,6 +71,7 @@ pub mod title_strip;
 pub mod tools;
 pub mod upstream;
 pub mod workflow_convert;
+pub mod workflow_fit;
 pub mod workflow_load;
 pub mod workflow_search;
 pub mod workflow_submit;

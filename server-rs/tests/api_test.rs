@@ -5641,7 +5641,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（23 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（25 个），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
@@ -5652,10 +5652,14 @@ async fn tool_policy_and_nsfw_endpoints() {
         names,
         vec![
             "ask_user_question",
+            // 体检两件（P4 第 62 步）：列"还等着外部给输入的位置" / 跟本机模型清单对账，
+            // 都**只报不改**（用户建议 ①/⑤）—— 按 name 升序排在这里
+            "comfy_check_inputs",
             // 本机模型清单对账（O3）：只读，**不属于 COMFY 那一类**（不吃查询预算）
             "comfy_env_report",
             // 两段式找工作流（用户 bug ⑤）：库里搜不到就回头看本机的工作流文件
             "comfy_find_workflow",
+            "comfy_fit_workflow",
             "comfy_get_run",
             "comfy_get_status",
             "comfy_list_workflows",
@@ -8228,6 +8232,9 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "comfy_make_mask",
         "search_prompts",
         "danbooru_lookup",
+        // 体检两件（P4 第 62 步）
+        "comfy_check_inputs",
+        "comfy_fit_workflow",
     ] {
         assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
     }
@@ -8237,10 +8244,8 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     }
     // 没实现的**一个都不许出现**
     for absent in [
-        "comfy_check_inputs",
         "comfy_audit_workflow",
         "comfy_prune_workflow",
-        "comfy_fit_workflow",
         "web_search",
         "web_fetch",
         "civitai_search",
@@ -9049,4 +9054,182 @@ async fn load_ui_workflow_uses_object_info_and_reports_gaps() {
 
     handle.abort();
     std::fs::remove_dir_all(&root).ok();
+}
+
+// ===========================================================================
+//  体检两件（P4 第 62 步）：comfy_check_inputs / comfy_fit_workflow
+//
+//  两件都是"只报不改"的诊断工具，判据全在**如实**两个字上：`check_inputs` 漏报一条，
+//  模型就以为图齐了；`fit_workflow` 报错一档，用户就被引去下载一个本来就在硬盘上的文件。
+//  所以这里断言到**具体字段**，不是"整串包含"。
+// ===========================================================================
+
+/// 与 [`call_tool`] 同一层，但让用例自己拿 session —— `comfy_check_inputs` 要看
+/// `session.has_image_attachment`（那个事实由执行器在 Run 开始时钉住）。
+async fn call_tool_with_session(
+    state: &comfyhub_server_rs::routes::AppState,
+    name: &str,
+    arguments: Value,
+    session: &mut comfyhub_server_rs::tools::ToolSession,
+) -> Result<comfyhub_server_rs::tools::ToolOutcome, comfyhub_server_rs::tools::ToolFailure> {
+    let policy = comfyhub_server_rs::policy::ToolPolicy::load(state).unwrap();
+    comfyhub_server_rs::tools::execute(state, &policy, "run-x", "conv-x", name, &arguments, session)
+        .await
+}
+
+/// 一份只有"缺一张参考图"的工作流：`LoadImage.image` 绑着上次捕获的旧文件名
+/// （用户建议 ⑤ 那个现场 —— 模型不看清楚就会硬提交一个不存在的文件）。
+fn graph_with_image_gap() -> Value {
+    serde_json::json!({
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sdxl.safetensors"}},
+        "89": {"class_type": "LoadImage", "inputs": {"image": "4789521234.jpg"}},
+        "3": {"class_type": "KSampler", "inputs": {"seed": 1}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["3", 0]}}
+    })
+}
+
+#[tokio::test]
+async fn comfy_check_inputs_reports_gaps_and_reads_the_attachment_flag() {
+    let state = state();
+    let mut session = comfyhub_server_rs::tools::ToolSession::default();
+
+    // ① 没带图：LoadImage 那条必须报出来，并且要挡住"带着缺口硬提交"这条路
+    let out = call_tool_with_session(
+        &state,
+        "comfy_check_inputs",
+        serde_json::json!({ "graph": graph_with_image_gap() }),
+        &mut session,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["missingCount"], 1, "{}", out.payload);
+    assert_eq!(out.payload["needsExternalAsset"], true, "{}", out.payload);
+    assert_eq!(out.payload["nodeCount"], 4, "SaveImage 的 images 不是缺口");
+    assert_eq!(out.payload["missing"][0]["ref"], "89.image");
+    assert_eq!(out.payload["missing"][0]["kind"], "image");
+    // `currentValue` 是**原值的 JSON 文本**（Kotlin `value.toString()`），所以带引号
+    assert_eq!(out.payload["missing"][0]["currentValue"], "\"4789521234.jpg\"");
+    assert!(out.content.contains("等着外部输入"), "{}", out.content);
+    assert!(out.content.contains("不要硬提交"), "{}", out.content);
+    // 没有 `title` 时**省掉键**（Kotlin 手拼 JSON 的取舍），不是写 null
+    assert!(out.payload["missing"][0].get("title").is_none(), "{}", out.payload);
+
+    // ② 本次带了图：同一个位置改列 `suppliedByAttachment`（**不要再问用户要图**）
+    let mut with_image = comfyhub_server_rs::tools::ToolSession::default();
+    with_image.has_image_attachment = true;
+    let out = call_tool_with_session(
+        &state,
+        "comfy_check_inputs",
+        serde_json::json!({ "graph": graph_with_image_gap() }),
+        &mut with_image,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["missingCount"], 0, "{}", out.payload);
+    assert_eq!(out.payload["needsExternalAsset"], false);
+    assert_eq!(out.payload["suppliedByAttachment"][0], "89.image（本次附件可以投放）");
+    assert!(out.content.contains("不必问用户"), "{}", out.content);
+
+    // ③ 字符串形态的图也认（模型从别处粘贴时经常带上引号）
+    let out = call_tool_with_session(
+        &state,
+        "comfy_check_inputs",
+        serde_json::json!({ "graph": graph_with_image_gap().to_string() }),
+        &mut session,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["missingCount"], 1);
+
+    // ④ 界面格式（nodes/links）**不是** API 图：如实拒绝，并指路 comfy_load_workflow
+    let refused = call_tool_with_session(
+        &state,
+        "comfy_check_inputs",
+        serde_json::json!({ "graph": {"nodes": [], "links": []} }),
+        &mut session,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.code, "INVALID_ARGUMENT");
+    assert!(refused.message.contains("comfy_load_workflow"), "{}", refused.message);
+    assert!(refused.message.contains("不是一份 API 格式节点图"), "{}", refused.message);
+    // 连 graph 都没给也是同一档（不是 500，也不是"什么都没缺"）
+    let missing =
+        call_tool_with_session(&state, "comfy_check_inputs", serde_json::json!({}), &mut session)
+            .await
+            .unwrap_err();
+    assert_eq!(missing.code, "INVALID_ARGUMENT");
+
+    std::fs::remove_dir_all(state.project_root()).ok();
+}
+
+/// 假 ComfyUI 的 `/object_info`：只声明一个 checkpoint 枚举 + 一个普通采样节点。
+const FIT_OBJECT_INFO: &str = r#"{
+  "CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": [["krea2_turbo_int8.safetensors"], {"tooltip": "选一个底模"}]}}},
+  "KSampler": {"input": {"required": {"steps": ["INT", {"default": 20}], "sampler_name": [["euler"]]}}}
+}"#;
+
+/// `comfy_fit_workflow`：图里点名的模型 ↔ **实例枚举**出来的清单，配上就是配上
+/// （`/object_info` 那一条枚举是"它能加载什么"的唯一权威）。
+#[tokio::test]
+async fn comfy_fit_workflow_pairs_graph_models_with_the_instance_inventory() {
+    let state = state();
+    let history: &'static str = Box::leak(r#"{}"#.to_string().into_boxed_str());
+    let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
+    let info: &'static str = Box::leak(FIT_OBJECT_INFO.to_string().into_boxed_str());
+    let (url, handle) = fake_comfy_full(history, view, info).await;
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = url.clone();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+
+    let graph = serde_json::json!({
+        "1": {"class_type": "CheckpointLoaderSimple",
+              "inputs": {"ckpt_name": "krea2_turbo_int8.safetensors"},
+              "_meta": {"title": "底模"}},
+        "3": {"class_type": "KSampler", "inputs": {"steps": 20}},
+        "9": {"class_type": "SomeMissingNode", "inputs": {}}
+    });
+
+    let out = call_tool(
+        &state,
+        "comfy_fit_workflow",
+        serde_json::json!({ "graph": graph.clone() }),
+    )
+    .await
+    .unwrap();
+    let payload = &out.payload;
+    assert_eq!(payload["inventorySource"], "object_info", "{payload}");
+    assert_eq!(payload["required"], 1);
+    assert_eq!(payload["exact"], 1);
+    assert_eq!(payload["missing"], 0);
+    assert_eq!(payload["onDiskOnly"], 0);
+    let item = &payload["models"][0];
+    assert_eq!(item["overrideKey"], "1.ckpt_name");
+    assert_eq!(item["wanted"], "krea2_turbo_int8.safetensors");
+    assert_eq!(item["folder"], "checkpoints");
+    assert_eq!(item["title"], "底模");
+    assert_eq!(item["status"], "exact");
+    assert_eq!(item["safeToAutoApply"], true);
+    // 候选必须带上"实例能不能加载"这一位（`/object_info` 来的当然能）
+    assert_eq!(item["candidates"][0]["name"], "krea2_turbo_int8.safetensors");
+    assert_eq!(item["candidates"][0]["visibleToInstance"], true);
+    // 同名 → 没有任何键要改（`suggestedOverrides` 是**省掉键**，不是空对象）
+    assert!(payload.get("suggestedOverrides").is_none(), "{payload}");
+    // 缺节点与缺模型**分开报**（缺的是自定义节点，不是模型）
+    assert_eq!(payload["missingNodes"][0], "SomeMissingNode", "{payload}");
+    assert!(out.content.contains("SomeMissingNode"), "{}", out.content);
+    assert!(out.content.contains("节点类"), "{}", out.content);
+    assert!(out.content.contains("不用改任何键"), "{}", out.content);
+    assert!(out.content.contains("只报不改"), "{}", out.content);
+
+    // 界面格式同样要被挡回来（这条与 `check_inputs` 是同一条判据）
+    let refused =
+        call_tool(&state, "comfy_fit_workflow", serde_json::json!({ "graph": {"nodes": []} }))
+            .await
+            .unwrap_err();
+    assert_eq!(refused.code, "INVALID_ARGUMENT");
+    assert!(refused.message.contains("不是一份 API 格式节点图"), "{}", refused.message);
+
+    handle.abort();
+    std::fs::remove_dir_all(state.project_root()).ok();
 }

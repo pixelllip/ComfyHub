@@ -42,6 +42,18 @@ pub struct DesktopToolSpec {
 pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
 
     DesktopToolSpec {
+        name: "comfy_check_inputs",
+        description: r#"体检一份工作流：**哪些输入还等着外部给**（缺图 / 缺视频 / 空连线 / 没值的参数），每条带 节点id.输入名、节点类、缺什么类型、以及下一步该怎么办。
+**什么时候必须先用它**：① 用户说"用这张参考图"这类需要图生图 / 控制网的话，而这份工作流你还没跑过；② `comfy_submit` 之前你想确认"这份图是不是齐了"；③ 用户抱怨"提交了却没出图"。
+怎么用：把 `comfy_get_run(raw=…)` 或 `comfy_load_workflow(includeGraph=true)` 里的API 节点图原样传给 `graph`。
+拿到结果后：`kind=image` 且用户给了附件 → 先 `comfy_use_attachment` 投放再覆盖那个输入；**用户没给图** → 问用户要一张，或换一条不需要参考图的工作流，**绝对不要**带着缺口硬提交（那只会得到一句缺输入）。
+本次消息带了图片附件时，图片类位置会列进 `suppliedByAttachment`（那是能直接解决的，不要再去问用户要图）。这个工具**只读**，不改工作流。"#,
+        input_schema: r#"{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_get_run 的 raw / comfy_load_workflow 的 apiGraph 原样传进来）"}},"required":["graph"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "comfy_env_report",
         description: r#"**本机 ComfyUI 环境对账**：把三套根摆在一起 + 列出本机模型清单。
 什么时候用：① 用户抱怨"明明有这个模型、AI 却说没有"；② 你要判断"这份工作流能不能跑"之前；③ `comfy_fit_workflow` 报了 `missing` 或 `onDiskOnly`；④ 想知道本机到底有哪些 checkpoint / LoRA / VAE（用 folder 或 query 过滤）。
@@ -56,6 +68,21 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         name: "comfy_find_workflow",
         description: r#"找一个**能直接跑的工作流**。先在库里的提示词中搜（按标题/正文关键词）；库里没有时**自动回头看本机 ComfyUI 已保存的工作流文件**（`user\<用户>\workflows\*.json`，结果在 localWorkflows 里，带 path）—— 所以"库里搜不到"不等于"这份工作流用不了"。返回参数摘要（采样器 / steps / cfg / seed / 尺寸 / 提示词）与可覆盖的参数路径，然后就能用 comfy_submit 按同一个工作流再跑一次（改提示词或参数）。"#,
         input_schema: r#"{"type":"object","properties":{"query":{"type":"string","description":"关键词：匹配库里的标题与正/负面提示词，也会匹配本机工作流文件名（如 krea2）"},"limit":{"type":"integer","description":"最多返回几条，默认 5，最多 20"},"includeGraph":{"type":"boolean","description":"是否带上完整 API 节点图（默认 false；要看节点编号与输入名时才带上）"}},"required":["query"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
+        name: "comfy_fit_workflow",
+        description: r#"**把一份工作流要的模型和本机已有的模型对一遍**（用户建议 ①）：输入一份 API 节点图，输出①图里点名的每个模型（checkpoint / LoRA / VAE / CLIP / ControlNet / 放大模型…）、②本机最接近的等价物（带**字面相似度**与体积）、③要改哪几个 `overrides` 键。
+**什么时候必须先用它**：① 用户从网上抄了一份工作流、或者让你"按这份工作流生成"——先看本机有没有那些模型，别提交了才发现少一个 13GB 的底模；② 你要用 `civitai_search` 找的模型改造一份工作流之前；③ 用户抱怨"提交了却报文件不存在"。
+怎么用：把 `comfy_load_workflow(includeGraph=true)` 的 `apiGraph`（或 `comfy_get_run` 的 `raw`）原样传给 `graph`。
+四种结论：`exact`（本机有同名的**且当前实例能加载**，不用改）/ `substitute`（有更接近的，**要不要换由你判断、换之前先问用户**）/ `onDiskOnly`（**硬盘上有同名，但当前这个实例枚举不到它**—— 说明实例的模型根没挂全：**先让用户重启 ComfyUI / 修好模型根，绝对不要去下载**，文件本来就在硬盘上；也不要改 overrides，改了同样报文件不存在）/ `missing`（本机确实没有 —— **绝对不要自己编一个文件名**，先去 `civitai_search` 查这个模型，再用 `ask_user_question` 给用户 2~4 个具体选项：自己装它 / 换一条只用本机已有模型的等价工作流 / 放弃）。
+**相似度只是字面相似**（词根对得上），**不代表架构兼容**：`sd_xl_base` 与 `sd_xl_refiner` 分数很高却是两份不同的模型。拿不准就问用户，别硬换。候选里的 `visibleToInstance` 是同一个意思：`false` 的**不能**拿去 overrides。
+它**只报不改**：报告里给的 `suggestedOverrides` 要真生效，得由你写进 `comfy_submit(overrides=…)`。也不装模型、不下模型（那是用户自己的事）。
+返回里 `inventorySource` 说明清单来自哪里：`object_info` = 问 ComfyUI 要的权威清单（列出来的就是它能加载的）；`scan` = 扫盘得到的（盘上有，未必被它认到）；`none` = 两边都没有（ComfyUI 没跑、也没找到 models 目录）。清单是**并集**：`invisibleToInstance` / `onDiskOnly` 就是"盘上有但实例看不到"的条数，大于 0 时报告正文会明说这一句 —— 那是"重启一次"的事，不是"再下一个"的事。
+`missingNodes` 另列"本机没有这些**节点类**"（缺的是自定义节点，不是模型）。"#,
+        input_schema: r#"{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_load_workflow 的 apiGraph / comfy_get_run 的 raw 原样传进来）"}},"required":["graph"],"additionalProperties":false}"#,
         scope: "DESKTOP",
         access: "ALLOW",
         mutating: false,
@@ -269,8 +296,10 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "comfy_check_inputs",
                 "comfy_env_report",
                 "comfy_find_workflow",
+                "comfy_fit_workflow",
                 "comfy_get_run",
                 "comfy_get_status",
                 "comfy_list_workflows",
@@ -292,8 +321,6 @@ mod tests {
             ]
         );
         for absent in [
-            "comfy_check_inputs",
-            "comfy_fit_workflow",
             "comfy_audit_workflow",
             "comfy_prune_workflow",
             "web_search",
