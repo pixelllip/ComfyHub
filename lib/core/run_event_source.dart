@@ -194,6 +194,24 @@ abstract class RunEventSource {
     String? token,
   });
 
+  /// 从桌面**拉一次**（**M4 的下行半边**，契约 🔒 §1~§3）。
+  ///
+  /// 与 [syncNow] 是一对：上行推本机产生的，下行把桌面那份投影到本地镜像。
+  ///
+  /// 手机实现走本地 harness（`SyncPull.pullOnce`）：握手 `manifest` → 首次 /
+  /// `schemaVersion` 变了 / 收到 **410** 时走 `bootstrap`，其余走 `changes` 增量；
+  /// **游标只在整趟成功之后才推进**，失败时一个字都不动（下次还能接着拉）。
+  /// `mode` 是这次实际走的那条路：`bootstrap` / `changes` / `up_to_date`。
+  ///
+  /// 桌面实现**恒** `up_to_date` / 0 条：后端自己就是真源，没有"从别人那里拉"这回事。
+  ///
+  /// ⚠ `ok=false` 时别拿 `mode` 当结论（判据永远是 `ok`）；失败**不许**拦聊天页 ——
+  /// 桌面不在线是手机的常态（与 [syncNow] 同一条纪律）。
+  Future<({bool ok, String mode, int applied, int cursor, String? error})> pullChanges({
+    String? baseUrl,
+    String? token,
+  });
+
   /// 回答 `user.question`（提问闸门；桌面是 HTTP，手机是本地闸门）。
   ///
   /// [answer] 与 [optionIndex] **至少给一个**，另一个留 null：点了选项就用 `optionIndex`，
@@ -285,6 +303,16 @@ class RemoteRunEventSource implements RunEventSource {
   @override
   Future<({bool ok, int applied, int pending, String? error})> syncNow({String? baseUrl, String? token}) async =>
       (ok: true, applied: 0, pending: 0, error: null);
+
+  /// 桌面：**恒 `up_to_date`** —— 后端自己就是真源，没有"从别人那里拉"这回事。
+  ///
+  /// （手机上这条路会把 `manifest` / `changes` / `bootstrap` 走一遍，见本地实现。）
+  @override
+  Future<({bool ok, String mode, int applied, int cursor, String? error})> pullChanges({
+    String? baseUrl,
+    String? token,
+  }) async =>
+      (ok: true, mode: 'up_to_date', applied: 0, cursor: 0, error: null);
 }
 
 /// 手机实现：`MethodChannel`（调用）+ `EventChannel`（事件流）。
@@ -459,6 +487,29 @@ class LocalHarnessRunEventSource implements RunEventSource {
   /// 本机 `_outbox` 里还剩几条（**只读本地库**，不出网）。
   @override
   Future<int> pendingOutbox() async => await _method.invokeMethod<int>('pendingOutbox') ?? 0;
+
+  /// 从桌面拉一次（M4 的下行半边，契约 §1~§3）。
+  ///
+  /// 桥那边已经把"能不能拉成"分好了：`ok` 是唯一判据，`mode` 只在 `ok=true` 时是结论
+  /// （`ok=false` 时它只是"本来打算走哪条"）。`pending` 那套与上行无关，这里没有。
+  @override
+  Future<({bool ok, String mode, int applied, int cursor, String? error})> pullChanges({
+    String? baseUrl,
+    String? token,
+  }) async {
+    final raw = await _method.invokeMethod<String>('syncPull', {
+      'baseUrl': ?baseUrl,
+      'token': ?token,
+    });
+    final map = _map(raw ?? '{}');
+    return (
+      ok: map['ok'] == true,
+      mode: (map['mode'] ?? 'up_to_date').toString(),
+      applied: (map['applied'] as num?)?.toInt() ?? 0,
+      cursor: (map['cursor'] as num?)?.toInt() ?? 0,
+      error: map['error']?.toString(),
+    );
+  }
 
   Future<List<String>> toolNames() async =>
       (await _method.invokeMethod<List<Object?>>('toolNames') ?? const [])

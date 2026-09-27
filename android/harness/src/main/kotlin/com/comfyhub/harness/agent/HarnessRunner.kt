@@ -27,6 +27,7 @@ import com.comfyhub.harness.text.TitleStripper
 import com.comfyhub.harness.tools.HarnessFiles
 import com.comfyhub.harness.tools.MobileAskGate
 import com.comfyhub.harness.tools.MobileToolRegistry
+import com.comfyhub.harness.tools.SecretLookup
 import com.comfyhub.harness.tools.ToolCallRequest
 import com.comfyhub.harness.tools.ToolContext
 import kotlinx.coroutines.CoroutineScope
@@ -128,8 +129,14 @@ class HarnessRunner(
     private val transport: HttpTransport,
     private val files: HarnessFiles,
     private val askGate: MobileAskGate = MobileAskGate(),
-    /** `credential_ref` → 密钥（Android Keystore 实现由平台通道注入；M6）。 */
-    private val resolveSecret: (String?) -> String? = { null },
+    /**
+     * `credential_ref` → 密钥（Android Keystore 实现由平台通道注入；M6）。
+     *
+     * ⚠ 返回 [SecretLookup] 而不是 `String?`：**"没配"与"解不开"是两件事**（AIH-015）。
+     * 没配 ⇒ 这条上游不需要 key；解不开 ⇒ 要**当场说清楚**（见 [execute] 里的那一段），
+     * 否则一次"密钥坏了"会退化成莫名其妙的 401。
+     */
+    private val secretLookup: (String?) -> SecretLookup = { SecretLookup.Missing },
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val upstream: UpstreamClient = UpstreamClient(transport),
 ) {
@@ -312,7 +319,16 @@ class HarnessRunner(
             val wantsTitle = shouldSummarizeTitle(conversation, userMessageCount) && !request.kit.titleInstruction.isNullOrBlank()
             titleStripper = if (wantsTitle) TitleStripper(enabled = true) else null
 
-            val secret = resolveSecret(request.credentialRef)
+            // 上游密钥：**解不开 ≠ 没配**（AIH-015）。解不开时当场失败并说清怎么办 ——
+            // 静默按"无 key"发出去只会换回一个 401，用户看到的是"模型不认我"。
+            val secret = when (val found = secretLookup(request.credentialRef)) {
+                is SecretLookup.Found -> found.value
+                SecretLookup.Missing -> null
+                SecretLookup.Unreadable -> throw UpstreamFailure(
+                    UpstreamErrorCode.CONFIG_ERROR,
+                    "本机这把密钥解不开（换过系统用户 / 密钥库里的钥匙丢了）：请在手机上重新填一次",
+                )
+            }
             val reasoningRequest = buildReasoningRequest(request, model)
             val maxOutputTokens = model?.maxOutputTokens
 
@@ -501,7 +517,7 @@ class HarnessRunner(
                     emit = { type, body -> emit(type, body) },
                     // 出网工具（web_search / civitai_search）的 key 从这里取：
                     // **同一个 lambda**，不另开一个口子（凭据只在 Run 开始时快照一次）。
-                    resolveSecret = resolveSecret,
+                    lookupSecret = secretLookup,
                 )
                 calls.forEach { call ->
                     emit(RunEventType.TOOL_STARTED, EventPayloads.toolStarted(call.id, call.name))

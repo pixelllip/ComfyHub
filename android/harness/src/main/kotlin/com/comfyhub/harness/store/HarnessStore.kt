@@ -882,6 +882,112 @@ class HarnessStore(private val session: SqlSession) {
     }
 
     // -----------------------------------------------------------------------
+    //  下行同步：游标 + "丢弃镜像"（契约 §2 / §3 / §5）
+    // -----------------------------------------------------------------------
+
+    /**
+     * 本机的同步游标（契约 §2）。
+     *
+     * `0` 有**两个**含义，而且都对：从没同步过（`mobile_kv` 里没有这个键），或镜像刚被丢弃
+     * （[resetMirror]）—— 两种都该走 `/api/sync/bootstrap`：增量照着游标往后扫，
+     * 而镜像不在时扫出来的东西没有落点。
+     *
+     * 非数字（被谁手改坏了）也回 0：那等于"重新全量一次"，是最安全的读法。
+     */
+    fun syncCursor(): Long = getKv(KvKey.SYNC_CURSOR)?.trim()?.toLongOrNull() ?: 0L
+
+    fun setSyncCursor(cursor: Long) = putKv(KvKey.SYNC_CURSOR, cursor.toString())
+
+    /**
+     * **丢弃镜像**（契约 §2 的 `410 Gone` 分支：游标落在保留窗口之外）。
+     *
+     * ## 为什么必须丢
+     *
+     * 手机是**投影**，镜像与桌面的对应关系全靠游标增量维护。桌面账本被裁剪之后
+     * （`_sync_log` 的保留窗口，契约 §5），老游标就再也扫不到那几个洞了 ——
+     * 表现是"手机少了几百条**而且永远补不回来**"。唯一解药是丢掉镜像、走一次全量。
+     *
+     * ## ⚠ 但"本机独有、还没推上去"的那部分**一行都不许丢**
+     *
+     * 镜像表里混着两种行：桌面那份的投影，与本机自己产生、**桌面还不知道**的会话/消息/Run。
+     * 无脑清空就把用户离线时聊的东西删了（那是真丢失，桌面补不回来 —— 契约 §4：上行只有
+     * upsert，我们没法让它"再发一次"）。判据只有一条：**`_outbox` 里还有它的待推行**
+     * ⇒ 本机独有 ⇒ 保住它（连同它级联的整棵树）。
+     *
+     * 附件不挂会话，所以它的判据是"**保留下来的**块还有没有引用它"：被引用的留着
+     * （界面还要拿它显示），其余清掉。
+     *
+     * 顺带把**游标置 0**：镜像都没了，游标就没有意义；置 0 的另一个好处是即使紧接着的
+     * bootstrap 半路失败，下一次也**只可能**走全量（绝不会拿"镜像已经没了"的状态走增量）。
+     *
+     * @return 实际删掉的行数（给人看的那种"丢了多少"）。
+     */
+    fun resetMirror(): Int {
+        var dropped = 0
+        session.transaction {
+            // ① 保住"本机独有、还没推上去"的会话（`_outbox` 里还有它的东西）
+            val kept = session.query(
+                """
+                SELECT c.id AS id FROM ${MobileSchema.CONVERSATIONS_TABLE} c
+                 WHERE EXISTS (SELECT 1 FROM _outbox o WHERE o.kind = ? AND o.ref_id = c.id)
+                    OR EXISTS (SELECT 1 FROM _outbox o WHERE o.ref_id IN
+                                 (SELECT id FROM ai_messages m WHERE m.conversation_id = c.id))
+                    OR EXISTS (SELECT 1 FROM _outbox o WHERE o.kind = ? AND
+                                 substr(o.ref_id, 1, instr(o.ref_id || '#', '#') - 1) IN
+                                 (SELECT id FROM ai_messages m WHERE m.conversation_id = c.id))
+                    OR EXISTS (SELECT 1 FROM _outbox o WHERE o.kind = ? AND o.ref_id IN
+                                 (SELECT r.id FROM ai_runs r WHERE r.conversation_id = c.id))
+                    OR EXISTS (SELECT 1 FROM _outbox o WHERE o.kind = ? AND o.ref_id IN
+                                 (SELECT t.id FROM ai_tool_calls t
+                                    JOIN ai_runs r ON r.id = t.run_id
+                                   WHERE r.conversation_id = c.id))
+                """.trimIndent(),
+                listOf(OutboxKind.CONVERSATION, OutboxKind.PART, OutboxKind.AI_RUN, OutboxKind.AI_TOOL_CALL),
+            ).map { it.str("id") }
+            val doomed = if (kept.isEmpty()) {
+                "1=1" to emptyList<Any?>()
+            } else {
+                "id NOT IN (${kept.joinToString(", ") { "?" }})" to kept
+            }
+            val convWhere =
+                "conversation_id IN (SELECT id FROM ${MobileSchema.CONVERSATIONS_TABLE} WHERE ${doomed.first})"
+            val msgWhere = "message_id IN (SELECT id FROM ai_messages WHERE $convWhere)"
+            val runWhere = "run_id IN (SELECT id FROM ai_runs WHERE $convWhere)"
+
+            // ② 非保留会话的整棵树：**先子后父**（别指望 `ON DELETE CASCADE` —— 它只在会话行
+            //    真的被删时才走，而这里要按"哪些不许删"来删，顺序必须自己排）
+            dropped += session.update("DELETE FROM ai_tool_calls WHERE $runWhere", doomed.second)
+            dropped += session.update("DELETE FROM ai_message_parts WHERE $msgWhere", doomed.second)
+            dropped += session.update("DELETE FROM ai_runs WHERE $convWhere", doomed.second)
+            dropped += session.update("DELETE FROM ai_messages WHERE $convWhere", doomed.second)
+            dropped += session.update(
+                "DELETE FROM ${MobileSchema.CONVERSATIONS_TABLE} WHERE ${doomed.first}",
+                doomed.second,
+            )
+            // 附件：还有块引用它的留着（保留下来的那些块，界面还要拿它显示）
+            dropped += session.update(
+                "DELETE FROM ai_attachments WHERE id NOT IN " +
+                    "(SELECT attachment_id FROM ai_message_parts WHERE attachment_id IS NOT NULL)",
+            )
+
+            // ③ 只读投影表：整表清掉（契约 §3.3 明写这几张**由桌面产生**，手机不许创建）
+            for (table in listOf("media_tags", "prompt_tags", "capture_runs", "media_assets", "prompts", "tags")) {
+                dropped += session.update("DELETE FROM $table")
+            }
+
+            // ④ 游标置 0：镜像丢了，增量就没有意义（下一次必须走全量）
+            session.exec(
+                """
+                INSERT INTO mobile_kv (k, v, updated_at) VALUES (?,?,?)
+                ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at
+                """.trimIndent(),
+                listOf(KvKey.SYNC_CURSOR, "0", Timestamps.now()),
+            )
+        }
+        return dropped
+    }
+
+    // -----------------------------------------------------------------------
     //  批量事件（P1 的写法，手机侧照搬）
     // -----------------------------------------------------------------------
 

@@ -73,10 +73,28 @@ class _FakeLocalSource implements RunEventSource {
     );
   }
 
-  /// 每次 `ensureRunKit` 带上来的配对令牌。
-  final List<String?> kitTokens = [];
+  /// 下行（M4 的另一半）：默认"什么都没拉到"（`up_to_date`），用例按需改。
+  bool pullOk = true;
+  String pullMode = 'up_to_date';
+  int pullApplied = 0;
+  int pullCursor = 918342;
+  String? pullError;
+  final List<String?> pulledBaseUrls = [];
+  final List<String?> pulledTokens = [];
 
   @override
+  Future<({bool ok, String mode, int applied, int cursor, String? error})> pullChanges({
+    String? baseUrl,
+    String? token,
+  }) async {
+    calls.add('pullChanges');
+    pulledBaseUrls.add(baseUrl);
+    pulledTokens.add(token);
+    return (ok: pullOk, mode: pullMode, applied: pullApplied, cursor: pullCursor, error: pullError);
+  }
+
+  /// 每次 `ensureRunKit` 带上来的配对令牌。
+  final List<String?> kitTokens = [];  @override
   Future<({bool ok, String? kitVersion, String? reason})> ensureRunKit({
     String? baseUrl,
     String? token,
@@ -274,6 +292,8 @@ void main() {
     expect(source.calls, contains('createConversation'), reason: '会话要落在本地库');
     expect(source.calls, contains('startRun'), reason: 'Run 由本地 harness 执行');
     expect(source.calls, contains('listConversations'), reason: '收尾对齐也走同一个来源');
+    // 一轮跑完是"内容定稿"的时刻：上行推一次、下行也拉一次（M4 的两半并排）
+    expect(source.calls, contains('pullChanges'), reason: 'Run 收尾也要拉一次下行');
 
     // 界面拿到的是**本地库那条会话**（不是远端回的那条）
     expect(store.conversation?.id, 'local-conv-1');
@@ -627,8 +647,115 @@ void main() {
     );
   });
 
-  testWidgets('回到前台（很可能刚恢复网络）：有活儿才补推，没活儿一条请求都不打', (tester) async {
-    mockPairingChannel(); // 见 [mockPairingChannel]：fakeAsync 里没人应答的通道会挂死
+  // -------------------------------------------------------------------------
+  //  M4 的下行半边：拉一次（冷启动 / 回到前台 / 每轮 Run 收尾）
+  // -------------------------------------------------------------------------
+
+  /// 桌面实现：**恒** up_to_date —— 后端自己就是真源，没有"从别人那里拉"这回事。
+  test('桌面源的下行恒 up_to_date（桌面自己就是真源，一条请求都不打）', () async {
+    var calls = 0;
+    final api = AiApiClient(
+      'http://127.0.0.1:8080',
+      client: MockClient((request) async {
+        calls++;
+        return http.Response('{}', 200);
+      }),
+    );
+    final r = await RemoteRunEventSource(api).pullChanges(baseUrl: 'http://10.0.0.5:8081', token: 'tok');
+
+    expect(r.ok, isTrue);
+    expect(r.mode, 'up_to_date');
+    expect(r.applied, 0);
+    expect(calls, 0, reason: '桌面不该为下行打任何请求');
+  });
+
+  /// 冷启动：上行推一次、下行也拉一次（M4 的两半并排），并把结果**如实**说出来。
+  test('手机冷启动会拉一次下行，并把"同步下来几条"如实说出来', () async {
+    final source = _FakeLocalSource()
+      ..pullMode = 'changes'
+      ..pullApplied = 3;
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+      baseUrlProvider: () => 'http://10.0.0.5:8081',
+    );
+
+    await store.load();
+
+    expect(source.calls, contains('pullChanges'), reason: '冷启动要拉一次（下行半边）');
+    expect(source.pulledBaseUrls.last, 'http://10.0.0.5:8081');
+    expect(store.syncedFromDesktop, 3);
+    expect(store.pushNotice, contains('已从桌面同步 3 条记录'));
+  });
+
+  /// 全量重建与"补几条"是两件事，说法不能一样（用户可能刚被 410 过）。
+  test('下行走的是全量时说法不一样（如实说"重建本机镜像"）', () async {
+    final source = _FakeLocalSource()
+      ..pullMode = 'bootstrap'
+      ..pullApplied = 42;
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    await store.load();
+
+    expect(store.pushNotice, contains('全量重建本机镜像（42 行）'));
+  });
+
+  /// 下行失败**绝不拦聊天页**（与上行同一条纪律）：只写提示，页面照常起来。
+  test('下行失败不拦聊天页：只记一句提示，游标下次接着拉', () async {
+    final source = _FakeLocalSource()
+      ..pullOk = false
+      ..pullError = '拿不到桌面的同步清单（HTTP 500）：这次不同步，本机游标没动';
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    await store.load();
+
+    expect(store.loaded, isTrue, reason: '拉不到桌面那份不该让整页起不来');
+    expect(store.conversation, isNotNull, reason: '本地库里的会话照常可用');
+    expect(store.pushNotice, contains('从桌面拉取失败'));
+    expect(store.pushNotice, contains('游标没动'));
+  });
+
+  testWidgets('回到前台也会拉一次下行（哪怕本机队列是空的）', (tester) async {
+    mockPairingChannel();
+    final source = _FakeLocalSource();
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+    addTearDown(store.dispose);
+
+    await store.load();
+    final atColdStart = source.calls.where((c) => c == 'pullChanges').length;
+    final atColdStartPush = source.calls.where((c) => c == 'syncNow').length;
+
+    // 本地一条待办都没有：推那一路不该动，但**拉**那一路要来一次
+    // （桌面那边可能刚改过东西，而本机队列本来就是空的）
+    source.pendingOutboxCount = 0;
+    await store.onAppResumed();
+
+    expect(
+      source.calls.where((c) => c == 'pullChanges').length,
+      greaterThan(atColdStart),
+      reason: '回到前台要拉一次：上限是每次回前台一次，不是轮询',
+    );
+    expect(
+      source.calls.where((c) => c == 'syncNow').length,
+      atColdStartPush,
+      reason: '队列空着的时候推那一路仍然一条请求都不打（那条纪律不变）',
+    );
+  });
+
+  testWidgets('回到前台：推那一路没待办就不打，拉那一路照常来一次（两条纪律各归各）', (tester) async {    mockPairingChannel(); // 见 [mockPairingChannel]：fakeAsync 里没人应答的通道会挂死
     final source = _FakeLocalSource()
       ..outboxPending = 3
       ..outboxError = '连不上上游：ConnectException';

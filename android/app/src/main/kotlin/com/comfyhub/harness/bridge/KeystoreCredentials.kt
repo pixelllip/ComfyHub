@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import com.comfyhub.harness.tools.SecretLookup
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -70,6 +71,24 @@ class KeystoreCredentials(context: Context) {
             }
             String(cipher.doFinal(data), Charsets.UTF_8)
         }.getOrNull()
+    }
+
+    /**
+     * **把"没配"与"解不开"分开**（AIH-015：把解不开当成没有，是最坏的一种安静）。
+     *
+     * [get] 是给"两种都无所谓"的调用方用的（例如配对令牌读不到就当没配对）；
+     * 而模型凭据 / 出网工具的 key 要的是三态 —— 否则用户在界面上看到"已配置"、
+     * 实际却在走免密钥 / 匿名通道，这种状态**没人查得出来**。
+     *
+     *  - 密文**根本不在**库里 → [SecretLookup.Missing]（正常状态，免密钥通道照常可用）；
+     *  - 密文在、也解得开 → [SecretLookup.Found]；
+     *  - 密文在、但解不开（换过系统用户 / Keystore 里那把钥匙没了 / 密文坏了）
+     *    → [SecretLookup.Unreadable]：要**如实报码**让人去重填，不许静默降级。
+     */
+    fun lookup(ref: String): SecretLookup {
+        if (ref.isBlank() || !prefs.contains(ref)) return SecretLookup.Missing
+        val value = get(ref)
+        return if (value.isNullOrBlank()) SecretLookup.Unreadable else SecretLookup.Found(value)
     }
 
     fun has(ref: String): Boolean = prefs.contains(ref)

@@ -18,6 +18,7 @@ import com.comfyhub.harness.protocol.ReasoningEffort
 import com.comfyhub.harness.store.HarnessDatabase
 import com.comfyhub.harness.store.HarnessStore
 import com.comfyhub.harness.store.MessageStatus
+import com.comfyhub.harness.sync.SyncPullClient
 import com.comfyhub.harness.sync.SyncPushClient
 import com.comfyhub.harness.tools.BuiltinTools
 import com.comfyhub.harness.tools.DefaultHarnessFiles
@@ -115,7 +116,10 @@ class HarnessBridge(private val context: Context) :
             transport = transport,
             files = DefaultHarnessFiles(context.filesDir),
             askGate = MobileAskGate(),
-            resolveSecret = { ref -> ref?.let { credentials.get(it) } },
+            // ⚠ 这条 lambda 返回的是 `SecretLookup`（三态），**不是 `String?`**：
+            //    "没配"与"解不开"必须分开（AIH-015）—— 前者是正常状态（免密钥 / 匿名通道照搜），
+            //    后者要如实报码让人去重填。合成一个 `null` 就是静默降级。
+            secretLookup = { ref -> credentials.lookup(ref.orEmpty()) },
             scope = scope,
         )
         database = db
@@ -140,6 +144,8 @@ class HarnessBridge(private val context: Context) :
                 // 而两端都不报错。2026-09-24 真机验收就是这么抓到的。
                 "fetchRunKit" -> offMain(result) { fetchRunKit(call) }
                 "syncNow" -> offMain(result) { syncNow(call) }
+                // 下行（M4 的另一半）：与 syncNow 同一个理由要离开主线程 —— 这是一串 GET
+                "syncPull" -> offMain(result) { syncPull(call) }
                 "cachedRunKit" -> result.success(cachedKitJson())
                 "startRun" -> startRun(call, result)
                 "cancelRun" -> result.success(runner?.cancel(call.argument<String>("runId").orEmpty()) ?: false)
@@ -191,9 +197,11 @@ class HarnessBridge(private val context: Context) :
                 "hasCredential" -> result.success(
                     credentials.has(call.argument<String>("ref").orEmpty()),
                 )
-                // 唯一一个"把密钥取出来"的动作。它存在的理由只有一个：
-                // **请求头要放配对令牌**（`X-ComfyHub-Token`），而令牌就存在这个密钥库里
-                // （`docs/pairing-design.md` §3.2 第 13 步）。值只回给 Dart 的内存，不进日志。
+                // **把密钥明文取出来**的那一个动作。现在有**两个**调用方，都必须显式：
+                //  ① 配对令牌要进请求头（`X-ComfyHub-Token`，`docs/pairing-design.md` §3.2 第 13 步）；
+                //  ② 用户点「把本机密钥推给桌面」（`CredentialStore.reveal()`，§14.4）——
+                //     那是**全仓唯一**允许读密钥的地方，名字刻意不叫 read/get，评审时一眼能看见。
+                // 三条不变：值只回给 Dart 的内存，**不进日志、不进事件、不回显**。
                 "getCredential" -> result.success(
                     credentials.get(call.argument<String>("ref").orEmpty()),
                 )
@@ -489,6 +497,47 @@ class HarnessBridge(private val context: Context) :
             put("rejectedTransient", outcome.rejectedTransient)
             put("pending", outcome.pending)
             put("droppedLocal", outcome.droppedLocal)
+            outcome.error?.let { put("error", it) }
+        }.toString()
+    }
+
+    // -----------------------------------------------------------------------
+    //  下行（M4 的另一半）：把桌面那份投影到本地镜像
+    // -----------------------------------------------------------------------
+
+    /**
+     * 拉一次（`GET /api/sync/{manifest,changes,bootstrap}` → 本地镜像）。
+     *
+     * 形状与上行那条对齐：`{ok, mode, applied, cursor, skippedDeleted?, skippedUnknown?,
+     * mirrorDropped?, error?}` —— 多的几个键只用于**如实说明**（跳过了几行、
+     * 这次为了重建镜像丢了多少行），Dart 侧不读也不影响。
+     *
+     * ⚠ `mode` 只在 `ok=true` 时是结论；`ok=false` 时别拿它当结论（判据永远是 `ok`）。
+     * 拿不到后端地址时**如实回 `ok=false`**（不是静默成功）—— 界面上说"已同步"是假的，
+     * 用户会以为桌面上那份已经下来了。
+     */
+    private fun syncPull(call: MethodCall): String {
+        val s = ensureInitialized()
+        val baseUrl = call.argument<String>("baseUrl").orEmpty().trim()
+        val token = call.argument<String>("token")
+        if (baseUrl.isEmpty()) {
+            return buildJsonObject {
+                put("ok", false)
+                put("mode", SyncPullClient.MODE_UP_TO_DATE)
+                put("applied", 0)
+                put("cursor", s.syncCursor())
+                put("error", "还不知道桌面地址（本机没有连过桌面）")
+            }.toString()
+        }
+        val outcome = SyncPullClient(s, transport).pullOnce(baseUrl.trimEnd('/'), token)
+        return buildJsonObject {
+            put("ok", outcome.ok)
+            put("mode", outcome.mode)
+            put("applied", outcome.applied)
+            put("cursor", outcome.cursor)
+            put("skippedDeleted", outcome.skippedDeleted)
+            put("skippedUnknown", outcome.skippedUnknown)
+            put("mirrorDropped", outcome.mirrorDropped)
             outcome.error?.let { put("error", it) }
         }.toString()
     }

@@ -11,6 +11,32 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 /**
+ * 一次"取密钥"的结果。
+ *
+ * ⚠ **为什么不是 `String?`**（2026-09-27 补的一处诚实缺口）：`null` 同时表示
+ * "本机没配这把 key"与"配了但**解不开**"（换过系统用户 / Keystore 里那把钥匙没了）。
+ * 把后者当成前者，按两端各自的语义都是**静默降级**：
+ *  - 出网工具：用户以为自己在用登录态，实际走的是免密钥 / 匿名通道（AIH-015 的原话：
+ *    "把解不开当成没有"是最坏的一种安静）；
+ *  - 上游调用：本该清楚的"密钥坏了"会变成一次 401，用户看到的是"模型不认我"。
+ *
+ * 所以取密钥这件事**必须**能把三件事分开：[Found] / [Missing] / [Unreadable]。
+ */
+sealed interface SecretLookup {
+    /** 取到了明文（**只当场用，不许落库、不许进日志或事件**）。 */
+    data class Found(val value: String) : SecretLookup
+
+    /** 本机没配这把 key —— 这是**正常状态**（免密钥 / 匿名通道照常可用）。 */
+    object Missing : SecretLookup
+
+    /** 配了，但解不开（密钥库换了、密文坏了）—— **不许当成"没配"**。 */
+    object Unreadable : SecretLookup
+}
+
+/** 取到明文就用它，其余（没配 / 解不开）都回 `null`。 */
+fun SecretLookup.valueOrNull(): String? = (this as? SecretLookup.Found)?.value
+
+/**
  * 工具调用的一次请求（模型给的原始 JSON 文本，**不替它猜类型**）。
  */
 data class ToolCallRequest(val callId: String, val name: String, val argumentsJson: String)
@@ -120,18 +146,18 @@ class ToolContext(
     val emit: (String, JsonObject) -> Unit,
     /**
      * `credential_ref` → 密钥（Android Keystore 那条路由平台通道注入，见
-     * `HarnessBridge` 的 `resolveSecret`）。
+     * `HarnessBridge` 的 `secretLookup`）。
      *
      * **出网工具的 key 只有这一个口子**：`web_search` 取 `keenable`、`civitai_search` 取
      * `civitai`（ref 名与桌面 `credentials::KEENABLE_REF` / `civitai::CREDENTIAL_REF` 同名）。
      * 工具 handler 不许自己去读环境变量或全局单例（与桌面同纪律：策略/凭据在 Run 开始时
      * 快照一次，用户中途改设置不该影响在飞的请求）。
      *
-     * 取不到（本机没配 / 密钥解不开）一律返回 `null` —— 调用方按"没有 key"处理，
-     * 而且**必须如实说出来**（Keenable 有免密钥通道、Civitai 匿名也照搜，
-     * 但哪一种是"没有登录态"必须让模型知道）。
+     * ⚠ 返回 [SecretLookup] 而**不是** `String?`：**"没配"与"解不开"是两件事**
+     * （[SecretLookup] 的注释写了为什么）。调用方对这两件事的处置也必须不同：
+     * 没配是正常状态（免密钥 / 匿名通道照搜），解不开要**如实报码**让人去重填。
      */
-    val resolveSecret: (String?) -> String? = { null },
+    val lookupSecret: (String?) -> SecretLookup = { SecretLookup.Missing },
 ) {
     /** 一次 Run 里 AI 最多新增几条记忆（与桌面 `MemoryStore.MAX_ENTRIES_PER_RUN` 同值）。 */
     var memoryWrites: Int = 0

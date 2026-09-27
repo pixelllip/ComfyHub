@@ -101,6 +101,8 @@ class WebToolsTest {
     private fun context(
         net: HttpTransport,
         secrets: Map<String, String> = emptyMap(),
+        /** 这些 ref "配了但解不开"（换过系统用户 / Keystore 钥匙丢了）—— 与"没配"必须分开。 */
+        unreadable: Set<String> = emptySet(),
         webLimit: Int = WebQueryBudget.MAX_QUERIES_PER_RUN,
     ) = ToolContext(
         runId = "r1",
@@ -111,7 +113,14 @@ class WebToolsTest {
         files = files,
         askGate = MobileAskGate(),
         emit = { _, _ -> },
-        resolveSecret = { ref -> ref?.let { secrets[it] } },
+        lookupSecret = { ref ->
+            when {
+                ref == null -> SecretLookup.Missing
+                ref in unreadable -> SecretLookup.Unreadable
+                secrets[ref] != null -> SecretLookup.Found(secrets.getValue(ref))
+                else -> SecretLookup.Missing
+            }
+        },
     ).also { it.webQueriesLimit = webLimit }
 
     // --- web_search ---------------------------------------------------------
@@ -213,6 +222,44 @@ class WebToolsTest {
         )
         assertTrue("带 key 时要说清是密钥额度用尽", withKey.content.contains("额度"))
         assertFalse("绝不回显密钥", withKey.content.contains("keen_secret_value"))
+    }
+
+    /**
+     * **密钥解不开 ≠ 没配**（AIH-015）：解不开要**如实报码**让人去重填，
+     * 而且**一个请求都不发**（免密钥 / 匿名通道不是遮羞布：用户以为自己在用登录态）。
+     */
+    @Test
+    fun `密钥解不开要如实报码，不许静默降级成无 key`() = runBlocking {
+        val net = FakeNet().also { it.reply = HttpReply(200, searchBody) }
+
+        val search = WebSearchTool().invoke(
+            buildJsonObject { put("query", "q") },
+            context(net, unreadable = setOf(WebCredentialRefs.KEENABLE)),
+        )
+        assertFalse(search.ok)
+        assertEquals("SEARCH_CREDENTIAL", search.errorCode)
+        assertTrue("要说清怎么办：${search.content}", search.content.contains("重新填写"))
+        assertEquals("解不开时一个请求都不发", 0, net.requests.size)
+
+        val civitai = CivitaiSearchTool().invoke(
+            buildJsonObject { put("query", "q") },
+            context(net, unreadable = setOf(WebCredentialRefs.CIVITAI)),
+        )
+        assertFalse(civitai.ok)
+        assertEquals("CIVITAI_CREDENTIAL", civitai.errorCode)
+        assertEquals(0, net.requests.size)
+    }
+
+    /** 三个出网工具共用一份预算（见下面那条用例；这条钉住"没配 ≠ 解不开"的反面）。 */
+    @Test
+    fun `没有 key（Missing）是正常状态：照搜，只是如实标出没带登录态`() = runBlocking {
+        val net = FakeNet().also { it.reply = HttpReply(200, searchBody) }
+        val ctx = context(net)
+        val out = WebSearchTool().invoke(buildJsonObject { put("query", "q") }, ctx)
+
+        assertTrue("没配 key 不该失败：免密钥通道照常可用", out.ok)
+        assertEquals("true", out.jsonPayload!!["keyless"].toString())
+        assertTrue(net.last.url.endsWith("/v1/search/public"))
     }
 
     // --- civitai_search -----------------------------------------------------

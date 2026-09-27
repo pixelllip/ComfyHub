@@ -16,6 +16,7 @@ import com.comfyhub.harness.tools.BuiltinTools
 import com.comfyhub.harness.tools.DefaultHarnessFiles
 import com.comfyhub.harness.tools.MobileAskGate
 import com.comfyhub.harness.tools.MobileToolRegistry
+import com.comfyhub.harness.tools.SecretLookup
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
@@ -147,7 +148,7 @@ class HarnessHttpEndToEndTest {
         transport = UrlConnectionTransport(connectTimeoutMs = 5_000, readTimeoutMs = 15_000),
         files = files,
         askGate = MobileAskGate(timeoutMs = 500),
-        resolveSecret = { "secret-1" },
+        secretLookup = { SecretLookup.Found("secret-1") },
     )
 
     private fun request(conversationId: String = "c-http") = RunRequest(

@@ -1080,6 +1080,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     // 上行（M4）：把本机攒的会话/消息推给桌面。**放在最后**且失败不抛 ——
     // 离线是手机的常态，同步不上去绝不该让聊天页起不来。
     await syncOutbox();
+    // 下行（M4 的另一半）：把桌面那份投影下来（首次会走全量 + 建游标）。
+    // 同一套纪律：失败只记一句提示，绝不拦聊天页。
+    await pullChanges();
     // ⚠ 这句必须放在 `_startFreshConversation()` **之后**：它内部会 `_openEmptyConversation()`，
     // 而那里会把 notice 清成 null（"切到空会话要清干净"）—— 放在前面等于白写。
     if (fromCache && providers.isNotEmpty) {
@@ -1206,6 +1209,58 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   bool _outboxPushing = false;
 
+  /// 从桌面**拉一次**（**M4 的下行半边**，契约 §1~§3）。
+  ///
+  /// 与 [syncOutbox] 并排、同一套纪律：
+  ///  - 只有手机走这条路（桌面自己就是真源，`_source.pullChanges` 恒 `upToDate`）；
+  ///  - **失败不抛**（桌面不在线是常态）：只写 [pushNotice] 那条既有通道，
+  ///    **绝不拦聊天页**；
+  ///  - 防重入：冷启动 / 回前台 / Run 收尾可能挨得很近，上一趟没跑完就跳过这一趟
+  ///    （与上行那条 `_outboxPushing` 同一个理由）。
+  ///
+  /// 返回值是**落库的行数**（给人看的"这次同步下来几条"）。
+  Future<int> pullChanges() async {
+    if (!_source.isLocal) return 0;
+    if (_pullingChanges) return 0;
+    _pullingChanges = true;
+    try {
+      final r = await _source.pullChanges(
+        baseUrl: baseUrlProvider?.call(),
+        // 同 ensureRunKit / syncNow：下行也是连桌面，闸门开着时没有这个头就是 403
+        token: pairingToken,
+      );
+      if (r.ok) {
+        if (r.applied > 0) {
+          syncedFromDesktop += r.applied;
+          // 全量重建与增量补几条是**两件事**，说法不能一样（前者用户可能刚 410 过）
+          pushNotice = r.mode == 'bootstrap'
+              ? '已从桌面全量重建本机镜像（${r.applied} 行）。'
+              : '已从桌面同步 ${r.applied} 条记录。';
+        }
+        debugPrint('[M4] 下行：mode=${r.mode} applied=${r.applied} cursor=${r.cursor}');
+      } else {
+        debugPrint('[M4] 下行：ok=false mode=${r.mode} cursor=${r.cursor} error=${r.error}');
+        if (r.error != null) {
+          // 失败要如实说，但不吵人：游标一个字都没动，下次接着拉
+          pushNotice = '从桌面拉取失败：${r.error}';
+        }
+      }
+      return r.applied;
+    } catch (e) {
+      // 通道本身炸了（桥没起来 / 库坏了）：与上行同一条处置 —— 只记一句
+      pushNotice = '从桌面拉取失败：$e';
+      debugPrint('[M4] 下行：异常 $e');
+      return 0;
+    } finally {
+      _pullingChanges = false;
+    }
+  }
+
+  bool _pullingChanges = false;
+
+  /// 本次会话累计**从桌面拉下来**的行数（界面上与 [syncedToDesktop] 对称）。
+  int syncedFromDesktop = 0;
+
   /// 上行重试的定时器（只在**队列里真有待办**时存在）。
   Timer? _outboxRetry;
 
@@ -1239,8 +1294,12 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 失败只记 [pushNotice]、**绝不拦聊天页**（离线是手机的常态）。
   Future<void> onAppResumed() async {
     if (!_source.isLocal) return;
-    if (await _pendingOutbox() <= 0) return;
-    await syncOutbox();
+    // ① 上行：**先问本地队列**，没有待办就不推（绝不空转烧电）
+    if (await _pendingOutbox() > 0) await syncOutbox();
+    // ② 下行：**不管本机队列空不空都要拉一次** —— 桌面那边可能刚改过东西
+    //    （用户刚在桌面上删了一条会话 / 另开了一台设备在聊），而本机队列本来就是空的。
+    //    上限是"每次回前台一次"，不是轮询；失败只记提示。
+    await pullChanges();
   }
 
   /// 问**本地库**还有几条待推（不出网）。
@@ -2216,6 +2275,9 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 一轮跑完是"内容定稿"的时刻：顺手把本机的会话/消息推给桌面（M4）。
       // 桌面不在线时它只记一句"还有几条没上去"，不拦任何东西。
       await syncOutbox();
+      // 同时把桌面那份的变化拉下来（同一个理由：这是"内容定稿"的时刻，
+      // 用户接下来多半要看/继续这段对话，两边的镜像该对齐）。
+      await pullChanges();
       _notifyNow();
     }
   }

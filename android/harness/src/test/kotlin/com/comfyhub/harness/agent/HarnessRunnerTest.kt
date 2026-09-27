@@ -19,6 +19,7 @@ import com.comfyhub.harness.tools.BuiltinTools
 import com.comfyhub.harness.tools.DefaultHarnessFiles
 import com.comfyhub.harness.tools.MobileAskGate
 import com.comfyhub.harness.tools.MobileToolRegistry
+import com.comfyhub.harness.tools.SecretLookup
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -136,7 +137,8 @@ class HarnessRunnerTest {
             transport = transport,
             files = files,
             askGate = MobileAskGate(timeoutMs = 500),
-            resolveSecret = { "secret-1" },
+            // 取到一把"明文"（真值是三态的：Found / Missing / Unreadable，见 SecretLookup）
+            secretLookup = { SecretLookup.Found("secret-1") },
         )
 
     private fun request(conversationId: String = "c-1", text: String = "你好") = RunRequest(
@@ -498,12 +500,39 @@ class HarnessRunnerTest {
             tools = MobileToolRegistry(BuiltinTools.all()),
             transport = transport,
             files = files,
-            resolveSecret = { null },
+            // "没配"是**正常状态**（有些端点不需要 key）
+            secretLookup = { SecretLookup.Missing },
         )
         val outcome = runner.run(request())
         assertEquals(RunStatus.FAILED, outcome.status)
         assertEquals(UpstreamErrorCode.MISSING_CREDENTIAL, outcome.errorCode)
         assertNotNull(store.getMessage(outcome.assistantMessageId))
+    }
+
+    /**
+     * **"解不开" ≠ "没配"**（AIH-015）：解不开时当场说清、**一个上游请求都不发**。
+     *
+     * 静默按"无 key"发出去的后果是换回一个 401，用户看到的是"模型不认我"，
+     * 而真正该做的事是"去手机上把那把密钥重填一次"。
+     */
+    @Test
+    fun `密钥解不开时当场说清，不许当成没密钥发出去（AIH-015）`() = runBlocking {
+        val transport = ScriptedTransport()
+        val runner = HarnessRunner(
+            store = store,
+            bus = com.comfyhub.harness.event.RunEventBus(),
+            tools = MobileToolRegistry(BuiltinTools.all()),
+            transport = transport,
+            files = files,
+            secretLookup = { SecretLookup.Unreadable },
+        )
+
+        val outcome = runner.run(request())
+
+        assertEquals(RunStatus.FAILED, outcome.status)
+        assertEquals(UpstreamErrorCode.CONFIG_ERROR, outcome.errorCode)
+        assertTrue("要留下可查的一条回复（R6）", store.getMessage(outcome.assistantMessageId) != null)
+        assertEquals("一个上游请求都不该发", 0, transport.urls.size)
     }
 
     // --- 调用方给的 id（M3.2：界面乐观插入的那两条气泡） --------------------

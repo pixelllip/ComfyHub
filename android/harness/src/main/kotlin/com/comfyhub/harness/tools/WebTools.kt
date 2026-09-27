@@ -36,11 +36,15 @@ import java.util.Locale
  *
  * ## 凭据（M6 那条路）
  *
- * key 从 `ToolContext.resolveSecret` 取（平台通道注入的 Android Keystore 实现）。
+ * key 从 `ToolContext.lookupSecret` 取（平台通道注入的 Android Keystore 实现）。
  * ref 名与桌面**同名**：[WebCredentialRefs.KEENABLE] / [WebCredentialRefs.CIVITAI] ——
  * 界面上"这台手机上填过哪些 Key"读的就是这些名字。**用户要在手机上单独填一次**
  * （两端的密钥互相独立，`docs/mobile-harness-design.md` §8），没填时两支工具都**照搜**：
  * Keenable 走免密钥通道（官方额度每小时 1000 次）、Civitai 走匿名通道并在正文里如实写明。
+ *
+ * ⚠ **"没配"与"解不开"是两件事**：前者是上面那种正常状态，后者（换过系统用户 /
+ * Keystore 钥匙丢了）一律**如实报码**（`SEARCH_CREDENTIAL` / 桌面没有对应的
+ * `CIVITAI_CREDENTIAL`）让人去重填 —— 静默降级成"没有 key"会让用户以为自己在用登录态。
  *
  * ## 两处与桌面**有意不同**（都是平台差异，不是口径差异）
  *
@@ -95,7 +99,17 @@ class WebSearchTool : MobileTool {
         ctx.webBudgetFailure()?.let { return it }
 
         val query = args.str("query") ?: return ToolOutcome.failure("INVALID_ARGUMENT", "缺少参数 query")
-        val key = ctx.resolveSecret(WebCredentialRefs.KEENABLE)?.takeIf { it.isNotBlank() }
+        // ⚠ "没配"与"解不开"必须分开（[SecretLookup]）：前者走免密钥通道照搜；
+        //   后者**如实报 SEARCH_CREDENTIAL**（与桌面 `web_tools::resolve_key` 同一个码）——
+        //   把"解不开"说成"没配"，用户会以为自己在用登录态，实际在裸奔（AIH-015）。
+        val key = when (val found = ctx.lookupSecret(WebCredentialRefs.KEENABLE)) {
+            is SecretLookup.Found -> found.value
+            SecretLookup.Missing -> null
+            SecretLookup.Unreadable -> return ToolOutcome.failure(
+                "SEARCH_CREDENTIAL",
+                "联网搜索的密钥无法解密；请在设置里重新填写，或移除它以改用免密钥模式",
+            )
+        }
 
         // 免密钥走 `/public` 后缀（带 key 时去掉它）—— 官方 SDK 的路径约定：同一个端点名两种调用面。
         // 手拼 JSON 的**键取舍**照抄桌面：可空的 site / published_* 是**省掉键**（不是写 null），
@@ -202,7 +216,18 @@ class CivitaiSearchTool : MobileTool {
         }
         val allowNsfw = args.bool("allowNsfw") ?: false
         val limit = (args.int("limit") ?: DEFAULT_LIMIT).coerceIn(1, MAX_LIMIT)
-        val key = ctx.resolveSecret(WebCredentialRefs.CIVITAI)?.takeIf { it.isNotBlank() }
+        // 同 Keenable：解不开要**如实报**，不许静默降级成匿名通道 ——
+        // ⚠ 桌面 `civitai.rs::resolve_token` 把解不开当没有（那边没有对应的码），
+        //   所以 `CIVITAI_CREDENTIAL` 是**手机侧新增的码**，理由是 AIH-015
+        //   （"把解不开当成没有"比"码名与桌面不一致"糟得多）。两端这里**有意不同**。
+        val key = when (val found = ctx.lookupSecret(WebCredentialRefs.CIVITAI)) {
+            is SecretLookup.Found -> found.value
+            SecretLookup.Missing -> null
+            SecretLookup.Unreadable -> return ToolOutcome.failure(
+                "CIVITAI_CREDENTIAL",
+                "Civitai 的密钥无法解密；请在设置里重新填写它（或移除它以走匿名通道）",
+            )
+        }
         val base = if (allowNsfw) NSFW_BASE_URL else SAFE_BASE_URL
 
         // ⚠ `sort=Most Downloaded` 那个空格**必须过编码**（Java URLEncoder 口径：空格变 `+`）——
