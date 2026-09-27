@@ -2532,6 +2532,12 @@ easy-use / SAM / LayerStyle 的模型目录也都是空的）。所以下一轮*
 量**拉普拉斯方差**（或边缘梯度能量）：数值明显下降就是真的糊了，不是错觉。
 判据写在用例里（同一个合成结果，内部锐度不许比"纯合成 denoise 0"低 20% 以上）。
 
+> ✅ **2026-09-27 已做（尺子 + 六个档的对照，数字见 §16.8）**：尺子是
+> `scripts\e2e\sharpness.py`（人物内部拉普拉斯方差），判据进了 `e2e-image-edit-test.ps1`
+> （`-SharpnessBaseline` + `-SharpnessOut`）。**结论与"三处怀疑"不完全一样**：
+> 内部锐度在两档上分别是纯合成的 **99.6% / 96.9%**（matte 档 99.9% / 100%）——
+> 也就是**"糊"不在人物内部**，内窥镜这一刀量不出用户看到的那个现象。
+
 ### 15.3 同时保留"不抠图"的两条路（用户一起点的）
 
 它们是**比抠图更稳**的两条：
@@ -2685,11 +2691,63 @@ subject_mask_from_image(tolerance=0.12) → drop_blended_edge(band=3, tolerance=
 | 项 | 状态 |
 | --- | --- |
 | `light`（按背景改光照/阴影） | ⛔ 仍**默认 `none`**，观感不合格（见 §15.4 / pitfalls 的 `light=auto` 那条） |
-| "人变糊"的**拉普拉斯方差**那把尺子 | ⛔ 没做。但本次已找出"糊"的一个主因（**无软 alpha + 前景被删**），§15.2 的三处怀疑里第 1、3 条（`unmix_edge` 除法 / `feather`）仍待单变量对照 |
+| "人变糊"的**拉普拉斯方差**那把尺子 | ✅ **已做（2026-09-27，见 §16.8）**：`scripts\e2e\sharpness.py` + e2e 的 `-SharpnessBaseline` 判据。六个档实测下来 **"糊"不在人物内部**（最低也有纯合成的 96.9%）—— 尺子照样要留着（它是一条**回归线**：谁把人物内部真的写糊了，它会红），但用户看到的"糊"得从**边缘 / 前景**那条路去解释（§16.4 的"无软 alpha + 前景被删 18.4%"） |
 | 长边 > 1024 的人物图 | ⚠ 未处理：BEN2 / RMBG-1.4 内部都固定 1024 推理，发丝会被降采样 |
 | 跨画风（动画人 + 照片景）本身仍违和 | ⚠ 那是**阶段一底模**的事，不是抠图能解决的 |
 | **§15.3 那两条"不抠图"的路写进 skill 当首选** | ✅ **已做（2026-09-27）**：skill v3 新增「★ 先想这一步：**有两条路比抠图更稳**」并放在"抠图"那一节**前面** —— ① 阶段一就按最终背景生成（`denoise 0.35~0.5` 直接融）；② `denoise 0` 纯合成。两条的代价（姿态受底图约束 / 光照不融合）也如实写上，并写明"什么时候才真的需要抠图" |
 | **matte 工作流的活实例验收** | ✅ **已做（2026-09-27）**：真实例（ComfyUI Desktop / RTX 4060）上 `scripts\e2e-image-edit-test.ps1 -Matte -PersonMediaId 301 -PersonDenoise 0.4 -BgColor green` → **39 项全绿**；产物在 `.run\matte-live\out.png`（夜景里那位双马尾，**细发丝与五官都在、没有绿边、没有白框**），变化图 `diff-heat.png` 上只有人物是红的、轮廓一圈亮边（ring 融接缝）、**其余整片深蓝**（背景没被动） |
+
+---
+
+### 16.8 「人变糊」量出来了：**内部没问题，问题在边缘**（2026-09-27）
+
+用户收工前那句"**人变糊了**"（§15.2）这一轮被量成了数字。尺子 = **人物内部拉普拉斯方差**
+（variance of Laplacian，VoL）：剪影向内腐蚀 8 像素，只在剩下的内部像素上算
+（边界上量到的是"边缘对比度"，不是"内部细节"），亮度取 Rec.601、4 邻域核。
+
+**工具**：`scripts\e2e\sharpness.py`（可以单跑，也可以给 e2e 当判据）。
+**口径与前提**（写在文件头，改之前先读）：剪影从**人物图**现推，所有被比较的图**共用同一个掩码**；
+所以它要求"人物没被搬过"（`-PlaceScale`/`-PlaceX`/`-PlaceY` 一给，掩码就对不上）。
+
+**怎么跑**（六个档，固定 `-Seed 20260927`；每个档一次完整 e2e）：
+
+```powershell
+# ① 参考档（纯合成，判据的基线）
+pwsh -File scripts\e2e-image-edit-test.ps1 -Matte -PersonMediaId 301 -PersonDenoise 0 -BgColor green `
+     -Seed 20260927 -SharpnessOut .run\sharp-ab\matte-d0.png
+# ② 活配置（ring=14，工作流里写着的那个）与 ③ 只改一个变量（关 ring）
+pwsh -File scripts\e2e-image-edit-test.ps1 -Matte -PersonMediaId 301 -PersonDenoise 0.4 -BgColor green `
+     -Seed 20260927 -SharpnessBaseline .run\sharp-ab\matte-d0.png -SharpnessOut .run\sharp-ab\matte-d04-ring14.png
+pwsh -File scripts\e2e-image-edit-test.ps1 -Matte -PersonMediaId 301 -PersonDenoise 0.4 -MatteRing 0 -BgColor green `
+     -Seed 20260927 -SharpnessBaseline .run\sharp-ab\matte-d0.png -SharpnessOut .run\sharp-ab\matte-d04-ring0.png
+# ④~⑥ 颜色抠图那条老路（`-Ring` 只在这一档真的存在）：把 -Matte 换成 -Workflow …\comfyhub_paste_person_anima.json
+```
+
+| 档 | 人物内部锐度（VoL） | 相对纯合成 | 判据（≥80%） |
+| --- | --- | --- | --- |
+| **matte** denoise 0（纯合成，参考） | 684.78 | 100% | — |
+| **matte** denoise 0.4 + ring 14（活配置） | 683.98 | **99.9%** | ✅ |
+| **matte** denoise 0.4 + `MatteRing 0` | 684.78 | **100%** | ✅ |
+| **颜色抠图** denoise 0（纯合成，参考） | 695.63 | 100% | — |
+| **颜色抠图** denoise 0.4 + `-Ring 14`（只融接缝） | 692.94 | **99.6%** | ✅ |
+| **颜色抠图** denoise 0.4 + `-Ring 0`（人物整块重采样） | 673.88 | **96.9%** | ✅ |
+
+**四条结论（按重要性排）**：
+
+1. **判据全部通过，而"糊"没有被量出来** —— 最差的一档（人物整块被重采样一遍）也只掉
+   **3.1%**。所以用户看到的"糊"**不是人物内部细节变少**：它要么在**边缘/alpha**上
+   （§16.4 已定位：颜色抠图丢掉 18.4% 前景、没有软 alpha，细发丝被整条删掉），
+   要么是"整幅都偏软"的观感（VAE 编解码 + 1024 推理）。**别拿这张表去宣称"糊已修好"**。
+2. **单变量对照给出了 ring 的真实代价**：颜色档 `-Ring 14 → -Ring 0`（ring 关掉 =
+   人物自己那圈也进重绘区）内部锐度从 99.6% 掉到 96.9% —— 方向与 §15.2 的怀疑②一致，
+   但量级远小于"糊"的观感。**该留的仍然要留**（ring 是"人物像素一个都不动"的机制）。
+3. **matte 档的内部是"逐字节安全"的**：`MatteRing 0` 与纯合成**数值完全相同**（684.7842）
+   —— 也就是说 `28 GrowMask(expand=0)` → `29 MaskComposite(subtract)` 得到**空重绘区**时，
+   KSampler（denoise 0.4）**一个像素都不改**。这既是"关 ring"这个变量的有效性证明，
+   也是"denoise 0 与空掩码等价"的实测。ring=14 那档掉 0.1% 是 VAE 感受野的连带（环在人物外面）。
+4. **尺子留下当回归线**：`-SharpnessBaseline` 一给，e2e 就会断言"内部锐度不低于纯合成的 80%"。
+   它的价值不是证明现在的观感，而是**挡住以后把人物内部真的写糊**（例如有人把
+   `unmix_edge` 的 band 算错、或把重绘区误扩到剪影内部）。
 
 ---
 

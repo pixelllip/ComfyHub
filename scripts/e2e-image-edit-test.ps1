@@ -86,10 +86,21 @@ param(
     # `easy imageRemBg` 现算（连续 alpha），Rust 侧只把人物图那份像素洗干净。
     # 它**需要人物图**（没有 subjectFilename 就没得抠），所以必须走两阶段 / 给 -PersonMediaId。
     [switch]$Matte,
+    # **matte 档的 ring**（只在 `-Matte` 下有意义）：`-1` = 不动工作流（它写死
+    # `28 GrowMask(expand=14)`）；`0` = 关掉那圈重绘。做"只改一个变量"的对照时用它 ——
+    # 那一档的 ring 在图里，传 `-Ring` 没人接（这正是 A/B 一开始跑不出差异的原因）。
+    [int]$MatteRing = -1,
     # 阶段一的提示词（要人物 + 干净背景）
     [string]$PersonPrompt = '',
     # 贴人物图时的融合档（0.4~0.6；高了人物会变样，低了接缝明显）
     [double]$PersonDenoise = 0.5,
+    # **固定 seed**（0 = 照旧随机，模拟真模型抽卡）。做单变量对照必须给一个固定值：
+    # 否则"关掉 ring 之后锐度变了多少"里混着"噪声不同"，那个差异说明不了任何事。
+    [int]$Seed = 0,
+    # **人物内部锐度那把尺子**（总纲 §15.2）：把产物另存一份到这里，方便并排看 / 当下一轮的基线
+    [string]$SharpnessOut = '',
+    # 给"纯合成"那一档的产物路径：量到的人物内部锐度（拉普拉斯方差）**不许比它低 20% 以上**
+    [string]$SharpnessBaseline = '',
     # **cfg**（0 = 不动，用工作流自己写死的值）。
     # ⚠ 两条自带工作流都写死 `cfg=1.0`（无引导档，Turbo 的常规跑法）——
     #   此时提示词对画面的约束很弱，"贴进来的背景"很难被重画掉。要提高就得显式给。
@@ -158,6 +169,25 @@ function Find-Python {
         'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\.venv\Scripts\python.exe'
     )
     foreach ($c in $cands) { if ($c -and (Test-Path $c)) { return $c } }
+    return $null
+}
+
+# 锐度尺子要 numpy + PIL —— **不能**拿"第一个存在的 python"就上：
+# 本机 `standalone-env\python.exe` 就没有 numpy，届时尺子会以 ImportError 收场，
+# 而那是"判据没跑成"，不是"图有问题"。所以按"真能 import 到"来挑（与 matte-probe.ps1 同思路）。
+function Find-MeasurePython {
+    $cands = @($env:COMFYHUB_PYTHON, (Find-Python))
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd) { $cands += $cmd.Source }
+    $cands += @(
+        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\.venv\Scripts\python.exe',
+        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\standalone-env\python.exe'
+    )
+    foreach ($c in $cands) {
+        if (-not $c -or -not (Test-Path $c)) { continue }
+        & $c -c 'import numpy, PIL' 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { return $c }
+    }
     return $null
 }
 
@@ -399,7 +429,11 @@ try {
     $placeXField = if ($PlaceX -ge 0) { "$PlaceX" } else { '' }
     $placeYField = if ($PlaceY -ge 0) { "$PlaceY" } else { '' }
     $matteField = if ($Matte) { '1' } else { '' }
-    $runText = "编辑图片 $($script:AttachmentId)|$workflowField|$effectiveDenoise|$Region|$Feather|$Prompt|$PersonMediaId|$cfgField|$Ring|$PlaceScale|$placeXField|$placeYField|$BgColor|$Light|$matteField"
+    # ⚠ 字段是**按位置**解析的（假网关那段 `split('|', N)` 与这里的顺序必须一一对应）：
+    #   尾部追加字段时，两边要一起改，而且假网关的 maxsplit 也要跟着加。
+    $seedField = if ($Seed -gt 0) { "$Seed" } else { '' }
+    $matteRingField = if ($Matte -and $MatteRing -ge 0) { "$MatteRing" } else { '' }
+    $runText = "编辑图片 $($script:AttachmentId)|$workflowField|$effectiveDenoise|$Region|$Feather|$Prompt|$PersonMediaId|$cfgField|$Ring|$PlaceScale|$placeXField|$placeYField|$BgColor|$Light|$matteField|$seedField|$matteRingField"
     $run = Invoke-Api 'POST' "/api/ai/conversations/$($conv.id)/runs" @{
         text = $runText; providerId = $ProviderId; modelId = 'fake-edit-model'
     }
@@ -562,8 +596,11 @@ try {
                 (@($applied | Where-Object { $_ -match ('^\d+\.image ← ' + [regex]::Escape($mask.ringFilename) + '$') }).Count -ge 1) `
                 ($applied -join ' | ')
         }
+        # ⚠ 与下面 cfg 那条同一个坑：工具回的是 **Rust 的 f64 格式化**，
+        #   `-PersonDenoise 0` 报出来是 `0.0`、而 PowerShell 的 `"$PersonDenoise"` 是 `0`。
+        #   不留这个尾巴，`denoise 0`（纯合成那一档）会被判成"没覆盖上"（实测假红）。
         Check "denoise 被覆盖成 $PersonDenoise（贴人物图的融合档）" `
-            (@($applied | Where-Object { $_ -match ('\.denoise ← ' + [regex]::Escape("$PersonDenoise") + '$') }).Count -ge 1) `
+            (@($applied | Where-Object { $_ -match ('\.denoise ← ' + [regex]::Escape("$PersonDenoise") + '(\.0+)?$') }).Count -ge 1) `
             ($applied -join ' | ')
         if ($Cfg -gt 0) {
             # ⚠ PowerShell 的 `"$Cfg"` 对 4.0 给的是 "4"（而工具回的是 "4.0"），
@@ -702,6 +739,64 @@ try {
         Check '遮罩外**基本没动**（平均差 < 8）' ($outAvg -ge 0 -and $outAvg -lt 8) $outAvg
         Check '内外差异拉开（遮罩内至少是遮罩外的 2 倍）' ($inAvg -gt $outAvg * 2) "内 $inAvg / 外 $outAvg"
         $out.Dispose()
+        }
+
+        # --- 8b. 人物内部锐度（拉普拉斯方差）—— "人变糊了"那把尺子（总纲 §15.2）
+        # 口径与前提见 scripts\e2e\sharpness.py 的文件头：只在人物**内部**（剪影向内腐蚀 8 像素）
+        # 量，而且人物图与所有被比较的产物**共用同一个掩码** —— 否则"谁的人更大/偏了一点"
+        # 就变成变量。代价是它要求"人物没被搬过"（`-PlaceScale`/`-PlaceX`/`-PlaceY` 一给，
+        # 掩码就对不上了；那时 `maskRatio` 会跟着不对，人会看出来）。
+        if ($PersonMediaId -gt 0) {
+            # 人物图（量尺的掩码从它现推）—— 三个来源按"越靠后越原始"排：
+            #   matte 档回 `personFilename`（一个字没改的那份）；摆放档回 `placedSubjectFilename`
+            #   （搬过位置的那份，此时掩码只能当参考）；**颜色抠图档两个都没有**，
+            #   它就是 `comfy_use_media` 投进去的那一份（`$person.filename`）。
+            $personName = if ($mask -and $mask.personFilename) { $mask.personFilename }
+                          elseif ($mask -and $mask.placedSubjectFilename) { $mask.placedSubjectFilename }
+                          elseif ($person -and $person.filename) { $person.filename }
+                          else { $null }
+            $personForRuler = if ($personName) { Join-Path $instanceInput $personName } else { $null }
+            Check '锐度尺子拿得到人物图（量尺的掩码从它现推）' `
+                ($personForRuler -and (Test-Path $personForRuler)) "$personForRuler"
+            $measurePython = Find-MeasurePython
+            # 拿"第一个存在的 python"就上会以 ImportError 收场，而那是"判据没跑成"、
+            # 不是"图有问题" —— 所以这一条也要如实报红，不许静默跳过。
+            Check '找得到带 numpy + PIL 的 python（锐度尺子要它）' ($null -ne $measurePython) `
+                '可用 COMFYHUB_PYTHON 指定'
+            if ($personForRuler -and (Test-Path $personForRuler) -and $measurePython) {
+                $rulerArgs = @((Join-Path $E2eDir 'sharpness.py'), '--image', $outFile,
+                    '--person', $personForRuler, '--erode', '8')
+                $baselineOk = $true
+                if ($SharpnessBaseline) {
+                    $baselineOk = Test-Path -LiteralPath $SharpnessBaseline
+                    Check '锐度基线文件在（-SharpnessBaseline 指向的那份纯合成产物）' $baselineOk $SharpnessBaseline
+                    if ($baselineOk) {
+                        $rulerArgs += @('--baseline', (Resolve-Path -LiteralPath $SharpnessBaseline).Path)
+                    }
+                }
+                $rulerRaw = (& $measurePython @rulerArgs 2>$null | Out-String).Trim()
+                $ruler = $null
+                try { $ruler = $rulerRaw | ConvertFrom-Json } catch { }
+                Check '锐度尺子跑出了数（不是空跑）' ($ruler -and ($null -ne $ruler.laplacianVariance)) $rulerRaw
+                if ($ruler -and ($null -ne $ruler.laplacianVariance)) {
+                    Say ("  人物内部锐度（拉普拉斯方差，erode=$($ruler.erode)px）：$($ruler.laplacianVariance)" +
+                        "（$($ruler.interiorPixels) 像素 = 剪影的 $([Math]::Round($ruler.maskRatio * 100, 1))%）") 'White'
+                    Check '内部区域够大、判据不是空跑（> 2 万像素）' ($ruler.interiorPixels -gt 20000) $ruler.interiorPixels
+                    if ($ruler.baseline) {
+                        $ratioPct = [Math]::Round($ruler.ratio * 100, 1)
+                        Say ("  基线（纯合成）：$($ruler.baseline.laplacianVariance) → 本档 $($ruler.laplacianVariance)" +
+                            " = 基线的 $ratioPct%") 'White'
+                        Check '人物内部锐度不低于纯合成的 80%（低于就是真的糊了，不是错觉）' `
+                            ($ruler.ratio -ge 0.8) "本档 / 基线 = $ratioPct%"
+                    }
+                }
+                if ($SharpnessOut) {
+                    $outDir = Split-Path -Parent $SharpnessOut
+                    if ($outDir) { New-Item -ItemType Directory -Force -Path $outDir | Out-Null }
+                    Copy-Item -LiteralPath $outFile -Destination $SharpnessOut -Force
+                    Say "  产物另存：$SharpnessOut（供并排看 / 当下一轮的 -SharpnessBaseline）" 'DarkGray'
+                }
+            }
         }
     }
 

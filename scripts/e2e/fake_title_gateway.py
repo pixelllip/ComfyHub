@@ -178,8 +178,8 @@ class Handler(BaseHTTPRequestHandler):
         if "编辑图片" in user_text:
             # ⚠ maxsplit 必须 >= 字段数-1：给少了，**最后一个字段会被并进前一个**里
             #   （实测：matte 那个 `1` 被并进 light，工具收到 `light="none|1"` → INVALID_ARGUMENT）。
-            #   现在 15 个字段 → maxsplit=14。
-            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 14)
+            #   现在 17 个字段（尾部加了 seed / matteRing，见下）→ maxsplit=16。
+            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 16)
             attachment_id = fields[0].strip() if fields else ""
             workflow_path = fields[1].strip() if len(fields) > 1 else ""
             denoise = float(fields[2].strip()) if len(fields) > 2 and fields[2].strip() else 1.0
@@ -214,6 +214,16 @@ class Handler(BaseHTTPRequestHandler):
             #   · 所以**一个 LoadImageMask 覆盖都不该写**（那份工作流没有 12 / 26）——
             #     这正是这一档要验的事。
             matte = bool(tail[6].strip()) if len(tail) > 6 and tail[6].strip() else False
+            # 第 16 个字段：**固定 seed**（`0` / 空 = 照旧随机，与真模型的行为一致）。
+            #   ⚠ 做 A/B 对照必须给一个固定值：这个网关原来每次都 `random.randint(...)`，
+            #   于是"关掉 ring 之后内部锐度变了多少"里混着"噪声不同"这个变量 ——
+            #   单变量对照的前提直接没了（2026-09-27 发现的）。
+            seed = int(tail[7].strip()) if len(tail) > 7 and tail[7].strip() else 0
+            # 第 17 个字段：**matte 档的 ring**（`-1` = 不动工作流）。
+            #   matte 那份工作流的 ring 是**写死在节点上**的
+            #   （`28 GrowMask(expand=14)` → `29 MaskComposite(subtract)`），
+            #   所以"关掉 ring"只能在提交时覆盖 `GrowMask.expand` —— 传参数没用。
+            matte_ring = int(tail[8].strip()) if len(tail) > 8 and tail[8].strip() else -1
             tool_msgs = [m for m in messages if m.get("role") == "tool"]
             rounds = 0
             if len(tool_msgs) == 0:
@@ -293,7 +303,9 @@ class Handler(BaseHTTPRequestHandler):
                         None if matte else mask.get("filename"),
                         mask.get("width"), mask.get("height"), prompt, denoise,
                         person_for_submit, cfg,
-                        None if matte else mask.get("ringFilename")),
+                        None if matte else mask.get("ringFilename"),
+                        seed=seed or None,
+                        grow_expand=(matte_ring if matte and matte_ring >= 0 else None)),
                     "title": "E2E 图像编辑验证",
                     "waitSeconds": 300,
                 })
@@ -350,7 +362,8 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     @staticmethod
-    def _inpaint_overrides(workflow_path, bg, mask, width, height, prompt, denoise, person=None, cfg=None, ring=None):
+    def _inpaint_overrides(workflow_path, bg, mask, width, height, prompt, denoise, person=None, cfg=None,
+                           ring=None, seed=None, grow_expand=None):
         """按**工作流自己的节点表**算 overrides（真实模型也是先看清图里有哪些节点）。
 
         刻意不写死节点 id：`comfyhub_inpaint_anima.json` 与 `..._krea2.json` 的编号不同，
@@ -359,6 +372,9 @@ class Handler(BaseHTTPRequestHandler):
         `person`（阶段一的人物图文件名）给了就填进**第二个** LoadImage、并且由调用方把
         `denoise` 降到 0.4~0.6 —— 那是"贴人物图"而不是"纯提示词重绘"，两件事的档位不同。
         `cfg` 给了才覆盖（默认不动：自带工作流都写死 `cfg=1.0`，那是 Turbo 的常规跑法）。
+        `seed` 给了就固定（**单变量对照的前提**：默认随机是对真模型的模拟，做 A/B 时必须钉住）。
+        `grow_expand` 给了就覆盖 `GrowMask.expand`（matte 那份工作流的 ring 写死在节点上，
+        只能这样关掉它 —— 见 `matte_ring` 那条注释）。
         """
         graph = json.loads(open(workflow_path, "r", encoding="utf-8").read())
         by_class = {}
@@ -375,10 +391,14 @@ class Handler(BaseHTTPRequestHandler):
         if mask and by_class.get("LoadImageMask"):
             masks = by_class["LoadImageMask"]
             overrides[f"{masks[0]}.image"] = mask          # 合成遮罩（剪影）
-            if ring and len(masks) > 1:
-                # 第二个 LoadImageMask = **重绘区**（只圈人物外面一圈）：
-                # 人物自己的像素于是原样保留 —— 这就是"嵌进去不变画风"的那条路。
-                overrides[f"{masks[1]}.image"] = ring
+            if len(masks) > 1:
+                # 第二个 LoadImageMask = **重绘区**。有 ring 时是"只圈人物外面那一圈"
+                # （人物自己的像素原样保留 —— "嵌进去不变画风"的那条路）；
+                # **没有 ring 时显式填回剪影本身**（= 人物整块一起重采样，也就是 ring 出现之前的老行为）。
+                # ⚠ 不能"不覆盖、让它用图里那个默认值"：那份工作流的默认是 `example_ring.png`，
+                #   而实例的 input 里**没有这个文件** → 提交直接炸；万一哪天有人放了一个旧的
+                #   `example_ring.png` 进去，它还会**静默**用错的那一圈（比炸更难查）。
+                overrides[f"{masks[1]}.image"] = ring or mask
         for node_id in by_class.get("ImageScale", []):
             # 尺寸必须与遮罩一致（不一致时采样直接炸）
             overrides[f"{node_id}.width"] = width
@@ -387,10 +407,13 @@ class Handler(BaseHTTPRequestHandler):
             overrides[f"{by_class['CLIPTextEncode'][0]}.text"] = prompt
         if by_class.get("KSampler"):
             sampler = by_class["KSampler"][0]
-            overrides[f"{sampler}.seed"] = random.randint(1, 2_000_000_000)
+            overrides[f"{sampler}.seed"] = seed if seed is not None else random.randint(1, 2_000_000_000)
             overrides[f"{sampler}.denoise"] = denoise
             if cfg is not None:
                 overrides[f"{sampler}.cfg"] = cfg
+        if grow_expand is not None and by_class.get("GrowMask"):
+            # matte 档的 ring：`28 GrowMask.expand=14` 写死在图里 → 覆盖它才是"关 ring"
+            overrides[f"{by_class['GrowMask'][0]}.expand"] = grow_expand
         return overrides
 
     def _stream_tool(self, name, arguments):
