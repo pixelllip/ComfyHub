@@ -312,6 +312,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
 | `scripts\server.ps1 start / stop / status / logs` | 只操作后端 |
 | `scripts\server.ps1 run` | 后端前台运行（Ctrl+C 停） |
 | `scripts\server.ps1 fatjar` | 打成一个独立 jar |
+| **`scripts\rebuild-server.ps1`** | **改了 `server-rs\` 之后要跑这个**（停后端 → `cargo build --release` → 起后端 → 等健康）。为什么必须有它：`up` / `server.ps1 start` **只在 exe 不存在时**才编（源码变新时它们直接复用旧 exe，= 改了半天没生效），而后端**在跑时 `cargo build` 必然失败**（Windows 不许覆盖运行中的 exe，实测文件被占）。它还会**在停服务之前**预检"能不能脱离进程树起进程"，探不通就原样退出（避免"停成功、起不来"）。端口默认沿用当前那个，正在跑的 App 不用重连。`-NoStart` 只编不起、`-Force` 源码没变也重编 |
 | `scripts\autorun-app.ps1` | 一键全流程：服务 → 分析 → 构建（Release）→ 启动 App |
 | `scripts\pack-release.ps1` | **打包发布版**：按 `packaging\manifest.json` 把 **Rust 后端二进制**（+ 脚本 / DDL / Skills / 捕获扩展）**就地装配进** `build\windows\x64\runner\Release\`，装完那个目录就是完整发布包（`-OutDir` 可另存，`-Zip` 顺带压包）。**P2 起不携带 MySQL、P4 起不携带 JRE**（合计少约 340MB，实测这种装配约 **14MB**） |
 | `scripts\ensure-runtime.ps1` | **运行时一键就绪**：检测不到的运行时自动下载安装（pwsh / VC++ 走 winget；Java **只在回退旧 Kotlin 后端时才需要** —— P4 收尾起 `up` 不再为 Rust 后端下 JRE）。`-CheckOnly` 只检测 |
