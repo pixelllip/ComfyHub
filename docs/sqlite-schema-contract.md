@@ -122,9 +122,23 @@ CREATE TABLE _outbox (
 
 | 同步 | 不同步 |
 | --- | --- |
-| `prompts` `tags` `prompt_tags` `media_assets` `media_tags` | **`ai_run_events`**（62 万行的调试日志） |
+| `prompts` `tags` `prompt_tags` `media_assets` `media_tags` | **`ai_run_events`**（单 Run 上万条的调试日志） |
 | `ai_conversations` `ai_messages` `ai_message_parts` `ai_attachments` | `ai_providers` `ai_models` `app_settings`（**含凭据引用与令牌明文**） |
-| `capture_runs`（可选） | `ai_runs` / `ai_tool_calls`（可选） |
+| `capture_runs` `ai_runs` `ai_tool_calls` | `ai_questions`（提问闸门只在桌面侧；手机看实时提问走 `GET /api/ai/pending`） |
+
+> ✅ **2026-09-27 用户拍板（总纲 §7 待定项 1 = 进同步范围）**：`ai_runs` / `ai_tool_calls`
+> 从"可选"变成**进**，理由是手机要能显示桌面那次 Run 的**工具过程**（跑过哪些工具、成没成、
+> 花了多久）。三条连带：
+> ① 两张表的 `_sync_log` 触发器在 `db/schema.sqlite.sql` 里补上了，而 `SCHEMA_VERSION`
+> 由 2 提到 3 —— **不 bump 的话老库直接早退、触发器一条都不会有**（`open_or_create`
+> 对"版本够新、表都在"的库不重跑 DDL）；顺带 `manifest.schemaVersion` 变了，
+> 手机据此重新 bootstrap；
+> ② 上行也要收（`table_of_kind` 认 `ai_run` / `ai_tool_call`），否则"手机发起的 Run
+> 在桌面上看不到工具过程"；
+> ③ 手机侧 `ai_runs` 变成**镜像表**之后，"崩溃恢复哪些 Run"必须靠本机的 `local_runs`
+> 标记来判（`status='running'` 会把桌面的 Run 也算进去，按 R6 标 failed 再推回桌面）。
+> ⚠ `ai_tool_calls` **没有 `updated_at` 列** → 上行的 LWW 对它不生效（`push` 只在 payload
+> 带 `updated_at` 时才比新旧）。纪律是"**只推自己写的行**"：手机不重推从桌面收到的行。
 
 - **主键约定**：会话 / 消息 / 块是 `CHAR(36)` UUID → 两端各自生成不会撞。
 - **手机不要创建 `prompts` / `media_assets` / `tags`**（那些由桌面在提交时产生）。

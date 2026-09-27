@@ -138,6 +138,37 @@ class HarnessStoreTest {
         assertTrue(RunStatus.isTerminal(after.status))
     }
 
+    @Test
+    fun `崩溃恢复：桌面同步下来的 running 行不算'我的未完成 Run'`() {
+        // `ai_runs` 自 2026-09-27 起是**镜像表**（总纲 §7 待定项 1 = 进同步范围）：
+        // 桌面那次 Run 会整行落下来。它要是被当成"我没跑完的 Run"，手机上就会按 R6 把它
+        // 标成 failed 再推回桌面 —— 这是**静默改坏别人数据**那一类。
+        // 判据：只有 createRun（同一个事务里写了 local_runs）出来的 Run 才算"我的"。
+        val c = store.createConversation()
+        val mine = store.createRun(c.id, null, null, null, null, "v1")
+
+        // 直接 SQL 插一条"桌面同步下来"的 running 行（镜像 apply 就是这个形状：整行覆盖，
+        // **不**写 local_runs）
+        db.session.exec(
+            """
+            INSERT INTO ai_runs (id, conversation_id, status, started_at, created_at, updated_at)
+            VALUES ('desktop-run-1', ?, 'running', '2026-09-27T00:00:00.000Z',
+                    '2026-09-27T00:00:00.000Z', '2026-09-27T00:00:00.000Z')
+            """.trimIndent(),
+            listOf(c.id),
+        )
+
+        val landed = db.session
+            .queryOne("SELECT COUNT(*) AS n FROM ai_runs WHERE conversation_id = ?", listOf(c.id))
+            ?.int("n")
+        assertEquals("镜像行真的落进库里了（两行都在）", 2, landed)
+        assertEquals(
+            "桌面那条 running 不许被当成我的未完成 Run",
+            listOf(mine.id),
+            store.listUnfinishedRuns().map { it.id },
+        )
+    }
+
     // --- 事件流（R5 / P1 的批量写） ----------------------------------------
 
     @Test

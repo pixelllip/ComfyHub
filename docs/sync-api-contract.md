@@ -109,7 +109,9 @@
 > 排序**按主键稳定升序**：SQLite 不保证无 `ORDER BY` 的顺序，翻页时顺序不稳就会
 > **重复或漏掉**行（有专门用例翻完所有页、去重后数条数）。
 >
-> 合法表名 = §6 的唯一真源表，也就是 `manifest.tables` 里 `synced: true` 的那 10 张。
+> 合法表名 = §6 的唯一真源表，也就是 `manifest.tables` 里 `synced: true` 的那 **12 张**
+> （2026-09-27 由 10 张变 12：`ai_runs` / `ai_tool_calls` 进同步范围，见
+> `sqlite-schema-contract.md` §6 那段注）。
 > **改这份清单要同时改两端**（手机侧 `MobileSchema` 有一份镜像清单）。
 
 ---
@@ -140,6 +142,7 @@
 | **`rejected` 必须逐条给 code** | 手机要能区分"永远不可能成功"（丢掉）与"暂时失败"（重试）。不许只回一个总数 |
 | 单批上限（默认 500 行） | 与 `changes` 的 limit 对齐，别让一次请求扛几万行 |
 | **手机不许创建 `prompts` / `media_assets` / `tags`** | 那些由桌面在提交时产生（总纲 §3.3）。推上来只能是 `rejected` |
+| **能推的 `kind` 是一张**表**，不是"什么都能推"** | 桌面 `table_of_kind` 认这 6 个：`ai_conversation` / `ai_message` / `ai_message_part` / `ai_attachment` / `ai_run` / `ai_tool_call`。别的回**永久性** `UNKNOWN_KIND`（手机据此丢掉那条 outbox，不再重试）。⚠ `ai_tool_calls` **没有 `updated_at`** → LWW 对它不生效，纪律是"只推自己写的行" |
 
 ---
 

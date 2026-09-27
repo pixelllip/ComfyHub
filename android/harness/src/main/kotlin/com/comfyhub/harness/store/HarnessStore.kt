@@ -361,6 +361,11 @@ class HarnessStore(private val session: SqlSession) {
                     record.reasoningEffort, now, now, now,
                 ),
             )
+            // ★ 同一事务里记一笔"这次 Run 是**本机**起的"。
+            //   `ai_runs` 自 2026-09-27 起是**镜像表**（总纲 §7 待定项 1 = 进同步范围）：桌面的 Run
+            //   也会整行落进来，而崩溃恢复（[listUnfinishedRuns]）要的是"**我**上次没跑完的那次"。
+            //   漏了这一步的表现：桌面的普通 Run 一同步下来就被手机按 R6 标成 failed。
+            session.exec("INSERT INTO local_runs (run_id) VALUES (?)", listOf(record.id))
         }
         return record
     }
@@ -389,16 +394,28 @@ class HarnessStore(private val session: SqlSession) {
     }
 
     /**
-     * **崩溃恢复**：找出没跑完的 Run。
+     * **崩溃恢复**：找出没跑完的 Run —— **只找本机起的那些**。
      *
      * 手机上前台服务有 6h/24h 配额、后台随时可能被杀（总纲 §7 的风险表），
      * 所以"进程重启后能看出有一个 Run 没跑完"是需求，不是可选项：
      * 重启后要把它们按 **R6** 收尾（该 flush 的 flush、该标 failed 的标 failed），
      * 而不是留一个永远 `running` 的幽灵。
+     *
+     * ⚠ **判据不能只是 `status = 'running'`**：`ai_runs` 自 2026-09-27 起是**镜像表**
+     * （总纲 §7 待定项 1 = 进同步范围），桌面那次 Run 也会整行同步下来 —— 桌面上真的在跑的
+     * Run 会被手机当成"我的未完成 Run"，被按 R6 标成 failed 再推回桌面。
+     * 所以这里 `JOIN local_runs`（[createRun] 在同一个事务里写的标记）。
      */
     fun listUnfinishedRuns(): List<RunRecord> =
-        session.query("SELECT * FROM ai_runs WHERE status = ? ORDER BY created_at ASC", listOf(RunStatus.RUNNING))
-            .map { it.toRun() }
+        session.query(
+            """
+            SELECT r.* FROM ai_runs r
+              JOIN local_runs l ON l.run_id = r.id
+             WHERE r.status = ?
+             ORDER BY r.created_at ASC
+            """.trimIndent(),
+            listOf(RunStatus.RUNNING),
+        ).map { it.toRun() }
 
     // -----------------------------------------------------------------------
     //  事件流（R5）

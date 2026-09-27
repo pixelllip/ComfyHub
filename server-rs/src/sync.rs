@@ -5,8 +5,8 @@
 //!
 //! # 同步范围用显式白名单（而不是"查一下有哪些触发器"）
 //!
-//! 先说清**今天的事实**（2026-09-24 核对过 `db/schema.sqlite.sql`）：真正挂 `_sync_log`
-//! 触发器的表**正好就是** [SYNCED] 这 10 张，一张不多一张不少。所以"从触发器派生范围"
+//! 先说清**今天的事实**（2026-09-27 核对过 `db/schema.sqlite.sql`）：真正挂 `_sync_log`
+//! 触发器的表**正好就是** [SYNCED] 这 12 张，一张不多一张不少。所以"从触发器派生范围"
 //! 在今天**不会**出错 —— 别把它当成"现在就有洞"。
 //!
 //! 但仍然坚持写死白名单，因为这条路径的**失败模式是静默且严重的**：
@@ -19,9 +19,23 @@
 //!   而不是各自去问 schema。
 //! - 注意区分**两类触发器**：`trg_<表>_sync_*` 才是账本触发器，`trg_<表>_touch` 只是
 //!   维护 `updated_at` 的（`app_settings` / `ai_providers` / `ai_models` / `ai_runs`
-//!   只有后者）。当初就是差点把 `touch` 当成 `sync` 才误判了一次 ——
+//!   都有后者）。当初就是差点把 `touch` 当成 `sync` 才误判了一次 ——
 //!   防线是 [`tests::synced_scope_matches_the_master_plan`] 与
 //!   `api_test.rs` 里那条"注入一条假的 `app_settings` 账本行，看它会不会被发出去"。
+//!
+//! # 2026-09-27：`ai_runs` / `ai_tool_calls` **进同步范围**（总纲 §7 待定项 1 拍板）
+//!
+//! 用户的原话是"进同步"。理由是**手机要能显示桌面那次 Run 的工具过程**（跑过哪些工具、
+//! 成没成、花了多久）—— 那件事只有这两张表有；`ai_run_events`（62 万行调试日志）照旧不进来。
+//!
+//! 三条连带后果（都别踩）：
+//!
+//! 1. **两张表都是 TEXT 主键（UUID）** → [`pk_kind`] 走 `Text`，账本里的 pk 直接是列值；
+//! 2. **上行也要收**：手机自己跑出来的 Run 也要能推上来（[`table_of_kind`] 认
+//!    `ai_run` / `ai_tool_call`），否则"手机发起的会话在桌面上看不到工具过程"；
+//! 3. **老库要拿到新触发器**：`open_or_create` 对"版本够新、表都在"的库是直接早退的，
+//!    所以这次把 `SCHEMA_VERSION` 由 2 提到 3（见 `db/schema.sqlite.sql` 末尾那段注释）——
+//!    不 bump 的话真库上一条 `ai_runs` 账本都不会有，而且**不报错**。
 
 use std::collections::BTreeMap;
 
@@ -42,6 +56,9 @@ pub const SYNCED: &[&str] = &[
     "ai_message_parts",
     "ai_attachments",
     "capture_runs",
+    // 2026-09-27 用户拍板（§7 待定项 1 = 进）：手机要能显示桌面那次 Run 的工具过程
+    "ai_runs",
+    "ai_tool_calls",
 ];
 
 /// **不同步**的表 —— 每一条都要有理由（`reason` 会原样吐给手机做诊断）。
@@ -53,10 +70,8 @@ pub const NOT_SYNCED: &[(&str, &str)] = &[
     ("app_settings", "含配对令牌明文与本地设置，绝不外发"),
     ("ai_providers", "含凭据引用，只在桌面侧"),
     ("ai_models", "模型目录由 run-kit 版本化下发"),
-    ("ai_run_events", "调试日志，按设计不同步"),
-    ("ai_runs", "工具过程与事件流（总纲 §7 待定项 1，当前不同步）"),
-    ("ai_tool_calls", "审批与工具调用明细，当前只留桌面"),
-    ("ai_questions", "提问闸门只在桌面侧，当前不同步"),
+    ("ai_run_events", "单 Run 上万条的调试日志；工具过程看 ai_runs / ai_tool_calls"),
+    ("ai_questions", "提问闸门只在桌面侧（手机看实时提问走 GET /api/ai/pending）"),
 ];
 
 /// `app_settings` 里 run-kit 版本号的键（与 Kotlin `RunKit.KEY_VERSION` 同值）。
@@ -181,7 +196,10 @@ impl PkPart {
 fn pk_kind(table: &str) -> Option<PkKind> {
     Some(match table {
         "prompts" | "tags" | "media_assets" | "capture_runs" => PkKind::Int,
-        "ai_conversations" | "ai_messages" | "ai_attachments" => PkKind::Text,
+        // `ai_runs` / `ai_tool_calls` 的主键是 UUID 文本（两端各自生成，不会撞）
+        "ai_conversations" | "ai_messages" | "ai_attachments" | "ai_runs" | "ai_tool_calls" => {
+            PkKind::Text
+        }
         "prompt_tags" => PkKind::Composite {
             sep: ':',
             parts: &[PkPart::Int("prompt_id"), PkPart::Int("tag_id")],
@@ -401,12 +419,18 @@ fn row_to_json(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
 // ---------------------------------------------------------------------------
 
 /// 手机 `kind` → 桌面表名（**单数 kind、复数表**，与契约 §4 的例子同形）。
+///
+/// `ai_run` / `ai_tool_call`（2026-09-27 加）是"手机自己跑出来的那次 Run 及其工具明细"：
+/// 手机 harness 在本地库写 `ai_runs`，靠它上行到桌面 —— 桌面于是也能看到手机那次 Run
+/// 的工具过程，与"桌面 Run 下行到手机"是同一件事的两个方向。
 fn table_of_kind(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "ai_conversation" => "ai_conversations",
         "ai_message" => "ai_messages",
         "ai_message_part" => "ai_message_parts",
         "ai_attachment" => "ai_attachments",
+        "ai_run" => "ai_runs",
+        "ai_tool_call" => "ai_tool_calls",
         _ => return None,
     })
 }
@@ -780,6 +804,9 @@ mod tests {
             "ai_message_parts",
             "ai_attachments",
             "capture_runs",
+            // 2026-09-27 §7 待定项 1 = 进（手机显示工具过程）
+            "ai_runs",
+            "ai_tool_calls",
         ];
         assert_eq!(SYNCED, &expected, "改同步范围要同时改总纲 §3.3 与契约");
         // 两张表不能同时出现在两个清单里
@@ -791,9 +818,126 @@ mod tests {
         }
     }
 
+    /// 每张同步表都能被 `changes` 取到（`pk_kind` 漏一张 = 那条账本被**静默跳过**）。
+    ///
+    /// `changes_on` 里的 `let Some(kind) = pk_kind(&row.tbl) else { continue }` 就是这个坑：
+    /// 表进了白名单、`pk_kind` 忘了加，表现是"手机收不到这张表的任何变更"，两端都不报错。
+    #[test]
+    fn every_synced_table_has_a_pk_kind() {
+        for name in SYNCED {
+            assert!(pk_kind(name).is_some(), "{name} 在 SYNCED 里，pk_kind 却不认识它");
+        }
+    }
+
+    /// 上行 kind 与下行表名**互为同一批表**（只有列表这一侧加了、上行那侧忘了，
+    /// 表现是手机推的 Run 全被 `UNKNOWN_KIND` 永久拒掉 —— 而且是"永久"，不再重试）。
+    #[test]
+    fn uplink_kinds_cover_the_phone_writable_tables() {
+        assert_eq!(table_of_kind("ai_run"), Some("ai_runs"));
+        assert_eq!(table_of_kind("ai_tool_call"), Some("ai_tool_calls"));
+        // 手机仍然**不许**创建桌面在提交时产出的那几张（[PHONE_FORBIDDEN]）
+        assert!(PHONE_FORBIDDEN.contains(&"prompts"));
+        assert!(PHONE_FORBIDDEN.contains(&"capture_runs"));
+        // 两个方向认识的是同一批表名（写错一个字母不会报错，只会"永远收不到"）
+        for kind in ["ai_conversation", "ai_message", "ai_message_part", "ai_attachment", "ai_run"] {
+            let table = table_of_kind(kind).expect("kind 必须认识");
+            assert!(SYNCED.contains(&table), "{kind} → {table}，但 {table} 不在同步范围里");
+        }
+    }
+
     #[test]
     fn kit_version_key_matches_the_kotlin_side() {
         // 键名写错不会报错，只会让 kitVersion 永远为 null（手机以为规则工件过期）
         assert_eq!(KEY_KIT_VERSION, "ai.runkit.version");
+    }
+
+    /// 真源是仓库里那份 DDL（`db/schema.sqlite.sql`）—— 与 `events.rs` / `character_cards.rs`
+    /// 读它的方式一致：**二进制里那份是编译期嵌进去的副本，这里要读的是文件本身**。
+    fn schema_text() -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("db")
+            .join("schema.sqlite.sql");
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读不到 {}：{e}", path.display()))
+    }
+
+    /// 取含 `needle` 的那条语句（DDL 里每条触发器正好两行：`CREATE …` + `BEGIN … END;`）。
+    fn statement_with(sql: &str, needle: &str) -> String {
+        sql.lines()
+            .skip_while(|line| !line.contains(needle))
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// `pk_kind` 认为触发器里应该长什么样的 pk 表达式（两边漂了就是"取不到那一行"）。
+    ///
+    /// `prefix` 是 `NEW`（INSERT / UPDATE）或 `OLD`（DELETE）—— 删除触发器的 pk 取的是**旧行**，
+    /// 这正是"删了以后按主键回查"能对上号的原因。
+    fn expected_pk_expr(kind: PkKind, prefix: &str) -> String {
+        match kind {
+            PkKind::Int => format!("CAST({prefix}.id AS TEXT)"),
+            PkKind::Text => format!("{prefix}.id"),
+            PkKind::Composite { sep, parts } => parts
+                .iter()
+                .enumerate()
+                .map(|(index, part)| {
+                    let piece = match part {
+                        PkPart::Int(col) => format!("CAST({prefix}.{col} AS TEXT)"),
+                        PkPart::Text(col) => format!("{prefix}.{col}"),
+                    };
+                    if index == 0 {
+                        piece
+                    } else {
+                        format!("'{sep}'||{piece}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("||"),
+        }
+    }
+
+    /// **白名单 ↔ 触发器逐字对齐**。
+    ///
+    /// ⚠ 这条以前**只写在 [`pk_kind`] 的注释里、测试并不存在**（2026-09-27 补上）：那段注释
+    /// 拿它当防线，而真加一张表忘了加触发器时，没有任何东西会红 —— 而表现是"手机永远收不到
+    /// 这张表的数据"，两端都不报错。所以这里做三件事：
+    ///   ① 同步表必须有 `sync_ai` / `sync_au` / `sync_ad` 三个触发器；
+    ///   ② 触发器的 pk 表达式必须与 [`pk_kind`] 算出来的**逐字相同**（含 `CAST` 与分隔符）；
+    ///   ③ 不同步的表**绝不许**有 `sync_*` 触发器（`touch` 触发器不算 —— 当初就误判过一次）。
+    #[test]
+    fn pk_shapes_match_the_schema_triggers() {
+        let sql = schema_text();
+        for name in SYNCED {
+            let kind = pk_kind(name).unwrap_or_else(|| panic!("{name} 在 SYNCED 里却没有 pk_kind"));
+            // ⚠ **复合主键的表没有 `au` 触发器**（`prompt_tags` / `media_tags`）：主键就是全部列，
+            //   "改一行"在语义上等于"删+插"，所以 DDL 里根本没写 UPDATE 那一条 ——
+            //   这不是漏了，别照着"三件套"去补（补了也只是永远不触发的死代码）。
+            let suffixes: &[(&str, &str, &str)] = match kind {
+                PkKind::Composite { .. } => &[("ai", "upsert", "NEW"), ("ad", "delete", "OLD")],
+                _ => &[("ai", "upsert", "NEW"), ("au", "upsert", "NEW"), ("ad", "delete", "OLD")],
+            };
+            for (suffix, op, prefix) in suffixes {
+                let expr = expected_pk_expr(kind, prefix);
+                let needle = format!("trg_{name}_sync_{suffix}");
+                assert!(
+                    sql.contains(&needle),
+                    "DDL 里没有 {needle}（表在白名单里却没触发器 = 手机永远收不到 {name}）",
+                );
+                let stmt = statement_with(&sql, &needle);
+                assert!(
+                    stmt.contains(&expr),
+                    "{needle} 的 pk 表达式与 pk_kind 不一致：\n期望包含 {expr}\n实际 {stmt}",
+                );
+                assert!(stmt.contains(&format!("'{op}'")), "{needle} 的 op 应当是 {op}：{stmt}");
+            }
+        }
+        for (name, _) in NOT_SYNCED {
+            assert!(
+                !sql.contains(&format!("trg_{name}_sync_")),
+                "{name} 在「不同步」清单里，DDL 里却挂了账本触发器 —— \
+                 要么删触发器，要么把它挪进 SYNCED（并同时改总纲 §3.3）",
+            );
+        }
     }
 }

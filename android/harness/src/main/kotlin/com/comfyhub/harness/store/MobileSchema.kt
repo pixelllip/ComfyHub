@@ -16,9 +16,15 @@ package com.comfyhub.harness.store
  *
  * ## 本机表（手机自己产生、要上行回去的）
  *
- * - `ai_runs` / `ai_run_events`：本地 Run 与事件流（**R5**：切后台再回来靠它回放）；
+ * - `ai_run_events`：本地 Run 的事件流（**R5**：切后台再回来靠它回放）—— **不进同步范围**
+ *   （桌面也不带它：单 Run 上万条）；
+ * - `local_runs`：**本机起过哪些 Run** 的标记（`ai_runs` 成了镜像表之后，崩溃恢复必须靠它
+ *   把"桌面的 Run"排除掉，见 [HarnessStore.listUnfinishedRuns]）；
  * - `_outbox`：上行队列（契约 §4），每条本地写**在同一个事务里**同时写业务表和它；
  * - `mobile_kv`：同步游标 / 设备号 / run-kit 缓存版本这类零散状态。
+ *
+ * ⚠ `ai_runs` / `ai_tool_calls` 属于**镜像表**那一组（2026-09-27 起）：桌面与手机都会写它们，
+ *   下行靠镜像覆盖、上行靠 outbox（wire kind = `ai_run` / `ai_tool_call`）。
  */
 object MobileSchema {
 
@@ -53,11 +59,18 @@ object MobileSchema {
         MirrorTable("ai_messages", listOf("id"), PkKind.SINGLE),
         MirrorTable("ai_message_parts", listOf("message_id", "ordinal"), PkKind.COMPOSITE),
         MirrorTable("ai_attachments", listOf("id"), PkKind.SINGLE),
+        // ★ 2026-09-27（总纲 §7 待定项 1 = 进同步范围）：手机的 Run 与工具明细。
+        //   桌面的 Run 要能整行落进来（手机上显示"桌面那次跑过哪些工具"），
+        //   手机自己的 Run 也要能推回桌面 —— 所以它们是"两边都能写"的表。
+        //   顺序：`ai_runs` 必须在 `ai_conversations` 之后（外键），
+        //   `ai_tool_calls` 必须在 `ai_runs` 之后（外键）。
+        MirrorTable("ai_runs", listOf("id"), PkKind.SINGLE),
+        MirrorTable("ai_tool_calls", listOf("id"), PkKind.SINGLE),
     )
 
-    /** 手机自己写、当期**不上行**的表（Run 过程与凭据引用）。 */
+    /** 手机自己写、当期**不上行**的表（事件流与凭据引用，外加"哪些 Run 是我起的"标记）。 */
     val LOCAL_ONLY_TABLES: List<String> = listOf(
-        "ai_providers", "ai_models", "ai_runs", "ai_run_events", "ai_tool_calls", "_outbox", "mobile_kv",
+        "ai_providers", "ai_models", "ai_run_events", "local_runs", "_outbox", "mobile_kv",
     )
 
     // -----------------------------------------------------------------------
@@ -248,6 +261,63 @@ object MobileSchema {
         )
         """.trimIndent(),
         "CREATE INDEX IF NOT EXISTS idx_ai_attachments_created ON ai_attachments(created_at)",
+
+        // ★ `ai_runs` / `ai_tool_calls`：**既是本机写的，也是同步下来的**（2026-09-27 用户拍板
+        //   总纲 §7 待定项 1 = 进同步范围）。所以它们的 DDL 放在**镜像表**这一组里：
+        //   ① 下行：桌面的 Run（含它的工具过程）要用整行覆盖进来 → 列必须与桌面逐列同形；
+        //   ② 上行：手机自己跑出来的 Run 要能推回桌面（wire kind = `ai_run`）。
+        //   ⚠ 代价是"本地库里的 ai_runs 不再全是自己的" —— 崩溃恢复必须靠 `local_runs`
+        //   那张本机表把"我起的那次"认出来（见 HarnessStore.listUnfinishedRuns），
+        //   否则桌面的 Run 一同步下来就会被手机按 R6 标成 failed。
+        """
+        CREATE TABLE IF NOT EXISTS ai_runs (
+          id                   TEXT    NOT NULL,
+          conversation_id      TEXT    NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+          status               TEXT    NOT NULL,
+          provider_id          TEXT    NULL,
+          model_id             TEXT    NULL,
+          user_message_id      TEXT    NULL,
+          assistant_message_id TEXT    NULL,
+          provider_snapshot    TEXT    NULL,
+          model_snapshot       TEXT    NULL,
+          skill_snapshot       TEXT    NULL,
+          prompt_version       TEXT    NULL,
+          retry_of_run_id      TEXT    NULL,
+          reasoning_effort     TEXT    NULL,
+          error_code           TEXT    NULL,
+          error_message        TEXT    NULL,
+          usage_json           TEXT    NULL,
+          started_at           TEXT    NULL,
+          completed_at         TEXT    NULL,
+          created_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          PRIMARY KEY (id)
+        )
+        """.trimIndent(),
+        "CREATE INDEX IF NOT EXISTS idx_ai_runs_conv   ON ai_runs(conversation_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_ai_runs_status ON ai_runs(status)",
+
+        """
+        CREATE TABLE IF NOT EXISTS ai_tool_calls (
+          id               TEXT    NOT NULL,
+          run_id           TEXT    NOT NULL REFERENCES ai_runs(id) ON DELETE CASCADE,
+          provider_call_id TEXT    NOT NULL,
+          name             TEXT    NOT NULL,
+          arguments_json   TEXT    NULL,
+          approval         TEXT    NOT NULL DEFAULT 'not_required',
+          status           TEXT    NOT NULL,
+          result_json      TEXT    NULL,
+          content          TEXT    NULL,
+          error            TEXT    NULL,
+          elapsed_ms       INTEGER NOT NULL DEFAULT 0,
+          started_at       TEXT    NULL,
+          completed_at     TEXT    NULL,
+          created_at       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          PRIMARY KEY (id)
+        )
+        """.trimIndent(),
+        "CREATE INDEX IF NOT EXISTS idx_ai_tool_run  ON ai_tool_calls(run_id, started_at)",
+        "CREATE INDEX IF NOT EXISTS idx_ai_tool_name ON ai_tool_calls(name)",
     )
 
     // -----------------------------------------------------------------------
@@ -302,34 +372,6 @@ object MobileSchema {
         """.trimIndent(),
 
         """
-        CREATE TABLE IF NOT EXISTS ai_runs (
-          id                   TEXT    NOT NULL,
-          conversation_id      TEXT    NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
-          status               TEXT    NOT NULL,
-          provider_id          TEXT    NULL,
-          model_id             TEXT    NULL,
-          user_message_id      TEXT    NULL,
-          assistant_message_id TEXT    NULL,
-          provider_snapshot    TEXT    NULL,
-          model_snapshot       TEXT    NULL,
-          skill_snapshot       TEXT    NULL,
-          prompt_version       TEXT    NULL,
-          retry_of_run_id      TEXT    NULL,
-          reasoning_effort     TEXT    NULL,
-          error_code           TEXT    NULL,
-          error_message        TEXT    NULL,
-          usage_json           TEXT    NULL,
-          started_at           TEXT    NULL,
-          completed_at         TEXT    NULL,
-          created_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-          updated_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-          PRIMARY KEY (id)
-        )
-        """.trimIndent(),
-        "CREATE INDEX IF NOT EXISTS idx_ai_runs_conv   ON ai_runs(conversation_id, created_at)",
-        "CREATE INDEX IF NOT EXISTS idx_ai_runs_status ON ai_runs(status)",
-
-        """
         CREATE TABLE IF NOT EXISTS ai_run_events (
           run_id       TEXT    NOT NULL REFERENCES ai_runs(id) ON DELETE CASCADE,
           seq          INTEGER NOT NULL,
@@ -340,27 +382,18 @@ object MobileSchema {
         )
         """.trimIndent(),
 
+        // ★ **本机起过的 Run**（唯一一张"我写的"标记表）。
+        //   `ai_runs` 现在是镜像表 —— 桌面的 Run 也会整行落进来。而崩溃恢复（R5/R6）要回答的
+        //   是"**我**上次有一次没跑完的 Run"，不是"库里有几行 status=running"：
+        //   拿后者当判据，桌面的 Run 一同步下来就会被手机标成 failed，而且推回桌面。
+        //   与 `createRun` **同一个事务**写，`run_id` 只增不删（一次 Run 一行，很小）。
         """
-        CREATE TABLE IF NOT EXISTS ai_tool_calls (
-          id               TEXT    NOT NULL,
-          run_id           TEXT    NOT NULL REFERENCES ai_runs(id) ON DELETE CASCADE,
-          provider_call_id TEXT    NOT NULL,
-          name             TEXT    NOT NULL,
-          arguments_json   TEXT    NULL,
-          approval         TEXT    NOT NULL DEFAULT 'not_required',
-          status           TEXT    NOT NULL,
-          result_json      TEXT    NULL,
-          content          TEXT    NULL,
-          error            TEXT    NULL,
-          elapsed_ms       INTEGER NOT NULL DEFAULT 0,
-          started_at       TEXT    NULL,
-          completed_at     TEXT    NULL,
-          created_at       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-          PRIMARY KEY (id)
+        CREATE TABLE IF NOT EXISTS local_runs (
+          run_id     TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          PRIMARY KEY (run_id)
         )
         """.trimIndent(),
-        "CREATE INDEX IF NOT EXISTS idx_ai_tool_run  ON ai_tool_calls(run_id, started_at)",
-        "CREATE INDEX IF NOT EXISTS idx_ai_tool_name ON ai_tool_calls(name)",
 
         // 上行队列（🔒 sync-api-contract §4）—— 手机侧**只有**这一本账
         """

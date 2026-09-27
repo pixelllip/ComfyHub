@@ -629,10 +629,41 @@ BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_attachments', NEW.id, 'ups
 CREATE TRIGGER IF NOT EXISTS trg_ai_attachments_sync_ad AFTER DELETE ON ai_attachments FOR EACH ROW
 BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_attachments', OLD.id, 'delete', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
 
+-- ai_runs / ai_tool_calls（2026-09-27 用户拍板：总纲 §7 待定项 1 = **进同步范围**）
+--
+-- 为什么要它们：手机要能显示桌面那次 Run 的**工具过程**（跑过哪些工具、成没成、花了多久）。
+-- 那件事只有这两张表有；`ai_run_events`（62 万行调试日志）照旧不同步。
+--
+-- ⚠ 与 `server-rs/src/sync.rs` 的 `SYNCED` / `pk_kind()` **必须一致**（表名 / 主键形态）：
+--   两张表都是 TEXT 主键（UUID），所以 pk 直接写列值、不加 CAST。
+-- ⚠ ai_runs 上还有 `trg_ai_runs_touch`（维护 updated_at）—— 一次更新会点亮两条账本行
+--   （touch 那次 UPDATE 又触发一次 sync_au）。幂等 upsert 无害，**别去"优化"它**：
+--   删掉 sync 触发器才是真错（手机永远收不到这次状态变化）。
+CREATE TRIGGER IF NOT EXISTS trg_ai_runs_sync_ai AFTER INSERT ON ai_runs FOR EACH ROW
+BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_runs', NEW.id, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
+CREATE TRIGGER IF NOT EXISTS trg_ai_runs_sync_au AFTER UPDATE ON ai_runs FOR EACH ROW
+BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_runs', NEW.id, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
+CREATE TRIGGER IF NOT EXISTS trg_ai_runs_sync_ad AFTER DELETE ON ai_runs FOR EACH ROW
+BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_runs', OLD.id, 'delete', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ai_tool_calls_sync_ai AFTER INSERT ON ai_tool_calls FOR EACH ROW
+BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', NEW.id, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
+CREATE TRIGGER IF NOT EXISTS trg_ai_tool_calls_sync_au AFTER UPDATE ON ai_tool_calls FOR EACH ROW
+BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', NEW.id, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
+CREATE TRIGGER IF NOT EXISTS trg_ai_tool_calls_sync_ad AFTER DELETE ON ai_tool_calls FOR EACH ROW
+BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', OLD.id, 'delete', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
+
 -- schema 版本（`PRAGMA user_version` 是 SQLite 自带的，不建版本表）
 --
 -- ⚠ 这里与 `server-rs/src/db.rs` 的 `SCHEMA_VERSION` **必须一致**（有用例
 --   `ddl_declared_version_matches_the_constant` 钉着 —— 两份漂了就是一整套静默故障）。
 --   Rust 侧写版本号时取的是 `max(库里的值, SCHEMA_VERSION)`：既不许把更新的库降级，
 --   也不会被这一行拖回去。**加表 / 改列就把两边一起 +1**。
-PRAGMA user_version = 2;
+--
+-- 2026-09-27 由 2 提到 3：**不是为了加表，是为了让"新触发器"到达已有的库**。
+--   `open_or_create` 对"版本号够新、表也都在"的老库是**直接早退**的（不重跑 DDL），
+--   所以只往这里加 `_sync_log` 触发器，真库上一条都不会有 —— 表现是"AI 的工具过程
+--   手机上永远收不到"，而且不报任何错。bump 版本号让老库走一遍收敛式 DDL
+--   （触发器 `DROP + CREATE`），顺带把 `manifest.schemaVersion` 变了，
+--   手机据此重新 bootstrap —— 这正是"同步范围变了"该有的信号。
+PRAGMA user_version = 3;

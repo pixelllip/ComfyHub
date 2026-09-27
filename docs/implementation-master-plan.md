@@ -142,9 +142,20 @@ PRAGMA foreign_keys = ON;       -- ★ 按连接，R1
 
 | 同步 | 不同步 |
 | --- | --- |
-| `prompts` `tags` `prompt_tags` `media_assets` `media_tags` | **`ai_run_events`**（62 万行的调试日志） |
+| `prompts` `tags` `prompt_tags` `media_assets` `media_tags` | **`ai_run_events`**（单 Run 上万条的调试日志） |
 | `ai_conversations` `ai_messages` `ai_message_parts` `ai_attachments` | `ai_providers` `ai_models` `app_settings`（**含凭据引用与令牌明文**） |
-| `capture_runs`（可选） | `ai_runs` / `ai_tool_calls`（可选，看你是否要在手机显示工具过程） |
+| `capture_runs` `ai_runs` `ai_tool_calls`（**2026-09-27 定：进**） | `ai_questions`（提问闸门只在桌面侧；手机看实时提问走 `GET /api/ai/pending`） |
+
+> ✅ **2026-09-27 用户拍板**：§7 待定项 1 = **进同步范围**（"§7进同步"）—— 手机要能显示
+> 桌面那次 Run 的**工具过程**（`ai_runs` = 状态 / 用了哪个 provider / 花了多久，
+> `ai_tool_calls` = 跑过哪些工具、审批与结果）。`capture_runs` 本来就在里面，这一轮补的是
+> 后两张。落地形状（**改同步范围时四份文档一起改**：本节 / 🔒 `sqlite-schema-contract.md` §6 /
+> `cross-device-sync-design.md` §4.5 / `sync.rs` 的白名单）：
+> ① `db/schema.sqlite.sql` 补两张表各三个 `_sync_log` 触发器，并把 `SCHEMA_VERSION` 由 2 提到 3
+> （**不 bump 老库就永远拿不到那几条触发器**，见 `db.rs` 的注释）；
+> ② `sync.rs` 的 `SYNCED` / `pk_kind` / `table_of_kind`（上行也收 `ai_run` / `ai_tool_call`）；
+> ③ 手机侧 `ai_runs` / `ai_tool_calls` 由"本机表"变**镜像表**，崩溃恢复改用本机的
+> `local_runs` 标记（否则桌面的 Run 一同步下来就被按 R6 标成 failed）。
 
 **主键约定**：会话/消息/块是 `CHAR(36)` UUID ✅ 两端各自生成不会撞；
 **手机不要创建 `prompts`/`media_assets`/`tags`**（那些由桌面在提交时产生）。
@@ -295,7 +306,9 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 
 **待定项（实施中会撞到，需当场拍板）：**
 
-1. **`capture_runs` / `ai_runs` / `ai_tool_calls` 要不要同步**（要不要在手机显示工具过程）？
+1. ✅ **已定（2026-09-27）：`capture_runs` / `ai_runs` / `ai_tool_calls` 都进同步范围**
+   （用户原话"§7进同步"，理由是要在手机显示工具过程）。落地见 §3.3 那段注与
+   🔒 `sqlite-schema-contract.md` §6；**`ai_run_events` 照旧不进**（单 Run 上万条）。
 2. **手机上点"提交"时，桌面还要不要再过一道审批闸门**？
    （注意 `inbound-auth-design.md` 的令牌是**连接鉴权**，不是**操作审批**，两者别混。）
 3. **手机发起的 Run 若被路由到桌面执行**（桌面在线时），是否允许它做桌面写操作？
