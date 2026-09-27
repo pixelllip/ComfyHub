@@ -12,6 +12,7 @@ import '../state/library_store.dart';
 import '../state/nsfw_store.dart';
 import '../widgets/adaptive_layout.dart';
 import 'ai_provider_settings_page.dart';
+import 'copy_review_page.dart';
 import 'pairing_section.dart';
 import 'sync_settings_page.dart';
 
@@ -534,6 +535,29 @@ class _SettingsPageState extends State<SettingsPage> {
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute(builder: (_) => const AiProviderSettingsPage()),
+                    ),
+                  ),
+                ),
+              ),
+              estimatedHeight: 120,
+            ),
+            // 文案台的入口与「AI 模型与凭据」挨着放：两件事都在回答同一个问题
+            // ——"AI 到底看到了什么"。凭据那页是模型能不能说话，这一页是它说的规则
+            // 是不是你想让它说的（系统提示 / 工具描述 / skill / 设置页注解）。
+            AdaptiveSection(
+              _section(
+                theme,
+                'AI 文案台',
+                Card(
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    leading: const Icon(Icons.fact_check_outlined),
+                    title: const Text('人工校验 / 批量修改 AI 文案'),
+                    subtitle: const Text('系统提示词、工具描述、skill 正文与设置页注解：默认值 vs 当前值并排看，'
+                        '改过 / 校验过 / 默认值变过三态一目了然；批量改先看 diff 再落地'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const CopyReviewPage()),
                     ),
                   ),
                 ),
