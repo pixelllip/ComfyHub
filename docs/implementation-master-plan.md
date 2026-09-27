@@ -199,7 +199,7 @@ GET /api/ai/run-kit/status  → { current, revoked:[...] }   ← 命中吊销则
 | **M4** | 上行通道 | `_outbox` + `/api/sync/push` + 幂等 apply + 服务端赢 LWW | 手机产生的会话在桌面可见可续写；重复推送不产生重复行 | M3 |
 | **M5** | 排队提交 | 手机 `comfy_queue_submit` + 桌面 outbox 消费（**走现有 `comfy_submit` 全链路**） | 手机排队 → 桌面在线后自动提交 → 产物入库画廊 → `mediaIds` 回到手机；**桌面侧审批/幂等/入库一条不少（R10/R11）** | M4 |
 | **M6** | 凭据 | `ai_providers` 下行（**不含密钥**）+ 手机 Android Keystore + `flutter_secure_storage` | 手机能独立调用 LLM；密钥不出本机；界面明确告知"需在手机上单独填 Key" | M3 |
-| **P4** | **桌面 Rust 重写** | 🔵 **进行中（截至 2026-09-25：第 1~44 步已落地，`cargo test` 315 例；工具层 14 个）**。**现状一句话**：非 AI 端点全通；`/api/ai/*` 的界面端点全通；Run 生命周期 / SSE / 执行器 / 工具层（含审批与提问闸门）**已能真的聊**；`/api/sync/*` 四条全通；捕获链（`status` / `jobs` / `poll`）已通并**在真 ComfyUI 上实测过**；界面格式工作流能转成 API 图。**剩下的**：**MCP 桥（39 工具）**、`comfy_submit`（R10）、`comfy_{find_workflow,check_inputs,fit_workflow,env_report,audit_workflow,prune_workflow}`、联网三工具 + `find_model`、附件（R9）、截断续写、**后台捕获轮询器**、`capture/{import,import-workflows}`、`ingest/comfyui`、`capabilities/{refresh,probe}`、`media/{id}/poster`、`WorkflowConvert` 的两处欠账（subgraph / 前端模拟）、**切流收尾**（schema 归 Rust、脚本与发布包、Kotlin 退役）。**下面是逐批落地记录（历史）**：第 1 步（只读）：`server-rs/`（axum 0.8 + tokio + **rusqlite 0.40 bundled** + serde + tower-http）。**第 1 步（只读）**：`db.rs`（连接工厂 + PRAGMA **读回自检** R1 / `BEGIN IMMEDIATE` R2 / FTS5·user_version 自检）、`models.rs`、`routes.rs`（`/api/health`、`/api/tags`(+categories)、`/api/prompts`、`/api/prompts/{id}`）。**第 2 步（写）**：`inputs.rs`、`repo.rs`（逐条对照 `TagRepo`/`PromptRepo`）、`write_routes.rs`（标签 CRUD；提示词 CRUD/收藏/复制/标签维护）。**第 3 步（产物）**：`media.rs`（列表/详情/**原件文件流**：ETag = `sha256` 内容寻址 → `If-None-Match` 304；单段 `Range` → 206 + `Content-Range`；目录穿越双保险拦截）。**第 4 步（产物写侧 + 统计）**：`media_write.rs`（`PATCH`/`DELETE`：`clearPrompt` 与 `promptId=null` 语义分开、空 body 回 404、删除连磁盘原件与缩略图一起清；`GET /api/stats` 七个字段）。**第 5 步（缩略图）**：`thumbs.rs`（`image` crate 替掉 ImageIO + TwelveMonkeys：最长边 512 / 不放大 / 透明先铺 #1E1E22 / JPEG 0.82；失败回退原图）。**第 6 步（上传）**：`media_upload.rs`（multipart 多文件：落盘名 32 位 hex+扩展名、**按内容 sha256 判重**、单文件一个事务、图片顺手写缩略图、单文件失败不整批失败）。**第 7 步（捕获配置 + 工作流原文）**：`capture.rs`（`GET/PUT /api/capture/config` 整体覆盖+归一化；`GET /api/{prompts,media}/{id}/workflow` 的 **404/204/200 三分**与原文直出）。**第 8 步（关联查询）**：`/api/prompts/{id}/media`（提示词不存在也回 200 + `[]`，与 Kotlin 同）、`/api/media/{id}/prompt`（产物不存在 404 / 没关联 204 / 有 200）。未搬的一律 **501**。默认端口 **8081** 与 Kotlin 的 8080 并存灰度 | ① `cargo test` **48 例**全绿；② **对真实库副本 + 产物目录副本起服务抽查**：24 条产物 8 页、`file` 200 且 ETag=sha256、`Range: bytes=0-9` → 206、`If-None-Match` → **304**、`stats` 27/24/16 + 分组、`PATCH` 三个分支（含 `bogus promptId` 400 / 空 body 404）、`DELETE` → `{"deleted":215}` 且**临时副本文件被删、真实产物文件未被动**、`media` 24→23；真库只读未改。**未搬**：`/api/media` 的 poster（要 ffmpeg 抽帧）、需要 ComfyUI 在场的 `/api/capture/{status,jobs,poll,locate*,import*,workflows}`、`/api/ingest/comfyui`、`/api/prompts/{id}/api-graph`、`/api/ai/*`、`/api/sync/*`；**未重建**：R6~R10；RSS ≤30MB 待量。⚠ **已知的一处行为差异**（切流验收清单要过）：悬挂引用时 `/api/media/{id}/prompt` 我们回 404，Kotlin 回 200 + `{error:…}`（前端会解析成空提示词） | P2、M0 |
+| **P4** | **桌面 Rust 重写** | 🔵 **进行中（截至 2026-09-25：第 1~44 步已落地，`cargo test` 315 例；工具层 14 个）**。**现状一句话**：非 AI 端点全通；`/api/ai/*` 的界面端点全通；Run 生命周期 / SSE / 执行器 / 工具层（含审批与提问闸门）**已能真的聊**；`/api/sync/*` 四条全通；捕获链（`status` / `jobs` / `poll`）已通并**在真 ComfyUI 上实测过**；界面格式工作流能转成 API 图。**剩下的**：**MCP 桥（39 工具）**、`comfy_submit`（R10）、`comfy_{find_workflow,check_inputs,fit_workflow,env_report,audit_workflow,prune_workflow}`、联网三工具 + `find_model`、附件（R9）、截断续写、**后台捕获轮询器**、`capture/{import,import-workflows}`、`ingest/comfyui`、`capabilities/{refresh,probe}`、`media/{id}/poster`、~~`WorkflowConvert` 的两处欠账（subgraph / 前端模拟）~~ ✅ 已清零（第 68 步，见 §22）、**切流收尾**（schema 归 Rust、脚本与发布包、Kotlin 退役）。**下面是逐批落地记录（历史）**：第 1 步（只读）：`server-rs/`（axum 0.8 + tokio + **rusqlite 0.40 bundled** + serde + tower-http）。**第 1 步（只读）**：`db.rs`（连接工厂 + PRAGMA **读回自检** R1 / `BEGIN IMMEDIATE` R2 / FTS5·user_version 自检）、`models.rs`、`routes.rs`（`/api/health`、`/api/tags`(+categories)、`/api/prompts`、`/api/prompts/{id}`）。**第 2 步（写）**：`inputs.rs`、`repo.rs`（逐条对照 `TagRepo`/`PromptRepo`）、`write_routes.rs`（标签 CRUD；提示词 CRUD/收藏/复制/标签维护）。**第 3 步（产物）**：`media.rs`（列表/详情/**原件文件流**：ETag = `sha256` 内容寻址 → `If-None-Match` 304；单段 `Range` → 206 + `Content-Range`；目录穿越双保险拦截）。**第 4 步（产物写侧 + 统计）**：`media_write.rs`（`PATCH`/`DELETE`：`clearPrompt` 与 `promptId=null` 语义分开、空 body 回 404、删除连磁盘原件与缩略图一起清；`GET /api/stats` 七个字段）。**第 5 步（缩略图）**：`thumbs.rs`（`image` crate 替掉 ImageIO + TwelveMonkeys：最长边 512 / 不放大 / 透明先铺 #1E1E22 / JPEG 0.82；失败回退原图）。**第 6 步（上传）**：`media_upload.rs`（multipart 多文件：落盘名 32 位 hex+扩展名、**按内容 sha256 判重**、单文件一个事务、图片顺手写缩略图、单文件失败不整批失败）。**第 7 步（捕获配置 + 工作流原文）**：`capture.rs`（`GET/PUT /api/capture/config` 整体覆盖+归一化；`GET /api/{prompts,media}/{id}/workflow` 的 **404/204/200 三分**与原文直出）。**第 8 步（关联查询）**：`/api/prompts/{id}/media`（提示词不存在也回 200 + `[]`，与 Kotlin 同）、`/api/media/{id}/prompt`（产物不存在 404 / 没关联 204 / 有 200）。未搬的一律 **501**。默认端口 **8081** 与 Kotlin 的 8080 并存灰度 | ① `cargo test` **48 例**全绿；② **对真实库副本 + 产物目录副本起服务抽查**：24 条产物 8 页、`file` 200 且 ETag=sha256、`Range: bytes=0-9` → 206、`If-None-Match` → **304**、`stats` 27/24/16 + 分组、`PATCH` 三个分支（含 `bogus promptId` 400 / 空 body 404）、`DELETE` → `{"deleted":215}` 且**临时副本文件被删、真实产物文件未被动**、`media` 24→23；真库只读未改。**未搬**：`/api/media` 的 poster（要 ffmpeg 抽帧）、需要 ComfyUI 在场的 `/api/capture/{status,jobs,poll,locate*,import*,workflows}`、`/api/ingest/comfyui`、`/api/prompts/{id}/api-graph`、`/api/ai/*`、`/api/sync/*`；**未重建**：R6~R10；RSS ≤30MB 待量。⚠ **已知的一处行为差异**（切流验收清单要过）：悬挂引用时 `/api/media/{id}/prompt` 我们回 404，Kotlin 回 200 + `{error:…}`（前端会解析成空提示词） | P2、M0 |
 
 ### 轨道依赖的关键判断
 
@@ -1560,6 +1560,8 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   工具的描述是从 Kotlin **逐字**搬的（R12/R13，里面写着"模拟用户行为默认开着"），
 >   所以 `workflow_load` **在结果里主动补一句 warning** 说明这一步没做 ——
 >   不说这句，用户会以为那些前端节点已经被照前端的做法接好了。
+>   **→ ✅ 这两处已在 P4 第 68 步清零（见 §22）：组节点按定义展开、「模拟用户行为」真的实现，
+>   那句补白连同 `emulate_frontend_warning` 一起删掉了 —— 工具描述现在说的是真的。**
 > - 验收：`cargo test` **315 例全绿**（192 lib + 121 api_test + 2 shape_lint），
 >   新增 8 例转换单测（含**两份逐字抄自 Kotlin `WorkflowConvertTest` 的用例**：
 >   经典六节点图与 `forceInput`，断言也照它写）+ 2 例端到端（API 文件幂等 + 删掉后能重导；
@@ -2197,7 +2199,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | `/api/media/{id}/poster`（视频首帧封面） | ✅ **已做（P4 第 51 步）**：`poster.rs` 起 `scripts\video-poster.ps1`（Windows 缩略图管线，**不依赖 ffmpeg**）；抽不出帧如实回 204 |
 | `/api/ai/capabilities/{refresh,probe}` | ✅ **已做**：`routes.rs:290/293`（另有 `probe-toggle`）；`tests/provider_probe_test.rs` |
 | `POST /api/auth/pair/start`（扫码配对） | ⛔ 501（**有意**：本轮只做"手机发起 + 桌面显示 6 位码"） |
-| **`WorkflowConvert` 两处欠账**：subgraph（组节点）展开、**`emulateFrontend`（模拟用户行为）** | ⚠ 都进 `unsupportedNodes` 如实报（默认档直接拒、`tolerateUnsupported` 摘掉给缺口清单）；工具描述是逐字搬的 → 结果里主动补一句 warning |
+| **`WorkflowConvert` 两处欠账**：subgraph（组节点）展开、**`emulateFrontend`（模拟用户行为）** | ✅ **已清零（P4 第 68 步，2026-09-27，见 §22）**：组节点按 `definitions.subgraphs` 展开成内部真节点（重编号 / 外层控件值填进内部输入 / 输出代理登记成改写）；「模拟用户行为」在 `workflow_frontend.rs`（Kotlin `FrontendNodes.kt` 的对照）里真的做（广播填空 / 丢显示节点 / 补 `SaveImage`），改了什么都列在 `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里 |
 | **切流收尾**：schema 建表/迁移归 Rust、`server.ps1` / `pack-release.ps1` / `manifest.json` 切到 Rust、Kotlin 退役 | ✅ **已完成（2026-09-26）**：桌面后端已是 Rust，脚本与发布包都切过去了，旧 Kotlin 源码在 `legacy\server\`（留档）—— 见 AGENTS §11 |
 | 已知行为差异（切流验收清单）：悬挂引用时 `/api/media/{id}/prompt` 回 404，Kotlin 回 200 + `{error:…}` | ⚠ 待确认（Dart 只判 204/2xx，行为无差异） |
 
@@ -2861,7 +2863,7 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 | `comfy_submit` 的提交闸门**没有**接 `workflow_audit::blocking_refusal` | ⛔ **未接**。工具描述（逐字搬自 Kotlin）里写着"提交时 `comfy_submit` 也会自动跑一次审核，但只拦'必跑不了'的那些（前端节点 / 版本不兼容 / 本机没有的节点类）"，而 Rust 的预检**只有两道实例侧检查**（节点类拦、模型文件只警告）—— `workflow_submit.rs` 的文件头已如实声明了这个差距。**接上去会改变 `comfy_submit` 的行为与 e2e 判据**，所以单独一批做 |
 | 系统提示第 17 条那句"`web_search`/`web_fetch`/`civitai_search` **共用这一个额度**"漏了 `find_model` | ⛔ **未改**：`find_model` 确实吃同一份预算（已加进 `category_of` 的 web 档并有断言），但改提示词要 **bump `PROMPT_VERSION`**（会动 `promptVersion` 的钉子与用户可见文案），单独一批做 |
 | 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`）+ `workflow_recipes` 表 + `bind` 端点 | ✅ **已搬（P4 第 67 步，2026-09-27，见 §20）**（`WorkflowRecipe.kt` 710 行 + Repo/Learner/Binder/Routes + 约 1000 行 Kotlin 测试断言逐条移植） |
-| `WorkflowConvert` 的两处欠账（subgraph 展开 / `emulateFrontend`） | ⛔ 未做（仍如实进 `unsupportedNodes`） |
+| `WorkflowConvert` 的两处欠账（subgraph 展开 / `emulateFrontend`） | ✅ **已清零（P4 第 68 步，2026-09-27，见 §22）** |
 | 桌面/手机两侧的剩余项（M4 补全 / M5 排队提交 / M6 离线模型清单 / 手机 `deleteConversation`） | ⛔ 未做（见 §10.8 的移动端那张表） |
 | 图像编辑的 `light=auto`、`>1024` 长边的人物图、"人变糊"的单变量对照 | ⛔ 未做（见 §15.4 / §16.7；`light` 那个死变量已清掉） |
 
@@ -2903,11 +2905,13 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 | 处 | 差异 | 为什么 |
 | --- | --- | --- |
 | `workflow_recipe.rs` 的 `RecipeFailure::to_tool_failure` | 仓储的 400（名字太长 / `promptId` 不存在）在 Kotlin 工具层会落到包装层的兜底分支（`TOOL_ERROR` + "工具执行失败：IllegalArgumentException（…）"），Rust 侧翻成 `INVALID_ARGUMENT` | 人话一个字不变，只是码能告诉模型"是我参数给错了"。这是本仓库既有约定（第 46 步 `character_cards` 的 `api_failure`）；**端点那一侧仍与 Kotlin 完全同形**（`{error: 人话}`） |
-| 学习时多补一句"还没实现「模拟用户行为」" | 工具描述逐字搬自 Kotlin（写着 `emulateFrontend` 默认开着），而 `workflow_convert.rs` 还没实现它 —— 所以结果里**主动补一句**如实说明 | 与第 44 步 `workflow_load.rs` 同一条纪律、**同一份实现**（`workflow_convert::emulate_frontend_warning`）。Kotlin 那边这一步是真做了的，所以它没有这句话 |
+| ~~学习时多补一句"还没实现「模拟用户行为」"~~ | ✅ **已撤销（P4 第 68 步，见 §22）**：`workflow_convert.rs` 现在真的实现了它（`workflow_frontend.rs`），所以那句补白连同 `workflow_convert::emulate_frontend_warning` 一起删掉了 —— 这一段差异**不再存在**，学习链路与 Kotlin 的行为一致 | 第 67 步当时的理由：工具描述逐字搬自 Kotlin（写着 `emulateFrontend` 默认开着），而 Rust 还没实现它，只能在结果里主动补一句如实说明 |
 
 同时**顺手收掉两处重复实现**（不改变行为）：`is_node_graph` 从 `workflow_load.rs`
 搬进 `workflow_convert.rs`（学习链路与加载链路共用一份判据）；
 「模拟用户行为」那句诚实说明也抽成上面那个公共函数（两处共用一份文本）。
+⚠ 那个公共函数 `emulate_frontend_warning` 已在 **P4 第 68 步**（§22）随欠账清零一起删除 ——
+保留这一段的目的是记清"它当时为什么存在"。
 
 ### 20.3 没做到的 / 留给下一批
 
@@ -3002,4 +3006,54 @@ AFTER : user_version=2（**没有退回 1**）, has workflow_recipes = True
    设计都有这一模一样的缝：代理指标与真实状态**可以不一致**，而跳过动作是静默的。
 3. 因此**凡是"据此跳过"的判据，都该顺手验一次真实状态**（这里验的就是 `sqlite_master`），
    代价是每个连接开库时 21 次 `sqlite_master` 查询 —— 换掉一整类静默故障，值。
+
+---
+
+## 22. 2026-09-27 这一轮（续）：`WorkflowConvert` 的两处欠账清零（**第 68 步**）
+
+> §19.1 第 44 步和 §20.2 各留了一条**诚实的欠账**：组节点（subgraph）不展开、
+> 「模拟用户行为」（`emulateFrontend`）没实现。后果是工具**描述**（从 Kotlin **逐字**搬的，
+> R12/R13）写着"默认开着、会照前端行为等价改写"，而**行为**不是 ——
+> 于是 `workflow_load.rs` / `workflow_recipe.rs` 各自补了一句"本后端还没实现这一步"的 warning。
+> 这一轮把两处都按 Kotlin 的原文实现掉，**那句补白连同它的公共函数一起删掉**，
+> 让描述与行为对齐（这是这一批的**唯一目的**：描述不许改，那就把行为补上）。
+
+### 22.1 组节点（subgraph）展开 —— `workflow_convert.rs` 的 `flatten`
+
+Kotlin `WorkflowConvert.flatten` 逐条对照搬过来（**没有一条是猜的**，每条都有出处）：
+
+| 事实（都来自真机存档） | 处理 |
+| --- | --- |
+| 主图里 `type` 等于某个 `definitions.subgraphs[].id`（UUID）的节点就是组节点实例 | 按定义就地展开，实例自己不再进图 |
+| 定义用两个**代理节点** `inputNode.id`（实测 -10）/ `outputNode.id`（-20）表示接口 | `origin_id = inputNode` 的连线 = "从实例第 k 个输入进来"；`target_id = outputNode` 的 = "实例第 k 个输出"（登记成改写，让下游拿到内部真正的产出节点） |
+| 内部节点 id 与主图**撞号**（内部也是 1、2、3…） | 从"现有最大值 + 1"起整批换新号 |
+| 内部连线 id 也是局部编号（实测出现过 14717 与主图重号） | 整表重新编号（新旧一一对应） |
+| 实例的某个输入**没接线但是控件**（分辨率 / 方向这类） | 把实例的控件值（`widgets_values_named` 优先、退回位置式）**直接填给内部节点的对应输入**（`forcedInputs`）—— **不能走控件顺序**，那是另一套编号 |
+| `mode != 0` 的实例 | **不展开**（它自己不执行，交给旁路 / 静音那套逻辑按类型接过去） |
+| 定义缺输入 / 输出代理、实例输入个数与定义对不上、组里还套着一层组节点 | **如实 `unsupported`**（带具体原因），绝不猜着展开 |
+
+### 22.2 「模拟用户行为」—— 新模块 `workflow_frontend.rs`
+
+Kotlin `FrontendNodes.kt` 的对照（**判据不重抄**：广播型 / 显示型两张表与三条模式
+复用第 63 步就手写好的 `workflow_audit::is_broadcast` / `is_display`，**没有 regex 依赖**）：
+
+| 前端节点 | 等价改写 |
+| --- | --- |
+| `Anything Everywhere` 一族 | 按 `properties` 里的 `Input Type` / `Input Name`（各版本键名逐个认）把上游那一路**填空**到全图同类型且空着的**连线型**输入上；说不清类型 / 名字过滤器一个都不命中 → **不猜**，照旧 `unsupported` |
+| `PreviewImage` / `ShowText` / `Display Any` … | 丢掉（官方前端也不把它们写进提示词），如实报告 |
+| 一个输出节点都没有 | 照前端补一个 `SaveImage`（接在**按类型找得到产出 IMAGE** 的那个节点上；认不出来就**不补**） |
+
+改写结果如实进工具结果：`frontendEmulated` / `frontendBroadcast` / `frontendInjected` + 一句
+`frontendHint`（Kotlin `AiWorkflowSearch` 里那几个 `put`，键名逐字一致）；广播灌完之后
+**重算 `openInputs`**（不然模型会去补一根已经接好的线）。
+
+### 22.3 验收
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test` | **682 例全绿 / 0 failed / 7 ignored**（lib **510**（较第 67 步 +23）+ api_test **135** + attachments 4 + danbooru 7 + import_folder 3 + provider_probe 7 + recipe_test 7 + shape_lint 2 + submit 7）；基线 658 → 682 |
+| `cargo check --all-targets` | 零 warning |
+| 新增用例 | 逐字抄 Kotlin `WorkflowConvertTest` 的其余 11 条断言（备注节点丢掉、纯前端节点如实报、无定义的自定义节点、控件个数对不上、控件存成对象、新写法 `links` 对象、旁路找不到同类型输入、`Reroute/Set/Get` 全链、静音悬挂输入点名、空输入清单、组节点展开 / 嵌套组节点 / 缺代理 / 输入个数对不上）+ **`emulateFrontend=true` vs `false` 的逐条差异**（广播填空、显示节点、补 `SaveImage`、不猜未声明类型、没接上游的广播、关掉时清单为空）+ 工具层契约（`frontendBroadcast` / `frontendInjected` / `frontendHint` 的键名） |
+| 端到端 | `scripts\e2e-submit-test.ps1`（第 5 幕"前端节点缺口补线"正是这条链路）|
+
 

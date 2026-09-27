@@ -79,6 +79,10 @@ async fn fake_comfyui() -> String {
 
 /// 界面格式工作流：`58 Krea2EditModelPatch` 挂在 `UNETLoader → KSampler.model` 中间。
 /// 假 `/object_info` 里没有这个类 → 转换摘掉它 → KSampler.model 悬空 → 默认**拒学**。
+///
+/// ⚠ 里面还有 `57 PreviewImage`（纯显示节点）。它是**第 68 步那条"缺省值必须是 true"**
+/// 用例的抓手：`emulateFrontend` 默认开着时前端自己会把它丢掉（不进 `gaps`），
+/// 显式关掉时它就变成一条"摘掉节点类：57 PreviewImage"的缺口 —— 两种结果**看得出来不一样**。
 fn ui_workflow_with_a_gap() -> Value {
     json!({
         "nodes": [
@@ -99,7 +103,9 @@ fn ui_workflow_with_a_gap() -> Value {
              "widgets_values": [12345, "fixed", 20, 2.5, "euler", "normal"]},
             {"id": 6, "type": "SaveImage",
              "inputs": [{"name": "images", "type": "IMAGE", "link": 7}],
-             "widgets_values": ["krea2/t2i"]}
+             "widgets_values": ["krea2/t2i"]},
+            {"id": 57, "type": "PreviewImage",
+             "inputs": [{"name": "images", "type": "IMAGE", "link": 10}]}
         ],
         "links": [
             [2, 2, 0, 5, 1, "CONDITIONING"],
@@ -107,7 +113,8 @@ fn ui_workflow_with_a_gap() -> Value {
             [6, 4, 0, 5, 3, "LATENT"],
             [7, 5, 0, 6, 0, "IMAGE"],
             [8, 55, 0, 58, 0, "MODEL"],
-            [9, 58, 0, 5, 0, "MODEL"]
+            [9, 58, 0, 5, 0, "MODEL"],
+            [10, 5, 0, 57, 0, "IMAGE"]
         ]
     })
 }
@@ -258,8 +265,9 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
     assert!(gaps.iter().any(|g| g.as_str().unwrap().contains("Krea2EditModelPatch")), "{gaps:?}");
     assert!(out.payload["recipeId"].as_i64().unwrap() > 0);
     assert!(out.content.contains("【工作流配方】"), "{}", out.content);
-    // ⚠ **有意与 Kotlin 不同**（本后端还没实现「模拟用户行为」）：必须如实补一句，
-    //   否则用户以为那些前端节点已经被照前端的做法接好了。
+    // ⚠ **第 68 步之前**这里断言的是"必须补一句『本后端还没实现「模拟用户行为」』"。
+    //   那个能力现在真的做了（`workflow_frontend.rs`），所以那条补白**不许再出现**；
+    //   而"显示节点真的被丢掉了"这件事由上面那条"缺省值必须是 true"的用例盯着。
     //   它落在**配方行的 warnings** 里（转换警告与归纳警告同一栏，Kotlin 也是这么存的），
     //   所以走详情端点读回来验（工具当场回的是 `recipe.render`，只有归纳那几条）。
     let id = out.payload["recipeId"].as_i64().unwrap();
@@ -277,8 +285,8 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
         .map(|w| w.as_str().unwrap().to_string())
         .collect();
     assert!(
-        warnings.iter().any(|w| w.contains("还没实现")),
-        "要说清「模拟用户行为」这一步本后端没做：{warnings:?}"
+        !warnings.iter().any(|w| w.contains("还没实现")),
+        "「模拟用户行为」已经实现，不该再补那句白：{warnings:?}"
     );
     let gaps: Vec<String> = detail["recipe"]["gaps"]
         .as_array()
@@ -289,14 +297,18 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
     assert!(gaps.iter().any(|g| g.contains("Krea2EditModelPatch")), "{gaps:?}");
     // 详情里的 render 与工具当场回的那份**跑的是同一个函数**（`Recipe::render`）。
     // ⚠ 两者**可以**不同，而且这与 Kotlin 一致：工具回的是 `learned.recipe`（只有归纳那几条警告），
-    //   而详情是从**落库的行**还原的 —— 那一行的 warnings 里还带着转换警告（含上面那句
-    //   「模拟用户行为」的如实说明）。所以这里比的是"同一个头 + 同一份槽位正文"，
-    //   不是逐字节相等（逐字节相等只在零转换的 API 图上成立，见下面那条用例）。
+    //   而详情是从**落库的行**还原的 —— 那一行的 warnings 里还带着**转换**警告
+    //   （这份夹具的 KSampler 有 6 个控件值、声明只认 5 个）。所以这里比的是
+    //   "同一个头 + 同一份槽位正文"，不是逐字节相等（逐字节相等只在零转换的 API 图上成立，
+    //   见下面那条用例）。
     let tool_text = out.content.as_str();
     let detail_text = detail["render"].as_str().unwrap();
     assert_eq!(tool_text.lines().next(), detail_text.lines().next(), "同一个渲染函数、同一个标题");
     assert!(detail_text.contains("55.unet_name = old_unet.safetensors"), "{detail_text}");
-    assert!(detail_text.contains("还没实现"), "落库的 warnings 要带出转换那句话：{detail_text}");
+    assert!(
+        detail_text.contains("控件值有 6 个"),
+        "落库的 warnings 要带出转换那句话：{detail_text}"
+    );
 
     // 同一个文件学两次 = 同一行（幂等靠 file:<sha256>）
     let again = call_tool(
@@ -594,22 +606,50 @@ async fn 端点学界面格式文件_缺口时回_400_unsupported_nodes() {
     assert_eq!(created["complete"], json!(false));
     assert_eq!(created["format"], "ui");
     // ⚠ **缺省值也要与 `comfy_load_workflow` / 工具那条路一致**：请求里**没传** `emulateFrontend`
-    //   （Kotlin 的 DTO 默认 `true`），所以那句"本后端还没实现「模拟用户行为」"必须落进这一行 ——
-    //   少了它就成了"一个字都不改"那一种（而界面上看不出区别）。`#[serde(default)]` 对
-    //   `bool` 是 `false`，这一条钉的就是那个坑。
-    //   注意：转换警告只在**落库的行**里（`learned.toJson` 不含 warnings，Kotlin 也是这么设计的），
+    //   （Kotlin 的 DTO 默认 `true`）→ 前端自己会丢掉那份图里的 `57 PreviewImage`，
+    //   所以 `gaps` 里**只该有**那个真的装不上的 `Krea2EditModelPatch`。
+    //   显式带上 `emulateFrontend: false` 再来一次，`PreviewImage` 就必须变成一条缺口 ——
+    //   两种结果**看得出来不一样**，这条钉的就是那个"默认 true"（`#[serde(default)]` 对
+    //   `bool` 是 `false`，不显式指定就会静默变成"一个字都不改"）。
+    //   注意：转换警告与 gaps 只在**落库的行**里（`learned.toJson` 不含 warnings，Kotlin 也是如此），
     //   所以这里走详情端点读回来验。
     let id = created["recipeId"].as_i64().unwrap();
     let (_, detail) = get_json(app(), &format!("/api/ai/workflow-recipes/{id}")).await;
-    let warnings: Vec<String> = detail["recipe"]["warnings"]
+    let gaps: Vec<String> = detail["recipe"]["gaps"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|w| w.as_str().unwrap().to_string())
+        .map(|g| g.as_str().unwrap().to_string())
         .collect();
     assert!(
-        warnings.iter().any(|w| w.contains("还没实现")),
-        "emulateFrontend 的缺省值必须是 true：{warnings:?}"
+        gaps.iter().any(|gap| gap.contains("Krea2EditModelPatch")),
+        "真的装不上的那个类必须还在缺口里：{gaps:?}"
+    );
+    assert!(
+        !gaps.iter().any(|gap| gap.contains("PreviewImage")),
+        "emulateFrontend 的缺省值必须是 true（否则显示节点不会被丢掉）：{gaps:?}"
+    );
+
+    // 显式关掉：一个字都不改 → 显示节点回到缺口里
+    let (status, raw) = send_json(
+        app(),
+        "POST",
+        "/api/ai/workflow-recipes",
+        json!({ "path": path, "tolerateUnsupported": true, "emulateFrontend": false }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{raw}");
+    let id = raw["recipeId"].as_i64().unwrap();
+    let (_, detail) = get_json(app(), &format!("/api/ai/workflow-recipes/{id}")).await;
+    let gaps: Vec<String> = detail["recipe"]["gaps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        gaps.iter().any(|gap| gap.contains("57 PreviewImage")),
+        "关掉之后显示节点必须如实进缺口：{gaps:?}"
     );
 
     // ⚠ 路径准入与 `comfy_load_workflow` 同一条：**禁写段读也不许**（与用户白名单无关）。

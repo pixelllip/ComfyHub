@@ -111,7 +111,9 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 `Anything Everywhere` 这类"只用前端 JS 实现"的节点过去只能如实报 `UNSUPPORTED_NODES`。
 
 「模拟用户行为」= **把前端排队前会做的那几件事，在后端等价地做掉**
-（`FrontendNodes.kt`，判据一律保守、做了什么都如实回报）：
+（Kotlin `FrontendNodes.kt`；Rust 侧是 `server-rs/src/workflow_frontend.rs`，
+**P4 第 68 步搬完** —— 之前 Rust 只如实报 `unsupportedNodes`，判据/表复用
+`workflow_audit.rs` 的 `is_broadcast` / `is_display`，没有第二份表。判据一律保守、做了什么都如实回报）：
 
 | 前端节点 | 前端自己干了什么 | 这里怎么等价改写 |
 | --- | --- | --- |
@@ -132,7 +134,9 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 - **不做**：浏览器自动化（不驱动 ComfyUI 网页界面）；rgthree 那类"只有界面逻辑"的特殊节点
   （说不清语义就不猜）。这两件是刻意的边界，不是没做完。
 - 判据：`FrontendNodesTest` 5 例 + `WorkflowConvertTest` 原有那批
-  （**不开开关时行为与过去逐字一致**那一条就是防回归的锚）。
+  （**不开开关时行为与过去逐字一致**那一条就是防回归的锚）；
+  Rust 侧对应 `workflow_frontend.rs` 的单测 + `workflow_convert.rs` 里那两条
+  "`emulateFrontend=true` vs `false` 逐条比差异"的用例（P4 第 68 步）。
 
 ### 2.0.3 摘节点 / 拼节点（2026-09-20，用户建议 ②）
 

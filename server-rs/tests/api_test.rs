@@ -8930,6 +8930,10 @@ fn api_workflow_file() -> String {
 }
 
 /// 一份**界面格式**工作流（nodes/links + 位置式 widgets_values）。
+///
+/// ⚠ 里面刻意放了两类"服务端根本没有这个类"的节点（对应工具描述里的两种出口）：
+/// * `4 Weird Frontend Thing` —— 既不广播也不显示，**谁都改写不了**，只能如实报错；
+/// * `5 PreviewImage` —— 纯显示节点，`emulateFrontend=true`（默认）时前端自己会丢掉它。
 fn ui_workflow_file() -> String {
     serde_json::json!({
         "nodes": [
@@ -8940,9 +8944,11 @@ fn ui_workflow_file() -> String {
                {"name":"positive","type":"CONDITIONING","link":1},
                {"name":"latent_image","type":"LATENT","link":2}],
              "widgets_values": [777, "fixed", 6, 2.0, "euler", "normal"]},
-            {"id": 4, "type": "Weird Frontend Thing", "widgets_values": []}
+            {"id": 4, "type": "Weird Frontend Thing", "widgets_values": []},
+            {"id": 5, "type": "PreviewImage",
+             "inputs": [{"name":"images","type":"IMAGE","link":3}]}
         ],
-        "links": [[1,1,0,3,0,"CONDITIONING"],[2,2,0,3,1,"LATENT"]]
+        "links": [[1,1,0,3,0,"CONDITIONING"],[2,2,0,3,1,"LATENT"],[3,3,0,5,0,"IMAGE"]]
     })
     .to_string()
 }
@@ -9077,12 +9083,52 @@ async fn load_ui_workflow_uses_object_info_and_reports_gaps() {
         "{:?}",
         out.payload
     );
-    // 描述里写着「模拟用户行为」默认开着，而本后端没实现 → **必须自己说出来**
+    // ⚠ **第 68 步之前**这里还有一句"本后端**还没实现**「模拟用户行为」"的补白。
+    //   现在那个能力真的做了（`workflow_frontend.rs` = Kotlin `FrontendNodes.kt` 的对照），
+    //   所以两件事都要钉住：
+    //   ① 那句"还没做"的补白**不许再出现**（工具描述里写的能力已经兑现）；
+    //   ② 显示节点要**真的被丢掉**，而且如实列在 `frontendEmulated` 里（用户看得到才敢信）。
+    let warnings: Vec<String> = out.payload["warnings"]
+        .as_array()
+        .map(|list| list.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
     assert!(
-        out.payload["warnings"].as_array().unwrap().iter().any(|v| v.as_str().unwrap().contains("还没实现")),
-        "不许默认用户以为前端节点已经被接好：{:?}",
-        out.payload["warnings"]
+        !warnings.iter().any(|w| w.contains("还没实现")),
+        "「模拟用户行为」已经实现，不该再补那句白：{warnings:?}"
     );
+    assert!(
+        out.payload["frontendEmulated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("5 PreviewImage（显示节点，已忽略）")),
+        "显示节点被丢掉要如实列出来：{:?}",
+        out.payload["frontendEmulated"]
+    );
+    assert!(
+        out.payload["frontendHint"].as_str().unwrap_or_default().contains("emulateFrontend=false"),
+        "改了前端的东西就要告诉模型怎么关掉：{:?}",
+        out.payload["frontendHint"]
+    );
+    // 关掉这个开关就**一个字都不改**：显示节点回到 unsupportedNodes 里，清单也空着
+    let raw = call_tool(
+        &state,
+        "comfy_load_workflow",
+        serde_json::json!({ "path": file.display().to_string(), "tolerateUnsupported": true,
+                            "emulateFrontend": false }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        raw.payload["unsupportedNodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("PreviewImage")),
+        "关着就不许动它：{:?}",
+        raw.payload["unsupportedNodes"]
+    );
+    assert!(raw.payload["frontendEmulated"].is_null(), "{:?}", raw.payload);
     // 转换后的图里控件是按声明顺序贴回去的
     let graph = &out.payload["apiGraph"];
     assert_eq!(graph["3"]["class_type"], "KSampler");
@@ -9104,9 +9150,141 @@ async fn load_ui_workflow_uses_object_info_and_reports_gaps() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// 一份带**广播型纯前端节点**、并且**一个输出节点都没有**的界面格式工作流。
+///
+/// 两件事都只有开了「模拟用户行为」才会发生：`14 Anything Everywhere` 把上游那一路
+/// 填进空着的同类型输入、前端会自己挂一个 `SaveImage`。
+fn ui_workflow_broadcast_file() -> String {
+    serde_json::json!({
+        "nodes": [
+            {"id": 1, "type": "CheckpointLoaderSimple", "widgets_values": ["a.safetensors"]},
+            {"id": 2, "type": "CLIPTextEncode",
+             "inputs": [{"name":"clip","type":"CLIP","link":10}],
+             "widgets_values": ["1girl"]},
+            {"id": 3, "type": "KSampler",
+             "inputs": [
+               {"name":"model","type":"MODEL","link":11},
+               {"name":"latent_image","type":"LATENT","link":12}],
+             "widgets_values": [1, "fixed", 20, 7.0, "euler", "normal"]},
+            {"id": 4, "type": "EmptyLatentImage", "widgets_values": [512, 512, 1]},
+            {"id": 5, "type": "VAEDecode",
+             "inputs": [{"name":"samples","type":"LATENT","link":13}]},
+            {"id": 14, "type": "Anything Everywhere",
+             "inputs": [{"name":"anything","link":14}],
+             "properties": {"Input Type": "CONDITIONING"}}
+        ],
+        "links": [
+            [10, 1, 1, 2, 0, "CLIP"],
+            [11, 1, 0, 3, 0, "MODEL"],
+            [12, 4, 0, 3, 3, "LATENT"],
+            [13, 3, 0, 5, 0, "LATENT"],
+            [14, 2, 0, 14, 0, "CONDITIONING"]
+        ]
+    })
+    .to_string()
+}
+
+/// 上一条夹具要的 `/object_info`（**故意没有** `Anything Everywhere` —— 它正是靠
+/// "查不到 + 名字在广播表里"才被当成纯前端节点的）。`VAEDecode` 声明了 `output: IMAGE`，
+/// 用来验"补的那个 `SaveImage` 接在哪一路"。
+fn object_info_for_broadcast() -> String {
+    serde_json::json!({
+        "CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": [["a.safetensors"]]}}},
+        "CLIPTextEncode": {"input": {"required": {"text": ["STRING"], "clip": ["CLIP"]}}},
+        "EmptyLatentImage": {"input": {"required": {
+            "width": ["INT"], "height": ["INT"], "batch_size": ["INT"]}}},
+        "KSampler": {"input": {"required": {
+            "model": ["MODEL"], "seed": ["INT", {"control_after_generate": true}],
+            "steps": ["INT"], "cfg": ["FLOAT"],
+            "sampler_name": [["euler"]], "scheduler": [["normal"]],
+            "positive": ["CONDITIONING"], "negative": ["CONDITIONING"],
+            "latent_image": ["LATENT"]}}},
+        "VAEDecode": {"input": {"required": {"samples": ["LATENT"]}}, "output": ["IMAGE"]}
+    })
+    .to_string()
+}
+
+/// ## 模拟用户行为 ##：走**工具这一整条路**（不只是转换函数），钉住结果里那几个字段名。
+///
+/// 为什么单独一条：`frontendBroadcast` / `frontendInjected` 这些键是**给模型看的契约**
+/// （Kotlin `AiWorkflowSearch` 里那几个 `put`）—— 单元测试只验 `Converted` 的字段，
+/// 验不到"落到工具结果里叫什么名字"。
+#[tokio::test]
+async fn load_ui_workflow_emulates_frontend_and_injects_a_save_node() {
+    let state = state();
+    let root = state.project_root();
+    let output = root.join("comfyui");
+    std::fs::create_dir_all(&output).unwrap();
+    let file = output.join("ui_broadcast.json");
+    std::fs::write(&file, ui_workflow_broadcast_file()).unwrap();
+
+    let history: &'static str = Box::leak(r#"{}"#.to_string().into_boxed_str());
+    let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
+    let info: &'static str = Box::leak(object_info_for_broadcast().into_boxed_str());
+    let (url, handle) = fake_comfy_full(history, view, info).await;
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = url.clone();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+
+    let out = call_tool(
+        &state,
+        "comfy_load_workflow",
+        serde_json::json!({ "path": file.display().to_string(), "includeGraph": true }),
+    )
+    .await
+    .unwrap();
+
+    // 广播 + 补 SaveImage 之后，这张图**真的能跑**了（默认档不再拒）
+    assert_eq!(out.payload["runnable"], true, "{:?}", out.payload);
+    assert!(out.payload["unsupportedNodes"].is_null(), "{:?}", out.payload["unsupportedNodes"]);
+    assert_eq!(out.payload["nodeCount"], 6, "5 个真节点 + 补出来的 SaveImage：{:?}", out.payload);
+
+    let broadcast: Vec<&str> = out.payload["frontendBroadcast"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(broadcast.len(), 2, "两条空的 CONDITIONING 都要被填上：{broadcast:?}");
+    assert!(broadcast.iter().any(|line| line.starts_with("3.positive ← 节点 14")), "{broadcast:?}");
+    assert!(broadcast.iter().any(|line| line.starts_with("3.negative ← 节点 14")), "{broadcast:?}");
+    assert!(
+        out.payload["frontendEmulated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("广播 2 处")),
+        "{:?}",
+        out.payload["frontendEmulated"]
+    );
+
+    // 补出来的输出节点接在**真正产出 IMAGE 的那个节点**上（`VAEDecode` 是 5 号）
+    let injected: Vec<&str> = out.payload["frontendInjected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(injected.len(), 1, "{injected:?}");
+    assert!(injected[0].contains("原本没有输出节点"), "{injected:?}");
+    let graph = &out.payload["apiGraph"];
+    assert_eq!(graph["6"]["class_type"], "SaveImage");
+    assert_eq!(graph["6"]["inputs"]["images"], serde_json::json!([5, 0]));
+
+    // 灌完之后 openInputs 要重算：那两条线已经接好了，不该再让模型去补
+    let open_inputs = out.payload["openInputs"].as_array().cloned().unwrap_or_default();
+    assert!(
+        !open_inputs.iter().any(|v| v.as_str().unwrap().contains("3.positive")),
+        "{:?}",
+        out.payload["openInputs"]
+    );
+
+    handle.abort();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 // ===========================================================================
-//  体检两件（P4 第 62 步）：comfy_check_inputs / comfy_fit_workflow
-//
+//  体检两件（P4 第 62 步）：comfy_check_inputs / comfy_fit_workflow//
 //  两件都是"只报不改"的诊断工具，判据全在**如实**两个字上：`check_inputs` 漏报一条，
 //  模型就以为图齐了；`fit_workflow` 报错一档，用户就被引去下载一个本来就在硬盘上的文件。
 //  所以这里断言到**具体字段**，不是"整串包含"。

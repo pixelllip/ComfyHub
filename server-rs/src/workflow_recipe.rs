@@ -52,10 +52,10 @@
 //! 所以默认档是**拒学**（`tolerateUnsupported = false`，稳定码 `UNSUPPORTED_NODES`），
 //! 只有显式带上它才学，且配方会带 `complete=false` 与 `gaps`。
 //!
-//! ⚠ **有意与 Kotlin 不同**（2026-09-27）：`workflow_convert.rs` 还没实现「模拟用户行为」
-//! （`emulateFrontend`），所以界面格式转换时**多补一句**如实说明（与第 44 步
-//! `workflow_load.rs` 同一句、同一份实现 [`crate::workflow_convert::emulate_frontend_warning`]）。
-//! Kotlin 那边这一步是真做了的，所以它没有这句话。
+//! ⚠ **2026-09-27 的那条"有意与 Kotlin 不同"已经在 P4 第 68 步撤销**：`workflow_convert.rs`
+//! 现在真的实现了「模拟用户行为」（[`crate::workflow_frontend`]），所以这里不再需要那句
+//! "本后端还没做这一步"的补白 —— `emulateFrontend` 与 Kotlin 一样**真的改变转换结果**：
+//! 开着时纯前端节点被等价改写（不进 `gaps`），关着时它们照旧留在 `unsupportedNodes` 里。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -1882,7 +1882,7 @@ pub fn learn_file(
                  存一份 API 格式的文件，再把那份路径给我。",
             ));
         };
-        let converted = crate::workflow_convert::to_api_graph(&root, info2)
+        let converted = crate::workflow_convert::to_api_graph(&root, info2, emulate_frontend)
             .map_err(|e| {
                 RecipeFailure::ai("INVALID_ARGUMENT", format!("转换工作流失败：{}", take_chars(&e, 400)))
             })?;
@@ -1909,15 +1909,6 @@ pub fn learn_file(
             .take(MAX_CONVERT_WARNINGS)
             .cloned()
             .collect();
-        // ⚠ **有意与 Kotlin 不同**（2026-09-27）：本后端还没实现「模拟用户行为」，
-        //   而工具描述是从 Kotlin 逐字搬的、里面写着这个能力 —— 必须如实补一句
-        //   （与 `workflow_load.rs` 共用同一份实现，见 `workflow_convert::emulate_frontend_warning`）。
-        if let Some(note) = crate::workflow_convert::emulate_frontend_warning(
-            emulate_frontend,
-            !converted.unsupported_nodes.is_empty(),
-        ) {
-            convert_warnings.push(note);
-        }
         if !gaps.is_empty() && !tolerate_unsupported {
             return Err(RecipeFailure::ai("UNSUPPORTED_NODES", unsupported_nodes_message(&gaps)));
         }

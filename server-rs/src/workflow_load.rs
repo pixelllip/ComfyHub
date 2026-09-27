@@ -17,12 +17,14 @@
 //! 只会永远回一句"正在被另一次调用加载"。所以"抢不到 + 那条记录是 `success` 但
 //! `prompt_id` 已经没了"这一档要**带 force 重抢**；正在处理中（`running`）的仍然让开。
 //!
-//! # 两处还没搬的能力（必须在结果里看得见）
+//! # 两处能力（P4 第 68 步起都在，见 [`crate::workflow_convert`] 文件头）
 //!
-//! 1. **组节点（subgraph）不展开**（见 [`crate::workflow_convert`] 文件头）；
-//! 2. **「模拟用户行为」（`emulateFrontend`）没实现**：纯前端广播节点不会被等价改写，
-//!    它们留在 `unsupportedNodes` 里。工具描述是从 Kotlin 逐字搬的、里面写了这个能力，
-//!    所以这里**主动补一句 warning**：调用方（模型/用户）必须知道"这一步没做"。
+//! 1. **组节点（subgraph）按定义展开**成内部真节点；
+//! 2. **「模拟用户行为」（`emulateFrontend`）**（[`crate::workflow_frontend`]）：
+//!    广播型节点按声明的类型 / 名字填空、显示节点丢掉、一个输出节点都没有时补 `SaveImage`。
+//!    替前端做了什么**如实列在结果里**（`frontendEmulated` / `frontendBroadcast` /
+//!    `frontendInjected` + 一句 `frontendHint`）—— 用户看得到才敢信这次跑的就是他工作流里的意思。
+//!    `emulateFrontend=false` 时一个字都不改，纯前端节点照旧进 `unsupportedNodes`。
 
 use std::path::Path;
 
@@ -119,6 +121,9 @@ pub async fn load_from_file(
     let mut unsupported: Vec<String> = Vec::new();
     let mut unresolved: Vec<String> = Vec::new();
     let mut open_inputs: Vec<String> = Vec::new();
+    let mut frontend_rewritten: Vec<String> = Vec::new();
+    let mut broadcast_lines: Vec<String> = Vec::new();
+    let mut injected_nodes: Vec<String> = Vec::new();
 
     let api_graph: Map<String, Value> = if api_format {
         root.clone()
@@ -142,22 +147,26 @@ pub async fn load_from_file(
         let Some(object_info) = object_info.as_object() else {
             return Err(LoadFailure::new("COMFY_UNREACHABLE", "/object_info 不是 JSON 对象"));
         };
-        let converted = workflow_convert::to_api_graph(&root, object_info).map_err(|message| {
-            LoadFailure::new("INVALID_ARGUMENT", format!("转换工作流失败：{message}"))
-        })?;
+        let converted = workflow_convert::to_api_graph(&root, object_info, emulate_frontend)
+            .map_err(|message| {
+                LoadFailure::new("INVALID_ARGUMENT", format!("转换工作流失败：{message}"))
+            })?;
         if !converted.unsupported_nodes.is_empty() && !tolerate_unsupported {
+            // ⚠ 这四条出口是 `AiWorkflowSearch.loadWorkflowFromFile` 里那段的**逐字**搬运：
+            //   第 68 步之后 ① 是真的（广播型节点会被照前端的行为等价改写），
+            //   组节点也不再需要"只能走②或③"那句话了。
             return Err(LoadFailure::new(
                 "UNSUPPORTED_NODES",
                 format!(
-                    "这条工作流用了 ComfyUI **前端**才有的节点（或本后端还不展开的组节点），\
-                     服务端没法等价转换：{}。四个出口：\
-                     ① 把 tolerateUnsupported=true 再来一次 —— 我会把这些节点摘掉、\
+                    "这条工作流用了 ComfyUI **前端**才有的节点，服务端没法等价转换：{}。四个出口：\
+                     ① 把 emulateFrontend=true（默认就是）确认开着 —— 广播型节点（Anything Everywhere \
+                     这类）会被照前端的行为等价改写；\
+                     ② 把 tolerateUnsupported=true 再来一次 —— 我会把这些节点摘掉、\
                      并把**缺哪些线**列出来（openInputs / unresolvedInputs），\
                      你照着用 comfy_submit(connections=…) 补上就能跑；\
-                     ② 在 ComfyUI 里用「工作流菜单 → 导出（API）」存成 API 格式，再把那份文件路径给我\
+                     ③ 在 ComfyUI 里用「工作流菜单 → 导出（API）」存成 API 格式，再把那份文件路径给我\
                      （API 格式是原样提交，零转换）；\
-                     ③ 在 ComfyUI 里点一次 Queue 让它跑一次，跑完会被自动捕获，之后就能按 promptId 提交；\
-                     ④ 带 subgraph 的工作流目前只能走②或③。",
+                     ④ 在 ComfyUI 里点一次 Queue 让它跑一次，跑完会被自动捕获，之后就能按 promptId 提交。",
                     converted
                         .unsupported_nodes
                         .join("、")
@@ -178,15 +187,9 @@ pub async fn load_from_file(
         unsupported = converted.unsupported_nodes.iter().take(MAX_UNSUPPORTED).cloned().collect();
         unresolved = converted.unresolved_inputs.iter().take(MAX_GAPS).cloned().collect();
         open_inputs = converted.open_inputs.iter().take(MAX_GAPS).cloned().collect();
-        // ★ **诚实那一句**：工具描述里写着「模拟用户行为」默认开着，而本后端还没实现它。
-        //   不说这句，用户会以为那些前端节点已经被照前端的做法接好了。
-        //   ⚠ 文本只有一个真源（`workflow_convert::emulate_frontend_warning`）：
-        //     第 67 步的学习链路也要说同一句话，各写一份必然走样。
-        if let Some(note) =
-            workflow_convert::emulate_frontend_warning(emulate_frontend, !unsupported.is_empty())
-        {
-            warnings.push(note);
-        }
+        frontend_rewritten = converted.frontend_rewritten.iter().take(MAX_REWRITTEN).cloned().collect();
+        broadcast_lines = converted.broadcast_lines.iter().take(MAX_GAPS).cloned().collect();
+        injected_nodes = converted.injected_nodes.iter().take(MAX_REWRITTEN).cloned().collect();
         converted.graph
     };
 
@@ -297,9 +300,18 @@ pub async fn load_from_file(
             )
         } else {
             format!(
-                "**这条现在还不能跑**：转换时摘掉了 {} 个节点（前端专有 / 本后端还不展开的），\
-                 留下的缺口见 openInputs / unresolvedInputs。请照着缺口把线补上再提交。",
-                unsupported.len()
+                "**这条现在还不能跑**：转换时摘掉了 {} 个 ComfyUI 前端节点，\
+                 留下的缺口见 openInputs / unresolvedInputs。请照着缺口用 \
+                 comfy_submit(promptId={prompt_id}, connections={{\"<节点id>.<输入名>\": \
+                 [\"<上游节点id>\", 槽位]}}) 把线补上再提交（要改的字面量仍走 overrides）。\
+                 不确定某条线该接哪时，先问用户，别乱接。{}",
+                unsupported.len(),
+                if broadcast_lines.is_empty() {
+                    String::new()
+                } else {
+                    "（其中一部分已经被「模拟用户行为」等价改写掉了，见 frontendBroadcast）"
+                        .to_string()
+                }
             )
         }),
     );
@@ -317,6 +329,28 @@ pub async fn load_from_file(
     }
     if !warnings.is_empty() {
         out.insert("warnings".into(), json!(warnings));
+    }
+    // ## 模拟用户行为 ##：把"替前端做了哪几件事"如实列出来 ——
+    // 用户看得到才敢信这次跑的就是他工作流里的意思（用户建议 ②）
+    if !frontend_rewritten.is_empty() {
+        out.insert("frontendEmulated".into(), json!(frontend_rewritten));
+    }
+    if !broadcast_lines.is_empty() {
+        out.insert("frontendBroadcast".into(), json!(broadcast_lines));
+    }
+    if !injected_nodes.is_empty() {
+        out.insert("frontendInjected".into(), json!(injected_nodes));
+    }
+    if !frontend_rewritten.is_empty() || !broadcast_lines.is_empty() || !injected_nodes.is_empty() {
+        out.insert(
+            "frontendHint".into(),
+            json!(
+                "这条工作流里有 ComfyUI **前端**才有的节点（服务端拿不到那份 JS）。\
+                 已经照前端排队前的行为**等价改写**：见 frontendEmulated / frontendBroadcast / \
+                 frontendInjected。提交前请扫一眼这些改动是不是你要的；\
+                 不想让它替你做，就带 emulateFrontend=false 重新读一次（那时会如实报缺口）。"
+            ),
+        );
     }
     out.insert("nodes".into(), summarize_nodes(&api_graph));
     if include_graph {

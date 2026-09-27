@@ -8,7 +8,7 @@
 //! | `list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill` | `DESKTOP` | 第 40 步，路径准入在 [`crate::policy`] |
 //! | `comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` | `DESKTOP` | 第 41/42 步；前两条只碰本机库与磁盘，`get_status` 会真问一次 ComfyUI 的 `/queue` |
 //! | `comfy_sync_history` | `DESKTOP` | 第 43 步；**会写库**（建提示词 + 产物入库），出厂档 `ASK` |
-//! | `comfy_load_workflow` | `DESKTOP` | 第 44 步；把本机工作流文件读进库（界面格式按 `/object_info` 转 API 图）。⚠ 组节点不展开、"模拟用户行为"未实现，两者都如实报 |
+//! | `comfy_load_workflow` | `DESKTOP` | 第 44 步；把本机工作流文件读进库（界面格式按 `/object_info` 转 API 图）。组节点按定义展开、「模拟用户行为」（`emulateFrontend`）等价改写纯前端节点并如实列出改了什么（第 68 步） |
 //! | `comfy_use_media` / `comfy_use_attachment` / `comfy_make_mask` | `DESKTOP` | **图像编辑三件**（见 [`crate::image_edit`]）：把画廊产物 / 用户附件投放进 ComfyUI 的 `input` 目录，以及生成"白=重绘区"的遮罩。三件都要用户批准（会往用户机器上写文件） |
 //! | `comfy_check_inputs` / `comfy_fit_workflow` | `DESKTOP` | 第 62 步的**体检两件**（见 [`crate::workflow_fit`]）：前者列"还等着外部给输入的位置"（用户没给参考图时的那个现场），后者把图里点名的模型与本机清单对一遍。两件都**只报不改**、出厂 `ALLOW` |
 //! | `comfy_audit_workflow` | `DESKTOP` | 第 63 步的**审核**（见 [`crate::workflow_audit`]）：七项检查只报事实，其中"必跑不了"的三项（前端节点 / 版本不兼容 / 本机没有的节点类）会被提交闸门拦下，参数/显存/提示词风格**只提醒**。出厂 `ALLOW` |
@@ -1514,9 +1514,10 @@ async fn comfy_sync_history(state: &AppState) -> Result<ToolOutcome, ToolFailure
 /// 路径走**读白名单**（[`crate::policy::ToolPolicy::resolve_read`]）：本机 ComfyUI 的目录
 /// 已经被自动放行（用户 bug ④），用户的工作流一般就躺在它下面的 `user\<用户>\workflows` 里。
 ///
-/// ⚠ `emulateFrontend` **收下但不改变行为**（本后端还没实现"模拟用户行为"）——
-/// 这正是 `workflow_load` 会在结果里补一句 warning 的原因：工具描述是从 Kotlin 逐字搬的、
-/// 里面写着这个能力，**不说明就等于默认它做了**（那会让用户以为前端节点已经被接好）。
+/// ⚠ `emulateFrontend`（默认 true）**真的改变结果**：开着时纯前端节点会被照 ComfyUI 前端
+/// 排队前的行为等价改写（广播填空 / 丢显示节点 / 补 `SaveImage`，见 [`crate::workflow_frontend`]），
+/// 改了什么列在结果的 `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里；
+/// 关着时一个字都不改，它们照旧进 `unsupportedNodes`。这正是工具描述里那一段的意思。
 async fn comfy_load_workflow(
     state: &AppState,
     policy: &crate::policy::ToolPolicy,
