@@ -3023,7 +3023,7 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         ]
     );
     assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
-    assert_eq!(body["promptVersion"], "v33");
+    assert_eq!(body["promptVersion"], "v34");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -7946,14 +7946,14 @@ async fn 遮罩照底图尺寸画且白区就是重绘区() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// `matteSource="model"`（AI 抠图那一档，2026-09-27）：**不写遮罩、不写 ring**，
+/// 贴人物档（`mode="subject"`，2026-09-27 起**唯一**一条贴人路）：**不写遮罩**，
 /// 也**一个像素都不改**人物图 —— 抠图与前景估计都由工作流里的模型做（`refine_foreground`）。
 ///
-/// 这一档存在的原因（总纲 §16）：合成用的软遮罩由工作流里的抠图节点 `easy imageRemBg` 现算，
-/// 而 `ImageCompositeMasked` 合的是**人物图那张的像素** —— 边界那圈"人 + 背景"的混合色不洗掉，
-/// 软遮罩按 alpha 贴上去就是绕着人的一圈淡背景色。
+/// ⛔ 颜色抠图那一档（`matteSource="color"` + despill/反混/choke/ring）已整档删除：
+/// 它会在人物轮廓**外**留一圈青绿（剪影外那条带 39.6% 像素偏绿，比底图多 +34.8pp），
+/// 而且**发梢被整段吃掉**。所以这里同时钉住"老参数会被明确拒绝"。
 #[tokio::test]
-async fn matte_档不写遮罩也不碰人物图交给工作流去抠() {
+async fn 贴人物档不写遮罩也不碰人物图交给工作流去抠() {
     let state = state();
     let root = state.project_root();
     configure_shared_output(&state, &root);
@@ -7961,7 +7961,7 @@ async fn matte_档不写遮罩也不碰人物图交给工作流去抠() {
     write_test_png(&input.join("bg.png"), 64, 48);
 
     // 人物图：绿幕 + 中间一块"人"，**紧贴人外面那两圈是"人 + 绿幕"的混合色**
-    //（颜色离背景很近 → 颜色键把它判成背景 → 它落在掩码**外面**，正是只往内压盖不到的那批）
+    //（颜色离背景很近 → 颜色键把它判成背景 → 它落在掩码**外面**，正是当初"只往内压盖不到"的那批）
     let (w, h) = (64u32, 48u32);
     let mut person = image::RgbImage::from_pixel(w, h, image::Rgb([0, 177, 64]));
     for y in 8..40u32 {
@@ -7984,7 +7984,6 @@ async fn matte_档不写遮罩也不碰人物图交给工作流去抠() {
         "comfy_make_mask",
         serde_json::json!({
             "mode": "subject",
-            "matteSource": "model",
             "baseFilename": "bg.png",
             "subjectFilename": "person.png",
             "bgColor": "green"
@@ -7993,24 +7992,25 @@ async fn matte_档不写遮罩也不碰人物图交给工作流去抠() {
     .await
     .unwrap();
 
-    assert_eq!(out.payload["matteSource"], "model");
-    assert_eq!(out.payload["maskGenerated"], false, "matte 档不许写合成遮罩");
+    assert_eq!(out.payload["maskGenerated"], false, "贴人物档不许写合成遮罩");
     assert!(out.payload.get("filename").is_none(), "没有遮罩文件名可给：{:?}", out.payload["filename"]);
     assert_eq!(
         out.payload["personFilename"], "person.png",
-        "要把**清理过**的那份人物图文件名回给调用方（它才是 20.image 该填的）"
+        "要把人物图文件名回给调用方（它才是 20.image 该填的）"
     );
+    // 定位器诊断还在（它只影响摆放），但要说清"不参与合成"
+    assert!(out.payload["subjectRatio"].as_f64().unwrap() > 0.005, "{:?}", out.payload["subjectRatio"]);
+    assert!(out.payload["locatorNote"].as_str().unwrap().contains("定位器"));
     let hint = out.payload["hint"].as_str().unwrap();
     assert!(hint.contains("comfyhub_paste_person_matte_anima.json"), "{hint}");
     assert!(
         hint.contains("不要") && hint.contains("LoadImageMask"),
-        "matte 档必须明确说「**不要**覆盖遮罩」：{hint}"
+        "必须明确说「**不要**覆盖遮罩」：{hint}"
     );
     assert!(
         !hint.contains("12.image"),
-        "matte 档不该出现「覆盖 12.image」那种指引（那份工作流没有 12 / 26）：{hint}"
+        "不该出现「覆盖 12.image」那种指引（那份工作流没有 12 / 26）：{hint}"
     );
-    assert!(out.payload["matteNote"].as_str().unwrap().contains("imageRemBg"));
 
     // input 目录里**不许**多出遮罩 / ring（写一张没人用的文件只会在用户目录里攒垃圾）
     let strays: Vec<String> = std::fs::read_dir(&input)
@@ -8019,39 +8019,31 @@ async fn matte_档不写遮罩也不碰人物图交给工作流去抠() {
         .map(|e| e.file_name().to_string_lossy().to_string())
         .filter(|n| n.starts_with("comfyhub_mask_") || n.starts_with("ring-"))
         .collect();
-    assert!(strays.is_empty(), "matte 档在 input 目录里留了垃圾：{strays:?}");
+    assert!(strays.is_empty(), "贴人物档在 input 目录里留了垃圾：{strays:?}");
 
-    // ★ **这一档一个像素都不许改人物图**（2026-09-27 用户拍板："全权交给 ai，而不是用 rust 预处理"）。
-    //   抠图与**前景估计**都在工作流里做（`easy imageRemBg` + `refine_foreground=true`），
-    //   用的是**模型自己的 alpha**；Rust 这边只有"按颜色猜的覆盖率"，试过三次都更差
-    //   （压通道→青边、两侧反混→白光晕），所以这里用**逐字节相同**来钉住"别碰"。
+    // ★ **一个像素都不许改人物图**：抠图与**前景估计**都在工作流里做（`easy imageRemBg` +
+    //   `refine_foreground=true`），用的是**模型自己的 alpha**；Rust 这边只有"按颜色猜的覆盖率"，
+    //   试过三次都更差（压通道→青边、两侧反混→白光晕）。用**逐字节相同**钉住"别碰"。
     let after = std::fs::read(input.join("person.png")).unwrap();
     assert_eq!(
         after,
         person_bytes,
-        "matte 档必须**原样**把人物图交给工作流（抠图与前景估计都由模型做）"
+        "贴人物档必须**原样**把人物图交给工作流（抠图与前景估计都由模型做）"
     );
 
-    // 取值只认两个；而且必须跟 mode=subject 一起用
-    //（⚠ 尺寸校验排在参数枚举校验前面，所以这里要把 width/height 给全，否则报的是尺寸那条）
-    let bad_value = call_tool(
-        &state,
-        "comfy_make_mask",
-        serde_json::json!({ "width": 64, "height": 48, "region": "full", "matteSource": "nope" }),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(bad_value.code, "INVALID_ARGUMENT");
-    assert!(bad_value.message.contains("matteSource"), "{}", bad_value.message);
-    let bad_mode = call_tool(
-        &state,
-        "comfy_make_mask",
-        serde_json::json!({ "width": 64, "height": 48, "region": "full", "matteSource": "model" }),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(bad_mode.code, "INVALID_ARGUMENT");
-    assert!(bad_mode.message.contains("mode=\"subject\""), "{}", bad_mode.message);
+    // ⛔ 已删除那一档的老参数：**明确拒绝**（静默忽略 = 模型以为遮罩是自己写的，去覆盖不存在的节点）
+    for removed in comfyhub_server_rs::image_edit::REMOVED_ARGS {
+        let mut map = serde_json::Map::new();
+        map.insert((*removed).to_string(), serde_json::json!("model"));
+        map.insert("width".to_string(), serde_json::json!(64));
+        map.insert("height".to_string(), serde_json::json!(48));
+        map.insert("region".to_string(), serde_json::json!("full"));
+        let err = call_tool(&state, "comfy_make_mask", serde_json::Value::Object(map))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "INVALID_ARGUMENT", "{removed} 应当被明确拒绝");
+        assert!(err.message.contains(removed) && err.message.contains("已删除"), "{}", err.message);
+    }
 
     std::fs::remove_dir_all(&root).ok();
 }

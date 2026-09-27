@@ -11,6 +11,7 @@ import json
 import random
 import re
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -178,8 +179,9 @@ class Handler(BaseHTTPRequestHandler):
         if "编辑图片" in user_text:
             # ⚠ maxsplit 必须 >= 字段数-1：给少了，**最后一个字段会被并进前一个**里
             #   （实测：matte 那个 `1` 被并进 light，工具收到 `light="none|1"` → INVALID_ARGUMENT）。
-            #   现在 17 个字段（尾部加了 seed / matteRing，见下）→ maxsplit=16。
-            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 16)
+            #   **2026-09-27 起字段收窄**（颜色抠图档删除 → 没有 ring / light / matte 三个开关了）：
+            #   8 个基本字段 + 5 个尾部字段（scale / x / y / bgColor / seed）= 13 个 → maxsplit=12。
+            fields = user_text.split("编辑图片", 1)[1].strip().split("|", 12)
             attachment_id = fields[0].strip() if fields else ""
             workflow_path = fields[1].strip() if len(fields) > 1 else ""
             denoise = float(fields[2].strip()) if len(fields) > 2 and fields[2].strip() else 1.0
@@ -196,34 +198,16 @@ class Handler(BaseHTTPRequestHandler):
             # ⚠ 自带工作流都写死 `cfg=1.0`（无引导档，Turbo 的常规跑法），此时**提示词
             #   对画面的约束很弱**；要"让模型重画掉贴进来的背景"就得把它提上去。
             cfg = float(fields[7].strip()) if len(fields) > 7 and fields[7].strip() not in ('', '0') else None
-            # 第 9~12 个字段：ring（只融接缝的那一圈）/ scale / x / y（摆放）
+            # 尾部：摆放（scale / x / y）、bgColor（定位器提示）、固定 seed
             tail = fields[8:] if len(fields) > 8 else []
-            ring = int(tail[0].strip()) if len(tail) > 0 and tail[0].strip() else 0
-            place_scale = float(tail[1].strip()) if len(tail) > 1 and tail[1].strip() not in ('', '0') else 1.0
-            place_x = float(tail[2].strip()) if len(tail) > 2 and tail[2].strip() else None
-            place_y = float(tail[3].strip()) if len(tail) > 3 and tail[3].strip() else None
-            # 第 13 个字段：bgColor（`#00b140` / `green` / `magenta`；空 = 从边框估）
-            bg_color = tail[4].strip() if len(tail) > 4 and tail[4].strip() else ""
-            # 第 14 个字段：light（auto / left / right / top / bottom / none）
-            light = tail[5].strip() if len(tail) > 5 and tail[5].strip() else ""
-            # 第 15 个字段：matte（`1` = 走 **AI 软遮罩**那一档，2026-09-27）
-            #   · `comfy_make_mask(matteSource="model")` —— 工具**不写遮罩**，只把人物图
-            #     那份像素洗干净（反混 + 两侧去溢色），回 `personFilename`；
-            #   · 工作流是 `comfyhub_paste_person_matte_anima.json`（抠图节点在**工作流里**，
-            #     ring 也由 GrowMask+MaskComposite 从同一份 alpha 现算）；
-            #   · 所以**一个 LoadImageMask 覆盖都不该写**（那份工作流没有 12 / 26）——
-            #     这正是这一档要验的事。
-            matte = bool(tail[6].strip()) if len(tail) > 6 and tail[6].strip() else False
-            # 第 16 个字段：**固定 seed**（`0` / 空 = 照旧随机，与真模型的行为一致）。
-            #   ⚠ 做 A/B 对照必须给一个固定值：这个网关原来每次都 `random.randint(...)`，
-            #   于是"关掉 ring 之后内部锐度变了多少"里混着"噪声不同"这个变量 ——
-            #   单变量对照的前提直接没了（2026-09-27 发现的）。
-            seed = int(tail[7].strip()) if len(tail) > 7 and tail[7].strip() else 0
-            # 第 17 个字段：**matte 档的 ring**（`-1` = 不动工作流）。
-            #   matte 那份工作流的 ring 是**写死在节点上**的
-            #   （`28 GrowMask(expand=14)` → `29 MaskComposite(subtract)`），
-            #   所以"关掉 ring"只能在提交时覆盖 `GrowMask.expand` —— 传参数没用。
-            matte_ring = int(tail[8].strip()) if len(tail) > 8 and tail[8].strip() else -1
+            place_scale = float(tail[0].strip()) if len(tail) > 0 and tail[0].strip() not in ('', '0') else 1.0
+            place_x = float(tail[1].strip()) if len(tail) > 1 and tail[1].strip() else None
+            place_y = float(tail[2].strip()) if len(tail) > 2 and tail[2].strip() else None
+            bg_color = tail[3].strip() if len(tail) > 3 and tail[3].strip() else ""
+            # **固定 seed**（`0` / 空 = 照旧随机，与真模型的行为一致）。
+            # ⚠ 做单变量对照必须给一个固定值：这个网关原来每次都 `random.randint(...)`，
+            #   于是"改了一个变量之后锐度变了多少"里混着"噪声不同" —— 对照的前提直接没了。
+            seed = int(tail[4].strip()) if len(tail) > 4 and tail[4].strip() else 0
             tool_msgs = [m for m in messages if m.get("role") == "tool"]
             rounds = 0
             if len(tool_msgs) == 0:
@@ -250,37 +234,19 @@ class Handler(BaseHTTPRequestHandler):
                     "feather": feather,
                     "filename": "edit-mask.png",
                 }
-                if matte:
-                    # ★ AI 软遮罩那一档：遮罩由**工作流里的抠图节点**现算。
-                    #   工具这一档**不写遮罩也不写 ring**，只把人物图那份像素洗干净
-                    #   （反混 + 两侧去溢色）——溢色像素在剪影**外面**，只往内压会留一圈淡背景色。
-                    mask_args.pop("filename", None)
-                    mask_args["matteSource"] = "model"
                 if person:
-                    # ★ 贴人物图时遮罩要**照人物的形状抠**（用户 2026-09-26 提的）：
-                    #   遮罩给矩形的话，ImageCompositeMasked 会把人物图那块矩形
-                    #   **连背景一起**贴进去 —— 白底人物图贴到夜景上就是一圈白框。
-                    # ⚠ 这里刻意传 `region="full"`：`mode=subject` 下 region 的作用是
-                    #   **裁切**（剪影超出框的部分被直边切掉），而人物已经在整张画布上了，
-                    #   再给矩形框只会把她切一刀 —— 不收窄就是"只按人物形状改"。
+                    # ★ 贴人物图：**抠图交给工作流**（2026-09-27 起唯一一条路）。
+                    #   工具这一档**不写遮罩**，只回 `personFilename` 与定位器诊断。
+                    # ⚠ 这里刻意传 `region="full"`：`mode=subject` 下 region 的作用是**裁切**
+                    #   （定位器剪影超出框的部分被直边切掉），而人物已经在整张画布上了。
+                    mask_args.pop("filename", None)
                     mask_args["mode"] = "subject"
                     mask_args["subjectFilename"] = person
                     mask_args["region"] = "full"
-                    # ring：**只在人物外面一圈重绘**（工作流得有两个 LoadImageMask）。
-                    # 这是"嵌进去会改变画风"的正解 —— 人物像素原样贴上去，模型只融接缝。
-                    # ⚠ matte 那一档**不传** ring：那份工作流的 ring 由 GrowMask+MaskComposite
-                    #   从同一份 alpha 现算（传了也没人接）。
-                    if ring > 0 and not matte:
-                        mask_args["ring"] = ring
-                    if light:
-                        # ★ 按背景环境改新图层的光照/阴影方向（用户最后一个要求）：
-                        #   工具从底图估光向+色偏烘进人物图，并按反方向烧影子
-                        mask_args["light"] = light
                     if bg_color:
-                        # ★ 用户 2026-09-26 指出的正解：**背景色与主体不同**（绿幕/品红），
-                        #   显式告诉工具背景是什么色，抠图就不用猜边框、也没有"白底 vs 白裙子"的二义。
+                        # 显式告诉**定位器**背景是什么色（只影响估出来的人物框，不影响画面）
                         mask_args["bgColor"] = bg_color
-                    # 摆放（缩放 + 位移）：工具会把人物像素与遮罩**一起**搬，并回一个新文件名，
+                    # 摆放（缩放 + 位移）：工具会把人物像素与定位掩码**一起**搬，并回一个新文件名，
                     # 所以下面一定要用返回里的 `placedSubjectFilename` 覆盖 `20.image`。
                     if place_scale != 1.0 or place_x is not None or place_y is not None:
                         mask_args["scale"] = place_scale
@@ -292,26 +258,23 @@ class Handler(BaseHTTPRequestHandler):
                 return
             mask = self._tool_json(tool_msgs[rounds])
             if len(tool_msgs) == rounds + 1:
-                # 摆放/抠形状之后的**人物图文件名**：工具把像素也一起搬了，这里必须跟着换。
-                # matte 那一档回的是 `personFilename`（**已经被洗过像素**的那一份）。
+                # 摆放之后的**人物图文件名**：工具把像素也一起搬了，这里必须跟着换。
                 person_for_submit = (mask.get("personFilename")
                                      or mask.get("placedSubjectFilename") or person)
                 self._stream_tool("comfy_submit", {
                     "workflowPath": workflow_path,
                     "overrides": self._inpaint_overrides(
                         workflow_path, placed.get("filename"),
-                        None if matte else mask.get("filename"),
+                        mask.get("filename"),
                         mask.get("width"), mask.get("height"), prompt, denoise,
                         person_for_submit, cfg,
-                        None if matte else mask.get("ringFilename"),
-                        seed=seed or None,
-                        grow_expand=(matte_ring if matte and matte_ring >= 0 else None)),
+                        seed=seed or None),
                     "title": "E2E 图像编辑验证",
                     "waitSeconds": 300,
                 })
                 return
-            self._sse("图像编辑完成：先把底图投进 ComfyUI 的 input 目录、照它的尺寸生成了遮罩，"
-                      + ("把阶段一的人物图也投了进去，" if person else "")
+            self._sse("图像编辑完成：先把底图投进 ComfyUI 的 input 目录、"
+                      + ("投放了人物图并让工具估了它的位置，" if person else "照它的尺寸生成了遮罩，")
                       + "再提交 inpaint 工作流覆盖了底图 / 遮罩 / 尺寸与提示词。产物已经入库。")
             return
         # 模板 I：**阶段一（t2i）** —— 先生成人物图（后面再把它贴进底图）。
@@ -363,7 +326,7 @@ class Handler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _inpaint_overrides(workflow_path, bg, mask, width, height, prompt, denoise, person=None, cfg=None,
-                           ring=None, seed=None, grow_expand=None):
+                           seed=None):
         """按**工作流自己的节点表**算 overrides（真实模型也是先看清图里有哪些节点）。
 
         刻意不写死节点 id：`comfyhub_inpaint_anima.json` 与 `..._krea2.json` 的编号不同，
@@ -373,8 +336,6 @@ class Handler(BaseHTTPRequestHandler):
         `denoise` 降到 0.4~0.6 —— 那是"贴人物图"而不是"纯提示词重绘"，两件事的档位不同。
         `cfg` 给了才覆盖（默认不动：自带工作流都写死 `cfg=1.0`，那是 Turbo 的常规跑法）。
         `seed` 给了就固定（**单变量对照的前提**：默认随机是对真模型的模拟，做 A/B 时必须钉住）。
-        `grow_expand` 给了就覆盖 `GrowMask.expand`（matte 那份工作流的 ring 写死在节点上，
-        只能这样关掉它 —— 见 `matte_ring` 那条注释）。
         """
         graph = json.loads(open(workflow_path, "r", encoding="utf-8").read())
         by_class = {}
@@ -389,16 +350,9 @@ class Handler(BaseHTTPRequestHandler):
             # 人物图：纯重绘时填底图自己（合成是空操作），两阶段时填阶段一的产物
             overrides[f"{loaders[1]}.image"] = person or bg
         if mask and by_class.get("LoadImageMask"):
-            masks = by_class["LoadImageMask"]
-            overrides[f"{masks[0]}.image"] = mask          # 合成遮罩（剪影）
-            if len(masks) > 1:
-                # 第二个 LoadImageMask = **重绘区**。有 ring 时是"只圈人物外面那一圈"
-                # （人物自己的像素原样保留 —— "嵌进去不变画风"的那条路）；
-                # **没有 ring 时显式填回剪影本身**（= 人物整块一起重采样，也就是 ring 出现之前的老行为）。
-                # ⚠ 不能"不覆盖、让它用图里那个默认值"：那份工作流的默认是 `example_ring.png`，
-                #   而实例的 input 里**没有这个文件** → 提交直接炸；万一哪天有人放了一个旧的
-                #   `example_ring.png` 进去，它还会**静默**用错的那一圈（比炸更难查）。
-                overrides[f"{masks[1]}.image"] = ring or mask
+            # 几何档（rect / ellipse）自己画的那张遮罩。⚠ 贴人物图（matte 工作流）**没有**
+            # LoadImageMask —— 那一档 `comfy_make_mask` 不写遮罩，覆盖了反而是错的。
+            overrides[f"{by_class['LoadImageMask'][0]}.image"] = mask
         for node_id in by_class.get("ImageScale", []):
             # 尺寸必须与遮罩一致（不一致时采样直接炸）
             overrides[f"{node_id}.width"] = width
@@ -411,9 +365,13 @@ class Handler(BaseHTTPRequestHandler):
             overrides[f"{sampler}.denoise"] = denoise
             if cfg is not None:
                 overrides[f"{sampler}.cfg"] = cfg
-        if grow_expand is not None and by_class.get("GrowMask"):
-            # matte 档的 ring：`28 GrowMask.expand=14` 写死在图里 → 覆盖它才是"关 ring"
-            overrides[f"{by_class['GrowMask'][0]}.expand"] = grow_expand
+        if seed is not None and by_class.get("SaveImage"):
+            # ★ 钉住 seed 时**必须**同时换掉输出前缀：ComfyUI 会覆盖同名文件，而本项目的捕获按
+            #   `prompt_id` + 文件 SHA-256 判重 —— 同一个 seed + 同一个前缀跑第二遍会回
+            #   `status:"empty"` / `mediaIds: []`（工具自己的 preflight 就警告过这条），
+            #   e2e 于是连产物都取不到、后面所有像素判据一起空跑。
+            #   前缀**不影响画面**，所以"只改一个变量"的对照照样成立（换的只是文件名）。
+            overrides[f"{by_class['SaveImage'][0]}.filename_prefix"] = f"e2e_exp_{uuid.uuid4().hex[:8]}"
         return overrides
 
     def _stream_tool(self, name, arguments):

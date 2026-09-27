@@ -9,9 +9,21 @@
 //! 1. **把图投放进 ComfyUI 的 `input` 目录** —— 工作流里的 `LoadImage` / `LoadImageMask`
 //!    **只能读那一个目录**，而阶段一的产物在画廊里（[`use_media`]）、用户随消息发来的图
 //!    在附件库（[`use_attachment`]）。模型既改不了这个目录，也编不出一个真实存在的文件名。
-//! 2. **生成遮罩**（[`make_mask`]）—— 局部重绘必须有遮罩，而用户在手机 / 平板上画不出来，
-//!    ComfyUI 的 MaskEditor 又要人坐在电脑前手描。这里用"归一化矩形 / 椭圆 + 反选 + 羽化"
-//!    表达意图，够用且可复现。
+//! 2. **给局部重绘画一张遮罩**（[`make_mask`]）—— 局部重绘必须有遮罩，而用户在手机 / 平板上
+//!    画不出来，ComfyUI 的 MaskEditor 又要人坐在电脑前手描。这里用"归一化矩形 / 椭圆 + 反选
+//!    + 羽化"表达意图，够用且可复现。
+//!
+//! # 贴人物图那条路：**抠图不是我们的事**（2026-09-27 定）
+//!
+//! `mode="subject"` 只做三件事：确认人物图在 `input` 里、按颜色**估一个定位器剪影**
+//! （算 bbox / 支撑摆放 / 报诊断）、把 `personFilename` 回给调用方。真正的合成 alpha 由
+//! **工作流里的抠图节点**现算（`easy imageRemBg` + `refine_foreground=true`，见
+//! `comfyui\workflows\comfyhub_paste_person_matte_anima.json`）。
+//!
+//! ⛔ 以前还有一档"用颜色剪影**当合成遮罩** + Rust 收边/反混/去溢色/现算 ring"（`matteSource="color"`）。
+//! 活实例实测：贴出来的人物**轮廓外一圈青绿**（剪影外那条带 39.6% 像素偏绿，比底图多 +34.8pp）、
+//! **发梢被整段吃掉**（AI 软遮罩那一档是 2.39% / −2.5pp）。根因是 Rust 手里没有模型的 alpha，
+//! 只能按颜色猜 —— 那一档连同补救算法一起删除了（传老参数会被明确拒绝，见 [`REMOVED_ARGS`]）。
 //!
 //! # 遮罩的语义（**白 = 要重新生成的地方**）
 //!
@@ -40,6 +52,8 @@
 //! `<原名>-<id 前 8 位><扩展名>` 这套命名规则（重复调用得到同一个文件，
 //! 重跑工作流不会指向一个已经不在的图），遮罩靠"白区在哪"与羽化半径。
 //! 单测盯的就是这两件事（`make_mask_白区与羽化` / `投放文件名可重复且不互相覆盖`）。
+//! ⚠ `mode="subject"` **不在这条对照里**：Kotlin 那一版是颜色抠图当遮罩，行为已经分叉
+//! （它那边还在写遮罩）—— 这一档是**有意**分叉的（R12 的分叉要有明确的记录）。
 
 use std::path::{Path, PathBuf};
 
@@ -55,6 +69,27 @@ pub const MAX_MASK_EDGE: i64 = 8192;
 /// 羽化上限（像素）。
 pub const MAX_FEATHER: i64 = 256;
 
+/// 老参数一律**明确拒绝**（见 [`REMOVED_ARGS`]）。
+///
+/// 抽成纯函数是为了能单测；`make_mask` 在**最前面**调它（先于 ComfyUI 探测）：
+/// 参数写错了就当场报，别等去找实例。
+fn reject_removed_args(args: &Value) -> Result<(), ToolFailure> {
+    for removed in REMOVED_ARGS {
+        if args.get(removed).map(|value| !value.is_null()).unwrap_or(false) {
+            return Err(ToolFailure::new(
+                "INVALID_ARGUMENT",
+                format!(
+                    "参数 `{removed}` 已删除（2026-09-27：颜色抠图那一档整档删掉了，抠图交给工作流）。\
+                     贴人物图用 mode=\"subject\" + subjectFilename，再照返回的 hint 用 \
+                     `comfyhub_paste_person_matte_anima.json` 提交；实例上没有抠图模型时先指引用户下载 \
+                     （`comfy_get_status` 的 `mattingModels.usable`）。"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `mode="subject"` 的默认容差（背景色距离的归一化阈值）。
 ///
 /// 为什么要有这个旋钮：生成图的"白底"从来不是纯 255（有渐变、噪点、浅浅的圆形水印纹），
@@ -66,19 +101,28 @@ pub const SUBJECT_TOLERANCE_DEFAULT: f64 = 0.12;
 ///
 /// 白 / 浅灰背景的通道差只有几，绿幕 / 品红是 100+ —— 这条线把它们分开，
 /// 于是"要不要填内部空洞"能自动分档（见 subject_mask_from_image 的 ③）。
+/// ⚠ 它现在只服务**定位器**的质量提示（`chromaKey` / `chromaAdvice`），不再参与任何画面像素。
 pub const CHROMA_MIN_SATURATION: i32 = 40;
 
-/// `mode="subject"` 默认往里收几像素（choke）—— 扔掉主体与背景交界那圈溢色。
-pub const DEFAULT_SUBJECT_SHRINK: i64 = 0;
-
-/// 按颜色收边的默认参数（`band` 像素 / 容差）。
+/// **已删除那一档的参数名**（2026-09-27：颜色抠图当合成遮罩，整档删除）。
 ///
-/// 0.35 比抠图那档（0.12）宽得多是有意的：只看**边界 3 像素**那条带，
-/// 那条带里的像素本来就是"人 + 背景"的混合色，容差放宽才收得掉；
-/// 而发丝（头发色，离背景色远）怎么放宽都还在。
-pub const DEFAULT_EDGE_BAND: i64 = 3;
-pub const DEFAULT_EDGE_TOLERANCE: f64 = 0.25;
-
+/// 传它们会被**明确拒绝**而不是静默忽略 —— 静默忽略更坏：模型按旧描述传
+/// `matteSource="model"`、以为遮罩是自己写的，实际拿到的是"不写遮罩"的语义，
+/// 它就会去覆盖一个不存在的 `LoadImageMask`。
+pub const REMOVED_ARGS: &[&str] = &[
+    // 那一档的开关
+    "matteSource",
+    // "拿猜出来的剪影去合成"才需要的补救
+    "ring",
+    "shrink",
+    "edgeBand",
+    "edgeTolerance",
+    // 打光那一档（默认 `none`，观感从未合格）
+    "light",
+    "lightStrength",
+    "shadowStrength",
+    "shadowOffset",
+];
 
 // ---------------------------------------------------------------------------
 //  ComfyUI 的 input 目录
@@ -347,19 +391,43 @@ pub fn use_attachment(
 
 /// `comfy_make_mask`：生成一张遮罩 PNG 放进 ComfyUI 的 `input` 目录（**白 = 要重新生成的地方**）。
 ///
+/// 两条用途（**2026-09-27 起只剩这两条**）：
+///  - `mode="rect" / "ellipse" / "full"`：照 `region` 画一张**几何**遮罩并写盘 —— 纯提示词重绘
+///    （换背景 / 只改一块地方）用它；
+///  - `mode="subject"`：贴人物图。这一档**不写遮罩**：合成用的 alpha 由工作流里的抠图节点现算
+///    （`easy imageRemBg` + `refine_foreground=true`，见
+///    `comfyui\workflows\comfyhub_paste_person_matte_anima.json`），本工具只回
+///    `personFilename`（拿它覆盖工作流的 `20.image`）。颜色剪影**只剩定位器用途**
+///    （算 bbox 供摆放、报 `subjectRatio` / `background` 供诊断），不参与画面。
+///
+/// ⛔ **"颜色抠图当合成遮罩"那一档已经删除**（2026-09-27 用户拍板"放弃纯rust编辑，删除它"）。
+/// 活实例实测（768×1024 绿幕人物 + 夜景）：那样贴出来的人物**轮廓外面一圈青绿**
+/// （剪影外那条带 39.6% 像素偏绿，比底图自己多 **+34.8pp**；AI 软遮罩那一档是 2.39% /
+/// −2.5pp），而且**发梢被整段吃掉**（草从头发里透出来，就是当初登记的"丢 18.4% 前景"）。
+/// 根因是 **Rust 手里没有模型的 alpha**，只能按颜色猜覆盖率 —— 猜出来的边界永远差一档，
+/// 调参救不了（三次尝试更差的记录见 pitfalls）。所以那一档连同它的补救算法一起删掉：
+/// `drop_blended_edge`（按颜色收边）/ `erode_mask`（choke）/ `unmix_edge`（反混）/
+/// `despill_edges`（去溢色）/ `ring_mask`（Rust 现算的 ring）/ `relight_and_shadow`（打光，观感从未合格）。
+/// 传这些老参数（以及 `matteSource`）会被**明确拒绝**而不是静默忽略。
+///
 /// 参数（类型一律容错，与 Kotlin 的 `str` / `int` / `bool` 同义）：
-///  - `mode`：`rect`（默认，按框画）/ **`subject`（照某张图里主体的形状抠** —— 贴人物图必须用它，
-///    否则 `ImageCompositeMasked` 会把人物图那块矩形**连背景一起**贴进去 = 一圈白框）；
-///  - `subjectFilename`：`mode="subject"` 时要抠形状的那张图（input 目录里的裸文件名）；
-///  - `tolerance`：`mode="subject"` 的背景色容差（默认 0.12，越大越激进）；
+///  - `mode`：`rect`（默认，按框画）/ `subject`（贴人物图，抠图交给工作流）；
+///  - `subjectFilename`：`mode="subject"` 时的**人物图**（input 目录里的裸文件名）——
+///    它就是 `20.image` 要填的那张，也是定位器的输入；
+///  - `tolerance`：`mode="subject"` 定位器的背景色容差（默认 0.12，越大越激进）；
+///  - `bgColor`：定位器的背景色提示（`green` / `magenta` / `#00b140`；不给就从四周估）——
+///    只影响定位器（bbox / `subjectRatio`），**不影响画面**；
 ///  - `baseFilename`：input 目录里的底图文件名 —— 给了就用**它的尺寸**（推荐，最不容易错）；
 ///  - `width` / `height`：没给 `baseFilename` 时的显式尺寸；
 ///  - `region`：`full`（默认）/ `x,y,w,h`（归一化 0~1）/ 预设 `left|right|top|bottom|center|person`；
 ///  - `shape`：`rect`（默认）/ `ellipse`；
 ///  - `invert`：反选（**换背景保人物**就是 `invert=true` + 人物那块 region）；
 ///  - `feather`：边缘羽化像素（默认 0；贴人物进新背景时 8~24 会明显更自然）；
+///  - `scale` / `x` / `y`：**摆放**（把人物缩放并搬到归一化坐标；人物像素与定位掩码一起搬）；
 ///  - `filename`：想固定的文件名（不给自己按内容算一个，重复调用得到同一个文件）。
 pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
+    // ⚠ 先于 ComfyUI 探测：参数写错了就当场报，**别等去找实例**（也让它能单测）。
+    reject_removed_args(args)?;
     let input_dir = resolve_input_dir(state)?;
 
     let base_filename = str_arg(args, "baseFilename");
@@ -418,39 +486,16 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         ));
     }
     let subject_filename = str_arg(args, "subjectFilename");
-    // `matteSource`：合成用的遮罩**从哪来**。
-    //   · `color`（默认）：今天的路 —— 本工具按颜色抠出剪影并**写一张遮罩文件**（`mode="subject"`），
-    //     或按 `region` 画一张（`mode="rect"`）。
-    //   · `model`：遮罩由**工作流里的抠图节点**现算（`easy imageRemBg`，
-    //     见 `comfyui\workflows\comfyhub_paste_person_matte_anima.json`）。这一档本工具**不写遮罩、不写 ring**，
-    //     只做一件事：把**人物图那一份像素**清理干净（反混 + 两侧去溢色）并把文件名回给调用方。
-    //     为什么非做不可：`ImageCompositeMasked` 合的是**那张图的像素**，边界那圈"人 + 背景"的混合色
-    //     不去掉，软遮罩按 alpha 贴上去就是绕着人的一圈淡背景色（实测 2.56 / max 16 → 清完 0.00 / max 0）。
-    let matte_source = str_arg(args, "matteSource").unwrap_or_else(|| "color".to_string()).to_lowercase();
-    if matte_source != "color" && matte_source != "model" {
-        return Err(ToolFailure::new(
-            "INVALID_ARGUMENT",
-            format!("matteSource 只支持 color / model，收到「{matte_source}」"),
-        ));
-    }
-    if matte_source == "model" && mode != "subject" {
-        return Err(ToolFailure::new(
-            "INVALID_ARGUMENT",
-            "matteSource=\"model\" 要跟 mode=\"subject\" 一起用：AI 抠图抠的就是 subjectFilename 那张人物图",
-        ));
-    }
     let tolerance = args
         .get("tolerance")
         .and_then(Value::as_f64)
         .unwrap_or(SUBJECT_TOLERANCE_DEFAULT);
 
-    // gColor：**显式告诉工具背景是什么颜色**（"#00b140" / "green" / "magenta"）——
-    // 抠图最稳的一档：不用去猜边框、也不受"主体挨到边"影响。配合"阶段一用绿幕/品红背景"，
-    // 背景色根本不会出现在主体身上，判据就干净了（见 subject_mask_from_image 的 ③）。
+    // `bgColor`：显式告诉**定位器**"背景是什么颜色"（"#00b140" / "green" / "magenta"）——
+    // 只喂定位器（bbox / 摆放 / `subjectRatio` 诊断），**不影响任何画面像素**：
+    // 合成用的 alpha 由工作流里的抠图节点现算，我们猜出来的那个剪影不参与合成。
     let explicit_background = str_arg(args, "bgColor").and_then(|raw| parse_color(&raw));
     let mut subject_info: Option<(String, [u8; 3], f64)> = None;
-    // 收缩前的剪影：ring 要把"被收掉的那条边"也盖住，否则会留一条没被重绘的接缝
-    let mut subject_before_shrink: Option<Vec<u8>> = None;
     let mut pixels = if mode == "subject" {
         let subject = subject_filename
             .as_deref()
@@ -471,50 +516,13 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
             ));
         }
         let use_region = region_text != "full";
-        // 收边要按**人物图自己的颜色**判（发丝 vs 混合像素），所以先把它读成画布尺寸的一张图
-        let image_for_edges = {
-            let opened = image::open(&subject_path)
-                .map_err(|e| ToolFailure::new("COMFY_INPUT_FAILED", format!("读不出人物图：{e}")))?
-                .to_rgb8();
-            if opened.width() as usize == w as usize && opened.height() as usize == h as usize {
-                opened
-            } else {
-                image::imageops::resize(&opened, w as u32, h as u32, image::imageops::FilterType::Triangle)
-            }
-        };
-        let (mut mask, background, ratio) =
+        let (mask, background, ratio) =
             subject_mask(&subject_path, w as usize, h as usize, tolerance, &region, use_region, explicit_background)?;
         subject_info = Some((subject, background, ratio));
-        // **收一刀**（choke）：把主体与背景交界那圈抗锯齿/溢色（绿边、白边）扔掉 ——
-        // 不收的话它们会被当成主体贴进去，再被 ring 一晕就是绕着人的一圈泛光。
-        // 默认 2 像素（几乎无感）；`shrink=0` 可关掉。
-        // ① **按颜色收边**（默认开）：扔掉边界那几个"人+背景"的混合像素 ——
-        //    比几何腐蚀强的地方是**不碰细发丝**（发丝是头发色，离背景色远）。
-        // ② 几何 `shrink` 默认 **0**（原来是 2，会把比 5 像素细的发丝整条吃掉）。
-        // ⚠ matte 档**不做这两步**：这一档的 `pixels` 只当**定位器**（真正的 alpha 在工作流里），
-        //    而"按颜色收边 / 几何收缩"都会把它往里啃 —— 啃完外带就从更里面起算，
-        //    反而盖不到软遮罩真正的边界。颜色档照旧（那两步是它的既定语义）。
-        let edge_band = int_arg(args, "edgeBand").unwrap_or(DEFAULT_EDGE_BAND).clamp(0, 32) as usize;
-        let edge_tolerance = args
-            .get("edgeTolerance")
-            .and_then(Value::as_f64)
-            .unwrap_or(DEFAULT_EDGE_TOLERANCE);
-        if edge_band > 0 && matte_source == "color" {
-            drop_blended_edge(
-                &mut mask,
-                &image_for_edges,
-                w as usize,
-                h as usize,
-                background,
-                edge_band,
-                edge_tolerance,
-            );
-        }
-        let shrink = int_arg(args, "shrink").unwrap_or(DEFAULT_SUBJECT_SHRINK).clamp(0, 32) as usize;
-        if shrink > 0 && matte_source == "color" {
-            subject_before_shrink = Some(mask.clone());
-            mask = erode_mask(&mask, w as usize, h as usize, shrink);
-        }
+        // ⚠ 这个剪影**只当定位器**：算 bbox（摆放要用）、报 `subjectRatio` / `background` 供诊断。
+        //    它**不写盘、也不当合成遮罩** —— 合成用的 alpha 由工作流里的抠图节点现算。
+        //    所以这里没有"按颜色收边（choke）/ 几何收缩 / 反混 / 去溢色"：那些是
+        //    "拿猜出来的剪影去合成"才需要的补救，2026-09-27 整档删除（见函数头）。
         mask
     } else {
         draw_mask(w as usize, h as usize, &region, &shape)
@@ -525,7 +533,6 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     // 实现方式是烘进文件（写一张 canvas 大小的新人物图 + 新遮罩），
     // 这样**不用改工作流**：还是 `20.image` + `12.image` 两个覆盖。
     let mut placed_subject: Option<(String, [f64; 4])> = None;
-    let mut placed_image: Option<image::RgbImage> = None;
     let scale = args.get("scale").and_then(Value::as_f64).unwrap_or(1.0);
     let center_x = args.get("x").and_then(Value::as_f64);
     let center_y = args.get("y").and_then(Value::as_f64);
@@ -573,145 +580,6 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
                 ));
             }
             pixels = scaled_mask;
-            placed_image = Some(scaled_person);
-            // ⚠ 剪影**位置变了**：ring 必须按搬家后的剪影算，
-            //   否则重绘区还留在原地（实测：人被搬到左下角，模型却在画面正中重画了一遍）
-            subject_before_shrink = None;
-        }
-    }
-    let _ = placed_image;
-
-    // **按背景环境改新图层的光照与阴影**（用户 2026-09-26 的最后一个要求）：
-    // 光向/色温从 `baseFilename` 那张底图上估（`light=\"auto\"`，也可以用 `lightDir=\"left\"` 等显式给），
-    // 结果烘进人物图的像素 + 烧一层投影（影子落在遮罩里，于是跟着一起贴上去 —— 不改工作流）。
-    let mut out_light: Option<([f64; 2], bool, usize)> = None;
-    let mut despilled = false;
-    let mut unmixed_edge = false;
-    let light_arg = str_arg(args, "light").unwrap_or_else(|| "none".to_string()).to_lowercase();
-    if mode == "subject" && light_arg != "none" && !light_arg.is_empty() {
-        let direction = match light_arg.as_str() {
-            "auto" => None,
-            "left" => Some([-1.0, 0.0]),
-            "right" => Some([1.0, 0.0]),
-            "top" | "up" => Some([0.0, -1.0]),
-            "bottom" | "down" => Some([0.0, 1.0]),
-            "topleft" | "left-top" => Some([-0.7, -0.7]),
-            "topright" | "right-top" => Some([0.7, -0.7]),
-            other => {
-                return Err(ToolFailure::new(
-                    "INVALID_ARGUMENT",
-                    format!("light 只支持 auto / left / right / top / bottom / topleft / topright / none，收到「{other}」"),
-                ))
-            }
-        };
-        let base_path = base_filename
-            .as_deref()
-            .map(file_name_only)
-            .map(|name| input_dir.join(name))
-            .filter(|path| path.is_file())
-            .ok_or_else(|| {
-                ToolFailure::new(
-                    "INVALID_ARGUMENT",
-                    "light 要用**底图**去估光向与色温，所以必须给 baseFilename（input 目录里那张）",
-                )
-            })?;
-        let mut person_image = placed_image
-            .take()
-            .or_else(|| {
-                subject_info
-                    .as_ref()
-                    .and_then(|info| image::open(input_dir.join(&info.0)).ok())
-                    .map(|image| {
-                        image::imageops::resize(
-                            &image.to_rgb8(),
-                            w as u32,
-                            h as u32,
-                            image::imageops::FilterType::Triangle,
-                        )
-                    })
-            })
-            .ok_or_else(|| ToolFailure::new("COMFY_INPUT_FAILED", "读不出人物图（打光要用它的像素）"))?;
-        let base_image = image::open(&base_path)
-            .map_err(|e| ToolFailure::new("INVALID_ARGUMENT", format!("读不出底图：{e}")))?
-            .to_rgb8();
-        let base_image = image::imageops::resize(&base_image, w as u32, h as u32, image::imageops::FilterType::Triangle);
-        let light = args.get("lightStrength").and_then(Value::as_f64).unwrap_or(0.35);
-        let shadow = args.get("shadowStrength").and_then(Value::as_f64).unwrap_or(0.45);
-        let offset = int_arg(args, "shadowOffset")
-            .unwrap_or_else(|| (w.min(h) as f64 * 0.04).round() as i64)
-            .clamp(0, 400) as usize;
-        let (dir, estimated) =
-            relight_and_shadow(&mut person_image, &mut pixels, &base_image, w as usize, h as usize, direction, light, shadow, offset);
-        let placed_name = format!("lit-{}", subject_info.as_ref().map(|i| i.0.clone()).unwrap_or_default());
-        person_image
-            .save(input_dir.join(&placed_name))
-            .map_err(|e| ToolFailure::new("COMFY_INPUT_FAILED", format!("写打好光的人物图失败：{e}")))?;
-        if let Some((_, bbox)) = placed_subject.as_mut() {
-            if let Some((x0, y0, x1, y1)) = mask_bbox(&pixels, w as usize, h as usize) {
-                *bbox = [
-                    (x0 + x1) as f64 / 2.0 / w as f64,
-                    (y0 + y1) as f64 / 2.0 / h as f64,
-                    (x1 - x0) as f64 / w as f64,
-                    (y1 - y0) as f64 / h as f64,
-                ];
-            }
-        } else {
-            placed_subject = Some((placed_name.clone(), [0.0, 0.0, 0.0, 0.0]));
-        }
-        // 打光后的人物图**换了文件名**（`lit-…`），使用方必须拿它覆盖 `20.image`
-        placed_subject = Some((
-            placed_name,
-            placed_subject.map(|(_, bbox)| bbox).unwrap_or([0.0, 0.0, 0.0, 0.0]),
-        ));
-        out_light = Some((dir, estimated, offset));
-    }
-    // **去溢色 / 反混**：只用于**颜色档**（`matteSource="color"`）——
-    // 那一档的合成遮罩就是我们自己按颜色抠的剪影，边界那圈"人+背景"的混合色得在这里收拾。
-    //
-    // ★★ **matte 档一个字都不动**（2026-09-27 用户拍板："你就不能全权交给 ai，而不是用 rust 预处理吗"）：
-    //    那一档的 alpha 是**模型给的**，而这里只有"按颜色猜的覆盖率"，做不了正确的分解。
-    //    实测三次都不行：只压通道 → 绿没了变**青**（B>G>R）；两侧反混 → 解出来的颜色被放大，
-    //    而且把外侧那圈也刷成发色 → **一圈发白光晕**（用户："显然更加不对啊"）。
-    //    正解在工作流里：`easy imageRemBg` 的 **refine_foreground=true** 会让模型自己跑
-    //    Photoroom 的快速前景估计，用**它自己的 alpha** 解出前景色，再按同一份 alpha 合成。
-    //    → 见 `comfyhub_paste_person_matte_anima.json` 的节点 27 / 22。
-    if mode == "subject" && matte_source == "color" {
-        if let Some((subject_file, background, _)) = subject_info.clone() {
-            let target_name = placed_subject
-                .as_ref()
-                .map(|(name, _)| name.clone())
-                .unwrap_or(subject_file);
-            let target_path = input_dir.join(&target_name);
-            if let Ok(opened) = image::open(&target_path) {
-                let mut canvas = opened.to_rgb8();
-                if canvas.width() as usize != w as usize || canvas.height() as usize != h as usize {
-                    canvas = image::imageops::resize(
-                        &canvas,
-                        w as u32,
-                        h as u32,
-                        image::imageops::FilterType::Triangle,
-                    );
-                }
-                // ① **反混**（把"人+背景"的混合像素还原成本体色）；
-                // ② despill 兜底（反混没覆盖到的边界像素压通道）。
-                // ⚠ `unmix_edge` 会**顺手啃掩码**（`a < 0.45` 的从掩码里去掉）—— 那是这一档的
-                //    既定语义（下一步写出去的就是被啃过的那张）。
-                let band = int_arg(args, "edgeBand").unwrap_or(DEFAULT_EDGE_BAND).clamp(1, 16) as usize;
-                let mut unmix_mask = pixels.clone();
-                let unmixed = unmix_edge(&mut canvas, &mut unmix_mask, w as usize, h as usize, background, band);
-                if unmixed { unmixed_edge = true; }
-                pixels = unmix_mask;
-                let despilled_now = despill_edges(&mut canvas, &pixels, w as usize, h as usize, background, 6);
-                if despilled_now { despilled = true; }
-                // ⚠ 只要**动过像素**就要写回：反混在白 / 浅色背景下不触发 despill（没有溢色通道
-                //    可压），而**那一档恰恰只有反混能修**（把"人 + 白底"的混合像素还原成本体色）。
-                //    原来只在 despill 为真时才 save → 白底那条路的反混结果被算出来又丢掉（静默）。
-                if unmixed || despilled_now {
-                    canvas.save(&target_path).map_err(|e| {
-                        ToolFailure::new("COMFY_INPUT_FAILED", format!("写回去溢色后的人物图失败：{e}"))
-                    })?;
-                }
-            }
         }
     }
 
@@ -730,40 +598,15 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         .unwrap_or_else(|| {
             format!("comfyhub_mask_{}.png", content_tag(w, h, &region, &shape, invert, feather))
         });
-    // matte 档**不写合成遮罩**：真正的 alpha 由工作流里的抠图节点现算（写一张没人用的文件
-    // 只会在 input 目录里攒垃圾，还会让调用方以为该去覆盖 LoadImageMask）。
-    let mask_written = matte_source == "color";
+    // `mode="subject"`（贴人物图）**不写遮罩**：真正的 alpha 由工作流里的抠图节点现算
+    // （写一张没人用的文件只会在 input 目录里攒垃圾，还会让调用方以为该去覆盖 LoadImageMask）。
+    let mask_written = mode != "subject";
     if mask_written {
         write_mask_png(&pixels, w as u32, h as u32, &input_dir.join(&filename))?;
     }
 
-    // **只在人物外面一圈重绘**（`ring`，单位像素）：配合带第二个 LoadImageMask 的工作流
-    // `comfyhub_paste_person_anima.json`，人物像素就能"原样贴上去、一点不被重画"
-    // —— 这是"嵌进去会改变画风"那条的正解（详见 `ring_mask` 的注释）。
-    // matte 档不要它：那份工作流用 `GrowMask` + `MaskComposite(subtract)` **从同一份 alpha 现算** ring。
-    let ring = int_arg(args, "ring").unwrap_or(0).clamp(0, MAX_FEATHER) as usize;
-    let mut ring_filename: Option<String> = None;
-    if mode == "subject" && ring > 0 && mask_written {
-        let mut ring_pixels = match subject_before_shrink.as_ref() {
-            // 用**收缩前**的剪影算外面那一圈，再把"被收掉的那条边"并回来 ——
-            // 于是重绘区正好盖住 人物外 N 像素 + 交界那一圈溢色
-            Some(orig) => ring_mask(orig, w as usize, h as usize, ring),
-            None => ring_mask(&pixels, w as usize, h as usize, ring),
-        };
-        if let Some(orig) = subject_before_shrink.as_ref() {
-            for index in 0..ring_pixels.len() {
-                if orig[index] > 127 && pixels[index] <= 127 {
-                    ring_pixels[index] = 255;
-                }
-            }
-        }
-        let ring_name = format!("ring-{filename}");
-        write_mask_png(&ring_pixels, w as u32, h as u32, &input_dir.join(&ring_name))?;
-        ring_filename = Some(ring_name);
-    }
-
     let region_joined = region.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
-    // matte 档要告诉调用方"拿哪张人物图去覆盖 20.image"（它已经被清理过了）
+    // `mode="subject"` 要告诉调用方"拿哪张人物图去覆盖 20.image"
     let person_filename = placed_subject
         .as_ref()
         .map(|(name, _)| name.clone())
@@ -773,7 +616,6 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
         "width": w,
         "height": h,
         "mode": mode,
-        "matteSource": matte_source,
         "maskGenerated": mask_written,
         "region": region_text,
         "regionNormalized": format!("[{region_joined}]"),
@@ -794,56 +636,34 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     } else {
         out["personFilename"] = json!(person_filename.clone().unwrap_or_default());
         out["hint"] = json!(format!(
-            "遮罩由**工作流里的抠图节点**现算，所以**不要**覆盖任何 LoadImageMask（也没有 12 / 26 可覆盖）。\
+            "`mode=\"subject\"` **不写遮罩**：合成用的 alpha 由工作流里的抠图节点现算，\
+             所以**不要**覆盖任何 LoadImageMask（那份工作流里也没有）。\
              ① comfy_load_workflow(path=\"<项目根>\\comfyui\\workflows\\comfyhub_paste_person_matte_anima.json\")；\
-             ② 覆盖 10.image（底图）、20.image=\"{person}\"（**已被清理过**的人物图）、\
-             11.width={w}、11.height={h}、21.width={w}、21.height={h}、15.text（只写**人物外面那一圈**该出现什么，写背景）、17.seed；\
+             ② 覆盖 10.image（底图）、20.image=\"{person}\"、\
+             11.width={w}、11.height={h}、21.width={w}、21.height={h}、\
+             15.text（只写**人物外面那一圈**该出现什么，写背景）、17.seed；\
              ③ 17.denoise 用 0.3~0.45（只融接缝；0 = 纯合成、一个像素都不改）。\
-             ⚠ 那张工作流要求 ComfyUI 里有抠图模型（models\\rembg\\BEN2_Base.pth 或 RMBG-1.4.pth）——\
-             没有就如实告诉用户下哪个，别让它静默下载。",
+             ⚠ 那份工作流要求 ComfyUI 里有抠图模型（models\\rembg\\BEN2_Base.pth 或 RMBG-1.4.pth，\
+             先用 comfy_get_status 的 mattingModels 查）——没有就如实告诉用户下哪个，别让它静默下载。",
             person = person_filename.unwrap_or_default(),
         ));
     }
     if let Some((subject, background, ratio)) = subject_info {
+        // 定位器诊断：这几项只说明"我们猜的人物在哪、占多大"，**画面不受它们影响**
+        // （合成用的 alpha 是工作流里抠图节点给的）。所以它们只用来判断"摆放靠不靠谱"。
         out["subjectFilename"] = json!(subject);
         out["background"] = json!(format!("#{:02x}{:02x}{:02x}", background[0], background[1], background[2]));
         out["subjectRatio"] = json!((ratio * 1000.0).round() / 1000.0);
-        if mode == "subject" {
-            out["shrink"] = json!(int_arg(args, "shrink").unwrap_or(DEFAULT_SUBJECT_SHRINK));
-        }
-        if despilled {
-            out["despilled"] = json!(true);
-        }
-        if unmixed_edge {
-            out["unmixedEdge"] = json!(true);
-        }
-        if matte_source == "model" {
-            // 如实报口径：这一档**我们不碰人物图一个像素** —— 抠图与前景估计都在工作流里
-            // （`easy imageRemBg` + `refine_foreground=true`），用的是**模型自己的 alpha**。
-            out["matteNote"] = json!(
-                "matteSource=\"model\"：抠图与**前景估计**都在工作流里做（`easy imageRemBg` 的 refine_foreground=true \
-                 —— 模型用它自己的 alpha 解出前景色），本工具**一个像素都不改**人物图。\
-                 所以**不要**覆盖任何 LoadImageMask，用 `comfyhub_paste_person_matte_anima.json` 那份工作流。\
-                 ⚠ 我们自己按颜色猜的那套（despill / 反混）在这一档**试过、观感更差**：\
-                 压通道会把绿幕变成青蓝、两侧反混会给出白光晕 —— 这条弯路记在 pitfalls 与总纲 §16.4。"
-            );
-        }
-        if let Some((dir, estimated, offset)) = out_light {
-            out["lightDir"] = json!(format!("[{:.2},{:.2}]", dir[0], dir[1]));
-            // 光向是**从底图估的**还是调用方给的 —— 如实说（估的就别吹成"打光模型"）
-            out["lightEstimated"] = json!(estimated);
-            out["shadowOffset"] = json!(offset);
-            out["lightNote"] = json!(
-                "光照是按**底图**估的方向梯度 + 色偏烘进人物图的（近似，不是重打光模型）；\
-                 影子沿光向**反方向**烧在了 `placedSubjectFilename` 里并落进了遮罩 —— \
-                 提交时**必须**用新的 `placedSubjectFilename` 覆盖 `20.image`（像素已经变了）。"
-            );
-        }
+        out["locatorNote"] = json!(
+            "剪影**只当定位器**（bbox / 摆放 / 这份诊断），不参与合成 —— \
+             合成用的 alpha 由工作流里的抠图节点现算。所以 subjectRatio 偏大偏小只影响摆放，\
+             不影响贴出来干不干净（边缘干净不干净取决于实例上的抠图模型）。"
+        );
         let saturation = background.iter().max().copied().unwrap_or(0) as i32
             - background.iter().min().copied().unwrap_or(0) as i32;
         let chroma = saturation >= CHROMA_MIN_SATURATION;
         out["chromaKey"] = json!(chroma);
-        // 显式给了 bgColor 但实际用的是另一个色 → 如实说明（模型那块绿/品红与写死的值不一样）
+        // 显式给了 bgColor 但实际用的是另一个色 → 如实说明（定位器那块绿/品红与写死的值不一样）
         if let Some(requested) = explicit_background {
             if requested != background {
                 out["bgColorIgnored"] = json!(format!(
@@ -853,13 +673,13 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
             }
         }
         if !chroma {
-            // ⚠ 低饱和背景（白 / 浅灰）与"人物身上的白"同色 —— 填洞只能靠连通性猜，
-            //   腿间/发丝之间的背景空白可能被当成主体（用户 2026-09-26 现场看到的那圈白）。
+            // ⚠ 低饱和背景（白 / 浅灰）与"人物身上的白"同色 —— 定位器只能靠连通性猜，
+            //   估出来的人物可能偏大/偏小（**只影响摆放**；边缘是工作流里的抠图模型做的）。
             out["chromaAdvice"] = json!(
-                "⚠ 背景是白/浅色（低饱和）：它与人物身上的浅色（白裙子/白衬衫/高光）同色，\
-                 抠图存在二义 —— 腿间、发丝之间的背景空白可能被当成主体贴进画面。\
-                 要干净就把**阶段一的背景换成绿幕或品红**（提示词写 `green background` / \
-                 `chroma green background`，并把 `bgColor=\"#00b140\"` 传进来）。"
+                "⚠ 背景是白/浅色（低饱和）：**定位器**在这种背景上容易把人物估得偏大/偏小\
+                 （人物身上的白裙子/高光与背景同色）。要摆放得准就把**阶段一的背景换成绿幕或品红**\
+                 （提示词写 `green background`，并把 `bgColor=\"#00b140\"` 传进来）。\
+                 ⚠ 这只影响摆放的准确性，**不影响贴出来的边缘** —— 边缘由工作流里的抠图模型做。"
             );
         }
         let placed_hint = match placed_subject.as_ref() {
@@ -875,31 +695,14 @@ pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
             ),
             None => String::new(),
         };
-        if mask_written {
+        if !placed_hint.is_empty() {
             out["hint"] = json!(format!(
-                "① 覆盖工作流里 LoadImageMask 节点的 image 输入：{{\"<节点id>.image\":\"{filename}\"}}；\
-                 ② ImageScale 的 width/height 覆盖成 {w}x{h}；\
-                 ③ 这张遮罩是照「{subject}」的**主体形状**抠的（背景色 {}，占画面 {:.1}%）。\
-                 遮罩几乎盖满整张图（>90%）时多半是背景不纯（也可能是主体本来就占满画面）—— 那时改用矩形遮罩 + 更高的 denoise，或换一张纯色背景重做阶段一，\
-                 或者改用 mode=\"rect\" 的矩形遮罩 + 更高的 denoise。{placed_hint}",
-                format!("#{:02x}{:02x}{:02x}", background[0], background[1], background[2]),
-                ratio * 100.0
+                "{} {placed_hint}",
+                out["hint"].as_str().unwrap_or("")
             ));
         }
         if let Some((placed_name, _)) = placed_subject.as_ref() {
             out["placedSubjectFilename"] = json!(placed_name);
-        }
-        if let Some(ring_name) = ring_filename.as_deref() {
-            out["ringFilename"] = json!(ring_name);
-            out["ring"] = json!(ring);
-            out["hint"] = json!(format!(
-                "① 合成用遮罩覆盖 `12.image`（或工作流里第一个 LoadImageMask）← `{filename}`；\
-                 ② **重绘区**覆盖第二个 LoadImageMask（`comfyhub_paste_person_anima.json` 里是 `26.image`）\
-                 ← `{ring_name}` —— 这一份只圈人物**外面 {ring} 像素**，于是人物自己的像素与画风一个都不动；\
-                 ③ ImageScale 的 width/height 覆盖成 {w}x{h}；\
-                 ④ 要用这条「只融接缝」的路，工作流必须是有两个 LoadImageMask 的那一份；\
-                 用的是单遮罩工作流时**别传 ring**（否则第二个遮罩没人接，人物会被重画）。"
-            ));
         }
     }
     Ok(out)
@@ -1367,53 +1170,6 @@ pub fn place_patch(
     (out_img, out_mask)
 }
 
-/// **人物外面一圈**的遮罩（`dilate(r) 减去 原剪影`）—— 专门给 `SetLatentNoiseMask` 用。
-///
-/// 为什么需要它（用户 2026-09-26 问的"嵌进去的时候会改变画风怎么解决"）：
-/// 现在的自带工作流**一个遮罩两用**（既给 `ImageCompositeMasked` 贴像素、又给
-/// `SetLatentNoiseMask` 决定重绘区），于是"贴上去的人"必然被模型重画一遍 ——
-/// denoise 0.5 时她的画风就被模型的画风换掉了。
-/// 正确的合成做法是：**人物像素原样贴上去、只把她外面那一圈重画**（融接缝 / 补光影）。
-/// 这份 ring 遮罩就是那一圈；配合 `comfyhub_paste_person_anima.json`（它有两个
-/// `LoadImageMask`：`12` 给合成、`26` 给重绘）用。
-///
-/// 半径 `r` 建议 8~24：太小接缝明显，太大等于在人物周围重画一片背景（反而更假）。
-pub fn ring_mask(mask: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
-    if radius == 0 {
-        return mask.to_vec();
-    }
-    let r = radius as i64;
-    let dilate = |x: i64, y: i64| -> bool {
-        // 方形结构元（够用；圆形结构元在"融接缝"这件事上没有区别）
-        for dy in -r..=r {
-            let ny = y + dy;
-            if ny < 0 || ny >= h as i64 {
-                continue;
-            }
-            for dx in -r..=r {
-                let nx = x + dx;
-                if nx < 0 || nx >= w as i64 {
-                    continue;
-                }
-                if mask[ny as usize * w + nx as usize] > 127 {
-                    return true;
-                }
-            }
-        }
-        false
-    };
-    let mut out = vec![0u8; w * h];
-    for y in 0..h as i64 {
-        for x in 0..w as i64 {
-            // 只在**原剪影之外**、且在膨胀范围内：人物自己的像素一个都不动
-            if mask[y as usize * w + x as usize] <= 127 && dilate(x, y) {
-                out[y as usize * w + x as usize] = 255;
-            }
-        }
-    }
-    out
-}
-
 /// 解析一个颜色（"#00b140" / "#0b0" / "green" / "magenta" / "white" / "black"）。
 ///
 /// 只认这几种确定写法 —— **不猜**：认不出来就返回 None（调用方回落成"从边框估"）。
@@ -1498,493 +1254,10 @@ pub fn matting_models(roots: &[std::path::PathBuf]) -> Value {
             "dir": "<上面 checked 里那个 ComfyUI 根>\\models\\rembg\\"
         },
         "note": "usable=false 时**别硬跑**：那个节点会自己去 HuggingFace 静默下载（常常很慢或失败，\
-                 表现是「点了按钮没反应」）。要么按 download 那两条指引用户把文件放好，\
-                 要么如实说做不到、退回颜色抠图（mode=\"subject\"，纯色背景够用但**会删掉五官**）。"
+                 表现是「点了按钮没反应」）。唯一正确的动作是按 download 那两条指引用户把文件放好；\
+                 **没有退路** —— 以前那档「Rust 按颜色抠剪影当遮罩」已经删除（轮廓外会留一圈青绿、\
+                 发梢会被整段吃掉），别去试它，也别让用户以为还有别的办法。"
     })
-}
-
-/// **按颜色扔掉边缘的"混合像素"**（替代几何腐蚀 —— 用户 2026-09-26：
-/// "细的头发也被你去掉了"）。
-///
-/// 与 `erode_mask` 的区别：腐蚀是**几何**的，比 `2*radius` 细的结构整条消失（发丝正好中招）；
-/// 这里是**按颜色**判 —— 边缘那几个像素是"人物 + 背景"的混合色，颜色离背景色**近**，扔掉；
-/// 发丝像素是头发色（离背景色远），**天然保住**。这才是绿幕抠图该有的"收边"。
-///
-/// 只在**边界往内 `band` 像素**这条带上动手；返回是否改过。
-pub fn drop_blended_edge(
-    mask: &mut [u8],
-    image: &image::RgbImage,
-    w: usize,
-    h: usize,
-    background: [u8; 3],
-    band: usize,
-    tolerance: f64,
-) -> bool {
-    let cutoff = (tolerance.clamp(0.01, 1.0) * 255.0).round() as i32;
-    let r = band as i64;
-    let mut changed = false;
-    for y in 0..h as i64 {
-        for x in 0..w as i64 {
-            let index = y as usize * w + x as usize;
-            if mask[index] <= 127 {
-                continue;
-            }
-            // 只在边界带里判
-            let mut on_edge = false;
-            'scan: for dy in -r..=r {
-                let ny = y + dy;
-                if ny < 0 || ny >= h as i64 {
-                    continue;
-                }
-                for dx in -r..=r {
-                    let nx = x + dx;
-                    if nx < 0 || nx >= w as i64 {
-                        continue;
-                    }
-                    if mask[ny as usize * w + nx as usize] <= 127 {
-                        on_edge = true;
-                        break 'scan;
-                    }
-                }
-            }
-            if !on_edge {
-                continue;
-            }
-            let pixel = image.get_pixel(x as u32, y as u32);
-            let distance = (0..3)
-                .map(|c| (pixel[c] as i32 - background[c] as i32).abs())
-                .max()
-                .unwrap_or(0);
-            if distance <= cutoff {
-                mask[index] = 0;
-                changed = true;
-            }
-        }
-    }
-    changed
-}
-
-/// 把遮罩**往里收** `radius` 个像素（腐蚀 / choke）。
-///
-/// 为什么贴人物图必须收一刀（用户 2026-09-26 问的"人物怎么冒背景的泛光"）：
-/// 主体与背景交界那一圈是**抗锯齿 / 溢色**像素 —— 绿幕上就是一圈绿边、白底上就是一圈白边。
-/// 它们与背景色的差刚好超过容差，于是被判成"主体"贴进画面，再被 ring 那道重绘一晕，
-/// 就成了绕着人物的一圈泛光。收 1~3 像素把这圈扔掉，接缝交给 ring 去融。
-///
-/// 方形的结构元够用（这一刀是"宁少勿多"，不需要圆的精确形状）。
-pub fn erode_mask(mask: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
-    if radius == 0 {
-        return mask.to_vec();
-    }
-    let r = radius as i64;
-    let mut out = vec![0u8; w * h];
-    for y in 0..h as i64 {
-        for x in 0..w as i64 {
-            let mut keep = true;
-            'outer: for dy in -r..=r {
-                let ny = y + dy;
-                if ny < 0 || ny >= h as i64 {
-                    keep = false;
-                    break;
-                }
-                for dx in -r..=r {
-                    let nx = x + dx;
-                    if nx < 0 || nx >= w as i64 || mask[ny as usize * w + nx as usize] <= 127 {
-                        keep = false;
-                        break 'outer;
-                    }
-                }
-            }
-            if keep {
-                out[y as usize * w + x as usize] = 255;
-            }
-        }
-    }
-    out
-}
-
-/// **去掉边缘的溢色**（despill / de-fringe）——用户 2026-09-26 的收尾要求。
-///
-/// 光靠 choke 不够：羽化会让最外几像素**半透明**，而那几个像素本身是"人物 + 背景"的混合色
-/// （绿幕上偏绿、白底上偏白），半透明地贴上去就是绕着人的一圈背景色。
-/// 这里在**剪影边界往内 `radius` 像素**的那条带上把背景**主色通道**压回另外两个通道的水平：
-/// 绿幕（G 最大）→ `g = min(g, (r+b)/2)`；品红（R/B 最大）→ `r = min(r, g)`、`b = min(b, g)`。
-/// 这是绿幕合成的标准做法，**只动边缘那条带**，人物内部一个像素都不碰。
-///
-/// ⚠ **它压不出中性色**（2026-09-27 用户指出"奇怪的蓝色调边缘"）：绿幕像素被压完是
-/// `B > G > R` 的**青蓝**。所以这一档只服务**颜色档** —— 那时掩码外面那些像素根本不会被合成，
-/// 压通道只为把"掩码内那圈混合色"收拾干净；matte 档**一个字都不动**（交给模型自己，
-/// 见 `comfyhub_paste_person_matte_anima.json` 里 `refine_foreground=true`，以及总纲 §16.4 那条弯路）。
-///
-/// 返回是否真的改过（没改就别去覆盖文件）。
-pub fn despill_edges(
-    person: &mut image::RgbImage,
-    mask: &[u8],
-    w: usize,
-    h: usize,
-    background: [u8; 3],
-    radius: usize,
-) -> bool {
-    let saturation = background.iter().max().copied().unwrap_or(0) as i32
-        - background.iter().min().copied().unwrap_or(0) as i32;
-    // 背景不彩（白 / 浅灰）就没什么"溢色通道"可压 —— 那时靠 choke + 羽化小一点
-    if saturation < CHROMA_MIN_SATURATION || radius == 0 {
-        return false;
-    }
-    // 背景的主导通道 = 溢色方向
-    let dominant = (0..3).max_by_key(|c| background[*c]).unwrap_or(1);
-    let others: Vec<usize> = (0..3).filter(|c| *c != dominant).collect();
-    let r = radius as i64;
-    let mut changed = false;
-    for y in 0..h as i64 {
-        for x in 0..w as i64 {
-            let index = y as usize * w + x as usize;
-            if mask[index] <= 127 {
-                continue;
-            }
-            // 只在**边界带**上动手：邻域里只要有背景像素就算带内
-            let mut on_edge = false;
-            'scan: for dy in -r..=r {
-                let ny = y + dy;
-                if ny < 0 || ny >= h as i64 {
-                    continue;
-                }
-                for dx in -r..=r {
-                    let nx = x + dx;
-                    if nx < 0 || nx >= w as i64 {
-                        continue;
-                    }
-                    if mask[ny as usize * w + nx as usize] <= 127 {
-                        on_edge = true;
-                        break 'scan;
-                    }
-                }
-            }
-            if !on_edge {
-                continue;
-            }
-            let pixel = person.get_pixel_mut(x as u32, y as u32);
-            let limit = ((pixel[others[0]] as f64 + pixel[others[1]] as f64) / 2.0 * 1.06) as u8;
-            if pixel[dominant] > limit {
-                pixel[dominant] = limit;
-                changed = true;
-            }
-        }
-    }
-    changed
-}
-
-/// **边缘反混（un-mix）**：把"人 + 背景"的混合像素**还原成人物自己的颜色**。
-///
-/// 为什么 despill 不够（用户 2026-09-26 第五次看边缘）：despill 只是把绿通道**压回**
-/// 另外两个通道的水平 —— 压完是"灰绿/橄榄绿"，肉眼仍然是一圈背景色的边。
-/// 正确的模型是 `p = a·P + (1-a)·B`（P = 人物本体色、B = 背景色、a = 覆盖率）：
-/// 取边界带内侧**干净**的邻居色当 `P`，最小二乘解出 `a`，再 `P' = B + (p-B)/a` —— 反混之后
-/// 那个像素就是人物自己的颜色（`a` 太小的丢掉，说明它本来就基本是背景）。
-///
-/// 与 despill 的区别：despill 是"**压通道**"（仍留混合色），这里是"**解方程**"（还原本体色）。
-/// 绿幕、白底、品红**都适用**（不依赖背景是不是彩色）。返回是否改过。
-///
-/// ⚠ **只服务颜色档**（`matteSource="color"`）：它靠"最近干净邻居 + 最小二乘估 a"，
-/// 而 matte 档的 alpha 是模型给的，在那边猜出来的 a 反而会把颜色放大成青/白光晕
-/// （2026-09-27 用户两次指出，见 `make_mask` 里那段注释）。matte 档交给模型自己。
-pub fn unmix_edge(
-    person: &mut image::RgbImage,
-    mask: &mut [u8],
-    w: usize,
-    h: usize,
-    background: [u8; 3],
-    band: usize,
-) -> bool {
-    if band == 0 {
-        return false;
-    }
-    // "干净" = 往里收 `band` 像素之后还在掩码里的部分（它的颜色没被背景混过）
-    let clean = erode_mask(mask, w, h, band);
-    let r = band as i64;
-    let mut changed = false;
-    for y in 0..h as i64 {
-        for x in 0..w as i64 {
-            let index = y as usize * w + x as usize;
-            if mask[index] <= 127 || clean[index] > 127 {
-                continue;
-            }
-            // 边界带里才动手（邻域里有背景像素）
-            let mut on_edge = false;
-            'scan: for dy in -r..=r {
-                let ny = y + dy;
-                if ny < 0 || ny >= h as i64 {
-                    continue;
-                }
-                for dx in -r..=r {
-                    let nx = x + dx;
-                    if nx < 0 || nx >= w as i64 {
-                        continue;
-                    }
-                    if mask[ny as usize * w + nx as usize] <= 127 {
-                        on_edge = true;
-                        break 'scan;
-                    }
-                }
-            }
-            if !on_edge {
-                continue;
-            }
-            // 找最近的一个"干净"邻居当本体色 P
-            let reach = r * 2 + 2;
-            let mut reference: Option<[f64; 3]> = None;
-            'search: for ring in 1..=reach {
-                for dy in -ring..=ring {
-                    for dx in -ring..=ring {
-                        if dx.abs() != ring && dy.abs() != ring {
-                            continue;
-                        }
-                        let (nx, ny) = (x + dx, y + dy);
-                        if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
-                            continue;
-                        }
-                        let nindex = ny as usize * w + nx as usize;
-                        if clean[nindex] > 127 {
-                            let pixel = person.get_pixel(nx as u32, ny as u32);
-                            reference = Some([pixel[0] as f64, pixel[1] as f64, pixel[2] as f64]);
-                            break 'search;
-                        }
-                    }
-                }
-            }
-            let Some(reference) = reference else { continue };
-            let b = [background[0] as f64, background[1] as f64, background[2] as f64];
-            let pixel = person.get_pixel(x as u32, y as u32);
-            let p = [pixel[0] as f64, pixel[1] as f64, pixel[2] as f64];
-            // 最小二乘解 a：p = a·P + (1-a)·B
-            let mut num = 0.0;
-            let mut den = 0.0;
-            for c in 0..3 {
-                num += (p[c] - b[c]) * (reference[c] - b[c]);
-                den += (reference[c] - b[c]) * (reference[c] - b[c]);
-            }
-            if den < 1.0 {
-                continue;
-            }
-            let a = (num / den).clamp(0.0, 1.0);
-            // 判据是**覆盖率 a**，不是"颜色离背景多远"（2026-09-26 两次踩坑的结论）：
-            //   · 发丝：a≈1（纯人物色）；皮肤阴影：a≈0.69；混合边：a≈0.28。
-            //   · 用颜色距离判 → 中间调的皮肤和混合像素**分不开**：容差开大就把皮肤删掉
-            //     （人身上一块块变透明），开小就留一圈绿边。
-            //   · 用 a 判 → 一刀两断：a < 0.45 的（不到一半是人物）从掩码里去掉，
-            //     其余一律**反混修颜色**。绿边是 a 小的那批，发丝与皮肤都远高于 0.45。
-            if a < 0.45 {
-                mask[index] = 0;
-                changed = true;
-                continue;
-            }
-            let mut out = [0u8; 3];
-            for c in 0..3 {
-                out[c] = (b[c] + (p[c] - b[c]) / a).clamp(0.0, 255.0) as u8;
-            }
-            let pixel = person.get_pixel_mut(x as u32, y as u32);
-            if (pixel[0], pixel[1], pixel[2]) != (out[0], out[1], out[2]) {
-                pixel[0] = out[0];
-                pixel[1] = out[1];
-                pixel[2] = out[2];
-                changed = true;
-            }
-        }
-    }
-    changed
-}
-
-/// **按背景给新图层打光 + 烧影子**（用户 2026-09-26 的最后一个要求）。
-///
-/// # 怎么估（不依赖任何模型）
-///
-/// ① **光向**：拿背景（遮罩之外）在剪影包围盒四周的**亮度差**估 ——
-///    `右半 - 左半` 给水平分量、`下半 - 上半` 给垂直分量（还带一点"光从哪来"的常识兜底：
-///    差太小就按左上）。这与"影子朝光源反方向"是同一条物理直觉。
-/// ② **色温 / 色偏**：背景（剪影附近）的平均色 ÷ 人物的平均色 —— 夜景就把人压冷压暗、
-///    暖灯下就把人拉暖（乘法，夹在 0.75~1.3，别把人拉爆）。
-/// ③ **方向梯度**：沿光向的线性 ramp 乘上去（亮面亮、暗面暗），强度 `light`（0~1）。
-/// ④ **投影**：把剪影沿**光向的反方向**平移 `offset` 并糊一遍当影子，按 `shadow`（0~1）
-///    把**背景色**压暗，写进人物图的像素里、并让那几像素落进遮罩 —— 于是合成时影子跟着一起
-///    贴上去（不用改工作流）。
-///
-/// ⚠ 它是**近似**，不是重打光模型（ComfyUI 里要真重打光得有 IC-Light 那类节点）。
-/// 如实写在返回值里（`lightDir` / `lightEstimated` / `shadowOffset`），别吹成"重打光"。
-pub fn relight_and_shadow(
-    person: &mut image::RgbImage,
-    mask: &mut [u8],
-    base: &image::RgbImage,
-    w: usize,
-    h: usize,
-    direction: Option<[f64; 2]>,
-    light: f64,
-    shadow: f64,
-    shadow_offset: usize,
-) -> ([f64; 2], bool) {
-    let bbox = mask_bbox(mask, w, h);
-    // ① 光向：显式给了就用给的；没给就从背景的四周亮度差里估
-    let (mut dir, estimated) = match direction {
-        Some(d) => (normalize2(d), false),
-        None => (estimate_light_dir(base, mask, w, h, bbox), true),
-    };
-    if dir == [0.0, 0.0] {
-        dir = normalize2([-0.7, -0.7]); // 兜底：光从左上来（影子朝右下）
-    }
-
-    // ② 色偏：背景（遮罩外）与人物（遮罩内）的平均色之比
-    let mut bg = [0.0f64; 3];
-    let mut fg = [0.0f64; 3];
-    let (mut bg_n, mut fg_n) = (0.0f64, 0.0f64);
-    for y in 0..h {
-        for x in 0..w {
-            let index = y * w + x;
-            if mask[index] > 127 {
-                // 人物那一侧只统计**真有像素**的地方（画布其余部分是黑底，算进去会把色偏估反）
-                let pixel = *person.get_pixel(x as u32, y as u32);
-                if pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32 > 0 {
-                    for c in 0..3 {
-                        fg[c] += pixel[c] as f64;
-                    }
-                    fg_n += 1.0;
-                }
-            } else {
-                let pixel = *base.get_pixel(x as u32, y as u32);
-                for c in 0..3 {
-                    bg[c] += pixel[c] as f64;
-                }
-                bg_n += 1.0;
-            }
-        }
-    }
-    let tint = if fg_n > 0.0 && bg_n > 0.0 {
-        let mut out = [1.0f64; 3];
-        for c in 0..3 {
-            let bg_mean = bg[c] / bg_n.max(1.0);
-            let fg_mean = fg[c] / fg_n.max(1.0);
-            out[c] = if fg_mean > 1.0 { (bg_mean / fg_mean).clamp(0.75, 1.3) } else { 1.0 };
-        }
-        out
-    } else {
-        [1.0, 1.0, 1.0]
-    };
-
-    // ③ 方向梯度：以包围盒中心为原点，沿光向线性增减
-    let (cx, cy, span) = match bbox {
-        Some((x0, y0, x1, y1)) => (
-            (x0 + x1) as f64 / 2.0,
-            (y0 + y1) as f64 / 2.0,
-            (((x1 - x0).max(y1 - y0)) as f64 / 2.0).max(1.0),
-        ),
-        None => (w as f64 / 2.0, h as f64 / 2.0, (w.max(h) as f64) / 2.0),
-    };
-    let light = light.clamp(0.0, 1.0);
-    for y in 0..h {
-        for x in 0..w {
-            if mask[y * w + x] <= 127 {
-                continue;
-            }
-            let ramp = (((x as f64 - cx) * dir[0] + (y as f64 - cy) * dir[1]) / span).clamp(-1.0, 1.0);
-            let factor = (1.0 + light * ramp) * 1.0;
-            let pixel = person.get_pixel_mut(x as u32, y as u32);
-            for c in 0..3 {
-                let value = pixel[c] as f64 * factor * tint[c];
-                pixel[c] = value.clamp(0.0, 255.0) as u8;
-            }
-        }
-    }
-
-    // ④ 投影：剪影往光的**反方向**挪、糊一遍，压在背景色上（写进人物图 + 扩遮罩）
-    if shadow > 0.0 && shadow_offset > 0 {
-        let source = mask.to_vec();
-        let dx = (-dir[0] * shadow_offset as f64).round() as i64;
-        let dy = (-dir[1] * shadow_offset as f64).round() as i64;
-        let mut shadow_mask = vec![0u8; w * h];
-        for y in 0..h as i64 {
-            for x in 0..w as i64 {
-                let (sx, sy) = (x - dx, y - dy);
-                if sx < 0 || sy < 0 || sx >= w as i64 || sy >= h as i64 {
-                    continue;
-                }
-                if source[sy as usize * w + sx as usize] > 127 {
-                    shadow_mask[y as usize * w + x as usize] = 255;
-                }
-            }
-        }
-        let blurred = box_blur(&shadow_mask, w, h, 24);
-        for y in 0..h {
-            for x in 0..w {
-                let alpha = blurred[y * w + x] as f64 / 255.0;
-                if alpha <= 0.02 {
-                    continue;
-                }
-                // ⚠ **影子不许盖住人物自己**：模糊会把影子扩进剪影内部，不收这一下就把人物的
-                //   像素整块换成"压暗的背景"（实测：`lit-*.png` 里那块是人形的一片街景）
-                if source[y * w + x] > 127 {
-                    continue;
-                }
-                let darken = 1.0 - shadow.clamp(0.0, 1.0) * alpha;
-                let background = *base.get_pixel(x as u32, y as u32);
-                let pixel = person.get_pixel_mut(x as u32, y as u32);
-                for c in 0..3 {
-                    pixel[c] = (background[c] as f64 * darken).clamp(0.0, 255.0) as u8;
-                }
-                mask[y * w + x] = 255; // 影子也要跟着贴上去
-            }
-        }
-    }
-
-    (dir, estimated)
-}
-
-/// 从背景的四周亮度差估光向（`[dx, dy]`，未归一化时为 0 表示"看不出方向"）。
-fn estimate_light_dir(base: &image::RgbImage, mask: &[u8], w: usize, h: usize, bbox: Option<(usize, usize, usize, usize)>) -> [f64; 2] {
-    let (x0, y0, x1, y1) = bbox.unwrap_or((0, 0, w, h));
-    let (mut left, mut right, mut top, mut bottom) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
-    let (mut ln, mut rn, mut tn, mut bn) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
-    let (cx, cy) = ((x0 + x1) as f64 / 2.0, (y0 + y1) as f64 / 2.0);
-    for y in 0..h {
-        for x in 0..w {
-            if mask[y * w + x] > 127 {
-                continue;
-            }
-            let pixel = base.get_pixel(x as u32, y as u32);
-            let luma = (pixel[0] as f64 * 0.299 + pixel[1] as f64 * 0.587 + pixel[2] as f64 * 0.114) / 255.0;
-            if (x as f64) < cx {
-                left += luma;
-                ln += 1.0;
-            } else {
-                right += luma;
-                rn += 1.0;
-            }
-            if (y as f64) < cy {
-                top += luma;
-                tn += 1.0;
-            } else {
-                bottom += luma;
-                bn += 1.0;
-            }
-        }
-    }
-    if ln == 0.0 || rn == 0.0 || tn == 0.0 || bn == 0.0 {
-        return [0.0, 0.0];
-    }
-    // 亮的一侧就是"光来的方向"
-    let dx = right / rn - left / ln;
-    let dy = bottom / bn - top / tn;
-    if dx.abs() < 0.01 && dy.abs() < 0.01 {
-        return [0.0, 0.0];
-    }
-    [dx, dy]
-}
-
-/// 单位化（长度 0 时回 `[0,0]`）。
-fn normalize2(v: [f64; 2]) -> [f64; 2] {
-    let len = (v[0] * v[0] + v[1] * v[1]).sqrt();
-    if len < 1e-6 {
-        [0.0, 0.0]
-    } else {
-        [v[0] / len, v[1] / len]
-    }
 }
 
 /// 遮罩里"有内容"的那块矩形（`(x0, y0, x1, y1)`，右/下开区间）；全黑时回 `None`。
@@ -2520,210 +1793,51 @@ mod tests {
         assert_eq!(mask[3 * w + 3], 0, "孤立的噪点还是要删");
     }
 
-    /// **按颜色收边**：边界那几个"人+背景"的混合像素扔掉，发丝（头发色）保住。
-    #[test]
-    fn 按颜色收边不碰发丝只扔混合像素() {
-        let (w, h) = (40usize, 40usize);
-        let mut image = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([0, 0, 0]));
-        let mut mask = vec![0u8; w * h];
-        for y in 10..30 {
-            for x in 10..30 {
-                let edge = x == 10 || x == 29 || y == 10 || y == 29;
-                // 边界像素 = 人 + 绿幕的混合色（离背景色近）；内部与"发丝"是深色（离背景远）
-                image.put_pixel(x as u32, y as u32, if edge { image::Rgb([60, 150, 70]) } else { image::Rgb([180, 40, 50]) });
-                mask[y * w + x] = 255;
-            }
-        }
-        // 一条 1 像素宽的深色发丝（颜色离绿幕很远）横穿左侧边界
-        for x in 6..12 {
-            image.put_pixel(x as u32, 20, image::Rgb([120, 90, 110]));
-            mask[20 * w + x] = 255;
-        }
-        let changed = drop_blended_edge(&mut mask, &image, w, h, [0, 177, 64], 3, 0.35);
-        assert!(changed);
-        assert_eq!(mask[10 * w + 20], 0, "边界上的混合像素要扔掉");
-        assert_eq!(mask[20 * w + 20], 255, "人物内部不动");
-        assert_eq!(mask[20 * w + 7], 255, "深色发丝（离背景色远）必须保住");
-    }
-
-    /// **反混**：`50% 人 + 50% 绿幕` 的边界像素要被还原成人物本体色（而不是压成灰绿）。
-    #[test]
-    fn 反混把混合像素还原成人物颜色() {
-        let (w, h) = (30usize, 30usize);
-        let bg = [0u8, 177, 64];
-        // 本体色（皮肤/裙子那种）：偏红
-        let body = [200.0f64, 60.0, 80.0];
-        // 边界像素 = 0.5*body + 0.5*bg
-        let mixed = [
-            ((0.5 * body[0] + 0.5 * bg[0] as f64)) as u8,
-            ((0.5 * body[1] + 0.5 * bg[1] as f64)) as u8,
-            ((0.5 * body[2] + 0.5 * bg[2] as f64)) as u8,
-        ];
-        let mut image = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb(bg));
-        let mut mask = vec![0u8; w * h];
-        // 10..20 是本体（纯 body 色），最外一圈是混合色
-        for y in 10..20 {
-            for x in 10..20 {
-                let edge = x == 10 || x == 19 || y == 10 || y == 19;
-                image.put_pixel(x as u32, y as u32, if edge { image::Rgb(mixed) } else { image::Rgb([200, 60, 80]) });
-                mask[y * w + x] = 255;
-            }
-        }
-        let mut mask2 = mask.clone();
-        let changed = unmix_edge(&mut image, &mut mask2, w, h, bg, 2);
-        assert!(changed, "混合像素应当被反混");
-        let fixed = image.get_pixel(10, 15);
-        // 反混之后应当接近 body（200,60,80），而不是混合色（100,118,72）
-        assert!(
-            (fixed[0] as i32 - 200).abs() < 25 && (fixed[1] as i32 - 60).abs() < 25,
-            "反混后应当接近人物本体色，实测 {fixed:?}（混合色是 {mixed:?}）"
-        );
-        // 内部不碰
-        assert_eq!(image.get_pixel(15, 15), &image::Rgb([200, 60, 80]).into());
-    }
-
-    /// **中间调的像素不许被删**（用户 2026-09-26："人的某些部分变透明了"）。
-    ///
-    /// 皮肤的阴影色恰好"介于人物本体色与背景色之间" —— 用第二个阈值去删（曾经把收边容差
-    /// 开到 0.5）会把它们一起删掉，于是人身上一块块透出背景。现在的分工是：
-    /// **只有覆盖率 a < 0.2 的才删**（那本来基本就是背景），其余一律反混修颜色。
-    #[test]
-    fn 中间调的皮肤像素不会被当成混合色删掉() {
-        let (w, h) = (40usize, 40usize);
-        let bg = [0u8, 177, 64];
-        let mut image = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb(bg));
-        let mut mask = vec![0u8; w * h];
-        // 本体是深红，边界带里放"中间调的皮肤阴影"（介于本体与绿幕之间，但不是"基本是背景"）
-        let skin_mid = image::Rgb([150, 120, 90]);
-        for y in 10..30 {
-            for x in 10..30 {
-                let edge = x <= 12 || x >= 27 || y <= 12 || y >= 27;
-                image.put_pixel(x as u32, y as u32, if edge { skin_mid } else { image::Rgb([200, 60, 80]) });
-                mask[y * w + x] = 255;
-            }
-        }
-        let before = mask.iter().filter(|v| **v > 127).count();
-        let _ = unmix_edge(&mut image, &mut mask, w, h, bg, 3);
-        let after = mask.iter().filter(|v| **v > 127).count();
-        assert_eq!(mask[12 * w + 20], 255, "中间调的皮肤（覆盖率 > 0.2）不许被删");
-        assert!(after as f64 > before as f64 * 0.95, "掩码不该被大幅削掉：{before} → {after}");
-    }
-
-    /// **去溢色**：绿幕边上那圈偏绿的像素要被压回中性，人物内部的像素**不许动**。
-    #[test]
-    fn 去溢色只压边缘的绿并且不动内部() {
-        let (w, h) = (40usize, 40usize);
-        // 人：中间 20x20 的红块，但最外一圈被绿幕"污染"成偏绿
-        let mut person = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([0, 0, 0]));
-        let mut mask = vec![0u8; w * h];
-        for y in 10..30 {
-            for x in 10..30 {
-                let edge = x == 10 || x == 29 || y == 10 || y == 29;
-                // 边缘：红 + 绿（典型溢色）；内部：纯红
-                person.put_pixel(x as u32, y as u32, if edge { image::Rgb([200, 190, 60]) } else { image::Rgb([200, 40, 60]) });
-                mask[y * w + x] = 255;
-            }
-        }
-        let changed = despill_edges(&mut person, &mask, w, h, [0, 177, 64], 2);
-        assert!(changed, "绿幕背景应当触发去溢色");
-        let edge = person.get_pixel(10, 20);
-        assert!(edge[1] < 150, "边缘的绿要被压下来，实测 {edge:?}");
-        let inner = person.get_pixel(20, 20);
-        assert_eq!((inner[0], inner[1], inner[2]), (200, 40, 60), "人物内部一个像素都不许动");
-        // 白底（低饱和）没有"溢色通道"可压 → 一个像素都不动
-        let mut white_bg = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([0, 0, 0]));
-        for y in 10..30 {
-            for x in 10..30 {
-                let edge = x == 10 || x == 29 || y == 10 || y == 29;
-                white_bg.put_pixel(x as u32, y as u32, if edge { image::Rgb([200, 190, 60]) } else { image::Rgb([200, 40, 60]) });
-            }
-        }
-        assert!(!despill_edges(&mut white_bg, &mask, w, h, [252, 252, 250], 2), "白底不该触发去溢色");
-        let untouched = white_bg.get_pixel(10, 20);
-        assert_eq!((untouched[0], untouched[1], untouched[2]), (200, 190, 60), "白底那一档不许乱压");
-    }
-
-    #[test]
-    fn 按背景估光向并烧出反向影子() {
-        let (w, h) = (120usize, 120usize);
-        // 背景：左暗右亮（光从右边来）
-        let mut base = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([20, 20, 20]));
-        for y in 0..h as u32 {
-            for x in (w as u32 / 2)..w as u32 {
-                base.put_pixel(x, y, image::Rgb([220, 210, 200]));
-            }
-        }
-        // 人物：中间一个白方块（有像素）
-        let mut person = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([0, 0, 0]));
-        let mut mask = vec![0u8; w * h];
-        for y in 50..70 {
-            for x in 50..70 {
-                person.put_pixel(x as u32, y as u32, image::Rgb([180, 180, 180]));
-                mask[y * w + x] = 255;
-            }
-        }
-        let (dir, estimated) =
-            relight_and_shadow(&mut person, &mut mask, &base, w, h, None, 0.5, 0.5, 6);
-        assert!(estimated, "没给方向时应当是从背景估的");
-        assert!(dir[0] > 0.5, "光应当从**右**边来（右半更亮），实测 dir={dir:?}");
-
-        // 亮面在右、暗面在左（方向梯度生效）
-        let left = person.get_pixel(52, 60)[0] as i32;
-        let right = person.get_pixel(67, 60)[0] as i32;
-        assert!(right > left, "受光面应当更亮：左 {left} / 右 {right}");
-
-        // 影子落在**反方向**（左边）：左边应当是"压暗后的背景色"且落进了遮罩
-        let shadow_x = 46;
-        assert_eq!(mask[60 * w + shadow_x], 255, "影子那几像素要落进遮罩（否则贴不上去）");
-        let shadow_pixel = person.get_pixel(shadow_x as u32, 60)[0];
-        // 左半背景是 20，压暗之后只会更暗
-        assert!(shadow_pixel < 25, "影子应当是压暗后的背景色，实测 {shadow_pixel}");
-    }
-
-    /// 显式给方向就不去估（`light="left"` 之类）。
-    #[test]
-    fn 显式光向不再从背景估() {
-        let (w, h) = (60usize, 60usize);
-        let base = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([128, 128, 128]));
-        let mut person = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb([0, 0, 0]));
-        let mut mask = vec![0u8; w * h];
-        for y in 20..40 {
-            for x in 20..40 {
-                person.put_pixel(x as u32, y as u32, image::Rgb([200, 200, 200]));
-                mask[y * w + x] = 255;
-            }
-        }
-        let (dir, estimated) =
-            relight_and_shadow(&mut person, &mut mask, &base, w, h, Some([0.0, -1.0]), 0.6, 0.0, 0);
-        assert!(!estimated);
-        assert_eq!(dir, [0.0, -1.0]);
-        assert!(person.get_pixel(30, 22)[0] > person.get_pixel(30, 38)[0], "光从上面来 → 上面更亮");
-    }
-    /// **收缩（choke）**：把主体与背景交界那圈抗锯齿 / 溢色扔掉 ——
-    /// 用户 2026-09-26 问的"人物怎么冒背景的泛光"就是没收这一刀（绿边被当主体贴进去）。
-    #[test]
-    fn 收缩把交界那圈溢色扔掉() {
-        let mut mask = vec![0u8; 100 * 100];
-        for y in 20..80 {
-            for x in 20..80 {
-                mask[y * 100 + x] = 255;
-            }
-        }
-        let eroded = erode_mask(&mask, 100, 100, 2);
-        assert_eq!(eroded[50 * 100 + 50], 255, "内部保留");
-        assert_eq!(eroded[20 * 100 + 50], 0, "原来那条边（y=20）被扔掉");
-        assert_eq!(eroded[21 * 100 + 50], 0);
-        assert_eq!(eroded[22 * 100 + 50], 255, "往里收 2 像素");
-        assert_eq!(eroded[79 * 100 + 79], 0, "右下角也收");
-        // radius=0 不动
-        assert_eq!(erode_mask(&mask, 100, 100, 0), mask);
-        // 收没了就是空的（别 panic）
-        let tiny = erode_mask(&mask, 100, 100, 40);
-        assert!(tiny.iter().all(|v| *v == 0));
-    }
-
     /// **摆放**（用户 2026-09-26 要的能力）：缩放到一半、搬到左下角 ——
     /// 遮罩与人物像素必须落在**同一个**位置（只动一个就是「人在这儿、遮罩在那儿」的错位）。
+    /// **已删除那一档的老参数必须被明确拒绝**（不许静默忽略）。
+    ///
+    /// 为什么这条要单独钉住：模型是照**工具描述**写参数的，而"描述已经改了、模型手里还是旧
+    /// 记忆"是常态。静默忽略的后果不是报错，是**语义错位** —— 它以为 `matteSource="model"`
+    /// 意思是"遮罩由你写"，实际拿到的是"不写遮罩"，于是去覆盖一个不存在的 `LoadImageMask`。
+    #[test]
+    fn 已删除的颜色档参数会被明确拒绝() {
+        let args = json!({
+            "baseFilename": "x.png",
+            "mode": "subject",
+            "subjectFilename": "person.png",
+            "matteSource": "model",
+        });
+        let err = reject_removed_args(&args).unwrap_err();
+        assert_eq!(err.code, "INVALID_ARGUMENT");
+        assert!(err.message.contains("matteSource"), "要指名道姓说是哪个参数：{}", err.message);
+        assert!(err.message.contains("已删除"), "要说清是删掉了、不是写错了：{}", err.message);
+
+        // 每一个老参数都要被认出来（漏一个 = 它会被当成未知键悄悄忽略）
+        for removed in REMOVED_ARGS {
+            let mut map = serde_json::Map::new();
+            map.insert((*removed).to_string(), json!(1));
+            map.insert("baseFilename".to_string(), json!("x.png"));
+            map.insert("mode".to_string(), json!("rect"));
+            map.insert("region".to_string(), json!("0.1,0.1,0.2,0.2"));
+            let err = reject_removed_args(&Value::Object(map)).unwrap_err();
+            assert_eq!(err.code, "INVALID_ARGUMENT", "{removed} 应当被拒");
+            assert!(err.message.contains(removed), "{removed} 的报错要点名它：{}", err.message);
+        }
+
+        // 正常参数一个都不许误伤
+        let ok = json!({
+            "baseFilename": "x.png",
+            "mode": "subject",
+            "subjectFilename": "person.png",
+            "bgColor": "green",
+            "scale": 1.0,
+            "x": 0.5,
+            "y": 0.5,
+        });
+        assert!(reject_removed_args(&ok).is_ok());
+    }
+
     #[test]
     fn 摆放要缩放并搬到位且图与遮罩不脱节() {
         let mut img = image::RgbImage::from_pixel(400, 400, image::Rgb([250, 250, 250]));
@@ -2750,38 +1864,6 @@ mod tests {
         assert_eq!(placed_mask[200 * 400 + 200], 0, "原位置必须清掉（否则老地方留个鬼影）");
         let old = *placed_img.get_pixel(200, 200);
         assert!(old[0] < 40 && old[1] < 40, "原位置的像素也要清掉，实测 {old:?}");
-    }
-
-    /// `ring`：**只在人物外面一圈**重绘（人物自己的像素一个都不动）。
-    ///
-    /// 2026-09-26 用户问的"嵌进去会改变画风怎么解决"的正解：自带工作流一个遮罩两用，
-    /// 于是贴上去的人必然被模型重画一遍（denoise 0.5 就把她的画风换掉了）。
-    #[test]
-    fn 环形遮罩只圈人物外面一圈() {
-        let mut img = image::RgbImage::from_pixel(200, 200, image::Rgb([252, 252, 250]));
-        for y in 60..140 {
-            for x in 80..120 {
-                img.put_pixel(x, y, image::Rgb([200, 30, 40]));
-            }
-        }
-        let (mask, _, _) =
-            subject_mask_from_image(&img, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
-        assert_eq!(mask[100 * 200 + 100], 255);
-
-        let ring = ring_mask(&mask, 200, 200, 5);
-        // 人物自己（含边界）**一个像素都不许在重绘区里**
-        for y in 60..140 {
-            for x in 80..120 {
-                assert_eq!(ring[y * 200 + x], 0, "人物内部不该被重绘（({x},{y})）");
-            }
-        }
-        // 外面一圈 5 像素之内是白的（要重绘），再远就不是
-        assert_eq!(ring[100 * 200 + (80 - 3)], 255, "人物左边 3 像素处应当在环里");
-        assert_eq!(ring[(60 - 3) * 200 + 100], 255, "人物上方 3 像素处应当在环里");
-        assert_eq!(ring[100 * 200 + (80 - 20)], 0, "离得太远的背景不该被重绘");
-        assert_eq!(ring[10 * 200 + 10], 0);
-        // 半径 0 = 原样返回（不生成环）
-        assert_eq!(ring_mask(&mask, 200, 200, 0), mask);
     }
 
     #[test]
@@ -2829,46 +1911,6 @@ mod tests {
         assert_eq!(blank, probed.join("input"));
 
         std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// **压通道修不出中性色** —— 只靠 `despill` 修不好绿幕边（2026-09-27 用户当场指出）。
-    ///
-    /// 绿幕上一个混合像素 `(112,168,146)`（本来就 B>R），despill 把绿压下去之后变成
-    /// `(112,146,149)` 那种**青蓝**（B>G>R）—— 绿是没了，可蓝还在，贴到暗背景上就是绕着人的一圈青边。
-    /// ⚠ 这条用例的价值是**记住这个失败模式**：所以 matte 档**不做** Rust 侧的压通道/反混，
-    /// 改由工作流里的 `easy imageRemBg(refine_foreground=true)` 用**模型自己的 alpha** 解出前景色
-    /// （见总纲 §16.4 与 pitfalls）。颜色档仍用 `despill_edges` —— 那一档掩码外的像素根本不会被合成。
-    #[test]
-    fn 压通道会把绿幕边变成青色所以_mat_档不靠它() {
-        let (w, h) = (60usize, 60usize);
-        let bg = [0u8, 177, 64];
-        let mut person = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb(bg));
-        let mut mask = vec![0u8; w * h];
-        // 人：中间 20x20 的浅灰（发色），掩码内部
-        for y in 20..40 {
-            for x in 20..40 {
-                person.put_pixel(x as u32, y as u32, image::Rgb([200, 200, 200]));
-                mask[y * w + x] = 255;
-            }
-        }
-        // 掩码**内**最外一圈 = "人 + 绿幕"的混合像素（抗锯齿）
-        let mixed = image::Rgb([112u8, 168, 146]);
-        for y in 20..40 {
-            for x in 20..40 {
-                if x == 20 || x == 39 || y == 20 || y == 39 {
-                    person.put_pixel(x as u32, y as u32, mixed);
-                }
-            }
-        }
-        assert!(despill_edges(&mut person, &mask, w, h, bg, 6), "绿幕背景应当触发压通道");
-        let after = *person.get_pixel(20, 30);
-        assert!(after[1] < mixed[1], "绿该被压下来：{after:?}");
-        assert!(
-            after[2] as i32 - after[0] as i32 > 20,
-            "⚠ 压完**偏青**（蓝-红 应 > 20）—— 这正是用户看到的那条边：{after:?}"
-        );
-        // 人物内部（干净的发色）一个像素都不许动
-        assert_eq!(*person.get_pixel(30, 30), image::Rgb([200, 200, 200]));
     }
 
     /// 文件不在它会自己去 HuggingFace **静默下载**（表现是"点了按钮没反应"）——

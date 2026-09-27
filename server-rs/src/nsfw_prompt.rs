@@ -41,10 +41,14 @@ pub const VERSION: &str = "nsfw-v3";
 ///   ⚠ **跳过 v31 是有意的**：Kotlin 的 v31 带第 20 条，而当时配方三件还没搬到 Rust，
 ///   不能写那一节（R13：不许描述没下发的工具），也不该与它"同名不同内容"。
 ///   ⚠ Kotlin 的 v31 **没有**第 19 条这批结论 —— 从它生成一次就会丢掉。
-/// - **Rust v33**（2026-09-27，本次）：第 20 条补进常驻段（配方三件已在
+/// - **Rust v33**（2026-09-27）：第 20 条补进常驻段（配方三件已在
 ///   [`crate::workflow_recipe`] 交付，R13 的前提满足了）。**不是**退回 Kotlin 的 v31：
 ///   那一版没有第 19 条的实测结论；Rust 这版是"v32 的正文 + 第 20 条"，所以只 bump 一档。
-pub const PROMPT_VERSION: &str = "v33";
+/// - **Rust v34**（2026-09-27）：第 19 条按"**颜色抠图那一档整档删除**"改写 ——
+///   贴人物图只剩 AI 软遮罩一条路（先查 `mattingModels.usable`，缺模型就指引用户下载，
+///   **绝不降级**）；`comfy_make_mask` 的老参数（`matteSource` / `ring` / `light*`）会被明确拒绝。
+///   同时删掉了"④ 没有模型时才退到颜色剪影"那一段。
+pub const PROMPT_VERSION: &str = "v34";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】
@@ -273,20 +277,19 @@ const PERSONA_RAW: &str = r#"
             ② **先想能不能不抠**（2026-09-27 的实测结论，抠图不管多好的模型都要在边缘上做取舍）：
                最优是**阶段一就按最终背景生成**（拿底图当 i2i 起点 / 同底模同场景，阶段二 `denoise 0.35~0.5`
                直接融）；其次是 **`denoise 0` 纯合成**（一个像素都不改，靠 alpha 贴）。**这两条没有边缘问题**。
-            ③ 真要抠（场景已钉死 / 换大动作 / 要透明素材）才走下面；**贴人物图首选 AI 软遮罩**：
+            ③ 真要抠（场景已钉死 / 换大动作 / 要透明素材）才走下面；**贴人物图只有一条路：AI 软遮罩**：
                先 `comfy_get_status` 看 **`mattingModels.usable`** ——
-               · `true` → `comfy_make_mask(mode="subject", matteSource="model", bgColor=…)`
-                 （它**不写遮罩**，只把人物图那份像素洗干净，回 `personFilename`）
+               · `true` → `comfy_make_mask(mode="subject", subjectFilename=<人物图>, bgColor=…)`
+                 （它**不写遮罩**，一个像素都不碰人物图，只回 `personFilename` 与定位器诊断）
                  ＋ 工作流 `comfyhub_paste_person_matte_anima.json`（**不要**覆盖任何 LoadImageMask）；
                · `false` → **如实让用户下模型**（照返回里的 `download` 说清下哪个 / 多大 / 放哪），
                  **别硬跑**（那个节点会自己去 HuggingFace 静默下载，表现是"点了没反应"），
-                 也**别默默降级**成颜色抠图 —— 实测它会把眼睛、发髻内部一起删掉（掉 18.4% 前景）。
-            ④ 没有抠图模型时才退到：`comfy_make_mask(mode="subject")` 生成**颜色剪影**遮罩
-               （**白 = 要重新生成的地方**；**保背景换人物** = 人物那块 region；
-               **换背景保人物** = 同一块 region 加 `invert=true`）＋ `comfyhub_paste_person_anima.json`，
-               覆盖 `10.image` / `12.image` / `20.image` / `11·21.width·height` / 提示词 / seed，
-               并在结果里**如实说明这一档的代价**（只对纯色背景够用）。
-            ⑤ 纯重绘 / 换背景保人物用 `comfyhub_inpaint_anima.json`。
+                 **也绝不降级**：以前那一档"Rust 按颜色抠剪影当遮罩"已经**删除**（它会给人物轮廓
+                 外面留一圈青绿、还会把发梢整段吃掉），传 `matteSource` / `ring` / `light*` 这些老参数
+                 会被工具明确拒绝 —— 缺模型时唯一正确的动作是让用户下模型。
+            ④ 纯重绘 / 换背景保人物用 `comfyhub_inpaint_anima.json`（那时 `comfy_make_mask` 用
+               `mode="rect"/"ellipse"` 画几何遮罩，**白 = 要重新生成的地方**；
+               **保背景换人物** = 人物那块 region，**换背景保人物** = 同一块 region 加 `invert=true`）。
                ⚠ **图像编辑只用 anima 那份**：`comfyhub_inpaint_krea2.json` 实测**不适合做编辑**
                （纯重绘 3 个 seed 只有 1 次跟随提示词；贴人物 denoise 0.5 带一圈白框、0.85 换人）——
                它留给**文生图**；用户要写实风格就如实说明这条限制，**不许**硬用之后说"做好了"。
@@ -756,10 +759,13 @@ mod tests {
         // ① 贴人物图首选 AI 软遮罩那份工作流，且要先查模型在不在
         assert!(persona.contains("comfyhub_paste_person_matte_anima.json"), "第 19 条少了 matte 工作流");
         assert!(persona.contains("mattingModels.usable"), "少了「先查模型在不在」这一步");
-        assert!(persona.contains("matteSource=\"model\""), "少了洗人物图那一档");
-        // ② 缺模型要指引用户下载，且**不许**硬跑 / 默默降级
+        // ② 缺模型要指引用户下载，且**不许**硬跑 / 默默降级（颜色抠图那一档 2026-09-27 已删除）
         assert!(persona.contains("如实让用户下模型"), "少了「缺模型就指引用户下」");
         assert!(persona.contains("静默下载"), "要写明为什么不能硬跑");
+        assert!(
+            persona.contains("也绝不降级") && !persona.contains("matteSource=\"model\""),
+            "颜色抠图档已删除：不能再教模型传 matteSource，也不能留「降级成颜色抠图」的说法",
+        );
         // ③ krea2 **不适合做编辑**（这条以前没写，提示里还在推荐它做编辑）
         assert!(persona.contains("不适合做编辑"), "krea2 那条实测结论必须在常驻提示里");
         // ④ 「先想能不能不抠」那两条路
