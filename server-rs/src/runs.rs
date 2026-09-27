@@ -691,6 +691,16 @@ pub fn approval_state(state: &AppState, call_id: &str) -> Result<Option<Approval
 /// `WHERE approval = 'pending'` 那一句是**"决定只能下一次"**（Kotlin 的内存闸门同语义：
 /// `resolve` 完那一条就没了）：重复点返回 `false`，而且**没人能把已经批过的调用改成拒绝**
 /// —— 否则运行中的那种"我点错了、快撤"会撤回一个已经在跑的命令。
+///
+/// # M5（2026-09-27）：这条闸门也管**手机排队的提交**
+///
+/// 桌面上那张"等你批准"的卡可能不是某个 Run 的工具调用，而是**手机排上来的一条
+/// `submit_job`**（契约 §4.1）。它记在 `submit_jobs` 那张表上（为什么不塞进
+/// `ai_tool_calls`：见 [`crate::submit_queue`] 的文件头），但**审批通道是同一条** ——
+/// 同一个端点、同一个函数，所以这里多认一类 `callId`（`submit:<queueId>`）。
+///
+/// 两条 UPDATE 在**同一个事务**里：谁先谁后都行（两类 callId 不会撞），
+/// `true` = 确实改到了一行（不管改的是哪一类）。
 pub fn resolve_approval(state: &AppState, call_id: &str, approved: bool) -> Result<bool, ApiError> {
     let call_id = call_id.to_string();
     state.write(move |tx| {
@@ -700,7 +710,8 @@ pub fn resolve_approval(state: &AppState, call_id: &str, approved: bool) -> Resu
               WHERE provider_call_id = ?2 AND status = 'pending' AND approval = 'pending'",
             rusqlite::params![if approved { "approved" } else { "denied" }, call_id],
         )?;
-        Ok(n > 0)
+        let m = crate::submit_queue::resolve_approval_on(tx, &call_id, approved)?;
+        Ok(n + m > 0)
     })
 }
 

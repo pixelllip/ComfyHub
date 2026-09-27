@@ -7271,16 +7271,35 @@ async fn capabilities_status_reports_the_three_layers_and_toggles_probe() {
     assert_eq!(body["remoteSource"], "models.dev", "另一层不受影响");
 }
 
-/// 还没搬的两条端点必须**明确 501**（拿空数组/假成功假装，比 501 坏得多）。
+/// `refresh` **已经实现**（2026-09-27，`86d7e71`）：带 `COMFYHUB_NO_DOWNLOAD=1` 时
+/// 它必须**如实跳过**（200 + `lastMessage` 说清原因），而不是去出网。
+///
+/// `probe`（实测校准，会对每个模型发真请求、花钱）**仍是 501** —— 拿空数组/假成功假装，
+/// 比 501 坏得多。
 #[tokio::test]
-async fn capability_refresh_and_probe_are_honest_501() {
+async fn capability_refresh_is_implemented_and_probe_is_honest_501() {
+    // ⚠ 只在这个用例里设一下、用完立刻撤（`std::env` 是进程级的，别的用例并行跑着）
+    std::env::set_var("COMFYHUB_NO_DOWNLOAD", "1");
     let state = state();
-    for path in ["/api/ai/capabilities/refresh", "/api/ai/capabilities/probe"] {
-        let (status, body) = send_json(router_for(state.clone()), "POST", path, serde_json::json!({})).await;
-        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{path}");
-        let message = body["error"].as_str().unwrap();
-        assert!(message.contains("还没搬到 Rust"), "{path}: {message}");
-    }
+    let (status, body) =
+        send_json(router_for(state.clone()), "POST", "/api/ai/capabilities/refresh", serde_json::json!({})).await;
+    std::env::remove_var("COMFYHUB_NO_DOWNLOAD");
+    assert_eq!(status, StatusCode::OK, "refresh 已经是实现：{body}");
+    let message = body["lastMessage"].as_str().unwrap_or("");
+    assert!(
+        message.contains("COMFYHUB_NO_DOWNLOAD=1"),
+        "关闭在线更新时要如实说清原因：{body}"
+    );
+    assert!(
+        body["remoteSource"].is_null() || !body.to_string().contains("\"entries\""),
+        "只是跳过，不该有数据集被写进来：{body}"
+    );
+
+    let (status, body) =
+        send_json(router_for(state), "POST", "/api/ai/capabilities/probe", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+    let message = body["error"].as_str().unwrap();
+    assert!(message.contains("还没搬到 Rust"), "{message}");
 }
 
 /// `id` / `event` / `data` 三元组（`id` 缺席的心跳帧给 `None`）。

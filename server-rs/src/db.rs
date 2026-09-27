@@ -66,8 +66,9 @@ pub const SCHEMA_SQL: &str = include_str!("../../db/schema.sqlite.sql");
 /// **加表 / 改列 / 加同步触发器都要 +1**（2026-09-27 由 1 提到 2：`workflow_recipes` 的 DDL
 /// 早就在 `db/schema.sqlite.sql` 里，而真库停在 1、**那张表根本不存在** —— 见
 /// [`open_or_create`] 的 ⚠；同日由 2 提到 3：给 `ai_runs` / `ai_tool_calls` 补 `_sync_log`
-/// 触发器 —— **不是加表但同样够不着老库**，理由写在 `db/schema.sqlite.sql` 末尾）。
-pub const SCHEMA_VERSION: i64 = 3;
+/// 触发器 —— **不是加表但同样够不着老库**，理由写在 `db/schema.sqlite.sql` 末尾；
+/// 同日由 3 提到 4：加 `submit_jobs` 表 = M5「手机排队 → 桌面真正提交」的持久账）。
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// **开库（必要时建库）**：切流之后 Rust 是唯一的后端，"第一次运行要能自己建库"这件事
 /// 必须在它这边成立 —— 以前那版遇到缺库直接 `exit 3`（"先让 Kotlin 起一次库"），

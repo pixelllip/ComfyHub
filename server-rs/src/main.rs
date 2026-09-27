@@ -33,7 +33,7 @@
 //! | **`POST /api/capture/import-workflows`**（把本机 ComfyUI 里已保存的工作流文件批量读进库；界面上的「导入本机工作流」按钮） | ✅（P4 第 49 步：`run_key = file:<sha256>` 判重，导两次只有一行） |
 //! | **后台捕获轮询器**（用户自己在 ComfyUI 里跑的东西也会被收）+ `/api/capture/status` 的 `lastPollAt` / `lastError` | ✅（P4 第 47 步：`capture_poller.rs`，逐条对齐 Kotlin `ComfyCapture.start()`；启动等 2.5 秒、停用 5 秒空转、间隔夹 1..600、同一时刻只跑一轮） |
 //! | `GET /api/{prompts,media}/{id}/workflow`、`GET /api/prompts/{id}/api-graph` | ✅ |
-//! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ |
+//! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ **含 `kind:"submit_job"` 那条指令**（M5，契约 §4.1）：手机排队 → 桌面**先过审批闸门**（"手机点过提交"不算批准）→ 批准后走**现有 `comfy_submit` 全链路**（R10）→ 结果作为一条助手消息追加进发起那条会话（手机靠普通下行同步看到）。落点 `submit_queue.rs` + `submit_jobs` 表；`push` 本身**不阻塞**（受理 = 落一行 + 起后台任务） |
 //! | `GET /api/ai/providers`（不含密钥）、`GET /api/ai/providers/{id}/models` | ✅ |
 //! | **Provider 写侧**：`POST/PUT/DELETE /api/ai/providers`（乐观锁 AIH-007）、`PUT …/models` | ✅（P4 第 37 步） |
 //! | **Provider 连接测试 / 模型发现**：`POST /api/ai/providers/{id}/{test,discover-models}` | ✅（P4 第 53 步：`provider_probe.rs`；`/models` 的两种 Base URL 写法都试、404 不算鉴权失败、密钥脱敏、能力**逐维度**合并内置目录） |
@@ -48,7 +48,7 @@
 //! | `POST/PATCH/DELETE /api/ai/conversations`、`POST …/messages`（**写侧**） | ✅ |
 //! | **Run 生命周期**：`POST …/runs`（202）/ `GET /runs/{id}` / `GET /runs/{id}/events`（**SSE**）/ `POST /runs/{id}/cancel` | ✅（事件流按 `?after=` 从库里拉，见 `run_lifecycle.rs`） |
 //! | **`GET /api/ai/run-kit{,/status}`**（手机 harness 的全部规则类输入；R12/R13 的第一次重建） | ✅ |
-//! | **`/api/ai/pending`**（跨端待办总览：还在等人的提问与工具审批） | ✅ |
+//! | **`/api/ai/pending`**（跨端待办总览：还在等人的提问、工具审批，**以及手机排队待批的提交**） | ✅ |
 //! | **`/api/auth*` 配对闸门 + `GET /api/ai/credentials` 密钥下行 + `PUT` 密钥上行**（inbound auth P0 + 配对第 2 步 / §14） | ✅ 下行的开关是 `allowCredentials`、上行是**另一个**开关 `allowCredentialsUpload`（两个都默认关，§14.1）；上行按 `ai.credentials.rev` 做"等值才应用"（落后回 `STALE_IGNORED`），逐条独立（env 只读 → `FORBIDDEN`、坏名字/空值 → `BAD_PAYLOAD`） |
 //! | 扫码配对（`POST /api/auth/pair/start`） | ✅（2026-09-27：**仅回环**。回 `ticket` + 6 位码 + `urls[]`（来自 `net_urls`）+ 两个过期时刻；二维码那串 URI 由**前端**编（`lib/core/pairing_payload.dart` 是格式的唯一实现）。扫码会话与"手机举手"共用同一套 `Session`，所以 `pair/claim` 两条路都认；`ticket` 只在这个响应里出现，不进 `pair/pending` —— 那张列表是给手敲那条路用的） |
 //! | `POST /api/ai/capabilities/{refresh,probe}` | `refresh` **✅（2026-09-27）**：从 `https://models.dev/api.json` 拉在线数据集 → 规范化成覆盖层写 `<storage>\ai\capabilities\remote.json`（不重启、不发版）；失败**不抛错、旧目录原样保留**，结果用 `lastMessage` 如实回给界面；`COMFYHUB_NO_DOWNLOAD=1` 时如实说"已关闭在线更新"。`probe`（实测校准，会对每个模型发真请求、花钱）**仍 501** |
@@ -207,6 +207,14 @@ async fn main() {
         Ok(_) => {}
         Err(e) => eprintln!("启动恢复：收尾待回答提问失败（{}）", e.human()),
     }
+    // ④ M5（契约 §4.1）：**手机排上来的提交**（`submit_jobs` 那张表）。
+    //    它有三种残局，各有各的处置（见 `submit_queue::resume_in_flight` 的表）：
+    //    还在等人批的按拒绝收尾（与上面第 ② 步**同一语义**）、人已经批过的复起提交、
+    //    提交中途没了的**如实说"结果不确定"且不重投**。三种都**不许静默**。
+    let queued = comfyhub_server_rs::submit_queue::resume_in_flight(&state);
+    if queued > 0 {
+        println!("启动恢复：{queued} 条排队提交被处置（审批被打断 / 提交被中断 / 复起）");
+    }
 
     // ---- 后台捕获轮询器（P4 第 47 步 = O5/O6）-------------------------------
     //
@@ -235,6 +243,17 @@ async fn main() {
             comfyhub_server_rs::mcp::warmup(&registry, &project_root).await;
         });
     }
+
+    // ---- 手机排队提交的清扫循环（M5，契约 §4.1）-----------------------------
+    //
+    // 它同时干三件事，都是"受理了但还没跑完不会丢"的兜底：
+    //  ① **看门狗**：worker 猝死留下的 `awaiting_approval` / `submitting` 按**租约**
+    //     （`heartbeat_at` 比现在早过 `LEASE_SECONDS`）收成终态 —— 绝不让手机上那条
+    //     "已排队"永远停在排队中；
+    //  ② **孤儿复起**：人已经批过、但当时没人认领的（认领是原子的，复起不会重复提交）；
+    //  ③ **回执投递**：终态的回执送不出去（会话还没同步上来 / 写库那次失败）就重试，
+    //     `reply_state` + 确定性的 `reply_message_id` 保证"一定送到、且只送一条"。
+    comfyhub_server_rs::submit_queue::spawn_sweeper(state.clone());
 
     let app = routes::router(state.clone())
         .layer(tower_http::cors::CorsLayer::permissive())

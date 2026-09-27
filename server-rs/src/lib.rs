@@ -69,6 +69,7 @@ pub mod run_lifecycle;
 pub mod runs;
 pub mod skills;
 pub mod strict_intake;
+pub mod submit_queue;
 pub mod sync;
 pub mod system_prompt;
 pub mod thumbs;

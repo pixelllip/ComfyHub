@@ -454,6 +454,64 @@ CREATE INDEX IF NOT EXISTS idx_workflow_recipes_skeleton ON workflow_recipes(ske
 CREATE INDEX IF NOT EXISTS idx_workflow_recipes_task     ON workflow_recipes(task);
 CREATE INDEX IF NOT EXISTS idx_workflow_recipes_created  ON workflow_recipes(created_at);
 
+-- ---------------------------------------------------------------------
+-- M5 手机排队提交（`kind: "submit_job"`，契约 §4.1）—— **一张指令的落点，不是表行的镜像**
+--
+-- 手机「点一下提交」推上来的是一条**指令**（`sync.rs` 的 push 里单独一个分支，
+-- **不走 `table_of_kind`**）。这张表就是那条指令的**持久账**：受理过没有、审批走到哪、
+-- 提交成没成、回执发给手机那条会话没有。
+--
+-- 三条设计约束（改这张表之前先读 `server-rs/src/submit_queue.rs` 的文件头）：
+--
+--  ① **`queue_id` 是幂等键**（手机生成）。同一个 `queueId` 再推一次 → 回 `applied`
+--     且**绝不重复提交**（手机重试是常态）。所以它是主键、插入用 `DO NOTHING`。
+--  ② **不挂 `_sync_log` 触发器、不进 `SYNCED`**：它不是给手机镜像的行
+--     （手机知道自己在等什么），结果只经"往发起那条会话追加一条助手消息"回传。
+--  ③ **`conversation_id` / `run_id` 故意不加外键**：手机那条会话（或它的 Run）
+--     可能**还没上行到桌面**（契约没保证顺序）。加外键会让"排队"直接失败，
+--     而正确处置是"受理、如实记回执失败、等它同步上来再补发"
+--     （`reply_state='blocked'` + 投递循环重试）。
+--
+-- `state` 状态机：awaiting_approval → submitting → done / failed；awaiting_approval → denied。
+--   **没有 approved 这个状态**：人点头落在 `approval` 列，由后台任务原子地
+--   `awaiting_approval + approval='approved' → submitting`（那种"两步状态"会多一个
+--   "批了但没人认领"的窗口，而它正是 R8 顺序要防的东西）。
+-- `approval` 与桌面审批闸门同语义：pending / approved / denied（**超时也写 denied**，
+--   与 `ToolApprovalGate` 一致），所以 `GET /api/ai/pending` 上不会留一张点了没用的卡。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS submit_jobs (
+  queue_id        TEXT    NOT NULL,          -- 手机生成的 queueId（幂等键）
+  call_id         TEXT    NOT NULL,          -- 审批闸门的调用号（`submit:<queueId>`，与 ai_tool_calls 不撞）
+  conversation_id TEXT    NOT NULL,          -- 回执要追加到哪条会话（**不加外键**，见上 ③）
+  run_id          TEXT    NULL,              -- 手机那次 Run（如实存，不加外键）
+  payload_json    TEXT    NOT NULL,          -- 推上来的原始 payload（排查用，不改它）
+  prompt_id       INTEGER NULL,              -- 受理时就解析好：payload.promptId 或 sourceRef 查到的那条
+  source_ref      TEXT    NULL,              -- `file:<sha256>` 那种来源（受理时解析成 prompt_id）
+  overrides_json  TEXT    NULL,              -- 参数覆盖（原样透给 comfy_submit）
+  nsfw            INTEGER NOT NULL DEFAULT 0 CHECK (nsfw IN (0,1)),
+  state           TEXT    NOT NULL,          -- awaiting_approval / submitting / done / failed / denied
+  approval        TEXT    NOT NULL DEFAULT 'pending',  -- pending / approved / denied
+  ok              INTEGER NULL CHECK (ok IS NULL OR ok IN (0,1)),  -- 终态的成败（审批中为 NULL）
+  outcome_code    TEXT    NULL,              -- 终态稳定码（成功为 NULL；失败/被拒必填）
+  outcome_message TEXT    NULL,              -- 终态人话（回执正文用它）
+  media_ids_json  TEXT    NULL,              -- 入库产物的 mediaIds（**只有真的入库了才有**）
+  comfy_prompt_id TEXT    NULL,              -- ComfyUI 的 prompt_id（提交成功后记下，排查/对账用）
+  elapsed_ms      INTEGER NOT NULL DEFAULT 0,-- 受理到终态（或审批等了多久）
+  reply_state     TEXT    NOT NULL DEFAULT 'pending',  -- pending / blocked / delivered（回执投递的账）
+  reply_error     TEXT    NULL,              -- 回执没送出去的原因（会话还没同步上来等）
+  reply_message_id TEXT   NULL,              -- 送出去的那条助手消息（幂等：同一个 id 不重发）
+  requested_at    TEXT    NULL,              -- payload.requestedAt（手机的排队时刻）
+  requested_by    TEXT    NULL,              -- payload.requestedBy（哪台手机）
+  heartbeat_at    TEXT    NULL,              -- 后台任务的租约心跳（看门狗判"这个 worker 死了没有"）
+  created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (queue_id)
+);
+-- 审批列表 / 投递循环 / 看门狗都按状态扫，索引跟着它们走
+CREATE INDEX IF NOT EXISTS idx_submit_jobs_state   ON submit_jobs(state, created_at);
+CREATE INDEX IF NOT EXISTS idx_submit_jobs_reply   ON submit_jobs(reply_state, updated_at);
+CREATE INDEX IF NOT EXISTS idx_submit_jobs_call    ON submit_jobs(call_id);
+
 -- =====================================================================
 --  同步账本（🔒 sqlite-schema-contract.md §3）—— 桌面是唯一真源
 -- =====================================================================
@@ -666,4 +724,11 @@ BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', OLD.id, 'dele
 --   手机上永远收不到"，而且不报任何错。bump 版本号让老库走一遍收敛式 DDL
 --   （触发器 `DROP + CREATE`），顺带把 `manifest.schemaVersion` 变了，
 --   手机据此重新 bootstrap —— 这正是"同步范围变了"该有的信号。
-PRAGMA user_version = 3;
+--
+-- 2026-09-27 由 3 提到 4（M5）：**加了一张表 `submit_jobs`**。
+--   它是"手机排队 → 桌面真正提交"那条指令的持久账，真库上不存在就会在
+--   第一次 `POST /api/sync/push` 时炸 `no such table`（而且是**手机那条路**炸，
+--   桌面上不看日志根本发现不了）—— 正是总纲 §21 那条静默故障的同一族。
+--   ⚠ 连带后果：`manifest.schemaVersion` 3 → 4，手机会按契约 §1 重走一次 bootstrap
+--   （`MobileSchema.VERSION` 得由手机那一侧跟着改，本仓库 android/** 不归这次改动）。
+PRAGMA user_version = 4;

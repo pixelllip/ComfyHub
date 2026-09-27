@@ -35,6 +35,15 @@
 //!    而审批那份是 ISO 字符串（`rs.isoTime`）。两个 `askedAt` 类型不同，别想着"统一一下"；
 //! ② 可空键**不出现**（`explicitNulls = false`）：`header` / `answer` / `optionIndex`
 //!    没有就整个键不出现，`optionIndexes` 空数组也不出现。
+//!
+//! # 2026-09-27（M5）：`approvals[]` 里现在有**两类**东西
+//!
+//! 除了桌面 Run 的工具调用，还并进了**手机排队的提交**（`submit_jobs.state='awaiting_approval'`，
+//! 契约 §4.1）。形状**完全同形**（同样 6 个键），所以列表本身、以及点它的那条路
+//! （`POST /api/ai/tool-calls/{callId}/{approve,deny}`）**一个字都没变** ——
+//! 用户看到的还是"有 N 个东西在等你批"。落点为什么不是 `ai_tool_calls` 那张表：
+//! 见 [`crate::submit_queue`] 的文件头（一句话：那张表的外键要求先有一个**桌面 Run**，
+//! 而"为了过闸门捏造一个 Run"是被明确禁止的）。
 
 use rusqlite::Connection;
 use serde_json::{Map, Value};
@@ -52,11 +61,17 @@ pub fn pending(state: &AppState) -> Result<Value, ApiError> {
     Ok(Value::Object(body))
 }
 
-/// 还在等批准的调用：`ai_tool_calls.status='pending'` **且 Run 还在 running**。
+/// 还在等批准的调用，**两类合成一个列表**（形状逐字一致，客户端不必分两路）：
 ///
-/// ⚠ 两个条件缺一不可：Run 已经收尾的 pending 行是"永远等不到人来点"的残留
-/// （后端重启恢复会把它们按拒绝收尾），把它列出来会让另一台设备上冒出一张
-/// **点了也没用**的审批卡。
+/// 1. **桌面 Run 的工具调用**：`ai_tool_calls.status='pending'` **且 Run 还在 running**；
+/// 2. **手机排队的提交**（M5，契约 §4.1）：`submit_jobs.state='awaiting_approval'`
+///    —— 见 [`crate::submit_queue`] 的文件头，落点为什么不是 `ai_tool_calls`
+///    （外键 `→ ai_runs(id)` + "不许为了它捏造一个桌面 Run"）。
+///
+/// 两条为什么都合成 `approvals[]`：**审批在桌面上必须看得见**（契约 §4.1 第一条），
+/// 而复用的是**同一条通道** —— 同一个列表 + 同一个
+/// `POST /api/ai/tool-calls/{callId}/{approve,deny}`（`runs::resolve_approval` 内部
+/// 两类都认）。另造一条通道会出现"手机上排了队、桌面上没有任何东西可以点"。
 fn list_pending_approvals(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
     let mut stmt = conn.prepare(
         "SELECT tc.provider_call_id, tc.run_id, r.conversation_id, tc.name,
@@ -66,7 +81,7 @@ fn list_pending_approvals(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
           WHERE tc.status = 'pending' AND r.status = 'running'
           ORDER BY tc.started_at, tc.id",
     )?;
-    let rows = stmt
+    let mut rows = stmt
         .query_map([], |row| {
             let mut out = Map::new();
             out.insert(
@@ -94,6 +109,8 @@ fn list_pending_approvals(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
             Ok(Value::Object(out))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    // 手机排队的提交接在后面（同一把锁、同一次读，两类的排序各自稳定）
+    rows.extend(crate::submit_queue::pending_approvals(conn)?);
     Ok(rows)
 }
 

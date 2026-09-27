@@ -72,6 +72,10 @@ pub const NOT_SYNCED: &[(&str, &str)] = &[
     ("ai_models", "模型目录由 run-kit 版本化下发"),
     ("ai_run_events", "单 Run 上万条的调试日志；工具过程看 ai_runs / ai_tool_calls"),
     ("ai_questions", "提问闸门只在桌面侧（手机看实时提问走 GET /api/ai/pending）"),
+    // 2026-09-27（M5）：手机的排队提交（契约 §4.1）是**一条指令**，不是给手机镜像的行 ——
+    // 手机本来就知道自己在等什么；结果只经"往发起那条会话追加一条助手消息"回传（那几条表在
+    // SYNCED 里）。它也**不该有**账本触发器：那是"手机反过来把桌面的工作单改掉"的入口。
+    ("submit_jobs", "排队提交是桌面侧的工作单；结果经会话消息下行（契约 §4.1）"),
 ];
 
 /// `app_settings` 里 run-kit 版本号的键（与 Kotlin `RunKit.KEY_VERSION` 同值）。
@@ -423,6 +427,12 @@ fn row_to_json(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
 /// `ai_run` / `ai_tool_call`（2026-09-27 加）是"手机自己跑出来的那次 Run 及其工具明细"：
 /// 手机 harness 在本地库写 `ai_runs`，靠它上行到桌面 —— 桌面于是也能看到手机那次 Run
 /// 的工具过程，与"桌面 Run 下行到手机"是同一件事的两个方向。
+///
+/// ⚠ **`submit_job` 故意不在这里**（契约 §4.1，M5 拍板）：它不是"某张表的行"，
+/// 而是一条**指令**（"请桌面把这条工作流真的提交一次"）—— 它的分支在 [`apply_one`] 的最前面，
+/// 落点是 `submit_jobs` 那张**不同步**的表 + 一个后台任务（`crate::submit_queue`）。
+/// 把它塞进这张映射表就会走到"按列名 upsert 一行"那条路上，
+/// 而 `submit_jobs` 的列与 payload 的键**根本不是一回事**。
 fn table_of_kind(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "ai_conversation" => "ai_conversations",
@@ -520,6 +530,19 @@ fn apply_one(state: &AppState, item: &PushItem) -> Result<(), Rejected> {
         code: code.to_string(),
         message,
     };
+
+    // ⓪ **`submit_job` 是一条指令，不是"一张表的行"**（契约 §4.1，M5）——
+    //    所以它排在 `table_of_kind` **之前**，也**绝不进那张映射表**。
+    //    受理本身不阻塞（落一行 + 起后台任务），审批与提交都在后台跑（见 `submit_queue`）。
+    if item.kind == "submit_job" {
+        return crate::submit_queue::accept(state, item)
+            .map(|_| ())
+            .map_err(|reject| Rejected {
+                ref_id: item.ref_id.clone(),
+                code: reject.code,
+                message: reject.message,
+            });
+    }
 
     // ① 允许的表（先看是不是"手机根本不配创建的"
     if PHONE_FORBIDDEN.contains(&item.kind.as_str()) {
@@ -843,6 +866,11 @@ mod tests {
             let table = table_of_kind(kind).expect("kind 必须认识");
             assert!(SYNCED.contains(&table), "{kind} → {table}，但 {table} 不在同步范围里");
         }
+        // ★ `submit_job` **不是表**（契约 §4.1）：它的分支在 `apply_one` 最前面。
+        //   真有谁"顺手"把它加进这张映射表，就会走到按列名 upsert 那条路上 ——
+        //   而 payload 的键（queueId / conversationId / …）跟 `submit_jobs` 的列不是一回事，
+        //   表现是一律 `SCHEMA_MISMATCH`（永久拒），手机上永远排不上队。
+        assert_eq!(table_of_kind("submit_job"), None, "submit_job 是一条指令，不是一张表");
     }
 
     #[test]
