@@ -249,7 +249,10 @@ async fn get_models(state: &AppState, provider: &AiProviderRow, secret: Option<&
 }
 
 /// 解析一个 provider 的密钥（**只在后端内部用，用完即弃**）。
-fn resolve_secret(state: &AppState, provider: &AiProviderRow) -> Option<String> {
+///
+/// `pub(crate)`：实测校准（`capability_probe.rs`）也要同一把密钥 —— 两处各写一份
+/// "凭据引用怎么解析"迟早会出现"连接测试连得上、校准却说没凭据"。
+pub(crate) fn resolve_secret(state: &AppState, provider: &AiProviderRow) -> Option<String> {
     let reference = provider.credential_ref.as_deref().map(str::trim).filter(|r| !r.is_empty())?;
     crate::auth::resolve_credential(state, reference).ok().filter(|s| !s.is_empty())
 }

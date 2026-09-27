@@ -7274,10 +7274,12 @@ async fn capabilities_status_reports_the_three_layers_and_toggles_probe() {
 /// `refresh` **已经实现**（2026-09-27，`86d7e71`）：带 `COMFYHUB_NO_DOWNLOAD=1` 时
 /// 它必须**如实跳过**（200 + `lastMessage` 说清原因），而不是去出网。
 ///
-/// `probe`（实测校准，会对每个模型发真请求、花钱）**仍是 501** —— 拿空数组/假成功假装，
-/// 比 501 坏得多。
+/// `probe`（实测校准，会对每个模型发真请求、花钱）**2026-09-27 已落地**（`capability_probe.rs`）
+/// —— 这里改成正面的断言，盯住那条最要紧的纪律：**开关关着时一个上游请求都不发**。
+/// "到底发了几次"由 `capability_probe.rs` 的注入式假 transport 用例钉死
+/// （本文件只能通过 HTTP 打端点，看不到 transport 的调用次数）。
 #[tokio::test]
-async fn capability_refresh_is_implemented_and_probe_is_honest_501() {
+async fn capability_refresh_is_implemented_and_probe_is_honest_when_disabled() {
     // ⚠ 只在这个用例里设一下、用完立刻撤（`std::env` 是进程级的，别的用例并行跑着）
     std::env::set_var("COMFYHUB_NO_DOWNLOAD", "1");
     let state = state();
@@ -7295,11 +7297,80 @@ async fn capability_refresh_is_implemented_and_probe_is_honest_501() {
         "只是跳过，不该有数据集被写进来：{body}"
     );
 
+    // ① 开关**默认关**：如实拒绝（200 + ok=false + 一句说清"会花钱"的话），不是 501
     let (status, body) =
-        send_json(router_for(state), "POST", "/api/ai/capabilities/probe", serde_json::json!({})).await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
-    let message = body["error"].as_str().unwrap();
-    assert!(message.contains("还没搬到 Rust"), "{message}");
+        send_json(router_for(state.clone()), "POST", "/api/ai/capabilities/probe", serde_json::json!({})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "这是「一次正常执行、结果是没做」，不是服务器出错（501 会让界面的错误分支先跳出来）：{body}"
+    );
+    assert_eq!(keys(&body), vec!["message", "ok", "outcomes"], "键集合就是三个：{body}");
+    assert_eq!(body["ok"], false, "没校准成功就不许说成功：{body}");
+    assert_eq!(body["outcomes"].as_array().unwrap().len(), 0, "一个模型都没试：{body}");
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("真实请求"), "要说清它会对每个模型发真请求：{message}");
+    assert!(message.contains("费用"), "还必须说清会产生费用：{message}");
+
+    // ② 库里有推理模型、开关也打开了 —— 只要**没有凭据又没有本机网关**，
+    //    这条端点也只该如实回报（失败/跳过），**绝不许 500**、绝不许发明档位。
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_providers
+                 (id, display_name, api, base_url, endpoint_trust, enabled, revision)
+                 VALUES ('p-probe', '本机假网关', 'openai-completions', 'http://127.0.0.1:1/v1',
+                         'loopback', 1, 1)",
+                [],
+            )?;
+            conn.execute(
+                r#"INSERT INTO ai_models (provider_id, model_id, display_name, input_modalities,
+                                          reasoning, thinking_efforts, capability_source, enabled)
+                   VALUES ('p-probe', 'dead-model', '连不上的模型', '["text"]', 1,
+                           '{"off":"none","high":"high"}', 'builtin', 1)"#,
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO app_settings (k, v) VALUES ('ai.capabilities.probe', '1')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/capabilities/probe",
+        serde_json::json!({ "providerId": "p-probe", "modelId": "dead-model" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "连不上是**如实回报**，不是 500：{body}");
+    let outcomes = body["outcomes"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 1, "{body}");
+    assert_eq!(outcomes[0]["modelId"], "dead-model");
+    assert_eq!(outcomes[0]["ok"], false);
+    assert_eq!(outcomes[0]["written"], false);
+    assert!(
+        outcomes[0].get("acceptedTop").is_none(),
+        "一个档位都没试成 → `acceptedTop` 连键都不许出现（更不许发明一个）：{body}"
+    );
+    assert!(
+        outcomes[0].get("ladder").is_none(),
+        "没试成就不许写回：{body}"
+    );
+    assert!(
+        !outcomes[0]["message"].as_str().unwrap_or("").is_empty(),
+        "失败必须带一句为什么：{body}"
+    );
+    // 端口 1 上没有东西 → 这条校准不该改动 `custom.json`（它本来也不存在）
+    let custom = state
+        .media_dir()
+        .parent()
+        .unwrap()
+        .join("ai")
+        .join("capabilities")
+        .join("custom.json");
+    assert!(!custom.exists(), "写不成 / 没试成都不许凭空造一份手工目录：{}", custom.display());
 }
 
 /// `id` / `event` / `data` 三元组（`id` 缺席的心跳帧给 `None`）。

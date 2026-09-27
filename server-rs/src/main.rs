@@ -41,7 +41,7 @@
 //! | **Skills 六条**：`/api/ai/skills{,/roots,/rescan,/{name}}` | ✅（P4 第 35 步） |
 //! | **长期记忆五条**：`GET/PUT/DELETE /api/ai/memory`、`POST …/entries`、`POST …/delete` | ✅（P4 第 36 步） |
 //! | **内置模型目录**：`GET /api/ai/builtin/status`、`POST /api/ai/builtin/sync` | ✅（P4 第 38 步） |
-//! | **能力目录状态**：`GET /api/ai/capabilities/status`、`PUT …/probe-toggle` | ✅（P4 第 39 步） |
+//! | **能力目录状态与实测校准**：`GET /api/ai/capabilities/status`、`PUT …/probe-toggle`、`POST …/refresh`、`POST …/probe` | ✅（P4 第 39 步；`refresh` 与 `probe` 见上表那一行） |
 //! | `GET /api/ai/conversations`、`/{id}`、`/{id}/messages`（**读侧**：历史会话与有序块） | ✅ |
 //! | **角色卡五条**：`/api/ai/character-cards{,/{id}}`（列表 / 新建 201 / 详情 / 全量编辑 / 删除） | ✅（P4 第 46 步：`character_cards.rs` 逐条对照 Kotlin `CharacterCardRepo`） |
 //! | **资料库两件工具**：`search_character_cards` / `save_character_card`（写角色前先查本机） | ✅（P4 第 46 步；`tagsVerifiedAt` 本轮**如实留空**，等 `danbooru_lookup` 搬过来才记时间） |
@@ -51,7 +51,7 @@
 //! | **`/api/ai/pending`**（跨端待办总览：还在等人的提问、工具审批，**以及手机排队待批的提交**） | ✅ |
 //! | **`/api/auth*` 配对闸门 + `GET /api/ai/credentials` 密钥下行 + `PUT` 密钥上行**（inbound auth P0 + 配对第 2 步 / §14） | ✅ 下行的开关是 `allowCredentials`、上行是**另一个**开关 `allowCredentialsUpload`（两个都默认关，§14.1）；上行按 `ai.credentials.rev` 做"等值才应用"（落后回 `STALE_IGNORED`），逐条独立（env 只读 → `FORBIDDEN`、坏名字/空值 → `BAD_PAYLOAD`） |
 //! | 扫码配对（`POST /api/auth/pair/start`） | ✅（2026-09-27：**仅回环**。回 `ticket` + 6 位码 + `urls[]`（来自 `net_urls`）+ 两个过期时刻；二维码那串 URI 由**前端**编（`lib/core/pairing_payload.dart` 是格式的唯一实现）。扫码会话与"手机举手"共用同一套 `Session`，所以 `pair/claim` 两条路都认；`ticket` 只在这个响应里出现，不进 `pair/pending` —— 那张列表是给手敲那条路用的） |
-//! | `POST /api/ai/capabilities/{refresh,probe}` | `refresh` **✅（2026-09-27）**：从 `https://models.dev/api.json` 拉在线数据集 → 规范化成覆盖层写 `<storage>\ai\capabilities\remote.json`（不重启、不发版）；失败**不抛错、旧目录原样保留**，结果用 `lastMessage` 如实回给界面；`COMFYHUB_NO_DOWNLOAD=1` 时如实说"已关闭在线更新"。`probe`（实测校准，会对每个模型发真请求、花钱）**仍 501** |
+//! | `POST /api/ai/capabilities/{refresh,probe}` | 两条**都是实现**。`refresh`（2026-09-27）：从 `https://models.dev/api.json` 拉在线数据集 → 规范化成覆盖层写 `<storage>\ai\capabilities\remote.json`（不重启、不发版）；失败**不抛错、旧目录原样保留**，结果用 `lastMessage` 如实回给界面；`COMFYHUB_NO_DOWNLOAD=1` 时如实说"已关闭在线更新"。`probe`（2026-09-27，`capability_probe.rs`）：对每个推理模型**从最高档往下**试极小请求（`content:"ping"` + `max_tokens:256` + 每请求 30 秒上限），把网关**实际接受**的档位写回 `custom.json`（只动这一个模型的 `thinkingEfforts`，别的条目一个字节都不变；读坏 / 坏 JSON 一律如实报错、绝不覆盖）；**默认关**（`PUT …/probe-toggle`，关着一个上游请求都不发），一个档位都没认就如实 `ok:false` + 不发明档位、不写回 |
 //! | **上游 LLM 客户端 / 协议适配器**（第 29 步）与**主循环**（第 30 步） | ✅ 已落地（不带工具、不带附件）；工具层已搬四个本机工具 + 两个闸门（第 31/32 步） |
 //! | **桌面文件工具五件**（`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`）+ **路径准入**（`resolve_read` / `resolve_write`：禁段、真实路径、目录根不可写） | ✅（P4 第 40 步；`desktop_tools.rs` + `policy.rs`，桌面提示词与下发的 `tools[]` 现在含它们） |
 //! | **comfy 五件**：`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` / `comfy_sync_history`（写库：建提示词 + 产物入库）/ `comfy_load_workflow`（把本机工作流文件读进库，界面格式按 `/object_info` 转换） | ✅（P4 第 41~44 步） |

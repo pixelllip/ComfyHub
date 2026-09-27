@@ -306,9 +306,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/builtin/status", get(ai_builtin_status))
         .route("/api/ai/builtin/sync", axum::routing::post(ai_builtin_sync))
         // 界面端点第六批（P4 第 39 步）：**能力目录的状态与实测校准开关**。
-        // `refresh` **已经是实现**（2026-09-27：拉 models.dev → 写 remote.json，
-        // 见 `capability_refresh.rs`）；`probe`（实测校准，会对每个模型发真请求、花钱）**仍是 501** ——
-        // 它们不满足"不需要人工/真机校验"这条，见 `main.rs` 的诚实清单。
+        // `refresh`（2026-09-27：拉 models.dev → 写 remote.json，见 `capability_refresh.rs`）
+        // 与 `probe`（2026-09-27：从最高档往下试极小请求、把网关接受的档位写回 `custom.json`，
+        // 见 `capability_probe.rs`）**都是实现**。`probe` 会花钱，所以由
+        // `probe-toggle`（**默认关**）拦着：没打开时一个上游请求都不发。
         .route("/api/ai/capabilities/status", get(ai_capabilities_status))
         .route(
             "/api/ai/capabilities/probe-toggle",
@@ -1621,11 +1622,31 @@ async fn ai_capabilities_refresh(
     )?))
 }
 
-/// `POST /api/ai/capabilities/probe` —— **501**：要真上游请求（会花钱）。
-async fn ai_capabilities_probe() -> ApiError {
-    ApiError::not_implemented(
-        "实测校准还没搬到 Rust（会对每个模型发真实请求、产生费用）",
+/// `POST /api/ai/capabilities/probe` —— **实测校准**（2026-09-27 落地）：
+/// 对每个推理模型从最高档往下试极小请求，把网关**实际接受**的档位写回 `custom.json`。
+///
+/// 行为逐条对照 Kotlin `ThinkingProbe` + `AiUpstream.probeThinkingLadder`
+/// （见 [`crate::capability_probe`] 的文件头六条纪律）。两条最容易踩的：
+///
+///  1. **开关默认关**：`probe-toggle` 没打开时**一个上游请求都不发**（连库都不读），
+///     只如实回一句"实测校准没开（它会对每个模型发真实请求、产生费用）"；
+///  2. **状态码是 200**：这是"一次正常执行、结果是没做"，不是服务器出错 ——
+///     回 501/400 会让界面的错误分支先跳出来，用户看不到那句人话。
+async fn ai_capabilities_probe(
+    State(state): State<AppState>,
+    Json(request): Json<crate::capability_probe::ProbeRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let dir = crate::capability_catalog::dir_of(
+        state.media_dir().parent().unwrap_or(state.media_dir()),
+    );
+    let response = crate::capability_probe::probe(
+        &state,
+        &dir,
+        &request,
+        &crate::capability_probe::HttpTransport,
     )
+    .await?;
+    Ok(Json(response))
 }
 
 // ---------------------------------------------------------------------------
