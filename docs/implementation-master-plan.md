@@ -2861,7 +2861,7 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 | 项 | 状态 |
 | --- | --- |
 | `comfy_submit` 的提交闸门**没有**接 `workflow_audit::blocking_refusal` | ⛔ **未接**。工具描述（逐字搬自 Kotlin）里写着"提交时 `comfy_submit` 也会自动跑一次审核，但只拦'必跑不了'的那些（前端节点 / 版本不兼容 / 本机没有的节点类）"，而 Rust 的预检**只有两道实例侧检查**（节点类拦、模型文件只警告）—— `workflow_submit.rs` 的文件头已如实声明了这个差距。**接上去会改变 `comfy_submit` 的行为与 e2e 判据**，所以单独一批做 |
-| 系统提示第 17 条那句"`web_search`/`web_fetch`/`civitai_search` **共用这一个额度**"漏了 `find_model` | ⛔ **未改**：`find_model` 确实吃同一份预算（已加进 `category_of` 的 web 档并有断言），但改提示词要 **bump `PROMPT_VERSION`**（会动 `promptVersion` 的钉子与用户可见文案），单独一批做 |
+| 系统提示第 17 条那句"`web_search`/`web_fetch`/`civitai_search` **共用这一个额度**"漏了 `find_model` | ✅ **已改（P4 第 69 步，2026-09-27）**：那句现在点名**五个**（`web_search` / `web_fetch` / `civitai_search` / `danbooru_lookup` / `find_model`）—— 预算按 `category_of(name)=="web"` 扣，而那一档本来就是这五个（只补 `find_model` 会把同一类不准确留在原地）。`PROMPT_VERSION` v32 → **v33**，`kitVersion` 随之 bump |
 | 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`）+ `workflow_recipes` 表 + `bind` 端点 | ✅ **已搬（P4 第 67 步，2026-09-27，见 §20）**（`WorkflowRecipe.kt` 710 行 + Repo/Learner/Binder/Routes + 约 1000 行 Kotlin 测试断言逐条移植） |
 | `WorkflowConvert` 的两处欠账（subgraph 展开 / `emulateFrontend`） | ✅ **已清零（P4 第 68 步，2026-09-27，见 §22）** |
 | 桌面/手机两侧的剩余项（M4 补全 / M5 排队提交 / M6 离线模型清单 / 手机 `deleteConversation`） | ⛔ 未做（见 §10.8 的移动端那张表） |
@@ -2917,7 +2917,7 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 
 | 项 | 状态 |
 | --- | --- |
-| 系统提示第 20 条（配方那条规则）+ skill `workflow-recipe` | ⛔ **未做**（与 §19.3 那条一样：改提示词要 **bump `PROMPT_VERSION`**，会动 `promptVersion` 的钉子与用户可见文案，单独一批做） |
+| 系统提示第 20 条（配方那条规则）+ skill `workflow-recipe` | ✅ **已做（P4 第 69 步，2026-09-27）**：第 20 条按 Kotlin 原文**逐字**补进 Rust 的 `PERSONA_RAW`（用生成器的 `trim_indent` 提取后比对，`§20 identical: True`；它点名的每件工具/行为都逐条核过确实已交付），`PROMPT_VERSION` v32 → **v33**；内置 skill `skills/builtin/workflow-recipe` 本来就在盘上（两端共用）。⚠ 同批**停用**了 `gen_prompts.py`（见 §23：它会静默撤掉第 19 条那些实测结论） |
 | `scripts\e2e-recipe-test.ps1`（对着真工作流文件跑"学 → 列 → 绑"） | ⛔ **未做**（Rust 侧的等价防线是 `tests/recipe_test.rs` 的假 ComfyUI + 真工作流文件夹具；端到端脚本按老规矩另起一批） |
 | W5 骨架改写（unet+clip+vae ↔ 整包 checkpoint 的增删与重连线） | ⛔ **未做**（Kotlin 侧也没做；绑定遇到这种结构时报告里**明说接不上**，这一条搬过来了） |
 | 界面上"看配方 / 绑定"的页面 | ⛔ **未做**（五条端点已就绪，界面按需再接；AI 那侧已经全通） |
@@ -3055,5 +3055,72 @@ Kotlin `FrontendNodes.kt` 的对照（**判据不重抄**：广播型 / 显示�
 | `cargo check --all-targets` | 零 warning |
 | 新增用例 | 逐字抄 Kotlin `WorkflowConvertTest` 的其余 11 条断言（备注节点丢掉、纯前端节点如实报、无定义的自定义节点、控件个数对不上、控件存成对象、新写法 `links` 对象、旁路找不到同类型输入、`Reroute/Set/Get` 全链、静音悬挂输入点名、空输入清单、组节点展开 / 嵌套组节点 / 缺代理 / 输入个数对不上）+ **`emulateFrontend=true` vs `false` 的逐条差异**（广播填空、显示节点、补 `SaveImage`、不猜未声明类型、没接上游的广播、关掉时清单为空）+ 工具层契约（`frontendBroadcast` / `frontendInjected` / `frontendHint` 的键名） |
 | 端到端 | `scripts\e2e-submit-test.ps1`（第 5 幕"前端节点缺口补线"正是这条链路）|
+
+---
+
+## 23. 2026-09-27：系统提示补上第 20 条 + **停用那个会静默撤掉好内容的生成器**
+
+> 这是"把描述补成真的"这条路线的最后一件（前两件：§18.3 的 `runnable` 假话、
+> §19.1 的 `submissions` 假值）。它顺带查出一个**更危险的东西**：一个**会静默回退**的生成脚本。
+
+### 23.1 第 20 条为什么现在才能写
+
+红线 R13 是"**不许**在提示词里描述没下发的工具"。Kotlin 那条线的 `SystemPrompt.VERSION = v31`
+带了第 20 条（配方规则），而 Rust 写 v32 时那三件工具**还没搬** —— 所以当时**故意不写**那一节，
+并在 `nsfw_prompt.rs` 里留了一句"**那之前不许**在提示词里提这三件工具"。
+
+第 67 步把它们搬到 Rust 之后，这句约束的前提没了。本批按 Kotlin 原文**逐字**补进
+`PERSONA_RAW`（用生成器自己的 `trim_indent()` 提取出来与 Kotlin 源比对，
+`§20 identical: True`），并且**逐条核过**它点名的每件工具/行为在 Rust 侧真的存在：
+`comfy_list_recipes(task= / skeletonHash=)`、`comfy_learn_workflow(path / promptId / graph +
+tolerateUnsupported + complete=false)`、`comfy_bind_recipe` 的四档、整包 checkpoint ↔ 分离式的
+"要改写骨架"note、`comfy_submit(promptId=…, overrides=…)` 与 `file:<sha256>` 同一把钥匙 ——
+**没有一句话在这边不成立**。
+
+`PROMPT_VERSION` v32 → **v33**（R12），`kitVersion` 随之 bump（闸门按设计动作）。
+
+### 23.2 ★ 更值钱的那一件：`gen_prompts.py` 会**静默撤掉**第 19 条
+
+`server-rs/src/nsfw_prompt.rs` 是**生成**的（`gen_prompts.py` 从 Kotlin 源码机械提取正文，
+`server-rs/tools/README.md` 写着"生成而不是手抄"的理由 —— 这段话本身是对的）。
+但那个脚本仍然指向 `server/src/main/kotlin/…`，而 **C-6 之后 Kotlin 树已经搬到 `legacy/`** ——
+路径早就失效了。
+
+我把脚本复制一份、只改路径与输出，跑了一次**到临时文件**，再与当前文件 diff。结果：
+
+| 重新生成会做什么 | 后果 |
+| --- | --- |
+| `PROMPT_VERSION` 从 v32 **退回 v31**（它从 Kotlin 的 `HarnessRunner.kt` 读版本号），并**整段删掉**"Rust 为什么从 v30 走到 v32 / 为什么跳过 v31"那段注释 | 版本号倒挂 + 追溯信息丢失 |
+| **撤掉 2026-09-27 第 19 条的那些实测结论** —— `grep legacy/.../NsfwPrompt.kt` 里 `mattingModels` / `先想能不能不抠` / `别默默降级` / `krea2 不适合` **全部 absent** | **真回归**：那是整整一轮活实例测试的结论（AI 软遮罩、先查模型再跑、krea2 那份不适合做编辑） |
+| 补上第 20 条 | 这一条本批已按原文补进 Rust 的 v33 |
+
+也就是说**两端已经真的分叉了**，而生成器的前提（"Kotlin 是唯一真源"）早就过期。
+**谁跑一下那个脚本，就会把好内容悄悄换掉，而且 `cargo test` 未必会红。**
+
+修法：
+1. **`nsfw_prompt.rs` 从此是正文真源**（文件头写明）。
+2. **`gen_prompts.py` 拒绝写**：打印那三条理由、`return 2`、**一个字节都不写**
+   （实测：退出码 2，文件 SHA256 前后相同）。提取助手与旧模板留在原处当"当年怎么提的"参照，
+   模板上加了"该说法已作废"的注释；**路径故意不改** —— 改到 `legacy/` 反而会让人以为"跑一下就好"。
+3. `server-rs/tools/README.md` 的表行标成 **⛔ 已停用**，并新增一节写清这三条理由，
+   同时记下"`compare_run_kit.py` 从今天起**必然报差异**"（Rust v33 / Kotlin v31，属已知有意分叉）。
+
+### 23.3 第 17 条那句预算说明漏了两个工具（不只是 `find_model`）
+
+任务书说漏了 `find_model` —— 实际**漏了两个**：预算按 `ai_settings::category_of(name) == "web"`
+扣，而那一档是 **`web_search` / `web_fetch` / `civitai_search` / `danbooru_lookup` / `find_model`**
+（`ai_settings.rs` 的 web 档 + `executor.rs` 的执行点）。只补 `find_model` 会把同一类不准确
+留在原地（`danbooru_lookup` 从第一天起就没写进去）。现在那句点名**五个**，
+并加了一条用例断言这五个的 `category_of` 真的是 `"web"` —— 提示词与预算表从此同源。
+
+### 23.4 验收
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test` | **684 例全绿 / 0 failed / 7 ignored**（lib **512**（第 68 步 510 → +2 条新用例）+ api_test 135 + 其余同上）；基线 682 → 684 |
+| `cargo check --all-targets` | 零 warning |
+| 生成器 | `python server-rs/tools/gen_prompts.py` → **退出码 2**、三条理由全打印、`nsfw_prompt.rs` 的 SHA256 **前后相同**（一个字节都没写） |
+| 端到端 | `scripts\e2e-ai-tools-test.ps1` **111 项全绿 / 0 失败**（对着**新编 release 二进制**的真后端跑）；实测 `GET /api/ai/run-kit`：`promptVersion=v33`、正文含第 20 条、第 17 条点名五个工具，`kitVersion` bump 到 `2026-09-27.2` |
+
 
 
