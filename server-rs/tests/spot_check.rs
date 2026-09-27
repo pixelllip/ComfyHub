@@ -432,6 +432,66 @@ async fn live_danbooru_lookup() {
 }
 
 // ===========================================================================
+//  联网三件 + 定向查询：**真站**抽查（要出网，默认不跑）
+//
+//  与 danbooru 那条同一个口子（`COMFYHUB_LIVE_WEB=1`）。假服务（`src/web_tools.rs` /
+//  `src/civitai.rs` / `src/find_model.rs` 里的用例）覆盖不了的就是**真站的形状**：
+//  免密钥归因头到底过不过、Civitai 的查询串（`sort=Most+Downloaded`）会不会被 400、
+//  三个源的检索接口与目录接口是不是真的那样返回。这一条证明的是"这条链路在本机真的通"。
+// ===========================================================================
+
+#[tokio::test]
+#[ignore = "真站抽查（要出网）：COMFYHUB_LIVE_WEB=1"]
+async fn live_web_tools_smoke() {
+    if std::env::var("COMFYHUB_LIVE_WEB").ok().as_deref() != Some("1") {
+        eprintln!("跳过：没有设 COMFYHUB_LIVE_WEB=1");
+        return;
+    }
+    let conn = comfyhub_server_rs::db::open_memory().expect("内存库");
+    let media = std::env::temp_dir().join("comfyhub-live-web").join("media");
+    std::fs::create_dir_all(&media).ok();
+    let state = AppState::new(conn, ":memory:", media);
+
+    // ① web_search：一句自然语言描述（免密钥额度内）
+    let search = call(
+        &state,
+        "web_search",
+        serde_json::json!({ "query": "对比 SDXL 与 Flux 出图速度的实测博客" }),
+    )
+    .await;
+    println!("{}", serde_json::to_string_pretty(&search).unwrap_or_default());
+    assert!(search["count"].as_i64().unwrap_or(0) >= 1, "一条都没搜到：{search}");
+    assert!(search["query"].is_string());
+
+    // ② civitai_search：安全档（`Most Downloaded` 里的空格是**必须编码**的那一处）
+    let civitai = call(
+        &state,
+        "civitai_search",
+        serde_json::json!({ "query": "anime style", "limit": 3 }),
+    )
+    .await;
+    println!("{}", serde_json::to_string_pretty(&civitai).unwrap_or_default());
+    assert!(civitai["count"].as_i64().unwrap_or(0) >= 1, "Civitai 一条都没搜到：{civitai}");
+    assert!(civitai["models"][0]["pageUrl"].as_str().unwrap_or("").starts_with("https://civitai.com/models/"));
+
+    // ③ find_model：三个源都要各占一行（先查本机说的是这台真机器的清单）
+    let found = call(
+        &state,
+        "find_model",
+        serde_json::json!({ "query": "anima base", "type": "checkpoint", "limit": 3 }),
+    )
+    .await;
+    println!("{}", serde_json::to_string_pretty(&found).unwrap_or_default());
+    let sources = found["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 3, "三个源一条不少：{found}");
+    assert_eq!(sources[0]["source"], "civitai");
+    assert_eq!(sources[1]["source"], "huggingface");
+    assert_eq!(sources[2]["source"], "modelscope");
+    // 「绝不代下」这条纪律也在结构化结果里
+    assert_eq!(found["downloadsModel"], false, "{found}");
+}
+
+// ===========================================================================
 //  comfy_env_report：真机环境对账（要一台真装了 ComfyUI 的机器）
 //
 //  它证明的是**盘扫那一半真的扫到了东西**：夹具里的临时目录永远长不出

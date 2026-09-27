@@ -94,10 +94,12 @@ pub(crate) fn category_of(name: &str) -> &'static str {
         "ask_user_question" => "ask",
         "list_skills" | "load_skill" | "register_skill" | "delete_skill" => "skill",
         "remember" => "memory",
-        // 联网（Kotlin `ToolCategory.WEB`）：**`danbooru_lookup` 也在这里**
-        // —— 它是 `WEB` 档（Kotlin `ToolRegistry` 那一条写的就是），于是也吃
+        // 联网（Kotlin `ToolCategory.WEB`）：**`danbooru_lookup` 与 `find_model` 也在这里**
+        // —— 两者的 Kotlin `ToolRegistry` 条目写的都是 `ToolCategory.WEB`，于是也吃
         // `MAX_WEB_QUERIES_PER_RUN` 那份预算、界面上也归在"联网"组里。
-        "web_search" | "web_fetch" | "civitai_search" | "danbooru_lookup" => "web",
+        // ⚠ 漏掉 `find_model` 的后果是**它不吃预算**（回落到 `_ => "comfy"`，
+        //   变成"按 ComfyUI 查询计"，而那份额度是另一条线），且界面上分组也会错。
+        "web_search" | "web_fetch" | "civitai_search" | "danbooru_lookup" | "find_model" => "web",
         // 资料库（Kotlin `ToolCategory.LIBRARY`）：查自己的提示词库 / 角色卡
         "search_prompts" | "search_character_cards" | "save_character_card" => "library",
         // 文件三件（Kotlin `ToolCategory.FILES`）
@@ -461,10 +463,13 @@ mod tests {
         assert_eq!(category_of("load_skill"), "skill");
         assert_eq!(category_of("remember"), "memory");
         assert_eq!(category_of("civitai_search"), "web");
-        // ⚠ `danbooru_lookup` 是 **WEB 档**（Kotlin `ToolRegistry` 那一条写的就是）——
-        // 它一改，"联网预算"与界面分组会同时走偏，而两者都不会有用例变红：
+        // ⚠ `danbooru_lookup` 与 `find_model` 都是 **WEB 档**（Kotlin `ToolRegistry` 那两条
+        // 写的就是）—— 改一位，"联网预算"与界面分组会同时走偏，而两者都不会有用例变红：
         // 预算是执行器按**类别**判的（`MAX_WEB_QUERIES_PER_RUN`），分组是界面按它画的。
         assert_eq!(category_of("danbooru_lookup"), "web");
+        assert_eq!(category_of("find_model"), "web");
+        assert_eq!(category_of("web_search"), "web");
+        assert_eq!(category_of("web_fetch"), "web");
         assert_eq!(category_of("search_prompts"), "library");
         assert_eq!(category_of("save_character_card"), "library");
         assert_eq!(category_of("comfy_submit"), "comfy");

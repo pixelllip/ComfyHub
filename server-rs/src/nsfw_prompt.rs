@@ -734,4 +734,22 @@ mod tests {
         // ④ 「先想能不能不抠」那两条路
         assert!(persona.contains("先想能不能不抠"), "少了「不抠图更稳」那一步");
     }
+
+    /// 第 17 条点名的四个联网工具**必须真的实现了**（P4 第 64 步把那个洞补上了）。
+    ///
+    /// 为什么钉在系统提示这一侧：那一节是**常驻提示**，里面写着"要用 `web_search` /
+    /// `find_model`"，而模型能看见的只有 `IMPLEMENTED` 里下发的那几个 ——
+    /// 少一个，那句纪律就是**空话**（这一批之前它点名的四个工具一个都没下发，
+    /// 模型按提示去找工具，只会拿到 `TOOL_NOT_FOUND`）。
+    #[test]
+    fn 第17条点名的四个联网工具都真的实现了() {
+        let persona = persona_block();
+        for name in ["web_search", "web_fetch", "civitai_search", "find_model"] {
+            assert!(persona.contains(name), "第 17 条少了 {name} 这个名字");
+            assert!(
+                crate::tools::is_implemented(name),
+                "{name} 在系统提示里点了名，却没进 IMPLEMENTED —— 模型按提示去找它只会失败"
+            );
+        }
+    }
 }

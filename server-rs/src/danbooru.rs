@@ -638,7 +638,17 @@ pub async fn tool_lookup(arguments: &Value) -> Result<crate::tools::ToolOutcome,
     let client = DanbooruClient::from_env()?;
     let outcome = client.lookup(query, limit, related_limit).await?;
     let payload = outcome.meta.clone();
-    Ok(crate::tools::ToolOutcome::new(outcome.text, payload))
+    // ⚠ 这一行是**补上的**（P4 第 64 步）：Kotlin 的 `danbooru_lookup` 处理体写的是
+    // `ToolOutput(untrustedBanner("danbooru 页面", query) + "\n\n" + outcome.text, …)`，
+    // 而这一批之前 Rust 侧把那段**数据区出处标记**漏掉了 —— 于是 danbooru 的正文进了
+    // 上下文却没有"这是资料"的标记，而系统提示第 4 条那套纪律是**靠工具结果里这一行**
+    // 才落到实处的（RSK-004）。文案、`kind` 与"只在有查询词时带第二行"都照抄 Kotlin。
+    let text = format!(
+        "{}\n\n{}",
+        crate::tools::untrusted_banner("danbooru 页面", Some(query)),
+        outcome.text
+    );
+    Ok(crate::tools::ToolOutcome::new(text, payload))
 }
 
 #[cfg(test)]

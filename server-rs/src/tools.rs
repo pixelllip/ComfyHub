@@ -13,9 +13,11 @@
 //! | `comfy_check_inputs` / `comfy_fit_workflow` | `DESKTOP` | 第 62 步的**体检两件**（见 [`crate::workflow_fit`]）：前者列"还等着外部给输入的位置"（用户没给参考图时的那个现场），后者把图里点名的模型与本机清单对一遍。两件都**只报不改**、出厂 `ALLOW` |
 //! | `comfy_audit_workflow` | `DESKTOP` | 第 63 步的**审核**（见 [`crate::workflow_audit`]）：七项检查只报事实，其中"必跑不了"的三项（前端节点 / 版本不兼容 / 本机没有的节点类）会被提交闸门拦下，参数/显存/提示词风格**只提醒**。出厂 `ALLOW` |
 //! | `comfy_prune_workflow` | `DESKTOP` | 第 63 步的**摘节点 / 拼节点**（见 [`crate::workflow_prune`]）：从输出节点反向做可达性分析摘掉无关分支并把下游的线接回上游，`analyze=true` 时一个字都不改。出厂 `ALLOW`（它不写盘、不提交，改好的图是**内联**返回的） |
+//! | `web_search` / `web_fetch` | `BOTH` | 第 64 步的**联网两件**（见 [`crate::web_tools`]）：Keenable 通用搜索（默认免密钥）+ 取公开网页正文。`web_fetch` 的目标过 SSRF 闸门，内网 / 本机 / 云元数据地址一个请求都不发。两件都出厂 `ASK` |
+//! | `civitai_search` | `BOTH` | 第 64 步的**模型库检索**（见 [`crate::civitai`]）：安全档走 `civitai.com`、`allowNsfw=true` 切到 `civitai.red`；没令牌也照搜，但正文里如实写明"本次是匿名通道"。出厂 `ASK` |
+//! | `find_model` | `DESKTOP` | 第 64 步的**定向查询**（见 [`crate::find_model`]）：先查本机（命中就一个外部请求都不发），再按 Civitai → HuggingFace → ModelScope 顺序查、逐源报可达性。**绝不代下**（只给链接 + sha256 + 目标目录）。出厂 `ASK` |
 //!
-//! 还没搬的：联网两个（`web_search` / `web_fetch`，要 Keenable 客户端 + `EndpointGuard`）、
-//! `civitai_search` / `find_model`、配方三件（`comfy_learn_workflow` / `comfy_list_recipes` /
+//! 还没搬的：配方三件（`comfy_learn_workflow` / `comfy_list_recipes` /
 //! `comfy_bind_recipe`）、官方 comfy-mcp 那 39 个（要 `McpStdioClient`，运行时拉的，不进这份静态清单）。
 //! **没搬的绝不下发**（`declaredTo = 清单 ∩ 本地实现`）。
 //!
@@ -386,8 +388,10 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前二十八个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前三十二个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
+/// + 联网三件（`web_search` / `web_fetch` / `civitai_search`，见 [`crate::web_tools`] 与
+/// [`crate::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
 /// + comfy 查询三件（`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status`）
 /// + `comfy_load_workflow` / `comfy_submit` / `comfy_sync_history`
 /// + 资料库两件（角色卡）+ **图像编辑三件**（`comfy_use_media` / `comfy_use_attachment` /
@@ -395,11 +399,11 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **体检两件**（`comfy_check_inputs` / `comfy_fit_workflow`，见 [`crate::workflow_fit`]，
 /// P4 第 62 步）
 /// + **审核 + 摘拼两件**（`comfy_audit_workflow` / `comfy_prune_workflow`，见
-/// [`crate::workflow_audit`] 与 [`crate::workflow_prune`]，P4 第 63 步）。
-/// 联网三个（`web_search` / `web_fetch` / `civitai_search`）要 Keenable / Civitai 客户端；
-/// `find_model` 另起批次。
-pub const IMPLEMENTED: [&str; 28] = [
+/// [`crate::workflow_audit`] 与 [`crate::workflow_prune`]，P4 第 63 步）
+/// + **定向查询**（`find_model`，见 [`crate::find_model`]，P4 第 64 步）。
+pub const IMPLEMENTED: [&str; 32] = [
     "ask_user_question",
+    "civitai_search",
     "comfy_audit_workflow",
     "comfy_check_inputs",
     "comfy_env_report",
@@ -417,6 +421,7 @@ pub const IMPLEMENTED: [&str; 28] = [
     "comfy_use_media",
     "danbooru_lookup",
     "delete_skill",
+    "find_model",
     "list_dir",
     "list_skills",
     "load_skill",
@@ -426,6 +431,8 @@ pub const IMPLEMENTED: [&str; 28] = [
     "save_character_card",
     "search_character_cards",
     "search_prompts",
+    "web_fetch",
+    "web_search",
     "write_file",
 ];
 
@@ -581,6 +588,15 @@ pub async fn execute(
         "save_character_card" => crate::character_cards::tool_save(state, arguments, session),
         // `search_prompts`：同一个落点的另一半 —— 库里可能已经有那个角色的完整 tag 栈
         "search_prompts" => search_prompts(state, arguments),
+        // ---- 联网三件 + 定向查询（P4 第 64 步：用户 2026-09-20 的"只用通用方案"）------
+        // 这个类别是**本项目里唯一会把数据送出本机**的那一类（`ai_settings::category_of`
+        // 回 "web"），所以三件事绑在一起：出厂 `ASK`（用户点一下才发出去）、
+        // 结果前面套**数据区标记**（RSK-004）、以及共用同一份
+        // `MAX_WEB_QUERIES_PER_RUN` 预算（执行器按类别判，见 `executor::handle_call`）。
+        "web_search" => crate::web_tools::tool_search(state, arguments).await,
+        "web_fetch" => crate::web_tools::tool_fetch(state, arguments).await,
+        "civitai_search" => crate::civitai::tool_search(state, arguments).await,
+        "find_model" => crate::find_model::tool_find_model(state, arguments).await,
         // ---- danbooru（联网，唯一会把数据送出本机的工具）----------------------
         // 查完必须把"这一轮真的查过哪个 tag"记进 session：`save_character_card`
         // 靠它决定写不写 `tagsVerifiedAt`（**核对时间是事实，不是模型的自称**）。
@@ -623,6 +639,188 @@ fn string_arg(arguments: &Value, key: &str) -> Result<String, ToolFailure> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| ToolFailure::new("INVALID_ARGUMENT", format!("缺少参数 {key}")))
+}
+
+// ---------------------------------------------------------------------------
+//  参数取值与"JVM 口径"小工具（Kotlin `ToolRegistry.kt` 末尾那一节 + 三个出网工具
+//  共用的口径）
+//
+//  ⚠ 这些是**三件出网工具共用的一份**：`web_search` / `web_fetch` / `civitai_search` /
+//    `find_model` 的编码与空白处理必须逐字一致 —— 各写一份的下场是"某一条工具的
+//    查询词悄悄编错，而它不报错、只是搜不到东西"。
+// ---------------------------------------------------------------------------
+
+/// `JsonObject.str`（Kotlin）的对应物：**任意 JSON 基本类型**取字面量（数字 / 布尔也算），
+/// 空白算"没给"，对象 / 数组 / null 一律 `None`。
+///
+/// 为什么与 [`string_arg`] 并存：那个是"参数必须是字符串"（缺了就报错），
+/// 这个是"参数可以宽松取，取不到算没给"（`args.int("limit") ?: 8` 那种写法）。
+pub(crate) fn str_arg(arguments: &Value, key: &str) -> Option<String> {
+    let raw = match arguments.get(key)? {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        _ => return None,
+    };
+    if raw.trim().is_empty() {
+        None
+    } else {
+        Some(raw)
+    }
+}
+
+/// 布尔参数（Kotlin `JsonObject.bool`：`content.toBooleanStrictOrNull()` 的对应物）——
+/// JSON 布尔与**恰好 `"true"` / `"false"`** 的字符串都认，其余一律 `None`。
+pub(crate) fn bool_arg(arguments: &Value, key: &str) -> Option<bool> {
+    let raw = arguments.get(key)?;
+    if let Some(value) = raw.as_bool() {
+        return Some(value);
+    }
+    match raw.as_str()? {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// `URLEncoder.encode(value, UTF_8)` 的逐字对应物（**Java 口径**，不是 RFC 3986）：
+/// 保留字母数字与 `-_.*`，**空格变 `+`**，其余按 UTF-8 字节百分号编码（大写十六进制）。
+///
+/// ⚠ 与 [`crate::danbooru::encode`] 的差别是**有意的**：Kotlin 的 `DanbooruSearch.encode`
+/// 在 `URLEncoder` 之后多做了 `.replace("+", "%20")`，而 Keenable / Civitai / FindModel
+/// 的 Kotlin 实现**没有**那一步 —— 所以这里必须留 `+`，改了就是与 Kotlin 不一致。
+pub(crate) fn url_encode(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.as_bytes() {
+        let ch = *byte as char;
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '*') {
+            out.push(ch);
+        } else if ch == ' ' {
+            out.push('+');
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// Kotlin `Regex("\\s+").replace(text, " ")` + `String.trim()`。
+///
+/// ⚠ 空白是 **ASCII 口径**（Java 的 `\s` 默认只认 `[ \t\n\x0B\f\r]`，`String.trim()`
+/// 也只去 `<= U+0020`）：全角空格 / NBSP 在 Kotlin 那边**不算空白**，这里也不许算 ——
+/// 否则简介会被多压掉几个字符，模型看到的正文就与 Kotlin 不一样。
+pub(crate) fn collapse_spaces(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_space = false;
+    for ch in text.chars() {
+        if matches!(ch, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r') {
+            in_space = true;
+            continue;
+        }
+        if in_space && !out.is_empty() {
+            out.push(' ');
+        }
+        in_space = false;
+        out.push(ch);
+    }
+    out
+}
+
+/// Java `String.trim()`（只去 `<= U+0020` 的字符，不是 Unicode 空白）。
+pub(crate) fn java_trim(text: &str) -> &str {
+    text.trim_matches(|c: char| c <= '\u{20}')
+}
+
+/// 环境变量取值：**空白当没配**，回落到默认值（Kotlin 那几处
+/// `System.getenv("X")?.takeIf { it.isNotBlank() } ?: DEFAULT` 的对应物）。
+pub(crate) fn env_or(name: &str, fallback: &str) -> String {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Kotlin `String.length` 数的是 **UTF-16 单元**（中文算 1、emoji 算 2）。
+///
+/// 联网工具那两处按"字符数"做的预算（`CONTEXT_MAX_CHARS` / `take(n)`）必须与它同口径，
+/// 否则"要不要留下这一条""截到多少字"会与 Kotlin 差几个字符 —— 而那种差别不报错。
+pub fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+/// Kotlin `String.take(n)` 的对应物（按 UTF-16 单元切，**不切碎代理对**）。
+pub fn take_utf16(text: &str, limit: usize) -> String {
+    if utf16_len(text) <= limit {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let width = ch.len_utf16();
+        if used + width > limit {
+            break;
+        }
+        used += width;
+        out.push(ch);
+    }
+    out
+}
+
+/// 联网工具结果前面那行**数据区出处标记**（Kotlin `untrustedBanner`）。
+///
+/// 模板随 run-kit 原样下发（R7：两端不许各写一份），这里只是把 `{kind}` / `{query}`
+/// 替换掉。第二行**只在有查询词时**带 —— 差别进了模型看到的文本，所以照抄。
+pub fn untrusted_banner(kind: &str, query: Option<&str>) -> String {
+    let mut out = crate::mobile_tools::UNTRUSTED_BANNER_TEMPLATE.replace("{kind}", kind);
+    if let Some(query) = query.filter(|q| !q.trim().is_empty()) {
+        out.push_str(&crate::mobile_tools::UNTRUSTED_BANNER_QUERY_LINE.replace("{query}", query));
+    }
+    out
+}
+
+/// 一次出网失败的**语义分类**（Kotlin 那边靠 Java 异常类型分的三档）。
+///
+/// 为什么不能只看 `is_timeout()`：连接超时（5 秒连不上）与读超时（连上了但没回完）
+/// 在用户那边是**两条不同的排查路**（前者多半是代理 / 出网，后者是对方慢），
+/// 而两者混成一句"超时（25 秒）"时用户按"稍后再试"永远好不了 —— 这是 Kotlin 侧
+/// 明确修过的一个"说谎的提示"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutboundError {
+    /// 连接阶段就没上去（`HttpConnectTimeoutException`）
+    ConnectTimeout,
+    /// 连上了但整次请求超时（`HttpTimeoutException`）
+    ReadTimeout,
+    /// 被立刻拒 / DNS 失败 / 其它（`ConnectException` 那一档）
+    Other,
+}
+
+/// 见 [`OutboundError`]。判据是 reqwest 的两条：`is_connect()` 与 `is_timeout()`。
+pub(crate) fn outbound_error_kind(error: &reqwest::Error) -> OutboundError {
+    if error.is_timeout() && error.is_connect() {
+        OutboundError::ConnectTimeout
+    } else if error.is_timeout() {
+        OutboundError::ReadTimeout
+    } else {
+        OutboundError::Other
+    }
+}
+
+/// Kotlin 错误文案里那个 `${e::class.simpleName}`。
+///
+/// Rust 没有 Java 异常类名，这里给一个**同名等价的分类**：文案一个字符都不用改
+/// （`连不上搜索服务（ConnectException）；…`），改的只是这个名字从哪来 —— 本机
+/// civitai / HF 直连不通时 Java 侧报的正是 `ConnectException`。
+pub(crate) fn java_error_name(error: &reqwest::Error) -> &'static str {
+    if error.is_connect() {
+        "ConnectException"
+    } else if error.is_timeout() {
+        "HttpTimeoutException"
+    } else if error.is_body() || error.is_decode() {
+        "IOException"
+    } else {
+        "IOException"
+    }
 }
 
 /// Skills 的两个根目录（与 `run_kit` / `skills::snapshot` **同一个算法**）。
@@ -1769,10 +1967,16 @@ mod tests {
         }
         assert!(specs.iter().any(|s| s.name == "list_skills"));
         assert!(specs.iter().any(|s| s.name == "ask_user_question"), "提问闸门已搬，应当下发");
-        // 联网那三个还没实现（要 Keenable / Civitai 客户端与 EndpointGuard）→ **不许**出现在清单里
-        assert!(!specs.iter().any(|s| s.name == "web_search"));
-        assert!(!specs.iter().any(|s| s.name == "web_fetch"));
-        assert!(!specs.iter().any(|s| s.name == "civitai_search"));
+        // 联网三件 + 定向查询（P4 第 64 步）：**应当**出现在清单里 ——
+        // 系统提示第 17 条点名的那四个工具到这一步才真的下发给模型（在此之前那一节指向
+        // 的是模型看不见的工具，等于一句空话）。
+        for expected in ["web_search", "web_fetch", "civitai_search", "find_model"] {
+            assert!(specs.iter().any(|s| s.name == expected), "{expected} 应当下发：{:?}", specs.iter().map(|s| &s.name).collect::<Vec<_>>());
+        }
+        // 配方三件还没实现 → 不许出现（模型会去调一个必然失败的调用）
+        for absent in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
+            assert!(!specs.iter().any(|s| s.name == absent), "{absent} 还没实现");
+        }
     }
 
     /// 联网额度是一条**独立的线**（Kotlin `ToolContext.webInWindow` +
@@ -1795,9 +1999,13 @@ mod tests {
 
         session.spend_call("danbooru_lookup");
         assert_eq!(session.web_queries_in_window, 1);
+        // `find_model` 也是 WEB 档（P4 第 64 步）—— 它同样吃这一份额度，
+        // 所以"这条工具不吃预算"这种漂移会**静默**发生（`ai_settings::category_of`）
+        session.spend_call("find_model");
+        assert_eq!(session.web_queries_in_window, 2);
 
         // 吃到上限 → 预检就该拦（执行器回 QUERY_BUDGET_EXCEEDED）
-        for _ in 1..crate::policy::MAX_WEB_QUERIES_PER_RUN {
+        for _ in 2..crate::policy::MAX_WEB_QUERIES_PER_RUN {
             session.spend_call("danbooru_lookup");
         }
         assert_eq!(session.web_queries_in_window, crate::policy::MAX_WEB_QUERIES_PER_RUN);
@@ -1885,8 +2093,8 @@ mod tests {
         assert_eq!(default_access("list_skills"), "ALLOW");
         // 不认识的工具：按最保守的来（ASK）
         assert_eq!(default_access("nope"), "ASK");
-        assert!(!is_implemented("web_search"));
-        assert!(!is_implemented("civitai_search"));
+        assert!(is_implemented("web_search"));
+        assert!(is_implemented("civitai_search"));
         assert!(is_implemented("remember"));
     }
 
@@ -1942,8 +2150,16 @@ mod tests {
             assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
             assert!(!is_mutating(name), "{name} 只报不改");
         }
+        // 联网三件 + 定向查询（P4 第 64 步）：**出厂全部 ASK**（查询词会离开本机，
+        // 用户点一下才发），且全部只读（`download_model` 那条写盘路由保持 deny）。
+        // 档位改成 ALLOW 的后果是"查询词静默出本机"，界面上不会有任何变化。
+        for name in ["web_search", "web_fetch", "civitai_search", "find_model"] {
+            assert!(is_implemented(name), "{name} 应当已实现");
+            assert_eq!(default_access(name), "ASK", "{name} 的出厂档必须是 ASK");
+            assert!(!is_mutating(name), "{name} 是只读的（绝不代下）");
+        }
         // 还没搬的一个都不许说"实现了"
-        for name in ["find_model", "web_fetch", "comfy_learn_workflow"] {
+        for name in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
             assert!(!is_implemented(name), "{name} 还没搬");
         }
     }

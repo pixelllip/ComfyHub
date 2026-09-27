@@ -5641,7 +5641,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（28 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（32 个），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
@@ -5652,6 +5652,9 @@ async fn tool_policy_and_nsfw_endpoints() {
         names,
         vec![
             "ask_user_question",
+            // 联网三件（P4 第 64 步）：Kotlin 给它们写的是 `BOTH`，所以它们住在
+            // `mobile_tools.rs`（机器抽取的那份），但**实现**是这一步才落地的
+            "civitai_search",
             // 审核（P4 第 63 步）：七项检查只报事实，"必跑不了"的三项才进提交闸门
             "comfy_audit_workflow",
             // 体检两件（P4 第 62 步）：列"还等着外部给输入的位置" / 跟本机模型清单对账，
@@ -5674,9 +5677,12 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_sync_history",
             "comfy_use_attachment",
             "comfy_use_media",
-            // danbooru（唯一会把数据送出本机的工具；出厂档 allow，但受联网预算约束）
+            // danbooru（会把数据送出本机的工具；出厂档 allow，但受联网预算约束）
             "danbooru_lookup",
             "delete_skill",
+            // 定向查询（P4 第 64 步）：先查本机、再按 Civitai → HF → ModelScope 查，
+            // **绝不代下**（只给链接 + sha256 + 目标目录）
+            "find_model",
             "list_dir",
             "list_skills",
             "load_skill",
@@ -5687,6 +5693,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             "save_character_card",
             "search_character_cards",
             "search_prompts",
+            "web_fetch",
+            "web_search",
             "write_file",
         ]
     );
@@ -8242,6 +8250,11 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         // 审核 + 摘拼两件（P4 第 63 步）
         "comfy_audit_workflow",
         "comfy_prune_workflow",
+        // 联网三件 + 定向查询（P4 第 64 步）
+        "web_search",
+        "web_fetch",
+        "civitai_search",
+        "find_model",
     ] {
         assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
     }
@@ -8250,13 +8263,7 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         assert!(names.contains(&expected), "{expected} 丢了：{names:?}");
     }
     // 没实现的**一个都不许出现**
-    for absent in [
-        "web_search",
-        "web_fetch",
-        "civitai_search",
-        "find_model",
-        "comfy_learn_workflow",
-    ] {
+    for absent in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
         assert!(!names.contains(&absent), "{absent} 还没实现却下发了：{names:?}");
     }
     // 系统提示里那段"可调用的工具"必须与下发的清单**同一份**
