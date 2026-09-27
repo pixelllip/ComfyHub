@@ -2918,7 +2918,7 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 | 项 | 状态 |
 | --- | --- |
 | 系统提示第 20 条（配方那条规则）+ skill `workflow-recipe` | ✅ **已做（P4 第 69 步，2026-09-27）**：第 20 条按 Kotlin 原文**逐字**补进 Rust 的 `PERSONA_RAW`（用生成器的 `trim_indent` 提取后比对，`§20 identical: True`；它点名的每件工具/行为都逐条核过确实已交付），`PROMPT_VERSION` v32 → **v33**；内置 skill `skills/builtin/workflow-recipe` 本来就在盘上（两端共用）。⚠ 同批**停用**了 `gen_prompts.py`（见 §23：它会静默撤掉第 19 条那些实测结论） |
-| `scripts\e2e-recipe-test.ps1`（对着真工作流文件跑"学 → 列 → 绑"） | ⛔ **未做**（Rust 侧的等价防线是 `tests/recipe_test.rs` 的假 ComfyUI + 真工作流文件夹具；端到端脚本按老规矩另起一批） |
+| `scripts\e2e-recipe-test.ps1`（对着真工作流文件跑"学 → 列 → 绑"） | ✅ **已对着 Rust 跑通（2026-09-27）**：脚本原先写死 Kotlin 的 `.bat` 启动器（C-6 之后那条路已经不存在），现已改成**复用 `scripts\backend.ps1` 的 `Resolve-Backend` / `Get-RustBuildFreshness`**（"用哪个后端"只有一份真源，与 `server.ps1` / `doctor` 同源）、命令行传 `--db/--storage/--port`、并带 `COMFYHUB_NO_PORT_FILE=1`（**绝不许覆盖用户真后端那份 `.run\api.json`**）。找不到 Rust 二进制时**明确 exit 2，绝不回退 Kotlin**（回退了就是拿另一套实现证明了另一件事）。实测 **39 项全绿**，含第 4 幕对着**用户真实那份** `krea2ImageEditingAnd_v10.json`：有缺口 → 400 `UNSUPPORTED_NODES` → 带 `tolerateUnsupported=true` 才学且 `complete=false` |
 | W5 骨架改写（unet+clip+vae ↔ 整包 checkpoint 的增删与重连线） | ⛔ **未做**（Kotlin 侧也没做；绑定遇到这种结构时报告里**明说接不上**，这一条搬过来了） |
 | 界面上"看配方 / 绑定"的页面 | ⛔ **未做**（五条端点已就绪，界面按需再接；AI 那侧已经全通） |
 | 配方同步到手机 / 跑通之后自动回写配方 | ⛔ **未做**（**有意**，理由见设计 §6 与 §12 的诚实清单） |

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    ComfyHub「工作流配方（学 → 列 → 绑）」端到端自测（Kotlin 后端；不花钱、不出网）。
+    ComfyHub「工作流配方（学 → 列 → 绑）」端到端自测（**Rust 后端**；不花钱、不出网）。
 
 .DESCRIPTION
     用户 2026-09-26 的问题："如果以后出了新的模型，如何让 AI 自主学习新模型泛用/特定工作流的搭建？"
@@ -42,7 +42,8 @@ param(
 $ErrorActionPreference = 'Continue'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $WorkDir = Join-Path $ProjectRoot '.run\e2e-recipe'
-$ServerBat = Join-Path $ProjectRoot 'server\build\install\comfy-hub-server\bin\comfy-hub-server.bat'
+# 「用哪个后端」只有一个真源：与 server.ps1 / doctor 共读 scripts\backend.ps1（AGENTS §7）
+. (Join-Path $PSScriptRoot 'backend.ps1')
 
 $script:Pass = 0
 $script:Fail = 0
@@ -85,25 +86,27 @@ function Invoke-Api {
     }
 }
 
-if (-not (Test-Path $ServerBat)) {
-    Write-Host "没有编好的后端：$ServerBat" -ForegroundColor Red
-    Write-Host "先跑：pwsh -File scripts\comfyhub.ps1 build    （或 cd server; gradle installDist）" -ForegroundColor Yellow
+# --- 用哪个后端：**这个脚本只认 Rust** -----------------------------------
+# 它验的是 Rust 工具层/端点（`workflow_recipe.rs`）。Kotlin 已退役（C-6），
+# 所以找不到 Rust 二进制时**明确报错退出**，绝不悄悄回退（回退了就是拿另一套实现
+# 证明了另一件事，而那正是 e2e 最不能有的假绿）。
+$backend = Resolve-Backend -ProjectRoot $ProjectRoot
+if ($backend.Kind -ne 'rust' -or -not $backend.Exe) {
+    Write-Host "找不到 Rust 后端二进制（$($backend.Note)）" -ForegroundColor Red
+    Write-Host '先编：cargo build --release --manifest-path server-rs\Cargo.toml' -ForegroundColor Yellow
     exit 2
 }
+Write-Host "后端：$($backend.Exe)（$($backend.Note)）" -ForegroundColor DarkGray
 
 # --- **构建新鲜度**：跑的必须是刚编出来的产物 -----------------------------
 # 不查这一条会得到假红的"e2e 抓到了 bug"：实测踩过 —— 改了源码没重编，
-# e2e 报的一堆 FAIL 全是**旧 jar** 的行为（AGENTS §1 那条"改了但界面没变"的后端版）。
-$installed = Get-ChildItem (Join-Path $ProjectRoot 'server\build\install\comfy-hub-server\lib') -Filter '*.jar' -ErrorAction SilentlyContinue
-$newestSource = Get-ChildItem (Join-Path $ProjectRoot 'server\src\main') -Recurse -Filter '*.kt' -ErrorAction SilentlyContinue |
-    Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if ($installed -and $newestSource) {
-    $jarTime = ($installed | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
-    if ($newestSource.LastWriteTime -gt $jarTime) {
-        Write-Host "后端产物比源码旧（jar $jarTime < $($newestSource.Name) $($newestSource.LastWriteTime)）" -ForegroundColor Red
-        Write-Host "先重编：cd server; gradle installDist（或 pwsh -File scripts\comfyhub.ps1 build）" -ForegroundColor Yellow
-        exit 2
-    }
+# e2e 报的一堆 FAIL 全是**旧二进制**的行为（AGENTS §1 那条"改了但界面没变"的后端版）。
+# 判据与 `comfyhub.ps1 doctor` 用**同一个函数**（`Get-RustBuildFreshness`）。
+$fresh = Get-RustBuildFreshness -Exe $backend.Exe -ProjectRoot $ProjectRoot
+if ($fresh -and $fresh.Stale) {
+    Write-Host "后端产物比源码旧（exe $($fresh.ExeTime) < $($fresh.NewestSource.Name) $($fresh.NewestSource.LastWriteTime)）" -ForegroundColor Red
+    Write-Host '先重编：cargo build --release --manifest-path server-rs\Cargo.toml' -ForegroundColor Yellow
+    exit 2
 }
 
 # --- 端口：0 = 自动挑一个空闲的 -----------------------------------------
@@ -114,16 +117,16 @@ if ($Port -eq 0) {
 $base = "http://127.0.0.1:$Port"
 
 # --- 临时现场：真库副本 + 空 storage ------------------------------------
-# ⚠ 先清掉**上一次跑剩下的**后端：`Start-Process` 起的是 `.bat`（cmd 包着 java），
-#    只杀 cmd 会留下 java 继续占着库副本的 WAL/shm —— 下一次 `Copy-Item` 就会报
-#    "请求的操作无法在使用用户映射区域打开的文件上执行"（踩过）。
+# ⚠ 先清掉**上一次跑剩下的**后端（跑挂了就会有残留，它会占着库副本的 WAL/shm，
+#    下一次 `Copy-Item` 就会报"请求的操作无法在使用用户映射区域打开的文件上执行"——踩过）。
+#    只认**命令行里带这个 WorkDir 的**那些，绝不误杀用户在用的后端。
 function Stop-Tree {
     param([int]$ProcessId)
     if ($ProcessId -le 0) { return }
     & taskkill /PID $ProcessId /T /F 2>&1 | Out-Null
 }
-Get-CimInstance Win32_Process -Filter "Name='java.exe' OR Name='cmd.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and ($_.CommandLine -like "*$WorkDir*" -or $_.CommandLine -like '*comfy-hub-server*') } |
+Get-CimInstance Win32_Process -Filter "Name='comfyhub-server-rs.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$WorkDir*" } |
     ForEach-Object { Stop-Tree $_.ProcessId }
 
 if (Test-Path $WorkDir) { Remove-Item $WorkDir -Recurse -Force -ErrorAction SilentlyContinue }
@@ -143,16 +146,17 @@ if ($hasRealDb) {
 
 $server = $null
 try {
-    # --- 起后端（Kotlin；环境变量指向库副本） ---------------------------
-    $env:COMFYHUB_JDBC_URL = 'jdbc:sqlite:' + ($dbCopy -replace '\\', '/')
-    $env:COMFYHUB_PORT = "$Port"
-    $env:COMFYHUB_STORAGE = Join-Path $WorkDir 'storage'
+    # --- 起后端（Rust；命令行指向库副本，环境变量指向项目根） -------------
+    # Rust 用**命令行参数**（`--db` / `--storage` / `--port`），不再是 Kotlin 那套环境变量。
     $env:COMFYHUB_PROJECT_ROOT = $ProjectRoot
-    if (-not $env:JAVA_HOME -and (Test-Path 'D:\Program Files\Android Studio\jbr\bin\java.exe')) {
-        $env:JAVA_HOME = 'D:\Program Files\Android Studio\jbr'
-    }
+    # ⚠ 绝不让它写 `<根>\.run\api.json`：那份记录属于用户真正在用的后端，
+    #   被这个临时后端覆盖掉的话，App 下次会去连一个已经关掉的端口（pitfalls 记过现场）。
+    $env:COMFYHUB_NO_PORT_FILE = '1'
+    $storageDir = Join-Path $WorkDir 'storage'
+    New-Item -ItemType Directory -Force -Path $storageDir | Out-Null
 
-    $server = Start-Process -FilePath $ServerBat -PassThru -WindowStyle Hidden `
+    $server = Start-Process -FilePath $backend.Exe -PassThru -WindowStyle Hidden `
+        -ArgumentList @('--db', $dbCopy, '--storage', $storageDir, '--port', "$Port") `
         -RedirectStandardOutput (Join-Path $WorkDir 'server.out.log') `
         -RedirectStandardError (Join-Path $WorkDir 'server.err.log')
 
@@ -339,11 +343,11 @@ catch {
 }
 finally {
     if ($server -and -not $server.HasExited) {
-        # **整棵树**一起杀（`.bat` 是 cmd 包 java；只杀 cmd 会留下 JVM 占着库副本）
+        # Rust 是单进程（没有 cmd 包 java 那一层），`/T` 留着是为了万一它有子进程（MCP 桥会起）
         Stop-Tree $server.Id
         Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach ($v in @('COMFYHUB_JDBC_URL', 'COMFYHUB_PORT', 'COMFYHUB_STORAGE', 'COMFYHUB_PROJECT_ROOT')) {
+    foreach ($v in @('COMFYHUB_PROJECT_ROOT', 'COMFYHUB_NO_PORT_FILE')) {
         Remove-Item "Env:\$v" -ErrorAction SilentlyContinue
     }
     if (-not $KeepData -and (Test-Path $WorkDir)) {
