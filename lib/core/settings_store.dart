@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 全局设置（后端地址、自动启动、MySQL 数据目录等），持久化在本地。
 class SettingsStore extends ChangeNotifier {
   static const _kBaseUrl = 'comfyhub.baseUrl';
+  static const _kBaseUrlHistory = 'comfyhub.baseUrlHistory';
   static const _kPageSize = 'comfyhub.pageSize';
   static const _kAutoStartBackend = 'comfyhub.autoStartBackend';
   static const _kStopServicesOnExit = 'comfyhub.stopServicesOnExit';
@@ -21,11 +22,25 @@ class SettingsStore extends ChangeNotifier {
   String? _mysqlDataDir;
   bool _loaded = false;
 
+  /// 用过哪些地址（最近用的在前，最多 [maxBaseUrlHistory] 条）。
+  ///
+  /// 为什么要有它：跨端用户至少有两条路要来回切 —— 模拟器/同机（回环）与
+  /// 真机（局域网 IP / Tailscale）。以前设置页只有**一个文本框**，
+  /// 换一次就得**手抄一遍 IP**，抄错一个数字就是"连不上"，而上一轮用过的地址
+  /// 明明就在几分钟前。所以历史是"选择"这件事的**事实来源**（不是猜的候选）。
+  List<String> _baseUrlHistory = const [];
+
   /// 地址是用户手填的（true）还是我们自动发现的（false，见 [baseUrlIsAuto]）。
   bool _baseUrlFromUser = false;
 
   String get baseUrl => _baseUrl;
   int get pageSize => _pageSize;
+
+  /// 历史地址（最近用的在前）。界面拿它渲染"最近用过"那一组候选。
+  List<String> get baseUrlHistory => List.unmodifiable(_baseUrlHistory);
+
+  /// 历史最多留几条（再多就成了"翻半天找不到"，而不是"顺手点一下"）。
+  static const int maxBaseUrlHistory = 6;
 
   /// 当前地址是不是"用户手填的"（false = 我们按本机 `.run\api.json` 自动定的）。
   ///
@@ -154,8 +169,45 @@ class SettingsStore extends ChangeNotifier {
     _stopServicesOnExit = prefs.getBool(_kStopServicesOnExit) ?? true;
     _projectRoot = prefs.getString(_kProjectRoot);
     _mysqlDataDir = prefs.getString(_kMysqlDataDir);
+    _baseUrlHistory = _sanitizeHistory(prefs.getStringList(_kBaseUrlHistory));
     _loaded = true;
     notifyListeners();
+  }
+
+  /// 去重（保序）、丢掉空串与非 http 的脏值、截到上限。
+  ///
+  /// 为什么在**读**的时候也要洗一遍：这份表是上一版程序写进去的（或者用户
+  /// 手改过 SharedPreferences），界面直接渲染脏值就会出现一个点不动的候选。
+  static List<String> _sanitizeHistory(List<String>? raw) {
+    if (raw == null) return const [];
+    final out = <String>[];
+    for (final item in raw) {
+      final v = item.trim();
+      if (v.isEmpty || !v.startsWith('http')) continue;
+      if (out.contains(v)) continue;
+      out.add(v);
+      if (out.length >= maxBaseUrlHistory) break;
+    }
+    return out;
+  }
+
+  /// 这个地址在"最近用过"里的位置（-1 = 没有）。
+  int baseUrlHistoryIndexOf(String url) {
+    final v = url.trim();
+    for (var i = 0; i < _baseUrlHistory.length; i++) {
+      if (_baseUrlHistory[i] == v) return i;
+    }
+    return -1;
+  }
+
+  /// 从历史里去掉一条（用户点「忘记」）。
+  Future<void> forgetBaseUrl(String url) async {
+    final v = url.trim();
+    if (!_baseUrlHistory.contains(v)) return;
+    _baseUrlHistory = [..._baseUrlHistory]..remove(v);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_kBaseUrlHistory, _baseUrlHistory);
   }
 
   /// 重新发现本机后端地址（后端重启换了端口时用）。
@@ -191,8 +243,13 @@ class SettingsStore extends ChangeNotifier {
     }
     _baseUrlFromUser = true;
     _baseUrl = v;
+    // 顺手记住它：跨端来回切时，"上一条用过的"就是最好的候选（见 _baseUrlHistory）
+    _baseUrlHistory = [v, ..._baseUrlHistory.where((e) => e != v)]
+        .take(maxBaseUrlHistory)
+        .toList();
     notifyListeners();
     await prefs.setString(_kBaseUrl, v);
+    await prefs.setStringList(_kBaseUrlHistory, _baseUrlHistory);
   }
 
   Future<void> setPageSize(int value) async {

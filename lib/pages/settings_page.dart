@@ -13,6 +13,7 @@ import '../state/nsfw_store.dart';
 import '../widgets/adaptive_layout.dart';
 import 'ai_provider_settings_page.dart';
 import 'pairing_section.dart';
+import 'sync_settings_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -543,6 +544,28 @@ class _SettingsPageState extends State<SettingsPage> {
             // 配对换来的是"这台手机能不能用桌面的东西"的令牌，而令牌正是
             // 密钥下行（`/api/ai/credentials`）的准入凭据。两块挨着看，用户才知道
             // "配完对还要在桌面上允许这台设备取密钥"。
+            // 「同步与连接」放在配对前面：先把"连哪台桌面"选对，配对才有意义
+            // （地址填错了，配对那条路上的 6 位码永远等不到）。
+            AdaptiveSection(
+              _section(
+                theme,
+                '同步与连接',
+                Card(
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    leading: const Icon(Icons.sync_alt),
+                    title: const Text('选择桌面地址 / 测试连接 / 手动同步'),
+                    subtitle: const Text('回环、局域网、Tailscale 三条路点一下就切；连不上会如实说原因；'
+                        '上行队列还剩几条也在这里看'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const SyncSettingsPage()),
+                    ),
+                  ),
+                ),
+              ),
+              estimatedHeight: 120,
+            ),
             AdaptiveSection(
               _section(
                 theme,
