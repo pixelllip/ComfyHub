@@ -306,7 +306,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/builtin/status", get(ai_builtin_status))
         .route("/api/ai/builtin/sync", axum::routing::post(ai_builtin_sync))
         // 界面端点第六批（P4 第 39 步）：**能力目录的状态与实测校准开关**。
-        // `refresh`（要 models.dev 在线数据集）与 `probe`（要真上游请求）**仍是 501** ——
+        // `refresh` **已经是实现**（2026-09-27：拉 models.dev → 写 remote.json，
+        // 见 `capability_refresh.rs`）；`probe`（实测校准，会对每个模型发真请求、花钱）**仍是 501** ——
         // 它们不满足"不需要人工/真机校验"这条，见 `main.rs` 的诚实清单。
         .route("/api/ai/capabilities/status", get(ai_capabilities_status))
         .route(
@@ -1605,14 +1606,19 @@ async fn put_capabilities_probe_toggle(
     Ok(Json(crate::ai_settings::capability_status(&state, Some(message))?))
 }
 
-/// `POST /api/ai/capabilities/refresh` —— **501**：要 models.dev 的在线数据集。
+/// `POST /api/ai/capabilities/refresh` —— **立即从 models.dev 拉一次在线数据集**。
 ///
-/// 如实不假装：刷新那条路的验收判据是"真的改了 `remote.json`"，本机不一定连得上
-/// models.dev —— 那种"跑完不报错但什么都没变"的实现比 501 更坏。
-async fn ai_capabilities_refresh() -> ApiError {
-    ApiError::not_implemented(
-        "能力目录在线刷新还没搬到 Rust（要 models.dev 的在线数据集；先用 Kotlin 后端或手工写 custom.json）",
-    )
+/// 行为逐条对照 Kotlin `CapabilityRefresh`（见 [`crate::capability_refresh`] 的文件头）：
+/// 失败**不抛错**、旧目录原样保留，结果用 `lastMessage` 如实回给界面（界面就靠它显示"为什么没变"）。
+/// `COMFYHUB_NO_DOWNLOAD=1` 时如实说"已关闭在线更新"，**不假装刷新成功**。
+async fn ai_capabilities_refresh(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = crate::capability_refresh::refresh(&state, true).await;
+    Ok(Json(crate::ai_settings::capability_status(
+        &state,
+        Some(result.message),
+    )?))
 }
 
 /// `POST /api/ai/capabilities/probe` —— **501**：要真上游请求（会花钱）。

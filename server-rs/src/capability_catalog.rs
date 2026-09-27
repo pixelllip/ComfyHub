@@ -100,32 +100,36 @@ pub fn rules() -> Vec<(&'static str, Capability)> {
 }
 
 /// 覆盖层里的一条模型声明（每个维度都可省 —— 省了就落到下一层，**绝不发明默认值**）。
-#[derive(Debug, Clone, Default, Deserialize)]
+///
+/// ⚠ `skip_serializing_if` 是**刻意的**：Kotlin 的 `AppJson` 是 `explicitNulls = false`，
+/// 写出来的 `remote.json` 里**没有 `null` 的键**。Rust 这边若写成 `"tools": null`，
+/// 两版后端来回跑一次就会把同一份文件改得面目全非（虽然两边都能读，但 diff 会骗人）。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayEntry {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modalities: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_efforts: Option<BTreeMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_format: Option<String>,
 }
 
 /// 覆盖层文件（`custom.json` / `remote.json`，同一个形状）。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayFile {
     /// 数据集出处（remote 固定 "models.dev"；custom 默认 "custom"），只作展示
     #[serde(default = "default_custom_source")]
     pub source: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// remote：拉取时间（ISO-8601）；custom 可空
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fetched_at: Option<String>,
     /// key = 模型 id（加载时统一小写）
     #[serde(default)]

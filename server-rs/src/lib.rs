@@ -19,6 +19,7 @@ pub mod attachments;
 pub mod auth;
 pub mod builtin;
 pub mod capability_catalog;
+pub mod capability_refresh;
 pub mod capability_rules;
 pub mod capture;
 pub mod capture_import;
