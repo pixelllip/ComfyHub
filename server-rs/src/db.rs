@@ -23,7 +23,31 @@ pub const PRAGMAS: &str = "
     PRAGMA synchronous  = NORMAL;
     PRAGMA busy_timeout = 5000;
     PRAGMA foreign_keys = ON;
+    PRAGMA temp_store = MEMORY;
 ";
+
+/// ⚠ **`temp_store = MEMORY` 不是调优，是"别依赖一个可写的 `%TEMP%`"**（2026-09-27 真机实测）。
+///
+/// 现场：`DELETE /api/prompts/{id}` 在**活着且健康**的后端上稳定回
+/// `500 {"error":"数据库错误：unable to open database file"}` —— 而同一条删除
+/// 对着**同一份库的副本**（另一个进程）却回 200。差别只有一个：
+/// 那个进程的映像在工作区内、**不能在 `%TEMP%` 建文件**，而 SQLite 默认
+/// （`temp_store = FILE`）会把排序/临时表溢出到 `%TEMP%` —— 建不出那个文件，
+/// 于是报的是"打不开数据库文件"，看着像库坏了，其实是**临时文件建不出来**。
+///
+/// 放到 `PRAGMAS` 里而不是每处 `PRAGMA`：它是**连接级**的，只设一处必然漏。
+/// 顺带对发布包也是好事：便携包可能落在只读/受限的目录里，别再额外依赖 `%TEMP%` 可写。
+pub fn assert_temp_store_is_memory(conn: &Connection) -> rusqlite::Result<()> {
+    // 2 = MEMORY（0 = 默认、1 = FILE）
+    let mode: i64 = conn.query_row("PRAGMA temp_store", [], |row| row.get(0))?;
+    if mode != 2 {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "temp_store={mode}（应为 2 = MEMORY）：临时表会落到 %TEMP%，\
+             那里不可写时删除/排序会报成 'unable to open database file'"
+        )));
+    }
+    Ok(())
+}
 
 /// 开一条**已经上好 PRAGMA** 的连接（连接工厂 —— 别在别处直接 `Connection::open`）。
 ///
@@ -191,8 +215,11 @@ pub fn open_readonly(path: impl AsRef<Path>) -> rusqlite::Result<Connection> {
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
-    // 只读连接同样要上 `busy_timeout` 与 `foreign_keys`：R1 没有例外
-    conn.execute_batch("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;")?;
+    // 只读连接同样要上 `busy_timeout`、`foreign_keys` 与 `temp_store`：R1 没有例外，
+    // 而 temp_store 也是连接级的（只读连接照样会做排序 → 照样可能要临时文件）
+    conn.execute_batch(
+        "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY;",
+    )?;
     assert_ready(&conn)?;
     Ok(conn)
 }
@@ -202,7 +229,8 @@ pub fn open_memory() -> rusqlite::Result<Connection> {
     let conn = Connection::open_in_memory()?;
     // 内存库没有 WAL（返回 memory），其余 PRAGMA 照上
     conn.execute_batch(
-        "PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;",
+        "PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; \
+         PRAGMA temp_store = MEMORY;",
     )?;
     assert_ready(&conn)?;
     Ok(conn)
@@ -216,6 +244,8 @@ pub fn assert_ready(conn: &Connection) -> rusqlite::Result<()> {
             "R1 未生效：PRAGMA foreign_keys={fk}（应为 1）—— 外键会静默失效"
         )));
     }
+    // 与 R1 同一种纪律：**读回来核对**，别"写了就算"
+    assert_temp_store_is_memory(conn)?;
     Ok(())
 }
 

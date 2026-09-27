@@ -785,17 +785,50 @@ try {
     if ($KeepData) {
         Say '  -KeepData：保留了测试产生的数据' 'Yellow'
     } else {
-        foreach ($id in ($createdMediaIds | Select-Object -Unique)) {
-            try { Invoke-Api 'DELETE' "/api/media/$id" $null | Out-Null } catch { }
+        # ★ 清理必须**数出来**，不许按"计划数"打印（2026-09-27 踩到，见总纲 §26）。
+        #
+        # 这里以前打印的是 `$createdMediaIds.Count` 与 `1 + $filePromptIds.Count` —— **计划数**。
+        # 于是当 API 删除整批失败时（那一次 `DELETE /api/prompts/{id}` 回
+        # 500 `{"error":"数据库错误：unable to open database file"}`）照样打印
+        # "已删除 4 个产物 / 4 条提示词"，而库里明明躺着 4 条 `source_ref=e2e-submit-*`
+        # —— **一个没发生的成功**，而且两处数字对不上，查的人得从 e2e 一路倒查到 SQLite。
+        #
+        # 现在：删之前**数一次**、删之后**再数一次**，打印的是两次之差；还有剩的就黄字说出来。
+        function Get-CleanupSnapshot {
+            if (-not (Test-SqliteAccess)) { return $null }
+            return @{
+                prompts = [int]"$(Invoke-Sqlite "SELECT COUNT(*) FROM prompts WHERE source_ref LIKE 'e2e-submit-%'")"
+                media   = [int]"$(Invoke-Sqlite 'SELECT COUNT(*) FROM media_assets')"
+                convs   = [int]"$(Invoke-Sqlite "SELECT COUNT(*) FROM ai_conversations WHERE provider_id LIKE 'e2e-submit%'")"
+                runs    = [int]"$(Invoke-Sqlite "SELECT COUNT(*) FROM capture_runs WHERE run_key LIKE 'e2e-submit-%'")"
+            }
         }
-        if ($createdPromptId) { try { Invoke-Api 'DELETE' "/api/prompts/$createdPromptId" $null | Out-Null } catch { } }
+        $snapBefore = Get-CleanupSnapshot
+        # 被吞掉的删除异常**分类计数**（以前是 `catch { }` —— 静默到连"失败过"都看不出来）。
+        # 三类要分开：`ok` 真删掉了 / `gone` 本来就不存在（404，**清理时的常态**，
+        # 不值得报警）/ `fail` 其它（5xx、连不上…）—— 那才是要看一眼的。
+        $delOk = 0; $delGone = 0; $delFail = 0
+        # 失败**原话**也要留几条：光知道"失败了 5 次"还是查不出为什么
+        # （2026-09-27 实测就是这样：后端活着、健康检查 ok，可 5 次删除全不是 404）
+        $script:delErrors = @()
+        function Remove-TestRow {
+            param([string]$Path)
+            try { Invoke-Api 'DELETE' $Path $null | Out-Null; $script:delOk++ }
+            catch {
+                $code = 0
+                try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+                $script:delErrors += "$Path -> $(if ($code) { "HTTP $code " })$($_.Exception.Message)"
+                if ($code -eq 404) { $script:delGone++ } else { $script:delFail++ }
+            }
+        }
+        $script:delOk = 0; $script:delGone = 0; $script:delFail = 0
+        foreach ($id in ($createdMediaIds | Select-Object -Unique)) { Remove-TestRow "/api/media/$id" }
+        if ($createdPromptId) { Remove-TestRow "/api/prompts/$createdPromptId" }
         # 第 4 / 5 / 8 幕从文件加载出来的提示词（source=ComfyUI-File）也要清掉，
         # 否则库里会攒下一堆 e2e 工作流，下一次跑"载入"还会命中同一个 run_key（幂等 → 不算新数据）
         $filePromptIds = @($script:LoadedPromptId, $script:GapPromptId, $script:LocalFilePromptId) |
             Where-Object { $_ }
-        foreach ($fid in $filePromptIds) {
-            try { Invoke-Api 'DELETE' "/api/prompts/$fid" $null | Out-Null } catch { }
-        }
+        foreach ($fid in $filePromptIds) { Remove-TestRow "/api/prompts/$fid" }
         # capture_runs 用**文件内容的 sha256** 精确定位（run_key = `file:<sha256>`）：
         # 只按 prompt_id 删会漏掉"提示词已经被删、prompt_id 置空"的那种残留记录。
         $fileRunKeys = @()
@@ -815,14 +848,28 @@ try {
                 Invoke-Sqlite "DELETE FROM capture_runs WHERE run_key IN ($($keys -join ','))" | Out-Null
             }
         }
-        Say ("  已删除 {0} 个产物 / {1} 条提示词 / 运行记录" -f `
-                ($createdMediaIds | Select-Object -Unique).Count, (1 + $filePromptIds.Count)) 'DarkGray'
         # 假 ComfyUI 的 prompt_id 造的提示词与运行记录（被自动捕获轮询收进来的那些），
-        # 以及测试自己开的会话（左侧列表里那串「补线 …」）
-        $stale = Clear-SubmitTestCaptures
-        $staleConvs = Clear-SubmitTestConversations
-        if ($stale -gt 0 -or $staleConvs -gt 0) {
-            Say "  已清掉 $stale 条捕获进来的测试提示词 / $staleConvs 个测试会话与运行记录" 'DarkGray'
+        # 以及测试自己开的会话（左侧列表里那串「补线 …」）—— 它们的效果由下面的快照体现
+        Clear-SubmitTestCaptures | Out-Null
+        Clear-SubmitTestConversations | Out-Null
+
+        $snapAfter = Get-CleanupSnapshot
+        if ($snapBefore -and $snapAfter) {
+            Say ("  清理结果（**数出来的**，不是计划数）：测试提示词 -{0} / 产物 -{1} / 测试会话 -{2} / 运行记录 -{3}" -f `
+                    ($snapBefore.prompts - $snapAfter.prompts), ($snapBefore.media - $snapAfter.media), `
+                    ($snapBefore.convs - $snapAfter.convs), ($snapBefore.runs - $snapAfter.runs)) 'DarkGray'
+            $left = $snapAfter.prompts + $snapAfter.convs + $snapAfter.runs
+            if ($left -gt 0) {
+                $warn = "  ⚠ 还有 $left 条测试数据没删掉（提示词 $($snapAfter.prompts) / 会话 $($snapAfter.convs) / " +
+                        "运行记录 $($snapAfter.runs)）—— 多半是后端不可达或库被换过；它们会留在库里，" +
+                        "下一次跑 e2e 的 SHA 判重可能受影响，请手工确认"
+                Say $warn 'Yellow'
+            }
+        }
+        Say "  API 删除：成功 $script:delOk / 本来就不存在 $script:delGone / **失败 $script:delFail**" 'DarkGray'
+        if ($script:delFail -gt 0) {
+            Say "  ⚠ 有 $script:delFail 次 API 删除**真的失败了**（不是 404）—— 以前这三类全被 `catch { }` 吞掉" 'Yellow'
+            foreach ($e in ($script:delErrors | Select-Object -First 3)) { Say "      $e" 'DarkGray' }
         }
         Remove-Item $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item $WfDir -Recurse -Force -ErrorAction SilentlyContinue
