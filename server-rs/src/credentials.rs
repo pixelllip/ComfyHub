@@ -176,6 +176,153 @@ pub fn unset(state: &AppState, reference: &str) -> Result<crate::ai::CredentialS
     Ok(describe_now(state, reference))
 }
 
+// ---------------------------------------------------------------------------
+//  密钥上行（手机 → 桌面，2026-09-27 用户拍板"双向"，docs/pairing-design.md §14）
+// ---------------------------------------------------------------------------
+
+/// 「这批 key 是哪一版」的修订号，存在 `app_settings` 里。
+///
+/// 为什么凭据需要一个版本号：它是**只写不读**的，没有天然的 `updated_at` 可比 ——
+/// 而手机推上来的那一版可能是几天前读到的。有了它，"等值才应用"才成立：
+/// 落后就回 `STALE_IGNORED`（**宁可让用户重试一次，也不许悄悄覆盖**）。
+pub const REV_KEY: &str = "ai.credentials.rev";
+
+/// 当前修订号（没有这一行 = 0，即"从没通过上行改过"）。
+pub fn rev(state: &AppState) -> Result<i64, ApiError> {
+    state.with(|conn| {
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT v FROM app_settings WHERE k = ?1",
+                [REV_KEY],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten();
+        Ok(raw.and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(0))
+    })
+}
+
+/// 修订号加一（写进 `app_settings`，用 upsert —— 被同步的表禁用 `INSERT OR REPLACE`，
+/// 见红线 R3；`app_settings` 本来就不在同步范围内，但写法照纪律来）。
+fn bump_rev(state: &AppState) -> Result<i64, ApiError> {
+    let next = rev(state)? + 1;
+    state.with(|conn| {
+        conn.execute(
+            "INSERT INTO app_settings (k, v, updated_at) VALUES (?1, ?2, \
+             strftime('%Y-%m-%dT%H:%M:%fZ','now')) \
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at",
+            rusqlite::params![REV_KEY, next.to_string()],
+        )?;
+        Ok(next)
+    })
+}
+
+/// 一条被拒的上行（`{ref, code, message}`，与手机侧 `CredentialRejection` 同形）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rejection {
+    pub reference: String,
+    /// `STALE_IGNORED` / `FORBIDDEN` / `BAD_PAYLOAD`（客户端按码给人话）。
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl Rejection {
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "ref": self.reference,
+            "code": self.code,
+            "message": self.message,
+        })
+    }
+}
+
+/// 引用名合法吗（**只判形状**：真正能不能用由上游请求说了算）。
+fn valid_ref(reference: &str) -> bool {
+    !reference.is_empty()
+        && reference.len() <= 64
+        && reference
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+}
+
+/// 应用一批上行（**这是 `PUT /api/ai/credentials` 的全部业务逻辑**，单独可测）。
+///
+/// 三条语义（§14.2/§14.3）：
+///  · `rev` 传了但**不等于**当前值 → 每一条都回 `STALE_IGNORED`，**一个字节都不写**；
+///  · `rev` **不带** = 用户显式点的强制覆盖（UI 上刚点过「推给桌面」）；
+///  · 逐条独立：`env` 提供的 ref 是只读（`FORBIDDEN`）、形状不合法或空值 → `BAD_PAYLOAD`，
+///    其余照写 —— **一条坏的不连坐**。
+pub fn apply_upload(
+    state: &AppState,
+    values: &BTreeMap<String, String>,
+    client_rev: Option<i64>,
+) -> Result<(Vec<String>, Vec<Rejection>, i64), ApiError> {
+    let current = rev(state)?;
+    if let Some(given) = client_rev {
+        if given != current {
+            let rejected = values
+                .keys()
+                .map(|reference| Rejection {
+                    reference: reference.clone(),
+                    code: "STALE_IGNORED",
+                    message: format!("桌面上的凭据已经更新过（本机读到的是第 {given} 版，桌面是第 {current} 版）"),
+                })
+                .collect();
+            return Ok((Vec::new(), rejected, current));
+        }
+    }
+
+    let mut applied = Vec::new();
+    let mut rejected = Vec::new();
+    for (reference, raw) in values {
+        if !valid_ref(reference) {
+            rejected.push(Rejection {
+                reference: reference.clone(),
+                code: "BAD_PAYLOAD",
+                message: "这个凭据名不合法（只允许字母数字与 _ - .，最长 64）".into(),
+            });
+            continue;
+        }
+        if raw.trim().is_empty() {
+            // 空值**不是**"清除"：清除是桌面界面上的动作。推一个空串上来只会把好的一把抹掉。
+            rejected.push(Rejection {
+                reference: reference.clone(),
+                code: "BAD_PAYLOAD",
+                message: "空值不接受（要清除请到桌面上操作）".into(),
+            });
+            continue;
+        }
+        if env_source(reference).is_some() {
+            rejected.push(Rejection {
+                reference: reference.clone(),
+                code: "FORBIDDEN",
+                message: format!("凭据 {reference} 由环境变量提供，是只读的"),
+            });
+            continue;
+        }
+        // `set` 自己会 sanitize（带引号 / NAME=value 整行都会当场拒）；拒了就如实带出去
+        match set(state, reference, raw) {
+            Ok(_) => applied.push(reference.clone()),
+            Err(e) => rejected.push(Rejection {
+                reference: reference.clone(),
+                code: "BAD_PAYLOAD",
+                message: e.human().to_string(),
+            }),
+        }
+    }
+    let next = if applied.is_empty() { current } else { bump_rev(state)? };
+    Ok((applied, rejected, next))
+}
+
+/// 上行回执的 JSON 形状（与手机侧 `CredentialUploadResult` 对齐）。
+pub fn upload_json(applied: &[String], rejected: &[Rejection], rev: i64) -> serde_json::Value {
+    serde_json::json!({
+        "applied": applied,
+        "rejected": rejected.iter().map(Rejection::json).collect::<Vec<_>>(),
+        "rev": rev,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

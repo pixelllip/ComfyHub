@@ -3552,16 +3552,30 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
     // （`lastSeenAt` / `lastIp` 有没有取决于活跃记录落库没有，所以这里逐条算，
     //  不写成"键一定等于某四个" —— 那会随"谁先跑了 GET /api/auth"而红）
     let device_keys = keys(&device);
-    for required in ["allowCredentials", "id", "name", "pairedAt"] {
+    for required in ["allowCredentials", "allowCredentialsUpload", "id", "name", "pairedAt"] {
         assert!(device_keys.iter().any(|k| k == required), "设备行少了 {required}：{device_keys:?}");
     }
     for key in &device_keys {
         assert!(
-            ["allowCredentials", "id", "lastIp", "lastSeenAt", "name", "pairedAt"].contains(&key.as_str()),
+            [
+                "allowCredentials",
+                "allowCredentialsUpload",
+                "id",
+                "lastIp",
+                "lastSeenAt",
+                "name",
+                "pairedAt"
+            ]
+            .contains(&key.as_str()),
             "设备行冒出一个不该有的键：{key}"
         );
     }
     assert_eq!(device["allowCredentials"], false, "配对成功 ≠ 允许下行密钥");
+    // ★ 密钥**上行**是另一个开关，同样默认关（§14.1）：读和写不是同一种权力
+    assert_eq!(
+        device["allowCredentialsUpload"], false,
+        "配对成功 ≠ 允许改桌面上的密钥"
+    );
     assert!(
         !body.to_string().contains(&token),
         "设备列表里一个字都不许出现长期令牌"
@@ -9899,4 +9913,178 @@ async fn net_urls_lists_the_port_we_actually_listen_on() {
         }
     }
     assert!(saw_loopback, "同机/模拟器那条路必须有：{body}");
+}
+
+// ---------------------------------------------------------------------------
+//  PUT /api/ai/credentials（密钥上行：手机改桌面上的 key，docs/pairing-design.md §14）
+// ---------------------------------------------------------------------------
+
+/// 闸门开着 + 一台已配对设备，两个凭据开关**分开**给（§14.1）。
+fn seed_auth_device(state: &comfyhub_server_rs::routes::AppState, allow_read: bool, allow_upload: bool) {
+    let file = serde_json::json!({
+        "schema": "comfyhub-inbound-auth/2",
+        "enabled": true,
+        "token": "global-token-43chars-aaaaaaaaaaaaaaaaaaaaaa",
+        "createdAt": "2026-09-24T00:00:00Z",
+        "devices": [{
+            "id": "phone-up",
+            "name": "夹具手机",
+            "token": DEVICE_TOKEN,
+            "pairedAt": "2026-09-24T00:00:00Z",
+            "allowCredentials": allow_read,
+            "allowCredentialsUpload": allow_upload
+        }]
+    });
+    put_setting(state, "auth.pairing", &file.to_string());
+}
+
+const DEVICE_TOKEN: &str = "device-token-43chars-bbbbbbbbbbbbbbbbbbbbbb";
+
+/// 带配对令牌的 JSON 请求（凭据端点那条闸门只认"已配对 + 已授权"的设备）。
+async fn send_json_token(
+    app: axum::Router,
+    method: &str,
+    uri: &str,
+    body: serde_json::Value,
+    token: &str,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("x-comfyhub-token", token)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.oneshot(request).await.expect("请求");
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
+}
+
+/// **只被允许读的设备不许写**：这是"两个开关分开"在 HTTP 层的样子（§14.1）。
+#[tokio::test]
+async fn credential_upload_is_forbidden_without_the_upload_switch() {
+    let st = state();
+    seed_auth_device(&st, true, false);
+    let app = router_for(st);
+
+    let (status, body) = send_json_token(
+        app,
+        "PUT",
+        "/api/ai/credentials",
+        serde_json::json!({ "credentials": { "SOME_KEY": "sk-1" } }),
+        DEVICE_TOKEN,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "得到 {body}");
+    assert!(
+        body["error"].as_str().unwrap_or("").contains("修改密钥"),
+        "措辞要指对方向（读/写是两件事）：{body}"
+    );
+}
+
+/// 版本号落后 → `STALE_IGNORED`，而且**一个字节都不写**（§14.3）。
+#[tokio::test]
+async fn credential_upload_refuses_a_stale_rev_without_writing() {
+    let st = state();
+    seed_auth_device(&st, false, true);
+    put_setting(&st, comfyhub_server_rs::credentials::REV_KEY, "7");
+    let store_before = std::fs::read_to_string(comfyhub_server_rs::credentials::store_path(&st)).ok();
+    let app = router_for(st.clone());
+
+    let (status, body) = send_json_token(
+        app,
+        "PUT",
+        "/api/ai/credentials",
+        serde_json::json!({ "credentials": { "SOME_KEY": "sk-1" }, "rev": 3 }),
+        DEVICE_TOKEN,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "版本冲突不是错误状态码：{body}");
+    assert_eq!(body["applied"].as_array().unwrap().len(), 0);
+    let rejected = body["rejected"].as_array().unwrap();
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0]["code"], "STALE_IGNORED");
+    assert_eq!(rejected[0]["ref"], "SOME_KEY");
+    assert_eq!(body["rev"], 7, "回执要带上桌面**当前**的版本号：{body}");
+
+    // 库里那条版本号没动，凭据文件也没被碰过
+    assert_eq!(read_setting(&st, comfyhub_server_rs::credentials::REV_KEY).unwrap(), serde_json::json!(7));
+    let store_after = std::fs::read_to_string(comfyhub_server_rs::credentials::store_path(&st)).ok();
+    assert_eq!(store_before, store_after, "STALE 分支不许落任何东西");
+}
+
+/// 逐条独立：坏名字 / 空值 → `BAD_PAYLOAD`；环境变量提供的 ref → `FORBIDDEN`（只读）。
+/// **一条坏的不连坐**（其余照写）。
+#[tokio::test]
+async fn credential_upload_rejects_per_ref_and_never_conflates_them() {
+    let st = state();
+    seed_auth_device(&st, false, true);
+    // 环境变量提供的 ref：写入一律拒绝（与桌面手动填同一条纪律）
+    std::env::set_var("COMFYHUB_TEST_ENV_KEY", "sk-from-env");
+    let app = router_for(st.clone());
+
+    let (status, body) = send_json_token(
+        app,
+        "PUT",
+        "/api/ai/credentials",
+        serde_json::json!({ "credentials": {
+            "坏名字 with space": "sk-1",
+            "EMPTY_ONE": "   ",
+            "COMFYHUB_TEST_ENV_KEY": "sk-2"
+        } }),
+        DEVICE_TOKEN,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "逐条拒不是整批失败：{body}");
+    std::env::remove_var("COMFYHUB_TEST_ENV_KEY");
+
+    let rejected = body["rejected"].as_array().unwrap();
+    let by_ref = |name: &str| {
+        rejected
+            .iter()
+            .find(|r| r["ref"] == name)
+            .unwrap_or_else(|| panic!("{name} 必须有一条拒收：{body}"))
+    };
+    assert_eq!(by_ref("坏名字 with space")["code"], "BAD_PAYLOAD");
+    assert_eq!(by_ref("EMPTY_ONE")["code"], "BAD_PAYLOAD");
+    let env_one = by_ref("COMFYHUB_TEST_ENV_KEY");
+    assert_eq!(env_one["code"], "FORBIDDEN");
+    assert!(
+        env_one["message"].as_str().unwrap().contains("环境变量"),
+        "要说清为什么拒：{env_one}"
+    );
+    assert_eq!(body["applied"].as_array().unwrap().len(), 0, "三条都该被拒：{body}");
+}
+
+/// 真的写进去：应用成功、版本号加一、值能从托管库里解出来（Windows 才有 DPAPI）。
+#[cfg(windows)]
+#[tokio::test]
+async fn credential_upload_applies_bumps_rev_and_the_key_really_works() {
+    let st = state();
+    seed_auth_device(&st, false, true);
+    let app = router_for(st.clone());
+
+    let (status, body) = send_json_token(
+        app,
+        "PUT",
+        "/api/ai/credentials",
+        serde_json::json!({ "credentials": { "PHONE_PUSHED_KEY": "sk-from-phone" } }),
+        DEVICE_TOKEN,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["applied"], serde_json::json!(["PHONE_PUSHED_KEY"]));
+    assert_eq!(body["rev"], 1, "写入成功要 bump：{body}");
+
+    // 值**真的能用**（不是只回了个 200）：走与上游调用同一条解析路径
+    let resolved = comfyhub_server_rs::auth::resolve_credential(&st, "PHONE_PUSHED_KEY").unwrap();
+    assert_eq!(resolved, "sk-from-phone");
+    assert_eq!(read_setting(&st, comfyhub_server_rs::credentials::REV_KEY).unwrap(), serde_json::json!(1));
+
+    // 值**不回显**：状态接口只给 configured/source/writable
+    let described = comfyhub_server_rs::credentials::describe_now(&st, "PHONE_PUSHED_KEY");
+    assert!(described.configured);
+    assert!(!serde_json::to_string(&described).unwrap().contains("sk-from-phone"));
 }

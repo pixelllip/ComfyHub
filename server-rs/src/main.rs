@@ -49,7 +49,7 @@
 //! | **Run 生命周期**：`POST …/runs`（202）/ `GET /runs/{id}` / `GET /runs/{id}/events`（**SSE**）/ `POST /runs/{id}/cancel` | ✅（事件流按 `?after=` 从库里拉，见 `run_lifecycle.rs`） |
 //! | **`GET /api/ai/run-kit{,/status}`**（手机 harness 的全部规则类输入；R12/R13 的第一次重建） | ✅ |
 //! | **`/api/ai/pending`**（跨端待办总览：还在等人的提问与工具审批） | ✅ |
-//! | **`/api/auth*` 配对闸门 + `GET /api/ai/credentials` 密钥下行**（inbound auth P0 + 配对第 2 步） | ✅ |
+//! | **`/api/auth*` 配对闸门 + `GET /api/ai/credentials` 密钥下行 + `PUT` 密钥上行**（inbound auth P0 + 配对第 2 步 / §14） | ✅ 下行的开关是 `allowCredentials`、上行是**另一个**开关 `allowCredentialsUpload`（两个都默认关，§14.1）；上行按 `ai.credentials.rev` 做"等值才应用"（落后回 `STALE_IGNORED`），逐条独立（env 只读 → `FORBIDDEN`、坏名字/空值 → `BAD_PAYLOAD`） |
 //! | 扫码配对（`POST /api/auth/pair/start`） | ⛔ **501**（本轮只做"手机发起 + 桌面显示 6 位码"，见 `docs/pairing-design.md` §11.1） |
 //! | `POST /api/ai/capabilities/{refresh,probe}` | ⛔ **501**：要 models.dev 在线数据集 / 要真上游请求（会花钱），不满足"不需要人工校验"这条 |
 //! | **上游 LLM 客户端 / 协议适配器**（第 29 步）与**主循环**（第 30 步） | ✅ 已落地（不带工具、不带附件）；工具层已搬四个本机工具 + 两个闸门（第 31/32 步） |

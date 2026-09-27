@@ -104,6 +104,14 @@ pub struct DeviceRecord {
     /// **密钥下行的唯一开关**，默认 `false`：配对成功 ≠ 能拿 API Key（§11.3）。
     #[serde(default, rename = "allowCredentials")]
     pub allow_credentials: bool,
+    /// **密钥上行（手机改桌面上的 key）的开关**，默认 `false`，与上面那条**刻意分开**
+    /// （`docs/pairing-design.md` §14.1）。
+    ///
+    /// 为什么不合一个：读和写不是同一种权力。允许"这台手机能用我的 key"与允许
+    /// "这台手机能改我的 key"，用户心里的答案经常不一样；合成的后果是用户为了图方便
+    /// 把读打开、**顺手也把写打开了** —— 而写能让"下一次桌面自己发请求"用上别人塞的 key。
+    #[serde(default, rename = "allowCredentialsUpload")]
+    pub allow_credentials_upload: bool,
 }
 
 fn default_schema() -> String {
@@ -176,8 +184,12 @@ pub enum Grant {
     Loopback,
     /// 全局令牌（`rotate` 作用在它身上）。
     Global,
-    /// 某台已配对设备（带上它是否被允许下行密钥）。
-    Device { id: String, allow_credentials: bool },
+    /// 某台已配对设备（带上它被允许做哪一半凭据操作：下行 / 上行）。
+    Device {
+        id: String,
+        allow_credentials: bool,
+        allow_credentials_upload: bool,
+    },
 }
 
 /// 闸门的判定结果。
@@ -241,7 +253,11 @@ pub fn grant_of(file: &AuthFile, token: &str) -> Option<Grant> {
     file.devices
         .iter()
         .find(|d| !d.token.is_empty() && tokens_equal(&d.token, token))
-        .map(|d| Grant::Device { id: d.id.clone(), allow_credentials: d.allow_credentials })
+        .map(|d| Grant::Device {
+            id: d.id.clone(),
+            allow_credentials: d.allow_credentials,
+            allow_credentials_upload: d.allow_credentials_upload,
+        })
 }
 
 /// **闸门的判定**（§11.4 的判定顺序，一行一条，顺序不能换）。
@@ -249,7 +265,7 @@ pub fn grant_of(file: &AuthFile, token: &str) -> Option<Grant> {
 /// * `path`：请求路径
 /// * `remote`：来源地址（`None` = 拿不到，按非回环处理）
 /// * `token`：请求头里的令牌
-pub fn decide(path: &str, remote: Option<IpAddr>, token: Option<&str>, file: &AuthFile) -> Verdict {
+pub fn decide(path: &str, method: &str, remote: Option<IpAddr>, token: Option<&str>, file: &AuthFile) -> Verdict {
     // ① 两条匿名端点：它们本来就是给未配对设备用的（内部限速 + 5 次作废）
     if path == PAIR_REQUEST_PATH || path == PAIR_CLAIM_PATH {
         return Verdict::Allow(Grant::Loopback);
@@ -258,13 +274,23 @@ pub fn decide(path: &str, remote: Option<IpAddr>, token: Option<&str>, file: &Au
     if is_loopback(remote) {
         return Verdict::Allow(Grant::Loopback);
     }
-    // ③ 凭据端点：**只认"已配对 + 已授权"的设备**，与 enabled 无关（纪律 ④）
+    // ③ 凭据端点：**只认"已配对 + 已授权"的设备**，与 enabled 无关（纪律 ④）。
+    //    ★ 读与写是**两个开关**（§14.1）：GET 看 `allowCredentials`、
+    //      PUT 看 `allowCredentialsUpload`。合成一个就会出现"为了图方便把读打开、
+    //      顺手也把写打开了"，而写能让下一次桌面自己发请求用上别人塞的 key。
     if path == CREDENTIALS_PATH {
+        let upload = method.eq_ignore_ascii_case("PUT") || method.eq_ignore_ascii_case("POST");
         return match token.and_then(|t| grant_of(file, t)) {
-            Some(Grant::Device { id, allow_credentials: true }) => {
-                Verdict::Allow(Grant::Device { id, allow_credentials: true })
+            Some(Grant::Device { id, allow_credentials, allow_credentials_upload })
+                if if upload { allow_credentials_upload } else { allow_credentials } =>
+            {
+                Verdict::Allow(Grant::Device { id, allow_credentials, allow_credentials_upload })
             }
-            Some(_) => Verdict::Forbidden("这台设备没有被允许读取密钥".into()),
+            Some(_) => Verdict::Forbidden(if upload {
+                "这台设备没有被允许修改密钥".into()
+            } else {
+                "这台设备没有被允许读取密钥".into()
+            }),
             None => match token {
                 Some(_) => Verdict::Unauthorized("令牌无效或已被吊销".into()),
                 None => Verdict::Forbidden("需要配对令牌（X-ComfyHub-Token）".into()),
@@ -715,6 +741,8 @@ fn require_loopback(remote: Option<IpAddr>, what: &str) -> Result<(), ApiError> 
 /// 每一步判定都在 [`decide`]（纯函数、可单测）；这里只负责"取来源 / 取令牌 / 读状态"。
 pub async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
+    // 方法要传下去：凭据端点 GET（读）与 PUT（写）是**两个不同的开关**（§14.1）
+    let method = req.method().as_str().to_string();
     let remote = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip());
     let token = header_token(req.headers());
 
@@ -725,7 +753,7 @@ pub async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Re
     }
 
     let verdict = state
-        .with(|conn| Ok(decide(&path, remote, token.as_deref(), &load(conn))))
+        .with(|conn| Ok(decide(&path, &method, remote, token.as_deref(), &load(conn))))
         // 读状态失败（库锁中毒等）：按**最保守**的一侧处理 —— 401 而不是放行
         .unwrap_or_else(|e| Verdict::Unauthorized(format!("读取配对状态失败：{}", e.human())));
     match verdict {
@@ -764,7 +792,7 @@ pub fn router() -> axum::Router<AppState> {
         .route("/api/auth/pair/pending", get(pair_pending))
         .route("/api/auth/pair/claim", post(pair_claim))
         // 密钥下行（**永不对匿名非回环请求开放**）
-        .route(CREDENTIALS_PATH, get(get_credentials))
+        .route(CREDENTIALS_PATH, get(get_credentials).put(put_credentials))
 }
 
 // ---------------------------------------------------------------------------
@@ -786,6 +814,13 @@ fn device_json(device: &DeviceRecord) -> Value {
         obj.insert("lastIp".into(), Value::String(v.clone()));
     }
     obj.insert("allowCredentials".into(), Value::Bool(device.allow_credentials));
+    // 与上面那条**分开报**：读和写是两个开关（§14.1）。
+    // ⚠ 旧后端没有这个键，客户端把「缺键」当 false —— 但那与"用户没开"是两件事，
+    // 所以手机侧要据**键在不在**提示"这台后端还不支持上行密钥"（见 pairing-design §14.5）。
+    obj.insert(
+        "allowCredentialsUpload".into(),
+        Value::Bool(device.allow_credentials_upload),
+    );
     Value::Object(obj)
 }
 
@@ -962,9 +997,14 @@ async fn revoke_device(
     Ok(Json(serde_json::json!({ "ok": true, "revoked": id })))
 }
 
-/// `POST /api/auth/devices/{id}/credentials` `{allow}`（**仅回环**）。
+/// `POST /api/auth/devices/{id}/credentials` `{allow, allowUpload?}`（**仅回环**）。
 ///
-/// 这是"把 API Key 发给手机"的唯一开关（§11.3）。默认关着，用户显式勾选才开。
+/// 两个开关：`allow` = 把 API Key **发给**手机（§11.3），`allowUpload` = 允许这台手机
+/// **改**桌面上的 key（§14.1）。**都默认关着**，用户显式勾选才开 —— 合成一个的后果是
+/// 用户为了图方便把读打开、顺手也把写打开了（写能让下一次桌面自己发请求用上别人塞的 key）。
+///
+/// `allowUpload` 可以**不传**（只动下行那个开关）：老的桌面 UI / e2e 就是这么调的，
+/// 要求必填会把它们全打断。
 async fn set_device_credentials(
     State(state): State<AppState>,
     RemoteAddr(remote): RemoteAddr,
@@ -976,12 +1016,16 @@ async fn set_device_credentials(
         .get("allow")
         .and_then(Value::as_bool)
         .ok_or_else(|| ApiError::bad_request("allow 必须是 true / false"))?;
+    let allow_upload = payload.get("allowUpload").and_then(Value::as_bool);
     let device = state.with(|conn| {
         let mut file = load(conn);
         let Some(device) = file.devices.iter_mut().find(|d| d.id == id) else {
             return Ok(None);
         };
         device.allow_credentials = allow;
+        if let Some(upload) = allow_upload {
+            device.allow_credentials_upload = upload;
+        }
         let snapshot = device.clone();
         save(conn, &file)?;
         Ok(Some(snapshot))
@@ -1196,6 +1240,8 @@ async fn pair_claim(
                 last_seen_at: None,
                 last_ip: ip,
                 allow_credentials: false,
+                // 新配对的设备两个开关都是关的：配对成功 ≠ 能拿密钥、更 ≠ 能改密钥
+                allow_credentials_upload: false,
             }),
         }
         if file.created_at.is_none() {
@@ -1263,10 +1309,41 @@ async fn get_credentials(
     Ok(Json(Value::Object(body)))
 }
 
+/// `PUT /api/ai/credentials` `{credentials:{ref:value}, rev?}` —— **密钥上行**（§14.2）。
+///
+/// 准入在闸门里（[`decide`] 的 ③）：只有 `allowCredentialsUpload = true` 的**已配对设备**，
+/// 或本机回环。这里只做业务：版本号语义 + 逐条独立（见 [`crate::credentials::apply_upload`]）。
+///
+/// ⚠ 值在这里**只出现一次**：不写日志、不回显、不进任何事件 —— 与下行同一条纪律。
+#[derive(Debug, serde::Deserialize)]
+struct CredentialUploadBody {
+    #[serde(default)]
+    credentials: std::collections::BTreeMap<String, String>,
+    /// 手机读到的那一版修订号；**不带 = 用户显式点的强制覆盖**（§14.3）。
+    #[serde(default)]
+    rev: Option<i64>,
+}
+
+async fn put_credentials(
+    State(state): State<AppState>,
+    Json(body): Json<CredentialUploadBody>,
+) -> Result<Json<Value>, ApiError> {
+    if body.credentials.is_empty() {
+        return Err(ApiError::bad_request("credentials 不能为空"));
+    }
+    if body.credentials.len() > MAX_CREDENTIAL_REFS {
+        return Err(ApiError::bad_request(format!(
+            "一次最多 {MAX_CREDENTIAL_REFS} 把凭据"
+        )));
+    }
+    let (applied, rejected, rev) =
+        crate::credentials::apply_upload(&state, &body.credentials, body.rev)?;
+    Ok(Json(crate::credentials::upload_json(&applied, &rejected, rev)))
+}
+
 // ---------------------------------------------------------------------------
 //  状态响应
 // ---------------------------------------------------------------------------
-
 fn status_json(file: &AuthFile, unix: u64) -> Value {
     let pending: Vec<Value> = sessions()
         .lock()
@@ -1364,7 +1441,7 @@ mod tests {
         // 闸门开着、没有令牌：这两条路径必须放行（它们就是给未配对设备用的）
         for path in [PAIR_REQUEST_PATH, PAIR_CLAIM_PATH] {
             assert!(matches!(
-                decide(path, Some("10.0.0.9".parse().unwrap()), None, &file_enabled()),
+                decide(path, "POST", Some("10.0.0.9".parse().unwrap()), None, &file_enabled()),
                 Verdict::Allow(_)
             ));
         }
@@ -1374,23 +1451,23 @@ mod tests {
     fn gate_forbids_and_unauthorizes_differently() {
         let remote = Some("10.0.0.9".parse().unwrap());
         // 没带令牌 → 403（不是 401）
-        match decide("/api/prompts", remote, None, &file_enabled()) {
+        match decide("/api/prompts", "GET", remote, None, &file_enabled()) {
             Verdict::Forbidden(_) => {}
             other => panic!("期望 403，得到 {other:?}"),
         }
         // 带了错的 → 401
-        match decide("/api/prompts", remote, Some("nope"), &file_enabled()) {
+        match decide("/api/prompts", "GET", remote, Some("nope"), &file_enabled()) {
             Verdict::Unauthorized(_) => {}
             other => panic!("期望 401，得到 {other:?}"),
         }
         // 对的 → 放行
         assert_eq!(
-            decide("/api/prompts", remote, Some("device-token"), &file_enabled()),
-            Verdict::Allow(Grant::Device { id: "phone-1".into(), allow_credentials: true })
+            decide("/api/prompts", "GET", remote, Some("device-token"), &file_enabled()),
+            Verdict::Allow(Grant::Device { id: "phone-1".into(), allow_credentials: true, allow_credentials_upload: false })
         );
         // 全局令牌也算
         assert_eq!(
-            decide("/api/prompts", remote, Some("global-token"), &file_enabled()),
+            decide("/api/prompts", "GET", remote, Some("global-token"), &file_enabled()),
             Verdict::Allow(Grant::Global)
         );
     }
@@ -1401,12 +1478,12 @@ mod tests {
         let file = AuthFile::default();
         assert!(!file.enabled);
         assert!(matches!(
-            decide("/api/prompts", Some("10.0.0.9".parse().unwrap()), None, &file),
+            decide("/api/prompts", "GET", Some("10.0.0.9".parse().unwrap()), None, &file),
             Verdict::Allow(_)
         ));
         // 三条既有 e2e / 桌面 App 走的是回环那条
         assert!(matches!(
-            decide("/api/prompts", Some("127.0.0.1".parse().unwrap()), None, &file),
+            decide("/api/prompts", "GET", Some("127.0.0.1".parse().unwrap()), None, &file),
             Verdict::Allow(Grant::Loopback)
         ));
     }
@@ -1445,30 +1522,70 @@ mod tests {
         };
         let remote = Some("10.0.0.9".parse().unwrap());
         // 匿名 → 403（**不是**放行）
-        match decide(CREDENTIALS_PATH, remote, None, &off) {
+        match decide(CREDENTIALS_PATH, "GET", remote, None, &off) {
             Verdict::Forbidden(_) => {}
             other => panic!("匿名请求必须被拒，得到 {other:?}"),
         }
         // 全局令牌也不行：那是"配对管理"的钥匙，不是"读密钥"的授权
-        match decide(CREDENTIALS_PATH, remote, Some("global-token"), &off) {
+        match decide(CREDENTIALS_PATH, "GET", remote, Some("global-token"), &off) {
             Verdict::Forbidden(_) => {}
             other => panic!("全局令牌不该能读密钥，得到 {other:?}"),
         }
         // 配对了但没勾"允许密钥" → 403
-        match decide(CREDENTIALS_PATH, remote, Some("not-granted"), &off) {
+        match decide(CREDENTIALS_PATH, "GET", remote, Some("not-granted"), &off) {
             Verdict::Forbidden(_) => {}
             other => panic!("未授权设备不该能读密钥，得到 {other:?}"),
         }
         // 勾了 → 放行
         assert!(matches!(
-            decide(CREDENTIALS_PATH, remote, Some("granted"), &off),
+            decide(CREDENTIALS_PATH, "GET", remote, Some("granted"), &off),
             Verdict::Allow(Grant::Device { allow_credentials: true, .. })
         ));
         // 本机回环 → 放行（桌面 App 自己要用）
         assert!(matches!(
-            decide(CREDENTIALS_PATH, Some("127.0.0.1".parse().unwrap()), None, &off),
+            decide(CREDENTIALS_PATH, "GET", Some("127.0.0.1".parse().unwrap()), None, &off),
             Verdict::Allow(Grant::Loopback)
         ));
+
+        // ★ 读与写是**两个开关**（§14.1）：phone-1 只被允许**读**，
+        //   于是它的 PUT 必须被拒 —— 合成一个开关就会在这里放行，
+        //   而放行的后果是"这台手机能改桌面上的 key"。
+        match decide(CREDENTIALS_PATH, "PUT", remote, Some("granted"), &off) {
+            Verdict::Forbidden(msg) => assert!(msg.contains("修改密钥"), "措辞要指对方向：{msg}"),
+            other => panic!("只被允许读的设备不许写，得到 {other:?}"),
+        }
+    }
+
+    /// 反过来：只勾了"允许改"的设备 **不许读**（两个开关谁都不许顺手带上另一个）。
+    #[test]
+    fn the_two_credential_switches_are_independent() {
+        let file = AuthFile {
+            enabled: false,
+            devices: vec![DeviceRecord {
+                id: "phone-1".into(),
+                token: "upload-only".into(),
+                allow_credentials: false,
+                allow_credentials_upload: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let remote = Some("10.0.0.9".parse().unwrap());
+        assert!(matches!(
+            decide(CREDENTIALS_PATH, "PUT", remote, Some("upload-only"), &file),
+            Verdict::Allow(Grant::Device { allow_credentials_upload: true, .. })
+        ));
+        match decide(CREDENTIALS_PATH, "GET", remote, Some("upload-only"), &file) {
+            Verdict::Forbidden(msg) => assert!(msg.contains("读取密钥"), "措辞要指对方向：{msg}"),
+            other => panic!("只被允许写的设备不许读，得到 {other:?}"),
+        }
+        // 旧库里的设备没有这个字段 → 反序列化后必须是 false（默认关），不是"跟着读那个开关走"
+        let legacy: AuthFile = serde_json::from_str(
+            r#"{"schema":"/2","enabled":true,"devices":[{"id":"d","token":"t","allowCredentials":true}]}"#,
+        )
+        .unwrap();
+        assert!(legacy.devices[0].allow_credentials);
+        assert!(!legacy.devices[0].allow_credentials_upload);
     }
 
     #[test]
