@@ -453,8 +453,8 @@ try {
 
     if ($Matte) {
         # ★ **AI 软遮罩那一档**（2026-09-27）：工具**不写遮罩** —— 真正的 alpha 由工作流里的
-        #   `easy imageRemBg` 现算，它只回 `personFilename`（那份像素已被反混 + 两侧去溢色洗过）。
-        #   所以这里一条遮罩文件断言都不该有，取而代之的是"它**没**写遮罩、给了洗过的人物图"。
+        #   `easy imageRemBg` 现算（`refine_foreground=true`，模型自己做前景估计），它只回 `personFilename`。
+        #   所以这里一条遮罩文件断言都不该有，取而代之的是"它**没**写遮罩、人物图**一个像素都没改**"。
         Check 'matte 档如实报了 matteSource=model' ($mask -and $mask.matteSource -eq 'model') ($mask | ConvertTo-Json -Compress)
         Check 'matte 档**不写**合成遮罩（maskGenerated=false）' ($mask.maskGenerated -eq $false) "$($mask.maskGenerated)"
         Check 'matte 档不给遮罩文件名' (-not $mask.filename) "$($mask.filename)"
@@ -463,7 +463,7 @@ try {
         Check 'matte 档的 hint 明说**不要**覆盖 LoadImageMask' ($mask.hint -match '不要' -and $mask.hint -match 'LoadImageMask') $mask.hint
         Check 'matte 档尺寸 = 画布尺寸（ImageScale 照它覆盖）' `
             ($mask.width -eq $canvasW -and $mask.height -eq $canvasH) "$($mask.width)x$($mask.height)"
-        Say "  遮罩来源：AI 软遮罩（工作流里的抠图节点）｜人物图（已洗过）：$($mask.personFilename)" 'White'
+        Say "  遮罩来源：AI 软遮罩 + 模型自己做前景估计（工作流里的抠图节点）｜人物图（原样交给模型）：$($mask.personFilename)" 'White'
     } else {
         Check '遮罩尺寸 = 画布尺寸' ($mask -and $mask.width -eq $canvasW -and $mask.height -eq $canvasH) `
             "遮罩 $($mask.width)x$($mask.height) / 画布 ${canvasW}x${canvasH}"
@@ -534,7 +534,7 @@ try {
         $applied = @($submitted.appliedOverrides)
         # ⚠ **摆放之后人物图换文件名了**（工具把像素与遮罩一起搬，回了 `placedSubjectFilename`）：
         #   断言要比这个新名字，拿原图名去比就是假红（实测踩过）。
-        #   matte 那一档回的是 `personFilename`（**已被洗过像素**的那一份）。
+        #   matte 那一档回的是 `personFilename`（**一个字都没改**的那一份 —— 抠图交给工作流里的模型）。
         $expectPerson = if ($mask.personFilename) { $mask.personFilename }
                         elseif ($mask.placedSubjectFilename) { $mask.placedSubjectFilename }
                         else { $person.filename }
@@ -548,7 +548,7 @@ try {
             $onlyLoadImage = @($imageOverrides | Where-Object { $_ -notmatch '^(10|20)\.image ← ' })
             Check 'matte 档只覆盖 LoadImage（10 / 20），一个 LoadImageMask 都没覆盖' `
                 ($onlyLoadImage.Count -eq 0) ($imageOverrides -join ' | ')
-            Check "20.image 用的是**洗过**的人物图 $expectPerson" `
+            Check "20.image 指向的就是那份人物图 $expectPerson" `
                 (@($applied | Where-Object { $_ -match ('^20\.image ← ' + [regex]::Escape($expectPerson) + '$') }).Count -ge 1) `
                 ($applied -join ' | ')
         }
@@ -597,7 +597,7 @@ try {
             #      人物外面 14 像素那圈（ring 由 GrowMask+MaskComposite 现算），拿近处当判据是假红。
             $personPath = Join-Path $instanceInput $expectPerson
             $personBmp = if (Test-Path $personPath) { [System.Drawing.Bitmap]::FromFile($personPath) } else { $null }
-            Check '人物图（洗过的那份）在盘上，能当量尺' ($null -ne $personBmp) $personPath
+            Check '人物图（原样交给模型的那份）在盘上，能当量尺' ($null -ne $personBmp) $personPath
             $bgCorner = if ($personBmp) { $personBmp.GetPixel(1, 1) } else { $null }
             $stride = 4
             $gw = [int][Math]::Ceiling($cmpW / $stride)

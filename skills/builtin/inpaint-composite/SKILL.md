@@ -149,14 +149,16 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
      （krea2 那两份见开头的结论：不适合做编辑）
 
    // ★ 首选：AI 软遮罩那份
-   // 第 0 步（**别跳过**）：先让工具把人物图那份像素洗一遍 —— 软遮罩是按 alpha 贴**那张图的像素**，
-   // 边界那圈"人 + 背景"的混合色不洗掉，贴上去就是绕着人的一圈淡背景色。
-   // matteSource="model" 时工具**不写遮罩**（真正的 alpha 由工作流里的节点现算），
-   // 只做反混 + **两侧**去溢色，并把 `personFilename` 回给你 —— 那才是 20.image 该填的。
+   // 第 0 步：告诉工具"这一档用工作流的抠图"，拿回 `personFilename`（= 20.image 该填的）与尺寸。
+   // ⚠ matteSource="model" 时工具**不写遮罩、不写 ring、也不改人物图一个像素** ——
+   //   抠图与**前景估计**都由工作流里的 `easy imageRemBg(refine_foreground=true)` 做：
+   //   它用**模型自己的 alpha** 把边界那圈"人 + 绿幕"的混合像素还原成发色。
+   //   （我们自己用 Rust 按颜色猜过两版：压通道 → 青边、两侧反混 → 白光晕，都比模型差，已撤掉。
+   //    所以**别**再往 Rust 侧加"预处理"的主意 —— 那里没有模型的 alpha，猜不准。）
    comfy_make_mask(mode="subject", matteSource="model",
                    baseFilename="<底图 filename>", subjectFilename="<人物图 filename>",
                    bgColor="green")             // 阶段一用什么背景就传什么（绿幕最稳）
-     → 拿 `personFilename`（没回就去覆盖里找 20.image 原来的名字，但**先看返回值**）
+     → 拿 `personFilename` 与 width/height
      → ⚠ 遮罩不要覆盖任何 LoadImageMask（这份工作流没有 12 / 26）
 
    comfy_submit(promptId=…, overrides={

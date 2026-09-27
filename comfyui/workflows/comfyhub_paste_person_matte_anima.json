@@ -133,7 +133,7 @@
   },
   "27": {
     "_meta": {
-      "title": "★ AI 抠图（软遮罩）：easy imageRemBg。rem_mode 可选 RMBG-2.0 / RMBG-1.4 / Inspyrenet / BEN2 —— 本机已在盘上的是 **BEN2**（1.1GB，质量最好）与 **RMBG-1.4**（169MB，快一个数量级）。⚠ 模型文件不在时会**静默去 HuggingFace 下载**，所以先查 ComfyUI\\models\\rembg\\ 再跑；缺了就按 skill 里的指引让用户下。image_output=Hide 是为了不往 output 落盘"
+      "title": "★ AI 抠图（软遮罩 + **前景估计**）：easy imageRemBg。rem_mode 可选 RMBG-2.0 / RMBG-1.4 / Inspyrenet / BEN2 —— 本机已在盘上的是 **BEN2**（1.1GB，质量最好）与 **RMBG-1.4**（169MB，快一个数量级）。⚠ 模型文件不在时会**静默去 HuggingFace 下载**，所以先查 ComfyUI\\models\\rembg\\ 再跑；缺了就按 skill 里的指引让用户下。image_output=Hide 是为了不往 output 落盘。★★ refine_foreground=true 是**关键**：它让模型自己跑 Photoroom 的快速前景估计（用**模型自己的 alpha** 解出前景色），于是边界那圈\"人+绿幕\"的混合像素被还原成**发色**而不是留成绿/青边 —— 这件事**不该由我们自己按颜色猜**（试过，越修越糟：压通道会把绿幕变成青，两侧反混会给出白光晕）。"
     },
     "inputs": {
       "images": [
@@ -145,13 +145,13 @@
       "save_prefix": "comfyhub_matte",
       "torchscript_jit": false,
       "add_background": "none",
-      "refine_foreground": false
+      "refine_foreground": true
     },
     "class_type": "easy imageRemBg"
   },
   "22": {
     "_meta": {
-      "title": "按**软遮罩**把人物图贴到底图上（ImageCompositeMasked 是 alpha 混合：source*mask + dest*(1-mask)，所以这里的连续 alpha 真的会用上）。⚠ 源图是纯色背景那张，边界像素带着背景色 —— 想要彻底干净要靠 Rust 侧的去溢色/反混（comfy_make_mask matteSource=model），否则会留一层很淡的背景色"
+      "title": "把**模型估计出来的前景图**（27 的 IMAGE 输出）按同一份 alpha 贴到底图上。⚠ source 必须是 `27` 而**不是** `21`：21 是原始人物图，它的边界像素还带着绿幕色；27 的 IMAGE 才是模型解开之后的前景色。ImageCompositeMasked 是 alpha 混合（source*mask + dest*(1-mask)），所以连续 alpha 真的会用上。"
     },
     "inputs": {
       "destination": [
@@ -159,7 +159,7 @@
         0
       ],
       "source": [
-        "21",
+        "27",
         0
       ],
       "x": 0,

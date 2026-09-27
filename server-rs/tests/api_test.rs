@@ -7907,13 +7907,13 @@ async fn 遮罩照底图尺寸画且白区就是重绘区() {
 }
 
 /// `matteSource="model"`（AI 抠图那一档，2026-09-27）：**不写遮罩、不写 ring**，
-/// 只把人物图那份像素清理干净，并把 `personFilename` 回给调用方。
+/// 也**一个像素都不改**人物图 —— 抠图与前景估计都由工作流里的模型做（`refine_foreground`）。
 ///
 /// 这一档存在的原因（总纲 §16）：合成用的软遮罩由工作流里的抠图节点 `easy imageRemBg` 现算，
 /// 而 `ImageCompositeMasked` 合的是**人物图那张的像素** —— 边界那圈"人 + 背景"的混合色不洗掉，
 /// 软遮罩按 alpha 贴上去就是绕着人的一圈淡背景色。
 #[tokio::test]
-async fn matte_档不写遮罩只把人物图清理干净() {
+async fn matte_档不写遮罩也不碰人物图交给工作流去抠() {
     let state = state();
     let root = state.project_root();
     configure_shared_output(&state, &root);
@@ -7937,6 +7937,7 @@ async fn matte_档不写遮罩只把人物图清理干净() {
         }
     }
     person.save(input.join("person.png")).unwrap();
+    let person_bytes = std::fs::read(input.join("person.png")).unwrap();
 
     let out = call_tool(
         &state,
@@ -7980,17 +7981,15 @@ async fn matte_档不写遮罩只把人物图清理干净() {
         .collect();
     assert!(strays.is_empty(), "matte 档在 input 目录里留了垃圾：{strays:?}");
 
-    // 人外面那圈溢色的绿要被压下去（只往内压时它是 170 —— 那就是那圈淡背景色）
-    let cleaned = image::open(input.join("person.png")).unwrap().to_rgb8();
-    assert!(
-        cleaned.get_pixel(14, 24)[1] < 100,
-        "掩码外那圈溢色要被压掉，实测 {:?}",
-        cleaned.get_pixel(14, 24)
-    );
+    // ★ **这一档一个像素都不许改人物图**（2026-09-27 用户拍板："全权交给 ai，而不是用 rust 预处理"）。
+    //   抠图与**前景估计**都在工作流里做（`easy imageRemBg` + `refine_foreground=true`），
+    //   用的是**模型自己的 alpha**；Rust 这边只有"按颜色猜的覆盖率"，试过三次都更差
+    //   （压通道→青边、两侧反混→白光晕），所以这里用**逐字节相同**来钉住"别碰"。
+    let after = std::fs::read(input.join("person.png")).unwrap();
     assert_eq!(
-        cleaned.get_pixel(32, 24),
-        &image::Rgb([200, 40, 60]),
-        "人物本体像素不许被改颜色"
+        after,
+        person_bytes,
+        "matte 档必须**原样**把人物图交给工作流（抠图与前景估计都由模型做）"
     );
 
     // 取值只认两个；而且必须跟 mode=subject 一起用
