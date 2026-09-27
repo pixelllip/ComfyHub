@@ -202,6 +202,29 @@ fn history_with_output() -> Value {
     })
 }
 
+/// 把夹具那条捕获记录里的 API 图改一改（`prompt_api_graph` 就是从这条链取图的）。
+fn patch_graph(fixture: &Fixture, edit: impl FnOnce(&mut Value)) {
+    fixture
+        .state
+        .write(|conn| {
+            let raw: String = conn.query_row(
+                "SELECT raw FROM capture_runs WHERE run_key = 'unit-run-1'",
+                [],
+                |row| row.get(0),
+            )?;
+            let mut entry: Value = serde_json::from_str(&raw).unwrap();
+            let mut graph = entry["prompt"]["prompt"].clone();
+            edit(&mut graph);
+            entry["prompt"]["prompt"] = graph;
+            conn.execute(
+                "UPDATE capture_runs SET raw = ?1 WHERE run_key = 'unit-run-1'",
+                rusqlite::params![entry.to_string()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
 #[tokio::test]
 async fn submit_runs_the_workflow_then_ingests_the_product() {
     let (base, submitted, gateway) = fake_comfy(object_info(), history_with_output()).await;
@@ -315,25 +338,9 @@ async fn preflight_blocks_unknown_node_classes_before_anything_is_sent() {
     let fixture = Fixture::new("preflight", &base);
     write_png(&fixture.dir.join("output").join("unit.png"), [1, 2, 3]);
     // 图里塞一个实例不认识的节点类
-    fixture
-        .state
-        .write(|conn| {
-            let raw: String = conn.query_row(
-                "SELECT raw FROM capture_runs WHERE run_key = 'unit-run-1'",
-                [],
-                |row| row.get(0),
-            )?;
-            let mut entry: Value = serde_json::from_str(&raw).unwrap();
-            let mut graph = entry["prompt"]["prompt"].clone();
-            graph["12"] = json!({ "class_type": "Krea2CustomNode", "inputs": {} });
-            entry["prompt"]["prompt"] = graph;
-            conn.execute(
-                "UPDATE capture_runs SET raw = ?1 WHERE run_key = 'unit-run-1'",
-                rusqlite::params![entry.to_string()],
-            )?;
-            Ok(())
-        })
-        .unwrap();
+    patch_graph(&fixture, |graph| {
+        graph["12"] = json!({ "class_type": "Krea2CustomNode", "inputs": {} });
+    });
 
     let arguments = json!({ "promptId": 101, "waitSeconds": 20 });
     let failure = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
@@ -369,6 +376,82 @@ async fn preflight_warns_about_models_it_cannot_see_but_still_submits() {
     let joined = warnings.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("\n");
     assert!(joined.contains("anima-base-v1.0.safetensors"), "{joined}");
     assert!(joined.contains("没有拦"), "{joined}");
+
+    gateway.abort();
+    fixture.finish();
+}
+
+#[tokio::test]
+async fn the_audit_blocks_pure_frontend_nodes_before_anything_is_sent() {
+    // 纯前端节点（`Label (rgthree)` / `Anything Everywhere` 那一族）只存在于 ComfyUI **前端**，
+    // 服务端根本没有这个类 —— 带着它提交，ComfyUI 会在验证阶段整片丢节点（0.01 秒空跑、零产物）。
+    //
+    // ⚠ 这一条钉的是**审核那一档真的接上了**：实例侧的 `preflight_refusal` 对这类**故意跳过**
+    // （它的措辞是"让用户装/启用节点包"，而前端类装也装不上），所以只有
+    // `workflow_audit::blocking_refusal` 接着才算拦得住 —— 没接线时这条图会直接发出去。
+    let (base, submitted, gateway) = fake_comfy(object_info(), history_with_output()).await;
+    let fixture = Fixture::new("audit-frontend", &base);
+    write_png(&fixture.dir.join("output").join("unit.png"), [1, 2, 3]);
+    patch_graph(&fixture, |graph| {
+        graph["12"] = json!({ "class_type": "Label (rgthree)", "inputs": {} });
+        graph["13"] = json!({ "class_type": "Anything Everywhere", "inputs": {} });
+    });
+
+    // 覆盖也一起给上：overrides **改不了** class_type，审核看的是覆盖之后的那张图，照样得拦
+    let arguments = json!({ "promptId": 101, "overrides": { "3.steps": 30 }, "waitSeconds": 20 });
+    let failure = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+        .await
+        .expect_err("纯前端节点必须被审核拦下");
+    assert_eq!(failure.code, "MODEL_NOT_LOADABLE", "错误码与 Kotlin 同（`AiWorkflowSearch.submit`）");
+    assert!(failure.message.contains("纯前端节点"), "{}", failure.message);
+    assert!(failure.message.contains("rgthree"), "{}", failure.message);
+    assert!(
+        failure.message.contains("没有提交"),
+        "被拒的话要说清「没有提交」：{}",
+        failure.message
+    );
+    assert!(submitted.lock().unwrap().is_empty(), "拦下时一个字节都不许发出去");
+
+    gateway.abort();
+    fixture.finish();
+}
+
+#[tokio::test]
+async fn the_audit_warns_but_still_submits_on_the_post_override_graph() {
+    // 只带**非阻断**结论的图必须照常提交，而结论要如实带回给模型（`preflightWarnings`）。
+    //
+    // 这一条同时钉住**审核跑在覆盖之后的那张图上**：库里的 `6.text` 是 "old prompt"
+    // （0 个逗号 → 提示词风格那一条**不会**报），只有把覆盖应用完才会变成
+    // "给 Krea 2 堆 Danbooru tag" 那条 🟠 —— 若审核跑的是库里的原图，它就报不出来。
+    let (base, submitted, gateway) = fake_comfy(object_info(), history_with_output()).await;
+    let fixture = Fixture::new("audit-warn", &base);
+    write_png(&fixture.dir.join("output").join("unit.png"), [4, 5, 6]);
+
+    let tags = "masterpiece, best quality, 1girl, solo, long hair, red eyes, smile, looking at viewer, detailed";
+    let arguments = json!({
+        "promptId": 101,
+        "overrides": { "6.text": tags },
+        "waitSeconds": 20
+    });
+    let outcome = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+        .await
+        .expect("非阻断的结论不许拦");
+
+    // 提交照常发生，而且发出去的就是覆盖之后的那张图
+    let sent = submitted.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1, "只许提交一次");
+    assert_eq!(sent[0]["prompt"]["6"]["inputs"]["text"], json!(tags), "覆盖要真的生效");
+
+    // 审核的非阻断结论进了 `preflightWarnings`（与"实例看不到模型文件"同一个通道）
+    let warnings = outcome.payload["preflightWarnings"].as_array().expect("要带回警告");
+    let joined = warnings.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(joined.contains("没有拦"), "{joined}");
+    assert!(joined.contains("Danbooru tag"), "提示词风格那一条要带回：{joined}");
+    assert!(joined.contains("Krea 2"), "{joined}");
+    assert!(joined.contains("🟠"), "非阻断的项用 🟠 标：{joined}");
+    assert!(!joined.contains("🔴"), "没有阻断项时不许出现 🔴：{joined}");
+    // 库里那张图的 steps=20 / cfg=7.5 本来就偏出 Krea 2 Turbo 档（4~8 / 0~1.5）→ 参数那一条也报
+    assert!(joined.contains("参数与"), "参数档位那一条要带回：{joined}");
 
     gateway.abort();
     fixture.finish();

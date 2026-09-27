@@ -20,10 +20,11 @@
 //!
 //!  - **确定性检查（这里）**：只报**事实**（哪个节点、哪个值、和什么冲突），可单测、可复现；
 //!  - **`skill`**（`skills/builtin/comfy-workflow-audit`）：写"所以该怎么办"的判定与修法；
-//!  - **提交闸门**（[`crate::workflow_submit::preflight_refusal`]
-//!    + [`Report::blocking_refusal`]）：只拦**必跑不了**的那些（前端节点没摘干净 /
-//!    已知版本不兼容节点 / 本机没有的节点类），参数档位、显存、提示词风格**只提醒不拦** ——
-//!    那些是"不推荐"，不是"跑不了"。
+//!  - **提交闸门**（[`crate::workflow_submit::preflight`] + [`Report::blocking_refusal`]）：只拦
+//!    **必跑不了**的那些（前端节点没摘干净 / 已知版本不兼容节点 / 本机没有的节点类），
+//!    参数档位、显存、提示词风格**只提醒不拦** —— 那些是"不推荐"，不是"跑不了"。
+//!    （P4 第 70 步接上的：在那之前 `comfy_submit` 只有两道实例侧检查，
+//!    [`Report::blocking_refusal`] 造好了却没人调。）
 //!
 //! # 一条纪律
 //!
@@ -121,6 +122,21 @@ impl Report {
         self.findings.iter().filter(|f| f.level == level).count()
     }
 
+    /// 只渲染**非阻断**的那几条（提交闸门要的那半张报告）。
+    ///
+    /// 拦下的那些走 [`Self::blocking_refusal`]（当场拒），剩下的（参数档位 / 显存 /
+    /// 提示词风格 / 输出前缀 / 加载器目录）**只提醒** —— 但也要让模型看见，
+    /// 否则它会以为"审核通过了 = 这份图没问题"。
+    ///
+    /// 一条都没有时返回 `None`：干净的图不该在提交结果里多出一句"审核通过"的噪声。
+    pub fn render_non_blocking(&self) -> Option<String> {
+        let mut out = String::new();
+        for f in self.findings.iter().filter(|f| f.level != Level::Block) {
+            out.push_str(&finding_block(f));
+        }
+        (!out.is_empty()).then_some(out)
+    }
+
     /// 提交闸门要的那句话：有"必跑不了"的项就返回一段说明，否则 `None`。
     ///
     /// 只收 [`Level::Block`] —— 参数档位 / 显存 / 提示词风格那些**不许**拦
@@ -191,19 +207,7 @@ impl Report {
         }
         out.push_str("。\n");
         for f in &self.findings {
-            let mark = match f.level {
-                Level::Block => "🔴",
-                Level::Warn => "🟠",
-                Level::Info => "🔵",
-            };
-            out.push_str(&format!("\n{mark} [{}] {}\n", f.check, f.title));
-            out.push_str(&format!("  {}\n", f.detail));
-            if !f.nodes.is_empty() {
-                out.push_str(&format!("  涉及节点：{}\n", f.nodes.join("、")));
-            }
-            if let Some(fix) = &f.fix {
-                out.push_str(&format!("  → {fix}\n"));
-            }
+            out.push_str(&finding_block(f));
         }
         out.push_str(
             "\n（审核**只报不改**：要摘节点用 `comfy_prune_workflow`，要改参数用 \
@@ -211,6 +215,26 @@ impl Report {
         );
         out
     }
+}
+
+/// 一条结论渲染成的那一小块（[`Report::render`] / [`Report::render_non_blocking`] 共用一份，
+/// 免得两处的措辞与记号漂移）。
+fn finding_block(f: &Finding) -> String {
+    let mark = match f.level {
+        Level::Block => "🔴",
+        Level::Warn => "🟠",
+        Level::Info => "🔵",
+    };
+    let mut out = String::new();
+    out.push_str(&format!("\n{mark} [{}] {}\n", f.check, f.title));
+    out.push_str(&format!("  {}\n", f.detail));
+    if !f.nodes.is_empty() {
+        out.push_str(&format!("  涉及节点：{}\n", f.nodes.join("、")));
+    }
+    if let Some(fix) = &f.fix {
+        out.push_str(&format!("  → {fix}\n"));
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +349,20 @@ const DISPLAY_VIRTUAL: [&str; 12] = [
     "Display Int",
     "Display Float",
 ];
+
+/// 这个类是不是"**服务端根本没有、只有 ComfyUI 前端才有**"的那一类。
+///
+/// 三条判据的**合取**（[`KNOWN_FRONTEND_ONLY`] 那张表 + [`is_broadcast`] + [`is_display`]）——
+/// 它同时是两处的唯一真源：
+///  * 这里挑"图里还有纯前端节点"（[`check_frontend_nodes`]）；
+///  * 提交闸门那边（[`crate::workflow_submit::preflight_refusal`]）**跳过**这一档：
+///    对它们说"让用户装/启用节点包"是错的方向（前端类装也装不上），
+///    那句话必须由这里那条结论来说。
+pub fn is_frontend_only(class_type: &str) -> bool {
+    KNOWN_FRONTEND_ONLY.contains(&class_type)
+        || is_broadcast(class_type)
+        || is_display(class_type)
+}
 
 /// 这个类是不是"仅前端"的广播型虚拟节点（`FrontendNodes.isBroadcast`）。
 pub fn is_broadcast(class_type: &str) -> bool {
@@ -488,9 +526,7 @@ fn check_frontend_nodes(
 ) -> Vec<Finding> {
     let ui_only: Vec<&(String, String, &Map<String, Value>)> = nodes
         .iter()
-        .filter(|(_, cls, _)| {
-            KNOWN_FRONTEND_ONLY.contains(&cls.as_str()) || is_broadcast(cls) || is_display(cls)
-        })
+        .filter(|(_, cls, _)| is_frontend_only(cls))
         .collect();
     let unknown: Vec<&(String, String, &Map<String, Value>)> = match object_info {
         None => Vec::new(),
@@ -1334,6 +1370,20 @@ mod tests {
         let report = audit(&g, None, None);
         assert!(!report.findings.is_empty(), "参数/显存/前缀都该报");
         assert!(report.blocking_refusal().is_none(), "但没有一项是「跑不了」—— 不许拦：{}", report.render());
+    }
+
+    #[test]
+    fn 非阻断的结论能单独渲染出来_给提交结果的提示用() {
+        // 提交闸门放行的那些（参数 / 显存 / 提示词风格 / 输出前缀 / 加载器目录）
+        // 要能**单独**渲染成一段提示 —— 拦下的那些走 `blocking_refusal`，不走这里。
+        let clean = audit(&clean_graph(), None, None);
+        let notes = clean.render_non_blocking().expect("固定 seed + 固定前缀那条要单独渲染出来");
+        assert!(notes.contains(CHECK_OUTPUT_NAME), "{notes}");
+        assert!(!notes.contains("🔴"), "这里只许有非阻断的项：{notes}");
+
+        // 一条结论都没有时**不许**多出一句"审核通过"的噪声（提交结果里那会天天出现）
+        let bare = graph(r#"{"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "a.safetensors"}}}"#);
+        assert!(audit(&bare, None, None).render_non_blocking().is_none());
     }
 
     #[test]

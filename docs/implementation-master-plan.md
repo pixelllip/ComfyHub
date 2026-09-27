@@ -720,6 +720,8 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   **重启 ComfyUI，别下载**）。**拿不到 `/object_info` 就一个都不拦**（Kotlin 同：误拦比白跑更糟）。
 >   ⚠ 与 Kotlin 的差别如实记在文件头：Kotlin 还做七项 `WorkflowAudit` 与盘扫（`ComfyModels.inventory`），
 >   Rust 这一版**只有这两道**，措辞也只说"实例看不到"—— 宁可比 Kotlin 少说，也不谎报检查过的范围。
+>   ⚠ **这段状态已被第 70 步改写**（见 §24）：审核那三道闸门接上了，非阻断的结论进 `preflightWarnings`；
+>   模型文件那一档仍然**只警告不拦**（这一条本批没动）。上面这段是第 48 步当时的记录，留作历史。
 > - `/api/capture/jobs` 的 `submissions[]` 从此**真的有内容**（第 47 步时还是如实空数组）：
 >   记录按 `submittedAt` 倒序、同 `promptId` 就地更新、最多 30 条，形状与 Kotlin `ComfySubmission` 逐字一致
 >   （有默认值的键一律出现、可空键为 null 时整键省略）。
@@ -2860,7 +2862,7 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 
 | 项 | 状态 |
 | --- | --- |
-| `comfy_submit` 的提交闸门**没有**接 `workflow_audit::blocking_refusal` | ⛔ **未接**。工具描述（逐字搬自 Kotlin）里写着"提交时 `comfy_submit` 也会自动跑一次审核，但只拦'必跑不了'的那些（前端节点 / 版本不兼容 / 本机没有的节点类）"，而 Rust 的预检**只有两道实例侧检查**（节点类拦、模型文件只警告）—— `workflow_submit.rs` 的文件头已如实声明了这个差距。**接上去会改变 `comfy_submit` 的行为与 e2e 判据**，所以单独一批做 |
+| `comfy_submit` 的提交闸门**没有**接 `workflow_audit::blocking_refusal` | ✅ **已接（P4 第 70 步，2026-09-27，见 §24）**。工具描述（逐字搬自 Kotlin）里写着"提交时 `comfy_submit` 也会自动跑一次审核，但只拦'必跑不了'的那些（前端节点 / 版本不兼容 / 本机没有的节点类）"—— 那句话**现在是真的**：审核跑在 `overrides` / `connections` 都应用完之后的最终图上（Kotlin `Application.kt` 的 `preflight` lambda 同位置），`blocking_refusal()` 有货就当场拒（`MODEL_NOT_LOADABLE`，与 Kotlin 同码同措辞），非阻断的那些进 `preflightWarnings`。`workflow_submit.rs` 文件头那段"审计没接"的诚实欠账已改写 |
 | 系统提示第 17 条那句"`web_search`/`web_fetch`/`civitai_search` **共用这一个额度**"漏了 `find_model` | ✅ **已改（P4 第 69 步，2026-09-27）**：那句现在点名**五个**（`web_search` / `web_fetch` / `civitai_search` / `danbooru_lookup` / `find_model`）—— 预算按 `category_of(name)=="web"` 扣，而那一档本来就是这五个（只补 `find_model` 会把同一类不准确留在原地）。`PROMPT_VERSION` v32 → **v33**，`kitVersion` 随之 bump |
 | 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`）+ `workflow_recipes` 表 + `bind` 端点 | ✅ **已搬（P4 第 67 步，2026-09-27，见 §20）**（`WorkflowRecipe.kt` 710 行 + Repo/Learner/Binder/Routes + 约 1000 行 Kotlin 测试断言逐条移植） |
 | `WorkflowConvert` 的两处欠账（subgraph 展开 / `emulateFrontend`） | ✅ **已清零（P4 第 68 步，2026-09-27，见 §22）** |
@@ -3121,6 +3123,55 @@ tolerateUnsupported + complete=false)`、`comfy_bind_recipe` 的四档、整包 
 | `cargo check --all-targets` | 零 warning |
 | 生成器 | `python server-rs/tools/gen_prompts.py` → **退出码 2**、三条理由全打印、`nsfw_prompt.rs` 的 SHA256 **前后相同**（一个字节都没写） |
 | 端到端 | `scripts\e2e-ai-tools-test.ps1` **111 项全绿 / 0 失败**（对着**新编 release 二进制**的真后端跑）；实测 `GET /api/ai/run-kit`：`promptVersion=v33`、正文含第 20 条、第 17 条点名五个工具，`kitVersion` bump 到 `2026-09-27.2` |
+
+---
+
+## 24. 2026-09-27：`comfy_submit` 的闸门接上 `workflow_audit::blocking_refusal`（**§19.3 那条 `⛔ 未接` 清零**）
+
+> 这是"工具描述说的必须是真的"这条路线的最后一件（前三件：§18.3 `runnable`、§19.1 `submissions`、§23 系统提示第 20 条）。
+> 第 63 步把 `WorkflowAudit` 整份搬到 Rust（`workflow_audit.rs`，含 `blocking_refusal()`），但**提交路径一直没调它** ——
+> 工具描述里那句"提交时也会自动跑一次审核"当时是假的。
+
+### 24.1 接法与 Kotlin 的逐条对照
+
+Kotlin 的真源在 `Application.kt` 的 `preflight` lambda（`AiWorkflowSearch.submit` 的 `preflight` 参数）：
+`WorkflowAudit.audit(graph, info, inv).blockingRefusal() ?: ModelPreflight.check(graph, inv)`，
+**位置在 `applyOverrides` + `applyConnections` 之后**（原话：模型常常就是在这一次覆盖里把模型名换成能用的那个），
+拒的码与文案就是那一段字符串（`throw ToolFailure("MODEL_NOT_LOADABLE", refusal)`）。
+
+| 闸门 | 拦不拦 | Rust 落点 |
+| --- | --- | --- |
+| `frontendNodes`（纯前端节点） | **拦** | `workflow_audit::blocking_refusal()` |
+| `nodeVersions`（已知识别不兼容） | **拦** | 同上 |
+| `unknownNodes`（`/object_info` 里没有的类） | **拦** | 同上；Rust 多一道措辞更贴纪律的实例侧检查（见 24.2 的第 3 条） |
+| `outputName` / `params` / `vram` / `promptStyle` / `loaderFolder` | **只提醒** | `Report::render_non_blocking()` → `preflightWarnings` |
+
+`/object_info` 与模型清单**只取一次**（审核第 ⑦ 项与两道实例侧检查吃同一份响应；清单走
+`comfy_models::inventory` + `mcp::desktop(None)`，与 `comfy_env_report` / `comfy_fit_workflow` / `comfy_audit_workflow` 同源）。
+
+### 24.2 三处**有意**的偏离（都写在 `workflow_submit.rs` 文件头）
+
+1. **非阻断的结论回给模型**：Kotlin 的 `preflight` 只回 `String?`，`audit` 的 report 其余部分**就地丢掉**；
+   这里把它们（🟠/🔵）接进 `preflightWarnings`，模型不必再自己调一次 `comfy_audit_workflow` 才知道参数档位不对。
+2. **模型文件那一档仍只警告**（Kotlin 的 `ModelPreflight` 是拒）：盘扫还没搬进 Rust 的模型预检措辞，
+   只按 `/object_info` 的候选判会误拦（e2e 第 4/5 幕的活证）。**顺带说明**：Kotlin 里唯一"能被 `overrides` 修好"的阻断项就是这一档
+   （换个模型名），而本仓库那三条审核阻断项（前端节点 / 版本不兼容 / 缺节点类）**都只看 `class_type`**，
+   `overrides` 改不了 —— 所以"覆盖之后放行"这条用例在这里不成立（Kotlin 侧同样不成立）。
+3. **"实例里没有这个节点类"排在审核之前**：Kotlin 的 `ModelPreflight` 不看节点类，这个重叠只存在于 Rust 侧，
+   没有 Kotlin 的先后可照搬；保留它先说话是因为措辞正是本仓库的纪律（"让用户启停/换实例，**不要**改用户的工作流"）。
+   **纯前端那一类被它故意跳过**（`workflow_audit::is_frontend_only`）：对 `Label (rgthree)` 说"装节点包"是错的方向，
+   那句话必须由审核那条"服务端根本没有这些类"的结论来说。
+
+### 24.3 验收
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test` | **688 例全绿 / 0 failed / 7 ignored**（lib **514**（512 → +2）+ submit **9**（7 → +2）；其余同上）；基线 684 → 688 |
+| `cargo check --all-targets` | 零 warning |
+| 端到端 | `scripts\e2e-submit-test.ps1`（第 5 幕"前端节点缺口补线"正是这条路径）—— 见该次提交的信息 |
+
+新的防线：`tests/submit_test.rs` 两条（纯前端节点 → 拒且**一个字节都不发**；只有非阻断结论时 → 照常提交且结论在 `preflightWarnings` 里，
+并顺带钉住"审核跑在**覆盖之后**的图上"：库里的 `6.text` 是 `old prompt`，只有覆盖应用完才会报"给 Krea 2 堆 Danbooru tag"那条）。
 
 
 

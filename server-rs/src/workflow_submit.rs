@@ -20,20 +20,41 @@
 //!     既不假装完成也不假装失败。等待上限 900 秒（`MAX_WAIT_SECONDS`）。
 //!  4. **不做无限等待、不接受任意 URL**：地址只来自应用配置（`capture.config.comfyUrl`）。
 //!
-//! # 提交前的两道实例侧预检（§10.1 的 O1/O3 那一条线）
+//! # 提交前的三道预检（§10.1 的 O1/O3 那一条线）
 //!
 //! 放在 `overrides` / `connections` **都应用完之后**（Kotlin 的原话：模型常常就是在这一次覆盖里
 //! 把模型名换成能用的那个），检查的是**真正要提交的那张图**：
 //!
 //!  | 闸门 | 判据 | 拒了之后让模型干什么 |
 //!  | --- | --- | --- |
-//!  | 节点类在不在实例里 | `class_type` 不在 `/object_info` 的键里 | 让用户装/启用那几个自定义节点包，或换实例；**不要**改用户的工作流 |
+//!  | 审核里"必跑不了"的三项 | [`crate::workflow_audit::audit`] 的 [`Report::blocking_refusal`]：纯前端节点 / 已知版本不兼容节点 / 本机没有的节点类 | 照审核给的那句话做（更新节点包 / 让 `comfy_load_workflow` 照前端行为改写 / 启停实例） |
+//!  | 节点类在不在实例里 | `class_type` 不在 `/object_info` 的键里（**纯前端那一类除外**，见下） | 让用户装/启用那几个自定义节点包，或换实例；**不要**改用户的工作流 |
 //!  | 模型文件实例认不认 | 节点类名含 `Loader` 的、输入值是字符串、而 `/object_info` 给该输入列的候选里有它没有 | 让用户**重启 ComfyUI**（ComfyHub 起实例时会挂上 Desktop 的模型根）；**别去下载** |
 //!
+//! 后两道是**实例侧**的（`/object_info` 直接说了算）；第一道是第 63 步那份
+//! [`crate::workflow_audit`] 的第 70 步接线，位置与 Kotlin `Application.kt` 的 `preflight`
+//! lambda（`WorkflowAudit.audit(graph, info, inv).blockingRefusal() ?: ModelPreflight.check(graph, inv)`）
+//! 一致。**只有前两道会拒**；非阻断的那些（参数档位 / 显存 / 提示词风格 / 输出前缀 /
+//! 加载器目录）走 `preflightWarnings` 如实带给模型与用户。
+//!
 //! ⚠ **拿不到 `/object_info` 就一个都不拦**（Kotlin 同）：误拦一个本来能跑的工作流，
-//! 比白跑一次更糟。⚠ 与 Kotlin 的差别如实记在这里：Kotlin 还会做七项 `WorkflowAudit`
-//! 与盘扫（`ComfyModels.inventory`，"盘上有但实例看不到"那种精确措辞），Rust 侧这一版
-//! **只有上面两道**，措辞也按"实例看不到"这一种给 —— 宁可比 Kotlin 少说，也不谎报检查过的范围。
+//! 比白跑一次更糟。⚠ 唯一不看 `/object_info` 的是审核里那两条**静态知识表**
+//!（纯前端节点 / 已知版本不兼容节点）—— 它们说的是"服务端根本没有这个类"，
+//! ComfyUI 没跑时也成立，所以照样拦（Kotlin 的 `objectInfo` 为 null 时同样会走到那两条）。
+//!
+//! ## 与 Kotlin 的三处差别（如实记在这里，不假装逐字一致）
+//!
+//!  1. **非阻断的审核结论会回给模型**（`preflightWarnings`）：Kotlin 的 `preflight` 只回
+//!     `String?`（拒 / 不拒），`audit` 的 report 其余部分**就地丢掉** —— 于是模型看不到
+//!     "参数档位不对 / 显存吃紧"，除非它自己再调一次 `comfy_audit_workflow`。
+//!     这里用 [`Report::render_non_blocking`] 把它们接到已有的警告通道上。
+//!  2. **模型文件那一档只警告、不拦**（Kotlin 的 `ModelPreflight` 是**拒**）：Rust 这一版
+//!     还没有"盘上有但实例看不到"那种盘扫措辞，只按 `/object_info` 的候选判会误拦 ——
+//!     `scripts\e2e-submit-test.ps1` 第 4/5 幕就是活证（见 [`preflight_refusal`] 的说明）。
+//!  3. **"实例里没有这个节点类"这一道排在审核之前**：Kotlin 的 `ModelPreflight` **不看节点类**
+//!     （它只管模型文件），所以这个重叠只存在于 Rust 侧，没有 Kotlin 的先后可照搬。
+//!     这一道先说话是因为它的措辞正是本仓库的纪律（"让用户启停/换实例，**不要**改用户的工作流"）；
+//!     而**纯前端**那一类被它**故意跳过**（对那种类说"装节点包"是错的方向），交给审核那一档说。
 
 use std::sync::Mutex;
 
@@ -42,6 +63,7 @@ use serde_json::{json, Map, Value};
 use crate::capture::CaptureConfig;
 use crate::routes::AppState;
 use crate::tools::{ToolFailure, ToolOutcome};
+use crate::workflow_audit;
 
 /// 等一次运行跑完的默认时长（Kotlin `DEFAULT_WAIT_SECONDS`）。
 pub const DEFAULT_WAIT_SECONDS: i64 = 240;
@@ -366,6 +388,11 @@ fn primitive_text(value: &Value) -> Option<String> {
 ///
 /// **误拦比白跑一次更糟**（Kotlin 那边也是这个口径），所以这一档现在是**警告**：
 /// 提交照常走，但把"实例看不到这些模型文件"如实回给模型与用户。
+///
+/// ⚠ **纯前端节点不在这里拦**（`Label (rgthree)` / `Anything Everywhere` / 显示节点…）：
+/// 它们不是"这个实例没装"，而是"**服务端根本没有这个类**" —— 装节点包也装不上，
+/// 那句"让用户装/启用节点包"是错的方向。这一档交给 [`workflow_audit`] 里
+/// [`crate::workflow_audit::CHECK_FRONTEND`] 那条结论说（它的修法才对）。
 pub fn preflight_refusal(graph: &Value, info: &Value) -> Option<String> {
     let info = info.as_object()?;
     let Some(nodes) = graph.as_object() else { return None };
@@ -376,6 +403,9 @@ pub fn preflight_refusal(graph: &Value, info: &Value) -> Option<String> {
     let mut unknown: Vec<String> = Vec::new();
     for (node_id, node) in nodes {
         let Some(class_type) = node.get("class_type").and_then(Value::as_str) else { continue };
+        if workflow_audit::is_frontend_only(class_type) {
+            continue;
+        }
         if !info.contains_key(class_type) {
             unknown.push(format!("{node_id}: {class_type}"));
         }
@@ -457,14 +487,50 @@ pub fn preflight_warnings(graph: &Value, info: &Value) -> Vec<String> {
     out
 }
 
-/// 取一次 `/object_info`：返回（**阻断性**的拒因，**提示性**的警告）。
+/// 本机模型清单：与 `comfy_env_report` / `comfy_fit_workflow` / `comfy_audit_workflow`
+/// **同一份取法**（`/object_info` ∪ 盘扫）—— 审核的第 ⑦ 项（加载器与目录不匹配）吃它。
 ///
-/// **拿不到清单就一个都不拦**（Kotlin 同：误拦比白跑更糟）。
-async fn preflight_from_instance(base: &str, graph: &Value) -> (Option<String>, Vec<String>) {
-    let Ok(info) = crate::comfy_client::get_json(&format!("{base}/object_info")).await else {
-        return (None, Vec::new());
+/// 四件工具各写一份必然漂移，而漂移的表现是"预检说能用、审核说没有"，从界面上看不出来。
+fn model_inventory(
+    state: &AppState,
+    object_info: Option<&Map<String, Value>>,
+) -> crate::comfy_models::Inventory {
+    let project_root = state.project_root();
+    let desktop = crate::mcp::desktop(None);
+    let model_dirs: Vec<std::path::PathBuf> =
+        desktop.as_ref().map(|d| d.models_dirs.clone()).unwrap_or_default();
+    crate::comfy_models::inventory(object_info, Some(&project_root), &model_dirs)
+}
+
+/// 三道预检：返回（**阻断性**的拒因，**提示性**的警告）。
+///
+/// 图是**最终那张**（`overrides` / `connections` 都应用完之后），与 Kotlin 的位置一致。
+/// `/object_info` **只问一次**：审核与两道实例侧检查吃的是同一份响应 ——
+/// 分两次请求的话，两个闸门可能对着两个不同的实例状态下结论。
+async fn preflight(base: &str, graph: &Value, state: &AppState) -> (Option<String>, Vec<String>) {
+    let Some(nodes) = graph.as_object() else { return (None, Vec::new()) };
+    let info = crate::comfy_client::get_json(&format!("{base}/object_info")).await.ok();
+    let object_info = info.as_ref().and_then(Value::as_object);
+    let inventory = model_inventory(state, object_info);
+    // 审核（`object_info` 拿不到时照样跑：纯前端节点 / 版本不兼容那两条是静态知识表）
+    let report = workflow_audit::audit(nodes, object_info, Some(&inventory));
+
+    // ① 实例里没有这个节点类（纯前端那一类留给审核，见 `preflight_refusal`）
+    // ② 审核里"必跑不了"的那三项（纯前端节点 / 版本不兼容 / 本机没有的节点类）
+    let refusal = info
+        .as_ref()
+        .and_then(|info| preflight_refusal(graph, info))
+        .or_else(|| report.blocking_refusal());
+
+    // ③ 只提醒的那些：实例看不到的模型文件 + 审核里非阻断的结论
+    let mut warnings = match info.as_ref() {
+        Some(info) => preflight_warnings(graph, info),
+        None => Vec::new(),
     };
-    (preflight_refusal(graph, &info), preflight_warnings(graph, &info))
+    if let Some(notes) = report.render_non_blocking() {
+        warnings.push(format!("⚠ 提交前的审核提示（**没有拦**）：\n{notes}"));
+    }
+    (refusal, warnings)
 }
 
 // ---------------------------------------------------------------------------
@@ -683,9 +749,9 @@ pub async fn tool_submit(
     }
 
     // 预检放在这里（overrides / connections **都应用完之后**）：检查的就是真正要提交的那张图。
-    // 节点类那一档**拦**（`/object_info` 对它是权威的）；模型文件那一档只**警告**（见函数注释：
-    // 盘扫还没搬，只按候选判会误拦 —— e2e 第 4/5 幕实测）。
-    let (refusal, warnings) = preflight_from_instance(&base, &patched).await;
+    // 审核里"必跑不了"的三项 + 节点类那一档**拦**；模型文件与审核里非阻断的那些只**警告**
+    // （见 `preflight` / `preflight_refusal` 的注释）。
+    let (refusal, warnings) = preflight(&base, &patched, state).await;
     if let Some(refusal) = refusal {
         return Err(ToolFailure::new("MODEL_NOT_LOADABLE", refusal));
     }
@@ -1030,6 +1096,37 @@ mod tests {
         info["LoadImage"] = json!({ "input": { "required": { "image": [["a.png"], {}] } } });
         assert!(preflight_refusal(&with_image, &info).is_none(), "LoadImage 不是 Loader，不判它");
         assert!(preflight_warnings(&with_image, &info).is_empty(), "也不该警告");
+    }
+
+    #[test]
+    fn 纯前端节点不走实例侧这一档_交给审核那一条说() {
+        // 对 `Label (rgthree)` / `Anything Everywhere` 说"让用户装/启用节点包"是**错的方向**：
+        // 这些类只存在于 ComfyUI 前端，服务端根本没有（装也装不上）。
+        // 这一档必须让给 `workflow_audit` 里那条"服务端根本没有这些类"的结论。
+        let mut frontend = graph();
+        frontend["2"] = json!({ "class_type": "Label (rgthree)", "inputs": {} });
+        frontend["5"] = json!({ "class_type": "Anything Everywhere", "inputs": {} });
+        frontend["8"] = json!({ "class_type": "PreviewImage", "inputs": {} });
+        assert!(
+            preflight_refusal(&frontend, &object_info()).is_none(),
+            "纯前端节点要被跳过（它们不在这一档的射程里）"
+        );
+        // 而审核那一档真的会拦它们（否则上面那个 continue 就成了漏网）
+        let info = object_info();
+        let report =
+            workflow_audit::audit(frontend.as_object().unwrap(), info.as_object(), None);
+        assert!(
+            report.blocking_refusal().is_some(),
+            "纯前端节点必须由审核拦下：{}",
+            report.render()
+        );
+        // 判据本身（三张表/模式的合取）钉一下
+        for cls in ["Label (rgthree)", "Anything Everywhere", "PreviewImage", "Display Any"] {
+            assert!(workflow_audit::is_frontend_only(cls), "{cls}");
+        }
+        for cls in ["Krea2CustomNode", "KSampler", "CheckpointLoaderSimple"] {
+            assert!(!workflow_audit::is_frontend_only(cls), "{cls} 不是纯前端类");
+        }
     }
 
     #[test]
