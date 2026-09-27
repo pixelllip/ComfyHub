@@ -118,6 +118,28 @@ abstract class RunEventSource {
   /// 拉一条会话的消息（**含有序块 `parts`** —— 工具卡 / 思考段全靠它）。
   Future<List<AiMessage>> listMessages(String conversationId);
 
+  /// 删掉一条会话（删的是**哪个库**由实现决定）。
+  ///
+  /// 为什么它必须在这个抽象里（M3.2 ③ 留下的坑）：界面切会话时会顺手清掉"上一条空壳"
+  /// （AIH-018），而手机上那一步原先打的是**远端** `DELETE /api/ai/conversations/{id}` ——
+  /// 可手机上会话的真源是**本地库**，那条请求既够不着本地镜像（空壳越攒越多），
+  /// 离线时还每次白报一个失败。所以清理必须与持久化走**同一个来源**：
+  /// 手机删本地库，桌面删后端库。
+  ///
+  /// ⚠ 手机上**不会**因此向上行通道写一个 `delete`（R3：上行只有 `upsert`，
+  /// 手机不许伪造删除）。没推上去的，桌面根本不知道它存在过；已经推上去的，
+  /// 桌面那份留着 —— 这里不假装"两边都删了"。
+  ///
+  /// 幂等：删一个不存在的 id **不算失败**（重复清理是常态）。
+  Future<void> deleteConversation(String conversationId);
+
+  /// 本机**还有几条没推到桌面**（手机专有；桌面恒 0）。
+  ///
+  /// 它是"要不要再推一次"的判据（见 `ai_workspace_store` 的前台定时与回到前台触发）：
+  /// 问的是**本地库**，一条网络请求都不打 —— 所以"队列空的时候别空转烧电"这件事
+  /// 才做得到。
+  Future<int> pendingOutbox();
+
   /// 会话列表（`_consumeRun` 收尾的"与服务端对齐"要用它）。
   Future<List<AiConversation>> listConversations();
 
@@ -212,6 +234,14 @@ class RemoteRunEventSource implements RunEventSource {
 
   @override
   Future<List<AiMessage>> listMessages(String conversationId) => _api.listMessages(conversationId);
+
+  /// 桌面：删的是**后端库**里那一条（`DELETE /api/ai/conversations/{id}`）。
+  @override
+  Future<void> deleteConversation(String conversationId) => _api.deleteConversation(conversationId);
+
+  /// 桌面：上行队列在**手机**手上（`_outbox` 是手机侧的东西），这里恒 0。
+  @override
+  Future<int> pendingOutbox() async => 0;
 
   @override
   Future<List<AiConversation>> listConversations() => _api.listConversations();
@@ -404,6 +434,18 @@ class LocalHarnessRunEventSource implements RunEventSource {
     return out;
   }
 
+  /// 删掉**本地库**里这一条会话（M3.2 ③ 的第二块砖）。
+  ///
+  /// 桥回的是"本机是否真的删掉了一行"：`false` = 本来就没有 —— 与桌面 `DELETE` 的语义一致
+  /// （幂等），所以这里**不把它当失败**。真正该报错的情况桥会回 `HARNESS_ERROR`
+  /// （`HarnessStore.deleteConversation` 对库错误一律抛），那才变成异常 ——
+  /// 静默成功会让界面以为删掉了、空壳其实还在。
+  @override
+  Future<void> deleteConversation(String conversationId) =>
+      _method.invokeMethod<bool>('deleteConversation', {'conversationId': conversationId});
+
+  /// 本机 `_outbox` 里还剩几条（**只读本地库**，不出网）。
+  @override
   Future<int> pendingOutbox() async => await _method.invokeMethod<int>('pendingOutbox') ?? 0;
 
   Future<List<String>> toolNames() async =>

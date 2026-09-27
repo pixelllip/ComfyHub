@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart' show FocusNode;
+import 'package:flutter/widgets.dart' show AppLifecycleListener, FocusNode;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/ai_api_client.dart';
@@ -791,6 +791,10 @@ class AiWorkspaceStore extends ChangeNotifier {
     // 攒着的流式通知定时器要一起收掉，否则页面都销毁了还会被回调
     _streamFlush?.cancel();
     _streamFlush = null;
+    // 上行重试与生命周期钩子同理：Store 都没了就不该再往外发东西
+    _cancelOutboxRetry();
+    _lifecycle?.dispose();
+    _lifecycle = null;
     pendingQuestionFocus.dispose();
     super.dispose();
   }
@@ -1029,6 +1033,8 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 桌面版本化下发的工件（M6 才真正下行），拿不到时**只把这件事说出来**，
   /// 绝不让整页起不来 —— 用户至少还能翻历史会话。
   Future<void> _loadLocalStartup() async {
+    // 装上"回到前台补推一次上行"的钩子（M4 补全）：只装一次，只装在手机上
+    _installLifecycleHook();
     // 先给上一轮"没跑完"的 Run 收尾（被系统杀掉是手机的常态）：
     // 必须在拉会话/消息**之前**做，否则界面上会先出现一个永远转圈的幽灵气泡。
     // 收尾只改状态与错误说明，已经说出去的话一个字不动（R6）。
@@ -1063,6 +1069,10 @@ class AiWorkspaceStore extends ChangeNotifier {
     //   不覆盖的话手机上会显示"已配置"（那是桌面那份），点发送必然 401。
     providers = await _overlayDeviceCredentials(providers);
     await _restoreRememberedModel();
+    // M6 剩余那一半：provider 清单有缓存、但**这个** Provider 的模型目录没缓存过时，
+    // 要在这里如实说出来。以前这种情形会在 `_loadModels` 里 rethrow 一路冒到 `_doLoad`，
+    // 整页变成"连接后端失败" —— 而手里的清单与历史会话明明都在。
+    if (modelsIssue != null) error = modelsIssue;
     // 规则工件（run-kit）：手机必须先拿到它才能开跑（R13）。
     // 这一步以前根本没被调用过，所以手机上第一条消息必然 `NO_RUN_KIT`。
     await ensureRunKit();
@@ -1157,6 +1167,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 否则用户不知道"手机上聊的东西桌面能不能看到"。返回推上去的条数。
   Future<int> syncOutbox() async {
     if (!_source.isLocal) return 0;
+    // 防重入：定时器到点时上一拍还没跑完就**跳过这一拍**，别把请求堆起来
+    if (_outboxPushing) return 0;
+    _outboxPushing = true;
     try {
       final r = await _source.syncNow(
         baseUrl: baseUrlProvider?.call(),
@@ -1171,13 +1184,87 @@ class AiWorkspaceStore extends ChangeNotifier {
         // 离线时不吵人：只在**确实有东西没推上去**时记一句
         pushNotice = '本机还有 ${r.pending} 条没同步到桌面：${r.error}';
       }
+      // M4 补全：队列里还有东西就**挂着定时重试**，推空了立刻停 ——
+      // 既不能"只在冷启动与 Run 收尾各推一次"（用户停在聊天页就永远不推了），
+      // 也不能空转（空队列还每 45 秒打一次网络 = 白烧电）。
+      if (r.pending > 0) {
+        _armOutboxRetry();
+      } else {
+        _cancelOutboxRetry();
+      }
       return r.applied;
     } catch (e) {
+      // 通道本身炸了：pending 未知，**不动**已经挂着的定时器（挂着就还会重试）
       pushNotice = '同步到桌面失败：$e';
       return 0;
     } finally {
+      _outboxPushing = false;
       // 上行是"看不见的"那条路（离线时本来就会失败）：只留一条可查的日志
       debugPrint('[M4] 上行：$pushNotice');
+    }
+  }
+
+  bool _outboxPushing = false;
+
+  /// 上行重试的定时器（只在**队列里真有待办**时存在）。
+  Timer? _outboxRetry;
+
+  /// 定时重试的间隔。故意不短：上行是后台补课，不是实时通道；
+  /// 真正"内容定稿"的时刻（每轮 Run 收尾）本来就会各推一次。
+  static const _kOutboxRetryInterval = Duration(seconds: 45);
+
+  /// 现在有没有挂着上行重试（回归用例据此证明"空队列不空转"）。
+  @visibleForTesting
+  bool get outboxRetryArmed => _outboxRetry != null;
+
+  void _armOutboxRetry() {
+    if (!_source.isLocal) return;
+    // 已经挂着就不叠第二个（`periodic` 会一直拍到队列被推空）
+    _outboxRetry ??= Timer.periodic(_kOutboxRetryInterval, (_) => unawaited(syncOutbox()));
+  }
+
+  void _cancelOutboxRetry() {
+    _outboxRetry?.cancel();
+    _outboxRetry = null;
+  }
+
+  /// 回到前台（很可能刚恢复网络）补推一次（**M4 补全**）。
+  ///
+  /// 为什么是"回到前台"而不是"网络恢复"：Android 的连接状态回调要新引一个依赖
+  /// （`connectivity_plus`），而这个工程里**已有的**生命周期钩子是 `AppLifecycleListener`
+  /// （`lib/app.dart` 用它做退出的收尾），所以这条就落在"回到前台"上 ——
+  /// 用户从别的 App / 锁屏回来时补推一次，正是"刚恢复网络"最常见的那一刻。
+  ///
+  /// 两条纪律：**先看本地队列**（没有待办就一条网络请求都不打），以及
+  /// 失败只记 [pushNotice]、**绝不拦聊天页**（离线是手机的常态）。
+  Future<void> onAppResumed() async {
+    if (!_source.isLocal) return;
+    if (await _pendingOutbox() <= 0) return;
+    await syncOutbox();
+  }
+
+  /// 问**本地库**还有几条待推（不出网）。
+  ///
+  /// 读不动时当作"没有待办"：这条通道坏了是另一件事（比上行失败严重得多），
+  /// 不该让"回到前台"变成一次崩溃；下次 Run 收尾 / 冷启动照旧会推。
+  Future<int> _pendingOutbox() async {
+    try {
+      return await _source.pendingOutbox();
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 生命周期钩子（只在手机上，且只装一次）：回到前台补推一次上行。
+  AppLifecycleListener? _lifecycle;
+
+  void _installLifecycleHook() {
+    if (_lifecycle != null || !_source.isLocal) return;
+    try {
+      _lifecycle = AppLifecycleListener(onResume: () => unawaited(onAppResumed()));
+    } catch (_) {
+      // 极少数宿主（纯 Dart 单测）没有 WidgetsBinding：没有这个钩子不影响其它路 ——
+      // 冷启动与 Run 收尾那两处触发照旧在
     }
   }
 
@@ -1394,8 +1481,16 @@ class AiWorkspaceStore extends ChangeNotifier {
     await saveDraft(conv.id, text, attachments: attachments);
   }
 
+  /// 模型目录当前的**如实说明**（离线且本机没缓存过这个 Provider 时非 null）。
+  ///
+  /// 为什么要单独一个字段：[providers] 从缓存来时界面已经有清单可用了，但
+  /// "**这个** Provider 的模型目录本机还没缓存过"是另一件事 —— 不说清楚，
+  /// 用户只会看到一个空的选择器，然后猜"是不是模型全被删了"。
+  String? modelsIssue;
+
   Future<void> _loadModels() async {
     final p = selectedProvider;
+    modelsIssue = null;
     if (p == null) {
       models = const [];
       selectedModel = null;
@@ -1408,8 +1503,21 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 手机：桌面不在线时用上次缓存的那份目录（能力声明是发得出去的前提 ——
       // 没有它，附件与工具在准入那一步就会被挡下，用户看到的却是"模型不可用"）
       final cached = credentials.isLocal ? await _readModelsCache(p.id) : const <AiModel>[];
-      if (cached.isEmpty) rethrow;
-      models = cached;
+      if (cached.isEmpty) {
+        // ⚠ 本机**没缓存过这个 Provider** 时，以前是直接 `rethrow`。两个后果都不如实：
+        //   ① 冷启动那条路上它会一路冒到 `_doLoad`，整页变成"连接后端失败" ——
+        //      可用户手里的 provider 清单与历史会话明明都还在，只是这个目录没缓存；
+        //   ② 离线时在输入区换一个 Provider（[selectProvider]）会抛一个没人接的异常。
+        //   所以**只对手机**放行（`credentials.isLocal` 就是"本机有没有本地清单缓存"
+        //   那个判据）：目录如实留空 + 把原因说清楚；桌面照旧抛（它本来就该连得上后端）。
+        if (!credentials.isLocal) rethrow;
+        models = const [];
+        modelsIssue = '桌面不在线，本机也还没缓存过「${p.displayName}」的模型清单：'
+            '在联网时选一次这个 Provider（本机就会把它缓存下来），之后离线也能发消息。'
+            '原因：$e';
+      } else {
+        models = cached;
+      }
     }
     if (selectedModel != null && !models.any((m) => m.id == selectedModel!.id)) {
       selectedModel = null;
@@ -1422,6 +1530,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     selectedProvider = p;
     selectedModel = null;
     await _loadModels();
+    // 离线且本机没缓存过这个 Provider 的目录：**当场说出来**（否则用户只看到一个空选择器，
+    // 只能猜"是不是模型全被删了"）。成功 / 有缓存时不动 error —— 别把别的错误盖掉。
+    if (modelsIssue != null) error = modelsIssue;
     await refreshPreflight();
     notifyListeners();
   }
@@ -1543,9 +1654,13 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   /// 删一条会话（连它的草稿一起清掉）。删不掉也不影响切换：可能是归档 / 网络抖动。
+  ///
+  /// ⚠ 走 [_source] 而不是 `_api`（M3.2 ③ 的第二块砖）：手机上会话的真源是**本地库**，
+  /// 原先那句远端 `DELETE` 够不着本地镜像 —— 于是每次清空壳都"看起来做了、实际没做"，
+  /// 空壳越攒越多，离线时还白报一个失败。
   Future<void> _deleteConversationQuietly(String id) async {
     try {
-      await _api.deleteConversation(id);
+      await _source.deleteConversation(id);
       conversations = conversations.where((c) => c.id != id).toList();
       if (conversation?.id == id) {
         conversation = null;
@@ -1599,6 +1714,12 @@ class AiWorkspaceStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 用户主动删一条会话（会话列表的菜单）。
+  ///
+  /// ⚠ 它**故意**仍然打后端，不走 [_deleteConversationQuietly] 那条本地清理：
+  /// 用户删的可能是一条**桌面创建、手机只是镜像**的会话，而手机侧没有、也不许有
+  /// "叫桌面删掉它"的上行 op（R3：上行只有 upsert）。所以这条路径上的
+  /// "本地镜像与桌面不一致"是**已知欠账**，不在这批里悄悄改（见本轮报告）。
   Future<void> deleteConversation(String id) async {
     try {
       await _api.deleteConversation(id);

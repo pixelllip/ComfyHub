@@ -301,4 +301,68 @@ class HarnessStoreTest {
         assertTrue("重复 id 建会话必须报错，不许静默覆盖", threw)
         assertEquals("标题不该被改掉", "手机上起的", store.getConversation("conv-ui-1")!!.title)
     }
+
+    // --- 本地删会话（M3.2 ③ 的第二块砖） ------------------------------------
+
+    /**
+     * 桥上新增的 `deleteConversation` 就是这条路。以前界面清"空壳会话"打的是**远端**
+     * `DELETE /api/ai/conversations/{id}`，而手机上会话的真源是本地库 ——
+     * 那条请求够不着本地镜像，于是空壳越攒越多（M3.2 ③ 留下的坑）。
+     *
+     * 这里钉四件事：行没了、**级联**把消息/块带走、待推行一并清掉、返回"是否真删掉了一行"。
+     */
+    @Test
+    fun `本地删会话：行连同消息与块一起没了，它的待推行也清掉`() {
+        val c = store.createConversation(id = "conv-del-1", title = "空壳")
+        val m = store.appendMessage(c.id, "user", "说了一句")
+        store.appendPart(m.id, 0, PartType.TEXT, text = "说了一句")
+        assertEquals("会话 + 消息 + 块 = 三条待推", 3, store.pendingOutbox().size)
+
+        assertTrue("删的是本机这一行", store.deleteConversation(c.id))
+
+        assertNull(store.getConversation(c.id))
+        assertFalse("列表里不该还有它", store.listConversations().any { it.id == c.id })
+        assertNull("消息跟着走（外键 ON DELETE CASCADE，R1）", store.getMessage(m.id))
+        assertTrue("块也一样", store.listParts(m.id).isEmpty())
+        assertTrue(
+            "还没推上去的待推行要一起清掉：留着的话桌面会收到一条本机已经没有的东西" +
+                "（或者白搭一次往返）——${store.pendingOutbox().map { it.kind to it.refId }}",
+            store.pendingOutbox().isEmpty(),
+        )
+    }
+
+    /**
+     * id 不存在**不是错误**（重复清理很常见：界面切会话时每次都会顺手清一次），
+     * 但也**不许**顺手把别的行删掉 —— 所以返回值必须能区分"真删掉了"与"本来就没有"。
+     */
+    @Test
+    fun `删一个不存在的 id：回 false，不抛，也不连累别的会话`() {
+        val keep = store.createConversation(id = "conv-keep")
+
+        assertFalse("本来就没有 → 不是错误，但也别假装删掉了", store.deleteConversation("conv-never-existed"))
+        assertFalse(store.deleteConversation(""))
+
+        assertNotNull("别的会话一个都不能被顺手删掉", store.getConversation(keep.id))
+        assertEquals("它的待推行也不许被清", 1, store.pendingOutbox().size)
+    }
+
+    /**
+     * **报错要如实**：库真的出错时一律抛，绝不静默回 `false`。
+     *
+     * 静默回 `false` 的后果是"界面以为删掉了、空壳其实还在"，而这是最难查的一类 ——
+     * 没有任何一端会报错。所以这里把库关掉再删一次，证明它**抛**。
+     */
+    @Test
+    fun `库真的出错时删会话要抛，不许静默回 false`() {
+        val c = store.createConversation(id = "conv-boom")
+        db.close()
+
+        var threw = false
+        try {
+            store.deleteConversation(c.id)
+        } catch (e: Throwable) {
+            threw = true
+        }
+        assertTrue("库坏了必须抛出去：静默回 false = 界面以为删掉了，空壳还在", threw)
+    }
 }

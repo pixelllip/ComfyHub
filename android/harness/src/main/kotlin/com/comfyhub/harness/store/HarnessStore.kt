@@ -114,6 +114,50 @@ class HarnessStore(private val session: SqlSession) {
         }
     }
 
+    /**
+     * 删掉本机这条会话（连同它的消息 / 块 / Run / 事件 —— 外键 `ON DELETE CASCADE`）。
+     *
+     * ## 为什么手机需要一个**本地**删除
+     *
+     * 界面切会话时会顺手清掉"上一条空壳"（AIH-018）。在此之前那一步打的是**远端**
+     * `DELETE /api/ai/conversations/{id}` —— 可手机上会话的真源是本地库，
+     * 那条请求既够不着本地镜像（空壳越攒越多），离线时还每次白报一个失败。
+     *
+     * ## 只删本地，**不写 wire 上的 delete**
+     *
+     * 上行只有 `upsert` 一种 op（🔒 `docs/sync-api-contract.md` §4），手机不许伪造删除
+     * （**R3**），而且"手机不修改桌面创建的既成事实"是设计里写死的纪律
+     * （`docs/mobile-harness-design.md` §7）。所以两种情形都**如实**：
+     *  - 还没推上去的：把它（以及它的消息 / 块）在 `_outbox` 里的待推行一并清掉，
+     *    桌面**根本不会知道它存在过**；
+     *  - 已经推上去的：桌面那份**留着**（那要由用户或桌面自己删），这里不假装"两边都删了"。
+     *
+     * ⚠ 返回值只说"**本机**是否真的删掉了一行"：id 不存在回 `false`（那不是错误，
+     * 重复清理很常见）；而库真的出错时一律**抛**出去 —— 静默回 `false` 会让界面以为
+     * 删掉了，实际空壳还在（那是"报错要如实"里最典型的一种假成功）。
+     */
+    fun deleteConversation(id: String): Boolean {
+        if (id.isBlank()) return false
+        var removed = false
+        session.transaction {
+            // 顺序不能反：消息行被删掉之后就查不出它们的 id 了。
+            // part 的 refId 形状是 `<messageId>#<ordinal>`（见 [appendPart]），
+            // 所以按 '#' 前缀反推它属于哪条消息。
+            session.update(
+                """
+                DELETE FROM _outbox
+                 WHERE ref_id = ?
+                    OR ref_id IN (SELECT id FROM ai_messages WHERE conversation_id = ?)
+                    OR (kind = ? AND substr(ref_id, 1, instr(ref_id || '#', '#') - 1)
+                          IN (SELECT id FROM ai_messages WHERE conversation_id = ?))
+                """.trimIndent(),
+                listOf(id, id, OutboxKind.PART, id),
+            )
+            removed = session.update("DELETE FROM ai_conversations WHERE id = ?", listOf(id)) > 0
+        }
+        return removed
+    }
+
     // -----------------------------------------------------------------------
     //  消息与有序块
     // -----------------------------------------------------------------------

@@ -1792,12 +1792,18 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 `_consumeRun()` / `stop()` / `answerQuestion()` / `_reloadMessages()` 一律走 `_source`）、
 以及**冷启动分叉**（`_doLoad()` 分组：桌面照旧；手机走 `_loadLocalStartup()`，会话只认本地库）。
 
-> ⚠ 下一轮容易踩的两点（都留了坑，别当成"已经全好了"）：
+> ⚠ 下一轮容易踩的两点（**2026-09-27 复核：两条都已处理，见 §25**）：
 > 1. **provider / 模型清单在离线时仍然是空的**（`_loadLocalStartup` 里 best-effort 拉一次桌面，
 >    失败就如实写进 `error`："桌面不在线，暂时拿不到模型清单…"）。所以**离线只能看历史会话**，
 >    发新消息仍会被 `sendBlockReason()` 挡住 —— 要让离线真能发，得等 **M6**（凭据下行 + Android Keystore）。
+>    → ✅ **M6 已落地（`dd6c69e` 就缓存了清单；移动端第 71 步补上"本机没缓存过这个 Provider"那条如实分支）**：
+>    现在"连过一次桌面"之后，离线冷启动照样拿得到 provider 与模型目录，配合本机密钥库里的 key 与
+>    缓存的 run-kit 就能直接发消息。**这条记录里"离线只能看历史会话"的说法早已不成立。**
 > 2. 本地库的**空壳会话清理**走的是 `_api.deleteConversation`（桥还没有这个动作），
 >    手机会攒下空壳。补法：桥加 `deleteConversation` + `RunEventSource` 加一个方法。
+>    → ✅ **已按这个补法做完（移动端第 71 步，§25）**：桥 `HarnessStore.deleteConversation` +
+>    `RunEventSource.deleteConversation` 两端实现，空壳清理改走 `_source`（**只有空壳那条路**改；
+>    用户主动删会话仍打后端 —— 见 §25 的"有意留着"）。
 
 ### ② 🔶 已做一半：P4 `/api/capture/workflows`（`1108673`）
 
@@ -2211,10 +2217,10 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | --- | --- |
 | **M5 排队提交**：手机 `comfy_queue_submit` → 桌面 outbox 消费者 → 产物 + `mediaIds` 回手机 | ⛔ **未开始**（`server-rs` 里 `submit_job` 这个 kind 一次都没出现；手机侧工具与 outbox 入队已在） |
 | M4 补全：`run` / `submit_job` 两种 kind 的上行通道 | ⛔ 未做（现在只推 `conversation` / `message` / `part`） |
-| M4 补全：前台定时 / 网络恢复时触发上行 | ⛔ 未做（只在**冷启动**与**每轮 Run 收尾**各推一次） |
-| **M6 剩余**：离线时 provider / 模型清单可用（本地目录缓存） | ⛔ 未做（离线只能看历史会话；凭据下行 + Keystore 已在第六轮验穿） |
+| M4 补全：前台定时 / 网络恢复时触发上行 | ✅ **已做（移动端第 71 步，2026-09-27，见 §25）**：队列里**真有待办**时才挂一个 45s 的 `Timer.periodic`（推空立刻停，绝不空转），外加"回到前台补推一次"（`AppLifecycleListener` —— 就是 `app.dart` 已经在用的那个钩子；手机没有连接状态回调，那要新引依赖）。两条都先看**本地**队列读数（`pendingOutbox`，不出网），失败只记 `pushNotice`，**不拦聊天页**（那条契约一个字未改） |
+| **M6 剩余**：离线时 provider / 模型清单可用（本地目录缓存） | ✅ **已做**，但要如实说：主体在 **`dd6c69e`（M6 那一轮）就做完了**，本条 ⛔ 是总纲的**陈旧记录**（缓存往返 / 离线起页面 / 能力声明不丢 / 凭据以本机密钥库为准，`test/ai_offline_source_test.dart` 里早有防线）。移动端第 71 步（§25）只补了**真正还空着的那一半**：provider 清单有缓存、但**本机没缓存过这个 Provider** 的目录时，以前会 `rethrow` 冒成"连接后端失败"（整页起不来）或一个没人接的异常（离线换 Provider），现在**只对手机**如实留空 + 说清原因 |
 | 手机侧 `web_search` / `civitai_search` | ⛔ 未实现（`declaredTo = kit ∩ 本地实现`，所以模型**看不到**这两个工具，不会"调了必然失败"） |
-| 手机空壳会话清理（桥缺 `deleteConversation`） | ⛔ 未做（M3.2 ③ 留下的坑） |
+| 手机空壳会话清理（桥缺 `deleteConversation`） | ✅ **已做（移动端第 71 步，2026-09-27，见 §25）**：桥新增 `deleteConversation`（`HarnessStore.deleteConversation` —— 连同消息/块/待推行一起清；id 不存在回 `false` 不算错；**库真出错一律抛**）+ `RunEventSource.deleteConversation` 两端实现，界面的**空壳清理**改走 `_source`。**只删本地、不写 wire 上的 delete（R3）** |
 | **M3.2 ④ 真机对着 Rust 后端回归** | ⛔ 未做（上一次真机验收是对 **Kotlin**；对着 Rust 只需要"发一条 → 桌面看得到"） |
 
 **防线与验收资产**
@@ -2866,7 +2872,7 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 | 系统提示第 17 条那句"`web_search`/`web_fetch`/`civitai_search` **共用这一个额度**"漏了 `find_model` | ✅ **已改（P4 第 69 步，2026-09-27）**：那句现在点名**五个**（`web_search` / `web_fetch` / `civitai_search` / `danbooru_lookup` / `find_model`）—— 预算按 `category_of(name)=="web"` 扣，而那一档本来就是这五个（只补 `find_model` 会把同一类不准确留在原地）。`PROMPT_VERSION` v32 → **v33**，`kitVersion` 随之 bump |
 | 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`）+ `workflow_recipes` 表 + `bind` 端点 | ✅ **已搬（P4 第 67 步，2026-09-27，见 §20）**（`WorkflowRecipe.kt` 710 行 + Repo/Learner/Binder/Routes + 约 1000 行 Kotlin 测试断言逐条移植） |
 | `WorkflowConvert` 的两处欠账（subgraph 展开 / `emulateFrontend`） | ✅ **已清零（P4 第 68 步，2026-09-27，见 §22）** |
-| 桌面/手机两侧的剩余项（M4 补全 / M5 排队提交 / M6 离线模型清单 / 手机 `deleteConversation`） | ⛔ 未做（见 §10.8 的移动端那张表） |
+| 桌面/手机两侧的剩余项（M4 补全 / M5 排队提交 / M6 离线模型清单 / 手机 `deleteConversation`） | 🔶 **M4 补全（前台定时 / 回到前台）与手机 `deleteConversation` 已做（移动端第 71 步，2026-09-27，见 §25）**；**M6 离线模型清单**复核后是"**早已做完**（`dd6c69e`）但总纲记成 ⛔"，这一批只补了"本机没缓存过那个 Provider"的如实分支；**M5 排队提交**仍 ⛔（见 §10.8 的移动端那张表） |
 | 图像编辑的 `light=auto`、`>1024` 长边的人物图、"人变糊"的单变量对照 | ⛔ 未做（见 §15.4 / §16.7；`light` 那个死变量已清掉） |
 
 ---
@@ -3172,6 +3178,96 @@ Kotlin 的真源在 `Application.kt` 的 `preflight` lambda（`AiWorkflowSearch.
 
 新的防线：`tests/submit_test.rs` 两条（纯前端节点 → 拒且**一个字节都不发**；只有非阻断结论时 → 照常提交且结论在 `preflightWarnings` 里，
 并顺带钉住"审核跑在**覆盖之后**的图上"：库里的 `6.text` 是 `old prompt`，只有覆盖应用完才会报"给 Krea 2 堆 Danbooru tag"那条）。
+
+---
+
+## 25. 2026-09-27（移动端第 71 步）：手机空壳会话清理 + 上行触发补全 + 离线模型清单的**如实分支**
+
+> 这一批只动**移动端（M 轨道）**那三件 ⛔。**复核之后有一件是总纲记错了**，如实写在下面。
+
+### 25.1 ① 手机空壳会话清理：桥加 `deleteConversation`
+
+界面切会话时会顺手清掉"上一条空壳"（AIH-018），而那一步原先打的是**远端**
+`DELETE /api/ai/conversations/{id}`（`_api.deleteConversation`）—— 可手机上会话的真源是
+**本地库**，那条请求够不着本地镜像：**空壳越攒越多**，离线时还每次白报一个失败。
+
+补法就是 §9 ① 里写的那一条，一个字没改：
+
+| 层 | 加了什么 |
+| --- | --- |
+| `HarnessStore.deleteConversation(id)` | `DELETE FROM ai_conversations`（消息 / 块 / Run / 事件靠 `ON DELETE CASCADE`，R1 的 `foreign_keys` 自检在守着），**同一个事务里**把这个会话（以及它的消息、`<messageId>#<ordinal>` 形状的块）在 `_outbox` 里的待推行一并清掉 |
+| `HarnessBridge` | 新方法 `deleteConversation`（只动本地库，**不出网**） |
+| `RunEventSource` | 新抽象方法 `deleteConversation`：远端 → `_api.deleteConversation`，本地 → 桥 |
+| `ai_workspace_store` | `_deleteConversationQuietly`（空壳清理那条路）改走 `_source` |
+
+三条纪律：
+
+1. **返回值只说"本机是否真删掉了一行"**：id 不存在回 `false`（重复清理是常态，**不是错误**）；
+   而**库真出错时一律抛**（桥回 `HARNESS_ERROR`）—— 静默回 `false` = 界面以为删掉了、空壳还在，
+   两端都不报错（这就是"报错要如实"）。
+2. **只删本地、不写 wire 上的 `delete`**（R3：上行只有 `upsert`）。没推上去的，桌面根本不知道它
+   存在过；**已经推上去的，桌面那份留着**（`docs/mobile-harness-design.md` §7：手机不修改桌面
+   创建的既成事实）。不假装"两边都删了"。
+3. **只改空壳那一条路**：用户主动删会话（`deleteConversation(id)`，会话列表的菜单）**仍然打后端** ——
+   手机上它删的可能是一条桌面创建、手机只是镜像的会话，而手机侧没有、也不许有"叫桌面删掉它"的
+   上行 op。**"手机上的主动删除不动本地镜像"是已知欠账，这一批有意没碰**（要做得先定一个本地
+   "删除标记"的形状，那是 M4 的活）。
+
+### 25.2 ② M4 补全：上行加"前台定时"与"回到前台"
+
+在此之前 `SyncPush` 只在**冷启动**与**每轮 Run 收尾**各推一次 —— 用户停在聊天页不动、
+或者"刚才断网、现在网回来了"，攒下的东西要等到下次冷启动才上去。
+
+- **判据是本地队列**：`RunEventSource` 新增 `pendingOutbox()`（手机读本地库、**不出网**；桌面恒 0）。
+- **前台定时**：`syncOutbox()` 每次收尾看 `pending` —— `> 0` 才挂 `Timer.periodic(45s)`，
+  **推空立刻停**；`syncOutbox` 自己防重入（上一拍没跑完就跳过这一拍）。**绝不空转烧电**
+  （回归用例把 5 分钟里的"一次额外上行都没有"钉住了）。
+- **回到前台**：`AppLifecycleListener(onResume:)`（**就是 `app.dart` 已经在用的那个 API**；
+  Android 的连接状态回调要新引 `connectivity_plus`，本批不引依赖）—— 先问本地队列，
+  **没有待办就一条网络请求都不打**，有才 `syncOutbox()`。
+- **契约一个字未改**：失败只写 `pushNotice`（"本机还有 N 条没同步到桌面：原因"），
+  **绝不拦聊天页**（`test/ai_offline_source_test.dart` 里"上行失败不拦聊天页"那条照旧在跑）。
+
+### 25.3 ③ M6：清单缓存**早已做完**，这一批只补了"没缓存过"那条如实分支
+
+如实说：**缓存主体在 `dd6c69e`（M6 那一轮）就落地了** —— provider 清单 + 每 Provider 的模型目录
+落 `SharedPreferences`，离线冷启动用缓存、并用本机密钥库状态覆盖 `credential`、界面说一句
+"用的是本机缓存的模型清单"。§10.8 那条 ⛔ 与 §9 ① 的警告是**陈旧记录**（写那两处时缓存还没加）。
+这一批**没有**重做它（重做等于把同一个事实写两遍），只补真正空着的那一半：
+
+`_loadModels()` 在"桌面不在线 **且** 本机没缓存过这个 Provider 的目录"时，以前直接 `rethrow`，
+两个后果都不如实：
+
+1. 冷启动那条路上它会一路冒到 `_doLoad` → **整页变成"连接后端失败"**，可手里的 provider 清单与
+   历史会话明明都在（只是这个目录没缓存）；
+2. 离线时在输入区**换一个 Provider**（`selectProvider`）会抛一个没人接的异常。
+
+现在**只对手机**放行（判据 `credentials.isLocal`，正是"本机有没有本地清单缓存"那个标志）：
+目录如实留空 + `modelsIssue` 说清"本机还没缓存过「X」的模型清单，联网时选一次它就会缓存下来"，
+并写进界面那个 `error` 通道（不假装新鲜）。**桌面那份行为一个字未改**（它本来就该连得上后端：
+`cached` 在桌面上恒为空 → 照旧 `rethrow`）。
+
+**缓存里绝不含密钥**：`AiProvider.toJson` 连 `credential` 这个键都不写（它是"这台机器上有没有 key"
+的即时状态），新增用例把"缓存里没有 `credential` 键、也没有任何密钥值"钉住（AIH-012）。
+
+### 25.4 验收
+
+| 项 | 结果 |
+| --- | --- |
+| `flutter analyze` | No issues found |
+| `flutter test` | **311 例全绿**（基线 302 → +9；`test/ai_offline_source_test.dart` 17 → 26） |
+| `:harness:testDebugUnitTest` | **165 例全绿**（基线 162 → +3：删会话级联 + 待推行、id 不存在不报错、库出错要抛） |
+
+### 25.5 ★ 两个测出来的坑（都写进了测试注释）
+
+1. **`testWidgets` 里"没人应答的 method channel"会把整条 `flutter test` 挂死**：`testWidgets` 跑在
+   `fakeAsync` 区里，而没人应答的通道要**经过引擎回包**（真实事件循环）—— 那一步永远不会被 fakeAsync
+   的时钟推进，于是 `await store.load()`（内部要读配对令牌）当场卡住：不报错、不超时、没有任何输出
+   （实测停在 `00:00 +12: 前台定时…` 之后）。**手机侧的用例都要先 `mockPairingChannel()`**（哪怕不要
+   令牌），回包走纯 Dart 那条路就正常了。
+2. **`testWidgets` 的"不许有 pending timer"断言跑在 `addTearDown` 之前**：用例体里必须把定时器停掉
+   （把队列推空），`addTearDown(store.dispose)` 来不及。
+
 
 
 

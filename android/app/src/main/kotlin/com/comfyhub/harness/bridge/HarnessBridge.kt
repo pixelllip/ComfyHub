@@ -173,6 +173,13 @@ class HarnessBridge(private val context: Context) :
                     )
                 }
                 "listMessages" -> result.success(listMessages(call.argument<String>("conversationId").orEmpty()))
+                // 清掉本地镜像里的空壳会话（界面切会话时顺手做的那种清理）。
+                // **只动本地库**：远端那条 DELETE 在手机上是打给桌面的，够不着本地镜像 ——
+                // 这正是"手机上空壳越攒越多"的原因（见 HarnessStore.deleteConversation）。
+                // 回的是"本机是否真的删掉了一行"：false = 本来就没有（不是错误）。
+                "deleteConversation" -> result.success(
+                    ensureInitialized().deleteConversation(call.argument<String>("conversationId").orEmpty()),
+                )
                 "listParts" -> result.success(listParts(call.argument<String>("messageId").orEmpty()))
                 "conversationTitle" -> result.success(
                     store?.getConversation(call.argument<String>("conversationId").orEmpty())?.title,

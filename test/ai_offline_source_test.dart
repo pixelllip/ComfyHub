@@ -14,6 +14,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -146,7 +147,31 @@ class _FakeLocalSource implements RunEventSource {
   @override
   Future<List<AiConversation>> listConversations() async {
     calls.add('listConversations');
-    return const [AiConversation(id: 'local-conv-1', title: '离线时起的会话')];
+    return List.of(conversations);
+  }
+
+  /// 本地库里的会话（默认一条空壳：多数用例只关心"离线也能进聊天页"）。
+  final List<AiConversation> conversations = [
+    const AiConversation(id: 'local-conv-1', title: '离线时起的会话'),
+  ];
+
+  /// 每次 `deleteConversation` 删掉的是哪条（M3.2 ③ 的第二块砖）。
+  final List<String> deleted = [];
+
+  @override
+  Future<void> deleteConversation(String conversationId) async {
+    calls.add('deleteConversation');
+    deleted.add(conversationId);
+    conversations.removeWhere((c) => c.id == conversationId);
+  }
+
+  /// 本地 `_outbox` 里还剩几条（**不出网**的那次问话，回到前台触发器要先看它）。
+  int pendingOutboxCount = 0;
+
+  @override
+  Future<int> pendingOutbox() async {
+    calls.add('pendingOutbox');
+    return pendingOutboxCount;
   }
 
   @override
@@ -423,6 +448,299 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
+  //  手机空壳会话清理：走本地库，不打远端 DELETE
+  // -------------------------------------------------------------------------
+
+  test('手机：清空壳会话删的是**本地库**（远端 DELETE 够不着本地镜像）', () async {
+    final remoteCalls = <String>[];
+    final source = _FakeLocalSource()
+      ..conversations.addAll(const [
+        AiConversation(id: 'local-old', title: '新对话'),
+        AiConversation(id: 'local-older', title: '新对话'),
+      ]);
+    final store = AiWorkspaceStore(
+      api: AiApiClient(
+        'http://127.0.0.1:8080',
+        client: MockClient((request) async {
+          remoteCalls.add('${request.method} ${request.url.path}');
+          return http.Response('offline', 500);
+        }),
+      ),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    await store.load();
+
+    // 列表按更新时间倒序：只留最新那条，其余两条清掉
+    expect(store.conversation?.id, 'local-conv-1');
+    expect(source.deleted, ['local-old', 'local-older'], reason: '空壳要在**本地库**里删掉');
+    expect(
+      remoteCalls.where((c) => c.startsWith('DELETE /api/ai/conversations/')),
+      isEmpty,
+      reason: '手机上那句远端 DELETE 够不着本地镜像，空壳会越攒越多：$remoteCalls',
+    );
+  });
+
+  test('手机：空壳删完之后，列表与本地库里都不该再有它', () async {
+    final source = _FakeLocalSource()
+      ..conversations.addAll(const [AiConversation(id: 'local-old', title: '新对话')]);
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+
+    await store.load();
+
+    expect(source.deleted, ['local-old']);
+    expect(source.conversations.map((c) => c.id), isNot(contains('local-old')));
+    expect(store.conversations.map((c) => c.id), isNot(contains('local-old')));
+  });
+
+  // -------------------------------------------------------------------------
+  //  M4 补全：上行不只在冷启动 / Run 收尾触发 —— 前台定时 + 回到前台
+  // -------------------------------------------------------------------------
+
+  testWidgets('前台定时：队列里还有东西才定时重推，推空了立刻停（不空转烧电）', (tester) async {
+    mockPairingChannel();
+    final source = _FakeLocalSource()
+      ..outboxPending = 2
+      ..outboxError = '连不上上游：ConnectException';
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+    addTearDown(store.dispose);
+
+    await store.load();
+    final atColdStart = source.calls.where((c) => c == 'syncNow').length;
+    expect(store.pushNotice, contains('2 条'), reason: '冷启动推失败要如实记一句');
+    expect(store.outboxRetryArmed, isTrue, reason: '还有 2 条没上去 → 该挂着重试');
+
+    // 桌面回来了：下一次定时到点就该把这两条补推上去
+    source
+      ..outboxPending = 0
+      ..outboxError = null
+      ..outboxApplied = 2;
+    await tester.pump(const Duration(minutes: 2));
+    await tester.pump();
+
+    expect(
+      source.calls.where((c) => c == 'syncNow').length,
+      greaterThan(atColdStart),
+      reason: '前台定时这一拍必须真的再推一次（这就是 M4 缺的那种触发）',
+    );
+    expect(store.pushNotice, contains('已把本机 2 条记录同步到桌面'));
+    expect(store.outboxRetryArmed, isFalse, reason: '推空了就要停：不能挂着空转');
+  });
+
+  testWidgets('队列是空的：不定时、也不打网络（用户停在聊天页不该被反复唤醒）', (tester) async {
+    mockPairingChannel(); // 见 [mockPairingChannel]：fakeAsync 里没人应答的通道会挂死
+    final source = _FakeLocalSource();
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+    addTearDown(store.dispose);
+
+    await store.load();
+    final atColdStart = source.calls.where((c) => c == 'syncNow').length;
+    expect(store.outboxRetryArmed, isFalse, reason: '一条待办都没有 → 不该挂定时器');
+
+    await tester.pump(const Duration(minutes: 5));
+
+    expect(
+      source.calls.where((c) => c == 'syncNow').length,
+      atColdStart,
+      reason: '空队列绝不能定时轮询：那是白烧电，也是 M4 补全里唯一要防的坏做法',
+    );
+  });
+
+  testWidgets('回到前台（很可能刚恢复网络）：有活儿才补推，没活儿一条请求都不打', (tester) async {
+    mockPairingChannel(); // 见 [mockPairingChannel]：fakeAsync 里没人应答的通道会挂死
+    final source = _FakeLocalSource()
+      ..outboxPending = 3
+      ..outboxError = '连不上上游：ConnectException';
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+    addTearDown(store.dispose);
+
+    await store.load();
+    final atColdStart = source.calls.where((c) => c == 'syncNow').length;
+
+    // ① 本地队列是空的 → 回前台不该打任何网络
+    source.pendingOutboxCount = 0;
+    await store.onAppResumed();
+    expect(
+      source.calls.where((c) => c == 'syncNow').length,
+      atColdStart,
+      reason: '没有待办时回到前台不该推（先问本地队列，问完就返回）',
+    );
+    expect(source.calls, contains('pendingOutbox'), reason: '判据必须是本地队列的读数');
+
+    // ② 有 3 条待办 → 回前台补推一次
+    source.pendingOutboxCount = 3;
+    await store.onAppResumed();
+    expect(
+      source.calls.where((c) => c == 'syncNow').length,
+      greaterThan(atColdStart),
+      reason: '这就是"网络刚恢复"那一刻该做的事',
+    );
+    expect(store.pushNotice, contains('3 条'));
+
+    // 收尾：这一推又失败了（还有 3 条）→ 定时器挂着。`addTearDown` 来不及 ——
+    // `testWidgets` 的"不许有 pending timer"断言跑在 tearDown **之前**，
+    // 所以要在**用例体里**把它推空、让它自己停。
+    source
+      ..pendingOutboxCount = 0
+      ..outboxPending = 0
+      ..outboxError = null
+      ..outboxApplied = 3;
+    await tester.pump(const Duration(minutes: 1));
+    expect(store.outboxRetryArmed, isFalse, reason: '推空了就该停');
+  });
+
+  testWidgets('回到前台的钩子真的装上了（投一次窗口生命周期事件即可）', (tester) async {
+    mockPairingChannel(); // 见 [mockPairingChannel]：fakeAsync 里没人应答的通道会挂死
+    final source = _FakeLocalSource();
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+    );
+    addTearDown(store.dispose);
+
+    await store.load();
+    source.pendingOutboxCount = 1;
+    final before = source.calls.where((c) => c == 'syncNow').length;
+
+    // 走**真的**那一条路：store 自己注册的 AppLifecycleListener（app.dart 用的是同一个 API）
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
+    expect(
+      source.calls.where((c) => c == 'syncNow').length,
+      greaterThan(before),
+      reason: '没有这个钩子，手机就得等下一次冷启动才会推',
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  //  M6 剩余：离线时 provider / 模型清单可用（本地缓存）
+  // -------------------------------------------------------------------------
+
+  testWidgets('手机：provider 清单有缓存、模型目录没缓存过 → 仍进得了聊天页，并如实说原因', (tester) async {
+    mockPairingChannel(); // 见 [mockPairingChannel]：fakeAsync 里没人应答的通道会挂死
+    final creds = _FakeDeviceCredentials(configured: true);
+
+    // 第一次"桌面在线"，但模型目录那一路挂了 → 只缓存下 provider 清单
+    final partial = AiWorkspaceStore(
+      api: _okApi(modelsOk: false),
+      source: _FakeLocalSource(),
+      credentials: creds,
+    );
+    await partial.load();
+    expect(partial.providers.single.id, 'p1');
+    expect(partial.models, isEmpty);
+    expect(partial.modelsIssue, isNotNull, reason: '目录没拿到要说清楚，不能装作"这个 Provider 没模型"');
+
+    // 离线冷启动：会话与 provider 清单都在本机 → 必须能进页面
+    final offline = AiWorkspaceStore(
+      api: AiApiClient(
+        'http://127.0.0.1:8080',
+        client: MockClient((request) async => http.Response('offline', 500)),
+      ),
+      source: _FakeLocalSource(),
+      credentials: creds,
+    );
+    await offline.load();
+
+    expect(offline.loaded, isTrue, reason: '目录没缓存过也不该让整页起不来（以前会冒成"连接后端失败"）');
+    expect(offline.providers.single.id, 'p1', reason: 'provider 清单是缓存的');
+    expect(offline.models, isEmpty);
+    expect(offline.error, contains('缓存过'), reason: '如实说"本机还没缓存过这个 Provider 的目录"');
+    expect(offline.error, isNot(contains('连接后端失败')));
+    // 发不出去的原因照旧是一句人话（不是异常、不是空白）
+    expect(offline.sendBlockReason(), contains('Provider 与模型'));
+  });
+
+  testWidgets('手机：离线换一个本机没缓存过的 Provider → 不抛异常，当场说明原因', (tester) async {
+    mockPairingChannel(); // 见 [mockPairingChannel]：fakeAsync 里没人应答的通道会挂死
+    final creds = _FakeDeviceCredentials(configured: true);
+    await AiWorkspaceStore(
+      api: _okApi(),
+      source: _FakeLocalSource(),
+      credentials: creds,
+    ).load(); // 先在本机缓存下 p1
+
+    final offline = AiWorkspaceStore(
+      api: AiApiClient(
+        'http://127.0.0.1:8080',
+        client: MockClient((request) async => http.Response('offline', 500)),
+      ),
+      source: _FakeLocalSource(),
+      credentials: creds,
+    );
+    await offline.load();
+
+    // 换到 p2：本机从来没有缓存过它的目录
+    await offline.selectProvider(_providerWithRef('p2', 'OTHER_KEY'));
+
+    expect(offline.models, isEmpty);
+    expect(offline.modelsIssue, contains('p2'));
+    expect(offline.error, contains('p2'), reason: '换完 Provider 要当场说明，别让用户对着空选择器猜');
+  });
+
+  test('手机：清单缓存里**只有能力声明与端点**，密钥一个字节都不许进（AIH-012）', () async {
+    mockPairingChannel(token: 'tok-phone-1');
+    final creds = _FakeDeviceCredentials(configured: false);
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: _FakeLocalSource(),
+      credentials: creds,
+      baseUrlProvider: () => 'http://10.0.0.5:8081',
+      authApiFactory: (base) => InboundAuthApi(
+        base,
+        client: MockClient(
+          (request) async => http.Response(
+            jsonEncode({
+              'credentials': {'PHONE_KEY': 'sk-secret-a'}
+            }),
+            200,
+            headers: const {'content-type': 'application/json; charset=utf-8'},
+          ),
+        ),
+      ),
+    );
+
+    await store.load(); // 缓存一份清单
+    await store.syncCredentialsFromDesktop(); // 再从桌面取一把密钥（值只进密钥库）
+
+    final prefs = await SharedPreferences.getInstance();
+    final cached = '${prefs.getString('comfyhub.ai.cachedProviders')}'
+        '${prefs.getString('comfyhub.ai.cachedModels.p1')}';
+    expect(cached, isNotEmpty);
+    expect(cached, isNot(contains('sk-secret-a')), reason: '密钥只能进密钥库，绝不进清单缓存');
+    expect(creds.saved['PHONE_KEY'], 'sk-secret-a');
+
+    // 缓存里的 provider 行**只有能力声明与端点**：`credential` 整个键都不许进去
+    // （它是"这台机器上有没有 key"的即时状态，缓存下来那一刻就可能过期；
+    //  更要紧的是它一旦进缓存，将来就有人往里塞值）。以后加字段时这条会红。
+    final rows = (jsonDecode(prefs.getString('comfyhub.ai.cachedProviders')!) as List).cast<Map>();
+    expect(rows.single.containsKey('credential'), isFalse);
+    expect(rows.single.keys.toSet(), {
+      'id', 'displayName', 'api', 'baseURL', 'credentialRef', 'endpointTrust', 'enabled', 'revision',
+    });
+  });
+
+  // -------------------------------------------------------------------------
   //  M4：上行 —— 手机产生的会话/消息要能到桌面
   // -------------------------------------------------------------------------
 
@@ -442,6 +760,9 @@ void main() {
     expect(store.syncedToDesktop, 3);
     expect(store.pushNotice, contains('3 条'));
     expect(store.pushNotice, contains('还有 1 条待同步'), reason: '"还剩几条"必须说出来');
+    // 还有 1 条待推 → M4 补全之后这里会挂上重试定时器；用例结束要收掉它
+    expect(store.outboxRetryArmed, isTrue);
+    store.dispose();
   });
 
   test('上行失败不拦聊天页（离线是手机的常态）', () async {
@@ -460,6 +781,9 @@ void main() {
     expect(store.loaded, isTrue);
     expect(store.pushNotice, contains('2 条'));
     expect(store.pushNotice, contains('ConnectException'));
+    // 顶部那条契约一个字没改：**没有抛**、页面可用，只是记了一句
+    expect(store.outboxRetryArmed, isTrue, reason: '离线且有 2 条待办 → 前台会再试（不拦聊天页）');
+    store.dispose();
   });
 
   test('一轮跑完之后也会顺手推一次（那时内容才定稿）', () async {
@@ -606,6 +930,13 @@ void main() {
 }
 
 /// 把配对令牌 / 设备身份灌进假的本机密钥库（真身是 Android Keystore，走桥）。
+///
+/// ⚠ **`testWidgets` 里的用例必须先调它（哪怕不要令牌）**：`testWidgets` 跑在
+/// `fakeAsync` 区里，而"没人应答的 method channel"要**经过引擎回包**（真实事件循环）——
+/// 那一步永远不会被 fakeAsync 的时钟推进，于是 `await store.load()`（内部要读配对令牌）
+/// 会**当场挂死**：整条 `flutter test` 卡住、不报错、也不超时。
+/// 装了应答者之后，回包走的是纯 Dart 那条路，正常。
+/// 实测踩过：`00:00 +12: 前台定时…` 之后就再没有任何输出。
 void mockPairingChannel({
   String? token,
   String deviceId = 'phone-1',
@@ -640,9 +971,12 @@ AiProvider _providerWithRef(String id, String ref) => AiProvider(
 
 /// 桌面在线：provider 清单 + 模型目录都正常返回（用来灌"本机缓存"）。
 ///
+/// [modelsOk] = false 时模型目录那一路 500 —— 用来造"provider 清单缓存到了、
+/// 模型目录没缓存到"这种真实存在的状态（M6 剩余那一半）。
+///
 /// ⚠ 响应必须带 `charset=utf-8`：`http.Response` 默认按 **Latin-1** 编码 body，
 /// 中文显示名会在 `http` 层就抛 "Contains invalid characters"（看起来像后端挂了）。
-AiApiClient _okApi() => AiApiClient(
+AiApiClient _okApi({bool modelsOk = true}) => AiApiClient(
       'http://127.0.0.1:8080',
       client: MockClient((request) async {
         const json = {'content-type': 'application/json; charset=utf-8'};
@@ -667,6 +1001,7 @@ AiApiClient _okApi() => AiApiClient(
           );
         }
         if (request.url.path == '/api/ai/providers/p1/models') {
+          if (!modelsOk) return http.Response('模型目录这次挂了', 500, headers: json);
           return http.Response(
             jsonEncode([
               {
