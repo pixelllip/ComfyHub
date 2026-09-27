@@ -40,6 +40,25 @@ use crate::routes::{ApiError, AppState};
 /// 单个附件的上传硬上限（Kotlin `AiAttachmentStore.MAX_UPLOAD_BYTES`）。
 pub const MAX_UPLOAD_BYTES: u64 = 32 * 1024 * 1024;
 
+/// `POST /api/ai/attachments` 整个请求体的上限（**不是**单文件上限，见下）。
+///
+/// ⚠ 这个常量是**补一个真实漏洞**（2026-09-27 用户报"上传不了图片附件"）：
+/// axum 的 `DefaultBodyLimit` 默认只有 **2MB**，而 Kotlin 那边是
+/// `call.receiveMultipart(formFieldLimit = MAX_UPLOAD_BYTES)` —— **32MB**。
+/// 搬过来时漏了这一层，于是"选一张手机拍的照片（4MB）→ 传不上去"：
+/// 请求体还没进到 `upload()` 就被截断，客户端拿到的是
+/// `附件上传解析失败：Error parsing multipart/form-data request`（curl）/
+/// `SocketException ... errno = 10053`（Dart 的 chunked 发送被中途掐断）。
+///
+/// 为什么取 `MAX_UPLOAD_BYTES` 的若干倍而不是等于它：`DefaultBodyLimit` 管的是
+/// **整个请求体**（所有字段加起来），而 App 的选文件对话框允许**一次选多张**。
+/// 单文件仍然由 `MAX_UPLOAD_BYTES` 逐条判定（超了给的是那句能看懂的人话）。
+///
+/// ⚠ 为什么不能直接照搬 Kotlin 的 4GB（`/api/media/upload` 那档）：Rust 侧
+/// `field.bytes()` 会把**整个字段读进内存**，Kotlin 是流式落盘 ——
+/// 上限给到 GB 级等于给自己埋一个 OOM。要真正对齐得先把落盘改成流式（未做）。
+pub const MAX_BODY_BYTES: usize = (MAX_UPLOAD_BYTES as usize) * 4;
+
 /// 允许前端随预检提交的文件头大小（Kotlin `StrictIntake.MAX_HEAD_BYTES`）。
 pub const MAX_HEAD_BYTES: usize = 4096;
 
@@ -551,6 +570,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/ai/attachments/{id}/thumb", axum::routing::get(get_thumb))
         // 附件准入预检（AIH-029）：**纯计算**，不产生任何上游请求
         .route("/api/ai/preflight", axum::routing::post(preflight))
+        // 上传这一条要放开 axum 的默认 2MB 请求体上限（默认值会让真实照片传不进来，
+        // 见 MAX_BODY_BYTES 的注释）。**只挂在这一条路由上**，别扩到全局。
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
 // ---------------------------------------------------------------------------
@@ -760,6 +782,19 @@ async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> Resu
             Err(e) => {
                 for (_, tmp, _) in incoming.iter() {
                     let _ = std::fs::remove_file(tmp);
+                }
+                // 请求体撞上上限（`DefaultBodyLimit`，见 MAX_BODY_BYTES）时 axum 给的是
+                // 一句 `Error parsing multipart/form-data request` —— 谁也看不出是"传太大了"。
+                // 这里换成能照着做的人话（单文件上限仍然由上面逐条判定）。
+                if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                    return Err(ApiError::ai(
+                        "UNSUPPORTED_CONTENT",
+                        format!(
+                            "这次上传的总内容超过 {} MB 上限（单张最大 {} MB）—— 少选几个文件再试",
+                            MAX_BODY_BYTES / 1024 / 1024,
+                            MAX_UPLOAD_BYTES / 1024 / 1024
+                        ),
+                    ));
                 }
                 return Err(ApiError::ai("CONFIG_ERROR", format!("附件上传解析失败：{e}")));
             }

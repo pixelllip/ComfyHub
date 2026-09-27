@@ -146,6 +146,25 @@ fn png_bytes() -> Vec<u8> {
     buffer.into_inner()
 }
 
+/// 一张**真 PNG**，而且**大到超过 axum 默认的 2MB 请求体上限**（2026-09-27 的回归夹具）。
+///
+/// 为什么用"压不动"的准随机像素：`image` 的 PNG 编码器对噪声没有压缩空间，
+/// 1400×900 的 RGB 稳定产出 ~3.8MB，而它仍然是一张真能解码、真能出缩略图的图。
+fn big_png_bytes() -> Vec<u8> {
+    let mut seed: u32 = 0x1234_5678;
+    let image = image::RgbImage::from_fn(1400, 900, |_, _| {
+        // 一个够用的 LCG：只要"看起来是噪声"，PNG 就压不动
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let b = seed.to_le_bytes();
+        image::Rgb([b[0], b[1], b[2]])
+    });
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(image)
+        .write_to(&mut buffer, image::ImageFormat::Png)
+        .unwrap();
+    buffer.into_inner()
+}
+
 /// 一台**记录请求体**的假网关：返回一段最小 SSE（让 Run 能收尾），并把请求体留给我们断言。
 async fn recording_gateway() -> (String, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -388,4 +407,27 @@ async fn 支持的图片会被真的内联_发不出去的必须如实告知() {
 
     gateway.abort();
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// 回归（2026-09-27 用户现场："**上传不了图片附件**"）：
+/// 一张 4MB 的照片在 axum 默认的 2MB `DefaultBodyLimit` 下**根本进不到 handler** ——
+/// curl 拿到 `附件上传解析失败：Error parsing multipart/form-data request`，
+/// 而 App 是 chunked 发送，被中途掐断后界面显示
+/// `ClientException with SocketException ... errno = 10053`（"你的主机中的软件中止了一个已建立的连接"）。
+///
+/// Kotlin 那边是 `call.receiveMultipart(formFieldLimit = MAX_UPLOAD_BYTES)`（32MB），
+/// 搬过来时漏了 `DefaultBodyLimit` 这一层。这条线钉住"**真实尺寸的照片必须收得下**"。
+#[tokio::test]
+async fn 真实尺寸的照片不被请求体上限截断() {
+    let (state, _dir) = state("big-upload");
+    let bytes = big_png_bytes();
+    assert!(
+        bytes.len() > 2 * 1024 * 1024,
+        "夹具本身必须大于 axum 的默认上限，否则这条用例防不住回归（实测 {} 字节）",
+        bytes.len()
+    );
+    let (status, body) = upload(&state, &[("files", "照片.png", bytes)]).await;
+    assert_eq!(status, StatusCode::CREATED, "真实尺寸的照片被请求体上限截断了：{body}");
+    assert_eq!(body["items"][0]["kind"], json!("image"));
+    assert_eq!(body["items"][0]["status"], json!("ready"));
 }
