@@ -1036,14 +1036,65 @@ async fn set_device_credentials(
     }
 }
 
-/// `POST /api/auth/pair/start` —— **扫码通道，本轮没做**（§11.1）。
+/// `POST /api/auth/pair/start` —— **扫码通道的桌面那一端**（§5.1 / §9 拍板，**仅回环**）。
 ///
-/// 刻意**显式 501**而不是让它掉进"接口不存在"：这两件事对用户是不同的
-/// （一个是"这条路还没修"，一个是"你路径写错了"）。
-async fn pair_start() -> Result<Json<Value>, ApiError> {
-    Err(ApiError::not_implemented(
-        "扫码配对还没做（本轮只做「手机发起 + 桌面显示 6 位码」，见 docs/pairing-design.md §11.1）",
-    ))
+/// 与 `pair/request` 的分工：那条是**手机举手**（桌面把码显示出来、人在手机上敲）；
+/// 这条是**桌面主动出码**（二维码里带 ticket + 可达地址，手机扫过去、再敲同一个 6 位码）。
+/// 两条路用的是**同一套会话**（[`Session`]），所以 `pair/claim` 两条都认。
+///
+/// 四条纪律：
+/// 1. **仅回环**：ticket 一旦编进二维码，看到它的人就能拿去兑（虽然还要 6 位码）——
+///    所以"生成二维码"只允许在桌面本机上做；
+/// 2. `ticket` 与 `code` **只在这个响应里出现**：不落库、不进日志、也不进 `pair/pending`
+///    （那张列表是给"手机举手"用的，扫码会话在举手时还不知道是谁）；
+/// 3. `urls` 来自 [`crate::net_urls`]（**我们实际监听的**端口），一条都没有就回空数组、
+///    让界面如实说"手填地址"——**绝不编一个连不上的地址**；
+/// 4. 会话 TTL 与 `pair/request` 同值（120 秒）：二维码被拍走后的可用窗口越短越好。
+async fn pair_start(
+    State(state): State<AppState>,
+    RemoteAddr(remote): RemoteAddr,
+) -> Result<Json<Value>, ApiError> {
+    require_loopback(remote, "生成配对二维码")?;
+    let unix = now_unix();
+    let id = random_hex_id()?;
+    // `secret` 就是 ticket（与 pair/request 同一个字段）：编进二维码、也是算 6 位码的密钥
+    let secret = random_token()?;
+    let expires = unix + SESSION_TTL_SECS;
+
+    {
+        let Ok(mut state) = sessions().lock() else {
+            return Err(ApiError::internal("配对状态锁已中毒"));
+        };
+        prune(&mut state.list, unix);
+        while state.list.len() >= MAX_PENDING {
+            state.list.remove(0);
+        }
+        state.list.push(Session {
+            id,
+            secret: secret.clone(),
+            // ★ 扫码通道在"出码"这一刻**还不知道是哪台手机**（谁扫就是谁）：
+            //   device_id 留空 —— `pair/claim` 里"设备与会话不一致"那条判据只对非空会话生效，
+            //   而 `pair_pending` 会把空 device_id 的会话过滤掉（它不是"有人在等"）。
+            device_id: String::new(),
+            device_name: String::new(),
+            ip: None,
+            expires,
+            attempts: 0,
+            used: false,
+        });
+    }
+
+    let urls: Vec<Value> = crate::net_urls::collect(state.port())
+        .into_iter()
+        .map(|e| Value::String(e.url))
+        .collect();
+    let mut obj = Map::new();
+    obj.insert("ticket".into(), Value::String(secret.clone()));
+    obj.insert("code".into(), Value::String(code_for(&secret, unix)));
+    obj.insert("expiresAt".into(), Value::String(iso_at(expires)));
+    obj.insert("codeExpiresAt".into(), Value::String(iso_at(code_expires_at(unix))));
+    obj.insert("urls".into(), Value::Array(urls));
+    Ok(Json(Value::Object(obj)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,7 +1186,9 @@ async fn pair_pending(RemoteAddr(remote): RemoteAddr) -> Result<Json<Value>, Api
     let pending: Vec<Value> = state
         .list
         .iter()
-        .filter(|s| !s.used)
+        // `device_id` 为空的会话是**扫码通道**（桌面出的码，还不知道谁来扫）——
+        // 它不是"有人在等"，列出来只会让桌面上多一条没有设备名的空行。
+        .filter(|s| !s.used && !s.device_id.is_empty())
         .map(|s| pending_json(s, unix))
         .collect();
     Ok(Json(serde_json::json!({ "pending": pending })))

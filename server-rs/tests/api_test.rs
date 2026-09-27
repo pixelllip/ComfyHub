@@ -3805,11 +3805,15 @@ async fn auth_switch_and_rotate_behave_as_documented() {
     assert_eq!(status, StatusCode::OK);
 }
 
-/// 扫码通道本轮**明确没做**：503 形状的诚实回答，而不是掉进"接口不存在"。
+/// 扫码通道**已经做了**（2026-09-27）：回环来源能拿到 ticket + 6 位码 + 地址数组。
+///
+/// 这条用例原先断言的是"明确 501"（那时候还没做）—— 现在改成正面断言，
+/// **顺带钉住"返回体里没有长期令牌"**：二维码里只有 ticket（兑换还要靠 6 位码）。
 #[tokio::test]
-async fn pair_start_is_explicitly_not_implemented() {
+async fn pair_start_hands_out_only_a_ticket_not_a_token() {
+    let st = state();
     let (status, body) = send_as(
-        app(),
+        router_for(st.clone()),
         "POST",
         "/api/auth/pair/start",
         Some(serde_json::json!({})),
@@ -3817,10 +3821,16 @@ async fn pair_start_is_explicitly_not_implemented() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["ticket"].is_string() && body["code"].is_string(), "{body}");
+    assert!(body["urls"].is_array(), "{body}");
+    // 长期令牌：既不在响应里，也不落库（这时候还**没有任何设备**）
+    let raw = body.to_string();
+    assert!(!raw.contains("X-ComfyHub-Token"), "{raw}");
     assert!(
-        body["error"].as_str().unwrap().contains("扫码配对还没做"),
-        "要说清是哪条路没修：{body}"
+        read_setting(&st, "auth.pairing").is_none(),
+        "只出码不该写设备表：{:?}",
+        read_setting(&st, "auth.pairing")
     );
 }
 
@@ -10087,4 +10097,101 @@ async fn credential_upload_applies_bumps_rev_and_the_key_really_works() {
     let described = comfyhub_server_rs::credentials::describe_now(&st, "PHONE_PUSHED_KEY");
     assert!(described.configured);
     assert!(!serde_json::to_string(&described).unwrap().contains("sk-from-phone"));
+}
+
+// ---------------------------------------------------------------------------
+//  POST /api/auth/pair/start（扫码通道的桌面那一端，docs/pairing-design.md §5.1）
+// ---------------------------------------------------------------------------
+
+/// 整条扫码链路：桌面出码（仅回环）→ 手机拿 ticket + 6 位码换令牌 → 设备落库（两个开关都关）。
+#[tokio::test]
+async fn pair_start_hands_out_a_ticket_and_the_scan_flow_claims() {
+    let st = state();
+    let app = router_for(st.clone());
+
+    // ① 桌面出码
+    let (status, body) = send_as(app.clone(), "POST", "/api/auth/pair/start", None, "127.0.0.1", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let ticket = body["ticket"].as_str().unwrap_or("").to_string();
+    let code = body["code"].as_str().unwrap_or("").to_string();
+    assert!(ticket.len() >= 40, "ticket 要够长：{body}");
+    assert_eq!(code.len(), 6, "6 位十进制码：{body}");
+    assert!(body["urls"].is_array(), "urls 永远是数组（一条都没有时是空数组）：{body}");
+    assert!(body["expiresAt"].is_string() && body["codeExpiresAt"].is_string(), "{body}");
+
+    // ② 扫码会话**不进** pair/pending（那张列表是给"手机举手"那条路用的）
+    //
+    // ⚠ 判据是"**条数没变**"而不是"条数为 0"：`sessions()` 是**进程级全局态**，
+    // 同进程里并行跑的别的配对用例随时会往里放"手机举手"的会话（本仓踩过这个坑，
+    // 所以 auth 用例还有一把 `auth_test_lock`）。断言 0 会变成"看谁先跑"的偶发红。
+    let (status, before) = send_as(app.clone(), "GET", "/api/auth/pair/pending", None, "127.0.0.1", None).await;
+    assert_eq!(status, StatusCode::OK, "{before}");
+    let count_before = before["pending"].as_array().unwrap().len();
+    let (status, again) = send_as(app.clone(), "POST", "/api/auth/pair/start", None, "127.0.0.1", None).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    let (status, after) = send_as(app.clone(), "GET", "/api/auth/pair/pending", None, "127.0.0.1", None).await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+    assert_eq!(
+        after["pending"].as_array().unwrap().len(),
+        count_before,
+        "又出了一次码，但『待配对』列表的条数不该变（扫码会话不进来）：before={before} after={after}"
+    );
+
+    // ③ 手机兑码（匿名端点）：ticket + 码 → 长期令牌
+    let (status, claim) = send_as(
+        app.clone(),
+        "POST",
+        "/api/auth/pair/claim",
+        Some(serde_json::json!({
+            // clone：后面第 ⑤ 步还要用同一对 ticket/码再兑一次
+            "ticket": ticket.clone(),
+            "code": code.clone(),
+            "deviceId": "phone-scan-1",
+            "deviceName": "KB2000"
+        })),
+        "10.0.0.9",
+    None)
+    .await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    assert!(claim["token"].as_str().unwrap_or("").len() >= 40, "{claim}");
+
+    // ④ 设备真的落库了，而且两个凭据开关都是关的（配对成功 ≠ 能读/写密钥）
+    let file = read_setting(&st, "auth.pairing").expect("auth.pairing 已落库");
+    let device = file["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == "phone-scan-1")
+        .expect("扫到的这台设备要在库里");
+    assert_eq!(device["allowCredentials"], false);
+    assert_eq!(device["allowCredentialsUpload"], false);
+
+    // ⑤ **一次性**：同一对 ticket + 正确的码再兑一次 → `410 Gone`（不是 400）。
+    //    这两句话在手机上意思不同：410 = "回电脑上重新发起"，400 = "码错了，再试试"。
+    let (status, reused) = send_as(
+        app,
+        "POST",
+        "/api/auth/pair/claim",
+        Some(serde_json::json!({
+            "ticket": ticket,
+            "code": code,
+            "deviceId": "phone-scan-2",
+            "deviceName": "另一台手机"
+        })),
+        "10.0.0.10",
+    None)
+    .await;
+    assert_eq!(status, StatusCode::GONE, "用过的会话再兑必须是 410：{reused}");
+}
+
+/// 非回环不许生成二维码（ticket 编进二维码 = 看到的人就能拿去兑）。
+#[tokio::test]
+async fn pair_start_is_loopback_only() {
+    let app = router_for(state());
+    let (status, body) = send_as(app, "POST", "/api/auth/pair/start", None, "10.0.0.9", None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body["error"].as_str().unwrap_or("").contains("只允许在本机"),
+        "要说清是（只允许在本机）：{body}"
+    );
 }

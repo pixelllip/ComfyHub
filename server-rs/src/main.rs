@@ -50,7 +50,7 @@
 //! | **`GET /api/ai/run-kit{,/status}`**（手机 harness 的全部规则类输入；R12/R13 的第一次重建） | ✅ |
 //! | **`/api/ai/pending`**（跨端待办总览：还在等人的提问与工具审批） | ✅ |
 //! | **`/api/auth*` 配对闸门 + `GET /api/ai/credentials` 密钥下行 + `PUT` 密钥上行**（inbound auth P0 + 配对第 2 步 / §14） | ✅ 下行的开关是 `allowCredentials`、上行是**另一个**开关 `allowCredentialsUpload`（两个都默认关，§14.1）；上行按 `ai.credentials.rev` 做"等值才应用"（落后回 `STALE_IGNORED`），逐条独立（env 只读 → `FORBIDDEN`、坏名字/空值 → `BAD_PAYLOAD`） |
-//! | 扫码配对（`POST /api/auth/pair/start`） | ⛔ **501**（本轮只做"手机发起 + 桌面显示 6 位码"，见 `docs/pairing-design.md` §11.1） |
+//! | 扫码配对（`POST /api/auth/pair/start`） | ✅（2026-09-27：**仅回环**。回 `ticket` + 6 位码 + `urls[]`（来自 `net_urls`）+ 两个过期时刻；二维码那串 URI 由**前端**编（`lib/core/pairing_payload.dart` 是格式的唯一实现）。扫码会话与"手机举手"共用同一套 `Session`，所以 `pair/claim` 两条路都认；`ticket` 只在这个响应里出现，不进 `pair/pending` —— 那张列表是给手敲那条路用的） |
 //! | `POST /api/ai/capabilities/{refresh,probe}` | ⛔ **501**：要 models.dev 在线数据集 / 要真上游请求（会花钱），不满足"不需要人工校验"这条 |
 //! | **上游 LLM 客户端 / 协议适配器**（第 29 步）与**主循环**（第 30 步） | ✅ 已落地（不带工具、不带附件）；工具层已搬四个本机工具 + 两个闸门（第 31/32 步） |
 //! | **桌面文件工具五件**（`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`）+ **路径准入**（`resolve_read` / `resolve_write`：禁段、真实路径、目录根不可写） | ✅（P4 第 40 步；`desktop_tools.rs` + `policy.rs`，桌面提示词与下发的 `tools[]` 现在含它们） |
