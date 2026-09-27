@@ -90,6 +90,9 @@ __pycache__/
 
 # Kotlin 增量编译缓存
 /server/.kotlin/
+# Android 构建留下的 Kotlin 诊断日志（`android\.kotlin\errors\*.log`）——
+# 跑一次 `:harness:testDebugUnitTest` 就会冒出来，不该进版本库
+/android/.kotlin/
 
 # 发布包装配输出（scripts\pack-release.ps1 的产物，几百 MB，不进版本库）
 /dist/
