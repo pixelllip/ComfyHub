@@ -60,6 +60,15 @@ data class RunRecord(
     val updatedAt: String,
 )
 
+/**
+ * Provider / 模型目录的写入被拒（id 冲突、乐观锁冲突、字段为空）。
+ *
+ * 消息与桌面**逐字同句**（"Provider ID 已存在: x（ID 创建后不可修改）" /
+ * "配置已被其他窗口修改（当前 revision=…，提交的=…），请刷新后重试" / "Provider 不存在: x"），
+ * 于是同一个动作在手机上与桌面上给用户看到的是同一句话。
+ */
+class ProviderStoreFailure(message: String) : RuntimeException(message)
+
 data class OutboxRecord(
     val id: String,
     val kind: String,
@@ -124,6 +133,56 @@ data class OutboxTarget(
     val wireKind: String,
     /** 完整一行（列清单来自行本身，见 `Row.asMap`）。 */
     val payload: Map<String, Any?>,
+)
+
+/**
+ * 一条 **Provider**（`ai_providers` 的一行）。
+ *
+ * ⚠ `ai_providers` / `ai_models` 是**本机表**（不在 [MobileSchema.MIRROR_TABLES] 里）：
+ * 它们是"这台手机自己那份清单"，**不走同步**（`docs/pairing-design.md` §14.4：两端各一份、
+ * 不做自动合并）。列名与桌面逐字同形，只是为了让同一份 JSON 形状两边都能读。
+ */
+data class ProviderRecord(
+    val id: String,
+    val displayName: String,
+    val api: String,
+    val baseUrl: String,
+    /** 凭据在**本机密钥库**里的名字（值不在库里，AIH-012）。 */
+    val credentialRef: String?,
+    /** `public` / `loopback` / `private-network` / `unsafe-any`。 */
+    val endpointTrust: String,
+    val enabled: Boolean,
+    /** 乐观锁（AIH-007）：新建由库给 1，每次更新 +1。 */
+    val revision: Int,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+/**
+ * 一个**模型的能力声明**（`ai_models` 的一行）—— 能力的唯一真源（AIH-011）。
+ *
+ * ⚠ 字段集**跟 Dart 的 `AiModel` DTO 走**（也就是后端 `AiModelDto` 里客户端真正在用的那些）：
+ * 表里还有 `max_attachment_bytes` / `limits_json` / `capability_verified_at` 三列，
+ * 手机侧这一版**不写它们**（写 NULL）—— 界面上根本没有那三个输入，编一个值比留空更糟。
+ */
+data class ModelRecord(
+    val providerId: String,
+    val modelId: String,
+    val displayName: String,
+    val inputModalities: List<String>,
+    /** `{模态: [传输方式]}`（按模态分开，M3 的附件准入就靠它）。 */
+    val attachmentTransports: Map<String, List<String>>,
+    val mimeAllowlist: List<String>,
+    val tools: Boolean,
+    val parallelTools: Boolean,
+    val reasoning: Boolean,
+    val thinkingEfforts: Map<String, String>,
+    val thinkingFormat: String?,
+    val contextWindow: Int?,
+    val maxOutputTokens: Int?,
+    val maxAttachmentCount: Int?,
+    val capabilitySource: String,
+    val enabled: Boolean,
 )
 
 /** Run 状态：与桌面 `AiRunRepo` 的四个常量同值（决策/审计两边要能对上）。 */

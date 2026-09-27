@@ -610,6 +610,182 @@ class HarnessStore(private val session: SqlSession) {
         ).map { it.toToolCall() }
 
     // -----------------------------------------------------------------------
+    //  Provider 与模型目录（**本机表**：ai_providers / ai_models，不走同步）
+    // -----------------------------------------------------------------------
+
+    /**
+     * 本机这份 Provider 清单。
+     *
+     * 顺序照抄桌面（`ORDER BY display_name, id`，BINARY 排序、**不加 NOCASE**）——
+     * 顺序不同在界面上就是"列表位置变了"，而两端本该长得一模一样。
+     */
+    fun listProviders(): List<ProviderRecord> =
+        session.query("SELECT * FROM ai_providers ORDER BY display_name ASC, id ASC")
+            .map { it.toProvider() }
+
+    fun getProvider(id: String): ProviderRecord? =
+        session.queryOne("SELECT * FROM ai_providers WHERE id = ?", listOf(id))?.toProvider()
+
+    /**
+     * 保存一条 Provider。
+     *
+     * ## 这是桌面的 **两条端点**在这一侧合一（语义逐条照抄，没有发明）
+     *
+     * | `record.revision` | 走桌面哪条 | 行为 |
+     * | --- | --- | --- |
+     * | `0`（JSON 里没给） | `POST /api/ai/providers` | **新建**：库给 `revision = 1`；id 已存在 → 抛「Provider ID 已存在」（桌面同句） |
+     * | `> 0` | `PUT /api/ai/providers/{id}` | **乐观锁更新**（AIH-007）：库里 revision 必须与它相等，否则抛「配置已被其他窗口修改…请刷新后重试」（桌面同句）；相符则整份更新并 `revision + 1` |
+     *
+     * 为什么合一：手机侧只有**一个本机库、一个写者**（桥），而页面拿到的行本来就带 revision；
+     * 分成两个方法只是把同一个 `if` 在 Kotlin 与 Dart 两边各写一遍。
+     *
+     * ## ⚠ 桌面**没有**"按 displayName 同名合并"这回事（去读了 `AiRoutes` / `ai.rs` 才敢写这句）
+     *
+     * PUT 是**整份替换**（除 id / created_at / revision 之外的六列全写），"重名"只在
+     * **id 冲突**时报错。所以这里也不发明"同名合并" —— 那会让同一个动作在两端出现两种结果。
+     *
+     * ## ⚠ 两处**有意**不照抄（写在这里，免得日后被当成 bug 改坏）
+     *
+     * 1. **不做信任档推断**：桌面在 `endpointTrust` 留空时按主机推成
+     *    `loopback` / `private-network` / `public`（`endpoint_guard::infer_trust`，含 IPv6 与
+     *    云元数据那几档）。手机侧这一版**照字面存默认值 `public`**：手机侧现在
+     *    **没有任何地方读这个字段**，与其半懂地推一个可能推错的档，不如存默认值 + 记在案。
+     *    将来手机侧真的开始用它时，要把那一份**逐条**搬过来。
+     * 2. **校验只做"不写坏本机库"的那几条**（id / displayName / api / baseURL 非空）：
+     *    协议白名单、URL 规范化那些在**界面**上已经挡过一道（`_ProviderDialog._revalidate`），
+     *    桌面那一整套（`require_api` / `normalize_base_url` / `parse_trust`）本批没搬。
+     */
+    fun saveProvider(record: ProviderRecord): ProviderRecord {
+        if (record.id.isBlank()) throw ProviderStoreFailure("Provider id 不能为空")
+        if (record.displayName.isBlank()) throw ProviderStoreFailure("Provider 显示名不能为空")
+        if (record.api.isBlank()) throw ProviderStoreFailure("Provider 协议不能为空")
+        if (record.baseUrl.isBlank()) throw ProviderStoreFailure("Provider Base URL 不能为空")
+
+        val now = Timestamps.now()
+        val existing = getProvider(record.id)
+        session.transaction {
+            if (existing == null) {
+                if (record.revision > 0) {
+                    // 带着 revision 却找不到那一行 = 客户端拿着一份过期的清单在改（与桌面同义）
+                    throw ProviderStoreFailure("Provider 不存在: ${record.id}")
+                }
+                session.exec(
+                    """
+                    INSERT INTO ai_providers
+                      (id, display_name, api, base_url, credential_ref, endpoint_trust, enabled,
+                       revision, created_at, updated_at)
+                    VALUES (?,?,?,?,?,?,?,1,?,?)
+                    """.trimIndent(),
+                    listOf(
+                        record.id, record.displayName, record.api, record.baseUrl,
+                        record.credentialRef, record.endpointTrust, record.enabled, now, now,
+                    ),
+                )
+                return@transaction
+            }
+            if (record.revision <= 0) {
+                throw ProviderStoreFailure("Provider ID 已存在: ${record.id}（ID 创建后不可修改）")
+            }
+            if (existing.revision != record.revision) {
+                throw ProviderStoreFailure(
+                    "配置已被其他窗口修改（当前 revision=${existing.revision}，" +
+                        "提交的=${record.revision}），请刷新后重试",
+                )
+            }
+            session.update(
+                """
+                UPDATE ai_providers
+                   SET display_name = ?, api = ?, base_url = ?, credential_ref = ?, endpoint_trust = ?,
+                       enabled = ?, revision = revision + 1, updated_at = ?
+                 WHERE id = ? AND revision = ?
+                """.trimIndent(),
+                listOf(
+                    record.displayName, record.api, record.baseUrl, record.credentialRef,
+                    record.endpointTrust, record.enabled, now, record.id, record.revision,
+                ),
+            )
+        }
+        return getProvider(record.id) ?: throw ProviderStoreFailure("Provider 写入后读不到: ${record.id}")
+    }
+
+    /**
+     * 删一条 Provider（`ai_models` 靠外键 `ON DELETE CASCADE` 一起走，R1 的自检在守着）。
+     *
+     * 不存在回 `false`（**不抛**）：桌面那边是 400「Provider 不存在: x」，由桥决定要不要
+     * 翻成错误 —— 库这一层如实回答"有没有删掉"就够了。
+     */
+    fun deleteProvider(id: String): Boolean {
+        if (id.isBlank()) return false
+        var removed = false
+        session.transaction {
+            removed = session.update("DELETE FROM ai_providers WHERE id = ?", listOf(id)) > 0
+        }
+        return removed
+    }
+
+    /**
+     * 某条 Provider 的模型目录（顺序照桌面：`ORDER BY display_name, model_id`）。
+     *
+     * provider 不存在时**照样回空表**（与桌面 `GET …/models` 的 400 不同）：库这一层不判，
+     * 由桥先 `getProvider` 再决定报不报错 —— "存不存在"的判据只写一处。
+     */
+    fun listModels(providerId: String): List<ModelRecord> =
+        session.query(
+            "SELECT * FROM ai_models WHERE provider_id = ? ORDER BY display_name ASC, model_id ASC",
+            listOf(providerId),
+        ).map { it.toModel() }
+
+    /**
+     * **全量替换**某条 Provider 的模型目录（AIH-011；与桌面 `PUT …/models` 逐条同义）。
+     *
+     * 四件事都照桌面：
+     *  1. **先 provider 存在**（不存在 → 抛「Provider 不存在: x」）；
+     *  2. `providerId` **一律以参数为准**（内容里那一列是客户端抄来的，信它会出现
+     *     "给 A 存了一堆写着 B 的模型"）；
+     *  3. `modelId` / `displayName` 非空才算合法，否则**整批不做**（校验失败却已经把旧目录
+     *     删了的话，界面显示的就是一份合法的空目录 —— "这个网关没有模型"，用户会去查网关）；
+     *  4. **一个事务里删旧插新**：分开做的话，中途失败就留下一个"模型全没了"的 provider。
+     */
+    fun saveModels(providerId: String, models: List<ModelRecord>): List<ModelRecord> {
+        getProvider(providerId) ?: throw ProviderStoreFailure("Provider 不存在: $providerId")
+        models.forEach { m ->
+            if (m.modelId.isBlank()) throw ProviderStoreFailure("模型 id 不能为空")
+            if (m.displayName.isBlank()) throw ProviderStoreFailure("模型 ${m.modelId} 缺少显示名")
+        }
+        session.transaction {
+            session.update("DELETE FROM ai_models WHERE provider_id = ?", listOf(providerId))
+            models.forEach { m -> insertModel(providerId, m) }
+        }
+        return listModels(providerId)
+    }
+
+    private fun insertModel(providerId: String, m: ModelRecord) {
+        val now = Timestamps.now()
+        session.exec(
+            """
+            INSERT INTO ai_models
+              (provider_id, model_id, display_name, input_modalities, attachment_transports,
+               mime_allowlist, tools, parallel_tools, reasoning, thinking_efforts, thinking_format,
+               context_window, max_output_tokens, max_attachment_count, capability_source, enabled,
+               created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """.trimIndent(),
+            listOf(
+                providerId, m.modelId, m.displayName,
+                ProviderJson.stringListJson(m.inputModalities),
+                ProviderJson.stringListMapJson(m.attachmentTransports),
+                ProviderJson.stringListJson(m.mimeAllowlist),
+                m.tools, m.parallelTools, m.reasoning,
+                ProviderJson.stringMapJson(m.thinkingEfforts),
+                m.thinkingFormat, m.contextWindow, m.maxOutputTokens, m.maxAttachmentCount,
+                // ⚠ `max_attachment_bytes` / `limits_json` / `capability_verified_at` 三列
+                //   这一版**不写**（DTO 里没有它们，界面上也没有输入）—— 写 NULL 而不是编一个值
+                m.capabilitySource, m.enabled, now, now,
+            ),
+        )
+    }
+
+    // -----------------------------------------------------------------------
     //  事件流（R5）
     // -----------------------------------------------------------------------
 
@@ -1107,6 +1283,38 @@ private fun Row.toRun() = RunRecord(
     updatedAt = str("updated_at"),
 )
 
+private fun Row.toProvider() = ProviderRecord(
+    id = str("id"),
+    displayName = str("display_name"),
+    api = str("api"),
+    baseUrl = str("base_url"),
+    credentialRef = text("credential_ref"),
+    endpointTrust = str("endpoint_trust"),
+    enabled = bool("enabled"),
+    revision = int("revision") ?: 1,
+    createdAt = str("created_at"),
+    updatedAt = str("updated_at"),
+)
+
+private fun Row.toModel() = ModelRecord(
+    providerId = str("provider_id"),
+    modelId = str("model_id"),
+    displayName = str("display_name"),
+    inputModalities = ProviderJson.stringListOf(text("input_modalities")),
+    attachmentTransports = ProviderJson.stringListMapOf(text("attachment_transports")),
+    mimeAllowlist = ProviderJson.stringListOf(text("mime_allowlist")),
+    tools = bool("tools"),
+    parallelTools = bool("parallel_tools"),
+    reasoning = bool("reasoning"),
+    thinkingEfforts = ProviderJson.stringMapOf(text("thinking_efforts")),
+    thinkingFormat = text("thinking_format"),
+    contextWindow = long("context_window")?.toInt(),
+    maxOutputTokens = long("max_output_tokens")?.toInt(),
+    maxAttachmentCount = long("max_attachment_count")?.toInt(),
+    capabilitySource = str("capability_source"),
+    enabled = bool("enabled"),
+)
+
 private fun Row.toOutbox() = OutboxRecord(
     id = str("id"),
     kind = str("kind"),
@@ -1117,8 +1325,7 @@ private fun Row.toOutbox() = OutboxRecord(
     lastError = text("last_error"),
 )
 
-private fun Row.toToolCall() = ToolCallRecord(
-    id = str("id"),
+private fun Row.toToolCall() = ToolCallRecord(    id = str("id"),
     runId = str("run_id"),
     providerCallId = str("provider_call_id"),
     name = str("name"),

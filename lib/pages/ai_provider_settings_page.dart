@@ -6,6 +6,7 @@ import '../core/api_client.dart' show ApiException;
 import '../core/credential_store.dart';
 import '../core/inbound_auth_api.dart';
 import '../core/pairing_token.dart';
+import '../core/provider_store.dart';
 import '../core/settings_store.dart';
 import '../models/ai_models.dart';
 import 'ai_tools_settings_page.dart';
@@ -24,11 +25,26 @@ class AiProviderSettingsPage extends StatefulWidget {
   /// 凭据来源。正式运行时按平台选（手机 = 本机密钥库）；测试注入假的。
   final CredentialStore? credentials;
 
+  /// **Provider 清单与模型目录**的来源（M6 的另一半）。
+  ///
+  /// 正式运行时按平台选：**手机 = 本机库**（走桥，一条网络请求都不打）、桌面 = 后端库。
+  /// 测试注入假的。
+  ///
+  /// ⚠ 它只管**这一页的清单 CRUD**；[api] 仍要传 —— 内置目录 / 能力目录两张维护卡，
+  /// 以及桌面上才有的「连接测试 / 获取模型」都还走它。
+  final ProviderStore? providers;
+
   /// `InboundAuthApi` 的工厂：**密钥上行**（「推给桌面」）要打 `/api/ai/credentials`。
   /// 测试注入带 MockClient 的那个，正式运行时按后端地址现建。
   final InboundAuthApi Function(String baseUrl)? authApiFactory;
 
-  const AiProviderSettingsPage({super.key, this.api, this.credentials, this.authApiFactory});
+  const AiProviderSettingsPage({
+    super.key,
+    this.api,
+    this.credentials,
+    this.providers,
+    this.authApiFactory,
+  });
 
   @override
   State<AiProviderSettingsPage> createState() => _AiProviderSettingsPageState();
@@ -41,6 +57,12 @@ enum _NarrowPane { list, detail, maintenance }
 
 class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   late AiApiClient _api;
+
+  /// **清单的来源**（provider / 模型目录）：手机 = 本机库（桥），桌面 = 后端库。
+  ///
+  /// 以前这一页的 CRUD 清一色打 `_api`（桌面 HTTP）—— 桌面不在线时手机上连
+  /// "新建一个 provider / 改个 baseURL"都做不到，而本机库里那两张表**本来就是本机表**。
+  late ProviderStore _store;
 
   /// 凭据的读写来源（M6）：桌面 = 后端托管；手机 = **本机密钥库**。
   ///
@@ -75,9 +97,17 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   @override
   void initState() {
     super.initState();
+    // ⚠ 这三个**必须在 initState 里就绪**（不能等 post-frame）：
+    //   `build()` 第一帧就要读 `_store.isLocal` —— 手机上那句"只在这台手机上"的提示、
+    //   以及"连接测试 / 获取模型"两个按钮的禁用都靠它。放进 post-frame 回调里的后果是
+    //   首帧 `LateInitializationError`（而 `context.read` 在 initState 里是安全的：
+    //   它不注册依赖，只是取一次值）。
+    _api = widget.api ?? AiApiClient(context.read<SettingsStore>().baseUrl);
+    _credentials = widget.credentials ?? openCredentialStore(api: _api);
+    // 手机上这份清单**只在本机**（不出网）；桌面那份仍然在后端。
+    _store = widget.providers ?? openProviderStore(api: _api);
+    // 真正的加载仍然放到首帧之后（与以前一致：不在 build 期间 setState）
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _api = widget.api ?? AiApiClient(context.read<SettingsStore>().baseUrl);
-      _credentials = widget.credentials ?? openCredentialStore(api: _api);
       _reload();
       _loadBuiltin();
       _loadCapabilityCatalog();
@@ -232,7 +262,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       _error = null;
     });
     try {
-      _providers = await _api.listProviders();
+      _providers = await _store.listProviders();
       // 手机上"这台设备有没有 key"只有本机密钥库知道：不覆盖就会显示桌面那份状态
       if (_credentials.isLocal) {
         final out = <AiProvider>[];
@@ -248,7 +278,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       if (_selected != null) {
         _selected = _providers.where((p) => p.id == _selected!.id).firstOrNull;
       }
-      _models = _selected == null ? const [] : await _api.listModels(_selected!.id);
+      _models = _selected == null ? const [] : await _store.listModels(_selected!.id);
     } catch (e) {
       _error = '$e';
     } finally {
@@ -265,7 +295,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     });
     if (p != null) {
       try {
-        _models = await _api.listModels(p.id);
+        _models = await _store.listModels(p.id);
       } catch (e) {
         setState(() => _error = '$e');
       }
@@ -284,6 +314,8 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       providers: _providers,
       selectedId: _selected?.id,
       loading: _loading,
+      // 手机上要如实说一句"这份清单只在本机"（§14.4：两端各一份、不自动合并）
+      local: _store.isLocal,
       onSelect: _select,
       onCreate: _createProvider,
       onDelete: _deleteProvider,
@@ -305,11 +337,13 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
             key: ValueKey(_selected!.id + _selected!.revision.toString()),
             api: _api,
             credentials: _credentials,
+            providers: _store,
             authApiFactory: widget.authApiFactory,
             provider: _selected!,
             models: _models,
             info: _info,
             error: _error,
+            onEdit: () => _editProvider(_selected!),
             onChanged: (msg) async {
               setState(() => _info = msg);
               await _reload();
@@ -469,11 +503,13 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
                     key: ValueKey(provider.id + provider.revision.toString()),
                     api: _api,
                     credentials: _credentials,
+                    providers: _store,
                     authApiFactory: widget.authApiFactory,
                     provider: provider,
                     models: _models,
                     info: _info,
                     error: _error,
+                    onEdit: () => _editProvider(provider),
                     onChanged: (msg) async {
                       setState(() => _info = msg);
                       await _reload();
@@ -511,6 +547,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
                   providers: _providers,
                   selectedId: _selected?.id,
                   loading: _loading,
+                  local: _store.isLocal,
                   onSelect: (p) async {
                     await _select(p);
                     // 手机上点一条 = **进子界面**（不是"在下面换个详情"）
@@ -644,7 +681,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     );
     if (draft == null) return;
     try {
-      final created = await _api.createProvider({
+      final created = await _store.createProvider({
         'id': draft.id,
         'displayName': draft.displayName,
         'api': draft.api.wire,
@@ -666,6 +703,43 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     }
   }
 
+  /// **编辑一条已有的**（用户要的"改个 baseURL"）。
+  ///
+  /// 三条与桌面 POST/PUT 对齐的纪律：
+  ///  1. **ID 不给改**（对话框里锁住）：桌面 `PUT` 的判据是"body 里的 id 不许与路径不同"，
+  ///     `POST` 撞到已存在的 id 直接报"Provider ID 已存在"；
+  ///  2. **带 revision 提交**（乐观锁 AIH-007）：手机侧库里只有一个写者，但**语义照旧** ——
+  ///     桌面那份清单可能同时被别的窗口改过，而两端看到的错误要是同一句话；
+  ///  3. 提交走 [_store]（手机 = 本机库，**不出网**）。
+  Future<void> _editProvider(AiProvider p) async {
+    final draft = await showDialog<_ProviderDraft>(
+      context: context,
+      builder: (_) => _ProviderDialog(existing: p),
+    );
+    if (draft == null) return;
+    try {
+      final updated = await _store.updateProvider(AiProvider(
+        id: p.id,
+        displayName: draft.displayName,
+        api: draft.api.wire,
+        baseURL: draft.baseURL,
+        credentialRef: draft.credentialRef,
+        // 用户在对话框里选了信任档就用它；选「自动」就保持原来那个值
+        // （手机侧**不做推断**，见 `HarnessStore.saveProvider` 的注释）
+        endpointTrust: draft.trust?.wire ?? p.endpointTrust,
+        enabled: p.enabled,
+        revision: p.revision,
+        credential: p.credential,
+      ));
+      await _reload();
+      await _select(updated);
+      _notify('已保存 Provider「${updated.displayName}」（revision ${updated.revision}）。');
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+      _notify('保存失败：$e', error: true);
+    }
+  }
+
   Future<void> _deleteProvider(AiProvider p) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -680,7 +754,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     );
     if (ok != true) return;
     try {
-      await _api.deleteProvider(p.id);
+      await _store.deleteProvider(p.id);
       if (_selected?.id == p.id) _selected = null;
       await _reload();
       _notify('已删除 Provider「${p.displayName}」');
@@ -695,6 +769,9 @@ class _ProviderList extends StatelessWidget {
   final List<AiProvider> providers;
   final String? selectedId;
   final bool loading;
+
+  /// 这份清单是不是**本机**的（手机）：是的话要说一句"桌面看不到它"。
+  final bool local;
   final Future<void> Function(AiProvider?) onSelect;
   final Future<void> Function() onCreate;
   final Future<void> Function(AiProvider) onDelete;
@@ -703,6 +780,7 @@ class _ProviderList extends StatelessWidget {
     required this.providers,
     required this.selectedId,
     required this.loading,
+    required this.local,
     required this.onSelect,
     required this.onCreate,
     required this.onDelete,
@@ -722,6 +800,19 @@ class _ProviderList extends StatelessWidget {
             label: const Text('新建 Provider'),
           ),
         ),
+        // ⚠ **如实**：手机上这一页管的是**本机那份清单**（`ai_providers` / `ai_models`
+        //    是手机的本机表），它与桌面那份**各归各、不自动合并** —— 同步的只有密钥明文
+        //    （用户显式点「推给桌面」那一个动作，`docs/pairing-design.md` §14.4）。
+        //    不写这一句，用户建完会以为桌面也能用（而桌面那边压根没有这条 provider）。
+        if (local)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: _Note(
+              text: '这些 Provider 只在这台手机上（存在本机库里），桌面看不到它们；'
+                  '两端的清单各归各，不会自动合并。桌面不在线时也能在这里新建 / 编辑 / 删除、改模型目录。',
+              error: false,
+            ),
+          ),
         if (loading) const LinearProgressIndicator(minHeight: 2),
         Expanded(
           child: providers.isEmpty
@@ -776,22 +867,31 @@ class _CredentialDot extends StatelessWidget {
 class _ProviderDetail extends StatefulWidget {
   final AiApiClient api;
   final CredentialStore credentials;
+
+  /// 清单来源（手机 = 本机库）：**模型目录的保存**走它，连接的测试/发现看它的 [ProviderStore.supportsProbe]。
+  final ProviderStore providers;
   final InboundAuthApi Function(String baseUrl)? authApiFactory;
   final AiProvider provider;
   final List<AiModel> models;
   final String? info;
   final String? error;
+
+  /// 「编辑 Provider」（改显示名 / 协议 / baseURL / 信任档 / 凭据引用名）。
+  /// **不带 revision 的修改不在这里** —— 编辑时用的是这一行的 revision（乐观锁）。
+  final Future<void> Function() onEdit;
   final Future<void> Function(String message) onChanged;
 
   const _ProviderDetail({
     super.key,
     required this.api,
     required this.credentials,
+    required this.providers,
     this.authApiFactory,
     required this.provider,
     required this.models,
     required this.info,
     required this.error,
+    required this.onEdit,
     required this.onChanged,
   });
 
@@ -878,7 +978,18 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     // 每个模型卡里有 6 个 FilterChip + 一个下拉框，几十个模型全在首帧就建出来，
     // 滚动时整个列表跟着重建 —— 这就是"AI 模型与凭据界面滑动卡顿"的主因。
     final header = <Widget>[
-      Text(p.displayName, style: theme.textTheme.titleLarge),
+      Row(
+        children: [
+          Expanded(child: Text(p.displayName, style: theme.textTheme.titleLarge)),
+          // 「改个 baseURL / 协议 / 信任档」的路（用户要的"独立配置 provider"）：
+          // 两端都走同一条 store（手机 = 本机库、桌面 = 后端），提交时带 revision（乐观锁）。
+          OutlinedButton.icon(
+            onPressed: _busy ? null : () => widget.onEdit(),
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            label: const Text('编辑 Provider'),
+          ),
+        ],
+      ),
       const SizedBox(height: 4),
       Text('${p.id} · ${p.apiLabel} · revision ${p.revision}',
           style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
@@ -901,16 +1012,26 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           Text('连接测试', style: theme.textTheme.titleSmall),
           const SizedBox(width: 10),
           OutlinedButton.icon(
-            onPressed: _busy ? null : _test,
+            // 手机上**还不能**：这一步要由本机自己向上游发请求（用本机密钥 + 端点信任档那套），
+            // 而桌面那一份 `provider_probe` 手机侧还没实现。禁用 + 下面那句话，
+            // 比让用户点下去拿到一句"Provider 不存在: x"（桌面不认识手机这条 id）诚实得多。
+            onPressed: (_busy || !widget.providers.supportsProbe) ? null : _test,
             icon: const Icon(Icons.network_check, size: 18),
             label: const Text('测试连接'),
           ),
         ],
       ),
-      Text(
-        '测试只发一次 GET 请求：不跟随重定向、10 秒超时，密钥不会出现在日志里。',
-        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-      ),
+      if (!widget.providers.supportsProbe)
+        Text(
+          '连接测试与「获取模型」目前只在桌面可用（要由那一端自己向上游发请求）；'
+          '这台手机上还做不到，所以这两个按钮先禁用着。',
+          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+        )
+      else
+        Text(
+          '测试只发一次 GET 请求：不跟随重定向、10 秒超时，密钥不会出现在日志里。',
+          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+        ),
       if (_testResult != null) ...[
         const SizedBox(height: 8),
         _Note(text: _testResult!.display, error: !_testResult!.ok),
@@ -987,7 +1108,8 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           Text('模型目录', style: theme.textTheme.titleSmall),
           const Spacer(),
           TextButton.icon(
-            onPressed: _busy ? null : _discover,
+            // 同上：手机上还做不到（要本机自己去拉上游的 /models）
+            onPressed: (_busy || !widget.providers.supportsProbe) ? null : _discover,
             icon: const Icon(Icons.cloud_download_outlined, size: 18),
             label: const Text('获取可用模型'),
           ),
@@ -1151,6 +1273,11 @@ class _ProviderDetailState extends State<_ProviderDetail> {
   // 快速滑动不掉帧的原因。
 
   Future<void> _test() async {
+    if (!widget.providers.supportsProbe) {
+      // 兜底（按钮已经禁用了）：真被调到也要说人话，别去撞桌面那条不存在的 id
+      _toast('手机上还没有"连接测试"：这一步要由本机自己向上游发请求，本批未实现。', error: true);
+      return;
+    }
     setState(() {
       _busy = true;
       _testResult = null;
@@ -1274,6 +1401,11 @@ class _ProviderDetailState extends State<_ProviderDetail> {
   /// 拉取候选模型。**发现只是候选**：勾选后先进本地列表，仍需点「保存模型目录」才落库；
   /// 能力（图片/视频/工具…）不会因为发现而被推断，一律保持"未声明"（AIH-009 / AIH-011）。
   Future<void> _discover() async {
+    if (!widget.providers.supportsProbe) {
+      // 兜底（按钮已经禁用了）：说清"这一端还做不到"，而不是去问桌面（它不认识本机这条 id）
+      _toast('手机上还没有"获取模型"：这一步要由本机自己去拉上游的 /models，本批未实现。', error: true);
+      return;
+    }
     setState(() => _busy = true);
     try {
       final result = await widget.api.discoverModels(widget.provider.id);
@@ -1375,30 +1507,8 @@ class _ProviderDetailState extends State<_ProviderDetail> {
   Future<void> _saveModels() async {
     setState(() => _busy = true);
     try {
-      await widget.api.saveModels(
-        widget.provider.id,
-        _models
-            .map((m) => {
-                  'providerId': widget.provider.id,
-                  'id': m.id,
-                  'displayName': m.displayName,
-                  'inputModalities': m.inputModalities,
-                  'attachmentTransports': m.attachmentTransports,
-                  'mimeAllowlist': m.mimeAllowlist,
-                  'tools': m.tools,
-                  'parallelTools': m.parallelTools,
-                  'reasoning': m.reasoning,
-                  // 思考强度声明（AIH-056）：空表 / null 都不发没用的字段
-                  if (m.thinkingEfforts.isNotEmpty) 'thinkingEfforts': m.thinkingEfforts,
-                  if (m.thinkingFormat != null) 'thinkingFormat': m.thinkingFormat,
-                  'contextWindow': m.contextWindow,
-                  'maxOutputTokens': m.maxOutputTokens,
-                  'maxAttachmentCount': m.maxAttachmentCount,
-                  'capabilitySource': m.capabilitySource,
-                  'enabled': m.enabled,
-                })
-            .toList(),
-      );
+      // 手机走本机库（一条网络请求都不打）；桌面走后端库。**同一份 toJson()**，两端不翻译。
+      await widget.providers.saveModels(widget.provider.id, _models);
       _dirty = false; // 已经落库，之后父级重建可以直接覆盖本地副本
       await widget.onChanged('模型目录已保存（${_models.length} 个）。');
     } catch (e) {
@@ -1446,7 +1556,11 @@ class _ProviderDraft {
 }
 
 class _ProviderDialog extends StatefulWidget {
-  const _ProviderDialog();
+  /// 传了就是**编辑**那一条（ID 锁住：桌面 `PUT` 的纪律是"ID 创建后不可修改"，
+  /// 而桌面 `POST` 遇到已存在的 id 会报"Provider ID 已存在"）。
+  final AiProvider? existing;
+
+  const _ProviderDialog({this.existing});
 
   @override
   State<_ProviderDialog> createState() => _ProviderDialogState();
@@ -1459,6 +1573,8 @@ class _ProviderDialogState extends State<_ProviderDialog> {
   final _ref = TextEditingController();
   AiApi _api = AiApi.openaiCompletions;
 
+  bool get _editing => widget.existing != null;
+
   /// null = 自动（由后端按地址判断公网 / 本机）。
   ///
   /// 之前默认是"仅本机"，用户填了公网地址却忘了改这里，保存被后端拒绝，
@@ -1470,6 +1586,17 @@ class _ProviderDialogState extends State<_ProviderDialog> {
   @override
   void initState() {
     super.initState();
+    // 编辑：把现有那一行填进来（ID 锁住，其余都能改 —— 用户要的"改个 baseURL"）
+    final existing = widget.existing;
+    if (existing != null) {
+      _id.text = existing.id;
+      _name.text = existing.displayName;
+      _url.text = existing.baseURL;
+      _ref.text = existing.credentialRef ?? defaultCredentialRef(existing.id);
+      _api = AiApi.parse(existing.api) ?? AiApi.openaiCompletions;
+      _trust = AiEndpointTrust.parse(existing.endpointTrust);
+      _refTouched = true; // 已有值，别再跟着 ID 自动改
+    }
     // 输入时就实时校验，按钮状态跟着变
     _id.addListener(_onIdChanged);
     _url.addListener(_revalidate);
@@ -1591,7 +1718,7 @@ class _ProviderDialogState extends State<_ProviderDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('新建 Provider'),
+      title: Text(_editing ? '编辑 Provider' : '新建 Provider'),
       content: SizedBox(
         width: 480,
         child: SingleChildScrollView(
@@ -1600,6 +1727,8 @@ class _ProviderDialogState extends State<_ProviderDialog> {
             children: [
               TextField(
                 controller: _id,
+                // 编辑时 ID 只读：桌面两侧都是"创建后不可修改"（POST 撞 id 报错、PUT 拒绝改 id）
+                readOnly: _editing,
                 decoration: InputDecoration(
                   labelText: 'Provider ID（创建后不可改）',
                   hintText: 'my-gateway',
@@ -1686,7 +1815,7 @@ class _ProviderDialogState extends State<_ProviderDialog> {
                       _trust,
                     ),
                   ),
-          child: const Text('创建'),
+          child: Text(_editing ? '保存' : '创建'),
         ),
       ],
     );

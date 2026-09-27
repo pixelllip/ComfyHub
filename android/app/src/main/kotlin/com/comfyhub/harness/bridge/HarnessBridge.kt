@@ -18,6 +18,8 @@ import com.comfyhub.harness.protocol.ReasoningEffort
 import com.comfyhub.harness.store.HarnessDatabase
 import com.comfyhub.harness.store.HarnessStore
 import com.comfyhub.harness.store.MessageStatus
+import com.comfyhub.harness.store.ProviderJson
+import com.comfyhub.harness.store.ProviderStoreFailure
 import com.comfyhub.harness.sync.SyncPullClient
 import com.comfyhub.harness.sync.SyncPushClient
 import com.comfyhub.harness.tools.BuiltinTools
@@ -34,6 +36,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -223,6 +226,17 @@ class HarnessBridge(private val context: Context) :
                     result.success(true)
                 }
                 "recoverUnfinished" -> result.success(recoverUnfinished())
+
+                // ---- Provider / 模型目录（M6 的另一半）---------------------------------
+                // 手机**自己那份清单**：ai_providers / ai_models 是**本机表**（不进同步范围），
+                // 所以这几个方法**一条网络请求都不打** —— 桌面不在线时也能新建/改地址。
+                // 进出都是 **JSON 字符串**，键名与 `AiProviderDto` / `AiModelDto` 逐字对齐
+                // （Dart 侧就是 `AiProvider.toJson()` / `AiModel.toJson()` 那份形状）。
+                "listProviders" -> result.success(listProviders())
+                "saveProvider" -> saveProvider(call, result)
+                "deleteProvider" -> deleteProvider(call, result)
+                "listModels" -> listModels(call, result)
+                "saveModels" -> saveModels(call, result)
                 else -> result.notImplemented()
             }
         } catch (e: Throwable) {
@@ -540,6 +554,104 @@ class HarnessBridge(private val context: Context) :
             put("mirrorDropped", outcome.mirrorDropped)
             outcome.error?.let { put("error", it) }
         }.toString()
+    }
+
+    // -----------------------------------------------------------------------
+    //  Provider / 模型目录（**只动本机库，不出网**）
+    // -----------------------------------------------------------------------
+
+    /**
+     * `listProviders()` → JSON **数组**字符串。
+     *
+     * ⚠ **不写 `credential` 键**：那是"这台手机有没有 key"的即时状态，真源是本机密钥库，
+     * 界面用 `CredentialStore.statusOf` 现问（`AiProvider.fromJson` 缺这个键时给 `none`，
+     * 接着被覆盖）。桥**不编一个可能过期的状态** —— 那正是"显示已配置、点发送却 401"的老坑。
+     */
+    private fun listProviders(): String = ProviderJson.providersToJsonArray(ensureInitialized().listProviders())
+
+    /**
+     * `saveProvider(provider: <JSON 字符串>)` → 保存后的那条（JSON 字符串）。
+     *
+     * `revision` 缺省/0 = 新建；带正数 = 乐观锁更新 —— 语义与错误文案都照桌面
+     * （见 `HarnessStore.saveProvider`）。
+     */
+    private fun saveProvider(call: MethodCall, result: MethodChannel.Result) {
+        val raw = call.argument<String>("provider").orEmpty()
+        val json = ProviderJson.parseObject(raw)
+        if (json == null) {
+            result.error("BAD_ARGUMENTS", "provider 必须是一段 JSON 对象", null)
+            return
+        }
+        val store = ensureInitialized()
+        val record = try {
+            ProviderJson.providerFromJson(json)
+        } catch (e: ProviderJson.ProviderJsonFailure) {
+            result.error("BAD_ARGUMENTS", e.message, null)
+            return
+        }
+        try {
+            result.success(ProviderJson.providerToJson(store.saveProvider(record)).toString())
+        } catch (e: ProviderStoreFailure) {
+            // 桌面对应的三条都是 400 CONFIG_ERROR —— 这里用同一个码，Dart 侧按人话显示
+            result.error("CONFIG_ERROR", e.message, null)
+        }
+    }
+
+    /** `deleteProvider(id)` → 是否真的删掉了一行；不存在按桌面同样是**错误**（"Provider 不存在: x"）。 */
+    private fun deleteProvider(call: MethodCall, result: MethodChannel.Result) {
+        val id = call.argument<String>("id").orEmpty()
+        if (id.isBlank()) {
+            result.error("BAD_ARGUMENTS", "id 不能为空", null)
+            return
+        }
+        if (!ensureInitialized().deleteProvider(id)) {
+            result.error("CONFIG_ERROR", "Provider 不存在: $id", null)
+            return
+        }
+        result.success(true)
+    }
+
+    /** `listModels(providerId)` → JSON 数组字符串；provider 不存在先报错（与桌面 `GET …/models` 同）。 */
+    private fun listModels(call: MethodCall, result: MethodChannel.Result) {
+        val providerId = call.argument<String>("providerId").orEmpty()
+        val store = ensureInitialized()
+        if (store.getProvider(providerId) == null) {
+            result.error("CONFIG_ERROR", "Provider 不存在: $providerId", null)
+            return
+        }
+        result.success(ProviderJson.modelsToJsonArray(store.listModels(providerId)))
+    }
+
+    /**
+     * `saveModels(providerId, models: <JSON 数组字符串>)` → 保存后的整份目录（JSON 数组字符串）。
+     *
+     * **全量替换**（与桌面 `PUT /api/ai/providers/{id}/models` 同）：界面上的模型列表就是全部。
+     */
+    private fun saveModels(call: MethodCall, result: MethodChannel.Result) {
+        val providerId = call.argument<String>("providerId").orEmpty()
+        val raw = call.argument<String>("models").orEmpty()
+        val elements = ProviderJson.parseArray(raw)
+        if (elements == null) {
+            result.error("BAD_ARGUMENTS", "models 必须是一段 JSON 数组", null)
+            return
+        }
+        val objects = elements.mapNotNull { it as? JsonObject }
+        if (objects.size != elements.size) {
+            result.error("BAD_ARGUMENTS", "models 里每一项都必须是 JSON 对象", null)
+            return
+        }
+        val store = ensureInitialized()
+        val records = try {
+            objects.map { ProviderJson.modelFromJson(it, providerId) }
+        } catch (e: ProviderJson.ProviderJsonFailure) {
+            result.error("BAD_ARGUMENTS", e.message, null)
+            return
+        }
+        try {
+            result.success(ProviderJson.modelsToJsonArray(store.saveModels(providerId, records)))
+        } catch (e: ProviderStoreFailure) {
+            result.error("CONFIG_ERROR", e.message, null)
+        }
     }
 
     // -----------------------------------------------------------------------
