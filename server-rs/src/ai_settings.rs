@@ -220,12 +220,14 @@ pub fn save_policy(state: &AppState, body: PolicyUpdate) -> Result<Value, ApiErr
         read_roots: body.read_roots.unwrap_or_else(|| current.config.read_roots.clone()),
         overrides: body.overrides.unwrap_or_else(|| current.config.overrides.clone()),
         permission_mode: mode.unwrap_or_else(|| current.config.permission_mode.clone()),
-        // 夹在 1..24 / 1..100（与 Kotlin 的 `coerceIn` 一致）——
-        // 0 会让"一轮都不许调工具"，正整数上限之外是明摆着写错了
+        // 夹在 1..`MAX_TOOL_STEPS_LIMIT` / 1..100 ——
+        // 0 会让"一轮都不许调工具"，正整数上限之外是明摆着写错了。
+        // ⚠ 上界**必须**跟着 `DEFAULT_MAX_TOOL_STEPS`（25）走：夹到 24 的话，
+        // 设置页选 25 会被静默改回 24（界面回读才发现），而那正是"改了没生效"那一类。
         max_tool_steps: body
             .max_tool_steps
             .unwrap_or(current.config.max_tool_steps)
-            .clamp(1, 24),
+            .clamp(1, crate::policy::MAX_TOOL_STEPS_LIMIT),
         max_calls_per_run: body
             .max_calls_per_run
             .unwrap_or(current.config.max_calls_per_run)

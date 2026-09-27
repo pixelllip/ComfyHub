@@ -5594,7 +5594,7 @@ async fn tool_policy_and_nsfw_endpoints() {
         ]
     );
     assert_eq!(policy["permissionMode"], "ask");
-    assert_eq!(policy["maxToolSteps"], 16);
+    assert_eq!(policy["maxToolSteps"], 25);
     assert_eq!(policy["maxCallsPerRun"], 48);
     assert!(
         policy["writeRoots"][0].as_str().unwrap().ends_with("comfyui"),

@@ -1574,7 +1574,7 @@ class AiToolPolicy {
     this.readRoots = const [],
     this.autoReadRoots = const [],
     this.overrides = const {},
-    this.maxToolSteps = 16,
+    this.maxToolSteps = 25,
     this.maxCallsPerRun = 48,
     this.maxReadBytes = 0,
     this.maxWriteBytes = 0,
@@ -1591,7 +1591,7 @@ class AiToolPolicy {
               (k, v) => MapEntry(k.toString(), v.toString()),
             ) ??
             const {},
-        maxToolSteps: (json['maxToolSteps'] as num?)?.toInt() ?? 16,
+        maxToolSteps: (json['maxToolSteps'] as num?)?.toInt() ?? 25,
         maxCallsPerRun: (json['maxCallsPerRun'] as num?)?.toInt() ?? 48,
         maxReadBytes: (json['maxReadBytes'] as num?)?.toInt() ?? 0,
         maxWriteBytes: (json['maxWriteBytes'] as num?)?.toInt() ?? 0,

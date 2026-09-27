@@ -60,7 +60,14 @@ data class RunRequest(
     val kit: RunKit,
     val userText: String,
     val reasoningEffort: ReasoningEffort? = null,
-    val maxSteps: Int = 8,
+    /**
+     * 单次回复的工具轮数上限。
+     *
+     * **8 → 25（2026-09-27）**：与桌面 `ToolPolicyConfig.DEFAULT_MAX_TOOL_STEPS` 同值。
+     * 手机上不去读桌面那份 policy（离线也要能跑），所以这里是"两处同值"的约定 ——
+     * 改一处要同时改另一处（`server-rs/src/policy.rs` 的 `DEFAULT_MAX_TOOL_STEPS`）。
+     */
+    val maxSteps: Int = 25,
     val maxContinuations: Int = 2,
     /**
      * 调用方（平台通道 / 界面）**自己指定**的消息主键。

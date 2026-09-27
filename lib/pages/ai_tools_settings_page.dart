@@ -378,7 +378,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
 
   Widget _budgetCard() {
     final theme = Theme.of(context);
-    const stepOptions = [1, 2, 4, 6, 8, 12, 16, 24];
+    const stepOptions = [1, 2, 4, 6, 8, 12, 16, 25, 32, 48];
     const callOptions = [4, 8, 16, 24, 32, 48, 64, 100];
     return Card(
       child: Padding(
@@ -397,7 +397,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
             const SizedBox(height: 10),
             _dropdownRow<int>(
               label: '工具轮数上限',
-              value: stepOptions.contains(_policy.maxToolSteps) ? _policy.maxToolSteps : 16,
+              value: stepOptions.contains(_policy.maxToolSteps) ? _policy.maxToolSteps : 25,
               options: stepOptions,
               labelOf: (v) => '$v 轮',
               onChanged: (v) => _patch({'maxToolSteps': v}, '工具轮数上限已设为 $v'),

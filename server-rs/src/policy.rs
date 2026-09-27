@@ -105,7 +105,7 @@ pub struct ToolPolicyConfig {
     pub read_roots: Vec<String>,
     pub overrides: BTreeMap<String, String>,
     pub permission_mode: String,
-    /// 单次回复最多**工具轮数**（Kotlin `ToolPolicyConfig.maxToolSteps`，出厂 16）。
+    /// 单次回复最多**工具轮数**（`ToolPolicyConfig.maxToolSteps`，出厂 **25**）。
     ///
     /// ⚠ 到顶**不是失败**：那一轮不执行工具、如实告诉用户"已达轮数上限、再发一条就能接着做"
     /// （Kotlin `HarnessRunner` 的原话就是这句）。写成 `TOOL_LOOP_LIMIT` 把整轮 Run 弄失败，
@@ -131,7 +131,16 @@ impl Default for ToolPolicyConfig {
 }
 
 /// 单次回复的工具轮数上限（`ToolPolicyConfig.DEFAULT_MAX_TOOL_STEPS`）。
-pub const DEFAULT_MAX_TOOL_STEPS: i64 = 16;
+///
+/// **16 → 25（2026-09-27 用户拍板）**：真机那次"没有可用工作流时让 AI 自己搭一份"
+/// （总纲 §17）用了 **22 次调用**，其中一半是侦察（读权重索引 / 查节点契约 / 搜模型），
+/// 16 轮会在**最后一步**（`comfy_submit`）把它掐断。上界放到 [`MAX_TOOL_STEPS_LIMIT`]，
+/// 让"搭图"这类长链路够用，又不会离 `max_calls_per_run`（48）太远。
+pub const DEFAULT_MAX_TOOL_STEPS: i64 = 25;
+/// `maxToolSteps` 的硬上界（设置页能选到、`PUT /api/ai/tools/policy` 也只会夹到这里）。
+///
+/// 与 [`DEFAULT_MAX_CALLS_PER_RUN`] 同量级：轮数再多也不会超过"总调用次数"那条线。
+pub const MAX_TOOL_STEPS_LIMIT: i64 = 48;
 /// 单个 Run 的工具调用次数上限（`ToolPolicyConfig.DEFAULT_MAX_CALLS_PER_RUN`）。
 pub const DEFAULT_MAX_CALLS_PER_RUN: i64 = 48;
 
@@ -478,7 +487,7 @@ mod tests {
     #[test]
     fn 工具预算的出厂值与_kotlin_一致() {
         let p = policy("{}");
-        assert_eq!(p.config.max_tool_steps, 16);
+        assert_eq!(p.config.max_tool_steps, 25);
         assert_eq!(p.config.max_calls_per_run, 48);
         // 老库里冻着的配置没有这两个键 → 必须落到出厂值，不是 0
         let legacy = policy(r#"{"writeRoots":["comfyui"],"permissionMode":"full"}"#);
