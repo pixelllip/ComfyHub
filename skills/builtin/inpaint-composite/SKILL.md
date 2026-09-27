@@ -1,8 +1,8 @@
 ---
 name: inpaint-composite
-description: 图像编辑的局部重绘工作流（贴人物图用 comfyhub_paste_person_anima.json + comfy_make_mask(mode="subject", ring=N)：剪影遮罩 + 只融接缝，人物像素与画风原样保留）——保背景换人物 / 换背景保人物 / 把先生成好的人物贴进某张图。用 comfy_make_mask 生成遮罩、comfy_use_media 投放画廊里的底图与人物图，工作流用项目自带的 anima 两份（重绘 comfyhub_inpaint_anima.json / 贴人 comfyhub_paste_person_anima.json）；krea2 那两份实测不适合做编辑（重绘不跟随提示词、贴人守不住），别用。遮罩一律"白=重绘区"。
-whenToUse: 用户说"保持背景不变，换个人 / 换个动作 / 换身衣服"、"背景换掉但人物不变"、"把这张图里的人换成…"、"先生成人物再放进去"、局部重绘 / inpaint / 遮罩 / 贴人 / 合成人物时。
-version: 1
+description: 图像编辑的局部重绘工作流 —— 保背景换人物 / 换背景保人物 / 把先生成好的人物贴进某张图。**贴人物图首选 `comfyhub_paste_person_matte_anima.json`**（AI 软遮罩：`easy imageRemBg` 抠出连续 alpha + ring 只融接缝，人物像素与画风原样保留）——⚠ **用之前必须先查 ComfyUI 里有没有抠图模型，缺了要指引用户下载**（下哪个、放哪、多大都在正文；别让它静默下载、也别默默退回颜色抠图）。没有模型时才退到 `comfyhub_paste_person_anima.json` + `comfy_make_mask(mode="subject", ring=N)`（颜色抠图：纯色背景够用，但**会删掉五官**，见正文实测表）。纯重绘 / 换背景保人物用 `comfyhub_inpaint_anima.json`；底图与人物图用 `comfy_use_media` / `comfy_use_attachment` 投进 ComfyUI 的 input。krea2 那两份实测不适合做编辑（重绘不跟随提示词、贴人守不住），别用。遮罩一律"白=重绘区"。
+whenToUse: 用户说"保持背景不变，换个人 / 换个动作 / 换身衣服"、"背景换掉但人物不变"、"把这张图里的人换成…"、"先生成人物再放进去"、局部重绘 / inpaint / 遮罩 / 贴人 / 合成人物 / 抠图 / 抠人 / 抠出来时。
+version: 2
 ---
 
 # 图像编辑：局部重绘（保背景换人物 / 换背景保人物）
@@ -35,6 +35,62 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
 | 整张重画（等价图生图） | `full` | `false` | 底图自己 | `0.4~0.7` |
 | **两阶段**：先生成人物再换上去 | 人物该出现的位置 | `false` | **阶段一产物的 filename** | `0.4~0.6` |
 
+## 抠图：要"干净的边缘"就**先查模型，缺了让用户下**（贴人物图必读）
+
+贴人物图的成败几乎全在"轮廓抠得干不干净"上。判据只有一条：**要连续 alpha（软遮罩），
+不要"删/不删"的硬剪影**。2026-09-27 在真图上量过（768×1024 绿幕动漫人物，尺子 `scripts\matte-probe.ps1`）：
+
+| 抠图方式 | 前景占比 | **软像素占比** | 结果 |
+| --- | --- | --- | --- |
+| **AI 软遮罩**（`easy imageRemBg`，`rem_mode=BEN2`） | 0.4257 | **3.16%** | 眼睛 / 细发丝 / 发髻都在，边缘是连续 alpha |
+| 颜色抠图（`comfy_make_mask(mode="subject")`） | 0.3564 | **0%（硬剪影）** | **把 18.4% 的前景删掉了** —— 眼睛没了，发髻内部与颈部一块块变透明 |
+
+（颜色那条逐档：原始颜色键 43.65% → `drop_blended_edge` 后 **36.30%** → `unmix_edge` 后 35.64%。
+根因是颜色键出来的掩码是"麻子"（五官内部本来就有洞），于是"边界 3 像素那条带"**实际盖住大半个主体**，
+按颜色扔混合像素就把主体内部整片扔了。**调 `tolerance` 救不回来** —— 调小只是洞小一点、绿边多一点。
+详见 `docs/pitfalls.md`。）
+
+### ① 先查本机有没有（**每次要用之前都查，别假设**）
+
+- **节点**：`easy imageRemBg`（`comfyui-easy-use` 自带，显示名 "Image Remove Bg"）。
+  用 `comfy_list_workflows` / 之前的调用结果能看到 ComfyUI 的位置；**节点在不在**可以直接跑一次看，
+  或者让用户确认 —— ⚠ **别指望 `comfy_env_report`**：它（连同 `comfy_check_inputs` /
+  `comfy_audit_workflow`）**在当前 Rust 后端还没下发**，模型看不到它们（见总纲 §16.5 的欠账）。
+- **模型文件**（节点**按文件名找**；文件不在，它就会**自己去 HuggingFace 下载**）：
+  - `<ComfyUI 安装目录>\ComfyUI\models\rembg\BEN2_Base.pth` —— 1.1GB，**质量最好（首选）**
+  - `<ComfyUI 安装目录>\ComfyUI\models\rembg\RMBG-1.4.pth` —— 169MB，**快一个数量级**，边缘略差
+
+  用 **`list_dir`** 看这两个文件在不在。⚠ **两个坑别踩**：
+  1. `models\rembg\` 这个目录名是 easy-use 写死的（它读 `folder_paths.models_dir` + `rembg`），
+     **不是** ComfyUI 原生的 `models\background_removal\`（那是另一套节点，本机是空的）；
+  2. ComfyUI Desktop 把"程序"与"共享数据（input / output）"分在两处，`comfy_use_media` 返回的
+     `inputDir` 指向**共享**那一份，而**模型在安装目录那一份** —— 别拿 `inputDir` 的兄弟目录当模型目录。
+     两处都 `list_dir` 一下（安装目录优先），或者**直接问用户**。
+
+  拿不准就这么问用户："你的 ComfyUI 装在哪个目录？`models\rembg\` 里有没有 `BEN2_Base.pth`
+  或 `RMBG-1.4.pth`？" —— 这比猜路径快，也比让它静默下载强。
+
+### ② 缺了就**如实告诉用户下哪个**（别静默下载，也别默默降级）
+
+把这张表给用户，并说清"不下会怎样"：
+
+| 模型 | 体积 | 下到哪 | 从哪下 |
+| --- | --- | --- | --- |
+| **BEN2**（推荐） | 1.1GB | `<ComfyUI>\models\rembg\BEN2_Base.pth` | HuggingFace `PramaLLC/BEN2` 仓库里的 `BEN2_Base.pth` |
+| RMBG-1.4（够用 / 最快） | 169MB | `<ComfyUI>\models\rembg\RMBG-1.4.pth` | HuggingFace `briaai/RMBG-1.4` 仓库里的 `model.pth`（**要存成 `RMBG-1.4.pth`**） |
+
+⚠ **为什么必须"先查再跑"**：那个节点在文件缺失时会**自己静默下载**（走 `torch.hub.download_url_to_file`），
+国内常常很慢或直接失败，表现就是"**点了按钮没反应**"（历史坑）。要么先按上表放好文件再跑，
+要么盯住 ComfyUI 控制台的下载行。easy-use 下载失败后会自动换 `hf-mirror.com` 再试一次。
+文件放好**不用重启**（节点每次现读文件）。
+
+### ③ 模型确实没有时
+
+只有一条近似路：`comfy_make_mask(mode="subject", ...)` 的**颜色抠图**，适用面就是上表那一行 ——
+**纯色 / 绿幕背景 + 不挑剔边缘**。**含糊不得**：用户要的是"把人干净地抠出来贴到新背景"，
+而缺模型时它连五官都会删掉 —— 这种情况**如实说做不到 + 告诉他下哪个模型**，
+**绝对不许**硬跑一遍然后说"换好了"。
+
 ## 三步（顺序不要调换）
 
 1. **底图进 ComfyUI 的 input 目录**（`LoadImage` 只能读那里面的文件）：
@@ -50,10 +106,35 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
    ```
    comfy_load_workflow(path="<项目根>\comfyui\workflows\comfyhub_inpaint_anima.json", includeGraph=true)
      → 拿 promptId（**纯提示词重绘 / 换背景保人物用这份**）
+   comfy_load_workflow(path="<项目根>\comfyui\workflows\comfyhub_paste_person_matte_anima.json", includeGraph=true)
+     → **贴人物图首选这份**（AI 软遮罩：内部 `easy imageRemBg` 抠 alpha，ring 由 GrowMask+MaskComposite 现算。
+       ⚠ 用之前先按上面"抠图"那一节查模型；它**不需要** 12 / 26 两个遮罩覆盖）
    comfy_load_workflow(path="<项目根>\comfyui\workflows\comfyhub_paste_person_anima.json", includeGraph=true)
-     → **贴人物图用这份**（它有两个 LoadImageMask：12 合成用剪影、26 重绘区用 ring）
+     → **没有抠图模型时才用这份**（颜色剪影：12 合成用剪影、26 重绘区用 ring）
      （krea2 那两份见开头的结论：不适合做编辑）
 
+   // ★ 首选：AI 软遮罩那份
+   // 第 0 步（**别跳过**）：先让工具把人物图那份像素洗一遍 —— 软遮罩是按 alpha 贴**那张图的像素**，
+   // 边界那圈"人 + 背景"的混合色不洗掉，贴上去就是绕着人的一圈淡背景色。
+   // matteSource="model" 时工具**不写遮罩**（真正的 alpha 由工作流里的节点现算），
+   // 只做反混 + **两侧**去溢色，并把 `personFilename` 回给你 —— 那才是 20.image 该填的。
+   comfy_make_mask(mode="subject", matteSource="model",
+                   baseFilename="<底图 filename>", subjectFilename="<人物图 filename>",
+                   bgColor="green")             // 阶段一用什么背景就传什么（绿幕最稳）
+     → 拿 `personFilename`（没回就去覆盖里找 20.image 原来的名字，但**先看返回值**）
+     → ⚠ 遮罩不要覆盖任何 LoadImageMask（这份工作流没有 12 / 26）
+
+   comfy_submit(promptId=…, overrides={
+     "10.image":  "<底图 filename>",
+     "20.image":  "<上一步的 personFilename>",   // **清理过**的那一份，不是原图
+     "11.width": W, "11.height": H,      // 与底图**必须一致**
+     "21.width": W, "21.height": H,
+     "15.text":  "<只写**人物外面那一圈**该出现什么 —— 写背景，绝不能写人物>",
+     "17.seed":  <换一个新的数字>,
+     "17.denoise": 0.4                   // 0 = 纯合成一个像素都不改；0.3~0.45 只融接缝（推荐）
+   })
+
+   // 退路：颜色剪影那份（没有抠图模型时）
    comfy_submit(promptId=…, overrides={
      "10.image":  "<底图 filename>",
      "20.image":  "<底图 filename 或 人物图 filename>",
@@ -66,6 +147,12 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
      "17.denoise": 1.0                   // 贴人物图时改 0.4~0.6
    })
    ```
+   ⚠ **第一次用 matte 那份之前**：它的节点名 / 输入名 / 链接都**静态核过**
+   （对着本机 ComfyUI 源码 + `scripts\matte-probe.ps1` 的实测），但**还没在活实例上端到端跑过**
+   —— 而且当前后端**没有** `comfy_check_inputs` 这类预检工具。所以：第一次跑完把结果
+   （成功 / 报错原文）**如实回报**，别假设它一定成；真报错就把原文转述给用户，别自己编原因。
+   `easy imageRemBg` 的 `rem_mode` 默认写的是 `BEN2`；想快就覆盖成 `"27.rem_mode": "RMBG-1.4"`，
+   ring 的外圈半径是 `"28.expand": 14`（想换更细的接缝就调它）。
    Anima 那份的提示词是 `15.text` + 采样器 `17.*`（**Danbooru tag**，写角色前先按系统提示第 18 条查三处）。
    要是用户坚持用 krea2 那份：提示词节点是 `13.text`、采样器是 `15.*`（**自然语言**，别堆 tag），
    并且**先说清上表那两档风险**（抽卡 / 贴人守不住）。
@@ -88,9 +175,13 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
    - 只认返回的 `mediaIds` —— 没拿到产物就别进入阶段二。
 2. **阶段二（局部重绘）**：
    - `comfy_use_media(mediaId=<阶段一产物>)` → 人物图的 `filename`；
-   - **贴人物图就用剪影遮罩**：`comfy_make_mask(mode="subject", baseFilename=<底图>, subjectFilename=<人物图>, ring=14, feather=…)`
+   - **贴人物图首选 AI 软遮罩**：直接用 `comfyhub_paste_person_matte_anima.json`（**不用**
+     `comfy_make_mask`、也不用覆盖 12 / 26）—— 但**先按上面的"抠图"一节查模型在不在**，
+     缺了就指引用户下载（别静默下载、也别默默退回颜色抠图）。
+   - **没有抠图模型时才用颜色剪影**：`comfy_make_mask(mode="subject", baseFilename=<底图>, subjectFilename=<人物图>, ring=14, feather=…)`
      —— 照人物形状抠（矩形遮罩会把人物图那块矩形连背景一起贴进去 = 一圈白框）；
      `region` 在 subject 档下**只有裁切作用，别传**（默认 full 才是"只按人物形状"）；
+     ⚠ 它的代价见上面那张实测表（**五官会被删掉**），只在"纯色背景 + 不挑剔边缘"时够用。
    - **边缘去溢色（despill，自动）**：`mode="subject"` + 彩色背景（绿幕/品红）时，工具会在剪影
      **边界往内 6 像素**那条带上把背景**主色通道**压回另外两个通道的水平（绿幕 → `g=min(g,(r+b)/2)`），
      并把结果**写回同一个文件名**（`20.image` 的覆盖不用改）。返回值里 `despilled=true` 表示动过。
@@ -131,8 +222,9 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
      | **剪影 + ring 14** | 0.5 | 1.0 | **人物原样保留、只融接缝**（推荐） |
 
      结论：**白框靠 `mode="subject"` 修；"人物被重画/画风变了"靠 `ring` 修**；
-     两者都不是 denoise/cfg 能调的。要是本机有分割 / 抠图模型（`rembg` 之类，
-     先用 `comfy_env_report` 查）也能抠得更干净，没有就用 `mode="subject"`（纯色背景够用）。
+     两者都不是 denoise/cfg 能调的。**边缘要真的干净就上 AI 软遮罩**
+     （`comfyhub_paste_person_matte_anima.json`，见上面"抠图"那一节：先查模型、缺了让用户下）；
+     没有模型时才用 `mode="subject"`（纯色背景够用，但**会删掉五官** —— 实测掉 18.4% 前景）。
 3. **保住画风的四条**（用户的原话是"保持画风"）：
    - 阶段一与阶段二**用同一个底模**（**都 Anima** —— 图像编辑这一档 krea2 不可靠，
      见开头那张表）与同一套 CLIP / VAE；
@@ -150,8 +242,9 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
 人物像素被 `SetLatentNoiseMask` 保住，所以不会被重画。
 
 - 人物**边缘一圈**仍可能被重绘：`feather` 8~24，或者把 `region` 往外放大 3~5%（x/y 减一点、w/h 加一点）；
-- 要"抠得干干净净"（带 alpha 的透明人物）得有分割 / 抠图模型（rembg 之类）：
-  **本机有没有用 `comfy_env_report` 查**，没有就如实说做不到，别吹。
+- 要"抠得干干净净"（带 alpha 的透明人物）就上 **AI 软遮罩**（`easy imageRemBg`）：
+  **先按上面"抠图"那一节查模型在不在**，缺了就**指引用户下载**（给 URL / 体积 / 目标路径）；
+  模型确实没有时**如实说做不到**，别吹，也别拿颜色抠图硬充当"干净"。
 
 ## 纪律
 
