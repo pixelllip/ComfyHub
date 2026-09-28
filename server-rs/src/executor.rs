@@ -332,9 +332,18 @@ async fn run_once(
                 sink.push_text(&pending);
             }
             sink_now(state, &assistant_id, &sink)?;
-            crate::runs::update_message(state, &assistant_id, &sink.text_body(), "cancelled", None, None)?;
+            // 取消也要把**已经烧掉的 token** 记上（用户 bug「未完成的对话不统计 token 用量」）：
+            // 前几轮的 usage 是真金白银，取消只代表"不再继续"，不代表"没花过"。
+            crate::runs::update_message(
+                state,
+                &assistant_id,
+                &sink.text_body(),
+                "cancelled",
+                last_provider_response_id.as_deref(),
+                total_usage.as_ref(),
+            )?;
             drop(sink);
-            finish_run(&state.bus, state, run_id, "cancelled", None, None, None)?;
+            finish_run(&state.bus, state, run_id, "cancelled", None, None, total_usage.as_ref())?;
             return Ok(());
         }
 
@@ -426,7 +435,16 @@ async fn run_once(
                     sink.push_text(&pending);
                 }
                 sink_now(state, &assistant_id, &sink)?;
-                crate::runs::update_message(state, &assistant_id, &sink.text_body(), "failed", None, None)?;
+                // 已跑完的那几轮的 usage 同样要记上（用户 bug「未完成的对话不统计 token 用量」）：
+                // 失败只说明这一轮没跑完，前面几轮烧掉的 token 是真实发生的。
+                crate::runs::update_message(
+                    state,
+                    &assistant_id,
+                    &sink.text_body(),
+                    "failed",
+                    last_provider_response_id.as_deref(),
+                    total_usage.as_ref(),
+                )?;
                 return Err(e);
             }
         };

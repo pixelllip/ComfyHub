@@ -4547,16 +4547,21 @@ async fn startup_recovery_fails_stale_runs_and_denies_pending_approvals() {
 /// 三个行为分岔（用查询参数选，默认 `ok`）：
 /// * `upstream=ok`：正常流（思考 → 三段正文 → finish_reason → usage → `[DONE]`）；
 /// * `upstream=http429`：直接 429（测"上游明确拒绝"那一档）；
+/// * `upstream=usage-then-die`：第一轮**正常跑完**（但 finish_reason=length，触发"接着写"），
+///   第二轮直接 429 —— 测"未完成的对话也要统计已烧掉的 token"（用户 bug 2026-09-28）；
 /// * `upstream=partial`：**先正常吐出两段正文，然后把连接掐掉** ——
 ///   R6"已经说出去的话一个字都不能丢"的现场（真·中途断流，而不是事后报错）。
 async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let hits = std::sync::Arc::new(AtomicUsize::new(0));
     let handle = tokio::spawn(async move {
         loop {
             let Ok((mut socket, _)) = listener.accept().await else { break };
+            let hits = hits.clone();
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 16 * 1024];
                 let Ok(n) = socket.read(&mut buf).await else { return };
@@ -4565,7 +4570,7 @@ async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
                     .next()
                     .unwrap_or_default()
                     .to_string();
-                if request_line.contains("upstream=http429") {
+                let reply_429 = |mut socket: tokio::net::TcpStream| async move {
                     let body = r#"{"error":"rate limited"}"#;
                     let head = format!(
                         "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
@@ -4574,18 +4579,35 @@ async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
                     let _ = socket.write_all(head.as_bytes()).await;
                     let _ = socket.write_all(body.as_bytes()).await;
                     let _ = socket.shutdown().await;
-                    return;
+                };
+                if request_line.contains("upstream=http429") {
+                    return reply_429(socket).await;
+                }
+                // 第一轮跑完、第二轮 429：分岔靠**请求计数**（"接着写"是一次新的上游请求）
+                if request_line.contains("upstream=usage-then-die") {
+                    let hit = hits.fetch_add(1, Ordering::SeqCst);
+                    if hit > 0 {
+                        return reply_429(socket).await;
+                    }
                 }
                 let partial = request_line.contains("upstream=partial");
                 let _ = socket
                     .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
                     .await;
+                let truncated = request_line.contains("upstream=usage-then-die");
                 let mut frames: Vec<&str> = vec![
                     r#"{"id":"chatcmpl-1","choices":[{"delta":{"reasoning_content":"先想一下"}}]}"#,
                     r#"{"choices":[{"delta":{"content":"你"}}]}"#,
                     r#"{"choices":[{"delta":{"content":"好"}}]}"#,
                 ];
-                if !partial {
+                if partial {
+                    // `partial`：**不说 DONE、直接断** —— 上游中途死掉的样子
+                } else if truncated {
+                    // 第一轮"被输出长度截断"：usage 已给（这轮的账已经发生），但话没说完
+                    frames.push(r#"{"choices":[{"finish_reason":"length"}]}"#);
+                    frames.push(r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}"#);
+                    frames.push("[DONE]");
+                } else {
                     frames.push(r#"{"choices":[{"delta":{"content":"呀"}}]}"#);
                     frames.push(r#"{"choices":[{"finish_reason":"stop"}]}"#);
                     frames.push(r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}"#);
@@ -4598,7 +4620,6 @@ async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
                     }
                     let _ = socket.flush().await;
                 }
-                // `partial`：**不说 DONE、直接断** —— 上游中途死掉的样子
                 let _ = socket.shutdown().await;
             });
         }
@@ -5828,6 +5849,49 @@ async fn executor_reports_the_stable_code_for_an_upstream_rejection() {
         run["errorMessage"].as_str().unwrap().contains("rate limited"),
         "上游的原话（已脱敏、已截断）要带出来，否则用户只看到「配置有误」：{run}"
     );
+
+    gateway.abort();
+}
+
+/// 未完成的对话也要统计 token（用户 bug 2026-09-28「未完成的对话不统计token用量」）：
+/// 第一轮**跑完**（usage 已经烧掉）、"接着写"的第二轮撞 429 —— 失败的助手消息
+/// 必须带着第一轮的 usage 落库，会话统计（AiUsageSummary 读消息行）才不会少算。
+#[tokio::test]
+async fn a_failed_run_still_persists_the_usage_of_completed_rounds() {
+    let (base_url, gateway) = fake_gateway().await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &format!("{base_url}?upstream=usage-then-die"));
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "写长一点", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+
+    let run = wait_for_run(&state, &run_id).await;
+    assert_eq!(run["status"], "failed", "{run}");
+    assert_eq!(run["errorCode"], "RATE_LIMIT");
+
+    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let assistant = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == assistant_id.as_str())
+        .unwrap();
+    assert_eq!(assistant["status"], "failed");
+    assert_eq!(assistant["text"], "你好", "第一轮已经说出去的话照旧要落下来（R6）");
+    assert_eq!(
+        assistant["usage"]["prompt_tokens"], 7,
+        "跑完的那一轮的 usage 必须留在失败的消息上：{assistant}"
+    );
+    assert_eq!(assistant["usage"]["total_tokens"], 10);
 
     gateway.abort();
 }
