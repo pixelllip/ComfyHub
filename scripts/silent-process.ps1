@@ -42,7 +42,11 @@ function New-HiddenStartupInfo {
 function Start-SilentProcess {
     <#
       启动一个「无窗口 + 脱离进程树」的进程。
-      返回实际生效的方式：'wmi-hidden' / 'wmi-vbs' / 'wmi-plain'；失败直接抛异常。
+      返回实际生效的方式：'wmi-hidden' / 'wmi-vbs' / 'direct-hidden' / 'wmi-plain'；
+      失败直接抛异常。
+
+      ⚠ `direct-hidden`（2026-09-28 新增的第 3 档）**不脱离作业对象** ——
+      它是在"WMI 被拒"的环境里唯一还能把服务起起来的办法，见那一档的注释。
 
       注意：CreateFlags 里的 CREATE_NO_WINDOW(0x08000000) 被 WMI 提供程序拒绝
       （ReturnValue=21 Invalid parameter），所以这里只用 ShowWindow。
@@ -65,8 +69,16 @@ function Start-SilentProcess {
     # 所以空串必须换成 $null（= 用默认工作目录）。
     $curDir = if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) { $null } else { $WorkingDirectory }
 
+    # 强制走哪一档（可选）：'wmi' = 只用 WMI（跳过第 3 档）；'direct' = 直接用第 3 档，不试 WMI。
+    #
+    # 两个用处：① 在"WMI 被拒"的机器上省掉两次注定失败的尝试与那两行黄字；
+    # ② 让第 3 档**可测** —— `check-silent-start.ps1` 要验"不弹窗口"，
+    #    而默认顺序下 WMI 先成功，新加的那一档根本没被执行到。
+    $forceMode = $env:COMFYHUB_SPAWN_MODE
+    if ($forceMode -eq 'direct') { Write-Host "  （COMFYHUB_SPAWN_MODE=direct：跳过 WMI，直接用 CreateProcess）" -ForegroundColor DarkGray }
+
     # ---- 1) WMI + Win32_ProcessStartup（ShowWindow = SW_HIDE）----
-    if (Test-SystemManagementAvailable) {
+    if ($forceMode -ne 'direct' -and (Test-SystemManagementAvailable)) {
         try {
             $si = New-HiddenStartupInfo
             $cls = [wmiclass]'Win32_Process'
@@ -85,6 +97,7 @@ function Start-SilentProcess {
     #   · 命令行里有引号 / 中文路径时，作为 wscript 参数传容易被拆坏，
     #     所以写进一个 UTF-16 的命令行文件，VBS 读出来再用（编码/引号都不用操心）。
     try {
+        if ($forceMode -eq 'direct') { throw '（COMFYHUB_SPAWN_MODE=direct：跳过这一档）' }
         $cmdFile = Join-Path $HelperDir "silent-$Tag.cmdline.txt"
         $vbsFile = Join-Path $HelperDir 'silent-run.vbs'
         Set-Content -Path $cmdFile -Value $CommandLine -Encoding Unicode
@@ -104,7 +117,43 @@ function Start-SilentProcess {
         Write-Host "  wscript 兜底也失败了（$($_.Exception.Message)）…" -ForegroundColor Yellow
     }
 
-    # ---- 3) 最后兜底：裸 WMI（会弹窗口，但服务能起来）----
+    # ---- 3) 直连 CreateProcess（**不经过 WMI**）：SW_HIDE，但不脱离作业对象 ----
+    #
+    # 为什么要有这一条（2026-09-28 实测，用户报的 `flutter run -d windows` 拉不起后端）：
+    # WMI 那两条路会被**「拒绝访问」**（`Invoke-CimMethod … Win32_Process -MethodName Create`，
+    # 本文件原来走到这里就直接 throw），而**同一个进程树里直接 `CreateProcess` 是通的** ——
+    # 判据是用户在**报错的那个终端**里跑
+    #   node -e "require('child_process').spawnSync('cmd',['/c','echo OK'],{encoding:'utf8'})"
+    # 回 `0 OK`。也就是说被拒的是 **WMI 这一下**（它要绕到 WmiPrvSE 去创建进程），
+    # 不是"整棵树被关住了"。所以这一档能把那种环境救回来。
+    #
+    # `Start-Process -WindowStyle Hidden` 走的是 .NET `Process.Start` → **直接
+    # `CreateProcessW`**，并在 STARTUPINFO 里带 `STARTF_USESHOWWINDOW + SW_HIDE` ——
+    # 与 WMI 那条 `ShowWindow=0` 想要的效果**完全一样**（窗口创建时就是隐藏的，
+    # 不是"先显示再隐藏"），而且不需要 WMI 提供程序。
+    #
+    # ⚠ 代价（必须说清，别把它当 WMI 的等价替代）：**它不脱离作业对象**。
+    # WMI 那条一直当首选，正是因为 WMI 提供程序建的进程落在调用者的 job 之外；
+    # 直连这条路建的子进程**仍在同一个 job 里** —— 调用者（比如 Harness 的一次性命令）
+    # 所在 job 若设了 kill-on-close，命令一结束它会被一起回收。
+    # 所以顺序是"能 WMI 就 WMI"（它更强），只有 WMI 被拒时才退到这一档，
+    # 并且**如实报出用的是哪一档**（返回 'direct-hidden'），调用方才知道要不要担心续命。
+    try {
+        $direct = @{
+            FilePath     = 'cmd.exe'
+            ArgumentList = @('/c', $CommandLine)
+            WindowStyle  = 'Hidden'
+            PassThru     = $true
+        }
+        if ($curDir) { $direct['WorkingDirectory'] = $curDir }
+        $proc = Start-Process @direct
+        if ($proc) { return 'direct-hidden' }
+        Write-Host '  直连 CreateProcess 也没拿到进程句柄，继续试最后一条…' -ForegroundColor Yellow
+    } catch {
+        Write-Host "  直连 CreateProcess 也失败了（$($_.Exception.Message)），继续试最后一条…" -ForegroundColor Yellow
+    }
+
+    # ---- 4) 最后兜底：裸 WMI（会弹窗口，但服务能起来）----
     Write-Host '  警告: 只能以普通方式启动，可能会出现一个控制台窗口。' -ForegroundColor Yellow
     $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $CommandLine }
     if ($r.ReturnValue -ne 0) { throw "创建进程失败 (ReturnValue=$($r.ReturnValue))" }

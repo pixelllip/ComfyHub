@@ -47,6 +47,21 @@
 
 1. **不能用 `Start-Process`** 起后端（以及搬迁老库时的 mysqld）：进程属于当前 PowerShell 的进程树，
    命令行一结束就可能被一起回收。要用 WMI `Win32_Process.Create` 脱离进程树。
+   - ⚠ **唯一的例外（2026-09-28 新增的第 3 档 `direct-hidden`）**：**WMI 那一下被系统拒绝**时
+     （实测现场就是用户报的 `flutter run -d windows` 拉不起后端：报
+     `Invoke-CimMethod … Win32_Process -MethodName Create` **拒绝访问**；而**同一个进程树里**
+     直接 `CreateProcess` 是通的 —— 判据是
+     `node -e "require('child_process').spawnSync('cmd',['/c','echo OK'],{encoding:'utf8'})"`
+     回 `0 OK`，所以被拒的是 WMI 本身，不是"整棵树被关住"），
+     `silent-process.ps1` 会自动退到 `Start-Process -WindowStyle Hidden`
+     （= .NET `Process.Start` → 直接 `CreateProcessW` + `STARTF_USESHOWWINDOW/SW_HIDE`，
+     与 `ShowWindow=0` 效果一致，且不经过 WmiPrvSE）。
+     **代价必须记住：它不脱离作业对象** —— 所以顺序永远是"能 WMI 就 WMI"，
+     只有 WMI 被拒才退这一档；`Start-SilentProcess` **如实返回实际用的是哪一档**
+     （`wmi-hidden` / `wmi-vbs` / `direct-hidden` / `wmi-plain`）。
+     `$env:COMFYHUB_SPAWN_MODE = 'direct' | 'wmi'` 可强制走某一档（诊断用；也让这一档可测）。
+     回归就是现成那条（实测：全程 0 个新窗口）：
+     `$env:COMFYHUB_SPAWN_MODE='direct'; pwsh -File scripts\check-silent-start.ps1 -Restart`
 2. **WMI 默认会给控制台程序分配一个可见的控制台窗口**（就是那个 cmd 黑框），
    所以必须传 `Win32_ProcessStartup{ ShowWindow = 0 }`（SW_HIDE）。
    公共实现是 `scripts\silent-process.ps1`，`mysql.ps1` / `server.ps1` 都 dot-source 它。
