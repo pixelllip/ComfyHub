@@ -66,7 +66,20 @@ $env:PUB_HOSTED_URL = 'https://pub.dev'
 
 $buildArgs = @('build', 'apk')
 $buildArgs += if ($DebugBuild) { '--debug' } else { '--release' }
-if ($Split) { $buildArgs += '--split-per-abi' }
+if ($Split) {
+    $buildArgs += '--split-per-abi'
+    # ★ 分架构包**不额外加 ABI 的 versionCode 偏移**（2026-09-28 起）。
+    #
+    # 不加这个的后果是**永久性**的：分架构包会拿到 1001 / 2001 / 4001，而全量包与
+    # `flutter run` 装的 debug 包是 1 —— 于是"装过一次分架构包"的手机，之后
+    # **`flutter run` 永远装不上去**（INSTALL_FAILED_VERSION_DOWNGRADE，`-r` 救不了，
+    # 只能先卸载）。这正是用户报"真手机无法安装"的第三个原因，实测复现过。
+    #
+    # 加了它，四种包（debug / 全量 release / 三个分架构）**共用同一个 versionCode**，
+    # 互相覆盖都是普通的"同版本替换"，`adb install -r` 与 `flutter run` 都能过。
+    # （这个开关是 Flutter 模板自己在 `android\app\build.gradle.kts` 里写明的，见那段注释。）
+    $buildArgs += '-Pforce-version-code-ignoring-abi=true'
+}
 
 Say ("→ flutter " + ($buildArgs -join ' ')) 'Cyan'
 Say '  （第一次编要几分钟：Gradle 要编译 Kotlin 与各插件）' 'DarkGray'
