@@ -744,7 +744,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('删除 Provider「${p.displayName}」？'),
-        content: const Text('已有会话会保留它的 Provider / 模型快照，但不能再继续发送。密钥不会被自动删除。'),
+        content: Text(p.credential.configured
+            ? '已有会话会保留它的 Provider / 模型快照，但不能再继续发送。它配置的密钥会一并删除。'
+            : '已有会话会保留它的 Provider / 模型快照，但不能再继续发送。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除')),

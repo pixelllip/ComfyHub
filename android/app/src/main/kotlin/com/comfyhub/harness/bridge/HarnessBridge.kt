@@ -597,16 +597,30 @@ class HarnessBridge(private val context: Context) :
         }
     }
 
-    /** `deleteProvider(id)` → 是否真的删掉了一行；不存在按桌面同样是**错误**（"Provider 不存在: x"）。 */
+    /**
+     * `deleteProvider(id)` → 是否真的删掉了一行；不存在按桌面同样是**错误**（"Provider 不存在: x"）。
+     *
+     * **密钥跟着走**（2026-09-28 用户 bug，与桌面 `ai::delete_provider` 同一条纪律）：
+     * provider 删掉后，它那把本机密钥若已无别的 provider 引用，一并从本机密钥库清掉 ——
+     * 否则它就成了界面上再也摸不到的孤儿。
+     */
     private fun deleteProvider(call: MethodCall, result: MethodChannel.Result) {
         val id = call.argument<String>("id").orEmpty()
         if (id.isBlank()) {
             result.error("BAD_ARGUMENTS", "id 不能为空", null)
             return
         }
-        if (!ensureInitialized().deleteProvider(id)) {
+        val store = ensureInitialized()
+        val credentialRef = store.getProvider(id)?.credentialRef?.takeIf { it.isNotBlank() }
+        if (!store.deleteProvider(id)) {
             result.error("CONFIG_ERROR", "Provider 不存在: $id", null)
             return
+        }
+        if (credentialRef != null &&
+            store.listProviders().none { it.credentialRef == credentialRef }
+        ) {
+            // 尽力而为：provider 已经删掉了，密钥清理失败不再把整个请求报成错误
+            runCatching { credentials.remove(credentialRef) }
         }
         result.success(true)
     }

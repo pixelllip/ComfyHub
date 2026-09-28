@@ -7526,6 +7526,62 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
     assert!(!comfyhub_server_rs::credentials::read_store(&store_file).contains_key(&reference));
 }
 
+/// 删 provider 时**托管密钥跟着走**（2026-09-28 用户 bug「删除 provider 时，密钥被设置成
+/// 不自动删除」）：以前 provider 删了，`credentials.dpapi.json` 里那把 key 成了孤儿 ——
+/// 界面上再也摸不到，却还留在盘上。两条会静默做错的边界各有一条断言：
+/// ① 无人引用 → key 一并清掉；② ref 被别的 provider 共用 → 留着（删的是引用不是 key）。
+/// （env 来源那条路在 `unset_orphan_credential` 里被 `env_source` 挡住 —— 往测试进程里
+/// 塞环境变量会泄漏到别的用例，不值得，那里只有一行。）
+#[tokio::test]
+async fn deleting_a_provider_takes_its_orphan_credential_with_it() {
+    let state = state();
+    let reference = format!("FIXTURE_ORPHAN_KEY_{}", std::process::id());
+    let store_file = state.media_dir().parent().unwrap().join("ai").join("credentials.dpapi.json");
+
+    // ① 无人引用：删 provider → key 一起没了
+    add_provider(&state, "p-orphan", Some(&reference));
+    let (status, _) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/p-orphan/credentials",
+        serde_json::json!({ "value": "sk-orphan-1234567890" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(comfyhub_server_rs::credentials::read_store(&store_file).contains_key(&reference));
+
+    let (status, _) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/p-orphan").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !comfyhub_server_rs::credentials::read_store(&store_file).contains_key(&reference),
+        "provider 删掉后它那把无人引用的 key 应当一并清掉"
+    );
+
+    // ② ref 被别的 provider 共用：删一个，key 留着（删的是引用，不是 key 本身）
+    add_provider(&state, "p-share-a", Some(&reference));
+    add_provider(&state, "p-share-b", Some(&reference));
+    let (status, _) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/p-share-a/credentials",
+        serde_json::json!({ "value": "sk-shared-1234567890" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/p-share-a").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        comfyhub_server_rs::credentials::read_store(&store_file).contains_key(&reference),
+        "ref 还有别的 provider 在用，key 必须留着"
+    );
+    let (status, _) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/p-share-b").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !comfyhub_server_rs::credentials::read_store(&store_file).contains_key(&reference),
+        "最后一个引用也删掉后，key 才跟着走"
+    );
+}
+
 /// 凭据端点的**三段前置判定**：provider 不存在 / 没配 credentialRef —— 都必须是
 /// `400 CONFIG_ERROR + detail`（人话），**不是 404**（写成 404 就没有 detail，
 /// 界面又一次显示不出人话，P4 第 17 步那条对齐）。

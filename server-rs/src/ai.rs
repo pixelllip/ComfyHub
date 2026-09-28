@@ -930,12 +930,52 @@ pub fn update_provider(
 }
 
 /// 删除 provider（`deleteProvider`）。`ai_models` 靠 `ON DELETE CASCADE` 一起走（R1）。
+///
+/// **密钥跟着走**（2026-09-28 用户 bug「删除 provider 时，密钥被设置成不自动删除」）：
+/// provider 没了，它那把托管 key 再也没有界面入口能摸到，却还留在
+/// `credentials.dpapi.json` 里 —— 删 provider 时把**不再被任何 provider 引用**的那把
+/// 一并清掉。三条边界：
+///  · env 来源的 key 是只读的（`credentials::unset` 也动不了它），直接跳过；
+///  · ref 被别的 provider 共用时留着（删的是引用，不是 key 本身）；
+///  · 清理是**尽力而为**：provider 已经删掉了，key 那步失败不再把整个请求打成 5xx
+///    （那只会让用户面对"提示失败、provider 却真没了"的中间态）。
 pub fn delete_provider(state: &AppState, id: &str) -> Result<bool, ApiError> {
+    let reference = get_provider_row(state, id)?
+        .and_then(|row| row.credential_ref)
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty());
     let removed = state.write(|tx| {
         let n = tx.execute("DELETE FROM ai_providers WHERE id = ?1", rusqlite::params![id])?;
         Ok(n)
     })?;
+    if removed > 0 {
+        if let Some(reference) = reference {
+            unset_orphan_credential(state, &reference);
+        }
+    }
     Ok(removed > 0)
+}
+
+/// provider 删掉之后，把它那把**已无人引用**的托管 key 清掉（见 [`delete_provider`]）。
+fn unset_orphan_credential(state: &AppState, reference: &str) {
+    // env 来源只读（AIH-013）：env 挡着的时候 managed 库里就算有同名条目也轮不到我们动
+    if crate::credentials::env_source(reference).is_some() {
+        return;
+    }
+    let still_used: bool = state
+        .with(|conn| {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM ai_providers WHERE credential_ref = ?1",
+                [reference],
+                |row| row.get(0),
+            )?;
+            Ok(n > 0)
+        })
+        .unwrap_or(true); // 读不出来就当"还有人在用"：宁可留一把孤儿 key，也不误删在用的
+    if still_used {
+        return;
+    }
+    let _ = crate::credentials::unset(state, reference);
 }
 
 /// 全量替换某 Provider 的模型目录（`AiRepo.replaceModels`，AIH-011）。
