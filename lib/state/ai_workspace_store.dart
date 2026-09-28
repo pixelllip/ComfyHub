@@ -127,6 +127,29 @@ class AiWorkspaceStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 只把**当前 Provider 的模型目录**重新读一次（与 [refreshProviders] 同一个触发点）。
+  ///
+  /// 为什么要与 [refreshProviders] 分开（用户 bug「对于模型声明，需要重启客户端才能生效」）：
+  /// 改的是**模型**的能力声明（补图片输入 / 勾工具 / 调思考档位），provider 行一个字节都不动
+  /// —— 那边的"清单变没变"判不出来，于是聊天页手里这份旧目录一直用到重启：
+  /// 发消息才被后端拒绝"模型未声明支持图片输入"。
+  ///
+  /// 代价是一次目录查询（手机本机库 / 桌面一个 GET），换来"打开选择器时目录也是最新的"。
+  /// 原来选中的模型按 id 找回来 —— 目录重读后对象是新的，不找回来选择器会显示成空。
+  Future<void> refreshModels() async {
+    try {
+      final rememberedId = selectedModel?.id;
+      await _loadModels();
+      if (rememberedId != null) {
+        selectedModel = models.where((m) => m.id == rememberedId).firstOrNull ?? selectedModel;
+        _clampReasoningEffort();
+      }
+    } catch (e) {
+      error = '重读模型目录失败：$e';
+    }
+    notifyListeners();
+  }
+
   Future<void> _restoreRememberedModel() async {
     final prefs = await _store;
     final providerId = prefs.getString(_kLastProvider);

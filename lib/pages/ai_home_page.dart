@@ -89,6 +89,10 @@ class _AiHomePageState extends State<AiHomePage> {
       // `load()` 自己是幂等的：切到别的页再回来（页面会被重建）不会重新加载、
       // 更不会再新建一条会话。
       if (mounted) _store.load();
+      // 回到聊天页 = 可能刚从「AI 模型与凭据」改完模型的能力声明回来：
+      // 目录重读一次，改动当场生效（用户 bug 2026-09-28「模型声明要重启客户端才生效」）。
+      // 冷启动那一次不用：load() 自己会读目录（loaded 还没翻真，正好跳过）。
+      if (mounted && _store.loaded) _store.refreshModels();
     });
   }
 
@@ -3444,7 +3448,10 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
     // 打开选择器 = "我要挑一个" = 清单必须是最新的（总纲 §27.2 第 12 条）：
     // 手机上 Provider 的真源是本机库，刚在「AI 模型与凭据」页建好的那一条，
     // 不重读一次就不会出现在这里（以前要切走再切回来才看得到）。
+    // 模型目录同理（用户 bug「模型声明要重启客户端才生效」）：改的是模型的能力声明，
+    // provider 行不动，refreshProviders 的"清单变没变"判不出来 —— 目录要单独重读。
     unawaited(widget.store.refreshProviders());
+    unawaited(widget.store.refreshModels());
   }
 
   @override
