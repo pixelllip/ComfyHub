@@ -287,7 +287,7 @@ impl McpClient {
     /// 三个环境变量的来历（2026-09-25 实测，记在 `docs/pitfalls.md`）：
     /// MCP 客户端自己的环境**没有 shell 的 PATH**，comfy-mcp 内部起 `comfy-cli` 时要靠
     /// `COMFY_BIN` 的绝对路径；`PYTHONUTF8` / `PYTHONIOENCODING` 防中文乱码。
-    pub fn spawn(runtime: &RuntimePaths) -> Result<Self, McpError> {
+    pub fn spawn(runtime: &RuntimePaths, project_root: &Path) -> Result<Self, McpError> {
         let python = runtime
             .python
             .clone()
@@ -312,6 +312,7 @@ impl McpClient {
         if let Some(comfy) = runtime.comfy_cli.as_ref() {
             command.env("COMFY_BIN", comfy);
         }
+        apply_comfy_cli_write_redirection(&mut command, project_root);
         command.stdin(std::process::Stdio::piped());
         command.stdout(std::process::Stdio::piped());
         command.stderr(std::process::Stdio::piped());
@@ -645,6 +646,69 @@ pub fn scripts_dir_of(python_exe: &Path) -> Option<PathBuf> {
         .map(|n| n.eq_ignore_ascii_case("Scripts"))
         .unwrap_or(false);
     Some(if is_scripts { parent.to_path_buf() } else { parent.join("Scripts") })
+}
+
+/// 给 MCP 子进程补上"comfy-cli 往哪儿写"的环境变量（2026-09-28 用户 bug
+/// 「MCP 调用总是失败」的真实根因，**不是 ComfyUI 没在运行**）。
+///
+/// 现场：comfy-cli 1.20 起**任何**命令都要先探测云凭据（`where.resolve_default →
+/// find_api_key`），凭据锁文件在 `%LOCALAPPDATA%\comfy-cli\secrets.json.lock` ——
+/// 而受限会话把"映像在工作区内"的进程（MCP 的 portable python 就是）关在工作区里，
+/// 写工作区外一律 `PermissionError [Errno 13]`（实测 WMI 拉起也一样，见
+/// `docs\pitfalls.md`），整个 `comfy nodes` 家族当场炸成 UnexpectedToolError，
+/// 还被误译成"先确认 ComfyUI 在线"。
+///
+/// 处置：comfy-cli 会写盘的三个地方全部指进项目内（`storage\ai\mcp\comfy-cli-home`）：
+/// - 云凭据 + 锁：`COMFY_SECRETS_PATH` —— **只在默认位置写不进时才指**，
+///   免得把用户已在 `%LOCALAPPDATA%\comfy-cli` 登录过的 Comfy Cloud 凭据弄丢；
+/// - 对象信息等缓存：`COMFY_CACHE_DIR`（默认 `~/.cache/comfy-cli`）；
+/// - tempfile：`TMP` / `TEMP`（默认 `%TEMP%`，SQLite 那条 `temp_store` 坑的同源）。
+fn apply_comfy_cli_write_redirection(command: &mut tokio::process::Command, project_root: &Path) {
+    let home = project_root
+        .join("storage")
+        .join("ai")
+        .join("mcp")
+        .join("comfy-cli-home");
+    if std::fs::create_dir_all(&home).is_ok() {
+        if !comfy_cli_config_dir_writable() {
+            command.env("COMFY_SECRETS_PATH", home.join("secrets.json"));
+        }
+        command.env("COMFY_CACHE_DIR", home.join("cache"));
+    }
+    if !dir_writable(&std::env::temp_dir()) {
+        let tmp = project_root.join(".run").join("tmp");
+        if std::fs::create_dir_all(&tmp).is_ok() {
+            command.env("TMP", &tmp);
+            command.env("TEMP", &tmp);
+        }
+    }
+}
+
+/// `%LOCALAPPDATA%\comfy-cli`（comfy-cli 的配置/凭据目录）现在写不写得进。
+/// 目录不存在时看 `%LOCALAPPDATA%` 本身（comfy-cli 首次会自己 mkdir）。
+fn comfy_cli_config_dir_writable() -> bool {
+    let Ok(local) = std::env::var("LOCALAPPDATA") else {
+        return false;
+    };
+    if local.trim().is_empty() {
+        return false;
+    }
+    let base = Path::new(local.trim());
+    let dir = base.join("comfy-cli");
+    let target = if dir.is_dir() { dir } else { base.to_path_buf() };
+    dir_writable(&target)
+}
+
+/// 目录当前进程写不写得进（建一个探测文件，用完即删；失败按不可写）。
+fn dir_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".comfyhub-write-probe-{}", std::process::id()));
+    match std::fs::OpenOptions::new().create_new(true).write(true).open(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// 找 MCP 运行时。
@@ -1233,7 +1297,7 @@ impl McpRegistry {
             ));
         }
 
-        let client = Arc::new(McpClient::spawn(&runtime)?);
+        let client = Arc::new(McpClient::spawn(&runtime, project_root)?);
         if let Err(e) = client.handshake().await {
             let _ = client.close().await;
             return Err(e);
@@ -1333,15 +1397,23 @@ pub async fn warmup(registry: &Arc<McpRegistry>, project_root: &Path) {
 /// 「调用 mcp 的 nodes 工具总是失败」）。
 ///
 /// 现场：`UnexpectedToolError: Error executing tool nodes` + 一整段 python traceback
-/// （工具函数里的异常被 MCP SDK 包成这一句，isError 回来）。根因大多不是参数写错，
-/// 而是 **ComfyUI 没在运行** —— comfy-cli 的节点查询要先连上 ComfyUI 拿 object_info，
-/// 连不上时异常就在子进程里炸出来。只把 traceback 原样丢给模型等于没说；
-/// 要给它"下一步做什么"。认不出的形状回 `None`（照旧原样透传，不编）。
+/// （工具函数里的异常被 MCP SDK 包成这一句，isError 回来）。根因不止一种，别一刀切：
+/// - `PermissionError [Errno 13]`（写凭据锁 / 缓存被拒）—— 受限会话里这是**最常见**的
+///   （见 [`apply_comfy_cli_write_redirection`] 的文件头），跟 ComfyUI 在不在线无关；
+/// - 连不上 ComfyUI —— 节点查询要先连上 ComfyUI 拿 object_info。
+/// 只把 traceback 原样丢给模型等于没说；要给它"下一步做什么"。
+/// 认不出的形状回 `None`（照旧原样透传，不编）。
 fn humanize_mcp_failure(name: &str, content: &str, stderr: &str) -> Option<String> {
     let text = format!("{content}\n{stderr}");
     if !(text.contains("UnexpectedToolError") || text.contains("Error executing tool")) {
         return None;
     }
+    let lower = text.to_lowercase();
+    let permission_denied = lower.contains("permissionerror")
+        || lower.contains("errno 13")
+        || lower.contains("errno = 5")
+        || lower.contains("拒绝访问")
+        || lower.contains("os error 5");
     const PROBE_TOOLS: [&str; 14] = [
         "nodes",
         "node_deps",
@@ -1358,10 +1430,15 @@ fn humanize_mcp_failure(name: &str, content: &str, stderr: &str) -> Option<Strin
         "free_memory",
         "get_logs",
     ];
-    let hint = if PROBE_TOOLS.contains(&name) {
-        "最常见的根因是本机 ComfyUI 没在运行（comfy-cli 的这些查询要先连上 ComfyUI 才拿得到节点表）。\
-         先用 server_info 确认 ComfyUI 在线；没在运行就先启动 ComfyUI（或问用户）再重试；\
-         ComfyUI 在线仍然失败，就把下面的 stderr 交给用户。"
+    let hint = if permission_denied {
+        "根因是**写文件被系统拒绝**（PermissionError / Errno 13）：comfy-cli 要把云凭据锁文件、\
+         缓存写到用户目录（%LOCALAPPDATA%\\comfy-cli / ~/.cache），而当前环境不允许这个子进程写项目外的位置\
+         （典型：后端是从受限会话里拉起来的）。新版已把 comfy-cli 的落盘位置指进项目内\
+         （storage\\ai\\mcp\\comfy-cli-home）；仍然出现就重启后端服务（设置页「重启后端」）让新环境生效，\
+         或从普通终端起后端。"
+    } else if PROBE_TOOLS.contains(&name) {
+        "comfy-cli 的这些查询要先连上本机 ComfyUI 拿节点表。先用 server_info 确认 ComfyUI 在线；\
+         没在运行就先启动 ComfyUI（或问用户）再重试；ComfyUI 在线仍然失败，就把下面的 stderr 交给用户。"
     } else {
         "工具在 comfy-mcp 子进程内部崩溃（不是参数校验失败）。先用 server_info 确认 ComfyUI 在线再重试一次；\
          仍失败就把下面的 stderr 交给用户。"
@@ -1471,13 +1548,42 @@ mod tests {
         let traceback = "UnexpectedToolError: Error executing tool nodes";
         // 认得的形状 → 人话里带着下一步
         let human = humanize_mcp_failure("nodes", traceback, "").expect("要翻");
-        assert!(human.contains("ComfyUI 没在运行"), "{human}");
+        assert!(human.contains("ComfyUI"), "{human}");
         assert!(human.contains("server_info"), "{human}");
         // 同样的话出现在 stderr 尾部（isError 的 content 是空的那个现场）也要认得
         let human = humanize_mcp_failure("nodes", "", traceback).expect("stderr 里也要认");
         assert!(human.contains("nodes"), "{human}");
         // 认不得的失败照旧透传（不编）
         assert!(humanize_mcp_failure("nodes", "HTTP 500: internal", "").is_none());
+    }
+
+    /// 用户 bug（2026-09-28）「MCP 调用总是失败，系统被强行误解为 comfy 没在运行」：
+    /// 真实根因是 `PermissionError [Errno 13]`（受限会话里 comfy-cli 写
+    /// `%LOCALAPPDATA%\comfy-cli\secrets.json.lock` 被拒），**不是** ComfyUI 没在运行 ——
+    /// 旧版把它一律译成"先确认 ComfyUI 在线"，把模型（和用户）往错误方向带。
+    #[test]
+    fn 权限被拒_不再误导为_comfy_没在运行() {
+        let traceback = "UnexpectedToolError: Error executing tool nodes\n\
+             PermissionError: [Errno 13] Permission denied: \
+             'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\comfy-cli\\\\secrets.json.lock'";
+        let human = humanize_mcp_failure("nodes", traceback, "").expect("要翻");
+        assert!(human.contains("写文件被系统拒绝"), "{human}");
+        assert!(human.contains("secrets") || human.contains("凭据"), "{human}");
+        assert!(!human.contains("先用 server_info"), "{human}");
+        // errno 5 / 拒绝访问 的变体也要认得（同一个根因家族）
+        let human = humanize_mcp_failure("nodes", "Error executing tool nodes\nOS Error: 拒绝访问。, errno = 5", "")
+            .expect("errno 5 也要认");
+        assert!(human.contains("写文件被系统拒绝"), "{human}");
+    }
+
+    /// 探测函数本身：项目内的临时目录写得进（true）；不存在的深层路径建不出（false）。
+    #[test]
+    fn dir_writable_探测结果可信() {
+        let dir = std::env::temp_dir().join(format!("comfyhub-rs-dw-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        assert!(dir_writable(&dir), "temp_dir 应该可写");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!dir_writable(&dir.join("不存在").join("更深")), "建不出的目录应报不可写");
     }
 
     #[tokio::test]
