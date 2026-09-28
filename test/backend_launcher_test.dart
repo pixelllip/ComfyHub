@@ -24,8 +24,9 @@ class _Call {
   final String exe;
   final List<String> args;
   final String? workDir;
+  final Map<String, String>? environment;
 
-  _Call(this.exe, this.args, this.workDir);
+  _Call(this.exe, this.args, this.workDir, [this.environment]);
 }
 
 /// 假的 Process：只提供 [_spawnDetached] 会用到的那几个成员
@@ -91,8 +92,8 @@ void main() {
 
   /// 装一个假的进程启动器
   void installStarter({bool throwError = false, bool neverExit = false}) {
-    BackendLauncher.processStarter = (exe, args, {workingDirectory}) async {
-      calls.add(_Call(exe, List<String>.of(args), workingDirectory));
+    BackendLauncher.processStarter = (exe, args, {workingDirectory, environment}) async {
+      calls.add(_Call(exe, List<String>.of(args), workingDirectory, environment));
       if (throwError) throw const ProcessException('pwsh', [], 'boom');
       return _FakeProcess(never: neverExit ? Completer<int>() : null);
     };
@@ -263,7 +264,7 @@ void main() {
     installStarter();
     await claim(launcher);
     // 让 starter 在返回前先 dispose 掉 launcher，模拟"关窗口时 widget 树已经拆了"
-    BackendLauncher.processStarter = (exe, args, {workingDirectory}) async {
+    BackendLauncher.processStarter = (exe, args, {workingDirectory, environment}) async {
       calls.add(_Call(exe, List<String>.of(args), workingDirectory));
       launcher.dispose();
       return _FakeProcess();
@@ -343,7 +344,7 @@ void main() {
     // 此时 settings.baseUrl 还是死端口（load 时读的旧 api.json）
     final launcher = BackendLauncher(settings);
     // 假的 up：退出前把 api.json 改写成**新端口**（后端绑上后自己会写）
-    BackendLauncher.processStarter = (exe, args, {workingDirectory}) async {
+    BackendLauncher.processStarter = (exe, args, {workingDirectory, environment}) async {
       calls.add(_Call(exe, List<String>.of(args), workingDirectory));
       writeApiJson(root, server.port);
       return _FakeProcess();
@@ -357,5 +358,39 @@ void main() {
     expect(launcher.logLines.any((l) => l.contains('后端换了端口')), isTrue);
     expect(launcher.phase, StartupPhase.ready);
     launcher.dispose();
+  });
+
+  test('允许局域网连接打开时，up 带上 COMFYHUB_ALLOW_REMOTE=1；关着时不带', () async {
+    // 用户 bug（2026-09-28）「手机连接桌面端失败，报 timed out」的根因是后端只听
+    // 127.0.0.1；开关就是靠这个环境变量一路传到 server.ps1 / Rust main 的。
+    // 指到一个必死的地址，逼 ensureRunning 真的去跑 up（假 starter 秒退，
+    // 等待期截短到 2 秒 —— 我们只看传了什么环境变量，不关心最终起没起来）。
+    Future<SettingsStore> deadSettings() async {
+      final settings = await loadSettings();
+      await settings.setBaseUrl('http://127.0.0.1:1');
+      return settings;
+    }
+
+    BackendLauncher.waitDeadlineOverride = const Duration(seconds: 2);
+    addTearDown(() => BackendLauncher.waitDeadlineOverride = null);
+
+    // 先关着：不带环境变量
+    final launcher = BackendLauncher(await deadSettings());
+    installStarter();
+    expect(await launcher.ensureRunning(), isFalse);
+    final off = calls.firstWhere((c) => c.args.contains('up'));
+    expect(off.environment ?? const {}, isEmpty);
+    launcher.dispose();
+
+    // 再打开：环境变量必须跟着脚本下去（关不掉它真机永远连不上桌面）
+    final settings2 = await deadSettings();
+    await settings2.setAllowRemoteBackend(true);
+    final launcher2 = BackendLauncher(settings2);
+    calls.clear();
+    installStarter();
+    expect(await launcher2.ensureRunning(), isFalse);
+    final on = calls.firstWhere((c) => c.args.contains('up'));
+    expect(on.environment, containsPair('COMFYHUB_ALLOW_REMOTE', '1'));
+    launcher2.dispose();
   });
 }

@@ -11,6 +11,7 @@ class SettingsStore extends ChangeNotifier {
   static const _kPageSize = 'comfyhub.pageSize';
   static const _kAutoStartBackend = 'comfyhub.autoStartBackend';
   static const _kStopServicesOnExit = 'comfyhub.stopServicesOnExit';
+  static const _kAllowRemoteBackend = 'comfyhub.allowRemoteBackend';
   static const _kProjectRoot = 'comfyhub.projectRoot';
   static const _kMysqlDataDir = 'comfyhub.mysqlDataDir';
 
@@ -18,6 +19,7 @@ class SettingsStore extends ChangeNotifier {
   int _pageSize = 24;
   bool _autoStartBackend = true;
   bool _stopServicesOnExit = true;
+  bool _allowRemoteBackend = false;
   String? _projectRoot;
   String? _mysqlDataDir;
   bool _loaded = false;
@@ -55,6 +57,13 @@ class SettingsStore extends ChangeNotifier {
   /// 关闭 App 时是否把**这次由 App 启动的**本地服务一并停掉（谁起的谁关）。
   /// 关掉的话服务会常驻，下次开 App 就是热启动。
   bool get stopServicesOnExit => _stopServicesOnExit;
+
+  /// 允许手机 / 局域网设备连接本机后端（`COMFYHUB_ALLOW_REMOTE`）。
+  ///
+  /// 默认关：后端只听回环。开着时后端听所有网卡 —— 真机连桌面才有得连
+  /// （2026-09-28 用户 bug「手机连接桌面端失败，报 timed out」的根因就是后端
+  /// 只听 127.0.0.1）。远程请求由配对闸门把关（回环放行，局域网要配对令牌）。
+  bool get allowRemoteBackend => _allowRemoteBackend;
 
   /// 项目根目录（放着 scripts\comfyhub.ps1 的那个目录）。为空表示自动探测。
   String? get projectRoot => _projectRoot;
@@ -167,6 +176,7 @@ class SettingsStore extends ChangeNotifier {
     _pageSize = prefs.getInt(_kPageSize) ?? 24;
     _autoStartBackend = prefs.getBool(_kAutoStartBackend) ?? true;
     _stopServicesOnExit = prefs.getBool(_kStopServicesOnExit) ?? true;
+    _allowRemoteBackend = prefs.getBool(_kAllowRemoteBackend) ?? false;
     _projectRoot = prefs.getString(_kProjectRoot);
     _mysqlDataDir = prefs.getString(_kMysqlDataDir);
     _baseUrlHistory = _sanitizeHistory(prefs.getStringList(_kBaseUrlHistory));
@@ -271,6 +281,14 @@ class SettingsStore extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kStopServicesOnExit, value);
+  }
+
+  /// 允许手机 / 局域网设备连接（改完要**重启后端**才生效：监听地址起进程时定）。
+  Future<void> setAllowRemoteBackend(bool value) async {
+    _allowRemoteBackend = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kAllowRemoteBackend, value);
   }
 
   Future<void> setProjectRoot(String? value) async {

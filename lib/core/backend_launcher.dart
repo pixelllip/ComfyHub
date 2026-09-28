@@ -24,18 +24,21 @@ typedef BackendProcessStarter = Future<Process> Function(
   String executable,
   List<String> arguments, {
   String? workingDirectory,
+  Map<String, String>? environment,
 });
 
 Future<Process> _startProcess(
   String executable,
   List<String> arguments, {
   String? workingDirectory,
+  Map<String, String>? environment,
   ProcessStartMode mode = ProcessStartMode.normal,
 }) =>
     Process.start(
       executable,
       arguments,
       workingDirectory: workingDirectory,
+      environment: environment,
       runInShell: false,
       mode: mode,
     );
@@ -102,6 +105,13 @@ class BackendLauncher extends ChangeNotifier {
       phase == StartupPhase.probing ||
       phase == StartupPhase.starting ||
       phase == StartupPhase.waiting;
+
+  /// 给脚本子进程的额外环境变量。目前只有一个：
+  /// `COMFYHUB_ALLOW_REMOTE=1`（用户开了「允许手机 / 局域网设备连接」）——
+  /// 后端由 pwsh → server.ps1 一路拉起，环境变量会顺着进程树传下去，
+  /// server.ps1 与 Rust `main` 都认它（不开时后端只听 127.0.0.1，真机连不上）。
+  Map<String, String>? get _scriptEnvironment =>
+      _settings.allowRemoteBackend ? const {'COMFYHUB_ALLOW_REMOTE': '1'} : null;
 
   bool get isReady => phase == StartupPhase.ready || phase == StartupPhase.skipped;
 
@@ -337,6 +347,7 @@ class BackendLauncher extends ChangeNotifier {
         shell,
         args,
         workingDirectory: script.parent.parent.path,
+        environment: _scriptEnvironment,
       );
     } catch (e) {
       return _fail('启动脚本失败: $e');
@@ -415,7 +426,8 @@ class BackendLauncher extends ChangeNotifier {
       args..add('-DataDir')..add(dataDir);
     }
     _addOwnerArgs(args, action);
-    final code = await _exec(shell, args, script.parent.parent.path);
+    final code = await _exec(shell, args, script.parent.parent.path,
+        environment: _scriptEnvironment);
     if (code == null) return;
 
     if (action == 'down' || action == 'restart') {
@@ -613,13 +625,15 @@ class BackendLauncher extends ChangeNotifier {
   }
 
   /// 跑一个子进程并把输出实时回显到启动页日志；返回退出码（启动失败返回 null）
-  Future<int?> _exec(String shell, List<String> args, String workingDirectory) async {
+  Future<int?> _exec(String shell, List<String> args, String workingDirectory,
+      {Map<String, String>? environment}) async {
     _log('$shell ${args.join(' ')}');
     try {
       final proc = await Process.start(
         shell,
         args,
         workingDirectory: workingDirectory,
+        environment: environment,
         runInShell: false,
       );
       proc.stdout

@@ -953,6 +953,22 @@ class _SettingsPageState extends State<SettingsPage> {
               title: '关闭 App 时一并停止本地服务',
               subtitle: '开着时：关掉 App 就停掉本机的后端（包括启动 App 之前就已经在跑的），下次开 App 是冷启动。\n关掉时：服务常驻，下次开 App 是热启动。',
             ),
+            _SwitchRow(
+              value: settings.allowRemoteBackend,
+              onChanged: (value) async {
+                await settings.setAllowRemoteBackend(value);
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(value
+                      ? '已允许局域网访问，重启后端（下面的「重启」按钮）后生效。'
+                      : '已恢复仅本机访问，重启后端后生效。'),
+                ));
+              },
+              title: '允许手机 / 局域网设备连接',
+              subtitle: '开着时后端监听所有网卡（COMFYHUB_ALLOW_REMOTE）——真机连桌面才有得连，'
+                  '否则手机永远 timed out。远程请求受配对闸门约束（回环放行，局域网要配对令牌）。'
+                  '改完要重启后端生效；若手机仍连不上，检查 Windows 防火墙有没有放行后端程序。',
+            ),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

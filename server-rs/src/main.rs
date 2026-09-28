@@ -93,7 +93,11 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut db: Option<PathBuf> = None;
     let mut storage: Option<PathBuf> = None;
-    let mut host = "127.0.0.1".to_string();
+    // 缺省监听回环。`COMFYHUB_ALLOW_REMOTE=1`（App 的「允许手机 / 局域网设备连接」
+    // 开关就是走它）时听 `0.0.0.0`：手机在局域网里才有得连（用户 bug 2026-09-28
+    // 「手机连接桌面端失败，报 timed out」—— `server.ps1` 以前硬编码 127.0.0.1，
+    // 真机连桌面永远超时）。远程访问由配对闸门把关（回环放行、局域网要令牌）。
+    let mut host = if remote_allowed() { "0.0.0.0".to_string() } else { "127.0.0.1".to_string() };
     let mut port = DEFAULT_PORT;
 
     let mut it = std::env::args().skip(1);
@@ -134,6 +138,18 @@ fn parse_args() -> Result<Args, String> {
             .unwrap_or_else(|| PathBuf::from("storage"))
     });
     Ok(Args { db, storage, host, port })
+}
+
+/// `COMFYHUB_ALLOW_REMOTE` 是否要求监听所有网卡（1 / true / yes / on 都算）。
+fn remote_allowed() -> bool {
+    matches!(
+        std::env::var("COMFYHUB_ALLOW_REMOTE")
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 #[tokio::main]
@@ -294,6 +310,9 @@ async fn main() {
     let actual_port = addr.port();
     let url = comfyhub_server_rs::api_port_file::url_for(&args.host, actual_port);
     println!("监听 {url}（pid={}）", std::process::id());
+    if remote_allowed() {
+        println!("允许局域网访问（COMFYHUB_ALLOW_REMOTE）：手机 / 其它设备用这台电脑的局域网 IP 连接；远程请求受配对闸门约束（回环放行，局域网要配对令牌）");
+    }
 
     // 把**实际**端口告诉 AppState：`GET /api/net/urls` 用它给手机拼候选地址
     // （不能拿请求里的 Host —— 那是客户端走过的路，手机问的恰恰是"还有别的没有"）。

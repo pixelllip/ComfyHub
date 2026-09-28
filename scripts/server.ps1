@@ -343,6 +343,16 @@ function Start-DetachedRust {
     #>
     param([string]$Exe, [string]$WorkDir, [string]$StdOut, [string]$StdErr, [string]$StorageDir, [int]$Port)
 
+    # 监听地址：默认回环；`COMFYHUB_ALLOW_REMOTE`（App 的「允许手机 / 局域网设备连接」
+    # 开关会带上它）时听 0.0.0.0 —— 否则真机连桌面永远超时（2026-09-28 用户 bug）。
+    # 远程访问由后端的配对闸门把关（回环放行、局域网要配对令牌），这里只管"听哪个网卡"。
+    $bindHost = if ($env:COMFYHUB_ALLOW_REMOTE -and $env:COMFYHUB_ALLOW_REMOTE.Trim() -match '^(?i:1|true|yes|on)$') {
+        Write-Host '==> 允许局域网访问（COMFYHUB_ALLOW_REMOTE）：后端将监听所有网卡' -ForegroundColor DarkGray
+        '0.0.0.0'
+    } else {
+        '127.0.0.1'
+    }
+
     $launcher = Join-Path $LogDir 'start-server.cmd'
     $dbFile = Join-Path $ProjectRoot '.db\comfyhub.db'
     $lines = @(
@@ -350,7 +360,7 @@ function Start-DetachedRust {
         "cd /d `"$WorkDir`"",
         "set `"COMFYHUB_PROJECT_ROOT=$ProjectRoot`"",
         "set `"COMFYHUB_STORAGE=$StorageDir`"",
-        "`"$Exe`" --db `"$dbFile`" --storage `"$StorageDir`" --host 127.0.0.1 --port $Port > `"$StdOut`" 2> `"$StdErr`""
+        "`"$Exe`" --db `"$dbFile`" --storage `"$StorageDir`" --host $bindHost --port $Port > `"$StdOut`" 2> `"$StdErr`""
     )
     Set-Content -Path $launcher -Value $lines -Encoding ascii
 
