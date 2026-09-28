@@ -318,6 +318,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
 | `scripts\ensure-runtime.ps1` | **运行时一键就绪**：检测不到的运行时自动下载安装（pwsh / VC++ 走 winget；Java **只在回退旧 Kotlin 后端时才需要** —— P4 收尾起 `up` 不再为 Rust 后端下 JRE）。`-CheckOnly` 只检测 |
 | `scripts\mcp-runtime.ps1` | **MCP 运行时装配**（可选能力）：**先用机器上已有的 Python**（已有 comfy-mcp 就直接借；没有就借它建 venv），机器上没有才下便携版 Python；再装 `comfy-cli` + `comfy-mcp` 到 `<根>\storage\ai\mcp`，并把 `comfy-cli` 的工作区指向用户真实在用的 ComfyUI。`status` / `install [-Force] [-ComfyHome <目录>]`；`comfyhub.ps1 up` 会自动补、`doctor` 会报状态与"这份 Python 哪来的" |
 | `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
+| **`scripts\build-apk.ps1`** | **打一份能装进真手机的安卓 APK + 体检 + 装机**。全量 release 约 78MB；`-Split` 出分架构包（arm64 实测 **28.9MB**，比 `flutter run` 的 debug 包 164MB 小一个量级，传输更不容易断）。编完会打出 `native-code` / `minSdkVersion` / 签名校验 / sha256，并且把"装不上时该看什么"逐条列出来；`-Install` 走真 adb：先报设备状态（`offline` / `unauthorized` 各自的人话处置），只挑**这台手机 ABI 匹配**的那一份装，装失败**自动换 `--no-streaming` 重试**并翻译失败码（含 `USER_RESTRICTED` / `VERSION_DOWNGRADE` 自动卸载重装）。2026-09-28 真机现场就靠它定位：`flutter run` 只回一句"失败原因空白"，其实是设备侧增量安装服务（`abb_exec`）断了，同一份包换成 push 安装当场 Success |
 | `scripts\check-silent-start.ps1` | **静默启动自测**：启动服务的同时盯屏，报告有没有弹出 cmd / 控制台窗口（加 `-Restart` 从零走一遍） |
 | `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成）。假 ComfyUI 默认在 **18188**（**不是 8188** —— 那是真实 ComfyUI 的端口，撞上会让测试悄悄连到真实那一个），起好后还会认一次身份，不是自己的就当场停下 |
 | `scripts\e2e-submit-test.ps1` | **AI 提交任务端到端自测**（假网关 + 假 ComfyUI）：批准闸门 / 真的提交 / 参数覆盖 / 产物入库 / 工作流文件直接提交 / **前端节点缺口补线**，32 项断言，不出网不花钱 |
