@@ -137,12 +137,74 @@ impl Default for ToolPolicyConfig {
 /// 16 轮会在**最后一步**（`comfy_submit`）把它掐断。上界放到 [`MAX_TOOL_STEPS_LIMIT`]，
 /// 让"搭图"这类长链路够用，又不会离 `max_calls_per_run`（48）太远。
 pub const DEFAULT_MAX_TOOL_STEPS: i64 = 25;
+/// `maxToolSteps` 的**旧出厂值**（2026-09-27 那次"16 → 25"之前的默认）。
+///
+/// 为什么要单独认它（2026-09-28 从用户库里查出来的真问题）：那次改动只动了**默认值**，
+/// 而用户的 `app_settings.ai.tools.policy` 里**早就把 16 落成了一份显式配置**
+/// （实测：`{"…","maxToolSteps":16,…}`）—— 显式配置永远盖过默认值，默认怎么改都不生效。
+/// 真机现场就是会话 `8a306e34` 的最后一轮被掐断，原话
+/// 「已达到本次回复的工具轮数上限 16」—— 明明代码里已经写着 25。
+///
+/// 所以这里把"**正好等于旧出厂值**"的那一份当成"从未显式设置过"，升到新默认；
+/// 用户自己挑过的其它值（8 / 40 …）一个字节都不动。
+pub const LEGACY_DEFAULT_MAX_TOOL_STEPS: i64 = 16;
 /// `maxToolSteps` 的硬上界（设置页能选到、`PUT /api/ai/tools/policy` 也只会夹到这里）。
 ///
 /// 与 [`DEFAULT_MAX_CALLS_PER_RUN`] 同量级：轮数再多也不会超过"总调用次数"那条线。
 pub const MAX_TOOL_STEPS_LIMIT: i64 = 48;
 /// 单个 Run 的工具调用次数上限（`ToolPolicyConfig.DEFAULT_MAX_CALLS_PER_RUN`）。
 pub const DEFAULT_MAX_CALLS_PER_RUN: i64 = 48;
+
+/// 把"**旧出厂值** 16"升级成新默认（纯函数，用例直接喂配置，不用起库）。
+///
+/// 判据只有一个：`max_tool_steps` **正好等于** [`LEGACY_DEFAULT_MAX_TOOL_STEPS`]。
+/// 别把这条写成"小于新默认就升"——那会把用户自己挑的 8 / 12 一起改掉，
+/// 而他明明是有意调低的（设置页里那些值都在选项里）。
+pub fn migrate_legacy_max_tool_steps(config: &mut ToolPolicyConfig) {
+    if config.max_tool_steps == LEGACY_DEFAULT_MAX_TOOL_STEPS {
+        config.max_tool_steps = DEFAULT_MAX_TOOL_STEPS;
+    }
+}
+
+/// 那次升级的**一次性标记**（写过就不再升级，见 [`ToolPolicy::load`]）。
+pub const MIGRATION_KEY: &str = "ai.tools.policy.migrated.maxtoolsteps16to25";
+
+/// 把升级后的值写回 `app_settings`（**合并**原 JSON，保住我们这一版不认识的键 —— 与
+/// `ai_settings::save_config` 同一条纪律），并落一次性标记。
+///
+/// 返回 `Err` 时调用方**不当失败**：升级是"顺手做的好事"，写不进去顶多是下次再算一遍，
+/// 绝不能让一次设置迁移把工具策略的读取整个搞挂。
+fn persist_migrated_max_tool_steps(
+    state: &AppState,
+    raw: &Option<String>,
+    steps: i64,
+) -> Result<(), ApiError> {
+    let mut map = raw
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|value| match value {
+            serde_json::Value::Object(map) => Some(map),
+            _ => None,
+        })
+        .unwrap_or_default();
+    map.insert("maxToolSteps".into(), serde_json::json!(steps));
+    let text = serde_json::Value::Object(map).to_string();
+    state.write(move |tx| {
+        tx.execute(
+            "INSERT INTO app_settings (k, v) VALUES (?1, ?2)
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            rusqlite::params![KEY, text],
+        )?;
+        tx.execute(
+            "INSERT INTO app_settings (k, v) VALUES (?1, ?2)
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            rusqlite::params![MIGRATION_KEY, "1"],
+        )?;
+        Ok(())
+    })
+}
 
 /// 生效的策略（白名单已展开成绝对路径）。
 #[derive(Debug, Clone)]
@@ -224,13 +286,24 @@ impl ToolPolicy {
     /// 顺带把**自动发现的只读目录**挂上：`read_file` 能不能读用户自己的 ComfyUI 工作流
     /// 文件，全靠这一条（用户 bug ④ 要的正是"读放宽、写不放宽"）。
     pub fn load(state: &AppState) -> Result<Self, ApiError> {
-        let raw: Option<String> = state.with(|conn| {
-            Ok(conn
+        // 一次读两行：策略本身 + 这次升级的**一次性标记**
+        let (raw, migrated) = state.with(|conn| {
+            let policy = conn
                 .query_row("SELECT v FROM app_settings WHERE k = ?1", [KEY], |row| {
                     row.get::<_, Option<String>>(0)
                 })
                 .ok()
-                .flatten())
+                .flatten();
+            let done = conn
+                .query_row(
+                    "SELECT v FROM app_settings WHERE k = ?1",
+                    [MIGRATION_KEY],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten()
+                .is_some();
+            Ok((policy, done))
         })?;
         let config = raw
             .as_deref()
@@ -238,6 +311,17 @@ impl ToolPolicy {
             .filter(|text| !text.is_empty())
             .and_then(|text| serde_json::from_str::<ToolPolicyConfig>(text).ok())
             .unwrap_or_default();
+        // 旧出厂值 16 → 新默认（见 [`LEGACY_DEFAULT_MAX_TOOL_STEPS`]）。
+        //
+        // **一次性**：标记写下去之后就不再动它 —— 否则用户哪天在设置页里特意选了 16，
+        // 下一次读配置又会被悄悄改回 25（那是把一个明确的选择当成没选）。
+        let mut config = config;
+        if !migrated && config.max_tool_steps == LEGACY_DEFAULT_MAX_TOOL_STEPS {
+            config.max_tool_steps = DEFAULT_MAX_TOOL_STEPS;
+            // 顺手把升级后的值写回库：不写回去的话"读一次升一次"看起来没差别，
+            // 但下次用户点保存写回来的仍是那份旧的 16。
+            let _ = persist_migrated_max_tool_steps(state, &raw, config.max_tool_steps);
+        }
         let project_root = state.project_root();
         // 探测失败 / 配置里没有输出目录 → 空表，**不是错误**（读白名单照常只有用户配的那些）
         let configured_output = crate::ai_settings::configured_output_dir(state).ok().flatten();
@@ -497,6 +581,67 @@ mod tests {
         let custom = policy(r#"{"maxToolSteps":8,"maxCallsPerRun":16}"#);
         assert_eq!(custom.config.max_tool_steps, 8);
         assert_eq!(custom.config.max_calls_per_run, 16);
+    }
+
+    /// 2026-09-28：用户库里那份"16"是**旧默认值落库**的，不升级它，默认怎么改都不生效。
+    #[test]
+    fn 旧出厂值_deprecated_16_要升到新默认而不是永远锁着() {
+        let mut old = ToolPolicyConfig { max_tool_steps: LEGACY_DEFAULT_MAX_TOOL_STEPS, ..Default::default() };
+        migrate_legacy_max_tool_steps(&mut old);
+        assert_eq!(old.max_tool_steps, DEFAULT_MAX_TOOL_STEPS);
+
+        // 用户自己挑的值一个都不许动（设置页里 8 / 12 / 40 都是可选值）
+        for chosen in [8, 12, 20, 40] {
+            let mut custom = ToolPolicyConfig { max_tool_steps: chosen, ..Default::default() };
+            migrate_legacy_max_tool_steps(&mut custom);
+            assert_eq!(custom.max_tool_steps, chosen);
+        }
+    }
+
+    /// 端到端那一半：真的从库里读一次 —— 旧值升上去、**写回库**、而且只升一次
+    /// （第二次读到的 16 是用户特意选的，不许再改）。
+    #[test]
+    fn 升级会写回库并且只做一次() {
+        let conn = crate::db::open_memory().unwrap();
+        let schema = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("db")
+                .join("schema.sqlite.sql"),
+        )
+        .unwrap();
+        conn.execute_batch(&schema).unwrap();
+        conn.execute(
+            "INSERT INTO app_settings (k, v) VALUES (?1, ?2)",
+            rusqlite::params![
+                KEY,
+                r#"{"writeRoots":[],"readRoots":[],"overrides":{},"permissionMode":"full","maxToolSteps":16,"maxCallsPerRun":48,"maxReadBytes":2097152,"maxWriteBytes":4194304}"#
+            ],
+        )
+        .unwrap();
+        let state = AppState::new(conn, ":memory:", std::env::temp_dir());
+
+        let first = ToolPolicy::load(&state).unwrap();
+        assert_eq!(first.config.max_tool_steps, DEFAULT_MAX_TOOL_STEPS, "旧出厂值要当没设过");
+        // 写回库：别的键（我们这一版不认识的 maxReadBytes 等）一个都不能丢
+        let stored: String = state
+            .with(|conn| Ok(conn.query_row("SELECT v FROM app_settings WHERE k = ?1", [KEY], |r| r.get(0))?))
+            .unwrap();
+        assert!(stored.contains("\"maxToolSteps\":25"), "{stored}");
+        assert!(stored.contains("maxReadBytes"), "合并写回，不许把别的键删掉：{stored}");
+
+        // 用户明确选了 16（标记已落）→ 第二次读**不许**再改
+        state
+            .write(|tx| {
+                tx.execute(
+                    "UPDATE app_settings SET v = json_set(v, '$.maxToolSteps', 16) WHERE k = ?1",
+                    [KEY],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let second = ToolPolicy::load(&state).unwrap();
+        assert_eq!(second.config.max_tool_steps, 16, "标记落过之后，用户挑的值就是最终答案");
     }
 
     // ------------------------------------------------------------------
