@@ -512,24 +512,6 @@ class AiApiClient {
 
   Future<void> cancelRun(String runId) async => _send('POST', '/api/ai/runs/$runId/cancel');
 
-  /// `GET /api/ai/runs/{id}`：这一次 Run 到哪了（`running` / 已终态三选一）。
-  ///
-  /// 给"事件流断了先别急着收尾"用（2026-09-28）：SSE 断开时**不能**直接断定 Run 结束
-  /// —— 用户切走窗口再切回来、后端重启、网络抖动都会断，而 Run 本身还在跑。
-  /// 只有这里如实回答"已经终态了"，界面才该收尾。
-  ///
-  /// 读不到（后端不可达 / 这条 Run 被清了）返回 null —— 调用方按"不知道"处理，
-  /// **不许**把 null 当成"跑完了"。
-  Future<String?> runStatus(String runId) async {
-    try {
-      final raw = await _get('/api/ai/runs/${Uri.encodeComponent(runId)}');
-      if (raw is! Map) return null;
-      return raw['status']?.toString();
-    } catch (_) {
-      return null;
-    }
-  }
-
   /// ComfyUI 实时进度（用户"其他建议"第 1 条）：队列状态 + 最近提交的任务。
   ///
   /// 走的是同一个后端的 `/api/capture/jobs`（不是 `/api/ai/*`），所以用同一个客户端实例、
@@ -551,12 +533,6 @@ class AiApiClient {
       throw AiApiException(res.statusCode, body.isEmpty ? '事件流连接失败' : body);
     }
     String? event;
-    // 事件的序号来自 SSE 的 `id:` 行（后端 `to_sse` 里就是 `id: 7\nevent: …`）。
-    //
-    // ⚠ 这一行**必须读**（2026-09-28）：序号的载荷里没有，只在这里。
-    // 不读它的后果是"断线之后没法续传"——只能从 0 重放（整段回复又长一遍），
-    // 或者干脆放弃（用户 bug：切走再切回来，前面已经流出来的正文全没了）。
-    int? lastId;
     final data = StringBuffer();
     await for (final line in res.stream.transform(utf8.decoder).transform(const LineSplitter())) {
       if (line.isEmpty) {
@@ -571,21 +547,15 @@ class AiApiClient {
               parsed = const {};
             }
           }
-          // 与本地 harness 那条通道**同名同义**（`LocalHarnessRunEventSource.events`
-          // 也是把 seq 塞进 payload）：上层只认 `data['seq']`，两端零分叉。
-          if (lastId != null) parsed = {...parsed, 'seq': lastId};
           yield AiRunEvent(event ?? 'message', parsed);
         }
         event = null;
-        lastId = null;
         data.clear();
         continue;
       }
       if (line.startsWith(':')) continue;
       if (line.startsWith('event:')) {
         event = line.substring(6).trim();
-      } else if (line.startsWith('id:')) {
-        lastId = int.tryParse(line.substring(3).trim());
       } else if (line.startsWith('data:')) {
         if (data.isNotEmpty) data.write('\n');
         data.write(line.substring(5).trimLeft());

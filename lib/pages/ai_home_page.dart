@@ -3439,6 +3439,15 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
   String _query = '';
 
   @override
+  void initState() {
+    super.initState();
+    // 打开选择器 = "我要挑一个" = 清单必须是最新的（总纲 §27.2 第 12 条）：
+    // 手机上 Provider 的真源是本机库，刚在「AI 模型与凭据」页建好的那一条，
+    // 不重读一次就不会出现在这里（以前要切走再切回来才看得到）。
+    unawaited(widget.store.refreshProviders());
+  }
+
+  @override
   void dispose() {
     _search.dispose();
     super.dispose();

@@ -96,6 +96,37 @@ class AiWorkspaceStore extends ChangeNotifier {
     await prefs.setString(_kLastEffort, reasoningEffort.wire);
   }
 
+  /// 只把**Provider 清单**重新读一次（不重启会话、不碰草稿、不动正在跑的 Run）。
+  ///
+  /// 为什么需要它（总纲 §27.2 第 12 条）：手机上 Provider 的真源是**本机库**，
+  /// 而「AI 模型与凭据」页新建 / 改完一个 Provider 之后，聊天页手里那份 `providers`
+  /// 还是进页面时读的旧清单 —— 用户必须切走再切回来（= 重新跑一遍 [load]）才看得到，
+  /// 于是看起来就像"我明明建好了它却说没有"。
+  ///
+  /// 触发点是**打开模型选择器那一刻**（`_ModelPickerDialog.initState`）：要挑模型的时候
+  /// 清单必须是最新的，而这一次重读只是本机库的一次查询（手机上一条网络请求都不打）。
+  /// 清单真的变了才顺手重读模型目录 —— 没变时也调 `_loadModels` 就是白白抖一下选择器。
+  Future<void> refreshProviders() async {
+    try {
+      final fresh = await _overlayDeviceCredentials(await _providerStore.listProviders());
+      final changed = fresh.length != providers.length ||
+          !List.generate(
+            fresh.length,
+            (i) => fresh[i].id == providers[i].id && fresh[i].revision == providers[i].revision,
+          ).every((same) => same);
+      providers = fresh;
+      if (providers.isEmpty) {
+        error ??= _emptyLocalProvidersNotice;
+      } else if (error == _emptyLocalProvidersNotice) {
+        error = null;
+      }
+      if (changed) await _loadModels();
+    } catch (e) {
+      error = "读本机那份 Provider 清单失败：$e";
+    }
+    notifyListeners();
+  }
+
   Future<void> _restoreRememberedModel() async {
     final prefs = await _store;
     final providerId = prefs.getString(_kLastProvider);
@@ -304,21 +335,6 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 正在执行的 Run（用于"停止"按钮，AIH-022）。
   String? _activeRunId;
   bool get running => _activeRunId != null;
-
-  /// 正在飞的这次 Run 属于**哪条会话**（用户 bug 2026-09-28）。
-  ///
-  /// 为什么要单独记：流式期间的正文**只在内存里**（后端一圈跑完才落库，见 `Sink`）。
-  /// 于是任何一次"从库里重读消息"（切会话再切回来 / 重连后收尾）都会把已经流出来的字
-  /// 当场抹掉 —— 界面上就是"前面显示的部分答复全部消失"。
-  /// 有它才能判断"这次重读要不要保住内存里那份还在长的正文"。
-  String? _activeConversationId;
-
-  /// **用户切走了、但那一轮还在流**的那条会话的消息快照（用户 bug 2026-09-28）。
-  ///
-  /// 少了它，"切到别的会话再切回来"必然丢字：切走时 `messages` 被换成另一条会话的，
-  /// 正在长的那条助手气泡**从内存里消失**，而库里还没有它（后端一圈跑完才落库）。
-  List<AiMessage>? _liveSnapshot;
-  String? _liveSnapshotConvId;
 
   /// **正在流式生成的那一条助手消息**（用户建议 2026-09-20）：
   /// 「AI 正在生成」的转圈动画要画在**它自己那个气泡的底部**，而不是页脚浮层。
@@ -1774,16 +1790,8 @@ class AiWorkspaceStore extends ChangeNotifier {
     try {
       await _stashAttachments();
       await _cleanupEmptyConversation();
-      // 切走之前：若这一条正有一条 Run 在流，把**现在这份列表**存成快照 ——
-      // 下面那一行会把 `messages` 换成另一条会话的，而正在长的那条气泡只在内存里
-      // （用户 bug 2026-09-28：切走再切回来，前面显示的答复全没了）。
-      final leaving = conversation?.id;
-      if (leaving != null && leaving == _activeConversationId) {
-        _liveSnapshot = messages;
-        _liveSnapshotConvId = leaving;
-      }
       conversation = conversations.firstWhere((c) => c.id == id);
-      messages = _mergeLiveMessages(await _source.listMessages(id), id);
+      messages = await _source.listMessages(id);
       _syncConversationStats();
       await _applyDraftAttachments(id);
       _pruneLiveState();
@@ -2177,39 +2185,15 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// 事件流断了之后，最多再挂几次（每次等 [_kStreamReconnectDelay]）。
-  ///
-  /// 只用来兜"连接本身抖了一下"，不是无限重试：真的连不上后端时，
-  /// 该做的是把原因如实说出来，而不是在这儿无声地转圈。
-  static const int _kMaxStreamReconnects = 5;
-  static const Duration _kStreamReconnectDelay = Duration(milliseconds: 800);
-
   Future<void> _consumeRun(String runId, String assistantMessageId, String conversationId) async {
     var streamed = '';
     // 这一条助手消息的实时思考 / 工具调用（气泡边流边渲染）
     _liveReasoning.remove(assistantMessageId);
     _liveSegments.remove(assistantMessageId);
     _liveToolCalls.remove(assistantMessageId);
-    _activeConversationId = conversationId;
-    // 事件的断点（SSE 的 `id:` 行 / 本地 harness 的 `seq`）。
-    //
-    // ⚠ 断线**不能**当成"这一轮结束了"（用户 bug 2026-09-28：切到别的窗口再切回来，
-    // 前面显示的部分答复全部消失）。当时的收尾逻辑是"流一断就 `_reloadMessages`"，
-    // 而后端是**一圈跑完才把正文落库**的（`executor.rs` 的 `Sink`：流式期间只在内存里攒），
-    // 于是这一读恰好读到一条空消息，界面上的字当场被擦干净 —— 而 Run 还在后端好好跑着。
-    // 现在：只有拿到**终态事件**（或后端明确说它已经终态）才收尾，其余情况带着
-    // `after=<最后一条事件的 seq>` 接着听，已经流出来的正文一个字都不动。
-    var after = 0;
-    var done = false;
-    var reconnects = 0;
     try {
-      while (!done) {
-        var broken = false;
-        try {
-          await for (final event in _source.events(runId, after: after)) {
-            final seq = (event.data['seq'] as num?)?.toInt();
-            if (seq != null && seq > after) after = seq;
-            switch (event.type) {
+      await for (final event in _source.events(runId)) {
+        switch (event.type) {
           case 'text.delta':
             streamed += event.text ?? '';
             _appendLiveSegment(assistantMessageId, 'text', event.text ?? '');
@@ -2388,54 +2372,14 @@ class AiWorkspaceStore extends ChangeNotifier {
             // 未知事件（后端加了新的）不能悄悄丢：至少留一条可查的日志
             debugPrint('AI 事件流收到未处理事件：${event.type}');
         }
-            if (event.isTerminal) {
-              done = true;
-              break;
-            }
-          }
-        } catch (e) {
-          // 连接本身炸了（不是 Run 炸了）：先记下来，下面按"要不要接着听"处理
-          broken = true;
-          error = '事件流中断：$e';
-        }
-        if (done) break;
-        // 没有 `seq` 就没法续传（老后端 / 老 harness）：退回老行为，别从 0 重放一遍
-        if (after <= 0) {
-          if (broken) error = '事件流中断，而且拿不到断点序号：这一轮只能到此为止。';
-          break;
-        }
-        // 断流不等于结束：问一次后端"这次 Run 到底还在不在跑"
-        if (!_source.isLocal) {
-          final status = await _api.runStatus(runId);
-          if (status != null && status != 'running') {
-            // 后端说实话：已经终态了。收尾时 `_reloadMessages` 会拿到完整正文。
-            break;
-          }
-        }
-        reconnects++;
-        if (reconnects > _kMaxStreamReconnects) {
-          error = '事件流中断了 $reconnects 次还没恢复：已经收到的内容都留着；'
-              '这一轮可能还在后端跑，重开这条会话可以看到最新的内容。';
-          break;
-        }
-        // 已经流出来的正文（`streamed`）与实时段**一个字都不动**，只换一条连接接着听
-        notice = '连接断了一下，正在接着收…';
-        _notifyNow();
-        await Future<void>.delayed(_kStreamReconnectDelay);
       }
+    } catch (e) {
+      error = '事件流中断：$e';
     } finally {
       _activeRunId = null;
       sending = false;
-      // ⚠ 顺序有讲究：`_reloadMessages` 要用 `_activeConversationId` 判断"这次重读要不要保住
-      // 内存里那份还在长的正文"，所以**必须先重读、再清它**（清了就等于放弃兜底：
-      // 后端还没落库时那一读是空的，用户眼前已经流出来的字会被擦掉）。
+      // 与服务端对齐一次（seq、状态、usage 都以库为准）
       await _reloadMessages(conversationId);
-      _activeConversationId = null;
-      // 定稿之后快照就没有意义了（它存在的唯一理由是"正在流的那份还没落库"）
-      if (_liveSnapshotConvId == conversationId) {
-        _liveSnapshot = null;
-        _liveSnapshotConvId = null;
-      }
       conversations = await _safeListConversations();
       // 一轮跑完是"内容定稿"的时刻：顺手把本机的会话/消息推给桌面（M4）。
       // 桌面不在线时它只记一句"还有几条没上去"，不拦任何东西。
@@ -2718,65 +2662,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     return null;
   }
 
-  /// 把**库里那份**消息与内存里"还在流的"那份合起来（用户 bug 2026-09-28）。
-  ///
-  /// 规则只有一条：**谁也不许把已经显示给用户的字擦掉**。
-  ///
-  ///  · 库里那条 `text` 为空、而内存里已经攒了正文 → 用内存里那份（流式期间后端还没落库，
-  ///    这不是"服务端更新了"，是"服务端还不知道"）；
-  ///  · 库里那条还没有 `parts`、而内存里已经收到了块 → 保留内存里那些（同一条纪律）；
-  ///  · 库里**整条都还没有**（一条都还没落）+ 它正是当前在流的那条 → 把它接回列表，
-  ///    否则重读一次列表就少一个气泡，字就"消失"了。
-  ///
-  /// 反向**绝不**兜：库里有内容就以库里为准（那才是真源，比如后端的收尾修正）。
-  ///
-  /// [forConversationId] 是要合并的那条会话：它可能正显示着（用 `messages`），
-  /// 也可能是"用户切走了、但还在流"的那条（用 [_liveSnapshot]）。
-  List<AiMessage> _mergeLiveMessages(List<AiMessage> fresh, String forConversationId) {
-    if (_activeConversationId != forConversationId) return fresh;
-    final local = <String, AiMessage>{
-      if (conversation?.id == forConversationId)
-        for (final m in messages) m.id: m
-      else if (_liveSnapshotConvId == forConversationId)
-        for (final m in _liveSnapshot ?? const <AiMessage>[]) m.id: m,
-    };
-    if (local.isEmpty) return fresh;
-    final seen = <String>{};
-    final out = <AiMessage>[];
-    for (final m in fresh) {
-      seen.add(m.id);
-      final mine = local[m.id];
-      if (mine == null) {
-        out.add(m);
-        continue;
-      }
-      final keepText = m.text.isEmpty && mine.text.isNotEmpty;
-      final keepParts = m.parts.isEmpty && mine.parts.isNotEmpty;
-      out.add(
-        keepText || keepParts
-            ? m.copyWith(text: keepText ? mine.text : null, parts: keepParts ? mine.parts : null)
-            : m,
-      );
-    }
-    // 库里还没有、但界面上已经在长的那条（助手流式气泡）：按原顺序补回去
-    for (final m in local.values) {
-      if (seen.contains(m.id)) continue;
-      final isLive = m.status == 'streaming' ||
-          _liveSegments.containsKey(m.id) ||
-          _liveToolCalls.containsKey(m.id);
-      if (isLive) out.add(m);
-    }
-    return out;
-  }
-
   /// 流式状态只对"还在列表里的消息"有意义：换会话 / 刷新后清掉孤儿，避免内存只增不减。
-  ///
-  /// ⚠ 快照里那条会话的块**不算孤儿**：用户切走了，那一轮还在流，切回来还要接着画。
   void _pruneLiveState() {
-    final ids = <String>{
-      ...messages.map((m) => m.id),
-      ...?_liveSnapshot?.map((m) => m.id),
-    };
+    final ids = messages.map((m) => m.id).toSet();
     _liveReasoning.removeWhere((k, _) => !ids.contains(k));
     _liveSegments.removeWhere((k, _) => !ids.contains(k));
     _liveToolCalls.removeWhere((k, _) => !ids.contains(k));
@@ -2841,17 +2729,15 @@ class AiWorkspaceStore extends ChangeNotifier {
   Future<void> _reloadMessages(String conversationId) async {
     try {
       final fresh = await _source.listMessages(conversationId);
-      // 后端可能还没落 parts（消息仍在写库）：保留事件里拿到的那些，别把工具卡擦掉；
-      // 流式正文同理（用户 bug 2026-09-28：切窗口回来，已经流出来的字全没了）
-      final merged = _mergeLiveMessages(fresh, conversationId);
-      if (conversation?.id == conversationId) {
-        messages = merged;
-      } else {
-        // 用户已经切走了：这一份留在快照里，切回来时接着显示 —— 直接写进 `messages`
-        // 会把**另一条会话**的列表换成这条的（那也是个当场看得见的错乱）
-        _liveSnapshot = merged;
-        _liveSnapshotConvId = conversationId;
-      }
+      // 后端可能还没落 parts（消息仍在写库）：保留事件里拿到的那些，别把工具卡擦掉
+      final known = {for (final m in messages) m.id: m.parts};
+      messages = [
+        for (final m in fresh)
+          if (m.parts.isEmpty && (known[m.id]?.isNotEmpty ?? false))
+            m.copyWith(parts: known[m.id])
+          else
+            m,
+      ];
       _pruneLiveState();
       _syncConversationStats();
     } catch (_) {
