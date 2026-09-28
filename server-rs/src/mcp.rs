@@ -1295,17 +1295,17 @@ impl McpRegistry {
             } else {
                 format!("\n\nMCP 子进程 stderr 末尾：\n{stderr}")
             };
-            return Err(ToolFailure::new(
-                "MCP_TOOL_ERROR",
-                format!(
-                    "{}{suffix}{detail}",
-                    if content.trim().is_empty() {
-                        format!("MCP 工具「{name}」执行失败")
-                    } else {
-                        content
-                    }
-                ),
-            ));
+            // 2026-09-28 用户 bug「调用 mcp 的 nodes 工具总是失败」：工具在 comfy-mcp
+            // 子进程内部崩了（UnexpectedToolError + 一整段 python traceback），模型只会
+            // 原样复读 —— 翻成人话并告诉它下一步做什么。
+            let message = humanize_mcp_failure(name, &content, &stderr).unwrap_or_else(|| {
+                if content.trim().is_empty() {
+                    format!("MCP 工具「{name}」执行失败")
+                } else {
+                    content.clone()
+                }
+            });
+            return Err(ToolFailure::new("MCP_TOOL_ERROR", format!("{message}{suffix}{detail}")));
         }
         let text = if content.trim().is_empty() {
             format!("（MCP 工具「{name}」没有返回文本内容）")
@@ -1327,6 +1327,46 @@ pub async fn warmup(registry: &Arc<McpRegistry>, project_root: &Path) {
             eprintln!("[mcp] 桥未就绪（{}）：{}", e.code, truncate_chars(&e.message, 300));
         }
     }
+}
+
+/// 把 comfy-mcp 的"工具内部崩溃"翻成人话 + 下一步该做什么（2026-09-28 用户 bug
+/// 「调用 mcp 的 nodes 工具总是失败」）。
+///
+/// 现场：`UnexpectedToolError: Error executing tool nodes` + 一整段 python traceback
+/// （工具函数里的异常被 MCP SDK 包成这一句，isError 回来）。根因大多不是参数写错，
+/// 而是 **ComfyUI 没在运行** —— comfy-cli 的节点查询要先连上 ComfyUI 拿 object_info，
+/// 连不上时异常就在子进程里炸出来。只把 traceback 原样丢给模型等于没说；
+/// 要给它"下一步做什么"。认不出的形状回 `None`（照旧原样透传，不编）。
+fn humanize_mcp_failure(name: &str, content: &str, stderr: &str) -> Option<String> {
+    let text = format!("{content}\n{stderr}");
+    if !(text.contains("UnexpectedToolError") || text.contains("Error executing tool")) {
+        return None;
+    }
+    const PROBE_TOOLS: [&str; 14] = [
+        "nodes",
+        "node_deps",
+        "search_nodes",
+        "list_nodes",
+        "get_node",
+        "nodes_upstream",
+        "nodes_downstream",
+        "nodes_path",
+        "nodes_types",
+        "nodes_categories",
+        "server_info",
+        "system_stats",
+        "free_memory",
+        "get_logs",
+    ];
+    let hint = if PROBE_TOOLS.contains(&name) {
+        "最常见的根因是本机 ComfyUI 没在运行（comfy-cli 的这些查询要先连上 ComfyUI 才拿得到节点表）。\
+         先用 server_info 确认 ComfyUI 在线；没在运行就先启动 ComfyUI（或问用户）再重试；\
+         ComfyUI 在线仍然失败，就把下面的 stderr 交给用户。"
+    } else {
+        "工具在 comfy-mcp 子进程内部崩溃（不是参数校验失败）。先用 server_info 确认 ComfyUI 在线再重试一次；\
+         仍失败就把下面的 stderr 交给用户。"
+    };
+    Some(format!("MCP 工具「{name}」在 comfy-mcp 子进程内部崩溃（UnexpectedToolError）。{hint}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1422,6 +1462,22 @@ mod tests {
         let result = client.call_tool("launch_comfyui", &json!({})).await.unwrap();
         assert!(result.is_error);
         assert_eq!(result.text, "Error executing tool xxx");
+    }
+
+    /// 用户 bug（2026-09-28）「调用 mcp 的 nodes 工具总是失败」：UnexpectedToolError
+    /// 要翻成"下一步做什么"的人话，而不是让模型原样复读一段 python traceback。
+    #[test]
+    fn unexpected_tool_error_翻成人话并给出下一步() {
+        let traceback = "UnexpectedToolError: Error executing tool nodes";
+        // 认得的形状 → 人话里带着下一步
+        let human = humanize_mcp_failure("nodes", traceback, "").expect("要翻");
+        assert!(human.contains("ComfyUI 没在运行"), "{human}");
+        assert!(human.contains("server_info"), "{human}");
+        // 同样的话出现在 stderr 尾部（isError 的 content 是空的那个现场）也要认得
+        let human = humanize_mcp_failure("nodes", "", traceback).expect("stderr 里也要认");
+        assert!(human.contains("nodes"), "{human}");
+        // 认不得的失败照旧透传（不编）
+        assert!(humanize_mcp_failure("nodes", "HTTP 500: internal", "").is_none());
     }
 
     #[tokio::test]
