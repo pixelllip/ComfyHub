@@ -1,5 +1,7 @@
+import 'dart:io' show Platform;
 import 'dart:ui' show AppExitResponse;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
@@ -156,6 +158,14 @@ class _StartupGateState extends State<StartupGate> {
     final launcher = context.read<BackendLauncher>();
     final settings = context.read<SettingsStore>();
     if (!settings.autoStartBackend) {
+      launcher.skip();
+      return;
+    }
+    // 安卓（以及任何非 Windows 平台）**没有"本地服务"这回事**：手机连的是桌面端
+    // 的后端（配对而来），桌面离线时聊天页自己会如实报错。把 Windows 那套
+    // "pwsh 拉起后端"的启动页搬上来只会白挡一屏（用户 bug 2026-09-28：
+    // "安卓启动时会显示 Windows 的加载界面，但是没有用"）—— 直接跳过进主界面。
+    if (kIsWeb || !Platform.isWindows) {
       launcher.skip();
       return;
     }

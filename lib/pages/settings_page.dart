@@ -1,4 +1,7 @@
+import 'dart:io' show Platform;
+
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -503,6 +506,12 @@ class _SettingsPageState extends State<SettingsPage> {
     final store = context.watch<LibraryStore>();
     final launcher = context.watch<BackendLauncher>();
 
+    // 「本地服务 / 后端地址 / 打开项目目录」这些只在 **Windows 桌面端**有意义
+    // （pwsh 拉起后端、本机盘符、资源管理器）。手机上它们一行都不该出现
+    // （用户 bug 2026-09-28：手机设置显示了只有 Windows 有效的设置项）——
+    // 手机连的是桌面端后端，地址选择在「同步与连接」里做。
+    final isWindowsDesktop = !kIsWeb && Platform.isWindows;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('设置'),
@@ -516,11 +525,12 @@ class _SettingsPageState extends State<SettingsPage> {
         // 列数 = 可用宽度 / 550（宽窗口自动分栏，窄窗口仍是单列）
         child: AdaptiveColumns(
           sections: [
-            AdaptiveSection(
-              _section(theme, '本地服务（后端 + 数据库）',
-                  _localServicesCard(theme, settings, launcher)),
-              estimatedHeight: 820,
-            ),
+            if (isWindowsDesktop)
+              AdaptiveSection(
+                _section(theme, '本地服务（后端 + 数据库）',
+                    _localServicesCard(theme, settings, launcher)),
+                estimatedHeight: 820,
+              ),
             AdaptiveSection(
               _section(
                 theme,
@@ -583,10 +593,13 @@ class _SettingsPageState extends State<SettingsPage> {
               _section(theme, 'NSFW 内容', _nsfwCard(theme)),
               estimatedHeight: 300,
             ),
-            AdaptiveSection(
-              _section(
-                theme,
-                '后端服务',
+            // 「后端服务」（后端地址 + 存储目录）只在 Windows 桌面端有用：
+            // 手机连的桌面地址在「同步与连接」里选。
+            if (isWindowsDesktop)
+              AdaptiveSection(
+                _section(
+                  theme,
+                  '后端服务',
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -744,16 +757,19 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                           ),
                         ),
-                        const Divider(height: 1),
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.folder_open_outlined),
-                          title: const Text('打开项目目录'),
-                          subtitle: Text(launcher.projectRoot ?? '未定位到项目目录'),
-                          onTap: launcher.projectRoot == null
-                              ? null
-                              : () => _openFolder(launcher.projectRoot!),
-                        ),
+                        // 「打开项目目录」是资源管理器的事，手机上没有这一说
+                        if (isWindowsDesktop) ...[
+                          const Divider(height: 1),
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.folder_open_outlined),
+                            title: const Text('打开项目目录'),
+                            subtitle: Text(launcher.projectRoot ?? '未定位到项目目录'),
+                            onTap: launcher.projectRoot == null
+                                ? null
+                                : () => _openFolder(launcher.projectRoot!),
+                          ),
+                        ],
                       ],
                     ),
                   ),
