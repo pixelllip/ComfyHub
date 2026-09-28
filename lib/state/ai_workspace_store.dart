@@ -1791,7 +1791,9 @@ class AiWorkspaceStore extends ChangeNotifier {
       await _stashAttachments();
       await _cleanupEmptyConversation();
       conversation = conversations.firstWhere((c) => c.id == id);
-      messages = await _source.listMessages(id);
+      // 库里那条流式助手的 text 是空的（整轮跑完才落库）——切回来时用内存里
+      // 那份正在长的正文盖回去，不然用户看到的就是"前面的答复全没了"
+      messages = _overlayInflight(await _source.listMessages(id));
       _syncConversationStats();
       await _applyDraftAttachments(id);
       _pruneLiveState();
@@ -2136,6 +2138,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 记下"助手消息 → Run"的关联：失败后的「重试」要把它作为 retryOfRunId 带回去（AIH-024）。
       // 在请求返回时就记，而不是等 `run.started` 事件 —— 后者在流中断时根本收不到。
       _runIds[assistantId] = start.runId;
+      // 这条就是"正在流式"的那条：切走会话再切回来，靠它认出内存里那份正文（_liveText）
+      _activeAssistantId = assistantId;
 
       // 乐观插入：用户消息 + 空的助手流式消息，收到 delta 就地增长。
       // 用户消息也带上 attachment 块：气泡里立刻就能看到缩略图，不用等重新拉历史。
@@ -2191,11 +2195,15 @@ class AiWorkspaceStore extends ChangeNotifier {
     _liveReasoning.remove(assistantMessageId);
     _liveSegments.remove(assistantMessageId);
     _liveToolCalls.remove(assistantMessageId);
+    _liveText.remove(assistantMessageId);
     try {
       await for (final event in _source.events(runId)) {
         switch (event.type) {
           case 'text.delta':
             streamed += event.text ?? '';
+            // 已到达的正文单独记一份：切走会话再切回来时，`messages` 会被库里那份
+            // （整轮跑完才落库）替换，这里就是唯一能救回正文的来源（_overlayInflight）
+            _liveText[assistantMessageId] = streamed;
             _appendLiveSegment(assistantMessageId, 'text', event.text ?? '');
             _replaceMessage(assistantMessageId, text: streamed, status: 'streaming');
             // 逐字回包只攒着，交给下一帧统一刷新（见 _notifyStreaming）
@@ -2381,6 +2389,10 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 与服务端对齐一次（seq、状态、usage 都以库为准）
       await _reloadMessages(conversationId);
       conversations = await _safeListConversations();
+      // 这一刻库里已经是权威（正文 / parts 都落库了）：内存里那份"正在长"的正文功成身退。
+      // ⚠ 必须在 _reloadMessages **之后**清 —— 对齐时还要靠它兜"库里没落全"的底。
+      _liveText.remove(assistantMessageId);
+      _activeAssistantId = null;
       // 一轮跑完是"内容定稿"的时刻：顺手把本机的会话/消息推给桌面（M4）。
       // 桌面不在线时它只记一句"还有几条没上去"，不拦任何东西。
       await syncOutbox();
@@ -2466,6 +2478,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       }
       // 这次 Run 与助手消息的关联就地记下（不依赖事件流，刷新消息也不会丢）
       _runIds[freshAssistantId] = start.runId;
+      // 这条就是"正在流式"的那条（与 send() 同：切走会话再切回来要靠它找回正文）
+      _activeAssistantId = freshAssistantId;
 
       AiMessage streamingPlaceholder(int seq) => AiMessage(
             id: freshAssistantId,
@@ -2509,6 +2523,16 @@ class AiWorkspaceStore extends ChangeNotifier {
   final Map<String, String> _runIds = {};
 
   String? _runIdOf(String assistantMessageId) => _runIds[assistantMessageId];
+
+  /// **正在流式**的那条助手消息 id（`send()` / `retry()` 记下，整轮收尾时清掉）。
+  String? _activeAssistantId;
+
+  /// 正在流式的那条助手**已到达的正文**（按助手消息 id 记）。
+  ///
+  /// 为什么不直接读 `messages` 里那条：切走会话时 `messages` 会被库里那份替换，
+  /// 而库里这条要等**整轮跑完**才有正文 —— 这张表是"切走再切回来"时唯一能救回
+  /// 正文的来源（见 [_overlayInflight]）。
+  final Map<String, String> _liveText = {};
 
   // --- 流式实时状态（工具卡 / 思考）---------------------------------------
 
@@ -2663,12 +2687,39 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   /// 流式状态只对"还在列表里的消息"有意义：换会话 / 刷新后清掉孤儿，避免内存只增不减。
+  ///
+  /// ⚠ **正在流式的那条不算孤儿**（用户 bug：生成答复时切到别的会话再切回来，
+  /// 前面已显示的部分答复全部消失）：它还不在这份 `messages` 里（或者被库里那份
+  /// 空壳顶掉了），但内存里的实时段 / 思考 / 工具卡是切回来时唯一的还原来源 ——
+  /// 清了它，切回来的就是一条空气泡。
   void _pruneLiveState() {
     final ids = messages.map((m) => m.id).toSet();
+    final active = _activeAssistantId;
+    if (active != null) ids.add(active);
     _liveReasoning.removeWhere((k, _) => !ids.contains(k));
     _liveSegments.removeWhere((k, _) => !ids.contains(k));
     _liveToolCalls.removeWhere((k, _) => !ids.contains(k));
     _liveRevisions.removeWhere((k, _) => !ids.contains(k));
+  }
+
+  /// 把内存里"正在长"的那份流式正文盖回刚从库里读出来的清单上（**纯前端合并**）。
+  ///
+  /// 用户 bug（2026-09-28）：生成答复时切到别的会话再切回来，前面已显示的部分答复全部消失。
+  /// 根因：流式正文只在**整轮跑完**才落库，期间库里那条助手消息的 text 是空的 ——
+  /// 任何一次"从库里重读"（[openConversation] / [_reloadMessages]）都会把内存里
+  /// 正在长的那份抹掉。修法：重读之后把还活着的那条盖回去（正文取更长的那份，
+  /// 状态仍是 streaming）；思考与工具卡由 [_pruneLiveState] 的"活跃条目不清理"保住。
+  List<AiMessage> _overlayInflight(List<AiMessage> fresh) {
+    final liveId = _activeAssistantId;
+    if (liveId == null) return fresh;
+    final live = _liveText[liveId];
+    return [
+      for (final m in fresh)
+        if (m.id == liveId && (live ?? '').length > m.text.length)
+          m.copyWith(text: live, status: 'streaming')
+        else
+          m,
+    ];
   }
 
   /// 就地改一条消息。
@@ -2728,16 +2779,20 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   Future<void> _reloadMessages(String conversationId) async {
     try {
+      // 用户已经切到别的会话：这次对齐是给**那条**会话的，别把旧会话的消息
+      // 盖进当前屏幕（否则 B 会话里会突然冒出 A 会话的消息）。
+      if (conversation?.id != conversationId) return;
       final fresh = await _source.listMessages(conversationId);
       // 后端可能还没落 parts（消息仍在写库）：保留事件里拿到的那些，别把工具卡擦掉
       final known = {for (final m in messages) m.id: m.parts};
-      messages = [
+      // 同理，正文 / 状态以"内存里正在长的那份"兜底（库里要等整轮跑完才有）
+      messages = _overlayInflight([
         for (final m in fresh)
           if (m.parts.isEmpty && (known[m.id]?.isNotEmpty ?? false))
             m.copyWith(parts: known[m.id])
           else
             m,
-      ];
+      ]);
       _pruneLiveState();
       _syncConversationStats();
     } catch (_) {

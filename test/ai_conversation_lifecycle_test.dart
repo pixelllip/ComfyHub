@@ -8,6 +8,7 @@
 //   3. 输入框里打了一半的字，切到别的会话再切回来必须还在 ——
 //      旧实现里"清空输入框"会被当成用户删字，把刚取回来的草稿覆盖成空串。
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -295,4 +296,140 @@ void main() {
         reason: '发出去之后输入框必须是空的：同一句话不能被草稿灌回来（那就是同一条消息发两遍）');
     expect((await store.loadDraft('c-empty')).text, isEmpty, reason: '发出去 = 这条会话的草稿作废');
   });
+
+  test('生成答复时切到别的会话再切回来：已流出来的部分答复还在（用户 bug：切窗口丢正文）', () async {
+    // 事件流由测试**逐段推**：先给一半正文，中间切走会话再切回来，最后才收尾。
+    // （_fakeBackend 那种"一次给完"的 SSE 复现不了这个 bug。）
+    // ⚠ 用普通 test() 而不是 testWidgets：流式要按真实时序一段段喂，
+    // widget 测试的 fake-async 区喂不动，会整条挂死。
+    final deltas = StreamController<List<int>>();
+    addTearDown(deltas.close);
+    // "库里"的消息：流式期间 a1 的 text 是空的（整轮跑完才落库），收尾后才是完整的
+    var db = <Map<String, dynamic>>[
+      {
+        'id': 'u1',
+        'conversationId': 'c-empty',
+        'seq': 1,
+        'role': 'user',
+        'status': 'complete',
+        'text': '你好',
+        'parts': <Object>[],
+      },
+      {
+        'id': 'a1',
+        'conversationId': 'c-empty',
+        'seq': 2,
+        'role': 'assistant',
+        'status': 'streaming',
+        'text': '',
+        'parts': <Object>[],
+      },
+    ];
+
+    Future<http.StreamedResponse> handler(http.BaseRequest request, http.ByteStream _) async {
+      final path = request.url.path;
+      Object body;
+      if (path == '/api/ai/providers') {
+        body = [
+          {
+            'id': 'local-gw',
+            'displayName': '本机网关',
+            'api': 'openai-completions',
+            'baseURL': 'http://127.0.0.1:11434/v1',
+            'credentialRef': 'LOCAL_KEY',
+            'endpointTrust': 'loopback',
+            'enabled': true,
+            'revision': 1,
+            'credential': {'configured': true, 'source': 'managed', 'writable': true},
+          }
+        ];
+      } else if (path == '/api/ai/providers/local-gw/models') {
+        body = [
+          {
+            'providerId': 'local-gw',
+            'id': 'm-text',
+            'displayName': '纯文本模型',
+            'inputModalities': ['text'],
+            'tools': true,
+            'reasoning': false,
+            'thinkingEfforts': <String, String>{},
+            'capabilitySource': 'manual',
+            'enabled': true,
+          }
+        ];
+      } else if (path == '/api/ai/conversations') {
+        body = [
+          {'id': 'c-empty', 'title': '新对话', 'messageCount': 0, 'archived': false},
+          {'id': 'c-old', 'title': '聊过的', 'messageCount': 1, 'archived': false},
+        ];
+      } else if (RegExp(r'^/api/ai/conversations/[^/]+/messages$').hasMatch(path)) {
+        body = path.contains('c-empty') ? db : db.take(1).toList();
+      } else if (RegExp(r'^/api/ai/conversations/[^/]+/runs$').hasMatch(path)) {
+        body = {'runId': 'r1', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
+      } else if (RegExp(r'^/api/ai/runs/[^/]+/events$').hasMatch(path)) {
+        return http.StreamedResponse(
+          deltas.stream,
+          200,
+          headers: {'content-type': 'text/event-stream; charset=utf-8'},
+        );
+      } else {
+        body = <Object>[];
+      }
+      return http.StreamedResponse(
+        Stream.value(utf8.encode(jsonEncode(body))),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+
+    SharedPreferences.setMockInitialValues({});
+    final settings = SettingsStore();
+    await settings.load();
+    final store = AiWorkspaceStore(
+      api: AiApiClient(settings.baseUrl, client: MockClient.streaming(handler)),
+    );
+    await store.load();
+    expect(store.conversation?.id, 'c-empty');
+
+    // 开始生成（不等它跑完）
+    final running = store.send('你好');
+    await _settle();
+    expect(store.messages.last.status, 'streaming');
+
+    // 流出一半正文
+    deltas.add(utf8.encode('id: 1\nevent: run.started\ndata: {"runId":"r1"}\n\n'));
+    await _settle();
+    deltas.add(utf8.encode('id: 2\nevent: text.delta\ndata: {"text":"部分答复"}\n\n'));
+    await _settle();
+    expect(store.messages.last.text, '部分答复');
+
+    // ⚠ 切走再切回来（此刻库里那条 a1 的 text 还是空串）
+    await store.openConversation('c-old');
+    await store.openConversation('c-empty');
+
+    final streaming = store.messages.firstWhere((m) => m.id == 'a1');
+    expect(streaming.status, 'streaming', reason: '还在生成，状态不该被库里那份顶掉');
+    expect(streaming.text, '部分答复', reason: '切回来必须看到已经流出来的部分答复');
+
+    // 收尾：库里落了完整正文
+    db = [
+      db.first,
+      {...db.last, 'status': 'complete', 'text': '完整答复'},
+    ];
+    deltas.add(utf8.encode('id: 3\nevent: message.completed\ndata: {"messageId":"a1","text":"完整答复"}\n\n'));
+    deltas.add(utf8.encode('id: 4\nevent: run.completed\ndata: {"runId":"r1"}\n\n'));
+    await deltas.close();
+    await running;
+
+    final done = store.messages.firstWhere((m) => m.id == 'a1');
+    expect(done.status, 'complete');
+    expect(done.text, '完整答复');
+  });
+}
+
+/// 真实时序下把积压的微任务/流事件放行（普通 test() 没有 pump 可用）。
+Future<void> _settle() async {
+  for (var i = 0; i < 5; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
 }
