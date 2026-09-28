@@ -404,6 +404,13 @@ async fn 支持的图片会被真的内联_发不出去的必须如实告知() {
     assert!(!request.contains("参考图.png（id="), "发出了的图片**不该**出现在未发送名单里：{request}");
     // ③ 系统提示里那句"附带图片附件"要与事实一致（内联了才说有）
     assert!(request.contains("本次请求附带图片附件: 有"), "{request}");
+    // ④ 附件 id 对照（用户 bug 2026-09-28「系统给不出可投放的附件 ID」）：
+    //    内联图片的 id 必须写进用户消息正文，模型才知道 comfy_use_attachment 投哪个 id。
+    assert!(
+        request.contains("随本条消息内联的附件"),
+        "内联了图片就要给附件 id 对照：{request}"
+    );
+    assert!(request.contains(&format!("参考图.png=id:{id}")), "对照里要有 id 本身：{request}");
 
     gateway.abort();
     let _ = std::fs::remove_dir_all(dir);

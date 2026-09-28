@@ -1486,6 +1486,33 @@ fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
         text.push_str("）");
         text
     };
+    // 附件 id 对照（用户 bug 2026-09-28「系统给不出可投放的附件 ID」）：工具描述让模型
+    // "见用户消息里的附件说明"，但从来没有人把**内联图片的 id**写进消息 —— 模型手里
+    // 没有 id，`comfy_use_attachment` 第一步就走不下去，ComfyUI 端也就读不到聊天里的图。
+    // （没内联的那些 id 已经在上面"未随本次请求发送"那句里了，这里不重复。）
+    let inlined_ids: Vec<String> = message
+        .parts
+        .iter()
+        .filter(|p| p.r#type == "attachment")
+        .filter_map(|p| p.attachment_id.clone())
+        .filter(|id| plan.inline.contains_key(id))
+        .map(|id| format!("{}=id:{id}", plan.name_of(&id)))
+        .collect();
+    let body = if inlined_ids.is_empty() {
+        body
+    } else {
+        let mut text = body;
+        if !text.trim().is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(
+            "（随本条消息内联的附件 —— 要把某张图放进 ComfyUI 的 input 目录，\
+             用 comfy_use_attachment 投它对应的 id：",
+        );
+        text.push_str(&inlined_ids.join("；"));
+        text.push_str("）");
+        text
+    };
     if !body.trim().is_empty() || !images.is_empty() {
         out.push(ChatTurn {
             role: message.role.clone(),
