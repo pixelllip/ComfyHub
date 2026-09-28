@@ -1,14 +1,19 @@
 ---
 name: inpaint-composite
-description: 图像编辑的局部重绘工作流 —— 保背景换人物 / 换背景保人物 / 把先生成好的人物贴进某张图。**贴人物图只有一条路**：`comfyhub_paste_person_matte_anima.json`（AI 软遮罩：`easy imageRemBg` + `refine_foreground=true` 抠出连续 alpha，ring 由 `GrowMask` + `MaskComposite` 从同一份 alpha 现算，人物像素与画风原样保留）——⚠ **用之前必须先查 ComfyUI 里有没有抠图模型**（`comfy_get_status` 的 `mattingModels.usable`），缺了就指引用户下载 `BEN2_Base.pth` / `RMBG-1.4.pth` 到 `<ComfyUI 根>\models\rembg\`；**没有模型就是做不到，如实说**（颜色抠图那条退路已整档删除，别再想它）。纯重绘 / 换背景保人物用 `comfyhub_inpaint_anima.json`；底图与人物图用 `comfy_use_media` / `comfy_use_attachment` 投进 ComfyUI 的 input。krea2 那两份实测不适合做编辑（重绘不跟随提示词、贴人守不住），别用。遮罩一律"白=重绘区"。
+description: 图像编辑的局部重绘工作流 —— 保背景换人物 / 换背景保人物 / 把先生成好的人物贴进某张图。**「把图里的人换成 X」默认就是三件套**（① 用现成的 `comfyhub_t2i_anima.json` 生成替换目标 → ② 用 AI 软遮罩把它抠下来、贴上原图背景），别一上来就想一次重绘完事。**贴人物图只有一条路**：`comfyhub_paste_person_matte_anima.json`（AI 软遮罩：`easy imageRemBg` + `refine_foreground=true` 抠出连续 alpha，ring 由 `GrowMask` + `MaskComposite` 从同一份 alpha 现算，人物像素与画风原样保留）——⚠ **用之前必须先查 ComfyUI 里有没有抠图模型**（`comfy_get_status` 的 `mattingModels.usable`），缺了就指引用户下载 `BEN2_Base.pth` / `RMBG-1.4.pth` 到 `<ComfyUI 根>\models\rembg\`；**没有模型就是做不到，如实说**（颜色抠图那条退路已整档删除，别再想它）。纯重绘 / 换背景保人物用 `comfyhub_inpaint_anima.json`；底图与人物图用 `comfy_use_media` / `comfy_use_attachment` 投进 ComfyUI 的 input。krea2 那两份实测不适合做编辑（重绘不跟随提示词、贴人守不住），别用。遮罩一律"白=重绘区"。
 whenToUse: 用户说"保持背景不变，换个人 / 换个动作 / 换身衣服"、"背景换掉但人物不变"、"把这张图里的人换成…"、"先生成人物再放进去"、局部重绘 / inpaint / 遮罩 / 贴人 / 合成人物 / 抠图 / 抠人 / 抠出来时。
-version: 4
+version: 5
 ---
 
 # 图像编辑：局部重绘（保背景换人物 / 换背景保人物）
 
 ## 版本记录
 
+- **version 5（2026-09-28）**：把"**换人 = 三件套**"提到最前面，写成一张能照着走的步骤表
+  （① 现成 `comfyhub_t2i_anima.json` 生成替换目标 → ② AI 抠图 + 贴回原图背景，
+  走 `comfyhub_paste_person_matte_anima.json`），并**明写"阶段一不要自己另写工作流"**。
+  起因是用户报"模型不知道先生成一张替换目标、再 AI 抠图、最后贴上目标背景"，
+  真机记录里它当场新写了一份 t2i 图，把轮数烧在侦察上，最后卡在上限、一张图都没出来。
 - **version 4（2026-09-27）**：按用户拍板「**放弃纯rust编辑，删除它**」，**整档删掉"颜色抠图当合成遮罩"**——
   连带删掉的参数有 `matteSource`（显式传它会被**明确拒绝**并说明"已删除"）、`ring`、`shrink`、`edgeBand`、
   `edgeTolerance`、`light` / `lightStrength` / `shadowStrength` / `shadowOffset`，以及它们背后那套
@@ -48,6 +53,47 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
 | **换背景保人物** | 人物所在位置 | **`true`** | 底图自己 | `0.85~1.0` |
 | 整张重画（等价图生图） | `full` | `false` | 底图自己 | `0.4~0.7` |
 | **两阶段**：先生成人物再换上去 | 不需要遮罩（用 matte 工作流） | — | **`comfy_make_mask` 回的 `personFilename`** | `0~0.45` |
+
+## ★★ 换人 = **三件套**，不是"一次重绘"（先看这一节）
+
+用户说"把图里的主要人物换成 X"（换角色 / 换装 / 换动作）时，**默认就是这三步**，
+一步都不能省、顺序不能换。**不要**一开始就去画一张新图直接贴 —— 那样边缘一定会脏。
+
+| # | 这一步做什么 | 用哪个工作流 | 得到的产物 |
+| --- | --- | --- | --- |
+| ① 生成替换目标 | 按角色卡 / danbooru tag 出一张**新的目标人物**（构图动作按最终需求） | **`comfyui\workflows\comfyhub_t2i_anima.json`** | 一张人物图（`mediaIds`） |
+| ② AI 抠图 + 贴回目标背景 | 用 AI 软遮罩把①里的人抠出连续 alpha，合进**原图** | **`comfyui\workflows\comfyhub_paste_person_matte_anima.json`** | 换好人的成图 |
+
+> ⚠ **阶段一不要自己另写一份工作流**（2026-09-28 真机教训）：模型当场新写了一份
+> t2i 图，光是"查本机 lora / 查节点契约 / 找模型"就烧掉大半轮数，最后卡在轮数上限上，
+> 产物一个都没出来。现成的那份已经把加载器（底模 / CLIP / VAE / Sage / turbo LoRA）
+> 配齐了，**直接 `comfy_load_workflow` 它、覆盖几个键就行**。
+
+**全流程大概只要 8~12 步**（照着走，别展开侦察）：
+
+```
+0. 查抠图模型在不在        comfy_get_status  → mattingModels.usable
+                          （false 就指引用户下 BEN2_Base.pth / RMBG-1.4.pth，然后如实说做不到）
+1. 原图进 input            comfy_use_attachment(attachmentId=<用户消息里的附件 id>)
+                          → 拿 filename 与 width/height
+2. 阶段一：加载现成 t2i    comfy_load_workflow(path="…\comfyhub_t2i_anima.json")
+3. 阶段一：提交            comfy_submit(overrides={ "10.width": <原图宽>, "10.height": <原图高>,
+                             "11.text": "<角色 tag 栈 + 动作 + 简单背景>", "12.seed": … }, wait=true)
+                          ★ 长宽比**必须与原图一致**（省一次拉伸）；只认返回的 mediaIds
+4. 人物图进 input          comfy_use_media(mediaId=<上一步的产物>)
+5. 定位 + 摆放             comfy_make_mask(mode="subject", baseFilename=<原图 filename>,
+                             subjectFilename=<人物图 filename>, scale/x/y…)
+                          → 拿 personFilename（**不是**遮罩；这一档不写遮罩）
+6. 阶段二：加载 matte 那份  comfy_load_workflow(path="…\comfyhub_paste_person_matte_anima.json")
+7. 阶段二：提交            comfy_submit(overrides={ "10.image": <原图 filename>,
+                             "20.image": <personFilename>, "17.denoise": 0.3,   // 纯合成填 0
+                             "11.width"/"11.height"/"21.width"/"21.height": <原图尺寸>,
+                             "4.lora_name"+"4.strength_model"+"4.strength_clip": <同一条画风 LoRA，确认文件在> })
+```
+
+**只有第 ② 步是"抠图"**：抠的是①里生成的**新人物**，贴回去的是**原图的背景** ——
+用户的原话"先生成一张替换目标，再将其用 AI 抠图下来，最后贴上目标背景"就是这条链。
+每一步的细节（提示词怎么写、denoise 取值、边缘怎么收）见下面各节。
 
 ## ★ 先想这一步：**有两条路比抠图更稳**（能用就别抠）
 
@@ -212,7 +258,12 @@ krea2 的**文生图没问题**（阶段一那张白底人物图就是它生成�
 
 ## 两阶段：先生成人物，再换上去（用户要的正是这个）
 
-1. **阶段一（t2i）**：按角色卡 / danbooru tags 生成人物。要求：
+1. **阶段一（t2i）**：按角色卡 / danbooru tags 生成人物。
+   **用现成的 `comfyui\workflows\comfyhub_t2i_anima.json`（`comfy_load_workflow` 加载它），
+   不要自己新写一份工作流**（2026-09-28 真机：自己写会把轮数烧在侦察上，最后卡在轮数上限、
+   一张图都没出来；那份现成的工作流加载器已经配齐）。要改的只有几个键：
+   `10.width` / `10.height`（画布）、`11.text`（提示词）、`12.seed`、
+   需要画风 LoRA 时覆盖节点 `4` 的 `lora_name` / `strength_model` / `strength_clip`。要求：
    - 构图与动作**按最终需求**来（反正是要贴进背景的那一个）；
    - 分辨率的长宽比**与底图一致**（省一次拉伸）；
    - 背景**不必是绿幕**（抠图交给模型，任意背景都行）；只有当你**要摆放**
