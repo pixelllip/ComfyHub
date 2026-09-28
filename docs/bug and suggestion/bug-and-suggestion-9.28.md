@@ -77,7 +77,7 @@
 |MCP nodes 工具 UnexpectedToolError|真实根因（2026-09-28 复现抓到）：**不是 ComfyUI 没在运行** —— comfy-cli 1.20 起任何命令都要先探测云凭据，凭据锁文件在 `%LOCALAPPDATA%\comfy-cli\secrets.json.lock`，而受限会话把"映像在项目里"的进程（MCP 的便携 python 就是）关在项目目录里，写项目外一律 `PermissionError [Errno 13]`，整个 `comfy nodes` 家族当场炸。修复：后端起 MCP 子进程时把 comfy-cli 的落盘位置指进项目内（`COMFY_SECRETS_PATH` / `COMFY_CACHE_DIR` / `TMP`，`server-rs/src/mcp.rs` 的 `apply_comfy_cli_write_redirection`，默认位置写得进的正常机器不动）。实测重定向后 `comfy nodes search` 立刻恢复正常|
 |MCP调用总是失败，系统被强行误解为comfy没在运行|就是上一条：旧版把一切 UnexpectedToolError 都译成"先确认 ComfyUI 在线"，把模型带偏。现在先认 `PermissionError / errno 13 / 拒绝访问` → 译成"写文件被系统拒绝 + 该怎么办"，认不出才回落到"确认 ComfyUI 在线"|
 |偏好保存报 PathAccessException（shared\_preferences.json，errno 5）|同一根因的另一个面：viewer.exe 映像在项目里，受限会话里写不了 `%APPDATA%\com.example\viewer\`。修复：默认位置写得进就一切照旧；写不进才把落盘位置搬进项目内 `<根>\storage\app-support`，旧偏好文件一次性拷过来（`lib/core/portable_paths.dart`，main() 最先安装）。实测受限会话里启动：日志报"已重定向到项目内"、迁移文件 487 字节、不再报 errno 5|
-|flutter run -d windows到打开应用之后，调试直接断掉|同一根因家族：debug 版 App 的 VM service 要在 `%TEMP%` 建 DevFS，受限会话里建不出来，`flutter run` 当场断（2026-09-27 已记在 `scripts\dev-app.ps1` 头注释）。不改代码 —— 用 `scripts\dev-app.ps1` 跑（它先把 TMP/TEMP 指到 `.run\tmp`），或自己在设了 TMP/TEMP 的终端里 `flutter run`|
+|flutter run -d windows到打开应用之后，调试直接断掉|根因确认（用户贴的崩溃栈）：`_createDevFS: Creation of temporary directory failed, path = '…\AppData\Local\Temp' (errno 5)` —— App 自己的 `%TEMP%` 在受限会话里写不了。**已在 `windows\runner\main.cpp` 修**：`wWinMain` 里、引擎起来之前探一次默认 temp，建不出文件就把 TMP/TEMP 指到 `<根>\.run\tmp`（建得出就什么都不做）。实测受限会话里直接 `flutter run -d windows`：`Syncing files to device Windows... 109ms`、热重载可用、DevFS 目录落在 `.run\tmp\viewer*`|
 |系统给不出可投放的附件 ID|根因：内联图片的附件 id 从来没写进用户消息正文（工具描述让模型"见附件说明"，但没人写）。现在每条带内联附件的消息末尾都有"附件 id 对照"。`c5241a9`|
 |未完成的对话不统计 token|失败 / 取消路径现在把已跑完轮次的 usage 落到助手消息上（UI 汇总读消息行）。`b2ba69c`|
 |安卓启动显示 Windows 加载界面|非 Windows 平台直接跳过本地服务引导进主界面。`ab0553d`|
@@ -85,6 +85,21 @@
 |手机设置显示 Windows 专属项|非 Windows 隐藏「本地服务」「后端服务」「打开项目目录」。`ab0553d`|
 |模型声明要重启客户端才生效|根因：改模型能力声明不动 provider 行，聊天页"清单变没变"判不出来。回到聊天页 / 打开模型选择器时重读模型目录。`5903a8f`|
 |删除 provider 时密钥残留|删 provider 时把无人引用的托管密钥一并清掉（桌面 Rust + 手机桥两条路；env 来源与共用 ref 例外）。`65529b8`|
+
+### 这一串"权限"问题的 git 起源（2026-09-28 复核）
+
+**没有哪一次改动"引入"了它** —— 触发条件是环境（受限会话把"映像在工作区内"的进程关在工作区内），
+带进来的是两条**一直就在**的依赖。可指认的起点：
+
+| 症状 | 起点 |
+|-|-|
+| 偏好 `shared_preferences.json` errno 5 | **`2f24294`（2026-09-12 初始提交）**：`lib/core/settings_store.dart` 用 shared_preferences，默认就写 `%APPDATA%\com.example\viewer\`，从第一天起没变过 |
+| MCP 工具 `Errno 13`（`secrets.json.lock`） | **`21fae51` + `8f0ca60`（2026-09-21）**：MCP 工具接进 App、comfy-cli/comfy-mcp 装进包内（本机装的是 **comfy-cli 1.20.0**，它的 `where.resolve_default` 无条件探测云凭据）；**`49dff64`（2026-09-26）** 把 MCP 改成"后端一启动就 warmup"，于是每次都撞 |
+| `flutter run` DevFS 断连 | 不在仓库里（DSH 沙箱行为）；仓库里**最早记录**是 **`aa66962`（2026-09-27）**"受限会话里 flutter run 起不来"，当时只做了 workaround（dev-app.ps1 设 TMP/TEMP），没往 App 里修 —— 本轮才修进 `windows\runner\main.cpp` |
+
+旁证：`%APPDATA%\...\shared_preferences.json` 的**最后一次成功写入是 2026-09-26 11:19**，
+之后再没更新过（今天迁移时文件时间戳仍是那一刻）—— 与"09-26 起 App 都在受限会话里跑"吻合。
+
 
 
 
