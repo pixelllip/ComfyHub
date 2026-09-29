@@ -29,6 +29,14 @@
   本机实测的耗时（别凭感觉说"测试太慢"，2026-09-23 重新量过）：`flutter test` 196 例 ≈ 23s、
   `gradle test` 597 例 ≈ 25s（热构建；首跑要编译）、`e2e-ai-tools-test.ps1` 111 项 ≈ 5~15s、
   `e2e-capture-test.ps1` / `e2e-submit-test.ps1` 各 ≈ 20~35s（后者含"工作流文件直接提交"那一幕）。
+- **Rust 用例要落盘，只许用 `crate::testpaths::scratch()`**（`tests/` 里是
+  `comfyhub_server_rs::testpaths::scratch()`），落点是 `<crate>\target\.scratch\`。
+  **别写 `std::env::temp_dir()`** —— `cargo test` 的测试二进制 `target\debug\deps\*.exe`
+  **在工作区内**，按"映像位置"判的写限制必然命中它：受限会话里本机实测 `cargo test --lib`
+  **539 过 / 69 红**，红的原因清一色 `PermissionDenied (os error 5)`，**与被测代码无关**
+  （2026-09-29 那次迁移就是把 47 处 `temp_dir()` 换掉，现在 lib 613 + 集成用例全绿）。
+  同理，**要造"写不进去"的场景就用"在目标文件名上放一个同名目录"**，别去改 ACL ——
+  Windows 上那必然回 `ERROR_ACCESS_DENIED`，与受限现场同一个错码，且不依赖本机 ACL。
 - 产物目录：debug 在 `build\windows\...\runner\Debug\`、Release 在 `...\Release\`；
   `autorun-app.ps1` / `comfyhub.ps1 up -WithApp` 启动 App 时**优先挑 Release**。
 - **"我改了但界面没变"先查构建新鲜度，别急着怀疑代码**：App 是直接双击 / `Start-Process`
@@ -481,9 +489,16 @@ MCP 任何工具报 `UnexpectedToolError` —— 同一批症状、同一个根�
 | 从哪个会话 / 终端起 | 双击一样被限 | 无关（限制在令牌里） |
 | spawn 档位 | `wmi-hidden` / `wmi-vbs` / `direct-hidden` 三档写同一个探针**都是 OK** | 无关（见第 2 节那条 ⚠⚠） |
 
-**两条机制并存**：`按映像位置`（后端 exe 在工作区内就必然被限）+ `按继承`
-（受限父进程拉起的、工作区外的 python 照样被拒，`tests/tmp-inherit-probe.rs` 量过）。
-所以"换个 ComfyUI 自带的 python 就好"是错的 —— **后端自己就写不了**，起手写实例 `temp/` 就死。
+**两条机制并存**（2026-09-29 用 `server-rs\tests\confinement_probe.rs` 在同一个会话里复量过：
+测试二进制在工作区内 → 自己写 `%TEMP%` 报 `os error 5`；**它拉起的 `cmd.exe`（映像在工作区外）
+写 `%TEMP%` 也报 `Access is denied`**；而同一会话里映像在工作区外的 pwsh 写哪儿都正常）：
+
+* **按映像位置** —— 映像落在工作区内的进程，与谁启动它无关，一律写不了工作区外；
+* **按继承** —— 受限进程拉起的子进程，**即使映像在工作区外**，照样受限。
+
+所以"换个 ComfyUI 自带的 python 就好"是错的 —— **后端自己就写不了**，起手写实例 `temp/` 就死；
+⛔ 而**"换个终端重起后端就行"同样是错的**（源码树布局下后端映像就在工作区内，换终端一样受限；
+`confinement.rs` 的 eprintln 原来就是这么写的，2026-09-29 已改成指向发布包）。
 
 ### 退路（以前漏了，现在有）
 
@@ -497,23 +512,46 @@ pwsh -File D:\dist\ComfyHub\scripts\comfyhub.ps1 up
 发布包的后端在 `<包根>\server\`、数据在 `<包根>\.db\` / `storage\` / `.run\`，**内容一点没外溢**。
 `Resolve-RustExe`（`scripts\backend.ps1`）**优先认 `COMFYHUB_SERVER_EXE`** ——
 那三个默认候选全在项目根下，所以**源码树布局下后端必然被限**，这不是配置错了。
-实测：装完发布包跑 `up` → 留证文件消失、不受限。
+
+**A/B 实测（2026-09-29，同一个二进制）**：
+
+| | 源码树布局 | 发布包布局 |
+| --- | --- | --- |
+| `GET /api/system/confinement` | `restricted: true` | `restricted: false` |
+| `.run\confinement.json` | 有（带 pid） | **无** |
+| `doctor` | 红字「后端受限 pid …（当前在跑的这个）」+ 修法 | 没有那一行 |
 
 ⚠ **别把 `COMFYHUB_SERVER_EXE` 指到 `%LOCALAPPDATA%` 之类**（第 13 节：内容一律在自身文件夹内）。
 它只该指向"**已经装配好的发布包**里的那个 exe"，或者你自己另外放的一整份安装。
 
-### 三条纪律
+⚠ **重打发布包前先 `comfyhub.ps1 down`**：后端正在跑时 `cargo build --release` 会
+`failed to remove file …comfyhub-server-rs.exe / 拒绝访问 (os error 5)` —— 那是 Windows 锁住
+正在运行的 exe，**不是**本节这套写限制（doctor 的「后端构建 已过期」判据照常是对的）。
+
+### 四条纪律
 
 1. **闸门留着**（`comfy_launch::ensure_writable`）：白起一个 100% CPU 卡死的实例，比如实拒绝糟得多。
    但**文案必须说对**：先讲真因（按映像位置判），再给上面那条修法。
    **别再写"没有退路 / 只能让用户双击 ComfyUI Desktop"** —— 双击确实能work，但不是唯一那条。
-   **也别建议往 `%LOCALAPPDATA%` 之类拷后端**（见第 3 条：内容一律在自身文件夹内）。
+   **也别写"换个终端重起就行"**（实测不成立，见上）。
+   **更别建议往 `%LOCALAPPDATA%` 之类拷后端**（见第 3 条：内容一律在自身文件夹内）。
 2. **别把探针的 `Err` 吞成 `bool`**（`confinement::probe_dir` 返回 `io::Result` 就是为此）：
    只报"哪个目录"不报"报什么错"，就会重演 2026-09-28 那次"现象对、处方错"。
    用例里也不许拿"这台机器哪个目录不可写"当判据 —— 用同名目录占位造出确定性的 `os error 5`。
 3. **看得见**（`server-rs\src\confinement.rs`）：后端启动自查 → 受限才写 `.run\confinement.json`、
    **正常就删**（免得过期标记一直亮着）；标记带 `pid`，`doctor` 还要比对"是不是当前在跑的后端"。
-   这条沿用第 151/154 条的纪律：**doctor 探不到的现象，就会一直靠猜**。
+   `GET /api/system/confinement` 把同一份结论**连判据一起**交给界面
+   （`serverImage` / `imageInsideProjectRoot` / `blockedPaths` / `remedy`），
+   受限时 App 顶部常驻一条横幅（`lib\widgets\confinement_banner.dart`）——
+   ⚠ 字段名只能说"**落在运行根目录里**"，别说"在工作区内"：发布包里根目录就等于包目录、
+   并不是被框住的地方（那里 `restricted=false`）。
+   这条沿用第 151/154 条的纪律：**doctor 探不到、界面上也看不见的现象，就会一直靠猜**。
+4. **写 input 的地方必须共用同一个入口**（`image_edit::write_or_defer`）：投放原图 / 遮罩 /
+   **摆好的人物图**三处曾经只有前两处有 HTTP 退路，于是"人物图投进去了、摆好的那份没落地"，
+   阶段二卡在"没拿到 personFilename"（2026-09-29 用户 bug）。
+   直写被拒一律改让 **ComfyUI 自己写**（`/upload/image`），并按它回的名字回填结果字段
+   （`LoadImage.image` 填的必须是它认得的那一串）。逐条清点见
+   **[docs/permission-audit.md](docs/permission-audit.md)**（12 处写工作区外的点，逐条标注退路/闸门）。
 
 ## 13. ⚠ 内容一律存在**自身文件夹**内（2026-09-29 用户定的总原则）
 

@@ -114,8 +114,23 @@ cd server-rs; cargo test --test confinement_probe -- --ignored --nocapture
 
 ---
 
-## 6. 没做的事（留给下一次）
+## 6. 本轮做完的 / 还剩的
 
-* **App 界面上还看不到受限状态** —— 只有 doctor 与工具文案会说。计划：后端把结论经 API 下发，
-  设置页给一条常驻提示（见 §1.1 的纪律：受限是"环境事实"，要看得见，别让用户一直靠猜）。
-* `comfyhub.ps1 up` 目前是**事后**由 doctor 报出来；可以在起后端之前就判一次映像位置并提示。
+**已做（2026-09-29）**
+
+* ✅ 写 input 的三处收敛到 `image_edit::write_or_defer`，直写被拒一律改走 `/upload/image`，
+  并按 ComfyUI 回的名字回填结果字段；
+* ✅ `Delivery` 支持多份投递（只留一个槽位会静默丢后一份）；
+* ✅ 错误文案不再甩锅 ACL、不再建议"换个终端重起"；
+* ✅ `GET /api/system/confinement` + App 顶部常驻横幅（受限时才出现，判据与修法一起显示）；
+* ✅ 测试暂存目录统一进项目内（`testpaths::scratch`），`cargo test` 在受限会话里全绿；
+* ✅ 发布包 A/B 实测（同一个二进制：源码树 `restricted=true`、发布包 `false`）。
+
+**还剩（留给下一次）**
+
+* `comfyhub.ps1 up` 目前是**事后**由 `doctor` 报出受限；可以在起后端之前就判一次映像位置并提示，
+  省得用户等界面横幅。
+* 横幅只在 `HomeShell` 挂载时问一次；重起后端解除了，要回到设置页点一次「保存并测试连接」
+  才会刷新（可考虑挂到 `BackendLauncher` 的重启回调上）。
+* 移动端 harness（Android）还没接这个端点；真机提交走 `comfy_queue_submit`，暂不受影响。
+

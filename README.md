@@ -1252,6 +1252,15 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 - **自动启动本地服务仅 Windows 桌面端**：其他平台会明确提示，不会静默失败。
 - **AI 工具默认只在 ComfyUI 目录内写文件**：这是刻意的（用户要求"默认不能修改 comfy 目录以外的内容"）。
   想让它写别处，去「设置 → AI 工具权限」加白名单；`.git` / `.mysql` / `.run` / `node_modules` 是硬禁写。
+- **源码树布局下后端写不了项目外**（2026-09-29）：Windows 上有一条按**映像位置 + 父子继承**的写限制
+  —— 映像落在工作区内的进程（源码树里的 `server-rs\target\release\comfyhub-server-rs.exe`、
+  `build\windows\…\viewer.exe`、`cargo test` 的测试二进制都是）写工作区外一律 `拒绝访问 (os error 5)`，
+  **与目录 ACL、路径配置、用户身份、Defender、哪个终端起的都无关**。表现是 `comfy_use_media` /
+  `comfy_make_mask` / `comfy_start` 报"拒绝访问"（投放与遮罩已自动改走 ComfyUI 自己的
+  `/upload/image`，所以多数情况能自愈）；App 顶部会常驻一条横幅说明，`comfyhub.ps1 doctor` 也会报
+  「后端受限」。**换终端重起没用**，修法是把整套放到工作区外（发布包，见 9.2）或设
+  `$env:COMFYHUB_SERVER_EXE` 指向工作区外的后端 exe。判据与逐条清点见
+  [docs/permission-audit.md](docs/permission-audit.md)。
 - **没有 shell / 进程类工具**：Skill 带来的 `scripts/` 只是不可执行的资源（AIH-045）。
   要执行命令请自己跑脚本 —— 这是权限模型的边界，不是漏做。
 - **工具审批没有"记住这次允许"**：每次 `ask` 类工具（`comfy_sync_history`、`delete_skill`）都要点一次；
