@@ -619,7 +619,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let state = AppState::new(conn, ":memory:", std::env::temp_dir());
+        let state = AppState::new(conn, ":memory:", crate::testpaths::scratch("media"));
 
         let first = ToolPolicy::load(&state).unwrap();
         assert_eq!(first.config.max_tool_steps, DEFAULT_MAX_TOOL_STEPS, "旧出厂值要当没设过");
@@ -652,11 +652,7 @@ mod tests {
     fn temp_root(tag: &str) -> PathBuf {
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("comfyhub-policy-{tag}-{unique}-{seq}"));
+        let root = crate::testpaths::scratch(&format!("policy-{tag}-{seq}"));
         std::fs::create_dir_all(root.join("comfyui")).unwrap();
         std::fs::create_dir_all(root.join("storage")).unwrap();
         root

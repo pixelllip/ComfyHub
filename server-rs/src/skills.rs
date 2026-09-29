@@ -1039,8 +1039,7 @@ mod tests {
 
     #[test]
     fn 扫描认_bundle_与平铺两种形态并且非法项要标记出来() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-skills-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testpaths::scratch("skills");
         let user = dir.join("user");
         std::fs::create_dir_all(user.join("good-skill")).unwrap();
         std::fs::write(
@@ -1071,8 +1070,7 @@ mod tests {
 
     #[test]
     fn 同名时用户版胜出() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-skills-override-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testpaths::scratch("skills-override");
         let builtin = dir.join("builtin");
         let user = dir.join("user");
         std::fs::create_dir_all(&builtin).unwrap();

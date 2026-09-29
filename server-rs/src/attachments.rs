@@ -911,7 +911,7 @@ mod tests {
     use super::*;
 
     fn state(label: &str) -> (AppState, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("comfyhub-att-{label}-{}", uuid_like()));
+        let dir = crate::testpaths::scratch(&format!("att-{label}-{}", uuid_like()));
         std::fs::create_dir_all(dir.join("media")).unwrap();
         let conn = crate::db::open_memory().unwrap();
         let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

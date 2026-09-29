@@ -1109,7 +1109,7 @@ mod tests {
     fn test_state() -> AppState {
         // 内存库要自己灌真 DDL（`AppState::new` 只包连接，不建表）
         let conn = conn();
-        AppState::new(conn, ":memory:", std::env::temp_dir())
+        AppState::new(conn, ":memory:", crate::testpaths::scratch("media"))
     }
 
     #[test]

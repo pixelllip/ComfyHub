@@ -637,7 +637,7 @@ mod tests {
         let state = crate::routes::AppState::new(
             crate::db::open_memory().unwrap(),
             ":memory:",
-            std::env::temp_dir(),
+            crate::testpaths::scratch("media"),
         );
         let error = ingest_json(&state, &json!({ "outputs": [] })).await.expect_err("缺 runKey");
         assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
@@ -649,7 +649,7 @@ mod tests {
         let state = crate::routes::AppState::new(
             crate::db::open_memory().unwrap(),
             ":memory:",
-            std::env::temp_dir(),
+            crate::testpaths::scratch("media"),
         );
         let error = import_workflows(&state, &json!({ "dir": "D:\\definitely-not-here" }))
             .await

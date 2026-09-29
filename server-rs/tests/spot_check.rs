@@ -416,7 +416,7 @@ async fn live_danbooru_lookup() {
     }
     // danbooru 这条工具不碰库，所以用内存库造一个最小的 state 就行
     let conn = comfyhub_server_rs::db::open_memory().expect("内存库");
-    let media = std::env::temp_dir().join("comfyhub-live-danbooru").join("media");
+    let media = comfyhub_server_rs::testpaths::scratch("live-danbooru").join("media");
     std::fs::create_dir_all(&media).ok();
     let state = AppState::new(conn, ":memory:", media);
 
@@ -448,7 +448,7 @@ async fn live_web_tools_smoke() {
         return;
     }
     let conn = comfyhub_server_rs::db::open_memory().expect("内存库");
-    let media = std::env::temp_dir().join("comfyhub-live-web").join("media");
+    let media = comfyhub_server_rs::testpaths::scratch("live-web").join("media");
     std::fs::create_dir_all(&media).ok();
     let state = AppState::new(conn, ":memory:", media);
 

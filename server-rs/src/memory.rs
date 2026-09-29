@@ -356,7 +356,8 @@ mod tests {
 
     #[test]
     fn 读不到文件就是空而不是报错() {
-        let dir = std::env::temp_dir().join("comfyhub-memory-missing");
+        // ⚠ 这一支要的就是"**读不到**"：只拼路径、不许创建
+        let dir = crate::testpaths::root().join("memory-没有这个目录");
         assert_eq!(read(&dir), "");
         assert_eq!(prompt_text(&dir), "");
     }
@@ -367,8 +368,7 @@ mod tests {
     /// 读回来去掉首尾空白。少这一下，界面里每按一次保存就多攒一个空行。
     #[test]
     fn 界面写入往返是幂等的() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-memory-ui-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testpaths::scratch("memory-ui");
 
         // 空 → 写两条 → 条数与内容
         let dto = write(&dir, "- 第一条\n- 第二条\n").unwrap();
@@ -414,8 +414,7 @@ mod tests {
     /// 靠字符串猜必然把这两档混掉，而"该去清理记忆"和"该把这条拆短"是两种处置。
     #[test]
     fn 三类超限的稳定码各不相同() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-memory-codes-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testpaths::scratch("memory-codes");
 
         // 单条太长（501 > 500）→ INVALID_ARGUMENT
         let long_entry = "字".repeat(MAX_ENTRY_CHARS + 1);

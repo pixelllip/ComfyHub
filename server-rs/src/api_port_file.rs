@@ -167,13 +167,7 @@ mod tests {
     use super::*;
 
     fn temp_root(label: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("comfyhub-portfile-{label}-{nanos}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        crate::testpaths::scratch(&format!("portfile-{label}"))
     }
 
     fn state(port: u16, pid: u32) -> ApiPortState {

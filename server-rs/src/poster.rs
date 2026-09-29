@@ -135,8 +135,7 @@ mod tests {
 
     #[test]
     fn 找不到脚本时如实回_false_而不是假装成功() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-poster-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testpaths::scratch("poster");
         let missing_root = dir.join("nothing-here");
         std::fs::create_dir_all(&missing_root).unwrap();
         assert!(locate_poster_script(&missing_root).is_none());

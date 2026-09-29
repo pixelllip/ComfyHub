@@ -101,8 +101,7 @@ mod tests {
 
     #[test]
     fn thumbnail_is_scaled_to_max_edge_and_never_upscaled() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-thumb-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testpaths::scratch("thumb");
 
         let big = png_with_alpha(&dir, "big.png", 1024, 512);
         let dest = dir.join("big.jpg");
@@ -122,8 +121,7 @@ mod tests {
 
     #[test]
     fn transparent_pixels_are_composited_on_the_dark_backdrop_not_black() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-thumb-a-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testpaths::scratch("thumb-alpha");
         let src = png_with_alpha(&dir, "alpha.png", 8, 8);
         let dest = dir.join("alpha.jpg");
         assert!(write_thumbnail(&src, &dest).unwrap());
@@ -137,8 +135,7 @@ mod tests {
 
     #[test]
     fn undecodable_files_report_false_instead_of_panicking() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-thumb-bad-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testpaths::scratch("thumb-bad");
         let bogus = dir.join("broken.png");
         std::fs::write(&bogus, b"not an image at all").unwrap();
         assert_eq!(write_thumbnail(&bogus, &dir.join("x.jpg")).unwrap(), false);

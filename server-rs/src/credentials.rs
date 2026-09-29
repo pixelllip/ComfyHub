@@ -372,10 +372,11 @@ mod tests {
 
     #[test]
     fn 读坏文件当空而不是报错() {
-        let dir = std::env::temp_dir().join("comfyhub-cred-missing");
+        // ⚠ 这一支要的就是"**读不到**"：只拼路径、**不许创建**（用 root() 而不是 scratch()）
+        let dir = crate::testpaths::root().join("cred-没有这个目录");
         assert!(read_store(&dir.join("nope.json")).is_empty());
 
-        let bad = std::env::temp_dir().join(format!("comfyhub-cred-bad-{}.json", std::process::id()));
+        let bad = crate::testpaths::scratch("cred").join("bad.json");
         std::fs::write(&bad, "{ 这不是 JSON").unwrap();
         assert!(read_store(&bad).is_empty());
         // 值的类型不是字符串时按 Kotlin 的 JsonPrimitive.content 取字面量；对象/数组跳过

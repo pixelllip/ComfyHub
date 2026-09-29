@@ -1202,13 +1202,7 @@ mod tests {
 
     #[test]
     fn 扫盘认后缀且深度与体积如实() {
-        let dir = std::env::temp_dir().join(format!(
-            "comfyhub-models-scan-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = crate::testpaths::scratch("models-scan");
         let loras = dir.join("loras");
         std::fs::create_dir_all(loras.join("nested")).unwrap();
         std::fs::write(loras.join("a.safetensors"), b"1234").unwrap();
@@ -1239,13 +1233,7 @@ mod tests {
     /// 并集才是那个"盘上有、实例看不到"的判据（2026-09-22 事故的解药）。
     #[test]
     fn 并集把实例看不到的那些单列出来() {
-        let dir = std::env::temp_dir().join(format!(
-            "comfyhub-models-merge-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = crate::testpaths::scratch("models-merge");
         let ckpts = dir.join("checkpoints");
         std::fs::create_dir_all(&ckpts).unwrap();
         std::fs::write(ckpts.join("on_disk_only.safetensors"), b"12").unwrap();

@@ -1673,7 +1673,7 @@ mod tests {
         // 托管文件那份是 **Kotlin 写的密文**（标准 base64 + DPAPI/CurrentUser/空熵）。
         // 这条用例把"Rust 能不能解开 Kotlin 写的东西"钉死 —— 自己写的 FFI
         // 参数（熵 / scope）错一位，表现就是"下行的密钥全是乱码或直接失败"。
-        let tmp = std::env::temp_dir().join(format!("comfyhub-auth-cred-{}", std::process::id()));
+        let tmp = crate::testpaths::scratch("auth-cred");
         let media = tmp.join("media");
         let ai = tmp.join("ai");
         std::fs::create_dir_all(&media).unwrap();

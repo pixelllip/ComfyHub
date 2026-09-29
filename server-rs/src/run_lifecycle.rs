@@ -694,7 +694,7 @@ mod tests {
              INSERT INTO ai_runs (id, conversation_id, status) VALUES ('r1', 'c1', 'running');",
         )
         .unwrap();
-        AppState::new(conn, ":memory:", std::env::temp_dir())
+        AppState::new(conn, ":memory:", crate::testpaths::scratch("media"))
     }
 
     fn model_with(reasoning: bool, efforts: &[(&str, &str)]) -> ModelRow {

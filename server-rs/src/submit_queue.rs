@@ -1371,7 +1371,7 @@ mod tests {
         // （`workflow_recipe.rs` 的用例同一条纪律）。
         let conn = crate::db::open_memory().unwrap();
         conn.execute_batch(crate::db::schema_sql()).expect("建 schema");
-        AppState::new(conn, ":memory:", std::env::temp_dir())
+        AppState::new(conn, ":memory:", crate::testpaths::scratch("media"))
     }
 
     fn item(payload: Value) -> PushItem {

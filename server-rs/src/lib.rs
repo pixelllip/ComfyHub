@@ -76,6 +76,7 @@ pub mod step_mark;
 pub mod submit_queue;
 pub mod sync;
 pub mod system_prompt;
+pub mod testpaths;
 pub mod thumbs;
 pub mod title_strip;
 pub mod tools;

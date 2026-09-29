@@ -1930,12 +1930,6 @@ mod tests {
     }
 
     fn temp_dir(label: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("comfyhub-rs-mcp-{label}-{nanos}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        crate::testpaths::scratch(&format!("mcp-{label}"))
     }
 }

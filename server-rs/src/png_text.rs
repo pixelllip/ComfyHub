@@ -153,11 +153,7 @@ mod tests {
     }
 
     fn temp_png(label: &str, bytes: &[u8]) -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("comfyhub-png-{label}-{nanos}.png"));
+        let path = crate::testpaths::scratch(&format!("png-{label}")).join("image.png");
         std::fs::write(&path, bytes).unwrap();
         path
     }

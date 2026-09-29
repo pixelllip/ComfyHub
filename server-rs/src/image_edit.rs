@@ -1795,21 +1795,6 @@ mod tests {
         img
     }
 
-    /// 项目内的暂存目录（**不要用 `%TEMP%`**：受限会话里"映像在工作区内"的进程写它会被拒 ——
-    /// 那正是本模块要模拟的现场，`crate::confinement` 的 tests 里有同一段说明）。
-    fn scratch(label: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(".scratch")
-            .join(format!("image-edit-{label}-{nanos}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     /// 一个"人物图已经投进 input、但 input 目录**写不进**"的后端状态。
     ///
     /// ⚠ **造法必须与受限现场同错码，且不依赖这台机器的目录 ACL**：
@@ -1817,7 +1802,7 @@ mod tests {
     /// `ERROR_ACCESS_DENIED (os error 5)`，正是"映像在工作区内"那一类进程拿到的错。
     /// （`crate::confinement` 的 tests 用的是同一个手法，两处都别改成"改 ACL"。）
     fn 写不进_input_的状态(label: &str) -> (crate::routes::AppState, PathBuf) {
-        let root = scratch(label);
+        let root = crate::testpaths::scratch(&format!("image-edit-{label}"));
         let shared = root.join("shared");
         let input = shared.join("input");
         let output = shared.join("output");
@@ -1881,7 +1866,7 @@ mod tests {
         assert_eq!(result["placedSubjectFilename"], "placed-person-m344.png");
         assert_eq!(result["maskGenerated"], false, "主体档本来就不写遮罩");
         assert!(result.get("channel").is_none(), "还没 flush，不许先说走了 upload");
-        std::fs::remove_dir_all(input.parent().unwrap().parent().unwrap()).ok();
+        crate::testpaths::cleanup(input.parent().unwrap().parent().unwrap());
     }
 
     /// **ComfyUI 认下的名字才是 `LoadImage` 认得的那个** —— flush 完必须按名字回填，
@@ -1931,7 +1916,7 @@ mod tests {
             delivery.pending[0].0.file_name().unwrap().to_string_lossy(),
             "blocked-mask.png"
         );
-        std::fs::remove_dir_all(input.parent().unwrap().parent().unwrap()).ok();
+        crate::testpaths::cleanup(input.parent().unwrap().parent().unwrap());
     }
 
     /// 写得进去时就**别多走一趟 HTTP**（投放原图每次都上传会白白多花几十 MB 流量）。
@@ -1949,7 +1934,7 @@ mod tests {
         make_mask_with(&state, &args, &mut delivery).unwrap();
         assert!(delivery.is_empty(), "直写成功就不该攒：{}", input.join("plain-mask.png").display());
         assert!(input.join("plain-mask.png").is_file(), "而且文件真的要落盘了");
-        std::fs::remove_dir_all(input.parent().unwrap().parent().unwrap()).ok();
+        crate::testpaths::cleanup(input.parent().unwrap().parent().unwrap());
     }
 
     /// `mode="subject"`：白底上抠一个方块，遮罩就该是**那个方块的形状**（不是整块矩形画面）。
@@ -1958,8 +1943,7 @@ mod tests {
     /// `ImageCompositeMasked` 按遮罩搬像素，遮罩是矩形就会把人物图那块矩形连背景一起搬进去。
     #[test]
     fn 主体遮罩抠出的是形状不是整块矩形() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-subject-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testpaths::scratch("subject");
         let path = dir.join("person.png");
         // 400x400 的白底，中间一个 100x200 的红方块（模拟站着的人）
         white_bg_with_block(400, 400, 150, 100, 250, 300).save(&path).unwrap();
@@ -1978,8 +1962,7 @@ mod tests {
 
     #[test]
     fn 主体遮罩只留最大的一块连通区并支持与矩形取交集() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-subject2-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testpaths::scratch("subject2");
         let path = dir.join("person.png");
         let mut img = white_bg_with_block(300, 300, 120, 60, 180, 260);
         // 角落里一个孤立的小红块：背景噪点 / 水印纹的替身 —— 必须被丢掉
@@ -2011,8 +1994,7 @@ mod tests {
     /// 否则剪影与缩放后的像素对不上，贴出来就是错位的。
     #[test]
     fn 主体遮罩会缩放到画布尺寸() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-subject3-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testpaths::scratch("subject3");
         let path = dir.join("person.png");
         white_bg_with_block(400, 400, 150, 100, 250, 300).save(&path).unwrap();
 
@@ -2030,8 +2012,7 @@ mod tests {
     /// 判据只能是连通性：被深色描边围住的白色窟窿属于主体。
     #[test]
     fn 主体遮罩要把被包住的同色窟窿填回来() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-subject4-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testpaths::scratch("subject4");
         let path = dir.join("person.png");
         // 白底 + 一个**深色描边的空心方块**（方块内部也是白的 = 白裙子）
         let mut img = image::RgbImage::from_pixel(200, 200, image::Rgb([252, 252, 250]));
@@ -2239,7 +2220,7 @@ mod tests {
     /// 配置的输出目录优先；它推不出 `input` 时才回落到探测到的 home。
     #[test]
     fn 配置的输出目录优先于探测到的_home() {
-        let root = std::env::temp_dir().join(format!("comfyhub-input-{}", std::process::id()));
+        let root = crate::testpaths::scratch("input-dirs");
         let configured = root.join("shared");
         let probed = root.join("probed");
         for dir in [configured.join("input"), probed.join("input")] {
@@ -2273,7 +2254,7 @@ mod tests {
     /// （真机上"装了模型的那个根"与"配置的输出目录那个根"是两处，只查一处就会误报"缺"）。
     #[test]
     fn 抠图模型检查只认_comfyui_根下的_rembg_且如实报缺() {
-        let base = std::env::temp_dir().join(format!("comfyhub-matte-{}", std::process::id()));
+        let base = crate::testpaths::scratch("matte-models");
         let with_model = base.join("install");
         let without = base.join("shared");
         let not_comfy = base.join("storage");

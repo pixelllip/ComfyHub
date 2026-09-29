@@ -117,11 +117,7 @@ async fn fake_comfy(
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("comfyhub-submit-queue-{label}-{nanos}"));
+    let dir = comfyhub_server_rs::testpaths::scratch(&format!("submit-queue-{label}"));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }

@@ -176,7 +176,10 @@ pub fn apply(project_root: &Path, report: &Report, pid: u32) -> Option<PathBuf> 
         return None;
     }
     eprintln!(
-        "[confinement] 本进程写不进项目外：{}（留证：{}）—— 从正常终端重起后端即可解除",
+        "[confinement] 本进程写不进项目外：{}（留证：{}）—— \
+         修法：把整套 ComfyHub 放到工作区外（发布包），或设 COMFYHUB_SERVER_EXE 指向工作区外那个后端 exe。\
+         **换个终端重起没用**：限制跟的是**映像位置 + 父子继承**，跟会话无关\
+         （2026-09-29 实测：受限进程拉起的、工作区外的 cmd.exe 一样写不进 %TEMP%，见 tests\\confinement_probe.rs）",
         report.blocked_paths.join("、"),
         target.display()
     );
@@ -224,20 +227,7 @@ pub fn belongs_to(project_root: &Path, pid: u32) -> Option<Report> {
 mod tests {
     use super::*;
 
-    fn scratch(label: &str) -> PathBuf {
-        // ⚠ 放项目内而不是 `%TEMP%`：受限会话里"映像在项目内"的进程写 `%TEMP%` 会被拒
-        // （`comfy_launch.rs` 的 tests 模块有同一段说明，两处都别改回 `temp_dir()`）。
-        let nanos = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(".scratch")
-            .join(format!("confinement-{label}-{nanos}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::testpaths::scratch;
 
     #[test]
     fn 探到写不进就如实报_且把系统错误原样带出去() {

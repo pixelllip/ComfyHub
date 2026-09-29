@@ -413,10 +413,7 @@ mod tests {
     /// ⚠ 每个用例**自己一个目录**：共用 `comfyhub-cap-<pid>` 会让并行用例互相覆盖
     /// `custom.json`（这个坑在本仓库踩过不止一次，见 docs/pitfalls.md 那条"偶发红"）。
     fn dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("comfyhub-cap-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        crate::testpaths::scratch(&format!("cap-{tag}"))
     }
 
     /// ★ 内置规则的**条数与 Kotlin 一致**（118 条）—— 这是"生成器漏规则"的绊线。

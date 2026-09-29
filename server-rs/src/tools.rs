@@ -1991,7 +1991,7 @@ mod tests {
     #[test]
     fn specs_only_include_implemented_tools() {
         let policy = crate::policy::ToolPolicy::new(
-            std::env::temp_dir(),
+            crate::testpaths::scratch("policy-root"),
             crate::policy::ToolPolicyConfig::default(),
         );
         let specs = specs(&policy);

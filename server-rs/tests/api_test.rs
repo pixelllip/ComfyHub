@@ -93,12 +93,7 @@ fn state() -> comfyhub_server_rs::routes::AppState {
     // 表现是"拒绝了的调用居然写进了记忆"这种莫名其妙的红（2026-09-25 实测）。
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = std::env::temp_dir()
-        .join(format!("comfyhub-test-{}-{unique}-{seq}", std::process::id()));
+    let root = comfyhub_server_rs::testpaths::scratch(&format!("api-{seq}"));
     let media = root.join("media");
     std::fs::create_dir_all(&media).unwrap();
     std::fs::write(media.join("a.png"), b"0123456789abcdef").unwrap();
@@ -192,7 +187,12 @@ async fn health_reports_engine_and_schema_version() {
     // `storageDir` 是 `<storage>`（media 的父目录），不是 media 目录本身
     let storage = body["storageDir"].as_str().unwrap();
     assert!(!storage.replace('\\', "/").ends_with("/media"), "storageDir 不该指向 media：{storage}");
-    assert!(storage.contains("comfyhub-test"), "夹具的 storage 就在临时目录下：{storage}");
+    // 夹具的 storage 必须落在**测试暂存根**里（`target\.scratch`，见 `testpaths`）——
+    // 那既是唯一约定的落盘位置，也顺带钉住"受限会话里用例照样能跑"。
+    assert!(
+        std::path::Path::new(storage).starts_with(comfyhub_server_rs::testpaths::root()),
+        "夹具的 storage 要在测试暂存根下：{storage}"
+    );
     assert!(body["serverTime"].as_str().unwrap().contains('T'), "{body}");
 }
 
@@ -820,11 +820,7 @@ async fn unmigrated_endpoints_answer_501_and_migrated_ones_work() {
 /// 目录布局照**发布包/源码树的真实形状**摆：`<根>\storage\media` 是产物目录，
 /// 于是 `AppState::project_root()` 算出来就是 `<根>`（与脚本传的 `COMFYHUB_PROJECT_ROOT` 等价）。
 fn state_with_workflow_files() -> (comfyhub_server_rs::routes::AppState, std::path::PathBuf) {
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!("comfyhub-wf-{}-{unique}", std::process::id()));
+    let root = comfyhub_server_rs::testpaths::scratch("api-workflows");
 
     // 项目内的 comfyui（三份目录来源里的第 ② 份）
     let home = root.join("comfyui");

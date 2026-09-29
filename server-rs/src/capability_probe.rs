@@ -1208,14 +1208,7 @@ mod tests {
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         static SEQ: AtomicUsize = AtomicUsize::new(0);
         let seq = SEQ.fetch_add(1, Ordering::SeqCst);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "comfyhub-probe-{}-{tag}-{nanos}-{seq}",
-            std::process::id()
-        ));
+        let dir = crate::testpaths::scratch(&format!("probe-{tag}-{seq}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

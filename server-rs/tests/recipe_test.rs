@@ -155,12 +155,7 @@ fn fixture_sync(comfy_url: String) -> Fixture {
 
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = std::env::temp_dir()
-        .join(format!("comfyhub-recipe-{}-{unique}-{seq}", std::process::id()));
+    let root = comfyhub_server_rs::testpaths::scratch(&format!("recipe-{seq}"));
     std::fs::create_dir_all(root.join("storage").join("media")).unwrap();
     std::fs::create_dir_all(root.join("comfyui")).unwrap();
     std::fs::write(

@@ -479,14 +479,7 @@ mod tests {
 
     #[test]
     fn 解析落盘_两种顶层形状都认_并且不填方言() {
-        let dir = std::env::temp_dir().join(format!(
-            "comfyhub-capability-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = crate::testpaths::scratch("capability");
         // 形状一：顶层就是 provider map
         let flat = r#"{"openai":{"models":{"gpt-5":{"id":"gpt-5","modalities":{"input":["text","image"]},"tool_call":true,"reasoning":true,"last_updated":"2026-09-01"}}}}"#;
         assert_eq!(parse_and_write(flat, &dir, "2026-09-27T00:00:00Z").unwrap(), 1);

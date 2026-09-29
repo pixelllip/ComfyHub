@@ -294,11 +294,7 @@ mod tests {
     use super::*;
 
     fn temp_path(label: &str) -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("comfyhub-db-{label}-{nanos}")).join("nested").join("comfyhub.db")
+        crate::testpaths::scratch(&format!("db-{label}")).join("nested").join("comfyhub.db")
     }
 
     /// **首次运行要能自己建库**（切流的硬要求）：目录不存在、库文件不存在 → 建目录 + 建表 + 写版本号。

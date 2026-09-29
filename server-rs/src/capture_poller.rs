@@ -187,7 +187,11 @@ mod tests {
     }
 
     fn state() -> AppState {
-        AppState::new(crate::db::open_memory().unwrap(), ":memory:", std::env::temp_dir())
+        AppState::new(
+            crate::db::open_memory().unwrap(),
+            ":memory:",
+            crate::testpaths::scratch("media"),
+        )
     }
 
     #[tokio::test]

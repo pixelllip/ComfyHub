@@ -304,7 +304,7 @@ mod tests {
              INSERT INTO ai_runs (id, conversation_id, status) VALUES ('r1', 'c1', 'running');",
         )
         .unwrap();
-        AppState::new(conn, ":memory:", std::env::temp_dir())
+        AppState::new(conn, ":memory:", crate::testpaths::scratch("media"))
     }
 
     /// `seq` 单调递增、绝不回退（**红线 R5 的核心**）。
