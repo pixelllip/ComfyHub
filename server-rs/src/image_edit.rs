@@ -129,33 +129,41 @@ pub const REMOVED_ARGS: &[&str] = &[
 // ---------------------------------------------------------------------------
 
 /// 直写 `input` 目录失败时**攒下来的投递任务**（2026-09-28 用户 bug
-/// 「comfy_use_attachment 总是失败」）。
+/// 「comfy_use_attachment 总是失败」；2026-09-29 补上"摆放后的人物图"那一处）。
 ///
 /// 现场：真机上直写 `D:\Comfy-Desktop\ComfyUI-Shared\input` 一律
-/// `拒绝访问 (os error 5)`（后端进程没有那个目录的写权限），而**同一次会话里
+/// `拒绝访问 (os error 5)` —— **不是路径配错、也不是 ACL**，是"映像在工作区内的进程写不了
+/// 工作区外"（见 [`crate::confinement`]，2026-09-29 逐条量过）；而**同一次会话里
 /// ComfyUI 自己写得进去** —— MCP 的 `upload_file` 走 `/upload/image` 就成功了。
-/// 所以：**先让 ComfyUI 自己写**（HTTP），直写只当"ComfyUI 不在"时的兜底。
+/// 所以：**直写被拒就改让 ComfyUI 自己写**（HTTP），那条路才是永远成立的。
 ///
 /// 为什么做成"攒下来"而不是"当场报错"：这几个工具的业务函数是 **sync** 的
 /// （要能脱离运行时单测），而 HTTP 那条路是 async。所以 sync 侧把内容攒在这里、
 /// 照常把结果对象返回给模型，async 的工具入口再兑现它 —— 兑现失败才如实报错。
+///
+/// ⚠ **攒的是"若干份"，不是一份**：`comfy_make_mask` 一次调用可能同时要写
+/// 摆放后的人物图与遮罩（今天主体档不写遮罩，但那是**语义**决定的，不是结构决定的 ——
+/// 只留一个槽位就会静默丢掉后一份，那正是 2026-09-29 用户报的"没拿到 personFilename"）。
 #[derive(Default)]
 pub struct Delivery {
     /// ComfyUI 的 input 目录（算 subfolder 用）
     input_dir: PathBuf,
-    /// (目标位置, 内容)：要写进去的路径 + 字节
-    pending: Option<(PathBuf, Vec<u8>)>,
+    /// (目标位置, 内容, 直写被拒的原因)：要写进去的路径 + 字节 + 真实系统错误
+    pending: Vec<(PathBuf, Vec<u8>, String)>,
 }
 
 impl Delivery {
     /// 绑定这次投放的目标 input 目录（算 subfolder 用）。
     pub fn for_input_dir(input_dir: &Path) -> Self {
-        Delivery { input_dir: input_dir.to_path_buf(), pending: None }
+        Delivery { input_dir: input_dir.to_path_buf(), pending: Vec::new() }
     }
 
     /// 记下一次"直写没成功、改走 ComfyUI"的投递。
-    fn defer(&mut self, target: &Path, bytes: Vec<u8>) {
-        self.pending = Some((target.to_path_buf(), bytes));
+    ///
+    /// `why` 是**系统给的原话**（`拒绝访问。 (os error 5)`）—— §12 的教训就是
+    /// "只报哪个目录不报报什么错"会把处方带歪，所以那一半必须一路带到文案里。
+    fn defer(&mut self, target: &Path, bytes: Vec<u8>, why: String) {
+        self.pending.push((target.to_path_buf(), bytes, why));
     }
 
     /// 目标相对 input 目录的子目录（`pasted/mask.png` → `pasted`）。
@@ -168,36 +176,103 @@ impl Delivery {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.pending.is_none()
+        self.pending.is_empty()
     }
 
-    /// 把攒下的那一份交给 ComfyUI 自己写（`/upload/image`），返回它给的文件名。
+    /// 把攒下的每一份交给 ComfyUI 自己写（`/upload/image`），
+    /// 返回 `[(我们算的文件名, ComfyUI 那边真实认下的文件名)]`。
     ///
-    /// 没攒下东西就 `Ok(None)`（说明直写本来就成功了）。
-    pub async fn flush(&mut self, state: &AppState) -> Result<Option<String>, ToolFailure> {
-        let Some((target, bytes)) = self.pending.take() else {
-            return Ok(None);
-        };
-        let filename = target
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "image.png".to_string());
+    /// 没攒下东西就 `Ok(vec![])`（说明直写本来就成功了）。
+    ///
+    /// ⚠ **必须按 ComfyUI 给的名单回填结果对象**（见 [`apply_uploaded_names`]）：
+    /// 工作流里 `LoadImage.image` 填的是**它认得的那个名字**，不是我们以为写进去的那个。
+    pub async fn flush(&mut self, state: &AppState) -> Result<Vec<(String, String)>, ToolFailure> {
+        if self.pending.is_empty() {
+            return Ok(Vec::new());
+        }
+        let queued = std::mem::take(&mut self.pending);
         let config = crate::capture::capture_config(state).map_err(|e| {
             ToolFailure::new("COMFY_NOT_FOUND", format!("读不到 ComfyUI 配置：{}", e.human()))
         })?;
-        let subfolder = self.subfolder_of(&target);
-        let uploaded =
-            crate::comfy_client::upload_image(&config.comfy_url, &filename, &subfolder, &bytes).await;
-        match uploaded {
-            Ok(name) => Ok(Some(name)),
-            Err(why) => Err(ToolFailure::new(
+        let mut delivered: Vec<(String, String)> = Vec::new();
+        let mut failed: Vec<String> = Vec::new();
+        for (target, bytes, why) in queued {
+            let filename = target
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "image.png".to_string());
+            let subfolder = self.subfolder_of(&target);
+            let uploaded = crate::comfy_client::upload_image(
+                &config.comfy_url,
+                &filename,
+                &subfolder,
+                &bytes,
+            )
+            .await;
+            match uploaded {
+                // ComfyUI 那边同名会**覆盖**（我们传的是 overwrite=true），所以正常情况下
+                // 两边同名；但仍以它回的名字为准 —— 它才是 LoadImage 认得的那一串。
+                Ok(name) => delivered.push((filename, name)),
+                Err(reason) => failed.push(format!(
+                    "{}（直写被系统拒绝：{why}；改让 ComfyUI 自己收也没成功：{reason}）",
+                    target.display()
+                )),
+            }
+        }
+        if !failed.is_empty() {
+            return Err(ToolFailure::new(
                 "COMFY_INPUT_FAILED",
                 format!(
-                    "放不进 ComfyUI 的 input 目录（{}）：直写被系统拒绝，改让 ComfyUI 自己收也没成功（{why}）。\
-                     确认 ComfyUI 在运行，或把它的 input 目录写权限给当前用户。",
-                    target.display()
+                    "放不进 ComfyUI 的 input 目录：{}\n\
+                     先确认 ComfyUI 还在跑、`comfy_get_status` 能连上；如果它也连不上，那多半是**这个后端\
+                     进程自己写不进项目外**（限制按**映像位置**判：源码树布局下后端 exe 就在工作区内 —— \
+                     与路径、目录 ACL、用户身份、Defender 都无关）。修法是打一个发布包到工作区外再启动：\n\
+                     `pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub` 然后 \
+                     `pwsh -File D:\\dist\\ComfyHub\\scripts\\comfyhub.ps1 up`\
+                     （已经有工作区外的构建产物时，设 `$env:COMFYHUB_SERVER_EXE` 指向那个 exe 就够）。",
+                    failed.join("；")
                 ),
-            )),
+            ));
+        }
+        Ok(delivered)
+    }
+}
+
+/// 把 ComfyUI 那边真实认下的文件名**回填**到工具结果里（模型照着它去覆盖 `LoadImage`）。
+///
+/// 三个字段都可能装着"我们打算写进去的那个名字"，所以逐个比对：
+/// `filename`（遮罩 / 投放的原图）、`personFilename` 与 `placedSubjectFilename`（贴人物档）。
+pub fn apply_uploaded_names(result: &mut Value, delivered: &[(String, String)]) {
+    if delivered.is_empty() {
+        return;
+    }
+    result["channel"] = json!("comfy-upload");
+    for key in ["filename", "personFilename", "placedSubjectFilename"] {
+        let current = result.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+        if let Some((_, remote)) = delivered.iter().find(|(local, _)| local == &current) {
+            result[key] = json!(remote);
+        }
+    }
+}
+
+/// 写一个文件到 ComfyUI 的 input 目录：**直写被系统拒绝就改让 ComfyUI 自己写**。
+///
+/// 三个调用点（投放原图 / 摆好的人物图 / 遮罩）**必须都走这里** ——
+/// 2026-09-29 用户报的"写停放好的人物图失败：拒绝访问 (os error 5)"就是第三个调用点
+/// 当场报错、没走退路，害得整条阶段二停在"没拿到 personFilename"。
+fn write_or_defer(
+    target: &Path,
+    bytes: Vec<u8>,
+    delivery: &mut Delivery,
+) -> Result<(), ToolFailure> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    match std::fs::write(target, &bytes) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            delivery.defer(target, bytes, format!("{error}"));
+            Ok(())
         }
     }
 }
@@ -311,15 +386,12 @@ fn copy_if_needed(source: &Path, target: &Path, delivery: &mut Delivery) -> Resu
             format!("读不出要投放的原件（{}）：{}", source.display(), take_text(&e.to_string(), 200)),
         )
     })?;
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
     let same = match (std::fs::metadata(target), std::fs::metadata(source)) {
         (Ok(to), Ok(from)) => to.len() == from.len(),
         _ => false,
     };
-    if !same && std::fs::write(target, &bytes).is_err() {
-        delivery.defer(target, bytes);
+    if !same {
+        write_or_defer(target, bytes, delivery)?;
     }
     Ok(())
 }
@@ -651,12 +723,28 @@ pub fn make_mask_with(
             );
             let placed_name = format!("placed-{}", subject_file);
             let placed_path = input_dir.join(&placed_name);
-            if let Some(parent) = placed_path.parent() {
-                std::fs::create_dir_all(parent).ok();
+            // ⚠ 编码成字节后**一律走 `write_or_defer`**（2026-09-29 用户 bug）：
+            // 原来这里是 `scaled_person.save(&placed_path)` 直写 + 当场报错，
+            // 于是"投放原图能过（走 HTTP）、摆好的人物图却过不去"—— 阶段二就卡在
+            // "没拿到 personFilename"。真因是后端进程写不进项目外，**不是** input 的权限。
+            let mut placed_bytes: Vec<u8> = Vec::new();
+            {
+                use image::ImageEncoder;
+                image::codecs::png::PngEncoder::new(&mut placed_bytes)
+                    .write_image(
+                        scaled_person.as_raw(),
+                        w as u32,
+                        h as u32,
+                        image::ExtendedColorType::Rgb8,
+                    )
+                    .map_err(|e| {
+                        ToolFailure::new(
+                            "COMFY_INPUT_FAILED",
+                            format!("编码摆放好的人物图失败（{placed_name}）：{e}"),
+                        )
+                    })?;
             }
-            scaled_person.save(&placed_path).map_err(|e| {
-                ToolFailure::new("COMFY_INPUT_FAILED", format!("写停放好的人物图失败：{e}"))
-            })?;
+            write_or_defer(&placed_path, placed_bytes, delivery)?;
             let new_bbox = mask_bbox(&scaled_mask, w as usize, h as usize);
             if let Some((nx0, ny0, nx1, ny1)) = new_bbox {
                 placed_subject = Some((
@@ -1467,35 +1555,15 @@ fn write_mask_png(
     target: &Path,
     delivery: &mut Delivery,
 ) -> Result<(), ToolFailure> {
-    let fail = |e: String| {
-        ToolFailure::new(
-            "COMFY_INPUT_FAILED",
-            format!(
-                "遮罩写不进 {}：{}",
-                target.parent().map(|p| p.display().to_string()).unwrap_or_default(),
-                take_text(&e, 200)
-            ),
-        )
-    };
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    let buffer = image::GrayImage::from_raw(w, h, pixels.to_vec())
-        .ok_or_else(|| fail("像素数与尺寸对不上".to_string()))?;
     // 编成 PNG 字节**只做一次**：直写用它、直写被拒时也用它去走 ComfyUI 的 HTTP 上传
     let mut bytes: Vec<u8> = Vec::new();
     {
         use image::ImageEncoder;
         image::codecs::png::PngEncoder::new(&mut bytes)
             .write_image(pixels, w, h, image::ExtendedColorType::L8)
-            .map_err(|e| fail(e.to_string()))?;
+            .map_err(|e| ToolFailure::new("COMFY_INPUT_FAILED", format!("编码遮罩失败：{e}")))?;
     }
-    let _ = buffer;
-    if std::fs::write(target, &bytes).is_err() {
-        // 直写被系统拒（真机实测 Access denied）→ 攒给 ComfyUI 自己写
-        delivery.defer(target, bytes);
-    }
-    Ok(())
+    write_or_defer(target, bytes, delivery)
 }
 
 // ---------------------------------------------------------------------------
@@ -1554,10 +1622,7 @@ pub async fn tool_use_attachment(
     let input_dir = resolve_input_dir(state)?;
     let mut delivery = Delivery::for_input_dir(&input_dir);
     let mut result = use_attachment(state, &attachment_id, wanted.as_deref(), &mut delivery)?;
-    if let Some(name) = delivery.flush(state).await? {
-        result["filename"] = json!(name);
-        result["channel"] = json!("comfy-upload");
-    }
+    apply_uploaded_names(&mut result, &delivery.flush(state).await?);
     Ok(crate::tools::ToolOutcome::new(result.to_string(), result))
 }
 
@@ -1574,10 +1639,7 @@ pub async fn tool_use_media(
     let input_dir = resolve_input_dir(state)?;
     let mut delivery = Delivery::for_input_dir(&input_dir);
     let mut result = use_media(state, media_id, wanted.as_deref(), &mut delivery)?;
-    if let Some(name) = delivery.flush(state).await? {
-        result["filename"] = json!(name);
-        result["channel"] = json!("comfy-upload");
-    }
+    apply_uploaded_names(&mut result, &delivery.flush(state).await?);
     Ok(crate::tools::ToolOutcome::new(result.to_string(), result))
 }
 
@@ -1589,11 +1651,10 @@ pub async fn tool_make_mask(
     let input_dir = resolve_input_dir(state)?;
     let mut delivery = Delivery::for_input_dir(&input_dir);
     let mut result = make_mask_with(state, arguments, &mut delivery)?;
-    if let Some(name) = delivery.flush(state).await? {
-        // 遮罩文件名以 ComfyUI 收到的那份为准（`LoadImageMask.image` 填的就是它）
-        result["maskFilename"] = json!(name);
-        result["channel"] = json!("comfy-upload");
-    }
+    // ⚠ 走 HTTP 的可能是**摆放后的人物图**（`placed-…`）而不只是遮罩 ——
+    //   所以按名字回填（`filename` / `personFilename` / `placedSubjectFilename`），不许写死一个键。
+    let delivered = delivery.flush(state).await?;
+    apply_uploaded_names(&mut result, &delivered);
     Ok(crate::tools::ToolOutcome::new(result.to_string(), result))
 }
 
@@ -1732,6 +1793,163 @@ mod tests {
             }
         }
         img
+    }
+
+    /// 项目内的暂存目录（**不要用 `%TEMP%`**：受限会话里"映像在工作区内"的进程写它会被拒 ——
+    /// 那正是本模块要模拟的现场，`crate::confinement` 的 tests 里有同一段说明）。
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(".scratch")
+            .join(format!("image-edit-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 一个"人物图已经投进 input、但 input 目录**写不进**"的后端状态。
+    ///
+    /// ⚠ **造法必须与受限现场同错码，且不依赖这台机器的目录 ACL**：
+    /// 在目标文件名上**放一个同名目录** —— Windows 上"在目录的位置建文件"必然回
+    /// `ERROR_ACCESS_DENIED (os error 5)`，正是"映像在工作区内"那一类进程拿到的错。
+    /// （`crate::confinement` 的 tests 用的是同一个手法，两处都别改成"改 ACL"。）
+    fn 写不进_input_的状态(label: &str) -> (crate::routes::AppState, PathBuf) {
+        let root = scratch(label);
+        let shared = root.join("shared");
+        let input = shared.join("input");
+        let output = shared.join("output");
+        std::fs::create_dir_all(&input).unwrap();
+        std::fs::create_dir_all(&output).unwrap();
+        white_bg_with_block(200, 200, 70, 40, 130, 160).save(input.join("person-m344.png")).unwrap();
+
+        let conn = crate::db::open_memory().unwrap();
+        let schema = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("db").join("schema.sqlite.sql"),
+        )
+        .expect("读得到真 schema");
+        conn.execute_batch(&schema).expect("建 schema");
+        let state =
+            crate::routes::AppState::new(conn, ":memory:", root.join("media"));
+        crate::capture::save_capture_config(
+            &state,
+            crate::capture::CaptureConfig {
+                output_dir: Some(output.display().to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("存捕获配置");
+        (state, input)
+    }
+
+    /// **摆放后的人物图直写被拒时，要改让 ComfyUI 自己写，而不是当场报错**
+    /// （2026-09-29 用户 bug：阶段二就卡在"写停放好的人物图失败：拒绝访问 (os error 5)"，
+    /// 于是没拿到 `personFilename`、也提交不了合成；同一轮里 `comfy_use_media` 却成功了
+    /// ——因为它走的是 `/upload/image`）。
+    #[test]
+    fn 摆放的人物图写不进时改走_upload_而不是报错() {
+        let (state, input) = 写不进_input_的状态("placed");
+        // 占住"摆好的人物图"该落地的那个文件名 → 直写必然拿 ERROR_ACCESS_DENIED
+        std::fs::create_dir(input.join("placed-person-m344.png")).unwrap();
+
+        let args = json!({
+            "mode": "subject",
+            "subjectFilename": "person-m344.png",
+            "width": 200,
+            "height": 200,
+            "scale": 1.0,
+            "x": 0.5,
+            "y": 0.5,
+        });
+        let mut delivery = Delivery::for_input_dir(&input);
+        let result = make_mask_with(&state, &args, &mut delivery)
+            .expect("直写被拒也要给出结果（那份内容攒给 ComfyUI 写），不能当场报错");
+
+        assert!(!delivery.is_empty(), "写不进去的那一份必须攒着等 /upload/image");
+        let (target, bytes, why) = &delivery.pending[0];
+        assert_eq!(
+            target.file_name().unwrap().to_string_lossy(),
+            "placed-person-m344.png",
+            "攒的必须是**摆好的那一份**（丢错文件 = 阶段二拿错图）"
+        );
+        assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']), "攒的要是编好的 PNG 字节：{:02x?}", &bytes[..4]);
+        assert!(why.contains("os error 5"), "直写被拒的原因要原样带出来：{why}");
+
+        assert_eq!(result["personFilename"], "placed-person-m344.png");
+        assert_eq!(result["placedSubjectFilename"], "placed-person-m344.png");
+        assert_eq!(result["maskGenerated"], false, "主体档本来就不写遮罩");
+        assert!(result.get("channel").is_none(), "还没 flush，不许先说走了 upload");
+        std::fs::remove_dir_all(input.parent().unwrap().parent().unwrap()).ok();
+    }
+
+    /// **ComfyUI 认下的名字才是 `LoadImage` 认得的那个** —— flush 完必须按名字回填，
+    /// 否则模型会拿一个"我们以为写进去了"的名字去覆盖工作流（表现是 `Invalid image file`）。
+    #[test]
+    fn 上传回来的文件名会回填到结果里() {
+        let mut result = json!({
+            "filename": "comfyhub_mask_ab12cd.png",
+            "personFilename": "placed-person-m344.png",
+            "placedSubjectFilename": "placed-person-m344.png",
+        });
+        apply_uploaded_names(
+            &mut result,
+            &[
+                ("placed-person-m344.png".to_string(), "placed-person.png".to_string()),
+                ("comfyhub_mask_ab12cd.png".to_string(), "comfyhub_mask_ab12cd.png".to_string()),
+            ],
+        );
+        assert_eq!(result["personFilename"], "placed-person.png");
+        assert_eq!(result["placedSubjectFilename"], "placed-person.png");
+        assert_eq!(result["filename"], "comfyhub_mask_ab12cd.png");
+        assert_eq!(result["channel"], "comfy-upload");
+
+        // 什么都没上传（直写就成功了）→ 一个键都不许动
+        let mut untouched = json!({"personFilename": "person-m344.png"});
+        apply_uploaded_names(&mut untouched, &[]);
+        assert_eq!(untouched, json!({"personFilename": "person-m344.png"}));
+    }
+
+    /// 遮罩那一档**走的是同一条退路**（它早就有，但没人钉住"被拒时不报错"）。
+    #[test]
+    fn 遮罩写不进时也改走_upload() {
+        let (state, input) = 写不进_input_的状态("mask");
+        std::fs::create_dir(input.join("blocked-mask.png")).unwrap();
+        let args = json!({
+            "mode": "rect",
+            "region": "0.1,0.1,0.4,0.4",
+            "width": 120,
+            "height": 120,
+            "filename": "blocked-mask.png",
+        });
+        let mut delivery = Delivery::for_input_dir(&input);
+        let result = make_mask_with(&state, &args, &mut delivery).expect("直写被拒也不当场报错");
+        assert_eq!(result["maskGenerated"], true);
+        assert_eq!(delivery.pending.len(), 1);
+        assert_eq!(
+            delivery.pending[0].0.file_name().unwrap().to_string_lossy(),
+            "blocked-mask.png"
+        );
+        std::fs::remove_dir_all(input.parent().unwrap().parent().unwrap()).ok();
+    }
+
+    /// 写得进去时就**别多走一趟 HTTP**（投放原图每次都上传会白白多花几十 MB 流量）。
+    #[test]
+    fn 写得进去时不攒投递() {
+        let (state, input) = 写不进_input_的状态("direct");
+        let args = json!({
+            "mode": "rect",
+            "region": "full",
+            "width": 120,
+            "height": 120,
+            "filename": "plain-mask.png",
+        });
+        let mut delivery = Delivery::for_input_dir(&input);
+        make_mask_with(&state, &args, &mut delivery).unwrap();
+        assert!(delivery.is_empty(), "直写成功就不该攒：{}", input.join("plain-mask.png").display());
+        assert!(input.join("plain-mask.png").is_file(), "而且文件真的要落盘了");
+        std::fs::remove_dir_all(input.parent().unwrap().parent().unwrap()).ok();
     }
 
     /// `mode="subject"`：白底上抠一个方块，遮罩就该是**那个方块的形状**（不是整块矩形画面）。
