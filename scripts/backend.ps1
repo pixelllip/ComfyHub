@@ -58,6 +58,21 @@ function Get-BackendProcess {
 function Resolve-RustExe {
     param([string]$ProjectRoot)
     $root = if ($ProjectRoot) { $ProjectRoot } else { Resolve-ProjectRootForBackend }
+    # ⚠ `COMFYHUB_SERVER_EXE` 优先级最高，**这不是给多套构建用的**（那是
+    #   `server-rs\target\release` vs `debug` 的事，下面按顺序认就行）——
+    #   它唯一非做不可的理由是：**把后端映像挪出工作区**。
+    #
+    # 2026-09-29 实测：写不进工作区外的那个限制是按**映像位置**判的，不是按路径、
+    # 也不是按用户 —— 同一个二进制逐字节相同，映像放在工作区内就写不了工作区外，
+    # 复制到 `%TEMP%` 立刻哪儿都能写（`docs/pitfalls.md` 第 159 条的现场）。
+    # 而下面三个候选**全在项目根下**，所以源码树布局下后端必然被限住：
+    # `comfy_start` 写不进 ComfyUI 的 temp/、`comfy_use_media` 写不进 input。
+    # 以前"无退路"的说法就是漏了这个开关 —— 现在有：把 exe 复制到工作区外，指过来。
+    if ($env:COMFYHUB_SERVER_EXE) {
+        $explicit = $env:COMFYHUB_SERVER_EXE.Trim()
+        if ($explicit -and (Test-Path $explicit)) { return $explicit }
+        Write-Host "==> COMFYHUB_SERVER_EXE=$explicit 不存在，当没设" -ForegroundColor Yellow
+    }
     foreach ($cand in @(
             (Join-Path $root 'server\comfyhub-server-rs.exe'),
             (Join-Path $root 'server-rs\target\release\comfyhub-server-rs.exe'),

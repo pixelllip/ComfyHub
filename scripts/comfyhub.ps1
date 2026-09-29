@@ -1,28 +1,23 @@
 <#
 .SYNOPSIS
-    ComfyHub 整套服务的统一生命周期入口：MySQL + Kotlin 后端（+ 可选桌面 App）。
+    ComfyHub 整套服务的统一生命周期入口：后端（Rust，+ 可选桌面 App）。
 
 .DESCRIPTION
-    之前 mysql.ps1 和 server.ps1 各管一半，会出现这些坏状态：
-      · 后端在跑但 MySQL 挂了 —— 所有接口 500，而 `server.ps1 start` 看到后端已在运行就直接返回，不修
-      · `mysql.ps1 stop` 之后后端还活着，静静地对着一个死库
-      · 没有任何一条命令能一次看清「三个东西分别是什么状态」
-    这个脚本负责把它们**当成一个整体**来起停和体检，保证启动顺序（MySQL 先就绪 → 后端才起）
-    和「后端健康 = 数据库也健康」。
+    P2（2026-09-23）起数据库是 **SQLite**（驱动自带引擎，P4 起后端是单个 Rust exe），
+    MySQL 已在 2026-09-29 彻底退役：`mysql.ps1` 连同"老库一次性搬迁"这条路一起删掉了。
 
-    MySQL 实例目录可以在项目外任意盘/目录。带了 -DataDir 就原样透传给 mysql.ps1 / server.ps1；
-    不带时由它们自己按 COMFYHUB_MYSQL_DIR → <项目>\.mysql-location.json → <项目>\.mysql 解析。
+    这个脚本负责把**后端 + 桌面 App**当成一个整体来起停和体检，保证"后端健康 = 数据库也健康"。
+    （SQLite 是单文件嵌入式库，没有独立进程，所以"数据库有没有起"这个问题本身消失了。）
 
 .EXAMPLE
-    pwsh -File scripts\comfyhub.ps1 up            # 起 MySQL + 后端
+    pwsh -File scripts\comfyhub.ps1 up            # 起后端
     pwsh -File scripts\comfyhub.ps1 up -WithApp   # 再顺带把桌面 App 拉起来
-    pwsh -File scripts\comfyhub.ps1 status        # 三者状态一览
-    pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端 → MySQL）
-    pwsh -File scripts\comfyhub.ps1 release       # 只停后端 + MySQL，不动 App（App 退出时调它）
+    pwsh -File scripts\comfyhub.ps1 status        # 后端 / App 状态一览
+    pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
+    pwsh -File scripts\comfyhub.ps1 release       # 只停后端，不动 App（App 退出时调它）
     pwsh -File scripts\comfyhub.ps1 watch -OwnerPid <pid>   # 给"已经在跑服务"的 App 补挂退出守护
     pwsh -File scripts\comfyhub.ps1 restart
     pwsh -File scripts\comfyhub.ps1 logs
-    pwsh -File scripts\comfyhub.ps1 up -DataDir 'D:\mysql\comfyhub'   # 指定 MySQL 存储位置
 #>
 [CmdletBinding()]
 param(
@@ -38,9 +33,6 @@ param(
     # 不透传就会出现"up 说用 Rust、server.ps1 自己去起 Kotlin"这种两端不一致。
     [ValidateSet('auto', 'rust', 'kotlin')]
     [string]$Backend = $env:COMFYHUB_BACKEND,
-
-    # MySQL 实例目录；留空则走默认解析链
-    [string]$DataDir,
 
     # 调用方（桌面 App）的 PID。传了它 = “这些服务是 App 拉起来的”：
     # 服务起来后会挂一个守护进程盯着这个 PID，App 一退出就把**这次启动过的**服务停掉。
@@ -59,13 +51,11 @@ $ErrorActionPreference = 'Continue'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Scripts     = $PSScriptRoot
 $RunDir      = Join-Path $ProjectRoot '.run'
-$MysqlPort   = 3307
 
 # 「关 App 自动停服务」的状态文件：里面记着当前负责的 watchdog PID
 $WatchState = Join-Path $RunDir 'watch-owner.json'
 
-# 这次 up 到底启动了哪几个服务（只停自己起的，见 watch-owner.ps1）
-$Script:StartedMysql = $false
+# 这次 up 到底启动了哪个服务（只停自己起的，见 watch-owner.ps1）
 $Script:StartedApi   = $false
 
 New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
@@ -130,7 +120,7 @@ function Test-TcpPort([string]$TargetHost, [int]$TargetPort, [int]$TimeoutMs = 2
       端口上"有没有人在听"的快速判断，所有"服务是否还活着"的探测都先过这一道。
 
       为什么不能直接去连：连一个没在监听的端口本机要等 SYN 重传，这台机器上实测
-      **恒定 ~2 秒**（Invoke-RestMethod / mysqladmin / 裸 TcpClient 都一样；开着
+      **恒定 ~2 秒**（Invoke-RestMethod / 裸 TcpClient 都一样；开着
       Clash/mihomo 这类 TUN 代理时 RST 会被吃掉，只会更明显）。冷启动时"服务还没起来"
       恰恰是最常见的状态，每次探测白等 2 秒，几次就把启动拖长了。
       BeginConnect + 200ms 超时则最多 200ms，端口开着时和正常连接一样快（实测 ~12ms）。
@@ -145,36 +135,11 @@ function Test-TcpPort([string]$TargetHost, [int]$TargetPort, [int]$TimeoutMs = 2
     finally { $client.Dispose() }
 }
 
-function Resolve-MysqlDataDir {
-    <#
-      与 mysql.ps1 保持同一套解析顺序（这里刻意重复实现，不引共享模块）：
-        -DataDir → COMFYHUB_MYSQL_DIR → <项目>\.mysql-location.json → <项目>\.mysql
-      相对路径按项目根目录展开，返回规范化绝对路径。
-    #>
-    $cand = @($DataDir, $env:COMFYHUB_MYSQL_DIR) | Where-Object { $_ } | Select-Object -First 1
-    if (-not $cand) {
-        $pointer = Join-Path $ProjectRoot '.mysql-location.json'
-        if (Test-Path $pointer) {
-            try {
-                $json = Get-Content -Path $pointer -Raw -Encoding utf8 | ConvertFrom-Json
-                if ($json -and $json.dataDir) { $cand = [string]$json.dataDir }
-            } catch {
-                Say "  警告: $pointer 解析失败，已忽略（$($_.Exception.Message)）" 'Yellow'
-            }
-        }
-    }
-    if (-not $cand) { return (Join-Path $ProjectRoot '.mysql') }
-    if (-not [System.IO.Path]::IsPathRooted($cand)) { $cand = Join-Path $ProjectRoot $cand }
-    return [System.IO.Path]::GetFullPath($cand).TrimEnd('\')
-}
-
-$MysqlInstanceDir = Resolve-MysqlDataDir
-$MysqlDataPath    = Join-Path $MysqlInstanceDir 'data'
-$MysqlErrorLog    = Join-Path $MysqlInstanceDir 'mysql-error.log'
-
-# 透传给 mysql.ps1 / server.ps1 的 -DataDir（留空就不传，让它们自己解析）
-$DataDirArgs = @()
-if ($DataDir) { $DataDirArgs = @('-DataDir', $DataDir) }
+# ---------------------------------------------------------------------------
+#  SQLite（P2 起的默认库；MySQL 已于 2026-09-29 退役）
+# ---------------------------------------------------------------------------
+$Script:SqliteDir = Join-Path $ProjectRoot '.db'
+$Script:SqliteDb = Join-Path $Script:SqliteDir 'comfyhub.db'
 
 # 中文是双宽字符，PowerShell 的 -f 对齐按"字符数"算会错位，这里按显示宽度手工补空格
 function Get-DisplayWidth([string]$s) {
@@ -200,86 +165,11 @@ function Format-Row([string]$name, [string]$state, [string]$detail) {
 }
 
 # ---------------------------------------------------------------------------
-#  探测
-# ---------------------------------------------------------------------------
-
-function Resolve-MysqlBin([string]$exe) {
-    <#
-      注意：不要写成 Get-ChildItem 'D:\tools\mysql\*\bin' -Filter xxx，
-      路径里带通配符时 -Filter 不会被文件系统提供程序正确应用，会静默返回空。
-    #>
-    $mysqlHome = $env:COMFYHUB_MYSQL_HOME
-    $cands = @()
-    if ($mysqlHome) { $cands += (Join-Path $mysqlHome "bin\$exe") }
-
-    # 发布包自带的便携版（<根>\mysql）要排在 D:\tools 前面：
-    # 装配好的发布包里有自己那份 MySQL，去找开发机路径的话换台机器就找不到，
-    # Test-MySqlAlive 会永远为假 → 状态页明明库在跑却报"未运行"。
-    $cands += (Join-Path $ProjectRoot "mysql\bin\$exe")
-
-    foreach ($root in @('D:\tools\mysql', 'C:\tools\mysql')) {
-        if (-not (Test-Path $root)) { continue }
-        $cands += (Join-Path $root "bin\$exe")
-        Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            $cands += (Join-Path $_.FullName "bin\$exe")
-        }
-    }
-    return ($cands | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1)
-}
-
-function Get-MysqldProcess {
-    Get-CimInstance Win32_Process -Filter "Name='mysqld.exe'" -ErrorAction SilentlyContinue
-}
-
-function Test-MySqlAlive {
-    # 先免费判断端口（死端口 ~300ms），再花 60ms 做权威的 mysqladmin ping，
-    # 也省掉"库根本没起"时那次没必要的目录枚举。
-    if (-not (Test-TcpPort '127.0.0.1' $MysqlPort)) { return $false }
-    if (-not $Script:MysqlAdminExe) { $Script:MysqlAdminExe = Resolve-MysqlBin 'mysqladmin.exe' }
-    if (-not $Script:MysqlAdminExe) { return $false }
-    & $Script:MysqlAdminExe --protocol=TCP -h 127.0.0.1 -P $MysqlPort -u comfyhub --password=comfyhub ping 2>&1 | Out-Null
-    return ($LASTEXITCODE -eq 0)
-}
-
-# ---------------------------------------------------------------------------
 #  SQLite（P2 起的默认库）
 # ---------------------------------------------------------------------------
-# MySQL 现在是**可选的**：只有"老库里有数据、新库还没建"时才会被拉起来做一次性搬迁。
-# 发布包里连 mysql/ 目录都没有（packaging\manifest.json 已去掉那个组件），
-# 所以下面所有涉及 MySQL 的判断都必须容得下"它根本不存在"。
 $Script:SqliteDir = Join-Path $ProjectRoot '.db'
 $Script:SqliteDb = Join-Path $Script:SqliteDir 'comfyhub.db'
 
-function Test-LegacyMysqlData {
-    # 老库的实例目录里到底有没有数据（没有就不必谈搬迁）
-    Test-Path (Join-Path $MysqlDataPath 'mysql')
-}
-
-function Test-LegacyMigrationNeeded {
-    # 需要一次性搬迁：新库还没建 **且** 老库里有真实数据
-    (-not (Test-Path $Script:SqliteDb)) -and (Test-LegacyMysqlData)
-}
-
-function Invoke-LegacyMigration {
-    <#  把老 MySQL 数据搬进新的 SQLite 库（走 server.ps1 migrate）。
-        失败**不拦 up**：宁可让用户看到一个空的新库，也不能因为搬迁问题连后端都起不来。  #>
-    Say '  检测到老的 MySQL 数据、而且还没有 SQLite 库 —— 先做一次性搬迁（P2）…' 'Cyan'
-    if (-not (Start-MySqlPart)) {
-        Say '  MySQL 没能起来，跳过搬迁：后端会用空的新库启动（老数据仍在 .mysql 里，没动过）' 'Yellow'
-        return $false
-    }
-    $migrateScript = Join-Path $Scripts 'server.ps1'
-    # ⚠ 必须 `| Out-Host`：不加的话子进程的 stdout 会变成**这个函数的返回值**，
-    # 调用点那个 `| Out-Null` 会把搬迁报告整段吃掉（报告看不到 = 不知道搬没搬对）；
-    # 而且返回值被数组污染后 `-not (Invoke-LegacyMigration)` 之类的判断永远不对（AGENTS §5）。
-    & pwsh -NoProfile -File $migrateScript migrate | Out-Host
-    $migrateCode = $LASTEXITCODE
-    if ($migrateCode -ne 0) {
-        Say "  搬迁失败（退出码 $migrateCode，详见上面的输出）：后端会用空的新库启动，老数据仍在 .mysql 里，没动过" 'Yellow'
-        return $false
-    }
-    return $true
-}
 
 function Get-ApiProcess {
     # 认**两个后端**（P4 收尾后默认是 Rust；灰度期可能还有旧的 Kotlin 在跑）
@@ -347,16 +237,11 @@ function Wait-ApiPortReleased {
 # ---------------------------------------------------------------------------
 
 function Get-StackStatus {
-    $mysqlProc = Get-MysqldProcess
-    $mysqlAlive = Test-MySqlAlive
     $apiProc = Get-ApiProcess
     $health = Get-ApiHealth
     $app = Get-AppProcess
 
     return [pscustomobject]@{
-        MysqlProcess = @($mysqlProc).Count
-        MysqlPids    = @($mysqlProc | ForEach-Object { $_.ProcessId })
-        MysqlAlive   = $mysqlAlive
         ApiProcess   = @($apiProc).Count
         ApiHealth    = $health
         AppProcess   = @($app).Count
@@ -371,16 +256,12 @@ function Show-Status {
     Say '  ComfyHub 服务状态' 'White'
     Say '  ────────────────────────────────────────────────────────────'
 
-    # 数据库：P2 起是 SQLite 文件（后端自己建 / 自己迁移），不再需要 MySQL 先就绪
+    # 数据库：P2 起是 SQLite 文件（后端自己建），没有独立进程
     if (Test-Path $Script:SqliteDb) {
         $sizeMb = [math]::Round((Get-Item $Script:SqliteDb).Length / 1MB, 2)
         Say (Format-Row '数据库' 'SQLite' "$Script:SqliteDb  ($sizeMb MB)") 'Green'
     } else {
-        Say (Format-Row '数据库' '待建' "$Script:SqliteDb（后端首次启动会建；有老 MySQL 数据时会先自动搬迁）") 'Yellow'
-    }
-    # 老 MySQL 只在搬迁时有用：它在跑就报一句，不在跑也**不算异常**
-    if ($s.MysqlAlive) {
-        Say (Format-Row '旧库' 'MySQL 运行中' "127.0.0.1:$MysqlPort  (PID $(($s.MysqlPids) -join ','))，只有 migrate 会读它") 'DarkGray'
+        Say (Format-Row '数据库' '待建' "$Script:SqliteDb（后端首次启动会建）") 'Yellow'
     }
 
     # 后端（报的是端到端健康，包含数据库连通性）
@@ -441,28 +322,6 @@ function Show-Status {
 #  启动
 # ---------------------------------------------------------------------------
 
-function Start-MySqlPart {
-    Trace 'MySQL: 存活检测'
-    if (Test-MySqlAlive) { Say '  MySQL 已经在跑了。' 'DarkGray'; Trace 'MySQL: 本来就在跑'; return $true }
-
-    Say '  [1/3] 启动 MySQL…' 'Cyan'
-    & pwsh -NoProfile -File (Join-Path $Scripts 'mysql.ps1') start @DataDirArgs
-    Trace 'MySQL: mysql.ps1 start 已返回'
-
-    # mysql.ps1 内部已经等过一轮，这里再兜一次底，确保"就绪"再往下走
-    $deadline = (Get-Date).AddSeconds(60)
-    while ((Get-Date) -lt $deadline) {
-        if (Test-MySqlAlive) {
-            $Script:StartedMysql = $true
-            Trace 'MySQL: 就绪'
-            return $true
-        }
-        Start-Sleep -Milliseconds 200
-    }
-    Say "  MySQL 没能就绪，请查看 $MysqlErrorLog" 'Red'
-    return $false
-}
-
 function Start-ApiPart {
     Trace '后端: 探测健康'
     $health = Get-ApiHealth
@@ -476,7 +335,7 @@ function Start-ApiPart {
     }
     if ($apiRunning) {
         Say '  后端在跑但数据库不通，先把它停掉再重启…' 'Yellow'
-        & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop -Port $Script:ApiPort @DataDirArgs
+        & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop -Port $Script:ApiPort
         Start-Sleep 1
     }
 
@@ -486,7 +345,7 @@ function Start-ApiPart {
     # 于是"后端在跑、脚本却说没起来"。`-Port 0` 表示"自动"，由后端挑好写进 .run\api.json。
     # `-Backend` 要**透传**给 server.ps1：不透传就会出现"up 说用 Rust、server.ps1 自己起 Kotlin"
     $backendArgs = if ($Backend) { @('-Backend', $Backend) } else { @() }
-    $apiArgs = @('-Port', "$Script:ApiPort") + $DataDirArgs + $backendArgs
+    $apiArgs = @('-Port', "$Script:ApiPort") + $backendArgs
     if ($SkipBuild) {
         & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') start -SkipBuild @apiArgs
     } else {
@@ -522,7 +381,7 @@ function Start-ApiPart {
     if ($Script:ApiPort -gt 0) {
         Say "  端口 $Script:ApiPort 起不来（旧进程没退干净 / 端口被保留）——改用随机端口重试一次…" 'Yellow'
         $script:ApiPort = 0
-        $retryArgs = @('-Port', '0') + $DataDirArgs + $backendArgs
+        $retryArgs = @('-Port', '0') + $backendArgs
         if ($SkipBuild) {
             & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') start -SkipBuild @retryArgs
         } else {
@@ -745,21 +604,20 @@ function Start-OwnerWatchdog {
       挂一个「脱离进程树 + 隐藏窗口」的 watchdog 盯着 App 的 PID（见 scripts\watch-owner.ps1）。
       只是锦上添花：拉不起来也不影响启动，只是关 App 时服务继续留着。
 
-      -StopApi / -StopMysql 显式指定要停哪几个服务；不传就沿用 up 的判定
-      （这次真正启动过的那几个，即 $Script:StartedApi / $Script:StartedMysql），
+      -StopApi 显式指定要不要跟着停后端；不传就沿用 up 的判定
+      （这次真正启动过的那个，即 $Script:StartedApi），
       所以 up 的行为和以前完全一样。`watch` 动作会用显式参数覆盖它。
     #>
     param(
         [int]$Owner = 0,
-        [bool]$StopApi = $Script:StartedApi,
-        [bool]$StopMysql = $Script:StartedMysql
+        [bool]$StopApi = $Script:StartedApi
     )
     $watcher = Join-Path $Scripts 'watch-owner.ps1'
     if (-not (Test-Path $watcher)) {
         Say '  提示: 找不到 scripts\watch-owner.ps1，关闭 App 时不会自动停服务。' 'Yellow'
         return $false
     }
-    if (-not $StopApi -and -not $StopMysql) {
+    if (-not $StopApi) {
         Say '  没有需要跟着 App 一起停的服务，跳过守护进程。' 'DarkGray'
         return $false
     }
@@ -778,8 +636,6 @@ function Start-OwnerWatchdog {
         '-Token', $token
     )
     if ($StopApi) { $parts += '-StopApi' }
-    if ($StopMysql) { $parts += '-StopMysql' }
-    if ($DataDir) { $parts += @('-DataDir', "`"$DataDir`"") }
     $cmdline = $parts -join ' '
 
     # 先把「认领令牌」写进状态文件，再拉 watchdog：它自己启动要几百毫秒，
@@ -809,7 +665,6 @@ function Start-OwnerWatchdog {
     }
 
     $what = @()
-    if ($StopMysql) { $what += 'MySQL' }
     if ($StopApi) { $what += '后端' }
     Say "  已挂守护进程（$how）：App(PID $Owner) 退出后自动停 $($what -join ' + ')" 'DarkGray'
     Trace "watchdog 已挂（owner=$Owner, $how）"
@@ -823,14 +678,8 @@ function Show-RuntimeHintsIfAvailable {
     #>
     if (-not (Get-Command Show-RuntimeFailureHints -ErrorAction SilentlyContinue)) { return }
 
-    $binDir = $null
-    try {
-        $mysqld = Resolve-MysqlBin 'mysqld.exe'
-        if ($mysqld) { $binDir = Split-Path -Parent $mysqld }
-    } catch { }
-
     # Java 交给 runtime-deps.ps1 自己解析（发布包 <根>\jre → PATH → 本机常见 JDK 位置）
-    Show-RuntimeFailureHints -ProjectRoot $ProjectRoot -MySqlBinDir $binDir | Out-Null
+    Show-RuntimeFailureHints -ProjectRoot $ProjectRoot | Out-Null
 }
 
 function Do-Up {
@@ -884,19 +733,14 @@ function Do-Up {
         }
     }
 
-    # 数据库：SQLite 由后端自己建。**唯一**会用到 MySQL 的情形是"老库有数据、新库还没建"
-    # （P2 换库的一次性过渡）—— 那时先拉起来搬一次，搬完照旧只跑 SQLite。
-    if (Test-LegacyMigrationNeeded) {
-        Invoke-LegacyMigration | Out-Null
-    } else {
-        Say "  数据库: SQLite $Script:SqliteDb（不需要 MySQL）" 'DarkGray'
-    }
+    # 数据库：SQLite 单文件，没有独立进程，**由后端自己建**（`db::open_or_create`）
+    Say "  数据库: SQLite $Script:SqliteDb" 'DarkGray'
 
     if (-not (Start-ApiPart))   { Show-Status | Out-Null; Show-RuntimeHintsIfAvailable; exit 1 }
     if ($WithApp) { Start-AppPart | Out-Null }
 
     if ($OwnerPid -gt 0) {
-        if ($Script:StartedMysql -or $Script:StartedApi) {
+        if ($Script:StartedApi) {
             Start-OwnerWatchdog -Owner $OwnerPid | Out-Null
         } else {
             Say '  服务本来就都在跑，这次不会跟着 App 退出而停止。' 'DarkGray'
@@ -914,7 +758,7 @@ function Do-Up {
 
 function Do-Down {
     Say ''
-    Say '  ComfyHub 停止中（App → 后端 → 老库）' 'White'
+    Say '  ComfyHub 停止中（App → 后端）' 'White'
 
     # 手工停了就别让 watchdog 再补一刀
     Clear-OwnerWatchdog
@@ -925,18 +769,11 @@ function Do-Down {
     } else { Say '  桌面 App 未运行。' 'DarkGray' }
 
     Say '  [2/2] 停止后端…' 'Cyan'
-    & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop -Port $Script:ApiPort @DataDirArgs
+    & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop -Port $Script:ApiPort
 
-    # 必须等后端真的退出再停库，否则它会一边报错一边重连
+    # 必须等后端真的退出，否则 App 一关它就被半路掐断
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline -and @(Get-ApiProcess).Count -gt 0) { Start-Sleep -Milliseconds 400 }
-
-    # 老库只在搬迁时才会被拉起来：没在跑就跳过 —— 发布包里连 mysql/ 都没有，
-    # 无条件调 mysql.ps1 stop 会当场抛"找不到 mysqld"（Do-Down 后半截全断）。
-    if (@(Get-MysqldProcess).Count -gt 0) {
-        Say '  （老库 MySQL 还在跑，顺手停掉）' 'Cyan'
-        & pwsh -NoProfile -File (Join-Path $Scripts 'mysql.ps1') stop @DataDirArgs
-    }
 
     Say ''
     Show-Status | Out-Null
@@ -944,31 +781,22 @@ function Do-Down {
 
 function Do-Release {
     <#
-      App 退出时**自己**调用的：只停后端 + 老库（若在跑），绝不碰 App 进程。
+      App 退出时**自己**调用的：只停后端，绝不碰 App 进程。
       和 Do-Down 的区别只有一条，但很关键 —— Do-Down 会按进程名 `viewer` 杀 App，
       在"App 自己还活着、正等我们停完服务"的时候调用它等于自杀。
-
-      顺序和 down 一致：后端 → 等 java 真的退出 → 老库（反过来的话后端会一直对着死库重连报错）。
     #>
     Say ''
-    Say '  ComfyHub 停止中（后端 → 老库，App 不动）' 'White'
+    Say '  ComfyHub 停止中（后端，App 不动）' 'White'
 
     # 手工/App 主动停了就别让 watchdog 再补一刀（它可能和我们同时动手）
     Clear-OwnerWatchdog
 
-    Say '  [1/2] 停止后端…' 'Cyan'
-    & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop -Port $Script:ApiPort @DataDirArgs
+    Say '  [1/1] 停止后端…' 'Cyan'
+    & pwsh -NoProfile -File (Join-Path $Scripts 'server.ps1') stop -Port $Script:ApiPort
 
-    # 必须等后端真的退出再停库，否则它会一边报错一边重连
+    # 必须等后端真的退出
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline -and @(Get-ApiProcess).Count -gt 0) { Start-Sleep -Milliseconds 400 }
-
-    if (@(Get-MysqldProcess).Count -gt 0) {
-        Say '  [2/2] 停止 MySQL（老库）…' 'Cyan'
-        & pwsh -NoProfile -File (Join-Path $Scripts 'mysql.ps1') stop @DataDirArgs
-    } else {
-        Say '  [2/2] MySQL 没在跑（P2 起默认用 SQLite），跳过。' 'DarkGray'
-    }
 
     Say ''
     Show-Status | Out-Null
@@ -978,10 +806,10 @@ function Do-Watch {
     <#
       「补挂守护进程」：App 启动时探到后端已经健康（比如你刚在终端里 up 过，
       或者上一次 App 的 watchdog 已经不在了）就直接返回，根本没跑 up ——
-      于是 watchdog 没挂上，之后关 App / 硬杀 App 就会把 MySQL + 后端留在后台。
+      于是 watchdog 没挂上，之后关 App / 硬杀 App 就会把后端留在后台。
 
-      App 在这种情况下会调一次 `watch -OwnerPid <自己的 PID>`，我们按**当前实际活着**的
-      服务来挂守护：谁在跑就准备停谁。已经在跑的库可能是用户手工起的，但既然 App 正在
+      App 在这种情况下会调一次 `watch -OwnerPid <自己的 PID>`，我们按**当前实际活着的**
+      服务来挂守护：谁在跑就准备停谁。已经在跑的可能是用户手工起的，但既然 App 正在
       用它、而用户又开着"关闭 App 时一并停止本地服务"，就一起带走（和 up -OwnerPid 的语义一致）。
     #>
     if ($OwnerPid -le 0) {
@@ -991,20 +819,16 @@ function Do-Watch {
     }
 
     $stopApi = (@(Get-ApiProcess).Count -gt 0) -or ($null -ne (Get-ApiHealth))
-    $stopMysql = Test-MySqlAlive
 
-    if (-not $stopApi -and -not $stopMysql) {
-        Say '  后端和 MySQL 都没在跑，不需要挂守护进程。' 'DarkGray'
+    if (-not $stopApi) {
+        Say '  后端没在跑，不需要挂守护进程。' 'DarkGray'
         Clear-OwnerWatchdog
         return
     }
 
-    $what = @()
-    if ($stopMysql) { $what += 'MySQL' }
-    if ($stopApi) { $what += '后端' }
     Say ''
-    Say "  ComfyHub 补挂退出守护（App PID $OwnerPid 退出后停 $($what -join ' + ')）" 'White'
-    Start-OwnerWatchdog -Owner $OwnerPid -StopApi $stopApi -StopMysql $stopMysql | Out-Null
+    Say "  ComfyHub 补挂退出守护（App PID $OwnerPid 退出后停后端）" 'White'
+    Start-OwnerWatchdog -Owner $OwnerPid -StopApi $stopApi | Out-Null
     Say ''
 }
 
@@ -1031,11 +855,8 @@ function Do-Unwatch {
 # ---------------------------------------------------------------------------
 
 function Do-Logs {
-    $err = $MysqlErrorLog
+    # MySQL 已于 2026-09-29 退役 —— 这里只看后端与守护进程的日志
     $out = Join-Path $RunDir 'server.out.log'
-    Say "──── MySQL 实例目录: $MysqlInstanceDir" 'DarkGray'
-    Say "──── MySQL 错误日志: $err" 'DarkGray'
-    if (Test-Path $err) { Say '──── MySQL (tail 30) ────' 'Cyan'; Get-Content $err -Tail 30 }
     if (Test-Path $out) { Say '──── 后端 (tail 40) ────' 'Cyan'; Get-Content $out -Tail 40 }
     $se = Join-Path $RunDir 'server.err.log'
     if ((Test-Path $se) -and (Get-Item $se).Length -gt 0) { Say '──── 后端 stderr (tail 20) ────' 'Cyan'; Get-Content $se -Tail 20 }
@@ -1071,7 +892,7 @@ function Do-Doctor {
         Say ("  {0,-16} {1}" -f $p.n, $(if ($ok) { 'OK' } else { "缺失: $($p.v)" })) $(if ($ok) { 'Green' } else { 'Yellow' })
     }
 
-    # 库：P2 起是 SQLite 文件（后端自建）。老 MySQL 只是搬迁来源，**不存在也不算异常**。
+    # 库：SQLite 单文件（后端自建）。MySQL 已于 2026-09-29 退役，这里不再有任何老库判断。
     if (Test-Path $Script:SqliteDb) {
         $sizeMb = [math]::Round((Get-Item $Script:SqliteDb).Length / 1MB, 2)
         $wal = Join-Path $Script:SqliteDir 'comfyhub.db-wal'
@@ -1079,15 +900,6 @@ function Do-Doctor {
         Say ("  {0,-16} {1}" -f 'SQLite 库', "$Script:SqliteDb  ($sizeMb MB$walText)") 'Green'
     } else {
         Say ("  {0,-16} {1}" -f 'SQLite 库', "还没建：$Script:SqliteDb（后端首次启动会建）") 'Gray'
-    }
-    if (Test-LegacyMysqlData) {
-        $legacyNote = if (Test-Path $Script:SqliteDb) { '老库在，但新库已存在（不会再自动搬迁）' } else { '下次 up 会自动搬迁进 SQLite' }
-        Say ("  {0,-16} {1}" -f '旧库 MySQL', "$MysqlDataPath（$legacyNote）") 'Gray'
-        Say ("  {0,-16} {1}" -f '位置来源', $(if ($DataDir) { "-DataDir 参数" } elseif ($env:COMFYHUB_MYSQL_DIR) { '环境变量 COMFYHUB_MYSQL_DIR' } elseif (Test-Path (Join-Path $ProjectRoot '.mysql-location.json')) { '.mysql-location.json' } else { '默认 .mysql' })) 'Gray'
-        $mysqld = Resolve-MysqlBin 'mysqld.exe'
-        Say ("  {0,-16} {1}" -f 'mysqld.exe', $(if ($mysqld) { $mysqld } else { '找不到（要搬迁就得先装/指定 COMFYHUB_MYSQL_HOME）' })) $(if ($mysqld) { 'Gray' } else { 'Yellow' })
-    } else {
-        Say ("  {0,-16} {1}" -f '旧库 MySQL', '没有老库数据（P2 起用 SQLite，不需要 MySQL）') 'Gray'
     }
 
     # 构建新鲜度：App 的产物比 lib\ 旧时，界面上看到的是旧代码。
@@ -1154,6 +966,46 @@ function Do-Doctor {
         }
     }
 
+    # 后端自己是不是"被关在项目里了"（2026-09-29）。
+    #
+    # 后端若是从**受限会话**（AI 助手的文件沙箱）里拉起来的，那份限制跟着进程走、
+    # 子进程原样继承 —— 表现是 comfy_start 写不进 ComfyUI 的 temp/、comfy_use_media
+    # 写不进 input…，而上面这些行**一条都看不出来**（这里只探端口/健康/构建新鲜度）。
+    # 所以后端启动时自己探一次并留证（`server-rs\src\confinement.rs`），这里读出来报。
+    # ⚠ 标记带 pid：**换了后端就重新判**，旧标记无权代表现状（那正是本条最常见的假红）。
+    $confFile = Join-Path (Join-Path $ProjectRoot '.run') 'confinement.json'
+    if (Test-Path $confFile) {
+        $conf = $null
+        try { $conf = Get-Content $confFile -Raw -Encoding utf8 | ConvertFrom-Json } catch { $conf = $null }
+        if ($conf -and $conf.restricted) {
+            $apiState0 = Read-ApiPortState -ProjectRoot $ProjectRoot
+            $isCurrent = ($null -ne $apiState0) -and ([int64]$conf.pid -eq [int64]$apiState0.Pid)
+            if ($isCurrent) {
+                Say ("  {0,-16} {1}" -f '后端受限', "pid $($conf.pid)（当前在跑的这个）写不进项目外：$(($conf.blockedPaths -join '、'))") 'Red'
+                # 修法要跟"内容一律在自身文件夹内"这条对齐 —— **不要**建议往 %LOCALAPPDATA% 之类拷
+                $backendExe = $null
+                # ⚠ 必须**先 dot-source 再调**（本文件另外两处 389/849 都是这个写法）：
+                # `Resolve-Backend` 住在 backend.ps1 里，不是本文件自带的。
+                $backendHelper2 = Join-Path $Scripts 'backend.ps1'
+                if (Test-Path $backendHelper2) {
+                    . $backendHelper2
+                    $backendExe = (Resolve-Backend -ProjectRoot $ProjectRoot).Exe
+                }
+                if ($backendExe) {
+                    Say ("  {0,-16} {1}" -f '', "后端映像：$backendExe") 'Red'
+                    Say ("  {0,-16} {1}" -f '', '限制按**映像位置**判：映像在工作区内就写不了工作区外（与路径/ACL/用户/终端都无关）。') 'Red'
+                    Say ("  {0,-16} {1}" -f '', '这是**源码树布局**的固有结果（项目根就是工作区）。要跑 ComfyUI 集成就用发布包：') 'Red'
+                    Say ("  {0,-16} {1}" -f '', '  pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub') 'Red'
+                    Say ("  {0,-16} {1}" -f '', '  pwsh -File D:\dist\ComfyHub\scripts\comfyhub.ps1 up') 'Red'
+                    Say ("  {0,-16} {1}" -f '', '发布包的后端在 <包根>\server\、数据在 <包根>\.db / storage / .run —— 内容照旧全在它自己的文件夹里。') 'Gray'
+                    Say ("  {0,-16} {1}" -f '', '已经有工作区外的构建产物时，一句 $env:COMFYHUB_SERVER_EXE = "<完整路径>" 就够。') 'Gray'
+                }
+            } else {
+                Say ("  {0,-16} {1}" -f '后端受限', "有旧标记（pid $($conf.pid)，不是当前在跑的后端）—— 重起后端会自动重新判定，可忽略") 'Gray'
+            }
+        }
+    }
+
     $flutter = (Get-Command flutter -ErrorAction SilentlyContinue)
     Say ("  {0,-16} {1}" -f 'flutter', $(if ($flutter) { $flutter.Source } else { 'PATH 里没有' })) $(if ($flutter) { 'Green' } else { 'Red' })
 
@@ -1172,24 +1024,17 @@ function Do-Doctor {
         Say ("  {0,-16} {1}" -f 'API 端口', '自动（0 = 由操作系统挑；真实端口写在 .run\api.json）') 'Gray'
     }
 
-    $mysqlListen = Get-NetTCPConnection -State Listen -LocalPort $MysqlPort -ErrorAction SilentlyContinue
-    if ($mysqlListen) {
-        Say ("  {0,-16} {1}" -f "端口 $MysqlPort", "被 PID $($mysqlListen[0].OwningProcess) 占用（老 MySQL 在跑，只有 migrate 用它）") 'Gray'
-    }
-
     $excluded = Get-ExcludedTcpPortRange -Port $apiPortNow
     if ($excluded) {
         Say ("  {0,-16} {1}" -f '端口保留段', "端口落在 Windows 保留段 $excluded 里（Hyper-V/WSL 预留）——换一个端口，或管理员执行 net stop winnat / net start winnat") 'Yellow'
     }
 
-    # 运行时依赖：发布包带不走的那几样（pwsh / VC++ 运行时）在这里现形
+    # 运行时依赖：发布包带不走的那几样（pwsh / Java）在这里现形
     Say ''
     Say '  运行时依赖' 'White'
     Say '  ────────────────────────────────────────────────────────────'
     if (Get-Command Show-RuntimeReport -ErrorAction SilentlyContinue) {
-        $mysqldForCheck = Resolve-MysqlBin 'mysqld.exe'
-        $binDirForCheck = if ($mysqldForCheck) { Split-Path -Parent $mysqldForCheck } else { $null }
-        Show-RuntimeReport -ProjectRoot $ProjectRoot -MySqlBinDir $binDirForCheck | Out-Null
+        Show-RuntimeReport -ProjectRoot $ProjectRoot | Out-Null
     } else {
         Say '  （找不到 scripts\runtime-deps.ps1，跳过运行时体检）' 'Yellow'
     }

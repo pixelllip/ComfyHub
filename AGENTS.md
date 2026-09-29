@@ -45,7 +45,7 @@
 后端由 App 启动时自动拉起（**数据库是 SQLite 文件，P2 起不用起数据库服务**），
 **不允许出现任何 cmd / 控制台窗口**。三件事都要记住：
 
-1. **不能用 `Start-Process`** 起后端（以及搬迁老库时的 mysqld）：进程属于当前 PowerShell 的进程树，
+1. **不能用 `Start-Process`** 起后端：进程属于当前 PowerShell 的进程树，
    命令行一结束就可能被一起回收。要用 WMI `Win32_Process.Create` 脱离进程树。
    - ⚠ **唯一的例外（2026-09-28 新增的第 3 档 `direct-hidden`）**：**WMI 那一下被系统拒绝**时
      （实测现场就是用户报的 `flutter run -d windows` 拉不起后端：报
@@ -62,9 +62,13 @@
      `$env:COMFYHUB_SPAWN_MODE = 'direct' | 'wmi'` 可强制走某一档（诊断用；也让这一档可测）。
      回归就是现成那条（实测：全程 0 个新窗口）：
      `$env:COMFYHUB_SPAWN_MODE='direct'; pwsh -File scripts\check-silent-start.ps1 -Restart`
+   - ⚠⚠ **2026-09-29 定案：「WMI 被系统拒绝」不是机器的属性**（逐条量过：`wmi-hidden` /
+     `wmi-vbs` / `direct-hidden` **三档都能起**，写同一个探针**全都是 OK** → spawn 档位与写权限**无关**）。
+     当时那批"拒绝访问"的现场，成因是**后端映像在工作区内**（见**第 12 节**），WMI 被拒只是它的**表现**。
+     **别再为"绕过 WMI"加新档位**，改这块之前先读第 12 节。
 2. **WMI 默认会给控制台程序分配一个可见的控制台窗口**（就是那个 cmd 黑框），
    所以必须传 `Win32_ProcessStartup{ ShowWindow = 0 }`（SW_HIDE）。
-   公共实现是 `scripts\silent-process.ps1`，`mysql.ps1` / `server.ps1` 都 dot-source 它。
+   公共实现是 `scripts\silent-process.ps1`，`server.ps1` 等脚本都 dot-source 它。
    - `CreateFlags = CREATE_NO_WINDOW(0x08000000)` 会被 WMI 拒绝（`ReturnValue=21`），不要用；
    - 传给 WMI 的 `CurrentDirectory` 绝不能是空串（`[string]` 参数没传值就是空串，不是 `$null`），
      否则同样 `ReturnValue=21` —— 这就是"手敲行、脚本不行"的那个坑；
@@ -97,10 +101,10 @@
 | 约束 | 说明 |
 | --- | --- |
 | JDK | **21~23**，但**只有回退旧 Kotlin 后端 / 跑 Gradle（含 `android/`）时才要**；Rust 后端不需要 JVM。`server.ps1` 只在真要用它时才解析（懒解析），可用 `COMFYHUB_JDK_HOME` 指定 |
-| MySQL | 免安装 zip 版，默认 `D:\tools\mysql\mysql-8.4.3-winx64`；实例目录默认 `<项目>\.mysql`，可用 `COMFYHUB_MYSQL_DIR` / `mysql.ps1 move` 换 |
+| MySQL | **已退役（2026-09-29）**：数据库自 P2 起是 SQLite 单文件 `<根>\.db\comfyhub.db`，`mysql.ps1` 与老库搬迁都不存在了；老机器上残留的 `D:\tools\mysql\`、`<项目>\.mysql\` 只是历史目录，不再被读取 |
 | pub 源 | 必须 `https://pub.dev`（国内镜像对个别包返回 424） |
 | 脚本 | 一律 `pwsh`（PowerShell 7）；脚本里的 WMI / CIM 调用依赖 Windows |
-| 端口 | MySQL `3307`、后端 `8080`、ComfyUI `8188` |
+| 端口 | 后端 `8080`、ComfyUI `8188`（原 MySQL `3307` 已随 2026-09-29 MySQL 退役，不再有任何用途） |
 | Android 构建 | `android/` 走 AGP **9.4.0** + Gradle **9.6.0** + **AGP 内建 Kotlin**（`android.builtInKotlin=true`，`org.jetbrains.kotlin.android` 只钉版本、不 apply）；动 `android/` 之前先读 `docs/android-agp9-builtin-kotlin-migration.md` |
 | Gradle 代理 | `~/.gradle/gradle.properties` 配了本机代理 `127.0.0.1:7890`：`dl.google.com` / `repo.maven.apache.org` **必须绕过代理**（`systemProp.http.nonProxyHosts`），而 `github.com` 直连不通、**必须走代理** |
 | 后端出网代理 | **JVM 默认无视 Windows 系统代理**（一律 DIRECT）：本机 `civitai.com` 这类目标直连不通、只有 `127.0.0.1:7890` 通，所以 `server/build.gradle.kts` 的 `applicationDefaultJvmArgs` 带着 `-Djava.net.useSystemProxies=true`，出网客户端再统一挂 `com.comfyhub.ai.OutboundProxy` 的选择器（**公网走代理、本机/内网强制直连**——打开系统代理后 Java 会把 `127.0.0.1:8188` 也交给代理，会打死 ComfyUI）。自己用 `java -jar` 起后端时要手动补这个参数，或设 `COMFYHUB_HTTPS_PROXY` |
@@ -163,7 +167,6 @@
 | 根目录怎么定 | 往上找 `scripts\comfyhub.ps1` | 同上（发布包的 `viewer.exe` 就铺在根目录，深度 0 就命中） |
 | 后端二进制 | `server-rs\target\release\comfyhub-server-rs.exe` | `<根>\server\comfyhub-server-rs.exe` |
 | 数据库 | `<根>\.db\comfyhub.db`（SQLite 单文件 + 它的 `-wal` / `-shm`） | 同一份约定（`<根>\.db\`，装配时预建空目录） |
-| `mysqld.exe` / `mysqladmin.exe`（**仅搬迁用**） | `D:\tools\mysql\...` | **不再随包携带**（P2 起数据库是 SQLite）；要搬迁就设 `COMFYHUB_MYSQL_HOME` |
 | Java | **只有回退旧 Kotlin 后端时才要**（JDK 21~23） | **不再随包携带**（P4 收尾起后端是 Rust，不需要 JVM） |
 | 旧 Kotlin 后端（已退役） | `legacy\server\`（留档） | 不装 |
 | `viewer.exe` | `build\windows\...\runner\Release\` | `<根>\viewer.exe` |
@@ -196,16 +199,18 @@
      （`Copy-Item` 会报 "Cannot copy item to itself"）。
 - 想要一份不随 `build\` 消失的长期副本，用 `-OutDir D:\dist\ComfyHub`。
 - **P2 起发布包不再携带 MySQL**（原来 `mysql/` 约 400MB，裁剪规则在清单的 `prune` 字段里）：
-  数据库是 SQLite，驱动自带引擎。老 MySQL 只在"搬一次旧数据"时才用得到 —— 因此
-  **VC++ 运行时与 mysqld 都降级成可选项**（`runtime-deps.ps1` 里 `Required = $false`）。
+  数据库是 SQLite，驱动自带引擎。**2026-09-29 起 MySQL 彻底退役**：连"搬一次旧数据"的搬迁
+  通道与 `mysql.ps1` 都删了，`runtime-deps.ps1` 的 MySQL 与 **VC++ 运行时**体检项也一并删除
+  （VC++ 当初只为 `mysqld.exe` 存在；实测后端 Rust exe 不引用 `vcruntime140.dll`、CRT 是静态链接，
+  只用 Win10/11 自带的 `api-ms-win-crt`，所以整项删掉是安全的）。
 - **`runtime-deps.ps1` 的 `Required` 字段决定"缺了算不算问题"**：`Show-RuntimeReport` /
   `Show-RuntimeFailureHints` 只把 **必需项** 缺失当红。
   改启动流程时别把这块提示丢了（`comfyhub.ps1` dot-source 它，跟 `silent-process.ps1` 一样）。
-- **首次运行必须能自动建库**（P2 起是后端自己建 SQLite 文件），
-  而且是**零动作升级**：`comfyhub.ps1 up` 发现"`<根>\.db\comfyhub.db` 还没有 **且** `.mysql\data\mysql` 存在"
-  → 先 `mysql.ps1 start` + `server.ps1 migrate` 搬一次（逐表核对行数与行哈希）→ 再起后端。
-  搬迁失败**不拦 up**（宁可给一个空的新库，也不能连后端都起不来），老库一个字节都不动。
-  自动建的库**故意不灌演示数据**（不能往用户库里塞演示提示词），只有手敲 `mysql.ps1 init` 才灌。
+- **首次运行必须能自动建库**（P2 起是后端自己建 SQLite 文件，`db::open_or_create` 负责）。
+  **"零动作升级搬迁老库"已于 2026-09-29 随 MySQL 彻底退役而删除** —— `up` 不再读 `.mysql\`，
+  `mysql.ps1` / `server.ps1 migrate` 这条路不存在了；老库目录原样留着（确认不要了再自己删），
+  搬迁链路的老规则（逐表核对行数与行哈希、失败不拦 up）随通道一起成为历史。
+  自动建的库**故意不灌演示数据**（不能往用户库里塞演示提示词）。
 
 ## 8. 运行时自动补齐 + 一个血泪教训
 
@@ -230,8 +235,10 @@
   ⚠ **venv 的解释器就在 `Scripts\` 里**，所以"pip 启动器在哪个目录"必须分两种情况
   （`Get-PythonScriptsDir` / Kotlin 的 `scriptsDirOf`）—— 一律 `父目录\Scripts` 会拼出
   `venv\Scripts\Scripts`，表现是"明明装好了却报缺 comfy-mcp.exe"。
-- **pwsh / VC++ / MySQL**：系统级安装，走 winget；`up` 阶段不碰（免得启动弹 UAC），只由 `ensure-runtime.ps1` 显式装。
-  **VC++ 与 MySQL 现在只对"搬迁老库"有意义**（`Get-RuntimeChecks` 里 `Required = $false`）。
+- **pwsh**：系统级安装，走 winget；`up` 阶段不碰（免得启动弹 UAC），只由 `ensure-runtime.ps1` 显式装。
+  **VC++ 与 MySQL 体检项已于 2026-09-29 随 MySQL 彻底退役而删除**（VC++ 当初只为 `mysqld.exe` 存在，
+  实测后端 Rust exe 不引用 `vcruntime140.dll`、CRT 是静态链接，只用系统自带的 `api-ms-win-crt`）——
+  `Get-RuntimeChecks` 现在只剩 pwsh（必需）与 Java 21（`Required = $false`，只对回退旧 Kotlin 后端有意义）。
 
 > **⚠ 参数改名的坑（2026-09-21 踩到）：非高级函数（没写 `[CmdletBinding()]`）收到不存在的命名参数时
 > 不报错，而是丢进 `$args`。** `mcp-runtime.ps1` 把参数从 `$Proxy`/`$Force` 改成 `$McpProxy`/`$McpForce`
@@ -455,6 +462,91 @@
 4. **发布包与运行时**：`mysql/`（304MB）、`jre/`（~40MB）与 Kotlin jar（~20MB）**都已经去掉**，
    装配实测约 **14MB**。`packaging\manifest.json` 与第 7 节的"两套运行布局"改之前**先看总纲**；
    `runtimeRequirements` 里的 `required` 字段决定"缺了算不算问题"。
+
+---
+
+## 12. ⚠ 写不进工作区外：限制**按映像位置 + 继承**判（2026-09-29 定案）
+
+`comfy_start` 报 `COMFY_WRITE_BLOCKED`、`comfy_use_media` 报 `COMFY_INPUT_FAILED … os error 5`、
+MCP 任何工具报 `UnexpectedToolError` —— 同一批症状、同一个根因。**动手改之前先读完这一节**，
+它推翻过 2026-09-28 的两处结论（现象没错，**处方错了**）。
+
+### 量出来的判据
+
+| 怀疑对象 | 实测 | 结论 |
+| --- | --- | --- |
+| 目录 ACL | 诊断脚本报 `NOT_THIS_CLASS`（无 deny ACE、无 package ACE，`WRITE_DAC`/`WRITE_OWNER` 都在） | 无关 |
+| 路径配错 / 用户身份 / Defender | 同用户同目录 `powershell` 写得进；Defender 无受控文件夹规则 | 无关 |
+| **映像在工作区内** | **同一个二进制逐字节相同：工作区内 → 写 `%TEMP%`、`D:\Comfy-Desktop\…` 全 `os error 5`；`copy` 到 `%TEMP%` → 哪儿都能写** | ✅ 就是它 |
+| 从哪个会话 / 终端起 | 双击一样被限 | 无关（限制在令牌里） |
+| spawn 档位 | `wmi-hidden` / `wmi-vbs` / `direct-hidden` 三档写同一个探针**都是 OK** | 无关（见第 2 节那条 ⚠⚠） |
+
+**两条机制并存**：`按映像位置`（后端 exe 在工作区内就必然被限）+ `按继承`
+（受限父进程拉起的、工作区外的 python 照样被拒，`tests/tmp-inherit-probe.rs` 量过）。
+所以"换个 ComfyUI 自带的 python 就好"是错的 —— **后端自己就写不了**，起手写实例 `temp/` 就死。
+
+### 退路（以前漏了，现在有）
+
+**正解是发布包** —— 它同时满足第 12 节的不变式与第 13 节"内容在自身文件夹内"：
+
+```powershell
+pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub
+pwsh -File D:\dist\ComfyHub\scripts\comfyhub.ps1 up
+```
+
+发布包的后端在 `<包根>\server\`、数据在 `<包根>\.db\` / `storage\` / `.run\`，**内容一点没外溢**。
+`Resolve-RustExe`（`scripts\backend.ps1`）**优先认 `COMFYHUB_SERVER_EXE`** ——
+那三个默认候选全在项目根下，所以**源码树布局下后端必然被限**，这不是配置错了。
+实测：装完发布包跑 `up` → 留证文件消失、不受限。
+
+⚠ **别把 `COMFYHUB_SERVER_EXE` 指到 `%LOCALAPPDATA%` 之类**（第 13 节：内容一律在自身文件夹内）。
+它只该指向"**已经装配好的发布包**里的那个 exe"，或者你自己另外放的一整份安装。
+
+### 三条纪律
+
+1. **闸门留着**（`comfy_launch::ensure_writable`）：白起一个 100% CPU 卡死的实例，比如实拒绝糟得多。
+   但**文案必须说对**：先讲真因（按映像位置判），再给上面那条修法。
+   **别再写"没有退路 / 只能让用户双击 ComfyUI Desktop"** —— 双击确实能work，但不是唯一那条。
+   **也别建议往 `%LOCALAPPDATA%` 之类拷后端**（见第 3 条：内容一律在自身文件夹内）。
+2. **别把探针的 `Err` 吞成 `bool`**（`confinement::probe_dir` 返回 `io::Result` 就是为此）：
+   只报"哪个目录"不报"报什么错"，就会重演 2026-09-28 那次"现象对、处方错"。
+   用例里也不许拿"这台机器哪个目录不可写"当判据 —— 用同名目录占位造出确定性的 `os error 5`。
+3. **看得见**（`server-rs\src\confinement.rs`）：后端启动自查 → 受限才写 `.run\confinement.json`、
+   **正常就删**（免得过期标记一直亮着）；标记带 `pid`，`doctor` 还要比对"是不是当前在跑的后端"。
+   这条沿用第 151/154 条的纪律：**doctor 探不到的现象，就会一直靠猜**。
+
+## 13. ⚠ 内容一律存在**自身文件夹**内（2026-09-29 用户定的总原则）
+
+> **ComfyHub 自己产生的内容，不许散到 `%APPDATA%` / `%LOCALAPPDATA%` / `%TEMP%`。**
+
+它同时是**落盘布局的总原则**，也是第 12 节那条不变式的**解法**：把整套 ComfyHub 放到工作区外
+（发布包），既不受限、布局又和源码树完全一致。
+
+| 内容 | 落点 | 一次性导入 |
+| --- | --- | --- |
+| 数据库 | `<根>\.db\comfyhub.db` | 无（曾是"零动作升级搬迁老库"，2026-09-29 随 MySQL 退役删除） |
+| 产物 / 缩略图 / 附件 | `<根>\storage\` | 无 |
+| 偏好 | `<根>\storage\app-support` | `%APPDATA%\…\shared_preferences.json` |
+| MCP 运行时（便携 python + venv，几百 MB） | `<根>\storage\ai\mcp` | 无（**删掉了 `%LOCALAPPDATA%\ComfyHub\mcp` 那一档**） |
+| comfy-cli 凭据 / 缓存 | `<根>\storage\ai\mcp\comfy-cli-home` | `%LOCALAPPDATA%\comfy-cli\{secrets.json,config.ini}` |
+| 临时文件 / DevFS | `<根>\.run\tmp` | 无 |
+
+**三条别踩**：
+
+1. **别再用"探系统位置 → 写不进才退回"这个模式**（2026-09-28 那批修法全是这个形状）。
+   判据不可靠（能不能写取决于进程映像位置，见第 12 节），而且方向本身就错了 ——
+   静默换地方正是"哪份才是真的要看机器上装过什么"的来源。
+   `Get-McpRuntimeDir` 现在**没有**"根不可写就退到 `%LOCALAPPDATA%`"那一档了；
+   真写不进去就**如实报错**，让用户把包/项目放到可写的地方。
+2. **导入是只读复制、且只做一次**（目标已存在就不动，否则会用旧文件盖掉用户新存的值）。
+   受限进程**读**项目外是允许的，所以即便 errno 5 的现场导入也做得成。
+3. **代价要如实说**：这些不再跨 ComfyHub 安装/跨机器共享。但 db 与 storage 本来就在各自文件夹里，
+   这与"发布包是便携的"本来就是一致的 —— 别把它当回归。
+
+改落盘位置时，`server-rs\src\mcp.rs` 与 `scripts\mcp-runtime.ps1` **必须一起改**：
+`discover_runtime` 与 `Get-McpRuntimeDir` 是同一个真源的两份实现（AGENTS §7 的纪律）。
+判据：装完发布包后跑一次 `up`，比对 `%APPDATA%\com.example`、`%LOCALAPPDATA\comfy-cli`、
+`%LOCALAPPDATA\ComfyHub` 三个目录的文件数 —— **跑前后都不变**才算过。
 
 
 

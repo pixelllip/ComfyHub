@@ -1,25 +1,26 @@
 <#
 .SYNOPSIS
-    ComfyHub Kotlin 后端：构建 / 启动 / 停止 / 搬迁老库。
+    ComfyHub 后端：构建 / 启动 / 停止 / 状态。
 
 .DESCRIPTION
-    P2（2026-09-23）起后端的库是 **SQLite**（`<项目根>\.db\comfyhub.db`），
-    不再需要 MySQL 先就绪 —— 只有 `migrate`（把老 MySQL 数据搬进新库）那一步才用得到它。
+    P2（2026-09-23）起后端的库是 **SQLite**（`<项目根>\.db\comfyhub.db`），由后端自己按需创建。
+    MySQL 连同"把老库搬进新库"那条 `migrate` 通道已在 2026-09-29 一起退役 ——
+    那条通道依赖已退役的 Kotlin 后端（`legacy\server` 的 `migrateData` Gradle 任务），本来就跑不通了。
 
     本机 JDK 25 与 Gradle 8.12 不兼容，脚本会自动挑选一个 JDK 21~23。
     优先顺序：-JdkHome 参数 > COMFYHUB_JDK_HOME > 已安装的 JDK 21/22/23 > Android Studio 自带 JBR。
+    （P4 起后端是 Rust 单文件二进制，JDK 只在回退旧 Kotlin 后端 / 跑 `build`/`test` 时才要。）
 
 .EXAMPLE
     pwsh -File scripts\server.ps1 run       # 前台启动（Ctrl+C 停止）
     pwsh -File scripts\server.ps1 start     # 后台启动
     pwsh -File scripts\server.ps1 stop
-    pwsh -File scripts\server.ps1 migrate   # 一次性把老 MySQL 库搬进 SQLite（P2）
-    pwsh -File scripts\server.ps1 fatjar    # 打成一个独立 jar
+    pwsh -File scripts\server.ps1 fatjar    # 打成一个独立 jar（仅 Kotlin 回退路径）
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('run', 'start', 'stop', 'restart', 'status', 'build', 'fatjar', 'logs', 'test', 'migrate')]
+    [ValidateSet('run', 'start', 'stop', 'restart', 'status', 'build', 'fatjar', 'logs', 'test')]
     [string]$Action = 'run',
 
     [string]$JdkHome = $env:COMFYHUB_JDK_HOME,
@@ -32,11 +33,7 @@ param(
     # API 端口。**默认 0 = 交给操作系统自动挑**（用户 2026-09-22）。
     # 解析顺序由 scripts\api-port.ps1 统一定：-Port > COMFYHUB_PORT > .run\api.json > 0。
     [int]$Port = 0,
-    [switch]$SkipBuild,
-
-    # MySQL 实例目录。留空则按 COMFYHUB_MYSQL_DIR → <项目>\.mysql-location.json → <项目>\.mysql 解析；
-    # 有值就原样 -DataDir 透传给 mysql.ps1 start。
-    [string]$DataDir
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,34 +99,6 @@ function Test-TcpPort([string]$TargetHost, [int]$TargetPort, [int]$TimeoutMs = 2
     } catch { return $false }
     finally { $client.Dispose() }
 }
-
-function Resolve-MysqlInstanceDir {
-    <#
-      与 mysql.ps1 同一套解析顺序（这里重复实现一遍，不引共享模块）：
-        -DataDir → COMFYHUB_MYSQL_DIR → <项目>\.mysql-location.json → <项目>\.mysql
-      只用于把错误信息里的日志路径指对地方。
-    #>
-    $cand = @($DataDir, $env:COMFYHUB_MYSQL_DIR) | Where-Object { $_ } | Select-Object -First 1
-    if (-not $cand) {
-        $pointer = Join-Path $ProjectRoot '.mysql-location.json'
-        if (Test-Path $pointer) {
-            try {
-                $json = Get-Content -Path $pointer -Raw -Encoding utf8 | ConvertFrom-Json
-                if ($json -and $json.dataDir) { $cand = [string]$json.dataDir }
-            } catch { }
-        }
-    }
-    if (-not $cand) { return (Join-Path $ProjectRoot '.mysql') }
-    if (-not [System.IO.Path]::IsPathRooted($cand)) { $cand = Join-Path $ProjectRoot $cand }
-    return [System.IO.Path]::GetFullPath($cand).TrimEnd('\')
-}
-
-$MysqlInstanceDir = Resolve-MysqlInstanceDir
-$MysqlErrorLog    = Join-Path $MysqlInstanceDir 'mysql-error.log'
-
-# 透传给 mysql.ps1 的 -DataDir（留空就不传，让 mysql.ps1 自己解析）
-$DataDirArgs = @()
-if ($DataDir) { $DataDirArgs = @('-DataDir', $DataDir) }
 
 # ---------------------------------------------------------------------------
 #  找一个能跑 Gradle 8.12 的 JDK（需要 21~23，JDK 24/25 不支持）
@@ -374,70 +343,13 @@ function Start-DetachedRust {
     return 'wmi-plain'
 }
 
-function Resolve-MysqlAdmin {
-    # 路径里带通配符时 Get-ChildItem -Filter 不生效，必须逐层解析；解析一次就缓存
-    if ($Script:MysqlAdminExe -and (Test-Path $Script:MysqlAdminExe)) { return $Script:MysqlAdminExe }
-    $admin = $null
-
-    # 发布包自带的便携版优先（<根>\mysql），否则换台机器就找不到 mysqladmin.exe，
-    # 于是 Test-MySqlAlive 永远返回 $false —— 库明明在跑却报"数据库不可用"。
-    $packaged = Join-Path $ProjectRoot 'mysql\bin\mysqladmin.exe'
-    if (Test-Path $packaged) { $Script:MysqlAdminExe = $packaged; return $packaged }
-
-    foreach ($root in @('D:\tools\mysql', 'C:\tools\mysql')) {
-        if (-not (Test-Path $root)) { continue }
-        $direct = Join-Path $root 'bin\mysqladmin.exe'
-        if (Test-Path $direct) { $admin = $direct; break }
-        $found = Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue |
-            ForEach-Object { Join-Path $_.FullName 'bin\mysqladmin.exe' } |
-            Where-Object { Test-Path $_ } | Select-Object -First 1
-        if ($found) { $admin = $found; break }
-    }
-    $Script:MysqlAdminExe = $admin
-    return $admin
-}
-
-function Test-MySqlAlive {
-    if (-not (Test-TcpPort '127.0.0.1' 3307)) { return $false }
-    $admin = Resolve-MysqlAdmin
-    if (-not $admin) { return $false }
-    & $admin --protocol=TCP -h 127.0.0.1 -P 3307 -u comfyhub --password=comfyhub ping 2>&1 | Out-Null
-    return ($LASTEXITCODE -eq 0)
-}
-
-function Ensure-MySql {
-    <#  返回 $true 表示数据库确实可用（而不是"尝试过了"）  #>
-    Trace 'MySQL 存活检测'
-    if (Test-MySqlAlive) { Trace 'MySQL 已在跑'; return $true }
-
-    Write-Host '==> MySQL 未运行，尝试启动...' -ForegroundColor Yellow
-    $mysqlScript = Join-Path $PSScriptRoot 'mysql.ps1'
-    if (-not (Test-Path $mysqlScript)) {
-        Write-Host '找不到 scripts\mysql.ps1' -ForegroundColor Red
-        return $false
-    }
-    # 注意：这里的输出必须吞掉。否则 mysql.ps1 的 stdout 会被当成返回值的一部分，
-    # 让 Ensure-MySql 返回"数组"而不是布尔值，下面 Do-Start 里的 -not $mysqlOk 就永远为假，
-    # 数据库起不来时后端还是会被硬拉起来（然后一直连不上库）。
-    & pwsh -NoProfile -File $mysqlScript start @DataDirArgs | Out-Null
-    Trace '已调用 mysql.ps1 start'
-
-    $deadline = (Get-Date).AddSeconds(60)
-    while ((Get-Date) -lt $deadline) {
-        if (Test-MySqlAlive) { Trace 'MySQL 就绪'; return $true }
-        Start-Sleep -Milliseconds 200
-    }
-    Write-Host "MySQL 启动后仍无法连接，请看 $MysqlErrorLog" -ForegroundColor Red
-    return $false
-}
-
 function Do-Start {
     Trace 'Do-Start 开始'
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
-    # ⚠ P2（2026-09-23）起**不再**等 MySQL：后端用的是 SQLite 文件（`<根>\.db\comfyhub.db`），
-    # 由后端自己按需创建 / 迁移（`Migrate.run`）。老 MySQL 只在 `migrate` 那一步当只读来源。
-    # 以前这里"库没起来就抛"的闸门保留在 `migrate` 动作里。
+    # P2（2026-09-23）起用 SQLite 单文件（`<根>\.db\comfyhub.db`），由后端自己按需创建；
+    # MySQL 已于 2026-09-29 退役，所以这里**没有任何"等数据库进程"的闸门**。
+    # （嵌入式单文件库没有独立进程，也就没有"库挂了但后端还活着"那类坏状态。）
 
     if (Get-AnyBackendProcess) {
         Trace 'CIM 查到后端进程'
@@ -547,17 +459,13 @@ Kotlin 后端已退役（P4 收尾）：legacy\server 里没有源码。
 }
 
 function Do-Status {
-    # 库是 SQLite 文件（P2）：直接看文件在不在 + 大小，比"进程活没活"更贴近事实
+    # 库是 SQLite 文件：直接看文件在不在 + 大小，比"进程活没活"更贴近事实
     $dbFile = Join-Path $ProjectRoot '.db\comfyhub.db'
     if (Test-Path $dbFile) {
         $sizeMb = [math]::Round((Get-Item $dbFile).Length / 1MB, 2)
         Write-Host "数据库:    SQLite $dbFile（$sizeMb MB）" -ForegroundColor Green
     } else {
         Write-Host "数据库:    SQLite 还没建（$dbFile；后端首次启动会建）" -ForegroundColor Yellow
-    }
-    # 老 MySQL 只在搬迁时有用；它在跑就顺手报一句，不在跑也**不算异常**
-    if (Test-MySqlAlive) {
-        Write-Host "旧库:      MySQL 运行中 127.0.0.1:3307（只有 migrate 会读它）" -ForegroundColor DarkGray
     }
 
     $procs = Get-ServerProcess
@@ -589,31 +497,6 @@ switch ($Action) {
     'build'  { Write-Host "==> JDK: $(Get-Jdk)" -ForegroundColor DarkGray; Invoke-Gradle @('build'); Write-Host '构建完成' -ForegroundColor Green }
     'test'   { Write-Host "==> JDK: $(Get-Jdk)" -ForegroundColor DarkGray; Invoke-Gradle @('test'); Write-Host '测试完成' -ForegroundColor Green }
     'fatjar' { Write-Host "==> JDK: $(Get-Jdk)" -ForegroundColor DarkGray; Invoke-Gradle @('fatJar'); Get-ChildItem (Join-Path $ServerDir 'build\libs') | Select-Object Name, Length }
-    'migrate' {
-        # 一次性数据搬迁（P2）：老 MySQL（只读来源）→ SQLite 目标库。
-        # 这一步是**唯一**还需要 MySQL 的地方；来源地址走 COMFYHUB_MIGRATE_SOURCE，
-        # 目标库走 COMFYHUB_JDBC_URL（缺省 <根>\.db\comfyhub.db）。
-        Write-Host '==> 一次性数据搬迁：MySQL → SQLite（旧 Kotlin 后端的能力；已退役，源码在 legacy\\server）' -ForegroundColor Cyan
-        if (-not (Ensure-MySql)) {
-            throw "老库（MySQL）不可用，没法搬迁。先执行: pwsh -File scripts\mysql.ps1 start $($DataDirArgs -join ' ')".TrimEnd()
-        }
-        if (-not $env:COMFYHUB_MIGRATE_SOURCE) {
-            $env:COMFYHUB_MIGRATE_SOURCE = 'jdbc:mysql://127.0.0.1:3307/comfy_hub?useUnicode=true&characterEncoding=UTF-8&allowPublicKeyRetrieval=true&useSSL=false'
-        }
-        # ⚠ 必须显式给出项目根 / storage：Gradle 是以 `server\` 为工作目录跑的，
-        # 后端 Config 的兜底会把 `<server>\storage` 的父目录当成项目根 —— 那样搬迁会
-        # 写进 `server\.db\comfyhub.db`（看上去"成功了"，其实新库还是空的，2026-09-23 实测踩到）。
-        $env:COMFYHUB_PROJECT_ROOT = $ProjectRoot
-        $env:COMFYHUB_STORAGE = Join-Path $ProjectRoot 'storage'
-        # 控制台代码页钉成 UTF-8：Java 是按 UTF-8 输出的（file.encoding=UTF-8），
-        # 不管的话中文报告在中文系统上会渲染成乱码。
-        try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch { }
-        Write-Host "==> 来源: $env:COMFYHUB_MIGRATE_SOURCE" -ForegroundColor DarkGray
-        Write-Host "==> 目标: $(if ($env:COMFYHUB_JDBC_URL) { $env:COMFYHUB_JDBC_URL } else { (Join-Path $ProjectRoot '.db\comfyhub.db') })" -ForegroundColor DarkGray
-        # 不给 -q：搬迁报告（逐表行数 + 核对结果）就是这一步的产出，不能被安静掉
-        Invoke-Gradle @('migrateData')
-        Write-Host '搬迁完成（逐表行数与行哈希已核对）' -ForegroundColor Green
-    }
     'start'  { Do-Start }
     'stop'   { Do-Stop }
     'restart'{ Do-Stop; Start-Sleep 1; Do-Start }

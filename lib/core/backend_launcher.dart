@@ -43,16 +43,16 @@ Future<Process> _startProcess(
       mode: mode,
     );
 
-/// 负责在 App 启动时把 **MySQL + Kotlin 后端** 拉起来。
+/// 负责在 App 启动时把 **后端** 拉起来。
 ///
 /// 做法很直接：先探一次 `/api/health`；
 ///   · 健康  → 什么都不做；
 ///   · 不健康 / 连不上 → 调用项目里的 `scripts\comfyhub.ps1 up`
-///     （它会按「MySQL 先就绪 → 后端再起」的顺序来，而且后端在跑但数据库死了会自动重启后端）；
+///     （后端在跑但数据库不通时会先停再起 —— SQLite 是单文件，"数据库死了"即健康检查非 ok）；
 ///   · 边跑边把脚本输出回显到启动页上，最后轮询健康直到就绪。
 ///
-/// 之所以不在 App 里直接起 java/mysqld：脚本里已经处理了一堆本机坑
-/// （JDK 版本挑选、WMI 脱离进程树、存储目录、MySQL 初始化……），
+/// 之所以不在 App 里直接起后端进程：脚本里已经处理了一堆本机坑
+/// （JDK 版本挑选、WMI 脱离进程树、存储目录……），
 /// 复用它比自己再写一遍可靠得多。
 class BackendLauncher extends ChangeNotifier {
   BackendLauncher(this._settings);
@@ -233,7 +233,7 @@ class BackendLauncher extends ChangeNotifier {
   }
 
   /// 「谁起的谁关」：把 App 自己的 PID 交给脚本，它会挂一个守护进程盯着这个 PID，
-  /// App 一退出就只停掉**这次真正启动过**的 MySQL / 后端（见 scripts\watch-owner.ps1）。
+  /// App 一退出就只停掉**这次真正启动过**的后端（见 scripts\watch-owner.ps1）。
   /// 返回是否真的加上了（给日志用）。
   bool _addOwnerArgs(List<String> args, String action) {
     if (!_settings.stopServicesOnExit) return false;
@@ -282,7 +282,7 @@ class BackendLauncher extends ChangeNotifier {
       _log('后端已在运行（版本 ${health['version']}，数据库 ok）');
       _set(StartupPhase.ready, '后端已就绪');
       // 走这条分支说明脚本根本没跑过 up —— 于是「关 App 停服务」的 watchdog 也没挂上，
-      // 之后硬杀 App（任务管理器 / 崩溃）就会把 MySQL + 后端留在后台。
+      // 之后硬杀 App（任务管理器 / 崩溃）就会把后端留在后台。
       // 这里补挂一个守护进程；它只是锦上添花，失败也绝不影响启动。
       unawaited(armOwnerWatch());
       return true;
@@ -328,16 +328,11 @@ class BackendLauncher extends ChangeNotifier {
     } else {
       _log('后端还没构建过，本次会先跑一次 gradle 构建（可能要好几分钟）…');
     }
-    final dataDir = _settings.mysqlDataDir;
-    if (dataDir != null && dataDir.isNotEmpty) {
-      args..add('-DataDir')..add(dataDir);
-      _log('MySQL 实例目录: $dataDir');
-    }
     if (_addOwnerArgs(args, 'up')) {
       _log('关闭 App 时会一并停掉本次启动的本地服务（设置里可关）');
     }
 
-    _set(StartupPhase.starting, '正在启动 MySQL + 后端…');
+    _set(StartupPhase.starting, '正在启动后端…');
     _log('$shell ${args.join(' ')}');
 
     try {
@@ -421,10 +416,6 @@ class BackendLauncher extends ChangeNotifier {
       script.path,
       action,
     ];
-    final dataDir = _settings.mysqlDataDir;
-    if (dataDir != null && dataDir.isNotEmpty && action != 'logs') {
-      args..add('-DataDir')..add(dataDir);
-    }
     _addOwnerArgs(args, action);
     final code = await _exec(shell, args, script.parent.parent.path,
         environment: _scriptEnvironment);
@@ -452,7 +443,7 @@ class BackendLauncher extends ChangeNotifier {
   // -------------------------------------------------------------------------
 
   /// 关 App 时把**本地服务**停掉：调 `scripts\comfyhub.ps1 release`
-  /// （只停后端 + MySQL，**绝不动 App 进程** —— `down` 会按进程名杀 viewer，不能在这里用）。
+  /// （只停后端，**绝不动 App 进程** —— `down` 会按进程名杀 viewer，不能在这里用）。
   ///
   /// 为什么能"活过我们自己的退出"：pwsh 是独立进程，父进程（App）退出不会带走它
   /// （Windows 不会因为父进程退出就杀子进程）。实测：父进程起来 400ms 后直接 exit(0)，
@@ -512,7 +503,7 @@ class BackendLauncher extends ChangeNotifier {
   /// 补挂「关 App 自动停服务」的守护进程：`comfyhub.ps1 watch -OwnerPid <自己>`。
   ///
   /// 用在 [ensureRunning] 探到后端已经健康、**根本没跑 up** 的那条路径上：
-  /// 那种情况下 watchdog 没挂上，硬杀 App 就会留下没人管的 MySQL + 后端。
+  /// 那种情况下 watchdog 没挂上，硬杀 App 就会留下没人管的后端。
   /// 只等"进程起来"（几毫秒），不等它退出；出错只记日志，绝不抛。
   Future<bool> armOwnerWatch() async {
     if (!_settings.stopServicesOnExit) return false;
@@ -551,10 +542,6 @@ class BackendLauncher extends ChangeNotifier {
     if (withOwnerPid) {
       args..add('-OwnerPid')..add('$pid');
     }
-    final dataDir = _settings.mysqlDataDir;
-    if (dataDir != null && dataDir.isNotEmpty) {
-      args..add('-DataDir')..add(dataDir);
-    }
     return _ServiceCall(shell, args, script.parent.parent.path);
   }
 
@@ -577,51 +564,6 @@ class BackendLauncher extends ChangeNotifier {
       _log('执行失败（已忽略，不影响关闭）: $e');
       return null;
     }
-  }
-
-  /// 把 MySQL 的实例目录整体搬到 [newDir]（数据文件 + my.ini + 日志）。
-  ///
-  /// 调的是 `scripts\mysql.ps1 move`：它会先停库、robocopy 过去、
-  /// 写一个 `.mysql-location.json` 记住新位置，再把库拉起来。
-  /// 源目录不会被删除，确认没问题后可以自己删。
-  Future<bool> moveMysqlData(String newDir) async {
-    if (busy) return false;
-    final root = (_settings.projectRoot?.isNotEmpty ?? false)
-        ? _settings.projectRoot!
-        : detectProjectRoot();
-    final shell = resolveShell();
-    if (kIsWeb || !Platform.isWindows || root == null || shell == null) {
-      _fail('找不到项目目录或 pwsh，无法迁移。');
-      return false;
-    }
-    final sep = Platform.pathSeparator;
-    final script = File([root, 'scripts', 'mysql.ps1'].join(sep));
-    if (!script.existsSync()) {
-      _fail('找不到 scripts\\mysql.ps1');
-      return false;
-    }
-    _set(StartupPhase.starting, '正在迁移 MySQL 数据目录到 $newDir …');
-    final code = await _exec(
-      shell,
-      [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        script.path,
-        'move',
-        '-DataDir',
-        newDir,
-      ],
-      root,
-    );
-    if (code == 0) {
-      await _settings.setMysqlDataDir(newDir);
-      _set(StartupPhase.idle, 'MySQL 数据目录已迁移到 $newDir');
-      return true;
-    }
-    _fail('迁移失败（退出码 $code），请看下面的日志');
-    return false;
   }
 
   /// 跑一个子进程并把输出实时回显到启动页日志；返回退出码（启动失败返回 null）

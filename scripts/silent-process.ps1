@@ -5,7 +5,7 @@
 .DESCRIPTION
     为什么不能直接用 Start-Process：
       · Start-Process 起的进程属于当前 PowerShell 的进程树，命令行一结束就可能被一起回收；
-      · 所以 mysqld / 后端一直是走 WMI 的 Win32_Process.Create 来脱离进程树的，
+      · 所以后端一直是走 WMI 的 Win32_Process.Create 来脱离进程树的，
         但 WMI 默认会给控制台程序分配一个**新的可见控制台窗口** ——
         App 自动拉起服务时闪出来的那个黑框就是它。
 
@@ -24,7 +24,6 @@
 
 .EXAMPLE
     . "$PSScriptRoot\silent-process.ps1"
-    Start-SilentProcess -CommandLine "`"$Mysqld`" --defaults-file=`"$IniFile`"" -Tag 'mysqld'
 #>
 
 function Test-SystemManagementAvailable {
@@ -93,7 +92,7 @@ function Start-SilentProcess {
     # ---- 2) WMI 起 wscript，由它用 SW_HIDE 把命令交给 cmd 执行 ----
     #  两个实测出来的坑：
     #   · wscript 的 Run 直接执行「"带引号的完整路径" + 参数」时，
-    #     有些程序（实测 mysqld.exe）会被它悄悄丢掉，交给 cmd 解析才稳；
+    #     有些程序（实测带引号的绝对路径）会被它悄悄丢掉，交给 cmd 解析才稳；
     #   · 命令行里有引号 / 中文路径时，作为 wscript 参数传容易被拆坏，
     #     所以写进一个 UTF-16 的命令行文件，VBS 读出来再用（编码/引号都不用操心）。
     try {

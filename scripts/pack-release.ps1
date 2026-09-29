@@ -32,7 +32,8 @@
 
     注意（P2，2026-09-23）：数据库是 **SQLite**（驱动自带引擎），
     所以发布包**不再携带便携版 MySQL**（少约 300MB），也不再需要 VC++ 运行时。
-    老 MySQL 只在"把老库数据搬进 SQLite"那一步（scripts\server.ps1 migrate）才用得到。
+    （2026-09-29 起 MySQL 连"把老库搬进新库"那条通道一起退役了 —— 运行期数据库是
+     SQLite 单文件，包里不再有任何数据库本体，这两行只是说明来龙去脉。）
 
 .EXAMPLE
     pwsh -File scripts\pack-release.ps1
@@ -375,8 +376,9 @@ if ($Clean) {
     }
     [void]$owned.Add('packaging')
     [void]$owned.Add('BUILD-INFO.txt')
-    # P2 之前清单里有 `mysql` 组件，老发布目录里还留着那 300MB —— 清单里已经没有它了，
-    # 只按清单清会把它永久留下来。这里显式补一刀（就地装配时那些目录本来就是我们装的）。
+    # 2026-09-29：MySQL 已彻底退役（`mysql` 组件早就不在清单里了）。
+    # 这里仍显式补一刀清 `mysql` —— 老发布目录里可能还留着那 300MB，
+    # 只按清单清会把它永久留下。`.mysql` 是实例目录，**不**在这里清（它属于运行期数据）。
     [void]$owned.Add('mysql')
     foreach ($e in ($owned | Select-Object -Unique)) {
         $p = Join-Path $OutDir $e
@@ -454,7 +456,7 @@ foreach ($c in $manifest.components) {
             'mysql_portable' {
                 # P2（2026-09-23）起清单里已经没有这个组件（数据库换成 SQLite）。
                 # 分支保留成一句明确报错：万一有人把清单改回去，这里要能说清为什么不该有。
-                throw '清单里不该再有 mysql_portable：P2 起数据库是 SQLite，发布包不再携带 MySQL。要搬迁老库请用 scripts\server.ps1 migrate。'
+                throw '清单里不该再有 mysql_portable：2026-09-29 起 MySQL 已彻底退役，运行期数据库是 SQLite 单文件，发布包不携带任何数据库本体。'
             }
             'copy_tree' {
                 $src = Join-Path $ProjectRoot $c.source

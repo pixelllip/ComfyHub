@@ -33,17 +33,17 @@
     "optionalRuntime": {
       "mcp": {
         "path": "storage/ai/mcp",
-        "why": "MCP 运行时（便携版 Python + comfy-cli + comfy-mcp）落在这里 —— 与 storage/ai/skills 同一个 storage 根，所以发布包（便携式）与源码树里路径同构。根目录不可写时退回 %LOCALAPPDATA%\\ComfyHub\\mcp，位置记在 <该目录>\\state.json。",
+        "why": "MCP 运行时（便携版 Python + comfy-cli + comfy-mcp）落在这里 —— 与 storage/ai/skills 同一个 storage 根，所以发布包（便携式）与源码树里路径同构。**只有这一个落点**（2026-09-29 删掉了\"根不可写就退到 %LOCALAPPDATA%\\ComfyHub\\mcp\"那一条：那是系统位置的外溢，写不进去应当如实报错让用户挪地方）。",
         "installer": "pwsh -File scripts\\mcp-runtime.ps1 install",
         "status": "pwsh -File scripts\\mcp-runtime.ps1 status"
       }
     },
     "databaseLocation": {
       "comment": [
-        "P2（2026-09-23）起数据库是 **SQLite 单文件**：<根>\\.db\\comfyhub.db。",
+        "P2（2026-09-23）起数据库是 **SQLite 单文件**：<根>\\.db\\comfyhub.db，由后端自己按需创建。",
         "同目录还会有 SQLite 自己写的 comfyhub.db-wal / -shm —— 备份/拷贝必须**三个一起**，",
         "而且要在后端停止时拷（写到一半的文件拷出来是坏的，见 docs\\memory-and-storage-evaluation.md §6.5）。",
-        "老 MySQL 库 → SQLite 的一次性搬迁：`scripts\\server.ps1 migrate`（逐表行数与行哈希核对）。"
+        "（2026-09-29：老 MySQL 库 → SQLite 的一次性搬迁通道已随 MySQL 一起删除。）"
       ],
       "default": ".db/comfyhub.db",
       "overrideOrder": [
@@ -66,11 +66,12 @@
 
   "runtimeRequirements": {
     "comment": [
-      "P2（2026-09-23）起发布包只需要带走 **Java 运行时**（bundled=true 的那一条）——",
-      "数据库是 SQLite（驱动自带引擎），所以 MySQL 本体与它依赖的 VC++ 运行时都**不再需要**。",
+      "P2（2026-09-23）起数据库是 SQLite 单文件，P4（2026-09-26）起后端是 Rust 单文件 exe ——",
+      "MySQL 本体与它专属的 VC++ 运行时**都不再需要**（2026-09-29 与\"搬迁老库\"通道一起删除）。",
+      "后端 exe 的 CRT 是静态链接的，只用 Windows 10/11 自带的 Universal CRT（api-ms-win-crt-*）。",
       "其余必须目标机器自己装 —— 缺了服务起不来，而且报错往往没头没尾。",
       "scripts\\runtime-deps.ps1 会在 `comfyhub.ps1 up` 失败时和 `comfyhub.ps1 doctor` 里把这几项报出来",
-      "（required=false 的只对\"搬迁老 MySQL 库\"有意义，缺了不算问题）。"
+      "（required=false 的只对回退旧 Kotlin 后端有意义，缺了不算问题）。"
     ],
     "required": [
       {
@@ -81,14 +82,6 @@
         "install": "winget install --id Microsoft.PowerShell --source winget"
       },
       {
-        "name": "Microsoft Visual C++ 2015-2022 Redistributable (x64)",
-        "bundled": false,
-        "required": false,
-        "legacy": true,
-        "why": "只有**搬迁老 MySQL 库**那一步需要（mysqld.exe 是 MSVC 编的）。P2 起后端用 SQLite，全新安装不需要它",
-        "install": "winget install --id Microsoft.VCRedist.2015+.x64"
-      },
-      {
         "name": "Java 21 运行时",
         "bundled": false,
         "required": false,
@@ -96,13 +89,6 @@
         "location": "jre",
         "autoDownload": "scripts\\ensure-runtime.ps1",
         "why": "**只在跑旧 Kotlin 后端时**才需要（灰度期 `COMFYHUB_BACKEND=kotlin`）。P4（2026-09-26）起后端是 Rust 单文件二进制，发布包默认不再装 jre（要装加 `-WithJre`），所以包又小约 40MB"
-      },
-      {
-        "name": "MySQL 8.4（免安装版）",
-        "bundled": false,
-        "required": false,
-        "legacy": true,
-        "why": "只给\"把老库数据搬进 SQLite\"用（scripts\\server.ps1 migrate）。P2 起**不再随包携带**：运行期数据库是 SQLite，发布包因此少了约 300MB"
       },
       {
         "name": "Windows 10 / 11 x64",
@@ -152,16 +138,16 @@
       "required": true,
       "source": "scripts",
       "target": "scripts",
-      "note": "整个 scripts 目录都要，别只挑几个：comfyhub.ps1 依赖 server.ps1 / silent-process.ps1 / watch-owner.ps1 / runtime-deps.ps1。mysql.ps1 只在搬迁老库时才用得到，但脚本之间互相引用，照旧整目录带走。"
+      "note": "整个 scripts 目录都要，别只挑几个：comfyhub.ps1 依赖 server.ps1 / silent-process.ps1 / watch-owner.ps1 / runtime-deps.ps1。（2026-09-29 起 mysql.ps1 已删除，这里没有任何 MySQL 相关脚本。）"
     },
     {
       "id": "db",
-      "title": "DDL（SQLite 建表 / 老 MySQL 参考）",
+      "title": "DDL（SQLite 建表）",
       "kind": "copy_tree",
       "required": true,
       "source": "db",
       "target": "db",
-      "note": "schema.sqlite.sql 是**现在的真源**（后端从 jar 里的副本执行，这里这份供人看 / sqlite3 CLI 手工建库）；schema.sql 是历史 MySQL 版，只在搬迁时当参考。"
+      "note": "schema.sqlite.sql 是**现在的真源**（后端从编译进二进制里的副本执行，这里这份供人看 / sqlite3 CLI 手工建库）；schema.sql 是历史 MySQL 版，只当留档（MySQL 已于 2026-09-29 退役，搬迁通道一并删除）。"
     },
     {
       "id": "comfyui",

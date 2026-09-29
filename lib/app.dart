@@ -71,7 +71,7 @@ class ComfyHubApp extends StatelessWidget {
   }
 }
 
-/// 启动闸门：先把 MySQL + 后端拉起来，再进主界面。
+/// 启动闸门：先把后端拉起来，再进主界面。
 ///
 /// 后端没起来时也能「跳过」进主界面（离线浏览最后一次的结果 / 去设置里改地址）。
 class StartupGate extends StatefulWidget {
@@ -106,7 +106,7 @@ class _StartupGateState extends State<StartupGate> {
     super.dispose();
   }
 
-  /// 关窗口时把**本地服务**停掉：`scripts\comfyhub.ps1 release`（只停后端 + MySQL，
+  /// 关窗口时把**本地服务**停掉：`scripts\comfyhub.ps1 release`（只停后端，
   /// 不碰 App 自己）。Windows 上这是唯一可靠的收尾时机 —— 模板 runner
   /// （windows\runner\flutter_window.cpp:50-70）把窗口消息交给引擎，
   /// WM_CLOSE 会被转成 onExitRequested；而 detach / dispose 之后 Dart 侧已经

@@ -5,9 +5,10 @@
 .DESCRIPTION
     发布包（scripts\pack-release.ps1）只带了**一样**能带走的东西：
       · Rust 后端     <根>\server\comfyhub-server-rs.exe  —— 单文件二进制，SQLite 引擎编在里面
-    （P4/2026-09-26 起后端是 Rust：**不再需要 JVM、不再需要 MySQL**，包从 ~60MB 降到 ~14MB。）
-    （P2/2026-09-23 起数据库是 **SQLite**：xerial 驱动自带引擎，不再需要 MySQL 本体、
-     也不再需要它依赖的 VC++ 运行时 —— 发布包因此少了 300MB。）
+    （P4/2026-09-26 起后端是 Rust 单文件 exe：**不再需要 JVM**。）
+    （P2/2026-09-23 起数据库是 **SQLite** 单文件，驱动自带引擎。）
+    （**2026-09-29：MySQL 与"搬迁老库"那条通道已彻底退役并删除**，
+     连同它专属的 VC++ 运行时体检项一起没了 —— 运行期不再有任何东西需要它们。）
     这之外还有几样**必须目标机器自己装**，缺一个服务就起不来，
     而失败现场往往只是一句没头没尾的报错（"不是内部或外部命令"）。
     这个文件把它们列清楚，并在启动失败时给出可操作的安装提示。
@@ -18,26 +19,7 @@
       1. PowerShell 7 (pwsh)            —— **必需**，且 Windows 自带的 powershell.exe 5.1 不算数
       2. Java 21 运行时                  —— **可选（legacy）**：只有回退旧 Kotlin 后端
                                           （COMFYHUB_BACKEND=kotlin + legacy\server）时才需要
-      3. VC++ 2015-2022 x64 可再发行组件 —— 可选：只有搬迁老 MySQL 库时才用得上
-      4. MySQL 本体                      —— 可选：同上，只有 `comfyhub.ps1 up` 遇到老库自动搬迁时才拉起来
 #>
-
-function Test-VcRuntime {
-    <#
-      mysqld.exe 是 MSVC 编的，缺 vcruntime140.dll / msvcp140.dll 会**直接起不来**，
-      而且报错往往落在 mysql-error.log 里，命令行上只看到"启动超时"。
-      优先看 mysqld.exe 旁边（有些发行版会把 DLL 放在 bin\ 下），再退回 System32。
-    #>
-    param([string]$MySqlBinDir)
-
-    foreach ($dll in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
-        $found = $false
-        if ($MySqlBinDir) { $found = Test-Path -LiteralPath (Join-Path $MySqlBinDir $dll) }
-        if (-not $found) { $found = Test-Path -LiteralPath (Join-Path $env:SystemRoot "System32\$dll") }
-        if (-not $found) { return $false }
-    }
-    return $true
-}
 
 function Get-RuntimeChecks {
     <#
@@ -46,16 +28,14 @@ function Get-RuntimeChecks {
     #>
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
-        [string]$MySqlBinDir,
-        [string]$MySqlHome,
         [string]$Jdk
     )
 
     $checks = @()
 
     # ---- 1) PowerShell 7 -------------------------------------------------
-    # 脚本内部到处是 `& pwsh -NoProfile -File xxx.ps1`（comfyhub.ps1 / mysql.ps1 /
-    # server.ps1 互相调用），Windows 自带的 powershell.exe(5.1) 满足不了这些调用。
+    # 脚本内部到处是 `& pwsh -NoProfile -File xxx.ps1`（comfyhub.ps1 与 server.ps1
+    # 互相调用），Windows 自带的 powershell.exe(5.1) 满足不了这些调用。
     $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
     $checks += [pscustomobject]@{
         Name     = 'PowerShell 7 (pwsh)'
@@ -64,20 +44,6 @@ function Get-RuntimeChecks {
         Detail   = $(if ($pwshCmd) { $pwshCmd.Source } else { 'PATH 里找不到 pwsh' })
         Why      = 'App 用它执行 scripts\comfyhub.ps1；脚本之间也互相调 pwsh（Windows 自带的 5.1 不够）'
         Hint     = 'winget install --id Microsoft.PowerShell --source winget    （或 https://aka.ms/powershell）'
-    }
-
-    # ---- 2) VC++ 运行时（**只有搬迁老 MySQL 库那一步**才需要）-------------
-    # P2（2026-09-23）起后端用 SQLite（xerial 自带引擎，纯 Java + 自带的本地库），
-    # 发布包里连 mysql/ 都没有了 —— 所以这一项**不再是必需项**，
-    # 只在"老库还在、还想搬迁"的时候才有意义。缺了它不该报红。
-    $vcOk = Test-VcRuntime -MySqlBinDir $MySqlBinDir
-    $checks += [pscustomobject]@{
-        Name     = 'VC++ 2015-2022 x64 运行时'
-        Ok       = $vcOk
-        Required = $false
-        Detail   = $(if ($vcOk) { 'vcruntime140 / msvcp140 都在' } else { '缺 vcruntime140.dll / msvcp140.dll（只有搬迁老 MySQL 库才用得上）' })
-        Why      = 'mysqld.exe 是 MSVC 编的，缺这几个 DLL 会直接起不来（错误只写在 mysql-error.log 里）。P2 起后端用 SQLite，只有 `comfyhub.ps1 up` 遇到老库数据要自动搬迁时才需要它'
-        Hint     = '装 "Microsoft Visual C++ 2015-2022 Redistributable (x64)"：winget install --id Microsoft.VCRedist.2015+.x64'
     }
 
     # ---- 3) Java 运行时 --------------------------------------------------
@@ -137,17 +103,6 @@ function Get-RuntimeChecks {
         Hint     = '回退旧后端时才装 JDK 21~23，或用 -JdkHome / COMFYHUB_JDK_HOME 指定'
     }
 
-    # ---- 4) MySQL 本体（**只有搬迁老库那一步**才需要）--------------------
-    $mysqldOk = $MySqlBinDir -and (Test-Path -LiteralPath (Join-Path $MySqlBinDir 'mysqld.exe'))
-    $checks += [pscustomobject]@{
-        Name     = 'MySQL 服务端 (mysqld.exe)'
-        Ok       = [bool]$mysqldOk
-        Required = $false
-        Detail   = $(if ($mysqldOk) { Join-Path $MySqlBinDir 'mysqld.exe' } else { '找不到 mysqld.exe（只有搬迁老库才用得上）' })
-        Why      = 'P2 起后端用 SQLite 文件（<根>\.db\comfyhub.db），不再需要 MySQL。只有把老 MySQL 数据搬进新库那一次（scripts\server.ps1 migrate）才需要它'
-        Hint     = '要搬迁就设 COMFYHUB_MYSQL_HOME 指向 MySQL 解压目录；全新安装不需要装 MySQL'
-    }
-
     return $checks
 }
 
@@ -155,14 +110,12 @@ function Show-RuntimeReport {
     <#  体检表：Ok 的一行带过，缺的重点标出来  #>
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
-        [string]$MySqlBinDir,
-        [string]$MySqlHome,
         [string]$Jdk,
         [switch]$OnlyProblems
     )
 
-    $checks = Get-RuntimeChecks -ProjectRoot $ProjectRoot -MySqlBinDir $MySqlBinDir -MySqlHome $MySqlHome -Jdk $Jdk
-    # 只有**必需项**缺失才算"问题"：MySQL / VC++ 现在是"只给搬迁旧库用"的可选项
+    $checks = Get-RuntimeChecks -ProjectRoot $ProjectRoot -Jdk $Jdk
+    # 只有**必需项**缺失才算"问题"：Java 是"只给回退旧后端用"的可选项
     $bad = @($checks | Where-Object { -not $_.Ok -and $_.Required })
 
     foreach ($c in $checks) {
@@ -191,12 +144,10 @@ function Show-RuntimeFailureHints {
     #>
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
-        [string]$MySqlBinDir,
-        [string]$MySqlHome,
         [string]$Jdk
     )
 
-    $checks = Get-RuntimeChecks -ProjectRoot $ProjectRoot -MySqlBinDir $MySqlBinDir -MySqlHome $MySqlHome -Jdk $Jdk
+    $checks = Get-RuntimeChecks -ProjectRoot $ProjectRoot -Jdk $Jdk
     $bad = @($checks | Where-Object { -not $_.Ok -and $_.Required })
     if ($bad.Count -eq 0) { return $false }
 
@@ -214,7 +165,7 @@ function Show-RuntimeFailureHints {
 # ===========================================================================
 #  自动获取运行时
 #  Java 能"下载一个便携版塞进 <根>\jre"就解决（免安装、免管理员）；
-#  pwsh / VC++ 运行时属于系统级安装，走 winget（没有 winget 就只给出提示）。
+#  pwsh 属于系统级安装，走 winget（没有 winget 就只给出提示）。
 #  入口脚本：scripts\ensure-runtime.ps1
 # ===========================================================================
 
@@ -592,7 +543,7 @@ function Get-WingetPath {
 
 function Install-WingetPackage {
     <#
-      用 winget 装系统级运行时。装 VC++ 运行时需要管理员权限，会弹 UAC ——
+      用 winget 装系统级运行时（pwsh）。需要管理员权限，会弹 UAC ——
       这是安装本身的性质，脚本没法绕过。
     #>
     param(
@@ -612,7 +563,7 @@ function Invoke-RuntimeEnsure {
     <#
       ensure-runtime.ps1 的主逻辑：检测全部运行时，把缺的补上。
         · Java        → 自动下载便携版（免安装、免管理员）
-        · pwsh / VC++ → 有 winget 就自动装，没有就给出下载地址
+        · pwsh          → 有 winget 就自动装，没有就给出下载地址
       返回 $true 表示全部就绪。
     #>
     param(
@@ -644,15 +595,8 @@ function Invoke-RuntimeEnsure {
         return [bool]($j -and $maj -and $maj -ge 21)
     }
 
-    # ---- pwsh / VC++ -----------------------------------------------------
+    # ---- pwsh ------------------------------------------------------------
     $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
-    $mysqld = $null
-    try {
-        $mysqld = Join-Path $ProjectRoot 'mysql\bin\mysqld.exe'
-    } catch { }
-    $binDir = $null
-    if ($mysqld -and (Test-Path -LiteralPath $mysqld)) { $binDir = Split-Path -Parent $mysqld }
-    $vcOk = Test-VcRuntime -MySqlBinDir $binDir
 
     if (-not $NoSystem -and -not $CheckOnly) {
         if (-not $pwshCmd) {
@@ -664,18 +608,10 @@ function Invoke-RuntimeEnsure {
                 $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
             }
         }
-        if (-not $vcOk) {
-            Say3 '  缺 VC++ 运行时，尝试用 winget 安装（会弹 UAC）…' 'Yellow'
-            if (-not (Install-WingetPackage -Id 'Microsoft.VCRedist.2015+.x64' -Quiet:$Quiet)) {
-                Say3 '  winget 装不了。请手动装: https://aka.ms/vs/17/release/vc_redist.x64.exe' 'Red'
-            } else {
-                $vcOk = Test-VcRuntime -MySqlBinDir $binDir
-            }
-        }
     }
 
     # ---- 汇总 ------------------------------------------------------------
-    $checks = Get-RuntimeChecks -ProjectRoot $ProjectRoot -MySqlBinDir $binDir
+    $checks = Get-RuntimeChecks -ProjectRoot $ProjectRoot
     $bad = @($checks | Where-Object { -not $_.Ok })
 
     Say3 ''

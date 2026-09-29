@@ -273,6 +273,22 @@ async fn main() {
     //     `reply_state` + 确定性的 `reply_message_id` 保证"一定送到、且只送一条"。
     comfyhub_server_rs::submit_queue::spawn_sweeper(state.clone());
 
+    // ---- 自己受限不自知（2026-09-29）-------------------------------------------
+    //
+    // 后端若是从**受限会话**（AI 助手的文件沙箱）里拉起来的，那份限制跟着进程走、
+    // 子进程原样继承 —— 表现是 `comfy_start` 写不进 ComfyUI 的 `temp/`、`comfy_use_media`
+    // 写不进 input…，而 `doctor` **一条都看不出来**（它只探端口/健康/构建新鲜度）。
+    // 这里启动时探一次并留证（`.run\confinement.json`），让 `comfyhub.ps1 doctor` 能直接说
+    // 「这个后端是从受限会话起的，重起它就行」—— 沿用 pitfalls 151/154 的纪律。
+    // 探不到工作区（还没配 ComfyUI）不是毛病，不留证。
+    {
+        let state = state.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            comfyhub_server_rs::confinement::refresh(&state);
+        });
+    }
+
     let app = routes::router(state.clone())
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http());

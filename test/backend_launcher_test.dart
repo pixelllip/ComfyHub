@@ -4,8 +4,8 @@
 // 换成假的之后就能断言"到底用哪个 shell、传了哪些参数、工作目录是哪儿"，
 // 用例因此在没有 pwsh 的机器上也能跑。
 //
-// 背景（修的是哪个 bug）：App 退出时没人停它冷启动拉起来的 MySQL + 后端。
-// 窗口关闭那一刀走 `comfyhub.ps1 release`（只停后端 + MySQL，不碰 App 自己，
+// 背景（修的是哪个 bug）：App 退出时没人停它冷启动拉起来的后端。
+// 窗口关闭那一刀走 `comfyhub.ps1 release`（只停后端，不碰 App 自己，
 // 所以不能用会按进程名杀 viewer 的 `down`）；App 启动时探到"后端已经健康"就直接
 // 返回、没跑过 up 的那条路，则补挂一次 `comfyhub.ps1 watch -OwnerPid <自己>`。
 
@@ -61,7 +61,6 @@ void main() {
   late BackendProcessStarter realStarter;
 
   const fakeShell = r'C:\fake\pwsh.exe';
-  const dataDir = r'D:\mysql\comfyhub-data';
 
   setUp(() {
     root = Directory.systemTemp.createTempSync('comfyhub-launcher-');
@@ -101,7 +100,6 @@ void main() {
 
   Future<SettingsStore> loadSettings({
     String? projectRoot,
-    String? mysqlDataDir,
     bool stopServicesOnExit = true,
   }) async {
     final values = <String, Object>{
@@ -109,9 +107,6 @@ void main() {
       'comfyhub.stopServicesOnExit': stopServicesOnExit,
       'comfyhub.autoStartBackend': false,
     };
-    if (mysqlDataDir != null) {
-      values['comfyhub.mysqlDataDir'] = mysqlDataDir;
-    }
     SharedPreferences.setMockInitialValues(values);
     final settings = SettingsStore();
     await settings.load();
@@ -125,8 +120,8 @@ void main() {
     calls.clear();
   }
 
-  test('releaseOnExit：调 release（不是 down），把 -DataDir 原样传下去', () async {
-    final settings = await loadSettings(mysqlDataDir: dataDir);
+  test('releaseOnExit：调 release（不是 down），且不传 -DataDir', () async {
+    final settings = await loadSettings();
     final launcher = BackendLauncher(settings);
     installStarter();
     await claim(launcher);
@@ -145,23 +140,13 @@ void main() {
       '${root.path}${Platform.pathSeparator}scripts'
           '${Platform.pathSeparator}comfyhub.ps1',
       'release',
-      '-DataDir',
-      dataDir,
     ]);
     // 一定要走 release：down 会按进程名把 App 自己杀掉
     expect(calls.single.args, isNot(contains('down')));
-    launcher.dispose();
-  });
-
-  test('releaseOnExit：没设 MySQL 目录时不传 -DataDir', () async {
-    final settings = await loadSettings();
-    final launcher = BackendLauncher(settings);
-    installStarter();
-    await claim(launcher);
-
-    await launcher.releaseOnExit();
-
-    expect(calls.single.args.sublist(5), ['release']);
+    // ⚠ MySQL 已于 2026-09-29 退役，`comfyhub.ps1` **不再接受 -DataDir**：
+    // 它是 [CmdletBinding()]，传未知命名参数会直接抛 ParameterBindingException ——
+    // 表现是 App 启动 / 退出当场失败。这条守着别把它加回去。
+    expect(calls.single.args, isNot(contains('-DataDir')));
     launcher.dispose();
   });
 
@@ -186,7 +171,7 @@ void main() {
   });
 
   test('armOwnerWatch：补挂守护进程，带上自己的 PID', () async {
-    final settings = await loadSettings(mysqlDataDir: dataDir);
+    final settings = await loadSettings();
     final launcher = BackendLauncher(settings);
     installStarter();
 
@@ -204,8 +189,6 @@ void main() {
       'watch',
       '-OwnerPid',
       '$pid',
-      '-DataDir',
-      dataDir,
     ]);
     launcher.dispose();
   });
@@ -273,7 +256,7 @@ void main() {
   });
 
   test('release/watch 的日志会被记下来（方便排查"到底停没停"）', () async {
-    final settings = await loadSettings(mysqlDataDir: dataDir);
+    final settings = await loadSettings();
     final launcher = BackendLauncher(settings);
     installStarter();
     await claim(launcher);

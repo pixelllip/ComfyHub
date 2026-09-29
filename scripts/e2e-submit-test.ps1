@@ -57,7 +57,7 @@ if (-not $ApiBase) {
 $E2eDir      = Join-Path $PSScriptRoot 'e2e'
 $WorkDir     = Join-Path $ProjectRoot '.run\e2e-submit'
 $OutDir      = Join-Path $WorkDir 'output'
-# 工作流文件故意放在**项目之外**的临时目录：项目内的 `.run` / `.mysql` / `.git` / `node_modules`
+# 工作流文件故意放在**项目之外**的临时目录：项目内的 `.run` / `.git` / `node_modules`
 # 是工具权限里"永远不许碰"的段（见 ToolPolicy.FORBIDDEN_SEGMENTS），拿它当"用户机器上的
 # 工作流文件"来测并不真实 —— 真实的 ComfyUI 工作流目录本来就在项目外面。
 $WfDir       = Join-Path ([System.IO.Path]::GetTempPath()) "comfyhub-e2e-submit-wf-$PID"
@@ -107,21 +107,12 @@ function Find-Python {
 }
 
 function Find-MysqlExe {
-    $cands = @()
-    if ($env:COMFYHUB_MYSQL_HOME) { $cands += (Join-Path $env:COMFYHUB_MYSQL_HOME 'bin\mysql.exe') }
-    foreach ($root in @('D:\tools\mysql', 'C:\tools\mysql')) {
-        if (-not (Test-Path $root)) { continue }
-        $cands += (Join-Path $root 'bin\mysql.exe')
-        Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue |
-            ForEach-Object { $cands += (Join-Path $_.FullName 'bin\mysql.exe') }
-    }
-    return ($cands | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1)
+    throw 'MySQL 已于 2026-09-29 退役，这个查找函数不该再存在'
 }
 
 # ---------------------------------------------------------------------------
 #  直接查库
-#  P2（2026-09-23）起后端写的是 **SQLite 单文件** `<项目根>\.db\comfyhub.db`；
-#  还去问 mysql.exe 只会得到"什么都没有"，症状是"没等到 tool.requested"。
+#  后端写的是 **SQLite 单文件** `<项目根>\.db\comfyhub.db`。
 #  用 python 的 sqlite3（本脚本本来就把 python 当前置条件），读 + 删都走它。
 # ---------------------------------------------------------------------------
 $script:SqliteDb = Join-Path $ProjectRoot '.db\comfyhub.db'

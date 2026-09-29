@@ -4,7 +4,7 @@ import 'dart:io' show Directory, File, Platform;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 全局设置（后端地址、自动启动、MySQL 数据目录等），持久化在本地。
+/// 全局设置（后端地址、自动启动、项目根目录等），持久化在本地。
 class SettingsStore extends ChangeNotifier {
   static const _kBaseUrl = 'comfyhub.baseUrl';
   static const _kBaseUrlHistory = 'comfyhub.baseUrlHistory';
@@ -13,7 +13,6 @@ class SettingsStore extends ChangeNotifier {
   static const _kStopServicesOnExit = 'comfyhub.stopServicesOnExit';
   static const _kAllowRemoteBackend = 'comfyhub.allowRemoteBackend';
   static const _kProjectRoot = 'comfyhub.projectRoot';
-  static const _kMysqlDataDir = 'comfyhub.mysqlDataDir';
 
   String _baseUrl = defaultBaseUrl();
   int _pageSize = 24;
@@ -21,7 +20,6 @@ class SettingsStore extends ChangeNotifier {
   bool _stopServicesOnExit = true;
   bool _allowRemoteBackend = false;
   String? _projectRoot;
-  String? _mysqlDataDir;
   bool _loaded = false;
 
   /// 用过哪些地址（最近用的在前，最多 [maxBaseUrlHistory] 条）。
@@ -51,7 +49,7 @@ class SettingsStore extends ChangeNotifier {
   /// （那是"我要连别的机器"，改它就是把人家的远程配置弄坏了）。
   bool get baseUrlIsAuto => !_baseUrlFromUser;
 
-  /// App 启动时是否自动把 MySQL + 后端拉起来
+  /// App 启动时是否自动把后端拉起来
   bool get autoStartBackend => _autoStartBackend;
 
   /// 关闭 App 时是否把**这次由 App 启动的**本地服务一并停掉（谁起的谁关）。
@@ -67,9 +65,6 @@ class SettingsStore extends ChangeNotifier {
 
   /// 项目根目录（放着 scripts\comfyhub.ps1 的那个目录）。为空表示自动探测。
   String? get projectRoot => _projectRoot;
-
-  /// 本地 MySQL 实例目录。为空表示用脚本默认值（<项目>\.mysql）。
-  String? get mysqlDataDir => _mysqlDataDir;
 
   bool get loaded => _loaded;
 
@@ -178,7 +173,6 @@ class SettingsStore extends ChangeNotifier {
     _stopServicesOnExit = prefs.getBool(_kStopServicesOnExit) ?? true;
     _allowRemoteBackend = prefs.getBool(_kAllowRemoteBackend) ?? false;
     _projectRoot = prefs.getString(_kProjectRoot);
-    _mysqlDataDir = prefs.getString(_kMysqlDataDir);
     _baseUrlHistory = _sanitizeHistory(prefs.getStringList(_kBaseUrlHistory));
     _loaded = true;
     notifyListeners();
@@ -300,18 +294,6 @@ class SettingsStore extends ChangeNotifier {
       await prefs.remove(_kProjectRoot);
     } else {
       await prefs.setString(_kProjectRoot, _projectRoot!);
-    }
-  }
-
-  Future<void> setMysqlDataDir(String? value) async {
-    final v = value?.trim();
-    _mysqlDataDir = (v == null || v.isEmpty) ? null : v;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    if (_mysqlDataDir == null) {
-      await prefs.remove(_kMysqlDataDir);
-    } else {
-      await prefs.setString(_kMysqlDataDir, _mysqlDataDir!);
     }
   }
 }

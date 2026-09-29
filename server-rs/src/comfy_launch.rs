@@ -49,17 +49,33 @@
 //! 生命周期，被 AI 顺手杀掉是不可接受的。杀之前还要用 `tasklist` 核一眼那个 pid 现在
 //! 是不是 python（pid 会被系统回收，不复核就可能误杀无辜进程）。
 //!
-//! # ⚠ 受限会话里"起得来"和"起得对"是两件事（2026-09-28 实测）
+//! # ⚠ 写不进工作区外：**限制按「映像位置」判，不按路径、也不按会话**（2026-09-29 逐条量过）
 //!
 //! 起实例的**子进程继承我们的令牌**：我们写不了的地方，它也写不了。实测现场是
 //! "命令一模一样、手工起就绪、我们起就 100% CPU 卡在扫自定义节点"，
 //! 而实例自己打的那行 `Failed to remove temp directory …: [WinError 5] 拒绝访问` 是铁证。
-//! 逃逸那条路也堵着（WMI `拒绝访问`、`schtasks` `Access is denied`、
-//! `Start-Process -WindowStyle Hidden` 照样继承）——**没有"换个方式拉起就没事"**。
-//!
 //! 所以起之前有一道 [`ensure_writable`] 闸门：写不进自己的目录就**当场如实拒绝**
-//! （`COMFY_WRITE_BLOCKED` + 下一步让人自己做），而不是白起一个卡死的实例。
-//! 判据与现场记录在 `tests/tmp-inherit-probe.rs`（那条临时探针）与 `docs/pitfalls.md`。
+//! （`COMFY_WRITE_BLOCKED`），而不是白起一个卡死的实例。
+//!
+//! ## 判据（这四条是 2026-09-29 用同一个二进制逐条对照量出来的，别的都排除了）
+//!
+//! | 怀疑对象 | 实测 | 结论 |
+//! | --- | --- | --- |
+//! | 目录 ACL | 诊断脚本对两个目录报 `NOT_THIS_CLASS`（无 deny ACE、无 package ACE，`WRITE_DAC`/`WRITE_OWNER` 都在） | 无关 |
+//! | 路径配错 / 用户身份 / Defender | 同用户同目录，`powershell` 写得进；Defender 无受控文件夹规则 | 无关 |
+//! | **映像在工作区内** | **同一个二进制逐字节相同：放工作区内 → 写 `%TEMP%`、`D:\Comfy-Desktop\…` 全 `os error 5`；`copy` 到 `%TEMP%` → 哪儿都能写** | ✅ 就是它 |
+//! | 从哪个会话 / 终端起 | 双击也一样被限 | 无关（限制在令牌里，跟会话走没用） |
+//!
+//! 另外两条**并存的**事实（别混成一条）：
+//! * **子进程继承父进程的限制** —— 受限父进程拉起的、工作区外的 python 照样被拒
+//!   （所以"换个 ComfyUI 自带的 python 就好"是错的）；
+//! * **WMI / schtasks 被拒只是受限的表现**，不是系统策略，换方式拉起逃不掉 —— 但
+//!   `Start-SilentProcess` 的三档**实测都能起**（`wmi-hidden` / `wmi-vbs` / `direct-hidden`
+//!   写同一个探针都是 OK），**spawn 档位与写权限无关**。
+//!
+//! 所以真正的修法只有一个：**把后端映像挪出工作区**（`COMFYHUB_SERVER_EXE`，或用发布包）。
+//! 留证交给 [`crate::confinement`] —— `comfyhub.ps1 doctor` 看得见，
+//! 沿用 `docs/pitfalls.md` 第 151/154 条已经定下的那条纪律。
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -285,35 +301,25 @@ pub fn plan_with(
 
 /// 子进程**继承我们的令牌** —— 我们写不了的地方，它也写不了。
 ///
-/// # 这条是本机实测出来的（2026-09-28），不是推断
+/// # 限制是"继承"+"按映像位置"，两条并存（2026-09-28 / 2026-09-29 实测）
 ///
-/// 现场：同一个命令，手工（pwsh，映像在项目外）起 ComfyUI 40~60s 就绪；
-/// 从 `cargo test`（映像在项目内）起，实例**100% CPU 卡在"扫自定义节点"那一步**
+/// 现场：同一个命令，手工（正常终端）起 ComfyUI 40~60s 就绪；
+/// 从**映像在工作区内的后端**再拉它，实例**100% CPU 卡在"扫自定义节点"那一步**
 /// （日志停在 `No OpenGL_accelerate…`），而且它自己打了一行
 /// `Failed to remove temp directory …\ComfyUI\temp: [WinError 5] 拒绝访问`。
 ///
-/// 量出来的判据（`tests/tmp-inherit-probe.rs` 的两条探针）：
-/// * 映像**在项目外**的 python，由**受限于项目的父进程**拉起时，写项目外照样
-///   `PermissionError [Errno 13]` —— 限制是**继承**的（原先记成"按映像判"是不完整的）；
-/// * 逃逸那条路也堵着：WMI `Win32_Process.Create` → `拒绝访问`；
-///   `schtasks /create` → `Access is denied`；`Start-Process -WindowStyle Hidden`
-///   不脱离作业对象，照样继承。
+/// 量出来的判据（文件头那张表是完整的，这里只留与本函数有关的）：
+/// * **按映像位置**：后端 exe 在工作区内 → 写工作区外全 `os error 5`；同一二进制复制出去 → 全通。
+///   所以换 ComfyUI 自带的 python **没用**（后端自己就写不了），换 spawn 档位也没用。
+/// * **按继承**：受限父进程拉起的、工作区外的 python 照样被拒（`tests/tmp-inherit-probe.rs`）。
+///   所以"让用户双击 Desktop"那条路之所以有效，是因为它的 python **映像在 ComfyUI 那边**
+///   **且**父进程（Desktop）不受限 —— 两个前提缺一个就不成立。
 ///
-/// 所以在这种会话里**任何由我们拉起的实例都是残废的**（写不了自己的 temp/output/模型目录）。
+/// 所以在这种后端里**任何由我们拉起的实例都是残废的**（写不了自己的 temp/output/模型目录）。
 /// 与其白起一个卡死的实例（用户等两分钟、看到 100% CPU、以为 ComfyUI 坏了），
-/// 不如**当场如实拒绝**并说清下一步。
+/// 不如**当场如实拒绝**并说清修法（把后端映像挪出工作区 —— 见下面 `ensure_writable` 的文案）。
 fn dir_writable(dir: &Path) -> bool {
-    if !dir.is_dir() {
-        return false;
-    }
-    let probe = dir.join(format!(".comfyhub-write-probe-{}", std::process::id()));
-    match std::fs::OpenOptions::new().create_new(true).write(true).open(&probe) {
-        Ok(_) => {
-            let _ = std::fs::remove_file(&probe);
-            true
-        }
-        Err(_) => false,
-    }
+    crate::confinement::dir_writable(dir)
 }
 
 /// 起实例前的"写得了吗"闸门（**可注入**判据，方便用例不依赖真机器）。
@@ -340,15 +346,40 @@ pub fn ensure_writable(
     Err(ToolFailure::new(
         "COMFY_WRITE_BLOCKED",
         format!(
-            "**不起**：这个会话不允许本进程（因此也不允许我起的子进程）写 ComfyUI 自己的目录 —— {}。\n\
-             这不是 ComfyUI 坏了，也不是路径配错了：子进程**继承**当前进程的限制，\
-             实测 WMI 的 `Win32_Process.Create`（拒绝访问）与 `schtasks /create`（Access is denied）\
-             都被系统挡掉，所以没有「换个方式拉起就没事」的退路；硬起只会得到一个卡死的实例\
-             （实测：100% CPU 卡在扫自定义节点，日志停在 `No OpenGL_accelerate…`）。\n\
-             **下一步（让用户自己做）**：让用户**双击 ComfyUI Desktop** 把实例起起来\
-             （那是由系统直接拉起的，不吃这个限制）——起完我这边用 `comfy_get_status` 就能接着干活；\
-             或者把 ComfyHub 从受限终端里挪出来（正常双击启动）之后再用 `comfy_start`。",
-            blocked.join("；")
+            "**不起**：本进程写不进项目外的目录 —— {blocked}。\n\
+             \n\
+             **真因是「后端映像放在哪儿」，不是 ComfyUI 坏了、也不是路径配错了**：\n\
+             写不进工作区外这件事是按**映像位置**判的（2026-09-29 逐条量过，见下），\n\
+             而源码树布局下后端 exe 就在工作区内 —— 于是它写不了 ComfyUI 自己的 `temp/`，\n\
+             硬起只会得到一个卡死的实例（实测：100% CPU 卡在扫自定义节点，日志停在 `No OpenGL_accelerate…`）。\n\
+             \n\
+             **修法（把整套 ComfyHub 放到工作区外 —— 内容照旧全在它自己的文件夹里）**：\n\
+             打一个发布包到工作区外，从那儿启动：\n\
+             ```\n\
+             pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub\n\
+             pwsh -File D:\\dist\\ComfyHub\\scripts\\comfyhub.ps1 up\n\
+             ```\n\
+             发布包的后端在 `<包根>\\server\\`、数据在 `<包根>\\.db\\` / `storage\\` / `.run\\` —— \
+             **既不受限，内容也仍然全在它自己的文件夹内**（这正是我们要的，不要改成往 `%LOCALAPPDATA%` \
+             之类的系统位置拷）。\n\
+             \n\
+             已经有工作区外的构建产物时，一条环境变量就够（不必重打整包）：\n\
+             `$env:COMFYHUB_SERVER_EXE` = 那个 `comfyhub-server-rs.exe` 的完整路径。\n\
+             \n\
+             **判据（2026-09-29 逐条量过，别再当成别的毛病）**：同一个二进制**逐字节相同**，\n\
+             映像放在工作区内 → 写 `%TEMP%`、`D:\\Comfy-Desktop\\…` 全部 `os error 5`，只写得进工作区；\n\
+             `copy` 到 `%TEMP%` 再跑 → **哪儿都能写**。所以：\n\
+             · 与**路径配错、目录 ACL、用户身份、Defender** 都无关（诊断脚本查这些目录的 ACL 是 `NOT_THIS_CLASS`，\n\
+               无 deny ACE、`WRITE_DAC`/`WRITE_OWNER` 都在；Defender 也没有受控文件夹规则）；\n\
+             · 与**从哪个终端起**也无关（双击也一样，限制跟的是映像不是会话）——\n\
+               但**子进程会继承父进程的限制**，所以受限父进程拉起的、工作区外的 python 照样被拒；\n\
+             · 也**不是 WMI/schtasks 的问题**：那两条路被挡只是受限的**表现**，换个方式拉起逃不掉（限制在令牌里）。\n\
+             \n\
+             **另一条也行**：让用户自己**双击 ComfyUI Desktop** 起实例（它的 python 映像在 ComfyUI 那边，不受限），\n\
+             起完这边用 `comfy_get_status` 就能接着干活。\n\
+             \n\
+             `comfyhub.ps1 doctor` 现在会直接报「后端受限」并指出是哪个 pid 留下的（别再靠猜）。",
+            blocked = blocked.join("；")
         ),
     ))
 }
@@ -379,6 +410,10 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
     let plan = plan_with(&state.project_root(), workspace, port, &extra, desktop.as_ref())?;
     // 先确认"子进程写得进它自己的目录"（写不进就别白起一个卡死的实例，见 ensure_writable）
     let output_dir = desktop.as_ref().and_then(|d| d.output_dir.clone());
+    // 顺手留证：探一次就把"本进程受不受限"落到 `.run\confinement.json`，doctor 靠它报出来 ——
+    // 沿用 pitfalls 151/154 的纪律（doctor 看不出这一条，用户就只能一直靠猜）。
+    // 探到正常时 `refresh` 会把旧标记清掉，所以每次调 comfy_start 都顺手校正一次。
+    crate::confinement::refresh(state);
     ensure_writable(&plan, output_dir.as_deref(), &dir_writable)?;
     let wait = arguments
         .get("waitSeconds")

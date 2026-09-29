@@ -28,7 +28,6 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController _urlController;
   late final TextEditingController _projectRootController;
-  late final TextEditingController _mysqlDataDirController;
   late final TextEditingController _comfyUrlController;
   late final TextEditingController _comfyOutputController;
   late final TextEditingController _autoTagController;
@@ -63,7 +62,6 @@ class _SettingsPageState extends State<SettingsPage> {
     _projectRootController = TextEditingController(
       text: settings.projectRoot ?? BackendLauncher.detectProjectRoot() ?? '',
     );
-    _mysqlDataDirController = TextEditingController(text: settings.mysqlDataDir ?? '');
     _comfyUrlController = TextEditingController(text: 'http://127.0.0.1:8188');
     _comfyOutputController = TextEditingController();
     _autoTagController = TextEditingController(text: 'ComfyUI');
@@ -74,7 +72,6 @@ class _SettingsPageState extends State<SettingsPage> {
   void dispose() {
     _urlController.dispose();
     _projectRootController.dispose();
-    _mysqlDataDirController.dispose();
     _comfyUrlController.dispose();
     _comfyOutputController.dispose();
     _autoTagController.dispose();
@@ -392,41 +389,6 @@ class _SettingsPageState extends State<SettingsPage> {
     if (launcher.isReady) {
       await context.read<LibraryStore>().refreshAll();
       await _loadCapture();
-    }
-  }
-
-  Future<void> _relocateMysql(BackendLauncher launcher) async {
-    final target = _mysqlDataDirController.text.trim();
-    if (target.isEmpty) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('迁移老 MySQL 库目录'),
-        content: Text(
-          '将把整个 MySQL 实例目录（数据文件 + 配置 + 日志）复制到：\n$target\n\n'
-          'P2 起当前数据库是本地 SQLite 文件（\\.db\\comfyhub.db），这里是**老库**的位置 —— '
-          '只在把老数据搬进新库时读得到。过程中会先停 MySQL、复制完成后再拉起来。'
-          '源目录不会被删除，确认新目录没问题后可以自己删掉。',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('开始迁移')),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    final ok = await launcher.moveMysqlData(target);
-    if (!mounted) return;
-    setState(() {
-      _mysqlDataDirController.text = context.read<SettingsStore>().mysqlDataDir ?? target;
-    });
-    if (!ok) {
-      _showLogs(launcher);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('老 MySQL 库目录已迁移到 $target')),
-      );
     }
   }
 
@@ -1044,41 +1006,6 @@ class _SettingsPageState extends State<SettingsPage> {
               ],
             ),
             const SizedBox(height: 8),
-            TextField(
-              controller: _mysqlDataDirController,
-              decoration: const InputDecoration(
-                // P2（2026-09-23）起数据库是本地 SQLite 文件（<项目根>\.db\comfyhub.db），
-                // 这个目录只剩"搬迁老库时的来源"这一个用途 —— 文案必须如实说，
-                // 否则用户会以为它是当前库的位置。
-                labelText: '老 MySQL 库目录（仅搬迁用）',
-                hintText: r'例如 D:\mysql-data\comfyhub',
-                helperText: '留空 = 项目下的 .mysql。当前数据库是 \\.db\\comfyhub.db（SQLite），'
-                    '这块只在把老 MySQL 数据搬进新库时读得到；换目录后点「迁移老库到该目录」',
-              ),
-            ),
-            const SizedBox(height: 6),
-            // 同上：`Row` 里最长的「迁移老库到该目录…」在窄卡片里放不下
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                TextButton.icon(
-                  onPressed: () async {
-                    await settings.setMysqlDataDir(_mysqlDataDirController.text);
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(const SnackBar(content: Text('老 MySQL 库目录已保存，重启服务后生效')));
-                  },
-                  icon: const Icon(Icons.save_outlined, size: 18),
-                  label: const Text('保存'),
-                ),
-                TextButton.icon(
-                  onPressed: busy ? null : () => _relocateMysql(launcher),
-                  icon: const Icon(Icons.drive_file_move_outline, size: 18),
-                  label: const Text('迁移老库到该目录…'),
-                ),
-              ],
-            ),
             const Divider(height: 24),
             Wrap(
               spacing: 10,

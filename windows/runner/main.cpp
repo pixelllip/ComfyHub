@@ -45,20 +45,12 @@ bool FileExists(const std::wstring& path) {
 // systemTemp 取自**本进程的 TMP/TEMP** —— 只有在引擎（Dart VM）起来之前设才有效，
 // 所以这一步必须在这里、`FlutterWindow` 之前做（放在 Dart 的 main() 里已经晚了）。
 //
-// 判据刻意保守：**默认 temp 建得出文件就什么都不做**（正常机器零行为差异）；
-// 只有它不可用才退到工作区内的 `<根>\.run\tmp`（发布包本来就是便携式的，
-// 可写数据都在包内，与 `scripts\dev-app.ps1` 给 TMP/TEMP 指路是同一个配方）。
+// ⚠ 2026-09-29 把方向反过来了：原来"默认 temp 建得出文件就什么都不做、不可用才退到
+// `<根>\.run\tmp`"。那个探针判据不可靠（能不能写取决于**进程的映像位置**，见 AGENTS §12），
+// 而且方向本身错了 —— 临时文件也是 ComfyHub 自己产生的内容，按"自己产生的内容存在自身
+// 文件夹内"这条，它默认就该在 `<根>\.run\tmp`。所以现在**无条件**指过去；
+// 认不出工作区根时保持原样（不猜路径），让上层照旧报错。
 void EnsureWritableTempDir() {
-  wchar_t temp[MAX_PATH + 1] = {0};
-  const DWORD len = ::GetTempPathW(MAX_PATH, temp);
-  if (len > 0 && len < MAX_PATH) {
-    const std::wstring probe = std::wstring(temp) + L"comfyhub-temp-probe-" +
-                               std::to_wstring(::GetCurrentProcessId()) + L".tmp";
-    if (FileWritable(probe)) {
-      return;  // 默认 temp 好好的：一切照旧
-    }
-  }
-
   // 往上找 `scripts\comfyhub.ps1` 定工作区根（与 Dart 侧
   // BackendLauncher.detectProjectRoot 同一套判据：源码树与发布包都认）。
   std::wstring dir = ExecutableDir();

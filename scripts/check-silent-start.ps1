@@ -5,7 +5,7 @@
 .DESCRIPTION
     为什么需要它：`Get-Process` 的 MainWindowHandle 判断不了这件事 ——
     Windows 的控制台窗口属于 **conhost.exe**，不属于那个控制台程序本身，
-    所以 mysqld / java / cmd 的 MainWindowHandle 永远是 0，会给你一个假绿灯。
+    所以 java / cmd 的 MainWindowHandle 永远是 0，会给你一个假绿灯。
     正确做法是枚举**可见的顶层窗口**（EnumWindows + IsWindowVisible），
     并且以 ~50ms 的间隔轮询 —— 否则"闪一下就没"的窗口根本抓不到。
 
@@ -109,7 +109,7 @@ if ($timedOut) { Write-Host "  !! 等待超时（$Seconds 秒），启动过程�
 Write-Host ''
 Write-Host "基线 $baseline 个窗口；盯屏 $([int]((Get-Date) - $started).TotalSeconds) 秒，发现 $($hits.Count) 个新窗口" -ForegroundColor Cyan
 
-$noisy = @($hits | Where-Object { $_ -match '进程=(cmd|conhost|java|javaw|mysqld|wscript|pwsh|powershell)\s' })
+$noisy = @($hits | Where-Object { $_ -match '进程=(cmd|conhost|java|javaw|wscript|pwsh|powershell)\s' })
 if ($noisy.Count -gt 0) {
     Write-Host '结果: 出现了命令行 / 服务相关的窗口，静默启动被破坏了 ——' -ForegroundColor Red
     $noisy | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }

@@ -11,9 +11,10 @@
 > **2026-09-23（P2）：数据库已从 MySQL 换成 SQLite。** 数据是一个文件：
 > **`<项目根>\.db\comfyhub.db`**（同目录还有它自己的 `-wal` / `-shm`，备份要三个一起拷）。
 > 库的建表/收敛**现在由 Rust 后端自己干**（`db::open_or_create`：库缺就按 `db\schema.sqlite.sql` 建）。
-> 老库里的数据**没有丢**，也不会被自动删：`scripts\comfyhub.ps1 up` 在"新库还没建、老 `.mysql` 里却有数据"
-> 时会**先自动搬一次**（那一步用的是旧 Kotlin 后端，见 `legacy\server\`），搬完照旧只跑 SQLite。
-> 本文里没跟上这两处改动的地方（尤其涉及 `mysql.ps1` / `.mysql\` / `my.ini` / `gradle` 的段落）一律按**历史**理解。
+> 老库里的数据**没有丢**，也不会被自动删，但**搬迁老库的通道已经没了**：
+> **2026-09-29 起 MySQL 彻底退役** —— `mysql.ps1`、`server.ps1 migrate` 与端口 3307 一并删除，
+> `up` 不再读 `.mysql\`（老目录原样留着，确认不要了再自己删）。
+> 本文里没跟上这些改动的地方（尤其涉及 `mysql.ps1` / `.mysql\` / `my.ini` / `gradle` 的段落）一律按**历史**理解。
 
 把 ComfyUI 里跑通的提示词存起来、打上标签；把生成出来的图片 / 视频 / 音频导入进来并**关联到对应的提示词**。
 之后点开任何一张图，就能立刻看到当初用的完整提示词；想找"那种赛博朋克夜景风格是怎么调出来的"，点一下标签就全出来了。
@@ -102,7 +103,7 @@
 **为什么后端用原生 JDBC 而不是 ORM**：查询里有动态标签 `IN (...)`、`EXISTS` 子查询、`ON CONFLICT` upsert 这类
 需要精确控制的写法（P2 换库时它们是**逐句核对过**的），直接写 SQL 更可控，也避开了 ORM 的版本兼容问题。
 整个后端只依赖 Ktor + HikariCP + SQLite 驱动（xerial，自带引擎），没有额外框架。
-老 MySQL 驱动只留给一次性搬迁（`scripts\server.ps1 migrate`）。
+老 MySQL 驱动与搬迁通道（`scripts\server.ps1 migrate`）已于 2026-09-29 随 MySQL 退役删除。
 
 ---
 
@@ -116,8 +117,8 @@ viewer/
 │   ├── core/
 │   │   ├── api_client.dart       # 后端 REST 客户端（含自动捕获接口）
 │   │   ├── ai_api_client.dart    # AI 工作台客户端（Provider / 模型 / 凭据状态 / 会话 / 预检）
-│   │   ├── backend_launcher.dart # ★ 启动时自动拉起 MySQL + 后端，并回显脚本输出
-│   │   ├── settings_store.dart   # 后端地址 / 项目目录 / MySQL 数据目录等本地设置
+│   │   ├── backend_launcher.dart # ★ 启动时自动拉起后端，并回显脚本输出
+│   │   ├── settings_store.dart   # 后端地址 / 项目目录等本地设置
 │   │   ├── theme.dart            # ★ 主题：中文字体族 / 字号 / 行高 / 字重
 │   │   └── formatting.dart       # 时间 / 体积 / 颜色格式化
 │   ├── models/models.dart        # 与后端 DTO 对应的数据模型（含捕获配置 / 状态）
@@ -190,15 +191,14 @@ viewer/
 │
 ├── db/
 │   ├── schema.sqlite.sql         # ★ 现在的建表真源（后端启动时从 jar 里执行；也用于 sqlite3 CLI 手工建库）
-│   ├── schema.sql                # 历史 MySQL 版（只在搬迁老库时当参考）
+│   ├── schema.sql                # 历史 MySQL 版（留档；MySQL 已于 2026-09-29 退役）
 │   ├── migrate.sql               # 历史 MySQL 增量迁移（同上）
 │   └── seed.sql                  # 演示数据（4 条提示词 + 12 个标签）
 │
 ├── scripts/
 │   ├── comfyhub.ps1              # ★ 统一入口：把数据库 + 后端当成一个整体来 up/down/status/doctor
-│   ├── silent-process.ps1        # ★ 后台进程「无窗口 + 脱离进程树」启动（后端用；老 MySQL 搬迁时也用）
-│   ├── mysql.ps1                 # 老 MySQL 脚本（P2 后只剩搬迁用途：start/stop/init/…）
-│   ├── server.ps1                # ★ 只操作后端（自动挑选 JDK 21；`migrate` 动作做一次性搬库）
+│   ├── silent-process.ps1        # ★ 后台进程「无窗口 + 脱离进程树」启动（后端等后台进程用）
+│   ├── server.ps1                # ★ 只操作后端（自动挑选 JDK 21；`migrate` 动作已随 MySQL 退役删除）
 │   ├── pack-release.ps1          # ★ 打包发布版：把 Rust 后端二进制就地装配进 Release 目录
 │   ├── autorun-app.ps1           # 一键：服务 → 分析 → 构建（Release）→ 启动 App
 │   ├── dev-app.ps1               # ★ 前端开发用：服务 → flutter run --debug（热重载）
@@ -223,7 +223,7 @@ viewer/
 │   ├── media/ thumbs/            # 画廊产物与它的缩略图 / 视频封面
 │   └── ai-attachments/ ai-thumbs/# 发给 AI 的附件原件、缩略图 / 视频预览帧（M3，与画廊分开）
 ├── .db/                          # ★ 数据库：SQLite 单文件 comfyhub.db（+ 它自己的 -wal / -shm）
-├── .mysql/                       # 老 MySQL 实例目录（P2 后只有搬迁时会读它；已 gitignore）
+├── .mysql/                       # 老 MySQL 实例目录（已 gitignore；2026-09-29 MySQL 退役后不再被读取，留着只是历史）
 └── .run/                         # 后端日志 / PID / e2e 临时文件（已 gitignore）
 ```
 
@@ -237,11 +237,11 @@ viewer/
 | JDK | **21 ~ 23**（**只有回退旧 Kotlin 后端 / 跑 Gradle 时才要**：Gradle 8.12 不支持 JDK 24/25，脚本会自动挑；Rust 后端**完全不需要 JVM**） |
 | Gradle（后端 `server/`） | 8.12 |
 | Android 构建（`android/`） | AGP **9.4.0** + Gradle **9.6.0** + **AGP 内建 Kotlin**（`android.builtInKotlin=true`，KGP 只用来钉版本、不 apply）；迁移与踩坑见 [docs/android-agp9-builtin-kotlin-migration.md](docs/android-agp9-builtin-kotlin-migration.md) |
-| MySQL | **P2 起不再需要**（数据库是 SQLite 单文件，驱动自带引擎）。只有"把老 MySQL 库搬进 SQLite"那一步才用得到：本仓库用免安装的 8.4.3 zip 版，放在 `D:\tools\mysql\mysql-8.4.3-winx64` |
+| MySQL | **2026-09-29 已彻底退役**：数据库是 SQLite 单文件（驱动自带引擎），脚本、打包清单、端口 3307 都不再涉及 MySQL；老机器上残留的 `D:\tools\mysql\`、`<项目>\.mysql\` 只是历史目录，可自行删除 |
 | Visual Studio | 2022+ 带「使用 C++ 的桌面开发」（编译 Flutter Windows 桌面端） |
 
-> 环境变量 `COMFYHUB_JDK_HOME` 可指定 JDK；`COMFYHUB_JDBC_URL` 可换库文件位置（缺省 `<根>\.db\comfyhub.db`）；
-> 搬迁时用 `COMFYHUB_MIGRATE_SOURCE` 指向老 MySQL（`COMFYHUB_MYSQL_HOME` 覆盖它的解压目录）。
+> 环境变量 `COMFYHUB_JDK_HOME` 可指定 JDK；`COMFYHUB_JDBC_URL` 可换库文件位置（缺省 `<根>\.db\comfyhub.db`）。
+> （`COMFYHUB_MIGRATE_SOURCE` / `COMFYHUB_MYSQL_HOME` 属于已随 MySQL 退役删除的搬迁链路，2026-09-29 起不存在。）
 
 ---
 
@@ -255,9 +255,9 @@ pwsh -File scripts\make-sample-media.ps1
 pwsh -File scripts\autorun-app.ps1
 ```
 
-**数据库不用你先建**：后端首次启动会自己建 `<项目根>\.db\comfyhub.db`（SQLite，含表结构与索引）；
-如果你机器上还有老的 `.mysql\` 实例，`up` 会**先自动搬一次**（逐表核对行数与行哈希），
-老库原样留着不动。
+**数据库不用你先建**：后端首次启动会自己建 `<项目根>\.db\comfyhub.db`（SQLite，含表结构与索引）。
+老的 `.mysql\` 实例**不会被读取、也不会自动搬迁**（那条"零动作升级"搬迁通道已于 2026-09-29 随 MySQL 退役删除），
+老库原样留着不动，确认不需要了再自己删。
 
 **从第 2 步开始，后端就不需要你手动起了**：
 App 启动时会先探一次后端健康检查（地址按 `<项目根>\.run\api.json` 里后端记录的**实际端口**算，
@@ -304,22 +304,20 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
 | `scripts\comfyhub.ps1 up -WithApp` | 顺带把桌面 App 也拉起来 |
 | `scripts\comfyhub.ps1 up -SkipBuild` | 跳过后端构建，直接用上次的产物启动（App 自动启动时走的就是这个；Rust 侧等于跳过 `cargo build`） |
 | `scripts\comfyhub.ps1 up -OwnerPid <pid>` | **App 自动启动时用的形式**：多挂一个「关 App 就停服务」的守护进程（见下面说明） |
-| `scripts\comfyhub.ps1 release` | **只停后端（+ 老 MySQL 若在跑），不动 App 自己**（App 关窗口时调的就是它；`down` 会按进程名杀 `viewer`，在 App 内部不能调） |
+| `scripts\comfyhub.ps1 release` | **只停后端，不动 App 自己**（App 关窗口时调的就是它；`down` 会按进程名杀 `viewer`，在 App 内部不能调） |
 | `scripts\comfyhub.ps1 watch -OwnerPid <pid>` | 给**已经在用本地服务**的 App 补挂「关 App 就停服务」的守护进程（App 启动时探到后端已健康、没跑 `up` 的那条路） |
 | `scripts\comfyhub.ps1 unwatch` | 撤掉上面那个守护进程（用户在设置里关掉「关闭 App 时一并停止本地服务」时 App 会调它），本地服务继续跑 |
-| `scripts\watch-owner.ps1` | 那个守护进程本体：盯着 `-OwnerPid`，目标进程一退出就按 `-StopApi` / `-StopMysql` 停掉对应服务（一般由 `up -OwnerPid` 自动拉起，不用手敲；日志在 `.run\watch-owner.log`） |
+| `scripts\watch-owner.ps1` | 那个守护进程本体：盯着 `-OwnerPid`，目标进程一退出就按 `-StopApi` 停掉对应服务（一般由 `up -OwnerPid` 自动拉起，不用手敲；日志在 `.run\watch-owner.log`） |
 | `$env:COMFYHUB_TRACE=1` + `scripts\comfyhub.ps1 up` | 把冷启动**每一段的耗时**打到 stderr（`[trace   1660ms] server: 就绪` 这种），用来定位"到底慢在哪" |
-| `scripts\comfyhub.ps1 doctor` | 体检：路径 / 依赖 / 端口占用逐项检查（含 **SQLite 库文件与它的大小、老库是否存在**、**探测到的 ComfyUI 目录与输出目录**） |
+| `scripts\comfyhub.ps1 doctor` | 体检：路径 / 依赖 / 端口占用逐项检查（含 **SQLite 库文件与它的大小**、**探测到的 ComfyUI 目录与输出目录**） |
 | `scripts\comfy-path.ps1` | **ComfyUI 位置解析**（被 dot-source 使用）：`Resolve-ComfyHome` / `Resolve-ComfyOutputDir`，判据与后端 `ComfyLocator.kt` 一致（用户"其他建议"第 3 条） |
-| **`scripts\server.ps1 migrate`** | **一次性搬库（P2）**：把老 MySQL 的业务数据搬进 SQLite，并**逐表核对行数与行哈希**（不一致就退出码 2）。`comfyhub.ps1 up` 在"新库还没建、老库有数据"时会自动替你做这一步 |
-| `scripts\mysql.ps1 …`（init / start / stop / move / cli / seed / reset / schema / migrate / logs） | **老 MySQL 专用，P2 后只剩"搬迁来源"这一个用途**。全新安装不需要它 |
 | `scripts\server.ps1 start / stop / status / logs` | 只操作后端 |
 | `scripts\server.ps1 run` | 后端前台运行（Ctrl+C 停） |
 | `scripts\server.ps1 fatjar` | 打成一个独立 jar |
 | **`scripts\rebuild-server.ps1`** | **改了 `server-rs\` 之后要跑这个**（停后端 → `cargo build --release` → 起后端 → 等健康）。为什么必须有它：`up` / `server.ps1 start` **只在 exe 不存在时**才编（源码变新时它们直接复用旧 exe，= 改了半天没生效），而后端**在跑时 `cargo build` 必然失败**（Windows 不许覆盖运行中的 exe，实测文件被占）。它还会**在停服务之前**预检"能不能脱离进程树起进程"，探不通就原样退出（避免"停成功、起不来"）。端口默认沿用当前那个，正在跑的 App 不用重连。`-NoStart` 只编不起、`-Force` 源码没变也重编 |
 | `scripts\autorun-app.ps1` | 一键全流程：服务 → 分析 → 构建（Release）→ 启动 App |
 | `scripts\pack-release.ps1` | **打包发布版**：按 `packaging\manifest.json` 把 **Rust 后端二进制**（+ 脚本 / DDL / Skills / 捕获扩展）**就地装配进** `build\windows\x64\runner\Release\`，装完那个目录就是完整发布包（`-OutDir` 可另存，`-Zip` 顺带压包）。**P2 起不携带 MySQL、P4 起不携带 JRE**（合计少约 340MB，实测这种装配约 **14MB**） |
-| `scripts\ensure-runtime.ps1` | **运行时一键就绪**：检测不到的运行时自动下载安装（pwsh / VC++ 走 winget；Java **只在回退旧 Kotlin 后端时才需要** —— P4 收尾起 `up` 不再为 Rust 后端下 JRE）。`-CheckOnly` 只检测 |
+| `scripts\ensure-runtime.ps1` | **运行时一键就绪**：检测不到的运行时自动下载安装（pwsh 走 winget；Java **只在回退旧 Kotlin 后端时才需要** —— P4 收尾起 `up` 不再为 Rust 后端下 JRE；VC++ / MySQL 检查已随 2026-09-29 MySQL 退役删除）。`-CheckOnly` 只检测 |
 | `scripts\mcp-runtime.ps1` | **MCP 运行时装配**（可选能力）：**先用机器上已有的 Python**（已有 comfy-mcp 就直接借；没有就借它建 venv），机器上没有才下便携版 Python；再装 `comfy-cli` + `comfy-mcp` 到 `<根>\storage\ai\mcp`，并把 `comfy-cli` 的工作区指向用户真实在用的 ComfyUI。`status` / `install [-Force] [-ComfyHome <目录>]`；`comfyhub.ps1 up` 会自动补、`doctor` 会报状态与"这份 Python 哪来的" |
 | `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
 | **`scripts\build-apk.ps1`** | **打一份能装进真手机的安卓 APK + 体检 + 装机**。全量 release 约 78MB；`-Split` 出分架构包（arm64 实测 **28.9MB**，比 `flutter run` 的 debug 包 164MB 小一个量级，传输更不容易断）。编完会打出 `native-code` / `minSdkVersion` / 签名校验 / sha256，并且把"装不上时该看什么"逐条列出来；`-Install` 走真 adb：先报设备状态（`offline` / `unauthorized` 各自的人话处置），只挑**这台手机 ABI 匹配**的那一份装，装失败**自动换 `--no-streaming` 重试**并翻译失败码（含 `USER_RESTRICTED` / `VERSION_DOWNGRADE` 自动卸载重装）。2026-09-28 真机现场就靠它定位：`flutter run` 只回一句"失败原因空白"，其实是设备侧增量安装服务（`abb_exec`）断了，同一份包换成 push 安装当场 Success |
@@ -339,16 +337,16 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
 | `scripts\gen-builtin-catalog.ps1` | **开发期工具**：把 `%USERPROFILE%\.dsh\settings.yaml` 里的模型目录抄成我们自己的冻结副本 `server\src\main\resources\ai\builtin-catalog.json`（运行时只读这份副本，**绝不读 YAML**；解析到少于 60 个模型就拒绝写盘） |
 | `scripts\copy-review.ps1`（2026-09-27） | **AI 文案审校（独立的小软件，不并入主程序）**：一条命令看全四类文案 —— **可改**的 skill 正文（`skills\builtin` / `<storage>\ai\skills` 的 `SKILL.md`）与界面注解（`lib\pages\**` 里的 Dart 字面量，由 `scripts\copy-review-ui.json` 的锚点现读源码），**只读**的系统提示词与工具描述（**问本地后端** `/api/ai/run-kit`，不在线就如实说"没取到"，绝不靠正则去猜 Rust 源码）。`open` 生成一份自包含 HTML（`.run\copy-review\copy-review.html`，无外链、`file://` 双击可用）供筛选 / 就地改文本 / 批量预览 / 导出 `copy-review-edits.json`；**HTML 里一个字节都不写文件**，唯一的写盘入口是 `apply -In <edits.json> [-Apply]`（默认 dry-run，每条先备份 `<file>.copyreview-bak`）。`list / show / verify / unverify / export / import / report / check` 命令行都能用；`-SelfTest` 用临时目录跑 19 项全流程自测。状态在 `.run\copy-review\state.json`，`verifiedAt` **绑内容 sha256**（文本一变，"已校验"自动失效 → "要重看"） |
 
-> **关 App 的时候，后端 / MySQL 会不会跟着停？**
+> **关 App 的时候，后端会不会跟着停？**
 >
 > 一句话：**开着「关闭 App 时一并停止本地服务」（默认）就停，关着就不停。**
 >
 > * **App 启动时自己把服务拉起来的**（那次 `up`）→ 停。脚本会带 `-OwnerPid <App 的 PID>`，
 >   服务起来后挂一个脱离进程树的 `watch-owner.ps1` 守护进程；App 一退出
->   （正常关闭 / 崩溃 / 任务管理器强杀都算）它就把服务停掉（后端 → 等 java 真退出 → MySQL）。
+>   （正常关闭 / 崩溃 / 任务管理器强杀都算）它就把服务停掉（停后端；原来"等 java 退出 → 再停 MySQL"那段顺序已随 2026-09-29 MySQL 退役删除）。
 > * **启动 App 之前服务就已经在跑**（比如你刚在终端 `up` 过、或上一次 App 留下过服务）→ 也停。
 >   App 探到 `/api/health` 健康就不会再跑一次 `up`，这种情况下它会补挂同一条守护
->   （`comfyhub.ps1 watch -OwnerPid <自己的 PID>`），所以**不会再出现"关了 App，3307/8080 还占着"**。
+>   （`comfyhub.ps1 watch -OwnerPid <自己的 PID>`），所以**不会再出现"关了 App，8080 还占着"**。
 >   ⚠️ 这比 2026-09-16 之前的行为更强硬：那时候"你在终端里起的服务"不会被带走。
 >   不想被带走就关掉那个开关，或者在关 App 前把开关关掉（App 会立刻 `unwatch` 撤销守护）。
 > * **关掉开关** → 服务常驻，App 开着关着都不影响；下次开 App 直接热启动（省掉 7~8 秒冷启动）。
@@ -360,8 +358,8 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
 
 ### 为什么需要一个统一的 `comfyhub.ps1`
 
-后端和数据库是**硬依赖**关系：库一挂，后端所有接口都会 500。之前 `mysql.ps1` 和 `server.ps1`
-各管一半，会出现三种坏状态（P2 换 SQLite 之后库由后端自己管，但这三条纪律照旧成立）：
+后端和数据库是**硬依赖**关系：库一挂，后端所有接口都会 500。P2 之前，MySQL 脚本和 `server.ps1`
+各管一半，会出现三种坏状态（P2 换 SQLite 之后库由后端自己管；MySQL 已于 2026-09-29 彻底退役，这三条纪律照旧成立）：
 
 | 坏状态 | 之前的表现 | 现在 |
 | --- | --- | --- |
@@ -793,7 +791,9 @@ MiMo、Step、Hy、Inkling、LongCat、Nemotron 等），连**同系列里的视
 
 ## 8. 数据库
 
-库名 `comfy_hub`，字符集 `utf8mb4` / `utf8mb4_unicode_ci`，端口 **3307**（避开常见的 3306）。
+P2 起库是 **SQLite 单文件**（放在哪见 8.1），下表的表结构对它与历史 MySQL 版同样成立；
+老 MySQL 时代的库名 `comfy_hub`、字符集 `utf8mb4` / `utf8mb4_unicode_ci`、端口 **3307** 已随
+**2026-09-29 MySQL 彻底退役**作废（3307 不再有任何用途）。
 
 | 表 | 作用 |
 | --- | --- |
@@ -837,11 +837,11 @@ pwsh -File scripts\comfyhub.ps1 restart     # 换库后重启后端即可（目�
   把 `PRAGMA user_version` 对齐 run-kit 的 `schemaVersion`。**幂等、可重复执行**，
   所以 App 自动拉起后端时**不需要**你手动跑任何 SQL。
 - 老 MySQL 的 `schema.sql` / `migrate.sql` 保留成历史参考资料（SQLite 没有存储过程）。
-- 搬迁：`pwsh -File scripts\server.ps1 migrate`（逐表核对行数与行哈希，不一致会明确报出来）。
+- 搬迁：**这条路径已经不存在了** —— MySQL 已于 2026-09-29 彻底退役，`pwsh -File scripts\server.ps1 migrate` 随之删除（本行仅存档）。
 
 ### 8.3 连接信息
 
-P2 起库是 SQLite 文件，**没有账号密码**（`COMFYHUB_DB_USER` / `COMFYHUB_DB_PASSWORD` 只对老 MySQL 来源有效）。
+P2 起库是 SQLite 文件，**没有账号密码**（`COMFYHUB_DB_USER` / `COMFYHUB_DB_PASSWORD` 是老 MySQL 时代的说法，2026-09-29 MySQL 退役后已无作用对象）。
 可用环境变量覆盖：
 
 ```powershell
@@ -850,8 +850,6 @@ $env:COMFYHUB_STORAGE='D:\comfyhub-storage'
 $env:COMFYHUB_PORT='0'          # 0 = 自动挑一个空闲端口（默认）；想固定就写具体端口
 $env:COMFYHUB_COMFY_URL='http://127.0.0.1:8188'
 $env:COMFYHUB_COMFY_OUTPUT='D:\Comfy-Desktop\ComfyUI-Shared\output'
-# 只在搬迁老库时用：
-$env:COMFYHUB_MIGRATE_SOURCE='jdbc:mysql://127.0.0.1:3307/comfy_hub?...'
 ```
 
 ---
@@ -887,7 +885,7 @@ Unregister-ScheduledTask -TaskName 'ComfyHub-AutoRun' -Confirm:$false
 
 ```powershell
 pwsh -File scripts\dev-app.ps1
-# 等价于：确保 MySQL + 后端在跑 → flutter run -d windows --debug
+# 等价于：确保后端在跑（数据库是 SQLite 文件，不用起 MySQL）→ flutter run -d windows --debug
 # 跑起来之后在终端里：r 热重载（保留状态） / R 热重启 / q 退出
 ```
 
@@ -907,7 +905,7 @@ pwsh -File scripts\dev-app.ps1
 里面没有后端、没有数据库、没有 Java 运行时 —— 直接把这个目录拷给别人跑不起来：
 
 - Kotlin 后端在 `server\build\install\` 下，那是 Gradle 的**构建中间产物**，不会跟着 Release 目录走；
-- MySQL 的 `mysqld.exe` 以前只在 `D:\tools\mysql\...` 这种**本机绝对路径**下找，换台机器直接崩；
+- MySQL 的 `mysqld.exe` 以前只在 `D:\tools\mysql\...` 这种**本机绝对路径**下找，换台机器直接崩（**该条已随 2026-09-29 MySQL 退役作废**，仅存档）；
 - 后端是 JVM 程序，不能假设目标机器装了 JDK。
 
 所以「交给别人用」要走 `pack-release.ps1`。它按 `packaging\manifest.json`（**软件打包清单**）
@@ -933,7 +931,8 @@ pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub   # 另存一份干
 | DDL | `<根>\db\` | `schema.sqlite.sql` 是**现在的真源**（后端从 jar 里执行同名副本，这里这份供人看 / 手工建库） |
 
 > **P2 起发布包不再携带便携版 MySQL**（少了约 300MB，也不需要它依赖的 VC++ 运行时的硬要求）：
-> 数据库是 SQLite，驱动自带引擎。老 MySQL 只在"把老库数据搬进 SQLite"时才用得到。
+> 数据库是 SQLite，驱动自带引擎。**2026-09-29 起 MySQL 彻底退役** —— 连"把老库数据搬进 SQLite"
+> 的一次性搬迁通道也一并删除，包里与脚本里都不再有任何 MySQL / VC++ 运行时的影子。
 
 > `-Clean` 只清**装配进去的东西**（`server\` / `jre\` / `scripts\` / `db\` / `comfyui\` /
 > `packaging\` / `BUILD-INFO.txt`），**不会**删 Flutter 自己的 `viewer.exe`，也**不会**动运行期数据
@@ -944,22 +943,20 @@ pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub   # 另存一份干
 打包只把 **Java 运行时**装进了包里，其余得目标机器自己装 ——
 缺了服务起不来，而且报错往往没头没尾（`pwsh 不是内部或外部命令`）。
 `scripts\comfyhub.ps1 doctor` 会把它们逐个报出来；`up` 失败时也会自动提示缺哪个、怎么装
-（缺的都在 `packaging\manifest.json` 的 `runtimeRequirements` 里登记，标了 `required=false` 的
-是"只给搬迁老库用"的可选项）。
+（缺的都在 `packaging\manifest.json` 的 `runtimeRequirements` 里登记；MySQL 与 VC++ 两条已于
+2026-09-29 删除，现在标 `required=false` 的只对回退旧 Kotlin 后端有意义）。
 
 | 依赖 | 谁需要它 | 随包携带？ |
 | --- | --- | --- |
 | **PowerShell 7 (`pwsh`)** | App 用它执行 `scripts\*.ps1`，脚本之间也**互相调 `pwsh`** | ❌ 要装：`winget install --id Microsoft.PowerShell` |
 | Java 21 运行时 | Kotlin 后端（JVM） | ✅ `<根>\jre`；**机器上已有可用 Java 就直接用**（`JAVA_HOME` / 常见 JDK 安装位置 / PATH），真的没有才自动下载（见下） |
 | Windows 10 / 11 x64 | 桌面端 + 脚本（WMI / CIM） | — |
-| VC++ 2015-2022 x64（**可选**） | 只有搬迁老 MySQL 库时需要（`mysqld.exe` 的 MSVC 依赖） | ❌ 要搬迁就装：`winget install --id Microsoft.VCRedist.2015+.x64` |
-| MySQL 8.4（**可选**） | 同上 —— 只是搬迁来源 | ❌ 不再随包携带 |
 
 #### 可选能力：MCP 运行时（`mcp-runtime.ps1`）
 
 **AI 的 ComfyUI 工具**走官方 [`comfy-mcp`](https://github.com/Comfy-Org/comfy-mcp)，而它是 Python 写的、
 并且要求 `comfy-cli`（**它自己不捆绑 comfy-cli**）。`scripts\mcp-runtime.ps1` 按**检测优先，安装只作兜底**
-的策略把它装进**包内**（跟 `<根>\jre` / `<根>\mysql` 一个路子）：
+的策略把它装进**包内**（跟 `<根>\jre` 一个路子）：
 
 **Python 从哪来（这个顺序就是策略本身，2026-09-21 用户定："环境有 python 你的脚本就不用再装了"）**：
 
@@ -1012,12 +1009,13 @@ pwsh -File scripts\ensure-runtime.ps1 -JavaOnly  # 只保证 Java
   每个源下载前先做一次 1KB 探测，连不上就立刻换下一个，不会卡在超时上。
 - **`comfyhub.ps1 up` 会顺带做这件事**：后端是 JVM 程序，缺 Java 时 App 启动会先自动补上
   （已经有 ≥21 的 java 时只是几次文件检查，不联网）。设 `COMFYHUB_NO_DOWNLOAD=1` 可关闭。
-- **pwsh / VC++ 是系统级安装**，脚本用 `winget` 自动装（VC++ 需要管理员，会弹 UAC）；
-  没有 winget 就打印官方下载地址。`up` 阶段**不会**碰这两个（避免启动时弹 UAC），
-  只用 `ensure-runtime.ps1` 显式跑（或失败提示里给出的命令）来装。
+- **pwsh 是系统级安装**，脚本用 `winget` 自动装；没有 winget 就打印官方下载地址。
+  `up` 阶段**不会**碰它（避免启动时弹 UAC），只用 `ensure-runtime.ps1` 显式跑
+  （或失败提示里给出的命令）来装。（VC++ 体检项已随 2026-09-29 MySQL 退役删除 ——
+  它当初只为 `mysqld.exe` 存在，Rust 后端不引用 `vcruntime140.dll`。）
 
 > **PowerShell 版本是个坑**：Windows 自带的 `powershell.exe` 是 5.1，**不算数** ——
-> `comfyhub.ps1` / `mysql.ps1` / `server.ps1` 之间有 15 处 `& pwsh -NoProfile -File ...` 互调，
+> `comfyhub.ps1` / `server.ps1` 等脚本之间有多处 `& pwsh -NoProfile -File ...` 互调，
 > 机器上只有 5.1 时这些子调用会失败。App 若只找到 5.1，会在启动页日志里明确告警并给出安装命令。
 
 **发布包是便携式的**（免安装、免管理员）：解压出来整个目录就是运行时根目录，可整体搬到任意盘/目录。
@@ -1044,7 +1042,6 @@ pwsh -File scripts\ensure-runtime.ps1 -JavaOnly  # 只保证 Java
 | Java | 本机 JDK 21~23 | `<根>\jre`（`server.ps1` 的 `Resolve-Jdk` 优先用它） |
 | `viewer.exe` | `build\windows\...\runner\Release\` | `<根>\viewer.exe` |
 | 数据库 | `<根>\.db\comfyhub.db`（同一份约定） | `<根>\.db\comfyhub.db` |
-| `mysqld.exe` / `mysqladmin.exe`（**仅搬迁用**） | `D:\tools\mysql\...` | 不再随包携带（`COMFYHUB_MYSQL_HOME` 指过去即可） |
 
 ---
 
@@ -1194,7 +1191,7 @@ pwsh -File scripts\e2e-capture-test.ps1
 # 跑完自动清理测试数据；加 -KeepData 可以保留下来在界面上看效果
 ```
 
-后端接口的端到端验证（真实 MySQL + Ktor）也可以用 curl：
+后端接口的端到端验证（对着正在跑的后端）也可以用 curl：
 
 ```powershell
 # 上传一张图并关联到提示词 1
@@ -1218,7 +1215,7 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
 
 搭建时实际遇到并已绕开的问题（现象 / 原因 / 处理，50+ 条）单独放在 **[docs/pitfalls.md](docs/pitfalls.md)**：
 那张表越写越长，留在 README 里会把「怎么用」挤得看不见。换机器时照着它走；
-本机的硬约束（JDK 21~23 / MySQL 路径 / 端口 / pub 源 / Gradle 代理）见 [AGENTS.md](AGENTS.md) 第 4 节。
+本机的硬约束（JDK 21~23 / 端口 / pub 源 / Gradle 代理）见 [AGENTS.md](AGENTS.md) 第 4 节。
 脚本侧的约定（静默启动、路径解析、发布包布局）见 AGENTS.md 第 2 / 5 / 7 节。
 
 ---
@@ -1237,7 +1234,7 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
   （Windows 资源管理器缩略图管线抽第一帧并缓存在 `storage/thumbs/<id>.poster.png`），
   所以首次显示要等 ~1.5s 抽帧；抽不出来（缺解码器）时退化成电影图标占位，**不是破图**。
   同样刻意不引入 ffmpeg（那要分发几十 MB 的二进制）。
-- **中文检索用 LIKE 而非 FULLTEXT**：MySQL 默认分词器对中文支持差（`ngram` 需额外配置），所以用多词 AND 的 `LIKE` 匹配。
+- **中文检索用 LIKE 而非 FULLTEXT**：当初在 MySQL 上是为避开其中文分词器（`ngram` 需额外配置）的短板，所以用多词 AND 的 `LIKE` 匹配；P2 换 SQLite 后照旧沿用这套匹配（MySQL 已于 2026-09-29 退役）。
 - **自动捕获有轮询延迟**：默认 4 秒一次（可调到 1 秒），想要零延迟就装自定义节点（见 6.2）。
 - **只有 PNG 能还原提示词**：历史导入时，PNG 内嵌的 `prompt` / `workflow` 才能反推出参数；
   视频 / 音频 / 被重新压缩过的图只会作为「未关联产物」入库（在画廊里用「未关联」筛出来就能看到）。

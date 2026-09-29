@@ -33,6 +33,7 @@ pub mod comfy_dirs;
 pub mod comfy_launch;
 pub mod comfy_models;
 pub mod comfy_progress;
+pub mod confinement;
 pub mod conversations;
 pub mod credentials;
 pub mod danbooru;

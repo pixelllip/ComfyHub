@@ -7,7 +7,7 @@
     （用户 2026-09-21 定的方向），而 comfy-mcp 是 Python 写的、并且要求
     `comfy-cli`（它自己不捆绑，README 原话："Installing this server does not install comfy-cli"）。
     发布包是**便携式**的，不能要求用户自己去装 Python、开终端敲 pip ——
-    所以这里把三样东西按"缺什么补什么"装进**包内**，跟 <根>\jre / <根>\mysql 一个路子。
+    所以这里把三样东西按"缺什么补什么"装进**包内**，跟 <根>\jre 一个路子。
 
     与 runtime-deps.ps1 的分工：
       · runtime-deps.ps1  —— **必需**的运行时（Java / MySQL），缺了服务根本起不来
@@ -107,23 +107,18 @@ $script:McpRuntimeSpec = @('comfy-mcp>=0.10,<0.11', 'comfy-cli>=1.14.0')
 function Get-McpRuntimeDir {
     <#
       可选运行时的落点：<根>\storage\ai\mcp（与 storage\ai\skills 同一个 storage 根）。
-      根不可写时退回 %LOCALAPPDATA%\ComfyHub\mcp —— 与 runtime-deps.ps1 里
-      Java 退到 %LOCALAPPDATA%\ComfyHub\jre 是同一个套路。
+
+      ⚠ 2026-09-29 删掉了原来的第 3 档 `%LOCALAPPDATA%\ComfyHub\mcp`，**不再有"根不可写就退出去"**：
+      便携 python + venv 是 ComfyHub **自己产生的内容**（几百 MB），按"自己产生的内容存在自身
+      文件夹内"这条，它只该落在 <根>\storage\ai\mcp。真写不进去时**如实报错**（让用户把包/项目
+      放到可写的地方），不要静默换个地方 —— 静默换地方正是"哪份才是真的要看机器上装过什么"的来源。
+
+      这次删掉也顺带修掉了一个判据问题：原来靠"父目录能不能写"决定落点，而能不能写取决于
+      **进程的映像位置**（见 AGENTS §12），于是同一条逻辑在源码树/发布包会给出相反结论。
     #>
     param([Parameter(Mandatory)][string]$ProjectRoot)
 
-    $preferred = Join-Path $ProjectRoot 'storage\ai\mcp'
-    if (Test-Path -LiteralPath $preferred) { return $preferred }
-    # 还没建过：看父目录能不能写（不能写就直接退到 LOCALAPPDATA）
-    $parent = Join-Path $ProjectRoot 'storage\ai'
-    $probeRoot = if (Test-Path -LiteralPath $parent) { $parent } else { $ProjectRoot }
-    $writable = if (Get-Command Test-DirWritable -ErrorAction SilentlyContinue) {
-        Test-DirWritable -Dir $probeRoot
-    } else {
-        Test-McpDirWritable -Dir $probeRoot
-    }
-    if ($writable) { return $preferred }
-    return (Join-Path $env:LOCALAPPDATA 'ComfyHub\mcp')
+    return (Join-Path $ProjectRoot 'storage\ai\mcp')
 }
 
 function Test-McpDirWritable {
@@ -212,7 +207,8 @@ function Get-PythonRuntimePath {
         1. state.json 里记的（上次装配的就是它；也可能是借来的系统 Python）
         2. <McpDir>\venv\Scripts\python.exe（借机器上的 Python 建的隔离环境）
         3. <McpDir>\python\python.exe（便携版，兜底那份）
-        4. <LOCALAPPDATA>\ComfyHub\mcp 下同样两处（根不可写时退到的那份）
+        （⚠ 2026-09-29 删掉了原来第 4 条 `%LOCALAPPDATA%\ComfyHub\mcp` 的两个候选 ——
+         落点只剩 <McpDir> 一个，见 `Get-McpRuntimeDir` 的理由。）
 
       ⚠ 这里**只做文件检查，不 spawn 进程**：`up` 每次冷启动都会调它，
       快档必须便宜（承 §Get-McpRuntimeStatus 里"6.1 秒"那条实测）。
@@ -223,13 +219,10 @@ function Get-PythonRuntimePath {
     )
 
     $state = Read-McpRuntimeState -McpDir $McpDir
-    $fallback = Join-Path $env:LOCALAPPDATA 'ComfyHub\mcp'
     $cands = New-Object System.Collections.ArrayList
     if ($state -and $state.pythonExe) { [void]$cands.Add([string]$state.pythonExe) }
     [void]$cands.Add((Join-Path (Get-McpVenvDir -McpDir $McpDir) 'Scripts\python.exe'))
     [void]$cands.Add((Join-Path $McpDir 'python\python.exe'))
-    [void]$cands.Add((Join-Path $fallback 'venv\Scripts\python.exe'))
-    [void]$cands.Add((Join-Path $fallback 'python\python.exe'))
 
     foreach ($c in $cands) {
         if ($c -and (Test-Path -LiteralPath $c)) { return $c }

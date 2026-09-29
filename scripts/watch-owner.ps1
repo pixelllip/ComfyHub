@@ -6,9 +6,9 @@
     `comfyhub.ps1 up -OwnerPid <pid>` 在服务起来之后，会用「脱离进程树 + 隐藏窗口」的方式
     拉起这个脚本（见 scripts\silent-process.ps1）。它每 3 秒确认一次「App 还在不在」：
 
-      · 进程没了（点关闭 / 崩溃 / 任务管理器强杀都一样）→ 按 -StopApi / -StopMysql
-        把**这一次真正启动过**的服务停掉；
-      · 只停这一次启动过的：库本来就是你在终端里起的，就不会被 App 的退出带走；
+      · 进程没了（点关闭 / 崩溃 / 任务管理器强杀都一样）→ 按 -StopApi
+        把**这一次真正启动过的**后端停掉；
+      · 只停这一次启动过的：后端本来就是你在终端里起的，就不会被 App 的退出带走；
       · 没带 -OwnerPid 的手工 `up` 根本不会拉起它，服务照旧常驻。
 
     防串台：<项目>\.run\watch-owner.json 记着「当前由哪个 watchdog 负责」（认领令牌 token）。
@@ -18,7 +18,7 @@
 
 .EXAMPLE
     # 一般不用手敲，comfyhub.ps1 up -OwnerPid 会自己拉起来
-    pwsh -File scripts\watch-owner.ps1 -OwnerPid 1234 -StopApi -StopMysql
+    pwsh -File scripts\watch-owner.ps1 -OwnerPid 1234 -StopApi
 #>
 [CmdletBinding()]
 param(
@@ -28,8 +28,6 @@ param(
     [long]$OwnerStartTicks = 0,
 
     [switch]$StopApi,
-    [switch]$StopMysql,
-    [string]$DataDir,
     [int]$PollSeconds = 3,
 
     # 认领令牌：comfyhub.ps1 生成并**先写进状态文件**，再拉起本脚本。
@@ -80,12 +78,11 @@ try {
             watchdogPid = $PID
             ownerPid    = $OwnerPid
             stopApi     = [bool]$StopApi
-            stopMysql   = [bool]$StopMysql
             startedAt   = (Get-Date).ToString('o')
         } | ConvertTo-Json) | Set-Content -Path $StateFile -Encoding utf8
 } catch { }
 
-Write-Log "启动 (watchdog=$PID owner=$OwnerPid api=$StopApi mysql=$StopMysql token=$Token)"
+Write-Log "启动 (watchdog=$PID owner=$OwnerPid api=$StopApi token=$Token)"
 
 # ---------------------------------------------------------------------------
 #  等 owner 退出
@@ -112,26 +109,13 @@ if ($StopApi) {
     $server = Join-Path $PSScriptRoot 'server.ps1'
     if (Test-Path $server) {
         $a = @('-NoProfile', '-File', $server, 'stop')
-        if ($DataDir) { $a += @('-DataDir', $DataDir) }
         & $PwshExe @a 2>&1 | Out-Null
         Write-Log '已下发 server.ps1 stop'
-        # 必须等后端真的退出再停库，否则它会一边报错一边重连
+        # 必须等后端真的退出，否则 watchdog 先退出会把它留成孤儿
         $deadline = (Get-Date).AddSeconds(20)
         while ((Get-Date) -lt $deadline -and @(Get-ApiProcess).Count -gt 0) { Start-Sleep -Milliseconds 400 }
     } else {
         Write-Log "找不到 $server，跳过"
-    }
-}
-
-if ($StopMysql) {
-    $mysql = Join-Path $PSScriptRoot 'mysql.ps1'
-    if (Test-Path $mysql) {
-        $a = @('-NoProfile', '-File', $mysql, 'stop')
-        if ($DataDir) { $a += @('-DataDir', $DataDir) }
-        & $PwshExe @a 2>&1 | Out-Null
-        Write-Log '已下发 mysql.ps1 stop'
-    } else {
-        Write-Log "找不到 $mysql，跳过"
     }
 }
 

@@ -648,21 +648,37 @@ pub fn scripts_dir_of(python_exe: &Path) -> Option<PathBuf> {
     Some(if is_scripts { parent.to_path_buf() } else { parent.join("Scripts") })
 }
 
-/// 给 MCP 子进程补上"comfy-cli 往哪儿写"的环境变量（2026-09-28 用户 bug
-/// 「MCP 调用总是失败」的真实根因，**不是 ComfyUI 没在运行**）。
+/// 给 MCP 子进程补上"comfy-cli 往哪儿写"的环境变量。
 ///
-/// 现场：comfy-cli 1.20 起**任何**命令都要先探测云凭据（`where.resolve_default →
-/// find_api_key`），凭据锁文件在 `%LOCALAPPDATA%\comfy-cli\secrets.json.lock` ——
-/// 而受限会话把"映像在工作区内"的进程（MCP 的 portable python 就是）关在工作区里，
-/// 写工作区外一律 `PermissionError [Errno 13]`（实测 WMI 拉起也一样，见
-/// `docs\pitfalls.md`），整个 `comfy nodes` 家族当场炸成 UnexpectedToolError，
-/// 还被误译成"先确认 ComfyUI 在线"。
+/// 现场（2026-09-28 用户 bug「MCP 调用总是失败」的真实根因，**不是 ComfyUI 没在运行**）：
+/// comfy-cli 1.20 起**任何**命令都要先探测云凭据（`where.resolve_default → find_api_key`），
+/// 凭据锁文件在 `%LOCALAPPDATA%\comfy-cli\secrets.json.lock`；它还把
+/// `config.ini` 写死在 `~\AppData\Local\comfy-cli`，缓存写 `~/.cache/comfy-cli`，
+/// 临时文件写 `%TEMP%`。这三处**全在 ComfyHub 自己的文件夹之外**。
 ///
-/// 处置：comfy-cli 会写盘的三个地方全部指进项目内（`storage\ai\mcp\comfy-cli-home`）：
-/// - 云凭据 + 锁：`COMFY_SECRETS_PATH` —— **只在默认位置写不进时才指**，
-///   免得把用户已在 `%LOCALAPPDATA%\comfy-cli` 登录过的 Comfy Cloud 凭据弄丢；
-/// - 对象信息等缓存：`COMFY_CACHE_DIR`（默认 `~/.cache/comfy-cli`）；
-/// - tempfile：`TMP` / `TEMP`（默认 `%TEMP%`，SQLite 那条 `temp_store` 坑的同源）。
+/// # ⚠ 2026-09-29 把方向反过来了：默认就落在自身文件夹，不再"试系统位置、失败才退回"
+///
+/// 原来的判据是 `comfy_cli_config_dir_writable` —— 写得进就用系统的、写不进才指项目内。
+/// 那个"探针"有两个问题：① 结果依赖**当前进程能不能建文件**，而那正是不可靠的那个事实
+/// （受限与否看映像位置，于是同一条逻辑在源码树/发布包给出相反结论）；
+/// ② 更根本的是**方向错了** —— comfy-cli 的凭据与缓存是 ComfyHub 驱动产生的状态，
+/// 按"自己产生的内容存在自身文件夹内"这条，它默认就该在 `<根>\storage\ai\mcp\comfy-cli-home`。
+///
+/// 所以现在**无条件**指进项目内，并且**一次性导入**用户此前在系统位置的那份：
+/// - 云凭据 + 锁：`COMFY_SECRETS_PATH` → `<home>\secrets.json`（导入旧的 `secrets.json`）
+/// - `config.ini`：**没有**环境变量可指（comfy-cli 1.20 把路径写死在
+///   `constants.DEFAULT_CONFIG[windows] = expanduser("~")\AppData\Local\comfy-cli`），
+///   但那条路径是**从 `~` 算出来的** —— 把 `USERPROFILE` 指进项目内同样生效，
+///   再把用户那份 `config.ini`（记着 comfy-cli 的工作区 `default_workspace`）抄过去。
+///   不抄的话 comfy-cli 会拿"假家目录"下的默认工作区（`~\Documents\comfy\ComfyUI`，
+///   根本不存在）→ 起实例 / 跑工作流全错。
+/// - 缓存：`COMFY_CACHE_DIR` → `<home>\cache`
+/// - tempfile：`TMP` / `TEMP` → `<根>\.run\tmp`（不再探 `%TEMP%`，见下）
+///
+/// ⚠ 导入是**只读复制**（读项目外是允许的，受限的只是写），且**只导一次**
+/// （目标已存在就不动，免得把用户新登录的凭据用旧文件盖回去）。
+/// 代价要说清：凭据不再跨 ComfyHub 安装/跨机器共享 —— 但 db 与 storage 本来就在各自文件夹里，
+/// 这与"便携包"本来就是一致的。
 fn apply_comfy_cli_write_redirection(command: &mut tokio::process::Command, project_root: &Path) {
     let home = project_root
         .join("storage")
@@ -670,28 +686,43 @@ fn apply_comfy_cli_write_redirection(command: &mut tokio::process::Command, proj
         .join("mcp")
         .join("comfy-cli-home");
     if std::fs::create_dir_all(&home).is_ok() {
-        if !comfy_cli_config_dir_writable() {
-            command.env("COMFY_SECRETS_PATH", home.join("secrets.json"));
-            // config.ini **没有**环境变量可指（comfy-cli 1.20 把路径写死在
-            // `constants.DEFAULT_CONFIG[windows] = expanduser("~")\AppData\Local\comfy-cli`），
-            // 但那条路径是**从 `~` 算出来的** —— 所以把 USERPROFILE 指进项目内同样能生效。
-            // 顺带把用户那份 config.ini（里面记着 comfy-cli 的工作区 `default_workspace`）
-            // 抄一份过去：不抄的话 comfy-cli 会拿"假家目录"下的默认工作区
-            // （`~\Documents\comfy\ComfyUI`，根本不存在）→ 起实例 / 跑工作流全错。
-            //
-            // ⚠ 抄的是**只读副本**：读用户那份是允许的（受限的是写），而写它我们不碰。
-            if let Some(dir) = redirect_comfy_cli_home(command, &home) {
-                eprintln!("[mcp] comfy-cli 的 config.ini 指向项目内：{}", dir.display());
-            }
+        command.env("COMFY_SECRETS_PATH", home.join("secrets.json"));
+        import_legacy_comfy_cli_secrets(&home);
+        if let Some(dir) = redirect_comfy_cli_home(command, &home) {
+            eprintln!("[mcp] comfy-cli 的 config.ini 指向项目内：{}", dir.display());
         }
         command.env("COMFY_CACHE_DIR", home.join("cache"));
     }
-    if !dir_writable(&std::env::temp_dir()) {
-        let tmp = project_root.join(".run").join("tmp");
-        if std::fs::create_dir_all(&tmp).is_ok() {
-            command.env("TMP", &tmp);
-            command.env("TEMP", &tmp);
-        }
+    // tempfile：**直接指**项目内，不再探 `%TEMP%`（SQLite `temp_store=MEMORY` 那条坑的同源）
+    let tmp = project_root.join(".run").join("tmp");
+    if std::fs::create_dir_all(&tmp).is_ok() {
+        command.env("TMP", &tmp);
+        command.env("TEMP", &tmp);
+    }
+}
+
+/// 把用户此前在 `%LOCALAPPDATA%\comfy-cli` 登录过的 Comfy Cloud 凭据**一次性**导入进来。
+///
+/// 只在目标缺失时导（导了两次会把用户新登录的凭据盖回旧的）；读不到就当没有，
+/// **不拦启动** —— 凭据没了用户重新登录一次即可，起不来才是大事。
+fn import_legacy_comfy_cli_secrets(home: &Path) {
+    let target = home.join("secrets.json");
+    if target.exists() {
+        return;
+    }
+    let Ok(local) = std::env::var("LOCALAPPDATA") else {
+        return;
+    };
+    let legacy = Path::new(local.trim()).join("comfy-cli").join("secrets.json");
+    if !legacy.is_file() {
+        return;
+    }
+    match std::fs::copy(&legacy, &target) {
+        Ok(_) => eprintln!(
+            "[mcp] 已把 %LOCALAPPDATA%\\comfy-cli\\secrets.json 导入到 {}（只此一次）",
+            target.display()
+        ),
+        Err(e) => eprintln!("[mcp] 导入 comfy-cli 云凭据失败（忽略，用户重新登录即可）：{e}"),
     }
 }
 
@@ -722,39 +753,16 @@ fn redirect_comfy_cli_home(command: &mut tokio::process::Command, home: &Path) -
     Some(config_dir)
 }
 
-/// `%LOCALAPPDATA%\comfy-cli`（comfy-cli 的配置/凭据目录）现在写不写得进。
-/// 目录不存在时看 `%LOCALAPPDATA%` 本身（comfy-cli 首次会自己 mkdir）。
-fn comfy_cli_config_dir_writable() -> bool {
-    let Ok(local) = std::env::var("LOCALAPPDATA") else {
-        return false;
-    };
-    if local.trim().is_empty() {
-        return false;
-    }
-    let base = Path::new(local.trim());
-    let dir = base.join("comfy-cli");
-    let target = if dir.is_dir() { dir } else { base.to_path_buf() };
-    dir_writable(&target)
-}
-
-/// 目录当前进程写不写得进（建一个探测文件，用完即删；失败按不可写）。
-fn dir_writable(dir: &Path) -> bool {
-    let probe = dir.join(format!(".comfyhub-write-probe-{}", std::process::id()));
-    match std::fs::OpenOptions::new().create_new(true).write(true).open(&probe) {
-        Ok(_) => {
-            let _ = std::fs::remove_file(&probe);
-            true
-        }
-        Err(_) => false,
-    }
-}
-
 /// 找 MCP 运行时。
 ///
-/// 顺序（与 `scripts\mcp-runtime.ps1` 的 `Get-McpRuntimeDir` 一致）：
+/// 顺序（与 `scripts\mcp-runtime.ps1` 的 `Get-McpRuntimeDir` 一致 —— 两处必须同序）：
 ///  1. 环境变量 `COMFYHUB_MCP_DIR`
 ///  2. `<根>\storage\ai\mcp`
-///  3. `%LOCALAPPDATA%\ComfyHub\mcp`
+///
+/// **只有这两个**：便携 python + venv 是 ComfyHub **自己的内容**（几百 MB），
+/// 按"自己产生的内容存在自身文件夹内"这条，它只该落在 `<根>\storage\ai\mcp`。
+/// 2026-09-29 删掉了原来的第 3 档 `%LOCALAPPDATA%\ComfyHub\mcp` —— 那正是这条规矩的反例：
+/// 内容散到系统位置，于是"哪份才是真的"要看机器上装过什么，发布包也不再便携。
 ///
 /// **刻意不读 `%USERPROFILE%\.dsh`**（AGENTS §10：任何运行期代码都不许依赖 DSH 的目录）。
 pub fn discover_runtime(project_root: &Path) -> RuntimePaths {
@@ -766,11 +774,6 @@ pub fn discover_runtime(project_root: &Path) -> RuntimePaths {
         }
     }
     candidates.push(project_root.join("storage").join("ai").join("mcp"));
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        if !local.trim().is_empty() {
-            candidates.push(PathBuf::from(local).join("ComfyHub").join("mcp"));
-        }
-    }
 
     // env 指的那个优先（哪怕它还不存在也先认它，报"没装配"比报"找不到"更有用）。
     let dir = candidates
@@ -1636,11 +1639,23 @@ mod tests {
     /// 探测函数本身：项目内的临时目录写得进（true）；不存在的深层路径建不出（false）。
     #[test]
     fn dir_writable_探测结果可信() {
-        let dir = std::env::temp_dir().join(format!("comfyhub-rs-dw-{}", std::process::id()));
+        // ⚠ 判据真源已经搬到 `crate::confinement::dir_writable`（后端自检与 doctor 都用它），
+        // 这里只保留一条"探针语义没被改坏"的回归 —— 用例的临时目录放**项目内**
+        // （`%TEMP%` 在受限会话里写不了，那正是 `confinement.rs` 文件头记的同一个坑）。
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(".scratch")
+            .join(format!("mcp-dw-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        assert!(dir_writable(&dir), "temp_dir 应该可写");
+        assert!(
+            crate::confinement::dir_writable(&dir),
+            "项目内的目录应该写得进"
+        );
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(!dir_writable(&dir.join("不存在").join("更深")), "建不出的目录应报不可写");
+        assert!(
+            !crate::confinement::dir_writable(&dir.join("不存在").join("更深")),
+            "建不出的目录应报不可写"
+        );
     }
 
     #[tokio::test]
