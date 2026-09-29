@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'core/backend_launcher.dart';
 import 'core/settings_store.dart';
 import 'core/theme.dart';
+import 'models/models.dart';
 import 'pages/ai_home_page.dart';
 import 'pages/gallery_page.dart';
 import 'pages/prompts_page.dart';
@@ -17,6 +18,7 @@ import 'pages/tags_page.dart';
 import 'state/ai_workspace_store.dart';
 import 'state/library_store.dart';
 import 'state/nsfw_store.dart';
+import 'widgets/confinement_banner.dart';
 
 class ComfyHubApp extends StatelessWidget {
   final SettingsStore settings;
@@ -327,6 +329,10 @@ class _HomeShellState extends State<HomeShell> {
   // 默认落在「AI 工作台」（AIH-001）—— 打开 App 先进入对话，画廊退到第二位
   int _index = 0;
 
+  /// 后端"受不受限"（写不写得进项目外）。**受限时横幅常驻** —— 受限是环境事实，
+  /// 界面上看不到就只剩工具文案与 doctor 会说，用户（和模型）只能靠猜（2026-09-29 用户 bug）。
+  ConfinementInfo? _confinement;
+
   static const _destinations = [
     _Dest('AI 工作台', Icons.auto_awesome_outlined, Icons.auto_awesome),
     _Dest('画廊', Icons.photo_library_outlined, Icons.photo_library),
@@ -334,6 +340,24 @@ class _HomeShellState extends State<HomeShell> {
     _Dest('标签', Icons.sell_outlined, Icons.sell),
     _Dest('设置', Icons.settings_outlined, Icons.settings),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _probeConfinement();
+  }
+
+  /// 只问一次。问不到（后端还没起 / 老版本没有这个端点）就当"不知道"：
+  /// **别亮横幅** —— 那不是受限的证据。
+  Future<void> _probeConfinement() async {
+    try {
+      final info = await context.read<LibraryStore>().api.confinement();
+      if (!mounted) return;
+      setState(() => _confinement = info);
+    } catch (_) {
+      // 同上：静默。真正撞到时工具文案与 `doctor` 会说。
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -345,6 +369,16 @@ class _HomeShellState extends State<HomeShell> {
       TagsPage(),
       SettingsPage(),
     ];
+    // 横幅在**内容之上**（不是浮层）：它是常驻状态，不是转瞬的提示
+    final body = Column(
+      children: [
+        ConfinementBanner(
+          info: _confinement,
+          onOpenSettings: () => setState(() => _index = 4),
+        ),
+        Expanded(child: pages[_index]),
+      ],
+    );
 
     if (wide) {
       return Scaffold(
@@ -368,14 +402,14 @@ class _HomeShellState extends State<HomeShell> {
               ],
             ),
             const VerticalDivider(width: 1),
-            Expanded(child: pages[_index]),
+            Expanded(child: body),
           ],
         ),
       );
     }
 
     return Scaffold(
-      body: pages[_index],
+      body: body,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),

@@ -160,6 +160,27 @@ fn keys(value: &Value) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn confinement_endpoint_reports_the_judge_not_just_the_verdict() {
+    let (status, body) = get_json(app(), "/api/system/confinement").await;
+    assert_eq!(status, StatusCode::OK);
+    // ⚠ **只断言"形状"，不断言 restricted 的取值**：真机上那份 ComfyUI 目录到底写不写得进
+    //   是环境属性（AGENTS §12 纪律）。要断言的是"判据必须一起给" ——
+    //   只回一个布尔，界面与模型就只能猜（2026-09-29 用户 bug 就是这么变成"改 ACL"的）。
+    for key in ["restricted", "serverImage", "imageInsideProject", "blockedPaths", "checkedPaths", "summary"] {
+        assert!(body.get(key).is_some(), "缺了 `{key}`：{body}");
+    }
+    assert!(body["restricted"].is_boolean());
+    assert!(body["imageInsideProject"].is_boolean(), "判据（映像在不在工作区内）必须给：{body}");
+    assert!(body["blockedPaths"].is_array());
+    let restricted = body["restricted"].as_bool().unwrap();
+    assert_eq!(
+        body["remedy"].is_null(),
+        !restricted,
+        "修法只在真受限时给（不受限时那行是噪音）"
+    );
+}
+
+#[tokio::test]
 async fn health_reports_engine_and_schema_version() {
     let (status, body) = get_json(app(), "/api/health").await;
     assert_eq!(status, StatusCode::OK);

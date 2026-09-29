@@ -158,13 +158,59 @@ pub fn refresh(state: &crate::routes::AppState) -> Report {
     report
 }
 
+/// 界面上要用的那份结论（`GET /api/system/confinement`）。
+///
+/// **必须带上"判据本身"**（[`server_image`] 与 `imageInsideProject`）：只说"受限"用户没法自查，
+/// 说清"因为后端映像在工作区内"他就能自己核对 —— 这正是 2026-09-28 那批现场描述被写歪的原因
+/// （现象对、结论错，处方跟着错）。
+pub fn describe(state: &crate::routes::AppState) -> serde_json::Value {
+    let report = refresh(state);
+    let image = server_image();
+    let inside = image
+        .as_deref()
+        .map(|path| path.starts_with(state.project_root()))
+        .unwrap_or(false);
+    serde_json::json!({
+        "restricted": report.restricted,
+        "pid": std::process::id(),
+        "projectRoot": state.project_root().display().to_string(),
+        "serverImage": image.map(|p| p.display().to_string()),
+        // ⚠ 这一条就是判据：true 时"把整套挪到工作区外"才有意义
+        "imageInsideProject": inside,
+        "checkedPaths": report.checked_paths,
+        "blockedPaths": report.blocked_paths,
+        "summary": report.summary(),
+        "remedy": if report.restricted { Some(remedy_text()) } else { None },
+    })
+}
+
+/// 一句人话的修法（界面、工具文案、doctor 共用同一份说法 —— 别各写各的）。
+pub fn remedy_text() -> String {
+    "把整套 ComfyHub 放到**工作区外**再启动（内容仍然全在它自己的文件夹里）：\n\
+     pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub\n\
+     pwsh -File D:\\dist\\ComfyHub\\scripts\\comfyhub.ps1 up\n\
+     已经有工作区外的构建产物时，一句 $env:COMFYHUB_SERVER_EXE = \"<完整路径>\" 就够。"
+        .to_string()
+}
+
+/// 后端映像（自己的 exe）现在在哪儿 —— **判据的第一半**。
+pub fn server_image() -> Option<PathBuf> {
+    std::env::current_exe().ok()
+}
+
 /// 把结论落到磁盘：**受限才写，正常就删**。
 ///
 /// 写不进标记文件不算失败（那正是受限的表现之一，不能因此让后端起不来）。
+///
+/// ⚠ **项目根不是一个真目录时连目录都不建**：单测里的 `AppState` 用的是 `:memory:`
+/// 这种占位根，不挡一下就会在当前工作目录里造出一个叫 `:memory:` 的文件夹。
 pub fn apply(project_root: &Path, report: &Report, pid: u32) -> Option<PathBuf> {
     let target = path(project_root);
     if !report.restricted {
         let _ = std::fs::remove_file(&target);
+        return None;
+    }
+    if !project_root.is_dir() {
         return None;
     }
     if let Some(parent) = target.parent() {
@@ -335,5 +381,60 @@ mod tests {
         std::fs::remove_dir(&blocker).unwrap();
         assert!(dir_writable(&root), "占位去掉后要恢复写得进");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 界面上那份 JSON（`GET /api/system/confinement`）：**判据与结论一起给**。
+    ///
+    /// 只说"受限"用户没法自查，说清"因为后端映像在工作区内"他就能自己核对 ——
+    /// 2026-09-28 那批现场描述就是这么被写歪的（现象对、结论错）。
+    #[test]
+    fn 界面那份结论要带判据与修法() {
+        let root = scratch("describe");
+        let conn = crate::db::open_memory().unwrap();
+        let schema = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("db").join("schema.sqlite.sql"),
+        )
+        .expect("读得到真 schema");
+        conn.execute_batch(&schema).expect("建 schema");
+        let state =
+            crate::routes::AppState::new(conn, root.to_string_lossy().as_ref(), root.join("media"));
+        crate::capture::save_capture_config(
+            &state,
+            crate::capture::CaptureConfig {
+                output_dir: Some(root.join("output").display().to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("存捕获配置");
+        std::fs::create_dir_all(root.join("output")).unwrap();
+
+        // ⚠ **不断言 restricted 的取值**：`resolve_workspace` 在本机是能探到真的 ComfyUI 的，
+        //   那份目录在本会话（映像在工作区内的测试二进制）恰好写不进去 → 结论是 true。
+        //   "这台机器哪个目录可写"是环境属性，不是被测行为（AGENTS §12 纪律）。
+        let json = describe(&state);
+        let restricted = json["restricted"].as_bool().expect("restricted 必须是布尔");
+        assert!(json["blockedPaths"].is_array());
+        assert!(json["checkedPaths"].is_array());
+        assert_eq!(
+            json["remedy"].is_null(),
+            !restricted,
+            "修法只在真受限时给（不受限时那行是噪音）"
+        );
+        // 判据那一半：映像路径与"它在不在项目内"
+        assert!(json["serverImage"].is_string(), "要说清后端映像在哪儿");
+        assert!(json["imageInsideProject"].is_boolean());
+        assert_eq!(json["pid"], serde_json::json!(std::process::id()));
+        assert!(!json["summary"].as_str().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn 修法文案指向发布包而不是让用户改_acl() {
+        let text = remedy_text();
+        assert!(text.contains("pack-release.ps1"), "要给出真正管用的那一步：{text}");
+        assert!(text.contains("COMFYHUB_SERVER_EXE"), "已有工作区外的产物时也要有路：{text}");
+        for wrong in ["权限", "ACL", "换个终端", "双击 ComfyUI"] {
+            assert!(!text.contains(wrong), "别再说错的处方（{wrong}）：{text}");
+        }
     }
 }

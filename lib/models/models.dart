@@ -4,6 +4,80 @@
 library;
 
 // ===========================================================================
+//  后端环境（受限状态）
+// ===========================================================================
+
+/// `GET /api/system/confinement` —— **"这个后端能不能写工作区外"**。
+///
+/// 为什么界面上要有它（2026-09-29 用户 bug）：受限这件事原本只有 `doctor` 与工具文案会说，
+/// 界面上看不到，于是模型如实转述成"input 目录权限不够"，用户去改 ACL —— 白忙一场。
+/// 受限是**环境事实**，得让人一眼看见；而且必须连**判据**一起给
+/// （[imageInsideProject]：后端映像落在项目内），否则用户没法自查。
+class ConfinementInfo {
+  final bool restricted;
+
+  /// 后端 exe 现在在哪儿（判据的第一半）
+  final String? serverImage;
+
+  /// 后端映像是否落在项目内（判据的第二半：true 时"挪到项目外"才管用）
+  final bool imageInsideProject;
+
+  /// 写不进的那些（人话形式：`产物目录 D:\…（permissiondenied（os error 5））`）
+  final List<String> blockedPaths;
+
+  /// 探过的那些
+  final List<String> checkedPaths;
+
+  /// 后端给的一行小结
+  final String summary;
+
+  /// 真受限时后端给的修法（**别在界面里另写一份**）
+  final String? remedy;
+
+  const ConfinementInfo({
+    required this.restricted,
+    this.serverImage,
+    this.imageInsideProject = false,
+    this.blockedPaths = const [],
+    this.checkedPaths = const [],
+    this.summary = '',
+    this.remedy,
+  });
+
+  factory ConfinementInfo.fromJson(Map<String, dynamic> j) => ConfinementInfo(
+        restricted: j['restricted'] == true,
+        serverImage: j['serverImage'] as String?,
+        imageInsideProject: j['imageInsideProject'] == true,
+        blockedPaths: ((j['blockedPaths'] as List?) ?? const []).map((e) => '$e').toList(),
+        checkedPaths: ((j['checkedPaths'] as List?) ?? const []).map((e) => '$e').toList(),
+        summary: (j['summary'] ?? '') as String,
+        remedy: j['remedy'] as String?,
+      );
+
+  /// 一句话说明"为什么" —— **判据在前、结论在后**，别反过来。
+  ///
+  /// 「后端被关在项目里」那种说法太含糊（听着像 ComfyUI 出问题了），
+  /// 说清是**后端映像落在工作区内**用户才能自己去核对。
+  String get headline => restricted
+      ? (imageInsideProject
+          ? '后端映像在工作区内，写不进项目外的目录'
+          : '后端写不进项目外的目录')
+      : '后端可以正常读写项目外';
+
+  /// 给用户看的细节（判据 + 写不进的目录）。
+  String get detail {
+    final lines = <String>[];
+    if (serverImage != null && serverImage!.isNotEmpty) {
+      lines.add('后端映像：$serverImage${imageInsideProject ? '（在工作区内 → 受限）' : ''}');
+    }
+    if (blockedPaths.isNotEmpty) {
+      lines.add('写不进：${blockedPaths.join('、')}');
+    }
+    return lines.join('\n');
+  }
+}
+
+// ===========================================================================
 //  标签
 // ===========================================================================
 

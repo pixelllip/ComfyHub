@@ -208,6 +208,8 @@ where
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
+        // 「我现在是不是被关在工作区里了」—— 界面/doctor/工具文案共用的那一份事实（见 confinement.rs）
+        .route("/api/system/confinement", get(system_confinement))
         .route("/api/tags", get(list_tags))
         .route("/api/tags/categories", get(list_tag_categories))
         .route("/api/prompts", get(list_prompts))
@@ -1844,6 +1846,15 @@ async fn health(State(state): State<AppState>) -> Result<Json<serde_json::Value>
         "schemaVersion": schema,
         "engine": engine,
     })))
+}
+
+/// `GET /api/system/confinement` —— **"这个后端能不能写工作区外"**，连判据一起给。
+///
+/// 存在的理由（2026-09-29 用户 bug）：受限这件事原来只有 `doctor` 与工具文案会说，
+/// 界面上一处都看不到，于是模型如实转述成"input 目录权限不够"，用户去改 ACL —— 白忙。
+/// 受限是**环境事实**，得让人一眼看见，而且要附上"为什么"（后端映像在工作区内）。
+async fn system_confinement(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::confinement::describe(&state)))
 }
 
 /// `<storage>`（`media_dir` 的父目录）—— Kotlin `cfg.storageDir` 的对应物。

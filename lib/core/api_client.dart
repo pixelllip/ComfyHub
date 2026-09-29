@@ -115,6 +115,21 @@ class ApiClient {
   Future<Map<String, dynamic>> health() async =>
       Map<String, dynamic>.from(await _get('/api/health') as Map);
 
+  /// **后端受不受限**（写不写得进项目外）—— 连判据一起给，见 [ConfinementInfo]。
+  ///
+  /// ⚠ 老后端没有这个端点（404）：那就当成"不知道"（回 `null`），
+  /// **不许当成"不受限"** —— 那会让横幅永远不亮，正是这次要解决的问题。
+  Future<ConfinementInfo?> confinement() async {
+    try {
+      final json = await _get('/api/system/confinement');
+      if (json is! Map) return null;
+      return ConfinementInfo.fromJson(Map<String, dynamic>.from(json));
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
   Future<LibraryStats> stats() async =>
       LibraryStats.fromJson(Map<String, dynamic>.from(await _get('/api/stats') as Map));
 
