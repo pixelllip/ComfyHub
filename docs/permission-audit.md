@@ -107,10 +107,28 @@
 ```powershell
 # 现在这个后端受不受限？（doctor 会读后端自己留的证，带 pid 比对）
 pwsh -File scripts\comfyhub.ps1 doctor
+# 直接问后端（带判据）
+Invoke-RestMethod http://127.0.0.1:<端口>/api/system/confinement
 
 # 想自己量一遍机制（诊断用例，默认 --ignore）
 cd server-rs; cargo test --test confinement_probe -- --ignored --nocapture
+
+# 走一遍真实的"贴人物 + 摆放"两阶段（活实例，46 项检查）
+pwsh -File scripts\e2e-image-edit-test.ps1 -TwoStage -BgColor green -PlaceX 0.5 -PlaceY 0.5 -PersonDenoise 0.4
 ```
+
+**验证记录（2026-09-29，源码树布局 = 受限的那个后端）**：
+
+```
+[OK] 贴人物档回了 personFilename（那才是 20.image 该填的）
+     人物图（原样交给模型的那份）：placed-edit-person-m345.png
+[OK] 摆放用的是搬过的新人物图（不是原图）
+[OK] 20.image 指向的就是那份人物图 placed-edit-person-m345.png
+✓ 全部通过（46 项检查）
+```
+
+即：**受限的后端照样走完了两阶段**，摆好的人物图是 ComfyUI 自己写进 `input` 的，
+`20.image` 填的就是它 —— 用户那次失败的正是这一步。
 
 ---
 
