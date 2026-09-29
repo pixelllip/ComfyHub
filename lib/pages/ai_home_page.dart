@@ -1032,32 +1032,49 @@ class _MessageBubble extends StatelessWidget {
     required this.mediaPosterUrlOf,
   });
 
-  /// 气泡正文的有序块：思考 / 正文 / 工具卡，顺序 = `parts` 的顺序（= 消息获取顺序）。
+  /// 气泡正文的有序块：思考 / 正文 / 工具卡 / **环节组**，顺序 = `parts` 的顺序（= 消息获取顺序）。
   ///
   /// 用户明确要求"完全按照消息获取顺序来，不要将最终回复置于最终思考的前面"：
   /// 早先这里是"所有思考与正文段先铺完、工具卡统统一坨挂在最下面"，
   /// 一轮回复里工具卡就跑到最终正文后面去了 —— 那也是重排。
   ///
-  /// `parts` 还没到的流式阶段退回 `segments`：实时段里除了思考 / 正文，还有
+  /// `parts` 还没到的流式阶段退回 `segments`：实时段里除了思考 / 正文 / 环节，还有
   /// **工具卡到达时的位置**（`type == 'tool_call'`，`text` 是 callId，见
   /// `AiWorkspaceStore._appendLiveToolCall`）。少了后者，流式期间工具卡就只能补在末尾，
   /// "思考 → 工具 → 正文"被画成"思考 → 正文 → 工具"，直到最终答复落库才跳回正确位置
   /// （用户 2026-09-19 报的错位）。
+  ///
+  /// **关键步骤（环节）折叠**（用户建议 2026-09-28）：`step` 块开一组，把**紧接着**的
+  /// 工具卡收进那一组（默认折叠，见 [`_StepGroup`]）。两条纪律：
+  ///  ① **只收连续的工具卡** —— 中间夹了正文 / 思考（或下一个环节）就先把这一组交出去
+  ///     （宁可同一个环节名多一个组头，也不把正文挪到工具卡后面去：正文与工具卡的先后
+  ///     是用户 bug⑥ 专门定下来的，不能再动）；
+  ///  ② 同一环节名再次开组时标「续」，让人一眼看出这是同一个环节的第二段操作。
   List<Widget> _orderedBody(ThemeData theme) {
     final m = message;
     final streaming = m.status == 'streaming';
     final blocks = <Widget>[];
     final placed = <String>{};
+    final steps = _StepCollector(out: blocks, buildCard: _toolCard);
 
     void addSeg(String type, String text) {
       if (text.isEmpty) return;
       if (type == 'reasoning') {
+        // 思考段打断"连续工具卡"这一串：它自己也是内容，必须按流顺序留在原位
+        steps.breakRun();
         blocks.add(_ReasoningPanel(text: text, streaming: streaming));
+      } else if (type == 'step') {
+        steps.open(text);
       } else if (type == 'text' && text.trim().isNotEmpty) {
+        steps.breakRun();
+        // 环节标记的兜底（手机 harness 是本地跑模型的，后端那条摘取链路不在它前面；
+        // 桌面这边后端已经摘过，这里是幂等的 no-op）
+        final visible = stripStepMarkers(text);
+        if (visible.trim().isEmpty) return;
         // 用户消息是**纯文本**，不走 Markdown（用户打什么就显示什么）
         blocks.add(m.isUser
-            ? Text(text)
-            : MarkdownText(text, style: theme.textTheme.bodyMedium, selectable: false));
+            ? Text(visible)
+            : MarkdownText(visible, style: theme.textTheme.bodyMedium, selectable: false));
       }
     }
 
@@ -1076,6 +1093,12 @@ class _MessageBubble extends StatelessWidget {
       }
 
       for (final part in m.parts) {
+        // 环节块**不参与合并**（哪怕相邻同名）：合并了就把两个环节粘成一个名字
+        if (part.type == 'step') {
+          flush();
+          addSeg('step', part.text ?? '');
+          continue;
+        }
         if (part.type == 'reasoning' || part.type == 'text') {
           if (part.type != type) {
             flush();
@@ -1089,7 +1112,7 @@ class _MessageBubble extends StatelessWidget {
         final call = toolCalls.where((c) => c.callId == part.toolCallId).firstOrNull;
         if (call == null) continue;
         placed.add(call.callId);
-        blocks.add(_toolCard(call));
+        steps.addCall(call);
       }
       flush();
     } else {
@@ -1100,7 +1123,7 @@ class _MessageBubble extends StatelessWidget {
           final call = toolCalls.where((c) => c.callId == seg.text).firstOrNull;
           if (call == null) continue;
           placed.add(call.callId);
-          blocks.add(_toolCard(call));
+          steps.addCall(call);
           continue;
         }
         addSeg(seg.type, seg.text);
@@ -1110,8 +1133,9 @@ class _MessageBubble extends StatelessWidget {
     // 还没归位的工具卡（流式过程中 parts 尚未到达 / parts 里没记的）追加在末尾
     for (final call in toolCalls) {
       if (placed.contains(call.callId)) continue;
-      blocks.add(_toolCard(call));
+      steps.addCall(call);
     }
+    steps.flush();
     return blocks;
   }
 
@@ -2535,6 +2559,164 @@ class _ProducedMediaCard extends StatelessWidget {
       context,
       title: '本次生成的工作流（提示词 #${promptIds.first}）',
       load: () => store.promptWorkflow(promptIds.first),
+    );
+  }
+}
+
+/// 把"环节 + 它里面的工具卡"攒成组（[`_MessageBubble._orderedBody`] 内部用）。
+///
+/// 为什么要它：可折叠容器必须是**连续**的一块，而流是交错的（思考 / 正文 / 工具卡轮流来）。
+/// 所以攒的是"**连续**到达的工具卡"这一串：
+///  * 中间夹了正文 / 思考 → 先把已经攒下的交出去，**环节仍然开着**，后面再来的工具卡
+///    另起一组并标「续」—— 这样"正文与工具卡的先后"永远等于它们到达的先后
+///    （用户 bug⑥ 的纪律），同时这一环节的操作**一个都不会漏在外面**；
+///  * 遇到下一个环节 → 关掉上一组，开新的一组。
+class _StepCollector {
+  _StepCollector({required this.out, required this.buildCard});
+
+  /// 已经排好的块（环节组按它开组的**位置**插进来）。
+  final List<Widget> out;
+
+  /// 一张工具卡怎么画（由气泡提供，工具卡自己有批准 / 拒绝的回调）。
+  final Widget Function(AiToolCallState call) buildCard;
+
+  /// 当前环节名（`null` = 没有环节，工具卡按老样子直接排在正文里）。
+  String? _phase;
+
+  /// 下一组是不是"同一环节的续"（中途夹过正文 / 思考就会是）。
+  bool _continued = false;
+
+  final List<AiToolCallState> _calls = [];
+
+  /// 正文 / 思考段之前要调：把已经攒下的工具卡先交出去（否则它们会被排到正文后面）。
+  void breakRun() {
+    flush();
+    if (_phase != null) _continued = true;
+  }
+
+  /// 一个环节开始（`step` 块 / `step.started` 事件）。
+  void open(String phase) {
+    flush();
+    _phase = phase;
+    _continued = false;
+  }
+
+  /// 一张工具卡：有开着的环节就收进去，否则直接排在正文里（老样子）。
+  void addCall(AiToolCallState call) {
+    if (_phase == null) {
+      out.add(buildCard(call));
+      return;
+    }
+    _calls.add(call);
+  }
+
+  /// 把攒着的那一组交出去（**没有工具卡的环节不画组** ——
+  /// 一个空组头只会白占一行，模型"说完环节名就去写正文"是正常用法）。
+  void flush() {
+    final phase = _phase;
+    if (phase == null || _calls.isEmpty) {
+      _calls.clear();
+      return;
+    }
+    out.add(_StepGroup(
+      phase: phase,
+      continued: _continued,
+      calls: List<AiToolCallState>.of(_calls),
+      buildCard: buildCard,
+    ));
+    _calls.clear();
+  }
+}
+
+/// 一个**关键步骤（环节）组**：环节头 + 这一环节里的操作（工具卡），默认折叠。
+///
+/// 用户建议 2026-09-28：「关键步骤之间 AI 的操作可以再折叠（关键步骤名显示这是哪个粗略环节，
+/// 比如正在分析请求这种，做个约束）」。环节名由**后端**从 `[步骤]…[/步骤]` 里摘出来，
+/// 只可能是那六个固定名字（见 `server-rs/src/step_mark.rs`）—— 前端这里不再做任何猜名。
+///
+/// 三条纪律：
+///  ① **默认折叠**（与"思考过程"同一条：过程让位给正文），但收起时**不是藏起来** ——
+///     标题上带"N 个操作"，一眼能看出这里做过几件事；
+///  ② **有东西等用户处理时不许折叠**（等批准的 / 失败的 / 被拒的）：批准按钮躲进折叠区，
+///     用户就永远不知道该点哪里（那是"AI 卡住了"的观感）；
+///  ③ 同一环节名的第二次开组标「续」，让人看出这是同一个环节的第二段操作（见 [`_StepCollector`]）。
+class _StepGroup extends StatefulWidget {
+  final String phase;
+  final bool continued;
+  final List<AiToolCallState> calls;
+  final Widget Function(AiToolCallState call) buildCard;
+
+  const _StepGroup({
+    required this.phase,
+    required this.continued,
+    required this.calls,
+    required this.buildCard,
+  });
+
+  @override
+  State<_StepGroup> createState() => _StepGroupState();
+}
+
+class _StepGroupState extends State<_StepGroup> {
+  /// 用户自己点开的（默认 false = 折叠）。
+  bool _userExpanded = false;
+
+  /// 这一组里有没有"等用户处理"的东西（处置见类注释第 ② 条）。
+  bool get _hasPendingWork => widget.calls.any(
+        (c) => c.needsApproval || c.status == AiToolCallStatus.failed || c.status == AiToolCallStatus.denied,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final label = theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline);
+    final expanded = _hasPendingWork || _userExpanded;
+    final header = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          _hasPendingWork
+              ? Icons.priority_high
+              : (_userExpanded ? Icons.expand_less : Icons.expand_more),
+          size: 16,
+          color: _hasPendingWork ? theme.colorScheme.error : theme.colorScheme.outline,
+        ),
+        Icon(Icons.route_outlined, size: 14, color: theme.colorScheme.outline),
+        const SizedBox(width: 4),
+        Text(widget.phase, style: label),
+        if (widget.continued) Text('（续）', style: label),
+        const SizedBox(width: 6),
+        Text(
+          _hasPendingWork ? '${widget.calls.length} 个操作 · 有等你处理的' : '${widget.calls.length} 个操作',
+          style: label?.copyWith(
+            color: _hasPendingWork ? theme.colorScheme.error : theme.colorScheme.outline,
+          ),
+        ),
+      ],
+    );
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 有东西等处理时**不给点**：点也只会立刻弹回来，反而让人以为按钮坏了
+          _hasPendingWork
+              ? Tooltip(message: '这一组里有等你处理的调用，不能折叠', child: header)
+              : InkWell(
+                  onTap: () => setState(() => _userExpanded = !_userExpanded),
+                  child: header,
+                ),
+          if (expanded)
+            // 收起时**整块不建**（与"思考过程"同一条：展开的 20 张工具卡不该留在树里）
+            Padding(
+              padding: const EdgeInsets.only(left: 15),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [for (final call in widget.calls) widget.buildCard(call)],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

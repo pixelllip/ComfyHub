@@ -830,14 +830,41 @@ class AiMessagePart {
   }
 }
 
-/// 一条助手消息里**按流顺序**排好的一段内容：思考段或正文段。
+/// 六个**固定环节名**（与后端 `server-rs/src/step_mark.rs` 的 `PHASES` 逐字一致）。
+///
+/// 系统提示第 21 条只让模型用这六个；后端摘标记时也只认这六个（枚举外的名字会被摘掉、
+/// 但**不记环节**）。这里再列一份是为了**手机端**：手机 harness 是本地跑模型的，
+/// 后端那条摘取链路不在它前面 —— 不兜这一下，`[步骤]正在查资料[/步骤]` 就会原样显示在手机上。
+const List<String> kStepPhases = [
+  '正在分析请求',
+  '正在查资料',
+  '正在读文件',
+  '正在生成图片',
+  '正在写文件',
+  '正在收尾',
+];
+
+/// 摘掉正文里的环节标记（`[步骤]正在查资料[/步骤]`）。
+///
+/// **只摘"名字恰好是那六个"的**：别的方括号文本（`[1]`、代码块里的 `[步骤]xxx`）一个字都不动
+/// —— 与后端的"绝不吞内容"同一条纪律。桌面后端已经摘过一遍，这里是个幂等的兜底。
+String stripStepMarkers(String text) {
+  if (text.isEmpty || !text.contains('[步骤]')) return text;
+  final pattern = RegExp(r'\[步骤\]\s*(' + kStepPhases.join('|') + r')\s*\[/步骤\]');
+  return text.replaceAll(pattern, '');
+}
+
+/// 一条助手消息里**按流顺序**排好的一段内容：思考段 / 正文段 / 环节段。
 ///
 /// 为什么需要它：工具循环会让一次回复变成
 /// `思考 → 正文 → 工具 → 思考 → 正文 …`，而人想看到的就是这个顺序。
 /// 后端给的 `parts` 已经是权威的有序块，这里只是把**相邻的同类块合并**成段，
 /// 免得一个气泡里冒出十几个碎段。
+///
+/// `step` 段（用户建议 2026-09-28）的 `text` 是**环节名**（后端从 `[步骤]…[/步骤]` 里摘的，
+/// 只可能是那六个之一）：界面按它把这一环节里的工具卡折进一组。
 class AiMessageSegment {
-  /// reasoning / text
+  /// reasoning / text / step（工具卡的位置占位是 `tool_call`，`text` 是 callId）
   final String type;
   final String text;
 
@@ -845,13 +872,22 @@ class AiMessageSegment {
 
   bool get isReasoning => type == 'reasoning';
 
+  /// 关键步骤（环节）段：`text` 是环节名。
+  bool get isStep => type == 'step';
+
   /// 从有序块还原成段（相邻同类合并）。没有 parts 时返回空列表，调用方回退到实时状态。
   static List<AiMessageSegment> fromParts(List<AiMessagePart> parts) {
     final out = <AiMessageSegment>[];
     for (final p in parts) {
-      if (p.type != 'reasoning' && p.type != 'text') continue;
+      if (p.type != 'reasoning' && p.type != 'text' && p.type != 'step') continue;
       final text = p.text ?? '';
       if (text.isEmpty) continue;
+      // ⚠ 环节段**不合并**（哪怕相邻同名）：分不清"一个环节里的两段操作"与"两个环节"
+      // —— 与实时段那边 `_appendLiveStep` 同一条纪律。
+      if (p.type == 'step') {
+        out.add(AiMessageSegment('step', text));
+        continue;
+      }
       if (out.isNotEmpty && out.last.type == p.type) {
         out[out.length - 1] = AiMessageSegment(p.type, out.last.text + text);
       } else {

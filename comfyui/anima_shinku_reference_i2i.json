@@ -1,0 +1,16 @@
+{
+  "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "anima-base-v1.0.safetensors", "weight_dtype": "default"}},
+  "2": {"class_type": "PathchSageAttentionKJ", "inputs": {"model": ["1", 0], "sage_attention": "auto", "allow_compile": false}},
+  "3": {"class_type": "LoraLoader", "inputs": {"model": ["2", 0], "clip": ["5", 0], "lora_name": "anima-turbo-lora-v0.2.safetensors", "strength_model": 1.0, "strength_clip": 1.0}},
+  "4": {"class_type": "LoraLoader", "inputs": {"model": ["3", 0], "clip": ["3", 1], "lora_name": "NTE(Anima)_trigger_word_@nte.safetensors", "strength_model": 0.7, "strength_clip": 0.7}},
+  "5": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_06b_base.safetensors", "type": "qwen_image", "device": "default"}},
+  "6": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+  "10": {"class_type": "LoadImage", "inputs": {"image": "000042ac031b2ae754774bade570e4bc.jpg"}},
+  "11": {"class_type": "ImageScale", "inputs": {"image": ["10", 0], "upscale_method": "lanczos", "width": 768, "height": 1024, "crop": "disabled"}},
+  "12": {"class_type": "VAEEncode", "inputs": {"pixels": ["11", 0], "vae": ["6", 0]}},
+  "13": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["4", 1], "text": "masterpiece, best quality, safe, highres, newest, anime coloring\n@nte\n1girl, solo, shinku_(student_of_terrasea)_(nte), shinku_(nte), neverness_to_everness,\nmulticolored_hair, very long dark navy hair, vivid magenta hair streaks, red eyes, large curved black horns with magenta stripes, dragon horns, dragon tail,\nStudent of Terrasea school outfit, oversized white school jacket with pink graphic accents, navy sailor collar, white shirt, black knit vest, large magenta plaid bow, dark navy pleated plaid skirt, thigh straps, fingerless gloves, black choker,\nfull body, natural anime proportions, long legs, standing, facing viewer, looking at viewer, both hands raised beside face, clear v sign peace gesture with both hands, gentle smile, feet fully visible,\nplain light background, soft even lighting"}},
+  "14": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["4", 1], "text": "worst quality, low quality, blurry, jpeg artifacts, bad anatomy, bad proportions, bad hands, missing fingers, extra digits, fused fingers, extra limbs, chibi, cropped feet, multiple people, cloned face, watermark, signature, text, realistic, 3d"}},
+  "15": {"class_type": "KSampler", "inputs": {"model": ["4", 0], "seed": 20261003, "steps": 12, "cfg": 1.0, "sampler_name": "er_sde", "scheduler": "simple", "positive": ["13", 0], "negative": ["14", 0], "latent_image": ["12", 0], "denoise": 0.72}},
+  "16": {"class_type": "VAEDecode", "inputs": {"samples": ["15", 0], "vae": ["6", 0]}},
+  "17": {"class_type": "SaveImage", "inputs": {"images": ["16", 0], "filename_prefix": "anima_shinku_reference_i2i"}}
+}

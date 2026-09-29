@@ -1685,5 +1685,161 @@ void main() {
     final controller = tester.widget<Scrollable>(scrollable).controller!;
     expect(controller.offset, closeTo(controller.position.maxScrollExtent, 1));
   });
-}
+  // -------------------------------------------------------------------------
+  //  关键步骤（环节）折叠（用户建议 2026-09-28）
+  //  「关键步骤之间 AI 的操作可以再折叠（关键步骤名显示这是哪个粗略环节）」：
+  //  环节名由后端从 `[步骤]…[/步骤]` 里摘出来（只可能是那六个），界面把它画成
+  //  一个可折叠的组头，把这一环节里的工具卡收进去。
+  // -------------------------------------------------------------------------
 
+  /// (e) `step` 块之后的**连续**工具卡折进一组；默认收起（标题上写着几个操作），点一下展开。
+  testWidgets('(e) 环节组：连续的工具卡折进一组，默认收起', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final parts = [
+      {'type': 'step', 'text': '正在查资料'},
+      {
+        'type': 'tool_call',
+        'toolCallId': 'c1',
+        'jsonPayload': {'name': 'search_prompts', 'arguments': '{"query":"shinku"}'},
+      },
+      {
+        'type': 'tool_result',
+        'toolCallId': 'c1',
+        'text': '库里 2 条',
+        'jsonPayload': {'name': 'search_prompts', 'ok': true, 'elapsedMs': 8},
+      },
+      {
+        'type': 'tool_call',
+        'toolCallId': 'c2',
+        'jsonPayload': {'name': 'danbooru_lookup', 'arguments': '{"query":"shinku"}'},
+      },
+      {
+        'type': 'tool_result',
+        'toolCallId': 'c2',
+        'text': '角色 tag：shinku_(nte)',
+        'jsonPayload': {'name': 'danbooru_lookup', 'ok': true, 'elapsedMs': 20},
+      },
+      {'type': 'text', 'text': '查到了。'},
+    ];
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(
+            3,
+            'message.completed',
+            jsonEncode({'messageId': 'a1', 'text': '查到了。', 'steps': 1, 'parts': parts})) +
+        _sse(4, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse, assistantParts: parts));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '查一下真红');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('正在查资料'), findsOneWidget);
+    expect(find.text('2 个操作'), findsOneWidget, reason: '收起时也要能看出这里做过几件事');
+    // 默认收起：工具卡一张都不建
+    expect(find.text('search_prompts'), findsNothing);
+    expect(find.text('danbooru_lookup'), findsNothing);
+    // 正文照旧在（环节只折"操作"，不折正文）
+    expect(find.textContaining('查到了。'), findsOneWidget);
+
+    await tester.tap(find.text('正在查资料'));
+    await tester.pumpAndSettle();
+    expect(find.text('search_prompts'), findsOneWidget);
+    expect(find.text('danbooru_lookup'), findsOneWidget);
+  });
+
+  /// (f) 环节中间夹了正文：**正文不许被挪到工具卡后面**（用户 bug⑥ 的纪律），
+  /// 第二个组标「续」让人看出这是同一个环节的第二段操作。
+  testWidgets('(f) 环节中间夹了正文：正文留在原位，第二组标「续」', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final parts = [
+      {'type': 'step', 'text': '正在生成图片'},
+      {
+        'type': 'tool_call',
+        'toolCallId': 'c1',
+        'jsonPayload': {'name': 'comfy_submit', 'arguments': '{"promptId":1}'},
+      },
+      {
+        'type': 'tool_result',
+        'toolCallId': 'c1',
+        'text': 'ok',
+        'jsonPayload': {'name': 'comfy_submit', 'ok': true, 'elapsedMs': 3000},
+      },
+      {'type': 'text', 'text': '第一张出来了。'},
+      {
+        'type': 'tool_call',
+        'toolCallId': 'c2',
+        'jsonPayload': {'name': 'comfy_submit', 'arguments': '{"promptId":1,"overrides":{}}'},
+      },
+      {
+        'type': 'tool_result',
+        'toolCallId': 'c2',
+        'text': 'ok',
+        'jsonPayload': {'name': 'comfy_submit', 'ok': true, 'elapsedMs': 3200},
+      },
+    ];
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(
+            3,
+            'message.completed',
+            jsonEncode({
+              'messageId': 'a1',
+              'text': '第一张出来了。',
+              'steps': 2,
+              'parts': parts,
+            })) +
+        _sse(4, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse, assistantParts: parts));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '出一张');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    final headY = tester.getTopLeft(find.text('正在生成图片').first).dy;
+    final textY = tester.getTopLeft(find.textContaining('第一张出来了。')).dy;
+    expect(find.text('（续）'), findsOneWidget, reason: '第二组要标出这是同一环节的续');
+    final contY = tester.getTopLeft(find.text('（续）')).dy;
+    expect(headY, lessThan(textY), reason: '第一组在正文之前');
+    expect(textY, lessThan(contY), reason: '正文夹在两组之间 —— 不许被挪到工具卡后面');
+  });
+
+  /// (g) 组里有**等批准**的调用：不许折叠 —— 批准按钮躲进收起的分组里，
+  /// 用户就永远不知道该点哪里（"AI 卡住了"的观感）。
+  testWidgets('(g) 环节组里有等批准的调用：不许折叠，批准按钮当场看得见', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    // 只有环节头 + 一个等批准的调用，**没有** run.completed：停在"等你点批准"这一刻
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'step.started', '{"messageId":"a1","phase":"正在写文件"}') +
+        _sse(
+            4,
+            'tool.requested',
+            '{"messageId":"a1","callId":"c1","name":"write_file","arguments":"{\\"path\\":\\"a.txt\\"}","approval":"pending"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '写个文件');
+    await tester.tap(find.text('发送'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+
+    expect(find.text('正在写文件'), findsOneWidget, reason: '流式期间环节头就要当场出现');
+    expect(find.textContaining('有等你处理的'), findsOneWidget);
+    expect(find.text('批准'), findsOneWidget, reason: '批准按钮不许被折进收起的分组里');
+  });
+}

@@ -23,6 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:viewer/core/ai_api_client.dart';
 import 'package:viewer/core/settings_store.dart';
+import 'package:viewer/models/ai_models.dart';
 import 'package:viewer/pages/ai_home_page.dart';
 import 'package:viewer/state/ai_workspace_store.dart';
 
@@ -363,5 +364,16 @@ void main() {
     // 收尾（不能 await：单订阅 controller 的 done future 要等消费方收尾）
     unawaited(events.close());
     await tester.pumpAndSettle();
+  });
+  // 环节标记的兜底摘取（手机 harness 本地跑模型，后端那条摘取链路不在它前面）。
+  // 只摘"名字恰好是那六个"的：别的方括号文本一个字都不能动（与后端"绝不吞内容"同一条纪律）。
+  test('stripStepMarkers：只摘固定枚举的环节标记', () {
+    expect(stripStepMarkers('[步骤]正在查资料[/步骤]接着干'), '接着干');
+    expect(stripStepMarkers('前[步骤]正在分析请求[/步骤]后'), '前后');
+    expect(stripStepMarkers('[步骤] 正在写文件 [/步骤]ok'), 'ok', reason: '允许名字两边有空白');
+    // 枚举外的名字、别的方括号：原样保留（那是模型真的写出来的字）
+    expect(stripStepMarkers('[步骤]正在玩耍[/步骤]x'), '[步骤]正在玩耍[/步骤]x');
+    expect(stripStepMarkers('看 [1] 这张图'), '看 [1] 这张图');
+    expect(stripStepMarkers('没有标记'), '没有标记');
   });
 }

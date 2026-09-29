@@ -30,7 +30,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | Skills 目录注入 | **采纳思路，实现不同** | DSH 把目录作为 **user 消息**（`<system-reminder>` + `<available_skills>`）注入，为的是不打断系统前缀的 KV cache；我们的系统提示本来就带时间戳（每 Run 变化），所以直接写进系统提示的独立区块，省一层消息 |
 | DSH 默认提示词的**行为纪律段** | **择优采纳**（2026-09-17，用户要求） | 原文 `docs\default-prompt-inject.md`。挑出与我们对得上的三块写进系统提示 **v9**：① 事实纪律（不猜本机状态 / 证据冲突的采信顺序 / 把"查到的"与"推测的"分开说）；② 表达风格（开门见山、不奉承、不复述、**不写嵌套列表** —— `lib\widgets\markdown.dart` 会把子项拍平成同级，而表格反而是支持的）；③ 两条硬规则（写入留退路：改参数用覆盖不重写原始工作流；读取按需：不遍历磁盘）。另外，那份文档里的 `[MODE: UNRESTRICTED SANDBOX — STABLE]` 段（人格 / 拒绝对抗 / 越狱与渗透话术）**当年是整段搬进来的，现在也还在**（`HarnessRunner.kt` 里一个独立的 `append("""…""")`，上方有注释）：2026-09-17 用户明确说"那是我的意图，不许删除，不要动那段越狱提示词"。它与代码侧的审批纪律（提示词第 3 条）和凭据红线（第 8 条）并存 —— **别把它当误粘贴清理掉**，要改先问用户（AGENTS §10 记着这条） |
 
-我们的工具清单（出厂 23 个，全部可在设置里改成 `allow / ask / deny`）：
+我们的工具清单（**唯一真源是 `server-rs/src/tools.rs` 的 `IMPLEMENTED`** —— 当前 37 个：手机侧 7 个 + 桌面专属 30 个；全部可在设置里改成 `allow / ask / deny`）：
 
 | 工具 | 类别 | 权限档 | 说明 |
 | --- | --- | --- | --- |
@@ -56,6 +56,8 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `web_fetch` | web | **ask** | 把一个**公开**网页取回来读全文（服务端去样板转 markdown，默认 20000 字符上限）。目标 URL 出网前先过 `EndpointGuard` 的 PUBLIC 判定：内网 / 本机 / 云元数据一律 `FETCH_TARGET_DENIED`。正文套**不可信数据**横幅后才给模型。**它不是模型库检索**：要模型 / LoRA 的字段用 `civitai_search`（见 §2.0.3） |
 | `civitai_search` | web | **ask** | 搜 **Civitai 模型库**（用户建议 ④⑦，2026-09-20）：每条结果都给"**拿来做什么**"——类型 / 底模 / 简介 / 触发词 / 下载量 / 链接，并放进结构化 `meta.models`（界面与"登记进长期记忆"直接可用）。普通搜索走 `civitai.com`（免令牌）；**NSFW 必须显式 `allowNsfw=true`**，走 `civitai.red`：配了令牌（凭据名 `civitai`，或环境变量 `CIVITAI_API_KEY`）就带上登录态，**没配也照搜**，但结果里会写明"本次是匿名通道"（2026-09-20 线上核对后由用户决定放宽，见第 9 节第 11 条）。与 `web_search` / `web_fetch` **共用同一个联网额度** |
 | `comfy_prune_workflow` | comfy | allow | **给一份工作流做减法 / 加法**（用户建议 ②，2026-09-20）：`removeFrom` 点名要摘的输入（`"89.image"`）或节点（`"89"`），后端做**确定性图运算**——摘掉目标、把指着它的线接回它自己的上游、把"从输出再也走不到又不是孤立节点"的那些级联收掉；`injections` 往一条线上插节点（典型是显存不足时的 `SageAttention`，接哪些输入由 `/object_info` 算）。返回**改好的完整图** + `removed` / `rewired` / `injected` / `unresolvedInputs` / `openInputs` / `runnable`。**只读**（不改用户的文件）；`runnable=false` 时工具会明确说"别硬提交" |
+| `comfy_start` | comfy | **ask** | **把本机 ComfyUI 实例起起来**（2026-09-28，用户 bug「通过 CLI 启动 comfyui 总是失败」）：ComfyHub **自己起** —— 用工作区自己的 `.venv\Scripts\python.exe` 跑 `main.py`，带上 ComfyUI Desktop 的三个路径参数（共享模型根 / input / output，复用 `launch_comfyui` 那一份实现）、`PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`，日志落项目内 `.run\comfyui-<端口>.log`，**等 `/system_stats` 真的答话**才回报成功（进程刚退出 / 等超时分开如实报，带日志尾巴）。已经在跑时**不再起第二个**。起之前有一道**写权限闸门**：当前会话把进程关在项目里时（子进程继承这个限制，WMI / schtasks 都被系统挡掉）**当场拒绝**并让用户自己双击 ComfyUI Desktop —— 硬起只会得到一个卡死的实例。默认要审批（起一个占显存的长跑进程）。**不要再用 comfy-mcp 的 `launch_comfyui`**：comfy-cli 启动要写两个项目外的文件，受限会话里必然 `Errno 13` |
+| `comfy_stop` | comfy | **ask** | **停掉 ComfyHub 自己起的那个实例**（2026-09-28）：只认 `.run\comfyui-<端口>.pid` 里那条记录，杀之前还核一眼那个 pid 现在是 python（pid 会被系统回收）——**用户自己用 ComfyUI Desktop 起的实例一个进程都不碰**（那种情况如实拒绝，让他自己在那个窗口里关）。杀完等端口真的不再答话才回报成功 |
 | `ask_user_question` | ask | allow | **当场提问、不中断当前回答**（用户建议 ⑥，2026-09-20）：把问题（+ 2~5 个可点选项）递到界面，**挂在原地等**用户答，答完把答案当工具结果喂回模型，**同一个 Run 接着往下做**。提问期间**输入区被答题卡接管**，末尾固定补一条「自己输入答案」（用户 bug 2026-09-21）。等不到（超时 / 用户跳过 / Run 结束）时如实返回"用户还没有回答"，模型据此基于已有信息继续。同一句话问两遍会被 `QUESTION_ALREADY_ASKED` 挡掉。既不改盘也不出网，所以默认 allow |
 
 ### 2.0.2 提问与审批是两件事（2026-09-20，用户建议 ⑥）
@@ -377,6 +379,14 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
   **v9 = 移植 DSH 默认提示词的行为纪律段**
   （事实纪律 / 表达风格 / 写入留退路 + 读取按需，见 §1 表格最后一行）；**v10 = 查询预算 3 → 9**
   （提示词里那个数字改成从常量插值）。改动只影响新 Run。
+  **v34 → v35（2026-09-28）= 第 21 条「环节标记」**（用户建议：关键步骤之间 AI 的操作再折叠）：
+  模型在**每个环节开始时**写一行 `[步骤]环节名[/步骤]`，名字**只许**从那六个里挑
+  （正在分析请求 / 正在查资料 / 正在读文件 / 正在生成图片 / 正在写文件 / 正在收尾）；
+  后端 `server-rs/src/step_mark.rs` 流式摘掉它（用户看不到标记），落成 `step` 有序块 +
+  发 `step.started` 事件，界面画成**默认折叠的环节组**（`lib/pages/ai_home_page.dart` 的
+  `_StepGroup` / `_StepCollector`；README 功能表里那条「关键步骤（环节）折叠」有用户可见的三条纪律）。
+  ⚠ 正文真源是 `server-rs/src/nsfw_prompt.rs`（`gen_prompts.py` 已停用）：改提示词**必须** bump
+  `PROMPT_VERSION`，而 `run_kit.rs` 的签名用例 + `api_test.rs` 的版本断言会一起红 —— 那是**故意的**。
 - **网关不认 `tools` 时的兜底**：很多网关收到 `tools` 直接 400。这种情况本次 Run 会自动
   **退回纯文本模式重试一次**，并在回复开头如实写明"上游网关不接受工具参数"——
   不能让用户在"模型到底行不行"上猜（也绝不假装是模型自己不想用工具）。

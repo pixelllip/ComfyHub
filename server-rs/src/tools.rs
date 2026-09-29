@@ -404,7 +404,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **配方三件**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`，
 /// 见 [`crate::workflow_recipe`]，P4 第 67 步；学与绑都与
 /// `POST /api/ai/workflow-recipes*` 共用一份实现）。
-pub const IMPLEMENTED: [&str; 35] = [
+pub const IMPLEMENTED: [&str; 37] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
@@ -421,6 +421,8 @@ pub const IMPLEMENTED: [&str; 35] = [
     "comfy_load_workflow",
     "comfy_make_mask",
     "comfy_prune_workflow",
+    "comfy_start",
+    "comfy_stop",
     "comfy_submit",
     "comfy_sync_history",
     "comfy_use_attachment",
@@ -584,6 +586,12 @@ pub async fn execute(
         }
         "comfy_list_recipes" => crate::workflow_recipe::tool_list_recipes(state, arguments),
         "comfy_bind_recipe" => crate::workflow_recipe::tool_bind_recipe(state, arguments).await,
+        // ---- 起 / 停实例（2026-09-28 用户 bug「通过 CLI 启动 comfyui 总是失败」）------
+        // 起法在 [`crate::comfy_launch`]：用工作区自己的 `.venv\python.exe` 跑 main.py
+        // （绕开 comfy-cli —— 它启动时要写两个**项目外**的文件，受限环境里必然 Errno 13）。
+        // 两件都是 `ASK`：起一个占显存的长跑进程 / 杀一个进程，都该用户点一下。
+        "comfy_start" => crate::comfy_launch::start(state, arguments).await,
+        "comfy_stop" => crate::comfy_launch::stop(state).await,
         // ---- 提交（P4 第 48 步：**R10 的落点**）------------------------------
         // 「审核 → 审批 → 提交 → 自己等 → captureRun 入库 → mediaIds」这条链：
         // 审批由执行器（`default_access = ASK`）负责，其余都在 `workflow_submit` 里。

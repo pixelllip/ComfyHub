@@ -214,7 +214,7 @@ pub(crate) fn plain_path(p: PathBuf) -> PathBuf {
     p
 }
 
-fn env_path(name: &str) -> Option<PathBuf> {
+pub(crate) fn env_path(name: &str) -> Option<PathBuf> {
     let raw = std::env::var(name).ok()?;
     let raw = raw.trim();
     if raw.is_empty() {
@@ -375,7 +375,7 @@ pub fn find_home(project_root: &Path, configured_output: Option<&str>) -> Option
 }
 
 /// `%USERPROFILE%\Documents\ComfyUI`（ComfyUI Desktop 的默认安装位置）。
-fn search_user_profile() -> Option<PathBuf> {
+pub(crate) fn search_user_profile() -> Option<PathBuf> {
     let home = std::env::var("USERPROFILE").ok()?;
     let base = PathBuf::from(home);
     let tries = [
@@ -393,7 +393,7 @@ fn search_user_profile() -> Option<PathBuf> {
 /// 它把源码检出放在 `<应用目录>\ComfyUI-Installs\<实例名>\ComfyUI` 下，
 /// 而不是 `Documents\ComfyUI` —— 只在顶层翻一层永远找不到它（用户机器实测就是这种）。
 /// 探测**有界**：固定几个应用目录 → 每个目录下的 `ComfyUI-Installs\*` 再拼一层 `ComfyUI`。
-fn search_desktop_installs() -> Option<PathBuf> {
+pub(crate) fn search_desktop_installs() -> Option<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
         let base = PathBuf::from(local_app_data);
@@ -429,7 +429,7 @@ fn search_desktop_installs() -> Option<PathBuf> {
 }
 
 /// 秋叶整合包 / 便携包常见的 `*ComfyUI*` 顶层目录（只翻一层，避免全盘扫描）。
-fn search_desktop_packages() -> Option<PathBuf> {
+pub(crate) fn search_desktop_packages() -> Option<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Ok(home) = std::env::var("USERPROFILE") {
         let base = PathBuf::from(home);

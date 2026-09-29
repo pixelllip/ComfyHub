@@ -231,6 +231,9 @@ pub mod event_type {
     pub const MESSAGE_STARTED: &str = "message.started";
     pub const REASONING_DELTA: &str = "reasoning.delta";
     pub const TEXT_DELTA: &str = "text.delta";
+    /// 关键步骤（环节）开始：`[步骤]正在查资料[/步骤]` 摘出来的名字（用户建议 2026-09-28）。
+    /// 界面靠它**当场**画出环节头，把这个环节的工具卡折进一组。
+    pub const STEP_STARTED: &str = "step.started";
     pub const TOOL_REQUESTED: &str = "tool.requested";
     pub const TOOL_STARTED: &str = "tool.started";
     pub const TOOL_COMPLETED: &str = "tool.completed";
@@ -245,12 +248,13 @@ pub mod event_type {
     pub const RUN_CANCELLED: &str = "run.cancelled";
     pub const HEARTBEAT: &str = "heartbeat";
 
-    /// 17 个类型（**顺序即契约文档的顺序**，两边逐字比对靠它）。
-    pub const ALL: [&str; 17] = [
+    /// 18 个类型（**顺序即契约文档的顺序**，两边逐字比对靠它）。
+    pub const ALL: [&str; 18] = [
         RUN_STARTED,
         MESSAGE_STARTED,
         REASONING_DELTA,
         TEXT_DELTA,
+        STEP_STARTED,
         TOOL_REQUESTED,
         TOOL_STARTED,
         TOOL_COMPLETED,
@@ -380,7 +384,7 @@ mod tests {
         assert_eq!(stored[1].r#type, event_type::RUN_COMPLETED, "终态事件落库了（R5）");
     }
 
-    /// 17 个事件类型与契约文档逐字一致（两边各一份常量，靠这条比对）。
+    /// 18 个事件类型与契约文档逐字一致（两边各一份常量，靠这条比对）。
     ///
     /// 字符串**逐字写死**（不是从常量反推）：契约是 `docs/run-event-contract.md`，
     /// 拼错一个字母的后果是"客户端一个事件都匹配不上、界面什么都不动"，而两端都不报错。
@@ -394,6 +398,7 @@ mod tests {
                 "message.started",
                 "reasoning.delta",
                 "text.delta",
+                "step.started",
                 "tool.requested",
                 "tool.started",
                 "tool.completed",
@@ -412,7 +417,7 @@ mod tests {
         let mut sorted = event_type::ALL.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(sorted.len(), 17, "不许有重复");
+        assert_eq!(sorted.len(), 18, "不许有重复");
         assert_eq!(TERMINAL_EVENTS, ["run.completed", "run.failed", "run.cancelled"]);
         for name in event_type::ALL {
             assert!(!name.is_empty());

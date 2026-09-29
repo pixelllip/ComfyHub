@@ -259,6 +259,10 @@ async fn run_once(
     // 摘标记的状态机：只有真要起标题时才开（关掉时原样透传）。
     // ⚠ 放在 `Arc<Mutex<…>>` 里：流式回调（同步闭包）与轮循环都要用它。
     let stripper = Arc::new(Mutex::new(crate::title_strip::TitleStripper::new(title_wanted)));
+    // 关键步骤（环节）标记：`[步骤]正在查资料[/步骤]` → 落一个 `step` 块 + 一条 `step.started` 事件
+    // （用户建议 2026-09-28：「关键步骤之间 AI 的操作再折叠」）。**永远开着** ——
+    // 它不吃请求、不占预算，模型不写标记时它一个字都不动（见 `step_mark.rs` 的三条纪律）。
+    let steps = Arc::new(Mutex::new(crate::step_mark::StepStripper::new()));
     let mut title_applied = false;
     let mut continuations = 0usize;
 
@@ -326,8 +330,11 @@ async fn run_once(
 
     loop {
         if state.executor.is_cancelled(run_id) {
-            let pending = stripper.lock().unwrap_or_else(|e| e.into_inner()).flush();
+            let (pending, phases) = drain_strippers(&stripper, &steps);
             let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
+            for phase in phases {
+                sink.push_step(&phase);
+            }
             if !pending.is_empty() {
                 sink.push_text(&pending);
             }
@@ -369,6 +376,7 @@ async fn run_once(
         let outcome = {
             let sink = sink.clone();
             let stripper = stripper.clone();
+            let steps = steps.clone();
             let state_for_cb = state.clone();
             let run = run_id.to_string();
             let assistant = assistant_id.clone();
@@ -399,6 +407,20 @@ async fn run_once(
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner())
                                 .push(&chunk);
+                            // 再摘环节标记：摘出来的环节**就地落块 + 当场发事件** ——
+                            // 界面要在这个环节的**第一张工具卡之前**就画出环节头
+                            // （顺序反过来就是"工具卡先冒出来、分组后到"，与思考那次同一个毛病）。
+                            let (visible, phases) = steps
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .push(&visible);
+                            for phase in phases {
+                                sink.push_step(&phase);
+                                emit(
+                                    json!({ "messageId": assistant, "phase": phase }),
+                                    event_type::STEP_STARTED,
+                                )?;
+                            }
                             if !visible.is_empty() {
                                 sink.push_text(&visible);
                                 emit(json!({ "messageId": assistant, "text": visible }), event_type::TEXT_DELTA)?;
@@ -428,9 +450,12 @@ async fn run_once(
             Err(e) => {
                 // **失败也要把已经说出去的话落下来**（R6 第 2 条）——
                 // 一次 429 不该让用户已经看到的那段话凭空消失。
-                // 摘标题的缓冲里可能还压着开头那一段（还没确认是不是标记），失败时也要放出来。
-                let pending = stripper.lock().unwrap_or_else(|e| e.into_inner()).flush();
+                // 摘标题 / 环节的两个缓冲里可能还压着东西（还没确认是不是标记），失败时也要放出来。
+                let (pending, phases) = drain_strippers(&stripper, &steps);
                 let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
+                for phase in phases {
+                    sink.push_step(&phase);
+                }
                 if !pending.is_empty() {
                     sink.push_text(&pending);
                 }
@@ -586,10 +611,13 @@ async fn run_once(
     }
 
     // ---- 落库 --------------------------------------------------------------
-    // 摘标题的缓冲兜底放行（模型没按格式给标题时，开头那一段一个字都不能少）
-    let pending = stripper.lock().unwrap_or_else(|e| e.into_inner()).flush();
+    // 两个摘标记状态机的缓冲兜底放行（模型没按格式写标记时，那些字一个字都不能少）
+    let (pending, phases) = drain_strippers(&stripper, &steps);
     let (body, completed_parts, reasoning_text) = {
         let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
+        for phase in phases {
+            sink.push_step(&phase);
+        }
         if !pending.is_empty() {
             sink.push_text(&pending);
         }
@@ -1187,6 +1215,18 @@ impl Sink {
         }
     }
 
+    /// 关键步骤（环节）块：`[步骤]正在查资料[/步骤]` 摘出来的那个名字。
+    ///
+    /// 与工具卡一样**先封正文段**：环节头必须落在"上一段正文之后、这个环节的工具卡之前"，
+    /// 界面就是按这个位置把后面的工具卡折进这一组的。
+    fn push_step(&mut self, phase: &str) {
+        if phase.is_empty() {
+            return;
+        }
+        self.seal_text();
+        self.parts.push(("step".into(), phase.to_string(), None, None));
+    }
+
     /// 工具卡块。`arguments` 是**模型给的原文**（Kotlin 也把它当字符串放进 payload）——
     /// 存成对象的话，Dart 侧 `map['arguments'].toString()` 会变成 `{query: x}` 这种
     /// 既不是 JSON、也没法回填进输入框的东西。
@@ -1247,6 +1287,21 @@ impl Sink {
     fn is_empty(&self) -> bool {
         self.parts.is_empty() && self.text.is_empty() && self.reasoning.is_empty()
     }
+}
+
+/// 把两个摘标记状态机的缓冲一起放出来（**收尾那三条路都要走它**：取消 / 失败 / 正常）。
+///
+/// 顺序必须与流式路径一致（标题 → 环节），否则同一段话在"跑完"与"失败"两条路上的正文顺序会不一样。
+/// 返回 `(应当进入正文的文本, 还认出来的环节)`：环节是**真的标记**，照样要落成 `step` 块。
+fn drain_strippers(
+    stripper: &Arc<Mutex<crate::title_strip::TitleStripper>>,
+    steps: &Arc<Mutex<crate::step_mark::StepStripper>>,
+) -> (String, Vec<String>) {
+    let pending = stripper.lock().unwrap_or_else(|e| e.into_inner()).flush();
+    let mut guard = steps.lock().unwrap_or_else(|e| e.into_inner());
+    let (visible, phases) = guard.push(&pending);
+    let tail = guard.flush();
+    (format!("{visible}{tail}"), phases)
 }
 
 /// 把攒下来的内容整理成**有序块列表**（`(type, text, tool_call_id, json_payload)` 文本）。

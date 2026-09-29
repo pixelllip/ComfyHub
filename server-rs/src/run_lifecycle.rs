@@ -545,6 +545,23 @@ impl Stream for SseStream {
         let this = &mut *self;
         // 一次 poll 里做完所有同步的活；**绝不在这里 await 一个未被 poll 的 future**
         // （那正是"第一个 await 还没完成就被丢弃 → 事务半截回滚"那类 bug 的来源）
+        //
+        // ⚠ **先把总线里攒着的那几条补写进库，再读**（2026-09-28 用户 bug：
+        // 「首段思考要等到第一个工具调用才显示」的根因）。
+        //
+        // 事件总线是**批写**的（[`crate::runs::EVENT_BATCH`] = 200 条一次事务，
+        // 逐字流式一次 Run 实测 4.7 万条 `text.delta`，逐条开事务正是那个坑），
+        // 而**本流只从库里读**。于是"攒在批里、还没满一批"的事件对界面**不可见** ——
+        // 一次 Run 的开头恰好就是这样：`run.started` / `message.started` /
+        // 几条 `reasoning.delta` 加起来远不到 200 条，全压在批里；
+        // 而第一条 `tool.requested` 是**闸门类事件**、那边会 `flush`（见 `executor`），
+        // 于是那一下把憋着的思考**一起**放出来 —— 用户看到的就是
+        // "思考过程要等第一个工具调用出现才显示"。
+        //
+        // 刷在这里的代价可以忽略：没攒到东西时 `flush` 连事务都不开（空批直接返回），
+        // 而这个流本身就是 120ms 一轮的轮询。收益是**任何**事件都不再依赖
+        // "攒满一批"或"恰好撞上某个闸门类事件"才能被看见。
+        let _ = this.state.bus.flush(&this.state, &this.run_id);
         let batch = runs::events(&this.state, &this.run_id, this.cursor);
         match batch {
             Ok(events) if !events.is_empty() => {
@@ -664,6 +681,22 @@ pub fn finish_run(
 mod tests {
     use super::*;
 
+    /// 内存库 + 建表 + 一条 run（与 `events.rs` 的用例同一套搭法）。
+    fn test_state() -> AppState {
+        let conn = crate::db::open_memory().unwrap();
+        let schema = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("db").join("schema.sqlite.sql"),
+        )
+        .unwrap();
+        conn.execute_batch(&schema).unwrap();
+        conn.execute_batch(
+            "INSERT INTO ai_conversations (id, title) VALUES ('c1', 't');
+             INSERT INTO ai_runs (id, conversation_id, status) VALUES ('r1', 'c1', 'running');",
+        )
+        .unwrap();
+        AppState::new(conn, ":memory:", std::env::temp_dir())
+    }
+
     fn model_with(reasoning: bool, efforts: &[(&str, &str)]) -> ModelRow {
         ModelRow {
             id: "m1".into(),
@@ -721,5 +754,58 @@ mod tests {
         assert!(!hb.contains("id:"));
         let ev = event_to_sse(7, event_type::TEXT_DELTA, &json!({"text": "a"}));
         assert!(ev.starts_with("id: 7\nevent: text.delta\n"));
+    }
+
+    /// **首段思考不必等第一个工具调用**（用户 bug 2026-09-28：
+    /// 「回复的首次思考过程没有显示 —— 等输出第一个工具调用的时候才显示最早的思考结果」）。
+    ///
+    /// 现场：事件总线是批写的（200 条一次事务），而这条流**只从库里读**。
+    /// 一次 Run 开头的 `run.started` / `message.started` / 几条 `reasoning.delta`
+    /// 加起来远不到一批，全压在批里看不见；直到第一条 `tool.requested`
+    /// （闸门类事件，那边会 flush）才把憋着的思考一起放出来 ——
+    /// 用户看到的就是"思考跟第一个工具卡同时冒出来"。
+    ///
+    /// 这条用例就是那个现场的最小复现：**只 emit、故意不 flush**，
+    /// 然后要求 SSE 的第一次 poll 就能读到它。去掉 `poll_next` 里那次 flush 必红。
+    #[test]
+    fn sse_sees_events_without_waiting_for_a_full_batch() {
+        let state = test_state();
+        state.bus.open("r1");
+        // 真实路径上这里就是"思考增量"：一条低产事件，谁也不会为它开事务
+        state
+            .bus
+            .emit(
+                &state,
+                "r1",
+                event_type::REASONING_DELTA,
+                &json!({ "messageId": "a1", "text": "先想一想" }),
+            )
+            .unwrap()
+            .expect("事件要真的发出去");
+        assert!(
+            runs::events(&state, "r1", 0).unwrap().is_empty(),
+            "前提：这时候库里确实还没有（还压在批里）"
+        );
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        rt.block_on(async {
+            use futures_util::StreamExt;
+            let mut stream = Box::pin(SseStream {
+                state: state.clone(),
+                run_id: "r1".into(),
+                cursor: 0,
+                idle: Duration::ZERO,
+                done: false,
+            });
+            let got = tokio::time::timeout(Duration::from_secs(1), stream.next()).await;
+            let bytes = match got {
+                Ok(Some(Ok(bytes))) => bytes,
+                Ok(other) => panic!("流不该是 {other:?}"),
+                Err(_) => panic!("1 秒内一个字都没读到 —— 事件还压在批里没落库"),
+            };
+            let text = String::from_utf8(bytes.to_vec()).unwrap();
+            assert!(text.contains("event: reasoning.delta"), "读到的帧是：{text}");
+            assert!(text.contains("先想一想"), "思考正文要在帧里：{text}");
+        });
     }
 }

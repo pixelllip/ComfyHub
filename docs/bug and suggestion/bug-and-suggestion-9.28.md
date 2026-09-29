@@ -103,3 +103,15 @@
 
 
 
+
+
+---
+
+## 处理记录（2026-09-28 深夜，用户新报三条）
+
+| 条目 | 结论 / 提交 |
+|-|-|
+| 回复的**首次思考过程没有显示**（用户补充："等输出第一个工具调用的时候才显示最早的思考结果"） | 根因：事件**攒够 200 条才落库**，而 SSE **只从库里读** —— 一次 Run 开头的 `reasoning.delta` 远不到一批，全压在批里；直到第一条 `tool.requested`（闸门类事件，那边会 `flush`）才一起放出来。修复：`SseStream::poll_next` 每轮读库**之前先 flush**（空批不开事务），延迟上限 = 轮询 120ms。防线 `run_lifecycle.rs::sse_sees_events_without_waiting_for_a_full_batch`（去掉那行 flush 必红）。 |
+| 尝试通过 CLI 启动 ComfyUI **总是失败** | 根因（真机复现）：`comfy-cli` 起实例时一定要写两个**项目外**的文件 —— `%LOCALAPPDATA%\comfy-cli\config.ini` 与 `<ComfyUI>\user\comfyui_8188.log`；受限会话里 MCP 的便携 python 两个都写不了（`PermissionError [Errno 13]`），而第二个**没有参数可改**。修复：新增原生 `comfy_start` / `comfy_stop`（自己用工作区 `.venv\python.exe` 起、日志落项目内、pid 只认自己起的那个）；MCP 那条补上 `USERPROFILE` 重定向 + 预置 `config.ini`，失败提示改指 `comfy_start`。 |
+| （上一条的连带发现）从项目内起的实例**卡死** | 实测把根因说全了：**受限是继承的**（不是按映像判），所以"换个 ComfyUI 自带的 python"没用 —— 我们拉起的实例写不了自己的 `temp/`，实测 100% CPU 卡在扫自定义节点。逃逸三条路全被系统挡掉（WMI `拒绝访问` / `schtasks Access is denied` / `Start-Process` 照样继承）。处置：起之前先探写权限，写不进就**当场如实拒绝**并让用户自己双击 ComfyUI Desktop。 |
+| 建议项：**关键步骤之间 AI 的操作再折叠**（"关键步骤名显示这是哪个粗略环节，比如正在分析请求这种，做个约束"） | 已做：系统提示新增**第 21 条**（`PROMPT_VERSION` v34 → v35），模型用 `[步骤]环节名[/步骤]` 声明环节，名字**只许**从那六个里挑（正在分析请求 / 正在查资料 / 正在读文件 / 正在生成图片 / 正在写文件 / 正在收尾）；后端 `step_mark.rs` 流式摘掉它（绝不吞内容、可切断、枚举外只摘不记），落成 `step` 有序块 + 发 `step.started` 事件；界面把它画成**默认折叠的环节组**，把这一环节的工具卡收进去（标题上写"N 个操作"），**组里有等批准 / 失败 / 被拒的调用时不许折叠**（审批按钮绝不能被折起来）。手机端（本地 harness）见不到后端那条摘取链路，Flutter 渲染时兜一层 `stripStepMarkers`。防线：`step_mark.rs` 6 例 + `ai_tools_ui_test.dart` 的 (e)(f)(g) 三例 + `ai_message_render_test.dart` 的兜底摘取。 |

@@ -672,6 +672,17 @@ fn apply_comfy_cli_write_redirection(command: &mut tokio::process::Command, proj
     if std::fs::create_dir_all(&home).is_ok() {
         if !comfy_cli_config_dir_writable() {
             command.env("COMFY_SECRETS_PATH", home.join("secrets.json"));
+            // config.ini **没有**环境变量可指（comfy-cli 1.20 把路径写死在
+            // `constants.DEFAULT_CONFIG[windows] = expanduser("~")\AppData\Local\comfy-cli`），
+            // 但那条路径是**从 `~` 算出来的** —— 所以把 USERPROFILE 指进项目内同样能生效。
+            // 顺带把用户那份 config.ini（里面记着 comfy-cli 的工作区 `default_workspace`）
+            // 抄一份过去：不抄的话 comfy-cli 会拿"假家目录"下的默认工作区
+            // （`~\Documents\comfy\ComfyUI`，根本不存在）→ 起实例 / 跑工作流全错。
+            //
+            // ⚠ 抄的是**只读副本**：读用户那份是允许的（受限的是写），而写它我们不碰。
+            if let Some(dir) = redirect_comfy_cli_home(command, &home) {
+                eprintln!("[mcp] comfy-cli 的 config.ini 指向项目内：{}", dir.display());
+            }
         }
         command.env("COMFY_CACHE_DIR", home.join("cache"));
     }
@@ -682,6 +693,33 @@ fn apply_comfy_cli_write_redirection(command: &mut tokio::process::Command, proj
             command.env("TEMP", &tmp);
         }
     }
+}
+
+/// 把 comfy-cli 的"家目录"指进项目内，并把用户那份 `config.ini` 抄过去（只读副本）。
+///
+/// 返回落地的那个 `…\comfy-cli` 目录（拿不到就 `None`，此时**不设** `USERPROFILE` ——
+/// 宁可按老样子失败，也不要让 comfy-cli 去一个没有工作区的假家目录里乱跑）。
+fn redirect_comfy_cli_home(command: &mut tokio::process::Command, home: &Path) -> Option<PathBuf> {
+    let fake_home = home.join("user");
+    let config_dir = fake_home.join("AppData").join("Local").join("comfy-cli");
+    std::fs::create_dir_all(&config_dir).ok()?;
+
+    // 抄用户那份（读得到才抄；读不到就**不动**已有的那份，免得把上次的工作区配置抹掉）
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let real = Path::new(local.trim()).join("comfy-cli").join("config.ini");
+        if real.is_file() {
+            match std::fs::read(&real) {
+                Ok(bytes) => {
+                    if std::fs::write(config_dir.join("config.ini"), &bytes).is_err() {
+                        eprintln!("[mcp] 抄 comfy-cli 的 config.ini 失败（工作区可能不对）");
+                    }
+                }
+                Err(e) => eprintln!("[mcp] 读不到用户那份 comfy-cli config.ini：{e}"),
+            }
+        }
+    }
+    command.env("USERPROFILE", &fake_home);
+    Some(config_dir)
 }
 
 /// `%LOCALAPPDATA%\comfy-cli`（comfy-cli 的配置/凭据目录）现在写不写得进。
@@ -1109,6 +1147,15 @@ fn render_note(desktop: Option<&Desktop>, added: &[&str], notes: &[String]) -> O
         }
         out.push_str(note);
     }
+    // 起停一律指向 ComfyHub 自己那条路（2026-09-28）：comfy-cli 起实例要把后台日志写进
+    // `<ComfyUI>\user\comfyui_<端口>.log`（项目外、没有参数可改），受限会话里必然失败。
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(
+        "· 要**起 / 停实例**请用 `comfy_start` / `comfy_stop`（ComfyHub 自己起：日志落项目内、\
+         先探一次写权限）；`launch_comfyui` 这条在受限会话里会因为 comfy-cli 写不了它的后台日志而失败。",
+    );
     let trimmed = out.trim().to_string();
     if trimmed.is_empty() {
         None
@@ -1430,12 +1477,22 @@ fn humanize_mcp_failure(name: &str, content: &str, stderr: &str) -> Option<Strin
         "free_memory",
         "get_logs",
     ];
-    let hint = if permission_denied {
+    let hint = if matches!(name, "launch_comfyui" | "restart_comfyui" | "stop_comfyui") {
+        // 起停类：comfy-cli 的 `comfy launch` 有一条**绕不开**的写：把后台实例的日志重定向到
+        // `<ComfyUI>\user\comfyui_<端口>.log`（在用户的工作区里，项目外），而这个路径
+        // 没有参数 / 环境变量可以改（2026-09-28 实测：config.ini 那关能用 USERPROFILE 绕过去，
+        // 日志这关绕不过去）。所以**改用 ComfyHub 自己那条路**。
+        "起停实例不要用这条（comfy-cli 的薄壳）：`comfy launch` 会把后台日志写进 \
+         `<ComfyUI>\\user\\comfyui_<端口>.log`，受限会话里那个位置写不了（Errno 13），\
+         而且它没有参数可以改。**改用 `comfy_start`**（ComfyHub 自己用工作区的 `.venv\\python.exe` 起，\
+         日志落项目内）；要停就用 `comfy_stop`。`comfy_start` 也会先探一次「写得了吗」，\
+         写不了会当场说清为什么、下一步该让用户做什么。"
+    } else if permission_denied {
         "根因是**写文件被系统拒绝**（PermissionError / Errno 13）：comfy-cli 要把云凭据锁文件、\
          缓存写到用户目录（%LOCALAPPDATA%\\comfy-cli / ~/.cache），而当前环境不允许这个子进程写项目外的位置\
          （典型：后端是从受限会话里拉起来的）。新版已把 comfy-cli 的落盘位置指进项目内\
-         （storage\\ai\\mcp\\comfy-cli-home）；仍然出现就重启后端服务（设置页「重启后端」）让新环境生效，\
-         或从普通终端起后端。"
+         （storage\\ai\\mcp\\comfy-cli-home，含 config.ini 那份只读副本）；仍然出现就重启后端服务\
+         （设置页「重启后端」）让新环境生效，或从普通终端起后端。"
     } else if PROBE_TOOLS.contains(&name) {
         "comfy-cli 的这些查询要先连上本机 ComfyUI 拿节点表。先用 server_info 确认 ComfyUI 在线；\
          没在运行就先启动 ComfyUI（或问用户）再重试；ComfyUI 在线仍然失败，就把下面的 stderr 交给用户。"
@@ -1817,6 +1874,43 @@ mod tests {
             .unwrap();
         let d = desktop(Some(tmp.clone())).unwrap();
         assert!(d.input_dir.is_none(), "不存在的目录不许进参数（会让启动直接失败）");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// 受限会话里把 comfy-cli 的"家目录 + config.ini"一并指进项目内（2026-09-28 用户 bug
+    /// 「通过 CLI 启动 comfyui 总是失败」的那半：config.ini 那关就是靠这个绕过去的）。
+    ///
+    /// 为什么必须抄 config.ini：comfy-cli 的工作区（`default_workspace`）就记在里面，
+    /// 不抄的话它会拿"假家目录"下的默认工作区 —— 那是 `~\Documents\comfy\ComfyUI`，
+    /// 根本不存在，于是正式启动 / 跑工作流全错，而且**不报错**。
+    #[test]
+    fn 受限时把_comfy_cli_的家目录与_config_ini_一并指进项目内() {
+        // 用例自己的临时目录放项目内（%TEMP% 在受限会话里写不了，见 comfy_launch 的同名注释）
+        let tmp = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(".scratch")
+            .join(format!("mcp-comfyhome-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let home = tmp.join("comfy-cli-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut cmd = tokio::process::Command::new("python");
+
+        let dir = redirect_comfy_cli_home(&mut cmd, &home).expect("要能建出目录");
+        assert!(dir.ends_with("comfy-cli"), "{}", dir.display());
+        assert!(dir.starts_with(&home), "必须落在项目内：{}", dir.display());
+
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let real = Path::new(local.trim()).join("comfy-cli").join("config.ini");
+            if real.is_file() {
+                let copied = dir.join("config.ini");
+                assert!(copied.is_file(), "要抄一份过来：{}", copied.display());
+                assert_eq!(
+                    std::fs::read(&copied).unwrap(),
+                    std::fs::read(&real).unwrap(),
+                    "抄的必须是用户那份的**逐字节**副本（工作区就在里面）"
+                );
+            }
+        }
         std::fs::remove_dir_all(&tmp).ok();
     }
 

@@ -3023,7 +3023,7 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         ]
     );
     assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
-    assert_eq!(body["promptVersion"], "v34");
+    assert_eq!(body["promptVersion"], "v35");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -5731,6 +5731,12 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_make_mask",
             // 摘节点 / 拼节点（P4 第 63 步，用户建议 ②）：改好的图是**内联**返回的
             "comfy_prune_workflow",
+            // 起 / 停实例（2026-09-28 用户 bug「通过 CLI 启动 comfyui 总是失败」）：
+            // ComfyHub 自己用工作区的 `.venv\python.exe` 起 —— comfy-cli 那条路要写
+            // `%LOCALAPPDATA%\comfy-cli\config.ini` 与 `<ComfyUI>\user\comfyui_8188.log`，
+            // 受限环境里必然 Errno 13。两件出厂档都是 ask（起/杀一个占显存的进程）
+            "comfy_start",
+            "comfy_stop",
             "comfy_submit",
             "comfy_sync_history",
             "comfy_use_attachment",
@@ -8489,6 +8495,9 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         // 审核 + 摘拼两件（P4 第 63 步）
         "comfy_audit_workflow",
         "comfy_prune_workflow",
+        // 起 / 停实例（2026-09-28）：桌面专属 —— 手机不直接起桌面的实例
+        "comfy_start",
+        "comfy_stop",
         // 联网三件 + 定向查询（P4 第 64 步）
         "web_search",
         "web_fetch",
@@ -10408,4 +10417,38 @@ async fn pair_start_is_loopback_only() {
         body["error"].as_str().unwrap_or("").contains("只允许在本机"),
         "要说清是（只允许在本机）：{body}"
     );
+}
+
+
+// ===========================================================================
+//  起 / 停实例（2026-09-28 用户 bug「通过 CLI 启动 comfyui 总是失败」）
+//
+//  这一对工具是"ComfyHub 自己拥有起实例这条路"的落点：COMfy-cli 那条路要写
+//  `%LOCALAPPDATA%\comfy-cli\config.ini` 与 `<ComfyUI>\user\comfyui_8188.log`
+//  两个**项目外**的文件，受限会话里必然 Errno 13（`comfy_launch.rs` 文件头有现场）。
+//  端到端这一层盯的是两条**只能在这一层验**的纪律：
+//   ① 已经有实例在跑时**不许**再起第二个（那只会撞端口 / 抢显存）；
+//   ② 停的时候只认自己的 pid 记录 —— 用户自己的 ComfyUI Desktop 实例
+//      **一个进程都不许碰**。
+// ===========================================================================
+
+#[tokio::test]
+async fn start_and_stop_refuse_to_touch_what_is_not_ours() {
+    let state = state();
+    // 一个"已经在跑"的假实例（假服务对 /system_stats 也回 200 + JSON，够 comfy_start 判定）
+    let (url, handle) = fake_comfy(r#"{}"#, &[]).await;
+    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    config.comfy_url = url.clone();
+    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+
+    let out = call_tool(&state, "comfy_start", serde_json::json!({})).await.unwrap();
+    assert_eq!(out.payload["alreadyRunning"], true, "{}", out.payload);
+    assert_eq!(out.payload["comfyReachable"], true);
+    assert!(out.content.contains("已经在跑"), "要说清没再起一个：{}", out.content);
+
+    // 停：没有 `.run\comfyui-<端口>.pid` → 如实拒绝（**绝不去猜一个 pid 杀**）
+    let err = call_tool(&state, "comfy_stop", serde_json::json!({})).await.unwrap_err();
+    assert_eq!(err.code, "COMFY_NOT_OURS", "{}", err.message);
+    assert!(err.message.contains("不是 ComfyHub 起的"), "{}", err.message);
+    handle.abort();
 }

@@ -34,7 +34,10 @@ data: <payload 的 JSON 单行>
 
 ---
 
-## 2. 事件类型清单（17 个，唯一真源 = `RunEventBus.kt` 的 `RunEventType`）
+## 2. 事件类型清单（18 个，唯一真源 = `server-rs/src/events.rs` 的 `event_type`）
+
+> 2026-09-28 起桌面后端是 Rust（`server-rs/src/events.rs` 的 `event_type::ALL` 与
+> `event_types_match_the_contract` 这条用例逐字钉住本表）；Kotlin 那份只在 `legacy/` 留档。
 
 | `type` | 常量 | payload 关键字段 | 谁发 |
 | --- | --- | --- | --- |
@@ -42,6 +45,7 @@ data: <payload 的 JSON 单行>
 | `message.started` | `MESSAGE_STARTED` | `messageId` | 助手气泡建立（前端据此挂占位） |
 | `reasoning.delta` | `REASONING_DELTA` | `text` | 思维链增量（**与正文分流**） |
 | `text.delta` | `TEXT_DELTA` | `text` | 正文增量（**逐字**） |
+| `step.started` | `STEP_STARTED` | `messageId`, **`phase`** | **关键步骤（环节）开始**（用户建议 2026-09-28）：后端从正文里摘掉 `[步骤]环节名[/步骤]` 后，把环节名发出来；`phase` 只可能是那六个固定名字（`server-rs/src/step_mark.rs` 的 `PHASES`）。界面靠它**当场**画出可折叠的环节头，把这一环节的工具卡收进一组。⚠ 落库的有序块类型同名（`type = "step"`，`text` = 环节名）—— 重开会话时界面读的是那个块 |
 | `tool.requested` | `TOOL_REQUESTED` | `runId`, `callId`, `name`, **`arguments`**, `approval` | 模型要调工具；**需审批的工具在发它之前必须先 `AskGate.open(callId)`**（红线 R8）。⚠ 键名是 `arguments`（不是 `args`）：桌面 `HarnessRunner.kt:724` 与 Flutter 的 `AiRunEvent.arguments` 都读这个键 —— 发错了工具卡里就看不到参数（2026-09-23 手机侧落地时发现文档这一列写错，已按代码改正） |
 | `tool.started` | `TOOL_STARTED` | `callId`, `name` | 批准后真正开始执行 |
 | `tool.completed` | `TOOL_COMPLETED` | `callId`, `name`, `elapsedMs`, `preview`, `result`（内含 `mediaIds`） | 工具成功 |
@@ -96,6 +100,16 @@ data: <payload 的 JSON 单行>
 - 两侧都"留尾部"，因为断线重连永远只看最新的一段（`?after=<seq>`）。
 
 **诚实的窗口边界**：被裁掉的只是"**后端重启后**能回放得到的最老那一段"。
+
+> ⚠ **批写 + 只从库里读 = 必须有人 flush**（2026-09-28 修的 bug：用户报"回复的首段思考
+> 要等到第一个工具调用才显示"）。事件是**攒够一批才落库**的（`EVENT_BATCH = 200`），
+> 而 SSE **只从库里读**（`?after=`）：攒在批里、还没满一批的事件对界面**不可见**。
+> 一次 Run 的开头恰好就是这样（`run.started` + `message.started` + 几条 `reasoning.delta`
+> 远不到 200 条），而第一条 `tool.requested` 是闸门类事件、那边会 `flush` ——
+> 那一下把憋着的思考**一起**放出来，用户看到的就是"思考跟第一个工具卡同时冒出来"。
+> 现在 `SseStream::poll_next` 每轮读库**之前先 `flush`**（没攒到东西时空批不开事务），
+> 于是**任何**事件都不再依赖"攒满一批"或"恰好撞上某个闸门类事件"。防线：
+> `run_lifecycle.rs` 的 `sse_sees_events_without_waiting_for_a_full_batch`（去掉那次 flush 必红）。
 
 | 场景 | 能不能补全 |
 | --- | --- |

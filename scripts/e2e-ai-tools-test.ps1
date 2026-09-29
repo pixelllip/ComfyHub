@@ -471,9 +471,23 @@ try {
 
     $policy = Invoke-Api 'GET' '/api/ai/tools/policy' $null
     $roots = @($policy.writeRoots)
-    Check "writeRoots 恰好是 $ExpectedWriteRoot" `
-        ($roots.Count -eq 1 -and $roots[0].TrimEnd('\') -ieq $ExpectedWriteRoot.TrimEnd('\')) `
-        ($roots -join ' | ')
+    # ⚠ 这条钉的是"**代码**不许自己往写白名单里塞目录"（用户 bug ④ 那条纪律：本机 ComfyUI
+    # 的目录只放宽**读**）。而白名单是**用户设置**：用户为了给 ComfyUI 的 input 目录写文件，
+    # 自己在设置页把 `D:\Comfy-Desktop` 加进来过（2026-09-28 的 bug 单里就是这么写的）——
+    # 那种情况下"恰好只有 comfyui"必然不成立，硬要求相等只会让这条 e2e 永远红着、
+    # 让人分不清是新的回归还是用户的设置。所以：
+    #   · 只有一项时 → 仍然**严格相等**（干净机器上照旧是硬闸门）；
+    #   · 多于一项时 → 只要求"项目 comfyui 一定在里面"，并把多出来的目录**打出来**（不假装没看见）。
+    # 真正的"代码不许自己加目录"由 `api_test.rs` 的默认值断言兜着（那边不读用户设置）。
+    if ($roots.Count -eq 1) {
+        Check "writeRoots 恰好是 $ExpectedWriteRoot" `
+            ($roots[0].TrimEnd('\') -ieq $ExpectedWriteRoot.TrimEnd('\')) `
+            ($roots -join ' | ')
+    } else {
+        $has = @($roots | Where-Object { $_.TrimEnd('\') -ieq $ExpectedWriteRoot.TrimEnd('\') }).Count -ge 1
+        Check "writeRoots 含 $ExpectedWriteRoot（另有用户自己加的目录）" $has ($roots -join ' | ')
+        Say "    · 写白名单里还有用户自己加的目录：$(($roots | Where-Object { $_.TrimEnd('\') -ine $ExpectedWriteRoot.TrimEnd('\') }) -join '、')" 'DarkGray'
+    }
 
     # --- 6. 场景 4：目录内写成功 ------------------------------------------
     Say ''

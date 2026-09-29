@@ -3148,5 +3148,7 @@ DELETE /api/prompts/457|459|461
 * **§9 ④ 里那两条**："手机侧的空壳会话清理（桥缺 `deleteConversation`）"与
   "`ai_run_events` 的保留窗口……Rust 侧更没有" **都已完成**（移动端第 71 步；Rust 第 26/27 步）。
   §9 ② 的"`/import-workflows` 仍是 501"也已完成（第 49 步）。
-* **`PROMPT_VERSION`**：§19.3 / §23 写的是 v33，而**代码里是 v34**（`server-rs/src/nsfw_prompt.rs:51`，
-  第 19 条按"贴人只有 matte 一条路"改写那次跟进的）。以代码为准。
+* **`PROMPT_VERSION`**：§19.3 / §23 写的是 v33，而**代码里是 v35**（`server-rs/src/nsfw_prompt.rs`：
+  v34 = 第 19 条按"贴人只有 matte 一条路"改写；v35 = 2026-09-28 新增**第 21 条**环节标记，
+  配合 `step_mark.rs` / `step.started` / 界面的关键步骤折叠）。以代码为准。
+  ⚠ 改提示词正文必须 bump，`run_kit.rs` 的签名用例与 `api_test.rs` 的版本断言会一起红（那是设计）。

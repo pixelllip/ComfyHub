@@ -242,6 +242,31 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
     },
 
     DesktopToolSpec {
+        name: "comfy_start",
+        description: r#"**把本机 ComfyUI 实例起起来**（ComfyHub 自己起，不走 comfy-cli/comfy-mcp 那条路）。
+什么时候用：`comfy_get_status` 报 `comfyReachable=false`（用户说"帮我启动 comfy"就是这件）。**先查再起**：已经在跑时它不会再起第二个，直接回报"已经在跑"。
+它怎么起：用该实例自己的 `.venv\python.exe` 跑 `main.py`，并替它带上 ComfyUI Desktop 的三个路径参数（共享模型根、input、output）—— 所以起来之后用户的工作流能直接跑（不给这三个参数的话，实例看不到共享目录里的模型，一切工作流都会报"缺模型"）。
+**等它真的答话（`/system_stats`）才回报成功**；进程刚起来就退出（日志编码、依赖坏了）与"等超时"分开如实报，并把日志尾巴贴给你看。日志落在**项目内** `.run\comfyui-<端口>.log`。
+⚠ **有一道"写得了吗"的闸门**：起之前先探工作区与产物目录写不写得进。写不进就**当场拒绝**（`COMFY_WRITE_BLOCKED`）—— 那说明当前会话把进程关在项目里了（子进程**继承**这个限制，实测 WMI / schtasks 都被系统挡掉，没有别的起法）。这时**不要**反复重试、也不要改用 `launch_comfyui`：如实把工具给的那段话转述给用户（让他自己双击 ComfyUI Desktop 起实例），起完用 `comfy_get_status` 接着干。
+停它用 `comfy_stop`（只停 ComfyHub 起的那个；用户自己用 ComfyUI Desktop 起的实例不会被碰）。
+⚠ 不要再用 comfy-mcp 的 `launch_comfyui`：comfy-cli 启动时要写 `%LOCALAPPDATA%\comfy-cli\config.ini` 与 `<ComfyUI>\user\comfyui_8188.log`，那两处在受限环境里必然 Errno 13（这正是它一直起不来的原因）。"#,
+        input_schema: r#"{"type":"object","properties":{"workspace":{"type":"string","description":"可选：ComfyUI 工作区（有 main.py + comfy/ 的那个目录）。不给就按本机配置自动找。"},"waitSeconds":{"type":"integer","description":"等它答话的最长秒数，默认 120，最多 600（冷启动加载自定义节点常要 40~60s）"},"extraArgs":{"type":"array","items":{"type":"string"},"description":"可选：还要传给 main.py 的参数（例如 [\"--lowvram\"]）；端口与那三个路径参数由后端负责，不要重复给"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ASK",
+        mutating: true,
+    },
+    DesktopToolSpec {
+        name: "comfy_stop",
+        description: r#"**停掉 ComfyHub 自己起的那个 ComfyUI 实例**（起它的是 `comfy_start`）。
+只认 `.run\comfyui-<端口>.pid` 里那条记录：**用户自己用 ComfyUI Desktop 起的实例不会被碰** —— 那种情况它会如实拒绝，让你告诉用户在那个窗口里自己关。pid 被系统回收过（那个号现在是别的进程）时同样拒绝并说明。
+杀之前会核一眼那个 pid 现在是 python，杀完等端口真的不再答话才回报成功。"#,
+        input_schema: r#"{"type":"object","properties":{},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ASK",
+        mutating: true,
+    },
+
+    DesktopToolSpec {
         name: "comfy_submit",
         description: r#"**把一个工作流提交给 ComfyUI 真的跑一次**（会消耗显卡时间，默认需要用户批准）。用 promptId 指定库里的工作流（先 comfy_find_workflow 或 comfy_load_workflow），或者直接用 workflowPath 指一份本机工作流文件（等价于先 comfy_load_workflow 再提交）。用 overrides 覆盖参数（键写成 节点id.输入名，例如 "3.steps"、"6.text"）。用 connections 补连线（键一样，值写成 ["上游节点id", 槽位]，例如 {"60.vae":["1",0]}）——comfy_load_workflow 报 runnable=false 时，照它给的 openInputs / unresolvedInputs 补。跑完后产物会自动入库到画廊。不要凭想象编造工作流；说不清要跑什么就先问用户。
 **提交前会先做一次模型预检**（用户 2026-09-22 拍板）：要的 checkpoint / LoRA / VAE 当前这个实例加载不了时会**当场拒**并告诉你该怎么办 —— 可能出现在硬盘上但实例看不到（重启 ComfyUI 就好，**别去下载**，见 `comfy_env_report`），也可能本机确实没有（去 `civitai_search` 查 + 问用户）。被拒时**不要改个名字重试**：预检看的是最终那张图（overrides / connections 应用之后），换个名字只会在下一次再被拒。
@@ -434,6 +459,10 @@ mod tests {
                 "comfy_load_workflow",
                 "comfy_make_mask",
                 "comfy_prune_workflow",
+                // 起 / 停实例（2026-09-28 用户 bug「通过 CLI 启动 comfyui 总是失败」）：
+                // 自己起就不用 comfy-cli 写项目外的那两个文件 —— 那条路必然 Errno 13。
+                "comfy_start",
+                "comfy_stop",
                 "comfy_submit",
                 "comfy_sync_history",
                 "comfy_use_attachment",
@@ -485,6 +514,20 @@ mod tests {
         for name in ["comfy_list_recipes", "comfy_bind_recipe"] {
             let tool = DESKTOP_TOOLS.iter().find(|t| t.name == name).expect(name);
             assert!(!tool.mutating, "{name} 只报不改，mutating 必须为 false");
+        }
+    }
+
+    /// 起 / 停实例两件的出厂档：**都要用户批准**（起一个占显存的长跑进程、停一个是杀进程，
+    /// 两件都不该由模型自己决定）。
+    ///
+    /// 与 comfy-mcp 那条 `launch_comfyui` 的档位一致（Kotlin `McpToolPolicyTest` 也是 ASK）——
+    /// 用户拍板过"权限跟随当前对话的权限设置"，所以这里只钉**出厂档**。
+    #[test]
+    fn 起停实例两件默认都要审批() {
+        for name in ["comfy_start", "comfy_stop"] {
+            let tool = DESKTOP_TOOLS.iter().find(|t| t.name == name).expect(name);
+            assert_eq!(tool.access, "ASK", "{name} 的出厂档必须是 ASK");
+            assert!(tool.mutating, "{name} 会起/杀进程，mutating 必须为 true");
         }
     }
 

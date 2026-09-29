@@ -2238,6 +2238,15 @@ class AiWorkspaceStore extends ChangeNotifier {
             _liveReasoning.update(assistantMessageId, (v) => v + delta, ifAbsent: () => delta);
             _appendLiveSegment(assistantMessageId, 'reasoning', delta);
             _notifyStreaming();
+          // 关键步骤（环节）开始（用户建议 2026-09-28）：`[步骤]正在查资料[/步骤]` 被后端摘掉后
+          // 发出来的是**环节名**。界面拿它在**这个环节的第一张工具卡之前**画出环节头 ——
+          // 与工具卡同一个道理：位置必须**当场**记进实时段，否则流式期间分组只能事后补，
+          // 又变成"工具卡先冒出来、分组后到"（用户 bug⑥ 的同一种错位）。
+          case 'step.started':
+            final phase = event.data['phase']?.toString() ?? '';
+            if (phase.isEmpty) break;
+            _appendLiveStep(assistantMessageId, phase);
+            _notifyNow();
           // 工具调用请求：approval=pending 的要在气泡上等用户点「批准 / 拒绝」
           case 'tool.requested':
             final approval = event.approval ?? 'not_required';
@@ -2601,6 +2610,18 @@ class AiWorkspaceStore extends ChangeNotifier {
     } else {
       list.add(AiMessageSegment(type, delta));
     }
+  }
+
+  /// 把一个**环节**记进实时段（用户建议 2026-09-28：关键步骤折叠）。
+  ///
+  /// 与 [`_appendLiveSegment`] 的区别：**每个环节都新开一段**（同名的相邻环节合并的话，
+  /// 界面就分不清"一个环节里两段操作"与"两个环节"了 —— 与工具卡那条同一个理由）。
+  void _appendLiveStep(String messageId, String phase) {
+    if (phase.isEmpty) return;
+    _bumpLiveRevision(messageId);
+    _liveSegments
+        .putIfAbsent(messageId, () => <AiMessageSegment>[])
+        .add(AiMessageSegment('step', phase));
   }
 
   /// 把一个工具调用的**位置**记进实时段（用户 bug⑥：流式时工具卡全跑到最后）。
