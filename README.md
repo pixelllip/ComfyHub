@@ -784,6 +784,7 @@ MiMo、Step、Hy、Inkling、LongCat、Nemotron 等），连**同系列里的视
 | `DELETE` | `/api/tags/{id}` | 删除（级联解除所有关联） |
 | `GET` | `/api/stats` | 库统计 |
 | `GET` | `/api/health` | 健康检查（含数据库连通性、存储目录） |
+| `GET` | `/api/system/confinement` | **后端写不写得进项目外**：`restricted` / `blockedPaths`（带系统原话）/ `summary` / `pid`，外加**判据本身** `serverImage` 与 `imageInsideProject`（后端 exe 在不在工作区内）与 `remedy`（人话修法）。受限时 App 顶部常驻一条横幅。详见 [docs/permission-audit.md](docs/permission-audit.md) |
 
 > ComfyUI 自动捕获相关的接口（配置 / 状态 / 轮询 / 目录导入 / 推送捕获 / 工作流原文）见 [6.5 捕获相关接口](#65-捕获相关接口)。
 

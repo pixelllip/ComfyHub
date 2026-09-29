@@ -166,7 +166,7 @@ pub fn refresh(state: &crate::routes::AppState) -> Report {
 pub fn describe(state: &crate::routes::AppState) -> serde_json::Value {
     let report = refresh(state);
     let image = server_image();
-    let inside = image
+    let inside_root = image
         .as_deref()
         .map(|path| path.starts_with(state.project_root()))
         .unwrap_or(false);
@@ -175,8 +175,11 @@ pub fn describe(state: &crate::routes::AppState) -> serde_json::Value {
         "pid": std::process::id(),
         "projectRoot": state.project_root().display().to_string(),
         "serverImage": image.map(|p| p.display().to_string()),
-        // ⚠ 这一条就是判据：true 时"把整套挪到工作区外"才有意义
-        "imageInsideProject": inside,
+        // ⚠ 判据：后端映像落在**自己的运行根目录**里没有。
+        //   注意别把它说成"在工作区内"——源码树布局下两者相等（所以那句话成立），
+        //   但发布包里根目录就是包目录、并不是被沙箱框住的地方（实测那里 `restricted=false`）。
+        //   所以文案只能说"落在自己的根目录里"，让用户自己对照自己的布局。
+        "imageInsideProjectRoot": inside_root,
         "checkedPaths": report.checked_paths,
         "blockedPaths": report.blocked_paths,
         "summary": report.summary(),
@@ -420,9 +423,9 @@ mod tests {
             !restricted,
             "修法只在真受限时给（不受限时那行是噪音）"
         );
-        // 判据那一半：映像路径与"它在不在项目内"
+        // 判据那一半：映像路径与"它在不在自己的运行根目录里"
         assert!(json["serverImage"].is_string(), "要说清后端映像在哪儿");
-        assert!(json["imageInsideProject"].is_boolean());
+        assert!(json["imageInsideProjectRoot"].is_boolean());
         assert_eq!(json["pid"], serde_json::json!(std::process::id()));
         assert!(!json["summary"].as_str().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(root);

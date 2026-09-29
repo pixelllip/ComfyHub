@@ -19,8 +19,12 @@ class ConfinementInfo {
   /// 后端 exe 现在在哪儿（判据的第一半）
   final String? serverImage;
 
-  /// 后端映像是否落在项目内（判据的第二半：true 时"挪到项目外"才管用）
-  final bool imageInsideProject;
+  /// 后端映像是否落在**自己的运行根目录**里（判据的第二半）。
+  ///
+  /// ⚠ 别把这句说成"在工作区内"：源码树布局下两者相等，但发布包里根目录就是包目录、
+  /// 并不是被沙箱框住的地方（实测那里 `restricted=false`）。所以文案只说"落在运行根目录里"，
+  /// 让用户自己对照自己的布局。
+  final bool imageInsideProjectRoot;
 
   /// 写不进的那些（人话形式：`产物目录 D:\…（permissiondenied（os error 5））`）
   final List<String> blockedPaths;
@@ -37,7 +41,7 @@ class ConfinementInfo {
   const ConfinementInfo({
     required this.restricted,
     this.serverImage,
-    this.imageInsideProject = false,
+    this.imageInsideProjectRoot = false,
     this.blockedPaths = const [],
     this.checkedPaths = const [],
     this.summary = '',
@@ -47,7 +51,7 @@ class ConfinementInfo {
   factory ConfinementInfo.fromJson(Map<String, dynamic> j) => ConfinementInfo(
         restricted: j['restricted'] == true,
         serverImage: j['serverImage'] as String?,
-        imageInsideProject: j['imageInsideProject'] == true,
+        imageInsideProjectRoot: j['imageInsideProjectRoot'] == true,
         blockedPaths: ((j['blockedPaths'] as List?) ?? const []).map((e) => '$e').toList(),
         checkedPaths: ((j['checkedPaths'] as List?) ?? const []).map((e) => '$e').toList(),
         summary: (j['summary'] ?? '') as String,
@@ -57,10 +61,10 @@ class ConfinementInfo {
   /// 一句话说明"为什么" —— **判据在前、结论在后**，别反过来。
   ///
   /// 「后端被关在项目里」那种说法太含糊（听着像 ComfyUI 出问题了），
-  /// 说清是**后端映像落在工作区内**用户才能自己去核对。
+  /// 说清是**后端映像落在运行根目录里**用户才能自己去核对。
   String get headline => restricted
-      ? (imageInsideProject
-          ? '后端映像在工作区内，写不进项目外的目录'
+      ? (imageInsideProjectRoot
+          ? '后端映像落在运行根目录里，写不进项目外的目录'
           : '后端写不进项目外的目录')
       : '后端可以正常读写项目外';
 
@@ -68,7 +72,7 @@ class ConfinementInfo {
   String get detail {
     final lines = <String>[];
     if (serverImage != null && serverImage!.isNotEmpty) {
-      lines.add('后端映像：$serverImage${imageInsideProject ? '（在工作区内 → 受限）' : ''}');
+      lines.add('后端映像：$serverImage${imageInsideProjectRoot ? '（在运行根目录内）' : ''}');
     }
     if (blockedPaths.isNotEmpty) {
       lines.add('写不进：${blockedPaths.join('、')}');

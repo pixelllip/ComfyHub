@@ -1,13 +1,3 @@
-// 「后端受限」横幅的三条回归：
-//
-//   1) 不受限 / 问不到时**一个像素都不占**（别制造噪音）
-//   2) 受限时**判据与结论一起说**（"因为后端映像在工作区内"），修法取后端给的那一份
-//   3) 老后端没有 /api/system/confinement（404）→ 当"不知道"，**不许当成"不受限"也不许报错**
-//
-// 为什么要有第 2 条：2026-09-29 用户 bug 里，模型把 os error 5 诊断成"input 目录权限不够"，
-// 用户去改 ACL —— 真因是"映像在工作区内的后端写不了工作区外"（AGENTS §12）。
-// 界面既然要显示，就必须把**判据**显示出来，否则又是一轮"现象对、结论错"。
-
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -26,7 +16,7 @@ const _restricted = {
   'pid': 5516,
   'projectRoot': r'D:\myProject\FlutterProject\viewer',
   'serverImage': r'D:\myProject\FlutterProject\viewer\server-rs\target\release\comfyhub-server-rs.exe',
-  'imageInsideProject': true,
+  'imageInsideProjectRoot': true,
   'checkedPaths': ['产物目录：D:\\Comfy-Desktop\\ComfyUI-Shared\\output'],
   'blockedPaths': ['产物目录 D:\\Comfy-Desktop\\ComfyUI-Shared\\output（permissiondenied（os error 5））'],
   'summary': '受限（写不进 …）',
@@ -35,7 +25,7 @@ const _restricted = {
 
 const _free = {
   'restricted': false,
-  'imageInsideProject': false,
+  'imageInsideProjectRoot': true,
   'checkedPaths': ['产物目录：D:\\dist\\ComfyHub\\storage'],
   'blockedPaths': <Object>[],
   'summary': '正常（探过 1 处）',
@@ -58,6 +48,8 @@ void main() {
   testWidgets('不受限 / 问不到时横幅不占位', (tester) async {
     for (final info in <ConfinementInfo?>[
       null,
+      // ⚠ 发布包的真实回包：映像**也在**运行根目录里（`<包根>\server\…`），
+      //   但那不是被沙箱框住的地方 —— 所以判据为真、受限为假时**绝不能**亮横幅。
       ConfinementInfo.fromJson(_free),
     ]) {
       await tester.pumpWidget(MaterialApp(
@@ -75,9 +67,9 @@ void main() {
     ));
 
     expect(find.text(info.headline), findsOneWidget);
-    // 判据：映像路径 + "在工作区内"（标题里就有，后端映像那一行再点明一次）
+    // 判据：映像路径 + "在运行根目录内"
     expect(find.textContaining(r'server-rs\target\release'), findsOneWidget);
-    expect(find.textContaining('在工作区内 → 受限'), findsOneWidget);
+    expect(find.textContaining('在运行根目录内'), findsOneWidget);
     // 写不进的是哪几个目录（带系统原话）
     expect(find.textContaining('os error 5'), findsOneWidget);
     // 修法取后端给的那一份，界面不另写
@@ -96,16 +88,16 @@ void main() {
 
   test('模型层：受限与不受限的措辞都要说人话', () {
     final restricted = ConfinementInfo.fromJson(_restricted);
-    expect(restricted.headline, contains('工作区内'));
+    expect(restricted.headline, contains('运行根目录'));
     expect(restricted.detail, contains('os error 5'));
 
-    // 判据为 false（后端不在工作区内却仍写不进）——不许硬说成"被关在项目里"
+    // 判据为 false（映像不在运行根目录里却仍写不进）——不许硬说成"落在根目录里"
     final odd = ConfinementInfo.fromJson({
       ..._restricted,
-      'imageInsideProject': false,
+      'imageInsideProjectRoot': false,
     });
     expect(odd.headline, '后端写不进项目外的目录');
-    expect(odd.headline, isNot(contains('工作区内')));
+    expect(odd.headline, isNot(contains('运行根目录')));
   });
 
   test('老后端没有这个端点（404）→ 当"不知道"，不许当成不受限也不许抛', () async {
