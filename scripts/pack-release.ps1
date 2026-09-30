@@ -33,7 +33,8 @@
     （2026-09-29 起 MySQL 连"把老库搬进新库"那条通道一起退役了 —— 运行期数据库是
      SQLite 单文件，包里不再有任何数据库本体，这两行只是说明来龙去脉。）
     注意（P4，2026-09-26）：后端是 **Rust 单文件 exe**（静态链接），不再需要 JVM，
-    发布包里没有 jre / server\bin，Kotlin 源码只在 legacy\ 里留档。
+    发布包里没有 jre / server\bin。旧 Kotlin 源码（`legacy/`）**2026-09-30 已整个删除**
+    （用户要求精简）—— 要对照从 git 历史取，别指望在树里找到它。
 
 .EXAMPLE
     pwsh -File scripts\pack-release.ps1

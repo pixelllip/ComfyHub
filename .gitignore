@@ -76,15 +76,12 @@ app.*.map.json
 # 演示用媒体（可由 scripts/make-sample-media.ps1 重新生成）
 /samples/
 
-# Kotlin 后端构建产物
+# Kotlin 后端构建产物（`/server` 那条是老布局的残留规则，留着免得老机器上又冒出来）
 /server/build/
-# Kotlin 后端已退役（P4 收尾）：源码在 legacy\server，但构建产物与它的 storage 一样**不进版本库**
-/legacy/server/build/
-/legacy/server/.gradle/
-/legacy/server/.kotlin/
-/legacy/server/storage/
 /server/.gradle/
 /server/storage/
+# ⚠ `legacy/`（退役的 Kotlin 后端）**2026-09-30 已整个删除** —— 用户要求精简，
+#   要回退旧后端从 git 历史取：`git show 6a9f243^:legacy/server/...`。所以这里不再有它的规则。
 
 # ComfyUI 捕获扩展：本机配置（从 config.example.json 复制而来，地址每台机器不同）
 /comfyui/comfyhub_capture/config.json

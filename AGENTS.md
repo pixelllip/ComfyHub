@@ -196,9 +196,10 @@
   **都只读它** —— 谁也不许自己编一个端口写进去（`api_port_file.rs` 是那个写者）。
 - **`--port 0` 是刻意的**：让操作系统挑空闲端口。写死端口就会撞"被占 / 落在 Windows 保留段"，
   而且真实端口要从 listener 读回来（`--port 0` 时那个 0 不是端口）。
-- **P4 收尾（2026-09-26）起 Kotlin 已退役**：源码在 `legacy\server\`（`.gitignore` 里
-  `/legacy/server/build`、`/legacy/server/storage` 照样忽略），发布包不带它、也不带 `jre`。
-  要回退旧后端得先把 `legacy\server` 放回原位自己构建 —— 这条路只在灰度期有意义。
+- **P4 收尾（2026-09-26）起 Kotlin 已退役；2026-09-30 源码也删了**（用户要求精简：
+  `legacy/` 整个目录连同盘上 239MB 构建产物一起删）。发布包不带它、也不带 `jre`。
+  ⚠ 要回退旧后端只能从 git 历史取：`git log --diff-filter=D -- legacy` 找到删除那次，
+  再 `git show <那次>^:legacy/server/...`。这条路只在灰度期有意义。
 - **`infra::db::open_or_create` 是"第一次运行能起来"的关键**：以前缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
   在发布包里等于**永远起不来**。现在库缺就自己建（DDL 编译期 `include_str!` 嵌在二进制里）。
 - **发布包是便携式的**：可写数据（数据库 `<根>\.db`、产物 `<根>\storage`、日志 `<根>\.run`）
@@ -279,7 +280,7 @@
 **功能说明见 [`docs/ai-tools-and-skills.md`](docs/ai-tools-and-skills.md)**（含"DSH 哪些工具抄了、哪些没抄"的对照表）。
 这里只记改动时容易踩的规矩。
 
-- 工具清单**只有一个真源**：`server-rs/src/tools/tools.rs` 的 `catalog`（桌面全量）与 `mobile_catalog`（手机 7 个）。旧 Kotlin 那份 `legacy/server/src/main/kotlin/com/comfyhub/ai/tools/ToolRegistry.kt` 只作**行为参照**。
+- 工具清单**只有一个真源**：`server-rs/src/tools/tools.rs` 的 `catalog`（桌面全量）与 `mobile_catalog`（手机 7 个）。旧 Kotlin 那份（`ToolRegistry.kt`）**已随 `legacy/` 一起删除**（2026-09-30），要对照就从 git 历史取。
   系统提示、`GET /api/ai/tools`、界面都从它派生 —— 加工具就在这里加一项 + 在 `ToolRegistryTest` 补用例，
   **别在别处再维护一份"可用工具"名单**。
 - **读白名单里会自动加上本机 ComfyUI 的目录**（`ComfyRoots` 每次现探、不落库，见用户 bug ④）：
@@ -441,7 +442,8 @@
 
 **2026-09-23 敲定**：`SQLite + 桌面 Rust + 移动 Kotlin + Flutter（两端）`。
 **2026-09-26 现状**：**桌面后端已是 Rust**（`server-rs/`，单文件 exe，无 JVM / 无 MySQL），
-脚本与发布包都切过去了，四条 e2e + `flutter test` 对着 Rust 全绿；旧 Kotlin 源码在 `legacy\server\`（留档）。
+脚本与发布包都切过去了，四条 e2e + `flutter test` 对着 Rust 全绿；旧 Kotlin 源码
+**2026-09-30 已删**（`legacy/`，要对照从 git 历史取）。
 第 1~10 节里凡是提到 **Kotlin 后端 / `gradle` / `installDist` / `jre` / `ToolRegistry.kt` / MySQL 搬迁**
 的地方，都按**历史（或"回退旧后端"）**理解 —— 运行期真源是 Rust。
 
@@ -450,8 +452,8 @@
 
 四条最容易踩的：
 
-1. **桌面后端只改 `server-rs/`（Rust）**：别在 `legacy\server\`（Kotlin）里继续堆东西 ——
-   它已经不在运行路径上，改了也没有任何效果（除了灰度回退那一次）。旧代码只当**行为参照**读。
+1. **桌面后端只改 `server-rs/`（Rust）**：Kotlin 那套**已经不在仓库里了**（删了）——
+   要参照旧行为就从 git 历史取，别指望在树上找到 `.kt`。
 2. **不要引入 KMP**（`kotlin.multiplatform`）。本工程已迁到 **AGP 9 内建 Kotlin**
    （`android.builtInKotlin=true`，任何模块都不 apply KGP），KMP 与这个刻意设计正面冲突 ——
    理由见 `docs/mobile-harness-design.md` §2.1。动 `android/` 前照旧先读
