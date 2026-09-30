@@ -100,9 +100,21 @@ const NEW_COLUMNS: &[(&str, &str, &str)] = &[
 ///
 /// 幂等：列已在就是空操作。**每次开库都跑**（两条 SQL 的代价），因为它跟 `missing_tables`
 /// 一样是"版本号够新也不代表结构对"的那道自愈 —— 真机踩过一次就够记一辈子了。
+///
+/// ⚠ **表还不存在时直接跳过**：这时候该由 DDL 去建（它建出来就带全列），
+/// 而对着一张不存在的表 `ALTER TABLE` 只会报 `no such table`。
+/// 这条是"能在跑 DDL **之前**调用"的前提 —— 顺序为什么不能反见 [`open_or_create`]。
 fn ensure_columns(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     let mut added: Vec<String> = Vec::new();
     for (table, column, ddl) in NEW_COLUMNS {
+        let table_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            rusqlite::params![table],
+            |row| row.get(0),
+        )?;
+        if table_exists == 0 {
+            continue;
+        }
         let present: i64 = conn.query_row(
             "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
             rusqlite::params![table, column],
@@ -150,6 +162,24 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
     let conn = open(path).map_err(|e| format!("开库失败（{}）：{e}", path.display()))?;
     let version = schema_version(&conn).map_err(|e| format!("读 user_version 失败：{e}"))?;
     let mut missing: Vec<&'static str> = Vec::new();
+
+    // ★★ **先补列，再跑 DDL —— 顺序不能反**（2026-09-30 用真库副本实测抓到，见用例
+    //   `open_or_create_upgrades_a_database_that_lacks_the_new_columns`）：
+    //   DDL 里可能有 `CREATE INDEX ... ON <表>(<新列>)`，而收敛式 DDL **不给已存在的表补列** ——
+    //   索引语句排在补列之前，那一刻列还不存在 → **整批 DDL 失败、库直接打不开**
+    //   （现场：`e2e-pair-test.ps1` 拿真库副本起后端，报
+    //    `打开/建库失败：… no such column: enabled in CREATE INDEX … idx_character_cards_enabled`）。
+    //   ⚠ 为什么单测没抓到：它们都用**全新库**（DDL 建表时自带新列），而这只有"老库升级"才会踩到。
+    //   `ensure_columns` 对不存在的表是空操作，所以在全新库上这么调也不亏。
+    let added = ensure_columns(&conn).map_err(|e| format!("补列失败：{e}"))?;
+    if !added.is_empty() {
+        eprintln!(
+            "[db] 老库缺 {} 列（{}）—— 用 ALTER 补上了；已有数据不动。",
+            added.len(),
+            added.join("、")
+        );
+    }
+
     if version >= SCHEMA_VERSION && !fresh {
         if version > SCHEMA_VERSION {
             eprintln!(
@@ -158,15 +188,7 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
             );
         }
         // ★ 自愈（见函数头那条 ⚠）：版本号够新**不等于**结构都对 ——
-        //   "表在不在"与"列在不在"是两件事（后者靠 NEW_COLUMNS 那套 ALTER）。
-        let added = ensure_columns(&conn).map_err(|e| format!("补列失败：{e}"))?;
-        if !added.is_empty() {
-            eprintln!(
-                "[db] 老库缺 {} 列（{}）—— 用 ALTER 补上了；已有数据不动。",
-                added.len(),
-                added.join("、")
-            );
-        }
+        //   "表在不在"与"列在不在"是两件事（后者刚在上面那一步补过）。
         missing = missing_tables(&conn).map_err(|e| format!("查缺表失败：{e}"))?;
         if missing.is_empty() {
             return Ok(conn);

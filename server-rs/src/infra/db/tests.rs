@@ -194,6 +194,71 @@ fn healing_a_missing_table_never_downgrades_a_newer_version() {
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
 }
 
+/// ★★ **老库升级**：库里已经有 `character_cards`（**没有**新列）、版本号还是旧的 —— 开库必须成功。
+///
+/// 这条是 2026-09-30 的真现场：`e2e-pair-test.ps1` 拿真库副本起后端，**后端直接起不来** ——
+/// ```text
+/// 打开/建库失败：执行 db/schema.sqlite.sql 失败：no such column: enabled in
+/// CREATE INDEX IF NOT EXISTS idx_character_cards_enabled ON character_cards(enabled);
+/// ```
+/// 真因是**顺序**：老库走"版本号比后端旧"那条迁移分支，整批跑 DDL；而收敛式 DDL
+/// **不给已存在的表补列**，那一刻表上还没有 `enabled` → 索引建不出来 → 整批失败 → 连库都打不开。
+///
+/// ⚠ 为什么原来 630 条单测一条都没抓到：它们**全是全新库**（DDL 建表时自带新列）。
+/// 只有"老库 + 新列"这个组合才会踩到 —— 而那是**每一个已装用户的升级路径**。
+#[test]
+fn open_or_create_upgrades_a_database_that_lacks_the_new_columns() {
+    let path = temp_path("upgrade-old-lib");
+    {
+        // 装作"这是加列之前那一版的库"：
+        //   ① 先按**当前** DDL 建一个完整库（这样别的表都是真的，不用手抄七百行 DDL）；
+        //   ② 再把 2026-09-30 新加的那一列与它的索引**拆掉**、版本号退回 4
+        //      —— 得到的就是"老库：一张表不缺、只少两个新列"，与真机现场同形。
+        //   ⚠ 索引必须先删：SQLite 不许 DROP 一个被索引引用的列。
+        //   （第一版用例是手写一张只有 4 列的假 character_cards —— 那连**旧列**上的索引
+        //   都建不出来，测出来的红跟真机不是一回事。）
+        let conn = open_or_create(&path).unwrap();
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS idx_character_cards_enabled;\
+             ALTER TABLE character_cards DROP COLUMN position;\
+             ALTER TABLE character_cards DROP COLUMN enabled;\
+             INSERT INTO character_cards (name, normalized) VALUES ('先有的卡', '先有的卡');\
+             PRAGMA user_version = 4;",
+        )
+        .unwrap();
+    }
+
+    let conn = open_or_create(&path).expect("老库必须能升级（这是每个已装用户的路径）");
+
+    // 两个新列都补上了
+    for column in ["position", "enabled"] {
+        let present: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('character_cards') WHERE name = ?1",
+                rusqlite::params![column],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(present, 1, "{column} 这一列没补上");
+    }
+    // ★ 那条建在**新列**上的索引：它才是把整批 DDL 拖垮的那一句
+    let idx: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_character_cards_enabled'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(idx, 1, "索引必须建出来（顺序反了的话整批 DDL 都会失败）");
+    // 老数据一个字都没动
+    let kept: String = conn
+        .query_row("SELECT name FROM character_cards", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(kept, "先有的卡");
+    assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION, "版本号要跟到最新");
+    std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+}
+
 /// DDL 末尾那行 `PRAGMA user_version = N` 与 [`SCHEMA_VERSION`] **必须是同一个数**。
 ///
 /// 它俩是两个真源（一份给两端共用的 DDL、一份给 Rust 的迁移逻辑），而漂了的表现是

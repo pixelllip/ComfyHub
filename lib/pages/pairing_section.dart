@@ -90,27 +90,35 @@ class _PairingSectionState extends State<PairingSection> {
   /// 页面切走时整个 State 被销毁，定时器也跟着在 `dispose` 里收掉 ——
   /// 一个设置页不该在后台一直问后端"有人要配对吗"。
   bool _pendingExpanded = false;
-  Timer? _pollTimer;
   bool _polling = false;
   String? _pendingError;
+
+  /// **一个计时器管两件事**（2026-09-30 合并：原来扫码一个 1s、轮询一个 2s）：
+  /// 每秒重画（跳秒）+ 每两秒问一次"手机举手了吗"。
+  ///
+  /// 跑的条件是"有活会话"：区展开了，**或者**桌面上正摆着一个二维码等着人扫
+  /// —— 二维码过期那一刻也由它负责撤掉（别让用户对着一个失效的码扫半天）。
+  Timer? _sessionTimer;
+  int _sessionTick = 0;
 
   /// 本机局域网 IPv4（拼给用户照着往手机上敲）。
   List<String> _localIps = const [];
 
   // --- 扫码配对（通道 A：桌面出二维码、手机扫；§9 拍板）---
   /// 桌面上正在展示的那次配对（ticket + 滚动码 + 可达地址）。
+  ///
+  /// ⚠ 它和 `_pending`（手机举手那条路）**是同一种东西**：后端 `pair/start` 与 `pair/request`
+  /// 造的都是同一种 `Session`、`claim` 两条路都认。区别只有"二维码是谁生成的"，
+  /// 所以界面上也收成同一种卡片（见 [`_sessionCard`]）。
   PairStart? _qr;
   String? _qrError;
   bool _qrBusy = false;
-  Timer? _qrTimer;
 
   // --- 手机侧 ---
   late final TextEditingController _baseUrlController;
   final TextEditingController _codeController = TextEditingController();
   bool _paired = false;
 
-  /// 扫到的配对码（通道 A）：有它就不用"举手"那一趟 —— 桌面已经算好码了（§3.2）。
-  PairingPayload? _scanned;
   String? _pairedDeviceId;
   bool _pairing = false;
   bool _syncingKeys = false;
@@ -159,10 +167,8 @@ class _PairingSectionState extends State<PairingSection> {
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    _qrTimer?.cancel();
-    _qrTimer = null;
+    _sessionTimer?.cancel();
+    _sessionTimer = null;
     _api?.dispose();
     _baseUrlController.dispose();
     _codeController.dispose();
@@ -192,7 +198,7 @@ class _PairingSectionState extends State<PairingSection> {
         return;
       }
       setState(() => _qr = start);
-      _startQrTicker();
+      _syncSessionTimer();
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -209,21 +215,29 @@ class _PairingSectionState extends State<PairingSection> {
     }
   }
 
-  /// 每秒重画一次倒计时；**过期就把二维码撤掉并说清**（别让用户对着一个失效的码扫半天）。
-  void _startQrTicker() {
-    _qrTimer?.cancel();
-    _qrTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+  /// **唯一的计时器**：跳秒 + 每两秒问一次"手机举手了吗" + 二维码到点自清。
+  void _syncSessionTimer() {
+    // 有活会话才跑：区展开了（有人在等）或桌面上摆着二维码（等人扫）
+    final need = mounted && (_pendingExpanded || _qr != null);
+    if (!need) {
+      _sessionTimer?.cancel();
+      _sessionTimer = null;
+      return;
+    }
+    _sessionTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
-      if (_remaining(_qr?.expiresAt) == Duration.zero) {
-        _qrTimer?.cancel();
-        _qrTimer = null;
+      final qr = _qr;
+      if (qr != null && (_remaining(qr.expiresAt) ?? Duration.zero) == Duration.zero) {
         setState(() {
           _qr = null;
           _qrError = '二维码已过期（120 秒有效）—— 点「生成二维码」再来一次。';
         });
+        _syncSessionTimer();
         return;
       }
       setState(() {}); // 只为了让"剩余 mm:ss"跳秒
+      _sessionTick++;
+      if (_sessionTick % 2 == 0) unawaited(_pollPending()); // 每 2 秒轮一次
     });
   }
 
@@ -236,94 +250,11 @@ class _PairingSectionState extends State<PairingSection> {
     return left.isNegative ? Duration.zero : left;
   }
 
-  String _remainingLabel(String? iso) {
-    final left = _remaining(iso);
-    if (left == null) return '';
+  /// 剩余时长 → `m:ss`（登在会话卡右上角；解析不出来就不显示，**不编一个倒计时**）。
+  String _mmss(Duration left) {
     final m = left.inMinutes;
     final s = left.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '剩余 $m:$s';
-  }
-
-  /// 二维码 + 6 位码 + 地址列表（放在「配对新手机」展开区里：两件事本来就是同一条路）。
-  Widget _qrPairingArea(ThemeData theme) {
-    final qr = _qr;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          '二维码会携带本机地址，扫码完成后仍需输入6位验证码进行验证。二维码 120 秒有效。',
-          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
-        ),
-        const SizedBox(height: 8),
-        if (qr == null)
-          Row(
-            children: [
-              FilledButton.icon(
-                onPressed: _qrBusy ? null : _startQrPairing,
-                icon: const Icon(Icons.qr_code_2, size: 18),
-                label: Text(_qr == null && _qrError != null ? '重新生成二维码' : '生成二维码'),
-              ),
-            ],
-          )
-        else ...[
-          // 二维码要**浅底**才扫得动 —— 白底那层在 `PairingQrImage` 里（两处 reason 见它的注释）
-          PairingQrImage(
-            payload: PairingPayload(
-              ticket: qr.ticket,
-              expiresAt: qr.expiresAt,
-              urls: qr.urls,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Text('6 位码', style: theme.textTheme.labelLarge),
-              const SizedBox(width: 8),
-              SelectableText(
-                qr.code,
-                style: theme.textTheme.headlineSmall?.copyWith(letterSpacing: 4),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                _remainingLabel(qr.codeExpiresAt).isEmpty
-                    ? _remainingLabel(qr.expiresAt)
-                    : _remainingLabel(qr.codeExpiresAt),
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          if (qr.urls.isEmpty)
-            Text(
-              '桌面没枚举出可达地址 —— 手机上请手填地址。',
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error),
-            )
-          else
-            for (final u in qr.urls)
-              SelectableText(u, style: theme.textTheme.labelSmall),
-          TextButton.icon(
-            onPressed: _qrBusy ? null : _startQrPairing,
-            icon: const Icon(Icons.refresh, size: 18),
-            label: const Text('重新生成'),
-          ),
-        ],
-        if (_qrError != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.error_outline, size: 16, color: theme.colorScheme.error),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(_qrError!, style: theme.textTheme.labelSmall),
-                ),
-              ],
-            ),
-          ),
-        const Divider(height: 20),
-      ],
-    );
+    return '$m:$s';
   }
 
   // -------------------------------------------------------------------------
@@ -349,7 +280,7 @@ class _PairingSectionState extends State<PairingSection> {
         // 用户手机上明明看到了提示，却在桌面上找不到码。
         if (s.pending.isNotEmpty) _pendingExpanded = true;
       });
-      _syncPolling();
+      _syncSessionTimer();
     } catch (e) {
       if (mounted) setState(() => _error = '读取配对状态失败：$e');
     } finally {
@@ -360,18 +291,8 @@ class _PairingSectionState extends State<PairingSection> {
   /// 展开 / 收起「配对新手机」，并据此开关轮询。
   void _togglePending() {
     setState(() => _pendingExpanded = !_pendingExpanded);
-    _syncPolling();
+    _syncSessionTimer();
     if (_pendingExpanded) unawaited(_pollPending());
-  }
-
-  void _syncPolling() {
-    final shouldPoll = mounted && _pendingExpanded && _pendingError == null;
-    if (shouldPoll) {
-      _pollTimer ??= Timer.periodic(const Duration(seconds: 2), (_) => unawaited(_pollPending()));
-    } else {
-      _pollTimer?.cancel();
-      _pollTimer = null;
-    }
   }
 
   Future<void> _pollPending() async {
@@ -391,7 +312,7 @@ class _PairingSectionState extends State<PairingSection> {
       // 拉不到就不再每 2 秒撞一次（旧后端没有这个端点时尤其明显），
       // 把原因写在界面上，用户点「重试」再开始轮询
       setState(() => _pendingError = '读取待配对列表失败：$e');
-      _syncPolling();
+      _syncSessionTimer();
     } finally {
       _polling = false;
     }
@@ -581,24 +502,30 @@ class _PairingSectionState extends State<PairingSection> {
     }
   }
 
-  /// 扫桌面上的二维码（通道 A，§3.2）：拿到 ticket（+ 地址）之后，
-  /// **6 位码仍要人来敲** —— 扫码解决"去哪、传什么"，输码解决"你是不是在旁边"。
-  Future<void> _scanQr() async {
+  /// 扫桌面上的二维码（通道 A，§3.2）→ **扫完直接接着配对**。
+  ///
+  /// 两件事各管一段：扫码解决"去哪、传什么"（把 ticket 和地址带回来），
+  /// 敲 6 位码解决"你是不是就站在旁边"。所以扫完**不要求再点一次按钮**
+  /// （2026-09-30 合并：原来扫完只是回到表单、还要用户自己再点「配对新电脑」）。
+  ///
+  /// ⚠ 顺手修掉一个真 bug：老代码把扫到的地址只写进一句提示（"地址已填好"），
+  /// **从来没填进输入框** —— 于是"二维码省掉手抄地址"这件事根本没发生，
+  /// 配对照样拿的是上一次存的地址。现在真的填进去（下面第一句）。
+  Future<void> _scanThenPair() async {
     final payload = await Navigator.of(context).push<PairingPayload>(
       MaterialPageRoute(builder: (_) => const ScanPairingPage()),
     );
     if (payload == null || !mounted) return;
-    setState(() {
-      _error = null;
-      _scanned = payload;
-      _message = payload.urls.isEmpty
-          ? '请手填桌面地址，再输入桌面端的 6 位验证码。'
-          : '地址已填好（${payload.urls.first}）。现在请输入桌面端 6 位验证码。';
-    });
+    if (payload.urls.isNotEmpty) {
+      _baseUrlController.text = payload.urls.first;
+    }
+    await _pair(scanned: payload);
   }
 
   /// 配对新电脑：举手 → 让人敲桌面上那 6 位码 → 换令牌 → **立刻存进密钥库**。
-  Future<void> _pair() async {
+  ///
+  /// `scanned` = 扫到的二维码（有它就不用"举手"那一趟：桌面已经算好码了）。
+  Future<void> _pair({PairingPayload? scanned}) async {
     if (_pairing) return;
     // 输入框里的地址就是"我要连的那台桌面"。不先把它存下来直接配对的话，
     // 用户改完地址点配对会**拿旧地址去问**、界面上却显示着新地址 —— 最难查的那类不一致。
@@ -616,7 +543,6 @@ class _PairingSectionState extends State<PairingSection> {
       }
       // 身份必须与上行同步用的是**同一个** deviceId（生成两次 = 桌面当成两台手机）
       final identity = await PairingTokenStore().identity();
-      final scanned = _scanned;
       // 两条通道（§3.2）：**扫码那条桌面已经算好码了**，手机不用再举手；
       // 手敲那条要先 requestPairing 让桌面把码显示出来。
       String? requestId;
@@ -820,13 +746,6 @@ class _PairingSectionState extends State<PairingSection> {
     return DateTime.tryParse(raw)?.toLocal();
   }
 
-  /// 这个待配对请求还剩几秒（拿不到时间戳返回 null）。
-  int? _remainingSeconds(PendingPairing p) {
-    final expire = _parseTime(p.codeExpiresAt) ?? _parseTime(p.expiresAt);
-    if (expire == null) return null;
-    return expire.difference(DateTime.now()).inSeconds;
-  }
-
   /// 结果 / 错误提示（中文、如实）。
   Widget _feedback(ThemeData theme) {
     final rows = <Widget>[];
@@ -914,7 +833,7 @@ class _PairingSectionState extends State<PairingSection> {
               trailing: Icon(_pendingExpanded ? Icons.expand_less : Icons.expand_more),
               onTap: _togglePending,
             ),
-            if (_pendingExpanded) _pendingArea(theme),
+            if (_pendingExpanded) _sessionsArea(theme),
             const Divider(height: 1),
             // ② 手机上填哪个地址
             Padding(
@@ -977,51 +896,19 @@ class _PairingSectionState extends State<PairingSection> {
     );
   }
 
-  Widget _pendingArea(ThemeData theme) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_pendingError != null)
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.error_outline, size: 18, color: theme.colorScheme.error),
-                const SizedBox(width: 8),
-                Expanded(child: Text(_pendingError!, style: theme.textTheme.bodySmall)),
-                TextButton(
-                  onPressed: () {
-                    setState(() => _pendingError = null);
-                    _syncPolling();
-                    unawaited(_pollPending());
-                  },
-                  child: const Text('重试'),
-                ),
-              ],
-            )
-          else if (_pending.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Text(
-                '在手机上点「配对新电脑」，这里会出现一组 6 位码。',
-                style: theme.textTheme.bodySmall,
-              ),
-            )
-          else
-            for (final p in _pending) _pendingRow(theme, p),
-          const Divider(height: 20),
-          // 同一件事的第二条路（§9 拍板）：桌面出二维码，手机扫过去 —— 地址不用手抄
-          _qrPairingArea(theme),
-        ],
-      ),
-    );
-  }
-
-  Widget _pendingRow(ThemeData theme, PendingPairing p) {
-    final remain = _remainingSeconds(p);
-    final ip = p.ip ?? '';
-    final name = (p.deviceName == null || p.deviceName!.isEmpty) ? '未知设备' : p.deviceName!;
+  /// 一条等待中的配对会话（桌面这侧）。
+  ///
+  /// ⚠ **只有一种卡片**（2026-09-30 合并）：手机举手来的（`pending`）和桌面出二维码的（`qr`）
+  /// 在界面上是同一件事 —— 都是"桌上摆着一组 6 位码等人敲"，区别只是二维码那条还带了
+  /// ticket + 地址（手机扫它就不用抄地址）。原来这里有两套渲染 + 两套计时器，
+  /// 用户要分别理解"配对新手机"和"扫码配对"两个概念。
+  Widget _sessionCard(ThemeData theme, {PairStart? qr, PendingPairing? pending}) {
+    final code = qr?.code ?? pending?.code ?? '';
+    final left = _remaining(qr?.codeExpiresAt ?? pending?.codeExpiresAt) ??
+        _remaining(qr?.expiresAt ?? pending?.expiresAt);
+    final expired = left == Duration.zero;
+    final ip = pending?.ip ?? '';
+    final name = (pending?.deviceName ?? '').isEmpty ? '未知设备' : pending!.deviceName!;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Material(
@@ -1032,33 +919,128 @@ class _PairingSectionState extends State<PairingSection> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Row(
+                children: [
+                  Icon(qr != null ? Icons.qr_code_2 : Icons.phone_iphone, size: 16, color: theme.colorScheme.outline),
+                  const SizedBox(width: 6),
+                  Text(qr != null ? '扫码配对' : '手机举手', style: theme.textTheme.labelMedium),
+                  const Spacer(),
+                  // ⚠ 「剩余」每张卡**只许出现一次**（用例 `find.textContaining('剩余')` 数它）
+                  Text(
+                    left == null ? '' : (expired ? '已过期' : '剩余 ${_mmss(left)}'),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: expired ? theme.colorScheme.error : theme.colorScheme.outline,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
               // 6 位码是这一块**唯一要给人看的东西**：等宽大字 + 可选中（方便核对）
               SelectableText(
-                p.code.isEmpty ? '······' : p.code,
+                code.isEmpty ? '······' : code,
                 style: theme.textTheme.headlineSmall?.copyWith(
                   fontFamily: 'monospace',
                   fontWeight: FontWeight.w700,
                   letterSpacing: 6,
                 ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 2),
               Text(
-                '$name${ip.isEmpty ? '' : ' · 来自 $ip'}',
-                style: theme.textTheme.bodySmall,
-              ),
-              Text(
-                remain == null
-                    ? '在手机上敲这 6 位码'
-                    : (remain > 0 ? '剩余 $remain 秒' : '这组码已过期，等桌面刷新出下一组'),
+                qr != null
+                    ? '手机上敲这 6 位码（扫上面的二维码可省去手抄地址）'
+                    : (expired
+                        ? '这组码已过期，让手机重新点一次「配对新电脑」'
+                        : '$name${ip.isEmpty ? '' : ' · 来自 $ip'} —— 在手机上敲这 6 位码'),
                 style: theme.textTheme.labelSmall?.copyWith(
-                  color: (remain != null && remain <= 0)
-                      ? theme.colorScheme.error
-                      : theme.colorScheme.outline,
+                  color: expired ? theme.colorScheme.error : theme.colorScheme.outline,
                 ),
               ),
+              if (qr != null) ...[
+                const SizedBox(height: 8),
+                // 二维码要**浅底**才扫得动 —— 白底那层在 `PairingQrImage` 里
+                PairingQrImage(
+                  payload: PairingPayload(
+                    ticket: qr.ticket,
+                    expiresAt: qr.expiresAt,
+                    urls: qr.urls,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                if (qr.urls.isEmpty)
+                  Text(
+                    '桌面没枚举出可达地址 —— 手机上请手填地址。',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error),
+                  )
+                else
+                  for (final u in qr.urls)
+                    SelectableText(u, style: theme.textTheme.labelSmall),
+              ],
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// 「配对新手机」那一区：说明 + 所有等待中的会话（两种来路混在一条列表里）。
+  Widget _sessionsArea(ThemeData theme) {
+    final qr = _qr;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '两条路都行：**手机上点「配对新电脑」**（这里会出现一组 6 位码），'
+            '或者**桌面出二维码**（手机扫码，地址不用手抄）。两条都还要在手机上敲那 6 位码。',
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              FilledButton.icon(
+                onPressed: _qrBusy ? null : _startQrPairing,
+                icon: const Icon(Icons.qr_code_2, size: 18),
+                label: Text(qr == null ? '生成二维码' : '重新生成二维码'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (_qrError != null)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.error_outline, size: 16, color: theme.colorScheme.error),
+                const SizedBox(width: 6),
+                Expanded(child: Text(_qrError!, style: theme.textTheme.labelSmall)),
+              ],
+            ),
+          if (_pendingError != null)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.error_outline, size: 18, color: theme.colorScheme.error),
+                const SizedBox(width: 8),
+                Expanded(child: Text(_pendingError!, style: theme.textTheme.bodySmall)),
+                TextButton(
+                  onPressed: () {
+                    setState(() => _pendingError = null);
+                    _syncSessionTimer();
+                    unawaited(_pollPending());
+                  },
+                  child: const Text('重试'),
+                ),
+              ],
+            ),
+          // 两种来路混排：二维码那条排在上面（它带着地址，最该被看见）
+          if (qr != null) _sessionCard(theme, qr: qr),
+          for (final p in _pending) _sessionCard(theme, pending: p),
+          if (qr == null && _pending.isEmpty && _pendingError == null && _qrError == null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Text('现在没有等待中的配对。', style: theme.textTheme.bodySmall),
+            ),
+        ],
       ),
     );
   }
@@ -1203,7 +1185,7 @@ class _PairingSectionState extends State<PairingSection> {
                   ),
                 // 通道 A 的入口：桌面出二维码，手机扫过来（地址不用手抄）
                 OutlinedButton.icon(
-                  onPressed: _pairing ? null : _scanQr,
+                  onPressed: _pairing ? null : _scanThenPair,
                   icon: const Icon(Icons.qr_code_scanner),
                   label: const Text('扫桌面上的二维码'),
                 ),

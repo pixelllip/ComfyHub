@@ -1050,39 +1050,62 @@ async fn set_device_credentials(
 /// 3. `urls` 来自 [`crate::mobile::net_urls`]（**我们实际监听的**端口），一条都没有就回空数组、
 ///    让界面如实说"手填地址"——**绝不编一个连不上的地址**；
 /// 4. 会话 TTL 与 `pair/request` 同值（120 秒）：二维码被拍走后的可用窗口越短越好。
+/// 造一条配对会话 —— **两条入口共用这一份**（桌面出二维码 / 手机举手）。
+///
+/// 2026-09-30 抽出来：原来两处各写一遍"加锁 → 清理过期 → 挤掉最老的 → push"，
+/// 而这三条规则（`prune` / `MAX_PENDING` / `SESSION_TTL_SECS`）是**安全属性**，
+/// 分成两份迟早只改一处。两条入口的差别只有：谁发起（要不要 `require_loopback`）、
+/// 会话上写不写设备、响应里给不给 `ticket`。
+///
+/// `device_id` 留空 = "还不知道是哪台手机"（扫码那条：谁扫就是谁）——
+/// `pair_claim` 里"设备与会话不一致"那条判据只对非空会话生效，
+/// `pair_pending` 会把空 `device_id` 过滤掉（它不是"有人在等"）。
+fn push_session(
+    unix: u64,
+    secret: &str,
+    device_id: &str,
+    device_name: &str,
+    ip: Option<String>,
+) -> Result<String, ApiError> {
+    let id = random_hex_id()?;
+    let Ok(mut state) = sessions().lock() else {
+        return Err(ApiError::internal("配对状态锁已中毒"));
+    };
+    // 只留还没过期的（再点一次 = 挤掉最老的那个）
+    prune(&mut state.list, unix);
+    while state.list.len() >= MAX_PENDING {
+        state.list.remove(0);
+    }
+    state.list.push(Session {
+        id: id.clone(),
+        secret: secret.to_string(),
+        device_id: device_id.to_string(),
+        device_name: device_name.to_string(),
+        ip,
+        expires: unix + SESSION_TTL_SECS,
+        attempts: 0,
+        used: false,
+    });
+    Ok(id)
+}
+
+/// 配对响应里那三个时间字段（**同一把尺子**，两个端点共用）。
+fn insert_session_times(obj: &mut Map<String, Value>, unix: u64) {
+    obj.insert("expiresAt".into(), Value::String(iso_at(unix + SESSION_TTL_SECS)));
+    obj.insert("codeExpiresAt".into(), Value::String(iso_at(code_expires_at(unix))));
+    obj.insert("serverTime".into(), Value::String(iso_now()));
+}
+
 async fn pair_start(
     State(state): State<AppState>,
     RemoteAddr(remote): RemoteAddr,
 ) -> Result<Json<Value>, ApiError> {
     require_loopback(remote, "生成配对二维码")?;
     let unix = now_unix();
-    let id = random_hex_id()?;
     // `secret` 就是 ticket（与 pair/request 同一个字段）：编进二维码、也是算 6 位码的密钥
     let secret = random_token()?;
-    let expires = unix + SESSION_TTL_SECS;
-
-    {
-        let Ok(mut state) = sessions().lock() else {
-            return Err(ApiError::internal("配对状态锁已中毒"));
-        };
-        prune(&mut state.list, unix);
-        while state.list.len() >= MAX_PENDING {
-            state.list.remove(0);
-        }
-        state.list.push(Session {
-            id,
-            secret: secret.clone(),
-            // ★ 扫码通道在"出码"这一刻**还不知道是哪台手机**（谁扫就是谁）：
-            //   device_id 留空 —— `pair/claim` 里"设备与会话不一致"那条判据只对非空会话生效，
-            //   而 `pair_pending` 会把空 device_id 的会话过滤掉（它不是"有人在等"）。
-            device_id: String::new(),
-            device_name: String::new(),
-            ip: None,
-            expires,
-            attempts: 0,
-            used: false,
-        });
-    }
+    // 扫码通道在"出码"这一刻还不知道是哪台手机 —— 设备三个字段都留空
+    push_session(unix, &secret, "", "", None)?;
 
     let urls: Vec<Value> = crate::mobile::net_urls::collect(state.port())
         .into_iter()
@@ -1091,9 +1114,8 @@ async fn pair_start(
     let mut obj = Map::new();
     obj.insert("ticket".into(), Value::String(secret.clone()));
     obj.insert("code".into(), Value::String(code_for(&secret, unix)));
-    obj.insert("expiresAt".into(), Value::String(iso_at(expires)));
-    obj.insert("codeExpiresAt".into(), Value::String(iso_at(code_expires_at(unix))));
     obj.insert("urls".into(), Value::Array(urls));
+    insert_session_times(&mut obj, unix);
     Ok(Json(Value::Object(obj)))
 }
 
@@ -1142,36 +1164,13 @@ async fn pair_request(
         .trim()
         .to_string();
 
-    let id = random_hex_id()?;
+    // 手机举手这条：桌面会把 6 位码显示出来（手机拿不到 `secret` —— 纪律 ③）
     let secret = random_token()?;
-    let expires = unix + SESSION_TTL_SECS;
-
-    {
-        let Ok(mut state) = sessions().lock() else {
-            return Err(ApiError::internal("配对状态锁已中毒"));
-        };
-        // 只留还没过期的（再点一次 = 挤掉最老的那个）
-        prune(&mut state.list, unix);
-        while state.list.len() >= MAX_PENDING {
-            state.list.remove(0);
-        }
-        state.list.push(Session {
-            id: id.clone(),
-            secret: secret.clone(),
-            device_id,
-            device_name,
-            ip: remote.map(|v| v.to_string()),
-            expires,
-            attempts: 0,
-            used: false,
-        });
-    }
+    let id = push_session(unix, &secret, &device_id, &device_name, remote.map(|v| v.to_string()))?;
 
     let mut obj = Map::new();
     obj.insert("requestId".into(), Value::String(id));
-    obj.insert("expiresAt".into(), Value::String(iso_at(expires)));
-    obj.insert("codeExpiresAt".into(), Value::String(iso_at(code_expires_at(unix))));
-    obj.insert("serverTime".into(), Value::String(iso_now()));
+    insert_session_times(&mut obj, unix);
     Ok(Json(Value::Object(obj)))
 }
 

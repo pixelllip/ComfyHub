@@ -312,7 +312,9 @@ void main() {
     // 6 位码 + 地址照样显示（人敲码那一步不能省）
     expect(find.text('428193'), findsOneWidget);
     expect(find.textContaining('192.168.1.23:51837'), findsWidgets);
-    expect(find.text('重新生成'), findsOneWidget);
+    // 2026-09-30 合并后只剩**一个**按钮：有码时它提示"重新生成二维码"
+    //（原来二维码那条路另有一个「重新生成」TextButton，与"生成"按钮重复）
+    expect(find.text('重新生成二维码'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
