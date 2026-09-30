@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import 'core/backend_launcher.dart';
 import 'core/settings_store.dart';
+import 'core/sync_endpoints.dart';
 import 'core/theme.dart';
 import 'models/models.dart';
 import 'pages/ai_home_page.dart';
@@ -347,6 +348,32 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     _probeConfinement();
+    _pickDesktopAutomatically();
+  }
+
+  /// **自动挑一台能连的桌面**（2026-09-30 用户要求：跨端这件事不该让用户管）。
+  ///
+  /// 只在手机上做：桌面的地址由 `.run\api.json` 自动决定（[SettingsStore.defaultBaseUrl]），
+  /// 而且**用户手填过地址就一个都不试**（[SettingsStore.baseUrlIsAuto] 为假 = 那是他的远程配置）。
+  ///
+  /// 静默失败：一条都不通时保持现状、不弹任何东西 —— 真正要用到后端时，
+  /// 各页面本来就会如实报"连不上"（那条路比启动横幅更接近用户当时在做的事）。
+  Future<void> _pickDesktopAutomatically() async {
+    if (kIsWeb) return;
+    try {
+      if (!Platform.isAndroid) return;
+    } catch (_) {
+      return;
+    }
+    final settings = context.read<SettingsStore>();
+    if (!settings.baseUrlIsAuto) return;
+    final picked = await autoPickBaseUrl(
+      autoUrl: SettingsStore.defaultBaseUrl(),
+      current: settings.baseUrl,
+      history: settings.baseUrlHistory,
+    );
+    if (picked.baseUrl == null) return;
+    await settings.adoptAutoBaseUrl(picked.baseUrl!);
   }
 
   /// 只问一次。问不到（后端还没起 / 老版本没有这个端点）就当"不知道"：

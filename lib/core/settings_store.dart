@@ -219,10 +219,7 @@ class SettingsStore extends ChangeNotifier {
       await prefs.remove(_kBaseUrl);
       return;
     }
-    if (!v.startsWith('http://') && !v.startsWith('https://')) v = 'http://$v';
-    while (v.endsWith('/')) {
-      v = v.substring(0, v.length - 1);
-    }
+    v = _normalizeUrl(v);
     _baseUrlFromUser = true;
     _baseUrl = v;
     // 顺手记住它：跨端来回切时，"上一条用过的"就是最好的候选（见 _baseUrlHistory）
@@ -232,6 +229,37 @@ class SettingsStore extends ChangeNotifier {
     notifyListeners();
     await prefs.setString(_kBaseUrl, v);
     await prefs.setStringList(_kBaseUrlHistory, _baseUrlHistory);
+  }
+
+  /// **自动挑到的地址**：只在本进程生效。
+  ///
+  /// 与 [setBaseUrl] 的区别就是"算不算用户手填"：这一条**不写 `_kBaseUrl`、也不置
+  /// `_baseUrlFromUser`** —— 下次冷启动重新挑一次才是"自动"（跨端地址本来就会变：
+  /// 换了 Wi-Fi、换到 Tailscale、模拟器换真机）。但它**进历史**，下次优先试它。
+  ///
+  /// 返回 true = 地址真的变了（调用方要重建 api client）。
+  Future<bool> adoptAutoBaseUrl(String value) async {
+    final v = _normalizeUrl(value);
+    if (v.isEmpty || v == _baseUrl) return false;
+    _baseUrl = v;
+    _baseUrlHistory = [v, ..._baseUrlHistory.where((e) => e != v)]
+        .take(maxBaseUrlHistory)
+        .toList();
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_kBaseUrlHistory, _baseUrlHistory);
+    return true;
+  }
+
+  /// 地址归一化（补 scheme、去掉尾部斜杠）——[setBaseUrl] 与 [adoptAutoBaseUrl] 共用一份。
+  static String _normalizeUrl(String value) {
+    var v = value.trim();
+    if (v.isEmpty) return '';
+    if (!v.startsWith('http://') && !v.startsWith('https://')) v = 'http://$v';
+    while (v.endsWith('/')) {
+      v = v.substring(0, v.length - 1);
+    }
+    return v;
   }
 
   Future<void> setPageSize(int value) async {

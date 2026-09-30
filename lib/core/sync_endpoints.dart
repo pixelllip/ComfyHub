@@ -105,6 +105,10 @@ List<SyncEndpoint> localEndpointCandidates({
 
 /// 问一次**对面**：它自己有哪些可达地址（`GET /api/net/urls`）。
 ///
+/// ⚠ **当前自动那条路不调它**（2026-09-30 删掉「同步与连接」页之后就没人调了）：
+/// 自动挑地址跑在"还没连上任何桌面"的时刻，问不到对面。保留它是因为**手机配对**那条路
+/// 需要它（先把地址显示给人看，见 `docs/pairing-design.md`）—— 改那块时从这儿接。
+///
 /// 三条纪律：
 ///  · **best-effort**：老后端没有这条端点（404）、或现在就连不上 —— 都不是错误，
 ///    回空列表 + 一句 note 即可（界面照旧有"自动发现 / 最近用过 / 手填"三条路）；
@@ -308,4 +312,87 @@ Future<SyncProbe> probeSyncEndpoint(
 String _snippet(String body) {
   final t = body.replaceAll('\n', ' ').trim();
   return t.length <= 200 ? t : '${t.substring(0, 200)}…';
+}
+
+/// 一次"自动挑桌面"的结果。
+class AutoPickedEndpoint {
+  const AutoPickedEndpoint({
+    required this.baseUrl,
+    required this.probe,
+    required this.tried,
+    required this.candidates,
+  });
+
+  /// 挑中的地址；一条都没通就是 `null`（调用方**保持现状**，别把地址清成空的）。
+  final String? baseUrl;
+
+  /// 挑中那次的探测结论（`baseUrl` 为 null 时是**最后一次**的结论，用来如实说为什么没挑到）。
+  final SyncProbe? probe;
+
+  /// 试了几条。
+  final int tried;
+
+  /// 试过哪些候选（诊断用；顺序就是试的顺序）。
+  final List<SyncEndpoint> candidates;
+
+  /// 给人看的一行（挑不到时说明试过哪几条）。
+  String get summary {
+    if (baseUrl != null) return '已自动连上 $baseUrl（${probe?.summary ?? ''}）';
+    if (candidates.isEmpty) return '没有可试的地址';
+    final list = candidates.map((e) => '${e.url}（${e.source}）').join('、');
+    return '试了 $tried 个地址都没连上：$list。最后一次：${probe?.error ?? '未知原因'}';
+  }
+}
+
+/// **自动挑一台能连的桌面**（用户不再需要管"连哪台"）。
+///
+/// 为什么可以自动：候选本来就只有那么几条（最近用过的 → 本机自动值 → 历史），
+/// 而每条能不能用一条 `/api/health` 就判死了（[probeSyncEndpoint]）。原来把这件事
+/// 摆成一页让用户点，等于把机器该做的活推给了人 —— 2026-09-30 用户要求改成自动。
+///
+/// 三条纪律：
+///  · **一条都不通就原样返回 `null`**，调用方保持现有地址（**不许清空**）——
+///    "连不上"是事实，不是"把配置删掉"的理由；
+///  · **超时短**（默认 3s）：这是在启动路径上跑的，串行试 4 条也只是十几秒；
+///  · **绝不猜地址**：只试 [localEndpointCandidates] 给的那几条（当前 / 自动发现 / 历史），
+///    不按网卡名编一个出来。
+Future<AutoPickedEndpoint> autoPickBaseUrl({
+  required String autoUrl,
+  required String current,
+  List<String> history = const [],
+  String? token,
+  http.Client? client,
+  Duration timeout = const Duration(seconds: 3),
+}) async {
+  final candidates = localEndpointCandidates(
+    autoUrl: autoUrl,
+    current: current,
+    history: history,
+  );
+  SyncProbe? last;
+  var tried = 0;
+  for (final candidate in candidates) {
+    tried++;
+    final probe = await probeSyncEndpoint(
+      candidate.url,
+      client: client,
+      token: token,
+      timeout: timeout,
+    );
+    last = probe;
+    if (probe.ok) {
+      return AutoPickedEndpoint(
+        baseUrl: probe.baseUrl,
+        probe: probe,
+        tried: tried,
+        candidates: candidates,
+      );
+    }
+  }
+  return AutoPickedEndpoint(
+    baseUrl: null,
+    probe: last,
+    tried: tried,
+    candidates: candidates,
+  );
 }
