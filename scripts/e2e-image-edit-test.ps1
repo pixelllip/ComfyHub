@@ -835,6 +835,10 @@ if ($script:Failed -gt 0) {
     Say ("  ✗ 有 $script:Failed 项没通过，请看上面的 [FAIL]") 'Red'
     exit 1
 }
+if ($script:Checks -eq 0) {
+    Say '  ✗ 一项检查都没跑（后端没起？前置条件没过？）—— 这不叫通过。' 'Red'
+    exit 1
+}
 Say '  ✓ 全部通过：AI 投放底图 → 生成遮罩 → 提交重绘；遮罩内大变、遮罩外没动' 'Green'
 Say ("  （{0} 项检查）" -f $script:Checks) 'DarkGray'
 Say ''

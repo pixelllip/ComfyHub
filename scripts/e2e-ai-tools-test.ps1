@@ -1123,6 +1123,12 @@ try {
     if ($script:Http) { try { $script:Http.Dispose() } catch { } }
 }
 
+# ★ **一条都没跑 = 没通过**（2026-09-30 补）：整段断言可能被静默跳过，而那时 Failed=0
+#   —— 只看 Failed 就会 exit 0，把"什么都没验"报成通过（总纲 §26 记的是同一族假绿）。
+if ($script:Total -le 0) {
+    Say '  ✗ 一项检查都没跑（后端没起？前置条件没过？）—— 这不叫通过。' 'Red'
+    exit 1
+}
 Say ''
 Say ("  总计 {0} 项，失败 {1} 项" -f $script:Total, $script:Failed) $(if ($script:Failed -gt 0) { 'Red' } else { 'Green' })
 Say ''

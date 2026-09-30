@@ -360,6 +360,13 @@ finally {
 }
 
 Write-Host ''
+# ★ **一条都没跑 = 没通过**（2026-09-30 补）：整段断言可能因为"后端没起 / 前置条件没过"
+#   被静默跳过，而那时 Fail=0 —— 只看 Fail 就会输出"0 项全部通过"这种假绿
+#   （e2e-submit 那边实测踩到过同一种；总纲 §26 记的也是这一族）。
+if ($script:Pass -le 0) {
+    Write-Host '  ✗ 一项检查都没跑（后端没起？前置条件没过？）—— 这不叫通过。' -ForegroundColor Red
+    exit 1
+}
 if ($script:Fail -eq 0) {
     Write-Host "工作流配方 e2e：$($script:Pass) 项全部通过" -ForegroundColor Green
     exit 0

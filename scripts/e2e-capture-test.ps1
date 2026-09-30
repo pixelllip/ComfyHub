@@ -47,6 +47,7 @@ $importPng   = Join-Path $OutDir 'e2e_import_00002_.png'
 $pushPng     = Join-Path $OutDir 'e2e_push_00003_.png'
 
 $script:Failed = 0
+$script:Checks = 0   # ★ 跑了多少项（0 项 = 没通过，见结尾的守卫）
 $script:CreatedPromptIds = New-Object System.Collections.Generic.List[long]
 $script:CreatedMediaIds = New-Object System.Collections.Generic.List[long]
 
@@ -57,7 +58,8 @@ function Check([string]$name, [bool]$ok, [string]$detail = '') {
         Say ("  [OK]   " + $name) 'Green'
     } else {
         Say ("  [FAIL] " + $name + $(if ($detail) { "  -> $detail" } else { '' })) 'Red'
-        $script:Failed++
+        $script:Checks++
+    $script:Failed++
     }
 }
 
@@ -402,6 +404,10 @@ try {
 }
 
 Say ''
+if ($script:Checks -le 0) {
+    Say '  ✗ 一项检查都没跑（后端没起？前置条件没过？）—— 这不叫通过。' 'Red'
+    exit 1
+}
 if ($script:Failed -gt 0) {
     Say ("  ✗ 有 $script:Failed 项没通过，请看上面的 [FAIL]") 'Red'
     exit 1

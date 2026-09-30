@@ -389,6 +389,10 @@ c.close()
     }
 }
 
+if ($script:Pass -le 0) {
+    Write-Host '  ✗ 一项检查都没跑（后端没起？前置条件没过？）—— 这不叫通过。' -ForegroundColor Red
+    exit 1
+}
 if ($script:Fail -gt 0) { exit 1 }
 if ($script:Skip -gt 0) { exit 2 }
 exit 0

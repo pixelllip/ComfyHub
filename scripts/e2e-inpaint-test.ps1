@@ -47,9 +47,11 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 
 function Say([string]$Text, [string]$Color = 'Gray') { Write-Host $Text -ForegroundColor $Color }
 function Check([bool]$Ok, [string]$What) {
+    $script:Checks++
     if ($Ok) { Say ("  [OK]   " + $What) 'Green' } else { Say ("  [FAIL] " + $What) 'Red'; $script:Failed++ }
 }
 $script:Failed = 0
+$script:Checks = 0   # ★ 跑了多少项（0 项 = 没通过）
 
 $ComfyUrl = if ($env:COMFYHUB_COMFY_URL) { $env:COMFYHUB_COMFY_URL.TrimEnd('/') } else { 'http://127.0.0.1:8188' }
 $comfyHome = Resolve-ComfyHome -ProjectRoot $ProjectRoot
@@ -257,6 +259,7 @@ Check ($outAvg -ge 0 -and $outAvg -lt 8) "遮罩外**基本没动**（平均差 
 Check ($inAvg -gt $outAvg * 2) "内外差异拉开（遮罩内至少是遮罩外的 2 倍）"
 
 Say ""
+if ($script:Checks -le 0) { Say '  ✗ 一项检查都没跑（活实例没起？前置条件没过？）—— 这不叫通过。' 'Red'; exit 1 }
 if ($script:Failed -gt 0) { Say "$($script:Failed) 项没通过" 'Red'; exit 1 }
 Say "自带 inpaint 工作流在活实例上跑通，且没有动到遮罩外的画面。" 'Green'
 
