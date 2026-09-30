@@ -50,31 +50,23 @@
   `flutter build windows --debug`（或 `dev-app.ps1`）重启一次，再截图确认**。
   后端同理：`scripts\backend.ps1 build` 会在源码变新时重编，`status` 里能看到跑的是哪一份。
 
-## 2. 本地服务必须"静默"启动（不弹命令行窗口）—— 现在由 Dart 保证
+## 2. 本地服务必须"静默"启动（不弹命令行窗口）
 
-后端由 App 自己启动（**数据库是 SQLite 文件，P2 起不用起数据库服务**），
-**不允许出现任何 cmd / 控制台窗口**。2026-09-30 之后的结论很干脆：
+后端由 App 自己起（`lib\core\backend_launcher.dart` **直接执行 exe**，不经过任何脚本）：
 
-1. **不需要任何技巧**：Dart 的 `Process.start`（attached 模式）在 Windows 上**自带
-   `CREATE_NO_WINDOW`** —— 这正是它源码注释里写的那个场景（"for gui applications
-   (flutter on windows) console might be absent, will create by CreateProcessW"）。
-   所以 `silent-process.ps1` 那套（WMI `Win32_Process.Create` + `ShowWindow=0` /
-   `wscript` + `.vbs` / `direct-hidden` 三档）**连同那个脚本一起删了**，
-   `COMFYHUB_SPAWN_MODE` 也不再存在。
-2. **"谁起的谁关"由进程句柄 + stdin 管道保证**：
-   * 正常关窗口 → `BackendLauncher.releaseOnExit()` 直接 `kill` 自己起的那个进程；
-   * 被任务管理器 / 崩溃强杀 → 后端启动时带的 `--watch-stdin` 生效：stdin 写端只有 App 持有，
-     App 一死管道即关，后端读到 EOF **优雅退出**（取代了 `watch-owner.ps1` 守护进程）。
-   回归：`server-rs/tests/watch_stdin_test.rs`（丢写端 → 必须自己退；管道活着 → 不许退）。
-3. **脚本那条路（`scripts\backend.ps1 start`）用 `Start-Process -WindowStyle Hidden`**：
-   它是给 e2e / dev 用的旁路，**不带 `--watch-stdin`**（Start-Process 给的不是管道，
-   带了后端会当场退出）。那条路**不脱离进程树**——这是刻意的：脚本活着它就活着，
-   脚本的 `finally` 负责收尾。
-4. **验证"没弹窗口"要看枚举窗口，不能看 `MainWindowHandle`**：控制台窗口属于 `conhost.exe`，
-   `Get-Process cmd | Select MainWindowHandle` 永远是 0，会给你假绿灯。
-   正确做法是 `EnumWindows` + `IsWindowVisible` 枚举可见顶层窗口，并以 ~50ms 轮询。
-   （`check-silent-start.ps1` 已随新链路删除；要复测就照上面两句现写一个盯屏脚本 ——
-   注意**别用 `Start-Process` 起后端来做这个测试**，它本来就是"不保证无窗口"的那条路。）
+- **不需要任何技巧**：Dart 的 `Process.start` 在 Windows 上**自带 `CREATE_NO_WINDOW`** ——
+  这就是"为什么不弹黑框"的全部原因。以前那套 WMI/wscript 三档（`silent-process.ps1` +
+  `COMFYHUB_SPAWN_MODE`）**2026-09-30 已随脚本一起删了**。
+- **"谁起的谁关"**：正常关窗 → `BackendLauncher.releaseOnExit()` kill 自己起的那一个；
+  被任务管理器/崩溃强杀 → 后端启动时带的 **`--watch-stdin`** 生效（stdin 写端只有 App 持有，
+  App 一死管道即关，后端读到 EOF 优雅退出）。回归：`server-rs/tests/watch_stdin_test.rs`。
+- **脚本旁路**（`scripts\backend.ps1 start`，给 e2e / dev 用）用 `Start-Process -WindowStyle Hidden`，
+  **不带 `--watch-stdin`**（Start-Process 给的不是管道，带了后端会当场退出），也**不脱离进程树**
+  —— 脚本活着它就活着，脚本的 `finally` 收尾。
+- **验证"没弹窗口"要看枚举窗口**：控制台窗口属于 `conhost.exe`，
+  `Get-Process cmd | Select MainWindowHandle` 永远是 0（假绿灯）。正确做法是
+  `EnumWindows` + `IsWindowVisible` 按 ~50ms 轮询；⚠ **别用 `Start-Process` 起后端来做这个测试**
+  —— 它本来就是"不保证无窗口"的那条路。
 ## 3. 首页 / 导航顺序
 
 `lib/app.dart` 的 `HomeShell`：**默认落在「AI 工作台」页**（AIH-001），
@@ -226,40 +218,31 @@
 - 想要一份不随 `build\` 消失、又**在工作区外**的长期副本，用
   `pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub`（既是长期留存，也是绕开写限制的正解）。
 
-## 8. 运行时自动补齐：**已经不需要了**（保留两条 PowerShell 血泪教训）
+## 8. MCP 运行时：**可选能力，检测优先**
 
-2026-09-30 起 Java / pwsh / VC++ 三样运行时**都不再需要**（后端是静态链接的 Rust 单文件 exe，
-数据库是 SQLite 单文件），所以 `ensure-runtime.ps1` / `runtime-deps.ps1` 已删除。
-唯一还会下载东西的是**可选能力** MCP 运行时（`scripts\mcp-runtime.ps1`），它的策略仍然是：
-**检测优先，安装只作兜底**（2026-09-21 用户定："环境有 python 你的脚本就不用再装了，同理 jdk、mcp 也是"）：
+2026-09-30 起 Java / pwsh / VC++ **都不再需要**（后端是静态链接的 Rust 单文件 exe、库是 SQLite 单文件），
+`ensure-runtime.ps1` / `runtime-deps.ps1` 已删。唯一还会下载东西的是**可选能力** MCP 运行时
+（`scripts\mcp-runtime.ps1`），策略是**检测优先、安装只作兜底**（用户 2026-09-21 定：
+"环境有 python 你的脚本就不用再装了，同理 jdk、mcp 也是"）：
 
 - 四档：① 已装好的（`state.json` / `venv` / `python`）→ ② 借机器上**已经装了 comfy-mcp + comfy-cli**
   的 Python（一个字节都不装）→ ③ 借机器上的 Python 建 **venv**（`<根>\storage\ai\mcp\venv`，
-  **不污染用户的全局 site-packages**）→ ④ 真的没有才下 embeddable 便携版。
-  用了哪一档记在 `state.json` 的 `pythonSource`。
-- ⚠ **venv 的解释器就在 `Scripts\` 里**，所以"pip 启动器在哪个目录"必须分两种情况
-  （`Get-PythonScriptsDir` / Kotlin 的 `scriptsDirOf`）—— 一律 `父目录\Scripts` 会拼出
-  `venv\Scripts\Scripts`，表现是"明明装好了却报缺 comfy-mcp.exe"。
-- **装不上不拦启动**：它是可选能力，缺了只是 AI 少一批 ComfyUI 工具。
+  **不污染全局 site-packages**）→ ④ 真没有才下 embeddable 便携版。用了哪一档记在 `state.json`。
+- ⚠ **venv 的解释器就在 `Scripts\` 里**：一律 `父目录\Scripts` 会拼出 `venv\Scripts\Scripts`，
+  表现是"明明装好了却报缺 comfy-mcp.exe"。
+- **装不上不拦启动**：缺了只是 AI 少一批 ComfyUI 工具。
 
-> **⚠ 参数改名的坑（2026-09-21 踩到，仍然有效）：非高级函数（没写 `[CmdletBinding()]`）收到不存在的
-> 命名参数时不报错，而是丢进 `$args`。** `mcp-runtime.ps1` 把参数从 `$Proxy`/`$Force` 改成
-> `$McpProxy`/`$McpForce`（为了躲 dot-source 的变量覆盖，见该文件头的注释）之后，内部一堆
-> `-Proxy $McpProxy` / `-Force:$McpForce` 就**静默失效**了 —— 没报错、没异常，只是代理没传过去、
-> 强制重装没生效。所以：改名后**必须把调用点一起改**，而且给命令行用的名字要留
-> `[Alias('Proxy')]` / `[Alias('Force')]`。
+两条**通用**的 PowerShell 血泪教训（当年为它踩的脚本已删，教训对所有脚本都成立）：
 
-> **⚠ 变量的坑：永远不要给变量起名 `$home`、`$input`、`$host`、`$pid`、`$profile`、`$args`。**
-> PowerShell 里自动变量**大小写不敏感**，`$home = ...` 会直接抛
-> "Cannot overwrite variable HOME because it is read-only or constant"；
-> 而更可怕的是**漏改了一处引用**：本仓库真的写出过
-> `$javaHome = ...`（定义）却仍用 `$home`（引用）的代码，于是
-> `Move-Item $home -Destination <解压目标>` 去搬 **`C:\Users\<用户>\` 整个用户目录**，
-> 把用户主目录下的 10 个文件（`.gitconfig` / `.npmrc` / `.claude.json` …）搬进了发布包
-> （幸好目录被占用才没造成更大破坏；出事的那个脚本已随"运行时自动补齐"一起删除，
-> **但教训对所有 `Move-Item` / `Remove-Item -Recurse` 都成立**）。
-> 写任何搬移 / 递归删除之前，先确认目标是"算出来的、可验证的"路径
-> （当时的修法是加一条安全闸：只允许搬运 staging 目录内的路径，否则当场抛异常）。
+> **⚠ 参数改名**：非高级函数（没写 `[CmdletBinding()]`）收到不存在的命名参数时**不报错**，
+> 而是丢进 `$args` —— 改名后内部一堆 `-Proxy $X` 会**静默失效**。所以改名必须同时改调用点，
+> 给命令行用的名字要留 `[Alias('旧名')]`。
+>
+> **⚠ 别给变量起名 `$home` / `$input` / `$host` / `$pid` / `$profile` / `$args`**：
+> 自动变量**大小写不敏感**，`$home = …` 会直接抛只读错误；更可怕的是漏改了一处引用
+> —— 本仓库真的写出过 `$javaHome = …`（定义）却仍用 `$home`（引用），于是
+> `Move-Item $home …` 去搬 **`C:\Users\<用户>\` 整个用户目录**（幸好目录被占用才没酿成大祸）。
+> **写任何 `Move-Item` / `Remove-Item -Recurse` 之前，先确认目标是"算出来的、可验证的"路径。**
 
 ## 9. 视频播放依赖一份打过补丁的插件副本
 
@@ -440,21 +423,16 @@
 
 ---
 
-## 11. ⚠ 目标架构（P0/P0.5/P1/M0/M1 ✅、P2 ✅、**P4 桌面 Rust 切流完成 2026-09-26**；剩 M3+/M4 的移动端）
+## 11. ⚠ 目标架构与"现在还剩什么"
 
-**2026-09-23 敲定**：`SQLite + 桌面 Rust + 移动 Kotlin + Flutter（两端）`。
-**2026-09-26 现状**：**桌面后端已是 Rust**（`server-rs/`，单文件 exe，无 JVM / 无 MySQL），
-脚本与发布包都切过去了，四条 e2e + `flutter test` 对着 Rust 全绿；旧 Kotlin 源码
-**2026-09-30 已删**（`legacy/`，要对照从 git 历史取）。
-第 1~10 节里凡是提到 **Kotlin 后端 / `gradle` / `installDist` / `jre` / `ToolRegistry.kt` / MySQL 搬迁**
-的地方，都按**历史（或"回退旧后端"）**理解 —— 运行期真源是 Rust。
-
-**动手之前先读 [`docs/implementation-master-plan.md`](docs/implementation-master-plan.md)**
-（实施总纲：冻结的接口契约、**14 条红线**、分阶段验收判据、回归防线归属、文档地图）。
+**一句话**：`SQLite（单文件）+ 桌面 Rust（单文件 exe）+ 移动 Kotlin harness + Flutter（两端）`。
+桌面切流 2026-09-26 完成，旧 Kotlin 源码 2026-09-30 连目录一起删了（要对照从 git 历史取）；
+**当前状态、14 条红线、验收判据、回归防线归属**全在
+[`docs/implementation-master-plan.md`](docs/implementation-master-plan.md)（**动手之前先读它**）。
 
 四条最容易踩的：
 
-1. **桌面后端只改 `server-rs/`（Rust）**：Kotlin 那套**已经不在仓库里了**（删了）——
+1. **桌面后端只改 `server-rs/`（Rust）**：Kotlin 那套**已经不在仓库里了** ——
    要参照旧行为就从 git 历史取，别指望在树上找到 `.kt`。
 2. **不要引入 KMP**（`kotlin.multiplatform`）。本工程已迁到 **AGP 9 内建 Kotlin**
    （`android.builtInKotlin=true`，任何模块都不 apply KGP），KMP 与这个刻意设计正面冲突 ——
@@ -462,7 +440,7 @@
    `docs/android-agp9-builtin-kotlin-migration.md`。
 3. **移动端 harness 用 Android Kotlin**（Flutter UI 通过 platform channel 调用），
    不是 Dart、不是 Rust。**手机端不许硬编码系统提示 / 工具描述 / 安全文案** ——
-   它们由桌面的 `/api/ai/run-kit` 版本化下发。
+   它们由桌面的 `/api/ai/run-kit` 版本化下发（R13）。
 4. **发布包与运行时**：`mysql/`（304MB）、`jre/`（~40MB）与 Kotlin jar（~20MB）**都已经去掉**，
    装配实测约 **14MB**。`packaging\manifest.json` 与第 7 节的"两套运行布局"改之前**先看总纲**；
    `runtimeRequirements` 里的 `required` 字段决定"缺了算不算问题"。

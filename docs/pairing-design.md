@@ -266,8 +266,9 @@ comfyhub://pair?v=1&t=<ticket>&e=<expiresAt>&u=<base64url(urls 用 \n 连接)>
 | Rust `:8081` | 四条 `/api/sync/*` **+ `/api/ai/run-kit{,/status}`**（2026-09-24 第 22 步搬完） | 会话写侧 / Run 与 SSE / 工具层与审批 / 附件 |
 
 > 📌 **2026-09-24 更新**：写这份设计时 `/api/ai/run-kit` 只在 Kotlin 上（所以手机"取规则"与
-> "推数据"各需要一台后端）。**现在 Rust 侧两条都有**（`docs/implementation-master-plan.md` §8
-> "P4 第 22 步"）—— 配对落地时**直接做在 Rust 上**，手机只连这一个后端。
+> "推数据"各需要一台后端）。**现在 Rust 侧两条都有**（`ai/run_kit.rs`，
+> 2026-09-24 的 P4 第 22 步 —— 那段流水账 2026-09-30 已从总纲删掉，要看用 `git log`）
+> —— 配对落地时**直接做在 Rust 上**，手机只连这一个后端。
 
 配对端点在**手机实际连的那个后端**上才生效。第一步的验收**只验"闸门与端点本身"**
 （它不依赖 `/api/sync/push` 或 `run-kit`），但第 3 步的真机验收要在 Rust 上做。
@@ -315,7 +316,7 @@ comfyhub://pair?v=1&t=<ticket>&e=<expiresAt>&u=<base64url(urls 用 \n 连接)>
 （取规则 / 推数据）必然撞上它。
 
 **这条已经解了**：`GET /api/ai/run-kit{,/status}` 在 2026-09-24 搬到了 Rust
-（`docs/implementation-master-plan.md` §8 "P4 第 22 步"），真库副本上两支后端 canon 零差异。
+（`ai/run_kit.rs`，P4 第 22 步），真库副本上两支后端 canon 零差异。
 所以配对三步现在都做在 **Rust** 上，手机只连一个后端。
 
 > ⚠ 保留这一节是因为它记着一条**通用纪律**：**"配对通了" ≠ "配完能用"**。
@@ -368,7 +369,7 @@ comfyhub://pair?v=1&t=<ticket>&e=<expiresAt>&u=<base64url(urls 用 \n 连接)>
 | --- | --- | --- |
 | 1 | TTL **120 秒**（修正 `inbound-auth-design.md:274` 的 5 分钟） | 5 分钟更宽容，但二维码被拍走后可用的窗口长 2.5 倍；`remote-access-security.md` §5 本来就建议 120 秒，本文按它对齐 |
 | 2 | 码的 HMAC **以 ticket 为密钥**，不另存 secret | 另存一个 secret 多一处状态与一处泄漏面；以 ticket 为密钥则"作废 ticket"自动作废码 |
-| 3 | 手机密钥库**复用 `KeystoreCredentials`**（Kotlin 侧 AES/GCM + SharedPreferences），而不是 `flutter_secure_storage` | 总纲 M6 行（`implementation-master-plan.md:201`）写的是 `flutter_secure_storage`。选复用是因为它**已经在生产代码里**、且 Dart 侧不需要再碰密钥；代价是"自己写的加密"要在评审时单独看一遍。若评审更信任成熟库，改成 `flutter_secure_storage` 只影响第 3 步 |
+| 3 | 手机密钥库**复用 `KeystoreCredentials`**（Kotlin 侧 AES/GCM + SharedPreferences），而不是 `flutter_secure_storage` | 总纲 §1 的 M6 行写的是 `flutter_secure_storage`。选复用是因为它**已经在生产代码里**、且 Dart 侧不需要再碰密钥；代价是"自己写的加密"要在评审时单独看一遍。若评审更信任成熟库，改成 `flutter_secure_storage` 只影响第 3 步 |
 | 4 | 一机一令牌**在配对时就落地**（而不是 D10 的"以后再说"） | 代价是状态形状要升 `/2`；收益是吊销从第一天起就是"按设备"的 |
 | 5 | ✅ **已拍板（2026-09-27）：二维码由 Dart 侧画**（`qr_flutter`，纯 Dart 包），后端**只回事实**（`ticket` / `urls[]` / `code` / 两个 `expiresAt`） | 备选是后端出 PNG，或后端直接回 `qrPayload` 字符串 —— **两种都否掉**：出 PNG 让后端多一条渲染路径；回 `qrPayload` 会把"格式"变成**两份实现**（Rust 编、Dart 解），而 §4.5 那串 URI 的字段（`v`/`t`/`e`/`u`）正是要靠**一份**实现守住的。现在编与解都在 `lib/core/pairing_payload.dart`，`PairingQrImage` 只负责画（白底那条纪律也在它里面）。渲染失败时**必须**退化成"把地址和 6 位码念给手机"的文本行（§3.1 第 6 步） |
 | 6 | ✅ **已拍板（2026-09-27）：手机扫码用 `mobile_scanner`，且相机不可用不算失败** | 相机是"锦上添花"的那条路：插件缺失 / 权限被拒 / 不是 ComfyHub 的码，一律**当场退回手敲 6 位码那条已经跑通的路**（B 通道），并说清原因。**不许**因为扫码不可用就让配对整条不可用 |
@@ -380,7 +381,7 @@ comfyhub://pair?v=1&t=<ticket>&e=<expiresAt>&u=<base64url(urls 用 \n 连接)>
 - [`inbound-auth-design.md`](inbound-auth-design.md) —— 令牌闸门本身（D1~D12、§6 的 P0/P1/P2、§8 防线、§9 风险登记）
 - [`remote-access-security.md`](remote-access-security.md) §5（配对与令牌的具体要求）、§4（四层防护）、§6（红线）
 - [`sync-api-contract.md`](sync-api-contract.md) §0（`X-ComfyHub-Token` 与"连接鉴权 ≠ 操作审批"）
-- [`implementation-master-plan.md`](implementation-master-plan.md) §1（桌面唯一真源）、§3.4（run-kit）、`:748-753`（两端分居的阻塞点）
+- [`implementation-master-plan.md`](implementation-master-plan.md) §1（桌面唯一真源与当前状态）、🔒 [`run-kit-contract.md`](run-kit-contract.md)（工件下发）
 - [`android-client-plan.md`](android-client-plan.md) §4（第 1 步鉴权、第 5 步局域网发现）
 
 ---
@@ -469,7 +470,7 @@ GET  /api/ai/credentials?refs=a,b         回环 或 **已配对且 allowCredent
 - 二维码（`pair/start`）与手机扫码：见 §11.1 的取舍；
 - `devicePublicKey` 请求签名（§8 已声明不做）；
 - HTTPS / 公网暴露（§8）；
-- 手机侧的前台服务与后台长时间 Run（归总纲 §7 风险表，与本轮无关）。
+- 手机侧的前台服务与后台长时间 Run（归总纲 §6 风险表，与本轮无关）。
 
 ---
 

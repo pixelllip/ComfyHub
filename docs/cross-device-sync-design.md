@@ -420,7 +420,7 @@ DELETE FROM _sync_log WHERE seq <= (SELECT MIN(cursor) FROM sync_clients);
 | `ai_attachments` | ✅ | 附件元数据（字节同样走 HTTP） |
 | `capture_runs` | ✅ **（2026-09-27 定：进）** | 是"生成发生过"的账本；原来标"可选"，现在明确进（手机看画廊时能显示"这次生成"） |
 | **`ai_run_events`** | ❌ | 单 Run 上万条的流式事件日志，是**调试/断线续传**用的，同步它等于把最大的表搬过去 |
-| `ai_runs` / `ai_tool_calls` | ✅ **（2026-09-27 定：进，总纲 §7 待定项 1）** | 手机要能显示桌面那次 Run 的**工具过程**（跑过哪些工具、成没成、花了多久）。⚠ 上行也收（`ai_run` / `ai_tool_call`），而手机侧 `ai_runs` 因此变**镜像表** —— 崩溃恢复要靠本机 `local_runs` 标记，别用 `status='running'` |
+| `ai_runs` / `ai_tool_calls` | ✅ **（2026-09-27 定：进，同步范围的真源是 🔒 `sqlite-schema-contract.md` §6）** | 手机要能显示桌面那次 Run 的**工具过程**（跑过哪些工具、成没成、花了多久）。⚠ 上行也收（`ai_run` / `ai_tool_call`），而手机侧 `ai_runs` 因此变**镜像表** —— 崩溃恢复要靠本机 `local_runs` 标记，别用 `status='running'` |
 | `ai_questions` | ❌ | 提问闸门只在桌面侧；手机看实时提问走 `GET /api/ai/pending` |
 | `ai_providers` / `ai_models` / `app_settings` | ❌ | **含凭据引用与端点配置**，手机不该有；`app_settings` 里还有配对令牌明文 |
 | `skills`（磁盘） | ❌ | 在 `storage/ai/skills`，不是库表 |
@@ -663,7 +663,7 @@ Flutter 端一行不改。可以按端点分组灰度（先换 `/api/tags`、`/a
 
 1. **同步范围**：§4.5 那张表认不认？特别是 `capture_runs` / `ai_runs` / `ai_tool_calls`
    要不要同步（同步 = 手机能看到"这次生成用了什么工具"，代价是三个表进镜像）。
-   ✅ **2026-09-27 用户已拍板：都进**（总纲 §7 待定项 1 = "进"，落地见 §4.5 表与 🔒 `sqlite-schema-contract.md` §6）。
+   ✅ **2026-09-27 用户已拍板：都进**（落地形状见本文件 §4.5 表与 🔒 `sqlite-schema-contract.md` §6）。
 2. **`ai_run_events` 确认不同步**？（62.1 万行，且是本该被裁剪的调试日志。）
 3. **手机端要不要"离线读"**？不要的话 S2/S4 都不用做，
    手机就是纯瘦客户端（`android-client-plan.md` 的原始设计），

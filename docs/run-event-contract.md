@@ -37,7 +37,9 @@ data: <payload 的 JSON 单行>
 ## 2. 事件类型清单（18 个，唯一真源 = `server-rs/src/ai/events.rs` 的 `event_type`）
 
 > 2026-09-28 起桌面后端是 Rust（`server-rs/src/ai/events.rs` 的 `event_type::ALL` 与
-> `event_types_match_the_contract` 这条用例逐字钉住本表）；Kotlin 那份只在 `legacy/` 留档。
+> `event_types_match_the_contract` 这条用例逐字钉住本表）。手机侧（Kotlin harness）也有一份
+> 同形的枚举与一条比对用例 —— 那份 Kotlin 是**安卓 harness**，不是退役的桌面 Kotlin 后端
+> （退役那份 2026-09-30 连目录一起删了，要对照从 git 历史取）。
 
 | `type` | 常量 | payload 关键字段 | 谁发 |
 | --- | --- | --- | --- |
