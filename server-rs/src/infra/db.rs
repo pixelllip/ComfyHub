@@ -67,8 +67,54 @@ pub const SCHEMA_SQL: &str = include_str!("../../../db/schema.sqlite.sql");
 /// 早就在 `db/schema.sqlite.sql` 里，而真库停在 1、**那张表根本不存在** —— 见
 /// [`open_or_create`] 的 ⚠；同日由 2 提到 3：给 `ai_runs` / `ai_tool_calls` 补 `_sync_log`
 /// 触发器 —— **不是加表但同样够不着老库**，理由写在 `db/schema.sqlite.sql` 末尾；
-/// 同日由 3 提到 4：加 `submit_jobs` 表 = M5「手机排队 → 桌面真正提交」的持久账）。
-pub const SCHEMA_VERSION: i64 = 4;
+/// 同日由 3 提到 4：加 `submit_jobs` 表 = M5「手机排队 → 桌面真正提交」的持久账；
+/// 2026-09-30 由 4 提到 5：给 `character_cards` 补 `position` / `enabled` 两列
+/// （生图角色卡框架：位置 + 是否参与本次生成）——**这是第一次"加列"**，
+/// 走的是下面 [`NEW_COLUMNS`] 那套"先 `PRAGMA table_info` 探测再 ALTER"）。
+pub const SCHEMA_VERSION: i64 = 5;
+
+/// **"这一列必须存在"的声明式清单**（2026-09-30 起）。
+///
+/// `db/schema.sqlite.sql` 是**收敛式**的，但 `CREATE TABLE IF NOT EXISTS` **不会**给已经存在的表补列 ——
+/// 所以在 DDL 里加一列，老库永远拿不到它（而且不报错，表现是"这列读出来永远是默认值"）。
+/// 契约（`docs/sqlite-schema-contract.md` §2）要求的就是这套写法：**先 `PRAGMA table_info` 探测再改**。
+///
+/// 加列的规矩：
+///  1. 三处一起改：这里 + `db/schema.sqlite.sql` 的建表 DDL + [`SCHEMA_VERSION`] +1；
+///  2. 只能加**可空列**或**带默认值的列**（SQLite 的 `ADD COLUMN` 不能加 `NOT NULL` 且无默认值的列）；
+///  3. 别改已有列的类型 / 名字（SQLite 改不动，得重建表 —— 那种迁移要单独写，不在这个清单里）。
+const NEW_COLUMNS: &[(&str, &str, &str)] = &[
+    (
+        "character_cards",
+        "position",
+        "ALTER TABLE character_cards ADD COLUMN position TEXT NULL",
+    ),
+    (
+        "character_cards",
+        "enabled",
+        "ALTER TABLE character_cards ADD COLUMN enabled INTEGER NOT NULL DEFAULT 0",
+    ),
+];
+
+/// 给老库补上 [`NEW_COLUMNS`] 里缺的列，返回**这次真加了哪些**（`表.列`）。
+///
+/// 幂等：列已在就是空操作。**每次开库都跑**（两条 SQL 的代价），因为它跟 `missing_tables`
+/// 一样是"版本号够新也不代表结构对"的那道自愈 —— 真机踩过一次就够记一辈子了。
+fn ensure_columns(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut added: Vec<String> = Vec::new();
+    for (table, column, ddl) in NEW_COLUMNS {
+        let present: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+            rusqlite::params![table, column],
+            |row| row.get(0),
+        )?;
+        if present == 0 {
+            conn.execute_batch(ddl)?;
+            added.push(format!("{table}.{column}"));
+        }
+    }
+    Ok(added)
+}
 
 /// **开库（必要时建库）**：切流之后 Rust 是唯一的后端，"第一次运行要能自己建库"这件事
 /// 必须在它这边成立 —— 以前那版遇到缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
@@ -111,7 +157,16 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
                  它可能是更新的版本建的。继续用会有列对不上的风险，建议升级后端。"
             );
         }
-        // ★ 自愈（见函数头那条 ⚠）：版本号够新**不等于**表都在
+        // ★ 自愈（见函数头那条 ⚠）：版本号够新**不等于**结构都对 ——
+        //   "表在不在"与"列在不在"是两件事（后者靠 NEW_COLUMNS 那套 ALTER）。
+        let added = ensure_columns(&conn).map_err(|e| format!("补列失败：{e}"))?;
+        if !added.is_empty() {
+            eprintln!(
+                "[db] 老库缺 {} 列（{}）—— 用 ALTER 补上了；已有数据不动。",
+                added.len(),
+                added.join("、")
+            );
+        }
         missing = missing_tables(&conn).map_err(|e| format!("查缺表失败：{e}"))?;
         if missing.is_empty() {
             return Ok(conn);
@@ -134,10 +189,17 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
             //  * **但也不能被 DDL 里的那行拖回去**：`db/schema.sqlite.sql` 末尾自己也有一行
             //    `PRAGMA user_version = N`（它是两端共用的文件、Kotlin 侧也读它），
             //    而"库够新、只是缺张表"那条自愈路径里我们**刚跑过一遍 DDL** ——
-            //    如果照搬"DLL 里的值"，版本号就会从 2 **退回 1**（2026-09-27 实测踩到：
+            //    如果照搬"DDL 里的值"，版本号就会从 2 **退回 1**（2026-09-27 实测踩到：
             //    自愈成功、表补上了，`user_version` 却掉回 1）。
+            //
+            // ⚠ **判据要比"DDL 跑完之后库里的实际值"，不能比"跑 DDL 之前读到的 version"**
+            //   （2026-09-30 补：原来写的是 `if target != version`，那只在"版本比后端旧"时成立 ——
+            //   库是 99、只是缺一张表时，DDL 把版本写成 5，而 `target(99) != version(99)` 为假，
+            //   于是**该写的那次没写**，库被静默降级到 5。用例
+            //   `healing_a_missing_table_never_downgrades_a_newer_version` 钉住这条）。
             let target = version.max(SCHEMA_VERSION);
-            if target != version {
+            let after_ddl = schema_version(&conn).map_err(|e| format!("读 user_version 失败：{e}"))?;
+            if after_ddl != target {
                 conn.execute_batch(&format!("PRAGMA user_version = {target};"))
                     .map_err(|e| format!("写 user_version 失败：{e}"))?;
             }

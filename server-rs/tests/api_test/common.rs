@@ -841,14 +841,19 @@ pub(crate) fn event_types(state: &comfyhub_server_rs::web::routes::AppState, run
 /// 上游是 `127.0.0.1:9`（没人监听），所以失败得很快；这里给足 3 秒并在超时后断言失败，
 /// 而不是"睡固定时长碰运气"。
 pub(crate) async fn wait_for_run(state: &comfyhub_server_rs::web::routes::AppState, run_id: &str) -> serde_json::Value {
-    for _ in 0..60 {
+    // ⚠ 这个上限是**"卡住了"的判据**，不是性能判据：假网关跑完一轮通常几十毫秒，
+    //   但 150 个用例并行（每个都起自己的 axum + tokio 任务）时实测能压到秒级 ——
+    //   原来写 60×50ms = 3s，负载高时会**偶发**在这里超（2026-09-30 撞到一次：
+    //   同一个用例单跑必绿、全量并行时红）。放到 10s：真卡住照样抓得住，
+    //   机器一时忙却不再报假红。
+    for _ in 0..200 {
         let run = comfyhub_server_rs::ai::runs::get(state, run_id).expect("Run 在库里");
         if run.status != comfyhub_server_rs::ai::runs::RUNNING {
             return serde_json::to_value(&run).unwrap();
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    panic!("Run {run_id} 三秒内还没收尾（执行器可能卡住了）");
+    panic!("Run {run_id} 十秒内还没收尾（执行器可能真的卡住了）");
 }
 
 /// 读一个 SSE 响应体（它自己会结束 —— 收尾的 Run 发完就关流）。

@@ -128,6 +128,72 @@ fn open_or_create_heals_a_database_missing_a_declared_table() {
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
 }
 
+/// **加列**的自愈（2026-09-30 起）：老库缺一列 → 开库时用 `ALTER` 补上，已有数据不动。
+///
+/// 为什么非要有这条：收敛式 DDL 的建表语句**不给已存在的表补列**（`IF NOT EXISTS` 只判表在不在），
+/// 所以在 DDL 里加一列、老库永远拿不到它，**而且不报错** —— 表现是"这列读出来永远是默认值"。
+#[test]
+fn open_or_create_heals_a_missing_column_without_touching_data() {
+    let path = temp_path("add-column");
+    let conn = open_or_create(&path).unwrap();
+    // 装成"这列是后加的"：SQLite 3.35+ 支持 DROP COLUMN；老版本靠重建表，这里用前者
+    conn.execute_batch("ALTER TABLE character_cards DROP COLUMN position;").unwrap();
+    conn.execute_batch(
+        "INSERT INTO character_cards (name, normalized, enabled) VALUES ('先有的卡', '先有的卡', 1);",
+    )
+    .unwrap();
+    let has: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('character_cards') WHERE name='position'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has, 0, "前提：position 这一列真的没了");
+    drop(conn);
+
+    let again = open_or_create(&path).expect("要能补列");
+    let has: i64 = again
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('character_cards') WHERE name='position'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has, 1, "DDL 里声明的列必须被补上");
+    let kept: (String, i64) = again
+        .query_row("SELECT name, enabled FROM character_cards", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!(kept, ("先有的卡".to_string(), 1), "补列不许动已有数据");
+    std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+}
+
+/// 库比后端新 + **缺一张表**：自愈可以，但**版本号绝不许被 DDL 那行拖下去**。
+///
+/// 这条盯的是 2026-09-30 补的那个判据：原来写的是 `if target != version`，在"库是 99、
+/// 只是缺一张表"时 `target(99) != version(99)` 为假 → **该写的那次没写**，而 DDL 末尾那行
+/// `PRAGMA user_version = 5` 已经把库写成 5 → 静默降级（用旧二进制写新库最危险的那件事）。
+#[test]
+fn healing_a_missing_table_never_downgrades_a_newer_version() {
+    let path = temp_path("heal-newer");
+    let conn = open_or_create(&path).unwrap();
+    conn.execute_batch("DROP TABLE workflow_recipes;").unwrap();
+    conn.execute_batch("PRAGMA user_version = 99;").unwrap();
+    drop(conn);
+
+    let again = open_or_create(&path).expect("更新的库也要能打开");
+    let healed: i64 = again
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workflow_recipes'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(healed, 1, "缺的表照样要补上");
+    assert_eq!(schema_version(&again).unwrap(), 99, "绝不许把更新的库降级写回去");
+    std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+}
+
 /// DDL 末尾那行 `PRAGMA user_version = N` 与 [`SCHEMA_VERSION`] **必须是同一个数**。
 ///
 /// 它俩是两个真源（一份给两端共用的 DDL、一份给 Rust 的迁移逻辑），而漂了的表现是

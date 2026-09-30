@@ -54,6 +54,22 @@ PRAGMA foreign_keys = ON;       -- ★ 按连接，默认 OFF，漏了不报错�
 **schema 版本 = `PRAGMA user_version`**（不建版本表）。
 迁移用"先 `PRAGMA table_info` 探测再改"的幂等写法，风格照搬现有 `Migrate.kt`。
 
+> **加列（2026-09-30 起有先例了）**：`db/schema.sqlite.sql` 是**收敛式**的，但建表语句
+> **不给已存在的表补列** —— 只在 DDL 里加一列的后果是**老库永远拿不到它，而且不报错**
+> （读出来永远是默认值）。所以加列要**三处一起改**：
+>
+> 1. `db/schema.sqlite.sql` 的建表 DDL（新库直接就有）；
+> 2. `server-rs/src/infra/db.rs` 的 `NEW_COLUMNS` 加一条 `(表, 列, ALTER 语句)` ——
+>    `open_or_create` **每次开库**都按 `PRAGMA table_info` 探测，缺了才 `ALTER`（幂等）；
+> 3. `SCHEMA_VERSION` +1，`db/schema.sqlite.sql` 末尾那行 `PRAGMA user_version = N` 同步。
+>
+> 只能加**可空列**或**带默认值的列**（SQLite `ADD COLUMN` 的限制）；改类型 / 改名要重建表，
+> 那种迁移不在 `NEW_COLUMNS` 里，得单独写。防线：`db.rs` 的
+> `open_or_create_heals_a_missing_column_without_touching_data` 与
+> `healing_a_missing_table_never_downgrades_a_newer_version`（后者盯的是"自愈时不许把
+> 更新的库降级写回去"—— DDL 末尾那行会把版本号写成 `SCHEMA_VERSION`，所以判据要比
+> **DDL 跑完之后**的实测值，不能比"跑之前"读到的那些）。
+
 > `db/migrate.sql` 那份**存储过程版可以废弃**（SQLite 无存储过程）→ 三份 DDL 变**两份**。
 
 ---

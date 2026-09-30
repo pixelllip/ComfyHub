@@ -275,3 +275,181 @@ fn 删除与不存在的行为() {
     assert!(get(&conn, id).unwrap().is_none());
     assert!(update(&conn, id, &input("Shinku", &[])).unwrap() == false);
 }
+
+// ---------------------------------------------------------------------------
+//  生图角色卡框架（2026-09-30）：位置 / 启用上限 / token 口径
+// ---------------------------------------------------------------------------
+
+/// 位置：留空 / `auto` / `自动` = 自动；合法格子**归一化成大写**；其余报错并说清该填什么。
+#[test]
+fn 位置只有自动与五乘五格子两种写法() {
+    let none = None;
+    assert_eq!(normalize_position(none).unwrap(), None);
+    assert_eq!(normalize_position(Some(&"".to_string())).unwrap(), None);
+    assert_eq!(normalize_position(Some(&"  ".to_string())).unwrap(), None);
+    assert_eq!(normalize_position(Some(&"auto".to_string())).unwrap(), None);
+    assert_eq!(normalize_position(Some(&"AUTO".to_string())).unwrap(), None);
+    assert_eq!(normalize_position(Some(&"自动".to_string())).unwrap(), None);
+
+    // 合法格子：大小写不敏感，输出一律大写（库里只有一种写法）
+    assert_eq!(normalize_position(Some(&"c3".to_string())).unwrap().as_deref(), Some("C3"));
+    assert_eq!(normalize_position(Some(&" A1 ".to_string())).unwrap().as_deref(), Some("A1"));
+    assert_eq!(normalize_position(Some(&"e5".to_string())).unwrap().as_deref(), Some("E5"));
+
+    // 越界 / 畸形：报错，而且要把"该填什么"写出来（静默当自动 = 设了没用）
+    for bad in ["F1", "A0", "C6", "1C", "C", "CC", "C33", "中间"] {
+        let err = normalize_position(Some(&bad.to_string())).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("A~E"), "{bad} 的报错要说清行列范围：{msg}");
+    }
+    // 边界：网格就是 5×5
+    for (row, col) in [("A", 1), ("E", 5)] {
+        assert!(is_grid_cell(&format!("{row}{col}")));
+    }
+    assert!(!is_grid_cell("F5"));
+    assert!(!is_grid_cell("A6"));
+    assert!(!is_grid_cell(""));
+}
+
+/// **最多同时启用 6 个**：第 7 个要**报错**（不是静默排掉），关一个之后才放行。
+#[test]
+fn 启用上限是六个且超了报人话() {
+    let conn = conn();
+    for i in 0..MAX_ENABLED {
+        let mut one = input(&format!("角色{i}"), &["1girl"]);
+        one.enabled = Some(true);
+        create(&conn, &one).unwrap_or_else(|e| panic!("第 {i} 个该能启用：{e:?}"));
+    }
+    assert_eq!(summary(&conn).unwrap().enabled_count, MAX_ENABLED);
+
+    let mut seventh = input("第七个", &["1girl"]);
+    seventh.enabled = Some(true);
+    let err = create(&conn, &seventh).unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(msg.contains("上限 6 个"), "要说清上限：{msg}");
+    assert!(msg.contains("不占 token"), "要说明未启用不是删掉：{msg}");
+
+    // 关掉一个 → 放行
+    let first = list(&conn, None, 10).unwrap().into_iter().find(|c| c.enabled).unwrap();
+    let mut off = input(&first.name, &["1girl"]);
+    off.enabled = Some(false);
+    update(&conn, first.id, &off).unwrap();
+    create(&conn, &seventh).expect("关掉一个之后就该放行");
+    assert_eq!(summary(&conn).unwrap().enabled_count, MAX_ENABLED);
+}
+
+/// **已经在启用状态的那张卡自己不占名额**（编辑保存不该被自己挡住）。
+#[test]
+fn 已启用的卡再保存不会撞自己的名额() {
+    let conn = conn();
+    let mut one = input("唯一", &["1girl"]);
+    one.enabled = Some(true);
+    let id = create(&conn, &one).unwrap();
+    // 再来 5 张凑满 6 个
+    for i in 0..(MAX_ENABLED - 1) {
+        let mut other = input(&format!("陪衬{i}"), &["1girl"]);
+        other.enabled = Some(true);
+        create(&conn, &other).unwrap();
+    }
+    let mut again = input("唯一", &["1girl", "blue eyes"]);
+    again.enabled = Some(true); // 还是启用
+    update(&conn, id, &again).expect("改自己不该被 6 个上限挡住");
+    assert_eq!(get(&conn, id).unwrap().unwrap().tags.len(), 2);
+}
+
+/// 位置与启用要**真的落库、真的读回来**（存了读不回来就是白存）。
+#[test]
+fn 位置与启用能存能读() {
+    let conn = conn();
+    let mut one = input("摆位测试", &["1girl"]);
+    one.position = Some(" c3 ".to_string());
+    one.enabled = Some(true);
+    let id = create(&conn, &one).unwrap();
+    let card = get(&conn, id).unwrap().unwrap();
+    assert_eq!(card.position.as_deref(), Some(DEFAULT_POSITION));
+    assert!(card.enabled);
+    // 结构化形状里也要有（前端读的是它）
+    let json = card_json(&card);
+    assert_eq!(json["position"], DEFAULT_POSITION);
+    assert_eq!(json["enabled"], true);
+    // 清成自动
+    let mut auto = input("摆位测试", &["1girl"]);
+    auto.position = Some("auto".to_string());
+    auto.enabled = Some(false);
+    update(&conn, id, &auto).unwrap();
+    let card = get(&conn, id).unwrap().unwrap();
+    assert_eq!(card.position, None, "auto 要落成 NULL");
+    assert!(!card.enabled);
+    assert!(card_json(&card).get("position").is_none(), "空位置整键省略");
+}
+
+/// 合并保存（AI 那条路）**没提就不动**：别把用户开着的位置/启用悄悄抹掉。
+#[test]
+fn 合并保存没提位置与启用就保持原样() {
+    let conn = conn();
+    let mut one = input("合并测试", &["1girl"]);
+    one.position = Some("B2".to_string());
+    one.enabled = Some(true);
+    save(&conn, one).unwrap();
+    // 模型这一轮只说"再加个 tag"，位置与启用提都没提
+    let (id, created) = save(&conn, input("合并测试", &["red ribbon"])).unwrap();
+    assert!(!created);
+    let card = get(&conn, id).unwrap().unwrap();
+    assert_eq!(card.position.as_deref(), Some("B2"), "没提就该留着");
+    assert!(card.enabled, "没提就该留着（别把用户开着的关掉）");
+    assert_eq!(card.tags.len(), 2);
+}
+
+/// token 口径：只算**启用**的那些；未启用不占（框架原话）。
+#[test]
+fn token_口径只算启用的那些() {
+    let conn = conn();
+    let mut on = input("算数的", &["1girl", "cat ears", "pink hair"]);
+    on.negative = Some("bad hands".to_string());
+    on.enabled = Some(true);
+    create(&conn, &on).unwrap();
+    let mut off = input("不算数的", &["1boy", "black hair"]);
+    off.enabled = Some(false);
+    create(&conn, &off).unwrap();
+
+    let sum = summary(&conn).unwrap();
+    assert_eq!(sum.enabled_count, 1);
+    assert_eq!(sum.max_enabled, MAX_ENABLED);
+    assert_eq!(sum.prompt_limit, PROMPT_LIMIT);
+    assert!(sum.prompt_tokens > 0 && sum.prompt_tokens < 60, "三个英文 tag 不该几十个 token：{sum:?}");
+    assert!(sum.negative_tokens > 0);
+    // 网格与默认位置也由后端给（前端不许自己写死）
+    assert_eq!(sum.default_position, DEFAULT_POSITION);
+    assert_eq!(sum.grid_rows, vec!["A", "B", "C", "D", "E"]);
+    assert_eq!(sum.grid_cols, vec![1, 2, 3, 4, 5]);
+
+    // 把那张关掉 → 两个数都归零
+    // ⚠ 别用 `list(Some("算数的"))` 取 id：LIKE 会把「**不**算数的」那张也搜出来
+    //   （用例第一版就是这么红的：拿到别人的 id，改名撞唯一索引）。
+    let id = list(&conn, None, 10)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.name == "算数的")
+        .expect("找得到那张卡")
+        .id;
+    let mut all_off = input("算数的", &["1girl", "cat ears", "pink hair"]);
+    all_off.enabled = Some(false);
+    update(&conn, id, &all_off).unwrap();
+    let sum = summary(&conn).unwrap();
+    assert_eq!(sum.enabled_count, 0);
+    assert_eq!(sum.prompt_tokens, 0);
+    assert_eq!(sum.negative_tokens, 0);
+}
+
+/// token 估算那把尺子：英文按 `ceil(字符/4)`、中文每字 1 个、分隔符不占。
+#[test]
+fn token_估算的尺子() {
+    assert_eq!(estimate_tokens(""), 0);
+    assert_eq!(estimate_tokens("   , , "), 0, "分隔符与空白不占 token");
+    assert_eq!(estimate_tokens("1girl"), 2, "5 个 ASCII 字符 → ceil(5/4)");
+    assert_eq!(estimate_tokens("catears"), 2, "8 个 → 2");
+    assert_eq!(estimate_tokens("cat, ears"), 2, "两个词各自 ceil");
+    assert_eq!(estimate_tokens("白毛"), 2, "CJK 每字一个");
+    assert_eq!(estimate_tokens("白毛, blue eyes"), 2 + 2, "中英混排各自算");
+}
+

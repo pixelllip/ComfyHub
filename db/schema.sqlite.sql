@@ -388,6 +388,11 @@ CREATE TABLE IF NOT EXISTS character_cards (
   source             TEXT    NULL,              -- 来源：链接 / "用户口述" / "danbooru" …
   tags_verified_at   TEXT    NULL,              -- 最后一次跟 danbooru 核对 tag 的时间
   notes              TEXT    NULL,
+  -- 下面两列是 2026-09-30 按"生图角色卡"框架加的（用户给的框架：
+  -- 名称 / 提示词 / 排除词 / **位置**，外加"最多同时启用 6 个"）。
+  -- ⚠ 老库靠 `infra::db::ensure_columns` 的 ALTER 补上（收敛式建表语句**不给已存在的表补列**）。
+  position           TEXT    NULL,              -- 5×5 网格里的目标位置（`A1`~`E5`）；NULL = 自动（让 AI 摆）
+  enabled            INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),  -- 是否参与本次生成（≤6 个）
   created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   FOREIGN KEY (reference_media_id) REFERENCES media_assets(id) ON DELETE SET NULL
@@ -396,6 +401,8 @@ CREATE TABLE IF NOT EXISTS character_cards (
 CREATE UNIQUE INDEX IF NOT EXISTS uk_character_cards_norm ON character_cards(normalized);
 CREATE INDEX IF NOT EXISTS idx_character_cards_char_tag ON character_cards(character_tag);
 CREATE INDEX IF NOT EXISTS idx_character_cards_created  ON character_cards(created_at);
+-- 列表页按【参与本次生成的那几张】筛（最多 6 条），走索引就不用全表扫
+CREATE INDEX IF NOT EXISTS idx_character_cards_enabled  ON character_cards(enabled);
 
 -- ---------------------------------------------------------------------
 -- 工作流配方（W2，2026-09-26）：把一份**具体**工作流归纳成
@@ -731,4 +738,4 @@ BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', OLD.id, 'dele
 --   桌面上不看日志根本发现不了）—— 正是总纲 §21 那条静默故障的同一族。
 --   ⚠ 连带后果：`manifest.schemaVersion` 3 → 4，手机会按契约 §1 重走一次 bootstrap
 --   （`MobileSchema.VERSION` 得由手机那一侧跟着改，本仓库 android/** 不归这次改动）。
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;

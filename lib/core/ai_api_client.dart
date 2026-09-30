@@ -233,6 +233,13 @@ class AiApiClient {
 
   Future<void> deleteCharacterCard(int id) async => _send('DELETE', '/api/ai/character-cards/$id');
 
+  /// 角色卡的汇总口径（启用数 + token 估算）。
+  ///
+  /// ⚠ **token 是后端估的**（前端不重算）：这些模型走 CLIP 系分词器，两侧都没有它，
+  /// 各写一份估算必然漂 —— 尺子只有后端那一份（AGENTS §7 的两份实现纪律）。
+  Future<CharacterSummary> characterSummary() async => CharacterSummary.fromJson(
+      Map<String, dynamic>.from(await _get('/api/ai/character-cards/summary') as Map));
+
   // --- 工具与权限（M4） --------------------------------------------------
 
   Future<List<AiToolInfo>> listTools() async {

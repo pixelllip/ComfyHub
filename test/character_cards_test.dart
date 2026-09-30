@@ -43,6 +43,9 @@ void main() {
       };
 
   /// 假后端：记下每次请求，按路径回固定数据。
+  ///
+  /// ⚠ 列表之后页面还会问一条 `/summary`（启用数 + token 口径，**后端算的**）。
+  /// 假后端必须认它 —— 否则那条会走到"GET → 回卡片数组"的分支上去。
   ({MockClient client, List<String> calls, List<Map<String, dynamic>> bodies}) backend(
       List<Map<String, dynamic>> cards) {
     final calls = <String>[];
@@ -53,7 +56,19 @@ void main() {
         bodies.add(jsonDecode(req.body) as Map<String, dynamic>);
       }
       Object body;
-      if (req.method == 'GET') {
+      if (req.url.path.endsWith('/summary')) {
+        body = {
+          'enabledCount': cards.where((c) => c['enabled'] == true).length,
+          'maxEnabled': 6,
+          'promptTokens': 12,
+          'negativeTokens': 3,
+          'promptLimit': 512,
+          'negativeLimit': 512,
+          'defaultPosition': 'C3',
+          'gridRows': ['A', 'B', 'C', 'D', 'E'],
+          'gridCols': [1, 2, 3, 4, 5],
+        };
+      } else if (req.method == 'GET') {
         body = cards;
       } else if (req.method == 'POST') {
         body = {...(jsonDecode(req.body) as Map<String, dynamic>), 'id': 9};
@@ -92,7 +107,10 @@ void main() {
     ]);
     await pumpPage(tester, AiApiClient('http://127.0.0.1:8080', client: b.client));
 
-    expect(b.calls.single, 'GET /api/ai/character-cards');
+    // ⚠ 列表之后页面还会问一条 `/summary`（启用数 + token 口径，后端算的），所以只钉第一条与最后一条
+    expect(b.calls.first, 'GET /api/ai/character-cards');
+    expect(b.calls.last, 'GET /api/ai/character-cards/summary');
+    expect(find.textContaining('已启用 0/6'), findsOneWidget, reason: '顶部那条口径要画出来');
     expect(find.text('shinku（Shinku）'), findsOneWidget);
     expect(find.text('iroi（Iroi）'), findsOneWidget);
     expect(find.text('shinku_(nte) · neverness_to_everness · 别名 真红 · LoRA NTE(Anima).safetensors @0.7'),
@@ -112,7 +130,63 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, '搜索'));
     await tester.pumpAndSettle();
 
-    expect(b.calls.last, 'GET /api/ai/character-cards?q=%E7%9C%9F%E7%BA%A2');
+    expect(
+      b.calls.where((c) => c.contains('q=')).single,
+      'GET /api/ai/character-cards?q=%E7%9C%9F%E7%BA%A2',
+    );
+  });
+
+  /// 生图角色卡框架那一层：**✓ 启用开关**（最多 6 个）、**位置 5×5**（默认 C3）、
+  /// 以及顶部那行 token 口径 —— 用户 2026-09-30 要求"照文档的框架改"。
+  testWidgets('列表上有启用开关与位置，超了 6 个时报后端的原话', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final b = backend([
+      {...card(), 'enabled': true, 'position': 'B2'},
+      {...card(id: 2, name: 'iroi'), 'enabled': false},
+    ]);
+    await pumpPage(tester, AiApiClient('http://127.0.0.1:8080', client: b.client));
+
+    // 位置画出来了（没填的那张显示"自动"）
+    expect(find.text('位置 B2'), findsOneWidget);
+    expect(find.text('位置 自动'), findsOneWidget);
+    expect(find.textContaining('已启用 1/6'), findsOneWidget);
+
+    // 点第二张的 ✓ → PUT，而且 payload 里带的是**整张卡**（全量替换，少发字段会清掉用户的东西）
+    await tester.tap(find.byType(Checkbox).last);
+    await tester.pumpAndSettle();
+    final put = b.bodies.last;
+    expect(put['enabled'], true);
+    expect(put['name'], 'iroi');
+    expect(put['tagsVerifiedAt'], isNull, reason: '全量替换要把原卡的字段都带上');
+  });
+
+  testWidgets('编辑弹窗里有 5×5 位置网格，默认 C3 居中', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final b = backend([card()]);
+    await pumpPage(tester, AiApiClient('http://127.0.0.1:8080', client: b.client));
+
+    await tester.tap(find.byTooltip('更多操作').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('编辑'));
+    await tester.pumpAndSettle();
+
+    // 25 格齐全，而且说明里点了默认那一格
+    for (final cell in ['A1', 'A5', 'C3', 'E5']) {
+      expect(find.text(cell), findsOneWidget, reason: '网格里该有 $cell');
+    }
+    expect(find.text('自动'), findsOneWidget);
+
+    // 点 B4 再保存 → payload 里就是 B4
+    // ⚠ 弹窗内容比屏幕高（字段多），网格在下面 —— 必须先滚到可见处再点，
+    //   否则 tap 落在视口外，什么都不发生（第一版用例就是这么假绿的）。
+    await tester.ensureVisible(find.text('B4'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('B4'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    expect(b.bodies.last['position'], 'B4');
+    expect(b.bodies.last['enabled'], false, reason: '没勾启用就还是未启用');
   });
 
   testWidgets('新建发 POST 编辑发 PUT 且原样带回核对时间', (tester) async {

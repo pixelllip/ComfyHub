@@ -1348,6 +1348,10 @@ class CharacterCard {
   final String? source;
   final String? tagsVerifiedAt;
   final String? notes;
+  /// 5×5 网格里的目标位置（`A1`~`E5`）；null = 自动（让 AI 自己摆）。
+  final String? position;
+  /// 是否参与本次生成（后端限制同时启用最多 6 个）。
+  final bool enabled;
   final String? updatedAt;
 
   const CharacterCard({
@@ -1367,6 +1371,8 @@ class CharacterCard {
     this.source,
     this.tagsVerifiedAt,
     this.notes,
+    this.position,
+    this.enabled = false,
     this.updatedAt,
   });
 
@@ -1395,7 +1401,33 @@ class CharacterCard {
         source: _text(json['source']),
         tagsVerifiedAt: _text(json['tagsVerifiedAt']),
         notes: _text(json['notes']),
+        position: _text(json['position']),
+        enabled: json['enabled'] == true,
         updatedAt: _text(json['updatedAt']),
+      );
+
+  /// 复制一份但改几个字段（列表里的"启用/停用"开关用它——后端 `PUT` 是全量替换，
+  /// 少发字段就会把用户存的东西清掉，所以走 `toPayload()` 而不是只发 `enabled`）。
+  CharacterCard copyWith({String? position, bool? enabled}) => CharacterCard(
+        id: id,
+        name: name,
+        nameEn: nameEn,
+        aliases: aliases,
+        characterTag: characterTag,
+        seriesTag: seriesTag,
+        tags: tags,
+        negative: negative,
+        loraName: loraName,
+        loraWeight: loraWeight,
+        loraTrigger: loraTrigger,
+        checkpoint: checkpoint,
+        referenceMediaId: referenceMediaId,
+        source: source,
+        tagsVerifiedAt: tagsVerifiedAt,
+        notes: notes,
+        position: position ?? this.position,
+        enabled: enabled ?? this.enabled,
+        updatedAt: updatedAt,
       );
 
   /// 发给后端的字段（不带 id / 时间戳）。
@@ -1419,6 +1451,9 @@ class CharacterCard {
         // 核对时间是后端工具写的，界面不改它 → 编辑保存时**原样带回**
         'tagsVerifiedAt': tagsVerifiedAt,
         'notes': notes,
+        // 生图角色卡框架那两件（全量替换，所以必须一起带）
+        'position': position,
+        'enabled': enabled,
       };
 
   /// 一行摘要（列表卡片上给用户看的那句）。
@@ -1434,10 +1469,62 @@ class CharacterCard {
   }
 }
 
+/// 角色卡的**汇总口径**（`GET /api/ai/character-cards/summary`）。
+///
+/// 界面上那行「已启用 N/6 · 提示词 X/512 · 排除词 Y/512」的全部数字都来自这里 ——
+/// **前端不重算 token**（估算的尺子只有后端那一份，AGENTS §7 的两份实现纪律）。
+class CharacterSummary {
+  final int enabledCount;
+  final int maxEnabled;
+  final int promptTokens;
+  final int negativeTokens;
+  final int promptLimit;
+  final int negativeLimit;
+
+  /// 新建角色默认落在哪一格（界面上的 5×5 网格拿它当默认选中）。
+  final String defaultPosition;
+
+  /// 网格的行 / 列（界面照它画，别自己写死 5×5）。
+  final List<String> gridRows;
+  final List<int> gridCols;
+
+  const CharacterSummary({
+    this.enabledCount = 0,
+    this.maxEnabled = 6,
+    this.promptTokens = 0,
+    this.negativeTokens = 0,
+    this.promptLimit = 512,
+    this.negativeLimit = 512,
+    this.defaultPosition = 'C3',
+    this.gridRows = const ['A', 'B', 'C', 'D', 'E'],
+    this.gridCols = const [1, 2, 3, 4, 5],
+  });
+
+  factory CharacterSummary.fromJson(Map<String, dynamic> json) => CharacterSummary(
+        enabledCount: (json['enabledCount'] as num?)?.toInt() ?? 0,
+        maxEnabled: (json['maxEnabled'] as num?)?.toInt() ?? 6,
+        promptTokens: (json['promptTokens'] as num?)?.toInt() ?? 0,
+        negativeTokens: (json['negativeTokens'] as num?)?.toInt() ?? 0,
+        promptLimit: (json['promptLimit'] as num?)?.toInt() ?? 512,
+        negativeLimit: (json['negativeLimit'] as num?)?.toInt() ?? 512,
+        defaultPosition: (json['defaultPosition'] ?? 'C3').toString(),
+        gridRows: (json['gridRows'] as List?)?.map((e) => e.toString()).toList() ??
+            const ['A', 'B', 'C', 'D', 'E'],
+        gridCols: (json['gridCols'] as List?)?.map((e) => (e as num).toInt()).toList() ??
+            const [1, 2, 3, 4, 5],
+      );
+
+  /// 还放得下几个（界面据此决定开关能不能点）。
+  bool get full => enabledCount >= maxEnabled;
+
+  /// 一行口径（列表顶部那条）。
+  String get line =>
+      '已启用 $enabledCount/$maxEnabled · 提示词 $promptTokens/$promptLimit · 排除词 $negativeTokens/$negativeLimit';
+}
+
 // ---------------------------------------------------------------------------
 //  工具与权限（M4 / AIH-031 ~ AIH-036 / AIH-049）
 // ---------------------------------------------------------------------------
-
 /// 一个工具的生效权限（`GET /api/ai/tools`）。
 class AiToolInfo {
   final String name;

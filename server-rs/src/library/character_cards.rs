@@ -57,9 +57,89 @@ pub const MAX_NOTES_CHARS: usize = 4000;
 /// 搜索一次最多回几张卡（给模型看的，不是分页）。
 pub const MAX_SEARCH: usize = 50;
 
+/// **同时启用的上限**（生图角色卡框架：单次生成最多 6 个）。
+///
+/// 超了要**报错**，不许静默只取前 6 个 —— 用户以为 7 个人都在画面里、出图少一个，
+/// 那种"哪儿不对但说不上来"比一句错误难查得多。
+pub const MAX_ENABLED: usize = 6;
+
+/// 位置网格：5 行（A~E）× 5 列（1~5）。
+pub const GRID_ROWS: [char; 5] = ['A', 'B', 'C', 'D', 'E'];
+/// 位置网格的列号。
+pub const GRID_COLS: [u8; 5] = [1, 2, 3, 4, 5];
+/// 新建角色的默认位置（**完全居中**，框架里点名的那一格）。
+pub const DEFAULT_POSITION: &str = "C3";
+
+/// 位置是不是一个合法格子（`A1`~`E5`，大小写不敏感）。
+pub fn is_grid_cell(text: &str) -> bool {
+    let mut chars = text.trim().chars();
+    let (Some(row), Some(col), None) = (chars.next(), chars.next(), chars.next()) else {
+        return false;
+    };
+    let Some(col) = col.to_digit(10) else { return false };
+    GRID_ROWS.contains(&row.to_ascii_uppercase()) && GRID_COLS.contains(&(col as u8))
+}
+
+/// 位置归一化：`None` / 空 / `auto` / `自动` → `None`（= 让 AI 自己摆）；
+/// `c3` → `C3`；其余**报错并说清该填什么**（静默当自动就是"设了没用"）。
+pub fn normalize_position(raw: Option<&String>) -> Result<Option<String>, WriteError> {
+    let Some(text) = raw else { return Ok(None) };
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") || trimmed == "自动" {
+        return Ok(None);
+    }
+    if !is_grid_cell(trimmed) {
+        return Err(WriteError::Validation(format!(
+            "position「{trimmed}」不合法：要么留空 = 自动（让 AI 自己摆），\
+             要么给 5×5 网格里的一个格子（行 A~E、列 1~5，例如默认的 {DEFAULT_POSITION}）"
+        )));
+    }
+    Ok(Some(trimmed.to_ascii_uppercase()))
+}
+
+/// 提示词 / 排除词的 **token 估算**（界面上那行「本 X · 总 Y/512」用的同一把尺子）。
+///
+/// ⚠ 是**估算**、不是真分词：这些模型走 CLIP 系分词器，Dart 与 Rust 两侧都没有它。
+/// 尺子：ASCII 连续串按 `ceil(字符数 / 4)`（英文 tag 的经验值）、CJK 每字 1 个、
+/// 空白与分隔符 0 —— 只在"离 512 还有多远"这件事上有意义，别拿它当精确值。
+///
+/// **前端不许再写一份**（AGENTS §7 的两份实现纪律）：要显示就调 `GET /api/characters/summary`。
+pub fn estimate_tokens(text: &str) -> usize {
+    let mut total = 0usize;
+    let mut ascii_run = 0usize;
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '\'' || ch == '-' || ch == '_' || ch == '.' {
+            ascii_run += 1;
+            continue;
+        }
+        // 非 ASCII 字母（中文 / 日文假名 / 汉字）按 1 个 token 算
+        if !ch.is_whitespace() && !ch.is_ascii() {
+            total += 1;
+        }
+        if ascii_run > 0 {
+            total += ascii_run.div_ceil(4);
+            ascii_run = 0;
+        }
+    }
+    if ascii_run > 0 {
+        total += ascii_run.div_ceil(4);
+    }
+    total
+}
+
+/// 一张卡的提示词 token 估算（tag 栈拼起来算）。
+pub fn prompt_tokens_of(card: &CharacterCardDto) -> usize {
+    estimate_tokens(&card.tags.join(", "))
+}
+
+/// 一张卡的排除词 token 估算。
+pub fn negative_tokens_of(card: &CharacterCardDto) -> usize {
+    card.negative.as_deref().map(estimate_tokens).unwrap_or(0)
+}
+
 const BASE_SELECT: &str = "SELECT id, name, normalized, name_en, aliases, character_tag, series_tag, tags, negative, \
      lora_name, lora_weight, lora_trigger, checkpoint, reference_media_id, source, \
-     tags_verified_at, notes, created_at, updated_at FROM character_cards";
+     tags_verified_at, notes, position, enabled, created_at, updated_at FROM character_cards";
 
 /// 一张角色卡（`CharacterCardDto`）。
 ///
@@ -101,6 +181,11 @@ pub struct CharacterCardDto {
     pub tags_verified_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// 5×5 网格里的目标位置（`A1`~`E5`）；`None` = 自动（让 AI 摆）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    /// 是否参与本次生成（同时启用最多 [`MAX_ENABLED`] 个）
+    pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,6 +211,10 @@ pub struct CharacterCardInput {
     pub source: Option<String>,
     pub tags_verified_at: Option<String>,
     pub notes: Option<String>,
+    /// 目标位置（`A1`~`E5`）；`None` / `"auto"` / 空 = 自动
+    pub position: Option<String>,
+    /// `None` = **这次没提这件事**（合并时保留原值）；`Some(true/false)` = 明确要开/关。
+    pub enabled: Option<bool>,
 }
 
 impl CharacterCardInput {
@@ -269,6 +358,8 @@ fn row_to_card(row: &Row<'_>) -> rusqlite::Result<CharacterCardDto> {
         source: row.get("source")?,
         tags_verified_at: iso_time(verified.as_deref()),
         notes: row.get("notes")?,
+        position: row.get("position")?,
+        enabled: row.get::<_, Option<i64>>("enabled")?.unwrap_or(0) != 0,
         created_at: iso_time(created.as_deref()),
         updated_at: iso_time(updated.as_deref()),
     })
@@ -354,13 +445,47 @@ fn require_media_exists(conn: &Connection, media_id: Option<i64>) -> Result<(), 
     Ok(())
 }
 
+/// 现在**已经启用**了几张（`exclude` 是"正在改的这张"，它自己的旧值不算）。
+fn enabled_count(conn: &Connection, exclude: Option<i64>) -> Result<usize, WriteError> {
+    let count: i64 = match exclude {
+        Some(id) => conn.query_row(
+            "SELECT COUNT(*) FROM character_cards WHERE enabled = 1 AND id <> ?1",
+            params![id],
+            |row| row.get(0),
+        )?,
+        None => conn.query_row("SELECT COUNT(*) FROM character_cards WHERE enabled = 1", [], |row| {
+            row.get(0)
+        })?,
+    };
+    Ok(count.max(0) as usize)
+}
+
+/// 要启用时就检查 6 个上限（**报错而不是静默排掉**）。
+fn require_enabled_room(conn: &Connection, enabled: Option<bool>, exclude: Option<i64>) -> Result<bool, WriteError> {
+    let want = enabled.unwrap_or(false);
+    if !want {
+        return Ok(false);
+    }
+    let already = enabled_count(conn, exclude)?;
+    if already >= MAX_ENABLED {
+        return Err(WriteError::Validation(format!(
+            "已经启用了 {already} 个角色（上限 {MAX_ENABLED} 个）：先关掉一个再启用这个。\
+             没启用的角色**留在库里、不占 token**，不是删掉。"
+        )));
+    }
+    Ok(true)
+}
+
 pub fn create(conn: &Connection, input: &CharacterCardInput) -> Result<i64, WriteError> {
     let name = validate(input)?;
     require_media_exists(conn, input.reference_media_id)?;
+    let position = normalize_position(input.position.as_ref())?;
+    let enabled = require_enabled_room(conn, input.enabled, None)?;
     conn.execute(
         "INSERT INTO character_cards (name, normalized, name_en, aliases, character_tag, series_tag, \
          tags, negative, lora_name, lora_weight, lora_trigger, checkpoint, reference_media_id, \
-         source, tags_verified_at, notes) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+         source, tags_verified_at, notes, position, enabled) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
         params![
             name,
             normalize(&name),
@@ -378,6 +503,8 @@ pub fn create(conn: &Connection, input: &CharacterCardInput) -> Result<i64, Writ
             require_fits(input.source.as_ref(), 500, "来源")?,
             require_fits(input.tags_verified_at.as_ref(), 64, "核对时间")?,
             require_fits(input.notes.as_ref(), MAX_NOTES_CHARS, "备注")?,
+            position,
+            enabled as i64,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -387,11 +514,13 @@ pub fn create(conn: &Connection, input: &CharacterCardInput) -> Result<i64, Writ
 pub fn update(conn: &Connection, id: i64, input: &CharacterCardInput) -> Result<bool, WriteError> {
     let name = validate(input)?;
     require_media_exists(conn, input.reference_media_id)?;
+    let position = normalize_position(input.position.as_ref())?;
+    let enabled = require_enabled_room(conn, input.enabled, Some(id))?;
     let changed = conn.execute(
         "UPDATE character_cards SET name = ?1, normalized = ?2, name_en = ?3, aliases = ?4, \
          character_tag = ?5, series_tag = ?6, tags = ?7, negative = ?8, lora_name = ?9, \
          lora_weight = ?10, lora_trigger = ?11, checkpoint = ?12, reference_media_id = ?13, \
-         source = ?14, tags_verified_at = ?15, notes = ?16 WHERE id = ?17",
+         source = ?14, tags_verified_at = ?15, notes = ?16, position = ?17, enabled = ?18 WHERE id = ?19",
         params![
             name,
             normalize(&name),
@@ -409,6 +538,8 @@ pub fn update(conn: &Connection, id: i64, input: &CharacterCardInput) -> Result<
             require_fits(input.source.as_ref(), 500, "来源")?,
             require_fits(input.tags_verified_at.as_ref(), 64, "核对时间")?,
             require_fits(input.notes.as_ref(), MAX_NOTES_CHARS, "备注")?,
+            position,
+            enabled as i64,
             id,
         ],
     )?;
@@ -468,6 +599,13 @@ pub fn merge(existing: Option<&CharacterCardDto>, incoming: CharacterCardInput) 
         source: pick(incoming.source, existing.source.clone()),
         tags_verified_at: pick(incoming.tags_verified_at, existing.tags_verified_at.clone()),
         notes: pick(incoming.notes, existing.notes.clone()),
+        // 位置：这次没说就保留原值；说了 `"auto"` 这类**明确要清空**的写法照旧归一化
+        position: match incoming.position.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty()) {
+            Some(_) => incoming.position.clone(),
+            None => existing.position.clone(),
+        },
+        // 启用开关：`None` = 这次没提（保留原值，别把用户开着的关掉）
+        enabled: incoming.enabled.or(Some(existing.enabled)),
     }
 }
 
@@ -560,6 +698,15 @@ pub fn render_card(card: &CharacterCardDto) -> String {
     if let Some(notes) = card.notes.as_ref() {
         out.push_str(&format!("  备注: {}\n", clip(notes, 300)));
     }
+    // 生图角色卡框架那两件：位置（5×5 网格）与"参不参与本次生成"
+    out.push_str(&format!(
+        "  位置: {}（5×5 网格 A1~E5；自动 = 让 AI 自己摆）\n",
+        card.position.as_deref().unwrap_or("自动")
+    ));
+    out.push_str(&format!(
+        "  {}（同时启用上限 {MAX_ENABLED} 个；未启用不占 token）\n",
+        if card.enabled { "✓ 已启用：参与本次生成" } else { "未启用：留在库里待命" }
+    ));
     out.push_str(&format!("  更新于 {}\n", card.updated_at.as_deref().unwrap_or("?")));
     out
 }
@@ -612,6 +759,10 @@ pub fn card_json(card: &CharacterCardDto) -> Value {
     }
     if let Some(v) = card.notes.as_ref() {
         put("notes", Value::String(v.clone()));
+    }
+    put("enabled", Value::Bool(card.enabled));
+    if let Some(v) = card.position.as_ref() {
+        put("position", Value::String(v.clone()));
     }
     if let Some(v) = card.created_at.as_ref() {
         put("createdAt", Value::String(v.clone()));
@@ -707,6 +858,9 @@ pub fn tool_save(
         source: arg_str(arguments, "source"),
         tags_verified_at: if verified { Some(crate::tools::danbooru::now_iso()) } else { None },
         notes: arg_str(arguments, "notes"),
+        // 位置 / 启用：模型没提就 `None`（`merge` 会保留原值，别把用户开着的关掉）
+        position: arg_str(arguments, "position"),
+        enabled: arguments.get("enabled").and_then(Value::as_bool),
     };
     let (id, created) = state.write(|conn| save(conn, input)).map_err(api_failure)?;
     let card = state
@@ -758,6 +912,55 @@ fn api_failure(error: crate::web::routes::ApiError) -> crate::tools::tools::Tool
 //  路由
 // ---------------------------------------------------------------------------
 
+/// 主提示词 / 排除词的 token 上限（生图角色卡框架里的那个 512）。
+pub const PROMPT_LIMIT: usize = 512;
+
+/// 界面顶部那行「本 X · 总 Y/512」需要的全部数字（**服务端算，前端不重算**）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterSummary {
+    /// 现在启用了几张
+    pub enabled_count: usize,
+    pub max_enabled: usize,
+    /// **只算启用的那些**（未启用不占 token —— 框架原话）
+    pub prompt_tokens: usize,
+    pub negative_tokens: usize,
+    pub prompt_limit: usize,
+    pub negative_limit: usize,
+    /// 新建角色的默认位置（界面上的 5×5 网格拿它当选中格）
+    pub default_position: String,
+    /// 网格的行 / 列（界面照它画 5×5，别自己写死）
+    pub grid_rows: Vec<String>,
+    pub grid_cols: Vec<u8>,
+}
+
+/// 算一次汇总（启用数 + token 口径）。
+pub fn summary(conn: &Connection) -> rusqlite::Result<CharacterSummary> {
+    let sql = format!("{BASE_SELECT} WHERE enabled = 1 ORDER BY position IS NULL, position, id");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], row_to_card)?;
+    let mut enabled_count = 0usize;
+    let mut prompt_tokens = 0usize;
+    let mut negative_tokens = 0usize;
+    for row in rows {
+        let card = row?;
+        enabled_count += 1;
+        prompt_tokens += prompt_tokens_of(&card);
+        negative_tokens += negative_tokens_of(&card);
+    }
+    Ok(CharacterSummary {
+        enabled_count,
+        max_enabled: MAX_ENABLED,
+        prompt_tokens,
+        negative_tokens,
+        prompt_limit: PROMPT_LIMIT,
+        negative_limit: PROMPT_LIMIT,
+        default_position: DEFAULT_POSITION.to_string(),
+        grid_rows: GRID_ROWS.iter().map(|c| c.to_string()).collect(),
+        grid_cols: GRID_COLS.to_vec(),
+    })
+}
+
 pub fn router() -> Router<AppState> {
     // ⚠ 这里必须写 `axum::routing::get` 的全路径：本模块的仓储函数就叫
     // `get` / `list` / `create` / `update` / `delete`（与 Kotlin 同名同义），
@@ -767,10 +970,22 @@ pub fn router() -> Router<AppState> {
             "/api/ai/character-cards",
             axum::routing::get(list_cards).post(create_card),
         )
+        // ⚠ 这条**必须在 `{id}` 之前**声明：matchit 里静态段本来就比参数段优先，
+        //   排前面只是把这件事写在明处（`summary` 不会被当成一个 id）。
+        .route(
+            "/api/ai/character-cards/summary",
+            axum::routing::get(summary_cards),
+        )
         .route(
             "/api/ai/character-cards/{id}",
             axum::routing::get(get_card).put(update_card).delete(delete_card),
         )
+}
+
+/// `GET /api/ai/character-cards/summary` —— 启用数与 token 口径。
+async fn summary_cards(State(state): State<AppState>) -> Result<Json<CharacterSummary>, ApiError> {
+    let out = state.with(summary)?;
+    Ok(Json(out))
 }
 
 #[derive(Debug, Deserialize)]
