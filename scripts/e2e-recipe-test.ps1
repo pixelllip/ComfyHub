@@ -42,7 +42,8 @@ param(
 $ErrorActionPreference = 'Continue'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $WorkDir = Join-Path $ProjectRoot '.run\e2e-recipe'
-# 「用哪个后端」只有一个真源：与 server.ps1 / doctor 共读 scripts\backend.ps1（AGENTS §7）
+# 「用哪个后端」只有一个真源：`scripts\backend.ps1` 的 Resolve-Backend，
+# App 那份在 `lib\core\backend_paths.dart`（AGENTS §7，改顺序两边一起改）
 . (Join-Path $PSScriptRoot 'backend.ps1')
 
 $script:Pass = 0
@@ -101,7 +102,7 @@ Write-Host "后端：$($backend.Exe)（$($backend.Note)）" -ForegroundColor Dar
 # --- **构建新鲜度**：跑的必须是刚编出来的产物 -----------------------------
 # 不查这一条会得到假红的"e2e 抓到了 bug"：实测踩过 —— 改了源码没重编，
 # e2e 报的一堆 FAIL 全是**旧二进制**的行为（AGENTS §1 那条"改了但界面没变"的后端版）。
-# 判据与 `comfyhub.ps1 doctor` 用**同一个函数**（`Get-RustBuildFreshness`）。
+# 判据是 `scripts\backend.ps1` 的 `Get-RustBuildFreshness`（同一份函数）。
 $fresh = Get-RustBuildFreshness -Exe $backend.Exe -ProjectRoot $ProjectRoot
 if ($fresh -and $fresh.Stale) {
     Write-Host "后端产物比源码旧（exe $($fresh.ExeTime) < $($fresh.NewestSource.Name) $($fresh.NewestSource.LastWriteTime)）" -ForegroundColor Red

@@ -371,7 +371,10 @@ async fn preflight_warns_about_models_it_cannot_see_but_still_submits() {
     let warnings = outcome.payload["preflightWarnings"].as_array().expect("要带回警告");
     let joined = warnings.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("\n");
     assert!(joined.contains("anima-base-v1.0.safetensors"), "{joined}");
-    assert!(joined.contains("没有拦"), "{joined}");
+    // ⚠ 文案 2026-09-30 由用户自己精简过（去掉了"没有拦"三个字）——
+    //   "这一档不拦"这件事**由行为本身钉住**（上面那两条：提交照常发生、只提交一次），
+    //   这里不再断言具体措辞。
+    assert!(joined.contains("看不到 1 个模型文件"), "要说清数量：{joined}");
 
     gateway.abort();
     fixture.finish();
@@ -441,7 +444,8 @@ async fn the_audit_warns_but_still_submits_on_the_post_override_graph() {
     // 审核的非阻断结论进了 `preflightWarnings`（与"实例看不到模型文件"同一个通道）
     let warnings = outcome.payload["preflightWarnings"].as_array().expect("要带回警告");
     let joined = warnings.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("\n");
-    assert!(joined.contains("没有拦"), "{joined}");
+    // ⚠ 文案 2026-09-30 由用户自己精简过（去掉了"没有拦"）—— "不拦"这件事由上面那三条钉住
+    //   （返回 Ok、只提交一次、发出去的是覆盖后的图），这里只钉结论本身。
     assert!(joined.contains("Danbooru tag"), "提示词风格那一条要带回：{joined}");
     assert!(joined.contains("Krea 2"), "{joined}");
     assert!(joined.contains("🟠"), "非阻断的项用 🟠 标：{joined}");

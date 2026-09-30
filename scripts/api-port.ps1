@@ -2,12 +2,12 @@
     API 端口的**唯一解析入口**（2026-09-22，用户要求"不再显式指定端口、启动时自动挑一个"）。
 
     为什么需要这个文件：端口过去写死在 5 个地方，而且**互不知道** ——
-    `comfyhub.ps1`（探测）、`server.ps1`（启动）、`Config.kt`（默认值）、
+    后端（`api_port_file.rs` 写）、`settings_store.dart`（App 读）、
     `settings_store.dart`（App 连谁）、`capture_core.py`（ComfyUI 节点推给谁）。
-    `comfyhub.ps1` 甚至从来没把 `-Port` 透传给 `server.ps1`，所以只要有人动过一处，
+    过去各处各写各的端口，
     就会出现"后端明明在跑、脚本却说没起来"这种自相矛盾的现场。
 
-    现在只有一个真源：**后端绑好端口后写的 `<项目根>\.run\api.json`**（见 `ApiPortFile.kt`）。
+    现在只有一个真源：**后端绑好端口后写的 `<项目根>\.run\api.json`**（见 `api_port_file.rs`）。
     本文件负责把它读出来，并把优先级钉死：
 
         显式参数 -Port  >  环境变量 COMFYHUB_PORT  >  .run\api.json 里上次的端口  >  0（自动）
@@ -74,7 +74,7 @@ function Read-ApiPortState {
     }
 }
 
-<# 端口上有没有人在听（不依赖 server.ps1 里的实现，两边各自成立）。 #>
+<# 端口上有没有人在听（纯 .NET 实现，不依赖别的脚本）。 #>
 function Test-ApiPortListening {
     param(
         [int]$Port,
@@ -211,7 +211,7 @@ function Get-ExcludedTcpPortRange {
 <#
     写状态文件（**只有 `restart` 用它**）。
 
-    为什么需要它：`restart` = down + up，而 `down`（`server.ps1 stop`）会把这个文件删掉
+    为什么需要它：`restart` = stop + start，而 stop 会把这个文件删掉
     （后端已停，记录没意义）。但 down 与 up 之间有个真实竞态：
     被强杀的旧后端**可能刚好在那一刻跑完自己的收尾钩子**，让文件在"删掉之后"又冒出来 ——
     于是紧接着的 up 读到的是**旧记录**，bind 到刚刚释放、还没完全关闭的端口上，
@@ -254,10 +254,8 @@ function Write-ApiPortState {
 <#
     删掉状态文件（后端已停，记录就没意义了）。
 
-    ⚠️ 必须住在这里（api-port.ps1）而不是某个调用方：server.ps1 的 Do-Stop 也用它，
-    而 server.ps1 只 dot-source 本文件 —— 之前它只定义在 comfyhub.ps1 里，
-    单独跑 `server.ps1 stop/restart` 就会报
-    "Remove-ApiPortState is not recognized"（2026-09-22 实测，restart 当场断在 down）。
+    ⚠️ 读写删都住在这里（api-port.ps1），调用方只 dot-source 本文件 ——
+    各处各自为政写 `.run\api.json` 就会撞车（2026-09-22 实测）。
 #>
 function Remove-ApiPortState {
     param([string]$ProjectRoot)

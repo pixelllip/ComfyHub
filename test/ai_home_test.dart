@@ -579,12 +579,24 @@ void main() {
 
     // 四枚控件都还在（一个都没被丢掉），都在输入区里、没有被裁。
     // 窄屏是**图标**形态，所以按 tooltip 找（tooltip 里带着当前档位/模型名，信息没丢）
+    //
+    // 「模型选择」那条**按前缀找**：换一个 Provider 之后光看模型名认不出它是谁家的，
+    // 所以紧凑形态的 tooltip 额外带着来源（2026-10：工作台的模型按 Provider 分组，
+    // 来源要标出来）。那行来源跟着选中项变，逐字匹配会让这条用例一换 Provider 就红。
+    final modelTooltip = find.byWidgetPredicate(
+      (w) => w is Tooltip && (w.message ?? '').startsWith('当前模型：DeepSeek V4.1 Flash（文本 / 图片）'),
+    );
+    expect(
+      tester.widget<Tooltip>(modelTooltip).message,
+      contains('来源：本机网关'),
+      reason: 'tooltip 必须写出这个模型来自哪条 Provider',
+    );
     final controls = <String, Finder>{
       '添加附件': find.byTooltip('添加附件'),
       '权限档': find.byTooltip(
           '当前：${AiToolPolicy.modeFullLabel} —— AI 调用工具不会等你批准'
           '（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
-      '模型选择': find.byTooltip('当前模型：DeepSeek V4.1 Flash（文本 / 图片） —— 点一下换一个'),
+      '模型选择': modelTooltip,
       '思考强度': find.byTooltip(
           '不支持思考 —— 该模型未声明推理能力，请到「设置 → AI 模型」声明'),
     };

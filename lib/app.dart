@@ -108,13 +108,15 @@ class _StartupGateState extends State<StartupGate> {
     super.dispose();
   }
 
-  /// 关窗口时把**本地服务**停掉：`scripts\comfyhub.ps1 release`（只停后端，
-  /// 不碰 App 自己）。Windows 上这是唯一可靠的收尾时机 —— 模板 runner
+  /// 关窗口时把**本地服务**停掉：`BackendLauncher.releaseOnExit()` ——
+  /// 它 kill 的是**这次由 App 拉起来的那个后端进程**（以前是调
+  /// `scripts\comfyhub.ps1 release`，那条脚本链路 2026-09-30 已删）。
+  /// Windows 上这是唯一可靠的收尾时机 —— 模板 runner
   /// （windows\runner\flutter_window.cpp:50-70）把窗口消息交给引擎，
   /// WM_CLOSE 会被转成 onExitRequested；而 detach / dispose 之后 Dart 侧已经
   /// 不适合再起子进程（onDetach 在桌面端也不可靠，注册它反而可能在启动时就误触发）。
   ///
-  /// 无论脚本成功、失败还是没有，都必须返回 exit：绝不能让 App 关不掉。
+  /// 无论停没停成，都必须返回 exit：绝不能让 App 关不掉。
   Future<AppExitResponse> _onExitRequested() async {
     final launcher = _launcher;
     if (launcher != null && (_settings?.stopServicesOnExit ?? false)) {
@@ -165,7 +167,7 @@ class _StartupGateState extends State<StartupGate> {
     }
     // 安卓（以及任何非 Windows 平台）**没有"本地服务"这回事**：手机连的是桌面端
     // 的后端（配对而来），桌面离线时聊天页自己会如实报错。把 Windows 那套
-    // "pwsh 拉起后端"的启动页搬上来只会白挡一屏（用户 bug 2026-09-28：
+    // "App 拉起后端"的启动页搬上来只会白挡一屏（用户 bug 2026-09-28：
     // "安卓启动时会显示 Windows 的加载界面，但是没有用"）—— 直接跳过进主界面。
     if (kIsWeb || !Platform.isWindows) {
       launcher.skip();
@@ -249,8 +251,8 @@ class _StartupView extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '正在自动准备本地服务：数据库（本地 SQLite 文件）→ Kotlin 后端。'
-                  '首次启动或需要构建后端时会慢一些。',
+                  '正在自动准备本地服务：数据库（本地 SQLite 文件）→ Rust 后端。'
+                  '后端由 App 自己直接启动，不再需要 PowerShell。',
                   style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
                 ),
                 const SizedBox(height: 16),

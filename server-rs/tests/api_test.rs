@@ -4927,6 +4927,79 @@ async fn scripted_tool_gateway(
     (format!("http://{addr}/v1"), handle)
 }
 
+/// 脚本化假网关（`openai-responses`，思考模式）：**第 2 轮起必须看见 `reasoning` 项**，
+/// 看不见就照那家上游的原话回 400 —— 这正是 2026-10 用户撞上的那条：
+/// `The reasoning_text in the thinking mode must be passed back to the API.`
+///
+/// 返回 `(base_url, 记录到的每一轮请求体)`：第 2 份就是"工具结果回填"那次，
+/// 用例直接断言它的形状（`reasoning` 项在 `function_call` 之前、里面是 `reasoning_text`）。
+async fn reasoning_echo_gateway() -> (
+    String,
+    tokio::task::JoinHandle<()>,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let recorder = seen.clone();
+    let handle = tokio::spawn(async move {
+        let mut round = 0usize;
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { break };
+            round += 1;
+            let recorder = recorder.clone();
+            tokio::spawn(async move {
+                // 只读一次：请求体不大（测试用的系统提示 + 两轮历史），一次 read 够判断
+                let mut buf = vec![0u8; 512 * 1024];
+                let n = socket.read(&mut buf).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                recorder.lock().unwrap().push(request.clone());
+                if round >= 2 && !request.contains("reasoning_text") {
+                    let body = r#"{"error":{"message":"The `reasoning_text` in the thinking mode must be passed back to the API.","type":"invalid_request_error"}}"#;
+                    let _ = socket
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                                body.len()
+                            )
+                            .as_bytes(),
+                        )
+                        .await;
+                    let _ = socket.shutdown().await;
+                    return;
+                }
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
+                    .await;
+                let frames: Vec<&str> = if round == 1 {
+                    vec![
+                        r#"{"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}"#,
+                        r#"{"type":"response.reasoning_text.delta","delta":"先看看技能"}"#,
+                        r#"{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"list_skills","arguments":""}}"#,
+                        r#"{"type":"response.function_call_arguments.delta","output_index":1,"item_id":"item_1","delta":"{}"}"#,
+                        r#"{"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}"#,
+                    ]
+                } else {
+                    vec![
+                        r#"{"type":"response.output_text.delta","delta":"收口了"}"#,
+                        r#"{"type":"response.completed","response":{"id":"resp_2","status":"completed","usage":{"input_tokens":9,"output_tokens":3,"total_tokens":12}}}"#,
+                    ]
+                };
+                for frame in frames {
+                    if socket.write_all(format!("data: {frame}\n\n").as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let _ = socket.flush().await;
+                }
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{addr}"), handle, seen)
+}
+
 /// 起一个 Run 并等它收尾（工具类用例的公共开头）。
 async fn start_run_and_wait(
     state: &comfyhub_server_rs::routes::AppState,
@@ -5049,6 +5122,83 @@ async fn executor_runs_a_tool_round_trip_and_orders_the_parts() {
     assert_eq!(calls[0]["name"], "list_skills");
     assert_eq!(calls[0]["status"], "ok");
     assert_eq!(calls[0]["approval"], "not_required");
+
+    gateway.abort();
+}
+
+/// **思考必须逐轮回传**（`openai-responses`，2026-10 的真实 400）：
+/// 工具结果回填的**第二次请求**必须带上这一轮产出的 `reasoning` 项，否则上游回
+/// `The reasoning_text in the thinking mode must be passed back to the API.`、整条 Run 变红。
+///
+/// 协议层单测（`responses_reasoning_round_trip`）只证明适配器**会**铺这个项；
+/// 这里证明**执行器真的把这一轮的思考交了出来**（按轮采集、历史不丢），
+/// 而且思考照旧落成有序块、**不混进正文**。
+#[tokio::test]
+async fn responses_run_echoes_each_round_reasoning_or_the_upstream_400s() {
+    let (base_url, gateway, seen) = reasoning_echo_gateway().await;
+    let state = state();
+    seed_provider_and_model(&state);
+    // 只换协议：夹具那条 provider 是 `openai-completions`，这条 Bug 只出在 responses 上
+    state
+        .write(|tx| {
+            tx.execute("UPDATE ai_providers SET api = 'openai-responses' WHERE id = 'goat'", [])?;
+            Ok(())
+        })
+        .unwrap();
+    point_at_gateway(&state, &base_url);
+
+    let (_, assistant_id, run) = start_run_and_wait(&state, "看看有哪些技能").await;
+    assert_eq!(
+        run["status"], "completed",
+        "第 2 轮没带 reasoning 项的话，假网关照上游原话回 400、Run 会失败：{run}"
+    );
+
+    let bodies = seen.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 2, "两轮上游请求：要工具 → 回填工具结果后收口");
+    assert!(
+        !bodies[0].contains("reasoning_text"),
+        "第一轮没有历史思考可回传，不许凭空造一个：{}",
+        bodies[0]
+    );
+    let second = &bodies[1];
+    assert!(second.contains(r#""type":"reasoning""#), "第二轮必须带 reasoning 项：{second}");
+    assert!(second.contains(r#""type":"reasoning_text""#), "内容块是 reasoning_text：{second}");
+    assert!(second.contains("先看看技能"), "回传的是**这一轮**的思维链原文：{second}");
+    let reasoning_at = second.find(r#""type":"reasoning""#).unwrap();
+    let call_at = second.find(r#""type":"function_call""#).unwrap();
+    assert!(reasoning_at < call_at, "reasoning 项要排在同一轮 function_call 之前：{second}");
+    // 调用 id 的**一致性**才是上游要的：无状态 API 靠它把 `function_call` 与
+    // `function_call_output` 配起来（两个条目我们都发，所以自洽）。
+    // ⚠ 目前取的是参数分片里的 `item_id`（`output_item.added` 里的真 `call_id` 会被它盖掉，
+    //    见 `OpenAiResponsesAdapter::interpret`）—— 这条断言只钉"两边一致"这个事实，
+    //    不钉具体取值：改它要单独评估（`ToolCallAccumulator` 三家协议共用）。
+    assert_eq!(
+        second.matches(r#""call_id":"item_1""#).count(),
+        2,
+        "function_call 与 function_call_output 必须带同一个调用 id：{second}"
+    );
+
+    // 界面上：思考落成块、顺序 = 事情发生的顺序，而且**正文里没有思考**（R6）
+    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let assistant = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == assistant_id.as_str())
+        .unwrap();
+    assert_eq!(assistant["text"], "收口了");
+    assert!(
+        !assistant["text"].as_str().unwrap().contains("先看看技能"),
+        "思考段不许混进正文：{assistant}"
+    );
+    let kinds: Vec<&str> = assistant["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, vec!["reasoning", "tool_call", "tool_result", "text"], "{assistant}");
+    assert_eq!(assistant["parts"][0]["text"], "先看看技能");
 
     gateway.abort();
 }
@@ -8001,6 +8151,69 @@ fn configure_shared_output(state: &comfyhub_server_rs::routes::AppState, root: &
             Ok(())
         })
         .unwrap();
+}
+
+/// **投放要跟着实例报出来的那份 input 走**（2026-09-30 那个 `400 Invalid image file` 的回归线）。
+///
+/// 起实例时挂哪个 input 有两处来源（调用方写的 `--input`、ComfyHub 补的 `--input-directory`），
+/// 光看配置推不出来。所以投放工具会**问一次实例**：拿它 `/object_info/LoadImage` 的候选名单
+/// 去比对候选目录，覆盖得最多的那个就是它在读的 input。
+///
+/// 这一条钉的是**那条 HTTP 路径真的接通了**：`LoadImage.input.required.image[0]` 的解析、
+/// 目录归属判定、以及结果里的 `inputDirSource`（诊断用 —— 投错目录时先看它）。
+#[tokio::test]
+async fn 投放要问实例它到底在读哪个_input() {
+    let state = state();
+    let root = state.project_root();
+    configure_shared_output(&state, &root);
+    let input = root.join("shared").join("input");
+    // 实例的名单里放一个**只在配置那份额 input 里才有**的文件 —— 探到它就说明找到了正主。
+    // （真机上的判据就是这个：安装目录那份与共享那份有一批文件是不重叠的。）
+    std::fs::write(input.join("only-in-shared-00000001.png"), b"x").unwrap();
+
+    let info: &'static str = Box::leak(
+        serde_json::json!({
+            "LoadImage": { "input": { "required": {
+                "image": [["only-in-shared-00000001.png", "example.png"], {}]
+            } } }
+        })
+        .to_string()
+        .into_boxed_str(),
+    );
+    let (base, gateway) = fake_comfy_full(r#"{}"#, b"", info).await;
+    // 让这个状态指向假实例（`configure_shared_output` 里写的是连不上的 127.0.0.1:9）
+    state
+        .write(|tx| {
+            tx.execute(
+                "UPDATE app_settings SET v = json_set(v, '$.comfyUrl', ?1) WHERE k = 'capture.config'",
+                rusqlite::params![base],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let source = root.join("ai-attachments").join("att-probe.png");
+    write_test_png(&source, 64, 48);
+    seed_attachment(&state, "att-probe", "参考图.png", "image");
+
+    let out = call_tool(&state, "comfy_use_attachment", serde_json::json!({ "attachmentId": "att-probe" }))
+        .await
+        .unwrap();
+    assert_eq!(
+        out.payload["inputDir"],
+        input.display().to_string(),
+        "探到实例读的就是这一份"
+    );
+    assert_eq!(out.payload["inputDirSource"], "instance", "来路要如实标出来：{}", out.payload);
+    assert!(out.payload.get("inputDirNote").is_none(), "两边一致时不该有 note");
+    let filename = out.payload["filename"].as_str().unwrap();
+    assert!(input.join(filename).is_file(), "要真的落盘：{}", input.join(filename).display());
+
+    // ⚠ **"实例说的那一份与我们推的那一份不一致"** 那半不在这里测：探测只能返回**候选里**的一个，
+    //   而候选来自配置 / Desktop 配置 / 盘探 —— 要造出"候选第二名胜出"就得动用户的真实
+    //   `%APPDATA%\Comfy Desktop`（测试不许碰）。那半是纯函数
+    //   `image_edit::tests::实例说的_input_覆盖我们按配置推的那份` 的活。
+    gateway.abort();
 }
 
 #[tokio::test]

@@ -50,10 +50,10 @@ class AiProviderSettingsPage extends StatefulWidget {
   State<AiProviderSettingsPage> createState() => _AiProviderSettingsPageState();
 }
 
-/// 窄屏（手机）上这一页的三块内容 —— **一次只显示一块、各自整屏**。
+/// 窄屏（手机）上这一页的两块内容 —— **一次只显示一块、各自整屏**。
 ///
 /// 理由见 `_buildNarrow` 的注释：手机上不做上下分屏，点进去就是子界面。
-enum _NarrowPane { list, detail, maintenance }
+enum _NarrowPane { list, detail }
 
 class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   late AiApiClient _api;
@@ -78,19 +78,19 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   String? _error;
   String? _info;
 
-  /// 内置模型目录的状态（只读预览，打开页面时拉一次）。
-  AiBuiltinCatalogStatus? _builtin;
-  bool _builtinBusy = false;
-
-  /// 模型能力目录的在线更新状态（custom > remote > 内置，2026-09-23）。
+  /// 模型能力目录的在线状态（models.dev，2026-09-23）。
+  ///
+  /// ⚠ **全局一份，但只显示在选中的那条 Provider 详情里**（用户 2026-10：
+  /// 「模型能力目录区域占用窗口区域太大，改成嵌在具体 provider 信息里」）。
+  /// 以前它是页顶两张常驻卡片之一，与"这条 Provider 是什么"毫无关系，却占掉半屏。
   AiCapabilityStatus? _cap;
   bool _capBusy = false;
   bool _probeBusy = false;
 
   /// **窄屏（手机）当前显示哪一块**。桌面用不上它（那边是左右分栏）。
   ///
-  /// 见 [`_buildNarrow`]：手机上"列表 / 详情 / 维护"各自整屏，一次只显示一块 ——
-  /// 用 `enum` 而不是 `Navigator.push`，是为了让三块共用同一份 `State`
+  /// 见 [`_buildNarrow`]：手机上"列表 / 详情"各自整屏，一次只显示一块 ——
+  /// 用 `enum` 而不是 `Navigator.push`，是为了让两块共用同一份 `State`
   /// （推成独立路由的话，父级 `setState` 不会重建它，卡片状态会停在推入那一刻）。
   _NarrowPane _pane = _NarrowPane.list;
 
@@ -109,7 +109,6 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     // 真正的加载仍然放到首帧之后（与以前一致：不在 build 期间 setState）
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _reload();
-      _loadBuiltin();
       _loadCapabilityCatalog();
     });
   }
@@ -117,18 +116,6 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   @override
   void dispose() {
     super.dispose();
-  }
-
-  /// 内置目录状态：拉不到只影响这张卡（要如实显示失败原因，不能静默）。
-  Future<void> _loadBuiltin() async {
-    try {
-      final status = await _api.builtinStatus();
-      if (mounted) setState(() => _builtin = status);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _builtin = AiBuiltinCatalogStatus(error: '$e'));
-      }
-    }
   }
 
   /// 能力目录状态：拉不到如实显示在卡上。
@@ -287,15 +274,24 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   }
 
   Future<void> _select(AiProvider? p) async {
+    // ⚠ **用清单里那一份，不要用调用方手里那个对象**（用户 2026-10 报的 bug：
+    // 「初始化填写完密钥之后，provider 会显示未填写密钥，但是实际已经填入」）。
+    //
+    // 新建 / 编辑的返回值里，`credential` 是后端**回读那一刻**算出来的 ——
+    // 那时密钥还没存（`insert_provider` / `update_provider` 都在 `PUT credentials` 之前
+    // 就回读了）。页面拿它当"当前选中项"，于是刚填进去的 key 在详情里显示成"未配置"，
+    // 而 [credential_store] 里明明有那把。`_reload()` 是在存完密钥之后跑的，
+    // 所以按 id 取回来的那一份才是最新的。
+    final fresh = p == null ? null : _providers.where((e) => e.id == p.id).firstOrNull ?? p;
     setState(() {
-      _selected = p;
+      _selected = fresh;
       _models = const [];
       _info = null;
       _error = null;
     });
-    if (p != null) {
+    if (fresh != null) {
       try {
-        _models = await _store.listModels(p.id);
+        _models = await _store.listModels(fresh.id);
       } catch (e) {
         setState(() => _error = '$e');
       }
@@ -342,6 +338,15 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
             models: _models,
             info: _info,
             error: _error,
+            // 「模型能力目录」**嵌在这一条 Provider 的详情里**（2026-10 用户要求）：
+            // 它以前是与 Provider 无关的两张常驻卡，页顶就吃掉半屏。
+            capability: _cap,
+            capabilityBusy: _capBusy,
+            probeBusy: _probeBusy,
+            onRefreshCapability: _loading ? null : _loadCapabilityCatalog,
+            onUpdateCapabilityRemote: _refreshCapabilityCatalog,
+            onProbeToggle: _toggleProbe,
+            onProbe: _probeThinkingLadders,
             onEdit: () => _editProvider(_selected!),
             onChanged: (msg) async {
               setState(() => _info = msg);
@@ -368,24 +373,6 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         children: [
           // 没有选中 Provider 时，错误也要看得见（新建失败最常发生在这种情况下）
           if (_error != null) _errorBanner(theme),
-          // 内置模型目录（M6）：冻结副本 → 库里的对齐入口，永远可见
-          //
-          // ⚠ 这两张卡（+ 上面的错误横幅）在手机上会占掉大半屏。桌面窗口够高，
-          // 但为了不让"窗口被拖小"时也画到屏幕外，这里给一个**高度上限**并让它自己滚
-          // （真机验收实测过 `BOTTOM OVERFLOWED BY 57 PIXELS` 就是这么来的）。
-          ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * 0.42,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                children: [
-                  _builtinCard(),
-                  _capabilityCard(),
-                ],
-              ),
-            ),
-          ),
           Expanded(
             child: Row(
               children: [
@@ -425,7 +412,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         ),
       );
 
-  /// **手机上的这一页**：三块内容各自**整屏**，带返回箭头，一次只显示一块。
+  /// **手机上的这一页**：两块内容各自**整屏**，带返回箭头，一次只显示一块。
   ///
   /// 用户反馈原话："上下分屏难受，而且有些东西在手机上应该表现为子界面。"
   /// 所以：
@@ -433,11 +420,10 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   /// | 面板 | 里面是什么 | 怎么进出 |
   /// | --- | --- | --- |
   /// | `list` | Provider 一览（主界面）+ 新建 | 点某一条 → `detail` |
-  /// | `detail` | 密钥 / 模型目录 / 连接测试 | 左上角返回 |
-  /// | `maintenance` | 「模型目录维护」那两张卡 | 右上角扳手 → 返回 |
+  /// | `detail` | 密钥 / 模型目录 / 能力目录 / 连接测试 | 左上角返回 |
   ///
-  /// ⚠ **刻意不 `Navigator.push` 开新路由**：三块共用同一份 `State`
-  /// （`_builtin` / `_cap` / `_models` / `_error` 全在这里）。推成独立路由之后，
+  /// ⚠ **刻意不 `Navigator.push` 开新路由**：两块共用同一份 `State`
+  /// （`_cap` / `_models` / `_error` 全在这里）。推成独立路由之后，
   /// 父级 `setState` **不会**重建那个路由 —— 卡片上的状态会停在推入那一刻，
   /// 表现是"东西明明加载完了却还显示空的、改完不回显"。一个 `enum` 就没有这个缝。
   Widget _buildNarrow(ThemeData theme) {
@@ -457,31 +443,6 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         );
 
     switch (pane) {
-      case _NarrowPane.maintenance:
-        return withBackGuard(
-          Scaffold(
-            appBar: AppBar(
-              leading: IconButton(
-                tooltip: '返回',
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => setState(() => _pane = _NarrowPane.list),
-              ),
-              title: const Text('模型目录维护'),
-            ),
-            body: SingleChildScrollView(
-              child: Column(
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
-                    child: Text('这两件事都在电脑上做更合适：给模型补能力声明、实测校准思考档位（后者会发真实请求、可能产生少量费用）。'),
-                  ),
-                  _builtinCard(),
-                  _capabilityCard(),
-                ],
-              ),
-            ),
-          ),
-        );
       case _NarrowPane.detail:
         final provider = _selected!;
         return withBackGuard(
@@ -508,6 +469,14 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
                     models: _models,
                     info: _info,
                     error: _error,
+                    // 与桌面同一处：能力目录嵌在这条 Provider 的详情里
+                    capability: _cap,
+                    capabilityBusy: _capBusy,
+                    probeBusy: _probeBusy,
+                    onRefreshCapability: _loading ? null : _loadCapabilityCatalog,
+                    onUpdateCapabilityRemote: _refreshCapabilityCatalog,
+                    onProbeToggle: _toggleProbe,
+                    onProbe: _probeThinkingLadders,
                     onEdit: () => _editProvider(provider),
                     onChanged: (msg) async {
                       setState(() => _info = msg);
@@ -524,11 +493,6 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           appBar: AppBar(
             title: const Text('AI 模型与凭据'),
             actions: [
-              IconButton(
-                tooltip: '模型目录维护',
-                icon: const Icon(Icons.tune),
-                onPressed: () => setState(() => _pane = _NarrowPane.maintenance),
-              ),
               IconButton(
                 tooltip: 'AI 工具权限',
                 icon: const Icon(Icons.shield_outlined),
@@ -559,95 +523,6 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
             ],
           ),
         );
-    }
-  }
-
-  /// 「内置模型目录」卡片（桌面平铺 / 手机折叠项里都用这一个，免得两处漂移）。
-  Widget _builtinCard() => _BuiltinCatalogCard(
-        status: _builtin,
-        busy: _builtinBusy,
-        onRefresh: _loading ? null : _loadBuiltin,
-        onAlignCapabilities: _alignBuiltinCapabilities,
-        onAddMissing: _addMissingBuiltinModels,
-      );
-
-  /// 「模型能力目录」卡片（同上）。
-  Widget _capabilityCard() => _CapabilityCatalogCard(
-        status: _cap,
-        busy: _capBusy,
-        probeBusy: _probeBusy,
-        onRefreshStatus: _loading ? null : _loadCapabilityCatalog,
-        onUpdateRemote: _refreshCapabilityCatalog,
-        onProbeToggle: _toggleProbe,
-        onProbe: _probeThinkingLadders,
-      );
-
-  /// 内置模型目录（M6）。
-  ///
-  /// 顺序不能颠倒：**先 GET status 预览 → 让用户确认 → 再 POST sync**。
-  /// 直接 POST 等于不问就改库里的能力声明。
-  Future<void> _alignBuiltinCapabilities() async {
-    final AiBuiltinCatalogStatus status;
-    try {
-      status = await _api.builtinStatus();
-    } catch (e) {
-      _notify('读取内置目录状态失败：$e', error: true);
-      return;
-    }
-    if (!mounted) return;
-    if (!status.ok) {
-      _notify('内置目录不可用：${status.error}', error: true);
-      return;
-    }
-    final count = status.divergentCount;
-    if (count == 0) {
-      _notify('内置目录与库里的能力声明已经一致，不需要对齐。');
-      setState(() => _builtin = status);
-      return;
-    }
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('用内置目录对齐模型能力？'),
-        content: Text(
-          '会按内置目录（版本 ${status.version}）重写 $count 个模型的能力声明：'
-          '输入模态、工具 / 推理能力、思考档位、思考方言与上下文。\n\n'
-          '不会新增或删除模型，也不会改展示名与启用状态。',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('对齐')),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    await _syncBuiltin('refresh-capabilities');
-  }
-
-  /// 补齐缺失模型：纯新增，不改已有行，所以不必弹确认框。
-  Future<void> _addMissingBuiltinModels() => _syncBuiltin('add-missing');
-
-  Future<void> _syncBuiltin(String mode) async {
-    setState(() => _builtinBusy = true);
-    try {
-      final result = await _api.syncBuiltinCatalog(mode: mode);
-      if (!mounted) return;
-      setState(() => _builtin = result);
-      if (!result.ok) {
-        _notify('同步失败：${result.error}', error: true);
-      } else if (mode == 'add-missing') {
-        _notify('已补齐 ${result.added} 个缺失模型（保留 ${result.kept} 个已有一致的模型）。');
-      } else {
-        _notify('已对齐 ${result.updated} 个模型的能力声明。');
-      }
-      // 库里的模型变了，右侧的模型目录要跟着刷新
-      await _reload();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _builtin = AiBuiltinCatalogStatus(error: '$e'));
-      _notify('同步失败：$e', error: true);
-    } finally {
-      if (mounted) setState(() => _builtinBusy = false);
     }
   }
 
@@ -685,54 +560,84 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         'displayName': draft.displayName,
         'api': draft.api.wire,
         'baseURL': draft.baseURL,
-        'credentialRef': draft.credentialRef,
-        // 不选就是 null，交给后端按地址推断（公网 / 本机），避免"默认只允许本机"把公网地址挡掉
-        'endpointTrust': draft.trust?.wire,
+        // 凭据引用名**由程序决定**（用户看不见它，所以不该问他）：Provider ID 全大写 + `_API_KEY`。
+        'credentialRef': defaultCredentialRef(draft.id),
+        // ⚠ **不发端点信任级别**：它由软件按地址自己判（桌面后端 `EndpointTrust.infer`；
+        //    手机侧存默认值，且手机侧根本不读这个字段 —— 见 `ProviderJson` 的注释）。
+        //    实测过的坑：硬塞一个"仅本机"会让公网地址当场被后端拒绝，而错误看不见。
       });
+      // 对话框里填了密钥就顺手存上（"填完就能用"）；留空不算错，详情页还能补。
+      final saved = await _saveDialogKey(created, draft.apiKey);
       await _reload();
       await _select(created);
       // 手机上建完直接进它的详情（不然用户还得在列表里再找一遍刚建的那条）
       if (mounted && MediaQuery.sizeOf(context).width < 900) {
         setState(() => _pane = _NarrowPane.detail);
       }
-      _notify('已创建 Provider「${created.displayName}」，接下来可以填 API Key 和模型目录。');
+      _notify(saved
+          ? '已创建 Provider「${created.displayName}」，API Key 已保存。'
+          : '已创建 Provider「${created.displayName}」，接下来可以填 API Key 和模型目录。');
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
       _notify('创建失败：$e', error: true);
     }
   }
 
+  /// 对话框里那一栏密钥：填了就存，留空返回 `false`（不是错误）。
+  ///
+  /// 存密钥失败**只提示、不撤销 provider** —— provider 本身已经建好了，
+  /// 把用户刚填的一整份配置连同 provider 一起丢掉，比"密钥没存上"糟得多。
+  Future<bool> _saveDialogKey(AiProvider provider, String key) async {
+    if (key.trim().isEmpty) return false;
+    try {
+      await _credentials.save(provider, key);
+      return true;
+    } catch (e) {
+      _notify('Provider 已保存，但 API Key 没存上：$e', error: true);
+      return false;
+    }
+  }
+
   /// **编辑一条已有的**（用户要的"改个 baseURL"）。
   ///
-  /// 三条与桌面 POST/PUT 对齐的纪律：
+  /// 四条与桌面 POST/PUT 对齐的纪律：
   ///  1. **ID 不给改**（对话框里锁住）：桌面 `PUT` 的判据是"body 里的 id 不许与路径不同"，
   ///     `POST` 撞到已存在的 id 直接报"Provider ID 已存在"；
   ///  2. **带 revision 提交**（乐观锁 AIH-007）：手机侧库里只有一个写者，但**语义照旧** ——
   ///     桌面那份清单可能同时被别的窗口改过，而两端看到的错误要是同一句话；
-  ///  3. 提交走 [_store]（手机 = 本机库，**不出网**）。
+  ///  3. 提交走 [_store]（手机 = 本机库，**不出网**）；
+  ///  4. **凭据引用名沿用原值**（老行可能是别的名字）：它跟着 ID 重推等于换了一把钥匙的
+  ///     槽位 —— 用户已经存好的密钥会**当场失效**，而界面上只会看到"未配置"。
   Future<void> _editProvider(AiProvider p) async {
     final draft = await showDialog<_ProviderDraft>(
       context: context,
       builder: (_) => _ProviderDialog(existing: p),
     );
     if (draft == null) return;
+    final existingRef = (p.credentialRef ?? '').trim();
     try {
       final updated = await _store.updateProvider(AiProvider(
         id: p.id,
         displayName: draft.displayName,
         api: draft.api.wire,
         baseURL: draft.baseURL,
-        credentialRef: draft.credentialRef,
-        // 用户在对话框里选了信任档就用它；选「自动」就保持原来那个值
-        // （手机侧**不做推断**，见 `HarnessStore.saveProvider` 的注释）
-        endpointTrust: draft.trust?.wire ?? p.endpointTrust,
+        // 见第 4 条：有就沿用，没有（历史数据）才由程序按 ID 推一个
+        credentialRef: existingRef.isEmpty ? defaultCredentialRef(p.id) : existingRef,
+        // 端点信任级别**不再由用户选**：桌面那份由后端按**新地址**重新推断
+        // （`RemoteProviderStore.updateProvider` 刻意不带这个键 —— 改地址后旧档位可能
+        //  已经不允许新地址了，"沿用旧档"会让用户撞上一个界面上再也改不动的错误）；
+        // 手机侧不读它，沿用原值。
+        endpointTrust: p.endpointTrust,
         enabled: p.enabled,
         revision: p.revision,
         credential: p.credential,
       ));
+      final saved = await _saveDialogKey(updated, draft.apiKey);
       await _reload();
       await _select(updated);
-      _notify('已保存 Provider「${updated.displayName}」（revision ${updated.revision}）。');
+      _notify(saved
+          ? '已保存 Provider「${updated.displayName}」（revision ${updated.revision}），API Key 已保存。'
+          : '已保存 Provider「${updated.displayName}」（revision ${updated.revision}）。');
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
       _notify('保存失败：$e', error: true);
@@ -877,7 +782,20 @@ class _ProviderDetail extends StatefulWidget {
   final String? info;
   final String? error;
 
-  /// 「编辑 Provider」（改显示名 / 协议 / baseURL / 信任档 / 凭据引用名）。
+  /// 「模型能力目录」那一块（在线数据集 = **models.dev**）。
+  ///
+  /// ⚠ 它是**全局**状态（一个 `remote.json`），却只显示在**这一条** Provider 的详情里 ——
+  /// 2026-10 用户要求："模型能力目录区域占用窗口区域太大，改成嵌在具体 provider 信息里"。
+  /// 折叠起来默认不展开：它是低频动作（更新目录 / 校准档位），不该把模型目录挤下去。
+  final AiCapabilityStatus? capability;
+  final bool capabilityBusy;
+  final bool probeBusy;
+  final VoidCallback? onRefreshCapability;
+  final VoidCallback? onUpdateCapabilityRemote;
+  final ValueChanged<bool>? onProbeToggle;
+  final VoidCallback? onProbe;
+
+  /// 「编辑 Provider」（改显示名 / 协议 / baseURL / API Key）。
   /// **不带 revision 的修改不在这里** —— 编辑时用的是这一行的 revision（乐观锁）。
   final Future<void> Function() onEdit;
   final Future<void> Function(String message) onChanged;
@@ -892,6 +810,13 @@ class _ProviderDetail extends StatefulWidget {
     required this.models,
     required this.info,
     required this.error,
+    this.capability,
+    this.capabilityBusy = false,
+    this.probeBusy = false,
+    this.onRefreshCapability,
+    this.onUpdateCapabilityRemote,
+    this.onProbeToggle,
+    this.onProbe,
     required this.onEdit,
     required this.onChanged,
   });
@@ -982,7 +907,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       Row(
         children: [
           Expanded(child: Text(p.displayName, style: theme.textTheme.titleLarge)),
-          // 「改个 baseURL / 协议 / 信任档」的路（用户要的"独立配置 provider"）：
+          // 「改个 baseURL / 协议」的路（用户要的"独立配置 provider"）：
           // 两端都走同一条 store（手机 = 本机库、桌面 = 后端），提交时带 revision（乐观锁）。
           OutlinedButton.icon(
             onPressed: _busy ? null : () => widget.onEdit(),
@@ -1102,10 +1027,15 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         ),
       ],
       const Divider(height: 32),
-      Row(
+      // `Wrap` 而不是 `Row` + `Spacer`：320dp 的手机上「模型目录 + 获取可用模型 + 手动添加」
+      // 三个挨在一排会 `RenderFlex overflowed by 17 pixels`（`phone_layout_overflow_test`
+      // 那条 320dp 用例盯的就是它）。窄了就换行，不裁。
+      Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 4,
         children: [
           Text('模型目录', style: theme.textTheme.titleSmall),
-          const Spacer(),
           TextButton.icon(
             // 同上：手机上还做不到（要本机自己去拉上游的 /models）
             onPressed: (_busy || !widget.providers.supportsProbe) ? null : _discover,
@@ -1125,6 +1055,10 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       ),
       const SizedBox(height: 8),
       if (_models.isEmpty) Text('还没有模型', style: theme.textTheme.bodySmall),
+      // 「模型能力目录」：**嵌在这一条 Provider 的详情里**（2026-10 用户要求）。
+      // 放在模型目录之后、且默认折叠 —— 它是低频动作，不该把上面的密钥/连接测试挤走。
+      const SizedBox(height: 16),
+      _capabilitySection(theme),
     ];
     final count = _models.length;
 
@@ -1184,6 +1118,64 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 「模型能力目录」那张卡，**折叠**着挂在这一条 Provider 的详情末尾。
+  ///
+  /// 为什么折叠而不是直接摊开：它有"立即更新 / 校准档位"两个按钮和一行状态标签，
+  /// 展开一次就有两百多像素 —— 而模型目录才是这一页的主体（2026-10 用户报的原话：
+  /// 「模型能力目录区域占用窗口区域太大」）。标题上永远看得见新鲜度那一行，
+  /// 折叠状态下也知道"目录是什么时候的"，不用展开才知道。
+  Widget _capabilitySection(ThemeData theme) {
+    final s = widget.capability;
+    return Theme(
+      // 去掉分隔线：这块是**卡片区**（下面自带 Card），不是又一个分组标题
+      data: theme.copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        // key 跟着 Provider 走：每一条的展开与否是**它自己的**选择（外面找得到
+        // PageStorage 就跨切换保留，找不到就重新折叠 —— 两种都不影响别的行为）
+        key: PageStorageKey('capability-${widget.provider.id}'),
+        initiallyExpanded: false,
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: EdgeInsets.zero,
+        title: Row(
+          children: [
+            Icon(Icons.auto_awesome_motion_outlined, size: 18, color: theme.colorScheme.primary),
+            const SizedBox(width: 6),
+            Text('模型能力目录', style: theme.textTheme.titleSmall),
+            const SizedBox(width: 8),
+            if (widget.capabilityBusy || widget.probeBusy)
+              const SizedBox(width: 10, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+            else
+              Flexible(
+                child: Text(
+                  s == null
+                      ? '正在读取…'
+                      : (s.error != null ? '读取失败' : s.remoteLabel),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: s?.remoteStale == true ? theme.colorScheme.error : theme.colorScheme.outline,
+                  ),
+                ),
+              ),
+          ],
+        ),
+        children: [
+          _CapabilityCatalogCard(
+            status: widget.capability,
+            busy: widget.capabilityBusy,
+            probeBusy: widget.probeBusy,
+            onRefreshStatus: widget.onRefreshCapability,
+            onUpdateRemote: widget.onUpdateCapabilityRemote,
+            onProbeToggle: widget.onProbeToggle,
+            onProbe: widget.onProbe,
+            // 卡片自己那圈 Card 外边距在折叠区里会多出一圈空白，去掉
+            margin: EdgeInsets.zero,
+          ),
+        ],
+      ),
     );
   }
 
@@ -1544,14 +1536,36 @@ class _Note extends StatelessWidget {
 //  新建 Provider / 新建模型 对话框
 // ---------------------------------------------------------------------------
 
+/// 由 Provider ID 推出的**凭据引用名**（API Key 的存放名）：全大写、`-` 换成 `_`、末尾加 `_API_KEY`。
+///
+/// 后端要求环境变量风格（大写字母/数字/下划线，且**以字母开头**）。例：`my-gateway` → `MY_GATEWAY_API_KEY`。
+///
+/// ⚠ **用户看不到它、也不该问他**（2026-10 用户要求：端点信任级别与凭据引用名都由软件自动决定）——
+/// 所以这里必须**永远推得出一个合法值**：Provider ID 允许以数字开头（`2fast` 是合法 kebab ID），
+/// 而推出来的 `2FAST_API_KEY` 不是合法引用名，前缀一个 `P` 就合法了（`P2FAST_API_KEY`）。
+/// 以前那种"ID 以数字开头就请用户手填"的做法，在表单里已经没有那一栏了。
+String defaultCredentialRef(String providerId) {
+  final name = '${providerId.trim().toUpperCase().replaceAll('-', '_')}_API_KEY';
+  // 合法就原样用；不合法（ID 以数字开头）补一个前缀 —— **不改**名字本身
+  return isValidCredentialRef(name) ? name : 'P$name';
+}
+
+/// 合法的引用名（后端 `require_credential_ref` 同一条正则）。
+bool isValidCredentialRef(String ref) => RegExp(r'^[A-Z][A-Z0-9_]{0,127}$').hasMatch(ref);
+
 class _ProviderDraft {
   final String id;
   final String displayName;
   final AiApi api;
   final String baseURL;
-  final String? credentialRef;
-  final AiEndpointTrust? trust;
-  const _ProviderDraft(this.id, this.displayName, this.api, this.baseURL, this.credentialRef, this.trust);
+
+  /// 对话框里填的 API Key（留空 = 先不填）。
+  ///
+  /// 它**不进**提交给 provider 接口的那份 body（provider 行里只有"这把钥匙叫什么名字"）；
+  /// 建完之后由页面调 `CredentialStore.save` 单独存（桌面 = 后端托管，手机 = 本机密钥库）。
+  final String apiKey;
+
+  const _ProviderDraft(this.id, this.displayName, this.api, this.baseURL, this.apiKey);
 }
 
 class _ProviderDialog extends StatefulWidget {
@@ -1569,16 +1583,13 @@ class _ProviderDialogState extends State<_ProviderDialog> {
   final _id = TextEditingController();
   final _name = TextEditingController();
   final _url = TextEditingController();
-  final _ref = TextEditingController();
+
+  /// API Key：**只写不读**（AIH-012）。对话框打开时永远是空的，
+  /// 编辑时留空 = 不动已有密钥（清除只能去详情里点「移除密钥」）。
+  final _key = TextEditingController();
   AiApi _api = AiApi.openaiCompletions;
 
   bool get _editing => widget.existing != null;
-
-  /// null = 自动（由后端按地址判断公网 / 本机）。
-  ///
-  /// 之前默认是"仅本机"，用户填了公网地址却忘了改这里，保存被后端拒绝，
-  /// 而且错误看不见 —— 就是"配好了点添加没反应"。
-  AiEndpointTrust? _trust;
 
   static final _kebab = RegExp(r'^[a-z0-9]+(-[a-z0-9]+)*$');
 
@@ -1591,38 +1602,13 @@ class _ProviderDialogState extends State<_ProviderDialog> {
       _id.text = existing.id;
       _name.text = existing.displayName;
       _url.text = existing.baseURL;
-      _ref.text = existing.credentialRef ?? defaultCredentialRef(existing.id);
       _api = AiApi.parse(existing.api) ?? AiApi.openaiCompletions;
-      _trust = AiEndpointTrust.parse(existing.endpointTrust);
-      _refTouched = true; // 已有值，别再跟着 ID 自动改
     }
     // 输入时就实时校验，按钮状态跟着变
-    _id.addListener(_onIdChanged);
+    _id.addListener(_revalidate);
     _url.addListener(_revalidate);
     _name.addListener(_revalidate);
-    // 凭据引用名默认跟着 ID 走（provider id 全大写），用户手动改过就不再覆盖
-    _ref.addListener(_onRefChanged);
   }
-
-  /// 用户手动改过凭据引用名 → 不再自动同步。
-  bool _refTouched = false;
-
-  /// 正在按 ID 自动填引用名：此时不把 `_ref` 的变化当成"用户手动改过"。
-  bool _syncingRef = false;
-
-  final _refFocus = FocusNode(debugLabel: 'credential-ref');
-
-  /// 由 Provider ID 推出的默认凭据引用名：**全大写、`-` 换成 `_`、末尾加 `_API_KEY`**
-  /// （后端要求环境变量风格：大写字母/数字/下划线，且以字母开头）。
-  ///
-  /// 例：`my-gateway` → `MY_GATEWAY_API_KEY`。
-  /// 凭据引用名实际上不能空着（没有它就没法保存 API Key），但用户不该为它操心，
-  /// 所以默认自动生成、跟着 ID 走，只有主动改过才停。
-  static String defaultCredentialRef(String providerId) =>
-      '${providerId.trim().toUpperCase().replaceAll('-', '_')}_API_KEY';
-
-  /// 默认值合不合法（ID 以数字开头时会推不出合法名字）。
-  static bool isValidCredentialRef(String ref) => RegExp(r'^[A-Z][A-Z0-9_]{0,127}$').hasMatch(ref);
 
   void _revalidate() => setState(() {});
 
@@ -1631,28 +1617,8 @@ class _ProviderDialogState extends State<_ProviderDialog> {
     _id.dispose();
     _name.dispose();
     _url.dispose();
-    _ref.dispose();
-    _refFocus.dispose();
+    _key.dispose();
     super.dispose();
-  }
-
-  void _onIdChanged() {
-    // 用户没主动接管过、或者把框清空了 → 继续跟着 ID 自动填
-    if (!_refTouched || _ref.text.trim().isEmpty) {
-      final next = defaultCredentialRef(_id.text);
-      if (_ref.text != next) {
-        _syncingRef = true;
-        _ref.text = next;
-        _syncingRef = false;
-      }
-    }
-    _revalidate();
-  }
-
-  /// 引用名变化：只有**用户自己**改的才算"手动接管"（程序自动填的不算）。
-  void _onRefChanged() {
-    if (!_syncingRef && !_refTouched) _refTouched = true;
-    _revalidate();
   }
 
   String? get _idError {
@@ -1673,46 +1639,15 @@ class _ProviderDialogState extends State<_ProviderDialog> {
     return null;
   }
 
-  /// 凭据引用名：**自动处理**。
+  /// 提交条件：**只有用户真的能填错的那几项**。
   ///
-  /// 它是 API Key 的存放名，所以不能空着；但用户不该为它操心 —— 默认值直接由
-  /// Provider ID 推出来（全大写、`-` 换成 `_`），并且跟着 ID 实时变；
-  /// 只有用户**主动改过**它之后才停止同步（见 [_refTouched]）。
-  String? get _refError {
-    final v = _ref.text.trim();
-    if (v.isEmpty) return null;
-    if (!isValidCredentialRef(v)) {
-      return '只能是大写字母、数字和下划线，且以字母开头（Provider ID 以数字开头时要手改一个）';
-    }
-    if (v.length > 128) return '不能超过 128 个字符';
-    return null;
-  }
-
-  /// 提交时把"用户没动过、值为空"的情况补上默认值，而不是拦着他（数据没错就行）。
-  ///
-  /// **用户手动清空也算"没填"**：那就用默认值，不去追究他为什么清空。
-  String get _effectiveRef {
-    final v = _ref.text.trim();
-    if (v.isNotEmpty) return v;
-    return defaultCredentialRef(_id.text);
-  }
-
-  bool get _canSubmit {
-    final ref = _effectiveRef;
-    if (ref.isEmpty || !isValidCredentialRef(ref)) return false;
-    return _kebab.hasMatch(_id.text.trim()) &&
-        _name.text.trim().isNotEmpty &&
-        _urlError == null &&
-        _url.text.trim().isNotEmpty;
-  }
-
-  /// 自动模式下的提示：让用户知道后端会怎么判断。
-  String get _autoTrustHint {
-    final host = Uri.tryParse(_url.text.trim())?.host ?? '';
-    if (host.isEmpty) return '按地址自动判断';
-    final isLocal = host == 'localhost' || host == '127.0.0.1' || host == '::1' || host.startsWith('192.168.') || host.startsWith('10.');
-    return isLocal ? '自动：识别为本机/局域网地址' : '自动：识别为公网（必须 https）';
-  }
+  /// 端点信任级别与凭据引用名都**不在表单里**（软件自动决定），所以这里不再校验它们 ——
+  /// 引用名由 [`defaultCredentialRef`] 保证合法，信任档由后端按地址推断。
+  bool get _canSubmit =>
+      _kebab.hasMatch(_id.text.trim()) &&
+      _name.text.trim().isNotEmpty &&
+      _url.text.trim().isNotEmpty &&
+      _urlError == null;
 
   @override
   Widget build(BuildContext context) {
@@ -1762,37 +1697,30 @@ class _ProviderDialogState extends State<_ProviderDialog> {
                 ),
               ),
               const SizedBox(height: 10),
-              DropdownButtonFormField<AiEndpointTrust?>(
-                initialValue: _trust,
-                decoration: InputDecoration(
-                  labelText: '端点信任级别',
-                  helperText: _autoTrustHint,
-                  isDense: true,
-                ),
-                items: [
-                  const DropdownMenuItem<AiEndpointTrust?>(value: null, child: Text('自动（按地址判断）')),
-                  for (final t in AiEndpointTrust.values)
-                    DropdownMenuItem<AiEndpointTrust?>(value: t, child: Text(t.label)),
-                ],
-                onChanged: (v) => setState(() => _trust = v),
-              ),
-              const SizedBox(height: 10),
-              // 凭据引用名：正常不用用户操心 —— 默认跟着 Provider ID 走
-              // （全大写、`-` 换成 `_`），只有主动改过才停。提交时若还空着就自动补上默认值。
+              // API Key：**填了就一起保存**（不用"先建 provider、再进去填一次"两步）。
+              // 只写不读 —— 编辑时它永远是空的，留空表示不修改已有密钥。
               TextField(
-                controller: _ref,
-                focusNode: _refFocus,
-                textCapitalization: TextCapitalization.characters,
+                controller: _key,
+                obscureText: true,
+                autocorrect: false,
+                enableSuggestions: false,
                 decoration: InputDecoration(
-                  labelText: '凭据引用名（可选）',
-                  hintText: 'DEEPSEEK_API_KEY',
-                  helperText: _refTouched
-                      ? '只是名字；密钥在创建之后单独填写（只写不读）'
-                      : '默认跟随 Provider ID：全大写、- 换成 _、末尾加 _API_KEY',
-                  errorText: _refError,
+                  labelText: 'API Key（可选）',
+                  hintText: 'sk-…',
+                  helperText: _editing
+                      ? '只写不读：留空表示不修改已有密钥（要清除请到详情里点「移除密钥」）'
+                      : '只写不读：填了就一起保存，留空可以先建好、稍后在详情里填',
                   isDense: true,
                 ),
               ),
+              if (!_editing) ...[
+                const SizedBox(height: 8),
+                const _Note(
+                  text: '端点信任级别（公网 / 本机 / 局域网）与凭据引用名都由程序按地址与 ID 自动决定，'
+                      '不用你选：地址是本机就按本机放行，是公网就要求 https。',
+                  error: false,
+                ),
+              ],
             ],
           ),
         ),
@@ -1809,9 +1737,7 @@ class _ProviderDialogState extends State<_ProviderDialog> {
                       _name.text.trim(),
                       _api,
                       _url.text.trim(),
-                      // 空着也没关系：这里补上由 Provider ID 推出来的默认名
-                      _effectiveRef,
-                      _trust,
+                      _key.text,
                     ),
                   ),
           child: Text(_editing ? '保存' : '创建'),
@@ -2080,150 +2006,15 @@ extension _FirstOrNullExt<T> on Iterable<T> {
   T? get firstOrNull => isEmpty ? null : first;
 }
 
-/// 「内置模型目录」卡片（M6）。
+/// 「模型能力目录」卡片（2026-09-23"全做了"，2026-10 挪进 Provider 详情里）。
 ///
-/// 内置目录是 `%USERPROFILE%\.dsh\settings.yaml` 的**冻结副本**
-/// （`server/src/main/resources/ai/builtin-catalog.json`）—— 运行时**绝不读 YAML**，
-/// 装我们项目的人没装 DSH 也能用；这里只是把冻结副本与库里的差异摆出来，让用户决定要不要对齐。
-class _BuiltinCatalogCard extends StatelessWidget {
-  final AiBuiltinCatalogStatus? status;
-  final bool busy;
-  final VoidCallback? onRefresh;
-  final Future<void> Function() onAlignCapabilities;
-  final Future<void> Function() onAddMissing;
-
-  const _BuiltinCatalogCard({
-    required this.status,
-    required this.busy,
-    required this.onRefresh,
-    required this.onAlignCapabilities,
-    required this.onAddMissing,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final s = status;
-    final divergent = s?.divergentCount ?? 0;
-
-    return Card(
-      margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.inventory_2_outlined, size: 18, color: theme.colorScheme.primary),
-                const SizedBox(width: 6),
-                Text('内置模型目录', style: theme.textTheme.titleSmall),
-                if (busy) ...[
-                  const SizedBox(width: 10),
-                  const SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ],
-                const Spacer(),
-                IconButton(
-                  tooltip: '刷新内置目录状态',
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                  padding: EdgeInsets.zero,
-                  onPressed: busy ? null : onRefresh,
-                  icon: const Icon(Icons.refresh, size: 16),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              r'来自 %USERPROFILE%\.dsh\settings.yaml 的冻结副本（内置目录），运行时不会去读 YAML；'
-              '已自动登记进数据库，这里只做「按需对齐」。',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
-            ),
-            const SizedBox(height: 8),
-            if (s == null)
-              Text('正在读取内置目录状态…', style: theme.textTheme.bodySmall)
-            else if (!s.ok)
-              Text('读取失败：${s.error}',
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error))
-            else ...[
-              Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  _Tag('版本 ${s.version}'),
-                  _Tag('目录模型 ${s.modelCount}'),
-                  _Tag('库里一致 ${s.kept}'),
-                  if (divergent > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.errorContainer,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.warning_amber_rounded,
-                              size: 13, color: theme.colorScheme.onErrorContainer),
-                          const SizedBox(width: 4),
-                          Text(
-                            s.divergenceLabel,
-                            style: theme.textTheme.labelSmall
-                                ?.copyWith(color: theme.colorScheme.onErrorContainer),
-                          ),
-                        ],
-                      ),
-                    )
-                  else
-                    const _Tag('能力声明一致'),
-                  if (s.providerCreated) const _Tag('Provider 按内置目录创建'),
-                ],
-              ),
-              if (divergent > 0)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    '分歧的模型：${s.divergent.take(6).join('、')}'
-                    '${divergent > 6 ? ' 等 $divergent 个' : ''}',
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: theme.colorScheme.outline),
-                  ),
-                ),
-            ],
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                FilledButton.icon(
-                  onPressed: busy ? null : () => onAlignCapabilities(),
-                  icon: const Icon(Icons.tune, size: 16),
-                  label: const Text('用内置目录对齐模型能力'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: busy ? null : () => onAddMissing(),
-                  icon: const Icon(Icons.playlist_add, size: 16),
-                  // 纯新增：不改任何已有行，所以不弹确认框
-                  label: const Text('补齐缺失模型'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 「模型能力目录」卡片（2026-09-23"全做了"）。
-///
-/// 展示三层目录（手工 custom > 在线 remote > 内置）的新鲜度；「立即更新」拉
-/// models.dev；实测校准默认关，打开后才能发真实请求校准思考档位。
+/// 能力的预填来源是**在线数据集 models.dev**（「立即更新」拉它）；手工目录排在它前面，
+/// 接口自己声明的永远优先。**内置目录那张卡已经删掉**（用户 2026-10："模型能力不再依赖
+/// 内置目录"）—— 那份是 `%USERPROFILE%\.dsh\settings.yaml` 的冻结副本，而
+/// AGENTS §10 已经定了"运行期不许依赖 `.dsh`"：装我们项目的人可能根本没装 DSH。
+/// 剩下那条 `内置规则` 只是后端的一小张兜底推断表（`capability_catalog.rs`），
+/// 拿它当"网关什么都没说"时的最后一层，不是一个用户要去维护的目录。
+/// 实测校准默认关，打开后才能发真实请求校准思考档位。
 /// 所有状态都从后端读（`/api/ai/capabilities/*`），前端不存一份自己的。
 class _CapabilityCatalogCard extends StatelessWidget {
   final AiCapabilityStatus? status;
@@ -2234,6 +2025,9 @@ class _CapabilityCatalogCard extends StatelessWidget {
   final ValueChanged<bool>? onProbeToggle;
   final VoidCallback? onProbe;
 
+  /// 外边距。嵌在折叠区里时传 [EdgeInsets.zero]（外面已经有一圈留白了）。
+  final EdgeInsetsGeometry margin;
+
   const _CapabilityCatalogCard({
     required this.status,
     required this.busy,
@@ -2242,6 +2036,7 @@ class _CapabilityCatalogCard extends StatelessWidget {
     required this.onUpdateRemote,
     required this.onProbeToggle,
     required this.onProbe,
+    this.margin = const EdgeInsets.fromLTRB(12, 8, 12, 4),
   });
 
   @override
@@ -2254,7 +2049,7 @@ class _CapabilityCatalogCard extends StatelessWidget {
     final probe = onProbe;
 
     return Card(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      margin: margin,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
         child: Column(
@@ -2286,7 +2081,8 @@ class _CapabilityCatalogCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '预填来源：手工目录 > 在线目录（models.dev 自动更新）> 内置规则；接口自己声明的永远优先。',
+              '预填来源：**在线目录 models.dev**（「立即更新」拉它）> 手工目录；'
+              '接口自己声明的永远优先，网关什么都不说时才轮到最后那层兜底推断。',
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
             ),
             const SizedBox(height: 6),
@@ -2301,7 +2097,6 @@ class _CapabilityCatalogCard extends StatelessWidget {
                 runSpacing: 4,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  _Tag('内置 v${s.version}（${s.builtinRules} 条规则）'),
                   if (s.customEntries != null) _Tag('手工 ${s.customEntries} 条'),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),

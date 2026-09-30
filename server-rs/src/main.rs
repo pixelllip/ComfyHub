@@ -4,6 +4,26 @@
 //! comfyhub-server-rs --db D:\.db\comfyhub.db --port 8081
 //! ```
 //!
+//! # 谁起我、谁关我（2026-09-30 起）
+//!
+//! **桌面 App 自己直接拉这个 exe**，不再经过 `scripts\comfyhub.ps1` / `server.ps1` /
+//! WMI（那套脚本已按用户要求删掉）。契约在 `lib\core\backend_launcher.dart`，参数是：
+//!
+//! ```text
+//! <根>\backend\comfyhub-server-rs.exe --db <根>\.db\comfyhub.db --storage <根>\storage \
+//!     --host 127.0.0.1 --port 0 --watch-stdin
+//! COMFYHUB_PROJECT_ROOT=<根>      （环境变量，端口文件与工具权限的基准）
+//! COMFYHUB_ALLOW_REMOTE=1         （开了「允许手机 / 局域网设备连接」时才有）
+//! ```
+//!
+//! 三条纪律（改动启动方式前先读）：
+//!
+//!  1. **端口永远是 `0`**（让操作系统挑），真实端口由我们写进 `<根>\.run\api.json`，
+//!     App 只读它 —— 所以 App 不能假定一个固定端口（`api_port_file.rs`）；
+//!  2. **`--watch-stdin` 是"App 强杀后不留孤儿"的唯一保障**（见 [`spawn_stdin_watchdog`]）；
+//!  3. **`COMFYHUB_PROJECT_ROOT` 由 App 显式给**：我们的兜底是"从 storage 往上推"，
+//!     而发布包里 `backend\` 与根目录差一层，纯靠推断容易把 `.run\` / `.db\` 落到别处。
+//!
 //! # 灰度期怎么跑
 //!
 //! Kotlin 版仍在 `8080` 上服务（它现在是唯一的写者），Rust 版**默认 8081**，
@@ -90,11 +110,14 @@ struct Args {
     storage: PathBuf,
     host: String,
     port: u16,
+    /// **父进程（桌面 App）没了就自己退** —— 见 [`spawn_stdin_watchdog`]。
+    watch_stdin: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut db: Option<PathBuf> = None;
     let mut storage: Option<PathBuf> = None;
+    let mut watch_stdin = false;
     // 缺省监听回环。`COMFYHUB_ALLOW_REMOTE=1`（App 的「允许手机 / 局域网设备连接」
     // 开关就是走它）时听 `0.0.0.0`：手机在局域网里才有得连（用户 bug 2026-09-28
     // 「手机连接桌面端失败，报 timed out」—— `server.ps1` 以前硬编码 127.0.0.1，
@@ -108,6 +131,10 @@ fn parse_args() -> Result<Args, String> {
             "--db" => db = it.next().map(PathBuf::from),
             "--storage" => storage = it.next().map(PathBuf::from),
             "--host" => host = it.next().unwrap_or(host),
+            // `--watch-stdin`：**由桌面 App 启动时必带**（见函数头）。父进程一死，
+            // 我们这侧的 stdin 管道立刻回 0，于是优雅退出 —— 它取代了以前的
+            // `scripts\watch-owner.ps1`（那个守护脚本随"App 直接起后端"一起删了）。
+            "--watch-stdin" => watch_stdin = true,
             "--port" => {
                 port = it
                     .next()
@@ -116,7 +143,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "用法: comfyhub-server-rs [--db <路径>] [--storage <目录>] [--host <地址>] [--port <端口>]"
+                    "用法: comfyhub-server-rs [--db <路径>] [--storage <目录>] [--host <地址>] [--port <端口>] [--watch-stdin]"
                 );
                 std::process::exit(0);
             }
@@ -139,7 +166,48 @@ fn parse_args() -> Result<Args, String> {
             .map(|root| root.join("storage"))
             .unwrap_or_else(|| PathBuf::from("storage"))
     });
-    Ok(Args { db, storage, host, port })
+    Ok(Args { db, storage, host, port, watch_stdin })
+}
+
+/// **"我爸（App）还活着吗"** —— 靠 stdin 这根管道的生死判断。
+///
+/// # 为什么是 stdin，而不是 `--owner-pid` + `OpenProcess`
+///
+/// 桌面 App 用 `Process.start`（Dart）起我们时，**只**给我们继承三根管道，stdin 是
+/// 其中一根，而它的写端**只有 App 持有**（Dart 侧 `CreateProcessPipe(stdin, kInheritRead)`
+/// 之后就把子进程那头的读端留给我们、写端留在自己手里，并且用
+/// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 保证不会被别的子孙进程继承）。于是：
+///
+/// | 事件 | 我们这一侧看到什么 |
+/// | --- | --- |
+/// | App 正常退出（先 `kill` 我们） | 不用等 watchdog，进程已经被杀了 |
+/// | App 被任务管理器 / 崩溃强杀 | 写端随进程消失 → `read` 立刻回 `0` → 我们自己退 |
+/// | App 还活着 | 管道开着，`read` 一直阻塞（不占 CPU） |
+///
+/// 换成 `--owner-pid` 就得再引一个 Win32 依赖（`OpenProcess` + `WaitForSingleObject`），
+/// 而这件事用标准库一根管道就够了 —— 与"发布包要便携、少一个依赖少一份 CVE 面"的纪律一致。
+///
+/// ⚠ **只有"确实会给我们一根活管道"的调用方才许带 `--watch-stdin`**：
+/// 从终端手动跑（stdin 是控制台，不是管道）时它读的是键盘，Ctrl+C / 关终端才算 EOF；
+/// 用 `< NUL` 或 `Start-Process` 起（stdin 直接就是 EOF）时**会立刻自己退**，那是预期行为，
+/// 但别拿它当"后台常驻"的开关。Posix 上同理（stdin 被重定向到 /dev/null 就是 EOF）。
+fn spawn_stdin_watchdog() -> tokio::sync::mpsc::Receiver<()> {
+    use std::io::Read as _;
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 64];
+        loop {
+            match std::io::stdin().read(&mut buf) {
+                // 0 = EOF（写端全关了）；Err = 管道坏了。两种都说明父进程没了。
+                Ok(0) => break,
+                Ok(_) => {} // 有人往 stdin 打字/写东西：还活着，继续等
+                Err(_) => break,
+            }
+        }
+        let _ = tx.blocking_send(());
+    });
+    rx
 }
 
 /// `COMFYHUB_ALLOW_REMOTE` 是否要求监听所有网卡（1 / true / yes / on 都算）。
@@ -273,13 +341,12 @@ async fn main() {
     //     `reply_state` + 确定性的 `reply_message_id` 保证"一定送到、且只送一条"。
     comfyhub_server_rs::submit_queue::spawn_sweeper(state.clone());
 
-    // ---- 自己受限不自知（2026-09-29）-------------------------------------------
+    // ---- 自己受限不自知（2026-09-29 引入；2026-09-30 机理订正为"完整性标签"）----
     //
-    // 后端若是从**受限会话**（AI 助手的文件沙箱）里拉起来的，那份限制跟着进程走、
-    // 子进程原样继承 —— 表现是 `comfy_start` 写不进 ComfyUI 的 `temp/`、`comfy_use_media`
-    // 写不进 input…，而 `doctor` **一条都看不出来**（它只探端口/健康/构建新鲜度）。
-    // 这里启动时探一次并留证（`.run\confinement.json`），让 `comfyhub.ps1 doctor` 能直接说
-    // 「这个后端是从受限会话起的，重起它就行」—— 沿用 pitfalls 151/154 的纪律。
+    // 后端若跑在**低完整性（Low IL）令牌**下（工作区产物带着 Low 标签 + min(父进程, 映像)），
+    // `comfy_start` 写不进 ComfyUI 的 `temp/`、`comfy_use_media` 写不进 input…，
+    // 而**探端口/健康是看不出来的**。这里启动时探一次并留证（`.run\confinement.json`），
+    // `GET /api/system/confinement` 会把同一份结论连判据一起交给界面（App 顶部常驻横幅）。
     // 探不到工作区（还没配 ComfyUI）不是毛病，不留证。
     {
         let state = state.clone();
@@ -362,10 +429,33 @@ async fn main() {
     // （`docs/pairing-design.md` §11.4）。漏了它，每一个请求都会走"拿不到来源 = 非回环"
     // 那条保守分支 —— 闸门一开，本机的桌面 App 也会被自己关在门外。
     let shutdown_state = port_state.clone();
+
+    // ---- 父进程退出就跟着退（2026-09-30：取代 scripts\watch-owner.ps1）-------
+    //
+    // 桌面 App 现在是**它自己**直接起我们（`lib\core\backend_launcher.dart`），
+    // 不再经过 pwsh / WMI，所以"谁起的谁关"这件事必须我们自己兜住：
+    // 正常关窗时 App 会先 `kill` 我们；**强杀 / 崩溃**那条路上没人来杀，
+    // 靠的就是这根 stdin 管道（见 [`spawn_stdin_watchdog`] 的说明）。
+    //
+    // 走**优雅退出**而不是 `std::process::exit`：端口记录 `.run\api.json` 的收尾、
+    // 在飞的请求都要走完（`delete_if_owned` 只删自己那一份，见 `api_port_file.rs`）。
+    let mut owner_rx = if args.watch_stdin { Some(spawn_stdin_watchdog()) } else { None };
+
     if let Err(e) = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            println!("收到停止信号，正在退出");
+            // 没开 watchdog 时这一支永远不完成（`pending`），只剩 Ctrl+C 一条路。
+            let owner = async {
+                match owner_rx.as_mut() {
+                    Some(rx) => {
+                        let _ = rx.recv().await;
+                    }
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => println!("收到停止信号，正在退出"),
+                _ = owner => println!("父进程已退出（stdin 关闭），随之退出"),
+            }
         })
         .await
     {

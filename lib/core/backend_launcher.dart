@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'backend_paths.dart';
 import 'settings_store.dart';
 
 /// 启动阶段
@@ -18,14 +19,18 @@ enum StartupPhase {
   skipped,
 }
 
-/// 起子进程的可注入缝隙：测试里换掉它，就能断言"到底传了哪些参数"，
-/// 而不用真去拉一个 pwsh（在没有 Windows / 没有 PowerShell 的环境里也能跑）。
+/// 起子进程的可注入缝隙：测试里换掉它，就能断言"到底起的是哪个 exe、传了哪些参数"，
+/// 而不用真去拉一个后端进程（在没有 Windows / 没有后端二进制的机器上也能跑）。
 typedef BackendProcessStarter = Future<Process> Function(
   String executable,
   List<String> arguments, {
   String? workingDirectory,
   Map<String, String>? environment,
 });
+
+/// 跑"小工具"进程（`icacls` / `taskkill`）的缝隙，测试里替换掉。
+typedef ToolRunner = Future<ProcessResult?> Function(
+    String executable, List<String> arguments);
 
 Future<Process> _startProcess(
   String executable,
@@ -43,17 +48,34 @@ Future<Process> _startProcess(
       mode: mode,
     );
 
-/// 负责在 App 启动时把 **后端** 拉起来。
+/// **App 自己把 Rust 后端拉起来 / 关掉**（2026-09-30 起不再经过 pwsh）。
 ///
-/// 做法很直接：先探一次 `/api/health`；
-///   · 健康  → 什么都不做；
-///   · 不健康 / 连不上 → 调用项目里的 `scripts\comfyhub.ps1 up`
-///     （后端在跑但数据库不通时会先停再起 —— SQLite 是单文件，"数据库死了"即健康检查非 ok）；
-///   · 边跑边把脚本输出回显到启动页上，最后轮询健康直到就绪。
+/// # 为什么改成这样
 ///
-/// 之所以不在 App 里直接起后端进程：脚本里已经处理了一堆本机坑
-/// （JDK 版本挑选、WMI 脱离进程树、存储目录……），
-/// 复用它比自己再写一遍可靠得多。
+/// 以前这条路是 `pwsh → comfyhub.ps1 → server.ps1 → WMI/cmd → 后端`：五层、要装
+/// PowerShell 7、要躲 WMI 的拒绝访问、要靠 `watch-owner.ps1` 看着 App 的 pid。
+/// 现在 App 直接 `Process.start(<根>\backend\comfyhub-server-rs.exe)`：
+///
+///  1. **不会有黑框**：Dart 的 `Process.start`（attached 模式）自己就带
+///     `CREATE_NO_WINDOW` —— 这正是它注释里写的那个场景（"for gui applications
+///     (flutter on windows) console might be absent, will create by CreateProcessW"）。
+///     所以 `scripts\silent-process.ps1` 那套 WMI/SW_HIDE 可以整体退场；
+///  2. **谁起的谁关**：进程句柄在我们手里，退出时 `kill` 一下就行 ——
+///     `scripts\watch-owner.ps1` 那个"盯着 App pid 的守护进程"也不需要了；
+///  3. **强杀 App 也不会留孤儿**：起后端时带 `--watch-stdin`，后端的 stdin 是
+///     我们给它的那根管道，写端**只有我们持有**；App 一死（任务管理器 / 崩溃）
+///     管道即关，后端读到 EOF 就自己优雅退出（见 `server-rs/src/main.rs`）。
+///
+/// ⚠ **`_process` 这个引用必须一直留着**：stdin 那根管道的写端挂在这个 Dart
+/// `Process` 对象上，一旦被 GC 回收，后端就会以为"App 没了"而退出。
+/// 所以启动成功后**绝不能**像以前那样把它置空。
+///
+/// # 起哪一份、怎么找
+///
+/// 见 [`BackendLayout`] / [`serverExeCandidates`]：release 产物里是
+/// `<viewer.exe 同级>\backend\comfyhub-server-rs.exe`（构建时由
+/// `windows\CMakeLists.txt` 装配进去），源码树里是
+/// `server-rs\target\{release,debug}\…`，`COMFYHUB_SERVER_EXE` 永远最高优先。
 class BackendLauncher extends ChangeNotifier {
   BackendLauncher(this._settings);
 
@@ -63,57 +85,76 @@ class BackendLauncher extends ChangeNotifier {
   String message = '尚未检查本地服务';
   String? lastError;
 
-  /// 脚本输出的最近若干行，直接显示在启动页上
+  /// 子进程输出的最近若干行，直接显示在启动页 / 设置页上
   final List<String> logLines = [];
 
-  String? projectRoot;
-  String? scriptPath;
-  String? shellPath;
+  /// 解析出来的布局（根目录 + 后端 exe）
+  BackendLayout? layout;
+
+  String? serverExe;
+  String? serverExeSource;
+
+  String? get projectRoot => layout?.root;
 
   Process? _process;
   bool _cancelled = false;
   bool _disposed = false;
 
-  /// 退出收尾只允许跑一次（窗口关闭 + detach 可能都触发）
+  /// 退出收尾只允许跑一次（窗口关闭 + dispose 可能都触发）
   bool _releaseStarted = false;
 
-  /// 这个 App 有没有"认领"本地服务：自己用 `up -OwnerPid` 起的，
-  /// 或者给已经在跑的服务补挂了退出守护（[armOwnerWatch]）。
+  /// 这次要停掉的后端 pid。
   ///
-  /// 只有认领过，退出时才会去停它们 —— 不然「你自己在终端里 `up`、
-  /// 只是开个 App 看看」这种场景会被 App 顺手带走（README 里承诺过不会）。
+  /// 包含两种：**我们自己起的**，以及**启动时探到已经在跑、被我们接管的**
+  /// （后者是设置里那句"包括启动 App 之前就已经在跑的"；以前靠
+  /// `watch -OwnerPid` 挂守护进程实现，现在就是记下 pid）。
+  final Set<int> _claimedPids = {};
+
+  /// 这个 App 有没有"认领"本地服务：自己起的，或者接管了已经在跑的那个。
+  /// 只有认领过，退出时才会去停它们 —— 不然「别人起的后端、只是开个 App 看看」
+  /// 会被顺手带走。
   bool servicesClaimed = false;
 
   /// 起子进程的实现，测试里替换成假的；见 [BackendProcessStarter]
   @visibleForTesting
   static BackendProcessStarter processStarter = _startProcess;
 
-  /// 测试里覆盖 [resolveShell] 的结果，让用例不依赖本机装没装 pwsh；null = 走真实解析
+  /// 跑 `icacls` / `taskkill` 的实现，测试里替换掉（不然用例会真的去拉进程）
   @visibleForTesting
-  static String? shellPathOverride;
+  static ToolRunner? toolRunnerOverride;
 
-  static const int _maxLogLines = 200;
-
-  /// 退出时最多等脚本多久：超时就让它在后台跑完，**关窗口绝不能卡住**
-  static const Duration exitReleaseTimeout = Duration(seconds: 8);
+  /// 杀 pid 的实现，测试里替换掉（不然用例会真的去杀系统里那个 pid）
+  @visibleForTesting
+  static Future<bool> Function(int pid)? killPidOverride;
 
   /// 测试里把「等后端就绪」的 90 秒截短；null = 走真实值
   @visibleForTesting
   static Duration? waitDeadlineOverride;
+
+  static const int _maxLogLines = 200;
+
+  /// 退出时最多等后端多久：超时就让它在后台收尾，**关窗口绝不能卡住**
+  static const Duration exitReleaseTimeout = Duration(seconds: 8);
+
+  /// 等后端就绪的上限。比脚本时代（90 秒）短得多：不再有 pwsh 冷启动 / cargo 构建，
+  /// 后端从进程起来到监听端口实测在 1 秒内；MCP 预热是后台的，不挡端口。
+  static const Duration readyTimeout = Duration(seconds: 60);
 
   bool get busy =>
       phase == StartupPhase.probing ||
       phase == StartupPhase.starting ||
       phase == StartupPhase.waiting;
 
-  /// 给脚本子进程的额外环境变量。目前只有一个：
-  /// `COMFYHUB_ALLOW_REMOTE=1`（用户开了「允许手机 / 局域网设备连接」）——
-  /// 后端由 pwsh → server.ps1 一路拉起，环境变量会顺着进程树传下去，
-  /// server.ps1 与 Rust `main` 都认它（不开时后端只听 127.0.0.1，真机连不上）。
-  Map<String, String>? get _scriptEnvironment =>
-      _settings.allowRemoteBackend ? const {'COMFYHUB_ALLOW_REMOTE': '1'} : null;
-
   bool get isReady => phase == StartupPhase.ready || phase == StartupPhase.skipped;
+
+  /// 给后端的额外环境变量。端口文件与工具权限的基准是 `COMFYHUB_PROJECT_ROOT`；
+  /// 开了「允许手机 / 局域网设备连接」时再带上 `COMFYHUB_ALLOW_REMOTE`
+  /// （不开时后端只听 127.0.0.1，真机连不上 —— 2026-09-28 用户 bug）。
+  Map<String, String>? _childEnvironment(String root) {
+    final env = <String, String>{'COMFYHUB_PROJECT_ROOT': root};
+    if (_settings.allowRemoteBackend) env['COMFYHUB_ALLOW_REMOTE'] = '1';
+    return env;
+  }
 
   // -------------------------------------------------------------------------
   //  探测
@@ -154,114 +195,38 @@ class BackendLauncher extends ChangeNotifier {
     }
   }
 
-  /// 从可执行文件所在目录往上找 `scripts\comfyhub.ps1`，定位项目根目录
-  static String? detectProjectRoot({String? from}) {
-    if (kIsWeb) return null;
+  /// 从可执行文件所在目录往上找运行根目录（判据与两种布局见 `backend_paths.dart`）。
+  ///
+  /// 保留这个静态入口：设置页的「项目根目录」输入框与提示都用它。
+  static String? detectProjectRoot({String? from}) => detectRoot(from: from);
 
-    final starts = <String>[];
-    if (from != null && from.isNotEmpty) {
-      starts.add(from);
-    } else {
-      try {
-        starts.add(File(Platform.resolvedExecutable).parent.path);
-      } catch (_) {}
-      try {
-        starts.add(Directory.current.path);
-      } catch (_) {}
+  /// 解析一次布局并记进 [layout] / [serverExe]。
+  bool _resolve({bool log = true}) {
+    final resolved = resolveLayout(projectRoot: _settings.projectRoot);
+    if (resolved == null) {
+      if (log) _log('定位不到运行根目录（这台机器上既没有源码树，也没有装配好的 release 产物）。');
+      return false;
     }
-
-    final sep = Platform.pathSeparator;
-    for (final start in starts) {
-      var dir = Directory(start);
-      for (var depth = 0; depth < 8; depth++) {
-        final marker = File([dir.path, 'scripts', 'comfyhub.ps1'].join(sep));
-        if (marker.existsSync()) return dir.path;
-        final parent = dir.parent;
-        if (parent.path == dir.path) break;
-        dir = parent;
+    layout = resolved;
+    serverExe = resolved.exe;
+    serverExeSource = resolved.exeSource;
+    if (log) {
+      _log('运行根目录: ${resolved.root}');
+      if (resolved.exe != null) {
+        _log('后端程序:   ${resolved.exe}（来源：${resolved.exeSource}）');
+      } else {
+        _log('后端程序:   没找到 $kServerExeName');
       }
     }
-    return null;
-  }
-
-  /// 解析出要执行的脚本
-  File? resolveScript() {
-    final root = (_settings.projectRoot?.isNotEmpty ?? false)
-        ? _settings.projectRoot!
-        : detectProjectRoot();
-    if (root == null) return null;
-    projectRoot = root;
-    final sep = Platform.pathSeparator;
-    final file = File('$root${sep}scripts${sep}comfyhub.ps1');
-    if (!file.existsSync()) return null;
-    scriptPath = file.path;
-    return file;
-  }
-
-  /// 找到的是不是 PowerShell 7 的 `pwsh.exe`（Windows 自带的 `powershell.exe` 不算）
-  static bool _isPwsh(String shellPath) =>
-      shellPath.toLowerCase().endsWith('pwsh.exe');
-
-  static String? resolveShell() {
-    if (kIsWeb || !Platform.isWindows) return null;
-    if (shellPathOverride != null) return shellPathOverride;
-    final candidates = <String>[
-      r'C:\Program Files\PowerShell\7\pwsh.exe',
-      r'C:\Program Files\PowerShell\7-preview\pwsh.exe',
-    ];
-    for (final c in candidates) {
-      if (File(c).existsSync()) return c;
-    }
-    // 在整个 PATH 里先找一遍 pwsh，再退而求其次找 powershell.exe。
-    // （逐个目录地"先 pwsh 后 powershell"会让靠前目录里的 5.1 抢在靠后的 7 前面。）
-    final pathEnv = Platform.environment['PATH'] ?? '';
-    final dirs = pathEnv
-        .split(';')
-        .map((d) => d.trim())
-        .where((d) => d.isNotEmpty);
-    for (final exe in const ['pwsh.exe', 'powershell.exe']) {
-      for (final dir in dirs) {
-        final p = '$dir${Platform.pathSeparator}$exe';
-        if (File(p).existsSync()) return p;
-      }
-    }
-    // 最后兜底：Windows 自带的 5.1 一定在。返回它让启动能试一次，
-    // 上层会用 _isPwsh 判出来并提示装 PowerShell 7。
-    const systemPs = r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe';
-    if (File(systemPs).existsSync()) return systemPs;
-    return null;
-  }
-
-  /// 「谁起的谁关」：把 App 自己的 PID 交给脚本，它会挂一个守护进程盯着这个 PID，
-  /// App 一退出就只停掉**这次真正启动过**的后端（见 scripts\watch-owner.ps1）。
-  /// 返回是否真的加上了（给日志用）。
-  bool _addOwnerArgs(List<String> args, String action) {
-    if (!_settings.stopServicesOnExit) return false;
-    if (kIsWeb || !Platform.isWindows) return false;
-    if (action != 'up' && action != 'restart') return false;
-    args..add('-OwnerPid')..add('$pid');
-    servicesClaimed = true;
     return true;
   }
 
-  /// 后端是否已经构建/装配过（决定要不要给脚本加 -SkipBuild）
-  ///
-  /// 两种布局都要认，否则发布包里的 App 会以为后端没构建，去跑一次不存在的 Gradle：
-  ///   · 开发布局：server\build\install\comfy-hub-server\bin\（gradle installDist 的产物）
-  ///   · 发布包布局：server\bin\（scripts\pack-release.ps1 装配的，见 packaging\manifest.json）
-  bool _hasBuiltServer() {
-    final root = projectRoot ?? _settings.projectRoot ?? detectProjectRoot();
-    if (root == null) return false;
-    final sep = Platform.pathSeparator;
-    final candidates = <String>[
-      '$root${sep}server${sep}bin${sep}comfy-hub-server.bat',
-      '$root${sep}server${sep}build${sep}install${sep}comfy-hub-server${sep}bin${sep}comfy-hub-server.bat',
-    ];
-    for (final path in candidates) {
-      if (File(path).existsSync()) return true;
-    }
-    return false;
-  }
+  String _missingExeMessage() => '没找到后端程序 $kServerExeName。三种修法：\n'
+      '  · 发布包 / Release 产物：它应该跟 viewer.exe 同级放在 backend\\ 里'
+      '（release 构建时由 windows\\CMakeLists.txt 自动装配，见 README「构建」一节）；\n'
+      '  · 源码树：cargo build --release --manifest-path server-rs\\Cargo.toml；\n'
+      '  · 已有别处的构建产物：设环境变量 $kServerExeEnv 指过去'
+      '（把后端映像挪出受限目录也是用这个开关）。';
 
   // -------------------------------------------------------------------------
   //  启动
@@ -273,22 +238,22 @@ class BackendLauncher extends ChangeNotifier {
     _cancelled = false;
     lastError = null;
 
-    // 后端端口是自动挑的：App 开着的时候后端可能被脚本重启到**新端口**，
+    // 后端端口是自动挑的：App 开着的时候后端可能重启到**新端口**，
     // 探活前先按 .run\api.json 重新发现一次（用户手填过地址时它什么也不做）。
     await _settings.refreshBaseUrlFromPortFile();
     _set(StartupPhase.probing, '正在检查本地服务 ${_settings.baseUrl} …');
     final health = await probe();
+
     if (!force && health != null && health['database'] == 'ok') {
       _log('后端已在运行（版本 ${health['version']}，数据库 ok）');
+      // 探到已经在跑 = 这次没起过进程，但要**认领**它：
+      // 「关 App 时一并停止本地服务」这句承诺包含"启动 App 之前就已经在跑的"那个。
+      _claimRunningBackend();
       _set(StartupPhase.ready, '后端已就绪');
-      // 走这条分支说明脚本根本没跑过 up —— 于是「关 App 停服务」的 watchdog 也没挂上，
-      // 之后硬杀 App（任务管理器 / 崩溃）就会把后端留在后台。
-      // 这里补挂一个守护进程；它只是锦上添花，失败也绝不影响启动。
-      unawaited(armOwnerWatch());
       return true;
     }
     if (health != null) {
-      _log('后端进程在跑，但数据库状态是 ${health['database']}，尝试修复…');
+      _log('后端进程在跑，但数据库状态是 ${health['database']} —— 先把它停掉再重新起一个。');
     } else {
       _log('后端未响应，准备启动。');
     }
@@ -297,144 +262,202 @@ class BackendLauncher extends ChangeNotifier {
       return _fail('当前平台不支持自动启动本地服务（仅 Windows 桌面端）。');
     }
 
-    final script = resolveScript();
-    if (script == null) {
-      return _fail('找不到 scripts\\comfyhub.ps1。请在「设置 → 本地服务」里指定项目根目录。');
+    if (!_resolve()) {
+      return _fail('定位不到运行根目录。请在「设置 → 本地服务」里指定项目根目录。');
     }
-    final shell = resolveShell();
-    if (shell == null) {
-      return _fail('PATH 里找不到 PowerShell，无法启动本地服务。'
-          '请安装 PowerShell 7（winget install --id Microsoft.PowerShell），装完重启 App。');
-    }
-    if (!_isPwsh(shell)) {
-      // Windows 自带的 5.1 不算数：scripts\*.ps1 内部到处是 `& pwsh -NoProfile -File ...`，
-      // 拿 powershell.exe 去跑，子调用会以"pwsh 不是内部或外部命令"失败。
-      _log('警告: 只找到 Windows PowerShell 5.1（$shell），缺少 PowerShell 7。');
-      _log('      scripts 之间互相调用 pwsh，缺了它启动多半会失败。');
-      _log('      安装: winget install --id Microsoft.PowerShell --source winget');
-    }
-    shellPath = shell;
+    if (serverExe == null) return _fail(_missingExeMessage());
 
+    // 库里那半死不活的那个先送走（它是我们或上一次运行留下的，端口文件里有它的 pid）
+    if (health != null) await _stopUnhealthy();
+
+    return _spawnAndWait();
+  }
+
+  /// 后端进程在、但数据库不 ok：把端口文件里记着的那个 pid 收掉再重起。
+  ///
+  /// 这一步**不看 `_claimedPids`**（那时还没认领任何东西），判据只有一条：
+  /// "`.run\api.json` 里那个 pid 还活着、而且它占着的端口回的 health 是坏的"。
+  Future<void> _stopUnhealthy() async {
+    final pid = _portFilePid();
+    if (pid == null || pid <= 0) return;
+    if (await _killPid(pid)) {
+      _log('已停掉状态异常的后端（pid $pid）');
+      // 让它把端口放掉再起新的（最多等 3 秒）
+      for (var i = 0; i < 15; i++) {
+        if (await probe(timeout: const Duration(milliseconds: 300)) == null) break;
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+    }
+  }
+
+  /// 起后端并等它健康。
+  Future<bool> _spawnAndWait() async {
+    final root = layout!.root;
+    final exe = serverExe!;
+
+    // 目录先备好：后端会自己建库目录，但 `.run` / `storage` 缺失会让它多打几句警告
+    for (final dir in [runDirOf(root), storageDirOf(root), dbParentOf(root)]) {
+      try {
+        Directory(dir).createSync(recursive: true);
+      } catch (_) {}
+    }
+
+    await _normalizeIntegrity(exe);
+
+    final dbFile = dbFileOf(root);
+    final storage = storageDirOf(root);
+    final bindHost = _settings.allowRemoteBackend ? '0.0.0.0' : '127.0.0.1';
     final args = <String>[
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      script.path,
-      'up',
+      '--db', dbFile,
+      '--storage', storage,
+      '--host', bindHost,
+      // **永远是 0**：让操作系统挑一个空闲端口，真实端口由后端写进 .run\api.json
+      // （端口只有一个真源；写死端口就会撞上"端口被占 / 落在 Windows 保留段"）。
+      '--port', '0',
+      // 强杀 App 时不留孤儿：见类注释与 server-rs/src/main.rs 的 spawn_stdin_watchdog
+      '--watch-stdin',
     ];
-    if (_hasBuiltServer()) {
-      args.add('-SkipBuild');
-    } else {
-      _log('后端还没构建过，本次会先跑一次 gradle 构建（可能要好几分钟）…');
-    }
-    if (_addOwnerArgs(args, 'up')) {
-      _log('关闭 App 时会一并停掉本次启动的本地服务（设置里可关）');
-    }
 
     _set(StartupPhase.starting, '正在启动后端…');
-    _log('$shell ${args.join(' ')}');
+    _log('$exe ${args.join(' ')}');
+    _log('       工作目录 $root；后端来源：$serverExeSource');
 
+    Process proc;
     try {
-      // 走 [processStarter] 这个可注入缝隙（与 release/watch 一致）——
-      // 之前这里直接 Process.start，测试里根本没法在不真拉 pwsh 的情况下覆盖 up 路径。
-      _process = await processStarter(
-        shell,
+      proc = await processStarter(
+        exe,
         args,
-        workingDirectory: script.parent.parent.path,
-        environment: _scriptEnvironment,
+        workingDirectory: root,
+        environment: _childEnvironment(root),
       );
     } catch (e) {
-      return _fail('启动脚本失败: $e');
+      return _fail('启动后端失败: $e');
     }
+    // ⚠ 这个引用要一直留着（stdin 的写端挂在它上面，GC 掉后端就会自己退）
+    _process = proc;
+    _claim(proc.pid);
 
-    // allowMalformed: 脚本侧虽然已经把输出钉成 UTF-8（见 scripts\*.ps1 顶部的
-    // [Console]::OutputEncoding），但万一某个版本/某种环境下漏出 GBK 字节，
-    // 也不该让整个日志流报 FormatException（原先是 Missing extension byte）。
-    _process!.stdout
+    // 输出回显。allowMalformed：后端偶尔会漏出非 UTF-8 字节（比如 Windows 的
+    // 本地化错误串），不该让整条日志流报 FormatException。
+    proc.stdout
         .transform(const Utf8Decoder(allowMalformed: true))
         .transform(const LineSplitter())
         .listen(_log, onError: (Object e) => _log('[stdout 错误] $e'));
-    _process!.stderr
+    proc.stderr
         .transform(const Utf8Decoder(allowMalformed: true))
         .transform(const LineSplitter())
-        .listen((l) => _log(l.isEmpty ? '' : l), onError: (Object e) => _log('[stderr 错误] $e'));
+        .listen((l) => _log(l.isEmpty ? '' : l),
+            onError: (Object e) => _log('[stderr 错误] $e'));
 
-    final exitCode = await _process!.exitCode;
-    _process = null;
-    if (_cancelled) {
-      _set(StartupPhase.failed, '已取消启动');
-      return false;
-    }
-    _log('启动脚本结束，退出码 $exitCode');
+    // 进程提前退出要能当场看见（不再像脚本时代那样白等满 90 秒）
+    var exited = false;
+    int? exitCode;
+    unawaited(proc.exitCode.then((code) {
+      exited = true;
+      exitCode = code;
+      _log('[后端已退出] 退出码 $code');
+      _notify();
+    }).catchError((Object _) {}));
 
     _set(StartupPhase.waiting, '等待后端就绪…');
-    final deadline = DateTime.now().add(waitDeadlineOverride ?? const Duration(seconds: 90));
+    final deadline = DateTime.now().add(waitDeadlineOverride ?? readyTimeout);
     var attempt = 0;
     while (DateTime.now().isBefore(deadline)) {
       attempt++;
-      // ⚠️ up 期间后端可能绑到了**新端口**（自动挑端口 / 候选被占回落）：
-      // `.run\api.json` 在它一绑上就被改写，而这里探活用的还是 App 启动时读到的
-      // 旧地址 —— 不每轮重读就会对着一个没人听的端口白等满 90 秒，报
-      // "等待后端超时"（2026-09-22 实测：后端早已就绪，只是 App 看的门牌是旧的）。
-      // 用户手填过地址时 refreshBaseUrlFromPortFile 什么也不做（那是远程配置）。
+      // ⚠️ 每轮都重读端口文件：后端绑好端口后自己写它，而我们探活用的地址
+      // 可能还是启动时读到的那个（用户手填过地址时这一步什么也不做）。
       if (await _settings.refreshBaseUrlFromPortFile()) {
         _log('后端换了端口，改探 ${_settings.baseUrl}（读自 .run\\api.json）');
       }
       final h = await probe(timeout: const Duration(seconds: 2));
       if (h != null && h['database'] == 'ok') {
         _log('后端已就绪：版本 ${h['version']}，存储目录 ${h['storageDir']}');
+        servicesClaimed = true;
         _set(StartupPhase.ready, '后端已就绪');
         return true;
       }
-      if (attempt % 5 == 0) {
-        _log('仍在等待…（${attempt * 2}s）${h == null ? "后端未响应" : "数据库 ${h['database']}"}');
+      if (_cancelled) return _fail('已取消启动');
+      if (exited) {
+        return _fail('后端启动失败：进程已退出（退出码 $exitCode）。日志见上。'
+            '常见原因：数据库文件被别的进程占着、端口绑不上、或 exe 与源码不匹配。');
       }
-      await Future.delayed(const Duration(seconds: 2));
+      if (attempt % 10 == 0) {
+        _log('仍在等待…（${attempt}s）'
+            '${h == null ? "后端未响应" : "数据库 ${h['database']}"}');
+      }
+      await Future.delayed(const Duration(milliseconds: 1000));
     }
 
-    return _fail('等待后端超时。可以看设置页的「查看服务日志」，或手动执行 '
-        'scripts\\comfyhub.ps1 doctor 体检（缺 pwsh / VC++ 运行时 / JDK 会在那里报出来），'
-        '也可以直接 scripts\\comfyhub.ps1 up 看完整输出。');
+    return _fail('等待后端超时（${(waitDeadlineOverride ?? readyTimeout).inSeconds} 秒）。'
+        '后端日志见上方输出；也可以在「设置 → 本地服务」里点「停止」再点「启动 / 修复服务」。');
   }
 
-  /// 停止 / 重启 / 只跑一遍脚本（不走健康等待）
+  /// 停下"我们认领过的"后端（自己起的 + 接管来的），不动别人的。
+  Future<bool> _stopClaimed({bool log = false}) async {
+    var killed = false;
+    final pids = _claimedPids.toList();
+    for (final pid in pids) {
+      if (await _killPid(pid)) killed = true;
+    }
+    // 句柄还在手上时优先用它（进程已经退出时 kill 返回 false，不算错）
+    final proc = _process;
+    if (proc != null) {
+      try {
+        if (proc.kill()) killed = true;
+      } catch (_) {}
+    }
+    _claimedPids.clear();
+    _process = null;
+    if (log && killed) _log('已停掉后端进程（pid ${pids.join('、')}）');
+    return killed;
+  }
+
+  /// 停止本地服务（用户点「停止」/「重启」时走这条）。
+  ///
+  /// 与退出收尾的区别：这里是**明确的用户意图**，所以除了认领过的那个，
+  /// 还会把端口文件里记着的、以及按映像名找到的后端一起收掉
+  /// （`server.ps1 stop` 以前就是这么干的）。
+  Future<bool> stopBackend() async {
+    if (busy) return false;
+    _set(StartupPhase.starting, '正在停止后端…');
+    var killed = await _stopClaimed(log: true);
+
+    final pid = _portFilePid();
+    if (pid != null && pid > 0 && await _killPid(pid)) killed = true;
+
+    if (!killed) {
+      final byName = await _taskkillByName();
+      killed = byName;
+    }
+
+    servicesClaimed = false;
+    if (killed) {
+      // 让收尾跑完：后端要删端口记录、写完 WAL 再退出（最多等 5 秒）
+      for (var i = 0; i < 25; i++) {
+        if (await probe(timeout: const Duration(milliseconds: 300)) == null) break;
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+      _set(StartupPhase.idle, '本地服务已停止');
+    } else {
+      _set(StartupPhase.idle, '本地服务本来就没在跑');
+    }
+    return killed;
+  }
+
+  /// 停止 / 重启（设置页按钮的共同出口）
   Future<void> runAction(String action) async {
     if (busy) return;
-    final script = resolveScript();
-    final shell = resolveShell();
-    if (script == null || shell == null) {
-      _fail('找不到 scripts\\comfyhub.ps1 或 pwsh。');
-      return;
-    }
-    _set(StartupPhase.starting, '正在执行 comfyhub.ps1 $action …');
-    final args = <String>[
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      script.path,
-      action,
-    ];
-    _addOwnerArgs(args, action);
-    final code = await _exec(shell, args, script.parent.parent.path,
-        environment: _scriptEnvironment);
-    if (code == null) return;
-
-    if (action == 'down' || action == 'restart') {
-      // restart 会换端口（旧的后端被停掉，新的重新随机挑一个）：收尾探活前
-      // 按 .run\api.json 重新发现一次，否则会对着旧端口误报"重启后后端没起来"。
-      await _settings.refreshBaseUrlFromPortFile();
-      final h = await probe(timeout: const Duration(seconds: 2));
-      if (h != null && h['database'] == 'ok') {
-        _set(StartupPhase.ready, '后端已就绪');
-      } else if (action == 'down') {
-        _set(StartupPhase.idle, '本地服务已停止');
-      } else {
-        _set(StartupPhase.failed, '重启后后端没起来，请看日志');
-      }
-    } else {
-      _set(phase == StartupPhase.starting ? StartupPhase.idle : phase, message);
+    switch (action) {
+      case 'down':
+      case 'stop':
+        await stopBackend();
+        return;
+      case 'restart':
+        await stopBackend();
+        await ensureRunning(force: true);
+        return;
+      default:
+        _fail('不认识的本地服务动作：$action');
     }
   }
 
@@ -442,18 +465,14 @@ class BackendLauncher extends ChangeNotifier {
   //  退出收尾：「谁起的谁关」
   // -------------------------------------------------------------------------
 
-  /// 关 App 时把**本地服务**停掉：调 `scripts\comfyhub.ps1 release`
-  /// （只停后端，**绝不动 App 进程** —— `down` 会按进程名杀 viewer，不能在这里用）。
+  /// 关 App 时把**本地服务**停掉（只停我们认领过的那些）。
   ///
-  /// 为什么能"活过我们自己的退出"：pwsh 是独立进程，父进程（App）退出不会带走它
-  /// （Windows 不会因为父进程退出就杀子进程）。实测：父进程起来 400ms 后直接 exit(0)，
-  /// 子 pwsh 的 stdout 管道虽然断了，它依然把后面的步骤全部跑完并写了收尾文件。
-  ///
-  /// 最多等 [timeout] 就返回，剩下的步骤在后台跑完 —— 关窗口绝不能卡住。
-  /// 任何异常（找不到脚本 / 起不来 / 超时）都只记日志，绝不让 App 关不掉。
-  Future<bool> releaseOnExit({
-    Duration timeout = exitReleaseTimeout,
-  }) async {
+  /// 三条纪律：
+  ///   · 设置里关掉「关闭 App 时一并停止本地服务」→ 什么都不做（服务常驻）；
+  ///   · 这次没起过 / 没接管过 → 什么都不做（别人终端里起的后端不归我们管）；
+  ///   · 最多等 [timeout] 就返回 —— **关窗口绝不能卡住**，剩下的收尾后端自己会跑完
+  ///     （它还握着 `--watch-stdin` 那根管道：我们一退出，它照样会优雅退出）。
+  Future<bool> releaseOnExit({Duration timeout = exitReleaseTimeout}) async {
     if (_releaseStarted) return false;
     _releaseStarted = true;
     if (!_settings.stopServicesOnExit) {
@@ -464,136 +483,139 @@ class BackendLauncher extends ChangeNotifier {
       _log('这次运行没有启动/接管过本地服务，退出时不主动停它们。');
       return false;
     }
-    final args = _buildServiceArgs('release');
-    if (args == null) return false;
 
-    final proc = await _spawnDetached(args.shell, args.args, args.workDir);
-    if (proc == null) return false;
-
-    try {
-      final code = await proc.exitCode.timeout(timeout);
-      _log('已停止本地服务（release 退出码 $code）');
-      return true;
-    } on TimeoutException {
-      _log('release 超过 ${timeout.inSeconds}s 还没结束，让它在后台跑完（不影响关闭）。');
-      return false;
-    } catch (e) {
-      // exitCode 在个别平台/模式下会直接抛（比如 detached），忽略即可
-      _log('release 结果未知（$e），已放它在后台跑完。');
-      return false;
-    }
-  }
-
-  /// 用户把「关闭 App 时一并停止本地服务」**关掉**时调用：撤掉已挂的守护进程。
-  ///
-  /// 只跳过 release 是不够的 —— 守护进程还在跑，App 一死它照样停服务。
-  /// 这个动作删掉认领令牌，守护下一轮（≤3 秒）就静默退出，服务交还给用户。
-  Future<bool> disarmOwnerWatch() async {
-    if (!servicesClaimed) return false;
-    final args = _buildServiceArgs('unwatch');
-    if (args == null) return false;
-    final proc = await _spawnDetached(args.shell, args.args, args.workDir);
-    if (proc == null) return false;
-    // 撤回认领：之后退出时 release 不会再动服务
+    _log('关闭 App：正在停掉本次启动的本地服务…');
+    // ⚠ 先把句柄取出来：`_stopClaimed` 会把 `_process` 置空，之后再读就晚了
+    final proc = _process;
+    final stopped = await _stopClaimed();
     servicesClaimed = false;
-    _log('用户关掉了「关闭 App 时一并停止本地服务」：已撤销退出守护，服务继续运行。');
-    return true;
+
+    if (proc != null) {
+      try {
+        final code = await proc.exitCode.timeout(timeout);
+        _log('本地服务已停止（后端退出码 $code）');
+      } on TimeoutException {
+        _log('后端 ${timeout.inSeconds}s 内还没退干净，放它在后台收尾'
+            '（stdin 一关它也会自己退，不影响关闭）。');
+      } catch (e) {
+        _log('后端退出结果未知（$e），已放它在后台跑完。');
+      }
+    }
+    return stopped;
   }
 
-  /// 补挂「关 App 自动停服务」的守护进程：`comfyhub.ps1 watch -OwnerPid <自己>`。
+  /// 用户把「关闭 App 时一并停止本地服务」**关掉**时调用：撤销认领。
   ///
-  /// 用在 [ensureRunning] 探到后端已经健康、**根本没跑 up** 的那条路径上：
-  /// 那种情况下 watchdog 没挂上，硬杀 App 就会留下没人管的后端。
-  /// 只等"进程起来"（几毫秒），不等它退出；出错只记日志，绝不抛。
-  Future<bool> armOwnerWatch() async {
-    if (!_settings.stopServicesOnExit) return false;
-    final args = _buildServiceArgs('watch', withOwnerPid: true);
-    if (args == null) return false;
-
-    final proc = await _spawnDetached(args.shell, args.args, args.workDir);
-    if (proc == null) return false;
-    // 挂上了守护 = 我们认领了这几个服务：硬杀由守护收尾，正常关闭由 release 收尾
-    servicesClaimed = true;
-    _log('已补挂退出守护：App(PID $pid) 退出后会停掉正在运行的本地服务。');
+  /// 不需要像以前那样再去撤一个 `watch-owner` 守护进程 —— 那份守护已经由
+  /// `--watch-stdin`（后端自己盯着这根管道）取代了。
+  Future<bool> disarm() async {
+    if (!servicesClaimed) return false;
+    servicesClaimed = false;
+    _claimedPids.clear();
+    _log('用户关掉了「关闭 App 时一并停止本地服务」：退出时不再停服务。');
     return true;
   }
 
-  /// 给 release / watch 拼参数；返回 null 表示环境不满足（找不到脚本 / pwsh）。
-  _ServiceCall? _buildServiceArgs(String action, {bool withOwnerPid = false}) {
-    if (kIsWeb || !Platform.isWindows) return null;
-    final script = resolveScript();
-    if (script == null) {
-      _log('提示: 找不到 scripts\\comfyhub.ps1，退出时不会自动停本地服务。');
-      return null;
-    }
-    final shell = resolveShell();
-    if (shell == null) {
-      _log('提示: PATH 里找不到 PowerShell，退出时不会自动停本地服务。');
-      return null;
-    }
-    final args = <String>[
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      script.path,
-      action,
-    ];
-    if (withOwnerPid) {
-      args..add('-OwnerPid')..add('$pid');
-    }
-    return _ServiceCall(shell, args, script.parent.parent.path);
-  }
+  // -------------------------------------------------------------------------
+  //  认领 / 杀进程 / 权限标签
+  // -------------------------------------------------------------------------
 
-  /// 起一个"自己活下去"的子进程并把输出回显到日志；起不来返回 null（不抛）。
-  Future<Process?> _spawnDetached(
-      String shell, List<String> args, String workingDirectory) async {
-    try {
-      _log('$shell ${args.join(' ')}');
-      final proc = await processStarter(shell, args, workingDirectory: workingDirectory);
-      proc.stdout
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .transform(const LineSplitter())
-          .listen(_log, onError: (_) {});
-      proc.stderr
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .transform(const LineSplitter())
-          .listen(_log, onError: (_) {});
-      return proc;
-    } catch (e) {
-      _log('执行失败（已忽略，不影响关闭）: $e');
-      return null;
+  /// 记下"这个 pid 是我们的人"。
+  void _claim(int? pid) {
+    if (pid != null && pid > 0) {
+      _claimedPids.add(pid);
+      servicesClaimed = true;
     }
   }
 
-  /// 跑一个子进程并把输出实时回显到启动页日志；返回退出码（启动失败返回 null）
-  Future<int?> _exec(String shell, List<String> args, String workingDirectory,
-      {Map<String, String>? environment}) async {
-    _log('$shell ${args.join(' ')}');
+  /// 探到"后端已经在跑"时把它认领下来：pid 取自后端自己写的 `.run\api.json`。
+  void _claimRunningBackend() {
+    final pid = _portFilePid();
+    if (pid != null && pid > 0) {
+      _claim(pid);
+      _log('已认领正在运行的后端（pid $pid）：关 App 时会按设置把它一并停掉。');
+    } else {
+      _log('提示：端口记录里没有后端 pid（`.run\\api.json` 缺 pid），退出时不会主动停它。');
+    }
+  }
+
+  int? _portFilePid() {
+    final root = layout?.root ?? detectRoot(from: _settings.projectRoot);
+    if (root == null) return null;
+    final state = readPortFile(root);
+    final pid = state?['pid'];
+    return pid is int ? pid : null;
+  }
+
+  static Future<bool> _killPid(int pid) async {
+    if (pid <= 0) return false;
+    final over = killPidOverride;
+    if (over != null) return over(pid);
     try {
-      final proc = await Process.start(
-        shell,
-        args,
-        workingDirectory: workingDirectory,
-        environment: environment,
-        runInShell: false,
-      );
-      proc.stdout
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .transform(const LineSplitter())
-          .listen(_log);
-      proc.stderr
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .transform(const LineSplitter())
-          .listen(_log);
-      final code = await proc.exitCode;
-      _log('退出码 $code');
-      return code;
-    } catch (e) {
-      _fail('执行失败: $e');
+      return Process.killPid(pid);
+    } catch (_) {
+      return false; // 进程已经没了 / 没权限：都不算异常
+    }
+  }
+
+  /// 按映像名收后端（用户点「停止」时的兜底：端口文件可能缺 pid 或指向了旧进程）。
+  Future<bool> _taskkillByName() async {
+    _log('按映像名收一遍 $kServerExeName …');
+    final result = await _runTool('taskkill', ['/F', '/IM', kServerExeName]);
+    if (result == null) return false;
+    // taskkill 找不到进程时回 128（"没有找到"），那不是错误
+    return result.exitCode == 0;
+  }
+
+  static Future<ProcessResult?> _runTool(
+      String executable, List<String> arguments) async {
+    try {
+      // Process.run 同样走 CREATE_NO_WINDOW（见类注释），不会闪黑框
+      return await Process.run(executable, arguments);
+    } catch (_) {
       return null;
     }
   }
+
+  Future<ProcessResult?> _tool(String exe, List<String> args) =>
+      (toolRunnerOverride ?? _runTool)(exe, args);
+
+  /// 把后端 exe 的**完整性标签**设回 `Medium`（best-effort，失败只记日志）。
+  ///
+  /// # 为什么要这一步（2026-09-30 用户实测的两条事实）
+  ///
+  /// 1. **写限制是"完整性级别（IL）"判的，不是路径 / 用户 / 会话**：清掉 exe 上的
+  ///    `Low` 标签，后端立刻就能写 ComfyUI 目录（`%TEMP%`、`D:\Comfy-Desktop\…` 同理）。
+  /// 2. **Windows 取 `min(父进程, 映像)`**：链路上**任何一环**是 Low，子进程照样掉回 Low
+  ///    —— 而"在工作区里构建出来的产物普遍带着 Low 标签"，`viewer.exe` 也不例外。
+  ///
+  /// 所以这一步只能救一半，而且救的正是常见的那一半：**App 自己是 Medium
+  /// （用户双击、从普通终端起），只是后端的 exe 上还留着构建时带的 Low 标签**。
+  /// 两种情况下它一定救不了，也只能如实记一句：
+  ///   · App 自己就是 Low（`viewer.exe` 也带着 Low 标签）—— Low 改不动向上的标签；
+  ///   · 没有 `icacls`（非 Windows / 精简系统）。
+  /// 真正的判断在**后端自己**的写探针上（`GET /api/system/confinement`，界面上有横幅），
+  /// 这里只做"顺手把标签归一"。
+  Future<void> _normalizeIntegrity(String exe) async {
+    if (kIsWeb || !Platform.isWindows) return;
+    final result = await _tool('icacls', [exe, '/setintegritylevel', 'Medium']);
+    if (result == null) {
+      _log('[权限] 没能执行 icacls（跳过完整性标签归一，后端照样会起）。');
+      return;
+    }
+    final lines = result.stdout.toString().trim().split('\n');
+    final first = lines.isEmpty ? '' : lines.first.trim();
+    if (result.exitCode == 0) {
+      _log('[权限] 已把后端 exe 的完整性标签设回 Medium（Low 标签是"写不进工作区外"的根因，'
+          '判据见 GET /api/system/confinement）。');
+    } else {
+      _log('[权限] 设完整性标签失败（icacls 退出码 ${result.exitCode}）$first —— '
+          'App 自己多半也跑在 Low 上（链路上任何一环是 Low，子进程就掉回 Low）。'
+          '那种情况只能把整个产物拷到工作区外，或在不受限的终端里重新构建一次。');
+    }
+  }
+
+  // -------------------------------------------------------------------------
 
   /// 用户在启动页点「先跳过」——不阻塞使用（离线只看本地缓存/稍后再连）
   void skip() {
@@ -603,12 +625,7 @@ class BackendLauncher extends ChangeNotifier {
 
   void cancel() {
     _cancelled = true;
-    final p = _process;
-    if (p != null) {
-      try {
-        p.kill();
-      } catch (_) {}
-    }
+    unawaited(_stopClaimed());
     _set(StartupPhase.failed, '已取消');
   }
 
@@ -651,18 +668,11 @@ class BackendLauncher extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    try {
-      _process?.kill();
-    } catch (_) {}
+    // 兜底：窗口关闭那刀（`AppLifecycleListener.onExitRequested`）没走成时，
+    // 至少别把这个后端留成孤儿。设了"保留服务"就什么都不做。
+    if (servicesClaimed && _settings.stopServicesOnExit) {
+      unawaited(_stopClaimed());
+    }
     super.dispose();
   }
-}
-
-/// release / watch 一次调用的参数（shell + 参数 + 工作目录）
-class _ServiceCall {
-  final String shell;
-  final List<String> args;
-  final String workDir;
-
-  const _ServiceCall(this.shell, this.args, this.workDir);
 }

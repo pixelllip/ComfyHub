@@ -19,6 +19,10 @@
 //! 3. **错误要翻成人话**（Kotlin `friendlyError`）：把 `ConnectException` 的类名丢给用户，
 //!    他只会看到一串 Java 内部名字，而不是"ComfyUI 没在运行？"。
 
+use std::path::PathBuf;
+
+use serde_json::Value;
+
 /// 一次队列快照（Kotlin `refreshQueue` 的三个字段）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueueSnapshot {
@@ -172,13 +176,19 @@ fn take_chars(text: &str, max: usize) -> String {
 ///
 /// `pub`：捕获轮询（`/history`）也走它 —— ComfyUI 的地址与代理纪律只有这一处实现。
 pub async fn get_json(url: &str) -> Result<serde_json::Value, String> {
+    get_json_with_timeout(url, 20).await
+}
+
+/// 同上，但**超时自定**：探测实例 input 目录那条路要一个短超时
+/// （实例没起来时"连不上"是瞬间的，但地址写错时不该把投放卡 20 秒）。
+pub async fn get_json_with_timeout(url: &str, timeout_secs: u64) -> Result<serde_json::Value, String> {
     let host = host_of(url);
     let client = crate::upstream::client_for(&host)
         .map_err(|e| format!("HTTP 客户端创建失败：{}", e.human()))?;
     let response = client
         .get(url)
         .header("Accept", "application/json")
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .send()
         .await
         .map_err(|e| friendly_error(&e, url))?;
@@ -188,6 +198,93 @@ pub async fn get_json(url: &str) -> Result<serde_json::Value, String> {
     }
     let text = response.text().await.map_err(|e| format!("读响应失败：{e}"))?;
     serde_json::from_str(&text).map_err(|e| format!("响应不是 JSON：{e}"))
+}
+
+// ---------------------------------------------------------------------------
+//  问实例："你读的是哪个 input 目录？"（2026-09-30 那个 400 的解药）
+// ---------------------------------------------------------------------------
+
+/// 探测实例 input 目录的超时（秒）。短一点：**问不到就当没问**（回落候选顺序），
+/// 不许因为一次探测把投放卡住。
+const PROBE_TIMEOUT_SECS: u64 = 5;
+
+/// 最多拿实例名单里的多少个名字去比对（input 目录可能有几千个文件，没必要全比）。
+const PROBE_MAX_NAMES: usize = 200;
+
+/// 实例"看得见"的 input 文件名单（`GET /object_info/LoadImage` 里 `image` 的候选值）。
+///
+/// 这是**实例自己报的** —— 它排除了"配置里写了什么"，是"它到底读哪儿"的唯一权威答案。
+pub async fn instance_input_names(comfy_url: &str) -> Result<Vec<String>, String> {
+    let base = comfy_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err("ComfyUI 地址没配置".to_string());
+    }
+    let body = get_json_with_timeout(&format!("{base}/object_info/LoadImage"), PROBE_TIMEOUT_SECS).await?;
+    let names = body
+        .get("LoadImage")
+        .and_then(|node| node.get("input"))
+        .and_then(|input| input.get("required"))
+        .and_then(|required| required.get("image"))
+        .and_then(Value::as_array)
+        .and_then(|spec| spec.first())
+        .and_then(Value::as_array)
+        .map(|values| {
+            values.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()
+        });
+    names.ok_or_else(|| "object_info 里没有 LoadImage.image 的候选名单（这个实例不认识 LoadImage？）".to_string())
+}
+
+/// **哪一个候选目录装着实例报出来的那些文件** —— 也就是"实例真正在读的那个 input"。
+///
+/// 判据是**覆盖面**：实例的名单就是它 input 目录的一份完整枚举，所以覆盖它最多的那个候选
+/// 就是它（两个目录里都有的公共文件，比如 ComfyUI 自带的 `example.png`，只算一票，
+/// 分不出高下）。
+///
+/// ⚠ **并列第一就 `None`**（宁可回落到候选顺序，也不猜）：猜错的表现是提交时
+/// `400 Invalid image file`，比"没探测到"更难查。
+pub fn dir_owning(candidates: &[PathBuf], names: &[String]) -> Option<PathBuf> {
+    if names.is_empty() {
+        return None;
+    }
+    let wanted: Vec<String> = names
+        .iter()
+        .take(PROBE_MAX_NAMES)
+        // 子目录形式（`sub/a.png`）按文件名比 —— 我们投放恒用空 subfolder，
+        // 但实例那边给出来的可能是带子目录的写法
+        .map(|name| name.rsplit('/').next().unwrap_or(name).to_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect();
+    let mut best: Option<(PathBuf, usize)> = None;
+    let mut tied = false;
+    for candidate in candidates {
+        let Ok(entries) = std::fs::read_dir(candidate) else { continue };
+        let present: std::collections::HashSet<String> = entries
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_lowercase())
+            .collect();
+        let hits = wanted.iter().filter(|name| present.contains(*name)).count();
+        if hits == 0 {
+            continue;
+        }
+        match &best {
+            Some((_, best_hits)) if hits == *best_hits => tied = true,
+            Some((_, best_hits)) if hits < *best_hits => {}
+            _ => {
+                best = Some((candidate.clone(), hits));
+                tied = false;
+            }
+        }
+    }
+    match best {
+        Some((dir, _)) if !tied => Some(dir),
+        _ => None,
+    }
+}
+
+/// [`dir_owning`] 的线上版：问一次实例，答话就用它，问不到就 `None`（不报错 —— 见 [`dir_owning`]）。
+pub async fn instance_input_dir(comfy_url: &str, candidates: &[PathBuf]) -> Option<PathBuf> {
+    let names = instance_input_names(comfy_url).await.ok()?;
+    dir_owning(candidates, &names)
 }
 
 /// 取一段二进制（产物下载兜底 `GET /view`）。
@@ -335,6 +432,46 @@ mod tests {
         ]);
         assert_eq!(label_of_queue_item(&blank), None);
         assert_eq!(label_of_queue_item(&serde_json::json!({})), None);
+    }
+
+    /// **哪一个候选目录装着实例报出来的那些文件** —— 也就是实例真正在读的那个 input。
+    ///
+    /// 用 2026-09-30 那台机器的真实形状当用例：安装目录那份 input 有 18 个文件、
+    /// 共享那份有 92 个，而实例报出来的名单是**共享**那份（它的 argv 里两条 input 参数、
+    /// argparse 取后写的 `--input-directory <共享>`）。
+    #[test]
+    fn dir_owning_picks_the_input_the_instance_actually_reads() {
+        let root = crate::testpaths::scratch("dir-owning");
+        let install = root.join("ComfyUI-Installs").join("ComfyUI").join("input");
+        let shared = root.join("ComfyUI-Shared").join("input");
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+        // 两边都有的公共文件（ComfyUI 自带的 example.png 就是这种）
+        for dir in [&install, &shared] {
+            std::fs::write(dir.join("example.png"), "x").unwrap();
+        }
+        // 只有共享那份有的（实例名单里绝大多数是这一类）
+        for name in ["a-00000000.jpg", "b-00000000.jpg", "c-00000000.jpg"] {
+            std::fs::write(shared.join(name), "x").unwrap();
+        }
+        // 只有安装目录那份有的（我们投错地方时写进去的就是这种）
+        std::fs::write(install.join("comfyhub_t2i_anima_00024_-m1.png"), "x").unwrap();
+
+        let names: Vec<String> =
+            ["example.png", "a-00000000.jpg", "b-00000000.jpg", "c-00000000.jpg"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        let picked = dir_owning(&[install.clone(), shared.clone()], &names);
+        assert_eq!(picked, Some(shared.clone()), "谁覆盖得多就是谁 —— 公共文件只算一票");
+
+        // 并列第一（两边都只装着公共那份）→ **None**：宁可回落到候选顺序，也不猜
+        assert_eq!(dir_owning(&[install.clone(), shared], &["example.png".to_string()]), None);
+        // 名单是空的 / 候选里一个都装不下 → None
+        assert_eq!(dir_owning(&[install.clone()], &[]), None);
+        assert_eq!(dir_owning(&[install], &["nope.png".to_string()]), None);
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

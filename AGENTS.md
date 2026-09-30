@@ -9,15 +9,18 @@
 - **只动 `lib/` 下的 Dart 代码**（页面 / 组件 / 主题 / 状态）→ 用 debug 版，跑起来后按 `r` 热重载，1~2 秒见效：
 
   ```powershell
-  pwsh -File scripts\dev-app.ps1        # 确保后端在跑（数据库是本地 SQLite，P2 起不用起库）→ flutter run -d windows --debug
+  pwsh -File scripts\dev-app.ps1        # ① 后端二进制缺/旧就先 cargo build --release ② flutter run -d windows --debug
   ```
 
-  它会先 `comfyhub.ps1 up -SkipBuild`，再 `flutter run -d windows --debug`；
-  想自己来也可以直接 `flutter run -d windows --debug`（记得先 `$env:PUB_HOSTED_URL='https://pub.dev'`）。
+  **后端由 App 自己起**（`lib\core\backend_launcher.dart` 直接执行 exe，2026-09-30 起不再经过 pwsh）——
+  `dev-app.ps1` 只负责"保证那份二进制存在且是最新的"，起停不归它管。
+  想自己来也可以直接 `flutter run -d windows --debug`（记得先 `$env:PUB_HOSTED_URL='https://pub.dev'`，
+  并且 `server-rs\target\{release,debug}\` 里得先有一份编好的后端）。
 
-- **别**为了看一个前端改动去跑 `scripts\autorun-app.ps1` / `flutter build windows` ——
+- **别**为了看一个前端改动去跑 `flutter build windows --release` ——
   那是 Release 完整构建，几分钟起步（改 `windows/` 原生代码、改 `pubspec.yaml` 依赖、
-  要出正式产物时才需要）。
+  要出正式产物时才需要）。它也**不需要**任何 `.ps1`：构建末段 CMake 会自己
+  `cargo build --release` 并把后端装进 `backend\`。
 - 改完前端至少过一遍：`flutter analyze` + `flutter test`（`PUB_HOSTED_URL=https://pub.dev`）。
   详情页大图、工作流弹窗这类交互改动，回归用例分别在 `test\zoomable_image_test.dart` 和
   `test\workflow_viewer_test.dart`，别只跑 `widget_test.dart`。
@@ -26,73 +29,52 @@
   为了用掉 import 而写的占位用例、同一行为的两种写法 —— 这类**该删就删**（用户提过"减少一些
   已经通过、不太重要的测试项"）。判断方法只有一句：**删了以后出错还能不能被测试抓住**。
   真正的防线（零上游请求、审批顺序、越界写被拒、内联预算、滚动条与懒构建…）一条都不能删。
-  本机实测的耗时（别凭感觉说"测试太慢"，2026-09-23 重新量过）：`flutter test` 196 例 ≈ 23s、
-  `gradle test` 597 例 ≈ 25s（热构建；首跑要编译）、`e2e-ai-tools-test.ps1` 111 项 ≈ 5~15s、
-  `e2e-capture-test.ps1` / `e2e-submit-test.ps1` 各 ≈ 20~35s（后者含"工作流文件直接提交"那一幕）。
+  本机实测的耗时（别凭感觉说"测试太慢"）：`flutter test` 407 例 ≈ 25s、
+  `cargo test`（后端 lib 613 例 + 集成）≈ 30s（热构建；首跑要编译）、
+  `e2e-ai-tools-test.ps1` 111 项 ≈ 5~15s、`e2e-capture-test.ps1` / `e2e-submit-test.ps1` 各 ≈ 20~35s。
 - **Rust 用例要落盘，只许用 `crate::testpaths::scratch()`**（`tests/` 里是
   `comfyhub_server_rs::testpaths::scratch()`），落点是 `<crate>\target\.scratch\`。
-  **别写 `std::env::temp_dir()`** —— `cargo test` 的测试二进制 `target\debug\deps\*.exe`
-  **在工作区内**，按"映像位置"判的写限制必然命中它：受限会话里本机实测 `cargo test --lib`
-  **539 过 / 69 红**，红的原因清一色 `PermissionDenied (os error 5)`，**与被测代码无关**
-  （2026-09-29 那次迁移就是把 47 处 `temp_dir()` 换掉，现在 lib 613 + 集成用例全绿）。
+  **别写 `std::env::temp_dir()`** —— 它在工作区外，而工作区里构建出来的测试二进制带着
+  Low 完整性标签（见**第 12 节**），受限会话里必然 `PermissionDenied (os error 5)`，
+  与被测代码无关（2026-09-29 那次迁移就是把 47 处 `temp_dir()` 换掉，现在全绿）。
   同理，**要造"写不进去"的场景就用"在目标文件名上放一个同名目录"**，别去改 ACL ——
   Windows 上那必然回 `ERROR_ACCESS_DENIED`，与受限现场同一个错码，且不依赖本机 ACL。
-- 产物目录：debug 在 `build\windows\...\runner\Debug\`、Release 在 `...\Release\`；
-  `autorun-app.ps1` / `comfyhub.ps1 up -WithApp` 启动 App 时**优先挑 Release**。
+- 产物目录：debug 在 `build\windows\...\runner\Debug\`、Release 在 `...\Release\`。
+  **debug 产物里没有 `backend\`**（只有 release 构建才装它），所以 debug 版用的是
+  `server-rs\target\{release,debug}\` 里那份 —— 改了 Rust 只要 `cargo build`，不用重建 App。
 - **"我改了但界面没变"先查构建新鲜度，别急着怀疑代码**：App 是直接双击 / `Start-Process`
   拉起旧产物时，跑的还是上一次编的 Dart（Release 看 `data\app.so`、debug 看
   `data\flutter_assets\kernel_blob.bin`）。2026-09-17 "画廊/提示词里的视频预览图不显示"
   就是这么丢的：源码 20:11 改好，用户手里跑的是 18:50 编的内核 —— 只跑 `flutter test`
   永远发现不了（测试跑的是源码，用户看的是旧二进制）。所以**界面类修复必须
-  `flutter build windows --debug`（或 `dev-app.ps1`）重启一次，再截图确认**；
-  `comfyhub.ps1 doctor` 会分别报"该启动的 App"和"正在跑的 App"是不是旧构建，
-  `up -WithApp` 选中/接管到旧构建时也会当场警告。
+  `flutter build windows --debug`（或 `dev-app.ps1`）重启一次，再截图确认**。
+  后端同理：`scripts\backend.ps1 build` 会在源码变新时重编，`status` 里能看到跑的是哪一份。
 
-## 2. 本地服务必须"静默"启动（不弹命令行窗口）
+## 2. 本地服务必须"静默"启动（不弹命令行窗口）—— 现在由 Dart 保证
 
-后端由 App 启动时自动拉起（**数据库是 SQLite 文件，P2 起不用起数据库服务**），
-**不允许出现任何 cmd / 控制台窗口**。三件事都要记住：
+后端由 App 自己启动（**数据库是 SQLite 文件，P2 起不用起数据库服务**），
+**不允许出现任何 cmd / 控制台窗口**。2026-09-30 之后的结论很干脆：
 
-1. **不能用 `Start-Process`** 起后端：进程属于当前 PowerShell 的进程树，
-   命令行一结束就可能被一起回收。要用 WMI `Win32_Process.Create` 脱离进程树。
-   - ⚠ **唯一的例外（2026-09-28 新增的第 3 档 `direct-hidden`）**：**WMI 那一下被系统拒绝**时
-     （实测现场就是用户报的 `flutter run -d windows` 拉不起后端：报
-     `Invoke-CimMethod … Win32_Process -MethodName Create` **拒绝访问**；而**同一个进程树里**
-     直接 `CreateProcess` 是通的 —— 判据是
-     `node -e "require('child_process').spawnSync('cmd',['/c','echo OK'],{encoding:'utf8'})"`
-     回 `0 OK`，所以被拒的是 WMI 本身，不是"整棵树被关住"），
-     `silent-process.ps1` 会自动退到 `Start-Process -WindowStyle Hidden`
-     （= .NET `Process.Start` → 直接 `CreateProcessW` + `STARTF_USESHOWWINDOW/SW_HIDE`，
-     与 `ShowWindow=0` 效果一致，且不经过 WmiPrvSE）。
-     **代价必须记住：它不脱离作业对象** —— 所以顺序永远是"能 WMI 就 WMI"，
-     只有 WMI 被拒才退这一档；`Start-SilentProcess` **如实返回实际用的是哪一档**
-     （`wmi-hidden` / `wmi-vbs` / `direct-hidden` / `wmi-plain`）。
-     `$env:COMFYHUB_SPAWN_MODE = 'direct' | 'wmi'` 可强制走某一档（诊断用；也让这一档可测）。
-     回归就是现成那条（实测：全程 0 个新窗口）：
-     `$env:COMFYHUB_SPAWN_MODE='direct'; pwsh -File scripts\check-silent-start.ps1 -Restart`
-   - ⚠⚠ **2026-09-29 定案：「WMI 被系统拒绝」不是机器的属性**（逐条量过：`wmi-hidden` /
-     `wmi-vbs` / `direct-hidden` **三档都能起**，写同一个探针**全都是 OK** → spawn 档位与写权限**无关**）。
-     当时那批"拒绝访问"的现场，成因是**后端映像在工作区内**（见**第 12 节**），WMI 被拒只是它的**表现**。
-     **别再为"绕过 WMI"加新档位**，改这块之前先读第 12 节。
-2. **WMI 默认会给控制台程序分配一个可见的控制台窗口**（就是那个 cmd 黑框），
-   所以必须传 `Win32_ProcessStartup{ ShowWindow = 0 }`（SW_HIDE）。
-   公共实现是 `scripts\silent-process.ps1`，`server.ps1` 等脚本都 dot-source 它。
-   - `CreateFlags = CREATE_NO_WINDOW(0x08000000)` 会被 WMI 拒绝（`ReturnValue=21`），不要用；
-   - 传给 WMI 的 `CurrentDirectory` 绝不能是空串（`[string]` 参数没传值就是空串，不是 `$null`），
-     否则同样 `ReturnValue=21` —— 这就是"手敲行、脚本不行"的那个坑；
-   - `[wmiclass]`（System.Management）不可用时自动退到 `wscript` + 临时 `.vbs`：
-     命令行先落成 UTF-16 文件，VBS 读出来交给 `cmd.exe /c "…"`（**不能**让 `Run` 直接跑
-     "带引号的完整路径 + 参数"，实测 mysqld 会被悄悄丢掉），最后才退回裸 WMI（弹窗但服务能起）。
-3. **验证"没弹窗口"要看枚举窗口，不能看 `MainWindowHandle`**：控制台窗口属于 `conhost.exe`，
+1. **不需要任何技巧**：Dart 的 `Process.start`（attached 模式）在 Windows 上**自带
+   `CREATE_NO_WINDOW`** —— 这正是它源码注释里写的那个场景（"for gui applications
+   (flutter on windows) console might be absent, will create by CreateProcessW"）。
+   所以 `silent-process.ps1` 那套（WMI `Win32_Process.Create` + `ShowWindow=0` /
+   `wscript` + `.vbs` / `direct-hidden` 三档）**连同那个脚本一起删了**，
+   `COMFYHUB_SPAWN_MODE` 也不再存在。
+2. **"谁起的谁关"由进程句柄 + stdin 管道保证**：
+   * 正常关窗口 → `BackendLauncher.releaseOnExit()` 直接 `kill` 自己起的那个进程；
+   * 被任务管理器 / 崩溃强杀 → 后端启动时带的 `--watch-stdin` 生效：stdin 写端只有 App 持有，
+     App 一死管道即关，后端读到 EOF **优雅退出**（取代了 `watch-owner.ps1` 守护进程）。
+   回归：`server-rs/tests/watch_stdin_test.rs`（丢写端 → 必须自己退；管道活着 → 不许退）。
+3. **脚本那条路（`scripts\backend.ps1 start`）用 `Start-Process -WindowStyle Hidden`**：
+   它是给 e2e / dev 用的旁路，**不带 `--watch-stdin`**（Start-Process 给的不是管道，
+   带了后端会当场退出）。那条路**不脱离进程树**——这是刻意的：脚本活着它就活着，
+   脚本的 `finally` 负责收尾。
+4. **验证"没弹窗口"要看枚举窗口，不能看 `MainWindowHandle`**：控制台窗口属于 `conhost.exe`，
    `Get-Process cmd | Select MainWindowHandle` 永远是 0，会给你假绿灯。
-   正确做法是用 `EnumWindows` + `IsWindowVisible` 枚举可见顶层窗口，
-   并且**边启动边以 ~50ms 轮询**，否则"闪一下就没"的窗口抓不到。
-   现成的一条命令（返回 0 才算通过）：
-
-   ```powershell
-   pwsh -File scripts\check-silent-start.ps1 -Restart      # 从零走一遍 down → up
-   ```
-
+   正确做法是 `EnumWindows` + `IsWindowVisible` 枚举可见顶层窗口，并以 ~50ms 轮询。
+   （`check-silent-start.ps1` 已随新链路删除；要复测就照上面两句现写一个盯屏脚本 ——
+   注意**别用 `Start-Process` 起后端来做这个测试**，它本来就是"不保证无窗口"的那条路。）
 ## 3. 首页 / 导航顺序
 
 `lib/app.dart` 的 `HomeShell`：**默认落在「AI 工作台」页**（AIH-001），
@@ -108,11 +90,11 @@
 
 | 约束 | 说明 |
 | --- | --- |
-| JDK | **21~23**，但**只有回退旧 Kotlin 后端 / 跑 Gradle（含 `android/`）时才要**；Rust 后端不需要 JVM。`server.ps1` 只在真要用它时才解析（懒解析），可用 `COMFYHUB_JDK_HOME` 指定 |
+| JDK | **21~23**，但**只有回退旧 Kotlin 后端 / 跑 Gradle（含 `android/`）时才要**；Rust 后端不需要 JVM（发布包也不带 JRE）。要指定用 `COMFYHUB_JDK_HOME` |
 | MySQL | **已退役（2026-09-29）**：数据库自 P2 起是 SQLite 单文件 `<根>\.db\comfyhub.db`，`mysql.ps1` 与老库搬迁都不存在了；老机器上残留的 `D:\tools\mysql\`、`<项目>\.mysql\` 只是历史目录，不再被读取 |
 | pub 源 | 必须 `https://pub.dev`（国内镜像对个别包返回 424） |
-| 脚本 | 一律 `pwsh`（PowerShell 7）；脚本里的 WMI / CIM 调用依赖 Windows |
-| 端口 | 后端 `8080`、ComfyUI `8188`（原 MySQL `3307` 已随 2026-09-29 MySQL 退役，不再有任何用途） |
+| 脚本 | 一律 `pwsh`（PowerShell 7）。**App 与后端启动已经不需要 pwsh**（App 直接执行 exe），脚本只剩构建 / 测试 / 可选能力（`video-poster.ps1`）在用 |
+| 端口 | 后端**自动挑**（`--port 0`，真实端口在后端自己写的 `.run\api.json` 里）、ComfyUI `8188`（原 MySQL `3307` 已随 2026-09-29 MySQL 退役） |
 | Android 构建 | `android/` 走 AGP **9.4.0** + Gradle **9.6.0** + **AGP 内建 Kotlin**（`android.builtInKotlin=true`，`org.jetbrains.kotlin.android` 只钉版本、不 apply）；动 `android/` 之前先读 `docs/android-agp9-builtin-kotlin-migration.md` |
 | Gradle 代理 | `~/.gradle/gradle.properties` 配了本机代理 `127.0.0.1:7890`：`dl.google.com` / `repo.maven.apache.org` **必须绕过代理**（`systemProp.http.nonProxyHosts`），而 `github.com` 直连不通、**必须走代理** |
 | 后端出网代理 | **JVM 默认无视 Windows 系统代理**（一律 DIRECT）：本机 `civitai.com` 这类目标直连不通、只有 `127.0.0.1:7890` 通，所以 `server/build.gradle.kts` 的 `applicationDefaultJvmArgs` 带着 `-Djava.net.useSystemProxies=true`，出网客户端再统一挂 `com.comfyhub.ai.OutboundProxy` 的选择器（**公网走代理、本机/内网强制直连**——打开系统代理后 Java 会把 `127.0.0.1:8188` 也交给代理，会打死 ComfyUI）。自己用 `java -jar` 起后端时要手动补这个参数，或设 `COMFYHUB_HTTPS_PROXY` |
@@ -124,10 +106,13 @@
 
 ## 5. 改脚本时的约定
 
-- 脚本是**唯一入口**：App 的「启动 / 修复 / 重启 / 停止」按钮调的就是 `scripts\comfyhub.ps1`，
-  命令行和 App 行为必须一致，不要在 Dart 侧另写一份启动逻辑。
-- 新增脚本请放进 `scripts\`、用 `pwsh -File scripts\xxx.ps1 <动作>` 的形式，
-  并在 README 的「脚本速查」表里登记。
+- **App 的启动逻辑只有一份，在 Dart 里**（`lib\core\backend_launcher.dart` + `backend_paths.dart`）：
+  起停后端**不再经过任何脚本**，所以别在 `.ps1` 里另写一份"怎么起后端"——
+  2026-09-30 之前那套 `comfyhub.ps1 → server.ps1 → silent-process.ps1` 就是这么一层层堆起来的，已整体删除。
+- **只留构建脚本与必要脚本**：新增脚本前先问一句"这件事能不能不进 `scripts\`"。
+  真要加就放进 `scripts\`、用 `pwsh -File scripts\xxx.ps1 <动作>` 的形式，并在 README「脚本速查」里登记。
+- **`scripts\backend.ps1` 是唯一允许碰后端的脚本**（给 e2e / dev 用），它的候选顺序是
+  `lib\core\backend_paths.dart` 的镜像 —— 改一边必须改另一边（第 7 节的纪律）。
 - PowerShell 坑：`& script.ps1` 的 **stdout 会成为表达式的返回值**，
   在 `$ok = & other.ps1 …` 这种地方必须 `| Out-Null`，否则返回值被输出数组污染、判断永远为真。
 
@@ -162,97 +147,104 @@
   正确做法是 `CustomScrollView` + `SliverFixedExtentList(itemExtent: 常数)`（extent 精确、滚动条不跳），
   行的详细编辑搬进 `showDialog`；回归用例 `test\model_list_scroll_test.dart`。
   代价是每行高度是常数，**别在行里塞会换行的 `Wrap`**（那会让常数失效）。
+- **目录卡不许占页顶**（2026-10 用户原话："模型能力目录区域占用窗口区域太大，改成嵌在具体
+  provider 信息里"）。「AI 模型与凭据」页现在页顶**一张常驻卡都没有**：Provider 列表 + 详情
+  两栏，能力目录 `ExpansionTile`（默认折叠）挂在**选中那条**的详情末尾。
+  凡是"与当前选中项无关"的大块状态，优先做成折叠项或详情内的一节，别做成常驻横幅。
+  回归用例 `test\phone_layout_overflow_test.dart`（384/320dp 两档都不许溢出）。
+- **内置模型目录那张卡与它的 Dart 客户端已删**（2026-10："模型能力不再依赖内置目录"）：
+  它抄自 `%USERPROFILE%\.dsh\settings.yaml`，而第 10 节已经定了"运行期不许依赖 `.dsh`"。
+  能力预填改由 **models.dev** 在线目录负责（`capability_refresh.rs`）。
+  后端 `server-rs\src\builtin.rs` 与 `/api/ai/builtin/{status,sync}` 仍在（Rust 用例盯着），
+  但界面上**没有任何入口** —— 别再把 `AiBuiltinCatalogStatus` / `builtinStatus()` 加回来。
+- **工作台的模型选择器按 Provider 分组**（2026-10 用户原话："来自不同 provider 的模型要套在
+  一个 padding 里面区分，padding 外标注模型来源"）。布局是硬要求：
+  `SliverToBoxAdapter(来源标注)` + `SliverPadding(SliverList(模型))` 一组一组，
+  回归用例 `test\ai_model_picker_test.dart`。
+  数据源是 `AiWorkspaceStore.catalogByProvider`（`providerId → 模型`，打开选择器时才拉），
+  **不是** `store.models`（那只是当前那一条的）—— 换 Provider 走 `selectModelFrom(p, m)`，
+  别拆成"先 `selectProvider` 再 `selectModel`"：那两步都是 `await` 的，
+  中间那次选中会被 `_loadModels()` 收尾时的"取第一个启用的"覆盖掉。
 
 ---
 
-## 7. 两套运行布局：源码树 vs 发布包（改路径解析前必读）
+## 7. 两种运行布局：源码树 vs 发布包（改路径解析前必读）
 
-同一个脚本/App 要能在**两种布局**下跑，任何"找东西"的逻辑都得两边都认 ——
-只按源码树的路径写，发布包（或者反过来）就会出现"文件明明在，它却说找不到"。
+**App 自己直接起后端**（2026-09-30 起），所以"找东西"的逻辑只有一份真源：
+**`lib\core\backend_paths.dart`**。改路径解析 = 改它；`scripts\backend.ps1` 是它在脚本世界的
+**镜像**（只服务 e2e / dev），**改一边必须改另一边**。
 
-| | 源码树（开发） | 发布包（`scripts\pack-release.ps1` 的产物） |
+| 找什么 | 源码树（开发） | Release 产物 / 发布包 |
 | --- | --- | --- |
-| 根目录怎么定 | 往上找 `scripts\comfyhub.ps1` | 同上（发布包的 `viewer.exe` 就铺在根目录，深度 0 就命中） |
-| 后端二进制 | `server-rs\target\release\comfyhub-server-rs.exe` | `<根>\server\comfyhub-server-rs.exe` |
-| 数据库 | `<根>\.db\comfyhub.db`（SQLite 单文件 + 它的 `-wal` / `-shm`） | 同一份约定（`<根>\.db\`，装配时预建空目录） |
-| Java | **只有回退旧 Kotlin 后端时才要**（JDK 21~23） | **不再随包携带**（P4 收尾起后端是 Rust，不需要 JVM） |
-| 旧 Kotlin 后端（已退役） | `legacy\server\`（留档） | 不装 |
-| `viewer.exe` | `build\windows\...\runner\Release\` | `<根>\viewer.exe` |
+| 运行根目录 | 往上找 `server-rs\Cargo.toml`（或 `db\schema.sqlite.sql`、`backend\comfyhub-server-rs.exe`） | `viewer.exe` 所在目录本身 |
+| 后端 exe | `<根>\server-rs\target\{release,debug}\comfyhub-server-rs.exe` | `<viewer.exe 同级>\backend\comfyhub-server-rs.exe` |
+| `viewer.exe` | `build\windows\...\runner\{Debug,Release}\` | `<根>\viewer.exe` |
+| 数据库 / 产物 / 端口 | `<根>\.db\` / `<根>\storage\` / `<根>\.run\api.json` | 同一份约定（可写数据都在根目录内） |
+| Java | **不需要**（Rust 后端） | **不随包携带** |
 
 踩过的坑：
 
-- **"用哪个后端"只有一个真源**：`scripts\backend.ps1` 的 `Resolve-Backend`
-  （`-Backend auto|rust|kotlin` > `COMFYHUB_BACKEND` > auto；auto 只看 Rust 二进制在不在）。
-  `server.ps1` 与 `comfyhub.ps1 doctor` **都读它那一份** —— 各写一份就会出现
-  "doctor 说 Kotlin 在跑、server.ps1 去停 Rust"（2026-09-26 切流时踩过）。
-- **JDK 必须懒解析**（`Get-Jdk`）：脚本开头就 `Resolve-Jdk` 会在**没装 JDK 的机器上直接抛**，
-  而那种机器正是发布包要支持的 —— Rust 后端根本不需要 JVM。
+- **后端 exe 的候选顺序只有一个真源**：`serverExeCandidates()`，顺序是
+  `$env:COMFYHUB_SERVER_EXE` > `<exe 同级>\backend\` > `<根>\backend\` > `<根>\server\`（旧布局兼容）
+  > `server-rs\target\release\` > `server-rs\target\debug\`。
+  `$env:COMFYHUB_SERVER_EXE` **永远最高优先**，它是"把后端映像挪出受限区"的唯一开关（第 12 节）。
+- **根目录判据必须同时认两种布局**：只按源码树的路径写，发布包里就会出现"文件明明在，它却说找不到"。
+  反之亦然。三种判据任一命中即可（`server-rs\Cargo.toml` / `db\schema.sqlite.sql` /
+  `backend\comfyhub-server-rs.exe`）。
+- **端口只有一个真源**：后端绑好之后自己写 `<根>\.run\api.json`。
+  App（`settings_store.dart`）、脚本（`api-port.ps1`）、ComfyUI 捕获扩展（`capture_core.py`）
+  **都只读它** —— 谁也不许自己编一个端口写进去（`api_port_file.rs` 是那个写者）。
+- **`--port 0` 是刻意的**：让操作系统挑空闲端口。写死端口就会撞"被占 / 落在 Windows 保留段"，
+  而且真实端口要从 listener 读回来（`--port 0` 时那个 0 不是端口）。
 - **P4 收尾（2026-09-26）起 Kotlin 已退役**：源码在 `legacy\server\`（`.gitignore` 里
-  `/legacy/server/build`、`/legacy/server/storage` 照样忽略），`pack-release.ps1` 不再有 `jre` / jar 组件。
+  `/legacy/server/build`、`/legacy/server/storage` 照样忽略），发布包不带它、也不带 `jre`。
   要回退旧后端得先把 `legacy\server` 放回原位自己构建 —— 这条路只在灰度期有意义。
 - **`db::open_or_create` 是"第一次运行能起来"的关键**：以前缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
   在发布包里等于**永远起不来**。现在库缺就自己建（DDL 编译期 `include_str!` 嵌在二进制里）。
-- **`comfyhub.ps1 doctor` 会打印当前是哪种布局**（`运行布局: 发布包（便携式）/ 源码树`）
-  与**后端实现/构建新鲜度**，路径类问题先看它。
 - **发布包是便携式的**：可写数据（数据库 `<根>\.db`、产物 `<根>\storage`、日志 `<根>\.run`）
   都在包内，`packaging\manifest.json` 里 `runtimeLayout` 记着这份约定；改存放位置要先改那里和 README 9.2。
-- **发布包默认"就地装配"**：`pack-release.ps1` 的 `-OutDir` 默认就是
-  `build\windows\x64\runner\Release`，装完那个目录本身就是完整发布包（App 认根目录时往上找
-  `scripts\comfyhub.ps1`，正好命中它自己的那一份）。三个连带后果别踩：
-  ① `flutter clean` / 重新构建会把它整个清空（又变回只有 App），要重跑脚本；
-  ② `-Clean` **不能**整个 `Remove-Item $OutDir`，否则把 `viewer.exe` 一起删了 ——
-     只能清清单里那些 target（`server` / `scripts` / `db` / `comfyui` …）+ `jre` / `mysql`（P4/P2 之前的老组件）
-     + `packaging` / `BUILD-INFO.txt`；运行期数据（`.db` / `storage` / `.run`）**不要动**；
+- **Release 产物默认"就地装配"**：`flutter build windows --release` 自己就把后端装进 `backend\`
+  （`windows\CMakeLists.txt` + `windows\cmake\bundle_backend.cmake`），装完
+  `build\windows\x64\runner\Release\` 就是完整发布包。三个连带后果别踩：
+  ① `flutter clean` / 重新构建会把它整个清空（又变回只有 App），重跑一次 release 构建即可；
+  ② `pack-release.ps1 -Clean` **不能**整个 `Remove-Item $OutDir`，否则把 `viewer.exe` 一起删了 ——
+     只能清清单里那些 target（`backend` / `scripts` / `db` / `comfyui` / `skills` …）
+     + 老组件（`server` / `jre` / `mysql`）+ `packaging` / `BUILD-INFO.txt`；
+     运行期数据（`.db` / `storage` / `.run`）**不要动**；
   ③ `flutter_release` 组件此时**源和目标是同一个目录**，必须跳过拷贝
      （`Copy-Item` 会报 "Cannot copy item to itself"）。
-- 想要一份不随 `build\` 消失的长期副本，用 `-OutDir D:\dist\ComfyHub`。
-- **P2 起发布包不再携带 MySQL**（原来 `mysql/` 约 400MB，裁剪规则在清单的 `prune` 字段里）：
-  数据库是 SQLite，驱动自带引擎。**2026-09-29 起 MySQL 彻底退役**：连"搬一次旧数据"的搬迁
-  通道与 `mysql.ps1` 都删了，`runtime-deps.ps1` 的 MySQL 与 **VC++ 运行时**体检项也一并删除
-  （VC++ 当初只为 `mysqld.exe` 存在；实测后端 Rust exe 不引用 `vcruntime140.dll`、CRT 是静态链接，
-  只用 Win10/11 自带的 `api-ms-win-crt`，所以整项删掉是安全的）。
-- **`runtime-deps.ps1` 的 `Required` 字段决定"缺了算不算问题"**：`Show-RuntimeReport` /
-  `Show-RuntimeFailureHints` 只把 **必需项** 缺失当红。
-  改启动流程时别把这块提示丢了（`comfyhub.ps1` dot-source 它，跟 `silent-process.ps1` 一样）。
-- **首次运行必须能自动建库**（P2 起是后端自己建 SQLite 文件，`db::open_or_create` 负责）。
-  **"零动作升级搬迁老库"已于 2026-09-29 随 MySQL 彻底退役而删除** —— `up` 不再读 `.mysql\`，
-  `mysql.ps1` / `server.ps1 migrate` 这条路不存在了；老库目录原样留着（确认不要了再自己删），
-  搬迁链路的老规则（逐表核对行数与行哈希、失败不拦 up）随通道一起成为历史。
-  自动建的库**故意不灌演示数据**（不能往用户库里塞演示提示词）。
+- **`install(SCRIPT)` 里读不到 configure 期的变量**（2026-09-30 踩到）：`CMAKE_CURRENT_SOURCE_DIR`
+  与"展开后的 `CMAKE_INSTALL_PREFIX`"都要由 `install(CODE ...)` **提前 `set()` 进去**——
+  后者的真值是生成器表达式 `$<TARGET_FILE_DIR:viewer>`，install 阶段直接读会拿到
+  **没展开的原字符串**（报 `file cannot create directory: ...\$<TARGET_FILE_DIR:viewer>\backend`）。
+- **`cargo build --release` 会在后端正在跑时失败**：Windows 锁着运行中的 exe，
+  报的是 `failed to remove file …comfyhub-server-rs.exe / 拒绝访问 (os error 5)` ——
+  先 `pwsh -File scripts\backend.ps1 stop` 再构建。
+- 想要一份不随 `build\` 消失、又**在工作区外**的长期副本，用
+  `pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub`（既是长期留存，也是绕开写限制的正解）。
 
-## 8. 运行时自动补齐 + 一个血泪教训
+## 8. 运行时自动补齐：**已经不需要了**（保留两条 PowerShell 血泪教训）
 
-`scripts\ensure-runtime.ps1`（实现都在 `scripts\runtime-deps.ps1`，被 `comfyhub.ps1` dot-source）
-负责"缺运行时自动装"：
+2026-09-30 起 Java / pwsh / VC++ 三样运行时**都不再需要**（后端是静态链接的 Rust 单文件 exe，
+数据库是 SQLite 单文件），所以 `ensure-runtime.ps1` / `runtime-deps.ps1` 已删除。
+唯一还会下载东西的是**可选能力** MCP 运行时（`scripts\mcp-runtime.ps1`），它的策略仍然是：
+**检测优先，安装只作兜底**（2026-09-21 用户定："环境有 python 你的脚本就不用再装了，同理 jdk、mcp 也是"）：
 
-> **总原则（2026-09-21 用户定）：检测优先，安装只作兜底。** "环境有 python 你的脚本就不用再装了，
-> 同理 jdk、mcp 也是。" —— 所以三条链都是**先找机器上已有的**，找不到才下便携版；
-> 判据与来源都要**能看出是哪一档**（`doctor` 会打出来）。改这三条链时别把顺序倒回去。
-
-- **Java**：`Ensure-JavaRuntime` —— 先用机器上已有的 ≥21（显式参数 → `COMFYHUB_JDK_HOME` →
-  包内 `<根>\jre` → **`JAVA_HOME`** → 常见 JDK 安装位置 → `PATH`），**没有才**下便携版塞进 `<根>\jre`，
-  免安装免管理员，带 sha256。
-  源顺序：Adoptium 官方(47MB,有官方 sha256) → 华为云 OpenJDK 21.0.2(190MB,sha256 硬编码在代码里)
-  → Adoptium 重定向 → Microsoft OpenJDK。每个源先 `Test-UrlReachable`(Range 取 1KB) 探测再下。
-  `comfyhub.ps1 up` 会调它；`COMFYHUB_NO_DOWNLOAD=1` 关闭（**这条现在在 `Ensure-JavaRuntime` 内部也认**，
-  不只是 `up` 里那一处）。
-- **MCP（Python）**：`scripts\mcp-runtime.ps1` 四档 —— ① 已装好的（`state.json` / `venv` / `python`）→
-  ② 借机器上**已经装了 comfy-mcp + comfy-cli** 的 Python（一个字节都不装）→ ③ 借机器上的 Python 建
-  **venv**（`<根>\storage\ai\mcp\venv`，**不污染用户的全局 site-packages**）→ ④ 真的没有才下 embeddable
-  便携版。用了哪一档记在 `state.json` 的 `pythonSource`，`doctor` 显示 `system` / `venv` / `portable`。
-  ⚠ **venv 的解释器就在 `Scripts\` 里**，所以"pip 启动器在哪个目录"必须分两种情况
+- 四档：① 已装好的（`state.json` / `venv` / `python`）→ ② 借机器上**已经装了 comfy-mcp + comfy-cli**
+  的 Python（一个字节都不装）→ ③ 借机器上的 Python 建 **venv**（`<根>\storage\ai\mcp\venv`，
+  **不污染用户的全局 site-packages**）→ ④ 真的没有才下 embeddable 便携版。
+  用了哪一档记在 `state.json` 的 `pythonSource`。
+- ⚠ **venv 的解释器就在 `Scripts\` 里**，所以"pip 启动器在哪个目录"必须分两种情况
   （`Get-PythonScriptsDir` / Kotlin 的 `scriptsDirOf`）—— 一律 `父目录\Scripts` 会拼出
   `venv\Scripts\Scripts`，表现是"明明装好了却报缺 comfy-mcp.exe"。
-- **pwsh**：系统级安装，走 winget；`up` 阶段不碰（免得启动弹 UAC），只由 `ensure-runtime.ps1` 显式装。
-  **VC++ 与 MySQL 体检项已于 2026-09-29 随 MySQL 彻底退役而删除**（VC++ 当初只为 `mysqld.exe` 存在，
-  实测后端 Rust exe 不引用 `vcruntime140.dll`、CRT 是静态链接，只用系统自带的 `api-ms-win-crt`）——
-  `Get-RuntimeChecks` 现在只剩 pwsh（必需）与 Java 21（`Required = $false`，只对回退旧 Kotlin 后端有意义）。
+- **装不上不拦启动**：它是可选能力，缺了只是 AI 少一批 ComfyUI 工具。
 
-> **⚠ 参数改名的坑（2026-09-21 踩到）：非高级函数（没写 `[CmdletBinding()]`）收到不存在的命名参数时
-> 不报错，而是丢进 `$args`。** `mcp-runtime.ps1` 把参数从 `$Proxy`/`$Force` 改成 `$McpProxy`/`$McpForce`
-> （为了躲 dot-source 的变量覆盖，见该文件头的注释）之后，内部一堆 `-Proxy $McpProxy` / `-Force:$McpForce`
-> 就**静默失效**了 —— 没报错、没异常，只是代理没传过去、强制重装没生效。所以：改名后**必须把调用点一起改**，
-> 而且给命令行用的名字要留 `[Alias('Proxy')]` / `[Alias('Force')]`。
+> **⚠ 参数改名的坑（2026-09-21 踩到，仍然有效）：非高级函数（没写 `[CmdletBinding()]`）收到不存在的
+> 命名参数时不报错，而是丢进 `$args`。** `mcp-runtime.ps1` 把参数从 `$Proxy`/`$Force` 改成
+> `$McpProxy`/`$McpForce`（为了躲 dot-source 的变量覆盖，见该文件头的注释）之后，内部一堆
+> `-Proxy $McpProxy` / `-Force:$McpForce` 就**静默失效**了 —— 没报错、没异常，只是代理没传过去、
+> 强制重装没生效。所以：改名后**必须把调用点一起改**，而且给命令行用的名字要留
+> `[Alias('Proxy')]` / `[Alias('Force')]`。
 
 > **⚠ 变量的坑：永远不要给变量起名 `$home`、`$input`、`$host`、`$pid`、`$profile`、`$args`。**
 > PowerShell 里自动变量**大小写不敏感**，`$home = ...` 会直接抛
@@ -260,11 +252,11 @@
 > 而更可怕的是**漏改了一处引用**：本仓库真的写出过
 > `$javaHome = ...`（定义）却仍用 `$home`（引用）的代码，于是
 > `Move-Item $home -Destination <解压目标>` 去搬 **`C:\Users\<用户>\` 整个用户目录**，
-> 把用户主目录下的 10 个文件（`.gitconfig` / `.npmrc` / `.claude.json` …）搬进了发布包。
-> 幸好目录被占用才没造成更大破坏。
-> 所以 `Expand-JavaArchive` 里加了一条**安全闸**：只允许搬运 staging 目录内的路径，
-> 否则当场抛异常（`$javaHome.StartsWith($stage, OrdinalIgnoreCase)`）。
-> 写任何 `Move-Item` / `Remove-Item -Recurse` 之前，先确认目标是"算出来的、可验证的"路径。
+> 把用户主目录下的 10 个文件（`.gitconfig` / `.npmrc` / `.claude.json` …）搬进了发布包
+> （幸好目录被占用才没造成更大破坏；出事的那个脚本已随"运行时自动补齐"一起删除，
+> **但教训对所有 `Move-Item` / `Remove-Item -Recurse` 都成立**）。
+> 写任何搬移 / 递归删除之前，先确认目标是"算出来的、可验证的"路径
+> （当时的修法是加一条安全闸：只允许搬运 staging 目录内的路径，否则当场抛异常）。
 
 ## 9. 视频播放依赖一份打过补丁的插件副本
 
@@ -473,85 +465,104 @@
 
 ---
 
-## 12. ⚠ 写不进工作区外：限制**按映像位置 + 继承**判（2026-09-29 定案）
+## 12. ⚠ 写不进工作区外：真因是**完整性标签（Low IL）** + `min(父进程, 映像)`（2026-09-30 定案）
 
 `comfy_start` 报 `COMFY_WRITE_BLOCKED`、`comfy_use_media` 报 `COMFY_INPUT_FAILED … os error 5`、
-MCP 任何工具报 `UnexpectedToolError` —— 同一批症状、同一个根因。**动手改之前先读完这一节**，
-它推翻过 2026-09-28 的两处结论（现象没错，**处方错了**）。
+MCP 任何工具报 `UnexpectedToolError`、`cargo test` 一批 `PermissionDenied (os error 5)` ——
+**同一批症状、同一个根因**。动手改之前先读完这一节：它推翻过 2026-09-28 与 2026-09-29 的**两版处方**
+（现象每次都量对了，解释与修法都错）。
 
-### 量出来的判据
+### 机理（用户 2026-09-30 实测钉死）
+
+1. 代码沙箱把**工作区目录树**打上 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`
+   （`(OI)(CI)` = 子目录/文件继承，`NW` = no-write-up）；
+2. 在工作区里构建出来的 exe（`comfyhub-server-rs.exe`、`viewer.exe`、测试二进制…）
+   **继承了 Low 标签**；
+3. Windows 创建进程时取 **`min(父进程令牌, 映像标签)`** —— 映像标签是 Low，进程令牌就是 Low；
+4. **Low 写不了 Medium 对象**（工作区外默认没有标签 = Medium）⇒ `拒绝访问 (os error 5)`。
+
+推论两条，别记错：
+
+* **只把 exe 的标签清回 Medium（位置一个字节不动）→ 后端立刻哪儿都能写**（实测）；
+* **链路上任何一环是 Low，子进程照样掉回 Low** —— 所以"只清后端 exe"不够：
+  `viewer.exe` 也是工作区里构建的、也带 Low 标签，那 App 自己就是 Low，
+  它起的后端一定是 Low，而且**这时连"修标签"这一步都做不动**（Low 改不了向上的标签）。
+
+### 量出来的判据（哪些怀疑对象被排除）
 
 | 怀疑对象 | 实测 | 结论 |
 | --- | --- | --- |
 | 目录 ACL | 诊断脚本报 `NOT_THIS_CLASS`（无 deny ACE、无 package ACE，`WRITE_DAC`/`WRITE_OWNER` 都在） | 无关 |
 | 路径配错 / 用户身份 / Defender | 同用户同目录 `powershell` 写得进；Defender 无受控文件夹规则 | 无关 |
-| **映像在工作区内** | **同一个二进制逐字节相同：工作区内 → 写 `%TEMP%`、`D:\Comfy-Desktop\…` 全 `os error 5`；`copy` 到 `%TEMP%` → 哪儿都能写** | ✅ 就是它 |
-| 从哪个会话 / 终端起 | 双击一样被限 | 无关（限制在令牌里） |
-| spawn 档位 | `wmi-hidden` / `wmi-vbs` / `direct-hidden` 三档写同一个探针**都是 OK** | 无关（见第 2 节那条 ⚠⚠） |
+| **映像上的 Low 标签** | **同一二进制逐字节相同：工作区内 → 写 `%TEMP%`、`D:\Comfy-Desktop\…` 全 `os error 5`；`copy` 到 `%TEMP%`（那里没有 Low 标签可继承）→ 哪儿都能写** | ✅ 就是它 |
+| 从哪个会话 / 终端起 | 双击一样被限；WMI / 计划任务 / Explorer 逐条量过都一样 | 无关（决定权在**映像标签**） |
+| spawn 档位 | `wmi-hidden` / `wmi-vbs` / `direct-hidden` 三档写同一个探针**都是 OK** | 无关（见第 2 节） |
+| 父进程是谁 | 高完整性父进程 + Low 映像 → **仍然受限**（`min` 取小的那个） | 只有父进程**也**是 Low 时才更糟 |
 
-**两条机制并存**（2026-09-29 用 `server-rs\tests\confinement_probe.rs` 在同一个会话里复量过：
-测试二进制在工作区内 → 自己写 `%TEMP%` 报 `os error 5`；**它拉起的 `cmd.exe`（映像在工作区外）
-写 `%TEMP%` 也报 `Access is denied`**；而同一会话里映像在工作区外的 pwsh 写哪儿都正常）：
+### 三条处方（仓库里已经做好的就是这三件）
 
-* **按映像位置** —— 映像落在工作区内的进程，与谁启动它无关，一律写不了工作区外；
-* **按继承** —— 受限进程拉起的子进程，**即使映像在工作区外**，照样受限。
+1. **发布/构建时把两个 exe 的标签都归一为 Medium**：
+   `windows\cmake\bundle_backend.cmake` 在 release 装配末尾对
+   `viewer.exe` 与 `backend\comfyhub-server-rs.exe` 各跑一次
+   `icacls <exe> /setintegritylevel Medium`（**失败只警告不中断构建** ——
+   在受限会话里构建时必然失败，那时只能走第 2 条）。
+2. **把整套 ComfyHub 放到工作区外**（终解，也是最稳的一条）：
 
-所以"换个 ComfyUI 自带的 python 就好"是错的 —— **后端自己就写不了**，起手写实例 `temp/` 就死；
-⛔ 而**"换个终端重起后端就行"同样是错的**（源码树布局下后端映像就在工作区内，换终端一样受限；
-`confinement.rs` 的 eprintln 原来就是这么写的，2026-09-29 已改成指向发布包）。
+   ```powershell
+   pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub
+   ```
 
-### 退路（以前漏了，现在有）
+   然后运行 `D:\dist\ComfyHub\viewer.exe`（App 自己起 `backend\` 里的后端）。
+   那边的文件没有 Low 标签可继承 —— **既不受限，内容也仍然全在它自己的文件夹里**（第 13 节）。
+3. **运行时就地修**：App 起后端之前会 best-effort 跑一次
+   `icacls <后端 exe> /setintegritylevel Medium`（`backend_launcher.dart` 的 `_normalizeIntegrity`）；
+   `scripts\backend.ps1 start` 也会先修（`Repair-LaunchImages`）。
+   这一条**只能救"App 自己是 Medium、只有后端 exe 还带 Low 标签"那一半**（实测存在这种现场），
+   App 自己也是 Low 时它必然失败，且日志里会如实说。
 
-**正解是发布包** —— 它同时满足第 12 节的不变式与第 13 节"内容在自身文件夹内"：
-
-```powershell
-pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub
-pwsh -File D:\dist\ComfyHub\scripts\comfyhub.ps1 up
-```
-
-发布包的后端在 `<包根>\server\`、数据在 `<包根>\.db\` / `storage\` / `.run\`，**内容一点没外溢**。
-`Resolve-RustExe`（`scripts\backend.ps1`）**优先认 `COMFYHUB_SERVER_EXE`** ——
-那三个默认候选全在项目根下，所以**源码树布局下后端必然被限**，这不是配置错了。
-
-**A/B 实测（2026-09-29，同一个二进制）**：
-
-| | 源码树布局 | 发布包布局 |
-| --- | --- | --- |
-| `GET /api/system/confinement` | `restricted: true` | `restricted: false` |
-| `.run\confinement.json` | 有（带 pid） | **无** |
-| `doctor` | 红字「后端受限 pid …（当前在跑的这个）」+ 修法 | 没有那一行 |
-
-⚠ **别把 `COMFYHUB_SERVER_EXE` 指到 `%LOCALAPPDATA%` 之类**（第 13 节：内容一律在自身文件夹内）。
-它只该指向"**已经装配好的发布包**里的那个 exe"，或者你自己另外放的一整份安装。
-
-⚠ **重打发布包前先 `comfyhub.ps1 down`**：后端正在跑时 `cargo build --release` 会
-`failed to remove file …comfyhub-server-rs.exe / 拒绝访问 (os error 5)` —— 那是 Windows 锁住
-正在运行的 exe，**不是**本节这套写限制（doctor 的「后端构建 已过期」判据照常是对的）。
+⚠ **两条边界**：**"换个终端重起"没用**（映像标签没变，进程照样是 Low）；
+**别建议往 `%LOCALAPPDATA%` / `%TEMP%` 之类拷后端**（违反第 13 节，而且那只是碰巧绕开标签）。
 
 ### 四条纪律
 
 1. **闸门留着**（`comfy_launch::ensure_writable`）：白起一个 100% CPU 卡死的实例，比如实拒绝糟得多。
-   但**文案必须说对**：先讲真因（按映像位置判），再给上面那条修法。
-   **别再写"没有退路 / 只能让用户双击 ComfyUI Desktop"** —— 双击确实能work，但不是唯一那条。
-   **也别写"换个终端重起就行"**（实测不成立，见上）。
-   **更别建议往 `%LOCALAPPDATA%` 之类拷后端**（见第 3 条：内容一律在自身文件夹内）。
+   但**文案必须说对**：先讲真因（Low 完整性标签 + `min(父进程, 映像)`），再给上面那三条处方。
+   **别再写"没有退路 / 只能让用户双击 ComfyUI Desktop"**（双击确实能 work，但不是唯一那条）；
+   **别写"换个终端重起就行"**；**别建议拷贝到系统目录**。
+   `confinement::remedy_text()` / `comfy_launch` / `image_edit` 三处文案是同一条纪律，用例
+   `修法文案指向发布包而不是让用户改_acl` 盯着它们**不许出现"权限 / ACL / 换个终端 / 双击 ComfyUI"**。
 2. **别把探针的 `Err` 吞成 `bool`**（`confinement::probe_dir` 返回 `io::Result` 就是为此）：
-   只报"哪个目录"不报"报什么错"，就会重演 2026-09-28 那次"现象对、处方错"。
-   用例里也不许拿"这台机器哪个目录不可写"当判据 —— 用同名目录占位造出确定性的 `os error 5`。
+   只报"哪个目录"不报"报什么错"，就会重演"现象对、处方错"。
+   用例里也不许拿"这台机器哪个目录不可写"当判据 —— 用**同名目录占位**造出确定性的 `os error 5`。
 3. **看得见**（`server-rs\src\confinement.rs`）：后端启动自查 → 受限才写 `.run\confinement.json`、
-   **正常就删**（免得过期标记一直亮着）；标记带 `pid`，`doctor` 还要比对"是不是当前在跑的后端"。
+   **正常就删**（免得过期标记一直亮着）；标记带 `pid`。
    `GET /api/system/confinement` 把同一份结论**连判据一起**交给界面
    （`serverImage` / `imageInsideProjectRoot` / `blockedPaths` / `remedy`），
    受限时 App 顶部常驻一条横幅（`lib\widgets\confinement_banner.dart`）——
    ⚠ 字段名只能说"**落在运行根目录里**"，别说"在工作区内"：发布包里根目录就等于包目录、
    并不是被框住的地方（那里 `restricted=false`）。
-   这条沿用第 151/154 条的纪律：**doctor 探不到、界面上也看不见的现象，就会一直靠猜**。
+   这条沿用第 151/154 条的纪律：**界面上看不见的现象，用户和模型就只能靠猜**。
 4. **写 input 的地方必须共用同一个入口**（`image_edit::write_or_defer`）：投放原图 / 遮罩 /
    **摆好的人物图**三处曾经只有前两处有 HTTP 退路，于是"人物图投进去了、摆好的那份没落地"，
    阶段二卡在"没拿到 personFilename"（2026-09-29 用户 bug）。
    直写被拒一律改让 **ComfyUI 自己写**（`/upload/image`），并按它回的名字回填结果字段
    （`LoadImage.image` 填的必须是它认得的那一串）。逐条清点见
    **[docs/permission-audit.md](docs/permission-audit.md)**（12 处写工作区外的点，逐条标注退路/闸门）。
+   **同理，"写哪个 input"也只有一个真源**（2026-09-30 用户 bug：阶段二重启后仍被 `400 Invalid
+   image file` 拒 —— 底图与人物图躺在**安装目录**的 `input` 里，实例读的却是**共享**那份）：
+   起实例的 argv 由 `comfy_launch::start` 落档（`.run\comfyui-<port>.launch.json`），
+   投放三件走 `image_edit::target_input_dir` —— **先问实例**（`/object_info/LoadImage` 的名单 ×
+   候选目录），问不到才按"留档 → 配置 output 兄弟 → Desktop `settings.json` 的 `inputDir` → 盘探"回落。
+   ⚠ 别拿**全名**判"调用方写过哪些参数"：`--input` 是 `--input-directory` 的 argparse 缩写、
+   同一个 `dest`、**后写的赢** —— 比全名就会把我们补的那条排在用户那条后面、把它静默顶掉
+   （用 `mcp::specified_flag`，并认 `--flag=value`）。两个环境变量名也别漂：
+   脚本与老版本用 `COMFYHUB_COMFY_OUTPUT`，别再只认 `COMFYHUB_COMFY_OUTPUT_DIR`（`capture::comfy_output_env`）。
+
+### 一个必须知道的连带影响
+
+**受限会话里 `cargo test` 会红一片**（`os error 5`），因为测试二进制就在工作区里、带着 Low 标签。
+所以用例**只许用 `crate::testpaths::scratch()`**（落在 `target\.scratch\`，工作区内），
+**别写 `std::env::temp_dir()`**（第 1 节）。要复现"写不进去"就用同名目录占位，别改 ACL。
 
 ## 13. ⚠ 内容一律存在**自身文件夹**内（2026-09-29 用户定的总原则）
 
@@ -583,7 +594,7 @@ pwsh -File D:\dist\ComfyHub\scripts\comfyhub.ps1 up
 
 改落盘位置时，`server-rs\src\mcp.rs` 与 `scripts\mcp-runtime.ps1` **必须一起改**：
 `discover_runtime` 与 `Get-McpRuntimeDir` 是同一个真源的两份实现（AGENTS §7 的纪律）。
-判据：装完发布包后跑一次 `up`，比对 `%APPDATA%\com.example`、`%LOCALAPPDATA\comfy-cli`、
+判据：装完发布包后从包内启动一次 App（或 `scripts\backend.ps1 start`），比对 `%APPDATA%\com.example`、`%LOCALAPPDATA\comfy-cli`、
 `%LOCALAPPDATA\ComfyHub` 三个目录的文件数 —— **跑前后都不变**才算过。
 
 

@@ -537,12 +537,85 @@ async fn comfy_env_report_reads_the_real_machine() {
 }
 
 // ===========================================================================
+//  投放的目录 = 实例在读的那一份（2026-09-30 用户 bug 的活体验收）
+//
+//  现场：起实例时挂的是 ComfyUI Desktop 配的**共享** input，而投放工具按"配置里
+//  outputDir 的兄弟目录"推、落到了**安装目录**那份 input（发布包的 `capture.config`
+//  里根本没有 outputDir，于是退到 `find_home` 探到的安装目录）—— 底图与摆好的人物图
+//  都躺在那边，提交回来的是 400 `Invalid image file`，看着像"文件不存在"。
+//
+//  判据只有一条，而且是**活体**的：工具把文件投进去之后，**实例自己**要能列出它。
+//  `/object_info/LoadImage` 的名单是**现算**的（实测：写进去 88→89、删掉立刻回落），
+//  所以这一条同时钉住了"目录对不对"和"实例真看得见"。
+// ===========================================================================
+
+#[tokio::test]
+#[ignore = "活体抽查：需要 ComfyUI 在跑 + COMFYHUB_SPOT_DB 指一份库副本"]
+async fn live_投放的目录就是实例在读的那一份() {
+    let Some((state, root)) = spot_state() else { return };
+    let config = comfyhub_server_rs::capture::capture_config(&state).expect("读捕获配置");
+    let comfy_url = config.comfy_url.clone();
+
+    // 我们按配置/Desktop/盘探**推**出来的候选（诊断用：与实例说的对不上就是这条 bug 的现场）
+    let candidates = comfyhub_server_rs::image_edit::input_dir_candidates(&state);
+    println!("project_root = {}", root.display());
+    println!("推出来的候选：");
+    for (dir, source) in &candidates {
+        println!("  [{source}] {}", dir.display());
+    }
+    let probed = comfyhub_server_rs::comfy_client::instance_input_dir(&comfy_url, &candidates.iter().map(|(d, _)| d.clone()).collect::<Vec<_>>())
+        .await;
+    println!("实例自己报的 input = {}", probed.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "（问不到）".into()));
+
+    // 投一张遮罩进去（`filename` 固定成唯一的，跑完自己删）
+    let name = format!("comfyhub-spot-{}.png", std::process::id());
+    let payload = call(
+        &state,
+        "comfy_make_mask",
+        serde_json::json!({
+            "mode": "rect", "region": "0.1,0.1,0.4,0.4",
+            "width": 64, "height": 64, "filename": name,
+        }),
+    )
+    .await;
+    println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+    let input_dir = std::path::PathBuf::from(payload["inputDir"].as_str().expect("要回 inputDir"));
+    assert_eq!(payload["filename"], name, "文件名该是我们给的那个");
+
+    // ① **实例自己看得见**（这一条就是那个 400 的解药；名单是现算的）
+    let names = comfyhub_server_rs::comfy_client::instance_input_names(&comfy_url)
+        .await
+        .expect("问得到实例的名单");
+    if names.is_empty() {
+        println!("⚠ 实例的 input 名单是空的 —— 跳过'看不看得见'那两条（这台机器的实例没有 input 文件）");
+    } else {
+        assert!(
+            names.iter().any(|n| n == &name),
+            "工具把 {name} 投进了 {}，实例却列不出来 —— 这正是 400 `Invalid image file` 的现场。\
+             实例的名单前 5 条：{:?}",
+            input_dir.display(),
+            &names[..names.len().min(5)]
+        );
+    }
+    // ② 来路如实：问到了实例就是 `instance`
+    if probed.is_some() {
+        assert_eq!(payload["inputDirSource"], "instance", "问得到实例时就该以它为准：{payload}");
+    }
+
+    // 收尾：删掉我们刚投的那一份（**只删自己刚建的那个文件名**）
+    let deposited = input_dir.join(&name);
+    match std::fs::remove_file(&deposited) {
+        Ok(()) => println!("已清理 {}", deposited.display()),
+        Err(e) => println!("⚠ 清理失败（受限进程写不了项目外是正常的，留着也无害）：{e}"),
+    }
+}
+
+// ===========================================================================
 //  comfy_find_workflow：两段式查找（库 → 本机文件）
 //
 //  真库的价值在这一条上特别直白：`runnable` 到底真不真，只有库里有**真的有 API 图**
 //  的提示词才测得出来（夹具里那两条要么都有图、要么都没图，掩盖不了）。
 // ===========================================================================
-
 #[tokio::test]
 #[ignore = "真库：COMFYHUB_SPOT_DB 指一份库副本"]
 async fn comfy_find_workflow_is_truthful_about_runnable() {

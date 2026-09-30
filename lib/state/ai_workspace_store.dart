@@ -121,11 +121,43 @@ class AiWorkspaceStore extends ChangeNotifier {
         error = null;
       }
       if (changed) await _loadModels();
+      // 跨 Provider 的完整目录：选择器按来源分组显示要的就是它（见 [catalogByProvider]）。
+      // 放在"清单变没变"判据**之外** —— 模型的增删改不会动 provider 那一行，
+      // 而用户要的恰恰是"刚加的模型立刻能选到"。
+      await _loadCatalog();
     } catch (e) {
       error = "读本机那份 Provider 清单失败：$e";
     }
     notifyListeners();
   }
+
+  /// 把**每条** Provider 的模型目录各读一次（选择器按来源分组显示的数据源）。
+  ///
+  /// 三条纪律：
+  ///  1. **逐条独立**：一条读失败只记进 [catalogIssues]，其余照常显示
+  ///     —— 少一个 Provider 的模型不该让整个选择器空掉；
+  ///  2. **来源与 [models] 一样**（本机库 / 后端库，见 [_modelsOf]），不许在这里另立一套；
+  ///  3. **不抛**：调用方（[refreshProviders]）不该因为一条 Provider 的目录读不到而失败。
+  Future<void> _loadCatalog() async {
+    final modelsByProvider = <String, List<AiModel>>{};
+    final issues = <String, String>{};
+    for (final p in providers) {
+      try {
+        modelsByProvider[p.id] = await _modelsOf(p);
+      } catch (e) {
+        issues[p.id] = '$e';
+      }
+    }
+    catalogByProvider = modelsByProvider;
+    catalogIssues = issues;
+  }
+
+  /// 某条 Provider 的模型目录 —— **真源与 [AiWorkspaceStore._loadModels] 同一个**。
+  ///
+  /// 单独写一遍就会出"聊天页看得到、选择器看不到"这种自相矛盾（同一个 provider
+  /// 的目录在同一台机器上只有一个真源）。
+  Future<List<AiModel>> _modelsOf(AiProvider p) async =>
+      _isPhone ? _providerStore.listModels(p.id) : _api.listModels(p.id);
 
   /// 只把**当前 Provider 的模型目录**重新读一次（与 [refreshProviders] 同一个触发点）。
   ///
@@ -295,6 +327,23 @@ class AiWorkspaceStore extends ChangeNotifier {
   List<AiModel> models = const [];
   AiProvider? selectedProvider;
   AiModel? selectedModel;
+
+  /// **每条 Provider 各自的模型目录**（`providerId → 模型`）。
+  ///
+  /// 为什么不能只留 [models]：它只是**当前选中那条**的目录，于是工作台里
+  /// "换 Provider"根本无处可去 —— 新建的 Provider 永远选不上（用户 2026-10 报的 bug：
+  /// 「新加入的 provider 无法在工作台中选用」）。选择器改成按来源分组列出之后，
+  /// 这里就是那一组一组的数据源。
+  ///
+  /// ⚠ 它是**打开选择器那一刻**才拉的（[refreshProviders]），不是冷启动就拉：
+  /// 冷启动就为每条 Provider 挨个发一次目录请求，启动会无谓地慢下来。
+  Map<String, List<AiModel>> catalogByProvider = const {};
+
+  /// 某条 Provider 的目录读失败时的原因（`providerId → 人话`）。
+  ///
+  /// 单独一个字段而不是并进 [error]：一条 Provider 挂了不该让整页都变成错误态，
+  /// 但界面上必须**如实标出是哪一条**（否则用户会以为"它一个模型都没有"）。
+  Map<String, String> catalogIssues = const {};
 
   // --- 会话 / 消息 ---
   List<AiConversation> conversations = const [];
@@ -1726,6 +1775,28 @@ class AiWorkspaceStore extends ChangeNotifier {
     if (modelsIssue != null) error = modelsIssue;
     await refreshPreflight();
     notifyListeners();
+  }
+
+  /// 选用**另一条 Provider** 下的模型（工作台的模型选择器按来源分组之后走的就是这条路）。
+  ///
+  /// 为什么不直接 "先 [selectProvider] 再 [selectModel]"：那两步都是 `await` 的，
+  /// 而 `_loadModels()` 收尾会把 `selectedModel` 收敛成"目录里第一个启用的"——
+  /// 夹在中间的那次选中于是**被覆盖掉**（选到别的模型，或者干脆空着）。
+  /// 这里把"换 Provider"和"选模型"合成一步，顺序才定得下来。
+  Future<void> selectModelFrom(AiProvider p, AiModel m) async {
+    if (selectedProvider?.id != p.id) {
+      selectedProvider = p;
+      selectedModel = null;
+      try {
+        await _loadModels();
+      } catch (e) {
+        // 目录读失败**不该让用户点不中**：那条模型明明就摆在这份界面上。
+        error = '读「${p.displayName}」的模型目录失败：$e';
+        models = catalogByProvider[p.id] ?? const [];
+      }
+      if (!models.any((e) => e.id == m.id)) models = catalogByProvider[p.id] ?? models;
+    }
+    await selectModel(m);
   }
 
   /// 切换模型必须立刻重算准入（AIH-029），不能等到发送时才提示。

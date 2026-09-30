@@ -1,8 +1,9 @@
-import 'dart:convert';
-import 'dart:io' show Directory, File, Platform;
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'backend_paths.dart';
 
 /// 全局设置（后端地址、自动启动、项目根目录等），持久化在本地。
 class SettingsStore extends ChangeNotifier {
@@ -63,7 +64,10 @@ class SettingsStore extends ChangeNotifier {
   /// 只听 127.0.0.1）。远程请求由配对闸门把关（回环放行，局域网要配对令牌）。
   bool get allowRemoteBackend => _allowRemoteBackend;
 
-  /// 项目根目录（放着 scripts\comfyhub.ps1 的那个目录）。为空表示自动探测。
+  /// 运行根目录（放 `.db\` / `storage\` / `.run\` 的那个目录）。为空表示自动探测。
+  ///
+  /// 判据见 `backend_paths.dart` 的 [looksLikeRoot]：源码树（`server-rs\Cargo.toml`）
+  /// 与 release 产物（`viewer.exe` 同级带 `backend\`）两种布局都认。
   String? get projectRoot => _projectRoot;
 
   bool get loaded => _loaded;
@@ -95,8 +99,8 @@ class SettingsStore extends ChangeNotifier {
 
   /// 从 `<项目根>\.run\api.json` 读后端**实际**监听的端口（读不到返回 null）。
   ///
-  /// 这是端口这件事在 Dart 侧的唯一入口，与 `scripts\api-port.ps1`、
-  /// `server\...\ApiPortFile.kt`、`comfyui\comfyhub_capture\capture_core.py` 读的是**同一个文件**。
+  /// 这是端口这件事在 Dart 侧的唯一入口，与后端 `api_port_file.rs`、
+  /// `comfyui\comfyhub_capture\capture_core.py` 读的是**同一个文件**。
   ///
   /// 三条纪律：
   ///  · **读不到就用默认值**，绝不抛异常 —— 它在 App 启动路径上，崩了就是白屏；
@@ -105,26 +109,22 @@ class SettingsStore extends ChangeNotifier {
   ///  · 用完**不缓存**：端口会随重启变，每次冷启动都重新读一次。
   static String? _baseUrlFromPortFile({String? projectRoot}) {
     for (final root in _projectRootCandidates(projectRoot)) {
-      try {
-        final file = File('$root${Platform.pathSeparator}.run'
-            '${Platform.pathSeparator}api.json');
-        if (!file.existsSync()) continue;
-        final decoded = jsonDecode(file.readAsStringSync());
-        if (decoded is! Map) continue;
-        final port = decoded['port'];
-        if (port is! int || port <= 0 || port > 65535) continue;
-        final host = (decoded['host'] as String?) ?? '127.0.0.1';
-        // `COMFYHUB_HOST=0.0.0.0` 时后端听的是所有网卡，而客户端连 0.0.0.0 是不通的 → 回落回环
-        final connectHost = (host.isEmpty || host == '0.0.0.0' || host == '::') ? '127.0.0.1' : host;
-        return 'http://$connectHost:$port';
-      } catch (_) {
-        // 文件坏了 / 读不动：试下一个候选目录，最后回落到默认值
-      }
+      final state = readPortFile(root);
+      final port = state?['port'];
+      if (port is! int || port <= 0 || port > 65535) continue;
+      final host = (state?['host'] as String?) ?? '127.0.0.1';
+      // `COMFYHUB_ALLOW_REMOTE=1` 时后端听的是所有网卡，而客户端连 0.0.0.0 是不通的 → 回落回环
+      final connectHost = (host.isEmpty || host == '0.0.0.0' || host == '::') ? '127.0.0.1' : host;
+      return 'http://$connectHost:$port';
     }
     return null;
   }
 
-  /// 去哪找 `.run\api.json`：显式给的根 → 环境变量 → 从 exe / cwd 往上找 `scripts\comfyhub.ps1`。
+  /// 去哪找 `.run\api.json`：显式给的根 → 环境变量 → 从 exe / cwd 往上找运行根目录。
+  ///
+  /// **判据与 [BackendLauncher] 完全同源**（`backend_paths.dart` 的 [detectRoot]）——
+  /// 2026-09-30 之前这里是自己再写一遍"往上找 `scripts\comfyhub.ps1`"，两处一旦漂移
+  /// 就会出现"App 起了后端、却读不到它写的端口文件"。
   ///
   /// **测试里必须能关掉它**（见 [portFileRootsOverride]）：否则用例的结果会随
   /// "这台机器上后端正跑在哪个端口"变化（实测：`context_menu_test` 复制出的 URL
@@ -136,30 +136,8 @@ class SettingsStore extends ChangeNotifier {
     if (explicit != null && explicit.isNotEmpty) roots.add(explicit);
     final env = Platform.environment['COMFYHUB_PROJECT_ROOT'];
     if (env != null && env.isNotEmpty) roots.add(env);
-
-    // 与 `BackendLauncher.detectProjectRoot` 同一套判据（往上找 `scripts\comfyhub.ps1`）：
-    // 这里不 import 它是为了不让"设置"依赖"启动器"（两边各自成立、互不牵连）。
-    final starts = <String>[];
-    try {
-      starts.add(File(Platform.resolvedExecutable).parent.path);
-    } catch (_) {}
-    try {
-      starts.add(Directory.current.path);
-    } catch (_) {}
-
-    final sep = Platform.pathSeparator;
-    for (final start in starts) {
-      var dir = Directory(start);
-      for (var depth = 0; depth < 8; depth++) {
-        if (File([dir.path, 'scripts', 'comfyhub.ps1'].join(sep)).existsSync()) {
-          roots.add(dir.path);
-          break;
-        }
-        final parent = dir.parent;
-        if (parent.path == dir.path) break;
-        dir = parent;
-      }
-    }
+    final detected = detectRoot();
+    if (detected != null) roots.add(detected);
     return roots;
   }
 

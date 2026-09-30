@@ -919,6 +919,68 @@ pub const FLAG_OUTPUT: &str = "--output-directory";
 /// 模型自己写这个时，input/output 由它说了算，我们不再插嘴。
 const FLAG_BASE: &str = "--base-directory";
 
+/// `--input` **与 `--input-directory` 是同一个参数**（2026-09-30 用户 bug 的根因）。
+///
+/// ComfyUI 的 `comfy/cli_args.py` 里 input 只有 `--input-directory` 一个长选项，而它的
+/// argparse 开着默认的 `allow_abbrev=True` —— 于是 `--input` 是它的**唯一前缀缩写**，
+/// 指向同一个 `dest`。argparse 对同一个 `dest` 是**后写的覆盖先写的**。
+///
+/// 所以判"调用方自己写过没有"**不能只比全名**：调用方写了 `--input <安装目录>\input`，
+/// 我们没认出来、又补了一条 `--input-directory <共享>\input` 排在后面 —— 实例最终挂的是
+/// **我们那条**，而投放工具按另一份配置推、把图写进了调用方指的那个目录：
+/// 提交时 400 `Invalid image file`，看着像"文件不存在"，其实是两边读写的不是同一个目录。
+const FLAG_INPUT_ALIASES: &[&str] = &[FLAG_INPUT, "--input"];
+/// 同 [`FLAG_INPUT_ALIASES`]：`--output` 是 `--output-directory` 的缩写。
+const FLAG_OUTPUT_ALIASES: &[&str] = &[FLAG_OUTPUT, "--output"];
+
+/// argv 里**已经写过**某个参数时返回它的名字（`--input X` 与 `--input=X` 两种写法都认）。
+///
+/// 只判"名字在不在"（值由 argparse 自己收），因为这里要回答的是二选一的问题：
+/// **这次要不要替调用方补这个参数**。
+fn specified_flag<'a>(argv: &'a [String], aliases: &[&str]) -> Option<&'a str> {
+    argv.iter().find_map(|token| {
+        let name = token.split('=').next().unwrap_or(token);
+        aliases.iter().any(|alias| *alias == name).then_some(name)
+    })
+}
+
+/// 从 argv 里读出**实例真正会用的** input 目录（argparse 后者覆盖前者 → 取最后一次出现）。
+///
+/// 起实例的人（[`crate::comfy_launch`]）拿它留档，投放侧（[`crate::image_edit`]）拿它对准 ——
+/// "挂哪个 input"与"往哪个 input 投"必须出自同一个答案，这就是 2026-09-30 那个 400 的解法。
+pub fn mounted_input_dir(argv: &[String]) -> Option<PathBuf> {
+    flag_value_last(argv, FLAG_INPUT_ALIASES)
+}
+
+/// [`mounted_input_dir`] 的另一半：`--output-directory`（同样认缩写、同样后者覆盖前者）。
+pub fn mounted_output_dir(argv: &[String]) -> Option<PathBuf> {
+    flag_value_last(argv, FLAG_OUTPUT_ALIASES)
+}
+
+/// 取某个参数**最后一次**出现的值（`--flag=v` / `--flag v` 都认；后面紧跟另一个 `--`
+/// 时视为没有值 —— 那是"参数写漏了"，不该把下一个参数名当成路径）。
+fn flag_value_last(argv: &[String], aliases: &[&str]) -> Option<PathBuf> {
+    let mut found: Option<PathBuf> = None;
+    for (index, token) in argv.iter().enumerate() {
+        let (name, inline) = match token.split_once('=') {
+            Some((name, value)) => (name, Some(value.to_string())),
+            None => (token.as_str(), None),
+        };
+        if !aliases.iter().any(|alias| *alias == name) {
+            continue;
+        }
+        let value = inline.or_else(|| {
+            argv.get(index + 1)
+                .filter(|next| !next.starts_with("--"))
+                .cloned()
+        });
+        if let Some(value) = value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+            found = Some(PathBuf::from(value));
+        }
+    }
+    found
+}
+
 /// 一台机器上读到的 Desktop 配置（全是事实；读取失败就是 `None` / 空列表）。
 #[derive(Debug, Clone, Default)]
 pub struct Desktop {
@@ -1016,8 +1078,9 @@ pub fn prepare_launch(args: &Value) -> LaunchPlan {
 /// 同上，但把 Desktop 配置注入进来（测试路径，不必依赖真的 `%APPDATA%`）。
 pub fn prepare_launch_with(args: &Value, desktop: Option<Desktop>) -> LaunchPlan {
     let existing = as_argv(args.get("extra_args"));
-    let flags: Vec<&str> = existing.iter().map(|s| s.as_str()).filter(|s| s.starts_with("--")).collect();
-    let has_flag = |flag: &str| flags.contains(&flag);
+    // ⚠ 判"调用方写过没有"必须认**缩写**（见 FLAG_INPUT_ALIASES）：只比全名就会把
+    // 调用方写的 `--input` 当成"没写过"，然后我们补的那条排在后面、argparse 后写的赢。
+    let has_flag = |flag: &str| specified_flag(&existing, &[flag]).is_some();
 
     let mut argv = existing.clone();
     let mut added: Vec<&str> = Vec::new();
@@ -1048,18 +1111,32 @@ pub fn prepare_launch_with(args: &Value, desktop: Option<Desktop>) -> LaunchPlan
                     "模型自己写了 `{FLAG_BASE}`，ComfyHub 不再补 input/output（免得跟它的意图打架）。"
                 ));
             } else {
-                if !has_flag(FLAG_INPUT) {
-                    if let Some(dir) = d.input_dir.as_ref() {
-                        argv.push(FLAG_INPUT.to_string());
-                        argv.push(dir.display().to_string());
-                        added.push(FLAG_INPUT);
+                // input / output 是**同一个参数**的两种写法（`--input` 是缩写），
+                // 调用方写了就一定是它说了算 —— 我们既不重复、也不覆盖。
+                match specified_flag(&existing, FLAG_INPUT_ALIASES) {
+                    Some(flag) => notes.push(format!(
+                        "input：**尊重调用方自己写的** `{flag}`（它与 `{FLAG_INPUT}` 指向同一个参数，\
+                         后写的会盖住先写的），ComfyHub 没有覆盖 ——\
+                         **投放工具会跟着它走**（读 `.run\\comfyui-<端口>.launch.json` 那份留档）。"
+                    )),
+                    None => {
+                        if let Some(dir) = d.input_dir.as_ref() {
+                            argv.push(FLAG_INPUT.to_string());
+                            argv.push(dir.display().to_string());
+                            added.push(FLAG_INPUT);
+                        }
                     }
                 }
-                if !has_flag(FLAG_OUTPUT) {
-                    if let Some(dir) = d.output_dir.as_ref() {
-                        argv.push(FLAG_OUTPUT.to_string());
-                        argv.push(dir.display().to_string());
-                        added.push(FLAG_OUTPUT);
+                match specified_flag(&existing, FLAG_OUTPUT_ALIASES) {
+                    Some(flag) => notes.push(format!(
+                        "output：**尊重调用方自己写的** `{flag}`，ComfyHub 没有覆盖。"
+                    )),
+                    None => {
+                        if let Some(dir) = d.output_dir.as_ref() {
+                            argv.push(FLAG_OUTPUT.to_string());
+                            argv.push(dir.display().to_string());
+                            added.push(FLAG_OUTPUT);
+                        }
                     }
                 }
             }
@@ -1890,6 +1967,70 @@ mod tests {
         let d = desktop(Some(tmp.clone())).unwrap();
         assert!(d.input_dir.is_none(), "不存在的目录不许进参数（会让启动直接失败）");
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// ⚠ **`--input` 是 `--input-directory` 的 argparse 缩写**，判"调用方写过没有"不能只比全名
+    /// （2026-09-30 用户 bug：调用方写的 `--input <安装目录>\input` 没被认出来，我们后补的
+    /// `--input-directory <共享>\input` 排在后面 —— argparse 后写的赢，于是实例挂的是共享那份，
+    /// 而投放工具按另一份配置推、把底图与人物图写进了安装目录 → 提交 400 `Invalid image file`）。
+    ///
+    /// 实测证据（用户实例自己的 `/system_stats`）：
+    /// `main.py --input …\ComfyUI-Installs\ComfyUI\ComfyUI\input …
+    ///  --input-directory …\ComfyUI-Shared\input …`，而 `LoadImage` 的候选名单是**共享**那份。
+    #[test]
+    fn 调用方写的_input_缩写也算写过不许覆盖() {
+        let tmp = temp_dir("comfyenv-input-alias");
+        let input = tmp.join("install-input");
+        let output = tmp.join("shared-output");
+        std::fs::create_dir_all(&input).unwrap();
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(tmp.join(SETTINGS_FILE), json!({ "outputDir": output }).to_string()).unwrap();
+        // 注意：Desktop 配置里**没有** inputDir —— 正是发布包那台的形状（少了 outputDir 那一半）
+        let d = desktop(Some(tmp.clone())).unwrap();
+
+        // ① 调用方写的是缩写 `--input`：**不许**再补 `--input-directory`
+        let plan = prepare_launch_with(
+            &json!({ "extra_args": ["--input", input.display().to_string()] }),
+            Some(d.clone()),
+        );
+        let argv = as_argv(plan.args.get("extra_args"));
+        assert!(
+            !argv.contains(&FLAG_INPUT.to_string()),
+            "调用方写过 input 了，ComfyHub 不许再补一条（argparse 后写的会盖住它）：{argv:?}"
+        );
+        assert_eq!(mounted_input_dir(&argv), Some(input.clone()), "生效的必须是调用方那一份");
+        assert!(plan.note.unwrap().contains("尊重调用方自己写的"), "{:?}", plan.args);
+
+        // ② `--input=<目录>` 这种写法也要认
+        let plan = prepare_launch_with(
+            &json!({ "extra_args": [format!("--input={}", input.display())] }),
+            Some(d.clone()),
+        );
+        assert!(!as_argv(plan.args.get("extra_args")).contains(&FLAG_INPUT.to_string()));
+
+        // ③ 调用方没写时才轮到我们：Desktop 有 outputDir 就补上，没有 inputDir 就**不编一个**
+        let plan = prepare_launch_with(&json!({}), Some(d));
+        let argv = as_argv(plan.args.get("extra_args"));
+        assert!(argv.contains(&FLAG_OUTPUT.to_string()), "{argv:?}");
+        assert!(!argv.contains(&FLAG_INPUT.to_string()), "{argv:?}");
+        assert_eq!(mounted_input_dir(&argv), None, "Desktop 没配 inputDir 时我们不编一个");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `mounted_input_dir` / `mounted_output_dir`：**取最后一次出现**（argparse 的语义），
+    /// 而且不给值的那一次（后面紧跟另一个 `--`）不算数。
+    #[test]
+    fn 读生效的_input_output_取最后一次() {
+        let argv: Vec<String> = ["--input", "A", "--port", "8188", "--input-directory", "B"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(mounted_input_dir(&argv), Some(PathBuf::from("B")), "后写的赢");
+        assert_eq!(mounted_output_dir(&argv), None);
+
+        let argv: Vec<String> = ["--output-directory=C", "--input"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(mounted_output_dir(&argv), Some(PathBuf::from("C")), "`=` 写法也要认");
+        assert_eq!(mounted_input_dir(&argv), None, "参数写漏了值就别把下一个参数名当路径");
     }
 
     /// 受限会话里把 comfy-cli 的"家目录 + config.ini"一并指进项目内（2026-09-28 用户 bug

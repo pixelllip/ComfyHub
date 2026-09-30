@@ -345,7 +345,9 @@ void main() {
 
     expect(find.byType(PairingQrImage), findsNothing);
     expect(find.textContaining('还没有"扫码配对"接口'), findsOneWidget);
-    expect(find.textContaining('手机举手'), findsOneWidget);
+    // ⚠ 文案 2026-09-30 由用户自己精简过（「手机举手 + 敲码」→「手动敲验证码」）——
+    //   这一条钉的是**指路**本身（不许只说失败、不说另一条路怎么走），不钉具体措辞。
+    expect(find.textContaining('手动敲验证码'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump();

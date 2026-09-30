@@ -1,15 +1,12 @@
 <#
 .SYNOPSIS
-    ComfyHub 发布包打包：把 Flutter App + Kotlin 后端 + JRE 装配成一个可以直接给别人的目录。
+    ComfyHub 发布包打包：把 Flutter App + Rust 后端装配成一个可以直接给别人的目录。
 
 .DESCRIPTION
-    之前「出正式产物」只有 scripts\autorun-app.ps1：它只跑 flutter build windows --release，
-    产物就是 build\windows\x64\runner\Release\ ——里面**只有 App**，缺一件要紧的东西：
-
-      · Kotlin 后端：在 server\build\install\ 下，是 Gradle 的构建中间产物，不会跟着 Release 目录走。
-
-    结果就是"把 Release 目录拷给别人"跑不起来。本脚本按 packaging\manifest.json 这份
-    **软件打包清单**把它们装配到同一个目录里。
+    2026-09-30 起 `flutter build windows --release` 自己就会把后端装进产物
+    （`windows\CMakeLists.txt` 跑 cargo 并装到 `<bundle>\backend\`），所以"把 Release
+    目录拷给别人"本身已经能跑。本脚本按 packaging\manifest.json 这份**软件打包清单**
+    做"发布级"装配：校验关键文件、顺带拷 scripts/db/skills、写 BUILD-INFO、可选打 zip。
 
     **默认就地装配**：输出目录就是 flutter build 的产物目录
     `build\windows\x64\runner\Release\` —— 装完之后这个目录本身就是完整可运行的发布包，
@@ -22,18 +19,21 @@
     发布包是便携式的（免安装、免管理员）：整个目录就是运行时根目录，可整体搬走。
     可写数据都在根目录内：
       · 数据库      <根>\.db       （SQLite 单文件 comfyhub.db + 它自己的 -wal / -shm）
-      · 生成产物    <根>\storage    （后端按 COMFYHUB_STORAGE 写这里）
+      · 生成产物    <根>\storage    （后端按 --storage 写入，App 直启时显式传入）
       · 日志 / PID  <根>\.run
     只读的运行时件：
-      · 后端        <根>\server     （gradle installDist 的 bin\ + lib\）
-      · JRE         <根>\jre        （后端是 JVM 程序，目标机器不假设装了 JDK）
-      · 脚本        <根>\scripts    （App 启动时调它拉起服务）
+      · App         <根>\viewer.exe（+ flutter_windows.dll / data/）
+      · 后端        <根>\backend\   （comfyhub-server-rs.exe，App 自己的资产）
+      · 脚本        <根>\scripts    （构建脚本 + 必要脚本 + video-poster 运行期依赖）
       · SQL         <根>\db         （schema.sqlite.sql 是现在的真源）
+      · Skills      <根>\skills     （只读的项目自带 skill）
 
     注意（P2，2026-09-23）：数据库是 **SQLite**（驱动自带引擎），
     所以发布包**不再携带便携版 MySQL**（少约 300MB），也不再需要 VC++ 运行时。
     （2026-09-29 起 MySQL 连"把老库搬进新库"那条通道一起退役了 —— 运行期数据库是
      SQLite 单文件，包里不再有任何数据库本体，这两行只是说明来龙去脉。）
+    注意（P4，2026-09-26）：后端是 **Rust 单文件 exe**（静态链接），不再需要 JVM，
+    发布包里没有 jre / server\bin，Kotlin 源码只在 legacy\ 里留档。
 
 .EXAMPLE
     pwsh -File scripts\pack-release.ps1
@@ -53,16 +53,13 @@ param(
     # 跳过某几件（迭代时用）
     [switch]$SkipApp,
     [switch]$SkipBackend,
-    # ⚠ `-SkipJre` / `-WithJre` 随 Kotlin 退役一起删了（P4 收尾）：发布包里已经没有 JRE 组件。
+    # ⚠ JRE 组件随 Kotlin 退役一起删了（P4 收尾，2026-09-26）：发布包里没有 JVM。
 
-    # 不裁剪（留给还带 prune 规则的组件：目前是 jre 之外的可选组件）
+    # 不裁剪（留给还带 prune 规则的组件）
     [switch]$NoPrune,
 
     # 装配前清空输出目录（默认只增量覆盖；改裁剪规则后建议带上）
-    [switch]$Clean,
-
-    # 显式指定工具链位置（默认按 scripts\server.ps1 同一套顺序解析）
-    [string]$JdkHome = $env:COMFYHUB_JDK_HOME
+    [switch]$Clean
 )
 
 $ErrorActionPreference = 'Stop'
@@ -97,48 +94,9 @@ function Get-DirSize([string]$Path) {
 }
 
 # ---------------------------------------------------------------------------
-#  工具链解析
-#  与 scripts\server.ps1 的 Resolve-Jdk 保持同一套顺序（本项目刻意不引共享模块）。
-#  差别只有一处：**发布包内自带的 <根>\jre 优先**，
-#  这样脚本在装配好的发布包里跑时用的就是包里那份，而不是开发机的 D:\tools。
+#  （2026-09-30：JDK/JRE 解析整体删除。Rust 后端是静态链接的单文件 exe，
+#  发布包与构建都不再需要 JVM；Android 构建走 AGP 内建 Kotlin，见 docs 里那篇迁移说明。）
 # ---------------------------------------------------------------------------
-
-function Resolve-Jdk {
-    param([string]$Explicit)
-
-    function Test-Jdk([string]$javaHome) {
-        if (-not $javaHome) { return $null }
-        $java = Join-Path $javaHome 'bin\java.exe'
-        if (-not (Test-Path -LiteralPath $java)) { return $null }
-        $out = & $java -version 2>&1 | Out-String
-        if ($out -match 'version "(\d+)') {
-            $major = [int]$Matches[1]
-            # 后端是 Kotlin/JVM 21 目标，Gradle 8.12 也要 21~23
-            if ($major -ge 21 -and $major -le 23) { return $javaHome }
-        }
-        return $null
-    }
-
-    foreach ($cand in @(
-            $Explicit,
-            $env:COMFYHUB_JDK_HOME,
-            (Join-Path $ProjectRoot 'jre'),          # 发布包自带的运行时
-            'D:\tools\jdk-21',
-            "$env:ProgramFiles\Eclipse Adoptium\jdk-21*",
-            "$env:ProgramFiles\Java\jdk-21*",
-            "$env:ProgramFiles\Java\jdk-22*",
-            "$env:ProgramFiles\Java\jdk-23*",
-            'D:\Program Files\Android Studio\jbr',
-            "$env:LOCALAPPDATA\Programs\Android Studio\jbr"
-        )) {
-        if (-not $cand) { continue }
-        foreach ($p in (Resolve-Path $cand -ErrorAction SilentlyContinue)) {
-            $ok = Test-Jdk $p.Path
-            if ($ok) { return $ok }
-        }
-    }
-    return $null
-}
 
 # ---------------------------------------------------------------------------
 #  裁剪规则：manifest 里写的是 glob（** / * / ?），PowerShell 的 -like 不认 **，
@@ -243,33 +201,8 @@ function Get-FlutterReleaseDir {
     return $null
 }
 
-function Build-ServerDist {
-    <#  gradle installDist → server\build\install\comfy-hub-server\ （含 bin\ + lib\）  #>
-    Step '构建 Kotlin 后端（gradle installDist）'
-    # 必须显式用挑出来的 JDK 21~23 跑 Gradle：Gradle 8.12 不认 JDK 24/25，
-    # 而本机 JAVA_HOME / PATH 上就是 JDK 25（server.ps1 同样要先钉住 $env:JAVA_HOME）。
-    # 不钉的话会以 "What went wrong: 25.0.1" 这种没头没尾的方式失败。
-    $jdk = Resolve-Jdk -Explicit $JdkHome
-    if (-not $jdk) { throw '找不到可用的 JDK 21~23，无法构建后端。用 -JdkHome 指定。' }
-    $env:JAVA_HOME = $jdk
-    $env:PATH = "$jdk\bin;$env:PATH"
-    Say "  使用 JDK: $jdk" 'DarkGray'
-    Push-Location (Join-Path $ProjectRoot 'server')
-    try {
-        & gradle -p (Join-Path $ProjectRoot 'server') --console=plain installDist
-        if ($LASTEXITCODE -ne 0) { throw "gradle installDist 失败（退出码 $LASTEXITCODE）" }
-    } finally { Pop-Location }
-}
-
-function Get-ServerDistDir {
-    # installDist 出来的目录名 = settings.gradle.kts 里的 rootProject.name
-    $base = Join-Path $ProjectRoot 'server\build\install'
-    if (-not (Test-Path $base)) { return $null }
-    foreach ($d in (Get-ChildItem $base -Directory -ErrorAction SilentlyContinue)) {
-        if (Test-Path (Join-Path $d.FullName 'bin\comfy-hub-server.bat')) { return $d.FullName }
-    }
-    return $null
-}
+# （2026-09-30：Build-ServerDist / Get-ServerDistDir / Install-Jre 已删。
+# Kotlin 后端与 JRE 随 P4 收尾退役，Rust 后端是静态链接单文件 exe，构建与发布包都不需要 JVM。）
 
 function Get-RustReleaseExe {
     $exe = Join-Path $ProjectRoot 'server-rs\target\release\comfyhub-server-rs.exe'
@@ -280,8 +213,8 @@ function Get-RustReleaseExe {
 function Build-RustRelease {
     <#  后端现在是 Rust 二进制（P4）：`cargo build --release`。
 
-        **构建新鲜度优先**：源码比 exe 新才编 —— 与 `comfyhub.ps1 doctor` 报的是同一条判据，
-        免得每打一次包都白等三分钟（首次全量 release 构建实测 2m41s）。  #>
+        **构建新鲜度优先**：源码比 exe 新才编 —— 与 `scripts\backend.ps1` 的
+        `Get-RustBuildFreshness` 同一条判据，免得每打一次包都白等几分钟。  #>
     $exe = Get-RustReleaseExe
     $srcDir = Join-Path $ProjectRoot 'server-rs\src'
     $need = $true
@@ -306,50 +239,8 @@ function Build-RustRelease {
     Say '  构建完成' 'DarkGray'
 }
 
-function Install-Jre {
-    <#  <jdk> → <OutDir>\jre。有 jmods 就 jlink 出精简运行时，否则整份拷（剪掉开发用的东西）。  #>
-    param([string]$Target)
-
-    $jdk = Resolve-Jdk -Explicit $JdkHome
-    if (-not $jdk) {
-        # 本机连 JDK 都没有 → 借 ensure-runtime.ps1 的自动下载能力拿一份便携版，
-        # 免得"想打个包还得先自己装 JDK"。
-        $runtimeHelper = Join-Path $PSScriptRoot 'runtime-deps.ps1'
-        if (Test-Path $runtimeHelper) {
-            if (-not (Get-Command Ensure-JavaRuntime -ErrorAction SilentlyContinue)) { . $runtimeHelper }
-            Say '  本机找不到 JDK 21~23，自动下载一份便携版运行时…' 'Yellow'
-            $javaExe = Ensure-JavaRuntime -ProjectRoot $ProjectRoot
-            # Ensure-JavaRuntime 返回的是 ...\jre\bin\java.exe，这里要的是运行时根目录
-            if ($javaExe) { $jdk = Split-Path -Parent (Split-Path -Parent $javaExe) }
-        }
-    }
-    if (-not $jdk) { throw '找不到可用的 JDK 21~23，无法准备 JRE。用 -JdkHome 指定，或先跑 scripts\ensure-runtime.ps1。' }
-    Say "  来源 JDK: $jdk" 'DarkGray'
-
-    $jmods = Join-Path $jdk 'jmods'
-    if ((Test-Path $jmods) -and (Get-Command (Join-Path $jdk 'bin\jlink.exe') -ErrorAction SilentlyContinue)) {
-        Say '  用 jlink 生成精简运行时…' 'DarkGray'
-        if (Test-Path -LiteralPath $Target) { Remove-Item -LiteralPath $Target -Recurse -Force }
-        # java.se 覆盖 java.sql / java.naming / java.management / java.desktop 等标准模块；
-        # jdk.unsupported 是 Netty / HikariCP 要的 sun.misc.Unsafe；jdk.crypto.ec 是 TLS 的 EC 套件。
-        $mods = 'java.se,jdk.unsupported,jdk.crypto.ec'
-        foreach ($compress in @('zip-6', '2', $null)) {
-            $args = @('--add-modules', $mods, '--strip-debug', '--no-man-pages', '--no-header-files', '--output', $Target)
-            if ($compress) { $args += "--compress=$compress" }
-            & (Join-Path $jdk 'bin\jlink.exe') @args
-            if ($LASTEXITCODE -eq 0) { return }
-            Say "  jlink 失败（--compress=$compress），换个参数重试…" 'Yellow'
-            if (Test-Path -LiteralPath $Target) { Remove-Item -LiteralPath $Target -Recurse -Force }
-        }
-        Warn 'jlink 一直失败，退化为整份拷贝 JRE。'
-    } else {
-        Say '  该 JDK 没有 jmods（Android Studio 的 JBR 就是这样），整份拷贝 JRE。' 'DarkGray'
-    }
-
-    # 整份拷贝：开发时才用的东西（jmods / include / demo / src.zip / 调试符号）都剪掉
-    $prune = @('jmods/**', 'include/**', 'demo/**', 'sample/**', 'lib/src.zip', '**/*.pdb', '**/*.map')
-    Copy-Tree -Source $jdk -Dest $Target -Prune $(if ($NoPrune) { @() } else { $prune }) | Out-Null
-}
+# （2026-09-30：Install-Jre 已删。Rust 后端是静态链接单文件 exe，不需要 JVM；
+# Android 构建走 AGP 内建 Kotlin，见 docs 里那篇迁移说明。）
 
 # ---------------------------------------------------------------------------
 #  主流程
@@ -380,6 +271,12 @@ if ($Clean) {
     # 这里仍显式补一刀清 `mysql` —— 老发布目录里可能还留着那 300MB，
     # 只按清单清会把它永久留下。`.mysql` 是实例目录，**不**在这里清（它属于运行期数据）。
     [void]$owned.Add('mysql')
+    # 2026-09-30：后端从 `<根>\server\` 挪到了 `<根>\backend\`（App 自己的资产），
+    # `jre\` 随 Kotlin 后端一起退役。老发布目录里这两样都还在，只按清单清会永久留下
+    # —— 而 `server\comfyhub-server-rs.exe` 正好是**旧的**那一份，留着会让人以为
+    # "后端在这儿"（`backend_paths.dart` 还会把它当兼容候选）。这里顺手清掉。
+    [void]$owned.Add('server')
+    [void]$owned.Add('jre')
     foreach ($e in ($owned | Select-Object -Unique)) {
         $p = Join-Path $OutDir $e
         if (Test-Path -LiteralPath $p) {
@@ -431,27 +328,8 @@ foreach ($c in $manifest.components) {
                 $dest = Join-Path $target 'comfyhub-server-rs.exe'
                 Copy-Item -LiteralPath $exe -Destination $dest -Force
                 $size = (Get-Item -LiteralPath $dest).Length
-                Say ("    已装 server\{0}  ({1:N1} MB)" -f 'comfyhub-server-rs.exe', ($size / 1MB)) 'DarkGray'
+                Say ("    已装 backend\{0}  ({1:N1} MB)" -f 'comfyhub-server-rs.exe', ($size / 1MB)) 'DarkGray'
                 $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = $size; dropped = 0 }
-            }
-            'gradle_install_dist' {
-                # ⚠ Kotlin 后端已退役（P4 收尾，2026-09-26）：源码在 `legacy\server\`，
-                # 发布包不再装它。清单里已经**没有**这个组件；真有人改回去，这里照旧能装，
-                # 但请先确认"回退旧后端"确实是你想要的。
-                Write-Host '  ⚠ 装 Kotlin 后端（已退役的 legacy 组件）—— 只有回退旧后端时才该这么做' -ForegroundColor Yellow
-                Build-ServerDist
-                $src = Get-ServerDistDir
-                if (-not $src) { throw '找不到 installDist 产物（server\build\install\*\bin\comfy-hub-server.bat）。' }
-                Say "  来源: $($src.Replace($ProjectRoot + '\', ''))" 'DarkGray'
-                $r = Copy-Tree -Source $src -Dest $target
-                $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = $r.Bytes; dropped = $r.DroppedBytes }
-            }
-            'jdk_runtime' {
-                # 同上：Rust 后端不需要 JVM，清单里已经没有这个组件
-                Write-Host '  ⚠ 装 Java 运行时（已退役的 legacy 组件）' -ForegroundColor Yellow
-                if (-not $NoPrune -and $c.prune) { } # jdk_runtime 的裁剪规则写在 Install-Jre 里
-                Install-Jre -Target $target
-                $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = (Get-DirSize $target); dropped = 0 }
             }
             'mysql_portable' {
                 # P2（2026-09-23）起清单里已经没有这个组件（数据库换成 SQLite）。
@@ -491,12 +369,10 @@ Step '自检（发布包里的关键文件）'
 
 $requiredFiles = @(
     @{ p = 'viewer.exe';                          what = 'Flutter App' },
-    @{ p = 'scripts\comfyhub.ps1';                what = '统一入口脚本' },
-    @{ p = 'scripts\server.ps1';                  what = '后端脚本' },
-    @{ p = 'scripts\backend.ps1';                 what = '后端选择（Rust/Kotlin）' },
-    # P4（2026-09-26）起后端是**这一个 exe**（SQLite 引擎编在里面）；
-    # `scripts\backend.ps1` 的第一优先路径就是它。
-    @{ p = 'server\comfyhub-server-rs.exe';       what = 'Rust 后端二进制' },
+    @{ p = 'scripts\backend.ps1';                 what = '后端找/编/起/停（e2e 与 dev 用）' },
+    @{ p = 'scripts\video-poster.ps1';            what = '视频封面抽帧（后端运行期依赖）' },
+    # P4（2026-09-26）起后端是**这一个 exe**（SQLite 引擎编在里面，viewer.exe 同级 backend\）。
+    @{ p = 'backend\comfyhub-server-rs.exe';      what = 'Rust 后端二进制' },
     @{ p = 'db\schema.sqlite.sql';                what = 'SQLite 库表结构（P2 起的真源）' }
 )
 
@@ -545,7 +421,7 @@ if ([System.IO.Path]::GetFullPath($OutDir).TrimEnd('\') -eq [System.IO.Path]::Ge
     $inPlaceNote = @"
 
 注意       : 本目录就是 flutter build 的产物目录（默认就地装配）。
-             跑 flutter clean / 重新构建会把它整个清空，后端、JRE 会一起没，
+             跑 flutter clean / 重新构建会把它整个清空，后端会一起没，
              那时重新执行一次 scripts\pack-release.ps1 即可。
 "@
 }
@@ -560,14 +436,13 @@ ComfyHub 发布包
 $reqLines
 可写数据（都在根目录内）:
   .db\        数据库（SQLite 单文件 comfyhub.db + 它自己的 -wal / -shm）
-  storage\    生成产物（后端按 COMFYHUB_STORAGE 写入）
+  storage\    生成产物（App 直启后端时按 --storage 显式传入）
   .run\       后端日志 / PID
 
 怎么用:
-  1. 双击 viewer.exe —— 它会自动把后端拉起来（首次启动会自己建库，稍等一会儿）
-  2. 或命令行: pwsh -File scripts\comfyhub.ps1 up -WithApp
-  3. 起不来先体检: pwsh -File scripts\comfyhub.ps1 doctor
-  4. 备份数据库: 停掉后端，把 .db 整个目录拷走（-wal / -shm 要一起）
+  1. 双击 viewer.exe —— 它会自动把 backend\ 里的后端拉起来（首次启动会自己建库，稍等一会儿）
+  2. 用命令行看后端状态：pwsh -File scripts\backend.ps1 status
+  3. 备份数据库: 停掉后端，把 .db 整个目录拷走（-wal / -shm 要一起）
 $inPlaceNote
 "@
 Set-Content -Path (Join-Path $OutDir 'BUILD-INFO.txt') -Value $buildInfo -Encoding utf8

@@ -3604,20 +3604,40 @@ class _ModelPicker extends StatelessWidget {
     );
     // 宽的时候名字与徽标都在按钮上，不用 tooltip（空 message 会画出空气泡）
     if (!compact) return button;
+    // 紧凑形态补一句 Provider —— 换过 Provider 之后光看模型名认不出它是谁家的
+    final provider = store.selectedProvider?.displayName;
     return Tooltip(
-      message: '当前模型：$name${modalities.isEmpty ? '' : '（$modalities）'} —— 点一下换一个',
+      message: '当前模型：$name${modalities.isEmpty ? '' : '（$modalities）'}'
+          '${provider == null ? '' : '\n来源：$provider'}'
+          ' —— 点一下换一个',
       child: button,
     );
   }
 }
 
-/// 可搜索的模型选择对话框（懒构建：只建屏幕上看得见的那几行）。
+/// 可搜索的模型选择对话框 —— **按 Provider 分组**（懒构建：只建屏幕上看得见的那几行）。
+///
+/// 分组是用户 2026-10 提的要求，原话两条：
+///  1. 「来自不同 provider 的模型要套在一个 padding 里面区分，**padding 外标注模型来源**」
+///     —— 所以布局是：**来源那一行在容器外面**，模型行**套在同一个 padding 里面**；
+///  2. 顺带把「换 Provider」这件事补上：以前这个对话框只有**当前那一条**的模型，
+///     界面上又没有别的地方能换，于是刚建好的 Provider 在工作台里永远选不上。
 class _ModelPickerDialog extends StatefulWidget {
   final AiWorkspaceStore store;
   const _ModelPickerDialog({required this.store});
 
   @override
   State<_ModelPickerDialog> createState() => _ModelPickerDialogState();
+}
+
+/// 选择器里的**一组**：一条 Provider + 它名下（命中搜索词的）那些模型。
+class _ProviderGroup {
+  final AiProvider provider;
+  final List<AiModel> all;
+  final List<AiModel> hits;
+  final String? issue;
+
+  const _ProviderGroup(this.provider, this.all, this.hits, this.issue);
 }
 
 class _ModelPickerDialogState extends State<_ModelPickerDialog> {
@@ -3643,19 +3663,122 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
   }
 
   /// 按 id / 显示名过滤（大小写不敏感）。
-  List<AiModel> get _filtered {
+  bool _matches(AiModel m) {
     final q = _query.trim().toLowerCase();
-    if (q.isEmpty) return widget.store.models;
-    return widget.store.models
-        .where((m) => m.id.toLowerCase().contains(q) || m.displayName.toLowerCase().contains(q))
-        .toList();
+    if (q.isEmpty) return true;
+    return m.id.toLowerCase().contains(q) || m.displayName.toLowerCase().contains(q);
+  }
+
+  /// 全部 Provider 的目录，**每条一组**；一条都搜不到的整组不列（否则满屏空标题）。
+  ///
+  /// 目录还没拉到（[AiWorkspaceStore.catalogByProvider] 是空的）时，**当前那条**仍用
+  /// `store.models` 顶上 —— 那样至少不会在"正在读"的那一瞬间把已有的模型清空。
+  List<_ProviderGroup> get _groups {
+    final store = widget.store;
+    final out = <_ProviderGroup>[];
+    for (final p in store.providers) {
+      final list = store.catalogByProvider[p.id] ??
+          (p.id == store.selectedProvider?.id ? store.models : const <AiModel>[]);
+      final hits = list.where(_matches).toList();
+      if (hits.isEmpty) continue;
+      out.add(_ProviderGroup(p, list, hits, store.catalogIssues[p.id]));
+    }
+    return out;
+  }
+
+  /// **来源标注**（在 padding **外面**的那一行）。
+  Widget _groupHeader(_ProviderGroup g, ThemeData theme, bool current) {
+    final p = g.provider;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+      child: Row(
+        children: [
+          Icon(
+            current ? Icons.radio_button_checked : Icons.cloud_outlined,
+            size: 14,
+            color: current ? theme.colorScheme.primary : theme.colorScheme.outline,
+          ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              '来源：${p.displayName}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: current ? theme.colorScheme.primary : theme.colorScheme.onSurface,
+                fontWeight: current ? FontWeight.w600 : null,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(p.id, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+          const Spacer(),
+          if (!p.enabled) const _Badge('已停用'),
+          if (!p.credential.configured) const _Badge('未配置密钥'),
+          _Badge('${g.all.length} 个'),
+        ],
+      ),
+    );
+  }
+
+  /// 一行模型（**在 padding 里面**）。
+  Widget _modelTile(AiProvider p, AiModel m, ThemeData theme, String? selectedId) {
+    return ListTile(
+      dense: true,
+      selected: p.id == widget.store.selectedProvider?.id && m.id == selectedId,
+      title: Text(m.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${m.modalities.map((e) => e.label).join(' / ')}'
+            '${m.tools ? ' · 工具' : ''} · ${m.capabilitySourceLabel}'
+            ' · ${m.id}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+          ),
+          const SizedBox(height: 2),
+          Wrap(
+            spacing: 4,
+            runSpacing: 2,
+            children: [
+              for (final modality in m.modalities) _Badge(modality.label),
+              if (m.tools) const _Badge('工具'),
+              if (m.reasoning) const _Badge('思考'),
+            ],
+          ),
+        ],
+      ),
+      // 唯一的选择入口：跨 Provider 时先把 Provider 切过去（见 store.selectModelFrom）
+      onTap: () {
+        unawaited(widget.store.selectModelFrom(p, m));
+        Navigator.of(context).pop();
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      // 目录是打开这一刻现拉的（`refreshProviders`）—— 不听通知的话，
+      // 拉回来之后这个对话框还是一张空列表。
+      listenable: widget.store,
+      builder: (context, _) => _buildDialog(context),
+    );
+  }
+
+  Widget _buildDialog(BuildContext context) {
     final theme = Theme.of(context);
-    final models = _filtered;
-    final selectedId = widget.store.selectedModel?.id;
+    final store = widget.store;
+    final groups = _groups;
+    final total = store.catalogByProvider.values.fold<int>(0, (a, b) => a + b.length);
+    final shown = groups.fold<int>(0, (a, g) => a + g.hits.length);
+    final selectedId = store.selectedModel?.id;
+    // 有 Provider 却一个目录都没读到 = 正在拉（`refreshProviders` 是异步的）
+    final loading = store.providers.isNotEmpty &&
+        store.catalogByProvider.isEmpty &&
+        store.catalogIssues.isEmpty;
 
     return Dialog(
       child: ConstrainedBox(
@@ -3678,74 +3801,82 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
                 children: [
-                  Text('共 ${widget.store.models.length} 个模型',
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: theme.colorScheme.outline)),
+                  Text(
+                    loading ? '正在读取各 Provider 的模型目录…' : '共 $total 个模型',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                  ),
                   const Spacer(),
-                  Text('显示 ${models.length} 个',
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: theme.colorScheme.outline)),
+                  Text(
+                    '显示 $shown 个',
+                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                  ),
                 ],
               ),
             ),
             const Divider(height: 12),
-            // 懒构建：69 个模型也只建可见的那几行
             Expanded(
-              child: models.isEmpty
-                  ? Center(
-                      child: Text('没有匹配的模型',
-                          style: theme.textTheme.bodySmall
-                              ?.copyWith(color: theme.colorScheme.outline)),
-                    )
-                  : ListView.builder(
-                      itemCount: models.length,
-                      itemBuilder: (context, i) {
-                        final m = models[i];
-                        return ListTile(
-                          dense: true,
-                          selected: m.id == selectedId,
-                          title: Text(m.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '${m.modalities.map((e) => e.label).join(' / ')}'
-                                '${m.tools ? ' · 工具' : ''} · ${m.capabilitySourceLabel}'
-                                ' · ${m.id}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: theme.textTheme.labelSmall
-                                    ?.copyWith(color: theme.colorScheme.outline),
-                              ),
-                              const SizedBox(height: 2),
-                              Wrap(
-                                spacing: 4,
-                                runSpacing: 2,
-                                children: [
-                                  for (final modality in m.modalities) _Badge(modality.label),
-                                  if (m.tools) const _Badge('工具'),
-                                  if (m.reasoning) const _Badge('思考'),
-                                ],
-                              ),
-                            ],
-                          ),
-                          // 唯一的选择入口：store.selectModel
-                          onTap: () {
-                            widget.store.selectModel(m);
-                            Navigator.of(context).pop();
-                          },
-                        );
-                      },
-                    ),
+              child: _body(theme, groups, loading, selectedId),
             ),
           ],
         ),
       ),
     );
   }
+
+  /// 三种状态各说各的话（用户原话纪律：看不见的现象只能靠猜，所以都要**如实说**）。
+  Widget _body(ThemeData theme, List<_ProviderGroup> groups, bool loading, String? selectedId) {
+    if (widget.store.providers.isEmpty) {
+      return _hint(theme, '还没有配置 Provider。\n去「设置 → AI 模型与凭据」建一条，并给它配好模型目录。');
+    }
+    if (loading) {
+      return const Center(
+        child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+    if (groups.isEmpty) {
+      return _hint(
+        theme,
+        _query.trim().isEmpty
+            ? '这些 Provider 下一条模型都没有。\n去「设置 → AI 模型与凭据」用「获取可用模型」或「手动添加」补上。'
+            : '没有匹配的模型',
+      );
+    }
+    // 每组两个 sliver：**标题在 padding 外，模型列表整体套在一个 padding 里**。
+    // 组内是 `SliverList`（懒构建）——69 个模型一次也只建视口附近那几行。
+    return CustomScrollView(
+      slivers: [
+        for (final g in groups) ...[
+          SliverToBoxAdapter(
+            child: _groupHeader(g, theme, g.provider.id == widget.store.selectedProvider?.id),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => _modelTile(g.provider, g.hits[i], theme, selectedId),
+                childCount: g.hits.length,
+              ),
+            ),
+          ),
+        ],
+        const SliverToBoxAdapter(child: SizedBox(height: 8)),
+      ],
+    );
+  }
+
+  Widget _hint(ThemeData theme, String text) => Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+          ),
+        ),
+      );
 }
 
 /// 思考强度选择器（AIH-056）。

@@ -112,3 +112,28 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# === ComfyHub 后端（Rust）作为 App 自己的资产 ==============================
+#
+# **release 构建时**先把后端编到最新，再装成 `<bundle>\backend\comfyhub-server-rs.exe`，
+# 并把运行期要用的只读件（scripts\video-poster.ps1、db\、skills\builtin）一起装配 ——
+# 于是 `build\windows\x64\runner\Release\` 本身就是一份完整可跑的发布包。
+# App 启动时**直接执行**这个 exe（`lib\core\backend_paths.dart`），不再经过 pwsh。
+#
+# Debug 刻意**不装**（用户要求："debug 版的时候在老位置"）：debug 跑的是源码树里
+# `server-rs\target\{release,debug}\` 那份，见 `backend_paths.dart` 的候选顺序。
+#
+# 具体做什么、为什么（含完整性标签那条）全在 windows\cmake\bundle_backend.cmake 里。
+#
+# ⚠ 两件事必须**显式用 install(CODE) 传进去**，别在脚本里直接读：
+#   · 源码树根 —— 脚本里读不到 configure 期的 `CMAKE_CURRENT_SOURCE_DIR`；
+#   · bundle 目录 —— 它的真值是生成器表达式 `$<TARGET_FILE_DIR:viewer>`（见上面的
+#     CMAKE_INSTALL_PREFIX），install 阶段读 `${CMAKE_INSTALL_PREFIX}` 只会拿到
+#     **没展开的原字符串**（第一次就这么踩的：报 file cannot create directory: ...\$<TARGET_FILE_DIR:viewer>\backend）。
+install(CODE "set(COMFYHUB_SRC_ROOT \"${CMAKE_CURRENT_SOURCE_DIR}/..\")"
+  COMPONENT Runtime)
+install(CODE "set(COMFYHUB_BUNDLE_DIR \"$<TARGET_FILE_DIR:${BINARY_NAME}>\")"
+  COMPONENT Runtime)
+install(SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/bundle_backend.cmake"
+  CONFIGURATIONS Release;Profile
+  COMPONENT Runtime)

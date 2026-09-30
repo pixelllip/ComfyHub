@@ -42,7 +42,7 @@
 //!
 //! | 这里 | Kotlin |
 //! | --- | --- |
-//! | [`resolve_input_dir`] | `AiWorkflowSearch.resolveComfyInputDir` |
+//! | [`resolve_input_dir`] / [`target_input_dir`] | `AiWorkflowSearch.resolveComfyInputDir` |
 //! | [`input_filename_for`] | `AiWorkflowSearch.inputFilenameFor` |
 //! | [`use_attachment`] | `AiWorkflowSearch.useAttachment` |
 //! | [`use_media`] | `AiImageEdit.useMedia` |
@@ -54,6 +54,12 @@
 //! 单测盯的就是这两件事（`make_mask_白区与羽化` / `投放文件名可重复且不互相覆盖`）。
 //! ⚠ `mode="subject"` **不在这条对照里**：Kotlin 那一版是颜色抠图当遮罩，行为已经分叉
 //! （它那边还在写遮罩）—— 这一档是**有意**分叉的（R12 的分叉要有明确的记录）。
+//!
+//! ⚠ **input 目录的判据也已经分叉，而且是有意的**（2026-09-30）：Kotlin 只按"配置的
+//! 输出目录推兄弟目录"，而真机上实例读哪一份由**起实例时挂的参数**决定（Desktop 的
+//! `settings.json`、或调用方自己写的 `--input`）。所以这里多两层：**我们起实例时的留档**
+//! 与**直接问实例**（[`target_input_dir`]）。写错的表现是提交时 `400 Invalid image file`，
+//! 那比"两端不一致"更值得优先防（现场与因果链见 [`input_dir_candidates`]）。
 
 use std::path::{Path, PathBuf};
 
@@ -225,11 +231,14 @@ impl Delivery {
                 format!(
                     "放不进 ComfyUI 的 input 目录：{}\n\
                      先确认 ComfyUI 还在跑、`comfy_get_status` 能连上；如果它也连不上，那多半是**这个后端\
-                     进程自己写不进项目外**（限制按**映像位置**判：源码树布局下后端 exe 就在工作区内 —— \
-                     与路径、目录 ACL、用户身份、Defender 都无关）。修法是打一个发布包到工作区外再启动：\n\
-                     `pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub` 然后 \
-                     `pwsh -File D:\\dist\\ComfyHub\\scripts\\comfyhub.ps1 up`\
-                     （已经有工作区外的构建产物时，设 `$env:COMFYHUB_SERVER_EXE` 指向那个 exe 就够）。",
+                     进程自己写不进项目外**（真因是完整性标签：工作区产物带着 Low 标签，Windows 取 \
+                     **min(父进程, 映像)** → 进程令牌是 Low，写不了工作区外的 Medium 对象 —— \
+                     与路径、目录 ACL、用户身份、Defender 都无关）。修法三选一：\n\
+                     1. `pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub`，\
+                     然后运行 `D:\\dist\\ComfyHub\\viewer.exe`（App 自己拉起 backend\\ 里的后端）；\n\
+                     2. 已有工作区外的构建产物时，设 `$env:COMFYHUB_SERVER_EXE` 指向那个 exe；\n\
+                     3. `pwsh -File scripts\\backend.ps1 start`（起之前把 Low 标签修回 Medium；\
+                     **当前会话本身是 Low 时修不动**，只剩 1/2 两条路）。",
                     failed.join("；")
                 ),
             ));
@@ -277,58 +286,179 @@ fn write_or_defer(
     }
 }
 
-/// ComfyUI 的 `input` 目录。
+/// ComfyUI 的 `input` 目录：**投放 / 遮罩 / 摆放三处共用同一个真源**。
 ///
-/// 优先从**已经配置好的输出目录**推（capture 配置里的 outputDir 与 input 是兄弟目录，
-/// 这是 ComfyUI 的固定布局）；推不出来再走 [`crate::comfy_dirs::find_home`] 的探测。
-/// 探测**只读**：找不到就如实报错，**绝不在随机位置建目录**。
+/// # 为什么不能只按"配置的输出目录"推（2026-09-30 用户 bug）
 ///
-/// ⚠ 为什么不能只按安装目录推：ComfyUI Desktop 把"程序"与"共享数据（input / output / models）"
-/// 分在两处，跑着的实例读写的是**共享**那一份。本机实测：安装目录
-/// `…\ComfyUI-Installs\ComfyUI\ComfyUI\input` 有 15 个文件，而实例真正在用的是
-/// `…\ComfyUI-Shared\input`（50 个）—— 写错地方的表现是 `Invalid image file`
-/// （看着像"文件不存在"，其实是写进了另一个目录）。判据与 Kotlin 那份**逐字一致**。
-pub fn resolve_input_dir(state: &AppState) -> Result<PathBuf, ToolFailure> {
-    let configured = crate::capture::capture_config(state)
-        .ok()
-        .and_then(|config| config.output_dir)
+/// 这份目录必须**与实例真正在读的那一份是同一个**，否则工作流里的 `LoadImage` 找不到文件 ——
+/// 提交时 `400 Invalid image file`，看着像"文件不存在"，其实是"两边读写的不是同一个目录"。
+///
+/// 而"实例读哪一份"是**起实例时**定下来的，可能来自两处：
+///   * 调用方自己写的 `--input` / `--input-directory`（`comfy_start` 的 `extraArgs`）；
+///   * ComfyHub 照 ComfyUI Desktop 的 `settings.json` 补的那条 `--input-directory`。
+///
+/// 原来这里只按"配置里 outputDir 的兄弟目录"推，于是发布包（`capture.config` 里**根本没有
+/// outputDir**）落到 `find_home` 探到的**安装目录**那份 input，而实例挂的是 Desktop 配的
+/// **共享**那份：底图与摆好的人物图都躺在安装目录的 input 里，提交必 400。
+///
+/// # 判据（**顺序即优先级**，第一个真实存在的目录就是投放目标）
+///
+/// 1. **我们上次起实例时挂的那份**（`.run\comfyui-<端口>.launch.json` 的留档）——
+///    最硬的证据：那个实例读的就是它（见 [`crate::comfy_launch::write_launch_record`]）；
+/// 2. 配置里生效的 `outputDir` 的兄弟 `input`（用户在「ComfyUI 自动捕获」里显式指的那份）；
+/// 3. **ComfyUI Desktop 的 `settings.json` 的 `inputDir`** —— 我们起实例时补的就是它；
+/// 4. `find_home` 探到的 `input`（便携包 / 整合包那种"程序与数据在一处"的布局）。
+///
+/// ⚠ 实例**答话**时它排在上面全部之前：那是"它到底读哪儿"的唯一权威答案
+/// （见 [`target_input_dir`] 的探测）。上面四条只服务"问不到"的时候。
+pub fn input_dir_candidates(state: &AppState) -> Vec<(PathBuf, &'static str)> {
+    let config = crate::capture::capture_config(state).ok();
+    let configured = config
+        .as_ref()
+        .and_then(|config| config.output_dir.clone())
         .map(|dir| dir.trim().to_string())
         .filter(|dir| !dir.is_empty());
-    let home = crate::comfy_dirs::find_home(&state.project_root(), configured.as_deref());
-    input_dir_from(configured.as_deref(), home)
+    let desktop_input = crate::mcp::desktop(None).and_then(|d| d.input_dir);
+    let comfy_url = config
+        .as_ref()
+        .map(|config| config.comfy_url.clone())
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:8188".to_string());
+    let port = crate::comfy_launch::port_of(&comfy_url);
+    let launched = crate::comfy_launch::launched_input_dir(&state.project_root(), port);
+    let home_input = crate::comfy_dirs::find_home(&state.project_root(), configured.as_deref())
+        .map(|home| home.join("input"));
+
+    let mut out: Vec<(PathBuf, &'static str)> = Vec::new();
+    for (dir, source) in [
+        (launched, "launch-record"),
+        (sibling_input_of(configured.as_deref()), "capture-output"),
+        (desktop_input, "desktop-config"),
+        (home_input, "probe"),
+    ] {
+        let Some(dir) = dir else { continue };
+        // 不存在的一律不给（免得投放跑到一个凭空拼出来的目录里）；同一个目录只留第一个来路
+        if !dir.is_dir() || out.iter().any(|(kept, _)| paths_equal(kept, &dir)) {
+            continue;
+        }
+        out.push((dir, source));
+    }
+    out
 }
 
-/// [`resolve_input_dir`] 的**纯函数那一半**：配置的输出目录 → 探测到的 home → 如实报错。
+/// 两份路径是不是同一个目录（只做字面比较 + 大小写不敏感 —— Windows 上够了，
+/// 也避免为了一次比较去 `canonicalize` 而引入 IO 失败分支）。
+fn paths_equal(a: &Path, b: &Path) -> bool {
+    a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+}
+
+/// 配置的输出目录 → 它的兄弟 `input` 目录。
 ///
-/// 拆出来是为了能测"两处都没有"那一支：本机（开发机）装着 ComfyUI，
+/// 配置里给的**可能就是 input 本身**（老版本设置页允许直接填 input 目录），那就原样用它；
+/// 名字是 `output` 就取它的父目录再拼 `input`（ComfyUI 的固定布局）。
+fn sibling_input_of(configured: Option<&str>) -> Option<PathBuf> {
+    let dir = configured.map(str::trim).filter(|dir| !dir.is_empty())?;
+    let path = PathBuf::from(dir);
+    let is_output = path
+        .file_name()
+        .map(|name| name.to_string_lossy().eq_ignore_ascii_case("output"))
+        .unwrap_or(false);
+    if is_output {
+        path.parent().map(|base| base.join("input"))
+    } else {
+        Some(path)
+    }
+}
+
+/// ComfyUI 的 `input` 目录（**只按候选顺序取，不问实例** —— 同步路径用）。
+///
+/// 顺序见 [`input_dir_candidates`]（留档 → 配置 output 兄弟 → Desktop 配置 → 盘探）。
+/// 探测**只读**：一个都不存在就如实报错，**绝不在随机位置建目录**。
+///
+/// ⚠ 真正调工具的那条路走 [`target_input_dir`]（它会先问实例），这个函数是它的兜底与单测入口。
+pub fn resolve_input_dir(state: &AppState) -> Result<PathBuf, ToolFailure> {
+    input_dir_from(input_dir_candidates(state))
+}
+
+/// [`resolve_input_dir`] 的**纯函数那一半**：按顺序取第一个**真实存在**的目录，都没有就如实报错。
+///
+/// 拆出来是为了能测"一处都没有"那一支：本机（开发机）装着 ComfyUI，
 /// `find_home` 一定探得到，于是"找不到"这条分支在集成用例里**永远走不到**
 /// —— 而它恰恰是新用户第一次用时会撞上的那一支（发布包里没有 ComfyUI 目录）。
-fn input_dir_from(configured: Option<&str>, home: Option<PathBuf>) -> Result<PathBuf, ToolFailure> {
-    if let Some(dir) = configured.map(str::trim).filter(|dir| !dir.is_empty()) {
-        let path = PathBuf::from(dir);
-        let is_output = path
-            .file_name()
-            .map(|name| name.to_string_lossy().eq_ignore_ascii_case("output"))
-            .unwrap_or(false);
-        let base = if is_output { path.parent().map(Path::to_path_buf) } else { Some(path) };
-        if let Some(base) = base {
-            let input = base.join("input");
-            if input.is_dir() {
-                return Ok(input);
-            }
-        }
-    }
-    if let Some(home) = home {
-        let input = home.join("input");
-        if input.is_dir() {
-            return Ok(input);
-        }
+///
+/// ⚠ 存在性**在这里也要判一遍**（[`input_dir_candidates`] 已经滤过）：这条函数是
+/// "按顺序取第一个可用的"这个契约本身，调用方（含用例）不该因为传进来一个不存在的路径
+/// 就拿到一个凭空拼出来的目录 —— 那正是"投进一个实例根本不读的目录"的开头。
+fn input_dir_from(candidates: Vec<(PathBuf, &'static str)>) -> Result<PathBuf, ToolFailure> {
+    if let Some((dir, _)) = candidates.into_iter().find(|(dir, _)| dir.is_dir()) {
+        return Ok(dir);
     }
     Err(ToolFailure::new(
         "COMFY_NOT_FOUND",
         "没找到 ComfyUI 的 input 目录（投放的图与遮罩必须放在那里，LoadImage / LoadImageMask 才读得到）。\
          让用户在「设置 → ComfyUI 自动捕获」里确认 ComfyUI 位置后再试。",
     ))
+}
+
+/// 投放的目标目录 + **它是怎么定下来的**（给模型看的那一句）。
+#[derive(Debug, Clone)]
+pub struct TargetInputDir {
+    pub dir: PathBuf,
+    /// 来路：`instance`（问了实例）/ `launch-record` / `capture-output` / `desktop-config` / `probe`
+    pub source: &'static str,
+    /// 需要如实说明的一句（"实例读的不是我们推的那个"这种）
+    pub note: Option<String>,
+}
+
+/// **投放工具真正用的那一个**：先问实例，问不到再按候选顺序。
+///
+/// 为什么非问不可：`--input` / `--input-directory` 两处都可能给实例赋值（argparse 后写的赢），
+/// 光看配置推不出"它到底读哪儿"。实例自己报的 `/object_info/LoadImage` 名单是唯一权威答案 ——
+/// 拿它去比对候选目录，**覆盖面最高**的那个就是它的 input（见 [`crate::comfy_client::dir_owning`]）。
+pub async fn target_input_dir(state: &AppState) -> Result<TargetInputDir, ToolFailure> {
+    let candidates = input_dir_candidates(state);
+    let comfy_url = crate::capture::capture_config(state).map(|c| c.comfy_url).unwrap_or_default();
+    let dirs: Vec<PathBuf> = candidates.iter().map(|(dir, _)| dir.clone()).collect();
+    let probed = crate::comfy_client::instance_input_dir(&comfy_url, &dirs).await;
+    choose_input_dir(&candidates, probed)
+}
+
+/// [`target_input_dir`] 的**纯函数那一半**（问实例的那一步的结果由调用方注入，可单测）。
+///
+/// 判据：**实例答话就是终点**（它是唯一权威）；它与我们推的第一名不一致时**必须说出来**——
+/// 那正是"配置与实际读的不是同一份"的现场（2026-09-30 用户 bug），用户与模型都该看见。
+fn choose_input_dir(
+    candidates: &[(PathBuf, &'static str)],
+    probed: Option<PathBuf>,
+) -> Result<TargetInputDir, ToolFailure> {
+    if let Some(probed) = probed {
+        let guessed = candidates.iter().find(|(dir, _)| dir.is_dir()).map(|(dir, _)| dir.clone());
+        let note = match &guessed {
+            Some(first) if !paths_equal(first, &probed) => Some(format!(
+                "实例报出来的 input 是 {}，而我们按配置推出来的是 {} —— **以实例为准**\
+                 （两边不一致时写错那一份的表现就是提交时 400 `Invalid image file`）。\
+                 建议让用户在「设置 → ComfyUI 自动捕获」里把输出目录改成实例真正在用的那一处，\
+                 免得每次都要靠探测。",
+                probed.display(),
+                first.display()
+            )),
+            _ => None,
+        };
+        return Ok(TargetInputDir { dir: probed, source: "instance", note });
+    }
+
+    let (dir, source) = candidates
+        .iter()
+        .find(|(dir, _)| dir.is_dir())
+        .map(|(dir, source)| (dir.clone(), *source))
+        .ok_or_else(|| {
+            ToolFailure::new(
+                "COMFY_NOT_FOUND",
+                "没找到 ComfyUI 的 input 目录（投放的图与遮罩必须放在那里，LoadImage / LoadImageMask 才读得到）。\
+                 让用户在「设置 → ComfyUI 自动捕获」里确认 ComfyUI 位置后再试。",
+            )
+        })?;
+    Ok(TargetInputDir { dir, source, note: None })
 }
 
 /// 投放进 `input` 目录的文件名。
@@ -416,6 +546,9 @@ fn read_size(file: &Path) -> Option<(i64, i64)> {
 /// 这条走 `<storage>/media`。为什么非要有它：两阶段流程里"阶段一的产物"天然在画廊，
 /// 而不在聊天附件里 —— 没有它，模型只能让用户手动去 ComfyUI 里找那张图。
 ///
+/// ⚠ `input_dir` **由工具入口算好传进来**（[`target_input_dir`]），不在这里自己推：
+/// "实例读哪个 input"与"往哪个 input 投"必须是同一个答案（2026-09-30 那个 400 的教训）。
+///
 /// 返回 `{mediaId, filename, inputDir, width?, height?, hint}`：`width/height` 是**原图尺寸**，
 /// 做遮罩时要照它给（遮罩与底图尺寸不一致 = 采样直接炸）。解不出来就不给这两个键，
 /// **但不拦**（模型可以显式给 width/height）。
@@ -423,6 +556,7 @@ pub fn use_media(
     state: &AppState,
     media_id: i64,
     wanted_name: Option<&str>,
+    input_dir: &Path,
     delivery: &mut Delivery,
 ) -> Result<Value, ToolFailure> {
     let media = crate::media::get(state, media_id).map_err(|_| {
@@ -452,8 +586,6 @@ pub fn use_media(
             format!("产物 #{media_id} 的原件不在盘上了：{}", source.display()),
         ));
     }
-
-    let input_dir = resolve_input_dir(state)?;
     let filename = input_filename_for(&media.original_name, &format!("m{media_id}"), wanted_name);
     copy_if_needed(&source, &input_dir.join(&filename), delivery)?;
 
@@ -483,6 +615,7 @@ pub fn use_attachment(
     state: &AppState,
     attachment_id: &str,
     wanted_name: Option<&str>,
+    input_dir: &Path,
     delivery: &mut Delivery,
 ) -> Result<Value, ToolFailure> {
     let dto = crate::attachments::get(state, attachment_id)
@@ -520,8 +653,6 @@ pub fn use_attachment(
             format!("附件「{}」的原件文件不在了：{}", dto.name, source.display()),
         ));
     }
-
-    let input_dir = resolve_input_dir(state)?;
     let filename = input_filename_for(&dto.name, attachment_id, wanted_name);
     copy_if_needed(&source, &input_dir.join(&filename), delivery)?;
 
@@ -578,19 +709,21 @@ pub fn use_attachment(
 ///  - `filename`：想固定的文件名（不给自己按内容算一个，重复调用得到同一个文件）。
 pub fn make_mask(state: &AppState, args: &Value) -> Result<Value, ToolFailure> {
     // 单测 / 老调用点：直写失败也不攒投递（那几个用例本来就在能写的机器上跑）
-    make_mask_with(state, args, &mut Delivery::default())
+    let input_dir = resolve_input_dir(state)?;
+    make_mask_with(args, &input_dir, &mut Delivery::default())
 }
 
 /// [`make_mask`] 的真实实现：多一个 [Delivery]，好让"直写被拒"的那份遮罩
-/// 由 async 的工具入口交给 ComfyUI 自己写（见 [Delivery] 的说明）。
+/// 由 async 的工具入口交给 ComfyUI 自己写（见 [Delivery] 的说明）；
+/// 多一个 `input_dir`：投放目标**由工具入口算好**（[`target_input_dir`]），这里不再自己推
+/// —— 也因此不再需要 `state`（它当初只为推 input 目录而传）。
 pub fn make_mask_with(
-    state: &AppState,
     args: &Value,
+    input_dir: &Path,
     delivery: &mut Delivery,
 ) -> Result<Value, ToolFailure> {
     // ⚠ 先于 ComfyUI 探测：参数写错了就当场报，**别等去找实例**（也让它能单测）。
     reject_removed_args(args)?;
-    let input_dir = resolve_input_dir(state)?;
 
     let base_filename = str_arg(args, "baseFilename");
     let mut width = int_arg(args, "width");
@@ -1619,10 +1752,11 @@ pub async fn tool_use_attachment(
         .ok_or_else(|| ToolFailure::new("INVALID_ARGUMENT", "缺少参数 attachmentId（见用户消息里的附件说明）"))?
         .to_string();
     let wanted = str_arg(arguments, "filename");
-    let input_dir = resolve_input_dir(state)?;
-    let mut delivery = Delivery::for_input_dir(&input_dir);
-    let mut result = use_attachment(state, &attachment_id, wanted.as_deref(), &mut delivery)?;
+    let target = target_input_dir(state).await?;
+    let mut delivery = Delivery::for_input_dir(&target.dir);
+    let mut result = use_attachment(state, &attachment_id, wanted.as_deref(), &target.dir, &mut delivery)?;
     apply_uploaded_names(&mut result, &delivery.flush(state).await?);
+    annotate_target(&mut result, &target);
     Ok(crate::tools::ToolOutcome::new(result.to_string(), result))
 }
 
@@ -1636,10 +1770,11 @@ pub async fn tool_use_media(
     let media_id = int_arg(arguments, "mediaId")
         .ok_or_else(|| ToolFailure::new("INVALID_ARGUMENT", "缺少参数 mediaId（画廊里的图片产物 id）"))?;
     let wanted = str_arg(arguments, "filename");
-    let input_dir = resolve_input_dir(state)?;
-    let mut delivery = Delivery::for_input_dir(&input_dir);
-    let mut result = use_media(state, media_id, wanted.as_deref(), &mut delivery)?;
+    let target = target_input_dir(state).await?;
+    let mut delivery = Delivery::for_input_dir(&target.dir);
+    let mut result = use_media(state, media_id, wanted.as_deref(), &target.dir, &mut delivery)?;
     apply_uploaded_names(&mut result, &delivery.flush(state).await?);
+    annotate_target(&mut result, &target);
     Ok(crate::tools::ToolOutcome::new(result.to_string(), result))
 }
 
@@ -1648,14 +1783,27 @@ pub async fn tool_make_mask(
     state: &AppState,
     arguments: &Value,
 ) -> Result<crate::tools::ToolOutcome, ToolFailure> {
-    let input_dir = resolve_input_dir(state)?;
-    let mut delivery = Delivery::for_input_dir(&input_dir);
-    let mut result = make_mask_with(state, arguments, &mut delivery)?;
+    let target = target_input_dir(state).await?;
+    let mut delivery = Delivery::for_input_dir(&target.dir);
+    let mut result = make_mask_with(arguments, &target.dir, &mut delivery)?;
     // ⚠ 走 HTTP 的可能是**摆放后的人物图**（`placed-…`）而不只是遮罩 ——
     //   所以按名字回填（`filename` / `personFilename` / `placedSubjectFilename`），不许写死一个键。
     let delivered = delivery.flush(state).await?;
     apply_uploaded_names(&mut result, &delivered);
+    annotate_target(&mut result, &target);
     Ok(crate::tools::ToolOutcome::new(result.to_string(), result))
+}
+
+/// 把"这份目录是怎么定下来的"如实写进结果里。
+///
+/// 为什么必须回给模型：`inputDir` 是我们**投进去**的地方，而工作流里的 `LoadImage` 认的是
+/// **实例在读**的地方 —— 两边不一致时提交会回 400 `Invalid image file`，而模型光看一个
+/// 路径字符串是分辨不出来的（`instance` = 问过实例，最可信；其余是推的，不一致时带 note）。
+fn annotate_target(result: &mut Value, target: &TargetInputDir) {
+    result["inputDirSource"] = json!(target.source);
+    if let Some(note) = &target.note {
+        result["inputDirNote"] = json!(note);
+    }
 }
 
 #[cfg(test)]
@@ -1835,7 +1983,7 @@ mod tests {
     /// ——因为它走的是 `/upload/image`）。
     #[test]
     fn 摆放的人物图写不进时改走_upload_而不是报错() {
-        let (state, input) = 写不进_input_的状态("placed");
+        let (_state, input) = 写不进_input_的状态("placed");
         // 占住"摆好的人物图"该落地的那个文件名 → 直写必然拿 ERROR_ACCESS_DENIED
         std::fs::create_dir(input.join("placed-person-m344.png")).unwrap();
 
@@ -1849,7 +1997,7 @@ mod tests {
             "y": 0.5,
         });
         let mut delivery = Delivery::for_input_dir(&input);
-        let result = make_mask_with(&state, &args, &mut delivery)
+        let result = make_mask_with(&args, &input, &mut delivery)
             .expect("直写被拒也要给出结果（那份内容攒给 ComfyUI 写），不能当场报错");
 
         assert!(!delivery.is_empty(), "写不进去的那一份必须攒着等 /upload/image");
@@ -1899,7 +2047,7 @@ mod tests {
     /// 遮罩那一档**走的是同一条退路**（它早就有，但没人钉住"被拒时不报错"）。
     #[test]
     fn 遮罩写不进时也改走_upload() {
-        let (state, input) = 写不进_input_的状态("mask");
+        let (_state, input) = 写不进_input_的状态("mask");
         std::fs::create_dir(input.join("blocked-mask.png")).unwrap();
         let args = json!({
             "mode": "rect",
@@ -1909,7 +2057,7 @@ mod tests {
             "filename": "blocked-mask.png",
         });
         let mut delivery = Delivery::for_input_dir(&input);
-        let result = make_mask_with(&state, &args, &mut delivery).expect("直写被拒也不当场报错");
+        let result = make_mask_with(&args, &input, &mut delivery).expect("直写被拒也不当场报错");
         assert_eq!(result["maskGenerated"], true);
         assert_eq!(delivery.pending.len(), 1);
         assert_eq!(
@@ -1922,7 +2070,7 @@ mod tests {
     /// 写得进去时就**别多走一趟 HTTP**（投放原图每次都上传会白白多花几十 MB 流量）。
     #[test]
     fn 写得进去时不攒投递() {
-        let (state, input) = 写不进_input_的状态("direct");
+        let (_state, input) = 写不进_input_的状态("direct");
         let args = json!({
             "mode": "rect",
             "region": "full",
@@ -1931,7 +2079,7 @@ mod tests {
             "filename": "plain-mask.png",
         });
         let mut delivery = Delivery::for_input_dir(&input);
-        make_mask_with(&state, &args, &mut delivery).unwrap();
+        make_mask_with(&args, &input, &mut delivery).unwrap();
         assert!(delivery.is_empty(), "直写成功就不该攒：{}", input.join("plain-mask.png").display());
         assert!(input.join("plain-mask.png").is_file(), "而且文件真的要落盘了");
         crate::testpaths::cleanup(input.parent().unwrap().parent().unwrap());
@@ -2212,14 +2360,18 @@ mod tests {
     /// `find_home` 一定探得到本机的 ComfyUI，而它恰恰是新用户第一次用时会撞上的那一支）。
     #[test]
     fn 找不到_comfyui_时如实报错() {
-        let failure = input_dir_from(None, None).unwrap_err();
+        let failure = input_dir_from(Vec::new()).unwrap_err();
         assert_eq!(failure.code, "COMFY_NOT_FOUND");
         assert!(failure.message.contains("设置"), "要告诉用户去哪儿确认：{}", failure.message);
     }
 
-    /// 配置的输出目录优先；它推不出 `input` 时才回落到探测到的 home。
+    /// 候选顺序：**先到先得**，第一个真实存在的目录就是投放目标。
+    ///
+    /// 2026-09-30 用户 bug 的回归线：发布包那份 `capture.config` 里**根本没有 outputDir**，
+    /// 于是只能退到"DeskTop 配的共享 input"（我们起实例时挂的就是它）—— 不能退到
+    /// `find_home` 探到的**安装目录**那份（实例根本不读它，提交必 400 `Invalid image file`）。
     #[test]
-    fn 配置的输出目录优先于探测到的_home() {
+    fn 候选目录按顺序取第一个存在的() {
         let root = crate::testpaths::scratch("input-dirs");
         let configured = root.join("shared");
         let probed = root.join("probed");
@@ -2227,25 +2379,89 @@ mod tests {
             std::fs::create_dir_all(dir).unwrap();
         }
 
-        let from_config = input_dir_from(Some(&configured.join("output").display().to_string()), Some(probed.clone()))
-            .unwrap();
-        assert_eq!(from_config, configured.join("input"), "配置里已经指明了，就不该用探测结果");
+        // ① 配置的输出目录排第一：配置里已经指明了，就不该用后面那些
+        let picks = input_dir_from(vec![
+            (configured.join("input"), "capture-output"),
+            (probed.join("input"), "probe"),
+        ])
+        .unwrap();
+        assert_eq!(picks, configured.join("input"));
 
-        // 配置给的不是 `output` 目录本身（用户可能直接填了父目录）→ 也在它下面找 input
-        let from_parent = input_dir_from(Some(&configured.display().to_string()), Some(probed.clone())).unwrap();
-        assert_eq!(from_parent, configured.join("input"));
+        // ② 配置那一份**不存在**时跳过它，取下一个真实存在的（新用户/换了机器的现场）
+        let picks = input_dir_from(vec![
+            (root.join("nope").join("input"), "capture-output"),
+            (probed.join("input"), "desktop-config"),
+        ])
+        .unwrap();
+        assert_eq!(picks, probed.join("input"), "不存在的候选不许占位");
 
-        // 配置指向一个**没有 input 的目录** → 回落到探测结果
-        let empty = root.join("empty");
-        std::fs::create_dir_all(&empty).unwrap();
-        let fallback =
-            input_dir_from(Some(&empty.display().to_string()), Some(probed.clone())).unwrap();
-        assert_eq!(fallback, probed.join("input"));
+        // ③ 一个都没有 → 如实报错（不建目录、不猜）
+        assert_eq!(input_dir_from(Vec::new()).unwrap_err().code, "COMFY_NOT_FOUND");
+        std::fs::remove_dir_all(&root).ok();
+    }
 
-        // 空白字符串当没配
-        let blank = input_dir_from(Some("   "), Some(probed.clone())).unwrap();
-        assert_eq!(blank, probed.join("input"));
+    /// **实例答话就是终点**：哪怕我们按配置推出来的是另一个目录，也得听实例的。
+    ///
+    /// 这就是 2026-09-30 用户 bug 的判据本身 —— 现场是"图投进了 A、实例读的是 B"，
+    /// 提交回 400 `Invalid image file`。所以：
+    ///  * 不一致 → 用实例那份，**并且把两个目录都写进 note**（用户与模型都得看见）；
+    ///  * 一致 → 用实例那份，但**不加 note**（一致时说一句"其实是一样的"是噪音）。
+    #[test]
+    fn 实例说的_input_覆盖我们按配置推的那份() {
+        let root = crate::testpaths::scratch("choose-input");
+        let install = root.join("ComfyUI-Installs").join("ComfyUI").join("input");
+        let shared = root.join("ComfyUI-Shared").join("input");
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+        let candidates = vec![(install.clone(), "capture-output"), (shared.clone(), "desktop-config")];
 
+        // ① 实例读的是**共享**那份，而配置推出来的是**安装目录**那份 → 以实例为准 + 说清两边
+        let picked = choose_input_dir(&candidates, Some(shared.clone())).unwrap();
+        assert_eq!(picked.dir, shared, "写错那一份的表现就是提交时 400");
+        assert_eq!(picked.source, "instance");
+        let note = picked.note.expect("不一致时必须如实说出来");
+        assert!(note.contains(&install.display().to_string()), "两个目录都要点名：{note}");
+        assert!(note.contains(&shared.display().to_string()), "{note}");
+
+        // ② 两边一致 → 同样以实例为准，但没有 note
+        let picked = choose_input_dir(&candidates, Some(install.clone())).unwrap();
+        assert_eq!(picked.dir, install);
+        assert_eq!(picked.source, "instance");
+        assert!(picked.note.is_none(), "一致时别加噪音：{:?}", picked.note);
+
+        // ③ 实例不答话（没在跑 / 不是 ComfyUI）→ 回落候选顺序，source 如实标它的来路
+        let picked = choose_input_dir(&candidates, None).unwrap();
+        assert_eq!(picked.dir, install);
+        assert_eq!(picked.source, "capture-output");
+        assert!(picked.note.is_none());
+
+        // ④ 候选全不存在 + 实例不答话 → 如实报错（不建目录、不猜）
+        let missing = vec![(root.join("nope").join("input"), "capture-output")];
+        assert_eq!(choose_input_dir(&missing, None).unwrap_err().code, "COMFY_NOT_FOUND");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 配置的 outputDir → 它的兄弟 `input`；配的是 input 本身 / 名字不叫 output 时**原样用**。
+    #[test]
+    fn 配置的输出目录推兄弟_input() {
+        let root = crate::testpaths::scratch("input-sibling");
+        assert_eq!(
+            sibling_input_of(Some(&root.join("ComfyUI-Shared").join("output").display().to_string())),
+            Some(root.join("ComfyUI-Shared").join("input")),
+            "output 的兄弟目录"
+        );
+        // 用户直接填了 input 目录（老设置页允许）→ 原样用，不许再往下拼一层
+        assert_eq!(
+            sibling_input_of(Some(&root.join("shared").join("input").display().to_string())),
+            Some(root.join("shared").join("input"))
+        );
+        // 大小写不敏感：Windows 上 `Output` 也是那个 output
+        assert_eq!(
+            sibling_input_of(Some(&root.join("shared").join("Output").display().to_string())),
+            Some(root.join("shared").join("input"))
+        );
+        assert_eq!(sibling_input_of(None), None);
+        assert_eq!(sibling_input_of(Some("   ")), None);
         std::fs::remove_dir_all(&root).ok();
     }
 

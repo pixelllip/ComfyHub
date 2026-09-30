@@ -33,8 +33,8 @@ class _Recorder {
   final List<String> calls = [];
   final List<Map<String, dynamic>> policyPuts = [];
 
-  /// 内置目录 sync 的请求体（用来断言"确认之前没有偷偷改库"）。
-  final List<Map<String, dynamic>> syncBodies = [];
+  /// 「立即更新」打过几次 `POST /api/ai/capabilities/refresh`（models.dev）。
+  int capabilityRefreshes = 0;
 
   /// 可变的 skills 列表：删除之后 fake 要真的少一个（否则刷新又回来了）
   List<Map<String, dynamic>> skills = [];
@@ -286,45 +286,47 @@ MockClient _backend(
   });
 }
 
-/// AI 设置页的假后端（只覆盖「内置模型目录」卡片要用的那几个接口）。
+/// AI 设置页的假后端（只覆盖「模型能力目录」那张卡要用的那几个接口）。
+///
+/// ⚠ **不再有 `/api/ai/builtin/*`**（2026-10：内置模型目录整块删掉了，能力改走 models.dev）。
+/// 这条 fake 里要是还留着它，用例就会"因为一个界面上已经不存在的接口而通过"。
 MockClient _providerBackend(
   _Recorder rec, {
-  List<String> divergent = const ['claude-sonnet-5', 'gpt-5'],
-  int missing = 3,
+  int remoteEntries = 1240,
   String? statusError,
+  String? refreshMessage,
 }) {
-  var synced = false;
-  Map<String, dynamic> status({
-    List<String>? divergent,
-    int added = 0,
-    int updated = 0,
-    int kept = 67,
-  }) =>
-      {
-        'mode': 'add-missing',
-        'version': '2026-09b-dsh',
-        'providerId': 'command-code-goat',
-        'added': added,
-        'updated': updated,
-        'kept': kept,
-        'divergent': divergent ?? const <String>[],
-        'modelCount': 69,
-        'providerCreated': false,
-        'error': statusError,
+  Map<String, dynamic> status({String? lastMessage}) => {
+        'version': '2026-10-a',
+        'builtinRules': 12,
+        'customEntries': 3,
+        'remoteSource': 'models.dev',
+        'remoteFetchedAt': '2026-10-01T00:00:00Z',
+        'remoteEntries': remoteEntries,
+        'remoteAgeHours': 40,
+        'remoteStale': false,
+        'refreshIntervalDays': 7,
+        'probeEnabled': false,
+        'lastMessage': lastMessage,
       };
 
   return MockClient((request) async {
     final path = request.url.path;
     Object body;
-    if (path == '/api/ai/builtin/status') {
-      body = status(divergent: synced ? const [] : divergent, kept: synced ? 69 : 67);
-    } else if (path == '/api/ai/builtin/sync') {
+    if (path == '/api/ai/capabilities/status' && statusError != null) {
+      // 真的失败（不是 body 里带个 error 字段）：`AiCapabilityStatus.error` 是**客户端**
+      // 在 catch 里填的，后端回 200 带个 error 键它根本不看。
+      return http.Response(jsonEncode({'error': statusError}), 404,
+          headers: {'content-type': 'application/json; charset=utf-8'});
+    }
+    if (path == '/api/ai/capabilities/status') {
+      body = status();
+    } else if (path == '/api/ai/capabilities/refresh') {
+      rec.capabilityRefreshes++;
+      body = status(lastMessage: refreshMessage ?? '已更新：写入 1240 条。');
+    } else if (path == '/api/ai/capabilities/probe-toggle') {
       final sent = jsonDecode(request.body) as Map<String, dynamic>;
-      rec.syncBodies.add(sent);
-      synced = true;
-      body = sent['mode'] == 'add-missing'
-          ? status(divergent: divergent, added: missing, kept: 66)
-          : status(updated: divergent.length);
+      body = status()..['probeEnabled'] = sent['enabled'];
     } else if (path == '/api/ai/providers') {
       body = [
         {
@@ -1177,7 +1179,7 @@ void main() {
     expect(rec.lastPolicyPut, contains('"writeRoots"'));
   });
 
-  testWidgets('(f) 内置目录卡片：分歧数醒目 + 先预览再确认才对齐能力', (tester) async {
+  testWidgets('(f) 能力目录嵌在选中的 Provider 详情里，折叠着不占地方', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -1190,29 +1192,33 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('内置模型目录'), findsOneWidget);
-    expect(find.textContaining('冻结副本'), findsOneWidget);
-    expect(find.text('版本 2026-09b-dsh'), findsOneWidget);
-    expect(find.text('目录模型 69'), findsOneWidget);
-    expect(find.textContaining('有 2 个模型的能力声明与内置目录不同'), findsOneWidget);
+    // 没选中 Provider 时**不许**出现：它是这一条的详情，不是页顶的一张常驻卡
+    // （2026-10 用户原话："模型能力目录区域占用窗口区域太大"）。
+    expect(find.text('模型能力目录'), findsNothing);
 
-    // 点对齐：先 GET 预览 → 弹确认框；**这一步绝不能已经改库**
-    await tester.tap(find.text('用内置目录对齐模型能力'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('重写 2 个模型的能力声明'), findsOneWidget);
-    expect(find.textContaining('不会新增或删除模型'), findsOneWidget);
-    expect(rec.syncBodies, isEmpty, reason: '确认之前不能已经发过 sync');
-
-    await tester.tap(find.text('对齐'));
+    await tester.tap(find.text('内置网关'));
     await tester.pumpAndSettle();
 
-    expect(rec.syncBodies.single['mode'], 'refresh-capabilities');
-    expect(find.textContaining('已对齐 2 个模型的能力声明'), findsOneWidget);
-    // 对齐完分歧清零
-    expect(find.textContaining('能力声明一致'), findsOneWidget);
+    // 折叠状态：只有标题 + 一眼能看出的新鲜度，模型目录才是这一页的主体
+    expect(find.text('模型能力目录'), findsOneWidget);
+    expect(find.textContaining('models.dev'), findsOneWidget);
+    expect(find.text('立即更新'), findsNothing, reason: '默认折叠，低频动作不许占着屏');
+
+    await tester.tap(find.text('模型能力目录'));
+    await tester.pumpAndSettle();
+    expect(find.text('立即更新'), findsOneWidget);
+    // 开关与它的说明是**兄弟**（`Row([Switch, Expanded(Text)])`），别去找祖先关系
+    expect(find.text('允许实测校准（发真实请求，可能产生少量费用）'), findsOneWidget);
+    expect(find.byType(Switch), findsOneWidget);
+
+    // ⚠ 内置目录那套**整块没了**：它抄自 `%USERPROFILE%\.dsh\settings.yaml`，
+    // 而运行期不许依赖 .dsh（AGENTS §10）。留着就会有人以为还能"用内置目录对齐"。
+    expect(find.text('内置模型目录'), findsNothing);
+    expect(find.textContaining('冻结副本'), findsNothing);
+    expect(find.text('用内置目录对齐模型能力'), findsNothing);
   });
 
-  testWidgets('(f2) 补齐缺失模型是纯新增，直接 POST add-missing', (tester) async {
+  testWidgets('(f2) 「立即更新」拉 models.dev 并如实回报结果', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -1220,20 +1226,24 @@ void main() {
     final rec = _Recorder();
     await tester.pumpWidget(MaterialApp(
       home: AiProviderSettingsPage(
-        api: AiApiClient('http://127.0.0.1:8080', client: _providerBackend(rec, divergent: const [])),
+        api: AiApiClient('http://127.0.0.1:8080',
+            client: _providerBackend(rec, refreshMessage: '已更新：写入 1240 条。')),
       ),
     ));
     await tester.pumpAndSettle();
-
-    await tester.tap(find.text('补齐缺失模型'));
+    await tester.tap(find.text('内置网关'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('模型能力目录'));
     await tester.pumpAndSettle();
 
-    expect(find.byType(AlertDialog), findsNothing, reason: '纯新增不需要确认框');
-    expect(rec.syncBodies.single['mode'], 'add-missing');
-    expect(find.textContaining('已补齐 3 个缺失模型'), findsOneWidget);
+    await tester.tap(find.text('立即更新'));
+    await tester.pumpAndSettle();
+
+    expect(rec.capabilityRefreshes, 1, reason: '必须真的打了 models.dev 那条刷新接口');
+    expect(find.textContaining('已更新：写入 1240 条'), findsWidgets);
   });
 
-  testWidgets('(f3) 内置目录读取失败要如实显示原因', (tester) async {
+  testWidgets('(f3) 能力目录读取失败要如实显示原因', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -1241,12 +1251,17 @@ void main() {
     final rec = _Recorder();
     await tester.pumpWidget(MaterialApp(
       home: AiProviderSettingsPage(
-        api: AiApiClient('http://127.0.0.1:8080', client: _providerBackend(rec, statusError: '目录缺失')),
+        api: AiApiClient('http://127.0.0.1:8080',
+            client: _providerBackend(rec, statusError: '在线目录读不出来')),
       ),
     ));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('内置网关'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('模型能力目录'));
+    await tester.pumpAndSettle();
 
-    expect(find.textContaining('目录缺失'), findsOneWidget);
+    expect(find.textContaining('在线目录读不出来'), findsOneWidget);
   });
 
   testWidgets('(g) 输入 / 弹出 Skill 菜单并写入 /skill-name', (tester) async {

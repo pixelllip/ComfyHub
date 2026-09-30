@@ -1,23 +1,27 @@
 <#
 .SYNOPSIS
-    前端开发模式：确保 MySQL + 后端在跑，然后用 **debug 版**把 App 跑起来（支持热重载）。
+    前端开发模式：确保后端在跑，然后用 **debug 版**把 App 跑起来（支持热重载）。
 
 .DESCRIPTION
     只改 lib/ 下的 Dart 前端代码时走这条路，别每次都 flutter build windows：
       · debug 版编译比 Release 完整构建快得多；
       · 跑起来之后在终端里按 r 热重载（保留状态）、R 热重启、q 退出；
-      · 后端 / MySQL 由脚本和 App 自己保证，不用手动开。
+      · 后端由 App 自己保证（直启 exe），这里只确保"**二进制存在且是新的**"，
+        免得 App 起了一个旧后端还得你手动重编。
 
     什么时候不要用它：改了 windows/ 原生代码或 pubspec 依赖（要重新编译），
-    以及要出正式产物交给别人用时 —— 那些走 scripts\autorun-app.ps1（Release）。
+    以及要出正式产物交给别人用时 —— 那走 `flutter build windows --release`
+    （构建时 CMake 会把 rust 后端一起装进产物，见 pack-release 一节）。
 
 .EXAMPLE
     pwsh -File scripts\dev-app.ps1
-    pwsh -File scripts\dev-app.ps1 -SkipServices   # 服务已经起好了，直接跑 App
+    pwsh -File scripts\dev-app.ps1 -SkipServices   # 后端二进制已有且够新，直接跑 App
+    pwsh -File scripts\dev-app.ps1 -WithMcp        # 另外装一次 MCP 运行时（可选能力）
 #>
 [CmdletBinding()]
 param(
-    [switch]$SkipServices
+    [switch]$SkipServices,
+    [switch]$WithMcp
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,8 +61,15 @@ if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
 }
 
 if (-not $SkipServices) {
-    Write-Host '==> 确保 MySQL + 后端在跑（-SkipBuild：直接用上次的产物）' -ForegroundColor Cyan
-    & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'comfyhub.ps1') up -SkipBuild
+    # 后端由 App 自己起（直启 backend\ 或 server-rs\target\… 里的 exe），
+    # 但 App **不会替你 cargo build** —— 这里先把二进制编到最新（不新才编）。
+    Write-Host '==> 确保后端二进制存在且是新的（App 启动时会自己把它拉起来）' -ForegroundColor Cyan
+    & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'backend.ps1') build
+}
+
+if ($WithMcp) {
+    Write-Host '==> 装配 MCP 运行时（可选能力：AI 的 ComfyUI 工具需要它）' -ForegroundColor Cyan
+    & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'mcp-runtime.ps1') install
 }
 
 Push-Location $ProjectRoot

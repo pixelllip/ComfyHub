@@ -79,7 +79,7 @@ const KEY_CAPTURE: &str = "capture.config";
 /// 读配置：库里没有（或解析不了）就用**环境变量给的环境默认值**。
 ///
 /// ⚠ 发布包/源码树两条路的默认值来自脚本传的环境变量（Kotlin 侧是 `AppConfig`），
-/// 所以这里也认 `COMFYHUB_COMFY_URL` / `COMFYHUB_COMFY_OUTPUT_DIR` ——
+/// 所以这里也认 `COMFYHUB_COMFY_URL` / `COMFYHUB_COMFY_OUTPUT` ——
 /// 否则 Rust 版会在"用户还没在设置页改过"时给出一份与 Kotlin 不同的默认值。
 pub fn capture_config(state: &AppState) -> Result<CaptureConfig, ApiError> {
     let raw: Option<String> = state.with(|conn| {
@@ -92,7 +92,7 @@ pub fn capture_config(state: &AppState) -> Result<CaptureConfig, ApiError> {
     })?;
     let env_default = CaptureConfig {
         comfy_url: std::env::var("COMFYHUB_COMFY_URL").unwrap_or_else(|_| default_comfy_url()),
-        output_dir: std::env::var("COMFYHUB_COMFY_OUTPUT_DIR").ok().filter(|v| !v.trim().is_empty()),
+        output_dir: comfy_output_env(),
         ..CaptureConfig::default()
     };
     match raw {
@@ -101,6 +101,28 @@ pub fn capture_config(state: &AppState) -> Result<CaptureConfig, ApiError> {
             .unwrap_or(env_default)),
         _ => Ok(env_default),
     }
+}
+
+/// 产物目录的环境默认值。
+///
+/// ⚠ **两个名字都认**（2026-09-30 踩到，是那个 `400 Invalid image file` 的一半根因）：
+/// 脚本、README 与 AGENTS 用的都是 **`COMFYHUB_COMFY_OUTPUT`**（`scripts\comfy-path.ps1`
+/// 就是按它判的，Kotlin 版 `Config.kt` 也只认它），而 Rust 版原来只认
+/// `COMFYHUB_COMFY_OUTPUT_DIR` —— **那个名字没有任何地方设置过**。
+///
+/// 后果不是"少一个旋钮"，而是：库里没有 outputDir（发布包第一次用就是这样）时，
+/// `output_dir` 静默为空 → `image_edit::resolve_input_dir` 退到 `find_home` 探到的
+/// **安装目录**那份 input，而实例挂的是 ComfyUI Desktop 配的**共享**那份 ——
+/// 投放的图躺在安装目录里，实例读共享目录 → 提交 400，看着像"文件不存在"。
+///
+/// 两份实现（`scripts\comfy-path.ps1` 与这里）的名字必须一致：先认带 `_DIR` 的全名，
+/// 再认脚本与老版本用的那个短名。
+fn comfy_output_env() -> Option<String> {
+    ["COMFYHUB_COMFY_OUTPUT_DIR", "COMFYHUB_COMFY_OUTPUT"]
+        .into_iter()
+        .find_map(|key| std::env::var(key).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// 存配置：**先归一化再落库**，返回归一化后的那份（前端拿它刷新界面）。

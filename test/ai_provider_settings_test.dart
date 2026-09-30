@@ -215,24 +215,35 @@ void main() {
     await tester.tap(find.text('新建 Provider'));
     await tester.pumpAndSettle();
 
-    // 故意不碰「端点信任级别」下拉，模拟"填完就点创建"的真实操作
+    // 表单里已经没有信任档与引用名这两栏（用户要求：都由软件自动决定），
+    // 模拟"填完就点创建"的真实操作。
+    expect(find.text('端点信任级别'), findsNothing);
+    expect(find.text('凭据引用名（可选）'), findsNothing);
     await tester.enterText(find.widgetWithText(TextField, 'Provider ID（创建后不可改）'), 'deepseek-gw');
     await tester.enterText(find.widgetWithText(TextField, '显示名'), 'DeepSeek');
     await tester.enterText(
         find.widgetWithText(TextField, 'Base URL'), 'https://api.deepseek.com/v1');
+    // API Key 顺手填上：创建与存密钥是**两条**请求，两条都要发出去
+    await tester.enterText(find.widgetWithText(TextField, 'API Key（可选）'), 'sk-e2e-secret');
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('创建'));
     await tester.pumpAndSettle();
 
-    // 1) 请求体里 endpointTrust 不能是 loopback（否则公网地址会被后端拒绝）
+    // 1) 请求体里**不带 endpointTrust**（由后端按地址推断），也不带密钥
     expect(recorder.providerCreates, hasLength(1));
     final sent = jsonDecode(recorder.providerCreates.single) as Map<String, dynamic>;
-    expect(sent['endpointTrust'], isNot('loopback'),
-        reason: '默认必须是"自动"，不能把公网地址按仅本机提交');
+    expect(sent.containsKey('endpointTrust'), isFalse,
+        reason: '信任档由软件按地址决定：不带这个键，后端就不会拿一个"仅本机"去挡公网地址');
+    expect(sent['credentialRef'], 'DEEPSEEK_GW_API_KEY', reason: '引用名由程序按 ID 推出');
     expect(sent['baseURL'], 'https://api.deepseek.com/v1');
+    expect(sent.values.contains('sk-e2e-secret'), isFalse, reason: '密钥不进 provider 行（AIH-012）');
 
-    // 2) 创建成功后确实进了列表，并且自动选中（右侧出现详情）
+    // 2) 密钥单独存一次（对话框里填了就必须落到 CredentialStore）
+    expect(recorder.puts, hasLength(1));
+    expect(recorder.puts.single, contains('sk-e2e-secret'));
+
+    // 3) 创建成功后确实进了列表，并且自动选中（右侧出现详情）
     expect(find.text('DeepSeek'), findsWidgets);
     expect(find.textContaining('revision'), findsWidgets);
   });
@@ -272,8 +283,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('本机网关'));
     await tester.pumpAndSettle();
-    // 页面上方压着两张目录卡：列表的懒构建表头（Provider/密钥区）比视口高，
-    // 模型行要拖一下才进视口 —— 与 model_list_scroll_test 的同一约定。
+    // 懒构建表头（Provider/密钥区）比视口高，模型行要拖一下才进视口 ——
+    // 与 model_list_scroll_test 的同一约定。
     await tester.drag(find.byType(CustomScrollView).first, const Offset(0, -400));
     await tester.pumpAndSettle();
 
@@ -335,5 +346,89 @@ void main() {
 
     expect(mystery['inputModalities'], ['text'], reason: '未识别的模型不能凭空多出图片能力');
     expect(mystery['capabilitySource'], 'manual', reason: '未识别＝用户接受了保守默认，标成手工声明');
+  });
+
+  testWidgets('新建时填了密钥，详情立刻显示「已配置」而不是「未配置」', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    SharedPreferences.setMockInitialValues({});
+    final settings = SettingsStore();
+    await settings.load();
+
+    // 按真后端的形状搭一个假库：**存完密钥之后**，`GET /providers` 才会说 configured。
+    //
+    // 这正是用户 2026-10 报的 bug 的成因：`POST /providers` 的返回值里 credential 是
+    // **回读那一刻**算的（那时密钥还没 PUT 过去），页面拿它当"当前选中项"就永远差一步。
+    final stored = <String>[];
+    final client = MockClient((request) async {
+      final path = request.url.path;
+      Object body;
+      if (path == '/api/ai/providers' && request.method == 'POST') {
+        final sent = jsonDecode(request.body) as Map<String, dynamic>;
+        body = {
+          'id': sent['id'],
+          'displayName': sent['displayName'],
+          'api': sent['api'],
+          'baseURL': sent['baseURL'],
+          'credentialRef': sent['credentialRef'],
+          'endpointTrust': 'public',
+          'enabled': true,
+          'revision': 1,
+          'credential': {'configured': false, 'source': 'none', 'writable': true},
+        };
+      } else if (path == '/api/ai/providers' && request.method == 'GET') {
+        body = [
+          {
+            'id': 'deepseek',
+            'displayName': 'DeepSeek',
+            'api': 'openai-completions',
+            'baseURL': 'https://api.deepseek.com/v1',
+            'credentialRef': 'DEEPSEEK_API_KEY',
+            'endpointTrust': 'public',
+            'enabled': true,
+            'revision': 1,
+            'credential': {
+              'configured': stored.isNotEmpty,
+              'source': stored.isEmpty ? 'none' : 'managed',
+              'writable': true,
+            },
+          }
+        ];
+      } else if (path.endsWith('/credentials') && request.method == 'PUT') {
+        stored.add(request.body);
+        body = {'configured': true, 'source': 'managed', 'writable': true};
+      } else {
+        body = <Object>[];
+      }
+      return http.Response(jsonEncode(body), 200,
+          headers: {'content-type': 'application/json; charset=utf-8'});
+    });
+
+    await tester.pumpWidget(ChangeNotifierProvider<SettingsStore>.value(
+      value: settings,
+      child: MaterialApp(
+        home: AiProviderSettingsPage(api: AiApiClient(settings.baseUrl, client: client)),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('新建 Provider'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Provider ID（创建后不可改）'), 'deepseek');
+    await tester.enterText(find.widgetWithText(TextField, '显示名'), 'DeepSeek');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Base URL'), 'https://api.deepseek.com/v1');
+    await tester.enterText(find.widgetWithText(TextField, 'API Key（可选）'), 'sk-demo-123');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    expect(stored, hasLength(1), reason: '对话框里填的密钥必须真的存下去');
+
+    // 密钥**确实已经存进去**了（真源在后端那份凭据库里），界面上不许还写"未配置"
+    expect(find.text('未配置'), findsNothing);
+    expect(find.text('已配置'), findsOneWidget);
   });
 }

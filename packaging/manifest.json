@@ -14,12 +14,12 @@
     "comment": [
       "发布包是**便携式**的：解压后整个目录就是运行时根目录，可以整体挪到任意盘/目录，",
       "不需要安装、不需要管理员权限。所有可写数据都落在根目录内，卸载 = 删目录。",
-      "根目录的判定方式：App 从 viewer.exe 所在目录往上找 scripts\\comfyhub.ps1（见",
-      "lib\\core\\backend_launcher.dart 的 detectProjectRoot），脚本则用自己所在目录的上级。"
+      "根目录的判定方式（2026-09-30 起，后端由 App 自己直启）：viewer.exe 所在目录就是根",
+      "（发布包里 viewer.exe 与 backend\\ 同级铺在根目录；见 lib\\core\\backend_paths.dart）。",
+      "源码树里则是往上找 server-rs\\Cargo.toml（或 db\\schema.sqlite.sql）的那个目录。"
     ],
     "readOnly": {
-      "backend": "server",
-      "jre": "jre",
+      "backend": "backend",
       "scripts": "scripts",
       "sql": "db",
       "comfyExtension": "comfyui",
@@ -55,7 +55,7 @@
     "artifactsLocation": {
       "default": "storage",
       "envVar": "COMFYHUB_STORAGE",
-      "setBy": "scripts\\server.ps1 启动后端时显式设成 <根>\\storage（后端 Config.kt 的 defaultStorageDir 只是兜底）",
+      "setBy": "App 直启后端时按 --storage 显式传入（见 lib\\core\\backend_launcher.dart）；scripts\\backend.ps1 的 Do-Start 也一样传",
       "subdirs": ["media", "tmp", "ai"],
       "skillsDropIn": {
         "path": "storage/ai/skills",
@@ -69,32 +69,15 @@
       "P2（2026-09-23）起数据库是 SQLite 单文件，P4（2026-09-26）起后端是 Rust 单文件 exe ——",
       "MySQL 本体与它专属的 VC++ 运行时**都不再需要**（2026-09-29 与\"搬迁老库\"通道一起删除）。",
       "后端 exe 的 CRT 是静态链接的，只用 Windows 10/11 自带的 Universal CRT（api-ms-win-crt-*）。",
-      "其余必须目标机器自己装 —— 缺了服务起不来，而且报错往往没头没尾。",
-      "scripts\\runtime-deps.ps1 会在 `comfyhub.ps1 up` 失败时和 `comfyhub.ps1 doctor` 里把这几项报出来",
-      "（required=false 的只对回退旧 Kotlin 后端有意义，缺了不算问题）。"
+      "2026-09-30 起 App 自己直启后端，**不再需要 PowerShell 7**（以前是 App 调 scripts\\comfyhub.ps1 用的；",
+      "video-poster.ps1 是后端抽视频封面时起的，属于可选能力）。doctor/up/watch-owner 那套脚本已整体删除。"
     ],
     "required": [
-      {
-        "name": "PowerShell 7 (pwsh)",
-        "bundled": false,
-        "required": true,
-        "why": "App 用 pwsh 执行 scripts\\comfyhub.ps1，脚本之间也互相调 pwsh；Windows 自带的 powershell.exe 5.1 不够",
-        "install": "winget install --id Microsoft.PowerShell --source winget"
-      },
-      {
-        "name": "Java 21 运行时",
-        "bundled": false,
-        "required": false,
-        "legacy": true,
-        "location": "jre",
-        "autoDownload": "scripts\\ensure-runtime.ps1",
-        "why": "**只在跑旧 Kotlin 后端时**才需要（灰度期 `COMFYHUB_BACKEND=kotlin`）。P4（2026-09-26）起后端是 Rust 单文件二进制，发布包默认不再装 jre（要装加 `-WithJre`），所以包又小约 40MB"
-      },
       {
         "name": "Windows 10 / 11 x64",
         "bundled": false,
         "required": true,
-        "why": "桌面端只有 Windows 构建；脚本里的 WMI / CIM 调用也依赖 Windows"
+        "why": "桌面端只有 Windows 构建"
       },
       {
         "name": "MCP 运行时（Python + comfy-cli + comfy-mcp）",
@@ -103,7 +86,7 @@
         "optional": true,
         "location": "storage/ai/mcp",
         "autoDownload": "scripts\\mcp-runtime.ps1",
-        "why": "AI 的 ComfyUI 工具走官方 comfy-mcp，它是 Python 写的且要求 comfy-cli（不捆绑）。comfyhub.ps1 up 会自动装配进 <根>\\storage\\ai\\mcp（便携版 Python embeddable + pip 包，首次约 300MB），doctor 会报状态。**它是可选能力**：装不上只是 AI 少一批 ComfyUI 工具，不拦 App / 后端启动（与 Java 那种必需项完全不同）。COMFYHUB_NO_MCP=1 可关闭。",
+        "why": "AI 的 ComfyUI 工具走官方 comfy-mcp，它是 Python 写的且要求 comfy-cli（不捆绑）。`pwsh -File scripts\\mcp-runtime.ps1 install` 会装配进 <根>\\storage\\ai\\mcp（借机器 Python 建 venv，兜底才下便携版，首次约 300MB）。**它是可选能力**：装不上只是 AI 少一批 ComfyUI 工具，不拦 App / 后端启动。",
         "install": "pwsh -File scripts\\mcp-runtime.ps1 install"
       }
     ]
@@ -126,19 +109,19 @@
       "kind": "rust_binary",
       "required": true,
       "source": "server-rs/target/release/comfyhub-server-rs.exe",
-      "target": "server",
+      "target": "backend",
       "produces": ["comfyhub-server-rs.exe"],
-      "note": "P4（2026-09-26）起后端是 **Rust 单文件二进制**：SQLite 用 rusqlite 的 bundled 引擎编进去了，所以既不需要 JVM 也不需要 MySQL。装配到 <根>\\server\\comfyhub-server-rs.exe —— scripts\\backend.ps1 的第一优先路径就是它。"
+      "note": "P4（2026-09-26）起后端是 **Rust 单文件二进制**：SQLite 用 rusqlite 的 bundled 引擎编进去了，所以既不需要 JVM 也不需要 MySQL。装配到 <根>\\backend\\comfyhub-server-rs.exe（viewer.exe 同级，App 自己的资产）—— lib\\core\\backend_paths.dart 的最高优先候选就是它（COMFYHUB_SERVER_EXE 覆盖除外）。"
     },
 
     {
       "id": "scripts",
-      "title": "生命周期脚本（App 靠它拉起后端）",
+      "title": "脚本（构建 + 必要脚本 + 运行期依赖）",
       "kind": "copy_tree",
       "required": true,
       "source": "scripts",
       "target": "scripts",
-      "note": "整个 scripts 目录都要，别只挑几个：comfyhub.ps1 依赖 server.ps1 / silent-process.ps1 / watch-owner.ps1 / runtime-deps.ps1。（2026-09-29 起 mysql.ps1 已删除，这里没有任何 MySQL 相关脚本。）"
+      "note": "2026-09-30 起只剩构建脚本与必要脚本：backend.ps1（e2e/dev 的找/编/起/停）、dev-app.ps1、build-apk.ps1、pack-release.ps1、api-port.ps1、comfy-path.ps1、mcp-runtime.ps1、video-poster.ps1（后端抽视频封面的运行期依赖）、gen-builtin-catalog.ps1、e2e-*.ps1。comfyhub.ps1 / server.ps1 / silent-process.ps1 / watch-owner.ps1 / runtime-deps.ps1 / ensure-runtime.ps1 等生命周期脚本已删（App 自己直启后端）。"
     },
     {
       "id": "db",

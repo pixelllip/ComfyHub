@@ -32,10 +32,8 @@
       · 长期记忆写一条测试记忆（结束时放回原文）；
       · 工具轮数上限钉成 1（第 12 幕要真的跑到"轮数用尽"那一轮）。
 
-    前置条件：MySQL + 后端已经在跑，且后端是**带 M4/M5 的新构建**：
-        pwsh -File scripts\comfyhub.ps1 up
-        pwsh -File scripts\server.ps1 stop
-        pwsh -File scripts\server.ps1 start
+    前置条件：后端已经在跑，且是**带 M4/M5 的新构建**：
+        pwsh -File scripts\backend.ps1 start     # 缺/旧会自动 cargo build 再起
 
 .EXAMPLE
     pwsh -File scripts\e2e-ai-tools-test.ps1
@@ -296,11 +294,9 @@ try {
     $health = $null
 }
 if (-not $health -or $health.database -ne 'ok') {
-    Say '' 
+    Say ''
     Say '  后端没在跑（GET /api/health 不可用）。请先：' 'Red'
-    Say '    pwsh -File scripts\comfyhub.ps1 up' 'Yellow'
-    Say '    pwsh -File scripts\server.ps1 stop' 'Yellow'
-    Say '    pwsh -File scripts\server.ps1 start' 'Yellow'
+    Say '    pwsh -File scripts\backend.ps1 start' 'Yellow'
     exit 1
 }
 Say ("  后端: {0}  v{1}  db={2}" -f $ApiBase, $health.version, $health.database) 'DarkGray'
@@ -313,12 +309,15 @@ $script:Http.Timeout = [TimeSpan]::FromSeconds(300)
 
 try {
     # --- 1. 启动假网关（静默，绝不弹窗；finally 里必杀） -------------------
+    # 2026-09-30：silent-process.ps1 已删（WMI 那套随 App 直启退场）。这里不需要
+    # 脱离进程树 —— 脚本全程活着、finally 必杀，用 Start-Process -WindowStyle Hidden
+    # 就够了（= .NET CreateProcess + SW_HIDE，不弹窗；console 继承本终端的那个）。
     Stop-Gateway   # 清掉上一次残留
-    . "$PSScriptRoot\silent-process.ps1"
-    $cmdLine = "`"$python`" `"$(Join-Path $E2eDir 'fake_openai.py')`" --port $GatewayPort"
-    $way = Start-SilentProcess -CommandLine $cmdLine -WorkingDirectory $ProjectRoot -Tag 'fake-openai'
+    $gatewayProc = Start-Process -FilePath $python `
+        -ArgumentList "`"$(Join-Path $E2eDir 'fake_openai.py')`"", '--port', $GatewayPort `
+        -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru
     $gatewayStarted = $true
-    Say "  假网关启动方式: $way" 'DarkGray'
+    Say "  假网关已起（pid $($gatewayProc.Id)，hidden）" 'DarkGray'
 
     $ready = $false
     foreach ($i in 1..40) {

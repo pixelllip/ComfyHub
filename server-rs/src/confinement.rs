@@ -13,12 +13,32 @@
 //! | **映像在工作区内** | **同一个二进制逐字节相同：工作区内 → 写工作区外全 `os error 5`；复制到 `%TEMP%` → 全通** | ✅ 就是它 |
 //! | 从哪个会话起 | 双击一样被限；`wmi-hidden`/`wmi-vbs`/`direct-hidden` 三档写同一个探针**都是 OK** | 无关 |
 //!
+//! # 2026-09-30 更新：机理钉死了 —— 是**完整性标签（Low IL）**，不是"位置"这个玄学
+//!
+//! 用户实测把上面那条"映像在工作区内"落到了实处：
+//!
+//! 1. 工作区目录树带着 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`，
+//!    从它里面构建出来的 exe **继承了 Low 标签**；
+//! 2. Windows 创建进程时取 **min(父进程令牌, 映像标签)** —— 映像是 Low，进程令牌就是 Low；
+//! 3. Low 写不了工作区外的 Medium 对象（默认 NO_WRITE_UP）→ 一律 `os error 5`。
+//!
+//! 由此推出三条**处方**（也解释了 2026-09-29 表格里的每一行）：
+//!
+//! * **只把映像标签修回 Medium（位置一个字节不动）→ 立刻哪儿都能写**（实测）——
+//!   `scripts\backend.ps1 start`（脚本路）与 `lib\core\backend_launcher.dart`（App 路，
+//!   起之前 best-effort 跑一次 `icacls … /setintegritylevel Medium`）都做这件事；
+//! * **链路上任何一环是 Low，子进程照样掉回 Low**：`viewer.exe` 也是工作区里构建的、
+//!   也带 Low 标签时，App 里点"启动"救不了后端 —— 所以 release 构建顺手把两个 exe
+//!   都归一为 Medium（`windows\cmake\bundle_backend.cmake`），而**受限会话里构建时这一步
+//!   必然失败**（Low 写不了向上的标签），只能换到工作区外再跑；
+//! * "复制到 `%TEMP%` 就通" = 那边没有 Low 标签可继承，与"谁启动"无关。
+//!
 //! **退路一直存在**：`COMFYHUB_SERVER_EXE`（`scripts\backend.ps1` 的 `Resolve-RustExe`）
 //! 或直接用发布包，都能把后端映像挪出工作区。所以"无退路"是**漏了一个开关**，不是事实。
 //!
-//! 本模块只回答一个问题：**"现在这个后端受限吗"**，并把答案落到磁盘让
-//! `comfyhub.ps1 doctor` 看得见 —— 沿用 `docs/pitfalls.md` 第 151/154 条已经定下的那条纪律
-//! （"doctor 看不出这一条，所以撞到这个错先问一句'这服务是谁起的'"）。
+//! 本模块只回答一个问题：**"现在这个后端受限吗"**，并把答案落到磁盘与
+//! `GET /api/system/confinement` 让界面看得见 —— 沿用 `docs/pitfalls.md` 第 151/154 条
+//! 已经定下的那条纪律（"界面上看不见的现象，用户和模型就只能靠猜"）。
 //!
 //! # 三条纪律
 //!
@@ -188,11 +208,20 @@ pub fn describe(state: &crate::routes::AppState) -> serde_json::Value {
 }
 
 /// 一句人话的修法（界面、工具文案、doctor 共用同一份说法 —— 别各写各的）。
+///
+/// ⚠ 措辞纪律（用例 [`修法文案指向发布包而不是让用户改_acl`] 盯着）：**别再说错的处方**。
+/// 2026-09-30 用户实测把真因钉死了：**工作区产物带着 Low 完整性标签，Windows 取
+/// min(父进程, 映像)** —— 所以修法是"换到没有 Low 标签的地方 / 把标签修回 Medium"，
+/// 而不是改 ACL、也不是"换个终端重起"（终端换了、映像标签还是 Low，照样受限）。
 pub fn remedy_text() -> String {
-    "把整套 ComfyHub 放到**工作区外**再启动（内容仍然全在它自己的文件夹里）：\n\
-     pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub\n\
-     pwsh -File D:\\dist\\ComfyHub\\scripts\\comfyhub.ps1 up\n\
-     已经有工作区外的构建产物时，一句 $env:COMFYHUB_SERVER_EXE = \"<完整路径>\" 就够。"
+    "真因：本进程是**低完整性（Low IL）令牌** —— 工作区里的产物带着 Low 标签，\
+     Windows 取 min(父进程, 映像)，Low 写不了工作区外的 Medium 对象（一律 os error 5）。\n\
+     修法（三选一，内容照旧全在它自己的文件夹里）：\n\
+     1. 把整套 ComfyHub 放到工作区外：pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub，\
+     然后运行 D:\\dist\\ComfyHub\\viewer.exe（App 会自己把 backend\\ 里的后端拉起来）；\n\
+     2. 已有工作区外的构建产物：$env:COMFYHUB_SERVER_EXE = \"<完整路径>\"；\n\
+     3. 就地修标签：pwsh -File scripts\\backend.ps1 start（起之前把 Low 标签修回 Medium；\
+     **当前会话本身是 Low 时修不动**，那就只剩 1/2 两条路）。"
         .to_string()
 }
 
@@ -225,10 +254,11 @@ pub fn apply(project_root: &Path, report: &Report, pid: u32) -> Option<PathBuf> 
         return None;
     }
     eprintln!(
-        "[confinement] 本进程写不进项目外：{}（留证：{}）—— \
-         修法：把整套 ComfyHub 放到工作区外（发布包），或设 COMFYHUB_SERVER_EXE 指向工作区外那个后端 exe。\
-         **换个终端重起没用**：限制跟的是**映像位置 + 父子继承**，跟会话无关\
-         （2026-09-29 实测：受限进程拉起的、工作区外的 cmd.exe 一样写不进 %TEMP%，见 tests\\confinement_probe.rs）",
+        "[confinement] 本进程是低完整性（Low）令牌，写不进项目外：{}（留证：{}）—— \
+         真因是工作区产物带着 Low 完整性标签，Windows 取 min(父进程, 映像)；\
+         修法：pack-release.ps1 打包到工作区外、或设 COMFYHUB_SERVER_EXE 指向工作区外那个后端 exe、\
+         或就地跑 scripts\\backend.ps1 start（起之前把 Low 标签修回 Medium）。\
+         **换个终端重起没用**：映像标签还是 Low，进程照样是 Low。",
         report.blocked_paths.join("、"),
         target.display()
     );

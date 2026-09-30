@@ -188,7 +188,7 @@ class _PairingSectionState extends State<PairingSection> {
       final start = await api.startPairing(token: PairingTokenCache.read());
       if (!mounted) return;
       if (!start.usable) {
-        setState(() => _qrError = '桌面回的配对信息不完整（缺 ticket 或 6 位码），没法画二维码。');
+        setState(() => _qrError = '桌面回的配对信息不完整，无法生成二维码。');
         return;
       }
       setState(() => _qr = start);
@@ -197,7 +197,7 @@ class _PairingSectionState extends State<PairingSection> {
       if (!mounted) return;
       setState(() {
         _qrError = switch (e.statusCode) {
-          404 || 501 => '这台后端还没有"扫码配对"接口（旧版本）—— 用上面那条「手机举手 + 敲码」的路。',
+          404 || 501 => '这台后端还没有"扫码配对"接口（旧版本）—— 用上面那条手动敲验证码的路。',
           403 => '生成二维码只允许在桌面本机上操作（127.0.0.1）。',
           _ => '生成二维码失败：${e.message}',
         };
@@ -251,7 +251,7 @@ class _PairingSectionState extends State<PairingSection> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '或者让手机**扫这个码**，地址会自己带过去，6 位码还是要敲。二维码 120 秒有效。',
+          '二维码会携带本机地址，扫码完成后仍需输入6位验证码进行验证。二维码 120 秒有效。',
           style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
         ),
         const SizedBox(height: 8),
@@ -295,7 +295,7 @@ class _PairingSectionState extends State<PairingSection> {
           const SizedBox(height: 4),
           if (qr.urls.isEmpty)
             Text(
-              '桌面没枚举出可达地址 —— 手机上请手填地址（回环 / 局域网 IP / Tailscale 都行）。',
+              '桌面没枚举出可达地址 —— 手机上请手填地址。',
               style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error),
             )
           else
@@ -419,10 +419,9 @@ class _PairingSectionState extends State<PairingSection> {
         if (next.enabled == value) {
           _message = value
               ? '已开启「允许移动端连接」：手机要带配对令牌才能连这台电脑。'
-              : '已关闭：局域网内任何设备都能连（今天的行为）。';
+              : '已关闭：局域网内任何设备都能连。';
         } else {
-          _error = '后端没有接受这个开关（响应里 enabled=${next.enabled}），设置没有被改。'
-              '多半是后端还是旧构建 —— 在「本地服务」里重启一次本地服务。';
+          _error = '后端没有接受这个开关（响应里 enabled=${next.enabled}），设置没有被改。';
         }
       });
     } catch (e) {
@@ -437,7 +436,7 @@ class _PairingSectionState extends State<PairingSection> {
     if (api == null) return;
     final ok = await _confirm(
       '吊销「${d.name.isEmpty ? d.id : d.name}」？',
-      '这台设备手上的令牌会**立刻**失效（没有宽限期），它下次请求会拿到 401。'
+      '这台设备手上的令牌会立刻失效，'
       '要重新连上就得在手机上重新配对一次。',
     );
     if (ok != true || !mounted) return;
@@ -502,13 +501,13 @@ class _PairingSectionState extends State<PairingSection> {
                 '升级桌面后端之后再来勾这一项。';
           } else {
             _message = updated.allowCredentialsUpload
-                ? '已允许「$name」改桌面上的密钥：它推上来的那一把会写到桌面上（桌面必须联网且在线才会收到）。'
-                : '已禁止「$name」改桌面上的密钥：它只能读（如果也允许了下行）或完全拿不到。';
+                ? '已允许「$name」改桌面上的密钥：当桌面联网且客户端在线时，手机端改的密钥将会推送到桌面端。'
+                : '已禁止「$name」改桌面上的密钥。';
           }
         } else {
           _message = updated.allowCredentials
-              ? '已允许「$name」把桌面上的 API Key 取走。'
-              : '已禁止「$name」取密钥：手机拿不到桌面上的 API Key。';
+              ? '已允许「$name」取密钥。'
+              : '已禁止「$name」取密钥。';
         }
       });
     } catch (e) {
@@ -593,8 +592,8 @@ class _PairingSectionState extends State<PairingSection> {
       _error = null;
       _scanned = payload;
       _message = payload.urls.isEmpty
-          ? '扫到了配对码，但桌面没枚举出可达地址 —— 请手填桌面地址，再把桌面上那 6 位码敲进来。'
-          : '扫到了：地址已填好（${payload.urls.first}）。现在把桌面上那 6 位码敲进来。';
+          ? '请手填桌面地址，再输入桌面端的 6 位验证码。'
+          : '地址已填好（${payload.urls.first}）。现在请输入桌面端 6 位验证码。';
     });
   }
 

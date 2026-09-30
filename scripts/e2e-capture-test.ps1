@@ -11,7 +11,7 @@
       4. 推送捕获   —— POST /api/ingest/comfyui（ComfyUI 自定义节点走的就是这条）
       5. 清理       —— 默认把测试产生的提示词 / 产物 / 运行记录删掉（用 -KeepData 保留）
 
-    前置条件：MySQL + 后端已经在跑（scripts\comfyhub.ps1 up），本机有 python。
+    前置条件：后端已经在跑（`pwsh -File scripts\backend.ps1 start`），本机有 python。
 
 .EXAMPLE
     pwsh -File scripts\e2e-capture-test.ps1
@@ -134,8 +134,8 @@ try {
     $healthBefore = $null
 }
 if (-not $healthBefore -or $healthBefore.database -ne 'ok') {
-    Say '  后端没在跑，先执行 scripts\comfyhub.ps1 up …' 'Yellow'
-    & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'comfyhub.ps1') up -SkipBuild | Out-Null
+    Say '  后端没在跑，先把它起起来（backend.ps1 start：缺/旧会自动编）…' 'Yellow'
+    & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'backend.ps1') start -SkipBuild | Out-Null
     try { $healthBefore = Invoke-Api 'GET' '/api/health' $null } catch { $healthBefore = $null }
 }
 Check '后端可用（db=ok）' ($null -ne $healthBefore -and $healthBefore.database -eq 'ok')

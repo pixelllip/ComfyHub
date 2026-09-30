@@ -36,9 +36,8 @@ void main() {
 
   /// 一个"什么都没搬过来"的后端：每个请求都回 `404 {error}`。
   ///
-  /// 这正好复现真机上的状态 —— 灰度期的 Rust 后端对 `/api/ai/builtin/status` /
-  /// `/api/ai/capabilities/status` 就是回这个（页面会把两句"读取失败"画在卡上，
-  /// 而**那两行文字正是把高度顶爆的那部分**）。
+  /// 这正好复现真机上的状态 —— 后端对 `/api/ai/capabilities/status` 就是回这个
+  /// （页面会把"读取失败"画在卡上，而**那行文字正是把高度顶爆的那部分**）。
   MockClient emptyBackend() => MockClient((request) async {
         final body = jsonEncode({'error': '接口不存在: ${request.url.path}'});
         return http.Response(body, 404, headers: {'content-type': 'application/json'});
@@ -96,23 +95,30 @@ void main() {
   }
 
   testWidgets('手机尺寸下「AI 模型与凭据」页不溢出、也不抛异常（两道斜纹的防线）', (tester) async {
-    await pumpProviderPage(tester, logical: const Size(384, 853));
+    await pumpProviderPage(
+        tester, logical: const Size(384, 853), backend: oneProviderBackend());
 
-    // 手机上是**三级面板**（用户原话："上下分屏难受，而且有些东西在手机上应该表现为子界面"）：
-    // 一级 = Provider 列表，维护那两张卡**不在主屏上**，而是一个子界面。
+    // 手机上是**两级面板**（用户原话："上下分屏难受，而且有些东西在手机上应该表现为子界面"）：
+    // 一级 = Provider 列表。目录卡已经不在这一页的页顶了（2026-10：能力目录改成嵌在
+    // **某一条 Provider 的详情里**，内置目录卡整块删掉），主屏只剩列表。
     expect(find.text('AI 模型与凭据'), findsOneWidget);
     expect(find.text('新建 Provider'), findsOneWidget);
-    expect(find.text('内置模型目录'), findsNothing, reason: '维护卡不该占主屏');
-    expect(find.text('模型能力目录'), findsNothing);
+    expect(find.text('模型能力目录'), findsNothing, reason: '能力目录只在某一条 Provider 的详情里');
 
-    // 右上角扳手 → 维护子界面（整屏 + 返回箭头），展开的两张卡**照样不许溢出**
-    await tester.tap(find.byTooltip('模型目录维护'));
+    // 点一条进去 → 详情子界面：那里面才挂着折叠着的「模型能力目录」。
+    // 两道斜纹的防线在**这一屏**（展开后是"开关 + 说明 + 两个按钮"那一行）。
+    await tester.tap(find.text('Command Code Goat'));
     await tester.pumpAndSettle();
-    expect(find.text('模型目录维护'), findsOneWidget);
-    expect(find.byTooltip('返回'), findsOneWidget);
-    expect(find.text('内置模型目录'), findsOneWidget);
+    expect(find.text('API Key'), findsOneWidget);
     expect(find.text('模型能力目录'), findsOneWidget);
-    expect(find.textContaining('接口不存在'), findsWidgets); // 如实写失败原因，不许静默
+    expect(find.textContaining('接口不存在'), findsWidgets, reason: '如实写失败原因，不许静默');
+
+    // 展开它：这一段就是当年把高度顶爆的那块，现在在详情里也不许溢出
+    await tester.ensureVisible(find.text('模型能力目录'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('模型能力目录'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
 
     // 返回 → 主屏
     await tester.tap(find.byTooltip('返回'));
@@ -145,10 +151,15 @@ void main() {
   });
 
   testWidgets('更窄的屏幕（320dp）同样不溢出', (tester) async {
-    await pumpProviderPage(tester, logical: const Size(320, 640));
+    await pumpProviderPage(
+        tester, logical: const Size(320, 640), backend: oneProviderBackend());
     expect(find.text('新建 Provider'), findsOneWidget);
-    await tester.tap(find.byTooltip('模型目录维护'));
+    await tester.tap(find.text('Command Code Goat'));
     await tester.pumpAndSettle();
-    expect(find.text('内置模型目录'), findsOneWidget);
+    // 折叠标题行：标题 + 那一小段新鲜度在 320dp 上也不许挤爆
+    await tester.ensureVisible(find.text('模型能力目录'));
+    await tester.pumpAndSettle();
+    expect(find.text('模型能力目录'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

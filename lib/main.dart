@@ -13,8 +13,9 @@ Future<void> main() async {
   await installPortablePaths();
   final settings = SettingsStore();
   await settings.load();
-  // 本地服务（后端）由 BackendLauncher 在首屏自动拉起，
-  // 不需要用户先手动执行 scripts\comfyhub.ps1 up。
+  // 本地服务（后端）由 BackendLauncher 在首屏自动拉起：它直接执行
+  // `<运行根>\backend\comfyhub-server-rs.exe`（见 lib\core\backend_paths.dart），
+  // 不需要用户先手动做什么，也不需要 PowerShell。
   final launcher = BackendLauncher(settings);
   runApp(ComfyHubApp(settings: settings, launcher: launcher));
 }

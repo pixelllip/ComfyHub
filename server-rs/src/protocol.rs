@@ -25,6 +25,10 @@
 //!    （网关并行下发时顺序是乱的）。
 //! 3. **`[DONE]` 不是数据**：OpenAI 兼容网关用它收尾，适配器认得它但
 //!    "收尾"这件事由调用方做（这里返回空表）。
+//! 4. **思考有时必须回传**：`openai-responses`（DeepSeek 那家是**无状态**的）在思考模式下
+//!    要求把历史轮次的思维链原文放回 `input`（`reasoning` 项）——
+//!    少一个就是 `400 The reasoning_text in the thinking mode must be passed back to the API.`
+//!    所以 [`ChatTurn::reasoning`] 是**逐协议**用的：responses 发、另两家一个字节都不发。
 
 use serde_json::{json, Map, Value};
 
@@ -160,6 +164,20 @@ pub struct ChatTurn {
     /// [`crate::executor`] 那一层做完，没通过的不在这里、而是变成正文里的一句
     /// "未随本次请求发送"（AIH-030：不许静默丢掉）。
     pub images: Vec<ChatImage>,
+    /// 这一轮助手的**思维链原文**（只有助手轮会有）。
+    ///
+    /// 起源是一次真实的 400（DeepSeek Responses API）：
+    /// `The reasoning_text in the thinking mode must be passed back to the API.`
+    /// —— 那家 API 是**无状态**的，思考模式下"带 `tools` 的请求"要求后续每一次请求都把
+    /// 历史轮次的思维链**完整回传**，否则直接 400（[DeepSeek Responses API 指南]：
+    /// 输入 item 里的 `reasoning` 明文 `content` 会被归并进相邻的 assistant 消息）。
+    ///
+    /// ⚠ **只有需要回传的协议才发它**：`openai-responses` 的适配器把它铺成 `reasoning` 项；
+    /// completions / anthropic 两个适配器**一个字节都不发**（它们的方言要不要回传是另一件事，
+    /// 没实测过就不许顺手加）。所以"历史里的思考进上下文"这件事是**逐协议**的。
+    ///
+    /// [DeepSeek Responses API 指南]: https://api-docs.deepseek.com/zh-cn/guides/responses_api
+    pub reasoning: Option<String>,
 }
 
 /// 一张内联进请求体的图片（适配器只管按各家的形状铺开）。
@@ -656,6 +674,19 @@ impl Adapter for OpenAiResponsesAdapter {
                     "output": turn.content,
                 }));
                 continue;
+            }
+            // ⚠ 思考项必须排在**同一条助手轮的其余条目之前**（DeepSeek 的输出顺序就是
+            // `reasoning` → `message` → `function_call`，回传时按同一顺序才不会被当成
+            // "另一个 assistant 轮"）。少了它，思考模式下带 tools 的后续请求会 400：
+            // "The reasoning_text in the thinking mode must be passed back to the API."
+            //
+            // 正文空、只有工具调用那一轮也要发（模型想完直接调工具是常态）—— 它归并进的是
+            // **相邻的**助手轮，而下面紧跟的正是那一轮的 `function_call`。
+            if let Some(reasoning) = turn.reasoning.as_deref().filter(|r| !r.trim().is_empty()) {
+                input.push(json!({
+                    "type": "reasoning",
+                    "content": [{ "type": "reasoning_text", "text": reasoning }],
+                }));
             }
             if !turn.content.is_empty() || !turn.images.is_empty() {
                 let mut content: Vec<Value> = Vec::new();
@@ -1177,6 +1208,8 @@ mod tests {
             }],
             tool_call_id: None,
             images: Vec::new(),
+            // 这一轮也想过了：completions 适配器**一个字节都不发**（见 ChatTurn::reasoning）
+            reasoning: Some("先想一下".into()),
         };
         let result = ChatTurn {
             role: "tool".into(),
@@ -1184,6 +1217,7 @@ mod tests {
             tool_calls: vec![],
             tool_call_id: Some("call_1".into()),
             images: Vec::new(),
+            reasoning: None,
         };
         let body = adapter.build_body(
             "m",
@@ -1198,6 +1232,10 @@ mod tests {
         );
         assert_eq!(body["messages"][1]["tool_calls"][0]["function"]["name"], "web_search");
         assert_eq!(body["messages"][1]["content"], "", "助手工具轮的 content 是空串（兼容性）");
+        assert!(
+            !body.to_string().contains("先想一下"),
+            "completions **不回传思考**（要回传的是 responses，见 responses_reasoning_round_trip）"
+        );
         assert_eq!(body["messages"][2]["role"], "tool");
         assert_eq!(body["messages"][2]["tool_call_id"], "call_1");
         assert_eq!(body["tools"][0]["type"], "function");
@@ -1341,6 +1379,7 @@ mod tests {
                     }],
                     tool_call_id: None,
                     images: Vec::new(),
+                    reasoning: None,
                 },
                 ChatTurn {
                     role: "tool".into(),
@@ -1348,6 +1387,7 @@ mod tests {
                     tool_calls: vec![],
                     tool_call_id: Some("call_1".into()),
                     images: Vec::new(),
+                    reasoning: None,
                 },
             ],
             &[ToolSpec {
@@ -1368,6 +1408,78 @@ mod tests {
         assert_eq!(body["tools"][0]["type"], "function");
         assert_eq!(body["tools"][0]["name"], "web_search", "responses 的工具是扁平的");
         assert!(body["input"].as_array().unwrap().iter().all(|i| i["role"] != "system"));
+    }
+
+    /// **思考必须回传**（真实的 400 现场，DeepSeek Responses API）：
+    /// `The reasoning_text in the thinking mode must be passed back to the API.`
+    ///
+    /// 那家 API 是**无状态**的，思考模式下"带 `tools` 的请求"要求后续每一次请求都把历史轮次的
+    /// 思维链按轮回传。形状与顺序两条都盯着（顺序错了会被当成"另一个 assistant 轮"）：
+    /// `reasoning` 项排在**同一条助手轮**的 `message` / `function_call` 之前，
+    /// 内容块是 `reasoning_text`（**不是** OpenAI 的 `summary_text` —— DeepSeek 不支持 summary）。
+    #[test]
+    fn responses_reasoning_round_trip() {
+        let adapter = OpenAiResponsesAdapter;
+        let body = adapter.build_body(
+            "deepseek-flash",
+            &[
+                turn("user", "杭州明天天气"),
+                ChatTurn {
+                    role: "assistant".into(),
+                    content: String::new(),
+                    tool_calls: vec![ToolCallRef {
+                        id: "call_1".into(),
+                        name: "get_weather".into(),
+                        arguments: "{}".into(),
+                    }],
+                    reasoning: Some("先查一下天气工具".into()),
+                    ..Default::default()
+                },
+                ChatTurn {
+                    role: "tool".into(),
+                    content: "多云".into(),
+                    tool_call_id: Some("call_1".into()),
+                    ..Default::default()
+                },
+            ],
+            &[],
+            &ReasoningRequest::default(),
+            None,
+        );
+        let input = body["input"].as_array().expect("input 数组");
+        assert_eq!(input[1]["type"], "reasoning", "思考项要排在 assistant 轮的最前面");
+        assert_eq!(input[1]["content"][0]["type"], "reasoning_text");
+        assert_eq!(input[1]["content"][0]["text"], "先查一下天气工具");
+        assert_eq!(input[2]["type"], "function_call", "思考项后面紧跟同一轮的 function_call");
+        assert_eq!(input[3]["type"], "function_call_output");
+
+        // 有正文的那一轮：`reasoning` → `message`（DeepSeek 的输出顺序就是这样回传的）
+        let with_text = adapter.build_body(
+            "deepseek-flash",
+            &[ChatTurn {
+                role: "assistant".into(),
+                content: "答案是 42".into(),
+                reasoning: Some("算一算".into()),
+                ..Default::default()
+            }],
+            &[],
+            &ReasoningRequest::default(),
+            None,
+        );
+        assert_eq!(with_text["input"][0]["type"], "reasoning");
+        assert_eq!(with_text["input"][1]["type"], "message");
+        assert_eq!(with_text["input"][1]["content"][0]["type"], "input_text");
+
+        // 没有思考的那一轮：一个 `reasoning` 项都不许凭空冒出来
+        let plain = adapter.build_body(
+            "deepseek-flash",
+            &[turn("assistant", "随口一句")],
+            &[],
+            &ReasoningRequest::default(),
+            None,
+        );
+        assert_eq!(plain["input"].as_array().unwrap().len(), 1);
+        assert_eq!(plain["input"][0]["type"], "message");
     }
 
     /// responses 的流事件：文本 / 思考 / 函数调用开始与参数分片 / 收尾。
@@ -1434,6 +1546,7 @@ mod tests {
                     tool_calls: vec![],
                     tool_call_id: Some("toolu_1".into()),
                     images: Vec::new(),
+                    reasoning: None,
                 },
             ],
             &[ToolSpec {
@@ -1464,6 +1577,7 @@ mod tests {
                 }],
                 tool_call_id: None,
                 images: Vec::new(),
+                reasoning: None,
             }],
             &[],
             &ReasoningRequest::default(),

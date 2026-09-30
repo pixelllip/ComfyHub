@@ -60,10 +60,15 @@ app.*.map.json
 /.mysql-location.json
 
 # SQLite 运行库（P2 起的默认库）：comfyhub.db 与它的 -wal / -shm 一起，属于运行期数据
+# ⚠ 上面两条是**根锚定**的，所以 crate 目录里偶尔冒出来的同名残留要单独 ignore
+# （2026-09-30：`server-rs\.db` / `server-rs\.run` 是历史现场留下的，真源永远在 <根>\.db / <根>\.run，
+#   见 AGENTS §13；不 ignore 的话它们会一直挂在 git status 里，让人以为"库有两份"）
 /.db/
+/server-rs/.db/
 
 # 运行期产物：后端日志、PID、临时启动脚本
 /.run/
+/server-rs/.run/
 
 # 用户上传的生成产物原始文件
 /storage/
@@ -112,3 +117,6 @@ __pycache__/
 
 # 文案审校工具留下的临时备份（不入库）
 *.copyreview-bak
+
+# 本机素材（e2e 的参考照片，6.5MB）：脚本没给 -RefPhoto 时会退回画廊最新产物，别入库
+/ref_photos/

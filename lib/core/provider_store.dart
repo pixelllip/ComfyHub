@@ -86,9 +86,22 @@ class RemoteProviderStore implements ProviderStore {
 
   /// ⚠ 传 `toJson()`（**带 revision**）：后端靠它做乐观锁，少了它后端会拒
   /// （"缺少 revision，请刷新后重试"）。
+  ///
+  /// ⚠ 但**刻意去掉 `endpointTrust`**（2026-10 用户要求：端点信任级别由软件自动决定，
+  /// 表单里不再让用户选）：这个键不传，后端就按**这次提交的新 baseURL** 重新推断
+  /// （`endpoint_guard::infer_trust`，见 `routes::update_provider`）。
+  /// 不这么做的话，"把一条公网 Provider 的地址改成本机"会带着旧的 `public` 档去校验，
+  /// 当场被拒（"端点信任级别 public 不允许访问主机 127.0.0.1"），而界面上**已经没有任何
+  /// 地方**能改这个档位了 —— 用户会卡在一个改不动的错误上。
+  ///
+  /// 手机侧是另一回事（[DeviceProviderStore] 照旧把这一行整份写回本机库）：
+  /// 它的 `ai_providers.endpoint_trust` **没有任何地方读**，`HarnessStore.saveProvider`
+  /// 里记着这条"有意不照抄"（见它的文件头注释）。
   @override
-  Future<AiProvider> updateProvider(AiProvider value) =>
-      _api.updateProvider(value.id, value.toJson());
+  Future<AiProvider> updateProvider(AiProvider value) {
+    final body = value.toJson()..remove('endpointTrust');
+    return _api.updateProvider(value.id, body);
+  }
 
   @override
   Future<void> deleteProvider(String id) => _api.deleteProvider(id);

@@ -277,7 +277,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!mounted) return;
       setState(() {
         _capture = saved;
-        _captureMessage = _captureEnabled ? '已保存，自动捕获已开启' : '已保存，自动捕获已关闭';
+        _captureMessage = _captureEnabled ? '自动捕获已开启' : '自动捕获已关闭';
       });
       await _refreshCaptureStatus();
     } catch (e) {
@@ -322,7 +322,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _importFolder() async {
     final dir = await FilePicker.getDirectoryPath(
-      dialogTitle: '选择 ComfyUI 的 output 目录（会读取 PNG 内嵌的提示词与工作流）',
+      dialogTitle: '选择 ComfyUI 的输出目录（会读取 PNG 内嵌的提示词与工作流）',
     );
     if (dir == null || dir.isEmpty) return;
     if (!mounted) return;
@@ -739,47 +739,6 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               estimatedHeight: 200,
             ),
-            AdaptiveSection(
-              _section(
-                theme,
-                '关于',
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('ComfyHub', style: theme.textTheme.titleMedium),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Flutter 前端 + Kotlin(Ktor) 后端 + 本地 SQLite 的 ComfyUI 提示词与生成产物管理器。'
-                          '后端会轮询 ComfyUI 的 /history 自动捕获工作流、参数与产物。',
-                          style: theme.textTheme.bodySmall,
-                        ),
-                        const SizedBox(height: 12),
-                        _endpoint(theme, 'GET', '/api/prompts', '提示词列表 / 搜索 / 标签筛选'),
-                        _endpoint(theme, 'POST', '/api/prompts', '新建提示词'),
-                        _endpoint(theme, 'GET', '/api/prompts/{id}/media', '某条提示词下的全部产物'),
-                        _endpoint(theme, 'POST', '/api/media/upload', '上传产物（multipart，可多文件）'),
-                        _endpoint(theme, 'GET', '/api/media/{id}', '产物详情（含关联提示词摘要）'),
-                        _endpoint(theme, 'PATCH', '/api/media/{id}', '关联 / 更换提示词、收藏、改名'),
-                        _endpoint(theme, 'GET', '/api/media/{id}/file', '原始文件（支持 Range，可拖动进度）'),
-                        _endpoint(theme, 'GET', '/api/tags', '标签词表'),
-                        _endpoint(theme, 'GET', '/api/capture/status', '自动捕获状态 + 最近捕获记录'),
-                        _endpoint(theme, 'PUT', '/api/capture/config', '修改自动捕获配置'),
-                        _endpoint(theme, 'POST', '/api/capture/poll', '立刻轮询一次 ComfyUI'),
-                        _endpoint(theme, 'POST', '/api/capture/import', '导入已有产物目录（含 PNG 内嵌工作流）'),
-                        _endpoint(theme, 'GET', '/api/capture/workflows', '本机 ComfyUI 已保存的工作流文件（只读）'),
-                        _endpoint(theme, 'POST', '/api/capture/import-workflows', '把这些工作流文件读进库'),
-                        _endpoint(theme, 'POST', '/api/ingest/comfyui', '捕获入口（自定义节点 / 外部脚本推送）'),
-                        _endpoint(theme, 'GET', '/api/prompts/{id}/workflow', '该提示词的完整工作流 JSON'),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              estimatedHeight: 640,
-            ),
           ],
         ),
       ),
@@ -833,15 +792,15 @@ class _SettingsPageState extends State<SettingsPage> {
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
               child: Text(
-                '成人内容相关。两个开关都由后端保存，改完**下一次回复**立刻生效，不用重启应用。',
+                '成人内容相关。改完下一次回复立刻生效。',
                 style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
               ),
             ),
             _SwitchRow(
               title: 'NSFW 模式',
               subtitle: enabled
-                  ? '已开启：系统提示词里会注入那段"越狱"人格提示词（对话语气更放开）。'
-                  : '未开启：不注入那段提示词，模型会按常规内容策略作答。',
+                  ? '已开启，但是AI工作台的对话有可能被审查严格的模型拦截。'
+                  : '未开启，模型会按常规内容策略作答。',
               value: enabled,
               onChanged: busy ? null : (v) => apply(nextEnabled: v),
             ),
@@ -851,7 +810,7 @@ class _SettingsPageState extends State<SettingsPage> {
               subtitle: !enabled
                   ? '先开启上面的「NSFW 模式」才有意义。'
                   : (blur
-                      ? '已开启：画廊 / 提示词 / 标签页与 AI 回复里的预览图会打码，点一下看原图（只对本次运行有效）。'
+                      ? '已开启：画廊 / 提示词 / 标签页与 AI 回复里的预览图会模糊'
                       : '未开启：预览图原样显示。'),
               value: blur,
               // 开关没开时这一项置灰：两个选项的从属关系要一眼看得出来
@@ -909,11 +868,12 @@ class _SettingsPageState extends State<SettingsPage> {
               value: settings.stopServicesOnExit,
               onChanged: (value) async {
                 await settings.setStopServicesOnExit(value);
-                // 关掉时要**真的撤销**已挂的守护进程，否则它在 App 死后照样停服务
-                if (!value) await launcher.disarmOwnerWatch();
+                // 关掉时要**真的撤销认领**，否则退出收尾照样会把它停掉
+                if (!value) await launcher.disarm();
               },
               title: '关闭 App 时一并停止本地服务',
-              subtitle: '开着时：关掉 App 就停掉本机的后端（包括启动 App 之前就已经在跑的），下次开 App 是冷启动。\n关掉时：服务常驻，下次开 App 是热启动。',
+              subtitle: '开着时：关掉 App 就停掉本机的后端（包括启动 App 之前就已经在跑的）。\n'
+                  '关掉时：服务常驻，下次开 App 是热启动。\n',
             ),
             _SwitchRow(
               value: settings.allowRemoteBackend,
@@ -927,9 +887,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ));
               },
               title: '允许手机 / 局域网设备连接',
-              subtitle: '开着时后端监听所有网卡（COMFYHUB_ALLOW_REMOTE）——真机连桌面才有得连，'
-                  '否则手机永远 timed out。远程请求受配对闸门约束（回环放行，局域网要配对令牌）。'
-                  '改完要重启后端生效；若手机仍连不上，检查 Windows 防火墙有没有放行后端程序。',
+              subtitle: '',
             ),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -968,15 +926,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
             ],
-            const SizedBox(height: 14),
-            TextField(
-              controller: _projectRootController,
-              decoration: InputDecoration(
-                labelText: '项目根目录',
-                hintText: BackendLauncher.detectProjectRoot() ?? r'例如 D:\myProject\FlutterProject\viewer',
-                helperText: '目录需包含 scripts\\comfyhub.ps1；留空表示自动探测',
-              ),
-            ),
             const SizedBox(height: 6),
             // 按钮组用 `Wrap`（用户 bug：窄窗口下"控件显示不全"）：窗口窄到 ~360px
             // （纯聊天/单列设置卡）时，两枚 `TextButton.icon` 的自然宽度加起来比卡片
@@ -998,7 +947,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     await settings.setProjectRoot(_projectRootController.text);
                     if (!mounted) return;
                     ScaffoldMessenger.of(context)
-                        .showSnackBar(const SnackBar(content: Text('项目根目录已保存')));
+                        .showSnackBar(const SnackBar(content: Text('运行根目录已保存')));
                   },
                   icon: const Icon(Icons.save_outlined, size: 18),
                   label: const Text('保存'),
@@ -1299,39 +1248,6 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _endpoint(ThemeData theme, String method, String path, String desc) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 52,
-            child: Text(
-              method,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SelectableText(path, style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace')),
-                Text(
-                  desc,
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

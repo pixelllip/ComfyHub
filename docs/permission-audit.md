@@ -49,7 +49,7 @@
 | 2 | `image_edit::write_mask_png` | ComfyUI `input` | 同上 | ✅ 有退路 |
 | 3 | `image_edit::make_mask_with` **摆好的人物图** | ComfyUI `input` | **原来当场报错**（本次修的就是它） | ✅ 已补退路 |
 | 4 | `comfy_launch::ensure_writable` | ComfyUI 工作区 / 产物目录 | **起手闸门**：`COMFY_WRITE_BLOCKED` + 如实文案 | ✅ 有闸门 |
-| 5 | `comfy_launch::start`（日志 / pid） | `<根>\.run\comfyui-<port>.log` | 项目内 | ✅ |
+| 5 | `comfy_launch::start`（日志 / pid / **启动留档**） | `<根>\.run\comfyui-<port>.{log,pid,launch.json}` | 项目内 | ✅ |
 | 6 | `mcp::prepare_launch`（comfy-cli 凭据 / 缓存 / TEMP） | `<根>\storage\ai\mcp\comfy-cli-home` | `USERPROFILE` / `LOCALAPPDATA` / `TEMP` **指进项目内** | ✅ 已重定向 |
 | 7 | `capture_ingest` / `capture_poller` | **只读** ComfyUI `output`（受限进程**读**项目外是允许的） | — | ✅ 只读 |
 | 8 | `capture_ingest::download_output` / `media_upload::upload` | `<storage>\tmp` → `<storage>\media` | 项目内 | ✅ |
@@ -65,6 +65,16 @@
 
 * 三处写入**必须走同一个入口** `image_edit::write_or_defer` —— 只补一处、别处照旧，就是这次
   "投放能过、摆放过不去"的成因。新增写入点时别再自己 `fs::write` + `map_err`。
+* **"写哪个 input"也必须只有一个真源**（2026-09-30 用户 bug）：
+  * 起实例时挂的那份 = `mcp::prepare_launch_with` 算出来的 argv，`comfy_launch::start` 把它
+    落成 `.run\comfyui-<port>.launch.json`（`inputDir` / `outputDir` / `argv` 原样留着）；
+  * 投放三件的目标由 `image_edit::target_input_dir` 决定：**先问实例**
+    （`GET /object_info/LoadImage` 的名单 × 候选目录，`comfy_client::dir_owning`），
+    问不到才按 `input_dir_candidates()` 的顺序回落（留档 → 配置 output 兄弟 →
+    Desktop `settings.json` 的 `inputDir` → 盘探）；
+  * ⚠ **`--input` 与 `--input-directory` 是同一个参数**（argparse 唯一前缀缩写、后写的赢）：
+    判"调用方写过没有"要用 `mcp::specified_flag`，别比全名 —— 比全名就是我们补的那条
+    把用户挂的那份静默顶掉，而投放又按另一份推（两处不一致 = 提交 400 `Invalid image file`）。
 * **回填文件名**：`LoadImage.image` 填的必须是 ComfyUI **回给你的那个名字**
   （`apply_uploaded_names`）。填错的表现是 `Invalid image file`，很像"文件不存在"。
 * 错误文案**不许甩锅给 ACL**（`把它的 input 目录写权限给当前用户` 这类说法已被实测否掉），
@@ -138,6 +148,9 @@ pwsh -File scripts\e2e-image-edit-test.ps1 -TwoStage -BgColor green -PlaceX 0.5 
 
 * ✅ 写 input 的三处收敛到 `image_edit::write_or_defer`，直写被拒一律改走 `/upload/image`，
   并按 ComfyUI 回的名字回填结果字段；
+* ✅ **"写哪个 input"收敛成同一个真源**（2026-09-30）：起实例的 argv 留档 + 投放前**先问实例**
+  （`target_input_dir` / `dir_owning`）+ `--input` 缩写不再被我们静默覆盖，
+  并修掉 `COMFYHUB_COMFY_OUTPUT` 的名字漂移（见 §1.1 与 `docs/pitfalls.md`）；
 * ✅ `Delivery` 支持多份投递（只留一个槽位会静默丢后一份）；
 * ✅ 错误文案不再甩锅 ACL、不再建议"换个终端重起"；
 * ✅ `GET /api/system/confinement` + App 顶部常驻横幅（受限时才出现，判据与修法一起显示）；

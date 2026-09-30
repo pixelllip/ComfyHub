@@ -322,23 +322,15 @@ class AiApiClient {
       AiNsfwSettings.fromJson(Map<String, dynamic>.from(
           await _send('PUT', '/api/ai/nsfw', {'enabled': enabled, 'blur': blur}) as Map));
 
-  // --- 内置模型目录（只读预览 / 对齐） ------------------------------------
-
-  /// 预览：内置目录有哪些模型、库里有多少条与它不一致。**不写库**。
-  Future<AiBuiltinCatalogStatus> builtinStatus() async => AiBuiltinCatalogStatus.fromJson(
-      Map<String, dynamic>.from(await _get('/api/ai/builtin/status') as Map));
-
-  /// 对齐内置目录。
-  ///  - `add-missing`：只补库里缺的模型，**绝不改已有行**；
-  ///  - `refresh-capabilities`：把同名模型的能力（模态 / 工具 / 推理 / 档位 / 方言 /
-  ///    上下文）对齐过来，不新增不删除、不动展示名与启用状态。
-  Future<AiBuiltinCatalogStatus> syncBuiltinCatalog({required String mode}) async =>
-      AiBuiltinCatalogStatus.fromJson(Map<String, dynamic>.from(
-          await _send('POST', '/api/ai/builtin/sync', {'mode': mode}) as Map));
-
   // --- 模型能力目录（在线更新 / 实测校准，2026-09-23） ----------------------
+  //
+  // ⚠ **内置模型目录（`/api/ai/builtin/*`）的客户端已删**（2026-10 用户要求：
+  // 「模型能力不再依赖内置目录」）。那份冻结副本抄自 `%USERPROFILE%\.dsh\settings.yaml`，
+  // 而 AGENTS §10 已经定了"运行期不许依赖 `.dsh`"。后端那两条端点还在
+  // （`server-rs/src/builtin.rs`），但界面上**不再有任何一个入口**去调它们 ——
+  // 能力预填的来源是**在线目录 models.dev**（下面这三条）。
 
-  /// 能力目录状态（内置表 + 在线目录的新鲜度 + 校准开关）。
+  /// 能力目录状态（在线目录的新鲜度 + 手工目录条数 + 校准开关）。
   Future<AiCapabilityStatus> capabilityStatus() async => AiCapabilityStatus.fromJson(
       Map<String, dynamic>.from(await _get('/api/ai/capabilities/status') as Map));
 

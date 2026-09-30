@@ -53,7 +53,7 @@ $script:Failed = 0
 
 $ComfyUrl = if ($env:COMFYHUB_COMFY_URL) { $env:COMFYHUB_COMFY_URL.TrimEnd('/') } else { 'http://127.0.0.1:8188' }
 $comfyHome = Resolve-ComfyHome -ProjectRoot $ProjectRoot
-if (-not $comfyHome) { throw "没找到 ComfyUI 目录（先 pwsh -File scripts\comfyhub.ps1 doctor 看一眼）" }
+if (-not $comfyHome) { throw "没找到 ComfyUI 目录（见 README「ComfyUI 位置」一节，或在设置页「自动捕获」卡点「使用这个目录」）" }
 $InputDir = Join-Path $comfyHome 'input'
 $detectedOutput = Resolve-ComfyOutputDir -ProjectRoot $ProjectRoot
 

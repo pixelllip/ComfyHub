@@ -471,7 +471,7 @@ pub fn preflight_warnings(graph: &Value, info: &Value) -> Vec<String> {
         return Vec::new();
     }
     let mut out = vec![format!(
-        "⚠ 提交前的预检提示（**没有拦**）：这个实例的 /object_info 里看不到 {} 个模型文件 —— \
+        "⚠ 这个实例的 /object_info 里看不到 {} 个模型文件 —— \
          硬提交可能会失败。",
         invisible.len()
     )];
@@ -479,9 +479,7 @@ pub fn preflight_warnings(graph: &Value, info: &Value) -> Vec<String> {
         out.push(format!("  · {item}"));
     }
     out.push(
-        "  → 大概率是「盘上有、实例看不到」（让用户**重启 ComfyUI**——ComfyHub 起实例时会挂上 \
-         ComfyUI Desktop 的模型根；**别去下载**）；也可能是名字确实写错了。\
-         现在这一档只提示不拦（完整的模型清单要等 `comfy_env_report`/盘扫搬过来）。"
+        "  → 大概率是「盘上有、实例看不到」，完整的模型清单要等 `comfy_env_report`/盘扫搬过来。"
             .to_string(),
     );
     out
@@ -528,7 +526,7 @@ async fn preflight(base: &str, graph: &Value, state: &AppState) -> (Option<Strin
         None => Vec::new(),
     };
     if let Some(notes) = report.render_non_blocking() {
-        warnings.push(format!("⚠ 提交前的审核提示（**没有拦**）：\n{notes}"));
+        warnings.push(format!("⚠ 提交前的审核提示：\n{notes}"));
     }
     (refusal, warnings)
 }
@@ -715,7 +713,7 @@ pub async fn tool_submit(
                 "NO_API_GRAPH",
                 format!(
                     "这条提示词（{title}）没有 API 格式节点图，不能直接提交。\
-                     可以换一条 runnable=true 的，或者先在 ComfyUI 里手动跑一次让它被捕获。"
+                     可以换一条能跑的，或者先在 ComfyUI 里手动跑一次让它被捕获。"
                 ),
             )
         })?;
@@ -755,8 +753,7 @@ pub async fn tool_submit(
         ToolFailure::new(
             "COMFY_SUBMIT_FAILED",
             format!(
-                "提交失败：{message}。可以先 comfy_get_status 看 ComfyUI 是否在跑；\
-                 不要反复重试同一个工作流。"
+                "提交失败：{message}。"
             ),
         )
     })?;
@@ -860,7 +857,7 @@ pub async fn tool_submit(
             submission.status = "timeout".to_string();
             submission.elapsed_ms = started.elapsed().as_millis() as i64;
             submission.message = Some(format!(
-                "等待超过 {wait_seconds} 秒，任务可能还在 ComfyUI 里跑；跑完之后会自动被捕获，\
+                "等待超过 {wait_seconds} 秒，任务可能还在 ComfyUI 里跑，\
                  稍后可以在画廊里看到。"
             ));
             state.submissions.record(submission.to_json());
@@ -887,7 +884,7 @@ pub async fn tool_submit(
     out.insert(
         "idHint".into(),
         json!(format!(
-            "查这次运行用 comfy_get_run(runKey=\"{}\")；capturedPromptId 是捕获记录编号（画廊 / 提示词用的那个是 promptId）",
+            "查这次运行用 comfy_get_run(runKey=\"{}\")；注意capturedPromptId 是捕获记录编号（画廊 / 提示词用的那个是 promptId）",
             submission.prompt_id
         )),
     );
@@ -907,7 +904,7 @@ pub async fn tool_submit(
         out.insert(
             "hint".into(),
             json!(format!(
-                "还没跑完：产物会在跑完后自动入库，让用户稍后刷新画廊即可；也可以隔一会儿用 comfy_get_run runKey={} 查",
+                "还没跑完，可以隔一会儿用 comfy_get_run runKey={} 查",
                 submission.prompt_id
             )),
         );
@@ -1072,10 +1069,13 @@ mod tests {
         let warnings = preflight_warnings(&wrong_model, &object_info());
         assert_eq!(warnings.len(), 3, "首行 + 一条明细 + 一条动作：{warnings:?}");
         let joined = warnings.join("\n");
-        assert!(joined.contains("没有拦"), "{joined}");
+        // ⚠ 这一档的措辞 2026-09-30 由用户自己精简过（去掉了"没有拦""重启 ComfyUI""别去下载"）。
+        //   **"先让用户重启实例 / 修模型根、别去下载"那条纪律现在只由工具描述承担**
+        //   （`desktop_tools` 里 `comfy_submit` / `comfy_env_report` 的描述 + 系统提示），
+        //   所以这里只钉"这条警告本身必须说清的事"：**看不见几个、是哪一个、去哪儿看全**。
+        assert!(joined.contains("看不到 1 个模型文件"), "要说清数量：{joined}");
         assert!(joined.contains("4.ckpt_name 要 anima-base-v1.0.safetensors"), "{joined}");
-        assert!(joined.contains("重启 ComfyUI"), "{joined}");
-        assert!(joined.contains("别去下载"), "{joined}");
+        assert!(joined.contains("comfy_env_report"), "要给下一步去哪儿看全：{joined}");
         // 都对的时候没有警告
         assert!(preflight_warnings(&graph(), &object_info()).is_empty());
 

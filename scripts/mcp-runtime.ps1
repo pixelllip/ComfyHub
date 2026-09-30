@@ -9,8 +9,10 @@
     发布包是**便携式**的，不能要求用户自己去装 Python、开终端敲 pip ——
     所以这里把三样东西按"缺什么补什么"装进**包内**，跟 <根>\jre 一个路子。
 
-    与 runtime-deps.ps1 的分工：
-      · runtime-deps.ps1  —— **必需**的运行时（Java / MySQL），缺了服务根本起不来
+    与 runtime-deps.ps1 的分工（2026-09-30 起 runtime-deps.ps1 已删，它的主体是
+    Ensure-JavaRuntime 与运行时体检，Rust 后端不再需要那些；留给本文件的三个
+    通用函数已内联到本文件底部的"通用小工具"一节）：
+      · 已删除的 runtime-deps.ps1  —— **必需**的运行时（Java / MySQL），缺了服务根本起不来
       · 本文件            —— **可选能力**的运行时（MCP），缺了只是"ComfyUI 那批工具用不了"
     所以这里的失败**不应该**拦住 up（这点和 Java 完全不同）：如实报告即可。
 
@@ -54,9 +56,9 @@
          于是 `run_workflow` / `search_models` 这些全是错的。所以装配的最后一步必须
          把用户**真实在用的** ComfyUI 目录喂给它（判据复用 scripts\comfy-path.ps1）。
 
-    被谁调用：
-      · scripts\comfyhub.ps1 的 Do-Up / Do-Doctor （dot-source 本文件，跟 runtime-deps.ps1 同套路）
+    被谁调用（2026-09-30 起 comfyhub.ps1 已删）：
       · 单独用：pwsh -File scripts\mcp-runtime.ps1 install | status
+      · dev-app.ps1 -WithMcp：开发时显式装配一次（App 启动不再顺带装，它是可选能力）
 #>
 
 # 独立运行的参数（被 dot-source 时这几位保持默认，不影响宿主脚本）。
@@ -101,6 +103,82 @@ $script:McpRuntimeIndexUrls = @(
 $script:McpRuntimeSpec = @('comfy-mcp>=0.10,<0.11', 'comfy-cli>=1.14.0')
 
 # ===========================================================================
+#  通用小工具（2026-09-30 从 scripts\runtime-deps.ps1 搬过来，原地内联）。
+#
+#  runtime-deps.ps1 随着 Java/MySQL 的退役一起删了（它的主体是 Ensure-JavaRuntime
+#  与运行时体检，Rust 后端不再需要那些）。mcp-runtime 只借了这三个下载/网络函数，
+#  留在这里、删掉跨文件依赖。
+# ===========================================================================
+
+function Initialize-Tls12 {
+    <#
+      Windows PowerShell 5.1 默认只开 TLS 1.0/1.1，直接下 HTTPS 会报
+      "基础连接已经关闭: 未能为 SSL/TLS 建立安全通道"。
+      （本文件要能在 5.1 下跑：pwsh 本身就是可能缺的那个运行时。）
+    #>
+    try {
+        $cur = [Net.ServicePointManager]::SecurityProtocol
+        [Net.ServicePointManager]::SecurityProtocol = $cur -bor [Net.SecurityProtocolType]::Tls12
+    } catch { }
+}
+
+function Test-UrlReachable {
+    <#
+      下载前先花几秒探一下（Range: 只取头 1KB）。
+      源被墙 / 挂掉时立刻换下一个 —— 否则要在一个连不上的地址上白等到超时，
+      后面的可用源（比如国内的华为云）迟迟轮不到。
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [string]$Proxy,
+        [int]$TimeoutSec = 10
+    )
+
+    $resp = $null
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($Url)
+        $req.Method = 'GET'
+        [void]$req.AddRange(0, 1023)
+        $req.Timeout = $TimeoutSec * 1000
+        $req.ReadWriteTimeout = $TimeoutSec * 1000
+        $req.UserAgent = 'ComfyHub-ensure-runtime/1.0'
+        if ($Proxy) { $req.Proxy = New-Object System.Net.WebProxy($Proxy, $true) }
+        else { $req.Proxy = [System.Net.WebRequest]::DefaultWebProxy }
+        $resp = $req.GetResponse()
+        $code = [int]$resp.StatusCode
+        return ($code -ge 200 -and $code -lt 300)
+    } catch {
+        return $false
+    } finally {
+        if ($resp) { $resp.Close() }
+    }
+}
+
+function Invoke-FileDownload {
+    <#  用 WebClient 而不是 Invoke-WebRequest：5.1 的 Invoke-WebRequest 走 IE 引擎，几十 MB 会慢到离谱  #>
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$OutFile,
+        [string]$Proxy,
+        [int]$TimeoutMs = 600000
+    )
+
+    $wc = New-Object System.Net.WebClient
+    try {
+        if ($Proxy) {
+            $wc.Proxy = New-Object System.Net.WebProxy($Proxy, $true)
+        } else {
+            # 不显式给 -Proxy 就沿用系统/环境里的代理设置
+            $wc.Proxy = [System.Net.WebRequest]::DefaultWebProxy
+        }
+        $wc.Headers.Add('User-Agent', 'ComfyHub-ensure-runtime/1.0')
+        $wc.DownloadFile($Url, $OutFile)
+    } finally {
+        $wc.Dispose()
+    }
+}
+
+# ===========================================================================
 #  位置解析（两种布局：源码树 / 发布包）
 # ===========================================================================
 
@@ -123,8 +201,8 @@ function Get-McpRuntimeDir {
 
 function Test-McpDirWritable {
     <#
-      Test-DirWritable 定义在 runtime-deps.ps1 里（被 comfyhub.ps1 一起 dot-source）。
-      这里留一个同等实现的兜底：单独拷走 mcp-runtime.ps1 时也不该因为少一个函数就崩。
+      与已删除的 runtime-deps.ps1 里的 Test-DirWritable 同等实现（comfyhub.ps1 已删，
+      宿主 dot-source 不存在了）：目录探针写一次删一次，单独拷走本文件也不崩。
     #>
     param([string]$Dir)
     try {
@@ -794,7 +872,8 @@ function Install-McpRuntime {
 
 function Ensure-McpRuntime {
     <#
-      comfyhub.ps1 up 用的"够用就好"入口（对标 Ensure-JavaRuntime）：
+      **独立入口**（2026-09-30 起 comfyhub.ps1 已删，不再有"up 顺带装"的宿主）：
+      `pwsh -File scripts\mcp-runtime.ps1 install` 或在 `dev-app.ps1 -WithMcp` 里显式调。
         · 已就绪 → 直接返回，**不联网、不装包**
         · 没装   → 装配一次。**优先借机器上已有的 Python**（连 300MB 的 pip 包都可能不用装）；
                    只有机器上真的没有 Python 时才下便携版
@@ -901,12 +980,8 @@ function Invoke-McpRuntimeCli {
 }
 
 # ===========================================================================
-#  直接跑本文件时（`pwsh -File scripts\mcp-runtime.ps1 install`）才执行；
-#  被 comfyhub.ps1 dot-source 时**不能**自动跑 —— 那是加载函数，不是执行动作。
-#
-#  判定用 $PSBoundParameters：dot-source 时不绑任何参数（空），
-#  `pwsh -File` 时位置参数/开关至少绑进一个。比看 $MyInvocation.InvocationName
-#  可靠 —— 后者在"被别的脚本 dot-source 再间接调用"这类写法下会变。
+#  直接跑本文件时（`pwsh -File scripts\mcp-runtime.ps1 install`）才执行。
+#  （2026-09-30：comfyhub.ps1 已删，不再有 dot-source 宿主；三个通用函数已内联。）
 # ===========================================================================
 if ($PSBoundParameters.Count -gt 0) {
     $rtRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
@@ -914,11 +989,6 @@ if ($PSBoundParameters.Count -gt 0) {
     # 让 Resolve-ComfyHome / Test-ComfyHome 可用（本文件不自己重复一份判据）
     $rtPathScript = Join-Path (Split-Path -Parent $PSCommandPath) 'comfy-path.ps1'
     if (Test-Path -LiteralPath $rtPathScript) { . $rtPathScript }
-
-    # 复用 runtime-deps.ps1 里的 Test-DirWritable / Invoke-FileDownload / Test-UrlReachable /
-    # Initialize-Tls12 —— 同一个仓库里不该有两份下载与可写性判定。
-    $rtDeps = Join-Path (Split-Path -Parent $PSCommandPath) 'runtime-deps.ps1'
-    if (Test-Path -LiteralPath $rtDeps) { . $rtDeps }
 
     $rtProxy = if ($McpProxy) { $McpProxy } else { $env:COMFYHUB_HTTPS_PROXY }
     exit (Invoke-McpRuntimeCli -ProjectRoot $rtRoot -McpAction $McpAction -McpProxy $rtProxy -ComfyHome $ComfyHome -McpForce:$McpForce -Deep:$Deep)

@@ -74,7 +74,7 @@
 //!   写同一个探针都是 OK），**spawn 档位与写权限无关**。
 //!
 //! 所以真正的修法只有一个：**把后端映像挪出工作区**（`COMFYHUB_SERVER_EXE`，或用发布包）。
-//! 留证交给 [`crate::confinement`] —— `comfyhub.ps1 doctor` 看得见，
+//! 留证交给 [`crate::confinement`] —— `GET /api/system/confinement`（界面上有横幅）看得见，
 //! 沿用 `docs/pitfalls.md` 第 151/154 条已经定下的那条纪律。
 
 use std::io::Write as _;
@@ -348,37 +348,41 @@ pub fn ensure_writable(
         format!(
             "**不起**：本进程写不进项目外的目录 —— {blocked}。\n\
              \n\
-             **真因是「后端映像放在哪儿」，不是 ComfyUI 坏了、也不是路径配错了**：\n\
-             写不进工作区外这件事是按**映像位置**判的（2026-09-29 逐条量过，见下），\n\
-             而源码树布局下后端 exe 就在工作区内 —— 于是它写不了 ComfyUI 自己的 `temp/`，\n\
+             **真因是完整性标签（Low IL），不是 ComfyUI 坏了、也不是路径配错了**：\n\
+             工作区里的产物带着 **Low 完整性标签**，Windows 创建进程时取 **min(父进程, 映像)**，\n\
+             映像标签是 Low → 进程令牌就是 Low → Low 写不了工作区外的 Medium 对象（一律 os error 5）。\n\
+             源码树布局下后端 exe 就在工作区里 —— 于是它写不了 ComfyUI 自己的 `temp/`，\n\
              硬起只会得到一个卡死的实例（实测：100% CPU 卡在扫自定义节点，日志停在 `No OpenGL_accelerate…`）。\n\
              \n\
-             **修法（把整套 ComfyHub 放到工作区外 —— 内容照旧全在它自己的文件夹里）**：\n\
-             打一个发布包到工作区外，从那儿启动：\n\
+             **修法（三选一，内容照旧全在它自己的文件夹里）**：\n\
+             1. 把整套 ComfyHub 放到工作区外（发布包），从那儿启动：\n\
              ```\n\
              pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub\n\
-             pwsh -File D:\\dist\\ComfyHub\\scripts\\comfyhub.ps1 up\n\
              ```\n\
-             发布包的后端在 `<包根>\\server\\`、数据在 `<包根>\\.db\\` / `storage\\` / `.run\\` —— \
-             **既不受限，内容也仍然全在它自己的文件夹内**（这正是我们要的，不要改成往 `%LOCALAPPDATA%` \
+             然后运行 `D:\\dist\\ComfyHub\\viewer.exe` —— App 会自己把 `<包根>\\backend\\` 里的后端拉起来。\n\
+             发布包的数据在 `<包根>\\.db\\` / `storage\\` / `.run\\` —— \n\
+             **既不受限，内容也仍然全在它自己的文件夹内**（这正是我们要的，不要改成往 `%LOCALAPPDATA%` \n\
              之类的系统位置拷）。\n\
+             2. 已有工作区外的构建产物：`$env:COMFYHUB_SERVER_EXE` = 那个 `comfyhub-server-rs.exe` 的完整路径。\n\
+             3. 就地修标签：`pwsh -File scripts\\backend.ps1 start`（起之前把产物的 Low 标签修回 Medium）。\n\
+             ⚠ **当前会话本身是 Low 时修不动**（Low 写不了向上的标签）—— 那就只剩 1/2 两条路。\n\
              \n\
-             已经有工作区外的构建产物时，一条环境变量就够（不必重打整包）：\n\
-             `$env:COMFYHUB_SERVER_EXE` = 那个 `comfyhub-server-rs.exe` 的完整路径。\n\
-             \n\
-             **判据（2026-09-29 逐条量过，别再当成别的毛病）**：同一个二进制**逐字节相同**，\n\
+             **判据（2026-09-29/30 逐条量过，别再当成别的毛病）**：同一个二进制**逐字节相同**，\n\
              映像放在工作区内 → 写 `%TEMP%`、`D:\\Comfy-Desktop\\…` 全部 `os error 5`，只写得进工作区；\n\
-             `copy` 到 `%TEMP%` 再跑 → **哪儿都能写**。所以：\n\
+             `copy` 到 `%TEMP%` 再跑 → **哪儿都能写**（那里没有 Low 标签，拷出去的文件继承到的是 Medium）。\n\
+             所以：\n\
              · 与**路径配错、目录 ACL、用户身份、Defender** 都无关（诊断脚本查这些目录的 ACL 是 `NOT_THIS_CLASS`，\n\
                无 deny ACE、`WRITE_DAC`/`WRITE_OWNER` 都在；Defender 也没有受控文件夹规则）；\n\
-             · 与**从哪个终端起**也无关（双击也一样，限制跟的是映像不是会话）——\n\
-               但**子进程会继承父进程的限制**，所以受限父进程拉起的、工作区外的 python 照样被拒；\n\
-             · 也**不是 WMI/schtasks 的问题**：那两条路被挡只是受限的**表现**，换个方式拉起逃不掉（限制在令牌里）。\n\
+             · 与**谁拉起 / 从哪个终端起**也无关 —— 决定权在**映像自己的标签**\n\
+               （WMI / 计划任务 / Explorer 逐条量过都一样）；但注意 **min(父进程, 映像)**：\n\
+               链路上任何一环是 Low，子进程照样掉回 Low（`viewer.exe` 也带着 Low 标签时，App 里点启动没用）；\n\
+             · **把映像标签修回 Medium（位置一个字节不动）→ 立刻哪儿都能写**（2026-09-30 实测）——\n\
+               这就是修法 3 的依据，也是 release 构建顺手做归一的原因（见 `windows\\cmake\\bundle_backend.cmake`）。\n\
              \n\
              **另一条也行**：让用户自己**双击 ComfyUI Desktop** 起实例（它的 python 映像在 ComfyUI 那边，不受限），\n\
              起完这边用 `comfy_get_status` 就能接着干活。\n\
              \n\
-             `comfyhub.ps1 doctor` 现在会直接报「后端受限」并指出是哪个 pid 留下的（别再靠猜）。",
+             `GET /api/system/confinement` 会给出同一份结论与判据（界面上有横幅，别再靠猜）。",
             blocked = blocked.join("；")
         ),
     ))
@@ -390,9 +394,12 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
         .map_err(|e| ToolFailure::new("CONFIG_ERROR", format!("读 ComfyUI 配置失败：{}", e.human())))?;
     let base = config.comfy_url.trim().trim_end_matches('/').to_string();
 
-    // 已经在跑就**不重复起**（同一端口硬起第二个必失败，而用户其实只想用它）
+    // 已经在跑就**不重复起**（同一端口硬起第二个必失败，而用户其实只想用它）。
+    // ⚠ 这里也要如实说"它读哪个 input"：那不是我们起的，只有**上次留档**或**问实例**知道
+    //   —— 投放工具会自己去问（`image_edit::target_input_dir`），这里的 payload 是给人看的。
     if let Some(stats) = probe(&base).await {
-        return Ok(running_outcome(&base, &stats, None));
+        let known = launched_input_dir(&state.project_root(), port_of(&base));
+        return Ok(running_outcome(&base, &stats, None, known));
     }
 
     let extra: Vec<String> = arguments
@@ -426,11 +433,14 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
     let pid = child.id();
     // 先记 pid 再等：等的过程里用户点「停止」也要停得掉
     let _ = write_pid_file(&plan, pid);
+    // 把"这个实例读哪个 input"一起记下来（投放侧要照它对上，见 write_launch_record）
+    let _ = write_launch_record(&plan, pid);
 
     let outcome = wait_until_up(&base, &plan, &mut child, wait, started).await;
     match outcome {
         Ok(stats) => {
-            let mut out = running_outcome(&base, &stats, Some((&plan, pid, started.elapsed())));
+            let known = crate::mcp::mounted_input_dir(&plan.args);
+            let mut out = running_outcome(&base, &stats, Some((&plan, pid, started.elapsed())), known);
             if let Some(note) = &plan.note {
                 out.payload["note"] = json!(note);
                 out.content.push('\n');
@@ -439,8 +449,9 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
             Ok(out)
         }
         Err(failure) => {
-            // 起不来就别留下一个"以为在跑"的 pid 记录
+            // 起不来就别留下一个"以为在跑"的 pid / 留档
             let _ = std::fs::remove_file(&plan.pid_file);
+            let _ = std::fs::remove_file(record_file_of(&plan.pid_file));
             Err(failure)
         }
     }
@@ -468,7 +479,7 @@ pub async fn stop(state: &AppState) -> Result<ToolOutcome, ToolFailure> {
     match image {
         Some(name) if name.to_ascii_lowercase().contains("python") => {}
         Some(name) => {
-            let _ = std::fs::remove_file(&pid_file);
+            clear_launch_files(&pid_file);
             return Err(ToolFailure::new(
                 "COMFY_NOT_OURS",
                 format!(
@@ -478,7 +489,7 @@ pub async fn stop(state: &AppState) -> Result<ToolOutcome, ToolFailure> {
             ));
         }
         None => {
-            let _ = std::fs::remove_file(&pid_file);
+            clear_launch_files(&pid_file);
             return Err(ToolFailure::new(
                 "COMFY_NOT_OURS",
                 format!("pid {pid} 已经不在了（实例大概自己退过），pid 记录已清掉；不用再停。"),
@@ -492,7 +503,7 @@ pub async fn stop(state: &AppState) -> Result<ToolOutcome, ToolFailure> {
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
         if probe(&base).await.is_none() {
-            let _ = std::fs::remove_file(&pid_file);
+            clear_launch_files(&pid_file);
             let payload = json!({
                 "stopped": true,
                 "pid": pid,
@@ -673,6 +684,73 @@ fn write_pid_file(plan: &LaunchPlan, pid: u32) -> std::io::Result<()> {
     )
 }
 
+/// 那次启动的**留档**文件（与 pid 文件同目录、同名不同后缀）。
+fn record_file_of(pid_file: &Path) -> PathBuf {
+    pid_file.with_extension("launch.json")
+}
+
+/// 一起清掉 pid 记录与留档（**必须成对**：只清一个就会留下"pid 没了、input 还指着一个
+/// 早就不是我们起的实例"的假事实，而投放侧正是照它选目录的）。
+fn clear_launch_files(pid_file: &Path) {
+    let _ = std::fs::remove_file(pid_file);
+    let _ = std::fs::remove_file(record_file_of(pid_file));
+}
+
+/// 把"这个实例读哪个 input / 写哪个 output"记下来。
+///
+/// # 为什么非记不可（2026-09-30 用户 bug）
+///
+/// 起实例时挂的 input 有两处可能给它赋值：调用方自己写的 `--input`、以及 ComfyHub 照
+/// ComfyUI Desktop 的 `settings.json` 补的 `--input-directory`。**实例最终读哪一个**，
+/// 光看配置是推不出来的（两处都可能生效，argparse 还是后写的赢）。
+///
+/// 而投放工具（[`crate::image_edit`] 的三件）必须写进**实例真正在读的那一个** ——
+/// 写错地方的表现是提交时 `400 Invalid image file`，看着像"文件不存在"。
+/// 所以这里把**起完之后实际生效的那份 argv** 连同解析出来的 input/output 一起落盘：
+/// 投放侧读同一份留档，两边就出自同一个答案（`image_edit::input_dir_candidates`）。
+fn write_launch_record(plan: &LaunchPlan, pid: u32) -> std::io::Result<()> {
+    let record = json!({
+        "pid": pid,
+        "port": plan.port,
+        "workspace": plan.workspace.display().to_string(),
+        "python": plan.python.display().to_string(),
+        "log": plan.log.display().to_string(),
+        // argv 原样留着：出问题时"到底挂了哪些参数"不用再猜
+        "argv": plan.args,
+        "inputDir": crate::mcp::mounted_input_dir(&plan.args).map(|p| p.display().to_string()),
+        "outputDir": crate::mcp::mounted_output_dir(&plan.args).map(|p| p.display().to_string()),
+        "startedAt": crate::iso_time::from_system_time(std::time::SystemTime::now()),
+    });
+    std::fs::write(record_file_of(&plan.pid_file), record.to_string())
+}
+
+/// 读那次启动的留档（没有 / 不是 JSON 就是 `None`）。
+pub fn read_launch_record(project_root: &Path, port: u16) -> Option<Value> {
+    let path = record_file_of(&project_root.join(".run").join(format!("comfyui-{port}.pid")));
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<Value>(&text).ok()
+}
+
+/// **我们上次起实例时挂的那个 input 目录**（投放侧拿它对准）。
+///
+/// 只认**自己起的、而且现在还活着**的那一个：pid 记录还在、而且那个 pid 现在真的是 python
+/// （pid 会被系统回收，不复核就可能把别人的进程当成自己的实例）。
+/// 用户自己用 ComfyUI Desktop 起的实例我们没起过 → `None`；那条路靠**直接问实例**
+/// （`image_edit::target_input_dir` 的探测），而不是靠猜。
+pub fn launched_input_dir(project_root: &Path, port: u16) -> Option<PathBuf> {
+    let pid_file = project_root.join(".run").join(format!("comfyui-{port}.pid"));
+    let pid = read_pid_file(&pid_file)?;
+    let image = process_image_name(pid)?;
+    if !image.to_ascii_lowercase().contains("python") {
+        return None;
+    }
+    read_launch_record(project_root, port)?
+        .get("inputDir")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_dir())
+}
+
 fn read_pid_file(path: &Path) -> Option<u32> {
     let text = std::fs::read_to_string(path).ok()?;
     text.lines()
@@ -691,7 +769,16 @@ fn log_tail(path: &Path) -> String {
 }
 
 /// "已经在跑 / 刚起来"的统一回报（**同一份措辞**：模型与用户看到的是同一件事）。
-fn running_outcome(base: &str, stats: &Value, fresh: Option<(&LaunchPlan, u32, Duration)>) -> ToolOutcome {
+///
+/// `known_input` 是**这个实例读哪个 input 目录** —— 起实例时挂的那份（我们起的）或留档里那份。
+/// 它是投放工具的目标目录，所以必须回给模型：两边不一致的表现是提交时 400
+/// `Invalid image file`，而模型光看配置是推不出来的（2026-09-30 用户 bug）。
+fn running_outcome(
+    base: &str,
+    stats: &Value,
+    fresh: Option<(&LaunchPlan, u32, Duration)>,
+    known_input: Option<PathBuf>,
+) -> ToolOutcome {
     let system = stats.get("system").cloned().unwrap_or(Value::Null);
     let mut payload = json!({
         "started": true,
@@ -700,6 +787,10 @@ fn running_outcome(base: &str, stats: &Value, fresh: Option<(&LaunchPlan, u32, D
         "comfyReachable": true,
         "comfyuiVersion": system.get("comfyui_version").cloned().unwrap_or(Value::Null),
         "pythonVersion": system.get("python_version").cloned().unwrap_or(Value::Null),
+        "inputDir": known_input
+            .as_ref()
+            .map(|p| Value::String(p.display().to_string()))
+            .unwrap_or(Value::Null),
         "device": stats
             .get("devices")
             .and_then(Value::as_array)
@@ -708,6 +799,17 @@ fn running_outcome(base: &str, stats: &Value, fresh: Option<(&LaunchPlan, u32, D
             .cloned()
             .unwrap_or(Value::Null),
     });
+    let input_line = match known_input.as_ref() {
+        Some(dir) => format!(
+            "\n· **这个实例的 input = {}** —— `comfy_use_media` / `comfy_use_attachment` / \
+             `comfy_make_mask` 会投到这里（它们会先问实例确认，投错目录的表现是提交时 400 \
+             `Invalid image file`）",
+            dir.display()
+        ),
+        None => "\n· 这个实例**不是 ComfyHub 起的**，所以这里不知道它读哪个 input；\
+                 投放工具会直接问实例自己（`/object_info/LoadImage`），不用你猜。"
+            .to_string(),
+    };
     let text = match fresh {
         Some((plan, pid, elapsed)) => {
             payload["pid"] = json!(pid);
@@ -719,7 +821,7 @@ fn running_outcome(base: &str, stats: &Value, fresh: Option<(&LaunchPlan, u32, D
             payload["args"] = json!(plan.args);
             payload["elapsedMs"] = json!(elapsed.as_millis() as u64);
             format!(
-                "ComfyHub 自己把 ComfyUI 起起来了（{:.1}s，pid {pid}）：{}\n\
+                "ComfyHub 自己把 ComfyUI 起起来了（{:.1}s，pid {pid}）：{}{input_line}\n\
                  · 日志：{}（**项目内** —— comfy-cli 那条路写不出来，见下）\n\
                  · 停在 `comfy_stop`（只停这一个；用户自己的 Desktop 实例不会被碰）\n\
                  · 起法绕开了 comfy-cli：它启动时要写 `%LOCALAPPDATA%\\comfy-cli\\config.ini` 与 \
@@ -730,7 +832,7 @@ fn running_outcome(base: &str, stats: &Value, fresh: Option<(&LaunchPlan, u32, D
             )
         }
         None => format!(
-            "ComfyUI 已经在跑（{base}），没有再起一个 —— 直接用就行。\
+            "ComfyUI 已经在跑（{base}），没有再起一个 —— 直接用就行。{input_line}\
              （要知道状态与队列用 `comfy_get_status`；要重启就先 `comfy_stop` 再 `comfy_start`。）"
         ),
     };
@@ -865,6 +967,59 @@ mod tests {
         write_pid_file(&plan, 4321).unwrap();
         assert_eq!(read_pid_file(&path), Some(4321));
         assert_eq!(read_pid_file(&tmp.join("nope.pid")), None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 起完实例**必须把"它读哪个 input"留档**（2026-09-30 用户 bug：投放工具与实例
+    /// 各读各的 input，图投进安装目录、实例读共享目录 → 提交 400 `Invalid image file`）。
+    ///
+    /// 留档里要能看到 argv 与解析出来的 input/output：调用方自己写的 `--input` 也要认
+    /// （argparse 允许唯一前缀缩写，后写的赢 —— 见 `mcp::mounted_input_dir`）。
+    #[test]
+    fn launch_record_remembers_which_input_the_instance_reads() {
+        let tmp = scratch("record");
+        let workspace = tmp.join("ComfyUI");
+        let mine = tmp.join("mine-input");
+        let shared = tmp.join("shared-input");
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+        // 留档与 pid 一样落在 `.run\` 下（读的一方就是照这个位置找的）
+        let run_dir = tmp.join(".run");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let plan = LaunchPlan {
+            workspace,
+            python: tmp.join("python.exe"),
+            port: 8188,
+            // 真实的现场形状：调用方写缩写 `--input`，ComfyHub 后补全名 —— **后写的赢**
+            args: vec![
+                "--input".into(),
+                mine.display().to_string(),
+                "--input-directory".into(),
+                shared.display().to_string(),
+                "--port".into(),
+                "8188".into(),
+            ],
+            log: tmp.join("x.log"),
+            pid_file: run_dir.join("comfyui-8188.pid"),
+            note: None,
+        };
+        write_pid_file(&plan, 4321).unwrap();
+        write_launch_record(&plan, 4321).unwrap();
+
+        let record = read_launch_record(&tmp, 8188).expect("留档要读得到");
+        assert_eq!(record["pid"], 4321);
+        assert_eq!(record["port"], 8188);
+        assert_eq!(
+            record["inputDir"].as_str().unwrap(),
+            shared.display().to_string(),
+            "留档的必须是**实例真正读的那一份**（后写的赢），不是调用方先写的那份"
+        );
+        assert!(record["argv"].as_array().unwrap().contains(&json!("--input")));
+
+        // 没有留档 / 别的端口 → None（不编一个）
+        assert!(read_launch_record(&tmp, 8199).is_none());
+        clear_launch_files(&plan.pid_file);
+        assert!(read_launch_record(&tmp, 8188).is_none(), "pid 与留档要成对清掉");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

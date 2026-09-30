@@ -106,9 +106,8 @@ Future<void> _open(WidgetTester tester) async {
   await tester.pumpAndSettle();
   await tester.tap(find.text('Command Code Goat'));
   await tester.pumpAndSettle();
-  // 页面上方压着两张目录卡（内置目录 + 能力目录）：列表的懒构建表头
-  // （Provider/密钥区，约 500px）比视口还高，模型行要拖一下才进视口 ——
-  // 先拖一屏，让第 0 行可见，后面的断言才有东西可找。
+  // 懒构建表头（Provider / 密钥 / 连接测试 / API Key 区）比视口高，模型行要拖一下
+  // 才进视口 —— 先拖一屏，让第 0 行可见，后面的断言才有东西可找。
   await tester.drag(find.byType(CustomScrollView).first, const Offset(0, -400));
   await tester.pumpAndSettle();
 }
@@ -191,7 +190,8 @@ void main() {
     expect(find.text('模型能力：Model 0'), findsOneWidget, reason: '点一行要能打开编辑弹窗');
 
     // 打开"思考强度"，勾上「高」；顺手把「图片」关掉。
-    // Switch 要圈定在弹窗里 —— 2026-09-23 起页面上方的能力目录卡也有一个开关。
+    // Switch 要圈定在弹窗里 —— 「AI 模型与凭据」页的「模型能力目录」卡里也有一个开关
+    // （2026-10 起它嵌在某条 Provider 的详情里、默认折叠）。
     await tester.tap(find.widgetWithText(FilterChip, '图片'));
     await tester.pumpAndSettle();
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.byType(Switch)));

@@ -2,19 +2,28 @@
 
 > ComfyUI 提示词 & 生成产物管理器 —— **Flutter 前端 + Rust 后端 + 本地 SQLite**
 
+> **2026-09-30（App 直启后端）：后端不再由 PowerShell 拉起。**
+> 桌面 App **自己直接执行**后端 exe（`Process.start`，Dart 自带 `CREATE_NO_WINDOW`，
+> 不弹黑框），起的时候带 `--watch-stdin`：App 一死（任务管理器 / 崩溃），
+> 后端 stdin 管道即关，它自己优雅退出 —— **不留孤儿**。
+> 于是 `comfyhub.ps1` / `server.ps1` / `silent-process.ps1` / `watch-owner.ps1` 那一整套
+> 生命周期脚本整体退场（脚本目录只剩构建脚本与必要脚本）；**发布包不再需要 pwsh 才能启动**。
+> App 去 `<viewer.exe 同级>\backend\comfyhub-server-rs.exe` 找后端（release 构建时由
+> `windows\CMakeLists.txt` 自动 `cargo build --release` 并装配进去），源码树里则是
+> `server-rs\target\{release,debug}\`；`$env:COMFYHUB_SERVER_EXE` 可显式覆盖。
+>
 > **2026-09-26（P4 收尾）：后端已从 Kotlin 换成 Rust。** 后端是**一个单文件二进制**
-> （`server-rs\target\release\comfyhub-server-rs.exe`，发布包里装配到 `<根>\server\comfyhub-server-rs.exe`），
+> （`server-rs\target\release\comfyhub-server-rs.exe`，发布包里装配到 `<根>\backend\comfyhub-server-rs.exe`），
 > SQLite 引擎编在里面 —— **不再需要 JVM、不再需要 MySQL**，发布包从 ~60MB 降到 **~14MB**。
-> 脚本与打包都已切过去（`scripts\backend.ps1` 是"用哪个后端"的唯一真源，`-Backend auto|rust|kotlin`）；
-> 旧 Kotlin 源码留在 `legacy\server\` 备查（灰度期可用 `COMFYHUB_BACKEND=kotlin` 回退，但要自己先把它建出来）。
+> 旧 Kotlin 源码留在 `legacy\server\` 备查（灰度回退那条路要先自己把 `legacy\server` 放回原位重建）。
 >
 > **2026-09-23（P2）：数据库已从 MySQL 换成 SQLite。** 数据是一个文件：
 > **`<项目根>\.db\comfyhub.db`**（同目录还有它自己的 `-wal` / `-shm`，备份要三个一起拷）。
 > 库的建表/收敛**现在由 Rust 后端自己干**（`db::open_or_create`：库缺就按 `db\schema.sqlite.sql` 建）。
 > 老库里的数据**没有丢**，也不会被自动删，但**搬迁老库的通道已经没了**：
-> **2026-09-29 起 MySQL 彻底退役** —— `mysql.ps1`、`server.ps1 migrate` 与端口 3307 一并删除，
-> `up` 不再读 `.mysql\`（老目录原样留着，确认不要了再自己删）。
-> 本文里没跟上这些改动的地方（尤其涉及 `mysql.ps1` / `.mysql\` / `my.ini` / `gradle` 的段落）一律按**历史**理解。
+> **2026-09-29 起 MySQL 彻底退役** —— `mysql.ps1`、`server.ps1 migrate` 与端口 3307 一并删除。
+> 本文里没跟上这些改动的地方（尤其涉及 `mysql.ps1` / `.mysql\` / `my.ini` / `gradle` /
+> 已删脚本的段落）一律按**历史**理解。
 
 把 ComfyUI 里跑通的提示词存起来、打上标签；把生成出来的图片 / 视频 / 音频导入进来并**关联到对应的提示词**。
 之后点开任何一张图，就能立刻看到当初用的完整提示词；想找"那种赛博朋克夜景风格是怎么调出来的"，点一下标签就全出来了。
@@ -196,19 +205,31 @@ viewer/
 │   └── seed.sql                  # 演示数据（4 条提示词 + 12 个标签）
 │
 ├── scripts/
-│   ├── comfyhub.ps1              # ★ 统一入口：把数据库 + 后端当成一个整体来 up/down/status/doctor
-│   ├── silent-process.ps1        # ★ 后台进程「无窗口 + 脱离进程树」启动（后端等后台进程用）
-│   ├── server.ps1                # ★ 只操作后端（自动挑选 JDK 21；`migrate` 动作已随 MySQL 退役删除）
-│   ├── pack-release.ps1          # ★ 打包发布版：把 Rust 后端二进制就地装配进 Release 目录
-│   ├── autorun-app.ps1           # 一键：服务 → 分析 → 构建（Release）→ 启动 App
-│   ├── dev-app.ps1               # ★ 前端开发用：服务 → flutter run --debug（热重载）
+│   ├── backend.ps1               # ★ 后端小工具：找 exe / cargo build / 起 / 停 / 状态（e2e 与 dev 脚本用）
+│   ├── pack-release.ps1          # ★ 打包发布版：校验并装配 `build\windows\x64\runner\Release\`（-OutDir 另存、-Zip 压包）
+│   ├── dev-app.ps1               # ★ 前端开发用：确保后端二进制最新 → flutter run --debug（热重载）
+│   ├── build-apk.ps1             # ★ 打安卓 APK（体检 + 装机 + 失败码翻译）
+│   ├── gen-builtin-catalog.ps1   # 内置模型目录 codegen（构建期工具）
+│   ├── api-port.ps1              # 端口解析（与后端 / App / 捕获扩展共读 `.run\api.json`）
+│   ├── comfy-path.ps1            # ComfyUI 位置解析（判据与后端 ComfyLocator 一致）
+│   ├── mcp-runtime.ps1           # ★ MCP 运行时装配（可选能力：AI 的 ComfyUI 工具）
+│   ├── video-poster.ps1          # ★ 视频封面抽帧（**后端运行期依赖**：/api/media/{id}/poster）
 │   ├── e2e-capture-test.ps1      # ★ 自动捕获端到端自测（用假 ComfyUI，不跑真实生成）
 │   ├── e2e-pair-test.ps1         # ★ 配对闸门 + 密钥下行端到端自测（打 Rust 后端，不需要真手机）
 │   ├── e2e-credential-test.ps1   # ★ 托管凭据双端互操作自测（Kotlin ⇄ Rust 写同一份 DPAPI 文件）
-│   ├── check-silent-start.ps1    # ★ 静默启动自测：启动服务时盯屏，确认没有弹窗
-│   ├── install-comfy-node.ps1    # ★（可选）把捕获节点装进 ComfyUI
-│   ├── e2e/                      # 自测用的假 ComfyUI 与测试 PNG 生成器
-│   └── make-sample-media.ps1     # 生成演示用图片 / 音频
+│   ├── e2e-ai-tools-test.ps1     # ★ AI 工具循环 + Skills + 附件端到端自测（假网关，不出网）
+│   ├── e2e-submit-test.ps1       # ★ 提交链路端到端自测
+│   ├── e2e-image-edit-test.ps1   # ★ AI 图像编辑端到端（活 ComfyUI 实例）
+│   ├── e2e-inpaint-test.ps1      # ★ 自带 inpaint 工作流的活实例验收
+│   ├── e2e-recipe-test.ps1       # ★ 工作流配方端到端（Rust）
+│   └── e2e/                      # 自测用的假 ComfyUI 与测试 PNG 生成器
+│
+│   （2026-09-30 删掉的一批：comfyhub.ps1 / server.ps1 / silent-process.ps1 /
+│    watch-owner.ps1 / check-silent-start.ps1 / runtime-deps.ps1 / ensure-runtime.ps1 /
+│    rebuild-server.ps1 / autorun-app.ps1 / copy-review.ps1 / anima-gen.ps1 /
+│    matte-probe.ps1 / make-sample-media.ps1 / install-comfy-node.ps1 / phone-run.ps1 /
+│    integrity.ps1 —— App 现在自己直启后端，那套生命周期脚本与一次性工具整体退场；
+│    只剩构建脚本与必要脚本。见下面「App 怎么起后端」。）
 │
 ├── packaging/manifest.json       # ★ 软件打包清单：发布包里装哪些件、各放在哪（pack-release.ps1 读它）
 ├── dist/                         # 发布包装配输出（运行时生成，已 gitignore）
@@ -248,22 +269,23 @@ viewer/
 ## 5. 快速开始
 
 ```powershell
-# 1) 生成演示媒体（可选）
-pwsh -File scripts\make-sample-media.ps1
+# 1) 构建（release 构建会把 Rust 后端一起编出来并装进产物里的 backend\）
+flutter build windows --release
 
-# 2) 构建并运行 Flutter 桌面端
-pwsh -File scripts\autorun-app.ps1
+# 2) 把产物交给别人 / 放到工作区外时，用打包脚本校验 + 另存一份
+pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub
+
+# 开发时（只改 lib/ 下的 Dart）：
+pwsh -File scripts\dev-app.ps1        # 起来之后按 r 热重载
 ```
 
 **数据库不用你先建**：后端首次启动会自己建 `<项目根>\.db\comfyhub.db`（SQLite，含表结构与索引）。
 老的 `.mysql\` 实例**不会被读取、也不会自动搬迁**（那条"零动作升级"搬迁通道已于 2026-09-29 随 MySQL 退役删除），
 老库原样留着不动，确认不需要了再自己删。
 
-**从第 2 步开始，后端就不需要你手动起了**：
-App 启动时会先探一次后端健康检查（地址按 `<项目根>\.run\api.json` 里后端记录的**实际端口**算，
-见下面「后端端口是自动的」），
-连不上或数据库不通就自己去调 `scripts\comfyhub.ps1 up`，
-并把脚本输出实时显示在启动页上（首次如果后端没构建过，会顺便跑一次 gradle 构建，会慢一些）。
+**后端也不需要你手动起**：App 启动时会先探一次后端健康检查（地址按 `<项目根>\.run\api.json` 里
+后端记录的**实际端口**算，见下面「后端端口是自动的」），连不上或数据库不通就**自己直接执行**
+`backend\comfyhub-server-rs.exe`（不再经过任何脚本），并把它的输出实时显示在启动页上。
 后端已经健康时它什么都不做，所以重复启动 App 不会有副作用。
 **整个过程是静默的**：后端在隐藏的（无窗口）控制台里跑，不会弹出 cmd 黑框。
 
@@ -278,8 +300,8 @@ App、脚本（`scripts\api-port.ps1`）、ComfyUI 捕获扩展都读**同一个
 说明（`doctor` / `status` 也会点出来）。要看当前端口：
 
 ```powershell
-pwsh -File scripts\comfyhub.ps1 status     # 直接报 http://127.0.0.1:<真实端口>
-Get-Content .run\api.json                  # 后端记录的端口 + PID（脚本 / App / 捕获扩展都读它）
+pwsh -File scripts\backend.ps1 status      # 直接报 http://127.0.0.1:<真实端口>
+Get-Content .run\api.json                  # 后端记录的端口 + PID（App / 脚本 / 捕获扩展都读它）
 ```
 
 前端（设置页「后端地址」）**留空 = 自动**：按 `.run\api.json` 走；手填了就以手填的为准
@@ -288,90 +310,70 @@ Get-Content .run\api.json                  # 后端记录的端口 + PID（脚�
 想关掉这个行为：设置页 →「本地服务」→ 关掉「启动 App 时自动拉起服务」。
 也可以在同一个卡片里手动「启动 / 修复」「重启」「停止」「查看日志」。
 
-命令行仍然完全可用（脚本是同一个，两边行为一致）：
+命令行也还留着一条**只给开发 / 测试用**的路（App 自己那条才是运行期真源）：
 
 ```powershell
-pwsh -File scripts\comfyhub.ps1 up -WithApp   # 起后端 + 桌面 App
-pwsh -File scripts\comfyhub.ps1 status        # 状态一览（数据库 / 后端 / App）
-pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
+pwsh -File scripts\backend.ps1 status      # 状态一览（库文件 / 后端进程 / 健康检查 / 端口）
+pwsh -File scripts\backend.ps1 start       # 起后端（缺/旧会自动 cargo build --release）
+pwsh -File scripts\backend.ps1 stop        # 只停后端
 ```
+
+### App 怎么起后端（2026-09-30 起）
+
+**App 自己直启后端，不经过任何脚本**（也不再需要 pwsh）：
+
+```text
+<viewer.exe 同级>\backend\comfyhub-server-rs.exe  --db <根>\.db\comfyhub.db \
+    --storage <根>\storage --host 127.0.0.1 --port 0 --watch-stdin
+环境：COMFYHUB_PROJECT_ROOT=<根>（+ 开了「允许局域网」时的 COMFYHUB_ALLOW_REMOTE=1）
+```
+
+四条纪律（改启动方式前先读 `lib\core\backend_launcher.dart` 与 `lib\core\backend_paths.dart`）：
+
+| 事 | 怎么做的 | 为什么 |
+| --- | --- | --- |
+| 去哪找后端 exe | `$env:COMFYHUB_SERVER_EXE` > `<viewer.exe 同级>\backend\` > `<根>\backend\` > `<根>\server\`（旧布局）> `server-rs\target\{release,debug}\` | 发布包里后端是 **App 自己的资产**（release 构建装配进 `backend\`）；源码树里用 cargo 的产物 |
+| 端口 | **永远 `--port 0`**（操作系统挑），真实端口由后端写进 `.run\api.json`，App 只读它 | 写死端口会撞"被占 / Windows 保留段"；端口只有一个真源 |
+| 不弹黑框 | Dart 的 `Process.start`（attached 模式）自带 `CREATE_NO_WINDOW` | 所以 `silent-process.ps1` 那套 WMI/SW_HIDE 整体退场 |
+| 不留孤儿 | 起的时候带 `--watch-stdin`：后端的 stdin 是我们给的管道、写端只有我们持有；App 一死（正常关 / 崩溃 / 任务管理器）管道即关，后端读到 EOF 就**优雅退出** | 取代了以前那个 `watch-owner.ps1` 守护进程 |
+
+**关 App 的时候后端会不会跟着停？** 一句话：**开着「关闭 App 时一并停止本地服务」（默认）就停，关着就不停。**
+
+* App **自己起的**那个 → 关窗口时直接 kill（`releaseOnExit`），不等任何轮询；
+  被硬杀时后端靠上面那根 stdin 管道自己退，**不留孤儿**。
+* 开 App 之前后端**就已经在跑**的（比如上一次被强杀留下的）→ App 探到 `/api/health` 健康就直接复用它，
+  同时把 `.run\api.json` 里的 pid **认领**下来，关窗口时按设置一并停掉。
+* **关掉开关** → 服务常驻，下次开 App 是热启动；App 完全不碰服务生命周期。
 
 ### 脚本速查
 
+> 2026-09-30 起脚本目录**只剩构建脚本与必要脚本**：App 自己直启后端，
+> `comfyhub.ps1` / `server.ps1` / `silent-process.ps1` / `watch-owner.ps1` /
+> `runtime-deps.ps1` / `ensure-runtime.ps1` / `rebuild-server.ps1` / `check-silent-start.ps1` /
+> `autorun-app.ps1` / `copy-review.ps1` / `integrity.ps1` 等已删除。
+
 | 命令 | 作用 |
 | --- | --- |
-| **`scripts\comfyhub.ps1 up / down / status / restart / logs / doctor / release / watch / unwatch`** | **统一入口：把数据库 + 后端当成一个整体来起停和体检** |
-| `scripts\comfyhub.ps1 up -WithApp` | 顺带把桌面 App 也拉起来 |
-| `scripts\comfyhub.ps1 up -SkipBuild` | 跳过后端构建，直接用上次的产物启动（App 自动启动时走的就是这个；Rust 侧等于跳过 `cargo build`） |
-| `scripts\comfyhub.ps1 up -OwnerPid <pid>` | **App 自动启动时用的形式**：多挂一个「关 App 就停服务」的守护进程（见下面说明） |
-| `scripts\comfyhub.ps1 release` | **只停后端，不动 App 自己**（App 关窗口时调的就是它；`down` 会按进程名杀 `viewer`，在 App 内部不能调） |
-| `scripts\comfyhub.ps1 watch -OwnerPid <pid>` | 给**已经在用本地服务**的 App 补挂「关 App 就停服务」的守护进程（App 启动时探到后端已健康、没跑 `up` 的那条路） |
-| `scripts\comfyhub.ps1 unwatch` | 撤掉上面那个守护进程（用户在设置里关掉「关闭 App 时一并停止本地服务」时 App 会调它），本地服务继续跑 |
-| `scripts\watch-owner.ps1` | 那个守护进程本体：盯着 `-OwnerPid`，目标进程一退出就按 `-StopApi` 停掉对应服务（一般由 `up -OwnerPid` 自动拉起，不用手敲；日志在 `.run\watch-owner.log`） |
-| `$env:COMFYHUB_TRACE=1` + `scripts\comfyhub.ps1 up` | 把冷启动**每一段的耗时**打到 stderr（`[trace   1660ms] server: 就绪` 这种），用来定位"到底慢在哪" |
-| `scripts\comfyhub.ps1 doctor` | 体检：路径 / 依赖 / 端口占用逐项检查（含 **SQLite 库文件与它的大小**、**探测到的 ComfyUI 目录与输出目录**） |
-| `scripts\comfy-path.ps1` | **ComfyUI 位置解析**（被 dot-source 使用）：`Resolve-ComfyHome` / `Resolve-ComfyOutputDir`，判据与后端 `ComfyLocator.kt` 一致（用户"其他建议"第 3 条） |
-| `scripts\server.ps1 start / stop / status / logs` | 只操作后端 |
-| `scripts\server.ps1 run` | 后端前台运行（Ctrl+C 停） |
-| `scripts\server.ps1 fatjar` | 打成一个独立 jar |
-| **`scripts\rebuild-server.ps1`** | **改了 `server-rs\` 之后要跑这个**（停后端 → `cargo build --release` → 起后端 → 等健康）。为什么必须有它：`up` / `server.ps1 start` **只在 exe 不存在时**才编（源码变新时它们直接复用旧 exe，= 改了半天没生效），而后端**在跑时 `cargo build` 必然失败**（Windows 不许覆盖运行中的 exe，实测文件被占）。它还会**在停服务之前**预检"能不能脱离进程树起进程"，探不通就原样退出（避免"停成功、起不来"）。端口默认沿用当前那个，正在跑的 App 不用重连。`-NoStart` 只编不起、`-Force` 源码没变也重编 |
-| `scripts\autorun-app.ps1` | 一键全流程：服务 → 分析 → 构建（Release）→ 启动 App |
-| `scripts\pack-release.ps1` | **打包发布版**：按 `packaging\manifest.json` 把 **Rust 后端二进制**（+ 脚本 / DDL / Skills / 捕获扩展）**就地装配进** `build\windows\x64\runner\Release\`，装完那个目录就是完整发布包（`-OutDir` 可另存，`-Zip` 顺带压包）。**P2 起不携带 MySQL、P4 起不携带 JRE**（合计少约 340MB，实测这种装配约 **14MB**） |
-| `scripts\ensure-runtime.ps1` | **运行时一键就绪**：检测不到的运行时自动下载安装（pwsh 走 winget；Java **只在回退旧 Kotlin 后端时才需要** —— P4 收尾起 `up` 不再为 Rust 后端下 JRE；VC++ / MySQL 检查已随 2026-09-29 MySQL 退役删除）。`-CheckOnly` 只检测 |
-| `scripts\mcp-runtime.ps1` | **MCP 运行时装配**（可选能力）：**先用机器上已有的 Python**（已有 comfy-mcp 就直接借；没有就借它建 venv），机器上没有才下便携版 Python；再装 `comfy-cli` + `comfy-mcp` 到 `<根>\storage\ai\mcp`，并把 `comfy-cli` 的工作区指向用户真实在用的 ComfyUI。`status` / `install [-Force] [-ComfyHome <目录>]`；`comfyhub.ps1 up` 会自动补、`doctor` 会报状态与"这份 Python 哪来的" |
-| `scripts\dev-app.ps1` | **只改前端时用这个**：服务 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)） |
-| **`scripts\build-apk.ps1`** | **打一份能装进真手机的安卓 APK + 体检 + 装机**。全量 release 约 78MB；`-Split` 出分架构包（arm64 实测 **28.9MB**，比 `flutter run` 的 debug 包 164MB 小一个量级，传输更不容易断）。编完会打出 `native-code` / `minSdkVersion` / 签名校验 / sha256，并且把"装不上时该看什么"逐条列出来；`-Install` 走真 adb：先报设备状态（`offline` / `unauthorized` 各自的人话处置），只挑**这台手机 ABI 匹配**的那一份装，装失败**自动换 `--no-streaming` 重试**并翻译失败码（含 `USER_RESTRICTED` / `VERSION_DOWNGRADE` 自动卸载重装）。2026-09-28 真机现场就靠它定位：`flutter run` 只回一句"失败原因空白"，其实是设备侧增量安装服务（`abb_exec`）断了，同一份包换成 push 安装当场 Success |
-| **`scripts\phone-run.ps1`** | **安卓真机的日常调试入口**（"我总是需要 flutter run 调试"的靠谱解）：`flutter run` 在真机上有两个它自己修不了的坑 —— ① 装机那一步是黑盒（固定流式、走 `abb`，实测设备侧服务一掉就只回一句"失败原因空白"，而它**没有** `--no-streaming` 开关）；② 分架构包的 versionCode 是 1001/2001/4001，装过一次之后 `flutter run` 那份（1）**永远**报 `INSTALL_FAILED_VERSION_DOWNGRADE`。所以本脚本把**装机**拿回来（带重试与失败码翻译：降级 / 签名不一致先卸载、没给失败码就换 `--no-streaming`），装完用 **`flutter attach`** 接管调试循环 —— 热重载 `r` / 热重启 `R` 与 `flutter run` 逐字相同。`-Split` 用 arm64 小包（~29MB，传输更不容易断）、`-ReuseBuild` 不重编、`-NoAttach` 只装 |
-| `scripts\check-silent-start.ps1` | **静默启动自测**：启动服务的同时盯屏，报告有没有弹出 cmd / 控制台窗口（加 `-Restart` 从零走一遍） |
-| `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成）。假 ComfyUI 默认在 **18188**（**不是 8188** —— 那是真实 ComfyUI 的端口，撞上会让测试悄悄连到真实那一个），起好后还会认一次身份，不是自己的就当场停下 |
+| **`scripts\backend.ps1 exe \| build \| start \| stop \| restart \| status \| wait`** | **后端小工具**（给 e2e 与 dev 脚本用；运行期真源是 App 自己）。`start` 缺/旧会自动 `cargo build --release`，起之前把 Low 完整性标签修回 Medium；`-SkipBuild` 直接用现有产物；`-BindHost 0.0.0.0` 允许局域网 |
+| `scripts\dev-app.ps1` | **只改前端时用这个**：确保后端二进制最新 → `flutter run --debug`，跑起来后按 `r` 热重载（见 [9.1](#91-只改前端时用-debug-版热重载省构建时间)）。`-WithMcp` 顺带装配 MCP 运行时 |
+| `scripts\pack-release.ps1` | **打包发布版**：校验并装配 `build\windows\x64\runner\Release\`（`-OutDir` 另存一份干净副本、`-Zip` 压包、`-Clean` 只清装配件）。**后端由 `flutter build windows --release` 自己装进 `backend\`**（见 [9.2](#92-出正式产物release-构建)） |
+| **`scripts\build-apk.ps1`** | **打一份能装进真手机的安卓 APK + 体检 + 装机**。全量 release 约 78MB；`-Split` 出分架构包（arm64 实测 **28.9MB**）。编完会打出 `native-code` / `minSdkVersion` / 签名校验 / sha256；`-Install` 走真 adb：先报设备状态，只挑**这台手机 ABI 匹配**的那份装，失败**自动换 `--no-streaming` 重试**并翻译失败码 |
+| `scripts\gen-builtin-catalog.ps1` | **开发期工具**：把 `%USERPROFILE%\.dsh\settings.yaml` 里的模型目录抄成冻结副本（运行时只读那份副本，**绝不读 YAML**；解析到少于 60 个模型就拒绝写盘） |
+| `scripts\api-port.ps1` | **端口解析**（被 dot-source 使用）：读 `.run\api.json`；与后端 `api_port_file.rs`、App `settings_store.dart`、捕获扩展 `capture_core.py` 共读同一个文件 |
+| `scripts\comfy-path.ps1` | **ComfyUI 位置解析**（被 dot-source 使用）：`Resolve-ComfyHome` / `Resolve-ComfyOutputDir`，判据与后端 `ComfyLocator` 一致 |
+| `scripts\mcp-runtime.ps1` | **MCP 运行时装配**（可选能力）：**先用机器上已有的 Python**（已有 comfy-mcp 就直接借；没有就借它建 venv），都没有才下便携版 Python；再装 `comfy-cli` + `comfy-mcp` 到 `<根>\storage\ai\mcp`。`status` / `install [-Force] [-ComfyHome <目录>]`。[190 秒超时](#) 之外的失败**不拦 App / 后端启动** |
+| **`scripts\video-poster.ps1`** | **视频封面抽帧**（Windows 资源管理器缩略图管线，**不依赖 ffmpeg**）—— ⚠ 它是**后端运行期依赖**：`GET /api/media/{id}/poster` 会起它；缺了那个端点回 204（播放器退化成转圈），其余功能不受影响 |
+| `scripts\e2e-capture-test.ps1` | **自动捕获端到端自测**（假 ComfyUI，不需要真跑一次生成）。假 ComfyUI 默认在 **18188**（**不是 8188** —— 撞上会悄悄连到真实那一个），起好后还会认一次身份 |
 | `scripts\e2e-submit-test.ps1` | **AI 提交任务端到端自测**（假网关 + 假 ComfyUI）：批准闸门 / 真的提交 / 参数覆盖 / 产物入库 / 工作流文件直接提交 / **前端节点缺口补线**，32 项断言，不出网不花钱 |
 | `scripts\e2e-ai-tools-test.ps1` | **AI 工具循环 + Skills + 附件端到端自测**（假 OpenAI 流式网关 `scripts\e2e\fake_openai.py`，不需要真 API Key、不出网：注册 / 按需加载 / 越界写被拒 / 目录内写成功 / 审批闸门 / 只读工具 / 长期记忆 / **附件上传·缩略图·图片内联·零上游请求** / 重试不重复提问 / 截断续写 / 首尾干净 / **429 与中途断流之后内容不丢**） |
-| `scripts\e2e-pair-test.ps1` | **配对闸门 + 密钥下行端到端自测**（打的是 **Rust 后端**，因为 `/api/auth*` 只在它上面；不需要真手机 —— 用一台"假装是手机"的 HTTP 客户端走完 举手 → 桌面显示 6 位码 → 兑码 → 令牌可用 → 授权后下行密钥 → 吊销 → 轮换，另含"闸门默认关着"那条反向回归。真库副本 + 真端口 + 真"非回环"来源，跑完真库一个字节没动） |
-| `scripts\e2e-credential-test.ps1` | **托管凭据双端互操作自测**（`<storage>\ai\credentials.dpapi.json` 是**一份**文件，Kotlin 与 Rust 两个实现都可能写它 —— 判据是"**一端写进去的密文另一端解得开**"，这是单测永远证明不了的：单测里两边都是我们自己。两边都真起、同一份真库/凭据副本，验 Rust 写→Kotlin 解、Kotlin 写→Rust 解、删除两端同步、响应与文件都不含明文、原有 key 一个没被动。Kotlin 那半可选，起不来会**大声报跳过**而不是假装通过） |
-| `scripts\install-comfy-node.ps1` | （可选）把捕获节点装进 ComfyUI，实现「跑完立刻捕获」 |
-| `scripts\anima-gen.ps1` | **Anima 生图执行器**：向本机 ComfyUI 提交一次文生图并等落盘（`-PromptFile/-NegativeFile/-Width/-Height/-Seed/-Prefix`） |
-| `scripts\e2e-inpaint-test.ps1`（2026-09-26） | **图像编辑的活实例端到端**：取一张真底图（默认画廊里最新的一张图）→ 造遮罩 → 提交**项目自带**的 inpaint 工作流 → 取产物 → **量化验收**：遮罩内平均像素差要大（真的重画了）、遮罩外要小（背景保住了，实测 0.73/255）。`-Model anima\|krea2`、`-Region x,y,w,h`、`-Feather`、`-Prompt`。⚠ 它只读画廊（底图是拷出去的），产物落在 ComfyUI 的 output；跑之前先确认 ComfyUI 在跑（`comfyhub.ps1 doctor`）。**它验的是工作流本身**（自己造遮罩、自己 POST），**不经过 AI 与工具层** —— 那条路见下一条；它也**不贴人物图**（贴人物图只有 matte 那一条路，见下一条） |
-| `scripts\e2e-image-edit-test.ps1`（2026-09-26；**2026-09-27 加锐度尺子、贴人只剩 matte 一条路**） | **AI 图像编辑端到端（活实例）**：让假网关只凭工具描述走完 **投放 → 遮罩 → 提交**（每轮过审批闸门），再用像素差验收"该换的换了、该保的没动"。默认底图 `ref_photos\ref_bg_1.jpg`（没有就退回画廊里最新的一张图），缩到长边 1024 并向下取 16 的倍数（8GB 显存上直接跑 3072x4096 会 OOM）。`-TwoStage` 会先跑**阶段一（t2i 生成人物）**再进第二阶段**贴人**（`-PersonMediaId` 指定人物产物、`-PersonPrompt` 管阶段一、`-PersonDenoise` 管融合档）—— 贴人物图**只有 matte 一条路**（`comfyhub_paste_person_matte_anima.json`：AI 软遮罩；**没有**颜色抠图那档开关）；`-Cfg` 可显式覆盖采样器 cfg（默认 0 = 用工作流自己写死的 `1.0`）；`-PlaceScale` / `-PlaceX` / `-PlaceY` 试**摆放**；**`-Seed` 钉住假网关的 seed** —— 做单变量对照必须给，否则每组噪声都不同、比出来的差异说明不了任何事。它额外盯三件只有端到端才抓得住的事：**投放写进去的就是实例真正在读的 input 目录**、**投放的文件名能直接喂给下一件工具**、**`appliedOverrides` 里真的出现了那几个键**（人物图 / denoise / cfg）。**"人变糊"那把尺子**：`scripts\e2e\sharpness.py`（**人物内部**拉普拉斯方差 —— 剪影向内腐蚀 8 像素后只量内部，边界上量到的是"边缘对比度"不是"内部细节"；也可单跑 `python scripts\e2e\sharpness.py --image <产物> --person <人物图>`），e2e 里给 `-SharpnessBaseline <纯合成产物>` 就会断言"内部锐度不低于基线的 80%"，`-SharpnessOut` 顺手把产物另存一份 —— 它是一条**回归线**（谁把人物内部真的写糊了，它会红）。实测 anima 遮罩内 101.95/255、外 3.74/255。⚠ 需要真 ComfyUI 在跑（会真花显卡时间），跑完还原捕获配置与权限档；**后端必须从普通终端起** —— 受限会话里起的后端写不了 ComfyUI 的 input 目录（`COMFY_INPUT_FAILED` + `os error 5`，见 [docs/pitfalls.md](docs/pitfalls.md) 里那条） |
-| `scripts\matte-probe.ps1`（2026-09-27） | **抠图（matting）质量探针**：把"抠图模型给不给连续 alpha"量成数字，而不是凭图说话。`run` 在一张真图上跑抠图模型（`BEN2` / `RMBG-1.4` 直接读本机 `ComfyUI\models\rembg\`（**已在盘上，零下载**），其余名字走 rembg 包的会话如 `isnet-anime`），`measure` 把目录里所有 `alpha-*.png` 用**同一套尺子**量一遍并出并排对照图。指标：**前景占比**（掉前景=发丝被吃/人变透明）、**软像素占比**（硬剪影恒为 0）、**平灰底边界溢色**（底不带绿 → 量到的绿只能来自人物自己）。⚠ **不需要 ComfyUI 在跑**，只借它的 venv 与模型文件；会自动挑那个**真装了 torch** 的 python（standalone-env 那个没有）。判据见内置 skill `inpaint-composite` 的「抠图」一节（总纲 §15 / §16 那两节的原调研记录已随颜色抠图档一起删除，只留墓碑） |
-| `scripts\e2e-recipe-test.ps1`（2026-09-26；**2026-09-27 改成跑 Rust 后端**） | **工作流配方端到端**（**Rust**，39 项，不花钱不出网）：学一份 API 格式工作流 → 幂等 → 从库里提示词学 → 界面格式（连不上要如实报 `COMFY_UNREACHABLE`；ComfyUI 在场时验"有缺口就拒学"）→ 列表 / 详情 → **绑定**（四档结论 + "非 exact 一个键都不许写"）→ 四条错误分支 → 删除。真库副本 + 自动挑空闲端口，跑完删掉（`-KeepData` 留着看现场、`-UiWorkflow` 指定那份界面格式文件）。**它自带三条防线**：后端只认 Rust（找不到就 exit 2，**不回退 Kotlin** —— 回退了就是拿另一套实现证明另一件事）、产物比源码旧就 exit 2（判据与 `doctor` 共用 `Get-RustBuildFreshness`）、起停都按进程**树**且**绝不写 `.run\api.json`**（那份记录属于用户真在用的后端）|
-| `scripts\gen-builtin-catalog.ps1` | **开发期工具**：把 `%USERPROFILE%\.dsh\settings.yaml` 里的模型目录抄成我们自己的冻结副本 `server\src\main\resources\ai\builtin-catalog.json`（运行时只读这份副本，**绝不读 YAML**；解析到少于 60 个模型就拒绝写盘） |
-| `scripts\copy-review.ps1`（2026-09-27） | **AI 文案审校（独立的小软件，不并入主程序）**：一条命令看全四类文案 —— **可改**的 skill 正文（`skills\builtin` / `<storage>\ai\skills` 的 `SKILL.md`）与界面注解（`lib\pages\**` 里的 Dart 字面量，由 `scripts\copy-review-ui.json` 的锚点现读源码），**只读**的系统提示词与工具描述（**问本地后端** `/api/ai/run-kit`，不在线就如实说"没取到"，绝不靠正则去猜 Rust 源码）。`open` 生成一份自包含 HTML（`.run\copy-review\copy-review.html`，无外链、`file://` 双击可用）供筛选 / 就地改文本 / 批量预览 / 导出 `copy-review-edits.json`；**HTML 里一个字节都不写文件**，唯一的写盘入口是 `apply -In <edits.json> [-Apply]`（默认 dry-run，每条先备份 `<file>.copyreview-bak`）。`list / show / verify / unverify / export / import / report / check` 命令行都能用；`-SelfTest` 用临时目录跑 19 项全流程自测。状态在 `.run\copy-review\state.json`，`verifiedAt` **绑内容 sha256**（文本一变，"已校验"自动失效 → "要重看"） |
-
-> **关 App 的时候，后端会不会跟着停？**
->
-> 一句话：**开着「关闭 App 时一并停止本地服务」（默认）就停，关着就不停。**
->
-> * **App 启动时自己把服务拉起来的**（那次 `up`）→ 停。脚本会带 `-OwnerPid <App 的 PID>`，
->   服务起来后挂一个脱离进程树的 `watch-owner.ps1` 守护进程；App 一退出
->   （正常关闭 / 崩溃 / 任务管理器强杀都算）它就把服务停掉（停后端；原来"等 java 退出 → 再停 MySQL"那段顺序已随 2026-09-29 MySQL 退役删除）。
-> * **启动 App 之前服务就已经在跑**（比如你刚在终端 `up` 过、或上一次 App 留下过服务）→ 也停。
->   App 探到 `/api/health` 健康就不会再跑一次 `up`，这种情况下它会补挂同一条守护
->   （`comfyhub.ps1 watch -OwnerPid <自己的 PID>`），所以**不会再出现"关了 App，8080 还占着"**。
->   ⚠️ 这比 2026-09-16 之前的行为更强硬：那时候"你在终端里起的服务"不会被带走。
->   不想被带走就关掉那个开关，或者在关 App 前把开关关掉（App 会立刻 `unwatch` 撤销守护）。
-> * **关掉开关** → 服务常驻，App 开着关着都不影响；下次开 App 直接热启动（省掉 7~8 秒冷启动）。
->   `autoStartBackend` 也关掉时，App 完全不碰服务生命周期。
->
-> 开关在「设置 → 本地服务 → 关闭 App 时一并停止本地服务」。
-> 另外还有一个兜底：App 正常关窗口时会**自己**调一次 `comfyhub.ps1 release`（只停服务、不杀 App），
-> 所以不用等守护进程那 3 秒轮询。
-
-### 为什么需要一个统一的 `comfyhub.ps1`
-
-后端和数据库是**硬依赖**关系：库一挂，后端所有接口都会 500。P2 之前，MySQL 脚本和 `server.ps1`
-各管一半，会出现三种坏状态（P2 换 SQLite 之后库由后端自己管；MySQL 已于 2026-09-29 彻底退役，这三条纪律照旧成立）：
-
-| 坏状态 | 之前的表现 | 现在 |
-| --- | --- | --- |
-| 后端在跑、数据库不可用（库文件被删/被占/磁盘满） | `server.ps1 start` 看到后端进程存在就直接返回，什么也不修 | `up` 检测到 `db != ok` 会**自动重启后端** |
-| 库被停掉 / 移走 | 后端还活着，静静地对着一个死库 | 后端启动时**带重试地等库**（20 次 × 1.5s），`status` 那行报的是**端到端健康**（含数据库连通性） |
-| 不知道各自是什么状态 | 没有任何一条命令能一次看清 | `status` 一行一个：数据库（SQLite 文件 + 大小）/ 后端 / App |
-
-后端启动时不再 fail-fast，而是**带重试地等数据库**，
-所以「库比后端晚几秒就绪」不会让后端直接退出；库被中途换掉后 Hikari 连接池会**自动恢复**，
-后端进程不需要重启。
-
----
+| `scripts\e2e-pair-test.ps1` | **配对闸门 + 密钥下行端到端自测**（打的是 **Rust 后端**；不需要真手机 —— 用"假装是手机"的 HTTP 客户端走完 举手 → 6 位码 → 兑码 → 令牌可用 → 授权后下行密钥 → 吊销 → 轮换，另含"闸门默认关着"的反向回归） |
+| `scripts\e2e-credential-test.ps1` | **托管凭据双端互操作自测**（Kotlin ⇄ Rust 写同一份 DPAPI 文件，判据是"一端加密文另一端解得开"；Kotlin 那半可选，起不来会**大声报跳过**） |
+| `scripts\e2e-inpaint-test.ps1`（2026-09-26） | **图像编辑的活实例端到端**：取一张真底图 → 造遮罩 → 提交**项目自带**的 inpaint 工作流 → 取产物 → **量化验收**：遮罩内平均像素差要大、遮罩外要小（实测 0.73/255）。`-Model anima\|krea2`、`-Region x,y,w,h`、`-Feather`、`-Prompt`。⚠ 它只读画廊（底图是拷出去的），产物落在 ComfyUI 的 output；**它验的是工作流本身**（自己造遮罩、自己 POST），**不经过 AI 与工具层** |
+| `scripts\e2e-image-edit-test.ps1`（2026-09-26） | **AI 图像编辑端到端（活实例）**：让假网关只凭工具描述走完 **投放 → 遮罩 → 提交**（每轮过审批闸门），再用像素差验收"该换的换了、该保的没动"。`-TwoStage` 先跑 **t2i 生成人物**再进第二阶段**贴人**（贴人物图**只有 matte 一条路**）；`-Cfg` / `-PlaceScale` / `-PlaceX` / `-PlaceY` / `-Seed`（做单变量对照必须钉 seed）。额外盯三件只有端到端才抓得住的事：**投放写进去的就是实例真正在读的 input 目录**、**投放的文件名能直接喂给下一件工具**、**`appliedOverrides` 里真的出现了那几个键**。**"人变糊"那把尺子**：`scripts\e2e\sharpness.py`（人物内部拉普拉斯方差），给 `-SharpnessBaseline` 就断言"内部锐度不低于基线的 80%"。⚠ 需要真 ComfyUI 在跑（会真花显卡时间） |
+| `scripts\e2e-recipe-test.ps1`（2026-09-26） | **工作流配方端到端**（**Rust**，39 项，不花钱不出网）：学一份 API 格式工作流 → 幂等 → 从库里提示词学 → 界面格式（连不上要如实报 `COMFY_UNREACHABLE`）→ 列表 / 详情 → **绑定**（四档结论 + "非 exact 一个键都不许写"）→ 四条错误分支 → 删除。**它自带三条防线**：后端只认 Rust（找不到就 exit 2，**不回退 Kotlin**）、产物比源码旧就 exit 2（判据与 `backend.ps1` 共用 `Get-RustBuildFreshness`）、起停都按进程**树**且**绝不写 `.run\api.json`** |
+| `scripts\install-comfy-node.ps1`（**2026-09-30 已删**） | 原来用来把捕获节点装进 ComfyUI。要装的话：把 `comfyui\comfyhub_capture\` 拷进 `<ComfyUI>\custom_nodes\` 再重启 ComfyUI（见 [6.4](#64-三种捕获方式怎么选)） |
+| `scripts\copy-review.ps1`（**2026-09-30 已删**） | 原来是个独立的文案审校小工具。需要时从 git 历史里翻（`git log -- scripts/copy-review.ps1`） |
+| `scripts\ensure-runtime.ps1` / `runtime-deps.ps1`（**2026-09-30 已删**） | 原来负责"运行时自动补齐 + 体检"（Java / MySQL / VC++）。这三样现在**一样都不需要**：后端是静态链接的 Rust 单文件 exe，数据库是 SQLite 单文件 |
 
 ## 6. ComfyUI 自动捕获
 
@@ -407,7 +409,7 @@ pwsh -File scripts\comfyhub.ps1 down          # 全停（App → 后端）
 | 方式 | 怎么开 | 延迟 | 适合 |
 | --- | --- | --- | --- |
 | **后端轮询**（默认） | 什么都不用做，后端启动就在跑 | 默认 4 秒 | 绝大多数情况；ComfyUI 关掉再开也不影响 |
-| **自定义节点推送** | `pwsh -File scripts\install-comfy-node.ps1` 后重启 ComfyUI | 立刻 | 想一点延迟都没有；或 ComfyUI 卡住时也要留下记录 |
+| **自定义节点推送** | 把 `comfyui\comfyhub_capture\` 拷进 `<ComfyUI>\custom_nodes\` 后重启 ComfyUI（`install-comfy-node.ps1` 已于 2026-09-30 删除） | 立刻 | 想一点延迟都没有；或 ComfyUI 卡住时也要留下记录 |
 | **目录导入** | 设置页 →「导入已有产物…」选 output 目录 | 手动 | 补录 ComfyHub 装好之前生成的老图 |
 
 三种方式共用同一套幂等键（`prompt_id` + 文件 SHA-256），所以**可以同时开着**，不会重复入库。
@@ -487,7 +489,7 @@ pwsh -File scripts\e2e-capture-test.ps1
 
 - **为什么不改你的工作流**：捕获走的是 ComfyUI 自己的 `/history`，它本来就保存了 API 参数、`extra_pnginfo` 工作流和输出文件名。
   轮询这条路对 ComfyUI 是**只读**的，不装节点、不改图、不影响出图。
-- **为什么工作流缺失时退回存 API 节点图**：agent / 脚本（例如 `scripts\anima-gen.ps1`）是直接 POST `/prompt` 的，
+- **为什么工作流缺失时退回存 API 节点图**：外部 agent / 脚本是直接 POST `/prompt` 的，
   它们从来没给过 ComfyUI 界面格式工作流，`/history` 里也就没有；但那份 API 节点图就是"当时到底跑了什么"的完整记录，
   ComfyUI 前端本来就能加载 API 格式 JSON（`loadApiJson`）。所以宁可存下来并在查看器里注明格式，也不要显示"没有工作流"。
 - **为什么同时存两份 JSON**：API 图（`extra_params` 里那份）是"当时到底用什么参数跑的"，
@@ -502,7 +504,7 @@ pwsh -File scripts\e2e-capture-test.ps1
 
 ## 7. REST API
 
-后端默认 `http://127.0.0.1:<自动端口>`（真实端口见 `.run\api.json` 或 `comfyhub.ps1 status`），
+后端默认 `http://127.0.0.1:<自动端口>`（真实端口见 `.run\api.json` 或 `scripts\backend.ps1 status`），
 全部返回 JSON（UTF-8）。下面例子里的 `8080` 请替换成当前端口；想固定端口就用 `-Port` / `COMFYHUB_PORT`。
 
 > 默认**只监听回环地址**：AI 接口会拿着用户的 API Key 代用户调用上游并产生费用，
@@ -600,8 +602,29 @@ pwsh -File scripts\e2e-capture-test.ps1
 | --- | --- |
 | `openai-completions` | ✅ 文本流 + 多轮历史 + 思考强度（OpenAI / DeepSeek / Moonshot / vLLM / LM Studio / Ollama 的 OpenAI 端点等）+ **图片内联**（`content` 变成有序块数组，`image_url` 用 `data:` URL） |
 | `anthropic-messages` | ✅ 文本流（system 顶层、`max_tokens`、`content_block_delta`）+ 思考强度（`thinking.budget_tokens`）+ **图片内联**（`{type:"image",source:{type:"base64",…}}`，图在前文在后） |
-| `openai-responses` | ✅ 文本流（`instructions` + `input[].content[]`、`store:false`）+ 思考强度（`reasoning.effort`）+ **图片内联**（`input_image` + `data:` URL）；端点 `{base}/responses`。**尚未用真实 API Key 实测**；本地假网关的端到端用例见 `AuthAndModelsUrlTest` |
+| `openai-responses` | ✅ 文本流（`instructions` + `input[].content[]`、`store:false`）+ 思考强度（`reasoning.effort`）+ **图片内联**（`input_image` + `data:` URL）+ **思考回传**（历史轮次的思维链按轮的 `reasoning` 项发回去，见下） ；端点 `{base}/responses`。**尚未用真实 API Key 实测**；本地假网关的端到端用例见 `AuthAndModelsUrlTest` |
 | 视频 / 音频 / 文档附件 | ⛔ 适配器尚未实现 → 预检直接阻断（不是静默丢弃，也不偷偷抽帧降级） |
+
+**思考模式下必须把思维链回传（`openai-responses`，2026-10 修的真实 400）**：
+DeepSeek 那家的 Responses API 是**无状态**的，思考模式下"带 `tools` 的请求"要求后续每一次请求
+都把历史轮次的思维链**完整回传**，否则直接
+`400 The reasoning_text in the thinking mode must be passed back to the API.`
+（[官方指南](https://api-docs.deepseek.com/zh-cn/guides/responses_api)：输入 item 里的 `reasoning`
+明文 `content` 会被归并进相邻的 assistant 消息 —— `summary` / `encrypted_content` 它不支持）。
+实现分三处，缺一条就复发：
+
+1. 请求体里，助手轮的 **`reasoning` 项排在同轮的 `message` / `function_call` 之前**
+   （`content: [{type:"reasoning_text", text:…}]`）—— 顺序错了会被当成另一个 assistant 轮；
+2. **按轮回传**，不是把整条回复的思考重复挂到每一轮上：执行器在每次工具往返时把这一轮的
+   思考"封段"（`Sink::seal_reasoning`），与正文封段同一时点；
+3. 历史里的思考段（`reasoning` 块）**进 `ChatTurn::reasoning`、不进正文** ——
+   正文里混进模型自己的碎片，它会以为那是自己说过的话。
+   ⚠ 这条是**逐协议**的：`openai-completions` / `anthropic-messages` 的适配器
+   **一个字节都不发**（它们的方言要不要回传是另一件事，没实测过就不许顺手加）。
+   防线：`protocol::tests::responses_reasoning_round_trip`、
+   `executor::tests::sink_seals_reasoning_per_round`、`history_keeps_reasoning_apart_from_the_text`，
+   以及端到端那条（假网关**第 2 轮起看不见 `reasoning` 项就照上游原话回 400**）：
+   `api_test::responses_run_echoes_each_round_reasoning_or_the_upstream_400s`。
 
 **附件（M3 / AIH-027 ~ AIH-031）**：聊天框左边的回形针选文件 → **先上传到后端**（类型只认签名）
 → 托盘里**图片显示缩略图、视频显示预览帧**（同一张 `/thumb` 接口：图片走 JPEG 缩略图 ——
@@ -676,26 +699,26 @@ DPAPI 不可用时写入直接失败，**不会退化成明文落盘**（AIH-012
 M4 之后请求体**真的会带 `tools`**：如果网关不认这个字段而直接 400，本次 Run 会**自动退回纯文本模式**
 重试一次，并在回复里如实写明"上游不接受工具参数"（而不是让用户以为模型坏了）。
 
-**内置模型目录：`%USERPROFILE%\.dsh\settings.yaml` 的内容已经抄进我们自己的项目**
-（用户要求：不能依赖"装了我们项目的人也装了 DSH"）。实现是三段：
+**模型能力：预填来源是 [models.dev](https://models.dev) 的公开数据集，不是内置目录**
+（2026-10 用户要求："模型能力不再依赖内置目录，而是拉取 models.dev 的模型"）。合并次序是
 
-1. `scripts\gen-builtin-catalog.ps1`（开发期工具）把那份 YAML 抄成
-   `server\src\main\resources\ai\builtin-catalog.json` —— 现在这份副本是 **1 个 provider
-   （`command-code-goat`，openai-completions）+ 69 个模型**，逐条带 `contextWindow` / 输入模态 /
-   思考档位，生成的 JSON 与手抄版本**逐字节一致**（sha256 相同）；
-2. 后端启动时 `AiSeeder` 把这份**冻结副本**（读 classpath，**不读 YAML**）登记进数据库：
-   provider 不存在就整套建好；已经存在就**只补库里缺的模型**，绝不覆盖用户改过的行
-   （能力声明与内置目录不一致的会记日志提示，可在界面上重新对齐）；
-3. `ModelCapabilityCatalog`（那张"按名字前缀猜能力"的建议表）继续用于**模型发现时的预填**，
-   两者不冲突：一个是"目录里真的有哪些模型"，一个是"接口没说时怎么预填能力"。
+```
+手工目录(custom.json) > 在线目录(models.dev) > 内置兜底规则 > 接口自己声明的永远优先
+```
 
-内置目录只是**预勾选建议**，可能过期；没命中的模型**绝不会按名字猜图片能力与思考支持**。
-"获取可用模型"里每个候选都能展开改模态再点加入。
-目前这张表覆盖了 DSH 里登记的那批常用模型（Claude 4.6/5、GPT-5.x、DeepSeek V4.x、
-Kimi K2.5~K3、GLM-5.x、MiniMax M2/M3、Qwen3.6~3.8、Gemini 3.x、Grok 4.5/4.6、Muse Spark、
-MiMo、Step、Hy、Inkling、LongCat、Nemotron 等），连**同系列里的视觉变体**
-（`deepseek-v4-flash-vision-exp` 有图、`deepseek-v4-pro` 没有；`glm-5.3` 有图、`glm-5.2` 没有）
-也分开登记了。
+`POST /api/ai/capabilities/refresh` 拉 `https://models.dev/api.json` → 规范化成覆盖层写
+`<storage>\ai\capabilities\remote.json`（不重启、不发版）；失败**不抛错、旧目录原样保留**，
+原因放在返回体的 `lastMessage` 里如实回给界面。`COMFYHUB_NO_DOWNLOAD=1` 时明确说"已关闭在线更新"。
+界面上的入口是「设置 → AI 模型与凭据 → 选中某条 Provider → 模型能力目录」（**嵌在那一条的详情里、
+默认折叠**，不再占页顶半屏）。
+
+**内置模型目录那张卡已经删掉**（2026-10）：它是 `%USERPROFILE%\.dsh\settings.yaml` 的冻结副本
+（`server-rs\assets\ai\builtin-catalog.json`），而运行期不许依赖 `.dsh` ——
+装我们项目的人可能根本没装 DSH。后端 `server-rs\src\builtin.rs` 与 `/api/ai/builtin/{status,sync}`
+两个端点还在，但界面上**没有任何入口**去调它们（`AiApiClient` 里那两条方法一并删了）。
+留在链路最末的那层"内置规则"是后端 `capability_catalog.rs` 里的一小张兜底推断表，
+不是用户要维护的目录；没命中的模型**绝不会按名字猜图片能力与思考支持**。
+「获取可用模型」里每个候选都能展开改模态再点加入。
 
 **混合协议网关**：同一条 Base URL 上，`claude-*` 走 `/messages`、其它模型走 `/chat/completions`
 的网关很常见（例如 `api.commandcode.ai`）。因为一条 Provider 固定一种协议，
@@ -712,10 +735,20 @@ MiMo、Step、Hy、Inkling、LongCat、Nemotron 等），连**同系列里的视
 （鉴权已经过了，只是这份端点不提供模型列表，手工添加模型即可），只有 401/403 才是真正的密钥问题
 （此时不再试第二个地址，避免把"Key 不对"掩盖成"地址不对"）。
 
-**新建 Provider 时的凭据引用名由程序自动生成**（它就是 API Key 的存放名，不能空着）：
-默认值 = **Provider ID 全大写、`-` 换成 `_`、末尾加 `_API_KEY`**（`my-gateway` → `MY_GATEWAY_API_KEY`），
-跟着 ID 实时变；只有用户**主动改过**它之后才停止同步；界面上标成「可选」，留空提交也会自动补上默认值。
-唯一要手填的情况是 ID 以数字开头（推出来的名字必须以字母开头）。
+**新建 Provider 的表单只有四栏**（2026-10 用户要求精简）：Provider ID、显示名、API 协议、Base URL，
+外加一栏可选的 **API Key**（填了就跟着一起保存，留空就先建好、之后在详情里补）。
+**端点信任级别与凭据引用名都不再问用户**，两项都由软件自己决定：
+
+* **信任级别**由后端按 Base URL 推断（`EndpointTrust.infer`：本机 → `loopback`、
+  内网 → `private-network`、其余 → `public` 且必须 https）。界面上不再有下拉框 ——
+  它以前默认就是"自动"，而"默认仅本机"那次把公网地址挡掉、错误还看不见（用户 bug）。
+  编辑时桌面那条 PUT **刻意不带这个键**，让后端按**新的**地址重新推断：
+  否则"把一条公网 Provider 改成本机"会带着旧的 `public` 档去校验、当场被拒，
+  而界面上已经没有地方能改它了。
+* **凭据引用名**（API Key 的存放名）由 Provider ID 推出来：全大写、`-` 换成 `_`、末尾加 `_API_KEY`
+  （`my-gateway` → `MY_GATEWAY_API_KEY`）。引用名必须以字母开头，所以 ID 以数字开头时前缀一个 `P`
+  （`2fast` → `P2FAST_API_KEY`）—— 以前这种情况要用户手填，现在也由程序兜住了。
+  **编辑时沿用原来的引用名**：跟着 ID 重推等于换掉钥匙槽位，用户已存的密钥会当场失效。
 
 ### 提示词
 
@@ -823,7 +856,7 @@ P2 起库是 **SQLite 单文件**（放在哪见 8.1），下表的表结构对�
 
 ```powershell
 $env:COMFYHUB_JDBC_URL = 'jdbc:sqlite:D:/comfyhub-data/comfyhub.db'
-pwsh -File scripts\comfyhub.ps1 restart     # 换库后重启后端即可（目录不存在时后端会自己建）
+pwsh -File scripts\backend.ps1 restart     # 换库后重启后端即可（目录不存在时后端会自己建）
 ```
 
 > 库结构不会被"重新初始化"覆盖：`Migrate.kt` 是**收敛式**迁移（`CREATE TABLE IF NOT EXISTS` +
@@ -857,101 +890,96 @@ $env:COMFYHUB_COMFY_OUTPUT='D:\Comfy-Desktop\ComfyUI-Shared\output'
 
 ## 9. 一键自动构建任务
 
-注册了一个 Windows 任务计划程序任务 **`ComfyHub-AutoRun`**（**仅按需触发**，没有定时器）：
-运行 `scripts\autorun-app.ps1`，做「`comfyhub.ps1 up` → `flutter pub get` → `flutter analyze`
-→ `flutter build windows` → 启动 `viewer.exe`」，全过程写入 `.run\autorun.log`。
-
-```powershell
-# 需要时手动触发一次
-Start-ScheduledTask -TaskName 'ComfyHub-AutoRun'
-Get-Content .run\autorun.log -Tail 60
-
-# 查看任务
-Get-ScheduledTask -TaskName 'ComfyHub-AutoRun' | Format-List
-
-# 不再需要时删除
-Unregister-ScheduledTask -TaskName 'ComfyHub-AutoRun' -Confirm:$false
-```
-
-> 提示：如果想让电脑每天 12:00 自动把 App 拉起来，可以给它加一个定时触发器：
+> **2026-09-30：`scripts\autorun-app.ps1` 已删**（它是"起服务 → 分析 → 构建 → 启动 App"的一键脚本）。
+> 那件事现在拆成两条更短的路，**不需要任何脚本**：
+>
+> * **要一份正式产物** → `flutter build windows --release`
+>   （构建时 CMake 会把 Rust 后端一起 `cargo build --release` 并装进 `backend\`，见 9.2）；
+> * **只要跑起来看** → 双击 `build\windows\x64\runner\Release\viewer.exe`
+>   （App 自己会把后端拉起来；开发时用 `scripts\dev-app.ps1`）。
+>
+> 如果你以前注册过那个计划任务，删掉它即可：
+>
 > ```powershell
-> $t = New-ScheduledTaskTrigger -Daily -At 12:00
-> Set-ScheduledTask -TaskName 'ComfyHub-AutoRun' -Trigger $t
+> Unregister-ScheduledTask -TaskName 'ComfyHub-AutoRun' -Confirm:$false
 > ```
 
 ### 9.1 只改前端时用 debug 版热重载（省构建时间）
 
-`autorun-app.ps1` 走的是 `flutter build windows`（**Release 完整构建，几分钟**）。
+`flutter build windows --release` 是**完整构建，几分钟**（它还会顺带 `cargo build --release`）。
 只改 `lib/` 下的 Dart 前端代码时不要每次都走它 —— 用 debug 版跑一次，之后按 `r` 热重载：
 
 ```powershell
 pwsh -File scripts\dev-app.ps1
-# 等价于：确保后端在跑（数据库是 SQLite 文件，不用起 MySQL）→ flutter run -d windows --debug
+# 做两件事：① 后端二进制不存在/比源码旧时先 cargo build --release；
+#          ② flutter run -d windows --debug —— 后端由 App 自己起
 # 跑起来之后在终端里：r 热重载（保留状态） / R 热重启 / q 退出
 ```
 
 | 改了什么 | 用什么 | 大概多久 |
 | --- | --- | --- |
 | `lib/` 里的 Dart 代码 | `scripts\dev-app.ps1` → 之后按 `r` | 首次 30~60s，热重载 1~2s |
-| `pubspec.yaml` 依赖 / `windows/` 原生代码 | `scripts\dev-app.ps1`（会重新编译）/ `autorun-app.ps1` | 分钟级 |
-| 要出正式产物 / 交给别人用 | `scripts\pack-release.ps1`（Release + Rust 后端装配成一个目录） | 几分钟 |
+| `server-rs/` 里的 Rust 代码 | `pwsh -File scripts\backend.ps1 build`（或 `cargo build --release`），然后重开 App | 增量几秒～首次几分钟 |
+| `pubspec.yaml` 依赖 / `windows/` 原生代码 | `scripts\dev-app.ps1`（会重新编译） | 分钟级 |
+| 要出正式产物 / 交给别人用 | `flutter build windows --release`（+ `scripts\pack-release.ps1 -OutDir` 另存） | 几分钟 |
 
-- debug 产物在 `build\windows\...\runner\Debug\`，Release 在 `...\Release\`，两者互不影响；
-  脚本启动 App 时**优先挑 Release**，所以做过 debug 调试也不会误启动一个 debug 版。
-- 后端不用管：App 启动时自己会拉起（见第 5 节），`dev-app.ps1` 也会先探一次。
+- debug 产物在 `build\windows\...\runner\Debug\`，Release 在 `...\Release\`，两者互不影响。
+  **debug 版不装 `backend\`**：它用源码树里 `server-rs\target\{release,debug}\` 那份
+  （所以改完 Rust 不用重建 App，编一下后端、重开 App 就行）。
+- 后端不用管：App 启动时自己会拉起（见第 5 节）。
 
-### 9.2 出发布包：`pack-release.ps1`
+### 9.2 出正式产物：`flutter build windows --release`
 
-`flutter build windows --release` 的产物（`build\windows\x64\runner\Release\`）**只有一个 App**，
-里面没有后端、没有数据库、没有 Java 运行时 —— 直接把这个目录拷给别人跑不起来：
-
-- Kotlin 后端在 `server\build\install\` 下，那是 Gradle 的**构建中间产物**，不会跟着 Release 目录走；
-- MySQL 的 `mysqld.exe` 以前只在 `D:\tools\mysql\...` 这种**本机绝对路径**下找，换台机器直接崩（**该条已随 2026-09-29 MySQL 退役作废**，仅存档）；
-- 后端是 JVM 程序，不能假设目标机器装了 JDK。
-
-所以「交给别人用」要走 `pack-release.ps1`。它按 `packaging\manifest.json`（**软件打包清单**）
-把这几样装配到**同一个目录**，而且**默认就地装配** —— 装完 `build\windows\x64\runner\Release\`
-本身就是完整可运行的发布包，直接双击里面的 `viewer.exe` 就能用：
+**2026-09-30 起后端由 release 构建自己装进去**（`windows\CMakeLists.txt` + `windows\cmake\bundle_backend.cmake`）：
 
 ```powershell
-pwsh -File scripts\pack-release.ps1              # 就地装配进 build\windows\x64\runner\Release\
+flutter build windows --release
+# 构建最后一步会：
+#   ① cargo build --release（后端编到最新）
+#   ② 把 exe 装成 build\windows\x64\runner\Release\backend\comfyhub-server-rs.exe
+#   ③ 顺带装 scripts\video-poster.ps1、db\schema.sqlite.sql、skills\builtin\
+#   ④ 把 viewer.exe 与 backend\comfyhub-server-rs.exe 的完整性标签设回 Medium（见 9.3）
+```
+
+于是那个目录**本身就是完整可运行的发布包**，双击 `viewer.exe` 就能用（App 自己起后端）。
+想再校验一遍 / 另存一份干净副本（比如发 zip）：
+
+```powershell
+pwsh -File scripts\pack-release.ps1              # 就地装配（校验关键文件 + 写 BUILD-INFO.txt）
 pwsh -File scripts\pack-release.ps1 -Zip         # 顺带压成 build\windows\x64\runner\Release.zip
 pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub   # 另存一份干净的独立副本
 ```
 
-> ⚠ **`build\` 是易失目录**：`flutter clean` 或重新构建会把它整个清空，后端 / JRE
-> 会一起没（那时那个目录又变回"只有 App"）。清过之后重新跑一次 `pack-release.ps1` 即可。
-> 要长期留存的副本，用 `-OutDir` 放到 `build\` 外面。
+> ⚠ **`build\` 是易失目录**：`flutter clean` 或重新构建会把它整个清空，`backend\` 会一起没
+> （那时那个目录又变回"只有 App"）。清过之后重新 `flutter build windows --release` 即可。
+> 要长期留存的副本，用 `-OutDir` 放到 `build\` 外面 —— 那也是**绕开工作区写限制**的正解（见 9.3）。
 
 | 清单里的件 | 发布包里的位置 | 说明 |
 | --- | --- | --- |
-| Flutter App | `<根>\viewer.exe` + `data\` | 必须铺在**根目录**：App 从 exe 所在目录往上找 `scripts\comfyhub.ps1` 来认根目录（就地装配时它本来就在，跳过拷贝） |
-| Kotlin 后端 | `<根>\server\` | `gradle installDist` 的 `bin\` + `lib\`（入口 `bin\comfy-hub-server.bat`） |
-| Java 运行时 | `<根>\jre\` | 优先 `jlink` 出精简运行时；本机 JDK 没有 `jmods`（Android Studio 的 JBR 就没有）就整份拷；本机连 JDK 都没有就自动下载一份 |
-| 生命周期脚本 | `<根>\scripts\` | **整个目录**都要：`comfyhub.ps1` 依赖 `server.ps1` / `silent-process.ps1` / `watch-owner.ps1` / `runtime-deps.ps1` |
-| DDL | `<根>\db\` | `schema.sqlite.sql` 是**现在的真源**（后端从 jar 里执行同名副本，这里这份供人看 / 手工建库） |
+| Flutter App | `<根>\viewer.exe` + `data\` | 必须铺在**根目录**：`viewer.exe` 所在目录就是运行根目录（`backend\` 与它同级） |
+| Rust 后端 | `<根>\backend\comfyhub-server-rs.exe` | **App 自己的资产**：App 直启它（`lib\core\backend_paths.dart` 的最高优先候选）；静态链接，不需要 JVM |
+| 脚本 | `<根>\scripts\` | 构建脚本 + 必要脚本 + **`video-poster.ps1`（后端运行期依赖）** |
+| DDL | `<根>\db\` | `schema.sqlite.sql` 是**现在的真源**（后端从二进制里执行同名副本，这里这份供人看 / 手工建库） |
+| Skills | `<根>\skills\builtin\` | 内置 skill（后端只读它） |
+| 清单 | `<根>\packaging\manifest.json` | 拿到包的人能一眼看出里面装了什么 |
 
-> **P2 起发布包不再携带便携版 MySQL**（少了约 300MB，也不需要它依赖的 VC++ 运行时的硬要求）：
+> **P2 起发布包不再携带便携版 MySQL**（少了约 300MB，也不再需要它依赖的 VC++ 运行时）：
 > 数据库是 SQLite，驱动自带引擎。**2026-09-29 起 MySQL 彻底退役** —— 连"把老库数据搬进 SQLite"
 > 的一次性搬迁通道也一并删除，包里与脚本里都不再有任何 MySQL / VC++ 运行时的影子。
+> **P4 起不携带 JRE**：后端是 Rust 单文件 exe。
 
-> `-Clean` 只清**装配进去的东西**（`server\` / `jre\` / `scripts\` / `db\` / `comfyui\` /
+> `-Clean` 只清**装配进去的东西**（`backend\` / `scripts\` / `db\` / `comfyui\` / `skills\` /
 > `packaging\` / `BUILD-INFO.txt`），**不会**删 Flutter 自己的 `viewer.exe`，也**不会**动运行期数据
 > （`.db\` 库、`storage\` 产物、`.run\` 日志）—— 就地装配时那是必须的，否则一 `clean` 就把 App 弄没了。
 
-#### 运行时依赖：发布包带不走的那几样
-
-打包只把 **Java 运行时**装进了包里，其余得目标机器自己装 ——
-缺了服务起不来，而且报错往往没头没尾（`pwsh 不是内部或外部命令`）。
-`scripts\comfyhub.ps1 doctor` 会把它们逐个报出来；`up` 失败时也会自动提示缺哪个、怎么装
-（缺的都在 `packaging\manifest.json` 的 `runtimeRequirements` 里登记；MySQL 与 VC++ 两条已于
-2026-09-29 删除，现在标 `required=false` 的只对回退旧 Kotlin 后端有意义）。
+#### 运行时依赖：现在只剩 Windows 本身
 
 | 依赖 | 谁需要它 | 随包携带？ |
 | --- | --- | --- |
-| **PowerShell 7 (`pwsh`)** | App 用它执行 `scripts\*.ps1`，脚本之间也**互相调 `pwsh`** | ❌ 要装：`winget install --id Microsoft.PowerShell` |
-| Java 21 运行时 | Kotlin 后端（JVM） | ✅ `<根>\jre`；**机器上已有可用 Java 就直接用**（`JAVA_HOME` / 常见 JDK 安装位置 / PATH），真的没有才自动下载（见下） |
-| Windows 10 / 11 x64 | 桌面端 + 脚本（WMI / CIM） | — |
+| Windows 10 / 11 x64 | 桌面端（后端 exe 的 CRT 是静态链接的，只用系统自带的 Universal CRT） | — |
+| **PowerShell 7 (`pwsh`)** | **只有"抽视频封面"那一条**（`scripts\video-poster.ps1`，后端起它）。**App 与后端启动完全不需要它** | ❌ 可选能力：缺了 `/api/media/{id}/poster` 回 204（播放器退化成转圈），其余功能不受影响 |
+| Java 21 运行时 | **不再需要**（Kotlin 后端已退役） | ❌ |
+| MCP 运行时（Python） | AI 的 ComfyUI 工具（可选能力，见下） | ❌ 按需装配 |
 
 #### 可选能力：MCP 运行时（`mcp-runtime.ps1`）
 
@@ -983,7 +1011,7 @@ pwsh -File scripts\mcp-runtime.ps1 install   # 装配（机器上有 Python 就�
 pwsh -File scripts\mcp-runtime.ps1 install -ComfyHome D:\ComfyUI   # 手工指定 ComfyUI 目录
 ```
 
-- **它是"可选能力"，装不上不拦启动**：`comfyhub.ps1 up` 会顺带补（已就绪时只是几次文件检查，不联网），
+- **它是"可选能力"，装不上不拦启动**（已就绪时只是几次文件检查，不联网；装它要显式跑一次 `mcp-runtime.ps1 install`），
   失败只提示一句，App 与后端照常起来 —— 与 Java 那种"缺了根本起不来"完全不同。
   `COMFYHUB_NO_MCP=1` 整个关掉；`COMFYHUB_NO_DOWNLOAD=1` 时只提示不自动装。
 - **pip 源按顺序试**：阿里云 → 清华 TUNA → pypi.org。
@@ -996,53 +1024,80 @@ pwsh -File scripts\mcp-runtime.ps1 install -ComfyHome D:\ComfyUI   # 手工指�
   `<应用目录>\ComfyUI-Installs\<实例>\ComfyUI`（本机实测 `D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI`），
   只在顶层翻一层永远找不到 —— `comfy-path.ps1` 与 `ComfyLocator.kt` **两边都补了**（判据必须一致）。
 
-#### 运行时能自动补齐：`ensure-runtime.ps1`
+#### 运行时补齐：已经不需要了（2026-09-30）
 
-```powershell
-pwsh -File scripts\ensure-runtime.ps1            # 检测 + 缺什么装什么
-pwsh -File scripts\ensure-runtime.ps1 -CheckOnly # 只看不装
-pwsh -File scripts\ensure-runtime.ps1 -JavaOnly  # 只保证 Java
-```
+以前这一节讲 `ensure-runtime.ps1` 怎么自动装 Java / pwsh / VC++。现在**三样都不需要**：
 
-- **Java 全自动**：没有（或版本低于 21）就下载一份便携版塞进 `<根>\jre` —— **免安装、免管理员**，
-  带 sha256 校验。下载源按顺序试：Adoptium 官方（Temurin JRE，约 47MB，有官方校验值）→
-  华为云 OpenJDK 21.0.2（国内可达性好，约 190MB）→ Adoptium 重定向 → Microsoft OpenJDK。
-  每个源下载前先做一次 1KB 探测，连不上就立刻换下一个，不会卡在超时上。
-- **`comfyhub.ps1 up` 会顺带做这件事**：后端是 JVM 程序，缺 Java 时 App 启动会先自动补上
-  （已经有 ≥21 的 java 时只是几次文件检查，不联网）。设 `COMFYHUB_NO_DOWNLOAD=1` 可关闭。
-- **pwsh 是系统级安装**，脚本用 `winget` 自动装；没有 winget 就打印官方下载地址。
-  `up` 阶段**不会**碰它（避免启动时弹 UAC），只用 `ensure-runtime.ps1` 显式跑
-  （或失败提示里给出的命令）来装。（VC++ 体检项已随 2026-09-29 MySQL 退役删除 ——
-  它当初只为 `mysqld.exe` 存在，Rust 后端不引用 `vcruntime140.dll`。）
+| 以前的运行时 | 现在 |
+| --- | --- |
+| Java 21（Kotlin 后端是 JVM 程序） | **不需要** —— 后端是 Rust 单文件 exe（静态链接，只用系统自带的 Universal CRT） |
+| VC++ 运行时（只为 `mysqld.exe`） | **不需要** —— 数据库是 SQLite，引擎编在后端 exe 里 |
+| PowerShell 7（App 用它执行脚本） | **不需要** —— App 直接执行 exe；只有"抽视频封面"那一条可选能力会用到 pwsh |
 
-> **PowerShell 版本是个坑**：Windows 自带的 `powershell.exe` 是 5.1，**不算数** ——
-> `comfyhub.ps1` / `server.ps1` 等脚本之间有多处 `& pwsh -NoProfile -File ...` 互调，
-> 机器上只有 5.1 时这些子调用会失败。App 若只找到 5.1，会在启动页日志里明确告警并给出安装命令。
+所以 `ensure-runtime.ps1` / `runtime-deps.ps1` 已删除；MCP 运行时的装配（唯一还需要下载东西的
+可选能力）留在 `scripts\mcp-runtime.ps1`，见上面那节。
 
 **发布包是便携式的**（免安装、免管理员）：解压出来整个目录就是运行时根目录，可整体搬到任意盘/目录。
 可写数据都落在根目录内，卸载 = 删目录：
 
 | 用途 | 默认位置 | 怎么改 |
 | --- | --- | --- |
-| 数据库 | `<根>\.db\comfyhub.db`（+ 它自己的 `-wal` / `-shm`） | 设 `COMFYHUB_JDBC_URL=jdbc:sqlite:<绝对路径>` 后重启后端；**备份要停掉后端再拷整个 `.db\` 目录** |
-| 生成产物 | `<根>\storage\`（`media\` + `tmp\`） | 后端启动时由 `server.ps1` 显式设成 `COMFYHUB_STORAGE`；要换位置就预先设这个环境变量 |
+| 数据库 | `<根>\.db\comfyhub.db`（+ 它自己的 `-wal` / `-shm`） | 后端 `--db` 参数（App 自己传 `<根>\.db\comfyhub.db`）；**备份要停掉后端再拷整个 `.db\` 目录** |
+| 生成产物 | `<根>\storage\`（`media\` + `tmp\`） | 后端 `--storage` 参数（App 传 `<根>\storage`） |
 | 日志 / PID | `<根>\.run\` | — |
 
 拿到包的人双击 `viewer.exe` 即可：App 会自己把后端拉起来，首次启动会**自己建库**（不留演示数据）。
-命令行等价写法 `pwsh -File scripts\comfyhub.ps1 up -WithApp`；体检 `... doctor`；全停 `... down`。
 
-> 装配完脚本会**自检** `viewer.exe`、`server\bin\comfy-hub-server.bat`、`jre\bin\java.exe`、
-> `db\schema.sqlite.sql` 是否都在，缺任何一个都以退出码 1 结束 ——
-> 不会悄悄给你一个跑不起来的包。同样的说明也写在包里的 `BUILD-INFO.txt`。
+> `pack-release.ps1` 装配完会**自检** `viewer.exe`、`scripts\backend.ps1`、
+> `scripts\video-poster.ps1`、`backend\comfyhub-server-rs.exe`、`db\schema.sqlite.sql`
+> 是否都在，缺任何一个都以退出码 1 结束 —— 不会悄悄给你一个跑不起来的包。
+> 同样的说明也写在包里的 `BUILD-INFO.txt`。
 
-为了让同一个脚本在**源码树**和**发布包**两种布局下都能用，路径解析都做成"两边都认"：
+为了在**源码树**和**发布包**两种布局下都能找到东西，路径解析都做成"两边都认"
+（真源是 `lib\core\backend_paths.dart`，`scripts\backend.ps1` 是它在脚本世界的镜像）：
 
-| 找什么 | 源码树 | 发布包 |
+| 找什么 | 源码树 | 发布包 / Release 产物 |
 | --- | --- | --- |
-| 后端启动脚本 | `server\build\install\comfy-hub-server\bin\` | `<根>\server\bin\`（`server.ps1` 会因此跳过 Gradle 构建） |
-| Java | 本机 JDK 21~23 | `<根>\jre`（`server.ps1` 的 `Resolve-Jdk` 优先用它） |
+| 运行根目录 | 往上找 `server-rs\Cargo.toml`（或 `db\schema.sqlite.sql`） | `viewer.exe` 所在目录本身 |
+| 后端 exe | `<根>\server-rs\target\{release,debug}\comfyhub-server-rs.exe` | `<viewer.exe 同级>\backend\comfyhub-server-rs.exe` |
 | `viewer.exe` | `build\windows\...\runner\Release\` | `<根>\viewer.exe` |
-| 数据库 | `<根>\.db\comfyhub.db`（同一份约定） | `<根>\.db\comfyhub.db` |
+| 数据库 / 产物 / 端口 | `<根>\.db\` / `<根>\storage\` / `<根>\.run\api.json`（同一份约定） | 同一份约定 |
+
+### 9.3 为什么后端会"写不进 ComfyUI 目录" —— 完整性标签（Low IL）
+
+**现象**：`comfy_start` 回 `COMFY_WRITE_BLOCKED`、`comfy_use_media` 回
+`COMFY_INPUT_FAILED … os error 5`、MCP 工具报 `UnexpectedToolError`，都是**同一件事**：
+后端进程写不了自己目录以外的位置。
+
+**真因不是路径、不是目录 ACL、不是用户身份、也不是 Defender**，而是 **Windows 强制完整性控制（MIC）**：
+
+1. 代码沙箱会把**工作区目录树**打上 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)` 标签；
+2. 在工作区里构建出来的 exe **继承了 Low 标签**；
+3. Windows 创建进程时取 **min(父进程令牌, 映像标签)** —— 映像标签是 Low，进程令牌就是 Low；
+4. Low 写不了工作区外的 Medium 对象（默认 `NO_WRITE_UP`）→ 一律 `拒绝访问 (os error 5)`。
+
+由此推出三条**处方**（也就是这个仓库里已经做好的三件事）：
+
+| 处方 | 谁在做 | 说明 |
+| --- | --- | --- |
+| **把映像标签修回 Medium（位置一个字节不动）** | release 构建 `windows\cmake\bundle_backend.cmake`（装完就 `icacls … /setintegritylevel Medium`）；运行时 App 起后端之前再跑一次；`scripts\backend.ps1 start` 也会修 | 实测清掉标签后**立刻哪儿都能写** |
+| **把整套 ComfyHub 挪到工作区外** | `pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub`，然后运行 `D:\dist\ComfyHub\viewer.exe` | 那边的文件没有 Low 标签可继承，**内容照旧全在它自己的文件夹里**（不往 `%LOCALAPPDATA%` 之类散） |
+| **已经有别处的构建产物** | `$env:COMFYHUB_SERVER_EXE = "<那个 exe 的完整路径>"` | 只换后端映像，不重打整包 |
+
+⚠ **两条边界，别指望前面那三条能绕过**：
+
+* **链路上任何一环是 Low，子进程照样掉回 Low**：如果 `viewer.exe` 自己也带着 Low 标签
+  （工作区里构建的产物普遍如此），那 App 就是 Low，它起的后端一定是 Low —— 这时
+  "修标签"那一步**也会失败**（Low 写不了向上的标签），只能走"挪到工作区外"。
+  release 构建会把**两个** exe（`viewer.exe` + `backend\…exe`）都归一，就是为了堵这一条；
+  但**在受限会话里构建时这一步必然失败**（只警告、不中断构建），换个不受限的终端重新构建即可。
+* **"换个终端重起"没用**：决定权在**映像自己的标签**，不在谁拉起它
+  （WMI / 任务计划程序 / Explorer 双击逐条量过都一样）。
+
+**看得见**：后端启动时会自己探一次（写不进就留证 `.run\confinement.json`），
+`GET /api/system/confinement` 把**结论 + 判据**（`serverImage` / `imageInsideProjectRoot` /
+`blockedPaths` / `remedy`）一起交给界面，App 顶部会**常驻一条横幅**。
+排查入口就在那儿，不用猜。
 
 ---
 
@@ -1109,8 +1164,8 @@ App 自己的文案都是中文，但文本框右键的「复制 / 全选 / 剪�
 ```powershell
 $env:PUB_HOSTED_URL='https://pub.dev'
 flutter analyze     # 无任何 error / warning / info
-flutter test        # 178 个用例
-pwsh -File scripts\server.ps1 test   # 后端 325 个用例
+flutter test        # 411 个用例
+cargo test --manifest-path server-rs\Cargo.toml   # 后端（lib 615 例 + 集成用例）
 ```
 
 | 文件 | 覆盖内容 |
@@ -1121,7 +1176,7 @@ pwsh -File scripts\server.ps1 test   # 后端 325 个用例
 | `test/ai_home_test.dart` | **AI 工作台**：宽屏三栏 / 窄屏无侧栏且输入区可用、**冷启动落在新建的会话上**、**输入草稿按会话保存**、**空会话切走时被清掉（聊过的不动）**、**记住上次选的模型**、能力徽标按目录声明显示、附件被准入阻断时给出具体原因并禁用发送按钮、**思考强度只列模型声明过的档位且选中的档位真的随请求发出**、**token 用量与对话汇总（没给 usage 就不显示）** |
 | `test/gallery_paging_test.dart` | **画廊分页**：在最后一页把当前页删空之后要**自动回到最后一页**而不是显示"画廊为空"（越界时多发一次请求）、真的删光才允许空态、正常刷新只发一个请求 |
 | `test/unlinked_prompt_test.dart` | **未关联产物**：没有关联产物的提示词显示「未关联」标记、「未关联产物」筛选走 `hasMedia=0`、一键清除只删未关联的（有关联的一条都不动）、**超过单页 200 条也要全部删掉**（边删边翻页最容易漏） |
-| `test/ai_provider_dialog_test.dart` | **新建 Provider 对话框**：凭据引用名默认 = Provider ID 全大写 + `-`→`_` + 末尾 `_API_KEY` 并跟着 ID 变、手动改过之后不再覆盖、留空也能提交（程序补默认值）、ID 以数字开头推不出合法名字时才要手填 |
+| `test/ai_provider_dialog_test.dart` | **新建 Provider 对话框**：表单里**没有**端点信任级别与凭据引用名（都由软件自动决定）、有 API Key 一栏且填了就单独存一次；请求体里不带 `endpointTrust`、引用名由 ID 推出（数字开头补 `P` 前缀，不再是死角）、密钥不进 provider 行 |
 | `test/workflow_viewer_test.dart` | 工作流查看器：格式化展示 / 204 空状态 / 复制全文 / 错误重试、界面格式与 API 格式的提示语区分，以及两个详情页的接线（按钮只在有工作流时出现） |
 | `test/zoomable_image_test.dart` | **大图查看器**：滚轮缩放（含上下限）、放大后拖动平移、缩略图只在放大后出现且高亮框跟着视野走、点缩略图跳转、适应窗口复位、图片加载失败兜底 |
 | `test/adaptive_layout_test.dart` | **多列布局**：列数规则（宽度 / 550、上限 4 列、异常宽度退回单列）、宽窗口排两列 / 窄窗口退回单列、设置页那种瀑布流把块放进最矮的一列 |
@@ -1133,7 +1188,10 @@ pwsh -File scripts\server.ps1 test   # 后端 325 个用例
 | `test/markdown_test.dart` | **Markdown 渲染**：粗斜体 / 删除线 / 行内代码 / 链接 / 标题 / 列表 / 引用 / 围栏代码块；重点是**流式安全**（未闭合的 `**`、代码围栏按字面量显示，不吞内容）与两个解析陷阱（`snake_case_name` 不算斜体、`3 * 4 = 12` 不算斜体） |
 | `test/ai_model_persistence_repro_test.dart` | **模型目录不丢**：用"PUT 存、GET 读"的有状态假后端，走完「选中 Provider → 添加模型 → 退出页面 → 重新进入 → 再选中」后目录里仍有该模型；另覆盖"父级异步补上目录后详情面板要跟着更新"（`didUpdateWidget`） || `test/localization_test.dart` | App 装的是 `zh_CN` 的 Material 本地化：选择菜单是「复制 / 全选 / 剪切 / 粘贴」而不是 Copy / Select all |
 | `test/comfyui_capture_test.py` | ComfyUI 捕获节点的纯逻辑（payload 组装、类型判定、重试），见 `docs/comfyui-capture.md` |
-| `server/src/test/kotlin/.../GraphParseTest.kt` | **参数解析器的回归测试**：经典 KSampler 图、真实的自定义采样链（MiniMax H3 那种）、空图/坏图、只有 `text_g`/`text_l` 的图。`pwsh -File scripts\server.ps1 test` |
+| `test/backend_paths_test.dart` | **两种运行布局的解析**（`lib\core\backend_paths.dart`，全 App 唯一一份）：根目录判据（源码树 / release 产物）、后端 exe 候选**顺序**（`COMFYHUB_SERVER_EXE` 覆盖 > `backend\` > 旧 `server\` > `target\{release,debug}`）、`.run\api.json` 读不出来时**绝不抛** |
+| `test/backend_launcher_test.dart` | **App 直启后端**（`lib\core\backend_launcher.dart`）：起进程的参数（`--port 0` / `--watch-stdin` / `COMFYHUB_PROJECT_ROOT`、局域网开关）、起之前先 `icacls` 归一完整性标签、后端提前退出时**当场报失败**（不再白等 90 秒）、端口被改写后重新发现、数据库不 ok 时先停旧的再起、退出收尾（kill 自己认领过的、只跑一次、超时不卡关窗、没认领过就不动别人） |
+| `server-rs/tests/watch_stdin_test.rs` | **不留孤儿**：丢掉 App 那侧的 stdin 写端 → 后端自己优雅退出；管道还开着 → 它就不许自己退（防 watchdog 太敏感） |
+| `server-rs/src/*` 里的内联用例 | Rust 侧（`cargo test`，lib 615 例 + 149 例 `api_test` 等集成用例）：从参数解析、工作流转换到工具层与 SSRF 闸门等。其中 `api_test::responses_run_echoes_each_round_reasoning_or_the_upstream_400s` 用假 Responses 网关钉住"思考必须逐轮回传"（看不见 `reasoning` 项就照上游原话回 400）。旧 Kotlin 的 `GraphParseTest.kt` 只作历史参照（`legacy\server\`） |
 | `server/src/test/kotlin/.../HistoryEntryTest.kt` | **`/history` 记录解析的回归测试**：ComfyUI 0.34.2 的六元组、老版本三元组、带界面工作流 / 不带、坏数据不抛异常 —— 钉住"提示词与工作流整条丢失"那个坑 |
 | `server/src/test/kotlin/.../WorkflowConvertTest.kt` | **界面格式 → API 节点图**（用户 bug ③ + 用户建议 ②）：连线还原成 `["上游id", 槽位]`、控件值按声明顺序贴回名字、`control_after_generate` 多占的槽位要跳过、`forceInput` 不算控件、静音 / 旁路 / Reroute / Set-Get 的语义、**`widgets_values_named` 优先且只认声明过的键**、**组节点按 `definitions.subgraphs` 展开**（内部节点换新号、外层控件值填进内部输入、实例输出穿透到真正的产出节点）、**缺口清单**（悬空输入点名 + 空着的连线型输入）、嵌套组节点与未知类的"宁可报错也不猜"。20 例 |
 | `server/src/test/kotlin/.../WorkflowEditTest.kt` | **提交前的改写**：参数覆盖按原类型转换（整数不能变字符串）、路径不存在 / 是连线数组一律报错、**补连线**（`8.vae ← [1, 0]`、上游节点必须真的在图里、值必须是 `[节点, 槽位]`）。13 例 |
@@ -1149,10 +1207,11 @@ pwsh -File scripts\server.ps1 test   # 后端 325 个用例
 | `server/src/test/kotlin/.../AiSeedCatalogTest.kt` + `AiSeederPlanTest.kt` | **内置模型目录**：资源里有 1 provider / 69 模型、逐条对照（含 `off: null` 被丢掉、纯文本条目、`xhigh` 档位）、生成器与手抄版一致；`planSeed` 的"只补缺失 / 不改用户行 / 分歧单独列出 / 用户自加模型永不被删"。27 例 |
 | `test/scroll_perf_test.dart` | **长列表性能**：缩略图解码宽度随格子与 DPR 变化且 ≤512、横竖图不变形、`FilterQuality.low`、`AdaptiveColumnList` 500 条只建 <60 项、单列 0 次固有高度查询、多列仍等高、网格每格有 `RepaintBoundary` 且无 `AutomaticKeepAlive`。8 例 |
 | `test/backend_launcher_test.dart` | **退出收尾**（全假进程，不真起服务）：`release` / `watch` / `unwatch` 的参数向量、没认领过服务就不主动停、`accepted`/失败不抛、`stopServicesOnExit` 关掉时不动作。11 例 |
-| `test/ai_tools_ui_test.dart` | **工具、Skills 与长期记忆的界面**：侧栏渲染实时 Skills 与 DELETE URL、**投放口路径 + 打开/复制 + 重新扫描（且没有「从 DSH 导入」按钮）**、**长期记忆面板（条数/预览）与编辑弹窗（列表视图：搜索过滤 / 单条删 / 勾选批量删 + 整篇编辑）**、工具卡状态与折叠预览、`pending` 时点批准 POST 到正确地址、`accepted=false` 如实告知、思考过程折叠、模型选择器懒构建 + 搜索过滤、权限页 PUT、内置目录卡片"确认前绝不发 sync"、`/` 菜单、**发送被拒（还在生成中）时不吃掉输入框里的字**、**输入法组字期间回车不发送也不清空**、**会话草稿在第一次界面通知之前就作废**，以及流式期间未变消息对象实例唯一（O(n) 热点回归）。19 例 |
+| `test/ai_tools_ui_test.dart` | **工具、Skills 与长期记忆的界面**：侧栏渲染实时 Skills 与 DELETE URL、**投放口路径 + 打开/复制 + 重新扫描（且没有「从 DSH 导入」按钮）**、**长期记忆面板（条数/预览）与编辑弹窗（列表视图：搜索过滤 / 单条删 / 勾选批量删 + 整篇编辑）**、工具卡状态与折叠预览、`pending` 时点批准 POST 到正确地址、`accepted=false` 如实告知、思考过程折叠、模型选择器懒构建 + 搜索过滤、权限页 PUT、**模型能力目录卡嵌在某一条 Provider 的详情里且默认折叠**、「立即更新」打 models.dev、`/` 菜单、**发送被拒（还在生成中）时不吃掉输入框里的字**、**输入法组字期间回车不发送也不清空**、**会话草稿在第一次界面通知之前就作废**，以及流式期间未变消息对象实例唯一（O(n) 热点回归）。19 例 |
 | `test/ai_conversation_lifecycle_test.dart` | **会话生命周期**：已有干净空会话就复用（不再新建）、切页重建不会重复加载/新建、历史遗留的多条空壳只留最新一条、**打了一半的字切走再切回还在**、有草稿的空会话不会被顺手删掉、**发出去的话不会被草稿灌回输入框（用户报的"一条消息复制一遍再发送"）**。6 例 |
 | `test/ai_retry_keep_content_test.dart` | **被 429 / 断流打断之后的内容不丢**（用户 bug，2026-09-19 深夜）：走真实链路"发消息 → 429 打断 → 点重试"，断言失败后正文与 parts（正文 + 工具卡）都在、重试**另起一条**助手气泡且旧气泡原样保留、空壳失败气泡仍然就地复用（不冒多余气泡）。2 例 |
 | `test/model_list_scroll_test.dart` | **「AI 模型与凭据」69 个模型的长列表**：滚动范围（滑块长度）全程稳定、一趟只建视口附近的行、行高是常数、能力编辑弹窗改完点确定写回行并落库、点取消不留痕迹。4 例 |
+| `test/ai_model_picker_test.dart` | **工作台的模型选择器按 Provider 分组**（2026-10）：**来源标注在 padding 外、模型行套在 padding 里**、没配密钥的那条标出来、搜索按组过滤（搜不到的组整组消失）、**点另一条 Provider 的模型会真的把 Provider 也切过去**（用户 bug：新加入的 provider 选不上）、一条 Provider 都没有时说清楚去哪儿建。4 例 |
 | `test/ai_reasoning_default_test.dart` | **思考强度「默认」档**（2026-09-20 由 `ai_thinking_off_test.dart` 改名）：「默认」永远可选且排在第一位（不要求模型声明 `off`）、没声明的思考档位仍然不给选、不支持推理的模型完全不给选、在聊天框选中「默认」后创建 Run 的请求体里**不带** `reasoningEffort`。2 例 |
 | `test/ai_attachment_test.dart` | **附件（M3）的界面**：上传走真文件路径（`runAsync`）且只传一次、图片附件在托盘里显示 `/thumb` 缩略图、视频显示预览帧 + 播放角标、音频/文档落回文件图标、被准入拦下时说明原因并禁用发送、上传失败如实报错且不进托盘、部分成功时逐个列出失败原因、发送时带上 `attachmentIds` 且用户消息气泡里也能看到附件缩略图。5 例 |
 | `server/src/test/kotlin/.../protocol/AttachmentProtocolTest.kt` | **附件内联的协议契约（三家）**：OpenAI 的 `image_url` + `data:` URL（文本在前）、Anthropic 的 `{type:"image",source:{type:"base64"}}`（图在前文在后）、Responses 的 `input_image`；纯文本轮仍是字符串（最广兼容）；视频/音频/文档抛 `UnsupportedContentFailure` 而不是静默丢掉；工具轮与附件轮互不干扰。10 例 |
@@ -1257,7 +1316,7 @@ curl.exe -X POST http://127.0.0.1:8080/api/capture/poll
   `build\windows\…\viewer.exe`、`cargo test` 的测试二进制都是）写工作区外一律 `拒绝访问 (os error 5)`，
   **与目录 ACL、路径配置、用户身份、Defender、哪个终端起的都无关**。表现是 `comfy_use_media` /
   `comfy_make_mask` / `comfy_start` 报"拒绝访问"（投放与遮罩已自动改走 ComfyUI 自己的
-  `/upload/image`，所以多数情况能自愈）；App 顶部会常驻一条横幅说明，`comfyhub.ps1 doctor` 也会报
+  `/upload/image`，所以多数情况能自愈）；App 顶部会常驻一条横幅说明，`GET /api/system/confinement` 会把判据一并给出来（见 9.3）
   「后端受限」。**换终端重起没用**，修法是把整套放到工作区外（发布包，见 9.2）或设
   `$env:COMFYHUB_SERVER_EXE` 指向工作区外的后端 exe。判据与逐条清点见
   [docs/permission-audit.md](docs/permission-audit.md)。

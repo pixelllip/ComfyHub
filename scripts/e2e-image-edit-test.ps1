@@ -35,7 +35,7 @@
     · 投放的文件名要能**直接喂给下一件工具**（`comfy_make_mask(baseFilename=…)`）——
       真实模型就是照工具返回的 filename 写的参数。
 
-  前置条件：`pwsh -File scripts\comfyhub.ps1 up`（后端）+ **ComfyUI 实例在跑**（8188）
+  前置条件：`pwsh -File scripts\backend.ps1 start`（后端）+ **ComfyUI 实例在跑**（8188）
   + 本机有 python。参考照片默认取 `ref_photos\ref_bg_1.jpg`（3072x4096，脚本会缩到长边 1024
   并向下取 16 的倍数 —— 8GB 显存上直接跑 3072x4096 会 OOM）。
   ⚠ 贴人物档要求实例上有抠图模型（`models\rembg\BEN2_Base.pth` / `RMBG-1.4.pth`）；

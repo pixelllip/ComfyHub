@@ -308,11 +308,20 @@ void main() {
   test('桌面实现：六个动作都转发给后端，更新带 revision', () async {
     final seen = <String>[];
     late Map<String, dynamic> lastBody;
+    /// 单独留一份 **provider 的 PUT body**：`lastBody` 最后会被模型目录那条 PUT 覆盖，
+    /// 而这里要看的是 provider 那一份（`endpointTrust` 刻意不带）。
+    Map<String, dynamic>? providerPut;
     final api = AiApiClient(
       'http://127.0.0.1:8080',
       client: MockClient((request) async {
         seen.add('${request.method} ${request.url.path}');
-        if (request.body.isNotEmpty) lastBody = jsonDecode(request.body) as Map<String, dynamic>;
+        if (request.body.isNotEmpty) {
+          final decoded = jsonDecode(request.body) as Map<String, dynamic>;
+          lastBody = decoded;
+          if (request.method == 'PUT' && request.url.path == '/api/ai/providers/phone-gw') {
+            providerPut = decoded;
+          }
+        }
         final body = request.url.path.endsWith('/models')
             ? [_modelJson()]
             : (request.method == 'GET' && request.url.path == '/api/ai/providers'
@@ -340,6 +349,14 @@ void main() {
       'PUT /api/ai/providers/p/models',
     ]);
     expect(lastBody['models'], isA<List>(), reason: '模型目录是整份替换（PUT body 里是 models 数组）');
+
+    // provider 那一份 PUT：**一个字节的 endpointTrust 都不带**
+    // （2026-10 用户要求：信任档由软件按地址决定）。带了旧档的话，"把公网 Provider 的地址
+    // 改成本机"会拿着 public 去校验，当场被后端拒 —— 而表单里已经没有这一栏可改了。
+    expect(providerPut, isNotNull, reason: '更新必须真的 PUT 出去');
+    expect(providerPut!.containsKey('endpointTrust'), isFalse,
+        reason: '不带信任档 → 后端按这次的新 baseURL 重新推断（`routes::update_provider`）');
+    expect(providerPut!['revision'], 4, reason: '乐观锁那一份照旧要带');
   });
 
   // -------------------------------------------------------------------------

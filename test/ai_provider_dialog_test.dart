@@ -1,8 +1,12 @@
-// 新建 Provider 对话框的回归：
+// 新建 Provider 对话框的回归（2026-10 用户要求改过一版）：
 //
-//   凭据引用名由程序**自动生成**：Provider ID 全大写、`-` 换成 `_`、末尾加 `_API_KEY`
-//   （后端要求环境变量风格）。它跟着 ID 实时变，只有用户主动改过才停。
-//   界面上它是可选项（正常不用手填），提交时若还空着就自动补上。
+//   1. **端点信任级别与凭据引用名都不再是表单项** —— 这两项由软件自动决定：
+//      信任档由后端按 baseURL 推断，引用名由 Provider ID 推出来（`defaultCredentialRef`）；
+//   2. 表单里**多了 API Key 一栏**：填了就跟着一起保存（不用"先建 provider、再进去填一次"）；
+//   3. 推出来的引用名**永远合法**：ID 以数字开头时前缀 `P`（`2fast` → `P2FAST_API_KEY`），
+//      再也不会出现"要用户手填一个引用名"的死角。
+
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,127 +19,178 @@ import 'package:viewer/core/ai_api_client.dart';
 import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/pages/ai_provider_settings_page.dart';
 
-/// 只用来让页面能加载起来；新建对话框本身不发请求。
-MockClient _emptyBackend() => MockClient((request) async {
-      return http.Response(
-        '[]',
-        200,
-        headers: {'content-type': 'application/json; charset=utf-8'},
-      );
-    });
+/// 记录新建 Provider 的请求体 + 写密钥的请求体（两者是**两条**请求：provider 行里没有密钥）。
+class _Recorder {
+  final List<String> providerCreates = [];
+  final List<String> keyPuts = [];
+}
+
+MockClient _backend(_Recorder recorder) {
+  return MockClient((request) async {
+    final path = request.url.path;
+    Object body;
+    if (path == '/api/ai/providers' && request.method == 'POST') {
+      recorder.providerCreates.add(request.body);
+      final sent = jsonDecode(request.body) as Map<String, dynamic>;
+      body = {
+        'id': sent['id'],
+        'displayName': sent['displayName'],
+        'api': sent['api'],
+        'baseURL': sent['baseURL'],
+        'credentialRef': sent['credentialRef'],
+        // 后端在 endpointTrust 缺省时按地址推断（这里模拟它的推断结果）
+        'endpointTrust': 'public',
+        'enabled': true,
+        'revision': 1,
+        'credential': {'configured': false, 'source': 'none', 'writable': true},
+      };
+    } else if (path.endsWith('/credentials')) {
+      if (request.method == 'PUT') recorder.keyPuts.add(request.body);
+      body = {'configured': true, 'source': 'managed', 'writable': true};
+    } else {
+      body = <Object>[];
+    }
+    return http.Response(
+      jsonEncode(body),
+      200,
+      headers: {'content-type': 'application/json; charset=utf-8'},
+    );
+  });
+}
+
+Future<Widget> _page(_Recorder recorder) async {
+  SharedPreferences.setMockInitialValues({});
+  final settings = SettingsStore();
+  await settings.load();
+  return ChangeNotifierProvider<SettingsStore>.value(
+    value: settings,
+    child: MaterialApp(
+      home: AiProviderSettingsPage(
+        api: AiApiClient(settings.baseUrl, client: _backend(recorder)),
+      ),
+    ),
+  );
+}
+
+Finder _field(String label) =>
+    find.ancestor(of: find.text(label), matching: find.byType(TextField));
+
+Future<void> _openDialog(WidgetTester tester, _Recorder recorder) async {
+  tester.view.physicalSize = const Size(1400, 1200);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(await _page(recorder));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('新建 Provider').first);
+  await tester.pumpAndSettle();
+}
 
 void main() {
-  testWidgets('凭据引用名默认 = Provider ID 全大写 + - 换 _ + 末尾 _API_KEY', (tester) async {
-    tester.view.physicalSize = const Size(1400, 1000);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
-
-    SharedPreferences.setMockInitialValues({});
-    final settings = SettingsStore();
-    await settings.load();
-
-    await tester.pumpWidget(
-      ChangeNotifierProvider<SettingsStore>.value(
-        value: settings,
-        child: MaterialApp(
-          home: AiProviderSettingsPage(
-            api: AiApiClient(settings.baseUrl, client: _emptyBackend()),
-          ),
-        ),
-      ),
+  /// 引用名是纯函数推出来的（用户看不见它），两种 ID 都要推得出合法值。
+  test('凭据引用名由 ID 推出，且永远合法（数字开头补前缀）', () {
+    expect(defaultCredentialRef('my-gateway'), 'MY_GATEWAY_API_KEY');
+    expect(defaultCredentialRef('deepseek'), 'DEEPSEEK_API_KEY');
+    expect(
+      defaultCredentialRef('2fast'),
+      'P2FAST_API_KEY',
+      reason: 'ID 可以是 2fast，但引用名必须以字母开头 —— 不许再把这件事推给用户',
     );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('新建 Provider'));
-    await tester.pumpAndSettle();
-
-    final idField = find.ancestor(
-      of: find.text('Provider ID（创建后不可改）'),
-      matching: find.byType(TextField),
-    );
-    final refField = find.ancestor(
-      of: find.text('凭据引用名（可选）'),
-      matching: find.byType(TextField),
-    );
-    expect(refField, findsOneWidget, reason: '它是可选项，不该写成必填');
-
-    await tester.enterText(idField, 'my-gateway');
-    await tester.pumpAndSettle();
-    expect(tester.widget<TextField>(refField).controller!.text, 'MY_GATEWAY_API_KEY');
-
-    // 继续改 ID：还没手动碰过引用名，应该继续跟着变
-    await tester.enterText(idField, 'deepseek');
-    await tester.pumpAndSettle();
-    expect(tester.widget<TextField>(refField).controller!.text, 'DEEPSEEK_API_KEY');
-
-    // 用户手动改了引用名 → 之后 ID 再变也不覆盖
-    await tester.enterText(refField, 'MY_CUSTOM_KEY');
-    await tester.pumpAndSettle();
-    await tester.enterText(idField, 'qwen');
-    await tester.pumpAndSettle();
-    expect(tester.widget<TextField>(refField).controller!.text, 'MY_CUSTOM_KEY',
-        reason: '用户自己填过就别再自动覆盖');
+    expect(isValidCredentialRef(defaultCredentialRef('2fast')), isTrue);
+    expect(isValidCredentialRef('2FAST_API_KEY'), isFalse, reason: '这一条正是补前缀的理由');
   });
 
-  testWidgets('引用名留空也能提交（程序会补默认值）；ID 以数字开头时默认值非法会被挡住', (tester) async {
-    tester.view.physicalSize = const Size(1400, 1000);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
+  testWidgets('表单里没有端点信任级别与凭据引用名，但有 API Key 一栏', (tester) async {
+    final recorder = _Recorder();
+    await _openDialog(tester, recorder);
 
-    SharedPreferences.setMockInitialValues({});
-    final settings = SettingsStore();
-    await settings.load();
+    expect(find.text('API Key（可选）'), findsOneWidget, reason: '新建时就能填密钥');
+    expect(find.text('端点信任级别'), findsNothing, reason: '信任档改由软件按地址决定，不再问用户');
+    expect(find.text('凭据引用名（可选）'), findsNothing, reason: '引用名由程序按 ID 生成，不再问用户');
+    // 协议下拉还在（这个必须由用户选：三家协议不能猜）
+    expect(find.text('OpenAI Chat Completions'), findsOneWidget);
+  });
 
-    await tester.pumpWidget(
-      ChangeNotifierProvider<SettingsStore>.value(
-        value: settings,
-        child: MaterialApp(
-          home: AiProviderSettingsPage(
-            api: AiApiClient(settings.baseUrl, client: _emptyBackend()),
-          ),
-        ),
-      ),
+  testWidgets('填完就创建：请求体由程序补齐引用名、不带信任档，密钥单独存一次', (tester) async {
+    final recorder = _Recorder();
+    await _openDialog(tester, recorder);
+
+    await tester.enterText(_field('Provider ID（创建后不可改）'), 'my-gateway');
+    await tester.enterText(_field('显示名'), '我的网关');
+    await tester.enterText(_field('Base URL'), 'https://api.example.com/v1');
+    await tester.enterText(_field('API Key（可选）'), 'sk-secret-value');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('创建'));
+    await tester.pumpAndSettle();
+
+    expect(recorder.providerCreates, hasLength(1));
+    final sent = jsonDecode(recorder.providerCreates.single) as Map<String, dynamic>;
+    expect(sent['credentialRef'], 'MY_GATEWAY_API_KEY', reason: '引用名由程序按 ID 推出');
+    expect(
+      sent.containsKey('endpointTrust'),
+      isFalse,
+      reason: '信任档**一个字节都不发**：由后端按地址推断（硬塞一档会让公网地址被拒）',
     );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('新建 Provider'));
-    await tester.pumpAndSettle();
-
-    final idField = find.ancestor(
-      of: find.text('Provider ID（创建后不可改）'),
-      matching: find.byType(TextField),
-    );
-    final nameField = find.ancestor(of: find.text('显示名'), matching: find.byType(TextField));
-    final urlField = find.ancestor(of: find.text('Base URL'), matching: find.byType(TextField));
-    final refField = find.ancestor(
-      of: find.text('凭据引用名（可选）'),
-      matching: find.byType(TextField),
+    expect(
+      sent.containsKey('apiKey') || sent.values.contains('sk-secret-value'),
+      isFalse,
+      reason: '密钥不许混进 provider 行（AIH-012：值只写不读、单独存）',
     );
 
-    FilledButton createButton() => tester.widget<FilledButton>(
-          find.ancestor(of: find.text('创建'), matching: find.byType(FilledButton)),
-        );
+    // 密钥走 CredentialStore 单独存一次（这里是桌面那条 = PUT /credentials）
+    expect(recorder.keyPuts, hasLength(1));
+    expect(recorder.keyPuts.single, contains('sk-secret-value'));
+  });
 
-    await tester.enterText(idField, 'my-gateway');
-    await tester.enterText(nameField, '我的网关');
-    await tester.enterText(urlField, 'https://api.example.com/v1');
-    await tester.pumpAndSettle();
-    expect(createButton().onPressed, isNotNull, reason: '默认值自动生成，正常情况直接能提交');
+  testWidgets('ID 以数字开头也能直接提交（引用名由程序补前缀，不再是死角）', (tester) async {
+    final recorder = _Recorder();
+    await _openDialog(tester, recorder);
 
-    // 手动清空也不拦着：提交时会补回默认值
-    await tester.enterText(refField, '');
+    await tester.enterText(_field('Provider ID（创建后不可改）'), '2fast');
+    await tester.enterText(_field('显示名'), '快网关');
+    await tester.enterText(_field('Base URL'), 'https://api.example.com/v1');
     await tester.pumpAndSettle();
-    expect(createButton().onPressed, isNotNull, reason: '留空 = 用默认值，不算错');
 
-    // `2fast` 是合法 kebab ID，但全大写 `2FAST_API_KEY` 不是合法引用名（必须以字母开头）
-    await tester.enterText(idField, '2fast');
-    await tester.pumpAndSettle();
-    expect(tester.widget<TextField>(refField).controller!.text, '2FAST_API_KEY');
-    expect(createButton().onPressed, isNull, reason: '推不出合法的引用名时要让用户自己填');
+    final create = tester.widget<FilledButton>(
+      find.ancestor(of: find.text('创建'), matching: find.byType(FilledButton)),
+    );
+    expect(create.onPressed, isNotNull, reason: '以前这里会禁用并要求用户手填引用名');
 
-    // 手动填一个合法的就能提交
-    await tester.enterText(refField, 'FAST_TWO_API_KEY');
+    await tester.tap(find.text('创建'));
     await tester.pumpAndSettle();
-    expect(createButton().onPressed, isNotNull);
+    final sent = jsonDecode(recorder.providerCreates.single) as Map<String, dynamic>;
+    expect(sent['credentialRef'], 'P2FAST_API_KEY');
+  });
+
+  testWidgets('密钥留空也照样能建（稍后在详情里补）', (tester) async {
+    final recorder = _Recorder();
+    await _openDialog(tester, recorder);
+
+    await tester.enterText(_field('Provider ID（创建后不可改）'), 'my-gateway');
+    await tester.enterText(_field('显示名'), '我的网关');
+    await tester.enterText(_field('Base URL'), 'https://api.example.com/v1');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('创建'));
+    await tester.pumpAndSettle();
+
+    expect(recorder.providerCreates, hasLength(1));
+    expect(recorder.keyPuts, isEmpty, reason: '留空 = 不写密钥，不该发一次空值上去');
+  });
+
+  testWidgets('非法 Provider ID 会被就地拦下（按钮禁用 + 说明原因）', (tester) async {
+    final recorder = _Recorder();
+    await _openDialog(tester, recorder);
+
+    await tester.enterText(_field('Provider ID（创建后不可改）'), 'My Gateway');
+    await tester.enterText(_field('显示名'), 'x');
+    await tester.enterText(_field('Base URL'), 'https://api.example.com/v1');
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('只能小写字母/数字'), findsOneWidget);
+    final create = tester.widget<FilledButton>(
+      find.ancestor(of: find.text('创建'), matching: find.byType(FilledButton)),
+    );
+    expect(create.onPressed, isNull, reason: 'ID 不合法时不允许提交（以前是提交后静默失败）');
+    expect(recorder.providerCreates, isEmpty);
   });
 }

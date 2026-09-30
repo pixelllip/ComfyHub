@@ -1,31 +1,66 @@
 <#
-    后端是哪一个：**Rust**（P4 目标）还是 **Kotlin**（旧的那一份）。
+.SYNOPSIS
+    Rust 后端的小工具：**找它 / 编它 / 起它 / 停它 / 看它**（给 e2e 与 dev 脚本用）。
 
-    为什么单独一个文件：`server.ps1`（起停）与 `comfyhub.ps1`（整体生命周期 / doctor）都要知道
-    这件事，各写一份必然漂移 —— 而漂移的表现是"doctor 说 Kotlin 在跑、server.ps1 去停 Rust"。
-    AGENTS §5 那条踩过的坑（共享小工具必须住在被 dot-source 的公共文件里）就是这个意思。
+.DESCRIPTION
+    ⚠ **运行期的真源是 App 自己**，不是这个脚本：
 
-    ## 选择规则（检测优先，别乱指）
+      · 找 exe    → `lib\core\backend_paths.dart` 的 `serverExeCandidates()`
+      · 起 / 停   → `lib\core\backend_launcher.dart`（Dart 直接 CreateProcess，
+                    带 `--watch-stdin`；强杀 App 时后端自己退）
 
-        -Backend rust|kotlin  >  环境变量 COMFYHUB_BACKEND  >  auto
+    本文件只服务于"没有 App 的场合"：`scripts\e2e-*-test.ps1`（需要一个后端来打接口）
+    与 `scripts\dev-app.ps1`（它只需要保证后端**存在且是新的**，起还是 App 自己起）。
+    **候选顺序与 Dart 那份必须一致** —— 改一边就要改另一边（AGENTS §7 的纪律）。
 
-    `auto` 的事实依据只有一条：**Rust 二进制在不在**。
-    找的顺序（与发布包/源码树两种布局对齐，见 AGENTS §7）：
+    2026-09-30 之前这条路是 `comfyhub.ps1 up → server.ps1 → silent-process.ps1(WMI)
+    → cmd → exe`，App 改成直接起 exe 之后那几层连同 `watch-owner.ps1` 一起删了。
+    这里起后端用 `Start-Process -WindowStyle Hidden`（不弹窗口），**不带 `--watch-stdin`**：
+    Start-Process 给的不是管道，带了后端会当场退出（见 `server-rs/src/main.rs`）。
 
-        1. `<根>\server\comfyhub-server-rs.exe`            —— 发布包（就地装配）
-        2. `<根>\server-rs\target\release\comfyhub-server-rs.exe` —— 源码树（正式构建）
-        3. `<根>\server-rs\target\debug\comfyhub-server-rs.exe`   —— 源码树（debug，仅在没 release 时）
-
-    ⚠ 找不到时**不报错、回退 Kotlin**：这条是为了"切过去之后如果 Rust 还没编出来，
-    用户至少还能用"。回退会**显式说一句**（doctor 里也看得到），绝不静默。
+.EXAMPLE
+    pwsh -File scripts\backend.ps1 exe                 # 后端程序在哪
+    pwsh -File scripts\backend.ps1 build               # 只 cargo build --release
+    pwsh -File scripts\backend.ps1 start               # 起来并等到健康（缺/旧会自动编）
+    pwsh -File scripts\backend.ps1 start -SkipBuild    # 直接用现有产物
+    pwsh -File scripts\backend.ps1 stop
+    pwsh -File scripts\backend.ps1 status
+    pwsh -File scripts\backend.ps1 wait -Seconds 30
 #>
+[CmdletBinding()]
+param(
+    [Parameter(Position = 0)]
+    [ValidateSet('exe', 'build', 'start', 'stop', 'restart', 'status', 'wait')]
+    [string]$Action = 'status',
 
-# 项目根：往上找 scripts\comfyhub.ps1（与其它脚本同一套算法，两种布局都认）
+    # 起后端时听哪个网卡（`0.0.0.0` = 允许手机 / 局域网设备连接）
+    [ValidateSet('127.0.0.1', '0.0.0.0')]
+    [string]$BindHost = '127.0.0.1',
+
+    # 起之前不检查/不跑 cargo build（e2e 里常用）
+    [switch]$SkipBuild,
+
+    # wait 的上限
+    [int]$Seconds = 60
+)
+
+$ErrorActionPreference = 'Stop'
+
+# 被 App / 别的脚本重定向时钉成 UTF-8（中文串在 936 代码页下会乱码）
+if ([Console]::IsOutputRedirected) {
+    try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch { }
+}
+
 function Resolve-ProjectRootForBackend {
     param([string]$Start)
     $dir = if ($Start) { (Resolve-Path $Start).Path } else { $PSScriptRoot }
     while ($dir) {
-        if (Test-Path (Join-Path $dir 'scripts\comfyhub.ps1')) { return $dir }
+        # 与 lib\core\backend_paths.dart 的 looksLikeRoot 同一组判据
+        if ((Test-Path (Join-Path $dir 'server-rs\Cargo.toml')) -or
+            (Test-Path (Join-Path $dir 'db\schema.sqlite.sql')) -or
+            (Test-Path (Join-Path $dir 'backend\comfyhub-server-rs.exe'))) {
+            return $dir
+        }
         $parent = Split-Path $dir -Parent
         if (-not $parent -or $parent -eq $dir) { break }
         $dir = $parent
@@ -33,92 +68,60 @@ function Resolve-ProjectRootForBackend {
     return (Split-Path $PSScriptRoot -Parent)
 }
 
-# 一个进程对象都没有时返回 $null（调用方常见写法是 `if (-not $p)`）
-function Get-RustServerProcess {
-    Get-CimInstance Win32_Process -Filter "Name='comfyhub-server-rs.exe'" -ErrorAction SilentlyContinue
-}
+$ProjectRoot = Resolve-ProjectRootForBackend
+$ExeName = 'comfyhub-server-rs.exe'
 
-function Get-KotlinServerProcess {
-    Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -like '*com.comfyhub.ApplicationKt*' }
-}
-
-<#  两个后端**都可能**在跑（切流期间尤其）：停的时候要一起停，否则两个进程抢同一个端口，
-    表现是"新后端起来了、健康检查却打到旧进程上"（或直接 bind 失败）。  #>
-function Get-AnyBackendProcess {
-    @(Get-RustServerProcess) + @(Get-KotlinServerProcess)
-}
-
-function Get-BackendProcess {
-    param([string]$Kind)
-    if ($Kind -eq 'rust') { return Get-RustServerProcess }
-    return Get-KotlinServerProcess
-}
-
+<#  后端 exe 在哪。**顺序即优先级**，与 `lib\core\backend_paths.dart` 一字不差：
+      ① $env:COMFYHUB_SERVER_EXE  —— 显式覆盖（把后端映像挪出受限目录也是用这个）
+      ② <根>\backend\             —— release 产物：后端是 App 自己的资产
+      ③ <根>\server\              —— 旧发布包布局（兼容）
+      ④ <根>\server-rs\target\release\  —— 源码树优先 release
+      ⑤ <根>\server-rs\target\debug\    —— 没编过 release 时用 debug
+    ⚠ 这里**不认** "viewer.exe 同级" 那条（脚本没有 exe 同级的概念），
+      所以发布包里跑 `scripts\backend.ps1` 时走的是 ③ 之后的 <根>\backend\（②）。  #>
 function Resolve-RustExe {
-    param([string]$ProjectRoot)
-    $root = if ($ProjectRoot) { $ProjectRoot } else { Resolve-ProjectRootForBackend }
-    # ⚠ `COMFYHUB_SERVER_EXE` 优先级最高，**这不是给多套构建用的**（那是
-    #   `server-rs\target\release` vs `debug` 的事，下面按顺序认就行）——
-    #   它唯一非做不可的理由是：**把后端映像挪出工作区**。
-    #
-    # 2026-09-29 实测：写不进工作区外的那个限制是按**映像位置**判的，不是按路径、
-    # 也不是按用户 —— 同一个二进制逐字节相同，映像放在工作区内就写不了工作区外，
-    # 复制到 `%TEMP%` 立刻哪儿都能写（`docs/pitfalls.md` 第 159 条的现场）。
-    # 而下面三个候选**全在项目根下**，所以源码树布局下后端必然被限住：
-    # `comfy_start` 写不进 ComfyUI 的 temp/、`comfy_use_media` 写不进 input。
-    # 以前"无退路"的说法就是漏了这个开关 —— 现在有：把 exe 复制到工作区外，指过来。
+    param([string]$ProjectRoot = $ProjectRoot)
     if ($env:COMFYHUB_SERVER_EXE) {
         $explicit = $env:COMFYHUB_SERVER_EXE.Trim()
         if ($explicit -and (Test-Path $explicit)) { return $explicit }
         Write-Host "==> COMFYHUB_SERVER_EXE=$explicit 不存在，当没设" -ForegroundColor Yellow
     }
     foreach ($cand in @(
-            (Join-Path $root 'server\comfyhub-server-rs.exe'),
-            (Join-Path $root 'server-rs\target\release\comfyhub-server-rs.exe'),
-            (Join-Path $root 'server-rs\target\debug\comfyhub-server-rs.exe')
+            (Join-Path $ProjectRoot "backend\$ExeName"),
+            (Join-Path $ProjectRoot "server\$ExeName"),
+            (Join-Path $ProjectRoot "server-rs\target\release\$ExeName"),
+            (Join-Path $ProjectRoot "server-rs\target\debug\$ExeName")
         )) {
         if (Test-Path $cand) { return $cand }
     }
     return $null
 }
 
+<#  「用哪个后端」——Kotlin 已于 2026-09-26 退役（P4 收尾），所以只剩 rust / none。
+    保留这个函数与返回值形状：`scripts\e2e-recipe-test.ps1` 直接读 `.Kind` / `.Exe`。  #>
 function Resolve-Backend {
-    param(
-        [string]$Preference,
-        [string]$ProjectRoot
-    )
-    $root = if ($ProjectRoot) { $ProjectRoot } else { Resolve-ProjectRootForBackend }
-    $want = if ($Preference) { $Preference } elseif ($env:COMFYHUB_BACKEND) { $env:COMFYHUB_BACKEND } else { 'auto' }
-    $want = $want.Trim().ToLowerInvariant()
-    if ($want -notin @('auto', 'rust', 'kotlin')) {
-        Write-Host "==> COMFYHUB_BACKEND=$want 不认识（只认 auto / rust / kotlin），按 auto 处理" -ForegroundColor Yellow
-        $want = 'auto'
-    }
-    $rust = Resolve-RustExe -ProjectRoot $root
-
-    if ($want -eq 'kotlin') {
-        return @{ Kind = 'kotlin'; Exe = $null; Note = 'COMFYHUB_BACKEND=kotlin（显式指定）'; RustExe = $rust }
-    }
+    param([string]$ProjectRoot = $ProjectRoot)
+    $rust = Resolve-RustExe -ProjectRoot $ProjectRoot
     if ($rust) {
-        $note = if ($want -eq 'rust') { 'COMFYHUB_BACKEND=rust（显式指定）' } else { '自动：找到 Rust 二进制' }
-        return @{ Kind = 'rust'; Exe = $rust; Note = $note; RustExe = $rust }
+        return @{ Kind = 'rust'; Exe = $rust; Note = 'Rust 后端'; RustExe = $rust }
     }
-    if ($want -eq 'rust') {
-        Write-Host '==> 指定了 Rust 后端，但找不到二进制；回退 Kotlin（构建：cargo build --release --manifest-path server-rs\Cargo.toml）' -ForegroundColor Yellow
-        return @{ Kind = 'kotlin'; Exe = $null; Note = '指定 rust 但没有二进制（已回退 Kotlin）'; RustExe = $null }
+    return @{
+        Kind    = 'none'
+        Exe     = $null
+        Note    = '找不到 Rust 后端二进制（cargo build --release --manifest-path server-rs\Cargo.toml）'
+        RustExe = $null
     }
-    return @{ Kind = 'kotlin'; Exe = $null; Note = '自动：没找到 Rust 二进制，用 Kotlin'; RustExe = $null }
 }
 
 <#  二进制构建新鲜度：`server-rs\src` 里最新的 .rs 是否比 exe 新。
-    界面类修复踩过这个坑（AGENTS §1："我改了但界面没变"先查构建新鲜度）——
-    后端同理：`comfyhub.ps1 doctor` 要能一眼看出"你改的 Rust 源码还没编译"。  #>
+
+    两条路都用它：`e2e-recipe-test.ps1` 拿它挡"拿旧二进制证明新实现"（假绿），
+    本脚本的 `start` 拿它决定要不要先编一次。
+    界面类修复踩过同一个坑（AGENTS §1："我改了但界面没变"先查构建新鲜度）—— 后端同理。  #>
 function Get-RustBuildFreshness {
-    param([string]$Exe, [string]$ProjectRoot)
+    param([string]$Exe, [string]$ProjectRoot = $ProjectRoot)
     if (-not $Exe -or -not (Test-Path $Exe)) { return $null }
-    $root = if ($ProjectRoot) { $ProjectRoot } else { Resolve-ProjectRootForBackend }
-    $srcDir = Join-Path $root 'server-rs\src'
+    $srcDir = Join-Path $ProjectRoot 'server-rs\src'
     $exeTime = (Get-Item $Exe).LastWriteTime
     if (-not (Test-Path $srcDir)) {
         return @{ ExeTime = $exeTime; NewestSource = $null; Stale = $false }
@@ -128,4 +131,265 @@ function Get-RustBuildFreshness {
     $stale = $false
     if ($newest) { $stale = $newest.LastWriteTime -gt $exeTime }
     return @{ ExeTime = $exeTime; NewestSource = $newest; Stale = $stale }
+}
+
+function Get-BackendProcess {
+    Get-CimInstance Win32_Process -Filter "Name='$ExeName'" -ErrorAction SilentlyContinue
+}
+
+<#  完整性标签修复（2026-09-30 从 scripts\integrity.ps1 并过来，那个文件已删）。
+
+    "写不进工作区外、一律 os error 5" 的真因是 Windows 强制完整性控制（MIC）：
+    工作区目录树带着 Low 标签 → 从工作区里构建出来的 exe 启动的进程就是 Low 令牌 →
+    Low 写不了工作区外的 Medium 对象；而 Windows 取 min(父进程, 映像），链路上
+    任何一环是 Low，子进程就掉回 Low。
+
+    所以起后端之前把"会被我们启动的那几个映像"修回 Medium（只动标签，不动位置）。
+    幂等：都不是 Low 时什么都不做。`COMFYHUB_NO_INTEGRITY_REPAIR=1` 可关掉。  #>
+function Get-IntegrityLabel {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $null }
+    try {
+        $hit = & icacls $Path 2>$null | Select-String -Pattern 'Mandatory Label' | Select-Object -First 1
+    } catch { return $null }
+    if (-not $hit) { return $null }
+    $t = $hit.ToString()
+    if ($t -match 'Low Mandatory Level') { return 'Low' }
+    if ($t -match 'Medium Mandatory Level') { return 'Medium' }
+    if ($t -match 'High Mandatory Level') { return 'High' }
+    if ($t -match 'System Mandatory Level') { return 'System' }
+    return 'Other'
+}
+
+function Repair-IntegrityLabel {
+    param([string]$Path, [switch]$Inherited)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    if ((Get-IntegrityLabel -Path $Path) -ne 'Low') { return $false }
+    if ($Inherited) {
+        # 目录带 (OI)(CI)：以后构建出来的新文件直接继承 Medium，不用每次都修
+        & icacls $Path /setintegritylevel '(OI)(CI)Medium' 2>&1 | Out-Null
+    } else {
+        & icacls $Path /setintegritylevel Medium 2>&1 | Out-Null
+    }
+    if ($LASTEXITCODE -ne 0) { return $false }
+    # 改完复读一次：icacls 成功不等于标签真的变了（Low 进程改不上，静默失败）
+    return ((Get-IntegrityLabel -Path $Path) -ne 'Low')
+}
+
+function Repair-LaunchImages {
+    param([string]$ProjectRoot = $ProjectRoot, [string]$ExtraExe)
+    if ($env:COMFYHUB_NO_INTEGRITY_REPAIR -and
+        $env:COMFYHUB_NO_INTEGRITY_REPAIR.Trim() -match '^(?i:1|true|yes|on)$') {
+        return
+    }
+    $targets = @(
+        @{ Path = (Join-Path $ProjectRoot 'server-rs\target');                  Inherited = $true;  What = '后端构建目录' },
+        @{ Path = (Join-Path $ProjectRoot 'build\windows\x64\runner\Release');  Inherited = $true;  What = 'App 产物目录 (Release)' },
+        @{ Path = (Join-Path $ProjectRoot 'build\windows\x64\runner\Debug');    Inherited = $true;  What = 'App 产物目录 (Debug)' },
+        @{ Path = (Join-Path $ProjectRoot 'storage\ai\mcp\python');             Inherited = $true;  What = 'MCP 便携 python 目录' }
+    )
+    if ($ExtraExe) {
+        $targets = @(@{ Path = $ExtraExe; Inherited = $false; What = '后端 exe' }) + $targets
+    }
+    foreach ($t in $targets) {
+        if (-not (Test-Path -LiteralPath $t.Path)) { continue }
+        if (Repair-IntegrityLabel -Path $t.Path -Inherited:$t.Inherited) {
+            Write-Host "  [权限] $($t.What) 的 Low 标签已修回 Medium：$($t.Path)" -ForegroundColor DarkGray
+        }
+    }
+}
+
+function Test-TcpPort([string]$TargetHost, [int]$TargetPort, [int]$TimeoutMs = 250) {
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $iar = $client.BeginConnect($TargetHost, $TargetPort, $null, $null)
+        if (-not $iar.AsyncWaitHandle.WaitOne($TimeoutMs)) { return $false }
+        $client.EndConnect($iar)
+        return $true
+    } catch { return $false }
+    finally { $client.Dispose() }
+}
+
+<#  后端实际监听的端口只有一个真源：它自己写的 `<根>\.run\api.json`。
+    （解析规则与 Dart / Python 扩展共读同一个文件，别在这里自己编一个端口。）  #>
+function Read-ApiPortState {
+    param([string]$ProjectRoot = $ProjectRoot)
+    $file = Join-Path $ProjectRoot '.run\api.json'
+    if (-not (Test-Path $file)) { return $null }
+    try { return (Get-Content $file -Raw | ConvertFrom-Json) } catch { return $null }
+}
+
+function Get-BackendHealth {
+    param([string]$ProjectRoot = $ProjectRoot)
+    $state = Read-ApiPortState -ProjectRoot $ProjectRoot
+    if (-not $state -or $state.port -le 0) { return $null }
+    if (-not (Test-TcpPort '127.0.0.1' $state.port)) { return $null }
+    try { return (Invoke-RestMethod "http://127.0.0.1:$($state.port)/api/health" -TimeoutSec 3) }
+    catch { return $null }
+}
+
+function Wait-BackendHealth {
+    param([int]$Seconds = 60, [string]$ProjectRoot = $ProjectRoot)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        $h = Get-BackendHealth -ProjectRoot $ProjectRoot
+        if ($h -and $h.database -eq 'ok') { return $h }
+        Start-Sleep -Milliseconds 300
+    }
+    return $null
+}
+
+function Invoke-BackendBuild {
+    param([string]$ProjectRoot = $ProjectRoot)
+    Write-Host '==> cargo build --release（后端会编到最新）' -ForegroundColor Cyan
+    & cargo build --release --manifest-path (Join-Path $ProjectRoot 'server-rs\Cargo.toml')
+    if ($LASTEXITCODE -ne 0) { throw 'cargo build --release 失败' }
+    return (Resolve-RustExe -ProjectRoot $ProjectRoot)
+}
+
+function Do-Build {
+    # dev-app.ps1 调的就是这一条："已新就跳过"，免得每次热重载前都等一次 cargo。
+    $exe = Resolve-RustExe
+    $fresh = Get-RustBuildFreshness -Exe $exe
+    if ($exe -and -not ($fresh -and $fresh.Stale)) {
+        Write-Host "后端已是最新: $exe" -ForegroundColor Green
+        return $exe
+    }
+    $exe = Invoke-BackendBuild
+    if (-not $exe) { throw '编完了却找不到后端 exe' }
+    Write-Host "后端: $exe" -ForegroundColor Green
+    return $exe
+}
+
+function Do-Start {
+    param([switch]$SkipBuild, [string]$BindHost = '127.0.0.1')
+
+    $exe = Resolve-RustExe
+    if (-not $SkipBuild) {
+        $fresh = Get-RustBuildFreshness -Exe $exe
+        if (-not $exe -or ($fresh -and $fresh.Stale)) {
+            $why = if (-not $exe) { '没有产物' } else { "比源码旧（$($fresh.NewestSource.Name)）" }
+            Write-Host "==> 后端$why，先编一次" -ForegroundColor Cyan
+            $exe = Invoke-BackendBuild
+        }
+    }
+    if (-not $exe) {
+        throw '找不到 Rust 后端二进制。构建：cargo build --release --manifest-path server-rs\Cargo.toml'
+    }
+
+    $h = Get-BackendHealth
+    if ($h -and $h.database -eq 'ok') {
+        $state = Read-ApiPortState
+        Write-Host "后端已在运行且健康（http://127.0.0.1:$($state.port)，pid $($state.pid)）。" -ForegroundColor Yellow
+        return
+    }
+    if (Get-BackendProcess) {
+        Write-Host '==> 有后端进程但不健康，先停掉' -ForegroundColor Yellow
+        Do-Stop
+    }
+
+    New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot '.db') | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot 'storage') | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot '.run') | Out-Null
+
+    # 起之前先把 Low 完整性标签修回 Medium（只动标签，不动位置；详见 Repair-LaunchImages）
+    Repair-LaunchImages -ProjectRoot $ProjectRoot -ExtraExe $exe
+
+    # 端口状态与工具权限的基准：后端认这个环境变量（App 起它时也是这么传的）
+    $env:COMFYHUB_PROJECT_ROOT = $ProjectRoot
+    $argLine = "--db `"$(Join-Path $ProjectRoot '.db\comfyhub.db')`" " +
+        "--storage `"$(Join-Path $ProjectRoot 'storage')`" " +
+        "--host $BindHost --port 0"
+
+    Write-Host "==> 启动后端（$BindHost，端口自动）exe=$exe" -ForegroundColor Cyan
+    # -WindowStyle Hidden：控制台程序不给窗口（App 那条路靠 Dart 的 CREATE_NO_WINDOW，
+    # 这里靠 .NET 的 SW_HIDE —— 两边的判据都是"用户看不见黑框"）
+    $proc = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $ProjectRoot `
+        -WindowStyle Hidden -PassThru
+    Write-Host "    pid $($proc.Id)" -ForegroundColor DarkGray
+
+    $health = Wait-BackendHealth -Seconds $Seconds
+    if (-not $health) {
+        Write-Host '启动超时 / 数据库不通。最近日志：' -ForegroundColor Red
+        Do-Status
+        throw '后端启动失败'
+    }
+    $state = Read-ApiPortState
+    Write-Host "后端就绪: http://127.0.0.1:$($state.port)  (db=$($health.database))" -ForegroundColor Green
+}
+
+function Do-Stop {
+    $killed = $false
+    $state = Read-ApiPortState
+    if ($state -and $state.pid -gt 0) {
+        Stop-Process -Id $state.pid -Force -ErrorAction SilentlyContinue
+        $killed = $true
+    }
+    foreach ($p in @(Get-BackendProcess)) {
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+        $killed = $true
+    }
+    if (-not $killed) { Write-Host '后端未运行。' -ForegroundColor Yellow; return }
+
+    # 等它真的死透并放开端口（重启时不等就会撞进空窗）
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline -and @(Get-BackendProcess).Count -gt 0) {
+        Start-Sleep -Milliseconds 200
+    }
+    # 强杀没有优雅退出，端口记录要自己删（留着只会让下一次去探一个空端口）
+    Remove-Item (Join-Path $ProjectRoot '.run\api.json') -Force -ErrorAction SilentlyContinue
+    Write-Host '后端已停止。' -ForegroundColor Green
+}
+
+function Do-Status {
+    $dbFile = Join-Path $ProjectRoot '.db\comfyhub.db'
+    if (Test-Path $dbFile) {
+        Write-Host "数据库:    SQLite $dbFile（$([math]::Round((Get-Item $dbFile).Length / 1MB, 2)) MB）"
+    } else {
+        Write-Host "数据库:    SQLite 还没建（$dbFile；后端首次启动会建）" -ForegroundColor Yellow
+    }
+    $procs = @(Get-BackendProcess)
+    if ($procs.Count -gt 0) {
+        Write-Host "后端进程:  PID $($procs.ProcessId -join ',')" -ForegroundColor Green
+    } else {
+        Write-Host '后端进程:  未运行' -ForegroundColor Yellow
+    }
+    $h = Get-BackendHealth
+    if ($h -and $h.database -eq 'ok') {
+        $state = Read-ApiPortState
+        Write-Host "健康检查:  OK  version=$($h.version)  db=ok" -ForegroundColor Green
+        Write-Host "API 地址:  http://127.0.0.1:$($state.port)"
+        Write-Host "存储目录:  $($h.storageDir)"
+    } elseif ($h) {
+        Write-Host "健康检查:  异常  db=$($h.database)" -ForegroundColor Red
+    } else {
+        $state = Read-ApiPortState
+        if ($state -and $state.port -gt 0) { Write-Host "端口记录:  $($state.port)（.run\api.json）" }
+        Write-Host '健康检查:  无法连接' -ForegroundColor Red
+    }
+}
+
+function Do-Exe {
+    $exe = Resolve-RustExe
+    if (-not $exe) { throw (Resolve-Backend).Note }
+    Write-Host $exe
+}
+
+<#  ⚠ **只有"直接跑本文件"才执行动作**：`scripts\e2e-recipe-test.ps1` 会 dot-source
+    本文件来借 `Resolve-Backend` / `Get-RustBuildFreshness`，那时不能顺手把后端起了
+    （AGENTS §5 那条"脚本被 dot-source 时 param() 会覆盖宿主变量"的坑同源）。  #>
+$DotSourced = $MyInvocation.InvocationName -eq '.'
+if (-not $DotSourced) {
+    switch ($Action) {
+        'exe' { Do-Exe }
+        'build' { Do-Build | Out-Null }
+        'start' { Do-Start -SkipBuild:$SkipBuild -BindHost $BindHost }
+        'stop' { Do-Stop }
+        'restart' { Do-Stop; Start-Sleep -Milliseconds 500; Do-Start -SkipBuild:$SkipBuild -BindHost $BindHost }
+        'status' { Do-Status }
+        'wait' {
+            if (Wait-BackendHealth -Seconds $Seconds) { Write-Host '后端就绪' -ForegroundColor Green }
+            else { throw "等了 $Seconds 秒后端还没就绪" }
+        }
+    }
 }

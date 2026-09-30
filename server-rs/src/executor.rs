@@ -282,7 +282,13 @@ async fn run_once(
             .filter_map(|p| p.text.clone())
             .collect();
         if !already.trim().is_empty() {
-            turns.push(ChatTurn { role: "assistant".into(), content: already, ..Default::default() });
+            turns.push(ChatTurn {
+                role: "assistant".into(),
+                content: already,
+                // 已经说出去的那半段如果带着思考，思考也要跟着回传（与历史同一条理由）
+                reasoning: reasoning_of(&current.parts),
+                ..Default::default()
+            });
         }
     }
 
@@ -511,11 +517,17 @@ async fn run_once(
                 // ⚠ 续写请求里要带上**已经说过的那半段**（作为最后一条 assistant 轮）：
                 // 少了它，模型看到的上下文是"用户突然说'接着写'"，它会从头再讲一遍
                 // （Kotlin 那边同样把这一轮的正文留在 turns 里）。
-                let partial = sink.lock().unwrap_or_else(|e| e.into_inner()).text.clone();
+                // 思考也一并取走：这一段思考属于**刚刚这一轮**，留到下一轮会被重复回传
+                // （续写的下一轮同样会带上这条 assistant 轮）。
+                let (partial, partial_reasoning) = {
+                    let mut guard = sink.lock().unwrap_or_else(|e| e.into_inner());
+                    (guard.text.clone(), guard.seal_reasoning())
+                };
                 if !partial.trim().is_empty() {
                     trailing.push(ChatTurn {
                         role: "assistant".into(),
                         content: partial,
+                        reasoning: Some(partial_reasoning).filter(|r| !r.trim().is_empty()),
                         ..Default::default()
                     });
                 }
@@ -558,11 +570,15 @@ async fn run_once(
         // 而这段正文同时必须留在 `parts` 里 —— 否则"这一轮说完话、下一轮撞 429"时，
         // 已经说出去的正文在库里**一个字都没有**（界面上那半段凭空消失）。
         // Kotlin 那边是"先 `parts.add("text", …)` 再起工具轮"，顺序完全一样。
-        let round_text = {
+        let (round_text, round_reasoning) = {
             let mut guard = sink.lock().unwrap_or_else(|e| e.into_inner());
             let text = guard.text.clone();
             guard.seal_text();
-            text
+            // 这一轮的**思维链**与正文在**同一个时点**封段：无状态的 responses / DeepSeek
+            // 在思考模式下要求把每一轮的思维链原文回传（少了它就是
+            // `400 The reasoning_text in the thinking mode must be passed back to the API.`），
+            // 而同一段思考只属于一轮 —— 留在 sink 里会被挂到下一轮的助手轮上（重复回传）。
+            (text, guard.seal_reasoning())
         };
         trailing.push(ChatTurn {
             role: "assistant".into(),
@@ -570,6 +586,7 @@ async fn run_once(
             tool_calls: calls.iter().map(|(_, call)| call.clone()).collect(),
             tool_call_id: None,
             images: Vec::new(),
+            reasoning: Some(round_reasoning).filter(|r| !r.trim().is_empty()),
         });
 
         // 一个一个执行（**串行**：多个调用里只要有一个要用户点头，就得按顺序来）
@@ -602,6 +619,7 @@ async fn run_once(
                 tool_calls: Vec::new(),
                 tool_call_id: Some(call_id.clone()),
                 images: Vec::new(),
+                reasoning: None,
             });
         }
 
@@ -1192,8 +1210,14 @@ async fn wait_for_approval(state: &AppState, run_id: &str, call_id: &str) -> Res
 struct Sink {
     /// 当前这一段正文（工具调用会把它"封段"，之后的正文算新的一段）
     text: String,
-    /// 思考段（只有第一轮有，收尾时落在最前面）
+    /// 思考段（累加：收尾时落在最前面，`parts` 里那一条 `reasoning` 块就是它）
     reasoning: String,
+    /// **本轮**的思考（`seal_reasoning()` 时交给刚刚那一轮助手轮）。
+    ///
+    /// 与 `reasoning` 分开是必须的：`reasoning` 是整条回复的思考（要落成块给界面看），
+    /// 而这里要的是"这一轮工具往返里模型想了什么" —— 无状态协议（responses/DeepSeek）
+    /// 要求把**每一轮**的思维链按轮回传，把整条回复的思考重复挂到每一轮上就重复了。
+    reasoning_round: String,
     /// 已经封好的块（`(type, text, tool_call_id, json_payload)`）
     parts: Vec<(String, String, Option<String>, Option<Value>)>,
 }
@@ -1205,6 +1229,7 @@ impl Sink {
 
     fn push_reasoning(&mut self, chunk: &str) {
         self.reasoning.push_str(chunk);
+        self.reasoning_round.push_str(chunk);
     }
 
     /// 当前这段正文封成块（工具卡之前必须调 —— 否则工具卡会插到正文前面去）。
@@ -1213,6 +1238,13 @@ impl Sink {
             let sealed = std::mem::take(&mut self.text);
             self.parts.push(("text".into(), sealed, None, None));
         }
+    }
+
+    /// **本轮**的思考取走（与 [`Sink::seal_text`] 同一个时点：工具往返开始时）。
+    ///
+    /// 取走而不是读：同一段思考只归属一轮，留着会被挂到下一轮的助手轮上（重复回传）。
+    fn seal_reasoning(&mut self) -> String {
+        std::mem::take(&mut self.reasoning_round)
     }
 
     /// 关键步骤（环节）块：`[步骤]正在查资料[/步骤]` 摘出来的那个名字。
@@ -1484,6 +1516,12 @@ fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
                 tool_calls: calls,
                 tool_call_id: None,
                 images: Vec::new(),
+                // ⚠ 思考段**不进正文**（它是展示用的，拼进正文会让模型看到自己的碎片），
+                // 但**要跟着这一轮走**：无状态的 responses / DeepSeek 在思考模式下要求
+                // 把历史轮次的思维链原文回传（`ChatTurn::reasoning`，completions / anthropic
+                // 的适配器一个字节都不发）。少了它，下一轮直接
+                // `400 The reasoning_text in the thinking mode must be passed back to the API.`
+                reasoning: reasoning_of(&message.parts),
             });
         }
         // ⚠ **助手消息里的工具结果也要作为独立的一轮回填**（`role = "tool"`）。
@@ -1498,6 +1536,7 @@ fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
                 tool_calls: Vec::new(),
                 tool_call_id: part.tool_call_id.clone(),
                 images: Vec::new(),
+                reasoning: None,
             });
         }
         return out;
@@ -1575,6 +1614,7 @@ fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
             tool_calls: Vec::new(),
             tool_call_id: None,
             images,
+            reasoning: None,
         });
     }
     // 工具结果：作为**独立的一轮**回填（`role = "tool"` + `tool_call_id`）
@@ -1585,9 +1625,23 @@ fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
             tool_calls: Vec::new(),
             tool_call_id: part.tool_call_id.clone(),
             images: Vec::new(),
+            reasoning: None,
         });
     }
     out
+}
+
+/// 助手轮里的**思维链原文**（`reasoning` 块拼起来）。
+///
+/// 只有 [`crate::protocol::ChatTurn::reasoning`] 需要它的协议（`openai-responses`）才会发出去；
+/// 正文里**一个字都不许混进来**（那是模型自己的碎片，拼进正文会让它以为"这是我说过的话"）。
+fn reasoning_of(parts: &[AiMessagePartDto]) -> Option<String> {
+    let text: String = parts
+        .iter()
+        .filter(|p| p.r#type == "reasoning")
+        .filter_map(|p| p.text.clone())
+        .collect();
+    Some(text).filter(|t| !t.trim().is_empty())
 }
 
 /// 助手轮里的工具调用（`json_payload` 里是 `{name, arguments}`）。
@@ -1648,9 +1702,14 @@ mod tests {
         }
     }
 
-    /// 历史 → 上游轮次：思考段**不进**上下文（各家都不接受回传思考）。
+    /// 历史 → 上游轮次：思考段**不进正文**，但**要单独挂在那一轮上**（`ChatTurn::reasoning`）。
+    ///
+    /// 起源是一次真实的 400（DeepSeek Responses）：思考模式下带 `tools` 的后续请求必须把
+    /// 历史思维链回传（`The reasoning_text in the thinking mode must be passed back to the API.`）。
+    /// 两条都要守住：**不许混进正文**（模型会把自己的碎片当成说过的话），
+    /// 也**不许丢**（丢了就是那条 400）。
     #[test]
-    fn history_drops_reasoning_and_keeps_text() {
+    fn history_keeps_reasoning_apart_from_the_text() {
         let mut m = message(
             "assistant",
             vec![
@@ -1668,7 +1727,30 @@ mod tests {
         let turns = turns_of(&m, &AttachmentPlan::empty());
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].content, "答案");
-        assert!(!turns[0].content.contains("我一直在想"));
+        assert!(!turns[0].content.contains("我一直在想"), "思考不许混进正文");
+        assert_eq!(turns[0].reasoning.as_deref(), Some("我一直在想"), "思考要挂在同一轮上回传");
+        // 没有思考块的那一轮：`None`（而不是空串 —— 适配器据此判断"发不发"）
+        let plain = turns_of(&message("assistant", vec![text_part("只有正文")]), &AttachmentPlan::empty());
+        assert_eq!(plain[0].reasoning, None);
+    }
+
+    /// 每轮思考**只归属一轮**：整条回复的思考（`reasoning`，落成块给界面看）与
+    /// **本轮**的思考（`seal_reasoning()`，回传给上游）是两份 —— 少了后者，
+    /// 同一个工具往返里模型想了什么就没人发给上游（那条 400 的半个成因）；
+    /// 而忘了取走，同一段思考会被挂到后面每一轮的助手轮上（重复回传）。
+    #[test]
+    fn sink_seals_reasoning_per_round() {
+        let mut sink = Sink::default();
+        sink.push_reasoning("第一轮想");
+        assert_eq!(sink.seal_reasoning(), "第一轮想");
+        assert_eq!(sink.seal_reasoning(), "", "取走之后本轮必须是空的（不许重复归属）");
+        sink.push_reasoning("第二轮想");
+        assert_eq!(sink.seal_reasoning(), "第二轮想");
+        assert_eq!(sink.reasoning, "第一轮想第二轮想", "整条回复的思考照样完整");
+        assert!(
+            parts_of(&sink).iter().any(|(kind, text, _, _)| kind == "reasoning" && text.contains("第二轮想")),
+            "落库的 reasoning 块要在（界面靠它显示思考）"
+        );
     }
 
     /// 工具结果必须**带着 `tool_call_id`** 单独成轮：否则上游看到的工具结果没有对应的调用

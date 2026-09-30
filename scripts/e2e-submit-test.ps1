@@ -26,7 +26,7 @@
                                     这一幕验：只读接口列得出它们、AI 的 `comfy_list_workflows` 也看得见、
                                     一键导入真的入库且幂等（用户 bug ⑤）
 
-    前置条件：MySQL + 后端在跑（scripts\comfyhub.ps1 up），本机有 python。
+    前置条件：后端在跑（`pwsh -File scripts\backend.ps1 start`），本机有 python。
     **目标工作流是脚本自己推送的一条合成捕获**（节点类 / 模型名全部来自
     `fake_comfy.py` 的 `/object_info`），所以**不依赖用户库里有什么** ——
     2026-09-23 之前它是从库里挑真实捕获的，那会同时被 P1 的提交前审核
