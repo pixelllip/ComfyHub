@@ -29,8 +29,8 @@
   为了用掉 import 而写的占位用例、同一行为的两种写法 —— 这类**该删就删**（用户提过"减少一些
   已经通过、不太重要的测试项"）。判断方法只有一句：**删了以后出错还能不能被测试抓住**。
   真正的防线（零上游请求、审批顺序、越界写被拒、内联预算、滚动条与懒构建…）一条都不能删。
-  本机实测的耗时（别凭感觉说"测试太慢"）：`flutter test` 407 例 ≈ 25s、
-  `cargo test`（后端 lib 613 例 + 集成）≈ 30s（热构建；首跑要编译）、
+  本机实测的耗时（别凭感觉说"测试太慢"）：`flutter test` 408 例 ≈ 25s、
+  `cargo test`（后端 lib 630 例 + 集成 150 例，api_test 已按域拆成 12 个文件）≈ 30s（热构建；首跑要编译）、
   `e2e-ai-tools-test.ps1` 111 项 ≈ 5~15s、`e2e-capture-test.ps1` / `e2e-submit-test.ps1` 各 ≈ 20~35s。
 - **Rust 用例要落盘，只许用 `crate::infra::testpaths::scratch()`**（`tests/` 里是
   `comfyhub_server_rs::infra::testpaths::scratch()`），落点是 `<crate>\target\.scratch\`。
@@ -84,7 +84,7 @@
 `test\localization_test.dart` 也用首页做锚点，改动落地页要一起改。
 
 > 历史约定是"默认落在画廊"，2026-09-15 按需求文档 `docs/ai-home-requirements-v0.1.xlsx`
-> 的 DEC-001 改为 AI 工作台；README 第 2 节、`lib/pages/ai_home_page.dart` 同步。
+> 的 DEC-001 改为 AI 工作台；README「功能一览」、`lib/pages/ai_home_page.dart` 同步。
 
 ## 4. 本机环境的硬约束（换机器要重新确认）
 
@@ -100,8 +100,9 @@
 | 后端出网代理 | **JVM 默认无视 Windows 系统代理**（一律 DIRECT）：本机 `civitai.com` 这类目标直连不通、只有 `127.0.0.1:7890` 通，所以 `server/build.gradle.kts` 的 `applicationDefaultJvmArgs` 带着 `-Djava.net.useSystemProxies=true`，出网客户端再统一挂 `com.comfyhub.ai.OutboundProxy` 的选择器（**公网走代理、本机/内网强制直连**——打开系统代理后 Java 会把 `127.0.0.1:8188` 也交给代理，会打死 ComfyUI）。自己用 `java -jar` 起后端时要手动补这个参数，或设 `COMFYHUB_HTTPS_PROXY` |
 | Kotlin 增量编译 | 本机 pub 缓存在 C:、工程在 D:，跨盘会炸（`this and base files have different roots`），所以 `android/gradle.properties` 里关掉了 `kotlin.incremental` |
 
-> **踩过的具体坑（50+ 条：现象 → 原因 → 处理）统一记在 [`docs/pitfalls.md`](docs/pitfalls.md)**。
-> 它原来是 README 第 12 节，2026-09-17 按用户要求单独拆出来（表太长，把 README 的"怎么用"挤没了）。
+> **踩过的具体坑（60+ 条：现象 → 原因 → 处理）统一记在 [`docs/pitfalls.md`](docs/pitfalls.md)**。
+> 它原来是 README 里的一节，2026-09-17 按用户要求单独拆出来（表太长，把 README 的"怎么用"挤没了）；
+> 2026-09-30 README 又从 1387 行砍到 200 行出头，**排错这件事只留一句指路**，正文全在这张表里。
 > 撞到"明明改了却没生效""脚本手敲行、跑起来不行"这类问题，先去那张表里搜现象。
 
 ## 5. 改脚本时的约定
@@ -203,7 +204,8 @@
 - **`infra::db::open_or_create` 是"第一次运行能起来"的关键**：以前缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
   在发布包里等于**永远起不来**。现在库缺就自己建（DDL 编译期 `include_str!` 嵌在二进制里）。
 - **发布包是便携式的**：可写数据（数据库 `<根>\.db`、产物 `<根>\storage`、日志 `<根>\.run`）
-  都在包内，`packaging\manifest.json` 里 `runtimeLayout` 记着这份约定；改存放位置要先改那里和 README 9.2。
+  都在包内，`packaging\manifest.json` 里 `runtimeLayout` 记着这份约定；改存放位置要先改那里和
+  README「为什么建议放到工作区外」那一节。
 - **Release 产物默认"就地装配"**：`flutter build windows --release` 自己就把后端装进 `backend\`
   （`windows\CMakeLists.txt` + `windows\cmake\bundle_backend.cmake`），装完
   `build\windows\x64\runner\Release\` 就是完整发布包。三个连带后果别踩：
