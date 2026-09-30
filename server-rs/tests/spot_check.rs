@@ -24,8 +24,8 @@
 //!
 //! 没有设 `COMFYHUB_SPOT_DB` 时**直接跳过**（打印一句），不假装通过。
 
-use comfyhub_server_rs::routes::AppState;
-use comfyhub_server_rs::tools::{self, ToolSession};
+use comfyhub_server_rs::web::routes::AppState;
+use comfyhub_server_rs::tools::tools::{self, ToolSession};
 
 /// 打开真库副本 + 真实 storage（没设环境变量就跳过）。
 fn spot_state() -> Option<(AppState, std::path::PathBuf)> {
@@ -42,7 +42,7 @@ fn spot_state() -> Option<(AppState, std::path::PathBuf)> {
             .join("storage")
             .join("media"),
     };
-    let conn = comfyhub_server_rs::db::open(std::path::Path::new(&db)).expect("打开库副本");
+    let conn = comfyhub_server_rs::infra::db::open(std::path::Path::new(&db)).expect("打开库副本");
     let state = AppState::new(conn, db.clone(), media);
     // 项目根决定白名单与"三份目录来源"里的第一份，必须与真机一致
     let root = std::env::var("COMFYHUB_SPOT_PROJECT_ROOT")
@@ -53,7 +53,7 @@ fn spot_state() -> Option<(AppState, std::path::PathBuf)> {
 
 /// 调一个工具并把结果打出来（真库抽查的价值在**看得见的输出**，用例只做基本断言）。
 async fn call(state: &AppState, name: &str, arguments: serde_json::Value) -> serde_json::Value {
-    let policy = comfyhub_server_rs::policy::ToolPolicy::load(state).expect("读策略");
+    let policy = comfyhub_server_rs::tools::policy::ToolPolicy::load(state).expect("读策略");
     let mut session = ToolSession::default();
     match tools::execute(state, &policy, "spot-run", "spot-conv", name, &arguments, &mut session).await
     {
@@ -97,8 +97,8 @@ async fn real_db_spot_check_replay_ingest() {
         return;
     };
     let entry: serde_json::Value = serde_json::from_str(&raw).expect("raw 是 JSON");
-    let config = comfyhub_server_rs::capture::capture_config(&state).expect("读配置");
-    let request = comfyhub_server_rs::capture_ingest::build_ingest_request(&run_key, &entry, &config, false);
+    let config = comfyhub_server_rs::comfy::capture::capture_config(&state).expect("读配置");
+    let request = comfyhub_server_rs::comfy::capture_ingest::build_ingest_request(&run_key, &entry, &config, false);
     println!(
         "重放 {run_key}：产物条目 {} 个，输出目录 {:?}，下载兜底 {}",
         request.outputs.len(),
@@ -108,7 +108,7 @@ async fn real_db_spot_check_replay_ingest() {
 
     // ⚠ 先把这条记录与它建的提示词从**副本**里清掉，否则 claim 会被幂等键挡住
     //    （这正是"同一次生成只建一条提示词"的实证）
-    let claim_first = comfyhub_server_rs::capture_ingest::begin_run(&state, &run_key, "ComfyUI", Some(&entry), false)
+    let claim_first = comfyhub_server_rs::comfy::capture_ingest::begin_run(&state, &run_key, "ComfyUI", Some(&entry), false)
         .expect("claim");
     println!("先抢一次（副本里已有 success 行）→ claimed={}", claim_first.claimed);
     assert!(!claim_first.claimed, "success 是终态，不该被重抢");
@@ -128,10 +128,10 @@ async fn real_db_spot_check_replay_ingest() {
         })
         .unwrap();
 
-    let claim = comfyhub_server_rs::capture_ingest::begin_run(&state, &run_key, "ComfyUI", Some(&entry), false)
+    let claim = comfyhub_server_rs::comfy::capture_ingest::begin_run(&state, &run_key, "ComfyUI", Some(&entry), false)
         .expect("重新抢");
     assert!(claim.claimed, "清掉之后必须能重新抢");
-    let outcome = comfyhub_server_rs::capture_ingest::ingest_claimed(&state, &request, &config).await;
+    let outcome = comfyhub_server_rs::comfy::capture_ingest::ingest_claimed(&state, &request, &config).await;
     println!("结果：{}", outcome.to_json());
     // 产物文件可能早被用户删了 —— 那是**如实**的 failed，不是错误；但提示词一定要建出来
     assert!(outcome.created || outcome.message.is_some(), "要么建了提示词、要么如实说为什么没建");
@@ -159,10 +159,10 @@ async fn real_db_spot_check_replay_ingest() {
 #[ignore = "真库副本抽查：需要 COMFYHUB_SPOT_DB / COMFYHUB_SPOT_STORAGE"]
 async fn real_db_spot_check_load_workflow_files() {
     let Some((state, root)) = spot_state() else { return };
-    let policy = comfyhub_server_rs::policy::ToolPolicy::load(&state).expect("读策略");
-    let config = comfyhub_server_rs::capture::capture_config(&state).expect("读配置");
-    let dirs = comfyhub_server_rs::comfy_dirs::workflow_dirs(&root, config.output_dir.as_deref());
-    let files = comfyhub_server_rs::comfy_dirs::scan(&dirs, None, 5);
+    let policy = comfyhub_server_rs::tools::policy::ToolPolicy::load(&state).expect("读策略");
+    let config = comfyhub_server_rs::comfy::capture::capture_config(&state).expect("读配置");
+    let dirs = comfyhub_server_rs::comfy::comfy_dirs::workflow_dirs(&root, config.output_dir.as_deref());
+    let files = comfyhub_server_rs::comfy::comfy_dirs::scan(&dirs, None, 5);
     println!("真机上扫到 {} 个候选（列前 {} 个）", files.len(), 5.min(files.len()));
     let mut api_loaded = 0;
     let mut ui_refused = 0;
@@ -175,7 +175,7 @@ async fn real_db_spot_check_load_workflow_files() {
                 continue;
             }
         };
-        match comfyhub_server_rs::workflow_load::load_from_file(
+        match comfyhub_server_rs::workflow::workflow_load::load_from_file(
             &state,
             &resolved,
             None,
@@ -227,7 +227,7 @@ async fn real_db_spot_check_comfy_queries() {
     assert!(listed["files"].is_array());
 
     // ③ 捕获状态（第 42 步）：真机上 ComfyUI 可能在也可能不在 —— **两种都要如实**
-    let status = comfyhub_server_rs::capture::status_json(&state).await.expect("状态");
+    let status = comfyhub_server_rs::comfy::capture::status_json(&state).await.expect("状态");
     println!("── /api/capture/status ──\n{status}");
     assert!(status["comfyReachable"].is_boolean());
     assert!(status["capturedRuns"].as_i64().unwrap_or(0) >= 0);
@@ -288,11 +288,11 @@ async fn real_db_spot_check_comfy_queries() {
                 ) = row?;
                 let Some(raw) = raw else { continue };
                 let Ok(entry) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
-                let graph = match comfyhub_server_rs::capture::history::parse(&entry).graph {
+                let graph = match comfyhub_server_rs::comfy::capture::history::parse(&entry).graph {
                     Some(serde_json::Value::Object(map)) => map,
                     _ => continue,
                 };
-                let parsed = comfyhub_server_rs::graph_parse::parse(Some(&graph));
+                let parsed = comfyhub_server_rs::workflow::graph_parse::parse(Some(&graph));
                 // 抽查时把前两条**逐字段打出来**：真库上不一致时，这几行就是第一现场
                 if compared < 2 {
                     let mut classes: Vec<String> = graph
@@ -415,8 +415,8 @@ async fn live_danbooru_lookup() {
         return;
     }
     // danbooru 这条工具不碰库，所以用内存库造一个最小的 state 就行
-    let conn = comfyhub_server_rs::db::open_memory().expect("内存库");
-    let media = comfyhub_server_rs::testpaths::scratch("live-danbooru").join("media");
+    let conn = comfyhub_server_rs::infra::db::open_memory().expect("内存库");
+    let media = comfyhub_server_rs::infra::testpaths::scratch("live-danbooru").join("media");
     std::fs::create_dir_all(&media).ok();
     let state = AppState::new(conn, ":memory:", media);
 
@@ -447,8 +447,8 @@ async fn live_web_tools_smoke() {
         eprintln!("跳过：没有设 COMFYHUB_LIVE_WEB=1");
         return;
     }
-    let conn = comfyhub_server_rs::db::open_memory().expect("内存库");
-    let media = comfyhub_server_rs::testpaths::scratch("live-web").join("media");
+    let conn = comfyhub_server_rs::infra::db::open_memory().expect("内存库");
+    let media = comfyhub_server_rs::infra::testpaths::scratch("live-web").join("media");
     std::fs::create_dir_all(&media).ok();
     let state = AppState::new(conn, ":memory:", media);
 
@@ -553,17 +553,17 @@ async fn comfy_env_report_reads_the_real_machine() {
 #[ignore = "活体抽查：需要 ComfyUI 在跑 + COMFYHUB_SPOT_DB 指一份库副本"]
 async fn live_投放的目录就是实例在读的那一份() {
     let Some((state, root)) = spot_state() else { return };
-    let config = comfyhub_server_rs::capture::capture_config(&state).expect("读捕获配置");
+    let config = comfyhub_server_rs::comfy::capture::capture_config(&state).expect("读捕获配置");
     let comfy_url = config.comfy_url.clone();
 
     // 我们按配置/Desktop/盘探**推**出来的候选（诊断用：与实例说的对不上就是这条 bug 的现场）
-    let candidates = comfyhub_server_rs::image_edit::input_dir_candidates(&state);
+    let candidates = comfyhub_server_rs::comfy::image_edit::input_dir_candidates(&state);
     println!("project_root = {}", root.display());
     println!("推出来的候选：");
     for (dir, source) in &candidates {
         println!("  [{source}] {}", dir.display());
     }
-    let probed = comfyhub_server_rs::comfy_client::instance_input_dir(&comfy_url, &candidates.iter().map(|(d, _)| d.clone()).collect::<Vec<_>>())
+    let probed = comfyhub_server_rs::comfy::comfy_client::instance_input_dir(&comfy_url, &candidates.iter().map(|(d, _)| d.clone()).collect::<Vec<_>>())
         .await;
     println!("实例自己报的 input = {}", probed.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "（问不到）".into()));
 
@@ -583,7 +583,7 @@ async fn live_投放的目录就是实例在读的那一份() {
     assert_eq!(payload["filename"], name, "文件名该是我们给的那个");
 
     // ① **实例自己看得见**（这一条就是那个 400 的解药；名单是现算的）
-    let names = comfyhub_server_rs::comfy_client::instance_input_names(&comfy_url)
+    let names = comfyhub_server_rs::comfy::comfy_client::instance_input_names(&comfy_url)
         .await
         .expect("问得到实例的名单");
     if names.is_empty() {

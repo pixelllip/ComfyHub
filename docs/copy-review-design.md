@@ -13,8 +13,8 @@
 > | --- | --- | --- |
 > | **skill 正文**（`skill.<name>.body`） | ✅ **可改**（它本来就是磁盘上的文件） | `<storage>\ai\skills\<name>\SKILL.md`、`skills\builtin\<name>\SKILL.md` |
 > | **界面注解**（`ui.*`） | ✅ **可改**（直接改主 App 的 Dart 源码文本，改完重新构建 App） | `lib/**` 里那些字面量 |
-> | **系统提示词**（`prompt.s<N>` / `prompt.nsfw`） | ⛔ **只读**（可看、可标"我读过"） | `server-rs/src/nsfw_prompt.rs` |
-> | **工具描述**（`tool.<name>.description`） | ⛔ **只读** | `server-rs/src/desktop_tools.rs` / `tools.rs` |
+> | **系统提示词**（`prompt.s<N>` / `prompt.nsfw`） | ⛔ **只读**（可看、可标"我读过"） | `server-rs/src/ai/nsfw_prompt.rs` |
+> | **工具描述**（`tool.<name>.description`） | ⛔ **只读** | `server-rs/src/tools/desktop_tools.rs` / `tools.rs` |
 >
 > **为什么不做覆盖层**（用户的原话是"不合并进我们的主程序"，这里记下我同意它的技术理由）：
 > 覆盖层会把"系统提示词 / 工具描述"从**编译期常量**变成**运行时数据** ——

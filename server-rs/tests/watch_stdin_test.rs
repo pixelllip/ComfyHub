@@ -21,7 +21,7 @@
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
 
-use comfyhub_server_rs::testpaths;
+use comfyhub_server_rs::infra::testpaths;
 
 struct Server {
     child: Child,

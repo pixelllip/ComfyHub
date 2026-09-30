@@ -33,9 +33,9 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use comfyhub_server_rs::routes::AppState;
-use comfyhub_server_rs::submit_queue::{self, Job};
-use comfyhub_server_rs::sync::{PushItem, PushRequest};
+use comfyhub_server_rs::web::routes::AppState;
+use comfyhub_server_rs::mobile::submit_queue::{self, Job};
+use comfyhub_server_rs::mobile::sync::{PushItem, PushRequest};
 
 // ---------------------------------------------------------------------------
 //  假 ComfyUI（与 `submit_test.rs` 同一套路：真 socket、真 /prompt、真 /history）
@@ -117,7 +117,7 @@ async fn fake_comfy(
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {
-    let dir = comfyhub_server_rs::testpaths::scratch(&format!("submit-queue-{label}"));
+    let dir = comfyhub_server_rs::infra::testpaths::scratch(&format!("submit-queue-{label}"));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -146,7 +146,7 @@ impl Fixture {
         let storage = dir.join("storage");
         std::fs::create_dir_all(storage.join("media")).unwrap();
 
-        let conn = comfyhub_server_rs::db::open_memory().expect("内存库");
+        let conn = comfyhub_server_rs::infra::db::open_memory().expect("内存库");
         let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("db")
@@ -178,7 +178,7 @@ impl Fixture {
         .expect("插捕获记录");
 
         let state = AppState::new(conn, ":memory:", storage.join("media"));
-        let config = comfyhub_server_rs::capture::CaptureConfig {
+        let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
             enabled: true,
             comfy_url: config_url.to_string(),
             output_dir: Some(output.display().to_string()),
@@ -187,7 +187,7 @@ impl Fixture {
             max_per_poll: 20,
             download_fallback: true,
         };
-        comfyhub_server_rs::capture::save_capture_config(&state, config).expect("存捕获配置");
+        comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).expect("存捕获配置");
         Self { state, dir }
     }
 
@@ -211,8 +211,8 @@ fn submit_job_item(queue_id: &str, payload: Value) -> PushItem {
 
 /// 走**真的** `POST /api/sync/push` 那条路（不是直接调 `accept`）——
 /// 任务书第 1 条要钉的正是"`submit_job` 在 push 里被认出来"。
-fn push_one(state: &AppState, item: PushItem) -> comfyhub_server_rs::sync::PushResult {
-    comfyhub_server_rs::sync::push(
+fn push_one(state: &AppState, item: PushItem) -> comfyhub_server_rs::mobile::sync::PushResult {
+    comfyhub_server_rs::mobile::sync::push(
         state,
         PushRequest { device_id: Some("phone-test".to_string()), batch: vec![item] },
     )
@@ -244,7 +244,7 @@ async fn wait_terminal(state: &AppState, queue_id: &str, seconds: u64) -> Job {
 
 /// 待审批列表里的那条（`GET /api/ai/pending` 的 `approvals[]`）。
 fn pending_approval(state: &AppState, call_id: &str) -> Option<Value> {
-    let body = comfyhub_server_rs::pending::pending(state).expect("读待办");
+    let body = comfyhub_server_rs::ai::pending::pending(state).expect("读待办");
     body["approvals"]
         .as_array()
         .expect("approvals 一定是数组")
@@ -254,7 +254,7 @@ fn pending_approval(state: &AppState, call_id: &str) -> Option<Value> {
 }
 
 fn approve(state: &AppState, call_id: &str) -> bool {
-    comfyhub_server_rs::runs::resolve_approval(state, call_id, true).expect("批准")
+    comfyhub_server_rs::ai::runs::resolve_approval(state, call_id, true).expect("批准")
 }
 
 /// 库里**全部**产物的 id（夹具库里本来一张都没有，所以"全部"就是"这一次收进来的"）。
@@ -303,7 +303,7 @@ async fn no_approval_means_zero_requests_and_a_rejected_reply() {
     assert!(submitted.lock().unwrap().is_empty(), "超时同样一个字节都不许发出去");
 
     // ★ **失败也要回一条**（手机上那条"已排队"永远停在排队中是最坏的表现）
-    let message = &comfyhub_server_rs::conversations::list_messages(&fixture.state, "c1").unwrap()[0];
+    let message = &comfyhub_server_rs::ai::conversations::list_messages(&fixture.state, "c1").unwrap()[0];
     assert_eq!(message.role, "assistant");
     assert!(message.text.contains("没有提交"), "{}", message.text);
     let result_part = message
@@ -368,7 +368,7 @@ async fn approval_then_the_existing_submit_chain_ingests_and_reports_media_ids()
     assert_eq!(finished.media_ids, in_library, "回执里的 id 必须就是画廊里那几条");
 
     // ③ 回执：一条助手消息 + 一个 tool_result 块（带 mediaIds）
-    let messages = comfyhub_server_rs::conversations::list_messages(&fixture.state, "c1").unwrap();
+    let messages = comfyhub_server_rs::ai::conversations::list_messages(&fixture.state, "c1").unwrap();
     assert_eq!(messages.len(), 1, "回执只许有一条");
     let message = &messages[0];
     assert_eq!(message.role, "assistant");
@@ -385,7 +385,7 @@ async fn approval_then_the_existing_submit_chain_ingests_and_reports_media_ids()
     // ④ 回执只送一次：再投递一轮不会冒出第二条（已经送达的**不进**待投递清单）
     assert_eq!(submit_queue::deliver_pending(&fixture.state), 0, "已送达的不用再管");
     assert_eq!(
-        comfyhub_server_rs::conversations::list_messages(&fixture.state, "c1").unwrap().len(),
+        comfyhub_server_rs::ai::conversations::list_messages(&fixture.state, "c1").unwrap().len(),
         1
     );
 
@@ -422,7 +422,7 @@ async fn the_same_queue_id_pushed_twice_submits_once() {
     assert_eq!(finished.state, submit_queue::STATE_DONE, "{finished:?}");
 
     assert_eq!(submitted.lock().unwrap().len(), 1, "**只许提交一次**（重复提交 = 白烧一轮显卡）");
-    let messages = comfyhub_server_rs::conversations::list_messages(&fixture.state, "c1").unwrap();
+    let messages = comfyhub_server_rs::ai::conversations::list_messages(&fixture.state, "c1").unwrap();
     assert_eq!(messages.len(), 1, "回执也只许有一条");
 
     gateway.abort();
@@ -471,7 +471,7 @@ async fn a_payload_missing_fields_is_rejected_permanently() {
         .unwrap();
     assert_eq!(rows, 0);
     assert!(submitted.lock().unwrap().is_empty());
-    assert!(comfyhub_server_rs::conversations::list_messages(&fixture.state, "c1").unwrap().is_empty());
+    assert!(comfyhub_server_rs::ai::conversations::list_messages(&fixture.state, "c1").unwrap().is_empty());
 
     gateway.abort();
     fixture.finish();
@@ -520,7 +520,7 @@ async fn the_approval_is_visible_before_anyone_can_click_it() {
     assert!(approve(&fixture.state, &call_id), "先看得见再批准 —— 点击不许落空");
     // 决定只能下一次：再点（哪怕改成拒绝）都不生效
     assert!(!approve(&fixture.state, &call_id));
-    assert!(!comfyhub_server_rs::runs::resolve_approval(&fixture.state, &call_id, false).unwrap());
+    assert!(!comfyhub_server_rs::ai::runs::resolve_approval(&fixture.state, &call_id, false).unwrap());
     assert_eq!(job(&fixture.state, queue_id).approval, "approved");
     assert!(pending_approval(&fixture.state, &call_id).is_none(), "批过的就该从待办里消失");
 
@@ -569,7 +569,7 @@ async fn a_missing_conversation_keeps_the_queue_and_delivers_later() {
         })
         .unwrap();
     assert_eq!(submit_queue::deliver_pending(&fixture.state), 1, "会话到了就该补发");
-    let messages = comfyhub_server_rs::conversations::list_messages(&fixture.state, "late").unwrap();
+    let messages = comfyhub_server_rs::ai::conversations::list_messages(&fixture.state, "late").unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].role, "assistant");
     let payload = messages[0]
@@ -602,12 +602,12 @@ fn an_old_database_gets_the_submit_jobs_table() {
     let dir = temp_dir("upgrade");
     let path = dir.join("comfyhub.db");
     {
-        let conn = comfyhub_server_rs::db::open_or_create(&path).expect("第一次建库");
+        let conn = comfyhub_server_rs::infra::db::open_or_create(&path).expect("第一次建库");
         // 把现场退回到"加这张表之前"：表删掉、版本号也退回 3
         conn.execute_batch("DROP TABLE submit_jobs; PRAGMA user_version = 3;")
             .expect("退回老库现场");
     }
-    let conn = comfyhub_server_rs::db::open_or_create(&path).expect("老库要能被收敛");
+    let conn = comfyhub_server_rs::infra::db::open_or_create(&path).expect("老库要能被收敛");
     let exists: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='submit_jobs'",
@@ -617,8 +617,8 @@ fn an_old_database_gets_the_submit_jobs_table() {
         .unwrap();
     assert_eq!(exists, 1, "老库必须补上 submit_jobs（加表忘了 bump 版本就是这条静默故障）");
     assert_eq!(
-        comfyhub_server_rs::db::schema_version(&conn).unwrap(),
-        comfyhub_server_rs::db::SCHEMA_VERSION,
+        comfyhub_server_rs::infra::db::schema_version(&conn).unwrap(),
+        comfyhub_server_rs::infra::db::SCHEMA_VERSION,
         "版本号要跟着走到 4，否则下一次又会被当成老库"
     );
     drop(conn);
@@ -660,7 +660,7 @@ async fn the_http_route_and_the_existing_approval_endpoint_are_the_only_channel(
 
     // ① push（真路由）：受理 = `applied` + 立刻回，**不等审批也不等生成**
     let (status, body) = send(
-        comfyhub_server_rs::routes::router(fixture.state.clone()),
+        comfyhub_server_rs::web::routes::router(fixture.state.clone()),
         "POST",
         "/api/sync/push",
         Some(json!({
@@ -681,7 +681,7 @@ async fn the_http_route_and_the_existing_approval_endpoint_are_the_only_channel(
 
     // ② 桌面上看得见（`/api/ai/pending` 的 approvals[]，形状与工具审批同形）
     let (status, body) = send(
-        comfyhub_server_rs::routes::router(fixture.state.clone()),
+        comfyhub_server_rs::web::routes::router(fixture.state.clone()),
         "GET",
         "/api/ai/pending",
         None,
@@ -699,7 +699,7 @@ async fn the_http_route_and_the_existing_approval_endpoint_are_the_only_channel(
 
     // ③ **现有的批准端点**（一个字都没为 M5 新加）→ 真的改到了那条排队提交
     let (status, body) = send(
-        comfyhub_server_rs::routes::router(fixture.state.clone()),
+        comfyhub_server_rs::web::routes::router(fixture.state.clone()),
         "POST",
         "/api/ai/tool-calls/submit:q-http/approve",
         Some(json!({})),
@@ -711,7 +711,7 @@ async fn the_http_route_and_the_existing_approval_endpoint_are_the_only_channel(
 
     // ④ 再说"拒绝"就晚了（决定只能下一次）——同一个端点、同一把锁
     let (status, body) = send(
-        comfyhub_server_rs::routes::router(fixture.state.clone()),
+        comfyhub_server_rs::web::routes::router(fixture.state.clone()),
         "POST",
         "/api/ai/tool-calls/submit:q-http/deny",
         Some(json!({})),
@@ -722,7 +722,7 @@ async fn the_http_route_and_the_existing_approval_endpoint_are_the_only_channel(
 
     // ⑤ 另一条走拒绝：`/api/ai/pending` 上立刻消失，而且**一个上游请求都不会发**
     let (_, _) = send(
-        comfyhub_server_rs::routes::router(fixture.state.clone()),
+        comfyhub_server_rs::web::routes::router(fixture.state.clone()),
         "POST",
         "/api/sync/push",
         Some(json!({
@@ -735,7 +735,7 @@ async fn the_http_route_and_the_existing_approval_endpoint_are_the_only_channel(
     )
     .await;
     let (status, body) = send(
-        comfyhub_server_rs::routes::router(fixture.state.clone()),
+        comfyhub_server_rs::web::routes::router(fixture.state.clone()),
         "POST",
         "/api/ai/tool-calls/submit:q-http-deny/deny",
         Some(json!({})),
@@ -749,7 +749,7 @@ async fn the_http_route_and_the_existing_approval_endpoint_are_the_only_channel(
     assert!(submitted.lock().unwrap().is_empty(), "被拒的那条一个字节都不许发");
 
     let (_, body) = send(
-        comfyhub_server_rs::routes::router(fixture.state.clone()),
+        comfyhub_server_rs::web::routes::router(fixture.state.clone()),
         "GET",
         "/api/ai/pending",
         None,

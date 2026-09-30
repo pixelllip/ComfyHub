@@ -23,11 +23,11 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use comfyhub_server_rs::routes::{router, AppState};
+use comfyhub_server_rs::web::routes::{router, AppState};
 
 /// 用 `db/schema.sqlite.sql`（**唯一真源**）建库。
 fn state(label: &str) -> (AppState, std::path::PathBuf) {
-    let dir = comfyhub_server_rs::testpaths::scratch(&format!("attachments-{label}"));
+    let dir = comfyhub_server_rs::infra::testpaths::scratch(&format!("attachments-{label}"));
     std::fs::create_dir_all(dir.join("storage").join("media")).unwrap();
 
     let conn = Connection::open_in_memory().unwrap();

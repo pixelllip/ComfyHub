@@ -22,7 +22,7 @@ use tower::ServiceExt;
 
 /// 用 `db/schema.sqlite.sql`（**唯一真源**）建库，再灌一点测试数据。
 fn test_conn() -> Connection {
-    let conn = comfyhub_server_rs::db::open_memory().expect("内存库");
+    let conn = comfyhub_server_rs::infra::db::open_memory().expect("内存库");
     let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("db")
@@ -86,22 +86,22 @@ fn app() -> axum::Router {
 ///
 /// 顺带把产物目录准备好：夹具里 `media_assets.id=100` 的 `stored_name` 是 `a.png`，
 /// 文件流端点要真的能在磁盘上找到它（内容已知，便于断言 Range 的字节）。
-fn state() -> comfyhub_server_rs::routes::AppState {
+fn state() -> comfyhub_server_rs::web::routes::AppState {
     // ⚠ 唯一性靠"**纳秒 + 进程内计数器**"，只靠纳秒**撞过**：Windows 上
     // `SystemTime` 的粒度约 100ns，并行用例里两个 `state()` 拿到同一个值，
     // 于是两个用例共用同一个临时根 —— 一个写进去的长期记忆被另一个读到，
     // 表现是"拒绝了的调用居然写进了记忆"这种莫名其妙的红（2026-09-25 实测）。
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let root = comfyhub_server_rs::testpaths::scratch(&format!("api-{seq}"));
+    let root = comfyhub_server_rs::infra::testpaths::scratch(&format!("api-{seq}"));
     let media = root.join("media");
     std::fs::create_dir_all(&media).unwrap();
     std::fs::write(media.join("a.png"), b"0123456789abcdef").unwrap();
-    comfyhub_server_rs::routes::AppState::new(test_conn(), ":memory:", media)
+    comfyhub_server_rs::web::routes::AppState::new(test_conn(), ":memory:", media)
 }
 
-fn router_for(state: comfyhub_server_rs::routes::AppState) -> axum::Router {
-    comfyhub_server_rs::routes::router(state)
+fn router_for(state: comfyhub_server_rs::web::routes::AppState) -> axum::Router {
+    comfyhub_server_rs::web::routes::router(state)
 }
 
 /// 发一个带 JSON body 的请求（写端点用）。
@@ -188,7 +188,7 @@ async fn health_reports_engine_and_schema_version() {
     assert_eq!(body["impl"], "rust");
     assert_eq!(
         body["schemaVersion"].as_i64(),
-        Some(comfyhub_server_rs::db::SCHEMA_VERSION),
+        Some(comfyhub_server_rs::infra::db::SCHEMA_VERSION),
         "就是 PRAGMA user_version（真源是 db.rs 的 SCHEMA_VERSION，别写死数字）"
     );
     assert_eq!(body["engine"]["fts5"], true, "R14：bundled 引擎必须带 FTS5");
@@ -211,7 +211,7 @@ async fn health_reports_engine_and_schema_version() {
     // 夹具的 storage 必须落在**测试暂存根**里（`target\.scratch`，见 `testpaths`）——
     // 那既是唯一约定的落盘位置，也顺带钉住"受限会话里用例照样能跑"。
     assert!(
-        std::path::Path::new(storage).starts_with(comfyhub_server_rs::testpaths::root()),
+        std::path::Path::new(storage).starts_with(comfyhub_server_rs::infra::testpaths::root()),
         "夹具的 storage 要在测试暂存根下：{storage}"
     );
     assert!(body["serverTime"].as_str().unwrap().contains('T'), "{body}");
@@ -460,14 +460,14 @@ async fn ordinary_errors_put_the_human_text_in_error() {
 async fn ai_errors_put_the_stable_code_in_error_and_the_human_text_in_detail() {
     use axum::response::IntoResponse;
 
-    let body_of = |error: comfyhub_server_rs::routes::ApiError| async move {
+    let body_of = |error: comfyhub_server_rs::web::routes::ApiError| async move {
         let response = error.into_response();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice::<Value>(&bytes).unwrap())
     };
 
-    let (status, body) = body_of(comfyhub_server_rs::routes::ApiError::ai(
+    let (status, body) = body_of(comfyhub_server_rs::web::routes::ApiError::ai(
         "CONFIG_ERROR",
         "会话不存在: 999999",
     ))
@@ -478,7 +478,7 @@ async fn ai_errors_put_the_stable_code_in_error_and_the_human_text_in_detail() {
     assert_eq!(body["detail"], "会话不存在: 999999");
 
     // 没有人类可读说明时 `detail` **整键省略**（Kotlin 那边 `cause.message == null` 就是这个形状）
-    let (_, body) = body_of(comfyhub_server_rs::routes::ApiError::ai("CONFIG_ERROR", "   ")).await;
+    let (_, body) = body_of(comfyhub_server_rs::web::routes::ApiError::ai("CONFIG_ERROR", "   ")).await;
     assert_eq!(keys(&body), vec!["error"], "`detail` 必须是**不出现**，不是 null：{body}");
 }
 
@@ -840,8 +840,8 @@ async fn unmigrated_endpoints_answer_501_and_migrated_ones_work() {
 ///
 /// 目录布局照**发布包/源码树的真实形状**摆：`<根>\storage\media` 是产物目录，
 /// 于是 `AppState::project_root()` 算出来就是 `<根>`（与脚本传的 `COMFYHUB_PROJECT_ROOT` 等价）。
-fn state_with_workflow_files() -> (comfyhub_server_rs::routes::AppState, std::path::PathBuf) {
-    let root = comfyhub_server_rs::testpaths::scratch("api-workflows");
+fn state_with_workflow_files() -> (comfyhub_server_rs::web::routes::AppState, std::path::PathBuf) {
+    let root = comfyhub_server_rs::infra::testpaths::scratch("api-workflows");
 
     // 项目内的 comfyui（三份目录来源里的第 ② 份）
     let home = root.join("comfyui");
@@ -857,7 +857,7 @@ fn state_with_workflow_files() -> (comfyhub_server_rs::routes::AppState, std::pa
 
     let conn = test_conn();
     // 其中一份已经在库里（`comfy_load_workflow` 用的就是 `run_key = file:<sha256>`）
-    let sha = comfyhub_server_rs::comfy_dirs::sha256_hex(br#"{"nodes":[],"links":[]}"#);
+    let sha = comfyhub_server_rs::comfy::comfy_dirs::sha256_hex(br#"{"nodes":[],"links":[]}"#);
     conn.execute(
         "INSERT INTO capture_runs (run_key, status, media_count, raw, prompt_id, created_at)
          VALUES (?1, 'success', 0, NULL, 10, '2026-09-24T00:00:00.000Z')",
@@ -865,7 +865,7 @@ fn state_with_workflow_files() -> (comfyhub_server_rs::routes::AppState, std::pa
     )
     .unwrap();
 
-    (comfyhub_server_rs::routes::AppState::new(conn, ":memory:", media), home)
+    (comfyhub_server_rs::web::routes::AppState::new(conn, ":memory:", media), home)
 }
 
 #[tokio::test]
@@ -2052,7 +2052,7 @@ async fn sync_manifest_lists_scope_and_never_offers_credentials() {
     );
     assert_eq!(
         body["schemaVersion"].as_i64(),
-        Some(comfyhub_server_rs::db::SCHEMA_VERSION),
+        Some(comfyhub_server_rs::infra::db::SCHEMA_VERSION),
         "= PRAGMA user_version（真源是 db.rs 的 SCHEMA_VERSION，别写死数字）"
     );
     // 夹具是**直接 SQL 插的行** —— 触发器照常点亮 `_sync_log`，所以游标已经往前走了。
@@ -2410,7 +2410,7 @@ fn push_item(kind: &str, ref_id: &str, payload: serde_json::Value) -> serde_json
     serde_json::json!({ "kind": kind, "refId": ref_id, "op": "upsert", "payload": payload })
 }
 
-async fn push(state: &comfyhub_server_rs::routes::AppState, batch: Vec<serde_json::Value>) -> (StatusCode, Value) {
+async fn push(state: &comfyhub_server_rs::web::routes::AppState, batch: Vec<serde_json::Value>) -> (StatusCode, Value) {
     send_json(
         router_for(state.clone()),
         "POST",
@@ -2980,7 +2980,7 @@ async fn media_prompt_has_three_outcomes() {
 ///
 /// 这几个正是 `systemPrompt` 里那几段的来源：环境头、工具清单、白名单、记忆、Skills ——
 /// 少灌一样，"那一段在提示词里到底写对没写对"就完全没被走到。
-fn seed_run_kit(state: &comfyhub_server_rs::routes::AppState) {
+fn seed_run_kit(state: &comfyhub_server_rs::web::routes::AppState) {
     state
         .with(|conn| {
             conn.execute(
@@ -3298,7 +3298,7 @@ async fn send_as(
 }
 
 /// 往 `app_settings` 里写一行（闸门状态就存在那儿：`auth.pairing`）。
-fn put_setting(state: &comfyhub_server_rs::routes::AppState, key: &str, value: &str) {
+fn put_setting(state: &comfyhub_server_rs::web::routes::AppState, key: &str, value: &str) {
     state
         .with(|conn| {
             conn.execute(
@@ -3311,7 +3311,7 @@ fn put_setting(state: &comfyhub_server_rs::routes::AppState, key: &str, value: &
         .unwrap();
 }
 
-fn read_setting(state: &comfyhub_server_rs::routes::AppState, key: &str) -> Option<Value> {
+fn read_setting(state: &comfyhub_server_rs::web::routes::AppState, key: &str) -> Option<Value> {
     state
         .with(|conn| {
             let raw: Option<String> = conn
@@ -3327,7 +3327,7 @@ fn read_setting(state: &comfyhub_server_rs::routes::AppState, key: &str) -> Opti
 }
 
 /// 闸门开着 + 一台已配对设备 + 一个全局令牌。
-fn seed_auth(state: &comfyhub_server_rs::routes::AppState, allow_credentials: bool) {
+fn seed_auth(state: &comfyhub_server_rs::web::routes::AppState, allow_credentials: bool) {
     let file = serde_json::json!({
         "schema": "comfyhub-inbound-auth/2",
         "enabled": true,
@@ -4257,7 +4257,7 @@ async fn append_message_assigns_seq_and_writes_parts_atomically() {
 /// ⚠ 必须真的插进 `ai_providers` / `ai_models`：`ai_runs.provider_id` 没有外键，
 /// 但 `run_kit` 与模型目录要它们；而"夹具里没有 provider"正是那种
 /// "测试全绿、真库才炸"的缝（`/api/sync/changes` 那次 500 的教训）。
-fn seed_provider_and_model(state: &comfyhub_server_rs::routes::AppState) {
+fn seed_provider_and_model(state: &comfyhub_server_rs::web::routes::AppState) {
     state
         .write(|tx| {
             // `credential_ref` 刻意留 NULL：这样执行器**不会**在"解析密钥"那一步就失败，
@@ -4286,7 +4286,7 @@ fn seed_provider_and_model(state: &comfyhub_server_rs::routes::AppState) {
 /// Run 的一生：建 → 落事件 → 终态；键集合与 SQL 里的时间列都要对。
 #[tokio::test]
 async fn run_persistence_round_trips_shape_and_terminal_state() {
-    use comfyhub_server_rs::runs;
+    use comfyhub_server_rs::ai::runs;
     let state = state();
     seed_provider_and_model(&state);
 
@@ -4391,7 +4391,7 @@ async fn run_persistence_round_trips_shape_and_terminal_state() {
 /// 事件：批量写 → `?after=` 续传 → **保留窗口留尾部**（红线 R5）。
 #[tokio::test]
 async fn run_events_replay_after_seq_and_prune_keeps_the_tail() {
-    use comfyhub_server_rs::runs;
+    use comfyhub_server_rs::ai::runs;
     let state = state();
     seed_provider_and_model(&state);
     let run = runs::create(
@@ -4470,7 +4470,7 @@ async fn run_events_replay_after_seq_and_prune_keeps_the_tail() {
 /// 库里留着它们就是"界面永远转圈 + 永远等不到人点的审批卡"。
 #[tokio::test]
 async fn startup_recovery_fails_stale_runs_and_denies_pending_approvals() {
-    use comfyhub_server_rs::runs;
+    use comfyhub_server_rs::ai::runs;
     let state = state();
     seed_provider_and_model(&state);
 
@@ -4645,7 +4645,7 @@ async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
 }
 
 /// 把夹具 provider 的 Base URL 指到假网关。
-fn point_at_gateway(state: &comfyhub_server_rs::routes::AppState, base_url: &str) {
+fn point_at_gateway(state: &comfyhub_server_rs::web::routes::AppState, base_url: &str) {
     state
         .write(|tx| {
             tx.execute(
@@ -4845,7 +4845,7 @@ async fn fake_tool_gateway(tool: &'static str, arguments: &'static str) -> (Stri
 }
 
 /// 写工具权限策略（与 Kotlin `ToolPolicyConfig` 同一份 JSON）。
-fn set_policy(state: &comfyhub_server_rs::routes::AppState, json: serde_json::Value) {
+fn set_policy(state: &comfyhub_server_rs::web::routes::AppState, json: serde_json::Value) {
     state
         .write(|tx| {
             tx.execute(
@@ -5002,7 +5002,7 @@ async fn reasoning_echo_gateway() -> (
 
 /// 起一个 Run 并等它收尾（工具类用例的公共开头）。
 async fn start_run_and_wait(
-    state: &comfyhub_server_rs::routes::AppState,
+    state: &comfyhub_server_rs::web::routes::AppState,
     text: &str,
 ) -> (String, String, serde_json::Value) {
     let (_, body) = send_json(
@@ -5019,8 +5019,8 @@ async fn start_run_and_wait(
 }
 
 /// 助手那条消息的正文（历史视图里看到的东西）。
-fn assistant_text(state: &comfyhub_server_rs::routes::AppState, assistant_id: &str) -> String {
-    let messages = comfyhub_server_rs::conversations::list_messages(state, "conv-0").unwrap();
+fn assistant_text(state: &comfyhub_server_rs::web::routes::AppState, assistant_id: &str) -> String {
+    let messages = comfyhub_server_rs::ai::conversations::list_messages(state, "conv-0").unwrap();
     messages
         .iter()
         .find(|m| m.id == assistant_id)
@@ -5117,7 +5117,7 @@ async fn executor_runs_a_tool_round_trip_and_orders_the_parts() {
     assert_eq!(keys(&completed), vec!["callId", "elapsedMs", "name", "preview", "result"]);
 
     // 审计表里留了痕
-    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0]["name"], "list_skills");
     assert_eq!(calls[0]["status"], "ok");
@@ -5231,7 +5231,7 @@ async fn approval_gate_opens_before_the_user_can_click() {
     // 只能干等超时"正是这条红线要防的事。所以判据是"立刻点也能被接受"。
     let mut accepted = false;
     for _ in 0..80 {
-        let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+        let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
         if calls.is_empty() || calls[0]["status"] != "pending" {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
             continue;
@@ -5271,7 +5271,7 @@ async fn approval_gate_opens_before_the_user_can_click() {
     // 落库的行：`approval` 记用户的决定、`status` 记执行结果，**而且只有一行** ——
     // 顺手把 `status` 也写成 `approved`（或让两列互相顶替）会让原地更新匹配不上，
     // 同一次调用在库里变成两行，而 `/api/ai/pending` 又会把它当成"还在等人批"。
-    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
     assert_eq!(calls.len(), 1, "同一次调用只许一行（两列分开记，不是插新行）：{calls:?}");
     assert_eq!(calls[0]["approval"], "approved");
     assert_eq!(calls[0]["status"], "ok");
@@ -5332,7 +5332,7 @@ async fn a_denied_call_is_recorded_and_never_runs() {
 
     let mut denied = false;
     for _ in 0..80 {
-        let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+        let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
         if calls.is_empty() || calls[0]["status"] != "pending" {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
             continue;
@@ -5354,7 +5354,7 @@ async fn a_denied_call_is_recorded_and_never_runs() {
     let run = wait_for_run(&state, &run_id).await;
     assert_eq!(run["status"], "completed", "拒绝不代表整轮 Run 失败：{run}");
 
-    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
     assert_eq!(calls.len(), 1, "{calls:?}");
     // 两列的分工（与 Kotlin `ToolRegistry.failure` 逐字一致）：`approval` 记用户的决定，
     // `status` 记执行结果 —— 被拒绝的那次**没有执行**，所以状态是 `failed` 而不是 `ok`；
@@ -5414,14 +5414,14 @@ async fn tool_round_limit_wraps_up_instead_of_failing_the_run() {
     assert_eq!(run["status"], "completed", "轮数到顶不是 Run 失败：{run}");
 
     // 只执行了一次（第 2 轮那批被挡在闸门外），而且**如实说了**
-    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
     assert_eq!(calls.len(), 1, "到顶那一轮不许执行：{calls:?}");
     assert_eq!(calls[0]["status"], "ok");
     let text = assistant_text(&state, &assistant_id);
     assert!(text.contains("工具轮数上限 1"), "要如实说明：{text}");
     assert!(text.contains("这次要调用的工具没有执行"), "{text}");
     // 那句话要**同时**落进有序块（前端在 parts 非空时只渲染 parts）
-    let messages = comfyhub_server_rs::conversations::list_messages(&state, "conv-0").unwrap();
+    let messages = comfyhub_server_rs::ai::conversations::list_messages(&state, "conv-0").unwrap();
     let parts = &messages.iter().find(|m| m.id == assistant_id).unwrap().parts;
     assert!(
         parts.iter().any(|p| p.r#type == "text" && p.text.as_deref().unwrap_or("").contains("工具轮数上限")),
@@ -5450,7 +5450,7 @@ async fn tool_budget_exceeded_is_reported_per_call() {
     let (run_id, assistant_id, run) = start_run_and_wait(&state, "两次技能").await;
     assert_eq!(run["status"], "completed", "{run}");
 
-    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
     assert_eq!(calls.len(), 2, "两次调用都要留痕：{calls:?}");
     // ⚠ 按 `callId` 找，**不要**按下标：同一毫秒里的两行，`ORDER BY started_at, id`
     // 的 tie-break 是随机 UUID（实测踩过：断言写在下标上，红得莫名其妙）
@@ -5468,7 +5468,7 @@ async fn tool_budget_exceeded_is_reported_per_call() {
     assert!(text.contains("工具调用次数已达上限（1 次）"), "{text}");
     // 第 3 次那个调用**没有执行**（额度已经用尽）→ 库里只有两行
     assert_eq!(
-        comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap().len(),
+        comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap().len(),
         2,
         "额度用尽之后不许再执行"
     );
@@ -5495,7 +5495,7 @@ async fn failed_calls_do_not_spend_the_budget() {
     let (run_id, _, run) = start_run_and_wait(&state, "先失败一次再查技能").await;
     assert_eq!(run["status"], "completed", "{run}");
 
-    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
     assert_eq!(calls.len(), 2, "{calls:?}");
     let failed = calls.iter().find(|c| c["callId"] == "call_1").unwrap();
     let ok = calls.iter().find(|c| c["callId"] == "call_2").unwrap();
@@ -5527,7 +5527,7 @@ async fn unknown_tool_is_reported_as_tool_not_found() {
     let (run_id, _, run) = start_run_and_wait(&state, "读个文件").await;
     assert_eq!(run["status"], "completed", "{run}");
 
-    let calls = comfyhub_server_rs::runs::list_tool_calls(&state, &run_id).unwrap();
+    let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert_eq!(calls[0]["status"], "failed");
     assert_eq!(calls[0]["approval"], "denied");
@@ -5655,7 +5655,7 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
     assert_eq!(stored["total"], 2);
 
     // ④ 答案喂回了模型（正文是 Kotlin 那两句的逐字形状），而且落进了有序块
-    let messages = comfyhub_server_rs::conversations::list_messages(&state, "conv-0").unwrap();
+    let messages = comfyhub_server_rs::ai::conversations::list_messages(&state, "conv-0").unwrap();
     let assistant = messages.iter().find(|m| m.id == assistant_id).unwrap();
     assert_eq!(assistant.text, "收口了");
     let result_part = assistant
@@ -5755,7 +5755,7 @@ async fn skipped_questions_are_reported_as_unanswered() {
     let run = wait_for_run(&state, &run_id).await;
     assert_eq!(run["status"], "completed", "{run}");
 
-    let messages = comfyhub_server_rs::conversations::list_messages(&state, "conv-0").unwrap();
+    let messages = comfyhub_server_rs::ai::conversations::list_messages(&state, "conv-0").unwrap();
     let assistant = messages.iter().find(|m| m.id == assistant_id).unwrap();
     let text = assistant
         .parts
@@ -5994,7 +5994,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     .await;
     assert_eq!(saved["effectiveBlur"], true);
     // run-kit 读的是**同一行**（各写一份键名就会出现"界面开了、提示词没注入"）
-    assert_eq!(comfyhub_server_rs::run_kit::nsfw_enabled(&state).unwrap(), true);
+    assert_eq!(comfyhub_server_rs::ai::run_kit::nsfw_enabled(&state).unwrap(), true);
 }
 
 /// 上游明确拒绝（429）：错误码要归到 `RATE_LIMIT`，而不是笼统的"失败了"。
@@ -6201,7 +6201,7 @@ async fn start_run_validates_then_creates_messages_and_run() {
 }
 
 /// 某个 Run 落库的事件类型（按 seq 升序）。
-fn event_types(state: &comfyhub_server_rs::routes::AppState, run_id: &str) -> Vec<String> {
+fn event_types(state: &comfyhub_server_rs::web::routes::AppState, run_id: &str) -> Vec<String> {
     state
         .with(|conn| {
             let mut stmt = conn
@@ -6218,10 +6218,10 @@ fn event_types(state: &comfyhub_server_rs::routes::AppState, run_id: &str) -> Ve
 ///
 /// 上游是 `127.0.0.1:9`（没人监听），所以失败得很快；这里给足 3 秒并在超时后断言失败，
 /// 而不是"睡固定时长碰运气"。
-async fn wait_for_run(state: &comfyhub_server_rs::routes::AppState, run_id: &str) -> serde_json::Value {
+async fn wait_for_run(state: &comfyhub_server_rs::web::routes::AppState, run_id: &str) -> serde_json::Value {
     for _ in 0..60 {
-        let run = comfyhub_server_rs::runs::get(state, run_id).expect("Run 在库里");
-        if run.status != comfyhub_server_rs::runs::RUNNING {
+        let run = comfyhub_server_rs::ai::runs::get(state, run_id).expect("Run 在库里");
+        if run.status != comfyhub_server_rs::ai::runs::RUNNING {
             return serde_json::to_value(&run).unwrap();
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -6344,9 +6344,9 @@ async fn retry_reuses_the_user_message_and_never_wipes_a_reply_with_content() {
 async fn run_events_stream_replays_and_resumes() {
     let state = state();
     seed_provider_and_model(&state);
-    let run = comfyhub_server_rs::runs::create(
+    let run = comfyhub_server_rs::ai::runs::create(
         &state,
-        comfyhub_server_rs::runs::NewRun {
+        comfyhub_server_rs::ai::runs::NewRun {
             conversation_id: "conv-0".into(),
             provider_id: "goat".into(),
             model_id: "m1".into(),
@@ -6370,7 +6370,7 @@ async fn run_events_stream_replays_and_resumes() {
             .emit(&state, &run.id, "text.delta", &serde_json::json!({ "messageId": "assistant-1", "text": text }))
             .unwrap();
     }
-    comfyhub_server_rs::run_lifecycle::finish_run(
+    comfyhub_server_rs::ai::run_lifecycle::finish_run(
         &state.bus,
         &state,
         &run.id,
@@ -6453,7 +6453,7 @@ async fn read_sse_with_headers(
 // ---------------------------------------------------------------------------
 
 /// 夹具里的两个 skill 根：`<root>/skills/builtin`（只读）与 `<root>/ai/skills`（投放口）。
-fn skill_dirs(state: &comfyhub_server_rs::routes::AppState) -> (std::path::PathBuf, std::path::PathBuf) {
+fn skill_dirs(state: &comfyhub_server_rs::web::routes::AppState) -> (std::path::PathBuf, std::path::PathBuf) {
     let storage = state.media_dir().parent().unwrap().to_path_buf();
     (state.project_root().join("skills").join("builtin"), storage.join("ai").join("skills"))
 }
@@ -6745,7 +6745,7 @@ async fn skills_rescan_registers_plain_files_and_never_touches_frontmatter() {
 // ---------------------------------------------------------------------------
 
 /// `<storage>\ai` —— 记忆文件的目录（端点内部就是这么拼的）。
-fn memory_dir(state: &comfyhub_server_rs::routes::AppState) -> std::path::PathBuf {
+fn memory_dir(state: &comfyhub_server_rs::web::routes::AppState) -> std::path::PathBuf {
     state.media_dir().parent().unwrap().join("ai")
 }
 
@@ -7636,7 +7636,7 @@ fn parse_sse(body: &str) -> Vec<(Option<i64>, String, Value)> {
 // ---------------------------------------------------------------------------
 
 /// 往夹具里加一个 provider（凭据端点的三段判定里第一段就是 `requireProvider`）。
-fn add_provider(state: &comfyhub_server_rs::routes::AppState, id: &str, reference: Option<&str>) {
+fn add_provider(state: &comfyhub_server_rs::web::routes::AppState, id: &str, reference: Option<&str>) {
     state
         .with(|conn| {
             conn.execute(
@@ -7702,7 +7702,7 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
     assert_eq!(body["configured"], false);
     let store_file = state.media_dir().parent().unwrap().join("ai").join("credentials.dpapi.json");
     assert!(
-        comfyhub_server_rs::credentials::read_store(&store_file).is_empty(),
+        comfyhub_server_rs::provider::credentials::read_store(&store_file).is_empty(),
         "留空必须**一个字节都不写**（AIH-012）"
     );
 
@@ -7723,7 +7723,7 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
 
     let raw_file = std::fs::read_to_string(&store_file).expect("凭据文件应当已经落盘");
     assert!(!raw_file.contains(sentinel), "文件里不许出现明文（AIH-015）");
-    let store = comfyhub_server_rs::credentials::read_store(&store_file);
+    let store = comfyhub_server_rs::provider::credentials::read_store(&store_file);
     let sealed_text = store.get(&reference).expect("这个 ref 应当已入库").clone();
     // 字母表绊线：Kotlin 用的是 `Base64.getEncoder()`（标准 `+/`），写成 url-safe 的话
     // Kotlin 侧解不开 —— 随机密文里出现 `-`/`_` 是必然事件，所以这条能真的挡住改错的那天。
@@ -7733,14 +7733,14 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
     );
     assert_eq!(sealed_text.len() % 4, 0, "标准 base64 的长度一定是 4 的倍数（带填充）");
     // 编码路径只有一处：`base64_std` 出来的东西必须就是库里那份（改字母表/去掉填充都会红）
-    let decoded = comfyhub_server_rs::auth::base64_decode(&sealed_text).expect("base64");
-    assert_eq!(comfyhub_server_rs::auth::base64_std(&decoded), sealed_text);
+    let decoded = comfyhub_server_rs::mobile::auth::base64_decode(&sealed_text).expect("base64");
+    assert_eq!(comfyhub_server_rs::mobile::auth::base64_std(&decoded), sealed_text);
 
     // 自己反解一次：证明写出去的确实是"本机 DPAPI 能解开的密文"
     #[cfg(windows)]
     {
-        let bytes = comfyhub_server_rs::auth::base64_decode(&sealed_text).expect("base64");
-        let plain = comfyhub_server_rs::auth::unprotect_secret(&bytes).expect("DPAPI 解密");
+        let bytes = comfyhub_server_rs::mobile::auth::base64_decode(&sealed_text).expect("base64");
+        let plain = comfyhub_server_rs::mobile::auth::unprotect_secret(&bytes).expect("DPAPI 解密");
         assert_eq!(String::from_utf8(plain).unwrap(), sentinel);
     }
 
@@ -7760,7 +7760,7 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["configured"], false);
     assert_eq!(body["source"], "none");
-    assert!(!comfyhub_server_rs::credentials::read_store(&store_file).contains_key(&reference));
+    assert!(!comfyhub_server_rs::provider::credentials::read_store(&store_file).contains_key(&reference));
 }
 
 /// 删 provider 时**托管密钥跟着走**（2026-09-28 用户 bug「删除 provider 时，密钥被设置成
@@ -7785,12 +7785,12 @@ async fn deleting_a_provider_takes_its_orphan_credential_with_it() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(comfyhub_server_rs::credentials::read_store(&store_file).contains_key(&reference));
+    assert!(comfyhub_server_rs::provider::credentials::read_store(&store_file).contains_key(&reference));
 
     let (status, _) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/p-orphan").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        !comfyhub_server_rs::credentials::read_store(&store_file).contains_key(&reference),
+        !comfyhub_server_rs::provider::credentials::read_store(&store_file).contains_key(&reference),
         "provider 删掉后它那把无人引用的 key 应当一并清掉"
     );
 
@@ -7808,13 +7808,13 @@ async fn deleting_a_provider_takes_its_orphan_credential_with_it() {
     let (status, _) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/p-share-a").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        comfyhub_server_rs::credentials::read_store(&store_file).contains_key(&reference),
+        comfyhub_server_rs::provider::credentials::read_store(&store_file).contains_key(&reference),
         "ref 还有别的 provider 在用，key 必须留着"
     );
     let (status, _) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/p-share-b").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        !comfyhub_server_rs::credentials::read_store(&store_file).contains_key(&reference),
+        !comfyhub_server_rs::provider::credentials::read_store(&store_file).contains_key(&reference),
         "最后一个引用也删掉后，key 才跟着走"
     );
 }
@@ -7860,7 +7860,7 @@ async fn credential_endpoints_report_config_errors_as_ai_errors() {
 #[tokio::test]
 async fn web_search_credential_is_write_only_and_read_only_when_env_provides_it() {
     let state = state();
-    let from_env = comfyhub_server_rs::credentials::env_source(comfyhub_server_rs::credentials::KEENABLE_REF)
+    let from_env = comfyhub_server_rs::provider::credentials::env_source(comfyhub_server_rs::provider::credentials::KEENABLE_REF)
         .is_some();
 
     let (status, body) = get_json(router_for(state.clone()), "/api/ai/web-search/credential").await;
@@ -7911,13 +7911,13 @@ async fn web_search_credential_is_write_only_and_read_only_when_env_provides_it(
 /// 直接调工具层（不起 HTTP）：`execute` 就是执行器的入口，
 /// 这一层的用例不该为了调一个工具去搭假网关。
 async fn call_tool(
-    state: &comfyhub_server_rs::routes::AppState,
+    state: &comfyhub_server_rs::web::routes::AppState,
     name: &str,
     arguments: serde_json::Value,
-) -> Result<comfyhub_server_rs::tools::ToolOutcome, comfyhub_server_rs::tools::ToolFailure> {
-    let policy = comfyhub_server_rs::policy::ToolPolicy::load(state).unwrap();
-    let mut session = comfyhub_server_rs::tools::ToolSession::default();
-    comfyhub_server_rs::tools::execute(state, &policy, "run-x", "conv-x", name, &arguments, &mut session)
+) -> Result<comfyhub_server_rs::tools::tools::ToolOutcome, comfyhub_server_rs::tools::tools::ToolFailure> {
+    let policy = comfyhub_server_rs::tools::policy::ToolPolicy::load(state).unwrap();
+    let mut session = comfyhub_server_rs::tools::tools::ToolSession::default();
+    comfyhub_server_rs::tools::tools::execute(state, &policy, "run-x", "conv-x", name, &arguments, &mut session)
         .await
 }
 
@@ -7952,12 +7952,12 @@ async fn desktop_file_tools_stay_inside_the_whitelist() {
     assert!(!root.join("storage").join("x.txt").exists(), "越界写被拒了却落了盘");
 
     // ③ 禁写段：即使用户把白名单放宽到项目根也不行
-    let mut config: comfyhub_server_rs::policy::ToolPolicyConfig =
+    let mut config: comfyhub_server_rs::tools::policy::ToolPolicyConfig =
         serde_json::from_str(r#"{"writeRoots":["."]}"#).unwrap();
     config.write_roots = vec![".".to_string()];
-    let wide = comfyhub_server_rs::policy::ToolPolicy::new(root.clone(), config);
-    let mut session = comfyhub_server_rs::tools::ToolSession::default();
-    let forbidden = comfyhub_server_rs::tools::execute(
+    let wide = comfyhub_server_rs::tools::policy::ToolPolicy::new(root.clone(), config);
+    let mut session = comfyhub_server_rs::tools::tools::ToolSession::default();
+    let forbidden = comfyhub_server_rs::tools::tools::execute(
         &state,
         &wide,
         "run-x",
@@ -7987,7 +7987,7 @@ async fn desktop_file_tools_stay_inside_the_whitelist() {
     assert_eq!(std::fs::read_to_string(root.join("comfyui").join("a.txt")).unwrap(), "甲乙");
 
     // ⑤ 超过单次上限：**告诉模型怎么分段写**，不是干巴巴一句失败
-    let huge = "x".repeat(comfyhub_server_rs::policy::DEFAULT_MAX_WRITE_BYTES as usize + 1);
+    let huge = "x".repeat(comfyhub_server_rs::tools::policy::DEFAULT_MAX_WRITE_BYTES as usize + 1);
     let too_large = call_tool(&state, "write_file", serde_json::json!({ "path": "comfyui/big.txt", "content": huge }))
         .await
         .unwrap_err();
@@ -8109,8 +8109,8 @@ fn write_test_png(path: &std::path::Path, w: u32, h: u32) {
 }
 
 /// 往夹具里塞一条附件（盘上那份真图由调用方写）。
-fn seed_attachment(state: &comfyhub_server_rs::routes::AppState, id: &str, name: &str, kind: &str) {
-    let dto = comfyhub_server_rs::attachments::AttachmentDto {
+fn seed_attachment(state: &comfyhub_server_rs::web::routes::AppState, id: &str, name: &str, kind: &str) {
+    let dto = comfyhub_server_rs::media::attachments::AttachmentDto {
         id: id.to_string(),
         name: name.to_string(),
         kind: kind.to_string(),
@@ -8123,12 +8123,12 @@ fn seed_attachment(state: &comfyhub_server_rs::routes::AppState, id: &str, name:
         status: "ready".to_string(),
         created_at: Some("2026-09-26T00:00:00.000Z".to_string()),
     };
-    comfyhub_server_rs::attachments::insert(state, &dto, &format!("{id}.png")).unwrap();
+    comfyhub_server_rs::media::attachments::insert(state, &dto, &format!("{id}.png")).unwrap();
 }
 
 /// 把"当前生效的输出目录"钉到 `<root>/shared/output`（ComfyUI Desktop 那种
 /// 程序与共享数据分家的布局），并在旁边建出 `input`。
-fn configure_shared_output(state: &comfyhub_server_rs::routes::AppState, root: &std::path::Path) {
+fn configure_shared_output(state: &comfyhub_server_rs::web::routes::AppState, root: &std::path::Path) {
     let shared = root.join("shared");
     std::fs::create_dir_all(shared.join("input")).unwrap();
     std::fs::create_dir_all(shared.join("output")).unwrap();
@@ -8502,7 +8502,7 @@ async fn 贴人物档不写遮罩也不碰人物图交给工作流去抠() {
     );
 
     // ⛔ 已删除那一档的老参数：**明确拒绝**（静默忽略 = 模型以为遮罩是自己写的，去覆盖不存在的节点）
-    for removed in comfyhub_server_rs::image_edit::REMOVED_ARGS {
+    for removed in comfyhub_server_rs::comfy::image_edit::REMOVED_ARGS {
         let mut map = serde_json::Map::new();
         map.insert((*removed).to_string(), serde_json::json!("model"));
         map.insert("width".to_string(), serde_json::json!(64));
@@ -8699,9 +8699,9 @@ async fn skill_tools_register_then_delete() {
 #[tokio::test]
 async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     let state = state();
-    let policy = comfyhub_server_rs::policy::ToolPolicy::load(&state).unwrap();
+    let policy = comfyhub_server_rs::tools::policy::ToolPolicy::load(&state).unwrap();
 
-    let specs = comfyhub_server_rs::tools::specs(&policy);
+    let specs = comfyhub_server_rs::tools::tools::specs(&policy);
     let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
     for expected in [
         "list_dir",
@@ -8751,7 +8751,7 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         assert!(names.contains(&present), "{present} 已经搬过来了，不许漏：{names:?}");
     }
     // 系统提示里那段"可调用的工具"必须与下发的清单**同一份**
-    let catalog = comfyhub_server_rs::tools::catalog(&policy);
+    let catalog = comfyhub_server_rs::tools::tools::catalog(&policy);
     assert_eq!(
         catalog.iter().map(|t| t.name).collect::<Vec<_>>(),
         names,
@@ -8785,11 +8785,11 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     }
 
     // deny 的工具连描述都不下发（与 Kotlin `kitParts` 同一条规则）
-    let mut config: comfyhub_server_rs::policy::ToolPolicyConfig = serde_json::from_str("{}").unwrap();
+    let mut config: comfyhub_server_rs::tools::policy::ToolPolicyConfig = serde_json::from_str("{}").unwrap();
     config.overrides.insert("write_file".into(), "deny".into());
-    let denied = comfyhub_server_rs::policy::ToolPolicy::new(state.project_root(), config);
+    let denied = comfyhub_server_rs::tools::policy::ToolPolicy::new(state.project_root(), config);
     let denied_names: Vec<String> =
-        comfyhub_server_rs::tools::specs(&denied).into_iter().map(|s| s.name).collect();
+        comfyhub_server_rs::tools::tools::specs(&denied).into_iter().map(|s| s.name).collect();
     assert!(!denied_names.contains(&"write_file".to_string()), "{denied_names:?}");
     assert!(denied_names.contains(&"read_file".to_string()));
 
@@ -8869,9 +8869,9 @@ async fn comfy_list_workflows_reads_the_same_dirs_as_the_endpoint() {
     std::fs::write(workflows.join("broken.json"), b"{ not json").unwrap();
     std::fs::write(workflows.join("empty.json"), b"").unwrap();
     std::fs::write(workflows.join("note.txt"), b"{}").unwrap();
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.output_dir = Some(root.join("comfyui").join("output").display().to_string());
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     let out = call_tool(&state, "comfy_list_workflows", serde_json::json!({})).await.unwrap();
     assert_eq!(out.payload["count"], 1, "{}", out.payload);
@@ -8889,7 +8889,7 @@ async fn comfy_list_workflows_reads_the_same_dirs_as_the_endpoint() {
     // 入库判定用的是 `file:<sha256>` 这把**与 comfy_load_workflow 相同的**钥匙。
     // 塞一行进去之后 inLibrary 必须翻成 true 并带上 promptId（幂等的前提）。
     let bytes = std::fs::read(workflows.join("krea2_demo.json")).unwrap();
-    let sha = comfyhub_server_rs::comfy_dirs::sha256_hex(&bytes);
+    let sha = comfyhub_server_rs::comfy::comfy_dirs::sha256_hex(&bytes);
     state
         .with(|conn| {
             // `capture_runs.prompt_id` 有外键 → 指向夹具里真实的提示词 10
@@ -8966,9 +8966,9 @@ fn queue_body() -> &'static str {
 async fn capture_status_and_jobs_ask_the_real_queue() {
     let state = state();
     // ① ComfyUI 不在：如实回 comfyReachable=false，**不是 500**（状态查询失败会让整个页面挂掉）
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = "http://127.0.0.1:1".to_string();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
     let (status_code, down) = get_json(router_for(state.clone()), "/api/capture/status").await;
     assert_eq!(status_code, StatusCode::OK, "{down}");
     assert_eq!(down["comfyReachable"], false);
@@ -8982,9 +8982,9 @@ async fn capture_status_and_jobs_ask_the_real_queue() {
 
     // ② ComfyUI 在：队列数与队首标题都要真的读到
     let (url, handle) = fake_comfy_queue(queue_body()).await;
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = url.clone();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     let (status_code, up) = get_json(router_for(state.clone()), "/api/capture/status").await;
     assert_eq!(status_code, StatusCode::OK, "{up}");
@@ -9063,9 +9063,9 @@ async fn capture_jobs_and_status_carry_real_progress_and_current_step() {
     // ⚠ 把 ComfyUI 地址钉死在一个**没人听**的端口上：不钉的话这台机器上真跑着的
     //   8188 会被问一句，队首真有任务时 `runningLabel` 冒出来、键集合就随环境变了
     //   （与上面那条用例同一个理由）。
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = "http://127.0.0.1:1".to_string();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
     // ① 什么都没跑、也没进度：`current` 与 `progress` **整键不出现**
     //    （不做这一步就不知道"省略规则"有没有被写坏成 `null`）
     let (code, jobs) = get_json(router_for(state.clone()), "/api/capture/jobs").await;
@@ -9261,7 +9261,7 @@ fn history_with_image(filename: &str, run_key: &str) -> String {
 
 #[tokio::test]
 async fn poll_captures_a_run_into_prompts_and_media() {
-    use comfyhub_server_rs::capture_ingest;
+    use comfyhub_server_rs::comfy::capture_ingest;
     let state = state();
     let root = state.project_root();
     // ① 本地 output 目录里**真的有**那份产物（这条路不下载，直接收）
@@ -9275,14 +9275,14 @@ async fn poll_captures_a_run_into_prompts_and_media() {
     let view: &'static [u8] = Box::leak(media_bytes.clone().into_boxed_slice());
     let (url, handle) = fake_comfy(history, view).await;
 
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = url.clone();
     config.output_dir = Some(output_dir.display().to_string());
     config.auto_tag = "ComfyUI".to_string();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     // ② 轮询一次：应当收下 1 次运行、1 个产物
-    let config = comfyhub_server_rs::capture::capture_config(&state).unwrap();
+    let config = comfyhub_server_rs::comfy::capture::capture_config(&state).unwrap();
     let result = capture_ingest::poll_once(&state, &config).await;
     assert_eq!(result["ok"], true, "{result}");
     assert_eq!(result["checked"], 1, "{result}");
@@ -9357,7 +9357,7 @@ async fn poll_captures_a_run_into_prompts_and_media() {
     assert_eq!(asset.3, Some(prompt_id), "产物必须挂在这次运行的提示词上");
     assert!(state.media_dir().join(&asset.4).is_file(), "产物要真的落进 storage/media");
     // 图片顺手写缩略图（画廊列表用它）
-    assert!(comfyhub_server_rs::thumbs::thumb_path(state.media_dir(), asset.0).is_file());
+    assert!(comfyhub_server_rs::media::thumbs::thumb_path(state.media_dir(), asset.0).is_file());
     let tag_count: i64 = state
         .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM media_tags WHERE media_id = ?1", [asset.0], |r| r.get(0))?))
         .unwrap();
@@ -9385,7 +9385,7 @@ async fn poll_captures_a_run_into_prompts_and_media() {
 /// 产物**本地没有**时走 HTTP 下载兜底（`GET /view`），而且 `empty` 能重试。
 #[tokio::test]
 async fn poll_downloads_missing_outputs_and_retries_empty_runs() {
-    use comfyhub_server_rs::capture_ingest;
+    use comfyhub_server_rs::comfy::capture_ingest;
     let state = state();
     let root = state.project_root();
     let output_dir = root.join("comfyui").join("output");
@@ -9406,14 +9406,14 @@ async fn poll_downloads_missing_outputs_and_retries_empty_runs() {
         .into_boxed_str(),
     );
     let (url, handle) = fake_comfy(empty_history, view).await;
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = url.clone();
     // ⚠ 故意把 outputDir 指向一个**没有那份文件**的目录 → 逼出 HTTP 下载兜底
     config.output_dir = Some(output_dir.display().to_string());
     config.auto_tag = "ComfyUI".to_string();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
-    let config = comfyhub_server_rs::capture::capture_config(&state).unwrap();
+    let config = comfyhub_server_rs::comfy::capture::capture_config(&state).unwrap();
     let first = capture_ingest::poll_once(&state, &config).await;
     assert_eq!(first["checked"], 1, "{first}");
     assert_eq!(first["newRuns"], 0, "没有产物 → 不算新运行");
@@ -9445,11 +9445,11 @@ async fn poll_downloads_missing_outputs_and_retries_empty_runs() {
         .into_boxed_str(),
     );
     let (url2, handle2) = fake_comfy(late_history, view).await;
-    let mut config2 = comfyhub_server_rs::capture::capture_config(&state).unwrap();
+    let mut config2 = comfyhub_server_rs::comfy::capture::capture_config(&state).unwrap();
     config2.comfy_url = url2.clone();
-    comfyhub_server_rs::capture::save_capture_config(&state, config2).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config2).unwrap();
 
-    let config2 = comfyhub_server_rs::capture::capture_config(&state).unwrap();
+    let config2 = comfyhub_server_rs::comfy::capture::capture_config(&state).unwrap();
     let second = capture_ingest::poll_once(&state, &config2).await;
     assert_eq!(second["checked"], 1, "empty 的运行必须能被重新抢占：{second}");
     assert_eq!(second["newMedia"], 1, "下载兜底要真的把产物收进来：{second}");
@@ -9479,9 +9479,9 @@ async fn poll_downloads_missing_outputs_and_retries_empty_runs() {
 async fn capture_poll_endpoint_returns_the_kotlin_shape() {
     let state = state();
     // ComfyUI 不在 → ok=false + 一句人话（**不是 500**）
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = "http://127.0.0.1:1".to_string();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
     let (status, body) = send_json(router_for(state.clone()), "POST", "/api/capture/poll", serde_json::json!({})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(keys(&body), vec!["checked", "message", "newMedia", "newRuns", "ok"]);
@@ -9640,9 +9640,9 @@ async fn load_ui_workflow_uses_object_info_and_reports_gaps() {
     let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
     let info: &'static str = Box::leak(object_info_json().into_boxed_str());
     let (url, handle) = fake_comfy_full(history, view, info).await;
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = url.clone();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     // ① 默认档：撞上不认识的前端节点 → **如实拒绝**（UNSUPPORTED_NODES），不许猜着提交
     let refused = call_tool(
@@ -9810,9 +9810,9 @@ async fn load_ui_workflow_emulates_frontend_and_injects_a_save_node() {
     let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
     let info: &'static str = Box::leak(object_info_for_broadcast().into_boxed_str());
     let (url, handle) = fake_comfy_full(history, view, info).await;
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = url.clone();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     let out = call_tool(
         &state,
@@ -9881,13 +9881,13 @@ async fn load_ui_workflow_emulates_frontend_and_injects_a_save_node() {
 /// 与 [`call_tool`] 同一层，但让用例自己拿 session —— `comfy_check_inputs` 要看
 /// `session.has_image_attachment`（那个事实由执行器在 Run 开始时钉住）。
 async fn call_tool_with_session(
-    state: &comfyhub_server_rs::routes::AppState,
+    state: &comfyhub_server_rs::web::routes::AppState,
     name: &str,
     arguments: Value,
-    session: &mut comfyhub_server_rs::tools::ToolSession,
-) -> Result<comfyhub_server_rs::tools::ToolOutcome, comfyhub_server_rs::tools::ToolFailure> {
-    let policy = comfyhub_server_rs::policy::ToolPolicy::load(state).unwrap();
-    comfyhub_server_rs::tools::execute(state, &policy, "run-x", "conv-x", name, &arguments, session)
+    session: &mut comfyhub_server_rs::tools::tools::ToolSession,
+) -> Result<comfyhub_server_rs::tools::tools::ToolOutcome, comfyhub_server_rs::tools::tools::ToolFailure> {
+    let policy = comfyhub_server_rs::tools::policy::ToolPolicy::load(state).unwrap();
+    comfyhub_server_rs::tools::tools::execute(state, &policy, "run-x", "conv-x", name, &arguments, session)
         .await
 }
 
@@ -9905,7 +9905,7 @@ fn graph_with_image_gap() -> Value {
 #[tokio::test]
 async fn comfy_check_inputs_reports_gaps_and_reads_the_attachment_flag() {
     let state = state();
-    let mut session = comfyhub_server_rs::tools::ToolSession::default();
+    let mut session = comfyhub_server_rs::tools::tools::ToolSession::default();
 
     // ① 没带图：LoadImage 那条必须报出来，并且要挡住"带着缺口硬提交"这条路
     let out = call_tool_with_session(
@@ -9929,7 +9929,7 @@ async fn comfy_check_inputs_reports_gaps_and_reads_the_attachment_flag() {
     assert!(out.payload["missing"][0].get("title").is_none(), "{}", out.payload);
 
     // ② 本次带了图：同一个位置改列 `suppliedByAttachment`（**不要再问用户要图**）
-    let mut with_image = comfyhub_server_rs::tools::ToolSession::default();
+    let mut with_image = comfyhub_server_rs::tools::tools::ToolSession::default();
     with_image.has_image_attachment = true;
     let out = call_tool_with_session(
         &state,
@@ -9992,9 +9992,9 @@ async fn comfy_fit_workflow_pairs_graph_models_with_the_instance_inventory() {
     let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
     let info: &'static str = Box::leak(FIT_OBJECT_INFO.to_string().into_boxed_str());
     let (url, handle) = fake_comfy_full(history, view, info).await;
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = url.clone();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     let graph = serde_json::json!({
         "1": {"class_type": "CheckpointLoaderSimple",
@@ -10067,9 +10067,9 @@ async fn comfy_audit_workflow_reports_facts_and_gates_only_blocking_items() {
     let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
     let info: &'static str = Box::leak(FIT_OBJECT_INFO.to_string().into_boxed_str());
     let (url, handle) = fake_comfy_full(history, view, info).await;
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = url.clone();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     // 一份"处处有问题"的图：前端节点 + 版本不兼容 + 本机没有的类 + 固定 seed/前缀 +
     // 参数偏离官方档位（每一个都对应 `WorkflowAuditTest` 里那条现场）。
@@ -10115,9 +10115,9 @@ async fn comfy_audit_workflow_reports_facts_and_gates_only_blocking_items() {
     assert!(frontend["detail"].as_str().unwrap().contains("0.01"), "{frontend}");
 
     // 每个模型的检查都"拿不准就不说"：换掉 /object_info（ComfyUI 不在）→ **不判**本机缺节点
-    let mut down = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut down = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     down.comfy_url = "http://127.0.0.1:1".to_string();
-    comfyhub_server_rs::capture::save_capture_config(&state, down).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, down).unwrap();
     let offline = call_tool(&state, "comfy_audit_workflow", serde_json::json!({ "graph": graph.clone() }))
         .await
         .unwrap();
@@ -10260,9 +10260,9 @@ async fn comfy_prune_workflow_only_prunes_when_the_instance_is_unreachable() {
     let inject = serde_json::json!([{"at":"3.model","classType":"SageAttention"}]);
 
     // ① ComfyUI 不在 → `ok=false` + `COMFY_UNREACHABLE`，但**摘除部分照样给出来**
-    let mut down = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut down = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     down.comfy_url = "http://127.0.0.1:1".to_string();
-    comfyhub_server_rs::capture::save_capture_config(&state, down).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, down).unwrap();
     let out = call_tool(
         &state,
         "comfy_prune_workflow",
@@ -10281,9 +10281,9 @@ async fn comfy_prune_workflow_only_prunes_when_the_instance_is_unreachable() {
     let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
     let info: &'static str = Box::leak(FIT_OBJECT_INFO.to_string().into_boxed_str());
     let (url, handle) = fake_comfy_full(history, view, info).await;
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = url.clone();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
     let out = call_tool(
         &state,
         "comfy_prune_workflow",
@@ -10308,9 +10308,9 @@ async fn comfy_prune_workflow_only_prunes_when_the_instance_is_unreachable() {
         r#"{"SageAttention": {"input":{"required":{"model":["MODEL"]}}}}"#.to_string().into_boxed_str(),
     );
     let (url, handle2) = fake_comfy_full(history, view, with_sage).await;
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = url.clone();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
     let out = call_tool(
         &state,
         "comfy_prune_workflow",
@@ -10383,7 +10383,7 @@ async fn net_urls_lists_the_port_we_actually_listen_on() {
 // ---------------------------------------------------------------------------
 
 /// 闸门开着 + 一台已配对设备，两个凭据开关**分开**给（§14.1）。
-fn seed_auth_device(state: &comfyhub_server_rs::routes::AppState, allow_read: bool, allow_upload: bool) {
+fn seed_auth_device(state: &comfyhub_server_rs::web::routes::AppState, allow_read: bool, allow_upload: bool) {
     let file = serde_json::json!({
         "schema": "comfyhub-inbound-auth/2",
         "enabled": true,
@@ -10452,8 +10452,8 @@ async fn credential_upload_is_forbidden_without_the_upload_switch() {
 async fn credential_upload_refuses_a_stale_rev_without_writing() {
     let st = state();
     seed_auth_device(&st, false, true);
-    put_setting(&st, comfyhub_server_rs::credentials::REV_KEY, "7");
-    let store_before = std::fs::read_to_string(comfyhub_server_rs::credentials::store_path(&st)).ok();
+    put_setting(&st, comfyhub_server_rs::provider::credentials::REV_KEY, "7");
+    let store_before = std::fs::read_to_string(comfyhub_server_rs::provider::credentials::store_path(&st)).ok();
     let app = router_for(st.clone());
 
     let (status, body) = send_json_token(
@@ -10473,8 +10473,8 @@ async fn credential_upload_refuses_a_stale_rev_without_writing() {
     assert_eq!(body["rev"], 7, "回执要带上桌面**当前**的版本号：{body}");
 
     // 库里那条版本号没动，凭据文件也没被碰过
-    assert_eq!(read_setting(&st, comfyhub_server_rs::credentials::REV_KEY).unwrap(), serde_json::json!(7));
-    let store_after = std::fs::read_to_string(comfyhub_server_rs::credentials::store_path(&st)).ok();
+    assert_eq!(read_setting(&st, comfyhub_server_rs::provider::credentials::REV_KEY).unwrap(), serde_json::json!(7));
+    let store_after = std::fs::read_to_string(comfyhub_server_rs::provider::credentials::store_path(&st)).ok();
     assert_eq!(store_before, store_after, "STALE 分支不许落任何东西");
 }
 
@@ -10542,12 +10542,12 @@ async fn credential_upload_applies_bumps_rev_and_the_key_really_works() {
     assert_eq!(body["rev"], 1, "写入成功要 bump：{body}");
 
     // 值**真的能用**（不是只回了个 200）：走与上游调用同一条解析路径
-    let resolved = comfyhub_server_rs::auth::resolve_credential(&st, "PHONE_PUSHED_KEY").unwrap();
+    let resolved = comfyhub_server_rs::mobile::auth::resolve_credential(&st, "PHONE_PUSHED_KEY").unwrap();
     assert_eq!(resolved, "sk-from-phone");
-    assert_eq!(read_setting(&st, comfyhub_server_rs::credentials::REV_KEY).unwrap(), serde_json::json!(1));
+    assert_eq!(read_setting(&st, comfyhub_server_rs::provider::credentials::REV_KEY).unwrap(), serde_json::json!(1));
 
     // 值**不回显**：状态接口只给 configured/source/writable
-    let described = comfyhub_server_rs::credentials::describe_now(&st, "PHONE_PUSHED_KEY");
+    let described = comfyhub_server_rs::provider::credentials::describe_now(&st, "PHONE_PUSHED_KEY");
     assert!(described.configured);
     assert!(!serde_json::to_string(&described).unwrap().contains("sk-from-phone"));
 }
@@ -10667,9 +10667,9 @@ async fn start_and_stop_refuse_to_touch_what_is_not_ours() {
     let state = state();
     // 一个"已经在跑"的假实例（假服务对 /system_stats 也回 200 + JSON，够 comfy_start 判定）
     let (url, handle) = fake_comfy(r#"{}"#, &[]).await;
-    let mut config = comfyhub_server_rs::capture::CaptureConfig::default();
+    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
     config.comfy_url = url.clone();
-    comfyhub_server_rs::capture::save_capture_config(&state, config).unwrap();
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     let out = call_tool(&state, "comfy_start", serde_json::json!({})).await.unwrap();
     assert_eq!(out.payload["alreadyRunning"], true, "{}", out.payload);

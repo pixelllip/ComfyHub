@@ -23,10 +23,10 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use comfyhub_server_rs::routes::{router, AppState};
+use comfyhub_server_rs::web::routes::{router, AppState};
 
 fn temp_dir(label: &str) -> std::path::PathBuf {
-    let dir = comfyhub_server_rs::testpaths::scratch(&format!("provider-probe-{label}"));
+    let dir = comfyhub_server_rs::infra::testpaths::scratch(&format!("provider-probe-{label}"));
     std::fs::create_dir_all(dir.join("storage").join("media")).unwrap();
     dir
 }

@@ -30,7 +30,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | Skills 目录注入 | **采纳思路，实现不同** | DSH 把目录作为 **user 消息**（`<system-reminder>` + `<available_skills>`）注入，为的是不打断系统前缀的 KV cache；我们的系统提示本来就带时间戳（每 Run 变化），所以直接写进系统提示的独立区块，省一层消息 |
 | DSH 默认提示词的**行为纪律段** | **择优采纳**（2026-09-17，用户要求） | 原文 `docs\default-prompt-inject.md`。挑出与我们对得上的三块写进系统提示 **v9**：① 事实纪律（不猜本机状态 / 证据冲突的采信顺序 / 把"查到的"与"推测的"分开说）；② 表达风格（开门见山、不奉承、不复述、**不写嵌套列表** —— `lib\widgets\markdown.dart` 会把子项拍平成同级，而表格反而是支持的）；③ 两条硬规则（写入留退路：改参数用覆盖不重写原始工作流；读取按需：不遍历磁盘）。另外，那份文档里的 `[MODE: UNRESTRICTED SANDBOX — STABLE]` 段（人格 / 拒绝对抗 / 越狱与渗透话术）**当年是整段搬进来的，现在也还在**（`HarnessRunner.kt` 里一个独立的 `append("""…""")`，上方有注释）：2026-09-17 用户明确说"那是我的意图，不许删除，不要动那段越狱提示词"。它与代码侧的审批纪律（提示词第 3 条）和凭据红线（第 8 条）并存 —— **别把它当误粘贴清理掉**，要改先问用户（AGENTS §10 记着这条） |
 
-我们的工具清单（**唯一真源是 `server-rs/src/tools.rs` 的 `IMPLEMENTED`** —— 当前 37 个：手机侧 7 个 + 桌面专属 30 个；全部可在设置里改成 `allow / ask / deny`）：
+我们的工具清单（**唯一真源是 `server-rs/src/tools/tools.rs` 的 `IMPLEMENTED`** —— 当前 37 个：手机侧 7 个 + 桌面专属 30 个；全部可在设置里改成 `allow / ask / deny`）：
 
 | 工具 | 类别 | 权限档 | 说明 |
 | --- | --- | --- | --- |
@@ -113,7 +113,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 `Anything Everywhere` 这类"只用前端 JS 实现"的节点过去只能如实报 `UNSUPPORTED_NODES`。
 
 「模拟用户行为」= **把前端排队前会做的那几件事，在后端等价地做掉**
-（Kotlin `FrontendNodes.kt`；Rust 侧是 `server-rs/src/workflow_frontend.rs`，
+（Kotlin `FrontendNodes.kt`；Rust 侧是 `server-rs/src/workflow/workflow_frontend.rs`，
 **P4 第 68 步搬完** —— 之前 Rust 只如实报 `unsupportedNodes`，判据/表复用
 `workflow_audit.rs` 的 `is_broadcast` / `is_display`，没有第二份表。判据一律保守、做了什么都如实回报）：
 
@@ -382,10 +382,10 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
   **v34 → v35（2026-09-28）= 第 21 条「环节标记」**（用户建议：关键步骤之间 AI 的操作再折叠）：
   模型在**每个环节开始时**写一行 `[步骤]环节名[/步骤]`，名字**只许**从那六个里挑
   （正在分析请求 / 正在查资料 / 正在读文件 / 正在生成图片 / 正在写文件 / 正在收尾）；
-  后端 `server-rs/src/step_mark.rs` 流式摘掉它（用户看不到标记），落成 `step` 有序块 +
+  后端 `server-rs/src/ai/step_mark.rs` 流式摘掉它（用户看不到标记），落成 `step` 有序块 +
   发 `step.started` 事件，界面画成**默认折叠的环节组**（`lib/pages/ai_home_page.dart` 的
   `_StepGroup` / `_StepCollector`；README 功能表里那条「关键步骤（环节）折叠」有用户可见的三条纪律）。
-  ⚠ 正文真源是 `server-rs/src/nsfw_prompt.rs`（`gen_prompts.py` 已停用）：改提示词**必须** bump
+  ⚠ 正文真源是 `server-rs/src/ai/nsfw_prompt.rs`（`gen_prompts.py` 已停用）：改提示词**必须** bump
   `PROMPT_VERSION`，而 `run_kit.rs` 的签名用例 + `api_test.rs` 的版本断言会一起红 —— 那是**故意的**。
 - **网关不认 `tools` 时的兜底**：很多网关收到 `tools` 直接 400。这种情况本次 Run 会自动
   **退回纯文本模式重试一次**，并在回复开头如实写明"上游网关不接受工具参数"——

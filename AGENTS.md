@@ -32,8 +32,8 @@
   本机实测的耗时（别凭感觉说"测试太慢"）：`flutter test` 407 例 ≈ 25s、
   `cargo test`（后端 lib 613 例 + 集成）≈ 30s（热构建；首跑要编译）、
   `e2e-ai-tools-test.ps1` 111 项 ≈ 5~15s、`e2e-capture-test.ps1` / `e2e-submit-test.ps1` 各 ≈ 20~35s。
-- **Rust 用例要落盘，只许用 `crate::testpaths::scratch()`**（`tests/` 里是
-  `comfyhub_server_rs::testpaths::scratch()`），落点是 `<crate>\target\.scratch\`。
+- **Rust 用例要落盘，只许用 `crate::infra::testpaths::scratch()`**（`tests/` 里是
+  `comfyhub_server_rs::infra::testpaths::scratch()`），落点是 `<crate>\target\.scratch\`。
   **别写 `std::env::temp_dir()`** —— 它在工作区外，而工作区里构建出来的测试二进制带着
   Low 完整性标签（见**第 12 节**），受限会话里必然 `PermissionDenied (os error 5)`，
   与被测代码无关（2026-09-29 那次迁移就是把 47 处 `temp_dir()` 换掉，现在全绿）。
@@ -155,7 +155,7 @@
 - **内置模型目录那张卡与它的 Dart 客户端已删**（2026-10："模型能力不再依赖内置目录"）：
   它抄自 `%USERPROFILE%\.dsh\settings.yaml`，而第 10 节已经定了"运行期不许依赖 `.dsh`"。
   能力预填改由 **models.dev** 在线目录负责（`capability_refresh.rs`）。
-  后端 `server-rs\src\builtin.rs` 与 `/api/ai/builtin/{status,sync}` 仍在（Rust 用例盯着），
+  后端 `server-rs\src\provider\builtin.rs` 与 `/api/ai/builtin/{status,sync}` 仍在（Rust 用例盯着），
   但界面上**没有任何入口** —— 别再把 `AiBuiltinCatalogStatus` / `builtinStatus()` 加回来。
 - **工作台的模型选择器按 Provider 分组**（2026-10 用户原话："来自不同 provider 的模型要套在
   一个 padding 里面区分，padding 外标注模型来源"）。布局是硬要求：
@@ -199,7 +199,7 @@
 - **P4 收尾（2026-09-26）起 Kotlin 已退役**：源码在 `legacy\server\`（`.gitignore` 里
   `/legacy/server/build`、`/legacy/server/storage` 照样忽略），发布包不带它、也不带 `jre`。
   要回退旧后端得先把 `legacy\server` 放回原位自己构建 —— 这条路只在灰度期有意义。
-- **`db::open_or_create` 是"第一次运行能起来"的关键**：以前缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
+- **`infra::db::open_or_create` 是"第一次运行能起来"的关键**：以前缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
   在发布包里等于**永远起不来**。现在库缺就自己建（DDL 编译期 `include_str!` 嵌在二进制里）。
 - **发布包是便携式的**：可写数据（数据库 `<根>\.db`、产物 `<根>\storage`、日志 `<根>\.run`）
   都在包内，`packaging\manifest.json` 里 `runtimeLayout` 记着这份约定；改存放位置要先改那里和 README 9.2。
@@ -279,7 +279,7 @@
 **功能说明见 [`docs/ai-tools-and-skills.md`](docs/ai-tools-and-skills.md)**（含"DSH 哪些工具抄了、哪些没抄"的对照表）。
 这里只记改动时容易踩的规矩。
 
-- 工具清单**只有一个真源**：`server-rs/src/tools.rs` 的 `catalog`（桌面全量）与 `mobile_catalog`（手机 7 个）。旧 Kotlin 那份 `legacy/server/src/main/kotlin/com/comfyhub/ai/tools/ToolRegistry.kt` 只作**行为参照**。
+- 工具清单**只有一个真源**：`server-rs/src/tools/tools.rs` 的 `catalog`（桌面全量）与 `mobile_catalog`（手机 7 个）。旧 Kotlin 那份 `legacy/server/src/main/kotlin/com/comfyhub/ai/tools/ToolRegistry.kt` 只作**行为参照**。
   系统提示、`GET /api/ai/tools`、界面都从它派生 —— 加工具就在这里加一项 + 在 `ToolRegistryTest` 补用例，
   **别在别处再维护一份"可用工具"名单**。
 - **读白名单里会自动加上本机 ComfyUI 的目录**（`ComfyRoots` 每次现探、不落库，见用户 bug ④）：
@@ -427,7 +427,7 @@
   发完要**立刻 `flush`**（`tool.requested` 与 `user.question` 就是这么做的）。
   防线：`run_lifecycle.rs::sse_sees_events_without_waiting_for_a_full_batch`。
 - **环节标记（第 21 条）与关键步骤折叠**（2026-09-28）：模型用 `[步骤]环节名[/步骤]` 声明环节，
-  六个固定名字的真源是 `server-rs/src/step_mark.rs` 的 `PHASES`，**系统提示第 21 条与它必须逐字一致**
+  六个固定名字的真源是 `server-rs/src/ai/step_mark.rs` 的 `PHASES`，**系统提示第 21 条与它必须逐字一致**
   （不一致的表现是"模型写的名字被摘掉、界面上什么都不出现"，而且不报错）。改这块记住：
   ① 摘取**绝不吞内容**（不闭合 / 撑爆 / flush 三条兜底都要把原文放出去）；② 枚举外的名字
   **摘掉但不记环节**；③ 有序块类型是 `step`、实时事件是 `step.started`（契约文档 §2 要一起改）；
@@ -525,16 +525,16 @@ MCP 任何工具报 `UnexpectedToolError`、`cargo test` 一批 `PermissionDenie
 
 ### 四条纪律
 
-1. **闸门留着**（`comfy_launch::ensure_writable`）：白起一个 100% CPU 卡死的实例，比如实拒绝糟得多。
+1. **闸门留着**（`comfy::comfy_launch::ensure_writable`）：白起一个 100% CPU 卡死的实例，比如实拒绝糟得多。
    但**文案必须说对**：先讲真因（Low 完整性标签 + `min(父进程, 映像)`），再给上面那三条处方。
    **别再写"没有退路 / 只能让用户双击 ComfyUI Desktop"**（双击确实能 work，但不是唯一那条）；
    **别写"换个终端重起就行"**；**别建议拷贝到系统目录**。
-   `confinement::remedy_text()` / `comfy_launch` / `image_edit` 三处文案是同一条纪律，用例
+   `infra::confinement::remedy_text()` / `comfy_launch` / `image_edit` 三处文案是同一条纪律，用例
    `修法文案指向发布包而不是让用户改_acl` 盯着它们**不许出现"权限 / ACL / 换个终端 / 双击 ComfyUI"**。
-2. **别把探针的 `Err` 吞成 `bool`**（`confinement::probe_dir` 返回 `io::Result` 就是为此）：
+2. **别把探针的 `Err` 吞成 `bool`**（`infra::confinement::probe_dir` 返回 `io::Result` 就是为此）：
    只报"哪个目录"不报"报什么错"，就会重演"现象对、处方错"。
    用例里也不许拿"这台机器哪个目录不可写"当判据 —— 用**同名目录占位**造出确定性的 `os error 5`。
-3. **看得见**（`server-rs\src\confinement.rs`）：后端启动自查 → 受限才写 `.run\confinement.json`、
+3. **看得见**（`server-rs\src\infra\confinement.rs`）：后端启动自查 → 受限才写 `.run\confinement.json`、
    **正常就删**（免得过期标记一直亮着）；标记带 `pid`。
    `GET /api/system/confinement` 把同一份结论**连判据一起**交给界面
    （`serverImage` / `imageInsideProjectRoot` / `blockedPaths` / `remedy`），
@@ -542,7 +542,7 @@ MCP 任何工具报 `UnexpectedToolError`、`cargo test` 一批 `PermissionDenie
    ⚠ 字段名只能说"**落在运行根目录里**"，别说"在工作区内"：发布包里根目录就等于包目录、
    并不是被框住的地方（那里 `restricted=false`）。
    这条沿用第 151/154 条的纪律：**界面上看不见的现象，用户和模型就只能靠猜**。
-4. **写 input 的地方必须共用同一个入口**（`image_edit::write_or_defer`）：投放原图 / 遮罩 /
+4. **写 input 的地方必须共用同一个入口**（`comfy::image_edit::write_or_defer`）：投放原图 / 遮罩 /
    **摆好的人物图**三处曾经只有前两处有 HTTP 退路，于是"人物图投进去了、摆好的那份没落地"，
    阶段二卡在"没拿到 personFilename"（2026-09-29 用户 bug）。
    直写被拒一律改让 **ComfyUI 自己写**（`/upload/image`），并按它回的名字回填结果字段
@@ -550,18 +550,18 @@ MCP 任何工具报 `UnexpectedToolError`、`cargo test` 一批 `PermissionDenie
    **[docs/permission-audit.md](docs/permission-audit.md)**（12 处写工作区外的点，逐条标注退路/闸门）。
    **同理，"写哪个 input"也只有一个真源**（2026-09-30 用户 bug：阶段二重启后仍被 `400 Invalid
    image file` 拒 —— 底图与人物图躺在**安装目录**的 `input` 里，实例读的却是**共享**那份）：
-   起实例的 argv 由 `comfy_launch::start` 落档（`.run\comfyui-<port>.launch.json`），
-   投放三件走 `image_edit::target_input_dir` —— **先问实例**（`/object_info/LoadImage` 的名单 ×
+   起实例的 argv 由 `comfy::comfy_launch::start` 落档（`.run\comfyui-<port>.launch.json`），
+   投放三件走 `comfy::image_edit::target_input_dir` —— **先问实例**（`/object_info/LoadImage` 的名单 ×
    候选目录），问不到才按"留档 → 配置 output 兄弟 → Desktop `settings.json` 的 `inputDir` → 盘探"回落。
    ⚠ 别拿**全名**判"调用方写过哪些参数"：`--input` 是 `--input-directory` 的 argparse 缩写、
    同一个 `dest`、**后写的赢** —— 比全名就会把我们补的那条排在用户那条后面、把它静默顶掉
-   （用 `mcp::specified_flag`，并认 `--flag=value`）。两个环境变量名也别漂：
-   脚本与老版本用 `COMFYHUB_COMFY_OUTPUT`，别再只认 `COMFYHUB_COMFY_OUTPUT_DIR`（`capture::comfy_output_env`）。
+   （用 `tools::mcp::specified_flag`，并认 `--flag=value`）。两个环境变量名也别漂：
+   脚本与老版本用 `COMFYHUB_COMFY_OUTPUT`，别再只认 `COMFYHUB_COMFY_OUTPUT_DIR`（`comfy::capture::comfy_output_env`）。
 
 ### 一个必须知道的连带影响
 
 **受限会话里 `cargo test` 会红一片**（`os error 5`），因为测试二进制就在工作区里、带着 Low 标签。
-所以用例**只许用 `crate::testpaths::scratch()`**（落在 `target\.scratch\`，工作区内），
+所以用例**只许用 `crate::infra::testpaths::scratch()`**（落在 `target\.scratch\`，工作区内），
 **别写 `std::env::temp_dir()`**（第 1 节）。要复现"写不进去"就用同名目录占位，别改 ACL。
 
 ## 13. ⚠ 内容一律存在**自身文件夹**内（2026-09-29 用户定的总原则）
@@ -592,7 +592,7 @@ MCP 任何工具报 `UnexpectedToolError`、`cargo test` 一批 `PermissionDenie
 3. **代价要如实说**：这些不再跨 ComfyHub 安装/跨机器共享。但 db 与 storage 本来就在各自文件夹里，
    这与"发布包是便携的"本来就是一致的 —— 别把它当回归。
 
-改落盘位置时，`server-rs\src\mcp.rs` 与 `scripts\mcp-runtime.ps1` **必须一起改**：
+改落盘位置时，`server-rs\src\tools\mcp.rs` 与 `scripts\mcp-runtime.ps1` **必须一起改**：
 `discover_runtime` 与 `Get-McpRuntimeDir` 是同一个真源的两份实现（AGENTS §7 的纪律）。
 判据：装完发布包后从包内启动一次 App（或 `scripts\backend.ps1 start`），比对 `%APPDATA%\com.example`、`%LOCALAPPDATA\comfy-cli`、
 `%LOCALAPPDATA\ComfyHub` 三个目录的文件数 —— **跑前后都不变**才算过。

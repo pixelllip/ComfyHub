@@ -578,7 +578,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >
 > **C-4：建表/迁移归 Rust（切流里最容易漏的一条）**（同一个提交）
 > - 原实现遇到缺库直接 `exit 3`（"先让 Kotlin 起一次库"）—— 那**在发布包里等于永远起不来**
->   （包里根本没有 Kotlin）。新增 `db::open_or_create`：库缺/空 → 建父目录 + 建库 + 跑
+>   （包里根本没有 Kotlin）。新增 `infra::db::open_or_create`：库缺/空 → 建父目录 + 建库 + 跑
 >   `db/schema.sqlite.sql`（**编译期 `include_str!` 嵌进二进制**，与 Kotlin 从 jar 里读同一性质）
 >   + 写 `user_version`；`user_version == 0` 的老库 → 收敛式跑一遍 DDL；已最新 → **绝不重跑**；
 >   库比后端新 → **只警告不拦**（拦了就没法回退版本）。
@@ -588,7 +588,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   （schemaVersion=1）→ 写端口文件 → `health.database=ok`；**发布包里的 exe 单独跑同样成立**。
 >
 > ✅ **P4 第 53 步（2026-09-26）：Provider 连接测试 + 模型发现（A2，设置页那两个按钮）** ——
-> 新模块 `server-rs/src/provider_probe.rs`，外加 `upstream::refine_from_body`（Kotlin `AiUpstream`
+> 新模块 `server-rs/src/provider/provider_probe.rs`，外加 `provider::upstream::refine_from_body`（Kotlin `AiUpstream`
 > 那一段的移植，**与 LLM 调用共用一份**）。A 组（App 直接调用的端点）**至此清零**。
 >
 > - **四条纪律逐条落地**：① **Base URL 带不带 `/v1` 的两种写法都试**，并把"实际可用的是哪个地址"
@@ -616,7 +616,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   不存在的 provider → `400 {"error":"CONFIG_ERROR","detail":"Provider 不存在: nope"}`。
 >
 > ✅ **P4 第 52 步（2026-09-26）：`POST /api/capture/import`（导入目录里已生成好的产物，A3 的最后一格）** ——
-> 两个新模块：`server-rs/src/png_text.rs`（Kotlin `PngMeta` 的逐条移植：`tEXt` 明文 /
+> 两个新模块：`server-rs/src/media/png_text.rs`（Kotlin `PngMeta` 的逐条移植：`tEXt` 明文 /
 > `zTXt` zlib / `iTXt`（含压缩）三种块全认，CRC 不校验、单块体积有上限）+ `capture_import.rs`
 > 的 [`import_folder_json`]。
 >
@@ -641,7 +641,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   `source=ComfyUI-Import`、`source_ref=import:1e4f926b…`（40 位 sha 前缀）—— **都是内嵌图里的事实，不是猜的**。
 >
 > ✅ **P4 第 51 步（2026-09-26）：视频封面 `GET /api/media/{id}/poster`（A5）** ——
-> `server-rs/src/poster.rs`：只做"找到脚本、起子进程、看结果"，**不重写抽帧逻辑** ——
+> `server-rs/src/media/poster.rs`：只做"找到脚本、起子进程、看结果"，**不重写抽帧逻辑** ——
 > 抽帧走 `scripts\video-poster.ps1`（Windows 资源管理器那条缩略图管线 / Media Foundation，
 > **不依赖 ffmpeg**），重写一份就等于两套行为，而用户看到的是"画廊里的视频有封面、聊天里的没有"。
 > 四种结果一条都不能混（Kotlin 同）：产物不存在 → **404**；不是视频 → **204**；
@@ -657,9 +657,9 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >
 > ✅ **P4 第 50 步（2026-09-26）：AI 附件（**R9 在 Rust 侧的落点**）** —— 两块，两个提交。
 >
-> **（上）地基**：`server-rs/src/file_kind.rs`（`FileKindDetector` 的逐条移植：**签名优先**、
+> **（上）地基**：`server-rs/src/media/file_kind.rs`（`FileKindDetector` 的逐条移植：**签名优先**、
 > ISO BMFF 按品牌分图片/视频、纯文本要扩展名 + 内容嗅探**同时**成立、认不出来就是 `Unknown`
-> 且**一律阻断** —— 绝不做"未知即图片"的乐观回退）+ `server-rs/src/attachments.rs`
+> 且**一律阻断** —— 绝不做"未知即图片"的乐观回退）+ `server-rs/src/media/attachments.rs`
 > （库 / 文件两层 + 五条端点）。原件落 `<storage>/ai-attachments`、缩略图落 `<storage>/ai-thumbs`，
 > 与画廊产物**分开**存（生命周期不同，混在一起以后清孤儿会互相误删）。
 > `/file` 复用画廊那份 `serve_path`（**ETag = sha256 + `If-None-Match` 304 + 单段 Range 206**）——
@@ -667,7 +667,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > 缩略图两级降级（JPEG 缩略图 → 解不了就发原件）；**视频预览帧回 204**（还没搬，见 A5），
 > 界面按既有约定退化成文件图标，**不假装**抽过帧。
 >
-> **（下）三层准入 + 真内联**：`server-rs/src/strict_intake.rs`（`StrictIntake` / `AttachmentPolicy` /
+> **（下）三层准入 + 真内联**：`server-rs/src/media/strict_intake.rs`（`StrictIntake` / `AttachmentPolicy` /
 > `InlineBudget` / `AdapterCapabilities.transportsFor` 的逐条移植）+ `POST /api/ai/preflight` +
 > `POST /runs` 前的闸门 + **适配器真的把图片内联进请求体**：
 > * 三家适配器各按自己的形状铺开（`image_url` data URL / `input_image` / `source.base64`），
@@ -694,7 +694,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > `If-None-Match` → **304**；`/thumb` → 200 + `image/jpeg` + `X-Thumbnail: 1`（635 字节）；
 > 不存在的 id → `400 CONFIG_ERROR + detail`；`DELETE` → `{"deleted":true,...}`、再删 → 400。
 >
-> ✅ **P4 第 49 步（2026-09-26）：推送式捕获 + 批量导入工作流**（`server-rs/src/capture_import.rs`）——
+> ✅ **P4 第 49 步（2026-09-26）：推送式捕获 + 批量导入工作流**（`server-rs/src/comfy/capture_import.rs`）——
 > 这两条是"库里怎么才会有东西"的另一半：轮询与 `comfy_submit` 收的是"跑过的运行"，
 > 而它们收的是**外部推过来的运行**（ComfyUI 自定义节点 / e2e 脚本）与
 > **用户早就存在盘上的工作流文件**（用户 bug ⑤：首次使用时库必然是空的）。
@@ -704,7 +704,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   + 已有的 `promptId`，绝不重复入库。⚠ 这层"驼峰 → 内部 snake_case"的映射就是两端形状的唯一接触点，
 >   写错了**不会报错**、只会"产物一条都收不进来"，所以键名逐个有用例钉住（`item["type"]` / `nodeId` 数字也要读）。
 > - **`POST /api/capture/import-workflows`**（`{dir?, limit?, query?}`）：`dir` 不填就按
->   `comfy_dirs::workflow_dirs` 自动发现，填了就当它是那个目录本身（不存在 → 400 人话）。
+>   `comfy::comfy_dirs::workflow_dirs` 自动发现，填了就当它是那个目录本身（不存在 → 400 人话）。
 >   逐条结果如实分开：`imported` / `duplicates` / `failed` + 每条 `{name, path, status, promptId?, runnable?, reason?}`；
 >   **幂等靠 `run_key = file:<sha256>`**（与 `comfy_load_workflow` 同一把钥匙），批量一律
 >   `tolerateUnsupported = true` —— 批量时"转换不了"绝不能让整份工作流消失（它照样是用户库里的资产，
@@ -721,13 +721,13 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   第二次 duplicates=11 / imported=0**（`file:<sha256>` 判重成立）。
 >
 > ✅ **P4 第 48 步（2026-09-26）：`comfy_submit`（**R10 在 Rust 侧的落点**）** ——
-> 新模块 `server-rs/src/workflow_submit.rs` 逐条对照 `ComfySubmitter`（提交 + 等 + 状态）、
+> 新模块 `server-rs/src/workflow/workflow_submit.rs` 逐条对照 `ComfySubmitter`（提交 + 等 + 状态）、
 > `ComfySubmitter.WorkflowEdit`（参数覆盖 / 补线）、`AiWorkflowSearch.submit`（工具层的编排与返回的键集合）。
 >
 > - **只认 API 格式节点图**（R10 一个字没松）：图从 `prompts.source_ref` → `capture_runs.raw` 那条链取
->   （[`capture::prompt_api_graph`](第 9 步)）；取不到就报 `NO_API_GRAPH` 并说清"可以换一条 runnable=true 的，
+>   （[`comfy::capture::prompt_api_graph`](第 9 步)）；取不到就报 `NO_API_GRAPH` 并说清"可以换一条 runnable=true 的，
 >   或先在 ComfyUI 里手跑一次让它被捕获"，**绝不猜着造一张**。`workflowPath` 那条路走
->   `workflow_load::load_from_file(…, tolerateUnsupported=true, emulateFrontend=true)`（与 Kotlin 同一档）。
+>   `workflow::workflow_load::load_from_file(…, tolerateUnsupported=true, emulateFrontend=true)`（与 Kotlin 同一档）。
 > - **提交后自带"等 + 立即入库"**（O4 的同一条纪律）：`POST /prompt` → 每 1.5 秒查 `/history/<id>`
 >   → 跑完立刻 `captureRun`（= `begin_run` + `build_ingest_request` + `ingest_claimed`，与轮询**同一条路**，
 >   幂等靠 prompt_id + sha256）。为什么不能只靠轮询：ComfyUI 的 `/history` **是进程内的**，
@@ -760,15 +760,15 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   `tools` / `desktop_tools` / `api_test` 里那些"还没搬的名字"清单也一并更新
 >   （`comfy_submit` 从"不许出现"挪进"必须出现"）。
 >
-> ✅ **P4 第 47 步（2026-09-26）：后台捕获轮询器（O5 / O6）** —— `server-rs/src/capture_poller.rs`。
+> ✅ **P4 第 47 步（2026-09-26）：后台捕获轮询器（O5 / O6）** —— `server-rs/src/comfy/capture_poller.rs`。
 > 此前 Rust 侧只有"端点/工具触发一次"的抓取，于是**用户自己在 ComfyUI 里跑的东西永远不会被收**，
 > 而 `/api/capture/status` 的 `lastPollAt` / `lastError` 只能如实回 null。现在两者都补上了，
 > 行为逐条对齐 Kotlin `ComfyCapture.start()`：启动先等 **2.5 秒**再跑第一轮、
 > `enabled=false` 时**每 5 秒空转但不退出**（用户在设置里打开就立刻生效，不必重启后端）、
 > 间隔 = `pollSeconds` 且**夹在 1..600**、**同一时刻只跑一轮**（上一轮没结束就让开）、
-> 成功写 `lastPollAt` 并**清空** `lastError`、失败写人话（`comfy_client::friendly_error`）**不假装成功**。
+> 成功写 `lastPollAt` 并**清空** `lastError`、失败写人话（`comfy::comfy_client::friendly_error`）**不假装成功**。
 > 一处刻意不同并写进了文件头：`lastPollAt` 存的是 **ISO-8601 文本**（与整库时间列同一个出口
-> `iso_time::from_system_time`），不是 Kotlin 那个内存 `Instant` —— 它要经 `/api/capture/status`
+> `infra::iso_time::from_system_time`），不是 Kotlin 那个内存 `Instant` —— 它要经 `/api/capture/status`
 > 出去给 Dart 解析，形状必须与别的可空时间键一致。
 > - **验收**：`cargo test` **346 例全绿**（223 lib + 121 api_test + 2 shape_lint；新增 4 例：
 >   停用时空转且不假装轮询过 / 连不上时如实记 `lastError`（且**不写** `lastPollAt`）/
@@ -784,7 +784,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   `comfyReachable=false` + `lastError="连不上 ComfyUI（http://127.0.0.1:9）：连接被拒绝 —— ComfyUI 没在运行？"`，
 >   而 `lastPollAt` **保留上一次成功的值**（Kotlin 只在成功时写）。
 >
-> ✅ **P4 第 46 步（2026-09-26）：角色卡五条端点**（`server-rs/src/character_cards.rs`）——
+> ✅ **P4 第 46 步（2026-09-26）：角色卡五条端点**（`server-rs/src/library/character_cards.rs`）——
 > 界面上那个从「提示词」页右上角进的**角色卡页面**（2026-09-26 那一轮 `2800eda`）此前只对着 Kotlin
 > 能用，指向 Rust 就是"接口不存在"。这一步把它补上，**实现逐条对照 `CharacterCardRepo.kt` + `CharacterCardRoutes.kt`**：
 >
@@ -828,7 +828,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >
 > ✅ **P4 第 45 步（2026-09-26）：MCP 桥（官方 comfy-mcp 的 39 个工具）** —— 第 45 步本来是
 > §9 起手顺序里的第 3 件（"AI 能不能真的生图"那一档），也是 §10.1 的 O1/O2 与 §10.5 的 O12 的落点。
-> 新模块 `server-rs/src/mcp.rs` 逐条对照 Kotlin 的三份实现 + `ComfyEnv.prepareLaunch`。
+> 新模块 `server-rs/src/tools/mcp.rs` 逐条对照 Kotlin 的三份实现 + `ComfyEnv.prepareLaunch`。
 >
 > - **协议层**（`McpClient`）：`initialize` → `notifications/initialized` → `tools/list` → `tools/call`，
 >   把 `comfy-mcp` 当子进程驱动。传输层做成**读一半 / 写一半的泛型**（`from_io`）：
@@ -850,7 +850,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > - **R12 的接法**：MCP 工具是**运行时**拉来的，而 `ToolView`/`IMPLEMENTED` 是静态的。
 >   刻意**不重构工具层**：拉到清单后把 name/description/schema 一次性 `Box::leak` 成 `&'static`
 >   （39 条、几十 KB，进程生命周期内固定），于是 `/api/ai/tools`、系统提示、下发的 `tools[]`
->   继续走同一条既有管线；新增 `tools::catalog_with` / `specs_with` 把两个来源合并后仍**按 name 升序**。
+>   继续走同一条既有管线；新增 `tools::tools::catalog_with` / `specs_with` 把两个来源合并后仍**按 name 升序**。
 >   权限档照 Kotlin `McpToolPolicy`：`update_comfyui` / `install_node` / `download*` = `DENY`，
 >   `launch_comfyui` / `run_workflow` / `generate_image` 那一批 = `ASK`，"其余的只读查询" = `ALLOW`。
 >   **拿不到 MCP 运行时不算错**：清单里就是空的（与 Kotlin "注册不上就没有这些工具"一致），
@@ -1003,7 +1003,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   Rust 侧前几批都是直接透传那一列，本机真库上"恰好"零差异（实测 27 提示词 / 24 产物 /
 >   23 会话 / 144 消息里**没有一个** `.000Z`），但 `strftime('%Y-%m-%dT%H:%M:%fZ','now')`
 >   的毫秒位是 `000` 的概率是 1/1000 —— 撞上就两端悄悄差一个字符串。
->   现在时间列**只有一个出口**（`iso_time::iso_time`），prompts / media / providers / models
+>   现在时间列**只有一个出口**（`infra::iso_time::iso_time`），prompts / media / providers / models
 >   全部改走它，`comfy_dirs` 那份私有的 `chrono_lite` 也并了进来（一处实现、一处用例）。
 >   用例把 `.000Z → 不带小数`、空格文本按 UTC、带偏移换算、以及"认不出来 → **键不出现**"
 >   全钉住了。**这条改动的判据就是"改完 18 个端点仍然零差异"** —— 实测确实零差异。
@@ -1114,9 +1114,9 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > | 字段 | Rust 侧落点 |
 > | --- | --- |
 > | `systemPrompt` | `system_prompt.rs`（`render` 的逐行对照）+ `nsfw_prompt.rs`（正文，**生成**） |
-> | `promptVersion` / `nsfwEnabled` | `nsfw_prompt::PROMPT_VERSION` / `app_settings` 的 `ai.nsfw` |
+> | `promptVersion` / `nsfwEnabled` | `ai::nsfw_prompt::PROMPT_VERSION` / `app_settings` 的 `ai.nsfw` |
 > | `tools[]` | `mobile_tools.rs`（7 个 `MOBILE`/`BOTH` 工具，**从 Kotlin 的真实 schema 生成**） |
-> | `untrustedBanner` | `mobile_tools::UNTRUSTED_BANNER_TEMPLATE` + `..._QUERY_LINE`（R7） |
+> | `untrustedBanner` | `tools::mobile_tools::UNTRUSTED_BANNER_TEMPLATE` + `..._QUERY_LINE`（R7） |
 > | `models[]` | `ai_providers` / `ai_models`（12 个键永远在、5 个可空键按行给，**连 `credentialRef` 都不下发**） |
 > | 白名单 / 权限档 | `policy.rs`（**只搬 run-kit 要的那一半**：展开白名单 + `ask`/`full` + 逐工具覆盖） |
 > | Skills / 记忆 | `skills.rs`（扫描 + frontmatter + 校验，非法项不进提示词）+ `memory.rs`（读 + 截断） |
@@ -1147,7 +1147,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   **本轮只做"手机发起 + 桌面显示 6 位码"，不做扫码** —— 扫码要相机插件 + 二维码包两个新依赖，
 >   而它买到的安全增量（"人必须看到桌面屏幕"）手机发起通道一样有；代价是用户手填一次桌面地址。
 >   A 通道（`pair/start`）留成**显式 501**，将来加不用改任何已冻结的形状）。
-> - `server-rs/src/auth.rs`：闸门是**纯函数** `decide(...)` + 一个只做 I/O 的中间件；
+> - `server-rs/src/mobile/auth.rs`：闸门是**纯函数** `decide(...)` + 一个只做 I/O 的中间件；
 >   **不引任何新依赖**（HMAC-SHA256 用已有的 `sha2` 手写、base64url 自己写、
 >   随机数走系统 CSPRNG，取不到就报错而不是退化成一个可预测的假随机数）；
 >   密钥下行要**解 DPAPI**（`CryptUnprotectData`，空熵 + CurrentUser，与 Kotlin 同档）。
@@ -1159,7 +1159,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   **真机那把 key 真的解开了** —— 对着真实 `storage\ai\credentials.dpapi.json`
 >   取回 `COMMAND_CODE_GOAT` / `DEEPSEEK_API_KEY`（**只报长度，不打印值**）。
 >
-> ✅ **P4 第 26 步（`343b6d9`，2026-09-25）：Run 持久化**（`server-rs/src/runs.rs`）—— 事件流
+> ✅ **P4 第 26 步（`343b6d9`，2026-09-25）：Run 持久化**（`server-rs/src/ai/runs.rs`）—— 事件流
 > **两条读法**（进程内 / 断线重连回放）共用的同一份事实，所以先把"落库与读回"这半边钉死。
 > `AiRunDto` 11 个键、`create`（14 列，`started_at` 走 SQL 侧 `strftime`）/ `finish`（终态只认三个）/
 > `fail_stale_running` + `expire_stale_pending_tool_calls`（后端重启恢复的两半）/
@@ -1206,7 +1206,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > （deepseek 余额不足如实回 `QUOTA_EXCEEDED`；command-code-goat 真回复）。
 
 > ✅ **P4 第 31 步（2026-09-25）：桌面工具层地基 + R8 审批闸门（`0f91b9f` + 补丁 `30725e6`）** ——
-> 交接单第 1 条的前半：**执行器的工具清单不再是空的**。`server-rs/src/tools.rs`（清单 / 执行 /
+> 交接单第 1 条的前半：**执行器的工具清单不再是空的**。`server-rs/src/tools/tools.rs`（清单 / 执行 /
 > 失败码 / 摘要 / 截断）+ 执行器的**工具往返循环** + 审批闸门 + 两条预算。
 > 形状全部**逐条对照 Kotlin**（`ToolRegistry.invoke` / `HarnessRunner:686~805`），
 > 因为事件与有序块的键集合就是两端共用契约 —— 这一批顺手抓出并修掉四处**只有对照才看得见**的偏差：
@@ -1239,7 +1239,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > - **跳过 = 立刻按"没回答"放行**：这一处**有意与 Kotlin 不同** —— Kotlin 的
 >   `AskGate.discard`（skip 走它）不唤醒 `awaitAll`，整张卡全跳过时那边要等 30 分钟超时；
 >   这里把"跳过 / 已失效"当结论，正是 skip 端点的文档语义（"别把 Run 挂死"）。
-> - **Run 收尾统一失效**：`finish_run` 里加 `questions::finalize_run(expired)`（收尾的唯一入口，
+> - **Run 收尾统一失效**：`finish_run` 里加 `ai::questions::finalize_run(expired)`（收尾的唯一入口，
 >   正常/失败/取消三条路都覆盖）—— 少了它那些行永远停在 pending，`/api/ai/pending` 会列出一张
 >   **点了也没用**的卡。
 > - ★ **顺手补上一条一直缺的启动恢复**：`main.rs` 从来没调用过 `fail_stale_running` /
@@ -1256,7 +1256,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 > ✅ **P4 第 33 步（`cde2e52`，2026-09-25）：界面端点第一批（`tools` / `tools/policy` / `nsfw`）** ——
 > 交接单第 3 条的第一刀，也是第 31 步那个审批闸门**能不能被用起来**的前提：
 > 少了「权限档」这一条，用户**连"自动允许"都切不了**，`ToolAccess::Ask` 的工具永远拦着等人点。
-> - `GET /api/ai/tools`：这台后端**能跑**的工具（只列 `tools::IMPLEMENTED`）。
+> - `GET /api/ai/tools`：这台后端**能跑**的工具（只列 `tools::tools::IMPLEMENTED`）。
 >   ⚠ 列一个跑不了的工具等于告诉用户"AI 能改文件"，而调用会回 `TOOL_NOT_FOUND`。
 > - `GET /api/ai/tools/policy`：11 个键与 `ToolPolicyDto` 逐字对齐；`writeRoots` / `readRoots`
 >   回的是**展开后的绝对路径**；`autoReadRoots` **每次现算**（真库副本上真的探到用户那 4 个
@@ -1266,7 +1266,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   写库是**合并**不是整份覆盖 —— 同一行里还有 `maxReadBytes` 等字段，覆盖会悄悄删掉它们。
 > - `GET/PUT /api/ai/nsfw`：`enabled` / `blur` / `effectiveBlur` / `promptVersion`；缺省一律按**关**
 >   （漏传一个字段绝不能让那段越狱提示词被悄悄打开），且与 run-kit 读**同一行**
->   （`run_kit::KEY_NSFW` 改成 `pub`：各写一份键名就会出现"界面里开了、提示词没注入"）。
+>   （`ai::run_kit::KEY_NSFW` 改成 `pub`：各写一份键名就会出现"界面里开了、提示词没注入"）。
 > - 验收：`cargo test` **223 例全绿**（128 lib + 93 api + 2 shape_lint）+ 真库副本抽查（8098）。
 
 > ✅ **P4 第 34 步（2026-09-25）：凭据写侧（`/api/ai/providers/{id}/credentials` + `/api/ai/web-search/credential`）** ——
@@ -1444,7 +1444,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   **禁段**（`.git`/`.mysql`/`.run`/`node_modules`，与用户白名单无关）→ **真实路径**
 >   （存在就解符号链接；不存在就沿父目录找到第一个存在的祖先再拼回来 —— `write_file` 的目标
 >   通常还不存在，只判词法路径就能被一个符号链接骗过）→ 白名单前缀 → **目录根本身不可写**。
->   顺带把 `comfy_dirs::plain_path` 提成 `pub(crate)`：`canonicalize` 的 `\\?\` 逐字前缀
+>   顺带把 `comfy::comfy_dirs::plain_path` 提成 `pub(crate)`：`canonicalize` 的 `\\?\` 逐字前缀
 >   以前只在接口返回里去过一次，工具结果里会**第二次**冒出来（模型还会把它贴进下一次调用）。
 > - `auto_read_roots` 挂到 `ToolPolicy::load` 上：**只放宽读**（用户 bug ④）——
 >   用户自己的 ComfyUI 工作流文件读得到，写仍然只认 `comfyui/`。
@@ -1474,13 +1474,13 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   `capturedAt` 走 `iso_time`（Java `Instant.toString()` 的规则：`.000Z` → 不带小数）——
 >   原样透传就会两端差一个字符串，而这是**只有真库才摆得出来**的那类差异。
 > - `comfy_list_workflows`：与 `GET /api/capture/workflows` **同一个实现**
->   （[`crate::comfy_dirs::workflows_json`]）—— 三份目录来源、`file:<sha256>` 那把幂等钥匙、
+>   （[`crate::comfy::comfy_dirs::workflows_json`]）—— 三份目录来源、`file:<sha256>` 那把幂等钥匙、
 >   `inLibrary` 判定都不另写一份。用例里把"工具的输出"与"端点的输出"逐键比了一遍：
 >   各写一份的后果正是用户 bug ⑤ 的复发形态（界面列得出来、AI 却说没有）。
 > - 新增 **`server-rs/tests/spot_check.rs`（真库副本抽查入口，默认 `#[ignore]`）**：
 >   端点类批次可以"起服务 + curl"抽查，但**工具层没有 HTTP 入口**，
 >   只跑内存夹具恰好会漏掉"夹具里没有的行与列"。现在把库副本 + 真 storage + 真项目根
->   指进去，直接调 `tools::execute`（以后的 `comfy_submit` 也走它）。
+>   指进去，直接调 `tools::tools::execute`（以后的 `comfy_submit` 也走它）。
 > - **真库副本实测**（本机 2026-09-25）：`comfy_list_workflows` 探到
 >   `D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows`（**1 份目录来源**）、
 >   15 份里列出 5 份，其中 `krea2SFWNSFWUncensoredImageTo_v10.json` → `inLibrary=true, promptId=305`
@@ -1498,7 +1498,7 @@ hmac / sha2 / base64           # 媒体签名 URL、令牌比较、sha256 去重
 >   （Kotlin `refreshQueue` + `labelOfQueueItem` 逐行对照：标题藏在
 >   `extra_data.extra_pnginfo.workflow.extra.title`，取不到就**不编一个名字**）。
 >   三条纪律写在文件头：地址只能来自配置（不接受模型给的 URL，否则就是 SSRF 入口）、
->   本机/内网**强制直连**（复用 `upstream::client_for`，否则打开系统代理就连不上 ComfyUI）、
+>   本机/内网**强制直连**（复用 `provider::upstream::client_for`，否则打开系统代理就连不上 ComfyUI）、
 >   网络异常翻成人话（`ConnectionRefused` → "连接被拒绝 —— ComfyUI 没在运行？"）。
 > - `/api/capture/status`（11 个键）与 `/api/capture/jobs`（5 个键）**从 501 变实现**：
 >   连不上时**如实** `comfyReachable=false` + 队列 0，而不是 500（状态查询失败会把整页拖垮）。
@@ -1849,7 +1849,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 > ✅ 可以直接复用的地基：`db.rs` 的 PRAGMA 读回自检（R1）、`BEGIN IMMEDIATE`（R2）、
 > `sync.rs` 的行 → JSON 泛型映射与列清单现查（`PRAGMA table_info`）、
 > `sync.rs` 里"永久性 / 暂时性错误要分清"的 `Rejected{code}` 形状（R6~R9 的错误码可沿用），
-> 以及第 14 步刚铺好的 `comfy_dirs::looks_like_comfy`（`/api/capture/locate*` 直接用它）。
+> 以及第 14 步刚铺好的 `comfy::comfy_dirs::looks_like_comfy`（`/api/capture/locate*` 直接用它）。
 
 > 🔎 **`/api/ai/providers` 的起手笔记（2026-09-24：**已经照着做完，见 §8 第 16 步**；下面这四条已实测，留着给 `/api/ai/models` 与 run-kit 当模板）** ——
 > 它就是 `AiRepo.listProviders().map { it.withCredential(credentials) }`，看着简单，
@@ -1981,10 +1981,10 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | --- | --- |
 | `comfy_submit`（**R10**：审核 → 审批 → 提交 → 自己等 → `captureRun()` 入库 → `mediaIds`） | ✅ **已搬（P4 第 48 步，2026-09-26）**：`workflow_submit.rs` + `tests/submit_test.rs` 6 例；预检只有"节点类 + 实例能不能加载这个模型"两道（七项 audit / 盘扫 / `env_report` 仍未搬） |
 | `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | 🔶 **`comfy_env_report` 与 `comfy_find_workflow` 已搬（§18，2026-09-27）**：`comfy_models.rs`（本机模型清单 `ComfyModels` + `ModelName`）与 `workflow_search.rs`（两段式找工作流）。其余四件仍未搬：`check_inputs`/`fit_workflow` 要拿 §18 那份清单做配对、`audit_workflow`/`prune_workflow` 是纯图结构分析（现在**都可以从 §18 这份清单派生了**） |
-| `comfy_use_media` / `comfy_make_mask` / `comfy_use_attachment`（图像编辑三件） | ✅ **已搬（第 58 步，2026-09-26）**：`server-rs/src/image_edit.rs` + 三条工具（出厂档 ASK）+ 16 例用例；那次活实例验收（第 58 步）的记录已随颜色抠图档删除，见 §13 墓碑 |
+| `comfy_use_media` / `comfy_make_mask` / `comfy_use_attachment`（图像编辑三件） | ✅ **已搬（第 58 步，2026-09-26）**：`server-rs/src/comfy/image_edit.rs` + 三条工具（出厂档 ASK）+ 16 例用例；那次活实例验收（第 58 步）的记录已随颜色抠图档删除，见 §13 墓碑 |
 | 联网三工具 `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（要 Keenable / Civitai 客户端；凭据端点已就绪）。⚠ **`danbooru_lookup` 已搬**（第 59 步，见 §14）—— 它是 Rust 侧第一条**联网**工具，顺带把"联网预算"这条只写在提示词里的规则变成真的拦得住 |
 | `search_prompts` / `search_character_cards` / `save_character_card` / `danbooru_lookup` | ✅ **已搬**：角色卡两件（第 46 步）+ **`search_prompts` / `danbooru_lookup`（第 59 步，见 §14）**。§11 的"写角色前先查三处"在 Rust 后端**已齐**；`save_character_card` 的核对时间也真的接上了（只有本轮真查过 danbooru 才写得进）。⚠ `character_cards` 那张表**不在同步白名单**里，这条纪律别丢 |
-| 工作流配方三件 `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表 | ✅ **已搬（P4 第 67 步，2026-09-27，见 §20）**：`server-rs/src/workflow_recipe.rs`（解析核心 + 仓储 + 学习 + 绑定 + 三条工具 + 五条端点）+ `tests/recipe_test.rs`。**故意不进同步范围**（手机提交走 `comfy_queue_submit`，R11）—— 这条纪律连用例一起搬了过来 |
+| 工作流配方三件 `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表 | ✅ **已搬（P4 第 67 步，2026-09-27，见 §20）**：`server-rs/src/workflow/workflow_recipe.rs`（解析核心 + 仓储 + 学习 + 绑定 + 三条工具 + 五条端点）+ `tests/recipe_test.rs`。**故意不进同步范围**（手机提交走 `comfy_queue_submit`，R11）—— 这条纪律连用例一起搬了过来 |
 | **后台捕获轮询器** + `lastPollAt` / `lastError`（O5/O6） | ✅ **已做（P4 第 47 步）**（用户自己在 ComfyUI 里跑的东西也会进画廊） |
 | **截断续写**（`MAX_CONTINUATIONS` + `CONTINUE_INSTRUCTION`） | ⛔ 未做（输出被长度上限卡断时，现在把半句话当结尾） |
 | 官方 comfy-mcp 39 个 | ✅ **第 45 步已做** |
@@ -2012,7 +2012,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
    `runtimeRequirements` 里 Java 那条也标成 `legacy`。**实测**：`pack-release.ps1 -SkipApp` 装配出
    **13.8MB**（Rust exe 12.8MB；旧的 jre 40MB + jar 20MB 全没了），发布包里的 exe 在**全新目录**
    （无库、无 JRE）里直接起来：自己建库（schemaVersion=1）→ 写端口文件 → `db=ok` + 17 个工具。
-4. ✅ **已做（第 55 步）**：**建表/迁移归 Rust** —— 新增 `db::open_or_create`：
+4. ✅ **已做（第 55 步）**：**建表/迁移归 Rust** —— 新增 `infra::db::open_or_create`：
    ① 库文件不存在（或空）→ 建父目录 + 建库 + 跑 `db/schema.sqlite.sql`（**编译期嵌进二进制**，
    与 Kotlin 从 jar 里读同一性质）+ 写 `user_version`；② `user_version == 0` 的老库 → 收敛式跑一遍 DDL；
    ③ 已是最新 → 什么都不做（**绝不重跑 DDL**）；④ 库比后端新 → **只警告不拦**（拦了就没法回退版本）。
@@ -2054,10 +2054,10 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
    * `pack-release.ps1` **删掉 `jre` 组件与 `-WithJre` / `-SkipJre`**，自检项只剩 Rust exe
      （`gradle_install_dist` / `jdk_runtime` 两个分支保留但明确标注"已退役的 legacy 组件"）。
    **文档**：README 的标题/现状/架构图/目录树/脚本表/环境表/打包说明、AGENTS 第 4/7/11 节与工具清单真源
-   （`server-rs/src/tools.rs`）全部改成 Rust 现状。
+   （`server-rs/src/tools/tools.rs`）全部改成 Rust 现状。
    **验收**：`comfyhub.ps1 doctor` 报到 `后端二进制 … comfyhub-server-rs.exe`、`后端构建 最新`；
    `restart` 正常（Rust、`db=ok`）；`pack-release.ps1 -SkipApp` 自检只剩 `viewer.exe`（因 `-SkipApp`），**合计 13.9MB**。
-   ⚠ **搬目录当场炸了一次**（值得记）：`server-rs/src/builtin.rs` 用
+   ⚠ **搬目录当场炸了一次**（值得记）：`server-rs/src/provider/builtin.rs` 用
    `include_str!("../../server/src/main/resources/ai/builtin-catalog.json")` 编译期读 Kotlin 那一份
    冻结模型目录 —— 目录一搬，**cargo 直接编不过**。按该模块头注释里早就写好的计划办：
    把 JSON **搬成 Rust 侧资产**（`server-rs/assets/ai/builtin-catalog.json`，31KB，运行期唯一真源），
@@ -2221,7 +2221,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | 项 | 状态 |
 | --- | --- |
-| **MCP 桥（官方 comfy-mcp 39 个工具）** | ✅ **已做（P4 第 45 步，2026-09-26）**：`server-rs/src/mcp.rs`（stdio JSON-RPC + 注册表 + 权限档 + `prepare_launch`）；真机验到 `/api/ai/tools` 回 53 个（39 个 MCP） |
+| **MCP 桥（官方 comfy-mcp 39 个工具）** | ✅ **已做（P4 第 45 步，2026-09-26）**：`server-rs/src/tools/mcp.rs`（stdio JSON-RPC + 注册表 + 权限档 + `prepare_launch`）；真机验到 `/api/ai/tools` 回 53 个（39 个 MCP） |
 | **`comfy_submit`**（R10：审核 → 审批 → 提交 → 等 → 入库 → `mediaIds`） | ✅ **已做（P4 第 48 步，2026-09-26）**：`workflow_submit.rs` + `tests/submit_test.rs` 6 例；预检只有"节点类 + 实例能不能加载这个模型"两道（七项 audit 与盘扫仍未搬） |
 | `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | 🔶 **`comfy_env_report` 已搬（§18，2026-09-27：`comfy_models.rs`，真机抽查 39/39、假警报清零）**；其余五件 ⛔ **未做（2026-09-27 复核：`tools.rs` 的 `IMPLEMENTED`（23 个）里确实没有它们）**（`find_workflow` 要库内搜索，`check_inputs`/`fit_workflow` 要拿 §18 那份清单做配对，`audit`/`prune` 是纯图结构分析）。⚠ **这条现在有直接后果**：AI **查不了**"本机有哪些模型 / 这份工作流的输入齐不齐"，于是 `inpaint-composite` 里凡是写 `comfy_env_report` / `comfy_check_inputs` 的地方**都执行不了** —— 前者**已解**（`comfy_env_report` 已在 Rust 后端下发，skill v3 也改成先读它的 `mattingModels`），后者仍只能退化成 `list_dir` 或直接问用户 |
 | `comfy_use_attachment`（把附件投进 ComfyUI `input\`） | ✅ **已做（P4 第 58 步，2026-09-26）**：图像编辑三件之一（`image_edit.rs`） |
@@ -2309,7 +2309,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | 项 | 状态 |
 | --- | --- |
-| 这四件工具 / 五条端点在 **Rust 侧**的对照实现 | ✅ **已做（第 58 步，2026-09-26）**：图像编辑三件（`server-rs/src/image_edit.rs`）。⚠ **角色卡那四条端点/两件工具与 `danbooru_lookup` / `search_prompts` 仍未搬** —— 搬的时候注意 `character_cards` **不在同步白名单**里（总纲 §3.3） |
+| 这四件工具 / 五条端点在 **Rust 侧**的对照实现 | ✅ **已做（第 58 步，2026-09-26）**：图像编辑三件（`server-rs/src/comfy/image_edit.rs`）。⚠ **角色卡那四条端点/两件工具与 `danbooru_lookup` / `search_prompts` 仍未搬** —— 搬的时候注意 `character_cards` **不在同步白名单**里（总纲 §3.3） |
 | 角色卡同步到手机（`/api/sync/*` 加表） | ⛔ 未做（要连 `sync.rs` 的 `SYNCED` / `pk_kind` / `PHONE_FORBIDDEN`、`MobileSchema.kt` 两份清单、测试夹具一起改） |
 | "抠人保背景"要**干净的边缘**（带 alpha 的 matting / rembg） | ✅ **已做（2026-09-27）**：贴人物图走 `comfyhub_paste_person_matte_anima.json`（`easy imageRemBg` + `refine_foreground=true` 给连续 alpha）；用之前先查 `comfy_get_status` 的 `mattingModels.usable`，缺模型就**指引用户下载**（不下就如实说做不到 —— 按颜色抠剪影那一档已整档删除） |
 | `comfy_audit_workflow` 里加一条"角色 tag 与角色卡/danbooru 是否一致"的检查 | ⛔ 未做（现在只在系统提示与工具描述里约束） |
@@ -2384,12 +2384,12 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | 提交 | 内容 |
 | --- | --- |
-| `a3470d6` | **资料库两件 + 联网预算**：`search_prompts`（与 `/api/prompts` 同一个实现）+ 新增 `server-rs/src/danbooru.rs`（四步有界查询 / 归一化 / 六种失败分开 / 挑战页单列）；`save_character_card` 的 `tagsVerifiedAt` 真的接上了（`ToolSession.danbooru_verified`）；**`MAX_WEB_QUERIES_PER_RUN` 从"只写在提示词里"变成执行器真的拦**，顺带修掉 `danbooru_lookup` 的分类漂移（Kotlin 是 WEB 档，Rust 表里写在 library） |
-| 本提交 | **顺手对齐提示词搜索的语义**（`routes::query_prompts` 按 Kotlin `PromptRepo.buildWhere` 重写：拆词 AND + 5 列 + `kind` 大写/`ALL` + `favorite` 只在 true 时筛）+ 文档登记（本节 + §10.8/§10.9 清单更新） |
+| `a3470d6` | **资料库两件 + 联网预算**：`search_prompts`（与 `/api/prompts` 同一个实现）+ 新增 `server-rs/src/tools/danbooru.rs`（四步有界查询 / 归一化 / 六种失败分开 / 挑战页单列）；`save_character_card` 的 `tagsVerifiedAt` 真的接上了（`ToolSession.danbooru_verified`）；**`MAX_WEB_QUERIES_PER_RUN` 从"只写在提示词里"变成执行器真的拦**，顺带修掉 `danbooru_lookup` 的分类漂移（Kotlin 是 WEB 档，Rust 表里写在 library） |
+| 本提交 | **顺手对齐提示词搜索的语义**（`web::routes::query_prompts` 按 Kotlin `PromptRepo.buildWhere` 重写：拆词 AND + 5 列 + `kind` 大写/`ALL` + `favorite` 只在 true 时筛）+ 文档登记（本节 + §10.8/§10.9 清单更新） |
 
 ### 14.1 三个"为什么这么做"
 
-1. **`search_prompts` 与 `/api/prompts` 必须同一份实现**（`routes::query_prompts` / `get_prompt_dto`
+1. **`search_prompts` 与 `/api/prompts` 必须同一份实现**（`web::routes::query_prompts` / `get_prompt_dto`
    抽成 `pub(crate)`）。各写一份 SQL 的后果是**"界面搜得到、AI 说没有"** —— 而那种不一致
    不会有任何用例变红（两边各自都对）。这一条与第 41 步"`comfy_list_workflows` 与
    `/api/capture/workflows` 同一个实现"是同一条纪律。
@@ -2428,7 +2428,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 | `web_search` / `web_fetch` / `civitai_search` + `find_model` | ⛔ 未搬（要 Keenable / Civitai 客户端 + `EndpointGuard`；`/api/ai/credentials` 已就绪）。⚠ **`danbooru_lookup` 是 Rust 侧第一条联网工具**，所以这一批把"联网预算"这条规则真的落地了 —— 后面三条搬过来时**直接复用**那份计数，别再各写一份 |
 | `comfy_find_workflow` / `check_inputs` / `fit_workflow` / `env_report` / `audit_workflow` / `prune_workflow` | ⛔ 未搬（要 `ComfyModels` 本机模型清单） |
 | 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表） | ✅ **已搬（P4 第 67 步，2026-09-27，见 §20）**（`WorkflowRecipe.kt` 的解析核心 + Repo/Learner/Binder/Routes 逐条对照；**故意不进同步范围**） |
-| **`comfy_query` 那一档的预算** | ✅ **已补（2026-09-27）**：`ToolSession.comfy_queries_in_window` + `has_comfy_queries_left()`，执行器在**权限档之前**按**类别**（`ai_settings::category_of(..) == "comfy"`）拦，回 `QUERY_BUDGET_EXCEEDED`（文案与 Kotlin 逐字同义："本次回复查询 ComfyUI 的次数已达上限（9 次）；请基于已有信息作答，或让用户稍后再问"）。数字真源仍是 `policy::MAX_COMFY_QUERIES_PER_RUN = 9`（系统提示第 7 条 `«MAX_COMFY»` 就是替换它）。**没有另发明一套** —— 结构照 `has_web_queries_left` 那一条；用户答完提问时 `reset_budget` 与联网额度一起归零。用例：`comfy_查询额度只认_comfy_类工具且只在成功时计数`。⚠ 顺带钉住一个日后会漂移的点：Kotlin 里 **`comfy_env_report` 是 `FILES` 类**（只扫盘、不碰服务），所以不能靠 `_ => "comfy"` 兜底 —— 已在 `category_of` 里提前写好那一条 |
+| **`comfy_query` 那一档的预算** | ✅ **已补（2026-09-27）**：`ToolSession.comfy_queries_in_window` + `has_comfy_queries_left()`，执行器在**权限档之前**按**类别**（`ai::ai_settings::category_of(..) == "comfy"`）拦，回 `QUERY_BUDGET_EXCEEDED`（文案与 Kotlin 逐字同义："本次回复查询 ComfyUI 的次数已达上限（9 次）；请基于已有信息作答，或让用户稍后再问"）。数字真源仍是 `tools::policy::MAX_COMFY_QUERIES_PER_RUN = 9`（系统提示第 7 条 `«MAX_COMFY»` 就是替换它）。**没有另发明一套** —— 结构照 `has_web_queries_left` 那一条；用户答完提问时 `reset_budget` 与联网额度一起归零。用例：`comfy_查询额度只认_comfy_类工具且只在成功时计数`。⚠ 顺带钉住一个日后会漂移的点：Kotlin 里 **`comfy_env_report` 是 `FILES` 类**（只扫盘、不碰服务），所以不能靠 `_ => "comfy"` 兜底 —— 已在 `category_of` 里提前写好那一条 |
 | `search_prompts` 的**多词 AND** 语义 | ✅ **顺手对齐了**（它本来是个静默漂移）：Rust 的 `query_prompts` 之前是**整串 LIKE + 3 列**（title / positive / negative），而 Kotlin `PromptRepo.buildWhere` 是**拆词 AND + 5 列**（`kind` 大写 / `ALL`、`favorite` 只在 true 时筛）—— 两边各自都"对"，所以一直没被发现 |
 
 ---
@@ -2480,7 +2480,7 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | # | 问题 | 修法 |
 | --- | --- | --- |
-| 1 | **`comfy_submit` 被算进"查询 ComfyUI"的额度** —— 于是"AI 自己搭工作流"这条正路在**最后一步**被挡住：侦察（读权重 / 查节点契约 / 搜模型）一轮就能用光 9 次，图写好了却没机会提交。⚠ 这是**当天早些时候我刚补的那条预算**引入的（Kotlin 也是这么分的，但**照着搬就把正路堵死了**） | 加 `ai_settings::is_comfy_query`：`comfy_submit` **不算查询**（系统提示那条规则的原话就是"主动**查询** ComfyUI 几次"）。执行器与 `spend_call` 都改用它；`comfy_use_media` / `comfy_make_mask` 照旧算（它们真的碰实例）。用例：`comfy_查询额度只认_comfy_类工具且只在成功时计数` 里那几条断言 |
+| 1 | **`comfy_submit` 被算进"查询 ComfyUI"的额度** —— 于是"AI 自己搭工作流"这条正路在**最后一步**被挡住：侦察（读权重 / 查节点契约 / 搜模型）一轮就能用光 9 次，图写好了却没机会提交。⚠ 这是**当天早些时候我刚补的那条预算**引入的（Kotlin 也是这么分的，但**照着搬就把正路堵死了**） | 加 `ai::ai_settings::is_comfy_query`：`comfy_submit` **不算查询**（系统提示那条规则的原话就是"主动**查询** ComfyUI 几次"）。执行器与 `spend_call` 都改用它；`comfy_use_media` / `comfy_make_mask` 照旧算（它们真的碰实例）。用例：`comfy_查询额度只认_comfy_类工具且只在成功时计数` 里那几条断言 |
 | 2 | **自己写的 API 图第一次被拒**：AI 在顶层加了 `_comment`、节点里也塞了注释 → `NOT_A_WORKFLOW`（"既不是 API 格式也不是界面格式"）。它自己改成纯净格式才读进去 —— 但那**白花了一轮** | `NOT_A_WORKFLOW` 的错误里现在**点出是哪个顶层键不像节点**，并给出改法（顶层只有节点 id、每个节点只有 `class_type` 与 `inputs`）。纯函数 `api_format_hint` + 用例 `api_格式提示要点出哪个顶层键不像节点`（顺带钉住"**节点内部**的 `_meta` 是合法的"—— 项目自带的四份工作流每个节点都带它） |
 
 ### 17.4 诚实清单
@@ -2509,8 +2509,8 @@ Run 与 SSE（**R5/R6 的保留窗口与"失败不丢内容"**）→ 工具层�
 
 | 提交 | 内容 |
 | --- | --- |
-| `5f15faa` | **`ComfyModels` + `comfy_env_report`（Rust）**：新增 `server-rs/src/comfy_models.rs`（`ComfyModels.kt` + `ModelName` 逐条对照）—— `MODEL_INPUTS` 29 条 loader 判据 / `from_object_info`（枚举抠清单）/ `scan`（有界扫盘，深度 ≤3、不跟符号链接、30 秒缓存）/ **`merge` 并集**（"盘上有、实例看不到"的判据）/ `requirements`（图里点名了哪些模型）/ `enumerate_model_inputs`（第三方 loader 也能认）/ `ModelName`（分词 Dice 相似度 + `lookup_query`）；工具进 `desktop_tools`（描述与 schema **逐字**搬 Kotlin，R12/R13）与 `tools.rs` 的 `IMPLEMENTED`（22 → 23），出厂档 `ALLOW` / `mutating=false`（**不属于 COMFY 那一类**，不吃查询预算） |
-| 本提交 | **`comfy_find_workflow`（Rust）**：新增 `server-rs/src/workflow_search.rs`（`AiWorkflowSearch.search` + `ToolRegistry.kt` 那条处理体的逐条对照）—— 两段式：先搜库（`routes::query_prompts`，与 `search_prompts` / `/api/prompts` **同一份实现**），库里 0 条时**自动回头看本机工作流文件**（复用 `comfy_dirs::workflows_json`，与 `/api/capture/workflows` / `comfy_list_workflows` 同一份）并给出 `localWorkflows` + `dirs` + hint；`IMPLEMENTED` 23 → 24，出厂档 `ALLOW` / `mutating=false` |
+| `5f15faa` | **`ComfyModels` + `comfy_env_report`（Rust）**：新增 `server-rs/src/comfy/comfy_models.rs`（`ComfyModels.kt` + `ModelName` 逐条对照）—— `MODEL_INPUTS` 29 条 loader 判据 / `from_object_info`（枚举抠清单）/ `scan`（有界扫盘，深度 ≤3、不跟符号链接、30 秒缓存）/ **`merge` 并集**（"盘上有、实例看不到"的判据）/ `requirements`（图里点名了哪些模型）/ `enumerate_model_inputs`（第三方 loader 也能认）/ `ModelName`（分词 Dice 相似度 + `lookup_query`）；工具进 `desktop_tools`（描述与 schema **逐字**搬 Kotlin，R12/R13）与 `tools.rs` 的 `IMPLEMENTED`（22 → 23），出厂档 `ALLOW` / `mutating=false`（**不属于 COMFY 那一类**，不吃查询预算） |
+| 本提交 | **`comfy_find_workflow`（Rust）**：新增 `server-rs/src/workflow/workflow_search.rs`（`AiWorkflowSearch.search` + `ToolRegistry.kt` 那条处理体的逐条对照）—— 两段式：先搜库（`web::routes::query_prompts`，与 `search_prompts` / `/api/prompts` **同一份实现**），库里 0 条时**自动回头看本机工作流文件**（复用 `comfy::comfy_dirs::workflows_json`，与 `/api/capture/workflows` / `comfy_list_workflows` 同一份）并给出 `localWorkflows` + `dirs` + hint；`IMPLEMENTED` 23 → 24，出厂档 `ALLOW` / `mutating=false` |
 
 ### 18.1 硬证据
 
@@ -2585,7 +2585,7 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 
 | 提交 | 内容 |
 | --- | --- |
-| `1ef6718` | **P4 第 62 步：`comfy_check_inputs` + `comfy_fit_workflow`**（`server-rs/src/workflow_fit.rs`，1476 行）—— 前者扫一份 API 图、把"还等着外部给输入的位置"逐个列清楚（用户建议 ⑤ 那个现场：没给参考图，工作流却用到参考图）；后者把图里点名的每个模型与**第 60 步那份本机清单**对一遍，给 `exact` / `substitute` / `onDiskOnly` / `missing` 四档 + 一份能直接贴进 `comfy_submit(overrides=…)` 的键。两件都**只报不改**。<br>★ 一处接线必须记住：Kotlin 的 `comfy_check_inputs` 读 `ctx.hasImageAttachment`（"本次带没带图"决定图片缺口算不算缺），Rust 没有 `ToolContext`，所以在 `ToolSession` 上加了 `has_image_attachment`，由执行器用**与系统提示那句「本次请求附带图片附件」同一个值**钉住 —— 两处不同源的话，模型会去要一张它已经收到的图 |
+| `1ef6718` | **P4 第 62 步：`comfy_check_inputs` + `comfy_fit_workflow`**（`server-rs/src/workflow/workflow_fit.rs`，1476 行）—— 前者扫一份 API 图、把"还等着外部给输入的位置"逐个列清楚（用户建议 ⑤ 那个现场：没给参考图，工作流却用到参考图）；后者把图里点名的每个模型与**第 60 步那份本机清单**对一遍，给 `exact` / `substitute` / `onDiskOnly` / `missing` 四档 + 一份能直接贴进 `comfy_submit(overrides=…)` 的键。两件都**只报不改**。<br>★ 一处接线必须记住：Kotlin 的 `comfy_check_inputs` 读 `ctx.hasImageAttachment`（"本次带没带图"决定图片缺口算不算缺），Rust 没有 `ToolContext`，所以在 `ToolSession` 上加了 `has_image_attachment`，由执行器用**与系统提示那句「本次请求附带图片附件」同一个值**钉住 —— 两处不同源的话，模型会去要一张它已经收到的图 |
 | `155d356` | **P4 第 63 步：`comfy_audit_workflow` + `comfy_prune_workflow`**（`workflow_audit.rs` 1394 + `workflow_prune.rs` 1657）—— 前者七项检查（跑之前就能查出来那七类）、后者"给工作流做减法/加法"（`analyze=true` 只分析、`removeFrom` 摘分支并**把下游接回上游**、`injections` 插节点）。两件都**只报不改**：要改图用 `comfy_submit(overrides=…)`、要摘节点用它自己 |
 | `99423d9` | **P4 第 64 步：联网三工具 + `find_model`**（`web_tools.rs` 994 + `civitai.rs` 1156 + `find_model.rs` 2822）—— 系统提示第 17 条那一整节「联网搜索的纪律」至此指向的工具**真的存在了**（在此之前模型看不见它们）。`find_model` 是"先查本机、本机已有同名就一个请求都不发"的那条路，它的本机那一半就是第 60 步那份清单 |
 | 本提交 | **修掉 `comfy_get_status` 里一处"刚提交完却说没提交过"**（见下） |
@@ -2607,7 +2607,7 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 ### 19.2 三个批次里值得记下来的四件事（都写进了各自的代码注释）
 
 1. **`web_search` / `web_fetch` / `civitai_search` 在 Kotlin 侧是 `ToolScope.BOTH`**，
-   **已经在 `mobile_tools.rs` 那份（run-kit 机器抽取）里**；而 `tools::implemented()`
+   **已经在 `mobile_tools.rs` 那份（run-kit 机器抽取）里**；而 `tools::tools::implemented()`
    **不去重** —— 顺手往 `desktop_tools.rs` 再加一遍，就会让下发的 `tools[]` 与
    `/api/ai/tools` 出现**重名**。所以这一批只把 `find_model`（Kotlin 默认 `DESKTOP`）
    加进了桌面清单，并在钉子用例里先断言"桌面这份**没有**那三件"。
@@ -2626,7 +2626,7 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 
 | 项 | 状态 |
 | --- | --- |
-| `comfy_submit` 的提交闸门**没有**接 `workflow_audit::blocking_refusal` | ✅ **已接（P4 第 70 步，2026-09-27，见 §24）**。工具描述（逐字搬自 Kotlin）里写着"提交时 `comfy_submit` 也会自动跑一次审核，但只拦'必跑不了'的那些（前端节点 / 版本不兼容 / 本机没有的节点类）"—— 那句话**现在是真的**：审核跑在 `overrides` / `connections` 都应用完之后的最终图上（Kotlin `Application.kt` 的 `preflight` lambda 同位置），`blocking_refusal()` 有货就当场拒（`MODEL_NOT_LOADABLE`，与 Kotlin 同码同措辞），非阻断的那些进 `preflightWarnings`。`workflow_submit.rs` 文件头那段"审计没接"的诚实欠账已改写 |
+| `comfy_submit` 的提交闸门**没有**接 `workflow::workflow_audit::blocking_refusal` | ✅ **已接（P4 第 70 步，2026-09-27，见 §24）**。工具描述（逐字搬自 Kotlin）里写着"提交时 `comfy_submit` 也会自动跑一次审核，但只拦'必跑不了'的那些（前端节点 / 版本不兼容 / 本机没有的节点类）"—— 那句话**现在是真的**：审核跑在 `overrides` / `connections` 都应用完之后的最终图上（Kotlin `Application.kt` 的 `preflight` lambda 同位置），`blocking_refusal()` 有货就当场拒（`MODEL_NOT_LOADABLE`，与 Kotlin 同码同措辞），非阻断的那些进 `preflightWarnings`。`workflow_submit.rs` 文件头那段"审计没接"的诚实欠账已改写 |
 | 系统提示第 17 条那句"`web_search`/`web_fetch`/`civitai_search` **共用这一个额度**"漏了 `find_model` | ✅ **已改（P4 第 69 步，2026-09-27）**：那句现在点名**五个**（`web_search` / `web_fetch` / `civitai_search` / `danbooru_lookup` / `find_model`）—— 预算按 `category_of(name)=="web"` 扣，而那一档本来就是这五个（只补 `find_model` 会把同一类不准确留在原地）。`PROMPT_VERSION` v32 → **v33**，`kitVersion` 随之 bump |
 | 配方三件（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`）+ `workflow_recipes` 表 + `bind` 端点 | ✅ **已搬（P4 第 67 步，2026-09-27，见 §20）**（`WorkflowRecipe.kt` 710 行 + Repo/Learner/Binder/Routes + 约 1000 行 Kotlin 测试断言逐条移植） |
 | `WorkflowConvert` 的两处欠账（subgraph 展开 / `emulateFrontend`） | ✅ **已清零（P4 第 68 步，2026-09-27，见 §22）** |
@@ -2648,11 +2648,11 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 
 | 提交 | 内容 |
 | --- | --- |
-| `本提交` | **P4 第 67 步：配方三件 + `workflow_recipes` 搬到 Rust**（`server-rs/src/workflow_recipe.rs`，约 2000 行；`tests/recipe_test.rs` 7 例）—— 学（`comfy_learn_workflow`）/ 列（`comfy_list_recipes`）/ 绑（`comfy_bind_recipe`）+ `GET/POST /api/ai/workflow-recipes`、`GET/DELETE /{id}`、`POST /{id}/bind` |
+| `本提交` | **P4 第 67 步：配方三件 + `workflow_recipes` 搬到 Rust**（`server-rs/src/workflow/workflow_recipe.rs`，约 2000 行；`tests/recipe_test.rs` 7 例）—— 学（`comfy_learn_workflow`）/ 列（`comfy_list_recipes`）/ 绑（`comfy_bind_recipe`）+ `GET/POST /api/ai/workflow-recipes`、`GET/DELETE /{id}`、`POST /{id}/bind` |
 
 ### 20.1 这一批的三条"接线必须记住"
 
-1. **学习与绑定只有一份实现**：`workflow_recipe::learn_and_save` / `bind_and_report` 就是
+1. **学习与绑定只有一份实现**：`workflow::workflow_recipe::learn_and_save` / `bind_and_report` 就是
    AI 工具与 `POST /api/ai/workflow-recipes*` **共用的那两个函数**（Kotlin 是 `Application.kt`
    里那两个 lambda）。两处各写一遍必然漂移，而漂移的表现是
    "AI 学出来的配方和界面看到的不一样"——**不报错**。
@@ -2671,7 +2671,7 @@ Rust 侧改成**恒查一次图**来定 `runnable`（图的体积才是当初想
 | 处 | 差异 | 为什么 |
 | --- | --- | --- |
 | `workflow_recipe.rs` 的 `RecipeFailure::to_tool_failure` | 仓储的 400（名字太长 / `promptId` 不存在）在 Kotlin 工具层会落到包装层的兜底分支（`TOOL_ERROR` + "工具执行失败：IllegalArgumentException（…）"），Rust 侧翻成 `INVALID_ARGUMENT` | 人话一个字不变，只是码能告诉模型"是我参数给错了"。这是本仓库既有约定（第 46 步 `character_cards` 的 `api_failure`）；**端点那一侧仍与 Kotlin 完全同形**（`{error: 人话}`） |
-| ~~学习时多补一句"还没实现「模拟用户行为」"~~ | ✅ **已撤销（P4 第 68 步，见 §22）**：`workflow_convert.rs` 现在真的实现了它（`workflow_frontend.rs`），所以那句补白连同 `workflow_convert::emulate_frontend_warning` 一起删掉了 —— 这一段差异**不再存在**，学习链路与 Kotlin 的行为一致 | 第 67 步当时的理由：工具描述逐字搬自 Kotlin（写着 `emulateFrontend` 默认开着），而 Rust 还没实现它，只能在结果里主动补一句如实说明 |
+| ~~学习时多补一句"还没实现「模拟用户行为」"~~ | ✅ **已撤销（P4 第 68 步，见 §22）**：`workflow_convert.rs` 现在真的实现了它（`workflow_frontend.rs`），所以那句补白连同 `workflow::workflow_convert::emulate_frontend_warning` 一起删掉了 —— 这一段差异**不再存在**，学习链路与 Kotlin 的行为一致 | 第 67 步当时的理由：工具描述逐字搬自 Kotlin（写着 `emulateFrontend` 默认开着），而 Rust 还没实现它，只能在结果里主动补一句如实说明 |
 
 同时**顺手收掉两处重复实现**（不改变行为）：`is_node_graph` 从 `workflow_load.rs`
 搬进 `workflow_convert.rs`（学习链路与加载链路共用一份判据）；
@@ -2801,7 +2801,7 @@ Kotlin `WorkflowConvert.flatten` 逐条对照搬过来（**没有一条是猜的
 ### 22.2 「模拟用户行为」—— 新模块 `workflow_frontend.rs`
 
 Kotlin `FrontendNodes.kt` 的对照（**判据不重抄**：广播型 / 显示型两张表与三条模式
-复用第 63 步就手写好的 `workflow_audit::is_broadcast` / `is_display`，**没有 regex 依赖**）：
+复用第 63 步就手写好的 `workflow::workflow_audit::is_broadcast` / `is_display`，**没有 regex 依赖**）：
 
 | 前端节点 | 等价改写 |
 | --- | --- |
@@ -2847,7 +2847,7 @@ tolerateUnsupported + complete=false)`、`comfy_bind_recipe` 的四档、整包 
 
 ### 23.2 ★ 更值钱的那一件：`gen_prompts.py` 会**静默撤掉**第 19 条
 
-`server-rs/src/nsfw_prompt.rs` 是**生成**的（`gen_prompts.py` 从 Kotlin 源码机械提取正文，
+`server-rs/src/ai/nsfw_prompt.rs` 是**生成**的（`gen_prompts.py` 从 Kotlin 源码机械提取正文，
 `server-rs/tools/README.md` 写着"生成而不是手抄"的理由 —— 这段话本身是对的）。
 但那个脚本仍然指向 `server/src/main/kotlin/…`，而 **C-6 之后 Kotlin 树已经搬到 `legacy/`** ——
 路径早就失效了。
@@ -2873,7 +2873,7 @@ tolerateUnsupported + complete=false)`、`comfy_bind_recipe` 的四档、整包 
 
 ### 23.3 第 17 条那句预算说明漏了两个工具（不只是 `find_model`）
 
-任务书说漏了 `find_model` —— 实际**漏了两个**：预算按 `ai_settings::category_of(name) == "web"`
+任务书说漏了 `find_model` —— 实际**漏了两个**：预算按 `ai::ai_settings::category_of(name) == "web"`
 扣，而那一档是 **`web_search` / `web_fetch` / `civitai_search` / `danbooru_lookup` / `find_model`**
 （`ai_settings.rs` 的 web 档 + `executor.rs` 的执行点）。只补 `find_model` 会把同一类不准确
 留在原地（`danbooru_lookup` 从第一天起就没写进去）。现在那句点名**五个**，
@@ -2890,7 +2890,7 @@ tolerateUnsupported + complete=false)`、`comfy_bind_recipe` 的四档、整包 
 
 ---
 
-## 24. 2026-09-27：`comfy_submit` 的闸门接上 `workflow_audit::blocking_refusal`（**§19.3 那条 `⛔ 未接` 清零**）
+## 24. 2026-09-27：`comfy_submit` 的闸门接上 `workflow::workflow_audit::blocking_refusal`（**§19.3 那条 `⛔ 未接` 清零**）
 
 > 这是"工具描述说的必须是真的"这条路线的最后一件（前三件：§18.3 `runnable`、§19.1 `submissions`、§23 系统提示第 20 条）。
 > 第 63 步把 `WorkflowAudit` 整份搬到 Rust（`workflow_audit.rs`，含 `blocking_refusal()`），但**提交路径一直没调它** ——
@@ -2905,13 +2905,13 @@ Kotlin 的真源在 `Application.kt` 的 `preflight` lambda（`AiWorkflowSearch.
 
 | 闸门 | 拦不拦 | Rust 落点 |
 | --- | --- | --- |
-| `frontendNodes`（纯前端节点） | **拦** | `workflow_audit::blocking_refusal()` |
+| `frontendNodes`（纯前端节点） | **拦** | `workflow::workflow_audit::blocking_refusal()` |
 | `nodeVersions`（已知识别不兼容） | **拦** | 同上 |
 | `unknownNodes`（`/object_info` 里没有的类） | **拦** | 同上；Rust 多一道措辞更贴纪律的实例侧检查（见 24.2 的第 3 条） |
 | `outputName` / `params` / `vram` / `promptStyle` / `loaderFolder` | **只提醒** | `Report::render_non_blocking()` → `preflightWarnings` |
 
 `/object_info` 与模型清单**只取一次**（审核第 ⑦ 项与两道实例侧检查吃同一份响应；清单走
-`comfy_models::inventory` + `mcp::desktop(None)`，与 `comfy_env_report` / `comfy_fit_workflow` / `comfy_audit_workflow` 同源）。
+`comfy::comfy_models::inventory` + `tools::mcp::desktop(None)`，与 `comfy_env_report` / `comfy_fit_workflow` / `comfy_audit_workflow` 同源）。
 
 ### 24.2 三处**有意**的偏离（都写在 `workflow_submit.rs` 文件头）
 
@@ -2923,7 +2923,7 @@ Kotlin 的真源在 `Application.kt` 的 `preflight` lambda（`AiWorkflowSearch.
    `overrides` 改不了 —— 所以"覆盖之后放行"这条用例在这里不成立（Kotlin 侧同样不成立）。
 3. **"实例里没有这个节点类"排在审核之前**：Kotlin 的 `ModelPreflight` 不看节点类，这个重叠只存在于 Rust 侧，
    没有 Kotlin 的先后可照搬；保留它先说话是因为措辞正是本仓库的纪律（"让用户启停/换实例，**不要**改用户的工作流"）。
-   **纯前端那一类被它故意跳过**（`workflow_audit::is_frontend_only`）：对 `Label (rgthree)` 说"装节点包"是错的方向，
+   **纯前端那一类被它故意跳过**（`workflow::workflow_audit::is_frontend_only`）：对 `Label (rgthree)` 说"装节点包"是错的方向，
    那句话必须由审核那条"服务端根本没有这些类"的结论来说。
 
 ### 24.3 验收
@@ -3148,7 +3148,7 @@ DELETE /api/prompts/457|459|461
 * **§9 ④ 里那两条**："手机侧的空壳会话清理（桥缺 `deleteConversation`）"与
   "`ai_run_events` 的保留窗口……Rust 侧更没有" **都已完成**（移动端第 71 步；Rust 第 26/27 步）。
   §9 ② 的"`/import-workflows` 仍是 501"也已完成（第 49 步）。
-* **`PROMPT_VERSION`**：§19.3 / §23 写的是 v33，而**代码里是 v35**（`server-rs/src/nsfw_prompt.rs`：
+* **`PROMPT_VERSION`**：§19.3 / §23 写的是 v33，而**代码里是 v35**（`server-rs/src/ai/nsfw_prompt.rs`：
   v34 = 第 19 条按"贴人只有 matte 一条路"改写；v35 = 2026-09-28 新增**第 21 条**环节标记，
   配合 `step_mark.rs` / `step.started` / 界面的关键步骤折叠）。以代码为准。
   ⚠ 改提示词正文必须 bump，`run_kit.rs` 的签名用例与 `api_test.rs` 的版本断言会一起红（那是设计）。

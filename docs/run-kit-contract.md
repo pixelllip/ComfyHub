@@ -107,7 +107,7 @@ GET /api/ai/run-kit/status  → { current: "2026-09-23.1", revoked: ["2026-09-22
 
 ## 6. Rust 侧实现（P4 第 22 步，2026-09-24）
 
-Rust 也实现了这两条端点（`server-rs/src/run_kit.rs` + `system_prompt.rs` +
+Rust 也实现了这两条端点（`server-rs/src/ai/run_kit.rs` + `system_prompt.rs` +
 `nsfw_prompt.rs` + `mobile_tools.rs` + `policy.rs` + `skills.rs` + `memory.rs`）。
 **手机从此可以只对着一个后端干活**：以前 `run-kit` 只在 Kotlin、`/api/sync/push` 只在 Rust，
 "发得出去"与"推得回去"需要两台后端。

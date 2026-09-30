@@ -25,7 +25,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
-use comfyhub_server_rs::routes::AppState;
+use comfyhub_server_rs::web::routes::AppState;
 
 /// 夹具用的 API 格式节点图（提交出去的就是它 + 覆盖 / 补线的结果）。
 fn api_graph() -> Value {
@@ -109,7 +109,7 @@ async fn fake_comfy(object_info: Value, history: Value) -> (String, Arc<Mutex<Ve
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {
-    let dir = comfyhub_server_rs::testpaths::scratch(&format!("submit-{label}"));
+    let dir = comfyhub_server_rs::infra::testpaths::scratch(&format!("submit-{label}"));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -137,7 +137,7 @@ impl Fixture {
         let storage = dir.join("storage");
         std::fs::create_dir_all(storage.join("media")).unwrap();
 
-        let conn = comfyhub_server_rs::db::open_memory().expect("内存库");
+        let conn = comfyhub_server_rs::infra::db::open_memory().expect("内存库");
         let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("db")
@@ -166,7 +166,7 @@ impl Fixture {
         .expect("插捕获记录");
 
         let state = AppState::new(conn, ":memory:", storage.join("media"));
-        let config = comfyhub_server_rs::capture::CaptureConfig {
+        let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
             enabled: true,
             comfy_url: config_url.to_string(),
             output_dir: Some(output.display().to_string()),
@@ -175,12 +175,12 @@ impl Fixture {
             max_per_poll: 20,
             download_fallback: true,
         };
-        comfyhub_server_rs::capture::save_capture_config(&state, config).expect("存捕获配置");
+        comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).expect("存捕获配置");
         Self { state, dir }
     }
 
-    fn policy(&self) -> comfyhub_server_rs::policy::ToolPolicy {
-        comfyhub_server_rs::policy::ToolPolicy::new(self.dir.clone(), Default::default())
+    fn policy(&self) -> comfyhub_server_rs::tools::policy::ToolPolicy {
+        comfyhub_server_rs::tools::policy::ToolPolicy::new(self.dir.clone(), Default::default())
     }
 
     fn finish(self) {
@@ -235,7 +235,7 @@ async fn submit_runs_the_workflow_then_ingests_the_product() {
         "wait": true,
         "waitSeconds": 20
     });
-    let outcome = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
         .await
         .expect("提交应当成功");
 
@@ -309,7 +309,7 @@ async fn nsfw_flag_travels_into_the_library() {
     write_png(&fixture.dir.join("output").join("unit.png"), [200, 20, 60]);
 
     let arguments = json!({ "promptId": 101, "nsfw": true, "waitSeconds": 20 });
-    let outcome = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
         .await
         .expect("提交应当成功");
     let media_id = outcome.payload["mediaIds"][0].as_i64().expect("有产物");
@@ -339,7 +339,7 @@ async fn preflight_blocks_unknown_node_classes_before_anything_is_sent() {
     });
 
     let arguments = json!({ "promptId": 101, "waitSeconds": 20 });
-    let failure = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
         .await
         .expect_err("节点类不认识的图必须拒");
     assert_eq!(failure.code, "MODEL_NOT_LOADABLE");
@@ -364,7 +364,7 @@ async fn preflight_warns_about_models_it_cannot_see_but_still_submits() {
         "overrides": { "4.ckpt_name": "anima-base-v1.0.safetensors" },
         "waitSeconds": 20
     });
-    let outcome = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
         .await
         .expect("这一档现在不拦");
     assert_eq!(submitted.lock().unwrap().len(), 1, "该提交还是要提交");
@@ -398,7 +398,7 @@ async fn the_audit_blocks_pure_frontend_nodes_before_anything_is_sent() {
 
     // 覆盖也一起给上：overrides **改不了** class_type，审核看的是覆盖之后的那张图，照样得拦
     let arguments = json!({ "promptId": 101, "overrides": { "3.steps": 30 }, "waitSeconds": 20 });
-    let failure = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
         .await
         .expect_err("纯前端节点必须被审核拦下");
     assert_eq!(failure.code, "MODEL_NOT_LOADABLE", "错误码与 Kotlin 同（`AiWorkflowSearch.submit`）");
@@ -432,7 +432,7 @@ async fn the_audit_warns_but_still_submits_on_the_post_override_graph() {
         "overrides": { "6.text": tags },
         "waitSeconds": 20
     });
-    let outcome = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
         .await
         .expect("非阻断的结论不许拦");
 
@@ -464,7 +464,7 @@ async fn timeout_is_reported_as_timeout_not_failure() {
     let fixture = Fixture::new("timeout", &base);
 
     let arguments = json!({ "promptId": 101, "wait": true, "waitSeconds": 1 });
-    let outcome = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
         .await
         .expect("超时不是失败");
     assert_eq!(submitted.lock().unwrap().len(), 1, "提交是发生了的");
@@ -492,7 +492,7 @@ async fn without_an_api_graph_it_refuses_instead_of_guessing() {
         .unwrap();
 
     let arguments = json!({ "promptId": 101, "waitSeconds": 20 });
-    let failure = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
+    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
         .await
         .expect_err("没有 API 图就不能猜着提交");
     assert_eq!(failure.code, "NO_API_GRAPH");
@@ -508,14 +508,14 @@ async fn missing_arguments_are_reported_as_invalid() {
     let (base, _submitted, gateway) = fake_comfy(object_info(), history_with_output()).await;
     let fixture = Fixture::new("args", &base);
 
-    let failure = comfyhub_server_rs::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &json!({}))
+    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &json!({}))
         .await
         .expect_err("既没 promptId 也没 workflowPath");
     assert_eq!(failure.code, "INVALID_ARGUMENT");
     assert!(failure.message.contains("promptId"), "{}", failure.message);
 
     // 覆盖里写了一个不存在的输入 → INVALID_ARGUMENT 且说得清有哪些
-    let failure = comfyhub_server_rs::workflow_submit::tool_submit(
+    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(
         &fixture.state,
         &fixture.policy(),
         &json!({ "promptId": 101, "overrides": { "3.nope": 1 } }),

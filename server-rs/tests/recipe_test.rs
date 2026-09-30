@@ -21,7 +21,7 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use comfyhub_server_rs::routes::AppState;
+use comfyhub_server_rs::web::routes::AppState;
 
 // ---------------------------------------------------------------------------
 //  假 ComfyUI（只有 `/object_info`，配方这条路只问它）
@@ -149,13 +149,13 @@ struct Fixture {
 
 /// 内存库 + 真 DDL。项目根由 `media_dir` 推出来（`<root>/storage/media` → `<root>`）。
 fn fixture_sync(comfy_url: String) -> Fixture {
-    let conn: Connection = comfyhub_server_rs::db::open_memory().unwrap();
-    conn.execute_batch(comfyhub_server_rs::db::schema_sql()).expect("建 schema");
-    comfyhub_server_rs::db::assert_ready(&conn).unwrap();
+    let conn: Connection = comfyhub_server_rs::infra::db::open_memory().unwrap();
+    conn.execute_batch(comfyhub_server_rs::infra::db::schema_sql()).expect("建 schema");
+    comfyhub_server_rs::infra::db::assert_ready(&conn).unwrap();
 
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let root = comfyhub_server_rs::testpaths::scratch(&format!("recipe-{seq}"));
+    let root = comfyhub_server_rs::infra::testpaths::scratch(&format!("recipe-{seq}"));
     std::fs::create_dir_all(root.join("storage").join("media")).unwrap();
     std::fs::create_dir_all(root.join("comfyui")).unwrap();
     std::fs::write(
@@ -165,11 +165,11 @@ fn fixture_sync(comfy_url: String) -> Fixture {
     .unwrap();
 
     let state = AppState::new(conn, ":memory:", root.join("storage").join("media"));
-    let config = comfyhub_server_rs::capture::CaptureConfig {
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
         comfy_url,
         ..Default::default()
     };
-    comfyhub_server_rs::capture::save_capture_config(&state, config).expect("写捕获配置");
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).expect("写捕获配置");
     Fixture { state, root }
 }
 
@@ -186,10 +186,10 @@ async fn call_tool(
     state: &AppState,
     name: &str,
     arguments: Value,
-) -> Result<comfyhub_server_rs::tools::ToolOutcome, comfyhub_server_rs::tools::ToolFailure> {
-    let policy = comfyhub_server_rs::policy::ToolPolicy::load(state).unwrap();
-    let mut session = comfyhub_server_rs::tools::ToolSession::default();
-    comfyhub_server_rs::tools::execute(state, &policy, "run-x", "conv-x", name, &arguments, &mut session)
+) -> Result<comfyhub_server_rs::tools::tools::ToolOutcome, comfyhub_server_rs::tools::tools::ToolFailure> {
+    let policy = comfyhub_server_rs::tools::policy::ToolPolicy::load(state).unwrap();
+    let mut session = comfyhub_server_rs::tools::tools::ToolSession::default();
+    comfyhub_server_rs::tools::tools::execute(state, &policy, "run-x", "conv-x", name, &arguments, &mut session)
         .await
 }
 
@@ -267,7 +267,7 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
     //   所以走详情端点读回来验（工具当场回的是 `recipe.render`，只有归纳那几条）。
     let id = out.payload["recipeId"].as_i64().unwrap();
     let (status, detail) = get_json(
-        comfyhub_server_rs::routes::router(f.state.clone()),
+        comfyhub_server_rs::web::routes::router(f.state.clone()),
         &format!("/api/ai/workflow-recipes/{id}"),
     )
     .await;
@@ -454,7 +454,7 @@ async fn 绑定走本机清单_只报不改() {
 #[tokio::test]
 async fn 配方五条端点的形状与状态码() {
     let f = fixture().await;
-    let app = || comfyhub_server_rs::routes::router(f.state.clone());
+    let app = || comfyhub_server_rs::web::routes::router(f.state.clone());
 
     // POST 学一份（**201 Created** + `learned.toJson(id)`）：学与工具共用一份实现
     let (status, created) = send_json(
@@ -574,7 +574,7 @@ async fn 配方五条端点的形状与状态码() {
 #[tokio::test]
 async fn 端点学界面格式文件_缺口时回_400_unsupported_nodes() {
     let f = fixture().await;
-    let app = || comfyhub_server_rs::routes::router(f.state.clone());
+    let app = || comfyhub_server_rs::web::routes::router(f.state.clone());
     let path = f.root.join("comfyui").join("krea2_edit_ui.json").display().to_string();
 
     // AI 域的稳定码走 `{error: 码, detail: 人话}`（界面读 detail）
@@ -670,7 +670,7 @@ async fn 端点学界面格式文件_缺口时回_400_unsupported_nodes() {
     // 界面格式但**连不上** ComfyUI：说清"要 /object_info"（不是 500）
     let offline = fixture_sync("http://127.0.0.1:1".to_string());
     let (status, body) = send_json(
-        comfyhub_server_rs::routes::router(offline.state.clone()),
+        comfyhub_server_rs::web::routes::router(offline.state.clone()),
         "POST",
         "/api/ai/workflow-recipes",
         json!({ "path": offline.root.join("comfyui").join("krea2_edit_ui.json").display().to_string() }),
@@ -691,11 +691,11 @@ async fn 端点学界面格式文件_缺口时回_400_unsupported_nodes() {
 #[tokio::test]
 async fn 配方表不在同步白名单里_端点也不在手机_run_kit_里() {
     assert!(
-        !comfyhub_server_rs::sync::SYNCED.contains(&"workflow_recipes"),
+        !comfyhub_server_rs::mobile::sync::SYNCED.contains(&"workflow_recipes"),
         "总纲 §3.3：这张表**刻意不同步**（手机提交走 comfy_queue_submit）"
     );
     let f = fixture().await;
-    let (status, kit) = get_json(comfyhub_server_rs::routes::router(f.state.clone()), "/api/ai/run-kit").await;
+    let (status, kit) = get_json(comfyhub_server_rs::web::routes::router(f.state.clone()), "/api/ai/run-kit").await;
     assert_eq!(status, StatusCode::OK);
     let tools: Vec<&str> = kit["tools"]
         .as_array()

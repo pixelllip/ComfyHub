@@ -19,7 +19,7 @@
 >
 > **2026-09-23（P2）：数据库已从 MySQL 换成 SQLite。** 数据是一个文件：
 > **`<项目根>\.db\comfyhub.db`**（同目录还有它自己的 `-wal` / `-shm`，备份要三个一起拷）。
-> 库的建表/收敛**现在由 Rust 后端自己干**（`db::open_or_create`：库缺就按 `db\schema.sqlite.sql` 建）。
+> 库的建表/收敛**现在由 Rust 后端自己干**（`infra::db::open_or_create`：库缺就按 `db\schema.sqlite.sql` 建）。
 > 老库里的数据**没有丢**，也不会被自动删，但**搬迁老库的通道已经没了**：
 > **2026-09-29 起 MySQL 彻底退役** —— `mysql.ps1`、`server.ps1 migrate` 与端口 3307 一并删除。
 > 本文里没跟上这些改动的地方（尤其涉及 `mysql.ps1` / `.mysql\` / `my.ini` / `gradle` /
@@ -621,8 +621,8 @@ DeepSeek 那家的 Responses API 是**无状态**的，思考模式下"带 `tool
    正文里混进模型自己的碎片，它会以为那是自己说过的话。
    ⚠ 这条是**逐协议**的：`openai-completions` / `anthropic-messages` 的适配器
    **一个字节都不发**（它们的方言要不要回传是另一件事，没实测过就不许顺手加）。
-   防线：`protocol::tests::responses_reasoning_round_trip`、
-   `executor::tests::sink_seals_reasoning_per_round`、`history_keeps_reasoning_apart_from_the_text`，
+   防线：`provider::protocol::tests::responses_reasoning_round_trip`、
+   `ai::executor::tests::sink_seals_reasoning_per_round`、`history_keeps_reasoning_apart_from_the_text`，
    以及端到端那条（假网关**第 2 轮起看不见 `reasoning` 项就照上游原话回 400**）：
    `api_test::responses_run_echoes_each_round_reasoning_or_the_upstream_400s`。
 
@@ -714,7 +714,7 @@ M4 之后请求体**真的会带 `tools`**：如果网关不认这个字段而�
 
 **内置模型目录那张卡已经删掉**（2026-10）：它是 `%USERPROFILE%\.dsh\settings.yaml` 的冻结副本
 （`server-rs\assets\ai\builtin-catalog.json`），而运行期不许依赖 `.dsh` ——
-装我们项目的人可能根本没装 DSH。后端 `server-rs\src\builtin.rs` 与 `/api/ai/builtin/{status,sync}`
+装我们项目的人可能根本没装 DSH。后端 `server-rs\src\provider\builtin.rs` 与 `/api/ai/builtin/{status,sync}`
 两个端点还在，但界面上**没有任何入口**去调它们（`AiApiClient` 里那两条方法一并删了）。
 留在链路最末的那层"内置规则"是后端 `capability_catalog.rs` 里的一小张兜底推断表，
 不是用户要维护的目录；没命中的模型**绝不会按名字猜图片能力与思考支持**。

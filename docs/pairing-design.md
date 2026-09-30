@@ -34,7 +34,7 @@
 
 | 环节 | 现状 | 出处 |
 | --- | --- | --- |
-| 后端有配对/鉴权端点吗 | ❌ **没有**。Kotlin 侧 `route("/api")` 只挂了 prompt/tag/media/capture/ai 六族，**没有 `authRoutes()`**；Rust 侧 40 条路由里也**没有一条 `/api/auth`** | `server/src/main/kotlin/com/comfyhub/Application.kt:605-631`、`server-rs/src/routes.rs:165-205` |
+| 后端有配对/鉴权端点吗 | ❌ **没有**。Kotlin 侧 `route("/api")` 只挂了 prompt/tag/media/capture/ai 六族，**没有 `authRoutes()`**；Rust 侧 40 条路由里也**没有一条 `/api/auth`** | `server/src/main/kotlin/com/comfyhub/Application.kt:605-631`、`server-rs/src/web/routes.rs:165-205` |
 | 后端认令牌吗 | ❌ 一次都没出现过。`X-ComfyHub-Token` / `InboundAuth` / `AuthStore` 在 `server/src/main/kotlin` 里 **0 命中**（只在文档里） | 全仓 grep 的结论 |
 | 局域网可达吗 | ⚠ 默认只听 `127.0.0.1`（`allowRemote=false` → `host=127.0.0.1`），必须 `COMFYHUB_ALLOW_REMOTE=1` 才听 `0.0.0.0` | `Config.kt:29`、`Config.kt:66-70`、`Config.kt:54` |
 | 手机知道连哪吗 | ⚠ 安卓默认 `http://10.0.2.2:8080`（**那是模拟器打宿主机的地址**，真机上它什么也不是）；桌面自己则是从 `.run\api.json` 读**自动挑的端口** | `lib/core/settings_store.dart:60-75`（`:67` 安卓分支、`:74` 桌面分支） |

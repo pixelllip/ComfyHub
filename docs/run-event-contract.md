@@ -34,9 +34,9 @@ data: <payload 的 JSON 单行>
 
 ---
 
-## 2. 事件类型清单（18 个，唯一真源 = `server-rs/src/events.rs` 的 `event_type`）
+## 2. 事件类型清单（18 个，唯一真源 = `server-rs/src/ai/events.rs` 的 `event_type`）
 
-> 2026-09-28 起桌面后端是 Rust（`server-rs/src/events.rs` 的 `event_type::ALL` 与
+> 2026-09-28 起桌面后端是 Rust（`server-rs/src/ai/events.rs` 的 `event_type::ALL` 与
 > `event_types_match_the_contract` 这条用例逐字钉住本表）；Kotlin 那份只在 `legacy/` 留档。
 
 | `type` | 常量 | payload 关键字段 | 谁发 |
@@ -45,7 +45,7 @@ data: <payload 的 JSON 单行>
 | `message.started` | `MESSAGE_STARTED` | `messageId` | 助手气泡建立（前端据此挂占位） |
 | `reasoning.delta` | `REASONING_DELTA` | `text` | 思维链增量（**与正文分流**） |
 | `text.delta` | `TEXT_DELTA` | `text` | 正文增量（**逐字**） |
-| `step.started` | `STEP_STARTED` | `messageId`, **`phase`** | **关键步骤（环节）开始**（用户建议 2026-09-28）：后端从正文里摘掉 `[步骤]环节名[/步骤]` 后，把环节名发出来；`phase` 只可能是那六个固定名字（`server-rs/src/step_mark.rs` 的 `PHASES`）。界面靠它**当场**画出可折叠的环节头，把这一环节的工具卡收进一组。⚠ 落库的有序块类型同名（`type = "step"`，`text` = 环节名）—— 重开会话时界面读的是那个块 |
+| `step.started` | `STEP_STARTED` | `messageId`, **`phase`** | **关键步骤（环节）开始**（用户建议 2026-09-28）：后端从正文里摘掉 `[步骤]环节名[/步骤]` 后，把环节名发出来；`phase` 只可能是那六个固定名字（`server-rs/src/ai/step_mark.rs` 的 `PHASES`）。界面靠它**当场**画出可折叠的环节头，把这一环节的工具卡收进一组。⚠ 落库的有序块类型同名（`type = "step"`，`text` = 环节名）—— 重开会话时界面读的是那个块 |
 | `tool.requested` | `TOOL_REQUESTED` | `runId`, `callId`, `name`, **`arguments`**, `approval` | 模型要调工具；**需审批的工具在发它之前必须先 `AskGate.open(callId)`**（红线 R8）。⚠ 键名是 `arguments`（不是 `args`）：桌面 `HarnessRunner.kt:724` 与 Flutter 的 `AiRunEvent.arguments` 都读这个键 —— 发错了工具卡里就看不到参数（2026-09-23 手机侧落地时发现文档这一列写错，已按代码改正） |
 | `tool.started` | `TOOL_STARTED` | `callId`, `name` | 批准后真正开始执行 |
 | `tool.completed` | `TOOL_COMPLETED` | `callId`, `name`, `elapsedMs`, `preview`, `result`（内含 `mediaIds`） | 工具成功 |

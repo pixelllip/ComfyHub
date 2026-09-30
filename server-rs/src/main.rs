@@ -96,7 +96,7 @@
 //! `POST /api/sync/push` 只在 Rust —— 手机"发得出去"与"推得回去"没法同时成立。
 //! `/api/ai/run-kit` 搬过来之后，**Rust 侧同时有这两条**，真机回归才有意义。
 
-use comfyhub_server_rs::{db, routes};
+use comfyhub_server_rs::{infra::db, web::routes};
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -278,17 +278,17 @@ async fn main() {
     // ② 还挂着 `pending` 的审批行 → `denied`（内存闸门随进程消失，那些审批
     //    "永远不会有人点"，而 `/api/ai/pending` 会一直把它们列出来）；
     // ③ 还挂着 `pending` 的提问行 → `expired`（同上）。
-    match comfyhub_server_rs::runs::fail_stale_running(&state, "后端重启导致 Run 中断") {
+    match comfyhub_server_rs::ai::runs::fail_stale_running(&state, "后端重启导致 Run 中断") {
         Ok(n) if n > 0 => println!("启动恢复：{n} 个僵死 Run 已标为 failed"),
         Ok(_) => {}
         Err(e) => eprintln!("启动恢复：收尾僵死 Run 失败（{}）", e.human()),
     }
-    match comfyhub_server_rs::runs::expire_stale_pending_tool_calls(&state) {
+    match comfyhub_server_rs::ai::runs::expire_stale_pending_tool_calls(&state) {
         Ok(n) if n > 0 => println!("启动恢复：{n} 条待审批调用按拒绝收尾"),
         Ok(_) => {}
         Err(e) => eprintln!("启动恢复：收尾待审批调用失败（{}）", e.human()),
     }
-    match comfyhub_server_rs::questions::expire_stale(&state) {
+    match comfyhub_server_rs::ai::questions::expire_stale(&state) {
         Ok(n) if n > 0 => println!("启动恢复：{n} 条待回答提问按失效收尾"),
         Ok(_) => {}
         Err(e) => eprintln!("启动恢复：收尾待回答提问失败（{}）", e.human()),
@@ -297,7 +297,7 @@ async fn main() {
     //    它有三种残局，各有各的处置（见 `submit_queue::resume_in_flight` 的表）：
     //    还在等人批的按拒绝收尾（与上面第 ② 步**同一语义**）、人已经批过的复起提交、
     //    提交中途没了的**如实说"结果不确定"且不重投**。三种都**不许静默**。
-    let queued = comfyhub_server_rs::submit_queue::resume_in_flight(&state);
+    let queued = comfyhub_server_rs::mobile::submit_queue::resume_in_flight(&state);
     if queued > 0 {
         println!("启动恢复：{queued} 条排队提交被处置（审批被打断 / 提交被中断 / 复起）");
     }
@@ -315,7 +315,7 @@ async fn main() {
     // 只有跑完的），生成任务的 percent 与"当前步骤"全在这条 WS 上。
     // **常驻 + 重连**，与上面的轮询器同一条纪律：绝不在每个请求里现连一次
     // （那既收不到已经发出去的帧，也会把 ComfyUI 按 clientId 记的 socket 表撑爆）。
-    comfyhub_server_rs::comfy_progress::spawn(&state.comfy_progress, state.clone());
+    comfyhub_server_rs::comfy::comfy_progress::spawn(&state.comfy_progress, state.clone());
 
     // ---- MCP 桥预热（P4 第 45 步）------------------------------------------
     //
@@ -326,7 +326,7 @@ async fn main() {
         let registry = state.mcp.clone();
         let project_root = state.project_root();
         tokio::spawn(async move {
-            comfyhub_server_rs::mcp::warmup(&registry, &project_root).await;
+            comfyhub_server_rs::tools::mcp::warmup(&registry, &project_root).await;
         });
     }
 
@@ -339,7 +339,7 @@ async fn main() {
     //  ② **孤儿复起**：人已经批过、但当时没人认领的（认领是原子的，复起不会重复提交）；
     //  ③ **回执投递**：终态的回执送不出去（会话还没同步上来 / 写库那次失败）就重试，
     //     `reply_state` + 确定性的 `reply_message_id` 保证"一定送到、且只送一条"。
-    comfyhub_server_rs::submit_queue::spawn_sweeper(state.clone());
+    comfyhub_server_rs::mobile::submit_queue::spawn_sweeper(state.clone());
 
     // ---- 自己受限不自知（2026-09-29 引入；2026-09-30 机理订正为"完整性标签"）----
     //
@@ -352,7 +352,7 @@ async fn main() {
         let state = state.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(300));
-            comfyhub_server_rs::confinement::refresh(&state);
+            comfyhub_server_rs::infra::confinement::refresh(&state);
         });
     }
 
@@ -393,7 +393,7 @@ async fn main() {
         }
     };
     let actual_port = addr.port();
-    let url = comfyhub_server_rs::api_port_file::url_for(&args.host, actual_port);
+    let url = comfyhub_server_rs::web::api_port_file::url_for(&args.host, actual_port);
     println!("监听 {url}（pid={}）", std::process::id());
     if remote_allowed() {
         println!("允许局域网访问（COMFYHUB_ALLOW_REMOTE）：手机 / 其它设备用这台电脑的局域网 IP 连接；远程请求受配对闸门约束（回环放行，局域网要配对令牌）");
@@ -412,16 +412,16 @@ async fn main() {
         None
     } else {
         let project_root = state.project_root();
-        let state_for_file = comfyhub_server_rs::api_port_file::ApiPortState {
+        let state_for_file = comfyhub_server_rs::web::api_port_file::ApiPortState {
             port: actual_port,
             pid: std::process::id(),
             host: args.host.clone(),
             url: url.clone(),
-            started_at: comfyhub_server_rs::iso_time::from_system_time(std::time::SystemTime::now()),
+            started_at: comfyhub_server_rs::infra::iso_time::from_system_time(std::time::SystemTime::now()),
             requested_port,
             fell_back,
         };
-        let written = comfyhub_server_rs::api_port_file::write(&project_root, &state_for_file);
+        let written = comfyhub_server_rs::web::api_port_file::write(&project_root, &state_for_file);
         written.map(|_| (project_root, state_for_file))
     };
 
@@ -464,6 +464,6 @@ async fn main() {
     }
     // 优雅退出时清掉端口记录，但**只清自己那一份**（重启时新进程刚写的那份不能被旧进程删掉）
     if let Some((project_root, state_for_file)) = shutdown_state {
-        comfyhub_server_rs::api_port_file::delete_if_owned(&project_root, state_for_file.pid);
+        comfyhub_server_rs::web::api_port_file::delete_if_owned(&project_root, state_for_file.pid);
     }
 }

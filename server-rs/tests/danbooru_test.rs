@@ -25,7 +25,7 @@ use axum::routing::get;
 use axum::Router;
 use serde_json::{json, Value};
 
-use comfyhub_server_rs::danbooru::{DanbooruClient, USER_AGENT};
+use comfyhub_server_rs::tools::danbooru::{DanbooruClient, USER_AGENT};
 
 /// 假 danbooru 收到的一次请求（**看请求行与请求头**，不只看返回值）。
 #[derive(Debug, Clone)]
