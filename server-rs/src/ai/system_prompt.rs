@@ -18,19 +18,32 @@
 //! 3. **工具列表是"已经过滤过 deny 的那一份"**：Kotlin 在 `kitParts` 里先剔掉 `deny`，
 //!    再把同一份传给 `render` —— 所以被禁用的工具**连描述都不出现在提示词里**。
 //!    这里照办（调用方传进来的就是过滤后的切片）。
-
-use std::time::SystemTime;
+//!
+//! # 为什么环境头里**没有**精确时间（2026-10，前缀缓存）
+//!
+//! 这里原来写的是 `- 当前时间: <带毫秒的 ISO 串>`（Kotlin 的 `Instant.now()`）。真库实测
+//! （`.db\comfyhub.db`，76 条带 usage 的消息）它有两个**完全不同**的后果：
+//!
+//! * **一个 Run 之内是好的**：`render` 每个 Run 只调一次（[`crate::ai::executor::spawn`] 那条
+//!   路在进工具循环**之前**渲染），所以同一 Run 每一轮的前缀逐字节相同。命中率 ≈ (轮数−1)/轮数
+//!   就是这么来的：1~2 次工具调用的 Run 命中 37~50%，16~22 次的 92~94%。
+//! * **跨 Run 就全废**：用户在同一条会话里再发一条 → 新的毫秒串 → **整个会话历史**
+//!   （实测经常 10 万 ~ 250 万 token）在新 Run 的第一轮按全价重读。
+//!   老数据里那 17.5% 的全价输入（4,214,587 / 24,132,406）主要就是它。
+//!
+//! 所以这里只写**本地日期**（`YYYY-MM-DD`，由调用方用 SQLite 的 `localtime` 取，见
+//! [`crate::ai::run_kit::local_date`]）：同一天内所有 Run 的系统提示逐字节相同，跨 Run 的前缀
+//! 缓存就稳住了。代价是模型看不到具体钟点 —— 本项目的用途（生图 / 工作流 / 资料检索）用不上它。
+//!
+//! ⚠ **真需要时间感时也别把它加回系统提示的前部**：系统提示之后紧跟的就是整段历史，
+//! 系统提示里任何一处抖动都会把后面的历史缓存一起作废 —— 那等于把上面那笔账再买一遍。
+//! 判据：`system_prompt::tests` 的 `同一个日期渲染两次逐字节相同`（去掉粗化必红）。
 
 use crate::ai::memory;
 use crate::ai::nsfw_prompt;
 use crate::tools::policy::{ToolAccess, ToolPolicy};
 use crate::ai::skills::SkillEntry;
 use crate::tools::tools::ToolView;
-
-/// 至少一份"当前时间"来源可被测试替换：`Instant.now()` 在 Kotlin 那边就是现取的。
-fn now_iso() -> String {
-    crate::infra::iso_time::from_system_time(SystemTime::now())
-}
 
 /// 权限标记（与 Kotlin `render` 里那三个字符串逐字一致）。
 fn mark_of(access: ToolAccess, mutating: bool) -> &'static str {
@@ -53,11 +66,15 @@ fn mark_of(access: ToolAccess, mutating: bool) -> &'static str {
 /// 手机（run-kit）传的是那 7 个可执行工具，桌面执行器传的是"手机 + 桌面专属"的合并清单
 /// —— **两边都只是把借来的清单递进来**，拼法与标记只有这一处实现。
 /// `memory`：`memory::prompt_text()` 的结果（空串 = 没有记忆，那段整个不出现）。
+/// `today`：**本地日期**（`YYYY-MM-DD`，调用方从 [`crate::ai::run_kit::local_date`] 拿）。
+/// 刻意只到"天"，理由见文件头"为什么环境头里没有精确时间"；
+/// 收成参数而不是自己取当前时间，是为了让这个函数**是输入的纯函数**（可直接断言逐字节输出）。
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     provider_display_name: &str,
     provider_api: &str,
     model_id: &str,
+    today: &str,
     tools: &[ToolView<'_>],
     skills: &[SkillEntry],
     policy: &ToolPolicy,
@@ -74,10 +91,9 @@ pub fn render(
          当前运行环境：\n\
          - Provider: {provider_display_name}（{provider_api}）\n\
          - Model: {model_id}\n\
-         - 当前时间: {}\n\
+         - 当前日期: {today}\n\
          - 工作目录（项目根）: {}\n\
          - 本次请求附带图片附件: {}",
-        now_iso(),
         policy.project_root.display(),
         if has_attachments { "有（已内联，可以直接看图回答）" } else { "无" },
     ));

@@ -13,12 +13,21 @@ fn policy(json: &str) -> ToolPolicy {
     )
 }
 
+/// 这些用例里"本机日期"是一个**固定值** —— `render` 收的是参数而不是自己取时间，
+/// 所以整个系统提示是输入的纯函数，可以直接逐字节断言（见下面那条前缀稳定性用例）。
+const TODAY: &str = "2026-09-30";
+
 fn render_with(policy: &ToolPolicy, nsfw: bool, memory_text: &str) -> String {
+    render_on(TODAY, policy, nsfw, memory_text)
+}
+
+fn render_on(today: &str, policy: &ToolPolicy, nsfw: bool, memory_text: &str) -> String {
     let tools: Vec<ToolView<'_>> = MOBILE_TOOLS.iter().map(ToolView::from).collect();
     render(
         "Command Code Goat",
         "openai-completions",
         "demo-model",
+        today,
         &tools,
         &[],
         policy,
@@ -34,12 +43,38 @@ fn 头部与白名单如实写出来() {
     assert!(text.starts_with("你是 ComfyHub AI 工作台中的创作与生成业务顾问"));
     assert!(text.contains("- Provider: Command Code Goat（openai-completions）\n"));
     assert!(text.contains("- Model: demo-model\n"));
+    assert!(text.contains(&format!("- 当前日期: {TODAY}\n")));
     assert!(text.contains("- 本次请求附带图片附件: 无\n"));
     assert!(text.contains(r"D:\proj\comfyui"));
     assert!(text.contains(r"D:\proj\storage"));
     assert!(text.contains("\n\n可用技能（Skills）与工具：\n"));
     // 没有 skill 时那句"还没装任何 Skill"必须还在
     assert!(text.contains("本机还没有安装任何 Skill"));
+}
+
+/// **前缀稳定性**：系统提示只跟输入有关，同一天的两次渲染必须**逐字节相同**。
+///
+/// 这是整套前缀缓存的地基 —— `render` 的输出后面紧跟着**整段对话历史**，
+/// 所以它里面任何一处按"当前时刻"抖动的东西，都会把后面的历史缓存一起作废。
+/// 2026-10 之前这里是 `- 当前时间: <带毫秒的 ISO>`：一个 Run 内没事（同一份复用），
+/// 但**跨 Run** 就全价重读整段历史（真库实测：24,132,406 输入里 4,214,587 是全价）。
+///
+/// 去掉"日期只到天"这条必红 —— 别把它改回 `Instant::now()`。
+#[test]
+fn 同一个日期渲染两次逐字节相同() {
+    let a = render_with(&policy("{}"), false, "- 甲\n");
+    assert_eq!(a, render_with(&policy("{}"), false, "- 甲\n"), "同输入必须同输出");
+
+    // 易变值**只许出现一次**（那一行）。多一处 = 多一个"跨天必断"的位置。
+    assert_eq!(a.matches(TODAY).count(), 1, "`{TODAY}` 只许出现在『当前日期』那一行");
+
+    // 跨天：逐字节比较时**只有那一行**允许不同
+    let other = render_on("2026-10-01", &policy("{}"), false, "- 甲\n");
+    assert_eq!(
+        a.replace(TODAY, "<DATE>"),
+        other.replace("2026-10-01", "<DATE>"),
+        "跨天只允许差『当前日期』那一行；别处跟着变就是把历史缓存又作废一次"
+    );
 }
 
 #[test]

@@ -11,7 +11,7 @@
 > 本文回答这一个问题。上游文档：`docs/android-client-plan.md`（单写者架构与分步落地）、
 > `docs/inbound-auth-design.md`（配对令牌与媒体签名 URL）、
 > `docs/memory-and-storage-evaluation.md`（为什么换 SQLite）、
-> `docs/embedded-db-sync-options-report.md`（为什么不用现成同步引擎）。
+> `docs/archive/embedded-db-sync-options-report.md`（为什么不用现成同步引擎）。
 
 ---
 

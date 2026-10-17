@@ -22,6 +22,13 @@ class LibraryStore extends ChangeNotifier {
 
   final SettingsStore _settings;
 
+  /// 这一份 store 用的设置对象（**同一个实例**，不是新造的）。
+  ///
+  /// 给测试夹具用：界面上有些组件（筛选栏的折叠状态）从 `context` 读 `SettingsStore`，
+  /// 而测试是手工搭 `Provider` 的 —— 有了它就不用把 `SettingsStore` 再穿一层参数
+  /// （穿错一次就变成"测试里改了设置、界面读的是另一份"，那种 bug 很难看出来）。
+  SettingsStore get settings => _settings;
+
   late ApiClient api;
   String _apiBaseUrl = '';
   /// 测试注入的客户端不允许被 baseUrl 变化替换掉
@@ -217,6 +224,9 @@ class LibraryStore extends ChangeNotifier {
         favorite: mediaOnlyFavorite ? true : null,
         untagged: mediaUntagged,
         sort: mediaSort,
+        // 画廊默认**折叠集合**：同一批微调的产物显示成一个格子（叠放封面 + 角标）。
+        // 详情页/工具要的是"这一个集合的全部成员"，那时传 collectionId 自己列（不走折叠）。
+        collapse: true,
         page: page,
         size: _settings.pageSize,
       );

@@ -31,7 +31,6 @@ class _TagsPageState extends State<TagsPage> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
-    final theme = Theme.of(context);
 
     var tags = store.tags.where((t) {
       if (_category != null && t.category != _category) return false;
@@ -59,10 +58,6 @@ class _TagsPageState extends State<TagsPage> {
           ),
           const SizedBox(width: 4),
         ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Divider(height: 1, color: theme.dividerColor),
-        ),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _editTag(context, null),
@@ -144,8 +139,21 @@ class _TagsPageState extends State<TagsPage> {
                       )
                     : LayoutBuilder(
                         builder: (context, constraints) {
-                          // 列数 = 可用宽度 / 550；标签卡片高度固定，直接用 GridView 更省事
-                          final columns = adaptiveColumnCount(constraints.maxWidth);
+                          // 列数 = 可用宽度 / **275**（= `kColumnWidth` 的一半）。
+                          //
+                          // ⚠ 这里刻意**不用**通用的 550（用户 2026-10-12：
+                          // "标签页的卡片宽度过大，缩小为原来一半"）：标签卡里只有
+                          // 一个名字 + 一行分类/说明 + 一个计数 + 两个按钮，
+                          // 按 550 分列时在 1440 窗口上每张 ≈656 宽、1600 上 ≈780 宽 ——
+                          // 名字只占左边一小截，右边全是空的。按 275 分列正好是原来一半
+                          // （1440 上 4 列 ≈320），手机上仍是单列满宽。
+                          //
+                          // 卡片高度固定，所以直接用 GridView（`mainAxisExtent`），
+                          // 不用 `AdaptiveColumnList` —— 那个是给"每行等高"的卡片用的。
+                          final columns = adaptiveColumnCount(
+                            constraints.maxWidth,
+                            minColumnWidth: kColumnWidth / 2,
+                          );
                           return GridView.builder(
                             padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
                             // 卡片外层 RepaintBoundary 由 delegate 自动加；

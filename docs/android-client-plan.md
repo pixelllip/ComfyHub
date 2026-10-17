@@ -27,7 +27,7 @@
 **核心判断：移动端不直连 ComfyUI，也不装 Python。** 理由不是"做不到"，而是：
 - ComfyUI、`comfy-mcp`、工作流文件、模型都在**桌面那台机器**上（那是唯一有显卡的机器）；
 - 产物入库（画廊 / NSFW 标记 / `promptId` 绑定）是我们自己的链路，必须走桌面后端；
-- 移动端一旦自己起 MCP，就会变成"第二份需要装配的运行时"，与发布包便携性冲突（见 `comfy-mcp-report.md` §4.1）。
+- 移动端一旦自己起 MCP，就会变成"第二份需要装配的运行时"，与发布包便携性冲突（见 `docs/archive/comfy-mcp-report.md` §4.1）。
 
 ---
 
@@ -136,7 +136,7 @@
 ## 6. 与 MCP 接入的关系
 
 移动端**不需要**知道 comfy-mcp 的存在 —— 它调的是"桌面的 `/api/ai/...`"，
-桌面后端在需要时自己把工具调用转给 MCP 子进程（已实现，见 `docs/comfy-mcp-report.md` §6 与
+桌面后端在需要时自己把工具调用转给 MCP 子进程（已实现，见 `docs/archive/comfy-mcp-report.md` §6 与
 `server/src/main/kotlin/com/comfyhub/ai/mcp/`）。这条隔离是有意的：
 
 - 移动端不必关心 MCP 的 Python 运行时、工具清单版本、stdio 生命周期；

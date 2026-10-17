@@ -128,6 +128,87 @@ fn open_or_create_heals_a_database_missing_a_declared_table() {
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
 }
 
+/// ★★ **一次改动同时"加表 + 加列"**：两条自愈路都必须走通（2026-10-11 产物集合）。
+///
+/// 为什么单独盯这一条：这次加的是 `media_collections`（表）+ `media_assets.collection_id`（列），
+/// 而两条路**各自都会静默失败**：
+/// * 只 bump 版本号、没进 `NEW_COLUMNS` → 列永远不存在，集合永远是 `None`，界面上什么都不显示；
+/// * 只进 `NEW_COLUMNS`、没 bump → 老库直接早退，表永远不存在，**产物一入库就炸 `no such table`**。
+///
+/// 顺带验一个容易踩的语法：`ALTER TABLE ... ADD COLUMN ... REFERENCES`（SQLite 允许，
+/// 但老库补上的这一列是"没有外键约束"的形态）—— 所以这里还要证明**它照样能写、能读**。
+#[test]
+fn open_or_create_heals_the_collection_table_and_column_together() {
+    let path = temp_path("collection-heal");
+    let conn = open_or_create(&path).unwrap();
+    // 装成"集合还不存在"的老库：列先去掉（表还在，模拟"只加了列没加表"的另一半）。
+    // ⚠ SQLite 的 `DROP COLUMN` 会因为**索引引用着这一列**而失败
+    // （`error in index idx_media_collection after drop column`），所以先删索引 ——
+    // 重开库时 DDL 会把索引一起补回来（`CREATE INDEX IF NOT EXISTS`）。
+    conn.execute_batch(
+        "DROP INDEX idx_media_collection; ALTER TABLE media_assets DROP COLUMN collection_id;",
+    )
+    .unwrap();
+    let has: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('media_assets') WHERE name='collection_id'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has, 0, "前提：collection_id 这一列真的没了");
+    drop(conn);
+
+    let again = open_or_create(&path).expect("要能补列");
+    let has: i64 = again
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('media_assets') WHERE name='collection_id'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has, 1, "DDL 里声明的列必须被补上");
+
+    // 补上的列必须真的能用：建集合 → 挂产物 → 读回来
+    again
+        .execute(
+            "INSERT INTO media_collections (group_key, kind) VALUES ('k1', 'IMAGE')",
+            [],
+        )
+        .unwrap();
+    let cid: i64 = again
+        .query_row("SELECT id FROM media_collections WHERE group_key='k1'", [], |r| r.get(0))
+        .unwrap();
+    again
+        .execute(
+            "INSERT INTO media_assets (kind, original_name, stored_name, collection_id)
+             VALUES ('IMAGE', 'a.png', 'a.png', ?1)",
+            rusqlite::params![cid],
+        )
+        .unwrap();
+    let back: Option<i64> = again
+        .query_row("SELECT collection_id FROM media_assets WHERE original_name='a.png'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(back, Some(cid), "补出来的列要能存能读");
+
+    // 集合行被删掉时产物**不能跟着消失**（ON DELETE SET NULL 的语义）
+    again
+        .execute("DELETE FROM media_collections WHERE id = ?1", rusqlite::params![cid])
+        .unwrap();
+    let (n, cid_after): (i64, Option<i64>) = again
+        .query_row(
+            "SELECT COUNT(*), MAX(collection_id) FROM media_assets WHERE original_name='a.png'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(n, 1, "删集合不该把产物删掉");
+    assert_eq!(cid_after, None, "产物要退回未分组");
+    std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+}
+
 /// **加列**的自愈（2026-09-30 起）：老库缺一列 → 开库时用 `ALTER` 补上，已有数据不动。
 ///
 /// 为什么非要有这条：收敛式 DDL 的建表语句**不给已存在的表补列**（`IF NOT EXISTS` 只判表在不在），
@@ -137,34 +218,34 @@ fn open_or_create_heals_a_missing_column_without_touching_data() {
     let path = temp_path("add-column");
     let conn = open_or_create(&path).unwrap();
     // 装成"这列是后加的"：SQLite 3.35+ 支持 DROP COLUMN；老版本靠重建表，这里用前者
-    conn.execute_batch("ALTER TABLE character_cards DROP COLUMN position;").unwrap();
+    conn.execute_batch("ALTER TABLE character_cards DROP COLUMN prompt;").unwrap();
     conn.execute_batch(
-        "INSERT INTO character_cards (name, normalized, enabled) VALUES ('先有的卡', '先有的卡', 1);",
+        "INSERT INTO character_cards (name, normalized, negative) VALUES ('先有的卡', '先有的卡', 'bad hands');",
     )
     .unwrap();
     let has: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('character_cards') WHERE name='position'",
+            "SELECT COUNT(*) FROM pragma_table_info('character_cards') WHERE name='prompt'",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(has, 0, "前提：position 这一列真的没了");
+    assert_eq!(has, 0, "前提：prompt 这一列真的没了");
     drop(conn);
 
     let again = open_or_create(&path).expect("要能补列");
     let has: i64 = again
         .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('character_cards') WHERE name='position'",
+            "SELECT COUNT(*) FROM pragma_table_info('character_cards') WHERE name='prompt'",
             [],
             |r| r.get(0),
         )
         .unwrap();
     assert_eq!(has, 1, "DDL 里声明的列必须被补上");
-    let kept: (String, i64) = again
-        .query_row("SELECT name, enabled FROM character_cards", [], |r| Ok((r.get(0)?, r.get(1)?)))
+    let kept: (String, String) = again
+        .query_row("SELECT name, negative FROM character_cards", [], |r| Ok((r.get(0)?, r.get(1)?)))
         .unwrap();
-    assert_eq!(kept, ("先有的卡".to_string(), 1), "补列不许动已有数据");
+    assert_eq!(kept, ("先有的卡".to_string(), "bad hands".to_string()), "补列不许动已有数据");
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
 }
 
@@ -194,68 +275,76 @@ fn healing_a_missing_table_never_downgrades_a_newer_version() {
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
 }
 
-/// ★★ **老库升级**：库里已经有 `character_cards`（**没有**新列）、版本号还是旧的 —— 开库必须成功。
+/// ★★ **老库的数据迁移**：老卡的 `tags`（JSON 数组）必须被拼成 `prompt`（整段文本）。
 ///
-/// 这条是 2026-09-30 的真现场：`e2e-pair-test.ps1` 拿真库副本起后端，**后端直接起不来** ——
-/// ```text
-/// 打开/建库失败：执行 db/schema.sqlite.sql 失败：no such column: enabled in
-/// CREATE INDEX IF NOT EXISTS idx_character_cards_enabled ON character_cards(enabled);
-/// ```
-/// 真因是**顺序**：老库走"版本号比后端旧"那条迁移分支，整批跑 DDL；而收敛式 DDL
-/// **不给已存在的表补列**，那一刻表上还没有 `enabled` → 索引建不出来 → 整批失败 → 连库都打不开。
+/// 这条盯的是 2026-10 角色卡收敛（只剩名称 / 正面提示词 / 负面提示词）：老库里 `prompt` 这一列
+/// 根本不存在，而新代码读的就是它 —— 不搬过去，用户打开角色卡页看到的是**一页空卡**
+/// （数据明明还在 `tags` 里）。列由 `ensure_columns` 补，内容由 `backfill_character_card_prompt` 搬。
 ///
-/// ⚠ 为什么原来 630 条单测一条都没抓到：它们**全是全新库**（DDL 建表时自带新列）。
-/// 只有"老库 + 新列"这个组合才会踩到 —— 而那是**每一个已装用户的升级路径**。
+/// ⚠ 两条边界是同一条用例的两面：**只搬一次**（幂等）+ **不许复活**用户清空过的提示词
+/// （老库的 `tags` 列留着不走，判据"prompt 空 + tags 非空"永远成立，每次开库都搬就会删了又回来）。
+///
+/// ⚠ 顺带守着 [`open_or_create`] 那条顺序纪律（先补列、再跑 DDL）：DDL 里若出现
+/// `CREATE INDEX ... ON <表>(<新列>)`，补列排在后面就会**整批失败、库直接打不开**
+/// （2026-09-30 真现场：`no such column: enabled in CREATE INDEX … idx_character_cards_enabled`；
+/// 角色卡收敛后 DDL 里已经没有建在新列上的索引，但顺序照旧不许反）。
 #[test]
-fn open_or_create_upgrades_a_database_that_lacks_the_new_columns() {
+fn open_or_create_migrates_the_old_card_tags_into_the_prompt() {
     let path = temp_path("upgrade-old-lib");
     {
-        // 装作"这是加列之前那一版的库"：
-        //   ① 先按**当前** DDL 建一个完整库（这样别的表都是真的，不用手抄七百行 DDL）；
-        //   ② 再把 2026-09-30 新加的那一列与它的索引**拆掉**、版本号退回 4
-        //      —— 得到的就是"老库：一张表不缺、只少两个新列"，与真机现场同形。
-        //   ⚠ 索引必须先删：SQLite 不许 DROP 一个被索引引用的列。
-        //   （第一版用例是手写一张只有 4 列的假 character_cards —— 那连**旧列**上的索引
-        //   都建不出来，测出来的红跟真机不是一回事。）
+        // 装作"这是收敛之前那一版的库"：把老列加回来、`prompt` 拆掉、版本号退回 5，
+        // 再塞一张有 tag 栈的老卡（tags 是 JSON 数组文本，与老实现同一个约定）。
         let conn = open_or_create(&path).unwrap();
         conn.execute_batch(
-            "DROP INDEX IF EXISTS idx_character_cards_enabled;\
-             ALTER TABLE character_cards DROP COLUMN position;\
-             ALTER TABLE character_cards DROP COLUMN enabled;\
-             INSERT INTO character_cards (name, normalized) VALUES ('先有的卡', '先有的卡');\
-             PRAGMA user_version = 4;",
+            "ALTER TABLE character_cards ADD COLUMN tags TEXT NULL;\
+             ALTER TABLE character_cards DROP COLUMN prompt;\
+             INSERT INTO character_cards (name, normalized, tags, negative) \
+               VALUES ('先有的卡', '先有的卡', '[\"shinku_(nte)\",\"pink streaks\"]', 'bad hands');\
+             PRAGMA user_version = 5;",
         )
         .unwrap();
     }
 
     let conn = open_or_create(&path).expect("老库必须能升级（这是每个已装用户的路径）");
 
-    // 两个新列都补上了
-    for column in ["position", "enabled"] {
-        let present: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('character_cards') WHERE name = ?1",
-                rusqlite::params![column],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(present, 1, "{column} 这一列没补上");
-    }
-    // ★ 那条建在**新列**上的索引：它才是把整批 DDL 拖垮的那一句
-    let idx: i64 = conn
+    // 新列补上了
+    let present: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_character_cards_enabled'",
+            "SELECT COUNT(*) FROM pragma_table_info('character_cards') WHERE name = 'prompt'",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(idx, 1, "索引必须建出来（顺序反了的话整批 DDL 都会失败）");
-    // 老数据一个字都没动
-    let kept: String = conn
-        .query_row("SELECT name FROM character_cards", [], |r| r.get(0))
+    assert_eq!(present, 1, "prompt 这一列没补上");
+    // ★ 老 tag 栈一个不许丢：按老约定拼成一行
+    let migrated: (String, Option<String>, String) = conn
+        .query_row("SELECT name, prompt, negative FROM character_cards", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
         .unwrap();
-    assert_eq!(kept, "先有的卡");
+    assert_eq!(migrated.0, "先有的卡");
+    assert_eq!(migrated.1.as_deref(), Some("shinku_(nte), pink streaks"), "tags 要拼成正面提示词");
+    assert_eq!(migrated.2, "bad hands", "老数据别的字段不动");
     assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION, "版本号要跟到最新");
+    drop(conn);
+
+    // 幂等：再开一次不许拼第二遍（也不许把用户后来手填的 prompt 盖掉）
+    let again = open_or_create(&path).expect("再开一次");
+    let kept: String = again
+        .query_row("SELECT prompt FROM character_cards", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(kept, "shinku_(nte), pink streaks", "迁移必须幂等：不许重复拼接");
+
+    // ★ 用户在界面上清空提示词（`prompt = NULL`）之后，**下次开库不许把它从 tags 复活**：
+    //   老库那个 `tags` 列还在，判据"prompt 为空 + tags 非空"永远成立 —— 所以迁移只能跑
+    //   "刚补上这一列"的那一次（`open_or_create` 拿 `added` 判）。
+    again.execute("UPDATE character_cards SET prompt = NULL", []).unwrap();
+    drop(again);
+    let third = open_or_create(&path).expect("第三次开库");
+    let cleared: Option<String> = third
+        .query_row("SELECT prompt FROM character_cards", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(cleared, None, "清空过的提示词不许被迁移复活");
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
 }
 

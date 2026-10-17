@@ -69,28 +69,80 @@ fn auth_headers_per_protocol() {
 }
 
 /// usage 累加：多家形状归一，多轮相加（AIH-057）。
+///
+/// ⚠ 重点在**四个字段一个都不能少**：`prompt_tokens` / `completion_tokens` 保住了
+/// 不代表对了 —— 2026-10 之前这一版只留了那两个数，于是 `cachedTokens` / `reasoningTokens`
+/// 在桌面上永久是 0（界面那行"缓存命中"从来没出现过）。细账见下一条。
 #[test]
 fn usage_accumulates_across_rounds() {
     let openai = serde_json::json!({"prompt_tokens": 10, "completion_tokens": 4});
     let merged = merge_usage(None, &openai);
-    assert_eq!(merged["prompt_tokens"], 10);
-    assert_eq!(merged["completion_tokens"], 4);
-    assert_eq!(merged["total_tokens"], 14);
+    assert_eq!(merged.input, 10);
+    assert_eq!(merged.output, 4);
+    assert_eq!(merged.to_json()["inputTokens"], 10);
+    assert_eq!(merged.to_json()["outputTokens"], 4);
 
     // 第二轮累加
     let merged = merge_usage(Some(merged), &serde_json::json!({"prompt_tokens": 5, "completion_tokens": 1}));
-    assert_eq!(merged["prompt_tokens"], 15);
-    assert_eq!(merged["total_tokens"], 20);
+    assert_eq!(merged.input, 15);
+    assert_eq!(merged.output, 5);
 
     // Anthropic 的键名也要认
-    let anthropic = serde_json::json!({"input_tokens": 7, "output_tokens": 2});
-    let merged = merge_usage(None, &anthropic);
-    assert_eq!(merged["prompt_tokens"], 7);
-    assert_eq!(merged["completion_tokens"], 2);
+    let merged = merge_usage(None, &serde_json::json!({"input_tokens": 7, "output_tokens": 2}));
+    assert_eq!(merged.input, 7);
+    assert_eq!(merged.output, 2);
 
     // 缺键按 0（不 panic）
-    let empty = merge_usage(None, &serde_json::json!({}));
-    assert_eq!(empty["total_tokens"], 0);
+    assert_eq!(merge_usage(None, &serde_json::json!({})), TokenUsage::default());
+}
+
+/// **缓存命中与思考 token 不许丢** —— 这两条是"前缀缓存到底有没有生效"的唯一度量。
+///
+/// 契约（`docs/run-event-contract.md` §2）要求这四个数真的送到界面；老实现只归一化输入/输出两个数，
+/// 于是 `cachedTokens` 永远是 0 —— **优化缓存的人连自己有没有优化成功都看不见**。
+#[test]
+fn cache_and_reasoning_tokens_survive_normalization() {
+    // OpenAI 兼容：命中藏在 `prompt_tokens_details` 里，而且 `prompt_tokens` **已经含**它
+    let usage = merge_usage(
+        None,
+        &serde_json::json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_tokens_details": { "cached_tokens": 896 },
+            "completion_tokens_details": { "reasoning_tokens": 30 },
+        }),
+    );
+    assert_eq!(usage.input, 1000, "OpenAI 的 prompt_tokens 本来就含命中，别再叠加一次");
+    assert_eq!(usage.cached, 896);
+    assert_eq!(usage.reasoning, 30);
+
+    // Anthropic：`input_tokens` **不含**命中，而且读 / 写缓存是两个字段
+    let anthropic = merge_usage(
+        None,
+        &serde_json::json!({
+            "input_tokens": 4,
+            "output_tokens": 9,
+            "cache_read_input_tokens": 896,
+            "cache_creation_input_tokens": 100,
+        }),
+    );
+    assert_eq!(anthropic.input, 1000, "4 + 896(读) + 100(写)：输入要含命中与写缓存");
+    assert_eq!(anthropic.cached, 896, "命中只算**读**；cache_creation 是写（1.25×），不算命中");
+    assert_eq!(anthropic.output, 9);
+
+    // 只给 total_tokens 的网关：口径退化，全记在输入上（§5.4 记着这条）
+    let total_only = merge_usage(None, &serde_json::json!({"total_tokens": 42}));
+    assert_eq!(total_only.input, 42);
+    assert_eq!(total_only.output, 0);
+
+    // 归一化过的形状要能**原样读回来**（`merge_usage` 的上一轮就是它，重启回填也一样）
+    assert_eq!(merge_usage(None, &anthropic.to_json()), anthropic);
+
+    // 送到界面的键**一个不多一个不少**（契约 §2 就是这四个）
+    let json = anthropic.to_json();
+    let keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, vec!["inputTokens", "outputTokens", "cachedTokens", "reasoningTokens"]);
+    assert_eq!(json["cachedTokens"], 896);
 }
 
 /// 日志里的端点**不带 query / 凭据**（规则 1：绝不把 key 写进日志）。

@@ -42,6 +42,17 @@ void main() {
       expect(looksLikeRoot(root.path), isTrue);
     });
 
+    test('schema 与 backend\\exe 同时存在 = 产物目录，不算源码树', () {
+      // 现场（2026-10-11）：`flutter build windows --debug` 会把 DDL 和后端一起装进
+      // `build\...\Debug\`，于是它同时命中"源码树"和"产物"两条判据 ——
+      // 被当成源码树的话，Debug 版 App 就会用它自己那份空库 + 旧后端（界面报 HTTP 400）。
+      touch(['db', 'schema.sqlite.sql']);
+      touch(['backend', kServerExeName]);
+      // 它**仍然**是个合法的"产物根"（真发布包就长这样），但**不是**源码树；
+      // 判据细节见下面那组用例：往上找根时源码树优先。
+      expect(looksLikeRoot(root.path), isTrue);
+    });
+
     test('Release 产物判据 backend\\comfyhub-server-rs.exe', () {
       touch(['backend', kServerExeName]);
       expect(looksLikeRoot(root.path), isTrue);
@@ -50,6 +61,36 @@ void main() {
     test('空目录不算', () {
       expect(looksLikeRoot(root.path), isFalse);
       expect(looksLikeRoot(''), isFalse);
+    });
+  });
+
+  group('源码树优先于产物根（2026-10-11 真 bug）', () {
+    // 现场：`flutter build windows --debug` 会把后端装进
+    // `build\windows\x64\runner\Debug\backend\`，于是那个产物目录命中了产物判据、
+    // 自己成了"根" —— Debug 版 App 去用它的空库 + 旧后端 exe（界面报 HTTP 400），
+    // 而用户的真库一直在项目根下。判据要"往上再找一层源码树"。
+    test('产物目录里有 backend\\，但上面有源码树 → 根取源码树', () {
+      touch(['server-rs', 'Cargo.toml']); // 项目根
+      final runner = Directory(p([root.path, 'build', 'windows', 'x64', 'runner', 'Debug']))
+        ..createSync(recursive: true);
+      File(p([runner.path, 'backend', kServerExeName]))
+        ..createSync(recursive: true)
+        ..writeAsStringSync('x');
+
+      // 产物目录**单独看**确实像根（这条判据本身没变）
+      expect(looksLikeRoot(runner.path), isTrue);
+      // 但从它往上找时，**必须**拿到项目根，而不是它自己
+      expect(detectRoot(from: runner.path), root.path,
+          reason: '源码树在就轮不到 build\\ 里的产物目录当根');
+    });
+
+    test('整条链上没有源码树 → 回退到产物根（真正的发布包）', () {
+      final pack = Directory(p([root.path, 'dist', 'ComfyHub']))..createSync(recursive: true);
+      File(p([pack.path, 'backend', kServerExeName]))
+        ..createSync(recursive: true)
+        ..writeAsStringSync('x');
+      expect(detectRoot(from: pack.path), pack.path,
+          reason: '发布包里后端就在旁边，它就是根');
     });
   });
 

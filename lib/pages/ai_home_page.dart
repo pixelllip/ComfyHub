@@ -89,6 +89,9 @@ class _AiHomePageState extends State<AiHomePage> {
       // `load()` 自己是幂等的：切到别的页再回来（页面会被重建）不会重新加载、
       // 更不会再新建一条会话。
       if (mounted) _store.load();
+      // 预设页可能在**这个页面挂上来之前**就把文本交过来了（先设文本、再切页），
+      // 那时监听器还没挂上 —— 所以这里补一次取用。
+      if (mounted) _applyHandoffIfAny();
       // 回到聊天页 = 可能刚从「AI 模型与凭据」改完模型的能力声明回来：
       // 目录重读一次，改动当场生效（用户 bug 2026-09-28「模型声明要重启客户端才生效」）。
       // 冷启动那一次不用：load() 自己会读目录（loaded 还没翻真，正好跳过）。
@@ -111,6 +114,7 @@ class _AiHomePageState extends State<AiHomePage> {
   void _onStoreChanged() {
     if (!mounted) return;
     _followIfAtBottom();
+    _applyHandoffIfAny();
     final id = _store.conversation?.id;
     _resetScrollForConversation(id);
     if (id == _draftConversationId) return;
@@ -147,6 +151,24 @@ class _AiHomePageState extends State<AiHomePage> {
       selection: TextSelection.collapsed(offset: text.length),
     );
     _applyingDraft = false;
+  }
+
+  /// 取走预设页交过来的文本（`▶️运行`），填进输入框并聚焦。
+  ///
+  /// 三条别踩：
+  ///  1. **取走即清空**（`takeHandoff`）—— 否则每次切回工作台都会再填一遍，
+  ///     用户刚清空的输入框会"复活"上一段字；
+  ///  2. **只在输入框为空时填**：用户可能已经打了一半，直接覆盖等于把他的字吃掉；
+  ///     有内容时改走"追加到末尾"，不丢他的输入；
+  ///  3. **不触发草稿保存**（走 [_setInputText]）—— 这段字是程序填的，
+  ///     不该被当成"用户打出来的草稿"落盘。
+  void _applyHandoffIfAny() {
+    if (!_store.hasHandoff) return;
+    final text = _store.takeHandoff();
+    if (text == null || text.isEmpty) return;
+    final existing = _input.text.trim();
+    _setInputText(existing.isEmpty ? text : '$existing\n$text');
+    _inputFocus.requestFocus();
   }
 
   @override
@@ -3239,56 +3261,44 @@ class _ComposerState extends State<_Composer> {
           // 换行后最后一行也贴右）。
           LayoutBuilder(
             builder: (context, constraints) {
-              if (constraints.maxWidth < _twoRowWidth) {
-                // 窄屏（手机）底行：**操作控件靠左、只有发送靠右**。
-                //
-                // 用户 2026-09-24 的反馈："输入框下方所有控件都是靠右 —— 我原来说，
-                // 除了发送按钮和 token 用量靠右，其他都靠左。" 老写法把四枚控件和
-                // 发送按钮塞进**同一个 `Wrap(alignment: end)`**，于是整排一起贴右：
-                // 屏幕稍宽一点就在"附件"左边空出一大片，看着像所有控件都被甩到右边。
-                //
-                // 现在拆成 `Row`：左边 `Expanded(Wrap(start))`、右边发送按钮。
-                // 发送**不参与压缩**（既不是 `Expanded`、也不在 `Wrap` 里），
-                // 所以它永远贴右；操作控件放不下时**自己往下折行**，每一行都从左边起排
-                // （`WrapAlignment.start`），不会再出现"整排贴右"。
-                //
-                // **token 汇总在窄屏仍然不显示**（用户 2026-09-21："宽度太窄的时候可以
-                // 不显示对话 token 用量"）：它是纯展示项，一行放不下时优先保住"能操作的
-                // 控件"（省下 ~140px，四枚图标 + 发送正好一行）。留在消息卡 / 详情里
-                // 照样看得到。
-                //
-                // 实测（320 逻辑宽 = 输入区内容 296）：发送 94 + 间距 4 +
-                // 附件 48 + 权限 50 + 模型 38 + 思考 38 + 3×4 间距 = 284 —— 五枚一排放得下。
-                return Row(
-                  key: const Key('ai-composer-two-row'),
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: FilterChipRow(
-                        key: const Key('ai-composer-actions'),
-                        alignment: WrapAlignment.start,
-                        spacing: 4,
-                        runSpacing: 4,
-                        children: _composerActions(compact: true),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    _sendButton(store),
-                  ],
-                );
-              }
+              // 三档（2026-10-11 用户："按钮太小了比较难点，也没显示出有用的关键信息；
+              // 在其他特定宽度下，控件变成两行排列也很难看"）：
+              //
+              //   ① ≥ [_fullLabelWidth]：控件带**全称**（"自动允许（无需批准）"、模型名 + 能力徽标）
+              //   ② [_shortLabelWidth] ~ [_fullLabelWidth]：控件带**短标签**
+              //      （"自动"/"询问"、"默认"/"高"）+ 模型名 —— 关键信息都还在，只是压掉了长文案
+              //   ③ < [_shortLabelWidth]：控件退成**图标按钮**（信息进 tooltip，一个都不丢）
+              //
+              // 为什么以前会难看：老版只有"全称 / 图标"两档，而四枚控件的**固有宽度差一个
+              // 数量级**（44 / 187 / 296 / 70），于是中等宽度下 `Wrap` 一折就是
+              // **两行 + 每行右边一大片空白 + 权限档孤零零挂一行**。
+              // 短标签把四枚压到 ~300px 以内，一档就能和发送挤在一排 —— 折行那件事不发生。
+              //
+              // ⚠ 折行仍然保留（`FilterChipRow` 是 `Wrap`）：那是**最后一道保险**，
+              // 不是主要排版手段；真折了也不会被裁掉任何控件。
+              final density = constraints.maxWidth >= _fullLabelWidth
+                  ? _ComposerLabel.full
+                  : constraints.maxWidth >= _shortLabelWidth
+                      ? _ComposerLabel.short
+                      : _ComposerLabel.icon;
+              // token 汇总是**纯展示项**，窄了先让它走（用户 2026-09-21：
+              // "宽度太窄的时候可以不显示对话 token 用量"）—— 但它不该在中等宽度就消失，
+              // 所以门限单独一档。
+              final showSummary = constraints.maxWidth >= _summaryWidth;
               return Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   // 操作组自己折行（宽裕时只占一行，不会把右边的汇总 / 发送顶出去）
                   Expanded(
                     child: FilterChipRow(
                       key: const Key('ai-composer-actions'),
+                      alignment: WrapAlignment.start,
                       spacing: 4,
                       runSpacing: 4,
-                      children: _composerActions(compact: false),
+                      children: _composerActions(density),
                     ),
                   ),
-                  ..._composerSummary(store, theme),
+                  if (showSummary) ..._composerSummary(store, theme),
                   _sendButton(store),
                 ],
               );
@@ -3299,36 +3309,49 @@ class _ComposerState extends State<_Composer> {
     );
   }
 
-  /// 换成两行的门限（**输入区**的可用宽度，不含两侧 12px 内边距）。
+  /// 换成"短标签"档的门限（**操作组自己的可用宽度**，不是窗口宽度）。
   ///
-  /// 取值依据（本机实测的控件固有宽度，`permissionMode=full` 那一档：
-  /// `自动允许（无需批准）` 那枚按钮 187、附件按钮 44、模型选择最窄 ~148（名字被挤到
-  /// 省略号）、思考强度 70，操作组合计 ~450）：发送 94 + token 汇总 ≤220 + 间距 12 = 326。
-  ///   · 门限以下单行时，操作组被压到 326 以外的全部剩余空间 —— 600px 窗口只剩
-  ///     69px（连附件按钮都放不下），这正是用户报的"控件显示不全"；
-  ///   · 560 时换成两行，并且这四枚控件退成**同宽图标**（见 `_composerActions`）：
-  ///     40 + 42 + 56 + 42 + 间距 ≈ 200，加上发送按钮 94 ≈ 294 —— 320px（产品最小
-  ///     宽度，内容区 296）刚好一行放得下，所以窄屏下底行就是**一排**。
-  static const double _twoRowWidth = 560;
+  /// 实测（本机探针，2026-10-11）：1200 窗口 → 操作组可用 **674**；960 → 595；1600 → 1074。
+  /// 全称档四枚的固有宽度约 44 + 190 + 300 + 80 ≈ 614 再加组内间距 ≈ 690 ——
+  /// 所以 **720** 是"放得下全称"的下界：674（1200 窗口）放不下，正好该收成短标签；
+  /// 1074（1600 窗口）放得下。
+  ///
+  /// ⚠ 门限要跟着**实测**走：以前凭印象写 780，结果 1600 窗口被误判（好在 1074 > 780
+  /// 侥幸没红），而 1200 窗口那些用例的断言全对不上 —— 判据错一点，
+  /// 表现就是"某个宽度下界面突然换了个样子"，而单测只看一个宽度时抓不到。
+  static const double _fullLabelWidth = 720;
+
+  /// 换成"纯图标"档的门限：短标签档四枚约 300 + 发送 94 + 间距 ≈ 410。
+  static const double _shortLabelWidth = 440;
+
+  /// 低于这个宽度就不显示 token 汇总（纯展示项让位给能操作的控件）。
+  static const double _summaryWidth = 560;
 
   /// 输入区底行的操作控件（不含发送）。
   ///
   /// 顺序就是用户建议 ⑤ 定的：附件 → 权限档 → 模型选择 → 思考强度。
-  /// [compact] = 窄的时候这四枚一律退成**图标按钮**（附件本来就是图标）：
-  /// 它们原来的固有宽度是 44 / 187 / 296 / 70 —— 直接折行会变成"三行 + 每行右边
-  /// 一大片空白 + 权限档孤零零一行"（用户："你不觉得这个排版很奇怪吗"）。
-  /// 退成等宽图标之后四枚只占 ~200px，能和发送按钮挤在同一排。
-  List<Widget> _composerActions({required bool compact}) {
+  ///
+  /// [label] 是**三档文字密度**（见 `build` 里那个 `LayoutBuilder` 的注释）：
+  /// 全称 / 短标签 / 纯图标。用户 2026-10-11 的原话是
+  /// "按钮太小了比较难点，也没显示出有用的关键信息" ——
+  /// 所以短标签档**保留文字**（"自动"/"询问"、"默认"/"高"），只压掉长文案；
+  /// 纯图标档才退回 tooltip，且图标按钮本身放大到能轻松点到。
+  List<Widget> _composerActions(_ComposerLabel density) {
     return [
+      // 附件按钮：三档都是图标（它本来就没有"状态"可显示），
+      // 但**三档都要够大** —— 用户点不准的就是这类按钮。
       IconButton(
         tooltip: '添加附件',
         onPressed: _pickFiles,
+        iconSize: 22,
+        padding: const EdgeInsets.all(10),
+        constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
         icon: const Icon(Icons.attach_file),
       ),
       // 权限档（用户建议 ⑤）：就在附件按钮和模型选择之间
-      _PermissionPicker(store: widget.store, compact: compact),
-      _ModelPicker(store: widget.store, compact: compact),
-      _EffortPicker(store: widget.store, compact: compact),
+      _PermissionPicker(store: widget.store, density: density),
+      _ModelPicker(store: widget.store, density: density),
+      _EffortPicker(store: widget.store, density: density),
     ];
   }
 
@@ -3437,6 +3460,29 @@ class _Banner extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
+//  输入区底行的文字密度（2026-10-11）
+// ---------------------------------------------------------------------------
+
+/// 输入区底行控件的**三档文字密度**。
+///
+/// 用户 2026-10-11："AI 工作台界面下方的控件，有时候按钮太小了比较难点，
+/// 也没显示出有用的关键信息；在其他特定宽度下，控件变成两行排列也很难看。"
+///
+/// 老版只有两档（全称 / 纯图标），中间那一大片宽度没档位 —— 于是要么文字被挤爆，
+/// 要么退成四个没有信息的小图标。现在补上中间的**短标签**档：
+/// 关键信息（哪一档权限、哪个思考强度、哪个模型）**在任何宽度都看得见**。
+enum _ComposerLabel {
+  /// 全称：`自动允许（无需批准）`、模型名 + 能力徽标、思考强度全名。
+  full,
+
+  /// 短标签：`自动` / `询问`、`默认` / `高` + 模型名。**关键信息仍在**。
+  short,
+
+  /// 纯图标：文字进 tooltip（信息一个都不丢，只是要点开/悬停才看见）。
+  icon,
+}
+
+// ---------------------------------------------------------------------------
 //  权限档（用户建议 ⑤）
 // ---------------------------------------------------------------------------
 
@@ -3452,23 +3498,27 @@ class _Banner extends StatelessWidget {
 class _PermissionPicker extends StatelessWidget {
   final AiWorkspaceStore store;
 
-  /// 窄的时候只显示图标（见 `_composerActions` 的注释）。
-  final bool compact;
+  /// 文字密度（见 [`_ComposerLabel`]）。
+  final _ComposerLabel density;
 
-  const _PermissionPicker({required this.store, this.compact = false});
+  const _PermissionPicker({required this.store, this.density = _ComposerLabel.full});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final full = store.fullPermission;
     final color = full ? theme.colorScheme.error : theme.colorScheme.outline;
-    final label = full ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel;
+    final text = full ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel;
+    // 短标签档：`自动允许（无需批准）` → `自动`；`询问` 本来就短，原样用。
+    // ⚠ 短标签**必须仍然能区分两档**（"自动" vs "询问"）——
+    // 退回纯图标之后，用户点不准又看不出现在是哪一档，那正是用户抱怨的那件事。
+    final shortText = full ? '自动' : AiToolPolicy.modeAskLabel;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: AppMenuButton<String>(
         tooltip: full
-            ? '当前：$label —— AI 调用工具不会等你批准（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'
-            : '当前：$label —— 写盘 / 提交任务这类改动操作会先弹批准。点一下切到「${AiToolPolicy.modeFullLabel}」。',
+            ? '当前：$text —— AI 调用工具不会等你批准（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'
+            : '当前：$text —— 写盘 / 提交任务这类改动操作会先弹批准。点一下切到「${AiToolPolicy.modeFullLabel}」。',
         onSelected: store.setPermissionMode,
         options: [
           MenuOption(
@@ -3495,7 +3545,12 @@ class _PermissionPicker extends StatelessWidget {
                 ? null
                 : () => controller.isOpen ? controller.close() : controller.open(),
             child: Container(
-              padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 10, vertical: 8),
+              // 三档都保证 ≥44 高（用户："按钮太小了比较难点"）
+              constraints: const BoxConstraints(minHeight: 44),
+              padding: EdgeInsets.symmetric(
+                horizontal: density == _ComposerLabel.full ? 10 : 12,
+                vertical: 8,
+              ),
               decoration: BoxDecoration(
                 border: Border.all(color: full ? color : theme.dividerColor),
                 borderRadius: BorderRadius.circular(8),
@@ -3506,17 +3561,18 @@ class _PermissionPicker extends StatelessWidget {
                 children: [
                   Icon(
                     full ? Icons.gpp_maybe_outlined : Icons.how_to_reg_outlined,
-                    size: 16,
+                    size: 18,
                     color: color,
                   ),
-                  if (!compact) ...[
+                  if (density != _ComposerLabel.icon) ...[
                     const SizedBox(width: 6),
-                    Text(label,
-                        style: theme.textTheme.labelMedium?.copyWith(color: full ? color : null)),
+                    Text(
+                      density == _ComposerLabel.full ? text : shortText,
+                      style: theme.textTheme.labelMedium?.copyWith(color: full ? color : null),
+                    ),
                   ],
-                  // 窄屏时"哪一档"只在图标颜色 / 底色上体现，箭头也省掉（那是展开暗示，
-                  // 图标按钮已经够明显）；tooltip 里写着当前档位。
-                  if (!compact)
+                  // 纯图标档不画箭头（那是展开暗示；图标按钮 + tooltip 已经够）。
+                  if (density != _ComposerLabel.icon)
                     Icon(Icons.arrow_drop_down, size: 18, color: theme.colorScheme.outline),
                 ],
               ),
@@ -3540,11 +3596,10 @@ class _PermissionPicker extends StatelessWidget {
 class _ModelPicker extends StatelessWidget {
   final AiWorkspaceStore store;
 
-  /// 窄的时候只显示图标（见 `_composerActions` 的注释）：模型名与能力徽标
-  /// 走 tooltip 与点开的对话框，不会丢失。
-  final bool compact;
+  /// 文字密度（见 [`_ComposerLabel`]）：`icon` 档才把模型名收进 tooltip。
+  final _ComposerLabel density;
 
-  const _ModelPicker({required this.store, this.compact = false});
+  const _ModelPicker({required this.store, this.density = _ComposerLabel.full});
 
   @override
   Widget build(BuildContext context) {
@@ -3559,6 +3614,8 @@ class _ModelPicker extends StatelessWidget {
         builder: (_) => _ModelPickerDialog(store: store),
       ),
       child: Container(
+        // 三档都保证 ≥44 高（用户："按钮太小了比较难点"）
+        constraints: const BoxConstraints(minHeight: 44),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           border: Border.all(
@@ -3571,10 +3628,10 @@ class _ModelPicker extends StatelessWidget {
           children: [
             Icon(
               model == null ? Icons.error_outline : Icons.memory,
-              size: 16,
+              size: 18,
               color: model == null ? theme.colorScheme.error : null,
             ),
-            if (!compact) ...[
+            if (density != _ComposerLabel.icon) ...[
               const SizedBox(width: 6),
               // 模型名可能很长（内置目录里就有 "…-preview-2026-01" 这种）：
               // 输入区底部这一行还要塞下附件 / 权限 / 思考强度 / token 汇总 / 发送，
@@ -3587,24 +3644,26 @@ class _ModelPicker extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              const SizedBox(width: 6),
-              for (final m in model?.modalities ?? const <AiModality>[])
-                Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: _Badge(m.label),
-                ),
+              // 能力徽标只在**全称**档给：短标签档的空间要留给模型名本身
+              // （用户要的是"显示出有用的关键信息"，模型名比"文本/图片"那两枚小徽标更关键）。
+              if (density == _ComposerLabel.full) ...[
+                const SizedBox(width: 6),
+                for (final m in model?.modalities ?? const <AiModality>[])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: _Badge(m.label),
+                  ),
+              ],
               const SizedBox(width: 2),
-              // 紧凑形态下**不画箭头**：那时它是"和附件/权限/思考同宽的图标按钮"，
-              // 多一个箭头就比同伴宽 20px，四枚 + 发送正好差这点放不进一排。
               Icon(Icons.arrow_drop_down, size: 18, color: theme.colorScheme.outline),
             ],
           ],
         ),
       ),
     );
-    // 宽的时候名字与徽标都在按钮上，不用 tooltip（空 message 会画出空气泡）
-    if (!compact) return button;
-    // 紧凑形态补一句 Provider —— 换过 Provider 之后光看模型名认不出它是谁家的
+    // 全称档名字与徽标都在按钮上，不用 tooltip（空 message 会画出空气泡）
+    if (density == _ComposerLabel.full) return button;
+    // 另外两档补一句 Provider —— 换过 Provider 之后光看模型名认不出它是谁家的
     final provider = store.selectedProvider?.displayName;
     return Tooltip(
       message: '当前模型：$name${modalities.isEmpty ? '' : '（$modalities）'}'
@@ -3889,10 +3948,10 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
 class _EffortPicker extends StatelessWidget {
   final AiWorkspaceStore store;
 
-  /// 窄的时候只显示图标（见 `_composerActions` 的注释）。
-  final bool compact;
+  /// 文字密度（见 [`_ComposerLabel`]）。
+  final _ComposerLabel density;
 
-  const _EffortPicker({required this.store, this.compact = false});
+  const _EffortPicker({required this.store, this.density = _ComposerLabel.full});
 
   @override
   Widget build(BuildContext context) {
@@ -3901,17 +3960,22 @@ class _EffortPicker extends StatelessWidget {
     final options = model?.selectableEfforts ?? const <AiReasoningEffort>[];
     final enabled = options.isNotEmpty;
 
-    final label = enabled
+    final text = enabled
         ? store.reasoningEffort.label
         : (model == null ? '思考强度' : '不支持思考');
+    // 短标签档：`默认` 本来就短；`高` / `中` / `低` 也短。
+    // 只有 `不支持思考` 那种长文案需要压 —— 压成"无"并让 tooltip 说清原因。
+    final shortText = enabled
+        ? store.reasoningEffort.label
+        : (model == null ? '思考' : '不支持');
 
-    // 窄的时候图标配 tooltip（tooltip 里带着档位说明与"为什么置灰"）
+    // 纯图标档用 tooltip 兜住信息（tooltip 里带着档位说明与"为什么置灰"）
     final tooltip = enabled
         ? '思考强度（当前：${store.reasoningEffort.label}）'
             '：「默认」始终可选：不发思考参数、由网关决定；'
             '模型声明的档位：'
             '${options.where((e) => e.isThinking).map((e) => e.label).join(' / ')}'
-        : (model == null ? '还没选模型' : '$label —— 该模型未声明推理能力，请到「设置 → AI 模型」声明');
+        : (model == null ? '还没选模型' : '$text —— 该模型未声明推理能力，请到「设置 → AI 模型」声明');
 
     return AppMenuButton<AiReasoningEffort>(
       tooltip: tooltip,
@@ -3939,6 +4003,8 @@ class _EffortPicker extends StatelessWidget {
               ? () => controller.isOpen ? controller.close() : controller.open()
               : null,
           child: Container(
+            // 三档都保证 ≥44 高（用户："按钮太小了比较难点"）
+            constraints: const BoxConstraints(minHeight: 44),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
               border: Border.all(
@@ -3952,14 +4018,18 @@ class _EffortPicker extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(Icons.psychology_outlined,
-                    size: 16,
+                    size: 18,
                     color: store.reasoningEffort.isThinking && enabled
                         ? theme.colorScheme.primary
                         : null),
-                // 紧凑形态下只有图标（和附件/权限/模型同宽，见 `_composerActions`）
-                if (!compact) ...[
+                // 纯图标档才把文字收进 tooltip（短标签档**保留档位名** ——
+                // "现在是什么思考强度"正是用户要看见的关键信息）
+                if (density != _ComposerLabel.icon) ...[
                   const SizedBox(width: 5),
-                  Text(label, style: theme.textTheme.labelMedium),
+                  Text(
+                    density == _ComposerLabel.full ? text : shortText,
+                    style: theme.textTheme.labelMedium,
+                  ),
                 ],
               ],
             ),
@@ -4603,7 +4673,12 @@ class _ContextPanelState extends State<_ContextPanel> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // **冷启动先等后端**（2026-10-12）：这一栏一显示就打三处
+      //（ComfyUI 状态 / 实时进度 / 待审批），而那一刻 `.run\api.json` 还没写出来、
+      // `baseUrl` 还是 8080 兜底值 —— 三个请求必然失败，其中 `/api/capture/status`
+      // 那个失败还会**留在界面上**（只有手点刷新才走）。等真有结论再打，失败也才如实。
+      await widget.store.waitForBackend();
       if (!mounted) return;
       _refresh();
       // 实时进度（用户"其他建议"第 1 条）：右侧栏一显示就开始轮询，

@@ -99,7 +99,7 @@ fn read_prompt(state: &AppState, id: i64) -> Result<Json<PromptDto>, ApiError> {
             match prompt {
                 Some(mut p) => {
                     p.tags = crate::web::routes::tags_of(conn, p.id)?;
-                    p.media_count = crate::web::routes::media_count_of(conn, p.id)?;
+                    p.media_count = crate::web::routes::media_count_matching(conn, p.id)?;
                     Ok(Some(p))
                 }
                 None => Ok(None),
@@ -212,7 +212,7 @@ async fn duplicate(
             .optional()?;
         let Some(mut p) = prompt else { return Ok(None) };
         p.tags = crate::web::routes::tags_of(conn, p.id)?;
-        p.media_count = crate::web::routes::media_count_of(conn, p.id)?;
+        p.media_count = crate::web::routes::media_count_matching(conn, p.id)?;
         Ok(Some(p))
     })?;
     let Some(prompt) = source else {

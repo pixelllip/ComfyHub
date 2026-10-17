@@ -244,8 +244,8 @@ pub fn create_prompt(conn: &Connection, input: &PromptInput) -> Result<i64, Writ
     conn.execute(
         "INSERT INTO prompts
            (title, kind, positive_prompt, negative_prompt, checkpoint, loras, sampler, scheduler,
-            steps, cfg_scale, seed, width, height, batch_size, extra_params, notes, favorite)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+            steps, cfg_scale, seed, width, height, batch_size, extra_params, notes, negative_mode, favorite)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
         params![
             title,
             normalized_kind(&input.kind),
@@ -263,6 +263,7 @@ pub fn create_prompt(conn: &Connection, input: &PromptInput) -> Result<i64, Writ
             input.batch_size,
             encode_extra(&input.extra_params),
             blank_to_none(input.notes.as_ref()),
+            crate::web::inputs::normalized_negative_mode(input.negative_mode.as_deref()),
             if input.favorite { 1 } else { 0 },
         ],
     )?;
@@ -285,8 +286,9 @@ pub fn update_prompt(conn: &Connection, id: i64, input: &PromptInput) -> Result<
         "UPDATE prompts SET
            title = ?1, kind = ?2, positive_prompt = ?3, negative_prompt = ?4, checkpoint = ?5,
            loras = ?6, sampler = ?7, scheduler = ?8, steps = ?9, cfg_scale = ?10, seed = ?11,
-           width = ?12, height = ?13, batch_size = ?14, extra_params = ?15, notes = ?16, favorite = ?17
-         WHERE id = ?18",
+           width = ?12, height = ?13, batch_size = ?14, extra_params = ?15, notes = ?16,
+           negative_mode = ?17, favorite = ?18
+         WHERE id = ?19",
         params![
             title,
             normalized_kind(&input.kind),
@@ -304,6 +306,7 @@ pub fn update_prompt(conn: &Connection, id: i64, input: &PromptInput) -> Result<
             input.batch_size,
             encode_extra(&input.extra_params),
             blank_to_none(input.notes.as_ref()),
+            crate::web::inputs::normalized_negative_mode(input.negative_mode.as_deref()),
             if input.favorite { 1 } else { 0 },
             id
         ],
@@ -365,6 +368,8 @@ pub fn duplicate_prompt(conn: &Connection, id: i64, source: &PromptWithTags) -> 
             })
             .unwrap_or_default(),
         notes: source.prompt.notes.clone(),
+        // 复制一份时**带上发送模式**：用户特意为 turbo 设的"只发正面"不该在复制后丢掉
+        negative_mode: Some(source.prompt.negative_mode.clone()),
         favorite: false,
         tags: source.tags.iter().map(|t| t.name.clone()).collect(),
     };

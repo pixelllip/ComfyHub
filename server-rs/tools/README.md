@@ -8,7 +8,7 @@
 | `gen_prompts.py` | ⛔ **已停用：只拒绝、不写**（见下节）。原来从 Kotlin `NsfwPrompt.kt` / `HarnessRunner.kt` 机械提取提示词正文（照抄 `trimIndent()` 语义，`${...}` 插值换成哨兵）；提取助手留着当**历史参考** | **无**（退出码 2，一个字节都不写） |
 | `gen_mobile_tools.py` | 从 Kotlin `/api/ai/run-kit` 的**真实响应**里取手机工具（name / description / inputSchema） | `src/mobile_tools.rs` |
 | `check_signature.py` | 按 Kotlin `RunKit.Signature.canonical()` 重算 `kitVersion` 的内容签名，与库里 `app_settings['ai.runkit.hash']` 比对 | 只打印结论 |
-| `compare_run_kit.py` | 同一份库 + 同一份 storage 上，canon 比较 Rust 与 Kotlin 的 `/api/ai/run-kit`（只归一化「当前时间」那一行） | 只打印结论 |
+| `compare_run_kit.py` | 同一份库 + 同一份 storage 上，canon 比较 Rust 与 Kotlin 的 `/api/ai/run-kit`（只归一化「当前时间 / 当前日期」那一行 —— **两个拼写都认**，Kotlin 基线是冻结的 ISO 时间，Rust 从 2026-10 起是只到天的日期，理由见 `src/ai/system_prompt.rs` 文件头的前缀缓存一节） | 只打印结论 |
 | `gen_capability_rules.py` | 从 Kotlin `ModelCapabilityCatalog.kt` 的 `rules` 表**机械提取** 118 条内置能力规则（模式 / 模态 / 工具 / 推理 / 思考档位 / 思考方言，**顺序即语义**） | `src/capability_rules.rs`（`--check` 只校验不写） |
 
 ## ⛔ 系统提示正文**不再生成**（`gen_prompts.py` 已停用，2026-09-27）
@@ -59,9 +59,10 @@ python server-rs\tools\compare_run_kit.py
 ```
 
 ⚠ 这条流程里**没有** `gen_prompts.py` 了 —— 它现在会拒绝并退出 2（理由见上节）。
-⚠ `compare_run_kit.py` 从 2026-09-27 起**必然报出差异**（Rust v33 / Kotlin v31，
+⚠ `compare_run_kit.py` 从 2026-09-27 起**必然报出差异**（Rust v33+ / Kotlin v31，
 且 §19 的两批内容不同）：那是**已知的、有意的分叉**，看的时候要按"哪些差异是设计好的"判，
-别把系统提示正文那几段差异当成回归。
+别把系统提示正文那几段差异当成回归。2026-10 起那一行本身也换了拼写
+（`当前时间: <毫秒 ISO>` → `当前日期: YYYY-MM-DD`），脚本已经把两个拼写都归一化掉了。
 
 ## ⚠ 两个"看起来没事、其实很严重"的坑（都真踩过）
 

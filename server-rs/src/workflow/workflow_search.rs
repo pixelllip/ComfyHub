@@ -51,6 +51,12 @@ pub fn search_json(
             sort: Some("newest".to_string()),
             page: Some(1),
             size: Some(limit),
+            // ⚠ **AI 侧要连自动捕获的一起搜**：`comfy_find_workflow` 找的是"库里能跑的
+            // 工作流"，而那些正是自动捕获来的 —— 不传 true 就等于把它们藏起来，
+            // 表现是"AI 说库里没有，用户却在画廊里看得到"（见 PromptQuery 的注释）。
+            include_captured: true,
+            // 不按"有没有关联产物"筛（那是界面上的入口）
+            has_media: None,
         },
     )
     .map_err(|e| ToolFailure::new("LIBRARY_ERROR", e.human()))?

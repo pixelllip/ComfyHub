@@ -17,6 +17,7 @@ import 'package:viewer/core/ai_api_client.dart';
 import 'package:viewer/core/api_client.dart';
 import 'package:viewer/core/backend_launcher.dart';
 import 'package:viewer/core/settings_store.dart';
+import 'package:viewer/core/theme.dart';
 import 'package:viewer/pages/settings_page.dart';
 import 'package:viewer/state/library_store.dart';
 import 'package:viewer/state/nsfw_store.dart';
@@ -77,14 +78,20 @@ MockClient _mockClient() {
   });
 }
 
-/// 设置页现在还要 `NsfwStore`（NSFW 两个开关的真源在后端），返回挂好 provider 的那棵树。
-Future<void> _pumpSettings(WidgetTester tester) async {
+/// 设置页现在还要 `NsfwStore`（NSFW 两个开关的真源在后端），返回挂好 provider 的那棵树
+/// （返回 launcher 是为了让用例能摆出"后端已经就绪 / 端口回落过"这些状态）。
+Future<BackendLauncher> _pumpSettings(
+  WidgetTester tester, {
+  int? portFallbackFrom,
+}) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
   final client = _mockClient();
   final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: client));
-  final launcher = BackendLauncher(settings);
+  // 「端口没能要回来」是后端写在 .run\api.json 里的事实，由 launcher 读懂后交给界面。
+  // 这里直接把它摆出来（真值的来源在 backend_launcher_test.dart 里验）。
+  final launcher = BackendLauncher(settings)..portFallbackFrom = portFallbackFrom;
   final nsfw = NsfwStore(api: AiApiClient(settings.baseUrl, client: client));
   addTearDown(store.dispose);
   addTearDown(launcher.dispose);
@@ -104,6 +111,7 @@ Future<void> _pumpSettings(WidgetTester tester) async {
     ),
   );
   await tester.pumpAndSettle();
+  return launcher;
 }
 
 void main() {
@@ -130,6 +138,29 @@ void main() {
         reason: '左侧要有留白，不能贴到卡片边缘');
     expect(cardRect.right - tileRect.right, greaterThanOrEqualTo(20),
         reason: '右侧（开关那一侧）也要有留白');
+  });
+
+  // 用户 2026-10-13：「主题（浅色/深色）那里排版奇怪，不应该一行搞定吗」。
+  //
+  // 当时的写法是 `ListTile(标题) + 另起一行 Wrap(三个 chip)`：这张卡片的 `Column`
+  // 是默认的 `crossAxisAlignment: center`，而 `Wrap` 只占内容宽度 —— 于是控件
+  // **在整行里居中**，看着就是"标题独在左边、控件飘在中间"。现在改成一行：
+  // 标题在左、三段选择器在右。
+  //
+  // 判据用**几何**：纵向中心必须基本重合（"同一行"）；退回"另起一行"时
+  // 纵向中心会差出几十像素，这条立刻红。
+  testWidgets('设置页：主题是"标题在左、选择器在右"的一行，不是另起一行居中', (tester) async {
+    tester.view.physicalSize = const Size(1700, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await _pumpSettings(tester);
+
+    final title = tester.getRect(find.text('主题'));
+    final picker = tester.getRect(find.byType(SegmentedButton<AppThemeMode>));
+    expect(picker.left, greaterThan(title.right), reason: '选择器要在标题右边');
+    expect((picker.center.dy - title.center.dy).abs(), lessThan(8),
+        reason: '两者必须在同一行（纵向中心基本重合），不能另起一行');
   });
 
   // 「AI 模型与凭据」是这一页最常去的入口，必须排在前面的列里，
@@ -210,5 +241,63 @@ void main() {
     ]) {
       expect(find.text(label), findsOneWidget, reason: '$label 不能被裁掉');
     }
+
+    // 「主题」那一行是**标题 + 三段选择器挤在一行**里（用户 2026-10-13 报过
+    // "排版奇怪，不应该一行搞定吗"，所以它不能退回"另起一行居中"）。
+    // 一行放三个中文标签最容易挤爆的就是这个宽度 —— 三段一个都不许被裁掉。
+    expect(find.text('主题'), findsOneWidget);
+    for (final label in const ['深色', '浅色', '跟随系统']) {
+      expect(find.text(label), findsOneWidget, reason: '主题的「$label」不能被挤掉');
+    }
+  });
+
+  // 用户 2026-10-13 问："「允许手机 / 局域网设备连接」和「允许移动端连接」
+  // 是不是重复了？"——**不是**同一个值，但名字像、后果都是"手机能不能连"：
+  //   · 这个开关 = 后端**听不听**局域网（起进程时定，要重启后端）；
+  //   · 那个（在「远程访问与配对」里）= **配对闸门**：局域网请求要不要带令牌。
+  // 所以两边的说明里都要有"①/②"和对方的去处 —— 少了它，用户遇到
+  // "我明明开了，手机还是连不上"就只能靠猜是卡在哪一道。
+  testWidgets('设置页：局域网开关要写明它和"配对闸门"是两道不同的闸', (tester) async {
+    tester.view.physicalSize = const Size(1700, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await _pumpSettings(tester);
+
+    expect(find.text('允许手机 / 局域网设备连接'), findsOneWidget);
+    expect(find.textContaining('① 让后端监听局域网'), findsOneWidget);
+    expect(find.textContaining('② 配对闸门'), findsOneWidget,
+        reason: '必须指出另一道闸在哪，否则两个开关看着就是重复的');
+  });
+
+  // 「端口没能要回上次那个」必须显示出来（2026-10-13，与「端口粘住」一起加的）。
+  //
+  // 后端平时会要回上一次的端口，手机上存的 `http://<局域网IP>:<端口>` 一直有效；
+  // 一旦那个端口被别的程序占了，后端只能回落 —— **手机保存的地址当场失效**。
+  // 这条提示是用户唯一的线索：少了它，用户遇到的只是"手机突然连不上"，
+  // 猜不到该去重扫二维码（本仓 §12.3）。
+  //
+  // 一句话两半：**该亮的时候要亮**，**正常的时候不许常年亮着吓人**。
+  testWidgets('设置页：端口回落时提示"手机要重扫"，正常时不显示（窄屏也不溢出）', (tester) async {
+    // 真机那两档宽度：384（OnePlus 8T）/ 320（最窄）—— 这句话很长，
+    // 它必须自己折行而不是把卡片顶爆。
+    for (final width in const [384.0, 320.0]) {
+      tester.view.physicalSize = Size(width, 1500);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await _pumpSettings(tester, portFallbackFrom: 6430);
+
+      expect(find.textContaining('6430 这次没能用上'), findsOneWidget,
+          reason: '${width}dp：端口回落必须写出来');
+      expect(find.textContaining('重新扫一次'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: '${width}dp 下这条提示不许溢出');
+    }
+
+    // 正常要回来（portFallbackFrom 为 null）→ 一个字都不该出现
+    tester.view.physicalSize = const Size(1700, 1200);
+    await _pumpSettings(tester);
+    expect(find.textContaining('这次没能用上'), findsNothing,
+        reason: '端口正常时不许常年亮一条警告');
   });
 }

@@ -278,7 +278,7 @@ applicationDefaultJvmArgs = listOf(
 
 **JVM 的地板大约 110~140 MB，mysqld 的地板大约 117 MB。**
 再往下就必须换实现了 —— 作为对照，调研中实测的一个最小 Rust HTTP 服务
-**工作集只有 4.2~5.0 MB**（见 `docs/embedded-db-sync-options-report.md`）。
+**工作集只有 4.2~5.0 MB**（见 `docs/archive/embedded-db-sync-options-report.md`）。
 也就是说：**不换栈的地板（~250 MB）仍然是一个 Rust+SQLite 方案的 20~50 倍。**
 这笔账值不值，见 §7。
 
@@ -526,7 +526,7 @@ END;
 （PowerSync / ElectricSQL / CR-SQLite 的核心价值）解决的是"多个副本同时改同一条数据"，
 **你没有这个问题**。为一台桌面 + 一部手机买单主同步引擎，是花钱买用不上的复杂度。
 
-另外 `docs/ai-home-implementation-plan-v0.1.md:73` 把"多用户账号、云端同步和团队权限"
+另外 `docs/archive/ai-home-implementation-plan-v0.1.md:73` 把"多用户账号、云端同步和团队权限"
 列为**范围之外** —— 这也印证了单用户单写者这个前提。
 
 ### 6.2 三种跨端形态（按成本排序）
@@ -683,7 +683,7 @@ Flutter：   39 个文件 / 23,408 行 Dart
 用户问得很直接：**"安卓倒是不需要 Rust 重写吧？"** —— **对，不需要，而且不该。**
 原先本文把"服务端可嵌入安卓"当作 Rust 的三大动机之一，**这个前提是错的**：
 
-**① 安卓上的硬约束直接把"内嵌服务端"这条路堵死了**（`docs/embedded-db-sync-options-report.md` §6.3 已核实）：
+**① 安卓上的硬约束直接把"内嵌服务端"这条路堵死了**（`docs/archive/embedded-db-sync-options-report.md` §6.3 已核实）：
 
 - **Android 10+ 禁止对应用私有目录里的文件执行 `execve()`** →
   内嵌服务端**只能是进程内的 `.so`，不能是子进程**；
@@ -778,7 +778,7 @@ Flutter：   39 个文件 / 23,408 行 Dart
 
 ## 10. 相关文档
 
-- **`docs/embedded-db-sync-options-report.md`** —— 由本评估派生的独立深度调研
+- **`docs/archive/embedded-db-sync-options-report.md`** —— 由本评估派生的独立深度调研
   （约 2.5 万字，119 条引用，每条结论标了 `[V]` 已核实 / `[MEASURED]` 本机实测 / `[?]` 未核实）。
   覆盖：SQLite/WAL 在安卓上的真实约束（AOSP 一直没出过 SQLite 3.51+、
   `SQLITE_OMIT_LOAD_EXTENSION` 导致 CR-SQLite 无法加载、`sqlite3_flutter_libs` 已是空壳、

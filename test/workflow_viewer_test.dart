@@ -110,6 +110,9 @@ MockClient _buildMockClient({
 
     if (path == '/api/prompts/1') return _json(_promptJson);
     if (path == '/api/prompts/1/media') return _json(<Map<String, dynamic>>[]);
+    // 提示词详情现在按"**同款提示词**"取关联产物（`/api/presets/{id}/media`，2026-10-11）：
+    // 少了这条路由，详情页会停在错误态、来源徽标与"查看工作流"都不显示。
+    if (path == '/api/presets/1/media') return _json(<Map<String, dynamic>>[]);
     if (path == '/api/media/1') return _json(_mediaJson);
 
     return _json({'error': 'not found: $path'}, 404);

@@ -70,8 +70,19 @@ pub const SCHEMA_SQL: &str = include_str!("../../../db/schema.sqlite.sql");
 /// 同日由 3 提到 4：加 `submit_jobs` 表 = M5「手机排队 → 桌面真正提交」的持久账；
 /// 2026-09-30 由 4 提到 5：给 `character_cards` 补 `position` / `enabled` 两列
 /// （生图角色卡框架：位置 + 是否参与本次生成）——**这是第一次"加列"**，
-/// 走的是下面 [`NEW_COLUMNS`] 那套"先 `PRAGMA table_info` 探测再 ALTER"）。
-pub const SCHEMA_VERSION: i64 = 5;
+/// 走的是下面 [`NEW_COLUMNS`] 那套"先 `PRAGMA table_info` 探测再 ALTER"。
+/// 2026-10 由 5 提到 6：角色卡**只留三个字段**（名称 / 正面提示词 / 负面提示词）——
+/// 加 `prompt` 列，并把老列的 `tags`（JSON 数组）拼成一行灌进去（见 [`backfill_character_card_prompt`]）；
+/// `position` / `enabled` 与那一堆资料库列从此**没人再读**（老库里保留原样，新库不建）。
+/// 2026-10-11 由 6 提到 7：加产物**集合**（`media_collections` 表 + `media_assets.collection_id`）——
+/// 同一批、只做了一点微调的产物归到一组，详情页可左右切换（判定见 `media/collection.rs`）。
+/// ⚠ 加的是**表 + 列**：老库靠"版本号 bump → 收敛式 DDL 建表" + [`NEW_COLUMNS`] 补列，
+/// 两条路缺一条就是**静默的**（表不存在时产物一入库就炸 `no such table`；
+/// 列不存在时集合永远是 None，界面上什么都不显示）。
+/// 2026-10-11 由 7 提到 8：给 `prompts` 加 `negative_mode`（发送模式：保留 / 只发正面）。
+/// 加的是**列**（走 [`NEW_COLUMNS`]）；bump 的另一个作用是让 `manifest.schemaVersion`
+/// 变化，手机据此重走一次 bootstrap（提示词形状变了）。
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// **"这一列必须存在"的声明式清单**（2026-09-30 起）。
 ///
@@ -82,17 +93,28 @@ pub const SCHEMA_VERSION: i64 = 5;
 /// 加列的规矩：
 ///  1. 三处一起改：这里 + `db/schema.sqlite.sql` 的建表 DDL + [`SCHEMA_VERSION`] +1；
 ///  2. 只能加**可空列**或**带默认值的列**（SQLite 的 `ADD COLUMN` 不能加 `NOT NULL` 且无默认值的列）；
-///  3. 别改已有列的类型 / 名字（SQLite 改不动，得重建表 —— 那种迁移要单独写，不在这个清单里）。
+///  3. 别改已有列的类型 / 名字（SQLite 改不动，得重建表 —— 那种迁移要单独写，不在这个清单里）；
+///  4. **删列不走这里**：这个清单只会 `ADD COLUMN`。角色卡那次收敛就是把老列留在原地
+///     （SQLite 删列要重建表，而它们只是没人再读，留着不碍事）。
 const NEW_COLUMNS: &[(&str, &str, &str)] = &[
     (
         "character_cards",
-        "position",
-        "ALTER TABLE character_cards ADD COLUMN position TEXT NULL",
+        "prompt",
+        "ALTER TABLE character_cards ADD COLUMN prompt TEXT NULL",
     ),
+    // 产物所属集合（2026-10-11）。可空 + 无默认值 → 符合"只能加可空列"的规矩。
+    // 老库补上这一列之后**全是 NULL**，要靠 `collection::backfill` 那一趟才填得满。
     (
-        "character_cards",
-        "enabled",
-        "ALTER TABLE character_cards ADD COLUMN enabled INTEGER NOT NULL DEFAULT 0",
+        "media_assets",
+        "collection_id",
+        "ALTER TABLE media_assets ADD COLUMN collection_id INTEGER NULL REFERENCES media_collections(id) ON DELETE SET NULL",
+    ),
+    // 发送模式（2026-10-11）：有些 turbo 模型不认负面提示词，用户要能表达"我只发正面"。
+    // 带默认值（`'keep'`）→ 符合"只能加可空列或带默认值的列"的规矩；老库补上之后全是 keep。
+    (
+        "prompts",
+        "negative_mode",
+        "ALTER TABLE prompts ADD COLUMN negative_mode TEXT NOT NULL DEFAULT 'keep'",
     ),
 ];
 
@@ -126,6 +148,74 @@ fn ensure_columns(conn: &Connection) -> rusqlite::Result<Vec<String>> {
         }
     }
     Ok(added)
+}
+
+/// 这个表上有没有这一列（表不存在也是 `false`）。
+fn column_exists(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let present: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+        rusqlite::params![table, column],
+        |row| row.get(0),
+    )?;
+    Ok(present > 0)
+}
+
+/// **老库的数据迁移**：`character_cards.tags`（JSON 数组文本）→ `prompt`（整段文本）。
+///
+/// 2026-10 角色卡收敛成"名称 / 正面提示词 / 负面提示词"之后，老卡里那套规范 tag 栈
+/// 就只剩 `tags` 那一列——**新代码读的是 `prompt`**，不搬过去等于把用户的卡清空了
+/// （而列还在、界面上却什么都没有，最难查的一类）。所以**刚补上 `prompt` 列那一刻**
+/// 把它们拼成 `a, b, c` 灌进去：迁移只加不减，宁可留得多，不许丢用户的话。
+///
+/// ⚠ **只在"这次真的刚补上这一列"时调**（[`open_or_create`] 用 `added` 判），不许每次开库都跑：
+/// 老库那个 `tags` 列是**留在原地**的，而判据是"prompt 为空 + tags 非空"——每次开库都跑的话，
+/// 用户在界面上清空提示词（`prompt = NULL`）会被下一次启动**从 tags 复活**，
+/// 表现是"删了又回来"，而那种 bug 极难查。
+///
+/// 三条边界：
+///  * **新库没有 `tags` 列** → 空操作（判据是"两个列都在"）；
+///  * **`prompt` 已经有值** → 一个字节都不动（幂等；也不覆盖用户后来手填的）；
+///  * `tags` 不是合法 JSON（手工改过）→ **原样当文本**用，不丢。
+fn backfill_character_card_prompt(conn: &Connection) -> rusqlite::Result<usize> {
+    if !column_exists(conn, "character_cards", "prompt")?
+        || !column_exists(conn, "character_cards", "tags")?
+    {
+        return Ok(0);
+    }
+    let rows: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, tags FROM character_cards \
+             WHERE (prompt IS NULL OR prompt = '') AND tags IS NOT NULL AND tags <> ''",
+        )?;
+        let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut migrated = 0usize;
+    for (id, raw) in rows {
+        let joined = old_tags_to_prompt(&raw);
+        if joined.is_empty() {
+            continue;
+        }
+        conn.execute(
+            "UPDATE character_cards SET prompt = ?1 WHERE id = ?2",
+            rusqlite::params![joined, id],
+        )?;
+        migrated += 1;
+    }
+    Ok(migrated)
+}
+
+/// 老的 `tags` JSON 数组 → 一行提示词（`a, b, c`）；不是 JSON 就原样返回。
+fn old_tags_to_prompt(raw: &str) -> String {
+    match serde_json::from_str::<Vec<String>>(raw) {
+        Ok(list) => list
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(", "),
+        Err(_) => raw.trim().to_string(),
+    }
 }
 
 /// **开库（必要时建库）**：切流之后 Rust 是唯一的后端，"第一次运行要能自己建库"这件事
@@ -163,14 +253,15 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
     let version = schema_version(&conn).map_err(|e| format!("读 user_version 失败：{e}"))?;
     let mut missing: Vec<&'static str> = Vec::new();
 
-    // ★★ **先补列，再跑 DDL —— 顺序不能反**（2026-09-30 用真库副本实测抓到，见用例
-    //   `open_or_create_upgrades_a_database_that_lacks_the_new_columns`）：
+    // ★★ **先补列，再跑 DDL —— 顺序不能反**（2026-09-30 用真库副本实测抓到）：
     //   DDL 里可能有 `CREATE INDEX ... ON <表>(<新列>)`，而收敛式 DDL **不给已存在的表补列** ——
     //   索引语句排在补列之前，那一刻列还不存在 → **整批 DDL 失败、库直接打不开**
     //   （现场：`e2e-pair-test.ps1` 拿真库副本起后端，报
     //    `打开/建库失败：… no such column: enabled in CREATE INDEX … idx_character_cards_enabled`）。
     //   ⚠ 为什么单测没抓到：它们都用**全新库**（DDL 建表时自带新列），而这只有"老库升级"才会踩到。
     //   `ensure_columns` 对不存在的表是空操作，所以在全新库上这么调也不亏。
+    //   （2026-10 角色卡收敛后，DDL 里已经**没有**建在新列上的索引了；顺序照旧保留 ——
+    //    哪天再给新列加索引，就是同一条坑。）
     let added = ensure_columns(&conn).map_err(|e| format!("补列失败：{e}"))?;
     if !added.is_empty() {
         eprintln!(
@@ -178,6 +269,17 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
             added.len(),
             added.join("、")
         );
+    }
+    // 补完列**立刻搬一次数据**：角色卡从 `tags`（JSON 数组）收敛成 `prompt`（整段文本），
+    // 不搬就是把老卡读成空卡（列还在、界面却没内容）。
+    // ⚠ **只在刚补上这一列的那一次**搬（判据是 `added`）—— 老库的 `tags` 列留在原地，
+    //   每次开库都搬会把用户在界面上清空的提示词"复活"，见函数头那条 ⚠。
+    if added.iter().any(|c| c == "character_cards.prompt") {
+        let migrated =
+            backfill_character_card_prompt(&conn).map_err(|e| format!("迁移角色卡失败：{e}"))?;
+        if migrated > 0 {
+            eprintln!("[db] 角色卡：把 {migrated} 张老卡的 tag 栈拼成了正面提示词（老列不动）。");
+        }
     }
 
     if version >= SCHEMA_VERSION && !fresh {

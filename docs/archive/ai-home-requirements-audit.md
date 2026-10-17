@@ -12,7 +12,7 @@
 > **行数更正**：任务描述说 `需求清单` 有 59 行（AIH-001..AIH-057 + AIK-001..003）。
 > 实际用 openpyxl 数出来是 **58 行**：`AIH-001..AIH-055` + `AIK-001..AIK-003`（见 `.run/ids.txt`）。
 > **`AIH-056` / `AIH-057`（思考强度、token 统计）根本不在需求清单里** —— 它们只出现在
-> `docs/ai-home-progress-v0.1.md:86-87` 与代码里（`HarnessRunner.kt:982`、`AiDomain.kt:92-151`）。
+> `docs/archive/ai-home-progress-v0.1.md:86-87` 与代码里（`HarnessRunner.kt:982`、`AiDomain.kt:92-151`）。
 > 下表覆盖清单里实际存在的全部 58 条，顺序与 xlsx 一致。
 
 ---
@@ -106,7 +106,7 @@
 
 ---
 
-## 3. 与 `docs/ai-home-progress-v0.1.md` 的分歧
+## 3. 与 `docs/archive/ai-home-progress-v0.1.md` 的分歧
 
 进度文档整体比 xlsx 可信得多（它自己在 `:564-565` 就承认 xlsx 状态列不可信），但仍有 18 处需要纠正 ——
 其中 **15 处是"高估"**（文档 ✅ 而实测未达标），**3 处是"低估 / 过时"**（代码比文档新，或文档自相矛盾）：

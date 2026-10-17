@@ -476,6 +476,68 @@ pub(crate) fn seed_provider_and_model(state: &comfyhub_server_rs::web::routes::A
 //  执行器主循环（P4 第 30 步）：对着**真 socket 上的假网关**跑一遍
 // ---------------------------------------------------------------------------
 
+/// 假网关读请求的**唯一入口**：把这一次请求（含 body）读干净，返回原始字节。
+///
+/// # 为什么不能"只读一次就回包"
+///
+/// 请求体是大件（系统提示 + 37 个工具的 JSON Schema，几十 KB），而假网关原来**最多读
+/// 16KB**（最窄的那处只有 8KB）、甚至**一个字都不读**（429 那条路径），然后就写响应并
+/// `close`。Windows 上**带着未读数据关闭会回 RST**，而客户端此刻可能还在写 body ——
+/// 它的 `send()` 就报 `error sending request`，用例把它读成"连不上上游"
+/// （`PROVIDER_UNREACHABLE`），于是一条真断言变成**偶发红灯**。
+/// 2026-10 实测：全量并行跑约 **1/10 轮**红、单跑必绿；**HEAD 上也一样** ——
+/// 这是假网关的既有毛病，不是被测代码的问题。
+///
+/// 认不出 `content-length`（GET / chunked）时**立刻返回**：那种情况下对端在等我们的回包，
+/// 一直读到对端关闭会**死等**。整段读另有 2 秒上限 —— 宁可少读，也不让用例卡住。
+pub(crate) async fn read_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut all: Vec<u8> = Vec::new();
+    let mut chunk = vec![0u8; 16 * 1024];
+    let mut headers_done = false;
+    let mut complete_at: Option<usize> = None;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match socket.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(n) => all.extend_from_slice(&chunk[..n]),
+                Err(_) => break,
+            }
+            if !headers_done {
+                let Some(pos) = all.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+                headers_done = true;
+                complete_at = content_length_of(&all[..pos]).map(|len| pos + 4 + len);
+            }
+            match complete_at {
+                // 头 + body 都收齐了
+                Some(total) if all.len() >= total => break,
+                // 认不出长度 → 别等对端关（它在等我们回包）
+                None => break,
+                // 还没读够 → 继续
+                _ => {}
+            }
+        }
+    })
+    .await;
+    all
+}
+
+/// 请求行（第一个 `\n` 之前那一段）—— 假网关的分流判据读的就是它。
+pub(crate) fn request_line_of(raw: &[u8]) -> String {
+    String::from_utf8_lossy(raw).lines().next().unwrap_or_default().to_string()
+}
+
+/// 从请求头里取 `content-length`（没有 / 认不出 → `None`）。
+fn content_length_of(head: &[u8]) -> Option<usize> {
+    String::from_utf8_lossy(head).lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if !name.trim().eq_ignore_ascii_case("content-length") {
+            return None;
+        }
+        value.trim().parse().ok()
+    })
+}
+
 /// 假网关：`127.0.0.1:<临时端口>`，只认 `POST /v1/chat/completions?upstream=…`。
 ///
 /// 为什么要一个真 socket 服务器（而不是 mock 掉 `stream_chat`）：
@@ -491,7 +553,7 @@ pub(crate) fn seed_provider_and_model(state: &comfyhub_server_rs::web::routes::A
 ///   R6"已经说出去的话一个字都不能丢"的现场（真·中途断流，而不是事后报错）。
 pub(crate) async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -501,14 +563,12 @@ pub(crate) async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
             let Ok((mut socket, _)) = listener.accept().await else { break };
             let hits = hits.clone();
             tokio::spawn(async move {
-                let mut buf = vec![0u8; 16 * 1024];
-                let Ok(n) = socket.read(&mut buf).await else { return };
-                let request_line = String::from_utf8_lossy(&buf[..n])
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .to_string();
+                // 读干净（含 body）再回 —— 不读就 close 会回 RST，客户端把它读成
+                // "连不上上游"。理由与代价见 [`read_request`]。
+                let request_line = request_line_of(&read_request(&mut socket).await);
                 let reply_429 = |mut socket: tokio::net::TcpStream| async move {
+                    // ⚠ 这里**不再读请求**：调用点已经用 `read_request` 把 body 收干净了
+                    // （不读就 close 会回 RST，客户端报的是"连不上上游"）。
                     let body = r#"{"error":"rate limited"}"#;
                     let head = format!(
                         "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
@@ -548,7 +608,14 @@ pub(crate) async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
                 } else {
                     frames.push(r#"{"choices":[{"delta":{"content":"呀"}}]}"#);
                     frames.push(r#"{"choices":[{"finish_reason":"stop"}]}"#);
-                    frames.push(r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}"#);
+                    // usage 带上 OpenAI 那两处**嵌套明细**（缓存命中 / 思考）：
+                    // 它们曾经在归一化时被整批丢掉。断言在 `ai_executor.rs` 的
+                    // `executor_streams_a_reply_and_persists_parts_in_order`（落库四字段
+                    // + `usage.updated` 平铺四字段那两条）。
+                    // ⚠ 必须**单行**：SSE 是按行切的，JSON 里带换行会被切成半截帧。
+                    frames.push(
+                        r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens_details":{"reasoning_tokens":1}}}"#,
+                    );
                     frames.push("[DONE]");
                 }
                 for frame in frames {
@@ -583,7 +650,7 @@ pub(crate) fn point_at_gateway(state: &comfyhub_server_rs::web::routes::AppState
 /// `tool` 是模型要调的工具名；`arguments` 是它给的参数 JSON。
 /// 第二次请求（带上工具结果的那一轮）回一段正文。
 pub(crate) async fn fake_tool_gateway(tool: &'static str, arguments: &'static str) -> (String, tokio::task::JoinHandle<()>) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -593,9 +660,9 @@ pub(crate) async fn fake_tool_gateway(tool: &'static str, arguments: &'static st
             let Ok((mut socket, _)) = listener.accept().await else { break };
             round += 1;
             tokio::spawn(async move {
-                // 只读一次：Content-Length 那一批够我们判断"这是第几轮"（测试用的请求体很小）
-                let mut buf = vec![0u8; 256 * 1024];
-                let _ = socket.read(&mut buf).await;
+                // 读干净再回（理由见 [`read_request`]）—— 这里不看请求内容，只按**轮次**分流。
+                // ⚠ 别退回"只读一次"：请求体里带着整份系统提示 + 37 个工具的 schema，不小。
+                let _ = read_request(&mut socket).await;
                 let _ = socket
                     .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
                     .await;
@@ -660,7 +727,7 @@ pub(crate) fn set_policy(state: &comfyhub_server_rs::web::routes::AppState, json
 pub(crate) async fn scripted_tool_gateway(
     script: Vec<Vec<(&'static str, &'static str)>>,
 ) -> (String, tokio::task::JoinHandle<()>) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -675,8 +742,8 @@ pub(crate) async fn scripted_tool_gateway(
             let counter = counter.clone();
             round += 1;
             tokio::spawn(async move {
-                let mut buf = vec![0u8; 256 * 1024];
-                let _ = socket.read(&mut buf).await;
+                // 读干净再回（理由见 [`read_request`]）
+                let _ = read_request(&mut socket).await;
                 let _ = socket
                     .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
                     .await;
@@ -732,7 +799,7 @@ pub(crate) async fn reasoning_echo_gateway() -> (
     tokio::task::JoinHandle<()>,
     std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 ) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -745,10 +812,9 @@ pub(crate) async fn reasoning_echo_gateway() -> (
             round += 1;
             let recorder = recorder.clone();
             tokio::spawn(async move {
-                // 只读一次：请求体不大（测试用的系统提示 + 两轮历史），一次 read 够判断
-                let mut buf = vec![0u8; 512 * 1024];
-                let n = socket.read(&mut buf).await.unwrap_or(0);
-                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                // 读**整份**请求（要按内容断言「思考有没有被回传」），顺便避免
+                // "没读完就 close"那颗 RST —— 理由见 [`read_request`]。
+                let request = String::from_utf8_lossy(&read_request(&mut socket).await).to_string();
                 recorder.lock().unwrap().push(request.clone());
                 if round >= 2 && !request.contains("reasoning_text") {
                     let body = r#"{"error":{"message":"The `reasoning_text` in the thinking mode must be passed back to the API.","type":"invalid_request_error"}}"#;
@@ -823,7 +889,14 @@ pub(crate) fn assistant_text(state: &comfyhub_server_rs::web::routes::AppState, 
 }
 
 /// 某个 Run 落库的事件类型（按 seq 升序）。
+///
+/// ⚠ **先 flush 再查**：事件是**攒批**写的（`EVENT_BATCH = 200`），而 `finish_run` 的顺序是
+/// `emit(run.completed)` → `runs::finish`（**状态在这一步变终态**）→ `bus.close`（flush）。
+/// 所以 `wait_for_run` 一返回，事件**可能还没落库** —— 直接查库就是一条偶发红灯
+/// （2026-10 全量并行跑撞到过两次，单跑必绿）。
+/// 生产侧的订阅路径正是这么做的：`SseStream::poll_next` 每轮读库前先 `bus.flush`，同一个理由。
 pub(crate) fn event_types(state: &comfyhub_server_rs::web::routes::AppState, run_id: &str) -> Vec<String> {
+    let _ = state.bus.flush(state, run_id);
     state
         .with(|conn| {
             let mut stmt = conn
@@ -834,6 +907,32 @@ pub(crate) fn event_types(state: &comfyhub_server_rs::web::routes::AppState, run
             Ok(rows)
         })
         .unwrap()
+}
+
+/// 某个 Run 里**第一条**指定类型事件的载荷（`None` = 没收过这个类型）。
+///
+/// 与 [`event_types`] 同样先 flush。用它，**别在用例里自己 `query_row(..).unwrap()`** ——
+/// 后者对"还没落库"和"落了两条"都会 panic，是一颗偶发红灯。
+pub(crate) fn event_payload(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    run_id: &str,
+    kind: &str,
+) -> Option<Value> {
+    use rusqlite::OptionalExtension;
+    let _ = state.bus.flush(state, run_id);
+    let raw: Option<String> = state
+        .with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT payload_json FROM ai_run_events WHERE run_id = ?1 AND event_type = ?2 \
+                     ORDER BY seq LIMIT 1",
+                    rusqlite::params![run_id, kind],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?)
+        })
+        .unwrap();
+    raw.map(|text| serde_json::from_str(&text).expect("payload_json 必须是合法 JSON"))
 }
 
 /// 等一次 Run 收尾（执行器是**后台任务**：它不可能在 `POST /runs` 的响应里就跑完）。
@@ -1044,15 +1143,15 @@ pub(crate) fn configure_shared_output(state: &comfyhub_server_rs::web::routes::A
 /// `[number, prompt_id, graph, extra_data, outputs]`，标题在
 /// `extra_data.extra_pnginfo.workflow.extra.title`）。
 pub(crate) async fn fake_comfy_queue(queue_json: &'static str) -> (String, tokio::task::JoinHandle<()>) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {
         loop {
             let Ok((mut socket, _)) = listener.accept().await else { break };
             tokio::spawn(async move {
-                let mut buf = vec![0u8; 8 * 1024];
-                let _ = socket.read(&mut buf).await;
+                // 读干净再回（理由见 [`read_request`]）；这一档只看轮次/路径，不看内容
+                let _ = read_request(&mut socket).await;
                 let body = queue_json;
                 let response = format!(
                     "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -1123,17 +1222,15 @@ pub(crate) async fn fake_comfy_full(
     view_body: &'static [u8],
     object_info: &'static str,
 ) -> (String, tokio::task::JoinHandle<()>) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {
         loop {
             let Ok((mut socket, _)) = listener.accept().await else { break };
             tokio::spawn(async move {
-                let mut buf = vec![0u8; 16 * 1024];
-                let Ok(read) = socket.read(&mut buf).await else { return };
-                let request = String::from_utf8_lossy(&buf[..read]).to_string();
-                let head = request.lines().next().unwrap_or("").to_string();
+                // 读干净再回（理由见 [`read_request`]）—— 下面的分流读的是**请求行**
+                let head = request_line_of(&read_request(&mut socket).await);
                 if head.contains("/object_info") {
                     let body = object_info;
                     let response = format!(

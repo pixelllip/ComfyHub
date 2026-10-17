@@ -109,10 +109,26 @@ pub fn delete(state: &AppState, id: i64) -> Result<(), ApiError> {
     };
 
     let ok = state.write(|tx| {
+        // 删之前先记住它属于哪个集合 —— 删完这一行就查不到了
+        let collection_id: Option<i64> = tx
+            .query_row(
+                "SELECT collection_id FROM media_assets WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
         let affected = tx.execute("DELETE FROM media_assets WHERE id = ?1", params![id])?;
         if affected > 0 {
             // 标签计数要跟着变（`media_tags` 已被 CASCADE 清掉，R1 生效的前提下）
             repo::refresh_use_counts(tx)?;
+            // 集合空了就把它一起删掉（2026-10-11）。
+            // 不删的表现是"删到 0 张还留一个空组"，而且集合行会**永久累积**
+            // （外键是 ON DELETE SET NULL，删产物不会带走集合行）。
+            // ⚠ 注意这里删的是**整个集合**：用户把一组图逐张删完时，那个组就该消失。
+            if let Some(cid) = collection_id {
+                crate::media::collection::prune_if_empty(tx, cid)?;
+            }
         }
         Ok(affected > 0)
     })?;

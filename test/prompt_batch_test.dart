@@ -87,8 +87,12 @@ Future<void> _pump(WidgetTester tester, LibraryStore store) async {
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
-    ChangeNotifierProvider<LibraryStore>.value(
-      value: store,
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<LibraryStore>.value(value: store),
+        // 预设页的筛选栏要读 `SettingsStore`（折叠状态记在它里面）
+        ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+      ],
       child: const MaterialApp(home: PromptsPage()),
     ),
   );

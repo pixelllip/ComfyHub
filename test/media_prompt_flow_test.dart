@@ -118,6 +118,11 @@ MockClient _buildMockClient() {
       body = _promptJson;
     } else if (path == '/api/prompts/1/media') {
       body = [_mediaJson];
+    } else if (path == '/api/presets/1/media') {
+      // 提示词详情现在按"**同款提示词**"取关联产物（`/api/presets/{id}/media`，
+      // 2026-10-11）：自动捕获的产物指向另一条提示词行，按 prompt_id 直连会漏掉它们。
+      // 夹具里两者等价，所以回同一份。
+      body = [_mediaJson];
     } else if (path == '/api/tags') {
       body = [
         {'id': 3, 'name': '赛博朋克', 'useCount': 1},
@@ -157,8 +162,12 @@ Future<LibraryStore> _makeStore() async {
   return store;
 }
 
-Widget _wrap(LibraryStore store) => ChangeNotifierProvider<LibraryStore>.value(
-      value: store,
+Widget _wrap(LibraryStore store) => MultiProvider(
+      providers: [
+        ChangeNotifierProvider<LibraryStore>.value(value: store),
+        // 画廊筛选栏要读 `SettingsStore`（折叠状态记在它里面）
+        ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+      ],
       child: const MaterialApp(home: GalleryPage()),
     );
 

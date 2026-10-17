@@ -27,6 +27,9 @@ fn synced_scope_matches_the_master_plan() {
         "prompt_tags",
         "media_assets",
         "media_tags",
+        // 2026-10-11：产物集合（同源微调归组）。跟着 media_assets 走 ——
+        // 少了它，手机上的 `collection_id` 会指向一个它那边不存在的集合。
+        "media_collections",
         "ai_conversations",
         "ai_messages",
         "ai_message_parts",

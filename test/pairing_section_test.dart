@@ -43,6 +43,34 @@ Finder _masterSwitch() => find.ancestor(
     );
 
 void main() {
+  // 「允许移动端连接」与「本地服务」那张卡里的「允许手机 / 局域网设备连接」
+  // **不是同一件事**，两个名字却都像"允许手机连"（用户 2026-10-13 问过
+  // "是不是重复了"）：
+  //   · 那个 = 后端**听不听**局域网（起进程时定，要重启）；
+  //   · 这个 = **配对闸门**：局域网请求要不要带令牌。
+  // 关掉这个不是"不许连"，而是"局域网内任何设备都能连、不用令牌"（更松）。
+  // 两边都必须把顺序写出来，否则用户分不清"我明明开了，手机还是连不上"卡在哪一道。
+  testWidgets('闸门这一项要写明它与「本地服务」那个开关的关系（防"看着像重复"）',
+      (tester) async {
+    tester.view.physicalSize = const Size(900, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final client = MockClient((request) async => _json({
+          'enabled': true,
+          'hasToken': true,
+          'devices': <Object>[],
+          'pending': <Object>[],
+        }));
+
+    await tester.pumpWidget(_host(client: client));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('② 已开启'), findsOneWidget);
+    expect(find.textContaining('「本地服务」'), findsOneWidget,
+        reason: '必须指出另一道闸在哪，否则两个开关看着就是重复的');
+  });
+
   testWidgets('桌面：后端没接受开关时，开关仍是"关"，并且如实说为什么', (tester) async {
     tester.view.physicalSize = const Size(900, 1600);
     tester.view.devicePixelRatio = 1.0;

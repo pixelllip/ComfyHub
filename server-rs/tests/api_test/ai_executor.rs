@@ -39,8 +39,19 @@ async fn executor_streams_a_reply_and_persists_parts_in_order() {
     assert_eq!(assistant["text"], "你好呀", "三段增量拼成完整正文");
     assert_eq!(assistant["status"], "complete");
     assert_eq!(assistant["providerResponseId"], "chatcmpl-1", "上游给的响应 id 要记下来");
-    assert_eq!(assistant["usage"]["prompt_tokens"], 7, "usage 原样落库（{assistant}）");
-    assert_eq!(assistant["usage"]["total_tokens"], 10);
+    // usage 落库/下发的是**契约的四个字段**（归一化在 `upstream::TokenUsage`）：
+    // 假网关给的是 OpenAI 那套嵌套明细，**缓存命中与思考一个都不许丢** ——
+    // 它们曾经在归一化时被整批丢掉，于是界面上那行「缓存命中」在桌面上从未出现过。
+    assert_eq!(
+        assistant["usage"],
+        serde_json::json!({
+            "inputTokens": 7,
+            "outputTokens": 3,
+            "cachedTokens": 4,
+            "reasoningTokens": 1,
+        }),
+        "usage 按契约四字段落库（{assistant}）"
+    );
 
     // 有序块：**思考在前、正文在后**（顺序乱了工具卡位置就错，而正文还在）
     let parts = assistant["parts"].as_array().unwrap();
@@ -61,6 +72,21 @@ async fn executor_streams_a_reply_and_persists_parts_in_order() {
         "三段正文 → 三条事件（逐字流式）：{types:?}"
     );
     assert!(types.contains(&"usage.updated".to_string()));
+    // `usage.updated` 的载荷是**平铺的四个键**（`docs/run-event-contract.md` §2）——
+    // 与手机 harness 的 `EventPayloads.usage` 同形，不是 `{"usage": {...}}` 那种包一层。
+    // ⚠ 这一条是契约的一致性防线：两端各写一种形状时，界面读哪一端就决定了它有没有 token 显示。
+    let usage_payload = event_payload(&state, &run_id, "usage.updated")
+        .expect("usage.updated 必须落库 —— 缓存命中率就在它里面，界面那行「缓存命中」靠它");
+    assert_eq!(
+        usage_payload,
+        serde_json::json!({
+            "inputTokens": 7,
+            "outputTokens": 3,
+            "cachedTokens": 4,
+            "reasoningTokens": 1,
+        }),
+        "usage.updated 平铺四字段（契约 §2 / 手机 harness 同形）"
+    );
     assert_eq!(types.last().unwrap(), "run.completed");
     let seqs = state
         .with(|conn| {
@@ -944,10 +970,14 @@ async fn a_failed_run_still_persists_the_usage_of_completed_rounds() {
     assert_eq!(assistant["status"], "failed");
     assert_eq!(assistant["text"], "你好", "第一轮已经说出去的话照旧要落下来（R6）");
     assert_eq!(
-        assistant["usage"]["prompt_tokens"], 7,
+        assistant["usage"]["inputTokens"], 7,
         "跑完的那一轮的 usage 必须留在失败的消息上：{assistant}"
     );
-    assert_eq!(assistant["usage"]["total_tokens"], 10);
+    assert_eq!(assistant["usage"]["outputTokens"], 3);
+    // 这一条走的是假网关的 `usage-then-die` 分支（那份 usage **没有**嵌套明细）：
+    // 认不出来就如实给 0，**不编数字**（契约：没有就是 0）
+    assert_eq!(assistant["usage"]["cachedTokens"], 0);
+    assert_eq!(assistant["usage"]["reasoningTokens"], 0);
 
     gateway.abort();
 }

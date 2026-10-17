@@ -500,13 +500,17 @@ fn model_inventory(
     crate::comfy::comfy_models::inventory(object_info, Some(&project_root), &model_dirs)
 }
 
-/// 三道预检：返回（**阻断性**的拒因，**提示性**的警告）。
+/// 三道预检：返回（**阻断性**的拒因，**提示性**的警告，**这份图认不认负面提示词**）。
 ///
 /// 图是**最终那张**（`overrides` / `connections` 都应用完之后），与 Kotlin 的位置一致。
-/// `/object_info` **只问一次**：审核与两道实例侧检查吃的是同一份响应 ——
+/// `/object_info` **只问一次**：审核、两道实例侧检查、负面能力判定吃的是同一份响应 ——
 /// 分两次请求的话，两个闸门可能对着两个不同的实例状态下结论。
-async fn preflight(base: &str, graph: &Value, state: &AppState) -> (Option<String>, Vec<String>) {
-    let Some(nodes) = graph.as_object() else { return (None, Vec::new()) };
+async fn preflight(
+    base: &str,
+    graph: &Value,
+    state: &AppState,
+) -> (Option<String>, Vec<String>, Option<Vec<String>>) {
+    let Some(nodes) = graph.as_object() else { return (None, Vec::new(), None) };
     let info = crate::comfy::comfy_client::get_json(&format!("{base}/object_info")).await.ok();
     let object_info = info.as_ref().and_then(Value::as_object);
     let inventory = model_inventory(state, object_info);
@@ -528,7 +532,58 @@ async fn preflight(base: &str, graph: &Value, state: &AppState) -> (Option<Strin
     if let Some(notes) = report.render_non_blocking() {
         warnings.push(format!("⚠ 提交前的审核提示：\n{notes}"));
     }
-    (refusal, warnings)
+    let negative = negative_capability(graph, object_info);
+    (refusal, warnings, negative)
+}
+
+/// **这份工作流认不认负面提示词**（2026-10-11）。
+///
+/// 有些 turbo 模型的工作流根本没有负面输入，用户/模型发过去的负面提示词**无处可放** ——
+/// 这件事只能从**目标工作流**上看出来（它是工作流的属性，不是预设的属性）。
+///
+/// 判据：按 `/object_info` 的声明，图里有没有**连了线**的 `negative` 条件输入。
+/// * 只看"图里有没有 CLIPTextEncode"是错的 —— 每个工作流都有一个（正面那一个）；
+/// * 只看"有没有 negative 输入声明"也不够 —— 没接线等于没用到；
+/// * **拿不到 `/object_info` 就回 `None`**（不知道就别猜，与预检同一条纪律）。
+///
+/// 返回的是**接了线的节点类名**（去重排序）；`Some(vec![])` = 查过了、确实没有负面输入。
+fn negative_capability(
+    graph: &Value,
+    object_info: Option<&Map<String, Value>>,
+) -> Option<Vec<String>> {
+    let info = object_info?;
+    let nodes = graph.as_object()?;
+    let mut hits: Vec<String> = Vec::new();
+    for node in nodes.values() {
+        let Some(node) = node.as_object() else { continue };
+        let class = node.get("class_type").and_then(Value::as_str).unwrap_or("");
+        let Some(spec) = info.get(class).and_then(Value::as_object) else { continue };
+        let Some(inputs) = spec.get("input").and_then(Value::as_object) else { continue };
+        // `required` / `optional` 两处都要看（负面多半是 optional）
+        let declares_negative = ["required", "optional"].iter().any(|slot| {
+            inputs
+                .get(*slot)
+                .and_then(Value::as_object)
+                .map(|m| m.contains_key("negative"))
+                .unwrap_or(false)
+        });
+        if !declares_negative {
+            continue;
+        }
+        // **接线才算用到**：值是 `[上游节点id, 槽位]` 那种数组
+        let wired = node
+            .get("inputs")
+            .and_then(Value::as_object)
+            .and_then(|m| m.get("negative"))
+            .map(Value::is_array)
+            .unwrap_or(false);
+        if wired {
+            hits.push(class.to_string());
+        }
+    }
+    hits.sort();
+    hits.dedup();
+    Some(hits)
 }
 
 // ---------------------------------------------------------------------------
@@ -734,7 +789,7 @@ pub async fn tool_submit(
     // 预检放在这里（overrides / connections **都应用完之后**）：检查的就是真正要提交的那张图。
     // 审核里"必跑不了"的三项 + 节点类那一档**拦**；模型文件与审核里非阻断的那些只**警告**
     // （见 `preflight` / `preflight_refusal` 的注释）。
-    let (refusal, warnings) = preflight(&base, &patched, state).await;
+    let (refusal, warnings, negative) = preflight(&base, &patched, state).await;
     if let Some(refusal) = refusal {
         return Err(ToolFailure::new("MODEL_NOT_LOADABLE", refusal));
     }
@@ -892,6 +947,17 @@ pub async fn tool_submit(
     out.insert("mediaIds".into(), json!(submission.media_ids));
     out.insert("mediaCount".into(), json!(submission.media_ids.len()));
     out.insert("nsfw".into(), json!(nsfw));
+    // **这份工作流认不认负面提示词**（2026-10-11）：有些 turbo 模型没有负面输入。
+    //
+    // 为什么要把这个事实交给模型：它是**工作流的属性**，不是预设的属性 ——
+    // 预设那边只有"我只发正面"这个意图（`negativeMode`）。两件事分开之后，
+    // 模型在"用这份预设跑"的时候才能自己判断：负面发不出去就别在正文里吹"已按负面约束"。
+    //
+    // 判据：图里有没有**连着线**的 `negative` 条件输入（按 `/object_info` 的声明算），
+    // 而不是"图里有没有 CLIPTextEncode" —— 后者每个工作流都有（正面那一个）。
+    if let Some(cap) = negative {
+        out.insert("negativeInputs".into(), json!(cap));
+    }
     // 预检的**提示**（不拦）：让模型/用户知道"实例可能看不到这几个模型文件"
     if !warnings.is_empty() {
         out.insert("preflightWarnings".into(), json!(warnings));

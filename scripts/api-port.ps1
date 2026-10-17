@@ -1,9 +1,9 @@
 <#
     API 端口的**唯一解析入口**（2026-09-22，用户要求"不再显式指定端口、启动时自动挑一个"）。
 
-    为什么需要这个文件：端口过去写死在 5 个地方，而且**互不知道** ——
-    后端（`api_port_file.rs` 写）、`settings_store.dart`（App 读）、
-    `settings_store.dart`（App 连谁）、`capture_core.py`（ComfyUI 节点推给谁）。
+    为什么需要这个文件：端口过去写死在好几个地方，而且**互不知道**：
+    后端（`api_port_file.rs` 写）、App（`settings_store.dart` 读）、
+    ComfyUI 捕获扩展（`capture_core.py` 读）。
     过去各处各写各的端口，
     就会出现"后端明明在跑、脚本却说没起来"这种自相矛盾的现场。
 

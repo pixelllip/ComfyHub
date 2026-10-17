@@ -232,7 +232,7 @@ class MediaThumb extends StatelessWidget {
           filterQuality: FilterQuality.low,
           cacheWidth: _decodeWidth(constraints, dpr),
           loadingBuilder: (context, child, progress) =>
-              progress == null ? child : _loadingPlaceholder(),
+              progress == null ? child : _loadingPlaceholder(theme),
           errorBuilder: (context, error, stack) => _placeholder(theme),
         );
       },
@@ -265,8 +265,16 @@ class MediaThumb extends StatelessWidget {
   /// 快速滑动时几十个格子同时在加载 = 每帧几十个 ticker + 几十次图层重绘。
   /// 缩略图走本机后端、通常几十毫秒就好，换个不会动的骨架完全够用
   /// （详情页大图查看器仍保留转圈进度）。
-  Widget _loadingPlaceholder() => const Center(
-        child: Icon(Icons.image_outlined, size: 30, color: Colors.white24),
+  ///
+  /// ⚠ 颜色**必须从主题取**，不能写死 `white24`：它是全 App 唯一一处
+  /// "压在 surface 底色上（而不是压在图片上）的白图标" —— 浅色主题下
+  /// 白底白图标 = 什么都看不见（2026-10-13 加浅色主题时抓到的）。
+  Widget _loadingPlaceholder(ThemeData theme) => Center(
+        child: Icon(
+          Icons.image_outlined,
+          size: 30,
+          color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.35),
+        ),
       );
 
   Widget _placeholder(ThemeData theme) {
@@ -282,8 +290,10 @@ class MediaThumb extends StatelessWidget {
             end: Alignment.bottomRight,
           ),
         ),
-        child: const Center(
-          child: Icon(Icons.graphic_eq, size: 40, color: Colors.white70),
+        child: Center(
+          // 同上：音频那层渐变是"主色系压在 surface 上"，浅色下会变很亮 ——
+          // 图标跟着 `onSurfaceVariant` 走，两套主题都读得清。
+          child: Icon(Icons.graphic_eq, size: 40, color: theme.colorScheme.onSurfaceVariant),
         ),
       );
     }
@@ -296,7 +306,9 @@ class MediaThumb extends StatelessWidget {
           ],
         ),
       ),
-      child: const Center(child: Icon(Icons.movie_outlined, size: 34, color: Colors.white54)),
+      child: Center(
+        child: Icon(Icons.movie_outlined, size: 34, color: theme.colorScheme.onSurfaceVariant),
+      ),
     );
   }
 }

@@ -42,8 +42,43 @@ const COLS: &str = "m.id, m.prompt_id, m.kind, m.title, m.original_name, m.store
      m.size_bytes, m.width, m.height, m.duration_ms, m.sha256, m.source, m.favorite, m.notes,
      m.nsfw, m.created_at, m.updated_at, (m.workflow_json IS NOT NULL) AS has_workflow,
      p.title AS prompt_title, p.positive_prompt AS prompt_positive,
-     p.negative_prompt AS prompt_negative, p.checkpoint, p.seed";
+     p.negative_prompt AS prompt_negative, p.checkpoint, p.seed,
+     m.collection_id AS collection_id,
+     -- `MAX(1, …)`：孤儿产物（collection_id IS NULL）的 COUNT 会是 0，
+     -- 但语义上它是「只有自己一个」→ 1。界面据此决定要不要叠放 / 显示角标，
+     -- 回 0 会让没进组的产物显示成「0 张的组」。
+     MAX(1, (SELECT COUNT(*) FROM media_assets x WHERE x.collection_id = m.collection_id))
+       AS collection_size,
+     -- 集合的**头三张**成员 id（按 created_at 升序，逗号分隔）—— 叠放封面用。
+     -- 放在 SQL 里算，是为了让画廊**一次请求就拿到封面**：
+     -- 否则每个集合格子都要再发一次列成员的请求（一页 24 格 = 24 次）。
+     -- 没进组时子查询为 NULL → 空串（Dart 侧 split 出来是空数组）。
+     COALESCE((SELECT GROUP_CONCAT(x.id) FROM (
+                 SELECT id FROM media_assets y
+                  WHERE y.collection_id = m.collection_id
+                  ORDER BY y.created_at ASC, y.id ASC LIMIT 3
+               ) x), '') AS collection_preview";
 
+/// 列表排序用的 `ORDER BY` 片段（**不许直接拼用户输入**，只认这几档）。
+fn order_clause(sort: Option<&str>) -> &'static str {
+    match sort {
+        Some("oldest") => "m.created_at ASC",
+        Some("updated") => "m.updated_at DESC",
+        Some("name") => "m.original_name ASC",
+        Some("largest") => "m.size_bytes DESC",
+        Some("favorite") => "m.favorite DESC, m.created_at DESC",
+        _ => "m.created_at DESC",
+    }
+}
+
+/// `GET /api/media` 的查询参数。
+///
+/// ⚠ **布尔项一律收成字符串再自己判**（[`bool_param`]），不用 `Option<bool>`：
+/// axum 的 `Query` 用的是严格 bool 解析，**只认 `true` / `false`** —— 发 `1` 会
+/// **整个请求 400**。而 Dart 那边（以及本仓库的 `untagged: '1'` 写法）发的是 `1`。
+/// 实测后果（2026-10-11）：画廊点一下「仅收藏」就变成"加载失败 HTTP 400" ——
+/// 这个筛选**一直是坏的**，而且报的是个看不出原因的 400。
+/// 收成字符串之后：认 `1/0/true/false/yes/no/on/off`，认不出来**当没传**（绝不 400）。
 #[derive(Debug, Deserialize, Default)]
 pub struct MediaQuery {
     q: Option<String>,
@@ -53,11 +88,45 @@ pub struct MediaQuery {
     kind: Option<String>,
     #[serde(rename = "promptId")]
     prompt_id: Option<i64>,
-    favorite: Option<bool>,
-    untagged: Option<bool>,
+    /// 只看某一个集合的成员（详情页的"同批"用得上）。
+    #[serde(rename = "collectionId")]
+    collection_id: Option<i64>,
+    /// **折叠集合**（`collapse=1`）：一个集合只留一条（按 `created_at` 最早那条当代表）。
+    /// 画廊用它把"同一批微调"显示成一个格子（带叠放封面与角标）。
+    collapse: Option<String>,
+    favorite: Option<String>,
+    untagged: Option<String>,
     sort: Option<String>,
     page: Option<i64>,
     size: Option<i64>,
+}
+
+impl MediaQuery {
+    fn collapse(&self) -> bool {
+        bool_param(self.collapse.as_deref())
+    }
+
+    fn favorite(&self) -> bool {
+        bool_param(self.favorite.as_deref())
+    }
+
+    fn untagged(&self) -> bool {
+        bool_param(self.untagged.as_deref())
+    }
+}
+
+/// 宽松的布尔参数：`1/0/true/false/yes/no/on/off` 都认，其余**当没传**。
+///
+/// **绝不报错** —— 一个筛选参数写错不该让整个列表变成 400（那正是这个 bug 的形状：
+/// 用户看到的是"加载失败 HTTP 400"，完全猜不到是"仅收藏"那个开关干的）。
+///
+/// `pub(crate)`：`PromptQuery`（提示词 / 预设列表）也吃同一份判据 ——
+/// 两处各写一遍的话，"产物列表收 1、提示词列表不收"这种漂移不会有用例变红。
+pub(crate) fn bool_param(raw: Option<&str>) -> bool {
+    match raw.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("1") | Some("true") | Some("yes") | Some("on") => true,
+        _ => false,
+    }
 }
 
 /// 列表 / 搜索（`GET /api/media`）。
@@ -137,32 +206,67 @@ pub fn search(state: &AppState, q: &MediaQuery) -> Result<Paged<MediaDto>, ApiEr
             clauses.push("m.prompt_id = ?".to_string());
             args.push(Box::new(prompt_id));
         }
-        if q.favorite == Some(true) {
+        if let Some(collection_id) = q.collection_id {
+            clauses.push("m.collection_id = ?".to_string());
+            args.push(Box::new(collection_id));
+        }
+        if q.favorite() {
             clauses.push("m.favorite = 1".to_string());
         }
-        if q.untagged == Some(true) {
+        if q.untagged() {
             clauses.push("m.prompt_id IS NULL".to_string());
         }
         if !clauses.is_empty() {
             where_sql = format!("WHERE {}", clauses.join(" AND "));
         }
 
+        let order = order_clause(q.sort.as_deref());
+
+        // 折叠（`collapse=1`）：一个集合只留**一个代表**，画廊据此把"同一批微调"
+        // 显示成一个格子（叠放封面 + 角标）。
+        //
+        // 代表 = 按 `created_at` 升序的第一条。用 `NOT EXISTS(更早的兄弟)` 表达，
+        // **不用 `MIN(id)`** —— 代表必须与 `ORDER BY … ASC` 的第一条严格一致，
+        // 否则会出现"折叠后总数对、但某条代表被漏掉"（总数与列表对不上）。
+        //
+        // ⚠⚠ 这里的写法踩过一次（2026-10-11，上线前真库上量出来的）：
+        // 曾经写成"未分组的 **或** 不是任何集合成员"，那等于**把所有集合成员全排除掉** ——
+        // 25 条产物折叠后回 21（只有孤儿），**4 个集合的格子在画廊里根本不出现**，
+        // 而且 `pages=1` 所以翻页也补不回来。用户看到的是"这几张图没了"。
+        // 正确语义是"**未分组的** ∪ **每个集合里最早的那条**"。
+        //
+        // ⚠ 代价（刻意取舍，别当 bug）：**搜索 / 标签筛选只认代表那条**。
+        // 否则会出现"搜到了这一组的第 3 张，但那一组在列表里根本不显示"——
+        // 用户看到的是"搜索结果少了几组，而且看不出为什么"。
+        // 折叠视图下用户看到的就是代表，所以按代表筛是一致的。
+        let collapse = q.collapse();
+        let representative_only = if where_sql.is_empty() {
+            "WHERE (m.collection_id IS NULL OR NOT EXISTS (
+                   SELECT 1 FROM media_assets x
+                    WHERE x.collection_id = m.collection_id
+                      AND (x.created_at < m.created_at
+                           OR (x.created_at = m.created_at AND x.id < m.id))))"
+                .to_string()
+        } else {
+            format!(
+                "{where_sql} AND (m.collection_id IS NULL OR NOT EXISTS (
+                   SELECT 1 FROM media_assets x
+                    WHERE x.collection_id = m.collection_id
+                      AND (x.created_at < m.created_at
+                           OR (x.created_at = m.created_at AND x.id < m.id))))"
+            )
+        };
+        let total_where = if collapse { &representative_only } else { &where_sql };
         let total: i64 = {
-            let sql = format!("SELECT COUNT(*) {FROM} {where_sql}");
+            let sql = format!("SELECT COUNT(*) {FROM} {total_where}");
             let mut stmt = conn.prepare(&sql)?;
             let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|a| a.as_ref()).collect();
             stmt.query_row(refs.as_slice(), |row| row.get(0))?
         };
 
-        let order = match q.sort.as_deref() {
-            Some("oldest") => "m.created_at ASC",
-            Some("updated") => "m.updated_at DESC",
-            Some("name") => "m.original_name ASC",
-            Some("largest") => "m.size_bytes DESC",
-            Some("favorite") => "m.favorite DESC, m.created_at DESC",
-            _ => "m.created_at DESC",
-        };
-        let sql = format!("SELECT {COLS} {FROM} {where_sql} ORDER BY {order} LIMIT ? OFFSET ?");
+        // 列表本身也要只留代表 —— 否则"总共 12 组"配上 40 个格子。
+        let list_where = if collapse { &representative_only } else { &where_sql };
+        let sql = format!("SELECT {COLS} {FROM} {list_where} ORDER BY {order} LIMIT ? OFFSET ?");
         let mut stmt = conn.prepare(&sql)?;
         {
             let mut all: Vec<&dyn rusqlite::ToSql> = args.iter().map(|a| a.as_ref()).collect();
@@ -502,6 +606,39 @@ pub async fn media_thumb(state: AppState, id: i64) -> Result<Response, ApiError>
     }
     Ok(builder.body(Body::from(bytes)).unwrap())
 }
+/// 按**一组 id** 取产物（`GET /api/presets/{id}/media` 用）。
+///
+/// 三条：
+///  1. **顺序跟着传进来的 id 顺序**（调用方给的是按时间升序的"关联产物"，界面照它排）；
+///     所以这里在 Rust 侧重排，而不是靠 SQL 的 `IN`（`IN` 不保证顺序）。
+///  2. 空列表直接回空，**不拼一条 `IN ()` 的非法 SQL**。
+///  3. 查不到的 id 静默跳过（产物可能刚好被删了）—— 不报错、也不编一条假数据。
+pub fn list_by_ids(state: &AppState, ids: &[i64]) -> Result<Vec<MediaDto>, ApiError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    state.with(|conn| {
+        let marks = vec!["?"; ids.len()].join(",");
+        let sql = format!("SELECT {COLS} {FROM} WHERE m.id IN ({marks})");
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(params.as_slice(), |row| media_from_row(row))?;
+        let mut found = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        for item in found.iter_mut() {
+            item.prompt_tags = merged_tags(conn, item)?;
+        }
+        // 按调用方给的顺序重排（`IN` 出来的顺序是 SQLite 自己的）
+        let mut out: Vec<MediaDto> = Vec::with_capacity(found.len());
+        for id in ids {
+            if let Some(pos) = found.iter().position(|m| m.id == *id) {
+                out.push(found.swap_remove(pos));
+            }
+        }
+        Ok(out)
+    })
+}
+
 /// `GET /api/prompts/{id}/media` —— 某个提示词下的全部产物（按创建时间倒序）。
 ///
 /// ⚠ 与 Kotlin 一致：**提示词不存在也回 200 + `[]`**（不做存在性检查）。
@@ -549,7 +686,7 @@ pub fn prompt_of_media(state: &AppState, media_id: i64) -> Result<Option<crate::
             match prompt {
                 Some(mut p) => {
                     p.tags = crate::web::routes::tags_of(conn, p.id)?;
-                    p.media_count = crate::web::routes::media_count_of(conn, p.id)?;
+                    p.media_count = crate::web::routes::media_count_matching(conn, p.id)?;
                     Ok(Some(Some(p)))
                 }
                 None => Ok(Some(None)),

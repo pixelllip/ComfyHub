@@ -557,28 +557,19 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, '发送'));
     await tester.pumpAndSettle();
 
-    // 输入区宽度（360 - 两侧 12）不够一行放下宽版控件 + token 汇总 + 发送 → 换行，
-    // 而且控件退成紧凑图标
-    expect(find.byKey(const Key('ai-composer-two-row')), findsOneWidget,
-        reason: '窄到放不下时，底行要换行而不是把控件裁掉');
-
+    // 输入区宽度（360 - 两侧 12）= 336 < 440 → 控件退成**图标**档（见 `_ComposerLabel`）
+    // ★ 底行**始终是一排**（两行排版 2026-10-11 已删）
+    expect(find.byKey(const Key('ai-composer-two-row')), findsNothing,
+        reason: '两行排版已删除：窄了该压文字，不该折成两行');
     final input = tester.getRect(find.byType(TextField).first);
     final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
-    expect(send.right, closeTo(input.right, 1), reason: '发送按钮仍然贴右');
-    expect(tester.takeException(), isNull, reason: '窄窗口不许出现 RenderFlex overflow');
+    final attach = tester.getRect(find.byTooltip('添加附件'));
+    expect(send.right, closeTo(input.right, 1), reason: '发送按钮贴右（和输入框右边缘对齐）');
+    expect((send.center.dy - attach.center.dy).abs(), lessThan(6),
+        reason: '发送必须和操作控件同一排');
+    expect(tester.takeException(), isNull, reason: '360 宽下不许 overflow');
 
-    // 底行里不许再出现横向滚动（用户明确不要"一行放不下就左右拖"）
-    final horizontal = find.byType(Scrollable).evaluate().where((e) {
-      final s = e.widget as Scrollable;
-      if (s.axisDirection != AxisDirection.right && s.axisDirection != AxisDirection.left) {
-        return false;
-      }
-      return s.restorationId != 'editable'; // TextField 自己的光标滚动，不算
-    });
-    expect(horizontal, isEmpty, reason: '输入区不许再靠横向滚动兜底');
-
-    // 四枚控件都还在（一个都没被丢掉），都在输入区里、没有被裁。
-    // 窄屏是**图标**形态，所以按 tooltip 找（tooltip 里带着当前档位/模型名，信息没丢）
+    // 四枚控件都还在（一个都没被丢掉），信息进 tooltip。
     //
     // 「模型选择」那条**按前缀找**：换一个 Provider 之后光看模型名认不出它是谁家的，
     // 所以紧凑形态的 tooltip 额外带着来源（2026-10：工作台的模型按 Provider 分组，
@@ -609,10 +600,12 @@ void main() {
           reason: '${entry.key} 不能被从右边裁掉');
     }
 
-    // 四枚图标 + 发送：360（内容区 336）时整排一次放得下，发送收在最右
+    // 四枚 + 发送：360（内容区 336）时整排一次放得下，发送收在最右
     for (final entry in controls.entries) {
       expect((tester.getRect(entry.value.last).center.dy - send.center.dy).abs(), lessThan(6),
           reason: '${entry.key} 要和发送按钮同一排');
+      expect(tester.getRect(entry.value.last).height, greaterThanOrEqualTo(44),
+          reason: '${entry.key} 的命中高度要 ≥44（不然点不准）');
     }
     // 整排贴着输入区右边缘收尾（收在发送按钮上）
     expect(send.right, closeTo(input.right, 1),
@@ -648,7 +641,11 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, '发送'));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('ai-composer-two-row')), findsOneWidget);
+    // ★ 底行**始终是一排**（用户 2026-10-11："在其他特定宽度下，控件变成两行排列也很难看"）。
+    // 以前 560 以下会切到 `ai-composer-two-row` 那个两行布局 —— 现在那个分支已经删了，
+    // 判据只剩"窗口宽度"，窄了就压缩文字/退图标，**不折行**。
+    expect(find.byKey(const Key('ai-composer-two-row')), findsNothing,
+        reason: '两行排版已删除：窄了该压文字，不该折成两行');
     final input = tester.getRect(find.byType(TextField).first);
     final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
     final attach = tester.getRect(find.byTooltip('添加附件'));
@@ -656,14 +653,33 @@ void main() {
 
     // 附件和发送**同一排**（发送是个固定宽的按钮，不该独占一行），
     // 整排都落在输入区里，没有任何 RenderFlex overflow。
-    // 实测 320（内容区 296）：发送 94 + 附件 48 + 权限 50 + 模型 38 + 思考 38
-    // + 4×4 间距 = 284 —— 五枚一排放得下，发送收在最右。
     expect((send.center.dy - attach.center.dy).abs(), lessThan(6),
         reason: '发送必须和操作控件同一排');
     expect(attach.left, greaterThanOrEqualTo(input.left - 0.5));
     expect(attach.left, closeTo(input.left, 5),
-        reason: '最窄档下操作控件同样从左边起排（用户：除了发送，其他都靠左）');
+        reason: '操作控件从左边起排（用户：除了发送，其他都靠左）');
     expect(tester.takeException(), isNull, reason: '320 宽下不许 overflow');
+
+    // ★ 每一枚操作控件都要**够大、点得准**（用户 2026-10-11："按钮太小了比较难点"）。
+    // 44 是 Windows / Material 都认的最小可点尺寸。
+    final controls320 = <String, Finder>{
+      '添加附件': find.byTooltip('添加附件'),
+      '权限档': find.byTooltip(
+          '当前：${AiToolPolicy.modeFullLabel} —— AI 调用工具不会等你批准'
+          '（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
+      '思考强度': find.byTooltip(
+          '不支持思考 —— 该模型未声明推理能力，请到「设置 → AI 模型」声明'),
+    };
+    for (final entry in controls320.entries) {
+      expect(entry.value, findsWidgets, reason: '${entry.key} 必须还在底行里');
+      final rect = tester.getRect(entry.value.last);
+      expect(rect.height, greaterThanOrEqualTo(44),
+          reason: '${entry.key} 的命中高度要 ≥44（不然点不准）');
+      expect(rect.center.dy, closeTo(attach.center.dy, 6),
+          reason: '${entry.key} 和附件同一排');
+      expect(rect.right, lessThanOrEqualTo(input.right + 0.5),
+          reason: '${entry.key} 不能被从右边裁掉');
+    }
 
     // 操作控件全都排在发送按钮**左边**（发送仍然是最右那一枚）
     final effort = tester.getRect(
@@ -675,9 +691,59 @@ void main() {
     expect(find.textContaining('本对话 ↑'), findsNothing);
   });
 
-  // 反向保险：窗口宽裕时**不换行**（否则底行会白白多出一行高度）
-  testWidgets('宽窗口输入区底行仍然是一行', (tester) async {
+  // ★ 三档文字密度（2026-10-11）：判据是**窗口宽度**，不是平台。
+  //
+  // 用户两条原话：
+  //   · "AI 工作台界面下方的控件，有时候按钮太小了比较难点，也没显示出有用的关键信息；
+  //     在其他特定宽度下，控件变成两行排列也很难看。"
+  //   · "还有是判据是窗口宽度不是平台哦。"
+  //
+  // 所以这一组在**同一台机器**上只改窗口宽度，看它怎么变 —— 平台一个字都不参与。
+  // ⚠ 每档单独一条用例（**不要在同一条里反复 pumpWidget 换尺寸**）：
+  // 换了尺寸之后旧的 element 树还挂着，`find` 会看到两份混在一起的东西。
+  testWidgets('底行密度·宽窗口：给全称（"自动允许（无需批准）"）', (tester) async {
     tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(await buildAiHomePage(permissionMode: AiToolPolicy.modeFull));
+    await tester.pumpAndSettle();
+    expect(find.text(AiToolPolicy.modeFullLabel), findsOneWidget, reason: '宽窗口给全称');
+    expect(find.byKey(const Key('ai-composer-two-row')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('底行密度·中等窗口：给短标签（"自动"），不能退成没有信息的图标', (tester) async {
+    tester.view.physicalSize = const Size(960, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(await buildAiHomePage(permissionMode: AiToolPolicy.modeFull));
+    await tester.pumpAndSettle();
+    expect(find.text(AiToolPolicy.modeFullLabel), findsNothing, reason: '中档不该再铺全称');
+    expect(find.text('自动'), findsOneWidget, reason: '中档要给短标签');
+    expect(find.byKey(const Key('ai-composer-two-row')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('底行密度·最窄窗口：退成图标，但档位仍可查、命中高度仍 ≥44', (tester) async {
+    tester.view.physicalSize = const Size(340, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(await buildAiHomePage(permissionMode: AiToolPolicy.modeFull));
+    await tester.pumpAndSettle();
+    expect(find.text('自动'), findsNothing, reason: '最窄档退成图标');
+    final permTip = find.byTooltip(
+        '当前：${AiToolPolicy.modeFullLabel} —— AI 调用工具不会等你批准'
+        '（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。');
+    expect(permTip, findsOneWidget, reason: '退成图标后当前档位必须还能查到（tooltip）');
+    expect(tester.getRect(permTip).height, greaterThanOrEqualTo(44),
+        reason: '最窄档也要点得准（用户："按钮太小了比较难点"）');
+    expect(find.byKey(const Key('ai-composer-two-row')), findsNothing,
+        reason: '最窄档也不许折成两行');
+    expect(tester.takeException(), isNull, reason: '340 宽下不许 overflow');
+  });
+
+  // 反向保险：窗口宽裕时**不换行**（否则底行会白白多出一行高度）
+  testWidgets('宽窗口输入区底行仍然是一行', (tester) async {    tester.view.physicalSize = const Size(1600, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
@@ -857,7 +923,10 @@ void main() {
   // --- 思考强度（AIH-056） ------------------------------------------------
 
   testWidgets('模型没声明思考档位时选择器置灰，并说明原因', (tester) async {
-    tester.view.physicalSize = const Size(1200, 900);
+    // ⚠ 窗口要够宽（1600）：2026-10-11 起底行控件有**三档文字密度**
+    // （全称 / 短标签 / 纯图标，见 `_ComposerLabel`），1200 宽时对话栏只剩 ~635，
+    // 走的是**短标签**档（显示"不支持"）。真实桌面窗口（1600）才是全称档。
+    tester.view.physicalSize = const Size(1600, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 

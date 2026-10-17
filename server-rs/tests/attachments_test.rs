@@ -173,6 +173,12 @@ async fn recording_gateway() -> (String, Arc<Mutex<Vec<String>>>, tokio::task::J
             let Ok((mut socket, _)) = listener.accept().await else { break };
             let store = store.clone();
             tokio::spawn(async move {
+                // ⚠ 与 `api_test/common.rs` 的 `read_request` 是**同一件事的两份实现**：
+                // 那边已经改成"把 body 读干净再回"，这边还是"只读一次"。
+                // 请求体一旦超过这个 256KB（内联图片 / 大附件就会），close 时带着未读数据
+                // 在 Windows 上回 RST，客户端把它读成"连不上上游" —— 症状是**偶发红灯**，
+                // 而且这里还要靠整份 body 做断言，截断了断言会看起来像"功能坏了"。
+                // 那份助手的推导与实测记录在 `api_test/common.rs::read_request`；修的时候抄过来。
                 let mut buf = vec![0u8; 256 * 1024];
                 let Ok(n) = socket.read(&mut buf).await else { return };
                 let request = String::from_utf8_lossy(&buf[..n]).to_string();

@@ -6,7 +6,10 @@
 //   用户得横向拖才看得见。用户明确说这样**不符合直觉**：
 //   「一行显示不完的控件用两行显示，两行还不行就三行」。
 //
-// 现在统一走 `FilterChipRow`（`Wrap`）。这组用例盯的就是：
+// 现在统一走会折行的容器：
+//   · 画廊 / 预设页 = `FilterGroupRow` + `FilterGroup`（2026-10-11 起"组内联排、整组换行"）；
+//   · 标签页仍是 `FilterChipRow`（`Wrap`）。
+// 这组用例盯的就是：
 //   ① 一行放不下时**真的折行**（不是被裁）；
 //   ② 每个控件都完整落在页面里（没有被任何裁剪祖先切掉）；
 //   ③ 全程没有 `RenderFlex overflow`。
@@ -120,8 +123,12 @@ Future<void> _pump(WidgetTester tester, Widget page, LibraryStore store) async {
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
-    ChangeNotifierProvider<LibraryStore>.value(
-      value: store,
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<LibraryStore>.value(value: store),
+        // 画廊 / 预设页的筛选栏要读 `SettingsStore`（折叠状态记在它里面）
+        ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+      ],
       child: MaterialApp(home: page),
     ),
   );
@@ -158,7 +165,23 @@ Future<void> _expectAllVisible(WidgetTester tester, List<String> labels) async {
     return s.restorationId != 'editable';
   }).toList();
   expect(horizontal, isEmpty, reason: '筛选行不许再靠横向滚动兜底');
-  expect(find.byType(FilterChipRow), findsWidgets, reason: '筛选行要走会折行的 FilterChipRow');
+  // 2026-10-11 起画廊 / 预设页是"**组**"（`FilterGroupRow` + `FilterGroup`）：
+  // 组内联排、整组换行；标签页仍是扁平的 `FilterChipRow`。
+  // 这一条盯的是"必须走会折行的容器"——换回 `Row` 就会把某一组切在屏幕外。
+  expect(
+    find.byType(FilterGroupRow).evaluate().isNotEmpty ||
+        find.byType(FilterChipRow).evaluate().isNotEmpty,
+    isTrue,
+    reason: '筛选行要走会折行的容器（FilterGroupRow 或 FilterChipRow）',
+  );
+  // ★ **组之间不许用分隔线**（用户 2026-10-11："尤其是分割线"很难看）：
+  // 分隔线在 `Wrap` 里是独立的一项，换行时会孤零零留在行尾。
+  // 分组的边界交给 `FilterGroup` 自己的容器 —— 它换行时整块走。
+  expect(
+    find.byType(VerticalDivider),
+    findsNothing,
+    reason: '筛选行里不许出现竖分隔线（换行时会断在行尾）',
+  );
 
   for (final label in labels) {
     final finder = find.text(label);
@@ -188,11 +211,13 @@ void main() {
     expect(find.textContaining('共 1 个'), findsOneWidget);
   });
 
-  testWidgets('提示词库：320px 下筛选行折行，每个控件都完整可见', (tester) async {
+  testWidgets('预设库：320px 下筛选行折行，每个控件都完整可见', (tester) async {
     final store = await _store();
     addTearDown(store.dispose);
     await _pump(tester, const PromptsPage(), store);
 
+    // 2026-10-11 起筛选栏是"**组**"（`FilterGroupRow`）：组内联排、放不下整组换行。
+    // 「清理」那一组在最右边，窄屏必然被挤到后面的行。
     final firstRow = tester.getRect(find.text('全部')).top;
     expect(tester.getRect(find.text('一键清除未关联')).top, greaterThan(firstRow),
         reason: '「一键清除未关联」被挤到后面的行 = 真的折行了');
@@ -220,23 +245,96 @@ void main() {
     ]);
   });
 
-  // 宽窗口不受影响：还是老老实实一行（折行只在放不下时发生）
-  testWidgets('画廊：宽窗口下筛选行仍然是一行', (tester) async {
+  // 宽窗口：**分区各占一行**（2026-10-11 起筛选选项按功能分区显示，
+  // 不再是"所有 chip 挤一行"）。分区标题就是分区的证据。
+  testWidgets('画廊：宽窗口下筛选选项按功能分区，各占一行', (tester) async {
     final store = await _store();
     addTearDown(store.dispose);
     tester.view.physicalSize = const Size(1600, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
-      ChangeNotifierProvider<LibraryStore>.value(
-        value: store,
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<LibraryStore>.value(value: store),
+          ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+        ],
         child: const MaterialApp(home: GalleryPage()),
       ),
     );
     await tester.pumpAndSettle();
 
-    final top = tester.getRect(find.text('全部')).top;
-    expect(tester.getRect(find.text('清除未关联产物')).top, closeTo(top, 1),
-        reason: '宽窗口下这一排还是一行');
+    // 分区标题都在
+    for (final title in ['类型', '状态', '排序', '清理']) {
+      expect(find.text(title), findsOneWidget, reason: '「$title」分区标题必须在');
+    }
+    // 同一分区里的选项**仍然一行**（宽窗口放得下就不该折）
+    final typeTop = tester.getRect(find.text('全部')).top;
+    expect(tester.getRect(find.text('图片')).top, closeTo(typeTop, 1),
+        reason: '「类型」分区里几个选项该在同一行');
+
+    // 不同分区**分属不同的行**（清理是破坏性动作，刻意与筛选分开）
+    expect(tester.getRect(find.text('清理')).top, greaterThan(typeTop),
+        reason: '「清理」是单独一区，不与类型同排');
+    expect(find.text('清除未关联产物'), findsOneWidget);
+  });
+
+  // 收起筛选栏：按钮在搜索栏右侧，收起后**露出生效筛选摘要**
+  // （否则用户看不出自己在筛选状态，会以为"图怎么少了"）
+  testWidgets('画廊：收起筛选栏后露出生效筛选摘要', (tester) async {
+    final store = await _store();
+    addTearDown(store.dispose);
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<LibraryStore>.value(value: store),
+          ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+        ],
+        child: const MaterialApp(home: GalleryPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 展开状态：分区标题在、摘要不在
+    expect(find.text('类型'), findsOneWidget);
+    expect(find.byTooltip('收起筛选'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('收起筛选'));
+    await tester.pumpAndSettle();
+
+    // 收起状态：分区没了，但**摘要露出来**（含当前排序档）
+    expect(find.text('类型'), findsNothing);
+    expect(find.byTooltip('展开筛选'), findsOneWidget);
+    expect(find.textContaining('最新加入'), findsWidgets,
+        reason: '收起后必须能看出当前生效的筛选项');
+  });
+
+  // 折叠状态要**记住**（用户 2026-10-11：记忆当前状态）。
+  // 少了这条，用户每次进画廊都要重新收一遍。
+  testWidgets('画廊：筛选栏折叠状态被记住', (tester) async {
+    final store = await _store();
+    addTearDown(store.dispose);
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<LibraryStore>.value(value: store),
+          ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+        ],
+        child: const MaterialApp(home: GalleryPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(store.settings.galleryFiltersCollapsed, isFalse, reason: '默认展开');
+
+    await tester.tap(find.byTooltip('收起筛选'));
+    await tester.pumpAndSettle();
+    expect(store.settings.galleryFiltersCollapsed, isTrue, reason: '收起后要记进设置');
   });
 }

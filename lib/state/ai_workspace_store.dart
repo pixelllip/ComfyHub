@@ -22,7 +22,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// [source] 仅供测试注入（默认按平台选：Android → 本地 harness，其余 → 远端 HTTP）；
   /// [credentials] 仅供测试注入（默认按平台选：Android → 本机密钥库，其余 → 后端托管）；
   /// [providers] 仅供测试注入（默认按平台选：Android → **本机库**，其余 → 后端库）；
-  /// [authApiFactory] 仅供测试注入（`syncCredentialsFromDesktop` 用的那个客户端）。
+  /// [authApiFactory] 仅供测试注入（`syncCredentialsFromDesktop` 用的那个客户端）；
+  /// [backendReady] **冷启动闸门**：等本地服务有个结论再发第一批请求
+  /// （`BackendLauncher.settled`；不注入 = 不等）。
   AiWorkspaceStore({
     this.baseUrlProvider,
     AiApiClient? api,
@@ -31,6 +33,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     CredentialStore? credentials,
     ProviderStore? providers,
     InboundAuthApi Function(String baseUrl)? authApiFactory,
+    this.backendReady,
   })  : _injected = api,
         _injectedPrefs = prefs,
         _injectedSource = source,
@@ -39,6 +42,21 @@ class AiWorkspaceStore extends ChangeNotifier {
         _injectedAuthApi = authApiFactory;
 
   final String Function()? baseUrlProvider;
+
+  /// 冷启动时"后端能不能开始干活"的闸门（见 [AiWorkspaceStore] 构造参数注释）。
+  ///
+  /// 不注入 = 不等（测试与手机那几条路本来就不需要）。
+  final Future<void> Function()? backendReady;
+
+  /// 页面在**打后端的初始化动作**之前先 `await` 它（转发 [backendReady]）。
+  ///
+  /// 为什么要暴露出来而不是让页面自己去读 `BackendLauncher`：AI 页里那些
+  /// "一显示就去拉"的地方（右侧栏的 ComfyUI 状态 / 实时进度 / 待审批）拿到的
+  /// `baseUrl` 在冷启动那一秒还是 8080 兜底值，请求注定失败 —— 而其中
+  /// `/api/capture/status` 那个失败是**会显示出来且不会自己消失**的（只有用户手点刷新）。
+  /// 走 store 这一道的好处：测试里没注入闸门时它是个空操作，不会因为缺 provider 就炸。
+  Future<void> waitForBackend() => backendReady?.call() ?? Future<void>.value();
+
   final AiApiClient? _injected;
   final SharedPreferences? _injectedPrefs;
   final RunEventSource? _injectedSource;
@@ -204,6 +222,34 @@ class AiWorkspaceStore extends ChangeNotifier {
       if (parsed != null) reasoningEffort = parsed;
       _clampReasoningEffort();
     }
+  }
+
+  /// **预设页 → 工作台**的交接文本（用户 2026-10-11：「▶️运行」= 送到聊天框并跳转过去）。
+  ///
+  /// 为什么用"待取用的一格"而不是给 `AiHomePage` 加构造参数：
+  /// 那个页面是 `const AiHomePage()`（导航列表里的一项，`pages[_index]` 复用同一个实例），
+  /// 加参数就得把它改成非 const、还要宿主往下穿回调 —— 而它本来就不该知道"预设"这回事。
+  ///
+  /// 用法：预设页 `store.handoffToComposer(text)` → 宿主切到工作台 → 工作台挂载后
+  /// 在 [`takeHandoff`] 里取走并填进输入框。**取走即清空**（只能被消费一次）。
+  String? _pendingComposerText;
+
+  /// 有没有等着被填进输入框的文本（工作台据此决定要不要切过去）。
+  bool get hasHandoff => (_pendingComposerText ?? '').isNotEmpty;
+
+  /// 把一段文本交给工作台的输入框。
+  void handoffToComposer(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+    _pendingComposerText = trimmed;
+    notifyListeners();
+  }
+
+  /// 取走交接文本（**取走即清空**：只能消费一次，否则每次切回工作台都会再填一遍）。
+  String? takeHandoff() {
+    final text = _pendingComposerText;
+    _pendingComposerText = null;
+    return text;
   }
 
   /// 输入区草稿：按会话保存。切换会话（以及把空会话删掉）都不会丢没发出去的文字。
@@ -1212,6 +1258,11 @@ class AiWorkspaceStore extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
+      // **先等本地服务有个结论**（见 [backendReady] / `BackendLauncher.settled`）：
+      // 冷启动时 `.run\api.json` 还没写出来，这一刻 `baseUrl` 是 8080 兜底值，
+      // 发出去的请求注定失败 —— 而后端 1 秒后就绪，用户看到的就是一句莫名其妙的
+      // "连接后端失败：ClientException … 127.0.0.1:8080/api/ai/providers"。
+      await backendReady?.call();
       // 先尽力把配对令牌读进内存（手机专有）：下面 ensureRunKit / syncOutbox 都要带它。
       // ⚠ 必须 **await**：不等它回来就往下走，`ensureRunKit` / `syncOutbox` 拿到的还是
       // null —— 那就等于这个洞没补（真的踩过：`unawaited` 与"令牌恒 null"是同一个现象）。

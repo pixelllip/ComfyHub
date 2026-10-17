@@ -14,7 +14,9 @@ import 'package:viewer/core/settings_store.dart';
 /// 所以每一条都对着一个**具体的坏情形**：
 ///  · 没有文件 / 文件坏了 / 字段不对 → 回落默认值，**绝不抛**（它在启动路径上，抛了就是白屏）；
 ///  · `host=0.0.0.0` → 换成 127.0.0.1（客户端连 `0.0.0.0` 连不上，这是最容易写错的一条）；
-///  · 用户手填过地址 → **不许**被本机端口发现覆盖（那是远程 / 局域网配置）。
+///  · 用户手填了**别的机器**的地址 → **不许**被本机端口发现覆盖（那是远程 / 局域网配置）；
+///  · 用户"手填"的其实是**本机**地址（设置页把自动发现来的值原样存回去）→ 仍然是自动，
+///    端口记录说了算（2026-10-12 的回归，见下面那几条）。
 void main() {
   // `SettingsStore.load()` 走 SharedPreferences（设置项本身），测试里要给它一个空的内存实现。
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -132,5 +134,111 @@ void main() {
     await settings.setBaseUrl('');
     expect(settings.baseUrlIsAuto, isTrue);
     expect(settings.baseUrl, 'http://127.0.0.1:50077');
+  });
+
+  // ---------------------------------------------------------------------------
+  //  "本机地址永远自动"（2026-10-12 用户报"直接启动软件连接不上后端"的回归）
+  //
+  //  现场：`storage\app-support\shared_preferences.json` 里躺着
+  //  `"flutter.comfyhub.baseUrl":"http://127.0.0.1:2175"`（设置页「保存并测试连接」
+  //  把框里**自动发现来的**地址原样存了回去），而后端这次绑在 9610 上。
+  //  老判据是"偏好里有值 = 用户手填过"，于是 `refreshBaseUrlFromPortFile` 永远提前返回：
+  //  后端活得好好的，App 对着 2175 等满 60 秒超时。
+  // ---------------------------------------------------------------------------
+
+  test('本机地址判据：回环算本机，别的机器不算', () {
+    for (final local in [
+      '127.0.0.1:2175',
+      'http://127.0.0.1:8080',
+      'http://localhost:1234',
+      'http://[::1]:9000',
+      'http://0.0.0.0:50001',
+    ]) {
+      expect(SettingsStore.isLocalBackendUrl(local), isTrue, reason: local);
+    }
+    for (final remote in [
+      'http://192.168.1.9:8080',
+      'http://10.0.2.2:8080', // 模拟器眼里的"宿主机" = 另一台设备
+      'http://100.64.0.7:9000', // Tailscale
+      'https://comfy.example.com',
+      '',
+    ]) {
+      expect(SettingsStore.isLocalBackendUrl(remote), isFalse, reason: remote);
+    }
+  });
+
+  test('偏好里存的是本机地址 → 当没填过，并按端口记录自愈（存量脏值）', () async {
+    writePortFile({'port': 51234, 'host': '127.0.0.1'});
+    SettingsStore.portFileRootsOverride = [root.path];
+    SharedPreferences.setMockInitialValues({
+      'flutter.comfyhub.baseUrl': 'http://127.0.0.1:2175',
+    });
+    // 先确认这份"脏偏好"真的喂进去了（读法与应用一致：**不带 `flutter.`**），
+    // 否则下面的断言只是因为"偏好是空的"而通过 —— 那是假绿灯。
+    expect((await SharedPreferences.getInstance()).getString('comfyhub.baseUrl'),
+        'http://127.0.0.1:2175');
+
+    final settings = SettingsStore();
+    await settings.load();
+
+    expect(settings.baseUrl, 'http://127.0.0.1:51234', reason: '以 .run\\api.json 为准');
+    expect(settings.baseUrlIsAuto, isTrue);
+    final prefs = await SharedPreferences.getInstance();
+    // ⚠ 读的时候用**不带 `flutter.`** 的键（`getString` 自己会加前缀，见
+    // shared_preferences 的 `_prefix`）—— 直接拿带前缀的串去读会读到 null，
+    // 断言就变成了"永远为真"的假绿灯。
+    expect(prefs.getString('comfyhub.baseUrl'), isNull,
+        reason: '那条脏偏好要顺手清掉，免得下一个人以为"用户手填过"');
+  });
+
+  test('「保存并测试连接」把框里的本机地址存回去 → 仍然跟着端口记录走', () async {
+    SettingsStore.portFileRootsOverride = [root.path];
+    writePortFile({'port': 51234, 'host': '127.0.0.1'});
+    final settings = SettingsStore();
+    await settings.load();
+
+    // 设置页那个按钮：把框里（= 自动发现来的）那一串原样存一次
+    await settings.setBaseUrl('http://127.0.0.1:51234');
+    expect(settings.baseUrlIsAuto, isTrue, reason: '本机地址不是"用户手填的覆盖"');
+
+    // 后端重启换了端口：必须能重新发现 —— 这是"重启后界面还能接着用"的全部依据
+    writePortFile({'port': 60002, 'host': '127.0.0.1'});
+    expect(await settings.refreshBaseUrlFromPortFile(), isTrue);
+    expect(settings.baseUrl, 'http://127.0.0.1:60002');
+  });
+
+  test('手填一个**本机**地址也回到自动，且不进历史（历史只放别的机器）', () async {
+    SettingsStore.portFileRootsOverride = [root.path];
+    writePortFile({'port': 50077});
+    final settings = SettingsStore();
+    await settings.load();
+
+    await settings.setBaseUrl('http://127.0.0.1:8080');
+    expect(settings.baseUrl, 'http://127.0.0.1:50077');
+    expect(settings.baseUrlIsAuto, isTrue);
+    expect(settings.baseUrlHistory, isEmpty, reason: '回环地址进历史 = 摆一串点不通的候选');
+  });
+
+  test('历史里的回环脏值在读的时候就被洗掉，别的机器照留', () async {
+    SettingsStore.portFileRootsOverride = [root.path];
+    writePortFile({'port': 50077});
+    SharedPreferences.setMockInitialValues({
+      'flutter.comfyhub.baseUrlHistory': [
+        'http://127.0.0.1:2175',
+        'http://192.168.1.9:8080',
+        'http://127.0.0.1:4484',
+        'localhost:9959',
+      ],
+    });
+    expect((await SharedPreferences.getInstance()).getStringList('comfyhub.baseUrlHistory'),
+        hasLength(4), reason: '脏历史要真的喂进去');
+
+    final settings = SettingsStore();
+    await settings.load();
+
+    expect(settings.baseUrlHistory, ['http://192.168.1.9:8080']);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getStringList('comfyhub.baseUrlHistory'),
+        ['http://192.168.1.9:8080'], reason: '洗干净的也要写回磁盘，别留着那串点不通的');
   });
 }

@@ -143,6 +143,7 @@ void main() {
     String? projectRoot,
     bool stopServicesOnExit = true,
     bool allowRemote = false,
+    int? lastApiPort,
   }) async {
     final values = <String, Object>{
       'comfyhub.projectRoot': projectRoot ?? root.path,
@@ -150,6 +151,7 @@ void main() {
       'comfyhub.autoStartBackend': false,
       if (allowRemote) 'comfyhub.allowRemoteBackend': true,
     };
+    if (lastApiPort != null) values['comfyhub.lastApiPort'] = lastApiPort;
     SharedPreferences.setMockInitialValues(values);
     final settings = SettingsStore();
     await settings.load();
@@ -157,12 +159,18 @@ void main() {
   }
 
   /// 写一份 `.run\api.json`（后端绑定成功后落盘的那份端口记录）
-  void writeApiJson(int port, {int pid = 987654}) {
+  ///
+  /// `requestedPort` / `fellBack` 是后端自己写的两个键：前者是"我们想让它听的端口"，
+  /// 后者是"那个端口没绑上、它回落到随机端口了"。它们正是"端口粘住"这件事的
+  /// 全部事实来源（我们**不猜**）。
+  void writeApiJson(int port,
+      {int pid = 987654, int requestedPort = 0, bool fellBack = false}) {
     final runDir = Directory('${root.path}${Platform.pathSeparator}.run');
     runDir.createSync(recursive: true);
     File('${runDir.path}${Platform.pathSeparator}api.json').writeAsStringSync(
         '{"port":$port,"pid":$pid,"host":"127.0.0.1",'
-        '"url":"http://127.0.0.1:$port","requestedPort":0,"fellBack":false}');
+        '"url":"http://127.0.0.1:$port","requestedPort":$requestedPort,'
+        '"fellBack":$fellBack}');
   }
 
   /// 起一个本地 HTTP 服务当"后端"（health 可控）
@@ -328,6 +336,43 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
+  //  首屏闸门（settled）—— "冷启动那一刻打 8080 兜底地址"那一类报错的防线
+  // -------------------------------------------------------------------------
+
+  test('settled：出结论之前不放行，结论一出（哪怕是失败）就放行', () async {
+    writeApiJson(await deadPort()); // 旧门牌没人听 → 这一轮必然去起新的
+    final settings = await loadSettings();
+    final launcher = BackendLauncher(settings);
+    installStarter();
+
+    // ⚠ 拿闸门的时机就是真实顺序：`HomeShell` 的 postFrame 先把后端拉起来
+    // （**同步**翻成 busy —— 这一步挪到第一个 await 之后，下面这条断言立刻红），
+    // 各页面的首屏请求随后才发。
+    final running = launcher.ensureRunning();
+    var settled = false;
+    unawaited(launcher.settled().then((_) => settled = true));
+
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(settled, isFalse,
+        reason: '后端还没结论，这时候发首屏请求只能是打 8080 那个兜底地址');
+
+    await running; // 假后端永远不健康 → 这一轮以 failed 收场
+    await Future<void>.delayed(Duration.zero);
+    expect(settled, isTrue, reason: '失败也要放行：各页面要如实报"连不上"，不许静默重试到底');
+    launcher.dispose();
+  });
+
+  test('settled：没什么可等时立刻返回（不许把首屏卡住）', () async {
+    writeApiJson(await deadPort());
+    final settings = await loadSettings();
+    final launcher = BackendLauncher(settings);
+    // 什么都没在跑（phase = idle）：立刻放行，不是"等满超时"
+    await launcher.settled(timeout: const Duration(milliseconds: 200));
+    expect(launcher.phase, StartupPhase.idle);
+    launcher.dispose();
+  });
+
+  // -------------------------------------------------------------------------
   //  退出收尾
   // -------------------------------------------------------------------------
 
@@ -463,5 +508,126 @@ void main() {
     expect(spawns.single.args, contains('--watch-stdin'));
     expect(spawns.single.args, contains('--port'));
     launcher.dispose();
+  });
+
+  // -------------------------------------------------------------------------
+  //  端口"粘住"：重启不要换端口，手机存的那个地址才一直有效
+  //
+  //  背景（用户 2026-10-13）：后端默认 `--port 0`（系统挑，避免被占 /
+  //  落在 Windows 保留段起不来），代价是**重启就换端口**；而手机存的是
+  //  `http://<局域网IP>:<端口>` —— 端口一变就得回桌面重扫二维码。
+  //  现在 App 会把上次实际用的端口记住，下次**先要回它**；只有"确实被占了"
+  //  这一种情况才换（由后端自己回落并在 api.json 里记 `fellBack`）。
+  // -------------------------------------------------------------------------
+
+  test('启动：有记录时先要回上次那个端口（不再是 --port 0）', () async {
+    writeApiJson(await deadPort());
+    final settings = await loadSettings(lastApiPort: 45678);
+    final launcher = BackendLauncher(settings);
+    installStarter();
+
+    await launcher.ensureRunning();
+
+    expect(spawns, hasLength(1));
+    final i = spawns.single.args.indexOf('--port');
+    expect(i, greaterThanOrEqualTo(0));
+    expect(spawns.single.args[i + 1], '45678',
+        reason: '要回旧端口，手机存的 http://<IP>:45678 才继续有效');
+    launcher.dispose();
+  });
+
+  test('启动：没记录过（或记录是脏值）时仍然是 --port 0，让系统挑', () async {
+    writeApiJson(await deadPort());
+    // 脏值（0 / 越界）必须当"没记录过"：`--port 99999` 会让后端直接退出
+    SharedPreferences.setMockInitialValues({
+      'comfyhub.projectRoot': root.path,
+      'comfyhub.autoStartBackend': false,
+      'comfyhub.lastApiPort': 99999,
+    });
+    final settings = SettingsStore();
+    await settings.load();
+    expect(settings.lastApiPort, isNull, reason: '越界值不许拼进 argv');
+    final launcher = BackendLauncher(settings);
+    installStarter();
+
+    await launcher.ensureRunning();
+
+    final i = spawns.single.args.indexOf('--port');
+    expect(spawns.single.args[i + 1], '0');
+    launcher.dispose();
+  });
+
+  test('启动：后端回落时记下新端口，并亮出"手机要重扫"（不许静默）', () async {
+    writeApiJson(await deadPort()); // 旧门牌没人听 → 这一轮会去起新的
+    final server = await startFakeBackend();
+    addTearDown(() => server.close(force: true));
+    final settings = await loadSettings(lastApiPort: 45678);
+    final launcher = BackendLauncher(settings);
+    // 假后端：绑定成功后写 api.json —— 想要 45678 没绑上，回落到 server.port
+    installStarter(
+      onSpawn: () => writeApiJson(server.port, pid: 555000, requestedPort: 45678, fellBack: true),
+    );
+
+    expect(await launcher.ensureRunning(), isTrue);
+
+    // ① 新端口要记下来：下次先要回它，别每次重启都换
+    expect(settings.lastApiPort, server.port);
+    // ② 回落这件事要能被界面看见（设置页「本地服务」卡片据此显示那行提示）——
+    //    不然用户遇到的只是"手机突然连不上"，猜不到该去重扫二维码
+    expect(launcher.portFallbackFrom, 45678);
+    expect(launcher.logLines.any((l) => l.contains('没能用上')), isTrue);
+    launcher.dispose();
+  });
+
+  test('启动：要回成功时不亮回落标记（界面上不该有多余的警告）', () async {
+    writeApiJson(await deadPort());
+    final server = await startFakeBackend();
+    addTearDown(() => server.close(force: true));
+    final settings = await loadSettings(lastApiPort: 45678);
+    final launcher = BackendLauncher(settings);
+    installStarter(
+      onSpawn: () => writeApiJson(server.port, pid: 555000, requestedPort: server.port),
+    );
+
+    expect(await launcher.ensureRunning(), isTrue);
+
+    expect(settings.lastApiPort, server.port);
+    expect(launcher.portFallbackFrom, isNull);
+    expect(launcher.logLines.any((l) => l.contains('端口沿用上次的')), isTrue);
+    launcher.dispose();
+  });
+
+  test('接管已经在跑的后端时，也把它的端口记下来（下次就能要回它）', () async {
+    final server = await startFakeBackend();
+    addTearDown(() => server.close(force: true));
+    writeApiJson(server.port, pid: 987654, requestedPort: server.port);
+    final settings = await loadSettings();
+    await settings.setBaseUrl('http://127.0.0.1:${server.port}');
+    final launcher = BackendLauncher(settings);
+
+    expect(await launcher.ensureRunning(), isTrue);
+
+    expect(spawns, isEmpty, reason: '本来就健康，不该再起一个');
+    expect(settings.lastApiPort, server.port,
+        reason: '接管来的那个也要记住：关掉 App 再开时要能要回同一个端口');
+    expect(launcher.portFallbackFrom, isNull);
+    launcher.dispose();
+  });
+
+  test('端口偏好：落盘读得回来，脏值一律当没记录过', () async {
+    SharedPreferences.setMockInitialValues({});
+    final settings = SettingsStore();
+    await settings.load();
+    expect(settings.lastApiPort, isNull, reason: '第一次运行还没有记录');
+
+    await settings.setLastApiPort(5000);
+    expect((await SharedPreferences.getInstance()).getInt('comfyhub.lastApiPort'), 5000);
+
+    final again = SettingsStore();
+    await again.load();
+    expect(again.lastApiPort, 5000);
+
+    await again.setLastApiPort(0);
+    expect(again.lastApiPort, isNull, reason: '0 不是端口（--port 0 的含义是"让系统挑"）');
   });
 }

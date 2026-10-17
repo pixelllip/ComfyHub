@@ -180,6 +180,14 @@ class Prompt {
   final int? batchSize;
   final Map<String, String> extraParams;
   final String? notes;
+
+  /// 发送模式：`keep`（默认，照原样带上负面提示词）/ `positive_only`。
+  ///
+  /// **有些 turbo 模型不认负面提示词**（用户 2026-10-11），所以预设要能表达
+  /// "我只发正面"。这是**预设的属性**（写提示词时的意图）——
+  /// 与"目标工作流认不认负面"是两件事，后者在提交那条路上兜底检查。
+  final String negativeMode;
+
   final bool favorite;
   /// 来源: Manual（手动新建）/ ComfyUI（自动捕获）/ ComfyUI-Import（历史导入）
   final String? source;
@@ -210,6 +218,7 @@ class Prompt {
     this.batchSize,
     this.extraParams = const {},
     this.notes,
+    this.negativeMode = 'keep',
     this.favorite = false,
     this.source,
     this.sourceRef,
@@ -241,6 +250,9 @@ class Prompt {
         extraParams: ((j['extraParams'] as Map?) ?? const {})
             .map((k, v) => MapEntry(k.toString(), v.toString())),
         notes: j['notes'] as String?,
+        // 老后端没有这个键时退回 keep —— **绝不能默认成只发正面**
+        // （那会悄悄丢掉用户的负面提示词，而 turbo 之外的模型很吃负面）
+        negativeMode: (j['negativeMode'] as String?) ?? 'keep',
         favorite: (j['favorite'] as bool?) ?? false,
         source: j['source'] as String?,
         sourceRef: j['sourceRef'] as String?,
@@ -271,6 +283,7 @@ class Prompt {
         'batchSize': batchSize,
         'extraParams': extraParams,
         'notes': notes,
+        'negativeMode': negativeMode,
         'favorite': favorite,
         'tags': tags.map((e) => e.name).toList(),
       };
@@ -293,6 +306,7 @@ class Prompt {
     int? batchSize,
     Map<String, String>? extraParams,
     String? notes,
+    String? negativeMode,
     bool? favorite,
     bool? hasWorkflow,
     List<Tag>? tags,
@@ -316,6 +330,7 @@ class Prompt {
         batchSize: batchSize ?? this.batchSize,
         extraParams: extraParams ?? this.extraParams,
         notes: notes ?? this.notes,
+        negativeMode: negativeMode ?? this.negativeMode,
         favorite: favorite ?? this.favorite,
         source: source,
         sourceRef: sourceRef,
@@ -389,6 +404,22 @@ class MediaAsset {
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
+  /// 所属**集合**（同源微调的产物归到一组）。
+  ///
+  /// `null` = 没进组（没关联提示词的孤儿产物，或规则判定它自成一类）。
+  /// 后端判定真源是 `server-rs/src/media/collection.rs`，**前端不做任何判定**。
+  final int? collectionId;
+
+  /// 这个集合有几个成员。**后端保证 ≥ 1**（没进组的产物是 1）。
+  /// 画廊靠它决定要不要叠放封面 / 显示角标；`<= 1` 与 `collectionId == null` 一样按普通格子显示。
+  final int collectionSize;
+
+  /// 集合**头三张**成员的 id（叠放封面用）。空 = 没进组。
+  ///
+  /// 后端在列表 SQL 里一次算好（`collection_preview`），所以画廊**不必**为每个集合格子
+  /// 再发一次"列成员"的请求 —— 一页 24 格就是 24 次。
+  final List<int> collectionPreview;
+
   // 关联提示词摘要
   final String? promptTitle;
   final String? promptPositive;
@@ -422,6 +453,9 @@ class MediaAsset {
     this.notes,
     this.createdAt,
     this.updatedAt,
+    this.collectionId,
+    this.collectionSize = 1,
+    this.collectionPreview = const [],
     this.promptTitle,
     this.promptPositive,
     this.promptNegative,
@@ -461,11 +495,23 @@ class MediaAsset {
         promptTags: ((j['promptTags'] as List?) ?? const [])
             .map((e) => e.toString())
             .toList(),
+        collectionId: (j['collectionId'] as num?)?.toInt(),
+        // 后端保证 ≥ 1；老后端没有这个键时退回 1（按普通格子显示，不会误叠放）
+        collectionSize: (j['collectionSize'] as num?)?.toInt() ?? 1,
+        collectionPreview: ((j['collectionPreview'] as List?) ?? const [])
+            .map((e) => (e as num).toInt())
+            .toList(),
         fileUrl: (j['fileUrl'] ?? '') as String,
         thumbUrl: j['thumbUrl'] as String?,
       );
 
   bool get hasPrompt => promptId != null;
+
+  /// 这一条在画廊里该不该显示成"一组"（叠放封面 + 角标）。
+  ///
+  /// 判据与后端一致：**有集合且成员多于一个**。没进组的（孤儿产物）是 `null` + `1`，
+  /// 按普通格子显示。
+  bool get isCollection => collectionId != null && collectionSize > 1;
 }
 
 // ===========================================================================

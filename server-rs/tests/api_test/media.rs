@@ -20,20 +20,24 @@ async fn media_list_uses_the_same_keys_and_filters() {
     assert_eq!(
         keys(item),
         vec![
-            "checkpoint", "createdAt", "favorite", "fileUrl", "hasWorkflow", "id", "kind", "nsfw",
-            "originalName", "promptId", "promptNegative", "promptPositive", "promptTags",
-            "promptTitle", "seed", "sizeBytes", "source", "storedName", "thumbUrl", "title",
-            "updatedAt",
+            "checkpoint", "collectionPreview", "collectionSize", "createdAt", "favorite", "fileUrl",
+            "hasWorkflow", "id", "kind", "nsfw", "originalName", "promptId", "promptNegative",
+            "promptPositive", "promptTags", "promptTitle", "seed", "sizeBytes", "source",
+            "storedName", "thumbUrl", "title", "updatedAt",
         ],
         "少一个键 = 画廊里少一块内容（缩略图 URL 也在这里）"
     );
     // 夹具里这些列是 NULL → Kotlin（`explicitNulls = false`）**整个键都不发**
-    for absent in ["mimeType", "width", "height", "durationMs", "sha256", "notes"] {
+    for absent in ["mimeType", "width", "height", "durationMs", "sha256", "notes", "collectionId"] {
         assert!(
             !item.as_object().unwrap().contains_key(absent),
             "`{absent}` 是 NULL 就不该有这个键（不是 null）：{item}"
         );
     }
+    // `collectionSize` 是**必给**的（i64，不是 Option）：画廊靠它决定要不要叠放封面 / 显示角标。
+    // 夹具里这条没进组（孤儿产物）→ 1 = 只有它自己；`collectionPreview` 是空数组。
+    assert_eq!(item["collectionSize"], 1, "没进组的产物 collectionSize 是 1");
+    assert_eq!(item["collectionPreview"], serde_json::json!([]), "没进组就没有可叠的封面");
     // 关联提示词摘要是直出的（列表不必二次请求）
     assert_eq!(item["promptTitle"], "赛博朋克少女");
     assert_eq!(item["promptTags"], serde_json::json!(["赛博朋克"]), "产物自身标签 ∪ 提示词标签");
@@ -47,6 +51,65 @@ async fn media_list_uses_the_same_keys_and_filters() {
     assert_eq!(by_prompt["total"], 1);
     let (_, untagged) = get_json(router_for(state.clone()), "/api/media?untagged=true").await;
     assert_eq!(untagged["total"], 0);
+    // ★ 布尔筛选**必须收 `1` / `0`**（2026-10-11 修的真 bug）：
+    // axum 的 `Query` 对 `Option<bool>` 只认 `true`/`false`，发 `1` 会**整个请求 400** ——
+    // 而 Dart 那边（`listMedia` 的 `favorite: favorite ? '1' : '0'`）发的就是 `1`。
+    // 表现：画廊点一下「仅收藏」→ "加载失败 HTTP 400"，用户完全猜不到是那个开关干的。
+    // 这条用例盯的就是"再也不许回到只认 true/false"。
+    for flag in ["1", "true"] {
+        let (status, body) =
+            get_json(router_for(state.clone()), &format!("/api/media?favorite={flag}")).await;
+        assert_eq!(status, StatusCode::OK, "favorite={flag} 不该 400（body={body}）");
+        assert_eq!(body["total"], 0, "夹具里没有收藏的产物");
+    }
+    for flag in ["1", "true"] {
+        let (status, body) =
+            get_json(router_for(state.clone()), &format!("/api/media?collapse={flag}")).await;
+        assert_eq!(status, StatusCode::OK, "collapse={flag} 不该 400（body={body}）");
+    }
+    // 认不出来的值**当没传**，绝不 400（一个筛选参数写错不该让整个列表挂掉）
+    let (status, _) = get_json(router_for(state.clone()), "/api/media?favorite=maybe").await;
+    assert_eq!(status, StatusCode::OK, "脏值当没传，不是 400");
+
+    // ★★ 折叠的**总数必须等于"未分组的 + 每个集合一个代表"**（2026-10-11 真 bug）。
+    //
+    // 曾经写成"未分组的 或 不是任何集合成员" —— 那等于把所有集合成员全排除掉，
+    // 于是**集合的格子在画廊里根本不出现**，而且 `pages=1` 翻页也补不回来
+    // （用户看到的是"这几张图没了"）。
+    //
+    // 现场构造：一条未分组的 + 一个两成员的集合 → 折叠后必须剩 **2** 格。
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO media_collections (group_key, kind, origin, rule_version)
+                 VALUES ('k-fold', 'IMAGE', 'auto', 1)",
+                [],
+            )?;
+            let cid = conn.last_insert_rowid();
+            conn.execute(
+                "UPDATE media_assets SET collection_id = ?1 WHERE id = 100",
+                rusqlite::params![cid],
+            )?;
+            conn.execute(
+                "INSERT INTO media_assets (kind, title, original_name, stored_name, collection_id, created_at)
+                 VALUES ('IMAGE', 'b', 'b.png', 'b.png', ?1, '2099-01-01T00:00:00.000Z')",
+                rusqlite::params![cid],
+            )?;
+            conn.execute(
+                "INSERT INTO media_assets (kind, title, original_name, stored_name)
+                 VALUES ('IMAGE', 'c', 'c.png', 'c.png')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+    let (_, folded) = get_json(router_for(state.clone()), "/api/media?collapse=1").await;
+    assert_eq!(
+        folded["total"], 2,
+        "折叠后 = 未分组的 1 条 + 这个集合的 1 个代表；集合成员不许被整批漏掉"
+    );
+    let (_, plain) = get_json(router_for(state.clone()), "/api/media").await;
+    assert_eq!(plain["total"], 3, "不折叠时三条都在");
     // 标签过滤是**精确匹配 normalized**（与 Kotlin `TagRepo.promptTagFilter` 一致，
     // 不是 LIKE）：所以要么给全名，要么筛不到 —— 这里给全名「赛博朋克」
     let (_, by_tag) =

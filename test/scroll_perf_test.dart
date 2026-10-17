@@ -331,8 +331,12 @@ void main() {
       await store.refreshAll();
 
       await tester.pumpWidget(
-        ChangeNotifierProvider<LibraryStore>.value(
-          value: store,
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<LibraryStore>.value(value: store),
+            // 画廊筛选栏要读 `SettingsStore`（折叠状态记在它里面）
+            ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+          ],
           child: const MaterialApp(home: GalleryPage()),
         ),
       );

@@ -19,10 +19,17 @@ class NsfwStore extends ChangeNotifier {
   final String Function()? baseUrlProvider;
   final AiApiClient? _injected;
 
+  /// 冷启动闸门：等本地服务有个结论再读设置（`BackendLauncher.settled`）。
+  ///
+  /// 它在这里**不只是"少一句报错"**：读失败时这个 store 保留的是默认值
+  /// （`blurEnabled == false`），于是"用户开了预览图模糊、冷启动却不糊"——
+  /// 同一个根因（端口文件还没写出来就发请求）在 NSFW 这条路上是**静默错**。
+  final Future<void> Function()? backendReady;
+
   AiApiClient? _cached;
   String? _cachedFor;
 
-  NsfwStore({this.baseUrlProvider, AiApiClient? api}) : _injected = api;
+  NsfwStore({this.baseUrlProvider, AiApiClient? api, this.backendReady}) : _injected = api;
 
   AiApiClient get _api {
     final injected = _injected;
@@ -87,6 +94,9 @@ class NsfwStore extends ChangeNotifier {
       notifyListeners();
     }
     try {
+      // 冷启动那一次要等后端起来（见 [backendReady]）—— 否则读到的是 8080 兜底地址，
+      // 失败之后 `settings` 停在默认值上（"模糊显示"于是静默失效）。
+      await backendReady?.call();
       final next = await _api.nsfwSettings();
       settings = next;
       error = null;

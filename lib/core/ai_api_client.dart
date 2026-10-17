@@ -210,6 +210,7 @@ class AiApiClient {
   // 与「长期记忆」同一套形状（列表 / 新建 / 编辑 / 删除）。
   // **AI 也用同一张表**（`save_character_card` / `search_character_cards`），
   // 所以界面上看到的卡就是模型"先查三处"里查的那一份。
+  // 2026-10 起卡上**只有三个字段**：名称 / 正面提示词 / 负面提示词。
 
   Future<List<CharacterCard>> listCharacterCards({String? query}) async {
     final q = (query ?? '').trim();
@@ -232,13 +233,6 @@ class AiApiClient {
           await _send('PUT', '/api/ai/character-cards/$id', body) as Map));
 
   Future<void> deleteCharacterCard(int id) async => _send('DELETE', '/api/ai/character-cards/$id');
-
-  /// 角色卡的汇总口径（启用数 + token 估算）。
-  ///
-  /// ⚠ **token 是后端估的**（前端不重算）：这些模型走 CLIP 系分词器，两侧都没有它，
-  /// 各写一份估算必然漂 —— 尺子只有后端那一份（AGENTS §7 的两份实现纪律）。
-  Future<CharacterSummary> characterSummary() async => CharacterSummary.fromJson(
-      Map<String, dynamic>.from(await _get('/api/ai/character-cards/summary') as Map));
 
   // --- 工具与权限（M4） --------------------------------------------------
 

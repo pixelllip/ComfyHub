@@ -623,9 +623,9 @@ pub fn now_iso() -> String {
 
 /// `danbooru_lookup`：查 tag 的规范写法。
 ///
-/// ⚠ **调用方要把"这一轮真查过哪个 tag"记进 `ToolSession.danbooru_verified`**
-/// （`save_character_card` 靠它决定写不写核对时间）—— 那一步在 `tools::execute` 里做，
-/// 因为"查到的角色 tag"要从这里的 `meta` 里读回来。
+/// ⚠ 它**不再往 session 里记"查过哪个 tag"**：那本账是角色卡 `tagsVerifiedAt` 的判据，
+/// 而角色卡 2026-10 已收敛成"名称 / 正面提示词 / 负面提示词"，没有核对时间这个字段了。
+/// 这条工具现在只负责把规范写法与同现 tag 交给模型。
 pub async fn tool_lookup(arguments: &Value) -> Result<crate::tools::tools::ToolOutcome, ToolFailure> {
     let query = arguments
         .get("query")

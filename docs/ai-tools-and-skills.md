@@ -3,7 +3,7 @@
 > 2026-09-16 起实施。对应需求：AIH-021/022/024（事件协议与取消）、AIH-033~036（Comfy 工具与轮数限制）、
 > AIH-037~045（Skills 与安全）、AIH-046/047（提示词与注入防护）、AIH-049（工具调用状态卡）、AIK-002（效仿 DSH）。
 >
-> 配套调查记录：[`dsh-tool-layer-report.md`](dsh-tool-layer-report.md)（对 DeepSeek Harness 工具层的逐项实测）。
+> 配套调查记录：[`dsh-tool-layer-report.md`](archive/dsh-tool-layer-report.md)（对 DeepSeek Harness 工具层的逐项实测）。
 
 ## 0. 一句话
 
@@ -13,7 +13,7 @@
 
 ## 1. DSH 的工具里，我们抄了哪些、不抄哪些
 
-DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md` §1）：
+DSH 暴露给模型的东西分五类。对照结论（`docs/archive/dsh-tool-layer-report.md` §1）：
 
 | DSH 工具 | 我们是否采纳 | 说明 |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ DSH 暴露给模型的东西分五类。对照结论（`dsh-tool-layer-report.md
 | `web_search` / `web_fetch` | **采纳**（2026-09-20 起推翻"首期不采纳"） | 用户定的规则：**只用通用方案**——不碰各家原生内置搜索（OpenAI `web_search` / Anthropic `web_search_20250305` 那套：能力没有统一的查询接口、按模型逐个变，取舍记录见 §2.0.1），接 **Keenable**（给 AI Agent 用的独立搜索索引，**默认免密钥**，按来源约 1000 次/小时；可选 key 只用来提额）。原"不采纳"的理由是"需要外部搜索服务与密钥"——免密钥默认把它消掉了；"与本地创作工具定位不符"由用户拍板推翻：查提示词用法 / 模型文档 / ComfyUI 节点说明是真需求。出网客户端：`KeenableSearch.kt`（本项目**唯一**出网口，复用 `EndpointGuard`） |
 | `present` / `exit_plan_mode` / `goal` 系列 | 不采纳 | 交付物在画廊里，不在工具里 |
 | **`skill`（加载 Skill 正文）** | **采纳** | 对应我们的 `load_skill`，并补了 `list_skills` / `register_skill` / `delete_skill` |
-| Skills 目录注入 | **采纳思路，实现不同** | DSH 把目录作为 **user 消息**（`<system-reminder>` + `<available_skills>`）注入，为的是不打断系统前缀的 KV cache；我们的系统提示本来就带时间戳（每 Run 变化），所以直接写进系统提示的独立区块，省一层消息 |
+| Skills 目录注入 | **采纳思路，实现不同** | DSH 把目录作为 **user 消息**（`<system-reminder>` + `<available_skills>`）注入，为的是不打断系统前缀的 KV cache；我们直接写进系统提示的独立区块，省一层消息。⚠ **2026-10 之前这一格写的理由是错的**（原文："我们的系统提示本来就带时间戳（每 Run 变化），所以直接写进系统提示"）—— 真库实测（`.db\comfyhub.db`，60 条 Kotlin 时代的 usage）：带毫秒的时间戳在**一个 Run 之内并不抖动**（`render` 每 Run 只调一次、进工具循环前就渲染好），所以那 82.5% 的命中率是真的；真正被打断的是**跨 Run** —— 同一会话里用户再发一条就是一个新毫秒串，整段会话历史在新 Run 的第一轮按全价重读（实测占全部输入 24,132,406 里的 4,214,587，17.5%）。现在那一行粗化成了**本地日期**，两个尺度上都稳了；细节与判据见 `server-rs/src/ai/system_prompt.rs` 的文件头。**别把精确时间加回系统提示的前部。** |
 | DSH 默认提示词的**行为纪律段** | **择优采纳**（2026-09-17，用户要求） | 原文 `docs\default-prompt-inject.md`。挑出与我们对得上的三块写进系统提示 **v9**：① 事实纪律（不猜本机状态 / 证据冲突的采信顺序 / 把"查到的"与"推测的"分开说）；② 表达风格（开门见山、不奉承、不复述、**不写嵌套列表** —— `lib\widgets\markdown.dart` 会把子项拍平成同级，而表格反而是支持的）；③ 两条硬规则（写入留退路：改参数用覆盖不重写原始工作流；读取按需：不遍历磁盘）。另外，那份文档里的 `[MODE: UNRESTRICTED SANDBOX — STABLE]` 段（人格 / 拒绝对抗 / 越狱与渗透话术）**当年是整段搬进来的，现在也还在**（`HarnessRunner.kt` 里一个独立的 `append("""…""")`，上方有注释）：2026-09-17 用户明确说"那是我的意图，不许删除，不要动那段越狱提示词"。它与代码侧的审批纪律（提示词第 3 条）和凭据红线（第 8 条）并存 —— **别把它当误粘贴清理掉**，要改先问用户（AGENTS §10 记着这条） |
 
 我们的工具清单（**唯一真源是 `server-rs/src/tools/tools.rs` 的 `IMPLEMENTED`** —— 当前 37 个：手机侧 7 个 + 桌面专属 30 个；全部可在设置里改成 `allow / ask / deny`）：
@@ -298,7 +298,7 @@ D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows\krea2SF
 ## 2. 权限模型：为什么不是照搬 DSH 的 preset
 
 DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `workspaceRoot` 表达权限
-（`dsh-tool-layer-report.md` §4：**没有** `autoApprove` / `allowedDirectories` 这类白名单）。
+（`docs/archive/dsh-tool-layer-report.md` §4：**没有** `autoApprove` / `allowedDirectories` 这类白名单）。
 那是给"AI 帮我在这个仓库里干活"设计的：整个工作区都该可写。
 
 我们面对的是**内容创作者**，不是开发者；他们机器上这个目录里有 `.mysql`（数据库）、`.run`（进程状态）、
@@ -390,6 +390,45 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
 - **网关不认 `tools` 时的兜底**：很多网关收到 `tools` 直接 400。这种情况本次 Run 会自动
   **退回纯文本模式重试一次**，并在回复开头如实写明"上游网关不接受工具参数"——
   不能让用户在"模型到底行不行"上猜（也绝不假装是模型自己不想用工具）。
+
+### 3.1 工具结果缓存（2026-10）—— 「同一个工具 + 同一组参数」不跑第二遍
+
+`server-rs/src/tools/tool_cache.rs`（**没有 Kotlin 对应物**：Kotlin 的 `ToolRegistry` 每次都真跑）。
+
+模型"再确认一下"是常态：`comfy_get_status` 连问三次队列、同一个查询词搜两遍、同一个文件读两遍。
+这三件事原本各自要花一次真实请求，还要吃那两条独立预算。缓存把它们变成"第二次 0 请求"，
+而那两条预算**只被真正的请求消耗**（命中走 `ToolSession::spend_cached_call`：总调用额度照记，
+不占联网 / ComfyUI 那两份）。
+
+| 档 | 工具 | 判据 |
+| --- | --- | --- |
+| 磁盘事实 | `read_file` / `list_dir` | `mtime + 长度` **加** 30 秒 TTL |
+| 本机库 / 本机目录 | `list_skills` / `search_prompts` / `search_character_cards` / `comfy_list_workflows` / `comfy_find_workflow` / `comfy_list_recipes` | 20 秒 |
+| 活体探测 | `comfy_get_status` / `comfy_get_run` | 10 秒（刻意短：够挡住"一句话被拆成两个调用"，挡不住真正的轮询） |
+| 纯计算 | `comfy_check_inputs` / `comfy_fit_workflow` / `comfy_audit_workflow` / `comfy_prune_workflow` / `comfy_bind_recipe` / `comfy_env_report` | 60 秒 |
+| 出网 | `web_search` / `web_fetch` / `civitai_search` / `find_model` / `danbooru_lookup` | 300 秒 |
+
+六条纪律（改这块之前先读 `tool_cache.rs` 的文件头）：
+
+1. 名单是**白名单**、逐条写死，不是 `!is_mutating` 一刀切 —— 写类工具、`ask_user_question`（闸门）、
+   `load_skill`（它自己"一轮只放行一次"，进了缓存就会把整篇正文再灌一遍）**都不进**。
+2. 命中**一律如实说**：正文开头是 `[缓存命中] 同一工具 + 同一组参数在 N 秒前跑过一次…（没有重新执行）`，
+   工具卡上那一行摘要（`preview`）也从这段正文重算 —— **模型与用户同时看得见**。
+   悄悄返回旧数据，模型就会把几分钟前的队列状态当成此刻的事实。
+3. **审批语义一个字都不改**：查缓存发生在**审批之后**（`executor::handle_call` 的步骤 ⑥）——
+   缓存只免掉"再跑一遍"，不免掉"再问一次"。
+4. **写类工具成功 → 清空整个缓存**（`invalidates`）。清空是唯一的失效动作。
+   ⚠ `comfy_load_workflow` 的 `mutating` 是 `false`（不改用户机器上的文件）但它**会写库**，
+   在 `invalidates` 里是显式例外。
+5. **有界**：96 条 × 单条 ≤ 32k 字符，LRU 淘汰。
+6. **失败不进缓存**：一次超时 / 429 是"这一次"的事实，存下来等于把偶发故障变成长达几分钟的必然失败。
+
+磁盘类还有一个顺带买到的性质：路径要过 `ToolPolicy::resolve_read` 才谈得上命中，
+所以**用户把某个目录从读白名单里删掉之后，缓存不会继续把那份内容续出去**。
+
+回归：`tools/tool_cache/tests.rs` 10 例（键序 / 如实标注 / 名单 / stat 失效 / 白名单收紧 /
+TTL / 有界 / 超长 / 非对象负载 / 写后清空）+ `tools/tools/tests.rs` 的
+`命中缓存的那一次不占联网与_comfy_额度`。
 
 ## 4. Skills（M5）
 

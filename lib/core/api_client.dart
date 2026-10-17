@@ -168,8 +168,7 @@ class ApiClient {
   Future<Prompt> getPrompt(int id) async =>
       Prompt.fromJson(Map<String, dynamic>.from(await _get('/api/prompts/$id') as Map));
 
-  Future<Prompt> createPrompt(Prompt p) async => Prompt.fromJson(
-      Map<String, dynamic>.from(await _send('POST', '/api/prompts', p.toInputJson()) as Map));
+  Future<Prompt> createPrompt(Prompt p) async => Prompt.fromJson(      Map<String, dynamic>.from(await _send('POST', '/api/prompts', p.toInputJson()) as Map));
 
   Future<Prompt> updatePrompt(Prompt p) async => Prompt.fromJson(Map<String, dynamic>.from(
       await _send('PUT', '/api/prompts/${p.id}', p.toInputJson()) as Map));
@@ -192,6 +191,16 @@ class ApiClient {
 
   Future<List<MediaAsset>> promptMedia(int id) async {
     final json = await _get('/api/prompts/$id/media') as List;
+    return json.map((e) => MediaAsset.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+  }
+
+  /// 与这条**预设**同款提示词的产物（按归一化后的提示词匹配，2026-10-11）。
+  ///
+  /// 与 [promptMedia]（只认 `prompt_id` 直连）的区别：自动捕获的产物指向的是
+  /// **另一条**提示词行，所以直连会漏掉它们 —— 而"用这套预设同款提示词的产物"
+  /// 正是用户要看到的那些。
+  Future<List<MediaAsset>> presetMedia(int id) async {
+    final json = await _get('/api/presets/$id/media') as List;
     return json.map((e) => MediaAsset.fromJson(Map<String, dynamic>.from(e as Map))).toList();
   }
 
@@ -240,6 +249,9 @@ class ApiClient {
     String tagMode = 'any',
     String? kind,
     int? promptId,
+    int? collectionId,
+    /// **折叠集合**：一个集合只回一条（最早那条当代表），画廊据此显示成"一组"。
+    bool collapse = false,
     bool? favorite,
     bool untagged = false,
     String sort = 'newest',
@@ -252,6 +264,8 @@ class ApiClient {
       'tagMode': tagMode,
       'kind': kind,
       'promptId': promptId,
+      'collectionId': collectionId,
+      'collapse': collapse ? '1' : null,
       'favorite': favorite == null ? null : (favorite ? '1' : '0'),
       'untagged': untagged ? '1' : null,
       'sort': sort,

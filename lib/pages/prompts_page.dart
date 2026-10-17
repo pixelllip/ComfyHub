@@ -2,17 +2,34 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/formatting.dart';
+import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common.dart';
 import '../widgets/tag_editor.dart';
 import 'character_cards_page.dart';
+import 'preset_run.dart';
 import 'prompt_detail_page.dart';
 import 'prompt_edit_page.dart';
 
+/// **预设页**（2026-10-11 由「提示词」页改组而来）。
+///
+/// 用户定的定位：预设 = **可复用的一段提示词 + 用途**。这一页只保留三件事：
+/// **查看 / 修改提示词 / 用途（生图·生视频·生音频）**，外加把预设送进工作台执行。
+///
+/// 刻意**不再**在这页做的东西（都搬到别处或删掉了）：
+///  * 产物反查 —— 从画廊详情点进去看提示词更自然（用户原话："根据画廊页详情查找产物提示词已经足够"）；
+///  * 角色卡独立界面 —— 改成"给预设打一个 `角色卡` tag"（见 `character_cards_page.dart` 的迁移）。
 class PromptsPage extends StatefulWidget {
-  const PromptsPage({super.key});
+  /// 「▶️运行」的落点：把这段文本交给 AI 工作台并跳过去。
+  ///
+  /// 由 `HomeShell` 往下传（切页只有它能做，`_index` 是它的状态）——
+  /// 与受限横幅 `onOpenSettings` 同一个形状。`null` = 没人接（测试里直接起这一页时），
+  /// 那时按钮**不显示**（宁可不给，也不给一个点了没反应的按钮）。
+  final void Function(String text)? onSendToWorkspace;
+
+  const PromptsPage({super.key, this.onSendToWorkspace});
 
   @override
   State<PromptsPage> createState() => _PromptsPageState();
@@ -58,7 +75,7 @@ class _PromptsPageState extends State<PromptsPage> {
                 onPressed: _exitSelection,
               )
             : null,
-        title: Text(_selectionMode ? '已选 ${_selected.length} 项' : '提示词库'),
+        title: Text(_selectionMode ? '已选 ${_selected.length} 项' : '预设库'),
         actions: _selectionMode
             ? [
                 IconButton(
@@ -83,8 +100,8 @@ class _PromptsPageState extends State<PromptsPage> {
                 IconButton(
                   tooltip: '角色卡',
                   icon: const Icon(Icons.badge_outlined),
-                  // 角色卡与提示词是同一件事的两半：写角色前先看卡里存的规范 tag 栈
-                  // （AI 也读同一张表）。做成子页面而不是第六个一级导航项 —— 手机窄屏
+                  // 角色卡与提示词是同一件事的两半：写角色前先看卡里存的名称 / 正面提示词 /
+                  // 负面提示词（AI 也读同一张表）。做成子页面而不是第六个一级导航项 —— 手机窄屏
                   // 塞不下六个图标，而且系统返回手势天然正确（见 `9480278`）。
                   onPressed: () => Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const CharacterCardsPage()),
@@ -102,10 +119,6 @@ class _PromptsPageState extends State<PromptsPage> {
                 ),
                 const SizedBox(width: 4),
               ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Divider(height: 1, color: Theme.of(context).dividerColor),
-        ),
       ),
       floatingActionButton: _selectionMode && _selected.isNotEmpty
           ? null
@@ -142,138 +155,183 @@ class _PromptsPageState extends State<PromptsPage> {
 
   Widget _buildToolbar(BuildContext context, LibraryStore store) {
     final theme = Theme.of(context);
+    final settings = context.watch<SettingsStore>();
+    final collapsed = settings.promptFiltersCollapsed;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          TextField(
-            controller: _searchController,
-            textInputAction: TextInputAction.search,
-            decoration: InputDecoration(
-              hintText: '搜索标题 / 正向提示词 / 负向提示词 / 模型名…',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: _searchController.text.isEmpty
-                  ? null
-                  : IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        _searchController.clear();
-                        store.setPromptQuery('');
-                        setState(() {});
-                      },
-                    ),
-            ),
-            onChanged: (v) {
-              setState(() {});
-            },
-            onSubmitted: store.setPromptQuery,
-          ),
-          const SizedBox(height: 10),
-          // 筛选行**折行显示**（用户要求：一行放不下就两行、三行，不要横向滚动）。
-          // 这里原来是 `SingleChildScrollView(horizontal)`：窗口一窄，
-          // 「一键清除未关联 / 任一标签 / 排序」就被切在右边，不拖看不到。
+          // 搜索栏 + **折叠按钮**（与画廊同一套交互，用户 2026-10-11 定的位置）
           Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Expanded(
-                child: FilterChipRow(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
-                    ..._kindFilter(store),
-                    FilterChip(
-                      label: const Text('仅收藏'),
-                      avatar: Icon(
-                        store.onlyFavorite ? Icons.star : Icons.star_border,
-                        size: 17,
-                        color: store.onlyFavorite ? Colors.amber : null,
-                      ),
-                      selected: store.onlyFavorite,
-                      onSelected: (v) => store.setOnlyFavorite(v),
-                    ),
-                    // 「未关联产物」：产物被删掉之后提示词会变成未关联，
-                    // 这里筛出来，配合右边的「一键清除未关联」一起用（用户要求）
-                    FilterChip(
-                      label: const Text('未关联产物'),
-                      avatar: Icon(
-                        Icons.link_off,
-                        size: 16,
-                        color: store.onlyUnlinked ? Colors.orange : null,
-                      ),
-                      selected: store.onlyUnlinked,
-                      onSelected: (v) => store.setOnlyUnlinked(v),
-                    ),
-                    TextButton.icon(
-                      onPressed: _busy ? null : _clearUnlinked,
-                      icon: const Icon(Icons.cleaning_services_outlined, size: 16),
-                      label: const Text('一键清除未关联'),
-                      style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
-                    ),
-                    if (store.selectedTags.isNotEmpty)
-                      SegmentedButton<String>(
-                        style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                        segments: const [
-                          ButtonSegment(value: 'any', label: Text('任一标签')),
-                          ButtonSegment(value: 'all', label: Text('全部标签')),
-                        ],
-                        selected: {store.tagMode},
-                        onSelectionChanged: (s) => store.setTagMode(s.first),
-                      ),
-                    AppMenuButton<String>(
-                      tooltip: '排序',
-                      onSelected: store.setPromptSort,
-                      options: const [
-                        MenuOption(value: 'newest', icon: Icons.schedule, label: '最新创建'),
-                        MenuOption(value: 'oldest', icon: Icons.history, label: '最旧创建'),
-                        MenuOption(value: 'updated', icon: Icons.update, label: '最近修改'),
-                        MenuOption(value: 'title', icon: Icons.sort_by_alpha, label: '按标题'),
-                        MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
-                      ],
-                      button: (context, controller, isOpen) => InkWell(
-                        borderRadius: BorderRadius.circular(8),
-                        onTap: () => controller.isOpen ? controller.close() : controller.open(),
-                        child: Chip(
-                          avatar: const Icon(Icons.sort, size: 16),
-                          label: Text(_sortLabel(store.promptSort)),
-                        ),
-                      ),
-                    ),
-                  ],
+                child: TextField(
+                  controller: _searchController,
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    hintText: '搜索标题 / 正向提示词 / 负向提示词 / 模型名…',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _searchController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              _searchController.clear();
+                              store.setPromptQuery('');
+                              setState(() {});
+                            },
+                          ),
+                  ),
+                  onChanged: (v) {
+                    setState(() {});
+                  },
+                  onSubmitted: store.setPromptQuery,
                 ),
               ),
-              const SizedBox(width: 8),
-              Padding(
-                // 和 chip 的视觉基线对齐（chip 自带一点内边距）
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  '共 ${store.prompts.total} 条',
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-                ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: collapsed ? '展开筛选' : '收起筛选',
+                icon: Icon(collapsed ? Icons.expand_more : Icons.expand_less),
+                onPressed: () => settings.setPromptFiltersCollapsed(!collapsed),
               ),
             ],
           ),
-          if (store.selectedTags.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Wrap(
-              children: [
-                for (final t in store.selectedTags)
-                  TagChip(
-                    label: t,
-                    selected: true,
-                    onDeleted: () => store.toggleTag(t),
-                    onTap: () => store.toggleTag(t),
-                  ),
-                TextButton.icon(
-                  onPressed: store.clearTags,
-                  icon: const Icon(Icons.clear_all, size: 16),
-                  label: const Text('清空标签'),
-                ),
-              ],
+          // 收起时露出生效筛选摘要（与画廊同一条理由：否则用户以为"预设怎么少了"）
+          if (collapsed)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: _FilterSummary(text: _filterSummary(store), theme: theme),
             ),
+          if (!collapsed) ...[
+            const SizedBox(height: 10),
+            _filterSections(store, theme),
           ],
         ],
       ),
+    );
+  }
+
+  /// 当前生效的筛选项摘要（形如 `生图 · 仅收藏 · 最新创建`）。
+  String _filterSummary(LibraryStore store) {
+    final parts = <String>[
+      switch (store.promptKind) {
+        'IMAGE' => '生图',
+        'VIDEO' => '生视频',
+        'AUDIO' => '生音频',
+        'MIXED' => '混合',
+        _ => '全部',
+      },
+      if (store.onlyFavorite) '仅收藏',
+      if (store.onlyUnlinked) '未关联产物',
+      if (store.selectedTags.isNotEmpty) '标签 ${store.selectedTags.join('/')}',
+      if (store.promptQuery.isNotEmpty) '搜索「${store.promptQuery}」',
+      _sortLabel(store.promptSort),
+    ];
+    return parts.join(' · ');
+  }
+
+  /// 筛选选项**按功能分区**，但**不"一种一行"**（用户 2026-10-11）：
+  /// 组内联排、组与组之间一条竖线，宽窗口一行塞得下两三组，窄窗口整组换行。
+  Widget _filterSections(LibraryStore store, ThemeData theme) {
+    return FilterGroupRow(
+      groups: [
+        FilterGroup(title: '用途', children: _kindFilter(store)),
+        FilterGroup(
+          title: '状态',
+          children: [
+            FilterChip(
+              label: const Text('仅收藏'),
+              avatar: Icon(
+                store.onlyFavorite ? Icons.star : Icons.star_border,
+                size: 17,
+                color: store.onlyFavorite ? Colors.amber : null,
+              ),
+              selected: store.onlyFavorite,
+              onSelected: (v) => store.setOnlyFavorite(v),
+            ),
+            // 「未关联产物」：产物被删掉之后提示词会变成未关联，
+            // 这里筛出来，配合「一键清除未关联」一起用（用户要求）
+            FilterChip(
+              label: const Text('未关联产物'),
+              avatar: Icon(
+                Icons.link_off,
+                size: 16,
+                color: store.onlyUnlinked ? Colors.orange : null,
+              ),
+              selected: store.onlyUnlinked,
+              onSelected: (v) => store.setOnlyUnlinked(v),
+            ),
+          ],
+        ),
+        if (store.selectedTags.isNotEmpty)
+          FilterGroup(
+            title: '标签',
+            children: [
+              for (final t in store.selectedTags)
+                TagChip(
+                  label: t,
+                  selected: true,
+                  onDeleted: () => store.toggleTag(t),
+                  onTap: () => store.toggleTag(t),
+                ),
+              SegmentedButton<String>(
+                style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                segments: const [
+                  ButtonSegment(value: 'any', label: Text('任一标签')),
+                  ButtonSegment(value: 'all', label: Text('全部标签')),
+                ],
+                selected: {store.tagMode},
+                onSelectionChanged: (s) => store.setTagMode(s.first),
+              ),
+              TextButton.icon(
+                onPressed: store.clearTags,
+                icon: const Icon(Icons.clear_all, size: 16),
+                label: const Text('清空标签'),
+              ),
+            ],
+          ),
+        FilterGroup(
+          title: '排序',
+          children: [
+            AppMenuButton<String>(
+              tooltip: '排序',
+              onSelected: store.setPromptSort,
+              options: const [
+                MenuOption(value: 'newest', icon: Icons.schedule, label: '最新创建'),
+                MenuOption(value: 'oldest', icon: Icons.history, label: '最旧创建'),
+                MenuOption(value: 'updated', icon: Icons.update, label: '最近修改'),
+                MenuOption(value: 'title', icon: Icons.sort_by_alpha, label: '按标题'),
+                MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
+              ],
+              button: (context, controller, isOpen) => InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => controller.isOpen ? controller.close() : controller.open(),
+                child: Chip(
+                  avatar: const Icon(Icons.sort, size: 16),
+                  label: Text(_sortLabel(store.promptSort)),
+                ),
+              ),
+            ),
+            Text(
+              '共 ${store.prompts.total} 条',
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+          ],
+        ),
+        // 清理是**破坏性**动作：单独一组，别跟筛选混在一起
+        FilterGroup(
+          title: '清理',
+          children: [
+            TextButton.icon(
+              onPressed: _busy ? null : _clearUnlinked,
+              icon: const Icon(Icons.cleaning_services_outlined, size: 16),
+              label: const Text('一键清除未关联'),
+              style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -356,6 +414,11 @@ class _PromptsPageState extends State<PromptsPage> {
                 onOpen: () =>
                     _selectionMode ? _toggle(prompt.id) : _openDetail(context, prompt),
                 onToggleTag: store.toggleTag,
+                // 「▶️运行」：交给宿主（HomeShell）送进工作台并切过去。
+                // 宿主没接（比如用例里直接起这一页）时传 null，按钮就不显示。
+                onRun: widget.onSendToWorkspace == null
+                    ? null
+                    : () => _runPreset(prompt),
               );
             },
           ),
@@ -374,6 +437,19 @@ class _PromptsPageState extends State<PromptsPage> {
       MaterialPageRoute(builder: (_) => PromptDetailPage(promptId: prompt.id)),
     );
     if (context.mounted) context.read<LibraryStore>().refreshAll();
+  }
+
+  /// 「▶️运行」：弹窗确认目标产物类型 → 把提示词送进工作台并跳过去。
+  ///
+  /// **不自动发送**（用户 2026-10-11 定的）：只填进输入框，用户自己按发送 ——
+  /// 这样不产生"无人值守的提交"，`comfy_submit` 那道审批闸门一个字都不改。
+  Future<void> _runPreset(Prompt prompt) async {
+    final send = widget.onSendToWorkspace;
+    if (send == null) return;
+    final kind = await showPresetRunDialog(context, prompt);
+    if (kind == null || !mounted) return;
+    // 类型以"预设自己的用途"为准；用户临时改了就按他改的走（写在指令里让模型照办）
+    send(buildPresetRunText(prompt, kind));
   }
 
   // -------------------------------------------------------------------------
@@ -489,8 +565,42 @@ class _PromptsPageState extends State<PromptsPage> {
 }
 
 /// 批量加标签：直接复用提示词编辑页那套标签控件（可搜索词表、也能新建）
-class _AddTagsDialog extends StatefulWidget {
-  final int count;
+/// 收起筛选栏时露出的"当前生效的筛选摘要"（与画廊那份同形同义）。
+///
+/// 收起来之后**必须**能看出自己在筛选状态，否则会以为"预设怎么少了"。
+class _FilterSummary extends StatelessWidget {
+  final String text;
+  final ThemeData theme;
+
+  const _FilterSummary({required this.text, required this.theme});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.filter_alt_outlined, size: 14, color: theme.colorScheme.outline),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AddTagsDialog extends StatefulWidget {  final int count;
 
   const _AddTagsDialog({required this.count});
 
@@ -593,6 +703,9 @@ class PromptCard extends StatelessWidget {
   final bool selectionMode;
   final bool selected;
 
+  /// 「▶️运行」：null = 不显示这个按钮（宿主没接这条回调时）。
+  final VoidCallback? onRun;
+
   const PromptCard({
     super.key,
     required this.prompt,
@@ -602,6 +715,7 @@ class PromptCard extends StatelessWidget {
     this.onLongPress,
     this.selectionMode = false,
     this.selected = false,
+    this.onRun,
   });
 
   @override
@@ -669,6 +783,20 @@ class PromptCard extends StatelessWidget {
                     ),
                   // 多选模式下藏掉单条操作，避免"想选中却点了收藏"
                   if (!selectionMode) ...[
+                    // 「▶️运行」：这个页面的主操作，所以放成**显式按钮**而不是收进"更多"。
+                    // 宿主没接回调时（测试里直接起这一页）不显示。
+                    if (onRun != null)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: FilledButton.tonalIcon(
+                          onPressed: onRun,
+                          icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                          label: const Text('运行'),
+                          style: FilledButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                      ),
                     IconButton(
                       tooltip: prompt.favorite ? '取消收藏' : '收藏',
                       visualDensity: VisualDensity.compact,

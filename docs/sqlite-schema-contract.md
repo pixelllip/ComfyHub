@@ -138,9 +138,17 @@ CREATE TABLE _outbox (
 
 | 同步 | 不同步 |
 | --- | --- |
-| `prompts` `tags` `prompt_tags` `media_assets` `media_tags` | **`ai_run_events`**（单 Run 上万条的调试日志） |
+| `prompts` `tags` `prompt_tags` `media_assets` `media_tags` `media_collections` | **`ai_run_events`**（单 Run 上万条的调试日志） |
 | `ai_conversations` `ai_messages` `ai_message_parts` `ai_attachments` | `ai_providers` `ai_models` `app_settings`（**含凭据引用与令牌明文**） |
 | `capture_runs` `ai_runs` `ai_tool_calls` | `ai_questions`（提问闸门只在桌面侧；手机看实时提问走 `GET /api/ai/pending`） |
+
+> **2026-10-11：`media_collections` 进同步范围**（产物集合：同源微调的产物归到一组）。
+> 它必须跟着 `media_assets` 一起走 —— 否则手机上的 `collection_id` 指向一个**它那边不存在的
+> 集合**，表现是"折叠不出组、也解释不了这几张为什么在一起"，而且**两端都不报错**。
+> 连带：`SCHEMA_VERSION` 由 6 提到 7（一次同时加表 + 加列，两条路都要走，见 §2）；
+> `media_collections` 也进了 `PHONE_FORBIDDEN`（分组由桌面算，手机不许自己造组）。
+> 判定规则本身**不进库** —— 真源是 `server-rs/src/media/collection.rs` 的纯函数，
+> 库里只存 `group_key` / `origin` / `rule_version`。
 
 > ✅ **2026-09-27 用户拍板（总纲 §7 待定项 1 = 进同步范围）**：`ai_runs` / `ai_tool_calls`
 > 从"可选"变成**进**，理由是手机要能显示桌面那次 Run 的**工具过程**（跑过哪些工具、成没成、

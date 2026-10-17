@@ -35,7 +35,7 @@ use crate::ai::events::event_type;
 use crate::provider::protocol::{Api, ChatTurn, ReasoningRequest, StreamEvent, ThinkingFormat};
 use crate::web::routes::{ApiError, AppState};
 use crate::ai::run_lifecycle::{finish_run, ModelRow};
-use crate::provider::upstream::{stream_chat, ChatRequest};
+use crate::provider::upstream::{stream_chat, ChatRequest, TokenUsage};
 
 /// 正文超过这个长度就请求"接着写"（Kotlin `HarnessRunner.CONTINUE_INSTRUCTION` 的触发条件）。
 pub const CONTINUE_CHARS: usize = 12_000;
@@ -175,6 +175,14 @@ fn started_payload(
     })
 }
 
+/// 内存里那份归一化 usage → **落库/发给界面的形状**（契约那四个键）。
+///
+/// 落库的 `usage_json` 与 `message.completed.usage` 读的是同一个形状，
+/// 所以这个转换只有这一处 —— 别在调用点各写一份 `json!`（写歪了界面就少一行）。
+fn usage_json(usage: Option<TokenUsage>) -> Option<Value> {
+    usage.map(TokenUsage::to_json)
+}
+
 /// 收尾包装：任何一步出错都只记日志（**不 panic、不把上一步的成果丢掉**）。
 fn finish_quietly(
     state: &AppState,
@@ -182,7 +190,7 @@ fn finish_quietly(
     status: &str,
     code: Option<&str>,
     message: Option<&str>,
-    usage: Option<&Value>,
+    usage: Option<TokenUsage>,
 ) {
     if let Err(e) = finish_run(&state.bus, state, run_id, status, code, message, usage) {
         eprintln!("执行器：收尾失败（Run 可能停在 running）：{}", e.human());
@@ -237,6 +245,10 @@ async fn run_once(
         &provider.display_name,
         &provider.api,
         &model.id,
+        // ⚠ **在这里渲染一次、整个 Run 复用**：进工具循环之前就算好，
+        // 于是同一 Run 的每一轮前缀逐字节相同（前缀缓存的命中率就是这么来的）。
+        // 日期只到"天"，所以同一天的后续 Run 也还是同一份 —— 见 `system_prompt` 文件头。
+        &crate::ai::run_kit::local_date(state)?,
         &tool_refs,
         &skills,
         &policy,
@@ -325,7 +337,7 @@ async fn run_once(
     // （Kotlin `ToolContext.hasImageAttachment`，与上面喂给系统提示的是**同一个值**）
     session.has_image_attachment = has_inlined_attachments;
     let mut trailing: Vec<ChatTurn> = Vec::new();
-    let mut total_usage: Option<Value> = None;
+    let mut total_usage: Option<TokenUsage> = None;
     let mut last_provider_response_id: Option<String> = None;
     let mut step = 0usize;
     let mut budget_exhausted = false;
@@ -353,10 +365,10 @@ async fn run_once(
                 &sink.text_body(),
                 "cancelled",
                 last_provider_response_id.as_deref(),
-                total_usage.as_ref(),
+                usage_json(total_usage).as_ref(),
             )?;
             drop(sink);
-            finish_run(&state.bus, state, run_id, "cancelled", None, None, total_usage.as_ref())?;
+            finish_run(&state.bus, state, run_id, "cancelled", None, None, total_usage)?;
             return Ok(());
         }
 
@@ -474,7 +486,7 @@ async fn run_once(
                     &sink.text_body(),
                     "failed",
                     last_provider_response_id.as_deref(),
-                    total_usage.as_ref(),
+                    usage_json(total_usage).as_ref(),
                 )?;
                 return Err(e);
             }
@@ -494,10 +506,11 @@ async fn run_once(
                 title_applied = true;
             }
         }
-        total_usage = Some(crate::provider::upstream::merge_usage(
-            total_usage,
-            idle.usage.as_ref().unwrap_or(&json!({})),
-        ));
+        total_usage = Some(
+            total_usage
+                .unwrap_or_default()
+                .merge(idle.usage.unwrap_or_default()),
+        );
         if idle.provider_response_id.is_some() {
             last_provider_response_id = idle.provider_response_id.clone();
         }
@@ -609,8 +622,16 @@ async fn run_once(
             // 让它们占额度就是用户抱怨过的那种"什么都没干就说预算不足"。
             if outcome.ok {
                 // **只有真的跑成功才消耗额度**（Kotlin spendCall 的时点）；
-                // 联网那一档另有一份计数（`MAX_WEB_QUERIES_PER_RUN`，见下面的预检）
-                session.spend_call(&call.name);
+                // 联网那一档另有一份计数（`MAX_WEB_QUERIES_PER_RUN`，见下面的预检）。
+                //
+                // ⚠ 命中缓存的那一次走 `spend_cached_call`：总调用额度照记
+                //   （它同样占了一轮上下文、同样该受 `maxCallsPerRun` 管），
+                //   但**不占**联网 / ComfyUI 那两条 —— 它一次真实请求都没发。
+                if outcome.cached {
+                    session.spend_cached_call(&call.name);
+                } else {
+                    session.spend_call(&call.name);
+                }
             }
             // 工具结果作为下一轮的 `role = tool`
             trailing.push(ChatTurn {
@@ -643,11 +664,13 @@ async fn run_once(
         (sink.text_body(), parts_json(&sink), sink.reasoning.clone())
     };
 
-    // usage 事件的形状：归一到 OpenAI 形状（界面读的是它）
-    if let Some(usage) = total_usage.as_ref() {
+    // usage 事件的载荷是**平铺的四个键**（契约 §2 的 `inputTokens` / `outputTokens` /
+    // `cachedTokens` / `reasoningTokens`）—— 与手机 harness 的 `EventPayloads.usage` 同形。
+    // ⚠ 别退回 `{ "usage": {...} }`：契约那一列写的就是这四个键本身。
+    if let Some(usage) = total_usage {
         state
             .bus
-            .emit(state, run_id, event_type::USAGE_UPDATED, &json!({ "usage": usage }))?;
+            .emit(state, run_id, event_type::USAGE_UPDATED, &usage.to_json())?;
     }
 
     let provider_response_id = last_provider_response_id
@@ -658,7 +681,7 @@ async fn run_once(
         &body,
         "complete",
         Some(&provider_response_id),
-        total_usage.as_ref(),
+        usage_json(total_usage).as_ref(),
     )?;
     state.bus.emit(
         state,
@@ -676,11 +699,11 @@ async fn run_once(
             "reasoningEffort": effort_stored,
             "steps": step,
             "parts": completed_parts,
-            "usage": total_usage,
+            "usage": usage_json(total_usage),
         }),
     )?;
 
-    finish_run(&state.bus, state, run_id, "completed", None, None, total_usage.as_ref())?;
+    finish_run(&state.bus, state, run_id, "completed", None, None, total_usage)?;
     Ok(())
 }
 
@@ -777,6 +800,11 @@ struct CallOutcome {
     /// 结构化结果（成功时是工具给的 `payload`；失败时 `null`）
     result: Value,
     elapsed_ms: i64,
+    /// 这一次是**命中缓存**得到的（没有真跑）。
+    ///
+    /// 用途只有一个：额度那边要分开记（[`crate::tools::tools::ToolSession::spend_cached_call`]）——
+    /// 命中不发任何真实请求，就不该占"联网 / ComfyUI 查询"那两份额度。
+    cached: bool,
 }
 
 impl CallOutcome {
@@ -791,6 +819,8 @@ impl CallOutcome {
             approval: approval.to_string(),
             result: Value::Null,
             elapsed_ms,
+            // 失败**从不**走缓存（`tool_cache` 纪律 6），所以这里恒为 false
+            cached: false,
         }
     }
 }
@@ -825,6 +855,14 @@ async fn handle_call(
     max_calls: i64,
 ) -> Result<CallOutcome, ApiError> {
     let arguments: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
+    // **只读工具的缓存命中**（`tools::tool_cache`）：这一句是**纯内存查询**，
+    // 什么都不碰、也不改任何闸门的顺序 —— 它只影响两件事：
+    //   ① 出网 / ComfyUI 那两条"别拿外部服务当轮询器"的额度**要不要扣**（命中不扣：
+    //      没有产生任何真实请求，凭什么占那份额度）；
+    //   ② ⑥ 那一步要不要真跑。
+    // ⚠ **它排在审批之前只是为了"额度判定"**，真正的取用（`into_wire`）在审批之后 ——
+    //    不然"用户没批准"就会被一份缓存悄悄顶掉（见 `tool_cache` 模块头纪律 3）。
+    let cached = crate::tools::tool_cache::lookup(policy, &call.name, &arguments);
     // 出厂权限档：静态清单里没有的名字，可能是运行时拉到的 MCP 工具（第 45 步）——
     // 那一批的档位由 `McpToolPolicy` 决定（`run_workflow` = ASK、`update_comfyui` = DENY…）。
     // 两个来源都没这个工具时回 `ASK`（保守：宁可多问一次，也不默默放开一个写操作）。
@@ -915,7 +953,13 @@ async fn handle_call(
     // 联网那档**另有一条独立预算**（Kotlin `ToolRegistry.invoke` 里 `ToolCategory.WEB` 那一段）：
     // 每搜一次都是一次真实的外部请求 + 一份要烧 token 的正文，"再搜一下确认"很容易刹不住车。
     // 系统提示里写着"一次回复最多联网 N 次"——**写了就必须真拦**，否则那句话是空的。
-    if crate::ai::ai_settings::category_of(&call.name) == "web" && !session.has_web_queries_left() {
+    //
+    // ⚠ 命中缓存的那一次**不占**这份额度：它一次外部请求都没发（`tools::tool_cache`）。
+    //    额度拦的是"真请求"，重复的那一次交给缓存拦。
+    if cached.is_none()
+        && crate::ai::ai_settings::category_of(&call.name) == "web"
+        && !session.has_web_queries_left()
+    {
         return finish_failure(
             state,
             run_id,
@@ -940,7 +984,11 @@ async fn handle_call(
     // Kotlin `ToolRegistry.invoke` 里 `ToolCategory.COMFY` 那一段）。系统提示里写着
     // "一次回复最多查 ComfyUI N 次" —— **写了就必须真拦**，否则那句话是空的
     // （这正是 2026-09-25 那次审查记下的"提示词里写了、代码里没有"）。
-    if crate::ai::ai_settings::is_comfy_query(&call.name) && !session.has_comfy_queries_left() {
+    // 命中缓存的那一次同样不占（同联网那条）。
+    if cached.is_none()
+        && crate::ai::ai_settings::is_comfy_query(&call.name)
+        && !session.has_comfy_queries_left()
+    {
         return finish_failure(
             state,
             run_id,
@@ -996,48 +1044,81 @@ async fn handle_call(
         emit_started(state, run_id, call_id, &call.name)?;
     }
 
-    // ⑥ 执行
+    // ⑥ 执行 —— **或者取缓存**（只读工具、参数完全相同、还在新鲜期内）
     let started = std::time::Instant::now();
-    let result = crate::tools::tools::execute(
-        state,
-        policy,
-        run_id,
-        conversation_id,
-        &call.name,
-        &arguments,
-        session,
-    )
-    .await;
-    let elapsed_ms = started.elapsed().as_millis() as i64;
-    let outcome = match result {
-        Ok(out) => {
-            let (content, truncated) = crate::tools::tools::truncate_result(&out.content);
-            // 结构化结果：工具给了就用它，否则"截断过"这件事本身也要让界面知道
-            let mut meta = out.payload.clone();
-            if truncated {
-                if let Some(map) = meta.as_object_mut() {
-                    map.insert("truncated".into(), Value::Bool(true));
-                } else {
-                    meta = json!({ "truncated": true });
-                }
-            }
+    let outcome = match cached {
+        // 命中：不执行、不烧那两条额度。正文与摘要由 `into_wire` **如实标注**
+        // （"同一工具 + 同一组参数在 N 秒前跑过一次，没有重新执行"）——
+        // 悄悄返回旧数据会让模型把几分钟前的队列状态当成此刻的事实，见 `tool_cache` 纪律 2。
+        Some(hit) => {
+            let (content, preview, payload) = hit.into_wire();
             CallOutcome {
                 content,
-                preview: out.preview,
+                preview,
                 ok: true,
                 code: None,
                 approval,
-                result: meta,
-                elapsed_ms,
+                result: payload,
+                elapsed_ms: started.elapsed().as_millis() as i64,
+                cached: true,
             }
         }
-        Err(failure) => CallOutcome::failure(
-            &failure.code,
-            &failure.message,
-            &approval,
-            elapsed_ms,
-        ),
+        None => {
+            let result = crate::tools::tools::execute(
+                state,
+                policy,
+                run_id,
+                conversation_id,
+                &call.name,
+                &arguments,
+                session,
+            )
+            .await;
+            let elapsed_ms = started.elapsed().as_millis() as i64;
+            match result {
+                Ok(out) => {
+                    let (content, truncated) = crate::tools::tools::truncate_result(&out.content);
+                    // 结构化结果：工具给了就用它，否则"截断过"这件事本身也要让界面知道
+                    let mut meta = out.payload.clone();
+                    if truncated {
+                        if let Some(map) = meta.as_object_mut() {
+                            map.insert("truncated".into(), Value::Bool(true));
+                        } else {
+                            meta = json!({ "truncated": true });
+                        }
+                    }
+                    // 存缓存：**只对 `freshness` 认的纯读工具**、且**只存成功的那一次**
+                    // （一次超时/429 是"这一次"的事实，存下来等于把偶发故障变成长达几分钟的必然失败）
+                    crate::tools::tool_cache::store(
+                        policy,
+                        &call.name,
+                        &arguments,
+                        &content,
+                        &meta,
+                    );
+                    CallOutcome {
+                        content,
+                        preview: out.preview,
+                        ok: true,
+                        code: None,
+                        approval,
+                        result: meta,
+                        elapsed_ms,
+                        cached: false,
+                    }
+                }
+                Err(failure) => {
+                    CallOutcome::failure(&failure.code, &failure.message, &approval, elapsed_ms)
+                }
+            }
+        }
     };
+
+    // 写类工具跑成功 → 缓存里那份"世界的描述"就过期了（纪律 4：清空是唯一的失效动作）。
+    // ⚠ 放在 `store` 之后也无妨：写类工具**本来就不在** `freshness` 名单里，两者不会互相打架。
+    if outcome.ok && crate::tools::tool_cache::invalidates(&call.name) {
+        crate::tools::tool_cache::invalidate_all();
+    }
 
     // ⑦ 落库 + 发事件 + 落块（失败也走同一条尾巴，**绝不静默**）
     let rec = crate::ai::runs::ToolCallRecord {

@@ -73,7 +73,7 @@ bug：
 - 把目前已有的skill整理成技能树，后续加skill进来用技能树管理和使用？
 - 新增对生成角色的提示词约束skill（占位符，哪天我想起来再实装）
 - 接入comfy mcp，我们项目里和mcp重复的功能就可以删掉了
-  → **决定：接（2026-09-21 晚，用户拍板）**；查证报告见 [`docs/comfy-mcp-report.md`](../../docs/comfy-mcp-report.md)。
+  → **决定：接（2026-09-21 晚，用户拍板）**；查证报告见 [`docs/archive/comfy-mcp-report.md`](../../docs/archive/comfy-mcp-report.md)。
   （先查证后决策：拉了官方本地服务端源码读（`Comfy-Org/comfy-mcp` v0.10.0，HEAD `e5f768d`，40 个 `@mcp.tool()`），
   当时的报告结论是"不整条接"（要 Python+comfy-cli、我们的入库链路删不掉、安全面更大）；
   用户随后给出了依赖问题的解法并拍板**用它的**："官方 mcp 它覆盖的功能比我们更多更全，用它的。

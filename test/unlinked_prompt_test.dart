@@ -107,8 +107,12 @@ Future<(LibraryStore, _FakeLibrary)> _makeStore(List<Map<String, dynamic>> promp
   return (store, fake);
 }
 
-Widget _wrap(LibraryStore store) => ChangeNotifierProvider<LibraryStore>.value(
-      value: store,
+Widget _wrap(LibraryStore store) => MultiProvider(
+      providers: [
+        ChangeNotifierProvider<LibraryStore>.value(value: store),
+        // 预设页的筛选栏要读 `SettingsStore`（折叠状态记在它里面）
+        ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+      ],
       child: const MaterialApp(home: PromptsPage()),
     );
 

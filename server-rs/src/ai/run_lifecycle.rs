@@ -42,6 +42,7 @@ use serde_json::{json, Value};
 use crate::ai::events::{event_type, RunEventBus, TERMINAL_EVENTS};
 use crate::web::routes::{ApiError, AppState};
 use crate::ai::runs::{self, NewRun};
+use crate::provider::upstream::TokenUsage;
 
 /// SSE 轮询间隔（毫秒）。120ms ≈ 每秒 8 次读一条 `seq > cursor` 的索引查询 ——
 /// 对 SQLite WAL 是白菜价，而界面上看起来就是"逐字在流"。
@@ -639,6 +640,9 @@ fn event_to_sse(seq: i64, event_type: &str, payload: &Value) -> String {
 ///
 /// 三条路（正常 / 失败 / 取消）都必须走它 —— 少任何一步的表现都是
 /// "界面永远转圈"或"断线重连补不回最后那句话"（R6）。
+///
+/// `usage` 收的是**归一化后的结构**（[`TokenUsage`]）；落库那一列要的是契约四字段的 JSON，
+/// 转换在这里做一次 —— 调用方别各写一份（"缓存命中"被写丢过一次，就是这么丢的）。
 pub fn finish_run(
     bus: &RunEventBus,
     state: &AppState,
@@ -646,8 +650,9 @@ pub fn finish_run(
     status: &str,
     error_code: Option<&str>,
     error_message: Option<&str>,
-    usage: Option<&Value>,
+    usage: Option<TokenUsage>,
 ) -> Result<(), ApiError> {
+    let usage_json = usage.map(TokenUsage::to_json);
     let event = match status {
         "completed" => event_type::RUN_COMPLETED,
         "cancelled" => event_type::RUN_CANCELLED,
@@ -665,7 +670,7 @@ pub fn finish_run(
     // 顺序：**先发事件再落终态**。反过来的话 SSE 可能先看到 `status != running`
     // 而结束流，那条终态事件就永远发不出去了。
     bus.emit(state, run_id, event, &payload)?;
-    runs::finish(state, run_id, status, error_code, error_message, usage)?;
+    runs::finish(state, run_id, status, error_code, error_message, usage_json.as_ref())?;
     // 这个 Run 上还没人回答的提问一律按失效收尾（Kotlin `AskRegistry.discardRun`）。
     // ⚠ 少了这一步，那些行会永远停在 pending：`/api/ai/pending` 一直把它们列出来，
     // 而点进去谁也答不了（Run 已经结束）—— 那就是一张"点了也没用"的卡。

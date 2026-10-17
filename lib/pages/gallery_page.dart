@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
+import '../widgets/collection_thumb.dart';
 import '../widgets/common.dart';
 import '../widgets/media_thumb.dart';
 import '../widgets/upload_sheet.dart';
@@ -35,10 +37,24 @@ class _GalleryPageState extends State<GalleryPage> {
     });
   }
 
+  void _toggleSelect(int id) {
+    setState(() {
+      if (!_selected.remove(id)) _selected.add(id);
+    });
+  }
+
+  /// 打开详情页，回来后刷新（删除 / 收藏 / 打标签都会改变列表）。
+  Future<void> _openDetail(int mediaId) async {
+    final store = context.read<LibraryStore>();
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => MediaDetailPage(mediaId: mediaId)),
+    );
+    await store.refreshMedia();
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
-    final theme = Theme.of(context);
 
     // ContextMenuScope：右键菜单的宿主。它**不铺 ModalBarrier**，所以菜单开着时
     // 画廊照样能滚（用户 bug ②）。一个页面只挂一个。
@@ -86,10 +102,6 @@ class _GalleryPageState extends State<GalleryPage> {
                 ),
                 const SizedBox(width: 4),
               ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Divider(height: 1, color: theme.dividerColor),
-        ),
       ),
       floatingActionButton: _selectionMode && _selected.isNotEmpty
           ? null
@@ -122,142 +134,191 @@ class _GalleryPageState extends State<GalleryPage> {
 
   Widget _buildToolbar(BuildContext context, LibraryStore store) {
     final theme = Theme.of(context);
+    final settings = context.watch<SettingsStore>();
+    final collapsed = settings.galleryFiltersCollapsed;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          TextField(
-            controller: _searchController,
-            decoration: InputDecoration(
-              hintText: '搜索产物 / 关联提示词内容…',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: _searchController.text.isEmpty
-                  ? null
-                  : IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        _searchController.clear();
-                        store.setMediaQuery('');
-                        setState(() {});
-                      },
-                    ),
-            ),
-            onChanged: (_) => setState(() {}),
-            onSubmitted: store.setMediaQuery,
-          ),
-          const SizedBox(height: 10),
-          // 筛选行**折行显示**（用户要求：一行放不下就两行、三行，不要横向滚动）。
-          // 这里原来是 `SingleChildScrollView(horizontal)`：窗口一窄，「仅收藏 / 未关联 /
-          // 清除未关联产物 / 排序」全被切在右边，不拖看不到。
-          // 「共 N 个」放在筛选行**后面**（它跟着 `Expanded` 贴到最右）：
-          // 塞进这一行的话它自己也会变成一个换行项。
+          // 搜索栏 + **折叠按钮**（用户 2026-10-11 定：按钮放搜索栏右侧）
           Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Expanded(
-                child: FilterChipRow(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    for (final entry in const <(String?, String)>[
-                      (null, '全部'),
-                      ('IMAGE', '图片'),
-                      ('VIDEO', '视频'),
-                      ('AUDIO', '音频'),
-                    ])
-                      ChoiceChip(
-                        label: Text(entry.$2),
-                        selected: store.mediaKind == entry.$1,
-                        onSelected: (_) => store.setMediaKind(entry.$1),
-                      ),
-                    FilterChip(
-                      label: const Text('仅收藏'),
-                      avatar: Icon(
-                        store.mediaOnlyFavorite ? Icons.star : Icons.star_border,
-                        size: 16,
-                        color: store.mediaOnlyFavorite ? Colors.amber : null,
-                      ),
-                      selected: store.mediaOnlyFavorite,
-                      onSelected: store.setMediaOnlyFavorite,
-                    ),
-                    FilterChip(
-                      label: const Text('未关联'),
-                      selected: store.mediaUntagged,
-                      onSelected: store.setMediaUntagged,
-                    ),
-                    // 提示词被删掉后，它名下的产物会解除关联（prompt_id → NULL）。
-                    // 这里给一个"把这些孤儿产物一次清掉"的入口（用户要求）。
-                    TextButton.icon(
-                      onPressed: _busy ? null : _clearUnlinked,
-                      icon: const Icon(Icons.cleaning_services_outlined, size: 16),
-                      label: const Text('清除未关联产物'),
-                      style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
-                    ),
-                    if (store.mediaTags.isNotEmpty)
-                      SegmentedButton<String>(
-                        style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                        segments: const [
-                          ButtonSegment(value: 'any', label: Text('任一标签')),
-                          ButtonSegment(value: 'all', label: Text('全部标签')),
-                        ],
-                        selected: {store.mediaTagMode},
-                        onSelectionChanged: (s) => store.setMediaTagMode(s.first),
-                      ),
-                    AppMenuButton<String>(
-                      tooltip: '排序',
-                      onSelected: store.setMediaSort,
-                      options: const [
-                        MenuOption(value: 'newest', icon: Icons.schedule, label: '最新加入'),
-                        MenuOption(value: 'oldest', icon: Icons.history, label: '最旧加入'),
-                        MenuOption(value: 'name', icon: Icons.sort_by_alpha, label: '按文件名'),
-                        MenuOption(value: 'largest', icon: Icons.data_usage, label: '按体积'),
-                        MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
-                      ],
-                      button: (context, controller, isOpen) => InkWell(
-                        borderRadius: BorderRadius.circular(8),
-                        onTap: () => controller.isOpen ? controller.close() : controller.open(),
-                        child: Chip(
-                          avatar: const Icon(Icons.sort, size: 16),
-                          label: Text(_sortLabel(store.mediaSort)),
-                        ),
-                      ),
-                    ),
-                  ],
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: '搜索产物 / 关联提示词内容…',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _searchController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              _searchController.clear();
+                              store.setMediaQuery('');
+                              setState(() {});
+                            },
+                          ),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: store.setMediaQuery,
                 ),
               ),
-              const SizedBox(width: 8),
-              Padding(
-                // 和 chip 的视觉基线对齐（chip 自带一点内边距）
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  '共 ${store.media.total} 个',
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-                ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: collapsed ? '展开筛选' : '收起筛选',
+                icon: Icon(collapsed ? Icons.expand_more : Icons.expand_less),
+                onPressed: () => settings.setGalleryFiltersCollapsed(!collapsed),
               ),
             ],
           ),
-          if (store.mediaTags.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Wrap(
-              children: [
-                for (final t in store.mediaTags)
-                  TagChip(
-                    label: t,
-                    selected: true,
-                    onDeleted: () => store.toggleMediaTag(t),
-                    onTap: () => store.toggleMediaTag(t),
-                  ),
-                TextButton.icon(
-                  onPressed: store.clearMediaTags,
-                  icon: const Icon(Icons.clear_all, size: 16),
-                  label: const Text('清空'),
-                ),
-              ],
+          // 收起时**露出当前生效的筛选摘要** —— 否则用户看不出自己在筛选状态，
+          // 会以为"图怎么少了"（用户 2026-10-11 明确要求）。
+          if (collapsed)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: _FilterSummary(text: _filterSummary(store), theme: theme),
             ),
+          if (!collapsed) ...[
+            const SizedBox(height: 10),
+            _filterSections(context, store, theme),
           ],
         ],
       ),
+    );
+  }
+
+  /// 当前生效的筛选项摘要（形如 `生图 · 仅收藏 · 最新加入`）。
+  String _filterSummary(LibraryStore store) {
+    final parts = <String>[
+      switch (store.mediaKind) {
+        'IMAGE' => '图片',
+        'VIDEO' => '视频',
+        'AUDIO' => '音频',
+        _ => '全部',
+      },
+      if (store.mediaOnlyFavorite) '仅收藏',
+      if (store.mediaUntagged) '未关联',
+      if (store.mediaTags.isNotEmpty) '标签 ${store.mediaTags.join('/')}',
+      if (store.mediaQuery.isNotEmpty) '搜索「${store.mediaQuery}」',
+      _sortLabel(store.mediaSort),
+    ];
+    return parts.join(' · ');
+  }
+
+  /// 筛选选项**按功能分区**，但**不"一种一行"**（2026-10-11 用户改的口径）：
+  /// 组内联排、组与组之间一条竖线，宽窗口一行塞得下两三组，窄窗口整组换行。
+  ///
+  /// 为什么分区：这些 chip 原来是一条扁平的流，"一键清除"那种**破坏性**动作
+  /// 与"只看收藏"混在一起，扫一眼分不出哪个会改数据。
+  Widget _filterSections(BuildContext context, LibraryStore store, ThemeData theme) {
+    return FilterGroupRow(
+      groups: [
+        FilterGroup(
+          title: '类型',
+          children: [
+            for (final entry in const <(String?, String)>[
+              (null, '全部'),
+              ('IMAGE', '图片'),
+              ('VIDEO', '视频'),
+              ('AUDIO', '音频'),
+            ])
+              ChoiceChip(
+                label: Text(entry.$2),
+                selected: store.mediaKind == entry.$1,
+                onSelected: (_) => store.setMediaKind(entry.$1),
+              ),
+          ],
+        ),
+        FilterGroup(
+          title: '状态',
+          children: [
+            FilterChip(
+              label: const Text('仅收藏'),
+              avatar: Icon(
+                store.mediaOnlyFavorite ? Icons.star : Icons.star_border,
+                size: 16,
+                color: store.mediaOnlyFavorite ? Colors.amber : null,
+              ),
+              selected: store.mediaOnlyFavorite,
+              onSelected: store.setMediaOnlyFavorite,
+            ),
+            FilterChip(
+              label: const Text('未关联'),
+              selected: store.mediaUntagged,
+              onSelected: store.setMediaUntagged,
+            ),
+          ],
+        ),
+        if (store.mediaTags.isNotEmpty)
+          FilterGroup(
+            title: '标签',
+            children: [
+              for (final t in store.mediaTags)
+                TagChip(
+                  label: t,
+                  selected: true,
+                  onDeleted: () => store.toggleMediaTag(t),
+                  onTap: () => store.toggleMediaTag(t),
+                ),
+              SegmentedButton<String>(
+                style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                segments: const [
+                  ButtonSegment(value: 'any', label: Text('任一')),
+                  ButtonSegment(value: 'all', label: Text('全部')),
+                ],
+                selected: {store.mediaTagMode},
+                onSelectionChanged: (s) => store.setMediaTagMode(s.first),
+              ),
+              TextButton.icon(
+                onPressed: store.clearMediaTags,
+                icon: const Icon(Icons.clear_all, size: 16),
+                label: const Text('清空'),
+              ),
+            ],
+          ),
+        FilterGroup(
+          title: '排序',
+          children: [
+            AppMenuButton<String>(
+              tooltip: '排序',
+              onSelected: store.setMediaSort,
+              options: const [
+                MenuOption(value: 'newest', icon: Icons.schedule, label: '最新加入'),
+                MenuOption(value: 'oldest', icon: Icons.history, label: '最旧加入'),
+                MenuOption(value: 'name', icon: Icons.sort_by_alpha, label: '按文件名'),
+                MenuOption(value: 'largest', icon: Icons.data_usage, label: '按体积'),
+                MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
+              ],
+              button: (context, controller, isOpen) => InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => controller.isOpen ? controller.close() : controller.open(),
+                child: Chip(
+                  avatar: const Icon(Icons.sort, size: 16),
+                  label: Text(_sortLabel(store.mediaSort)),
+                ),
+              ),
+            ),
+            Text(
+              '共 ${store.media.total} 个',
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+            ),
+          ],
+        ),
+        // 清理是**破坏性**动作：单独一组，别跟筛选混在一起
+        FilterGroup(
+          title: '清理',
+          children: [
+            TextButton.icon(
+              onPressed: _busy ? null : _clearUnlinked,
+              icon: const Icon(Icons.cleaning_services_outlined, size: 16),
+              label: const Text('清除未关联产物'),
+              style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -312,37 +373,40 @@ class _GalleryPageState extends State<GalleryPage> {
               childAspectRatio: 1,
             ),
             itemCount: store.media.items.length,
-            itemBuilder: (context, i) {
-              final m = store.media.items[i];
-              return GestureDetector(
-                onLongPress: () => setState(() {
-                  _selectionMode = true;
-                  _selected.add(m.id);
-                }),
-                // 右键：单个产物最常用的三个操作，不用先点进详情页。
-                // 这里把 itemBuilder 的 context 传下去 —— 它在 ContextMenuScope **里面**，
-                // 而 `_GalleryPageState.context` 在 Scope 外面（页面 build 才返回 Scope），
-                // 用后者去找右键菜单宿主必然找不到。
-                onSecondaryTapDown: (details) =>
-                    _showThumbMenu(context, m, details.globalPosition),
-                child: MediaThumb(
-                  media: m,
-                  selectionMode: _selectionMode,
-                  selected: _selected.contains(m.id),
-                  onToggleSelect: () => setState(() {
-                    if (!_selected.remove(m.id)) _selected.add(m.id);
+              itemBuilder: (context, i) {
+                final m = store.media.items[i];
+                // 集合格子（同一批微调的产物折叠成一张）：叠放封面 + 右下角总数。
+                // 判定完全来自后端（`collectionId` + `collectionSize > 1`），前端不猜。
+                final thumb = m.isCollection
+                    ? CollectionThumb(
+                        media: m,
+                        previewIds: m.collectionPreview,
+                        selectionMode: _selectionMode,
+                        selected: _selected.contains(m.id),
+                        onToggleSelect: () => _toggleSelect(m.id),
+                        onTap: () => _openDetail(m.id),
+                      )
+                    : MediaThumb(
+                        media: m,
+                        selectionMode: _selectionMode,
+                        selected: _selected.contains(m.id),
+                        onToggleSelect: () => _toggleSelect(m.id),
+                        onTap: () => _openDetail(m.id),
+                      );
+                return GestureDetector(
+                  onLongPress: () => setState(() {
+                    _selectionMode = true;
+                    _selected.add(m.id);
                   }),
-                  onTap: () async {
-                    // 先把 store 取出来，避免 await 之后再碰 context
-                    final store = context.read<LibraryStore>();
-                    await Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => MediaDetailPage(mediaId: m.id)),
-                    );
-                    await store.refreshMedia();
-                  },
-                ),
-              );
-            },
+                  // 右键：单个产物最常用的三个操作，不用先点进详情页。
+                  // 这里把 itemBuilder 的 context 传下去 —— 它在 ContextMenuScope **里面**，
+                  // 而 `_GalleryPageState.context` 在 Scope 外面（页面 build 才返回 Scope），
+                  // 用后者去找右键菜单宿主必然找不到。
+                  onSecondaryTapDown: (details) =>
+                      _showThumbMenu(context, m, details.globalPosition),
+                  child: thumb,
+                );
+              },
           ),
         ),
         if (store.media.pages > 1)
@@ -546,6 +610,42 @@ class _GalleryPageState extends State<GalleryPage> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+}
+
+/// 收起筛选栏时露出的"当前生效的筛选摘要"。
+///
+/// 用户 2026-10-11 明确要求：收起来之后**必须**能看出自己在筛选状态，
+/// 否则会以为"图怎么少了"。
+class _FilterSummary extends StatelessWidget {
+  final String text;
+  final ThemeData theme;
+
+  const _FilterSummary({required this.text, required this.theme});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.filter_alt_outlined, size: 14, color: theme.colorScheme.outline),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

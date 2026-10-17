@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/backend_launcher.dart';
 import '../core/formatting.dart';
 import '../core/settings_store.dart';
+import '../core/theme.dart';
 import '../models/models.dart';
 import '../state/ai_workspace_store.dart';
 import '../state/library_store.dart';
@@ -30,6 +31,11 @@ class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController _comfyUrlController;
   late final TextEditingController _comfyOutputController;
   late final TextEditingController _autoTagController;
+
+  /// 地址框的焦点：**只有它没被编辑时才跟着真实地址同步**（见 [_syncUrlField]）。
+  final FocusNode _urlFocus = FocusNode();
+
+  late SettingsStore _settings;
 
   bool _testing = false;
   String? _testResult;
@@ -56,7 +62,12 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     final settings = context.read<SettingsStore>();
+    _settings = settings;
     _urlController = TextEditingController(text: settings.baseUrl);
+    // 后端重启会换端口（自动挑的），地址一变这框就得跟着走 —— 否则界面上摆的是一个
+    // **上一轮的**死地址，用户看着它去排查，只会越查越糊涂（2026-10-12 那个 bug 里
+    // 存的正是 2175，而后端跑在 9610）。
+    settings.addListener(_syncUrlField);
     // 没手动设过就直接把自动探测到的路径填进去，省得用户对着空框猜
     _projectRootController = TextEditingController(
       text: settings.projectRoot ?? BackendLauncher.detectProjectRoot() ?? '',
@@ -67,8 +78,20 @@ class _SettingsPageState extends State<SettingsPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadCapture());
   }
 
+  /// 地址框跟着**当前真实地址**走。
+  ///
+  /// 只在用户没在编辑这个框的时候同步 —— 否则会把他正打的字吃掉。用户手填的地址
+  /// （别的机器）不会被自动改，所以对他没有副作用。
+  void _syncUrlField() {
+    if (!mounted || _urlFocus.hasFocus) return;
+    final v = _settings.baseUrl;
+    if (_urlController.text != v) _urlController.text = v;
+  }
+
   @override
   void dispose() {
+    _settings.removeListener(_syncUrlField);
+    _urlFocus.dispose();
     _urlController.dispose();
     _projectRootController.dispose();
     _comfyUrlController.dispose();
@@ -108,7 +131,17 @@ class _SettingsPageState extends State<SettingsPage> {
       _testing = true;
       _testResult = null;
     });
+    // ⚠ 判据是"**本机地址永远自动**"（`SettingsStore.isLocalBackendUrl`）：用户把
+    // 回环地址填回来（很常见 —— 框里本来就是这个字符串）不会变成"手填的覆盖"，
+    // 后端端口是自动挑的，真源只有 `.run\api.json`。所以这里存完要把框里的值
+    // 拉回**真实地址**，并当面说一句，别让人以为"我填的没生效"。
+    final wasLocalTyped = SettingsStore.isLocalBackendUrl(_urlController.text);
     await settings.setBaseUrl(_urlController.text);
+    if (!mounted) return;
+    _urlController.text = settings.baseUrl;
+    final localNote = (wasLocalTyped && _urlController.text.isNotEmpty)
+        ? '（本机地址永远自动：端口是后端启动时挑的，以 .run\\api.json 为准）\n'
+        : '';
     try {
       final h = await store.api.health();
       if (!mounted) return;
@@ -116,8 +149,8 @@ class _SettingsPageState extends State<SettingsPage> {
         _health = h;
         _testOk = h['status'] == 'ok';
         _testResult = _testOk
-            ? '连接成功（版本 ${h['version']}，数据库 ${h['database']}）'
-            : '服务可访问，但状态异常：${h['status']}';
+            ? '$localNote连接成功（版本 ${h['version']}，数据库 ${h['database']}）'
+            : '$localNote服务可访问，但状态异常：${h['status']}';
       });
       await store.refreshAll();
       await _loadCapture();
@@ -126,7 +159,7 @@ class _SettingsPageState extends State<SettingsPage> {
       setState(() {
         _testOk = false;
         _health = null;
-        _testResult = '连接失败：$e';
+        _testResult = '$localNote连接失败：$e';
       });
     } finally {
       if (mounted) setState(() => _testing = false);
@@ -476,10 +509,6 @@ class _SettingsPageState extends State<SettingsPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('设置'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Divider(height: 1, color: theme.dividerColor),
-        ),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 48),
@@ -552,6 +581,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       children: [
                         TextField(
                           controller: _urlController,
+                          focusNode: _urlFocus,
                           decoration: const InputDecoration(
                             labelText: '后端地址',
                             hintText: '留空 = 自动（按 .run\\api.json 里后端记录的端口）',
@@ -560,8 +590,9 @@ class _SettingsPageState extends State<SettingsPage> {
                         const SizedBox(height: 8),
                         Text(
                           'Windows 桌面端用 127.0.0.1；Android 模拟器用 10.0.2.2；真机用电脑的局域网 IP。\n'
-                          '留空 = 自动：后端端口在启动时挑（重启会换），App 读它记录在 .run\\api.json 里的真实端口；'
-                          '只有要连别的机器时才需要手填。',
+                          '本机地址（127.0.0.1 / localhost）永远自动：端口是后端启动时挑的（重启会换），'
+                          'App 每次都读它写在 .run\\api.json 里的真实端口 —— 这里填什么都不会保存下来。\n'
+                          '只有要连别的机器时手填才有意义（填了就不会被自动改）。',
                           style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
                         ),
                         const SizedBox(height: 12),
@@ -684,6 +715,33 @@ class _SettingsPageState extends State<SettingsPage> {
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Column(
                       children: [
+                        // 一行放下：**标题在左、控件在右**（与下面「每页数量」同一套排法）。
+                        //
+                        // ⚠ 别退回"`ListTile` + 另起一行 `Wrap` 放三个 chip"：这个卡片里的
+                        // `Column` 是**默认的 `crossAxisAlignment: center`**，而 `Wrap`
+                        // 只占内容宽度 —— 于是那三个 chip 会在整行里**居中**，
+                        // 看着就是"标题独在左边、控件飘在中间"（用户 2026-10-13 报的
+                        // "排版奇怪，不应该一行搞定吗"）。要么给 Row/Column 定对齐，
+                        // 要么就老老实实一行。
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('主题'),
+                          trailing: SegmentedButton<AppThemeMode>(
+                            // 三段都是两三个字，320dp 上量过不会溢出
+                            // （回归：settings_layout_test 的窄窗口那一条）
+                            segments: [
+                              for (final mode in AppThemeMode.values)
+                                ButtonSegment(value: mode, label: Text(mode.label)),
+                            ],
+                            selected: {settings.themeMode},
+                            onSelectionChanged: (picked) => settings.setThemeMode(picked.first),
+                            // 不要勾选图标：三个短标签本来就窄，加了勾反而挤
+                            // （选中态靠底色区分，M3 的 segmented button 本来就看得清）
+                            showSelectedIcon: false,
+                            style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                          ),
+                        ),
+                        const Divider(height: 1),
                         ListTile(
                           contentPadding: EdgeInsets.zero,
                           title: const Text('每页数量'),
@@ -869,7 +927,13 @@ class _SettingsPageState extends State<SettingsPage> {
                 ));
               },
               title: '允许手机 / 局域网设备连接',
-              subtitle: '',
+              // ⚠ 这一项**不是**「远程访问与配对」里那个「允许移动端连接」：
+              //   · 这里 = **要不要让后端监听局域网**（起进程时定 → 必须重启后端）；
+              //   · 那里 = **配对闸门**（局域网请求要不要带令牌，API 即刻生效）。
+              // 两个名字都像"允许手机连"，所以必须在这里把顺序讲出来，
+              // 否则用户永远分不清"我明明开了，手机还是连不上"是卡在哪一道。
+              subtitle: '① 让后端监听局域网（改完要点下面的「重启」才生效）。\n'
+                  '手机最终能不能连，还要看「远程访问与配对」里的 ② 配对闸门。',
             ),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -885,6 +949,30 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ],
             ),
+            // 「端口没能要回上次那个」必须**看得见**（2026-10-13）：
+            // 后端平时会要回上一次的端口（`--port <上次>`），所以手机上存的
+            // `http://<局域网IP>:<端口>` 一直有效；一旦那个端口被别的程序占了，
+            // 后端只能回落 —— **手机保存的地址当场失效**。
+            // 不写出来的话，用户遇到的只是"手机突然连不上"，猜不到该去重扫二维码
+            // （本仓 §12.3：界面上看不见的现象，用户和模型就只能靠猜）。
+            if (launcher.portFallbackFrom != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.warning_amber_rounded, size: 18, color: theme.colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '端口 ${launcher.portFallbackFrom} 这次没能用上（被别的程序占了），'
+                      '后端改听另一个端口 —— 手机上保存的地址已失效：'
+                      '请让手机重新扫一次「远程访问与配对」里的二维码。',
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             if (tail.isNotEmpty && (busy || launcher.phase == StartupPhase.failed)) ...[
               const SizedBox(height: 8),
               Container(

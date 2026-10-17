@@ -39,7 +39,7 @@ bug:
   （两处根因：① 输入框是"先清空、再由 `send()` 拒绝"，"正在生成中按回车"会把用户打的字静默吃掉；
   ② 会话草稿在 `startRun` 之后才清，而"发送中"那次通知在它之前，页面的"取回草稿"正好把刚发出去的原话
   灌回输入框。现在：准入判断同步化（`sendBlockReason()`，被拒时不动输入框）、草稿在第一次通知前作废、
-  用户打的字一律认领到当前会话；回归用例 4 条，见 [`ai-home-progress-v0.1.md`](ai-home-progress-v0.1.md) §4.13）
+  用户打的字一律认领到当前会话；回归用例 4 条，见 [`ai-home-progress-v0.1.md`](../archive/ai-home-progress-v0.1.md) §4.13）
 
 * ~~"**我需要在本项目进程存活的时候，产生新工作流运行的记录才会入库**，这不对吧"~~ → **已修，你说得对**（2026-09-18）
   （现场：你说"基于 `krea2SFWNSFWUncensoredImageTo_v10` 生成"，AI 回"库里搜不到这条工作流，
@@ -72,7 +72,7 @@ bug:
   直接打开这次真跑过的工作流；标题也如实写成"N 个 · 含 M 份工作流"。
   防线：`ai_tools_ui_test.dart` "「生成的产物」里也含生成它的那份工作流"）
 * ~~查看工作流功能，可以效仿comfy内部那样展开成蓝图显示出来（难度比较大，先调研）~~ → **调研完成**（2026-09-18）
-  （见 [`workflow-blueprint-research.md`](workflow-blueprint-research.md)，本轮**只调研、未动代码**。
+  （见 [`workflow-blueprint-research.md`](../archive/workflow-blueprint-research.md)，本轮**只调研、未动代码**。
   结论摘要：**分两阶段**——A 先做结构化大纲/树视图（1~1.5 人日）；B 再做 `CustomPainter` +
   `InteractiveViewer` 的**只读**蓝图画布（3.5~5 人日，UI 格式有 `pos`/`size`/`links`，可以忠实还原）。
   **不建议**内嵌 litegraph.js / ComfyUI 前端（Flutter Windows 没有 DOM；那套前端依赖服务端 API +

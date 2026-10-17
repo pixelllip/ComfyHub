@@ -147,6 +147,87 @@ class FilterChipRow extends StatelessWidget {
   }
 }
 
+/// 筛选栏里的**一个分区**：`小标题 + 内容`，装在一个**浅底圆角容器**里。
+///
+/// 2026-10-11 用户两轮反馈的结论：
+///  ① 原来是"**一种一行**"（标题占 34px 固定栏、内容另起），桌面宽窗口下左边一大片空、
+///     整个工具栏又高 → 改成组内联排；
+///  ② 改完用**竖分隔线**隔组，用户直接说"这样排版很奇怪，尤其是分割线"——
+///     分隔线在 `Wrap` 里是**独立的一项**，换行时会孤零零留在行尾；
+///     而且"组与组之间"和"一组内部"的间距一样，边界只能靠猜。
+///
+/// 所以现在用**容器**表达分组：浅底 + 圆角 + 一圈极淡的边。
+/// 它在换行时是**整块**移动的（不会像分隔线那样断在行尾），
+/// 组内元素贴着标题、组与组之间是容器外的那道间距 —— 一眼分得清。
+class FilterGroup extends StatelessWidget {
+  final String title;
+  final List<Widget> children;
+
+  /// 组内元素间距。
+  final double spacing;
+
+  const FilterGroup({
+    super.key,
+    required this.title,
+    required this.children,
+    this.spacing = 6,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+      decoration: BoxDecoration(
+        // 只给一层**很淡的底**，**不加描边** —— 组里的 `ChoiceChip` / `FilterChip`
+        // 自己就带描边，容器再套一圈会出现"双边框"，看着很脏（2026-10-11 试过）。
+        // 分组靠"底色块 + 块之间的空隙"表达，足够清楚。
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Wrap(
+        spacing: spacing,
+        runSpacing: 6,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+          ),
+          ...children,
+        ],
+      ),
+    );
+  }
+}
+
+/// 一排**分区**：放不下就**整组**换行。
+///
+/// 用 `Wrap` 而不是 `Row`：窄窗口下"一组"自己换行，而不是把某一组切在屏幕外
+/// （横向滚动是用户明确不要的交互）。
+///
+/// ⚠ **组之间不放分隔线**（用户 2026-10-11："尤其是分割线"很难看）：
+/// 分隔线在 `Wrap` 里会变成"行尾的一根孤线"。分组的视觉边界交给
+/// [`FilterGroup`] 自己的容器 —— 它换行时整块走。
+class FilterGroupRow extends StatelessWidget {
+  final List<Widget> groups;
+
+  /// 组与组之间的间距。
+  final double spacing;
+
+  const FilterGroupRow({super.key, required this.groups, this.spacing = 8});
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: spacing,
+      runSpacing: spacing,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: groups,
+    );
+  }
+}
+
 /// 提示词类型徽标
 class KindBadge extends StatelessWidget {
   final PromptKind kind;

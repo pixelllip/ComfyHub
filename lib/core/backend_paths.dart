@@ -3,7 +3,8 @@
 /// 以前这件事住在 `scripts\backend.ps1`（`Resolve-RustExe`）与
 /// `backend_launcher.dart` 两处，靠"两边都写一遍、别写歪"维持。2026-09-30 起
 /// **App 自己直接起后端**（不再经过 pwsh），所以 Dart 侧成了唯一真源 ——
-/// 脚本那边已经没有了（`scripts\backend.ps1` 已删）。
+/// `scripts\backend.ps1` 只剩 e2e / dev 那条旁路，它的候选顺序是**本文件的镜像**
+/// （AGENTS §7 的纪律：改一边必须改另一边）。
 ///
 /// # 两种布局（AGENTS §7）
 ///
@@ -65,18 +66,34 @@ class BackendLayout {
 ///   · `backend\comfyhub-server-rs.exe` —— Release 产物（后端是 App 自己的资产）
 bool looksLikeRoot(String dir) {
   if (dir.isEmpty) return false;
-  final sep = Platform.pathSeparator;
-  bool has(List<String> parts) {
-    try {
-      return File(parts.join(sep)).existsSync();
-    } catch (_) {
-      return false;
-    }
-  }
+  return _isSourceRoot(dir) || _isBundleRoot(dir);
+}
 
-  return has([dir, 'server-rs', 'Cargo.toml']) ||
-      has([dir, 'db', 'schema.sqlite.sql']) ||
-      has([dir, 'backend', kServerExeName]);
+/// **源码树判据：`server-rs\Cargo.toml`，或者"有 `db\schema.sqlite.sql` 但没有 `backend\exe`"。**
+///
+/// ⚠ 为什么不能只看 `db\schema.sqlite.sql`（2026-10-11 踩到的坑）：那份 DDL 是
+/// **构建时拷进产物目录**的，所以 `build\windows\x64\runner\Debug\` 里也有一份 ——
+/// 单看它会把产物目录误认成源码树，于是"往上找源码树"那一步被它截住，
+/// Debug 版 App 又回到"用自己的空库 + 旧后端 exe"（界面报 HTTP 400）。
+///
+/// 判据拆成两半，靠"后端 exe 在不在旁边"区分：
+///   · `Cargo.toml` 在 → 源码树（只存在于真正的源码树，不会出现在任何产物里）；
+///   · 只有 schema、**没有** `backend\exe` → 源码树（有人只拷了 DDL 出来）；
+///   · schema **和** `backend\exe` 都在 → **产物目录**（后端是 App 自己的资产），
+///     这一条交给 [`_isBundleRoot`]，调用方会继续往上找真正的根。
+bool _isSourceRoot(String dir) =>
+    _has([dir, 'server-rs', 'Cargo.toml']) ||
+    (_has([dir, 'db', 'schema.sqlite.sql']) && !_isBundleRoot(dir));
+
+/// Release 产物 / 发布包根：后端就在它旁边的 `backend\` 里。
+bool _isBundleRoot(String dir) => _has([dir, 'backend', kServerExeName]);
+
+bool _has(List<String> parts) {
+  try {
+    return File(parts.join(Platform.pathSeparator)).existsSync();
+  } catch (_) {
+    return false;
+  }
 }
 
 /// 从 [from]（默认 exe 所在目录 / 当前目录）往上找运行根目录；找不到返回 null。
@@ -111,12 +128,26 @@ String? detectRoot({String? from}) {
 String? _searchUp(String start) {
   try {
     var dir = Directory(start);
+    String? bundleHit;
     for (var depth = 0; depth < 8; depth++) {
-      if (looksLikeRoot(dir.path)) return dir.path;
+      // ⚠ **源码树优先于产物根**（2026-10-11 踩到的坑）。
+      //
+      // 场景：`flutter build windows --debug` 会把后端装进
+      // `build\windows\x64\runner\Debug\backend\`，于是那个产物目录**命中了产物判据**、
+      // 自己成了"根" —— 结果是 Debug 版 App 去用它自己那份空库
+      // （`build\...\Debug\.db\comfyhub.db`，0 条产物）和那份**旧的后端 exe**
+      // （不认识新参数 → 界面报 HTTP 400），而用户的真库一直在项目根下。
+      //
+      // 所以这里**不立刻返回**：先把产物命中记下来，继续往上找源码树根
+      // （`server-rs\Cargo.toml` / `db\schema.sqlite.sql`）；找到就用它。
+      // 整条链上没有源码树时才回退到产物根 —— 那时它是真的发布包/产物目录。
+      if (_isSourceRoot(dir.path)) return dir.path;
+      if (bundleHit == null && _isBundleRoot(dir.path)) bundleHit = dir.path;
       final parent = dir.parent;
       if (parent.path == dir.path) break;
       dir = parent;
     }
+    return bundleHit;
   } catch (_) {
     // 路径不存在 / 权限不够：当没找到，交给上层报人话
   }

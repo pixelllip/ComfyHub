@@ -96,9 +96,15 @@
 
 | 同步 | 不同步 |
 | --- | --- |
-| `prompts` `tags` `prompt_tags` `media_assets` `media_tags` | **`ai_run_events`**（单 Run 上万条的调试日志） |
+| `prompts` `tags` `prompt_tags` `media_assets` `media_tags` `media_collections` | **`ai_run_events`**（单 Run 上万条的调试日志） |
 | `ai_conversations` `ai_messages` `ai_message_parts` `ai_attachments` | `ai_providers` `ai_models` `app_settings`（含凭据引用与令牌明文） |
 | `capture_runs` `ai_runs` `ai_tool_calls`（2026-09-27 用户拍板：进） | `ai_questions`（提问闸门只在桌面；手机看实时提问走 `GET /api/ai/pending`） |
+
+> `media_collections` 是 2026-10-11 随产物**集合**一起进的（同源微调的产物归到一组）。
+> 它必须跟着 `media_assets` 走 —— 少了它，手机上的 `collection_id` 指向一个它那边
+> **不存在的集合**，折叠不出组、也解释不了"这几张为什么在一起"。
+> 判定规则本身**不进库**（`server-rs/src/media/collection.rs` 的纯函数），
+> 库里只存算出来的 `group_key` / `origin` / `rule_version`。
 
 ---
 
@@ -177,6 +183,5 @@ pwsh -File scripts\e2e-capture-test.ps1                                  # 捕�
 
 **历史与论证**（只在需要推导细节时查，不作为实施依据）：
 `memory-and-storage-evaluation.md`（为什么换 SQLite、MySQL 方言可移植性）、
-`embedded-db-sync-options-report.md`（六个同步方案为什么都不用）、
-`audit-client-architecture-android-readiness.md`（客户端端点全清单）、
-`ai-home-*.md` / `docs/bug and suggestion/`（早期需求与现场记录）。
+`bug and suggestion/`（早期需求与现场记录）；
+一次性的**调研 / 审计 / 进度快照**已归档到 [`archive/`](archive/)（六个同步方案为什么都不用、客户端端点全清单、AIH 需求逐条审计、工作流蓝图调研…）。

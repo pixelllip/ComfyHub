@@ -75,10 +75,24 @@ pub struct PromptInput {
     pub extra_params: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub notes: Option<String>,
+    /// 发送模式（2026-10-11）：`keep`（默认，照原样带上负面提示词）/
+    /// `positive_only`（有些 turbo 模型不认负面提示词，发给 Comfy 前去掉）。
+    ///
+    /// 认不出来的值**归一到 `keep`** —— 绝不因为一个模式串写错就让整条提示词存不进去。
+    #[serde(default)]
+    pub negative_mode: Option<String>,
     #[serde(default)]
     pub favorite: bool,
     #[serde(default)]
     pub tags: Vec<String>,
+}
+
+/// 把外来的 `negativeMode` 归一到两个合法值之一（认不出来就是 `keep`）。
+pub fn normalized_negative_mode(raw: Option<&str>) -> &'static str {
+    match raw.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("positive_only") | Some("positiveonly") | Some("positive") => "positive_only",
+        _ => "keep",
+    }
 }
 
 fn default_kind() -> String {

@@ -63,8 +63,8 @@
 //! | **内置模型目录**：`GET /api/ai/builtin/status`、`POST /api/ai/builtin/sync` | ✅（P4 第 38 步） |
 //! | **能力目录状态与实测校准**：`GET /api/ai/capabilities/status`、`PUT …/probe-toggle`、`POST …/refresh`、`POST …/probe` | ✅（P4 第 39 步；`refresh` 与 `probe` 见上表那一行） |
 //! | `GET /api/ai/conversations`、`/{id}`、`/{id}/messages`（**读侧**：历史会话与有序块） | ✅ |
-//! | **角色卡五条**：`/api/ai/character-cards{,/{id}}`（列表 / 新建 201 / 详情 / 全量编辑 / 删除） | ✅（P4 第 46 步：`character_cards.rs` 逐条对照 Kotlin `CharacterCardRepo`） |
-//! | **资料库两件工具**：`search_character_cards` / `save_character_card`（写角色前先查本机） | ✅（P4 第 46 步；`tagsVerifiedAt` 本轮**如实留空**，等 `danbooru_lookup` 搬过来才记时间） |
+//! | **角色卡四条**：`/api/ai/character-cards{,/{id}}`（列表 / 新建 201 / 详情 / 全量编辑 / 删除） | ✅（P4 第 46 步：`character_cards.rs`；2026-10 收敛成**名称 / 正面提示词 / 负面提示词**，`/summary` 那条一起删了） |
+//! | **资料库两件工具**：`search_character_cards` / `save_character_card`（写角色前先查本机） | ✅（P4 第 46 步；2026-10 随角色卡一起只剩名称 / 正面提示词 / 负面提示词） |
 //! | `POST/PATCH/DELETE /api/ai/conversations`、`POST …/messages`（**写侧**） | ✅ |
 //! | **Run 生命周期**：`POST …/runs`（202）/ `GET /runs/{id}` / `GET /runs/{id}/events`（**SSE**）/ `POST /runs/{id}/cancel` | ✅（事件流按 `?after=` 从库里拉，见 `run_lifecycle.rs`） |
 //! | **`GET /api/ai/run-kit{,/status}`**（手机 harness 的全部规则类输入；R12/R13 的第一次重建） | ✅ |
@@ -353,6 +353,70 @@ async fn main() {
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(300));
             comfyhub_server_rs::infra::confinement::refresh(&state);
+        });
+    }
+
+    // ---- 产物**集合**的存量回填（2026-10-11）---------------------------------
+    //
+    // 老库刚补上 `collection_id` 那一列时**全是 NULL**，不跑这一趟就"一个集合都没有"，
+    // 界面上表现为"这个功能好像没做"（而且不报错）。
+    //
+    // 三条纪律：
+    //  ① **只补 `collection_id IS NULL` 的行** —— 用户手动拆开/合并过的（`origin='manual'`）
+    //     和已经分好组的一律不碰（`collection::backfill` 里守着这条）；
+    //  ② **按 `created_at` 升序**跑，同一组的成员顺序 = 调参的先后；
+    //  ③ **没活儿就不动**：先数一下，0 条直接返回（每次启动都全表扫一遍太亏）。
+    // 跑在后台线程里、不阻塞端口监听 —— 它可能要给几万条产物算 key。
+    {
+        let state = state.clone();
+        std::thread::spawn(move || {
+            let pending = state.with(|conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM media_assets WHERE collection_id IS NULL",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?)
+            });
+            let pending = match pending {
+                Ok(n) if n > 0 => n,
+                Ok(_) => return,
+                Err(e) => {
+                    eprintln!("[collection] 数未分组的产物失败：{}", e.human());
+                    return;
+                }
+            };
+            // `state.with` 的回调要的是 `rusqlite::Result`，而 `backfill` 报的是
+            // `WriteError`（它要区分"参数不合法/冲突"那几档，端点层用得上）。
+            // 这里只是启动期的一趟回填，把错因转成文字塞回 rusqlite 就行。
+            // 顺带收拾**空集合**：`collection_id` 是 `ON DELETE SET NULL`，删产物不会带走
+            // 集合行，所以老版本/异常中断可能留下"点不开的空格子"。幂等、一次 SQL。
+            // 收拾失败不影响回填（它只是清洁工作），所以这里只记一句。
+            let pruned = match state.with(|conn| {
+                comfyhub_server_rs::media::collection::prune_all_empty(conn).map_err(|e| {
+                    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
+                        e.to_string(),
+                    )))
+                })
+            }) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("[collection] 清空集合失败（不影响使用）：{}", e.human());
+                    0
+                }
+            };
+            match state.with(|conn| {
+                comfyhub_server_rs::media::collection::backfill(conn).map_err(|e| {
+                    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
+                        e.to_string(),
+                    )))
+                })
+            }) {
+                Ok(n) => println!(
+                    "[collection] 存量回填：{pending} 条待分组，已分 {n} 条；清掉空集合 {pruned} 个"
+                ),
+                // 回填失败**不拦启动**：集合只是分组视图，缺了不影响产物本身
+                Err(e) => eprintln!("[collection] 存量回填失败（不影响使用）：{}", e.human()),
+            }
         });
     }
 

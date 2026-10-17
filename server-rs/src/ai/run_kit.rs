@@ -215,7 +215,12 @@ fn current_version(state: &AppState) -> Result<Option<String>, ApiError> {
 }
 
 /// 本地日期（Kotlin `LocalDate.now()`）；用 SQLite 的 `localtime` 拿，不引时间库。
-fn local_date(state: &AppState) -> Result<String, ApiError> {
+///
+/// 两个用途**共用同一个真源**，所以是 `pub`：
+/// ① 版本号推导（`next_version` 的 `today`）；② 系统提示里那行 `当前日期`
+/// （[`crate::ai::system_prompt::render`]）。后者的粒度**刻意只到天**，
+/// 理由见 `system_prompt` 文件头"为什么环境头里没有精确时间"。
+pub fn local_date(state: &AppState) -> Result<String, ApiError> {
     state.with(|conn| conn.query_row("SELECT date('now','localtime')", [], |row| row.get::<_, String>(0)))
 }
 
@@ -316,6 +321,12 @@ pub fn build(
         &provider.display_name,
         &provider.api,
         &model_id,
+        // ⚠ 只到"天"：同一天内取多少次 kit 都得到逐字节相同的提示词（前缀缓存），
+        // 见 `system_prompt` 文件头。
+        // 顺带一个**已知边界**（与 Kotlin 一致，不是这次引入的）：手机拿的是缓存下来的 kit，
+        // 所以手机上那句日期是**取 kit 那一刻**的；桌面是每个 Run 现渲染。
+        // 粗到"天"让这个边界的代价从"时分秒全错"缩成"最多差几天"，也让手机不必为了时间重取。
+        &local_date(state)?,
         // ⚠ 这里传的是**手机工具**那一份（`parts.tools`）：run-kit 的 systemPrompt 必须与
         // Kotlin 的 `toolsFor(MOBILE)` 逐字一致 —— 桌面专属工具（`read_file` 等）
         // 手机调不到，不许出现在手机的系统提示里（R11 / 总纲 §3.5）。

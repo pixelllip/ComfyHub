@@ -224,6 +224,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/media/{id}/poster", get(media_poster))
         .route("/api/media/{id}/prompt", get(media_prompt))
         .route("/api/prompts/{id}/media", get(prompt_media))
+    // 预设的"关联产物"：按**归一化后的提示词**匹配，所以能把自动捕获那条对上（2026-10-11）
+    .route("/api/presets/{id}/media", get(preset_media))
         .route("/api/media/upload", axum::routing::post(media_upload))
         // 捕获配置（本地那一半：读写 app_settings 里的一行 JSON）
         .route("/api/capture/config", get(capture_config).put(put_capture_config))
@@ -479,6 +481,31 @@ async fn prompt_media(
     Id(id): Id,
 ) -> Result<Json<Vec<crate::web::models::MediaDto>>, ApiError> {
     Ok(Json(crate::media::media::list_by_prompt(&state, id)?))
+}
+
+/// `GET /api/presets/{id}/media`：**与这条预设同款提示词**的产物（2026-10-11）。
+///
+/// 与 `/api/prompts/{id}/media`（只认 `prompt_id` 直连）的区别：
+/// 这里按**归一化后的提示词**匹配，所以"自动捕获那条"与"人存的预设"能对上 ——
+/// 用户要的正是这个（"如果有用这套预设同款提示词的产物，自动关联预设"）。
+async fn preset_media(
+    State(state): State<AppState>,
+    Id(id): Id,
+) -> Result<Json<Vec<crate::web::models::MediaDto>>, ApiError> {
+    // ⚠ **预设不存在 = 200 + `[]`**，不是 404 —— 与 `/api/prompts/{id}/media` 同一条纪律
+    // （那条路由也不做存在性检查；详情页拿空列表渲染比弹一个 404 更合适）。
+    let ids = state.with(|conn| {
+        Ok(match crate::media::collection::media_of_preset(conn, id) {
+            Ok(ids) => ids,
+            Err(crate::library::repo::WriteError::NotFound) => Vec::new(),
+            Err(e) => {
+                return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                    std::io::Error::other(e.to_string()),
+                )))
+            }
+        })
+    })?;
+    Ok(Json(crate::media::media::list_by_ids(&state, &ids)?))
 }
 
 /// `GET /api/capture/config`
@@ -1920,15 +1947,43 @@ async fn list_tag_categories(State(state): State<AppState>) -> Result<Json<Vec<S
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 /// `/api/prompts` 的查询参数（**不只是端点在用**：`search_prompts` 工具走同一个实现，
 /// 见 [`query_prompts`] —— 两份 SQL 的后果是"界面搜得到、AI 说没有"，而那不会有用例变红）。
+///
+/// ⚠ **`rename_all = "camelCase"` 不能少**：Dart 侧发的是 `includeCaptured`，
+/// 而 serde 默认按字段名 `include_captured` 找 —— 少这一行，参数**静默失效**
+/// （表现是"传了 true 却还是被过滤掉"，而且不报错）。这条是 2026-10-11 被用例抓到的。
 pub(crate) struct PromptQuery {
     pub(crate) q: Option<String>,
     pub(crate) kind: Option<String>,
-    pub(crate) favorite: Option<bool>,
+    /// 布尔项收成字符串自己判（与 `MediaQuery` 同一条纪律）：
+    /// axum 的 `Query` 对 `Option<bool>` **只认 `true`/`false`**，发 `1` 会**整个请求 400**。
+    pub(crate) favorite: Option<String>,
     pub(crate) sort: Option<String>,
     pub(crate) page: Option<i64>,
     pub(crate) size: Option<i64>,
+    /// **把自动捕获的提示词也算进来**（2026-10-11）。
+    ///
+    /// 默认 `false`：**预设库只放"人自己存下来的"**（用户原话："从 comfy 输出目录获取的
+    /// 产物，其关联的提示词不需要送进预设库 —— 毕竟都叫这个名字了"）。
+    /// 自动捕获那些仍然是提示词行（画廊详情要按 `promptId` 反查它），只是不进这个列表。
+    ///
+    /// ⚠ **AI 侧必须传 `true`**：`search_prompts` / `comfy_find_workflow` 找的是
+    /// "库里能跑的东西"，自动捕获那些正是最好用的工作流来源 —— 默认过滤会把它们藏起来，
+    /// 表现是"AI 说库里没有，而用户明明在画廊里看得到"（而且不会有用例变红）。
+    #[serde(default)]
+    pub(crate) include_captured: bool,
+    /// 按"**有没有关联产物**"过滤（`1` = 只要有关联的，`0` = 只要没关联的）。
+    ///
+    /// ⚠ 这个参数 Dart 侧**一直在发**（`ApiClient.listPrompts` 的 `hasMedia`），
+    /// 而后端以前**根本没有这个字段** —— serde 默认忽略未知键，于是
+    /// 「未关联产物」那个筛选**从来没生效过**（不报错、不红用例，只是点了没反应）。
+    /// 2026-10-11 补上，判据走 [`crate::media::collection::prompt_ids_with_media`]。
+    ///
+    /// 收成字符串自己判，与 `favorite` 同一条纪律（axum 的 `Option<bool>` 只认 `true/false`）。
+    #[serde(default)]
+    pub(crate) has_media: Option<String>,
 }
 
 async fn list_prompts(
@@ -1987,8 +2042,49 @@ pub(crate) fn query_prompts(state: &AppState, q: &PromptQuery) -> Result<Paged<P
         params.push(rusqlite::types::Value::Text(kind));
     }
     // Kotlin 只在 `favorite == true` 时过滤（传 false 等于不过滤）
-    if q.favorite == Some(true) {
+    if crate::media::media::bool_param(q.favorite.as_deref()) {
         where_sql.push_str(" AND favorite = 1");
+    }
+    // **预设库只放人自己存的**（2026-10-11，用户拍板）：自动捕获那些
+    // （`source` 为 `ComfyUI` / `ComfyUI-Import` / `ComfyUI-File`）不进列表。
+    //
+    // 判据用"**不是** `Manual`"而不是"是那三个前缀"：这样以后新增任何自动来源
+    // （推送捕获、手机排队提交的回流…）都自动被排除，不用回来改这里。
+    // `Manual` 之外还有一个 `source IS NULL` 的老数据 —— 那是手动建的早期行，也要留下。
+    if !q.include_captured {
+        where_sql.push_str(" AND (source IS NULL OR source = 'Manual')");
+    }
+    // 「未关联产物」筛选：判据是**同款提示词**有没有产物（不是 `prompt_id` 直连）。
+    //
+    // ⚠ 只有显式传了 `hasMedia` 才算这组 id（不传就别做这次全表匹配）——
+    // 这个计算要遍历一遍提示词与产物，不该让普通列表也跟着付这笔钱。
+    let media_filter = q
+        .has_media
+        .as_deref()
+        .filter(|raw| !raw.trim().is_empty())
+        .map(|raw| crate::media::media::bool_param(Some(raw)));
+    let with_media = match media_filter {
+        Some(_) => Some(state.with(|conn| {
+            Ok(crate::media::collection::prompt_ids_with_media(conn).map_err(|e| {
+                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(e.to_string())))
+            })?)
+        })?),
+        None => None,
+    };
+    // 条件直接拼进 SQL（而不是取出来再在内存里筛）—— 因为**分页与 total 都靠这条 SQL**，
+    // 内存筛会让 `total` 说 10 条、界面只显示 3 条。
+    if let (Some(want), Some(ids)) = (media_filter, with_media.as_ref()) {
+        let marks = vec!["?"; ids.len()].join(",");
+        if ids.is_empty() {
+            // 一条都没有关联产物：`hasMedia=1` 返回空、`hasMedia=0` 返回全部
+            where_sql.push_str(if want { " AND 0 = 1" } else { " AND 1 = 1" });
+        } else if want {
+            where_sql.push_str(&format!(" AND id IN ({marks})"));
+            params.extend(ids.iter().map(|id| rusqlite::types::Value::Integer(*id)));
+        } else {
+            where_sql.push_str(&format!(" AND id NOT IN ({marks})"));
+            params.extend(ids.iter().map(|id| rusqlite::types::Value::Integer(*id)));
+        }
     }
 
     state.with(|conn| {
@@ -2012,7 +2108,23 @@ pub(crate) fn query_prompts(state: &AppState, q: &PromptQuery) -> Result<Paged<P
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for item in items.iter_mut() {
             item.tags = tags_of(conn, item.id)?;
-            item.media_count = media_count_of(conn, item.id)?;
+            // **产物数按"同款提示词"算，不是 `prompt_id` 直连**（2026-10-11 用户 bug）：
+            // 从画廊存下来的预设，产物指向的是**自动捕获那条**提示词行，
+            // 直连判定会让卡片显示「未关联」—— 而用户明明是从那张图存的。
+            //
+            // 已经算过 `with_media` 集合时就白拿（`hasMedia` 那次过滤顺便算的）。
+            item.media_count = match with_media.as_ref() {
+                Some(ids) => {
+                    if ids.binary_search(&item.id).is_ok() {
+                        // 集合里是"有关联产物"，但**具体几条**还得现算：
+                        // 卡片上那个数字要准（"关联 3 个产物"）。
+                        media_count_matching(conn, item.id)?
+                    } else {
+                        0
+                    }
+                }
+                None => media_count_matching(conn, item.id)?,
+            };
         }
         Ok(Paged::new(items, total, page, size))
     })
@@ -2027,7 +2139,7 @@ pub(crate) fn get_prompt_dto(state: &AppState, id: i64) -> Result<PromptDto, Api
             Some(row) => {
                 let mut prompt = row?;
                 prompt.tags = tags_of(conn, prompt.id)?;
-                prompt.media_count = media_count_of(conn, prompt.id)?;
+                prompt.media_count = media_count_matching(conn, prompt.id)?;
                 Ok(Some(prompt))
             }
             None => Ok(None),
@@ -2055,10 +2167,13 @@ pub(crate) fn tags_of(conn: &Connection, prompt_id: i64) -> rusqlite::Result<Vec
     rows.collect()
 }
 
-pub(crate) fn media_count_of(conn: &Connection, prompt_id: i64) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM media_assets WHERE prompt_id = ?1",
-        rusqlite::params![prompt_id],
-        |row| row.get(0),
-    )
+/// 与这条提示词**同款**的产物数量（判据见 [`crate::media::collection::media_of_preset`]）。
+///
+/// 2026-10-11 起界面上的"关联产物数"**一律走这一条**：从画廊存下来的预设，产物指向的是
+/// **自动捕获那条**提示词行，直连 `media_assets.prompt_id == 预设 id` 会说"没关联"，
+/// 用户明明是从那张图存的（那条直连计数的老函数已删 —— 留着必然被误用）。
+pub(crate) fn media_count_matching(conn: &Connection, prompt_id: i64) -> rusqlite::Result<i64> {
+    crate::media::collection::media_count_of_preset(conn, prompt_id).map_err(|e| {
+        rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(e.to_string())))
+    })
 }

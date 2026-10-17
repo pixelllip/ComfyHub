@@ -76,7 +76,7 @@
   "分析 → 确认 → 执行"三步。昨天那份 rgthree 工作流里 20 个纯前端节点正是典型场景。
 
 * 调研我昨天和ai的对话记录，分析还有哪些值得优化的
-  → **已做（2026-09-22，提交 `0a7da68`）**：见 [`conversation-review-9.21.md`](conversation-review-9.21.md)。
+  → **已做（2026-09-22，提交 `0a7da68`）**：见 [`conversation-review-9.21.md`](../archive/conversation-review-9.21.md)。
   口径是库里 09-21 的 5 场对话、45 条消息、36 次 Run、91 次工具调用。三条真痛点：
   ① 工具预算（上面那条，已修）；② **上游连接失败 11/13、8 条是 `SSLHandshakeException`，
   而且失败时回复是空的** —— 用户看到的是"四连空气泡"，且错误信息把 cause 链丢了、

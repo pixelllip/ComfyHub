@@ -73,6 +73,26 @@ fn 联网额度只认联网类工具且只在成功时计数() {
     assert_eq!(session.web_queries_in_window, 0);
 }
 
+/// **命中缓存的那一次不占联网 / ComfyUI 额度**（`tools::tool_cache`）：
+/// 那两条额度的语义是"别拿外部服务当轮询器"，而命中缓存时**一次外部请求都没发**。
+///
+/// 为什么单列一条：这条线一漂移，表现就是"明明没打扰人家，却被告知额度用尽"
+/// （模型的手被捆住、用户看到一句 `QUERY_BUDGET_EXCEEDED`），而**不会有任何别的用例变红**。
+#[test]
+fn 命中缓存的那一次不占联网与_comfy_额度() {
+    let mut session = ToolSession::default();
+    session.spend_cached_call("web_search");
+    session.spend_cached_call("comfy_get_status");
+    assert_eq!(session.web_queries_in_window, 0, "没发请求就不该占联网额度");
+    assert_eq!(session.comfy_queries_in_window, 0, "同上：没问 ComfyUI 就不该占它的额度");
+    assert_eq!(session.calls, 2, "总调用额度照记：命中同样多一轮往返、同样烧上下文");
+    assert_eq!(session.calls_in_window, 2);
+
+    // 与"真跑成功"那一档对照：同名的真跑是要占的
+    session.spend_call("web_search");
+    assert_eq!(session.web_queries_in_window, 1);
+}
+
 /// **ComfyUI 查询额度**是另一条独立的线（AIH-036「不许把 ComfyUI 当轮询器」，
 /// Kotlin `ToolContext.comfyInWindow` + `DEFAULT_MAX_COMFY_QUERIES_PER_RUN = 9`）。
 ///

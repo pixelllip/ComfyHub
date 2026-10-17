@@ -122,6 +122,123 @@ async fn prompts_paged_envelope_matches_dart_paged() {
     assert_eq!(body["items"][0]["title"], "国风山水");
 }
 
+/// ★ **预设库只放人自己存的**（2026-10-11 用户拍板）。
+///
+/// 原话："从 comfy 输出目录获取的产物，其关联的提示词不需要送进预设库 —— 毕竟都叫这个名字了"。
+/// 自动捕获那些仍然是提示词行（画廊详情要按 `promptId` 反查它），只是不进这个列表。
+///
+/// ⚠ **AI 侧必须传 `includeCaptured=true`**：`search_prompts` / `comfy_find_workflow` 找的是
+/// "库里能跑的工作流"，自动捕获那些正是最好用的来源 —— 默认过滤会把它们藏起来，
+/// 表现是"AI 说库里没有，而用户明明在画廊里看得到"（而且不会有用例变红）。
+#[tokio::test]
+async fn preset_list_hides_captured_prompts_but_ai_can_still_search_them() {
+    let state = state();
+    // 造两条自动捕获来的提示词（来源是 ComfyUI 系）
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO prompts (id, title, kind, positive_prompt, source, created_at, updated_at)
+                 VALUES (30, '自动捕获 A', 'IMAGE', 'captured one', 'ComfyUI', '2026-09-23T03:00:00.000Z', '2026-09-23T03:00:00.000Z'),
+                        (31, '导入的文件 B', 'IMAGE', 'imported one', 'ComfyUI-Import', '2026-09-23T04:00:00.000Z', '2026-09-23T04:00:00.000Z')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+    let app = router_for(state.clone());
+
+    // 默认（界面）：只剩两条 Manual 的
+    let (_, body) = get_json(app.clone(), "/api/prompts?size=50").await;
+    assert_eq!(body["total"], 2, "自动捕获那两条不许进预设库：{body}");
+    let titles: Vec<&str> =
+        body["items"].as_array().unwrap().iter().map(|i| i["title"].as_str().unwrap()).collect();
+    assert!(!titles.contains(&"自动捕获 A"), "{titles:?}");
+    assert!(!titles.contains(&"导入的文件 B"), "{titles:?}");
+
+    // AI 侧（`includeCaptured=true`）：四条都在
+    let (_, all) = get_json(app.clone(), "/api/prompts?size=50&includeCaptured=true").await;
+    assert_eq!(all["total"], 4, "AI 侧要能搜到自动捕获的工作流：{all}");
+
+    // 显式关掉也还是两条（参数语义与"默认"一致）
+    let (_, explicit) = get_json(app.clone(), "/api/prompts?size=50&includeCaptured=false").await;
+    assert_eq!(explicit["total"], 2);
+}
+
+/// ★ 预设的**关联产物**按归一化后的提示词匹配（2026-10-11）。
+///
+/// 用户要的是"用这套预设同款提示词的产物自动关联上来" —— 所以判据**不能**是
+/// `media_assets.prompt_id == 预设 id`（那只有"这条预设自己生成过"才算，
+/// 而自动捕获的产物指向的是**另一条**提示词行）。
+#[tokio::test]
+async fn preset_media_matches_by_normalized_prompt() {
+    let state = state();
+    // 夹具里 prompt 10 是 `1girl, cyberpunk` + 负面 `lowres`；
+    // 再建一条**同款但写法不同**的自动捕获行 + 一张产物。
+    // ⚠ 负面也要同款 —— 判据是"归一化后的**正负**提示词都相同"，
+    // 少给一边就会（正确地）判成不同款，用例会红在一个看不出原因的地方。
+    let media_id = state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO prompts (id, title, kind, positive_prompt, negative_prompt, source, created_at, updated_at)
+                 VALUES (40, '自动捕获的同款', 'IMAGE', '(1girl:1.2), cyberpunk', '(lowres:1.1)', 'ComfyUI', '2026-09-23T05:00:00.000Z', '2026-09-23T05:00:00.000Z')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO media_assets (id, prompt_id, kind, title, original_name, stored_name, created_at, updated_at)
+                 VALUES (900, 40, 'IMAGE', '同款产物', 'same.png', 'same.png', '2026-09-23T05:01:00.000Z', '2026-09-23T05:01:00.000Z')",
+                [],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })
+        .unwrap();
+    let _ = media_id;
+    let app = router_for(state.clone());
+
+    // 先确认现场真的造出来了（否则下面那条断言会指向错误的地方）
+    let count: i64 = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM media_assets WHERE id = 900",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(count, 1, "前提：同款产物 900 真的入库了");
+    let norm = state
+        .with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT COUNT(*) FROM media_assets m JOIN prompts p ON p.id = m.prompt_id
+                      WHERE m.kind = 'IMAGE'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+        })
+        .unwrap();
+    assert!(norm >= 2, "前提：至少两条 IMAGE 产物进了候选（实际 {norm}）");
+
+    let (status, body) = get_json(app.clone(), "/api/presets/10/media").await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<i64> = body.as_array().unwrap().iter().map(|m| m["id"].as_i64().unwrap()).collect();
+    assert!(
+        ids.contains(&900),
+        "写法不同（`(1girl:1.2)` ↔ `1girl`）也要认成同款并关联：{ids:?}"
+    );
+
+    // 不同款的一条都不许混进来
+    let (_, other) = get_json(app.clone(), "/api/presets/11/media").await;
+    assert!(
+        !other.as_array().unwrap().iter().any(|m| m["id"] == 900),
+        "国风山水那条预设不该关联到赛博朋克少女的产物"
+    );
+
+    // 预设不存在 → 空列表（与 `/api/prompts/{id}/media` 同一条纪律：不做存在性检查）
+    let (status, empty) = get_json(app.clone(), "/api/presets/999/media").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty, serde_json::json!([]));
+}
+
 #[tokio::test]
 async fn prompt_object_has_every_key_dart_reads() {
     let (status, body) = get_json(app(), "/api/prompts/10").await;
@@ -131,11 +248,14 @@ async fn prompt_object_has_every_key_dart_reads() {
         keys(&body),
         vec![
             "cfgScale", "checkpoint", "createdAt", "extraParams", "favorite", "hasWorkflow", "id",
-            "kind", "loras", "mediaCount", "negativePrompt", "positivePrompt", "seed", "source",
-            "tags", "title", "updatedAt",
+            "kind", "loras", "mediaCount", "negativeMode", "negativePrompt", "positivePrompt", "seed",
+            "source", "tags", "title", "updatedAt",
         ],
         "少一个键 = 界面上少一块内容；多一个键 = 与 Kotlin 不一致"
     );
+    // `negativeMode` 是**必给**的（不是 Option）：界面拿它决定"只发正面"那个开关的位置。
+    // 老库补上这一列之后默认是 keep —— 绝不能默认成 positive_only（那会悄悄丢掉用户的负面提示词）。
+    assert_eq!(body["negativeMode"], "keep", "没设过就是 keep");
     for absent in ["sampler", "scheduler", "steps", "width", "height", "batchSize", "notes", "sourceRef"] {
         assert!(
             !body.as_object().unwrap().contains_key(absent),
@@ -159,7 +279,8 @@ async fn prompt_object_has_every_key_dart_reads() {
         keys(&bare),
         vec![
             "createdAt", "extraParams", "favorite", "hasWorkflow", "id", "kind", "loras",
-            "mediaCount", "positivePrompt", "source", "sourceRef", "tags", "title", "updatedAt",
+            "mediaCount", "negativeMode", "positivePrompt", "source", "sourceRef", "tags", "title",
+            "updatedAt",
         ],
         "全空的那条只剩这些键：{bare}"
     );

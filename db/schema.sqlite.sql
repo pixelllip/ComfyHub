@@ -40,6 +40,11 @@ CREATE TABLE IF NOT EXISTS prompts (
   extra_params      TEXT    NULL,   -- JSON 对象文本
 
   notes             TEXT    NULL,
+  -- 发送模式（2026-10-11）：有些 turbo 模型不认负面提示词，用户要能表达"我只发正面"。
+  --   'keep'（默认）= 照原样带上负面提示词；'positive_only' = 发给 Comfy 前**去掉**负面。
+  -- ⚠ 这是**预设的属性**（写提示词时的意图），与"目标工作流认不认负面"是两件事 ——
+  -- 后者是工作流的属性，兜底检查在提交那条路上（`comfy_submit`）。
+  negative_mode     TEXT    NOT NULL DEFAULT 'keep',
   favorite          INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0,1)),
 
   source            TEXT    NULL DEFAULT 'Manual',
@@ -82,11 +87,39 @@ CREATE TABLE IF NOT EXISTS prompt_tags (
 CREATE INDEX IF NOT EXISTS idx_pt_tag ON prompt_tags(tag_id);
 
 -- ---------------------------------------------------------------------
+-- 产物「集合」：同源、只做了一点微调的产物归到一组
+--
+-- 判定真源是 `server-rs/src/media/collection.rs` 的 `group_key`（**纯函数**，入库与
+-- 存量回填共用同一份实现）。这里只存"算出来的结果"，规则本身一个字都不进库。
+--
+--   group_key     = kind ⊗ 归一化正提示词 ⊗ 归一化负提示词（含长度前缀，见那个文件）
+--   origin        = auto（算法分出来的）| manual（用户拆开/合并出来的）
+--   rule_version  = 产出这条集合时的判定规则版本；**规则改了要把老的重新分一遍**
+--
+-- ⚠ 两张表都要有：`media_collections` 本身也要同步（否则手机上折叠不出集合）。
+-- ⚠ 这张表**必须建在 `media_assets` 之前** —— 后者用 REFERENCES 引它。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS media_collections (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_key    TEXT    NOT NULL,
+  kind         TEXT    NOT NULL DEFAULT 'IMAGE',
+  origin       TEXT    NOT NULL DEFAULT 'auto' CHECK (origin IN ('auto','manual')),
+  rule_version INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_collections_key    ON media_collections(group_key);
+CREATE INDEX IF NOT EXISTS idx_collections_origin ON media_collections(origin);
+
+-- ---------------------------------------------------------------------
 -- 生成产物（图片 / 视频 / 音频）
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS media_assets (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   prompt_id      INTEGER NULL REFERENCES prompts(id) ON DELETE SET NULL,
+  -- 所属「集合」（同源、只做了一点微调的产物归到一组；判定见 media/collection.rs）
+  -- ON DELETE SET NULL：集合行被清掉时产物**不能跟着消失**（集合是视图性质的分组）
+  collection_id  INTEGER NULL REFERENCES media_collections(id) ON DELETE SET NULL,
   kind           TEXT    NOT NULL CHECK (kind IN ('IMAGE','VIDEO','AUDIO')),
   title          TEXT    NOT NULL DEFAULT '',
   original_name  TEXT    NOT NULL,
@@ -112,6 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_media_kind       ON media_assets(kind);
 CREATE INDEX IF NOT EXISTS idx_media_created    ON media_assets(created_at);
 CREATE INDEX IF NOT EXISTS idx_media_sha256     ON media_assets(sha256);
 CREATE INDEX IF NOT EXISTS idx_media_source_ref ON media_assets(source_ref);
+CREATE INDEX IF NOT EXISTS idx_media_collection ON media_assets(collection_id);
 
 -- ---------------------------------------------------------------------
 -- 生成产物 <-> 标签
@@ -355,16 +389,25 @@ CREATE INDEX IF NOT EXISTS idx_ai_questions_run    ON ai_questions(run_id);
 CREATE INDEX IF NOT EXISTS idx_ai_questions_status ON ai_questions(status);
 
 -- ---------------------------------------------------------------------
--- 角色卡（O8，2026-09-25）：一个角色的**规范 tag 栈 + 来源 + 配哪条 LoRA**
+-- 角色卡（O8，2026-09-25）：一张卡 = 一个角色，**只有三个字段**：
+-- **名称 / 正面提示词 / 负面提示词**（2026-10 按用户要求收敛，见下面那条 ⚠）。
 --
 -- 为什么是一张表而不是长期记忆：记忆是"一行一条文本"、有 100 条上限、超限**直接报错**
--- （MemoryStore），而角色卡是结构化字段（tag 栈 / LoRA / 权重 / 别名 / 来源），
--- 还要按名字幂等地反复覆盖（同名 = 同一张卡，不许攒出三四份）。
+-- （MemoryStore），而角色卡要按名字幂等地反复覆盖（同名 = 同一张卡，不许攒出三四份）。
 --
 -- `normalized` = name 的小写，是幂等 upsert 的键（照 tags.normalized 的写法）。
--- `tags` / `aliases` 是 JSON 数组文本（与 prompts.loras 同一约定）。
--- `tags_verified_at` 记"最后一次跟 danbooru 核对过 tag"的时间 —— "查没查过"是个事实，
--- 不能靠模型嘴上说"我查了"。
+-- `prompt` / `negative` 都是**整段文本**（不是 tag 数组、不拼 SQL）。
+--
+-- ⚠ 2026-10 收敛（用户原话："角色卡只保留：名称、正面提示词、负面提示词"）：
+--   删掉了两批东西 ——
+--     ① 资料库那批：`name_en` / `aliases` / `character_tag` / `series_tag` / `tags` /
+--        `lora_name` / `lora_weight` / `lora_trigger` / `checkpoint` / `reference_media_id` /
+--        `source` / `tags_verified_at` / `notes`；
+--     ② "生图角色卡框架"那两件：`position`（5×5 位置）/ `enabled`（最多同时启用 6 个 + token 口径），
+--        `GET /api/ai/character-cards/summary` 与 `MAX_ENABLED` 一起删。
+--   ⚠ **老库里的那些列不去动**（SQLite 删列要重建表，不值当）：它们只是**再没人读**，
+--     新库建出来就没有。`tags` 里已有的内容由 `infra::db` 的迁移**拼成一行**灌进 `prompt`
+--     （不丢用户数据），随后那两个列同样是死列。
 --
 -- ⚠ **不进同步范围**（总纲 §3.3 的白名单里没有它）：手机侧目前没有角色卡的读写界面。
 --   要同步时 schema 的 3 条 `_sync_log` 触发器、`server-rs/src/sync.rs` 的 `SYNCED` /
@@ -374,35 +417,14 @@ CREATE TABLE IF NOT EXISTS character_cards (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,
   name               TEXT    NOT NULL,          -- 用户叫的名字（中文 / 原名）
   normalized         TEXT    NOT NULL,          -- name 的小写（幂等 upsert 的键）
-  name_en            TEXT    NULL,              -- 罗马字 / 英文写法（danbooru 上的样子）
-  aliases            TEXT    NULL,              -- JSON 数组文本：别名 / 其他叫法
-  character_tag      TEXT    NULL,              -- danbooru 角色 tag（形如 shinku_(nte)）
-  series_tag         TEXT    NULL,              -- 作品 tag（形如 neverness_to_everness）
-  tags               TEXT    NULL,              -- JSON 数组文本：规范 tag 栈（外观 / 服装 / 动作基线）
-  negative           TEXT    NULL,              -- 这个角色常踩的负面词
-  lora_name          TEXT    NULL,              -- 角色 LoRA 文件名（ComfyUI models/loras 下）
-  lora_weight        REAL    NULL,              -- 建议权重
-  lora_trigger       TEXT    NULL,              -- LoRA 触发词（多个用逗号分隔）
-  checkpoint         TEXT    NULL,              -- 建议底模
-  reference_media_id INTEGER NULL,              -- 参考图（画廊里的产物 id）
-  source             TEXT    NULL,              -- 来源：链接 / "用户口述" / "danbooru" …
-  tags_verified_at   TEXT    NULL,              -- 最后一次跟 danbooru 核对 tag 的时间
-  notes              TEXT    NULL,
-  -- 下面两列是 2026-09-30 按"生图角色卡"框架加的（用户给的框架：
-  -- 名称 / 提示词 / 排除词 / **位置**，外加"最多同时启用 6 个"）。
-  -- ⚠ 老库靠 `infra::db::ensure_columns` 的 ALTER 补上（收敛式建表语句**不给已存在的表补列**）。
-  position           TEXT    NULL,              -- 5×5 网格里的目标位置（`A1`~`E5`）；NULL = 自动（让 AI 摆）
-  enabled            INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),  -- 是否参与本次生成（≤6 个）
+  prompt             TEXT    NULL,              -- 正面提示词（整段文本）
+  negative           TEXT    NULL,              -- 负面提示词（整段文本）
   created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  FOREIGN KEY (reference_media_id) REFERENCES media_assets(id) ON DELETE SET NULL
+  updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 -- 幂等 upsert 的键：同名 = 同一张卡（`ON CONFLICT(normalized) DO UPDATE`，R3 不许用 OR REPLACE）
 CREATE UNIQUE INDEX IF NOT EXISTS uk_character_cards_norm ON character_cards(normalized);
-CREATE INDEX IF NOT EXISTS idx_character_cards_char_tag ON character_cards(character_tag);
 CREATE INDEX IF NOT EXISTS idx_character_cards_created  ON character_cards(created_at);
--- 列表页按【参与本次生成的那几张】筛（最多 6 条），走索引就不用全表扫
-CREATE INDEX IF NOT EXISTS idx_character_cards_enabled  ON character_cards(enabled);
 
 -- ---------------------------------------------------------------------
 -- 工作流配方（W2，2026-09-26）：把一份**具体**工作流归纳成
@@ -558,6 +580,12 @@ BEGIN
   UPDATE media_assets SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id;
 END;
 
+CREATE TRIGGER IF NOT EXISTS trg_media_collections_touch AFTER UPDATE ON media_collections FOR EACH ROW
+WHEN NEW.updated_at IS OLD.updated_at
+BEGIN
+  UPDATE media_collections SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id;
+END;
+
 CREATE TRIGGER IF NOT EXISTS trg_app_settings_touch AFTER UPDATE ON app_settings FOR EACH ROW
 WHEN NEW.updated_at IS OLD.updated_at
 BEGIN
@@ -647,6 +675,14 @@ CREATE TRIGGER IF NOT EXISTS trg_media_assets_sync_au AFTER UPDATE ON media_asse
 BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('media_assets', CAST(NEW.id AS TEXT), 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
 CREATE TRIGGER IF NOT EXISTS trg_media_assets_sync_ad AFTER DELETE ON media_assets FOR EACH ROW
 BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('media_assets', CAST(OLD.id AS TEXT), 'delete', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
+
+-- media_collections（pk 用自增 id；产物靠 `collection_id` 指过来）
+CREATE TRIGGER IF NOT EXISTS trg_media_collections_sync_ai AFTER INSERT ON media_collections FOR EACH ROW
+BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('media_collections', CAST(NEW.id AS TEXT), 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
+CREATE TRIGGER IF NOT EXISTS trg_media_collections_sync_au AFTER UPDATE ON media_collections FOR EACH ROW
+BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('media_collections', CAST(NEW.id AS TEXT), 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
+CREATE TRIGGER IF NOT EXISTS trg_media_collections_sync_ad AFTER DELETE ON media_collections FOR EACH ROW
+BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('media_collections', CAST(OLD.id AS TEXT), 'delete', strftime('%Y-%m-%dT%H:%M:%fZ','now')); END;
 
 -- media_tags（复合主键）
 CREATE TRIGGER IF NOT EXISTS trg_media_tags_sync_ai AFTER INSERT ON media_tags FOR EACH ROW
@@ -738,4 +774,25 @@ BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', OLD.id, 'dele
 --   桌面上不看日志根本发现不了）—— 正是总纲 §21 那条静默故障的同一族。
 --   ⚠ 连带后果：`manifest.schemaVersion` 3 → 4，手机会按契约 §1 重走一次 bootstrap
 --   （`MobileSchema.VERSION` 得由手机那一侧跟着改，本仓库 android/** 不归这次改动）。
-PRAGMA user_version = 5;
+--
+-- 2026-10 由 5 提到 6：角色卡**只留三个字段**（名称 / 正面提示词 / 负面提示词）。
+--   建表 DDL 那边少了十几个列，但收敛式 DDL **不给已存在的表删列** —— 所以老库靠
+--   `infra::db` 里那条迁移：补 `prompt` 列 + 把 `tags`（JSON 数组）拼成一行灌进去；
+--   其余老列原样留着、只是没人再读（删列要重建表，不值当）。同步范围没变，
+--   但 manifest 的版本号变了，手机照样重走一次 bootstrap —— 无害。
+-- 2026-10-11 由 6 提到 7：加产物**集合**（`media_collections` 表 + `media_assets.collection_id`）。
+--   一次改动同时踩了"加表"和"加列"两条路，**两条都必须走**：
+--   ① 加表靠 bump 版本号让老库重跑一遍收敛式 DDL（`CREATE TABLE IF NOT EXISTS`）；
+--   ② 加列 `CREATE TABLE IF NOT EXISTS` **补不了**，靠 `infra::db` 的 `NEW_COLUMNS` 那套
+--      "先 PRAGMA table_info 探测再 ALTER"。
+--   只做①的表现是"集合永远是 None、界面上什么都不显示"；只做②的表现是产物一入库就炸
+--   `no such table: media_collections` —— 两种都是静默的（后者只在入库那条路上炸）。
+--   ⚠ 连带后果：`manifest.schemaVersion` 6 → 7，手机会按契约重走一次 bootstrap
+--   （`MobileSchema.VERSION` 要由手机那一侧跟着改，本仓库 `android/**` 不归这次改动）。
+--
+-- 2026-10-11 由 7 提到 8：给 `prompts` 加 `negative_mode`（发送模式：保留 / 只发正面）。
+--   加的是**列**，走 `infra::db` 的 `NEW_COLUMNS` 那套（`CREATE TABLE IF NOT EXISTS` 补不了列）；
+--   bump 版本号是为了让**新加的列**在老库上也有一趟自愈的机会
+--   （`ensure_columns` 每次开库都跑，其实不 bump 也能补上；bump 是为了让手机那边
+--   拿到新的 `manifest.schemaVersion`、顺带重走一次 bootstrap —— 提示词形状变了）。
+PRAGMA user_version = 8;

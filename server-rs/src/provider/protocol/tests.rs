@@ -623,3 +623,149 @@ fn chat_urls_match_kotlin() {
     assert_eq!(Api::parse("  grok  "), None);
     assert_eq!(Api::AnthropicMessages.wire(), "anthropic-messages");
 }
+
+/// **Anthropic 的显式缓存断点**（2026-10）：不发 `cache_control` 就一次都不命中，
+/// 而工具往返循环每一轮都把"系统提示 + 整段历史"重发一遍。
+///
+/// 断点只打两处：最后一个工具 + 最后一条消息的最后一个内容块。
+/// ⚠ 只加在 anthropic 这一家：OpenAI 系（completions / responses）是**自动**缓存，
+/// 多发一个它们不认识的键反而是风险。
+#[test]
+fn anthropic_prompt_cache_breakpoints() {
+    let adapter = AnthropicMessagesAdapter;
+    let tools = vec![
+        ToolSpec { name: "a".into(), description: "甲".into(), parameters: json!({"type":"object"}) },
+        ToolSpec { name: "b".into(), description: "乙".into(), parameters: json!({"type":"object"}) },
+    ];
+    let turns = vec![
+        turn("system", "规则"),
+        turn("user", "看看队列"),
+        ChatTurn {
+            role: "tool".into(),
+            content: "空".into(),
+            tool_call_id: Some("toolu_1".into()),
+            ..Default::default()
+        },
+    ];
+    let body = adapter.build_body("claude", &turns, &tools, &ReasoningRequest::default(), None);
+
+    // ① 断点打在**最后一个**工具上（打中间那个就只缓存到一半）
+    assert!(body["tools"][0].get("cache_control").is_none(), "断点只打最后一个工具");
+    assert_eq!(body["tools"][1]["cache_control"], json!({ "type": "ephemeral" }));
+    // ② 滚动断点：最后一条消息（这里是工具结果那条用户轮）的最后一个内容块
+    let last = body["messages"].as_array().unwrap().last().unwrap();
+    assert_eq!(last["content"].as_array().unwrap().len(), 1);
+    assert_eq!(last["content"][0]["cache_control"], json!({ "type": "ephemeral" }));
+    assert_eq!(last["content"][0]["type"], "tool_result", "断点不许把块的类型挤掉");
+    // ③ 系统提示**仍是字符串**（不动线上的形状，理由见类型文档）
+    assert_eq!(body["system"], "规则");
+
+    // 空工具 / 空消息时一个断点都不发（别在多造出来的块上打）
+    let bare = adapter.build_body("claude", &[turn("user", "hi")], &[], &ReasoningRequest::default(), None);
+    assert!(bare.get("tools").is_none());
+    assert!(bare["messages"][0]["content"][0].get("cache_control").is_some());
+}
+
+/// 递归抹掉 `cache_control`（**只用于前缀比较**：它是元数据，见下面那条用例的注释）。
+fn strip_cache_control(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.remove("cache_control");
+            for item in map.values_mut() {
+                strip_cache_control(item);
+            }
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                strip_cache_control(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// **前缀稳定性**：第 N+1 轮的请求体必须是"第 N 轮的请求体 + 新增的那几条"。
+/// 上游的前缀缓存（Anthropic 靠上面那条显式断点，OpenAI 系自动）认的就是这个
+/// "逐字节相同的前缀"。往前缀里塞任何"每轮都会变"的东西，都会让整段历史按全价重读，
+/// 而**不会有任何别的用例变红**（AGENTS §10 那笔账：老库里 17.5% 的全价输入）。
+#[test]
+fn 下一轮的请求前缀逐字节包含上一轮() {
+    let reasoning = ReasoningRequest::default();
+    let tools = vec![ToolSpec {
+        name: "read_file".into(),
+        description: "读文件".into(),
+        parameters: json!({"type": "object"}),
+    }];
+    let base = vec![turn("system", "规则"), turn("user", "读一下那个文件")];
+    let appended = vec![
+        ChatTurn {
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: vec![ToolCallRef {
+                id: "call_1".into(),
+                name: "read_file".into(),
+                arguments: "{\"path\":\"a.txt\"}".into(),
+            }],
+            ..Default::default()
+        },
+        ChatTurn {
+            role: "tool".into(),
+            content: "内容".into(),
+            tool_call_id: Some("call_1".into()),
+            ..Default::default()
+        },
+    ];
+    let mut second_turns = base.clone();
+    second_turns.extend(appended.iter().cloned());
+
+    for (label, adapter) in [
+        ("openai-completions", adapter_for(Api::OpenAiCompletions)),
+        ("openai-responses", adapter_for(Api::OpenAiResponses)),
+        ("anthropic-messages", adapter_for(Api::AnthropicMessages)),
+    ] {
+        let first = adapter.build_body("m", &base, &tools, &reasoning, None);
+        let second = adapter.build_body("m", &second_turns, &tools, &reasoning, None);
+
+        // ① 工具定义逐字节相同（两份请求的 `tools` 必须是同一个字符串）
+        assert_eq!(
+            first.get("tools").map(Value::to_string),
+            second.get("tools").map(Value::to_string),
+            "{label}：工具定义在两轮之间变了 —— 前缀缓存会整段作废"
+        );
+
+        // ② 上一轮的每一条消息都原样出现在下一轮的**同一位置**上
+        let pick = |body: &Value| -> Vec<Value> {
+            let key = if body.get("messages").is_some() { "messages" } else { "input" };
+            body[key]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                // responses 把 system 挪进 `instructions`，比较起来两边的"条数"不同 ——
+                // 只比它真的铺进 input 的那几条
+                .filter(|item| item.get("role").and_then(Value::as_str) != Some("system"))
+                .map(|mut item| {
+                    // ⚠ Anthropic 的**滚动断点**会从前一轮的最后一块挪到这一轮的最后一块，
+                    //   所以"上一轮的最后一块"在下一轮少一个 `cache_control`。
+                    //   那是**元数据**（不进缓存前缀的 token 序列），挪动不影响命中 ——
+                    //   但它确实不属于"逐字节相同"的那部分，这里按同一口径抹掉再比。
+                    strip_cache_control(&mut item);
+                    item
+                })
+                .collect()
+        };
+        let before = pick(&first);
+        let after = pick(&second);
+        assert_eq!(
+            after.len(),
+            before.len() + appended.len(),
+            "{label}：第二轮只该多出新增的那几条"
+        );
+        for (index, item) in before.iter().enumerate() {
+            assert_eq!(
+                &after[index], item,
+                "{label}：第 {index} 条在两轮之间变了 —— 前缀从这里往后全部作废"
+            );
+        }
+    }
+}

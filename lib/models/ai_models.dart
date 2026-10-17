@@ -1325,59 +1325,31 @@ class AiMemory {
 //  角色卡（O8，2026-09-26）
 // ---------------------------------------------------------------------------
 
-/// 一个角色的**规范 tag 栈 + 配哪条 LoRA / 权重 + 来源**。
+/// 一个角色的**名称 + 正面提示词 + 负面提示词**（2026-10 收敛成这三样）。
 ///
 /// 为什么要有它：写角色提示词时模型最容易凭印象编 tag（现场：shinku 被当成 iroi
 /// 写了两版废图），而"查过一遍"的结果不落到某个地方，下一轮又得重查。
-/// `tagsVerifiedAt` 是"最后一次跟 danbooru 核对过"的**事实**（由后端的 danbooru 工具写，
-/// 不是模型自称）—— 界面上要和"没核对过"分开显示。
+/// 卡上原有的 tag 栈 / LoRA / 别名 / 来源 / 备注 / 位置 / 启用开关**全部删掉** ——
+/// 没有的字段不发键（与后端 `explicitNulls = false` 一致）。
 class CharacterCard {
   final int id;
   final String name;
-  final String? nameEn;
-  final List<String> aliases;
-  final String? characterTag;
-  final String? seriesTag;
-  final List<String> tags;
+
+  /// 正面提示词（整段文本）。
+  final String? prompt;
+
+  /// 负面提示词（整段文本）。
   final String? negative;
-  final String? loraName;
-  final double? loraWeight;
-  final String? loraTrigger;
-  final String? checkpoint;
-  final int? referenceMediaId;
-  final String? source;
-  final String? tagsVerifiedAt;
-  final String? notes;
-  /// 5×5 网格里的目标位置（`A1`~`E5`）；null = 自动（让 AI 自己摆）。
-  final String? position;
-  /// 是否参与本次生成（后端限制同时启用最多 6 个）。
-  final bool enabled;
+
   final String? updatedAt;
 
   const CharacterCard({
     required this.id,
     required this.name,
-    this.nameEn,
-    this.aliases = const [],
-    this.characterTag,
-    this.seriesTag,
-    this.tags = const [],
+    this.prompt,
     this.negative,
-    this.loraName,
-    this.loraWeight,
-    this.loraTrigger,
-    this.checkpoint,
-    this.referenceMediaId,
-    this.source,
-    this.tagsVerifiedAt,
-    this.notes,
-    this.position,
-    this.enabled = false,
     this.updatedAt,
   });
-
-  static List<String> _list(dynamic raw) =>
-      raw is List ? raw.map((e) => e.toString()).where((e) => e.isNotEmpty).toList() : const [];
 
   static String? _text(dynamic raw) {
     final s = raw?.toString().trim();
@@ -1387,139 +1359,10 @@ class CharacterCard {
   factory CharacterCard.fromJson(Map<String, dynamic> json) => CharacterCard(
         id: (json['id'] as num?)?.toInt() ?? 0,
         name: (json['name'] ?? '').toString(),
-        nameEn: _text(json['nameEn']),
-        aliases: _list(json['aliases']),
-        characterTag: _text(json['characterTag']),
-        seriesTag: _text(json['seriesTag']),
-        tags: _list(json['tags']),
+        prompt: _text(json['prompt']),
         negative: _text(json['negative']),
-        loraName: _text(json['loraName']),
-        loraWeight: (json['loraWeight'] as num?)?.toDouble(),
-        loraTrigger: _text(json['loraTrigger']),
-        checkpoint: _text(json['checkpoint']),
-        referenceMediaId: (json['referenceMediaId'] as num?)?.toInt(),
-        source: _text(json['source']),
-        tagsVerifiedAt: _text(json['tagsVerifiedAt']),
-        notes: _text(json['notes']),
-        position: _text(json['position']),
-        enabled: json['enabled'] == true,
         updatedAt: _text(json['updatedAt']),
       );
-
-  /// 复制一份但改几个字段（列表里的"启用/停用"开关用它——后端 `PUT` 是全量替换，
-  /// 少发字段就会把用户存的东西清掉，所以走 `toPayload()` 而不是只发 `enabled`）。
-  CharacterCard copyWith({String? position, bool? enabled}) => CharacterCard(
-        id: id,
-        name: name,
-        nameEn: nameEn,
-        aliases: aliases,
-        characterTag: characterTag,
-        seriesTag: seriesTag,
-        tags: tags,
-        negative: negative,
-        loraName: loraName,
-        loraWeight: loraWeight,
-        loraTrigger: loraTrigger,
-        checkpoint: checkpoint,
-        referenceMediaId: referenceMediaId,
-        source: source,
-        tagsVerifiedAt: tagsVerifiedAt,
-        notes: notes,
-        position: position ?? this.position,
-        enabled: enabled ?? this.enabled,
-        updatedAt: updatedAt,
-      );
-
-  /// 发给后端的字段（不带 id / 时间戳）。
-  ///
-  /// ⚠ 后端的 `PUT` 是**全量替换**：这里把空字段一并发出去（`null` / `[]`），
-  /// 用户在编辑弹窗里清空一个字段才会真的清掉。别"只发非空字段" —— 那样清空永远不生效。
-  Map<String, dynamic> toPayload() => {
-        'name': name,
-        'nameEn': nameEn,
-        'aliases': aliases,
-        'characterTag': characterTag,
-        'seriesTag': seriesTag,
-        'tags': tags,
-        'negative': negative,
-        'loraName': loraName,
-        'loraWeight': loraWeight,
-        'loraTrigger': loraTrigger,
-        'checkpoint': checkpoint,
-        'referenceMediaId': referenceMediaId,
-        'source': source,
-        // 核对时间是后端工具写的，界面不改它 → 编辑保存时**原样带回**
-        'tagsVerifiedAt': tagsVerifiedAt,
-        'notes': notes,
-        // 生图角色卡框架那两件（全量替换，所以必须一起带）
-        'position': position,
-        'enabled': enabled,
-      };
-
-  /// 一行摘要（列表卡片上给用户看的那句）。
-  String get summary {
-    final bits = <String>[];
-    if (characterTag != null) bits.add(characterTag!);
-    if (seriesTag != null) bits.add(seriesTag!);
-    if (aliases.isNotEmpty) bits.add('别名 ${aliases.take(3).join('、')}');
-    if (loraName != null) {
-      bits.add('LoRA $loraName${loraWeight == null ? '' : ' @$loraWeight'}');
-    }
-    return bits.join(' · ');
-  }
-}
-
-/// 角色卡的**汇总口径**（`GET /api/ai/character-cards/summary`）。
-///
-/// 界面上那行「已启用 N/6 · 提示词 X/512 · 排除词 Y/512」的全部数字都来自这里 ——
-/// **前端不重算 token**（估算的尺子只有后端那一份，AGENTS §7 的两份实现纪律）。
-class CharacterSummary {
-  final int enabledCount;
-  final int maxEnabled;
-  final int promptTokens;
-  final int negativeTokens;
-  final int promptLimit;
-  final int negativeLimit;
-
-  /// 新建角色默认落在哪一格（界面上的 5×5 网格拿它当默认选中）。
-  final String defaultPosition;
-
-  /// 网格的行 / 列（界面照它画，别自己写死 5×5）。
-  final List<String> gridRows;
-  final List<int> gridCols;
-
-  const CharacterSummary({
-    this.enabledCount = 0,
-    this.maxEnabled = 6,
-    this.promptTokens = 0,
-    this.negativeTokens = 0,
-    this.promptLimit = 512,
-    this.negativeLimit = 512,
-    this.defaultPosition = 'C3',
-    this.gridRows = const ['A', 'B', 'C', 'D', 'E'],
-    this.gridCols = const [1, 2, 3, 4, 5],
-  });
-
-  factory CharacterSummary.fromJson(Map<String, dynamic> json) => CharacterSummary(
-        enabledCount: (json['enabledCount'] as num?)?.toInt() ?? 0,
-        maxEnabled: (json['maxEnabled'] as num?)?.toInt() ?? 6,
-        promptTokens: (json['promptTokens'] as num?)?.toInt() ?? 0,
-        negativeTokens: (json['negativeTokens'] as num?)?.toInt() ?? 0,
-        promptLimit: (json['promptLimit'] as num?)?.toInt() ?? 512,
-        negativeLimit: (json['negativeLimit'] as num?)?.toInt() ?? 512,
-        defaultPosition: (json['defaultPosition'] ?? 'C3').toString(),
-        gridRows: (json['gridRows'] as List?)?.map((e) => e.toString()).toList() ??
-            const ['A', 'B', 'C', 'D', 'E'],
-        gridCols: (json['gridCols'] as List?)?.map((e) => (e as num).toInt()).toList() ??
-            const [1, 2, 3, 4, 5],
-      );
-
-  /// 还放得下几个（界面据此决定开关能不能点）。
-  bool get full => enabledCount >= maxEnabled;
-
-  /// 一行口径（列表顶部那条）。
-  String get line =>
-      '已启用 $enabledCount/$maxEnabled · 提示词 $promptTokens/$promptLimit · 排除词 $negativeTokens/$negativeLimit';
 }
 
 // ---------------------------------------------------------------------------

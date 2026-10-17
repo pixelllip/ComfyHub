@@ -104,9 +104,78 @@ fn object_info() -> Value {
     })
 }
 
+// ---------------------------------------------------------------------------
+//  「这份工作流认不认负面提示词」（2026-10-11）
+// ---------------------------------------------------------------------------
+
+/// 一份**有**负面输入的采样器（`negative` 是 optional 条件输入）。
+fn info_with_negative() -> Map<String, Value> {
+    serde_json::from_value(json!({
+        "KSampler": {
+            "input": {
+                "required": { "seed": ["INT", {}], "positive": ["CONDITIONING", {}] },
+                "optional": { "negative": ["CONDITIONING", {}] }
+            }
+        },
+        // 认不出来源的类：`/object_info` 里没有 → 不参与判定（不猜）
+        "CLIPTextEncode": { "input": { "required": { "text": ["STRING", {}] } } }
+    }))
+    .unwrap()
+}
+
 #[test]
-fn 预检_节点类拦_模型文件只警告() {
-    assert!(preflight_refusal(&graph(), &object_info()).is_none(), "都对就必须放行");
+fn 负面能力_接了线才算认() {
+    // 采样器的 negative 接了线 → 认
+    let wired = json!({
+        "3": { "class_type": "KSampler",
+               "inputs": { "seed": 1, "positive": ["6", 0], "negative": ["7", 0] } },
+        "6": { "class_type": "CLIPTextEncode", "inputs": { "text": "1girl" } },
+        "7": { "class_type": "CLIPTextEncode", "inputs": { "text": "bad hands" } }
+    });
+    assert_eq!(
+        negative_capability(&wired, Some(&info_with_negative())),
+        Some(vec!["KSampler".to_string()]),
+        "negative 接了线 → 这份工作流认负面"
+    );
+}
+
+#[test]
+fn 负面能力_声明了但没接线不算() {
+    // 采样器声明了 negative，但图里**没接** —— 等于没用到（这正是 turbo 那种工作流的形状）
+    let unwired = json!({
+        "3": { "class_type": "KSampler", "inputs": { "seed": 1, "positive": ["6", 0] } },
+        "6": { "class_type": "CLIPTextEncode", "inputs": { "text": "1girl" } }
+    });
+    assert_eq!(
+        negative_capability(&unwired, Some(&info_with_negative())),
+        Some(Vec::new()),
+        "查过了、确实没有负面输入 → 空数组（**不是** None）"
+    );
+}
+
+#[test]
+fn 负面能力_只有正面文本编码器不算认负面() {
+    // 最常见的误判：图里**有** CLIPTextEncode 就以为"认负面"。
+    // 那个其实是正面那一个 —— 判据必须落在"采样器的 negative 接没接线"上。
+    let only_positive = json!({
+        "3": { "class_type": "KSampler", "inputs": { "seed": 1, "positive": ["6", 0] } },
+        "6": { "class_type": "CLIPTextEncode", "inputs": { "text": "1girl" } }
+    });
+    assert_eq!(negative_capability(&only_positive, Some(&info_with_negative())), Some(Vec::new()));
+}
+
+#[test]
+fn 负面能力_拿不到_object_info_就回_None_不猜() {
+    let graph = json!({ "3": { "class_type": "KSampler", "inputs": { "negative": ["7", 0] } } });
+    assert_eq!(
+        negative_capability(&graph, None),
+        None,
+        "ComfyUI 没跑（拿不到 /object_info）时不许说'这份图不认负面'"
+    );
+}
+
+#[test]
+fn 预检_节点类拦_模型文件只警告() {    assert!(preflight_refusal(&graph(), &object_info()).is_none(), "都对就必须放行");
 
     // ① 实例不认识的节点类 → **拦**（`/object_info` 对节点类是权威的）
     let mut missing_node = graph();

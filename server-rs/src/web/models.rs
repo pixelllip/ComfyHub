@@ -78,6 +78,9 @@ pub struct PromptDto {
     pub extra_params: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// 发送模式：`keep`（默认）/ `positive_only`（不认负面提示词的 turbo 模型用）。
+    /// **总是给**（不是 Option）：界面拿它决定那个开关的位置，缺了会显示成"未设置"。
+    pub negative_mode: String,
     pub favorite: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -139,6 +142,11 @@ pub fn prompt_from_row(row: &Row<'_>) -> rusqlite::Result<PromptDto> {
         batch_size: row.get("batch_size")?,
         extra_params: parse_json_object(extra_text.as_deref()),
         notes: row.get("notes")?,
+        // 老库 / 老查询没带这一列时退回 `keep`（**绝不能变成"只发正面"**：
+        // 那会悄悄把用户的负面提示词丢掉，而 turbo 之外的模型很吃负面）
+        negative_mode: row
+            .get::<_, Option<String>>("negative_mode")?
+            .unwrap_or_else(|| "keep".to_string()),
         favorite: row.get::<_, i64>("favorite")? != 0,
         source: row.get("source")?,
         source_ref: row.get("source_ref")?,
@@ -162,6 +170,17 @@ pub fn tag_from_row(row: &Row<'_>) -> rusqlite::Result<TagDto> {
         use_count: row.get("use_count")?,
         created_at: crate::infra::iso_time::iso_time(row.get::<_, Option<String>>("created_at")?.as_deref()),
     })
+}
+
+/// `GROUP_CONCAT` 出来的 id 列表（`"12,15,31"`）→ `Vec<i64>`。
+///
+/// 坏数据**当作空数组**（与 `parse_loras` 同一条纪律：不让一行脏数据把整个列表打成 500）。
+/// `None`（子查询没命中）也当空数组 —— 界面拿到空数组就是"没进组 / 没有封面可叠"。
+fn parse_id_list(raw: Option<&str>) -> Vec<i64> {
+    let Some(text) = raw else { return Vec::new() };
+    text.split(',')
+        .filter_map(|s| s.trim().parse::<i64>().ok())
+        .collect()
 }
 
 /// `loras` 列是 JSON 数组文本；坏数据**当作空数组**（不让一行脏数据把整个列表打成 500）。
@@ -239,6 +258,19 @@ pub struct MediaDto {
     pub checkpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<i64>,
+    /// 所属**集合**（同源微调的产物归到一组；判定见 `media/collection.rs`）。
+    ///
+    /// `None` = 没进组（没关联提示词的孤儿产物，或规则判定它自成一类）。
+    /// 界面上 `collection_size <= 1` 与 `None` 一样按普通格子显示。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_id: Option<i64>,
+    /// 这个集合有几个成员（`1` = 只有它自己）。画廊据此决定要不要叠放封面、要不要显示角标。
+    pub collection_size: i64,
+    /// 集合**头三张**成员的 id（叠放封面用）。空数组 = 没进组。
+    ///
+    /// 后端在列表 SQL 里一次算好，所以画廊**不必**为每个集合格子再发一次请求
+    /// （一页 24 格就是 24 次）。成员数超过 3 时只给前 3 张，界面靠 `collectionSize` 显示总数。
+    pub collection_preview: Vec<i64>,
     pub prompt_tags: Vec<String>,
     pub file_url: String,
     /// Kotlin 是 `thumbUrl: String? = null`；这里**总是算得出来**，所以键总是在（值不会是 null）
@@ -273,6 +305,11 @@ pub fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaDto> {
         prompt_negative: row.get("prompt_negative")?,
         checkpoint: row.get("checkpoint")?,
         seed: row.get("seed")?,
+        collection_id: row.get("collection_id")?,
+        // 老调用点（`get` 那条按 id 取单条）也用同一个 COLS，所以这里一定读得到；
+        // 万一某个查询没带这一列，退回 1（= 只有它自己，界面按普通格子显示）。
+        collection_size: row.get::<_, Option<i64>>("collection_size")?.unwrap_or(1),
+        collection_preview: parse_id_list(row.get::<_, Option<String>>("collection_preview")?.as_deref()),
         prompt_tags: Vec::new(),
         file_url: format!("/api/media/{id}/file"),
         thumb_url: format!("/api/media/{id}/thumb"),

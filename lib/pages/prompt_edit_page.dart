@@ -37,6 +37,9 @@ class _PromptEditPageState extends State<PromptEditPage> {
   late final TextEditingController _notes;
 
   late PromptKind _kind;
+
+  /// 发送模式：`keep` / `positive_only`（见 `Prompt.negativeMode` 的注释）。
+  late String _negativeMode;
   late bool _favorite;
   late List<String> _tags;
   late List<LoraRef> _loras;
@@ -62,6 +65,8 @@ class _PromptEditPageState extends State<PromptEditPage> {
     _batch = TextEditingController(text: p?.batchSize?.toString() ?? '');
     _notes = TextEditingController(text: p?.notes ?? '');
     _kind = p?.kind ?? PromptKind.image;
+    // 老后端 / 老数据没有这个字段时退回 keep（**绝不能默认成只发正面**）
+    _negativeMode = p?.negativeMode ?? 'keep';
     _favorite = p?.favorite ?? false;
     _tags = [
       ...(p?.tags.map((e) => e.name) ?? const <String>[]),
@@ -113,6 +118,7 @@ class _PromptEditPageState extends State<PromptEditPage> {
       batchSize: _intOf(_batch),
       extraParams: widget.prompt?.extraParams ?? const {},
       notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
+      negativeMode: _negativeMode,
       favorite: _favorite,
       tags: _tags.map((e) => Tag(id: 0, name: e)).toList(),
     );
@@ -197,7 +203,26 @@ class _PromptEditPageState extends State<PromptEditPage> {
                 alignLabelWithHint: true,
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 10),
+            // 发送模式（用户 2026-10-11）：**有些 turbo 模型不认负面提示词**，
+            // 所以要能表达"我只发正面"。这是**预设自己的属性**（写提示词时的意图）——
+            // "目标工作流认不认负面"是另一件事，提交那条路上另有兜底检查。
+            //
+            // 说清后果（"发给 Comfy 时会去掉"）而不是只写个开关名：
+            // 用户点开开关时得知道负面提示词**不会**被送出去。
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              value: _negativeMode == 'positive_only',
+              onChanged: (v) => setState(() => _negativeMode = v ? 'positive_only' : 'keep'),
+              title: const Text('只发正面提示词'),
+              subtitle: Text(
+                '目标模型不认负面提示词时打开。发给 Comfy 执行时会去掉下面的负向提示词，'
+                '内容本身不受影响。',
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              ),
+            ),
+            const SizedBox(height: 12),
 
             _section(theme, '生成参数'),
             const SizedBox(height: 10),

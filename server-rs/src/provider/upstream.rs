@@ -6,6 +6,12 @@
 //! 2. **发出去、把 SSE 逐行喂给适配器**，吐出一串 [`crate::provider::protocol::StreamEvent`]；
 //! 3. **把失败归到稳定错误码**（AIH-024）—— 前端与 harness 都不解析供应商文案。
 //!
+//! 外加一件顺带做的：**把 `usage` 归一化**（[`TokenUsage`]）。三家的形状差别很大、
+//! 同一件事叫三个名字，而界面与落库只要"输入 / 输出 / 缓存命中 / 思考"这四个数，
+//! 所以归一化**只有这一处实现**。
+//! ⚠ `cachedTokens` 与 `reasoningTokens` **一个都不能丢** —— 前者是判断前缀缓存有没有生效的
+//! 唯一度量（2026-09 切 Rust 时丢过一次，界面上那行「缓存命中」因此从未出现过）。
+//!
 //! # 四条硬规则（照抄 Kotlin `AiUpstream` 的文件头）
 //!
 //! 1. **绝不记录 Authorization / x-api-key**：日志只写 Provider ID、脱敏端点、状态码、稳定码；
@@ -33,7 +39,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::provider::protocol::{adapter_for, Api, ChatTurn, Frame, ReasoningRequest, SseAccumulator, StreamEvent, ToolSpec};
 use crate::web::routes::{ApiError, AppState};
@@ -374,40 +380,137 @@ where
 pub struct Outcome {
     /// 上游的响应 id（进 `ai_messages.provider_response_id`，事后追溯用）
     pub provider_response_id: Option<String>,
-    /// 这一轮的 usage（**原样 JSON**：形状三家不同，归一化交给界面）
-    pub usage: Option<Value>,
+    /// 这一轮的 usage（**已经归一化**，形状见 [`TokenUsage`]）
+    pub usage: Option<TokenUsage>,
     /// `finish_reason` / `stop_reason`
     pub finish_reason: Option<String>,
     /// 工具调用分片（**原样**转交给 [`crate::provider::protocol::ToolCallAccumulator`] 拼装）
     pub tool_calls: Vec<(usize, String, Option<String>, Option<String>, Option<String>)>,
 }
 
-/// usage 的累加（AIH-057：多轮工具循环不能只算最后一轮）。
+/// 归一化后的 token 用量 —— **契约的那四个字段**（`docs/run-event-contract.md` §2）。
 ///
-/// 归一到 **OpenAI 形状**（`prompt_tokens` / `completion_tokens` / `total_tokens`），
-/// 因为界面的 token 显示读的就是它；Anthropic 的 `input_tokens` / `output_tokens`
-/// 在这里映射过去。
-pub fn merge_usage(previous: Option<Value>, incoming: &Value) -> Value {
-    let read = |value: &Value, keys: &[&str]| -> i64 {
-        keys.iter()
-            .find_map(|key| value.get(*key).and_then(Value::as_i64))
-            .unwrap_or(0)
-    };
-    let normalize = |value: &Value| -> (i64, i64) {
-        (
-            read(value, &["prompt_tokens", "input_tokens"]),
-            read(value, &["completion_tokens", "output_tokens"]),
-        )
-    };
-    let (mut input, mut output) = previous.as_ref().map(normalize).unwrap_or((0, 0));
-    let (add_input, add_output) = normalize(incoming);
-    input += add_input;
-    output += add_output;
-    serde_json::json!({
-        "prompt_tokens": input,
-        "completion_tokens": output,
-        "total_tokens": input + output,
-    })
+/// # 为什么要有这个类型（而不是把供应商的 JSON 原样透传）
+///
+/// 三家的形状差别很大，**同一件事在三家叫三个名字**；界面只画那四个数，
+/// 所以必须有一条唯一的归一化实现。真源就是这里 ——
+/// 前端 `AiTokenUsage.fromRaw`（`lib/models/ai_models.dart`）只是**对库里老数据的兼容读取**，
+/// 不是第二份实现（老数据存的是 Kotlin 时代的供应商原文）。
+///
+/// | 这里 | OpenAI 兼容 | Anthropic |
+/// | --- | --- | --- |
+/// | `input` | `prompt_tokens` | `input_tokens + cache_read + cache_creation` |
+/// | `output` | `completion_tokens` | `output_tokens` |
+/// | `cached` | `prompt_tokens_details.cached_tokens` | `cache_read_input_tokens` |
+/// | `reasoning` | `completion_tokens_details.reasoning_tokens` | （含在 `output_tokens` 里，无独立字段） |
+///
+/// # 两条口径（⚠ 改之前先读，前端按这两条画界面）
+///
+/// 1. **`input` 是"这一次请求一共读了多少 prompt token"，含命中的那一部分。**
+///    OpenAI 的 `prompt_tokens` 本来就把命中的算进去了，而 Anthropic 的 `input_tokens`
+///    **不含** `cache_read_input_tokens` —— 不把它抬到同一个口径，"输入"与"缓存命中"
+///    就不是同一个分母（Anthropic 那边会算出 >100% 的命中率）。
+/// 2. **`cached` 只算"读命中"（便宜的那部分），不算"写缓存"。**
+///    Anthropic 的 `cache_creation_input_tokens` 按 1.25× 计价，它是**输入但不是命中** ——
+///    算进 `cached` 会给出一个虚高的命中率。它已经含在 `input` 里。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    /// 这一次请求一共读了多少 prompt token（**含** `cached`）
+    pub input: i64,
+    pub output: i64,
+    /// 缓存**读命中**的那部分输入
+    pub cached: i64,
+    /// 思考 token
+    pub reasoning: i64,
+}
+
+impl TokenUsage {
+    /// 从上游给的 usage JSON 读出来。
+    ///
+    /// 认 OpenAI / Anthropic 两家方言，**也认自己吐出去的那个形状**（`inputTokens` 那一套）——
+    /// 后者是必须的：`merge_usage` 是"上一轮的归一化结果 + 这一轮的原样 JSON"，
+    /// 而 Run 的 usage 会落库（`ai_messages.usage_json` / `ai_runs.usage_json`），
+    /// 回填或重试时拿到手里的可能已经是归一化过的。
+    ///
+    /// 认不出来的键一律按 0，**不编数字**（契约：没有就是 0，界面不显示占位）。
+    pub fn from_raw(raw: &Value) -> Self {
+        let num = |key: &str| -> Option<i64> { raw.get(key).and_then(Value::as_i64) };
+        let nested = |parent: &str, key: &str| -> i64 {
+            raw.get(parent).and_then(|child| child.get(key)).and_then(Value::as_i64).unwrap_or(0)
+        };
+        // 命中：同一件事有好几个来源，取**最大**的那个（有的网关两个都发）。
+        // ⚠ 前端 `AiTokenUsage.fromRaw` 用的是同一条规则（取最大）—— 两边别漂。
+        let cached = [
+            nested("prompt_tokens_details", "cached_tokens"),
+            nested("input_tokens_details", "cached_tokens"),
+            num("cache_read_input_tokens").unwrap_or(0),
+            num("cachedTokens").unwrap_or(0),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+        let cache_creation = num("cache_creation_input_tokens").unwrap_or(0);
+        // 输入：① 自己归一化过的形状 → ② OpenAI 的 `prompt_tokens`（已含命中）
+        //      → ③ Anthropic 的 `input_tokens`（**不含**命中，要把读/写缓存补回去）
+        //      → ④ 只给 `total_tokens` 的网关（口径退化，§5.4 记着这条）。
+        let input = num("inputTokens")
+            .or_else(|| num("prompt_tokens"))
+            .or_else(|| {
+                let anthropic = num("input_tokens");
+                let hit = num("cache_read_input_tokens");
+                (anthropic.is_some() || hit.is_some())
+                    .then(|| anthropic.unwrap_or(0) + hit.unwrap_or(0) + cache_creation)
+            })
+            .or_else(|| num("total_tokens"))
+            .unwrap_or(0);
+        let output = num("outputTokens")
+            .or_else(|| num("completion_tokens"))
+            .or_else(|| num("output_tokens"))
+            .unwrap_or(0);
+        let reasoning = [
+            nested("completion_tokens_details", "reasoning_tokens"),
+            nested("output_tokens_details", "reasoning_tokens"),
+            num("reasoning_tokens").unwrap_or(0),
+            num("reasoningTokens").unwrap_or(0),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+
+        Self { input, output, cached, reasoning }
+    }
+
+    /// 逐项相加（AIH-057：多轮工具循环不能只算最后一轮）。
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            input: self.input + other.input,
+            output: self.output + other.output,
+            cached: self.cached + other.cached,
+            reasoning: self.reasoning + other.reasoning,
+        }
+    }
+
+    /// 发给界面与落库的形状（**契约 §2 的四个键，一个不多一个不少**）。
+    ///
+    /// `usage.updated` 的载荷就是它本身（平铺，与手机 harness 的 `EventPayloads.usage` 同形），
+    /// `message.completed` 把它挂在 `usage` 键下。
+    pub fn to_json(self) -> Value {
+        json!({
+            "inputTokens": self.input,
+            "outputTokens": self.output,
+            "cachedTokens": self.cached,
+            "reasoningTokens": self.reasoning,
+        })
+    }
+}
+
+/// usage 的累加：把这一轮的**原样 JSON** 归一并加到前面几轮上（AIH-057）。
+///
+/// ⚠ 别退回"只取最后一轮"或"只累加 prompt/completion 两个数"——
+/// 后者正是"缓存命中在桌面上永远是 0"的那次回归：`cached` 与 `reasoning`
+/// 是分开的字段，被丢掉之后**界面看不出来、账单也看不出来**。
+pub fn merge_usage(previous: Option<TokenUsage>, incoming: &Value) -> TokenUsage {
+    previous.unwrap_or_default().merge(TokenUsage::from_raw(incoming))
 }
 
 /// 日志里只出现 `scheme://host:port/path`（**不带 query / fragment / userInfo**）。

@@ -1,4 +1,6 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -31,10 +33,28 @@ class MediaDetailPage extends StatefulWidget {
 }
 
 class _MediaDetailPageState extends State<MediaDetailPage> {
+  /// **当前正在看的那一条**（可以和 `widget.mediaId` 不同 —— 见 [`_goTo`]）。
+  ///
+  /// 用户 2026-10-11："重新路由的实际行为是关闭旧窗口、打开新窗口。太奇怪了。
+  /// 能不能改成更加舒服的过渡方式：**页面不变，但是填充内容实时改变**？"
+  ///
+  /// 所以左右切换**不再走 `pushReplacement`**：路由始终是同一个，
+  /// 只把 `_currentId` 换掉、重新取数据，页面骨架（AppBar / 布局 / 滚动位置）原地不动。
+  late int _currentId = widget.mediaId;
+
   MediaAsset? _media;
   Prompt? _prompt;
   bool _loading = true;
   String? _error;
+
+  /// 当前这一条所属**集合**的成员 id（按时间升序）。
+  ///
+  /// 用户 2026-10-11："产物对应的工作流参数大体相同、只有一点点微调，完全可以放进同一个页面…
+  /// 点进详情里可以左右切换。" 判定在后端（`media/collection.rs`），这里只按 `collectionId` 列成员。
+  ///
+  /// ⚠ 只有 `collectionId != null` 时才拉；**空列表 / 单成员 = 不显示箭头**（用户定的
+  /// "只有一份产物时禁用箭头"）。
+  List<int> _siblings = const [];
 
   @override
   void initState() {
@@ -42,19 +62,32 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
-  Future<void> _load() async {
+  @override
+  void didUpdateWidget(covariant MediaDetailPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 外部（比如画廊重新 push 了同一个路由）换了 id：跟着换，别停在旧内容上
+    if (oldWidget.mediaId != widget.mediaId && widget.mediaId != _currentId) {
+      _currentId = widget.mediaId;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    }
+  }
+
+  Future<void> _load({bool showSpinner = true}) async {
     if (!mounted) return;
     final store = context.read<LibraryStore>();
     // 打开详情 = 用户主动要看这一条（用户 2026-09-20：「打开详情之后就没必要模糊了」）：
     // 详情页自己不打码，顺手把"这一条看过了"记下来 —— 回到列表时它的缩略图也不再糊。
     // 只记在内存里（`NsfwStore`），关掉 App 再打开照旧打码。
-    context.read<NsfwStore?>()?.reveal('media:${widget.mediaId}');
+    //
+    // ⚠ 每次**切换**也要对新的那一条 reveal（`_goTo` 会再调一次 `_load`）——
+    // 漏掉的表现是"看完第 1 张，第 2 张又糊上了"。
+    context.read<NsfwStore?>()?.reveal('media:$_currentId');
     setState(() {
-      _loading = true;
+      if (showSpinner) _loading = true;
       _error = null;
     });
     try {
-      final media = await store.api.getMedia(widget.mediaId);
+      final media = await store.api.getMedia(_currentId);
       Prompt? prompt;
       if (media.promptId != null) {
         try {
@@ -63,10 +96,25 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           prompt = null;
         }
       }
+      // 集合成员：拿到失败**不影响详情页**（没有箭头而已，不是错误）
+      var siblings = const <int>[];
+      if (media.collectionId != null) {
+        try {
+          final page = await store.api.listMedia(
+            collectionId: media.collectionId,
+            sort: 'oldest',
+            size: 200,
+          );
+          siblings = page.items.map((e) => e.id).toList();
+        } catch (_) {
+          siblings = const [];
+        }
+      }
       if (!mounted) return;
       setState(() {
         _media = media;
         _prompt = prompt;
+        _siblings = siblings;
         _loading = false;
       });
     } catch (e) {
@@ -75,6 +123,65 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
         _error = '$e';
         _loading = false;
       });
+    }
+  }
+
+  /// 当前这条在集合里的下标（不在集合里 = -1）。
+  int get _indexInSiblings => _siblings.indexOf(_currentId);
+
+  /// 上一条 / 下一条的 id（没有就返回 null → 按钮禁用、快捷键不响应）。
+  int? get _prevId {
+    final i = _indexInSiblings;
+    return (i > 0) ? _siblings[i - 1] : null;
+  }
+
+  int? get _nextId {
+    final i = _indexInSiblings;
+    return (i >= 0 && i + 1 < _siblings.length) ? _siblings[i + 1] : null;
+  }
+
+  /// 切到集合里的另一条：**原地换内容，路由不动**（用户 2026-10-11）。
+  ///
+  /// 为什么不 `pushReplacement`：那在 Flutter 里等于"**旧页销毁 + 新页进场**"——
+  /// 用户看到的是"窗口关了一下又开"，而且页面骨架（AppBar / 布局 / 滚动位置）全重建。
+  /// 用户原话："太奇怪了。能不能改成更加舒服的过渡方式：页面不变，但是填充内容实时改变？"
+  ///
+  /// 所以这里只改 `_currentId` 再取一次数据：
+  ///  * **路由始终是同一个**（后退一次就回画廊，不会翻十张要按十次）；
+  ///  * 页面骨架原地不动，只有内容区换；
+  ///  * `showSpinner: false` —— 切换时不闪加载圈，旧图一直显示到新图数据到位
+  ///    （`getMedia` 是本机后端，通常几十毫秒）。
+  ///
+  /// ⚠ **不许清 `_prompt`**：清掉会让"关联的提示词"那张卡**空一下**再填上，
+  /// 看起来就是整块在闪（用户 2026-10-11 报的"图片切换时整个界面闪烁"的一半）。
+  /// 留着旧值也不会串 —— `_media` 与 `_prompt` 是**同一次 setState** 一起换的，
+  /// 所以"图换了词还是旧的"这个中间态根本不存在。
+  void _goTo(int id) {
+    if (id == _currentId) return;
+    setState(() => _currentId = id);
+    _load(showSpinner: false);
+  }
+
+  /// 「存为预设」：把这条产物当初用的提示词**复制**成一条新预设。
+  ///
+  /// 为什么是复制、不是就地改：自动捕获的提示词行是**运行记录**
+  /// （`capture_runs.prompt_id` 指向它），改它等于篡改台账（R10 那条链）。
+  /// "我想以后反复用这套词"是另一件事 —— 所以另起一条 `Manual` 来源的预设。
+  Future<void> _saveAsPreset(BuildContext context, Prompt source) async {
+    final store = context.read<LibraryStore>();
+    final messenger = ScaffoldMessenger.of(context);
+    final name = await _promptText(
+      title: '存为预设',
+      label: '预设名',
+      initial: source.title.isEmpty ? '未命名预设' : '${source.title}（预设）',
+    );
+    if (name == null || !mounted) return;
+    try {
+      await store.api.createPrompt(source.copyWith(id: 0, title: name));
+      await store.refreshAll();
+      messenger.showSnackBar(SnackBar(content: Text('已存为预设「$name」')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('存为预设失败: $e')));
     }
   }
 
@@ -209,14 +316,45 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       ),
       body: RefreshIndicator(
         onRefresh: _load,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
+        // 左右方向键切换同批产物（用户 2026-10-11 报的"方向键在切按钮选中状态"）。
+        //
+        // 为什么要 `CallbackShortcuts` + `Focus`（而不是靠按钮自带的焦点遍历）：
+        // 方向键默认是 Flutter 的**焦点遍历**快捷键 —— 一按就在页面上的按钮之间跳，
+        // 用户按左键看到的是"某个按钮被选中了"，而不是"上一张图"。
+        // 这里用一个**自动获得焦点**的 `Focus` 把 ←/→ 接管掉：
+        //   · 只在有上一条/下一条时响应（边界上按了什么都不做，不会误触发别的）；
+        //   · 其他键（Tab / Enter / 空格）**原样放行**，不影响键盘操作按钮。
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.arrowLeft): () {
+              final id = _prevId;
+              if (id != null) _goTo(id);
+            },
+            const SingleActivator(LogicalKeyboardKey.arrowRight): () {
+              final id = _nextId;
+              if (id != null) _goTo(id);
+            },
+          },
+          child: Focus(
+            autofocus: true,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
             final wide = constraints.maxWidth >= 1000;
             final info = _InfoPanel(
               media: m,
               prompt: _prompt,
               onChanged: _load,
+              onSaveAsPreset: (p) => _saveAsPreset(context, p),
             );
+            // ⚠ **不要在这里包 `AnimatedSwitcher`**（2026-10-11 用户报的"切换时整个界面闪烁"）。
+            //
+            // 曾经把整页（`Row` / `ListView`）包进一个 key 跟着 `_currentId` 变的
+            // `AnimatedSwitcher`：那样每切一张图，**整页骨架**都要重建一遍
+            // （`LayoutBuilder` → `Row` → 两个 `Expanded` → 滚动容器…），
+            // 而旧的那份在 `layoutBuilder` 里还占着位置 —— 于是整块闪。
+            //
+            // 正确做法：**布局原地不动，只让真正变的那块（图片）自己淡入**。
+            // 过渡在 `_previewArea` 里做（见那里的 `AnimatedSwitcher`）。
             if (wide) {
               return Row(
                 // stretch：左栏的大图查看器要铺满整屏高度（自己处理拖动 / 缩放）
@@ -246,6 +384,8 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
               ],
             );
           },
+            ),
+          ),
         ),
       ),
         ),
@@ -270,14 +410,100 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           behavior: HitTestBehavior.translucent,
           onSecondaryTapDown: (d) =>
               _showPreviewMenu(menuContext, m, url, d.globalPosition),
-          child: _Preview(media: m, url: url, posterUrl: _posterUrl(m)),
+          // ⚠ **滚轮冲突**（2026-10-11 用户报的"窄屏下滚轮同时滚界面和缩放图片"）：
+          //
+          // 窄屏时详情页是 `ListView`，而大图查看器的滚轮缩放（`InteractiveViewer` 自带）
+          // 与列表滚动**同时响应同一个事件** —— 结果滚一下既翻页又缩放。
+          //
+          // 修法：在预览区外面包一层 `Listener`，把滚轮事件**登记进手势竞技场**，
+          // 外层 `Scrollable` 的处理器就会跳过它（这正是 Flutter 自己的
+          // `Scrollable` 处理滚轮的方式：`GestureBinding.instance.pointerSignalResolver`，
+          // 谁先注册谁赢，而命中测试是**自下而上**的 —— `InteractiveViewer` 在里层先拿到）。
+          //
+          // 代价（刻意接受）：鼠标停在图上时**不能**用滚轮翻页，得把鼠标移开图再滚。
+          // 这是"图上的滚轮 = 缩放"这条通用约定的必然结果 —— 看图工具都这么做。
+          child: Listener(
+            onPointerSignal: (event) {
+              if (event is PointerScrollEvent) {
+                GestureBinding.instance.pointerSignalResolver.register(event, (_) {});
+              }
+            },
+            // **过渡只做在图片上**（用户 2026-10-11："切换时整个界面闪烁"）：
+            // 布局原地不动，只有这一块淡入。key 跟着 `_currentId` 变 ——
+            // 同一个 id 重建时（比如下拉刷新）不重放动画。
+            //
+            // ⚠ 别把这个 `AnimatedSwitcher` 提到外层：提到外层就是"整页骨架重建"，
+            // 那正是闪烁的来源（`LayoutBuilder`/`Row`/滚动容器全都要重来一遍）。
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 140),
+              // ⚠ **别用默认的 `layoutBuilder`**：它把新旧两份摆进一个 `Stack`
+              // 同时布局 —— 预览区是"由外层 `Row` 的 stretch 给高度"的，
+              // 两份同时存在时其中一份会拿到 unbounded 高度（溢出/闪烁）。
+              // 这里只留"新的那一份"，过渡就只剩淡入，布局始终只有一份。
+              layoutBuilder: (current, previous) => current ?? const SizedBox.shrink(),
+              child: KeyedSubtree(
+                key: ValueKey<int>(_currentId),
+                child: _Preview(media: m, url: url, posterUrl: _posterUrl(m)),
+              ),
+            ),
+          ),
         );
+
+        // 同批产物：左右箭头 + "第几张 / 共几张"（用户 2026-10-11）。
+        //
+        // **只给图片**：视频 / 音频的"上一个 / 下一个"在**播放控件那一行**
+        // （用户 2026-10-11 明确分开的），所以那两种 kind 直接就是 `preview`。
+        // 只有**多于一张**时才叠 —— 单张（或没进组）时连位置都不占
+        // （用户定的"只有一份产物时禁用箭头"）。
+        final withNav = (m.kind == MediaKind.image && _siblings.length > 1)
+            ? Stack(
+                fit: StackFit.expand,
+                children: [
+                  preview,
+                  Positioned(
+                    left: 4,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: _NavArrow(
+                        icon: Icons.chevron_left,
+                        tooltip: '上一张（←）',
+                        onPressed: _prevId == null ? null : () => _goTo(_prevId!),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 4,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: _NavArrow(
+                        icon: Icons.chevron_right,
+                        tooltip: '下一张（→）',
+                        onPressed: _nextId == null ? null : () => _goTo(_nextId!),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 8,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: _NavCounter(
+                        index: _indexInSiblings + 1,
+                        total: _siblings.length,
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : preview;
 
         if (m.kind == MediaKind.image) {
           return SizedBox(
             width: double.infinity,
             height: wide ? null : height, // 宽屏时高度由 Row 的 stretch 给
-            child: preview,
+            child: withNav,
           );
         }
         if (m.kind == MediaKind.audio) {
@@ -285,17 +511,17 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           final centered = Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 560),
-              child: preview,
+              child: withNav,
             ),
           );
-          return wide ? centered : preview;
+          return wide ? centered : withNav;
         }
         // 视频：宽屏铺满整栏（长边铺满靠播放器自己算），窄屏给固定高度、
         // 不放进滚动容器 —— 播放器的控制条和全屏按钮需要一块稳定可见的区域。
         return SizedBox(
           width: double.infinity,
           height: wide ? null : (height ?? 420),
-          child: preview,
+          child: withNav,
         );
       },
     );
@@ -444,6 +670,65 @@ class _Preview extends StatelessWidget {
   }
 }
 
+/// 同批产物之间切换的左右箭头。
+///
+/// `onPressed == null` = **禁用**（不是隐藏）—— 用户 2026-10-11 明确要的是
+/// "只有一份产物时禁用箭头"，所以边界上那个箭头仍在，只是按不动。
+class _NavArrow extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback? onPressed;
+
+  const _NavArrow({required this.icon, required this.tooltip, this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.black.withValues(alpha: enabled ? 0.45 : 0.18),
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onPressed,
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Icon(
+              icon,
+              size: 26,
+              color: enabled ? Colors.white : Colors.white38,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "第几张 / 共几张"的小胶囊。
+class _NavCounter extends StatelessWidget {
+  final int index;
+  final int total;
+
+  const _NavCounter({required this.index, required this.total});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        '$index / $total',
+        style: const TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+}
+
 class _Unsupported extends StatelessWidget {
   final IconData icon;
   final String message;
@@ -479,7 +764,16 @@ class _InfoPanel extends StatelessWidget {
   final Prompt? prompt;
   final Future<void> Function() onChanged;
 
-  const _InfoPanel({required this.media, required this.prompt, required this.onChanged});
+  /// 「存为预设」：由页面状态实现（它要拿 LibraryStore 与弹窗）。
+  /// `null` = 不显示这个按钮（用例里直接起这个面板时）。
+  final void Function(Prompt prompt)? onSaveAsPreset;
+
+  const _InfoPanel({
+    required this.media,
+    required this.prompt,
+    required this.onChanged,
+    this.onSaveAsPreset,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -499,12 +793,17 @@ class _InfoPanel extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                // ⚠ 用 `Wrap` 而不是 `Row`（2026-10-11 用户报的窄屏 pixel overflow）：
+                // 这一行是"图标 + 固定宽标题 + 两个按钮"，窄屏（320/384dp）下
+                // 固定部分加起来就超过卡片宽度 → `RenderFlex overflowed`。
+                // `Wrap` 放不下就把按钮整组换到下一行，**一个控件都不会被裁**。
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 0,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Icon(Icons.link, size: 18, color: theme.colorScheme.primary),
-                    const SizedBox(width: 6),
                     Text('关联的提示词', style: theme.textTheme.titleSmall),
-                    const Spacer(),
                     TextButton.icon(
                       onPressed: () => _changeLink(context),
                       icon: const Icon(Icons.sync_alt, size: 16),
@@ -529,7 +828,9 @@ class _InfoPanel extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                     onTap: () async {
                       await Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => PromptDetailPage(promptId: p.id)),
+                        MaterialPageRoute(
+                          builder: (_) => PromptDetailPage(promptId: p.id, showParams: true),
+                        ),
                       );
                       await onChanged();
                     },
@@ -553,6 +854,19 @@ class _InfoPanel extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
+                  // 「存为预设」（用户 2026-10-11）：把这条产物当初用的提示词
+                  // **复制**成一条新预设，而不是就地改这条自动捕获的提示词。
+                  //
+                  // 为什么是复制：自动捕获的提示词行是**运行记录**（`capture_runs.prompt_id`
+                  // 指向它），改它等于篡改台账；而"我想以后反复用这套词"是另一件事。
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => onSaveAsPreset?.call(p),
+                      icon: const Icon(Icons.bookmark_add_outlined, size: 16),
+                      label: const Text('存为预设'),
+                    ),
+                  ),
                   CopyableText(label: '正向提示词', text: p.positivePrompt),
                   if ((p.negativePrompt ?? '').isNotEmpty) ...[
                     const SizedBox(height: 10),
@@ -575,12 +889,15 @@ class _InfoPanel extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  // 同上一处：`Wrap` 而不是 `Row` —— 窄屏下"生成参数"与右边那句说明
+                  // 加起来会超过卡片宽度（用户 2026-10-11 报的 overflow 之一）。
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 2,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       Icon(Icons.tune, size: 18, color: theme.colorScheme.primary),
-                      const SizedBox(width: 6),
                       Text('生成参数', style: theme.textTheme.titleSmall),
-                      const Spacer(),
                       Text(
                         '来自关联的提示词',
                         style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),

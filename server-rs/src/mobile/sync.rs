@@ -51,6 +51,10 @@ pub const SYNCED: &[&str] = &[
     "prompt_tags",
     "media_assets",
     "media_tags",
+    // 2026-10-11：产物**集合**（同源微调的产物归到一组）。
+    // 必须跟着 `media_assets` 一起同步 —— 否则手机上 `collection_id` 指向一个
+    // **它那边不存在的集合**，折叠不出组、也解释不了"这几张为什么在一起"。
+    "media_collections",
     "ai_conversations",
     "ai_messages",
     "ai_message_parts",
@@ -199,7 +203,7 @@ impl PkPart {
 /// 表名与列名都是编译期常量 → 下面拼 SQL 不是注入面。
 fn pk_kind(table: &str) -> Option<PkKind> {
     Some(match table {
-        "prompts" | "tags" | "media_assets" | "capture_runs" => PkKind::Int,
+        "prompts" | "tags" | "media_assets" | "capture_runs" | "media_collections" => PkKind::Int,
         // `ai_runs` / `ai_tool_calls` 的主键是 UUID 文本（两端各自生成，不会撞）
         "ai_conversations" | "ai_messages" | "ai_attachments" | "ai_runs" | "ai_tool_calls" => {
             PkKind::Text
@@ -452,6 +456,9 @@ fn table_of_kind(kind: &str) -> Option<&'static str> {
 const PHONE_FORBIDDEN: &[&str] = &[
     "prompts",
     "media_assets",
+    // 2026-10-11：集合由桌面算出来（判定要读提示词），手机不许自己造组 ——
+    // 否则两端会各自维护一套分组，而且手机的组在桌面上没有对应行。
+    "media_collections",
     "tags",
     "prompt_tags",
     "media_tags",

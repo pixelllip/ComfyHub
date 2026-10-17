@@ -4,7 +4,7 @@
 > 这是**设计**，不是已完成的东西 —— 每条"现状"都标了代码出处，每条决策都写了代价。
 >
 > 上游背景：`docs/android-client-plan.md` §4 第 1 步已写下要点（`X-ComfyHub-Token`、默认关闭、覆盖 SSE）；
-> 需求侧缺口记在 `docs/ai-home-requirements-audit.md:61/103/119`（AIH-016 收紧监听与 CORS、AIK-003 预留远程：
+> 需求侧缺口记在 `docs/archive/ai-home-requirements-audit.md:61/103/119`（AIH-016 收紧监听与 CORS、AIK-003 预留远程：
 > 两条都只差"**认证**"这一块）。本文把它补全到可实施的程度。
 
 ---
@@ -282,7 +282,7 @@ t = base64url(HMAC-SHA256(secret = 令牌, msg = "<path>|<exp>"))     e = <exp>�
 
 | 条目 | 现状（审计原文） | 本文补上什么 |
 | --- | --- | --- |
-| **AIH-016** 收紧监听与 CORS | `◐ 部分实现`，"**没有任何 Authentication / 会话令牌拦截**"（`ai-home-requirements-audit.md:61`） | D2/D7/D8：拦截器 + 默认拒绝 + CORS 头 |
+| **AIH-016** 收紧监听与 CORS | `◐ 部分实现`，"**没有任何 Authentication / 会话令牌拦截**"（`docs/archive/ai-home-requirements-audit.md:61`） | D2/D7/D8：拦截器 + 默认拒绝 + CORS 头 |
 | **AIK-003** 预留 Android / 远程 | `◐`，只有"可配 Base URL + 显式开对外监听 + Android 默认地址"（`:103`） | D1/D10/D11 + P1 的移动端接入 |
 | `android-client-plan.md` §4 第 1 步 | 要点已写（`:78-97`） | 补齐：回环豁免、媒体签名、默认拒绝、轮换语义、纯函数防线；**修正**它那句"`EventSource` 不能自定义 header"（C3：我们用 `http.Request`，能带头） |
 | README `:1188-1190`"单用户、无鉴权（回环）" | 现状陈述 | 实施后改成"回环免鉴权、非回环需配对令牌" |
@@ -339,6 +339,6 @@ t = base64url(HMAC-SHA256(secret = 令牌, msg = "<path>|<exp>"))     e = <exp>�
 ## 12. 参考
 
 - `docs/android-client-plan.md` §4 第 1 步（本设计的上游要点）
-- `docs/ai-home-requirements-audit.md:61/103/119`（AIH-016、AIK-003 的缺口原文）
+- `docs/archive/ai-home-requirements-audit.md:61/103/119`（AIH-016、AIK-003 的缺口原文）
 - `README.md:1188-1190`（"单用户、无鉴权（回环）"的现状陈述）、`:1195/1208`（§14 后续清单里的"鉴权与限流"）
 - 端到端模板：`docs/comfyui-capture.md`、三条 `scripts\e2e-*-test.ps1`

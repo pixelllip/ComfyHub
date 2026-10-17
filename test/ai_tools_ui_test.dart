@@ -1603,8 +1603,19 @@ void main() {
     // 界面上要如实显示新档位（而且给出"目录范围没放宽"的说明）
     // 档位名来自用户建议：以前叫「完全权限」，容易被理解成"什么都能干"。
     expect(AiToolPolicy.modeFullLabel, '自动允许（无需批准）');
-    expect(find.text(AiToolPolicy.modeFullLabel), findsWidgets);
-    expect(find.textContaining('不再等你批准'), findsWidgets);
+    // ⚠ 2026-10-11 起底行控件有**三档文字密度**（见 `_ComposerLabel`）：
+    // 1200 窗口下操作组只有 674 宽，**放不下全称**（全称四枚要约 690），
+    // 所以显示的是**短标签**「自动」—— 当前档位仍然一眼可见，只是压掉了长文案。
+    // 全称档由 `ai_home_test.dart` 的「底行密度·宽窗口」那条盯（1600 窗口）。
+    expect(find.text('自动'), findsWidgets, reason: '中档显示短标签');
+    // 切档后的说明文字在 tooltip 里（点开菜单/悬停能看到）
+    expect(
+      find.byTooltip(
+          '当前：${AiToolPolicy.modeFullLabel} —— AI 调用工具不会等你批准'
+          '（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
+      findsWidgets,
+      reason: '档位说明与"目录范围没放宽"那句必须还能查到',
+    );
   });
 
   testWidgets('(b4) 工具卡按 parts 的真实顺序插在正文之间（不重排到最后）', (tester) async {

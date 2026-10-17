@@ -305,6 +305,9 @@ pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::
                     if !tags.is_empty() {
                         repo::add_media_tags(tx, id, &tags)?;
                     }
+                    // 产物**集合**：手动上传的产物一般没有提示词，会按 kind 归到"孤儿那一组"
+                    // （详情页也要能在同批之间左右切换）。判定见 `media/collection.rs`。
+                    crate::media::collection::assign(tx, id)?;
                     repo::refresh_use_counts(tx)?;
                     Ok(id)
                 })

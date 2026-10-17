@@ -4,7 +4,7 @@
 > 即：**手机能独立和 AI 出设计方案，此时桌面可以不在线**；设计完再提交给桌面的 ComfyUI。
 >
 > 上游：`docs/cross-device-sync-design.md` §2.4（B 与 A 的分叉与代价）、
-> `docs/embedded-db-sync-options-report.md`（安卓平台约束，均已核实）、
+> `docs/archive/embedded-db-sync-options-report.md`（安卓平台约束，均已核实）、
 > `docs/ai-tools-and-skills.md`（工具与 Skills 的现存约定）。
 >
 > ⚠ 本文推翻/修正了两处早先的结论，§1 明确列出。

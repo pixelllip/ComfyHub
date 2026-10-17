@@ -266,6 +266,11 @@ pub fn import_file(
         if !tags.is_empty() {
             crate::library::repo::add_media_tags(tx, id, tags)?;
         }
+        // 产物**集合**（2026-10-11）：判定只看提示词（kind + 正/负），
+        // seed / steps / cfg 一概不影响 —— 详见 `media/collection.rs` 的文件头。
+        // 放在同一个事务里：分组失败就让整条入库回滚，别留"产物在、分组没算"的中间态。
+        // 孤儿产物（没关联提示词）**刻意不进组**，那一步返回 `Orphan`，不是错误。
+        crate::media::collection::assign(tx, id)?;
         crate::library::repo::refresh_use_counts(tx)?;
         Ok(id)
     });

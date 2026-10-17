@@ -29,20 +29,25 @@ constexpr const wchar_t kGetPreferredBrightnessRegValue[] = L"AppsUseLightTheme"
 // The number of Win32Window objects that currently exist.
 static int g_active_window_count = 0;
 
-// 窗口能缩到的最小尺寸（**逻辑像素**，用户要求 2026-09-21："限制窗口最小宽度为 320"）。
+// 窗口能缩到的最小尺寸（**逻辑像素**）。
 //
+// 2026-09-21 用户要求"限制窗口最小宽度为 320"；**2026-10-12 改成 360** ——
 // 界面在更窄的宽度下已经没有可用的排法：标题栏会被挤到只剩标题、输入区底行
 // 得靠折行 + 横向滚动勉强挤下。所以直接在 Win32 这一层挡住 —— 用户拖不动，
 // 不是"拖小了以后界面变形"。
 //
+// ⚠ 这个数字与 Dart 侧是**一对**：`lib/app.dart` 的 `kWideLayoutMinWidth`（900）
+// 把 360~900 划成"手机形态"，那一档要能在 360 上不溢出
+// （回归 `test\phone_layout_overflow_test.dart`）。改这里顺手也看一眼那边。
+//
 // 注意 `ptMinTrackSize` 是**物理像素**，而 Flutter 的布局是逻辑像素：
-// 150% 缩放的屏幕上 320 逻辑 = 480 物理。所以要按当前窗口 DPI 换算，
-// 不能直接写 320（那样 150% 屏上只能缩到 213 逻辑，界面就碎了）。
-// 这个尺寸是**内容区**（client area）的尺寸，所以"最小内容宽度" = 320 逻辑像素，
+// 150% 缩放的屏幕上 360 逻辑 = 540 物理。所以要按当前窗口 DPI 换算，
+// 不能直接写 360（那样 150% 屏上只能缩到 240 逻辑，界面就碎了）。
+// 这个尺寸是**内容区**（client area）的尺寸，所以"最小内容宽度" = 360 逻辑像素，
 // 比 `ptMinTrackSize` 那个"整个窗口"的下限略小 —— WM_GETMINMAXINFO 兜住用户拖动，
 // 这里兜住"起点就比下限还小"（例如以后默认尺寸被改小）。
-constexpr int kMinWindowWidthLogical = 320;
-constexpr int kMinWindowHeightLogical = 320;
+constexpr int kMinWindowWidthLogical = 360;
+constexpr int kMinWindowHeightLogical = 360;
 
 using EnableNonClientDpiScaling = BOOL __stdcall(HWND hwnd);
 
@@ -160,7 +165,7 @@ bool Win32Window::Create(const std::wstring& title,
   }
 
   // 起手就比最小宽度还小的话，拖都拖不回来（WM_GETMINMAXINFO 只管"拖"），
-  // 所以这里把创建尺寸夹一次 —— 界面在 320x320 以下没有可用的排法。
+  // 所以这里把创建尺寸夹一次 —— 界面在 360x360 以下没有可用的排法。
   {
     RECT client_rect{};
     GetClientRect(window, &client_rect);

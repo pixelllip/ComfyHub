@@ -54,7 +54,7 @@ data: <payload 的 JSON 单行>
 | `tool.failed` | `TOOL_FAILED` | `callId`, `name`, `code`, `message`, `approval`, `elapsedMs` | 工具失败 |
 | `user.question` | `USER_QUESTION` | `questionId`, `question`, `options?` | **AI 问用户**（不是审批，见 §3） |
 | `user.question.answered` | `USER_QUESTION_ANSWERED` | `questionId`, `answer` | 用户答完了 |
-| `usage.updated` | `USAGE_UPDATED` | `inputTokens`, `outputTokens`, `cachedTokens`, `reasoningTokens` | token 用量 |
+| `usage.updated` | `USAGE_UPDATED` | `inputTokens`, `outputTokens`, `cachedTokens`, `reasoningTokens` | token 用量。⚠ 载荷**平铺**这四个键（**不是** `{"usage": {...}}` 包一层）；`message.completed.usage` 里装的是**同一组键**。`inputTokens` **含**缓存命中的那部分（各家的口径由后端 `provider/upstream.rs` 的 `TokenUsage` 统一），所以 `cachedTokens / inputTokens` 就是命中率 |
 | `message.completed` | `MESSAGE_COMPLETED` | `messageId`, `text`, `reasoning`, `finishReason`, `elapsedMs`, `reasoningEffort`, `steps`, **`parts`**, `usage` | 一条助手消息收口（**落块时机**）。⚠ `parts` 是**权威**：界面在 parts 非空时只渲染 parts |
 | `conversation.updated` | `CONVERSATION_UPDATED` | `runId`, `conversationId`, `title` | 标题被总结出来了，前端刷新列表 |
 | `run.completed` | `RUN_COMPLETED` | `runId`, `elapsedMs` | Run 正常结束 |

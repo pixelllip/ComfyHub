@@ -115,6 +115,15 @@ class BackendLauncher extends ChangeNotifier {
   /// 会被顺手带走。
   bool servicesClaimed = false;
 
+  /// 这次后端**没能用回**我们想要的端口时，记下当初想要的那个（null = 一切正常）。
+  ///
+  /// 判据**不是我猜的**，是后端自己写的 `.run\api.json`：`fellBack: true` +
+  /// `requestedPort: <我们给的>`。为什么要让界面看得见（`settings_page.dart` 的
+  /// 「本地服务」卡片会显示它）：**端口一换，手机上保存的那个地址就失效了** ——
+  /// 用户得回桌面上重新扫一次配对二维码。不写出来的话，手机"突然连不上"
+  /// 就只剩用户自己猜（本仓 §12.3「界面上看不见的现象，用户只能靠猜」）。
+  int? portFallbackFrom;
+
   /// 起子进程的实现，测试里替换成假的；见 [BackendProcessStarter]
   @visibleForTesting
   static BackendProcessStarter processStarter = _startProcess;
@@ -195,6 +204,45 @@ class BackendLauncher extends ChangeNotifier {
     }
   }
 
+  /// **首屏拉数据的闸门**：等"这一轮启动/探测有没有结论"（就绪 / 失败 / 跳过）。
+  ///
+  /// # 为什么必须有它
+  ///
+  /// 冷启动时 `<根>\.run\api.json` **还不存在**（后端优雅退出时会把它删掉），
+  /// 于是 `SettingsStore.baseUrl` 只能是 `http://127.0.0.1:8080` 那个兜底值 ——
+  /// 那一刻发出去的任何请求都**注定失败**，而失败的样子还很吓人：
+  /// `ClientException … Connection attempt cancelled, host: 127.0.0.1, port: 8080`
+  /// （2026-10-12 用户报的"刚启动 AI 工作台就显示这个"）。
+  ///
+  /// 更阴的是**半截失败**：后端绑好端口后我们一 `notifyListeners`，store 就按新地址
+  /// 把旧 client `dispose()` 掉，那个还在连 8080 的请求于是被"取消"（而不是"拒绝"）——
+  /// 所以消息里写的是 cancelled。等出结论再发，这一整类现象就都没有了。
+  ///
+  /// # 三条纪律
+  ///
+  ///  1. **只等"有没有结论"，不保证结论是好的** —— 后端起不来时照样放行，
+  ///     让各页面如实报"连不上"（不许替用户静默重试到底）；
+  ///  2. **不许把首屏卡死**：超时就放行（那时请求失败是如实的结果）；
+  ///  3. **它不阻塞用户动作** —— 只有"冷启动第一波"该等（`AiWorkspaceStore.load` /
+  ///     `NsfwStore.load`），用户点出来的动作照旧直接发。
+  Future<void> settled({Duration? timeout}) async {
+    if (!busy) return;
+    final completer = Completer<void>();
+    void check() {
+      if (!busy && !completer.isCompleted) completer.complete();
+    }
+
+    addListener(check);
+    check(); // 加监听与首次判断之间可能刚好翻了档，补一次
+    try {
+      await completer.future.timeout(timeout ?? readyTimeout + const Duration(seconds: 5));
+    } on TimeoutException {
+      _log('等后端启动结论超时，先按现状继续（该报的错照样会报）。');
+    } finally {
+      removeListener(check);
+    }
+  }
+
   /// 从可执行文件所在目录往上找运行根目录（判据与两种布局见 `backend_paths.dart`）。
   ///
   /// 保留这个静态入口：设置页的「项目根目录」输入框与提示都用它。
@@ -238,6 +286,13 @@ class BackendLauncher extends ChangeNotifier {
     _cancelled = false;
     lastError = null;
 
+    // ⚠ **先翻成"忙"，再做第一个 await**（2026-10-12）：首屏各页的 postFrame 回调与
+    // 我们在**同一帧**里跑，而这里第一件事（读端口文件）是异步的 —— 中间那段空窗
+    // 会被 [settled] 的调用方当成"没人起后端、可以发请求了"，于是它们拿着 8080 那个
+    // 兜底地址发出去，冷启动**必然**报一次"连接后端失败"（用户贴的那个
+    // `ClientException … 127.0.0.1:8080/api/ai/providers`）。
+    _set(StartupPhase.probing, '正在检查本地服务…');
+
     // 后端端口是自动挑的：App 开着的时候后端可能重启到**新端口**，
     // 探活前先按 .run\api.json 重新发现一次（用户手填过地址时它什么也不做）。
     await _settings.refreshBaseUrlFromPortFile();
@@ -249,6 +304,9 @@ class BackendLauncher extends ChangeNotifier {
       // 探到已经在跑 = 这次没起过进程，但要**认领**它：
       // 「关 App 时一并停止本地服务」这句承诺包含"启动 App 之前就已经在跑的"那个。
       _claimRunningBackend();
+      // 顺手把它的端口记下来：下次我们启动时就能要回同一个（这是"手机不用重新配"的
+      // 前提），而且它要是当初回落过，这里也要如实说出来。
+      await _recordActualPort(null, spawned: false);
       _set(StartupPhase.ready, '后端已就绪');
       return true;
     }
@@ -307,13 +365,20 @@ class BackendLauncher extends ChangeNotifier {
     final dbFile = dbFileOf(root);
     final storage = storageDirOf(root);
     final bindHost = _settings.allowRemoteBackend ? '0.0.0.0' : '127.0.0.1';
+    // **先要回上一次那个端口**（2026-10-13）：`--port 0` 让系统挑，代价是重启就换
+    // 端口，而**手机存的是 `http://<局域网IP>:<端口>`** —— 端口一变那条地址就废了，
+    // 用户得重新扫一次配对二维码。要回旧端口之后，"端口变了"就只剩
+    // "它确实被别人占了"这一种情况（那时后端自己回落到随机端口并记 `fellBack`）。
+    //
+    // ⚠ 要回失败**不影响启动**：`main.rs` 绑不上就自动回落（且不会退出），
+    // 所以这条优化不会把"起不来"引进来（那正是当初选 `--port 0` 的理由）。
+    final preferredPort = _settings.lastApiPort;
     final args = <String>[
       '--db', dbFile,
       '--storage', storage,
       '--host', bindHost,
-      // **永远是 0**：让操作系统挑一个空闲端口，真实端口由后端写进 .run\api.json
-      // （端口只有一个真源；写死端口就会撞上"端口被占 / 落在 Windows 保留段"）。
-      '--port', '0',
+      // 端口只有一个真源：真实端口由后端写进 .run\api.json，我们只读它
+      '--port', '${preferredPort ?? 0}',
       // 强杀 App 时不留孤儿：见类注释与 server-rs/src/main.rs 的 spawn_stdin_watchdog
       '--watch-stdin',
     ];
@@ -373,6 +438,8 @@ class BackendLauncher extends ChangeNotifier {
       if (h != null && h['database'] == 'ok') {
         _log('后端已就绪：版本 ${h['version']}，存储目录 ${h['storageDir']}');
         servicesClaimed = true;
+        // 把这次实际用的端口记下来（下次先要回它），并如实报告"没要回来"
+        await _recordActualPort(root);
         _set(StartupPhase.ready, '后端已就绪');
         return true;
       }
@@ -540,11 +607,43 @@ class BackendLauncher extends ChangeNotifier {
   }
 
   int? _portFilePid() {
-    final root = layout?.root ?? detectRoot(from: _settings.projectRoot);
-    if (root == null) return null;
-    final state = readPortFile(root);
+    final state = readPortFile(_portFileRoot() ?? '');
     final pid = state?['pid'];
     return pid is int ? pid : null;
+  }
+
+  /// 去哪个根目录找 `.run\api.json`（解析出来的布局优先，其次按偏好 / 真实现场探）。
+  String? _portFileRoot() =>
+      layout?.root ?? detectRoot(from: _settings.projectRoot);
+
+  /// 把**这次实际**监听的端口记进偏好（下次启动先要回它），并如实报告"没要回来"。
+  ///
+  /// 三条纪律：
+  ///  1. **只认 `.run\api.json`**（后端自己写的真源）—— 读不到就什么都不做，
+  ///     绝不按"我们请求的端口"猜一个记下来；
+  ///  2. **端口没变时一个字都不写**（[SettingsStore.setLastApiPort] 内部会 early return，
+  ///     这里再判一次是为了连通知都不发）；
+  ///  3. **回落必须说出来**：这是"手机连不上"的唯一线索，不能只躺在日志里
+  ///     （[portFallbackFrom] + 设置页那行提示）。
+  Future<void> _recordActualPort(String? root, {bool spawned = true}) async {
+    final resolved = root ?? _portFileRoot();
+    if (resolved == null) return;
+    final state = readPortFile(resolved);
+    final port = state?['port'];
+    if (port is! int || port <= 0) return;
+
+    final requested = state?['requestedPort'];
+    final wanted = (requested is int && requested > 0) ? requested : null;
+    portFallbackFrom = (state?['fellBack'] == true) ? wanted : null;
+    await _settings.setLastApiPort(port);
+
+    if (portFallbackFrom != null) {
+      _log('⚠ 端口 $portFallbackFrom 这次没能用上（被别的程序占了，或落在系统保留段），'
+          '后端改听 $port。**手机上保存的地址会失效**：'
+          '请在「设置 → 远程访问与配对」里重新扫一次二维码。');
+    } else if (spawned && wanted != null) {
+      _log('端口沿用上次的 $port（手机存的地址不用改）。');
+    }
   }
 
   static Future<bool> _killPid(int pid) async {
@@ -657,6 +756,14 @@ class BackendLauncher extends ChangeNotifier {
     message = msg;
     _notify();
   }
+
+  /// **测试专用**：把状态直接推到某一档（不碰进程）。
+  ///
+  /// 为什么需要它：2026-10-11 起 `HomeShell` 是最高级、加载页只是覆盖物，
+  /// 而"后端重启时壳子不许被换掉"这条纪律**只能靠模拟 isReady 变假来验证** ——
+  /// 真去 kill 一个后端进程在单测里做不到。生产代码一行都不用它。
+  @visibleForTesting
+  void debugSetPhase(StartupPhase p, {String message = ''}) => _set(p, message);
 
   /// 退出收尾是异步的，可能落在 dispose 之后 —— 那时再 notifyListeners 会抛
   /// 「was used after being disposed」，会把 App 的关闭流程搅乱，所以这里兜一下。

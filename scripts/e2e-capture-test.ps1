@@ -54,12 +54,15 @@ $script:CreatedMediaIds = New-Object System.Collections.Generic.List[long]
 function Say([string]$msg, [string]$color = 'Gray') { Write-Host $msg -ForegroundColor $color }
 
 function Check([string]$name, [bool]$ok, [string]$detail = '') {
+    # ⚠ 计数必须在分支**外面**：掉进 `else` 就变成"只有失败才计数"，
+    # 于是全绿时结尾那条 `if ($script:Checks -le 0)` 会报"一项检查都没跑"——
+    # 通过与否都会 exit 1，整套自测等于白跑（2026-10-11 修）。
+    $script:Checks++
     if ($ok) {
         Say ("  [OK]   " + $name) 'Green'
     } else {
         Say ("  [FAIL] " + $name + $(if ($detail) { "  -> $detail" } else { '' })) 'Red'
-        $script:Checks++
-    $script:Failed++
+        $script:Failed++
     }
 }
 

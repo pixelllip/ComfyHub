@@ -46,7 +46,7 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 - **工具与 Skills**：桌面全量工具清单（`server-rs/src/tools/tools.rs` 是唯一真源）+ 三层准入（选完预检 / 发送前禁用 /
   建 Run 前后端再验）；Skills 正文真源是磁盘（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`），**不做缓存**。
 - **长期记忆**：`<storage>\ai\memory.md`，一行一条，用户可手改；写超限**报错不截断**。
-- **角色卡**：人物的标准容器（名称 / 提示词 / 排除词 / **位置**），**同时最多启用 6 个**、未启用不占 token。见 §4。
+- **角色卡**：一个角色的标准容器（**名称 / 正面提示词 / 负面提示词**）。见 §4。
 
 ## 3. 架构
 
@@ -75,17 +75,29 @@ Rust 后端（单文件 exe，SQLite 单文件）──► ComfyUI（127.0.0.1:8
 | `scripts/` | 构建 / 测试 / 打包（§7），**App 起停后端不经过它们** |
 | `docs/` | 设计、契约、排错（§9） |
 
-## 4. 角色卡（生图角色卡框架）
+## 4. 角色卡
 
-框架来自 [docs.aisese.ai/zh-CN/imagegen/character](https://docs.aisese.ai/zh-CN/imagegen/character)：
+一张卡 = 一个角色，**只有三个字段**（2026-10 用户要求："角色卡只保留：名称、正面提示词、负面提示词"）：
 
-- **四字段**：名称（只做标识、不参与生成）/ 提示词 / 排除词 / **位置**；
-- **位置 = 5×5 网格**（行 `A`~`E`、列 `1`~`5`），默认 **`C3` 居中**；留空 = 自动（让模型自己摆）；
-- **单次生成最多同时启用 6 个**（每张卡一个 ✓ 开关）；未启用留在库里待命、**不占 token**；
-- **token 口径**：界面顶部显示 `已启用 N/6 · 提示词 X/512 · 排除词 Y/512`，
-  数字由后端 `GET /api/ai/character-cards/summary` 算（**前端不重算**）。
+- **名称**：只做标识（同名 = 同一张卡：AI 重复保存是**合并**，不会攒出第二张）；
+- **正面提示词**：这个角色的规范 tag 栈 / 外观服饰基线（整段文本）；
+- **负面提示词**：这个角色常踩的那些词。
 
-我们在这四件之上还保留了资料库那套（danbooru tag 栈 / LoRA 与权重 / 参考图 / 别名 / 备注 / 核对时间）。
+为什么是结构化的一张表而不是长期记忆：记忆是"一行一条文本"、有 100 条上限、超限**直接报错**，
+而角色卡要按名字幂等地反复覆盖。
+
+- **入口**：「提示词」页右上角。刻意不做成第六个一级导航项 —— 窄屏上六个图标会挤成两行，
+  而角色卡天然属于"写提示词"这条工作流。
+- **AI 那两条工具**：`search_character_cards`（写角色之前先查本机，有卡就照卡写）/
+  `save_character_card`（存成卡）。`prompt` 是**整段替换**：想在已有内容上补两句，
+  先把卡读出来、再给完整的那一份（追加会把两段风格不同的提示词粘成一条）。
+- **端点**：`GET/POST /api/ai/character-cards`、`GET/PUT/DELETE /api/ai/character-cards/{id}`
+  （`PUT` 是全量替换，界面弹窗用）。**没有 `/summary`** —— 启用数 / token 口径 / 5×5 位置
+  那一层随"只留三个字段"一起删了（2026-10）。
+- **老库升级**：开库时把老卡的 `tags`（JSON 数组）拼成一行灌进 `prompt`
+  （`infra::db` 那条迁移：**只在刚补上这一列的那一次**跑，幂等、不覆盖已有值、
+  不是 JSON 就原样当文本；所以用户清空过的提示词不会被下次启动"复活"）；
+  其余老列留在库里，只是再没人读（SQLite 删列要重建表，不值当）。
 
 ## 5. 端口、环境变量、运行布局
 
@@ -195,6 +207,7 @@ pwsh -File scripts\e2e-submit-test.ps1                                # 提交�
 | [docs/pairing-design.md](docs/pairing-design.md) | 配对闸门与密钥下行 |
 | [docs/workflow-recipe-design.md](docs/workflow-recipe-design.md) | 工作流配方 |
 | [docs/mobile-harness-design.md](docs/mobile-harness-design.md) | 移动端 harness（Android Kotlin） |
+| [docs/archive/](docs/archive/README.md) | **已归档**：做完了的任务书、被取代的进度快照、当时的审计与调研 —— 不是当前依据 |
 
 ## 13. 已知限制
 

@@ -195,13 +195,6 @@ pub struct ToolSession {
     pub ask_cards_in_window: i64,
     /// 已经用掉几次"答题重置额度"（上限 [`crate::ai::questions::MAX_BUDGET_RESETS`]）
     pub budget_resets: i64,
-    /// **这一轮真的查过 danbooru 的 tag**（Kotlin `ToolContext.danbooruVerified`）。
-    ///
-    /// 为什么要有它：`save_character_card` 的 `tagsVerifiedAt` 是"这些 tag 跟 danbooru
-    /// 核对过"的**唯一凭据** —— 它只能由"真去查过"这件事写，**绝不能由模型自称**
-    /// （否则那张卡会带着一个假的核对时间，而假时间比没有时间更坏）。
-    /// 键是 [`crate::tools::danbooru::normalize_tag`] 归一之后的写法（`shinku_(nte)`）。
-    danbooru_verified: HashSet<String>,
     /// **本次请求是否带了图片附件**（Kotlin `ToolContext.hasImageAttachment`）。
     ///
     /// 与系统提示里那句"本次请求附带图片附件"**是同一个事实**（Kotlin 那边也是同一个
@@ -212,19 +205,6 @@ pub struct ToolSession {
 }
 
 impl ToolSession {
-    /// 记下"这一轮真查过这个 tag"（归一之后进集合；空串直接忽略）。
-    pub fn mark_danbooru_verified(&mut self, tag: &str) {
-        let key = crate::tools::danbooru::normalize_tag(tag);
-        if !key.is_empty() {
-            self.danbooru_verified.insert(key);
-        }
-    }
-
-    /// 这一轮查过这个 tag 吗（`save_character_card` 的判据）。
-    pub fn danbooru_verified(&self, tag: &str) -> bool {
-        self.danbooru_verified.contains(&crate::tools::danbooru::normalize_tag(tag))
-    }
-
     /// 还能不能再动一次工具（窗内额度与绝对天花板都没到）。
     pub fn has_calls_left(&self, max_calls: i64) -> bool {
         self.calls_in_window < max_calls.max(1) && self.calls < ABSOLUTE_CALL_CAP
@@ -253,6 +233,20 @@ impl ToolSession {
             }
             _ => {}
         }
+    }
+
+    /// **命中缓存**的那一次（没有真跑）→ 只记总调用额度。
+    ///
+    /// 为什么与 [`Self::spend_call`] 分开：联网 / ComfyUI 那两条额度的语义是
+    /// **"别拿外部服务当轮询器"**（AIH-036），而命中缓存时**一次外部请求都没发** ——
+    /// 让它占额度就等于"明明没打扰人家，却把它算成打扰了一次"，
+    /// 而那两份额度正是"再确认一下"最容易撞上的墙（撞上就是一句
+    /// `QUERY_BUDGET_EXCEEDED` 把模型的手捆住）。
+    ///
+    /// 总调用额度照记不误：命中同样要多一轮往返、同样烧上下文，`maxCallsPerRun` 该管它。
+    pub fn spend_cached_call(&mut self, _name: &str) {
+        self.calls += 1;
+        self.calls_in_window += 1;
     }
 
     /// 这一窗的联网额度还剩不剩（预检用；**扣费在真跑成功之后**）。
@@ -608,7 +602,7 @@ pub async fn execute(
         // O7/O8 的落点：写角色之前**先查本机**（库里那张卡 / 那条提示词的 tag 栈），
         // 而不是凭印象编 —— 现场教训是"把 shinku 当成 iroi 写了两版废图"。
         "search_character_cards" => crate::library::character_cards::tool_search(state, arguments),
-        "save_character_card" => crate::library::character_cards::tool_save(state, arguments, session),
+        "save_character_card" => crate::library::character_cards::tool_save(state, arguments),
         // `search_prompts`：同一个落点的另一半 —— 库里可能已经有那个角色的完整 tag 栈
         "search_prompts" => search_prompts(state, arguments),
         // ---- 联网三件 + 定向查询（P4 第 64 步：用户 2026-09-20 的"只用通用方案"）------
@@ -621,23 +615,9 @@ pub async fn execute(
         "civitai_search" => crate::tools::civitai::tool_search(state, arguments).await,
         "find_model" => crate::tools::find_model::tool_find_model(state, arguments).await,
         // ---- danbooru（联网，唯一会把数据送出本机的工具）----------------------
-        // 查完必须把"这一轮真的查过哪个 tag"记进 session：`save_character_card`
-        // 靠它决定写不写 `tagsVerifiedAt`（**核对时间是事实，不是模型的自称**）。
-        "danbooru_lookup" => {
-            let outcome = crate::tools::danbooru::tool_lookup(arguments).await;
-            if let Ok(outcome) = outcome.as_ref() {
-                session.mark_danbooru_verified(arguments.get("query").and_then(Value::as_str).unwrap_or(""));
-                if let Some(tag) = outcome
-                    .payload
-                    .get("character")
-                    .and_then(|c| c.get("tag"))
-                    .and_then(Value::as_str)
-                {
-                    session.mark_danbooru_verified(tag);
-                }
-            }
-            outcome
-        }
+        // 它是"写角色之前先查 danbooru"那条纪律的执行者：查规范写法与同现 tag，
+        // 结果自己就是给模型看的正文（`save_character_card` 那边只管存用户要的那三样）。
+        "danbooru_lookup" => crate::tools::danbooru::tool_lookup(arguments).await,
         // ---- 官方 comfy-mcp 的 39 个工具（P4 第 45 步）------------------------
         //
         // 名字是**运行时**拉来的（`tools/list`），所以这里用"注册表里有没有"来兜底，
@@ -1326,6 +1306,10 @@ fn search_prompts(state: &AppState, arguments: &Value) -> Result<ToolOutcome, To
                 sort: Some("newest".to_string()),
                 page: Some(1),
                 size: Some(limit),
+                // AI 侧连自动捕获的一起搜（见 `PromptQuery::include_captured` 的注释）
+                include_captured: true,
+                // 这个工具不按"有没有关联产物"筛（那是界面上的入口）
+                has_media: None,
             },
         )
         .map_err(library_failure)?

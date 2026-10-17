@@ -4,23 +4,59 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'backend_paths.dart';
+import 'theme.dart';
 
 /// 全局设置（后端地址、自动启动、项目根目录等），持久化在本地。
 class SettingsStore extends ChangeNotifier {
   static const _kBaseUrl = 'comfyhub.baseUrl';
   static const _kBaseUrlHistory = 'comfyhub.baseUrlHistory';
   static const _kPageSize = 'comfyhub.pageSize';
+  /// 筛选栏折叠状态（**整体一个**，用户 2026-10-11 定的：不是每个分区各自折叠）。
+  ///
+  /// 默认**展开**（别一上来就把功能藏起来）；用户收起过就记住 —— 按页面各自记，
+  /// 因为画廊和预设页的筛选栏内容不同，收了一个不代表想收另一个。
+  static const _kGalleryFiltersCollapsed = 'comfyhub.galleryFiltersCollapsed';
+  static const _kPromptFiltersCollapsed = 'comfyhub.promptFiltersCollapsed';
   static const _kAutoStartBackend = 'comfyhub.autoStartBackend';
   static const _kStopServicesOnExit = 'comfyhub.stopServicesOnExit';
   static const _kAllowRemoteBackend = 'comfyhub.allowRemoteBackend';
   static const _kProjectRoot = 'comfyhub.projectRoot';
 
+  /// 界面外观（深色 / 浅色 / 跟随系统）。见 [AppThemeMode]。
+  ///
+  /// ⚠ 默认**深色**：这是 2026-10-13 之前唯一存在过的外观（`MaterialApp.themeMode`
+  /// 写死 dark），换成别的默认值等于给所有存量用户换一套配色。
+  static const _kThemeMode = 'comfyhub.themeMode';
+
+  /// 上次后端**实际**监听的端口（0 / 缺省 = 还没记录过）。
+  ///
+  /// # 为什么必须记住它（2026-10-13 用户提的问题）
+  ///
+  /// 后端默认 `--port 0`（让操作系统挑空闲端口，避免"被占 / 落在 Windows 保留段"
+  /// 起不来），**代价是重启就换端口**。而**手机那边存的是
+  /// `http://<局域网IP>:<端口>`** —— 端口一变那条地址就废了，用户得跑到桌面上
+  /// 重新扫一次配对二维码（用户原话："怎么保证手机稳定连接电脑，而不用每次
+  /// 重新配置"）。
+  ///
+  /// 所以下次启动**先要回这个端口**；只有"它确实被别人占了"这一种情况才换
+  /// （那时由后端自己回落到随机端口，并在 `.run\api.json` 里记 `fellBack: true`，
+  /// 我们再把新端口记下来 + 在界面上如实说一声，见 `BackendLauncher.portFallbackFrom`）。
+  ///
+  /// ⚠ 这条偏好**不是**"用户手填的端口"：它是"上次实际用的那个"。
+  /// 想改端口没有任何界面入口 —— 真源永远只有一个：后端绑好之后写的
+  /// `.run\api.json`（见 [refreshBaseUrlFromPortFile]）。
+  static const _kLastApiPort = 'comfyhub.lastApiPort';
+
   String _baseUrl = defaultBaseUrl();
   int _pageSize = 24;
+  bool _galleryFiltersCollapsed = false;
+  bool _promptFiltersCollapsed = false;
   bool _autoStartBackend = true;
   bool _stopServicesOnExit = true;
   bool _allowRemoteBackend = false;
   String? _projectRoot;
+  AppThemeMode _themeMode = AppThemeMode.dark;
+  int? _lastApiPort;
   bool _loaded = false;
 
   /// 用过哪些地址（最近用的在前，最多 [maxBaseUrlHistory] 条）。
@@ -32,10 +68,19 @@ class SettingsStore extends ChangeNotifier {
   List<String> _baseUrlHistory = const [];
 
   /// 地址是用户手填的（true）还是我们自动发现的（false，见 [baseUrlIsAuto]）。
+  ///
+  /// ⚠ 它**不再单独决定"要不要听端口文件的"** —— 回环地址（[isLocalBackendUrl] 为真）
+  /// 一律按自动处理，不管这里是什么。判据只有一条，见 [refreshBaseUrlFromPortFile]。
   bool _baseUrlFromUser = false;
 
   String get baseUrl => _baseUrl;
   int get pageSize => _pageSize;
+
+  /// 画廊筛选栏是否收起（默认展开）。
+  bool get galleryFiltersCollapsed => _galleryFiltersCollapsed;
+
+  /// 预设页筛选栏是否收起（默认展开）。
+  bool get promptFiltersCollapsed => _promptFiltersCollapsed;
 
   /// 历史地址（最近用的在前）。界面拿它渲染"最近用过"那一组候选。
   List<String> get baseUrlHistory => List.unmodifiable(_baseUrlHistory);
@@ -45,10 +90,47 @@ class SettingsStore extends ChangeNotifier {
 
   /// 当前地址是不是"用户手填的"（false = 我们按本机 `.run\api.json` 自动定的）。
   ///
-  /// 用途只有一个（2026-09-22）：后端**重启会换端口**（端口是自动挑的），
-  /// 那时 App 必须能自己重新发现并改口 —— 但**绝不能**覆盖用户在设置页里填的地址
-  /// （那是"我要连别的机器"，改它就是把人家的远程配置弄坏了）。
-  bool get baseUrlIsAuto => !_baseUrlFromUser;
+  /// 用途有两个：后端重启后要不要**改口**（见 [refreshBaseUrlFromPortFile]），
+  /// 以及手机端启动时要不要**自己挑一台桌面**（见 `app.dart` 的
+  /// `_pickDesktopAutomatically`）—— 用户手填过就不许替他改。
+  ///
+  /// ⚠ **本机（回环）地址一律算"自动"**：它说的是"这台机器上的后端"，
+  /// 而本机后端端口是 `--port 0` 自动挑的。把它当用户配置存下来，等于把
+  /// "当前这个随机端口"抄了一遍 —— 下次后端一重启，界面就永远连不上
+  /// （2026-10-12 用户报的"直接启动软件连接不上后端"，根因就在这）。
+  bool get baseUrlIsAuto => !_baseUrlFromUser || isLocalBackendUrl(_baseUrl);
+
+  /// **"这个地址说的是本机后端吗"** —— 回环地址判据。
+  ///
+  /// 端口这件事**只有这一条判据**，别在别处再写一遍"要不要听用户的"：
+  ///   · 真 —— 本机后端。端口是自动挑的、真源只有 `.run\api.json`，
+  ///     所以地址**永远跟着它走**（哪怕这个值先前被写进过偏好）；
+  ///   · 假 —— 别的机器（局域网 IP / Tailscale / 域名）。那是用户的远程配置，
+  ///     端口文件与它无关，一个字都不许改。
+  ///
+  /// `0.0.0.0` 也算"本机"：后端开了局域网监听时它写在端口文件里，
+  /// 而客户端连通配地址是连不上的（读侧会回落回环，见 [_baseUrlFromPortFile]）。
+  static bool isLocalBackendUrl(String url) {
+    final v = url.trim();
+    if (v.isEmpty) return false;
+    var host = '';
+    try {
+      host = Uri.parse(v.contains('://') ? v : 'http://$v').host;
+    } catch (_) {
+      // 解析不了就走下面的正则兜底
+    }
+    if (host.isEmpty) {
+      final m = RegExp(r'^(?:[a-zA-Z][a-zA-Z0-9+.-]*://)?([^/:?#]+)').firstMatch(v);
+      host = m?.group(1) ?? '';
+    }
+    host = host.toLowerCase();
+    return host == '127.0.0.1' ||
+        host == 'localhost' ||
+        host == '::1' ||
+        host == '[::1]' ||
+        host == '0.0.0.0';
+  }
+
 
   /// App 启动时是否自动把后端拉起来
   bool get autoStartBackend => _autoStartBackend;
@@ -69,6 +151,14 @@ class SettingsStore extends ChangeNotifier {
   /// 判据见 `backend_paths.dart` 的 [looksLikeRoot]：源码树（`server-rs\Cargo.toml`）
   /// 与 release 产物（`viewer.exe` 同级带 `backend\`）两种布局都认。
   String? get projectRoot => _projectRoot;
+
+  /// 界面外观（默认深色）。[AppThemeMode.material] 才是给 `MaterialApp` 的那个值。
+  AppThemeMode get themeMode => _themeMode;
+
+  /// 上次后端实际监听的端口（null = 还没记录过 → 这一轮还是让系统挑）。
+  ///
+  /// 只用来**要回**同一个端口，不是"用户配置"：真源永远是后端写的 `.run\api.json`。
+  int? get lastApiPort => _lastApiPort;
 
   bool get loaded => _loaded;
 
@@ -104,8 +194,8 @@ class SettingsStore extends ChangeNotifier {
   ///
   /// 三条纪律：
   ///  · **读不到就用默认值**，绝不抛异常 —— 它在 App 启动路径上，崩了就是白屏；
-  ///  · **只在"用户没手填地址"时才用**（[load] 里 `prefs` 有值就优先用用户的），
-  ///    否则远程 / 局域网场景会被拽回本机；
+  ///  · **只在"这个地址说的是本机"时才收下它**（判据只有一条：[isLocalBackendUrl]。
+  ///    用户填了别的机器就永远优先用他的，否则远程 / 局域网场景会被拽回本机）；
   ///  · 用完**不缓存**：端口会随重启变，每次冷启动都重新读一次。
   static String? _baseUrlFromPortFile({String? projectRoot}) {
     for (final root in _projectRootCandidates(projectRoot)) {
@@ -144,14 +234,33 @@ class SettingsStore extends ChangeNotifier {
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString(_kBaseUrl);
-    _baseUrlFromUser = stored != null && stored.isNotEmpty;
+    // 存量清洗（2026-10-12）：老版本会把**自动发现来的回环地址**当"用户手填"存进
+    // `_kBaseUrl`（设置页那个「保存并测试连接」把框里的值原样写回），而那份值
+    // 下次启动就是死地址 —— 界面的表现是"后端明明起来了、App 却连不上"。
+    // 回环 = 本机 = 自动，所以这里直接当没填过，并顺手把那条偏好删掉：
+    // 留着它只会让下一个排查的人以为"用户手填过"。
+    final storedIsLocal =
+        stored != null && stored.isNotEmpty && isLocalBackendUrl(stored);
+    if (storedIsLocal) await prefs.remove(_kBaseUrl);
+    _baseUrlFromUser = stored != null && stored.isNotEmpty && !storedIsLocal;
     _baseUrl = _baseUrlFromUser ? stored! : defaultBaseUrl();
     _pageSize = prefs.getInt(_kPageSize) ?? 24;
+    _galleryFiltersCollapsed = prefs.getBool(_kGalleryFiltersCollapsed) ?? false;
+    _promptFiltersCollapsed = prefs.getBool(_kPromptFiltersCollapsed) ?? false;
     _autoStartBackend = prefs.getBool(_kAutoStartBackend) ?? true;
     _stopServicesOnExit = prefs.getBool(_kStopServicesOnExit) ?? true;
     _allowRemoteBackend = prefs.getBool(_kAllowRemoteBackend) ?? false;
     _projectRoot = prefs.getString(_kProjectRoot);
-    _baseUrlHistory = _sanitizeHistory(prefs.getStringList(_kBaseUrlHistory));
+    // 认不出来的值（老版本写的 / 手改过的）回默认，不抛：见 AppThemeMode.parse
+    _themeMode = AppThemeMode.parse(prefs.getString(_kThemeMode));
+    _lastApiPort = _sanitizePort(prefs.getInt(_kLastApiPort));
+    final rawHistory = prefs.getStringList(_kBaseUrlHistory);
+    _baseUrlHistory = _sanitizeHistory(rawHistory);
+    // 洗出来的和历史里躺着的不一样 → 把干净的**写回去**（同上：留着脏的只会误导排查，
+    // 而且"最近用过"那一组候选会一直摆着几条永远点不通的本机地址）。
+    if (rawHistory != null && !listEquals(rawHistory, _baseUrlHistory)) {
+      await prefs.setStringList(_kBaseUrlHistory, _baseUrlHistory);
+    }
     _loaded = true;
     notifyListeners();
   }
@@ -160,12 +269,17 @@ class SettingsStore extends ChangeNotifier {
   ///
   /// 为什么在**读**的时候也要洗一遍：这份表是上一版程序写进去的（或者用户
   /// 手改过 SharedPreferences），界面直接渲染脏值就会出现一个点不动的候选。
+  ///
+  /// ⚠ **回环地址不进历史**（2026-10-12）：历史是"联**别的机器**的候选"，
+  /// 而本机地址是自动的、端口每次启动都换 —— 把 `127.0.0.1:2175` 这种留在里面，
+  /// 只会在界面上摆一串**永远点不通**的候选（它们正是那个 bug 留下的渣）。
   static List<String> _sanitizeHistory(List<String>? raw) {
     if (raw == null) return const [];
     final out = <String>[];
     for (final item in raw) {
       final v = item.trim();
       if (v.isEmpty || !v.startsWith('http')) continue;
+      if (isLocalBackendUrl(v)) continue;
       if (out.contains(v)) continue;
       out.add(v);
       if (out.length >= maxBaseUrlHistory) break;
@@ -195,12 +309,21 @@ class SettingsStore extends ChangeNotifier {
   /// 重新发现本机后端地址（后端重启换了端口时用）。
   ///
   /// 返回 true = 地址变了（调用方要重建 api client）。
-  /// **用户手填过地址时什么也不做**并返回 false —— 那是他的远程配置，不该被本机服务改掉。
+  ///
+  /// **判据只有一条**（2026-10-12 定案，别再拆成两半）：地址指向**本机**（回环，
+  /// [isLocalBackendUrl]）→ 永远跟着 `.run\api.json` 走，**哪怕它先前被写进过偏好**；
+  /// 指向**别的机器** → 那是用户的远程配置，什么也不做。
+  ///
+  /// 为什么必须这样：后端端口是 `--port 0` 自动挑的（重启就换），"把当前这个端口
+  /// 存下来"等于存了一个下次启动必然失效的死地址。2026-10-12 之前这里写的是
+  /// `if (_baseUrlFromUser) return false`，而设置页会把框里**自动发现来的**地址
+  /// 原样存回去（`setBaseUrl`），于是 `_baseUrlFromUser` 一旦为真就再也不读端口文件 ——
+  /// 后端在新端口上跑得好好的，App 却对着旧端口等满 60 秒超时。
   ///
   /// 调用时机：后端启动完成之后（`BackendLauncher.ensureRunning` / 重启动作收尾处）。
   /// 端口文件读不到（还没起来 / 已停止）时保持原样，绝不猜。
   Future<bool> refreshBaseUrlFromPortFile() async {
-    if (_baseUrlFromUser) return false;
+    if (_baseUrlFromUser && !isLocalBackendUrl(_baseUrl)) return false;
     final discovered = _baseUrlFromPortFile(projectRoot: _projectRoot);
     if (discovered == null || discovered == _baseUrl) return false;
     _baseUrl = discovered;
@@ -211,8 +334,11 @@ class SettingsStore extends ChangeNotifier {
   Future<void> setBaseUrl(String value) async {
     var v = value.trim();
     final prefs = await SharedPreferences.getInstance();
-    if (v.isEmpty) {
-      // 清空 = 回到"自动"：地址由 `.run\api.json` 决定（后端端口是自动挑的）
+    // ⚠ **本机地址不是"用户配置"**（2026-10-12）：本机后端端口由它自己挑，真源只有
+    // `.run\api.json`。所以回环地址与"清空"走同一条路 —— 回到自动。
+    // 否则存下来的就是"当前这个随机端口"，下次后端一重启界面就永远连不上
+    // （而且这条偏好还会让 [refreshBaseUrlFromPortFile] 一直提前返回）。
+    if (v.isEmpty || isLocalBackendUrl(v)) {
       _baseUrlFromUser = false;
       _baseUrl = defaultBaseUrl();
       notifyListeners();
@@ -269,6 +395,21 @@ class SettingsStore extends ChangeNotifier {
     await prefs.setInt(_kPageSize, _pageSize);
   }
 
+  /// 记住筛选栏的折叠状态（按页面各自记）。
+  Future<void> setGalleryFiltersCollapsed(bool value) async {
+    _galleryFiltersCollapsed = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kGalleryFiltersCollapsed, value);
+  }
+
+  Future<void> setPromptFiltersCollapsed(bool value) async {
+    _promptFiltersCollapsed = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kPromptFiltersCollapsed, value);
+  }
+
   Future<void> setAutoStartBackend(bool value) async {
     _autoStartBackend = value;
     notifyListeners();
@@ -301,5 +442,37 @@ class SettingsStore extends ChangeNotifier {
     } else {
       await prefs.setString(_kProjectRoot, _projectRoot!);
     }
+  }
+
+  /// 端口合法区间内的值才收；其余（0 / 负数 / 超过 65535 / 手改坏的）一律当"没记录过"。
+  ///
+  /// **不许把它拼进 argv 之前才校验**：`--port 99999` 会让后端直接退出
+  /// （`main.rs` 里 "端口必须是 1~65535" 那条分支），而"App 记着一条脏值"
+  /// 这件事本身就不该存在。
+  static int? _sanitizePort(int? value) =>
+      (value != null && value >= 1 && value <= 65535) ? value : null;
+
+  /// 把后端这次实际监听的端口落盘（下次启动要回它）。见 [_kLastApiPort]。
+  Future<void> setLastApiPort(int? value) async {
+    final clean = _sanitizePort(value);
+    if (_lastApiPort == clean) return;
+    _lastApiPort = clean;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    if (clean == null) {
+      await prefs.remove(_kLastApiPort);
+    } else {
+      await prefs.setInt(_kLastApiPort, clean);
+    }
+  }
+
+  /// 切换界面外观。**立刻 `notifyListeners()` 再落盘**：换主题是"看得见"的操作，
+  /// 不能等磁盘（`ComfyHubApp` 就挂着这个 notifier 重建 `MaterialApp`）。
+  Future<void> setThemeMode(AppThemeMode value) async {
+    if (_themeMode == value) return;
+    _themeMode = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kThemeMode, value.name);
   }
 }

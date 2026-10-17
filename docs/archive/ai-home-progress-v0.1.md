@@ -6,7 +6,7 @@
 > Skills 投放口、长期记忆 M6）**，
 > **2026-09-16 第四轮追加（M3 附件真的能发了 + 思考强度可关闭）**
 > 依据：`docs/ai-home-requirements-v0.1.xlsx`（需求清单 / 待确认决策 / 风险清单 / 里程碑）
-> 与 `docs/ai-home-implementation-plan-v0.1.md`（实施方案）
+> 与 `docs/archive/ai-home-implementation-plan-v0.1.md`（实施方案）
 > 已覆盖范围：**M0 安全前置 + M1（Provider / 模型 / 凭据）+ M2（Run / 统一 SSE / 三协议）
 > + 思考强度与 token 统计（AIH-056 / AIH-057）+ **M4 工具循环（AIH-033~036 / 046 / 049）
 > + M5 Skills（AIH-037~045）** + **M6 长期记忆** + **M3 附件（AIH-027 ~ AIH-031）**
@@ -56,7 +56,7 @@
 
 | 需求 | 状态 | 说明 |
 | --- | --- | --- |
-| ⚠️ **本表的逐条判定已被独立审计取代** | — | 状态列已按 [`docs/ai-home-requirements-audit.md`](ai-home-requirements-audit.md)（逐条读代码、每条给 file:line 的独立审计）改成现状：**✅ 33 / ◐ 19 / ⬜ 8**（含补登记的 AIH-056/057）。审计列出了本表此前 18 处高估/过时之处及证据，遇到冲突以审计与代码为准。 |
+| ⚠️ **本表的逐条判定已被独立审计取代** | — | 状态列已按 [`docs/archive/ai-home-requirements-audit.md`](ai-home-requirements-audit.md)（逐条读代码、每条给 file:line 的独立审计）改成现状：**✅ 33 / ◐ 19 / ⬜ 8**（含补登记的 AIH-056/057）。审计列出了本表此前 18 处高估/过时之处及证据，遇到冲突以审计与代码为准。 |
 | AIH-001 默认落地页 | ✅ | `HomeShell` 默认 `AI 工作台`，顺序 AI 工作台→画廊→提示词→标签→设置；`home_nav_test` / `localization_test` 已同步 |
 | AIH-002 宽屏三栏 / 窄屏 | ◐ | ≥900 三栏，≥1200 才显示右侧栏；窄屏会话进抽屉、状态进底部 Sheet，Composer 常驻 |
 | AIH-003 openai-completions | ✅ | 文本流 + 多轮历史真的能聊；`SseAccumulator` + `OpenAiCompletionsAdapter`，适配器有契约单测 |
@@ -251,7 +251,7 @@ Inkling、LongCat、Nemotron、Ling、Laguna、gpt-oss 等（`VERSION = 2026-09b
 
 这一轮对应 `docs/bug-and-suggestion-9.16.md` 的新内容（用户当天更新的那份）：
 三条 bug + 两条建议。设计说明单独成文：[`docs/ai-tools-and-skills.md`](ai-tools-and-skills.md)，
-DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool-layer-report.md)。
+DSH 工具层的逐项实测记录在 [`docs/archive/dsh-tool-layer-report.md`](dsh-tool-layer-report.md)。
 
 | 用户报的 | 做法 | 证据 |
 | --- | --- | --- |
@@ -541,7 +541,7 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 | ⑤ | **调研最新对话记录找出的 bug**：`comfy_get_run` 查不到**刚提交完**的那次运行 | `comfy_submit` 的结果里同时有 `promptId`（库里的提示词）/ `comfyPromptId`（ComfyUI 的 UUID）/ `capturedPromptId`（捕获记录编号），模型很自然地拿数字那个去 `comfy_get_run`，而那边只认 runKey（UUID）→ 直接 `NOT_FOUND`。现在：结果里显式给出 `runKey` 与 `idHint`，查询入口**数字与 UUID 都认**（`CaptureRepo.findRunByPromptId`） | `ToolRegistryTest` / `CaptureRepo` 侧改动；工具描述里写明三样 id 各是什么 |
 | ⑥ | **一条消息会复制一遍再发送** | 上一轮已修（见 §4.13，4 条用例）。本轮复核：`flutter test` 里那 4 条仍然全过 | `ai_tools_ui_test.dart` (i)(j) + `ai_conversation_lifecycle_test.dart` |
 | 建议① | **"生成的产物"包括生成的工作流** | 回复末尾那张「生成的产物」卡原来只有缩略图。现在工具结果里的 `capturedPromptId`（**本次真正入库**的那份提示词，含改过的参数）也带进界面，卡上多一个「查看工作流」按钮，直接打开这次真跑过的工作流 | `ai_tools_ui_test.dart` "「生成的产物」里也含生成它的那份工作流" |
-| 建议② | **查看工作流能不能像 ComfyUI 那样展开成蓝图**（用户说"难度比较大，先调研"） | 出了一份调研：[`docs/workflow-blueprint-research.md`](workflow-blueprint-research.md)。结论：分两阶段 —— A 结构化大纲（1~1.5 人日）、B `CustomPainter + InteractiveViewer` 只读蓝图画布（3.5~5 人日）；**不**内嵌 litegraph.js / ComfyUI 前端（Flutter Windows 没有 DOM，且那套前端依赖服务端 API + WebSocket，不是可复用库）。硬约束：库里 13 份工作流中 **10 份是 API 格式、没有坐标**，分层布局只能是猜测且必须标注 | 本轮只出调研，未动代码 |
+| 建议② | **查看工作流能不能像 ComfyUI 那样展开成蓝图**（用户说"难度比较大，先调研"） | 出了一份调研：[`docs/archive/workflow-blueprint-research.md`](workflow-blueprint-research.md)。结论：分两阶段 —— A 结构化大纲（1~1.5 人日）、B `CustomPainter + InteractiveViewer` 只读蓝图画布（3.5~5 人日）；**不**内嵌 litegraph.js / ComfyUI 前端（Flutter Windows 没有 DOM，且那套前端依赖服务端 API + WebSocket，不是可复用库）。硬约束：库里 13 份工作流中 **10 份是 API 格式、没有坐标**，分层布局只能是猜测且必须标注 | 本轮只出调研，未动代码 |
 
 顺带修的：
 
@@ -564,7 +564,7 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 | `scripts\e2e-submit-test.ps1` | **4 幕全过**（新增第 4 幕 11 项：工作流文件 → 界面格式转 API 图 → 真的提交 → `3.steps=13` / `3.positive=[6,0]` / `6.text` 都对） |
 | `scripts\e2e-capture-test.ps1` | 全过（捕获链路没被这轮改动弄坏） |
 
-需求 xlsx 的状态列也按独立审计改了现状（`docs/ai-home-requirements-audit.md` + 表内新增的「验收结论」页）：
+需求 xlsx 的状态列也按独立审计改了现状（`docs/archive/ai-home-requirements-audit.md` + 表内新增的「验收结论」页）：
 **✅ 33 / ◐ 19 / ⬜ 8**，并补登记了原表漏掉的 AIH-056/057。
 
 ### 4.15 第九轮：用户清单 `docs/bug-and-suggestion-9.19.md`（2026-09-19）
@@ -713,7 +713,7 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 失败时界面会带上上游原文（已抹密钥），把那段话发回来就能定位。
 
 > ⚠️ **需求 xlsx 的"状态"列曾经不可信**（整列一律写着"通过"）。2026-09-18 已按
-> [`docs/ai-home-requirements-audit.md`](ai-home-requirements-audit.md)（逐条读代码、每条给 `file:line` 的独立审计）
+> [`docs/archive/ai-home-requirements-audit.md`](ai-home-requirements-audit.md)（逐条读代码、每条给 `file:line` 的独立审计）
 > 改成现状：**✅ 33 / ◐ 19 / ⬜ 8**，并补登记了原表漏掉的 AIH-056/057。
 > 需要逐条判定与证据时**以那份审计为准**——本文档第 2 节的表格此前有 18 处与代码不符（现已同步）。
 
@@ -772,15 +772,31 @@ DSH 工具层的逐项实测记录在 [`docs/dsh-tool-layer-report.md`](dsh-tool
 
 ### 5.4 token 统计
 
-后端 `TokenUsage.from(usage)` 把各家方言归一化：
+后端把各家方言归一化，**真源是 `server-rs/src/provider/upstream.rs` 的 `TokenUsage`**
+（Kotlin 时代那份已随 `legacy/` 删除；前端 `AiTokenUsage.fromRaw` 只是对**库里老数据**的兼容
+读取，不是第二份实现）：
 
-- 输入：`prompt_tokens` / `input_tokens`；
+- 输入：`prompt_tokens` / `input_tokens`。⚠ Anthropic 的 `input_tokens` **不含**缓存命中，
+  要把 `cache_read_input_tokens` + `cache_creation_input_tokens` 补回去 ——
+  **`inputTokens` 是"这一次请求一共读了多少 prompt token"，含命中**，
+  否则"输入"与"缓存命中"不是同一个分母（会算出 >100% 的命中率）；
 - 输出：`completion_tokens` / `output_tokens`；
-- 缓存命中：`prompt_tokens_details.cached_tokens` / `cache_read_input_tokens`；
-- 思考：`completion_tokens_details.reasoning_tokens`。
+- 缓存命中：`prompt_tokens_details.cached_tokens` / `input_tokens_details.cached_tokens` /
+  `cache_read_input_tokens`（同一件事有多个来源时**取最大**）。⚠
+  **`cache_creation_input_tokens` 是"写缓存"不是"命中"**（按 1.25× 计价），
+  它只进输入、不进 `cachedTokens`；
+- 思考：`completion_tokens_details.reasoning_tokens` / `output_tokens_details.reasoning_tokens`。
 
 只给 `total_tokens` 的网关会退化成"全记在输入上"（`totalTokens` 仍然正确）。
 没给 usage 就是 0，**不编数字**：界面上没有就是没有，不显示占位的 0。
+
+⚠ **这四个字段一个都不能少**：2026-09-26 切 Rust 时只归一化了输入/输出两个数，
+于是 `cachedTokens` / `reasoningTokens` 在桌面上**永远是 0** —— 界面那行「缓存命中」
+从未出现过，人也就没法判断前缀缓存到底有没有生效。
+载荷形状：`usage.updated` 是**平铺的这四个键**（契约 §2，与手机 harness 的
+`EventPayloads.usage` 同形），`message.completed.usage` 把它挂在 `usage` 键下。
+防线：`provider/upstream/tests.rs` 的 `cache_and_reasoning_tokens_survive_normalization`
++ `tests/api_test/ai_executor.rs` 里两处四字段断言。
 
 ## 6. 给下一个协作者的注意事项
 

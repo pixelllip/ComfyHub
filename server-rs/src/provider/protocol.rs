@@ -863,12 +863,60 @@ fn content_index(root: &Value) -> usize {
 //  anthropic-messages
 // ---------------------------------------------------------------------------
 
+/// 打一个 Anthropic 的显式缓存断点（`cache_control: {"type":"ephemeral"}`）。
+///
+/// 幂等且无副作用：目标不是对象（理论上不会发生）就原样不动 ——
+/// **宁可少一个断点，也不要为它把请求体拼坏**（那会变成一个 400）。
+fn mark_for_cache(block: &mut Value) {
+    if let Some(map) = block.as_object_mut() {
+        map.insert("cache_control".into(), json!({ "type": "ephemeral" }));
+    }
+}
+
+/// 把断点打在**最后一条消息的最后一个内容块**上（"滚动断点"，见
+/// [`AnthropicMessagesAdapter`] 的类型文档）。
+///
+/// 空消息 / 没有内容块时什么都不做：Anthropic 对空 `content` 数组直接 400，
+/// 这里不去替调用方造一个块出来。
+fn mark_last_block_for_cache(messages: Option<&mut Value>) {
+    let Some(Value::Array(items)) = messages else {
+        return;
+    };
+    let Some(last_message) = items.last_mut() else {
+        return;
+    };
+    let Some(blocks) = last_message.get_mut("content").and_then(Value::as_array_mut) else {
+        return;
+    };
+    if let Some(last_block) = blocks.last_mut() {
+        mark_for_cache(last_block);
+    }
+}
+
 /// Anthropic Messages。
 ///
 /// 形状要点（照抄 Kotlin）：系统提示是**顶层 `system` 字符串**（不是消息）；
 /// `max_tokens` **必填**（没有默认值，缺了直接 400）；工具的参数 schema 叫
 /// `input_schema`；内容块是 `content: [{type:"text"}]`；
 /// 工具结果是**用户轮的 `tool_result` 块**（不是 `role:"tool"`）。
+///
+/// # 显式缓存断点（2026-10，只加在 Anthropic 这一家）
+///
+/// Anthropic 的前缀缓存是**显式**的：不发 `cache_control` 就一次都不命中 ——
+/// 而工具往返循环每一轮都把"系统提示 + 整段历史"重发一遍，那是这个仓库里最贵的一笔输入。
+/// 另外两家（OpenAI 系）是**自动**的，什么都不用发。
+///
+/// 断点打在**两处**（上限 4 个，这里刻意只用 2 个）：
+///
+/// 1. **最后一个工具**：把 `tools[]` 整段钉进缓存（它们每个 Run 都逐字节相同）；
+/// 2. **最后一条消息的最后一个内容块**：这是"滚动断点"—— 下一轮的上下文是这一轮的
+///    **超集**，前缀逐字节相同，所以整段（工具 + 系统提示 + 历史）直接命中，
+///    只有新增的那几条按 1.25× 写一次。
+///
+/// ⚠ **不动 `system` 的形状**（它本可以写成带断点的块数组，那样能多一个断点）：
+/// 从字符串改成数组是**线上的形状变更**，而第三方 anthropic 兼容网关未必都收；
+/// 而"最后一个工具 + 滚动断点"这两个已经把系统提示含在缓存前缀里了 ——
+/// 用一个兼容性风险去换一个多余的断点，不值得。
 pub struct AnthropicMessagesAdapter;
 
 impl Adapter for AnthropicMessagesAdapter {
@@ -948,23 +996,26 @@ impl Adapter for AnthropicMessagesAdapter {
             }
         }
         root.insert("messages".into(), Value::Array(messages));
+        // 滚动缓存断点：打在**最后一条消息的最后一个内容块**上（见类型文档）。
+        // 下一轮的上下文是这一轮的超集，所以整段（工具 + 系统提示 + 历史）直接命中。
+        mark_last_block_for_cache(root.get_mut("messages"));
 
         if !tools.is_empty() {
-            root.insert(
-                "tools".into(),
-                Value::Array(
-                    tools
-                        .iter()
-                        .map(|tool| {
-                            json!({
-                                "name": tool.name,
-                                "description": tool.description,
-                                "input_schema": tool.parameters,
-                            })
-                        })
-                        .collect(),
-                ),
-            );
+            let mut specs: Vec<Value> = tools
+                .iter()
+                .map(|tool| {
+                    json!({
+                        "name": tool.name,
+                        "description": tool.description,
+                        "input_schema": tool.parameters,
+                    })
+                })
+                .collect();
+            // 工具定义也逐字节稳定（`catalog_with` 按 name 升序），整段钉进缓存
+            if let Some(last) = specs.last_mut() {
+                mark_for_cache(last);
+            }
+            root.insert("tools".into(), Value::Array(specs));
         }
         // 思考：Anthropic 要的是**预算 token 数**，不是等级名
         if let (Some(_), Some(budget)) = (reasoning.effort.as_ref(), reasoning.wire_value.as_ref()) {

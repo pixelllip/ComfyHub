@@ -132,7 +132,9 @@ class _TagResultsPageState extends State<TagResultsPage>
                                   onTap: () async {
                                     await Navigator.of(context).push(
                                       MaterialPageRoute(
-                                        builder: (_) => PromptDetailPage(promptId: p.id),
+                                        // 从标签页进来 = 看"这张图/这段词当初怎么配的"，
+                                        // 所以要带生成参数（预设视角才不带）
+                                        builder: (_) => PromptDetailPage(promptId: p.id, showParams: true),
                                       ),
                                     );
                                     await _load();
