@@ -268,7 +268,10 @@ try {
     Check '发现并捕获 1 次运行' ($poll1.ok -and $poll1.newRuns -eq 1) ($poll1 | ConvertTo-Json -Compress)
     Check '入库 1 个产物' ($poll1.newMedia -eq 1) ($poll1 | ConvertTo-Json -Compress)
 
-    $found = Invoke-Api 'GET' '/api/prompts?q=e2e_capture&size=5' $null
+    # ⚠ 必须带 `includeCaptured=true`：2026-10-11 起 `GET /api/prompts` 默认**只列人自己存的**
+    #   （`source` 不是 `Manual` 的自动捕获一律排除，"预设库只放人自己存的"），
+    #   而这条检查问的恰恰是"自动捕获有没有建提示词" —— 不带这个参数它必然 0 条。
+    $found = Invoke-Api 'GET' '/api/prompts?q=e2e_capture&size=5&includeCaptured=true' $null
     $prompt = $found.items | Select-Object -First 1
     Check '自动建了提示词' ($null -ne $prompt)
     if ($prompt) {

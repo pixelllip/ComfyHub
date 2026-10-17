@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/models.dart';
 import 'pairing_token.dart';
+import 'workflow_blueprint.dart';
 
 /// 后端返回的错误
 class ApiException implements Exception {
@@ -431,4 +432,27 @@ class ApiClient {
       throw ApiException(0, '无法连接后端 $baseUrl', e.message);
     }
   }
+
+  /// 把一份工作流原文交给后端**算成蓝图 + 接线体检**（`POST /api/workflow/blueprint`）。
+  ///
+  /// 为什么要过一趟后端而不是在 Dart 里解析：判"哪个插口是必填"、"这个类本机有没有"、
+  /// "这两根线的类型对不对"都要 ComfyUI 的 `/object_info`，而**只有后端能问它**。
+  /// 判据也只有那一份（`workflow_blueprint.rs`）—— 前端再写一套解析，两套迟早分叉。
+  ///
+  /// 界面在蓝图上改完参数之后**用同一个方法**就地复检（不落库、不改原文件）。
+  Future<Map<String, dynamic>> workflowBlueprint(String raw, {bool diagnose = true}) async =>
+      Map<String, dynamic>.from(await _send('POST', '/api/workflow/blueprint', {
+        'raw': raw,
+        'diagnose': diagnose,
+      }) as Map);
+
+  /// 把（改过的）工作流存成一份文件，回它的绝对路径。
+  ///
+  /// 落点由**后端**的白名单决定（`<项目根>\comfyui\workflows\`），前端不拼路径。
+  Future<SavedWorkflow> saveWorkflow({required String raw, String? name}) async =>
+      SavedWorkflow.fromJson(Map<String, dynamic>.from(
+          await _send('POST', '/api/workflow/save', {
+        'raw': raw,
+        if (name != null && name.isNotEmpty) 'name': name,
+      }) as Map));
 }

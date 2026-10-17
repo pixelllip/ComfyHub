@@ -207,6 +207,12 @@ fn file_tool_defaults_match_the_kotlin_registry() {
     assert!(is_implemented("comfy_env_report"));
     assert_eq!(default_access("comfy_env_report"), "ALLOW");
     assert!(!is_mutating("comfy_env_report"));
+    // `comfy_diagnose_workflow`（2026-10-17 用户"对于错误接线要能向用户指出"）：
+    // **只读**（读文件 / 读库 / 问一次 /object_info），出厂 ALLOW ——
+    // 它是"看一份图接得对不对"，不该每问一次都等用户点批准
+    assert!(is_implemented("comfy_diagnose_workflow"));
+    assert_eq!(default_access("comfy_diagnose_workflow"), "ALLOW");
+    assert!(!is_mutating("comfy_diagnose_workflow"));
     // `comfy_find_workflow`（两段式找工作流）：**只读**，出厂 ALLOW ——
     // 它是系统提示第 16 条① 点名的那件（在此之前那句话是空的）
     assert!(is_implemented("comfy_find_workflow"));

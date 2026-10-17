@@ -11,6 +11,7 @@ import '../core/inbound_auth_api.dart';
 import '../core/pairing_token.dart';
 import '../core/provider_store.dart';
 import '../core/run_event_source.dart';
+import '../core/workflow_blueprint.dart';
 import '../models/ai_models.dart';
 
 /// AI 工作台状态。
@@ -2204,6 +2205,14 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 用户建议 ①："生成的产物"包括生成的工作流 —— 回复末尾那张卡上的「查看工作流」用它。
   Future<String?> promptWorkflow(int promptId) => _api.promptWorkflow(promptId);
+
+  /// 工作流蓝图 + 接线体检（那条卡上的「看蓝图」用它；同样走注入的 http client）。
+  Future<Map<String, dynamic>> workflowBlueprint(String raw, {bool diagnose = true}) =>
+      _api.workflowBlueprint(raw, diagnose: diagnose);
+
+  /// 把改过的工作流存成文件（落点由后端白名单决定）。
+  Future<SavedWorkflow> saveWorkflow({required String raw, String? name}) =>
+      _api.saveWorkflow(raw: raw, name: name);
 
   // -----------------------------------------------------------------------
   //  发送

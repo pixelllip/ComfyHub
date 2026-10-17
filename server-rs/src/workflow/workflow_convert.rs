@@ -75,6 +75,12 @@ pub struct Converted {
     pub unresolved_inputs: Vec<String>,
     /// 现在空着的连线型输入，形如 `60.vae (VAE)`
     pub open_inputs: Vec<String>,
+    /// 其中**必填**的那一部分（可选插口空着是常态，不算缺口）。
+    ///
+    /// ⚠ 判据只有一份（[`crate::workflow::workflow_frontend::required_open_inputs_of`]）：
+    /// 配方学习、蓝图体检、提交前的缺口清单都读它 —— 各判一遍的下场是
+    /// "蓝图说没事、学习说缺件"，而两边都不会报错（2026-10-17 实测到过）。
+    pub required_open_inputs: Vec<String>,
     /// ## 模拟用户行为 ## 等价改写掉的前端节点，形如 `12 Anything Everywhere（广播 3 处）`。
     ///
     /// 只有 `emulateFrontend=true` 才有内容。改了哪几根线看得见，用户才能判断这次
@@ -103,6 +109,24 @@ const MODE_BYPASS: i64 = 4;
 /// （那时它就该原样保留），所以只有"查不到 + 名字在这张表里"才改写。
 const FRONTEND_VIRTUAL: [&str; 6] =
     ["Note", "MarkdownNote", "PrimitiveNode", "Reroute", "SetNode", "GetNode"];
+
+/// 只在前端存在的**直通**节点（1 进 1 出地把上游那一路递下去）。
+///
+/// rgthree 那几个开关（`Bypasser` / `Muter` / `Fast Groups …`）都继承同一个前端基类：
+/// 基类在 `onConstructed` 里 `addOutput("OPT_CONNECTION", "*")` —— 它的语义就是
+/// "把上游那一路直接接到下游"，**只在前端成立**（rgthree 的 Python 包里根本没有这些类）。
+///
+/// ⚠ 判据来自真实提交记录（2026-10-17 从本机 ComfyUI `/history` 取回的 i2i 运行）：
+/// 界面里 `105.model ← 90（Fast Bypasser）← 89`，而**服务端收到的是 `105.model = ["89", 0]`** ——
+/// 前端确实是把这条线穿透过去的。不做这一步的表现是 `comfy_load_workflow` 直接报
+/// `105.model ← 节点 90（没有转换出来）`，用户的 i2i 工作流**整份都进不来**。
+///
+/// 形状不对（不是恰好 1 个接了线的输入）就**不猜**：照旧留在 `unsupported` 里。
+const FRONTEND_PASSTHROUGH: [&str; 3] = [
+    "Fast Bypasser (rgthree)",
+    "Fast Groups Bypasser (rgthree)",
+    "Fast Groups Muter (rgthree)",
+];
 
 /// 会被当作"控件"（有 `widgets_values` 槽位）的类型。其余都是连线插口。
 const WIDGET_TYPES: [&str; 5] = ["INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"];
@@ -197,6 +221,20 @@ pub fn to_api_graph(
                     }
                 }
             }
+            other if FRONTEND_PASSTHROUGH.contains(&other) => {
+                // 直通开关：把下游接到它那个唯一接了线的上游上（见 `FRONTEND_PASSTHROUGH` 的注释）
+                let linked = linked_input_count(node, &links);
+                match (linked, first_linked_input(node, &links)) {
+                    (0, _) => rewritten.push(format!("{id} {class}（只是开关，没有接上游）")),
+                    (1, Some(source)) => {
+                        redirects.insert((id.clone(), 0), resolve(source, &redirects));
+                        rewritten.push(format!("{id} {class}（直通）"));
+                    }
+                    (count, _) => unsupported.push(format!(
+                        "{id} {class}（有 {count} 个接了线的输入，判不出该透传哪一路）"
+                    )),
+                }
+            }
             other if FRONTEND_VIRTUAL.contains(&other) => rewritten.push(format!("{id} {class}")),
             _ => {}
         }
@@ -228,7 +266,9 @@ pub fn to_api_graph(
         if handled.contains(&id) || redirected_ids.contains(&id) {
             continue;
         }
-        if FRONTEND_VIRTUAL.contains(&class.as_str()) && object_info.get(&class).is_none() {
+        if (FRONTEND_VIRTUAL.contains(&class.as_str()) || FRONTEND_PASSTHROUGH.contains(&class.as_str()))
+            && object_info.get(&class).is_none()
+        {
             continue;
         }
         if mode == MODE_MUTED {
@@ -302,6 +342,7 @@ pub fn to_api_graph(
     // 照旧留在 unsupported 里（出口还是一样）。
     let mut final_graph = out;
     let mut final_open = open_inputs;
+    let required_open: Vec<String>;
     let mut frontend_rewritten: Vec<String> = Vec::new();
     let mut broadcast_lines: Vec<String> = Vec::new();
     let mut injected_nodes: Vec<String> = Vec::new();
@@ -311,6 +352,8 @@ pub fn to_api_graph(
         final_graph = emulated;
         // 广播灌完之后"还空着"的清单要重算：不然模型会去补一根已经接好的线
         final_open = crate::workflow::workflow_frontend::open_inputs_of(object_info, &final_graph);
+        required_open =
+            crate::workflow::workflow_frontend::required_open_inputs_of(object_info, &final_graph);
         frontend_rewritten = report.rewritten;
         broadcast_lines = report.broadcast;
         injected_nodes = report.injected;
@@ -319,6 +362,9 @@ pub fn to_api_graph(
             !report.handled_ids.iter().any(|handled_id| line.starts_with(&format!("{handled_id} ")))
         });
         unsupported.extend(report.unsupported);
+    } else {
+        required_open =
+            crate::workflow::workflow_frontend::required_open_inputs_of(object_info, &final_graph);
     }
 
     let unresolved = dangling_inputs(&final_graph);
@@ -331,6 +377,7 @@ pub fn to_api_graph(
         unsupported_nodes: unsupported,
         unresolved_inputs: unresolved,
         open_inputs: final_open,
+        required_open_inputs: required_open,
         frontend_rewritten,
         broadcast_lines,
         injected_nodes,
@@ -367,7 +414,7 @@ fn flatten(ui: &Map<String, Value>, object_info: &Map<String, Value>) -> Flat {
         .and_then(Value::as_array)
         .map(|list| list.iter().filter_map(|v| v.as_object().cloned()).collect())
         .unwrap_or_default();
-    let top_links = parse_raw_links(ui.get("links"));
+    let top_links = raw_links(ui.get("links"));
 
     let mut nodes: Vec<Map<String, Value>> = Vec::new();
     let mut links: LinkTable = LinkTable::new();
@@ -446,7 +493,7 @@ fn flatten(ui: &Map<String, Value>, object_info: &Map<String, Value>) -> Flat {
             continue;
         }
 
-        let inner_links = parse_raw_links(def.get("links"));
+        let inner_links = raw_links(def.get("links"));
         // 内部连线整表重新编号（新旧是一一对应的双射，分配顺序不影响语义）
         let mut renumber: HashMap<i64, i64> = HashMap::new();
         for old in inner_links.keys() {
@@ -599,15 +646,24 @@ fn object_list(raw: Option<&Value>) -> Vec<&Map<String, Value>> {
 }
 
 /// 界面格式里的一条连线（Kotlin `RawLink`）。
-struct RawLink {
-    origin: String,
-    origin_slot: i64,
-    target: String,
-    target_slot: i64,
+///
+/// `type_name` 是 litegraph 记在连线上的**类型字符串**（`"MODEL"` / `"LATENT"`…）：
+/// 转换本身不看它（转换按输入名对），但蓝图要拿它跟"目标输入声明的类型"对一遍
+/// （见 [`crate::workflow::workflow_blueprint`] 的类型检查）。
+pub(crate) struct RawLink {
+    pub origin: String,
+    pub origin_slot: i64,
+    pub target: String,
+    pub target_slot: i64,
+    pub type_name: Option<String>,
 }
 
 /// `links` 表：两种写法都认（老写法是数组、新写法是对象）。
-fn parse_raw_links(raw: Option<&Value>) -> HashMap<i64, RawLink> {
+///
+/// ⚠ 两种写法**必须都认**：老版本 ComfyUI 存数组、新版本存对象，
+/// 只认一种的下场是"某一份文件里一条线都读不出来"，而那种失败**不报错**。
+/// 判据只有这一份（`flatten` 与蓝图共用）。
+pub(crate) fn raw_links(raw: Option<&Value>) -> HashMap<i64, RawLink> {
     let mut out: HashMap<i64, RawLink> = HashMap::new();
     let Some(list) = raw.and_then(Value::as_array) else { return out };
     for entry in list {
@@ -623,6 +679,7 @@ fn parse_raw_links(raw: Option<&Value>) -> HashMap<i64, RawLink> {
                         origin_slot: as_int(items.get(2)).unwrap_or(0),
                         target: items.get(3).and_then(primitive_text).unwrap_or_default(),
                         target_slot: as_int(items.get(4)).unwrap_or(0),
+                        type_name: items.get(5).and_then(primitive_text),
                     },
                 );
             }
@@ -637,6 +694,7 @@ fn parse_raw_links(raw: Option<&Value>) -> HashMap<i64, RawLink> {
                         origin_slot: as_int(obj.get("origin_slot")).unwrap_or(0),
                         target: obj.get("target_id").and_then(primitive_text).unwrap_or_default(),
                         target_slot: as_int(obj.get("target_slot")).unwrap_or(0),
+                        type_name: obj.get("type").and_then(primitive_text),
                     },
                 );
             }
@@ -745,6 +803,13 @@ fn fill_widgets(
     }
     // 0) **首选带名字的那份**（`widgets_values_named`）：有它就不必按位置猜。
     //    只认 `/object_info` **声明过**的控件名（多出来的键会让 ComfyUI 拒掉整张图）。
+    //
+    //    ⚠ 一个例外：**动态下拉框的子项**。`COMFY_DYNAMICCOMBO_V3` 那种声明里只写了
+    //    `sampling_mode`，它的子项（`sampling_mode.temperature` / `.top_k` …）要等
+    //    服务端按选中的那一项展开之后才存在，**名字就是带点的**。判据不是猜的：
+    //    本机 ComfyUI 的真实提交记录里，`TextGenerate` 的 `inputs` 长的就是
+    //    `{"sampling_mode":"on","sampling_mode.temperature":0.7,…}`（见
+    //    `docs/pitfalls.md` 的那条实测）。丢掉它们会让这一路退回默认值（或者直接缺必填）。
     if let Some(named) = node.get("widgets_values_named").and_then(Value::as_object) {
         if !named.is_empty() {
             for (name, value) in named {
@@ -752,6 +817,8 @@ fn fill_widgets(
                     continue;
                 }
                 if specs.iter().any(|spec| &spec.name == name) {
+                    inputs.insert(name.clone(), value.clone());
+                } else if specs.iter().any(|spec| spec.dynamic && is_dynamic_child(&spec.name, name)) {
                     inputs.insert(name.clone(), value.clone());
                 } else {
                     warnings.push(format!(
@@ -809,6 +876,13 @@ fn fill_widgets(
 struct WidgetSpec {
     name: String,
     extra_slot: bool,
+    /// 动态下拉框（`COMFY_DYNAMICCOMBO_*`）：它的子项名字是 `名字.子项`
+    dynamic: bool,
+}
+
+/// `parent` 这个动态下拉框的子项名（`sampling_mode.temperature`）。
+fn is_dynamic_child(parent: &str, name: &str) -> bool {
+    name.strip_prefix(parent).map(|rest| rest.starts_with('.') && rest.len() > 1).unwrap_or(false)
 }
 
 /// 一个输入声明算不算"控件"（= 有 `widgets_values` 槽位）。
@@ -828,9 +902,33 @@ pub(crate) fn is_widget_input(decl: &Value) -> bool {
     }
     match items.first() {
         Some(Value::Array(_)) => true,
-        Some(Value::String(text)) => WIDGET_TYPES.contains(&text.to_uppercase().as_str()),
+        Some(Value::String(text)) => {
+            let upper = text.to_uppercase();
+            // `COMFY_DYNAMICCOMBO_V3` 之类：**它是控件**，只是子项在展开时才存在
+            // （见 [`fill_widgets`] 的 `dynamic` 分支）。把它当插口的表现是
+            // "某个必填输入一直空着" —— 用户的 `krea2 i2i workflow.json` 里
+            // `TextGenerate.sampling_mode` 就是这样被误判的。
+            WIDGET_TYPES.contains(&upper.as_str()) || upper.starts_with("COMFY_DYNAMIC")
+        }
         _ => false,
     }
+}
+
+/// 一个类的控件名（**按 `widgets_values` 的位置**，`None` = 那一位是 seed 后面
+/// 跟着的 `control_after_generate` 下拉框，没有独立名字）。
+///
+/// 蓝图要用它把"只有位置"的控件值贴回名字上（`widgets_values_named` 缺失时）。
+/// 与 [`fill_widgets`] 共用 [`widget_specs`] 这一份声明 —— 各写一份的下场是
+/// "转换时按这套顺序取值、界面上按那套顺序显示"，而错位不会报错。
+pub(crate) fn widget_names(info: &Map<String, Value>) -> Vec<Option<String>> {
+    let mut out = Vec::new();
+    for spec in widget_specs(info) {
+        out.push(Some(spec.name));
+        if spec.extra_slot {
+            out.push(None);
+        }
+    }
+    out
 }
 
 /// 一个节点的控件（= 有 `widgets_values` 槽位的输入）名字与顺序，来自 `/object_info`。
@@ -850,7 +948,13 @@ fn widget_specs(info: &Map<String, Value>) -> Vec<WidgetSpec> {
                 .and_then(|options| options.get("control_after_generate"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            out.push(WidgetSpec { name: name.clone(), extra_slot });
+            let dynamic = raw
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(primitive_text)
+                .map(|text| text.to_uppercase().starts_with("COMFY_DYNAMIC"))
+                .unwrap_or(false);
+            out.push(WidgetSpec { name: name.clone(), extra_slot, dynamic });
         }
     }
     out
@@ -934,6 +1038,20 @@ fn first_linked_input(
         }
     }
     None
+}
+
+/// 有几个输入真的接了线（直通类节点要靠它判形状，见 [`FRONTEND_PASSTHROUGH`]）。
+fn linked_input_count(node: &Map<String, Value>, links: &LinkTable) -> usize {
+    let mut count = 0;
+    let Some(inputs) = node.get("inputs").and_then(Value::as_array) else { return 0 };
+    for entry in inputs {
+        let Some(entry) = entry.as_object() else { continue };
+        let Some(link_id) = as_int(entry.get("link")) else { continue };
+        if links.contains_key(&link_id) {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// `SetNode` / `GetNode` 的"变量名"（唯一那个控件值）。

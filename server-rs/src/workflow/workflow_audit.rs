@@ -247,9 +247,14 @@ fn finding_block(f: &Finding) -> String {
 /// 10 Label + Fast Groups Bypasser + 8 Bookmark + …共 20 个）。
 /// `Anything Everywhere` 与显示节点由 [`is_broadcast`] / [`is_display`] 自己认得
 /// （模式匹配），这里不重复列。
-const KNOWN_FRONTEND_ONLY: [&str; 12] = [
+///
+/// ⚠ `Fast Bypasser (rgthree)` 是 2026-10-17 补的：用户的 `krea2 i2i workflow.json` 里
+/// 用的就是**单数**那个名字（rgthree 新旧版本的类名不同），而 `/object_info` 里查不到它 ——
+/// 漏了这一条的表现是"这份工作流学不下来"，而屏幕上看不出为什么。
+pub(crate) const KNOWN_FRONTEND_ONLY: [&str; 13] = [
     "Label (rgthree)",
     "Bookmark (rgthree)",
+    "Fast Bypasser (rgthree)",
     "Fast Groups Bypasser (rgthree)",
     "Fast Groups Muter (rgthree)",
     "Image Comparer (rgthree)",

@@ -21,6 +21,15 @@
 //! 判据一律**保守**：说不清类型的广播不猜，照旧报 `unsupported`（出口还是那一套：
 //! 用 `comfy_submit(connections=…)` 点名补线，或者在 ComfyUI 里导出 API 格式）。
 //!
+//! # 「注册成零输出桩」的广播节点也算前端节点（2026-10-17 修）
+//!
+//! `cg-use-everywhere` 会把 `Anything Everywhere` **注册**进 `/object_info`
+//! （`input.optional.anything = ["*"]`、`output = []`）：它在服务端是个什么都不产出的空节点，
+//! 广播语义只活在前端。原判据是"`/object_info` 里查得到就原样保留"，于是这类节点
+//! 既不会被等价改写、又不会产出任何东西 —— 它该填的那几路一直空着，提交上去直接
+//! 缺必填输入。现在只对**广播型**放宽：注册了但 `output` 为空 → 仍然当广播节点改写。
+//! 用户的 `krea2 t2i workflow.json` / `krea2 i2i workflow.json` 依赖这一条才跑得起来。
+//!
 //! # 判据只有一份
 //!
 //! "这个类是不是广播型 / 显示型"两张表与三条模式在 [`crate::workflow::workflow_audit`]
@@ -74,10 +83,33 @@ pub fn emulate(
     let mut report = Emulation::default();
 
     // ⚠ 判定顺序与 Kotlin 一致：**先看 `/object_info` 里有没有这个类**
-    //   （有的版本把它们做成了真节点，那时它就该原样保留）
+    //   （有的版本把它们做成了真节点，那时它就该原样保留）。
+    //
+    //   2026-10-17 补的一条：**广播型**节点在本机常常被注册成「零输出」的桩 ——
+    //   cg-use-everywhere 的 `Anything Everywhere` 就是这样（`input.optional.anything = ["*"]`、
+    //   `output = []`）。它在 `/object_info` 里**查得到**，可服务端拿到它什么也不产出，
+    //   真正干活的仍旧是前端那次广播。只按「查得到就留下」判，这份图提交上去就会
+    //   **缺一堆必填输入**（用户的 `krea2 t2i workflow.json` / `krea2 i2i workflow.json`
+    //   就是这么坏的，而且不报错）。
+    //
+    //   判据只加在**广播型**上：显示型节点（`PreviewImage` 之类）注册了就是真节点，
+    //   丢掉它们反而会把「只想看一眼」的图变成「自动补 SaveImage 落盘」。
     let is_virtual = |node: &Map<String, Value>, predicate: fn(&str) -> bool| -> bool {
         let class = ui_class(node);
-        !class.is_empty() && object_info.get(&class).is_none() && predicate(&class)
+        if class.is_empty() || !predicate(&class) {
+            return false;
+        }
+        match object_info.get(&class).and_then(Value::as_object) {
+            None => true,
+            Some(entry) => {
+                is_broadcast(&class)
+                    && entry
+                        .get("output")
+                        .and_then(Value::as_array)
+                        .map(|list| list.is_empty())
+                        .unwrap_or(false)
+            }
+        }
     };
     let broadcasters: Vec<&Map<String, Value>> =
         raw_nodes.iter().filter(|node| is_virtual(node, is_broadcast)).collect();
@@ -92,40 +124,48 @@ pub fn emulate(
     for node in &broadcasters {
         let Some(id) = node_id(node) else { continue };
         let class = ui_class(node);
-        let Some(source) = broadcast_source(node, links).and_then(|r| resolve_for(&out, r)) else {
+        let spec = broadcast_spec(node);
+        let routes = broadcast_routes(node, links, &spec, &out);
+        if routes.is_empty() {
             // 它自己都没接上游：没有任何东西可广播（前端这时候也不会灌值）
             report.unsupported.push(format!("{id} {class}（没有接上游，没有东西可以广播）"));
             continue;
-        };
-        let spec = broadcast_spec(node);
-        let targets: Vec<&OpenInput> = all_open
-            .iter()
-            .filter(|target| !filled.contains(&(target.node_id.clone(), target.name.clone())))
-            .collect();
-        let hits: Vec<&OpenInput> =
-            targets.into_iter().filter(|target| matches(&spec, target)).collect();
-        if hits.is_empty() {
-            report
-                .unsupported
-                .push(format!("{id} {class}（{}：全图没有对得上的空输入）", spec.describe()));
-            continue;
         }
-        for target in &hits {
-            let Some(node_body) = out.get(&target.node_id).and_then(Value::as_object) else {
+        let mut filled_here = 0usize;
+        for route in &routes {
+            // 每灌一条线就记进 filled，后面的广播不会再重复灌同一个位置
+            let hits: Vec<&OpenInput> = all_open
+                .iter()
+                .filter(|target| !filled.contains(&(target.node_id.clone(), target.name.clone())))
+                .filter(|target| matches(&spec, target, route.type_name.as_deref()))
+                .collect();
+            if hits.is_empty() {
+                report.unsupported.push(format!(
+                    "{id} {class}（{}：全图没有对得上的空输入）",
+                    spec.describe(route.type_name.as_deref())
+                ));
                 continue;
-            };
-            let mut inputs: Map<String, Value> =
-                node_body.get("inputs").and_then(Value::as_object).cloned().unwrap_or_default();
-            inputs.insert(target.name.clone(), json!([ref_of(&source.0), source.1]));
-            let mut rebuilt = node_body.clone();
-            rebuilt.insert("inputs".into(), Value::Object(inputs));
-            out.insert(target.node_id.clone(), Value::Object(rebuilt));
-            filled.insert((target.node_id.clone(), target.name.clone()));
-            report
-                .broadcast
-                .push(format!("{}.{} ← 节点 {id}（{class}）", target.node_id, target.name));
+            }
+            for target in &hits {
+                let Some(node_body) = out.get(&target.node_id).and_then(Value::as_object) else {
+                    continue;
+                };
+                let mut inputs: Map<String, Value> =
+                    node_body.get("inputs").and_then(Value::as_object).cloned().unwrap_or_default();
+                inputs.insert(target.name.clone(), json!([ref_of(&route.source.0), route.source.1]));
+                let mut rebuilt = node_body.clone();
+                rebuilt.insert("inputs".into(), Value::Object(inputs));
+                out.insert(target.node_id.clone(), Value::Object(rebuilt));
+                filled.insert((target.node_id.clone(), target.name.clone()));
+                filled_here += 1;
+                report
+                    .broadcast
+                    .push(format!("{}.{} ← 节点 {id}（{class}）", target.node_id, target.name));
+            }
         }
-        report.rewritten.push(format!("{id} {class}（广播 {} 处）", hits.len()));
+        if filled_here > 0 {
+            report.rewritten.push(format!("{id} {class}（广播 {filled_here} 处）"));
+        }
     }
 
     // --- ② 显示节点：丢掉（官方前端也不把这类写进提示词）---
@@ -180,6 +220,23 @@ pub fn open_inputs_of(object_info: &Map<String, Value>, graph: &Map<String, Valu
         .collect()
 }
 
+/// 还空着的**必填**连线型输入（可选插口不算缺口）。
+///
+/// ⚠ 与 [`open_inputs_of`] 的差别**只有必填这一条**，而它是"这份图能不能跑"的分水岭：
+/// 可选插口空着是常态（`TextGenerate.video` / `.audio`、`RMBG.background_color` 都是可选），
+/// 把它们算成缺口的表现是**学一份配方直接被拒**（2026-10-17 在用户的
+/// `krea2 i2i workflow.json` 上实测：三条可选插口让 `UNSUPPORTED_NODES` 挡下了整份工作流）。
+pub fn required_open_inputs_of(
+    object_info: &Map<String, Value>,
+    graph: &Map<String, Value>,
+) -> Vec<String> {
+    open_inputs(object_info, graph)
+        .into_iter()
+        .filter(|target| target.required)
+        .map(|target| format!("{}.{} ({})", target.node_id, target.name, target.types.join("/")))
+        .collect()
+}
+
 /// 广播的目标类型 / 名字过滤（Kotlin `BroadcastSpec`）。
 ///
 /// `Anything Everywhere` 把自己的设定存在节点的 `properties` 里
@@ -193,9 +250,10 @@ struct BroadcastSpec {
 }
 
 impl BroadcastSpec {
-    fn describe(&self) -> String {
+    /// `route_type` = 这一路的类型（新版本把类型挂在**输入插口**上，见 [`broadcast_routes`]）。
+    fn describe(&self, route_type: Option<&str>) -> String {
         let mut out = String::from("类型 ");
-        out.push_str(self.type_name.as_deref().unwrap_or("未声明"));
+        out.push_str(self.type_name.as_deref().or(route_type).unwrap_or("未声明"));
         if let Some(filter) = &self.name_filter {
             out.push_str(&format!("，名字含「{filter}」"));
         }
@@ -207,6 +265,54 @@ impl BroadcastSpec {
         }
         out
     }
+}
+
+/// 一路广播：一个来源 + 它自己声明的类型。
+struct BroadcastRoute {
+    source: (String, i64),
+    type_name: Option<String>,
+}
+
+/// 广播节点到底广播**哪几路**（判据两套，新旧版本各一套）。
+///
+/// * **老版本**（`Anything Everywhere` 带 `Input Type` / `Input Name` 控件，存在 `properties` 里）：
+///   整台节点只有一路来源 + 一条类型/名字规则 —— 与 [`broadcast_spec`] 一起用。
+/// * **新版本**（cg-use-everywhere ≥ 1.x，2026-10-17 在用户的
+///   `krea2 t2i workflow.json` 上实测）：`properties` 里**没有**类型，节点自己长着
+///   `anything[CLIP]` / `anything15[MODEL]` / `anything16[VAE]` 这样**每个接了线的输入插口各一路**，
+///   类型就写在那条插口的 `type` 上。只认老版本的表现是"这份工作流一处广播都填不上"，
+///   而它看上去一切正常（缺口留到提交时才炸）。
+fn broadcast_routes(
+    node: &Map<String, Value>,
+    links: &LinkTable,
+    spec: &BroadcastSpec,
+    graph: &Map<String, Value>,
+) -> Vec<BroadcastRoute> {
+    // 老版本：声明了类型或名字过滤 → 只认"第一个接了线的输入"当来源
+    if spec.type_name.is_some() || spec.name_filter.is_some() {
+        return broadcast_source(node, links)
+            .and_then(|source| resolve_for(graph, source))
+            .map(|source| vec![BroadcastRoute { source, type_name: None }])
+            .unwrap_or_default();
+    }
+    // 新版本：逐个插口
+    let mut out: Vec<BroadcastRoute> = Vec::new();
+    let Some(entries) = node.get("inputs").and_then(Value::as_array) else { return out };
+    for entry in entries.iter().filter_map(Value::as_object) {
+        let Some(link_id) = as_int(entry.get("link")) else { continue };
+        let Some(source) = links.get(&link_id).cloned() else { continue };
+        let Some(source) = resolve_for(graph, source) else { continue };
+        let type_name = entry
+            .get("type")
+            .and_then(primitive_text)
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty() && text != "*");
+        if out.iter().any(|route| route.source == source) {
+            continue;
+        }
+        out.push(BroadcastRoute { source, type_name });
+    }
+    out
 }
 
 /// `properties` 里几个键名各版本不一样，逐个认（Kotlin `broadcastSpec` 的 `prop`）。
@@ -240,7 +346,9 @@ fn broadcast_spec(node: &Map<String, Value>) -> BroadcastSpec {
 }
 
 /// 这条空输入接不接受这次广播（Kotlin `matches`）。
-fn matches(spec: &BroadcastSpec, target: &OpenInput) -> bool {
+///
+/// `route_type` = 这一路自己的类型（新版本从插口上读来的）；旧版节点没有它就传 `None`。
+fn matches(spec: &BroadcastSpec, target: &OpenInput, route_type: Option<&str>) -> bool {
     // 名字过滤优先（Prompts Everywhere 就是靠它只灌提示词输入）
     if let Some(filter) = &spec.name_filter {
         // Kotlin `contains(other, ignoreCase = true)` 是按 `Char` 折大小写的；
@@ -248,7 +356,8 @@ fn matches(spec: &BroadcastSpec, target: &OpenInput) -> bool {
         // 非 ASCII 的过滤词只在个别字符（如 `İ`）上比 Kotlin 宽一点，不会漏灌。
         return target.name.to_lowercase().contains(&filter.to_lowercase());
     }
-    let Some(type_name) = &spec.type_name else { return false };
+    let wanted = spec.type_name.as_deref().or(route_type).filter(|text| !text.is_empty() && *text != "*");
+    let Some(type_name) = wanted else { return false };
     target.types.iter().any(|accepted| accepted.eq_ignore_ascii_case(type_name))
 }
 
@@ -286,6 +395,8 @@ struct OpenInput {
     name: String,
     /// `/object_info` 声明的可接受类型（空 = 说不清，不参与广播）
     types: Vec<String>,
+    /// 它是**必填**还是可选 —— "缺口"只算必填那一档（见 [`required_open_inputs_of`]）
+    required: bool,
 }
 
 /// 现在**还空着**的连线型输入（转出来的图里没有这个键 = 空着）。
@@ -315,7 +426,12 @@ fn open_inputs(object_info: &Map<String, Value>, graph: &Map<String, Value>) -> 
                 if accepted.is_empty() {
                     continue;
                 }
-                out.push(OpenInput { node_id: node_id.clone(), name: name.clone(), types: accepted });
+                out.push(OpenInput {
+                    node_id: node_id.clone(),
+                    name: name.clone(),
+                    types: accepted,
+                    required: group == "required",
+                });
             }
         }
     }

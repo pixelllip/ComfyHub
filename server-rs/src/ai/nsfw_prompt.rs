@@ -63,7 +63,10 @@ pub const VERSION: &str = "nsfw-v3";
 ///   但 `PROMPT_VERSION` 是"系统提示这一整份"的版本，所以照样要 bump —— R12 的判据是
 ///   "模型看到的规则变没变"，不是"改的是哪个文件"。
 ///   判据：`system_prompt/tests.rs` 的 `同一个日期渲染两次逐字节相同`。
-pub const PROMPT_VERSION: &str = "v37";
+/// - **Rust v38**（2026-10-17）：工具清单多了一件 `comfy_diagnose_workflow`
+///   （**接线体检**：类型不匹配 / 悬挂引用 / 空必填 / 环 / 前端节点…）。
+///   工具清单是从 `tools::catalog` 派生的，所以"模型看到的规则"确实变了 → 照样 bump。
+pub const PROMPT_VERSION: &str = "v38";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】

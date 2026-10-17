@@ -346,3 +346,58 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
 
     std::fs::remove_dir_all(state.project_root()).ok();
 }
+
+/// `comfy_diagnose_workflow`（2026-10-17 用户"对于错误接线要能向用户指出"）：
+/// **接线体检**要真的从工具层走得通，并且把"哪根线坏了"说到点上。
+///
+/// 这条用例**故意不依赖 ComfyUI**（夹具库里没有 `comfyUrl`）：拿不到 `/object_info` 时
+/// 它只做结构检查 —— 那正是"不许凭猜下结论"的那一档，而"指向不存在的节点"这条
+/// 不需要节点定义就判得出来。
+#[tokio::test]
+async fn diagnose_workflow_points_at_the_dangling_wire_without_comfyui() {
+    let state = state();
+    // `2.vae` 指向节点 9 —— 图里没有 9，这是**不需要 /object_info 也判得出来**的接线错误
+    let out = call_tool(
+        &state,
+        "comfy_diagnose_workflow",
+        serde_json::json!({
+            "graph": {
+                "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "a.safetensors" } },
+                "2": { "class_type": "VAEDecode", "inputs": { "samples": ["1", 0], "vae": ["9", 0] } }
+            }
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(out.payload["format"], "api", "{}", out.content);
+    assert!(out.payload["counts"]["errors"].as_i64().unwrap() >= 1, "{}", out.content);
+    // 报告要点到**哪个节点、哪个输入**（只报"有问题"等于没说）
+    assert!(out.content.contains("2.vae"), "报告没点到出问题的插口：{}", out.content);
+    assert!(out.content.contains('9'), "报告没点到那个不存在的节点：{}", out.content);
+    // ⚠ 不断言"没连上 ComfyUI"那句话：**本机真的跑着 ComfyUI** 时它会连上、覆盖面就变大了
+    //   （那是环境差异，不是行为差异）。"拿不到 /object_info 就只做结构检查"由
+    //   `workflow_blueprint::tests` 那两条钉着（一条离线、一条在线）。
+    assert!(out.payload["objectInfo"].is_boolean(), "{}", out.content);
+}
+
+/// 体检走的是**同一份路径准入**（读白名单之外的文件一律拒），
+/// 而且拒绝要说人话（不是 500 / 不是 TOOL_NOT_FOUND）。
+#[tokio::test]
+async fn diagnose_workflow_respects_the_read_whitelist() {
+    let state = state();
+    let denied = call_tool(
+        &state,
+        "comfy_diagnose_workflow",
+        serde_json::json!({ "path": "C:\\Windows\\win.ini" }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(denied.code, "PATH_DENIED", "{}", denied.message);
+
+    // 三个来源一个都不给：如实说"要给我一份工作流"，别猜
+    let empty = call_tool(&state, "comfy_diagnose_workflow", serde_json::json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(empty.code, "INVALID_ARGUMENT", "{}", empty.message);
+}

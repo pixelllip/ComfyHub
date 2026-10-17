@@ -960,3 +960,242 @@ fn emulate_off_leaves_the_frontend_report_empty() {
     assert!(emulated.injected_nodes.is_empty());
     assert_eq!(emulated.node_count, 5);
 }
+
+// ---------------------------------------------------------------------------
+// 2026-10-17：用户 krea2 i2i 工作流踩到的两处（判据都来自真实提交记录）
+// ---------------------------------------------------------------------------
+
+/// rgthree 的开关节点（`Fast Bypasser (rgthree)`）是**直通**：服务端收到的是
+/// `105.model = ["89", 0]`，中间那个节点根本不在图里。
+///
+/// 判据来源：本机 ComfyUI `/history` 里那次 i2i 运行的真实提交图（见
+/// `FRONTEND_PASSTHROUGH` 的注释）。不做这一步的表现是 `105.model ← 节点 90（没有转换出来）`，
+/// 整份工作流都进不来。
+#[test]
+fn rgthree_直通开关把下游接到真正的上游() {
+    let object_info = object(
+        r#"{
+          "Krea2ControlLoRALoader": {
+            "input": { "required": { "lora_name": [["x.safetensors"]], "strength": ["FLOAT"], "model": ["MODEL"] } },
+            "output": ["MODEL"] },
+          "Krea2ControlApply": {
+            "input": { "required": { "model": ["MODEL"], "control_latent": ["LATENT"] } },
+            "output": ["MODEL"] },
+          "EmptyLatentImage": {
+            "input": { "required": { "width": ["INT"], "height": ["INT"], "batch_size": ["INT"] } },
+            "output": ["LATENT"] }
+        }"#,
+    );
+    let ui = object(
+        r#"{
+          "version": 0.4,
+          "nodes": [
+            {"id": 89, "type": "Krea2ControlLoRALoader", "mode": 0,
+             "inputs": [{"name": "model", "type": "MODEL", "link": null},
+                        {"name": "lora_name", "type": "COMBO", "link": null, "widget": {"name": "lora_name"}},
+                        {"name": "strength", "type": "FLOAT", "link": null, "widget": {"name": "strength"}}],
+             "outputs": [{"name": "MODEL", "type": "MODEL", "links": [224]}],
+             "widgets_values": ["depth-control-lora.safetensors", 0.8]},
+            {"id": 90, "type": "Fast Bypasser (rgthree)", "mode": 0,
+             "inputs": [{"name": "Krea2 Control LoRA Loader", "type": "*", "link": 224},
+                        {"name": "", "type": "*", "link": null}],
+             "outputs": [{"name": "OPT_CONNECTION", "type": "*", "links": [261]}],
+             "widgets_values": []},
+            {"id": 105, "type": "Krea2ControlApply", "mode": 0,
+             "inputs": [{"name": "model", "type": "MODEL", "link": 261},
+                        {"name": "control_latent", "type": "LATENT", "link": null}],
+             "outputs": [{"name": "MODEL", "type": "MODEL", "links": []}],
+             "widgets_values": []}
+          ],
+          "links": [[224, 89, 0, 90, 0, "MODEL"], [261, 90, 0, 105, 0, "MODEL"]]
+        }"#,
+    );
+    let converted = to_api_graph(&ui, &object_info, false).unwrap();
+    assert_eq!(converted.graph["105"]["inputs"]["model"], json!([89, 0]));
+    assert!(!converted.graph.contains_key("90"), "直通节点自己不进图");
+    assert!(converted.unsupported_nodes.is_empty(), "{:?}", converted.unsupported_nodes);
+    assert!(
+        converted.rewritten.iter().any(|line| line.contains("90 Fast Bypasser (rgthree)（直通）")),
+        "{:?}",
+        converted.rewritten
+    );
+    assert!(converted.unresolved_inputs.is_empty(), "{:?}", converted.unresolved_inputs);
+}
+
+/// 形状不对就**不猜**：直通节点有 2 个接了线的输入时判不出该透传哪一路，如实报；
+/// 一个都没接时它只是个开关，丢掉即可（下游若指着它就由悬挂引用那条说）。
+#[test]
+fn 直通开关的形状不对时不猜() {
+    let object_info = object(
+        r#"{
+          "Krea2ControlApply": {
+            "input": { "required": { "model": ["MODEL"], "control_latent": ["LATENT"] } },
+            "output": ["MODEL"] }
+        }"#,
+    );
+    let two_inputs = object(
+        r#"{
+          "version": 0.4,
+          "nodes": [
+            {"id": 90, "type": "Fast Bypasser (rgthree)", "mode": 0,
+             "inputs": [{"name": "a", "type": "*", "link": 1}, {"name": "b", "type": "*", "link": 2}],
+             "outputs": [{"name": "OPT_CONNECTION", "type": "*", "links": [3]}], "widgets_values": []},
+            {"id": 105, "type": "Krea2ControlApply", "mode": 0,
+             "inputs": [{"name": "model", "type": "MODEL", "link": 3},
+                        {"name": "control_latent", "type": "LATENT", "link": null}],
+             "outputs": [], "widgets_values": []}
+          ],
+          "links": [[1, 1, 0, 90, 0, "MODEL"], [2, 2, 0, 90, 1, "MODEL"], [3, 90, 0, 105, 0, "MODEL"]]
+        }"#,
+    );
+    let converted = to_api_graph(&two_inputs, &object_info, false).unwrap();
+    assert!(
+        converted
+            .unsupported_nodes
+            .iter()
+            .any(|line| line.contains("有 2 个接了线的输入")),
+        "{:?}",
+        converted.unsupported_nodes
+    );
+
+    let no_input = object(
+        r#"{
+          "version": 0.4,
+          "nodes": [
+            {"id": 90, "type": "Fast Bypasser (rgthree)", "mode": 0,
+             "inputs": [{"name": "a", "type": "*", "link": null}],
+             "outputs": [{"name": "OPT_CONNECTION", "type": "*", "links": []}], "widgets_values": []}
+          ],
+          "links": []
+        }"#,
+    );
+    let converted = to_api_graph(&no_input, &object_info, false).unwrap();
+    assert!(converted.unsupported_nodes.is_empty(), "{:?}", converted.unsupported_nodes);
+    assert!(
+        converted.rewritten.iter().any(|line| line.contains("只是开关，没有接上游")),
+        "{:?}",
+        converted.rewritten
+    );
+}
+
+/// 动态下拉框（`COMFY_DYNAMICCOMBO_V3`）：它**是控件**，子项名字带点
+/// （`sampling_mode.temperature`）。
+///
+/// 判据来源：本机 ComfyUI 真实提交图里 `TextGenerate.inputs` 长的就是
+/// `{"sampling_mode":"on","sampling_mode.temperature":0.7,…}`。误判成插口的表现是
+/// "某个必填输入一直空着"，丢掉子项的表现是参数静默退回默认值。
+#[test]
+fn 动态下拉框的子项要跟着主项一起进图() {
+    let object_info = object(
+        r#"{
+          "CLIPLoader": {
+            "input": { "required": { "clip_name": [["a.safetensors"]], "type": [["krea2"]] } },
+            "output": ["CLIP"] },
+          "TextGenerate": {
+            "input": {
+              "required": { "clip": ["CLIP"], "prompt": ["STRING"], "max_length": ["INT"],
+                            "sampling_mode": ["COMFY_DYNAMICCOMBO_V3", {"options": []}] },
+              "optional": { "thinking": ["BOOLEAN"], "use_default_template": ["BOOLEAN"],
+                            "mtp": [["auto", "on", "off"]] } },
+            "output": ["STRING", "STRING"] }
+        }"#,
+    );
+    let ui = object(
+        r#"{
+          "version": 0.4,
+          "nodes": [
+            {"id": 4, "type": "CLIPLoader", "mode": 0,
+             "inputs": [{"name": "clip_name", "type": "COMBO", "link": null, "widget": {"name": "clip_name"}},
+                        {"name": "type", "type": "COMBO", "link": null, "widget": {"name": "type"}}],
+             "outputs": [{"name": "CLIP", "type": "CLIP", "links": [100]}],
+             "widgets_values": ["a.safetensors", "krea2"]},
+            {"id": 43, "type": "TextGenerate", "mode": 0,
+             "inputs": [{"name": "clip", "type": "CLIP", "link": 100}],
+             "outputs": [{"name": "STRING", "type": "STRING", "links": []}],
+             "widgets_values": ["", 512, "on", 0.7, 64, 0.95, 0.05, 1.05, 0, 0, false, true, "auto"],
+             "widgets_values_named": {"prompt": "", "max_length": 512, "sampling_mode": "on",
+               "sampling_mode.temperature": 0.7, "sampling_mode.top_k": 64, "sampling_mode.top_p": 0.95,
+               "sampling_mode.min_p": 0.05, "sampling_mode.repetition_penalty": 1.05,
+               "sampling_mode.seed": 0, "sampling_mode.presence_penalty": 0.0,
+               "thinking": false, "use_default_template": true, "mtp": "auto"}}
+          ],
+          "links": [[100, 4, 0, 43, 0, "CLIP"]]
+        }"#,
+    );
+    let converted = to_api_graph(&ui, &object_info, false).unwrap();
+    let inputs = &converted.graph["43"]["inputs"];
+    assert_eq!(inputs["sampling_mode"], json!("on"));
+    assert_eq!(inputs["sampling_mode.temperature"], json!(0.7));
+    assert_eq!(inputs["sampling_mode.top_k"], json!(64));
+    assert_eq!(inputs["mtp"], json!("auto"));
+    assert!(
+        !converted.open_inputs.iter().any(|line| line.starts_with("43.sampling_mode")),
+        "它是控件不是插口：{:?}",
+        converted.open_inputs
+    );
+    assert!(
+        converted.warnings.is_empty(),
+        "子项都认得出来，不该再有「对不齐」的提醒：{:?}",
+        converted.warnings
+    );
+}
+
+/// 广播型节点在本机**注册成"零输出"桩**（cg-use-everywhere 就是这样）时，
+/// 仍然要按前端行为等价改写 —— 否则它该填的那几路会一直空着，且不报错。
+#[test]
+fn 注册成零输出桩的广播节点照样等价改写() {
+    let object_info = object(
+        r#"{
+          "CheckpointLoaderSimple": {
+            "input": { "required": { "ckpt_name": [["a.safetensors"]] } },
+            "output": ["MODEL", "CLIP", "VAE"] },
+          "EmptyLatentImage": {
+            "input": { "required": { "width": ["INT"], "height": ["INT"], "batch_size": ["INT"] } },
+            "output": ["LATENT"] },
+          "VAEDecode": {
+            "input": { "required": { "samples": ["LATENT"], "vae": ["VAE"] } },
+            "output": ["IMAGE"] },
+          "SaveImage": {
+            "input": { "required": { "images": ["IMAGE"], "filename_prefix": ["STRING"] } },
+            "output": ["IMAGE"], "output_node": true },
+          "Anything Everywhere": {
+            "input": { "required": {}, "optional": { "anything": ["*"] } }, "output": [] }
+        }"#,
+    );
+    let ui = object(
+        r#"{
+          "version": 0.4,
+          "nodes": [
+            {"id": 1, "type": "CheckpointLoaderSimple", "mode": 0, "inputs": [],
+             "outputs": [{"name": "MODEL", "type": "MODEL", "links": []},
+                         {"name": "CLIP", "type": "CLIP", "links": []},
+                         {"name": "VAE", "type": "VAE", "links": [10]}],
+             "widgets_values": ["a.safetensors"]},
+            {"id": 2, "type": "Anything Everywhere", "mode": 0,
+             "inputs": [{"name": "anything", "type": "VAE", "link": 10}], "outputs": [], "widgets_values": []},
+            {"id": 3, "type": "EmptyLatentImage", "mode": 0, "inputs": [],
+             "outputs": [{"name": "LATENT", "type": "LATENT", "links": [11]}],
+             "widgets_values": [512, 512, 1]},
+            {"id": 4, "type": "VAEDecode", "mode": 0,
+             "inputs": [{"name": "samples", "type": "LATENT", "link": 11},
+                        {"name": "vae", "type": "VAE", "link": null}],
+             "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": [12]}], "widgets_values": []},
+            {"id": 5, "type": "SaveImage", "mode": 0,
+             "inputs": [{"name": "images", "type": "IMAGE", "link": 12},
+                        {"name": "filename_prefix", "type": "STRING", "link": null, "widget": {"name": "filename_prefix"}}],
+             "outputs": [], "widgets_values": ["x"]}
+          ],
+          "links": [[10, 1, 2, 2, 0, "VAE"], [11, 3, 0, 4, 0, "LATENT"], [12, 4, 0, 5, 0, "IMAGE"]]
+        }"#,
+    );
+    // 不开：注册过的桩被当普通节点留在图里，`vae` 一直空着（而且**不报错**）
+    let plain = to_api_graph(&ui, &object_info, false).unwrap();
+    assert!(plain.unsupported_nodes.is_empty(), "它注册过，所以不会被报成 unsupported：{:?}", plain.unsupported_nodes);
+    assert!(plain.open_inputs.iter().any(|line| line.starts_with("4.vae")), "{:?}", plain.open_inputs);
+
+    // 开：按前端行为广播填上
+    let emulated = to_api_graph(&ui, &object_info, true).unwrap();
+    assert_eq!(emulated.graph["4"]["inputs"]["vae"], json!([1, 2]));
+    assert!(!emulated.open_inputs.iter().any(|line| line.starts_with("4.vae")), "{:?}", emulated.open_inputs);
+    assert!(emulated.broadcast_lines.iter().any(|line| line.starts_with("4.vae")), "{:?}", emulated.broadcast_lines);
+}

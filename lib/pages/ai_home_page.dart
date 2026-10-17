@@ -2581,6 +2581,8 @@ class _ProducedMediaCard extends StatelessWidget {
       context,
       title: '本次生成的工作流（提示词 #${promptIds.first}）',
       load: () => store.promptWorkflow(promptIds.first),
+      blueprint: store.workflowBlueprint,
+      saveBlueprint: (raw, name) => store.saveWorkflow(raw: raw, name: name),
     );
   }
 }

@@ -46,6 +46,9 @@ fn 只列真搬过来了的那些() {
             // 配方三件（P4 第 67 步）：学 → 列 → 绑。绑的那件按 name 升序排在体检之前
             "comfy_bind_recipe",
             "comfy_check_inputs",
+            // 接线体检（2026-10-17）：看的是**接线本身**，界面格式也认 ——
+            // 与 `comfy_audit_workflow`（只审 API 图、"跑起来会不会崩"）分工不同，两件都要在
+            "comfy_diagnose_workflow",
             "comfy_env_report",
             "comfy_find_workflow",
             "comfy_fit_workflow",

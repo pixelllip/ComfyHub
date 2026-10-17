@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'workflow_blueprint_page.dart';
+
 /// 这份 JSON 是不是「API 格式节点图」。
 ///
 /// 界面格式工作流长这样：`{"nodes": [...], "links": [...], "version": 0.4}`；
@@ -18,6 +20,8 @@ bool looksLikeApiGraph(Object? json) {
 ///
 /// ComfyUI 存下来的是 UI 格式的工作流 JSON，用户把它拖回 ComfyUI 就能复现同一次生成。
 /// 所以这里只做一件事：把后端存的原文完整、可选中地交到用户手上。
+/// （要看**蓝图**（节点-连线画布 + 接线体检 + 改参数）走 [`showWorkflowBlueprint`]，
+/// 那是另一整屏，不在这个弹窗里。）
 
 /// 单次渲染的字符上限。
 ///
@@ -28,17 +32,26 @@ const int _maxDisplayChars = 400 * 1024;
 /// 打开工作流弹窗。
 ///
 /// [load] 返回 null 表示后端没有存过这次运行的工作流。
+/// [blueprint] 给了才会出现「看蓝图」按钮（那需要后端能算蓝图 + 体检）。
 Future<void> showWorkflowDialog(
   BuildContext context, {
   required String title,
   required Future<String?> Function() load,
+  BlueprintDiagnose? blueprint,
+  BlueprintSave? saveBlueprint,
 }) {
   // 在打开弹窗时就抓住调用方的 ScaffoldMessenger：弹窗自身的 context 不一定
   // 落在某个 Scaffold 之下，用调用方的那个才能把 SnackBar 稳定地弹出来。
   final messenger = ScaffoldMessenger.maybeOf(context);
   return showDialog<void>(
     context: context,
-    builder: (_) => _WorkflowDialog(title: title, load: load, messenger: messenger),
+    builder: (_) => _WorkflowDialog(
+      title: title,
+      load: load,
+      messenger: messenger,
+      blueprint: blueprint,
+      saveBlueprint: saveBlueprint,
+    ),
   );
 }
 
@@ -48,17 +61,31 @@ class WorkflowButton extends StatelessWidget {
   final String title;
   final Future<String?> Function() load;
 
+  /// 蓝图取数（不传就没有「看蓝图」入口）
+  final BlueprintDiagnose? blueprint;
+
+  /// 把改过的工作流存成文件（不传就没有「保存」）
+  final BlueprintSave? saveBlueprint;
+
   const WorkflowButton({
     super.key,
     this.label = '查看工作流',
     this.title = '工作流',
     required this.load,
+    this.blueprint,
+    this.saveBlueprint,
   });
 
   @override
   Widget build(BuildContext context) {
     return TextButton.icon(
-      onPressed: () => showWorkflowDialog(context, title: title, load: load),
+      onPressed: () => showWorkflowDialog(
+        context,
+        title: title,
+        load: load,
+        blueprint: blueprint,
+        saveBlueprint: saveBlueprint,
+      ),
       icon: const Icon(Icons.account_tree_outlined, size: 16),
       label: Text(label),
       style: TextButton.styleFrom(
@@ -74,8 +101,16 @@ class _WorkflowDialog extends StatefulWidget {
   final Future<String?> Function() load;
   /// 打开弹窗的那个页面所属的 messenger
   final ScaffoldMessengerState? messenger;
+  final BlueprintDiagnose? blueprint;
+  final BlueprintSave? saveBlueprint;
 
-  const _WorkflowDialog({required this.title, required this.load, this.messenger});
+  const _WorkflowDialog({
+    required this.title,
+    required this.load,
+    this.messenger,
+    this.blueprint,
+    this.saveBlueprint,
+  });
 
   @override
   State<_WorkflowDialog> createState() => _WorkflowDialogState();
@@ -176,6 +211,20 @@ class _WorkflowDialogState extends State<_WorkflowDialog> {
     );
   }
 
+  /// 打开整屏蓝图（弹窗**不关**：关掉蓝图就回到 JSON 原文，随时还能复制）
+  Future<void> _openBlueprint() async {
+    final raw = _raw;
+    final diagnose = widget.blueprint;
+    if (raw == null || diagnose == null) return;
+    await showWorkflowBlueprint(
+      context,
+      title: widget.title,
+      raw: raw,
+      diagnose: diagnose,
+      save: widget.saveBlueprint,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -190,7 +239,13 @@ class _WorkflowDialogState extends State<_WorkflowDialog> {
           Expanded(
             child: Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
-          // 复制按钮放标题栏，正文区就能整块留给工作流
+          // 「看蓝图」与「复制」放标题栏，正文区就能整块留给工作流
+          if (_raw != null && widget.blueprint != null)
+            TextButton.icon(
+              onPressed: _openBlueprint,
+              icon: const Icon(Icons.account_tree_outlined, size: 16),
+              label: const Text('看蓝图'),
+            ),
           if (_raw != null)
             TextButton.icon(
               onPressed: _copy,

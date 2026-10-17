@@ -1,9 +1,17 @@
 ---
 name: krea-2
-description: 写 Krea 2（K2）生图提示词，并用本机 ComfyUI 跑 Krea 2 RAW / Turbo（官方推荐参数：RAW 52 步 cfg 3.5 ≤1K，Turbo 8 步 cfg 0 mu 1.15 1K~2K）。含 Krea 官方 prompting 规则、提示词扩写纪律、风格参考（Srefs）与风格 LoRA 用法。正文按 Krea 官方材料整理（krea-ai/krea-2、krea-ai/skills、ComfyUI 官方 Krea-2 教程）。
-whenToUse: 用户提到 Krea 2 / K2 / krea2，要写 Krea 2 提示词，要调 Krea 2 的步数 / CFG / mu / 分辨率 / 种子，要用 Krea 2 的风格参考或风格 LoRA，或问"Krea 2 在 ComfyUI 里怎么配/怎么出图"时。
-version: 1
+description: 写 Krea 2（K2）生图提示词，并用本机 ComfyUI 跑 Krea 2 RAW / Turbo（官方推荐参数：RAW 52 步 cfg 3.5 ≤1K，Turbo 8 步 cfg 0 mu 1.15 1K~2K）。含 Krea 官方 prompting 规则、提示词扩写纪律、风格参考（Srefs）与风格 LoRA 用法，以及本机两份现成模板（`comfyhub_t2i_krea2.json` 文生图 / `comfyhub_i2i_krea2.json` 参考图编辑）的节点结构与可覆盖键。正文按 Krea 官方材料整理（krea-ai/krea-2、krea-ai/skills、ComfyUI 官方 Krea-2 教程），模板部分是对用户两份真工作流的实测归纳。
+whenToUse: 用户提到 Krea 2 / K2 / krea2，要写 Krea 2 提示词，要调 Krea 2 的步数 / CFG / mu / 分辨率 / 种子，要用 Krea 2 的风格参考或风格 LoRA，问"Krea 2 在 ComfyUI 里怎么配/怎么出图"，或者要用本机的 krea2 文生图 / 图生图模板出图时。
+version: 2
 ---
+
+## 版本记录
+
+- **version 2（2026-10-17）**：新增 §6「本机的两份 krea2 模板」—— 用户当天从 ComfyUI 里存出来的
+  `comfyhub_t2i_krea2.json` / `comfyhub_i2i_krea2.json` 的节点结构、可覆盖键与三个坑
+  （广播只在前端生效、`Fast Bypasser` 是直通开关、`TextGenerate` 的动态下拉框）。
+  起因：这两份工作流以前**转换就会缺一堆必填输入**，AI 只能即兴重写一份（然后跑偏）。
+
 
 # Krea 2（K2）：提示词 + 本机 ComfyUI 出图
 
@@ -142,3 +150,81 @@ ComfyUI/models/loras/            krea2_style_reference.safetensors
 | `references/official-expansion-system-prompt.txt` | 官方扩写用的 system prompt（`docs/expansion.txt`）原文 |
 | `references/official-comfyui-krea-2.md` | ComfyUI 官方 Krea-2 教程要点（模型 / 分辨率 / LoRA / 风格参考） |
 | `references/SOURCES.md` | 上面每一份的 URL、采集日期、版本与许可 |
+
+## 6. 本机的两份 krea2 模板（**要用 krea2 出图就先用它们，别现写**）
+
+两份都在 `<根>\comfyui\workflows\`（仓库里也有一份同样的副本），是用户 2026-10-17
+从 ComfyUI 里存出来的真工作流（界面格式）：
+
+| 模板 | 干什么 | 结构（API 图节点数） |
+| --- | --- | --- |
+| `comfyhub_t2i_krea2.json` | **文生图**（Turbo 档：8 步 / euler / 896×1344） | 15 |
+| `comfyhub_i2i_krea2.json` | **参考图编辑 / i2i**（LoadImage + 控制分支 + 提示词扩写） | 27 |
+
+**怎么用**（三步，全是现成工具）：
+
+1. `comfy_load_workflow(path="<根>\\comfyui\\workflows\\comfyhub_t2i_krea2.json", includeGraph=true)`
+   —— 它会照 ComfyUI 前端的做法把前端节点等价改写掉（**必须开着 `emulateFrontend`，默认就是开的**），
+   返回 `promptId` 与转换后的 `apiGraph`；**可覆盖键就从那份 `apiGraph` 里读**（`节点id.输入名`）。
+2. `comfy_fit_workflow(promptId=…)` 看本机模型齐不齐（缺哪个文件、要不要换）。
+3. `comfy_submit(promptId=…, overrides={"<节点id>.text": "…", …})`。
+
+### 6.1 t2i 那张图的骨架（节点 id 就是模板里的 id）
+
+```
+28 CheckpointLoaderSimple(krea2Turbo…Int8) ─┐
+30 CLIPLoader(type=krea2) ──────────────────┤→ 32 Lora Loader Stack(rgthree) ─┐
+29 VAELoader(qwen_image_vae) ───────────────┘                                  │
+                                   36 Anything Everywhere（广播 MODEL/CLIP/VAE）
+                                                                               ↓
+31 EmptyLatentImage(896×1344) → 33 Krea2TurboReferenceSigmaSchedulerFromLatent(8 步) ─┐
+34 CLIPTextEncode(提示词) ──────────────────────────────────────────────────────────┤
+42 RandomNoise(种子) → 40 SamplerCustomAdvanced ← 37 KSamplerSelect(euler) ←────────┘
+                                    41 BasicGuider ← 34
+40 → 38 VAEDecode → 39 SaveImage
+```
+
+| 想改什么 | 覆盖键 | 备注 |
+| --- | --- | --- |
+| 正面提示词 | `34.text` | Krea 2 用自然语言（§1），不是 tag |
+| 分辨率 | `31.width` / `31.height` | 16 的倍数；改了会改构图，不是放大 |
+| 种子 | `42.noise_seed` | |
+| 步数 / 去噪 | `33.steps` / `33.denoise` | Turbo 档 8 步；**别乱调 cfg**（这张图没有 cfg，Turbo 是 cfg-free 那一路） |
+| 底模 / VAE / 文本编码器 | `28.ckpt_name` / `29.vae_name` / `30.clip_name` | 换之前先 `comfy_fit_workflow` |
+| LoRA 与强度 | `32.lora_01` … `32.lora_04` / `32.strength_01` … | 名字里带 `krea2` 的才是这一族的 |
+| 输出前缀 | `39.filename_prefix` | |
+
+### 6.2 i2i 那张图多了什么
+
+主链与 t2i 同款，多出来的三块（都在主链旁边，**互不相干，可以只开一块**）：
+
+1. **参考图 → 控制分支**：`42 LoadImage` → `97 RMBG` / `102 DepthAnythingPreprocessor`
+   → `103 FluxKontextImageScale` → `104 Krea2ControlImageEncode` → `105 Krea2ControlApply`
+   （LoRA 在 `89 Krea2ControlLoRALoader`，默认 `depth-control-lora.safetensors` 0.8）。
+   要换参考图：先 `comfy_use_media` / `comfy_use_attachment` 把图投进 ComfyUI 的 `input/`，
+   再覆盖 `42.image`（**别自己拼文件名**，见 skill `img2img-reference`）。
+2. **提示词扩写**：`45 PrimitiveStringMultiline`（扩写用的 system prompt）→ `43 TextGenerate`
+   （本地 LLM 扩写）→ 结果进 `108 CLIPTextEncode`。想直接给提示词就覆盖 `108.text`，
+   或者把 `43` 那一路关掉（`mode=4` 旁路 / 让界面关掉它）。
+3. **显示节点**：`55 PreviewAny` / `106 PreviewImage` —— 转换时会被丢掉，不影响出图。
+
+### 6.3 三个坑（**踩过，别再踩**）
+
+| 坑 | 现象 | 正确做法 |
+| --- | --- | --- |
+| **`Anything Everywhere` 只在前端生效** | 它在 `/object_info` 里**查得到**（cg-use-everywhere 注册了个零输出的桩），可服务端拿到它什么都不产出 —— 它该填的 MODEL/CLIP/VAE 那几路会一直空着。表现是"图看着没问题，提交上去缺 5 个必填输入" | 提交链**必须**走 `comfy_load_workflow`（它默认 `emulateFrontend=true`，会按前端行为把同类型的值填进去）。**不许**把这份界面格式文件直接当 API 图提交 |
+| **`Fast Bypasser (rgthree)` 是直通开关** | 它不在 `/object_info` 里；不处理的话 `105.model ← 节点 90（没有转换出来）`，整份工作流都进不来 | 同上：`comfy_load_workflow` 会把它当"1 进 1 出"的直通接过去（判据来自真实提交记录：前端发出去的确实是 `105.model = ["89", 0]`） |
+| **`TextGenerate.sampling_mode` 是动态下拉框** | 它的子项名字带点（`sampling_mode.temperature`），把主项当插口会报"必填输入空着"、丢掉子项会静默退回默认值 | 别手工拼这几个键；转换器已经按 `/object_info` + `widgets_values_named` 处理好了 |
+
+### 6.4 两份模板的体检结论（2026-10-17 实测，供对照）
+
+- **t2i**：0 错误。三条提醒：① 广播节点是"零输出桩"（见上表）；② `42 RandomNoise` 的控件值多一个
+  `control_after_generate`（界面版本与后端声明不一致，已忽略）；③ **`35 ComfyUI-Krea2T-Enhancer`
+  的输出没有接出去** —— 它在图里等于没生效，别以为它在起作用（要它生效就在 ComfyUI 里把
+  `35.model` 接到该接的地方，再另存一份）。
+- **i2i**：0 错误。除了上面那几条，还有 `TextGenerate` 的可选插口（`video` / `audio`）与
+  `RMBG.background_color` 空着 —— **那是可选的，不是缺口**。
+
+> 判据怎么来的：`comfy_audit_workflow` 只审 API 图，看不到这些；界面里点「查看工作流 → 看蓝图」
+> 会跑一遍**接线体检**（同一份判据），哪根线接错、哪个插口空着、为什么，都在那份报告里。
+

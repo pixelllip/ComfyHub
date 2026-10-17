@@ -357,6 +357,9 @@ pub fn router(state: AppState) -> Router {
         // **学习与绑定走的是 AI 工具那两个函数**（`workflow_recipe::learn_and_save` /
         // `bind_and_report`）—— 分头写必然漂移，而漂移的表现是"AI 学出来的配方和界面看到的不一样"。
         .merge(crate::workflow::workflow_recipe::router())
+        // 蓝图：给"界面里那段任意 JSON"做体检（改完参数就地再验一次，不落库）。
+        // 库里那两条（`/api/{prompts,media}/{id}/blueprint`）在上面的路由表里。
+        .merge(crate::workflow::workflow_blueprint::router())
         // AI 附件五条（P4 第 50 步）：原件落在 `<storage>/ai-attachments`，缩略图在 `<storage>/ai-thumbs`。
         .merge(crate::media::attachments::router())
         // Provider 连接测试 / 模型发现（P4 第 53 步）：设置页那两个按钮。

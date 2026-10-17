@@ -45,10 +45,49 @@ fn 名字过滤优先于类型且大小写不敏感() {
         node_id: "5".into(),
         name: "positive".into(),
         types: vec!["CONDITIONING".into()],
+        required: true,
     };
-    assert!(matches(&spec, &target), "名字过滤命中时不再要求类型对得上");
+    assert!(matches(&spec, &target, None), "名字过滤命中时不再要求类型对得上");
     let other = OpenInput { name: "seed".into(), ..target };
-    assert!(!matches(&spec, &other));
+    assert!(!matches(&spec, &other, None));
+}
+
+/// 新版本 cg-use-everywhere（`properties` 里没有类型）：**每个接了线的插口各一路**，
+/// 类型写在插口自己的 `type` 上。
+///
+/// 判据来源是用户 2026-10-17 存下来的 `krea2 t2i workflow.json`：那个
+/// `Anything Everywhere` 长着 `anything[CLIP]` / `anything15[MODEL]` / `anything16[VAE]`
+/// 三个接了线的插口，而 `properties` 里只有 `title_regex` 这类正则键。
+/// 只认老版本的表现是"一处广播都填不上"，且**不报错**。
+#[test]
+fn 新版广播节点按每个插口的类型分路() {
+    let node = object(
+        r#"{"id":36,"type":"Anything Everywhere","properties":{"title_regex":null,"next_input_index":17},
+            "inputs":[{"name":"anything","type":"CLIP","link":45},
+                      {"name":"anything15","type":"MODEL","link":57},
+                      {"name":"anything16","type":"VAE","link":58},
+                      {"name":"anything17","type":"*","link":null}]}"#,
+    );
+    let mut links: LinkTable = LinkTable::new();
+    links.insert(45, ("32".to_string(), 1));
+    links.insert(57, ("32".to_string(), 0));
+    links.insert(58, ("29".to_string(), 0));
+    let graph = object(r#"{"32":{"class_type":"Lora Loader Stack (rgthree)","inputs":{}},
+                            "29":{"class_type":"VAELoader","inputs":{}}}"#);
+    let spec = broadcast_spec(&node);
+    assert!(spec.type_name.is_none() && spec.name_filter.is_none(), "老版本的类型声明一个字都没有");
+    let routes = broadcast_routes(&node, &links, &spec, &graph);
+    assert_eq!(routes.len(), 3, "三路（没接线的那个 `*` 不算）");
+    let types: Vec<Option<&str>> = routes.iter().map(|route| route.type_name.as_deref()).collect();
+    assert_eq!(types, vec![Some("CLIP"), Some("MODEL"), Some("VAE")]);
+    // 每路只填同类型的空输入
+    let clip = OpenInput { node_id: "34".into(), name: "clip".into(), types: vec!["CLIP".into()], required: true };
+    let model = OpenInput { node_id: "41".into(), name: "model".into(), types: vec!["MODEL".into()], required: true };
+    assert!(matches(&spec, &clip, Some("CLIP")));
+    assert!(!matches(&spec, &clip, Some("MODEL")));
+    assert!(matches(&spec, &model, Some("MODEL")));
+    // 类型说不清（`*`）时一路都不灌 —— 宁可少做，也不要把错的线接上去
+    assert!(!matches(&spec, &model, Some("*")));
 }
 
 /// 空输入清单：控件型不算缺口，`forceInput` 是插口（要算）。

@@ -22,7 +22,7 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         ]
     );
     assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
-    assert_eq!(body["promptVersion"], "v37");
+    assert_eq!(body["promptVersion"], "v38");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -342,6 +342,9 @@ async fn tool_policy_and_nsfw_endpoints() {
             // 体检两件（P4 第 62 步）：列"还等着外部给输入的位置" / 跟本机模型清单对账，
             // 都**只报不改**（用户建议 ①/⑤）—— 按 name 升序排在这里
             "comfy_check_inputs",
+            // 接线体检（2026-10-17 用户"对于错误接线要能向用户指出"）：只读、出厂 allow ——
+            // 与 `comfy_audit_workflow` 分工不同（那条只审 API 图、看"跑起来会不会崩"）
+            "comfy_diagnose_workflow",
             // 本机模型清单对账（O3）：只读，**不属于 COMFY 那一类**（不吃查询预算）
             "comfy_env_report",
             // 两段式找工作流（用户 bug ⑤）：库里搜不到就回头看本机的工作流文件

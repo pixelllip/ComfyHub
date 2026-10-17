@@ -101,6 +101,18 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "comfy_diagnose_workflow",
+        description: r#"**接线体检**：把一份工作流摊成「节点-连线」并逐条指出哪里接错了 —— 类型不匹配、悬挂引用（线指向不存在的节点）、空着的必填输入、环、一个输出节点都没有、本机没有的节点类、纯前端节点、连线表与插口对不上、控件值个数对不上。每条都给「哪个节点 / 哪个插口 / 哪根线」和一句修法。
+三种来源**任选一个**：`path`（本机工作流文件，界面格式也行）、`promptId`（库里有工作流原文的提示词）、`graph`（API 格式节点图）。
+**它和 `comfy_audit_workflow` 的分工**：审核那条只审 **API 图**、看的是「跑起来会不会崩」（前端节点 / 版本不兼容 / 参数档位 / 显存 / 提示词风格）；这条看的是**接线本身**，界面格式也认，能看到广播节点该填却没填的那几路 —— 用户说「这条工作流好像接错了 / 跑出来不对 / 缺输入」时先跑这条。
+⚠ 判「哪个插口必填」「这两根线的类型对不对」要 ComfyUI 的 `/object_info`：连不上时只做结构检查（重复 id / 悬挂引用 / 连线表 / 环），并在结果里**如实说明覆盖面小一圈**，不许凭猜下结论。"#,
+        // **只读**：只读文件 / 只读库，不写任何东西
+        input_schema: r#"{"type":"object","properties":{"path":{"type":"string","description":"本机工作流文件的完整路径（.json；界面格式也行）"},"promptId":{"type":"integer","description":"或者：库里有工作流原文的提示词 id"},"graph":{"type":"object","description":"或者：直接给 API 格式节点图"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "comfy_env_report",
         description: r#"**本机 ComfyUI 环境对账**：把三套根摆在一起 + 列出本机模型清单。
 什么时候用：① 用户抱怨"明明有这个模型、AI 却说没有"；② 你要判断"这份工作流能不能跑"之前；③ `comfy_fit_workflow` 报了 `missing` 或 `onDiskOnly`；④ 想知道本机到底有哪些 checkpoint / LoRA / VAE（用 folder 或 query 过滤）。

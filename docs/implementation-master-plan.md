@@ -175,6 +175,7 @@ pwsh -File scripts\e2e-capture-test.ps1                                  # 捕�
 | [ai-tools-and-skills.md](ai-tools-and-skills.md) | AI 工具与 Skills 的接线（含与 DSH 的对照） |
 | [permission-audit.md](permission-audit.md) | 写工作区外的 12 处，逐条标注退路 / 闸门 |
 | [workflow-recipe-design.md](workflow-recipe-design.md) | 工作流配方：骨架 / 模型槽位 / 参数档位三层分解 |
+| [workflow-blueprint-design.md](workflow-blueprint-design.md) | 工作流蓝图（画布 + 可改参数）与**接线体检** 13 条判据；两份 krea2 模板的实测结论 |
 | [pairing-design.md](pairing-design.md) | 配对闸门与密钥下行（§11 是实现的入口） |
 | [mobile-harness-design.md](mobile-harness-design.md) | 手机 harness 的范围与边界、为什么 Kotlin 而非 Dart/Rust |
 | [cross-device-sync-design.md](cross-device-sync-design.md) | 同步机制细节（变更账本、游标、墓碑、bootstrap、SQLite 坑） |

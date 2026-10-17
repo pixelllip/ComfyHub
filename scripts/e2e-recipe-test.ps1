@@ -193,8 +193,10 @@ try {
     Write-Host "`n[2] 幂等：同一份文件学两次只有一行" -ForegroundColor Cyan
     $learn1b = Invoke-Api -Method POST -Uri "$base/api/ai/workflow-recipes" -Body @{ path = $apiFile }
     Assert-That '第二次还是同一个 recipeId' ($learn1b.json.recipeId -eq $recipe1.recipeId) "$($learn1b.json.recipeId) vs $($recipe1.recipeId)"
-    $list0 = Invoke-Api -Method GET -Uri "$base/api/ai/workflow-recipes"
-    Assert-That '列表里只有 1 条' (@($list0.json).Count -eq 1) "$(@($list0.json).Count)"
+    $list0 = Invoke-Api -Method GET -Uri "$base/api/ai/workflow-recipes?skeleton=$($recipe1.skeletonHash)"
+    # ⚠ 按**自己这一族的骨架**过滤，不数全库：库副本里本来就可能躺着别的配方
+    #   （2026-10-17 实测：真实库里学过的 krea2 两份会让"全库只有 1 条"变成 3 条而假红）
+    Assert-That '这一族只有 1 条' (@($list0.json).Count -eq 1) "$(@($list0.json).Count)"
 
     # --- 3. 学库里的提示词（promptId） ---------------------------------
     Write-Host "`n[3] 学库里的提示词（从 capture_runs.raw 那份 API 图学）" -ForegroundColor Cyan

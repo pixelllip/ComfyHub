@@ -42,6 +42,9 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
   另外两条入口是**目录导入**（读 PNG 内嵌工作流）与**推送**（自定义节点）。见 §7。
 - **工作流**：找能跑的 / 体检（模型与节点齐不齐）/ 摘拼节点 / **配方**（把一份具体工作流归纳成"骨架 + 模型槽位 + 旋钮"，
   换新模型不用重搭）/ 提交（`comfy_submit`，只能提交 API 格式节点图）。
+- **蓝图与接线体检**：任意一份工作流都能摊成**节点-连线画布**（真实坐标 / 分组 / 旁路灰显 / 前端 only 节点一个不丢），
+  并给出**哪里接错了**（类型不匹配 / 悬空引用 / 空必填 / 环 / 没输出节点 …）；在画布上还能**改参数、关掉某条分支**，
+  改完就地复检、可复制或存成文件。入口：详情页「查看工作流 → 看蓝图」。见 [docs/workflow-blueprint-design.md](docs/workflow-blueprint-design.md)。
 - **图像编辑**：把画廊产物 / 用户附件**投放**进 ComfyUI 的 `input`，生成遮罩，贴人物（抠图交给工作流里的 rembg 节点）。
 - **工具与 Skills**：桌面全量工具清单（`server-rs/src/tools/tools.rs` 是唯一真源）+ 三层准入（选完预检 / 发送前禁用 /
   建 Run 前后端再验）；Skills 正文真源是磁盘（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`），**不做缓存**。
@@ -206,6 +209,7 @@ pwsh -File scripts\e2e-submit-test.ps1                                # 提交�
 | [docs/permission-audit.md](docs/permission-audit.md) | 写工作区外的 12 处，逐条标注退路 / 闸门 |
 | [docs/pairing-design.md](docs/pairing-design.md) | 配对闸门与密钥下行 |
 | [docs/workflow-recipe-design.md](docs/workflow-recipe-design.md) | 工作流配方 |
+| [docs/workflow-blueprint-design.md](docs/workflow-blueprint-design.md) | 工作流蓝图与接线体检（含两份 krea2 模板的实测结论） |
 | [docs/mobile-harness-design.md](docs/mobile-harness-design.md) | 移动端 harness（Android Kotlin） |
 | [docs/archive/](docs/archive/README.md) | **已归档**：做完了的任务书、被取代的进度快照、当时的审计与调研 —— 不是当前依据 |
 

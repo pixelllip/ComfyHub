@@ -184,6 +184,9 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
                   WorkflowButton(
                     title: p.title.isEmpty ? '未命名提示词' : p.title,
                     load: () => store.api.promptWorkflow(p.id),
+                    blueprint: store.api.workflowBlueprint,
+                    saveBlueprint: (raw, name) =>
+                        store.api.saveWorkflow(raw: raw, name: name),
                   ),
               ],
             ),

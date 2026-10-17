@@ -552,12 +552,18 @@ try {
 
     # --- 7. 前端节点转不出来时：模型拿缺口清单 → 补线 → 提交（用户建议 ②）----
     #
-    # 现场：krea2 那份工作流里有一堆纯前端节点（Anything Everywhere 之类），
-    # 服务端不敢猜着改写，于是整件事卡在"这条工作流转不了"。
+    # 现场：界面格式工作流里带着**说不清类型**的广播节点（`Anything Everywhere` 的插口
+    # 类型是 `*`，`properties` 里也没有 `Input Type`），服务端**不敢猜着改写**，
+    # 于是整件事卡在"这条工作流转不了"。
     # 现在的处理是**放权给 AI**：带 tolerateUnsupported=true 读进来，拿到
     # `openInputs`（哪些连线型输入空着、缺什么类型）与 `unresolvedInputs`，
     # 由模型用 comfy_submit(connections=…) 把线补上再跑 —— 补的是"哪根线接哪"，
     # 猜的那部分仍然由 ComfyUI 自己的校验兜底。
+    #
+    # ⚠ 2026-10-17 起"**插口上写了类型**的广播节点会被自动改写"（判据来自本机 ComfyUI
+    #   `/history` 里真实提交的 API 图：cg-use-everywhere 就是每个插口一路、类型写在插口上）。
+    #   所以这条场景的夹具必须用**类型未声明**（`"type": "*"`）的那一档 ——
+    #   那才是"不猜、交给 AI 补线"仍然成立的情形。
     Say ''
     Say '  [5/6] 前端节点转不出来：模型按缺口清单补线再提交（用户建议 ②）' 'Cyan'
 
@@ -570,7 +576,7 @@ try {
     { "id": 1, "type": "CheckpointLoaderSimple", "mode": 0,
       "widgets_values": ["e2e_model.safetensors"], "inputs": [] },
     { "id": 2, "type": "Anything Everywhere", "mode": 0,
-      "inputs": [{ "name": "anything", "type": "VAE", "link": 9 }], "outputs": [] },
+      "inputs": [{ "name": "anything", "type": "*", "link": 9 }], "outputs": [] },
     { "id": 6, "type": "CLIPTextEncode", "mode": 0,
       "widgets_values": ["a cyberpunk cat"], "inputs": [{ "name": "clip", "type": "CLIP", "link": 1 }] },
     { "id": 7, "type": "CLIPTextEncode", "mode": 0,

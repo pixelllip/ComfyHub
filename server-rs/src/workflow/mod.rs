@@ -1,9 +1,11 @@
 //! `workflow/` —— 工作流。
 //!
-//! 界面格式 ↔ API 节点图、跑之前体检、摘/拼节点、配方（学/列/绑）、提交（R10 的落点）。
+//! 界面格式 ↔ API 节点图、跑之前体检、摘/拼节点、配方（学/列/绑）、提交（R10 的落点）、
+//! 蓝图（可绘制的节点-连线模型 + 接线体检）。
 
 pub mod graph_parse;
 pub mod workflow_audit;
+pub mod workflow_blueprint;
 pub mod workflow_convert;
 pub mod workflow_fit;
 pub mod workflow_frontend;

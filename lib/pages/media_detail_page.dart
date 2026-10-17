@@ -979,6 +979,8 @@ class _InfoPanel extends StatelessWidget {
               WorkflowButton(
                 title: media.title.isEmpty ? media.originalName : media.title,
                 load: () => store.api.mediaWorkflow(media.id),
+                blueprint: store.api.workflowBlueprint,
+                saveBlueprint: (raw, name) => store.api.saveWorkflow(raw: raw, name: name),
               ),
             OutlinedButton.icon(
               onPressed: () async {

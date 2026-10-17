@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/ai_models.dart';
 import 'pairing_token.dart';
+import 'workflow_blueprint.dart';
 
 /// AI 工作台的后端客户端（AIH-006 / AIH-012 / AIH-018 / AIH-029）。
 ///
@@ -406,6 +407,23 @@ class AiApiClient {
     return res.body.isEmpty ? null : res.body;
   }
 
+  /// 工作流蓝图 + 接线体检（`POST /api/workflow/blueprint`）。
+  ///
+  /// 与 `ApiClient.workflowBlueprint` 同一条端点：判据只有后端那一份
+  /// （要 ComfyUI 的 `/object_info` 才判得出必填与类型）。
+  Future<Map<String, dynamic>> workflowBlueprint(String raw, {bool diagnose = true}) async =>
+      Map<String, dynamic>.from(await _send('POST', '/api/workflow/blueprint', {
+        'raw': raw,
+        'diagnose': diagnose,
+      }) as Map);
+
+  /// 把（改过的）工作流存成一份文件（落点由后端白名单决定）。
+  Future<SavedWorkflow> saveWorkflow({required String raw, String? name}) async =>
+      SavedWorkflow.fromJson(Map<String, dynamic>.from(
+          await _send('POST', '/api/workflow/save', {
+        'raw': raw,
+        if (name != null && name.isNotEmpty) 'name': name,
+      }) as Map));
   /// 删除还没用进聊天记录的附件（已被引用的会报错，调用方可以忽略）。
   Future<void> deleteAttachment(String attachmentId) async =>
       _send('DELETE', '/api/ai/attachments/$attachmentId');

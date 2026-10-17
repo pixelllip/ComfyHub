@@ -1894,9 +1894,9 @@ pub fn learn_file(
                 .chain(converted.unresolved_inputs.iter().map(|input| format!("悬空输入：{input}")))
                 .chain(
                     converted
-                        .open_inputs
+                        .required_open_inputs
                         .iter()
-                        .map(|input| format!("空着的连线输入：{input}")),
+                        .map(|input| format!("空着的必填输入：{input}")),
                 )
                 .collect::<Vec<String>>(),
         )

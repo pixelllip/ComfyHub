@@ -395,15 +395,18 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **审核 + 摘拼两件**（`comfy_audit_workflow` / `comfy_prune_workflow`，见
 /// [`crate::workflow::workflow_audit`] 与 [`crate::workflow::workflow_prune`]，P4 第 63 步）
 /// + **定向查询**（`find_model`，见 [`crate::tools::find_model`]，P4 第 64 步）
+/// + **接线体检**（`comfy_diagnose_workflow`，见 [`crate::workflow::workflow_blueprint`]，
+/// 2026-10-17：与界面上「看蓝图」共用一份判据）
 /// + **配方三件**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`，
 /// 见 [`crate::workflow::workflow_recipe`]，P4 第 67 步；学与绑都与
 /// `POST /api/ai/workflow-recipes*` 共用一份实现）。
-pub const IMPLEMENTED: [&str; 37] = [
+pub const IMPLEMENTED: [&str; 38] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
     "comfy_bind_recipe",
     "comfy_check_inputs",
+    "comfy_diagnose_workflow",
     "comfy_env_report",
     "comfy_find_workflow",
     "comfy_fit_workflow",
@@ -570,6 +573,13 @@ pub async fn execute(
         }
         "comfy_prune_workflow" => {
             crate::workflow::workflow_prune::tool_prune_workflow(state, arguments).await
+        }
+        // ---- 接线体检（2026-10-17 用户："对于错误接线要能向用户指出"）----------------
+        // 与审核那条的分工：`audit` 审"跑起来会不会崩"（**只认 API 图**），
+        // 这条审"接线本身"（界面格式也认 —— 广播节点该填却没填的那几路只有它看得见）。
+        // 判据与界面上「看蓝图」那一页**同一份**（`workflow_blueprint::build`）。
+        "comfy_diagnose_workflow" => {
+            crate::workflow::workflow_blueprint::tool_diagnose_workflow(state, policy, arguments).await
         }
         // ---- 配方三件（P4 第 67 步：用户"新模型该怎么接上已有骨架"）----------------
         // 学（归纳 + 落库）与绑（只报不改地算出该改哪几个 overrides 键）都走
