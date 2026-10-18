@@ -9,6 +9,8 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "clipboard_channel.cpp"
   "clipboard_channel.h"
+  "file_drop_channel.cpp"
+  "file_drop_channel.h"
   "flutter_window.cpp"
   "main.cpp"
   "utils.cpp"

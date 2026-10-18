@@ -511,4 +511,239 @@ void main() {
       reason: '触屏那条路也要真的能移动',
     );
   });
+
+  // ---------------------------------------------------------------------------
+  //  集合详情的**形态由用户选**（用户 2026-10-18："能不能让我自由选择在电脑/手机
+  //  排版的画廊的集合详情行为？"）
+  //
+  //  以前是**代码**按宽度档替他定：宽屏且"扣掉面板后网格还剩得下 420"才停靠，
+  //  否则一律居中弹窗。现在两个宽度档各自一条偏好，代码**严格照办**。
+  //
+  //  判据（读完 `gallery_page.dart` 后定的，写在文件末尾的 `_isPopupForm` 上）：
+  //  两种形态在 widget 树上各有**独有**节点，不看"能跑就行"。
+  // ---------------------------------------------------------------------------
+
+  testWidgets('默认（没动过设置）：宽屏 = 停靠面板，且面板占的是真实布局空间', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final (store, settings) = await _seed();
+    await tester.pumpWidget(_app(store, settings));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(CollectionThumb));
+    await tester.pumpAndSettle();
+
+    expect(_folderTitle(), findsOneWidget, reason: '前提：集合详情开着');
+    expect(
+      _isPopupForm(tester),
+      isFalse,
+      reason: '★ 默认宽屏必须是**停靠** —— 没动过设置的人看到的东西一个字都不许变',
+    );
+    _expectDockedGeometry(tester);
+  });
+
+  testWidgets('默认（没动过设置）：窄屏 = 居中弹窗，面板不是布局的一部分', (tester) async {
+    tester.view.physicalSize = const Size(820, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final (store, settings) = await _seed();
+    await tester.pumpWidget(_app(store, settings));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(CollectionThumb));
+    await tester.pumpAndSettle();
+
+    expect(_folderTitle(), findsOneWidget, reason: '前提：集合详情开着');
+    expect(
+      _isPopupForm(tester),
+      isTrue,
+      reason: '★ 默认窄屏必须是**居中弹窗** —— 同样一个字都不许变',
+    );
+    _expectCenteredPopup(tester);
+  });
+
+  testWidgets('窄屏选「停靠面板」→ 真的停靠（不再有"空间不够就回退弹窗"）', (tester) async {
+    // 用户 2026-10-18 要的正是这个"我自己定"：窄窗口上选停靠就该停靠，
+    // 代码不许偷偷加一层"剩余空间不足 → 回退弹窗"（上一版就是那样）。
+    tester.view.physicalSize = const Size(820, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final (store, settings) = await _seed();
+    await settings.setCollectionDetailNarrow(CollectionDetailStyle.dock);
+    await tester.pumpWidget(_app(store, settings));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(CollectionThumb));
+    await tester.pumpAndSettle();
+
+    expect(_folderTitle(), findsOneWidget);
+    expect(
+      _isPopupForm(tester),
+      isFalse,
+      reason: '★ 窄屏选了停靠就得停靠（用户的明确选择），不许回退成弹窗',
+    );
+    _expectDockedGeometry(tester);
+  });
+
+  testWidgets('窗口最窄（360）+ 选停靠：不抛异常；网格被挤成细条 = 这个选择的既定代价', (tester) async {
+    // 用户 2026-10-18 要求"严格照用户意愿"：选了停靠就停靠，**不加**"空间不够就回退弹窗"。
+    // 这条把这个选择的边界钉成"已知"而不是"以后才炸"：
+    // 窗口最小宽度是 360（`windows\runner\win32_window.cpp` 的 `kMinWindowWidthLogical`），
+    // 面板宽度被算式夹在下限 300（`kCollectionPanelMinWidth`）→ 网格只剩几十像素。
+    // 不许崩、不许 RenderFlex overflow；挤成细条是用户自己选的那一半代价。
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final (store, settings) = await _seed();
+    await settings.setCollectionDetailNarrow(CollectionDetailStyle.dock);
+    await tester.pumpWidget(_app(store, settings));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(CollectionThumb));
+    await tester.pumpAndSettle();
+
+    expect(_folderTitle(), findsOneWidget);
+    expect(_isPopupForm(tester), isFalse, reason: '★ 窗口再窄，选了停靠也是停靠');
+    expect(tester.takeException(), isNull, reason: '停靠 + 360 宽不许崩 / 溢出');
+    _expectDockedGeometry(tester);
+    expect(
+      tester.getRect(find.byType(MediaThumb)).width,
+      lessThan(80),
+      reason: '网格只剩几十像素 —— 这是"窄窗口 + 停靠"的既定代价（设置页的说明也写了）',
+    );
+  });
+
+  testWidgets('宽屏选「居中弹窗」→ 真的是居中弹窗（不再停靠）', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final (store, settings) = await _seed();
+    await settings.setCollectionDetailWide(CollectionDetailStyle.popup);
+    await tester.pumpWidget(_app(store, settings));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(CollectionThumb));
+    await tester.pumpAndSettle();
+
+    expect(_folderTitle(), findsOneWidget);
+    expect(_isPopupForm(tester), isTrue, reason: '★ 宽屏选了弹窗就得是弹窗');
+    _expectCenteredPopup(tester);
+  });
+
+  testWidgets('形态改完**不用重启**：同一棵树里切一下，当场生效（两个方向都试）', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final (store, settings) = await _seed();
+    await tester.pumpWidget(_app(store, settings));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(CollectionThumb));
+    await tester.pumpAndSettle();
+    expect(_isPopupForm(tester), isFalse, reason: '前提：默认宽屏是停靠');
+
+    await settings.setCollectionDetailWide(CollectionDetailStyle.popup);
+    await tester.pumpAndSettle();
+    expect(
+      _isPopupForm(tester),
+      isTrue,
+      reason: '★ 设置改完必须**当场**换形态（SettingsStore 是 ChangeNotifier，画廊 watch 着它）',
+    );
+    _expectCenteredPopup(tester);
+
+    await settings.setCollectionDetailWide(CollectionDetailStyle.dock);
+    await tester.pumpAndSettle();
+    expect(_isPopupForm(tester), isFalse, reason: '★ 切回来也要当场生效，不能要求重启');
+    _expectDockedGeometry(tester);
+  });
+
+  testWidgets('两条偏好存得住、也读得回来（键名和取值；认不出的值回默认，不抛）', (tester) async {
+    // 上面几条走的是"改设置 → 当场生效"，而**重启后还记不记得**只有这条盯得住：
+    // setter 写的键与 load 读的键一旦漂了（或者把 'dock'/'popup' 写成 int），
+    // 界面上完全看不出来，下次开 App 才莫名其妙回到默认值。
+    SharedPreferences.setMockInitialValues({
+      'comfyhub.galleryCollectionDetailWide': 'popup',
+      'comfyhub.galleryCollectionDetailNarrow': 'dock',
+    });
+    final restored = SettingsStore();
+    await restored.load();
+    expect(restored.collectionDetailWide, CollectionDetailStyle.popup, reason: '宽屏那条要能读回来');
+    expect(restored.collectionDetailNarrow, CollectionDetailStyle.dock, reason: '窄屏那条要能读回来');
+
+    // 手改坏 / 老版本写的值 → 回**默认**（= 改之前写死在代码里的行为），绝不抛：
+    // 它在 App 启动路径上，抛了就是白屏（与 `AppThemeMode.parse` 同一条纪律）。
+    SharedPreferences.setMockInitialValues({
+      'comfyhub.galleryCollectionDetailWide': '停靠',
+      'comfyhub.galleryCollectionDetailNarrow': '2',
+    });
+    final cleaned = SettingsStore();
+    await cleaned.load();
+    expect(cleaned.collectionDetailWide, CollectionDetailStyle.dock);
+    expect(cleaned.collectionDetailNarrow, CollectionDetailStyle.popup);
+  });
+}
+
+// -----------------------------------------------------------------------------
+//  形态判据
+// -----------------------------------------------------------------------------
+
+/// 集合面板的标题（**两种形态都有**这一行，所以它只当"面板在不在"的锚点）。
+Finder _folderTitle() => find.textContaining('这一组（3 张）');
+
+/// ★ 凭什么判"停靠 vs 弹窗"（读完 `gallery_page.dart` 后定的判据，不是"能跑就行"）：
+///
+/// 两种形态在 widget 树上各有**独有**的节点，且这两个类型在 `gallery_page.dart`
+/// 里**各只出现一次、都只出现在 `_folderLayer` 里**（全仓 grep 过）：
+///
+///  * **居中弹窗**一定走 `_folderLayer(theme)` —— 那一层
+///    ① 给面板套了 `Visibility`（拖动时"只藏不销毁"，`maintainState: true`），
+///    ② 并且铺了一层 `BackdropFilter`（虚化背景）；
+///  * **停靠面板**是 `Row` 里 `Expanded(网格)` 的兄弟 `SizedBox(width: panelWidth)`，
+///    面板就是布局的一部分 —— 上面两个节点**一个都不该有**。
+///
+/// 所以"面板标题有没有 `Visibility` 祖先 / 树里有没有 `BackdropFilter`"
+/// ⇔ "是不是弹窗形态"。把形态改回去（比如给停靠也铺一层虚化背景），这条立刻红。
+bool _isPopupForm(WidgetTester tester) =>
+    find.byType(BackdropFilter).evaluate().isNotEmpty ||
+    find.ancestor(of: _folderTitle(), matching: find.byType(Visibility)).evaluate().isNotEmpty;
+
+/// 停靠形态的**几何证据**（结构判据之外的第二条腿）：
+///
+///  * 面板**贴窗口右边缘** —— 关闭按钮在面板右端，它离窗口右边只差 ListTile 自己的内边距；
+///  * 画廊网格**真的收窄了** —— 最右边那个产物格子在面板左边缘左边。
+///
+/// 这正是"占真实布局空间、谁都不遮谁"的定义；弹窗形态是居中的，两条都不成立。
+void _expectDockedGeometry(WidgetTester tester) {
+  final window = tester.view.physicalSize / tester.view.devicePixelRatio;
+  final close = tester.getRect(find.byTooltip('关闭'));
+  expect(
+    close.right,
+    greaterThan(window.width - 40),
+    reason: '停靠：面板要贴窗口右边缘（实际 ${close.right}，窗口宽 ${window.width}）',
+  );
+  final thumbRight = tester.getRect(find.byType(MediaThumb)).right;
+  expect(
+    thumbRight,
+    lessThan(close.left),
+    reason: '停靠：网格必须给面板让出真实空间（格子右边缘 $thumbRight 应在面板左边缘 ${close.left} 左边）',
+  );
+}
+
+/// 弹窗形态的**几何证据**：面板矩形 `Visibility`（它直接包住 `_folderPanel`，
+/// 所以它的矩形就是弹窗的矩形）**水平居中**、明显窄于窗口、也不占满高度。
+void _expectCenteredPopup(WidgetTester tester) {
+  final window = tester.view.physicalSize / tester.view.devicePixelRatio;
+  final layer = find.ancestor(of: _folderTitle(), matching: find.byType(Visibility));
+  expect(layer, findsOneWidget, reason: '弹窗形态的面板一定在 `_folderLayer` 的 Visibility 里');
+  final popup = tester.getRect(layer);
+  expect(popup.center.dx, closeTo(window.width / 2, 1), reason: '弹窗要水平居中');
+  expect(popup.width, lessThan(window.width * 0.95), reason: '弹窗是"限制大小"的浮层，不占满宽');
+  expect(popup.height, lessThan(window.height * 0.95), reason: '弹窗不占满高（那是停靠面板的样子）');
 }

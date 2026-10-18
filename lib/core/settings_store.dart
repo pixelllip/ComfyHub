@@ -6,6 +6,40 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'backend_paths.dart';
 import 'theme.dart';
 
+/// 画廊「集合详情」的两种形态（真源：`SettingsStore.collectionDetailWide` /
+/// `collectionDetailNarrow`）。
+///
+/// 用户 2026-10-18："能不能让我自由选择在电脑/手机排版的画廊的集合详情行为？"
+/// —— 以前是**代码**按宽度档替他定（宽屏停靠、窄屏弹窗），现在两个宽度档
+/// **各自一条偏好**，选哪边由用户自己说。
+///
+/// 落盘取 [name]（`'dock'` / `'popup'`），不用 int 魔法数：偏好里躺着 `0/1`
+/// 的排查成本远高于一个能直接读懂的字符串。
+enum CollectionDetailStyle {
+  /// 停靠面板：占**真实布局空间**，画廊网格自己收窄 —— 谁都不遮谁。
+  dock('停靠面板'),
+
+  /// 居中弹窗：浮在画廊之上、背景虚化 —— 不改变网格布局。
+  popup('居中弹窗');
+
+  /// 设置页两选一控件上的标签。
+  final String label;
+
+  const CollectionDetailStyle(this.label);
+
+  /// 读偏好。认不出来的（老版本写的 / 用户手改过的）回 [fallback]，**绝不抛** ——
+  /// 它在界面构建路径上，抛了就是白屏（与 `AppThemeMode.parse` 同一条纪律）。
+  static CollectionDetailStyle parse(
+    String? raw, {
+    required CollectionDetailStyle fallback,
+  }) {
+    for (final style in values) {
+      if (style.name == raw) return style;
+    }
+    return fallback;
+  }
+}
+
 /// 全局设置（后端地址、自动启动、项目根目录等），持久化在本地。
 class SettingsStore extends ChangeNotifier {
   static const _kBaseUrl = 'comfyhub.baseUrl';
@@ -21,6 +55,18 @@ class SettingsStore extends ChangeNotifier {
   static const _kStopServicesOnExit = 'comfyhub.stopServicesOnExit';
   static const _kAllowRemoteBackend = 'comfyhub.allowRemoteBackend';
   static const _kProjectRoot = 'comfyhub.projectRoot';
+
+  /// 画廊「集合详情」在**宽屏**（`lib/app.dart` 的 `kWideLayoutMinWidth`，900）下的形态。
+  ///
+  /// 用户 2026-10-18："能不能让我自由选择在电脑/手机排版的画廊的集合详情行为？"
+  /// —— 两个宽度档各自一条偏好，形态由用户定，代码不再替他选。
+  ///
+  /// ⚠ 默认 `'dock'` / `'popup'` **必须等于改之前写死在代码里的行为**
+  /// （宽屏停靠、窄屏居中弹窗），否则没动过设置的人看到的东西就变了。
+  static const _kCollectionDetailWide = 'comfyhub.galleryCollectionDetailWide';
+
+  /// 画廊「集合详情」在**窄屏**（`< kWideLayoutMinWidth`）下的形态。默认 `'popup'`。
+  static const _kCollectionDetailNarrow = 'comfyhub.galleryCollectionDetailNarrow';
 
   /// 界面外观（深色 / 浅色 / 跟随系统）。见 [AppThemeMode]。
   ///
@@ -56,6 +102,8 @@ class SettingsStore extends ChangeNotifier {
   bool _allowRemoteBackend = false;
   String? _projectRoot;
   AppThemeMode _themeMode = AppThemeMode.dark;
+  CollectionDetailStyle _collectionDetailWide = CollectionDetailStyle.dock;
+  CollectionDetailStyle _collectionDetailNarrow = CollectionDetailStyle.popup;
   int? _lastApiPort;
   bool _loaded = false;
 
@@ -155,6 +203,12 @@ class SettingsStore extends ChangeNotifier {
   /// 界面外观（默认深色）。[AppThemeMode.material] 才是给 `MaterialApp` 的那个值。
   AppThemeMode get themeMode => _themeMode;
 
+  /// 宽屏（`>= kWideLayoutMinWidth`）下集合详情的形态。默认 [CollectionDetailStyle.dock]。
+  CollectionDetailStyle get collectionDetailWide => _collectionDetailWide;
+
+  /// 窄屏（`< kWideLayoutMinWidth`）下集合详情的形态。默认 [CollectionDetailStyle.popup]。
+  CollectionDetailStyle get collectionDetailNarrow => _collectionDetailNarrow;
+
   /// 上次后端实际监听的端口（null = 还没记录过 → 这一轮还是让系统挑）。
   ///
   /// 只用来**要回**同一个端口，不是"用户配置"：真源永远是后端写的 `.run\api.json`。
@@ -253,6 +307,15 @@ class SettingsStore extends ChangeNotifier {
     _projectRoot = prefs.getString(_kProjectRoot);
     // 认不出来的值（老版本写的 / 手改过的）回默认，不抛：见 AppThemeMode.parse
     _themeMode = AppThemeMode.parse(prefs.getString(_kThemeMode));
+    // 同上：回默认值就是"改之前写死在代码里的行为"（宽屏停靠 / 窄屏居中弹窗）
+    _collectionDetailWide = CollectionDetailStyle.parse(
+      prefs.getString(_kCollectionDetailWide),
+      fallback: CollectionDetailStyle.dock,
+    );
+    _collectionDetailNarrow = CollectionDetailStyle.parse(
+      prefs.getString(_kCollectionDetailNarrow),
+      fallback: CollectionDetailStyle.popup,
+    );
     _lastApiPort = _sanitizePort(prefs.getInt(_kLastApiPort));
     final rawHistory = prefs.getStringList(_kBaseUrlHistory);
     _baseUrlHistory = _sanitizeHistory(rawHistory);
@@ -474,5 +537,24 @@ class SettingsStore extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kThemeMode, value.name);
+  }
+
+  /// 选宽屏下集合详情的形态。**先 `notifyListeners()` 再落盘**：画廊监听着它，
+  /// 改完当场换形态（不许要求重启），磁盘那一步不该挡在界面响应前面。
+  Future<void> setCollectionDetailWide(CollectionDetailStyle value) async {
+    if (_collectionDetailWide == value) return;
+    _collectionDetailWide = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kCollectionDetailWide, value.name);
+  }
+
+  /// 选窄屏下集合详情的形态（同上：当场生效）。
+  Future<void> setCollectionDetailNarrow(CollectionDetailStyle value) async {
+    if (_collectionDetailNarrow == value) return;
+    _collectionDetailNarrow = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kCollectionDetailNarrow, value.name);
   }
 }

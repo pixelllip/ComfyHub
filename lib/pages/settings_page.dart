@@ -759,6 +759,51 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                           ),
                         ),
+                        const Divider(height: 1),
+                        // 「集合详情」两种形态由**用户自己定**（用户 2026-10-18：
+                        // "能不能让我自由选择在电脑/手机排版的画廊的集合详情行为？"）
+                        // —— 以前是代码按宽度档替他定（宽屏停靠、窄屏弹窗）。
+                        // 两个宽度档各一项，改完**当场生效**：`SettingsStore` 是
+                        // ChangeNotifier，画廊那边 watch 着它。
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('集合详情：宽屏'),
+                          subtitle: const Text(
+                            '窗口够宽（≥ 900）时用哪种。停靠面板 = 占住真实布局、画廊网格自己收窄，'
+                            '谁都不遮谁；居中弹窗 = 浮在画廊上、背景虚化。',
+                          ),
+                          trailing: SegmentedButton<CollectionDetailStyle>(
+                            segments: [
+                              for (final style in CollectionDetailStyle.values)
+                                ButtonSegment(value: style, label: Text(style.label)),
+                            ],
+                            selected: {settings.collectionDetailWide},
+                            onSelectionChanged: (picked) =>
+                                settings.setCollectionDetailWide(picked.first),
+                            showSelectedIcon: false,
+                            style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                          ),
+                        ),
+                        const Divider(height: 1),
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('集合详情：窄屏'),
+                          subtitle: const Text(
+                            '窗口较窄（< 900）时用哪种。停靠面板 = 占住真实布局、画廊网格自己收窄'
+                            '（窗口很窄时网格会被挤得很小）；居中弹窗 = 浮在画廊上、背景虚化。',
+                          ),
+                          trailing: SegmentedButton<CollectionDetailStyle>(
+                            segments: [
+                              for (final style in CollectionDetailStyle.values)
+                                ButtonSegment(value: style, label: Text(style.label)),
+                            ],
+                            selected: {settings.collectionDetailNarrow},
+                            onSelectionChanged: (picked) =>
+                                settings.setCollectionDetailNarrow(picked.first),
+                            showSelectedIcon: false,
+                            style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                          ),
+                        ),
                         // 「打开项目目录」是资源管理器的事，手机上没有这一说
                         if (isWindowsDesktop) ...[
                           const Divider(height: 1),
@@ -777,7 +822,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
               ),
-              estimatedHeight: 200,
+              estimatedHeight: 380,
             ),
           ],
         ),

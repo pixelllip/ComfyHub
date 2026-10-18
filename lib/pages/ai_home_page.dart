@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../core/api_client.dart';
 import '../core/file_clipboard.dart';
+import '../core/file_drop.dart';
 import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
@@ -3064,16 +3065,41 @@ class _ComposerState extends State<_Composer> {
   /// `/` 后面的查询词；null = 不显示 Skill 菜单。
   String? _slashQuery;
 
+  /// 拖进窗口的文件（原生 `WM_DROPFILES` → `comfyhub/file_drop`）。取消订阅用。
+  StreamSubscription<List<String>>? _dropSub;
+
   @override
   void initState() {
     super.initState();
     widget.controller.addListener(_onControllerChanged);
+    // 拖进来的文件**挂成附件**（用户 2026-10-18："实现拖拽进窗口（AI工作台）"）。
+    //
+    // ⚠ 听的是**全局广播流**，不是"输入框上的拖放区域"：Flutter 框架没有
+    // "外部文件拖进窗口"的 API（`Draggable`/`DragTarget` 只传应用内的数据），
+    // 真正收到文件的是**顶层窗口**的 `WM_DROPFILES`（原生那半边）。
+    // 所以"拖到哪里"这件事在原生侧根本不区分 —— 拖进窗口任意位置都算，
+    // 这正好也符合直觉（整个工作台都是投放区）。
+    if (FileDrop.supported) {
+      _dropSub = FileDrop.stream.listen(_attachDropped);
+    }
   }
 
   @override
   void dispose() {
+    _dropSub?.cancel();
     widget.controller.removeListener(_onControllerChanged);
     super.dispose();
+  }
+
+  /// 一批拖进来的路径 → 挂成附件。
+  ///
+  /// 与 `Ctrl+V` 走的是**同一个** `attachFiles`，所以"拖进来"和"粘进来"的
+  /// 附件形状、去重、上限完全一致 —— 不为拖放另开一条准入路径。
+  void _attachDropped(List<String> paths) {
+    if (!mounted || paths.isEmpty) return;
+    unawaited(widget.store.attachFiles([
+      for (final path in paths) (name: _fileNameOf(path), path: path),
+    ]));
   }
 
   /// `/` 菜单：输入区里最后一段要是 `/xxx`（行首或空格后）才弹出来。
@@ -3255,6 +3281,9 @@ class _ComposerState extends State<_Composer> {
                   minLines: 2,
                   maxLines: 8,
                   textInputAction: TextInputAction.newline,
+                  // ⚠ 右键「粘贴」必须换成我们自己的那条，否则它只读文本、
+                  // 会把"文件路径"当内容贴进来（见 `_composerContextMenu`）
+                  contextMenuBuilder: _composerContextMenu,
                   decoration: const InputDecoration(
                     hintText: '描述你的生图 / 生视频需求，或输入 / 调用 Skill（Enter 发送，Shift+Enter 换行）',
                     border: OutlineInputBorder(),
@@ -3452,6 +3481,34 @@ class _ComposerState extends State<_Composer> {
 
   /// `Ctrl+V`：剪贴板里有**文件**就吃成附件，没有就把这次粘贴**还回去**。
   ///
+  /// 输入框的右键菜单：把内置的「粘贴」换成**我们自己的**那条。
+  ///
+  /// ⚠ 为什么必须有它 —— **Ctrl+V 与右键「粘贴」是两条完全不同的路**：
+  ///
+  /// * `Ctrl+V` 被 [`_onComposerKey`] 拦下来，读剪贴板里的 `CF_HDROP` → 挂成附件；
+  /// * 右键那条走 `EditableText` 内置的粘贴动作，**只读 `CF_UNICODETEXT`**。
+  ///
+  /// 偏偏 [`FileClipboard.writeFiles`] 为了让记事本 / 聊天框之类也能粘，
+  /// **故意**额外写了一份文本兜底 —— 而那份文本就是**路径串本身**。
+  /// 于是"复制一个文件、右键粘贴"粘出来的是文件路径（用户 2026-10-18 报的）。
+  /// 换掉这一项之后，两条路都走同一个 `_pasteFilesOrText`：有文件挂附件、没有才粘文本。
+  Widget _composerContextMenu(BuildContext context, EditableTextState state) {
+    final items = withReplacedPaste(
+      state.contextMenuButtonItems,
+      () {
+        state.hideToolbar();
+        unawaited(_pasteFilesOrText());
+      },
+    );
+    return AdaptiveTextSelectionToolbar.buttonItems(
+      anchors: state.contextMenuAnchors,
+      buttonItems: items,
+    );
+  }
+
+  /// 那条"原生通道没接上"的提示**只说一次**（别每次 Ctrl+V 都弹）。
+  bool _clipboardNoticeShown = false;
+
   /// 用户 2026-10-18："ctrl+v不能粘贴附件。"
   ///
   /// # 为什么这里必须异步 + 自己兜底
@@ -3480,12 +3537,19 @@ class _ComposerState extends State<_Composer> {
     final paths = await FileClipboard.readFiles();
     if (!mounted) return;
     if (paths.isNotEmpty) {
-      await widget.store.attachFiles(
-        [for (final path in paths) (name: _fileNameOf(path), path: path)],
-      );
+      // 与"拖进来"共用同一条路（形状、去重、上限都一致）
+      _attachDropped(paths);
       return;
     }
-    // 没有文件 → 这是一次**普通文本粘贴**，原样实现一遍交给输入框
+    // 没有文件 → 先看是不是**原生那一半压根没接上**："通道没编进产物"与"剪贴板里
+    // 确实没有文件"表现完全一样，静默降级的话这一档永远查不出来（只说一次）。
+    if (FileClipboard.channelAlive == false && !_clipboardNoticeShown) {
+      _clipboardNoticeShown = true;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+        content: Text('读剪贴板文件的原生通道没接上：Ctrl+V 现在只能粘文本'),
+      ));
+    }
+    // 这是一次**普通文本粘贴**，原样实现一遍交给输入框
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text;
     if (!mounted || text == null || text.isEmpty) return;
@@ -3512,6 +3576,41 @@ class _ComposerState extends State<_Composer> {
 
 class _SendIntent extends Intent {
   const _SendIntent();
+}
+
+/// 把右键菜单里的「粘贴」换成 `onPaste`（**位置不变**；内置项里没有就补在末尾）。
+///
+/// 抽成公开的纯函数只为一件事：**让它可测**。它是"右键粘贴别把文件路径当文本贴进来"
+/// 的**唯一**防线，而这种"换掉一个内置菜单项"的改动一旦被谁改回去，
+/// 界面上不会报任何错、只会安安静静粘出一串 `D:\...`（见 `_composerContextMenu`）。
+///
+/// 为什么要补末尾那一手：光标落在只读位置之类的场景下，内置项里**压根没有**「粘贴」，
+/// 不补的话用户在这一档就没有任何粘贴入口了。
+@visibleForTesting
+List<ContextMenuButtonItem> withReplacedPaste(
+  List<ContextMenuButtonItem> items,
+  VoidCallback onPaste,
+) {
+  // ⚠ `type` 必须显式写回 `paste`：`ContextMenuButtonItem` 不传 `type` 时默认是
+  // `custom`，而平台相关的**排序与文案**是看 `type` 的 —— 丢了类型会变成
+  // "菜单位置对但样式/排序跟别处不一样"，且不报错。
+  final paste = ContextMenuButtonItem(
+    type: ContextMenuButtonType.paste,
+    label: '粘贴',
+    onPressed: onPaste,
+  );
+  final out = <ContextMenuButtonItem>[];
+  var replaced = false;
+  for (final item in items) {
+    if (item.type == ContextMenuButtonType.paste) {
+      out.add(paste);
+      replaced = true;
+    } else {
+      out.add(item);
+    }
+  }
+  if (!replaced) out.add(paste);
+  return out;
 }
 
 class _Banner extends StatelessWidget {

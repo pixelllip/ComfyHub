@@ -26,14 +26,17 @@ class GalleryPage extends StatefulWidget {
 /// 集合面板的尺寸区间。
 ///
 /// ⚠ 它们**不是布局断点** —— 断点仍然只有 `kWideLayoutMinWidth` 一个。
-/// 这三个数说的是"这块面板自己长什么样"，不是"窗口够不够宽"。
+/// 这两个数说的是"这块面板自己长什么样"，不是"窗口够不够宽"。
 ///
-/// * 面板最窄 / 最宽：再窄里面的成员格子没法看，再宽就喧宾夺主；
-/// * 网格最小宽度：**并排的判据**是"扣掉面板之后网格还剩得下这么多"，
-///   不够就老老实实退回居中弹窗（否则 900 出头的小窗口上网格会被挤没）。
+/// * 面板最窄 / 最宽：再窄里面的成员格子没法看，再宽就喧宾夺主。
+///
+/// ⚠ **"停靠还是弹窗"不由这几个数决定**（用户 2026-10-18："能不能让我自由选择…"）：
+/// 形态**只看设置**（`SettingsStore.collectionDetailWide` / `collectionDetailNarrow`，
+/// 见 [_libraryBody]），这里的宽度算式只管"停靠时这块面板多宽"。
+/// 以前还有一条"扣掉面板后网格剩不下 `kCollectionGridMinWidth` 就退回弹窗"的
+/// 自动回退 —— **已删**：那正是替用户做决定，他要的是"我自己定"。
 const double kCollectionPanelMinWidth = 300;
 const double kCollectionPanelMaxWidth = 480;
-const double kCollectionGridMinWidth = 420;
 
 /// 测试用：强制"鼠标优先"这个判据（`Platform` 在用例里改不动）。
 ///
@@ -543,17 +546,20 @@ class _GalleryPageState extends State<GalleryPage> {
     );
 
     final open = _openFolder != null;
-    final panelWidth = collectionPanelWidth(available);
-    // 用户 2026-10-18 拍板："停靠面板适合电脑 UI，弹窗适合手机 UI，
-    // 手机 UI 限制弹窗大小就可以了。"
+    // ⚠ 两件事**分工**，别混：
     //
-    // 所以是**两个条件都要**：
-    // ① 先看**设备类别**（`kWideLayoutMinWidth`，仍然是唯一的布局断点）——
-    //    手机上永远用居中小弹窗，跟窗口碰巧有多宽无关；
-    // ② 再看**剩余空间**：扣掉面板之后网格还得剩得下 `kCollectionGridMinWidth`，
-    //    否则宁可退回弹窗，也不要把网格挤成一条缝（用户报的"窄屏很难用"）。
+    //  · **形态**（停靠 / 弹窗）只由**用户的设置**决定 —— 宽档读
+    //    `collectionDetailWide`、窄档读 `collectionDetailNarrow`
+    //    （用户 2026-10-18："能不能让我自由选择在电脑/手机排版的画廊的集合详情行为？"）。
+    //    这里**刻意没有任何"空间不够就回退弹窗"的分支**：那是上一版替用户做的决定，
+    //    而这次他要的恰恰是"我自己定" —— 选了停靠就停靠，哪怕窗口很窄。
+    //  · **面板宽度**由 [collectionPanelWidth] 决定（随可用宽度缩放、夹在 300~480）。
+    //    它是"停靠时面板长什么样"，跟"停靠还是弹窗"是两件事 —— 一个字都不改。
+    final settings = context.watch<SettingsStore>();
     final wide = MediaQuery.sizeOf(context).width >= kWideLayoutMinWidth;
-    final docked = open && wide && available - panelWidth >= kCollectionGridMinWidth;
+    final style = wide ? settings.collectionDetailWide : settings.collectionDetailNarrow;
+    final docked = open && style == CollectionDetailStyle.dock;
+    final panelWidth = collectionPanelWidth(available);
 
     return Stack(
       children: [
@@ -562,8 +568,9 @@ class _GalleryPageState extends State<GalleryPage> {
               ? Row(
                   children: [
                     Expanded(child: grid),
-                    // ⚠ 宽屏：面板**占真实布局空间**（网格自己收窄），
-                    // 谁都不遮谁 —— 于是"让开 / 回来 / 只藏不销毁"整套机制都不需要。
+                    // 停靠：面板**占真实布局空间**（网格自己收窄），谁都不遮谁 ——
+                    // 于是"让开 / 回来 / 只藏不销毁"整套机制都不需要。
+                    // （选停靠的是**用户**，不是"窗口够宽"这个判据，见上面 [docked]）
                     SizedBox(
                       width: panelWidth,
                       child: LayoutBuilder(
@@ -575,7 +582,7 @@ class _GalleryPageState extends State<GalleryPage> {
                 )
               : grid,
         ),
-        // 窄屏才用居中弹窗（虚化背景；拖出去时它彻底让开，见 `_folderLayer`）
+        // 用户选了弹窗才用居中弹窗（虚化背景；拖出去时它彻底让开，见 `_folderLayer`）
         if (open && !docked) _folderLayer(theme),
         // 拖动中给一条"移出集合"的落点提示（两种形态都有；
         // 现在**随手松手**也算移出，它只是顺手接得住）
@@ -905,10 +912,9 @@ class _GalleryPageState extends State<GalleryPage> {
     );
   }
 
-  /// 集合面板：**宽屏停靠、窄屏居中弹窗**。
-  ///
-  /// 用户 2026-10-18 拍板："都可以留，停靠面板适合电脑 UI，弹窗适合手机 UI，
-  /// 手机 UI 限制弹窗大小就可以了。"
+  /// 集合面板本体：**停靠还是居中弹窗由用户的设置决定**
+  /// （`SettingsStore.collectionDetailWide` / `collectionDetailNarrow`，见 [_libraryBody]）。
+  /// [docked] 只影响它自己的外观（圆角 / 阴影 / 尺寸），不参与"谁决定形态"。
   ///
   /// ⚠ **整个面板本身是一个落点**：只把成员格子做成落点的话，"把外面的一张加进这一组"
   /// 就没有地方可放 —— 用户 2026-10-18 报的 B 的那个 bug 正是这个。
