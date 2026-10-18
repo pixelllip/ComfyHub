@@ -48,6 +48,73 @@ pub fn write_router() -> Router<AppState> {
         .route("/api/prompts/{id}/tags", post(add_tags))
         .route("/api/prompts/{id}/tags/{tag_id}", delete(remove_tag))
         .route("/api/media/{id}", patch(patch_media).delete(delete_media))
+        // 手动集合（2026-10-18）：建一个集合并把选中的产物一起移进去。
+        // 读那一半（`GET /api/media/collections`）在读端点表里。
+        .route("/api/media/collections", post(create_collection))
+        // 「重新自动整理」：把 `origin='auto'` 的集合全解散再按当前规则重分。
+        // ⚠ 与上面那条是**两个互相独立**的静态路径（不是同一路径的不同方法，
+        // 也不是动态段），所以两条都要写出来 —— 少了任何一条，对应操作都是 404/405。
+        .route("/api/media/collections/regroup", post(regroup_collections))
+}
+
+/// `POST /api/media/collections/regroup` 的响应体：`{"regrouped": 12}`。
+///
+/// 键名是**动词的过去式**（与 `{"deleted": id}` 同一套风格）：`regrouped` 是这次
+/// 分进组的产物条数，口径与启动回填的返回值一致（孤儿 / 已移出 / 正文空白都不算）。
+#[derive(Debug, serde::Serialize)]
+pub struct RegroupResult {
+    pub regrouped: usize,
+}
+
+/// `POST /api/media/collections/regroup`：**重新自动整理**（2026-10-18）。
+///
+/// 语义全在 [`crate::media::collection::regroup_auto`] 里，这里只负责"过事务 + 回 JSON"：
+/// 解散 auto、重分、清空集合是**一个整体**，中间崩一次就会留下"成员被摘下来了、
+/// 新组还没建"的半截状态（产物暂时不属于任何集合，且不报错）。
+///
+/// ⚠ 写端点必须注册在 `write_router()` 里（`state.write` 用的是 `BEGIN IMMEDIATE`）；
+/// 读到只读路由表里会没有事务，与红线 R2 冲突。
+async fn regroup_collections(
+    State(state): State<AppState>,
+) -> Result<Json<RegroupResult>, ApiError> {
+    // `regroup_auto` 收 `&Connection`，`Transaction` 靠 `Deref` 递过去（与 `create_manual` 同一条路）。
+    let regrouped = state.write(|tx| crate::media::collection::regroup_auto(tx))?;
+    Ok(Json(RegroupResult { regrouped }))
+}
+
+/// `POST /api/media/collections` 的请求体。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCollectionInput {
+    pub media_ids: Vec<i64>,
+    /// 集合名字，可空（界面会催一句，但不强制）。
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// `POST /api/media/collections`：**新建手动集合**（201 + 新集合摘要）。
+///
+/// 一次调用同时做三件事，所以必须在一个事务里：建集合行、把选中产物挂进去、
+/// 收拾被搬空的老集合。中间崩一次就会留下"集合建了、成员没进去"的空壳。
+///
+/// ⚠ 拒绝的情况（400）与拒绝的**理由**：
+/// * 选中的产物 kind 不一致（"一个集合只能装一种"）；
+/// * 一条都没选。
+async fn create_collection(
+    State(state): State<AppState>,
+    Json(body): Json<CreateCollectionInput>,
+) -> Result<(StatusCode, Json<crate::web::models::MediaCollectionDto>), ApiError> {
+    let created = state.write(|tx| {
+        crate::media::collection::create_manual(tx, &body.media_ids, body.title.as_deref())
+    })?;
+    let summary = state
+        .with(|conn| {
+            crate::media::collection::list(conn).map_err(crate::web::routes::as_sql_error)
+        })?
+        .into_iter()
+        .find(|c| c.id == created)
+        .ok_or_else(|| ApiError::internal("集合刚建好就找不到了"))?;
+    Ok((StatusCode::CREATED, Json(summary.into())))
 }
 
 /// `PATCH /api/media/{id}`：改标题 / 关联提示词 / 收藏 / 备注 / NSFW 标记。

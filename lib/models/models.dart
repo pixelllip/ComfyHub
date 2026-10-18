@@ -514,6 +514,48 @@ class MediaAsset {
   bool get isCollection => collectionId != null && collectionSize > 1;
 }
 
+/// 一个**集合**的摘要（后端 `GET /api/media/collections`，2026-10-18 手动集合）。
+///
+/// 两种集合本来就是两种东西，界面上必须分得清：
+/// * `auto` = 算法按提示词分出来的（**没有名字**，可以重新算）；
+/// * `manual` = 用户建的、或者被用户改过的（有名字，算法不再动它）。
+class MediaCollection {
+  final int id;
+  final String kind;
+  /// `auto` / `manual`
+  final String origin;
+  /// 用户起的名字。算法分出来的为 null。
+  final String? title;
+  final int size;
+
+  const MediaCollection({
+    required this.id,
+    required this.kind,
+    required this.origin,
+    this.title,
+    this.size = 0,
+  });
+
+  bool get isManual => origin == 'manual';
+
+  /// 界面上显示的名字：手动集合用人起的名字；算法的如实说"算法分组（几张）"。
+  String get label {
+    final named = title?.trim() ?? '';
+    return named.isEmpty ? '算法分组（$size 张）' : named;
+  }
+
+  /// 装不装得下 [mediaKind]（一个集合只装一种，用户 2026-10-18 拍板）。
+  bool accepts(String mediaKind) => kind.toUpperCase() == mediaKind.toUpperCase();
+
+  factory MediaCollection.fromJson(Map<String, dynamic> json) => MediaCollection(
+        id: (json['id'] as num).toInt(),
+        kind: (json['kind'] ?? 'IMAGE').toString(),
+        origin: (json['origin'] ?? 'auto').toString(),
+        title: json['title']?.toString(),
+        size: (json['size'] as num?)?.toInt() ?? 0,
+      );
+}
+
 // ===========================================================================
 //  分页
 // ===========================================================================

@@ -330,6 +330,19 @@ async fn main() {
         });
     }
 
+    // ---- ComfyUI `/object_info` 预热 ---------------------------------------
+    //
+    // 它是**兆字节级**响应，蓝图 / 配方 / 体检 / 盘查都要它。以前每开一次蓝图重新拉一遍
+    // + 重新解析一遍，于是"点开蓝图"明显比 ComfyUI 自己慢（用户 2026-10-18）。
+    // 这里在后台先取一次把缓存填上：ComfyUI 没起时**静默失败**（不缓存失败），
+    // 下次真正要用时会照常重试 —— 所以这条预热永远不会让状态变坏。
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let _ = comfyhub_server_rs::workflow::workflow_recipe::object_info_of(&state).await;
+        });
+    }
+
     // ---- 手机排队提交的清扫循环（M5，契约 §4.1）-----------------------------
     //
     // 它同时干三件事，都是"受理了但还没跑完不会丢"的兜底：
@@ -356,66 +369,75 @@ async fn main() {
         });
     }
 
-    // ---- 产物**集合**的存量回填（2026-10-11）---------------------------------
+    // ---- 产物**集合**的存量归并（2026-10-11）---------------------------------
     //
     // 老库刚补上 `collection_id` 那一列时**全是 NULL**，不跑这一趟就"一个集合都没有"，
     // 界面上表现为"这个功能好像没做"（而且不报错）。
     //
-    // 三条纪律：
+    // 四条纪律：
     //  ① **只补 `collection_id IS NULL` 的行** —— 用户手动拆开/合并过的（`origin='manual'`）
     //     和已经分好组的一律不碰（`collection::backfill` 里守着这条）；
-    //  ② **按 `created_at` 升序**跑，同一组的成员顺序 = 调参的先后；
-    //  ③ **没活儿就不动**：先数一下，0 条直接返回（每次启动都全表扫一遍太亏）。
+    //  ② **只有"同款 >= 2 张"才算活**（独苗不成组）—— 探针 `pending_grouped` 与回填
+    //     **共用同一份分桶**，所以下面那个数字就是"马上要做的事"，不是估算；
+    //  ③ **有活才跑、才打；没活一行都不打**（别打"已分 0 张"那种废话）；
+    //  ④ **收尾一定要跑**（与有没有活无关）—— 见下面「收尾」那一段。
     // 跑在后台线程里、不阻塞端口监听 —— 它可能要给几万条产物算 key。
     {
         let state = state.clone();
         std::thread::spawn(move || {
-            let pending = state.with(|conn| {
-                Ok(conn.query_row(
-                    "SELECT COUNT(*) FROM media_assets WHERE collection_id IS NULL",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )?)
-            });
-            let pending = match pending {
-                Ok(n) if n > 0 => n,
-                Ok(_) => return,
+            // `state.with` 的回调只认 `rusqlite::Result`，而归并 / 收尾报的是
+            // `WriteError`（端点层才需要那几档区分）。这里只是启动期的一趟，把错因
+            // 转成文字塞回 rusqlite 就行。
+            fn as_sql(e: comfyhub_server_rs::library::repo::WriteError) -> rusqlite::Error {
+                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
+                    e.to_string(),
+                )))
+            }
+
+            let pending = match state.with(|conn| {
+                comfyhub_server_rs::media::collection::pending_grouped(conn).map_err(as_sql)
+            }) {
+                Ok(n) => n,
                 Err(e) => {
-                    eprintln!("[collection] 数未分组的产物失败：{}", e.human());
+                    eprintln!("[collection] 统计待归并产物失败（不影响使用）：{}", e.human());
                     return;
                 }
             };
-            // `state.with` 的回调要的是 `rusqlite::Result`，而 `backfill` 报的是
-            // `WriteError`（它要区分"参数不合法/冲突"那几档，端点层用得上）。
-            // 这里只是启动期的一趟回填，把错因转成文字塞回 rusqlite 就行。
-            // 顺带收拾**空集合**：`collection_id` 是 `ON DELETE SET NULL`，删产物不会带走
-            // 集合行，所以老版本/异常中断可能留下"点不开的空格子"。幂等、一次 SQL。
-            // 收拾失败不影响回填（它只是清洁工作），所以这里只记一句。
-            let pruned = match state.with(|conn| {
-                comfyhub_server_rs::media::collection::prune_all_empty(conn).map_err(|e| {
-                    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
-                        e.to_string(),
-                    )))
-                })
-            }) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("[collection] 清空集合失败（不影响使用）：{}", e.human());
-                    0
+
+            // 归并（有活才跑、才打：`pending` 就是"几组 / 几张"）。
+            if pending.0 > 0 {
+                match state.with(|conn| {
+                    comfyhub_server_rs::media::collection::backfill(conn).map_err(as_sql)
+                }) {
+                    // 探针与回填**同一份分桶**，所以回填的返回值恒等于 `pending.1`
+                    // （真差了这个数只可能是中途出错，那会走下面的 Err 分支）——
+                    // 日志里就不再重复计一个计数器了。
+                    Ok(_) => println!(
+                        "[collection] 存量归并：{} 组 / {} 张",
+                        pending.0, pending.1
+                    ),
+                    // 归并失败**不拦启动**：集合只是分组视图，缺了不影响产物本身
+                    Err(e) => eprintln!("[collection] 存量归并失败（不影响使用）：{}", e.human()),
                 }
-            };
+            }
+
+            // 收尾：解散"`auto` 且只剩 1 个成员"的集合 + 清掉 0 成员的空壳
+            //    （用户 2026-10-18 报的"旧集合元素为 1，旧集合没有自动解散"）。
+            //
+            //    ⚠ **必须在归并之后**：归并把产物挂进集合，收尾看的是挂完之后还剩几个成员。
+            //    ⚠ 而且**不管有没有归并的活都要跑**，三个理由：
+            //       ① 历史库里遗留的单成员 auto 组，归并永远不碰它（成员都还有归属）；
+            //       ② 这一趟归并**没有包在事务里**（`state.with` 是逐条自动提交），
+            //          中途中断可能留下半截的单成员组；
+            //       ③ 顺带清掉点不开的空壳。
             match state.with(|conn| {
-                comfyhub_server_rs::media::collection::backfill(conn).map_err(|e| {
-                    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
-                        e.to_string(),
-                    )))
-                })
+                comfyhub_server_rs::media::collection::prune_singleton_auto(conn).map_err(as_sql)
             }) {
-                Ok(n) => println!(
-                    "[collection] 存量回填：{pending} 条待分组，已分 {n} 条；清掉空集合 {pruned} 个"
-                ),
-                // 回填失败**不拦启动**：集合只是分组视图，缺了不影响产物本身
-                Err(e) => eprintln!("[collection] 存量回填失败（不影响使用）：{}", e.human()),
+                Ok(n) if n > 0 => println!("[collection] 解散单成员自动集合：{n} 个"),
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("[collection] 解散单成员集合失败（不影响使用）：{}", e.human())
+                }
             }
         });
     }

@@ -4,6 +4,7 @@
 //! 蓝图（可绘制的节点-连线模型 + 接线体检）。
 
 pub mod graph_parse;
+pub mod object_info_cache;
 pub mod workflow_audit;
 pub mod workflow_blueprint;
 pub mod workflow_convert;

@@ -535,3 +535,57 @@ class _ZoomBar extends StatelessWidget {
         constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
       );
 }
+
+/// 在**应用内**弹一个大图预览（不跳系统浏览器）。
+///
+/// 为什么要有这个封装：`ZoomableImageView` 本身只是个"铺满父级"的组件，
+/// 聊天里的图片附件以前直接 `launchUrl(externalApplication)`，于是点一张参考图
+/// 会把整个浏览器拉起来（用户 bug 2026-10-18）。查看器早就有，缺的只是这个入口。
+///
+/// 尺寸按窗口的 86% 给（有上下限），这样窄窗口里不会挤出屏幕、宽屏也不会糊成一片。
+Future<void> showImagePreview(
+  BuildContext context, {
+  required String url,
+  Size? imageSize,
+}) {
+  final screen = MediaQuery.sizeOf(context);
+  final width = (screen.width * 0.86).clamp(320.0, 1400.0);
+  final height = (screen.height * 0.86).clamp(260.0, 1000.0);
+  return showDialog<void>(
+    context: context,
+    // 看大图时把背后压暗：不然聊天气泡会从四边漏进来抢注意力
+    barrierColor: Colors.black.withValues(alpha: 0.82),
+    builder: (context) => Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.all(16),
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: ZoomableImageView(url: url, imageSize: imageSize),
+              ),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Material(
+                color: Colors.black.withValues(alpha: 0.45),
+                shape: const CircleBorder(),
+                child: IconButton(
+                  tooltip: '关闭',
+                  icon: const Icon(Icons.close, size: 18, color: Colors.white),
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}

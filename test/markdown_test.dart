@@ -154,6 +154,57 @@ void main() {
     });
   });
 
+  group('##强调##（本仓库约定的标记，与 **粗体** 同义）', () {
+    test('成对的 ##文字## 渲染成粗体，界面上不留 # 字符', () {
+      expect(parseInline('##模拟用户行为##'), [const MdInline('模拟用户行为', bold: true)]);
+
+      // 仓库里的真实写法（workflow_blueprint.rs）：夹在正文与行内代码中间
+      final spans = parseInline('② 提交时开 ##模拟用户行为##（`comfy_load_workflow`）');
+      expect(spans.firstWhere((s) => s.text == '模拟用户行为').bold, isTrue);
+      expect(spans.any((s) => s.text.contains('#')), isFalse, reason: '不能有裸露的 #');
+      expect(spans.where((s) => s.bold && !s.code), hasLength(1), reason: '一段粗体就够了');
+
+      // 系统提示 / 工具描述里的写法：分隔符内侧带空格，空格不算内容
+      expect(parseInline('## 模拟用户行为 ##'), [const MdInline('模拟用户行为', bold: true)]);
+
+      // 段落走一遍：界面上看到的确实是粗体，不是字面量
+      final d = dump(parseMarkdown('提交时开 ##模拟用户行为##（默认开着）'));
+      expect(d, contains('b:模拟用户行为'));
+      expect(d, isNot(contains('#')));
+    });
+
+    test('成对才认：收尾缺失 / 空内容一律原样保留', () {
+      // 流式吐到一半时不能吞内容，也不能凭空多出粗体
+      expect(parseInline('## 没有收尾'), [const MdInline('## 没有收尾')]);
+      expect(parseInline('##模拟用户行为'), [const MdInline('##模拟用户行为')]);
+      // `####` 是空内容，不能产出一个空的粗体 span
+      expect(parseInline('####'), [const MdInline('####')]);
+      expect(parseInline('## ##'), [const MdInline('## ##')]);
+    });
+
+    test('与既有规则不打架：**粗体** 照旧，单个 # 不被吃掉', () {
+      expect(parseInline('**a**'), [const MdInline('a', bold: true)]);
+      expect(parseInline('# 一行注释'), [const MdInline('# 一行注释')]);
+      // 标题仍然是标题（行为一个字没改）
+      expect(dump(parseMarkdown('# 标题')), 'H1(标题)');
+
+      final spans = parseInline('##A## 和 **B** 以及 `##C##`');
+      expect(spans.firstWhere((s) => s.text == 'A').bold, isTrue);
+      expect(spans.firstWhere((s) => s.text == 'B').bold, isTrue);
+      expect(spans.map((s) => s.text).join(), 'A 和 B 以及 ##C##');
+    });
+
+    test('行内代码里的 ## 不生效（与 ** 的处理一致）', () {
+      expect(parseInline('`##x##`'), [const MdInline('##x##', code: true)]);
+
+      final spans = parseInline('用 `##模拟用户行为##` 打开');
+      expect(spans.firstWhere((s) => s.code).text, '##模拟用户行为##');
+      expect(spans.any((s) => s.bold), isFalse);
+      // 代码段后面的正文照常是正文
+      expect(spans.last.text, ' 打开');
+    });
+  });
+
   group('表格（GFM）', () {
     test('表头 + 分隔行 + 数据行解析成 MdTable', () {
       final blocks = parseMarkdown('''

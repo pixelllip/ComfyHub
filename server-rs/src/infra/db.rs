@@ -82,7 +82,15 @@ pub const SCHEMA_SQL: &str = include_str!("../../../db/schema.sqlite.sql");
 /// 2026-10-11 由 7 提到 8：给 `prompts` 加 `negative_mode`（发送模式：保留 / 只发正面）。
 /// 加的是**列**（走 [`NEW_COLUMNS`]）；bump 的另一个作用是让 `manifest.schemaVersion`
 /// 变化，手机据此重走一次 bootstrap（提示词形状变了）。
-pub const SCHEMA_VERSION: i64 = 8;
+/// **2026-10-18 由 8 提到 9：手动集合两列** ——
+/// ① `media_collections.title`（用户给集合起的名字，可空）；
+/// ② `media_assets.collection_opt_out`（用户**明确把这一条移出集合**了）。
+///
+/// ⚠ ② 不是"锦上添花的标记"，是**正确性的前提**：`backfill` 的判据是
+/// `collection_id IS NULL`，而"移出集合"恰恰就是把它置成 NULL ——
+/// 没有这一列，用户刚拖出去的那张会在**下次启动**被回填静默吸回原组
+/// （`collection.rs` 里那句"手动拆开过的一律不碰"就只是一句空承诺）。
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// **"这一列必须存在"的声明式清单**（2026-09-30 起）。
 ///
@@ -115,6 +123,19 @@ const NEW_COLUMNS: &[(&str, &str, &str)] = &[
         "prompts",
         "negative_mode",
         "ALTER TABLE prompts ADD COLUMN negative_mode TEXT NOT NULL DEFAULT 'keep'",
+    ),
+    // 手动集合的名字（2026-10-18）。可空：算法分出来的集合没有名字。
+    (
+        "media_collections",
+        "title",
+        "ALTER TABLE media_collections ADD COLUMN title TEXT NULL",
+    ),
+    // 「用户已明确把这一条移出集合」（2026-10-18）。带默认值 0 → 符合加列规矩。
+    // ⚠ `backfill` 的 WHERE 必须带上 `AND collection_opt_out = 0`，否则"移出"下次启动就复原。
+    (
+        "media_assets",
+        "collection_opt_out",
+        "ALTER TABLE media_assets ADD COLUMN collection_opt_out INTEGER NOT NULL DEFAULT 0",
     ),
 ];
 

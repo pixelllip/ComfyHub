@@ -150,4 +150,14 @@ pub struct MediaUpdate {
     /// 手动标记 / 取消标记成人内容（只影响预览图打不打码）
     #[serde(default)]
     pub nsfw: Option<bool>,
+    /// 手动**移进**某个集合（2026-10-18）。与 `promptId` 同形：`None` = 这次不动归属。
+    ///
+    /// 目标集合的 `kind` 必须与产物一致，否则 400（"手动集合不混图像和视频"）。
+    #[serde(default)]
+    pub collection_id: Option<i64>,
+    /// 手动**移出**集合（2026-10-18）。与 `clearPrompt` 同形 —— 少了它，界面就永远
+    /// 拆不开一组。⚠ 落库时会同时写 `collection_opt_out = 1`，否则下次启动的
+    /// `backfill` 会把这一条**静默吸回原组**。
+    #[serde(default)]
+    pub clear_collection: bool,
 }

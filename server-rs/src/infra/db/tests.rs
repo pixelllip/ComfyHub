@@ -146,7 +146,10 @@ fn open_or_create_heals_the_collection_table_and_column_together() {
     // （`error in index idx_media_collection after drop column`），所以先删索引 ——
     // 重开库时 DDL 会把索引一起补回来（`CREATE INDEX IF NOT EXISTS`）。
     conn.execute_batch(
-        "DROP INDEX idx_media_collection; ALTER TABLE media_assets DROP COLUMN collection_id;",
+        "DROP INDEX idx_media_collection;
+         ALTER TABLE media_assets DROP COLUMN collection_id;
+         ALTER TABLE media_assets DROP COLUMN collection_opt_out;
+         ALTER TABLE media_collections DROP COLUMN title;",
     )
     .unwrap();
     let has: i64 = conn
@@ -157,6 +160,22 @@ fn open_or_create_heals_the_collection_table_and_column_together() {
         )
         .unwrap();
     assert_eq!(has, 0, "前提：collection_id 这一列真的没了");
+    let has_opt_out: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('media_assets') WHERE name='collection_opt_out'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_opt_out, 0, "前提：collection_opt_out 这一列真的没了");
+    let has_title: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('media_collections') WHERE name='title'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_title, 0, "前提：media_collections.title 这一列真的没了");
     drop(conn);
 
     let again = open_or_create(&path).expect("要能补列");
@@ -168,6 +187,22 @@ fn open_or_create_heals_the_collection_table_and_column_together() {
         )
         .unwrap();
     assert_eq!(has, 1, "DDL 里声明的列必须被补上");
+
+    // 2026-10-18 的两列：**老库也必须拿到**，否则
+    // ① "移出集合"失效（`backfill` 会把它吸回去）；② 手动集合没有名字。
+    for (table, column) in [
+        ("media_assets", "collection_opt_out"),
+        ("media_collections", "title"),
+    ] {
+        let n: i64 = again
+            .query_row(
+                &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='{column}'"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "老库必须补上 {table}.{column}");
+    }
 
     // 补上的列必须真的能用：建集合 → 挂产物 → 读回来
     again

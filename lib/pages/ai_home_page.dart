@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/api_client.dart';
+import '../core/file_clipboard.dart';
 import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
@@ -17,7 +18,22 @@ import '../widgets/common.dart' show FilterChipRow;
 import '../widgets/markdown_view.dart';
 import '../widgets/nsfw_blur.dart';
 import '../widgets/workflow_viewer.dart';
+import '../widgets/zoomable_image_view.dart';
 import 'media_detail_page.dart';
+
+/// 这个附件能不能**在本应用内**直接看（图片），而不是丢给系统默认程序。
+///
+/// 历史消息里的附件块**没有 modality**（后端只落 `attachmentId` 与名字），所以：
+/// * 有 modality 就信它（输入区托盘是有的）；
+/// * 没有就按扩展名兜底 —— 认不出来一律外跳（文档 / 音频 / 压缩包本来就该交给系统）。
+///
+/// 用户 bug 2026-10-18："点击会话内的图片会跳转浏览器而不是在应用内弹出小窗。"
+bool canPreviewInline(String? modality, String name) {
+  if (modality != null && modality.isNotEmpty) return modality == 'image';
+  final lower = name.toLowerCase();
+  return const ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif']
+      .any(lower.endsWith);
+}
 
 /// AI 工作台（AIH-001 / AIH-002 / AIK-002）。
 ///
@@ -3221,16 +3237,29 @@ class _ComposerState extends State<_Composer> {
                   },
                 ),
               },
-              child: TextField(
-                controller: widget.controller,
-                focusNode: widget.focusNode,
-                minLines: 2,
-                maxLines: 8,
-                textInputAction: TextInputAction.newline,
-                decoration: const InputDecoration(
-                  hintText: '描述你的生图 / 生视频需求，或输入 / 调用 Skill（Enter 发送，Shift+Enter 换行）',
-                  border: OutlineInputBorder(),
-                  isDense: true,
+              child: Focus(
+                // Ctrl+V 粘附件（用户 2026-10-18："ctrl+v不能粘贴附件"）。
+                //
+                // ⚠ 为什么把 handler 放在**这里**（紧贴 TextField 外面）：
+                // 按键是从焦点节点**往上冒泡**的，而"粘文本"是 `DefaultTextEditingShortcuts`
+                // 挂在很上面的 `Shortcuts` 里处理的。我的节点只要比它更靠近 TextField，
+                // 就一定能先看到 Ctrl+V。
+                //
+                // `canRequestFocus: false`：它只当"按键监听器"用，**不许抢文本框的焦点**。
+                canRequestFocus: false,
+                skipTraversal: true,
+                onKeyEvent: _onComposerKey,
+                child: TextField(
+                  controller: widget.controller,
+                  focusNode: widget.focusNode,
+                  minLines: 2,
+                  maxLines: 8,
+                  textInputAction: TextInputAction.newline,
+                  decoration: const InputDecoration(
+                    hintText: '描述你的生图 / 生视频需求，或输入 / 调用 Skill（Enter 发送，Shift+Enter 换行）',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
                 ),
               ),
             ),
@@ -3419,6 +3448,65 @@ class _ComposerState extends State<_Composer> {
       widget.store.noteAttachmentsUnreadable(missing);
     }
     await widget.store.attachFiles(picked);
+  }
+
+  /// `Ctrl+V`：剪贴板里有**文件**就吃成附件，没有就把这次粘贴**还回去**。
+  ///
+  /// 用户 2026-10-18："ctrl+v不能粘贴附件。"
+  ///
+  /// # 为什么这里必须异步 + 自己兜底
+  ///
+  /// "剪贴板里有没有文件"要问原生（`FileClipboard.hasFiles`），而按键回调**是同步的**
+  /// —— 没法 `await` 了再决定吃不吃这个事件。所以这里的做法是：
+  /// **先把事件吃掉**，然后异步判；没有文件就自己把文本粘进输入框。
+  ///
+  /// ⚠ 兜底那一步不能省：不还回去的话，用户按 Ctrl+V 会**什么都粘不上**
+  /// （事件被我们吃掉了，而 `DefaultTextEditingShortcuts` 没机会处理）。
+  KeyEventResult _onComposerKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (!FileClipboard.supported) return KeyEventResult.ignored;
+    if (event.logicalKey != LogicalKeyboardKey.keyV) return KeyEventResult.ignored;
+    if (!HardwareKeyboard.instance.isControlPressed) return KeyEventResult.ignored;
+    // 只认"纯 Ctrl+V"：Ctrl+Shift+V / Alt+V 有别的含义，别抢
+    if (HardwareKeyboard.instance.isShiftPressed ||
+        HardwareKeyboard.instance.isAltPressed) {
+      return KeyEventResult.ignored;
+    }
+    unawaited(_pasteFilesOrText());
+    return KeyEventResult.handled;
+  }
+
+  Future<void> _pasteFilesOrText() async {
+    final paths = await FileClipboard.readFiles();
+    if (!mounted) return;
+    if (paths.isNotEmpty) {
+      await widget.store.attachFiles(
+        [for (final path in paths) (name: _fileNameOf(path), path: path)],
+      );
+      return;
+    }
+    // 没有文件 → 这是一次**普通文本粘贴**，原样实现一遍交给输入框
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (!mounted || text == null || text.isEmpty) return;
+    final controller = widget.controller;
+    final value = controller.value;
+    final selection = value.selection;
+    final start = selection.isValid ? selection.start : value.text.length;
+    final end = selection.isValid ? selection.end : value.text.length;
+    controller.value = value.copyWith(
+      text: value.text.replaceRange(start, end, text),
+      selection: TextSelection.collapsed(offset: start + text.length),
+      composing: TextRange.empty,
+    );
+  }
+
+  /// 从磁盘路径取文件名（附件显示用）。取不到就退回整条路径 —— 界面上总得有个名字。
+  static String _fileNameOf(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    final index = normalized.lastIndexOf('/');
+    final name = index < 0 ? normalized : normalized.substring(index + 1);
+    return name.isEmpty ? path : name;
   }
 }
 
@@ -4075,12 +4163,14 @@ class _AttachmentTile extends StatelessWidget {
     final theme = Theme.of(context);
     final blocked = blockers.isNotEmpty;
     final borderColor = blocked ? theme.colorScheme.error : theme.dividerColor;
+    // 输入区托盘有 modality，直接信它（见 [canPreviewInline]）
+    final preview = canPreviewInline(attachment.modality, attachment.name);
 
     return Tooltip(
       message: blocked
           ? '这张附件发不出去：\n${blockers.map((b) => '· $b').join('\n')}'
           : '${attachment.name} · ${attachment.sizeLabel}${attachment.isVideo ? '（已取预览帧）' : ''}'
-              '\n点击在新窗口打开',
+              '\n${preview ? '点击预览' : '点击用系统程序打开'}',
       child: SizedBox(
         width: _size,
         child: Column(
@@ -4094,7 +4184,11 @@ class _AttachmentTile extends StatelessWidget {
                 children: [
                   Positioned.fill(
                     child: InkWell(
-                      onTap: fileUrl == null ? null : () => _openAttachment(fileUrl!),
+                      onTap: fileUrl == null
+                          ? null
+                          : () => preview
+                              ? showImagePreview(context, url: fileUrl!)
+                              : _openAttachment(fileUrl!),
                       child: Container(
                         clipBehavior: Clip.antiAlias,
                         decoration: BoxDecoration(
@@ -4205,10 +4299,16 @@ class _MessageAttachment extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // 历史消息没有 modality，只能按名字判（见 [canPreviewInline]）
+    final preview = canPreviewInline(null, name);
     return Tooltip(
-      message: '$name\n点击在新窗口打开',
+      message: preview ? '$name\n点击预览' : '$name\n点击用系统程序打开',
       child: InkWell(
-        onTap: fileUrl == null ? null : () => _openAttachment(fileUrl!),
+        onTap: fileUrl == null
+            ? null
+            : () => preview
+                ? showImagePreview(context, url: fileUrl!)
+                : _openAttachment(fileUrl!),
         child: Container(
           width: 96,
           height: 96,

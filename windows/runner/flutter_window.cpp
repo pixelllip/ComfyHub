@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include "clipboard_channel.h"
 #include "flutter/generated_plugin_registrant.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -25,6 +26,9 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  // 自建通道（2026-10-18）：读/写剪贴板里的**文件**（CF_HDROP）。
+  // 内置的 Clipboard 只会写 CF_UNICODETEXT，"复制文件本身"做不到 —— 见通道的头注释。
+  RegisterClipboardChannel(flutter_controller_->engine()->messenger());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {

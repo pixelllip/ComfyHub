@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../app.dart' show kWideLayoutMinWidth;
 import '../core/workflow_blueprint.dart';
+import 'markdown_view.dart';
 import 'workflow_blueprint_painter.dart';
 
 /// 蓝图取数的两个入口（详情页把 `store.api` 的两个方法包一下传进来）。
@@ -77,8 +78,26 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   bool _editing = false;
   bool _showIssues = false;
 
+  /// 正在**就地编辑**哪一行参数（`widgets_values` 的下标）。null = 没在编辑。
+  ///
+  /// 用户 2026-10-18："编辑时应该可以在蓝图上直接操作，而不是在右侧侧边栏慢慢选择。"
+  int? _editingWidget;
+
+  /// 侧/下方面板开不开。用户 2026-10-18："（况且它还不能折叠）"。
+  ///
+  /// 折叠之后画布会变宽 —— 这时**故意不重新适配**：用户多半是想多看点图，
+  /// 把视角抢回"适应窗口"反而碍事。要重新适配有工具栏那颗「适应窗口」。
+  bool _panelOpen = true;
+
   /// 初始视角只适配一次（用户自己缩放之后不许被抢回去）
   bool _fitted = false;
+
+  /// 画布**自己**的视口尺寸（不是 `_body` 的 `constraints.biggest`）。
+  ///
+  /// ⚠ 2026-10-18 用户 bug："打开之后默认跑到右上角"。真因是适配用的是**整个 body** 的
+  /// 尺寸（含右侧 380 面板与上方横幅），比画布宽一截，算出来的平移把内容推到右边。
+  /// 现在由 [`_canvasArea`] 的 `LayoutBuilder` 给出真实尺寸。
+  Size? _viewport;
 
   Timer? _debounce;
 
@@ -110,7 +129,9 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
         _loading = false;
         _blueprint = blueprint;
         _layout = BlueprintLayout.of(blueprint);
-        _fitted = false;
+        // ⚠ 这里**不许**再写 `_fitted = false`：改一个参数就会触发一次就地复检，
+        // 复位它等于"每改一次参数就把用户的视角抢回初始位置"（用户 bug 2026-10-18）。
+        // 要重新适配请用工具栏的「适应窗口」。
         // 选中的节点没了（比如换了一份图）就取消选中
         if (_selectedId != null && blueprint.nodeById(_selectedId!) == null) {
           _selectedId = null;
@@ -194,31 +215,84 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   // -------------------------------------------------------------------------
   //  画布
   // -------------------------------------------------------------------------
+
+  /// 画布四周的留白（**画布坐标**，会跟着缩放一起变小/变大）。
+  ///
+  /// `_canvas` 与 `_fitToView` **必须用同一个数**：适配的平移量是按
+  /// "图包围盒 + 这份留白"这个矩形算的，两处各写一个数就会错位。
+  static const double _canvasPadding = 40.0;
+
+  /// 把整张图**缩放对齐到窗口正中**。
+  ///
+  /// ⚠ 平移量必须按**画布坐标**算，不能拿 `bounds.left/top` 当参照系：
+  /// `origin = _canvasPadding - bounds.left`，也就是说 `bounds.left` 已经被 `origin`
+  /// 抵消过一次了，再减一次 `bounds.left * fit` 等于按"图坐标"平移到一个已经是
+  /// "画布坐标"的空间里 —— 表现就是内容整体往右下推。
+  /// 用户 bug 2026-10-18："打开之后默认跑到右上角"。
   void _fitToView(Size viewport) {
     final layout = _layout;
     if (layout == null || layout.bounds.isEmpty) return;
-    final padding = 24.0;
-    final scale = ((viewport.width - padding * 2) / layout.bounds.width)
+    // 屏幕上的留白（与画布留白是两件事：这个是"别贴边"，那个是画布自己的内边距）
+    const margin = 24.0;
+    final scaleX = ((viewport.width - margin * 2) / layout.bounds.width)
         .clamp(0.05, 1.0)
         .toDouble();
-    final scaleY = ((viewport.height - padding * 2) / layout.bounds.height)
+    final scaleY = ((viewport.height - margin * 2) / layout.bounds.height)
         .clamp(0.05, 1.0)
         .toDouble();
-    final fit = scale < scaleY ? scale : scaleY;
-    final dx = (viewport.width - layout.bounds.width * fit) / 2 - layout.bounds.left * fit;
-    final dy = (viewport.height - layout.bounds.height * fit) / 2 - layout.bounds.top * fit;
+    final fit = scaleX < scaleY ? scaleX : scaleY;
+    // 让"图包围盒 + 画布留白"这一块的**中心**落在视口中心
+    final dx = viewport.width / 2 - (_canvasPadding + layout.bounds.width / 2) * fit;
+    final dy = viewport.height / 2 - (_canvasPadding + layout.bounds.height / 2) * fit;
     _controller.value = Matrix4.identity()
       ..translateByDouble(dx, dy, 0, 1)
       ..scaleByDouble(fit, fit, 1, 1);
   }
 
-  Widget _canvas(Size viewportSize) {
+  /// 画布区：**在画布自己的 LayoutBuilder 里**量视口，再交给 [`_canvas`]。
+  ///
+  /// 两件事只有在这里才做得对：
+  /// 1. "适应窗口"要用**画布**尺寸（右/下侧面板、上方横幅都不算画布面积）；
+  /// 2. 首帧时 `_layout` 刚算好、尺寸也刚确定，这时适配一次才落在正中。
+  Widget _canvasArea() {
+    return LayoutBuilder(builder: (context, constraints) {
+      final size = constraints.biggest;
+      if (size.width > 0 && size.height > 0 && size != _viewport) {
+        _viewport = size;
+        if (!_fitted) {
+          _fitted = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            // 尺寸在这一帧里又变了就别适配了 —— 等下一次进入这个分支
+            if (mounted && _viewport == size) _fitToView(size);
+          });
+        }
+      }
+      return ValueListenableBuilder<Matrix4>(
+        valueListenable: _controller,
+        builder: (context, matrix, _) {
+          final palette = BlueprintPalette.of(Theme.of(context).brightness);
+          return Stack(
+            children: [
+              Positioned.fill(child: _canvas(size, matrix, palette)),
+              // 就地编辑层：**屏幕坐标**，盖在 `InteractiveViewer` 之上。
+              // 放进 `InteractiveViewer` 里面的话控件会跟着缩放糊掉、还会跟拖动抢手势。
+              ..._inlineEditor(matrix, size),
+            ],
+          );
+        },
+      );
+    });
+  }
+
+  Widget _canvas(Size viewportSize, Matrix4 matrix, BlueprintPalette palette) {
     final blueprint = _blueprint!;
     final layout = _layout!;
-    final padding = 40.0;
-    final width = layout.bounds.width + padding * 2;
-    final height = layout.bounds.height + padding * 2;
-    final origin = Offset(padding - layout.bounds.left, padding - layout.bounds.top);
+    final width = layout.bounds.width + _canvasPadding * 2;
+    final height = layout.bounds.height + _canvasPadding * 2;
+    final origin = Offset(
+      _canvasPadding - layout.bounds.left,
+      _canvasPadding - layout.bounds.top,
+    );
 
     return ClipRect(
       child: InteractiveViewer(
@@ -232,36 +306,103 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           height: height,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapUp: (details) {
-              final graph = details.localPosition - origin;
-              final hit = hitTestNode(layout, graph);
-              setState(() {
-                _selectedId = hit;
-                if (hit != null) _showIssues = false;
-              });
-            },
+            onTapUp: (details) => _onCanvasTap(details.localPosition, origin, layout),
             // 跟着缩放重建：**视口剔除与 LOD 都要当前变换**（`InteractiveViewer` 只变换
             // 子节点、不会重建它，所以不监听就永远拿的是首帧那个比例）。
-            child: ValueListenableBuilder<Matrix4>(
-              valueListenable: _controller,
-              builder: (context, matrix, _) {
-                return CustomPaint(
-                  size: Size(width, height),
-                  painter: BlueprintPainter(BlueprintPainterSpec(
-                    blueprint: blueprint,
-                    layout: layout,
-                    origin: origin,
-                    viewport: visibleGraphRect(matrix, viewportSize, origin),
-                    selectedId: _selectedId,
-                    scale: matrix.getMaxScaleOnAxis(),
-                  )),
-                );
-              },
+            child: CustomPaint(
+              size: Size(width, height),
+              painter: BlueprintPainter(BlueprintPainterSpec(
+                blueprint: blueprint,
+                layout: layout,
+                origin: origin,
+                viewport: visibleGraphRect(matrix, viewportSize, origin),
+                selectedId: _selectedId,
+                scale: blueprintScaleOf(matrix),
+                // 深浅主题各一套配色 —— 画笔里再写死一套就会重演"深色下压一片近白"
+                palette: palette,
+              )),
             ),
           ),
         ),
       ),
     );
+  }
+
+  /// 画布上的一次点击：先命中节点，**编辑模式下再往下一层命中"参数行"**。
+  void _onCanvasTap(Offset local, Offset origin, BlueprintLayout layout) {
+    final graph = local - origin;
+    final hit = hitTestNode(layout, graph);
+    final blueprint = _blueprint;
+    var row = _editingWidget;
+    if (hit == null || !_editing || blueprint == null) {
+      row = null;
+    } else {
+      final node = blueprint.nodeById(hit);
+      final box = layout.boxOf(hit);
+      row = (node == null || box == null) ? null : hitTestWidgetRow(node, box, graph);
+    }
+    setState(() {
+      _selectedId = hit;
+      _editingWidget = row;
+      if (hit != null) _showIssues = false;
+    });
+  }
+
+  /// 就地编辑层：把选中的那一行参数投影到屏幕，放一个真控件在那儿。
+  ///
+  /// 投影用当前 `Matrix4`（画布坐标 → 屏幕），加 `origin` 就是"图坐标 → 画布坐标"。
+  List<Widget> _inlineEditor(Matrix4 matrix, Size viewport) {
+    final index = _editingWidget;
+    final id = _selectedId;
+    final layout = _layout;
+    final blueprint = _blueprint;
+    if (!_editing || index == null || id == null || layout == null || blueprint == null) {
+      return const [];
+    }
+    final node = blueprint.nodeById(id);
+    final box = layout.boxOf(id);
+    if (node == null || box == null || index >= node.widgets.length) return const [];
+
+    final origin = Offset(
+      _canvasPadding - layout.bounds.left,
+      _canvasPadding - layout.bounds.top,
+    );
+    // 编辑器落在**值那一格**上（用户 2026-10-18："点击的时候右边出现可修改的 textfield"），
+    // 而不是盖住整个节点。
+    final cell = blueprintWidgetValueRect(node, box, index);
+    final target = Rect.fromPoints(
+      MatrixUtils.transformPoint(matrix, cell.topLeft + origin),
+      MatrixUtils.transformPoint(matrix, cell.bottomRight + origin),
+    );
+    // 只要求"这一格在屏幕上有一定宽度"：编辑器是**固定尺寸的浮层**，
+    // 不需要源格有多高 —— 缩小看全局时那一行只有几像素高，那是正常的，
+    // 因为浮层是给人打字的。
+    if (target.width < 32) return const [];
+
+    final widget = node.widgets[index];
+    final width = target.width + 4 > 150 ? target.width + 4 : 150.0;
+    final maxLeft = viewport.width - width - 4;
+    final left = (target.left - 2).clamp(4.0, maxLeft < 4 ? 4.0 : maxLeft);
+    return [
+      Positioned(
+        left: left,
+        top: target.top - 2,
+        width: width,
+        height: 34,
+        child: _InlineWidgetEditor(
+          key: ValueKey('inline-widget-${node.id}-$index-${widget.value}'),
+          label: widget.label,
+          value: widget.value,
+          onCommit: (next) {
+            if (_editor?.setWidgetValue(node.id, index, next) == true) {
+              setState(() => _editingWidget = null);
+              _afterEdit();
+            }
+          },
+          onCancel: () => setState(() => _editingWidget = null),
+        ),
+      ),
+    ];
   }
 
   // -------------------------------------------------------------------------
@@ -286,10 +427,28 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                 ),
                 label: Text('${blueprint.errorCount} 错 / ${blueprint.warnCount} 警'),
               ),
+            IconButton(
+              key: const Key('blueprint-panel-toggle'),
+              tooltip: _panelOpen ? '收起面板' : '展开面板',
+              onPressed: () => setState(() => _panelOpen = !_panelOpen),
+              icon: Icon(_panelOpen ? Icons.view_sidebar : Icons.view_sidebar_outlined),
+            ),
+            IconButton(
+              tooltip: '适应窗口',
+              onPressed: () {
+                final viewport = _viewport;
+                if (viewport != null) _fitToView(viewport);
+              },
+              icon: const Icon(Icons.fit_screen_outlined),
+            ),
             if (_editor?.editable == true)
               IconButton(
                 tooltip: _editing ? '退出编辑' : '编辑参数与节点状态',
-                onPressed: () => setState(() => _editing = !_editing),
+                onPressed: () => setState(() {
+                  _editing = !_editing;
+                  // 退出编辑就把就地编辑那一行收掉，免得留一个孤儿输入框
+                  if (!_editing) _editingWidget = null;
+                }),
                 icon: Icon(_editing ? Icons.edit_off_outlined : Icons.edit_outlined),
               ),
             IconButton(
@@ -371,13 +530,7 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     }
     return LayoutBuilder(builder: (context, constraints) {
       final wide = constraints.maxWidth >= kWideLayoutMinWidth;
-      if (!_fitted) {
-        _fitted = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _fitToView(constraints.biggest);
-        });
-      }
-      final canvas = _canvas(constraints.biggest);
+      final canvas = _canvasArea();
       final panel = _panel(theme, blueprint);
       final banner = _banner(theme, blueprint);
       if (wide) {
@@ -388,8 +541,10 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
               child: Row(
                 children: [
                   Expanded(child: canvas),
-                  const VerticalDivider(width: 1),
-                  SizedBox(width: 380, child: panel),
+                  if (_panelOpen) ...[
+                    const VerticalDivider(width: 1),
+                    SizedBox(width: 380, child: panel),
+                  ],
                 ],
               ),
             ),
@@ -400,11 +555,13 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
         children: [
           banner,
           Expanded(child: canvas),
-          const Divider(height: 1),
-          SizedBox(
-            height: (constraints.maxHeight * 0.42).clamp(200.0, 420.0),
-            child: panel,
-          ),
+          if (_panelOpen) ...[
+            const Divider(height: 1),
+            SizedBox(
+              height: (constraints.maxHeight * 0.42).clamp(200.0, 420.0),
+              child: panel,
+            ),
+          ],
         ],
       );
     });
@@ -432,9 +589,10 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           Icon(Icons.info_outline, size: 15, color: theme.colorScheme.outline),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
+            child: MarkdownText(
               notes.join('\n'),
               style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              selectable: false,
             ),
           ),
         ],
@@ -574,12 +732,21 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                     ],
                   ),
                   const SizedBox(height: 4),
-                  SelectableText(issue.detail, style: theme.textTheme.bodySmall),
+                  // ⚠ 后端这几段文案里带 markdown（`` `comfy_load_workflow` ``、`**加粗**`、
+                  // 以及本仓库约定的 `##强调##`）。用 `Text` 直接显示就是**字面的反引号和井号**
+                  // —— 用户 2026-10-18 报的"到处都是 markdown 格式文案，但是又没有支持渲染"。
+                  MarkdownText(
+                    issue.detail,
+                    style: theme.textTheme.bodySmall,
+                    selectable: false,
+                  ),
                   if (issue.fix != null) ...[
                     const SizedBox(height: 6),
-                    Text(
+                    MarkdownText(
                       '修法：${issue.fix}',
-                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary),
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.primary),
+                      selectable: false,
                     ),
                   ],
                   if (issue.nodes.isNotEmpty) ...[
@@ -633,11 +800,13 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           for (final issue in issues)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
-              child: Text(
+              // 同上：这几行也带 markdown，别让反引号与井号原样露出来
+              child: MarkdownText(
                 '${issue.isError ? '错误' : issue.isWarn ? '警告' : '提示'}：${issue.title}',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: issue.isError ? theme.colorScheme.error : const Color(0xFFF9A825),
                 ),
+                selectable: false,
               ),
             ),
         ],
@@ -716,61 +885,99 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     );
   }
 
-  /// 一个参数一行。**编辑开关打开时**按值的类型给对应的输入控件：
-  /// 布尔给开关、数字给数字框、其余给文本框。
+  /// 一个参数一行，**左边名字（不变）、右边值（可变）**。
+  ///
+  /// 用户 2026-10-18："最起码得显示成：text（不变） | xxx...（可变）的形式，
+  /// 点击的时候右边出现可修改的 textfield。"
+  ///
+  /// 为什么不做成 `名字 = 值` 一行：长值（一段提示词）会把名字挤没，
+  /// 而"这是什么参数"恰恰是最不该丢的信息。
   ///
   /// ⚠ 类型是从**当前值**推的，不是从 `/object_info` 推的 —— 蓝图里没有控件声明，
-  /// 所以这里只保证"改得动"，不假装知道取值范围（要精确改参数请用 ComfyUI 或 AI 工具）。
+  /// 所以这里只保证"改得动"，不假装知道取值范围。
   Widget _widgetRow(ThemeData theme, BlueprintNode node, BlueprintWidget widget) {
     final value = widget.value;
+    final label = Padding(
+      padding: const EdgeInsets.only(top: 9, right: 8),
+      child: SizedBox(
+        width: kBlueprintParamLabelWidth,
+        child: Text(
+          widget.label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.labelSmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
+      ),
+    );
+
     if (!_editing) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 4),
-        child: SelectableText(
-          '${widget.label} = ${value ?? '—'}',
-          maxLines: 3,
-          style: theme.textTheme.bodySmall,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            label,
+            Expanded(
+              child: SelectableText(
+                value?.toString() ?? '—',
+                maxLines: 3,
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
+          ],
         ),
       );
     }
+
     if (value is bool) {
-      return SwitchListTile(
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        title: Text(widget.label, style: theme.textTheme.bodySmall),
-        value: value,
-        onChanged: (next) {
-          if (_editor?.setWidgetValue(node.id, widget.index, next) == true) _afterEdit();
-        },
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 2),
+        child: Row(
+          children: [
+            label,
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Switch(
+                  value: value,
+                  onChanged: (next) {
+                    if (_editor?.setWidgetValue(node.id, widget.index, next) == true) {
+                      _afterEdit();
+                    }
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
       );
     }
+
     final numeric = value is num;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: TextFormField(
-        initialValue: value?.toString() ?? '',
-        keyboardType: numeric
-            ? const TextInputType.numberWithOptions(decimal: true, signed: true)
-            : TextInputType.multiline,
-        maxLines: numeric ? 1 : 3,
-        decoration: InputDecoration(
-          labelText: widget.label,
-          isDense: true,
-          border: const OutlineInputBorder(),
-        ),
-        onFieldSubmitted: (text) {
-          final next = _coerce(text, value);
-          if (_editor?.setWidgetValue(node.id, widget.index, next) == true) _afterEdit();
-        },
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          label,
+          Expanded(
+            child: _PanelWidgetField(
+              // 换节点 / 换值要重建（`initialValue` 只在首帧生效）
+              key: ValueKey('panel-widget-${node.id}-${widget.index}-$value'),
+              initial: value?.toString() ?? '',
+              numeric: numeric,
+              onCommit: (text) {
+                final next = coerceWidgetValue(text, value);
+                if (_editor?.setWidgetValue(node.id, widget.index, next) == true) {
+                  _afterEdit();
+                }
+              },
+            ),
+          ),
+        ],
       ),
     );
-  }
-
-  /// 文本框里的字符串 → 原来的类型（数字还是数字，别的原样）。
-  static Object? _coerce(String text, Object? previous) {
-    if (previous is int) return int.tryParse(text.trim()) ?? previous;
-    if (previous is double) return double.tryParse(text.trim()) ?? previous;
-    return text;
   }
 
   Widget _portRow(
@@ -813,6 +1020,151 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
               child: Icon(Icons.report_problem_outlined, size: 14, color: colour),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// 面板里"参数名"那一列的宽度。
+///
+/// 与画布上的两列布局是同一套观感（名字窄、值宽）—— 用户 2026-10-18：
+/// "最起码得显示成：text（不变） | xxx...（可变）的形式"。
+const double kBlueprintParamLabelWidth = 96;
+
+/// 文本框里的字符串 → 原来的类型（数字还是数字，别的原样）。
+///
+/// ⚠ 类型是从**当前值**推的，不是从 `/object_info` 推的 —— 蓝图里没有控件声明，
+/// 所以这里只保证"改得动、改得准"，不假装知道取值范围。
+Object? coerceWidgetValue(String text, Object? previous) {
+  if (previous is int) return int.tryParse(text.trim()) ?? previous;
+  if (previous is double) return double.tryParse(text.trim()) ?? previous;
+  return text;
+}
+
+/// 面板里的一个参数值输入框。
+///
+/// 单独做成 StatefulWidget 只为一件事：**它自己持有 `TextEditingController`**，
+/// 这样才能在"点到别处"时把当前文本提交上去。
+///
+/// ⚠ 为什么"点到别处"必须提交：多行文本框里回车是换行，`onFieldSubmitted`
+/// **永远不会触发** —— 只挂它的话，用户改完一段提示词点别处就走了，
+/// 而**一个字都没落库、还什么都不报**（本仓库最讨厌的那一类 bug）。
+class _PanelWidgetField extends StatefulWidget {
+  final String initial;
+  final bool numeric;
+  final ValueChanged<String> onCommit;
+
+  const _PanelWidgetField({
+    super.key,
+    required this.initial,
+    required this.numeric,
+    required this.onCommit,
+  });
+
+  @override
+  State<_PanelWidgetField> createState() => _PanelWidgetFieldState();
+}
+
+class _PanelWidgetFieldState extends State<_PanelWidgetField> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _commit() => widget.onCommit(_controller.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      // 面板里"参数值"那一格的稳定锚点（用例按它定位；画布上的就地编辑器另有 key）
+      key: const Key('blueprint-panel-widget-field'),
+      controller: _controller,
+      keyboardType: widget.numeric
+          ? const TextInputType.numberWithOptions(decimal: true, signed: true)
+          : TextInputType.multiline,
+      maxLines: widget.numeric ? 1 : 4,
+      style: Theme.of(context).textTheme.bodySmall,
+      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+      onSubmitted: (_) => _commit(),
+      onTapOutside: (_) => _commit(),
+    );
+  }
+}
+
+/// 画布上的**就地参数编辑器**：一个贴在那行参数上的小输入框。
+///
+/// 用户 2026-10-18："编辑时应该可以在蓝图上直接操作，而不是在右侧侧边栏慢慢选择
+/// （况且它还不能折叠）。"
+///
+/// 为什么只给文本框、不按类型分派控件：画布上这一行常常只有十几像素高，
+/// 放不下开关和下拉框；而且用户随时可以「适应窗口」放大之后再改。
+///
+/// ⚠ 它**不能**放进 `InteractiveViewer` 里面：那样控件会跟着缩放一起糊，
+/// 内嵌的 `TextField` 还会跟画布的拖动抢手势。这里是由调用方按当前矩阵投影出来的
+/// **屏幕坐标**位置（见 `_inlineEditor`）。
+class _InlineWidgetEditor extends StatefulWidget {
+  final String label;
+  final Object? value;
+  final ValueChanged<Object?> onCommit;
+  final VoidCallback onCancel;
+
+  const _InlineWidgetEditor({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.onCommit,
+    required this.onCancel,
+  });
+
+  @override
+  State<_InlineWidgetEditor> createState() => _InlineWidgetEditorState();
+}
+
+class _InlineWidgetEditorState extends State<_InlineWidgetEditor> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.value?.toString() ?? '');
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(6),
+      color: theme.colorScheme.surfaceContainerHigh,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        child: TextField(
+          key: const Key('blueprint-inline-widget-field'),
+          controller: _controller,
+          autofocus: true,
+          style: theme.textTheme.bodySmall,
+          decoration: InputDecoration(
+            labelText: widget.label,
+            isDense: true,
+            border: InputBorder.none,
+            suffixIcon: IconButton(
+              tooltip: '取消',
+              iconSize: 14,
+              visualDensity: VisualDensity.compact,
+              onPressed: widget.onCancel,
+              icon: const Icon(Icons.close),
+            ),
+          ),
+          onSubmitted: (text) => widget.onCommit(coerceWidgetValue(text, widget.value)),
+          // 点到别处 = **提交**（不是取消）：把刚打的字丢掉比"多改一次"更气人
+          onTapOutside: (_) =>
+              widget.onCommit(coerceWidgetValue(_controller.text, widget.value)),
+        ),
       ),
     );
   }

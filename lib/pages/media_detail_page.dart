@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/file_clipboard.dart';
 import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
@@ -162,6 +163,36 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     _load(showSpinner: false);
   }
 
+  /// 「复制文件本身」：把磁盘上的原件放进系统剪贴板（资源管理器里能直接粘出文件）。
+  ///
+  /// 三条纪律：
+  /// 1. 磁盘路径**由后端给**（`GET /api/media/{id}/path`）—— 前端不拼路径（AGENTS §7）；
+  /// 2. 路径拿不到（文件不在盘上 / 产物不存在）就**如实说**，不假装成功；
+  /// 3. 写剪贴板失败也**如实说**，并给出退路（「复制文件地址」）。
+  Future<void> _copyFileToClipboard(
+    LibraryStore store,
+    int mediaId,
+    ScaffoldMessengerState messenger,
+  ) async {
+    final String path;
+    try {
+      path = await store.api.mediaPath(mediaId);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('拿不到磁盘路径：$e')));
+      return;
+    }
+    if (path.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('这条产物的文件不在盘上')));
+      return;
+    }
+    final ok = await FileClipboard.writeFiles([path]);
+    messenger.showSnackBar(SnackBar(
+      content: Text(ok
+          ? '已复制文件，可以在资源管理器里 Ctrl+V 粘贴'
+          : '复制文件失败，可以改用「复制文件地址」'),
+    ));
+  }
+
   /// 「存为预设」：把这条产物当初用的提示词**复制**成一条新预设。
   ///
   /// 为什么是复制、不是就地改：自动捕获的提示词行是**运行记录**
@@ -263,6 +294,15 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                 case 'copyUrl':
                   await copyToClipboard(context, fileUrl, label: '文件地址');
                   break;
+                case 'detach':
+                  // 移出之后要**重新拉一遍**：`_siblings` 少一个，左右箭头跟着收起
+                  await store.api.updateMedia(m.id, clearCollection: true);
+                  await _load();
+                  messenger.showSnackBar(const SnackBar(content: Text('已移出集合')));
+                  break;
+                case 'copyFile':
+                  await _copyFileToClipboard(store, m.id, messenger);
+                  break;
                 case 'nsfw':
                   // 手动标记 / 取消标记（用户 bug 2026-09-20）：AI 没声明过的内容
                   // （自己导入的、或老数据）由用户自己说了算 —— 打码只作用于标记过的条目。
@@ -292,12 +332,29 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                 label: m.nsfw ? '取消 NSFW 标记' : '标记为 NSFW',
               ),
               const MenuOption(value: 'open', icon: Icons.open_in_new, label: '用系统播放器打开'),
+              // 归类纠错（2026-10-18）：只有真在某个集合里才给这一项。
+              // 后端会同时记下"用户已移出"，所以拆出来之后回填不会再吸回去。
+              if (m.isCollection)
+                MenuOption(
+                  value: 'detach',
+                  icon: Icons.call_split,
+                  label: '移出集合（共 ${m.collectionSize} 张里的这一张）',
+                  dividerBefore: true,
+                ),
               const MenuOption(
                 value: 'copyUrl',
                 icon: Icons.link,
                 label: '复制文件地址',
                 dividerBefore: true,
               ),
+              // 「复制文件本身」（2026-10-18）：写 CF_HDROP，资源管理器里能直接粘出文件。
+              // 只有 Windows 有这条路（见 `lib/core/file_clipboard.dart`）。
+              if (FileClipboard.supported)
+                const MenuOption(
+                  value: 'copyFile',
+                  icon: Icons.file_copy_outlined,
+                  label: '复制文件（可在资源管理器粘贴）',
+                ),
               const MenuOption(
                 value: 'delete',
                 icon: Icons.delete_outline,
@@ -553,6 +610,13 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       globalPosition: globalPosition,
       items: (_) => [
         const MenuOption(value: 'copyUrl', icon: Icons.link, label: '复制文件地址'),
+        // 复制**文件本身**（写 CF_HDROP）：资源管理器里能直接粘出文件
+        if (FileClipboard.supported)
+          const MenuOption(
+            value: 'copyFile',
+            icon: Icons.file_copy_outlined,
+            label: '复制文件',
+          ),
         const MenuOption(
           value: 'copyName',
           icon: Icons.description_outlined,
@@ -578,6 +642,13 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     switch (action) {
       case 'copyUrl':
         await copyToClipboard(context, url, label: '文件地址');
+        break;
+      case 'copyFile':
+        await _copyFileToClipboard(
+          context.read<LibraryStore>(),
+          m.id,
+          ScaffoldMessenger.of(context),
+        );
         break;
       case 'copyName':
         await copyToClipboard(context, m.originalName, label: '文件名');

@@ -1769,7 +1769,7 @@ async fn post_blueprint(
 ) -> Result<axum::Json<Value>, crate::web::routes::ApiError> {
     let raw: Value = parse_raw(&input.raw)?;
     let object_info = crate::workflow::workflow_recipe::object_info_of(&state).await;
-    Ok(axum::Json(build(&raw, object_info.as_ref(), input.diagnose).to_json()))
+    Ok(axum::Json(build(&raw, object_info.as_deref(), input.diagnose).to_json()))
 }
 
 /// 存一份（多半是刚在蓝图上改过的）工作流。
@@ -1908,7 +1908,7 @@ pub async fn tool_diagnose_workflow(
     };
 
     let object_info = crate::workflow::workflow_recipe::object_info_of(state).await;
-    let blueprint = build(&raw, object_info.as_ref(), true);
+    let blueprint = build(&raw, object_info.as_deref(), true);
     let mut text = blueprint.render();
     if let Some(summary) = blueprint.summary() {
         // 报告开头先给一句"结论"，模型不必读完 30 行才知道有没有问题

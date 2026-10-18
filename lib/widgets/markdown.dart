@@ -7,7 +7,8 @@
 //   2. 不引入依赖，Windows 离线构建的行为完全可控。
 //
 // 支持：标题 / 段落 / 无序列表 / 有序列表 / 引用 / 分隔线 /
-//      围栏代码块 / 行内代码 / 粗体 / 斜体 / 删除线 / 链接 / 自动链接。
+//      围栏代码块 / 行内代码 / 粗体 / 斜体 / 删除线 / 链接 / 自动链接 /
+//      `##强调##`（本仓库约定的标记，与 `**粗体**` 同义）。
 //
 // 解析结果与 Flutter 无关，方便在纯单测里断言（test/markdown_test.dart）。
 
@@ -150,7 +151,7 @@ void clearMarkdownParseCache() {
 /// 把 Markdown 文本解析成块列表。
 ///
 /// **流式安全**：未闭合的围栏代码块会把"剩下的内容"当代码继续渲染；
-/// 未闭合的行内标记（`**`、`*`、`` ` ``）一律按字面量显示，不会吞内容。
+/// 未闭合的行内标记（`**`、`##`、`*`、`` ` ``）一律按字面量显示，不会吞内容。
 ///
 /// 返回值是**内部缓存的对象，调用方只许读、不许改**（要改先 `toList()`）。
 List<MdBlock> parseMarkdown(String source) {
@@ -424,9 +425,17 @@ _ListItem? _listItemOf(String line) {
   return null;
 }
 
-// 行内标记：**粗** / __粗__ / *斜* / _斜_ / ~~删~~ / `代码` / [文案](url)
+// 行内标记：**粗** / __粗__ / ##粗## / *斜* / _斜_ / ~~删~~ / `代码` / [文案](url)
 // 注意 `**` 要排在 `*` 前面匹配，否则 `**a**` 会被斜体规则先吃掉一半。
 final _boldStar = RegExp(r'\*\*(?!\s)(.+?)(?<!\s)\*\*', dotAll: true);
+// `##文字##` 是本仓库约定的**强调**标记，与 `**文字**` 完全同义（走同一条粗体路径）。
+// 规则与 `_boldStar` 对齐，两点差异都是照实际文案来的：
+//   1. 分隔符内侧允许各带一段空白 —— 系统提示与工具描述里写的是 `## 模拟用户行为 ##`，
+//      空白不算内容（`(.+?)` 收窄到非空白结尾，`[ \t]*` 只吃分隔符旁边那几个空格）；
+//   2. 必须**成对**：没有收尾的 `## 标题` 保持原样；`####` / `## ##` 这种空内容也匹配不上
+//      （`(.+?)` 至少要吃掉一个字符），不会产出一个空的粗体 span。
+// 行内代码里的 `##`（`` `##x##` ``）不进这条规则：`code` 候选优先级更高，且命中后不递归。
+final _boldHash = RegExp(r'##[ \t]*(?!\s)(.+?)(?<!\s)[ \t]*##', dotAll: true);
 // 下划线强调必须落在词边界上，否则 snake_case_name 会被误判（CommonMark 同款规则）
 final _boldUnder = RegExp(r'(?<![\w])__(?![\s_])(.+?)(?<![\s_])__(?![\w])', dotAll: true);
 final _strike = RegExp(r'~~(?!\s)(.+?)(?<!\s)~~', dotAll: true);
@@ -460,6 +469,9 @@ void _scanInline(String text, MdInline style, List<MdInline> out) {
 
   add('code', 0, _codeSpan.firstMatch(text));
   add('bold', 1, _boldStar.firstMatch(text) ?? _boldUnder.firstMatch(text));
+  // `##文字##` 与 `**文字**` 同义：单列一个候选，仍然"位置最靠前者胜"
+  // （`##` 与 `**` 起头字符不同，不会出现同起点争用）。
+  add('bold', 1, _boldHash.firstMatch(text));
   add('strike', 2, _strike.firstMatch(text));
   add('italic', 3, _italicStar.firstMatch(text) ?? _italicUnder.firstMatch(text));
   add('link', 4, _link.firstMatch(text));

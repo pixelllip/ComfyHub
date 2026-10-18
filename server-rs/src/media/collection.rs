@@ -42,6 +42,8 @@
 //! 会拼出同一个 key（**造出假分组，而且不报错**）。
 //! 现在的写法是**长度前缀**（`len ⊗ "+"'len2 0x1F 片段 ⊗ ...`），消除歧义且不用防转义。
 
+use std::collections::HashMap;
+
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::library::repo::WriteError;
@@ -369,7 +371,41 @@ pub enum Assigned {
     Orphan,
 }
 
-/// 读一条产物的成组输入：`Ok(None)` = 孤儿（没关联提示词），`Err(NotFound)` = 产物不在。
+/// "这条产物能不能进组"的唯一判据：能进就给它的成组输入，不能进就 `None`。
+///
+/// 两档都算"不进组"：
+/// 1. **没关联提示词**（`prompt_id` 为空）—— 见 [`Assigned`] 的注释；
+/// 2. **关联了提示词，但正负正文归一化后都是空的** —— 它同样没有"走向"可判。
+///
+/// ⚠ 第 2 档是 2026-10-18 补的。少了它，所有"提示词解析不出来"的运行（自建工作流、
+/// 非标准文本节点、特殊图生图链路）会**全部并进同一个 `IMAGE ⊗ ∅` 集合** ——
+/// 那就是用户报的"生成的内容自动分类到错误的集合"。捕获入库时每次运行都会插一条
+/// prompts 行（`capture_ingest.rs` 的 `create_captured_prompt`），正文原样写入、不判空，
+/// 所以这一档在真机上很常见，而不是理论情况。
+///
+/// 判据用的是与 [`group_key`] **同一个** [`normalize`]：`"   "`、`",,,"`、只有换行
+/// 都算空 —— 否则"看起来空、算起来不空"会让同一件事有两个答案。
+fn endpoint_for(
+    kind: &str,
+    prompt_id: Option<i64>,
+    positive: Option<String>,
+    negative: Option<String>,
+) -> Option<Endpoint> {
+    if prompt_id.is_none() {
+        return None;
+    }
+    let ep = Endpoint::new(
+        kind,
+        positive.unwrap_or_default(),
+        negative.filter(|s| !s.trim().is_empty()),
+    );
+    if normalize(&ep.positive).is_empty() && normalize_negative(ep.negative.as_deref()).is_empty() {
+        return None;
+    }
+    Some(ep)
+}
+
+/// 读一条产物的成组输入：`Ok(None)` = 不进组（孤儿 / 正文空白），`Err(NotFound)` = 产物不在。
 ///
 /// 没关联提示词**不是**"正提示词为空"，两者必须分开 —— 见 [`Assigned`] 的注释。
 fn endpoint_of(conn: &Connection, media_id: i64) -> Result<Option<Endpoint>, WriteError> {
@@ -392,14 +428,7 @@ fn endpoint_of(conn: &Connection, media_id: i64) -> Result<Option<Endpoint>, Wri
     let Some((kind, prompt_id, pos, neg)) = row else {
         return Err(WriteError::NotFound);
     };
-    if prompt_id.is_none() {
-        return Ok(None);
-    }
-    Ok(Some(Endpoint::new(
-        &kind,
-        pos.unwrap_or_default(),
-        neg.filter(|s| !s.trim().is_empty()),
-    )))
+    Ok(endpoint_for(&kind, prompt_id, pos, neg))
 }
 
 /// 按 `group_key` 查/建集合并把产物挂上去。
@@ -458,20 +487,25 @@ pub fn assign(conn: &Connection, media_id: i64) -> Result<Assigned, WriteError> 
     }
 }
 
-/// 把**还没分组**的产物按同一套规则分一遍（存量回填 / 规则改了之后重算）。
+/// 把"还没分组"的产物读出来，按**成组判据**分桶（同一份实现：回填与启动探针共用）。
 ///
-/// 三条纪律：
-/// 1. **只动 `collection_id IS NULL` 的行** —— 用户手动拆开/合并过的（`origin='manual'`）
-///    以及已经分好组的，一律不碰。用户刚拆开又被合回去是最气人的那种 bug。
-/// 2. **按 `created_at` 升序** —— 同一组的成员顺序就是"调参的先后"，集合的
-///    `id` 也据此稳定（详情页左右切换靠它）。
-/// 3. 返回"这次分了多少条"（孤儿不算）。调用方据此决定要不要写日志。
-pub fn backfill(conn: &Connection) -> Result<usize, WriteError> {
+/// 桶键就是 [`group_key`] —— 与入库时 [`attach`] 找"算法那一组"用的是同一个 key，
+/// 所以"探针说有几组 / 几张"与"回填真的会建几组 / 挂几张"**必然一致**；
+/// 两处各写一遍分桶就会漂（探针说有活、回填却什么都没干，反过来也一样）。
+///
+/// 三条口径（与 [`backfill`] 逐字一致）：
+/// * 只取 `collection_id IS NULL AND collection_opt_out = 0` 的行；
+/// * [`endpoint_for`] 判为"不进组"的（孤儿 / 正文空白）**不进任何桶**；
+/// * 行序 `created_at ASC, id ASC`，桶序 = 桶里第一条的读入顺序 —— 这样 [`attach`]
+///   建集合的先后与"逐行处理"的老实现完全一样，集合 `id` 因此保持稳定。
+///
+/// 返回 `(端点, 成员 id)`；桶内按读入顺序排，且**桶可以只有一条**（独苗，见 [`backfill`]）。
+fn pending_buckets(conn: &Connection) -> Result<Vec<(Endpoint, Vec<i64>)>, WriteError> {
     let rows: Vec<(i64, Option<i64>, String, Option<String>, Option<String>)> = {
         let mut stmt = conn.prepare(
             "SELECT m.id, m.prompt_id, m.kind, p.positive_prompt, p.negative_prompt
                FROM media_assets m LEFT JOIN prompts p ON p.id = m.prompt_id
-              WHERE m.collection_id IS NULL
+              WHERE m.collection_id IS NULL AND m.collection_opt_out = 0
               ORDER BY m.created_at ASC, m.id ASC",
         )?;
         let mapped = stmt.query_map([], |row| {
@@ -485,44 +519,433 @@ pub fn backfill(conn: &Connection) -> Result<usize, WriteError> {
         })?;
         mapped.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    let mut done = 0usize;
+
+    let mut buckets: Vec<(Endpoint, Vec<i64>)> = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
     for (id, prompt_id, kind, pos, neg) in rows {
-        // 孤儿产物：不分组，也不建集合（见 `Assigned` 的注释）
-        if prompt_id.is_none() {
+        // 孤儿 / 正文空白：不分组，也不建集合（判据全在 [`endpoint_for`] 里，这里不重写一遍）
+        let Some(ep) = endpoint_for(&kind, prompt_id, pos, neg) else {
+            continue;
+        };
+        let key = group_key(&ep);
+        match seen.get(&key) {
+            Some(&i) => buckets[i].1.push(id),
+            None => {
+                seen.insert(key, buckets.len());
+                buckets.push((ep, vec![id]));
+            }
+        }
+    }
+    Ok(buckets)
+}
+
+/// "这次启动有多少活儿"：**只数桶大小 >= 2 的**（独苗不建组，见 [`backfill`]）。
+///
+/// 返回 `(组数, 张数)`。它与 [`backfill`] 调的是**同一个** [`pending_buckets`]，
+/// 所以这个数字就是"回填马上要做的事"，不是估算 —— 启动日志只报它，
+/// 报 0 组就代表这一趟真的什么都不用干。
+pub fn pending_grouped(conn: &Connection) -> Result<(usize, usize), WriteError> {
+    let mut groups = 0usize;
+    let mut items = 0usize;
+    for (_, ids) in pending_buckets(conn)? {
+        if ids.len() >= 2 {
+            groups += 1;
+            items += ids.len();
+        }
+    }
+    Ok((groups, items))
+}
+
+/// 把**还没分组**的产物按同一套规则分一遍（存量归并 / 规则改了之后重算）。
+///
+/// 五条纪律：
+/// 1. **只动 `collection_id IS NULL` 的行** —— 用户手动拆开/合并过的（`origin='manual'`）
+///    以及已经分好组的，一律不碰。用户刚拆开又被合回去是最气人的那种 bug。
+/// 2. **`collection_opt_out = 0`**（2026-10-18 加）—— "用户明确把这一条移出集合"的行
+///    `collection_id` 也是 NULL（那正是"移出"的写法），只判第 1 条等于**把刚拖出去的那张
+///    又吸回来**，而且一个错都不报。这两条判据必须成对出现，少了任何一条都是静默失败。
+/// 3. **只给"同款 >= 2 张"的桶建组**（2026-10-18 加）—— 一个组只有一张图没有意义
+///    （见 [`prune_singleton_auto`]），所以独苗**压根不建组**，而不是"先建一个再解散"：
+///    后者每次启动都要白跑一趟（建了又拆），日志还会跟着响。桶由 [`pending_buckets`] 算，
+///    判据与入库 / 探针**共用同一份**（这里不重写一遍）。
+/// 4. **按 `created_at` 升序** —— 同一组的成员顺序就是"调参的先后"，集合的
+///    `id` 也据此稳定（详情页左右切换靠它）。
+/// 5. 返回"这次分了多少**张**"（孤儿 / 已移出 / 正文空白 / 独苗都不算）。
+///    调用方据此决定要不要写日志。
+pub fn backfill(conn: &Connection) -> Result<usize, WriteError> {
+    let mut done = 0usize;
+    for (ep, ids) in pending_buckets(conn)? {
+        // 独苗不建组（纪律 3）：它保持 `collection_id = NULL` 留在散图里。
+        // ⚠ `collection_opt_out` **不写** —— 那不是"用户移出"，将来同款再来一张时
+        // 回填该把它们并起来（写了就被第 2 条永久挡住）。
+        if ids.len() < 2 {
             continue;
         }
-        let ep = Endpoint::new(&kind, pos.unwrap_or_default(), neg.filter(|s| !s.trim().is_empty()));
-        attach(conn, id, &ep)?;
-        done += 1;
+        for id in ids {
+            attach(conn, id, &ep)?;
+            done += 1;
+        }
     }
     Ok(done)
 }
 
-/// 集合空了就把它删掉；还有成员就什么都不做。**幂等**（集合不在了也不报错）。
+/// **显式「重新自动整理」**：把所有 `auto` 集合解散，再按当前规则全量重分一遍。
+///
+/// 与 [`backfill`] 的分工（这两件事**不能**合并成一个函数）：
+/// * [`backfill`] 只补 `collection_id IS NULL` 的行 —— 已经分好组的**永远不会**被重算，
+///   所以它是"老库补课"，不是"按现在的规则整理一遍"；
+/// * 这里是用户点了「重新自动整理」时的全量重算：算法分出来的组先全拆，再按当前
+///   [`RULE_VERSION`] 的规则重新分。
+///
+/// 五条纪律（顺序与判据都有理由，别调）：
+/// 1. **先解散 `auto`、再 [`backfill`]** —— 反过来那些还没解散的老组在 `backfill` 眼里
+///    是"已分组"，会**整组被跳过**：表现是"点了没反应"，而且一个错都不报。
+/// 2. **只解散 `origin = 'auto'`** —— `manual` 集合（用户新建的、以及用户移进移出过的，
+///    见 [`mark_manual`]）的成员 `collection_id` **一个字都不许动**。用户刚整理好的组
+///    被算法合回去是这条功能最气人的那种 bug。
+/// 3. **`collection_opt_out` 原样保留** —— 解散只把 `collection_id` 置 NULL；用户明确
+///    移出的那几条仍然被 [`backfill`] 的 `AND collection_opt_out = 0` 挡在外面，
+///    不会被吸回来（判据只有那一处，这里不重写一遍）。
+/// 4. **收尾是"结构上不可能出现"的，所以这里没有收尾调用**（2026-10-18 改）——
+///    ① 先解散 `auto` 是**DELETE 整个 `origin='auto'`**，所以此刻全库一条 auto 集合都没有；
+///    ② [`backfill`] 只对"同款 >= 2 张"的桶建 auto 组，所以它新建的每一条 auto 集合
+///    成员数都 >= 2；③ `attach` 只**加**成员、从不摘成员，而且它即便命中一条已存在的
+///    同 key 集合，那条也绝不可能是 auto（① 已删光），只能是 `manual`（`origin` 不在
+///    收尾范围内）。三条合起来：这一步之后再出现"单成员 auto 组"是不可能的。
+///    ⚠ 以前这里调过一次 [`prune_singleton_auto`]——那会让"单成员 auto 组"这个
+///    **不变式**被一次防御性收尾悄悄兜住；现在由 §13 的
+///    `重新整理之后_单成员自动集合也不留` 用例正面盯着：规则一退化，它就红。
+/// 5. 返回"这次分了多少条"，口径与 [`backfill`] **完全一致**（孤儿 / 已移出 / 正文空白 /
+///    独苗都不算），调用方据此给用户报数。
+pub fn regroup_auto(conn: &Connection) -> Result<usize, WriteError> {
+    // ① 解散 auto：先把成员摘下来（`collection_id = NULL`），再删集合行。
+    //
+    // ⚠ 顺序不能反。虽然 `media_assets.collection_id` 是 `ON DELETE SET NULL`，但外键
+    // 开关（`PRAGMA foreign_keys`）不是每个连接都保证打开 —— 显式置 NULL 才是"一定
+    // 会被摘下来"的那条路。`collection_opt_out` **不写**，保持用户原来的选择。
+    conn.execute(
+        "UPDATE media_assets SET collection_id = NULL
+          WHERE collection_id IN (SELECT id FROM media_collections WHERE origin = ?1)",
+        params![Origin::Auto.as_str()],
+    )?;
+    conn.execute(
+        "DELETE FROM media_collections WHERE origin = ?1",
+        params![Origin::Auto.as_str()],
+    )?;
+
+    // ② 再按当前规则分一遍。判据（孤儿 / 正文空白 / 已移出 / 独苗）全在 `backfill` 里，复用。
+    //    它只对 >= 2 张的桶建组，所以这一步之后**结构上不可能**留下单成员 auto 组
+    //    （推演见纪律 4）—— 这里因此没有第三次调用做收尾。
+    let done = backfill(conn)?;
+    Ok(done)
+}
+
+// ---------------------------------------------------------------------------
+//  用户手动改归属（2026-10-18）：移出 / 移进
+// ---------------------------------------------------------------------------
+
+/// 读一条产物当前所属集合（不在任何集合 = `None`）。产物不存在回 [`WriteError::NotFound`]。
+fn collection_of(conn: &Connection, media_id: i64) -> Result<Option<i64>, WriteError> {
+    conn.query_row(
+        "SELECT collection_id FROM media_assets WHERE id = ?1",
+        params![media_id],
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .optional()?
+    .ok_or(WriteError::NotFound)
+}
+
+/// **用户手动把一条产物移出集合**（"我碰过它，它归我"）。
+///
+/// ⚠ 必须同时写 `collection_opt_out = 1`。只把 `collection_id` 置成 NULL 的话，
+/// **下次启动**的 [`backfill`] 会按提示词把它重新算回原来那一组 ——
+/// 用户会看到"我明明拖出来了，重启又回去了"，而且**一个错都不报**。
+///
+/// 移出之后**源集合**要收尾（[`prune_singleton_auto`]，唯一实现）：
+/// 搬空了 → 删掉（不留点不开的空格子）；是 `auto` 且只剩 1 个成员 → 一并解散；
+/// 是 `manual` → **一个字都不动**（用户自己建的组，只剩一张也留着）。
+pub fn detach(conn: &Connection, media_id: i64) -> Result<(), WriteError> {
+    // 顺手当 NotFound 的判据（产物不在就别去动集合）
+    let from = collection_of(conn, media_id)?;
+    let affected = conn.execute(
+        "UPDATE media_assets SET collection_id = NULL, collection_opt_out = 1 WHERE id = ?1",
+        params![media_id],
+    )?;
+    if affected == 0 {
+        return Err(WriteError::NotFound);
+    }
+    // 本来就不在任何集合里 → 没有哪个集合的成员数会变，白扫一遍不值当。
+    if from.is_some() {
+        prune_singleton_auto(conn)?;
+    }
+    Ok(())
+}
+
+/// 移进之后要把 `origin` 从 `auto` 翻成 `manual`。
+///
+/// 为什么必须翻：`auto` 集合的 `group_key` 是"算法算出来的那一组"的指纹 ——
+/// 用户往里塞了一张提示词不同的图之后，这个指纹就**不再描述它的内容**了，
+/// 而 `attach` 还在按这个 key 往它里面吸新图（把不相关的图越吸越多）。
+/// 用户碰过它，它就是手动的了；要回到算法分组只能显式"重新自动分组"。
+fn mark_manual(conn: &Connection, collection_id: i64) -> Result<(), WriteError> {
+    conn.execute(
+        "UPDATE media_collections SET origin = ?1 WHERE id = ?2 AND origin <> ?1",
+        params![Origin::Manual.as_str(), collection_id],
+    )?;
+    Ok(())
+}
+
+/// **用户手动把一条产物移进某个集合**。
+///
+/// 判据两条，都是"不猜、不将就"：
+/// 1. 目标集合必须存在；
+/// 2. **kind 必须相同** —— 图像集合里放视频会被明确拒绝（用户 2026-10-18 拍板
+///    "手动集合不允许混图像和视频"）。拒绝要说人话，不许静默不动。
+///
+/// 移进来会把 `collection_opt_out` 清掉（用户改主意了），源集合随后收尾
+/// （[`prune_singleton_auto`]：空了删掉、`auto` 且只剩一张的一并解散），
+/// 目标若是算法分组出来的则**就地转成手动**（见 [`mark_manual`]）。
+pub fn move_into(conn: &Connection, media_id: i64, target: i64) -> Result<(), WriteError> {
+    let media_kind: Option<String> = conn
+        .query_row(
+            "SELECT kind FROM media_assets WHERE id = ?1",
+            params![media_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(media_kind) = media_kind else {
+        return Err(WriteError::NotFound);
+    };
+    let target_kind: Option<String> = conn
+        .query_row(
+            "SELECT kind FROM media_collections WHERE id = ?1",
+            params![target],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(target_kind) = target_kind else {
+        return Err(WriteError::Validation(format!("集合 {target} 不存在")));
+    };
+    if !media_kind.eq_ignore_ascii_case(&target_kind) {
+        return Err(WriteError::Validation(format!(
+            "那个集合是 {target_kind}，装不下 {media_kind} 的产物"
+        )));
+    }
+
+    let from = collection_of(conn, media_id)?;
+    conn.execute(
+        "UPDATE media_assets SET collection_id = ?1, collection_opt_out = 0 WHERE id = ?2",
+        params![target, media_id],
+    )?;
+    // ⚠ 顺序有意义：**先翻手动、再收尾**。翻完之后目标集合（哪怕只剩 1 个成员）
+    // 已经是 `manual`，下面的收尾绝不会把它当成"单成员 auto 组"解散掉 ——
+    // 用户刚点的那一下不能被算法吃掉。
+    mark_manual(conn, target)?;
+    // 源集合收尾（唯一实现见 [`prune_singleton_auto`]）：搬空的删掉、
+    // `auto` 且只剩 1 个成员的一并解散（用户报的"旧集合元素为 1 没有自动解散"）。
+    if from.is_some() {
+        prune_singleton_auto(conn)?;
+    }
+    Ok(())
+}
+
+/// 选择器要的一份集合摘要。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionSummary {
+    pub id: i64,
+    pub kind: String,
+    /// `auto` / `manual`
+    pub origin: String,
+    pub title: Option<String>,
+    /// 成员数
+    pub size: i64,
+}
+
+/// 列出所有集合（手动在前、最近建的在前），给"移到集合…"的选择器用。
+pub fn list(conn: &Connection) -> Result<Vec<CollectionSummary>, WriteError> {
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.kind, c.origin, c.title,
+                (SELECT COUNT(*) FROM media_assets m WHERE m.collection_id = c.id)
+           FROM media_collections c
+          ORDER BY (c.origin = 'manual') DESC, c.id DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(CollectionSummary {
+            id: row.get(0)?,
+            kind: row.get(1)?,
+            origin: row.get(2)?,
+            title: row.get(3)?,
+            size: row.get(4)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// **新建一个手动集合**，并把 `media_ids` 全部移进去；返回新集合 id。
+///
+/// 选中的产物 **kind 必须一致**（同上：不混图像和视频），不一致就明确拒绝。
+///
+/// 成员从**老集合**搬走之后，老集合要收尾（[`prune_singleton_auto`]，唯一实现）：
+/// 搬空的删掉、`auto` 且只剩 1 个成员的一并解散。用户报的
+/// "将内容从一个集合调到另一个集合的时候，如果旧集合元素为 1，旧集合没有自动解散"
+/// 在"新建集合并移入"这条路上同样成立 —— 所以这里也要收。
+pub fn create_manual(
+    conn: &Connection,
+    media_ids: &[i64],
+    title: Option<&str>,
+) -> Result<i64, WriteError> {
+    if media_ids.is_empty() {
+        return Err(WriteError::Validation("至少要选一个产物".into()));
+    }
+    let mut kind: Option<String> = None;
+    for media_id in media_ids {
+        let current: Option<String> = conn
+            .query_row(
+                "SELECT kind FROM media_assets WHERE id = ?1",
+                params![media_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(current) = current else {
+            return Err(WriteError::NotFound);
+        };
+        match kind.as_deref() {
+            None => kind = Some(current),
+            Some(existing) if existing.eq_ignore_ascii_case(&current) => {}
+            Some(existing) => {
+                return Err(WriteError::Validation(format!(
+                    "选中的产物里有 {existing} 也有 {current}，一个集合只能装一种"
+                )))
+            }
+        }
+    }
+    let kind = kind.ok_or(WriteError::NotFound)?;
+
+    conn.execute(
+        "INSERT INTO media_collections (group_key, kind, origin, rule_version, title)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            manual_key(media_ids),
+            kind,
+            Origin::Manual.as_str(),
+            RULE_VERSION,
+            title.map(str::trim).filter(|t| !t.is_empty()),
+        ],
+    )?;
+    let created = conn.last_insert_rowid();
+
+    for media_id in media_ids {
+        conn.execute(
+            "UPDATE media_assets SET collection_id = ?1, collection_opt_out = 0 WHERE id = ?2",
+            params![created, media_id],
+        )?;
+    }
+    // 老集合的收尾（唯一实现）：搬空的删掉、`auto` 且只剩 1 个成员的一并解散。
+    // ⚠ 放在循环**之后**：循环里每搬一条就收尾一次的话，中间态会把"在本次搬选中
+    // 迟早也要被搬空"的 auto 集合提前解散（结果一样，纯白干）。
+    prune_singleton_auto(conn)?;
+    Ok(created)
+}
+
+/// 手动集合的 `group_key`。
+///
+/// ⚠ 表上 `group_key` 是 `NOT NULL`，而且 [`attach`] 靠它找"算法那一组" ——
+/// 所以手动集合的 key 必须以 `manual:` 开头：算法的 key 一定以 **kind** 开头
+/// （见 [`group_key`]），两者**永远不可能相等**，手动集合因此天然不会被新图吸走。
+fn manual_key(media_ids: &[i64]) -> String {
+    let anchor = media_ids.iter().copied().min().unwrap_or(0);
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("manual:{anchor}:{millis}")
+}
+
+/// 清掉**所有**空集合（存量收拾 / 批量删除之后的收尾）。
 ///
 /// 为什么必须有这一步：`media_assets.collection_id` 是 `ON DELETE SET NULL`，
 /// 所以**删产物不会带走集合行**。少了它会有两个后果：
 /// ① "删到 0 张还留一个空组"（用户看到的是一个点不开的空格子）；
 /// ② 集合行**永久累积**（每删一批就多一个孤儿集合，而且它会跟着同步到手机）。
-pub fn prune_if_empty(conn: &Connection, collection_id: i64) -> Result<(), WriteError> {
-    conn.execute(
-        "DELETE FROM media_collections
-          WHERE id = ?1
-            AND NOT EXISTS (SELECT 1 FROM media_assets WHERE collection_id = ?1)",
-        params![collection_id],
-    )?;
-    Ok(())
-}
-
-/// 清掉**所有**空集合（存量收拾 / 批量删除之后的收尾）。
 ///
-/// 返回删了几个。批量删除（如"清除未关联产物"）之后调一次，比逐条 prune 便宜。
+/// ⚠ **写路径不要直接调它**（删产物 / 移出 / 移进 / 新建手动集合一律走
+/// [`prune_singleton_auto`]，它把"空了删掉"和"`auto` 只剩一张解散"合成了一条收尾路径）：
+/// 单独调这个只做了前半件，于是"删一张"与"移走一张"两条入口的终态就不一致了
+/// （用户 2026-10-18 报的正是后者）。它现在只作为 [`prune_singleton_auto`] 的最后一步存在。
 pub fn prune_all_empty(conn: &Connection) -> Result<usize, WriteError> {
     Ok(conn.execute(
         "DELETE FROM media_collections
           WHERE NOT EXISTS (SELECT 1 FROM media_assets WHERE collection_id = media_collections.id)",
         [],
     )?)
+}
+
+/// 解散**算法分出来的、只剩 1 个成员**的集合：把最后那张放回散图
+/// （`collection_id = NULL`），再把集合行删掉。返回解散了几个。**幂等**。
+///
+/// # 为什么"只剩一张"也要解散（用户 2026-10-18 报的 bug）
+///
+/// 用户原话："将内容从一个集合调到另一个集合的时候，如果旧集合元素为 1，
+/// 旧集合没有自动解散。" 一个 `auto` 集合的语义是"同一句提示词的一批微调"（见文件头），
+/// 只剩一张时它不再是一批，而界面上仍然是一个叠放封面 + 数量角标、点进去只有一张的格子。
+/// 判据是**集合的语义**，不是"空 / 非空" —— 所以只清 0 成员的 [`prune_all_empty`]
+/// 罩不住它，要单独收拾（"只剩一张"这一档也因此是**收尾**的责任，而不是"压根不建"
+/// 一句话能覆盖的：`assign` 那条入库路会先建出单成员组，要等这里的收尾或 [`backfill`]）。
+///
+/// # 只碰 `origin = 'auto'`（**硬纪律**，别放宽）
+///
+/// `manual` 集合是**用户自己建的**（可能还改了标题），只剩一张也必须原样留着 ——
+/// 解散它等于删用户的东西。用户碰过的 `auto` 集合在 [`move_into`] 里已经就地翻成
+/// `manual`（[`mark_manual`]），所以这里天然放过它。
+///
+/// # 不变量（三条，顺序有意义，别调）
+///
+/// 1. **先摘成员、再删集合行**：`media_assets.collection_id` 虽然是 `ON DELETE SET NULL`，
+///    但外键开关（`PRAGMA foreign_keys`）不保证每个连接都打开 —— 显式置 NULL 才是
+///    "一定会被摘下来"的那条路；
+/// 2. **`collection_opt_out` 一个字都不写**：那张图不是"用户明确移出的"，它只是这一组
+///    不够成组。写了它就会被 [`backfill`] 永久挡在外面（以后同款提示词再来一张，
+///    它也回不去那个本该 >= 2 的组）；
+/// 3. **最后再 [`prune_all_empty`]**：不变量 1、2 之间可能留下 0 成员的残留
+///    （成员先被别的语句删掉之类的极端边界），一次扫干净，顺带把空壳带走。
+///
+/// ⚠ 调用时机（写在这里免得被搬错）：**任何"把产物搬离集合"的写路径**都要调它
+/// （[`detach`] / [`move_into`] / [`create_manual`] / 删产物），以及**启动回填之后**
+/// （`main.rs`；历史遗留的单成员 auto 组、以及半截回填留下的，只可能在那里被收拾）。
+/// **入库那条路（[`assign`]）不能调** —— 一批同款图是一条一条进来的，中途每条都是
+/// "单成员组"，当场解散会让它们永远并不到一起（第 2 张来时又新建一个单成员组，如此循环）。
+/// **[`regroup_auto`] 也不需要调** —— 它先删光所有 auto、再只对 >= 2 张的桶建组，
+/// 结构上不可能留下单成员组（推演写在它的纪律 4 里）。
+pub fn prune_singleton_auto(conn: &Connection) -> Result<usize, WriteError> {
+    // 判据只写这一遍：先把名单取出来，下面两条语句共用。
+    let ids: Vec<i64> = {
+        let mut stmt = conn.prepare(
+            "SELECT c.id FROM media_collections c
+              WHERE c.origin = ?1
+                AND (SELECT COUNT(*) FROM media_assets m WHERE m.collection_id = c.id) = 1",
+        )?;
+        let rows = stmt.query_map(params![Origin::Auto.as_str()], |row| row.get::<_, i64>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let dissolved = ids.len();
+    if !ids.is_empty() {
+        let placeholders = vec!["?"; ids.len()].join(", ");
+        // ① 先摘成员（不碰 `collection_opt_out`，见不变量 2）
+        conn.execute(
+            &format!(
+                "UPDATE media_assets SET collection_id = NULL WHERE collection_id IN ({placeholders})"
+            ),
+            rusqlite::params_from_iter(ids.iter()),
+        )?;
+        // ② 再删集合行
+        conn.execute(
+            &format!("DELETE FROM media_collections WHERE id IN ({placeholders})"),
+            rusqlite::params_from_iter(ids.iter()),
+        )?;
+    }
+    // ③ 0 成员残留（幂等；空壳一个都不留）
+    prune_all_empty(conn)?;
+    Ok(dissolved)
 }
 
 /// 找出**与这条预设同款提示词**的产物 id（按时间升序）。

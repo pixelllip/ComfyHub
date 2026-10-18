@@ -315,3 +315,32 @@ pub fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaDto> {
         thumb_url: format!("/api/media/{id}/thumb"),
     })
 }
+
+/// 一个**集合**的摘要（2026-10-18 手动集合）。
+///
+/// 给"移到集合…"的选择器用：它要知道有哪些集合、各是什么 kind（不混图像和视频）、
+/// 有几个成员、是算法分的还是用户建的。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaCollectionDto {
+    pub id: i64,
+    pub kind: String,
+    /// `auto` = 算法分组出来的；`manual` = 用户建的（或被用户改过的）
+    pub origin: String,
+    /// 用户起的名字。**算法分出来的没有名字**（界面按"算法分组"标记显示）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub size: i64,
+}
+
+impl From<crate::media::collection::CollectionSummary> for MediaCollectionDto {
+    fn from(value: crate::media::collection::CollectionSummary) -> Self {
+        Self {
+            id: value.id,
+            kind: value.kind,
+            origin: value.origin,
+            title: value.title,
+            size: value.size,
+        }
+    }
+}

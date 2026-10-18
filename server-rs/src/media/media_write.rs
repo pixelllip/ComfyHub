@@ -50,6 +50,17 @@ pub fn update(state: &AppState, id: i64, input: &MediaUpdate) -> Result<MediaDto
         let mut sets: Vec<String> = Vec::new();
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
+        // 归属（2026-10-18）：这两个是**带副作用**的（要顺手收拾空集合、
+        // 要在移出时打上 `collection_opt_out`），所以不拼进下面那条通用 UPDATE。
+        let mut collection_touched = false;
+        if input.clear_collection {
+            crate::media::collection::detach(tx, id)?;
+            collection_touched = true;
+        } else if let Some(collection_id) = input.collection_id {
+            crate::media::collection::move_into(tx, id, collection_id)?;
+            collection_touched = true;
+        }
+
         if input.clear_prompt {
             sets.push("prompt_id = ?".into());
             args.push(Box::new(rusqlite::types::Null));
@@ -78,8 +89,9 @@ pub fn update(state: &AppState, id: i64, input: &MediaUpdate) -> Result<MediaDto
             args.push(Box::new(if nsfw { 1_i64 } else { 0_i64 }));
         }
         if sets.is_empty() {
-            // 没有字段要更新 —— 与 Kotlin 一致地"当成没找到"（让空 body 立刻可见）
-            return Ok(false);
+            // 一个普通字段都没有：**但只改归属也算改过**（`detach` / `move_into`
+            // 已经在上面落库了），别把它当成"没找到"。
+            return Ok(collection_touched);
         }
         args.push(Box::new(id));
         let sql = format!("UPDATE media_assets SET {} WHERE id = ?{}", sets.join(", "), args.len());
@@ -109,26 +121,23 @@ pub fn delete(state: &AppState, id: i64) -> Result<(), ApiError> {
     };
 
     let ok = state.write(|tx| {
-        // 删之前先记住它属于哪个集合 —— 删完这一行就查不到了
-        let collection_id: Option<i64> = tx
-            .query_row(
-                "SELECT collection_id FROM media_assets WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .optional()?
-            .flatten();
         let affected = tx.execute("DELETE FROM media_assets WHERE id = ?1", params![id])?;
         if affected > 0 {
             // 标签计数要跟着变（`media_tags` 已被 CASCADE 清掉，R1 生效的前提下）
             repo::refresh_use_counts(tx)?;
-            // 集合空了就把它一起删掉（2026-10-11）。
-            // 不删的表现是"删到 0 张还留一个空组"，而且集合行会**永久累积**
-            // （外键是 ON DELETE SET NULL，删产物不会带走集合行）。
-            // ⚠ 注意这里删的是**整个集合**：用户把一组图逐张删完时，那个组就该消失。
-            if let Some(cid) = collection_id {
-                crate::media::collection::prune_if_empty(tx, cid)?;
-            }
+            // 集合收尾走**唯一实现** `prune_singleton_auto`（2026-10-18）。
+            //
+            // 它一次把两件事都做了：**空了**就删集合行；`auto` 且**只剩一张**也解散。
+            // 前半件是 2026-10-11 就有的（不删的表现是"删到 0 张还留一个空组"，
+            // 集合行会永久累积 —— 外键是 ON DELETE SET NULL，删产物不带走集合行）；
+            // 后半件是用户 2026-10-18 报的"剩一张不解散"在**删除**这条入口上的同一症状：
+            // 从两张里删掉一张，剩下一张就不该还挂着一个"集合"。
+            //
+            // ⚠ 收尾**必须是全局的那一个实现**（`prune_singleton_auto`），不能"按单个集合收尾"：
+            // 删除这条路是**事后**才知道自己影响了谁的（行已经删了，`collection_id` 查不回来了），
+            // 而"只剩一张要解散吗"本来就要看**现在**还有几个成员 —— 那正是它做的事情。
+            // ⚠ 也不必先查"它原来属于哪个集合"：全局收尾是幂等的，查了也是白查。
+            crate::media::collection::prune_singleton_auto(tx)?;
         }
         Ok(affected > 0)
     })?;

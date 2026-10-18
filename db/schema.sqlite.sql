@@ -105,6 +105,9 @@ CREATE TABLE IF NOT EXISTS media_collections (
   kind         TEXT    NOT NULL DEFAULT 'IMAGE',
   origin       TEXT    NOT NULL DEFAULT 'auto' CHECK (origin IN ('auto','manual')),
   rule_version INTEGER NOT NULL DEFAULT 1,
+  -- 2026-10-18：用户给**手动集合**起的名字。算法分出来的集合没有名字（NULL），
+  -- 界面上按"算法分组"标记显示 —— 两种集合本来就不是一种东西。
+  title        TEXT    NULL,
   created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -120,6 +123,13 @@ CREATE TABLE IF NOT EXISTS media_assets (
   -- 所属「集合」（同源、只做了一点微调的产物归到一组；判定见 media/collection.rs）
   -- ON DELETE SET NULL：集合行被清掉时产物**不能跟着消失**（集合是视图性质的分组）
   collection_id  INTEGER NULL REFERENCES media_collections(id) ON DELETE SET NULL,
+  -- 2026-10-18：用户**明确把这一条移出集合**了（"我碰过它，它归我"）。
+  --
+  -- ⚠ 这一列是**正确性的前提**，不是装饰：`backfill` 只处理 `collection_id IS NULL`
+  -- 的行，而"移出集合"恰恰就是把它置成 NULL —— 少了它，用户刚拖出去的那张会在
+  -- 下次启动被回填**静默吸回原组**（`media/collection.rs` 那句"手动拆开过的一律不碰"
+  -- 在没有这一列时只是一句空承诺）。回填的 WHERE 必须带 `AND collection_opt_out = 0`。
+  collection_opt_out INTEGER NOT NULL DEFAULT 0,
   kind           TEXT    NOT NULL CHECK (kind IN ('IMAGE','VIDEO','AUDIO')),
   title          TEXT    NOT NULL DEFAULT '',
   original_name  TEXT    NOT NULL,
@@ -795,4 +805,10 @@ BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', OLD.id, 'dele
 --   bump 版本号是为了让**新加的列**在老库上也有一趟自愈的机会
 --   （`ensure_columns` 每次开库都跑，其实不 bump 也能补上；bump 是为了让手机那边
 --   拿到新的 `manifest.schemaVersion`、顺带重走一次 bootstrap —— 提示词形状变了）。
-PRAGMA user_version = 8;
+-- 2026-10-18 由 8 提到 9：**手动集合**两列。
+--   ① `media_collections.title` —— 用户给集合起的名字（算法分出来的没有名字）；
+--   ② `media_assets.collection_opt_out` —— 用户**明确把这一条移出集合**了。
+--   ⚠ ② 是**正确性的前提**：`backfill` 只处理 `collection_id IS NULL` 的行，
+--   而"移出集合"恰恰就是置 NULL —— 少了这一列，"移出"会在下次启动被静默吸回原组。
+--   两列都走 `NEW_COLUMNS`（`CREATE TABLE IF NOT EXISTS` 补不了已存在表的列）。
+PRAGMA user_version = 9;

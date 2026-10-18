@@ -227,6 +227,22 @@ WorkflowBlueprint _blueprint({bool api = false}) =>
 //  模型
 // ---------------------------------------------------------------------------
 
+/// 把当前**渲染出来**的文字全收集起来（含 `RichText`）。
+///
+/// 为什么要它：`find.text` 只认 `Text.data`，而 markdown 渲染出来的是 `RichText` ——
+/// 用它才能断言"标记没有原样露出来"（否则断言会假绿）。
+String _renderedText(WidgetTester tester) {
+  final buffer = StringBuffer();
+  for (final widget in tester.allWidgets) {
+    if (widget is RichText) {
+      buffer.writeln(widget.text.toPlainText());
+    } else if (widget is Text && widget.data != null) {
+      buffer.writeln(widget.data);
+    }
+  }
+  return buffer.toString();
+}
+
 void main() {
   group('模型', () {
     test('界面格式：节点 / 连线 / 分组 / 问题都读得出来', () {
@@ -366,6 +382,60 @@ void main() {
       expect(hitTestNode(layout, const Offset(-390, 10)), '4');
       expect(hitTestNode(layout, const Offset(5000, 5000)), isNull);
     });
+
+    test('参数行的几何只有一份：画出来的矩形，点它的中心必须命中它自己', () {
+      // 用户 2026-10-18 要求"在蓝图上直接改参数"。命中与绘制**共用同一个算式**，
+      // 否则表现是"点得到的地方和画出来的地方不重合"，而且一个错都不报。
+      final blueprint = _blueprint();
+      final layout = BlueprintLayout.of(blueprint);
+      var checked = 0;
+      for (final node in blueprint.nodes) {
+        final box = layout.boxOf(node.id);
+        if (box == null) continue;
+        for (final widget in node.widgets) {
+          final row = blueprintWidgetRowRect(node, box, widget.index);
+          // 超出节点底边的行根本不画（画笔里 `break`），也就不该被点到
+          if (row.top > box.bottom - 10) continue;
+          expect(hitTestWidgetRow(node, box, row.center), widget.index,
+              reason: '节点 ${node.id} 第 ${widget.index} 行的中心必须命中它自己');
+          checked++;
+        }
+      }
+      expect(checked, greaterThan(0), reason: '夹具里至少要有一行画得出来的参数');
+
+      // 标题条上点一下：**不该**命中任何参数行（那是"选中节点"的手势）
+      final node = blueprint.nodes.firstWhere((n) => n.widgets.isNotEmpty);
+      final box = layout.boxOf(node.id)!;
+      expect(hitTestWidgetRow(node, box, Offset(box.left + 4, box.top + 4)), isNull);
+      // 节点外面更不该命中
+      expect(hitTestWidgetRow(node, box, Offset(box.left, box.bottom + 40)), isNull);
+    });
+
+    test('参数行是"名字 | 值"两列：不重叠、不留缝、宽度有上下限', () {
+      // 用户 2026-10-18："最起码得显示成：text（不变） | xxx...（可变）的形式。"
+      final blueprint = _blueprint();
+      final layout = BlueprintLayout.of(blueprint);
+      var checked = 0;
+      for (final node in blueprint.nodes) {
+        final box = layout.boxOf(node.id);
+        if (box == null) continue;
+        for (final widget in node.widgets) {
+          final row = blueprintWidgetRowRect(node, box, widget.index);
+          if (row.top > box.bottom - 10) continue;
+          final label = blueprintWidgetLabelRect(node, box, widget.index);
+          final value = blueprintWidgetValueRect(node, box, widget.index);
+
+          expect(label.right, closeTo(value.left, 0.001), reason: '两列必须紧挨着，不留缝');
+          expect(label.left, closeTo(row.left, 0.001));
+          expect(value.right, closeTo(row.right, 0.001));
+          expect(label.width, greaterThanOrEqualTo(28), reason: '名字太窄就认不出是什么参数');
+          expect(label.width, lessThanOrEqualTo(96), reason: '名字太宽值就没地方了');
+          expect(value.width, greaterThan(0), reason: '值那一列必须真的存在');
+          checked++;
+        }
+      }
+      expect(checked, greaterThan(0), reason: '夹具里至少要有一行画得出来的参数');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -457,10 +527,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('KSampler · 节点 #2 · 旁路'), findsOneWidget);
 
-      // 编辑：改 seed（第一个参数）
+      // 编辑：改 seed（第一个参数）—— 面板里每个参数是"名字 | 值"两列，
+      // 值那一格是 `_PanelWidgetField` 里的 TextField，用它的稳定 key 定位。
       await tester.tap(find.byIcon(Icons.edit_outlined));
       await tester.pumpAndSettle();
-      final field = find.byType(TextFormField).at(1); // 0 是标题
+      final field = find.byKey(const Key('blueprint-panel-widget-field')).first;
       await tester.enterText(field, '777');
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pump(const Duration(milliseconds: 500));
@@ -470,6 +541,182 @@ void main() {
       expect(seen.last, contains('"seed": 777'), reason: '交回去的是改过的那份原文');
       // 原文里别的东西一个都没动
       expect(seen.last, contains('"type": "Note"'));
+    });
+
+    testWidgets('打开就把内容缩放对齐到画布中心 —— 不是跑到右上角', (tester) async {
+      // 用户 bug 2026-10-18："蓝图打开之后默认跑到右上角去了，应缩放对齐窗口。"
+      // 真因：适配用的是**整个 body** 的尺寸（含右侧 380 面板与上方横幅），
+      // 比画布宽一截，算出来的平移把内容推到了右边。
+      //
+      // 断言是**精确**的：适配之后，图包围盒的中心在屏幕上必须正好落在视口中心
+      // （数学上 `screen = p*fit + dx` 里 `dx` 恰好把 `bounds` 居中，与缩放无关）。
+      tester.view.physicalSize = const Size(1200, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(MaterialApp(
+        home: WorkflowBlueprintPage(
+          title: '测试',
+          raw: _uiRaw,
+          diagnose: (raw) async => _blueprintJson(),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      final viewer = tester.widget<InteractiveViewer>(find.byType(InteractiveViewer));
+      final matrix = viewer.transformationController!.value;
+      final viewport = tester.getSize(find.byType(InteractiveViewer));
+
+      final blueprint = WorkflowBlueprint.fromJson(_blueprintJson());
+      final bounds = BlueprintLayout.of(blueprint).bounds;
+      // 图坐标 → 画布坐标（与页面里的 `origin` 同一套算法，padding = 40）
+      const padding = 40.0;
+      final origin = Offset(padding - bounds.left, padding - bounds.top);
+      final onScreen = MatrixUtils.transformPoint(matrix, bounds.center + origin);
+
+      expect((onScreen.dx - viewport.width / 2).abs(), lessThan(0.5),
+          reason: '横向必须居中；偏到右边就是"跑到右上角"那个 bug');
+      expect((onScreen.dy - viewport.height / 2).abs(), lessThan(0.5),
+          reason: '纵向必须居中');
+      // 缩放要真的"适应窗口"（不是 1:1 原样铺开）
+      final scale = blueprintScaleOf(matrix);
+      expect(scale, lessThanOrEqualTo(1.0));
+      expect(scale, greaterThan(0.0));
+      // ⚠ 判据必须是 blueprintScaleOf，不是 `getMaxScaleOnAxis()`：
+      // 后者把 Z=1 也算进去，缩小的时候永远回 1.0，LOD 会整个失效。
+      final expectedFit = (viewport.width - 48) / bounds.width;
+      expect((scale - expectedFit).abs(), lessThan(0.001),
+          reason: '按窗口宽度适应：$scale vs $expectedFit');
+    });
+
+    testWidgets('面板能折叠：收起之后画布变宽，再展开回来', (tester) async {
+      // 用户 2026-10-18 的原话里专门点了这一句："（况且它还不能折叠）"。
+      tester.view.physicalSize = const Size(1200, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(MaterialApp(
+        home: WorkflowBlueprintPage(
+          title: '测试',
+          raw: _uiRaw,
+          diagnose: (raw) async => _blueprintJson(),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      final openWidth = tester.getSize(find.byType(InteractiveViewer)).width;
+      expect(find.textContaining('节点 /'), findsOneWidget, reason: '前提：面板开着');
+
+      await tester.tap(find.byKey(const Key('blueprint-panel-toggle')));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('节点 /'), findsNothing, reason: '收起之后面板该整个消失');
+      final closedWidth = tester.getSize(find.byType(InteractiveViewer)).width;
+      expect(closedWidth, greaterThan(openWidth), reason: '收起面板的意义就是画布变宽');
+
+      await tester.tap(find.byKey(const Key('blueprint-panel-toggle')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('节点 /'), findsOneWidget, reason: '要能再展开回来');
+      expect(tester.getSize(find.byType(InteractiveViewer)).width, openWidth);
+    });
+
+    testWidgets('编辑模式下点画布上的参数行 = 就地改，不用去右侧面板', (tester) async {
+      // 用户 2026-10-18："编辑时应该可以在蓝图上直接操作，而不是在右侧侧边栏慢慢选择。"
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final seen = <String>[];
+      await tester.pumpWidget(MaterialApp(
+        home: WorkflowBlueprintPage(
+          title: '测试',
+          raw: _uiRaw,
+          diagnose: (raw) async {
+            seen.add(raw);
+            return _blueprintJson();
+          },
+        ),
+      ));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.edit_outlined));
+      await tester.pumpAndSettle();
+
+      final blueprint = WorkflowBlueprint.fromJson(_blueprintJson());
+      final layout = BlueprintLayout.of(blueprint);
+      final viewer = tester.widget<InteractiveViewer>(find.byType(InteractiveViewer));
+      final matrix = viewer.transformationController!.value;
+      final canvasTopLeft = tester.getTopLeft(find.byType(InteractiveViewer));
+      const padding = 40.0;
+      final origin = Offset(padding - layout.bounds.left, padding - layout.bounds.top);
+
+      // 找一行"屏幕上画得出来、而且宽度够摆输入框"的参数（与生产判据同一个阈值）
+      Object? original;
+      Offset? target;
+      for (final node in blueprint.nodes) {
+        final box = layout.boxOf(node.id);
+        if (box == null) continue;
+        for (final widget in node.widgets) {
+          final row = blueprintWidgetRowRect(node, box, widget.index);
+          if (row.top > box.bottom - 10) continue;
+          final centre =
+              MatrixUtils.transformPoint(matrix, row.center + origin);
+          final width = row.width * blueprintScaleOf(matrix);
+          if (width < 40) continue;
+          original = widget.value;
+          target = canvasTopLeft + centre;
+          break;
+        }
+        if (target != null) break;
+      }
+      expect(target, isNotNull, reason: '夹具里至少要有一行能就地编辑的参数');
+
+      await tester.tapAt(target!);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('blueprint-inline-widget-field')), findsOneWidget,
+          reason: '点了参数行就该在**画布上**出现输入框');
+
+      // 数字按数字改，字符串按字符串改（类型从当前值推，见 coerceWidgetValue）
+      final probe = original is num ? '424242' : 'blueprint-inline-probe';
+      await tester.enterText(find.byKey(const Key('blueprint-inline-widget-field')), probe);
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('blueprint-inline-widget-field')), findsNothing,
+          reason: '提交之后就地编辑器要收起来');
+      expect(seen.length, greaterThanOrEqualTo(2), reason: '改完要就地复检');
+      expect(seen.last, contains(probe), reason: '复检用的是**改过之后**的原文');
+    });
+
+    testWidgets('体检里的 markdown 真的被渲染（不许露出反引号与井号）', (tester) async {
+      // 用户 2026-10-18："到处都是 markdown 格式文案，但是在这些组件又没有支持渲染。"
+      // 后端那几段文案里带 `` `代码` ``、`**加粗**`，以及本仓库约定的 `##强调##`。
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(MaterialApp(
+        home: WorkflowBlueprintPage(
+          title: '测试',
+          raw: _uiRaw,
+          diagnose: (raw) async {
+            final json = _blueprintJson();
+            final issues = (json['issues'] as List).cast<Map<String, dynamic>>();
+            issues.first['detail'] =
+                '开 ##模拟用户行为## 就行（`comfy_load_workflow`，**默认开着**）';
+            return json;
+          },
+        ),
+      ));
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('体检 2'));
+      await tester.pumpAndSettle();
+
+      final text = _renderedText(tester);
+      expect(text, contains('模拟用户行为'), reason: '内容本身要还在');
+      expect(text, isNot(contains('##')), reason: '井号必须被渲染掉，不能原样露出来');
+      expect(text, isNot(contains('`')), reason: '反引号必须被渲染掉');
+      expect(text, isNot(contains('**')), reason: '星号必须被渲染掉');
     });
 
     testWidgets('「看蓝图」只在给了蓝图取数时才出现', (tester) async {
@@ -501,6 +748,66 @@ void main() {
       await tester.tap(find.text('查看工作流'));
       await tester.pumpAndSettle();
       expect(find.text('看蓝图'), findsOneWidget);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  //  配色
+  //
+  //  用户 bug 2026-10-18："蓝图对比度过高，比较刺眼。"
+  //  真因：配色是**一整套浅色**写死在画笔里（节点底 #F3F5F7 + 近黑正文），
+  //  而 App 默认深色主题 ⇒ 深底上压一片近白，对比约 17:1。
+  //
+  //  仓库不做 golden / 截图回归，所以"观感"只能**算**出来 —— 这几条就是那个量。
+  // ---------------------------------------------------------------------------
+  group('配色', () {
+    /// 近白：老实现那个 `#F3F5F7` 就落在这里面。
+    bool looksNearWhite(Color c) => relativeLuminance(c) > 0.7;
+
+    test('深色主题下节点底不许是近白色（老实现就是这么刺眼的）', () {
+      final dark = BlueprintPalette.dark;
+      expect(
+        looksNearWhite(dark.body),
+        isFalse,
+        reason: '深色主题的节点底一旦接近白色，大面积高对比就会刺眼（2026-10-18 的 bug）',
+      );
+      expect(relativeLuminance(dark.canvas) < relativeLuminance(dark.body), isTrue,
+          reason: '节点底要比画布**亮一档**才分得出层（不许同色）');
+    });
+
+    test('两套主题下"节点底 vs 画布底"都看得清、但不刺眼', () {
+      for (final palette in [BlueprintPalette.dark, BlueprintPalette.light]) {
+        final ratio = contrastRatio(palette.body, palette.canvas);
+        expect(ratio, greaterThanOrEqualTo(1.1),
+            reason: '太低就分不出节点边界（浅色主题曾经就是这样）');
+        expect(ratio, lessThanOrEqualTo(2.5),
+            reason: '太大就是"一大片高对比色块"，正是用户说的刺眼');
+      }
+    });
+
+    test('两套主题下节点标题都读得清（正文级对比 ≥ 7:1）', () {
+      for (final palette in [BlueprintPalette.dark, BlueprintPalette.light]) {
+        expect(contrastRatio(palette.title, palette.body), greaterThanOrEqualTo(7.0));
+        expect(contrastRatio(palette.widgetText, palette.widgetBar), greaterThanOrEqualTo(4.5),
+            reason: '参数行是小字，至少要 AA 的 4.5:1');
+      }
+    });
+
+    test('语义色只上强调，不铺满整块底', () {
+      final dark = BlueprintPalette.dark;
+      expect(dark.accentOf('note'), isNot(dark.body));
+      expect(dark.accentOf('unknown'), isNot(dark.body));
+      // 认不出来的 kind 回普通描边色 —— **不猜**
+      expect(dark.accentOf('没见过的类'), dark.border);
+      // 深浅两套都要给同名的 kind 留位置，否则某个主题下会静默退化成"没上色"
+      expect(dark.accents.keys.toSet(), BlueprintPalette.light.accents.keys.toSet());
+    });
+
+    test('两套配色必须是稳定单例（shouldRepaint 靠身份比较）', () {
+      expect(identical(BlueprintPalette.of(Brightness.dark), BlueprintPalette.dark), isTrue);
+      expect(identical(BlueprintPalette.of(Brightness.light), BlueprintPalette.light), isTrue);
+      expect(BlueprintPalette.dark.isDark, isTrue);
+      expect(BlueprintPalette.light.isDark, isFalse);
     });
   });
 }

@@ -59,6 +59,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -1722,17 +1723,40 @@ impl<'a> Deps<'a> {
 ///
 /// 取法与 `comfy_fit_workflow` / `comfy_env_report` **同一份**（先看配置里的地址，再问一次）：
 /// 两处各写一份就会出现"同一台机器，两个工具看到两份节点定义"。
-pub async fn object_info_of(state: &AppState) -> Option<Map<String, Value>> {
+///
+/// 结果**过 [`crate::workflow::object_info_cache`]**：`/object_info` 是兆字节级响应，
+/// 每开一次蓝图就重拉一遍会让"打开蓝图"比 ComfyUI 自己慢一个量级（用户 2026-10-18）。
+/// 返回值是 `Arc`，调用方**不要再拷一份**。
+pub async fn object_info_of(state: &AppState) -> Option<Arc<Map<String, Value>>> {
     let config = crate::comfy::capture::capture_config(state).ok()?;
     let base = config.comfy_url.trim().trim_end_matches('/').to_string();
     if base.is_empty() {
         return None;
     }
-    crate::comfy::comfy_client::get_json(&format!("{base}/object_info"))
-        .await
-        .ok()
-        .and_then(|v| v.as_object().cloned())
+    // 命中就立刻回（只加引用计数）—— "开蓝图不再等一两秒"的全部秘密。
+    if let Some(hit) = state.object_info.get(&base) {
+        return Some(hit);
+    }
+    let value = crate::comfy::comfy_client::get_json_with_timeout(
+        &format!("{base}/object_info"),
+        OBJECT_INFO_TIMEOUT_SECS,
+    )
+    .await
+    .ok()?;
+    // 用 `if let` 把 map **移动**出来。写成 `as_object().cloned()` 会白拷整棵树
+    // （兆字节级、逐节点重新分配），正好把缓存省下来的时间还回去。
+    let Value::Object(map) = value else { return None };
+    let map = Arc::new(map);
+    // **只缓存成功**：拿不到就让下次重试（ComfyUI 可能刚起来，负缓存会让人以为它没开）
+    state.object_info.put(&base, Arc::clone(&map));
+    Some(map)
 }
+
+/// 取 `/object_info` 的超时。
+///
+/// 比通用的 20 秒短得多：**拿不到就退回"只做结构检查"**，而不是把界面卡 20 秒。
+/// 蓝图在没有节点定义时照样能画、能报结构问题，只是覆盖面小一圈（界面已如实标注）。
+const OBJECT_INFO_TIMEOUT_SECS: u64 = 8;
 
 /// 按 id 取提示词标题（给配方起名用）。
 fn prompt_title(state: &AppState, prompt_id: i64) -> Option<String> {
@@ -2117,7 +2141,9 @@ pub async fn learn_and_save(
             .map_err(|failure| RecipeFailure::ai(&failure.code, failure.message))?;
         args.path = Some(path.display().to_string());
     }
-    let object_info = object_info_of(state).await;
+    // 这一层要**拥有一份**（`Deps` 借用它到异步结束），所以显式解开 Arc 拷一次；
+    // 只有"学配方"这条冷路径会付这个拷贝，蓝图那条热路径直接吃 `Arc`。
+    let object_info = object_info_of(state).await.map(|info| (*info).clone());
     let deps = Deps::for_state(state, object_info);
     let learned = learn(&args, &deps)?;
     let extra: Vec<String> = learned
@@ -2843,7 +2869,7 @@ pub async fn bind_and_report(
     let model_dirs: Vec<std::path::PathBuf> =
         desktop.as_ref().map(|d| d.models_dirs.clone()).unwrap_or_default();
     let inventory =
-        crate::comfy::comfy_models::inventory(object_info.as_ref(), Some(&project_root), &model_dirs);
+        crate::comfy::comfy_models::inventory(object_info.as_deref(), Some(&project_root), &model_dirs);
     Ok(Some(bind(
         &row.to_recipe(),
         requests,

@@ -299,6 +299,12 @@ class ApiClient {
     return null;
   }
 
+  /// 改一条产物的元信息。
+  ///
+  /// 归属（集合）两组参数与 `promptId` / `clearPrompt` **同形**（2026-10-18）：
+  /// * `collectionId` = 手动**移进**那个集合（后端会校验 kind 一致，不一致回 400）；
+  /// * `clearCollection` = 手动**移出**（后端同时打上 `collection_opt_out`，
+  ///   否则下次启动的回填会把它静默吸回原组）。
   Future<MediaAsset> updateMedia(
     int id, {
     int? promptId,
@@ -309,10 +315,14 @@ class ApiClient {
     String? source,
     /// 标记 / 取消标记成人内容（用户 bug 2026-09-20：模糊只作用于标记过的条目）
     bool? nsfw,
+    int? collectionId,
+    bool clearCollection = false,
   }) async =>
       MediaAsset.fromJson(Map<String, dynamic>.from(await _send('PATCH', '/api/media/$id', {
         if (clearPrompt) 'clearPrompt': true,
         if (!clearPrompt && promptId != null) 'promptId': promptId,
+        if (clearCollection) 'clearCollection': true,
+        if (!clearCollection && collectionId != null) 'collectionId': collectionId,
         // Dart 的 null-aware map value：值为 null 时整条不写入
         'title': ?title,
         'notes': ?notes,
@@ -322,6 +332,49 @@ class ApiClient {
       }) as Map));
 
   Future<void> deleteMedia(int id) async => _send('DELETE', '/api/media/$id', null);
+
+  /// 这条产物**在磁盘上的绝对路径**。
+  ///
+  /// 「复制文件本身」（写 `CF_HDROP`）要它。⚠ **不要**在前端自己拼
+  /// `<storage>\media\<storedName>` —— 路径解析只有后端一份真源，
+  /// 前端拼等于长出第二份（AGENTS §7）。
+  ///
+  /// 文件不在盘上时后端回 404（调用方要如实说"文件不见了"）。
+  Future<String> mediaPath(int id) async {
+    final json = await _get('/api/media/$id/path');
+    return (Map<String, dynamic>.from(json as Map)['path'] ?? '').toString();
+  }
+
+  /// **重新自动整理**：把库里已存的产物按当前规则重算一遍分组。
+  ///
+  /// ⚠ 后端**只重算算法分出来的组**（`origin='auto'`）：用户新建的 / 被用户改过的集合、
+  /// 以及"用户已移出"的产物一个都不动。这条纪律在前端**不许绕**（别在本地先拆再合）。
+  ///
+  /// 返回这次重算了多少张。
+  Future<int> regroupCollections() async {
+    final json = await _send('POST', '/api/media/collections/regroup', const {});
+    return (Map<String, dynamic>.from(json as Map)['regrouped'] as num?)?.toInt() ?? 0;
+  }
+
+  /// 所有集合（手动在前）——「移到集合…」的选择器吃它。
+  Future<List<MediaCollection>> listCollections() async {
+    final raw = await _get('/api/media/collections');
+    return ((raw as List?) ?? const [])
+        .map((e) => MediaCollection.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList(growable: false);
+  }
+
+  /// **新建一个手动集合**，并把 [mediaIds] 一起移进去。
+  ///
+  /// 400 的两种情形都要如实显示给用户（后端的原话）：
+  /// ① 选中的产物 kind 不一致；② 一条都没选。
+  Future<MediaCollection> createCollection(List<int> mediaIds, {String? title}) async {
+    final json = await _send('POST', '/api/media/collections', {
+      'mediaIds': mediaIds,
+      if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+    });
+    return MediaCollection.fromJson(Map<String, dynamic>.from(json as Map));
+  }
 
   /// 上传若干文件；[promptId] 为空表示"暂不关联"。
   Future<UploadResult> uploadMedia({

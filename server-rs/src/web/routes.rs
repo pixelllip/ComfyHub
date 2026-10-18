@@ -29,7 +29,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -70,6 +70,12 @@ pub struct AppState {
     /// 所以它是"跑到哪一步了"的唯一来源；`/api/capture/{status,jobs}` 与
     /// `comfy_get_status` 三处读的都是这一份内存表。
     pub comfy_progress: Arc<crate::comfy::comfy_progress::ComfyProgress>,
+    /// ComfyUI `/object_info` 的**进程内缓存**。
+    ///
+    /// `/object_info` 是兆字节级响应，而蓝图、配方、接线体检、盘查全都要它 ——
+    /// 以前每次重新拉一遍 + 重新解析一遍，于是"点开蓝图要等一两秒"
+    /// （用户 2026-10-18："和 comfy 不是一个量级"）。见 [`crate::workflow::object_info_cache`]。
+    pub object_info: Arc<crate::workflow::object_info_cache::ObjectInfoCache>,
     /// 后端**实际**监听的端口（`--port 0` 时是系统挑的那个）。
     ///
     /// `GET /api/net/urls` 用它拼候选地址：不能拿请求里的 Host（那是**客户端**走过的路，
@@ -90,6 +96,7 @@ impl AppState {
             capture_poller: Arc::new(crate::comfy::capture_poller::CapturePoller::new()),
             submissions: Arc::new(crate::workflow::workflow_submit::Submissions::new()),
             comfy_progress: Arc::new(crate::comfy::comfy_progress::ComfyProgress::new()),
+            object_info: Arc::new(crate::workflow::object_info_cache::ObjectInfoCache::new()),
             port: Arc::new(std::sync::atomic::AtomicU16::new(0)),
         }
     }
@@ -217,8 +224,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/stats", get(get_stats))
         // 产物（P4 第 3 步）：列表 / 详情 / **原件文件流**（Range + ETag）
         .route("/api/media", get(list_media))
+        // 集合清单（2026-10-18 手动集合）：给"移到集合…"的选择器用。
+        // ⚠ 它和 `/api/media/{id}` 是**同段数**——静态段优先于参数段（matchit 的规矩），
+        // 所以 `collections` 不会被当成 id 吃掉。
+        .route("/api/media/collections", get(list_collections))
         .route("/api/media/{id}", get(get_media))
         .route("/api/media/{id}/file", get(media_file))
+        // 这条产物**在磁盘上的绝对路径**（2026-10-18）：给"复制文件本身"用。
+        .route("/api/media/{id}/path", get(media_path))
         // 还没搬的：缩略图要图像解码器、封面要 ffmpeg 抽帧、上传要 multipart —— 一律 501
         .route("/api/media/{id}/thumb", get(media_thumb))
         .route("/api/media/{id}/poster", get(media_poster))
@@ -855,6 +868,42 @@ async fn media_workflow(
     Id(id): Id,
 ) -> Result<axum::response::Response, ApiError> {
     workflow_response(crate::comfy::capture::media_workflow(&state, id)?)
+}
+
+/// `GET /api/media/{id}/path`：这条产物**在磁盘上的绝对路径**（2026-10-18）。
+///
+/// # 为什么必须有这一条
+///
+/// "复制文件本身"要往剪贴板写 `CF_HDROP`，那需要**磁盘绝对路径**；而 `MediaDto` 里
+/// 只有 `/api/media/{id}/file` 这种 **HTTP 地址**。让前端自己拼
+/// `<storage>\media\<storedName>` 是**被禁止的**——路径解析只有一份真源
+/// （`web/models.rs` 的注释 + AGENTS §7）。所以后端算好交给它。
+///
+/// 两种 404 要分得清（界面据此说人话）：
+/// * 产物不存在；
+/// * 产物在库里、但**文件不在盘上**（被手动删了 / 外置盘拔了）。
+async fn media_path(
+    State(state): State<AppState>,
+    Id(id): Id,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let stored: Option<String> = state.with(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT stored_name FROM media_assets WHERE id = ?1",
+                rusqlite::params![id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    })?;
+    let Some(stored) = stored else {
+        return Err(ApiError::not_found(format!("产物 {id} 不存在")));
+    };
+    // `resolve_media` 顺带挡住目录穿越，并且**只认真的存在且是文件**的路径
+    let Some(path) = crate::media::media::resolve_media(state.media_dir(), &stored) else {
+        return Err(ApiError::not_found(format!("产物 {id} 的文件不在盘上")));
+    };
+    Ok(Json(serde_json::json!({ "path": path.display().to_string() })))
 }
 
 /// `GET /api/prompts/{id}/api-graph` —— **API 格式**节点图（提交给 ComfyUI 的那一份）。
@@ -2175,8 +2224,30 @@ pub(crate) fn tags_of(conn: &Connection, prompt_id: i64) -> rusqlite::Result<Vec
 /// 2026-10-11 起界面上的"关联产物数"**一律走这一条**：从画廊存下来的预设，产物指向的是
 /// **自动捕获那条**提示词行，直连 `media_assets.prompt_id == 预设 id` 会说"没关联"，
 /// 用户明明是从那张图存的（那条直连计数的老函数已删 —— 留着必然被误用）。
+/// `WriteError` → `rusqlite::Error`。
+///
+/// 为什么需要它：`state.with(...)` 的闭包**只能回 `rusqlite::Result`**
+/// （它是个只读连接包装），而集合那一层的函数一律回 [`crate::library::repo::WriteError`]。
+/// 只读路径上没有 Validation/NotFound 的花样，所以原样搬过去即可 ——
+/// 真正需要 400/404 的那些判断都在 `state.write(...)` 里，那条路直接映射成 [`ApiError`]。
+pub(crate) fn as_sql_error(error: crate::library::repo::WriteError) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(error.to_string())))
+}
+
 pub(crate) fn media_count_matching(conn: &Connection, prompt_id: i64) -> rusqlite::Result<i64> {
-    crate::media::collection::media_count_of_preset(conn, prompt_id).map_err(|e| {
-        rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(e.to_string())))
-    })
+    crate::media::collection::media_count_of_preset(conn, prompt_id).map_err(as_sql_error)
+}
+
+/// `GET /api/media/collections`：集合清单（2026-10-18 手动集合）。
+///
+/// 给"移到集合…"的选择器用：**手动集合排前面**（用户自己建的在上面更好找），
+/// 每条带 `kind` 与 `size` —— 界面据此把"装不下这一批"的目标置灰并说明原因。
+///
+/// 算法分出来的集合也在列表里（用户可以把图拖进一个自动分组，那一组会**就地转成手动**），
+/// 只是**没有名字**（`title` 缺席，界面按"算法分组"显示）。
+async fn list_collections(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<crate::web::models::MediaCollectionDto>>, ApiError> {
+    let rows = state.with(|conn| crate::media::collection::list(conn).map_err(as_sql_error))?;
+    Ok(Json(rows.into_iter().map(Into::into).collect()))
 }
