@@ -142,6 +142,7 @@ D:\dist\ComfyHub\viewer.exe
 | `pack-release.ps1` | 打包 / 校验发布包（`-OutDir` 建议指到工作区外；`-Clean` 不动运行期数据） |
 | `comfy-path.ps1` | 找 ComfyUI（判据与后端 `comfy_dirs` 必须一致） |
 | `mcp-runtime.ps1` | 可选能力：MCP 运行时（检测优先，装不上下载便携版兜底） |
+| `train-engine.ps1` | 可选能力：本地 LoRA 训练引擎（探测器 / 起停守护进程与自有 WebUI / 打开界面）。见 [docs/training-engine.md](docs/training-engine.md) |
 | `video-poster.ps1` | 给视频产物取封面 / 预览帧（可选能力） |
 | `gen-builtin-catalog.ps1` | 重新生成内置模型目录的冻结副本 |
 | `build-apk.ps1` | 打 Android 包 |
@@ -210,6 +211,7 @@ pwsh -File scripts\e2e-submit-test.ps1                                # 提交�
 | [docs/pairing-design.md](docs/pairing-design.md) | 配对闸门与密钥下行 |
 | [docs/workflow-recipe-design.md](docs/workflow-recipe-design.md) | 工作流配方 |
 | [docs/workflow-blueprint-design.md](docs/workflow-blueprint-design.md) | 工作流蓝图与接线体检（含两份 krea2 模板的实测结论） |
+| [docs/training-engine.md](docs/training-engine.md) | 可选能力「本地 LoRA 训练引擎」：现状 / 脚本 / 接进 App 的落点 |
 | [docs/mobile-harness-design.md](docs/mobile-harness-design.md) | 移动端 harness（Android Kotlin） |
 | [docs/archive/](docs/archive/README.md) | **已归档**：做完了的任务书、被取代的进度快照、当时的审计与调研 —— 不是当前依据 |
 
