@@ -298,11 +298,45 @@ pub fn specs(policy: &crate::tools::policy::ToolPolicy) -> Vec<crate::provider::
 /// `input_schema` 是**原样透传**的那份 JSON Schema（MCP 的也一样，见 `mcp.rs` 模块头 §2）：
 /// 解析不出来时退化成空对象 schema，**不编一份我们自己的形状**（改错了模型就调不对参数）。
 pub fn spec_of_view(view: &ToolView<'_>) -> crate::provider::protocol::ToolSpec {
+    let mut parameters =
+        serde_json::from_str(view.input_schema).unwrap_or_else(|_| json!({"type":"object"}));
+    add_reason_property(&mut parameters);
     crate::provider::protocol::ToolSpec {
         name: view.name.to_string(),
         description: view.description.to_string(),
-        parameters: serde_json::from_str(view.input_schema).unwrap_or_else(|_| json!({"type":"object"})),
+        parameters,
     }
+}
+
+/// 给**每一个**下发给模型的工具 schema 补一个可选 `reason` 字段。
+///
+/// # 为什么要动全部工具，而不是逐个改 `input_schema`
+///
+/// 用户 2026-10-21 的要求：工具卡上不要只写 `comfy_load_workflow` 这种机器名，
+/// 要写"这次调用是干什么的"。最可靠的来源是**模型自己**——它在发起调用时最清楚
+/// 为什么调。让它带一句 `reason`，比前端按工具名猜用途准得多。
+///
+/// 三个纪律：
+/// 1. **可选**（不进 `required`）：旧模型不写也不会让整次调用失败；前端退回到工具名映射。
+/// 2. **执行前必须摘掉**：`reason` 只给界面看，绝不能漏进工具参数
+///    （`additionalProperties:false` 的工具会当场拒绝，`write_file` 之类还可能把它当正文）。
+///    摘除在 `ai::executor::handle_call` 的入口做，**只有一处**。
+/// 3. **只改对象型 schema**：MCP 工具可能是 `oneOf` 一类形状，硬塞 `properties` 会破坏它。
+fn add_reason_property(parameters: &mut Value) {
+    let Some(schema) = parameters.as_object_mut() else { return };
+    let is_object = schema.get("type").and_then(Value::as_str) == Some("object")
+        || schema.contains_key("properties");
+    if !is_object {
+        return;
+    }
+    let entry = schema.entry("properties").or_insert_with(|| json!({}));
+    let Some(properties) = entry.as_object_mut() else { return };
+    properties.entry("reason").or_insert_with(|| {
+        json!({
+            "type": "string",
+            "description": "为什么调用这个工具：用一句用户看得懂的话写清你要解决什么（例：\"先确认本机有没有这个模型\"）。它只显示在工具卡上，不会传给工具本身。每次调用都写。"
+        })
+    });
 }
 
 /// 一个工具在"清单"这一层的借用视图（两种来源的公共形状）。
@@ -382,13 +416,14 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前三十五个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前四十个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
 /// + 联网三件（`web_search` / `web_fetch` / `civitai_search`，见 [`crate::tools::web_tools`] 与
 /// [`crate::tools::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
 /// + comfy 查询三件（`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status`）
 /// + `comfy_load_workflow` / `comfy_submit` / `comfy_sync_history`
-/// + 资料库两件（角色卡）+ **图像编辑三件**（`comfy_use_media` / `comfy_use_attachment` /
+/// + 资料库四件（角色卡 + 画风卡：`search/save_character_card`、`search/save_style_card`）
+/// + **图像编辑三件**（`comfy_use_media` / `comfy_use_attachment` /
 /// `comfy_make_mask`，见 [`crate::comfy::image_edit`]）
 /// + **体检两件**（`comfy_check_inputs` / `comfy_fit_workflow`，见 [`crate::workflow::workflow_fit`]，
 /// P4 第 62 步）
@@ -400,7 +435,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **配方三件**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`，
 /// 见 [`crate::workflow::workflow_recipe`]，P4 第 67 步；学与绑都与
 /// `POST /api/ai/workflow-recipes*` 共用一份实现）。
-pub const IMPLEMENTED: [&str; 38] = [
+pub const IMPLEMENTED: [&str; 40] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
@@ -434,8 +469,10 @@ pub const IMPLEMENTED: [&str; 38] = [
     "register_skill",
     "remember",
     "save_character_card",
+    "save_style_card",
     "search_character_cards",
     "search_prompts",
+    "search_style_cards",
     "web_fetch",
     "web_search",
     "write_file",
@@ -613,6 +650,9 @@ pub async fn execute(
         // 而不是凭印象编 —— 现场教训是"把 shinku 当成 iroi 写了两版废图"。
         "search_character_cards" => crate::library::character_cards::tool_search(state, arguments),
         "save_character_card" => crate::library::character_cards::tool_save(state, arguments),
+        // 画风卡与角色卡同等地位：写画风 / 复刻画风之前先查这里。
+        "search_style_cards" => crate::library::style_cards::tool_search(state, arguments),
+        "save_style_card" => crate::library::style_cards::tool_save(state, arguments),
         // `search_prompts`：同一个落点的另一半 —— 库里可能已经有那个角色的完整 tag 栈
         "search_prompts" => search_prompts(state, arguments),
         // ---- 联网三件 + 定向查询（P4 第 64 步：用户 2026-09-20 的"只用通用方案"）------

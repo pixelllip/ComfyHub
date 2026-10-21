@@ -31,6 +31,7 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
+use comfyhub_server_rs::workflow::workflow_submit::WorkflowEdit;
 use comfyhub_server_rs::workflow::{workflow_blueprint, workflow_convert};
 
 /// 项目根（`server-rs/` 的上一级）。
@@ -89,6 +90,16 @@ async fn krea2_两份模板开模拟用户行为之后都没有缺口() {
         }
         assert!(converted.unsupported_nodes.is_empty(), "{name} 有没转换出来的节点：{:?}", converted.unsupported_nodes);
         assert!(converted.unresolved_inputs.is_empty(), "{name} 有悬挂引用：{:?}", converted.unresolved_inputs);
+
+        // ③ 正面提示词注入：i2i 的 108.text 被 115/116 那条线覆盖，必须能断开。
+        let graph = Value::Object(converted.graph.clone());
+        let (patched, changed, bypassed) =
+            WorkflowEdit::apply_positive_prompt(&graph, "最终提示词").unwrap();
+        eprintln!("   positivePrompt → {changed:?}；TextGenerate 摘掉 {bypassed:?}");
+        assert!(!changed.is_empty(), "{name} 找不到正面文本编码器");
+        if name == "comfyhub_i2i_krea2.json" {
+            assert_eq!(patched["108"]["inputs"]["text"], "最终提示词");
+        }
 
         // ② 接线体检：不许有 error（warn 可以 —— 比如"这些参数对不齐"）
         let blueprint = workflow_blueprint::build(&ui, Some(&info), true);

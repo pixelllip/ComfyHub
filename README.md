@@ -1,7 +1,7 @@
 # ComfyHub
 
 **本机的 AI 绘图工作台**：把 ComfyUI 的"能跑"变成"好跑" —— AI 帮你写提示词、选工作流、投放参考图、
-提交生成，产物自动进画廊；提示词 / 标签 / 角色卡这些"库"是本地 SQLite 单文件，跨端只走局域网配对。
+提交生成，产物自动进画廊；提示词 / 标签 / 角色卡 / 画风卡这些"库"是本地 SQLite 单文件，跨端只走局域网配对。
 
 三句话：
 
@@ -45,11 +45,15 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 - **蓝图与接线体检**：任意一份工作流都能摊成**节点-连线画布**（真实坐标 / 分组 / 旁路灰显 / 前端 only 节点一个不丢），
   并给出**哪里接错了**（类型不匹配 / 悬空引用 / 空必填 / 环 / 没输出节点 …）；在画布上还能**改参数、关掉某条分支**，
   改完就地复检、可复制或存成文件。入口：详情页「查看工作流 → 看蓝图」。见 [docs/workflow-blueprint-design.md](docs/workflow-blueprint-design.md)。
+- **选择现有工作流**：AI 工作台顶栏「选择现有工作流」列出本机 ComfyUI 里已保存的工作流，每行可**看蓝图**；
+  选中后把路径写进输入框，AI 会照这一份出图，**不再自己编节点图**。带 `TextGenerate` 的工作流由 AI 服从其
+  `system_prompt` 自己写终稿，再用 `comfy_submit(positivePrompt=…)` 摘线注入正面条件编码。
 - **图像编辑**：把画廊产物 / 用户附件**投放**进 ComfyUI 的 `input`，生成遮罩，贴人物（抠图交给工作流里的 rembg 节点）。
 - **工具与 Skills**：桌面全量工具清单（`server-rs/src/tools/tools.rs` 是唯一真源）+ 三层准入（选完预检 / 发送前禁用 /
   建 Run 前后端再验）；Skills 正文真源是磁盘（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`），**不做缓存**。
 - **长期记忆**：`<storage>\ai\memory.md`，一行一条，用户可手改；写超限**报错不截断**。
-- **角色卡**：一个角色的标准容器（**名称 / 正面提示词 / 负面提示词**）。见 §4。
+- **卡片库**：角色卡（画的是谁）+ 画风卡（画成什么样），同等地位。每张卡有 Danbooru tag 版 +
+  自然语言版 + 负面提示词 + 示例产物。见 §4。
 
 ## 3. 架构
 
@@ -78,29 +82,42 @@ Rust 后端（单文件 exe，SQLite 单文件）──► ComfyUI（127.0.0.1:8
 | `scripts/` | 构建 / 测试 / 打包（§7），**App 起停后端不经过它们** |
 | `docs/` | 设计、契约、排错（§9） |
 
-## 4. 角色卡
+## 4. 卡片库：角色卡 + 画风卡
 
-一张卡 = 一个角色，**只有三个字段**（2026-10 用户要求："角色卡只保留：名称、正面提示词、负面提示词"）：
+**角色卡**管"画的是谁"，**画风卡**管"画成什么样"（画师 / 媒介 / 上色 / 光 / 质感）——
+两者**同等地位**、字段同形、共用同一个页面与同一套 AI 工具。
+
+每张卡有：
 
 - **名称**：只做标识（同名 = 同一张卡：AI 重复保存是**合并**，不会攒出第二张）；
-- **正面提示词**：这个角色的规范 tag 栈 / 外观服饰基线（整段文本）；
-- **负面提示词**：这个角色常踩的那些词。
+- **Danbooru tag 版**（`tagPrompt`）：规范 tag 栈，逗号分隔，给 tag 模型直接照抄；
+- **自然语言版**（`prompt`）：整段文本。角色卡要求 **600+ token、从头到脚每一个细节**；
+  画风卡要求 **100~200 token、一段话**（媒介笔触 → 上色 → 色调 → 光 → 阴影 → 辉光 →
+  散景/颗粒 → 完成度）；
+- **负面提示词**：两版共用；
+- **示例产物**：可以挂最多 24 条画廊产物（`#mediaId`），界面画成缩略图，AI 用
+  `comfy_use_media` 把示例投进 ComfyUI 当参考。
+
+**两版缺一不算写完**：缺一版时让 AI 补，它会按已有那版补出另一版；两版都有时可以继续优化，
+但不许改掉核心身份 / 画风。写作规则与自检清单在 skill `card-writer`（角色卡 600+ token 全身上下、
+画风卡 100~200 token）。
 
 为什么是结构化的一张表而不是长期记忆：记忆是"一行一条文本"、有 100 条上限、超限**直接报错**，
-而角色卡要按名字幂等地反复覆盖。
+而卡片要按名字幂等地反复覆盖。
 
-- **入口**：「提示词」页右上角。刻意不做成第六个一级导航项 —— 窄屏上六个图标会挤成两行，
-  而角色卡天然属于"写提示词"这条工作流。
-- **AI 那两条工具**：`search_character_cards`（写角色之前先查本机，有卡就照卡写）/
-  `save_character_card`（存成卡）。`prompt` 是**整段替换**：想在已有内容上补两句，
+- **入口**：「预设库」页右上角 →「卡片库」，顶部可在角色卡 / 画风卡之间切换。
+  刻意不做成第六个一级导航项 —— 窄屏上六个图标会挤成两行。
+- **AI 四条工具**：`search_character_cards` / `save_character_card`、
+  `search_style_cards` / `save_style_card`。两个正面字段都是**整段替换**：想在已有内容上补两句，
   先把卡读出来、再给完整的那一份（追加会把两段风格不同的提示词粘成一条）。
-- **端点**：`GET/POST /api/ai/character-cards`、`GET/PUT/DELETE /api/ai/character-cards/{id}`
-  （`PUT` 是全量替换，界面弹窗用）。**没有 `/summary`** —— 启用数 / token 口径 / 5×5 位置
-  那一层随"只留三个字段"一起删了（2026-10）。
-- **老库升级**：开库时把老卡的 `tags`（JSON 数组）拼成一行灌进 `prompt`
-  （`infra::db` 那条迁移：**只在刚补上这一列的那一次**跑，幂等、不覆盖已有值、
-  不是 JSON 就原样当文本；所以用户清空过的提示词不会被下次启动"复活"）；
-  其余老列留在库里，只是再没人读（SQLite 删列要重建表，不值当）。
+- **端点**：
+  - `GET/POST /api/ai/{character,style}-cards`、`GET/PUT/DELETE /api/ai/{character,style}-cards/{id}`
+    （`PUT` 是全量替换，界面弹窗用）；
+  - `GET/POST/PUT /api/ai/{character,style}-cards/{id}/examples`、
+    `DELETE /api/ai/{character,style}-cards/{id}/examples/{mediaId}`。
+- **老库升级**：`character_cards` 补 `tag_prompt` 列（空着，由 AI / 用户补，不做自动回填）；
+  老 `tags`（JSON 数组）仍按原来的迁移灌进 `prompt`（自然语言版）—— 那次迁移只在刚补列时跑一次。
+- **不进同步范围**：卡片是桌面侧知识，手机提交走 `comfy_queue_submit`；与 `workflow_recipes` 同一档。
 
 ## 5. 端口、环境变量、运行布局
 
@@ -210,7 +227,7 @@ pwsh -File scripts\e2e-submit-test.ps1                                # 提交�
 | [docs/permission-audit.md](docs/permission-audit.md) | 写工作区外的 12 处，逐条标注退路 / 闸门 |
 | [docs/pairing-design.md](docs/pairing-design.md) | 配对闸门与密钥下行 |
 | [docs/workflow-recipe-design.md](docs/workflow-recipe-design.md) | 工作流配方 |
-| [docs/workflow-blueprint-design.md](docs/workflow-blueprint-design.md) | 工作流蓝图与接线体检（含两份 krea2 模板的实测结论） |
+| [docs/workflow-blueprint-design.md](docs/workflow-blueprint-design.md) | 工作流蓝图与接线体检（含两份 krea2 结构样例的实测结论；样例不是出图起点） |
 | [docs/training-engine.md](docs/training-engine.md) | 可选能力「本地 LoRA 训练引擎」：现状 / 脚本 / 接进 App 的落点 |
 | [docs/mobile-harness-design.md](docs/mobile-harness-design.md) | 移动端 harness（Android Kotlin） |
 | [docs/archive/](docs/archive/README.md) | **已归档**：做完了的任务书、被取代的进度快照、当时的审计与调研 —— 不是当前依据 |

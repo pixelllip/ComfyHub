@@ -1768,7 +1768,14 @@ async fn post_blueprint(
     axum::Json(input): axum::Json<BlueprintInput>,
 ) -> Result<axum::Json<Value>, crate::web::routes::ApiError> {
     let raw: Value = parse_raw(&input.raw)?;
-    let object_info = crate::workflow::workflow_recipe::object_info_of(&state).await;
+    // ⚡ `diagnose=false` 是界面的**快路径**：只画结构，不判接线。
+    // 它**不需要** `/object_info`（兆字节级、冷缓存时要几百毫秒），所以这里连取都不取 ——
+    // 否则"先秒开一张图、再补体检"就白设计了。判据本身仍只有 `build` 一份。
+    let object_info = if input.diagnose {
+        crate::workflow::workflow_recipe::object_info_of(&state).await
+    } else {
+        None
+    };
     Ok(axum::Json(build(&raw, object_info.as_deref(), input.diagnose).to_json()))
 }
 

@@ -95,6 +95,7 @@ fn 会改世界的工具一律不进缓存() {
         "comfy_sync_history",
         "comfy_learn_workflow",
         "save_character_card",
+        "save_style_card",
         // ⚠ 它的 `mutating` 是 `false`（不改用户机器上的文件），但它会往库里写提示词 ——
         //   `invalidates` 里那条显式例外盯的就是它
         "comfy_load_workflow",
@@ -107,9 +108,16 @@ fn 会改世界的工具一律不进缓存() {
         assert!(freshness(name).is_none(), "{name} 不该进缓存");
     }
     // 反面：纯读工具既要能进缓存，又**不该**清缓存
-    for name in
-        ["read_file", "list_dir", "comfy_get_status", "comfy_get_run", "web_search", "find_model"]
-    {
+    for name in [
+        "read_file",
+        "list_dir",
+        "comfy_get_status",
+        "comfy_get_run",
+        "web_search",
+        "find_model",
+        "search_character_cards",
+        "search_style_cards",
+    ] {
         assert!(freshness(name).is_some(), "{name} 应当进缓存");
         assert!(!invalidates(name), "{name} 不该清缓存");
     }

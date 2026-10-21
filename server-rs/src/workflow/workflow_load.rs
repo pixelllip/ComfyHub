@@ -128,26 +128,22 @@ pub async fn load_from_file(
     let api_graph: Map<String, Value> = if api_format {
         root.clone()
     } else {
-        let config = crate::comfy::capture::capture_config(state)
-            .map_err(|e| LoadFailure::new("CONFIG_ERROR", e.human()))?;
-        let base = config.comfy_url.trim().trim_end_matches('/').to_string();
-        // 界面格式的转换**必须**问 ComfyUI 要节点定义（widgets_values 只有位置没有名字）
-        let object_info = crate::comfy::comfy_client::get_json(&format!("{base}/object_info"))
+        // 界面格式的转换**必须**问 ComfyUI 要节点定义（widgets_values 只有位置没有名字）。
+        //
+        // ⚠ 这里必须走 `object_info_of`（带进程内缓存）：`comfy_load_workflow` 是"每用一次
+        // 工作流就调一次"的工具，直连 `/object_info` 等于每次都重新拉 4~15MB + 重新解析，
+        // 典型体感是"读个工作流要等半秒到两秒"。缓存键是 ComfyUI 地址，换实例天然失效。
+        let object_info = crate::workflow::workflow_recipe::object_info_of(state)
             .await
-            .map_err(|message| {
+            .ok_or_else(|| {
                 LoadFailure::new(
                     "COMFY_UNREACHABLE",
-                    format!(
-                        "这是界面格式工作流，转换需要问 ComfyUI 要节点定义（/object_info），但连不上：\
-                         {}。先 comfy_get_status 看 ComfyUI 在不在跑。",
-                        message.chars().take(200).collect::<String>()
-                    ),
+                    "这是界面格式工作流，转换需要问 ComfyUI 要节点定义（/object_info），但连不上。\
+                     先 comfy_get_status 看 ComfyUI 在不在跑。"
+                        .to_string(),
                 )
             })?;
-        let Some(object_info) = object_info.as_object() else {
-            return Err(LoadFailure::new("COMFY_UNREACHABLE", "/object_info 不是 JSON 对象"));
-        };
-        let converted = workflow_convert::to_api_graph(&root, object_info, emulate_frontend)
+        let converted = workflow_convert::to_api_graph(&root, object_info.as_ref(), emulate_frontend)
             .map_err(|message| {
                 LoadFailure::new("INVALID_ARGUMENT", format!("转换工作流失败：{message}"))
             })?;

@@ -251,7 +251,7 @@ fn finding_block(f: &Finding) -> String {
 /// ⚠ `Fast Bypasser (rgthree)` 是 2026-10-17 补的：用户的 `krea2 i2i workflow.json` 里
 /// 用的就是**单数**那个名字（rgthree 新旧版本的类名不同），而 `/object_info` 里查不到它 ——
 /// 漏了这一条的表现是"这份工作流学不下来"，而屏幕上看不出为什么。
-pub(crate) const KNOWN_FRONTEND_ONLY: [&str; 13] = [
+pub(crate) const KNOWN_FRONTEND_ONLY: [&str; 14] = [
     "Label (rgthree)",
     "Bookmark (rgthree)",
     "Fast Bypasser (rgthree)",
@@ -264,6 +264,10 @@ pub(crate) const KNOWN_FRONTEND_ONLY: [&str; 13] = [
     "GetNode",
     "Reroute",
     "Note",
+    // ComfyUI 自带的 Markdown 注释框（MOSS / Krea 官方模板里都有）：
+    // 它和 `Note` 一样只活在前端。漏了它会被判成"本机没有这个节点类"，
+    // 蓝图里就多一条**假 error**（MOSS 模板实测踩到）。
+    "MarkdownNote",
     "PrimitiveNode",
 ];
 

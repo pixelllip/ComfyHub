@@ -19,6 +19,13 @@ fn specs_only_include_implemented_tools() {
         );
         assert!(!spec.description.is_empty());
         assert!(spec.parameters.is_object(), "{} 的 schema 必须是对象", spec.name);
+        // 用户 2026-10-21：工具卡要显示"为什么调用"。schema 里没这个可选字段，
+        // 模型就算想写也会被 `additionalProperties:false` 拒掉。
+        assert_eq!(
+            spec.parameters["properties"]["reason"]["type"], "string",
+            "{} 的 schema 少了 reason（工具卡只能显示机器名）",
+            spec.name
+        );
     }
     assert!(specs.iter().any(|s| s.name == "list_skills"));
     assert!(specs.iter().any(|s| s.name == "ask_user_question"), "提问闸门已搬，应当下发");
@@ -33,6 +40,13 @@ fn specs_only_include_implemented_tools() {
     for expected in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
         assert!(specs.iter().any(|s| s.name == expected), "{expected} 应当下发");
     }
+    // 2026-10-21：带 TextGenerate 的工作流由 AI 自己写终稿，`positivePrompt` 必须下发给模型，
+    // 否则 skill 里写的流程模型根本调不到。
+    let submit = specs.iter().find(|s| s.name == "comfy_submit").expect("comfy_submit 应当下发");
+    assert_eq!(
+        submit.parameters["properties"]["positivePrompt"]["type"], "string",
+        "comfy_submit 少了 positivePrompt"
+    );
 }
 
 /// 联网额度是一条**独立的线**（Kotlin `ToolContext.webInWindow` +

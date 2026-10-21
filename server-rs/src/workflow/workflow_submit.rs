@@ -56,6 +56,7 @@
 //!     这一道先说话是因为它的措辞正是本仓库的纪律（"让用户启停/换实例，**不要**改用户的工作流"）；
 //!     而**纯前端**那一类被它**故意跳过**（对那种类说"装节点包"是错的方向），交给审核那一档说。
 
+use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::sync::Mutex;
 
 use serde_json::{json, Map, Value};
@@ -307,6 +308,178 @@ impl WorkflowEdit {
         }
         Ok((Value::Object(nodes), applied))
     }
+
+    /// 把**最终正面提示词**直接写进正面文本编码器，并摘掉原来接着的那一路。
+    ///
+    /// # 为什么需要它（用户 2026-10-21）
+    ///
+    /// 很多现成工作流里有一个 `TextGenerate`（本地 LLM 扩写 / 布局编译器）：
+    /// 它的输出经过 `ComfySwitchNode` / `Fast Bypasser` 一路接到 `CLIPTextEncode.text`。
+    /// 以前模型只能干看着：直接覆盖 `text` 会被"这是连线"拒掉；不覆盖就只能让本地 LLM
+    /// 按它自己的随机性扩写（慢、不可控，还经常把中文写成英文标签）。
+    ///
+    /// 现在模型可以**自己服从 `TextGenerate.system_prompt`** 写好最终提示词，再走这个参数：
+    /// 1. 从每个采样器的 `positive` 输入往上找**最近的** `CLIPTextEncode`（不碰 negative）；
+    /// 2. 把它的 `text` 改成字面量 —— 原来那条线**就此断开**；
+    /// 3. 断开之后 `TextGenerate` 那一路从输出再也走不到，ComfyUI 不会执行它
+    ///    （节点还留在图里，用户自己的文件一个字没动）。
+    ///
+    /// 返回 `(改过的图, 改过的 节点id.text, 被摘掉的 TextGenerate 节点 id)`。
+    /// **找不到正面文本编码器就报错**：静默什么都不改会让模型以为已经按它的提示词出了图。
+    pub fn apply_positive_prompt(
+        graph: &Value,
+        prompt: &str,
+    ) -> Result<(Value, Vec<String>, Vec<String>), String> {
+        let mut nodes: Map<String, Value> = graph
+            .as_object()
+            .cloned()
+            .ok_or_else(|| "工作流不是 API 格式节点图（顶层要是对象）".to_string())?;
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            return Err("positivePrompt 是空的：要给最终提示词（不是给用户原话让本地 LLM 扩写）".into());
+        }
+
+        // ① 所有"正面条件"入口：
+        //    · KSampler / CFGGuider 这类有 `positive` 插口的；
+        //    · `BasicGuider` 那种只有 `conditioning` 的（Krea 2 的
+        //      `SamplerCustomAdvanced → BasicGuider → CLIPTextEncode` 就是它）。
+        let mut starts: Vec<String> = Vec::new();
+        for node in nodes.values() {
+            let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+            if let Some((up, _)) = inputs.get("positive").and_then(link_ref) {
+                starts.push(up);
+            }
+            let class = node.get("class_type").and_then(Value::as_str).unwrap_or("");
+            if class.to_ascii_lowercase().contains("guider") {
+                if let Some((up, _)) = inputs.get("conditioning").and_then(link_ref) {
+                    starts.push(up);
+                }
+            }
+        }
+        if starts.is_empty() {
+            return Err(
+                "这份工作流里找不到 `positive` 条件输入（它不是一张能出图的条件采样图）；\
+                 不要传 positivePrompt"
+                    .into(),
+            );
+        }
+
+        // ② 往上找最近的文本编码器（遇到就停，不再往它的 clip 上游走）
+        let mut queue: VecDeque<(String, usize)> =
+            starts.into_iter().map(|id| (id, 0usize)).collect();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut found: Vec<(String, usize)> = Vec::new();
+        while let Some((id, depth)) = queue.pop_front() {
+            if depth > 32 || !seen.insert(id.clone()) {
+                continue;
+            }
+            let Some(node) = nodes.get(&id).and_then(Value::as_object) else { continue };
+            let class = node.get("class_type").and_then(Value::as_str).unwrap_or("");
+            let is_text_encode = class.to_ascii_lowercase().contains("textencode");
+            if is_text_encode {
+                let has_text = node
+                    .get("inputs")
+                    .and_then(Value::as_object)
+                    .map(|inputs| inputs.contains_key("text"))
+                    .unwrap_or(false);
+                if has_text {
+                    found.push((id, depth));
+                }
+                continue;
+            }
+            let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+            for (key, value) in inputs {
+                if !follows_positive(key) {
+                    continue;
+                }
+                if let Some((up, _)) = link_ref(value) {
+                    queue.push_back((up, depth + 1));
+                }
+            }
+        }
+        if found.is_empty() {
+            return Err(
+                "顺着 `positive` 往上没找到带 text 的 CLIPTextEncode：这份工作流的正面条件可能是\
+                 别的方式编码的。如实告诉用户，不要硬塞 positivePrompt"
+                    .into(),
+            );
+        }
+        // 只改**最近的那一层**：更上游的编码器可能是风格 / 参考分支，不该被同一句话覆盖。
+        let nearest = found.iter().map(|(_, depth)| *depth).min().unwrap_or(0);
+        found.retain(|(_, depth)| *depth == nearest);
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        found.dedup_by(|a, b| a.0 == b.0);
+
+        // ③ 先记下"原来接在正面 text 上的 TextGenerate"（用于如实回报），再断开
+        let mut bypassed: BTreeSet<String> = BTreeSet::new();
+        for (id, _) in &found {
+            let Some(link) = nodes
+                .get(id)
+                .and_then(|node| node.get("inputs"))
+                .and_then(Value::as_object)
+                .and_then(|inputs| inputs.get("text"))
+                .and_then(link_ref)
+            else {
+                continue;
+            };
+            collect_text_generate(&nodes, &link.0, &mut bypassed);
+        }
+
+        let mut changed: Vec<String> = Vec::new();
+        for (id, _) in &found {
+            let Some(node) = nodes.get_mut(id).and_then(Value::as_object_mut) else { continue };
+            let entry = node.entry("inputs").or_insert_with(|| json!({}));
+            let Some(inputs) = entry.as_object_mut() else { continue };
+            inputs.insert("text".into(), json!(prompt));
+            changed.push(format!("{id}.text"));
+        }
+        Ok((Value::Object(nodes), changed, bypassed.into_iter().collect()))
+    }
+}
+
+/// 顺着正面条件往上走时要跟哪些输入。
+///
+/// 刻意只跟"条件/开关"这几类：跟着 `model` / `clip` / `image` 走到加载器上，
+/// 既没有意义，也会在几百个节点的工作流上白跑一大圈。
+fn follows_positive(key: &str) -> bool {
+    key == "positive"
+        || key == "conditioning"
+        || key.starts_with("conditioning_")
+        || key == "on_true"
+        || key == "on_false"
+}
+
+/// 从某个输入往上走，收集 `TextGenerate` 一族（只用于回报"摘掉了哪一路"）。
+fn collect_text_generate(nodes: &Map<String, Value>, start: &str, out: &mut BTreeSet<String>) {
+    let mut queue: VecDeque<(String, usize)> = VecDeque::from([(start.to_string(), 0usize)]);
+    let mut seen: HashSet<String> = HashSet::new();
+    while let Some((id, depth)) = queue.pop_front() {
+        if depth > 16 || !seen.insert(id.clone()) {
+            continue;
+        }
+        let Some(node) = nodes.get(&id).and_then(Value::as_object) else { continue };
+        let class = node.get("class_type").and_then(Value::as_str).unwrap_or("");
+        if class.to_ascii_lowercase().contains("textgenerate") {
+            out.insert(id.clone());
+        }
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        for value in inputs.values() {
+            if let Some((up, _)) = link_ref(value) {
+                queue.push_back((up, depth + 1));
+            }
+        }
+    }
+}
+
+/// `["12", 0]` / `[12, 0]` → `("12", 0)`。
+fn link_ref(value: &Value) -> Option<(String, i64)> {
+    let array = value.as_array()?;
+    if array.len() != 2 {
+        return None;
+    }
+    let source = primitive_text(&array[0])?;
+    let slot = primitive_text(&array[1])?.trim().parse::<i64>().ok()?;
+    Some((source, slot))
 }
 
 /// 按原值类型转换（Kotlin `coerce`）：原来是整数就不能塞非整数，原来是布尔同理。
@@ -717,6 +890,19 @@ pub async fn tool_submit(
 ) -> Result<ToolOutcome, ToolFailure> {
     let overrides = arguments.get("overrides").and_then(Value::as_object).cloned().unwrap_or_default();
     let connections = arguments.get("connections").and_then(Value::as_object).cloned().unwrap_or_default();
+    // 最终正面提示词：给了就**由模型自己写完**（通常已经服从了工作流里 TextGenerate 的
+    // system prompt），后端只负责把它写进正面编码器并摘掉原来那一路。
+    let positive_prompt = match arguments.get("positivePrompt") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) if !text.trim().is_empty() => Some(text.trim().to_string()),
+        Some(_) => {
+            return Err(ToolFailure::new(
+                "INVALID_ARGUMENT",
+                "positivePrompt 要是一个非空字符串（最终提示词本体）；\
+                 不要传用户原话让本地 TextGenerate 去扩写",
+            ))
+        }
+    };
     let wait = arguments.get("wait").and_then(Value::as_bool).unwrap_or(true);
     let wait_seconds = arguments
         .get("waitSeconds")
@@ -773,6 +959,12 @@ pub async fn tool_submit(
             )
         })?;
 
+    // 先摘 TextGenerate / 写正面提示词，再应用 overrides：显式 overrides 仍然最后说了算。
+    let (graph, positive_targets, text_generate_bypassed) = match positive_prompt.as_deref() {
+        Some(prompt) => WorkflowEdit::apply_positive_prompt(&graph, prompt)
+            .map_err(|message| ToolFailure::new("INVALID_ARGUMENT", message))?,
+        None => (graph, Vec::new(), Vec::new()),
+    };
     let (overridden, mut applied) = WorkflowEdit::apply_overrides(&graph, &overrides)
         .map_err(|message| ToolFailure::new("INVALID_ARGUMENT", message))?;
     let (patched, applied_connections) = WorkflowEdit::apply_connections(&overridden, &connections)
@@ -944,6 +1136,17 @@ pub async fn tool_submit(
         )),
     );
     out.insert("appliedOverrides".into(), json!(applied));
+    if !positive_targets.is_empty() {
+        out.insert("positivePromptApplied".into(), json!(positive_targets));
+        out.insert("textGenerateBypassed".into(), json!(text_generate_bypassed));
+        out.insert(
+            "positivePromptHint".into(),
+            json!(
+                "已经把最终提示词写进正面条件编码；TextGenerate 那一路从正面链路断开了，\
+                 不会被执行（节点还在图里，用户的原文件没有被改）。"
+            ),
+        );
+    }
     out.insert("mediaIds".into(), json!(submission.media_ids));
     out.insert("mediaCount".into(), json!(submission.media_ids.len()));
     out.insert("nsfw".into(), json!(nsfw));

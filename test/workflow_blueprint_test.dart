@@ -501,7 +501,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final seen = <String>[];
-      Future<Map<String, dynamic>> diagnose(String raw) async {
+      Future<Map<String, dynamic>> diagnose(String raw, {bool diagnose = true}) async {
         seen.add(raw);
         return _blueprintJson();
       }
@@ -511,7 +511,8 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      expect(seen.length, 1);
+      // 打开时并发两条：结构快照（diagnose=false）+ 全量体检（diagnose=true）。
+      expect(seen.length, 2);
       expect(find.textContaining('4 节点'), findsOneWidget);
       expect(find.textContaining('2 连线'), findsOneWidget);
       expect(find.textContaining('1 分组'), findsOneWidget);
@@ -558,7 +559,7 @@ void main() {
         home: WorkflowBlueprintPage(
           title: '测试',
           raw: _uiRaw,
-          diagnose: (raw) async => _blueprintJson(),
+          diagnose: (raw, {bool diagnose = true}) async => _blueprintJson(),
         ),
       ));
       await tester.pumpAndSettle();
@@ -599,7 +600,7 @@ void main() {
         home: WorkflowBlueprintPage(
           title: '测试',
           raw: _uiRaw,
-          diagnose: (raw) async => _blueprintJson(),
+          diagnose: (raw, {bool diagnose = true}) async => _blueprintJson(),
         ),
       ));
       await tester.pumpAndSettle();
@@ -631,7 +632,7 @@ void main() {
         home: WorkflowBlueprintPage(
           title: '测试',
           raw: _uiRaw,
-          diagnose: (raw) async {
+          diagnose: (raw, {bool diagnose = true}) async {
             seen.add(raw);
             return _blueprintJson();
           },
@@ -699,7 +700,7 @@ void main() {
         home: WorkflowBlueprintPage(
           title: '测试',
           raw: _uiRaw,
-          diagnose: (raw) async {
+          diagnose: (raw, {bool diagnose = true}) async {
             final json = _blueprintJson();
             final issues = (json['issues'] as List).cast<Map<String, dynamic>>();
             issues.first['detail'] =
@@ -740,7 +741,7 @@ void main() {
             child: WorkflowButton(
               title: '测试',
               load: () async => _uiRaw,
-              blueprint: (raw) async => _blueprintJson(),
+              blueprint: (raw, {bool diagnose = true}) async => _blueprintJson(),
             ),
           ),
         ),

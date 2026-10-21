@@ -1,17 +1,26 @@
 ---
 name: krea-2
-description: 写 Krea 2（K2）生图提示词，并用本机 ComfyUI 跑 Krea 2 RAW / Turbo（官方推荐参数：RAW 52 步 cfg 3.5 ≤1K，Turbo 8 步 cfg 0 mu 1.15 1K~2K）。含 Krea 官方 prompting 规则、提示词扩写纪律、风格参考（Srefs）与风格 LoRA 用法，以及本机两份现成模板（`comfyhub_t2i_krea2.json` 文生图 / `comfyhub_i2i_krea2.json` 参考图编辑）的节点结构与可覆盖键。正文按 Krea 官方材料整理（krea-ai/krea-2、krea-ai/skills、ComfyUI 官方 Krea-2 教程），模板部分是对用户两份真工作流的实测归纳。
-whenToUse: 用户提到 Krea 2 / K2 / krea2，要写 Krea 2 提示词，要调 Krea 2 的步数 / CFG / mu / 分辨率 / 种子，要用 Krea 2 的风格参考或风格 LoRA，问"Krea 2 在 ComfyUI 里怎么配/怎么出图"，或者要用本机的 krea2 文生图 / 图生图模板出图时。
-version: 2
+description: 写 Krea 2（K2）生图提示词，并用**用户自己在 ComfyUI 里存出来的 krea2 工作流**在本机出图（官方推荐参数：RAW 52 步 cfg 3.5 ≤1K，Turbo 8 步 cfg 0 mu 1.15 1K~2K）。含 Krea 官方 prompting 规则、提示词扩写纪律、风格参考（Srefs）与风格 LoRA 用法，以及"先找用户工作流 → 读 apiGraph 认节点 → 只覆盖真实存在的输入 → 带 TextGenerate 时由 AI 服从其 system prompt 写终稿再 `positivePrompt` 摘线"的完整流程。**不依赖仓库里的模板**：模板只是回归测试夹具 / 结构样例，出图起点必须是用户自己存出来的那一份。
+whenToUse: 用户提到 Krea 2 / K2 / krea2，要写 Krea 2 提示词，要调 Krea 2 的步数 / CFG / mu / 分辨率 / 种子，要用 Krea 2 的风格参考或风格 LoRA，问"Krea 2 在 ComfyUI 里怎么配/怎么出图"，或者要用他自己 ComfyUI 里保存的 krea2 工作流出图时。
+version: 4
 ---
 
 ## 版本记录
 
-- **version 2（2026-10-17）**：新增 §6「本机的两份 krea2 模板」—— 用户当天从 ComfyUI 里存出来的
-  `comfyhub_t2i_krea2.json` / `comfyhub_i2i_krea2.json` 的节点结构、可覆盖键与三个坑
-  （广播只在前端生效、`Fast Bypasser` 是直通开关、`TextGenerate` 的动态下拉框）。
-  起因：这两份工作流以前**转换就会缺一堆必填输入**，AI 只能即兴重写一份（然后跑偏）。
+- **version 2（2026-10-17）**：新增「本机的两份 krea2 模板」—— 用户当天从 ComfyUI 里存出来的
+  `comfyhub_t2i_krea2.json` / `comfyhub_i2i_krea2.json` 的节点结构、可覆盖键与三个坑。
+- **version 3（2026-10-21）**：新增「工作流优先 / 副本 / TextGenerate 摘线」；
+  修正"直接覆盖 `108.text`"的错误说法（它被 `116 PrimitiveString` 连线覆盖，覆盖会被拒），
+  改为 `comfy_submit(positivePrompt=…)`。
+- **version 4（2026-10-21）**：**不再把仓库里的两份模板当默认起点**。
+  出图一律先找**用户自己从 ComfyUI 里存出来的 krea2 工作流**，按它的实际 `apiGraph` 识别节点；
+  模板只保留为回归测试夹具与结构样例，**不许拿它当"现成工作流"直接跑**。
 
+> **⚠ 唯一默认起点：用户自己的 krea2 工作流。**
+> 仓库里的 `comfyhub_t2i_krea2.json` / `comfyhub_i2i_krea2.json` 是测试夹具/结构样例，
+> **不是**出图入口。用户还没有自己的工作流时，教他：
+> 在 ComfyUI 里打开官方 Krea-2 模板 → **另存为** `我的krea2_xxx.json`（放在
+> `user\<用户>\workflows\`）→ 再以那份为起点；**不要**拿仓库副本开跑，也不要自己拼节点图。
 
 # Krea 2（K2）：提示词 + 本机 ComfyUI 出图
 
@@ -59,50 +68,92 @@ version: 2
 | 分辨率 | 训练到 **1K**（别超） | **1K ~ 2K** |
 | 用途 | 多样性 / 可塑性最强，**用来训 LoRA、微调** | **日常出图**，快且质量高 |
 
-- 官方的用法一句话：**TRAIN on RAW, RUN on Turbo** —— RAW 上训出来的 LoRA 直接能用在 Turbo 上。
-  用户要"多个变体、要探索风格"→ RAW；用户要"快点出图 / 迭代提示词"→ Turbo。
+- 官方用法一句话：**TRAIN on RAW, RUN on Turbo** —— RAW 上训出来的 LoRA 直接能用在 Turbo 上。
+  用户要"多个变体、要探索风格"→ RAW；要"快点出图 / 迭代提示词"→ Turbo。
 - **分辨率必须是 16 的倍数**（官方采样器会把非整数倍向上补齐；在 ComfyUI 里请直接给合法值，
   1K≈1024、2K≈2048；用户没说就沿用工作流里现有的分辨率，别擅自改）。
 - 同一 seed + 同一提示词 + 同一参数才可复现；**改分辨率会改变画面构成**，不是"同一张图放大"。
 - 官方云端还有 Intensity / Complexity / Movement 滑杆与 Creativity（raw / low / medium / high）——
-  那是 **krea.ai 网页 / API 独有**的，本机 ComfyUI 里没有对应输入（见 §3.3）。
+  那是 **krea.ai 网页 / API 独有**的，本机 ComfyUI 里没有对应输入（见 §3.5）。
 
-## 3. 在本机 ComfyUI 上怎么跑（我们的工具契约）
+## 3. 在本机 ComfyUI 上怎么跑（**从用户的工作流开始**）
 
-### 3.1 找图 → 只覆盖真实存在的输入
+### 3.1 第一步：找用户自己保存的 krea2 工作流
 
-1. `comfy_find_workflow(query="krea", includeGraph=true)` —— 在 API 节点图里认三样东西：
-   提示词节点（`CLIPTextEncode`，官方模板里是 "Text String (User Prompt)" 那个子图输入）、
-   采样器的 `steps` / `cfg` / `seed`、分辨率来源（`EmptyLatentImage` 的 `width`/`height`，
-   或模板里的 ResolutionSelector）。
-2. `comfy_submit(promptId=…, overrides={"<节点id>.text": "…", "<节点id>.steps": 8, "<节点id>.cfg": 0.0})`
-   - 键一律 `节点id.输入名`；**按原值类型写**（数字就是数字，别写成字符串）。
-   - 字段不存在 / 是连线数组时后端会**明确拒绝**：这时**如实告诉用户"这个工作流没有这个输入"**，
-     不要换个名字乱试到"看起来成功了"。
-   - 用户没要求就别动 steps / cfg / seed / 分辨率 —— 工作流里的默认值就是它调好的。
-3. 提交后**只认返回的 `mediaIds`**：没拿到就说没拿到，不许说"已经生成了"。
-   超时会记 `timeout`，如实转述，不许假装完成也不许假装失败。
+按顺序：
 
-### 3.2 用用户的图做风格参考（Srefs）
+1. `comfy_list_workflows(query="krea")` —— 列本机 ComfyUI 已保存的工作流文件；
+2. `comfy_find_workflow(query="krea2")` —— 库里/本机文件一起搜；
+3. 如果有多份，把**名字 + 路径 + 你判断的用途**（t2i / i2i / 参考图编辑 / 放大…）
+   用 `ask_user_question` 让用户挑；**别替他默认选一份**。
 
-- 本机走 ComfyUI 官方那条专用管线：`krea2_turbo_int8_convrot` + `krea2_style_reference` LoRA +
-  `LoadImage` 参考图（模板名 "Krea-2 Style Reference"，可支持 1~2 张参考图）。
+**不要**：
+- ❌ 直接拿仓库里的 `comfyhub_t2i_krea2.json` / `comfyhub_i2i_krea2.json` 当起点（那是测试夹具）；
+- ❌ 自己拼一份"等价"的节点图；
+- ❌ 用户说"随便"就挑一份名字带 krea 的——先打开图看接线，确认它真的是 krea2 出图。
+
+用户还没有自己的 krea2 工作流时：让他在 ComfyUI 里打开官方 Krea-2 模板，**另存为**自己的工作流；
+这份另存出来的文件才是起点。
+
+### 3.2 第二步：读 `apiGraph`，按实际接线认节点
+
+`comfy_load_workflow(path=…, includeGraph=true)`，然后**从返回的 `apiGraph` 里现读**下面几样，
+**不要背节点 id**（换一份工作流 id 就全变了）：
+
+| 要找什么 | 怎么认 |
+| --- | --- |
+| 正面提示词节点 | 顺着采样器的 `positive` / `BasicGuider.conditioning` 往上找 `CLIPTextEncode`；它的 `text` 可能是一个控件，也可能是连线 |
+| 采样参数 | `KSampler` / `SamplerCustomAdvanced` 那条链上的 `steps` / `cfg` / `sampler_name` / `scheduler` / `seed` |
+| 分辨率 | `EmptyLatentImage.width/height`，或 `ResolutionSelector` 的 `aspect_ratio` / `megapixels` / `multiple` |
+| 模型 | `CheckpointLoaderSimple` / `UNETLoader` / `CLIPLoader(type=krea2)` / `VAELoader` / `LoraLoader*` |
+| 参考图支路 | `LoadImage` → 控制预处理 / `Krea2ControlImageEncode` / ControlNet → 是否真的接进采样器 |
+| 提示词扩写 | `TextGenerate` 及其 `system_prompt` 来源（常是 `PrimitiveStringMultiline`） |
+
+**三个坑**（任何一份 krea2 工作流都可能遇到）：
+
+1. **`Anything Everywhere` 只在前端生效**：它在 `/object_info` 里可能查得到（注册成零输出桩），
+   服务端拿到它什么都不产出。提交链**必须**走 `comfy_load_workflow`（默认 `emulateFrontend=true`）。
+2. **`Fast Bypasser (rgthree)` 是直通开关**：不在 `/object_info` 里；不处理会让下游指向一个"没转换出来"的节点。
+   同样交给 `comfy_load_workflow` 处理，别手工拼。
+3. **`TextGenerate.sampling_mode` 是动态下拉框**：子项键名带点（`sampling_mode.temperature`），
+   别手工拼；转换器已按 `/object_info` + `widgets_values_named` 处理。
+
+### 3.3 第三步：只覆盖真实存在的输入
+
+```text
+comfy_submit(promptId=…, overrides={"<节点id>.text": "…", "<节点id>.steps": 8, "<节点id>.cfg": 0.0})
+```
+
+- 键一律 `节点id.输入名`；**按原值类型写**（数字就是数字，别写成字符串）。
+- 字段不存在 / 是连线数组时后端会**明确拒绝**：**如实告诉用户"这个工作流没有这个输入"**，
+  不要换个名字乱试到"看起来成功了"。
+- ⚠ **文本编码器的 `text` 是连线时**，`overrides` 改不动它：用
+  `comfy_submit(positivePrompt="最终提示词")`（见 §7.3），不要硬写那个节点。
+- 用户没要求就别动 steps / cfg / seed / 分辨率 —— 工作流里的默认值就是它调好的。
+
+提交后**只认返回的 `mediaIds`**：没拿到就说没拿到，不许说"已经生成了"。
+超时会记 `timeout`，如实转述，不许假装完成也不许假装失败。
+
+### 3.4 用用户的图做风格参考（Srefs）
+
+- 前提：**用户自己的工作流里真的有**风格参考那条管线（`krea2_style_reference` LoRA +
+  `LoadImage`）。没有就如实说"这份工作流没有参考图输入"，不要替他加节点。
 - 用户发来的图要先投放：`comfy_use_attachment(attachmentId=…)` 拿到它在 ComfyUI `input/` 里的真实文件名，
-  再覆盖 `LoadImage` 的 `image` 输入 —— 详细三步与纪律见内置 skill **`img2img-reference`**（不要自己拼文件名）。
+  再覆盖 `LoadImage.image` —— 详细三步与纪律见内置 skill **`img2img-reference`**（不要自己拼文件名）。
 - 参考图强度、参考图张数：**只覆盖工作流里真实存在的输入**，没有就说没有。
 
-### 3.3 云端独有能力：**不要假装本机能设**
+### 3.5 云端独有能力：**不要假装本机能设**
 
 | Krea 云端（krea.ai / API） | 本机 ComfyUI |
 | --- | --- |
 | Srefs 每张参考图的强度滑杆 | 取决于工作流有没有这个输入，没有就直说 |
 | 情绪板 Moodboards（最多 1 个，strength 默认 0.23） | **没有** |
 | Intensity / Complexity / Movement 滑杆 | **没有** |
-| Creativity 模式（raw / low / medium / high，提示词扩写档位） | **没有**（模板里的 `prompt_enhance` 只是 LLM 扩写开关） |
+| Creativity 模式（raw / low / medium / high，提示词扩写档位） | **没有**（工作流里的 LLM 扩写开关不等价） |
 
 要等价效果：把风格 / 色彩 / 质感**写进提示词**，或者换一个风格 LoRA。**不许编造字段名**。
 
-### 3.4 风格 LoRA（官方随 Krea 2 发布，放在 `ComfyUI/models/loras/`）
+### 3.6 风格 LoRA（官方随 Krea 2 发布，放在 `ComfyUI/models/loras/`）
 
 触发词加进提示词，强度官方推荐 **1.0**：
 
@@ -118,11 +169,13 @@ version: 2
 | `krea2_sunsetblur` | ethereal motion blur style |
 | `krea2_vintagetarot` | vintage tarot style |
 
-### 3.5 用户问"Krea 2 在 ComfyUI 里怎么配"
+用户自己的工作流里没有 `LoraLoader` 时，**不要为了加风格 LoRA 改结构**；把风格写进提示词即可。
+
+### 3.7 用户问"Krea 2 在 ComfyUI 里怎么配"
 
 官方（Comfy-Org 优化版）要三样文件，缺一样就会报节点 / 模型加载失败：
 
-```
+```text
 ComfyUI/models/diffusion_models/ krea2_turbo_fp8_scaled.safetensors   # Turbo，多数人推荐
 ComfyUI/models/text_encoders/    qwen3vl_4b_fp8_scaled.safetensors    # Qwen3VL-4B 文本编码器
 ComfyUI/models/vae/              qwen_image_vae.safetensors
@@ -131,15 +184,16 @@ ComfyUI/models/diffusion_models/ krea2_turbo_int8_convrot.safetensors
 ComfyUI/models/loras/            krea2_style_reference.safetensors
 ```
 
-还有 BF16 / NVFP4 / MXFP8 等变体（显存够用才上）。ComfyUI 要够新，模板在
-模板库（Template Library）里搜 "Krea-2" / "Krea-2 Style Reference" 就有。
+还有 BF16 / NVFP4 / MXFP8 等变体（显存够用才上）。ComfyUI 要够新；
+官方模板在 ComfyUI 的 Template Library 里搜 "Krea-2" / "Krea-2 Style Reference"。
+**但下载/打开官方模板只是"造一份自己的工作流"的手段**，真正出图仍以用户另存出来的那份为起点。
 
 ## 4. 纪律（与 `img2img-reference` 同一条底线）
 
 - 提示词是提示词、参数是参数：**别把 steps / cfg / LoRA 名写进提示词正文**。
 - 参数覆盖失败、附件投放失败、产物没回来 —— 一律**如实说**，不许假装成功。
 - 用户没说要改参数就别改；**"我调了参数"不是"结果变好了"的证据**，要看 `mediaIds` 对应的产物。
-- 拿不准工作流结构时先 `comfy_find_workflow(..., includeGraph=true)` 看清楚，再动手。
+- 拿不准工作流结构时先 `comfy_load_workflow(..., includeGraph=true)` 看清楚，再动手。
 
 ## 5. 官方原文（本目录 `references/`，给人核对用）
 
@@ -151,32 +205,25 @@ ComfyUI/models/loras/            krea2_style_reference.safetensors
 | `references/official-comfyui-krea-2.md` | ComfyUI 官方 Krea-2 教程要点（模型 / 分辨率 / LoRA / 风格参考） |
 | `references/SOURCES.md` | 上面每一份的 URL、采集日期、版本与许可 |
 
-## 6. 本机的两份 krea2 模板（**要用 krea2 出图就先用它们，别现写**）
+## 6. 结构样例（**只是对照，不是起点**）
 
-两份都在 `<根>\comfyui\workflows\`（仓库里也有一份同样的副本），是用户 2026-10-17
-从 ComfyUI 里存出来的真工作流（界面格式）：
+> 下面两份是用户 2026-10-17 从 ComfyUI 里存出来的样例，**现在只作为回归测试夹具与结构参考**。
+> 节点 id 只属于那两份文件；用户换一份工作流，id、节点数、甚至主链都会变。
+> **读任何一份 krea2 工作流时都以 `apiGraph` 现读为准**，不要把下面的 id 背成"标准答案"。
 
-| 模板 | 干什么 | 结构（API 图节点数） |
+| 样例 | 用途 | API 图节点数 |
 | --- | --- | --- |
-| `comfyhub_t2i_krea2.json` | **文生图**（Turbo 档：8 步 / euler / 896×1344） | 15 |
-| `comfyhub_i2i_krea2.json` | **参考图编辑 / i2i**（LoadImage + 控制分支 + 提示词扩写） | 27 |
+| `comfyhub_t2i_krea2.json` | 文生图（Turbo 档） | 15 |
+| `comfyhub_i2i_krea2.json` | 参考图编辑 / i2i | 27 |
 
-**怎么用**（三步，全是现成工具）：
+### 6.1 t2i 样例的骨架（**仅供对照**）
 
-1. `comfy_load_workflow(path="<根>\\comfyui\\workflows\\comfyhub_t2i_krea2.json", includeGraph=true)`
-   —— 它会照 ComfyUI 前端的做法把前端节点等价改写掉（**必须开着 `emulateFrontend`，默认就是开的**），
-   返回 `promptId` 与转换后的 `apiGraph`；**可覆盖键就从那份 `apiGraph` 里读**（`节点id.输入名`）。
-2. `comfy_fit_workflow(promptId=…)` 看本机模型齐不齐（缺哪个文件、要不要换）。
-3. `comfy_submit(promptId=…, overrides={"<节点id>.text": "…", …})`。
-
-### 6.1 t2i 那张图的骨架（节点 id 就是模板里的 id）
-
-```
+```text
 28 CheckpointLoaderSimple(krea2Turbo…Int8) ─┐
 30 CLIPLoader(type=krea2) ──────────────────┤→ 32 Lora Loader Stack(rgthree) ─┐
 29 VAELoader(qwen_image_vae) ───────────────┘                                  │
                                    36 Anything Everywhere（广播 MODEL/CLIP/VAE）
-                                                                               ↓
+                                                                                ↓
 31 EmptyLatentImage(896×1344) → 33 Krea2TurboReferenceSigmaSchedulerFromLatent(8 步) ─┐
 34 CLIPTextEncode(提示词) ──────────────────────────────────────────────────────────┤
 42 RandomNoise(种子) → 40 SamplerCustomAdvanced ← 37 KSamplerSelect(euler) ←────────┘
@@ -184,47 +231,74 @@ ComfyUI/models/loras/            krea2_style_reference.safetensors
 40 → 38 VAEDecode → 39 SaveImage
 ```
 
-| 想改什么 | 覆盖键 | 备注 |
-| --- | --- | --- |
-| 正面提示词 | `34.text` | Krea 2 用自然语言（§1），不是 tag |
-| 分辨率 | `31.width` / `31.height` | 16 的倍数；改了会改构图，不是放大 |
-| 种子 | `42.noise_seed` | |
-| 步数 / 去噪 | `33.steps` / `33.denoise` | Turbo 档 8 步；**别乱调 cfg**（这张图没有 cfg，Turbo 是 cfg-free 那一路） |
-| 底模 / VAE / 文本编码器 | `28.ckpt_name` / `29.vae_name` / `30.clip_name` | 换之前先 `comfy_fit_workflow` |
-| LoRA 与强度 | `32.lora_01` … `32.lora_04` / `32.strength_01` … | 名字里带 `krea2` 的才是这一族的 |
-| 输出前缀 | `39.filename_prefix` | |
+这份样例里可覆盖键是 `34.text` / `31.width` / `31.height` / `42.noise_seed` /
+`33.steps` / `33.denoise` / `28.ckpt_name` / `29.vae_name` / `30.clip_name` /
+`32.lora_01…04` / `39.filename_prefix`。**换一份工作流时，这些键要重新从 `apiGraph` 里读**。
 
-### 6.2 i2i 那张图多了什么
-
-主链与 t2i 同款，多出来的三块（都在主链旁边，**互不相干，可以只开一块**）：
+### 6.2 i2i 样例多出来的东西（**仅供对照**）
 
 1. **参考图 → 控制分支**：`42 LoadImage` → `97 RMBG` / `102 DepthAnythingPreprocessor`
    → `103 FluxKontextImageScale` → `104 Krea2ControlImageEncode` → `105 Krea2ControlApply`
-   （LoRA 在 `89 Krea2ControlLoRALoader`，默认 `depth-control-lora.safetensors` 0.8）。
-   要换参考图：先 `comfy_use_media` / `comfy_use_attachment` 把图投进 ComfyUI 的 `input/`，
-   再覆盖 `42.image`（**别自己拼文件名**，见 skill `img2img-reference`）。
-2. **提示词扩写**：`45 PrimitiveStringMultiline`（扩写用的 system prompt）→ `43 TextGenerate`
-   （本地 LLM 扩写）→ 结果进 `108 CLIPTextEncode`。想直接给提示词就覆盖 `108.text`，
-   或者把 `43` 那一路关掉（`mode=4` 旁路 / 让界面关掉它）。
+   （LoRA 在 `89 Krea2ControlLoRALoader`）。换图先投放，再覆盖 `42.image`。
+2. **提示词扩写**：`45 PrimitiveStringMultiline`（system prompt）→ `43 TextGenerate`
+   → `115 Fast Bypasser` → `116 PrimitiveString` → `108 CLIPTextEncode.text`。
+   `108.text` 是连线，直接覆盖会被拒；用 `positivePrompt`（见 §7.3）。
 3. **显示节点**：`55 PreviewAny` / `106 PreviewImage` —— 转换时会被丢掉，不影响出图。
 
-### 6.3 三个坑（**踩过，别再踩**）
+### 6.3 样例的体检结论（2026-10-17 实测，供对照）
 
-| 坑 | 现象 | 正确做法 |
-| --- | --- | --- |
-| **`Anything Everywhere` 只在前端生效** | 它在 `/object_info` 里**查得到**（cg-use-everywhere 注册了个零输出的桩），可服务端拿到它什么都不产出 —— 它该填的 MODEL/CLIP/VAE 那几路会一直空着。表现是"图看着没问题，提交上去缺 5 个必填输入" | 提交链**必须**走 `comfy_load_workflow`（它默认 `emulateFrontend=true`，会按前端行为把同类型的值填进去）。**不许**把这份界面格式文件直接当 API 图提交 |
-| **`Fast Bypasser (rgthree)` 是直通开关** | 它不在 `/object_info` 里；不处理的话 `105.model ← 节点 90（没有转换出来）`，整份工作流都进不来 | 同上：`comfy_load_workflow` 会把它当"1 进 1 出"的直通接过去（判据来自真实提交记录：前端发出去的确实是 `105.model = ["89", 0]`） |
-| **`TextGenerate.sampling_mode` 是动态下拉框** | 它的子项名字带点（`sampling_mode.temperature`），把主项当插口会报"必填输入空着"、丢掉子项会静默退回默认值 | 别手工拼这几个键；转换器已经按 `/object_info` + `widgets_values_named` 处理好了 |
-
-### 6.4 两份模板的体检结论（2026-10-17 实测，供对照）
-
-- **t2i**：0 错误。三条提醒：① 广播节点是"零输出桩"（见上表）；② `42 RandomNoise` 的控件值多一个
-  `control_after_generate`（界面版本与后端声明不一致，已忽略）；③ **`35 ComfyUI-Krea2T-Enhancer`
-  的输出没有接出去** —— 它在图里等于没生效，别以为它在起作用（要它生效就在 ComfyUI 里把
-  `35.model` 接到该接的地方，再另存一份）。
-- **i2i**：0 错误。除了上面那几条，还有 `TextGenerate` 的可选插口（`video` / `audio`）与
-  `RMBG.background_color` 空着 —— **那是可选的，不是缺口**。
+- **t2i**：0 错误。提醒：广播节点是零输出桩；`42 RandomNoise` 多一个
+  `control_after_generate`（已忽略）；`35 ComfyUI-Krea2T-Enhancer` 的输出没有接出去，
+  它在图里等于没生效。
+- **i2i**：0 错误。`TextGenerate` 的可选插口（`video` / `audio`）与 `RMBG.background_color`
+  空着是**可选**，不是缺口。
 
 > 判据怎么来的：`comfy_audit_workflow` 只审 API 图，看不到这些；界面里点「查看工作流 → 看蓝图」
 > 会跑一遍**接线体检**（同一份判据），哪根线接错、哪个插口空着、为什么，都在那份报告里。
 
+## 7. 工作流优先 / 副本 / TextGenerate 摘线（2026-10-21 用户拍板）
+
+### 7.1 不许从零编，也不拿仓库模板顶替
+
+- 要 krea2 出图时，**只用用户自己存出来的 krea2 工作流**作为起点；
+  先 `comfy_list_workflows(query="krea")` / `comfy_find_workflow(query="krea2")` 找，
+  把候选与用途列给用户选。**不要**自己拼节点图，**也不要**回退到仓库里的
+  `comfyhub_*_krea2.json`（那是测试夹具）。
+- 用户说"换新模型 / 换个底模"时，先看 `comfy_list_recipes(task=…)`；
+  要改骨架也只在**副本**上改（蓝图保存 / `write_file` 存 `*_copy.json`），原文件不动。
+
+### 7.2 先讲清用途（看接线，不看文件名）
+
+- 采样器的 `latent_image` 来自 `EmptyLatentImage` 一类空 latent → **t2i**；
+- `LoadImage` 经 VAEEncode / 控制分支真的接进采样器 → **i2i / 参考图编辑**；
+- 有遮罩链且接进采样 → **inpaint**；
+- 判断"是不是 i2i"要看 `LoadImage` 的输出有没有真的进采样器；只看文件名 / 标题会错。
+- 用户给的工作流如果有 `TextGenerate`，还要看它的输出最终接到哪个正面 `CLIPTextEncode`。
+
+### 7.3 TextGenerate 摘线（通用流程）
+
+只要用户的工作流里有 `TextGenerate`（本地 LLM 扩写 / 布局编译器）：
+
+1. `comfy_load_workflow(path=用户选中的那份, includeGraph=true)`；
+2. 在 `apiGraph` 里找 `TextGenerate`、它的 `system_prompt` 来源、以及正面 `CLIPTextEncode`；
+   读那段 system prompt，**你自己按它扩写**用户的需求（保真优先、不改主体 / 动作 / 颜色 /
+   空间关系、不堆质量词）；
+3. `comfy_submit(promptId=…, positivePrompt="<你写好的终稿>", overrides={…参考图、seed 等})`。
+   后端会把终稿写进正面 `CLIPTextEncode.text`，并断开原来接着的那一路
+   （含 `TextGenerate` / 开关 / `PreviewAny`）；节点还在图里，但不再被执行。
+4. 返回 `positivePromptApplied` / `textGenerateBypassed` 是证据；没有就如实说没改成。
+
+> 样例（`comfyhub_i2i_krea2.json`）里是 `45 → 43 → 115 → 116 → 108`；
+> **换一份工作流时以实际 `apiGraph` 为准**，不要照抄这些 id。
+
+**不要**：
+- ❌ 覆盖一个被连线覆盖的 `text`（后端会拒绝）；
+- ❌ 覆盖 `TextGenerate` 的 `system_prompt` 来源或它的控件值然后声称"已经按你的提示词生成"
+  （那只是换了 system prompt，仍然让本地 LLM 扩写）；
+- ❌ 把用户原话直接丢给 `TextGenerate`（它会把中文改写成英文标签，且每次温度不同）。
+
+### 7.4 跑之前
+
+`comfy_check_inputs` 看参考图 / 遮罩缺不缺；`comfy_fit_workflow` 看
+`krea2_turbo_*` / `qwen3vl_4b_*` / `qwen_image_vae` / 控制 LoRA 在不在。
+缺件让用户下（**绝不代下**），不要改文件名硬凑。

@@ -141,6 +141,7 @@ CREATE TABLE _outbox (
 | `prompts` `tags` `prompt_tags` `media_assets` `media_tags` `media_collections` | **`ai_run_events`**（单 Run 上万条的调试日志） |
 | `ai_conversations` `ai_messages` `ai_message_parts` `ai_attachments` | `ai_providers` `ai_models` `app_settings`（**含凭据引用与令牌明文**） |
 | `capture_runs` `ai_runs` `ai_tool_calls` | `ai_questions`（提问闸门只在桌面侧；手机看实时提问走 `GET /api/ai/pending`） |
+| | `character_cards` `character_card_examples` `style_cards` `style_card_examples` `workflow_recipes`（桌面侧知识；手机提交走 `comfy_queue_submit`） |
 
 > **2026-10-11：`media_collections` 进同步范围**（产物集合：同源微调的产物归到一组）。
 > 它必须跟着 `media_assets` 一起走 —— 否则手机上的 `collection_id` 指向一个**它那边不存在的

@@ -13,6 +13,7 @@ import '../core/provider_store.dart';
 import '../core/run_event_source.dart';
 import '../core/workflow_blueprint.dart';
 import '../models/ai_models.dart';
+import '../models/models.dart' show ComfyWorkflowList;
 
 /// AI 工作台状态。
 ///
@@ -35,12 +36,12 @@ class AiWorkspaceStore extends ChangeNotifier {
     ProviderStore? providers,
     InboundAuthApi Function(String baseUrl)? authApiFactory,
     this.backendReady,
-  })  : _injected = api,
-        _injectedPrefs = prefs,
-        _injectedSource = source,
-        _injectedCredentials = credentials,
-        _injectedProviders = providers,
-        _injectedAuthApi = authApiFactory;
+  }) : _injected = api,
+       _injectedPrefs = prefs,
+       _injectedSource = source,
+       _injectedCredentials = credentials,
+       _injectedProviders = providers,
+       _injectedAuthApi = authApiFactory;
 
   final String Function()? baseUrlProvider;
 
@@ -91,7 +92,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   ProviderStore get _providerStore {
     final api = _api;
     if (_cachedProviders == null || _cachedProvidersFor != api) {
-      _cachedProviders = _injectedProviders ?? openProviderStore(api: api, forceLocal: _source.isLocal);
+      _cachedProviders =
+          _injectedProviders ??
+          openProviderStore(api: api, forceLocal: _source.isLocal);
       _cachedProvidersFor = api;
     }
     return _cachedProviders!;
@@ -127,11 +130,16 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 清单真的变了才顺手重读模型目录 —— 没变时也调 `_loadModels` 就是白白抖一下选择器。
   Future<void> refreshProviders() async {
     try {
-      final fresh = await _overlayDeviceCredentials(await _providerStore.listProviders());
-      final changed = fresh.length != providers.length ||
+      final fresh = await _overlayDeviceCredentials(
+        await _providerStore.listProviders(),
+      );
+      final changed =
+          fresh.length != providers.length ||
           !List.generate(
             fresh.length,
-            (i) => fresh[i].id == providers[i].id && fresh[i].revision == providers[i].revision,
+            (i) =>
+                fresh[i].id == providers[i].id &&
+                fresh[i].revision == providers[i].revision,
           ).every((same) => same);
       providers = fresh;
       if (providers.isEmpty) {
@@ -192,7 +200,9 @@ class AiWorkspaceStore extends ChangeNotifier {
       final rememberedId = selectedModel?.id;
       await _loadModels();
       if (rememberedId != null) {
-        selectedModel = models.where((m) => m.id == rememberedId).firstOrNull ?? selectedModel;
+        selectedModel =
+            models.where((m) => m.id == rememberedId).firstOrNull ??
+            selectedModel;
         _clampReasoningEffort();
       }
     } catch (e) {
@@ -264,7 +274,11 @@ class AiWorkspaceStore extends ChangeNotifier {
     List<AiAttachment>? attachments,
   }) async {
     final prefs = await _store;
-    final next = attachments ?? _decodeAttachments(prefs.getString('$_kDraftAttachPrefix$conversationId'));
+    final next =
+        attachments ??
+        _decodeAttachments(
+          prefs.getString('$_kDraftAttachPrefix$conversationId'),
+        );
     if (text.trim().isEmpty && next.isEmpty) {
       await prefs.remove('$_kDraftTextPrefix$conversationId');
       await prefs.remove('$_kDraftAttachPrefix$conversationId');
@@ -278,11 +292,15 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   /// 取回草稿；没有就返回空。
-  Future<({String text, List<AiAttachment> attachments})> loadDraft(String conversationId) async {
+  Future<({String text, List<AiAttachment> attachments})> loadDraft(
+    String conversationId,
+  ) async {
     final prefs = await _store;
     return (
       text: prefs.getString('$_kDraftTextPrefix$conversationId') ?? '',
-      attachments: _decodeAttachments(prefs.getString('$_kDraftAttachPrefix$conversationId')),
+      attachments: _decodeAttachments(
+        prefs.getString('$_kDraftAttachPrefix$conversationId'),
+      ),
     );
   }
 
@@ -295,16 +313,19 @@ class AiWorkspaceStore extends ChangeNotifier {
       if (list is List) {
         for (final e in list.whereType<Map>()) {
           final m = Map<String, dynamic>.from(e);
-          out.add(AiAttachment(
-            // id 要一起存：草稿恢复出来的附件已经在后端了，重发时直接引用，不必再传一次
-            id: m['id']?.toString(),
-            name: (m['name'] ?? '').toString(),
-            modality: m['modality']?.toString(),
-            mimeType: (m['mimeType'] ?? 'application/octet-stream').toString(),
-            sizeBytes: (m['sizeBytes'] as num?)?.toInt() ?? 0,
-            width: (m['width'] as num?)?.toInt(),
-            height: (m['height'] as num?)?.toInt(),
-          ));
+          out.add(
+            AiAttachment(
+              // id 要一起存：草稿恢复出来的附件已经在后端了，重发时直接引用，不必再传一次
+              id: m['id']?.toString(),
+              name: (m['name'] ?? '').toString(),
+              modality: m['modality']?.toString(),
+              mimeType: (m['mimeType'] ?? 'application/octet-stream')
+                  .toString(),
+              sizeBytes: (m['sizeBytes'] as num?)?.toInt() ?? 0,
+              width: (m['width'] as num?)?.toInt(),
+              height: (m['height'] as num?)?.toInt(),
+            ),
+          );
         }
       }
     } catch (_) {
@@ -478,7 +499,6 @@ class AiWorkspaceStore extends ChangeNotifier {
     return null;
   }
 
-
   // -----------------------------------------------------------------------
   //  「AI 正在等用户回答」的那条提问（用户 bug 2026-09-21）
   // -----------------------------------------------------------------------
@@ -488,7 +508,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 放在 Store 上是为了让**气泡里的提问卡**能说"去下面那个框里打字"：
   /// 卡片与输入区隔着好几层组件，回调传下去会污染一大串构造参数，
   /// 而焦点本身是"这一轮提问"的状态，本来就属于 Store。
-  final FocusNode pendingQuestionFocus = FocusNode(debugLabel: 'ask-user-question');
+  final FocusNode pendingQuestionFocus = FocusNode(
+    debugLabel: 'ask-user-question',
+  );
 
   /// **当前正等着用户回答的那条提问**（没有就返回 null）。
   ///
@@ -770,14 +792,19 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 按下标删除几条（界面的单条 / 批量删除）。
   ///
   /// 下标由界面从 `memory.entries` 里选中给出，与后端的行序同源。
-  Future<({bool ok, String message})> deleteMemoryEntries(List<int> indices) async {
+  Future<({bool ok, String message})> deleteMemoryEntries(
+    List<int> indices,
+  ) async {
     if (indices.isEmpty) return (ok: true, message: '没有选中任何一条');
     memoryBusy = true;
     notifyListeners();
     try {
       memory = await _api.deleteMemoryEntries(indices);
       memoryError = null;
-      return (ok: true, message: '已删除 ${indices.length} 条（剩 ${memory.entryCount} 条）');
+      return (
+        ok: true,
+        message: '已删除 ${indices.length} 条（剩 ${memory.entryCount} 条）',
+      );
     } catch (e) {
       memoryError = '$e';
       return (ok: false, message: '删除失败：$e');
@@ -904,7 +931,8 @@ class AiWorkspaceStore extends ChangeNotifier {
   // -----------------------------------------------------------------------
 
   /// 批准一次待批准的工具调用（AIH-035 / AIH-049）。
-  Future<void> approveToolCall(String callId) => _resolveToolCall(callId, approve: true);
+  Future<void> approveToolCall(String callId) =>
+      _resolveToolCall(callId, approve: true);
 
   // -----------------------------------------------------------------------
   //  ComfyUI 实时进度（用户"其他建议"第 1 条）
@@ -924,7 +952,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   void startWatchingComfy() {
     _jobsTimer?.cancel();
     _jobsTimer = Timer.periodic(
-      comfyJobs.hasActivity ? const Duration(milliseconds: 1500) : const Duration(seconds: 6),
+      comfyJobs.hasActivity
+          ? const Duration(milliseconds: 1500)
+          : const Duration(seconds: 6),
       (_) => unawaited(refreshComfyJobs()),
     );
     unawaited(refreshComfyJobs());
@@ -984,7 +1014,10 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 慢一秒发现都算慢 —— 但也不能更勤，右侧栏一开着就每秒问后端一次是纯浪费。
   void startWatchingPending() {
     _pendingTimer?.cancel();
-    _pendingTimer = Timer.periodic(const Duration(seconds: 5), (_) => unawaited(refreshPending()));
+    _pendingTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => unawaited(refreshPending()),
+    );
     unawaited(refreshPending());
   }
 
@@ -1021,8 +1054,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     required bool approve,
   }) async {
     try {
-      final accepted =
-          approve ? await _api.approveToolCall(callId) : await _api.denyToolCall(callId);
+      final accepted = approve
+          ? await _api.approveToolCall(callId)
+          : await _api.denyToolCall(callId);
       if (!accepted) {
         return (
           accepted: false,
@@ -1042,8 +1076,8 @@ class AiWorkspaceStore extends ChangeNotifier {
         accepted: true,
         message: approve
             ? (queued
-                ? '已批准：桌面会走 comfy_submit 那条链路真提交，跑完产物进画廊、结果回那条会话。'
-                : '已批准这次工具调用，模型会继续执行。')
+                  ? '已批准：桌面会走 comfy_submit 那条链路真提交，跑完产物进画廊、结果回那条会话。'
+                  : '已批准这次工具调用，模型会继续执行。')
             : (queued ? '已拒绝这一条排队提交，桌面不会提交它。' : '已拒绝这次工具调用。'),
       );
     } catch (e) {
@@ -1109,7 +1143,8 @@ class AiWorkspaceStore extends ChangeNotifier {
     return seen.toList();
   }
 
-  Future<void> denyToolCall(String callId) => _resolveToolCall(callId, approve: false);
+  Future<void> denyToolCall(String callId) =>
+      _resolveToolCall(callId, approve: false);
 
   /// 回答 AI 的提问（用户建议 ⑥）。
   ///
@@ -1123,7 +1158,11 @@ class AiWorkspaceStore extends ChangeNotifier {
     String? text,
   }) async {
     try {
-      final accepted = await _source.answerQuestion(questionId, text, optionIndex: optionIndex);
+      final accepted = await _source.answerQuestion(
+        questionId,
+        text,
+        optionIndex: optionIndex,
+      );
       if (!accepted) {
         // 提问已经结束（超时 / Run 停了）：如实说，不能假装收到
         return (ok: false, message: '这条提问已经结束了（超时或本次回答已停止），这次回答没有被采纳。');
@@ -1136,8 +1175,11 @@ class AiWorkspaceStore extends ChangeNotifier {
         (call) => _applyLocalAnswer(
           call,
           questionId,
-          answer: text ??
-              (optionIndex != null ? call.question?.options.elementAtOrNull(optionIndex) : null),
+          answer:
+              text ??
+              (optionIndex != null
+                  ? call.question?.options.elementAtOrNull(optionIndex)
+                  : null),
           optionIndex: optionIndex,
         ),
       );
@@ -1214,7 +1256,9 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   Future<void> _resolveToolCall(String callId, {required bool approve}) async {
     try {
-      final accepted = approve ? await _api.approveToolCall(callId) : await _api.denyToolCall(callId);
+      final accepted = approve
+          ? await _api.approveToolCall(callId)
+          : await _api.denyToolCall(callId);
       if (!accepted) {
         // 点晚了：这次调用已经结束 / 超时，**如实说**，不要假装批准成功
         notice = '这次工具调用已经结束或超时，${approve ? '批准' : '拒绝'}没有生效。';
@@ -1222,7 +1266,9 @@ class AiWorkspaceStore extends ChangeNotifier {
         _patchToolCall(
           callId,
           (c) => c.copyWith(
-            status: approve ? AiToolCallStatus.running : AiToolCallStatus.denied,
+            status: approve
+                ? AiToolCallStatus.running
+                : AiToolCallStatus.denied,
             approval: approve ? c.approval : 'denied',
           ),
         );
@@ -1455,7 +1501,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       );
       if (r.ok && r.applied > 0) {
         syncedToDesktop += r.applied;
-        pushNotice = '已把本机 ${r.applied} 条记录同步到桌面'
+        pushNotice =
+            '已把本机 ${r.applied} 条记录同步到桌面'
             '${r.pending > 0 ? '（还有 ${r.pending} 条待同步）' : ''}。';
       } else if (!r.ok && r.error != null && r.pending > 0) {
         // 离线时不吵人：只在**确实有东西没推上去**时记一句
@@ -1511,9 +1558,13 @@ class AiWorkspaceStore extends ChangeNotifier {
               ? '已从桌面全量重建本机镜像（${r.applied} 行）。'
               : '已从桌面同步 ${r.applied} 条记录。';
         }
-        debugPrint('[M4] 下行：mode=${r.mode} applied=${r.applied} cursor=${r.cursor}');
+        debugPrint(
+          '[M4] 下行：mode=${r.mode} applied=${r.applied} cursor=${r.cursor}',
+        );
       } else {
-        debugPrint('[M4] 下行：ok=false mode=${r.mode} cursor=${r.cursor} error=${r.error}');
+        debugPrint(
+          '[M4] 下行：ok=false mode=${r.mode} cursor=${r.cursor} error=${r.error}',
+        );
         if (r.error != null) {
           // 失败要如实说，但不吵人：游标一个字都没动，下次接着拉
           pushNotice = '从桌面拉取失败：${r.error}';
@@ -1549,7 +1600,10 @@ class AiWorkspaceStore extends ChangeNotifier {
   void _armOutboxRetry() {
     if (!_source.isLocal) return;
     // 已经挂着就不叠第二个（`periodic` 会一直拍到队列被推空）
-    _outboxRetry ??= Timer.periodic(_kOutboxRetryInterval, (_) => unawaited(syncOutbox()));
+    _outboxRetry ??= Timer.periodic(
+      _kOutboxRetryInterval,
+      (_) => unawaited(syncOutbox()),
+    );
   }
 
   void _cancelOutboxRetry() {
@@ -1594,7 +1648,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   void _installLifecycleHook() {
     if (_lifecycle != null || !_source.isLocal) return;
     try {
-      _lifecycle = AppLifecycleListener(onResume: () => unawaited(onAppResumed()));
+      _lifecycle = AppLifecycleListener(
+        onResume: () => unawaited(onAppResumed()),
+      );
     } catch (_) {
       // 极少数宿主（纯 Dart 单测）没有 WidgetsBinding：没有这个钩子不影响其它路 ——
       // 冷启动与 Run 收尾那两处触发照旧在
@@ -1668,8 +1724,10 @@ class AiWorkspaceStore extends ChangeNotifier {
             : '已从桌面取得并写入本机密钥库 ${written.length} 把：${written.join('、')}',
       ];
       if (missing.isNotEmpty) {
-        parts.add('${missing.length} 把没拿到（桌面没配过，或这台设备还没被允许下行密钥）：'
-            '${missing.join('、')}');
+        parts.add(
+          '${missing.length} 把没拿到（桌面没配过，或这台设备还没被允许下行密钥）：'
+          '${missing.join('、')}',
+        );
       }
       if (failed.isNotEmpty) {
         parts.add('${failed.length} 把写不进本机密钥库：${failed.join('、')}');
@@ -1704,7 +1762,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 拿不到就原样保留桌面那份，并且**不抛** —— 这里失败不该让整个列表消失
   /// （用户至少还能看见 provider 与模型）。
-  Future<List<AiProvider>> _overlayDeviceCredentials(List<AiProvider> list) async {
+  Future<List<AiProvider>> _overlayDeviceCredentials(
+    List<AiProvider> list,
+  ) async {
     if (!credentials.isLocal) return list;
     final out = <AiProvider>[];
     for (final p in list) {
@@ -1740,7 +1800,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     for (final c in conversations) {
       if (c.archived || c.messageCount != 0) continue;
       final draft = await loadDraft(c.id);
-      if (draft.text.trim().isEmpty && draft.attachments.isEmpty) reusable.add(c);
+      if (draft.text.trim().isEmpty && draft.attachments.isEmpty) {
+        reusable.add(c);
+      }
     }
     if (reusable.isEmpty) {
       await _createConversation();
@@ -1798,7 +1860,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       try {
         models = await _providerStore.listModels(p.id);
         if (models.isEmpty) {
-          modelsIssue = '本机还没为「${p.displayName}」配过模型清单：'
+          modelsIssue =
+              '本机还没为「${p.displayName}」配过模型清单：'
               '去「AI 模型与凭据」里加一个模型（能力要显式声明，别指望它按名字猜），'
               '加完这里就能选它了。';
         }
@@ -1811,7 +1874,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 给一个空目录会让人以为"模型都被删了"。
       models = await _api.listModels(p.id);
     }
-    if (selectedModel != null && !models.any((m) => m.id == selectedModel!.id)) {
+    if (selectedModel != null &&
+        !models.any((m) => m.id == selectedModel!.id)) {
       selectedModel = null;
     }
     selectedModel ??= models.where((m) => m.enabled).firstOrNull;
@@ -1846,7 +1910,9 @@ class AiWorkspaceStore extends ChangeNotifier {
         error = '读「${p.displayName}」的模型目录失败：$e';
         models = catalogByProvider[p.id] ?? const [];
       }
-      if (!models.any((e) => e.id == m.id)) models = catalogByProvider[p.id] ?? models;
+      if (!models.any((e) => e.id == m.id)) {
+        models = catalogByProvider[p.id] ?? models;
+      }
     }
     await selectModel(m);
   }
@@ -1877,7 +1943,8 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 选择思考强度。模型没声明这个档位时直接忽略（真源在模型目录，AIH-056）。
   void selectReasoningEffort(AiReasoningEffort effort) {
-    final allowed = selectedModel?.selectableEfforts ?? const <AiReasoningEffort>[];
+    final allowed =
+        selectedModel?.selectableEfforts ?? const <AiReasoningEffort>[];
     if (!allowed.contains(effort)) return;
     reasoningEffort = effort;
     _rememberModel();
@@ -1886,8 +1953,11 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 换模型后把档位收敛回合法集合：新模型没有这个档位就退回"关闭"。
   void _clampReasoningEffort() {
-    final allowed = selectedModel?.selectableEfforts ?? const <AiReasoningEffort>[];
-    if (!allowed.contains(reasoningEffort)) reasoningEffort = AiReasoningEffort.off;
+    final allowed =
+        selectedModel?.selectableEfforts ?? const <AiReasoningEffort>[];
+    if (!allowed.contains(reasoningEffort)) {
+      reasoningEffort = AiReasoningEffort.off;
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -1952,7 +2022,9 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 当前会话是不是"空壳"：一条消息都没有，输入区也没有待发送的内容。
   bool get isEmptyConversation =>
-      (conversation?.id ?? '').isNotEmpty && messages.isEmpty && attachments.isEmpty;
+      (conversation?.id ?? '').isNotEmpty &&
+      messages.isEmpty &&
+      attachments.isEmpty;
 
   /// 切换会话时顺手删掉上一个空会话（用户要求）：聊天记录列表不该堆一串"新对话"。
   ///
@@ -2008,7 +2080,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     if (conv == null) return;
     try {
       final updated = await _api.patchConversation(conv.id, {'title': title});
-      conversations = conversations.map((c) => c.id == updated.id ? updated : c).toList();
+      conversations = conversations
+          .map((c) => c.id == updated.id ? updated : c)
+          .toList();
       conversation = updated;
     } catch (e) {
       error = '重命名失败：$e';
@@ -2188,11 +2262,15 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 某个附件在当前模型下的缩略图 / 预览帧地址（界面用）。
   String? thumbUrlFor(String? attachmentId) =>
-      attachmentId == null || attachmentId.isEmpty ? null : _api.attachmentThumbUrl(attachmentId);
+      attachmentId == null || attachmentId.isEmpty
+      ? null
+      : _api.attachmentThumbUrl(attachmentId);
 
   /// 原件的地址（点开看大图 / 播视频）。
   String? fileUrlFor(String? attachmentId) =>
-      attachmentId == null || attachmentId.isEmpty ? null : _api.attachmentFileUrl(attachmentId);
+      attachmentId == null || attachmentId.isEmpty
+      ? null
+      : _api.attachmentFileUrl(attachmentId);
 
   /// **画廊产物**（媒体 id）的缩略图 / 视频封面地址。
   ///
@@ -2207,8 +2285,17 @@ class AiWorkspaceStore extends ChangeNotifier {
   Future<String?> promptWorkflow(int promptId) => _api.promptWorkflow(promptId);
 
   /// 工作流蓝图 + 接线体检（那条卡上的「看蓝图」用它；同样走注入的 http client）。
-  Future<Map<String, dynamic>> workflowBlueprint(String raw, {bool diagnose = true}) =>
-      _api.workflowBlueprint(raw, diagnose: diagnose);
+  Future<Map<String, dynamic>> workflowBlueprint(
+    String raw, {
+    bool diagnose = true,
+  }) => _api.workflowBlueprint(raw, diagnose: diagnose);
+
+  /// 本机已保存的工作流清单（输入区「选择现有工作流」用；只读）。
+  Future<ComfyWorkflowList> listWorkflowFiles({String? q, int limit = 50}) =>
+      _api.listWorkflowFiles(q: q, limit: limit);
+
+  /// 读一份本机工作流原文（路径准入在后端）。
+  Future<String> readWorkflowFile(String path) => _api.readWorkflowFile(path);
 
   /// 把改过的工作流存成文件（落点由后端白名单决定）。
   Future<SavedWorkflow> saveWorkflow({required String raw, String? name}) =>
@@ -2264,7 +2351,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       await _clearDraft(conv.id);
       notifyListeners(); // 到这里：发送中 + 这条会话的草稿已作废
       // 模型没声明推理能力时不带这个字段（后端也会再挡一次，AIH-056）
-      final effort = (model.supportsReasoningEffort && reasoningEffort.isThinking)
+      final effort =
+          (model.supportsReasoningEffort && reasoningEffort.isThinking)
           ? reasoningEffort.wire
           : null;
       final start = await _source.startRun(
@@ -2287,7 +2375,9 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 而那正是最难查的一类故障（M3.2 ① 修的就是它）。
       final assistantId = start.assistantMessageId;
       if (assistantId == null || assistantId.isEmpty) {
-        throw StateError('事件源没有回传助手消息 id（${_source.isLocal ? "本地 harness" : "远端后端"}）');
+        throw StateError(
+          '事件源没有回传助手消息 id（${_source.isLocal ? "本地 harness" : "远端后端"}）',
+        );
       }
       // 记下"助手消息 → Run"的关联：失败后的「重试」要把它作为 retryOfRunId 带回去（AIH-024）。
       // 在请求返回时就记，而不是等 `run.started` 事件 —— 后者在流中断时根本收不到。
@@ -2309,7 +2399,11 @@ class AiWorkspaceStore extends ChangeNotifier {
           parts: [
             if (body.isNotEmpty) AiMessagePart(type: 'text', text: body),
             for (final a in attachments)
-              AiMessagePart(type: 'attachment', text: a.name, attachmentId: a.id),
+              AiMessagePart(
+                type: 'attachment',
+                text: a.name,
+                attachmentId: a.id,
+              ),
           ],
         ),
         AiMessage(
@@ -2343,7 +2437,11 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  Future<void> _consumeRun(String runId, String assistantMessageId, String conversationId) async {
+  Future<void> _consumeRun(
+    String runId,
+    String assistantMessageId,
+    String conversationId,
+  ) async {
     var streamed = '';
     // 这一条助手消息的实时思考 / 工具调用（气泡边流边渲染）
     _liveReasoning.remove(assistantMessageId);
@@ -2359,14 +2457,22 @@ class AiWorkspaceStore extends ChangeNotifier {
             // （整轮跑完才落库）替换，这里就是唯一能救回正文的来源（_overlayInflight）
             _liveText[assistantMessageId] = streamed;
             _appendLiveSegment(assistantMessageId, 'text', event.text ?? '');
-            _replaceMessage(assistantMessageId, text: streamed, status: 'streaming');
+            _replaceMessage(
+              assistantMessageId,
+              text: streamed,
+              status: 'streaming',
+            );
             // 逐字回包只攒着，交给下一帧统一刷新（见 _notifyStreaming）
             _notifyStreaming();
           // 思考增量（M4）：按消息累加，气泡里折叠展示
           case 'reasoning.delta':
             final delta = event.text ?? '';
             if (delta.isEmpty) break;
-            _liveReasoning.update(assistantMessageId, (v) => v + delta, ifAbsent: () => delta);
+            _liveReasoning.update(
+              assistantMessageId,
+              (v) => v + delta,
+              ifAbsent: () => delta,
+            );
             _appendLiveSegment(assistantMessageId, 'reasoning', delta);
             _notifyStreaming();
           // 关键步骤（环节）开始（用户建议 2026-09-28）：`[步骤]正在查资料[/步骤]` 被后端摘掉后
@@ -2384,26 +2490,42 @@ class AiWorkspaceStore extends ChangeNotifier {
             final added = _upsertToolCall(
               assistantMessageId,
               event.callId ?? '',
-              (prev) => (prev ?? AiToolCallState(callId: event.callId ?? '', name: event.toolName ?? ''))
-                  .copyWith(
-                name: event.toolName ?? prev?.name,
-                arguments: event.arguments ?? prev?.arguments,
-                approval: approval,
-                status: approval == 'pending'
-                    ? AiToolCallStatus.pendingApproval
-                    : AiToolCallStatus.running,
-              ),
+              (prev) =>
+                  (prev ??
+                          AiToolCallState(
+                            callId: event.callId ?? '',
+                            name: event.toolName ?? '',
+                          ))
+                      .copyWith(
+                        name: event.toolName ?? prev?.name,
+                        arguments: event.arguments ?? prev?.arguments,
+                        reason: event.reason ?? prev?.reason,
+                        approval: approval,
+                        status: approval == 'pending'
+                            ? AiToolCallStatus.pendingApproval
+                            : AiToolCallStatus.running,
+                      ),
             );
             // 第一次见到这个调用号：把工具卡的**位置**也记进实时段，
             // 流式期间才画得出"思考 → 工具 → 正文"的真实交错（用户 bug⑥）
-            if (added) _appendLiveToolCall(assistantMessageId, event.callId ?? '');
+            if (added) {
+              _appendLiveToolCall(assistantMessageId, event.callId ?? '');
+            }
             _notifyNow();
           case 'tool.started':
             _upsertToolCall(
               assistantMessageId,
               event.callId ?? '',
-              (prev) => (prev ?? AiToolCallState(callId: event.callId ?? '', name: event.toolName ?? ''))
-                  .copyWith(name: event.toolName ?? prev?.name, status: AiToolCallStatus.running),
+              (prev) =>
+                  (prev ??
+                          AiToolCallState(
+                            callId: event.callId ?? '',
+                            name: event.toolName ?? '',
+                          ))
+                      .copyWith(
+                        name: event.toolName ?? prev?.name,
+                        status: AiToolCallStatus.running,
+                      ),
             );
             _notifyNow();
           // 提问（用户建议 ⑥）：AI 当场问一句，**这一次回答不会结束**。
@@ -2421,28 +2543,37 @@ class AiWorkspaceStore extends ChangeNotifier {
             // 提问卡被挂在另一个键上，于是 `pendingQuestion` 在 `callId` 那条上找不到问题，
             // 输入区永远不接管（而 `tool.completed` / `tool.failed` 也按 `callId` 更新，
             // 结果就是"工具卡一直在运行中、提问卡根本不出现"）。
-            final askCallId = _liveAskCallId(assistantMessageId) ?? event.callId ?? q.questionId;
+            final askCallId =
+                _liveAskCallId(assistantMessageId) ??
+                event.callId ??
+                q.questionId;
             _upsertToolCall(
               assistantMessageId,
               askCallId,
-              (prev) => (prev ?? AiToolCallState(callId: askCallId, name: 'ask_user_question'))
-                  .copyWith(
-                name: 'ask_user_question',
-                status: AiToolCallStatus.pendingApproval,
-                // 把调用号一起记进问题里：答题 / 切状态都要按它定位
-                // 多问（2026-09-22）：一题一条事件、都挂同一个 `callId`，
-                // 必须**并进同一张卡**；只留最后一条会把前面的题顶掉。
-                questions: AiToolCallState.mergeQuestions(
-                  prev?.questions ?? const [],
-                  q.copyWith(callId: askCallId),
-                ),
-                // `question` 仍是**第一条**（历史回放与旧用例照旧读它）
-                question: prev?.question ?? q.copyWith(callId: askCallId),
-                // 卡片要画在正确的位置：与工具卡一样，第一次见到就记进实时段
-                arguments: (prev?.arguments ?? '').isEmpty
-                    ? '{"question":"${q.question}"}'
-                    : prev?.arguments,
-              ),
+              (prev) =>
+                  (prev ??
+                          AiToolCallState(
+                            callId: askCallId,
+                            name: 'ask_user_question',
+                          ))
+                      .copyWith(
+                        name: 'ask_user_question',
+                        status: AiToolCallStatus.pendingApproval,
+                        // 把调用号一起记进问题里：答题 / 切状态都要按它定位
+                        // 多问（2026-09-22）：一题一条事件、都挂同一个 `callId`，
+                        // 必须**并进同一张卡**；只留最后一条会把前面的题顶掉。
+                        questions: AiToolCallState.mergeQuestions(
+                          prev?.questions ?? const [],
+                          q.copyWith(callId: askCallId),
+                        ),
+                        // `question` 仍是**第一条**（历史回放与旧用例照旧读它）
+                        question:
+                            prev?.question ?? q.copyWith(callId: askCallId),
+                        // 卡片要画在正确的位置：与工具卡一样，第一次见到就记进实时段
+                        arguments: (prev?.arguments ?? '').isEmpty
+                            ? '{"question":"${q.question}"}'
+                            : prev?.arguments,
+                      ),
             );
             _notifyNow();
           case 'user.question.answered':
@@ -2454,46 +2585,65 @@ class AiWorkspaceStore extends ChangeNotifier {
             // 多问时只标**这一题**：整张卡要等最后一题答完才收（否则输入区会提前让位）。
             _patchToolCall(
               _liveAskCallId(assistantMessageId) ?? qid,
-              (call) => _applyLocalAnswer(call, qid, answer: ans, optionIndex: idx),
+              (call) =>
+                  _applyLocalAnswer(call, qid, answer: ans, optionIndex: idx),
             );
             _notifyNow();
           case 'tool.completed':
             _upsertToolCall(
               assistantMessageId,
               event.callId ?? '',
-              (prev) => (prev ?? AiToolCallState(callId: event.callId ?? '', name: event.toolName ?? ''))
-                  .copyWith(
-                name: event.toolName ?? prev?.name,
-                status: AiToolCallStatus.ok,
-                preview: event.preview ?? prev?.preview,
-                elapsedMs: event.elapsedMs ?? prev?.elapsedMs,
-                // 结构化结果里的产物 id：回复末尾的「画廊入口卡」（用户建议 ⑤）用它
-                mediaIds: AiToolCallState.mediaIdsOf(event.data['result']),
-                // 入库的提示词 id：那张卡还要能打开"生成这些图的工作流"（用户建议 ①）
-                promptId: AiToolCallState.promptIdOf(event.data['result']),
-              ),
+              (prev) =>
+                  (prev ??
+                          AiToolCallState(
+                            callId: event.callId ?? '',
+                            name: event.toolName ?? '',
+                          ))
+                      .copyWith(
+                        name: event.toolName ?? prev?.name,
+                        status: AiToolCallStatus.ok,
+                        preview: event.preview ?? prev?.preview,
+                        elapsedMs: event.elapsedMs ?? prev?.elapsedMs,
+                        // 结构化结果里的产物 id：回复末尾的「画廊入口卡」（用户建议 ⑤）用它
+                        mediaIds: AiToolCallState.mediaIdsOf(
+                          event.data['result'],
+                        ),
+                        // 入库的提示词 id：那张卡还要能打开"生成这些图的工作流"（用户建议 ①）
+                        promptId: AiToolCallState.promptIdOf(
+                          event.data['result'],
+                        ),
+                      ),
             );
             // 提交了任务：立刻刷新进度，用户马上就能在右侧栏看到"排队中 / 正在生成"
             unawaited(refreshComfyJobs());
             // AI 用 `remember` 写了长期记忆：右侧栏的条数 / 预览必须当场跟上
             // （用户 bug：写完长期记忆后侧边栏不刷新，要切走再切回来才变）。
             // 后端改的是 memory.md，这边只有重新拉一次才知道新条数。
-            if (event.toolName == 'remember') unawaited(loadMemory(silent: true));
+            if (event.toolName == 'remember') {
+              unawaited(loadMemory(silent: true));
+            }
             _notifyNow();
           case 'tool.failed':
             final denied = (event.approval ?? '') == 'denied';
             _upsertToolCall(
               assistantMessageId,
               event.callId ?? '',
-              (prev) => (prev ?? AiToolCallState(callId: event.callId ?? '', name: event.toolName ?? ''))
-                  .copyWith(
-                name: event.toolName ?? prev?.name,
-                // 被拒绝不是"出错"：状态要分开显示
-                status: denied ? AiToolCallStatus.denied : AiToolCallStatus.failed,
-                error: event.message ?? event.code,
-                approval: event.approval ?? prev?.approval,
-                elapsedMs: event.elapsedMs ?? prev?.elapsedMs,
-              ),
+              (prev) =>
+                  (prev ??
+                          AiToolCallState(
+                            callId: event.callId ?? '',
+                            name: event.toolName ?? '',
+                          ))
+                      .copyWith(
+                        name: event.toolName ?? prev?.name,
+                        // 被拒绝不是"出错"：状态要分开显示
+                        status: denied
+                            ? AiToolCallStatus.denied
+                            : AiToolCallStatus.failed,
+                        error: event.message ?? event.code,
+                        approval: event.approval ?? prev?.approval,
+                        elapsedMs: event.elapsedMs ?? prev?.elapsedMs,
+                      ),
             );
             _notifyNow();
           case 'message.completed':
@@ -2512,22 +2662,33 @@ class AiWorkspaceStore extends ChangeNotifier {
               parts: parts,
               // token 统计（AIH-057）：后端已在事件里给了归一化 usage
               usage: event.data['usage'] is Map
-                  ? AiTokenUsage.fromJson(Map<String, dynamic>.from(event.data['usage'] as Map))
+                  ? AiTokenUsage.fromJson(
+                      Map<String, dynamic>.from(event.data['usage'] as Map),
+                    )
                   : null,
               reasoningEffort: event.data['reasoningEffort']?.toString(),
             );
             _notifyNow();
           case 'run.failed':
-            _replaceMessage(assistantMessageId, text: streamed, status: 'failed');
+            _replaceMessage(
+              assistantMessageId,
+              text: streamed,
+              status: 'failed',
+            );
             error = '[${event.code ?? 'ERROR'}] ${event.message ?? '运行失败'}';
           case 'run.cancelled':
-            _replaceMessage(assistantMessageId, text: streamed, status: 'cancelled');
+            _replaceMessage(
+              assistantMessageId,
+              text: streamed,
+              status: 'cancelled',
+            );
             notice = '已停止本次生成。';
           // 会话标题被后端自动总结出来了（用户建议 ③）：立刻刷新标题与对话列表，
           // 不等这次 Run 结束 —— 用户第一眼就能在 AppBar 上看到这条对话叫什么。
           case 'conversation.updated':
             final newTitle = event.data['title']?.toString();
-            final convId = event.data['conversationId']?.toString() ?? conversation?.id;
+            final convId =
+                event.data['conversationId']?.toString() ?? conversation?.id;
             if (newTitle != null && newTitle.isNotEmpty && convId != null) {
               _applyConversationTitle(convId, newTitle);
               _notifyNow();
@@ -2637,7 +2798,9 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 理由同 `send()`：拿不到就当场失败，不悄悄兜底
       final freshAssistantId = start.assistantMessageId;
       if (freshAssistantId == null || freshAssistantId.isEmpty) {
-        throw StateError('事件源没有回传助手消息 id（${_source.isLocal ? "本地 harness" : "远端后端"}）');
+        throw StateError(
+          '事件源没有回传助手消息 id（${_source.isLocal ? "本地 harness" : "远端后端"}）',
+        );
       }
       // 这次 Run 与助手消息的关联就地记下（不依赖事件流，刷新消息也不会丢）
       _runIds[freshAssistantId] = start.runId;
@@ -2645,21 +2808,24 @@ class AiWorkspaceStore extends ChangeNotifier {
       _activeAssistantId = freshAssistantId;
 
       AiMessage streamingPlaceholder(int seq) => AiMessage(
-            id: freshAssistantId,
-            conversationId: conv.id,
-            seq: seq,
-            role: 'assistant',
-            status: 'streaming',
-            text: '',
-            modelId: m.id,
-            reasoningEffort: effort,
-          );
+        id: freshAssistantId,
+        conversationId: conv.id,
+        seq: seq,
+        role: 'assistant',
+        status: 'streaming',
+        text: '',
+        modelId: m.id,
+        reasoningEffort: effort,
+      );
 
       if (freshAssistantId == assistantMessageId) {
         // 后端**就地复用**了那条失败气泡（它是空的）→ 同样就地换成流式占位，不新增气泡
         messages = [
           for (final msg in messages)
-            if (msg.id == assistantMessageId) streamingPlaceholder(msg.seq) else msg,
+            if (msg.id == assistantMessageId)
+              streamingPlaceholder(msg.seq)
+            else
+              msg,
         ];
       } else {
         // 后端**另起**了一条：原来那条失败回复里有内容（正文 / 思考 / 工具卡 / 产物入口卡），
@@ -2735,7 +2901,10 @@ class AiWorkspaceStore extends ChangeNotifier {
   void _appendLiveSegment(String messageId, String type, String delta) {
     if (delta.isEmpty) return;
     _bumpLiveRevision(messageId);
-    final list = _liveSegments.putIfAbsent(messageId, () => <AiMessageSegment>[]);
+    final list = _liveSegments.putIfAbsent(
+      messageId,
+      () => <AiMessageSegment>[],
+    );
     if (list.isNotEmpty && list.last.type == type) {
       list[list.length - 1] = AiMessageSegment(type, list.last.text + delta);
     } else {
@@ -2803,7 +2972,10 @@ class AiWorkspaceStore extends ChangeNotifier {
   ) {
     if (callId.isEmpty) return false;
     _bumpLiveRevision(messageId);
-    final list = _liveToolCalls.putIfAbsent(messageId, () => <AiToolCallState>[]);
+    final list = _liveToolCalls.putIfAbsent(
+      messageId,
+      () => <AiToolCallState>[],
+    );
     final i = list.indexWhere((c) => c.callId == callId);
     final next = update(i < 0 ? null : list[i]);
     if (i < 0) {
@@ -2814,7 +2986,10 @@ class AiWorkspaceStore extends ChangeNotifier {
     return false;
   }
 
-  void _patchToolCall(String callId, AiToolCallState Function(AiToolCallState call) update) {
+  void _patchToolCall(
+    String callId,
+    AiToolCallState Function(AiToolCallState call) update,
+  ) {
     for (final entry in _liveToolCalls.entries) {
       final list = entry.value;
       final i = list.indexWhere((c) => c.callId == callId);
@@ -2843,7 +3018,8 @@ class AiWorkspaceStore extends ChangeNotifier {
     if (nested is Map) {
       return AiQuestion.fromJson(Map<String, dynamic>.from(nested));
     }
-    if (nested is String && (data['questionId']?.toString().isNotEmpty ?? false)) {
+    if (nested is String &&
+        (data['questionId']?.toString().isNotEmpty ?? false)) {
       return AiQuestion.fromJson(data);
     }
     return null;
@@ -2943,7 +3119,10 @@ class AiWorkspaceStore extends ChangeNotifier {
     if (conv == null) return;
     final count = messages.length;
     if (conv.messageCount == count) return;
-    final updated = conv.copyWith(messageCount: count, updatedAt: DateTime.now());
+    final updated = conv.copyWith(
+      messageCount: count,
+      updatedAt: DateTime.now(),
+    );
     conversation = updated;
     conversations = [
       updated,

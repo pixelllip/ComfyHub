@@ -2,11 +2,12 @@
 name: lora-training
 description: 本机 LoRA 训练的参数调优、打标与预处理方法论（Krea-2 与 Anima 两条线）。按"先探环境 → 再定配方 → 再动数据"的顺序，把已有实测经验套到用户这台机器的真实显存与内存上。含：分辨率档 × 宿主内存的口径（8GB 显存是底线，档位看内存）、Krea-2 的当前 target 档位（official_gate 264，attn_mlp 已弃用）与 512 档生产配方、Anima 的 low_vram 配方、宿主内存与 Windows 专属坑（WDDM 换页、pin_memory、cudaMallocAsync）、两种打标口径（Anima 的 Danbooru caption 模板 / Krea-2 的长自然语言 + tag-notes + 确定性闸门）、预处理缓存三件套与"什么变了必须重编"、剂量与"文本通道压过权重"这两个风格 LoRA 的坑、失败模式速查。
 whenToUse: 用户要"在本机训 LoRA"、"调显存/内存参数"、"低显存怎么跑"、"这套参数合适吗"、"用哪个 target 档"、"帮我打标/预处理数据集"、"训练 OOM 了/卡住不动/loss 不降"、"风格学不进去"、要挑 rank/lr/步数/分辨率、要把数据集整理成可训练的缓存、要判断某张卡能不能跑某个模型，或者要把训练好的 LoRA 放进 ComfyUI 使用时。
-version: 3
+version: 4
 ---
 
 ## 版本记录
 
+- **version 4（2026-10-20，用户口径）**：`comfy_*` 不止能探状态 —— **能直接跑工作流出图**。训练后的 LoRA 验收一律走 comfy 工作流（换 `LoraLoader` 的 `lora_name` + 触发词），不要另写 `inference.py` 旁路。
 - **version 3（2026-10-18，按 krea2-webui 最近四天文档重校）**：这一版**改掉 v1/v2 里的一批错**——
   ① target 档位：**`official_gate` / 264 是当前口径**（2026-10-13 起），不是 `attention`/160；
   `attn_mlp`/196 **已弃用**。② `blocks_to_swap` 的 512 档生产值是 **26**（不是 20）。
@@ -30,8 +31,10 @@ version: 3
 | --- | --- |
 | `list_dir` / `read_file` | ✅ 读引擎目录、`output/daemon/*.json`、训练 `stdout.log`、`progress.jsonl`、`configs/*.toml`、数据集清单、`_manifest.json` |
 | `write_file` | ✅ 配方 TOML、caption sidecar、给用户跑的脚本、复盘记录 |
-| `comfy_*`（comfy-mcp） | ✅ 能问 ComfyUI 实例状态（含显存）与模型清单 —— **本机唯一"不跑命令就能探硬件"的路子** |
+| `comfy_*`（comfy-mcp） | ✅ 能问 ComfyUI 实例状态（含显存）与模型清单；**也能直接跑工作流出图**（list/find → load_workflow → submit） |
 | 起训练进程 / 跑 shell | ❌ 没有。**交付物 = 配方 + caption + 可粘贴的命令 + 验收判据** |
+
+> **出图验收走 comfy 工作流，别写推理脚本**（2026-10-20 用户口径）：`comfy_start`（没起时）→ `comfy_list_workflows` / `comfy_find_workflow` → `comfy_load_workflow` → `comfy_check_inputs`（缺输入）/ `comfy_fit_workflow`（缺模型）→ `comfy_submit`（要审批）。LoRA 验收 = 工作流里换 `LoraLoader` 的 `lora_name`、prompt 带触发词；Krea-2 / MOSS 各走自己那条线的工作流。`inference.py` 那类旁路只用于引擎自己的回归。
 
 **红线**：① 不许撑爆宿主内存（见 §3 闸门）；② 只读源图、只写缓存/产物目录、`output_name` 不许覆盖已有 LoRA；
 ③ 先 20 步试跑再长跑；④ 起跑后先看 loss 与步时是否"在学、稳"；⑤ 用户的数据集与已有产物一个字不许动。

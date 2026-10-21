@@ -22,7 +22,7 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         ]
     );
     assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
-    assert_eq!(body["promptVersion"], "v38");
+    assert_eq!(body["promptVersion"], "v41");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -320,7 +320,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（35 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（40 个），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
@@ -384,8 +384,11 @@ async fn tool_policy_and_nsfw_endpoints() {
             "remember",
             // 第 46 步：资料库（写角色之前先查本机，而不是凭印象编 tag）
             "save_character_card",
+            // 画风卡（2026-10-21）：与角色卡同等地位
+            "save_style_card",
             "search_character_cards",
             "search_prompts",
+            "search_style_cards",
             "web_fetch",
             "web_search",
             "write_file",

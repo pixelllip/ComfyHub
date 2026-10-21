@@ -31,6 +31,7 @@
 //! | `ai_executor.rs` | 一次 Run 的主循环、流中断、审批闸门、提问、轮次与预算上限、重试 |
 //! | `ai_providers.rs` | Provider CRUD、模型目录、内置目录、能力三层、凭据、联网搜索凭据 |
 //! | `ai_run_kit.rs` | run-kit 工件与 Skills / 记忆 |
+//! | `cards.rs` | 角色卡 / 画风卡：双版本、示例产物、错误码 |
 //! | `tools.rs` | 桌面文件五件、工具清单与作用域、资料库检索 |
 //! | `comfy.rs` | comfy 查询两件、状态/队列/进度、读工作流、体检/审核/摘拼、图像编辑投放、起停实例 |
 //!
@@ -46,5 +47,6 @@ mod ai_conversations;
 mod ai_executor;
 mod ai_providers;
 mod ai_run_kit;
+mod cards;
 mod tools;
 mod comfy;

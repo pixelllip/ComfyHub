@@ -11,8 +11,16 @@ import 'workflow_blueprint_painter.dart';
 /// 蓝图取数的两个入口（详情页把 `store.api` 的两个方法包一下传进来）。
 ///
 /// 传闭包而不是 `ApiClient`：页面因此**不依赖网络**，用例可以直接喂一份假蓝图。
-typedef BlueprintDiagnose = Future<Map<String, dynamic>> Function(String raw);
-typedef BlueprintSave = Future<SavedWorkflow> Function(String raw, String? name);
+/// [diagnose] = false 时只要**结构**（节点 / 连线 / 坐标），不跑接线体检 ——
+/// 后端据此跳过 `/object_info`（兆字节级），界面可以先秒开一张图、再补体检。
+typedef BlueprintDiagnose = Future<Map<String, dynamic>> Function(
+  String raw, {
+  bool diagnose,
+});
+typedef BlueprintSave = Future<SavedWorkflow> Function(
+  String raw,
+  String? name,
+);
 
 /// 打开工作流蓝图（整屏）。
 ///
@@ -74,6 +82,16 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   bool _dirty = false;
   bool _saving = false;
 
+  /// 只认**最后一次** `_load` 的结果：改参数会 350ms 防抖后重跑，慢的那次回来不许覆盖快的。
+  int _loadSeq = 0;
+
+  /// 同一份原文的蓝图缓存（最多 6 份，5 分钟）：
+  /// 用户"关掉蓝图 → 再点开"是常态，第二次不该再等一次网络 + 体检。
+  static final Map<String, ({WorkflowBlueprint blueprint, DateTime at})>
+  _cache = {};
+  static const int _cacheLimit = 6;
+  static const Duration _cacheTtl = Duration(minutes: 5);
+
   String? _selectedId;
   bool _editing = false;
   bool _showIssues = false;
@@ -117,32 +135,85 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   }
 
   Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final json = await widget.diagnose(_raw);
-      if (!mounted) return;
-      final blueprint = WorkflowBlueprint.fromJson(json);
+    final raw = _raw;
+    final seq = ++_loadSeq;
+    final cached = _cachedBlueprint(raw);
+    if (cached != null) {
+      // 缓存命中：先把它画出来，不等网络。后台仍会复检一次（文件可能被用户在 ComfyUI 里改过）。
+      _applyBlueprint(cached, loading: false);
+    } else {
       setState(() {
-        _loading = false;
-        _blueprint = blueprint;
-        _layout = BlueprintLayout.of(blueprint);
-        // ⚠ 这里**不许**再写 `_fitted = false`：改一个参数就会触发一次就地复检，
-        // 复位它等于"每改一次参数就把用户的视角抢回初始位置"（用户 bug 2026-10-18）。
-        // 要重新适配请用工具栏的「适应窗口」。
-        // 选中的节点没了（比如换了一份图）就取消选中
-        if (_selectedId != null && blueprint.nodeById(_selectedId!) == null) {
-          _selectedId = null;
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    // ① 结构快照（diagnose=false）：后端不取 `/object_info`，通常几毫秒就回。
+    //    它先让用户看到图；② 的体检回来后再补问题清单。
+    Future<Map<String, dynamic>>? fast;
+    if (cached == null) {
+      fast = widget.diagnose(raw, diagnose: false);
+    }
+    // ② 全量体检：与快照**并发**发出，不要等快照回来再发。
+    final full = widget.diagnose(raw, diagnose: true);
+
+    if (fast != null) {
+      try {
+        final json = await fast;
+        if (!mounted || seq != _loadSeq) return;
+        // 全量已经先回来时不要再拿快照覆盖它（快照没有体检结论）。
+        if (_blueprint == null || _loading) {
+          _applyBlueprint(WorkflowBlueprint.fromJson(json), loading: false);
         }
-      });
+      } catch (_) {
+        // 快照失败不单独报错：全量那条路会给出真正的原因。
+      }
+    }
+
+    try {
+      final json = await full;
+      if (!mounted || seq != _loadSeq) return;
+      final blueprint = WorkflowBlueprint.fromJson(json);
+      _rememberBlueprint(raw, blueprint);
+      _applyBlueprint(blueprint, loading: false);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq) return;
       setState(() {
         _loading = false;
-        _error = '$e';
+        // 已经有快照可看时，别把整页变成错误页；错误留给"重试"与全量失败时展示。
+        if (_blueprint == null) _error = '$e';
       });
+    }
+  }
+
+  /// 把一份蓝图套到页面上。**不重置 `_fitted`**（用户视角不许被抢回去）。
+  void _applyBlueprint(WorkflowBlueprint blueprint, {required bool loading}) {
+    setState(() {
+      _loading = loading;
+      if (_blueprint == null) _error = null;
+      _blueprint = blueprint;
+      _layout = BlueprintLayout.of(blueprint);
+      if (_selectedId != null && blueprint.nodeById(_selectedId!) == null) {
+        _selectedId = null;
+      }
+    });
+  }
+
+  WorkflowBlueprint? _cachedBlueprint(String raw) {
+    final hit = _cache[raw];
+    if (hit == null) return null;
+    if (DateTime.now().difference(hit.at) > _cacheTtl) {
+      _cache.remove(raw);
+      return null;
+    }
+    return hit.blueprint;
+  }
+
+  static void _rememberBlueprint(String raw, WorkflowBlueprint blueprint) {
+    _cache.remove(raw);
+    _cache[raw] = (blueprint: blueprint, at: DateTime.now());
+    while (_cache.length > _cacheLimit) {
+      _cache.remove(_cache.keys.first);
     }
   }
 
@@ -182,11 +253,14 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
       final base = (_blueprint?.title?.trim().isNotEmpty ?? false)
           ? _blueprint!.title!.trim()
           : widget.title.trim();
-      final name = '${_slug(base.isEmpty ? 'workflow' : base)}${_dirty ? '-edited' : ''}.json';
+      final name =
+          '${_slug(base.isEmpty ? 'workflow' : base)}${_dirty ? '-edited' : ''}.json';
       final saved = await save(_raw, name);
       if (!mounted) return;
       setState(() => _saving = false);
-      _toast('已存到 ${saved.path}（${(saved.bytes / 1024).toStringAsFixed(0)} KB）—— ${saved.hint}');
+      _toast(
+        '已存到 ${saved.path}（${(saved.bytes / 1024).toStringAsFixed(0)} KB）—— ${saved.hint}',
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -195,11 +269,13 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   }
 
   void _toast(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(text),
-      duration: const Duration(milliseconds: 3200),
-      behavior: SnackBarBehavior.floating,
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        duration: const Duration(milliseconds: 3200),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   /// 文件名用的短名（中文原样留，只挡掉路径分隔符与控制字符）。
@@ -242,8 +318,10 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
         .toDouble();
     final fit = scaleX < scaleY ? scaleX : scaleY;
     // 让"图包围盒 + 画布留白"这一块的**中心**落在视口中心
-    final dx = viewport.width / 2 - (_canvasPadding + layout.bounds.width / 2) * fit;
-    final dy = viewport.height / 2 - (_canvasPadding + layout.bounds.height / 2) * fit;
+    final dx =
+        viewport.width / 2 - (_canvasPadding + layout.bounds.width / 2) * fit;
+    final dy =
+        viewport.height / 2 - (_canvasPadding + layout.bounds.height / 2) * fit;
     _controller.value = Matrix4.identity()
       ..translateByDouble(dx, dy, 0, 1)
       ..scaleByDouble(fit, fit, 1, 1);
@@ -255,33 +333,35 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   /// 1. "适应窗口"要用**画布**尺寸（右/下侧面板、上方横幅都不算画布面积）；
   /// 2. 首帧时 `_layout` 刚算好、尺寸也刚确定，这时适配一次才落在正中。
   Widget _canvasArea() {
-    return LayoutBuilder(builder: (context, constraints) {
-      final size = constraints.biggest;
-      if (size.width > 0 && size.height > 0 && size != _viewport) {
-        _viewport = size;
-        if (!_fitted) {
-          _fitted = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            // 尺寸在这一帧里又变了就别适配了 —— 等下一次进入这个分支
-            if (mounted && _viewport == size) _fitToView(size);
-          });
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.biggest;
+        if (size.width > 0 && size.height > 0 && size != _viewport) {
+          _viewport = size;
+          if (!_fitted) {
+            _fitted = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              // 尺寸在这一帧里又变了就别适配了 —— 等下一次进入这个分支
+              if (mounted && _viewport == size) _fitToView(size);
+            });
+          }
         }
-      }
-      return ValueListenableBuilder<Matrix4>(
-        valueListenable: _controller,
-        builder: (context, matrix, _) {
-          final palette = BlueprintPalette.of(Theme.of(context).brightness);
-          return Stack(
-            children: [
-              Positioned.fill(child: _canvas(size, matrix, palette)),
-              // 就地编辑层：**屏幕坐标**，盖在 `InteractiveViewer` 之上。
-              // 放进 `InteractiveViewer` 里面的话控件会跟着缩放糊掉、还会跟拖动抢手势。
-              ..._inlineEditor(matrix, size),
-            ],
-          );
-        },
-      );
-    });
+        return ValueListenableBuilder<Matrix4>(
+          valueListenable: _controller,
+          builder: (context, matrix, _) {
+            final palette = BlueprintPalette.of(Theme.of(context).brightness);
+            return Stack(
+              children: [
+                Positioned.fill(child: _canvas(size, matrix, palette)),
+                // 就地编辑层：**屏幕坐标**，盖在 `InteractiveViewer` 之上。
+                // 放进 `InteractiveViewer` 里面的话控件会跟着缩放糊掉、还会跟拖动抢手势。
+                ..._inlineEditor(matrix, size),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Widget _canvas(Size viewportSize, Matrix4 matrix, BlueprintPalette palette) {
@@ -306,21 +386,24 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           height: height,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapUp: (details) => _onCanvasTap(details.localPosition, origin, layout),
+            onTapUp: (details) =>
+                _onCanvasTap(details.localPosition, origin, layout),
             // 跟着缩放重建：**视口剔除与 LOD 都要当前变换**（`InteractiveViewer` 只变换
             // 子节点、不会重建它，所以不监听就永远拿的是首帧那个比例）。
             child: CustomPaint(
               size: Size(width, height),
-              painter: BlueprintPainter(BlueprintPainterSpec(
-                blueprint: blueprint,
-                layout: layout,
-                origin: origin,
-                viewport: visibleGraphRect(matrix, viewportSize, origin),
-                selectedId: _selectedId,
-                scale: blueprintScaleOf(matrix),
-                // 深浅主题各一套配色 —— 画笔里再写死一套就会重演"深色下压一片近白"
-                palette: palette,
-              )),
+              painter: BlueprintPainter(
+                BlueprintPainterSpec(
+                  blueprint: blueprint,
+                  layout: layout,
+                  origin: origin,
+                  viewport: visibleGraphRect(matrix, viewportSize, origin),
+                  selectedId: _selectedId,
+                  scale: blueprintScaleOf(matrix),
+                  // 深浅主题各一套配色 —— 画笔里再写死一套就会重演"深色下压一片近白"
+                  palette: palette,
+                ),
+              ),
             ),
           ),
         ),
@@ -339,7 +422,9 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     } else {
       final node = blueprint.nodeById(hit);
       final box = layout.boxOf(hit);
-      row = (node == null || box == null) ? null : hitTestWidgetRow(node, box, graph);
+      row = (node == null || box == null)
+          ? null
+          : hitTestWidgetRow(node, box, graph);
     }
     setState(() {
       _selectedId = hit;
@@ -356,12 +441,18 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     final id = _selectedId;
     final layout = _layout;
     final blueprint = _blueprint;
-    if (!_editing || index == null || id == null || layout == null || blueprint == null) {
+    if (!_editing ||
+        index == null ||
+        id == null ||
+        layout == null ||
+        blueprint == null) {
       return const [];
     }
     final node = blueprint.nodeById(id);
     final box = layout.boxOf(id);
-    if (node == null || box == null || index >= node.widgets.length) return const [];
+    if (node == null || box == null || index >= node.widgets.length) {
+      return const [];
+    }
 
     final origin = Offset(
       _canvasPadding - layout.bounds.left,
@@ -414,24 +505,36 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     final blueprint = _blueprint;
     return Scaffold(
       appBar: AppBar(
-        title: Text('工作流蓝图 · ${widget.title}', maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(
+          '工作流蓝图 · ${widget.title}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         actions: [
           if (blueprint != null && blueprint.known) ...[
             if (blueprint.issues.isNotEmpty)
               TextButton.icon(
                 onPressed: () => setState(() => _showIssues = true),
                 icon: Icon(
-                  blueprint.errorCount > 0 ? Icons.error_outline : Icons.report_problem_outlined,
+                  blueprint.errorCount > 0
+                      ? Icons.error_outline
+                      : Icons.report_problem_outlined,
                   size: 18,
-                  color: blueprint.errorCount > 0 ? theme.colorScheme.error : null,
+                  color: blueprint.errorCount > 0
+                      ? theme.colorScheme.error
+                      : null,
                 ),
-                label: Text('${blueprint.errorCount} 错 / ${blueprint.warnCount} 警'),
+                label: Text(
+                  '${blueprint.errorCount} 错 / ${blueprint.warnCount} 警',
+                ),
               ),
             IconButton(
               key: const Key('blueprint-panel-toggle'),
               tooltip: _panelOpen ? '收起面板' : '展开面板',
               onPressed: () => setState(() => _panelOpen = !_panelOpen),
-              icon: Icon(_panelOpen ? Icons.view_sidebar : Icons.view_sidebar_outlined),
+              icon: Icon(
+                _panelOpen ? Icons.view_sidebar : Icons.view_sidebar_outlined,
+              ),
             ),
             IconButton(
               tooltip: '适应窗口',
@@ -449,7 +552,9 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                   // 退出编辑就把就地编辑那一行收掉，免得留一个孤儿输入框
                   if (!_editing) _editingWidget = null;
                 }),
-                icon: Icon(_editing ? Icons.edit_off_outlined : Icons.edit_outlined),
+                icon: Icon(
+                  _editing ? Icons.edit_off_outlined : Icons.edit_outlined,
+                ),
               ),
             IconButton(
               tooltip: '复制工作流 JSON',
@@ -461,7 +566,11 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                 tooltip: '存成文件（拖进 ComfyUI 就能打开）',
                 onPressed: _saving ? null : _save,
                 icon: _saving
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
                     : const Icon(Icons.save_alt_outlined),
               ),
           ],
@@ -492,9 +601,17 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.cloud_off_outlined, size: 46, color: theme.colorScheme.error),
+              Icon(
+                Icons.cloud_off_outlined,
+                size: 46,
+                color: theme.colorScheme.error,
+              ),
               const SizedBox(height: 12),
-              SelectableText(error, textAlign: TextAlign.center, style: theme.textTheme.bodySmall),
+              SelectableText(
+                error,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall,
+              ),
               const SizedBox(height: 16),
               FilledButton.icon(
                 onPressed: _load,
@@ -514,57 +631,65 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.help_outline, size: 46, color: theme.colorScheme.outline),
+              Icon(
+                Icons.help_outline,
+                size: 46,
+                color: theme.colorScheme.outline,
+              ),
               const SizedBox(height: 12),
               Text('这份 JSON 不是认得的工作流', style: theme.textTheme.titleSmall),
               const SizedBox(height: 8),
               Text(
                 blueprint.warnings.join('\n'),
                 textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             ],
           ),
         ),
       );
     }
-    return LayoutBuilder(builder: (context, constraints) {
-      final wide = constraints.maxWidth >= kWideLayoutMinWidth;
-      final canvas = _canvasArea();
-      final panel = _panel(theme, blueprint);
-      final banner = _banner(theme, blueprint);
-      if (wide) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= kWideLayoutMinWidth;
+        final canvas = _canvasArea();
+        final panel = _panel(theme, blueprint);
+        final banner = _banner(theme, blueprint);
+        if (wide) {
+          return Column(
+            children: [
+              banner,
+              Expanded(
+                child: Row(
+                  children: [
+                    Expanded(child: canvas),
+                    if (_panelOpen) ...[
+                      const VerticalDivider(width: 1),
+                      SizedBox(width: 380, child: panel),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          );
+        }
         return Column(
           children: [
             banner,
-            Expanded(
-              child: Row(
-                children: [
-                  Expanded(child: canvas),
-                  if (_panelOpen) ...[
-                    const VerticalDivider(width: 1),
-                    SizedBox(width: 380, child: panel),
-                  ],
-                ],
+            Expanded(child: canvas),
+            if (_panelOpen) ...[
+              const Divider(height: 1),
+              SizedBox(
+                height: (constraints.maxHeight * 0.42).clamp(200.0, 420.0),
+                child: panel,
               ),
-            ),
+            ],
           ],
         );
-      }
-      return Column(
-        children: [
-          banner,
-          Expanded(child: canvas),
-          if (_panelOpen) ...[
-            const Divider(height: 1),
-            SizedBox(
-              height: (constraints.maxHeight * 0.42).clamp(200.0, 420.0),
-              child: panel,
-            ),
-          ],
-        ],
-      );
-    });
+      },
+    );
   }
 
   Widget _banner(ThemeData theme, WorkflowBlueprint blueprint) {
@@ -591,7 +716,9 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           Expanded(
             child: MarkdownText(
               notes.join('\n'),
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
               selectable: false,
             ),
           ),
@@ -616,11 +743,17 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                   '${blueprint.isUi ? '界面格式' : 'API 格式'} · ${blueprint.nodes.length} 节点 / '
                   '${blueprint.edges.length} 连线 / ${blueprint.groups.length} 分组'
                   '${_selectedId == null ? '' : ' · 已选 #$_selectedId'}',
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
               ),
               if (_loading)
-                const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
             ],
           ),
         ),
@@ -628,7 +761,11 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
           child: SegmentedButton<bool>(
             segments: [
-              const ButtonSegment(value: false, label: Text('节点'), icon: Icon(Icons.crop_square, size: 16)),
+              const ButtonSegment(
+                value: false,
+                label: Text('节点'),
+                icon: Icon(Icons.crop_square, size: 16),
+              ),
               ButtonSegment(
                 value: true,
                 label: Text('体检 ${blueprint.issues.length}'),
@@ -636,7 +773,8 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
               ),
             ],
             selected: {_showIssues},
-            onSelectionChanged: (value) => setState(() => _showIssues = value.first),
+            onSelectionChanged: (value) =>
+                setState(() => _showIssues = value.first),
             showSelectedIcon: false,
           ),
         ),
@@ -644,35 +782,43 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           child: _showIssues
               ? _issuesList(theme, blueprint)
               : (node == null
-                  ? _emptySelection(theme)
-                  : _nodeDetails(theme, blueprint, node)),
+                    ? _emptySelection(theme)
+                    : _nodeDetails(theme, blueprint, node)),
         ),
       ],
     );
   }
 
   Widget _emptySelection(ThemeData theme) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.touch_app_outlined, size: 36, color: theme.colorScheme.outline),
-              const SizedBox(height: 10),
-              Text(
-                '点画布上的任意节点看它的参数、插口与接线问题',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                '滚轮缩放 · 拖动平移',
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
-              ),
-            ],
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.touch_app_outlined,
+            size: 36,
+            color: theme.colorScheme.outline,
           ),
-        ),
-      );
+          const SizedBox(height: 10),
+          Text(
+            '点画布上的任意节点看它的参数、插口与接线问题',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '滚轮缩放 · 拖动平移',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 
   Widget _issuesList(ThemeData theme, WorkflowBlueprint blueprint) {
     if (blueprint.issues.isEmpty) {
@@ -680,7 +826,11 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.check_circle_outline, size: 40, color: theme.colorScheme.primary),
+            Icon(
+              Icons.check_circle_outline,
+              size: 40,
+              color: theme.colorScheme.primary,
+            ),
             const SizedBox(height: 10),
             Text('接线体检没发现问题', style: theme.textTheme.bodyMedium),
           ],
@@ -695,17 +845,17 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
         final colour = issue.isError
             ? theme.colorScheme.error
             : issue.isWarn
-                ? const Color(0xFFF9A825)
-                : theme.colorScheme.primary;
+            ? const Color(0xFFF9A825)
+            : theme.colorScheme.primary;
         return Card(
           margin: const EdgeInsets.only(bottom: 8),
           child: InkWell(
             onTap: issue.nodes.isEmpty
                 ? null
                 : () => setState(() {
-                      _selectedId = issue.nodes.first;
-                      _showIssues = false;
-                    }),
+                    _selectedId = issue.nodes.first;
+                    _showIssues = false;
+                  }),
             child: Padding(
               padding: const EdgeInsets.all(10),
               child: Column(
@@ -717,8 +867,8 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                         issue.isError
                             ? Icons.error_outline
                             : issue.isWarn
-                                ? Icons.warning_amber_outlined
-                                : Icons.info_outline,
+                            ? Icons.warning_amber_outlined
+                            : Icons.info_outline,
                         size: 15,
                         color: colour,
                       ),
@@ -726,7 +876,9 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                       Expanded(
                         child: Text(
                           issue.title,
-                          style: theme.textTheme.labelLarge?.copyWith(color: colour),
+                          style: theme.textTheme.labelLarge?.copyWith(
+                            color: colour,
+                          ),
                         ),
                       ),
                     ],
@@ -744,8 +896,9 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                     const SizedBox(height: 6),
                     MarkdownText(
                       '修法：${issue.fix}',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.primary),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.primary,
+                      ),
                       selectable: false,
                     ),
                   ],
@@ -757,7 +910,10 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                       children: [
                         for (final id in issue.nodes.take(12))
                           ActionChip(
-                            label: Text('#$id', style: theme.textTheme.labelSmall),
+                            label: Text(
+                              '#$id',
+                              style: theme.textTheme.labelSmall,
+                            ),
                             visualDensity: VisualDensity.compact,
                             onPressed: () => setState(() {
                               _selectedId = id;
@@ -776,7 +932,11 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     );
   }
 
-  Widget _nodeDetails(ThemeData theme, WorkflowBlueprint blueprint, BlueprintNode node) {
+  Widget _nodeDetails(
+    ThemeData theme,
+    WorkflowBlueprint blueprint,
+    BlueprintNode node,
+  ) {
     final issues = blueprint.issuesForNode(node.id);
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
@@ -792,8 +952,14 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
         const SizedBox(height: 2),
         SelectableText(
           '${node.className} · 节点 #${node.id}'
-          '${node.mode == kNodeModeNormal ? '' : node.muted ? ' · 静音' : ' · 旁路'}',
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+          '${node.mode == kNodeModeNormal
+              ? ''
+              : node.muted
+              ? ' · 静音'
+              : ' · 旁路'}',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
         ),
         if (issues.isNotEmpty) ...[
           const SizedBox(height: 10),
@@ -802,9 +968,15 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
               padding: const EdgeInsets.only(bottom: 6),
               // 同上：这几行也带 markdown，别让反引号与井号原样露出来
               child: MarkdownText(
-                '${issue.isError ? '错误' : issue.isWarn ? '警告' : '提示'}：${issue.title}',
+                '${issue.isError
+                    ? '错误'
+                    : issue.isWarn
+                    ? '警告'
+                    : '提示'}：${issue.title}',
                 style: theme.textTheme.bodySmall?.copyWith(
-                  color: issue.isError ? theme.colorScheme.error : const Color(0xFFF9A825),
+                  color: issue.isError
+                      ? theme.colorScheme.error
+                      : const Color(0xFFF9A825),
                 ),
                 selectable: false,
               ),
@@ -834,31 +1006,42 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
             ],
             selected: {node.mode},
             onSelectionChanged: (value) {
-              if (_editor?.setNodeMode(node.id, value.first) == true) _afterEdit();
+              if (_editor?.setNodeMode(node.id, value.first) == true) {
+                _afterEdit();
+              }
             },
             showSelectedIcon: false,
           ),
           const SizedBox(height: 6),
           Text(
             '旁路 = 数据穿过去但不执行这个节点；静音 = 它和它的下游都拿不到东西',
-            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
           ),
         ],
         const SizedBox(height: 14),
         Text('参数（${node.widgets.length}）', style: theme.textTheme.labelMedium),
         const SizedBox(height: 6),
         if (node.widgets.isEmpty)
-          Text('这个节点没有参数', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline))
+          Text(
+            '这个节点没有参数',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          )
         else
           for (final widget in node.widgets) _widgetRow(theme, node, widget),
         const SizedBox(height: 14),
         Text('输入插口（${node.inputs.length}）', style: theme.textTheme.labelMedium),
         const SizedBox(height: 6),
-        for (var i = 0; i < node.inputs.length; i++) _portRow(theme, blueprint, node, i, node.inputs[i]),
+        for (var i = 0; i < node.inputs.length; i++)
+          _portRow(theme, blueprint, node, i, node.inputs[i]),
         const SizedBox(height: 14),
         Text('输出（${node.outputs.length}）', style: theme.textTheme.labelMedium),
         const SizedBox(height: 6),
-        for (var i = 0; i < node.outputs.length; i++) _portRow(theme, blueprint, node, i, node.outputs[i]),
+        for (var i = 0; i < node.outputs.length; i++)
+          _portRow(theme, blueprint, node, i, node.outputs[i]),
       ],
     );
   }
@@ -895,7 +1078,11 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   ///
   /// ⚠ 类型是从**当前值**推的，不是从 `/object_info` 推的 —— 蓝图里没有控件声明，
   /// 所以这里只保证"改得动"，不假装知道取值范围。
-  Widget _widgetRow(ThemeData theme, BlueprintNode node, BlueprintWidget widget) {
+  Widget _widgetRow(
+    ThemeData theme,
+    BlueprintNode node,
+    BlueprintWidget widget,
+  ) {
     final value = widget.value;
     final label = Padding(
       padding: const EdgeInsets.only(top: 9, right: 8),
@@ -905,8 +1092,9 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           widget.label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: theme.textTheme.labelSmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
       ),
     );
@@ -942,7 +1130,8 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                 child: Switch(
                   value: value,
                   onChanged: (next) {
-                    if (_editor?.setWidgetValue(node.id, widget.index, next) == true) {
+                    if (_editor?.setWidgetValue(node.id, widget.index, next) ==
+                        true) {
                       _afterEdit();
                     }
                   },
@@ -969,7 +1158,8 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
               numeric: numeric,
               onCommit: (text) {
                 final next = coerceWidgetValue(text, value);
-                if (_editor?.setWidgetValue(node.id, widget.index, next) == true) {
+                if (_editor?.setWidgetValue(node.id, widget.index, next) ==
+                    true) {
                   _afterEdit();
                 }
               },
@@ -992,8 +1182,8 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     final colour = issues.any((issue) => issue.isError)
         ? theme.colorScheme.error
         : issues.any((issue) => issue.isWarn)
-            ? const Color(0xFFF9A825)
-            : theme.colorScheme.outline;
+        ? const Color(0xFFF9A825)
+        : theme.colorScheme.outline;
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(
@@ -1017,7 +1207,11 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           if (issues.isNotEmpty)
             Tooltip(
               message: issues.map((issue) => issue.title).join('\n'),
-              child: Icon(Icons.report_problem_outlined, size: 14, color: colour),
+              child: Icon(
+                Icons.report_problem_outlined,
+                size: 14,
+                color: colour,
+              ),
             ),
         ],
       ),
@@ -1066,8 +1260,9 @@ class _PanelWidgetField extends StatefulWidget {
 }
 
 class _PanelWidgetFieldState extends State<_PanelWidgetField> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.initial);
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initial,
+  );
 
   @override
   void dispose() {
@@ -1088,7 +1283,10 @@ class _PanelWidgetFieldState extends State<_PanelWidgetField> {
           : TextInputType.multiline,
       maxLines: widget.numeric ? 1 : 4,
       style: Theme.of(context).textTheme.bodySmall,
-      decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+      decoration: const InputDecoration(
+        isDense: true,
+        border: OutlineInputBorder(),
+      ),
       onSubmitted: (_) => _commit(),
       onTapOutside: (_) => _commit(),
     );
@@ -1125,8 +1323,9 @@ class _InlineWidgetEditor extends StatefulWidget {
 }
 
 class _InlineWidgetEditorState extends State<_InlineWidgetEditor> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.value?.toString() ?? '');
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.value?.toString() ?? '',
+  );
 
   @override
   void dispose() {
@@ -1160,10 +1359,12 @@ class _InlineWidgetEditorState extends State<_InlineWidgetEditor> {
               icon: const Icon(Icons.close),
             ),
           ),
-          onSubmitted: (text) => widget.onCommit(coerceWidgetValue(text, widget.value)),
+          onSubmitted: (text) =>
+              widget.onCommit(coerceWidgetValue(text, widget.value)),
           // 点到别处 = **提交**（不是取消）：把刚打的字丢掉比"多改一次"更气人
-          onTapOutside: (_) =>
-              widget.onCommit(coerceWidgetValue(_controller.text, widget.value)),
+          onTapOutside: (_) => widget.onCommit(
+            coerceWidgetValue(_controller.text, widget.value),
+          ),
         ),
       ),
     );

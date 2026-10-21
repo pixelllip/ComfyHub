@@ -108,7 +108,9 @@ pub fn freshness(name: &str) -> Option<Freshness> {
         "read_file" | "list_dir" => File(secs(30)),
 
         // ---- 本机库 / 本机目录：读起来便宜，但用户（或另一台端）随时会改 ----
-        "list_skills" | "search_prompts" | "search_character_cards" => Ttl(secs(20)),
+        "list_skills" | "search_prompts" | "search_character_cards" | "search_style_cards" => {
+            Ttl(secs(20))
+        }
         "comfy_list_workflows" | "comfy_find_workflow" | "comfy_list_recipes" => Ttl(secs(20)),
         "comfy_env_report" => Ttl(secs(60)),
 
@@ -141,6 +143,7 @@ pub fn freshness(name: &str) -> Option<Freshness> {
         // 其余的（`write_file` / `register_skill` / `delete_skill` / `remember` /
         // `comfy_submit` / `comfy_use_*` / `comfy_make_mask` / `comfy_start` / `comfy_stop` /
         // `comfy_sync_history` / `comfy_learn_workflow` / `save_character_card` /
+        // `save_style_card` /
         // `comfy_load_workflow`…）**全部不进**：它们改世界，见 [`invalidates`]。
         _ => return None,
     })

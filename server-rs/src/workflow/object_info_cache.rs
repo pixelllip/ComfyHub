@@ -24,7 +24,12 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value};
 
 /// 缓存有效期。
-pub const TTL: Duration = Duration::from_secs(60);
+///
+/// 60 秒太短：用户点开一份工作流、改个参数、再点开另一份，中间很容易过一分钟，
+/// 于是每隔一会儿就有一次"冷"的兆字节请求（真机 4.5MB / ~550ms），体感就是"蓝图时不时卡一下"。
+/// `/object_info` 只在装 / 卸节点包时变，10 分钟足够跟上，又不会让"刚装的节点包"永远看不到
+/// （重启后端 / 换地址都会重新取）。
+pub const TTL: Duration = Duration::from_secs(600);
 
 /// 一次成功的取数。
 struct Entry {

@@ -6,6 +6,8 @@ library;
 
 import 'dart:convert';
 
+import 'models.dart';
+
 /// 凭据状态：只有"有没有 / 从哪来 / 能不能改"，没有值。
 class AiCredentialStatus {
   final bool configured;
@@ -24,20 +26,25 @@ class AiCredentialStatus {
     required this.writable,
   });
 
-  static const none = AiCredentialStatus(configured: false, source: 'none', writable: false);
+  static const none = AiCredentialStatus(
+    configured: false,
+    source: 'none',
+    writable: false,
+  );
 
-  factory AiCredentialStatus.fromJson(Map<String, dynamic> json) => AiCredentialStatus(
+  factory AiCredentialStatus.fromJson(Map<String, dynamic> json) =>
+      AiCredentialStatus(
         configured: json['configured'] == true,
         source: (json['source'] ?? 'none').toString(),
         writable: json['writable'] == true,
       );
 
   String get label => switch (source) {
-        'env' => configured ? '已配置（环境变量，只读）' : '未配置（环境变量）',
-        'managed' => '已配置',
-        'keystore' => '已配置（本机密钥库）',
-        _ => '未配置',
-      };
+    'env' => configured ? '已配置（环境变量，只读）' : '未配置（环境变量）',
+    'managed' => '已配置',
+    'keystore' => '已配置（本机密钥库）',
+    _ => '未配置',
+  };
 }
 
 /// 输入模态。未知即不支持，不猜（AIH-011）。
@@ -160,8 +167,10 @@ enum AiEndpointTrust {
   final String wire;
   final String label;
 
-  static AiEndpointTrust parse(String? wire) =>
-      values.firstWhere((t) => t.wire == wire, orElse: () => AiEndpointTrust.public_);
+  static AiEndpointTrust parse(String? wire) => values.firstWhere(
+    (t) => t.wire == wire,
+    orElse: () => AiEndpointTrust.public_,
+  );
 }
 
 class AiProvider {
@@ -188,18 +197,20 @@ class AiProvider {
   });
 
   factory AiProvider.fromJson(Map<String, dynamic> json) => AiProvider(
-        id: (json['id'] ?? '').toString(),
-        displayName: (json['displayName'] ?? json['id'] ?? '').toString(),
-        api: (json['api'] ?? '').toString(),
-        baseURL: (json['baseURL'] ?? '').toString(),
-        credentialRef: json['credentialRef']?.toString(),
-        endpointTrust: (json['endpointTrust'] ?? 'public').toString(),
-        enabled: json['enabled'] != false,
-        revision: (json['revision'] as num?)?.toInt() ?? 1,
-        credential: json['credential'] is Map
-            ? AiCredentialStatus.fromJson(Map<String, dynamic>.from(json['credential'] as Map))
-            : AiCredentialStatus.none,
-      );
+    id: (json['id'] ?? '').toString(),
+    displayName: (json['displayName'] ?? json['id'] ?? '').toString(),
+    api: (json['api'] ?? '').toString(),
+    baseURL: (json['baseURL'] ?? '').toString(),
+    credentialRef: json['credentialRef']?.toString(),
+    endpointTrust: (json['endpointTrust'] ?? 'public').toString(),
+    enabled: json['enabled'] != false,
+    revision: (json['revision'] as num?)?.toInt() ?? 1,
+    credential: json['credential'] is Map
+        ? AiCredentialStatus.fromJson(
+            Map<String, dynamic>.from(json['credential'] as Map),
+          )
+        : AiCredentialStatus.none,
+  );
 
   AiApi? get apiEnum => AiApi.parse(api);
   String get apiLabel => apiEnum?.label ?? api;
@@ -207,15 +218,15 @@ class AiProvider {
   /// 落本地缓存用（M6）。`credential` **不进缓存**：它是"这台机器上有没有 key"的
   /// 即时状态，缓存下来的那一刻就可能已经过期了（手机上是本机密钥库说了算）。
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'displayName': displayName,
-        'api': api,
-        'baseURL': baseURL,
-        if (credentialRef != null) 'credentialRef': credentialRef,
-        'endpointTrust': endpointTrust,
-        'enabled': enabled,
-        'revision': revision,
-      };
+    'id': id,
+    'displayName': displayName,
+    'api': api,
+    'baseURL': baseURL,
+    if (credentialRef != null) 'credentialRef': credentialRef,
+    'endpointTrust': endpointTrust,
+    'enabled': enabled,
+    'revision': revision,
+  };
 
   /// 只换凭据状态。
   ///
@@ -223,16 +234,16 @@ class AiProvider {
   /// 只有本机密钥库知道 —— 所以拿到的清单要用本机状态**覆盖** `credential` 再交给界面，
   /// 否则手机上会显示"已配置"，点发送却 401（而界面从头到尾没说过一句实话）。
   AiProvider withCredential(AiCredentialStatus status) => AiProvider(
-        id: id,
-        displayName: displayName,
-        api: api,
-        baseURL: baseURL,
-        credentialRef: credentialRef,
-        endpointTrust: endpointTrust,
-        enabled: enabled,
-        revision: revision,
-        credential: status,
-      );
+    id: id,
+    displayName: displayName,
+    api: api,
+    baseURL: baseURL,
+    credentialRef: credentialRef,
+    endpointTrust: endpointTrust,
+    enabled: enabled,
+    revision: revision,
+    credential: status,
+  );
 }
 
 class AiModel {
@@ -277,33 +288,38 @@ class AiModel {
   });
 
   factory AiModel.fromJson(Map<String, dynamic> json) => AiModel(
-        providerId: (json['providerId'] ?? '').toString(),
-        id: (json['id'] ?? '').toString(),
-        displayName: (json['displayName'] ?? json['id'] ?? '').toString(),
-        inputModalities:
-            (json['inputModalities'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-        attachmentTransports: (json['attachmentTransports'] as Map?)?.map(
-              (k, v) => MapEntry(
-                k.toString(),
-                (v as List?)?.map((e) => e.toString()).toList() ?? const <String>[],
-              ),
-            ) ??
-            const {},
-        mimeAllowlist: (json['mimeAllowlist'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-        tools: json['tools'] == true,
-        parallelTools: json['parallelTools'] == true,
-        reasoning: json['reasoning'] == true,
-        thinkingEfforts: (json['thinkingEfforts'] as Map?)?.map(
-              (k, v) => MapEntry(k.toString(), (v ?? '').toString()),
-            ) ??
-            const {},
-        thinkingFormat: json['thinkingFormat']?.toString(),
-        contextWindow: (json['contextWindow'] as num?)?.toInt(),
-        maxOutputTokens: (json['maxOutputTokens'] as num?)?.toInt(),
-        maxAttachmentCount: (json['maxAttachmentCount'] as num?)?.toInt(),
-        capabilitySource: (json['capabilitySource'] ?? 'manual').toString(),
-        enabled: json['enabled'] != false,
-      );
+    providerId: (json['providerId'] ?? '').toString(),
+    id: (json['id'] ?? '').toString(),
+    displayName: (json['displayName'] ?? json['id'] ?? '').toString(),
+    inputModalities:
+        (json['inputModalities'] as List?)?.map((e) => e.toString()).toList() ??
+        const [],
+    attachmentTransports:
+        (json['attachmentTransports'] as Map?)?.map(
+          (k, v) => MapEntry(
+            k.toString(),
+            (v as List?)?.map((e) => e.toString()).toList() ?? const <String>[],
+          ),
+        ) ??
+        const {},
+    mimeAllowlist:
+        (json['mimeAllowlist'] as List?)?.map((e) => e.toString()).toList() ??
+        const [],
+    tools: json['tools'] == true,
+    parallelTools: json['parallelTools'] == true,
+    reasoning: json['reasoning'] == true,
+    thinkingEfforts:
+        (json['thinkingEfforts'] as Map?)?.map(
+          (k, v) => MapEntry(k.toString(), (v ?? '').toString()),
+        ) ??
+        const {},
+    thinkingFormat: json['thinkingFormat']?.toString(),
+    contextWindow: (json['contextWindow'] as num?)?.toInt(),
+    maxOutputTokens: (json['maxOutputTokens'] as num?)?.toInt(),
+    maxAttachmentCount: (json['maxAttachmentCount'] as num?)?.toInt(),
+    capabilitySource: (json['capabilitySource'] ?? 'manual').toString(),
+    enabled: json['enabled'] != false,
+  );
 
   /// 落本地缓存用（M6：手机把桌面下发的模型目录存下来，离线时接着用）。
   ///
@@ -311,23 +327,23 @@ class AiModel {
   /// 另写一套"缓存格式"就会与后端漂移，而漂移的表现是"离线时能力声明少了几项"
   /// （附件发不出去、工具卡不显示），且没有任何东西会报错。
   Map<String, dynamic> toJson() => {
-        'providerId': providerId,
-        'id': id,
-        'displayName': displayName,
-        'inputModalities': inputModalities,
-        'attachmentTransports': attachmentTransports,
-        'mimeAllowlist': mimeAllowlist,
-        'tools': tools,
-        'parallelTools': parallelTools,
-        'reasoning': reasoning,
-        'thinkingEfforts': thinkingEfforts,
-        if (thinkingFormat != null) 'thinkingFormat': thinkingFormat,
-        if (contextWindow != null) 'contextWindow': contextWindow,
-        if (maxOutputTokens != null) 'maxOutputTokens': maxOutputTokens,
-        if (maxAttachmentCount != null) 'maxAttachmentCount': maxAttachmentCount,
-        'capabilitySource': capabilitySource,
-        'enabled': enabled,
-      };
+    'providerId': providerId,
+    'id': id,
+    'displayName': displayName,
+    'inputModalities': inputModalities,
+    'attachmentTransports': attachmentTransports,
+    'mimeAllowlist': mimeAllowlist,
+    'tools': tools,
+    'parallelTools': parallelTools,
+    'reasoning': reasoning,
+    'thinkingEfforts': thinkingEfforts,
+    if (thinkingFormat != null) 'thinkingFormat': thinkingFormat,
+    if (contextWindow != null) 'contextWindow': contextWindow,
+    if (maxOutputTokens != null) 'maxOutputTokens': maxOutputTokens,
+    if (maxAttachmentCount != null) 'maxAttachmentCount': maxAttachmentCount,
+    'capabilitySource': capabilitySource,
+    'enabled': enabled,
+  };
 
   /// 模型选择器上的能力徽标（AIH-048）：只显示能力目录里的声明，不猜测。
   List<AiModality> get modalities =>
@@ -337,7 +353,8 @@ class AiModel {
 
   /// 该模型能不能调思考强度：必须声明推理能力，且**至少声明了一个具体档位**。
   bool get supportsReasoningEffort =>
-      reasoning && thinkingEfforts.keys.any((k) => k != AiReasoningEffort.off.wire);
+      reasoning &&
+      thinkingEfforts.keys.any((k) => k != AiReasoningEffort.off.wire);
 
   /// 可选的思考档位（固定顺序：默认 → 极低 → 低 → 中 → 高 → 极高 → 最大）。
   ///
@@ -351,22 +368,26 @@ class AiModel {
     final declared = thinkingEfforts.keys.toSet();
     return [
       AiReasoningEffort.off,
-      ...AiReasoningEffort.values.where((e) => e.isThinking && declared.contains(e.wire)),
+      ...AiReasoningEffort.values.where(
+        (e) => e.isThinking && declared.contains(e.wire),
+      ),
     ];
   }
 
   /// 该等级的线上表达（网关改名时显示给用户看）。数字表示 Anthropic 的思考预算。
-  String? effortWireValue(AiReasoningEffort effort) => thinkingEfforts[effort.wire];
+  String? effortWireValue(AiReasoningEffort effort) =>
+      thinkingEfforts[effort.wire];
 
-  AiThinkingFormat? get thinkingFormatEnum => AiThinkingFormat.parse(thinkingFormat);
+  AiThinkingFormat? get thinkingFormatEnum =>
+      AiThinkingFormat.parse(thinkingFormat);
 
   /// 能力来源提示：让用户知道这个声明是人填的还是探测来的（AIH-011）。
   String get capabilitySourceLabel => switch (capabilitySource) {
-        'builtin' => '内置',
-        'discovered' => '探测所得',
-        'tested' => '已实测',
-        _ => '手工声明',
-      };
+    'builtin' => '内置',
+    'discovered' => '探测所得',
+    'tested' => '已实测',
+    _ => '手工声明',
+  };
 }
 
 /// 连接测试结果（AIH-008）：只有状态与稳定错误码，没有任何凭据内容。
@@ -385,7 +406,8 @@ class AiProviderTestResult {
     this.modelCount,
   });
 
-  factory AiProviderTestResult.fromJson(Map<String, dynamic> json) => AiProviderTestResult(
+  factory AiProviderTestResult.fromJson(Map<String, dynamic> json) =>
+      AiProviderTestResult(
         ok: json['ok'] == true,
         errorCode: json['errorCode']?.toString(),
         message: (json['message'] ?? '').toString(),
@@ -434,7 +456,8 @@ class AiModelCandidate {
     this.capabilityNote,
   });
 
-  factory AiModelCandidate.fromJson(Map<String, dynamic> json) => AiModelCandidate(
+  factory AiModelCandidate.fromJson(Map<String, dynamic> json) =>
+      AiModelCandidate(
         id: (json['id'] ?? '').toString(),
         displayName: (json['displayName'] ?? json['id'] ?? '').toString(),
         contextWindow: (json['contextWindow'] as num?)?.toInt(),
@@ -445,7 +468,8 @@ class AiModelCandidate {
             .toList(),
         tools: json['tools'] == true,
         reasoning: json['reasoning'] == true,
-        thinkingEfforts: (json['thinkingEfforts'] as Map?)?.map(
+        thinkingEfforts:
+            (json['thinkingEfforts'] as Map?)?.map(
               (k, v) => MapEntry(k.toString(), (v ?? '').toString()),
             ) ??
             const {},
@@ -456,12 +480,12 @@ class AiModelCandidate {
 
   /// 能力来源的中文标签 —— 必须让用户看得出"这是谁说的"。
   String get sourceLabel => switch (capabilitySource) {
-        'discovered' => '接口声明',
-        'builtin' => '内置目录',
-        'tested' => '已实测',
-        'manual' => '手工声明',
-        _ => '未识别（默认仅文本）',
-      };
+    'discovered' => '接口声明',
+    'builtin' => '内置目录',
+    'tested' => '已实测',
+    'manual' => '手工声明',
+    _ => '未识别（默认仅文本）',
+  };
 
   bool get sourceIsGuess => capabilitySource == 'builtin';
 
@@ -472,7 +496,8 @@ class AiModelCandidate {
     return parts.isEmpty ? id : '$id · ${parts.join(' · ')}';
   }
 
-  AiModelCandidate copyWith({List<AiModality>? modalities, bool? tools}) => AiModelCandidate(
+  AiModelCandidate copyWith({List<AiModality>? modalities, bool? tools}) =>
+      AiModelCandidate(
         id: id,
         displayName: displayName,
         contextWindow: contextWindow,
@@ -498,13 +523,18 @@ class AiDiscoverResult {
     this.candidates = const [],
   });
 
-  factory AiDiscoverResult.fromJson(Map<String, dynamic> json) => AiDiscoverResult(
+  factory AiDiscoverResult.fromJson(Map<String, dynamic> json) =>
+      AiDiscoverResult(
         ok: json['ok'] == true,
         errorCode: json['errorCode']?.toString(),
         message: (json['message'] ?? '').toString(),
-        candidates: (json['candidates'] as List?)
+        candidates:
+            (json['candidates'] as List?)
                 ?.whereType<Map>()
-                .map((e) => AiModelCandidate.fromJson(Map<String, dynamic>.from(e)))
+                .map(
+                  (e) =>
+                      AiModelCandidate.fromJson(Map<String, dynamic>.from(e)),
+                )
                 .toList() ??
             const [],
       );
@@ -525,10 +555,10 @@ class AiRunStart {
   });
 
   factory AiRunStart.fromJson(Map<String, dynamic> json) => AiRunStart(
-        runId: (json['runId'] ?? '').toString(),
-        assistantMessageId: (json['assistantMessageId'] ?? '').toString(),
-        userMessageId: json['userMessageId']?.toString(),
-      );
+    runId: (json['runId'] ?? '').toString(),
+    assistantMessageId: (json['assistantMessageId'] ?? '').toString(),
+    userMessageId: json['userMessageId']?.toString(),
+  );
 }
 
 /// 统一 Harness 事件（AIH-021）。Flutter 只认这一套，不解析供应商 SSE。
@@ -547,6 +577,9 @@ class AiRunEvent {
   String? get callId => data['callId']?.toString();
   String? get toolName => data['name']?.toString();
   String? get arguments => data['arguments']?.toString();
+
+  /// 模型写的一句"为什么调用"（`tool.requested` 里的可选字段，只给界面看）。
+  String? get reason => data['reason']?.toString();
   String? get approval => data['approval']?.toString();
   String? get preview => data['preview']?.toString();
   int? get elapsedMs => (data['elapsedMs'] as num?)?.toInt();
@@ -568,7 +601,9 @@ class AiRunEvent {
   }
 
   bool get isTerminal =>
-      type == 'run.completed' || type == 'run.failed' || type == 'run.cancelled';
+      type == 'run.completed' ||
+      type == 'run.failed' ||
+      type == 'run.cancelled';
 }
 
 class AiConversation {
@@ -591,26 +626,31 @@ class AiConversation {
   });
 
   factory AiConversation.fromJson(Map<String, dynamic> json) => AiConversation(
-        id: (json['id'] ?? '').toString(),
-        title: (json['title'] ?? '新对话').toString(),
-        providerId: json['providerId']?.toString(),
-        modelId: json['modelId']?.toString(),
-        archived: json['archived'] == true,
-        messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
-        // 后端给的是 `Instant.toString()`（UTC，带 Z）；不转本地时区的话，
-        // 列表里那个"最近一次对话"时间会整体偏掉一个时差（本机是 +08:00）。
-        updatedAt: DateTime.tryParse((json['updatedAt'] ?? '').toString())?.toLocal(),
-      );
+    id: (json['id'] ?? '').toString(),
+    title: (json['title'] ?? '新对话').toString(),
+    providerId: json['providerId']?.toString(),
+    modelId: json['modelId']?.toString(),
+    archived: json['archived'] == true,
+    messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
+    // 后端给的是 `Instant.toString()`（UTC，带 Z）；不转本地时区的话，
+    // 列表里那个"最近一次对话"时间会整体偏掉一个时差（本机是 +08:00）。
+    updatedAt: DateTime.tryParse((json['updatedAt'] ?? '').toString())
+        ?.toLocal(),
+  );
 
-  AiConversation copyWith({String? title, int? messageCount, DateTime? updatedAt}) => AiConversation(
-        id: id,
-        title: title ?? this.title,
-        providerId: providerId,
-        modelId: modelId,
-        archived: archived,
-        messageCount: messageCount ?? this.messageCount,
-        updatedAt: updatedAt ?? this.updatedAt,
-      );
+  AiConversation copyWith({
+    String? title,
+    int? messageCount,
+    DateTime? updatedAt,
+  }) => AiConversation(
+    id: id,
+    title: title ?? this.title,
+    providerId: providerId,
+    modelId: modelId,
+    archived: archived,
+    messageCount: messageCount ?? this.messageCount,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
 }
 
 /// 一次请求的 token 用量（AIH-057）。
@@ -632,11 +672,11 @@ class AiTokenUsage {
   static const empty = AiTokenUsage();
 
   factory AiTokenUsage.fromJson(Map<String, dynamic> json) => AiTokenUsage(
-        inputTokens: (json['inputTokens'] as num?)?.toInt() ?? 0,
-        outputTokens: (json['outputTokens'] as num?)?.toInt() ?? 0,
-        cachedTokens: (json['cachedTokens'] as num?)?.toInt() ?? 0,
-        reasoningTokens: (json['reasoningTokens'] as num?)?.toInt() ?? 0,
-      );
+    inputTokens: (json['inputTokens'] as num?)?.toInt() ?? 0,
+    outputTokens: (json['outputTokens'] as num?)?.toInt() ?? 0,
+    cachedTokens: (json['cachedTokens'] as num?)?.toInt() ?? 0,
+    reasoningTokens: (json['reasoningTokens'] as num?)?.toInt() ?? 0,
+  );
 
   /// 兼容后端历史数据：某些老消息的 `usage` 还是供应商原始对象（OpenAI/Anthropic 两种方言）。
   factory AiTokenUsage.fromRaw(Object? raw) {
@@ -665,7 +705,9 @@ class AiTokenUsage {
 
     var input = pick(['inputTokens', 'prompt_tokens', 'input_tokens']);
     final output = pick(['outputTokens', 'completion_tokens', 'output_tokens']);
-    if (input == 0 && output == 0) input = pick(['total_tokens', 'totalTokens']);
+    if (input == 0 && output == 0) {
+      input = pick(['total_tokens', 'totalTokens']);
+    }
     return AiTokenUsage(
       inputTokens: input,
       outputTokens: output,
@@ -683,7 +725,8 @@ class AiTokenUsage {
 
   int get totalTokens => inputTokens + outputTokens;
 
-  bool get isEmpty => totalTokens == 0 && cachedTokens == 0 && reasoningTokens == 0;
+  bool get isEmpty =>
+      totalTokens == 0 && cachedTokens == 0 && reasoningTokens == 0;
 
   /// `↑1.2k ↓340` —— 输入/输出，聊天里最常看的一对。
   String get shortLabel => '↑${compact(inputTokens)} ↓${compact(outputTokens)}';
@@ -709,13 +752,17 @@ class AiTokenUsage {
     final (double scaled, String unit) = abs < 1000
         ? (n.toDouble(), '')
         : abs < 1000000
-            ? (n / 1000, 'K')
-            : abs < 1000000000
-                ? (n / 1000000, 'M')
-                : (n / 1000000000, 'B');
+        ? (n / 1000, 'K')
+        : abs < 1000000000
+        ? (n / 1000000, 'M')
+        : (n / 1000000000, 'B');
     if (unit.isEmpty) return '$n';
-    final digits = scaled.abs() < 10 ? scaled.toStringAsFixed(1) : scaled.toStringAsFixed(0);
-    final trimmed = digits.endsWith('.0') ? digits.substring(0, digits.length - 2) : digits;
+    final digits = scaled.abs() < 10
+        ? scaled.toStringAsFixed(1)
+        : scaled.toStringAsFixed(0);
+    final trimmed = digits.endsWith('.0')
+        ? digits.substring(0, digits.length - 2)
+        : digits;
     return '$trimmed$unit';
   }
 }
@@ -766,9 +813,13 @@ class AiUsageSummary {
   /// `3 次请求 · ↑12.4k ↓3.1k · 合计 15.5k`
   String get label {
     if (isEmpty) return '本对话暂无 token 统计';
-    final buf = StringBuffer('$requests 次请求 · ↑${AiTokenUsage.compact(inputTokens)} '
-        '↓${AiTokenUsage.compact(outputTokens)} · 合计 ${AiTokenUsage.compact(totalTokens)}');
-    if (cachedTokens > 0) buf.write(' · 缓存命中 ${AiTokenUsage.compact(cachedTokens)}');
+    final buf = StringBuffer(
+      '$requests 次请求 · ↑${AiTokenUsage.compact(inputTokens)} '
+      '↓${AiTokenUsage.compact(outputTokens)} · 合计 ${AiTokenUsage.compact(totalTokens)}',
+    );
+    if (cachedTokens > 0) {
+      buf.write(' · 缓存命中 ${AiTokenUsage.compact(cachedTokens)}');
+    }
     return buf.toString();
   }
 }
@@ -790,17 +841,17 @@ class AiMessagePart {
   });
 
   factory AiMessagePart.fromJson(Map<String, dynamic> json) => AiMessagePart(
-        type: (json['type'] ?? 'text').toString(),
-        text: json['text']?.toString(),
-        attachmentId: json['attachmentId']?.toString(),
-        toolCallId: json['toolCallId']?.toString(),
-        // `jsonPayload` 有**两种来路**，必须都认：
-        // ① 桌面后端（Kotlin/JSON 对象）→ 直接就是 Map；
-        // ② 手机桥（`MethodChannel` 的字符串载荷）→ 是一段 JSON 文本。
-        // 只认 Map 的话，手机上每条 `tool_call` 的 `payload` 都是 null，
-        // 表现是**工具卡上的工具名与参数永远空着**（正文还在，所以看着像"只是没显示全"）。
-        payload: _payloadOf(json['jsonPayload']),
-      );
+    type: (json['type'] ?? 'text').toString(),
+    text: json['text']?.toString(),
+    attachmentId: json['attachmentId']?.toString(),
+    toolCallId: json['toolCallId']?.toString(),
+    // `jsonPayload` 有**两种来路**，必须都认：
+    // ① 桌面后端（Kotlin/JSON 对象）→ 直接就是 Map；
+    // ② 手机桥（`MethodChannel` 的字符串载荷）→ 是一段 JSON 文本。
+    // 只认 Map 的话，手机上每条 `tool_call` 的 `payload` 都是 null，
+    // 表现是**工具卡上的工具名与参数永远空着**（正文还在，所以看着像"只是没显示全"）。
+    payload: _payloadOf(json['jsonPayload']),
+  );
 
   static Map<String, dynamic>? _payloadOf(Object? raw) {
     if (raw is Map) return Map<String, dynamic>.from(raw);
@@ -850,7 +901,9 @@ const List<String> kStepPhases = [
 /// —— 与后端的"绝不吞内容"同一条纪律。桌面后端已经摘过一遍，这里是个幂等的兜底。
 String stripStepMarkers(String text) {
   if (text.isEmpty || !text.contains('[步骤]')) return text;
-  final pattern = RegExp(r'\[步骤\]\s*(' + kStepPhases.join('|') + r')\s*\[/步骤\]');
+  final pattern = RegExp(
+    r'\[步骤\]\s*(' + kStepPhases.join('|') + r')\s*\[/步骤\]',
+  );
   return text.replaceAll(pattern, '');
 }
 
@@ -879,7 +932,9 @@ class AiMessageSegment {
   static List<AiMessageSegment> fromParts(List<AiMessagePart> parts) {
     final out = <AiMessageSegment>[];
     for (final p in parts) {
-      if (p.type != 'reasoning' && p.type != 'text' && p.type != 'step') continue;
+      if (p.type != 'reasoning' && p.type != 'text' && p.type != 'step') {
+        continue;
+      }
       final text = p.text ?? '';
       if (text.isEmpty) continue;
       // ⚠ 环节段**不合并**（哪怕相邻同名）：分不清"一个环节里的两段操作"与"两个环节"
@@ -899,8 +954,8 @@ class AiMessageSegment {
 
   /// 反过来：把段落列表拼回有序块（测试与排错时用）。
   static List<AiMessagePart> toParts(List<AiMessageSegment> segments) => [
-        for (final s in segments) AiMessagePart(type: s.type, text: s.text),
-      ];
+    for (final s in segments) AiMessagePart(type: s.type, text: s.text),
+  ];
 }
 
 class AiMessage {
@@ -933,21 +988,22 @@ class AiMessage {
   });
 
   factory AiMessage.fromJson(Map<String, dynamic> json) => AiMessage(
-        id: (json['id'] ?? '').toString(),
-        conversationId: (json['conversationId'] ?? '').toString(),
-        seq: (json['seq'] as num?)?.toInt() ?? 0,
-        role: (json['role'] ?? 'assistant').toString(),
-        status: (json['status'] ?? 'complete').toString(),
-        text: (json['text'] ?? '').toString(),
-        modelId: json['modelId']?.toString(),
-        parts: (json['parts'] as List?)
-                ?.whereType<Map>()
-                .map((e) => AiMessagePart.fromJson(Map<String, dynamic>.from(e)))
-                .toList() ??
-            const [],
-        usage: json['usage'] == null ? null : AiTokenUsage.fromRaw(json['usage']),
-        reasoningEffort: json['reasoningEffort']?.toString(),
-      );
+    id: (json['id'] ?? '').toString(),
+    conversationId: (json['conversationId'] ?? '').toString(),
+    seq: (json['seq'] as num?)?.toInt() ?? 0,
+    role: (json['role'] ?? 'assistant').toString(),
+    status: (json['status'] ?? 'complete').toString(),
+    text: (json['text'] ?? '').toString(),
+    modelId: json['modelId']?.toString(),
+    parts:
+        (json['parts'] as List?)
+            ?.whereType<Map>()
+            .map((e) => AiMessagePart.fromJson(Map<String, dynamic>.from(e)))
+            .toList() ??
+        const [],
+    usage: json['usage'] == null ? null : AiTokenUsage.fromRaw(json['usage']),
+    reasoningEffort: json['reasoningEffort']?.toString(),
+  );
 
   AiMessage copyWith({
     String? text,
@@ -955,19 +1011,18 @@ class AiMessage {
     AiTokenUsage? usage,
     String? reasoningEffort,
     List<AiMessagePart>? parts,
-  }) =>
-      AiMessage(
-        id: id,
-        conversationId: conversationId,
-        seq: seq,
-        role: role,
-        status: status ?? this.status,
-        text: text ?? this.text,
-        modelId: modelId,
-        parts: parts ?? this.parts,
-        usage: usage ?? this.usage,
-        reasoningEffort: reasoningEffort ?? this.reasoningEffort,
-      );
+  }) => AiMessage(
+    id: id,
+    conversationId: conversationId,
+    seq: seq,
+    role: role,
+    status: status ?? this.status,
+    text: text ?? this.text,
+    modelId: modelId,
+    parts: parts ?? this.parts,
+    usage: usage ?? this.usage,
+    reasoningEffort: reasoningEffort ?? this.reasoningEffort,
+  );
 
   bool get isUser => role == 'user';
 }
@@ -1003,23 +1058,23 @@ class AiAttachment {
 
   /// 后端 `AiAttachmentDto` → 前端模型。
   factory AiAttachment.fromJson(Map<String, dynamic> json) => AiAttachment(
-        id: json['id']?.toString(),
-        name: (json['name'] ?? '附件').toString(),
-        modality: json['modality']?.toString(),
-        mimeType: (json['mimeType'] ?? 'application/octet-stream').toString(),
-        sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
-        width: (json['width'] as num?)?.toInt(),
-        height: (json['height'] as num?)?.toInt(),
-      );
+    id: json['id']?.toString(),
+    name: (json['name'] ?? '附件').toString(),
+    modality: json['modality']?.toString(),
+    mimeType: (json['mimeType'] ?? 'application/octet-stream').toString(),
+    sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
+    width: (json['width'] as num?)?.toInt(),
+    height: (json['height'] as num?)?.toInt(),
+  );
 
   /// 预检用的"线索"（后端有 id 时以库里的判定为准，这里只是兼容老路径与草稿存储）
   Map<String, dynamic> toJson() => {
-        if (id != null) 'id': id,
-        'name': name,
-        if (modality != null) 'modality': modality,
-        'mimeType': mimeType,
-        'sizeBytes': sizeBytes,
-      };
+    if (id != null) 'id': id,
+    'name': name,
+    if (modality != null) 'modality': modality,
+    'mimeType': mimeType,
+    'sizeBytes': sizeBytes,
+  };
 
   bool get isImage => modality == 'image';
   bool get isVideo => modality == 'video';
@@ -1027,7 +1082,9 @@ class AiAttachment {
 
   String get sizeLabel {
     if (sizeBytes < 1024) return '$sizeBytes B';
-    if (sizeBytes < 1024 * 1024) return '${(sizeBytes / 1024).toStringAsFixed(0)} KB';
+    if (sizeBytes < 1024 * 1024) {
+      return '${(sizeBytes / 1024).toStringAsFixed(0)} KB';
+    }
     return '${(sizeBytes / 1024 / 1024).toStringAsFixed(1)} MB';
   }
 }
@@ -1037,20 +1094,28 @@ class AiAttachmentUploadResult {
   final List<AiAttachment> items;
   final List<({String fileName, String reason})> failed;
 
-  const AiAttachmentUploadResult({this.items = const [], this.failed = const []});
+  const AiAttachmentUploadResult({
+    this.items = const [],
+    this.failed = const [],
+  });
 
-  factory AiAttachmentUploadResult.fromJson(Map<String, dynamic> json) => AiAttachmentUploadResult(
-        items: (json['items'] as List?)
+  factory AiAttachmentUploadResult.fromJson(Map<String, dynamic> json) =>
+      AiAttachmentUploadResult(
+        items:
+            (json['items'] as List?)
                 ?.whereType<Map>()
                 .map((e) => AiAttachment.fromJson(Map<String, dynamic>.from(e)))
                 .toList() ??
             const [],
-        failed: (json['failed'] as List?)
+        failed:
+            (json['failed'] as List?)
                 ?.whereType<Map>()
-                .map((e) => (
-                      fileName: (e['fileName'] ?? '附件').toString(),
-                      reason: (e['reason'] ?? '上传失败').toString(),
-                    ))
+                .map(
+                  (e) => (
+                    fileName: (e['fileName'] ?? '附件').toString(),
+                    reason: (e['reason'] ?? '上传失败').toString(),
+                  ),
+                )
                 .toList() ??
             const [],
       );
@@ -1075,11 +1140,14 @@ class AiPreflightItem {
     this.attachmentId,
   });
 
-  factory AiPreflightItem.fromJson(Map<String, dynamic> json) => AiPreflightItem(
+  factory AiPreflightItem.fromJson(Map<String, dynamic> json) =>
+      AiPreflightItem(
         index: (json['index'] as num?)?.toInt() ?? 0,
         name: (json['name'] ?? '附件').toString(),
         allowed: json['allowed'] == true,
-        blockers: (json['blockers'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+        blockers:
+            (json['blockers'] as List?)?.map((e) => e.toString()).toList() ??
+            const [],
         attachmentId: json['attachmentId']?.toString(),
       );
 }
@@ -1092,23 +1160,35 @@ class AiPreflightResult {
   /// 逐个附件的结论（顺序与请求一致）：托盘里给被拦下的那张打标记
   final List<AiPreflightItem> items;
 
-  const AiPreflightResult({required this.allowed, required this.blockers, this.items = const []});
+  const AiPreflightResult({
+    required this.allowed,
+    required this.blockers,
+    this.items = const [],
+  });
 
   static const allow = AiPreflightResult(allowed: true, blockers: []);
 
-  factory AiPreflightResult.fromJson(Map<String, dynamic> json) => AiPreflightResult(
+  factory AiPreflightResult.fromJson(Map<String, dynamic> json) =>
+      AiPreflightResult(
         allowed: json['allowed'] == true,
-        blockers: (json['blockers'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-        items: (json['items'] as List?)
+        blockers:
+            (json['blockers'] as List?)?.map((e) => e.toString()).toList() ??
+            const [],
+        items:
+            (json['items'] as List?)
                 ?.whereType<Map>()
-                .map((e) => AiPreflightItem.fromJson(Map<String, dynamic>.from(e)))
+                .map(
+                  (e) => AiPreflightItem.fromJson(Map<String, dynamic>.from(e)),
+                )
                 .toList() ??
             const [],
       );
 
   /// 第 [index] 个附件被拦下的原因（空列表 = 没问题）。
-  List<String> blockersAt(int index) =>
-      items.where((it) => it.index == index).expand((it) => it.blockers).toList();
+  List<String> blockersAt(int index) => items
+      .where((it) => it.index == index)
+      .expand((it) => it.blockers)
+      .toList();
 }
 
 // ---------------------------------------------------------------------------
@@ -1166,23 +1246,23 @@ class AiSkill {
   });
 
   factory AiSkill.fromJson(Map<String, dynamic> json) => AiSkill(
-        name: (json['name'] ?? '').toString(),
-        description: (json['description'] ?? '').toString(),
-        whenToUse: json['whenToUse']?.toString(),
-        version: json['version']?.toString(),
-        source: (json['source'] ?? 'user').toString(),
-        // 后端缺字段时按"可用"处理，不要凭空把 skill 变成停用
-        enabled: json['enabled'] != false,
-        userInvocable: json['userInvocable'] != false,
-        modelInvocable: json['modelInvocable'] != false,
-        digest: json['digest']?.toString(),
-        sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
-        fileCount: (json['fileCount'] as num?)?.toInt() ?? 1,
-        updatedAt: DateTime.tryParse((json['updatedAt'] ?? '').toString()),
-        validationError: json['validationError']?.toString(),
-        conflict: json['conflict']?.toString(),
-        origin: json['origin']?.toString(),
-      );
+    name: (json['name'] ?? '').toString(),
+    description: (json['description'] ?? '').toString(),
+    whenToUse: json['whenToUse']?.toString(),
+    version: json['version']?.toString(),
+    source: (json['source'] ?? 'user').toString(),
+    // 后端缺字段时按"可用"处理，不要凭空把 skill 变成停用
+    enabled: json['enabled'] != false,
+    userInvocable: json['userInvocable'] != false,
+    modelInvocable: json['modelInvocable'] != false,
+    digest: json['digest']?.toString(),
+    sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
+    fileCount: (json['fileCount'] as num?)?.toInt() ?? 1,
+    updatedAt: DateTime.tryParse((json['updatedAt'] ?? '').toString()),
+    validationError: json['validationError']?.toString(),
+    conflict: json['conflict']?.toString(),
+    origin: json['origin']?.toString(),
+  );
 
   bool get isBuiltin => source == 'builtin';
 
@@ -1190,7 +1270,8 @@ class AiSkill {
   String get sourceLabel => isBuiltin ? '内置' : '用户';
 
   /// 有没有需要提醒用户的问题（不合法或冲突）。
-  bool get hasWarning => (validationError ?? '').isNotEmpty || (conflict ?? '').isNotEmpty;
+  bool get hasWarning =>
+      (validationError ?? '').isNotEmpty || (conflict ?? '').isNotEmpty;
 
   /// 悬浮提示上的完整说明：问题优先，其次冲突，最后来源。
   String get warningText {
@@ -1201,7 +1282,9 @@ class AiSkill {
 
   String get sizeLabel {
     if (sizeBytes < 1024) return '$sizeBytes B';
-    if (sizeBytes < 1024 * 1024) return '${(sizeBytes / 1024).toStringAsFixed(1)} KB';
+    if (sizeBytes < 1024 * 1024) {
+      return '${(sizeBytes / 1024).toStringAsFixed(1)} KB';
+    }
     return '${(sizeBytes / 1024 / 1024).toStringAsFixed(1)} MB';
   }
 
@@ -1220,11 +1303,11 @@ class AiSkillDetail {
   const AiSkillDetail({required this.skill, required this.content});
 
   factory AiSkillDetail.fromJson(Map<String, dynamic> json) => AiSkillDetail(
-        skill: json['skill'] is Map
-            ? AiSkill.fromJson(Map<String, dynamic>.from(json['skill'] as Map))
-            : const AiSkill(name: ''),
-        content: (json['content'] ?? '').toString(),
-      );
+    skill: json['skill'] is Map
+        ? AiSkill.fromJson(Map<String, dynamic>.from(json['skill'] as Map))
+        : const AiSkill(name: ''),
+    content: (json['content'] ?? '').toString(),
+  );
 }
 
 /// skills 投放口的位置（用户建议：不要「从 DSH 导入」按钮，改成"往文件夹里拷"）。
@@ -1243,10 +1326,10 @@ class AiSkillRoots {
   });
 
   factory AiSkillRoots.fromJson(Map<String, dynamic> json) => AiSkillRoots(
-        userRoot: (json['userRoot'] ?? '').toString(),
-        builtinRoot: (json['builtinRoot'] ?? '').toString(),
-        userRootExists: json['userRootExists'] == true,
-      );
+    userRoot: (json['userRoot'] ?? '').toString(),
+    builtinRoot: (json['builtinRoot'] ?? '').toString(),
+    userRootExists: json['userRootExists'] == true,
+  );
 }
 
 /// 「重新扫描投放口」的结果：这次自动登记了什么 + 扫描后的完整清单。
@@ -1263,11 +1346,17 @@ class AiSkillRescanResult {
     this.skills = const [],
   });
 
-  factory AiSkillRescanResult.fromJson(Map<String, dynamic> json) => AiSkillRescanResult(
+  factory AiSkillRescanResult.fromJson(Map<String, dynamic> json) =>
+      AiSkillRescanResult(
         registered: (json['registered'] as num?)?.toInt() ?? 0,
-        names: (json['names'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-        errors: (json['errors'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-        skills: (json['skills'] as List?)
+        names:
+            (json['names'] as List?)?.map((e) => e.toString()).toList() ??
+            const [],
+        errors:
+            (json['errors'] as List?)?.map((e) => e.toString()).toList() ??
+            const [],
+        skills:
+            (json['skills'] as List?)
                 ?.whereType<Map>()
                 .map((e) => AiSkill.fromJson(Map<String, dynamic>.from(e)))
                 .toList() ??
@@ -1277,8 +1366,12 @@ class AiSkillRescanResult {
   /// 要给用户看的话：**失败条目也要说**，不能只报"成功 N 个"。
   String get summary {
     final parts = <String>['扫描到 ${skills.length} 个 skill'];
-    if (registered > 0) parts.add('自动登记 $registered 个（${names.take(3).join('、')}）');
-    if (errors.isNotEmpty) parts.add('${errors.length} 个没法用：${errors.take(2).join('；')}');
+    if (registered > 0) {
+      parts.add('自动登记 $registered 个（${names.take(3).join('、')}）');
+    }
+    if (errors.isNotEmpty) {
+      parts.add('${errors.length} 个没法用：${errors.take(2).join('；')}');
+    }
     return parts.join(' · ');
   }
 }
@@ -1302,12 +1395,12 @@ class AiMemory {
   });
 
   factory AiMemory.fromJson(Map<String, dynamic> json) => AiMemory(
-        content: (json['content'] ?? '').toString(),
-        path: (json['path'] ?? '').toString(),
-        entryCount: (json['entryCount'] as num?)?.toInt() ?? 0,
-        maxChars: (json['maxChars'] as num?)?.toInt() ?? 8000,
-        maxEntries: (json['maxEntries'] as num?)?.toInt() ?? 100,
-      );
+    content: (json['content'] ?? '').toString(),
+    path: (json['path'] ?? '').toString(),
+    entryCount: (json['entryCount'] as num?)?.toInt() ?? 0,
+    maxChars: (json['maxChars'] as num?)?.toInt() ?? 8000,
+    maxEntries: (json['maxEntries'] as num?)?.toInt() ?? 100,
+  );
 
   /// 一行一条的正文（去掉空行）。**下标与后端 `MemoryStore.entries()` 同源** ——
   /// 界面按这份列表做单条 / 批量删除，顺手把 `- ` 与 `[日期] ` 前缀剥掉只用于展示。
@@ -1315,39 +1408,55 @@ class AiMemory {
       .split('\n')
       .map((l) => l.trim())
       .where((l) => l.isNotEmpty)
-      .map((l) => l.replaceFirst(RegExp(r'^[-*]\s*'), '').replaceFirst(_datePrefix, '').trim())
+      .map(
+        (l) => l
+            .replaceFirst(RegExp(r'^[-*]\s*'), '')
+            .replaceFirst(_datePrefix, '')
+            .trim(),
+      )
       .toList();
 
   static final _datePrefix = RegExp(r'^\[\d{4}-\d{2}-\d{2}]\s*');
 }
 
 // ---------------------------------------------------------------------------
-//  角色卡（O8，2026-09-26）
+//  卡片库：角色卡 / 画风卡（2026-10-21）
 // ---------------------------------------------------------------------------
 
-/// 一个角色的**名称 + 正面提示词 + 负面提示词**（2026-10 收敛成这三样）。
+/// 一张卡（角色卡 / 画风卡）的公共形状。
 ///
-/// 为什么要有它：写角色提示词时模型最容易凭印象编 tag（现场：shinku 被当成 iroi
-/// 写了两版废图），而"查过一遍"的结果不落到某个地方，下一轮又得重查。
-/// 卡上原有的 tag 栈 / LoRA / 别名 / 来源 / 备注 / 位置 / 启用开关**全部删掉** ——
-/// 没有的字段不发键（与后端 `explicitNulls = false` 一致）。
+/// 每张卡都有**两版正面提示词**（用户 2026-10-21 的要求）：
+///  * [tagPrompt]：Danbooru tag 版（逗号分隔，给 tag 模型直接照抄）；
+///  * [prompt]：自然语言版（整段文本；角色 600+ token 全身上下，画风 100~200 token）。
+///
+/// [examples] 是这张卡的**示例产物**（画廊里的 mediaId）：
+/// 界面上画成缩略图，AI 那边用 `#id「标题」` 的形式看到。
+/// 两版可以只写一版（AI 能补另一版），但都空着时**不算写完**。
 class CharacterCard {
   final int id;
   final String name;
 
-  /// 正面提示词（整段文本）。
+  /// Danbooru tag 版（整段、逗号分隔）。
+  final String? tagPrompt;
+
+  /// 自然语言版（整段文本）。
   final String? prompt;
 
-  /// 负面提示词（整段文本）。
+  /// 负面提示词（两版共用）。
   final String? negative;
+
+  /// 示例产物（按加入顺序）。
+  final List<MediaAsset> examples;
 
   final String? updatedAt;
 
   const CharacterCard({
     required this.id,
     required this.name,
+    this.tagPrompt,
     this.prompt,
     this.negative,
+    this.examples = const [],
     this.updatedAt,
   });
 
@@ -1357,12 +1466,49 @@ class CharacterCard {
   }
 
   factory CharacterCard.fromJson(Map<String, dynamic> json) => CharacterCard(
-        id: (json['id'] as num?)?.toInt() ?? 0,
-        name: (json['name'] ?? '').toString(),
-        prompt: _text(json['prompt']),
-        negative: _text(json['negative']),
-        updatedAt: _text(json['updatedAt']),
-      );
+    id: (json['id'] as num?)?.toInt() ?? 0,
+    name: (json['name'] ?? '').toString(),
+    tagPrompt: _text(json['tagPrompt']),
+    prompt: _text(json['prompt']),
+    negative: _text(json['negative']),
+    examples: ((json['examples'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => MediaAsset.fromJson(Map<String, dynamic>.from(e)))
+        .toList(),
+    updatedAt: _text(json['updatedAt']),
+  );
+
+  /// 两版都写完了才算完整（前端只做提示，不阻止保存）。
+  bool get hasBothVersions => tagPrompt != null && prompt != null;
+}
+
+/// 画风卡：字段与 [CharacterCard] 逐项同形，只是语义是"画成什么样"。
+///
+/// 单独一个类是为了让调用点读起来是画风卡（`StyleCard`），
+/// 而不是在 UI 里到处传一个叫 `CharacterCard` 的东西。
+class StyleCard extends CharacterCard {
+  const StyleCard({
+    required super.id,
+    required super.name,
+    super.tagPrompt,
+    super.prompt,
+    super.negative,
+    super.examples,
+    super.updatedAt,
+  });
+
+  factory StyleCard.fromJson(Map<String, dynamic> json) {
+    final card = CharacterCard.fromJson(json);
+    return StyleCard(
+      id: card.id,
+      name: card.name,
+      tagPrompt: card.tagPrompt,
+      prompt: card.prompt,
+      negative: card.negative,
+      examples: card.examples,
+      updatedAt: card.updatedAt,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1395,25 +1541,25 @@ class AiToolInfo {
   });
 
   factory AiToolInfo.fromJson(Map<String, dynamic> json) => AiToolInfo(
-        name: (json['name'] ?? '').toString(),
-        description: (json['description'] ?? '').toString(),
-        category: (json['category'] ?? 'comfy').toString(),
-        mutating: json['mutating'] == true,
-        access: (json['access'] ?? 'ask').toString(),
-        overridden: json['overridden'] == true,
-      );
+    name: (json['name'] ?? '').toString(),
+    description: (json['description'] ?? '').toString(),
+    category: (json['category'] ?? 'comfy').toString(),
+    mutating: json['mutating'] == true,
+    access: (json['access'] ?? 'ask').toString(),
+    overridden: json['overridden'] == true,
+  );
 
   String get categoryLabel => switch (category) {
-        'skill' => 'Skills',
-        'files' => '文件',
-        'comfy' => 'ComfyUI',
-        'memory' => '记忆',
-        // 联网搜索（2026-09-20）：唯一会把数据送出本机的类别
-        'web' => '联网搜索',
-        // O7/O8（2026-09-25）：搜自己的提示词库 / 读写角色卡
-        'library' => '资料库',
-        _ => category,
-      };
+    'skill' => 'Skills',
+    'files' => '文件',
+    'comfy' => 'ComfyUI',
+    'memory' => '记忆',
+    // 联网搜索（2026-09-20）：唯一会把数据送出本机的类别
+    'web' => '联网搜索',
+    // O7/O8（2026-09-25）：搜自己的提示词库 / 读写角色卡
+    'library' => '资料库',
+    _ => category,
+  };
 
   String get accessLabel => AiToolPolicy.accessLabel(access);
 
@@ -1474,22 +1620,28 @@ class AiToolPolicy {
   });
 
   factory AiToolPolicy.fromJson(Map<String, dynamic> json) => AiToolPolicy(
-        writeRoots: (json['writeRoots'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-        readRoots: (json['readRoots'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-        autoReadRoots:
-            (json['autoReadRoots'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-        overrides: (json['overrides'] as Map?)?.map(
-              (k, v) => MapEntry(k.toString(), v.toString()),
-            ) ??
-            const {},
-        maxToolSteps: (json['maxToolSteps'] as num?)?.toInt() ?? 25,
-        maxCallsPerRun: (json['maxCallsPerRun'] as num?)?.toInt() ?? 48,
-        maxReadBytes: (json['maxReadBytes'] as num?)?.toInt() ?? 0,
-        maxWriteBytes: (json['maxWriteBytes'] as num?)?.toInt() ?? 0,
-        defaultWriteRoot: json['defaultWriteRoot']?.toString(),
-        // 认不出的档位一律当「询问」：权限这种事不猜
-        permissionMode: json['permissionMode'] == modeFull ? modeFull : modeAsk,
-      );
+    writeRoots:
+        (json['writeRoots'] as List?)?.map((e) => e.toString()).toList() ??
+        const [],
+    readRoots:
+        (json['readRoots'] as List?)?.map((e) => e.toString()).toList() ??
+        const [],
+    autoReadRoots:
+        (json['autoReadRoots'] as List?)?.map((e) => e.toString()).toList() ??
+        const [],
+    overrides:
+        (json['overrides'] as Map?)?.map(
+          (k, v) => MapEntry(k.toString(), v.toString()),
+        ) ??
+        const {},
+    maxToolSteps: (json['maxToolSteps'] as num?)?.toInt() ?? 25,
+    maxCallsPerRun: (json['maxCallsPerRun'] as num?)?.toInt() ?? 48,
+    maxReadBytes: (json['maxReadBytes'] as num?)?.toInt() ?? 0,
+    maxWriteBytes: (json['maxWriteBytes'] as num?)?.toInt() ?? 0,
+    defaultWriteRoot: json['defaultWriteRoot']?.toString(),
+    // 认不出的档位一律当「询问」：权限这种事不猜
+    permissionMode: json['permissionMode'] == modeFull ? modeFull : modeAsk,
+  );
 
   static const accessOptions = <String, String>{
     'allow': '允许',
@@ -1506,22 +1658,22 @@ class AiToolPolicy {
     Map<String, String>? overrides,
     int? maxToolSteps,
     int? maxCallsPerRun,
-  }) =>
-      AiToolPolicy(
-        writeRoots: writeRoots ?? this.writeRoots,
-        readRoots: readRoots ?? this.readRoots,
-        autoReadRoots: autoReadRoots ?? this.autoReadRoots,
-        overrides: overrides ?? this.overrides,
-        maxToolSteps: maxToolSteps ?? this.maxToolSteps,
-        maxCallsPerRun: maxCallsPerRun ?? this.maxCallsPerRun,
-        maxReadBytes: maxReadBytes,
-        maxWriteBytes: maxWriteBytes,
-        defaultWriteRoot: defaultWriteRoot,
-        permissionMode: permissionMode,
-      );
+  }) => AiToolPolicy(
+    writeRoots: writeRoots ?? this.writeRoots,
+    readRoots: readRoots ?? this.readRoots,
+    autoReadRoots: autoReadRoots ?? this.autoReadRoots,
+    overrides: overrides ?? this.overrides,
+    maxToolSteps: maxToolSteps ?? this.maxToolSteps,
+    maxCallsPerRun: maxCallsPerRun ?? this.maxCallsPerRun,
+    maxReadBytes: maxReadBytes,
+    maxWriteBytes: maxWriteBytes,
+    defaultWriteRoot: defaultWriteRoot,
+    permissionMode: permissionMode,
+  );
 
   /// 界面上那句"默认只能写哪里"。
-  String get defaultWriteHint => defaultWriteRoot == null || defaultWriteRoot!.isEmpty
+  String get defaultWriteHint =>
+      defaultWriteRoot == null || defaultWriteRoot!.isEmpty
       ? '默认只能写后端预设的产物目录，其它位置一律拒绝。'
       : '默认只能写 $defaultWriteRoot，其它位置一律拒绝。';
 }
@@ -1555,19 +1707,19 @@ class AiNsfwSettings {
   });
 
   factory AiNsfwSettings.fromJson(Map<String, dynamic> json) => AiNsfwSettings(
-        enabled: json['enabled'] == true,
-        blur: json['blur'] == true,
-        effectiveBlur: json['effectiveBlur'] == true,
-        promptVersion: (json['promptVersion'] ?? '').toString(),
-      );
+    enabled: json['enabled'] == true,
+    blur: json['blur'] == true,
+    effectiveBlur: json['effectiveBlur'] == true,
+    promptVersion: (json['promptVersion'] ?? '').toString(),
+  );
 
   AiNsfwSettings copyWith({bool? enabled, bool? blur}) => AiNsfwSettings(
-        enabled: enabled ?? this.enabled,
-        blur: blur ?? this.blur,
-        // 本地先按同一套规则预示；写回后以后端返回的为准
-        effectiveBlur: (enabled ?? this.enabled) && (blur ?? this.blur),
-        promptVersion: promptVersion,
-      );
+    enabled: enabled ?? this.enabled,
+    blur: blur ?? this.blur,
+    // 本地先按同一套规则预示；写回后以后端返回的为准
+    effectiveBlur: (enabled ?? this.enabled) && (blur ?? this.blur),
+    promptVersion: promptVersion,
+  );
 }
 
 /// AI 向用户提的一个问题（用户建议 ⑥，2026-09-20："让 AI 像 deepseek harness 一样
@@ -1650,24 +1802,30 @@ class AiQuestion {
   });
 
   factory AiQuestion.fromJson(Map<String, dynamic> json) => AiQuestion(
-        questionId: (json['questionId'] ?? '').toString(),
-        runId: (json['runId'] ?? '').toString(),
-        conversationId: (json['conversationId'] ?? '').toString(),
-        question: (json['question'] ?? '').toString(),
-        callId: json['callId']?.toString(),
-        options: (json['options'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-        allowFreeText: json['allowFreeText'] != false,
-        header: json['header']?.toString(),
-        answered: json['answered'] == true,
-        answer: json['answer']?.toString(),
-        optionIndex: (json['optionIndex'] as num?)?.toInt(),
-        index: (json['index'] as num?)?.toInt() ?? 0,
-        total: (json['total'] as num?)?.toInt() ?? 1,
-        groupId: (json['groupId'] ?? '').toString(),
-        multiSelect: json['multiSelect'] == true,
-        optionIndexes: (json['optionIndexes'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ??
-            const [],
-      );
+    questionId: (json['questionId'] ?? '').toString(),
+    runId: (json['runId'] ?? '').toString(),
+    conversationId: (json['conversationId'] ?? '').toString(),
+    question: (json['question'] ?? '').toString(),
+    callId: json['callId']?.toString(),
+    options:
+        (json['options'] as List?)?.map((e) => e.toString()).toList() ??
+        const [],
+    allowFreeText: json['allowFreeText'] != false,
+    header: json['header']?.toString(),
+    answered: json['answered'] == true,
+    answer: json['answer']?.toString(),
+    optionIndex: (json['optionIndex'] as num?)?.toInt(),
+    index: (json['index'] as num?)?.toInt() ?? 0,
+    total: (json['total'] as num?)?.toInt() ?? 1,
+    groupId: (json['groupId'] ?? '').toString(),
+    multiSelect: json['multiSelect'] == true,
+    optionIndexes:
+        (json['optionIndexes'] as List?)
+            ?.whereType<num>()
+            .map((e) => e.toInt())
+            .toList() ??
+        const [],
+  );
 
   AiQuestion copyWith({
     String? callId,
@@ -1675,29 +1833,29 @@ class AiQuestion {
     String? answer,
     int? optionIndex,
     List<int>? optionIndexes,
-  }) =>
-      AiQuestion(
-        questionId: questionId,
-        runId: runId,
-        conversationId: conversationId,
-        question: question,
-        callId: callId ?? this.callId,
-        options: options,
-        allowFreeText: allowFreeText,
-        header: header,
-        answered: answered ?? this.answered,
-        answer: answer ?? this.answer,
-        optionIndex: optionIndex ?? this.optionIndex,
-        index: index,
-        total: total,
-        groupId: groupId,
-        multiSelect: multiSelect,
-        optionIndexes: optionIndexes ?? this.optionIndexes,
-      );
+  }) => AiQuestion(
+    questionId: questionId,
+    runId: runId,
+    conversationId: conversationId,
+    question: question,
+    callId: callId ?? this.callId,
+    options: options,
+    allowFreeText: allowFreeText,
+    header: header,
+    answered: answered ?? this.answered,
+    answer: answer ?? this.answer,
+    optionIndex: optionIndex ?? this.optionIndex,
+    index: index,
+    total: total,
+    groupId: groupId,
+    multiSelect: multiSelect,
+    optionIndexes: optionIndexes ?? this.optionIndexes,
+  );
 }
 
 /// 一次工具调用的状态机。
-enum AiToolCallStatus {  running('running', '运行中'),
+enum AiToolCallStatus {
+  running('running', '运行中'),
   pendingApproval('pending_approval', '待批准'),
   ok('ok', '已完成'),
   failed('failed', '失败'),
@@ -1726,6 +1884,12 @@ class AiToolCallState {
 
   /// 模型给的参数原文（JSON 文本）。**原样展示**，前端不解析、不执行。
   final String arguments;
+
+  /// 模型写的一句"为什么调用"（后端从参数里摘出来，**不会传给工具**）。
+  ///
+  /// 用户 2026-10-21：工具卡不要只显示 `comfy_load_workflow` 这种机器名。
+  /// 有它就把它当标题（一眼看出这次在干什么），工具名退到副标题。
+  final String? reason;
   final AiToolCallStatus status;
 
   /// 结果预览（后端已按 MAX_RESULT_CHARS 截断）。
@@ -1771,11 +1935,78 @@ class AiToolCallState {
   final List<AiQuestion> questions;
 
   /// 这张卡要画几题：优先用 [questions]，没有就退回 [question]。
-  List<AiQuestion> get allQuestions =>
-      questions.isNotEmpty ? questions : (question == null ? const <AiQuestion>[] : [question!]);
+  List<AiQuestion> get allQuestions => questions.isNotEmpty
+      ? questions
+      : (question == null ? const <AiQuestion>[] : [question!]);
+
+  /// 工具名 → 用户看得懂的"用途"（没有 `reason` 时至少不显示机器名）。
+  ///
+  /// ⚠ 这张表只是**界面兜底**：模型写了 `reason` 就用它，那张表不参与任何执行 / 安全判定。
+  /// 新增工具时在这里补一行即可；漏了会退回工具名（不会崩）。
+  String get purposeLabel => switch (name) {
+    'comfy_load_workflow' => '读取工作流',
+    'comfy_list_workflows' => '查看本机工作流',
+    'comfy_find_workflow' => '查找工作流',
+    'comfy_submit' => '提交出图',
+    'comfy_get_status' => '查看 ComfyUI 状态',
+    'comfy_get_run' => '查看这次运行',
+    'comfy_sync_history' => '同步生成记录',
+    'comfy_use_attachment' => '投放参考图',
+    'comfy_use_media' => '投放画廊图片',
+    'comfy_make_mask' => '制作遮罩',
+    'comfy_prune_workflow' => '摘改工作流',
+    'comfy_audit_workflow' => '审核工作流',
+    'comfy_diagnose_workflow' => '检查接线',
+    'comfy_check_inputs' => '检查工作流输入',
+    'comfy_fit_workflow' => '核对本机模型',
+    'comfy_learn_workflow' => '学习工作流',
+    'comfy_list_recipes' => '查看工作流配方',
+    'comfy_bind_recipe' => '匹配模型配方',
+    'comfy_start' => '启动 ComfyUI',
+    'comfy_stop' => '停止 ComfyUI',
+    'comfy_env_report' => '检查运行环境',
+    'read_file' => '读取文件',
+    'write_file' => '写入文件',
+    'list_dir' => '查看目录',
+    'list_skills' => '查看技能',
+    'load_skill' => '加载技能',
+    'register_skill' => '注册技能',
+    'delete_skill' => '删除技能',
+    'remember' => '记一条长期记忆',
+    'search_prompts' => '搜索提示词',
+    'search_character_cards' => '搜索角色卡',
+    'save_character_card' => '保存角色卡',
+    'danbooru_lookup' => '查 Danbooru 标签',
+    'civitai_search' => '搜模型库',
+    'find_model' => '查找模型',
+    'web_search' => '联网搜索',
+    'web_fetch' => '读取网页',
+    'ask_user_question' => '询问你',
+    'todo_write' => '更新任务清单',
+    _ => name.isEmpty ? '工具调用' : name,
+  };
+
+  /// 工具卡的**主标题**：模型写了原因就显示原因（"先确认本机有没有这个模型"），
+  /// 否则显示用途（"读取工作流"）。机器名退到副标题。
+  String get displayTitle {
+    final text = reason?.trim();
+    return (text == null || text.isEmpty) ? purposeLabel : text;
+  }
+
+  /// 副标题：`用途 · 机器名`；没有 `reason` 时只给机器名（与用途相同的就不重复）。
+  String get displaySubtitle {
+    final label = purposeLabel;
+    if (reason?.trim().isNotEmpty ?? false) {
+      return label == name ? name : '$label · $name';
+    }
+    return label == name ? '' : name;
+  }
 
   /// 把新到的一条提问并进这张卡：同 `questionId` 覆盖，否则追加，按题号排。
-  static List<AiQuestion> mergeQuestions(List<AiQuestion> prev, AiQuestion next) {
+  static List<AiQuestion> mergeQuestions(
+    List<AiQuestion> prev,
+    AiQuestion next,
+  ) {
     final out = <AiQuestion>[
       ...prev.where((q) => q.questionId != next.questionId),
       next,
@@ -1787,6 +2018,7 @@ class AiToolCallState {
     required this.callId,
     required this.name,
     this.arguments = '',
+    this.reason,
     this.status = AiToolCallStatus.running,
     this.preview,
     this.error,
@@ -1799,21 +2031,34 @@ class AiToolCallState {
     this.questions = const [],
   });
 
-  factory AiToolCallState.fromJson(Map<String, dynamic> json) => AiToolCallState(
+  factory AiToolCallState.fromJson(Map<String, dynamic> json) =>
+      AiToolCallState(
         callId: (json['callId'] ?? '').toString(),
         name: (json['name'] ?? '').toString(),
         arguments: (json['arguments'] ?? '').toString(),
+        reason: json['reason']?.toString(),
         status: AiToolCallStatus.parse(json['status']?.toString()),
         preview: json['preview']?.toString(),
         error: json['error']?.toString(),
         elapsedMs: (json['elapsedMs'] as num?)?.toInt() ?? 0,
         approval: json['approval']?.toString(),
-        mediaIds: (json['mediaIds'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ?? const [],
+        mediaIds:
+            (json['mediaIds'] as List?)
+                ?.whereType<num>()
+                .map((e) => e.toInt())
+                .toList() ??
+            const [],
         nsfwMediaIds:
-            (json['nsfwMediaIds'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ?? const [],
+            (json['nsfwMediaIds'] as List?)
+                ?.whereType<num>()
+                .map((e) => e.toInt())
+                .toList() ??
+            const [],
         promptId: (json['promptId'] as num?)?.toInt(),
         question: json['question'] is Map
-            ? AiQuestion.fromJson(Map<String, dynamic>.from(json['question'] as Map))
+            ? AiQuestion.fromJson(
+                Map<String, dynamic>.from(json['question'] as Map),
+              )
             : null,
         questions: _questionsOf(json['questions']),
       );
@@ -1865,11 +2110,14 @@ class AiToolCallState {
         final id = part.toolCallId ?? '';
         final map = part.payload ?? const <String, dynamic>{};
         indexOf[id] = out.length;
-        out.add(AiToolCallState(
-          callId: id,
-          name: (map['name'] ?? '').toString(),
-          arguments: (map['arguments'] ?? '').toString(),
-        ));
+        out.add(
+          AiToolCallState(
+            callId: id,
+            name: (map['name'] ?? '').toString(),
+            arguments: (map['arguments'] ?? '').toString(),
+            reason: map['reason']?.toString(),
+          ),
+        );
       } else if (part.type == 'tool_result') {
         final id = part.toolCallId ?? '';
         final map = part.payload ?? const <String, dynamic>{};
@@ -1880,7 +2128,9 @@ class AiToolCallState {
         // 提问工具的结果里记着"问了什么、答了什么"：重开 App 之后那张卡要照原样显示
         // （已完成状态），不能变成一张空白卡片（用户建议 ⑥）。
         final asked = map['question'] is Map
-            ? AiQuestion.fromJson(Map<String, dynamic>.from(map['question'] as Map))
+            ? AiQuestion.fromJson(
+                Map<String, dynamic>.from(map['question'] as Map),
+              )
             : null;
         // 整组提问（多问改造）：后端在工具结果里落 `askedAll`；
         // 老结果只有 `asked` 一条 —— 那就退化成单题，界面照样画得出来。
@@ -1888,18 +2138,26 @@ class AiToolCallState {
         final askedGroup = askedAll.isNotEmpty
             ? askedAll
             : (asked == null
-                ? (prev?.questions ?? const <AiQuestion>[])
-                : AiToolCallState.mergeQuestions(prev?.questions ?? const [], asked));
+                  ? (prev?.questions ?? const <AiQuestion>[])
+                  : AiToolCallState.mergeQuestions(
+                      prev?.questions ?? const [],
+                      asked,
+                    ));
         final next = AiToolCallState(
           callId: id,
           name: (map['name'] ?? prev?.name ?? '').toString(),
           arguments: prev?.arguments ?? '',
+          reason: prev?.reason,
           status: ok
               ? AiToolCallStatus.ok
-              : (approval == 'denied' ? AiToolCallStatus.denied : AiToolCallStatus.failed),
+              : (approval == 'denied'
+                    ? AiToolCallStatus.denied
+                    : AiToolCallStatus.failed),
           // tool_result.text 就是完整输出（后端已截断到 MAX_RESULT_CHARS）
           preview: part.text,
-          error: ok ? null : (map['code']?.toString() ?? map['error']?.toString()),
+          error: ok
+              ? null
+              : (map['code']?.toString() ?? map['error']?.toString()),
           elapsedMs: (map['elapsedMs'] as num?)?.toInt() ?? 0,
           approval: approval.isEmpty ? null : approval,
           mediaIds: AiToolCallState.mediaIdsOf(map),
@@ -1922,6 +2180,7 @@ class AiToolCallState {
   AiToolCallState copyWith({
     String? name,
     String? arguments,
+    String? reason,
     AiToolCallStatus? status,
     String? preview,
     String? error,
@@ -1932,22 +2191,22 @@ class AiToolCallState {
     int? promptId,
     AiQuestion? question,
     List<AiQuestion>? questions,
-  }) =>
-      AiToolCallState(
-        callId: callId,
-        name: name ?? this.name,
-        arguments: arguments ?? this.arguments,
-        status: status ?? this.status,
-        preview: preview ?? this.preview,
-        error: error ?? this.error,
-        elapsedMs: elapsedMs ?? this.elapsedMs,
-        approval: approval ?? this.approval,
-        mediaIds: mediaIds ?? this.mediaIds,
-        nsfwMediaIds: nsfwMediaIds ?? this.nsfwMediaIds,
-        promptId: promptId ?? this.promptId,
-        question: question ?? this.question,
-        questions: questions ?? this.questions,
-      );
+  }) => AiToolCallState(
+    callId: callId,
+    name: name ?? this.name,
+    arguments: arguments ?? this.arguments,
+    reason: reason ?? this.reason,
+    status: status ?? this.status,
+    preview: preview ?? this.preview,
+    error: error ?? this.error,
+    elapsedMs: elapsedMs ?? this.elapsedMs,
+    approval: approval ?? this.approval,
+    mediaIds: mediaIds ?? this.mediaIds,
+    nsfwMediaIds: nsfwMediaIds ?? this.nsfwMediaIds,
+    promptId: promptId ?? this.promptId,
+    question: question ?? this.question,
+    questions: questions ?? this.questions,
+  );
 
   /// 待用户批准：气泡上要出「批准 / 拒绝」。
   bool get needsApproval => status == AiToolCallStatus.pendingApproval;
@@ -1965,7 +2224,9 @@ class AiToolCallState {
 
   String get elapsedLabel => elapsedMs <= 0
       ? ''
-      : (elapsedMs < 1000 ? '$elapsedMs ms' : '${(elapsedMs / 1000).toStringAsFixed(1)} s');
+      : (elapsedMs < 1000
+            ? '$elapsedMs ms'
+            : '${(elapsedMs / 1000).toStringAsFixed(1)} s');
 }
 
 // ---------------------------------------------------------------------------
@@ -2014,7 +2275,8 @@ class AiComfySubmission {
     this.progress,
   });
 
-  factory AiComfySubmission.fromJson(Map<String, dynamic> json) => AiComfySubmission(
+  factory AiComfySubmission.fromJson(Map<String, dynamic> json) =>
+      AiComfySubmission(
         promptId: (json['promptId'] ?? '').toString(),
         submittedBy: (json['submittedBy'] ?? 'ai').toString(),
         title: json['title']?.toString(),
@@ -2022,12 +2284,19 @@ class AiComfySubmission {
         submittedAt: (json['submittedAt'] ?? '').toString(),
         finishedAt: json['finishedAt']?.toString(),
         elapsedMs: (json['elapsedMs'] as num?)?.toInt() ?? 0,
-        mediaIds: (json['mediaIds'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ?? const [],
+        mediaIds:
+            (json['mediaIds'] as List?)
+                ?.whereType<num>()
+                .map((e) => e.toInt())
+                .toList() ??
+            const [],
         capturedPromptId: (json['capturedPromptId'] as num?)?.toInt(),
         error: json['error']?.toString(),
         message: json['message']?.toString(),
         progress: json['progress'] is Map
-            ? AiComfyProgress.fromJson(Map<String, dynamic>.from(json['progress'] as Map))
+            ? AiComfyProgress.fromJson(
+                Map<String, dynamic>.from(json['progress'] as Map),
+              )
             : null,
       );
 
@@ -2038,19 +2307,21 @@ class AiComfySubmission {
 
   /// 界面上的状态文案。
   String get statusLabel => switch (status) {
-        'queued' => '排队中',
-        'running' => '生成中',
-        'success' => '已完成',
-        'empty' => '已完成（无产物）',
-        'error' => '失败',
-        'timeout' => '仍在运行',
-        _ => status,
-      };
+    'queued' => '排队中',
+    'running' => '生成中',
+    'success' => '已完成',
+    'empty' => '已完成（无产物）',
+    'error' => '失败',
+    'timeout' => '仍在运行',
+    _ => status,
+  };
 
   String get elapsedLabel {
     if (elapsedMs <= 0) return '';
     final s = elapsedMs / 1000;
-    return s < 60 ? '${s.toStringAsFixed(0)} 秒' : '${(s / 60).toStringAsFixed(1)} 分钟';
+    return s < 60
+        ? '${s.toStringAsFixed(0)} 秒'
+        : '${(s / 60).toStringAsFixed(1)} 分钟';
   }
 
   /// 界面上显示的名字（标题 → promptId 前 8 位）。
@@ -2100,7 +2371,8 @@ class AiComfyProgress {
     this.updatedAt,
   });
 
-  factory AiComfyProgress.fromJson(Map<String, dynamic> json) => AiComfyProgress(
+  factory AiComfyProgress.fromJson(Map<String, dynamic> json) =>
+      AiComfyProgress(
         promptId: (json['promptId'] ?? '').toString(),
         state: (json['state'] ?? 'queued').toString(),
         value: (json['value'] as num?)?.toDouble(),
@@ -2121,7 +2393,9 @@ class AiComfyProgress {
   String get stepLabel {
     final name = (nodeName != null && nodeName!.trim().isNotEmpty)
         ? nodeName!.trim()
-        : (nodeId != null && nodeId!.trim().isNotEmpty ? '节点 ${nodeId!.trim()}' : null);
+        : (nodeId != null && nodeId!.trim().isNotEmpty
+              ? '节点 ${nodeId!.trim()}'
+              : null);
     final steps = (value != null && max != null && max! > 0)
         ? '${value!.round()}/${max!.round()}'
         : null;
@@ -2162,26 +2436,31 @@ class AiComfyJobs {
   static const empty = AiComfyJobs();
 
   factory AiComfyJobs.fromJson(Map<String, dynamic> json) => AiComfyJobs(
-        queueRunning: (json['queueRunning'] as num?)?.toInt() ?? 0,
-        queuePending: (json['queuePending'] as num?)?.toInt() ?? 0,
-        comfyReachable: json['comfyReachable'] == true,
-        runningLabel: json['runningLabel']?.toString(),
-        submissions: (json['submissions'] as List?)
-                ?.whereType<Map>()
-                .map((e) => AiComfySubmission.fromJson(Map<String, dynamic>.from(e)))
-                .toList() ??
-            const [],
-        current: json['current'] is Map
-            ? AiComfyProgress.fromJson(Map<String, dynamic>.from(json['current'] as Map))
-            : null,
-      );
+    queueRunning: (json['queueRunning'] as num?)?.toInt() ?? 0,
+    queuePending: (json['queuePending'] as num?)?.toInt() ?? 0,
+    comfyReachable: json['comfyReachable'] == true,
+    runningLabel: json['runningLabel']?.toString(),
+    submissions:
+        (json['submissions'] as List?)
+            ?.whereType<Map>()
+            .map(
+              (e) => AiComfySubmission.fromJson(Map<String, dynamic>.from(e)),
+            )
+            .toList() ??
+        const [],
+    current: json['current'] is Map
+        ? AiComfyProgress.fromJson(
+            Map<String, dynamic>.from(json['current'] as Map),
+          )
+        : null,
+  );
 
   /// 有没有"正在跑"的东西 —— 界面据此决定要不要显示进度块、要不要继续轮询。
-  bool get hasActivity => queueRunning > 0 || queuePending > 0 || submissions.any((s) => s.isActive);
+  bool get hasActivity =>
+      queueRunning > 0 ||
+      queuePending > 0 ||
+      submissions.any((s) => s.isActive);
 }
-
-
-
 
 // ---------------------------------------------------------------------------
 //  模型能力目录的在线更新（2026-09-23"全做了"）
@@ -2233,7 +2512,8 @@ class AiCapabilityStatus {
     this.error,
   });
 
-  factory AiCapabilityStatus.fromJson(Map<String, dynamic> json) => AiCapabilityStatus(
+  factory AiCapabilityStatus.fromJson(Map<String, dynamic> json) =>
+      AiCapabilityStatus(
         version: json['version'] as String? ?? '',
         builtinRules: (json['builtinRules'] as num?)?.toInt() ?? 0,
         customSource: json['customSource'] as String?,
@@ -2244,7 +2524,8 @@ class AiCapabilityStatus {
         remoteEntries: (json['remoteEntries'] as num?)?.toInt(),
         remoteAgeHours: (json['remoteAgeHours'] as num?)?.toInt(),
         remoteStale: json['remoteStale'] == true,
-        refreshIntervalDays: (json['refreshIntervalDays'] as num?)?.toInt() ?? 7,
+        refreshIntervalDays:
+            (json['refreshIntervalDays'] as num?)?.toInt() ?? 7,
         probeEnabled: json['probeEnabled'] == true,
         lastMessage: json['lastMessage'] as String?,
       );
@@ -2286,8 +2567,9 @@ class AiCapabilityProbeOutcome {
         modelId: json['modelId'] as String? ?? '',
         ok: json['ok'] == true,
         acceptedTop: json['acceptedTop'] as String?,
-        ladder: (json['ladder'] as Map?)
-            ?.map((k, v) => MapEntry(k.toString(), v.toString())),
+        ladder: (json['ladder'] as Map?)?.map(
+          (k, v) => MapEntry(k.toString(), v.toString()),
+        ),
         written: json['written'] == true,
         skipped: json['skipped'] == true,
         message: json['message'] as String? ?? '',
@@ -2309,10 +2591,14 @@ class AiCapabilityProbeResponse {
       AiCapabilityProbeResponse(
         ok: json['ok'] == true,
         message: json['message'] as String? ?? '',
-        outcomes: (json['outcomes'] as List?)
+        outcomes:
+            (json['outcomes'] as List?)
                 ?.whereType<Map>()
-                .map((e) =>
-                    AiCapabilityProbeOutcome.fromJson(Map<String, dynamic>.from(e)))
+                .map(
+                  (e) => AiCapabilityProbeOutcome.fromJson(
+                    Map<String, dynamic>.from(e),
+                  ),
+                )
                 .toList() ??
             const [],
       );
@@ -2344,15 +2630,21 @@ class AiPendingOverview {
 
   static const empty = AiPendingOverview();
 
-  factory AiPendingOverview.fromJson(Map<String, dynamic> json) => AiPendingOverview(
-        asks: (json['asks'] as List?)
+  factory AiPendingOverview.fromJson(Map<String, dynamic> json) =>
+      AiPendingOverview(
+        asks:
+            (json['asks'] as List?)
                 ?.whereType<Map>()
                 .map((e) => AiPendingAsk.fromJson(Map<String, dynamic>.from(e)))
                 .toList() ??
             const [],
-        approvals: (json['approvals'] as List?)
+        approvals:
+            (json['approvals'] as List?)
                 ?.whereType<Map>()
-                .map((e) => AiPendingApproval.fromJson(Map<String, dynamic>.from(e)))
+                .map(
+                  (e) =>
+                      AiPendingApproval.fromJson(Map<String, dynamic>.from(e)),
+                )
                 .toList() ??
             const [],
       );
@@ -2366,9 +2658,9 @@ class AiPendingOverview {
   /// 把它移出了待办（`submit_jobs` / `ai_tool_calls` 的 `approval` 当场置位），
   /// 不该等"下一次轮询刚好拉回来"才从界面上消失。
   AiPendingOverview withoutApproval(String callId) => AiPendingOverview(
-        asks: asks,
-        approvals: approvals.where((a) => a.callId != callId).toList(),
-      );
+    asks: asks,
+    approvals: approvals.where((a) => a.callId != callId).toList(),
+  );
 }
 
 /// `approvals[]` 的一条 —— 正在等人批准的调用。
@@ -2406,7 +2698,8 @@ class AiPendingApproval {
     this.askedAt,
   });
 
-  factory AiPendingApproval.fromJson(Map<String, dynamic> json) => AiPendingApproval(
+  factory AiPendingApproval.fromJson(Map<String, dynamic> json) =>
+      AiPendingApproval(
         callId: (json['callId'] ?? '').toString(),
         runId: (json['runId'] ?? '').toString(),
         conversationId: (json['conversationId'] ?? '').toString(),
@@ -2471,23 +2764,28 @@ class AiPendingAsk {
   });
 
   factory AiPendingAsk.fromJson(Map<String, dynamic> json) => AiPendingAsk(
-        questionId: (json['questionId'] ?? '').toString(),
-        runId: (json['runId'] ?? '').toString(),
-        conversationId: (json['conversationId'] ?? '').toString(),
-        question: (json['question'] ?? '').toString(),
-        options: (json['options'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-        allowFreeText: json['allowFreeText'] != false,
-        answered: json['answered'] == true,
-        askedAt: (json['askedAt'] as num?)?.toInt() ?? 0,
-        index: (json['index'] as num?)?.toInt() ?? 0,
-        total: (json['total'] as num?)?.toInt() ?? 1,
-        groupId: (json['groupId'] ?? '').toString(),
-        multiSelect: json['multiSelect'] == true,
-        header: json['header']?.toString(),
-        answer: json['answer']?.toString(),
-        optionIndex: (json['optionIndex'] as num?)?.toInt(),
-        optionIndexes:
-            (json['optionIndexes'] as List?)?.whereType<num>().map((e) => e.toInt()).toList() ??
-                const [],
-      );
+    questionId: (json['questionId'] ?? '').toString(),
+    runId: (json['runId'] ?? '').toString(),
+    conversationId: (json['conversationId'] ?? '').toString(),
+    question: (json['question'] ?? '').toString(),
+    options:
+        (json['options'] as List?)?.map((e) => e.toString()).toList() ??
+        const [],
+    allowFreeText: json['allowFreeText'] != false,
+    answered: json['answered'] == true,
+    askedAt: (json['askedAt'] as num?)?.toInt() ?? 0,
+    index: (json['index'] as num?)?.toInt() ?? 0,
+    total: (json['total'] as num?)?.toInt() ?? 1,
+    groupId: (json['groupId'] ?? '').toString(),
+    multiSelect: json['multiSelect'] == true,
+    header: json['header']?.toString(),
+    answer: json['answer']?.toString(),
+    optionIndex: (json['optionIndex'] as num?)?.toInt(),
+    optionIndexes:
+        (json['optionIndexes'] as List?)
+            ?.whereType<num>()
+            .map((e) => e.toInt())
+            .toList() ??
+        const [],
+  );
 }

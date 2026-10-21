@@ -151,3 +151,22 @@ fn cancel_flag_lifecycle() {
     assert!(!executor.is_cancelled("r1"), "收尾之后旗标必须清掉（否则下一次 Run 一开就取消）");
     assert!(!executor.request_cancel("r1"));
 }
+
+/// `reason` 只给界面看：**必须摘掉**，不能漏进工具参数。
+#[test]
+fn take_reason_strips_the_ui_only_field() {
+    let mut raw = r#"{"query":"krea","reason":"先确认本机有没有这个工作流"}"#.to_string();
+    let reason = take_reason(&mut raw);
+    assert_eq!(reason.as_deref(), Some("先确认本机有没有这个工作流"));
+    let parsed: Value = serde_json::from_str(&raw).unwrap();
+    assert!(parsed.get("reason").is_none(), "reason 不许传给工具");
+    assert_eq!(parsed["query"], "krea", "其余参数一个字都不许动");
+
+    // 没写就是没有；参数不是对象时原样返回
+    let mut none = r#"{"query":"x"}"#.to_string();
+    assert!(take_reason(&mut none).is_none());
+    assert_eq!(none, r#"{"query":"x"}"#);
+    let mut array = "[1,2]".to_string();
+    assert!(take_reason(&mut array).is_none());
+    assert_eq!(array, "[1,2]");
+}

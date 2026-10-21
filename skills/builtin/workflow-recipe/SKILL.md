@@ -2,10 +2,19 @@
 name: workflow-recipe
 description: 换（新）模型时怎么接上已有的工作流骨架——把一份具体工作流"学"成配方（任务 + 骨架指纹 + 模型槽位 + 参数旋钮），再"绑"到新模型上拿 comfy_submit 的 overrides。含四档绑定结论（exact / onDiskOnly / substitute / missing）的处置、整包 checkpoint 与分离式（unet+clip+vae）接不上时的两条路、以及"缺件配方不许开跑"的判据。工具是 comfy_learn_workflow / comfy_list_recipes / comfy_bind_recipe。
 whenToUse: 用户说"出了个新模型，想用它做 XX"、"这条工作流能不能换个底模"、"这个模型该配哪条工作流"、"把这条工作流记下来下次还用"、"换个 LoRA / VAE / 文本编码器"，或者你正准备为某个新模型**从零搭一张图**时（先查有没有现成骨架）。也适用于"这份工作流是干什么的 / 它要哪些模型"这类问题。
-version: 1
+version: 2
 ---
 
 # 工作流配方：让"新模型"接上"旧骨架"
+
+> **第一纪律（2026-10-21 用户拍板）**：**不许从零编工作流**。
+> 先 `comfy_list_recipes` / `comfy_list_workflows` / `comfy_find_workflow` 找现成的；
+> 没有现成的就"学一份"（`comfy_learn_workflow`），而不是现写节点图。
+> 要改只在**副本**上改：`comfy_load_workflow` 读进库不动原文件；落盘用蓝图「保存」或
+> `write_file` 另存 `*_copy.json`。原文件一个字节都不许改。
+> 工作流里有 `TextGenerate` 时，由**你**服从它的 `system_prompt` 写终稿，
+> 再 `comfy_submit(..., positivePrompt=…)` 把正提示词写进正面编码器并断开那一路
+> （详见 skill `comfy-workflow-guide` §2）。
 
 **一句话**：工作流拆成三层 —— **任务骨架（泛用）**、**模型槽位（特定）**、**参数档位（特定）**。
 本机把学过的骨架记在 `workflow_recipes` 表里，换模型时只改槽位那几格，**不重搭图**。
@@ -45,6 +54,8 @@ version: 1
    （与配方的 `sourceRef = file:<sha256>` 是**同一把钥匙**），再
    `comfy_submit(promptId=…, overrides={…原来的槽位键换成新文件名…, 提示词 / seed 等})`。
    **配方本身不是可提交对象**（红线 R10：提交只有 `comfy_submit` 一条路）。
+   带 `TextGenerate` 的骨架：**你**按它的 `system_prompt` 写终稿，走
+   `comfy_submit(positivePrompt=…)`；不要覆盖被连线覆盖的 `text` 控件，也不要让本地 LLM 扩写。
 
 ## 四档绑定结论（每一档的处置都不一样）
 

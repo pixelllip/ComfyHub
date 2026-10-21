@@ -18,12 +18,21 @@
   这一份会被隐藏并在界面上标"冲突"；
 - 这个目录里的 Skill **不能通过界面或 AI 删除**（`DELETE /api/ai/skills/{name}` 返回
   `SKILL_READONLY`），只能停用；
-- 本目录里目前有三个**随包分发**的内置 Skill：
+- 本目录里目前有这些**随包分发**的内置 Skill：
+  `comfy-workflow-guide`（工作流第一站：判断 t2i / i2i / edit / inpaint / video 用途、
+   给用户选现有工作流、复制副本再改、TextGenerate 摘线）；
   `img2img-reference`（把用户发来的图投放进 ComfyUI 的 input 目录，再覆盖 LoadImage）；
   `inpaint-composite`（图像编辑的局部重绘：保背景换人物 / 换背景保人物 / 两阶段"先生成人物再换上去"。
    配套工具 `comfy_make_mask` + `comfy_use_media`，配套工作流 `comfyui\workflows\comfyhub_inpaint_*.json`）；
-  `krea-2`（Krea 2 提示词规则 + RAW/Turbo 官方参数 + 本机 ComfyUI 落地，
-   官方原文逐字放在它的 `references/` 里，出处/许可见那份 `SOURCES.md`）。
+  `comfy-workflow-audit`（工作流审核的判定与修法）；
+  `lora-training`（LoRA 数据集 / 打标 / 训练配方与验收）；
+  `workflow-recipe`（换新模型：学配方 / 绑模型 / 四档结论）；
+  `krea-2`（Krea 2 提示词规则 + RAW/Turbo 官方参数 + 从**用户自己保存的 krea2 工作流**落地，
+   官方原文逐字放在它的 `references/` 里，出处/许可见那份 `SOURCES.md`）；
+  `moss-image`（MOSS-Image 提示词 / Layout JSON / 参数 + 本机两份模板
+   `comfyhub_moss_{t2i,layout}.json` 的节点键与 TextGenerate 摘线）；
+  `card-writer`（角色卡 / 画风卡的双版本写作：Danbooru tag 版 + 自然语言版；
+   角色自然语言 600+ token 全身上下，画风自然语言 100~200 token；补版 / 优化 / 示例产物纪律）。
   发布包能带上它们靠 `packaging/manifest.json` 的 `skills` 组件（source/target 都是 `skills`）。
 - 用户自己的 Skill **不放这里**：拷进投放口 `<storage>\ai\skills` 就算装好
   （后端启动时 / 点「重新扫描」会自动给没有 frontmatter 的文件补登记）。

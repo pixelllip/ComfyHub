@@ -8,7 +8,7 @@ import '../state/library_store.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common.dart';
 import '../widgets/tag_editor.dart';
-import 'character_cards_page.dart';
+import 'cards_page.dart';
 import 'preset_run.dart';
 import 'prompt_detail_page.dart';
 import 'prompt_edit_page.dart';
@@ -20,7 +20,7 @@ import 'prompt_edit_page.dart';
 ///
 /// 刻意**不再**在这页做的东西（都搬到别处或删掉了）：
 ///  * 产物反查 —— 从画廊详情点进去看提示词更自然（用户原话："根据画廊页详情查找产物提示词已经足够"）；
-///  * 角色卡独立界面 —— 改成"给预设打一个 `角色卡` tag"（见 `character_cards_page.dart` 的迁移）。
+///  * 卡片库的内联编辑 —— 角色卡 / 画风卡从右上角进独立的「卡片库」子页（AI 读写同一批表）。
 class PromptsPage extends StatefulWidget {
   /// 「▶️运行」的落点：把这段文本交给 AI 工作台并跳过去。
   ///
@@ -98,13 +98,13 @@ class _PromptsPageState extends State<PromptsPage> {
               ]
             : [
                 IconButton(
-                  tooltip: '角色卡',
-                  icon: const Icon(Icons.badge_outlined),
-                  // 角色卡与提示词是同一件事的两半：写角色前先看卡里存的名称 / 正面提示词 /
-                  // 负面提示词（AI 也读同一张表）。做成子页面而不是第六个一级导航项 —— 手机窄屏
-                  // 塞不下六个图标，而且系统返回手势天然正确（见 `9480278`）。
+                  tooltip: '卡片库（角色卡 / 画风卡）',
+                  icon: const Icon(Icons.style_outlined),
+                  // 角色卡与画风卡是提示词的两类标准容器（AI 也读同一批表）：
+                  // 角色卡管"画的是谁"、画风卡管"画成什么样"。做成子页面而不是
+                  // 第六个一级导航项 —— 手机窄屏塞不下六个图标，而且系统返回手势天然正确。
                   onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const CharacterCardsPage()),
+                    MaterialPageRoute(builder: (_) => const CardsPage()),
                   ),
                 ),
                 IconButton(

@@ -49,30 +49,34 @@ class ConfinementInfo {
   });
 
   factory ConfinementInfo.fromJson(Map<String, dynamic> j) => ConfinementInfo(
-        restricted: j['restricted'] == true,
-        serverImage: j['serverImage'] as String?,
-        imageInsideProjectRoot: j['imageInsideProjectRoot'] == true,
-        blockedPaths: ((j['blockedPaths'] as List?) ?? const []).map((e) => '$e').toList(),
-        checkedPaths: ((j['checkedPaths'] as List?) ?? const []).map((e) => '$e').toList(),
-        summary: (j['summary'] ?? '') as String,
-        remedy: j['remedy'] as String?,
-      );
+    restricted: j['restricted'] == true,
+    serverImage: j['serverImage'] as String?,
+    imageInsideProjectRoot: j['imageInsideProjectRoot'] == true,
+    blockedPaths: ((j['blockedPaths'] as List?) ?? const [])
+        .map((e) => '$e')
+        .toList(),
+    checkedPaths: ((j['checkedPaths'] as List?) ?? const [])
+        .map((e) => '$e')
+        .toList(),
+    summary: (j['summary'] ?? '') as String,
+    remedy: j['remedy'] as String?,
+  );
 
   /// 一句话说明"为什么" —— **判据在前、结论在后**，别反过来。
   ///
   /// 「后端被关在项目里」那种说法太含糊（听着像 ComfyUI 出问题了），
   /// 说清是**后端映像落在运行根目录里**用户才能自己去核对。
   String get headline => restricted
-      ? (imageInsideProjectRoot
-          ? '后端映像落在运行根目录里，写不进项目外的目录'
-          : '后端写不进项目外的目录')
+      ? (imageInsideProjectRoot ? '后端映像落在运行根目录里，写不进项目外的目录' : '后端写不进项目外的目录')
       : '后端可以正常读写项目外';
 
   /// 给用户看的细节（判据 + 写不进的目录）。
   String get detail {
     final lines = <String>[];
     if (serverImage != null && serverImage!.isNotEmpty) {
-      lines.add('后端映像：$serverImage${imageInsideProjectRoot ? '（在运行根目录内）' : ''}');
+      lines.add(
+        '后端映像：$serverImage${imageInsideProjectRoot ? '（在运行根目录内）' : ''}',
+      );
     }
     if (blockedPaths.isNotEmpty) {
       lines.add('写不进：${blockedPaths.join('、')}');
@@ -103,20 +107,20 @@ class Tag {
   });
 
   factory Tag.fromJson(Map<String, dynamic> j) => Tag(
-        id: (j['id'] as num).toInt(),
-        name: (j['name'] ?? '') as String,
-        category: j['category'] as String?,
-        color: j['color'] as String?,
-        description: j['description'] as String?,
-        useCount: (j['useCount'] as num?)?.toInt() ?? 0,
-      );
+    id: (j['id'] as num).toInt(),
+    name: (j['name'] ?? '') as String,
+    category: j['category'] as String?,
+    color: j['color'] as String?,
+    description: j['description'] as String?,
+    useCount: (j['useCount'] as num?)?.toInt() ?? 0,
+  );
 
   Map<String, dynamic> toJson() => {
-        'name': name,
-        if (category != null) 'category': category,
-        if (color != null) 'color': color,
-        if (description != null) 'description': description,
-      };
+    'name': name,
+    if (category != null) 'category': category,
+    if (color != null) 'color': color,
+    if (description != null) 'description': description,
+  };
 }
 
 // ===========================================================================
@@ -141,11 +145,11 @@ PromptKind promptKindFrom(String? raw) {
 extension PromptKindX on PromptKind {
   String get wire => name.toUpperCase();
   String get label => switch (this) {
-        PromptKind.image => '生图',
-        PromptKind.video => '生视频',
-        PromptKind.audio => '生音频',
-        PromptKind.mixed => '混合',
-      };
+    PromptKind.image => '生图',
+    PromptKind.video => '生视频',
+    PromptKind.audio => '生音频',
+    PromptKind.mixed => '混合',
+  };
 }
 
 class LoraRef {
@@ -155,9 +159,9 @@ class LoraRef {
   const LoraRef({required this.name, this.weight = 1.0});
 
   factory LoraRef.fromJson(Map<String, dynamic> j) => LoraRef(
-        name: (j['name'] ?? '') as String,
-        weight: (j['weight'] as num?)?.toDouble() ?? 1.0,
-      );
+    name: (j['name'] ?? '') as String,
+    weight: (j['weight'] as num?)?.toDouble() ?? 1.0,
+  );
 
   Map<String, dynamic> toJson() => {'name': name, 'weight': weight};
 }
@@ -189,10 +193,13 @@ class Prompt {
   final String negativeMode;
 
   final bool favorite;
+
   /// 来源: Manual（手动新建）/ ComfyUI（自动捕获）/ ComfyUI-Import（历史导入）
   final String? source;
+
   /// 来源侧唯一标识（如 ComfyUI 的 prompt_id）
   final String? sourceRef;
+
   /// 后端是否存了完整工作流（决定要不要显示「查看工作流」）
   final bool hasWorkflow;
   final DateTime? createdAt;
@@ -230,63 +237,64 @@ class Prompt {
   });
 
   factory Prompt.fromJson(Map<String, dynamic> j) => Prompt(
-        id: (j['id'] as num).toInt(),
-        title: (j['title'] ?? '') as String,
-        kind: promptKindFrom(j['kind'] as String?),
-        positivePrompt: (j['positivePrompt'] ?? '') as String,
-        negativePrompt: j['negativePrompt'] as String?,
-        checkpoint: j['checkpoint'] as String?,
-        loras: ((j['loras'] as List?) ?? const [])
-            .map((e) => LoraRef.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        sampler: j['sampler'] as String?,
-        scheduler: j['scheduler'] as String?,
-        steps: (j['steps'] as num?)?.toInt(),
-        cfgScale: (j['cfgScale'] as num?)?.toDouble(),
-        seed: (j['seed'] as num?)?.toInt(),
-        width: (j['width'] as num?)?.toInt(),
-        height: (j['height'] as num?)?.toInt(),
-        batchSize: (j['batchSize'] as num?)?.toInt(),
-        extraParams: ((j['extraParams'] as Map?) ?? const {})
-            .map((k, v) => MapEntry(k.toString(), v.toString())),
-        notes: j['notes'] as String?,
-        // 老后端没有这个键时退回 keep —— **绝不能默认成只发正面**
-        // （那会悄悄丢掉用户的负面提示词，而 turbo 之外的模型很吃负面）
-        negativeMode: (j['negativeMode'] as String?) ?? 'keep',
-        favorite: (j['favorite'] as bool?) ?? false,
-        source: j['source'] as String?,
-        sourceRef: j['sourceRef'] as String?,
-        hasWorkflow: (j['hasWorkflow'] as bool?) ?? false,
-        createdAt: _dt(j['createdAt']),
-        updatedAt: _dt(j['updatedAt']),
-        tags: ((j['tags'] as List?) ?? const [])
-            .map((e) => Tag.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        mediaCount: (j['mediaCount'] as num?)?.toInt() ?? 0,
-      );
+    id: (j['id'] as num).toInt(),
+    title: (j['title'] ?? '') as String,
+    kind: promptKindFrom(j['kind'] as String?),
+    positivePrompt: (j['positivePrompt'] ?? '') as String,
+    negativePrompt: j['negativePrompt'] as String?,
+    checkpoint: j['checkpoint'] as String?,
+    loras: ((j['loras'] as List?) ?? const [])
+        .map((e) => LoraRef.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    sampler: j['sampler'] as String?,
+    scheduler: j['scheduler'] as String?,
+    steps: (j['steps'] as num?)?.toInt(),
+    cfgScale: (j['cfgScale'] as num?)?.toDouble(),
+    seed: (j['seed'] as num?)?.toInt(),
+    width: (j['width'] as num?)?.toInt(),
+    height: (j['height'] as num?)?.toInt(),
+    batchSize: (j['batchSize'] as num?)?.toInt(),
+    extraParams: ((j['extraParams'] as Map?) ?? const {}).map(
+      (k, v) => MapEntry(k.toString(), v.toString()),
+    ),
+    notes: j['notes'] as String?,
+    // 老后端没有这个键时退回 keep —— **绝不能默认成只发正面**
+    // （那会悄悄丢掉用户的负面提示词，而 turbo 之外的模型很吃负面）
+    negativeMode: (j['negativeMode'] as String?) ?? 'keep',
+    favorite: (j['favorite'] as bool?) ?? false,
+    source: j['source'] as String?,
+    sourceRef: j['sourceRef'] as String?,
+    hasWorkflow: (j['hasWorkflow'] as bool?) ?? false,
+    createdAt: _dt(j['createdAt']),
+    updatedAt: _dt(j['updatedAt']),
+    tags: ((j['tags'] as List?) ?? const [])
+        .map((e) => Tag.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    mediaCount: (j['mediaCount'] as num?)?.toInt() ?? 0,
+  );
 
   /// 用于 POST/PUT 的请求体
   Map<String, dynamic> toInputJson() => {
-        'title': title,
-        'kind': kind.wire,
-        'positivePrompt': positivePrompt,
-        'negativePrompt': negativePrompt,
-        'checkpoint': checkpoint,
-        'loras': loras.map((e) => e.toJson()).toList(),
-        'sampler': sampler,
-        'scheduler': scheduler,
-        'steps': steps,
-        'cfgScale': cfgScale,
-        'seed': seed,
-        'width': width,
-        'height': height,
-        'batchSize': batchSize,
-        'extraParams': extraParams,
-        'notes': notes,
-        'negativeMode': negativeMode,
-        'favorite': favorite,
-        'tags': tags.map((e) => e.name).toList(),
-      };
+    'title': title,
+    'kind': kind.wire,
+    'positivePrompt': positivePrompt,
+    'negativePrompt': negativePrompt,
+    'checkpoint': checkpoint,
+    'loras': loras.map((e) => e.toJson()).toList(),
+    'sampler': sampler,
+    'scheduler': scheduler,
+    'steps': steps,
+    'cfgScale': cfgScale,
+    'seed': seed,
+    'width': width,
+    'height': height,
+    'batchSize': batchSize,
+    'extraParams': extraParams,
+    'notes': notes,
+    'negativeMode': negativeMode,
+    'favorite': favorite,
+    'tags': tags.map((e) => e.name).toList(),
+  };
 
   Prompt copyWith({
     int? id,
@@ -311,43 +319,42 @@ class Prompt {
     bool? hasWorkflow,
     List<Tag>? tags,
     int? mediaCount,
-  }) =>
-      Prompt(
-        id: id ?? this.id,
-        title: title ?? this.title,
-        kind: kind ?? this.kind,
-        positivePrompt: positivePrompt ?? this.positivePrompt,
-        negativePrompt: negativePrompt ?? this.negativePrompt,
-        checkpoint: checkpoint ?? this.checkpoint,
-        loras: loras ?? this.loras,
-        sampler: sampler ?? this.sampler,
-        scheduler: scheduler ?? this.scheduler,
-        steps: steps ?? this.steps,
-        cfgScale: cfgScale ?? this.cfgScale,
-        seed: seed ?? this.seed,
-        width: width ?? this.width,
-        height: height ?? this.height,
-        batchSize: batchSize ?? this.batchSize,
-        extraParams: extraParams ?? this.extraParams,
-        notes: notes ?? this.notes,
-        negativeMode: negativeMode ?? this.negativeMode,
-        favorite: favorite ?? this.favorite,
-        source: source,
-        sourceRef: sourceRef,
-        hasWorkflow: hasWorkflow ?? this.hasWorkflow,
-        createdAt: createdAt,
-        updatedAt: updatedAt,
-        tags: tags ?? this.tags,
-        mediaCount: mediaCount ?? this.mediaCount,
-      );
+  }) => Prompt(
+    id: id ?? this.id,
+    title: title ?? this.title,
+    kind: kind ?? this.kind,
+    positivePrompt: positivePrompt ?? this.positivePrompt,
+    negativePrompt: negativePrompt ?? this.negativePrompt,
+    checkpoint: checkpoint ?? this.checkpoint,
+    loras: loras ?? this.loras,
+    sampler: sampler ?? this.sampler,
+    scheduler: scheduler ?? this.scheduler,
+    steps: steps ?? this.steps,
+    cfgScale: cfgScale ?? this.cfgScale,
+    seed: seed ?? this.seed,
+    width: width ?? this.width,
+    height: height ?? this.height,
+    batchSize: batchSize ?? this.batchSize,
+    extraParams: extraParams ?? this.extraParams,
+    notes: notes ?? this.notes,
+    negativeMode: negativeMode ?? this.negativeMode,
+    favorite: favorite ?? this.favorite,
+    source: source,
+    sourceRef: sourceRef,
+    hasWorkflow: hasWorkflow ?? this.hasWorkflow,
+    createdAt: createdAt,
+    updatedAt: updatedAt,
+    tags: tags ?? this.tags,
+    mediaCount: mediaCount ?? this.mediaCount,
+  );
 
   /// 空白草稿
   static Prompt draft() => const Prompt(
-        id: 0,
-        title: '',
-        kind: PromptKind.image,
-        positivePrompt: '',
-      );
+    id: 0,
+    title: '',
+    kind: PromptKind.image,
+    positivePrompt: '',
+  );
 }
 
 // ===========================================================================
@@ -370,10 +377,10 @@ MediaKind mediaKindFrom(String? raw) {
 extension MediaKindX on MediaKind {
   String get wire => name.toUpperCase();
   String get label => switch (this) {
-        MediaKind.image => '图片',
-        MediaKind.video => '视频',
-        MediaKind.audio => '音频',
-      };
+    MediaKind.image => '图片',
+    MediaKind.video => '视频',
+    MediaKind.audio => '音频',
+  };
 }
 
 class MediaAsset {
@@ -467,43 +474,43 @@ class MediaAsset {
   });
 
   factory MediaAsset.fromJson(Map<String, dynamic> j) => MediaAsset(
-        id: (j['id'] as num).toInt(),
-        promptId: (j['promptId'] as num?)?.toInt(),
-        kind: mediaKindFrom(j['kind'] as String?),
-        title: (j['title'] ?? '') as String,
-        originalName: (j['originalName'] ?? '') as String,
-        storedName: (j['storedName'] ?? '') as String,
-        mimeType: j['mimeType'] as String?,
-        sizeBytes: (j['sizeBytes'] as num?)?.toInt() ?? 0,
-        width: (j['width'] as num?)?.toInt(),
-        height: (j['height'] as num?)?.toInt(),
-        durationMs: (j['durationMs'] as num?)?.toInt(),
-        sha256: j['sha256'] as String?,
-        source: j['source'] as String?,
-        sourceRef: j['sourceRef'] as String?,
-        hasWorkflow: (j['hasWorkflow'] as bool?) ?? false,
-        favorite: (j['favorite'] as bool?) ?? false,
-        nsfw: (j['nsfw'] as bool?) ?? false,
-        notes: j['notes'] as String?,
-        createdAt: _dt(j['createdAt']),
-        updatedAt: _dt(j['updatedAt']),
-        promptTitle: j['promptTitle'] as String?,
-        promptPositive: j['promptPositive'] as String?,
-        promptNegative: j['promptNegative'] as String?,
-        checkpoint: j['checkpoint'] as String?,
-        seed: (j['seed'] as num?)?.toInt(),
-        promptTags: ((j['promptTags'] as List?) ?? const [])
-            .map((e) => e.toString())
-            .toList(),
-        collectionId: (j['collectionId'] as num?)?.toInt(),
-        // 后端保证 ≥ 1；老后端没有这个键时退回 1（按普通格子显示，不会误叠放）
-        collectionSize: (j['collectionSize'] as num?)?.toInt() ?? 1,
-        collectionPreview: ((j['collectionPreview'] as List?) ?? const [])
-            .map((e) => (e as num).toInt())
-            .toList(),
-        fileUrl: (j['fileUrl'] ?? '') as String,
-        thumbUrl: j['thumbUrl'] as String?,
-      );
+    id: (j['id'] as num).toInt(),
+    promptId: (j['promptId'] as num?)?.toInt(),
+    kind: mediaKindFrom(j['kind'] as String?),
+    title: (j['title'] ?? '') as String,
+    originalName: (j['originalName'] ?? '') as String,
+    storedName: (j['storedName'] ?? '') as String,
+    mimeType: j['mimeType'] as String?,
+    sizeBytes: (j['sizeBytes'] as num?)?.toInt() ?? 0,
+    width: (j['width'] as num?)?.toInt(),
+    height: (j['height'] as num?)?.toInt(),
+    durationMs: (j['durationMs'] as num?)?.toInt(),
+    sha256: j['sha256'] as String?,
+    source: j['source'] as String?,
+    sourceRef: j['sourceRef'] as String?,
+    hasWorkflow: (j['hasWorkflow'] as bool?) ?? false,
+    favorite: (j['favorite'] as bool?) ?? false,
+    nsfw: (j['nsfw'] as bool?) ?? false,
+    notes: j['notes'] as String?,
+    createdAt: _dt(j['createdAt']),
+    updatedAt: _dt(j['updatedAt']),
+    promptTitle: j['promptTitle'] as String?,
+    promptPositive: j['promptPositive'] as String?,
+    promptNegative: j['promptNegative'] as String?,
+    checkpoint: j['checkpoint'] as String?,
+    seed: (j['seed'] as num?)?.toInt(),
+    promptTags: ((j['promptTags'] as List?) ?? const [])
+        .map((e) => e.toString())
+        .toList(),
+    collectionId: (j['collectionId'] as num?)?.toInt(),
+    // 后端保证 ≥ 1；老后端没有这个键时退回 1（按普通格子显示，不会误叠放）
+    collectionSize: (j['collectionSize'] as num?)?.toInt() ?? 1,
+    collectionPreview: ((j['collectionPreview'] as List?) ?? const [])
+        .map((e) => (e as num).toInt())
+        .toList(),
+    fileUrl: (j['fileUrl'] ?? '') as String,
+    thumbUrl: j['thumbUrl'] as String?,
+  );
 
   bool get hasPrompt => promptId != null;
 
@@ -522,8 +529,10 @@ class MediaAsset {
 class MediaCollection {
   final int id;
   final String kind;
+
   /// `auto` / `manual`
   final String origin;
+
   /// 用户起的名字。算法分出来的为 null。
   final String? title;
   final int size;
@@ -545,9 +554,11 @@ class MediaCollection {
   }
 
   /// 装不装得下 [mediaKind]（一个集合只装一种，用户 2026-10-18 拍板）。
-  bool accepts(String mediaKind) => kind.toUpperCase() == mediaKind.toUpperCase();
+  bool accepts(String mediaKind) =>
+      kind.toUpperCase() == mediaKind.toUpperCase();
 
-  factory MediaCollection.fromJson(Map<String, dynamic> json) => MediaCollection(
+  factory MediaCollection.fromJson(Map<String, dynamic> json) =>
+      MediaCollection(
         id: (json['id'] as num).toInt(),
         kind: (json['kind'] ?? 'IMAGE').toString(),
         origin: (json['origin'] ?? 'auto').toString(),
@@ -575,16 +586,18 @@ class Paged<T> {
     required this.pages,
   });
 
-  factory Paged.fromJson(Map<String, dynamic> j, T Function(Map<String, dynamic>) item) =>
-      Paged(
-        items: ((j['items'] as List?) ?? const [])
-            .map((e) => item(e as Map<String, dynamic>))
-            .toList(),
-        total: (j['total'] as num?)?.toInt() ?? 0,
-        page: (j['page'] as num?)?.toInt() ?? 1,
-        size: (j['size'] as num?)?.toInt() ?? 20,
-        pages: (j['pages'] as num?)?.toInt() ?? 0,
-      );
+  factory Paged.fromJson(
+    Map<String, dynamic> j,
+    T Function(Map<String, dynamic>) item,
+  ) => Paged(
+    items: ((j['items'] as List?) ?? const [])
+        .map((e) => item(e as Map<String, dynamic>))
+        .toList(),
+    total: (j['total'] as num?)?.toInt() ?? 0,
+    page: (j['page'] as num?)?.toInt() ?? 1,
+    size: (j['size'] as num?)?.toInt() ?? 20,
+    pages: (j['pages'] as num?)?.toInt() ?? 0,
+  );
 
   static Paged<T> empty<T>() =>
       Paged<T>(items: const [], total: 0, page: 1, size: 20, pages: 0);
@@ -604,17 +617,17 @@ class UploadResult {
   });
 
   factory UploadResult.fromJson(Map<String, dynamic> j) => UploadResult(
-        items: ((j['items'] as List?) ?? const [])
-            .map((e) => MediaAsset.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        duplicates: ((j['duplicates'] as List?) ?? const [])
-            .map((e) => (e as Map).cast<String, dynamic>())
-            .toList(),
-        failed: ((j['failed'] as List?) ?? const [])
-            .map((e) => (e as Map).cast<String, dynamic>())
-            .toList(),
-        promptId: (j['promptId'] as num?)?.toInt(),
-      );
+    items: ((j['items'] as List?) ?? const [])
+        .map((e) => MediaAsset.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    duplicates: ((j['duplicates'] as List?) ?? const [])
+        .map((e) => (e as Map).cast<String, dynamic>())
+        .toList(),
+    failed: ((j['failed'] as List?) ?? const [])
+        .map((e) => (e as Map).cast<String, dynamic>())
+        .toList(),
+    promptId: (j['promptId'] as num?)?.toInt(),
+  );
 }
 
 class LibraryStats {
@@ -637,16 +650,18 @@ class LibraryStats {
   });
 
   factory LibraryStats.fromJson(Map<String, dynamic> j) => LibraryStats(
-        prompts: (j['prompts'] as num?)?.toInt() ?? 0,
-        media: (j['media'] as num?)?.toInt() ?? 0,
-        tags: (j['tags'] as num?)?.toInt() ?? 0,
-        favoritePrompts: (j['favoritePrompts'] as num?)?.toInt() ?? 0,
-        favoriteMedia: (j['favoriteMedia'] as num?)?.toInt() ?? 0,
-        byKind: ((j['byKind'] as Map?) ?? const {})
-            .map((k, v) => MapEntry(k.toString(), (v as num).toInt())),
-        byMediaKind: ((j['byMediaKind'] as Map?) ?? const {})
-            .map((k, v) => MapEntry(k.toString(), (v as num).toInt())),
-      );
+    prompts: (j['prompts'] as num?)?.toInt() ?? 0,
+    media: (j['media'] as num?)?.toInt() ?? 0,
+    tags: (j['tags'] as num?)?.toInt() ?? 0,
+    favoritePrompts: (j['favoritePrompts'] as num?)?.toInt() ?? 0,
+    favoriteMedia: (j['favoriteMedia'] as num?)?.toInt() ?? 0,
+    byKind: ((j['byKind'] as Map?) ?? const {}).map(
+      (k, v) => MapEntry(k.toString(), (v as num).toInt()),
+    ),
+    byMediaKind: ((j['byMediaKind'] as Map?) ?? const {}).map(
+      (k, v) => MapEntry(k.toString(), (v as num).toInt()),
+    ),
+  );
 }
 
 // ===========================================================================
@@ -657,13 +672,17 @@ class LibraryStats {
 class CaptureConfig {
   final bool enabled;
   final String comfyUrl;
+
   /// ComfyUI 输出目录；填了就能直接读本地文件，省掉一次 HTTP 下载
   final String? outputDir;
   final int pollSeconds;
+
   /// 捕获到的提示词自动打上的标签
   final String autoTag;
+
   /// 一轮轮询最多处理几条未捕获的运行
   final int maxPerPoll;
+
   /// 本地文件找不到时是否回退到 HTTP 下载
   final bool downloadFallback;
 
@@ -678,26 +697,26 @@ class CaptureConfig {
   });
 
   factory CaptureConfig.fromJson(Map<String, dynamic> j) => CaptureConfig(
-        enabled: (j['enabled'] as bool?) ?? true,
-        comfyUrl: (j['comfyUrl'] ?? 'http://127.0.0.1:8188') as String,
-        outputDir: (j['outputDir'] as String?)?.trim().isEmpty ?? true
-            ? null
-            : (j['outputDir'] as String).trim(),
-        pollSeconds: (j['pollSeconds'] as num?)?.toInt() ?? 4,
-        autoTag: (j['autoTag'] ?? 'ComfyUI') as String,
-        maxPerPoll: (j['maxPerPoll'] as num?)?.toInt() ?? 20,
-        downloadFallback: (j['downloadFallback'] as bool?) ?? true,
-      );
+    enabled: (j['enabled'] as bool?) ?? true,
+    comfyUrl: (j['comfyUrl'] ?? 'http://127.0.0.1:8188') as String,
+    outputDir: (j['outputDir'] as String?)?.trim().isEmpty ?? true
+        ? null
+        : (j['outputDir'] as String).trim(),
+    pollSeconds: (j['pollSeconds'] as num?)?.toInt() ?? 4,
+    autoTag: (j['autoTag'] ?? 'ComfyUI') as String,
+    maxPerPoll: (j['maxPerPoll'] as num?)?.toInt() ?? 20,
+    downloadFallback: (j['downloadFallback'] as bool?) ?? true,
+  );
 
   Map<String, dynamic> toJson() => {
-        'enabled': enabled,
-        'comfyUrl': comfyUrl,
-        'outputDir': outputDir,
-        'pollSeconds': pollSeconds,
-        'autoTag': autoTag,
-        'maxPerPoll': maxPerPoll,
-        'downloadFallback': downloadFallback,
-      };
+    'enabled': enabled,
+    'comfyUrl': comfyUrl,
+    'outputDir': outputDir,
+    'pollSeconds': pollSeconds,
+    'autoTag': autoTag,
+    'maxPerPoll': maxPerPoll,
+    'downloadFallback': downloadFallback,
+  };
 
   CaptureConfig copyWith({
     bool? enabled,
@@ -708,16 +727,15 @@ class CaptureConfig {
     String? autoTag,
     int? maxPerPoll,
     bool? downloadFallback,
-  }) =>
-      CaptureConfig(
-        enabled: enabled ?? this.enabled,
-        comfyUrl: comfyUrl ?? this.comfyUrl,
-        outputDir: clearOutputDir ? null : (outputDir ?? this.outputDir),
-        pollSeconds: pollSeconds ?? this.pollSeconds,
-        autoTag: autoTag ?? this.autoTag,
-        maxPerPoll: maxPerPoll ?? this.maxPerPoll,
-        downloadFallback: downloadFallback ?? this.downloadFallback,
-      );
+  }) => CaptureConfig(
+    enabled: enabled ?? this.enabled,
+    comfyUrl: comfyUrl ?? this.comfyUrl,
+    outputDir: clearOutputDir ? null : (outputDir ?? this.outputDir),
+    pollSeconds: pollSeconds ?? this.pollSeconds,
+    autoTag: autoTag ?? this.autoTag,
+    maxPerPoll: maxPerPoll ?? this.maxPerPoll,
+    downloadFallback: downloadFallback ?? this.downloadFallback,
+  );
 }
 
 class CaptureRunInfo {
@@ -740,14 +758,14 @@ class CaptureRunInfo {
   });
 
   factory CaptureRunInfo.fromJson(Map<String, dynamic> j) => CaptureRunInfo(
-        runKey: (j['runKey'] ?? '') as String,
-        promptId: (j['promptId'] as num?)?.toInt(),
-        status: (j['status'] ?? 'success') as String,
-        mediaCount: (j['mediaCount'] as num?)?.toInt() ?? 0,
-        title: j['title'] as String?,
-        error: j['error'] as String?,
-        capturedAt: _dt(j['capturedAt']),
-      );
+    runKey: (j['runKey'] ?? '') as String,
+    promptId: (j['promptId'] as num?)?.toInt(),
+    status: (j['status'] ?? 'success') as String,
+    mediaCount: (j['mediaCount'] as num?)?.toInt() ?? 0,
+    title: j['title'] as String?,
+    error: j['error'] as String?,
+    capturedAt: _dt(j['capturedAt']),
+  );
 }
 
 class CaptureStatus {
@@ -778,20 +796,20 @@ class CaptureStatus {
   });
 
   factory CaptureStatus.fromJson(Map<String, dynamic> j) => CaptureStatus(
-        enabled: (j['enabled'] as bool?) ?? false,
-        comfyUrl: (j['comfyUrl'] ?? '') as String,
-        outputDir: j['outputDir'] as String?,
-        comfyReachable: (j['comfyReachable'] as bool?) ?? false,
-        queueRunning: (j['queueRunning'] as num?)?.toInt() ?? 0,
-        queuePending: (j['queuePending'] as num?)?.toInt() ?? 0,
-        lastPollAt: _dt(j['lastPollAt']),
-        lastError: j['lastError'] as String?,
-        capturedRuns: (j['capturedRuns'] as num?)?.toInt() ?? 0,
-        capturedMedia: (j['capturedMedia'] as num?)?.toInt() ?? 0,
-        recent: ((j['recent'] as List?) ?? const [])
-            .map((e) => CaptureRunInfo.fromJson((e as Map).cast<String, dynamic>()))
-            .toList(),
-      );
+    enabled: (j['enabled'] as bool?) ?? false,
+    comfyUrl: (j['comfyUrl'] ?? '') as String,
+    outputDir: j['outputDir'] as String?,
+    comfyReachable: (j['comfyReachable'] as bool?) ?? false,
+    queueRunning: (j['queueRunning'] as num?)?.toInt() ?? 0,
+    queuePending: (j['queuePending'] as num?)?.toInt() ?? 0,
+    lastPollAt: _dt(j['lastPollAt']),
+    lastError: j['lastError'] as String?,
+    capturedRuns: (j['capturedRuns'] as num?)?.toInt() ?? 0,
+    capturedMedia: (j['capturedMedia'] as num?)?.toInt() ?? 0,
+    recent: ((j['recent'] as List?) ?? const [])
+        .map((e) => CaptureRunInfo.fromJson((e as Map).cast<String, dynamic>()))
+        .toList(),
+  );
 }
 
 /// ComfyUI 安装位置探测结果（用户"其他建议"第 3 条）。
@@ -824,20 +842,23 @@ class ComfyLocation {
   });
 
   factory ComfyLocation.fromJson(Map<String, dynamic> j) => ComfyLocation(
-        home: j['home'] as String?,
-        outputDir: j['outputDir'] as String?,
-        source: j['source'] as String?,
-        configuredOutputDir: j['configuredOutputDir'] as String?,
-        note: j['note'] as String?,
-      );
+    home: j['home'] as String?,
+    outputDir: j['outputDir'] as String?,
+    source: j['source'] as String?,
+    configuredOutputDir: j['configuredOutputDir'] as String?,
+    note: j['note'] as String?,
+  );
 
   /// 探测到了可以直接用的输出目录，且和当前配置不一样。
   bool get canApply =>
-      outputDir != null && outputDir!.isNotEmpty && outputDir != configuredOutputDir;
+      outputDir != null &&
+      outputDir!.isNotEmpty &&
+      outputDir != configuredOutputDir;
 }
 
 class CapturePollResult {
-  final bool ok;  final int checked;
+  final bool ok;
+  final int checked;
   final int newRuns;
   final int newMedia;
   final String? message;
@@ -850,7 +871,8 @@ class CapturePollResult {
     this.message,
   });
 
-  factory CapturePollResult.fromJson(Map<String, dynamic> j) => CapturePollResult(
+  factory CapturePollResult.fromJson(Map<String, dynamic> j) =>
+      CapturePollResult(
         ok: (j['ok'] as bool?) ?? false,
         checked: (j['checked'] as num?)?.toInt() ?? 0,
         newRuns: (j['newRuns'] as num?)?.toInt() ?? 0,
@@ -882,14 +904,17 @@ class ImportFolderResult {
     this.errors = const [],
   });
 
-  factory ImportFolderResult.fromJson(Map<String, dynamic> j) => ImportFolderResult(
+  factory ImportFolderResult.fromJson(Map<String, dynamic> j) =>
+      ImportFolderResult(
         dir: (j['dir'] ?? '') as String,
         scanned: (j['scanned'] as num?)?.toInt() ?? 0,
         imported: (j['imported'] as num?)?.toInt() ?? 0,
         duplicates: (j['duplicates'] as num?)?.toInt() ?? 0,
         failed: (j['failed'] as num?)?.toInt() ?? 0,
         promptsCreated: (j['promptsCreated'] as num?)?.toInt() ?? 0,
-        errors: ((j['errors'] as List?) ?? const []).map((e) => e.toString()).toList(),
+        errors: ((j['errors'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
       );
 
   String get summary =>
@@ -923,8 +948,11 @@ class ImportWorkflowsResult {
     this.message,
   });
 
-  factory ImportWorkflowsResult.fromJson(Map<String, dynamic> j) => ImportWorkflowsResult(
-        dirs: ((j['dirs'] as List?) ?? const []).map((e) => e.toString()).toList(),
+  factory ImportWorkflowsResult.fromJson(Map<String, dynamic> j) =>
+      ImportWorkflowsResult(
+        dirs: ((j['dirs'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
         scanned: (j['scanned'] as num?)?.toInt() ?? 0,
         imported: (j['imported'] as num?)?.toInt() ?? 0,
         duplicates: (j['duplicates'] as num?)?.toInt() ?? 0,
@@ -936,10 +964,86 @@ class ImportWorkflowsResult {
       );
 
   String get summary {
-    final base = message ??
+    final base =
+        message ??
         '扫描 $scanned 份工作流文件：新导入 $imported，已在库里 $duplicates，失败 $failed';
     return dirs.isEmpty ? base : '$base（目录：${dirs.join("、")}）';
   }
+}
+
+/// 本机 ComfyUI 里已保存的一份工作流文件（`GET /api/capture/workflows`）。
+///
+/// **只读**：列表来自磁盘扫描，`path` 是「看蓝图 / 让 AI 用它」的唯一钥匙。
+class ComfyWorkflowFile {
+  final String name;
+  final String path;
+  final int bytes;
+  final String modifiedAt;
+
+  /// `ui`（界面格式） / `api`（API 节点图） / `unknown`
+  final String format;
+  final bool inLibrary;
+  final int? promptId;
+
+  const ComfyWorkflowFile({
+    required this.name,
+    required this.path,
+    this.bytes = 0,
+    this.modifiedAt = '',
+    this.format = 'unknown',
+    this.inLibrary = false,
+    this.promptId,
+  });
+
+  factory ComfyWorkflowFile.fromJson(Map<String, dynamic> j) =>
+      ComfyWorkflowFile(
+        name: (j['name'] ?? '').toString(),
+        path: (j['path'] ?? '').toString(),
+        bytes: (j['bytes'] as num?)?.toInt() ?? 0,
+        modifiedAt: (j['modifiedAt'] ?? '').toString(),
+        format: (j['format'] ?? 'unknown').toString(),
+        inLibrary: j['inLibrary'] == true,
+        promptId: (j['promptId'] as num?)?.toInt(),
+      );
+
+  String get sizeLabel => bytes >= 1024 * 1024
+      ? '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB'
+      : '${(bytes / 1024).toStringAsFixed(0)} KB';
+
+  String get formatLabel => switch (format) {
+    'ui' => '界面格式',
+    'api' => 'API 格式',
+    _ => '未知格式',
+  };
+}
+
+/// `GET /api/capture/workflows` 的结果（文件清单 + 一句给用户看的话）。
+class ComfyWorkflowList {
+  final List<ComfyWorkflowFile> files;
+  final List<String> dirs;
+  final int total;
+  final String? message;
+
+  const ComfyWorkflowList({
+    this.files = const [],
+    this.dirs = const [],
+    this.total = 0,
+    this.message,
+  });
+
+  factory ComfyWorkflowList.fromJson(
+    Map<String, dynamic> j,
+  ) => ComfyWorkflowList(
+    files: ((j['files'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => ComfyWorkflowFile.fromJson(Map<String, dynamic>.from(e)))
+        .toList(),
+    dirs: ((j['dirs'] as List?) ?? const []).map((e) => e.toString()).toList(),
+    total: (j['total'] as num?)?.toInt() ?? 0,
+    message: j['message']?.toString(),
+  );
+
+  bool get isEmpty => files.isEmpty;
 }
 
 // ===========================================================================

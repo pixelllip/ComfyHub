@@ -36,9 +36,12 @@ class ApiClient {
   /// 桌面侧它恒为 `null`（没有任何东西会写那个缓存）→ 请求与以前**逐字节相同**。
   final String? Function()? tokenProvider;
 
-  ApiClient(this.baseUrl, {http.Client? client, String? Function()? tokenProvider})
-      : tokenProvider = tokenProvider ?? PairingTokenCache.read,
-        _client = client ?? http.Client();
+  ApiClient(
+    this.baseUrl, {
+    http.Client? client,
+    String? Function()? tokenProvider,
+  }) : tokenProvider = tokenProvider ?? PairingTokenCache.read,
+       _client = client ?? http.Client();
 
   void dispose() => _client.close();
 
@@ -57,7 +60,8 @@ class ApiClient {
       if (s.isEmpty) return;
       q[k] = s;
     });
-    return Uri.parse('$baseUrl$path').replace(queryParameters: q.isEmpty ? null : q);
+    return Uri.parse('$baseUrl$path')
+        .replace(queryParameters: q.isEmpty ? null : q);
   }
 
   /// 把后端的相对路径（/api/media/1/file）拼成完整 URL
@@ -65,9 +69,9 @@ class ApiClient {
       relative.startsWith('http') ? relative : '$baseUrl$relative';
 
   Map<String, String> get _jsonHeaders => const {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Accept': 'application/json',
-      };
+    'Content-Type': 'application/json; charset=utf-8',
+    'Accept': 'application/json',
+  };
 
   dynamic _decode(http.Response res) {
     final body = utf8.decode(res.bodyBytes);
@@ -84,13 +88,17 @@ class ApiClient {
     final msg = (json is Map && json['error'] != null)
         ? json['error'].toString()
         : 'HTTP ${res.statusCode}';
-    final detail = (json is Map && json['detail'] != null) ? json['detail'].toString() : null;
+    final detail = (json is Map && json['detail'] != null)
+        ? json['detail'].toString()
+        : null;
     throw ApiException(res.statusCode, msg, detail);
   }
 
   Future<dynamic> _get(String path, [Map<String, dynamic>? query]) async {
     try {
-      return _decode(await _client.get(_uri(path, query), headers: _authHeaders()));
+      return _decode(
+        await _client.get(_uri(path, query), headers: _authHeaders()),
+      );
     } on SocketException catch (e) {
       throw ApiException(0, '无法连接后端 $baseUrl', e.message);
     }
@@ -131,8 +139,9 @@ class ApiClient {
     }
   }
 
-  Future<LibraryStats> stats() async =>
-      LibraryStats.fromJson(Map<String, dynamic>.from(await _get('/api/stats') as Map));
+  Future<LibraryStats> stats() async => LibraryStats.fromJson(
+    Map<String, dynamic>.from(await _get('/api/stats') as Map),
+  );
 
   // -------------------------------------------------------------------------
   //  提示词
@@ -166,33 +175,54 @@ class ApiClient {
     );
   }
 
-  Future<Prompt> getPrompt(int id) async =>
-      Prompt.fromJson(Map<String, dynamic>.from(await _get('/api/prompts/$id') as Map));
+  Future<Prompt> getPrompt(int id) async => Prompt.fromJson(
+    Map<String, dynamic>.from(await _get('/api/prompts/$id') as Map),
+  );
 
-  Future<Prompt> createPrompt(Prompt p) async => Prompt.fromJson(      Map<String, dynamic>.from(await _send('POST', '/api/prompts', p.toInputJson()) as Map));
+  Future<Prompt> createPrompt(Prompt p) async => Prompt.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/prompts', p.toInputJson()) as Map,
+    ),
+  );
 
-  Future<Prompt> updatePrompt(Prompt p) async => Prompt.fromJson(Map<String, dynamic>.from(
-      await _send('PUT', '/api/prompts/${p.id}', p.toInputJson()) as Map));
+  Future<Prompt> updatePrompt(Prompt p) async => Prompt.fromJson(
+    Map<String, dynamic>.from(
+      await _send('PUT', '/api/prompts/${p.id}', p.toInputJson()) as Map,
+    ),
+  );
 
-  Future<void> deletePrompt(int id) async => _send('DELETE', '/api/prompts/$id', null);
+  Future<void> deletePrompt(int id) async =>
+      _send('DELETE', '/api/prompts/$id', null);
 
-  Future<Prompt> duplicatePrompt(int id) async => Prompt.fromJson(Map<String, dynamic>.from(
-      await _send('POST', '/api/prompts/$id/duplicate', null) as Map));
+  Future<Prompt> duplicatePrompt(int id) async => Prompt.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/prompts/$id/duplicate', null) as Map,
+    ),
+  );
 
   Future<void> setPromptFavorite(int id, bool favorite) async =>
       _send('POST', '/api/prompts/$id/favorite', {'favorite': favorite});
 
   Future<Prompt> addPromptTags(int id, List<String> tags) async =>
-      Prompt.fromJson(Map<String, dynamic>.from(
-          await _send('POST', '/api/prompts/$id/tags', {'tags': tags}) as Map));
+      Prompt.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/prompts/$id/tags', {'tags': tags}) as Map,
+        ),
+      );
 
   Future<Prompt> removePromptTag(int promptId, int tagId) async =>
-      Prompt.fromJson(Map<String, dynamic>.from(
-          await _send('DELETE', '/api/prompts/$promptId/tags/$tagId', null) as Map));
+      Prompt.fromJson(
+        Map<String, dynamic>.from(
+          await _send('DELETE', '/api/prompts/$promptId/tags/$tagId', null)
+              as Map,
+        ),
+      );
 
   Future<List<MediaAsset>> promptMedia(int id) async {
     final json = await _get('/api/prompts/$id/media') as List;
-    return json.map((e) => MediaAsset.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+    return json
+        .map((e) => MediaAsset.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
   }
 
   /// 与这条**预设**同款提示词的产物（按归一化后的提示词匹配，2026-10-11）。
@@ -202,43 +232,72 @@ class ApiClient {
   /// 正是用户要看到的那些。
   Future<List<MediaAsset>> presetMedia(int id) async {
     final json = await _get('/api/presets/$id/media') as List;
-    return json.map((e) => MediaAsset.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+    return json
+        .map((e) => MediaAsset.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
   }
 
   // -------------------------------------------------------------------------
   //  标签
   // -------------------------------------------------------------------------
 
-  Future<List<Tag>> listTags({String? q, String? category, String sort = 'popular', int limit = 500}) async {
+  Future<List<Tag>> listTags({
+    String? q,
+    String? category,
+    String sort = 'popular',
+    int limit = 500,
+  }) async {
     final json = await _get('/api/tags', {
       'q': q,
       'category': category,
       'sort': sort,
       'limit': limit,
     }) as List;
-    return json.map((e) => Tag.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+    return json
+        .map((e) => Tag.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
   }
 
   Future<List<String>> tagCategories() async =>
-      (await _get('/api/tags/categories') as List).map((e) => e.toString()).toList();
+      (await _get('/api/tags/categories') as List)
+          .map((e) => e.toString())
+          .toList();
 
-  Future<Tag> createTag(String name, {String? category, String? color, String? description}) async =>
-      Tag.fromJson(Map<String, dynamic>.from(await _send('POST', '/api/tags', {
+  Future<Tag> createTag(
+    String name, {
+    String? category,
+    String? color,
+    String? description,
+  }) async => Tag.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/tags', {
         'name': name,
         'category': category,
         'color': color,
         'description': description,
-      }) as Map));
+      }) as Map,
+    ),
+  );
 
-  Future<Tag> updateTag(int id, String name, {String? category, String? color, String? description}) async =>
-      Tag.fromJson(Map<String, dynamic>.from(await _send('PUT', '/api/tags/$id', {
+  Future<Tag> updateTag(
+    int id,
+    String name, {
+    String? category,
+    String? color,
+    String? description,
+  }) async => Tag.fromJson(
+    Map<String, dynamic>.from(
+      await _send('PUT', '/api/tags/$id', {
         'name': name,
         'category': category,
         'color': color,
         'description': description,
-      }) as Map));
+      }) as Map,
+    ),
+  );
 
-  Future<void> deleteTag(int id) async => _send('DELETE', '/api/tags/$id', null);
+  Future<void> deleteTag(int id) async =>
+      _send('DELETE', '/api/tags/$id', null);
 
   // -------------------------------------------------------------------------
   //  生成产物
@@ -251,6 +310,7 @@ class ApiClient {
     String? kind,
     int? promptId,
     int? collectionId,
+
     /// **折叠集合**：一个集合只回一条（最早那条当代表），画廊据此显示成"一组"。
     bool collapse = false,
     bool? favorite,
@@ -279,8 +339,9 @@ class ApiClient {
     );
   }
 
-  Future<MediaAsset> getMedia(int id) async =>
-      MediaAsset.fromJson(Map<String, dynamic>.from(await _get('/api/media/$id') as Map));
+  Future<MediaAsset> getMedia(int id) async => MediaAsset.fromJson(
+    Map<String, dynamic>.from(await _get('/api/media/$id') as Map),
+  );
 
   /// 视频封面（第一帧）的完整地址。
   ///
@@ -289,11 +350,17 @@ class ApiClient {
   String mediaPosterUrl(int id) => '$baseUrl/api/media/$id/poster';
 
   Future<Prompt?> mediaPrompt(int id) async {
-    final res = await _client.get(_uri('/api/media/$id/prompt'), headers: _authHeaders());
+    final res = await _client.get(
+      _uri('/api/media/$id/prompt'),
+      headers: _authHeaders(),
+    );
     if (res.statusCode == 204) return null;
     if (res.statusCode >= 200 && res.statusCode < 300) {
       return Prompt.fromJson(
-          Map<String, dynamic>.from(jsonDecode(utf8.decode(res.bodyBytes)) as Map));
+        Map<String, dynamic>.from(
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map,
+        ),
+      );
     }
     _decode(res);
     return null;
@@ -313,25 +380,31 @@ class ApiClient {
     String? notes,
     bool? favorite,
     String? source,
+
     /// 标记 / 取消标记成人内容（用户 bug 2026-09-20：模糊只作用于标记过的条目）
     bool? nsfw,
     int? collectionId,
     bool clearCollection = false,
-  }) async =>
-      MediaAsset.fromJson(Map<String, dynamic>.from(await _send('PATCH', '/api/media/$id', {
+  }) async => MediaAsset.fromJson(
+    Map<String, dynamic>.from(
+      await _send('PATCH', '/api/media/$id', {
         if (clearPrompt) 'clearPrompt': true,
         if (!clearPrompt && promptId != null) 'promptId': promptId,
         if (clearCollection) 'clearCollection': true,
-        if (!clearCollection && collectionId != null) 'collectionId': collectionId,
+        if (!clearCollection && collectionId != null)
+          'collectionId': collectionId,
         // Dart 的 null-aware map value：值为 null 时整条不写入
         'title': ?title,
         'notes': ?notes,
         'favorite': ?favorite,
         'source': ?source,
         'nsfw': ?nsfw,
-      }) as Map));
+      }) as Map,
+    ),
+  );
 
-  Future<void> deleteMedia(int id) async => _send('DELETE', '/api/media/$id', null);
+  Future<void> deleteMedia(int id) async =>
+      _send('DELETE', '/api/media/$id', null);
 
   /// 这条产物**在磁盘上的绝对路径**。
   ///
@@ -352,15 +425,23 @@ class ApiClient {
   ///
   /// 返回这次重算了多少张。
   Future<int> regroupCollections() async {
-    final json = await _send('POST', '/api/media/collections/regroup', const {});
-    return (Map<String, dynamic>.from(json as Map)['regrouped'] as num?)?.toInt() ?? 0;
+    final json = await _send(
+      'POST',
+      '/api/media/collections/regroup',
+      const {},
+    );
+    return (Map<String, dynamic>.from(json as Map)['regrouped'] as num?)
+            ?.toInt() ??
+        0;
   }
 
   /// 所有集合（手动在前）——「移到集合…」的选择器吃它。
   Future<List<MediaCollection>> listCollections() async {
     final raw = await _get('/api/media/collections');
     return ((raw as List?) ?? const [])
-        .map((e) => MediaCollection.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map(
+          (e) => MediaCollection.fromJson(Map<String, dynamic>.from(e as Map)),
+        )
         .toList(growable: false);
   }
 
@@ -368,7 +449,10 @@ class ApiClient {
   ///
   /// 400 的两种情形都要如实显示给用户（后端的原话）：
   /// ① 选中的产物 kind 不一致；② 一条都没选。
-  Future<MediaCollection> createCollection(List<int> mediaIds, {String? title}) async {
+  Future<MediaCollection> createCollection(
+    List<int> mediaIds, {
+    String? title,
+  }) async {
     final json = await _send('POST', '/api/media/collections', {
       'mediaIds': mediaIds,
       if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
@@ -403,7 +487,8 @@ class ApiClient {
       final streamed = await _client.send(req);
       final res = await http.Response.fromStream(streamed);
       return UploadResult.fromJson(
-          Map<String, dynamic>.from(_decode(res) as Map));
+        Map<String, dynamic>.from(_decode(res) as Map),
+      );
     } on SocketException catch (e) {
       throw ApiException(0, '无法连接后端 $baseUrl', e.message);
     }
@@ -413,28 +498,42 @@ class ApiClient {
   //  ComfyUI 自动捕获
   // -------------------------------------------------------------------------
 
-  Future<CaptureConfig> captureConfig() async =>
-      CaptureConfig.fromJson(Map<String, dynamic>.from(await _get('/api/capture/config') as Map));
+  Future<CaptureConfig> captureConfig() async => CaptureConfig.fromJson(
+    Map<String, dynamic>.from(await _get('/api/capture/config') as Map),
+  );
 
   Future<CaptureConfig> updateCaptureConfig(CaptureConfig config) async =>
-      CaptureConfig.fromJson(Map<String, dynamic>.from(
-          await _send('PUT', '/api/capture/config', config.toJson()) as Map));
+      CaptureConfig.fromJson(
+        Map<String, dynamic>.from(
+          await _send('PUT', '/api/capture/config', config.toJson()) as Map,
+        ),
+      );
 
-  Future<CaptureStatus> captureStatus() async =>
-      CaptureStatus.fromJson(Map<String, dynamic>.from(await _get('/api/capture/status') as Map));
+  Future<CaptureStatus> captureStatus() async => CaptureStatus.fromJson(
+    Map<String, dynamic>.from(await _get('/api/capture/status') as Map),
+  );
 
   /// 探测 ComfyUI 装在哪（用户"其他建议"第 3 条）。**只读**：不会自动改配置。
-  Future<ComfyLocation> locateComfy() async =>
-      ComfyLocation.fromJson(Map<String, dynamic>.from(await _get('/api/capture/locate') as Map));
+  Future<ComfyLocation> locateComfy() async => ComfyLocation.fromJson(
+    Map<String, dynamic>.from(await _get('/api/capture/locate') as Map),
+  );
 
   /// 把探测到的输出目录写进配置（用户点了「使用这个目录」）。
   Future<CaptureConfig> applyComfyLocation(String outputDir) async =>
-      CaptureConfig.fromJson(Map<String, dynamic>.from(
-          await _send('POST', '/api/capture/locate/apply', {'outputDir': outputDir}) as Map));
+      CaptureConfig.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/capture/locate/apply', {
+            'outputDir': outputDir,
+          }) as Map,
+        ),
+      );
 
   /// 立刻轮询一次 ComfyUI 的 /history（App 里点「立即同步」时用）
   Future<CapturePollResult> pollCapture() async => CapturePollResult.fromJson(
-      Map<String, dynamic>.from(await _send('POST', '/api/capture/poll', null) as Map));
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/capture/poll', null) as Map,
+    ),
+  );
 
   /// 导入某个目录里历史上已经生成好的产物
   Future<ImportFolderResult> importCaptureFolder({
@@ -443,37 +542,72 @@ class ApiClient {
     int limit = 200,
     bool linkWorkflow = true,
     List<String> tags = const [],
-  }) async =>
-      ImportFolderResult.fromJson(Map<String, dynamic>.from(
-          await _send('POST', '/api/capture/import', {
+  }) async => ImportFolderResult.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/capture/import', {
         'dir': dir,
         'recursive': recursive,
         'limit': limit,
         'linkWorkflow': linkWorkflow,
         'tags': tags,
-      }) as Map));
+      }) as Map,
+    ),
+  );
 
   /// 把**本机 ComfyUI 里已经保存的工作流文件**批量读进库（用户 bug ⑤）。
   ///
   /// `dir` 不传就自动发现本机 ComfyUI 的 `user\<用户>\workflows` 目录 ——
   /// 过去这些工作流只有"在 ComfyUI 里跑过一次被捕获"或"AI 手动按路径读"才会进库，
   /// 首次使用时库里是空的。
-  Future<ImportWorkflowsResult> importWorkflowFiles({String? dir, int limit = 200}) async =>
-      ImportWorkflowsResult.fromJson(Map<String, dynamic>.from(
-          await _send('POST', '/api/capture/import-workflows', {
+  Future<ImportWorkflowsResult> importWorkflowFiles({
+    String? dir,
+    int limit = 200,
+  }) async => ImportWorkflowsResult.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/capture/import-workflows', {
         if (dir != null && dir.isNotEmpty) 'dir': dir,
         'limit': limit,
-      }) as Map));
+      }) as Map,
+    ),
+  );
+
+  /// 本机 ComfyUI 里已经保存的工作流文件（**只读**，`GET /api/capture/workflows`）。
+  ///
+  /// 「选择现有工作流」用：给用户一个能点、能看蓝图、能让 AI 照着跑的清单。
+  /// `q` 按文件名过滤；不传就按最近修改排序。
+  Future<ComfyWorkflowList> listWorkflowFiles({
+    String? q,
+    int limit = 50,
+  }) async => ComfyWorkflowList.fromJson(
+    Map<String, dynamic>.from(
+      await _get('/api/capture/workflows', {'q': q, 'limit': limit}) as Map,
+    ),
+  );
+
+  /// 读一份本机工作流的原文（`GET /api/capture/workflow?path=…`）。
+  ///
+  /// 路径准入在后端（读白名单）；前端**不拼盘路径**。文件不存在 / 越界会抛 [ApiException]。
+  Future<String> readWorkflowFile(String path) async {
+    final json = await _get('/api/capture/workflow', {'path': path});
+    final raw = (json is Map) ? json['raw'] : null;
+    if (raw is! String) {
+      throw ApiException(0, '后端没有返回工作流原文', path);
+    }
+    return raw;
+  }
 
   /// 提示词对应的完整工作流 JSON；没存过返回 null
-  Future<String?> promptWorkflow(int promptId) => _workflowText('/api/prompts/$promptId/workflow');
+  Future<String?> promptWorkflow(int promptId) =>
+      _workflowText('/api/prompts/$promptId/workflow');
 
   /// 产物对应的完整工作流 JSON；没存过返回 null
-  Future<String?> mediaWorkflow(int mediaId) => _workflowText('/api/media/$mediaId/workflow');
+  Future<String?> mediaWorkflow(int mediaId) =>
+      _workflowText('/api/media/$mediaId/workflow');
 
   Future<String?> _workflowText(String path) async {
     try {
-      final res = await _client.get(_uri(path), headers: _authHeaders())
+      final res = await _client
+          .get(_uri(path), headers: _authHeaders())
           .timeout(const Duration(seconds: 30));
       if (res.statusCode == 204 || res.statusCode == 404) return null;
       if (res.statusCode >= 200 && res.statusCode < 300) {
@@ -493,19 +627,28 @@ class ApiClient {
   /// 判据也只有那一份（`workflow_blueprint.rs`）—— 前端再写一套解析，两套迟早分叉。
   ///
   /// 界面在蓝图上改完参数之后**用同一个方法**就地复检（不落库、不改原文件）。
-  Future<Map<String, dynamic>> workflowBlueprint(String raw, {bool diagnose = true}) async =>
-      Map<String, dynamic>.from(await _send('POST', '/api/workflow/blueprint', {
-        'raw': raw,
-        'diagnose': diagnose,
-      }) as Map);
+  Future<Map<String, dynamic>> workflowBlueprint(
+    String raw, {
+    bool diagnose = true,
+  }) async => Map<String, dynamic>.from(
+    await _send('POST', '/api/workflow/blueprint', {
+      'raw': raw,
+      'diagnose': diagnose,
+    }) as Map,
+  );
 
   /// 把（改过的）工作流存成一份文件，回它的绝对路径。
   ///
   /// 落点由**后端**的白名单决定（`<项目根>\comfyui\workflows\`），前端不拼路径。
-  Future<SavedWorkflow> saveWorkflow({required String raw, String? name}) async =>
-      SavedWorkflow.fromJson(Map<String, dynamic>.from(
-          await _send('POST', '/api/workflow/save', {
+  Future<SavedWorkflow> saveWorkflow({
+    required String raw,
+    String? name,
+  }) async => SavedWorkflow.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/workflow/save', {
         'raw': raw,
         if (name != null && name.isNotEmpty) 'name': name,
-      }) as Map));
+      }) as Map,
+    ),
+  );
 }

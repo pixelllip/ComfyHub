@@ -77,8 +77,10 @@ fn 只列真搬过来了的那些() {
             "read_file",
             "register_skill",
             "save_character_card",
+            "save_style_card",
             "search_character_cards",
             "search_prompts",
+            "search_style_cards",
             "write_file",
         ]
     );

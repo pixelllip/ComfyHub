@@ -94,6 +94,93 @@ fn 补线允许新输入但要求上游节点存在() {
     assert_eq!(patched["6"]["inputs"]["clip"], json!([4, 1]));
 }
 
+/// 正面提示词直接写进最近的 `CLIPTextEncode.text`，并**不碰 negative**。
+#[test]
+fn positive_prompt_writes_positive_text_and_bypasses_text_generate() {
+    let graph = json!({
+        "10": {"class_type": "KSampler", "inputs": {
+            "positive": ["6", 0], "negative": ["20", 0], "seed": 1
+        }},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {
+            "text": ["7", 0], "clip": ["4", 0]
+        }},
+        "7": {"class_type": "TextGenerate", "inputs": {
+            "system_prompt": "把想法写成 caption", "prompt": "一只猫"
+        }},
+        "20": {"class_type": "CLIPTextEncode", "inputs": {"text": "low quality"}}
+    });
+    let (patched, changed, bypassed) =
+        WorkflowEdit::apply_positive_prompt(&graph, "  A photo of a cat on a windowsill.  ").unwrap();
+    assert_eq!(patched["6"]["inputs"]["text"], "A photo of a cat on a windowsill.");
+    assert_eq!(patched["20"]["inputs"]["text"], "low quality", "negative 一个字都不许动");
+    assert_eq!(changed, vec!["6.text".to_string()]);
+    assert_eq!(bypassed, vec!["7".to_string()], "要如实回报摘掉了哪一路 TextGenerate");
+    // 原图不能改（纯函数）
+    assert_eq!(graph["6"]["inputs"]["text"], json!(["7", 0]));
+}
+
+/// MOSS t2i 那种 `CLIPTextEncode.text ← PreviewAny ← ComfySwitchNode` 的链也要能断。
+#[test]
+fn positive_prompt_follows_switch_and_preview_chain() {
+    let graph = json!({
+        "36": {"class_type": "KSampler", "inputs": {"positive": ["34", 0], "negative": ["41", 0]}},
+        "34": {"class_type": "CLIPTextEncode", "inputs": {"text": ["38", 0], "clip": ["35", 0]}},
+        "38": {"class_type": "PreviewAny", "inputs": {"source": ["39", 0]}},
+        "39": {"class_type": "ComfySwitchNode", "inputs": {
+            "on_false": ["30", 0], "on_true": ["32", 0], "switch": false
+        }},
+        "30": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "用户原话"}},
+        "32": {"class_type": "TextGenerate", "inputs": {"system_prompt": ["31", 0]}},
+        "31": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "扩写指令"}},
+        "41": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}}
+    });
+    let (patched, changed, bypassed) =
+        WorkflowEdit::apply_positive_prompt(&graph, "最终提示词").unwrap();
+    assert_eq!(patched["34"]["inputs"]["text"], "最终提示词");
+    assert_eq!(changed, vec!["34.text".to_string()]);
+    assert_eq!(bypassed, vec!["32".to_string()]);
+    assert_eq!(patched["41"]["inputs"]["text"], "", "negative 不动");
+}
+
+/// `BasicGuider` 没有 `positive` 插口，只有 `conditioning` —— Krea 2 的
+/// `SamplerCustomAdvanced → BasicGuider → CLIPTextEncode` 必须也能找到。
+#[test]
+fn positive_prompt_follows_basic_guider_conditioning() {
+    let graph = json!({
+        "40": {"class_type": "SamplerCustomAdvanced", "inputs": {
+            "guider": ["41", 0], "noise": ["42", 0]
+        }},
+        "41": {"class_type": "BasicGuider", "inputs": {
+            "model": ["1", 0], "conditioning": ["34", 0]
+        }},
+        "34": {"class_type": "CLIPTextEncode", "inputs": {"text": "old", "clip": ["2", 0]}},
+        "42": {"class_type": "RandomNoise", "inputs": {"noise_seed": 1}}
+    });
+    let (patched, changed, _) =
+        WorkflowEdit::apply_positive_prompt(&graph, "krea prompt").unwrap();
+    assert_eq!(patched["34"]["inputs"]["text"], "krea prompt");
+    assert_eq!(changed, vec!["34.text".to_string()]);
+}
+
+/// 找不到正面文本编码器 / 空提示词都要报错，**不许静默什么都不改**。
+#[test]
+fn positive_prompt_refuses_when_it_cannot_find_a_target() {
+    let no_positive = json!({"1": {"class_type": "SaveImage", "inputs": {}}});
+    let message = WorkflowEdit::apply_positive_prompt(&no_positive, "x").unwrap_err();
+    assert!(message.contains("positive"), "{message}");
+
+    let graph = json!({
+        "10": {"class_type": "KSampler", "inputs": {"positive": ["6", 0]}},
+        "6": {"class_type": "ConditioningCombine", "inputs": {"conditioning_1": ["7", 0]}},
+        "7": {"class_type": "SomeOp", "inputs": {}}
+    });
+    let message = WorkflowEdit::apply_positive_prompt(&graph, "x").unwrap_err();
+    assert!(message.contains("CLIPTextEncode"), "{message}");
+
+    let message = WorkflowEdit::apply_positive_prompt(&graph, "   ").unwrap_err();
+    assert!(message.contains("空"), "{message}");
+}
+
 fn object_info() -> Value {
     json!({
         "KSampler": { "input": { "required": { "seed": ["INT", {}], "steps": ["INT", {}] } } },

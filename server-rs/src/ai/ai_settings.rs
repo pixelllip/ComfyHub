@@ -100,8 +100,12 @@ pub(crate) fn category_of(name: &str) -> &'static str {
         // ⚠ 漏掉 `find_model` 的后果是**它不吃预算**（回落到 `_ => "comfy"`，
         //   变成"按 ComfyUI 查询计"，而那份额度是另一条线），且界面上分组也会错。
         "web_search" | "web_fetch" | "civitai_search" | "danbooru_lookup" | "find_model" => "web",
-        // 资料库（Kotlin `ToolCategory.LIBRARY`）：查自己的提示词库 / 角色卡
-        "search_prompts" | "search_character_cards" | "save_character_card" => "library",
+        // 资料库（Kotlin `ToolCategory.LIBRARY`）：查自己的提示词库 / 角色卡 / 画风卡
+        "search_prompts"
+        | "search_character_cards"
+        | "save_character_card"
+        | "search_style_cards"
+        | "save_style_card" => "library",
         // 文件三件（Kotlin `ToolCategory.FILES`）
         "list_dir" | "read_file" | "write_file" => "files",
         // ⚠ **例外**：Kotlin 里 `comfy_env_report` 是 `ToolCategory.FILES`（它只是扫盘，

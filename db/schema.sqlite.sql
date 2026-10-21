@@ -427,14 +427,60 @@ CREATE TABLE IF NOT EXISTS character_cards (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,
   name               TEXT    NOT NULL,          -- 用户叫的名字（中文 / 原名）
   normalized         TEXT    NOT NULL,          -- name 的小写（幂等 upsert 的键）
-  prompt             TEXT    NULL,              -- 正面提示词（整段文本）
-  negative           TEXT    NULL,              -- 负面提示词（整段文本）
+  tag_prompt         TEXT    NULL,              -- Danbooru tag 版（逗号分隔）
+  prompt             TEXT    NULL,              -- 自然语言版（整段文本）
+  negative           TEXT    NULL,              -- 负面提示词（两版共用，整段文本）
   created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 -- 幂等 upsert 的键：同名 = 同一张卡（`ON CONFLICT(normalized) DO UPDATE`，R3 不许用 OR REPLACE）
 CREATE UNIQUE INDEX IF NOT EXISTS uk_character_cards_norm ON character_cards(normalized);
 CREATE INDEX IF NOT EXISTS idx_character_cards_created  ON character_cards(created_at);
+
+-- ---------------------------------------------------------------------
+-- 画风卡（2026-10-21）：与角色卡**同等地位**，一个画风的标准容器。
+--
+-- 字段与 `character_cards` 逐列同形（名称 / Danbooru tag 版 / 自然语言版 / 负面提示词）：
+-- 角色卡管"画的是谁"，画风卡管"画成什么样"（画师 / 媒介 / 上色 / 光线 / 质感）。
+-- 两张表刻意不合并：同名角色与同名画风是两条独立的知识，不能互相覆盖。
+-- 同样**不进同步范围**（理由与 character_cards 那节相同）。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS style_cards (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  name               TEXT    NOT NULL,          -- 用户叫的画风名
+  normalized         TEXT    NOT NULL,          -- name 的小写（幂等 upsert 的键）
+  tag_prompt         TEXT    NULL,              -- Danbooru tag 版（逗号分隔）
+  prompt             TEXT    NULL,              -- 自然语言版（整段文本，100~200 token）
+  negative           TEXT    NULL,              -- 负面提示词（两版共用，整段文本）
+  created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_style_cards_norm ON style_cards(normalized);
+CREATE INDEX IF NOT EXISTS idx_style_cards_created  ON style_cards(created_at);
+
+-- 卡片示例产物：一张卡可以挂若干条画廊产物，作为"这套设定 / 这个画风长什么样"的样本。
+--
+-- 两张关联表刻意分开（不是一张 `card_examples(kind, card_id, media_id)`）：
+-- 外键要能 `ON DELETE CASCADE`，而单表的多态 `card_id` 没有一张表可以指向。
+-- `PRIMARY KEY (card_id, media_id)` = 同一张卡里同一条产物只出现一次；
+-- 顺序按加入顺序（`rowid`），界面与 AI 看到的顺序一致。
+CREATE TABLE IF NOT EXISTS character_card_examples (
+  card_id     INTEGER NOT NULL REFERENCES character_cards(id) ON DELETE CASCADE,
+  media_id    INTEGER NOT NULL REFERENCES media_assets(id) ON DELETE CASCADE,
+  added_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (card_id, media_id)
+);
+CREATE INDEX IF NOT EXISTS idx_character_card_examples_media
+  ON character_card_examples(media_id);
+
+CREATE TABLE IF NOT EXISTS style_card_examples (
+  card_id     INTEGER NOT NULL REFERENCES style_cards(id) ON DELETE CASCADE,
+  media_id    INTEGER NOT NULL REFERENCES media_assets(id) ON DELETE CASCADE,
+  added_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (card_id, media_id)
+);
+CREATE INDEX IF NOT EXISTS idx_style_card_examples_media
+  ON style_card_examples(media_id);
 
 -- ---------------------------------------------------------------------
 -- 工作流配方（W2，2026-09-26）：把一份**具体**工作流归纳成
@@ -639,6 +685,12 @@ BEGIN
   UPDATE character_cards SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id;
 END;
 
+CREATE TRIGGER IF NOT EXISTS trg_style_cards_touch AFTER UPDATE ON style_cards FOR EACH ROW
+WHEN NEW.updated_at IS OLD.updated_at
+BEGIN
+  UPDATE style_cards SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id;
+END;
+
 CREATE TRIGGER IF NOT EXISTS trg_workflow_recipes_touch AFTER UPDATE ON workflow_recipes FOR EACH ROW
 WHEN NEW.updated_at IS OLD.updated_at
 BEGIN
@@ -650,7 +702,7 @@ END;
 --   ⚠ 同步范围的真源就是这一节：`/api/sync/{bootstrap,changes}` 也从它派生。
 --   不同步：ai_run_events（62 万行调试日志）、ai_providers / ai_models /
 --   app_settings（含凭据引用与令牌明文）、ai_runs / ai_tool_calls / ai_questions /
---   character_cards / workflow_recipes（桌面侧的知识，手机提交走 comfy_queue_submit）。
+--   character_cards / style_cards / workflow_recipes（桌面侧的知识，手机提交走 comfy_queue_submit）。
 --
 --   pk 用的都是**各表自己的稳定标识**（INTEGER 主键转文本；两处复合主键用
 --   `a:b` 拼，块用 `message#ordinal`），手机侧按同一约定删本地投影行。
@@ -811,4 +863,11 @@ BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', OLD.id, 'dele
 --   ⚠ ② 是**正确性的前提**：`backfill` 只处理 `collection_id IS NULL` 的行，
 --   而"移出集合"恰恰就是置 NULL —— 少了这一列，"移出"会在下次启动被静默吸回原组。
 --   两列都走 `NEW_COLUMNS`（`CREATE TABLE IF NOT EXISTS` 补不了已存在表的列）。
-PRAGMA user_version = 9;
+-- 2026-10-21 由 9 提到 10：**画风卡 + 两种卡片版本的示例产物**。
+--   ① 新增 `style_cards`（与角色卡同形）；
+--   ② `character_cards` / `style_cards` 各加 `tag_prompt`（Danbooru tag 版），
+--      原有 `prompt` 明确为**自然语言版**；
+--   ③ 新增 `character_card_examples` / `style_card_examples` 两张关联表。
+--   `character_cards.tag_prompt` 是"加列"，必须同时写进 `infra::db` 的 `NEW_COLUMNS`；
+--   其余都是新表，靠 bump 版本号重跑收敛式 DDL 就能建出来。
+PRAGMA user_version = 10;

@@ -302,6 +302,24 @@ void main() {
     });
   });
 
+  group('超宽表格：横向滚动 + 常驻滚动条', () {
+    testWidgets('7 列表格不再把每列压成一个字，出现横向滚动条', (tester) async {
+      const reply = '| 模型 | 用途 | 节点 | 输入 | 输出 | 备注 | 来源 |\n'
+          '|---|---|---|---|---|---|---|\n'
+          '| MOSS-Image | 文生图 / 布局 | 36 KSampler | 提示词 / 分辨率 | 图片 | 8 步 DMD | 官方模板 |\n'
+          '| Krea 2 | 文生图 / 参考图 | 40 SamplerCustom | 提示词 / 参考图 | 图片 | Turbo 8 步 | 本机模板 |\n';
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Center(child: SizedBox(width: 360, child: MarkdownText(reply))),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.byType(Scrollbar), findsOneWidget, reason: '超宽表要能横向滚动');
+      expect(find.byType(Table), findsOneWidget);
+    });
+  });
+
   group('代码块：单行超宽要换行，多行保持横向滚动', () {
     const oneLine = 'curl -X POST http://127.0.0.1:8080/api/ai/conversations/xxx/runs '
         '-H "Content-Type: application/json" -d @body.json';
@@ -336,6 +354,16 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.byType(SingleChildScrollView), findsOneWidget);
       expect(find.text(multi), findsOneWidget);
+    });
+
+    testWidgets('代码块显式给 SelectionArea 一个选择色（否则选中态会被底色糊掉）', (tester) async {
+      await pump(tester, '```\ncode block\n```');
+      final styles = tester
+          .widgetList<DefaultSelectionStyle>(find.byType(DefaultSelectionStyle))
+          .where((style) => style.selectionColor != null)
+          .toList();
+      expect(styles, isNotEmpty,
+          reason: '代码块必须显式给 selectionColor：外层 SelectionArea 靠它画高亮');
     });
   });
 }

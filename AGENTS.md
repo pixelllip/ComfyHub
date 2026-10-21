@@ -30,7 +30,7 @@
 
 `lib/app.dart` 的 `HomeShell` 默认落在「AI 工作台」，顺序 `AI 工作台 → 画廊 → 提示词 → 标签 → 设置`；`_destinations`（图标 / 文案）与 `pages` **必须同序**（`_index` 同时索引它们）。改完跑 `flutter test test\home_nav_test.dart`；`test\localization_test.dart` 也用首页做锚点。
 
-一级导航**只有 5 项**：窄屏上第 6 个图标会挤成两行，所以新功能优先做成**次级页**或挂进已有页面（角色卡就是这么挂在「提示词」页的）。
+一级导航**只有 5 项**：窄屏上第 6 个图标会挤成两行，所以新功能优先做成**次级页**或挂进已有页面（角色卡 / 画风卡的「卡片库」就是这么挂在「预设库」页的）。
 
 ## 4. 本机环境硬约束（换机器要重新确认）
 
@@ -131,6 +131,7 @@
 **功能说明见 [`docs/ai-tools-and-skills.md`](docs/ai-tools-and-skills.md)**（含"DSH 哪些工具抄了、哪些没抄"）。这里只记改动时容易踩的规矩。
 
 - 工具清单**只有一个真源**：`server-rs/src/tools/tools.rs` 的 `catalog`（桌面全量）与 `mobile_catalog`（手机 7 个）。系统提示、`GET /api/ai/tools`、界面都从它派生 —— 加工具就在这里加一项 + `ToolRegistryTest` 补用例，**别在别处再维护一份名单**。
+- **出图 / LoRA 验收走 comfy 工作流，不写推理脚本**（2026-10-20 用户口径）：ComfyUI 没起先 `comfy_start`；然后 `comfy_list_workflows` / `comfy_find_workflow` 找本机工作流 → `comfy_load_workflow` → `comfy_check_inputs`（缺输入）/ `comfy_fit_workflow`（缺模型）→ `comfy_submit`。验收 LoRA 只需在工作流里换 `LoraLoader` 的 `lora_name`、prompt 加触发词；**别为了看一眼效果另写 `inference.py` 之类的推理旁路**（那条只给引擎自己的回归用）。
 - **读白名单会自动加上本机 ComfyUI 的目录**（`ComfyRoots` 每次现探、不落库）：用户的 ComfyUI 不在项目里，只按 `<根>\comfyui` 判会让 `read_file` 读不了他自己的工作流。**这只放宽读** —— 写仍然只认 `<根>\comfyui`。判定是"认特征文件"（`comfy_dirs::looks_like_comfy`），搜索有界（深度 ≤3、只往名字带 comfy 的分支下钻）。
 - **本机 ComfyUI 的工作流文件是"库"之外的第二来源**：`prompts` 库只收"捕获过的运行"与"手动读进来的文件"，所以**首次使用时库必然是空的**，而 `user\<用户>\workflows\*.json` 早就存在。`ComfyWorkflowFiles` 现探这些目录；`comfy_list_workflows` / `GET /api/capture/workflows` **只列不写**；批量入库与 `comfy_load_workflow` 用**同一把钥匙** `run_key = file:<sha256>`（幂等）。**别把"库里没有"当成"这条工作流用不了"** —— 系统提示与 `ToolRegistryTest` 守着这条。
 - **默认只能写 `<项目根>\comfyui`**：新增写入类工具时路径必须过 `ToolPolicy.resolveWrite()` / `resolveRead()`，**不要自己拼 `Path`**；`.git` / `.mysql` / `.run` / `node_modules` **永远禁写**（`ToolPolicyConfig.FORBIDDEN_SEGMENTS`），白名单放到项目根也一样拒绝。

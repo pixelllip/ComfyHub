@@ -21,6 +21,8 @@ fn 类别与权限档的线上字与_kotlin_一致() {
     assert_eq!(category_of("web_fetch"), "web");
     assert_eq!(category_of("search_prompts"), "library");
     assert_eq!(category_of("save_character_card"), "library");
+    assert_eq!(category_of("search_style_cards"), "library");
+    assert_eq!(category_of("save_style_card"), "library");
     assert_eq!(category_of("comfy_submit"), "comfy");
     assert_eq!(access_wire(crate::tools::policy::ToolAccess::Allow), "allow");
     assert_eq!(access_wire(crate::tools::policy::ToolAccess::Ask), "ask");

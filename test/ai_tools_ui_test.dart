@@ -624,7 +624,8 @@ void main() {
             4,
             'tool.requested',
             '{"runId":"r1","callId":"call-1","name":"read_file",'
-                '"arguments":"{\\"path\\":\\"a.md\\"}","approval":"not_required"}') +
+                '"arguments":"{\\"path\\":\\"a.md\\"}","reason":"先读一下 a.md",'
+                '"approval":"not_required"}') +
         _sse(5, 'tool.started', '{"callId":"call-1","name":"read_file"}') +
         _sse(
             6,
@@ -635,7 +636,7 @@ void main() {
             'message.completed',
             '{"messageId":"a1","text":"好的，我看一下文件。","steps":1,"parts":['
                 '{"type":"text","text":"好的，我看一下文件。"},'
-                '{"type":"tool_call","toolCallId":"call-1","jsonPayload":{"name":"read_file","arguments":"{\\"path\\":\\"a.md\\"}"}},'
+                '{"type":"tool_call","toolCallId":"call-1","jsonPayload":{"name":"read_file","arguments":"{\\"path\\":\\"a.md\\"}","reason":"先读一下 a.md"}},'
                 '{"type":"tool_result","toolCallId":"call-1","text":"# 标题\\n正文","jsonPayload":{"name":"read_file","ok":true,"elapsedMs":42,"approval":"approved"}}'
                 ']}') +
         _sse(8, 'run.completed', '{"runId":"r1"}');
@@ -648,7 +649,11 @@ void main() {
         {
           'type': 'tool_call',
           'toolCallId': 'call-1',
-          'jsonPayload': {'name': 'read_file', 'arguments': '{"path":"a.md"}'},
+          'jsonPayload': {
+            'name': 'read_file',
+            'arguments': '{"path":"a.md"}',
+            'reason': '先读一下 a.md',
+          },
         },
         {
           'type': 'tool_result',
@@ -670,14 +675,15 @@ void main() {
     await tester.tap(find.text('发送'));
     await tester.pumpAndSettle();
 
-    // 工具卡：名字 + 状态 + 耗时
-    expect(find.text('read_file'), findsOneWidget);
+    // 工具卡：**模型写的调用原因**当标题 + 状态 + 耗时；用途/机器名退到副标题。
+    expect(find.text('先读一下 a.md'), findsOneWidget);
+    expect(find.textContaining('读取文件 · read_file'), findsOneWidget);
     expect(find.text('已完成'), findsOneWidget);
     expect(find.text('42 ms'), findsOneWidget);
     // 结果预览默认折叠
     expect(find.textContaining('# 标题'), findsNothing);
 
-    await tester.tap(find.byTooltip('展开 read_file 的结果'));
+    await tester.tap(find.byTooltip('展开 先读一下 a.md 的结果'));
     await tester.pumpAndSettle();
     expect(find.textContaining('# 标题'), findsWidgets);
   });
@@ -1001,8 +1007,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 40));
 
     expect(find.text('思考中…'), findsOneWidget, reason: '流式中要有明确的进行中标记');
-    expect(find.textContaining('尾巴结论'), findsNothing,
-        reason: '流式生成中也不能自动展开整段思考（用户要求默认自动折叠）');
+    // 用户 2026-10-21：流式生成中摘要显示**当前思考的末尾一行**（不是开头）。
+    expect(find.textContaining('尾巴结论'), findsWidgets,
+        reason: '生成中要看"现在想到哪了"');
+    // 但仍然只显示摘要、没有自动展开整段（展开后会出现完整正文的分块）。
+    expect(find.text('思考过程'), findsOneWidget);
     // 但用户点一下还是能看到全文
     await tester.tap(find.text('思考过程'));
     await tester.pumpAndSettle();

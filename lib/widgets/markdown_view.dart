@@ -45,22 +45,29 @@ class MarkdownText extends StatelessWidget {
   Widget build(BuildContext context) {
     if (source.trim().isEmpty) return const SizedBox.shrink();
     final theme = Theme.of(context);
-    final base = style ?? theme.textTheme.bodyMedium ?? const TextStyle(fontSize: 14);
+    final base =
+        style ?? theme.textTheme.bodyMedium ?? const TextStyle(fontSize: 14);
     final blocks = parseMarkdown(source);
     final column = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final b in blocks) _block(context, theme, base, b),
-      ],
+      children: [for (final b in blocks) _block(context, theme, base, b)],
     );
     return selectable ? SelectionArea(child: column) : column;
   }
 
-  Widget _block(BuildContext context, ThemeData theme, TextStyle base, MdBlock block) {
+  Widget _block(
+    BuildContext context,
+    ThemeData theme,
+    TextStyle base,
+    MdBlock block,
+  ) {
     switch (block) {
       case MdParagraph(:final spans):
-        return Text.rich(TextSpan(children: _spans(context, theme, base, spans)), style: base);
+        return Text.rich(
+          TextSpan(children: _spans(context, theme, base, spans)),
+          style: base,
+        );
 
       case MdHeading(:final level, :final spans):
         final size = switch (level) {
@@ -91,7 +98,10 @@ class MarkdownText extends StatelessWidget {
             children: [
               SizedBox(
                 width: ordered ? 26 : 16,
-                child: Text(marker, style: base.copyWith(color: theme.colorScheme.outline)),
+                child: Text(
+                  marker,
+                  style: base.copyWith(color: theme.colorScheme.outline),
+                ),
               ),
               Expanded(
                 child: Text.rich(
@@ -109,7 +119,10 @@ class MarkdownText extends StatelessWidget {
           padding: const EdgeInsets.only(left: 10),
           decoration: BoxDecoration(
             border: Border(
-              left: BorderSide(color: theme.colorScheme.outlineVariant, width: 3),
+              left: BorderSide(
+                color: theme.colorScheme.outlineVariant,
+                width: 3,
+              ),
             ),
           ),
           child: Column(
@@ -118,8 +131,15 @@ class MarkdownText extends StatelessWidget {
             children: [
               for (final inner in blocks)
                 DefaultTextStyle.merge(
-                  style: base.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                  child: _block(context, theme, base.copyWith(color: theme.colorScheme.onSurfaceVariant), inner),
+                  style: base.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  child: _block(
+                    context,
+                    theme,
+                    base.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    inner,
+                  ),
                 ),
             ],
           ),
@@ -131,23 +151,34 @@ class MarkdownText extends StatelessWidget {
         // 多行代码块**保持横向滚动**：代码的换行位置本身有意义（缩进 / 对齐 / 表格状输出），
         // 自动折行反而更难读。
         final singleLine = !code.contains('\n');
-        final codeText = Text(
-          code,
-          style: base.copyWith(
-            fontFamily: 'Consolas',
-            fontFamilyFallback: const ['Courier New', 'monospace'],
-            fontSize: (base.fontSize ?? 14) - 0.5,
-            height: 1.4,
+        // ⚠ 代码块底色必须是**半透明**、而且要把 `selectionColor` 显式交给
+        // `DefaultSelectionStyle`：外层 `SelectionArea` 的高亮由每个 `RenderParagraph`
+        // 自己画，纯色块 + 主题里没给选择色时，选中区域会和底色糊在一起，看起来像"没选中"。
+        final codeText = DefaultSelectionStyle(
+          selectionColor: theme.colorScheme.primary.withValues(alpha: 0.45),
+          child: Text(
+            code,
+            style: base.copyWith(
+              fontFamily: 'Consolas',
+              fontFamilyFallback: const ['Courier New', 'monospace'],
+              fontSize: (base.fontSize ?? 14) - 0.5,
+              height: 1.4,
+            ),
+            softWrap: singleLine,
           ),
-          softWrap: singleLine,
         );
         return Container(
           width: double.infinity,
           margin: const EdgeInsets.symmetric(vertical: 6),
           decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.7),
+            // 0.7 → 0.42：留出透光率，选择高亮即使被画在底色下面也看得见。
+            color: theme.colorScheme.surfaceContainerHighest.withValues(
+              alpha: 0.42,
+            ),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+            border: Border.all(
+              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -156,9 +187,12 @@ class MarkdownText extends StatelessWidget {
               if (language != null)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
-                  child: Text(language,
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: theme.colorScheme.outline)),
+                  child: Text(
+                    language,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
                 ),
               // 单行：直接放进有界宽度里（软换行，必要时连超长单词也会被拆开）；
               // 多行：横向滚动，保持原始排版
@@ -178,39 +212,19 @@ class MarkdownText extends StatelessWidget {
         );
 
       case MdTable(:final alignments, :final header, :final rows):
-        // 表格用 `Table` 的弹性列宽：气泡本身有 maxWidth（720），列会自动分摊，
-        // 单元格里的长文本正常换行 —— 比横向滚动的 IntrinsicColumnWidth 好用得多。
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Table(
-              defaultVerticalAlignment: TableCellVerticalAlignment.top,
-              border: TableBorder.symmetric(
-                inside: BorderSide(color: theme.colorScheme.outlineVariant, width: 0.8),
-                outside: BorderSide(color: theme.colorScheme.outlineVariant),
-              ),
-              children: [
-                TableRow(
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.7),
-                  ),
-                  children: [
-                    for (var c = 0; c < alignments.length; c++)
-                      _cell(context, theme, base.copyWith(fontWeight: FontWeight.w600),
-                          header[c], alignments[c]),
-                  ],
-                ),
-                for (final row in rows)
-                  TableRow(
-                    children: [
-                      for (var c = 0; c < alignments.length; c++)
-                        _cell(context, theme, base, row[c], alignments[c]),
-                    ],
-                  ),
-              ],
-            ),
-          ),
+        // 普通表格仍用弹性列宽（长文本换行，读起来最舒服）；
+        // **超宽表格**（列多 / 单元格长）改成固有列宽 + 横向滚动，并带一条常驻滚动条 ——
+        // 否则只有 5 列的表会把每一列压成"一个字一行"，根本没法读。
+        final wide = _tableLooksWide(alignments, header, rows);
+        return _MarkdownTable(
+          alignments: alignments,
+          header: header,
+          rows: rows,
+          theme: theme,
+          base: base,
+          scrollable: wide,
+          cellBuilder: (spans, align, style) =>
+              _cell(context, theme, style, spans, align),
         );
 
       case MdRule():
@@ -244,7 +258,11 @@ class MarkdownText extends StatelessWidget {
   }
 
   List<InlineSpan> _spans(
-      BuildContext context, ThemeData theme, TextStyle base, List<MdInline> spans) {
+    BuildContext context,
+    ThemeData theme,
+    TextStyle base,
+    List<MdInline> spans,
+  ) {
     return [
       for (final s in spans)
         TextSpan(
@@ -266,7 +284,10 @@ class MarkdownText extends StatelessWidget {
       out = out.copyWith(
         fontFamily: 'Consolas',
         fontFamilyFallback: const ['Courier New', 'monospace'],
-        backgroundColor: theme.colorScheme.surfaceContainerHighest,
+        // 行内代码也留透光率：纯色底色会把选中高亮盖住（用户 2026-10-21 的反馈）。
+        backgroundColor: theme.colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.65,
+        ),
       );
     }
     if (s.link != null) {
@@ -283,10 +304,152 @@ class MarkdownText extends StatelessWidget {
     if (onLinkTap != null) return onLinkTap!(url);
     final messenger = ScaffoldMessenger.maybeOf(context);
     try {
-      final ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      final ok = await launchUrl(
+        Uri.parse(url),
+        mode: LaunchMode.externalApplication,
+      );
       if (!ok) messenger?.showSnackBar(SnackBar(content: Text('打不开链接：$url')));
     } catch (e) {
       messenger?.showSnackBar(SnackBar(content: Text('打不开链接：$e')));
     }
+  }
+}
+
+/// 这张表是不是"超宽"——决定用固有列宽 + 横向滚动，还是弹性列宽 + 换行。
+///
+/// 判据刻意只看**内容规模**（列数 / 单元格字符数），不看实际像素：
+/// 像素要等布局之后才知道，而这里必须在建表之前选分支。阈值取得比较保守，
+/// 普通 3~4 列说明表不会误判成滚动表。
+bool _tableLooksWide(
+  List<MdColumnAlign> alignments,
+  List<List<MdInline>> header,
+  List<List<List<MdInline>>> rows,
+) {
+  if (alignments.length >= 6) return true;
+  var maxCell = 0;
+  var total = 0;
+  void scan(List<List<MdInline>> row) {
+    for (final cell in row) {
+      final length = cell.fold<int>(0, (sum, span) => sum + span.text.length);
+      if (length > maxCell) maxCell = length;
+      total += length;
+    }
+  }
+
+  scan(header);
+  for (final row in rows) {
+    scan(row);
+  }
+  return maxCell >= 48 || total >= 280;
+}
+
+/// 表格：普通表用 `Table` 的弹性列宽；超宽表包一层横向 `Scrollbar`。
+///
+/// 为什么不做"永远横向滚动"：ComfyUI 相关的回复里 3 列小表很常见，
+/// 永远滚动会让它们右边空一大片、左边还要拖，反而难读。
+class _MarkdownTable extends StatefulWidget {
+  final List<MdColumnAlign> alignments;
+  final List<List<MdInline>> header;
+  final List<List<List<MdInline>>> rows;
+  final ThemeData theme;
+  final TextStyle base;
+  final bool scrollable;
+  final Widget Function(List<MdInline>, MdColumnAlign, TextStyle) cellBuilder;
+
+  const _MarkdownTable({
+    required this.alignments,
+    required this.header,
+    required this.rows,
+    required this.theme,
+    required this.base,
+    required this.scrollable,
+    required this.cellBuilder,
+  });
+
+  @override
+  State<_MarkdownTable> createState() => _MarkdownTableState();
+}
+
+class _MarkdownTableState extends State<_MarkdownTable> {
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = widget.theme;
+    final table = Table(
+      // 超宽表：列按内容宽度，不折行（折了就等于把代码/参数名劈开）；
+      // 普通表：列宽均分，长文本正常换行。
+      defaultColumnWidth: widget.scrollable
+          ? const IntrinsicColumnWidth()
+          : const FlexColumnWidth(),
+      defaultVerticalAlignment: TableCellVerticalAlignment.top,
+      border: TableBorder.symmetric(
+        inside: BorderSide(color: theme.colorScheme.outlineVariant, width: 0.8),
+        outside: BorderSide(color: theme.colorScheme.outlineVariant),
+      ),
+      children: [
+        TableRow(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest.withValues(
+              alpha: 0.7,
+            ),
+          ),
+          children: [
+            for (var c = 0; c < widget.alignments.length; c++)
+              widget.cellBuilder(
+                widget.header[c],
+                widget.alignments[c],
+                widget.base.copyWith(fontWeight: FontWeight.w600),
+              ),
+          ],
+        ),
+        for (final row in widget.rows)
+          TableRow(
+            children: [
+              for (var c = 0; c < widget.alignments.length; c++)
+                widget.cellBuilder(row[c], widget.alignments[c], widget.base),
+            ],
+          ),
+      ],
+    );
+
+    final clipped = ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: table,
+    );
+    if (!widget.scrollable) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: clipped,
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6, bottom: 10),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return Scrollbar(
+            controller: _scroll,
+            // 常驻：用户**看得见**这里可以横向滚动（默认只在滚动时闪一下，桌面端很容易错过）。
+            thumbVisibility: true,
+            scrollbarOrientation: ScrollbarOrientation.bottom,
+            child: SingleChildScrollView(
+              controller: _scroll,
+              scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                child: clipped,
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 }

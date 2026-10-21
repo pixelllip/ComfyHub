@@ -90,7 +90,12 @@ pub const SCHEMA_SQL: &str = include_str!("../../../db/schema.sqlite.sql");
 /// `collection_id IS NULL`，而"移出集合"恰恰就是把它置成 NULL ——
 /// 没有这一列，用户刚拖出去的那张会在**下次启动**被回填静默吸回原组
 /// （`collection.rs` 里那句"手动拆开过的一律不碰"就只是一句空承诺）。
-pub const SCHEMA_VERSION: i64 = 9;
+/// 2026-10-21 由 9 提到 10：**画风卡 + 卡片示例产物 + 卡片的双版本** ——
+/// ① 新表 `style_cards`（与角色卡同形）；
+/// ② 两张卡表各加 `tag_prompt`（Danbooru tag 版），`prompt` 自此专指自然语言版；
+/// ③ 两张示例关联表（`character_card_examples` / `style_card_examples`）。
+/// 加的是"表 + 列"，所以 bump 版本号与 `NEW_COLUMNS` 两条路都要走。
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// **"这一列必须存在"的声明式清单**（2026-09-30 起）。
 ///
@@ -109,6 +114,20 @@ const NEW_COLUMNS: &[(&str, &str, &str)] = &[
         "character_cards",
         "prompt",
         "ALTER TABLE character_cards ADD COLUMN prompt TEXT NULL",
+    ),
+    // Danbooru tag 版（2026-10-21）。老卡只有 `prompt`（当时语义是"正面提示词"），
+    // 这一列补上之后是空的 —— 由 AI 的补版能力 / 用户从界面补，**不做自动回填**：
+    // 把一段自然语言硬当 tag 栈灌进去只会让模型两边都不像。
+    (
+        "character_cards",
+        "tag_prompt",
+        "ALTER TABLE character_cards ADD COLUMN tag_prompt TEXT NULL",
+    ),
+    // 画风卡正常由新表 DDL 一次建全；这一条只兜"开发期曾建过一张没有 tag_prompt 的表"。
+    (
+        "style_cards",
+        "tag_prompt",
+        "ALTER TABLE style_cards ADD COLUMN tag_prompt TEXT NULL",
     ),
     // 产物所属集合（2026-10-11）。可空 + 无默认值 → 符合"只能加可空列"的规矩。
     // 老库补上这一列之后**全是 NULL**，要靠 `collection::backfill` 那一趟才填得满。

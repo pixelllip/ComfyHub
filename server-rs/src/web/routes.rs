@@ -339,6 +339,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/capabilities/probe", axum::routing::post(ai_capabilities_probe))
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
+        // 工作流原文（界面「选择现有工作流 → 看蓝图」按需拉）。**只读**，路径过读白名单。
+        .route("/api/capture/workflow", get(capture_workflow_raw))
         // 捕获状态与实时进度（第 42 步）：真的去问一次 ComfyUI 的 /queue
         .route("/api/capture/status", get(capture_status))
         .route("/api/capture/jobs", get(capture_jobs))
@@ -364,8 +366,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/push", axum::routing::post(sync_push))
         .route("/api/sync/bootstrap", get(sync_bootstrap))
         .merge(crate::web::write_routes::write_router())
-        // 角色卡五条（P4 第 46 步）：界面的角色卡页面 + AI 的 `save_character_card` 共用一份仓储。
-        .merge(crate::library::character_cards::router())
+        // 角色卡 + 画风卡（2026-10-21 合并到同一个仓储）：界面的卡片页与 AI 的
+        // `save_character_card` / `save_style_card` 共用这一份实现。
+        .merge(crate::library::cards::router())
         // 工作流配方五条（P4 第 67 步）：列表 / 学一份 / 详情 / 绑定 / 删除。
         // **学习与绑定走的是 AI 工具那两个函数**（`workflow_recipe::learn_and_save` /
         // `bind_and_report`）—— 分头写必然漂移，而漂移的表现是"AI 学出来的配方和界面看到的不一样"。
@@ -546,6 +549,49 @@ async fn capture_workflows(
     Query(query): Query<crate::comfy::comfy_dirs::WorkflowQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::comfy::comfy_dirs::workflows_json(&state, query)?))
+}
+
+/// `GET /api/capture/workflow?path=…` 的查询参数。
+#[derive(Debug, serde::Deserialize)]
+pub struct WorkflowRawQuery {
+    pub path: String,
+}
+
+/// `GET /api/capture/workflow?path=…` —— 读一份本机工作流原文（**只读**）。
+///
+/// 界面「选择现有工作流」列表只给了 `path`；点「看蓝图」时要原文。
+/// **准入与 `read_file` 同一条**：过 [`crate::tools::policy::ToolPolicy::resolve_read`]，
+/// 不在读白名单里的路径一律拒绝 —— 前端绝不自己拼路径读盘。
+async fn capture_workflow_raw(
+    State(state): State<AppState>,
+    Query(query): Query<WorkflowRawQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    const MAX_BYTES: u64 = 8 * 1024 * 1024;
+    let path = query.path.trim();
+    if path.is_empty() {
+        return Err(ApiError::bad_request("path 不能为空"));
+    }
+    let policy = crate::tools::policy::ToolPolicy::load(&state)?;
+    let resolved = policy
+        .resolve_read(path)
+        .map_err(|failure| ApiError::ai(failure.code, failure.message))?;
+    let size = std::fs::metadata(&resolved)
+        .map_err(|e| ApiError::bad_request(format!("读不到 {}：{e}", resolved.display())))?
+        .len();
+    if size > MAX_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "工作流文件 {} MB，超过界面预览上限（{} MB）",
+            size / 1024 / 1024,
+            MAX_BYTES / 1024 / 1024
+        )));
+    }
+    let raw = std::fs::read_to_string(&resolved)
+        .map_err(|e| ApiError::bad_request(format!("读不到 {}：{e}", resolved.display())))?;
+    Ok(Json(serde_json::json!({
+        "path": resolved.display().to_string(),
+        "bytes": raw.len(),
+        "raw": raw,
+    })))
 }
 
 /// `GET /api/capture/status` —— 捕获状态（含**真的问一次** ComfyUI 队列）。

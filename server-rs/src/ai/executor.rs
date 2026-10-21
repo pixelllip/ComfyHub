@@ -825,6 +825,25 @@ impl CallOutcome {
     }
 }
 
+/// 把模型写在参数里的 `reason` 摘出来（见 `tools::spec_of_view`）。
+///
+/// 返回 `(摘过之后的参数 JSON 文本, reason)`。参数不是对象 / 不是合法 JSON 时原样返回。
+/// `reason` 只认字符串；写了别的类型也**照样摘掉**（否则会漏进工具参数）。
+fn take_reason(arguments: &mut String) -> Option<String> {
+    let mut value: Value = serde_json::from_str(arguments).ok()?;
+    let object = value.as_object_mut()?;
+    let raw = object.remove("reason")?;
+    let reason = raw
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+    if let Ok(text) = serde_json::to_string(&value) {
+        *arguments = text;
+    }
+    reason
+}
+
 /// 处理一次工具调用：**闸门 → 执行 → 落库 → 发事件**，返回喂回模型的那份结果。
 ///
 /// # 顺序不能倒（R8）
@@ -854,6 +873,11 @@ async fn handle_call(
     conversation_id: &str,
     max_calls: i64,
 ) -> Result<CallOutcome, ApiError> {
+    // `reason` 是**给用户看的**（工具卡标题），不是工具参数：
+    // 先摘掉再解析，后面缓存键、落库、执行、回填历史用的都是摘过的那一份。
+    // 只有这一处摘 —— 工具 handler 永远看不到它（见 `tools::spec_of_view` 的注释）。
+    let mut call = call.clone();
+    let reason = take_reason(&mut call.arguments);
     let arguments: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
     // **只读工具的缓存命中**（`tools::tool_cache`）：这一句是**纯内存查询**，
     // 什么都不碰、也不改任何闸门的顺序 —— 它只影响两件事：
@@ -876,7 +900,7 @@ async fn handle_call(
     // 参数用**原文**（不是解析后的对象）：Dart 侧 `map['arguments']` 读的就是这个字符串。
     {
         let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
-        sink.push_tool_call(call_id, &call.name, &call.arguments);
+        sink.push_tool_call(call_id, &call.name, &call.arguments, reason.as_deref());
     }
 
     // ① 落库（R8：闸门开的同一刻就落，用户手快也点得到）
@@ -899,6 +923,8 @@ async fn handle_call(
             "callId": call_id,
             "name": call.name,
             "arguments": call.arguments,
+            // 只给界面看：工具卡标题用它代替机器名（没有就退回到前端那张名字表）
+            "reason": reason,
             "approval": if needs_approval { "pending" } else { "not_required" },
         }),
     )?;
@@ -915,7 +941,7 @@ async fn handle_call(
             run_id,
             assistant_id,
             call_id,
-            call,
+            &call,
             sink,
             CallOutcome::failure(
                 "TOOL_NOT_FOUND",
@@ -936,7 +962,7 @@ async fn handle_call(
             run_id,
             assistant_id,
             call_id,
-            call,
+            &call,
             sink,
             CallOutcome::failure(
                 "TOOL_BUDGET_EXCEEDED",
@@ -965,7 +991,7 @@ async fn handle_call(
             run_id,
             assistant_id,
             call_id,
-            call,
+            &call,
             sink,
             CallOutcome::failure(
                 "QUERY_BUDGET_EXCEEDED",
@@ -994,7 +1020,7 @@ async fn handle_call(
             run_id,
             assistant_id,
             call_id,
-            call,
+            &call,
             sink,
             CallOutcome::failure(
                 "QUERY_BUDGET_EXCEEDED",
@@ -1015,7 +1041,7 @@ async fn handle_call(
             run_id,
             assistant_id,
             call_id,
-            call,
+            &call,
             sink,
             CallOutcome::failure(
                 "TOOL_DENIED",
@@ -1037,7 +1063,7 @@ async fn handle_call(
                 "denied",
                 APPROVAL_TIMEOUT_SECONDS as i64 * 1000,
             );
-            return finish_failure(state, run_id, assistant_id, call_id, call, sink, outcome).await;
+            return finish_failure(state, run_id, assistant_id, call_id, &call, sink, outcome).await;
         }
         approval = "approved".to_string();
         // 批准的那一刻就告诉界面"开始跑了"，而不是等它跑完再补发
@@ -1343,13 +1369,13 @@ impl Sink {
     /// 工具卡块。`arguments` 是**模型给的原文**（Kotlin 也把它当字符串放进 payload）——
     /// 存成对象的话，Dart 侧 `map['arguments'].toString()` 会变成 `{query: x}` 这种
     /// 既不是 JSON、也没法回填进输入框的东西。
-    fn push_tool_call(&mut self, call_id: &str, name: &str, arguments: &str) {
+    fn push_tool_call(&mut self, call_id: &str, name: &str, arguments: &str, reason: Option<&str>) {
         self.seal_text();
         self.parts.push((
             "tool_call".into(),
             String::new(),
             Some(call_id.to_string()),
-            Some(json!({ "name": name, "arguments": arguments })),
+            Some(json!({ "name": name, "arguments": arguments, "reason": reason })),
         ));
     }
 

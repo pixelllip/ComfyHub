@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/ai_models.dart';
+import '../models/models.dart';
 import 'pairing_token.dart';
 import 'workflow_blueprint.dart';
 
@@ -27,9 +28,12 @@ class AiApiClient {
   /// 缓存一份头会让它要等 client 重建才生效。
   final String? Function()? tokenProvider;
 
-  AiApiClient(this.baseUrl, {http.Client? client, String? Function()? tokenProvider})
-      : tokenProvider = tokenProvider ?? PairingTokenCache.read,
-        _client = client ?? http.Client();
+  AiApiClient(
+    this.baseUrl, {
+    http.Client? client,
+    String? Function()? tokenProvider,
+  }) : tokenProvider = tokenProvider ?? PairingTokenCache.read,
+       _client = client ?? http.Client();
 
   void dispose() => _client.close();
 
@@ -62,13 +66,16 @@ class AiApiClient {
     final message = (json is Map && json['detail'] != null)
         ? json['detail'].toString()
         : (json is Map && json['error'] != null
-            ? json['error'].toString()
-            // 最后的兜底：`message` 是老形状（Rust 侧 2026-09-24 已对齐成 {error, detail?}）
-            : (json is Map && json['message'] != null ? json['message'].toString() : '请求失败'));
+              ? json['error'].toString()
+              // 最后的兜底：`message` 是老形状（Rust 侧 2026-09-24 已对齐成 {error, detail?}）
+              : (json is Map && json['message'] != null
+                    ? json['message'].toString()
+                    : '请求失败'));
     throw AiApiException(res.statusCode, message);
   }
 
-  Future<dynamic> _get(String path) async => _decode(await _client.get(_uri(path), headers: _headers));
+  Future<dynamic> _get(String path) async =>
+      _decode(await _client.get(_uri(path), headers: _headers));
 
   Future<dynamic> _send(String method, String path, [Object? body]) async {
     final req = http.Request(method, _uri(path))
@@ -82,37 +89,73 @@ class AiApiClient {
 
   Future<List<AiProvider>> listProviders() async {
     final raw = await _get('/api/ai/providers');
-    return (raw as List).whereType<Map>().map((e) => AiProvider.fromJson(Map<String, dynamic>.from(e))).toList();
+    return (raw as List)
+        .whereType<Map>()
+        .map((e) => AiProvider.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 
   Future<AiProvider> createProvider(Map<String, dynamic> body) async =>
-      AiProvider.fromJson(Map<String, dynamic>.from(await _send('POST', '/api/ai/providers', body) as Map));
+      AiProvider.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/providers', body) as Map,
+        ),
+      );
 
-  Future<AiProvider> updateProvider(String id, Map<String, dynamic> body) async => AiProvider.fromJson(
-      Map<String, dynamic>.from(await _send('PUT', '/api/ai/providers/$id', body) as Map));
+  Future<AiProvider> updateProvider(
+    String id,
+    Map<String, dynamic> body,
+  ) async => AiProvider.fromJson(
+    Map<String, dynamic>.from(
+      await _send('PUT', '/api/ai/providers/$id', body) as Map,
+    ),
+  );
 
-  Future<void> deleteProvider(String id) async => _send('DELETE', '/api/ai/providers/$id');
+  Future<void> deleteProvider(String id) async =>
+      _send('DELETE', '/api/ai/providers/$id');
 
   /// 连接测试：只拿回状态与稳定错误码，**不会拿回密钥**（AIH-008）。
-  Future<AiProviderTestResult> testProvider(String id) async => AiProviderTestResult.fromJson(
-      Map<String, dynamic>.from(await _send('POST', '/api/ai/providers/$id/test') as Map));
+  Future<AiProviderTestResult> testProvider(String id) async =>
+      AiProviderTestResult.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/providers/$id/test') as Map,
+        ),
+      );
 
   /// 模型发现：返回候选，**不落库**；用户勾选后再由 [saveModels] 保存（AIH-009）。
-  Future<AiDiscoverResult> discoverModels(String id) async => AiDiscoverResult.fromJson(
-      Map<String, dynamic>.from(await _send('POST', '/api/ai/providers/$id/discover-models') as Map));
+  Future<AiDiscoverResult> discoverModels(String id) async =>
+      AiDiscoverResult.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/providers/$id/discover-models') as Map,
+        ),
+      );
 
   Future<AiCredentialStatus> credentialStatus(String providerId) async =>
-      AiCredentialStatus.fromJson(Map<String, dynamic>.from(
-          await _get('/api/ai/providers/$providerId/credentials') as Map));
+      AiCredentialStatus.fromJson(
+        Map<String, dynamic>.from(
+          await _get('/api/ai/providers/$providerId/credentials') as Map,
+        ),
+      );
 
   /// 只写：值传出去之后前端不再持有，也不回读（留空表示不修改）。
-  Future<AiCredentialStatus> setCredential(String providerId, String value) async =>
-      AiCredentialStatus.fromJson(Map<String, dynamic>.from(
-          await _send('PUT', '/api/ai/providers/$providerId/credentials', {'value': value}) as Map));
+  Future<AiCredentialStatus> setCredential(
+    String providerId,
+    String value,
+  ) async => AiCredentialStatus.fromJson(
+    Map<String, dynamic>.from(
+      await _send('PUT', '/api/ai/providers/$providerId/credentials', {
+        'value': value,
+      }) as Map,
+    ),
+  );
 
   Future<AiCredentialStatus> removeCredential(String providerId) async =>
-      AiCredentialStatus.fromJson(Map<String, dynamic>.from(
-          await _send('DELETE', '/api/ai/providers/$providerId/credentials') as Map));
+      AiCredentialStatus.fromJson(
+        Map<String, dynamic>.from(
+          await _send('DELETE', '/api/ai/providers/$providerId/credentials')
+              as Map,
+        ),
+      );
 
   // --- 联网搜索（Keenable）的可选密钥 -------------------------------------
   //
@@ -120,28 +163,49 @@ class AiApiClient {
   // env 来源只读。出厂免密钥就能用，这里只是给想提额的用户一个入口。
 
   Future<AiCredentialStatus> webSearchCredentialStatus() async =>
-      AiCredentialStatus.fromJson(Map<String, dynamic>.from(
-          await _get('/api/ai/web-search/credential') as Map));
+      AiCredentialStatus.fromJson(
+        Map<String, dynamic>.from(
+          await _get('/api/ai/web-search/credential') as Map,
+        ),
+      );
 
   /// 只写：值传出去之后前端不再持有，也不回读（留空表示不修改）。
   Future<AiCredentialStatus> setWebSearchCredential(String value) async =>
-      AiCredentialStatus.fromJson(Map<String, dynamic>.from(
-          await _send('PUT', '/api/ai/web-search/credential', {'value': value}) as Map));
+      AiCredentialStatus.fromJson(
+        Map<String, dynamic>.from(
+          await _send('PUT', '/api/ai/web-search/credential', {'value': value})
+              as Map,
+        ),
+      );
 
   Future<AiCredentialStatus> removeWebSearchCredential() async =>
-      AiCredentialStatus.fromJson(Map<String, dynamic>.from(
-          await _send('DELETE', '/api/ai/web-search/credential') as Map));
+      AiCredentialStatus.fromJson(
+        Map<String, dynamic>.from(
+          await _send('DELETE', '/api/ai/web-search/credential') as Map,
+        ),
+      );
 
   // --- 模型目录 ----------------------------------------------------------
 
   Future<List<AiModel>> listModels(String providerId) async {
     final raw = await _get('/api/ai/providers/$providerId/models');
-    return (raw as List).whereType<Map>().map((e) => AiModel.fromJson(Map<String, dynamic>.from(e))).toList();
+    return (raw as List)
+        .whereType<Map>()
+        .map((e) => AiModel.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 
-  Future<List<AiModel>> saveModels(String providerId, List<Map<String, dynamic>> models) async {
-    final raw = await _send('PUT', '/api/ai/providers/$providerId/models', {'models': models});
-    return (raw as List).whereType<Map>().map((e) => AiModel.fromJson(Map<String, dynamic>.from(e))).toList();
+  Future<List<AiModel>> saveModels(
+    String providerId,
+    List<Map<String, dynamic>> models,
+  ) async {
+    final raw = await _send('PUT', '/api/ai/providers/$providerId/models', {
+      'models': models,
+    });
+    return (raw as List)
+        .whereType<Map>()
+        .map((e) => AiModel.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 
   // --- Skills（M5） ------------------------------------------------------
@@ -155,8 +219,12 @@ class AiApiClient {
         .toList();
   }
 
-  Future<AiSkillDetail> skillDetail(String name) async => AiSkillDetail.fromJson(
-      Map<String, dynamic>.from(await _get('/api/ai/skills/${Uri.encodeComponent(name)}') as Map));
+  Future<AiSkillDetail> skillDetail(String name) async =>
+      AiSkillDetail.fromJson(
+        Map<String, dynamic>.from(
+          await _get('/api/ai/skills/${Uri.encodeComponent(name)}') as Map,
+        ),
+      );
 
   /// 注册（或覆盖）用户 skill；后端 201 + SkillDto。
   Future<AiSkill> createSkill({
@@ -164,76 +232,214 @@ class AiApiClient {
     required String description,
     String? whenToUse,
     required String content,
-  }) async =>
-      AiSkill.fromJson(Map<String, dynamic>.from(await _send('POST', '/api/ai/skills', {
+  }) async => AiSkill.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/ai/skills', {
         'name': name,
         'description': description,
         'whenToUse': ?whenToUse,
         'content': content,
-      }) as Map));
+      }) as Map,
+    ),
+  );
 
   /// 删除用户 skill。内置 skill 会被后端拒绝（错误消息原样展示给用户）。
   Future<void> deleteSkill(String name) async =>
       _send('DELETE', '/api/ai/skills/${Uri.encodeComponent(name)}');
 
   /// skills 投放口在哪（界面显示绝对路径，让用户知道往哪个文件夹拷）。
-  Future<AiSkillRoots> skillRoots() async =>
-      AiSkillRoots.fromJson(Map<String, dynamic>.from(await _get('/api/ai/skills/roots') as Map));
+  Future<AiSkillRoots> skillRoots() async => AiSkillRoots.fromJson(
+    Map<String, dynamic>.from(await _get('/api/ai/skills/roots') as Map),
+  );
 
   /// 重新扫描投放口：给"拷进来但没写 frontmatter"的 skill 自动登记，并返回最新清单。
   /// 应用开着的时候往文件夹里拷东西，点一下就生效，不用重启（启动时后端也会扫一次）。
-  Future<AiSkillRescanResult> rescanSkills() async => AiSkillRescanResult.fromJson(
-      Map<String, dynamic>.from(await _send('POST', '/api/ai/skills/rescan') as Map));
+  Future<AiSkillRescanResult> rescanSkills() async =>
+      AiSkillRescanResult.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/skills/rescan') as Map,
+        ),
+      );
 
   // --- 长期记忆（M6） ----------------------------------------------------
 
-  Future<AiMemory> memory() async =>
-      AiMemory.fromJson(Map<String, dynamic>.from(await _get('/api/ai/memory') as Map));
+  Future<AiMemory> memory() async => AiMemory.fromJson(
+    Map<String, dynamic>.from(await _get('/api/ai/memory') as Map),
+  );
 
   /// 整篇替换（界面的「保存」）。
   Future<AiMemory> saveMemory(String content) async => AiMemory.fromJson(
-      Map<String, dynamic>.from(await _send('PUT', '/api/ai/memory', {'content': content}) as Map));
+    Map<String, dynamic>.from(
+      await _send('PUT', '/api/ai/memory', {'content': content}) as Map,
+    ),
+  );
 
   /// 追加一条（界面的「添加一条」）。
-  Future<AiMemory> appendMemory(String content) async => AiMemory.fromJson(Map<String, dynamic>.from(
-      await _send('POST', '/api/ai/memory/entries', {'content': content}) as Map));
+  Future<AiMemory> appendMemory(String content) async => AiMemory.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/ai/memory/entries', {'content': content})
+          as Map,
+    ),
+  );
 
   /// 按下标删几条（界面的单条 / 批量删除）。下标与 `AiMemory.entries` 同源。
-  Future<AiMemory> deleteMemoryEntries(List<int> indices) async => AiMemory.fromJson(
-      Map<String, dynamic>.from(
-          await _send('POST', '/api/ai/memory/delete', {'indices': indices}) as Map));
+  Future<AiMemory> deleteMemoryEntries(List<int> indices) async =>
+      AiMemory.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/memory/delete', {'indices': indices})
+              as Map,
+        ),
+      );
 
-  Future<AiMemory> clearMemory() async =>
-      AiMemory.fromJson(Map<String, dynamic>.from(await _send('DELETE', '/api/ai/memory') as Map));
+  Future<AiMemory> clearMemory() async => AiMemory.fromJson(
+    Map<String, dynamic>.from(await _send('DELETE', '/api/ai/memory') as Map),
+  );
 
-  // --- 角色卡（O8，2026-09-26）-------------------------------------------
+  // --- 卡片库：角色卡 / 画风卡（2026-10-21）------------------------------
   //
-  // 与「长期记忆」同一套形状（列表 / 新建 / 编辑 / 删除）。
-  // **AI 也用同一张表**（`save_character_card` / `search_character_cards`），
-  // 所以界面上看到的卡就是模型"先查三处"里查的那一份。
-  // 2026-10 起卡上**只有三个字段**：名称 / 正面提示词 / 负面提示词。
+  // 两种卡**同等地位**、字段同形：名称 / Danbooru tag 版 / 自然语言版 /
+  // 负面提示词 / 示例产物。AI 用同一批表（`save_character_card` /
+  // `save_style_card` / `search_character_cards` / `search_style_cards`），
+  // 所以界面上看到的就是模型查到的那一份。
+  //
+  // `PUT` 一律是**全量替换卡的文本字段**（清空一个字段就真的清掉）；
+  // 示例产物有独立端点（界面"管理示例"用 `PUT .../examples` 全量替换）。
 
   Future<List<CharacterCard>> listCharacterCards({String? query}) async {
-    final q = (query ?? '').trim();
-    final path = q.isEmpty
-        ? '/api/ai/character-cards'
-        : '/api/ai/character-cards?q=${Uri.encodeQueryComponent(q)}';
-    final raw = await _get(path);
+    final raw = await _get(_cardsPath('character-cards', query));
     return (raw as List)
         .whereType<Map>()
         .map((e) => CharacterCard.fromJson(Map<String, dynamic>.from(e)))
         .toList();
   }
 
-  Future<CharacterCard> createCharacterCard(Map<String, dynamic> body) async => CharacterCard.fromJson(
-      Map<String, dynamic>.from(await _send('POST', '/api/ai/character-cards', body) as Map));
+  Future<List<StyleCard>> listStyleCards({String? query}) async {
+    final raw = await _get(_cardsPath('style-cards', query));
+    return (raw as List)
+        .whereType<Map>()
+        .map((e) => StyleCard.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  String _cardsPath(String kind, String? query) {
+    final q = (query ?? '').trim();
+    return q.isEmpty
+        ? '/api/ai/$kind'
+        : '/api/ai/$kind?q=${Uri.encodeQueryComponent(q)}';
+  }
+
+  Future<CharacterCard> createCharacterCard(Map<String, dynamic> body) async =>
+      CharacterCard.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/character-cards', body) as Map,
+        ),
+      );
+
+  Future<StyleCard> createStyleCard(Map<String, dynamic> body) async =>
+      StyleCard.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/style-cards', body) as Map,
+        ),
+      );
 
   /// 全量替换（弹窗里所有字段都在 —— 清空一个字段就真的清掉）。
-  Future<CharacterCard> updateCharacterCard(int id, Map<String, dynamic> body) async =>
-      CharacterCard.fromJson(Map<String, dynamic>.from(
-          await _send('PUT', '/api/ai/character-cards/$id', body) as Map));
+  Future<CharacterCard> updateCharacterCard(
+    int id,
+    Map<String, dynamic> body,
+  ) async => CharacterCard.fromJson(
+    Map<String, dynamic>.from(
+      await _send('PUT', '/api/ai/character-cards/$id', body) as Map,
+    ),
+  );
 
-  Future<void> deleteCharacterCard(int id) async => _send('DELETE', '/api/ai/character-cards/$id');
+  Future<StyleCard> updateStyleCard(
+    int id,
+    Map<String, dynamic> body,
+  ) async => StyleCard.fromJson(
+    Map<String, dynamic>.from(
+      await _send('PUT', '/api/ai/style-cards/$id', body) as Map,
+    ),
+  );
+
+  Future<void> deleteCharacterCard(int id) async =>
+      _send('DELETE', '/api/ai/character-cards/$id');
+
+  Future<void> deleteStyleCard(int id) async =>
+      _send('DELETE', '/api/ai/style-cards/$id');
+
+  /// **全量替换**一张卡的示例产物（界面的"管理示例"用它）。
+  Future<CharacterCard> replaceCharacterCardExamples(
+    int id,
+    List<int> mediaIds,
+  ) async => CharacterCard.fromJson(
+    Map<String, dynamic>.from(
+      await _send('PUT', '/api/ai/character-cards/$id/examples', {
+        'mediaIds': mediaIds,
+      }) as Map,
+    ),
+  );
+
+  Future<StyleCard> replaceStyleCardExamples(
+    int id,
+    List<int> mediaIds,
+  ) async => StyleCard.fromJson(
+    Map<String, dynamic>.from(
+      await _send('PUT', '/api/ai/style-cards/$id/examples', {
+        'mediaIds': mediaIds,
+      }) as Map,
+    ),
+  );
+
+  /// 追加一条示例（"快速加一条"用；重复 id 后端会忽略）。
+  Future<CharacterCard> addCharacterCardExample(int id, int mediaId) async =>
+      CharacterCard.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/character-cards/$id/examples', {
+            'mediaIds': [mediaId],
+          }) as Map,
+        ),
+      );
+
+  Future<StyleCard> addStyleCardExample(int id, int mediaId) async =>
+      StyleCard.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/style-cards/$id/examples', {
+            'mediaIds': [mediaId],
+          }) as Map,
+        ),
+      );
+
+  Future<void> deleteCharacterCardExample(int id, int mediaId) async =>
+      _send('DELETE', '/api/ai/character-cards/$id/examples/$mediaId');
+
+  Future<void> deleteStyleCardExample(int id, int mediaId) async =>
+      _send('DELETE', '/api/ai/style-cards/$id/examples/$mediaId');
+
+  /// 卡片"管理示例"选择器用的画廊列表（最近 60 条；可按关键字搜）。
+  ///
+  /// 这不是第二个画廊 —— 只给卡片页挑示例用，所以只读、不带筛选状态。
+  Future<List<MediaAsset>> searchMediaForExamples({
+    String? query,
+    int size = 60,
+  }) async {
+    final params = <String, String>{'size': '$size', 'sort': 'newest'};
+    final q = (query ?? '').trim();
+    if (q.isNotEmpty) params['q'] = q;
+    final path = Uri(path: '/api/media', queryParameters: params).toString();
+    final raw = await _get(path);
+    return Paged.fromJson(
+      Map<String, dynamic>.from(raw as Map),
+      MediaAsset.fromJson,
+    ).items;
+  }
+
+  /// 后端算好的相对路径 → 可加载的绝对 URL（卡片缩略图用）。
+  ///
+  /// 与 `ApiClient.absolute` 同一条规则，**不要在页面里手拼**。
+  String absolute(String path) {
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    return path.startsWith('/') ? '$baseUrl$path' : '$baseUrl/$path';
+  }
 
   // --- 工具与权限（M4） --------------------------------------------------
 
@@ -245,20 +451,33 @@ class AiApiClient {
         .toList();
   }
 
-  Future<AiToolPolicy> toolPolicy() async =>
-      AiToolPolicy.fromJson(Map<String, dynamic>.from(await _get('/api/ai/tools/policy') as Map));
+  Future<AiToolPolicy> toolPolicy() async => AiToolPolicy.fromJson(
+    Map<String, dynamic>.from(await _get('/api/ai/tools/policy') as Map),
+  );
 
   /// 只发要改的字段（`any subset`），返回生效后的完整策略。
-  Future<AiToolPolicy> updateToolPolicy(Map<String, dynamic> patch) async => AiToolPolicy.fromJson(
-      Map<String, dynamic>.from(await _send('PUT', '/api/ai/tools/policy', patch) as Map));
+  Future<AiToolPolicy> updateToolPolicy(Map<String, dynamic> patch) async =>
+      AiToolPolicy.fromJson(
+        Map<String, dynamic>.from(
+          await _send('PUT', '/api/ai/tools/policy', patch) as Map,
+        ),
+      );
 
   /// 批准 / 拒绝一次工具调用。返回 `accepted`：false 表示这次调用已经结束或超时，
   /// 按钮点晚了 —— 界面要把这个如实说出来，不能假装成功。
-  Future<bool> approveToolCall(String callId) async =>
-      _approvalAccepted(await _send('POST', '/api/ai/tool-calls/${Uri.encodeComponent(callId)}/approve'));
+  Future<bool> approveToolCall(String callId) async => _approvalAccepted(
+    await _send(
+      'POST',
+      '/api/ai/tool-calls/${Uri.encodeComponent(callId)}/approve',
+    ),
+  );
 
-  Future<bool> denyToolCall(String callId) async =>
-      _approvalAccepted(await _send('POST', '/api/ai/tool-calls/${Uri.encodeComponent(callId)}/deny'));
+  Future<bool> denyToolCall(String callId) async => _approvalAccepted(
+    await _send(
+      'POST',
+      '/api/ai/tool-calls/${Uri.encodeComponent(callId)}/deny',
+    ),
+  );
 
   bool _approvalAccepted(dynamic raw) => raw is Map && raw['accepted'] == true;
 
@@ -271,8 +490,9 @@ class AiApiClient {
   /// 提交（契约 §4.1 的 `submit_job`）**不在任何本机 Run 的事件流里** ——
   /// 没有这个接口，"手机排的队"在桌面上就看不见、点不了，只能等超时。
   /// 批准 / 拒绝仍然走同一条通道（[approveToolCall] / [denyToolCall]）。
-  Future<AiPendingOverview> pending() async =>
-      AiPendingOverview.fromJson(Map<String, dynamic>.from(await _get('/api/ai/pending') as Map));
+  Future<AiPendingOverview> pending() async => AiPendingOverview.fromJson(
+    Map<String, dynamic>.from(await _get('/api/ai/pending') as Map),
+  );
 
   // --- 提问（用户建议 ⑥）------------------------------------------------
 
@@ -282,7 +502,8 @@ class AiApiClient {
   /// 没挂着的时候发出的，靠这个接口把那张卡片补回来。
   Future<AiQuestion?> pendingQuestion(String runId) async {
     final raw = Map<String, dynamic>.from(
-        await _get('/api/ai/runs/${Uri.encodeComponent(runId)}/question') as Map);
+      await _get('/api/ai/runs/${Uri.encodeComponent(runId)}/question') as Map,
+    );
     if (raw['pending'] != true) return null;
     final q = raw['question'];
     return q is Map ? AiQuestion.fromJson(Map<String, dynamic>.from(q)) : null;
@@ -292,21 +513,25 @@ class AiApiClient {
   ///
   /// 返回 `accepted`：false 表示这条提问已经结束了（超时 / Run 已停），
   /// 界面要如实告诉用户"这次回答没被采纳"，不能假装成功。
-  Future<bool> answerQuestion(String questionId, {int? optionIndex, String? answer}) async {
+  Future<bool> answerQuestion(
+    String questionId, {
+    int? optionIndex,
+    String? answer,
+  }) async {
     final raw = await _send(
       'POST',
       '/api/ai/questions/${Uri.encodeComponent(questionId)}/answer',
-      {
-        'optionIndex': ?optionIndex,
-        'answer': ?answer,
-      },
+      {'optionIndex': ?optionIndex, 'answer': ?answer},
     );
     return raw is Map && raw['accepted'] == true;
   }
 
   /// 跳过一条提问：当作"用户没有回答"放行（模型据此基于已有信息继续）。
   Future<bool> skipQuestion(String questionId) async {
-    final raw = await _send('POST', '/api/ai/questions/${Uri.encodeComponent(questionId)}/skip');
+    final raw = await _send(
+      'POST',
+      '/api/ai/questions/${Uri.encodeComponent(questionId)}/skip',
+    );
     return raw is Map && raw['accepted'] == true;
   }
 
@@ -316,13 +541,20 @@ class AiApiClient {
   ///
   /// 真源在后端（`app_settings` 的 `ai.nsfw`）：`enabled` 决定系统提示词里注不注入那一段，
   /// 所以前端**不能**自己存一份 —— 否则会出现"界面说开着、后端其实没注入"。
-  Future<AiNsfwSettings> nsfwSettings() async =>
-      AiNsfwSettings.fromJson(Map<String, dynamic>.from(await _get('/api/ai/nsfw') as Map));
+  Future<AiNsfwSettings> nsfwSettings() async => AiNsfwSettings.fromJson(
+    Map<String, dynamic>.from(await _get('/api/ai/nsfw') as Map),
+  );
 
   /// 写 NSFW 设置，返回**生效后**的那份（`effectiveBlur` 由后端算好）。
-  Future<AiNsfwSettings> updateNsfwSettings({required bool enabled, required bool blur}) async =>
-      AiNsfwSettings.fromJson(Map<String, dynamic>.from(
-          await _send('PUT', '/api/ai/nsfw', {'enabled': enabled, 'blur': blur}) as Map));
+  Future<AiNsfwSettings> updateNsfwSettings({
+    required bool enabled,
+    required bool blur,
+  }) async => AiNsfwSettings.fromJson(
+    Map<String, dynamic>.from(
+      await _send('PUT', '/api/ai/nsfw', {'enabled': enabled, 'blur': blur})
+          as Map,
+    ),
+  );
 
   // --- 模型能力目录（在线更新 / 实测校准，2026-09-23） ----------------------
   //
@@ -333,27 +565,45 @@ class AiApiClient {
   // 能力预填的来源是**在线目录 models.dev**（下面这三条）。
 
   /// 能力目录状态（在线目录的新鲜度 + 手工目录条数 + 校准开关）。
-  Future<AiCapabilityStatus> capabilityStatus() async => AiCapabilityStatus.fromJson(
-      Map<String, dynamic>.from(await _get('/api/ai/capabilities/status') as Map));
+  Future<AiCapabilityStatus> capabilityStatus() async =>
+      AiCapabilityStatus.fromJson(
+        Map<String, dynamic>.from(
+          await _get('/api/ai/capabilities/status') as Map,
+        ),
+      );
 
   /// 立即从在线数据集（models.dev）刷新能力目录。失败不抛错：返回体里
   /// `lastMessage` 带着如实的原因（旧目录原样保留），界面照常显示。
-  Future<AiCapabilityStatus> refreshCapabilityCatalog() async => AiCapabilityStatus.fromJson(
-      Map<String, dynamic>.from(await _send('POST', '/api/ai/capabilities/refresh', const {}) as Map));
+  Future<AiCapabilityStatus> refreshCapabilityCatalog() async =>
+      AiCapabilityStatus.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/capabilities/refresh', const {}) as Map,
+        ),
+      );
 
   /// 开/关「实测校准」（校准会发真实请求，默认关）。
   Future<AiCapabilityStatus> setProbeEnabled({required bool enabled}) async =>
-      AiCapabilityStatus.fromJson(Map<String, dynamic>.from(
-          await _send('PUT', '/api/ai/capabilities/probe-toggle', {'enabled': enabled}) as Map));
+      AiCapabilityStatus.fromJson(
+        Map<String, dynamic>.from(
+          await _send('PUT', '/api/ai/capabilities/probe-toggle', {
+            'enabled': enabled,
+          }) as Map,
+        ),
+      );
 
   /// 校准思考档位：真发极小请求从最高档往下试，把网关实际接受的档位写回。
   /// `providerId` 缺省 = 所有启用的 Provider；`modelId` 缺省 = 该 Provider 全部推理模型。
-  Future<AiCapabilityProbeResponse> probeCapabilities({String? providerId, String? modelId}) async =>
-      AiCapabilityProbeResponse.fromJson(Map<String, dynamic>.from(
-          await _send('POST', '/api/ai/capabilities/probe', {
-            'providerId': ?providerId,
-            'modelId': ?modelId,
-          }) as Map));
+  Future<AiCapabilityProbeResponse> probeCapabilities({
+    String? providerId,
+    String? modelId,
+  }) async => AiCapabilityProbeResponse.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/ai/capabilities/probe', {
+        'providerId': ?providerId,
+        'modelId': ?modelId,
+      }) as Map,
+    ),
+  );
 
   // --- 附件（M3） --------------------------------------------------------
 
@@ -367,12 +617,15 @@ class AiApiClient {
   ) async {
     final req = http.MultipartRequest('POST', _uri('/api/ai/attachments'));
     for (final f in files) {
-      req.files.add(await http.MultipartFile.fromPath('files', f.path, filename: f.name));
+      req.files.add(
+        await http.MultipartFile.fromPath('files', f.path, filename: f.name),
+      );
     }
     final streamed = await _client.send(req);
     final res = await http.Response.fromStream(streamed);
     return AiAttachmentUploadResult.fromJson(
-        Map<String, dynamic>.from(_decode(res) as Map));
+      Map<String, dynamic>.from(_decode(res) as Map),
+    );
   }
 
   /// 缩略图 / 视频预览帧（**同一张接口**）：图片给缩略图，视频给第一帧预览图。
@@ -399,7 +652,10 @@ class AiApiClient {
   /// **必须用注入进来的 http client**，否则测试里换了假后端这条就测不到
   /// （真实客户端在 widget 测试里一律 400）。
   Future<String?> promptWorkflow(int promptId) async {
-    final res = await _client.get(_uri('/api/prompts/$promptId/workflow'), headers: _headers);
+    final res = await _client.get(
+      _uri('/api/prompts/$promptId/workflow'),
+      headers: _headers,
+    );
     if (res.statusCode == 204 || res.statusCode == 404) return null;
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw AiApiException(res.statusCode, '读取工作流失败（HTTP ${res.statusCode}）');
@@ -411,19 +667,56 @@ class AiApiClient {
   ///
   /// 与 `ApiClient.workflowBlueprint` 同一条端点：判据只有后端那一份
   /// （要 ComfyUI 的 `/object_info` 才判得出必填与类型）。
-  Future<Map<String, dynamic>> workflowBlueprint(String raw, {bool diagnose = true}) async =>
-      Map<String, dynamic>.from(await _send('POST', '/api/workflow/blueprint', {
-        'raw': raw,
-        'diagnose': diagnose,
-      }) as Map);
+  Future<Map<String, dynamic>> workflowBlueprint(
+    String raw, {
+    bool diagnose = true,
+  }) async => Map<String, dynamic>.from(
+    await _send('POST', '/api/workflow/blueprint', {
+      'raw': raw,
+      'diagnose': diagnose,
+    }) as Map,
+  );
+
+  /// 本机 ComfyUI 已保存的工作流文件（「选择现有工作流」用，只读）。
+  Future<ComfyWorkflowList> listWorkflowFiles({
+    String? q,
+    int limit = 50,
+  }) async {
+    final query = <String, String>{
+      'limit': '$limit',
+      if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
+    };
+    final path = '/api/capture/workflows?${Uri(queryParameters: query).query}';
+    return ComfyWorkflowList.fromJson(
+      Map<String, dynamic>.from(await _get(path) as Map),
+    );
+  }
+
+  /// 读一份本机工作流的原文（路径准入在后端；前端不拼盘路径）。
+  Future<String> readWorkflowFile(String path) async {
+    final raw = await _get(
+      '/api/capture/workflow?path=${Uri.encodeQueryComponent(path)}',
+    );
+    final text = (raw is Map) ? raw['raw'] : null;
+    if (text is! String) {
+      throw AiApiException(0, '后端没有返回工作流原文：$path');
+    }
+    return text;
+  }
 
   /// 把（改过的）工作流存成一份文件（落点由后端白名单决定）。
-  Future<SavedWorkflow> saveWorkflow({required String raw, String? name}) async =>
-      SavedWorkflow.fromJson(Map<String, dynamic>.from(
-          await _send('POST', '/api/workflow/save', {
+  Future<SavedWorkflow> saveWorkflow({
+    required String raw,
+    String? name,
+  }) async => SavedWorkflow.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/workflow/save', {
         'raw': raw,
         if (name != null && name.isNotEmpty) 'name': name,
-      }) as Map));
+      }) as Map,
+    ),
+  );
+
   /// 删除还没用进聊天记录的附件（已被引用的会报错，调用方可以忽略）。
   Future<void> deleteAttachment(String attachmentId) async =>
       _send('DELETE', '/api/ai/attachments/$attachmentId');
@@ -439,41 +732,65 @@ class AiApiClient {
     required String modelId,
     List<AiAttachment> attachments = const [],
     List<String> attachmentIds = const [],
-  }) async =>
-      AiPreflightResult.fromJson(Map<String, dynamic>.from(await _send('POST', '/api/ai/preflight', {
+  }) async => AiPreflightResult.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/ai/preflight', {
         'providerId': providerId,
         'modelId': modelId,
         if (attachmentIds.isNotEmpty)
           'attachmentIds': attachmentIds
         else
           'attachments': attachments.map((a) => a.toJson()).toList(),
-      }) as Map));
+      }) as Map,
+    ),
+  );
 
   // --- 会话与消息 --------------------------------------------------------
 
-  Future<List<AiConversation>> listConversations({bool includeArchived = false}) async {
-    final raw = await _get('/api/ai/conversations${includeArchived ? '?includeArchived=1' : ''}');
+  Future<List<AiConversation>> listConversations({
+    bool includeArchived = false,
+  }) async {
+    final raw = await _get(
+      '/api/ai/conversations${includeArchived ? '?includeArchived=1' : ''}',
+    );
     return (raw as List)
         .whereType<Map>()
         .map((e) => AiConversation.fromJson(Map<String, dynamic>.from(e)))
         .toList();
   }
 
-  Future<AiConversation> createConversation({String? title, String? providerId, String? modelId}) async =>
-      AiConversation.fromJson(Map<String, dynamic>.from(await _send('POST', '/api/ai/conversations', {
+  Future<AiConversation> createConversation({
+    String? title,
+    String? providerId,
+    String? modelId,
+  }) async => AiConversation.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/ai/conversations', {
         'title': ?title,
         'providerId': ?providerId,
         'modelId': ?modelId,
-      }) as Map));
+      }) as Map,
+    ),
+  );
 
-  Future<AiConversation> patchConversation(String id, Map<String, dynamic> body) async => AiConversation.fromJson(
-      Map<String, dynamic>.from(await _send('PATCH', '/api/ai/conversations/$id', body) as Map));
+  Future<AiConversation> patchConversation(
+    String id,
+    Map<String, dynamic> body,
+  ) async => AiConversation.fromJson(
+    Map<String, dynamic>.from(
+      await _send('PATCH', '/api/ai/conversations/$id', body) as Map,
+    ),
+  );
 
-  Future<void> deleteConversation(String id) async => _send('DELETE', '/api/ai/conversations/$id');
+  Future<void> deleteConversation(String id) async =>
+      _send('DELETE', '/api/ai/conversations/$id');
 
   Future<List<AiMessage>> listMessages(String conversationId) async {
     final raw = await _get('/api/ai/conversations/$conversationId/messages');
-    return (raw as List).whereType<Map>().map((e) => AiMessage.fromJson(Map<String, dynamic>.from(e))).toList();
+    return (raw as List)
+        .whereType<Map>()
+        .map((e) => AiMessage.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 
   Future<AiMessage> appendMessage(
@@ -483,14 +800,17 @@ class AiApiClient {
     String status = 'complete',
     String? modelId,
     List<Map<String, dynamic>> parts = const [],
-  }) async =>
-      AiMessage.fromJson(Map<String, dynamic>.from(await _send('POST', '/api/ai/conversations/$conversationId/messages', {
+  }) async => AiMessage.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/ai/conversations/$conversationId/messages', {
         'role': role,
         'text': text,
         'status': status,
         'modelId': ?modelId,
         'parts': parts,
-      }) as Map));
+      }) as Map,
+    ),
+  );
 
   // --- Run（AIH-020 / AIH-021 / AIH-022） --------------------------------
 
@@ -510,34 +830,42 @@ class AiApiClient {
     String? reasoningEffort,
     List<String> attachmentIds = const [],
     String? retryOfRunId,
-  }) async =>
-      AiRunStart.fromJson(Map<String, dynamic>.from(
-          await _send('POST', '/api/ai/conversations/$conversationId/runs', {
+  }) async => AiRunStart.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/ai/conversations/$conversationId/runs', {
         'text': text,
         'providerId': providerId,
         'modelId': modelId,
         'reasoningEffort': ?reasoningEffort,
         if (attachmentIds.isNotEmpty) 'attachmentIds': attachmentIds,
         'retryOfRunId': ?retryOfRunId,
-      }) as Map));
+      }) as Map,
+    ),
+  );
 
-  Future<void> cancelRun(String runId) async => _send('POST', '/api/ai/runs/$runId/cancel');
+  Future<void> cancelRun(String runId) async =>
+      _send('POST', '/api/ai/runs/$runId/cancel');
 
   /// ComfyUI 实时进度（用户"其他建议"第 1 条）：队列状态 + 最近提交的任务。
   ///
   /// 走的是同一个后端的 `/api/capture/jobs`（不是 `/api/ai/*`），所以用同一个客户端实例、
   /// 同一套错误处理；**不接受任意 URL**，和工具层一样只认应用配置里的 ComfyUI 地址。
-  Future<AiComfyJobs> comfyJobs() async =>
-      AiComfyJobs.fromJson(Map<String, dynamic>.from(await _get('/api/capture/jobs') as Map));
+  Future<AiComfyJobs> comfyJobs() async => AiComfyJobs.fromJson(
+    Map<String, dynamic>.from(await _get('/api/capture/jobs') as Map),
+  );
 
   /// 订阅统一事件流（SSE）。`after` 用于断线续传。
   Stream<AiRunEvent> runEvents(String runId, {int after = 0}) async* {
-    final req = http.Request('GET', _uri('/api/ai/runs/$runId/events?after=$after'))
-      ..headers['Accept'] = 'text/event-stream';
+    final req = http.Request(
+      'GET',
+      _uri('/api/ai/runs/$runId/events?after=$after'),
+    )..headers['Accept'] = 'text/event-stream';
     // 事件流也是这个后端的一个请求：手机带令牌连桌面时才不会被闸门挡在 403
     // （不传 tokenProvider 时这里与以前完全一样，只有 Accept 一个头）
     final token = tokenProvider?.call();
-    if (token != null && token.isNotEmpty) req.headers['X-ComfyHub-Token'] = token;
+    if (token != null && token.isNotEmpty) {
+      req.headers['X-ComfyHub-Token'] = token;
+    }
     final res = await _client.send(req);
     if (res.statusCode != 200) {
       final body = await res.stream.bytesToString();
@@ -545,7 +873,8 @@ class AiApiClient {
     }
     String? event;
     final data = StringBuffer();
-    await for (final line in res.stream.transform(utf8.decoder).transform(const LineSplitter())) {
+    await for (final line
+        in res.stream.transform(utf8.decoder).transform(const LineSplitter())) {
       if (line.isEmpty) {
         if (event != null || data.isNotEmpty) {
           Map<String, dynamic> parsed = const {};
