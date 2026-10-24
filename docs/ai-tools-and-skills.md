@@ -596,7 +596,8 @@ SSE 新增事件：`reasoning.delta`、`tool.requested`、`tool.started`、`tool
    ComfyUI 参数）、`comfy-workflow-audit`（工作流审核的判定与修法）、`comfy-workflow-guide`
    （工作流第一站：判断用途 / 复制副本再改）、`inpaint-composite`（图像编辑：底图 + 遮罩 +
    两阶段贴人）、`lora-training`、`moss-image`、`workflow-recipe`（换新模型：学配方 / 绑模型 /
-   四档结论）、`card-writer`（角色卡 / 画风卡：一版自然语言正文、600+ / 100~200 token、优化）、
+   四档结论）、`card-writer`（角色卡 / 画风卡：一版自然语言正文、600+ / 100~200 token **起**
+   （下限，复杂画风按材质分部位写长）、优化）、
    `r2i-prompt`（参考图 + 角色卡 + 画风卡 → 一整段 r2i 提示词；工作台 `+` / `@` 插卡）；
    用户自己的 16 个（Anima / H3 / Music3 等）仍在投放口里 ——
    **别人的 skill 正文能不能随项目分发要单独确认许可**，所以它们刻意不进 `builtin`。

@@ -32,9 +32,12 @@
   `moss-image`（MOSS-Image 提示词 / Layout JSON / 参数 + 本机两份模板
    `comfyhub_moss_{t2i,layout}.json` 的节点键与 TextGenerate 摘线）；
   `card-writer`（角色卡 / 画风卡写作：卡里只存**一版自然语言正面提示词**；
-   角色 600+ token 全身上下、画风 100~200 token；要 Danbooru tag 版时当场另翻、不存卡）；
+   角色 600+ token 全身上下、画风 100~200 token **起**（下限不是上限，复杂画风按
+   上色 / 打光 / 面部·头发·衣物·其他物体的材质分部位写长）；要 Danbooru tag 版时当场另翻、不存卡）；
   `r2i-prompt`（参考图 + `[CHARACTER CARD]` + `[STYLE SPEC]` → 一整段 300~400 词提示词；
-    工作台输入区 `+` 菜单 / `@` 插卡，卡片正文逐字进槽位）。
+    工作台输入区 `+` 菜单 / `@` 插卡，卡片正文逐字进槽位、**卡本身不进成品**：
+    画风卡是锁定渲染规格，面部 / 身体 / 头发 / 衣物的具体渲染写进对应部位的句子，
+    结尾只留 ≤25 词总括；参考图的表情按可见面部配置如实写出）。
   发布包能带上它们靠 `packaging/manifest.json` 的 `skills` 组件（source/target 都是 `skills`）。
 - 用户自己的 Skill **不放这里**：拷进投放口 `<storage>\ai\skills` 就算装好
   （后端启动时 / 点「重新扫描」会自动给没有 frontmatter 的文件补登记）。

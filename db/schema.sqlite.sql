@@ -453,7 +453,7 @@ CREATE TABLE IF NOT EXISTS style_cards (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,
   name               TEXT    NOT NULL,          -- 用户叫的画风名
   normalized         TEXT    NOT NULL,          -- name 的小写（幂等 upsert 的键）
-  prompt             TEXT    NULL,              -- 正面提示词（整段自然语言，100~200 token）
+  prompt             TEXT    NULL,              -- 正面提示词（整段自然语言，100~200 token 起；复杂画风按需更长）
   negative           TEXT    NULL,              -- 负面提示词（整段文本）
   created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
