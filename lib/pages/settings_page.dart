@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/backend_launcher.dart';
 import '../core/formatting.dart';
 import '../core/settings_store.dart';
+import '../core/system_accent.dart';
 import '../core/theme.dart';
 import '../models/models.dart';
 import '../state/ai_workspace_store.dart';
@@ -103,6 +104,14 @@ class _SettingsPageState extends State<SettingsPage> {
   // -------------------------------------------------------------------------
   //  后端地址
   // -------------------------------------------------------------------------
+
+  /// 重新读一次平台强调色：用户在系统里换了颜色，不用重启 App 就能看到。
+  Future<void> _redetectAccent() async {
+    final messenger = ScaffoldMessenger.of(context);
+    await _settings.refreshSystemAccent();
+    if (!mounted) return;
+    messenger.showSnackBar(SnackBar(content: Text(SystemAccent.sourceLabel)));
+  }
 
   /// 跑一个服务动作（重启 / 停止），**完事重新发现后端地址**。
   ///
@@ -739,6 +748,45 @@ class _SettingsPageState extends State<SettingsPage> {
                             // （选中态靠底色区分，M3 的 segmented button 本来就看得清）
                             showSelectedIcon: false,
                             style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                          ),
+                        ),
+                        const Divider(height: 1),
+                        // 系统强调色（2026-10-24）：Windows / Android 12+ 读得到，
+                        // 读到就自动当主题种子色；读不到就是"没有这一项"，回默认紫。
+                        // 点整行 = 重新检测（用户在系统里换了强调色回来不用重启 App）。
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          onTap: _redetectAccent,
+                          title: Row(
+                            children: [
+                              Container(
+                                width: 12,
+                                height: 12,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: SystemAccent.color ?? AppTheme.defaultSeed,
+                                  border: Border.all(
+                                    color: theme.colorScheme.outlineVariant,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              const Flexible(child: Text('系统主题色')),
+                            ],
+                          ),
+                          subtitle: Text(
+                            SystemAccent.available
+                                ? '${SystemAccent.sourceLabel}。已自动套用；关掉就用默认配色。点这一行重新检测。'
+                                : '${SystemAccent.sourceLabel}，使用默认配色（换台设备 / 升级系统后点这一行再试）。',
+                          ),
+                          trailing: Switch(
+                            // 取不到颜色时这一项没有意义：显示为关、且不可点，
+                            // 免得用户以为"打开了却没效果"。
+                            value: settings.followSystemAccent &&
+                                SystemAccent.available,
+                            onChanged: SystemAccent.available
+                                ? (v) => settings.setFollowSystemAccent(v)
+                                : null,
                           ),
                         ),
                         const Divider(height: 1),

@@ -1,7 +1,7 @@
 import 'dart:io' show Platform;
 import 'dart:ui' show AppExitResponse;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'core/backend_launcher.dart';
 import 'core/settings_store.dart';
 import 'core/sync_endpoints.dart';
+import 'core/system_accent.dart';
 import 'core/theme.dart';
 import 'models/models.dart';
 import 'pages/ai_home_page.dart';
@@ -89,23 +90,39 @@ class ComfyHubApp extends StatelessWidget {
           supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
           // 外观默认深色，可在设置页切浅色 / 跟随系统（`SettingsStore.themeMode`）
           themeMode: settings.themeMode.material,
-          // 字体 / 字号 / 行高在 core/theme.dart 里统一按"中文友好"调过
-          theme: _lightTheme,
-          darkTheme: _darkTheme,
+          // 字体 / 字号 / 行高在 core/theme.dart 里统一按"中文友好"调过；
+          // 种子色来自平台强调色（取不到就是默认紫，见 core/system_accent.dart）
+          theme: _themeFor(Brightness.light),
+          darkTheme: _themeFor(Brightness.dark),
           home: const HomeShell(),
         ),
       ),
     );
   }
 
-  /// 两套主题**只构建一次**。
+  /// 两套主题**按（明暗 × 种子色）各构建一次**并缓存。
   ///
   /// ⚠ 别退回"在 builder 里现调 `AppTheme.build(...)`"：`ColorScheme.fromSeed`
   /// 每次都要跑一遍配色算法，而上面这个 builder 跟着 `settings` 的**任何**通知
   /// 重建 —— 拖一下设置页的「每页数量」滑杆就是每帧重算两套配色。
-  /// `ThemeData` 是常量数据，构建一次用到底即可（`static final` 只在首次访问时求值）。
-  static final ThemeData _lightTheme = AppTheme.build(Brightness.light);
-  static final ThemeData _darkTheme = AppTheme.build(Brightness.dark);
+  /// `ThemeData` 是常量数据，同一种种子构建一次用到底即可。
+  static final Map<String, ThemeData> _themeCache = <String, ThemeData>{};
+
+  ThemeData _themeFor(Brightness brightness) =>
+      themeFor(settings, brightness);
+
+  /// **外观的唯一拼装点**（静态是为了让用例直接验"系统强调色开 / 关时
+  /// 到底用了哪个种子色"，不用把整个 `HomeShell` 拉起来）。
+  @visibleForTesting
+  static ThemeData themeFor(SettingsStore settings, Brightness brightness) {
+    final accent = settings.followSystemAccent ? SystemAccent.color : null;
+    final seed = accent ?? AppTheme.defaultSeed;
+    final key = '${brightness.index}:${seed.toARGB32()}';
+    return _themeCache.putIfAbsent(
+      key,
+      () => AppTheme.build(brightness, seedColor: seed),
+    );
+  }
 }
 
 /// 主框架：宽屏用 NavigationRail，窄屏用底部导航。

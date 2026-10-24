@@ -12,6 +12,7 @@ import '../state/library_store.dart';
 import '../widgets/collection_thumb.dart';
 import '../widgets/common.dart';
 import '../widgets/media_thumb.dart';
+import '../widgets/paged_swipe.dart';
 import '../widgets/upload_sheet.dart';
 import 'media_detail_page.dart';
 import 'prompts_page.dart' show confirmDialog;
@@ -475,7 +476,12 @@ class _GalleryPageState extends State<GalleryPage> {
     final grid = Column(
       children: [
         Expanded(
-          child: GridView.builder(
+          // 左右滑动 = 翻当前页（与预设页同一套交互，见 SwipePageView）
+          child: SwipePageView(
+            page: store.mediaPage,
+            pages: store.media.pages,
+            onPageChanged: store.setMediaPage,
+            child: GridView.builder(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
             // 每个格子**已经**带了自己的 RepaintBoundary（SliverChildBuilderDelegate
             // 的 addRepaintBoundaries 默认就是 true），所以这里不用再手包一层；
@@ -534,31 +540,14 @@ class _GalleryPageState extends State<GalleryPage> {
                   child: _draggableTile(m, thumb),
                 );
               },
+            ),
           ),
         ),
-        if (store.media.pages > 1)
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            decoration: BoxDecoration(
-              border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.chevron_left),
-                  onPressed: store.mediaPage > 1 ? () => store.setMediaPage(store.mediaPage - 1) : null,
-                ),
-                Text('第 ${store.mediaPage} / ${store.media.pages} 页'),
-                IconButton(
-                  icon: const Icon(Icons.chevron_right),
-                  onPressed: store.mediaPage < store.media.pages
-                      ? () => store.setMediaPage(store.mediaPage + 1)
-                      : null,
-                ),
-              ],
-            ),
-          ),
+        PageBar(
+          page: store.mediaPage,
+          pages: store.media.pages,
+          onChanged: store.setMediaPage,
+        ),
       ],
     );
 

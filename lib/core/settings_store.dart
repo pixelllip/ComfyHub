@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'backend_paths.dart';
+import 'system_accent.dart';
 import 'theme.dart';
 
 /// 画廊「集合详情」的两种形态（真源：`SettingsStore.collectionDetailWide` /
@@ -74,6 +75,12 @@ class SettingsStore extends ChangeNotifier {
   /// 写死 dark），换成别的默认值等于给所有存量用户换一套配色。
   static const _kThemeMode = 'comfyhub.themeMode';
 
+  /// 是否把**系统强调色**当作主题的种子色（默认开：用户 2026-10-24 要的就是"自动套用"）。
+  ///
+  /// 取不到系统强调色的平台（Linux / macOS / Android 11-）上它没有任何效果，
+  /// 界面会回到 [AppTheme.defaultSeed] —— 与改之前完全一样。
+  static const _kFollowSystemAccent = 'comfyhub.followSystemAccent';
+
   /// 上次后端**实际**监听的端口（0 / 缺省 = 还没记录过）。
   ///
   /// # 为什么必须记住它（2026-10-13 用户提的问题）
@@ -102,6 +109,7 @@ class SettingsStore extends ChangeNotifier {
   bool _allowRemoteBackend = false;
   String? _projectRoot;
   AppThemeMode _themeMode = AppThemeMode.dark;
+  bool _followSystemAccent = true;
   CollectionDetailStyle _collectionDetailWide = CollectionDetailStyle.dock;
   CollectionDetailStyle _collectionDetailNarrow = CollectionDetailStyle.popup;
   int? _lastApiPort;
@@ -202,6 +210,9 @@ class SettingsStore extends ChangeNotifier {
 
   /// 界面外观（默认深色）。[AppThemeMode.material] 才是给 `MaterialApp` 的那个值。
   AppThemeMode get themeMode => _themeMode;
+
+  /// 是否跟随系统强调色（见 [SystemAccent]）。
+  bool get followSystemAccent => _followSystemAccent;
 
   /// 宽屏（`>= kWideLayoutMinWidth`）下集合详情的形态。默认 [CollectionDetailStyle.dock]。
   CollectionDetailStyle get collectionDetailWide => _collectionDetailWide;
@@ -307,6 +318,7 @@ class SettingsStore extends ChangeNotifier {
     _projectRoot = prefs.getString(_kProjectRoot);
     // 认不出来的值（老版本写的 / 手改过的）回默认，不抛：见 AppThemeMode.parse
     _themeMode = AppThemeMode.parse(prefs.getString(_kThemeMode));
+    _followSystemAccent = prefs.getBool(_kFollowSystemAccent) ?? true;
     // 同上：回默认值就是"改之前写死在代码里的行为"（宽屏停靠 / 窄屏居中弹窗）
     _collectionDetailWide = CollectionDetailStyle.parse(
       prefs.getString(_kCollectionDetailWide),
@@ -537,6 +549,22 @@ class SettingsStore extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kThemeMode, value.name);
+  }
+
+  /// 打开 / 关闭"跟随系统强调色"。**先通知再落盘**（`MaterialApp` 挂着这个 notifier，
+  /// 主题要当场换，不该等磁盘）。
+  Future<void> setFollowSystemAccent(bool value) async {
+    if (_followSystemAccent == value) return;
+    _followSystemAccent = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kFollowSystemAccent, value);
+  }
+
+  /// 重新检测一次系统强调色，然后让主题重建（设置页的「重新检测」）。
+  Future<void> refreshSystemAccent() async {
+    await SystemAccent.detect();
+    notifyListeners();
   }
 
   /// 选宽屏下集合详情的形态。**先 `notifyListeners()` 再落盘**：画廊监听着它，

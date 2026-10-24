@@ -71,34 +71,25 @@ enum CardKind {
   };
 }
 
-/// 卡片库页面：顶部可在角色卡 / 画风卡之间切换（[switchable] = false 时锁死）。
+/// 卡片视图（角色卡 / 画风卡）：搜索栏 + 列表 + 空 / 错 / loading。
 ///
-/// 两种卡共用同一个页面与同一套编辑器，是因为它们的字段与操作**逐项同形**；
-/// 分两套 UI 必然会出现"角色卡能挂示例、画风卡不能"这种漂移。
-class CardsPage extends StatefulWidget {
-  final CardKind initialKind;
-
-  /// 是否显示顶部的"角色卡 / 画风卡"切换。外部入口用 true；
-  /// 旧的两个包装页（[CharacterCardsPage] / [StyleCardsPage]）用 false。
-  final bool switchable;
+/// **没有 Scaffold / AppBar / FAB**：预设页把它当作「角色卡」「画风卡」两个
+/// 同级页签的内容，顶部导航与新建按钮属于宿主页面（跟着页签换）。
+/// [CardsPage] 是给"单独打开一类卡"的老入口 / 用例用的壳子。
+class CardsView extends StatefulWidget {
+  final CardKind kind;
 
   /// [api] 仅供测试注入假后端；正式运行时按设置里的后端地址创建。
   final AiApiClient? api;
 
-  const CardsPage({
-    super.key,
-    this.initialKind = CardKind.character,
-    this.switchable = true,
-    this.api,
-  });
+  const CardsView({super.key, required this.kind, this.api});
 
   @override
-  State<CardsPage> createState() => _CardsPageState();
+  State<CardsView> createState() => CardsViewState();
 }
 
-class _CardsPageState extends State<CardsPage> {
+class CardsViewState extends State<CardsView> {
   late AiApiClient _api;
-  late CardKind _kind;
   bool _loading = true;
   String? _error;
   List<CharacterCard> _cards = const [];
@@ -108,13 +99,15 @@ class _CardsPageState extends State<CardsPage> {
   /// 切种类 / 连按搜索时旧请求可能晚到；只认最后一次。
   int _loadSeq = 0;
 
+  CardKind get _kind => widget.kind;
+
   @override
   void initState() {
     super.initState();
-    _kind = widget.initialKind;
+    // `context.read` 在 initState 里是允许的（不订阅变化）
+    _api = widget.api ?? AiApiClient(context.read<SettingsStore>().baseUrl);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _api = widget.api ?? AiApiClient(context.read<SettingsStore>().baseUrl);
-      _reload();
+      if (mounted) _reload();
     });
   }
 
@@ -123,6 +116,12 @@ class _CardsPageState extends State<CardsPage> {
     _searchInput.dispose();
     super.dispose();
   }
+
+  /// 供宿主页的「新建」按钮调用（预设页的 FAB 会按当前页签调它）。
+  Future<void> createNew() => _edit(null);
+
+  /// 供宿主页的「刷新」按钮调用。
+  Future<void> reload() => _reload();
 
   Future<void> _reload() async {
     final seq = ++_loadSeq;
@@ -147,17 +146,6 @@ class _CardsPageState extends State<CardsPage> {
         _loading = false;
       });
     }
-  }
-
-  void _switchKind(CardKind kind) {
-    if (kind == _kind) return;
-    setState(() {
-      _kind = kind;
-      _cards = const [];
-      _query = '';
-      _searchInput.clear();
-    });
-    _reload();
   }
 
   void _snack(String message) {
@@ -244,96 +232,52 @@ class _CardsPageState extends State<CardsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_kind.label),
-        actions: [
-          IconButton(
-            tooltip: '刷新',
-            icon: const Icon(Icons.refresh),
-            onPressed: _reload,
-          ),
-          const SizedBox(width: 4),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _edit(null),
-        icon: const Icon(Icons.add),
-        label: Text(_kind.newLabel),
-      ),
-      body: Column(
-        children: [
-          if (widget.switchable)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: SegmentedButton<CardKind>(
-                  showSelectedIcon: false,
-                  style: const ButtonStyle(
-                    visualDensity: VisualDensity.compact,
+    // 只有搜索栏 + 列表：页面骨架（AppBar / FAB / 页签）属于宿主
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchInput,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    hintText: _kind.searchHint,
+                    border: const OutlineInputBorder(),
+                    suffixIcon: _query.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: '清除',
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () {
+                              _searchInput.clear();
+                              setState(() => _query = '');
+                              _reload();
+                            },
+                          ),
                   ),
-                  segments: const [
-                    ButtonSegment(
-                      value: CardKind.character,
-                      icon: Icon(Icons.badge_outlined, size: 18),
-                      label: Text('角色卡'),
-                    ),
-                    ButtonSegment(
-                      value: CardKind.style,
-                      icon: Icon(Icons.palette_outlined, size: 18),
-                      label: Text('画风卡'),
-                    ),
-                  ],
-                  selected: {_kind},
-                  onSelectionChanged: (s) => _switchKind(s.first),
-                ),
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _searchInput,
-                    decoration: InputDecoration(
-                      isDense: true,
-                      prefixIcon: const Icon(Icons.search, size: 18),
-                      hintText: _kind.searchHint,
-                      border: const OutlineInputBorder(),
-                      suffixIcon: _query.isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: '清除',
-                              icon: const Icon(Icons.close, size: 18),
-                              onPressed: () {
-                                _searchInput.clear();
-                                setState(() => _query = '');
-                                _reload();
-                              },
-                            ),
-                    ),
-                    onSubmitted: (v) {
-                      setState(() => _query = v.trim());
-                      _reload();
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: () {
-                    setState(() => _query = _searchInput.text.trim());
+                  onSubmitted: (v) {
+                    setState(() => _query = v.trim());
                     _reload();
                   },
-                  child: const Text('搜索'),
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: () {
+                  setState(() => _query = _searchInput.text.trim());
+                  _reload();
+                },
+                child: const Text('搜索'),
+              ),
+            ],
           ),
-          Expanded(child: _body()),
-        ],
-      ),
+        ),
+        Expanded(child: _body()),
+      ],
     );
   }
 
@@ -383,6 +327,97 @@ class _CardsPageState extends State<CardsPage> {
   }
 }
 
+/// 卡片库的独立页面（老入口 / 用例用）。
+///
+/// 内部就是 [CardsView]；**预设页不再走这里** —— 它把两个 [CardsView] 直接当作
+/// 「角色卡」「画风卡」两个同级页签（用户 2026-10-24 的要求），顶部只有一条导航。
+class CardsPage extends StatefulWidget {
+  final CardKind initialKind;
+
+  /// 是否显示顶部的"角色卡 / 画风卡"切换。独立入口用 true；
+  /// 旧的两个包装页（[CharacterCardsPage] / [StyleCardsPage]）用 false。
+  final bool switchable;
+
+  /// [api] 仅供测试注入假后端；正式运行时按设置里的后端地址创建。
+  final AiApiClient? api;
+
+  const CardsPage({
+    super.key,
+    this.initialKind = CardKind.character,
+    this.switchable = true,
+    this.api,
+  });
+
+  @override
+  State<CardsPage> createState() => _CardsPageState();
+}
+
+class _CardsPageState extends State<CardsPage> {
+  late CardKind _kind = widget.initialKind;
+
+  /// 两种卡各留一个 key：切过去时**新实例**自己加载，切回来也还在（搜索词不丢）。
+  final Map<CardKind, GlobalKey<CardsViewState>> _viewKeys = {
+    for (final kind in CardKind.values) kind: GlobalKey<CardsViewState>(),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final key = _viewKeys[_kind]!;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_kind.label),
+        actions: [
+          IconButton(
+            tooltip: '刷新',
+            icon: const Icon(Icons.refresh),
+            onPressed: () => key.currentState?.reload(),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => key.currentState?.createNew(),
+        icon: const Icon(Icons.add),
+        label: Text(_kind.newLabel),
+      ),
+      body: Column(
+        children: [
+          if (widget.switchable)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SegmentedButton<CardKind>(
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  segments: const [
+                    ButtonSegment(
+                      value: CardKind.character,
+                      icon: Icon(Icons.badge_outlined, size: 18),
+                      label: Text('角色卡'),
+                    ),
+                    ButtonSegment(
+                      value: CardKind.style,
+                      icon: Icon(Icons.palette_outlined, size: 18),
+                      label: Text('画风卡'),
+                    ),
+                  ],
+                  selected: {_kind},
+                  onSelectionChanged: (s) => setState(() => _kind = s.first),
+                ),
+              ),
+            ),
+          Expanded(
+            child: CardsView(key: key, kind: _kind, api: widget.api),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 一张卡（列表里的一项）：名称、两版提示词、示例产物。
 class _CardTile extends StatelessWidget {
   final CharacterCard card;
@@ -409,153 +444,160 @@ class _CardTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 8, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Text(
-                    card.name,
-                    style: theme.textTheme.titleSmall,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        // 点卡片本体 = **编辑**（用户 2026-10-24："点击画风卡 卡片的行为是编辑，
+        // 不是修改示例图片"）。示例缩略图与「管理示例」按钮有自己的点击区域，
+        // 点它们仍然是看示例 / 管理示例。
+        onTap: onEdit,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 8, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      card.name,
+                      style: theme.textTheme.titleSmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-                AppMenuButton<String>(
-                  tooltip: '更多操作',
-                  onSelected: (v) => v == 'edit' ? onEdit() : onDelete(),
-                  options: const [
-                    MenuOption(
-                      value: 'edit',
-                      icon: Icons.edit_outlined,
-                      label: '编辑',
-                    ),
-                    MenuOption(
-                      value: 'delete',
-                      icon: Icons.delete_outline,
-                      label: '删除',
-                      danger: true,
-                      dividerBefore: true,
-                    ),
-                  ],
-                  button: (context, controller, isOpen) => IconButton(
+                  AppMenuButton<String>(
                     tooltip: '更多操作',
-                    icon: const Icon(Icons.more_vert, size: 18),
-                    onPressed: () => controller.isOpen
-                        ? controller.close()
-                        : controller.open(),
+                    onSelected: (v) => v == 'edit' ? onEdit() : onDelete(),
+                    options: const [
+                      MenuOption(
+                        value: 'edit',
+                        icon: Icons.edit_outlined,
+                        label: '编辑',
+                      ),
+                      MenuOption(
+                        value: 'delete',
+                        icon: Icons.delete_outline,
+                        label: '删除',
+                        danger: true,
+                        dividerBefore: true,
+                      ),
+                    ],
+                    button: (context, controller, isOpen) => IconButton(
+                      tooltip: '更多操作',
+                      icon: const Icon(Icons.more_vert, size: 18),
+                      onPressed: () => controller.isOpen
+                          ? controller.close()
+                          : controller.open(),
+                    ),
                   ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              _VersionBlock(
+                label: 'Danbooru tag 版',
+                value: card.tagPrompt,
+                emptyText: '还没有 Danbooru tag 版',
+                maxLines: 4,
+                monospace: true,
+              ),
+              const SizedBox(height: 6),
+              _VersionBlock(
+                label: '自然语言版',
+                value: card.prompt,
+                emptyText: '还没有自然语言版',
+                maxLines: kind == CardKind.character ? 8 : 5,
+              ),
+              if (card.negative != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '负面：${card.negative}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
-            ),
-            const SizedBox(height: 6),
-            _VersionBlock(
-              label: 'Danbooru tag 版',
-              value: card.tagPrompt,
-              emptyText: '还没有 Danbooru tag 版',
-              maxLines: 4,
-              monospace: true,
-            ),
-            const SizedBox(height: 6),
-            _VersionBlock(
-              label: '自然语言版',
-              value: card.prompt,
-              emptyText: '还没有自然语言版',
-              maxLines: kind == CardKind.character ? 8 : 5,
-            ),
-            if (card.negative != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                '负面：${card.negative}',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.outline,
+              if (!card.hasBothVersions) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 14,
+                      color: theme.colorScheme.tertiary,
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        '两版还没写全 —— 可以让 AI 按已有那版补出另一版，再继续优化。',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.tertiary,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-            if (!card.hasBothVersions) ...[
+              ],
               const SizedBox(height: 8),
               Row(
                 children: [
                   Icon(
-                    Icons.info_outline,
-                    size: 14,
-                    color: theme.colorScheme.tertiary,
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      '两版还没写全 —— 可以让 AI 按已有那版补出另一版，再继续优化。',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.tertiary,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Icon(
-                  Icons.photo_library_outlined,
-                  size: 15,
-                  color: theme.colorScheme.outline,
-                ),
-                const SizedBox(width: 5),
-                Text(
-                  card.examples.isEmpty
-                      ? '示例产物'
-                      : '示例产物 ${card.examples.length}',
-                  style: theme.textTheme.labelMedium?.copyWith(
+                    Icons.photo_library_outlined,
+                    size: 15,
                     color: theme.colorScheme.outline,
                   ),
-                ),
-                const Spacer(),
-                TextButton.icon(
-                  onPressed: onManageExamples,
-                  icon: const Icon(
-                    Icons.add_photo_alternate_outlined,
-                    size: 17,
+                  const SizedBox(width: 5),
+                  Text(
+                    card.examples.isEmpty
+                        ? '示例产物'
+                        : '示例产物 ${card.examples.length}',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
                   ),
-                  label: Text(card.examples.isEmpty ? '添加示例' : '管理示例'),
-                ),
-              ],
-            ),
-            if (card.examples.isNotEmpty)
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  for (final media in card.examples.take(6))
-                    _ExampleThumb(
-                      media: media,
-                      apiBase: apiBase,
-                      posterUrl: mediaPosterUrl(media.id),
-                      onTap: () => onOpenExample(media),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: onManageExamples,
+                    icon: const Icon(
+                      Icons.add_photo_alternate_outlined,
+                      size: 17,
                     ),
-                  if (card.examples.length > 6)
-                    Container(
-                      width: 64,
-                      height: 64,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        '+${card.examples.length - 6}',
-                        style: theme.textTheme.labelMedium,
-                      ),
-                    ),
+                    label: Text(card.examples.isEmpty ? '添加示例' : '管理示例'),
+                  ),
                 ],
               ),
-          ],
+              if (card.examples.isNotEmpty)
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final media in card.examples.take(6))
+                      _ExampleThumb(
+                        media: media,
+                        apiBase: apiBase,
+                        posterUrl: mediaPosterUrl(media.id),
+                        onTap: () => onOpenExample(media),
+                      ),
+                    if (card.examples.length > 6)
+                      Container(
+                        width: 64,
+                        height: 64,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '+${card.examples.length - 6}',
+                          style: theme.textTheme.labelMedium,
+                        ),
+                      ),
+                  ],
+                ),
+            ],
+          ),
         ),
       ),
     );

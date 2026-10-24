@@ -136,6 +136,20 @@ void main() {
     expect(find.textContaining('还没有自然语言版'), findsOneWidget, reason: '缺版是个事实，要显式画出来');
   });
 
+  testWidgets('点卡片本体 = 编辑（不是改示例图）', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final b = backend([card()]);
+    await pumpPage(
+      tester,
+      CharacterCardsPage(api: AiApiClient('http://127.0.0.1:8080', client: b.client)),
+    );
+
+    await tester.tap(find.text('shinku'));
+    await tester.pumpAndSettle();
+    expect(find.text('编辑角色卡'), findsOneWidget);
+    expect(find.text('选择示例产物'), findsNothing);
+  });
+
   testWidgets('搜索把关键字发给后端', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final b = backend([card()]);

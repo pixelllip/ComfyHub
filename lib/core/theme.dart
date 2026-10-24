@@ -55,6 +55,12 @@ enum AppThemeMode {
 class AppTheme {
   AppTheme._();
 
+  /// 默认种子色（深紫）。系统拿不到强调色时用它；**存量外观就是这一套**。
+  ///
+  /// 别随手改它：`SettingsStore.followSystemAccent` 关掉、或平台没有可读的
+  /// 系统强调色时，界面会回到这里 —— 这个值等于"以前所有人看到的那套配色"。
+  static const Color defaultSeed = Color(0xFF7C5CFF);
+
   /// 中文兜底字体链。按优先级排列，缺哪个会自动往后找。
   static const List<String> cjkFallback = <String>[
     'Microsoft YaHei UI', // Windows 11 默认中文 UI 字体
@@ -80,11 +86,41 @@ class AppTheme {
     return null;
   }
 
-  static ThemeData build(Brightness brightness) {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF7C5CFF),
+  static ThemeData build(Brightness brightness, {Color seedColor = defaultSeed}) {
+    // 平台强调色**只改"强调"这一层**（主色 / 次色 / 选中态），主体底色仍用
+    // 默认种子那套中性 surface —— 用户 2026-10-24 的原话："底色别变（主体部分
+    // 还是要白/灰），不然很影响观感"。
+    //
+    // 直接把强调色丢进 `ColorScheme.fromSeed` 会让 **所有** surface 都带它的色相：
+    // 本机强调色是暗红时，整页会变成粉褐色。所以这里取强调方案的 accent 角色 +
+    // 默认方案的 surface 角色，拼成最终方案。
+    final accentScheme = ColorScheme.fromSeed(
+      seedColor: seedColor,
       brightness: brightness,
     );
+    final scheme = seedColor == defaultSeed
+        ? accentScheme
+        : ColorScheme.fromSeed(seedColor: defaultSeed, brightness: brightness)
+            .copyWith(
+              primary: accentScheme.primary,
+              onPrimary: accentScheme.onPrimary,
+              primaryContainer: accentScheme.primaryContainer,
+              onPrimaryContainer: accentScheme.onPrimaryContainer,
+              secondary: accentScheme.secondary,
+              onSecondary: accentScheme.onSecondary,
+              secondaryContainer: accentScheme.secondaryContainer,
+              onSecondaryContainer: accentScheme.onSecondaryContainer,
+              tertiary: accentScheme.tertiary,
+              onTertiary: accentScheme.onTertiary,
+              tertiaryContainer: accentScheme.tertiaryContainer,
+              onTertiaryContainer: accentScheme.onTertiaryContainer,
+              inversePrimary: accentScheme.inversePrimary,
+            );
+
+    // 背景一律保持白 / 灰（用户 2026-10-24 最后定的口径）：页面、卡片、
+    // 侧边栏、手机底部导航都用这套中性 surface；强调色只作用于**组件**
+    // （按钮、开关、选中胶囊、焦点、进度条…），不铺到底色 / 卡片上。
+    final navBackground = scheme.surfaceContainerLow;
 
     final base = ThemeData(useMaterial3: true, colorScheme: scheme);
     final family = primaryFontFamily();
@@ -267,7 +303,7 @@ class AppTheme {
       //  当"换页不重建"的判据（逐像素相同），改尺寸会让那条用例失去意义。
       // -------------------------------------------------------------------------
       navigationRailTheme: NavigationRailThemeData(
-        backgroundColor: scheme.surfaceContainerLow,
+        backgroundColor: navBackground,
         labelType: NavigationRailLabelType.all,
         useIndicator: true,
         indicatorColor: scheme.secondaryContainer,
@@ -294,7 +330,7 @@ class AppTheme {
         ),
       ),
       navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: scheme.surfaceContainerLow,
+        backgroundColor: navBackground,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         indicatorColor: scheme.secondaryContainer,

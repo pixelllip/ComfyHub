@@ -1,26 +1,52 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/ai_api_client.dart';
 import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common.dart';
+import '../widgets/paged_swipe.dart';
 import '../widgets/tag_editor.dart';
 import 'cards_page.dart';
 import 'preset_run.dart';
 import 'prompt_detail_page.dart';
 import 'prompt_edit_page.dart';
 
+/// 预设库顶部的三个**同级页签**（用户 2026-10-24 定的）。
+///
+/// 常规预设 / 角色卡 / 画风卡以前是"一个主页面 + 一个卡片库子页"，现在并排；
+/// 角色卡与画风卡只是 [CardsView] 的一种 kind，字段 / 编辑器 / 示例管理完全共用。
+enum PresetSection {
+  prompts('常规预设', Icons.text_snippet_outlined),
+  characters('角色卡', Icons.badge_outlined),
+  styles('画风卡', Icons.palette_outlined);
+
+  final String label;
+  final IconData icon;
+
+  const PresetSection(this.label, this.icon);
+
+  /// 卡片页签对应的种类；常规预设是 null。
+  CardKind? get cardKind => switch (this) {
+    PresetSection.characters => CardKind.character,
+    PresetSection.styles => CardKind.style,
+    PresetSection.prompts => null,
+  };
+}
+
 /// **预设页**（2026-10-11 由「提示词」页改组而来）。
 ///
 /// 用户定的定位：预设 = **可复用的一段提示词 + 用途**。这一页只保留三件事：
 /// **查看 / 修改提示词 / 用途（生图·生视频·生音频）**，外加把预设送进工作台执行。
 ///
-/// 刻意**不再**在这页做的东西（都搬到别处或删掉了）：
-///  * 产物反查 —— 从画廊详情点进去看提示词更自然（用户原话："根据画廊页详情查找产物提示词已经足够"）；
-///  * 卡片库的内联编辑 —— 角色卡 / 画风卡从右上角进独立的「卡片库」子页（AI 读写同一批表）。
+/// 刻意**不再**在这页做的东西：
+///  * 产物反查 —— 从画廊详情点进去看提示词更自然（用户原话："根据画廊页详情查找产物提示词已经足够"）。
+///
+/// 2026-10-24 起角色卡 / 画风卡**不再是子页**：顶部一条导航把它们和常规预设并排
+/// 显示（[PresetSection]），三者的列表区互不干扰、各自保留搜索与滚动位置。
 class PromptsPage extends StatefulWidget {
   /// 「▶️运行」的落点：把这段文本交给 AI 工作台并跳过去。
   ///
@@ -29,24 +55,68 @@ class PromptsPage extends StatefulWidget {
   /// 那时按钮**不显示**（宁可不给，也不给一个点了没反应的按钮）。
   final void Function(String text)? onSendToWorkspace;
 
-  const PromptsPage({super.key, this.onSendToWorkspace});
+  /// 角色卡 / 画风卡页签用的后端客户端。**仅供测试注入**；
+  /// 正式运行时给 null，由 [CardsView] 按设置里的后端地址创建。
+  final AiApiClient? cardsApi;
+
+  const PromptsPage({super.key, this.onSendToWorkspace, this.cardsApi});
 
   @override
   State<PromptsPage> createState() => _PromptsPageState();
 }
 
-class _PromptsPageState extends State<PromptsPage> {
+class _PromptsPageState extends State<PromptsPage>
+    with SingleTickerProviderStateMixin {
   final _searchController = TextEditingController();
+
+  /// 顶部三个页签：用 `TabBar` 是为了拿到与主题一致的下划线 / 文字样式；
+  /// **不用 `TabBarView`** —— 内容要保留状态（IndexedStack），而且左右滑动
+  /// 属于列表分页，不能被"切页签"抢走。
+  late final TabController _tabs = TabController(
+    length: PresetSection.values.length,
+    vsync: this,
+  );
+  int _sectionIndex = 0;
+
+  /// 访问过的页签才真的建（卡片页签首次点开才拉数据）。
+  final Set<int> _visitedSections = {0};
+
+  /// 两种卡各一个 key：宿主页的「新建 / 刷新」要能调到当前页签那份视图。
+  final Map<CardKind, GlobalKey<CardsViewState>> _cardViews = {
+    for (final kind in CardKind.values) kind: GlobalKey<CardsViewState>(),
+  };
 
   /// 批量管理：多选模式 + 已选中的提示词 id
   final Set<int> _selected = {};
   bool _selectionMode = false;
   bool _busy = false;
 
+  PresetSection get _section => PresetSection.values[_sectionIndex];
+
   @override
   void dispose() {
     _searchController.dispose();
+    _tabs.dispose();
     super.dispose();
+  }
+
+  void _switchSection(int index) {
+    if (index == _sectionIndex) return;
+    setState(() {
+      // 多选是"常规预设"的操作；切到卡片页签还挂着底部批量条只会让人误操作
+      _selectionMode = false;
+      _selected.clear();
+      _sectionIndex = index;
+      _visitedSections.add(index);
+    });
+  }
+
+  void _refreshCurrent() {
+    if (_section == PresetSection.prompts) {
+      context.read<LibraryStore>().refreshAll();
+    } else {
+      _cardViews[_section.cardKind]?.currentState?.reload();
+    }
   }
 
   void _exitSelection() {
@@ -65,6 +135,7 @@ class _PromptsPageState extends State<PromptsPage> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
+    final section = _section;
 
     return Scaffold(
       appBar: AppBar(
@@ -92,48 +163,30 @@ class _PromptsPageState extends State<PromptsPage> {
                     padding: EdgeInsets.symmetric(horizontal: 16),
                     child: Center(
                       child: SizedBox(
-                          width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
                     ),
                   ),
               ]
             : [
-                IconButton(
-                  tooltip: '卡片库（角色卡 / 画风卡）',
-                  icon: const Icon(Icons.style_outlined),
-                  // 角色卡与画风卡是提示词的两类标准容器（AI 也读同一批表）：
-                  // 角色卡管"画的是谁"、画风卡管"画成什么样"。做成子页面而不是
-                  // 第六个一级导航项 —— 手机窄屏塞不下六个图标，而且系统返回手势天然正确。
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const CardsPage()),
+                // 批量管理只属于常规预设：卡片页签没有"批量"这个概念
+                if (section == PresetSection.prompts)
+                  IconButton(
+                    tooltip: '批量管理',
+                    icon: const Icon(Icons.checklist),
+                    onPressed: () => setState(() => _selectionMode = true),
                   ),
-                ),
-                IconButton(
-                  tooltip: '批量管理',
-                  icon: const Icon(Icons.checklist),
-                  onPressed: () => setState(() => _selectionMode = true),
-                ),
                 IconButton(
                   tooltip: '刷新',
                   icon: const Icon(Icons.refresh),
-                  onPressed: () => store.refreshAll(),
+                  onPressed: _refreshCurrent,
                 ),
                 const SizedBox(width: 4),
               ],
       ),
-      floatingActionButton: _selectionMode && _selected.isNotEmpty
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: () async {
-                final created = await Navigator.of(context).push<Prompt>(
-                  MaterialPageRoute(builder: (_) => const PromptEditPage()),
-                );
-                if (created != null && context.mounted) {
-                  context.read<LibraryStore>().refreshAll();
-                }
-              },
-              icon: const Icon(Icons.add),
-              label: const Text('新建提示词'),
-            ),
+      floatingActionButton: _buildFab(),
       bottomNavigationBar: _selectionMode && _selected.isNotEmpty
           ? _SelectionBar(
               count: _selected.length,
@@ -146,10 +199,88 @@ class _PromptsPageState extends State<PromptsPage> {
           : null,
       body: Column(
         children: [
-          _buildToolbar(context, store),
-          Expanded(child: _buildBody(context, store)),
+          // 详情（列表）**上面**的一条导航：常规预设 / 角色卡 / 画风卡同级
+          Material(
+            color: Theme.of(context).colorScheme.surface,
+            child: TabBar(
+              controller: _tabs,
+              onTap: _switchSection,
+              // 320dp 上三个页签各 ≈106；给 Row 留的横向内边距必须小，
+              // 否则"图标 + 两个字"会把标签挤溢出
+              labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+              tabs: [
+                for (final s in PresetSection.values)
+                  Tab(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(s.icon, size: 18),
+                        const SizedBox(width: 6),
+                        Text(s.label),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // 三份内容**常驻**（访问过才建）：切回来时搜索词 / 滚动位置都还在
+          Expanded(
+            child: IndexedStack(
+              index: _sectionIndex,
+              sizing: StackFit.expand,
+              children: [
+                _promptsTab(context, store),
+                for (final tab in PresetSection.values.skip(1))
+                  _visitedSections.contains(tab.index)
+                      ? CardsView(
+                          key: _cardViews[tab.cardKind],
+                          kind: tab.cardKind!,
+                          api: widget.cardsApi,
+                        )
+                      : const SizedBox.shrink(),
+              ],
+            ),
+          ),
         ],
       ),
+    );
+  }
+
+  /// 新建按钮跟着页签走：常规预设新建提示词，两个卡片页签新建对应种类的卡。
+  Widget? _buildFab() {
+    if (_selectionMode && _selected.isNotEmpty) return null;
+    switch (_section) {
+      case PresetSection.prompts:
+        return FloatingActionButton.extended(
+          onPressed: () async {
+            final created = await Navigator.of(context).push<Prompt>(
+              MaterialPageRoute(builder: (_) => const PromptEditPage()),
+            );
+            if (created != null && mounted) {
+              context.read<LibraryStore>().refreshAll();
+            }
+          },
+          icon: const Icon(Icons.add),
+          label: const Text('新建提示词'),
+        );
+      case PresetSection.characters:
+      case PresetSection.styles:
+        return FloatingActionButton.extended(
+          onPressed: () =>
+              _cardViews[_section.cardKind]?.currentState?.createNew(),
+          icon: const Icon(Icons.add),
+          label: Text(_section.cardKind!.newLabel),
+        );
+    }
+  }
+
+  /// 常规预设页签的内容（筛选栏 + 列表），与另外两个页签互不影响。
+  Widget _promptsTab(BuildContext context, LibraryStore store) {
+    return Column(
+      children: [
+        _buildToolbar(context, store),
+        Expanded(child: _buildBody(context, store)),
+      ],
     );
   }
 
@@ -298,15 +429,28 @@ class _PromptsPageState extends State<PromptsPage> {
               tooltip: '排序',
               onSelected: store.setPromptSort,
               options: const [
-                MenuOption(value: 'newest', icon: Icons.schedule, label: '最新创建'),
+                MenuOption(
+                  value: 'newest',
+                  icon: Icons.schedule,
+                  label: '最新创建',
+                ),
                 MenuOption(value: 'oldest', icon: Icons.history, label: '最旧创建'),
                 MenuOption(value: 'updated', icon: Icons.update, label: '最近修改'),
-                MenuOption(value: 'title', icon: Icons.sort_by_alpha, label: '按标题'),
-                MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
+                MenuOption(
+                  value: 'title',
+                  icon: Icons.sort_by_alpha,
+                  label: '按标题',
+                ),
+                MenuOption(
+                  value: 'favorite',
+                  icon: Icons.star_border,
+                  label: '收藏优先',
+                ),
               ],
               button: (context, controller, isOpen) => InkWell(
                 borderRadius: BorderRadius.circular(8),
-                onTap: () => controller.isOpen ? controller.close() : controller.open(),
+                onTap: () =>
+                    controller.isOpen ? controller.close() : controller.open(),
                 child: Chip(
                   avatar: const Icon(Icons.sort, size: 16),
                   label: Text(_sortLabel(store.promptSort)),
@@ -315,7 +459,9 @@ class _PromptsPageState extends State<PromptsPage> {
             ),
             Text(
               '共 ${store.prompts.total} 条',
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           ],
         ),
@@ -327,7 +473,9 @@ class _PromptsPageState extends State<PromptsPage> {
               onPressed: _busy ? null : _clearUnlinked,
               icon: const Icon(Icons.cleaning_services_outlined, size: 16),
               label: const Text('一键清除未关联'),
-              style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+              style: TextButton.styleFrom(
+                foregroundColor: theme.colorScheme.error,
+              ),
             ),
           ],
         ),
@@ -336,12 +484,12 @@ class _PromptsPageState extends State<PromptsPage> {
   }
 
   String _sortLabel(String sort) => switch (sort) {
-        'oldest' => '最旧创建',
-        'updated' => '最近修改',
-        'title' => '按标题',
-        'favorite' => '收藏优先',
-        _ => '最新创建',
-      };
+    'oldest' => '最旧创建',
+    'updated' => '最近修改',
+    'title' => '按标题',
+    'favorite' => '收藏优先',
+    _ => '最新创建',
+  };
 
   /// 提示词类型筛选（"全部 / 生图 / 生视频 / 生音频 / 混合"）。
   ///
@@ -370,7 +518,10 @@ class _PromptsPageState extends State<PromptsPage> {
       return const Center(child: CircularProgressIndicator());
     }
     if (store.promptsError != null) {
-      return ErrorState(message: store.promptsError!, onRetry: store.refreshPrompts);
+      return ErrorState(
+        message: store.promptsError!,
+        onRetry: store.refreshPrompts,
+      );
     }
     if (store.prompts.items.isEmpty) {
       return EmptyState(
@@ -380,14 +531,17 @@ class _PromptsPageState extends State<PromptsPage> {
             ? '换个关键词或标签试试'
             : '把 ComfyUI 里跑通的提示词存进来，之后按标签就能快速找到',
         action: store.hasPromptFilter
-            ? TextButton(onPressed: () {
-                _searchController.clear();
-                store.setPromptQuery('');
-                store.clearTags();
-                store.setPromptKind(null);
-                store.setOnlyFavorite(false);
-                setState(() {});
-              }, child: const Text('清除筛选'))
+            ? TextButton(
+                onPressed: () {
+                  _searchController.clear();
+                  store.setPromptQuery('');
+                  store.clearTags();
+                  store.setPromptKind(null);
+                  store.setOnlyFavorite(false);
+                  setState(() {});
+                },
+                child: const Text('清除筛选'),
+              )
             : null,
       );
     }
@@ -395,35 +549,42 @@ class _PromptsPageState extends State<PromptsPage> {
     return Column(
       children: [
         Expanded(
-          // 列数 = 可用宽度 / 550（宽窗口自动多列，窄窗口仍是单列）
-          child: AdaptiveColumnList(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
-            runSpacing: 10,
-            itemCount: store.prompts.items.length,
-            itemBuilder: (context, i) {
-              final prompt = store.prompts.items[i];
-              return PromptCard(
-                prompt: prompt,
-                selectedTags: store.selectedTags,
-                selectionMode: _selectionMode,
-                selected: _selected.contains(prompt.id),
-                onLongPress: () => setState(() {
-                  _selectionMode = true;
-                  _selected.add(prompt.id);
-                }),
-                onOpen: () =>
-                    _selectionMode ? _toggle(prompt.id) : _openDetail(context, prompt),
-                onToggleTag: store.toggleTag,
-                // 「▶️运行」：交给宿主（HomeShell）送进工作台并切过去。
-                // 宿主没接（比如用例里直接起这一页）时传 null，按钮就不显示。
-                onRun: widget.onSendToWorkspace == null
-                    ? null
-                    : () => _runPreset(prompt),
-              );
-            },
+          // 左右滑动 = 翻当前列表的页（带滑入 / 滑出动画，见 SwipePageView）
+          child: SwipePageView(
+            page: store.prompts.page,
+            pages: store.prompts.pages,
+            onPageChanged: store.setPromptPage,
+            // 列数 = 可用宽度 / 550（宽窗口自动多列，窄窗口仍是单列）
+            child: AdaptiveColumnList(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
+              runSpacing: 10,
+              itemCount: store.prompts.items.length,
+              itemBuilder: (context, i) {
+                final prompt = store.prompts.items[i];
+                return PromptCard(
+                  prompt: prompt,
+                  selectedTags: store.selectedTags,
+                  selectionMode: _selectionMode,
+                  selected: _selected.contains(prompt.id),
+                  onLongPress: () => setState(() {
+                    _selectionMode = true;
+                    _selected.add(prompt.id);
+                  }),
+                  onOpen: () => _selectionMode
+                      ? _toggle(prompt.id)
+                      : _openDetail(context, prompt),
+                  onToggleTag: store.toggleTag,
+                  // 「▶️运行」：交给宿主（HomeShell）送进工作台并切过去。
+                  // 宿主没接（比如用例里直接起这一页）时传 null，按钮就不显示。
+                  onRun: widget.onSendToWorkspace == null
+                      ? null
+                      : () => _runPreset(prompt),
+                );
+              },
+            ),
           ),
         ),
-        _Pager(
+        PageBar(
           page: store.prompts.page,
           pages: store.prompts.pages,
           onChanged: store.setPromptPage,
@@ -505,7 +666,11 @@ class _PromptsPageState extends State<PromptsPage> {
       return;
     }
     // 顺手拿前几条标题当例子
-    final sample = await store.api.listPrompts(hasMedia: false, page: 1, size: 5);
+    final sample = await store.api.listPrompts(
+      hasMedia: false,
+      page: 1,
+      size: 5,
+    );
     if (!mounted) return;
     final ok = await showDialog<bool>(
       context: context,
@@ -515,20 +680,29 @@ class _PromptsPageState extends State<PromptsPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('这些提示词目前没有关联任何产物（产物被删掉了，或还没关联过）。\n'
-                '删除后不可恢复；产物本身不受影响。'),
+            const Text(
+              '这些提示词目前没有关联任何产物（产物被删掉了，或还没关联过）。\n'
+              '删除后不可恢复；产物本身不受影响。',
+            ),
             const SizedBox(height: 10),
             for (final p in sample.items)
               Text('· ${p.title}', style: Theme.of(ctx).textTheme.bodySmall),
             if (total > sample.items.length)
-              Text('…… 还有 ${total - sample.items.length} 条',
-                  style: Theme.of(ctx).textTheme.labelSmall),
+              Text(
+                '…… 还有 ${total - sample.items.length} 条',
+                style: Theme.of(ctx).textTheme.labelSmall,
+              ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: Text('删除 $total 条'),
           ),
@@ -536,16 +710,13 @@ class _PromptsPageState extends State<PromptsPage> {
       ),
     );
     if (ok != true || !mounted) return;
-    await _run(
-      () async {
-        // 真正删除交给 store 循环按批处理（边删边翻页会漏掉一部分）
-        final removed = await store.deleteUnlinkedPrompts();
-        if (removed != total) {
-          debugPrint('未关联提示词期望删除 $total 条，实际删除 $removed 条');
-        }
-      },
-      '已清除 $total 条未关联提示词',
-    );
+    await _run(() async {
+      // 真正删除交给 store 循环按批处理（边删边翻页会漏掉一部分）
+      final removed = await store.deleteUnlinkedPrompts();
+      if (removed != total) {
+        debugPrint('未关联提示词期望删除 $total 条，实际删除 $removed 条');
+      }
+    }, '已清除 $total 条未关联提示词');
   }
 
   Future<void> _run(Future<void> Function() action, String toast) async {
@@ -579,19 +750,27 @@ class _FilterSummary extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+        color: theme.colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.45,
+        ),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         children: [
-          Icon(Icons.filter_alt_outlined, size: 14, color: theme.colorScheme.outline),
+          Icon(
+            Icons.filter_alt_outlined,
+            size: 14,
+            color: theme.colorScheme.outline,
+          ),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
               text,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ],
@@ -600,7 +779,8 @@ class _FilterSummary extends StatelessWidget {
   }
 }
 
-class _AddTagsDialog extends StatefulWidget {  final int count;
+class _AddTagsDialog extends StatefulWidget {
+  final int count;
 
   const _AddTagsDialog({required this.count});
 
@@ -626,7 +806,10 @@ class _AddTagsDialogState extends State<_AddTagsDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
         FilledButton(
           onPressed: _tags.isEmpty ? null : () => Navigator.pop(context, _tags),
           child: const Text('添加标签'),
@@ -686,7 +869,9 @@ class _SelectionBar extends StatelessWidget {
             onPressed: busy ? null : onDelete,
             icon: const Icon(Icons.delete_outline),
             label: const Text('删除'),
-            style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+            style: TextButton.styleFrom(
+              foregroundColor: theme.colorScheme.error,
+            ),
           ),
         ],
       ),
@@ -737,9 +922,13 @@ class PromptCard extends StatelessWidget {
                 children: [
                   if (selectionMode) ...[
                     Icon(
-                      selected ? Icons.check_circle : Icons.radio_button_unchecked,
+                      selected
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
                       size: 20,
-                      color: selected ? theme.colorScheme.primary : theme.colorScheme.outline,
+                      color: selected
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.outline,
                     ),
                     const SizedBox(width: 8),
                   ],
@@ -750,7 +939,9 @@ class PromptCard extends StatelessWidget {
                       prompt.title.isEmpty ? '未命名提示词' : prompt.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   if (prompt.mediaCount > 0)
@@ -758,7 +949,10 @@ class PromptCard extends StatelessWidget {
                       padding: const EdgeInsets.only(right: 4),
                       child: Chip(
                         visualDensity: VisualDensity.compact,
-                        avatar: const Icon(Icons.photo_library_outlined, size: 14),
+                        avatar: const Icon(
+                          Icons.photo_library_outlined,
+                          size: 14,
+                        ),
                         label: Text('${prompt.mediaCount}'),
                       ),
                     )
@@ -771,12 +965,22 @@ class PromptCard extends StatelessWidget {
                         message: '没有关联任何产物：可能是产物被删掉了，或还没关联过',
                         child: Chip(
                           visualDensity: VisualDensity.compact,
-                          backgroundColor: Colors.orange.withValues(alpha: 0.12),
-                          side: BorderSide(color: Colors.orange.withValues(alpha: 0.6)),
-                          avatar: const Icon(Icons.link_off, size: 14, color: Colors.orange),
+                          backgroundColor: Colors.orange.withValues(
+                            alpha: 0.12,
+                          ),
+                          side: BorderSide(
+                            color: Colors.orange.withValues(alpha: 0.6),
+                          ),
+                          avatar: const Icon(
+                            Icons.link_off,
+                            size: 14,
+                            color: Colors.orange,
+                          ),
                           label: Text(
                             '未关联',
-                            style: theme.textTheme.labelSmall?.copyWith(color: Colors.orange),
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: Colors.orange,
+                            ),
                           ),
                         ),
                       ),
@@ -802,7 +1006,9 @@ class PromptCard extends StatelessWidget {
                       visualDensity: VisualDensity.compact,
                       icon: Icon(
                         prompt.favorite ? Icons.star : Icons.star_border,
-                        color: prompt.favorite ? Colors.amber : theme.colorScheme.outline,
+                        color: prompt.favorite
+                            ? Colors.amber
+                            : theme.colorScheme.outline,
                       ),
                       onPressed: () => store.togglePromptFavorite(prompt),
                     ),
@@ -813,31 +1019,48 @@ class PromptCard extends StatelessWidget {
                         switch (v) {
                           case 'edit':
                             await Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => PromptEditPage(prompt: prompt)),
+                              MaterialPageRoute(
+                                builder: (_) => PromptEditPage(prompt: prompt),
+                              ),
                             );
-                            if (context.mounted) context.read<LibraryStore>().refreshAll();
+                            if (context.mounted) {
+                              context.read<LibraryStore>().refreshAll();
+                            }
                             break;
                           case 'duplicate':
                             await store.api.duplicatePrompt(prompt.id);
                             await store.refreshAll();
-                            messenger.showSnackBar(const SnackBar(content: Text('已复制')));
+                            messenger.showSnackBar(
+                              const SnackBar(content: Text('已复制')),
+                            );
                             break;
                           case 'delete':
                             final ok = await confirmDialog(
                               context,
                               title: '删除提示词',
-                              message: '确定删除「${prompt.title}」吗？\n已关联的产物会保留，但会解除关联。',
+                              message:
+                                  '确定删除「${prompt.title}」吗？\n已关联的产物会保留，但会解除关联。',
                             );
                             if (ok) {
                               await store.deletePrompt(prompt.id);
-                              messenger.showSnackBar(const SnackBar(content: Text('已删除')));
+                              messenger.showSnackBar(
+                                const SnackBar(content: Text('已删除')),
+                              );
                             }
                             break;
                         }
                       },
                       options: const [
-                        MenuOption(value: 'edit', icon: Icons.edit, label: '编辑'),
-                        MenuOption(value: 'duplicate', icon: Icons.copy, label: '复制一份'),
+                        MenuOption(
+                          value: 'edit',
+                          icon: Icons.edit,
+                          label: '编辑',
+                        ),
+                        MenuOption(
+                          value: 'duplicate',
+                          icon: Icons.copy,
+                          label: '复制一份',
+                        ),
                         MenuOption(
                           value: 'delete',
                           icon: Icons.delete_outline,
@@ -849,8 +1072,9 @@ class PromptCard extends StatelessWidget {
                       button: (context, controller, isOpen) => IconButton(
                         tooltip: '更多',
                         visualDensity: VisualDensity.compact,
-                        onPressed: () =>
-                            controller.isOpen ? controller.close() : controller.open(),
+                        onPressed: () => controller.isOpen
+                            ? controller.close()
+                            : controller.open(),
                         icon: const Icon(Icons.more_vert, size: 18),
                       ),
                     ),
@@ -890,52 +1114,23 @@ class PromptCard extends StatelessWidget {
                         prompt.checkpoint!,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.outline,
+                        ),
                       ),
                     ),
                   const Spacer(),
                   Text(
                     relativeTime(prompt.updatedAt ?? prompt.createdAt),
-                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
                   ),
                 ],
               ),
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _Pager extends StatelessWidget {
-  final int page;
-  final int pages;
-  final ValueChanged<int> onChanged;
-
-  const _Pager({required this.page, required this.pages, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    if (pages <= 1) return const SizedBox.shrink();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.chevron_left),
-            onPressed: page > 1 ? () => onChanged(page - 1) : null,
-          ),
-          Text('第 $page / $pages 页'),
-          IconButton(
-            icon: const Icon(Icons.chevron_right),
-            onPressed: page < pages ? () => onChanged(page + 1) : null,
-          ),
-        ],
       ),
     );
   }
@@ -953,9 +1148,14 @@ Future<bool> confirmDialog(
       title: Text(title),
       content: Text(message),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('取消'),
+        ),
         FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+          style: FilledButton.styleFrom(
+            backgroundColor: Theme.of(ctx).colorScheme.error,
+          ),
           onPressed: () => Navigator.pop(ctx, true),
           child: Text(confirmText),
         ),
