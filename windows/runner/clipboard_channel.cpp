@@ -6,9 +6,11 @@
 #include <windows.h>
 #include <shellapi.h>  // DragQueryFileW / HDROP
 
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -94,6 +96,218 @@ std::vector<std::wstring> ReadFiles() {
   }
   ::CloseClipboard();
   return paths;
+}
+
+// 把一段"整块全局内存"的剪贴板负载原样拷出来（`CF_DIB` / `PNG` 都是这个形状）。
+// **调用时剪贴板必须已经打开**；失败回空表。
+std::vector<uint8_t> GlobalBytes(UINT format) {
+  std::vector<uint8_t> out;
+  HANDLE handle = ::GetClipboardData(format);
+  if (handle == nullptr) return out;
+  const SIZE_T size = ::GlobalSize(handle);
+  if (size == 0) return out;
+  const void* source = ::GlobalLock(handle);
+  if (source == nullptr) return out;
+  const auto* bytes = static_cast<const uint8_t*>(source);
+  out.assign(bytes, bytes + size);
+  ::GlobalUnlock(handle);
+  return out;
+}
+
+uint32_t ReadU32(const uint8_t* p) {
+  return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+         (static_cast<uint32_t>(p[2]) << 16) |
+         (static_cast<uint32_t>(p[3]) << 24);
+}
+
+uint16_t ReadU16(const uint8_t* p) {
+  return static_cast<uint16_t>(static_cast<uint16_t>(p[0]) |
+                               (static_cast<uint16_t>(p[1]) << 8));
+}
+
+/// `PNG` 注册格式名。
+///
+/// Chromium（浏览器里复制图片）以及部分截图工具在 `CF_DIB` 之外**还会再放一份
+/// 已编码的 PNG**。有它就用它：一是不用自己转码、像素与原图逐字节一致，
+/// 二是 32bpp DIB 里那个"未使用"的 alpha 字节不会把图弄成全透明。
+UINT PngClipboardFormat() {
+  static const UINT format = ::RegisterClipboardFormatW(L"PNG");
+  return format;
+}
+
+// `BITMAPFILEHEADER`（14 字节）。系统头里它在 `wingdi.h`，但那一份依赖
+// `WIN32_LEAN_AND_MEAN` 之类的宏开关才可见；这里按规范声明并用 `static_assert`
+// 钉住尺寸 —— 与下面 `DropFilesHeader` 是同一个理由。
+#pragma pack(push, 1)
+struct BitmapFileHeader {
+  WORD type;       ///< 'BM'
+  DWORD size;      ///< 整个 .bmp 文件的字节数
+  WORD reserved1;  ///< 0
+  WORD reserved2;  ///< 0
+  DWORD off_bits;  ///< 像素数据的起点（相对文件开头）
+};
+#pragma pack(pop)
+static_assert(sizeof(BitmapFileHeader) == 14,
+              "BITMAPFILEHEADER 必须是 14 字节：偏移写错就是一张花屏");
+
+/// 把一段裸 DIB（`CF_DIB` / `CF_DIBV5` 的负载）包成 `.bmp` 文件的字节。
+///
+/// 为什么必须包这一层：Flutter 的解码器（Skia）认的是**带文件头的 BMP**，
+/// 裸 DIB 没有 `bfOffBits` 那一层。而像素起点要按头里的位深 / 压缩方式 / 调色板
+/// 算出来（8bpp 有调色板、`BI_BITFIELDS` 多 12 字节掩码），算错不会报错，只会花屏。
+///
+/// [force_opaque]：把 32bpp `BI_RGB` 的 alpha 字节强制置 255。按规范那一位
+/// **未使用**，但截图工具给出来的常常是全 0 —— 照原样交给解码器会得到一张
+/// 全透明的图（用户那边看起来就是"粘上去啥也没有"）。
+std::vector<uint8_t> DibToBmp(const std::vector<uint8_t>& dib,
+                              bool force_opaque) {
+  std::vector<uint8_t> bmp;
+  if (dib.size() < 40) return bmp;  // 连 BITMAPINFOHEADER 都不够
+
+  const uint32_t header = ReadU32(dib.data());
+  if (header < 40 || header > dib.size()) return bmp;
+  const uint32_t bpp = ReadU16(dib.data() + 14);
+  const uint32_t compression = ReadU32(dib.data() + 16);
+  const uint32_t colors_used = ReadU32(dib.data() + 32);
+
+  size_t extra = 0;    // BI_BITFIELDS 的掩码（仅 40 字节的老头才有）
+  size_t palette = 0;  // 8bpp 及以下的调色板
+  if (header == 40) {
+    if (compression == BI_BITFIELDS && (bpp == 16 || bpp == 32)) {
+      extra = 12;
+    }
+    if (bpp > 0 && bpp <= 8) {
+      palette = static_cast<size_t>(colors_used != 0 ? colors_used
+                                                     : (1u << bpp)) * 4;
+    }
+  }
+
+  // 像素起点（相对 .bmp 文件开头）
+  const size_t off_bits = 14 + header + extra + palette;
+  if (off_bits > 14 + dib.size()) return bmp;  // 头里说的是"后面还有数据"却没有
+
+  std::vector<uint8_t> payload = dib;
+  if (force_opaque && bpp == 32 && compression == BI_RGB) {
+    for (size_t i = (off_bits - 14) + 3; i < payload.size(); i += 4) {
+      payload[i] = 0xFF;
+    }
+  }
+
+  BitmapFileHeader file_header{};
+  file_header.type = 0x4D42;  // 'BM'
+  file_header.size = static_cast<DWORD>(14 + payload.size());
+  file_header.off_bits = static_cast<DWORD>(off_bits);
+
+  bmp.resize(file_header.size);
+  std::memcpy(bmp.data(), &file_header, sizeof(file_header));
+  std::memcpy(bmp.data() + sizeof(file_header), payload.data(), payload.size());
+  return bmp;
+}
+
+/// `CF_BITMAP`（`HBITMAP`）→ 32bpp DIB（`GetDIBits` 自己填像素）。
+/// **调用时剪贴板必须已经打开**（位图句柄归剪贴板所有）。
+std::vector<uint8_t> BitmapToDib(HBITMAP bitmap) {
+  std::vector<uint8_t> dib;
+  if (bitmap == nullptr) return dib;
+  BITMAP info{};
+  if (::GetObjectW(bitmap, sizeof(info), &info) != sizeof(info)) return dib;
+  if (info.bmWidth <= 0 || info.bmHeight <= 0) return dib;
+
+  BITMAPINFOHEADER header{};
+  header.biSize = sizeof(header);
+  header.biWidth = info.bmWidth;
+  header.biHeight = info.bmHeight;  // 正数 = 自下而上，正是 BMP 的约定
+  header.biPlanes = 1;
+  header.biBitCount = 32;
+  header.biCompression = BI_RGB;
+  header.biSizeImage =
+      static_cast<DWORD>(info.bmWidth) * static_cast<DWORD>(info.bmHeight) * 4;
+
+  std::vector<uint8_t> pixels(header.biSizeImage);
+  HDC dc = ::GetDC(nullptr);
+  if (dc == nullptr) return dib;
+  BITMAPINFO dto{};
+  dto.bmiHeader = header;
+  const int lines = ::GetDIBits(dc, bitmap, 0, static_cast<UINT>(info.bmHeight),
+                                pixels.data(), &dto, DIB_RGB_COLORS);
+  ::ReleaseDC(nullptr, dc);
+  if (lines != info.bmHeight) return dib;
+
+  dib.resize(sizeof(header) + pixels.size());
+  std::memcpy(dib.data(), &header, sizeof(header));
+  std::memcpy(dib.data() + sizeof(header), pixels.data(), pixels.size());
+  return dib;
+}
+
+/// 剪贴板里的一幅图（读不到时 `ok == false`）。
+struct ClipboardImage {
+  bool ok = false;
+  bool png = false;  ///< true = [bytes] 已经是 PNG；false = 是 .bmp
+  std::vector<uint8_t> bytes;
+};
+
+bool HasImage() {
+  const UINT png = PngClipboardFormat();
+  return ::IsClipboardFormatAvailable(CF_DIB) != FALSE ||
+         ::IsClipboardFormatAvailable(CF_DIBV5) != FALSE ||
+         ::IsClipboardFormatAvailable(CF_BITMAP) != FALSE ||
+         (png != 0 && ::IsClipboardFormatAvailable(png) != FALSE);
+}
+
+/// 读剪贴板里的位图。顺序：PNG（保真）→ CF_DIBV5 → CF_DIB → CF_BITMAP。
+///
+/// V5 优先于 V4/DIB：它带 alpha 掩码，透明背景的图不会在转换时丢掉。
+///
+/// ⚠ **`IsClipboardFormatAvailable` 只说明"它声称有这个格式"，不等于拿得到数据**：
+/// .NET `DataObject` / OLE 延迟渲染会把 `CF_DIBV5` / `CF_BITMAP` 列进格式表，
+/// 而 `GetClipboardData` 回 NULL（实测：PowerShell 里 `Clipboard.SetDataObject`
+/// 之后 `CF_DIBV5 available=1 handle=0`）。所以这里**必须逐个格式试**，
+/// 读到真数据才算数 —— 一旦"选中" V5 就放弃 DIB，这类剪贴板会一张图都读不出来。
+ClipboardImage ReadImage() {
+  ClipboardImage image;
+  if (!HasImage()) return image;
+  if (!OpenClipboardWithRetry()) return image;
+
+  const UINT png_format = PngClipboardFormat();
+  if (png_format != 0 && ::IsClipboardFormatAvailable(png_format)) {
+    auto bytes = GlobalBytes(png_format);
+    // PNG 的签名是 8 字节，短于它的一定不是图
+    if (bytes.size() > 8 && bytes[0] == 0x89 && bytes[1] == 0x50) {
+      image.ok = true;
+      image.png = true;
+      image.bytes = std::move(bytes);
+    }
+  }
+
+  if (!image.ok) {
+    const UINT kDibFormats[] = {CF_DIBV5, CF_DIB};
+    for (UINT format : kDibFormats) {
+      if (!::IsClipboardFormatAvailable(format)) continue;
+      auto bmp = DibToBmp(GlobalBytes(format), /*force_opaque=*/true);
+      if (!bmp.empty()) {
+        image.ok = true;
+        image.png = false;
+        image.bytes = std::move(bmp);
+        break;
+      }
+    }
+  }
+
+  if (!image.ok && ::IsClipboardFormatAvailable(CF_BITMAP)) {
+    auto handle = ::GetClipboardData(CF_BITMAP);
+    if (handle != nullptr) {
+      auto bmp = DibToBmp(BitmapToDib(static_cast<HBITMAP>(handle)),
+                          /*force_opaque=*/true);
+      if (!bmp.empty()) {
+        image.ok = true;
+        image.png = false;
+        image.bytes = std::move(bmp);
+      }
+    }
+  }
+
+  ::CloseClipboard();
+  return image;
 }
 
 // 把一段字节写进一块**可移动全局内存**；失败回 nullptr。
@@ -209,6 +423,27 @@ void RegisterClipboardChannel(flutter::BinaryMessenger* messenger) {
             list.push_back(flutter::EncodableValue(Narrow(path)));
           }
           result->Success(flutter::EncodableValue(list));
+          return;
+        }
+
+        if (method == "hasImage") {
+          result->Success(flutter::EncodableValue(HasImage()));
+          return;
+        }
+
+        if (method == "readImage") {
+          const auto image = ReadImage();
+          if (!image.ok) {
+            // **没有就是没有**：回 null，让 Dart 那边退回"粘文本"那条路。
+            result->Success(flutter::EncodableValue());
+            return;
+          }
+          flutter::EncodableMap payload;
+          payload[flutter::EncodableValue("format")] =
+              flutter::EncodableValue(image.png ? "png" : "bmp");
+          payload[flutter::EncodableValue("bytes")] =
+              flutter::EncodableValue(image.bytes);
+          result->Success(flutter::EncodableValue(payload));
           return;
         }
 

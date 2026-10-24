@@ -21,6 +21,11 @@
 //   * `hasFiles`   → bool
 //   * `readFiles`  → List<String>
 //   * `writeFiles` → bool（参数是 `List<String>` 路径）
+//   * `hasImage`   → bool（剪贴板里有没有位图：截图 / 浏览器复制的图）
+//   * `readImage`  → Map?（`{format: 'png'|'bmp', bytes: Uint8List}`；没有就是 null）
+//
+// ⚠ 位图为什么也要走原生：Flutter 的 `Clipboard` 只支持**纯文本**，截图工具放在
+// `CF_DIB` / `CF_BITMAP`（浏览器还会放一份 `PNG`）里的东西一个都拿不到。
 void RegisterClipboardChannel(flutter::BinaryMessenger* messenger);
 
 #endif  // RUNNER_CLIPBOARD_CHANNEL_H_

@@ -20,6 +20,8 @@ void main() {
   late bool hasFiles;
   late List<String> files;
   late bool writeOk;
+  late bool hasImage;
+  late Map<String, Object?>? image;
   Object? throwOn;
 
   setUp(() {
@@ -27,6 +29,8 @@ void main() {
     hasFiles = false;
     files = [];
     writeOk = true;
+    hasImage = false;
+    image = null;
     throwOn = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(_channel, (call) async {
@@ -41,6 +45,10 @@ void main() {
           return files;
         case 'writeFiles':
           return writeOk;
+        case 'hasImage':
+          return hasImage;
+        case 'readImage':
+          return image;
       }
       return null;
     });
@@ -90,5 +98,52 @@ void main() {
     expect(await FileClipboard.readFiles(), isEmpty);
     throwOn = 'writeFiles';
     expect(await FileClipboard.writeFiles([r'C:\a.png']), isFalse);
+  });
+
+  group('剪贴板里的位图（截图 / 浏览器复制图片）', () {
+    test('hasImage 如实转发原生结论', () async {
+      expect(await FileClipboard.hasImage(), isFalse);
+      hasImage = true;
+      expect(await FileClipboard.hasImage(), isTrue);
+    });
+
+    test('readImage：PNG 原样带回，格式不被改写成 bmp', () async {
+      // PNG 签名 + 两个填充字节：只要不是空串，这一层不校验像素，
+      // 校验的是"原生给的格式与字节**原样**到调用方手里"。
+      final png = Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 1, 2, 3]);
+      image = {'format': 'png', 'bytes': png};
+      final got = await FileClipboard.readImage();
+      expect(got, isNotNull);
+      expect(got!.isPng, isTrue);
+      expect(got.bytes, png);
+    });
+
+    test('readImage：bmp 也原样带回（转 PNG 是调用方的事）', () async {
+      image = {'format': 'bmp', 'bytes': Uint8List.fromList([1, 2, 3, 4])};
+      final got = await FileClipboard.readImage();
+      expect(got!.isPng, isFalse);
+    });
+
+    test('readImage：没有图回 null（调用方据此退回粘文本）', () async {
+      expect(await FileClipboard.readImage(), isNull);
+      // 通道说"有"，但拿回来是空 / 脏值 —— 同样按"没有"处理，不许造一张空图
+      image = {'format': 'png', 'bytes': Uint8List(0)};
+      expect(await FileClipboard.readImage(), isNull);
+      image = {'format': 'png', 'bytes': 'not-bytes'};
+      expect(await FileClipboard.readImage(), isNull);
+    });
+
+    test('readImage：格式缺失时默认按 png（原生只会给这两种）', () async {
+      image = {'bytes': Uint8List.fromList([1, 2, 3])};
+      final got = await FileClipboard.readImage();
+      expect(got!.format, 'png');
+    });
+
+    test('★ 通道没接上时 hasImage/readImage 降级，不把粘贴弄坏', () async {
+      throwOn = 'hasImage';
+      expect(await FileClipboard.hasImage(), isFalse);
+      throwOn = 'readImage';
+      expect(await FileClipboard.readImage(), isNull);
+    });
   });
 }

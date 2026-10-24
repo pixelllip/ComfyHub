@@ -55,7 +55,7 @@
 | 蓝图**画布上直接改参数** | ✅ | `blueprintWidgetRowRect` / `hitTestWidgetRow`（与绘制**共用一份几何**）+ 屏幕坐标浮层 `_InlineWidgetEditor`。用例：「参数行的几何只有一份…」+「点画布上的参数行 = 就地改…」 |
 | **移进集合**在界面上的入口 | ✅ | 见上（选择器） |
 | **复制文件本身**（Windows） | ✅ | 自建原生通道 `comfyhub/clipboard`（`windows/runner/clipboard_channel.{h,cpp}`）：`CF_HDROP` + 纯文本兜底 + `Preferred DropEffect=复制`；Dart 侧 `lib/core/file_clipboard.dart`；后端新增 `GET /api/media/{id}/path`（**路径只由后端给**）。入口：详情页「更多」与画面右键。⚠ 实机观感未验证（见下） |
-| **Ctrl+V 粘贴附件** | ✅ | 输入框外挂一个 `Focus(onKeyEvent:)`（比 `DefaultTextEditingShortcuts` 更靠近 TextField，所以先拿到事件）：剪贴板有文件就吃成附件，**没有就把这次粘贴自己还回去**（不然用户会"什么都粘不上"）。用例 `test/file_clipboard_test.dart` 6 例（含"通道抛异常一律降级"） |
+| **Ctrl+V 粘贴附件** | ✅ | 输入框外挂一个 `Focus(onKeyEvent:)`（比 `DefaultTextEditingShortcuts` 更靠近 TextField，所以先拿到事件）：剪贴板有文件就吃成附件，**没有就把这次粘贴自己还回去**（不然用户会"什么都粘不上"）。**2026-10-24 补上截图那一半**（用户："允许我在 AI 工作台 Ctrl+V 粘贴附件"）：原生通道 `readImage` 按 `PNG` → `CF_DIBV5` → `CF_DIB` → `CF_BITMAP` 读位图，Dart 把 BMP 转 PNG 后**按字节上传**（同一张 `/api/ai/attachments`，不落临时文件）。用例 `test/file_clipboard_test.dart` 11 例 + `test/ai_attachment_test.dart` 的三条 Ctrl+V 界面用例（粘截图 / 粘文件 / 粘文本） |
 | 集合格子**拖动**（整理模式内长按拖） | ✅ | 模式外长按 = 进模式，**模式内长按拖 = 移动**（与 iOS/Android 同一套肌肉记忆，也因此不与 `GridView` 的滚动抢手势）。拖到有集合的格子 = 并进去；拖到没集合的格子 = **当场新建一组**；拖的是集合格子则**整组一起过去**。用例：`gallery_group_selection_test.dart` 的「拖到一起成一组」「拖到没有集合的一格上」，后者断言新建的组是 `{1,2,3,4}`（**整组**，不是只动封面） |
 | 真拖拽（把文件从资源管理器拖进窗口） | ⬜ 未做（**不在本次目标内**） | 需要 `DragAcceptFiles` + 子类化 `WndProc` 收 `WM_DROPFILES`。`ai_home_page.dart:2993` / `gallery_page.dart:346` 那两句"拖进来"的文案现在**还是假的**，建议要么做要么改掉 |
 
@@ -582,6 +582,9 @@ Flutter 内置的 `Clipboard.getData` **只支持文本**（`Clipboard.kTextPlai
    ⚠ 现在全仓库**没用过 `isControlPressed`**（只用过 `isShiftPressed`，`:1934`），是新写法。
    ⚠ "粘截图"要先落地成文件（`CF_DIB` 位图 → PNG 写进 `<根>\.run\tmp`，AGENTS §13 的临时目录约定），
    再走上传 —— **建议第一版只做"粘文件路径"，把 `CF_DIB` 往后放**。
+   （**2026-10-24 已补**：`readImage` 读位图，Dart 侧转 PNG 后直接 `fromBytes` 上传，
+   **不落 `.run\tmp`**；`CF_DIB`/`CF_BITMAP` 的 32bpp alpha 由原生强制置 255，
+   免得截图粘上去是一张全透明的图。）
 3. **拖拽要单独决策**：Windows 侧 `DragAcceptFiles` + `WM_DROPFILES`（原生），
    或者引 `desktop_drop` 包。本仓库对新依赖很保守（AGENTS §9 的 `video_player_win` 教训），
    而且这条**不影响 §5**（§5 不需要原生）⇒ 建议**先不做拖拽**，

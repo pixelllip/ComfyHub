@@ -2,6 +2,19 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart';
 
+/// 剪贴板里的一幅**位图**（截图工具 / 浏览器里复制图片）。
+///
+/// `format` 是原生给的原样格式：`png`（剪贴板本来就带编码好的 PNG，保真）
+/// 或 `bmp`（原生用 `CF_DIB` / `CF_BITMAP` 包出来的 BMP，需要解码后转 PNG 再上传）。
+class ClipboardImage {
+  const ClipboardImage({required this.bytes, required this.format});
+
+  final Uint8List bytes;
+  final String format;
+
+  bool get isPng => format == 'png';
+}
+
 /// 剪贴板里的**文件**（Windows 的 `CF_HDROP`）——读与写都只有这一份实现。
 ///
 /// # 为什么不用 Flutter 自带的 `Clipboard`
@@ -73,6 +86,31 @@ class FileClipboard {
     if (!supported) return const [];
     final raw = await _invoke<List<Object?>>('readFiles');
     return (raw ?? const <Object?>[]).whereType<String>().toList(growable: false);
+  }
+
+  /// 剪贴板里**有没有位图**（截图 / 浏览器复制的图）。
+  ///
+  /// 与 [hasFiles] 一样只是一条提示：真正的判据永远是 [readImage] 拿没拿到东西。
+  static Future<bool> hasImage() async {
+    if (!supported) return false;
+    return await _invoke<bool>('hasImage') ?? false;
+  }
+
+  /// 取出剪贴板里的位图。没有图 / 读失败都回 `null`（调用方按"没有"处理）。
+  ///
+  /// ⚠ 拿不到图与通道没接上**必须能区分**：前者要退回"粘文本"，后者要提示一次
+  /// （[channelAlive]）。这也是所有失败都走 [_invoke] 的原因。
+  static Future<ClipboardImage?> readImage() async {
+    if (!supported) return null;
+    final raw = await _invoke<Map<Object?, Object?>>('readImage');
+    if (raw == null) return null;
+    final bytes = raw['bytes'];
+    if (bytes is! Uint8List || bytes.isEmpty) return null;
+    final format = raw['format'];
+    return ClipboardImage(
+      bytes: bytes,
+      format: format is String && format.isNotEmpty ? format : 'png',
+    );
   }
 
   /// 把一批文件放进剪贴板（资源管理器里 Ctrl+V 能粘出文件）。失败回 `false`。

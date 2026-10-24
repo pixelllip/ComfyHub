@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -4222,7 +4223,7 @@ class _ComposerState extends State<_Composer> {
     await widget.store.attachFiles(picked);
   }
 
-  /// `Ctrl+V`：剪贴板里有**文件**就吃成附件，没有就把这次粘贴**还回去**。
+  /// `Ctrl+V`：剪贴板里是**文件**或**一张图**就吃成附件，都不是就把这次粘贴还回去。
   ///
   /// 输入框的右键菜单：把内置的「粘贴」换成**我们自己的**那条。
   ///
@@ -4234,7 +4235,7 @@ class _ComposerState extends State<_Composer> {
   /// 偏偏 [`FileClipboard.writeFiles`] 为了让记事本 / 聊天框之类也能粘，
   /// **故意**额外写了一份文本兜底 —— 而那份文本就是**路径串本身**。
   /// 于是"复制一个文件、右键粘贴"粘出来的是文件路径（用户 2026-10-18 报的）。
-  /// 换掉这一项之后，两条路都走同一个 `_pasteFilesOrText`：有文件挂附件、没有才粘文本。
+  /// 换掉这一项之后，两条路都走同一个 `_pasteFilesOrText`：有文件 / 图挂附件、都没有才粘文本。
   Widget _composerContextMenu(BuildContext context, EditableTextState state) {
     final items = withReplacedPaste(state.contextMenuButtonItems, () {
       state.hideToolbar();
@@ -4249,13 +4250,13 @@ class _ComposerState extends State<_Composer> {
   /// 那条"原生通道没接上"的提示**只说一次**（别每次 Ctrl+V 都弹）。
   bool _clipboardNoticeShown = false;
 
-  /// 用户 2026-10-18："ctrl+v不能粘贴附件。"
+  /// 用户 2026-10-18："ctrl+v不能粘贴附件。"（2026-10-24 补上"截图 / 复制图片"那一半）
   ///
   /// # 为什么这里必须异步 + 自己兜底
   ///
-  /// "剪贴板里有没有文件"要问原生（`FileClipboard.hasFiles`），而按键回调**是同步的**
+  /// "剪贴板里有没有文件 / 图"要问原生（`FileClipboard`），而按键回调**是同步的**
   /// —— 没法 `await` 了再决定吃不吃这个事件。所以这里的做法是：
-  /// **先把事件吃掉**，然后异步判；没有文件就自己把文本粘进输入框。
+  /// **先把事件吃掉**，然后异步判；都不是就自己把文本粘进输入框。
   ///
   /// ⚠ 兜底那一步不能省：不还回去的话，用户按 Ctrl+V 会**什么都粘不上**
   /// （事件被我们吃掉了，而 `DefaultTextEditingShortcuts` 没机会处理）。
@@ -4285,12 +4286,20 @@ class _ComposerState extends State<_Composer> {
       _attachDropped(paths);
       return;
     }
+    // 不是文件 —— 再看是不是**一张图**（截图工具 / 浏览器里复制图片）。
+    //
+    // 用户 2026-10-24："允许我在 AI 工作台 Ctrl+V 粘贴附件。" 截图那条路以前是空的：
+    // Flutter 的 `Clipboard` 只读文本，而截图在 `CF_DIB` / `CF_BITMAP` 里。
+    final image = await FileClipboard.readImage();
+    if (!mounted) return;
+    if (image != null && await _attachClipboardImage(image)) return;
+    if (!mounted) return;
     // 没有文件 → 先看是不是**原生那一半压根没接上**："通道没编进产物"与"剪贴板里
     // 确实没有文件"表现完全一样，静默降级的话这一档永远查不出来（只说一次）。
     if (FileClipboard.channelAlive == false && !_clipboardNoticeShown) {
       _clipboardNoticeShown = true;
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(content: Text('读剪贴板文件的原生通道没接上：Ctrl+V 现在只能粘文本')),
+        const SnackBar(content: Text('读剪贴板（文件 / 图片）的原生通道没接上：Ctrl+V 现在只能粘文本')),
       );
     }
     // 这是一次**普通文本粘贴**，原样实现一遍交给输入框
@@ -4308,6 +4317,42 @@ class _ComposerState extends State<_Composer> {
       composing: TextRange.empty,
     );
   }
+
+  /// 剪贴板里的位图 → PNG → 挂成附件（与"选文件"同一条上传链路）。
+  ///
+  /// 原生给 `bmp`（来自 `CF_DIB` / `CF_BITMAP`）时在这里解码再编码成 PNG：
+  /// 三家上游都只收 png / jpeg / webp / gif，BMP 直接发出去会被网关拒绝。
+  /// 解码走 `dart:ui`（Skia 的 BMP 解码器），不为这件事引新依赖。
+  ///
+  /// 返回 `false` = 这张图用不了（调用方继续走文本粘贴，别把这次 Ctrl+V 吞掉）。
+  Future<bool> _attachClipboardImage(ClipboardImage image) async {
+    var bytes = image.bytes;
+    if (!image.isPng) {
+      try {
+        final codec = await ui.instantiateImageCodec(bytes);
+        final frame = await codec.getNextFrame();
+        final png = await frame.image.toByteData(
+          format: ui.ImageByteFormat.png,
+        );
+        frame.image.dispose();
+        codec.dispose();
+        if (png == null) return false;
+        bytes = png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes);
+      } catch (_) {
+        // 解不出来（剪贴板里是别的位图变体）—— 如实忽略，退回文本粘贴
+        return false;
+      }
+    }
+    if (!mounted) return false;
+    final now = DateTime.now();
+    final name =
+        '剪贴板图片-${now.year}${_two(now.month)}${_two(now.day)}-'
+        '${_two(now.hour)}${_two(now.minute)}${_two(now.second)}.png';
+    await widget.store.attachImageBytes(bytes, name: name);
+    return true;
+  }
+
+  static String _two(int value) => value.toString().padLeft(2, '0');
 
   /// 从磁盘路径取文件名（附件显示用）。取不到就退回整条路径 —— 界面上总得有个名字。
   static String _fileNameOf(String path) {

@@ -2189,12 +2189,34 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 上传失败**如实报出来**（哪个文件、为什么），不是静默吞掉。
   Future<void> attachFiles(List<({String name, String path})> files) async {
     if (files.isEmpty) return;
+    await _runUpload(() => _api.uploadAttachments(files));
+  }
+
+  /// 剪贴板里的**一张图**（截图 / 浏览器复制图片按 Ctrl+V）—— 直接传字节。
+  ///
+  /// 与 [attachFiles] 是**同一条上传链路、同一套准入**：类型识别、缩略图、
+  /// 预检都在后端做；这里只多了一个"字节从哪来"的差别。
+  Future<void> attachImageBytes(
+    Uint8List bytes, {
+    required String name,
+  }) async {
+    if (bytes.isEmpty) return;
+    await _runUpload(() => _api.uploadAttachmentBytes(name: name, bytes: bytes));
+  }
+
+  /// 上传的共同尾巴：置忙 → 收结果（逐条失败也要如实说）→ 存草稿 → 重跑预检。
+  ///
+  /// 抽出来是为了让"选文件"与"粘图片"不会长成两份逐渐走样的实现
+  /// （尤其是 `notice` / `error` / `uploadingAttachments` 这三件事）。
+  Future<void> _runUpload(
+    Future<AiAttachmentUploadResult> Function() upload,
+  ) async {
     uploadingAttachments = true;
     error = null;
     notice = null;
     notifyListeners();
     try {
-      final result = await _api.uploadAttachments(files);
+      final result = await upload();
       attachments.addAll(result.items);
       if (result.failed.isNotEmpty) {
         notice = '有 ${result.failed.length} 个附件没能上传：${result.failedLabel}';

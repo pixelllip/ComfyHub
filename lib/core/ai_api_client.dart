@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -621,6 +622,27 @@ class AiApiClient {
         await http.MultipartFile.fromPath('files', f.path, filename: f.name),
       );
     }
+    final streamed = await _client.send(req);
+    final res = await http.Response.fromStream(streamed);
+    return AiAttachmentUploadResult.fromJson(
+      Map<String, dynamic>.from(_decode(res) as Map),
+    );
+  }
+
+  /// 上传**内存里的字节**（剪贴板里的截图走这条）。
+  ///
+  /// 为什么不先落成临时文件再走 [uploadAttachments]：剪贴板图片没有"用户选中的
+  /// 那个文件"，为它造一个临时路径既多一处清理责任，也把 AGENTS §13 的落盘约定
+  /// （内容只存在自身文件夹里）搞复杂。字节直接进 multipart，落盘由后端负责。
+  ///
+  /// ⚠ **不传 contentType**：后端以文件签名判定类型（`file_kind`），前端声明的
+  /// MIME 只是线索；声明错了反而会撞上"签名与声明不符"那条拒绝。
+  Future<AiAttachmentUploadResult> uploadAttachmentBytes({
+    required String name,
+    required Uint8List bytes,
+  }) async {
+    final req = http.MultipartRequest('POST', _uri('/api/ai/attachments'));
+    req.files.add(http.MultipartFile.fromBytes('files', bytes, filename: name));
     final streamed = await _client.send(req);
     final res = await http.Response.fromStream(streamed);
     return AiAttachmentUploadResult.fromJson(

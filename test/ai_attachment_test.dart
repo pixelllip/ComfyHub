@@ -7,8 +7,10 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -25,6 +27,9 @@ final List<Map<String, dynamic>> runBodies = [];
 
 /// 上传接口收到的请求次数（断言"选一次只传一次"）。
 int uploadCalls = 0;
+
+/// 最近一次上传的 multipart 原始字节（用来断言"粘上来的图真的变成了 PNG"）。
+Uint8List? lastUploadBody;
 
 String _sse(int seq, String type, String dataJson) => 'id: $seq\nevent: $type\ndata: $dataJson\n\n';
 
@@ -83,6 +88,7 @@ MockClient _backend({
       ];
     } else if (path == '/api/ai/attachments' && request.method == 'POST') {
       uploadCalls++;
+      lastUploadBody = request.bodyBytes;
       if (uploadStatus >= 400) {
         status = uploadStatus;
         body = {'code': 'UNSUPPORTED_CONTENT', 'message': uploadError};
@@ -201,10 +207,109 @@ Iterable<String> thumbUrls(WidgetTester tester) => tester
     .whereType<NetworkImage>()
     .map((n) => n.url);
 
+/// `comfyhub/clipboard` 的假原生：文件与位图各一个出口（与真实通道同一组方法）。
+const MethodChannel _clipboardChannel = MethodChannel('comfyhub/clipboard');
+
+void _mockClipboard({
+  List<String> files = const [],
+  Map<String, Object?>? image,
+}) {
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(_clipboardChannel, (call) async {
+    switch (call.method) {
+      case 'hasFiles':
+        return files.isNotEmpty;
+      case 'readFiles':
+        return files;
+      case 'hasImage':
+        return image != null;
+      case 'readImage':
+        return image;
+    }
+    return null;
+  });
+  addTearDown(
+    () => messenger.setMockMethodCallHandler(_clipboardChannel, null),
+  );
+}
+
+/// 在输入框里按一次 Ctrl+V。
+///
+/// ⚠ 必须在 `runAsync` 里推：上传要读真文件 / 走真实异步，假异步跑不完；
+/// 又不能用 `pumpAndSettle`（聚焦的输入框光标一直在闪，永远不收敛）。
+Future<void> _pressCtrlV(WidgetTester tester) async {
+  await tester.tap(find.byType(TextField));
+  await tester.pump();
+  await tester.runAsync(() async {
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+  });
+  await tester.pump();
+}
+
+/// 一张 4×2、32bpp、`BITMAPV5HEADER`（124 字节头）的最小 BMP。
+///
+/// 这个形状不是随手挑的：本机实测（原生探针，2026-10-24）Windows 会把
+/// `CF_DIB` / `CF_BITMAP` **合成成 V5 头**交给读剪贴板的一方，所以它才是
+/// "截图按 Ctrl+V" 最常走的那条路；40 字节头的经典 24bpp BMP 反而少见。
+/// alpha 按"原生 force_opaque 之后"的样子写成 255。
+Uint8List _tinyBmp() {
+  const width = 4;
+  const height = 2;
+  const offBits = 14 + 124;
+  final header = ByteData(124);
+  header.setUint32(0, 124, Endian.little); // bV5Size
+  header.setInt32(4, width, Endian.little);
+  header.setInt32(8, height, Endian.little);
+  header.setUint16(12, 1, Endian.little);
+  header.setUint16(14, 32, Endian.little);
+  header.setUint32(16, 0, Endian.little); // BI_RGB
+  header.setUint32(20, width * height * 4, Endian.little);
+
+  final pixels = Uint8List(width * height * 4);
+  for (var i = 0; i < pixels.length; i += 4) {
+    pixels[i] = 255; // B
+    pixels[i + 1] = 0; // G
+    pixels[i + 2] = 0; // R
+    pixels[i + 3] = 255; // A
+  }
+
+  final fileHeader = ByteData(14);
+  fileHeader.setUint16(0, 0x4D42, Endian.little); // 'BM'
+  fileHeader.setUint32(2, offBits + pixels.length, Endian.little);
+  fileHeader.setUint32(10, offBits, Endian.little);
+
+  return (BytesBuilder()
+        ..add(fileHeader.buffer.asUint8List())
+        ..add(header.buffer.asUint8List())
+        ..add(pixels))
+      .toBytes();
+}
+
+const List<int> _pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+bool _containsSignature(Uint8List haystack) {
+  for (var i = 0; i + _pngSignature.length <= haystack.length; i++) {
+    var hit = true;
+    for (var j = 0; j < _pngSignature.length; j++) {
+      if (haystack[i + j] != _pngSignature[j]) {
+        hit = false;
+        break;
+      }
+    }
+    if (hit) return true;
+  }
+  return false;
+}
+
 void main() {
   setUp(() {
     runBodies.clear();
     uploadCalls = 0;
+    lastUploadBody = null;
   });
 
   testWidgets('上传图片后托盘显示缩略图，发送时带上 attachmentIds', (tester) async {
@@ -323,5 +428,87 @@ void main() {
     expect(store.attachments.single.id, 'att-2');
     expect(store.notice, contains('bad.bin'));
     expect(store.notice, contains('无法识别'));
+  });
+
+  // -------------------------------------------------------------------------
+  //  Ctrl+V（用户 2026-10-24："允许我在 AI 工作台 Ctrl+V 粘贴附件"）
+  // -------------------------------------------------------------------------
+
+  testWidgets('Ctrl+V 粘截图：位图转成 PNG 后挂成附件', (tester) async {
+    // 截图的真实形状：剪贴板里**没有文件**，只有一张位图。
+    _mockClipboard(
+      image: {
+        'format': 'bmp',
+        'bytes': _tinyBmp(),
+      },
+    );
+    final store = await _pump(
+      tester,
+      client: _backend(uploadItems: [_dto('att-clip', '剪贴板图片.png', 'image')]),
+    );
+
+    await _pressCtrlV(tester);
+
+    expect(uploadCalls, 1, reason: '★ 截图必须走上传，而不是"什么都没发生"');
+    // 上游只收 png/jpeg/webp/gif：BMP 必须在这里转掉（否则网关卡在签名上）
+    expect(
+      lastUploadBody,
+      isNotNull,
+      reason: '上传请求要真的发出去',
+    );
+    expect(
+      _containsSignature(lastUploadBody!),
+      isTrue,
+      reason: '★ 发出去的必须是 PNG，不能把剪贴板里的 BMP 原样丢给后端',
+    );
+    expect(store.attachments.single.id, 'att-clip');
+    expect(
+      thumbUrls(tester).any((u) => u.endsWith('/api/ai/attachments/att-clip/thumb')),
+      isTrue,
+    );
+  });
+
+  testWidgets('Ctrl+V 粘文件：仍是"按路径上传"那条老路', (tester) async {
+    final file = _tempFile('cat.png');
+    _mockClipboard(files: [file.path]);
+    final store = await _pump(
+      tester,
+      client: _backend(uploadItems: [_dto('att-1', 'cat.png', 'image')]),
+    );
+
+    await _pressCtrlV(tester);
+
+    expect(uploadCalls, 1);
+    expect(store.attachments.single.id, 'att-1');
+    expect(store.error, isNull);
+  });
+
+  testWidgets('剪贴板里既没文件也没图：Ctrl+V 照常粘文本', (tester) async {
+    _mockClipboard();
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    // 只拦剪贴板文本这一个方法；其余平台调用原样返回 null
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.getData') return {'text': '粘进来的字'};
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    final store = await _pump(
+      tester,
+      client: _backend(uploadItems: [_dto('att-1', 'cat.png', 'image')]),
+    );
+
+    await _pressCtrlV(tester);
+
+    // 事件被我们吃掉了，所以"还回去"这一步是唯一让文本能进来的路
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '粘进来的字',
+    );
+    expect(uploadCalls, 0);
+    expect(store.attachments, isEmpty);
   });
 }
