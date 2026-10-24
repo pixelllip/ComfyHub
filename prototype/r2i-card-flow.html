@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ComfyHub 实验窗 · 卡片 → r2i 提示词</title>
+<style>
+  :root {
+    --bg: #0b0910;
+    --surface: #141119;
+    --surface-2: #1b1724;
+    --surface-3: #221d2e;
+    --line: #2c2539;
+    --line-soft: #241f30;
+    --text: #ece7f5;
+    --muted: #9b93ad;
+    --faint: #6f6880;
+    --primary: #cbb7ff;
+    --primary-strong: #7c5cff;
+    --good: #8fd6a5;
+    --warn: #f0b46b;
+    --bad: #f08a8a;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(124, 92, 255, .18), transparent 60%),
+      radial-gradient(900px 500px at 90% 0%, rgba(203, 183, 255, .08), transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+    letter-spacing: .1px;
+  }
+  .page { max-width: 1440px; margin: 0 auto; padding: 26px 30px 40px; }
+
+  /* ---------- header ---------- */
+  .head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 20px; flex-wrap: nowrap; }
+  .head > div:nth-child(2) { flex: 1; min-width: 0; }
+  .logo {
+    width: 42px; height: 42px; border-radius: 12px; flex: none;
+    background: linear-gradient(145deg, #8d6bff, #5a3bd6);
+    display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 15px;
+    box-shadow: 0 8px 24px rgba(124, 92, 255, .35);
+  }
+  .head h1 { font-size: 19px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  .head .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .head .right { margin-left: auto; display: flex; flex-direction: row; gap: 8px; align-items: center; flex: none; }
+  .pill {
+    border: 1px solid var(--line); background: rgba(34, 28, 46, .7);
+    color: var(--muted); border-radius: 999px; padding: 5px 12px; font-size: 12px;
+    display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); box-shadow: 0 0 10px rgba(143, 214, 165, .6); }
+
+  /* ---------- layout ---------- */
+  .main { display: grid; grid-template-columns: minmax(0, 1.22fr) minmax(0, 1fr); gap: 18px; align-items: stretch; }
+  .panel {
+    background: linear-gradient(180deg, rgba(27, 23, 36, .92), rgba(20, 17, 25, .96));
+    border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .35);
+  }
+  .panel-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 13px 16px; border-bottom: 1px solid var(--line-soft);
+    background: rgba(255, 255, 255, .015);
+  }
+  .panel-head .title { font-weight: 650; font-size: 13.5px; }
+  .panel-head .hint { color: var(--faint); font-size: 11.5px; }
+  .panel-head .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+  /* ---------- workbench ---------- */
+  .workbench { display: flex; flex-direction: column; min-height: 640px; position: relative; }
+  .thread { padding: 18px 18px 8px; display: flex; flex-direction: column; gap: 14px; flex: 1; }
+  .msg { display: flex; gap: 10px; }
+  .msg .avatar {
+    width: 30px; height: 30px; border-radius: 9px; flex: none; display: grid; place-items: center;
+    font-size: 12px; font-weight: 700;
+  }
+  .msg.user .avatar { background: #2b2440; color: #c9bcff; }
+  .msg.ai .avatar { background: linear-gradient(145deg, #8d6bff, #5a3bd6); color: #fff; }
+  .bubble {
+    background: var(--surface-2); border: 1px solid var(--line-soft);
+    border-radius: 4px 14px 14px 14px; padding: 10px 13px; max-width: 92%;
+    font-size: 13px;
+  }
+  .msg.user .bubble { background: #241c33; border-color: #352a4b; }
+  .msg.ai .bubble { background: transparent; border-color: transparent; padding-left: 2px; }
+  .refrow { display: flex; gap: 10px; margin-top: 9px; align-items: center; }
+  .refthumb {
+    width: 86px; height: 86px; border-radius: 10px; flex: none; position: relative; overflow: hidden;
+    border: 1px solid #3a2f52;
+    background:
+      radial-gradient(60px 90px at 50% 72%, rgba(255, 210, 170, .55), transparent 70%),
+      linear-gradient(160deg, #2a2140 0%, #1a1526 55%, #241b33 100%);
+  }
+  .refthumb::before {
+    content: ""; position: absolute; inset: 0;
+    background:
+      radial-gradient(circle at 52% 40%, rgba(240, 220, 255, .9) 0 8px, transparent 9px),
+      radial-gradient(ellipse 26px 40px at 52% 72%, rgba(255, 235, 220, .85), transparent 70%),
+      linear-gradient(90deg, transparent 46%, rgba(255, 190, 120, .5) 50%, transparent 54%);
+    opacity: .55; filter: blur(1px);
+  }
+  .refthumb span {
+    position: absolute; left: 7px; bottom: 6px; font-size: 10px; color: #d9cff2;
+    background: rgba(10, 8, 15, .65); padding: 1px 6px; border-radius: 5px;
+  }
+  .refmeta { font-size: 12px; color: var(--muted); }
+
+  /* ---------- composer ---------- */
+  .composer {
+    border-top: 1px solid var(--line-soft); padding: 12px 14px 14px;
+    background: rgba(15, 12, 21, .85); position: relative;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 9px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 12px;
+    background: #2a2140; border: 1px solid #3d3159; color: #ddd2ff;
+    border-radius: 8px; padding: 5px 8px 5px 9px;
+  }
+  .chip .kind { font-size: 10px; color: #a892e0; letter-spacing: .4px; }
+  .chip b { font-weight: 600; }
+  .chip button {
+    all: unset; cursor: pointer; width: 16px; height: 16px; border-radius: 5px;
+    display: grid; place-items: center; color: #9c8ec2;
+  }
+  .chip button:hover { background: #3b2f56; color: #fff; }
+  .composer textarea {
+    width: 100%; min-height: 78px; max-height: 140px; resize: vertical;
+    background: #100d17; color: var(--text); border: 1px solid #322a44; border-radius: 10px;
+    padding: 10px 12px; font: inherit; font-size: 13px; line-height: 1.65; outline: none;
+  }
+  .composer textarea:focus { border-color: #6a4fd0; box-shadow: 0 0 0 3px rgba(124, 92, 255, .12); }
+  .composer textarea::placeholder { color: #6c647f; }
+  .bar { display: flex; align-items: center; gap: 6px; margin-top: 9px; }
+  .tool {
+    all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    color: #b9aedd; font-size: 12.5px; padding: 6px 10px; border-radius: 8px;
+  }
+  .tool:hover { background: #241d33; }
+  .tool .key { font-family: var(--mono); color: #e4d9ff; background: #2a2140; border-radius: 5px; padding: 0 5px; }
+  .bar .spacer { flex: 1; }
+  .send {
+    all: unset; cursor: pointer; background: #cbb7ff; color: #221a33; font-weight: 650;
+    padding: 8px 18px; border-radius: 10px; font-size: 13px; transition: .15s;
+  }
+  .send:hover { background: #dccdff; }
+  .send:active { transform: translateY(1px); }
+
+  /* ---------- picker ---------- */
+  .picker {
+    position: absolute; left: 14px; right: 14px; bottom: calc(100% - 2px); z-index: 30;
+    background: #1a1624; border: 1px solid #3a3050; border-radius: 14px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, .6); display: none; overflow: hidden;
+  }
+  .picker.open { display: block; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .picker .search { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #2b2439; }
+  .picker .search input {
+    all: unset; flex: 1; color: var(--text); font: inherit; font-size: 13px;
+  }
+  .picker .search input::placeholder { color: #6c647f; }
+  .picker .tabs { display: flex; gap: 4px; padding: 8px 10px 0; }
+  .tab {
+    all: unset; cursor: pointer; padding: 6px 12px; border-radius: 8px 8px 0 0;
+    color: var(--muted); font-size: 12.5px;
+  }
+  .tab.active { background: #241d33; color: #e6ddff; box-shadow: inset 0 -2px 0 #8a6bff; }
+  .tab .count { color: #7f7594; font-size: 11px; margin-left: 4px; }
+  .list { max-height: 268px; overflow: auto; padding: 6px 8px 8px; background: #241d33; }
+  .row {
+    display: flex; gap: 10px; align-items: center; padding: 9px 10px; border-radius: 9px;
+    cursor: pointer; border: 1px solid transparent;
+  }
+  .row:hover { background: #2b2340; }
+  .row.selected { border-color: #6a4fd0; background: #2a2142; }
+  .row .ic {
+    width: 34px; height: 34px; border-radius: 9px; flex: none; display: grid; place-items: center;
+    background: #332a4b; color: #c6b4ff; font-size: 15px;
+  }
+  .row .body { min-width: 0; flex: 1; }
+  .row .name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+  .row .desc { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .badge { font-size: 10px; color: #9d92b8; border: 1px solid #3c3354; border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
+  .row .check { color: #a98bff; font-size: 15px; width: 18px; text-align: center; }
+  .empty { color: var(--faint); font-size: 12px; text-align: center; padding: 20px 0; }
+  .picker-foot {
+    padding: 7px 12px; color: var(--faint); font-size: 11px;
+    border-top: 1px solid #2b2439; background: #1c1727;
+  }
+
+  /* ---------- right panel ---------- */
+  .right { display: flex; flex-direction: column; }
+  .seg { display: flex; gap: 4px; background: #100d17; border: 1px solid var(--line-soft); padding: 3px; border-radius: 9px; }
+  .seg button {
+    all: unset; cursor: pointer; font-size: 12px; color: var(--muted); padding: 5px 11px; border-radius: 7px;
+  }
+  .seg button.active { background: #2c2342; color: #efe7ff; }
+  .pane { display: none; padding: 16px; overflow: auto; max-height: 660px; }
+  .pane.active { display: block; }
+  .note { color: var(--faint); font-size: 11.5px; margin-bottom: 10px; display: flex; gap: 6px; align-items: center; }
+  .block {
+    background: #100d17; border: 1px solid #2b2438; border-radius: 12px; padding: 13px 14px;
+    font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+  }
+  .mk { color: #c9a8ff; font-weight: 600; }
+  .mk2 { color: #8fd6a5; font-weight: 600; }
+  .dim { color: var(--faint); }
+  .promptText p { margin: 0 0 10px; }
+  .promptText p:last-child { margin-bottom: 0; }
+  .styleline { color: #d6c6ff; }
+  .promptMeta { display: flex; gap: 10px; align-items: center; margin: 12px 0 0; color: var(--faint); font-size: 11.5px; }
+  .copy {
+    all: unset; cursor: pointer; margin-left: auto; color: #c8b8fb; font-size: 12px;
+    border: 1px solid #3a3050; padding: 4px 10px; border-radius: 7px;
+  }
+  .copy:hover { background: #241d33; }
+
+  /* ---------- text-generate section ---------- */
+  .tg { margin-top: 18px; }
+  .tg-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .tg-head h2 { font-size: 15px; margin: 0; font-weight: 650; }
+  .tg-head .sub { color: var(--muted); font-size: 12px; }
+  .tg-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+  .card h3 { font-size: 12.5px; margin: 0 0 10px; font-weight: 600; color: #cfc3ea; display: flex; align-items: center; gap: 7px; }
+  .graph { display: flex; flex-direction: column; gap: 12px; padding-top: 8px; }
+  .grow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .node {
+    border: 1px solid #3a3150; background: #1d1828; border-radius: 9px; padding: 6px 9px;
+    font-size: 11.5px; line-height: 1.35; position: relative;
+  }
+  .node small { display: block; color: var(--faint); font-size: 10px; font-family: var(--mono); }
+  .node.tg { border-color: #7a5ad8; background: #271f3d; }
+  .node.lit { border-color: #4d8f63; background: #1a2a21; }
+  .node.dead { opacity: .32; text-decoration: line-through; }
+  .node .tag {
+    position: absolute; top: -8px; right: -6px; font-size: 9px; padding: 0 5px; border-radius: 999px;
+    background: #3a2a55; color: #c9b3ff; border: 1px solid #5b4785; white-space: nowrap;
+  }
+  .node .tag.bad { background: #3d2222; color: #f3a5a5; border-color: #6d3a3a; }
+  .arrow { color: #5c5372; font-size: 13px; }
+  .arrow.hot { color: #8f76d8; }
+  .arrow.cut { color: #6d3a3a; }
+  .legend { color: var(--faint); font-size: 11px; margin-top: 10px; }
+  pre.json {
+    background: #0d0a13; border: 1px solid #2a2337; border-radius: 11px; padding: 11px 12px;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.65; color: #cdc4e0;
+    overflow: auto; margin: 10px 0 0;
+  }
+  .json .k { color: #a9c6ff; }
+  .json .s { color: #a8d8b4; }
+  .json .c { color: #6d6582; }
+  .json .bad { color: #f0a0a0; }
+  .why { margin-top: 12px; font-size: 12.5px; color: #bdb4cd; }
+  .why b { color: #e7dcff; font-weight: 600; }
+  .why .line { display: flex; gap: 8px; margin-top: 6px; }
+  .icon { flex: none; width: 17px; height: 17px; border-radius: 5px; display: grid; place-items: center; font-size: 10px; margin-top: 2px; }
+  .icon.bad { background: #3a2323; color: #f0a0a0; }
+  .icon.good { background: #1f3327; color: #9fe0b3; }
+
+  footer { margin-top: 22px; color: var(--faint); font-size: 11.5px; display: flex; flex-wrap: wrap; gap: 8px 20px; }
+  footer b { color: #a99fc0; font-weight: 600; }
+
+  /* scrollbars */
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: #342b47; border-radius: 8px; border: 2px solid #1a1624; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="head">
+    <div class="logo">CH</div>
+    <div>
+      <h1>实验窗 · 角色卡 / 画风卡 → r2i 提示词</h1>
+      <div class="sub">只验证两件事：工作台怎么把卡交给模型、TextGenerate 怎么从提交图里摘干净。数据是样例，不连后端。<br>可以试：点底部「@ 卡片」或直接输入 @；右侧切「消息 / 产出」；下面切「新 / 旧」。</div>
+    </div>
+    <div class="right">
+      <span class="pill"><span class="dot"></span>静态原型</span>
+      <span class="pill">r2i-prompt · skill</span>
+    </div>
+  </div>
+
+  <div class="main">
+
+    <!-- ================= 工作台 ================= -->
+    <section class="panel workbench" id="workbench">
+      <div class="panel-head">
+        <span class="title">AI 工作台</span>
+        <span class="hint">宽屏三栏里「消息 + 输入」这一栏</span>
+        <div class="right">
+          <span class="pill" style="font-size:11px">r2i-prompt</span>
+        </div>
+      </div>
+
+      <div class="thread">
+        <div class="msg user">
+          <div class="avatar">你</div>
+          <div class="bubble">
+            把参考图扩写成一张新图的提示词：保留构图与“回头”的瞬间，夏夜、干燥。
+            <div class="refrow">
+              <div class="refthumb"><span>参考图</span></div>
+              <div class="refmeta">
+                附件 ×1 · 1536×2048<br>
+                只作为“这一刻”的描述来源
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="msg ai">
+          <div class="avatar">AI</div>
+          <div class="bubble">
+            收到。画风卡定义“怎么画”，角色卡定义“谁”；两张卡会逐字带进
+            <span class="mk">[STYLE SPEC]</span> / <span class="mk2">[CHARACTER CARD]</span> 槽位，我只补镜头、动作、姿势、服装、场景与光。
+          </div>
+        </div>
+      </div>
+
+      <!-- 输入区 -->
+      <div class="composer" id="composer">
+        <!-- 选卡弹层 -->
+        <div class="picker" id="picker" role="dialog" aria-label="选择卡片">
+          <div class="search">
+            <span style="color:#7f7594">⌕</span>
+            <input id="searchInput" placeholder="搜卡片名 / 提示词内容" autocomplete="off">
+            <span class="pill" style="font-size:10px;padding:2px 8px">Esc 关闭</span>
+          </div>
+          <div class="tabs" id="tabs">
+            <button class="tab active" data-tab="character">角色卡<span class="count" id="countCharacter"></span></button>
+            <button class="tab" data-tab="style">画风卡<span class="count" id="countStyle"></span></button>
+          </div>
+          <div class="list" id="cardList"></div>
+          <div class="picker-foot">角色卡 / 画风卡各占一个槽位；再选同类会替换。tag 版留在卡里，不进 r2i 正文。</div>
+        </div>
+        <div class="chips" id="chips"></div>
+        <textarea id="input" placeholder="描述你想生成的画面；输入 @ 可以插入角色卡 / 画风卡。">保留参考图的构图与“回头”的瞬间，把这一刻扩写成一张新图的提示词。</textarea>
+        <div class="bar">
+          <button class="tool" id="atButton" title="插入卡片"><span class="key">@</span> 卡片</button>
+          <button class="tool" id="refButton">＋ 参考图</button>
+          <span class="pill" style="font-size:11px;padding:3px 9px">/ r2i-prompt</span>
+          <span class="spacer"></span>
+          <button class="send" id="send">发送</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 右侧：消息 / 产出 ================= -->
+    <section class="panel right">
+      <div class="panel-head">
+        <span class="title" id="rightTitle">发给 AI 的消息</span>
+        <div class="right">
+          <div class="seg" id="seg">
+            <button class="active" data-pane="message">消息</button>
+            <button data-pane="result">产出</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="pane active" id="paneMessage">
+        <div class="note">↳ 工作台点「发送」时真正送出去的那段文本（卡片正文逐字、不改写）</div>
+        <div class="block" id="messageBlock"></div>
+      </div>
+
+      <div class="pane" id="paneResult">
+        <div class="note">↳ 模型按 skill 输出：一整段、300–400 词、镜头与动作在首句</div>
+        <div class="block promptText" id="promptBlock"></div>
+        <div class="promptMeta">
+          <span id="wordCount"></span>
+          <span>·</span>
+          <span>示例：凛 + 物理感动画</span>
+          <button class="copy" id="copy">复制</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================= TextGenerate ================= -->
+  <section class="panel tg" style="padding:16px 16px 18px;margin-top:18px">
+    <div class="tg-head">
+      <h2>TextGenerate：摘线 ≠ 绕过</h2>
+      <span class="sub">这次要补的就是“摘掉之后，节点不能再跑、也不能留悬挂引用”</span>
+      <div class="right" style="margin-left:auto">
+        <div class="seg" id="tgSeg">
+          <button class="active" data-mode="new">新：断了 + 绕过</button>
+          <button data-mode="old">旧：只断线</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tg-grid">
+      <div class="card">
+        <h3>提交给 ComfyUI 的那张 API 图</h3>
+        <div class="graph" id="graph"></div>
+        <div class="legend" id="legend"></div>
+      </div>
+      <div class="card">
+        <h3>返回值与图里剩下的东西</h3>
+        <pre class="json" id="json"></pre>
+        <div class="why" id="why"></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span><b>接入点：</b><code>_Composer</code> 的 <code>@</code> 菜单 · <code>listCharacterCards()</code> / <code>listStyleCards()</code> · <code>skills/builtin/r2i-prompt</code></span>
+    <span><b>卡片格式：</b>名称 + 自然语言正文（tag 版不进 r2i 槽位）</span>
+    <span><b>风格：</b>只来自 STYLE SPEC，逐字保留</span>
+  </footer>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+//  样例数据
+// ---------------------------------------------------------------------------
+const STYLE_TEXT = `Physically based anime rendering: anime proportions carried on fully three-dimensional shading, every surface modelled and lit, every edge the edge of a form. The face keeps its drawing while the light stays real: a heavy dark upper lash line, a fine lower lash, brows reading through the fringe, a nose marked by one soft shadow, a mouth of a single fine line, a flat blush panel on each cheek, the cheekbone and jaw carrying soft occlusion. Skin holds the density of flesh, dry and powder-matte, warm shadow settling into the hollows of the collarbone and the fold of the elbow. Cloth behaves as cloth from edge to edge — cotton, linen, muslin and flannel drink the light, darker in the crease, dry at the crest, hanging in straight folds under the weight of the weave. Hard mirror-sharp reflections appear on the finished surfaces alone — lacquer, glass, polished metal, latex — each carrying the light source as a clean rectangular shape that bends along the curve beneath it. Eyes anchor the drawing: large and almond, a deep saturated outer ring graduating into a luminous centre, the iris banded rather than photographic, one bright catchlight and one small, a heavy dark lash line above and a fine one below. Hair is a dark strand-resolved mass with soft occlusion between layers, its gloss a gentle gradation one tone above the local colour, dissolving into fine strands where it meets the window light. One light source and one occlusion field govern the whole figure, shadow direction, contact darkness and highlight placement agreeing across face, hair, cloth and skin. Camera realism: 85mm at f/1.8, shallow depth of field, mild bloom, one atmospheric haze layer.`;
+
+const RIN_TEXT = `Rin, a woman in her mid-twenties, 170 cm, slim with long limbs and square shoulders. Black hair, straight and heavy, gathered into a low ponytail that falls to the shoulder blades, a few strands escaping at the temple; a straight fringe cut level at the brow. Grey eyes, narrow and calm, a dark outer ring and a lighter centre; brows straight and low. A short nose with a soft tip, a full mouth with the lower lip slightly heavier, a small mole under the left eye. Pale skin with a warm undertone, dry and matte, faint freckles across the nose bridge. A thin silver chain at the throat and one small silver hoop in each ear. Resting face: level brows, lids at mid-height, lips closed.`;
+
+const SU_TEXT = `Su Wan, a woman of about thirty, 165 cm, soft build with rounded shoulders. Chestnut hair, wavy, cut to the jaw and tucked behind one ear, a loose wave falling across the forehead. Brown eyes, round and bright, a warm amber ring; brows thin and arched. A small round nose, a wide mouth with a full upper lip, a dimple on the right cheek. Warm beige skin, dry and matte, a scatter of freckles over the shoulders. Two thin gold hoops in the left ear, a braided cord bracelet on the right wrist.`;
+
+const LAN_TEXT = `Alan, a man in his late twenties, 182 cm, lean with broad shoulders and long arms. Dark brown hair, cropped short at the sides and left longer on top, pushed back from the forehead. Hazel eyes, deep-set, a dark outer ring; brows thick and level. A straight nose with a slight bridge, a wide mouth with a thin upper lip, a scar through the left brow. Olive skin, dry and matte, shadowed under the jaw. A silver ring on the right index finger.`;
+
+const FILM_TEXT = `Analog portrait photography: 35mm film, visible grain, halation around highlights, soft focus falloff at the edges, muted teal and warm sand palette, deep but lifted shadows, gentle highlight roll-off, slight vignette, natural window light with one soft source, 50mm at f/2, shallow depth of field.`;
+
+const CHARACTERS = [
+  { id: 'rin', name: '凛', en: 'Rin', body: RIN_TEXT, desc: '黑长直 / 低马尾 / 灰眼 / 银链', badge: '两版齐全' },
+  { id: 'suwan', name: '苏晚', en: 'Su Wan', body: SU_TEXT, desc: '栗色波浪 / 圆眼 / 右颊酒窝', badge: '只有自然语言' },
+  { id: 'alan', name: '阿岚', en: 'Alan', body: LAN_TEXT, desc: '深棕短发 / 橄榄皮 / 眉骨疤', badge: '两版齐全' },
+];
+const STYLES = [
+  { id: 'pba', name: '物理感动画', en: 'style_physically_based_anime', body: STYLE_TEXT, desc: '三维受光 / 镜面高光只在硬表面', badge: 'Preset/STYLE SPEC' },
+  { id: 'film', name: '胶片人像', en: 'analog_portrait', body: FILM_TEXT, desc: '35mm 颗粒 / 青与暖沙 / 高光晕开', badge: '示例' },
+];
+
+const state = {
+  tab: 'character',
+  query: '',
+  character: 'rin',
+  style: 'pba',
+  pane: 'message',
+  tg: 'new',
+  pickerOpen: false,
+};
+
+// ---------------------------------------------------------------------------
+//  卡片选择器
+// ---------------------------------------------------------------------------
+const picker = document.getElementById('picker');
+const searchInput = document.getElementById('searchInput');
+const cardList = document.getElementById('cardList');
+const input = document.getElementById('input');
+
+function cardsOf(tab) { return tab === 'character' ? CHARACTERS : STYLES; }
+function selectedId(tab) { return tab === 'character' ? state.character : state.style; }
+
+function renderList() {
+  const all = cardsOf(state.tab);
+  const q = state.query.trim().toLowerCase();
+  const rows = all.filter(c =>
+    !q || (c.name + ' ' + c.desc + ' ' + c.body).toLowerCase().includes(q)
+  );
+  document.getElementById('countCharacter').textContent = CHARACTERS.length;
+  document.getElementById('countStyle').textContent = STYLES.length;
+  cardList.innerHTML = rows.length ? '' : '<div class="empty">没有匹配的卡片</div>';
+  for (const c of rows) {
+    const selected = selectedId(state.tab) === c.id;
+    const row = document.createElement('div');
+    row.className = 'row' + (selected ? ' selected' : '');
+    row.innerHTML = `
+      <div class="ic">${state.tab === 'character' ? '☺' : '◐'}</div>
+      <div class="body">
+        <div class="name">${c.name}<span style="color:#7f7594;font-weight:400;font-size:11px">${c.en}</span></div>
+        <div class="desc">${c.desc}</div>
+      </div>
+      <span class="badge">${c.badge}</span>
+      <span class="check">${selected ? '✓' : ''}</span>`;
+    row.onclick = () => choose(c.id);
+    cardList.appendChild(row);
+  }
+}
+
+function choose(id) {
+  if (state.tab === 'character') state.character = id; else state.style = id;
+  // 从输入框里摘掉触发用的 `@查询词`（用户只留下自己打的那句话）
+  if (/(^|\s)@[^\s@]*$/.test(input.value)) {
+    input.value = input.value.replace(/(^|\s)@[^\s@]*$/, '$1').replace(/\s+$/, '');
+  }
+  closePicker();
+  renderAll();
+  input.focus();
+}
+
+function openPicker(tab) {
+  state.pickerOpen = true;
+  if (tab) state.tab = tab;
+  state.query = '';
+  searchInput.value = '';
+  picker.classList.add('open');
+  document.querySelectorAll('#tabs .tab').forEach(t => t.classList.toggle('active', t.dataset.tab === state.tab));
+  renderList();
+  setTimeout(() => searchInput.focus(), 30);
+}
+function closePicker() {
+  state.pickerOpen = false;
+  picker.classList.remove('open');
+  input.focus();
+}
+
+document.getElementById('atButton').onclick = () => openPicker();
+document.querySelectorAll('#tabs .tab').forEach(t => {
+  t.onclick = () => {
+    state.tab = t.dataset.tab;
+    document.querySelectorAll('#tabs .tab').forEach(x => x.classList.toggle('active', x === t));
+    renderList();
+  };
+});
+searchInput.oninput = () => { state.query = searchInput.value; renderList(); };
+searchInput.onkeydown = (e) => {
+  if (e.key === 'Escape') closePicker();
+  if (e.key === 'Enter') {
+    const first = cardList.querySelector('.row');
+    if (first) first.click();
+  }
+};
+input.addEventListener('input', () => {
+  const at = /(^|\s)@([^\s@]*)$/.exec(input.value);
+  if (at) openPicker(at[2].startsWith('画') ? 'style' : undefined);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && state.pickerOpen) closePicker();
+});
+document.addEventListener('mousedown', e => {
+  if (state.pickerOpen && !picker.contains(e.target) && !document.getElementById('atButton').contains(e.target)) closePicker();
+});
+
+// ---------------------------------------------------------------------------
+//  选择后的 chip / 消息 / 产出
+// ---------------------------------------------------------------------------
+function cardById(tab, id) { return cardsOf(tab).find(c => c.id === id); }
+
+function renderChips() {
+  const chips = document.getElementById('chips');
+  const parts = [];
+  if (state.style) {
+    const c = cardById('style', state.style);
+    parts.push(`<span class="chip"><span class="kind">画风卡</span><b>${c.name}</b><button data-kind="style" title="移除">✕</button></span>`);
+  }
+  if (state.character) {
+    const c = cardById('character', state.character);
+    parts.push(`<span class="chip"><span class="kind">角色卡</span><b>${c.name}</b><button data-kind="character" title="移除">✕</button></span>`);
+  }
+  chips.innerHTML = parts.join('');
+  chips.querySelectorAll('button').forEach(b => {
+    b.onclick = () => { state[b.dataset.kind] = null; renderAll(); };
+  });
+}
+
+function messageText() {
+  const s = state.style ? cardById('style', state.style) : null;
+  const c = state.character ? cardById('character', state.character) : null;
+  const blocks = [];
+  if (s) blocks.push(`[STYLE SPEC]\n${s.name}（${s.en}）\n${s.body}`);
+  if (c) blocks.push(`[CHARACTER CARD]\n${c.name}（${c.en}）\n${c.body}`);
+  blocks.push(`[参考图] 附件 ×1（1536×2048）`);
+  blocks.push(`需求：${input.value.trim() || '（还没写）'}`);
+  return blocks.join('\n\n');
+}
+
+function renderMessage() {
+  const text = messageText();
+  const html = text
+    .replace(/\[STYLE SPEC\]/g, '<span class="mk">[STYLE SPEC]</span>')
+    .replace(/\[CHARACTER CARD\]/g, '<span class="mk2">[CHARACTER CARD]</span>')
+    .replace(/\[参考图\]/g, '<span class="mk">[参考图]</span>')
+    .replace(/^需求：/gm, '<span class="mk">需求：</span>');
+  document.getElementById('messageBlock').innerHTML = html;
+}
+
+// 产出示例（用凛 + 物理感动画）：契约是**一整段**
+const PROMPT = `Full-body shot from a camera at chest height, three-quarter rear angle: Rin turns her upper body toward the lens in the open doorway of a laundromat at night, her right hand lifting a paper cup to shoulder height while her left palm stays flat on the steel door frame, weight settling onto the back foot, hips still squared to the door and shoulders rotated a beat further, chin dipping toward the viewer. Her gaze meets the lens under level brows, lids at mid-height, lips closed with one corner pulled slightly in, a shallow crease between the brows. Black hair, dry, gathered in a low ponytail over her right shoulder, loose strands lying across the cheekbone; skin dry and powder-matte, warm shadow pooling in the hollow of her throat and along the collarbone. An oversized white cotton T-shirt, dry, hangs from her shoulders, its hem at mid-thigh breaking into straight folds at the hip, the neckline pulled wide to bare both collarbones and the top edge of a black tank strap; cuffed denim shorts, dry, their front pockets showing below the tee; a thin silver chain at the throat and one small silver hoop in each ear. Her right wrist turns the cup so its rim catches the light; the fingers of her left hand spread against the door frame, the pads pale where they press. Behind her the laundromat runs deep: two rows of front-loading machines receding toward the back wall, their round glass doors holding hard rectangular reflections of the ceiling tubes, a folded stack of towels on the counter, a coin tray, a dry flyer taped to the glass. Warm fluorescent light from inside, hard and even, spills across the linoleum and edges her jaw, forearm and the door frame; a cool streetlamp from camera left, soft, lays a blue rim along her hair and the steel, its shadow running off toward the right curb. Foreground: a cracked concrete step, a dry flyer underfoot, the front wheel of a parked bicycle at the lower left edge. Physically based anime rendering: three-dimensional matte shading, hard mirrored highlights on glass and chrome alone, one light field, mild bloom, 85mm at f/1.8.`;
+
+function renderPrompt() {
+  const body = PROMPT.replace(/Physically based anime rendering:.*$/, '').trim();
+  const style = PROMPT.slice(body.length).trim();
+  document.getElementById('promptBlock').innerHTML =
+    `<p>${body} <span class="styleline">${style}</span></p>`;
+  const words = PROMPT.trim().split(/\s+/).length;
+  document.getElementById('wordCount').textContent = `${words} 词 · 一整段 · 300–400 档`;
+}
+
+function renderAll() {
+  renderChips();
+  renderMessage();
+}
+
+// ---------------------------------------------------------------------------
+//  发送 / 复制
+// ---------------------------------------------------------------------------
+document.getElementById('send').onclick = () => {
+  renderMessage();
+  document.getElementById('paneMessage').classList.add('active');
+  document.getElementById('paneResult').classList.remove('active');
+  document.getElementById('rightTitle').textContent = '发给 AI 的消息';
+  document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('active', b.dataset.pane === 'message'));
+  const ai = document.querySelector('.msg.ai .bubble');
+  ai.innerHTML = '按 <span class="mk">[STYLE SPEC]</span> 与 <span class="mk2">[CHARACTER CARD]</span> 扩写完成：镜头在首句、动作有接触点、服装写了体积、场景分了三层。点右上「产出」看整段。';
+  document.querySelector('#seg button[data-pane="result"]').click();
+};
+document.querySelectorAll('#seg button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('#seg button').forEach(x => x.classList.toggle('active', x === b));
+    const result = b.dataset.pane === 'result';
+    document.getElementById('paneMessage').classList.toggle('active', !result);
+    document.getElementById('paneResult').classList.toggle('active', result);
+    document.getElementById('rightTitle').textContent = result ? 'AI 产出的提示词' : '发给 AI 的消息';
+  };
+});
+document.getElementById('copy').onclick = async () => {
+  try { await navigator.clipboard.writeText(PROMPT); } catch (_) {}
+  const btn = document.getElementById('copy');
+  btn.textContent = '已复制';
+  setTimeout(() => btn.textContent = '复制', 1200);
+};
+
+// ---------------------------------------------------------------------------
+//  TextGenerate 对比
+// ---------------------------------------------------------------------------
+const GRAPH = {
+  new: {
+    nodes: [
+      { row: 0, items: [
+        { id: '31', label: 'PrimitiveStringMultiline', sub: '扩写指令', dead: true },
+        { arrow: '→' },
+        { id: '32', label: 'TextGenerate', sub: '本地 LLM', dead: true, tag: '已摘除' },
+        { arrow: '→' },
+        { id: '39', label: 'ComfySwitchNode', sub: 'on_true', dead: true },
+        { arrow: '→' },
+        { id: '38', label: 'PreviewAny', sub: '显示扩写结果', dead: true },
+      ]},
+      { row: 1, items: [
+        { id: '30', label: 'PrimitiveStringMultiline', sub: '用户原话', dead: true },
+        { arrow: '→' },
+        { id: '39b', label: 'ComfySwitchNode', sub: 'on_false', dead: true },
+      ]},
+      { row: 2, items: [
+        { id: '34', label: 'CLIPTextEncode', sub: 'text = 最终提示词（字面量）', lit: true, tag: '已改写' },
+        { arrow: '→' },
+        { id: '3', label: 'KSampler', sub: 'positive' },
+      ]},
+    ],
+    legend: '灰色划线 = 不再出现在提交图里；34 的 text 已是字面量，没有任何节点再指向被摘掉的那一支。',
+  },
+  old: {
+    nodes: [
+      { row: 0, items: [
+        { id: '31', label: 'PrimitiveStringMultiline', sub: '扩写指令' },
+        { arrow: '→' },
+        { id: '32', label: 'TextGenerate', sub: '本地 LLM', tg: true, tag: '仍在校验', tagBad: true },
+        { arrow: '→' },
+        { id: '39', label: 'ComfySwitchNode', sub: 'on_true' },
+        { arrow: '→' },
+        { id: '38', label: 'PreviewAny', sub: '显示扩写结果' },
+      ]},
+      { row: 1, items: [
+        { id: '30', label: 'PrimitiveStringMultiline', sub: '用户原话' },
+        { arrow: '→' },
+        { id: '39b', label: 'ComfySwitchNode', sub: 'on_false' },
+      ]},
+      { row: 2, items: [
+        { id: '34', label: 'CLIPTextEncode', sub: 'text = 最终提示词（字面量）', lit: true, tag: '已改写' },
+        { arrow: '→' },
+        { id: '3', label: 'KSampler', sub: 'positive' },
+      ]},
+    ],
+    legend: '34 的线断了，但 31/32/39/38 原样留在提交图里 —— ComfyUI 仍会把它们读进 prompt 并校验。',
+  },
+};
+
+const JSONS = {
+  new: `{ <span class="c">// 只提交还需要的节点</span>
+  <span class="k">"34"</span>: { <span class="k">"class_type"</span>: <span class="s">"CLIPTextEncode"</span>,
+        <span class="k">"inputs"</span>: { <span class="k">"text"</span>: <span class="s">"最终提示词"</span>, <span class="k">"clip"</span>: [<span class="s">"35"</span>, 0] } },
+  <span class="k">"3"</span>:  { <span class="k">"class_type"</span>: <span class="s">"KSampler"</span>, <span class="k">"inputs"</span>: { <span class="k">"positive"</span>: [<span class="s">"34"</span>, 0], … } }
+
+<span class="c">// 31 / 32 / 39 / 38 已不在图里；没有任何输入指向它们</span>`,
+  old: `{ <span class="c">// 32 还在图里，只是没人可达</span>
+  <span class="k">"34"</span>: { <span class="k">"class_type"</span>: <span class="s">"CLIPTextEncode"</span>,
+        <span class="k">"inputs"</span>: { <span class="k">"text"</span>: <span class="s">"最终提示词"</span>, <span class="k">"clip"</span>: [<span class="s">"35"</span>, 0] } },
+  <span class="k">"32"</span>: { <span class="k">"class_type"</span>: <span class="s">"TextGenerate"</span>, <span class="k">"inputs"</span>: { … } },  <span class="bad">← 整张 prompt 仍要校验它</span>
+  <span class="k">"38"</span>: { <span class="k">"class_type"</span>: <span class="s">"PreviewAny"</span>, <span class="k">"inputs"</span>: { <span class="k">"source"</span>: [<span class="s">"39"</span>, 0] } }
+}`,
+};
+
+const WHY = {
+  new: `<div class="line"><span class="icon good">✓</span><div><b>摘干净：</b>从提交图里删掉 TextGenerate 这一支（节点 + 只为它服务的上游 + 指向它的显示节点），再确认没有剩余引用。API 格式没有 <code>mode</code> 字段，UI 里的“旁路”在这里等价于“删掉并用字面量补位”。</div></div>
+    <div class="line"><span class="icon good">✓</span><div><b>原文件不动：</b>改的只是这一次提交的图，用户的 <code>.json</code> 一个字节都没写。</div></div>
+    <div class="line"><span class="icon good">✓</span><div><b>返回值：</b><code>positivePromptApplied: ["34.text"]</code>、<code>textGenerateBypassed: ["32","39","38"]</code>，模型能如实向用户报证据。</div></div>`,
+  old: `<div class="line"><span class="icon bad">!</span><div><b>校验的是整张 prompt，不是“可达节点”：</b>ComfyUI 的 <code>validate_prompt</code> 会遍历每个节点。本机没装 TextGenerate 节点包、或它的动态下拉框值不合法时，整份报错（<code>Node type not found: TextGenerate</code>），哪怕它一个输出都没接。</div></div>
+    <div class="line"><span class="icon bad">!</span><div><b>更糟的是“删了但没删干净”：</b>只把 32 从图里删掉、却留着 <code>39.on_true → [32,0]</code>，就会得到 <code>Node 32 not found</code> —— 用户看到的正是“有节点没接入”。</div></div>
+    <div class="line"><span class="icon bad">!</span><div><b>所以这一步要成对：</b>删节点 + 清引用；只做一半，两种报错各来一次。</div></div>`,
+};
+
+function renderTg() {
+  const g = GRAPH[state.tg];
+  const graph = document.getElementById('graph');
+  graph.innerHTML = '';
+  for (const row of g.nodes) {
+    const el = document.createElement('div');
+    el.className = 'grow';
+    el.style.paddingLeft = row.row === 1 ? '0' : '0';
+    for (const it of row.items) {
+      if (it.arrow) {
+        const a = document.createElement('span');
+        a.className = 'arrow' + (state.tg === 'new' ? '' : ' hot');
+        a.textContent = it.arrow;
+        el.appendChild(a);
+        continue;
+      }
+      const n = document.createElement('div');
+      n.className = 'node' + (it.tg ? ' tg' : '') + (it.lit ? ' lit' : '') + (it.dead ? ' dead' : '');
+      n.innerHTML = `${it.label}<small>#${it.id} · ${it.sub}</small>` + (it.tag ? `<span class="tag ${it.tagBad ? 'bad' : ''}">${it.tag}</span>` : '');
+      el.appendChild(n);
+    }
+    graph.appendChild(el);
+  }
+  document.getElementById('legend').textContent = g.legend;
+  document.getElementById('json').innerHTML = JSONS[state.tg];
+  document.getElementById('why').innerHTML = WHY[state.tg];
+}
+
+document.querySelectorAll('#tgSeg button').forEach(b => {
+  b.onclick = () => {
+    state.tg = b.dataset.mode;
+    document.querySelectorAll('#tgSeg button').forEach(x => x.classList.toggle('active', x === b));
+    renderTg();
+  };
+});
+
+// ---------------------------------------------------------------------------
+//  初始化
+// ---------------------------------------------------------------------------
+renderAll();
+renderPrompt();
+renderTg();
+renderList();
+
+// 截图 / 演示用：#picker（可加 :style / :character）、#result、#old
+const hash = location.hash.replace('#', '');
+if (hash.startsWith('picker')) {
+  openPicker(hash.includes('style') ? 'style' : undefined);
+}
+if (hash === 'result') document.querySelector('#seg button[data-pane="result"]').click();
+if (hash === 'old') document.querySelector('#tgSeg button[data-mode="old"]').click();
+</script>
+</body>
+</html>
