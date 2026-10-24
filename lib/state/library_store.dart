@@ -216,6 +216,14 @@ class LibraryStore extends ChangeNotifier {
     }
   }
 
+  /// 「仅收藏」时画廊**无视集合**：每张被收藏的图按单张列出（不折叠、也不展开成组）。
+  ///
+  /// 为什么必须这样（用户 2026-10-24）：折叠视图里一个集合只留**最早那张**当代表。
+  /// 收藏的若是别的成员，它就永远不出现在「仅收藏」里；代表本身没被收藏时整组直接消失。
+  /// 所以这一档请求 `collapse=0`（见 [_listMedia]），界面也把 `isCollection` 的格子
+  /// 当单图渲染（`gallery_page.dart` 里所有 `isCollection` 判据都过这个开关）。
+  bool get mediaFavoritesFlat => mediaOnlyFavorite;
+
   Future<Paged<MediaAsset>> _listMedia({required int page}) => api.listMedia(
         q: mediaQuery.isEmpty ? null : mediaQuery,
         tags: mediaTags.toList(),
@@ -226,7 +234,11 @@ class LibraryStore extends ChangeNotifier {
         sort: mediaSort,
         // 画廊默认**折叠集合**：同一批微调的产物显示成一个格子（叠放封面 + 角标）。
         // 详情页/工具要的是"这一个集合的全部成员"，那时传 collectionId 自己列（不走折叠）。
-        collapse: true,
+        //
+        // ⚠ 但「仅收藏」时**不许折叠**：折叠只认每个集合的代表（最早那张），
+        // 代表没被收藏就整组消失、收藏了非代表的那张也永远看不到 ——
+        // 这一档用户要看的是"我收藏过的那几张图"，见 [mediaFavoritesFlat]。
+        collapse: !mediaFavoritesFlat,
         page: page,
         size: _settings.pageSize,
       );

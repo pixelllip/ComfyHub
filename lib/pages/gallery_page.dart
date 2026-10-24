@@ -96,10 +96,16 @@ class _GalleryPageState extends State<GalleryPage> {
   int get _pickedCount => _picked.values.fold(0, (sum, pick) => sum + pick.size);
 
   /// 把当前一页的格子收进"选中"（全选本页用）。
+  ///
+  /// ⚠ 「仅收藏」档里集合被**无视**（每个格子都是一张单图，见
+  /// `LibraryStore.mediaFavoritesFlat`）：这里也必须按一张算 ——
+  /// 否则界面上勾的是一张、批量删/收藏却动了整组。
   void _pickOf(MediaAsset media) {
+    final favoritesFlat = context.read<LibraryStore>().mediaFavoritesFlat;
+    final grouped = media.isCollection && !favoritesFlat;
     _picked[media.id] = (
-      size: media.isCollection ? media.collectionSize : 1,
-      collection: media.isCollection ? media.collectionId : null,
+      size: grouped ? media.collectionSize : 1,
+      collection: grouped ? media.collectionId : null,
       kind: media.kind.name.toUpperCase(),
     );
   }
@@ -333,7 +339,12 @@ class _GalleryPageState extends State<GalleryPage> {
                 color: store.mediaOnlyFavorite ? Colors.amber : null,
               ),
               selected: store.mediaOnlyFavorite,
-              onSelected: store.setMediaOnlyFavorite,
+              // 这一档**无视集合**（见 `LibraryStore.mediaFavoritesFlat`）：
+              // 还开着的集合面板已经不符合这个语义，顺手收起，别让用户对着两个矛盾的视图。
+              onSelected: (v) {
+                _closeFolder();
+                store.setMediaOnlyFavorite(v);
+              },
             ),
             FilterChip(
               label: const Text('未关联'),
@@ -483,7 +494,13 @@ class _GalleryPageState extends State<GalleryPage> {
                 final m = store.media.items[i];
                 // 集合格子（同一批微调的产物折叠成一张）：叠放封面 + 右下角总数。
                 // 判定完全来自后端（`collectionId` + `collectionSize > 1`），前端不猜。
-                final thumb = m.isCollection
+                //
+                // ⚠ 例外是「仅收藏」：那一档**无视集合**，每个收藏都要显示成**单张图**
+                // （用户 2026-10-24）。后端的折叠也确实是关掉的，这里再把格子的
+                // "集合外观"关掉 —— 两件事必须同时做，不然会看到一个只含收藏的文件夹。
+                final favoritesFlat = store.mediaFavoritesFlat;
+                final grouped = m.isCollection && !favoritesFlat;
+                final thumb = grouped
                     ? CollectionThumb(
                         media: m,
                         previewIds: m.collectionPreview,
@@ -641,7 +658,10 @@ class _GalleryPageState extends State<GalleryPage> {
     }
 
     // 集合格子（叠放 N 张）与普通格子的删除语义**不同**：前者要能"删整组"。
-    final isGroup = media.isCollection;
+    // 「仅收藏」档无视集合（每个格子都是单图），所以那里**一律按单张**处理 ——
+    // 否则菜单会对着界面上的一张图说"删除整个集合（3 张）"。
+    final favoritesFlat = context.read<LibraryStore>().mediaFavoritesFlat;
+    final isGroup = media.isCollection && !favoritesFlat;
     final action = await showContextMenuAt<String>(
       source,
       globalPosition: globalPosition,
@@ -751,8 +771,11 @@ class _GalleryPageState extends State<GalleryPage> {
   }) {
     // 反馈只用一小片文字，**不拿整张图当 feedback**：几百 KB 的图跟在指针下面很贵，
     // 而且盖住落点反而看不清放到哪儿了。
+    // 「仅收藏」档里那格子就是一张单图，标签也别再说"一组 N 张"。
+    final favoritesFlat = context.read<LibraryStore>().mediaFavoritesFlat;
+    final grouped = media.isCollection && !favoritesFlat;
     final feedback = _DragChip(
-      label: media.isCollection ? '一组的 ${media.collectionSize} 张' : media.originalName,
+      label: grouped ? '一组的 ${media.collectionSize} 张' : media.originalName,
     );
     final dragging = Opacity(opacity: 0.35, child: child);
     if (_mouseFirst) {
@@ -1206,6 +1229,23 @@ class _GalleryPageState extends State<GalleryPage> {
                 color: selected ? theme.colorScheme.primary : Colors.white70,
               ),
             ),
+          // 收藏标记（用户 2026-10-24）：集合里的成员被收藏时也要**看得出来**，
+          // 与画廊里散图的星标一致 —— 以前展开后收藏状态整个消失了。
+          // 小图上不加渐变（那是 `MediaThumb` 的做法），改成垫一枚半透明圆底，
+          // 浅色缩略图上星标也读得清；它在右上角，不与左上角的勾选圈打架。
+          if (media.favorite)
+            Positioned(
+              top: 4,
+              right: 4,
+              child: Container(
+                padding: const EdgeInsets.all(3),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.black.withValues(alpha: 0.42),
+                ),
+                child: const Icon(Icons.star, size: 13, color: Colors.amber),
+              ),
+            ),
         ],
       ),
     );
@@ -1302,6 +1342,9 @@ class _GalleryPageState extends State<GalleryPage> {
     if (_picked.length > 1 && _picked.containsKey(mediaId)) {
       return _expandPicks();
     }
+    // ③ 「仅收藏」档**无视集合**：拖哪张就只动哪张 —— 界面上它本来就是一张单图，
+    // 按集合摊开会让"拖走一张、结果动了整组"（与显示对不上）。
+    if (context.read<LibraryStore>().mediaFavoritesFlat) return [mediaId];
     final pick = _picked[mediaId];
     final collectionId = pick?.collection ?? _mediaById(mediaId)?.collectionId;
     if (collectionId == null) return [mediaId];
