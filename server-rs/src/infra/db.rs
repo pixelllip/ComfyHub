@@ -95,7 +95,14 @@ pub const SCHEMA_SQL: &str = include_str!("../../../db/schema.sqlite.sql");
 /// ② 两张卡表各加 `tag_prompt`（Danbooru tag 版），`prompt` 自此专指自然语言版；
 /// ③ 两张示例关联表（`character_card_examples` / `style_card_examples`）。
 /// 加的是"表 + 列"，所以 bump 版本号与 `NEW_COLUMNS` 两条路都要走。
-pub const SCHEMA_VERSION: i64 = 10;
+///
+/// 2026-10-24 由 10 提到 11：**卡片回到单版本（只要自然语言）** ——
+/// 用户口径："只保留自然语言版，tag 版删掉；老库里已经存着的 tag 版转成自然语言再删"。
+/// ① 新库的 DDL 不再建 `tag_prompt`（老库那一列留在原地，**再没人读**）；
+/// ② 升级到 11 的那一次把 `tag_prompt` 转成一段自然语言灌进 `prompt`
+///    （见 [`migrate_card_tags_to_prompt`]）——**只填 prompt 为空的卡**，
+///    已经有自然语言版的卡一个字都不动。
+pub const SCHEMA_VERSION: i64 = 11;
 
 /// **"这一列必须存在"的声明式清单**（2026-09-30 起）。
 ///
@@ -115,20 +122,10 @@ const NEW_COLUMNS: &[(&str, &str, &str)] = &[
         "prompt",
         "ALTER TABLE character_cards ADD COLUMN prompt TEXT NULL",
     ),
-    // Danbooru tag 版（2026-10-21）。老卡只有 `prompt`（当时语义是"正面提示词"），
-    // 这一列补上之后是空的 —— 由 AI 的补版能力 / 用户从界面补，**不做自动回填**：
-    // 把一段自然语言硬当 tag 栈灌进去只会让模型两边都不像。
-    (
-        "character_cards",
-        "tag_prompt",
-        "ALTER TABLE character_cards ADD COLUMN tag_prompt TEXT NULL",
-    ),
-    // 画风卡正常由新表 DDL 一次建全；这一条只兜"开发期曾建过一张没有 tag_prompt 的表"。
-    (
-        "style_cards",
-        "tag_prompt",
-        "ALTER TABLE style_cards ADD COLUMN tag_prompt TEXT NULL",
-    ),
+    // ⚠ 2026-10-24 起**不再补 `tag_prompt`**：卡片回到单版本（只要自然语言）。
+    //   老库那一列还在，由 [`migrate_card_tags_to_prompt`] 转成 prompt 之后成为死列；
+    //   新库的 DDL 根本不建它。别为了"兼容"把它加回这个清单 —— 那样新库也会长出一个
+    //   没人读的列，下一个人就会以为它还是真源。
     // 产物所属集合（2026-10-11）。可空 + 无默认值 → 符合"只能加可空列"的规矩。
     // 老库补上这一列之后**全是 NULL**，要靠 `collection::backfill` 那一趟才填得满。
     (
@@ -258,6 +255,178 @@ fn old_tags_to_prompt(raw: &str) -> String {
     }
 }
 
+/// **老库迁移（2026-10-24）**：把两张卡表里残留的 `tag_prompt` 转成自然语言灌进 `prompt`。
+///
+/// 用户口径：卡片只留自然语言版，tag 版不再占字段。判据是
+/// "`prompt` 为空 **且** `tag_prompt` 非空" —— 已经有自然语言版的卡**一个字都不动**
+/// （转出来的句式只是保底，不能盖掉用户 / AI 写好的那一段）。
+///
+/// 只在 `user_version < 11` 的那一次升级里跑（见 [`open_or_create`]）：老库那一列留在原地，
+/// 每次开库都跑的话，用户后来**清空**提示词会被下一次启动从 tag 列复活
+/// （与 [`backfill_character_card_prompt`] 同一条教训）。
+fn migrate_card_tags_to_prompt(conn: &Connection) -> rusqlite::Result<usize> {
+    let mut migrated = 0usize;
+    for table in ["character_cards", "style_cards"] {
+        if !column_exists(conn, table, "tag_prompt")? {
+            continue;
+        }
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT id, tag_prompt FROM {table} \
+                 WHERE (prompt IS NULL OR prompt = '') \
+                   AND tag_prompt IS NOT NULL AND trim(tag_prompt) <> ''"
+            ))?;
+            let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            mapped.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for (id, raw) in rows {
+            let text = tags_to_natural_language(&raw);
+            if text.is_empty() {
+                continue;
+            }
+            conn.execute(
+                &format!("UPDATE {table} SET prompt = ?1 WHERE id = ?2"),
+                rusqlite::params![text, id],
+            )?;
+            migrated += 1;
+        }
+    }
+    Ok(migrated)
+}
+
+/// 一列 Danbooru 风格 tag → 一段**尽力而为**的自然语言。
+///
+/// 这不是翻译器：它保留每个 tag 的信息（去下划线、按"外观 / 衣着 / 其余"分组），
+/// 拼成 `A girl with red eyes and silver hair, wearing school uniform. Shinku (nte).`。
+/// 迁移用它兜底；用户 / AI 之后可以用 `card-writer` 把句子重写成更顺的一版。
+pub(crate) fn tags_to_natural_language(raw: &str) -> String {
+    let trimmed = raw.trim();
+    // 已经是整句的（没有分隔符、词数够多）**原样保留**：老库里那一列偶尔存的本来就是散文，
+    // 按 tag 拆只会得到 `A character with A quiet girl with red eyes...` 这种更糟的结果。
+    if !trimmed.contains(',')
+        && !trimmed.contains('，')
+        && !trimmed.contains(';')
+        && !trimmed.contains('；')
+        && !trimmed.contains('\n')
+        && trimmed.split_whitespace().count() >= 8
+    {
+        return trimmed.to_string();
+    }
+    const DROP: &[&str] = &[
+        "masterpiece",
+        "best quality",
+        "high quality",
+        "highres",
+        "absurdres",
+        "ultra detailed",
+        "8k",
+        "4k",
+        "score 9",
+        "score 8",
+        "commentary",
+        "translation request",
+        "english text",
+        "watermark",
+        "signature",
+        "solo",
+    ];
+    const APPEARANCE: &[&str] = &[
+        "hair", "eyes", "eye", "skin", "ear", "ears", "horn", "horns", "tail", "wings",
+        "freckles", "mole", "scar", "tattoo", "breasts", "stomach", "legs", "arms", "face",
+        "teeth", "eyelashes", "eyebrows", "nose", "lips", "navel", "penis", "vagina",
+        "nipples", "areolae", "pubic", "thighs", "fingers", "neck", "height",
+    ];
+    const CLOTHING: &[&str] = &[
+        "dress", "skirt", "shirt", "blouse", "sweater", "hoodie", "jacket", "coat",
+        "uniform", "kimono", "yukata", "bikini", "swimsuit", "bra", "panties", "underwear",
+        "shorts", "pants", "jeans", "trousers", "socks", "stockings", "thighhighs",
+        "pantyhose", "gloves", "hat", "cap", "beret", "helmet", "ribbon", "bow", "necktie",
+        "tie", "scarf", "boots", "shoes", "sandals", "slippers", "apron", "cape", "cloak",
+        "armor", "leotard", "bodysuit", "choker", "necklace", "earrings", "earring",
+        "glasses", "mask", "goggles", "bracelet", "ring", "belt", "suspenders", "collar",
+    ];
+
+    let subject_of = |lower: &str| -> Option<&'static str> {
+        match lower {
+            "1girl" | "girl" => Some("A girl"),
+            "1boy" | "boy" => Some("A boy"),
+            "2girls" => Some("Two girls"),
+            "3girls" => Some("Three girls"),
+            "2boys" => Some("Two boys"),
+            "multiple girls" | "6+girls" => Some("Several girls"),
+            "1other" => Some("A character"),
+            _ => None,
+        }
+    };
+
+    let mut subject: Option<&'static str> = None;
+    let mut attrs: Vec<String> = Vec::new();
+    let mut clothes: Vec<String> = Vec::new();
+    let mut other: Vec<String> = Vec::new();
+
+    for raw_tag in raw.split(|c: char| matches!(c, ',' | '，' | ';' | '；' | '\n')) {
+        let tag = raw_tag.replace('_', " ");
+        let tag = tag.split_whitespace().collect::<Vec<_>>().join(" ");
+        if tag.is_empty() {
+            continue;
+        }
+        let lower = tag.to_lowercase();
+        if let Some(found) = subject_of(&lower) {
+            subject = Some(found);
+            continue;
+        }
+        if DROP.contains(&lower.as_str()) {
+            continue;
+        }
+        let bucket = if APPEARANCE.iter().any(|w| lower.contains(w)) {
+            &mut attrs
+        } else if CLOTHING.iter().any(|w| lower.contains(w)) {
+            &mut clothes
+        } else {
+            &mut other
+        };
+        if !bucket.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
+            bucket.push(tag);
+        }
+    }
+
+    if subject.is_none() && attrs.is_empty() && clothes.is_empty() && other.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(subject.unwrap_or("A character"));
+    if !attrs.is_empty() {
+        out.push_str(" with ");
+        out.push_str(&join_and(&attrs));
+    }
+    if !clothes.is_empty() {
+        out.push_str(", wearing ");
+        out.push_str(&join_and(&clothes));
+    }
+    if !other.is_empty() {
+        out.push_str(". ");
+        out.push_str(&capitalize_first(&join_and(&other)));
+    }
+    out.push('.');
+    out
+}
+
+fn join_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+fn capitalize_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}
+
 /// **开库（必要时建库）**：切流之后 Rust 是唯一的后端，"第一次运行要能自己建库"这件事
 /// 必须在它这边成立 —— 以前那版遇到缺库直接 `exit 3`（"先让 Kotlin 起一次库"），
 /// 那在发布包里等于**永远起不来**（包里根本没有 Kotlin）。
@@ -319,6 +488,18 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
             backfill_character_card_prompt(&conn).map_err(|e| format!("迁移角色卡失败：{e}"))?;
         if migrated > 0 {
             eprintln!("[db] 角色卡：把 {migrated} 张老卡的 tag 栈拼成了正面提示词（老列不动）。");
+        }
+    }
+    // 2026-10-24：卡片回到单版本。升级到 schemaVersion 11 的那一次，把老库里残留的
+    // `tag_prompt` **转成自然语言**灌进 `prompt`（只填空卡；已有正文的一个字节都不动）。
+    // ⚠ 只在 `version < 11` 时跑：老列留在原地，每次开库都跑会把用户清空的提示词复活。
+    if version < 11 {
+        let migrated = migrate_card_tags_to_prompt(&conn)
+            .map_err(|e| format!("迁移卡片 tag 版失败：{e}"))?;
+        if migrated > 0 {
+            eprintln!(
+                "[db] 卡片：把 {migrated} 张只有 tag 版的卡转成了自然语言（已有正文的卡没动）。"
+            );
         }
     }
 

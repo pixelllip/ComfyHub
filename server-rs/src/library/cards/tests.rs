@@ -1,10 +1,10 @@
 //! `cards` 的单元测试：角色卡 / 画风卡共用这一份仓储。
 //!
 //! 重点盯四条（都是会**静默**出错的）：
-//!  ① 两版提示词（Danbooru tag / 自然语言）必须各自合并、互不覆盖；
+//!  ① 正面提示词只有**一版**（2026-10-24 收敛：自然语言），合并保存时没给的字段不许被抹掉；
 //!  ② 角色卡与画风卡同名时必须是**两条独立记录**；
 //!  ③ 示例产物必须校验存在性、保持加入顺序、上限报错而不是截断；
-//!  ④ 工具正文要**明确说出缺哪一版** —— 少了这句，模型就会以为卡已经写完整了。
+//!  ④ 工具正文要**明确说出正面提示词还空着** —— 少了这句，模型就会以为卡已经写完整了。
 
 use super::*;
 
@@ -24,9 +24,8 @@ fn conn() -> Connection {
 fn input(name: &str) -> CardInput {
     CardInput {
         name: name.into(),
-        tag_prompt: Some("shinku_(nte), red_eyes".into()),
         prompt: Some("A quiet girl with red eyes and silver hair.".into()),
-        ..Default::default()
+        negative: Some("blurry, low quality".into()),
     }
 }
 
@@ -45,20 +44,23 @@ fn test_state() -> AppState {
 }
 
 #[test]
-fn 建卡读回两版与示例列表() {
+fn 建卡读回正文与示例列表() {
     let conn = conn();
     let id = create(&conn, CardKind::Character, &input("Shinku")).unwrap();
     let got = get(&conn, CardKind::Character, id).unwrap().unwrap();
-    assert_eq!(got.tag_prompt.as_deref(), Some("shinku_(nte), red_eyes"));
     assert_eq!(
         got.prompt.as_deref(),
         Some("A quiet girl with red eyes and silver hair.")
     );
+    assert_eq!(got.negative.as_deref(), Some("blurry, low quality"));
     assert!(got.examples.is_empty(), "新卡没有示例");
     let json = serde_json::to_value(&got).unwrap();
     assert!(json.get("examples").unwrap().is_array());
-    assert!(json.get("tagPrompt").is_some());
     assert!(json.get("prompt").is_some());
+    assert!(
+        json.get("tagPrompt").is_none(),
+        "卡片只有一版正文，tag 字段不许再出现：{json}"
+    );
 }
 
 #[test]
@@ -66,30 +68,28 @@ fn 空字段落_null_而不是空串() {
     let conn = conn();
     let card = CardInput {
         name: "空卡".into(),
-        tag_prompt: Some("   ".into()),
-        prompt: Some(String::new()),
+        prompt: Some("   ".into()),
         negative: Some("\n".into()),
     };
     let id = create(&conn, CardKind::Style, &card).unwrap();
     let got = get(&conn, CardKind::Style, id).unwrap().unwrap();
-    assert!(got.tag_prompt.is_none() && got.prompt.is_none() && got.negative.is_none());
+    assert!(got.prompt.is_none() && got.negative.is_none());
     let json = card_json(&got);
-    assert!(json.get("tagPrompt").is_none(), "整键省略：{json}");
     assert!(json.get("prompt").is_none(), "整键省略：{json}");
     assert!(json.get("negative").is_none(), "整键省略：{json}");
 }
 
 #[test]
-fn 同名合并_只覆盖这次给的那一版() {
+fn 同名合并不抹掉这次没给的字段() {
     let conn = conn();
     let (id1, created1) = save(&conn, CardKind::Character, input("Iroi")).unwrap();
     assert!(created1);
 
-    // 第二轮只补自然语言版：tag 版必须原样保留
+    // 第二轮只补正文：负面提示词必须原样保留
     let second = CardInput {
         name: "iroi".into(),
         prompt: Some("Iroi, green hair and sheep horns, standing under a lamp.".into()),
-        ..Default::default()
+        negative: None,
     };
     let (id2, created2) = save(&conn, CardKind::Character, second).unwrap();
     assert!(!created2, "同名必须走合并");
@@ -97,40 +97,35 @@ fn 同名合并_只覆盖这次给的那一版() {
 
     let got = get(&conn, CardKind::Character, id1).unwrap().unwrap();
     assert_eq!(
-        got.tag_prompt.as_deref(),
-        Some("shinku_(nte), red_eyes"),
-        "没给 tag 版时不许抹掉"
+        got.negative.as_deref(),
+        Some("blurry, low quality"),
+        "没给负面时不许抹掉"
     );
     assert!(got.prompt.unwrap().contains("green hair"));
 
-    // 第三轮只改 tag 版：自然语言版必须原样保留
+    // 第三轮只改负面：正文必须原样保留
     let third = CardInput {
         name: "iroi".into(),
-        tag_prompt: Some("iroi_(nte), green_hair, sheep_horns".into()),
-        ..Default::default()
+        prompt: None,
+        negative: Some("lowres".into()),
     };
     save(&conn, CardKind::Character, third).unwrap();
     let got = get(&conn, CardKind::Character, id1).unwrap().unwrap();
-    assert_eq!(
-        got.tag_prompt.as_deref(),
-        Some("iroi_(nte), green_hair, sheep_horns")
-    );
+    assert_eq!(got.negative.as_deref(), Some("lowres"));
     assert!(got.prompt.unwrap().contains("green hair"));
 }
 
 #[test]
-fn 两版都是整段替换不是追加() {
+fn 正文是整段替换不是追加() {
     let conn = conn();
     let (id, _) = save(&conn, CardKind::Character, input("Shinku")).unwrap();
     let second = CardInput {
         name: "Shinku".into(),
-        tag_prompt: Some("shinku_(nte), blue_eyes".into()),
         prompt: Some("Now with blue eyes.".into()),
-        ..Default::default()
+        negative: None,
     };
     save(&conn, CardKind::Character, second).unwrap();
     let got = get(&conn, CardKind::Character, id).unwrap().unwrap();
-    assert_eq!(got.tag_prompt.as_deref(), Some("shinku_(nte), blue_eyes"));
     assert_eq!(got.prompt.as_deref(), Some("Now with blue eyes."));
 }
 
@@ -144,7 +139,7 @@ fn 全量替换会清掉没给的字段() {
     };
     assert!(update(&conn, CardKind::Style, id, &replaced).unwrap());
     let got = get(&conn, CardKind::Style, id).unwrap().unwrap();
-    assert!(got.tag_prompt.is_none() && got.prompt.is_none() && got.negative.is_none());
+    assert!(got.prompt.is_none() && got.negative.is_none());
 }
 
 #[test]
@@ -153,18 +148,18 @@ fn 字段超长报错而不是截断() {
     let long = "x".repeat(MAX_PROMPT_CHARS + 1);
     let card = CardInput {
         name: "x".into(),
-        tag_prompt: Some(long.clone()),
-        ..Default::default()
+        prompt: Some(long.clone()),
+        negative: None,
     };
     let err = create(&conn, CardKind::Style, &card).unwrap_err();
     let message = format!("{err:?}");
-    assert!(message.contains("Danbooru tag 版 超出上限"), "{message}");
+    assert!(message.contains("正面提示词 超出上限"), "{message}");
     assert!(message.contains("不要指望被悄悄截断"), "{message}");
 
     let card = CardInput {
         name: "x".into(),
+        prompt: None,
         negative: Some(long),
-        ..Default::default()
     };
     let err = create(&conn, CardKind::Character, &card).unwrap_err();
     assert!(format!("{err:?}").contains("负面提示词 超出上限"));
@@ -174,7 +169,7 @@ fn 字段超长报错而不是截断() {
 }
 
 #[test]
-fn 搜索命中两版提示词() {
+fn 搜索命中正文与负面() {
     let conn = conn();
     create(&conn, CardKind::Character, &input("Shinku")).unwrap();
     create(
@@ -182,9 +177,8 @@ fn 搜索命中两版提示词() {
         CardKind::Character,
         &CardInput {
             name: "Iroi".into(),
-            tag_prompt: Some("iroi_(nte), green_hair".into()),
             prompt: Some("Sheep horns under a street lamp.".into()),
-            ..Default::default()
+            negative: Some("green skin".into()),
         },
     )
     .unwrap();
@@ -194,12 +188,12 @@ fn 搜索命中两版提示词() {
     assert_eq!(
         list(&conn, CardKind::Character, Some("sheep horns"), MAX_SEARCH).unwrap().len(),
         1,
-        "自然语言版要命中"
+        "正文要命中"
     );
     assert_eq!(
-        list(&conn, CardKind::Character, Some("green_hair"), MAX_SEARCH).unwrap().len(),
+        list(&conn, CardKind::Character, Some("green skin"), MAX_SEARCH).unwrap().len(),
         1,
-        "tag 版要命中"
+        "负面提示词要命中"
     );
     assert!(list(&conn, CardKind::Character, Some("不存在"), MAX_SEARCH).unwrap().is_empty());
 }
@@ -213,16 +207,16 @@ fn 角色卡与画风卡同名也是两条记录() {
         CardKind::Style,
         &CardInput {
             name: "月光".into(),
-            tag_prompt: Some("moonlight_style, cool_palette".into()),
-            ..Default::default()
+            prompt: Some("A cool moonlight palette with soft edges.".into()),
+            negative: None,
         },
     )
     .unwrap();
     // 两张表各自自增，id 可以撞（都是 1）—— **种类 + id** 才是主键。
     let c = get(&conn, CardKind::Character, character).unwrap().unwrap();
     let s = get(&conn, CardKind::Style, style).unwrap().unwrap();
-    assert_eq!(c.tag_prompt.as_deref(), Some("shinku_(nte), red_eyes"));
-    assert_eq!(s.tag_prompt.as_deref(), Some("moonlight_style, cool_palette"));
+    assert!(c.prompt.unwrap().contains("red eyes"));
+    assert!(s.prompt.unwrap().contains("moonlight"));
     assert_eq!(
         list(&conn, CardKind::Character, Some("月光"), MAX_SEARCH).unwrap().len(),
         1
@@ -270,20 +264,20 @@ fn 删产物会从卡片示例里自动摘掉() {
 }
 
 #[test]
-fn 工具_缺哪一版就明说哪一版() {
+fn 工具_正文空着就明说() {
     let state = test_state();
     let first = tool_save(
         &state,
         CardKind::Character,
-        &serde_json::json!({ "name": "Shinku", "tagPrompt": "shinku_(nte)" }),
+        &serde_json::json!({ "name": "Shinku" }),
     )
     .unwrap();
     assert!(first.content.contains("已保存角色卡 #1「Shinku」（新建）"), "{}", first.content);
-    assert!(first.content.contains("自然语言版:（空）"), "{}", first.content);
-    assert!(first.content.contains("这张卡还缺：自然语言版"), "{}", first.content);
+    assert!(first.content.contains("正面提示词:（空）"), "{}", first.content);
+    assert!(first.content.contains("还空着**正面提示词**"), "{}", first.content);
     assert!(first.content.contains("600+ token"), "{}", first.content);
 
-    // 第二轮补自然语言版：tag 版不许被抹掉
+    // 第二轮补正文：负面提示词不许被抹掉
     let second = tool_save(
         &state,
         CardKind::Character,
@@ -294,9 +288,8 @@ fn 工具_缺哪一版就明说哪一版() {
     )
     .unwrap();
     assert!(second.content.contains("（合并更新）"), "{}", second.content);
-    assert_eq!(second.payload["tagPrompt"], "shinku_(nte)");
     assert!(second.payload["prompt"].as_str().unwrap().contains("head to toe"));
-    assert!(!second.content.contains("这张卡还缺"), "{}", second.content);
+    assert!(!second.content.contains("还空着"), "{}", second.content);
 
     // 画风卡同样会提醒（文案里给出 100~200 token 的目标）
     let style = tool_save(&state, CardKind::Style, &serde_json::json!({ "name": "赛博国风" })).unwrap();
@@ -315,7 +308,6 @@ fn 工具_save_可以顺手挂示例产物() {
         CardKind::Style,
         &serde_json::json!({
             "name": "赛博国风",
-            "tagPrompt": "cyberpunk, chinese_style",
             "prompt": "semi-thick line work, low-chroma blue-gray field, warm islands, luminous finish",
             "exampleMediaIds": [media_id]
         }),
@@ -351,7 +343,7 @@ fn 工具_搜索查不到时给对下一步() {
 }
 
 #[test]
-fn 正文形状把两版与示例都画出来() {
+fn 正文形状把正文与示例都画出来() {
     let conn = conn();
     let id = create(&conn, CardKind::Character, &input("Shinku")).unwrap();
     let sample = media(&conn, "sample.png");
@@ -359,14 +351,14 @@ fn 正文形状把两版与示例都画出来() {
     let card = get(&conn, CardKind::Character, id).unwrap().unwrap();
     let text = render_card(CardKind::Character, &card);
     assert!(text.contains("#1「Shinku」（角色卡）"), "{text}");
-    assert!(text.contains("Danbooru tag 版: shinku_(nte), red_eyes"), "{text}");
-    assert!(text.contains("自然语言版: A quiet girl"), "{text}");
+    assert!(text.contains("正面提示词: A quiet girl"), "{text}");
+    assert!(text.contains("负面提示词: blurry, low quality"), "{text}");
     assert!(text.contains(&format!("示例产物（1）: #{sample}「sample.png」")), "{text}");
+    assert!(!text.contains("tag"), "卡片正文不许再出现 tag 版：{text}");
 
     let empty = CardDto {
         id: 2,
         name: "空的".into(),
-        tag_prompt: None,
         prompt: None,
         negative: None,
         created_at: None,
@@ -374,8 +366,7 @@ fn 正文形状把两版与示例都画出来() {
         examples: Vec::new(),
     };
     let text = render_card(CardKind::Style, &empty);
-    assert!(text.contains("Danbooru tag 版:（空）"), "{text}");
-    assert!(text.contains("自然语言版:（空）"), "{text}");
+    assert!(text.contains("正面提示词:（空）"), "{text}");
     assert!(text.contains("示例产物:（无）"), "{text}");
 }
 

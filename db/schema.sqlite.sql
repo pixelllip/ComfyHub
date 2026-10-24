@@ -402,6 +402,11 @@ CREATE INDEX IF NOT EXISTS idx_ai_questions_status ON ai_questions(status);
 -- 角色卡（O8，2026-09-25）：一张卡 = 一个角色，**只有三个字段**：
 -- **名称 / 正面提示词 / 负面提示词**（2026-10 按用户要求收敛，见下面那条 ⚠）。
 --
+-- 2026-10-24 用户再次收敛：**正面提示词只留自然语言一版**（tag 版整列删除）——
+-- 一句话描述比 tag 栈更耐改（换底模 / 换 tag 体系都不用重写），要 tag 版时按用户
+-- 要求当场再翻一版即可。老库里 `tag_prompt` 的内容由 `infra::db` 的迁移转成自然语言
+-- 灌进 `prompt`（只填空卡；已有自然语言版的一个字节都不动）。
+--
 -- 为什么是一张表而不是长期记忆：记忆是"一行一条文本"、有 100 条上限、超限**直接报错**
 -- （MemoryStore），而角色卡要按名字幂等地反复覆盖（同名 = 同一张卡，不许攒出三四份）。
 --
@@ -427,9 +432,8 @@ CREATE TABLE IF NOT EXISTS character_cards (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,
   name               TEXT    NOT NULL,          -- 用户叫的名字（中文 / 原名）
   normalized         TEXT    NOT NULL,          -- name 的小写（幂等 upsert 的键）
-  tag_prompt         TEXT    NULL,              -- Danbooru tag 版（逗号分隔）
-  prompt             TEXT    NULL,              -- 自然语言版（整段文本）
-  negative           TEXT    NULL,              -- 负面提示词（两版共用，整段文本）
+  prompt             TEXT    NULL,              -- 正面提示词（整段自然语言）
+  negative           TEXT    NULL,              -- 负面提示词（整段文本）
   created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -440,7 +444,7 @@ CREATE INDEX IF NOT EXISTS idx_character_cards_created  ON character_cards(creat
 -- ---------------------------------------------------------------------
 -- 画风卡（2026-10-21）：与角色卡**同等地位**，一个画风的标准容器。
 --
--- 字段与 `character_cards` 逐列同形（名称 / Danbooru tag 版 / 自然语言版 / 负面提示词）：
+-- 字段与 `character_cards` 逐列同形（名称 / 正面提示词 / 负面提示词）：
 -- 角色卡管"画的是谁"，画风卡管"画成什么样"（画师 / 媒介 / 上色 / 光线 / 质感）。
 -- 两张表刻意不合并：同名角色与同名画风是两条独立的知识，不能互相覆盖。
 -- 同样**不进同步范围**（理由与 character_cards 那节相同）。
@@ -449,9 +453,8 @@ CREATE TABLE IF NOT EXISTS style_cards (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,
   name               TEXT    NOT NULL,          -- 用户叫的画风名
   normalized         TEXT    NOT NULL,          -- name 的小写（幂等 upsert 的键）
-  tag_prompt         TEXT    NULL,              -- Danbooru tag 版（逗号分隔）
-  prompt             TEXT    NULL,              -- 自然语言版（整段文本，100~200 token）
-  negative           TEXT    NULL,              -- 负面提示词（两版共用，整段文本）
+  prompt             TEXT    NULL,              -- 正面提示词（整段自然语言，100~200 token）
+  negative           TEXT    NULL,              -- 负面提示词（整段文本）
   created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -870,4 +873,9 @@ BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', OLD.id, 'dele
 --   ③ 新增 `character_card_examples` / `style_card_examples` 两张关联表。
 --   `character_cards.tag_prompt` 是"加列"，必须同时写进 `infra::db` 的 `NEW_COLUMNS`；
 --   其余都是新表，靠 bump 版本号重跑收敛式 DDL 就能建出来。
-PRAGMA user_version = 10;
+--   （⚠ 这一条在 v11 被**撤回**了：`tag_prompt` 已从两个清单里删掉，见下。）
+-- 2026-10-24 由 10 提到 11：**卡片回到单版本**（只要自然语言）。
+--   ① 新库的两张卡表不再建 `tag_prompt`（老库那一列留在原地，再没人读）；
+--   ② 升级到 11 的那一次由 `infra::db::migrate_card_tags_to_prompt` 把老的 tag 版
+--      **转成自然语言**灌进 `prompt` —— 只填空卡，已有自然语言版的卡一个字都不动。
+PRAGMA user_version = 11;

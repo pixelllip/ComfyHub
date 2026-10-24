@@ -42,14 +42,12 @@ void main() {
   Map<String, dynamic> card({
     int id = 1,
     String name = 'shinku',
-    String? tagPrompt = 'shinku_(nte), red_eyes',
     String? prompt = 'A quiet girl with red eyes and silver hair.',
     String? negative,
     List<Map<String, dynamic>>? examples,
   }) => {
     'id': id,
     'name': name,
-    'tagPrompt': ?tagPrompt,
     'prompt': ?prompt,
     'negative': ?negative,
     'examples': examples ?? const [],
@@ -110,17 +108,12 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('列表画出两版提示词 缺哪版明说哪版', (tester) async {
+  testWidgets('列表画出正面提示词 空着就明说', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final b = backend([
       card(negative: 'bad hands'),
-      // 第二张刻意只有 tag 版：两张卡必须各画各的，而且"还没有自然语言版"只该出现一次
-      card(
-        id: 2,
-        name: 'iroi',
-        tagPrompt: 'iroi_(nte), green_hair',
-        prompt: null,
-      ),
+      // 第二张刻意没有正文：两张卡必须各画各的，而且"还没有正面提示词"只该出现一次
+      card(id: 2, name: 'iroi', prompt: null),
     ]);
     await pumpPage(
       tester,
@@ -131,9 +124,8 @@ void main() {
     expect(find.text('shinku'), findsOneWidget);
     expect(find.text('iroi'), findsOneWidget);
     expect(find.text('A quiet girl with red eyes and silver hair.'), findsOneWidget);
-    expect(find.text('shinku_(nte), red_eyes'), findsOneWidget);
     expect(find.text('负面：bad hands'), findsOneWidget);
-    expect(find.textContaining('还没有自然语言版'), findsOneWidget, reason: '缺版是个事实，要显式画出来');
+    expect(find.textContaining('还没有正面提示词'), findsOneWidget, reason: '空着是个事实，要显式画出来');
   });
 
   testWidgets('点卡片本体 = 编辑（不是改示例图）', (tester) async {
@@ -168,7 +160,7 @@ void main() {
     );
   });
 
-  testWidgets('新建发 POST 编辑发 PUT 且 payload 恰好四个字段', (tester) async {
+  testWidgets('新建发 POST 编辑发 PUT 且 payload 恰好三个字段', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final b = backend([card()]);
     await pumpPage(
@@ -176,7 +168,7 @@ void main() {
       CharacterCardsPage(api: AiApiClient('http://127.0.0.1:8080', client: b.client)),
     );
 
-    // 编辑：打开菜单 → 编辑 → 改两版 → 保存
+    // 编辑：打开菜单 → 编辑 → 改正文 → 保存
     await tester.tap(find.byTooltip('更多操作').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('编辑'));
@@ -184,28 +176,23 @@ void main() {
     expect(find.text('编辑角色卡'), findsOneWidget);
 
     await tester.enterText(
-      find.widgetWithText(TextField, 'Danbooru tag 版'),
-      'shinku_(nte), blue_eyes',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, '自然语言版'),
+      find.widgetWithText(TextField, '正面提示词'),
       'A girl with blue eyes, every detail from head to toe.',
     );
-    await tester.enterText(find.widgetWithText(TextField, '负面提示词（两版共用）'), 'bad hands');
+    await tester.enterText(find.widgetWithText(TextField, '负面提示词'), 'bad hands');
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();
 
     expect(b.calls.where((c) => c.startsWith('PUT')), isNotEmpty);
     final sent = b.bodies.last;
     expect(sent['name'], 'shinku');
-    expect(sent['tagPrompt'], 'shinku_(nte), blue_eyes');
     expect(sent['prompt'], 'A girl with blue eyes, every detail from head to toe.');
     expect(sent['negative'], 'bad hands');
-    // ★ 全量替换的形状：**恰好**这四个键
-    expect(sent.keys.toList()..sort(), ['name', 'negative', 'prompt', 'tagPrompt']);
+    // ★ 全量替换的形状：**恰好**这三个键（tag 版已经彻底删掉）
+    expect(sent.keys.toList()..sort(), ['name', 'negative', 'prompt']);
   });
 
-  testWidgets('清空一版要发 null 而不是漏掉这个键', (tester) async {
+  testWidgets('清空正文要发 null 而不是漏掉这个键', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final b = backend([card()]);
     await pumpPage(
@@ -218,7 +205,7 @@ void main() {
     await tester.tap(find.text('编辑'));
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.widgetWithText(TextField, '自然语言版'), '');
+    await tester.enterText(find.widgetWithText(TextField, '正面提示词'), '');
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();
 
@@ -234,14 +221,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(b.calls.where((c) => c.startsWith('POST')), isNotEmpty);
     expect(b.bodies.last['name'], 'iroi');
-    expect(b.bodies.last['tagPrompt'], isNull, reason: '没填就是 null，不许编一个');
     expect(b.bodies.last['prompt'], isNull);
+    expect(b.bodies.last.keys.toList()..sort(), ['name', 'negative', 'prompt']);
   });
 
   testWidgets('画风卡走自己的端点 并与角色卡共用 UI', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final b = backend(
-      [card(name: '赛博国风', tagPrompt: 'cyberpunk, chinese_style', prompt: 'semi-thick line work')],
+      [card(name: '赛博国风', prompt: 'semi-thick line work')],
       cardsPath: '/api/ai/style-cards',
     );
     await pumpPage(
@@ -299,7 +286,7 @@ void main() {
     final client = MockClient((req) async {
       calls.add(req.url.path);
       final body = req.url.path == '/api/ai/style-cards'
-          ? [card(name: '赛博国风', tagPrompt: 'cyberpunk', prompt: 'semi-thick')]
+          ? [card(name: '赛博国风', prompt: 'semi-thick')]
           : [card()];
       return http.Response(jsonEncode(body), 200,
           headers: {'content-type': 'application/json; charset=utf-8'});
@@ -316,7 +303,7 @@ void main() {
     expect(find.text('赛博国风'), findsOneWidget);
   });
 
-  testWidgets('真机尺寸（384x853）下两版与示例都不溢出', (tester) async {
+  testWidgets('真机尺寸（384x853）下正文与示例都不溢出', (tester) async {
     tester.view.physicalSize = const Size(384 * 2.8125, 853 * 2.8125);
     tester.view.devicePixelRatio = 2.8125;
     addTearDown(tester.view.resetPhysicalSize);
@@ -325,7 +312,6 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final b = backend([
       card(
-        tagPrompt: List.generate(80, (i) => 'tag_$i').join(', '),
         prompt: List.generate(120, (i) => 'detail_$i').join(' '),
         examples: [media(id: 1), media(id: 2), media(id: 3)],
       ),

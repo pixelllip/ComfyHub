@@ -94,9 +94,10 @@ fn 补线允许新输入但要求上游节点存在() {
     assert_eq!(patched["6"]["inputs"]["clip"], json!([4, 1]));
 }
 
-/// 正面提示词直接写进最近的 `CLIPTextEncode.text`，并**不碰 negative**。
+/// 正面提示词直接写进最近的 `CLIPTextEncode.text`，**不碰 negative**，
+/// 并把 TextGenerate 从提交图里删掉（不是只断线）。
 #[test]
-fn positive_prompt_writes_positive_text_and_bypasses_text_generate() {
+fn positive_prompt_writes_positive_text_and_removes_text_generate() {
     let graph = json!({
         "10": {"class_type": "KSampler", "inputs": {
             "positive": ["6", 0], "negative": ["20", 0], "seed": 1
@@ -107,21 +108,28 @@ fn positive_prompt_writes_positive_text_and_bypasses_text_generate() {
         "7": {"class_type": "TextGenerate", "inputs": {
             "system_prompt": "把想法写成 caption", "prompt": "一只猫"
         }},
-        "20": {"class_type": "CLIPTextEncode", "inputs": {"text": "low quality"}}
+        "20": {"class_type": "CLIPTextEncode", "inputs": {"text": "low quality"}},
+        "30": {"class_type": "SaveImage", "inputs": {"images": ["10", 0]}}
     });
-    let (patched, changed, bypassed) =
+    let (patched, changed, removed) =
         WorkflowEdit::apply_positive_prompt(&graph, "  A photo of a cat on a windowsill.  ").unwrap();
     assert_eq!(patched["6"]["inputs"]["text"], "A photo of a cat on a windowsill.");
     assert_eq!(patched["20"]["inputs"]["text"], "low quality", "negative 一个字都不许动");
     assert_eq!(changed, vec!["6.text".to_string()]);
-    assert_eq!(bypassed, vec!["7".to_string()], "要如实回报摘掉了哪一路 TextGenerate");
+    assert_eq!(removed, vec!["7".to_string()], "要如实回报从提交图里摘掉了谁");
+    assert!(
+        patched.get("7").is_none(),
+        "TextGenerate 必须从提交图里消失（留在图里仍会被整张校验）：{patched}"
+    );
     // 原图不能改（纯函数）
     assert_eq!(graph["6"]["inputs"]["text"], json!(["7", 0]));
+    assert!(graph.get("7").is_some(), "原图里的节点不许删");
 }
 
-/// MOSS t2i 那种 `CLIPTextEncode.text ← PreviewAny ← ComfySwitchNode` 的链也要能断。
+/// MOSS t2i 那种 `CLIPTextEncode.text ← PreviewAny ← ComfySwitchNode` 的链：
+/// 断线的同时把整支（含只喂它的上游与指向它的显示节点）摘干净，不留悬挂引用。
 #[test]
-fn positive_prompt_follows_switch_and_preview_chain() {
+fn positive_prompt_removes_the_whole_switch_and_preview_branch() {
     let graph = json!({
         "36": {"class_type": "KSampler", "inputs": {"positive": ["34", 0], "negative": ["41", 0]}},
         "34": {"class_type": "CLIPTextEncode", "inputs": {"text": ["38", 0], "clip": ["35", 0]}},
@@ -132,14 +140,56 @@ fn positive_prompt_follows_switch_and_preview_chain() {
         "30": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "用户原话"}},
         "32": {"class_type": "TextGenerate", "inputs": {"system_prompt": ["31", 0]}},
         "31": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "扩写指令"}},
+        "35": {"class_type": "SaveImage", "inputs": {"images": ["34", 0]}},
         "41": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}}
     });
-    let (patched, changed, bypassed) =
+    let (patched, changed, removed) =
         WorkflowEdit::apply_positive_prompt(&graph, "最终提示词").unwrap();
     assert_eq!(patched["34"]["inputs"]["text"], "最终提示词");
     assert_eq!(changed, vec!["34.text".to_string()]);
-    assert_eq!(bypassed, vec!["32".to_string()]);
+    assert_eq!(
+        removed,
+        vec![
+            "31".to_string(),
+            "32".to_string(),
+            "38".to_string(),
+            "39".to_string()
+        ],
+        "TextGenerate + 专属上游 + 指向它的显示节点要一起摘"
+    );
+    for id in ["31", "32", "38", "39"] {
+        assert!(patched.get(id).is_none(), "节点 {id} 还在提交图里");
+    }
+    // 30 只是失去了消费者（原本喂 switch 的用户原话），不在 TG 的祖先链上；
+    // 留在图里既不会被执行也不会让校验失败 —— 不为了"干净"去猜它该不该删。
+    // 没有悬挂引用：剩下的每个连线都指向还在图里的节点
+    for (id, node) in patched.as_object().unwrap() {
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        for (name, value) in inputs {
+            if let Some((up, _)) = link_ref(value) {
+                assert!(
+                    patched.get(&up).is_some(),
+                    "{id}.{name} 还指向被摘掉的 {up}"
+                );
+            }
+        }
+    }
     assert_eq!(patched["41"]["inputs"]["text"], "", "negative 不动");
+}
+
+/// 摘除要保底：**不能把最后一个输出摘掉** —— 那种图退回"只断线"，并如实回报没摘谁。
+#[test]
+fn positive_prompt_keeps_text_generate_when_removal_would_leave_no_output() {
+    let graph = json!({
+        "36": {"class_type": "KSampler", "inputs": {"positive": ["34", 0]}},
+        "34": {"class_type": "CLIPTextEncode", "inputs": {"text": ["7", 0]}},
+        "7": {"class_type": "TextGenerate", "inputs": {"prompt": "一只猫"}}
+    });
+    let (patched, _, removed) =
+        WorkflowEdit::apply_positive_prompt(&graph, "最终提示词").unwrap();
+    assert_eq!(patched["34"]["inputs"]["text"], "最终提示词", "正文照样要写进去");
+    // 这张图本来就没输出节点（没有 Save/Preview）→ 摘除会让图彻底没法提交，于是不摘。
+    assert!(removed.is_empty(), "没有输出时不许摘：{removed:?}");
 }
 
 /// `BasicGuider` 没有 `positive` 插口，只有 `conditioning` —— Krea 2 的

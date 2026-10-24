@@ -3445,6 +3445,7 @@ class _ComposerState extends State<_Composer> {
   @override
   void dispose() {
     _dropSub?.cancel();
+    _cardSearch.dispose();
     widget.controller.removeListener(_onControllerChanged);
     super.dispose();
   }
@@ -3467,6 +3468,10 @@ class _ComposerState extends State<_Composer> {
     final text = widget.controller.text;
     final match = RegExp(r'(?:^|\s)/([^\s/]*)$').firstMatch(text);
     final next = match?.group(1);
+    // 键盘路径：行末输入 `@` 直接开卡片面板（按钮收在 "+" 菜单里；直接打字也该有入口）。
+    if (!_cardsOpen && RegExp(r'(?:^|\s)@$').hasMatch(text)) {
+      _openCards();
+    }
     // 组字状态也参与"发送按钮可不可用"，所以它一变就得重建（见 build 里的 `composing`）
     final composing = _composing;
     if (next != _slashQuery || composing != _wasComposing) {
@@ -3479,6 +3484,118 @@ class _ComposerState extends State<_Composer> {
 
   /// 上一次重建时的组字状态：只在**变化**时 setState，免得每次按键都重建。
   bool _wasComposing = false;
+
+  // -----------------------------------------------------------------------
+  //  卡片（角色卡 / 画风卡）：输入区的 `@` 菜单
+  // -----------------------------------------------------------------------
+
+  /// 这一条消息要带上的两张卡（各一张；再选同类会替换）。
+  ///
+  /// 发送时被拼成两段固定标记的文本（`[STYLE SPEC]` / `[CHARACTER CARD]`），
+  /// 正文**逐字**带上 —— skill `r2i-prompt` 认的就是这两个槽位。
+  CharacterCard? _characterCard;
+  StyleCard? _styleCard;
+
+  /// 卡片面板是否展开；null = 收起。
+  bool _cardsOpen = false;
+
+  /// 当前页签：false = 角色卡，true = 画风卡。
+  bool _cardsStyled = false;
+
+  bool _cardsLoading = false;
+  String? _cardsError;
+  String _cardQuery = '';
+  final _cardSearch = TextEditingController();
+  List<CharacterCard> _characters = const [];
+  List<StyleCard> _styles = const [];
+
+  /// 打开面板并（第一次）拉卡片库：**一次拉两类**，页签切换不再打请求。
+  ///
+  /// 失败不冒充"没有卡"：面板里如实显示错误（[`_cardsError`]）。
+  Future<void> _openCards({bool style = false}) async {
+    setState(() {
+      _cardsOpen = true;
+      _cardsStyled = style;
+      _cardsError = null;
+    });
+    if (_characters.isNotEmpty || _styles.isNotEmpty || _cardsLoading) return;
+    setState(() => _cardsLoading = true);
+    try {
+      final characters = await widget.store.listCharacterCards();
+      final styles = await widget.store.listStyleCards();
+      if (!mounted) return;
+      setState(() {
+        _characters = characters;
+        _styles = styles;
+        _cardsLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _cardsLoading = false;
+        _cardsError = '读不到卡片库：$e';
+      });
+    }
+  }
+
+  void _closeCards() {
+    setState(() {
+      _cardsOpen = false;
+      _cardQuery = '';
+      _cardSearch.clear();
+    });
+  }
+
+  void _chooseCard(CharacterCard card) {
+    if ((card.prompt ?? '').trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('这张卡的正面提示词还空着：先去「预设库 → 卡片库」补上再用。'),
+        ),
+      );
+      return;
+    }
+    setState(() {
+      if (card is StyleCard) {
+        _styleCard = card;
+      } else {
+        _characterCard = card;
+      }
+      _cardsOpen = false;
+      _cardQuery = '';
+      _cardSearch.clear();
+    });
+    // 从键盘 `@` 进来的那条路：把行末那个查询词摘掉，只留用户自己写的正文。
+    final text = widget.controller.text;
+    final trigger = RegExp(r'(?:^|\s)@[^\s@]*$').firstMatch(text);
+    if (trigger != null) {
+      final next = text.substring(0, trigger.start).trimRight();
+      widget.controller.value = TextEditingValue(
+        text: next,
+        selection: TextSelection.collapsed(offset: next.length),
+      );
+    }
+    widget.focusNode.requestFocus();
+  }
+
+  /// 把选中的卡拼到消息前面。
+  ///
+  /// 槽位名与 skill `r2i-prompt` 的输入约定逐字一致；卡正文**一个字符都不改**。
+  String _composeOutgoing(String text) {
+    final blocks = <String>[];
+    final style = _styleCard;
+    if (style != null) {
+      blocks.add('[STYLE SPEC]\n${style.name}\n${style.prompt}');
+    }
+    final character = _characterCard;
+    if (character != null) {
+      blocks.add('[CHARACTER CARD]\n${character.name}\n${character.prompt}');
+    }
+    final body = text.trim();
+    if (blocks.isEmpty) return text;
+    if (body.isEmpty) return blocks.join('\n\n');
+    return '${blocks.join('\n\n')}\n\n$body';
+  }
 
   /// 菜单里列出的 skills：只列**用户可调用**且启用的（`/` 就是用户显式调用）。
   List<AiSkill> get _slashMatches {
@@ -3622,6 +3739,9 @@ class _ComposerState extends State<_Composer> {
                 ),
               ),
             ),
+          // 卡片面板（角色卡 / 画风卡）：在输入框上方，和 `/` 菜单同一套位置。
+          if (_cardsOpen) _cardsPanel(theme),
+          if (_characterCard != null || _styleCard != null) _cardChips(theme),
           // 排版：上一行整宽输入框，下一行 [附件] [模型选择] …… [发送]
           Shortcuts(
             shortcuts: const {
@@ -3661,7 +3781,7 @@ class _ComposerState extends State<_Composer> {
                   // 会把"文件路径"当内容贴进来（见 `_composerContextMenu`）
                   contextMenuBuilder: _composerContextMenu,
                   decoration: const InputDecoration(
-                    hintText: '描述你的生图 / 生视频需求，或输入 / 调用 Skill（Enter 发送，Shift+Enter 换行）',
+                    hintText: '描述你的生图需求；/ 调用 Skill，@ 插入角色卡 / 画风卡（Enter 发送，Shift+Enter 换行）',
                     border: OutlineInputBorder(),
                     isDense: true,
                   ),
@@ -3774,21 +3894,254 @@ class _ComposerState extends State<_Composer> {
   /// 纯图标档才退回 tooltip，且图标按钮本身放大到能轻松点到。
   List<Widget> _composerActions(_ComposerLabel density) {
     return [
-      // 附件按钮：三档都是图标（它本来就没有"状态"可显示），
-      // 但**三档都要够大** —— 用户点不准的就是这类按钮。
-      IconButton(
-        tooltip: '添加附件',
-        onPressed: _pickFiles,
-        iconSize: 22,
-        padding: const EdgeInsets.all(10),
-        constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-        icon: const Icon(Icons.attach_file),
+      // 附件 + 卡片合成一个 "+" 菜单（用户 2026-10-24 指着 DSH 的排版问"放得下实体 @ 按钮吗"：
+      // 320~720 宽时底行已经有 4 枚状态控件 + 发送，再塞第 5 枚就必然折行 / 挤压）。
+      // 收起一层之后底行仍是 4 枚，入口还在最左；键盘路径另外留了直接输入 `@`。
+      AppMenuButton<String>(
+        onSelected: (v) {
+          if (v == 'attach') _pickFiles();
+          if (v == 'cards') _openCards();
+        },
+        options: [
+          const MenuOption(
+            value: 'attach',
+            icon: Icons.attach_file,
+            label: '添加附件',
+          ),
+          // 卡片库只有桌面后端有（手机侧没有这两张表）。
+          if (!widget.store.isLocal)
+            const MenuOption(
+              value: 'cards',
+              icon: Icons.alternate_email,
+              label: '角色卡 / 画风卡…',
+              dividerBefore: true,
+            ),
+        ],
+        button: (context, controller, isOpen) => IconButton(
+          tooltip: '添加附件 / 插入卡片（@）',
+          onPressed: () => controller.isOpen ? controller.close() : controller.open(),
+          iconSize: 22,
+          padding: const EdgeInsets.all(10),
+          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+          icon: const Icon(Icons.add),
+        ),
       ),
       // 权限档（用户建议 ⑤）：就在附件按钮和模型选择之间
       _PermissionPicker(store: widget.store, density: density),
       _ModelPicker(store: widget.store, density: density),
       _EffortPicker(store: widget.store, density: density),
     ];
+  }
+
+  /// 卡片面板：搜索 + 角色卡 / 画风卡两个页签 + 列表。
+  ///
+  /// 位置与 `/` 菜单一致（输入框上方），不铺遮罩：同一条理由 —— 弹出层不该吃掉
+  /// 整页的滚轮 / 拖动（`AppMenuButton` 那条约定的同源问题）。
+  Widget _cardsPanel(ThemeData theme) {
+    final cards = _cardsStyled ? _styles : _characters;
+    final query = _cardQuery.trim().toLowerCase();
+    final shown = query.isEmpty
+        ? cards
+        : cards
+              .where(
+                (c) =>
+                    '${c.name} ${c.prompt ?? ''}'.toLowerCase().contains(query),
+              )
+              .toList();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: theme.dividerColor),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          height: 250,
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  _cardsTab(theme, '角色卡', !_cardsStyled, () {
+                    setState(() {
+                      _cardsStyled = false;
+                      _cardQuery = '';
+                      _cardSearch.clear();
+                    });
+                  }),
+                  _cardsTab(theme, '画风卡', _cardsStyled, () {
+                    setState(() {
+                      _cardsStyled = true;
+                      _cardQuery = '';
+                      _cardSearch.clear();
+                    });
+                  }),
+                  const Spacer(),
+                  if (_cardsLoading)
+                    const Padding(
+                      padding: EdgeInsets.only(right: 8),
+                      child: SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  IconButton(
+                    tooltip: '收起卡片面板',
+                    onPressed: _closeCards,
+                    icon: const Icon(Icons.close, size: 18),
+                  ),
+                ],
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+                child: TextField(
+                  controller: _cardSearch,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    prefixIcon: Icon(Icons.search, size: 18),
+                    hintText: '搜卡片名 / 正文',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (v) => setState(() => _cardQuery = v),
+                ),
+              ),
+              Expanded(child: _cardsBody(theme, shown)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _cardsTab(
+    ThemeData theme,
+    String label,
+    bool selected,
+    VoidCallback onTap,
+  ) => TextButton(
+    onPressed: onTap,
+    style: TextButton.styleFrom(
+      minimumSize: const Size(0, 34),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      foregroundColor: selected
+          ? theme.colorScheme.primary
+          : theme.colorScheme.outline,
+      textStyle: theme.textTheme.labelMedium,
+    ),
+    child: Text(label),
+  );
+
+  Widget _cardsBody(ThemeData theme, List<CharacterCard> shown) {
+    if (_cardsError != null) {
+      return Padding(
+        padding: const EdgeInsets.all(12),
+        child: Text(
+          _cardsError!,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.error,
+          ),
+        ),
+      );
+    }
+    if (_cardsLoading) {
+      return const Center(
+        child: SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+    if (shown.isEmpty) {
+      return Center(
+        child: Text(
+          _cardQuery.trim().isEmpty
+              ? '还没有${_cardsStyled ? '画风卡' : '角色卡'}：去「预设库 → 卡片库」新建一张。'
+              : '没有匹配的卡片',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: EdgeInsets.zero,
+      itemCount: shown.length,
+      itemBuilder: (context, i) {
+        final card = shown[i];
+        final selected = identical(
+          card,
+          _cardsStyled ? _styleCard : _characterCard,
+        );
+        return ListTile(
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          leading: Icon(
+            _cardsStyled ? Icons.palette_outlined : Icons.badge_outlined,
+            size: 18,
+          ),
+          title: Text(
+            card.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelMedium,
+          ),
+          subtitle: Text(
+            (card.prompt ?? '（正面提示词还空着）').replaceAll('\n', ' '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelSmall,
+          ),
+          trailing: selected
+              ? Icon(Icons.check, size: 18, color: theme.colorScheme.primary)
+              : null,
+          onTap: () => _chooseCard(card),
+        );
+      },
+    );
+  }
+
+  /// 已选中的卡：输入框上方一排 chip，点 × 取消。
+  Widget _cardChips(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        children: [
+          if (_styleCard != null)
+            InputChip(
+              avatar: Icon(
+                Icons.palette_outlined,
+                size: 16,
+                color: theme.colorScheme.primary,
+              ),
+              label: Text(
+                '画风卡 · ${_styleCard!.name}',
+                style: theme.textTheme.labelSmall,
+              ),
+              visualDensity: VisualDensity.compact,
+              onDeleted: () => setState(() => _styleCard = null),
+            ),
+          if (_characterCard != null)
+            InputChip(
+              avatar: Icon(
+                Icons.badge_outlined,
+                size: 16,
+                color: theme.colorScheme.primary,
+              ),
+              label: Text(
+                '角色卡 · ${_characterCard!.name}',
+                style: theme.textTheme.labelSmall,
+              ),
+              visualDensity: VisualDensity.compact,
+              onDeleted: () => setState(() => _characterCard = null),
+            ),
+        ],
+      ),
+    );
   }
 
   /// 本对话的 token 汇总（AIH-057）：一直是可见的，不必翻设置。
@@ -3833,8 +4186,19 @@ class _ComposerState extends State<_Composer> {
     // 组字（拼音还没上屏）期间的回车是"选词 / 上屏"，不是发送（AIH-053）；
     // 按钮走同一条路，所以闸放在这里，两条入口都拦得住。
     if (_composing) return;
-    final text = widget.controller.text;
+    // 选中的卡拼在正文前面（槽位标记逐字固定，卡正文不改）。
+    final text = _composeOutgoing(widget.controller.text);
+    final sendable = widget.store.sendBlockReason() == null;
     widget.onSubmit(text);
+    // 只有"真的会被发出去"才清掉卡片：被拒时（正在生成 / 附件还在上传）卡片要留着，
+    // 不能因为按了一次回车就没了。
+    if (sendable && (_characterCard != null || _styleCard != null)) {
+      setState(() {
+        _characterCard = null;
+        _styleCard = null;
+        _cardsOpen = false;
+      });
+    }
   }
 
   Future<void> _pickFiles() async {

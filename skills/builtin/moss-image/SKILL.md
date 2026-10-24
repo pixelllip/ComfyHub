@@ -193,10 +193,10 @@ MOSS 能读一个 JSON 布局，指定每个物体 / 每行文字的位置。官
    - t2i：写成 80~200 词英文 caption（§2 的规则）；
    - layout：写成 Layout JSON（§4，注意这份工作流用 `x_min...` 社区格式）。
 3. `comfy_submit(promptId=…, positivePrompt="<你写好的最终提示词>")`。
-   后端会把它写进正面 `CLIPTextEncode.text`，并**断开原来接在那儿的那一路**
-   （含 `TextGenerate` / `PreviewAny` / `ComfySwitchNode`）；
-   TextGenerate 节点还在图里，但从输出走不到，ComfyUI 不会执行它。
-   返回里看 `positivePromptApplied` 与 `textGenerateBypassed` 确认改了哪几个节点。
+   后端会把它写进正面 `CLIPTextEncode.text`，并把 `TextGenerate` 那一支**从提交图里摘掉**
+   （含 `TextGenerate` / `PreviewAny` / `ComfySwitchNode` 与只喂它的上游）——
+   节点不再存在，既不校验也不执行（只断线不够：ComfyUI 校验的是整张 prompt）。
+   返回里看 `positivePromptApplied` 与 `textGenerateBypassed` 确认摘了哪几个节点。
 
 ### 6.2 不要做的事
 

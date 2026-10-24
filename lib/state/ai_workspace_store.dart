@@ -2301,6 +2301,16 @@ class AiWorkspaceStore extends ChangeNotifier {
   Future<SavedWorkflow> saveWorkflow({required String raw, String? name}) =>
       _api.saveWorkflow(raw: raw, name: name);
 
+  /// 卡片库（角色卡 / 画风卡）—— 工作台输入区的 `@` 菜单用。
+  ///
+  /// **只有桌面后端有这两张表**：手机侧没有卡片库，`store.isLocal` 时界面不显示入口。
+  /// 失败不在这里吞（调用方要显示"读不到卡片库"），也绝不返回空列表冒充"一张卡都没有"。
+  Future<List<CharacterCard>> listCharacterCards({String? query}) =>
+      _api.listCharacterCards(query: query);
+
+  Future<List<StyleCard>> listStyleCards({String? query}) =>
+      _api.listStyleCards(query: query);
+
   // -----------------------------------------------------------------------
   //  发送
   // -----------------------------------------------------------------------

@@ -145,6 +145,19 @@
   .tool:hover { background: #241d33; }
   .tool .key { font-family: var(--mono); color: #e4d9ff; background: #2a2140; border-radius: 5px; padding: 0 5px; }
   .bar .spacer { flex: 1; }
+  .addwrap { position: relative; display: inline-flex; }
+  .addmenu {
+    position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 40;
+    display: none; flex-direction: column; min-width: 180px; padding: 4px;
+    background: #1a1624; border: 1px solid #3a3050; border-radius: 10px;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, .55);
+  }
+  .addmenu.open { display: flex; }
+  .addmenu button {
+    all: unset; cursor: pointer; padding: 8px 12px; border-radius: 6px;
+    font-size: 12.5px; color: #ddd4ef; white-space: nowrap;
+  }
+  .addmenu button:hover { background: #2a2140; }
   .send {
     all: unset; cursor: pointer; background: #cbb7ff; color: #221a33; font-weight: 650;
     padding: 8px 18px; border-radius: 10px; font-size: 13px; transition: .15s;
@@ -280,7 +293,7 @@
     <div class="logo">CH</div>
     <div>
       <h1>实验窗 · 角色卡 / 画风卡 → r2i 提示词</h1>
-      <div class="sub">只验证两件事：工作台怎么把卡交给模型、TextGenerate 怎么从提交图里摘干净。数据是样例，不连后端。<br>可以试：点底部「@ 卡片」或直接输入 @；右侧切「消息 / 产出」；下面切「新 / 旧」。</div>
+      <div class="sub">只验证两件事：工作台怎么把卡交给模型、TextGenerate 怎么从提交图里摘干净。数据是样例，不连后端。<br>可以试：点底部「＋」→ 角色卡 / 画风卡，或直接输入 @；右侧切「消息 / 产出」；下面切「新 / 旧」。</div>
     </div>
     <div class="right">
       <span class="pill"><span class="dot"></span>静态原型</span>
@@ -337,13 +350,18 @@
             <button class="tab" data-tab="style">画风卡<span class="count" id="countStyle"></span></button>
           </div>
           <div class="list" id="cardList"></div>
-          <div class="picker-foot">角色卡 / 画风卡各占一个槽位；再选同类会替换。tag 版留在卡里，不进 r2i 正文。</div>
+          <div class="picker-foot">角色卡 / 画风卡各占一个槽位，再选同类会替换；卡片只有一版自然语言正文。</div>
         </div>
         <div class="chips" id="chips"></div>
         <textarea id="input" placeholder="描述你想生成的画面；输入 @ 可以插入角色卡 / 画风卡。">保留参考图的构图与“回头”的瞬间，把这一刻扩写成一张新图的提示词。</textarea>
         <div class="bar">
-          <button class="tool" id="atButton" title="插入卡片"><span class="key">@</span> 卡片</button>
-          <button class="tool" id="refButton">＋ 参考图</button>
+          <span class="addwrap">
+            <button class="tool" id="addButton" title="添加附件 / 插入卡片">＋</button>
+            <div class="addmenu" id="addMenu">
+              <button data-act="attach">📎&ensp;添加附件</button>
+              <button data-act="cards">＠&ensp;角色卡 / 画风卡…</button>
+            </div>
+          </span>
           <span class="pill" style="font-size:11px;padding:3px 9px">/ r2i-prompt</span>
           <span class="spacer"></span>
           <button class="send" id="send">发送</button>
@@ -410,7 +428,7 @@
 
   <footer>
     <span><b>接入点：</b><code>_Composer</code> 的 <code>@</code> 菜单 · <code>listCharacterCards()</code> / <code>listStyleCards()</code> · <code>skills/builtin/r2i-prompt</code></span>
-    <span><b>卡片格式：</b>名称 + 自然语言正文（tag 版不进 r2i 槽位）</span>
+    <span><b>卡片格式：</b>名称 + 一版自然语言正文（要 tag 版时 AI 当场另翻，不存卡）</span>
     <span><b>风格：</b>只来自 STYLE SPEC，逐字保留</span>
   </footer>
 </div>
@@ -430,9 +448,9 @@ const LAN_TEXT = `Alan, a man in his late twenties, 182 cm, lean with broad shou
 const FILM_TEXT = `Analog portrait photography: 35mm film, visible grain, halation around highlights, soft focus falloff at the edges, muted teal and warm sand palette, deep but lifted shadows, gentle highlight roll-off, slight vignette, natural window light with one soft source, 50mm at f/2, shallow depth of field.`;
 
 const CHARACTERS = [
-  { id: 'rin', name: '凛', en: 'Rin', body: RIN_TEXT, desc: '黑长直 / 低马尾 / 灰眼 / 银链', badge: '两版齐全' },
-  { id: 'suwan', name: '苏晚', en: 'Su Wan', body: SU_TEXT, desc: '栗色波浪 / 圆眼 / 右颊酒窝', badge: '只有自然语言' },
-  { id: 'alan', name: '阿岚', en: 'Alan', body: LAN_TEXT, desc: '深棕短发 / 橄榄皮 / 眉骨疤', badge: '两版齐全' },
+  { id: 'rin', name: '凛', en: 'Rin', body: RIN_TEXT, desc: '黑长直 / 低马尾 / 灰眼 / 银链', badge: '正文齐全' },
+  { id: 'suwan', name: '苏晚', en: 'Su Wan', body: SU_TEXT, desc: '栗色波浪 / 圆眼 / 右颊酒窝', badge: '正文较短' },
+  { id: 'alan', name: '阿岚', en: 'Alan', body: LAN_TEXT, desc: '深棕短发 / 橄榄皮 / 眉骨疤', badge: '正文齐全' },
 ];
 const STYLES = [
   { id: 'pba', name: '物理感动画', en: 'style_physically_based_anime', body: STYLE_TEXT, desc: '三维受光 / 镜面高光只在硬表面', badge: 'Preset/STYLE SPEC' },
@@ -513,7 +531,17 @@ function closePicker() {
   input.focus();
 }
 
-document.getElementById('atButton').onclick = () => openPicker();
+const addMenu = document.getElementById('addMenu');
+document.getElementById('addButton').onclick = (e) => {
+  e.stopPropagation();
+  addMenu.classList.toggle('open');
+};
+addMenu.querySelectorAll('button').forEach(b => {
+  b.onclick = () => {
+    addMenu.classList.remove('open');
+    if (b.dataset.act === 'cards') openPicker();
+  };
+});
 document.querySelectorAll('#tabs .tab').forEach(t => {
   t.onclick = () => {
     state.tab = t.dataset.tab;
@@ -535,9 +563,11 @@ input.addEventListener('input', () => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && state.pickerOpen) closePicker();
+  if (e.key === 'Escape') addMenu.classList.remove('open');
 });
 document.addEventListener('mousedown', e => {
-  if (state.pickerOpen && !picker.contains(e.target) && !document.getElementById('atButton').contains(e.target)) closePicker();
+  if (state.pickerOpen && !picker.contains(e.target) && !e.target.closest('.addwrap')) closePicker();
+  if (!e.target.closest('.addwrap')) addMenu.classList.remove('open');
 });
 
 // ---------------------------------------------------------------------------

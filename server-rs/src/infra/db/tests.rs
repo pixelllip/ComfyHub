@@ -484,3 +484,112 @@ fn bundled_engine_has_fts5() {
     let info = engine_info(&conn).unwrap();
     assert_eq!(info["fts5"], serde_json::json!(true), "engine={info}");
 }
+
+// ---------------------------------------------------------------------------
+//  2026-10-24：卡片回到单版本（只留自然语言）
+// ---------------------------------------------------------------------------
+
+/// 新库不该再有 `tag_prompt` 列（老库那一列留给迁移，迁移完再没人读）。
+#[test]
+fn fresh_database_has_no_card_tag_prompt_column() {
+    let path = temp_path("card-single");
+    let conn = open_or_create(&path).unwrap();
+    for table in ["character_cards", "style_cards"] {
+        let present: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = 'tag_prompt'",
+                rusqlite::params![table],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(present, 0, "{table} 新库不该再建 tag_prompt");
+    }
+    std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+}
+
+/// tag 栈 → 自然语言的兜底转换：信息不丢、能读、不是原样抄 tag。
+#[test]
+fn tags_are_turned_into_a_natural_sentence() {
+    let text = tags_to_natural_language("1girl, red_eyes, silver_hair, school_uniform, shinku_(nte)");
+    assert_eq!(
+        text,
+        "A girl with red eyes and silver hair, wearing school uniform. Shinku (nte)."
+    );
+    // 质量词不算内容：只剩它们时返回空串（迁移据此跳过这张卡）
+    assert!(tags_to_natural_language("masterpiece, best_quality, highres").is_empty());
+    assert!(tags_to_natural_language("   ").is_empty());
+    // 老库里那一列偶尔存的是整句：没有分隔符 + 词数够多就原样保留，不许再套一层 "A character with…"
+    let prose = "A quiet girl with red eyes and silver hair and a dark coat.";
+    assert_eq!(tags_to_natural_language(prose), prose);
+    // 换行 / 中文逗号 / 下划线都认
+    let text = tags_to_natural_language("1boy\nblue_eyes，black_coat");
+    assert!(text.starts_with("A boy with blue eyes"), "{text}");
+    assert!(text.contains("wearing black coat"), "{text}");
+}
+
+/// 升级到 11 的那一次：只有 tag 版的卡转成自然语言；**已有正文的卡一个字都不动**；
+/// 而且只跑一次 —— 用户之后清空正文，不会被 tag 列复活。
+#[test]
+fn upgrading_to_11_converts_tag_cards_once() {
+    let path = temp_path("card-tag-migrate");
+    let conn = open_or_create(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE character_cards ADD COLUMN tag_prompt TEXT NULL; \
+         ALTER TABLE style_cards ADD COLUMN tag_prompt TEXT NULL;",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO character_cards (name, normalized, tag_prompt) \
+         VALUES ('shinku', 'shinku', '1girl, red_eyes, silver_hair')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO character_cards (name, normalized, tag_prompt, prompt) \
+         VALUES ('iroi', 'iroi', '1girl, green_hair', 'Iroi already has prose.')",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA user_version = 10;").unwrap();
+    drop(conn);
+
+    let conn = open_or_create(&path).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+    let converted: String = conn
+        .query_row(
+            "SELECT prompt FROM character_cards WHERE normalized = 'shinku'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        converted.starts_with("A girl with red eyes and silver hair"),
+        "{converted}"
+    );
+    let kept: String = conn
+        .query_row(
+            "SELECT prompt FROM character_cards WHERE normalized = 'iroi'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept, "Iroi already has prose.", "已有自然语言版不许被覆盖");
+
+    // 再清空一次正文：重开库**不许**从 tag 列复活（迁移只在 version<11 那一次跑）
+    conn.execute(
+        "UPDATE character_cards SET prompt = NULL WHERE normalized = 'shinku'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let conn = open_or_create(&path).unwrap();
+    let cleared: Option<String> = conn
+        .query_row(
+            "SELECT prompt FROM character_cards WHERE normalized = 'shinku'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(cleared.is_none(), "清空过的卡不许被 tag 列复活：{cleared:?}");
+    std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
+}

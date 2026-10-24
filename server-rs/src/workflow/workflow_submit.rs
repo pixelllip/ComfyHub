@@ -309,7 +309,7 @@ impl WorkflowEdit {
         Ok((Value::Object(nodes), applied))
     }
 
-    /// 把**最终正面提示词**直接写进正面文本编码器，并摘掉原来接着的那一路。
+    /// 把**最终正面提示词**直接写进正面文本编码器，并从提交图里摘掉原来那一路。
     ///
     /// # 为什么需要它（用户 2026-10-21）
     ///
@@ -321,10 +321,17 @@ impl WorkflowEdit {
     /// 现在模型可以**自己服从 `TextGenerate.system_prompt`** 写好最终提示词，再走这个参数：
     /// 1. 从每个采样器的 `positive` 输入往上找**最近的** `CLIPTextEncode`（不碰 negative）；
     /// 2. 把它的 `text` 改成字面量 —— 原来那条线**就此断开**；
-    /// 3. 断开之后 `TextGenerate` 那一路从输出再也走不到，ComfyUI 不会执行它
-    ///    （节点还留在图里，用户自己的文件一个字没动）。
+    /// 3. **再把 TextGenerate 这一支从提交图里删掉**（2026-10-24 用户口径：摘线 ≠ 绕过）：
+    ///    · 只断线，节点还在提交图里，而 ComfyUI 的 `validate_prompt` 校验的是**整张 prompt**
+    ///      （不只可达节点）—— 本机没装 TextGenerate 节点包、或它的动态下拉框值不合法时，
+    ///      整份报错（`Node type not found: TextGenerate`），哪怕一个输出都没接；
+    ///    · 只删节点不清引用，留下 `39.on_true → [32,0]` 又会 `Node 32 not found`
+    ///      （用户看到的"有节点没接入"）。
+    ///    所以这里**成对做**：删 TextGenerate 这一支 + 把指向它的下游一并摘掉 / 把只喂它的
+    ///    上游一并清掉，删完校验"没有悬挂引用、至少还剩一个输出"；校验不过就退回只断线。
+    /// 4. 用户自己的文件**一个字节都不动**：改的只是这一次提交的图。
     ///
-    /// 返回 `(改过的图, 改过的 节点id.text, 被摘掉的 TextGenerate 节点 id)`。
+    /// 返回 `(改过的图, 改过的 节点id.text, 从提交图里摘掉的节点 id)`。
     /// **找不到正面文本编码器就报错**：静默什么都不改会让模型以为已经按它的提示词出了图。
     pub fn apply_positive_prompt(
         graph: &Value,
@@ -433,7 +440,9 @@ impl WorkflowEdit {
             inputs.insert("text".into(), json!(prompt));
             changed.push(format!("{id}.text"));
         }
-        Ok((Value::Object(nodes), changed, bypassed.into_iter().collect()))
+        // ④ 从**提交图**里摘掉 TextGenerate 这一支（摘节点 + 清引用，成对做）。
+        let removed = remove_text_generate_branch(&mut nodes, &bypassed);
+        Ok((Value::Object(nodes), changed, removed))
     }
 }
 
@@ -449,7 +458,7 @@ fn follows_positive(key: &str) -> bool {
         || key == "on_false"
 }
 
-/// 从某个输入往上走，收集 `TextGenerate` 一族（只用于回报"摘掉了哪一路"）。
+/// 从某个输入往上走，收集 `TextGenerate` 一族（摘线时先记下"原来接着的是哪一路"）。
 fn collect_text_generate(nodes: &Map<String, Value>, start: &str, out: &mut BTreeSet<String>) {
     let mut queue: VecDeque<(String, usize)> = VecDeque::from([(start.to_string(), 0usize)]);
     let mut seen: HashSet<String> = HashSet::new();
@@ -469,6 +478,141 @@ fn collect_text_generate(nodes: &Map<String, Value>, start: &str, out: &mut BTre
             }
         }
     }
+}
+
+fn node_class(node: &Value) -> Option<&str> {
+    node.get("class_type").and_then(Value::as_str)
+}
+
+/// 一个节点上所有连线型输入：`[(上游节点 id, 槽位)]`。
+fn node_input_links(node: &Value) -> Vec<(String, i64)> {
+    let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { return Vec::new() };
+    inputs.values().filter_map(link_ref).collect()
+}
+
+/// 输出节点（有它，"这张图有结果"才成立）。
+///
+/// 判据与 `workflow_prune::OUTPUT_HINTS` 同一档：Save / Preview / VideoCombine / Export。
+/// 摘 TextGenerate 那支时要靠它兜底 —— 把最后一个输出摘掉，提交就没意义了。
+fn is_output_class(class: &str) -> bool {
+    let lower = class.to_ascii_lowercase();
+    lower.contains("save")
+        || lower.contains("preview")
+        || lower.contains("videocombine")
+        || lower.contains("export")
+}
+
+/// 顺着输入往上走，收集这些种子的**全部上游**（含种子自己）。
+fn collect_ancestors(nodes: &Map<String, Value>, seeds: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut queue: VecDeque<(String, usize)> =
+        seeds.iter().map(|s| (s.clone(), 0usize)).collect();
+    while let Some((id, depth)) = queue.pop_front() {
+        if depth > 32 || !seen.insert(id.clone()) {
+            continue;
+        }
+        if let Some(node) = nodes.get(&id) {
+            for (src, _) in node_input_links(node) {
+                queue.push_back((src, depth + 1));
+            }
+        }
+    }
+    seen
+}
+
+/// 摘完这一支之后：仍然至少有一个输出节点，且没有节点再指向被摘掉的 id。
+///
+/// 只在自己的摘除范围内判（图本来就有的悬挂引用不归这里管）；判不过就**放弃摘除**、
+/// 退回"只断线"，别为了干净把整张图搞成提交不了的形状。
+fn graph_is_sound(nodes: &Map<String, Value>, removed: &BTreeSet<String>) -> bool {
+    let has_output = nodes.iter().any(|(id, node)| {
+        !removed.contains(id) && node_class(node).map(is_output_class).unwrap_or(false)
+    });
+    if !has_output {
+        return false;
+    }
+    nodes.iter().all(|(id, node)| {
+        removed.contains(id)
+            || node_input_links(node)
+                .iter()
+                .all(|(src, _)| !removed.contains(src))
+    })
+}
+
+/// 把 `TextGenerate` 这一支从**提交图**里摘掉，返回真正删掉的节点 id（升序）。
+///
+/// 2026-10-24 用户口径："摘除了还得阻止该节点运行（绕过节点），不然工作流运行时可能
+/// 产生报错（有节点没接入之类）"。两件事必须成对做：
+///
+/// 1. **删节点**：ComfyUI 的 `validate_prompt` 校验整张 prompt（不只可达节点），
+///    留在图里的 `TextGenerate` 仍会被查类名 / 动态下拉框 —— 本机没装那个节点包时
+///    整份报错，哪怕它一个输出都没接；
+/// 2. **清引用**：只删节点会留下 `39.on_true → [32,0]`，变成 `Node 32 not found`。
+///
+/// 做法：从种子（TextGenerate）出发，① 下游**任何输入指向已摘除节点的**一并摘掉；
+/// ② 上游只喂给已摘除节点、自己又不是输出节点的辅助节点一并清掉。删完先校验，
+/// 校验不过是"至少剩一个输出 + 没有悬挂引用"，不过就退回空列表（调用方保留只断线的图）。
+fn remove_text_generate_branch(
+    nodes: &mut Map<String, Value>,
+    seeds: &BTreeSet<String>,
+) -> Vec<String> {
+    if seeds.is_empty() {
+        return Vec::new();
+    }
+    let ancestors = collect_ancestors(nodes, seeds);
+    let mut removed = seeds.clone();
+    loop {
+        let mut victim: Option<String> = None;
+        // ① 下游：输入指着已摘除节点的，一并摘掉（否则就是"有节点没接入"）
+        for (id, node) in nodes.iter() {
+            if removed.contains(id) {
+                continue;
+            }
+            if node_input_links(node)
+                .iter()
+                .any(|(src, _)| removed.contains(src))
+            {
+                victim = Some(id.clone());
+                break;
+            }
+        }
+        // ② 上游：只喂给已摘除节点、自己又不是输出的辅助节点，一并清掉
+        if victim.is_none() {
+            for id in &ancestors {
+                if removed.contains(id) {
+                    continue;
+                }
+                let Some(node) = nodes.get(id) else { continue };
+                if node_class(node).map(is_output_class).unwrap_or(false) {
+                    continue;
+                }
+                let has_live_consumer = nodes.iter().any(|(other, n)| {
+                    other != id
+                        && !removed.contains(other)
+                        && node_input_links(n).iter().any(|(src, _)| src == id)
+                });
+                if !has_live_consumer {
+                    victim = Some(id.clone());
+                    break;
+                }
+            }
+        }
+        match victim {
+            Some(id) => {
+                removed.insert(id);
+            }
+            None => break,
+        }
+    }
+    if !graph_is_sound(nodes, &removed) {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = removed.into_iter().collect();
+    for id in &out {
+        nodes.remove(id);
+    }
+    out.sort();
+    out
 }
 
 /// `["12", 0]` / `[12, 0]` → `("12", 0)`。
@@ -1142,8 +1286,9 @@ pub async fn tool_submit(
         out.insert(
             "positivePromptHint".into(),
             json!(
-                "已经把最终提示词写进正面条件编码；TextGenerate 那一路从正面链路断开了，\
-                 不会被执行（节点还在图里，用户的原文件没有被改）。"
+                "已经把最终提示词写进正面条件编码；TextGenerate 那一路（含只喂它的上游、\
+                 指向它的显示节点）已经从**这次提交的图**里摘掉 —— ComfyUI 既不会校验也不会\
+                 执行它（只断线不够：校验看的是整张 prompt）。用户的原文件没有被改。"
             ),
         );
     }

@@ -297,7 +297,7 @@ class AiApiClient {
 
   // --- 卡片库：角色卡 / 画风卡（2026-10-21）------------------------------
   //
-  // 两种卡**同等地位**、字段同形：名称 / Danbooru tag 版 / 自然语言版 /
+  // 两种卡**同等地位**、字段同形：名称 / 一版自然语言正面提示词 /
   // 负面提示词 / 示例产物。AI 用同一批表（`save_character_card` /
   // `save_style_card` / `search_character_cards` / `search_style_cards`），
   // 所以界面上看到的就是模型查到的那一份。

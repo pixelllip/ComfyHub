@@ -2,11 +2,13 @@
 
 浏览器直接打开 `r2i-card-flow.html`，不连后端、数据是样例。三处可以试：
 
-- 点底部「@ 卡片」或直接在输入框输入 `@`：弹出角色卡 / 画风卡选择器（可搜、两组页签、各占一个槽位）；
+- 点底部「＋」→「角色卡 / 画风卡…」（或直接在输入框输入 `@`）：弹出选择器（可搜、两组页签、
+  各占一个槽位）。真机上底行已经有 4 枚状态控件 + 发送，320~720 宽再塞第 5 枚会折行，
+  所以入口收进 `+` 菜单，键盘路径保留 `@`；
 - 右侧切「消息 / 产出」：看工作台**真正发出去**的文本（`[STYLE SPEC]` / `[CHARACTER CARD]` 逐字带上），
   以及 skill 按契约输出的**一整段** 300–400 词提示词；
 - 底部切「新 / 旧」：`TextGenerate` 只断线 vs 断线 + 从提交图里摘干净，两种结果各自剩下的节点与报错风险。
 
-`preview/` 是三个状态的截图。这里只定**交互与文案**；真实接入（`_Composer` 的 `@` 菜单、
-`listCharacterCards()` / `listStyleCards()`、`r2i-prompt` skill、`apply_positive_prompt` 的绕过逻辑）
-在实现提交里落地。
+`preview/` 是三个状态的截图。这里定的是**交互与文案**；真实接入（`_Composer` 的 `+` 菜单 /
+`@` 触发、`listCharacterCards()` / `listStyleCards()`、`r2i-prompt` skill、
+`apply_positive_prompt` 的摘支逻辑）已经在实现提交里落地。

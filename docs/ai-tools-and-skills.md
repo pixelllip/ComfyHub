@@ -48,7 +48,7 @@ DSH 暴露给模型的东西分五类。对照结论（`docs/archive/dsh-tool-la
 | `comfy_load_workflow` | comfy | allow | 把**一份本机工作流文件**读进库换成一个能提交的 `promptId`（用户 bug ③，2026-09-18）：API 格式原样用；界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图 —— 普通节点、**组节点（subgraph）**、Reroute / Set-Get、旁路都会等价展开或改写，控件值**首选带名字的 `widgets_values_named`**。**## 模拟用户行为 ##**（用户建议 ②，2026-09-21）：`emulateFrontend` **默认开着**，把纯前端节点照前端排队前的行为等价改写（广播填空 / 丢显示节点 / 补 SaveImage），改了什么都列在 `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里（见 §2.0.2）；说不清类型的仍然如实报 `UNSUPPORTED_NODES`，带 `tolerateUnsupported=true` 再来一次则**摘掉它们并给出缺口清单**（`openInputs` / `unresolvedInputs`），交给模型补线。只读用户机器上的文件，不改它 |
 | `comfy_find_workflow` | comfy | allow | 找一个**能直接跑**的工作流：先搜库里**能直接跑**的工作流（标注 `runnable` = 有没有 API 节点图）；**库里没有时自动回头列本机 ComfyUI 已保存的工作流文件**（结果在 `localWorkflows` 里，用户 bug ⑤，2026-09-18） |
 | `comfy_list_workflows` | comfy | allow | 列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`，用户 bug ⑤，2026-09-18）：带路径 / 格式（ui/api）/ 是否已入库（`inLibrary` / `promptId`），可按文件名过滤（如 `krea2`）。**只读**，不改用户的文件。首次使用、或 `comfy_find_workflow` 什么都搜不到时先看它 —— 这些工作流**不需要在 ComfyUI 里跑过一次**，拿到 path 直接 `comfy_load_workflow` 就能提交 |
-| `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数、`connections` 补连线（值写 `["<上游节点id>", 槽位]`），跑完直接入库；会消耗显卡时间，默认要审批。**2026-10-21 新增 `positivePrompt`**：工作流里带 `TextGenerate`（本地 LLM 扩写 / 布局编译器）时，AI 先读它的 `system_prompt`、自己写好最终提示词，再由后端写进正面 `CLIPTextEncode.text` 并**断开原来那一路**（含 TextGenerate），本地 LLM 不再执行。返回 `positivePromptApplied` / `textGenerateBypassed` 作为证据 |
+| `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数、`connections` 补连线（值写 `["<上游节点id>", 槽位]`），跑完直接入库；会消耗显卡时间，默认要审批。**2026-10-21 新增 `positivePrompt`**：工作流里带 `TextGenerate`（本地 LLM 扩写 / 布局编译器）时，AI 先读它的 `system_prompt`、自己写好最终提示词，再由后端写进正面 `CLIPTextEncode.text`，并把 TextGenerate 这一支**从这次提交的图里摘掉**（节点 + 指向它的显示节点 + 只喂它的上游；2026-10-24 起：只断线不够，ComfyUI 校验整张 prompt），本地 LLM 既不校验也不执行，原文件不动。返回 `positivePromptApplied` / `textGenerateBypassed` 作为证据 |
 | `comfy_use_attachment` | comfy | **ask** | 把用户发来的**图片附件**投放进 ComfyUI 的 `input/` 目录并返回真实文件名（用户 bug，2026-09-17）：图生图 / 参考图的唯一正路，默认要审批（往用户机器上写文件） |
 | `comfy_check_inputs` | comfy | allow | **体检一份工作流：哪些输入还等着外部给**（用户建议 ⑤，2026-09-20）：把 `comfy_get_run` 的 `raw` / `comfy_load_workflow` 的 `apiGraph` 传进来，逐条列出 `节点id.输入名` / 节点类 / 缺什么类型 / 现在是什么值 / 下一步该怎么办，分成 `image` / `video` / `connection` / `parameter` 四类。**只读**。用户现场是"用户没提供参考图，但工作流的节点用到参考图"——没有它，模型会带着缺口硬提交，ComfyUI 只回一句缺输入。判据刻意保守：只有"连线型空着 / 值缺失"才算缺口，已经填好值的不报；`Save*` / `Preview*` 这类输出节点不算缺口。本次带了图附件时，图片类位置进 `suppliedByAttachment`（投放就能解决），不混进"要用户补" |
 | `comfy_fit_workflow` | comfy | allow | **把一份工作流要的模型与本机已有的对一遍**（用户建议 ①，2026-09-22）：输入 API 节点图，输出①图里点名的每个模型（`CheckpointLoaderSimple` / `LoraLoader` / `VAELoader` / `CLIPLoader` / ControlNet…，自定义加载器靠 `/object_info` 的枚举反推）、②本机最接近的等价物（**词根相似度** + 体积）、③要改哪几个 `overrides` 键。**只报不改**：`suggestedOverrides` 要真生效得由模型写进 `comfy_submit(overrides=…)`。三档结论：`exact`（同名，不用改）/ `substitute`（有更像的，**先问用户**——相似度高**不代表架构兼容**）/ `missing`（本机没有，**不许编文件名**，去 `civitai_search` 查 + `ask_user_question` 让用户选装 / 换工作流 / 放弃）。清单来源优先 `/object_info` 的枚举（"ComfyUI 能加载什么"的权威答案），拿不到才扫盘，`inventorySource` 会说明是哪一档。**只读**：不装模型、不改图、不写文件 |
@@ -591,12 +591,13 @@ SSE 新增事件：`reasoning.delta`、`tool.requested`、`tool.started`、`tool
 1. **附件可发（M3）**：与工具无关，但适配器的 `transports` 仍是空集，图片附件依旧是"正确阻断"。
 2. **第三方 Skill 的 ZIP 导入 + 预览确认**（AIH-043/044）：现在装 skill 靠"拷进投放口"这一条路
    （ZIP 要用户自己解压后拷进去）。
-3. **内置 Anima / H3 Skills 正文**（AIH-041/042）：内置根 `<根>\skills\builtin` 里现在有九份
+3. **内置 Anima / H3 Skills 正文**（AIH-041/042）：内置根 `<根>\skills\builtin` 里现在有十份
    （**随项目分发**，只读、不可删）：`img2img-reference`（图生图三步）、`krea-2`（Krea 2 提示词 +
    ComfyUI 参数）、`comfy-workflow-audit`（工作流审核的判定与修法）、`comfy-workflow-guide`
    （工作流第一站：判断用途 / 复制副本再改）、`inpaint-composite`（图像编辑：底图 + 遮罩 +
    两阶段贴人）、`lora-training`、`moss-image`、`workflow-recipe`（换新模型：学配方 / 绑模型 /
-   四档结论）、`card-writer`（角色卡 / 画风卡：双版本、600+ / 100~200 token、补版与优化）；
+   四档结论）、`card-writer`（角色卡 / 画风卡：一版自然语言正文、600+ / 100~200 token、优化）、
+   `r2i-prompt`（参考图 + 角色卡 + 画风卡 → 一整段 r2i 提示词；工作台 `+` / `@` 插卡）；
    用户自己的 16 个（Anima / H3 / Music3 等）仍在投放口里 ——
    **别人的 skill 正文能不能随项目分发要单独确认许可**，所以它们刻意不进 `builtin`。
    `krea-2` 是唯一一份"官方 skill 落地"的样板：正文按 Krea 官方材料适配本机 ComfyUI 路线，

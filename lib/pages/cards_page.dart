@@ -37,8 +37,8 @@ enum CardKind {
   };
 
   String get searchHint => switch (this) {
-    CardKind.character => '搜角色名 / 两版提示词',
-    CardKind.style => '搜画风名 / 两版提示词',
+    CardKind.character => '搜角色名 / 正面提示词',
+    CardKind.style => '搜画风名 / 正面提示词',
   };
 
   String get emptyTitle => switch (this) {
@@ -48,20 +48,20 @@ enum CardKind {
 
   String get emptySubtitle => switch (this) {
     CardKind.character =>
-      '一张角色卡 = 名称 + Danbooru tag 版 + 自然语言版 + 负面提示词，\n'
+      '一张角色卡 = 名称 + 一版自然语言正面提示词 + 负面提示词，\n'
           '还可以挂几张产物当示例。角色卡管"画的是谁"。',
     CardKind.style =>
-      '一张画风卡 = 名称 + Danbooru tag 版 + 自然语言版 + 负面提示词，\n'
+      '一张画风卡 = 名称 + 一版自然语言正面提示词 + 负面提示词，\n'
           '还可以挂几张产物当示例。画风卡管"画成什么样"。',
   };
 
   String get editorHint => switch (this) {
     CardKind.character =>
-      '角色卡交给 AI 保存时是合并：只覆盖这次给了值的字段。\n'
-          '自然语言版写到 600+ token（英文约 450~600 词）、从头到脚写全；tag 版用 Danbooru 规范写法。',
+      '正面提示词写成一整段自然语言（600+ token、英文约 450~600 词），从头到脚写全。\n'
+          '要 Danbooru tag 版时让 AI 当场另写一版给你看 —— 卡片里只存自然语言。',
     CardKind.style =>
       '画风卡与角色卡同等地位，只写"画成什么样"（画师 / 媒介 / 上色 / 光 / 质感）。\n'
-          '自然语言版 100~200 token（英文约 75~150 词）；tag 版写同一画风的 tag 栈。',
+          '正面提示词 100~200 token（英文约 75~150 词）；要 tag 版时让 AI 当场另写。',
   };
 
   /// 图标（空状态等地方用）。
@@ -290,7 +290,7 @@ class CardsViewState extends State<CardsView> {
         title: _query.isEmpty ? _kind.emptyTitle : '没有匹配的${_kind.label}',
         subtitle: _query.isEmpty
             ? '${_kind.emptySubtitle}\n也可以让 AI 写完自己存 —— 你在这一页能看到它存了什么。'
-            : '换个词再搜（名字 / 两版提示词里的词）。',
+            : '换个词再搜（名字 / 正面提示词里的词）。',
       );
     }
     return AdaptiveColumnList(
@@ -418,7 +418,7 @@ class _CardsPageState extends State<CardsPage> {
   }
 }
 
-/// 一张卡（列表里的一项）：名称、两版提示词、示例产物。
+/// 一张卡（列表里的一项）：名称、正面提示词、示例产物。
 class _CardTile extends StatelessWidget {
   final CharacterCard card;
   final CardKind kind;
@@ -495,17 +495,9 @@ class _CardTile extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               _VersionBlock(
-                label: 'Danbooru tag 版',
-                value: card.tagPrompt,
-                emptyText: '还没有 Danbooru tag 版',
-                maxLines: 4,
-                monospace: true,
-              ),
-              const SizedBox(height: 6),
-              _VersionBlock(
-                label: '自然语言版',
+                label: '正面提示词',
                 value: card.prompt,
-                emptyText: '还没有自然语言版',
+                emptyText: '还没有正面提示词',
                 maxLines: kind == CardKind.character ? 8 : 5,
               ),
               if (card.negative != null) ...[
@@ -519,7 +511,7 @@ class _CardTile extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
-              if (!card.hasBothVersions) ...[
+              if (!card.hasPrompt) ...[
                 const SizedBox(height: 8),
                 Row(
                   children: [
@@ -531,7 +523,7 @@ class _CardTile extends StatelessWidget {
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        '两版还没写全 —— 可以让 AI 按已有那版补出另一版，再继续优化。',
+                        '正面提示词还空着 —— 可以让 AI 写一版，或点这张卡自己补。',
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: theme.colorScheme.tertiary,
                         ),
@@ -609,14 +601,12 @@ class _VersionBlock extends StatelessWidget {
   final String? value;
   final String emptyText;
   final int maxLines;
-  final bool monospace;
 
   const _VersionBlock({
     required this.label,
     required this.value,
     required this.emptyText,
     required this.maxLines,
-    this.monospace = false,
   });
 
   @override
@@ -643,9 +633,7 @@ class _VersionBlock extends StatelessWidget {
         const SizedBox(height: 1),
         Text(
           value!,
-          style: theme.textTheme.bodySmall?.copyWith(
-            fontFamily: monospace ? 'monospace' : null,
-          ),
+          style: theme.textTheme.bodySmall,
           maxLines: maxLines,
           overflow: TextOverflow.ellipsis,
         ),
@@ -742,7 +730,7 @@ class _ExampleThumb extends StatelessWidget {
   }
 }
 
-/// 新建 / 编辑一张卡：名称 + Danbooru tag 版 + 自然语言版 + 负面提示词。
+/// 新建 / 编辑一张卡：名称 + 正面提示词（自然语言）+ 负面提示词。
 ///
 /// 字段与后端 `CardInput` 一一对应；**保存是全量替换**（后端 `PUT` 语义），
 /// 所以在这里清空一个字段就真的清掉它。
@@ -768,7 +756,6 @@ class _CardEditorDialogState extends State<_CardEditorDialog> {
     final card = widget.card;
     _c = {
       'name': TextEditingController(text: card?.name ?? ''),
-      'tagPrompt': TextEditingController(text: card?.tagPrompt ?? ''),
       'prompt': TextEditingController(text: card?.prompt ?? ''),
       'negative': TextEditingController(text: card?.negative ?? ''),
     };
@@ -800,7 +787,6 @@ class _CardEditorDialogState extends State<_CardEditorDialog> {
     // 全量替换：空字段发 null（后端落 NULL），用户在弹窗里清空就真的清掉
     final payload = <String, dynamic>{
       'name': name,
-      'tagPrompt': _text('tagPrompt'),
       'prompt': _text('prompt'),
       'negative': _text('negative'),
     };
@@ -834,13 +820,11 @@ class _CardEditorDialogState extends State<_CardEditorDialog> {
     String label, {
     String? hint,
     int maxLines = 1,
-    bool monospace = false,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 10),
     child: TextField(
       controller: _c[key],
       maxLines: maxLines,
-      style: monospace ? const TextStyle(fontFamily: 'monospace') : null,
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
@@ -871,17 +855,8 @@ class _CardEditorDialogState extends State<_CardEditorDialog> {
                     : '用户叫的画风名，例如 赛博国风 / semi-thick_anime',
               ),
               _field(
-                'tagPrompt',
-                'Danbooru tag 版',
-                hint: kind == CardKind.character
-                    ? '这个角色的规范 tag 栈，例如 shinku_(nte), red_eyes, silver_hair'
-                    : '这套画风的 tag 栈，例如 anime_coloring, thin_lines, blue_theme, bloom',
-                maxLines: 5,
-                monospace: true,
-              ),
-              _field(
                 'prompt',
-                '自然语言版',
+                '正面提示词',
                 hint: kind == CardKind.character
                     ? '从头到脚写全：脸、眼睛、头发、皮肤、身体、服装分层、鞋袜、饰品、体态……600+ token'
                     : '一段话：媒介与笔触 → 上色 → 色调 → 光 → 阴影 → 辉光 → 散景/颗粒 → 完成度（100~200 token）',
@@ -889,7 +864,7 @@ class _CardEditorDialogState extends State<_CardEditorDialog> {
               ),
               _field(
                 'negative',
-                '负面提示词（两版共用）',
+                '负面提示词',
                 hint: kind == CardKind.character
                     ? '这个角色常踩的那些词'
                     : '会破坏这套画风的词（写实、3d、照片、脏色……）',

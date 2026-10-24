@@ -177,6 +177,24 @@ MockClient _fakeBackend({
           'parts': <Object>[],
         },
       ];
+    } else if (path == '/api/ai/character-cards') {
+      body = [
+        {
+          'id': 1,
+          'name': '凛',
+          'prompt': 'Rin, black hair in a low ponytail, grey eyes, dry skin.',
+          'examples': <Object>[],
+        },
+      ];
+    } else if (path == '/api/ai/style-cards') {
+      body = [
+        {
+          'id': 2,
+          'name': '物理感动画',
+          'prompt': 'Physically based anime rendering: three-dimensional matte shading.',
+          'examples': <Object>[],
+        },
+      ];
     } else if (path == '/api/ai/tools/policy') {
       // 权限档（用户建议 ⑤）的真源：界面读它决定那枚按钮显示哪一档
       body = {'permissionMode': permissionMode};
@@ -563,7 +581,7 @@ void main() {
         reason: '两行排版已删除：窄了该压文字，不该折成两行');
     final input = tester.getRect(find.byType(TextField).first);
     final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
-    final attach = tester.getRect(find.byTooltip('添加附件'));
+    final attach = tester.getRect(find.byTooltip('添加附件 / 插入卡片（@）'));
     expect(send.right, closeTo(input.right, 1), reason: '发送按钮贴右（和输入框右边缘对齐）');
     expect((send.center.dy - attach.center.dy).abs(), lessThan(6),
         reason: '发送必须和操作控件同一排');
@@ -583,7 +601,7 @@ void main() {
       reason: 'tooltip 必须写出这个模型来自哪条 Provider',
     );
     final controls = <String, Finder>{
-      '添加附件': find.byTooltip('添加附件'),
+      '添加附件 / 插入卡片（@）': find.byTooltip('添加附件 / 插入卡片（@）'),
       '权限档': find.byTooltip(
           '当前：${AiToolPolicy.modeFullLabel} —— AI 调用工具不会等你批准'
           '（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
@@ -613,7 +631,7 @@ void main() {
     // 操作控件**从左边起排**（用户 2026-09-24：除了发送按钮和 token 用量，其他都靠左）：
     // 老写法整排 `Wrap(alignment: end)`，附件左边空着一大片，所有控件都被甩到右边。
     // 容差 5px 是 `IconButton` 自己的内缩（48 的命中区里那 40 宽的可见盒居中，左缩 4）。
-    expect(tester.getRect(find.byTooltip('添加附件')).left, closeTo(input.left, 5),
+    expect(tester.getRect(find.byTooltip('添加附件 / 插入卡片（@）')).left, closeTo(input.left, 5),
         reason: '第一枚操作控件（添加附件）必须贴在输入区左边缘，不能整排靠右');
     expect(find.byTooltip('不支持思考 —— 该模型未声明推理能力，请到「设置 → AI 模型」声明'),
         findsWidgets);
@@ -648,7 +666,7 @@ void main() {
         reason: '两行排版已删除：窄了该压文字，不该折成两行');
     final input = tester.getRect(find.byType(TextField).first);
     final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
-    final attach = tester.getRect(find.byTooltip('添加附件'));
+    final attach = tester.getRect(find.byTooltip('添加附件 / 插入卡片（@）'));
     expect(send.right, closeTo(input.right, 1), reason: '发送按钮贴右（和输入框右边缘对齐）');
 
     // 附件和发送**同一排**（发送是个固定宽的按钮，不该独占一行），
@@ -663,7 +681,7 @@ void main() {
     // ★ 每一枚操作控件都要**够大、点得准**（用户 2026-10-11："按钮太小了比较难点"）。
     // 44 是 Windows / Material 都认的最小可点尺寸。
     final controls320 = <String, Finder>{
-      '添加附件': find.byTooltip('添加附件'),
+      '添加附件 / 插入卡片（@）': find.byTooltip('添加附件 / 插入卡片（@）'),
       '权限档': find.byTooltip(
           '当前：${AiToolPolicy.modeFullLabel} —— AI 调用工具不会等你批准'
           '（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
@@ -752,7 +770,7 @@ void main() {
 
     expect(find.byKey(const Key('ai-composer-two-row')), findsNothing);
     // 一行时发送按钮和"添加附件"在同一水平带上（换行后发送会落到操作组下面）
-    final attach = tester.getRect(find.byTooltip('添加附件'));
+    final attach = tester.getRect(find.byTooltip('添加附件 / 插入卡片（@）'));
     final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
     expect((send.center.dy - attach.center.dy).abs(), lessThan(8),
         reason: '宽窗口下发送按钮仍和操作组同一行');
@@ -1164,5 +1182,46 @@ void main() {
 
     expect(find.textContaining('↑'), findsNothing, reason: '没有 usage 就不该编一个出来');
     expect(find.text('你好，我是假模型'), findsOneWidget);
+  });
+
+  testWidgets('@ 卡片：插入角色卡 / 画风卡后，发出去的正文带两个槽位', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1100);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await buildAiHomePage());
+    await tester.pumpAndSettle();
+
+    // 入口在底行最左的 "+" 菜单里（4 枚控件 + 发送已经占满 320~440 的宽度）
+    Future<void> openCardPicker() async {
+      await tester.tap(find.byTooltip('添加附件 / 插入卡片（@）'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('角色卡 / 画风卡…'));
+      await tester.pumpAndSettle();
+    }
+
+    await openCardPicker();
+    expect(find.text('凛'), findsOneWidget);
+    await tester.tap(find.text('凛'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
+
+    await openCardPicker();
+    await tester.tap(find.text('画风卡'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('物理感动画'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('画风卡 · 物理感动画'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).first, '保留构图');
+    await tester.tap(find.widgetWithText(FilledButton, '发送'));
+    await tester.pumpAndSettle();
+
+    final sent = lastRunBody!['text'] as String;
+    expect(sent, startsWith('[STYLE SPEC]\n物理感动画\n'));
+    expect(sent, contains('[CHARACTER CARD]\n凛\n'));
+    expect(sent, endsWith('保留构图'));
+    // 发出去之后卡片清空，下一轮不会重复带上一轮的卡
+    expect(find.textContaining('角色卡 · 凛'), findsNothing);
   });
 }

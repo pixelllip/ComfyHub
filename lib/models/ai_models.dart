@@ -1425,24 +1425,21 @@ class AiMemory {
 
 /// 一张卡（角色卡 / 画风卡）的公共形状。
 ///
-/// 每张卡都有**两版正面提示词**（用户 2026-10-21 的要求）：
-///  * [tagPrompt]：Danbooru tag 版（逗号分隔，给 tag 模型直接照抄）；
-///  * [prompt]：自然语言版（整段文本；角色 600+ token 全身上下，画风 100~200 token）。
+/// 每张卡只有**一版正面提示词** [prompt]：整段自然语言。
+/// 2026-10-24 用户口径：**不再保留 Danbooru tag 版** —— 一句话描述比 tag 栈更耐改
+/// （换底模 / 换 tag 体系都不用重写），要 tag 版时让 AI 按用户要求当场另翻一版即可。
+/// 老库里存着的 tag 版由后端迁移转成自然语言灌进 [prompt]（已有正文的卡不动）。
 ///
 /// [examples] 是这张卡的**示例产物**（画廊里的 mediaId）：
 /// 界面上画成缩略图，AI 那边用 `#id「标题」` 的形式看到。
-/// 两版可以只写一版（AI 能补另一版），但都空着时**不算写完**。
 class CharacterCard {
   final int id;
   final String name;
 
-  /// Danbooru tag 版（整段、逗号分隔）。
-  final String? tagPrompt;
-
-  /// 自然语言版（整段文本）。
+  /// 正面提示词（整段自然语言）。
   final String? prompt;
 
-  /// 负面提示词（两版共用）。
+  /// 负面提示词（整段文本）。
   final String? negative;
 
   /// 示例产物（按加入顺序）。
@@ -1453,7 +1450,6 @@ class CharacterCard {
   const CharacterCard({
     required this.id,
     required this.name,
-    this.tagPrompt,
     this.prompt,
     this.negative,
     this.examples = const [],
@@ -1468,7 +1464,6 @@ class CharacterCard {
   factory CharacterCard.fromJson(Map<String, dynamic> json) => CharacterCard(
     id: (json['id'] as num?)?.toInt() ?? 0,
     name: (json['name'] ?? '').toString(),
-    tagPrompt: _text(json['tagPrompt']),
     prompt: _text(json['prompt']),
     negative: _text(json['negative']),
     examples: ((json['examples'] as List?) ?? const [])
@@ -1478,8 +1473,8 @@ class CharacterCard {
     updatedAt: _text(json['updatedAt']),
   );
 
-  /// 两版都写完了才算完整（前端只做提示，不阻止保存）。
-  bool get hasBothVersions => tagPrompt != null && prompt != null;
+  /// 正文写完了才算完整（前端只做提示，不阻止保存）。
+  bool get hasPrompt => prompt != null;
 }
 
 /// 画风卡：字段与 [CharacterCard] 逐项同形，只是语义是"画成什么样"。
@@ -1490,7 +1485,6 @@ class StyleCard extends CharacterCard {
   const StyleCard({
     required super.id,
     required super.name,
-    super.tagPrompt,
     super.prompt,
     super.negative,
     super.examples,
@@ -1502,7 +1496,6 @@ class StyleCard extends CharacterCard {
     return StyleCard(
       id: card.id,
       name: card.name,
-      tagPrompt: card.tagPrompt,
       prompt: card.prompt,
       negative: card.negative,
       examples: card.examples,

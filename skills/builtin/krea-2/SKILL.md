@@ -284,8 +284,9 @@ ComfyUI/models/loras/            krea2_style_reference.safetensors
    读那段 system prompt，**你自己按它扩写**用户的需求（保真优先、不改主体 / 动作 / 颜色 /
    空间关系、不堆质量词）；
 3. `comfy_submit(promptId=…, positivePrompt="<你写好的终稿>", overrides={…参考图、seed 等})`。
-   后端会把终稿写进正面 `CLIPTextEncode.text`，并断开原来接着的那一路
-   （含 `TextGenerate` / 开关 / `PreviewAny`）；节点还在图里，但不再被执行。
+   后端会把终稿写进正面 `CLIPTextEncode.text`，并把 `TextGenerate` 这一支
+   **从提交图里摘掉**（含开关 / `PreviewAny` 与只喂它的上游）—— 节点不再存在，
+   既不校验也不执行（只断线不够：ComfyUI 校验的是整张 prompt）。
 4. 返回 `positivePromptApplied` / `textGenerateBypassed` 是证据；没有就如实说没改成。
 
 > 样例（`comfyhub_i2i_krea2.json`）里是 `45 → 43 → 115 → 116 → 108`；

@@ -4,12 +4,14 @@
 //!  * 角色卡管"画的是谁"—— 一套人物的外观 / 服饰基线；
 //!  * 画风卡管"画成什么样"—— 画师 / 媒介 / 上色 / 光线 / 质感。
 //!
-//! 每张卡都有**两版正面提示词**，它们不是两种画法，而是同一件事的两种写法：
-//!  * `tag_prompt`：Danbooru tag 版（逗号分隔，给 tag 模型直接照抄）；
-//!  * `prompt`：自然语言版（整段文本，给自然语言模型 / 人读）。
+//! 每张卡只有**一版正面提示词** `prompt`：整段自然语言，给自然语言模型 / 人读。
 //!
-//! 只写一版是合法的（AI 可以按另一版补出来）；但两版都空时工具会**明确提醒**，
-//! 不许假装卡已经写好了。两版都由 `save_*` 按字段合并保存，互不覆盖。
+//! 2026-10-24 用户口径：**不再保留 Danbooru tag 版**。卡片里的一句话描述比 tag 栈
+//! 更耐改（换底模、换 tag 体系都不用重写），真要 tag 版时按用户要求**当场再翻一版**
+//! 就行。老库里 `tag_prompt` 那一列的内容由 `infra::db` 的迁移**转成自然语言后灌进
+//! `prompt`**（已有自然语言版的卡一个字都不动），随后那一列再没人读。
+//!
+//! 正面提示词为空时工具会**明确提醒**，不许假装卡已经写好了。
 //!
 //! 一张卡还可以挂若干条**示例产物**（`character_card_examples` /
 //! `style_card_examples`）。它们是"这套设定 / 这个画风长什么样"的样本：
@@ -131,7 +133,7 @@ impl CardKind {
     }
 }
 
-const BASE_COLUMNS: &str = "id, name, prompt, tag_prompt, negative, created_at, updated_at";
+const BASE_COLUMNS: &str = "id, name, prompt, negative, created_at, updated_at";
 
 /// 一张卡（`CharacterCardDto` / `StyleCardDto` 的公共形状）。
 ///
@@ -142,13 +144,10 @@ const BASE_COLUMNS: &str = "id, name, prompt, tag_prompt, negative, created_at, 
 pub struct CardDto {
     pub id: i64,
     pub name: String,
-    /// Danbooru tag 版（逗号分隔）。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tag_prompt: Option<String>,
-    /// 自然语言版（整段文本）。
+    /// 正面提示词（整段自然语言）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
-    /// 负面提示词（两版共用）。
+    /// 负面提示词（整段文本）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub negative: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -202,7 +201,6 @@ impl CardExampleDto {
 #[serde(rename_all = "camelCase", default)]
 pub struct CardInput {
     pub name: String,
-    pub tag_prompt: Option<String>,
     pub prompt: Option<String>,
     pub negative: Option<String>,
 }
@@ -244,7 +242,6 @@ fn row_to_card(row: &Row<'_>) -> rusqlite::Result<CardDto> {
     Ok(CardDto {
         id: row.get("id")?,
         name: row.get::<_, Option<String>>("name")?.unwrap_or_default(),
-        tag_prompt: row.get("tag_prompt")?,
         prompt: row.get("prompt")?,
         negative: row.get("negative")?,
         created_at: iso_time(created.as_deref()),
@@ -468,7 +465,7 @@ pub fn list(
             let like = format!("%{q}%");
             let sql = format!(
                 "SELECT {BASE_COLUMNS} FROM {table} \
-                  WHERE (name LIKE ?1 OR normalized LIKE ?1 OR tag_prompt LIKE ?1 \
+                  WHERE (name LIKE ?1 OR normalized LIKE ?1 \
                          OR prompt LIKE ?1 OR negative LIKE ?1) \
                   ORDER BY updated_at DESC, id DESC LIMIT ?2",
                 table = kind.table()
@@ -542,11 +539,10 @@ fn validate(kind: CardKind, input: &CardInput) -> Result<String, WriteError> {
     Ok(name.to_string())
 }
 
-/// 三个文本字段的清洗（超长报错，空串落 NULL）。
-fn clean_text(input: &CardInput) -> Result<(Option<String>, Option<String>, Option<String>), WriteError> {
+/// 两个文本字段的清洗（超长报错，空串落 NULL）。
+fn clean_text(input: &CardInput) -> Result<(Option<String>, Option<String>), WriteError> {
     Ok((
-        require_fits(input.tag_prompt.as_ref(), MAX_PROMPT_CHARS, "Danbooru tag 版")?,
-        require_fits(input.prompt.as_ref(), MAX_PROMPT_CHARS, "自然语言版")?,
+        require_fits(input.prompt.as_ref(), MAX_PROMPT_CHARS, "正面提示词")?,
         require_fits(input.negative.as_ref(), MAX_PROMPT_CHARS, "负面提示词")?,
     ))
 }
@@ -564,14 +560,14 @@ fn unique_error(kind: CardKind, err: rusqlite::Error) -> WriteError {
 
 pub fn create(conn: &Connection, kind: CardKind, input: &CardInput) -> Result<i64, WriteError> {
     let name = validate(kind, input)?;
-    let (tag_prompt, prompt, negative) = clean_text(input)?;
+    let (prompt, negative) = clean_text(input)?;
     if let Err(err) = conn.execute(
         &format!(
-            "INSERT INTO {table} (name, normalized, tag_prompt, prompt, negative) \
-             VALUES (?1,?2,?3,?4,?5)",
+            "INSERT INTO {table} (name, normalized, prompt, negative) \
+             VALUES (?1,?2,?3,?4)",
             table = kind.table()
         ),
-        params![name, normalize(&name), tag_prompt, prompt, negative],
+        params![name, normalize(&name), prompt, negative],
     ) {
         return Err(unique_error(kind, err));
     }
@@ -586,14 +582,14 @@ pub fn update(
     input: &CardInput,
 ) -> Result<bool, WriteError> {
     let name = validate(kind, input)?;
-    let (tag_prompt, prompt, negative) = clean_text(input)?;
+    let (prompt, negative) = clean_text(input)?;
     let changed = match conn.execute(
         &format!(
-            "UPDATE {table} SET name = ?1, normalized = ?2, tag_prompt = ?3, prompt = ?4, negative = ?5 \
-              WHERE id = ?6",
+            "UPDATE {table} SET name = ?1, normalized = ?2, prompt = ?3, negative = ?4 \
+              WHERE id = ?5",
             table = kind.table()
         ),
-        params![name, normalize(&name), tag_prompt, prompt, negative, id],
+        params![name, normalize(&name), prompt, negative, id],
     ) {
         Ok(changed) => changed,
         Err(err) => return Err(unique_error(kind, err)),
@@ -610,11 +606,11 @@ pub fn delete(conn: &Connection, kind: CardKind, id: i64) -> Result<bool, WriteE
 
 /// 合并（**AI 保存卡片时用这个**，不是全量替换）。
 ///
-/// 模型一次只会说一件事（"这个角色的自然语言版是…"），全量替换会把它上一轮
-/// 存下来的 tag 版一起抹掉。所以：`incoming` 里为空 / 没给的字段一律保留
+/// 模型一次只会说一件事（"这个角色的正面提示词是…"），全量替换会把它上一轮
+/// 存下来的负面提示词一起抹掉。所以：`incoming` 里为空 / 没给的字段一律保留
 /// `existing` 的值。
 ///
-/// ⚠ 每个正面字段都是**整段替换**（给了就整段覆盖），**不是追加** —— 追加会把
+/// ⚠ 正面字段是**整段替换**（给了就整段覆盖），**不是追加** —— 追加会把
 /// 两段风格不同的提示词粘在一起，读起来像一条、其实是两条。
 pub fn merge(existing: Option<&CardDto>, incoming: CardInput) -> CardInput {
     let Some(existing) = existing else { return incoming };
@@ -629,7 +625,6 @@ pub fn merge(existing: Option<&CardDto>, incoming: CardInput) -> CardInput {
     };
     CardInput {
         name,
-        tag_prompt: pick(incoming.tag_prompt, existing.tag_prompt.clone()),
         prompt: pick(incoming.prompt, existing.prompt.clone()),
         negative: pick(incoming.negative, existing.negative.clone()),
     }
@@ -679,7 +674,7 @@ fn examples_line(card: &CardDto) -> String {
     format!("  示例产物（{}）: {names}\n", card.examples.len())
 }
 
-/// 卡片在工具结果里的正文形状：模型要能一眼看出"卡里已经有什么、缺哪一版"。
+/// 卡片在工具结果里的正文形状：模型要能一眼看出"卡里已经有什么、还缺什么"。
 pub fn render_card(kind: CardKind, card: &CardDto) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -688,15 +683,11 @@ pub fn render_card(kind: CardKind, card: &CardDto) -> String {
         card.name,
         kind.label()
     ));
-    match card.tag_prompt.as_deref() {
-        Some(tags) => out.push_str(&format!("  Danbooru tag 版: {}\n", clip(tags, 3000))),
-        None => out.push_str("  Danbooru tag 版:（空）\n"),
-    }
     match card.prompt.as_deref() {
-        // 角色卡的自然语言版要求 600+ token（英文常见 3000~4000 字符）——
+        // 角色卡的正面提示词要求 600+ token（英文常见 3000~4000 字符）——
         // 这里给到 7000 才不会被截尾，否则模型"优化"时会照着截断版保存、悄悄丢细节。
-        Some(prompt) => out.push_str(&format!("  自然语言版: {}\n", clip(prompt, 7000))),
-        None => out.push_str("  自然语言版:（空）\n"),
+        Some(prompt) => out.push_str(&format!("  正面提示词: {}\n", clip(prompt, 7000))),
+        None => out.push_str("  正面提示词:（空）\n"),
     }
     if let Some(negative) = card.negative.as_deref() {
         out.push_str(&format!("  负面提示词: {}\n", clip(negative, 600)));
@@ -714,9 +705,6 @@ pub fn card_json(card: &CardDto) -> Value {
     let mut put = |key: &str, value: Value| {
         out.insert(key.to_string(), value);
     };
-    if let Some(v) = card.tag_prompt.as_ref() {
-        put("tagPrompt", Value::String(v.clone()));
-    }
     if let Some(v) = card.prompt.as_ref() {
         put("prompt", Value::String(v.clone()));
     }
@@ -801,15 +789,8 @@ fn arg_media_ids(
     }
 }
 
-fn missing_versions(card: &CardDto) -> Vec<&'static str> {
-    let mut out = Vec::new();
-    if card.tag_prompt.is_none() {
-        out.push("Danbooru tag 版");
-    }
-    if card.prompt.is_none() {
-        out.push("自然语言版");
-    }
-    out
+fn missing_prompt(card: &CardDto) -> bool {
+    card.prompt.is_none()
 }
 
 /// `search_character_cards` / `search_style_cards`：查本机存下来的卡片。
@@ -828,12 +809,13 @@ pub fn tool_search(
     if cards.is_empty() {
         let next = match kind {
             CardKind::Character => {
-                "`danbooru_lookup(query=\"角色名\")` 核对写法与同现 tag，再把两版提示词用 \
-                 `save_character_card` 存成角色卡；**不要**凭印象编 tag。"
+                "`danbooru_lookup(query=\"角色名\")` 核对写法与同现 tag（只作参考），\
+                 再把角色写成**一版自然语言正面提示词**，用 `save_character_card` 存成角色卡；\
+                 **不要**把 tag 栈当正文存进去。"
             }
             CardKind::Style => {
-                "先 `search_prompts` 看库里有没有现成的画风提示词；再按用户要的方向写一版 \
-                 Danbooru tag + 一版自然语言（100~200 token），用 `save_style_card` 存成画风卡。\
+                "先 `search_prompts` 看库里有没有现成的画风提示词；再按用户要的方向写\
+                 **一版 100~200 token 的自然语言画风描述**，用 `save_style_card` 存成画风卡。\
                  画风卡管「画成什么样」，不要把它写成人物设定。"
             }
         };
@@ -861,7 +843,7 @@ pub fn tool_search(
 /// `save_character_card` / `save_style_card`。
 ///
 /// 同名 = 同一张卡（合并保存：这次没给的字段保持原样）。
-/// 只给名字也能存（先占位），但正文会提醒"缺哪一版"。
+/// 只给名字也能存（先占位），但正文会提醒"正面提示词还空着"。
 pub fn tool_save(
     state: &AppState,
     kind: CardKind,
@@ -872,7 +854,6 @@ pub fn tool_save(
     })?;
     let input = CardInput {
         name: name.clone(),
-        tag_prompt: arg_str(arguments, "tagPrompt"),
         prompt: arg_str(arguments, "prompt"),
         negative: arg_str(arguments, "negative"),
     };
@@ -902,24 +883,17 @@ pub fn tool_save(
         if created { "新建" } else { "合并更新" }
     );
     text.push_str(&render_card(kind, &card));
-    let missing = missing_versions(&card);
-    if !missing.is_empty() {
+    if missing_prompt(&card) {
         let length_rule = match kind {
             CardKind::Character => {
-                "角色卡的自然语言版要写到 600+ token、覆盖全身上下每一个细节"
+                "角色卡的正面提示词要写到 600+ token、覆盖全身上下每一个细节"
             }
-            CardKind::Style => "画风卡的自然语言版控制在 100~200 token、一段话写完画风",
-        };
-        let action = if missing.len() == 2 {
-            "两版都还空着：先按用户给的信息把两版都写出来"
-        } else {
-            "先按已有那版补出缺的那版"
+            CardKind::Style => "画风卡的正面提示词控制在 100~200 token、一段话写完画风",
         };
         text.push_str(&format!(
-            "\n⚠ 这张卡还缺：{}。用户要的是**两版都有**（Danbooru tag 版 + 自然语言版）—— \
-             {action}，再带完整字段保存一次；补的时候别改掉已有版本。\
-             {length_rule}。规则见 skill `card-writer`。",
-            missing.join(" / ")
+            "\n⚠ 这张卡还空着**正面提示词**。写一版**自然语言**正文再带完整字段保存一次；\
+             只写 tag 栈不算数（用户要 tag 版时当场另翻一版给他看，不要存进卡里）。\
+             {length_rule}。规则见 skill `card-writer`。"
         ));
     }
     Ok(crate::tools::tools::ToolOutcome::new(text, card_json(&card)))

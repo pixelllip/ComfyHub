@@ -9,6 +9,7 @@ import '../core/pairing_token.dart';
 import '../core/provider_store.dart';
 import '../core/settings_store.dart';
 import '../models/ai_models.dart';
+import '../state/ai_workspace_store.dart';
 import 'ai_tools_settings_page.dart';
 
 /// AI 模型设置（AIH-006 / AIH-007 / AIH-010 / AIH-011 / AIH-012 / AIH-013）。
@@ -1501,6 +1502,20 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       // 手机走本机库（一条网络请求都不打）；桌面走后端库。**同一份 toJson()**，两端不翻译。
       await widget.providers.saveModels(widget.provider.id, _models);
       _dirty = false; // 已经落库，之后父级重建可以直接覆盖本地副本
+      // 工作台手里那份模型目录只在"打开模型选择器 / 重新进页面"时才重读；用户在这里
+      // 改完思考强度 / 能力声明、保存后直接切回工作台，看到的还是旧声明
+      // （用户 bug 2026-10-24："在 AI 模型设置里手动指定过模型的思考强度，但保存之后
+      // 并没有在 AI 工作台应用"）。保存成功就当场把工作台那份刷掉，别等他再点一次选择器。
+      if (mounted) {
+        try {
+          final workspace = Provider.of<AiWorkspaceStore>(context, listen: false);
+          await workspace.refreshModels();
+          await workspace.refreshProviders();
+        } catch (_) {
+          // 设置页也可能在没有工作台 store 的环境里单独打开（测试 / 独立入口）；
+          // 刷新失败不该把"保存成功"显示成失败。
+        }
+      }
       await widget.onChanged('模型目录已保存（${_models.length} 个）。');
     } catch (e) {
       _toast('保存模型目录失败：$e', error: true);

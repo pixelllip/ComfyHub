@@ -23,11 +23,14 @@ fn 角色卡门面查的是角色卡而不是画风卡() {
     let state = state();
     let saved = tool_save(
         &state,
-        &serde_json::json!({ "name": "shinku", "tagPrompt": "shinku_(nte), red_eyes" }),
+        &serde_json::json!({ "name": "shinku", "prompt": "A girl with red eyes and silver hair." }),
     )
     .unwrap();
     assert_eq!(saved.payload["name"], "shinku");
-    assert_eq!(saved.payload["tagPrompt"], "shinku_(nte), red_eyes");
+    assert_eq!(
+        saved.payload["prompt"],
+        "A girl with red eyes and silver hair."
+    );
 
     // 画风卡那一边没有这张卡
     let other = crate::library::style_cards::tool_search(&state, &serde_json::json!({}))
@@ -37,6 +40,10 @@ fn 角色卡门面查的是角色卡而不是画风卡() {
 
     let hit = tool_search(&state, &serde_json::json!({ "query": "shinku" })).unwrap();
     assert!(hit.content.contains("角色卡：命中 1 张"), "{}", hit.content);
-    assert!(hit.content.contains("Danbooru tag 版: shinku_(nte), red_eyes"), "{}", hit.content);
-    assert!(hit.content.contains("自然语言版:（空）"), "{}", hit.content);
+    assert!(
+        hit.content
+            .contains("正面提示词: A girl with red eyes and silver hair."),
+        "{}",
+        hit.content
+    );
 }

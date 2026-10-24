@@ -110,8 +110,10 @@ version: 1
    - 它是"把需求编译成 Layout JSON"→ 你写 JSON，字段照它给的模板；
    - 它是"风格扩写"→ 你按它的规则扩写，保留用户原意。
 3. `comfy_submit(promptId=…, positivePrompt="<最终稿>", overrides={…})`。
-   - 后端会把最终稿写进**正面** `CLIPTextEncode.text`，并断开原来接在那儿的那一路
-     （含 TextGenerate / 开关 / PreviewAny）。
+   - 后端会把最终稿写进**正面** `CLIPTextEncode.text`，并把 `TextGenerate` 这一支
+     **从这次提交的图里摘掉**（节点 + 指向它的显示节点 + 只喂它的上游）。
+     只断线不够：ComfyUI 校验的是整张 prompt，留在图里的 `TextGenerate` 仍会被查类名 /
+     动态下拉框（本机没装那个节点包就整份报错）。
    - 返回里 `positivePromptApplied` / `textGenerateBypassed` 是证据；没有就别声称改好了。
 4. 如果正面文本编码器本身是**字面量**（没有连线），也可以直接 `overrides={"<id>.text": …}`；
    `positivePrompt` 同样能用（它会重写那个控件）。
@@ -123,7 +125,7 @@ version: 1
 
 - ❌ 把用户原话直接丢给 `TextGenerate` 去扩写（慢、随机、经常把中文写成英文标签）。
 - ❌ 覆盖一个被连线覆盖的 `text`（后端会拒绝：值是连线数组）。
-- ❌ 删掉用户工作流里的节点后说"已经改好"——`positivePrompt` 只在这次提交的图上断线，
+- ❌ 删掉用户工作流里的节点后说"已经改好"——`positivePrompt` 只在这次提交的图上摘，
   用户的原文件不动；要永久改就存副本并明确告诉他。
 
 ## 3. 给用户看蓝图

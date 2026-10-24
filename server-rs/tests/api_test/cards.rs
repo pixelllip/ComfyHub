@@ -1,4 +1,4 @@
-//! 卡片库端点（角色卡 / 画风卡）：形状、双版本、示例产物、错误码。
+//! 卡片库端点（角色卡 / 画风卡）：形状、单版本正文、示例产物、错误码。
 //!
 //! 仓储细节在 `server-rs/src/library/cards/tests.rs`；这里盯 **HTTP 那一层**：
 //! 键名（前端按它解析）、`PUT` 的全量替换语义、`examples` 的 404/400。
@@ -6,7 +6,7 @@
 use super::common::*;
 
 #[tokio::test]
-async fn style_card_has_both_versions_and_examples_round_trip() {
+async fn style_card_has_one_prompt_and_examples_round_trip() {
     let state = state();
     let (status, card) = send_json(
         router_for(state.clone()),
@@ -14,7 +14,6 @@ async fn style_card_has_both_versions_and_examples_round_trip() {
         "/api/ai/style-cards",
         serde_json::json!({
             "name": "赛博国风",
-            "tagPrompt": "cyberpunk, chinese_style, blue_theme",
             "prompt": "A digital anime illustration painted semi-thick, low-chroma blue-gray field, luminous finish.",
             "negative": "photo, 3d"
         }),
@@ -23,9 +22,10 @@ async fn style_card_has_both_versions_and_examples_round_trip() {
     assert_eq!(status, StatusCode::CREATED, "{card}");
     assert_eq!(
         keys(&card),
-        vec!["createdAt", "examples", "id", "name", "negative", "prompt", "tagPrompt", "updatedAt"]
+        vec!["createdAt", "examples", "id", "name", "negative", "prompt", "updatedAt"],
+        "卡片只剩一版自然语言正文：不再有 tagPrompt 键"
     );
-    assert_eq!(card["tagPrompt"], "cyberpunk, chinese_style, blue_theme");
+    assert!(card["prompt"].as_str().unwrap().contains("semi-thick"));
     assert!(card["examples"].as_array().unwrap().is_empty());
 
     let id = card["id"].as_i64().unwrap();
@@ -66,7 +66,7 @@ async fn card_examples_reject_missing_media_and_missing_cards() {
         router_for(state.clone()),
         "POST",
         "/api/ai/character-cards",
-        serde_json::json!({ "name": "shinku", "tagPrompt": "shinku_(nte)" }),
+        serde_json::json!({ "name": "shinku", "prompt": "A girl with red eyes and silver hair." }),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);

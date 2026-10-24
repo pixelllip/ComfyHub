@@ -34,12 +34,10 @@ void main() {
   Map<String, dynamic> card({
     int id = 1,
     String name = 'shinku',
-    String tagPrompt = 'shinku_(nte), red_eyes',
     String promptText = 'A quiet girl with red eyes.',
   }) => {
     'id': id,
     'name': name,
-    'tagPrompt': tagPrompt,
     'prompt': promptText,
     'examples': <Object>[],
     'updatedAt': '2026-10-01T00:00:00Z',
@@ -123,7 +121,6 @@ void main() {
               card(
                 id: 2,
                 name: '赛博国风',
-                tagPrompt: 'cyberpunk, chinese_style',
                 promptText: 'semi-thick line work',
               ),
             ]
