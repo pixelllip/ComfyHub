@@ -36,6 +36,12 @@ add_definitions(-DUNICODE -D_UNICODE)
 # 否则在 936/GBK 代码页下会报 C4819/C2001（而且 /WX 会把警告升级成错误）。
 if(MSVC)
   add_compile_options("/utf-8")
+  # C++/WinRT 在 /std:c++17 下会 include <experimental/coroutine>，而 VS 17.14 /
+  # MSVC 14.51（v18）把它的弃用升级成了 C2338 静态断言。webview_all_windows 1.4.5
+  # 仍然走这条路（它自己的 CMakeLists 没有定义这个宏），所以逃生口还得留着 ——
+  # 这是微软官方给的宏，只压警告、不改运行时行为。
+  # 上游换到 C++20 <coroutine> 后删掉；升级插件时先重跑关窗回归（AGENTS §9.1）。
+  add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 endif()
 
 # Compilation settings that should be applied to most targets.

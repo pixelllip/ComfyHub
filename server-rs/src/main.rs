@@ -302,6 +302,26 @@ async fn main() {
         println!("启动恢复：{queued} 条排队提交被处置（审批被打断 / 提交被中断 / 复起）");
     }
 
+    // ---- 老提示词的 LoRA 回填（2026-10-23）----------------------------------
+    //
+    // 2026-10-22 修了第三方 LoRA 加载节点（rgthree 的 `lora_01` / 嵌套对象等）的识别，
+    // 但**已经入库**的 `prompts.loras` 不会自己变 —— 用户重开 App 看到的还是"少几条"。
+    // 这里按回填版本跑一次：只补"入库后没被用户编辑过"的行里缺的 LoRA 名字，不改已有条目
+    // （四条纪律见 `capture_ingest::backfill_loras`）。同步跑、不塞后台：
+    // 界面首次拉列表时就必须是补好的。
+    match state.write(|tx| {
+        if !comfyhub_server_rs::comfy::capture_ingest::loras_backfill_needed(tx)? {
+            return Ok(0);
+        }
+        Ok(comfyhub_server_rs::comfy::capture_ingest::run_loras_backfill(tx)?)
+    }) {
+        Ok(n) if n > 0 => {
+            println!("[capture] LoRA 回填：{n} 条提示词补上了第三方加载节点里的 LoRA")
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("[capture] LoRA 回填失败（不影响使用）：{}", e.human()),
+    }
+
     // ---- 后台捕获轮询器（P4 第 47 步 = O5/O6）-------------------------------
     //
     // 与 Kotlin `ComfyCapture.start()` 同一件事：**用户自己在 ComfyUI 里跑的东西也要被收**。

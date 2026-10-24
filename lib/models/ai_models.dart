@@ -1553,6 +1553,8 @@ class AiToolInfo {
     'skill' => 'Skills',
     'files' => '文件',
     'comfy' => 'ComfyUI',
+    // 本机 LoRA 训练引擎（anima-lora-next）：项目 / 数据集 / 打标 / 预处理 / 训练
+    'train' => '训练',
     'memory' => '记忆',
     // 联网搜索（2026-09-20）：唯一会把数据送出本机的类别
     'web' => '联网搜索',

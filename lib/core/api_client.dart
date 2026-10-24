@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../models/models.dart';
+import '../models/train_models.dart';
 import 'pairing_token.dart';
 import 'workflow_blueprint.dart';
 
@@ -651,4 +652,30 @@ class ApiClient {
       }) as Map,
     ),
   );
+
+  // -------------------------------------------------------------------------
+  //  本地 LoRA 训练引擎（可选能力）
+  // -------------------------------------------------------------------------
+
+  /// 引擎装没装、守护进程 / WebUI 在哪个端口。
+  Future<TrainEngineStatus> trainStatus() async =>
+      TrainEngineStatus.fromJson(
+        Map<String, dynamic>.from(await _get('/api/train/status') as Map),
+      );
+
+  /// 起守护进程 + WebUI（幂等）。
+  Future<TrainEngineStatus> trainStart() async =>
+      TrainEngineStatus.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/train/start', const {}) as Map,
+        ),
+      );
+
+  /// 停 WebUI + 守护进程；**不会 kill 正在跑的训练**（等它跑完）。
+  Future<TrainEngineStatus> trainStop() async =>
+      TrainEngineStatus.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/train/stop', const {}) as Map,
+        ),
+      );
 }

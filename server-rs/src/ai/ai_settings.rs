@@ -113,6 +113,10 @@ pub(crate) fn category_of(name: &str) -> &'static str {
         //   否则它一落地就会吃掉"不许把 ComfyUI 当轮询器"那 9 次额度（`MAX_COMFY_QUERIES_PER_RUN`）。
         //   它还没搬过来，这里先钉住映射，免得日后静默漂移（Kotlin `ToolRegistry.kt` 那条写的就是 FILES）。
         "comfy_env_report" => "files",
+        // 训练引擎（anima-lora-next）的工具。**必须是独立类别**：落到 `comfy`
+        // 兜底里会让每一次 `anima_studio_*` 都吃掉 ComfyUI 的那 9 次查询额度，
+        // 而它根本不查 ComfyUI —— 表现是“问了几次训练状态，出图提交就被预算拦住”。
+        _ if name.starts_with(crate::tools::mcp::ANIMA_PREFIX) => "train",
         _ => "comfy",
     }
 }

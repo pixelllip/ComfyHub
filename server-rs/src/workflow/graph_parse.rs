@@ -25,6 +25,8 @@
 //! 并列的图（很常见：一个空负向、一个负向关键词表长度相同）两端选到不同的节点。
 //! 这里显式实现"取第一个最大"，并有用例钉住。
 
+use std::collections::HashSet;
+
 use serde_json::{Map, Value};
 
 /// 一条 LoRA 引用（Kotlin `LoraRef`）。
@@ -370,31 +372,13 @@ fn walk_model(
                 break;
             }
             let Some(node) = lookup(nodes, &current) else { break };
-            let class = cls(node);
 
-            if class.to_lowercase().contains("lora") {
-                let raw = input(node, "lora_name")
-                    .or_else(|| input(node, "lora"))
-                    .or_else(|| input(node, "lora_path"));
-                let names: Vec<String> = match raw {
-                    Some(Value::String(text)) => vec![text.clone()],
-                    Some(Value::Array(items)) => items
-                        .iter()
-                        .filter_map(|item| item.as_str().map(str::to_string))
-                        .collect(),
-                    _ => Vec::new(),
-                };
-                let weight = input_double(node, "strength_model")
-                    .or_else(|| input_double(node, "strength"))
-                    .or_else(|| input_double(node, "weight"))
-                    .unwrap_or(1.0);
-                for name in names.into_iter().filter(|name| !name.trim().is_empty()) {
-                    // 只留文件名（两种分隔符都要认：ComfyUI 的 lora 名可能是 `a\b\lora.safetensors`）
-                    let short = name.rsplit(['/', '\\']).next().unwrap_or(&name).to_string();
-                    if !loras.iter().any(|existing| existing.name == short) {
-                        loras.push(LoraRef { name: short, weight });
-                    }
-                }
+            if looks_like_lora_node(node) {
+                // 从当前节点往**上游**收：本节点的槽位 + 它引用的 LoRA 栈（WAS 那类把名字
+                // 放在 `lora_stack` 指向的另一个节点里）。`visited` 防环，深度上限与文本链一致。
+                let mut visited: HashSet<String> = HashSet::new();
+                visited.insert(current.clone());
+                collect_loras(node, nodes, &mut loras, &mut visited, 0);
             }
 
             if checkpoint.is_none() {
@@ -416,6 +400,233 @@ fn walk_model(
         }
     }
     (loras, checkpoint)
+}
+
+/// 这个节点像不像"加载 LoRA"的节点。
+///
+/// 两条判据任一命中即可（**不要**维护第三方类名白名单 —— 用户装了什么节点包我们猜不到）：
+///  ① 类名里带 `lora`：官方 `LoraLoader` / `LoraLoaderModelOnly`、rgthree 的
+///     `Lora Loader Stack` / `Power Lora Loader`、Krea2 的 `Krea2ControlLoRALoader`……
+///  ② 有以 `lora` 开头的**文件名槽位**：有些自定义节点类名看不出用途，但槽位名是
+///     `lora_name` / `lora_01` 这类。
+fn looks_like_lora_node(node: &Map<String, Value>) -> bool {
+    if cls(node).to_lowercase().contains("lora") {
+        return true;
+    }
+    inputs(node)
+        .map(|map| {
+            map.iter().any(|(key, value)| {
+                // 文件名槽位，或 `lora_stack` 这种指向上游栈节点的连线
+                lora_slot_key(key) || (key.to_lowercase().starts_with("lora") && is_link(value))
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// 输入键是不是"LoRA 文件名槽位"。
+///
+/// 认的是**槽位命名**，不是某几个固定键：
+/// * 官方：`lora_name` / `lora` / `lora_path`
+/// * rgthree `Lora Loader Stack`：`lora_01` … `lora_04`（权重在旁边 `strength_01`）
+/// * Comfyroll / WAS 的栈：`lora_name_1`（权重是 `model_weight_1`）
+///
+/// 同一批节点还会带权重 / 触发词 / 栈引用这类**同前缀但不是文件名**的键，一律排除。
+fn lora_slot_key(key: &str) -> bool {
+    let lower = key.to_lowercase();
+    if !lower.starts_with("lora") {
+        return false;
+    }
+    if ["strength", "weight", "wt", "scale", "trigger", "stack"]
+        .iter()
+        .any(|hint| lower.contains(hint))
+    {
+        return false;
+    }
+    // 开关类键（`lora_on`）不是文件名。只按**整键 / 后缀**判，别用 `contains`：
+    // 那会误伤 `lora_version` 这类正常槽位。
+    !(lower == "lora_on"
+        || lower == "lora_enable"
+        || lower == "lora_enabled"
+        || lower.ends_with("_on")
+        || lower.ends_with("_enable")
+        || lower.ends_with("_enabled"))
+}
+
+/// 槽位对应的权重。
+///
+/// 先按**编号后缀**找（`lora_01` → `strength_01`、`lora_name_1` → `model_weight_1`），
+/// 找不到再退回老的三档（`strength_model` / `strength` / `weight`）。
+/// 一个值都没有时按 1.0 —— 老行为，别改成 0（0 权重等于"没启用"，语义完全不同）。
+fn lora_weight(node: &Map<String, Value>, key: &str) -> f64 {
+    let lower = key.to_lowercase();
+    let index = lower
+        .rsplit_once('_')
+        .filter(|(_, tail)| !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()))
+        .map(|(_, tail)| tail.to_string());
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(index) = index {
+        // `_01` 与 `01` 两种拼法都试（不同节点包的写法不一样）
+        for prefix in [
+            "strength",
+            "weight",
+            "model_weight",
+            "strength_model",
+            "strength_clip",
+            "lora_strength",
+            "lora_weight",
+        ] {
+            candidates.push(format!("{prefix}_{index}"));
+            candidates.push(format!("{prefix}{index}"));
+        }
+    }
+    for prefix in ["strength_model", "strength", "weight", "model_weight", "lora_strength"] {
+        candidates.push(prefix.to_string());
+    }
+    candidates
+        .into_iter()
+        .find_map(|candidate| input_double(node, &candidate))
+        .unwrap_or(1.0)
+}
+
+/// 从一个 LoRA 槽位节点里收 `(名字, 权重)`。**只看槽位本身，不递归**。
+///
+/// 三种值形状都要认：
+///  * 字符串：`"lora_name": "a.safetensors"`
+///  * 字符串数组：少数节点把多个名字写在一个键里
+///  * 对象：rgthree 的 `Power Lora Loader` 写成
+///    `"lora_1": {"on": true, "lora": "Krea2\\x.safetensors", "strength": 1}`
+///
+/// ⚠ `["节点id", 槽位]` 是**连线**，不是文件名 —— 必须挡掉，否则会把节点 id 当成 LoRA 名。
+fn collect_lora_entries(node: &Map<String, Value>) -> Vec<(String, f64)> {
+    let mut out: Vec<(String, f64)> = Vec::new();
+    let Some(inputs) = inputs(node) else { return out };
+    for (key, value) in inputs {
+        if !lora_slot_key(key) {
+            continue;
+        }
+        match value {
+            Value::String(name) => out.push((name.clone(), lora_weight(node, key))),
+            Value::Array(items) => {
+                if is_link(value) {
+                    continue;
+                }
+                for item in items {
+                    match item {
+                        Value::String(name) => out.push((name.clone(), lora_weight(node, key))),
+                        Value::Object(object) => {
+                            if let Some(entry) = nested_lora_entry(object) {
+                                out.push(entry);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Value::Object(object) => {
+                if let Some(entry) = nested_lora_entry(object) {
+                    out.push(entry);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// rgthree `Power Lora Loader` 那种"一个槽位一个对象"的写法。
+///
+/// `on: false` 的槽位**跳过**：它在 ComfyUI 里没有生效，记进提示词等于撒谎。
+fn nested_lora_entry(object: &Map<String, Value>) -> Option<(String, f64)> {
+    let name = object
+        .get("lora")
+        .and_then(Value::as_str)
+        .or_else(|| object.get("name").and_then(Value::as_str))?;
+    if name.trim().is_empty() {
+        return None;
+    }
+    if let Some(flag) = object.get("on") {
+        let enabled = match flag {
+            Value::Bool(value) => *value,
+            Value::String(text) => {
+                !text.trim().is_empty()
+                    && !text.eq_ignore_ascii_case("false")
+                    && !text.eq_ignore_ascii_case("off")
+            }
+            Value::Number(number) => number.as_f64().map(|value| value != 0.0).unwrap_or(true),
+            _ => true,
+        };
+        if !enabled {
+            return None;
+        }
+    }
+    let weight = as_double(object.get("strength"))
+        .or_else(|| as_double(object.get("weight")))
+        .unwrap_or(1.0);
+    Some((name.to_string(), weight))
+}
+
+/// 收 LoRA：本节点 + 它用 `lora*` 连线引用的上游（栈节点）。
+///
+/// WAS 那类把名字放在 `lora_stack` 指向的另一个节点里，加载器自己只有一条连线；
+/// 只走 `model` 链会漏掉整座栈，所以要顺着 LoRA 键往下看一眼。
+fn collect_loras(
+    node: &Map<String, Value>,
+    nodes: &[(&str, &Map<String, Value>)],
+    loras: &mut Vec<LoraRef>,
+    visited: &mut HashSet<String>,
+    depth: usize,
+) {
+    if depth > 6 {
+        return;
+    }
+    for (name, weight) in collect_lora_entries(node) {
+        push_lora(loras, &name, weight);
+    }
+    let Some(inputs) = inputs(node) else { return };
+    for (key, value) in inputs {
+        if !key.to_lowercase().starts_with("lora") || !is_link(value) {
+            continue;
+        }
+        let Some(id) = reference_ref(Some(value)) else { continue };
+        if !visited.insert(id.clone()) {
+            continue;
+        }
+        if let Some(next) = lookup(nodes, &id) {
+            collect_loras(next, nodes, loras, visited, depth + 1);
+        }
+    }
+}
+
+/// 入库一条 LoRA：只留文件名、同名只留第一次（顺序即语义）。
+fn push_lora(loras: &mut Vec<LoraRef>, raw: &str, weight: f64) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    // 两种分隔符都要认：ComfyUI 的 lora 名可能是 `a\b\lora.safetensors`
+    let short = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed).trim();
+    if short.is_empty() {
+        return;
+    }
+    // rgthree 的 `Lora Loader Stack` 用字符串 `"None"` 占位未启用的槽位（真机捕获里
+    // `"lora_04": "None"` 很常见）—— 那是空槽，不是名叫 None 的 LoRA。
+    if matches!(
+        short.to_lowercase().as_str(),
+        "none" | "null" | "nil" | "undefined"
+    ) {
+        return;
+    }
+    if !loras.iter().any(|existing| existing.name == short) {
+        loras.push(LoraRef { name: short.to_string(), weight });
+    }
+}
+
+/// `["节点id", 槽位]` 形状的连线（第二项是数字才算；名字数组没有数字第二项）。
+fn is_link(value: &Value) -> bool {
+    let Some(items) = value.as_array() else { return false };
+    items.len() >= 2
+        && items[1].is_number()
+        && (items[0].is_string() || items[0].is_number())
 }
 
 /// 兜底找 checkpoint（Kotlin `findCheckpoint`）。

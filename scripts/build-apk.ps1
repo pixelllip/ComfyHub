@@ -81,6 +81,22 @@ if ($Split) {
     $buildArgs += '-Pforce-version-code-ignoring-abi=true'
 }
 
+# JDK：Gradle 9.6 要**完整 JDK**（带 jlink），JBR jcef 只有运行时。
+# 判据不靠版本号，靠 `jlink.exe` 在不在 —— 缺了它 Gradle 会在
+# `JdkImageTransform` 里报 "jlink executable ... does not exist"，而错误里不会
+# 说"你给的不是 JDK"。优先 COMFYHUB_JDK_HOME（AGENTS §4），其次 JAVA_HOME。
+$jdk = if ($env:COMFYHUB_JDK_HOME) { $env:COMFYHUB_JDK_HOME } else { $env:JAVA_HOME }
+if ($jdk) {
+    if (-not (Test-Path (Join-Path $jdk 'bin\jlink.exe'))) {
+        Say "✗ $jdk 不是完整 JDK（缺 bin\jlink.exe）。JBR jcef 只有运行时，编不了 Android。" 'Red'
+        Say '  用带 jlink 的 JDK（本机实测 C:\Program Files\Java\jdk-25 可以），或删掉环境变量让 Flutter 自己挑。' 'Yellow'
+        exit 2
+    }
+    $env:JAVA_HOME = $jdk
+    $env:PATH = (Join-Path $jdk 'bin') + ';' + $env:PATH
+    Say "JDK: $jdk" 'DarkGray'
+}
+
 Say ("→ flutter " + ($buildArgs -join ' ')) 'Cyan'
 Say '  （第一次编要几分钟：Gradle 要编译 Kotlin 与各插件）' 'DarkGray'
 & flutter @buildArgs

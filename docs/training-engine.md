@@ -1,14 +1,18 @@
 # 训练引擎（可选能力）—— 现状、脚本、以及"接进 App"的落点
 
-> 状态：**脚本层已落地并实测**（2026-10-18）。App 内的界面/Rust 桥还是待办（§4）。
+> 状态：**全链路已接通**（2026-10-21）。脚本层 + Rust `train` 域 + Flutter 训练台
+> （内嵌 WebUI）+ 训练引擎的 MCP 桥都已经落地并实测。
 > 一句话：训练引擎是**可选能力**，按 AGENTS §8 的纪律（检测优先、安装兜底、装不上不拦启动）走。
+>
+> 2026-10-21 起，WebUI **并回下游仓库**（`anima-lora-next/anima_lora_webui`）是唯一真源；
+> 兄弟目录 `anima-lora-webui` 只是历史副本，`train-engine.ps1` 与 Rust 都会**先找引擎自带的**。
 
 ## 1. 引擎是什么
 
 | 仓库 | 内容 | 备注 |
 | --- | --- | --- |
 | `pixelllip/anima-lora-next` | 上游 `sorryhyun/anima_lora` 的**下游整合版**：训练/推理/守护进程内核 + 中文界面补丁 + Krea-2 内核 | 以上游为基线，带"每日跟版"CI（[DOWNSTREAM.md](https://github.com/pixelllip/anima-lora-next/blob/main/DOWNSTREAM.md)） |
-| `pixelllip/anima-lora-webui` | 自有 Web 界面（标准库，零依赖，常驻 ~25MB） | 替代上游那个有 bug、常驻 164MB 的 PySide6 GUI |
+| `anima-lora-next/anima_lora_webui` | 自有 Web 界面（标准库，零依赖，常驻 ~25MB） | 2026-10-18 起**并回下游仓库**；兄弟仓库 `pixelllip/anima-lora-webui` 只保留历史 |
 
 引擎的对外面只有一个：**`anima_daemon` 的 localhost REST**（JSON，无 CORS 头）：
 
@@ -20,8 +24,40 @@ GET  /jobs/{id}                 单个作业 + latest/stale_for
 GET  /jobs/{id}/progress?last_n=2000   结构化事件（ev=step|ckpt|log|run_start|run_end）
 GET  /jobs/{id}/logs            stdout+stderr 的 SSE
 POST /jobs/{id}/{stop,pause,resume} · /queue/{start,pause} · /shutdown
-GET  /tools                    自描述清单（13 个操作，带 JSON-Schema）
+GET  /tools                    自描述清单（带 JSON-Schema；2026-10-21 起含 14 个 /studio 工具）
 ```
+
+**训练工作区（2026-10-21 新增，`anima_daemon/studio.py`）**：
+
+```
+GET  /studio/projects                          项目列表（含五阶段状态）
+POST /studio/projects                          {name,trigger?,variant?,preset?,...}
+GET  /studio/projects/{slug}                   项目详情 + 阶段→作业账本
+POST /studio/projects/{slug}/import            取训练集（本机路径 / http(s) URL → inbox）
+GET  /studio/projects/{slug}/images?state=     图片 + caption + 缩略图 URL
+POST /studio/projects/{slug}/review            人工筛选 accept/reject/restore/delete
+GET/POST /studio/projects/{slug}/caption       读 / 写 caption sidecar
+POST /studio/projects/{slug}/trigger           给全部已接受图补触发词
+POST /studio/projects/{slug}/tag               打标作业（caption-autotag）
+POST /studio/projects/{slug}/preprocess        预处理作业（preprocess-config；可 chain_train）
+POST /studio/projects/{slug}/train             正式训练（生成 scoped 配置并提交）
+GET  /studio/projects/{slug}/file?path=        图片字节（WebUI 缩略图）
+```
+
+数据落在引擎目录里，**没有任何一份散到 `%APPDATA%`**：
+
+```
+training_projects/<slug>/{project.json,inbox/,rejected/,jobs.json,train_config.toml}
+image_dataset/<slug>/                       已接受的图 + 同名 .txt
+post_image_dataset/resized/<slug>/          预处理派生
+post_image_dataset/lora/<slug>/             VAE/TE 缓存
+output/ckpt/<slug>/                         训练产物
+```
+
+路径之所以是 `image_dataset/<slug>`：引擎的 Qt GUI 本来就有一个 GUI-only 的
+`path_scope`，会把 `image_dataset/<scope>` → `resized/<scope>` → `lora/<scope>` →
+`output/ckpt/<scope>` 一次性展开。复用它，训练器 / 预处理 / mask / ComfyUI trainer node
+就都同意同一套路径，**不用写第二份路径推导**。
 
 端口的唯一真源是 pidfile：`<引擎>\output\daemon\daemon.json`（还有一份用户级镜像
 `%USERPROFILE%\.anima\daemon.json`，可用 `ANIMA_DAEMON_PIDFILE` 覆盖 —— 见 §5 的一条纪律）。
@@ -53,20 +89,42 @@ pwsh -File scripts\train-engine.ps1 stop     # 两个都停；8810 / 8765 都不
 训练栈 = Python + torch + 5GB 权重 + 数据集，**不可能**进 Rust 单文件 exe。所以形态跟 ComfyUI 一样：
 ComfyHub 负责**目录 / 起停 / 端口 / 界面**，训练本身跑在引擎自己的进程里。
 
-## 4. 接进 App 的落点（待办）
+## 4. 接进 App（2026-10-21 已完成）
 
-1. **Rust：新域 `server-rs/src/train/`**（`mod.rs` + `engine.rs` + `routes`），照 `comfy::comfy_launch`
-   的模子：探测引擎目录、读 pidfile、起停（`CREATE_NO_WINDOW`）、把上面那 6 个端点薄薄地转出去
-   （**别在 Rust 里重写训练逻辑**）。设置项进 `app_settings`（`train.engineDir` / `train.webuiPort`）。
-2. **Flutter：次级页**「训练」（AGENTS §3：一级导航只有 5 项，新功能挂次级页或设置页）。
-   内容 = 引擎状态卡（目录 / 守护进程 / WebUI）+ 作业列表 + 提交表单 + 进度（loss 曲线与事件表）。
-   原型已经在 WebUI 里验证过（同一套 REST），Flutter 只是换一层壳。
-3. **自动下载**：`install` 那条 One-liner 的 App 版 —— 沿用上游 `ANIMA_DIR`/`ANIMA_VERSION`，
-   指向**我们自己仓库的 release**；四档策略照 `mcp-runtime.ps1`（已装好 → 借现成 → 建 venv → 才下载），
-   认 `COMFYHUB_NO_DOWNLOAD`，失败不拦启动。
-4. **产物入口**：训练产出的 LoRA 落在 `<引擎>\output\ckpt\`，元数据里带 `ss_adaln_layout=comfy`
-   （**可直接被 ComfyUI 的 LoRA loader 读**）——App 里给一个"复制到 ComfyUI 的 loras 目录"的按钮，
-   而不是自己写第二套加载器。
+| 层 | 落点 | 说明 |
+| --- | --- | --- |
+| Rust 探测 / 起停 | `server-rs/src/train/mod.rs` | `discover_engine`（环境变量 → `<根>\training\anima_lora` → 同级/上上级 `anima-lora-next`）、`status`、`start`、`stop`；`pythonw` + `CREATE_NO_WINDOW`，日志落 `<根>\.run\train-*.log` |
+| HTTP | `GET /api/train/status` · `POST /api/train/{start,stop}` | 只给界面"装没装 / 起没起 / WebUI 在哪个端口"；训练数据面仍在引擎 |
+| AI 工具 | `tools/mcp.rs` 的第二条 MCP 桥 | 子进程 = 引擎自带的 `anima_daemon/mcp.py`；工具名统一前缀 `anima_`；读类 ALLOW、写类 ASK |
+| Flutter | `lib/pages/train_page.dart` | 从 AI 工作台 AppBar 的「LoRA 训练台」进入；`webview_all` 内嵌 WebUI（2026-10-23 从 `flutter_inappwebview` 换过来，原因见 AGENTS §9.1）；URL host 取 `SettingsStore.baseUrl` 的 host，所以**手机连桌面地址时也能用同一页** |
+| 生成配置 | 引擎 `gui.core.config_io` + `gui.core.submit.training_snapshot` | WebUI 调引擎自己的合并链，`path_scope = <slug>`；前后端都不手写第二份配置 |
+| 参数面板 | 引擎 `anima_daemon/studio.py` 的 `/studio/projects/{slug}/config` + `anima_lora_webui` 的「参数」页 | **复现 Qt GUI 的 Config 页**：方法 / 硬件档、基础字段、可折叠高级分组；字段与中文帮助来自 `gui.core.config_io` + `_fields.json`，只写用户改过的 overrides；虚拟键（验证集 / 文件夹重复）复用 `gui.core.validation` 写进 `[[datasets]]` |
+| Krea-2 面板 | `studio.py` 的 `/studio/projects/{slug}/krea2{,/train}` | 独立训练线的 `TrainRequest` 全表 + `stack_lora_*`（style-in-the-loop）；保存 `training_projects/<slug>/krea2.toml`，校验 cache/model 后以 `scripts/krea2/train.py --config` 提交到同一串行队列 |
+
+**启动顺序**：Flutter 只调 `/api/train/start` → Rust 起 `anima_daemon`（等 `/health`）→
+起 `anima_lora_webui`（挑空闲端口、等 `/api/_env`）→ 写 `<根>\.run\train-engine.json`。
+WebUI 端口**只从这份 state 读**，和 `.run\api.json` 同一条纪律。
+
+**手机 / 局域网**：Rust 起 WebUI 时绑 `0.0.0.0` 并生成一次性 token
+（`--token`，写在 state 里）。`/api/train/status` 把 token 一起给 Flutter；
+训练台打开 `http://<baseUrl 的 host>:<webuiPort>/?token=…`，WebUI 302 到 `/`
+并种 HttpOnly Cookie，之后的 JS / 图片 / SSE 自动带。没有 token 的请求 401。
+这样手机能连桌面，又不会把训练控制台裸露给整个局域网。
+
+**两条独立 MCP 桥**（`comfy` 与 `anima`）：任何一条没装都只影响自己那批工具；
+`warmup` 在后台各试一次，失败只记日志，不拦后端启动。
+
+### 4.1 还没做（别当成已有）
+
+1. **App 内的 `install`**：仍然只有 `train-engine.ps1 install`（上游 One-liner）。
+   四档策略（已装好 → 借现成 → 建 venv → 才下载）照 `mcp-runtime.ps1` 的模子，但尚未实现。
+2. **"复制 LoRA 到 ComfyUI 的 loras 目录"按钮**：产物路径已经由 `studio_status` 的
+   `paths.output` 给出；复制动作还没做（手动复制可用）。
+3. **项目删除**：WebUI 只提供筛选 / 重命名，没有"删除整个项目"的入口（避免误删数据集）。
+4. **Qt GUI 的 Merge / TensorBoard / EasyControl 专属页**：WebUI 目前复现的是
+   **参数表单**（Config）与整条数据 → 训练 → 作业链路；`easycontrol` 可以作为方法
+   选到，但没有它单独的 dataset/preprocess 生命周期页。别把"参数页已对齐"当成
+   "Qt GUI 的每个 tab 都搬过来了"。
 
 ## 5. 与仓库纪律的冲突点（实现前必须处理）
 
@@ -97,5 +155,23 @@ ComfyHub 负责**目录 / 起停 / 端口 / 界面**，训练本身跑在引擎�
 `tasks.py preprocess` 全链路；Krea-2 内核在 512 档桶上 forward+backward（swap=20 + 梯度检查点，
 显存 3.77GB / 宿主 7.5GB 可用）；WebUI 起停与内存；本脚本的 status/start/stop。
 
+**2026-10-21 新增实测**：
+
+* `studio` 全链路（隔离目录）：创建项目 → 导入 → 接受 → caption → 加触发词 → 生成配置，
+  `training_snapshot` 的 `source_image_dir` / `resized_image_dir` / `lora_cache_dir` /
+  `output_dir` / `datasets[*].subsets[*]` **全部** scope 到项目；拒绝会清掉 resized + latent。
+* WebUI 同源反代：`/api/studio/projects` 经 8810 返回 200；静态页 / JS / CSS 正常。
+* Rust `GET /api/train/status` 在真实引擎上返回 `installed=true`、`daemon/webui` 端口、
+  `projects`；`/api/ai/tools` 里出现 27 个 `anima_*`（含 14 个 studio 工具）。
+* Windows debug / release 构建（含 `webview_all_windows`）通过。旧实现 `flutter_inappwebview_windows`
+  在插件注册时创建 Composition 合成器，关窗必弹 `Unknown Hard Error`，已整体换成 `webview_all 1.4.5`
+  （2026-10-23；根因与关窗回归见 AGENTS §9.1）。
+* Rust `train::start` 起 WebUI 时 `--host 0.0.0.0 --token <36 位>`：首跳 302 + HttpOnly
+  Cookie，之后 `/api/_env` / 静态 / SSE 全部 200；无 token 的请求 401（实测
+  `HttpClient` 带 CookieContainer 走通）。
+* Android `flutter build apk --debug` 通过（JDK 25；`webview_all_android` 原生支持 AGP 9 内建
+  Kotlin，不再需要补丁副本）。
+
 **未验证**：Krea-2 的**完整 20 步训练**（缺 line 接线，见 `anima-lora-next/downstream/krea2-line-plan.md`）；
-App 内的 Rust/Flutter 部分（还没写）；`install` 动作用我们的 release（目前指向上游安装器）。
+App 内的 `install`（仍只有脚本）；在手机上真机打开训练台（WebView 逻辑按 host 替换，
+但本机只验了 Windows debug 构建）。

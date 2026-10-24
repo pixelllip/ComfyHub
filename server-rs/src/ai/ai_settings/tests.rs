@@ -24,6 +24,11 @@ fn 类别与权限档的线上字与_kotlin_一致() {
     assert_eq!(category_of("search_style_cards"), "library");
     assert_eq!(category_of("save_style_card"), "library");
     assert_eq!(category_of("comfy_submit"), "comfy");
+    // 训练引擎的工具必须是**独立类别**：落到 comfy 会让它吃 ComfyUI 的查询额度。
+    assert_eq!(category_of("anima_studio_projects"), "train");
+    assert_eq!(category_of("anima_studio_train"), "train");
+    assert!(!is_comfy_query("anima_studio_projects"));
+    assert!(is_comfy_query("comfy_find_workflow"));
     assert_eq!(access_wire(crate::tools::policy::ToolAccess::Allow), "allow");
     assert_eq!(access_wire(crate::tools::policy::ToolAccess::Ask), "ask");
     assert_eq!(access_wire(crate::tools::policy::ToolAccess::Deny), "deny");

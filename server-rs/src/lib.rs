@@ -21,6 +21,7 @@
 //! | [`library`] | 本地内容库 | `repo`（标签/提示词仓储）、`character_cards`（角色卡） |
 //! | [`infra`] | 基础设施 | `db`（事务纪律 R1/R2）、`confinement`（沙箱自查）、`outbound`（代理）、`testpaths` |
 //! | [`mobile`] | 跨端（手机） | `auth`（配对闸门）、`sync`、`submit_queue`（排队→桌面提交）、`net_urls` |
+//! | [`train`] | 本地 LoRA 训练引擎（可选能力） | `mod.rs`（探测 anima-lora-next / 起停守护进程与 WebUI / 状态） |
 //! | [`web`] | HTTP 层 | `routes` / `write_routes`（装配）、`models` / `inputs`（形状）、`endpoint_guard`（SSRF） |
 //!
 //! 三条纪律（改分层图时一起守）：
@@ -40,5 +41,6 @@ pub mod media;
 pub mod mobile;
 pub mod provider;
 pub mod tools;
+pub mod train;
 pub mod web;
 pub mod workflow;

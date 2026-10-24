@@ -135,6 +135,15 @@ pub fn render(
             out.push_str(&memory::take_utf16(tool.description, 300));
             out.push('\n');
         }
+        // 训练引擎装好时工具清单里会出现 `anima_studio_*`。模型需要知道的只有
+        // **顺序**与**人工闸门**：数据集是用户的资产，模型不许跳过筛选直接开训。
+        if tools.iter().any(|t| t.name.starts_with("anima_")) {
+            out.push_str(
+                "- 训练链路（anima_studio_*）的顺序固定为：取训练集 → **人工筛选** → 打标（可选）\
+                 → 预处理 → 正式训练。导入只进 `inbox`；**必须先让用户在训练台里筛完**（或逐个 \
+                 studio_review 确认）再预处理/训练，不要替用户决定留哪张图。\n",
+            );
+        }
     }
 
     out.push_str(&format!(

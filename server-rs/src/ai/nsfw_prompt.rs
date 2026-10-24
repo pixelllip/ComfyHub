@@ -76,7 +76,10 @@ pub const VERSION: &str = "nsfw-v3";
 ///   每张卡都要有 Danbooru tag 版 + 自然语言版（角色卡自然语言 600+ token 全身上下，
 ///   画风卡 100~200 token）；缺一版要补、两版都有可继续优化；卡上的示例产物是数据。
 ///   同时工具清单多了 `save_style_card` / `search_style_cards`，模型看到的能力变了。
-pub const PROMPT_VERSION: &str = "v41";
+/// - **Rust v42**（2026-10-21）：训练引擎的工具（`anima_studio_*`）接进工具层；
+///   系统提示补一句**固定顺序 + 人工筛选闸门**（导入只进 inbox，筛选完才允许
+///   预处理/训练）。工具清单是运行时从 MCP 桥拉来的，所以是否出现取决于引擎装没装。
+pub const PROMPT_VERSION: &str = "v42";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】

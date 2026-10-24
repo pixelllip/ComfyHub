@@ -22,7 +22,9 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         ]
     );
     assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
-    assert_eq!(body["promptVersion"], "v41");
+    // v42：训练引擎工具（anima_studio_*）进工具层，系统提示补“取训练集 → 人工筛选
+    // → 打标 → 预处理 → 训练”的顺序与筛选闸门。
+    assert_eq!(body["promptVersion"], "v42");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");

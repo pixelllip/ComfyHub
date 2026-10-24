@@ -56,6 +56,16 @@ dependencies:
   url_launcher: ^6.3.2
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.4.2
+  # 训练台内嵌 WebUI（Windows / Android 都要）。**刻意不用 flutter_inappwebview**：
+  # 它的 Windows 端（flutter_inappwebview_windows 0.6.0）在**插件注册时**就创建
+  # Windows.UI.Composition.Compositor + DispatcherQueue（InAppWebViewManager 构造
+  # 函数），进程收尾释放顺序错误 → 关闭窗口必弹 "Unknown Hard Error"
+  # （csrss 硬错误，出错模块 dcomp.dll；上游 flutter_inappwebview#2512 关门未修）。
+  # webview_all 是 webview_flutter 的跨平台实现：1.4.1 修过同类退出崩溃，Android
+  # 端支持 AGP 9 内建 Kotlin —— 换过来去掉了 Android 的 third_party 补丁副本。
+  # ⚠ Windows 端的 <experimental/coroutine> 逃生宏**仍然要留**（它 1.4.5 也没躲开），
+  # 见 windows/CMakeLists.txt。钉版本：升级前先跑 Windows 关窗回归（AGENTS §9.1）。
+  webview_all: 1.4.5
 
 dev_dependencies:
   flutter_test:

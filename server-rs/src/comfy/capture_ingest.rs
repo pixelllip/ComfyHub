@@ -379,6 +379,148 @@ pub fn create_captured_prompt(
 }
 
 // ---------------------------------------------------------------------------
+//  老提示词的 LoRA 回填（2026-10-23）
+// ---------------------------------------------------------------------------
+
+/// `app_settings` 里"LoRA 回填跑到哪一版"的键。
+///
+/// 值是 [`LORA_BACKFILL_VERSION`]；只有低于当前版本才跑，跑完写回。
+/// 以后**再改 LoRA 识别规则**就 +1：首次那趟只补"没被编辑过"的行，之后的版本升级
+/// 会对所有捕获行再补一遍（仍然只追加，不改已有条目）。
+pub const LORA_BACKFILL_KEY: &str = "capture.loras.backfill";
+
+/// 当前回填规则版本（`graph_parse` 认 LoRA 的规则版本）。
+pub const LORA_BACKFILL_VERSION: i64 = 1;
+
+/// 已跑过的回填版本（没有标记 = `None`）。
+fn loras_backfill_marker(conn: &rusqlite::Connection) -> rusqlite::Result<Option<i64>> {
+    use rusqlite::OptionalExtension;
+    let raw: Option<String> = conn
+        .query_row("SELECT v FROM app_settings WHERE k = ?1", [LORA_BACKFILL_KEY], |row| row.get(0))
+        .optional()?;
+    Ok(raw.as_deref().and_then(|text| text.trim().parse::<i64>().ok()))
+}
+
+/// 回填还要不要跑（没有标记 / 标记低于当前版本 → `true`）。
+pub fn loras_backfill_needed(conn: &rusqlite::Connection) -> rusqlite::Result<bool> {
+    Ok(loras_backfill_marker(conn)?.unwrap_or(0) < LORA_BACKFILL_VERSION)
+}
+
+/// 记下"这一版回填已经跑过"。
+pub fn mark_loras_backfill_done(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO app_settings (k, v) VALUES (?1, ?2)
+         ON CONFLICT(k) DO UPDATE SET v = excluded.v, \
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+        params![LORA_BACKFILL_KEY, LORA_BACKFILL_VERSION.to_string()],
+    )?;
+    Ok(())
+}
+
+/// 启动时跑的那一趟：**首次**只补"没被编辑过"的行（保护升级前用户手改过的 LoRA）；
+/// 以后版本升级时对所有捕获行再补一遍（只追加，用户改过的名字 / 权重仍不动）。
+///
+/// 返回改了几条提示词。
+pub fn run_loras_backfill(conn: &rusqlite::Connection) -> rusqlite::Result<usize> {
+    let first_run = loras_backfill_marker(conn)?.is_none();
+    let updated = backfill_loras(conn, first_run)?;
+    mark_loras_backfill_done(conn)?;
+    Ok(updated)
+}
+
+/// 把捕获图里能认出的 LoRA **补进** `prompts.loras`。返回改了几条提示词。
+///
+/// # 为什么需要它（2026-10-22 修 `graph_parse` 之后）
+///
+/// 那之前 `Lora Loader Stack (rgthree)` 这类第三方节点的 LoRA 整批没被识别，已经入库的
+/// `prompts.loras` 却不会自己变 —— 用户重开 App 看到的还是"少几条"。这里按**捕获时的
+/// 原始节点图**（`capture_runs.raw`）重解析一遍，把缺的补上。
+///
+/// # 四条纪律（都为了"别把用户的数据改坏"）
+///
+///  1. `only_untouched` = `true` 时**只碰 `updated_at == created_at` 的行**（= 入库后没被
+///     用户编辑过）；`false` 时（版本升级那趟）对所有捕获行都看，但下一条保证不改坏；
+///  2. **只追加、不覆盖**：解析出来但原列表里没有的名字才 push；已有名字的权重、顺序
+///     原样保留（老记录里 `Krea2ControlLoRALoader` 本来就是对的那一条）；
+///  3. **解析结果为空就跳过**：绝不用一次解析失败去清空已有数据；
+///  4. 走 `UPDATE prompts SET loras = …`，`trg_prompts_touch` 会把 `updated_at` 顶上去，
+///     所以同一行不会被反复改写，同步账本也会记一笔。
+pub fn backfill_loras(
+    conn: &rusqlite::Connection,
+    only_untouched: bool,
+) -> rusqlite::Result<usize> {
+    // 先把要处理的行**全读出来**再更新：同一个连接上边读游标边写同一张表，
+    // 不同 SQLite 版本的行为不一致（有版本会 `database table is locked`）。
+    let rows: Vec<(i64, Option<String>, String)> = {
+        let sql = if only_untouched {
+            "SELECT p.id, p.loras, c.raw
+               FROM prompts p
+               JOIN capture_runs c ON c.prompt_id = p.id
+              WHERE c.raw IS NOT NULL
+                AND p.updated_at = p.created_at
+              ORDER BY p.id"
+        } else {
+            "SELECT p.id, p.loras, c.raw
+               FROM prompts p
+               JOIN capture_runs c ON c.prompt_id = p.id
+              WHERE c.raw IS NOT NULL
+              ORDER BY p.id"
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+
+    let mut updated = 0usize;
+    for (prompt_id, stored_raw, raw) in rows {
+        let Some(parsed) = captured_loras(&raw) else { continue };
+        if parsed.is_empty() {
+            continue;
+        }
+        // 库里已有的（含用户手改的）按原样留着，只追加缺的。
+        let mut merged: Vec<(String, f64)> = crate::web::models::parse_loras(stored_raw.as_deref())
+            .into_iter()
+            .map(|lora| (lora.name, lora.weight))
+            .collect();
+        let mut added = 0usize;
+        for lora in parsed {
+            if !merged.iter().any(|(name, _)| *name == lora.name) {
+                merged.push((lora.name, lora.weight));
+                added += 1;
+            }
+        }
+        if added == 0 {
+            continue;
+        }
+        let encoded = json!(merged
+            .iter()
+            .map(|(name, weight)| json!({ "name": name, "weight": weight }))
+            .collect::<Vec<_>>())
+        .to_string();
+        conn.execute(
+            "UPDATE prompts SET loras = ?1 WHERE id = ?2",
+            params![encoded, prompt_id],
+        )?;
+        updated += 1;
+    }
+    Ok(updated)
+}
+
+/// 从 `capture_runs.raw` 里抠出 API 节点图并解析 LoRA。
+///
+/// raw 有三种历史形状（见 [`crate::comfy::capture::history`]）：`{prompt: 图}`、
+/// `{prompt: {prompt: 图, extra_data}}`、`{prompt: [id, uuid, 图]}` —— 统一交给
+/// `history::parse`，再用 `api_graph_of` 挡掉"看着像对象、其实是界面格式"的脏数据。
+fn captured_loras(raw: &str) -> Option<Vec<crate::workflow::graph_parse::LoraRef>> {
+    let doc: Value = serde_json::from_str(raw).ok()?;
+    let graph = crate::comfy::capture::history::parse(&doc).graph?;
+    let graph = crate::workflow::workflow_fit::api_graph_of(Some(&graph))?;
+    Some(crate::workflow::graph_parse::parse(Some(&graph)).loras)
+}
+
+// ---------------------------------------------------------------------------
 //  一次运行 → 入库
 // ---------------------------------------------------------------------------
 

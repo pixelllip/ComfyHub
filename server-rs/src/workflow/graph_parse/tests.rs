@@ -60,6 +60,100 @@ fn lora_chain_walks_model_links() {
     assert_eq!(parsed.checkpoint.as_deref(), Some("krea2.safetensors"));
 }
 
+/// rgthree 的 `Lora Loader Stack`：槽位是 `lora_01` + `strength_01`，不是 `lora_name`。
+///
+/// 这条是真库对账抓出来的：库里 78 份捕获带着这个节点，而提示词的 `loras` 只记到了
+/// 旁边的 `Krea2ControlLoRALoader`（或干脆是空的）—— 四个 LoRA 整批静默漏掉。
+#[test]
+fn rgthree_lora_loader_stack_is_recognized() {
+    let parsed = parse(Some(&graph(
+        r#"{
+          "1": {"class_type":"KSampler","inputs":{"steps":8,"cfg":1,"seed":7,"model":["91",0]}},
+          "91": {"class_type":"Lora Loader Stack (rgthree)","inputs":{
+                  "model":["6",0],"clip":["4",0],
+                  "lora_01":"KNP_000003000.safetensors","strength_01":1.25,
+                  "lora_02":"twinbox_late.safetensors","strength_02":0.7,
+                  "lora_03":"fajyobore.safetensors","strength_03":0.3,
+                  "lora_04":"hiten.safetensors","strength_04":0.3,
+                  "lora_05":"None","strength_05":1.0}},
+          "6": {"class_type":"UNETLoader","inputs":{"unet_name":"anima-base.safetensors"}},
+          "4": {"class_type":"CLIPLoader","inputs":{"clip_name":"qwen_3_06b_base.safetensors"}}
+        }"#,
+    )));
+    assert_eq!(
+        parsed.loras.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+        vec!["KNP_000003000.safetensors", "twinbox_late.safetensors", "fajyobore.safetensors", "hiten.safetensors"],
+        "四个槽位都要收，顺序按槽位顺序"
+    );
+    assert!(
+        !parsed.loras.iter().any(|l| l.name == "None"),
+        "rgthree 用字符串 None 占位空槽，不能记成名叫 None 的 LoRA"
+    );
+    assert_eq!(
+        parsed.loras.iter().map(|l| l.weight).collect::<Vec<_>>(),
+        vec![1.25, 0.7, 0.3, 0.3],
+        "权重取同编号的 strength_xx"
+    );
+    assert_eq!(parsed.checkpoint.as_deref(), Some("anima-base.safetensors"));
+}
+
+/// rgthree 的 `Power Lora Loader`：`lora_1` 是嵌套对象，且带 `on` 开关。
+///
+/// `on: false` 的槽位在 ComfyUI 里没有生效，**不许**记进提示词。
+#[test]
+fn power_lora_loader_nested_objects_are_recognized() {
+    let parsed = parse(Some(&graph(
+        r#"{
+          "1": {"class_type":"KSampler","inputs":{"steps":8,"cfg":1,"seed":7,"model":["21",0]}},
+          "21": {"class_type":"Power Lora Loader (rgthree)","inputs":{
+                  "model":["4",0],"clip":["6",0],
+                  "lora_1":{"on":true,"lora":"Krea2\\KNPV3_1.safetensors","strength":1},
+                  "lora_2":{"on":true,"lora":"Krea2\\sub\\anime style.safetensors","strength":0.6},
+                  "lora_3":{"on":false,"lora":"disabled.safetensors","strength":1},
+                  "➕ Add Lora":"",
+                  "PowerLoraLoaderHeaderWidget":{"type":"PowerLoraLoaderHeaderWidget"}}},
+          "4": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"krea2.safetensors"}},
+          "6": {"class_type":"CLIPLoader","inputs":{"clip_name":"qwen_3_06b_base.safetensors"}}
+        }"#,
+    )));
+    assert_eq!(
+        parsed.loras.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+        vec!["KNPV3_1.safetensors", "anime style.safetensors"],
+        "嵌套对象里的名字要收、目录要剥掉、关闭的槽位不要"
+    );
+    assert_eq!(parsed.loras.iter().map(|l| l.weight).collect::<Vec<_>>(), vec![1.0, 0.6]);
+}
+
+/// 栈式加载器（WAS 那类）：名字在 `lora_stack` 指向的**另一个节点**里。
+///
+/// 只顺着 `model` 链走会漏掉整座栈；顺带钉住两件防误报的事：
+/// ① `lora_name_1` 的权重叫 `model_weight_1`；② `lora_strength`（只有强度、没有文件名）
+/// 不能被当成一个 LoRA 名字。
+#[test]
+fn lora_stack_references_and_numbered_slots_are_recognized() {
+    let parsed = parse(Some(&graph(
+        r#"{
+          "1": {"class_type":"KSampler","inputs":{"steps":8,"cfg":1,"seed":7,"model":["10",0]}},
+          "10": {"class_type":"Lora Loader (WAS)","inputs":{
+                   "model":["50",0],"clip":["6",0],"lora_stack":["30",0]}},
+          "30": {"class_type":"Lora Stacker (WAS)","inputs":{
+                   "lora_name_1":"a.safetensors","model_weight_1":0.6,
+                   "lora_name_2":"b.safetensors","model_weight_2":0.4,
+                   "lora_name_3":"","model_weight_3":1}},
+          "50": {"class_type":"RapidMOSSAdapter","inputs":{
+                   "adapter":"rapid-moss-4step","lora_strength":1.0,"model":["4",0]}},
+          "4": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"m.safetensors"}},
+          "6": {"class_type":"CLIPLoader","inputs":{"clip_name":"qwen_3_06b_base.safetensors"}}
+        }"#,
+    )));
+    assert_eq!(
+        parsed.loras.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+        vec!["a.safetensors", "b.safetensors"],
+        "栈里的两个名字都要收；空白槽位与 lora_strength 不许占位"
+    );
+    assert_eq!(parsed.loras.iter().map(|l| l.weight).collect::<Vec<_>>(), vec![0.6, 0.4]);
+}
+
 /// 视频 / 音频类型：`SaveVideo` → VIDEO；纯音频图 → AUDIO；两种都有 → MIXED。
 #[test]
 fn kind_detection_covers_video_audio_and_mixed() {

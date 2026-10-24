@@ -22,6 +22,7 @@ import '../widgets/workflow_picker.dart';
 import '../widgets/workflow_viewer.dart';
 import '../widgets/zoomable_image_view.dart';
 import 'media_detail_page.dart';
+import 'train_page.dart';
 
 /// 这个附件能不能**在本应用内**直接看（图片），而不是丢给系统默认程序。
 ///
@@ -817,6 +818,13 @@ class _ConversationAppBar extends StatelessWidget
             icon: const Icon(Icons.dns_outlined, size: 18),
             onPressed: onShowStatus,
           ),
+        IconButton(
+          tooltip: 'LoRA 训练台（取训练集 → 筛选 → 打标 → 预处理 → 参数 → 训练 / Krea-2）',
+          icon: const Icon(Icons.school_outlined, size: 18),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const TrainPage()),
+          ),
+        ),
         if (conv != null)
           IconButton(
             tooltip: '重命名这条对话',

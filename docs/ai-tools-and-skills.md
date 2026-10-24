@@ -335,6 +335,33 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
 > 移植自 DSH 的两个细节：工具的 JSON Schema 里 `additionalProperties: false`（模型乱加参数会当场报错，
 > 而不是悄悄忽略）；工具结果**视为不可信数据**，写进系统提示第 4 条（防提示注入，对应 RSK-004）。
 
+## 2.2 训练引擎工具（`anima_*`，2026-10-21）
+
+`tools/mcp.rs` 现在有**两条独立 MCP 桥**：
+
+| 桥 | 子进程 | 工具名 | 失败时 |
+| --- | --- | --- | --- |
+| `comfy` | comfy-mcp（MCP 运行时） | 原名（`system_stats` / `run_workflow`…） | 只影响 comfy 那批 |
+| `anima` | `<引擎>\.venv\Scripts\python.exe -m anima_daemon.mcp` | 统一前缀 `anima_` | 只影响训练那批 |
+
+- **前缀是必须的**：两边都有 `health` / `list_jobs`，不加前缀会撞车；模型看到
+  `anima_studio_train` 也知道这一步动的是训练，不是 ComfyUI。
+- **权限档**：只读（`studio_projects` / `studio_images` / `studio_caption` / `studio_status` /
+  `list_jobs` / `get_job` / `get_progress` / `health` / `tail_log`）→ ALLOW；其余 → ASK
+  （导入 / 筛选 / 写 caption / 打标 / 预处理 / 训练 / 停队列都会写盘或占显卡）。
+- **类别是 `train`，不是 `comfy`**：`category_of` 的 `_ => "comfy"` 兜底会让每次
+  `anima_studio_*` 都吃掉 ComfyUI 的 9 次查询额度（它根本不查 ComfyUI）。
+  回归：`ai_settings/tests.rs` 的「类别与权限档的线上字与 kotlin 一致」。
+- **人工筛选是硬闸门**：`studio_import` 只进 `inbox`；系统提示第 2.2 条那一段明确
+  “先让用户筛完（或逐个 studio_review 确认）再预处理/训练”。不要替用户决定留哪张图。
+- **预热失败不拦启动**：`warmup` 先后 `ensure`（comfy）与 `ensure_anima`；没装引擎只是
+  少一批工具，`problems` 里如实记原因。
+- **依赖**：`server-rs/src/train/mod.rs` 的 `discover_engine` 与 `scripts/train-engine.ps1`
+  同一套顺序（环境变量 → `<根>\training\anima_lora` → 同级/上上级 `anima-lora-next`）；
+  WebUI 源码**先找引擎自带的 `anima_lora_webui`**（2026-10-18 已并回下游仓库）。
+- **界面**：`GET /api/train/{status,start,stop}` 只给 Flutter 状态与起停；训练表单 /
+  数据集 / 进度全在 WebUI（`webview_all` 内嵌），AI 与人共用同一批 `/studio/*`。
+
 ## 3. 工具循环（HarnessRunner）
 
 ```

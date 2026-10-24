@@ -58,10 +58,14 @@ function Get-ProjectRoot {
 $Root = Get-ProjectRoot
 if (-not $Dir) { $Dir = Join-Path $Root 'training\anima_lora' }
 if (-not $WebUiDir) {
-    # 常见摆法都试一遍：<根>\.. 、<根>\..\.. 、<根>\training\
+    # ⚠ 顺序要紧：**引擎自带的 `anima_lora_webui` 优先**。
+    # 2026-10-18 起 WebUI 已并回下游仓库（`anima-lora-next` 的提交 aa3d5dea），
+    # 兄弟目录 `anima-lora-webui` 只是历史副本；先命中它就会起一个**没有
+    # /studio 接口的旧界面**（新页面能加载、每个请求都 404，且不报错）。
     $up1 = Split-Path -Parent $Root
     $up2 = Split-Path -Parent $up1
-    foreach ($cand in @((Join-Path $up1 'anima-lora-webui'),
+    foreach ($cand in @($Dir,
+                        (Join-Path $up1 'anima-lora-webui'),
                         (Join-Path $up2 'anima-lora-webui'),
                         (Join-Path $up1 'anima-lora-next'),
                         (Join-Path $Root 'training\anima-lora-webui'))) {
@@ -113,7 +117,10 @@ function Show-Status {
     if ($d) { Info ("守护进程: 端口 {0}，pid {1}，{2}" -f $d.port, $d.pid, $(if ($d.alive) { '健康' } else { '**没响应**（pidfile 是旧的？）' })) }
     else { Info "守护进程: 没起（提交作业时它也会自动拉起，见 anima_daemon/README.md）" }
     $w = Get-WebUi
-    if ($w) { Info ("WebUI: http://127.0.0.1:{0}（pid {1}）" -f $w.webuiPort, $w.webuiPid) }
+    if ($w) {
+        $auth = if ($w.webuiToken) { '（带访问令牌，用 open 动作打开）' } else { '' }
+        Info ("WebUI: http://127.0.0.1:{0}（pid {1}）{2}" -f $w.webuiPort, $w.webuiPid, $auth)
+    }
     else { Info "WebUI: 没起（可选；不起也能用引擎自带的 GUI/CLI）" }
     if ($WebUiDir) { Info "WebUI 源码: $WebUiDir" } else { Info "WebUI 源码: 没找到（只用引擎自带界面）" }
 }
@@ -128,6 +135,9 @@ function Start-Engine {
         Say '起守护进程（pythonw，无窗口）'
         # §2：Start-Process 给的不是管道，所以**不能**带 --watch-stdin；
         # 谁起的谁关：pid 记进 state，stop 负责收（守护进程自己也写 pidfile）
+        # §13：引擎还会写一份用户级镜像（~/.anima/daemon.json）——用环境变量把它
+        # 钉进项目内，和 Rust `train::start` 完全同一口径。
+        $env:ANIMA_DAEMON_PIDFILE = Join-Path $Root '.run\anima-daemon.json'
         Start-Process -FilePath $EnginePyW -ArgumentList '-m', 'anima_daemon' -WorkingDirectory $Dir -WindowStyle Hidden
         for ($i = 0; $i -lt 30; $i++) {
             Start-Sleep -Milliseconds 500
@@ -176,6 +186,7 @@ function Stop-Engine {
         try { Invoke-RestMethod -Method Post ("http://127.0.0.1:{0}/shutdown" -f $d.port) -Body '{"kill_jobs":false}' -ContentType 'application/json' -TimeoutSec 10 | Out-Null } catch { }
     }
     Remove-Item $StatePath -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $Root '.run\anima-daemon.json') -Force -ErrorAction SilentlyContinue
     Say '已停（作业若在跑，守护进程会先让它跑完；要强停用 /jobs/{id}/stop）'
 }
 
@@ -183,6 +194,9 @@ function Open-WebUi {
     Start-Engine
     $s = Read-Json $StatePath
     $url = if ($s) { "http://127.0.0.1:$($s.webuiPort)" } else { "http://127.0.0.1:$WebUiPort" }
+    # Rust 起的 WebUI 会带 --token（绑 0.0.0.0）；首跳必须带 token 才能种 Cookie。
+    # 手动 / 脚本起的实例没有这个字段，URL 保持不带参数。
+    if ($s -and $s.webuiToken) { $url += "?token=$($s.webuiToken)" }
     Say "打开 $url"
     Start-Process $url
 }

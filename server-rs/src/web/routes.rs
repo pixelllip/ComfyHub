@@ -217,6 +217,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         // 「我现在是不是被关在工作区里了」—— 界面/doctor/工具文案共用的那一份事实（见 confinement.rs）
         .route("/api/system/confinement", get(system_confinement))
+        // 本地 LoRA 训练引擎（可选能力）：探测 / 起停 / 状态。
+        // 数据面在 anima_daemon 的 /studio/*（经 MCP 工具暴露给模型），这里只给
+        // 界面一个“装没装 / 起没起 / WebUI 在哪个端口”的入口。
+        .route("/api/train/status", get(train_status))
+        .route("/api/train/start", axum::routing::post(train_start))
+        .route("/api/train/stop", axum::routing::post(train_stop))
         .route("/api/tags", get(list_tags))
         .route("/api/tags/categories", get(list_tag_categories))
         .route("/api/prompts", get(list_prompts))
@@ -1980,6 +1986,27 @@ async fn health(State(state): State<AppState>) -> Result<Json<serde_json::Value>
 /// 受限是**环境事实**，得让人一眼看见，而且要附上"为什么"（后端映像在工作区内）。
 async fn system_confinement(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::infra::confinement::describe(&state)))
+}
+
+/// 训练引擎状态：装没装、守护进程 / WebUI 在不在线、项目数、问题清单。
+async fn train_status(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::train::status(&state.project_root()).await))
+}
+
+/// 起训练引擎（守护进程 + WebUI）。幂等：已经在跑就不重复起。
+async fn train_start(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    crate::train::start(&state.project_root())
+        .await
+        .map(Json)
+        .map_err(ApiError::bad_request)
+}
+
+/// 停训练引擎。**不 kill 正在跑的训练**（走 `/shutdown {kill_jobs:false}`）。
+async fn train_stop(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    crate::train::stop(&state.project_root())
+        .await
+        .map(Json)
+        .map_err(ApiError::bad_request)
 }
 
 /// `<storage>`（`media_dir` 的父目录）—— Kotlin `cfg.storageDir` 的对应物。

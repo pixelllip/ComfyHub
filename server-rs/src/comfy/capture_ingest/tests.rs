@@ -151,3 +151,163 @@ fn percent_encoding_matches_urlencoder() {
     assert_eq!(url_encode("中文.png"), "%E4%B8%AD%E6%96%87.png");
     assert_eq!(url_encode("a/b-c_d.png"), "a%2Fb-c_d.png");
 }
+
+// ---------------------------------------------------------------------------
+//  LoRA 回填（2026-10-23）
+// ---------------------------------------------------------------------------
+
+fn memory_db() -> rusqlite::Connection {
+    let conn = crate::infra::db::open_memory().unwrap();
+    conn.execute_batch(crate::infra::db::SCHEMA_SQL).expect("建 schema");
+    crate::infra::db::assert_ready(&conn).unwrap();
+    conn
+}
+
+/// 造一条捕获来的提示词；`edited` 模拟"用户改过"（`updated_at != created_at`）。
+fn captured_prompt(conn: &rusqlite::Connection, loras: &str, edited: bool) -> i64 {
+    conn.execute(
+        "INSERT INTO prompts (title, kind, positive_prompt, loras, source) \
+         VALUES ('t', 'IMAGE', 'p', ?1, 'ComfyUI')",
+        [loras],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+    if edited {
+        // 显式写成另一个时间：`trg_prompts_touch` 的 WHEN 是 `NEW IS OLD`，不会把它顶回去
+        conn.execute(
+            "UPDATE prompts SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+    }
+    id
+}
+
+fn attach_capture(conn: &rusqlite::Connection, prompt_id: i64, raw: Value) {
+    conn.execute(
+        "INSERT INTO capture_runs (run_key, prompt_id, raw) VALUES (?1, ?2, ?3)",
+        params![format!("run:{prompt_id}"), prompt_id, raw.to_string()],
+    )
+    .unwrap();
+}
+
+/// 真机形状：`Krea2ControlLoRALoader` + rgthree 的 `Lora Loader Stack`。
+fn stack_graph(with_lora: bool) -> Value {
+    if with_lora {
+        json!({"prompt": [1, "uuid", {
+          "1": {"class_type":"KSampler","inputs":{"steps":8,"cfg":1,"seed":7,"model":["91",0]}},
+          "91": {"class_type":"Lora Loader Stack (rgthree)","inputs":{
+                  "model":["4",0],
+                  "lora_01":"KNP.safetensors","strength_01":1.25,
+                  "lora_02":"hiten.safetensors","strength_02":0.3}},
+          "4": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"m.safetensors"}}
+        }]})
+    } else {
+        json!({"prompt": [1, "uuid", {
+          "1": {"class_type":"KSampler","inputs":{"steps":8,"cfg":1,"seed":7,"model":["4",0]}},
+          "4": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"m.safetensors"}}
+        }]})
+    }
+}
+
+fn loras_of(conn: &rusqlite::Connection, id: i64) -> String {
+    conn.query_row("SELECT loras FROM prompts WHERE id = ?1", [id], |row| row.get(0)).unwrap()
+}
+
+/// 只追加缺的 LoRA；用户编辑过的、解析为空的、本来就没有 LoRA 的都不动。
+#[test]
+fn lora_backfill_appends_missing_and_never_rewrites_user_edits() {
+    let conn = memory_db();
+
+    // ① 老记录：只有 Krea2 控制 LoRA，栈里那两个没认出来
+    let partial = captured_prompt(
+        &conn,
+        r#"[{"name":"depth-control-lora.safetensors","weight":1.0}]"#,
+        false,
+    );
+    attach_capture(&conn, partial, stack_graph(true));
+
+    // ② 空列表：应该补全
+    let empty = captured_prompt(&conn, "[]", false);
+    attach_capture(&conn, empty, stack_graph(true));
+
+    // ③ 用户编辑过：一个字都不许动
+    let edited = captured_prompt(&conn, "[]", true);
+    attach_capture(&conn, edited, stack_graph(true));
+
+    // ④ 图里没有 LoRA：不许把库里已有的清空
+    let no_lora = captured_prompt(
+        &conn,
+        r#"[{"name":"keep.safetensors","weight":0.5}]"#,
+        false,
+    );
+    attach_capture(&conn, no_lora, stack_graph(false));
+
+    assert_eq!(backfill_loras(&conn, true).unwrap(), 2, "只改 ①② 两条");
+
+    let partial_loras = loras_of(&conn, partial);
+    assert!(partial_loras.contains("depth-control-lora.safetensors"), "{partial_loras}");
+    assert!(partial_loras.contains("KNP.safetensors"), "{partial_loras}");
+    assert!(partial_loras.contains("hiten.safetensors"), "{partial_loras}");
+    // 原有的那一条不被覆盖（名字在前、权重原样）
+    assert!(partial_loras.starts_with(r#"[{"name":"depth-control-lora.safetensors","weight":1.0}"#));
+
+    assert!(loras_of(&conn, empty).contains("KNP.safetensors"));
+    assert_eq!(loras_of(&conn, edited), "[]", "用户编辑过的行不许动");
+    assert_eq!(
+        loras_of(&conn, no_lora),
+        r#"[{"name":"keep.safetensors","weight":0.5}]"#,
+        "图里没有 LoRA 时不许清空"
+    );
+
+    // 回填过的行 `updated_at` 已被顶上去 → 第二遍是空操作
+    assert_eq!(backfill_loras(&conn, true).unwrap(), 0);
+}
+
+/// 版本升级那趟（`only_untouched = false`）要能补到"已经被我们顶过 `updated_at`"的行，
+/// 但仍然只追加：用户自己改过的名字 / 权重保持原样。
+#[test]
+fn lora_backfill_version_upgrade_appends_to_already_touched_rows() {
+    let conn = memory_db();
+    let id = captured_prompt(
+        &conn,
+        r#"[{"name":"depth-control-lora.safetensors","weight":0.55}]"#,
+        false,
+    );
+    attach_capture(&conn, id, stack_graph(true));
+
+    // 首次回填：补上两个栈内 LoRA，`updated_at` 也被顶掉
+    assert_eq!(backfill_loras(&conn, true).unwrap(), 1);
+    let first = loras_of(&conn, id);
+    assert!(first.contains("KNP.safetensors"), "{first}");
+
+    // 模拟"又改了一版识别规则"：把原列表换成一个用户手改过的版本，再跑升级那趟
+    conn.execute(
+        "UPDATE prompts SET loras = ?1 WHERE id = ?2",
+        params![
+            r#"[{"name":"depth-control-lora.safetensors","weight":0.9},{"name":"user-pick.safetensors","weight":0.4}]"#,
+            id
+        ],
+    )
+    .unwrap();
+    assert_eq!(backfill_loras(&conn, false).unwrap(), 1, "升级那趟要补回来");
+    let upgraded = loras_of(&conn, id);
+    assert!(upgraded.contains(r#""name":"depth-control-lora.safetensors","weight":0.9"#), "已有权重不许改：{upgraded}");
+    assert!(upgraded.contains("user-pick.safetensors"), "用户自己加的不许删：{upgraded}");
+    assert!(upgraded.contains("hiten.safetensors"), "新版多认出来的要补上：{upgraded}");
+}
+
+/// 回填标记：第一次要跑，写完不再跑；版本被写低（或将来 bump）时要再跑一遍。
+#[test]
+fn lora_backfill_marker_tracks_the_version() {
+    let conn = memory_db();
+    assert!(loras_backfill_needed(&conn).unwrap(), "没有标记时必须跑");
+    mark_loras_backfill_done(&conn).unwrap();
+    assert!(!loras_backfill_needed(&conn).unwrap(), "同一版本不再重复扫");
+    conn.execute(
+        "UPDATE app_settings SET v = '0' WHERE k = ?1",
+        [LORA_BACKFILL_KEY],
+    )
+    .unwrap();
+    assert!(loras_backfill_needed(&conn).unwrap(), "旧版本标记必须再跑");
+}

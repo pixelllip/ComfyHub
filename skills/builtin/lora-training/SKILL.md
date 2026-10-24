@@ -2,11 +2,15 @@
 name: lora-training
 description: 本机 LoRA 训练的参数调优、打标与预处理方法论（Krea-2 与 Anima 两条线）。按"先探环境 → 再定配方 → 再动数据"的顺序，把已有实测经验套到用户这台机器的真实显存与内存上。含：分辨率档 × 宿主内存的口径（8GB 显存是底线，档位看内存）、Krea-2 的当前 target 档位（official_gate 264，attn_mlp 已弃用）与 512 档生产配方、Anima 的 low_vram 配方、宿主内存与 Windows 专属坑（WDDM 换页、pin_memory、cudaMallocAsync）、两种打标口径（Anima 的 Danbooru caption 模板 / Krea-2 的长自然语言 + tag-notes + 确定性闸门）、预处理缓存三件套与"什么变了必须重编"、剂量与"文本通道压过权重"这两个风格 LoRA 的坑、失败模式速查。
 whenToUse: 用户要"在本机训 LoRA"、"调显存/内存参数"、"低显存怎么跑"、"这套参数合适吗"、"用哪个 target 档"、"帮我打标/预处理数据集"、"训练 OOM 了/卡住不动/loss 不降"、"风格学不进去"、要挑 rank/lr/步数/分辨率、要把数据集整理成可训练的缓存、要判断某张卡能不能跑某个模型，或者要把训练好的 LoRA 放进 ComfyUI 使用时。
-version: 4
+version: 5
 ---
 
 ## 版本记录
 
+- **version 5（2026-10-21，训练台接通）**：训练不再只是"交付配方 + 命令"—— 本机装了
+  anima-lora-next 时，工具清单里会出现 **`anima_studio_*`**：项目 / 取训练集 / 人工筛选 /
+  打标 / 预处理 / 正式训练 / 作业进度都能直接调。**人工筛选是硬闸门**（导入只进 inbox，
+  必须等用户确认或逐个 `studio_review`）。Flutter 的「LoRA 训练台」内嵌同一个 WebUI。
 - **version 4（2026-10-20，用户口径）**：`comfy_*` 不止能探状态 —— **能直接跑工作流出图**。训练后的 LoRA 验收一律走 comfy 工作流（换 `LoraLoader` 的 `lora_name` + 触发词），不要另写 `inference.py` 旁路。
 - **version 3（2026-10-18，按 krea2-webui 最近四天文档重校）**：这一版**改掉 v1/v2 里的一批错**——
   ① target 档位：**`official_gate` / 264 是当前口径**（2026-10-13 起），不是 `attention`/160；
@@ -32,7 +36,8 @@ version: 4
 | `list_dir` / `read_file` | ✅ 读引擎目录、`output/daemon/*.json`、训练 `stdout.log`、`progress.jsonl`、`configs/*.toml`、数据集清单、`_manifest.json` |
 | `write_file` | ✅ 配方 TOML、caption sidecar、给用户跑的脚本、复盘记录 |
 | `comfy_*`（comfy-mcp） | ✅ 能问 ComfyUI 实例状态（含显存）与模型清单；**也能直接跑工作流出图**（list/find → load_workflow → submit） |
-| 起训练进程 / 跑 shell | ❌ 没有。**交付物 = 配方 + caption + 可粘贴的命令 + 验收判据** |
+| `anima_studio_*`（训练引擎） | ✅ **全链路**：`studio_projects` / `studio_create_project` / `studio_import` / `studio_images` / `studio_review` / `studio_set_caption` / `studio_apply_trigger` / `studio_tag` / `studio_preprocess` / `studio_train` / `studio_status`。写类默认要用户批准 |
+| 起训练进程 / 跑 shell | ⚠ 只有引擎装好时才有（上面那批工具）；没有引擎时仍只能交付配方 + 命令 |
 
 > **出图验收走 comfy 工作流，别写推理脚本**（2026-10-20 用户口径）：`comfy_start`（没起时）→ `comfy_list_workflows` / `comfy_find_workflow` → `comfy_load_workflow` → `comfy_check_inputs`（缺输入）/ `comfy_fit_workflow`（缺模型）→ `comfy_submit`（要审批）。LoRA 验收 = 工作流里换 `LoraLoader` 的 `lora_name`、prompt 带触发词；Krea-2 / MOSS 各走自己那条线的工作流。`inference.py` 那类旁路只用于引擎自己的回归。
 
@@ -244,10 +249,20 @@ Windows 不支持 `expandable_segments`。Anima 的默认值会咬人：`vocab_p
   **下游整合版**（中文补丁 + Krea-2 内核，见 `docs/training-engine.md`）。
 - 对外只有一条面：`anima_daemon` 的 localhost REST（`POST /jobs`、`GET /jobs/{id}/progress`…），
   端口只从 `<引擎>\output\daemon\daemon.json` 读。
-- 产物：`<引擎>\output\ckpt\**\*.safetensors`，元数据带 `ss_adaln_layout=comfy`（Anima）/
+- 产物：`<引擎>\output\ckpt\<项目>\**\*.safetensors`，元数据带 `ss_adaln_layout=comfy`（Anima）/
   `modelspec.architecture=krea2-raw/lora`（Krea-2）→ **可直接复制进 ComfyUI 的 `models\loras\`** 用。
-- 你（AI）现在的交付物：配方 TOML + caption sidecar + 可粘贴的命令 + 验收判据；
-  等 ComfyHub 的 `train` 域上线后才轮到"直接提交作业 / 看曲线"。
+- **全链路工具**（引擎装好时自动出现在工具清单里，名字前缀 `anima_`）：
+  1. `studio_projects` 看现有项目；没有就 `studio_create_project`（名字 + 触发词 + variant/preset）。
+  2. `studio_import` 取训练集：`paths`（本机文件夹/文件）或 `urls`（http(s) 图片）→ 只进 `inbox`。
+  3. `studio_images` 列图；**把候选图列给用户看，等用户说留哪些**（或用户自己在「LoRA 训练台」里勾）。
+     `studio_review(action="accept")` 才进训练集；`reject` 会连同 resized/latent 一起清掉。
+  4. 打标可选：`studio_tag`（missing/merge/overwrite）→ 可再 `studio_apply_trigger` 补触发词；
+     也可以 `studio_set_caption` 逐张写。
+  5. `studio_preprocess`（可 `chain_train=true` 自动接训练）→ `studio_train`。
+  6. `studio_status` / `anima_get_job` / `anima_tail_log` 看阶段与曲线。
+- **红线**：① 导入后**不许**跳过人工筛选直接预处理/训练；② 改 caption 后必须重跑预处理
+  （TE 缓存按 caption mtime 失效）；③ 训练前确认 `studio_status.stages.preprocess == true`；
+  ④ 产物落到项目自己的 `output/ckpt/<项目>`，别去动别的项目。
 
 ## 9. 一页速查
 
@@ -264,4 +279,6 @@ Windows 不支持 `expandable_segments`。Anima 的默认值会咬人：`vocab_p
 7) 先 20 步：看 loss、看 reserved（≤ 卡容量）、看步时稳不稳（512 档 ~7–8.5s 是生产值）
 8) 剂量：风格学不进去先看步数 × 遍数（参照 ‖ΔW‖ 1511.8 vs 1000 步 470）；512 档实践 5 遍
 9) 产物进 ComfyUI 的 models\loras\ 验证
+10) 全链路：studio_import → 人工筛选 studio_review → studio_tag(可选) → studio_preprocess
+    → studio_train；训练台在 AI 工作台 AppBar 的「LoRA 训练台」，手机/电脑同一份状态
 ```

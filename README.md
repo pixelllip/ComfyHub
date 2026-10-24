@@ -30,7 +30,8 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 
 | 页面 | 做什么 |
 | --- | --- |
-| **AI 工作台**（默认落地页） | 和模型对话干活：写提示词、查 danbooru、投放参考图、提交 ComfyUI、看实时进度与产物入口卡。审批闸门 / 提问闸门 / 轮次与预算上限都在这一页看得见 |
+| **AI 工作台**（默认落地页） | 和模型对话干活：写提示词、查 danbooru、投放参考图、提交 ComfyUI、看实时进度与产物入口卡。审批闸门 / 提问闸门 / 轮次与预算上限都在这一页看得见。AppBar 的「LoRA 训练台」进次级页（见下） |
+| **LoRA 训练台**（次级页） | 可选能力：本机 anima-lora-next 的全链路 —— 取训练集 → **人工筛选** → 打标（可选）→ 预处理 → **参数（复现 Qt GUI 的 Config 表单）** → 正式训练；另有独立的 **Krea-2 参数 / 训练**页（`TrainRequest` 全表 + style-in-the-loop）。内嵌引擎自己的响应式 WebUI（手机 / 电脑同一份状态），AI 工作台调的是同一批 `anima_studio_*` 工具 |
 | **画廊** | 生成产物：列表 / 详情 / 大图（滚轮缩放）/ 视频播放；NSFW 标记与模糊；右键菜单 |
 | **提示词** | 本机提示词库：搜索、收藏、标签、工作流原文（界面格式 ↔ API 图的转换在服务端） |
 | **标签** | 标签库与分类、使用次数 |
@@ -54,6 +55,9 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 - **长期记忆**：`<storage>\ai\memory.md`，一行一条，用户可手改；写超限**报错不截断**。
 - **卡片库**：角色卡（画的是谁）+ 画风卡（画成什么样），同等地位。每张卡有 Danbooru tag 版 +
   自然语言版 + 负面提示词 + 示例产物。见 §4。
+- **外观**：默认跟随**系统强调色**（Windows 读 `HKCU` 的 `AccentColorMenu`，Android 12+ 读
+  `system_accent1_500`；读不到就回默认紫）。页面与卡片的底色**始终保持白 / 灰**，
+  强调色只用在按钮、开关、选中态这些组件上（设置页可关）。见 `lib/core/system_accent.dart`。
 
 ## 3. 架构
 
@@ -105,7 +109,8 @@ Rust 后端（单文件 exe，SQLite 单文件）──► ComfyUI（127.0.0.1:8
 为什么是结构化的一张表而不是长期记忆：记忆是"一行一条文本"、有 100 条上限、超限**直接报错**，
 而卡片要按名字幂等地反复覆盖。
 
-- **入口**：「预设库」页右上角 →「卡片库」，顶部可在角色卡 / 画风卡之间切换。
+- **入口**：「预设库」页**顶部导航**直接切到「角色卡」/「画风卡」（与「常规预设」同级，
+  不再是右上角的「卡片库」子页）；点卡片本体 = 编辑，示例缩略图仍单独可点。
   刻意不做成第六个一级导航项 —— 窄屏上六个图标会挤成两行。
 - **AI 四条工具**：`search_character_cards` / `save_character_card`、
   `search_style_cards` / `save_style_card`。两个正面字段都是**整段替换**：想在已有内容上补两句，
@@ -228,7 +233,7 @@ pwsh -File scripts\e2e-submit-test.ps1                                # 提交�
 | [docs/pairing-design.md](docs/pairing-design.md) | 配对闸门与密钥下行 |
 | [docs/workflow-recipe-design.md](docs/workflow-recipe-design.md) | 工作流配方 |
 | [docs/workflow-blueprint-design.md](docs/workflow-blueprint-design.md) | 工作流蓝图与接线体检（含两份 krea2 结构样例的实测结论；样例不是出图起点） |
-| [docs/training-engine.md](docs/training-engine.md) | 可选能力「本地 LoRA 训练引擎」：现状 / 脚本 / 接进 App 的落点 |
+| [docs/training-engine.md](docs/training-engine.md) | 可选能力「本地 LoRA 训练引擎」：全链路（项目 / 数据集 / 打标 / 预处理 / 训练）、Rust `train` 域、内嵌 WebUI |
 | [docs/mobile-harness-design.md](docs/mobile-harness-design.md) | 移动端 harness（Android Kotlin） |
 | [docs/archive/](docs/archive/README.md) | **已归档**：做完了的任务书、被取代的进度快照、当时的审计与调研 —— 不是当前依据 |
 

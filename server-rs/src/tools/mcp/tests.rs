@@ -259,6 +259,32 @@ async fn 读循环结束会让在等的调用当场失败() {
 }
 
 #[test]
+fn 训练引擎的权限档按读写分开() {
+    // 读状态 / 列项目 / 看 caption → 不需要批准
+    for name in ["studio_projects", "studio_project", "studio_images", "studio_caption", "studio_status"] {
+        assert_eq!(anima_access_for(name), "ALLOW", "{name}");
+        assert!(!anima_is_mutating(name), "{name}");
+    }
+    // 导入 / 筛选 / 写 caption / 打标 / 预处理 / 训练 → 会写盘或占显卡
+    for name in [
+        "studio_import",
+        "studio_review",
+        "studio_set_caption",
+        "studio_apply_trigger",
+        "studio_tag",
+        "studio_preprocess",
+        "studio_train",
+    ] {
+        assert_eq!(anima_access_for(name), "ASK", "{name}");
+        assert!(anima_is_mutating(name), "{name}");
+    }
+    // 描述前缀必须说对话：只读工具不许被写成“会写数据集”
+    assert!(anima_description_prefix("studio_images").contains("只读"));
+    assert!(anima_description_prefix("studio_train").contains("会写"));
+    assert!(reason_for("anima_studio_train").contains("训练"));
+}
+
+#[test]
 fn 权限档与_kotlin_一致() {
     assert_eq!(access_for("run_workflow"), "ASK");
     assert_eq!(access_for("launch_comfyui"), "ASK");

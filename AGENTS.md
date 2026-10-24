@@ -36,7 +36,7 @@
 
 | 约束 | 说明 |
 | --- | --- |
-| **不需要 JVM** | 后端是静态链接的 Rust 单文件 exe、库是 SQLite 单文件。**只有跑 `android/` / Gradle 时才要 JDK 21~23**（用 `COMFYHUB_JDK_HOME` 指定）。MySQL / JRE / Kotlin jar 都已退役 —— 别去找 `mysql.ps1`、老库搬迁或 `.mysql\` |
+| **不需要 JVM** | 后端是静态链接的 Rust 单文件 exe、库是 SQLite 单文件。**只有跑 `android/` / Gradle 时才要完整 JDK（带 `jlink.exe`）**（用 `COMFYHUB_JDK_HOME` 指定；本机实测 JDK 25 可用，JBR jcef 21 只有运行时、缺 jlink 会失败）。MySQL / JRE / Kotlin jar 都已退役 —— 别去找 `mysql.ps1`、老库搬迁或 `.mysql\` |
 | pub 源 | 必须 `https://pub.dev`（国内镜像对个别包返回 424） |
 | 脚本 | 一律 `pwsh`。**App 与后端的起停不走任何脚本**，脚本只剩构建 / 测试 / 可选能力 |
 | 端口 | 后端 `--port 0` 让系统挑，真实端口只从 `.run\api.json` 读；ComfyUI `8188` |
@@ -125,6 +125,18 @@
 - 改动点两行，搜 `ComfyHub 补丁` 定位（`windows\video_player_win_plugin.cpp` 的 `initTexture()`）。
 - **别"顺手升级"回 pub.dev**，也别在 `flutter pub upgrade` 后不看 `pubspec.lock` —— 一升回去立刻复发。上游修好后再整体换回并删掉这一节。
 - 排查顺序：① 控制台有没有 `Could not create external texture`；② 日志里是不是 `Using the Impeller rendering backend`；③ `--no-enable-impeller` 跑一遍对照（Skia 会容忍 0 尺寸，所以它在旧版本里"看起来是好的"）。
+
+## 9.1 WebView 用 webview_all（**不要换回 flutter_inappwebview**）
+
+训练台内嵌 WebUI 用 `webview_all: 1.4.5`（`lib\pages\train_page.dart`）。**2026-10-23 从 `flutter_inappwebview: 6.1.5` 换过来，原因是关窗必弹 `Unknown Hard Error`**：
+
+- 根因在 `flutter_inappwebview_windows 0.6.0` 的 `InAppWebViewManager` **构造函数**（= 插件注册时，哪怕一个 WebView 都没创建）：它 `RoInitialize` 后创建 `DispatcherQueueController` + `Windows.UI.Composition.Compositor`（`graphics_context.cc`），进程收尾时按错误顺序释放 → csrss 报硬错误（事件日志 `Application Popup` ID 26；WER 里模块 `dcomp.dll`、异常码 `0xe0464645`）。上游 [issue #2512](https://github.com/pichillilorenzo/flutter_inappwebview/issues/2512) 关了没修。
+- **判据**（别凭手感）：不注册 webview 插件 → 关窗 0 条事件；只注册它 → 关窗必现（当时的逐插件开关 `COMFYHUB_PLUGINS` 已随修复删除；改回来只需在 `FlutterWindow::OnCreate` 里按名字挑一条 `RegisterWithRegistrar`）。
+- `webview_all` 是 `webview_flutter` 的跨平台实现（Windows/Android/iOS/macOS/Linux/Web），1.4.1 修过同类"退出即崩"（[#37](https://github.com/abandoft/webview_all/issues/37) / [#38](https://github.com/abandoft/webview_all/pull/38)）；Android 端支持 AGP 9 内建 Kotlin，所以换过来删掉了 Android 的 `third_party\flutter_inappwebview_android` + `dependency_overrides`。⚠ Windows 的 `<experimental/coroutine>` 逃生宏**仍然要留**（1.4.5 的 C++/WinRT 也没躲开 MSVC 14.51 的 C2338），见 `windows/CMakeLists.txt` 的注释。
+- **版本钉死**：`pubspec.yaml` 写 `webview_all: 1.4.5`。升级前必须重跑关窗回归 —— 1.4.0 就出现过"应用退出即崩"，这类问题只在**关窗那一秒**出现，`flutter test` 抓不到。
+- **关窗回归**（Windows）：`flutter build windows --debug` → 启动 `build\windows\x64\runner\Debug\viewer.exe` → 等窗口出来 → 发 `WM_CLOSE` → 查 `Get-WinEvent -FilterHashtable @{LogName='System'; Id=26; StartTime=...}` **必须为 0 条**（`Application Popup` 事件就是那个弹窗）。⚠ Debug 产物用的后端是源码树 `server-rs\target\{release,debug}\` 那份，不经过 release 装配。
+- Android 侧仍按老规矩 `flutter build apk --debug` 过一遍；需要带 `jlink.exe` 的完整 JDK（JBR jcef 没有 jlink，本机 `C:\Program Files\Java\jdk-25` 可以）。
+- WebView2 运行时是 Windows 的硬前提（Win10 1809+ / Win11 自带）。加载失败时 `onWebResourceError` 只在**主文档**失败时提示；子资源 404 不该把整页判死。
 
 ## 10. AI 工具与 Skills 的接线约定
 
