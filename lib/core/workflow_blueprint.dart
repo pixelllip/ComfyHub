@@ -521,8 +521,9 @@ class BlueprintLayout {
       width = (chars * 8.5 + 40).clamp(160.0, 460.0).toDouble();
     }
     if (height <= 0) {
+      // 与画笔的几何常量对齐：标题 28 + 插口 18/行 + 参数 20/行，再留一点边。
       final rows = math.max(node.inputs.length, node.outputs.length);
-      height = (30 + rows * 20 + node.widgets.length * 18).clamp(50.0, 400.0).toDouble();
+      height = (34 + rows * 18 + node.widgets.length * 20).clamp(50.0, 520.0).toDouble();
     }
     return Size(width, height);
   }

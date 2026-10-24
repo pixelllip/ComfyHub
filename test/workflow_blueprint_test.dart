@@ -419,22 +419,65 @@ void main() {
       for (final node in blueprint.nodes) {
         final box = layout.boxOf(node.id);
         if (box == null) continue;
-        for (final widget in node.widgets) {
-          final row = blueprintWidgetRowRect(node, box, widget.index);
-          if (row.top > box.bottom - 10) continue;
-          final label = blueprintWidgetLabelRect(node, box, widget.index);
-          final value = blueprintWidgetValueRect(node, box, widget.index);
-
-          expect(label.right, closeTo(value.left, 0.001), reason: '两列必须紧挨着，不留缝');
-          expect(label.left, closeTo(row.left, 0.001));
-          expect(value.right, closeTo(row.right, 0.001));
-          expect(label.width, greaterThanOrEqualTo(28), reason: '名字太窄就认不出是什么参数');
-          expect(label.width, lessThanOrEqualTo(96), reason: '名字太宽值就没地方了');
-          expect(value.width, greaterThan(0), reason: '值那一列必须真的存在');
+        for (final row in blueprintWidgetRows(node, box)) {
+          // 多行文本框（Note / 长提示词）本来就没有"名字列"，
+          // 它该占整行 —— 这里只钉单行参数的"名字 | 值"两列。
+          if (!row.visible || row.multiline) continue;
+          expect(row.label.right, closeTo(row.value.left, 0.001), reason: '两列必须紧挨着，不留缝');
+          expect(row.label.left, closeTo(row.rect.left, 0.001));
+          expect(row.value.right, closeTo(row.rect.right, 0.001));
+          expect(row.label.width, greaterThanOrEqualTo(28), reason: '名字太窄就认不出是什么参数');
+          expect(row.label.width, lessThanOrEqualTo(96), reason: '名字太宽值就没地方了');
+          expect(row.value.width, greaterThan(0), reason: '值那一列必须真的存在');
+          expect(row.rect.height, greaterThanOrEqualTo(kBlueprintWidgetBarHeight));
           checked++;
         }
       }
       expect(checked, greaterThan(0), reason: '夹具里至少要有一行画得出来的参数');
+    });
+
+    test('长文本 / Note 按多行撑高，后面的参数与节点底边都不被顶穿', () {
+      // 用户 2026-10-24："有些该多行显示的就多行显示。"
+      // 以前所有参数都是 11px 高的一行，一段提示词只露前 24 个字。
+      final node = BlueprintNode(
+        id: 'text',
+        className: 'PrimitiveStringMultiline',
+        title: 'Text String',
+        widgets: const [
+          BlueprintWidget(
+            index: 0,
+            name: 'value',
+            value: '第一行提示词\n第二行提示词\n第三行提示词',
+          ),
+          BlueprintWidget(index: 1, name: 'seed', value: 42),
+        ],
+      );
+      final box = const Rect.fromLTWH(0, 0, 320, 260);
+      final rows = blueprintWidgetRows(node, box);
+
+      expect(rows.length, 2);
+      expect(rows[0].multiline, isTrue);
+      expect(rows[0].rect.height, greaterThan(kBlueprintWidgetRowStep),
+          reason: '多行文本必须真的占多行，而不是压成一行');
+      expect(rows[0].lines, 3);
+      // 后面的参数仍然要留出位置，不许被长文本顶到框外
+      expect(rows[1].multiline, isFalse);
+      expect(rows[1].rect.bottom, lessThanOrEqualTo(box.bottom));
+      // 命中测试读的是同一份几何：点多行文本中间必须命中它自己
+      expect(hitTestWidgetRow(node, box, rows[0].rect.center), 0);
+      expect(hitTestWidgetRow(node, box, rows[1].rect.center), 1);
+    });
+
+    test('纯控件输入不占端口行：参数区不会被 20 个输入一路往下推', () {
+      // TextGenerate 有 6 个真插口 + 一堆 widget 输入；旧算法按 inputs.length 算端口，
+      // 直接吃掉 360px。ComfyUI 里这些控件显示成参数行，不画左侧圆点。
+      final blueprint = _blueprint();
+      final sampler = blueprint.nodeById('2')!;
+      // 夹具里 KSampler 的 seed 是 widget 输入、没接线 ⇒ 只有 model 占一行
+      expect(blueprintInputSocketCount(sampler), 1);
+      expect(blueprintInputRowIndex(sampler, 0), 0);
+      expect(blueprintInputRowIndex(sampler, 1), isNull);
+      expect(blueprintPortRowCount(sampler), 1);
     });
   });
 
@@ -809,6 +852,41 @@ void main() {
       expect(identical(BlueprintPalette.of(Brightness.light), BlueprintPalette.light), isTrue);
       expect(BlueprintPalette.dark.isDark, isTrue);
       expect(BlueprintPalette.light.isDark, isFalse);
+    });
+
+    test('插口 / 连线取 ComfyUI 的类型色：同类同色、异类异色', () {
+      // 用户 2026-10-24："不同输入/输出的节点和连线配色取自 comfyui。"
+      final dark = BlueprintPalette.dark;
+      expect(dark.typeColor('MODEL'), const Color(0xFFB39DDB));
+      expect(dark.typeColor('CLIP'), const Color(0xFFFFD500));
+      expect(dark.typeColor('IMAGE'), const Color(0xFF64B5F6));
+      expect(dark.typeColor('LATENT'), const Color(0xFFFF9CF9));
+      expect(dark.typeColor('STRING'), const Color(0xFF7CFF7C));
+      // 大小写 / 空白不该影响判据（后端给的类型大小写并不总是统一）
+      expect(dark.typeColor(' model '), dark.typeColor('MODEL'));
+      // 四种最常见的类型必须互相区分开 —— 全画成灰色就回到了"所有线一个样"
+      final common = {
+        dark.typeColor('MODEL'),
+        dark.typeColor('CLIP'),
+        dark.typeColor('IMAGE'),
+        dark.typeColor('LATENT'),
+        dark.typeColor('CONDITIONING'),
+      };
+      expect(common.length, 5);
+      // 认不出的类型按名字稳定散列，但又不能撞回灰色默认值
+      expect(dark.typeColor('SEGS'), dark.typeColor('SEGS'));
+      expect(dark.typeColor('SEGS'), isNot(dark.unknownType));
+      expect(dark.typeColor(null), dark.unknownType);
+      // 深浅两套都要把这套类型表带全，否则某个主题下会静默退化成随机色
+      expect(dark.typeColors.keys.toSet(), BlueprintPalette.light.typeColors.keys.toSet());
+    });
+
+    test('标题条是中性的，不按节点类别整片染色（与 ComfyUI 一致）', () {
+      final dark = BlueprintPalette.dark;
+      expect(dark.header, isNot(dark.accentOf('note')));
+      expect(dark.header, isNot(dark.accentOf('unknown')));
+      expect(relativeLuminance(dark.header), greaterThan(relativeLuminance(dark.body)),
+          reason: '标题条要比节点底亮一档才分得开');
     });
   });
 }

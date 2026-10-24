@@ -162,6 +162,31 @@
 3. 前端按**原文**缓存最近 6 份蓝图（5 分钟）：关掉再点开同一份工作流不再等网络。
 4. 判据仍然是后端那一份 `build()`；快路径只是"少做一步"，不新增第二套解析。
 
+### 5.2 画布显示：向 ComfyUI 对齐（2026-10-24）
+
+用户原话："优化蓝图显示逻辑，**有些该多行显示的就多行显示**，不同输入/输出的节点和
+**连线配色取自 comfyui**，该左对齐的左对齐、右对齐的右对齐。"
+
+| 项目 | 现在的做法 | 判据 / 出处 |
+| --- | --- | --- |
+| 端口圆点 | 按**类型**上色：`MODEL #B39DDB`、`CLIP #FFD500`、`IMAGE #64B5F6`、`LATENT #FF9CF9`、`CONDITIONING #FFA931` … | ComfyUI 前端 `link_type_colors`；截图实测 `STRING` 是 `#7CFF7C` |
+| 连线 | 与端口同色；错误 / 警告仍然优先于类型色 | 同一份 `BlueprintPalette.typeColor` |
+| 未知类型 | 按类型名**稳定散列**成一种颜色，不一律灰 | `typeColor()`；用例钉"两次同名同色、且不等于默认灰" |
+| 输入 / 输出名 | 输入**左对齐**贴左边缘，输出**右对齐**贴右边缘 | 截图：`model` / `模型` 各贴一边 |
+| 参数值 | 单行值**右对齐**；布尔画成开关；`#RRGGBB` 画小色块 | 截图：`strength_01 1.25`、`use_default_template` 开关 |
+| 多行 | Note 正文、`PrimitiveStringMultiline`、超长 `text` 提示词 → 多行文本框，按剩余高度撑开 | `isBlueprintMultilineWidget` / `blueprintWidgetRows` |
+| 纯控件输入 | **不占端口行**（不画左侧圆点），参数区不再被 20 个输入推到框外 | `blueprintInputSocketCount` / `blueprintInputRowIndex` |
+| 底色 | 画布 / 节点 / 标题条用 ComfyUI 的中性灰阶；语义色只留在边框 | 截图实测：`#282828` / `#313131` / `#3E3E3E` |
+| 节点 id | 画在框的右上角**外面**，右对齐 | 截图里的 `#160` / `#43` |
+
+⚠ 两个容易踩的几何点：
+
+1. **画布底色必须在 `translate` 之前画**。图坐标原点常常离包围盒很远（实测 x≈3550），
+   平移后再画 `Offset.zero & size` 会落到画面外 —— 表现是"画布透明 / 只剩 Scaffold 底色"，
+   而**一个错都不报**。
+2. **参数行的几何只有一份**：`blueprintWidgetRows` 同时喂绘制、命中与就地编辑。
+   多行文本把后面的行往下推之后，三者仍然重合。
+
 ---
 
 ## 6. 明确不做（诚实清单）
@@ -192,7 +217,7 @@
 
 | 事实 | 防线 |
 | --- | --- |
-| 蓝图模型 / 布局 / 编辑 / 画布剔除 | `test/workflow_blueprint_test.dart`（15 例：模型、坐标、分层确定性、视口剔除、命中、编辑只碰一个字段、页面接线） |
+| 蓝图模型 / 布局 / 编辑 / 画布剔除 / 类型配色 / 多行几何 | `test/workflow_blueprint_test.dart`（30 例：模型、坐标、分层确定性、视口剔除、命中、多行撑高、纯控件输入不占端口行、编辑只碰一个字段、页面接线、ComfyUI 类型色） |
 | 接线体检的每一条判据 | `server-rs/src/workflow/workflow_blueprint/tests.rs`（17 例） |
 | 广播改写（含零输出桩） | `workflow_frontend/tests.rs` + `workflow_convert/tests.rs::注册成零输出桩的广播节点照样等价改写` |
 | 直通开关 / 动态下拉框 | `workflow_convert/tests.rs::rgthree_直通开关把下游接到真正的上游` / `动态下拉框的子项要跟着主项一起进图` |

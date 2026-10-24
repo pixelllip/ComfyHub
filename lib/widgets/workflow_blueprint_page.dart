@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -471,7 +472,12 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     if (target.width < 32) return const [];
 
     final widget = node.widgets[index];
-    final width = target.width + 4 > 150 ? target.width + 4 : 150.0;
+    // 多行文本行的源矩形可能比视口还宽（一段提示词占满整个节点）：
+    // 浮层是给人打字的，**不许超出屏幕**，也不小于 150。
+    final width = math.min(
+      math.max(target.width + 4, 150.0),
+      math.max(150.0, viewport.width - 8),
+    );
     final maxLeft = viewport.width - width - 4;
     final left = (target.left - 2).clamp(4.0, maxLeft < 4 ? 4.0 : maxLeft);
     return [
@@ -1109,7 +1115,11 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
             Expanded(
               child: SelectableText(
                 value?.toString() ?? '—',
-                maxLines: 3,
+                // 一段提示词在面板里只露三行等于看不到内容；多行文本给到 8 行，
+                // 再长的仍然靠滚动看（列表本身就能滚）。
+                maxLines: value is String && (value.contains('\n') || value.length > 48)
+                    ? 8
+                    : 3,
                 style: theme.textTheme.bodySmall,
               ),
             ),
@@ -1281,7 +1291,7 @@ class _PanelWidgetFieldState extends State<_PanelWidgetField> {
       keyboardType: widget.numeric
           ? const TextInputType.numberWithOptions(decimal: true, signed: true)
           : TextInputType.multiline,
-      maxLines: widget.numeric ? 1 : 4,
+      maxLines: widget.numeric ? 1 : 6,
       style: Theme.of(context).textTheme.bodySmall,
       decoration: const InputDecoration(
         isDense: true,
