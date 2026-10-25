@@ -1047,8 +1047,15 @@ pub async fn tool_submit(
             ))
         }
     };
-    let wait = arguments.get("wait").and_then(Value::as_bool).unwrap_or(true);
-    let wait_seconds = arguments
+    // 技能名（可选）：服务端按名读 skill 正文，写进 `TextGenerate.system_prompt` 的源节点。
+    // 模型只报名字 —— 18KB 的正文让它复述既贵又容易抄错。
+    let text_generate_skill = arguments
+        .get("textGenerateSkill")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string);
+    let wait = arguments.get("wait").and_then(Value::as_bool).unwrap_or(true);    let wait_seconds = arguments
         .get("waitSeconds")
         .and_then(arg_i64)
         .unwrap_or(DEFAULT_WAIT_SECONDS)
@@ -1103,6 +1110,29 @@ pub async fn tool_submit(
             )
         })?;
 
+    // 先按名把 skill 正文写进 TextGenerate.system_prompt（只改这一次提交的图）
+    let (graph, system_prompt_targets) = match text_generate_skill.as_deref() {
+        Some(name) => {
+            let (builtin, user) = crate::ai::skills::roots_of(state);
+            let skill = crate::ai::skills::read_body(&builtin, &user, name).ok_or_else(|| {
+                ToolFailure::new(
+                    "INVALID_ARGUMENT",
+                    format!("找不到 skill `{name}`——先 list_skills 看装了什么，不要把正文猜出来"),
+                )
+            })?;
+            if !skill.valid {
+                return Err(ToolFailure::new(
+                    "INVALID_ARGUMENT",
+                    format!("skill `{name}` 的 frontmatter 不合法（界面上有校验错误），不能加载"),
+                ));
+            }
+            let (graph, targets) = apply_text_generate_system_prompt(&graph, &skill.body)
+                .map_err(|message| ToolFailure::new("INVALID_ARGUMENT", message))?;
+            (graph, targets)
+        }
+        None => (graph, Vec::new()),
+    };
+
     // 先摘 TextGenerate / 写正面提示词，再应用 overrides：显式 overrides 仍然最后说了算。
     let (graph, positive_targets, text_generate_bypassed) = match positive_prompt.as_deref() {
         Some(prompt) => WorkflowEdit::apply_positive_prompt(&graph, prompt)
@@ -1114,6 +1144,16 @@ pub async fn tool_submit(
     let (patched, applied_connections) = WorkflowEdit::apply_connections(&overridden, &connections)
         .map_err(|message| ToolFailure::new("INVALID_ARGUMENT", message))?;
     applied.extend(applied_connections);
+
+    // 这次提示词是谁写的：caller（模型自己写完传 positivePrompt）/ text-generate（本地生成）
+    // / literal（图里写死的文本）。**写进结果**，工具卡上就能看见 —— 静默失效才查得出来。
+    let prompt_source = if positive_prompt.is_some() {
+        "caller"
+    } else if !system_prompt_targets.is_empty() || positive_prompt_is_generated(&patched) {
+        "text-generate"
+    } else {
+        "literal"
+    };
 
     let config = crate::comfy::capture::capture_config(state)
         .map_err(|e| ToolFailure::new("TOOL_ERROR", format!("读捕获配置出错：{}", e.human())))?;
@@ -1280,6 +1320,10 @@ pub async fn tool_submit(
         )),
     );
     out.insert("appliedOverrides".into(), json!(applied));
+    out.insert("promptSource".into(), json!(prompt_source));
+    if !system_prompt_targets.is_empty() {
+        out.insert("systemPromptApplied".into(), json!(system_prompt_targets));
+    }
     if !positive_targets.is_empty() {
         out.insert("positivePromptApplied".into(), json!(positive_targets));
         out.insert("textGenerateBypassed".into(), json!(text_generate_bypassed));
@@ -1333,6 +1377,138 @@ fn arg_i64(value: &Value) -> Option<i64> {
         Value::String(text) => text.trim().parse::<i64>().ok(),
         _ => None,
     }
+}
+
+/// 把一段 skill 正文写进工作流里 `TextGenerate.system_prompt` 指向的那个字符串节点。
+///
+/// 为什么放在服务端：18KB 的 r2i skill 正文让模型在 `overrides` 里复述一遍既贵、又容易抄错
+/// （2026-10-25 的口径：模型只说 skill 名，正文由后端按名读出来写进去）。
+/// 只改**这一次提交的图**，用户的原文件一个字节都不动。
+///
+/// 能写两种形状：`system_prompt` 直接是内联字符串；或者它连着某个 `*String*` 节点（改它的 `value`）。
+pub fn apply_text_generate_system_prompt(
+    graph: &Value,
+    body: &str,
+) -> Result<(Value, Vec<String>), String> {
+    let mut nodes: Map<String, Value> = graph
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "工作流不是 API 格式节点图（顶层要是对象）".to_string())?;
+    let body = body.trim();
+    if body.is_empty() {
+        return Err("textGenerateSkill 指向的 skill 正文是空的".into());
+    }
+    let mut targets: Vec<String> = Vec::new();
+    let ids: Vec<String> = nodes.keys().cloned().collect();
+    for id in ids {
+        let Some(node) = nodes.get(&id).and_then(Value::as_object) else { continue };
+        let class = node.get("class_type").and_then(Value::as_str).unwrap_or("");
+        if !class.to_ascii_lowercase().contains("textgenerate") {
+            continue;
+        }
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(system_prompt) = inputs.get("system_prompt") else { continue };
+        if system_prompt.is_string() {
+            if let Some(node) = nodes.get_mut(&id).and_then(Value::as_object_mut) {
+                if let Some(inputs) = node.get_mut("inputs").and_then(Value::as_object_mut) {
+                    inputs.insert("system_prompt".into(), Value::String(body.to_string()));
+                    targets.push(format!("{id}.system_prompt"));
+                }
+            }
+            continue;
+        }
+        let Some((upstream, _)) = link_ref(system_prompt) else { continue };
+        let Some(upstream_node) = nodes.get_mut(&upstream).and_then(Value::as_object_mut) else { continue };
+        let is_string_node = upstream_node
+            .get("class_type")
+            .and_then(Value::as_str)
+            .map(|c| c.to_ascii_lowercase().contains("string"))
+            .unwrap_or(false);
+        if !is_string_node {
+            continue;
+        }
+        if let Some(inputs) = upstream_node.get_mut("inputs").and_then(Value::as_object_mut) {
+            inputs.insert("value".into(), Value::String(body.to_string()));
+            targets.push(format!("{upstream}.value"));
+        }
+    }
+    if targets.is_empty() {
+        return Err(
+            "这份工作流里找不到可写的 `TextGenerate.system_prompt`（没有 TextGenerate，\
+             或者它接的不是字符串节点）；确认它是不是布局 / 扩写节点"
+                .into(),
+        );
+    }
+    Ok((Value::Object(nodes), targets))
+}
+
+/// 这张图的正面条件是不是**由本地 TextGenerate 生成**的（而不是图里写死的文本）。
+///
+/// 用途只有一个：`comfy_submit` 结果里的 `promptSource`。没有它，"模型以为走了生成支路、
+/// 其实 switch 还指着纯文本拼接"这种静默失效就查不出来。
+pub fn positive_prompt_is_generated(graph: &Value) -> bool {
+    let Some(nodes) = graph.as_object() else { return false };
+    let mut starts: Vec<String> = Vec::new();
+    for node in nodes.values() {
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        if let Some((up, _)) = inputs.get("positive").and_then(link_ref) {
+            starts.push(up);
+        }
+        let class = node.get("class_type").and_then(Value::as_str).unwrap_or("");
+        if class.to_ascii_lowercase().contains("guider") {
+            if let Some((up, _)) = inputs.get("conditioning").and_then(link_ref) {
+                starts.push(up);
+            }
+        }
+    }
+    let mut queue: VecDeque<(String, usize)> = starts.into_iter().map(|id| (id, 0usize)).collect();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut encoders: Vec<String> = Vec::new();
+    while let Some((id, depth)) = queue.pop_front() {
+        if depth > 32 || !seen.insert(id.clone()) {
+            continue;
+        }
+        let Some(node) = nodes.get(&id).and_then(Value::as_object) else { continue };
+        let class = node.get("class_type").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+        if class.contains("textencode") {
+            encoders.push(id);
+            continue;
+        }
+        if let Some(inputs) = node.get("inputs").and_then(Value::as_object) {
+            for value in inputs.values() {
+                if let Some((up, _)) = link_ref(value) {
+                    queue.push_back((up, depth + 1));
+                }
+            }
+        }
+    }
+    // 从每个编码器的 text 连线往上找一层（switch / concat / TextGenerate 都在这条链上）
+    for encoder in encoders {
+        let Some(node) = nodes.get(&encoder).and_then(Value::as_object) else { continue };
+        let Some(text) = node.get("inputs").and_then(Value::as_object).and_then(|i| i.get("text")) else { continue };
+        let mut frontier: Vec<String> = link_ref(text).map(|(up, _)| vec![up]).unwrap_or_default();
+        let mut hop = 0;
+        while !frontier.is_empty() && hop < 8 {
+            let mut next: Vec<String> = Vec::new();
+            for id in frontier {
+                let Some(node) = nodes.get(&id).and_then(Value::as_object) else { continue };
+                let class = node.get("class_type").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+                if class.contains("textgenerate") {
+                    return true;
+                }
+                if let Some(inputs) = node.get("inputs").and_then(Value::as_object) {
+                    for value in inputs.values() {
+                        if let Some((up, _)) = link_ref(value) {
+                            next.push(up);
+                        }
+                    }
+                }
+            }
+            frontier = next;
+            hop += 1;
+        }
+    }
+    false
 }
 
 /// 库里那条提示词的标题（找不到就 `None`）。

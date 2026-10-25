@@ -22,8 +22,8 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         ]
     );
     assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
-    // v52：环境头加「视觉能力」行，23④ 拆三档。
-    assert_eq!(body["promptVersion"], "v52");
+    // v53：comfy_submit 加 textGenerateSkill + 结果 promptSource。
+    assert_eq!(body["promptVersion"], "v53");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");

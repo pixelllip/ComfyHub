@@ -129,7 +129,11 @@ pub const VERSION: &str = "nsfw-v3";
 ///   支持+有图 → 自己写 positivePrompt；支持+本轮无图 → **先要图**（给 LoadImage 路径），不许退回
 ///   TextGenerate、也不许凭文件名编；不支持 → 说明并建议换多模态模型，用户坚持才用 TextGenerate；
 ///   并写明用 TextGenerate **必须把 `162.switch` 置 true**，否则走的是 `182` 拼接支路、静默不生效。
-pub const PROMPT_VERSION: &str = "v52";
+/// - **Rust v53**（2026-10-25）：`comfy_submit` 多一个 `textGenerateSkill`（服务端按名读 skill
+///   正文写进 `TextGenerate.system_prompt` 的源节点，模型只报名字、不抄 18KB 正文），
+///   结果多一个 `promptSource`（caller / text-generate / literal）——"以为走了生成支路、其实
+///   走的是纯文本拼接"这种静默失效从此可查。工具 schema 变了，模型看到的能力跟着变 → bump。
+pub const PROMPT_VERSION: &str = "v53";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】

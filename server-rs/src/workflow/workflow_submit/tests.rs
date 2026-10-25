@@ -461,3 +461,48 @@ fn 提交记录的形状与_kotlin_的可空约定一致() {
         assert!(!map.contains_key(key), "{key} 不该出现：{queued}");
     }
 }
+
+
+/// `textGenerateSkill` 只改**这一次提交的图**：写进 `TextGenerate.system_prompt` 指向的字符串节点。
+#[test]
+fn 技能正文写进_text_generate_的系统提示节点() {
+    let graph = json!({
+        "43": { "class_type": "TextGenerate", "inputs": { "prompt": ["182", 0], "system_prompt": ["45", 0] } },
+        "45": { "class_type": "PrimitiveStringMultiline", "inputs": { "value": "旧系统提示" } },
+        "182": { "class_type": "StringConcatenate", "inputs": { "string_a": "a", "string_b": "b" } }
+    });
+    let (patched, targets) = apply_text_generate_system_prompt(&graph, "新的 skill 正文").unwrap();
+    assert_eq!(patched["45"]["inputs"]["value"], json!("新的 skill 正文"));
+    assert_eq!(targets, vec!["45.value".to_string()]);
+    // 原图不动
+    assert_eq!(graph["45"]["inputs"]["value"], json!("旧系统提示"));
+}
+
+/// 没有 TextGenerate（或它接的不是字符串节点）要报出来，不许静默什么都不改。
+#[test]
+fn 技能正文找不到可写节点时报错() {
+    let graph = json!({
+        "43": { "class_type": "TextGenerate", "inputs": { "prompt": ["182", 0] } }
+    });
+    let err = apply_text_generate_system_prompt(&graph, "x").unwrap_err();
+    assert!(err.contains("TextGenerate.system_prompt"), "{err}");
+}
+
+/// `promptSource` 的判据：正面文本是从 `TextGenerate` 那条链上来的才算生成。
+#[test]
+fn 正面条件是否由_text_generate_生成() {
+    let generated = json!({
+        "128": { "class_type": "KSampler", "inputs": { "positive": ["108", 0] } },
+        "108": { "class_type": "CLIPTextEncode", "inputs": { "text": ["162", 0] } },
+        "162": { "class_type": "ComfySwitchNode", "inputs": { "on_true": ["43", 0], "on_false": ["182", 0] } },
+        "43": { "class_type": "TextGenerate", "inputs": { "prompt": ["182", 0] } },
+        "182": { "class_type": "StringConcatenate", "inputs": { "string_a": "a", "string_b": "b" } }
+    });
+    assert!(positive_prompt_is_generated(&generated));
+
+    let literal = json!({
+        "128": { "class_type": "KSampler", "inputs": { "positive": ["108", 0] } },
+        "108": { "class_type": "CLIPTextEncode", "inputs": { "text": "写死的提示词" } }
+    });
+    assert!(!positive_prompt_is_generated(&literal));
+}
