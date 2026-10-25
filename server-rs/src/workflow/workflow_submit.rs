@@ -258,6 +258,9 @@ impl WorkflowEdit {
     ///  1. **允许写一个当前不存在的输入名** —— 转换时"空着的那个输入"本来就不会出现在 inputs 里，
     ///     而这些正是要补的位置（清单见 `comfy_load_workflow` 返回的 `openInputs`）；
     ///  2. 上游节点必须**在这张图里真的存在** —— 这是最容易写错、后果又最难查的一处。
+    ///
+    /// ⚠ 写进图里的引用**永远是字符串 id**（哪怕调用方给的是数字）：ComfyUI 拿它索引
+    /// prompt 字典，数字会 `KeyError`（与 `workflow_convert::ref_of` 同一条纪律）。
     pub fn apply_connections(
         graph: &Value,
         connections: &Map<String, Value>,
@@ -300,7 +303,9 @@ impl WorkflowEdit {
                 .and_then(|text| text.trim().parse::<i64>().ok())
                 .ok_or_else(|| format!("连线 {path} 的槽位要是整数"))?;
             let mut inputs = node.get("inputs").and_then(Value::as_object).cloned().unwrap_or_default();
-            inputs.insert(field.to_string(), json!([reference[0], slot]));
+            // ⚠ 引用里的 id **一律写字符串**（`["4", 1]`）：ComfyUI 拿它直接索引 prompt 字典，
+            // 写成数字就是 `KeyError('4')`（见 `workflow_convert::ref_of` 的注释）。
+            inputs.insert(field.to_string(), json!([source, slot]));
             let mut patched = node.clone();
             patched.insert("inputs".into(), Value::Object(inputs));
             nodes.insert(node_id.to_string(), Value::Object(patched));

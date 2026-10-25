@@ -1089,7 +1089,7 @@ async fn load_ui_workflow_uses_object_info_and_reports_gaps() {
     let graph = &out.payload["apiGraph"];
     assert_eq!(graph["3"]["class_type"], "KSampler");
     assert_eq!(graph["3"]["inputs"]["seed"], 777);
-    assert_eq!(graph["3"]["inputs"]["positive"], serde_json::json!([1, 0]));
+    assert_eq!(graph["3"]["inputs"]["positive"], serde_json::json!(["1", 0]));
     assert_eq!(graph["2"]["inputs"]["width"], 512);
     // 缺口清单：正面提示词那一路接上了，但 `negative` / `model` 还空着
     assert!(
@@ -1171,7 +1171,7 @@ async fn load_ui_workflow_emulates_frontend_and_injects_a_save_node() {
     assert!(injected[0].contains("原本没有输出节点"), "{injected:?}");
     let graph = &out.payload["apiGraph"];
     assert_eq!(graph["6"]["class_type"], "SaveImage");
-    assert_eq!(graph["6"]["inputs"]["images"], serde_json::json!([5, 0]));
+    assert_eq!(graph["6"]["inputs"]["images"], serde_json::json!(["5", 0]));
 
     // 灌完之后 openInputs 要重算：那两条线已经接好了，不该再让模型去补
     let open_inputs = out.payload["openInputs"].as_array().cloned().unwrap_or_default();

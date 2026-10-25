@@ -63,7 +63,62 @@ fn 纯前端节点必须拦_那次是_20_个() {
     for id in ["10", "15", "20", "163"] {
         assert!(f.nodes.contains(&id.to_string()), "{:?}", f.nodes);
     }
-    assert!(report.blocking_refusal().is_some());
+    // 拒因里要**点出节点 id**：只说"图里还有 1 个纯前端节点"时，模型只能把整份图重读一遍
+    // 去猜是哪一个（2026-10-25 现场为此多花了 3 轮工具）。
+    let refusal = report.blocking_refusal().expect("有 BLOCK 就必须给拒因");
+    for id in ["10", "15", "20", "163"] {
+        assert!(refusal.contains(id), "拒因里没有节点 {id}：\n{refusal}");
+    }
+}
+
+/// **`/object_info` 里真的有的显示节点不算"纯前端"**（2026-10-25 现场）。
+///
+/// `krea2 r2i workflow.json` 里的 `55 PreviewAny` 是 ComfyUI **自带**的真节点
+/// （`output_node: true`），只是名字命中 `^Preview[A-Z]` 那条模式；
+/// 早先它被判成纯前端 → 提交闸门 `MODEL_NOT_LOADABLE` 拒掉整份图，
+/// 而 ComfyUI 明明能跑 —— 模型只能反复重读 / 重写工作流，永远过不去。
+#[test]
+fn object_info_里有的显示节点不算纯前端() {
+    let g = graph(
+        r#"{
+          "1": {"class_type": "VAEDecode", "inputs": {"samples": ["2", 0]}},
+          "2": {"class_type": "KSampler", "inputs": {"steps": 8, "cfg": 1.0, "sampler_name": "er_sde", "seed": 1}},
+          "3": {"class_type": "PreviewAny", "inputs": {"source": ["1", 0]}},
+          "4": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "x"}}
+        }"#,
+    );
+    // ① 拿不到 `/object_info`：静态判据照旧（不知道 ≠ 没问题）
+    assert_eq!(find(&audit(&g, None, None), CHECK_FRONTEND).len(), 1);
+    // ② 实例里真有这个类：不许再说"服务端根本没有这个类"
+    let info: Map<String, Value> = graph(
+        r#"{
+          "VAEDecode": {"input": {"required": {}}, "output": ["IMAGE"]},
+          "KSampler": {"input": {"required": {"steps": ["INT"]}}, "output": ["LATENT"]},
+          "PreviewAny": {"input": {"required": {}}, "output": [], "output_node": true},
+          "SaveImage": {"input": {"required": {}}, "output": []}
+        }"#,
+    );
+    let findings = find(&audit(&g, Some(&info), None), CHECK_FRONTEND);
+    assert!(findings.is_empty(), "PreviewAny 是 ComfyUI 自带真节点：{}", findings[0].detail);
+    assert!(audit(&g, Some(&info), None).blocking_refusal().is_none());
+}
+
+/// 广播型是**零输出桩**：哪怕它注册在 `/object_info` 里，也照样跑不出东西 —— 仍然要拦。
+#[test]
+fn 广播桩即使注册在_object_info_里也照样算前端类() {
+    let g = graph(
+        r#"{
+          "1": {"class_type": "Anything Everywhere", "inputs": {}},
+          "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "x"}}
+        }"#,
+    );
+    let info: Map<String, Value> = graph(
+        r#"{
+          "Anything Everywhere": {"input": {"required": {}}, "output": []},
+          "SaveImage": {"input": {"required": {}}, "output": []}
+        }"#,
+    );
+    assert_eq!(find(&audit(&g, Some(&info), None), CHECK_FRONTEND).len(), 1);
 }
 
 #[test]

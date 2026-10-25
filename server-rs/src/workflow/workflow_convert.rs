@@ -1112,17 +1112,21 @@ pub(crate) fn as_int(value: Option<&Value>) -> Option<i64> {
     trimmed.parse::<f64>().ok().map(|v| v.trunc().clamp(i64::MIN as f64, i64::MAX as f64) as i64)
 }
 
-/// 节点引用里的 id 值：**数字 id 发数字、非数字发字符串**（Kotlin `WorkflowNodeKeys.refOf`）。
+/// 节点引用里的 id 值：**永远是字符串**（`["128", 0]`，不是 `[128, 0]`）。
 ///
-/// ⚠ 这条看着"无所谓"，其实是**两端一致**的问题：图的**键**永远是字符串（`"4"`），
-/// 而引用里 Kotlin 会把纯数字 id 写成 `4`。真机上 Kotlin 提交的就是这种形状
-/// （用户的工作流一直在跑），所以这里照它 —— 全都写字符串虽然也符合 ComfyUI 的规范，
-/// 但会让"两端转换同一份文件"的产物**逐字节不同**，而这类差异不会报错、只会让人怀疑。
+/// ⚠ 这里踩过一次真机事故（2026-10-25，`krea2 r2i workflow.json`）：
+/// 早先照 Kotlin 的 `WorkflowNodeKeys.refOf` 把纯数字 id 写成**数字**，
+/// 而 ComfyUI 的 `execution.validate_prompt` 是拿引用里的 id **直接索引 prompt 字典**
+/// （`prompt[o_id]`）—— 那个字典的键来自 JSON、**永远是字符串**。于是数字引用一律抛
+/// `KeyError`，被 `/prompt` 包成
+/// `prompt_outputs_failed_validation … {"exception_type":"KeyError","details":"<节点 id>"}`，
+/// 界面上只说"提交失败"，一个字都指不到这里。
+///
+/// ComfyUI 官方前端 `graphToPrompt()` 写的就是 `[String(id), slot]`；
+/// 从 ComfyUI `/history` 捕获回来的图（`capture_runs.raw`）同样是字符串引用 ——
+/// 也就是说**只有我们自己转出来的那份是数字**，那正是"库里老工作流能跑、新读进来的跑不了"。
 pub(crate) fn ref_of(id: &str) -> Value {
-    match id.parse::<i64>() {
-        Ok(number) => json!(number),
-        Err(_) => json!(id),
-    }
+    json!(id)
 }
 
 #[cfg(test)]

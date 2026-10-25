@@ -154,6 +154,11 @@ impl Report {
         for f in blocking {
             out.push_str(&format!("\n· [{}] {}\n", f.check, f.title));
             out.push_str(&format!("  {}\n", f.detail));
+            // 点出**是哪几个节点**：只说"图里还有 1 个纯前端节点"时，模型只能整份图重读一遍
+            // 去猜是哪一个（2026-10-25 现场：它为此多花了 3 轮工具）。
+            if !f.nodes.is_empty() {
+                out.push_str(&format!("  · 涉及的节点：{}\n", f.nodes.join("、")));
+            }
             if let Some(fix) = &f.fix {
                 out.push_str(&format!("  → {fix}\n"));
             }
@@ -533,9 +538,29 @@ fn check_frontend_nodes(
     nodes: &[(String, String, &Map<String, Value>)],
     object_info: Option<&Map<String, Value>>,
 ) -> Vec<Finding> {
+    // ⚠ **`/object_info` 里真的有这个类时，它就不是"服务端根本没有的类"。**
+    //
+    // 显示型那一族（`^Preview…` / `^Show…` / `^Display…`）最容易误判：ComfyUI 自带的
+    // `PreviewImage` / `PreviewAny` 都是**真节点**（`output_node: true`），只是"看一眼、没下游"。
+    // 2026-10-25 的现场就是它：`krea2 r2i` 里的 `55 PreviewAny` 被这张模式表判成纯前端节点，
+    // 提交闸门当场按 `MODEL_NOT_LOADABLE` 拒 —— 而 ComfyUI 明明能跑它；模型只能一遍遍重读
+    // 工作流、换着法子重写，永远过不去（用户看到的就是"AI 走了大量弯路还是没跑通"）。
+    //
+    // 广播型（`Anything Everywhere` 那一族）**不适用**这条：它们在本机被注册成**零输出桩**，
+    // 在 `/object_info` 里查得到也照样跑不出东西（见 `workflow_frontend` 的文件头）。
+    // `KNOWN_FRONTEND_ONLY` 那张表里的 rgthree 前端类则从来不会出现在 `/object_info`。
     let ui_only: Vec<&(String, String, &Map<String, Value>)> = nodes
         .iter()
-        .filter(|(_, cls, _)| is_frontend_only(cls))
+        .filter(|(_, cls, _)| {
+            if KNOWN_FRONTEND_ONLY.contains(&cls.as_str()) || is_broadcast(cls) {
+                return true;
+            }
+            if is_display(cls) {
+                // 拿不到 `/object_info` 时沿用静态判据（"不知道"不等于"没问题"）
+                return object_info.map(|info| !info.contains_key(cls.as_str())).unwrap_or(true);
+            }
+            false
+        })
         .collect();
     let unknown: Vec<&(String, String, &Map<String, Value>)> = match object_info {
         None => Vec::new(),

@@ -88,10 +88,11 @@ fn 补线允许新输入但要求上游节点存在() {
     assert!(WorkflowEdit::apply_connections(&graph(), &bad_slot).unwrap_err().contains("槽位要是整数"));
 
     // 数字 id 与字符串 id 必须都能用（真库里有 `"negative": [76, 0]` 这种）
+    // —— 但**写进图里的引用一律是字符串**：ComfyUI 拿它索引 prompt 字典，数字会 KeyError。
     let mut numeric = Map::new();
     numeric.insert("6.clip".into(), json!([4, 1]));
     let (patched, _) = WorkflowEdit::apply_connections(&graph(), &numeric).unwrap();
-    assert_eq!(patched["6"]["inputs"]["clip"], json!([4, 1]));
+    assert_eq!(patched["6"]["inputs"]["clip"], json!(["4", 1]));
 }
 
 /// 正面提示词直接写进最近的 `CLIPTextEncode.text`，**不碰 negative**，

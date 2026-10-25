@@ -230,8 +230,8 @@ fn converts_a_classic_ui_workflow() {
     assert_eq!(converted.node_count, 6);
     let sampler = converted.graph.get("5").unwrap();
     assert_eq!(sampler["class_type"], "KSampler");
-    assert_eq!(sampler["inputs"]["model"], json!([1, 0]));
-    assert_eq!(sampler["inputs"]["positive"], json!([2, 0]));
+    assert_eq!(sampler["inputs"]["model"], json!(["1", 0]));
+    assert_eq!(sampler["inputs"]["positive"], json!(["2", 0]));
     // 控件按声明顺序贴回名字上；`seed` 后面那个 control_after_generate 槽位要跳过去
     assert_eq!(sampler["inputs"]["seed"], 12345);
     assert_eq!(sampler["inputs"]["steps"], 20);
@@ -300,7 +300,7 @@ fn reroute_and_set_get_are_rewritten() {
     let converted = to_api_graph(&workflow, &info, false).unwrap();
     let inputs = &converted.graph["6"]["inputs"];
     // Reroute 穿透：model ← 节点 1（不是节点 2）
-    assert_eq!(inputs["model"], json!([1, 0]), "{:?}", converted.rewritten);
+    assert_eq!(inputs["model"], json!(["1", 0]), "{:?}", converted.rewritten);
     assert!(
         converted.rewritten.iter().any(|r| r.contains("Reroute"))
             && converted.rewritten.iter().any(|r| r.contains("Note")),
@@ -343,7 +343,7 @@ fn bypass_redirects_to_the_same_type_input() {
     let converted = to_api_graph(&workflow, &info(), false).unwrap();
     // 旁路的 LoraLoader 自己不进图；KSampler 的 model 直接接到节点 1
     assert!(converted.graph.get("2").is_none(), "旁路节点不该出现在图里");
-    assert_eq!(converted.graph["3"]["inputs"]["model"], json!([1, 0]));
+    assert_eq!(converted.graph["3"]["inputs"]["model"], json!(["1", 0]));
     assert!(
         converted.rewritten.iter().any(|r| r.contains("旁路")),
         "{:?}",
@@ -401,8 +401,8 @@ fn kotlin_case_classic_ui_workflow() {
     assert!(converted.unsupported_nodes.is_empty(), "{:?}", converted.unsupported_nodes);
     assert_eq!(converted.node_count, 6);
     let sampler = &converted.graph["3"]["inputs"];
-    assert_eq!(sampler["model"], json!([4, 0]));
-    assert_eq!(sampler["positive"], json!([6, 0]));
+    assert_eq!(sampler["model"], json!(["4", 0]));
+    assert_eq!(sampler["positive"], json!(["6", 0]));
     // seed 之后跳过 control_after_generate 那个槽位，steps 才拿到 30
     assert_eq!(sampler["seed"], 20260918);
     assert_eq!(sampler["steps"], 30);
@@ -432,7 +432,7 @@ fn kotlin_case_force_input_is_not_a_widget() {
             "links": [[9, 2, 0, 1, 0, "STRING"]] }"#,
     );
     let converted = to_api_graph(&ui, &object_info, false).unwrap();
-    assert_eq!(converted.graph["1"]["inputs"]["value"], json!([2, 0]));
+    assert_eq!(converted.graph["1"]["inputs"]["value"], json!(["2", 0]));
     assert_eq!(converted.graph["1"]["inputs"]["note"], "hello");
 }
 
@@ -556,7 +556,7 @@ fn kotlin_case_new_style_object_links() {
           "links": [ {"id": 4, "origin_id": 6, "origin_slot": 0, "target_id": 3, "target_slot": 1} ] }"#,
     );
     let converted = to_api_graph(&ui, &kotlin_object_info(), false).unwrap();
-    assert_eq!(converted.graph["3"]["inputs"]["positive"], json!([6, 0]));
+    assert_eq!(converted.graph["3"]["inputs"]["positive"], json!(["6", 0]));
 }
 
 /// Kotlin `旁路的输出找不到同类型输入时留警告 不静默`。
@@ -602,7 +602,7 @@ fn kotlin_case_reroute_set_get_chain() {
     );
     let converted = to_api_graph(&ui, &kotlin_object_info(), false).unwrap();
     assert!(converted.unsupported_nodes.is_empty(), "{:?}", converted.unsupported_nodes);
-    assert_eq!(converted.graph["5"]["inputs"]["model"], json!([1, 0]));
+    assert_eq!(converted.graph["5"]["inputs"]["model"], json!(["1", 0]));
     assert!(!converted.graph.contains_key("2"));
     assert!(!converted.graph.contains_key("3"));
     assert!(!converted.graph.contains_key("4"));
@@ -685,14 +685,13 @@ fn kotlin_case_subgraph_is_flattened() {
     // ② 组节点的"连线型输入"要接上主图那边真正的来源
     assert_eq!(
         inner_model["inputs"]["model"],
-        json!([1, 0]),
+        json!(["1", 0]),
         "组节点输入喂进来的 MODEL 应该接回主图的 CheckpointLoaderSimple"
     );
     // ③ 组节点的输出要穿透到内部真正产出它的节点
-    let inner_id: i64 = inner_latent_id.parse().unwrap();
     assert_eq!(
         converted.graph["20"]["inputs"]["latent_image"],
-        json!([inner_id, 0]),
+        json!([inner_latent_id.as_str(), 0]),
         "下游拿到的必须是内部那个 EmptyLatentImage"
     );
     assert!(converted.unresolved_inputs.is_empty(), "{:?}", converted.unresolved_inputs);
@@ -882,8 +881,8 @@ fn kotlin_case_emulate_frontend_changes_the_graph() {
     assert!(emulated.unsupported_nodes.is_empty(), "{:?}", emulated.unsupported_nodes);
     assert!(emulated.runnable(), "{:?}", emulated.unsupported_nodes);
     // ① 广播：上游那一路（节点 2 的 CONDITIONING）填进所有同类型且空着的输入
-    assert_eq!(emulated.graph["5"]["inputs"]["positive"], json!([2, 0]));
-    assert_eq!(emulated.graph["5"]["inputs"]["negative"], json!([2, 0]));
+    assert_eq!(emulated.graph["5"]["inputs"]["positive"], json!(["2", 0]));
+    assert_eq!(emulated.graph["5"]["inputs"]["negative"], json!(["2", 0]));
     assert_eq!(emulated.broadcast_lines.len(), 2, "{:?}", emulated.broadcast_lines);
     assert!(
         emulated.broadcast_lines.iter().any(|line| line.contains("5.positive ← 节点 14")),
@@ -910,7 +909,7 @@ fn kotlin_case_emulate_frontend_changes_the_graph() {
     // ③ 一个输出节点都没有 → 照前端的做法补一个 SaveImage，接在产出 IMAGE 的那个节点上
     assert_eq!(emulated.injected_nodes.len(), 1, "{:?}", emulated.injected_nodes);
     assert_eq!(emulated.graph["7"]["class_type"], json!("SaveImage"));
-    assert_eq!(emulated.graph["7"]["inputs"]["images"], json!([6, 0]));
+    assert_eq!(emulated.graph["7"]["inputs"]["images"], json!(["6", 0]));
     assert_eq!(emulated.graph["7"]["inputs"]["filename_prefix"], json!("ComfyHub"));
     assert_eq!(emulated.node_count, 6, "补完之后节点数要多一个");
 }
@@ -1011,7 +1010,7 @@ fn rgthree_直通开关把下游接到真正的上游() {
         }"#,
     );
     let converted = to_api_graph(&ui, &object_info, false).unwrap();
-    assert_eq!(converted.graph["105"]["inputs"]["model"], json!([89, 0]));
+    assert_eq!(converted.graph["105"]["inputs"]["model"], json!(["89", 0]));
     assert!(!converted.graph.contains_key("90"), "直通节点自己不进图");
     assert!(converted.unsupported_nodes.is_empty(), "{:?}", converted.unsupported_nodes);
     assert!(
@@ -1195,7 +1194,7 @@ fn 注册成零输出桩的广播节点照样等价改写() {
 
     // 开：按前端行为广播填上
     let emulated = to_api_graph(&ui, &object_info, true).unwrap();
-    assert_eq!(emulated.graph["4"]["inputs"]["vae"], json!([1, 2]));
+    assert_eq!(emulated.graph["4"]["inputs"]["vae"], json!(["1", 2]));
     assert!(!emulated.open_inputs.iter().any(|line| line.starts_with("4.vae")), "{:?}", emulated.open_inputs);
     assert!(emulated.broadcast_lines.iter().any(|line| line.starts_with("4.vae")), "{:?}", emulated.broadcast_lines);
 }

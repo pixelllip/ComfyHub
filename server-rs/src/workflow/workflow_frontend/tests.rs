@@ -116,7 +116,7 @@ fn 没有输出节点时才补_saveimage() {
     );
     let (emulated, report) = emulate(&[], &object_info, &graph, &LinkTable::new());
     assert_eq!(emulated["3"]["class_type"], json!("SaveImage"));
-    assert_eq!(emulated["3"]["inputs"]["images"], json!([2, 0]));
+    assert_eq!(emulated["3"]["inputs"]["images"], json!(["2", 0]));
     assert_eq!(report.injected.len(), 1, "{:?}", report.injected);
 
     // 已经有 SaveImage 就不再补（绝不覆盖用户自己的工作流）
