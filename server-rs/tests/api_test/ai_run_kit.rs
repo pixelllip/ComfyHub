@@ -22,8 +22,8 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         ]
     );
     assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
-    // v50：Scene 段改成逐件点名 + 方位，禁止发明背景。
-    assert_eq!(body["promptVersion"], "v50");
+    // v51：23④ 按识图能力分流 + 表情不许来自角色卡。
+    assert_eq!(body["promptVersion"], "v51");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");

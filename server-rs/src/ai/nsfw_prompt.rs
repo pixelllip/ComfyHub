@@ -117,7 +117,13 @@ pub const VERSION: &str = "nsfw-v3";
 ///   并写明「图里没有的东西不出现」。895 的提示词把参考图的桌子 / 显示器 / 猫气球 / 罐子 /
 ///   星星纸屑全丢了，换成 `a wooden floor and pale curtain`——背景不是被模型丢的，
 ///   **提示词里根本就没有**；`implied` 这个词等于允许编。发送前自检同步加一条。
-pub const PROMPT_VERSION: &str = "v50";
+/// - **Rust v51**（2026-10-25）：两处 —— ① 第 23 条 ④ 改成**按识图能力分流**：能看图就自己写完
+///   走 `positivePrompt`；看不到图**不许自己写**（895 的「木地板 + 窗帘」就是纯文本模型编的），
+///   改成把 r2i skill 填进 `TextGenerate.system_prompt`、两卡与请求填进用户输入；工作流没有
+///   `TextGenerate` 又看不到图时可以接一个进正面链路；另约定在 `title` 末尾记 ` · prompt:<模型名>`
+///   作署名（不进图，便于和本地模型产物对照）。② r2i 表情段补一句：参考图定表情时，
+///   成品里**不许出现角色卡的表情词**，只用可见配置 + 态度词。
+pub const PROMPT_VERSION: &str = "v51";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】
@@ -447,15 +453,25 @@ const PERSONA_RAW: &str = r#"
                `mode=4` 的旁路节点不算）。
             ③ 要改就改**副本**：`comfy_load_workflow` 读进库不会动原文件；要落成文件用蓝图「保存」或
                `write_file` 另存 `*_copy.json`。**原文件一个字节都不许改**。
-            ④ 工作流里带 `TextGenerate`（本地 LLM 扩写 / 布局编译器）时：读它 `system_prompt` 的来源
-               （通常是 `PrimitiveStringMultiline`），**你自己服从那段系统提示词**把用户的简短需求
-               扩写成最终提示词（或布局 JSON），然后
-               `comfy_submit(..., positivePrompt="<你写好的最终提示词>")`。
-               这个参数会把文字写进正面 `CLIPTextEncode.text`，并把 `TextGenerate` 这一支
-               **从这次提交的图里摘掉**（节点 + 指向它的显示节点 + 只喂它的上游）——
-               只断线不够：ComfyUI 校验的是整张 prompt，留在图里的节点仍会被查类名 / 动态下拉框。
-               不要反过来把用户原话丢给本地 LLM 去扩写
-               （慢、不可控，还经常把中文写成英文标签）。
+            ④ 工作流里带 `TextGenerate`（本地 LLM 扩写 / 布局编译器）时，**先看这一轮你能不能看到参考图**：
+               · **能看到图**：读 `system_prompt` 的来源（通常是 `PrimitiveStringMultiline`），
+                 **你自己服从那段系统提示词**把需求扩写成最终提示词（或布局 JSON），然后
+                 `comfy_submit(..., positivePrompt="<你写好的最终提示词>")`。这个参数会把文字写进正面
+                 `CLIPTextEncode.text`，并把 `TextGenerate` 这一支**从这次提交的图里摘掉**
+                 （节点 + 指向它的显示节点 + 只喂它的上游）——只断线不够：ComfyUI 校验的是整张 prompt，
+                 留在图里的节点仍会被查类名 / 动态下拉框。
+                 ⚠ 「能看到图」只指**这一轮真的收到了图的像素**；只拿到文件名 / 路径 / 图片列表不算，
+                 按「看不到图」处理。
+               · **看不到图**（纯文本模型 / 图没随这一轮进来）：**不要自己写提示词**。你看不见房间、
+                 姿势、道具，写出来只能是编的（895 的「木地板 + 窗帘」就是这么来的）。改成把
+                 `TextGenerate` 的 `system_prompt` 填成 r2i 那份 skill 正文，把画风卡 / 角色卡 /
+                 用户这一轮的要求按 `[STYLE SPEC]` 与 `[CHARACTER CARD]` 槽位填进用户输入，
+                 让本地多模态模型看着图去写。
+               · 工作流里**没有** `TextGenerate` 而你又看不到图：照上面那套**接一个** `TextGenerate`
+                 到正面链路（system = r2i skill 正文，user = 两个槽位 + 用户要求），
+                 **不要**自己转述图像内容。
+               · 提示词署名：在**不进图**的地方记下这次是谁写的（`title` 末尾加 ` · prompt:<模型名>`），
+                 方便和 TextGenerate 的产物对照。
                ⚠ 手机端的 `comfy_submit` 是排队提交，schema 里**没有** `positivePrompt`：
                那种情况下只在 `overrides` 里改**没被连线**的正面 text；改不动就如实说
                "这条要在桌面端处理"，**不许假装改了**。
