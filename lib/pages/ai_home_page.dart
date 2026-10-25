@@ -1360,9 +1360,20 @@ class _MessageBubble extends StatelessWidget {
           // 气泡本体（内含底色那一块）在用例里要能精确取到矩形 ——
           // "转圈动画贴在正在生成的那条气泡底部"这条断言就靠它。
           key: ValueKey('ai-bubble-${m.id}'),
-          // **没有 maxWidth 上限**（用户建议 2026-09-20："空间利用率低"）：
-          // 以前写死 720，宽窗口下右半边整片空着，表格 / 代码块也被挤在 720 里
-          // 横向溢出。现在气泡由外层 `stretch` 撑满整行，左右各留 24（见 `_itemPadding`）。
+          // **助手气泡铺满整行，用户气泡按内容收缩**（用户 bug 2026-10-25）。
+          //
+          // 助手这一侧是"内容面板"（正文 / 工具卡 / 产物卡 / 思考过程…），宽度
+          // 只能由版面决定：一旦让 `Container` 收缩到内容宽度，流式期间气泡宽度
+          // 就会跟着"当前最后一行有多长"一抽一抽地跳 —— 思考过程最明显，它折叠时
+          // 显示的正是**最后一行**，每换一行气泡右边缘就变一次（用户截图）。
+          // 用户这一侧是"消息气泡"：按内容收缩、贴右边，才像一条消息。
+          //
+          // 早先这里指望外层 `stretch` 撑满（用户建议 2026-09-20："空间利用率低"），
+          // 但 `stretch` 只作用到"每条消息占满整行"那一层：这一层 Column 的
+          // `crossAxisAlignment` 是 start/end，气泡拿到的是**松约束**、又缩回内容
+          // 宽度了（这也是 057c47b 那句"气泡由 stretch 撑满整行"没兑现的原因）。
+          // 所以 `width: double.infinity` 不能省：它把助手气泡钉在整行宽上。
+          width: m.isUser ? null : double.infinity,
           margin: const EdgeInsets.symmetric(vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(

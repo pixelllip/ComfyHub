@@ -1077,6 +1077,55 @@ void main() {
     expect(find.textContaining('尾巴结论。'), findsOneWidget);
   });
 
+  testWidgets('(b5) 折叠摘要的长短不许改变气泡宽度（用户 bug 2026-10-25）', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    // 停在流式生成中，而且思考的**最后一行很短**（"好。"）。
+    //
+    // 用户报的现象：气泡宽度跟着折叠摘要那最后一行一抽一抽地变 ——
+    // 因为收起时气泡是"按内容收缩"的，思考一行一行写下来，每换一行
+    // 气泡右边缘就跳一次。气泡宽度是版面的一部分，不能是"这行字有多长"的函数。
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(
+            3,
+            'reasoning.delta',
+            '{"messageId":"a1","text":"先看需求，再定风格。\\n再检查一下手。\\n好。"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '帮我想想');
+    await tester.tap(find.text('发送'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+
+    expect(find.text('思考中…'), findsOneWidget, reason: '前提：停在流式生成中');
+    final list = tester.getRect(find.byKey(const Key('ai-message-list')));
+    final bubble = tester.getRect(
+      find.byKey(const ValueKey('ai-bubble-a1')).first,
+    );
+    // 消息区左右各留 24（`_itemPadding`）→ 气泡该占满剩下那一行。
+    // 旧行为实测只有 160 宽（缩成摘要最后一行那么宽）。
+    expect(
+      bubble.width,
+      closeTo(list.width - 48, 0.5),
+      reason: '气泡宽度不许跟着折叠摘要最后一行长短变（旧行为：缩成「好。」那么宽）',
+    );
+    expect(bubble.left, closeTo(list.left + 24, 0.5));
+
+    // 展开也不许变宽 —— 展开/收起是同一个面板的两种形态，气泡得留在原地。
+    await tester.tap(find.text('思考过程'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getRect(find.byKey(const ValueKey('ai-bubble-a1')).first).width,
+      closeTo(bubble.width, 0.5),
+      reason: '展开完整思考后气泡宽度要保持不变',
+    );
+  });
+
   testWidgets('(d) 模型选择器懒构建并可按搜索过滤', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1.0;
