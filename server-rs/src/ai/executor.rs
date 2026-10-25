@@ -254,6 +254,8 @@ async fn run_once(
         &policy,
         &memory_text,
         has_inlined_attachments,
+        // 与附件计划**分开**：模型能不能收图，与这一轮有没有图是两件事。
+        model.input_modalities.iter().any(|m| m == "image"),
         nsfw,
     );
 

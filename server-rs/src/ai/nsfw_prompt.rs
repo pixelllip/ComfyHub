@@ -123,7 +123,13 @@ pub const VERSION: &str = "nsfw-v3";
 ///   `TextGenerate` 又看不到图时可以接一个进正面链路；另约定在 `title` 末尾记 ` · prompt:<模型名>`
 ///   作署名（不进图，便于和本地模型产物对照）。② r2i 表情段补一句：参考图定表情时，
 ///   成品里**不许出现角色卡的表情词**，只用可见配置 + 态度词。
-pub const PROMPT_VERSION: &str = "v51";
+/// - **Rust v52**（2026-10-25）：两处 —— ① 环境头加一行 `视觉能力: 支持 / 不支持`（取自
+///   `ai_models.input_modalities`），把「这一轮没带图」和「模型看不了图」**分开**：895 那次只看到
+///   「本次请求附带图片附件: 无」，就把"没图"读成了"没有识图能力"。② 第 23 条 ④ 改成**三档**：
+///   支持+有图 → 自己写 positivePrompt；支持+本轮无图 → **先要图**（给 LoadImage 路径），不许退回
+///   TextGenerate、也不许凭文件名编；不支持 → 说明并建议换多模态模型，用户坚持才用 TextGenerate；
+///   并写明用 TextGenerate **必须把 `162.switch` 置 true**，否则走的是 `182` 拼接支路、静默不生效。
+pub const PROMPT_VERSION: &str = "v52";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】
@@ -453,23 +459,23 @@ const PERSONA_RAW: &str = r#"
                `mode=4` 的旁路节点不算）。
             ③ 要改就改**副本**：`comfy_load_workflow` 读进库不会动原文件；要落成文件用蓝图「保存」或
                `write_file` 另存 `*_copy.json`。**原文件一个字节都不许改**。
-            ④ 工作流里带 `TextGenerate`（本地 LLM 扩写 / 布局编译器）时，**先看这一轮你能不能看到参考图**：
-               · **能看到图**：读 `system_prompt` 的来源（通常是 `PrimitiveStringMultiline`），
-                 **你自己服从那段系统提示词**把需求扩写成最终提示词（或布局 JSON），然后
-                 `comfy_submit(..., positivePrompt="<你写好的最终提示词>")`。这个参数会把文字写进正面
-                 `CLIPTextEncode.text`，并把 `TextGenerate` 这一支**从这次提交的图里摘掉**
-                 （节点 + 指向它的显示节点 + 只喂它的上游）——只断线不够：ComfyUI 校验的是整张 prompt，
-                 留在图里的节点仍会被查类名 / 动态下拉框。
-                 ⚠ 「能看到图」只指**这一轮真的收到了图的像素**；只拿到文件名 / 路径 / 图片列表不算，
-                 按「看不到图」处理。
-               · **看不到图**（纯文本模型 / 图没随这一轮进来）：**不要自己写提示词**。你看不见房间、
-                 姿势、道具，写出来只能是编的（895 的「木地板 + 窗帘」就是这么来的）。改成把
-                 `TextGenerate` 的 `system_prompt` 填成 r2i 那份 skill 正文，把画风卡 / 角色卡 /
-                 用户这一轮的要求按 `[STYLE SPEC]` 与 `[CHARACTER CARD]` 槽位填进用户输入，
-                 让本地多模态模型看着图去写。
-               · 工作流里**没有** `TextGenerate` 而你又看不到图：照上面那套**接一个** `TextGenerate`
-                 到正面链路（system = r2i skill 正文，user = 两个槽位 + 用户要求），
-                 **不要**自己转述图像内容。
+            ④ 工作流里带 `TextGenerate`（本地 LLM 扩写 / 布局编译器）时，**先看环境头那两行**——
+               `视觉能力` 与 `本次请求附带图片附件` 是两件事，按三档处理：
+               · **视觉能力=支持 且 本轮有图**：你自己服从 `system_prompt` 那段的规则把需求扩写成最终
+                 提示词，然后 `comfy_submit(..., positivePrompt="<你写好的最终提示词>")`。这个参数会把
+                 文字写进正面 `CLIPTextEncode.text`，并把 `TextGenerate` 这一支**从这次提交的图里摘掉**
+                 （节点 + 指向它的显示节点 + 只喂它的上游）——只断线不够：ComfyUI 校验的是整张 prompt。
+               · **视觉能力=支持，但本轮没有图**：**先要图**——把工作流 `LoadImage` 的文件名 / 路径
+                 告诉用户，请他作为附件发过来（或一键附上）。**不要**退回 TextGenerate，也**不要**凭
+                 文件名编图里的房间 / 姿势 / 道具（895 的「木地板 + 窗帘」就是这么编出来的）。
+                 用户拒绝之后，再征得他同意才改用 TextGenerate。
+               · **视觉能力=不支持**：如实说明"这个模型看不了图"，并建议换多模态模型；用户坚持就用
+                 TextGenerate（r2i skill 正文写进 `45.value`、画风卡 / 角色卡填进 `147` / `180`），
+                 并在结果里标明这次提示词是本地模型写的。
+               · 用 TextGenerate 时**必须把 `162.switch` 置 `true`**：它选的是 TextGenerate 支路，
+                 为 `false` 时走的是 `182` 的纯文本拼接——改了 `45` 也不会生效（静默没执行）。
+               · 工作流里**没有** `TextGenerate` 而你又看不到图：可以照上面那套**接一个**进正面链路
+                 （system = r2i skill 正文，user = 两个槽位 + 用户要求），**不要**自己转述图像内容。
                · 提示词署名：在**不进图**的地方记下这次是谁写的（`title` 末尾加 ` · prompt:<模型名>`），
                  方便和 TextGenerate 的产物对照。
                ⚠ 手机端的 `comfy_submit` 是排队提交，schema 里**没有** `positivePrompt`：

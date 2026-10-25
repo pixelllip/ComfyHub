@@ -317,6 +317,15 @@ pub fn build(
     );
     let memory_text = memory::prompt_text(&storage.join("ai"));
 
+    // 这一份 kit 渲染给哪个模型看：**能力取自模型目录**（`ai_models.input_modalities`），
+    // 与"这一轮有没有图"无关 —— 两者混在一起就会让模型把"没带图"读成"看不了图"。
+    let model_sees_images = models_of(state, &provider.id)?
+        .into_iter()
+        .find(|(_, m)| m.get("id").and_then(|v| v.as_str()) == Some(model_id.as_str()))
+        .and_then(|(_, m)| m.get("inputModalities").and_then(|v| v.as_array()).cloned())
+        .map(|arr| arr.iter().any(|v| v.as_str() == Some("image")))
+        .unwrap_or(false);
+
     let system_prompt = system_prompt::render(
         &provider.display_name,
         &provider.api,
@@ -336,6 +345,7 @@ pub fn build(
         &memory_text,
         // kit 是"取那一刻"的工件：本次请求带没带图由发起 Run 的那一端在用户轮里如实说明
         false,
+        model_sees_images,
         nsfw,
     );
 

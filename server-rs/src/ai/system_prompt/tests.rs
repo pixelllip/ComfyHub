@@ -33,6 +33,8 @@ fn render_on(today: &str, policy: &ToolPolicy, nsfw: bool, memory_text: &str) ->
         policy,
         memory_text,
         false,
+        // 视觉能力：这份夹具当"模型能收图"处理；"本轮没图"由上一行的 false 表达。
+        true,
         nsfw,
     )
 }

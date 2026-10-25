@@ -80,6 +80,7 @@ pub fn render(
     policy: &ToolPolicy,
     memory_text: &str,
     has_attachments: bool,
+    model_sees_images: bool,
     nsfw: bool,
 ) -> String {
     let mut out = String::with_capacity(48 * 1024);
@@ -93,9 +94,13 @@ pub fn render(
          - Model: {model_id}\n\
          - 当前日期: {today}\n\
          - 工作目录（项目根）: {}\n\
-         - 本次请求附带图片附件: {}",
+         - 本次请求附带图片附件: {}\n\
+         - 视觉能力: {}",
         policy.project_root.display(),
         if has_attachments { "有（已内联，可以直接看图回答）" } else { "无" },
+        // ⚠ 这两行必须**分开**：`无附件` 与 `看不了图` 是两件事。
+        // 895 那次就是只看到"无"，把"这一轮没图"读成了"我没有识图能力"。
+        if model_sees_images { "支持（本模型能接收图片）" } else { "不支持（本模型没有图片输入）" },
     ));
 
     out.push_str("\n\n可用技能（Skills）与工具：\n");
