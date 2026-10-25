@@ -1,6 +1,6 @@
 ---
 name: r2i-prompt
-description: 把参考图 + 角色卡 + 画风卡扩写成一段可直接出图的自然语言提示词（r2i）。画风卡是**锁定的渲染规格**：面部 / 身体 / 头发 / 衣物的具体渲染行为分别写进对应部位的句子，结尾只留一句 ≤25 词的总括，既不重复也不照抄卡；参考图的渲染不照抄（只借构图 / 姿势 / 服饰 / 光向），但它的表情要按可见的面部配置如实写出来。只输出一整段 300~400 词的提示词。
+description: 把参考图 + 角色卡 + 画风卡扩写成一段可直接出图的自然语言提示词（r2i）。画风卡是**锁定的渲染规格**：面部 / 身体 / 头发 / 衣物的具体渲染行为分别写进对应部位的句子，**每个部位带自己的介质或维度词**，它决定这一处的质感先验；结尾只留一句 ≤25 词的总括，既不重复也不照抄卡；参考图的渲染不照抄，但表情要按可见的面部配置如实写出。只输出一整段 300~400 词的提示词。
 whenToUse: 用户发来一张（或几张）参考图，想"照着这张扩写成新图 / 写一段提示词 / 换画风重画 / 用这张卡和画风卡写一版"；或者用户已经在工作台用 @ 插入了角色卡 / 画风卡，接下来要一段成品提示词时；画风卡里写的是材质、面部与身体分开的渲染规格时同样走这里。
 version: 3
 ---
@@ -44,6 +44,10 @@ Fidelity to the spec: Treat the STYLE SPEC as a binding rendering specification,
 Translate the STYLE SPEC's concrete rendering instructions into the corresponding regional and material descriptions. Preserve the specified techniques and their relationships at the intensity implied by the original specification. Keep illustrated facial features and their adapted shading with the face; anatomical volume, body-plane transitions and specified skin shading with the body; layered locks, occlusion and directional highlights with the hair; and thickness, draping, folds and material-specific light response with the clothing. Preserve other explicitly specified surface and reflection behaviours in their relevant locations. Do not replace distinct rendering mechanisms with generic style labels, introduce unsupported effects, or alter the specified rendering method to impose a different aesthetic.
 
 Fidelity is semantic, not verbatim. Express each distinct rendering behaviour once in the relevant part of the final prompt. Remove redundant restatements, not distinct techniques or their relationships. Do not reproduce the STYLE SPEC or append a paraphrased copy of it. Preserve the relationships between geometry, material, lighting, shadows and highlights. The final prompt must read as one coherent image description, with a concise closing style clause that summarizes rather than repeats the body.
+
+Medium and dimension: every region of the picture is produced in a medium, and a medium word selects a whole family of priors rather than an adjective — photograph, illustration, render and flat colour are four different families, not four flavours of one. Fix the medium for each region before writing the sentence that describes it, and take its wording from the STYLE SPEC: a region that carries no medium word of its own drifts one step toward the model's default, and a medium word buried in a clause full of content detail — hair colour, accessories, buttons, patterns — is diluted by that detail.
+
+Mechanism words need a location, a count and a direction. A spec line such as painted strokes over the mass, or each feather a drawn stroke, is executed literally as scratches or blobs unless the prompt says where the stroke starts, how it runs and how dense it is. A spec's exclusions are carried as positive operations, never as negations: never a bright outline becomes a contour two shades darker than the mass. A mechanism stays in the region the spec attaches it to — a sheen band the spec places on the skin does not belong in the face clause, and moving it changes the medium of the region that receives it. The closing clause restates this map of mediums; it never repairs a region whose own clause left its medium unstated.
 
 Consistency across images: the style clause is worded the same way for the same STYLE SPEC every time. Only the subject, pose and scene change between outputs; the style sentence stays stable, so a batch of images reads as one series. Rewording the style clause per image is a defect.
 

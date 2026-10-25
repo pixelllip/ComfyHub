@@ -22,8 +22,8 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         ]
     );
     assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
-    // v46：r2i 正文换成用户新版（区域化渲染 + 表情必须显式写出可见配置）。
-    assert_eq!(body["promptVersion"], "v46");
+    // v47：r2i 补「介质与维度」两段（介质=形态族、逐部位声明、机制词要落点、否定翻肯定）。
+    assert_eq!(body["promptVersion"], "v47");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
