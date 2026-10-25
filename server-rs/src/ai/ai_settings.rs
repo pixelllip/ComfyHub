@@ -133,7 +133,31 @@ pub(crate) fn category_of(name: &str) -> &'static str {
 /// （当时它的原话是"提交不属于查询 —— 直接跑"，而代码把它算成了查询）。
 /// 反复提交本身由 `max_tool_steps` / `max_calls_per_run` 与审批闸门兜着，不需要这份额度。
 pub fn is_comfy_query(name: &str) -> bool {
-    category_of(name) == "comfy" && name != "comfy_submit"
+    category_of(name) == "comfy" && name != "comfy_submit" && !is_schema_query(name)
+}
+
+/// 只读的"节点契约"查询（comfy-mcp 的 `nodes` 一族）。
+///
+/// 它们问的是 `/object_info` 那份 **schema**，不是 ComfyUI 的运行状态；把它们算进
+/// "别把 ComfyUI 当轮询器"那 9 次额度，现场表现是"查了两次节点类型，真要提交时
+/// 预检已经没额度了"（2026-10-25 第二轮：`nodes` 两次 + 一次 check 就把额度吃光）。
+/// 这里给它们**独立档**：仍受总调用数 / 轮数管，但不占那 9 次"主动查询"。
+///
+/// ⚠ 只放**只读**的契约查询；`run_workflow` / `launch_comfyui` 这类动作绝不进来。
+fn is_schema_query(name: &str) -> bool {
+    matches!(
+        name,
+        "nodes"
+            | "node_deps"
+            | "search_nodes"
+            | "list_nodes"
+            | "get_node"
+            | "nodes_upstream"
+            | "nodes_downstream"
+            | "nodes_path"
+            | "nodes_types"
+            | "nodes_categories"
+    )
 }
 
 /// 权限档 → 线上字（Kotlin `ToolAccess.wire`）。

@@ -292,7 +292,8 @@ pub async fn load_from_file(
         json!(if runnable {
             format!(
                 "现在可以 comfy_submit(promptId={prompt_id}, overrides={{\"<节点id>.<输入名>\": 值}}) 提交它；\
-                 参数路径见下面的 nodes（linked 里的输入是连线，不能覆盖）。"
+                 参数路径见下面的 nodes（手改要整图时才是 apiGraph）；\
+                 linked 里的输入是连线，不能覆盖。"
             )
         } else {
             format!(
@@ -348,9 +349,24 @@ pub async fn load_from_file(
             ),
         );
     }
-    out.insert("nodes".into(), summarize_nodes(&api_graph));
+    // 默认**只给摘要**（`nodes`：谁能改什么、哪些是连线）；整图只在模型明确要
+    // 手改结构（`includeGraph=true`）时才给 —— 一份 22KB 的 API 图会跟着每一轮工具
+    // 往返重复进上下文（2026-10-25 现场：26KB × 19 轮），而其中 87% 是整图。
+    //
+    // 带整图时**不再重复 `nodes`**：图是摘要的超集，两边都发只是白占字节。
     if include_graph {
+        let graph_bytes = serde_json::to_string(&api_graph).map(|text| text.len()).unwrap_or(0);
         out.insert("apiGraph".into(), Value::Object(api_graph));
+        out.insert("apiGraphBytes".into(), json!(graph_bytes));
+        out.insert(
+            "graphHint".into(),
+            json!(format!(
+                "这次按你的要求带了完整 API 图（约 {graph_bytes} 字节）。只改参数用 overrides，\
+                 不需要它；下次只查参数就不要再传 includeGraph。"
+            )),
+        );
+    } else {
+        out.insert("nodes".into(), summarize_nodes(&api_graph));
     }
     Ok(Value::Object(out))
 }

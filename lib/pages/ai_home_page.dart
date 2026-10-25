@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
@@ -2644,24 +2645,17 @@ class _ToolCallCardState extends State<_ToolCallCard> {
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 260),
+                constraints: const BoxConstraints(maxHeight: 320),
                 child: SingleChildScrollView(
+                  // 三块**各自一个容器**（用户 2026-10-25：参数 / 结果分开显示，
+                  // 有说明再放第三块）。一块展开 = 三块一起展开，不各管各的。
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (call.arguments.isNotEmpty) ...[
-                        Text('参数', style: theme.textTheme.labelSmall),
-                        Text(call.arguments, style: theme.textTheme.bodySmall),
-                        if (call.detailText.isNotEmpty)
-                          const SizedBox(height: 6),
-                      ],
-                      if (call.detailText.isNotEmpty) ...[
-                        Text(
-                          call.status == AiToolCallStatus.ok ? '结果' : '说明',
-                          style: theme.textTheme.labelSmall,
-                        ),
-                        Text(call.detailText, style: theme.textTheme.bodySmall),
-                      ],
+                      _ToolSection(title: '调用参数', text: _argumentsText),
+                      _ToolSection(title: '调用结果', text: _resultText),
+                      if (_noteText.isNotEmpty)
+                        _ToolSection(title: '说明', text: _noteText),
                     ],
                   ),
                 ),
@@ -2670,6 +2664,41 @@ class _ToolCallCardState extends State<_ToolCallCard> {
         ],
       ),
     );
+  }
+
+  /// 参数：能解析就缩进成多行（长 JSON 一行根本读不了）；解析不了就原样。
+  String get _argumentsText {
+    final raw = widget.call.arguments.trim();
+    if (raw.isEmpty) return '（没有参数）';
+    try {
+      return const JsonEncoder.withIndent('  ').convert(jsonDecode(raw));
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  /// 结果：工具的输出；还没结果时给一句**如实**的状态（不拿失败原因冒充结果）。
+  String get _resultText {
+    final text = widget.call.resultText;
+    if (text.isNotEmpty) return text;
+    return switch (widget.call.status) {
+      AiToolCallStatus.running => '（还在执行…）',
+      AiToolCallStatus.pendingApproval => '（等你批准后才会执行）',
+      AiToolCallStatus.denied => '（已拒绝，没有执行）',
+      AiToolCallStatus.failed => '（失败，没有输出）',
+      AiToolCallStatus.ok => '（没有输出）',
+    };
+  }
+
+  /// 说明：失败 / 拒绝的原因（稳定错误码或消息）。
+  ///
+  /// 结果正文里已经原样带着的那句就不再重复（`tool_result.text` 常常就是整段错误）。
+  String get _noteText {
+    final note = widget.call.noteText;
+    if (note.isEmpty) return '';
+    final result = widget.call.resultText;
+    if (result.isNotEmpty && result.contains(note)) return '';
+    return note;
   }
 
   Future<void> _resolve({required bool approve}) async {
@@ -2681,6 +2710,41 @@ class _ToolCallCardState extends State<_ToolCallCard> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+}
+
+class _ToolSection extends StatelessWidget {
+  final String title;
+  final String text;
+
+  const _ToolSection({required this.title, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.6)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(text, style: theme.textTheme.bodySmall),
+        ],
+      ),
+    );
   }
 }
 

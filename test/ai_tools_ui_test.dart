@@ -686,6 +686,65 @@ void main() {
     await tester.tap(find.byTooltip('展开 先读一下 a.md 的结果'));
     await tester.pumpAndSettle();
     expect(find.textContaining('# 标题'), findsWidgets);
+    // 参数 / 结果 各占一块（用户 2026-10-25）；成功调用没有第三块「说明」
+    expect(find.text('调用参数'), findsOneWidget);
+    expect(find.text('调用结果'), findsOneWidget);
+    expect(find.text('说明'), findsNothing);
+    // 参数缩进成多行，不再是压成一行的原始 JSON
+    expect(find.textContaining('"path": "a.md"'), findsOneWidget);
+  });
+
+  testWidgets('(b1) 工具卡：失败原因放第三块「说明」，不冒充结果', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final parts = [
+      {
+        'type': 'tool_call',
+        'toolCallId': 'c1',
+        'jsonPayload': {
+          'name': 'write_file',
+          'arguments': '{"path":"a.md","content":"x"}',
+          'reason': '写个文件',
+        },
+      },
+      {
+        'type': 'tool_result',
+        'toolCallId': 'c1',
+        'text': '缺少参数 path',
+        'jsonPayload': {
+          'name': 'write_file',
+          'ok': false,
+          'code': 'INVALID_ARGUMENT',
+          'approval': 'approved',
+        },
+      },
+    ];
+    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(
+            3,
+            'message.completed',
+            '{"messageId":"a1","text":"写完了。","steps":1,'
+                '"parts":${jsonEncode(parts)}}') +
+        _sse(4, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '写个文件');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('展开 写个文件 的结果'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('调用参数'), findsOneWidget);
+    expect(find.text('调用结果'), findsOneWidget);
+    expect(find.text('说明'), findsOneWidget);
+    expect(find.textContaining('缺少参数 path'), findsWidgets);
+    expect(find.text('INVALID_ARGUMENT'), findsOneWidget, reason: '错误码要如实放在说明里');
   });
 
   testWidgets('(e3) 回复末尾贴出「生成的产物」画廊入口卡（用户建议 ⑤）', (tester) async {

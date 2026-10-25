@@ -705,6 +705,17 @@ async fn run_once(
         }),
     )?;
 
+    // 模型这一轮没起标题（没写 `[标题]` / 写坏了）→ 用**首条用户消息**兜底。
+    // 用户 2026-10-25：两轮新对话都叫「新对话」，列表里根本分不清谁是谁。
+    // 只在标题还是默认值时才写：用户自己改过 / 模型已经起过，一个字都不动。
+    if !title_applied && conversation_needs_title(state, &conversation_id) {
+        if let Some(text) = first_user_message_text(state, &conversation_id) {
+            if let Some(title) = title_from_user_message(&text) {
+                apply_conversation_title(state, run_id, &conversation_id, &title)?;
+            }
+        }
+    }
+
     finish_run(&state.bus, state, run_id, "completed", None, None, total_usage)?;
     Ok(())
 }
@@ -724,10 +735,59 @@ pub fn is_truncated_by_output_limit(finish_reason: Option<&str>) -> bool {
     )
 }
 
+/// 首条用户消息的正文（没有就 `None`）。
+fn first_user_message_text(state: &AppState, conversation_id: &str) -> Option<String> {
+    state
+        .with(|conn| {
+            use rusqlite::OptionalExtension;
+            Ok(conn
+                .query_row(
+                    "SELECT text FROM ai_messages \
+                      WHERE conversation_id = ?1 AND role = 'user' ORDER BY seq LIMIT 1",
+                    rusqlite::params![conversation_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten())
+        })
+        .ok()
+        .flatten()
+}
+
+/// 首条用户消息 → 标题兜底：**去掉卡片槽位标记，取第一行前 20 字**。
+///
+/// 典型输入（工作台把 `@` 选的卡原样拼在正文前面）：
+///
+/// ```text
+/// [STYLE SPEC]
+/// 二次元三次元混搭画风
+/// Physically based anime rendering: …
+/// ```
+///
+/// 去掉 `[STYLE SPEC]` / `[CHARACTER CARD]` 这两行之后，第一行是卡名 —— 它比
+/// 「新对话」有信息量，也不会把整段画风正文塞进标题。
+fn title_from_user_message(text: &str) -> Option<String> {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .find(|line| !matches!(*line, "[STYLE SPEC]" | "[CHARACTER CARD]"))?;
+    let title: String = line.chars().take(20).collect();
+    let title = title.trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
+    }
+}
+
 /// 这个会话还该不该让模型**起标题**（Kotlin `shouldSummarizeTitle`）。
 ///
 /// 标题不是空的、也不是「新对话」→ 说明用户自己改过（或已经起过）→ **尊重用户，不再覆盖**。
-/// "绝不拿正文的第一句话去糊弄一个标题"（那才是"看起来总结过了"的假象）。
+///
+/// 2026-10-25 起补了一条**兜底**（见 [`title_from_user_message`]）：模型没起标题时，
+/// 用首条用户消息的前 20 字当标题 —— 否则两轮对话在列表里都叫「新对话」。
+/// 兜底只在**这次 Run 收尾、标题仍是默认值**时触发，模型起的标题 / 用户改的名字优先。
 fn conversation_needs_title(state: &AppState, conversation_id: &str) -> bool {
     let title = state
         .with(|conn| {
@@ -879,6 +939,11 @@ async fn handle_call(
     // 先摘掉再解析，后面缓存键、落库、执行、回填历史用的都是摘过的那一份。
     // 只有这一处摘 —— 工具 handler 永远看不到它（见 `tools::spec_of_view` 的注释）。
     let mut call = call.clone();
+    // 模型偶尔把整份参数再包一层（`{"arguments": "\"{\\\"path\\\":…}\""}`）：
+    // 先解回正常对象，`reason` 才摘得到，工具也才拿得到 `path`。
+    // 解包只发生在**执行 / 展示**这一份副本上；回给上游的那条 assistant 轮仍是原文
+    // （见下面 `trailing.push(ChatTurn { tool_calls: calls … })`）—— 不许替模型改它的历史。
+    call.arguments = crate::tools::tools::normalize_arguments_text(&call.arguments);
     let reason = take_reason(&mut call.arguments);
     let arguments: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
     // **只读工具的缓存命中**（`tools::tool_cache`）：这一句是**纯内存查询**，

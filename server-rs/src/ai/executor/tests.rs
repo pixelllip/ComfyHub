@@ -170,3 +170,26 @@ fn take_reason_strips_the_ui_only_field() {
     assert!(take_reason(&mut array).is_none());
     assert_eq!(array, "[1,2]");
 }
+
+/// 首轮模型没起标题时的兜底（用户 2026-10-25：两轮都叫「新对话」，列表里分不清）。
+#[test]
+fn 首条用户消息兜底成标题且去掉卡片标记() {
+    // 工作台把 `@` 选的卡拼在正文前面：去掉槽位标记后，第一行是卡名 —— 比「新对话」有信息量
+    assert_eq!(
+        title_from_user_message("[STYLE SPEC]\n二次元三次元混搭画风\nPhysically based anime…")
+            .as_deref(),
+        Some("二次元三次元混搭画风")
+    );
+    assert_eq!(
+        title_from_user_message("[CHARACTER CARD]\n成熟deepseek鲸鱼娘\n正文").as_deref(),
+        Some("成熟deepseek鲸鱼娘")
+    );
+    // 普通消息：第一行前 20 个字（按**字符**截，别把中文切坏）
+    assert_eq!(
+        title_from_user_message("一二三四五六七八九十一二三四五六七八九十甲乙丙").as_deref(),
+        Some("一二三四五六七八九十一二三四五六七八九十")
+    );
+    // 只有标记 / 空消息：不编标题
+    assert_eq!(title_from_user_message("[STYLE SPEC]\n\n[CHARACTER CARD]\n  "), None);
+    assert_eq!(title_from_user_message(""), None);
+}

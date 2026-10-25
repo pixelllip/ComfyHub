@@ -284,3 +284,49 @@ fn deny_hides_a_tool_from_the_model_but_not_from_the_settings_page() {
     assert_eq!(sent.len() + 1, listed.len());
     assert!(listed.contains(&"read_file") && sent.contains(&"read_file"));
 }
+
+#[test]
+fn 参数被多包一层时在入口解开() {
+    let inner = json!({
+        "path": "D:\\proj\\comfyui\\krea2_r2i_run3.json",
+        "mode": "overwrite",
+        "content": "{\"1\":{\"class_type\":\"VAEDecode\"}}",
+    });
+    // 见过的最深一层：`{"arguments": "\"{\\\"path\\\":…}\""}`
+    let twice = serde_json::to_string(&serde_json::to_string(&inner).unwrap()).unwrap();
+    let raw = serde_json::to_string(&json!({ "arguments": twice })).unwrap();
+    let fixed = normalize_arguments_text(&raw);
+    let parsed: Value = serde_json::from_str(&fixed).unwrap();
+    assert_eq!(parsed, inner, "解开之后 path / content 都要回来：{fixed}");
+
+    // 正常参数一个字都不许动（比较值，不比较键序）
+    let plain = r#"{"path":"a.md","reason":"先读一下"}"#;
+    assert_eq!(
+        serde_json::from_str::<Value>(&normalize_arguments_text(plain)).unwrap(),
+        serde_json::from_str::<Value>(plain).unwrap()
+    );
+    // 解不出来就原样返回，别吞成 {}
+    let broken = r#"{"arguments":"not json"}"#;
+    assert_eq!(normalize_arguments_text(broken), broken);
+}
+
+/// 节点契约查询（`nodes` 一族）走**独立档**：不占"别把 ComfyUI 当轮询器"的 9 次额度。
+///
+/// 现场（2026-10-25 第二轮）：查了两次节点类型，`comfy_submit` 之前就撞上
+/// `QUERY_BUDGET_EXCEEDED` —— 而它问的是 `/object_info` 那份 schema，不是运行状态。
+#[test]
+fn 节点契约查询不占_comfy_查询额度() {
+    use crate::ai::ai_settings::{category_of, is_comfy_query};
+    assert_eq!(category_of("nodes"), "comfy", "界面分组照旧归 comfy");
+    assert!(!is_comfy_query("nodes"), "schema 查询不该吃那 9 次");
+    assert!(!is_comfy_query("nodes_upstream"), "同一族都豁免");
+    // 真会碰实例状态的查询照旧要占
+    assert!(is_comfy_query("comfy_get_status"));
+    assert!(is_comfy_query("get_logs"), "日志不是 schema，仍算查询");
+
+    let mut session = ToolSession::default();
+    session.spend_call("nodes");
+    session.spend_call("nodes");
+    assert_eq!(session.comfy_queries_in_window, 0);
+    assert_eq!(session.calls_in_window, 2, "总调用额度照记");
+}

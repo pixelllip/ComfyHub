@@ -2215,6 +2215,15 @@ class AiToolCallState {
     return '';
   }
 
+  /// 工具的**结果正文**（`preview`）。
+  ///
+  /// 与 [noteText] 分开是用户 2026-10-25 的要求：工具卡里"参数"和"结果"各占一块，
+  /// 失败原因作为第三块"说明"—— 不许像以前那样把 `error` 顶到结果的位置上。
+  String get resultText => (preview ?? '').trim();
+
+  /// 失败 / 拒绝的**说明**（稳定错误码或消息）；成功时为空。
+  String get noteText => (error ?? '').trim();
+
   bool get hasDetail => detailText.isNotEmpty || arguments.isNotEmpty;
 
   String get elapsedLabel => elapsedMs <= 0

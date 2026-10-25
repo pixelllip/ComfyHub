@@ -96,6 +96,23 @@ const LONG_TOOLS: [&str; 6] = [
     "download",
 ];
 
+/// **不从 comfy-mcp 清单里下发给模型**的工具（2026-10-25 现场后定的）。
+///
+/// * `run_workflow`：本机实测在 comfy-mcp 子进程里直接崩（`MCP_TOOL_ERROR`），
+///   而"跑一次"已经有 `comfy_submit`（走 ComfyHub 自己的提交通道，产物会入库）；
+/// * `validate_workflow`：comfy-cli 会**自己归一化**连线 id，对一份数字 id 的图判
+///   `valid: true`，而 ComfyUI 同一份图 400（`KeyError: '1'`）。两个裁判互相矛盾，
+///   模型据此下过"图没问题，是 ComfyHub 提交路径的错"的结论 —— 比没有这个工具更糟。
+///
+/// 隐藏发生在**清单层**（`ensure` 过滤），所以 `/api/ai/tools`、系统提示、请求体里
+/// 都不会再出现它们；模型就算记住名字也调不到（执行器的第一道闸门会回 `TOOL_NOT_FOUND`）。
+const HIDDEN_TOOLS: [&str; 2] = ["run_workflow", "validate_workflow"];
+
+/// 这条 MCP 工具要不要**对模型隐藏**（见 [`HIDDEN_TOOLS`]）。
+pub fn is_hidden_tool(name: &str) -> bool {
+    HIDDEN_TOOLS.contains(&name)
+}
+
 /// MCP 调用出错（连不上 / 超时 / 服务端报错）。
 ///
 /// `code` 直接给模型与界面看 —— 与 Kotlin 的 `McpException.code` 同名同值。
@@ -1563,6 +1580,9 @@ impl McpRegistry {
         // 一次性 leak 成 `&'static`（见模块头 §2）：工具清单在进程生命周期内固定。
         let specs: Vec<McpSpec> = decls
             .iter()
+            // 两个"备用裁判"不交给模型（见 `HIDDEN_TOOLS`）：一个必崩，一个会给出与
+            // ComfyUI 相反的结论。宁可少两条工具，也不让模型拿它们当证据。
+            .filter(|decl| !is_hidden_tool(&decl.name))
             .map(|decl| {
                 let description = format!("{}{}", description_prefix(&decl.name), decl.description.trim());
                 McpSpec {

@@ -339,6 +339,49 @@ fn add_reason_property(parameters: &mut Value) {
     });
 }
 
+/// 把模型偶尔**多包了一层**的参数解回正常形状。
+///
+/// 现场（2026-10-25 的 `write_file`）：模型把整份参数又包成一个字符串，塞进唯一的
+/// `arguments` 键里（而且外面还套了一层 JSON 字符串）：
+///
+/// ```text
+/// {"arguments": "\"{\\\"content\\\":\\\"…\\\",\\\"path\\\":\\\"D:\\\\…json\\\"}\""}
+/// ```
+///
+/// 工具层只看到 `{"arguments": …}`，于是 `write_file` 报"缺少参数 path"—— 明明模型
+/// 已经把 path 写对了。这是**模型的序列化手滑**，不是它在骗人；在入口解一层即可，
+/// 不改变任何工具自己的校验。
+///
+/// 纪律：
+/// * **只解"只有一个 `arguments` / `args` 键"的对象**（正常参数里不会只有一个 `arguments`）；
+/// * 最多解 4 层（字符串 → 对象 → 字符串…实际见过 2 层）；
+/// * 解不出来 / 解完不是对象 → **原样返回**，让工具自己报错（不许吞成 `{}`）。
+pub fn normalize_arguments_text(raw: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(raw) else { return raw.to_string() };
+    for _ in 0..4 {
+        let next = match &value {
+            Value::Object(map) if map.len() == 1 => map
+                .get("arguments")
+                .or_else(|| map.get("args"))
+                .and_then(|inner| match inner {
+                    Value::String(text) => serde_json::from_str::<Value>(text.trim()).ok(),
+                    Value::Object(_) => Some(inner.clone()),
+                    _ => None,
+                }),
+            // 顶层就是字符串：上一轮解出来的 `"{\"path\":…}"` 还要再解一次
+            Value::String(text) => serde_json::from_str::<Value>(text.trim()).ok(),
+            _ => None,
+        };
+        match next {
+            // 字符串也要继续：真实形状是 `{"arguments": "\"{\\\"path\\\":…}\""}`
+            // —— 第一层解出来还是个字符串，再解一次才是对象。
+            Some(next) if next.is_object() || next.is_string() => value = next,
+            _ => break,
+        }
+    }
+    serde_json::to_string(&value).unwrap_or_else(|_| raw.to_string())
+}
+
 /// 一个工具在"清单"这一层的借用视图（两种来源的公共形状）。
 ///
 /// 为什么要有它：`system_prompt::render` 要的是"名字 / 描述 / 出厂档 / 是否写数据"这四样，

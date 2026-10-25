@@ -285,6 +285,16 @@ fn 训练引擎的权限档按读写分开() {
 }
 
 #[test]
+fn 两个备用裁判不进清单() {
+    // 2026-10-25：run_workflow 在子进程里必崩；validate_workflow 会自己归一 id、
+    // 给出与 ComfyUI 相反的 valid。两条都从下发给模型的清单里摘掉。
+    assert!(is_hidden_tool("run_workflow"));
+    assert!(is_hidden_tool("validate_workflow"));
+    assert!(!is_hidden_tool("nodes"), "只读的 schema 查询必须留着");
+    assert!(!is_hidden_tool("comfy_submit"));
+}
+
+#[test]
 fn 权限档与_kotlin_一致() {
     assert_eq!(access_for("run_workflow"), "ASK");
     assert_eq!(access_for("launch_comfyui"), "ASK");
