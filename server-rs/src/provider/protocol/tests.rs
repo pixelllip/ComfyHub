@@ -408,6 +408,56 @@ fn responses_reasoning_round_trip() {
     assert_eq!(plain["input"][0]["type"], "message");
 }
 
+/// **模型有些轮次根本不思考**（2026-10-25 现场）：那一轮只有 `function_call`、思维链 0 字符，
+/// 而 DeepSeek 的 Responses 在思考模式下要求每个工具轮都能对上思维链 —— 少了它，下一次请求
+/// 必然 `400 The reasoning_text in the thinking mode must be passed back to the API.`
+///
+/// 这里补的是一个**空 `content`** 的 `reasoning` 项（这一轮确实没思考文本，不编假话；
+/// 且空 content 是那家接受的形状）。三条边界一起钉住：
+/// ① deepseek 方言 + 思考开着才补；② 思考已关（`effort=none`）不补（那一档不校验回传）；
+/// ③ 别的方言一个字节都不补（空 reasoning 项对 OpenAI 官方是不合法条目）。
+#[test]
+fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
+    let adapter = OpenAiResponsesAdapter;
+    let silent_tool_turn = ChatTurn {
+        role: "assistant".into(),
+        content: String::new(),
+        tool_calls: vec![ToolCallRef { id: "call_1".into(), name: "t".into(), arguments: "{}".into() }],
+        ..Default::default()
+    };
+    let deepseek = ReasoningRequest {
+        effort: Some("high".into()),
+        wire_value: Some("high".into()),
+        format: Some(ThinkingFormat::DeepSeek),
+    };
+    let body = adapter.build_body("m", &[silent_tool_turn.clone()], &[], &deepseek, None);
+    assert_eq!(body["input"][0]["type"], "reasoning");
+    assert_eq!(body["input"][0]["content"], json!([]), "空 content，而不是空白 reasoning_text");
+    assert_eq!(body["input"][1]["type"], "function_call");
+
+    let off = ReasoningRequest {
+        effort: Some("none".into()),
+        wire_value: Some("none".into()),
+        format: Some(ThinkingFormat::DeepSeek),
+    };
+    let body = adapter.build_body("m", &[silent_tool_turn.clone()], &[], &off, None);
+    assert!(
+        body["input"].as_array().unwrap().iter().all(|i| i["type"] != "reasoning"),
+        "思考关掉时不校验回传，不补"
+    );
+
+    let openai = ReasoningRequest {
+        effort: Some("high".into()),
+        wire_value: Some("high".into()),
+        format: Some(ThinkingFormat::OpenAi),
+    };
+    let body = adapter.build_body("m", &[silent_tool_turn], &[], &openai, None);
+    assert!(
+        body["input"].as_array().unwrap().iter().all(|i| i["type"] != "reasoning"),
+        "别的方言不许凭空多一个 reasoning 项"
+    );
+}
+
 /// responses 的流事件：文本 / 思考 / 函数调用开始与参数分片 / 收尾。
 #[test]
 fn responses_interpret() {

@@ -354,6 +354,9 @@ async fn run_once(
     let mut last_provider_response_id: Option<String> = None;
     let mut step = 0usize;
     let mut budget_exhausted = false;
+    // 思考被上游逼停（`effort=none` 重发过一次）之后，本次 Run 余下的每一轮都要沿用 ——
+    // 那些轮次同样没有思维链可回传，换回思考模式就是一轮一次 400（见 `stream_chat`）。
+    let mut thinking_forced_off = false;
     // 上游这一轮是怎么结束的（`length` = 被输出长度上限截断 → 要接着写）
     // 初值只为让编译器看清"每轮都会赋值"；`unused_assignments` 在这里是误报。
     #[allow(unused_assignments)]
@@ -411,6 +414,17 @@ async fn run_once(
             let state_for_cb = state.clone();
             let run = run_id.to_string();
             let assistant = assistant_id.clone();
+            // 思考已被逼停：这一轮（以及后面每一轮）都不发思考参数，
+            // 也不带 `format`（那是"开着思考时用哪种方言表达档位"的事）。
+            let reasoning_for_round = if thinking_forced_off {
+                crate::provider::protocol::ReasoningRequest {
+                    effort: Some("none".into()),
+                    wire_value: Some("none".into()),
+                    format: None,
+                }
+            } else {
+                reasoning_request.clone()
+            };
             stream_chat(
                 ChatRequest {
                     state,
@@ -420,7 +434,7 @@ async fn run_once(
                     credential_ref: provider.credential_ref.as_deref(),
                     turns: &turns_now,
                     tools: &tools,
-                    reasoning: reasoning_request.clone(),
+                    reasoning: reasoning_for_round,
                     max_output_tokens: model.max_output_tokens,
                 },
                 move |event| {
@@ -506,6 +520,16 @@ async fn run_once(
         };
 
         finish_reason = idle.finish_reason.clone();
+        // 上游因为"思维链回传"拒了这次请求、`stream_chat` 自己关掉思考重发成功：
+        // 把这件事**在正文里说一句**（看不到的现象，用户与模型都只能靠猜），
+        // 并把余下的轮次一并降档 —— 重发那一轮同样没有思维链，换回思考就是再来一次 400。
+        if idle.thinking_forced_off && !thinking_forced_off {
+            thinking_forced_off = true;
+            let note = "\n\n（本轮模型没有产生思考，而上游在思考模式下要求逐轮回传思维链；\
+                        为避免后续请求被拒，本次回复余下的请求已关闭思考。）";
+            push_note(state, run_id, &assistant_id, &sink, note)?;
+            eprintln!("[run {run_id}] 思维链回传被上游拒绝：本次 Run 余下请求改用 effort=none");
+        }
         // 摘到标题就**立刻**写进会话并广播（界面左侧列表马上改名）；
         // 只有第一次算数 —— 后面那些是回声（`TitleStripper` 里已经只认第一次）。
         if !title_applied {

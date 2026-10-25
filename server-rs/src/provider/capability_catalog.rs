@@ -6,7 +6,7 @@
 //! | --- | --- | --- | --- |
 //! | custom | `<storage>\ai\capabilities\custom.json` | 用户 / 界面导出 | 手工修正，最高优先 |
 //! | remote | `<storage>\ai\capabilities\remote.json` | 在线数据集（models.dev） | 主力更新源 |
-//! | builtin | [`crate::provider::capability_rules`]（**生成**的 118 条） | 随版本发布 | 家族级兜底 |
+//! | builtin | [`crate::provider::capability_rules`]（**生成**的 119 条） | 随版本发布 | 家族级兜底 |
 //!
 //! 匹配方式：custom / remote 按**精确 id**（大小写不敏感；网关 id 带 `org/` 前缀而数据集
 //! 不带、或反过来时做**去前缀**匹配，但要求结果唯一 —— 有歧义宁可不命中）；
@@ -74,7 +74,7 @@ pub fn unknown() -> Capability {
     }
 }
 
-/// 内置规则（**按生成表原样建**：118 条、调用频率很低；缓存带来的失效风险不值这点开销）。
+/// 内置规则（**按生成表原样建**：119 条、调用频率很低；缓存带来的失效风险不值这点开销）。
 pub fn rules() -> Vec<(&'static str, Capability)> {
     crate::provider::capability_rules::RAW_RULES
         .iter()

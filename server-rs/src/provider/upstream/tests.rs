@@ -68,6 +68,26 @@ fn auth_headers_per_protocol() {
     assert!(auth_header(Api::OpenAiCompletions, Some("   ")).is_empty());
 }
 
+/// **"思考模式必须回传思维链"那一条 400 的判据**（2026-10-25 现场）。
+///
+/// 只认"两样都提到"的正文：既要 `reasoning` / `thinking`，又要"回传"。
+/// 看到 `reasoning` 就重发，会把"这个模型根本不支持思考"那类配置错误悄悄降档 ——
+/// 用户从此看不到真正的原因。
+#[test]
+fn reasoning_passback_error_is_recognised() {
+    let real = r#"{"error":{"message":"The `reasoning_text` in the thinking mode must be passed back to the API. (request_id: abc)","type":"invalid_request_error"}}"#;
+    assert!(is_reasoning_passback_error(real));
+    // 网关把措辞换成 thinking + pass back 也要认
+    assert!(is_reasoning_passback_error("thinking mode: reasoning must be passed back"));
+    // "不允许空的思考内容"也是同一件事的变体（我们给没思考的工具轮补的是空 content 项）
+    assert!(is_reasoning_passback_error(
+        r#"{"error":{"message":"reasoning content must not be empty"}}"#
+    ));
+    // 只提到 reasoning、或只提到回传 —— 都不认
+    assert!(!is_reasoning_passback_error("this model does not support reasoning"));
+    assert!(!is_reasoning_passback_error("tool result must be passed back"));
+}
+
 /// usage 累加：多家形状归一，多轮相加（AIH-057）。
 ///
 /// ⚠ 重点在**四个字段一个都不能少**：`prompt_tokens` / `completion_tokens` 保住了

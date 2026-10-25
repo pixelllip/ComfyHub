@@ -3,7 +3,7 @@
 //! **自动生成，别手改**：`python server-rs/tools/gen_capability_rules.py`
 //! （源 = `server/src/main/kotlin/com/comfyhub/ai/ModelCapabilityCatalog.kt`，
 //! `--check` 可以只校验不写）。理由同 `mobile_tools.rs` / `nsfw_prompt.rs`：
-//! 这张表有 **118 条**，手抄必然漏几条 —— 而漏掉的表现是"某个模型在 Rust 后端上
+//! 这张表有 **119 条**，手抄必然漏几条 —— 而漏掉的表现是"某个模型在 Rust 后端上
 //! 图片输入没勾上"，界面上完全看不出来（只是导入时少预填一个选项）。
 //!
 //! 用法只有一个：`capability_catalog::rules()`（`builtinRules` 的条数也从它来）。
@@ -42,6 +42,11 @@ pub const RAW_RULES: &[RawRule] = &[
     RawRule { pattern: "gpt-5.4", modalities: TEXT_IMAGE, tools: true, reasoning: true, efforts: Some(EFFORT_LOW_MED_HIGH_XHIGH), format: None },
     RawRule { pattern: "gpt-5.3", modalities: TEXT_IMAGE, tools: true, reasoning: true, efforts: Some(EFFORT_LOW_MED_HIGH_XHIGH), format: None },
     RawRule { pattern: "deepseek-v4.1", modalities: TEXT_IMAGE, tools: true, reasoning: true, efforts: Some(EFFORT_LOW_HIGH_MAX), format: Some("deepseek") },
+    // `deepseek-flash` 是 DeepSeek 官方现行模型 id（与 `deepseek-v4.1` 那批旧名并存）。
+    // 少了这一条时，它落到"没规则命中"→ 只能手工声明，而手工表极易填成
+    // `{"max": "high"}` 这种**错的映射**（2026-10-25 用户 bug：思考强度档位错误）。
+    // 档位按官方文档：`none / low / high / max`。
+    RawRule { pattern: "deepseek-flash", modalities: TEXT_IMAGE, tools: true, reasoning: true, efforts: Some(EFFORT_LOW_HIGH_MAX), format: Some("deepseek") },
     RawRule { pattern: "flash-vision", modalities: TEXT_IMAGE, tools: true, reasoning: true, efforts: Some(EFFORT_HIGH_MAX), format: Some("deepseek") },
     RawRule { pattern: "deepseek-v4", modalities: TEXT_ONLY, tools: true, reasoning: true, efforts: Some(EFFORT_HIGH_MAX), format: Some("deepseek") },
     RawRule { pattern: "deepseek-v3", modalities: TEXT_ONLY, tools: true, reasoning: false, efforts: None, format: Some("deepseek") },

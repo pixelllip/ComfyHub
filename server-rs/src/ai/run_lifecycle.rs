@@ -218,17 +218,30 @@ pub fn model(state: &AppState, provider_id: &str, model_id: &str) -> Result<Mode
 ///
 /// 返回 `(落库值, 发给上游的值)`：落库一律是 `off` 或等级名（Run 的"当时生效值"），
 /// 发给上游的 `off` 是 `None`（"不指定"与"明确关掉"在上游是两件事）。
+///
+/// # ⚠ 发给上游的是**表里的值**，不是等级名（2026-10-25 用户 bug：思考强度映射档位错误）
+///
+/// 模型表 `thinkingEfforts` 的语义是"等级名 → 线上值"（网关改名时能对上，
+/// 例如 `{"max": "high"}`、或 Anthropic 那种 `{"max": "4096"}` 预算）。
+/// 早先这一版校验完**把等级名原样发出去**，于是整张表只起到了"可选哪些档"的作用，
+/// 界面上写着"实际发送：max→high"、真正发出去的却是 `max` —— 网关要么当成它没有的档位
+/// 报 400，要么按另一档跑，而界面上的提示与事实不符。
+///
+/// `LEVELS` 也必须覆盖**全部**等级名（`minimal` / `xhigh` 早先漏了）：
+/// 目录里声明了极高档的模型（claude / gpt-5.x 那批）一选「极高」就被这里判成"未知的思考强度"，
+/// 而界面上那一档明明是可选的。
 pub fn thinking_effort(m: &ModelRow, requested: Option<&str>) -> Result<(String, Option<String>), ApiError> {
-    const LEVELS: [&str; 5] = ["off", "low", "medium", "high", "max"];
+    /// 等级名（**不是**线上值）：模型表里的键就是它。
+    const LEVELS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
     let requested = requested.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("off");
+    if requested == "off" {
+        return Ok(("off".to_string(), None));
+    }
     if !LEVELS.contains(&requested) {
         return Err(ApiError::ai(
             "CONFIG_ERROR",
-            format!("未知的思考强度：{requested}（可选 {}）", LEVELS.join(" / ")),
+            format!("未知的思考强度：{requested}（可选 off / {}）", LEVELS.join(" / ")),
         ));
-    }
-    if requested == "off" {
-        return Ok(("off".to_string(), None));
     }
     if !m.reasoning {
         return Err(ApiError::ai(
@@ -238,6 +251,7 @@ pub fn thinking_effort(m: &ModelRow, requested: Option<&str>) -> Result<(String,
     }
     let declared: Vec<String> = m.thinking_efforts.keys().cloned().filter(|k| k != "off").collect();
     if declared.is_empty() {
+        // 只声明了"能思考"、没列档位：等级名就是线上值（老行为，网关多半直接认）
         return Ok((requested.to_string(), Some(requested.to_string())));
     }
     if !declared.iter().any(|k| k == requested) {
@@ -246,7 +260,15 @@ pub fn thinking_effort(m: &ModelRow, requested: Option<&str>) -> Result<(String,
             format!("模型 {} 未声明思考强度 {requested}（可选：{}）", m.id, declared.join(" / ")),
         ));
     }
-    Ok((requested.to_string(), Some(requested.to_string())))
+    // ★ 线上值取表里的（空串/空白当作没填 → 退回等级名，绝不发一个空参数）
+    let wire = m
+        .thinking_efforts
+        .get(requested)
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .unwrap_or(requested)
+        .to_string();
+    Ok((requested.to_string(), Some(wire)))
 }
 
 /// `POST /api/ai/conversations/{id}/runs`。

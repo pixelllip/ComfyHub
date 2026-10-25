@@ -638,11 +638,22 @@ fn apply_openai_reasoning(root: &mut Map<String, Value>, r: &ReasoningRequest) {
 /// `{type:"function", name, parameters}`（没有 `function` 那层）。
 pub struct OpenAiResponsesAdapter;
 
+/// 这一份请求会不会被要求"逐轮回传思维链"（DeepSeek 的 Responses）。
+///
+/// 判据只有两条，都是实测出来的：① 模型目录里声明的思考方言是 `deepseek`；
+/// ② 思考**没被关掉** —— `effort=none` 那一档上游不校验回传（2026-10-25 的对照实验）。
+///
+/// ⚠ 别的方言没有实测过，不许顺手加：空 `content` 的 `reasoning` 项对 OpenAI 官方
+/// 是不合法条目（它要 `id` / 加密内容），多塞一个就把本来能跑的请求变成 400。
+fn reasoning_echo_required(reasoning: &ReasoningRequest) -> bool {
+    matches!(reasoning.format, Some(ThinkingFormat::DeepSeek))
+        && !matches!(reasoning.effort.as_deref(), Some("none"))
+}
+
 impl Adapter for OpenAiResponsesAdapter {
     fn api(&self) -> Api {
         Api::OpenAiResponses
     }
-
     fn build_body(
         &self,
         model: &str,
@@ -687,6 +698,18 @@ impl Adapter for OpenAiResponsesAdapter {
                     "type": "reasoning",
                     "content": [{ "type": "reasoning_text", "text": reasoning }],
                 }));
+            } else if !turn.tool_calls.is_empty() && reasoning_echo_required(reasoning) {
+                // **这一轮模型根本没思考**（实测 2026-10-25：`krea2 r2i` 那次的 16 轮里，
+                // 有一轮只发了一个工具调用、2.3 秒就回来了，思维链 0 字符）。
+                //
+                // 思考模式下带 `tools` 的请求要求"每个工具轮都能对上思维链"，少一个就是
+                // `400 The reasoning_text in the thinking mode must be passed back to the API.`
+                // —— 而这一轮**没有思维链可回传**，编一段假的等于把别人的思考塞进它的历史。
+                //
+                // 所以补一个**空 `content` 的 reasoning 项**：这一轮确实没有思考文本（诚实），
+                // 而空 content 正是那家明确接受的形状（被拒的是"空白 reasoning_text"，
+                // 见 `docs/pitfalls.md` 里那行 2026-10-25 的实测）。
+                input.push(json!({ "type": "reasoning", "content": [] }));
             }
             if !turn.content.is_empty() || !turn.images.is_empty() {
                 let mut content: Vec<Value> = Vec::new();

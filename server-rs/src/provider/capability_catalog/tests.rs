@@ -10,13 +10,18 @@ fn dir(tag: &str) -> PathBuf {
     crate::infra::testpaths::scratch(&format!("cap-{tag}"))
 }
 
-/// ★ 内置规则的**条数与 Kotlin 一致**（118 条）—— 这是"生成器漏规则"的绊线。
+/// ★ 内置规则的**条数与生成表一致**（119 条 = 生成器给的 118 条 + 手工补的 `deepseek-flash`）
+/// —— 这是"生成器漏规则"的绊线。
 ///
 /// 真机验收靠"两端 `/api/ai/capabilities/status` 的 `builtinRules` 相等"，
 /// 但那条要起两个后端；这条能在 `cargo test` 里就把它钉住。
 #[test]
 fn 内置规则条数与生成源一致() {
-    assert_eq!(rules().len(), 118, "规则表变了？重跑 tools/gen_capability_rules.py");
+    assert_eq!(
+        rules().len(),
+        119,
+        "规则表变了？重跑 tools/gen_capability_rules.py（`deepseek-flash` 那条是手工补的）"
+    );
     // 前几条的顺序**就是语义**（宽前缀在后），抽查开头与结尾
     assert_eq!(rules()[0].0, "claude-sonnet-5");
     assert_eq!(rules().last().unwrap().0, "grok");
@@ -45,6 +50,23 @@ fn 内置匹配按包含且先命中先用() {
     assert!(deepseek.reasoning);
     assert_eq!(deepseek.thinking_format.as_deref(), Some("deepseek"));
     assert!(deepseek.thinking_efforts.iter().any(|(k, _)| k == "max"));
+
+    // `deepseek-flash`（官方现行 id）：档位必须是**恒等映射**（`max → max`）。
+    // 这条少掉时它落到"手工声明"，而真机上那份手工表被填成了 `max → high` ——
+    // 用户看到的正是"思考强度映射档位错误"（选「最大」，实际发的是 high）。
+    let flash = lookup(&overlays, "deepseek-flash").unwrap();
+    assert_eq!(flash.modalities, vec!["text", "image"]);
+    assert_eq!(flash.thinking_format.as_deref(), Some("deepseek"));
+    assert_eq!(
+        flash.thinking_efforts,
+        vec![
+            ("off".to_string(), "none".to_string()),
+            ("low".to_string(), "low".to_string()),
+            ("high".to_string(), "high".to_string()),
+            ("max".to_string(), "max".to_string()),
+        ],
+        "档位表按声明顺序（off / low / high / max），且必须是恒等映射"
+    );
 
     // deepseek-chat：只吃文本、**不声明推理** → 方言也一并清空（Kotlin 同：
     // `val format = if (!reasoning) null else …`）。
@@ -139,7 +161,7 @@ fn 状态读三层而坏文件不炸() {
     // 先什么都没有
     let empty = status(&d);
     assert_eq!(empty.version, VERSION);
-    assert_eq!(empty.builtin_rules, 118);
+    assert_eq!(empty.builtin_rules, 119);
     assert!(empty.custom.is_none() && empty.remote.is_none());
     assert!(is_stale(&d, 1_000_000), "没拉过就算过期");
 

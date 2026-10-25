@@ -720,7 +720,7 @@ async fn builtin_status_shape_changes_when_the_provider_exists() {
 
 /// `GET /api/ai/capabilities/status` 的形状 + `PUT .../probe-toggle` 的开关语义。
 ///
-/// 两个承重事实：**`builtinRules` 必须与 Kotlin 相同**（118 条 —— 生成器漏规则就从这儿露馅），
+/// 两个承重事实：**`builtinRules` 必须与生成表一致**（119 条 = 118 + 手工补的 `deepseek-flash`；生成器漏规则就从这儿露馅），
 /// 以及**开关只认 "1"**（认不出来的值一律按关：那是"会花钱发真请求"的开关）。
 #[tokio::test]
 async fn capabilities_status_reports_the_three_layers_and_toggles_probe() {
@@ -735,7 +735,7 @@ async fn capabilities_status_reports_the_three_layers_and_toggles_probe() {
         "没拉过在线目录时 remote 那几项**整个键不出现**（写成 0 小时会让界面显示『刚刚更新过』）"
     );
     assert_eq!(body["version"], "2026-09b");
-    assert_eq!(body["builtinRules"], 118, "与 Kotlin 的 rules.size 相同（生成表的条数）");
+    assert_eq!(body["builtinRules"], 119, "生成表 118 条 + 手工补的 deepseek-flash");
     assert_eq!(body["refreshIntervalDays"], 7);
     assert_eq!(body["remoteStale"], true, "没拉过就算过期");
     assert_eq!(body["probeEnabled"], false, "实测校准默认关（会花钱）");

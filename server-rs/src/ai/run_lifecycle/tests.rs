@@ -61,12 +61,41 @@ fn thinking_effort_branches() {
         ("high".into(), Some("high".into()))
     );
 
-    // 列了等级 → 只允许表里的
+    // 列了等级 → 只允许表里的，而且**发给上游的是表里的值**（不是等级名）
+    // `4096` 那种预算值（Anthropic）与 `max→high` 那种改名都靠它 ——
+    // 早先这一版把等级名原样发出去，界面上写着"实际发送：max→4096"、真正发的却是 `max`。
     let listed = model_with(true, &[("low", "low"), ("max", "4096")]);
-    assert!(thinking_effort(&listed, Some("low")).is_ok());
-    assert!(thinking_effort(&listed, Some("max")).is_ok());
+    assert_eq!(
+        thinking_effort(&listed, Some("max")).unwrap(),
+        ("max".into(), Some("4096".into()))
+    );
+    assert_eq!(
+        thinking_effort(&listed, Some("low")).unwrap(),
+        ("low".into(), Some("low".into()))
+    );
+    // 表里写了空白值的兜底：退回等级名，绝不给上游发一个空参数
+    let blank = model_with(true, &[("high", "  ")]);
+    assert_eq!(
+        thinking_effort(&blank, Some("high")).unwrap(),
+        ("high".into(), Some("high".into()))
+    );
     let err = thinking_effort(&listed, Some("medium")).unwrap_err();
     assert!(err.detail.unwrap().contains("未声明思考强度 medium"));
+
+    // 极低 / 极高两档**必须在允许列表里**：目录里声明了它们的模型
+    // （claude / gpt-5.x 那一批）一选这两档就被判"未知的思考强度"，而界面上明明是可选。
+    let wide = model_with(true, &[("minimal", "minimal"), ("xhigh", "xhigh"), ("max", "max")]);
+    for level in ["minimal", "xhigh"] {
+        assert_eq!(
+            thinking_effort(&wide, Some(level)).unwrap(),
+            (level.to_string(), Some(level.to_string()))
+        );
+    }
+    // 没列档位时同样认这两档（"请求什么给什么"的老口径）
+    assert_eq!(
+        thinking_effort(&reasoning, Some("xhigh")).unwrap(),
+        ("xhigh".into(), Some("xhigh".into()))
+    );
 }
 
 /// 心跳帧**不带 `id:` 行**（它不是可续传的游标）；正式事件带。

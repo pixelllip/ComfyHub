@@ -222,52 +222,88 @@ where
     };
 
     let adapter = adapter_for(request.api);
-    let body = adapter.build_body(
+    let mut reasoning = request.reasoning.clone();
+    let mut body = adapter.build_body(
         request.model,
         request.turns,
         request.tools,
-        &request.reasoning,
+        &reasoning,
         request.max_output_tokens,
     );
 
     let client = client_for(&host)?;
-    let mut builder = client
-        .post(&url)
-        .header("accept", "text/event-stream")
-        .header("content-type", "application/json")
-        .json(&body);
-    for (name, value) in auth_header(request.api, secret.as_deref()) {
-        builder = builder.header(name, value);
-    }
+    // 思考模式下的"思维链回传"被上游拒绝时，我们把思考关掉重发**一次**，
+    // 并把这个事实交给执行器（这个 Run 余下的请求都沿用 effort=none，见 `Outcome`）。
+    let mut thinking_forced_off = false;
+    let response = loop {
+        let mut builder = client
+            .post(&url)
+            .header("accept", "text/event-stream")
+            .header("content-type", "application/json")
+            .json(&body);
+        for (name, value) in auth_header(request.api, secret.as_deref()) {
+            builder = builder.header(name, value);
+        }
 
-    // 只记 provider / 端点 / 协议 / 模型，**绝不记 header 与请求体**
-    eprintln!(
-        "Run 请求 endpoint={} adapter={} model={} tools={} route={}",
-        safe_endpoint(&url),
-        request.api.wire(),
-        request.model,
-        request.tools.len(),
-        crate::infra::outbound::route(&host).describe()
-    );
+        // 只记 provider / 端点 / 协议 / 模型，**绝不记 header 与请求体**
+        eprintln!(
+            "Run 请求 endpoint={} adapter={} model={} tools={} route={}",
+            safe_endpoint(&url),
+            request.api.wire(),
+            request.model,
+            request.tools.len(),
+            crate::infra::outbound::route(&host).describe()
+        );
 
-    let response = builder.send().await.map_err(|e| {
-        ApiError::ai(
-            "PROVIDER_UNREACHABLE",
-            format!(
-                "连不上上游（{}）：{}｜本次路径：{}",
-                safe_endpoint(&url),
-                trim_error(&e.to_string()),
-                crate::infra::outbound::route(&host).describe()
-            ),
-        )
-    })?;
+        let response = builder.send().await.map_err(|e| {
+            ApiError::ai(
+                "PROVIDER_UNREACHABLE",
+                format!(
+                    "连不上上游（{}）：{}｜本次路径：{}",
+                    safe_endpoint(&url),
+                    trim_error(&e.to_string()),
+                    crate::infra::outbound::route(&host).describe()
+                ),
+            )
+        })?;
 
-    let status = response.status().as_u16();
-    if !(200..=299).contains(&status) {
+        let status = response.status().as_u16();
+        if (200..=299).contains(&status) {
+            break response;
+        }
+
         let raw = response.text().await.unwrap_or_default();
         let code = classify_status(status);
         let detail = redact(&raw, secret.as_deref());
         eprintln!("上游返回 {status}（code={code}）: {detail}");
+
+        // ⚠ **思考模式下"模型这一轮没思考"是救得回来的**（2026-10-25 现场）：
+        // DeepSeek 的 Responses 要求工具轮逐轮回传思维链，而模型有些轮次**根本不思考**
+        // （实测：只发一个工具调用、2.3 秒返回，`reasoning_tokens` 为 0）——
+        // 那一轮没有任何思维链可回传，再按思考模式发下去就是**恒定 400**，
+        // 用户的感受是"AI 走了大量弯路、每条消息最后都报同一个错"。
+        // 唯一的出路是**把思考关掉**：`effort: none` 那一档不校验回传（同一个请求体 200）。
+        if !thinking_forced_off && is_reasoning_passback_error(&detail) {
+            thinking_forced_off = true;
+            reasoning = ReasoningRequest {
+                effort: Some("none".into()),
+                wire_value: Some("none".into()),
+                format: None,
+            };
+            body = adapter.build_body(
+                request.model,
+                request.turns,
+                request.tools,
+                &reasoning,
+                request.max_output_tokens,
+            );
+            eprintln!(
+                "上游要求回传思维链，但这次请求里有工具轮没有思维链（模型没思考）：\
+                 改用 effort=none 重发一次（本次 Run 余下的请求也沿用）"
+            );
+            continue;
+        }
+
         return Err(ApiError::ai(
             code,
             if detail.is_empty() {
@@ -276,10 +312,11 @@ where
                 format!("{}｜上游返回：{detail}", explain(code, status))
             },
         ));
-    }
+    };
 
     let mut accumulator = SseAccumulator::new();
     let mut outcome = Outcome::default();
+    outcome.thinking_forced_off = thinking_forced_off;
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut seen_done = false;
@@ -386,6 +423,30 @@ pub struct Outcome {
     pub finish_reason: Option<String>,
     /// 工具调用分片（**原样**转交给 [`crate::provider::protocol::ToolCallAccumulator`] 拼装）
     pub tool_calls: Vec<(usize, String, Option<String>, Option<String>, Option<String>)>,
+    /// 这一次请求是不是**因为思维链回传被拒而关掉思考重发**的（见 [`stream_chat`]）。
+    ///
+    /// 执行器据此把 `effort=none` 沿用到本次 Run 的余下请求：重发产生的这一轮同样没有
+    /// 思维链，继续按思考模式发下去会一轮一次 400（每次都要多花一次输入 token 的钱）。
+    pub thinking_forced_off: bool,
+}
+
+/// 上游是不是在说"思考模式下必须把思维链回传"（DeepSeek Responses 的原文）：
+/// `The \`reasoning_text\` in the thinking mode must be passed back to the API.`
+///
+/// 判据宽松到"同时提到 reasoning / thinking 与回传"即可（各家网关的措辞会漂），
+/// 也认"不允许空的思考内容"那类变体（`reasoning content must not be empty` ——
+/// 见 `protocol.rs` 里给"没思考的工具轮"补的那个空 content 项）。
+///
+/// 但**必须两样都命中** —— 只看到 `reasoning` 就重发，会把"这个模型不支持思考"
+/// 那类配置错误也悄悄降档成非思考，用户就再也看不到真正的原因了。
+pub fn is_reasoning_passback_error(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    let mentions_reasoning = lower.contains("reasoning") || lower.contains("thinking");
+    let mentions_echo = lower.contains("passed back")
+        || lower.contains("must be passed")
+        || lower.contains("pass back");
+    let complains_about_empty = lower.contains("empty") || lower.contains("blank");
+    mentions_reasoning && (mentions_echo || complains_about_empty)
 }
 
 /// 归一化后的 token 用量 —— **契约的那四个字段**（`docs/run-event-contract.md` §2）。
