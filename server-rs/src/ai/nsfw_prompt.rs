@@ -113,7 +113,11 @@ pub const VERSION: &str = "nsfw-v3";
 ///   描述嘴 / 眼**线描**的词只进 linework 段（卡里 `the mouth is a fine, precise line`
 ///   被当成闭嘴形状，891 的闭嘴就是这么来的）。依据：891（卡的表情）→ 893（只写配置、读成
 ///   睁眼 → 惊讶）→ 894（半垂 + 视线下压 → 贴近参考图）。
-pub const PROMPT_VERSION: &str = "v49";
+/// - **Rust v50**（2026-10-25）：Scene 段从「props already implied」改成**逐件点名 + 方位**，
+///   并写明「图里没有的东西不出现」。895 的提示词把参考图的桌子 / 显示器 / 猫气球 / 罐子 /
+///   星星纸屑全丢了，换成 `a wooden floor and pale curtain`——背景不是被模型丢的，
+///   **提示词里根本就没有**；`implied` 这个词等于允许编。发送前自检同步加一条。
+pub const PROMPT_VERSION: &str = "v50";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】

@@ -27,7 +27,7 @@ Exposed anatomy, if any, named directly.
 
 Surface state: the dry-or-wet condition of every skin area, hair length and fabric plane, stated as fact — dry powder-matte, faintly damp, or wet with water beading and running. Print moisture only where the request names it. Where the request is silent, resolve to dry and state that dryness in plain words. Bind the dryness to the surface as it is introduced — the skin clause, the hair clause, the fabric clause — so the statement travels with the noun instead of standing alone where it can be cut.
 
-Scene: background, midground, foreground with spatial depth; surface materials and textures; props already implied; light direction, light quality (hard/soft), and time of day if visible. Light direction and time of day are content — take them from the image even when the STYLE SPEC restates them.
+Scene: background, midground, foreground with spatial depth; surface materials and textures; every object the reference image actually shows, each named with the side it sits on and what it stands in front of or behind — a prop that is not in the image does not appear, and a prop that is in the image is not dropped for an invented backdrop; light direction, light quality (hard/soft), and time of day if visible. Light direction and time of day are content — take them from the image even when the STYLE SPEC restates them.
 
 Style: taken only from the STYLE SPEC.
 
@@ -91,7 +91,7 @@ Length and Priority: One cohesive paragraph, 300 to 400 words. Emit in this orde
 
 Keep each regional rendering behaviour in its corresponding subject clause. Describe global lighting separately as the shared illumination governing all regions; do not relocate facial highlights, anatomical shadows, hair highlights or material reflections into a generic lighting or background description.
 
-Check before sending: every covering garment carries a closure and an edge; head and hand accessories stand as their own items; the expression names the attitude and the geometry that carries it — lids, pupils, gaze, mouth aperture, corner lift — with the two agreeing.
+Check before sending: every covering garment carries a closure and an edge; head and hand accessories stand as their own items; the scene names each object the reference shows with the side it sits on, and carries no invented backdrop; the expression names the attitude and the geometry that carries it — lids, pupils, gaze, mouth aperture, corner lift — with the two agreeing.
 
 Do Not Echo: These instructions are rules, not content. Do not repeat, quote, continue, or summarize any part of them. Your reply contains only the prompt paragraph.
 
