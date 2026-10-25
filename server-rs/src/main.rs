@@ -322,6 +322,25 @@ async fn main() {
         Err(e) => eprintln!("[capture] LoRA 回填失败（不影响使用）：{}", e.human()),
     }
 
+    // ---- 老提示词的"运行时正向提示词"回填（2026-10-25）----------------------
+    //
+    // Krea2 r2i 的 `TextGenerate` 在跑的时候才写出最终提示词，节点图里只有 system prompt
+    // 与空槽；2026-10-25 之前入库的行因此正向是空的（`test_00901_.png`）。
+    // 那次运行的 `/history` 条目（`capture_runs.raw`）里其实有最终文本，这里补一遍。
+    // 只补空正向的行、只认"喂给了正向条件"的文本（见 `capture_ingest::backfill_runtime_prompts`）。
+    match state.write(|tx| {
+        if !comfyhub_server_rs::comfy::capture_ingest::prompt_backfill_needed(tx)? {
+            return Ok(0);
+        }
+        Ok(comfyhub_server_rs::comfy::capture_ingest::run_prompt_backfill(tx)?)
+    }) {
+        Ok(n) if n > 0 => {
+            println!("[capture] 提示词回填：{n} 条提示词补上了运行时生成的正向提示词")
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("[capture] 提示词回填失败（不影响使用）：{}", e.human()),
+    }
+
     // ---- 后台捕获轮询器（P4 第 47 步 = O5/O6）-------------------------------
     //
     // 与 Kotlin `ComfyCapture.start()` 同一件事：**用户自己在 ComfyUI 里跑的东西也要被收**。

@@ -25,7 +25,7 @@
 //! 并列的图（很常见：一个空负向、一个负向关键词表长度相同）两端选到不同的节点。
 //! 这里显式实现"取第一个最大"，并有用例钉住。
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use serde_json::{Map, Value};
 
@@ -308,6 +308,172 @@ pub fn parse(graph: Option<&Map<String, Value>>) -> Parsed {
         extra: collect_extra(&nodes),
         title_hint: find_filename_prefix(&nodes),
     }
+}
+
+// ---------------------------------------------------------------------------
+//  运行时最终提示词（2026-10-25）
+// ---------------------------------------------------------------------------
+
+/// 从 `/history` 的 `outputs` 里取**这次运行真正喂给正向条件的文本**。
+///
+/// # 为什么节点图不够
+///
+/// Krea2 r2i 那类工作流的正向提示词是**运行时生成**的：
+/// `TextGenerate`（本地看图 / 扩写模型）→ `ComfySwitchNode` → `PreviewAny` → `CLIPTextEncode.text`。
+/// 节点图里只有 `TextGenerate.system_prompt` 和两个**空**的输入槽，最终那一整段话
+/// 只出现在 `/history` 的 `outputs` 里（`PreviewAny` / `ShowText` 的 `text` 数组）。
+/// 只看图的话，画廊详情里的提示词会一直是空的（用户 2026-10-25 的 `test_00901_.png`）。
+///
+/// # 判据（只认"它确实喂给了正向条件"）
+///
+/// 1. 从采样器的 `positive`（以及 guider 的 `conditioning`）顺着条件链找到文本编码器；
+/// 2. 编码器的 `text` 是**连线**时才查运行时输出（字面量由 [`parse`] 直接拿到，
+///    不能被旁边某个预览节点的文本顶掉）；
+/// 3. 只认这条连线指向的节点（含 PreviewAny / ShowText / 开关这类纯转发节点）在
+///    `outputs[id].text` 里的值；
+/// 4. 找不到就 `None` —— **绝不拿别的文本输出顶替**（那可能是备注或负向），
+///    调用方保持 [`parse`] 的原结果。
+pub fn final_positive(
+    graph: Option<&Map<String, Value>>,
+    outputs: Option<&Map<String, Value>>,
+) -> Option<String> {
+    let graph = graph?;
+    let outputs = outputs?;
+    if graph.is_empty() {
+        return None;
+    }
+    let nodes: Vec<(&str, &Map<String, Value>)> = graph
+        .iter()
+        .filter_map(|(id, value)| value.as_object().map(|obj| (id.as_str(), obj)))
+        .collect();
+    if nodes.is_empty() {
+        return None;
+    }
+
+    let sampler = find_sampler(&nodes);
+    // guider 的取法与 [`parse`] 完全一致（Krea 2 的 `BasicGuider` 只有 `conditioning`）
+    let guider = sampler
+        .and_then(|node| input_ref(node, "guider"))
+        .and_then(|id| lookup(&nodes, &id))
+        .or_else(|| {
+            sampler
+                .and_then(|node| input_ref(node, "model"))
+                .and_then(|id| lookup(&nodes, &id))
+                .filter(|node| cls(node).contains("Guider"))
+        });
+
+    let mut starts: Vec<String> = Vec::new();
+    if let Some(node) = sampler {
+        starts.extend(input_ref(node, "positive"));
+        starts.extend(input_ref(node, "positive_cond"));
+    }
+    if let Some(node) = guider {
+        starts.extend(input_ref(node, "conditioning"));
+        starts.extend(input_ref(node, "positive"));
+    }
+
+    let mut queue: VecDeque<(String, usize)> = starts.into_iter().map(|id| (id, 0)).collect();
+    let mut seen: HashSet<String> = HashSet::new();
+    while let Some((id, depth)) = queue.pop_front() {
+        if depth > 8 || id.trim().is_empty() || !seen.insert(id.clone()) {
+            continue;
+        }
+        let Some(node) = lookup(&nodes, &id) else { continue };
+        if cls(node).to_ascii_lowercase().contains("textencode") {
+            let Some(text) = input(node, "text") else { continue };
+            // 字面量（parse 已经拿得到）不在这里处理；只有连线才需要看运行时输出。
+            let Some(upstream) = reference_ref(Some(text)) else { continue };
+            if let Some(found) = runtime_text_in_chain(&upstream, &nodes, outputs, 0) {
+                let trimmed = found.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+            continue;
+        }
+        let Some(map) = inputs(node) else { continue };
+        for (key, value) in map {
+            if !positive_chain_key(key) {
+                continue;
+            }
+            if let Some(up) = reference_ref(Some(value)) {
+                queue.push_back((up, depth + 1));
+            }
+        }
+    }
+    None
+}
+
+/// 条件链上还要继续跟着走的输入（与 `workflow_submit::apply_positive_prompt` 同一档）。
+fn positive_chain_key(key: &str) -> bool {
+    key == "positive"
+        || key == "conditioning"
+        || key.starts_with("conditioning_")
+        || key == "on_true"
+        || key == "on_false"
+}
+
+/// 文本转发节点上可以继续往下找的输入：`PreviewAny.source`、开关的 `on_true/on_false`、
+/// `StringConcatenate.string_a/b`、`PrimitiveString*.value` 都在这一档。
+fn runtime_text_chain_key(key: &str) -> bool {
+    matches!(
+        key,
+        "source" | "text" | "value" | "string" | "string_a" | "string_b" | "prompt" | "on_true" | "on_false"
+    )
+}
+
+/// 某个节点这次运行输出的文本（`PreviewAny` / `ShowText` 一类）。
+///
+/// ComfyUI 的形状是 `outputs[id].text = ["…", …]`（字符串数组）；个别实现给字符串 —— 两种都认。
+fn runtime_text_of(outputs: &Map<String, Value>, id: &str) -> Option<String> {
+    let node = outputs.get(id)?.as_object()?;
+    match node.get("text")? {
+        Value::Array(items) => {
+            let joined = items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!joined.is_empty()).then_some(joined)
+        }
+        Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// 从编码器 `text` 指向的节点往回找它的运行时文本；中间允许穿过纯转发节点。
+///
+/// 深度上限与 [`text_from_ref`] 同一档（6）：真实链很少超过三层，
+/// 而"图里绕圈子"的脏数据不能把捕获轮询卡住。
+fn runtime_text_in_chain(
+    id: &str,
+    nodes: &[(&str, &Map<String, Value>)],
+    outputs: &Map<String, Value>,
+    depth: usize,
+) -> Option<String> {
+    if depth > 6 {
+        return None;
+    }
+    if let Some(text) = runtime_text_of(outputs, id) {
+        return Some(text);
+    }
+    let node = lookup(nodes, id)?;
+    let map = inputs(node)?;
+    for (key, value) in map {
+        if !runtime_text_chain_key(key) {
+            continue;
+        }
+        let Some(up) = reference_ref(Some(value)) else { continue };
+        if let Some(text) = runtime_text_in_chain(&up, nodes, outputs, depth + 1) {
+            return Some(text);
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------

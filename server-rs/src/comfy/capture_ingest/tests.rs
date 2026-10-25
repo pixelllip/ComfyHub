@@ -311,3 +311,84 @@ fn lora_backfill_marker_tracks_the_version() {
     .unwrap();
     assert!(loras_backfill_needed(&conn).unwrap(), "旧版本标记必须再跑");
 }
+
+// ---------------------------------------------------------------------------
+//  运行时正向提示词回填（2026-10-25）
+// ---------------------------------------------------------------------------
+
+fn positive_of(conn: &rusqlite::Connection, id: i64) -> String {
+    conn.query_row("SELECT positive_prompt FROM prompts WHERE id = ?1", [id], |row| row.get(0))
+        .unwrap()
+}
+
+/// 真机形状（`test_00901_.png`）：`TextGenerate → ComfySwitchNode → PreviewAny → CLIPTextEncode`。
+fn runtime_prompt_raw(text: &str) -> Value {
+    json!({
+        "prompt": [48, "uuid", {
+          "128": {"class_type":"KSampler","inputs":{"steps":8,"cfg":1,"seed":7,
+                  "positive":["108",0],"negative":["133",0]}},
+          "108": {"class_type":"CLIPTextEncode","inputs":{"text":["55",0],"clip":["4",1]}},
+          "55":  {"class_type":"PreviewAny","inputs":{"source":["162",0]}},
+          "162": {"class_type":"ComfySwitchNode","inputs":{"on_true":["43",0],"on_false":["182",0],"switch":true}},
+          "43":  {"class_type":"TextGenerate","inputs":{"system_prompt":["45",0],"prompt":["182",0]}},
+          "45":  {"class_type":"PrimitiveStringMultiline","inputs":{"value":"You are an expert prompt engineer."}},
+          "182": {"class_type":"StringConcatenate","inputs":{"string_a":["147",0],"string_b":["180",0]}},
+          "147": {"class_type":"PrimitiveStringMultiline","inputs":{"value":""}},
+          "180": {"class_type":"PrimitiveStringMultiline","inputs":{"value":""}},
+          "133": {"class_type":"CLIPTextEncode","inputs":{"text":""}}
+        }],
+        "outputs": {
+          "55": {"text": [text]},
+          "2": {"images": [{"filename":"test_00901_.png"}]}
+        }
+    })
+}
+
+/// 只补空正向的行；用户已经写过的正文字一个字都不动。
+#[test]
+fn prompt_backfill_fills_only_empty_positive_prompts() {
+    let conn = memory_db();
+
+    insert_empty_prompt(&conn);
+    let empty = conn.last_insert_rowid();
+    attach_capture(&conn, empty, runtime_prompt_raw("最终提示词：绿发少女站在雨夜街头"));
+
+    insert_empty_prompt(&conn);
+    let hand_written = conn.last_insert_rowid();
+    conn.execute(
+        "UPDATE prompts SET positive_prompt = '我自己写的' WHERE id = ?1",
+        [hand_written],
+    )
+    .unwrap();
+    attach_capture(&conn, hand_written, runtime_prompt_raw("运行时生成的"));
+
+    assert_eq!(backfill_runtime_prompts(&conn).unwrap(), 1, "只补空的那一条");
+    assert_eq!(positive_of(&conn, empty), "最终提示词：绿发少女站在雨夜街头");
+    assert_eq!(positive_of(&conn, hand_written), "我自己写的", "手写的正向不许被覆盖");
+
+    // 回填过的行已被顶过 `updated_at`，但判据是"正向空不空"，所以直接再跑也不会重复改
+    assert_eq!(backfill_runtime_prompts(&conn).unwrap(), 0);
+}
+
+fn insert_empty_prompt(conn: &rusqlite::Connection) {
+    conn.execute(
+        "INSERT INTO prompts (title, kind, positive_prompt, source) \
+         VALUES ('test · seed 1', 'IMAGE', '', 'ComfyUI')",
+        [],
+    )
+    .unwrap();
+}
+
+#[test]
+fn prompt_backfill_marker_tracks_the_version() {
+    let conn = memory_db();
+    assert!(prompt_backfill_needed(&conn).unwrap(), "没有标记时必须跑");
+    mark_prompt_backfill_done(&conn).unwrap();
+    assert!(!prompt_backfill_needed(&conn).unwrap(), "同一版本不再重复扫");
+    conn.execute(
+        "UPDATE app_settings SET v = '0' WHERE k = ?1",
+        [PROMPT_BACKFILL_KEY],
+    )
+    .unwrap();
+    assert!(prompt_backfill_needed(&conn).unwrap(), "旧版本标记必须再跑");
+}

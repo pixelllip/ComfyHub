@@ -521,6 +521,108 @@ fn captured_loras(raw: &str) -> Option<Vec<crate::workflow::graph_parse::LoraRef
 }
 
 // ---------------------------------------------------------------------------
+//  老提示词的"运行时正向提示词"回填（2026-10-25）
+// ---------------------------------------------------------------------------
+
+/// `app_settings` 里"运行时提示词回填跑到哪一版"的键。
+pub const PROMPT_BACKFILL_KEY: &str = "capture.prompts.backfill";
+
+/// 当前回填规则版本。以后**再改提取规则**就 +1（启动时会重扫一遍空正向的行）。
+pub const PROMPT_BACKFILL_VERSION: i64 = 1;
+
+fn prompt_backfill_marker(conn: &rusqlite::Connection) -> rusqlite::Result<Option<i64>> {
+    use rusqlite::OptionalExtension;
+    let raw: Option<String> = conn
+        .query_row("SELECT v FROM app_settings WHERE k = ?1", [PROMPT_BACKFILL_KEY], |row| row.get(0))
+        .optional()?;
+    Ok(raw.as_deref().and_then(|text| text.trim().parse::<i64>().ok()))
+}
+
+/// 回填还要不要跑（没有标记 / 标记低于当前版本 → `true`）。
+pub fn prompt_backfill_needed(conn: &rusqlite::Connection) -> rusqlite::Result<bool> {
+    Ok(prompt_backfill_marker(conn)?.unwrap_or(0) < PROMPT_BACKFILL_VERSION)
+}
+
+/// 记下"这一版回填已经跑过"。
+pub fn mark_prompt_backfill_done(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO app_settings (k, v) VALUES (?1, ?2)
+         ON CONFLICT(k) DO UPDATE SET v = excluded.v, \
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+        params![PROMPT_BACKFILL_KEY, PROMPT_BACKFILL_VERSION.to_string()],
+    )?;
+    Ok(())
+}
+
+/// 启动时跑的那一趟，返回补了几条提示词。
+pub fn run_prompt_backfill(conn: &rusqlite::Connection) -> rusqlite::Result<usize> {
+    let updated = backfill_runtime_prompts(conn)?;
+    mark_prompt_backfill_done(conn)?;
+    Ok(updated)
+}
+
+/// 把**运行时才生成**的正向提示词补进 `prompts.positive_prompt`（只补空的那一批）。
+///
+/// # 为什么需要它
+///
+/// Krea2 r2i 的 `TextGenerate`（本地看图 / 扩写模型）在跑的时候才写出最终提示词，
+/// 节点图里只有 system prompt 和空槽。2026-10-25 之前入库的那些行因此 `positive_prompt = ''`
+/// （现场：`test_00901_.png`，画廊详情里提示词一直空着）。
+/// 那次运行的 `/history` 条目（`capture_runs.raw`）里其实**有**最终文本
+/// （`outputs["55"].text`），只是入库时没读它。这里按同一套判据补一遍。
+///
+/// # 四条纪律
+///
+/// 1. **只碰空正向的行**（`TRIM(positive_prompt) = ''`）—— 用户手写或已经解析出来的一个字都不改；
+/// 2. **只认能证明"喂给了正向条件"的文本**（[`graph_parse::final_positive`]），找不到就跳过，
+///    绝不拿旁边的备注 / 负向顶替；
+/// 3. **解析失败不清空、不报错**：脏 raw 直接跳过（老库里有截断的）；
+/// 4. `UPDATE` 会顶 `updated_at`，所以同一行不会被反复改写，同步账本也会记一笔。
+pub fn backfill_runtime_prompts(conn: &rusqlite::Connection) -> rusqlite::Result<usize> {
+    // 同一批先全读出来再更新（理由同 `backfill_loras`：边读游标边写同一张表不可靠）
+    let rows: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT p.id, c.raw
+               FROM prompts p
+               JOIN capture_runs c ON c.prompt_id = p.id
+              WHERE TRIM(COALESCE(p.positive_prompt, '')) = ''
+                AND c.raw IS NOT NULL
+              ORDER BY p.id, c.id",
+        )?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+
+    let mut updated = 0usize;
+    let mut done: Vec<i64> = Vec::new();
+    for (prompt_id, raw) in rows {
+        if done.contains(&prompt_id) {
+            continue;
+        }
+        let Ok(doc) = serde_json::from_str::<Value>(&raw) else { continue };
+        let history = crate::comfy::capture::history::parse(&doc);
+        let Some(graph) = history.graph.as_ref().and_then(Value::as_object) else { continue };
+        let outputs = doc.get("outputs").and_then(Value::as_object);
+        let Some(text) = crate::workflow::graph_parse::final_positive(Some(graph), outputs) else {
+            continue;
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        conn.execute(
+            "UPDATE prompts SET positive_prompt = ?1 WHERE id = ?2",
+            params![text, prompt_id],
+        )?;
+        done.push(prompt_id);
+        updated += 1;
+    }
+    Ok(updated)
+}
+
+// ---------------------------------------------------------------------------
 //  一次运行 → 入库
 // ---------------------------------------------------------------------------
 
@@ -686,7 +788,21 @@ async fn ingest_inner(
 ) -> Result<IngestResult, String> {
     let run_key = req.run_key.clone();
     let graph = req.prompt.as_ref().and_then(Value::as_object);
-    let parsed = crate::workflow::graph_parse::parse(graph);
+    let mut parsed = crate::workflow::graph_parse::parse(graph);
+    // **运行时才生成的提示词**（Krea2 r2i 的 `TextGenerate → ComfySwitchNode → PreviewAny → CLIPTextEncode`）：
+    // 节点图里只有 system prompt 与空槽，最终那一整段话只出现在 `/history` 的 `outputs` 里。
+    // 不在这里补，画廊详情里的提示词会一直是空的（用户 2026-10-25 的 `test_00901_.png`）。
+    let runtime_outputs = req
+        .raw
+        .as_ref()
+        .and_then(|entry| entry.get("outputs"))
+        .and_then(Value::as_object);
+    if let Some(text) = crate::workflow::graph_parse::final_positive(graph, runtime_outputs) {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            parsed.positive = trimmed.to_string();
+        }
+    }
 
     // 标签：ComfyUI 来源自动带上配置里的 autoTag，再加上调用方给的
     let mut tags: Vec<String> = Vec::new();

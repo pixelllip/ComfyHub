@@ -992,6 +992,9 @@ pub async fn capture_run(
     run_key: &str,
     entry: &Value,
     nsfw: bool,
+    // 本次提交时给的标题（`comfy_submit(title=…)`）：**必须带进捕获**，否则
+    // `make_title` 会退回保存节点的 `filename_prefix`（用户看到的是 `test · seed …`）。
+    title: Option<&str>,
 ) -> Result<crate::comfy::capture_ingest::IngestResult, String> {
     let claim = crate::comfy::capture_ingest::begin_run(state, run_key, "ComfyUI", Some(entry), false)
         .map_err(|e| e.human().to_string())?;
@@ -1028,6 +1031,9 @@ pub async fn capture_run(
         == Some("error");
     let mut request = crate::comfy::capture_ingest::build_ingest_request(run_key, entry, config, is_error);
     request.nsfw = nsfw;
+    if let Some(title) = title.map(str::trim).filter(|text| !text.is_empty()) {
+        request.title = Some(title.to_string());
+    }
     Ok(crate::comfy::capture_ingest::ingest_claimed(state, &request, config).await)
 }
 
@@ -1248,7 +1254,7 @@ pub async fn tool_submit(
 
             let failed = status_str == Some("error");
             let elapsed = started.elapsed().as_millis() as i64;
-            match capture_run(state, &config, &run_key, &entry, nsfw).await {
+            match capture_run(state, &config, &run_key, &entry, nsfw, title.as_deref()).await {
                 Err(message) => {
                     // 运行结束了但入库失败：如实说，别把它说成"没跑"
                     submission.status = if failed { "error" } else { "success" }.to_string();
