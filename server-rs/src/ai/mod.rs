@@ -11,6 +11,7 @@ pub mod memory;
 pub mod nsfw_prompt;
 pub mod pending;
 pub mod questions;
+pub mod reference_attach;
 pub mod run_kit;
 pub mod run_lifecycle;
 pub mod runs;

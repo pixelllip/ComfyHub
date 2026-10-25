@@ -45,7 +45,7 @@ DSH 暴露给模型的东西分五类。对照结论（`docs/archive/dsh-tool-la
 | `comfy_get_status` | comfy | allow | 复用 `ComfyCapture.status()`：连通性 / 队列 / 最近捕获（**附最近提交的任务**） |
 | `comfy_get_run` | comfy | allow | 按 runKey 查一次捕获（AIH-034） |
 | `comfy_sync_history` | comfy | **ask** | 会写我们的库，按 DEC-005 默认要审批 |
-| `comfy_load_workflow` | comfy | allow | 把**一份本机工作流文件**读进库换成一个能提交的 `promptId`（用户 bug ③，2026-09-18）：API 格式原样用；界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图 —— 普通节点、**组节点（subgraph）**、Reroute / Set-Get、旁路都会等价展开或改写，控件值**首选带名字的 `widgets_values_named`**。**## 模拟用户行为 ##**（用户建议 ②，2026-09-21）：`emulateFrontend` **默认开着**，把纯前端节点照前端排队前的行为等价改写（广播填空 / 丢显示节点 / 补 SaveImage），改了什么都列在 `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里（见 §2.0.2）；说不清类型的仍然如实报 `UNSUPPORTED_NODES`，带 `tolerateUnsupported=true` 再来一次则**摘掉它们并给出缺口清单**（`openInputs` / `unresolvedInputs`），交给模型补线。只读用户机器上的文件，不改它 |
+| `comfy_load_workflow` | comfy | allow | 把**一份本机工作流文件**读进库换成一个能提交的 `promptId`（用户 bug ③，2026-09-18）：API 格式原样用；界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图 —— 普通节点、**组节点（subgraph）**、Reroute / Set-Get、旁路都会等价展开或改写，控件值**首选带名字的 `widgets_values_named`**。**## 模拟用户行为 ##**（用户建议 ②，2026-09-21）：`emulateFrontend` **默认开着**，把纯前端节点照前端排队前的行为等价改写（广播填空 / 丢显示节点 / 补 SaveImage），改了什么都列在 `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里（见 §2.0.2）；说不清类型的仍然如实报 `UNSUPPORTED_NODES`，带 `tolerateUnsupported=true` 再来一次则**摘掉它们并给出缺口清单**（`openInputs` / `unresolvedInputs`），交给模型补线。**2026-10-25 起**结果多一个 `referenceImages`（`LoadImage` 指向的真实路径 + 原始分辨率），能看图的模型由执行器把图缩到 ≤1024 长边后**自动附在下一轮**（见 §2.1.3）。只读用户机器上的文件，不改它 |
 | `comfy_find_workflow` | comfy | allow | 找一个**能直接跑**的工作流：先搜库里**能直接跑**的工作流（标注 `runnable` = 有没有 API 节点图）；**库里没有时自动回头列本机 ComfyUI 已保存的工作流文件**（结果在 `localWorkflows` 里，用户 bug ⑤，2026-09-18） |
 | `comfy_list_workflows` | comfy | allow | 列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`，用户 bug ⑤，2026-09-18）：带路径 / 格式（ui/api）/ 是否已入库（`inLibrary` / `promptId`），可按文件名过滤（如 `krea2`）。**只读**，不改用户的文件。首次使用、或 `comfy_find_workflow` 什么都搜不到时先看它 —— 这些工作流**不需要在 ComfyUI 里跑过一次**，拿到 path 直接 `comfy_load_workflow` 就能提交 |
 | `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数、`connections` 补连线（值写 `["<上游节点id>", 槽位]`），跑完直接入库；会消耗显卡时间，默认要审批。**2026-10-21 新增 `positivePrompt`**：工作流里带 `TextGenerate`（本地 LLM 扩写 / 布局编译器）时，AI 先读它的 `system_prompt`、自己写好最终提示词，再由后端写进正面 `CLIPTextEncode.text`，并把 TextGenerate 这一支**从这次提交的图里摘掉**（节点 + 指向它的显示节点 + 只喂它的上游；2026-10-24 起：只断线不够，ComfyUI 校验整张 prompt），本地 LLM 既不校验也不执行，原文件不动。返回 `positivePromptApplied` / `textGenerateBypassed` 作为证据 |
@@ -273,6 +273,38 @@ D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows\krea2SF
 防线：`ComfyWorkflowFilesTest` 7 例（懒加载发现 / 多用户目录 / 坏文件过滤 / query / 入库标记 /
 空目录如实说）+ `ToolRegistryTest` 3 例（回落、`NOT_FOUND` 指路、只读 allow）+
 `e2e-submit-test.ps1` 第 6 幕 6 项断言（只读列出 → AI 拿到路径 → 一键导入 → 幂等 → 状态回填）。
+
+### 2.1.3 载入工作流时自动带图（2026-10-25）
+
+现场（895）：工作流的 `LoadImage.image` 写着 `image (15).png`，文件就在 ComfyUI 的 `input`
+目录里。模型只拿到这个名字，**既没有路径也没有像素** —— 于是它照着文件名把画面编了出来：
+参考图里的粉房间、猫气球、显示器、罐子一个没写，倒多出「木地板 + 浅色窗帘」。
+系统提示里那句「支持看图但本轮没有图 → 先要图」也救不了它：它并不知道**图一直就在工作流里**。
+
+两处一起改：
+
+1. **`comfy_load_workflow` 返回 `referenceImages`**（`workflow/reference_images.rs`）：
+   遍历 API 图里的 `LoadImage`，把 widget 值解析成**真实路径 + 原始分辨率 + 体积 + `exists`**。
+   目录按 `image_edit::input_dir_candidates` 走（实例留档 → 配置 output 的兄弟 → Desktop 设置 →
+   盘探），**不自己拼 ComfyUI 安装路径**；`[output]` 后缀去 output 目录找，`[temp]` 如实说明是临时图。
+   ⚠ 文件名只接受**相对路径**（`..` / 盘符 / 根目录一律拒绝）：工作流文件来自网上，
+   越界读等于把用户机器上的文件当成"参考图"发给模型。
+2. **执行器自动把图挂进下一轮**（`ai/reference_attach.rs`，`executor` 在工具结果之后调）：
+   把图缩到 **≤1024 长边**、JPEG 重编码、base64 内联，挂成**工具结果之后的一条 `user` 轮**
+   （tool 轮里放图 OpenAI / Anthropic 都不收）。正文逐条写「节点 id · 文件名 · 原图 W×H ·
+   这次附上的是缩图」，所以**原始分辨率始终告诉模型**（用户口径："图片过大的时候要有压缩，
+   但是要让 AI 知道原始分辨率"）。一次工具结果最多 4 张、一次 Run 最多 6 张，按路径去重；
+   文件不在 / 读不出图 / 超过上限都会写进「没附上的」那一句，**不静默丢**（AIH-030）。
+   并行工具调用时**所有工具结果推完之后**才挂这一条 user 轮 —— 中间插一条 user 消息会打断
+   `assistant(tool_calls) → tool…` 的邻接关系。
+
+准入与附件内联同一条：模型 `input_modalities` 含 `image` **且** 该协议的适配器实现了
+`inline_base64`。看不到图的模型不会收到图（它照旧按 `path` 请用户附图），
+**不许凭文件名编内容**（第 12 条 ④）。防线：`reference_images` 5 例（分辨率 / 越界 / 缺失 /
+`[output]` / `[temp]`）+ `reference_attach` 5 例（缩图与原始分辨率 / 不放大 / 能力判据 /
+缺失如实说 / 每批 4 张·每 Run 6 张）+ `api_test` 的
+`load_workflow_auto_attaches_the_reference_image_to_the_next_round`（假网关看两轮请求体：
+第一轮无图、第二轮有 `image_url` + 原图 1600×900 + 缩图 1024×576）。
 
 ### 2.1 提交任务（`comfy_submit`）的几条纪律（2026-09-17）
 

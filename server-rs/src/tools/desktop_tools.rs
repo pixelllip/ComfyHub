@@ -207,6 +207,7 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
 界面格式（nodes/links）会按 ComfyUI 的 /object_info 转成 API 节点图：普通节点、Reroute / Set-Get、旁路都会等价展开或改写。
 剩下的纯前端节点默认**如实报错**；带 tolerateUnsupported=true 再来一次，我会把它们摘掉并给出**缺口清单**：`unresolvedInputs`（哪个输入还悬着）、`openInputs`（哪些连线型输入空着，缺的是什么类型）、`unsupportedNodes`（摘掉了哪些类）—— 照着清单用 comfy_submit(connections=…) 补线即可。
 返回里有 promptId、runnable（能不能直接跑）与每个节点的 id / 可覆盖的输入名。
+`referenceImages` 是工作流里 `LoadImage` 指向的**参考图**（真实路径 + 原始分辨率）：当前模型能看图时，服务端会把它们**自动附在下一轮**（长边超过 1024 会先等比缩小，原图尺寸见 width/height）；看不到图时按 path 请用户确认或附图，**不要凭文件名编画面内容**。
 只读用户机器上的文件，不改它。"#,
         // ⚠ 这段 schema 是 `ToolRegistry.kt` 那一条的**逐字**拷贝（R12/R13）。
         //   第 68 步之前 `emulateFrontend` 只是"收下不改变行为"，所以那会儿只能在返回值里

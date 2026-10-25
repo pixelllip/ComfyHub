@@ -241,6 +241,17 @@ async fn run_once(
     let attachment_plan = attachment_plan_of(state, &history, &model, &provider.api);
     let has_inlined_attachments = !attachment_plan.inline.is_empty();
 
+    // 工作流参考图（2026-10-25「载入工作流时自动带图」）：`comfy_load_workflow` 的结果里
+    // 带 `referenceImages`（`LoadImage` 的真实路径 + 原始分辨率），模型能收图时由
+    // `reference_attach` 缩图后挂到下一轮。能力判据与附件内联同一条（模型声明图片模态 +
+    // 适配器实现了 inline_base64）；预算与去重是**整个 Run** 的。
+    let can_inline_reference_images = crate::ai::reference_attach::supports_images(
+        model.input_modalities.iter().any(|m| m == "image"),
+        &provider.api,
+    );
+    let mut reference_budget = crate::ai::reference_attach::Budget::default();
+    let mut attached_reference_paths: HashSet<String> = HashSet::new();
+
     let system_prompt = crate::ai::system_prompt::render(
         &provider.display_name,
         &provider.api,
@@ -605,6 +616,12 @@ async fn run_once(
         });
 
         // 一个一个执行（**串行**：多个调用里只要有一个要用户点头，就得按顺序来）
+        //
+        // 参考图先攒着、**这一轮所有工具结果都推完之后**再挂成一条 user 轮：
+        // 一次回复里并行调好几个工具时，中间插一条 user 消息会打断
+        // "assistant(tool_calls) → tool…" 的邻接关系（OpenAI 直接 400，
+        // Anthropic 的 tool_result 也要求紧跟着 tool_use）。
+        let mut reference_batches: Vec<crate::ai::reference_attach::Batch> = Vec::new();
         for (call_id, call) in &calls {
             let outcome = handle_call(
                 state,
@@ -635,6 +652,20 @@ async fn run_once(
                     session.spend_call(&call.name);
                 }
             }
+            // 工作流参考图：`comfy_load_workflow` 的结果里带 `referenceImages` 时，
+            // 把图挂到**工具结果之后的一条 user 轮**上（tool 轮装不了图 ——
+            // OpenAI / Anthropic 都不接受 tool 消息里的图片）。
+            // 只有真的跑成功了才挂：失败结果里没有可用的路径。
+            if outcome.ok && call.name == "comfy_load_workflow" {
+                if let Some(batch) = crate::ai::reference_attach::plan(
+                    &outcome.result,
+                    can_inline_reference_images,
+                    &mut reference_budget,
+                    &mut attached_reference_paths,
+                ) {
+                    reference_batches.push(batch);
+                }
+            }
             // 工具结果作为下一轮的 `role = tool`
             trailing.push(ChatTurn {
                 role: "tool".into(),
@@ -643,6 +674,25 @@ async fn run_once(
                 tool_call_id: Some(call_id.clone()),
                 images: Vec::new(),
                 reasoning: None,
+            });
+        }
+        if !reference_batches.is_empty() {
+            // 多条合并成**一条** user 轮：连续两条 user 消息在 OpenAI 那边是合法的，
+            // 但没必要；图按节点顺序排，正文逐条列出（含"没附上的"那句）。
+            let mut text = String::new();
+            let mut images = Vec::new();
+            for batch in reference_batches {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(&batch.text);
+                images.extend(batch.images);
+            }
+            trailing.push(ChatTurn {
+                role: "user".into(),
+                content: text,
+                images,
+                ..Default::default()
             });
         }
 

@@ -1222,3 +1222,171 @@ async fn retry_reuses_the_user_message_and_never_wipes_a_reply_with_content() {
     assert_eq!(body["error"], "CONFIG_ERROR");
     assert!(body["detail"].as_str().unwrap().contains("不需要（也不能）重试"));
 }
+
+/// 假网关：第 1 轮调一个工具，第 2 轮收口；**记录每一轮请求体**（用来断言图有没有真的挂上）。
+async fn tool_call_then_reply_gateway(
+    tool: &'static str,
+    arguments: String,
+) -> (
+    String,
+    tokio::task::JoinHandle<()>,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let recorder = seen.clone();
+    let handle = tokio::spawn(async move {
+        let mut round = 0usize;
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { break };
+            round += 1;
+            let recorder = recorder.clone();
+            let arguments = arguments.clone();
+            tokio::spawn(async move {
+                let request = String::from_utf8_lossy(&read_request(&mut socket).await).to_string();
+                recorder.lock().unwrap().push(request);
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
+                    .await;
+                let frames: Vec<String> = if round == 1 {
+                    vec![
+                        format!(
+                            r#"{{"id":"chatcmpl-tool","choices":[{{"delta":{{"tool_calls":[{{"index":0,"id":"call_load","function":{{"name":"{tool}","arguments":""}}}}]}}}}]}}"#
+                        ),
+                        format!(
+                            r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"function":{{"arguments":{}}}}}]}}}}]}}"#,
+                            serde_json::to_string(&arguments).unwrap()
+                        ),
+                        r#"{"choices":[{"finish_reason":"tool_calls"}]}"#.to_string(),
+                        "[DONE]".to_string(),
+                    ]
+                } else {
+                    vec![
+                        r#"{"choices":[{"delta":{"content":"收口了"}}]}"#.to_string(),
+                        r#"{"choices":[{"finish_reason":"stop"}]}"#.to_string(),
+                        "[DONE]".to_string(),
+                    ]
+                };
+                for frame in frames {
+                    let payload = if frame == "[DONE]" {
+                        "data: [DONE]\n\n".to_string()
+                    } else {
+                        format!("data: {frame}\n\n")
+                    };
+                    if socket.write_all(payload.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let _ = socket.flush().await;
+                }
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{addr}/v1"), handle, seen)
+}
+
+/// **载入工作流时自动带图**（2026-10-25）：`comfy_load_workflow` 的结果里带 `referenceImages`，
+/// 执行器把 `LoadImage` 指向的那张图缩到 ≤1024 长边、编码成 JPEG，**挂到下一轮的 user 轮**上。
+///
+/// 这条用例盯的是**接线**（单图解析 / 缩图逻辑在 `reference_attach` 的单元用例里）：
+/// 第 1 轮请求里不许有图，第 2 轮必须有 `image_url` + 原始分辨率 + 缩图后的尺寸。
+#[tokio::test]
+async fn load_workflow_auto_attaches_the_reference_image_to_the_next_round() {
+    let state = state();
+    seed_provider_and_model(&state);
+    // 工作流 / 参考图 / input 目录都放**测试自己的**暂存目录，不碰本机 ComfyUI
+    let root = comfyhub_server_rs::infra::testpaths::scratch("ref-attach-e2e");
+    let input = root.join("input");
+    let output = root.join("output");
+    std::fs::create_dir_all(&input).unwrap();
+    std::fs::create_dir_all(&output).unwrap();
+    let reference = input.join("ref.png");
+    let image = image::RgbImage::from_pixel(1600, 900, image::Rgb([12, 34, 56]));
+    image.save(&reference).unwrap();
+    let workflow = root.join("auto-attach.json");
+    std::fs::write(
+        &workflow,
+        serde_json::json!({
+            "1": {"class_type": "LoadImage", "inputs": {"image": "ref.png"}},
+            "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // 目录候选：配置里的 outputDir 的兄弟 `input` 就是上面那份（顺序在 desktop/probe 之前）
+    state
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO app_settings (k, v) VALUES ('capture.config', ?1)
+                 ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                rusqlite::params![serde_json::json!({
+                    "enabled": false,
+                    "outputDir": output.to_string_lossy()
+                })
+                .to_string()],
+            )?;
+            // 读白名单：这次只认测试自己的目录（工具要读得到那份工作流）
+            Ok(())
+        })
+        .unwrap();
+    set_policy(
+        &state,
+        serde_json::json!({ "readRoots": [root.to_string_lossy()] }),
+    );
+    // 模型得声明识图能力，否则按准入一条图都不发（那是另一条用例的事）
+    state
+        .write(|tx| {
+            tx.execute(
+                "UPDATE ai_models SET input_modalities = '[\"text\",\"image\"]' WHERE model_id = 'm1'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let (base_url, gateway, seen) = tool_call_then_reply_gateway(
+        "comfy_load_workflow",
+        serde_json::json!({ "path": workflow.to_string_lossy() }).to_string(),
+    )
+    .await;
+    point_at_gateway(&state, &base_url);
+
+    let (run_id, _assistant_id, run) = start_run_and_wait(&state, "用这份工作流画一张").await;
+    assert_eq!(run["status"], "completed", "{run}");
+
+    let bodies = seen.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 2, "两轮：load → 回填 → 收口");
+    assert!(
+        !bodies[0].contains("image_url"),
+        "载入之前不该有图：{}",
+        bodies[0]
+    );
+    let second = &bodies[1];
+    assert!(second.contains(r#""type":"image_url""#), "第二轮必须把参考图挂上：{second}");
+    assert!(second.contains("data:image/jpeg;base64,"), "缩图之后是 JPEG：{second}");
+    assert!(second.contains("原图 1600×900"), "原始分辨率要告诉模型：{second}");
+    assert!(second.contains("1024×576"), "附上的是缩到 1024 长边的图：{second}");
+
+    // 工具审计里也要能查得到（`referenceImages` 是这次调用**真实返回过**的事实）
+    let result_json: String = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT result_json FROM ai_tool_calls
+                  WHERE run_id = ?1 AND name = 'comfy_load_workflow'",
+                rusqlite::params![run_id],
+                |row| row.get::<_, String>(0),
+            )?)
+        })
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&result_json).unwrap();
+    let refs = &payload["referenceImages"];
+    assert_eq!(refs[0]["nodeId"], "1", "{payload}");
+    assert_eq!(refs[0]["width"], 1600);
+    assert_eq!(refs[0]["height"], 900);
+
+    gateway.abort();
+    comfyhub_server_rs::infra::testpaths::cleanup(&root);
+}

@@ -133,7 +133,12 @@ pub const VERSION: &str = "nsfw-v3";
 ///   正文写进 `TextGenerate.system_prompt` 的源节点，模型只报名字、不抄 18KB 正文），
 ///   结果多一个 `promptSource`（caller / text-generate / literal）——"以为走了生成支路、其实
 ///   走的是纯文本拼接"这种静默失效从此可查。工具 schema 变了，模型看到的能力跟着变 → bump。
-pub const PROMPT_VERSION: &str = "v53";
+/// - **Rust v54**（2026-10-25）：**载入工作流时自动带图**。`comfy_load_workflow` 的结果多一个
+///   `referenceImages`（`LoadImage` 指向的真实路径 + 原始分辨率），模型能看图时执行器会把图
+///   缩到 ≤1024 长边后**自动附在下一轮**；第 12 条补第 ④ 步：要"看"工作流里已绑定的参考图就
+///   直接 load，看不到才按 path 请用户附图 —— **不许凭文件名编内容**（895 的"木地板 + 窗帘"
+///   就是只看到 `image (15).png` 这个名字编出来的）。工具描述与规则都变了 → bump。
+pub const PROMPT_VERSION: &str = "v54";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】
@@ -230,6 +235,11 @@ const PERSONA_RAW: &str = r#"
             工作流被捕获时绑定的那个文件名（形如 `478952….jpg`）**跟你没有关系，也改不了**：
             不许改写它（那会指向一个不存在的文件），也不许对用户说"我改不了文件名"就作罢 ——
             按上面三步做就能真的把用户的图用上。图片没随本次请求内联（正文里有那句说明）时也一样能投放。
+            ④ 你需要**看**这份工作流里已经绑定的参考图（写提示词 / 判断构图 / 对表情）时，
+            直接 `comfy_load_workflow(path=…)`：结果里的 `referenceImages` 给出真实路径与**原始分辨率**，
+            模型能看图时服务端会把图**自动附在下一轮**（长边超过 1024 会先等比缩小，原图尺寸仍写在 width/height 里）。
+            看不到图就按 path 请用户附图或确认；**不许凭文件名编画面内容**
+            （895 就是只看到 `image (15).png` 这个名字，把整间房都编错了）。
             **用户没给图**、而这份工作流里却有 `LoadImage` / IPAdapter 这类"等着图"的位置时，
             先用 `comfy_check_inputs(graph=…)` 把缺口列清楚（把 `comfy_get_run` 的 `raw` 或
             `comfy_load_workflow` 的 `apiGraph` 原样传进去）：
