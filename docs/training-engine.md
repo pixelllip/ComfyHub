@@ -2,6 +2,8 @@
 
 > 状态：**全链路已接通**（2026-10-21）。脚本层 + Rust `train` 域 + Flutter 训练台
 > （内嵌 WebUI）+ 训练引擎的 MCP 桥都已经落地并实测。
+> **2026-10-28**：WebUI 补齐 Qt GUI 的剩余页签（合并 / EasyControl / TensorBoard /
+> Anime Tools / 实验(Turbo+Soup) / 全局队列），App 内的训练台因此不再是"简化版"。
 > 一句话：训练引擎是**可选能力**，按 AGENTS §8 的纪律（检测优先、安装兜底、装不上不拦启动）走。
 >
 > 2026-10-21 起，WebUI **并回下游仓库**（`anima-lora-next/anima_lora_webui`）是唯一真源；
@@ -89,7 +91,7 @@ pwsh -File scripts\train-engine.ps1 stop     # 两个都停；8810 / 8765 都不
 训练栈 = Python + torch + 5GB 权重 + 数据集，**不可能**进 Rust 单文件 exe。所以形态跟 ComfyUI 一样：
 ComfyHub 负责**目录 / 起停 / 端口 / 界面**，训练本身跑在引擎自己的进程里。
 
-## 4. 接进 App（2026-10-21 已完成）
+## 4. 接进 App（2026-10-21 接通；2026-10-28 补齐 Qt GUI 剩余页）
 
 | 层 | 落点 | 说明 |
 | --- | --- | --- |
@@ -100,6 +102,11 @@ ComfyHub 负责**目录 / 起停 / 端口 / 界面**，训练本身跑在引擎�
 | 生成配置 | 引擎 `gui.core.config_io` + `gui.core.submit.training_snapshot` | WebUI 调引擎自己的合并链，`path_scope = <slug>`；前后端都不手写第二份配置 |
 | 参数面板 | 引擎 `anima_daemon/studio.py` 的 `/studio/projects/{slug}/config` + `anima_lora_webui` 的「参数」页 | **复现 Qt GUI 的 Config 页**：方法 / 硬件档、基础字段、可折叠高级分组；字段与中文帮助来自 `gui.core.config_io` + `_fields.json`，只写用户改过的 overrides；虚拟键（验证集 / 文件夹重复）复用 `gui.core.validation` 写进 `[[datasets]]` |
 | Krea-2 面板 | `studio.py` 的 `/studio/projects/{slug}/krea2{,/train}` | 独立训练线的 `TrainRequest` 全表 + `stack_lora_*`（style-in-the-loop）；保存 `training_projects/<slug>/krea2.toml`，校验 cache/model 后以 `scripts/krea2/train.py --config` 提交到同一串行队列 |
+| **合并页**（2026-10-28） | `anima_daemon/toolkits.py` 的 `/studio/toolkits/merge*` + WebUI「合并」 | 复现 Qt GUI 的 Merge：适配器目录 / 文件列表 / safetensors 烘焙体检（LoRA / Hydra / postfix 判定）；三种模式（烘焙进 DiT / 融合多个 LoRA / 提取 ΔW LoRA）+ 只读干扰分析；命令走 `manager.submit_command`，日志复用 job SSE |
+| **EasyControl**（2026-10-28） | `anima_daemon/easycontrol.py` 的 `/studio/easycontrol*` + WebUI「EasyControl」 | 方法变体（`gui-methods/*.toml`）+ 描述符变体（`configs/easycontrol/*.toml`）；字段来自 Qt GUI 同一条合并链 / 描述符标量表；保存用 tomlkit 稀疏写回（注释与 `[[datasets]]` 蓝图不动）；预处理带 `EASYADAPTER=<variant>`，描述符训练复用 `scripts.tasks.training._easy_train_extra` |
+| **TensorBoard / Anime Tools**（2026-10-28） | `toolkits.py` 的 `/studio/toolkits/{tensorboard,anime}*` + WebUI 同名页 | TensorBoard 由守护进程起停（6006 起自动避让）、列出 `output/logs` 真 event 目录；Anime Tools 起停引擎自带 `anime_tools.gui` 策展面板（只绑回环，手机上不嵌） |
+| **实验（Turbo / Soup）**（2026-10-28） | `toolkits.py` 的 `/studio/toolkits/distill/{turbo,soup}*` + WebUI「实验」 | Turbo 编辑 `configs/methods/turbo.toml` 后提交 `tasks.py turbo`；Soup 编辑 `configs/soup/soup.toml` 后直接提交 `python -m scripts.soup.pipeline`（不经 tasks.py，避免嵌套提交卡死串行队列）；sectioned TOML 稀疏写回保留注释 |
+| **全局作业队列**（2026-10-28） | WebUI「作业」 | 从项目页签提升为全局页；新增队列暂停 / 恢复；单作业停止 / 暂停 / 恢复与 loss 曲线保持原样 |
 
 **启动顺序**：Flutter 只调 `/api/train/start` → Rust 起 `anima_daemon`（等 `/health`）→
 起 `anima_lora_webui`（挑空闲端口、等 `/api/_env`）→ 写 `<根>\.run\train-engine.json`。
@@ -121,10 +128,9 @@ WebUI 端口**只从这份 state 读**，和 `.run\api.json` 同一条纪律。
 2. **"复制 LoRA 到 ComfyUI 的 loras 目录"按钮**：产物路径已经由 `studio_status` 的
    `paths.output` 给出；复制动作还没做（手动复制可用）。
 3. **项目删除**：WebUI 只提供筛选 / 重命名，没有"删除整个项目"的入口（避免误删数据集）。
-4. **Qt GUI 的 Merge / TensorBoard / EasyControl 专属页**：WebUI 目前复现的是
-   **参数表单**（Config）与整条数据 → 训练 → 作业链路；`easycontrol` 可以作为方法
-   选到，但没有它单独的 dataset/preprocess 生命周期页。别把"参数页已对齐"当成
-   "Qt GUI 的每个 tab 都搬过来了"。
+4. **MOSS 页**：Qt GUI 的模式切换里那条 MOSS 训练线（`gui/lines` + `library/moss`）
+   还没有 WebUI 页；其余页签（Dataset / Tag / Preprocess / Config / Merge / EasyControl /
+   Experimental(Turbo+Soup) / Anime Tools / TensorBoard / Queue）都已对齐。
 
 ## 5. 与仓库纪律的冲突点（实现前必须处理）
 

@@ -31,11 +31,11 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 | 页面 | 做什么 |
 | --- | --- |
 | **AI 工作台**（默认落地页） | 和模型对话干活：写提示词、查 danbooru、投放参考图、提交 ComfyUI、看实时进度与产物入口卡。审批闸门 / 提问闸门 / 轮次与预算上限都在这一页看得见。AppBar 的「LoRA 训练台」进次级页（见下） |
-| **LoRA 训练台**（次级页） | 可选能力：本机 anima-lora-next 的全链路 —— 取训练集 → **人工筛选** → 打标（可选）→ 预处理 → **参数（复现 Qt GUI 的 Config 表单）** → 正式训练；另有独立的 **Krea-2 参数 / 训练**页（`TrainRequest` 全表 + style-in-the-loop）。内嵌引擎自己的响应式 WebUI（手机 / 电脑同一份状态），AI 工作台调的是同一批 `anima_studio_*` 工具 |
+| **LoRA 训练台**（次级页） | 可选能力：本机 anima-lora-next 的**完整训练台**（与 Qt GUI 的页签对齐，MOSS 页除外）—— 取训练集 → **人工筛选** → 打标（可选）→ 预处理 → **参数（复现 Qt GUI 的 Config 表单）** → 正式训练；另有 **Krea-2**、**合并（烘焙 / 融合 / ΔW 提取）**、**EasyControl**（方法 / 描述符变体）、**TensorBoard**、**Anime Tools 策展面板**、**实验（Turbo / Soup）** 与**全局作业队列**。内嵌引擎自己的响应式 WebUI（手机 / 电脑同一份状态），AI 工作台调的是同一批 `anima_studio_*` 工具 |
 | **画廊** | 生成产物：列表 / 详情 / 大图（滚轮缩放）/ 视频播放；NSFW 标记与模糊；右键菜单 |
 | **提示词** | 本机提示词库：搜索、收藏、标签、工作流原文（界面格式 ↔ API 图的转换在服务端） |
 | **标签** | 标签库与分类、使用次数 |
-| **设置** | Provider / 模型目录 / API Key、「远程访问与配对」、NSFW 开关、ComfyUI 自动捕获、桌面端还有本地服务与后端地址 |
+| **设置** | Provider / 模型目录 / API Key、「远程访问与配对」、NSFW 开关、ComfyUI 自动捕获、桌面端还有本地服务与后端地址、**产物导出** |
 
 后端能力（都是 AI 的工具，不是界面按钮）：
 
@@ -196,9 +196,25 @@ D:\dist\ComfyHub\viewer.exe
 常用只读探针：`GET /api/health`（引擎与 schema 版本）、`GET /api/ai/tools`（当前能跑的工具）、
 `GET /api/system/confinement`（本进程受不受限）、`GET /api/stats`。
 
+### 8.1 产物导出（2026-10-27）
+
+产物原件本来就在磁盘上（`<根>\storage\media\<stored_name>`），库里存的是**定位 + 元信息**；
+此前缺的是"带出去"的入口。现在四个入口：画廊顶栏（全部 / 仅收藏）、画廊多选（选中项，
+集合格子会展开成整组）、产物详情页「更多 → 导出这一条…」、设置页「导出产物」。
+
+- 后端 `POST /api/media/export`（**只允许回环**，会往任意绝对路径写文件；手机端不显示入口）；
+  实现只有一份：`server-rs/src/media/export.rs`。
+- 落盘结构：`图片/` `视频/` `音频/` `其它/` 按类型分；同一集合单独一个文件夹（`collection.json`
+  记成员顺序）；每份产物旁边一份 `<文件名>.json` 侧车（提示词 / 集合 / 工作流引用）。
+- 工作流按内容 SHA-256 去重放 `工作流/`（界面格式 `*.ui.json`；有捕获记录时再带 `*.api.json`）。
+- 根目录 `导出清单.json` 是总账：相对路径、数量、失败原因。文件缺失 / 复制失败**只报那一条**，
+  其余照常导出；同名文件不覆盖，自动加序号。**只读库、不搬不移**。
+
 ## 9. 数据库
 
 - 位置：`<根>\.db\comfyhub.db`（`COMFYHUB_JDBC_URL` 可换）；**SQLite 单文件，没有服务**。
+- **产物原件不在库里**：落在 `<根>\storage\media\<stored_name>`，`media_assets` 只存
+  `stored_name` / 大小 / 哈希 / 提示词与工作流等元信息。导出（§8.1）是**复制**，不搬不移。
 - 建表真源：`db/schema.sqlite.sql`（收敛式 DDL，重跑安全）；版本号是 `PRAGMA user_version`
   （`server-rs/src/infra/db.rs` 的 `SCHEMA_VERSION` 与 DDL 末尾那行**必须相等**，有用例钉）。
 - **加一列要三处一起改**：DDL + `infra/db.rs` 的 `NEW_COLUMNS`（`ALTER`，每次开库按
@@ -208,8 +224,8 @@ D:\dist\ComfyHub\viewer.exe
 ## 10. 测试
 
 ```powershell
-$env:PUB_HOSTED_URL='https://pub.dev'; flutter analyze; flutter test   # 前端：408 例 ≈ 25s
-cargo test --manifest-path server-rs\Cargo.toml                       # 后端：lib 630 + 集成 150 ≈ 30s
+$env:PUB_HOSTED_URL='https://pub.dev'; flutter analyze; flutter test   # 前端：592 例 ≈ 65s
+cargo test --manifest-path server-rs\Cargo.toml                       # 后端：lib 789 + 集成 158 ≈ 40s
 pwsh -File scripts\e2e-submit-test.ps1                                # 提交链路（6 幕，不出网、不花钱）
 ```
 
