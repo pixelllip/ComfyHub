@@ -7,6 +7,7 @@ import '../core/credential_store.dart';
 import '../core/inbound_auth_api.dart';
 import '../core/pairing_token.dart';
 import '../core/provider_store.dart';
+import '../core/provider_sync.dart';
 import '../core/settings_store.dart';
 import '../models/ai_models.dart';
 import '../state/ai_workspace_store.dart';
@@ -94,6 +95,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   /// 用 `enum` 而不是 `Navigator.push`，是为了让两块共用同一份 `State`
   /// （推成独立路由的话，父级 `setState` 不会重建它，卡片状态会停在推入那一刻）。
   _NarrowPane _pane = _NarrowPane.list;
+
+  /// 「从电脑同步 Provider」正在跑（按钮变转圈 + 禁用；再点一次不会叠一趟）。
+  bool _syncingProviders = false;
 
   @override
   void initState() {
@@ -316,6 +320,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       onSelect: _select,
       onCreate: _createProvider,
       onDelete: _deleteProvider,
+      // 只在手机上出现：桌面上后端库自己就是真源
+      onSync: _store.isLocal ? _syncProvidersFromDesktop : null,
+      syncing: _syncingProviders,
     );
 
     final detail = _selected == null
@@ -519,6 +526,8 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
                   },
                   onCreate: _createProvider,
                   onDelete: _deleteProvider,
+                  onSync: _store.isLocal ? _syncProvidersFromDesktop : null,
+                  syncing: _syncingProviders,
                 ),
               ),
             ],
@@ -670,6 +679,148 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       _notify('删除失败：$e', error: true);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  //  从电脑同步 Provider 清单（`docs/pairing-design.md` §14.6）
+  // ---------------------------------------------------------------------------
+
+  /// **把桌面那份清单搬到本机**（只在手机上出现）。
+  ///
+  /// 为什么要有这个入口：两端清单是**各一份**（本机表 / 后端库，§14.4），分开之后
+  /// "在桌面上配好一条 Provider"对手机毫无帮助 —— 手机上还得从头再敲一遍 Base URL、
+  /// 模型能力声明（敲错一个字符的表现是"附件发不出去 / 思考参数不发"，两端都不报错）。
+  ///
+  /// 三条纪律（真活在 [ProviderSync] 里，这里只管界面与反馈）：
+  ///  ① **覆盖要先问一次**（同 id 会被桌面那份改掉，不打招呼就改配置是最糟的一种"顺手"）；
+  ///  ② 结束时**如实报账**（建了几个 / 覆盖了几个 / 本机独有几个保留 / 哪几条没成）；
+  ///  ③ 完成后**让聊天页那份清单也跟上**（[AiWorkspaceStore.refreshProviders]）——
+  ///     不然用户切回去看到"同步来了却没得选"，只能切走再切回来。
+  Future<void> _syncProvidersFromDesktop() async {
+    if (!_store.isLocal || _syncingProviders) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('从电脑同步 Provider？'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '把桌面上的 Provider 清单与模型目录搬到这台手机：\n\n'
+            '· 桌面有、手机没有的 → 新建\n'
+            '· 同 id 的 → 用桌面那份覆盖（显示名 / 协议 / Base URL / 模型能力）\n'
+            '· 只在手机上有的 → 保留，不删\n\n'
+            'API Key 不在其中 —— 它要单独在「远程访问与配对」里取回（桌面要允许这台设备读密钥）。',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('开始同步')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _syncingProviders = true;
+      _error = null;
+    });
+    try {
+      // ⚠ **不在这里主动读令牌**：真源是 Android Keystore，而这一页只通过
+      // `AiApiClient` 发请求 —— 它的令牌默认取自进程内缓存（`PairingTokenCache`，
+      // 由 AI 工作台冷启动时读进来）。这一页自己去撞一次桥有两个坏处：
+      // ① 桥不归它管（值只该经手一次）；② 真机之外的宿主（单测）上那次调用会**悬着不返回**，
+      // 表现为"点了同步永远转圈"。没令牌时后端会回 401/403，下面那句人话已经足够可读。
+      final report = await ProviderSync(desktop: _api, local: _store).run();
+      if (!mounted) return;
+      await _reload();
+      if (!mounted) return;
+      // 聊天页的清单是它自己读的（`AiWorkspaceStore.providers`），这里顺带刷新一次。
+      // 取不到这个 store（单测 / 宿主没挂）时什么都不做 —— 不该因为"状态没挂上"就报错。
+      try {
+        await context.read<AiWorkspaceStore?>()?.refreshProviders();
+      } catch (_) {
+        // 只是聊天页的缓存没跟上，本机库已经写好了
+      }
+      if (!mounted) return;
+      // 先收掉按钮上的转圈，再弹结果：转圈还在跑的时候 `pumpAndSettle` 永远等不到静止，
+      // 而语义上"同步"这一刻也确实结束了（下面只是报账）。
+      setState(() => _syncingProviders = false);
+      await _showSyncReport(report);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+      _notify('从电脑同步失败：$e', error: true);
+    } finally {
+      if (mounted) setState(() => _syncingProviders = false);
+    }
+  }
+
+  /// 同步结果的**如实报账**（+ "本机还缺哪几把 key"时给一个一键取回的出口）。
+  Future<void> _showSyncReport(ProviderSyncReport report) async {
+    if (!report.ok) {
+      _notify(report.error!, error: true);
+      return;
+    }
+    final lines = <String>[
+      if (report.created.isNotEmpty) '新建 ${report.created.length} 个：${report.created.join('、')}',
+      if (report.updated.isNotEmpty) '覆盖 ${report.updated.length} 个：${report.updated.join('、')}',
+      if (report.unchanged.isNotEmpty) '${report.unchanged.length} 个与桌面一致，没有改动',
+      '模型目录写入 ${report.modelsWritten} 条',
+      if (report.localOnly.isNotEmpty)
+        '只在手机上有的 ${report.localOnly.length} 个保留不动：${report.localOnly.join('、')}',
+    ];
+    if (report.problems.isNotEmpty) {
+      lines.add('没同步成的 ${report.problems.length} 条：');
+      for (final p in report.problems) {
+        lines.add('· $p');
+      }
+    }
+    // 缺密钥只说给**能取**的人听（本机密钥库 + 已挂上 AI 工作台）。
+    final missing = [
+      for (final p in _providers)
+        if ((p.credentialRef ?? '').trim().isNotEmpty && !p.credential.configured) p.displayName,
+    ];
+    final canPullKeys =
+        _credentials.isLocal && missing.isNotEmpty && context.read<AiWorkspaceStore?>() != null;
+    if (missing.isNotEmpty) {
+      lines.add(
+        canPullKeys
+            ? '其中 ${missing.length} 个在本机还没有密钥（${missing.join('、')}）—— 可以接着从桌面取回'
+            : '其中 ${missing.length} 个在本机还没有密钥 —— 去「远程访问与配对」点「从桌面同步密钥」取回'
+                  '（桌面要允许这台设备读取密钥）',
+      );
+    }
+
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('同步完成'),
+        content: SingleChildScrollView(child: Text(lines.join('\n'))),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, 'ok'), child: const Text('好的')),
+          if (canPullKeys)
+            FilledButton(onPressed: () => Navigator.pop(ctx, 'keys'), child: const Text('再取回密钥')),
+        ],
+      ),
+    );
+    if (choice == 'keys' && mounted) await _pullKeysFromDesktop();
+  }
+
+  /// 接着把密钥取回本机（真活在 [AiWorkspaceStore.syncCredentialsFromDesktop]：
+  /// 值只经手一次、只进本机密钥库，界面不碰它）。
+  Future<void> _pullKeysFromDesktop() async {
+    final store = context.read<AiWorkspaceStore?>();
+    if (store == null) {
+      _notify('AI 工作台还没准备好，稍后再试一次。', error: true);
+      return;
+    }
+    try {
+      // 它读的是自己那份 `providers` —— 刚同步来的那几条要先让它看见，否则 refs 是旧的
+      await store.refreshProviders();
+      final text = await store.syncCredentialsFromDesktop();
+      if (mounted) await _reload();
+      _notify(text);
+    } catch (e) {
+      _notify('从桌面同步密钥失败：$e', error: true);
+    }
+  }
 }
 
 class _ProviderList extends StatelessWidget {
@@ -683,6 +834,15 @@ class _ProviderList extends StatelessWidget {
   final Future<void> Function() onCreate;
   final Future<void> Function(AiProvider) onDelete;
 
+  /// 「从电脑同步 Provider」（`docs/pairing-design.md` §14.6）。
+  ///
+  /// **`null` = 这一端不该有它**（桌面上后端库自己就是真源）—— 按钮与那句说明一起不渲染，
+  /// 而不是渲染一个点了没反应的按钮。
+  final Future<void> Function()? onSync;
+
+  /// 同步正在跑：按钮转圈 + 禁用（再点一次不叠第二趟）。
+  final bool syncing;
+
   const _ProviderList({
     required this.providers,
     required this.selectedId,
@@ -691,6 +851,8 @@ class _ProviderList extends StatelessWidget {
     required this.onSelect,
     required this.onCreate,
     required this.onDelete,
+    this.onSync,
+    this.syncing = false,
   });
 
   @override
@@ -701,22 +863,45 @@ class _ProviderList extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-          child: FilledButton.icon(
-            onPressed: () => onCreate(),
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('新建 Provider'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FilledButton.icon(
+                onPressed: () => onCreate(),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('新建 Provider'),
+              ),
+              if (onSync != null) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  // 同步进行中禁用：再点一次会在本机库上叠第二趟写
+                  onPressed: syncing ? null : () => onSync!(),
+                  icon: syncing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cloud_download_outlined, size: 18),
+                  label: const Text('从电脑同步 Provider'),
+                ),
+              ],
+            ],
           ),
         ),
         // ⚠ **如实**：手机上这一页管的是**本机那份清单**（`ai_providers` / `ai_models`
         //    是手机的本机表），它与桌面那份**各归各、不自动合并** —— 同步的只有密钥明文
-        //    （用户显式点「推给桌面」那一个动作，`docs/pairing-design.md` §14.4）。
+        //    （用户显式点「推给桌面」/「从桌面同步密钥」那些动作，`docs/pairing-design.md` §14）。
         //    不写这一句，用户建完会以为桌面也能用（而桌面那边压根没有这条 provider）。
+        //    §14.6 又加了一条**显式**的搬运通道，所以这句要说清"要手动点"，免得它被读成"会自动同步"。
         if (local)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: _Note(
               text: '这些 Provider 只在这台手机上（存在本机库里），桌面看不到它们；'
-                  '两端的清单各归各，不会自动合并。桌面不在线时也能在这里新建 / 编辑 / 删除、改模型目录。',
+                  '两端的清单各归各，不会自动合并 —— 桌面那份要手动点「从电脑同步 Provider」搬过来'
+                  '（同 id 会被覆盖，只在手机上有的保留不动，API Key 不在其中）。'
+                  '桌面不在线时也能在这里新建 / 编辑 / 删除、改模型目录。',
               error: false,
             ),
           ),

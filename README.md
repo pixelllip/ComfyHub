@@ -58,6 +58,10 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 - **外观**：默认跟随**系统强调色**（Windows 读 `HKCU` 的 `AccentColorMenu`，Android 12+ 读
   `system_accent1_500`；读不到就回默认紫）。页面与卡片的底色**始终保持白 / 灰**，
   强调色只用在按钮、开关、选中态这些组件上（设置页可关）。见 `lib/core/system_accent.dart`。
+- **手机从桌面搬 Provider**：手机「AI 模型与凭据」里点「从电脑同步 Provider」，把桌面那份
+  清单 + 模型目录（含能力声明）搬进本机库 —— 桌面有 / 手机没有的**新建**，同 id 的**用桌面覆盖**，
+  **只在手机上的保留不删**；API Key 不在其中（要单独从「远程访问与配对」取回）。
+  见 [docs/pairing-design.md](docs/pairing-design.md) §14.6。
 
 ## 3. 架构
 

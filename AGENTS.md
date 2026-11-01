@@ -78,6 +78,7 @@
 - **大块状态不许占页顶**（用户原话："模型能力目录区域占用窗口区域太大"）：与当前选中项无关的大块内容做成折叠项或详情内的一节，别做常驻横幅。回归 `test\phone_layout_overflow_test.dart`（384 / 320dp 两档都不许溢出）。
 - **工作台的模型选择器按 Provider 分组**：`SliverToBoxAdapter(来源标注)` + `SliverPadding(SliverList(模型))` 一组一组。数据源是 `AiWorkspaceStore.catalogByProvider`（打开选择器时才拉），**不是** `store.models`；换 Provider 走 `selectModelFrom(p, m)` —— 别拆成"先 `selectProvider` 再 `selectModel`"，那两步都是 `await`，中间那次选中会被 `_loadModels()` 收尾时的"取第一个启用的"覆盖。回归 `test\ai_model_picker_test.dart`。
 - **内置模型目录那张卡与它的 Dart 客户端已删**：能力预填改由 **models.dev** 在线目录负责（`capability_refresh.rs`）。后端 `server-rs\src\provider\builtin.rs` 与 `/api/ai/builtin/{status,sync}` 还在（Rust 用例盯着），但界面上**没有任何入口** —— 别再把 `AiBuiltinCatalogStatus` / `builtinStatus()` 加回来。
+- **手机「从电脑同步 Provider」是"用户显式点的一次导入"，不是自动合并**（`lib/core/provider_sync.dart`，契约 [`docs/pairing-design.md`](docs/pairing-design.md) §14.6）：桌面有 / 手机没有 → 新建；同 id → 桌面覆盖（提交的是**本机** `revision`，两端的库各算各的）；只在手机上的 → **保留不删**；模型目录**只在真的拿到时才写**（拉取失败绝不许回落到空目录）；`api` 不在手机那三种协议里的**跳过并如实说**。按钮**只在手机上渲染**。⚠ 这一页**不要自己去读配对令牌**（`PairingTokenStore`）—— `AiApiClient` 默认取进程内缓存即可；硬读法在真机之外的宿主上会悬着不返回（表现是"点了同步永远转圈"，2026-11-01 踩过）。回归 `test\provider_sync_test.dart`。
 
 ---
 

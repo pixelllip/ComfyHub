@@ -1405,10 +1405,12 @@ class AiWorkspaceStore extends ChangeNotifier {
     await pullChanges();
   }
 
-  /// 本机库里一条 Provider 都没有时那句**人话**（手机上第一件事就是去建一条）。
+  /// 本机库里一条 Provider 都没有时那句**人话**（手机上第一件事就是去建一条）——
+  /// 或者走「从电脑同步 Provider」把桌面那份直接搬过来（`docs/pairing-design.md` §14.6）。
   static const _emptyLocalProvidersNotice =
       '这台手机上还没有配置任何 Provider —— 手机与桌面各有一份清单，不会自动合并。'
-      '去「AI 模型与凭据」新建一条（填 Base URL 与 API Key），它就会出现在这里。';
+      '去「AI 模型与凭据」新建一条（填 Base URL 与 API Key），或点那里的'
+      '「从电脑同步 Provider」把桌面那份清单和模型目录搬过来（API Key 要单独取回），它就会出现在这里。';
 
   /// **配对令牌**（`X-ComfyHub-Token`，`docs/pairing-design.md` §11）。
   ///
