@@ -1,3 +1,5 @@
+import 'dart:io' show File;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../core/file_clipboard.dart';
 import '../core/formatting.dart';
+import '../core/media_cache.dart';
+import '../core/media_saver.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
@@ -47,6 +51,9 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   Prompt? _prompt;
   bool _loading = true;
   String? _error;
+
+  /// 当前这条的**本机缓存原件**（手机端）。`null` = 还没下完，预览继续走网络。
+  File? _cachedFile;
 
   /// 当前这一条所属**集合**的成员 id（按时间升序）。
   ///
@@ -117,7 +124,19 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
         _prompt = prompt;
         _siblings = siblings;
         _loading = false;
+        _cachedFile = null;
       });
+      // 详情页打开 = 用户要看原件：默认把它缓存到手机，之后离线也能看 / 保存。
+      // 失败不打扰界面，继续用网络图（见 MediaCache.ensure）。
+      final cached = await MediaCache.instance.ensure(
+        media.id,
+        url: media.fileUrl,
+        thumb: false,
+        api: store.api,
+      );
+      if (mounted && _currentId == media.id && cached != null) {
+        setState(() => _cachedFile = cached);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -191,6 +210,64 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           ? '已复制文件，可以在资源管理器里 Ctrl+V 粘贴'
           : '复制文件失败，可以改用「复制文件地址」'),
     ));
+  }
+
+  /// 「保存到手机相册」：先确保原件已缓存，再交给原生 MediaStore。
+  ///
+  /// 缓存**默认在打开详情时就开始下载**（见 [_load]）；这里只是兜底：
+  /// 用户可能下载还没完成就点了保存，或者从别的入口直接进来。
+  Future<void> _saveToGallery(
+    LibraryStore store,
+    MediaAsset media,
+    ScaffoldMessengerState messenger,
+  ) async {
+    final file =
+        _cachedFile ??
+        await MediaCache.instance.ensure(
+          media.id,
+          url: media.fileUrl,
+          thumb: false,
+          api: store.api,
+        );
+    if (file == null) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('这条产物还没缓存到手机，先连上桌面再试一次')),
+      );
+      return;
+    }
+    final mime = (media.mimeType?.trim().isNotEmpty ?? false)
+        ? media.mimeType!
+        : _mimeForMedia(media);
+    try {
+      await MediaSaver.saveToGallery(
+        path: file.path,
+        mime: mime,
+        name: media.originalName,
+      );
+      messenger.showSnackBar(const SnackBar(content: Text('已保存到手机相册')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('保存失败：$e')));
+    }
+  }
+
+  static String _mimeForMedia(MediaAsset media) {
+    final ext = media.originalName.split('.').last.toLowerCase();
+    return switch (ext) {
+      'png' => 'image/png',
+      'webp' => 'image/webp',
+      'gif' => 'image/gif',
+      'mp4' => 'video/mp4',
+      'webm' => 'video/webm',
+      'mov' => 'video/quicktime',
+      'mp3' => 'audio/mpeg',
+      'wav' => 'audio/wav',
+      'ogg' => 'audio/ogg',
+      _ => switch (media.kind) {
+        MediaKind.video => 'video/mp4',
+        MediaKind.audio => 'audio/mpeg',
+        MediaKind.image => 'image/jpeg',
+      },
+    };
   }
 
   /// 「存为预设」：把这条产物当初用的提示词**复制**成一条新预设。
@@ -303,6 +380,9 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                 case 'copyFile':
                   await _copyFileToClipboard(store, m.id, messenger);
                   break;
+                case 'saveToGallery':
+                  await _saveToGallery(store, m, messenger);
+                  break;
                 case 'nsfw':
                   // 手动标记 / 取消标记（用户 bug 2026-09-20）：AI 没声明过的内容
                   // （自己导入的、或老数据）由用户自己说了算 —— 打码只作用于标记过的条目。
@@ -354,6 +434,14 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                   value: 'copyFile',
                   icon: Icons.file_copy_outlined,
                   label: '复制文件（可在资源管理器粘贴）',
+                ),
+              // 手机端：把**这一条**存进系统相册（与桌面「导出产物」不是同一件事）。
+              if (MediaSaver.supported)
+                const MenuOption(
+                  value: 'saveToGallery',
+                  icon: Icons.download_outlined,
+                  label: '保存到手机相册',
+                  dividerBefore: true,
                 ),
               const MenuOption(
                 value: 'delete',
@@ -417,7 +505,15 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                 // stretch：左栏的大图查看器要铺满整屏高度（自己处理拖动 / 缩放）
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(flex: 3, child: _previewArea(m, fileUrl, wide: true)),
+                  Expanded(
+                    flex: 3,
+                    child: _previewArea(
+                      m,
+                      fileUrl,
+                      wide: true,
+                      file: _cachedFile,
+                    ),
+                  ),
                   const VerticalDivider(width: 1),
                   Expanded(
                     flex: 2,
@@ -433,7 +529,13 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
             final previewHeight = (constraints.maxHeight * 0.62).clamp(240.0, 620.0);
             return ListView(
               children: [
-                _previewArea(m, fileUrl, wide: false, height: previewHeight),
+                _previewArea(
+                  m,
+                  fileUrl,
+                  wide: false,
+                  height: previewHeight,
+                  file: _cachedFile,
+                ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 48),
                   child: info,
@@ -457,7 +559,13 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   ///
   /// 整块都能**右键**：弹出复制相关的快捷项（地址 / 文件名 / 提示词），
   /// 不用先划选文字再复制。
-  Widget _previewArea(MediaAsset m, String url, {required bool wide, double? height}) {
+  Widget _previewArea(
+    MediaAsset m,
+    String url, {
+    required bool wide,
+    double? height,
+    File? file,
+  }) {
     // Builder 取一个**在 ContextMenuScope 里面**的 context 传给右键菜单：
     // 页面自己的 `State.context` 在 Scope 外面，用它找不到菜单宿主。
     return Builder(
@@ -500,7 +608,12 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
               layoutBuilder: (current, previous) => current ?? const SizedBox.shrink(),
               child: KeyedSubtree(
                 key: ValueKey<int>(_currentId),
-                child: _Preview(media: m, url: url, posterUrl: _posterUrl(m)),
+                child: _Preview(
+                  media: m,
+                  url: url,
+                  posterUrl: _posterUrl(m),
+                  file: file,
+                ),
               ),
             ),
           ),
@@ -705,7 +818,15 @@ class _Preview extends StatelessWidget {
   final String url;
   final String? posterUrl;
 
-  const _Preview({required this.media, required this.url, this.posterUrl});
+  /// 本机缓存原件；有它就不走网络（手机端离线看已缓存的图）。
+  final File? file;
+
+  const _Preview({
+    required this.media,
+    required this.url,
+    this.posterUrl,
+    this.file,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -714,6 +835,7 @@ class _Preview extends StatelessWidget {
         // 鼠标拖动平移、滚轮以指针为中心缩放，右下角缩略图指示当前视野
         return ZoomableImageView(
           url: url,
+          imageProvider: file == null ? null : FileImage(file!),
           imageSize: (media.width != null && media.height != null)
               ? Size(media.width!.toDouble(), media.height!.toDouble())
               : null,
@@ -724,7 +846,7 @@ class _Preview extends StatelessWidget {
           color: Colors.black,
           width: double.infinity,
           child: PlatformVideoView.supported
-              ? PlatformVideoView(url: url, posterUrl: posterUrl)
+              ? PlatformVideoView(url: url, file: file, posterUrl: posterUrl)
               : _Unsupported(
                   icon: Icons.movie_outlined,
                   message: '当前平台不支持内嵌视频播放',
@@ -735,7 +857,11 @@ class _Preview extends StatelessWidget {
       case MediaKind.audio:
         return Padding(
           padding: const EdgeInsets.all(12),
-          child: AudioPlayerView(url: url, title: media.title.isEmpty ? media.originalName : media.title),
+          child: AudioPlayerView(
+            url: url,
+            file: file,
+            title: media.title.isEmpty ? media.originalName : media.title,
+          ),
         );
     }
   }

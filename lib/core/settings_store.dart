@@ -46,6 +46,7 @@ class SettingsStore extends ChangeNotifier {
   static const _kBaseUrl = 'comfyhub.baseUrl';
   static const _kBaseUrlHistory = 'comfyhub.baseUrlHistory';
   static const _kPageSize = 'comfyhub.pageSize';
+
   /// 筛选栏折叠状态（**整体一个**，用户 2026-10-11 定的：不是每个分区各自折叠）。
   ///
   /// 默认**展开**（别一上来就把功能藏起来）；用户收起过就记住 —— 按页面各自记，
@@ -67,7 +68,8 @@ class SettingsStore extends ChangeNotifier {
   static const _kCollectionDetailWide = 'comfyhub.galleryCollectionDetailWide';
 
   /// 画廊「集合详情」在**窄屏**（`< kWideLayoutMinWidth`）下的形态。默认 `'popup'`。
-  static const _kCollectionDetailNarrow = 'comfyhub.galleryCollectionDetailNarrow';
+  static const _kCollectionDetailNarrow =
+      'comfyhub.galleryCollectionDetailNarrow';
 
   /// 界面外观（深色 / 浅色 / 跟随系统）。见 [AppThemeMode]。
   ///
@@ -176,7 +178,8 @@ class SettingsStore extends ChangeNotifier {
       // 解析不了就走下面的正则兜底
     }
     if (host.isEmpty) {
-      final m = RegExp(r'^(?:[a-zA-Z][a-zA-Z0-9+.-]*://)?([^/:?#]+)').firstMatch(v);
+      final m = RegExp(r'^(?:[a-zA-Z][a-zA-Z0-9+.-]*://)?([^/:?#]+)')
+          .firstMatch(v);
       host = m?.group(1) ?? '';
     }
     host = host.toLowerCase();
@@ -186,7 +189,6 @@ class SettingsStore extends ChangeNotifier {
         host == '[::1]' ||
         host == '0.0.0.0';
   }
-
 
   /// App 启动时是否自动把后端拉起来
   bool get autoStartBackend => _autoStartBackend;
@@ -235,6 +237,22 @@ class SettingsStore extends ChangeNotifier {
   @visibleForTesting
   static List<String>? portFileRootsOverride;
 
+  /// 测试用：覆盖"手机默认收起筛选栏"这条平台判据（见 [load]）。
+  /// 生产恒为 `null`，由真实平台决定。
+  @visibleForTesting
+  static bool? mobileFiltersDefaultOverride;
+
+  static bool get _mobileFiltersDefault {
+    final override = mobileFiltersDefaultOverride;
+    if (override != null) return override;
+    if (kIsWeb) return false;
+    try {
+      return Platform.isAndroid || Platform.isIOS;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static String defaultBaseUrl() {
     if (kIsWeb) return 'http://127.0.0.1:8080';
     try {
@@ -269,7 +287,9 @@ class SettingsStore extends ChangeNotifier {
       if (port is! int || port <= 0 || port > 65535) continue;
       final host = (state?['host'] as String?) ?? '127.0.0.1';
       // `COMFYHUB_ALLOW_REMOTE=1` 时后端听的是所有网卡，而客户端连 0.0.0.0 是不通的 → 回落回环
-      final connectHost = (host.isEmpty || host == '0.0.0.0' || host == '::') ? '127.0.0.1' : host;
+      final connectHost = (host.isEmpty || host == '0.0.0.0' || host == '::')
+          ? '127.0.0.1'
+          : host;
       return 'http://$connectHost:$port';
     }
     return null;
@@ -310,8 +330,18 @@ class SettingsStore extends ChangeNotifier {
     _baseUrlFromUser = stored != null && stored.isNotEmpty && !storedIsLocal;
     _baseUrl = _baseUrlFromUser ? stored! : defaultBaseUrl();
     _pageSize = prefs.getInt(_kPageSize) ?? 24;
-    _galleryFiltersCollapsed = prefs.getBool(_kGalleryFiltersCollapsed) ?? false;
-    _promptFiltersCollapsed = prefs.getBool(_kPromptFiltersCollapsed) ?? false;
+    // 手机上筛选区默认**收起**：360dp 宽度里它一展开就占掉半屏，画廊 / 预设先看到的
+    // 应该是内容而不是一排筛选 chip（用户 2026-10-31）。桌面端仍默认展开。
+    // 只作为"没有偏好时"的默认值：用户自己点过展开 / 收起之后，偏好说了算。
+    //
+    // ⚠ 判据用 `Platform.isAndroid`（真实运行平台），**不是** `defaultTargetPlatform`：
+    // Flutter 测试进程里后者默认就是 android，用它会让所有 Windows 用例的筛选栏
+    // 突然默认收起（2026-10-31 实测 4 条布局用例一起红）。
+    final mobileDefault = _mobileFiltersDefault;
+    _galleryFiltersCollapsed =
+        prefs.getBool(_kGalleryFiltersCollapsed) ?? mobileDefault;
+    _promptFiltersCollapsed =
+        prefs.getBool(_kPromptFiltersCollapsed) ?? mobileDefault;
     _autoStartBackend = prefs.getBool(_kAutoStartBackend) ?? true;
     _stopServicesOnExit = prefs.getBool(_kStopServicesOnExit) ?? true;
     _allowRemoteBackend = prefs.getBool(_kAllowRemoteBackend) ?? false;
@@ -424,9 +454,10 @@ class SettingsStore extends ChangeNotifier {
     _baseUrlFromUser = true;
     _baseUrl = v;
     // 顺手记住它：跨端来回切时，"上一条用过的"就是最好的候选（见 _baseUrlHistory）
-    _baseUrlHistory = [v, ..._baseUrlHistory.where((e) => e != v)]
-        .take(maxBaseUrlHistory)
-        .toList();
+    _baseUrlHistory = [
+      v,
+      ..._baseUrlHistory.where((e) => e != v),
+    ].take(maxBaseUrlHistory).toList();
     notifyListeners();
     await prefs.setString(_kBaseUrl, v);
     await prefs.setStringList(_kBaseUrlHistory, _baseUrlHistory);
@@ -443,9 +474,10 @@ class SettingsStore extends ChangeNotifier {
     final v = _normalizeUrl(value);
     if (v.isEmpty || v == _baseUrl) return false;
     _baseUrl = v;
-    _baseUrlHistory = [v, ..._baseUrlHistory.where((e) => e != v)]
-        .take(maxBaseUrlHistory)
-        .toList();
+    _baseUrlHistory = [
+      v,
+      ..._baseUrlHistory.where((e) => e != v),
+    ].take(maxBaseUrlHistory).toList();
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_kBaseUrlHistory, _baseUrlHistory);

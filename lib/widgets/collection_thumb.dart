@@ -6,7 +6,7 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
 import 'common.dart';
-import 'media_thumb.dart' show kThumbMaxDecodeEdge;
+import 'media_thumb.dart' show CachedThumbImage, kThumbMaxDecodeEdge;
 import 'nsfw_blur.dart';
 
 /// 画廊里的**集合格子**：同一批微调的产物叠成一张，右下角标总数。
@@ -81,11 +81,7 @@ class CollectionThumb extends StatelessWidget {
               ),
             _countBadge(theme, count),
             if (selectionMode)
-              Positioned(
-                top: 6,
-                left: 6,
-                child: _check(theme),
-              ),
+              Positioned(top: 6, left: 6, child: _check(theme)),
           ],
         ),
       ),
@@ -113,23 +109,22 @@ class CollectionThumb extends StatelessWidget {
       url = store.api.absolute('/api/media/$mediaId/thumb');
     }
 
-    final image = Image.network(
-      url,
-      fit: BoxFit.cover,
-      filterQuality: FilterQuality.low,
+    final image = CachedThumbImage(
+      mediaId: mediaId,
+      url: url,
+      api: store.api,
       cacheWidth: kThumbMaxDecodeEdge,
-      loadingBuilder: (context, child, progress) => progress == null
-          ? child
-          : Center(
-              // 与 `MediaThumb` 同一条纪律：占位图标压在 **surface** 上，
-              // 颜色必须从主题取 —— 写死白色在浅色主题下等于看不见。
-              child: Icon(
-                Icons.image_outlined,
-                size: 26,
-                color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.35),
-              ),
-            ),
-      errorBuilder: (_, _, _) => Center(
+      theme: theme,
+      loading: () => Center(
+        // 与 `MediaThumb` 同一条纪律：占位图标压在 **surface** 上，
+        // 颜色必须从主题取 —— 写死白色在浅色主题下等于看不见。
+        child: Icon(
+          Icons.image_outlined,
+          size: 26,
+          color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.35),
+        ),
+      ),
+      failed: () => Center(
         child: Icon(
           Icons.image_not_supported_outlined,
           size: 22,
@@ -167,7 +162,10 @@ class CollectionThumb extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Colors.black.withValues(alpha: 0.55), Colors.transparent],
+                    colors: [
+                      Colors.black.withValues(alpha: 0.55),
+                      Colors.transparent,
+                    ],
                   ),
                 ),
               ),
@@ -182,7 +180,10 @@ class CollectionThumb extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.bottomCenter,
                     end: Alignment.topCenter,
-                    colors: [Colors.black.withValues(alpha: 0.72), Colors.transparent],
+                    colors: [
+                      Colors.black.withValues(alpha: 0.72),
+                      Colors.transparent,
+                    ],
                   ),
                 ),
               ),
@@ -193,7 +194,11 @@ class CollectionThumb extends StatelessWidget {
               child: MediaKindBadge(kind: media.kind),
             ),
             if (media.favorite)
-              const Positioned(top: 6, right: 6, child: Icon(Icons.star, size: 16, color: Colors.amber)),
+              const Positioned(
+                top: 6,
+                right: 6,
+                child: Icon(Icons.star, size: 16, color: Colors.amber),
+              ),
             Positioned(
               left: 8,
               // 右下角留给角标，所以标题往左收一点
@@ -232,7 +237,11 @@ class CollectionThumb extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.filter_none_rounded, size: 12, color: Colors.white),
+            const Icon(
+              Icons.filter_none_rounded,
+              size: 12,
+              color: Colors.white,
+            ),
             const SizedBox(width: 3),
             Text(
               '$count',
@@ -249,15 +258,17 @@ class CollectionThumb extends StatelessWidget {
   }
 
   Widget _check(ThemeData theme) => Container(
-        width: 22,
-        height: 22,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: selected ? theme.colorScheme.primary : Colors.black45,
-          border: Border.all(color: Colors.white70, width: 1.5),
-        ),
-        child: selected ? const Icon(Icons.check, size: 14, color: Colors.white) : null,
-      );
+    width: 22,
+    height: 22,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      color: selected ? theme.colorScheme.primary : Colors.black45,
+      border: Border.all(color: Colors.white70, width: 1.5),
+    ),
+    child: selected
+        ? const Icon(Icons.check, size: 14, color: Colors.white)
+        : null,
+  );
 }
 
 /// 叠放时**每层的最大内缩**（像素）—— 抽出来是为了能被测试钉住"格子不被撑高"。

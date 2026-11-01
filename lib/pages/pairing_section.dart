@@ -157,7 +157,9 @@ class _PairingSectionState extends State<PairingSection> {
     _api?.dispose();
     _api = null;
     if (_isAndroid) {
-      if (_baseUrlController.text != widget.baseUrl) _baseUrlController.text = widget.baseUrl;
+      if (_baseUrlController.text != widget.baseUrl) {
+        _baseUrlController.text = widget.baseUrl;
+      }
     } else {
       _api = _openApi(widget.baseUrl);
       unawaited(_loadStatus());
@@ -227,7 +229,8 @@ class _PairingSectionState extends State<PairingSection> {
     _sessionTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       final qr = _qr;
-      if (qr != null && (_remaining(qr.expiresAt) ?? Duration.zero) == Duration.zero) {
+      if (qr != null &&
+          (_remaining(qr.expiresAt) ?? Duration.zero) == Duration.zero) {
         setState(() {
           _qr = null;
           _qrError = '二维码已过期（120 秒有效）—— 点「生成二维码」再来一次。';
@@ -358,7 +361,7 @@ class _PairingSectionState extends State<PairingSection> {
     final ok = await _confirm(
       '吊销「${d.name.isEmpty ? d.id : d.name}」？',
       '这台设备手上的令牌会立刻失效，'
-      '要重新连上就得在手机上重新配对一次。',
+          '要重新连上就得在手机上重新配对一次。',
     );
     if (ok != true || !mounted) return;
     setState(() {
@@ -386,7 +389,11 @@ class _PairingSectionState extends State<PairingSection> {
   /// 只改一个时另一个**原样传当前值**（后端按"传了就改"处理）；本地重建设备行时
   /// 必须把**两个**开关都带上 —— 漏掉一个就是"点下行、上行被悄悄关掉"，
   /// 而用户下一次点「推给桌面」会拿到 403，还以为是手机坏了。
-  Future<void> _setDeviceCredentials(PairedDevice d, {bool? allow, bool? allowUpload}) async {
+  Future<void> _setDeviceCredentials(
+    PairedDevice d, {
+    bool? allow,
+    bool? allowUpload,
+  }) async {
     final api = _api;
     if (api == null) return;
     final wantAllow = allow ?? d.allowCredentials;
@@ -396,7 +403,11 @@ class _PairingSectionState extends State<PairingSection> {
       _message = null;
     });
     try {
-      final updated = await api.setAllowCredentials(d.id, wantAllow, allowUpload: allowUpload);
+      final updated = await api.setAllowCredentials(
+        d.id,
+        wantAllow,
+        allowUpload: allowUpload,
+      );
       if (!mounted) return;
       final name = d.name.isEmpty ? d.id : d.name;
       setState(() {
@@ -418,7 +429,8 @@ class _PairingSectionState extends State<PairingSection> {
         if (allowUpload != null) {
           if (allowUpload && !updated.allowCredentialsUpload) {
             // 回读为 false = 这台后端**不认识**这个开关（旧版本）—— 如实说，别假装开了
-            _error = '这台后端还不支持"允许设备改密钥"（旧版本）：开关没有生效。'
+            _error =
+                '这台后端还不支持"允许设备改密钥"（旧版本）：开关没有生效。'
                 '升级桌面后端之后再来勾这一项。';
           } else {
             _message = updated.allowCredentialsUpload
@@ -516,8 +528,28 @@ class _PairingSectionState extends State<PairingSection> {
       MaterialPageRoute(builder: (_) => const ScanPairingPage()),
     );
     if (payload == null || !mounted) return;
-    if (payload.urls.isNotEmpty) {
-      _baseUrlController.text = payload.urls.first;
+    // ⚠ 不能拿 `urls.first`：桌面的候选列表里回环（`127.0.0.1`）天然排在最前，
+    // 手机上连它等于连自己 —— 扫码 + 验证码全对，界面只报"连接失败"。
+    // 优先用二维码里**非回环**的地址；一条都没有时，如果用户已经手填了一个
+    // 非回环地址就沿用它，否则当场说清楚，不再拿一个注定连不上的地址去配。
+    final preferred = payload.preferredUrl;
+    if (preferred != null) {
+      _baseUrlController.text = preferred;
+    } else if (payload.urls.isNotEmpty) {
+      final typed = _baseUrlController.text.trim();
+      final typedHost = Uri.tryParse(typed)?.host ?? '';
+      final typedUsable =
+          typed.isNotEmpty &&
+          typedHost.isNotEmpty &&
+          !PairingPayload.isLoopbackHost(typedHost);
+      if (!typedUsable) {
+        setState(
+          () => _error =
+              '二维码里只有回环地址（127.0.0.1），手机连不到桌面。'
+              '请在桌面上重新生成二维码（选局域网地址），或先在上面的输入框手填桌面地址再扫。',
+        );
+        return;
+      }
     }
     await _pair(scanned: payload);
   }
@@ -538,7 +570,9 @@ class _PairingSectionState extends State<PairingSection> {
     });
     final api = _openApi(base);
     try {
-      if (widget.onSaveBaseUrl != null && typed.isNotEmpty && typed != widget.baseUrl) {
+      if (widget.onSaveBaseUrl != null &&
+          typed.isNotEmpty &&
+          typed != widget.baseUrl) {
         await widget.onSaveBaseUrl!(typed);
       }
       // 身份必须与上行同步用的是**同一个** deviceId（生成两次 = 桌面当成两台手机）
@@ -572,15 +606,19 @@ class _PairingSectionState extends State<PairingSection> {
         await PairingTokenStore().write(claim.token);
       } catch (e) {
         if (!mounted) return;
-        setState(() => _error = '配对令牌写不进本机密钥库，这次配对作废（令牌已丢弃，'
-            '没有任何地方留着它）：$e');
+        setState(
+          () => _error =
+              '配对令牌写不进本机密钥库，这次配对作废（令牌已丢弃，'
+              '没有任何地方留着它）：$e',
+        );
         return;
       }
       if (!mounted) return;
       setState(() {
         _paired = true;
         _pairedDeviceId = claim.deviceId;
-        _message = '已配对（${_prefix(claim.deviceId)}）。'
+        _message =
+            '已配对（${_prefix(claim.deviceId)}）。'
             '桌面把「${identity.deviceName}」记成了这台设备。';
       });
       await widget.onPaired?.call();
@@ -612,7 +650,10 @@ class _PairingSectionState extends State<PairingSection> {
               keyboardType: TextInputType.number,
               maxLength: 6,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: const InputDecoration(labelText: '6 位配对码', hintText: '例如 428193'),
+              decoration: const InputDecoration(
+                labelText: '6 位配对码',
+                hintText: '例如 428193',
+              ),
               onSubmitted: (v) {
                 if (v.trim().length == 6) Navigator.pop(ctx, v.trim());
               },
@@ -620,14 +661,19 @@ class _PairingSectionState extends State<PairingSection> {
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           // 位数不够就点不动：让后端回一句"配对失败"不如在按钮上就拦住
           ValueListenableBuilder<TextEditingValue>(
             valueListenable: _codeController,
             builder: (_, value, _) {
               final ok = value.text.trim().length == 6;
               return FilledButton(
-                onPressed: ok ? () => Navigator.pop(ctx, value.text.trim()) : null,
+                onPressed: ok
+                    ? () => Navigator.pop(ctx, value.text.trim())
+                    : null,
                 child: const Text('配对'),
               );
             },
@@ -639,7 +685,9 @@ class _PairingSectionState extends State<PairingSection> {
 
   /// 配对失败时把后端给的**人话**显示出来，并说清下一步该干什么（§11.2 的错误码）。
   String _pairErrorText(ApiException e) {
-    final human = (e.detail == null || e.detail!.isEmpty) ? e.message : '${e.message}（${e.detail}）';
+    final human = (e.detail == null || e.detail!.isEmpty)
+        ? e.message
+        : '${e.message}（${e.detail}）';
     switch (e.statusCode) {
       case 400:
         return '配对没通过：$human '
@@ -663,7 +711,7 @@ class _PairingSectionState extends State<PairingSection> {
     final ok = await _confirm(
       '忘记这台电脑？',
       '只会删掉本机密钥库里的配对令牌，本机不再带它连桌面。'
-      '桌面上的那条设备记录还在（要一起清掉，请在桌面上点那台设备的「吊销」）。',
+          '桌面上的那条设备记录还在（要一起清掉，请在桌面上点那台设备的「吊销」）。',
     );
     if (ok != true || !mounted) return;
     setState(() {
@@ -695,7 +743,11 @@ class _PairingSectionState extends State<PairingSection> {
     try {
       await save(url);
       if (!mounted) return;
-      setState(() => _message = url.isEmpty ? '已清空桌面地址（桌面端 = 自动发现本机后端）。' : '桌面地址已保存：$url');
+      setState(
+        () => _message = url.isEmpty
+            ? '已清空桌面地址（桌面端 = 自动发现本机后端）。'
+            : '桌面地址已保存：$url',
+      );
     } catch (e) {
       if (mounted) setState(() => _error = '保存地址失败：$e');
     }
@@ -724,16 +776,22 @@ class _PairingSectionState extends State<PairingSection> {
   // -------------------------------------------------------------------------
 
   Future<bool?> _confirm(String title, String body) => showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(title),
-          content: Text(body),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('确认')),
-          ],
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: Text(body),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('取消'),
         ),
-      );
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('确认'),
+        ),
+      ],
+    ),
+  );
 
   static String _prefix(String deviceId) {
     if (deviceId.isEmpty) return '设备 id 未知';
@@ -750,24 +808,39 @@ class _PairingSectionState extends State<PairingSection> {
   Widget _feedback(ThemeData theme) {
     final rows = <Widget>[];
     if (_error != null) {
-      rows.add(Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.error_outline, size: 18, color: theme.colorScheme.error),
-          const SizedBox(width: 8),
-          Expanded(child: SelectableText(_error!, style: theme.textTheme.bodySmall)),
-        ],
-      ));
+      rows.add(
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.error_outline, size: 18, color: theme.colorScheme.error),
+            const SizedBox(width: 8),
+            Expanded(
+              child: SelectableText(_error!, style: theme.textTheme.bodySmall),
+            ),
+          ],
+        ),
+      );
     }
     if (_message != null) {
-      rows.add(Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.check_circle_outline, size: 18, color: Colors.green),
-          const SizedBox(width: 8),
-          Expanded(child: SelectableText(_message!, style: theme.textTheme.bodySmall)),
-        ],
-      ));
+      rows.add(
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(
+              Icons.check_circle_outline,
+              size: 18,
+              color: Colors.green,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: SelectableText(
+                _message!,
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
+          ],
+        ),
+      );
     }
     if (rows.isEmpty) return const SizedBox.shrink();
     return Padding(
@@ -805,7 +878,9 @@ class _PairingSectionState extends State<PairingSection> {
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
               child: Text(
                 '打开后，手机要带上配对令牌才能连这台电脑的 AI。配对时码由这台电脑算，只显示在下面。',
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             ),
             if (_loading)
@@ -822,9 +897,9 @@ class _PairingSectionState extends State<PairingSection> {
               // 都能连、不用令牌"，那反而更松。
               subtitle: _enabled
                   ? '② 已开启：手机带配对令牌才能连（没带会被 403 挡下）。'
-                      '前提是「本地服务」里的 ① 已开且重启过后端。'
+                        '前提是「本地服务」里的 ① 已开且重启过后端。'
                   : '② 未开启：局域网内任何设备都能连（不需要令牌）。'
-                      '要连手机的话建议开启；前提是「本地服务」里的 ① 已开。',
+                        '要连手机的话建议开启；前提是「本地服务」里的 ① 已开。',
               value: _enabled,
               onChanged: (_busy || _loading) ? null : _setEnabled,
             ),
@@ -834,10 +909,14 @@ class _PairingSectionState extends State<PairingSection> {
               contentPadding: const EdgeInsets.symmetric(horizontal: 8),
               leading: const Icon(Icons.qr_code_2_outlined),
               title: const Text('配对新手机'),
-              subtitle: Text(_pending.isEmpty
-                  ? '还没有待配对的请求'
-                  : '有 ${_pending.length} 个待配对请求，下面这组码念给手机'),
-              trailing: Icon(_pendingExpanded ? Icons.expand_less : Icons.expand_more),
+              subtitle: Text(
+                _pending.isEmpty
+                    ? '还没有待配对的请求'
+                    : '有 ${_pending.length} 个待配对请求，下面这组码念给手机',
+              ),
+              trailing: Icon(
+                _pendingExpanded ? Icons.expand_less : Icons.expand_more,
+              ),
               onTap: _togglePending,
             ),
             if (_pendingExpanded) _sessionsArea(theme),
@@ -861,13 +940,16 @@ class _PairingSectionState extends State<PairingSection> {
                         for (final url in _reachableUrls)
                           SelectableText(
                             url,
-                            style: theme.textTheme.bodyMedium?.copyWith(fontFamily: 'monospace'),
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontFamily: 'monospace',
+                            ),
                           ),
                         const SizedBox(height: 2),
                         Text(
                           '手机与这台电脑要在同一个局域网里；地址里的端口与桌面后端一致。',
-                          style: theme.textTheme.labelSmall
-                              ?.copyWith(color: theme.colorScheme.outline),
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
                         ),
                       ],
                     ),
@@ -878,12 +960,15 @@ class _PairingSectionState extends State<PairingSection> {
               padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
               child: Row(
                 children: [
-                  Expanded(child: Text('已配对设备', style: theme.textTheme.titleSmall)),
+                  Expanded(
+                    child: Text('已配对设备', style: theme.textTheme.titleSmall),
+                  ),
                   if (_hasToken)
                     Text(
                       '全局令牌已生成',
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: theme.colorScheme.outline),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.outline,
+                      ),
                     ),
                 ],
               ),
@@ -909,13 +994,20 @@ class _PairingSectionState extends State<PairingSection> {
   /// 在界面上是同一件事 —— 都是"桌上摆着一组 6 位码等人敲"，区别只是二维码那条还带了
   /// ticket + 地址（手机扫它就不用抄地址）。原来这里有两套渲染 + 两套计时器，
   /// 用户要分别理解"配对新手机"和"扫码配对"两个概念。
-  Widget _sessionCard(ThemeData theme, {PairStart? qr, PendingPairing? pending}) {
+  Widget _sessionCard(
+    ThemeData theme, {
+    PairStart? qr,
+    PendingPairing? pending,
+  }) {
     final code = qr?.code ?? pending?.code ?? '';
-    final left = _remaining(qr?.codeExpiresAt ?? pending?.codeExpiresAt) ??
+    final left =
+        _remaining(qr?.codeExpiresAt ?? pending?.codeExpiresAt) ??
         _remaining(qr?.expiresAt ?? pending?.expiresAt);
     final expired = left == Duration.zero;
     final ip = pending?.ip ?? '';
-    final name = (pending?.deviceName ?? '').isEmpty ? '未知设备' : pending!.deviceName!;
+    final name = (pending?.deviceName ?? '').isEmpty
+        ? '未知设备'
+        : pending!.deviceName!;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Material(
@@ -928,15 +1020,24 @@ class _PairingSectionState extends State<PairingSection> {
             children: [
               Row(
                 children: [
-                  Icon(qr != null ? Icons.qr_code_2 : Icons.phone_iphone, size: 16, color: theme.colorScheme.outline),
+                  Icon(
+                    qr != null ? Icons.qr_code_2 : Icons.phone_iphone,
+                    size: 16,
+                    color: theme.colorScheme.outline,
+                  ),
                   const SizedBox(width: 6),
-                  Text(qr != null ? '扫码配对' : '手机举手', style: theme.textTheme.labelMedium),
+                  Text(
+                    qr != null ? '扫码配对' : '手机举手',
+                    style: theme.textTheme.labelMedium,
+                  ),
                   const Spacer(),
                   // ⚠ 「剩余」每张卡**只许出现一次**（用例 `find.textContaining('剩余')` 数它）
                   Text(
                     left == null ? '' : (expired ? '已过期' : '剩余 ${_mmss(left)}'),
                     style: theme.textTheme.labelSmall?.copyWith(
-                      color: expired ? theme.colorScheme.error : theme.colorScheme.outline,
+                      color: expired
+                          ? theme.colorScheme.error
+                          : theme.colorScheme.outline,
                     ),
                   ),
                 ],
@@ -956,10 +1057,12 @@ class _PairingSectionState extends State<PairingSection> {
                 qr != null
                     ? '手机上敲这 6 位码（扫上面的二维码可省去手抄地址）'
                     : (expired
-                        ? '这组码已过期，让手机重新点一次「配对新电脑」'
-                        : '$name${ip.isEmpty ? '' : ' · 来自 $ip'} —— 在手机上敲这 6 位码'),
+                          ? '这组码已过期，让手机重新点一次「配对新电脑」'
+                          : '$name${ip.isEmpty ? '' : ' · 来自 $ip'} —— 在手机上敲这 6 位码'),
                 style: theme.textTheme.labelSmall?.copyWith(
-                  color: expired ? theme.colorScheme.error : theme.colorScheme.outline,
+                  color: expired
+                      ? theme.colorScheme.error
+                      : theme.colorScheme.outline,
                 ),
               ),
               if (qr != null) ...[
@@ -976,7 +1079,9 @@ class _PairingSectionState extends State<PairingSection> {
                 if (qr.urls.isEmpty)
                   Text(
                     '桌面没枚举出可达地址 —— 手机上请手填地址。',
-                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
                   )
                 else
                   for (final u in qr.urls)
@@ -1000,7 +1105,9 @@ class _PairingSectionState extends State<PairingSection> {
           Text(
             '两条路都行：**手机上点「配对新电脑」**（这里会出现一组 6 位码），'
             '或者**桌面出二维码**（手机扫码，地址不用手抄）。两条都还要在手机上敲那 6 位码。',
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
           ),
           const SizedBox(height: 8),
           Row(
@@ -1017,18 +1124,30 @@ class _PairingSectionState extends State<PairingSection> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.error_outline, size: 16, color: theme.colorScheme.error),
+                Icon(
+                  Icons.error_outline,
+                  size: 16,
+                  color: theme.colorScheme.error,
+                ),
                 const SizedBox(width: 6),
-                Expanded(child: Text(_qrError!, style: theme.textTheme.labelSmall)),
+                Expanded(
+                  child: Text(_qrError!, style: theme.textTheme.labelSmall),
+                ),
               ],
             ),
           if (_pendingError != null)
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.error_outline, size: 18, color: theme.colorScheme.error),
+                Icon(
+                  Icons.error_outline,
+                  size: 18,
+                  color: theme.colorScheme.error,
+                ),
                 const SizedBox(width: 8),
-                Expanded(child: Text(_pendingError!, style: theme.textTheme.bodySmall)),
+                Expanded(
+                  child: Text(_pendingError!, style: theme.textTheme.bodySmall),
+                ),
                 TextButton(
                   onPressed: () {
                     setState(() => _pendingError = null);
@@ -1042,7 +1161,10 @@ class _PairingSectionState extends State<PairingSection> {
           // 两种来路混排：二维码那条排在上面（它带着地址，最该被看见）
           if (qr != null) _sessionCard(theme, qr: qr),
           for (final p in _pending) _sessionCard(theme, pending: p),
-          if (qr == null && _pending.isEmpty && _pendingError == null && _qrError == null)
+          if (qr == null &&
+              _pending.isEmpty &&
+              _pendingError == null &&
+              _qrError == null)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: Text('现在没有等待中的配对。', style: theme.textTheme.bodySmall),
@@ -1076,7 +1198,9 @@ class _PairingSectionState extends State<PairingSection> {
             child: Text(
               '最后活跃 ${relativeTime(_parseTime(d.lastSeenAt))}'
               '${ip.isEmpty ? '' : ' · 最后 IP $ip'}',
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           ),
           Padding(
@@ -1087,7 +1211,9 @@ class _PairingSectionState extends State<PairingSection> {
                   ? '已允许：这台手机可以「从桌面同步密钥」把 API Key 取到本机密钥库。'
                   : '未允许：**手机拿不到桌面上的 API Key**（配对成功不等于能取密钥）。',
               value: d.allowCredentials,
-              onChanged: _busy ? null : (v) => _setDeviceCredentials(d, allow: v),
+              onChanged: _busy
+                  ? null
+                  : (v) => _setDeviceCredentials(d, allow: v),
             ),
           ),
           // ★ 第二个开关：**改**桌面上的密钥（上行，§14.1）。
@@ -1102,7 +1228,9 @@ class _PairingSectionState extends State<PairingSection> {
                   ? '已允许：手机上可以「推给桌面」，把它本机密钥库里的那一把写到桌面上。'
                   : '未允许（默认）：此时手机推上来的密钥会被桌面拒绝（403）。',
               value: d.allowCredentialsUpload,
-              onChanged: _busy ? null : (v) => _setDeviceCredentials(d, allowUpload: v),
+              onChanged: _busy
+                  ? null
+                  : (v) => _setDeviceCredentials(d, allowUpload: v),
             ),
           ),
         ],
@@ -1124,7 +1252,9 @@ class _PairingSectionState extends State<PairingSection> {
             Text(
               '配对之后，这台手机会把配对令牌存进本机密钥库，用它连桌面取规则工件与密钥。'
               '配对码由桌面算出并显示在桌面屏幕上，手机这边只负责把它敲进来。',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -1216,7 +1346,9 @@ class _PairingSectionState extends State<PairingSection> {
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
                   '只会同步「桌面已允许同步」的密钥，没允许的不会下发。',
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
               ),
             _feedback(theme),

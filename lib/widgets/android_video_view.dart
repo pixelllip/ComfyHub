@@ -1,4 +1,4 @@
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
@@ -19,12 +19,16 @@ class AndroidVideoView extends StatefulWidget {
   const AndroidVideoView({
     super.key,
     required this.url,
+    this.file,
     this.posterUrl,
     this.autoPlay = false,
     this.loop = false,
   });
 
   final String url;
+
+  /// 本机缓存原件；有它就不走网络（手机离线 / 远程访问都靠它）。
+  final File? file;
 
   /// 可选封面（后端 `/api/media/{id}/poster` 抽的首帧）。
   final String? posterUrl;
@@ -55,12 +59,29 @@ class _AndroidVideoViewState extends State<AndroidVideoView> {
     _open();
   }
 
+  @override
+  void didUpdateWidget(covariant AndroidVideoView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 缓存下载完成会把 file 从 null 变成有值：这时要从网络源切到本地源，
+    // 不能继续停在已经打开的网络控制器上。
+    if (oldWidget.url != widget.url ||
+        oldWidget.file?.path != widget.file?.path) {
+      _controller?.dispose();
+      _controller = null;
+      _ready = false;
+      _error = null;
+      _open();
+    }
+  }
+
   Future<void> _open() async {
     if (!AndroidVideoView.supported) {
       setState(() => _error = '当前平台不支持内嵌播放（安卓 / iOS 才有这个实现）');
       return;
     }
-    final controller = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    final controller = widget.file != null
+        ? VideoPlayerController.file(widget.file!)
+        : VideoPlayerController.networkUrl(Uri.parse(widget.url));
     _controller = controller;
     try {
       await controller.initialize();
@@ -140,15 +161,24 @@ class _AndroidVideoViewState extends State<AndroidVideoView> {
         alignment: Alignment.center,
         children: [
           AspectRatio(
-            aspectRatio: c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
+            aspectRatio: c.value.aspectRatio == 0
+                ? 16 / 9
+                : c.value.aspectRatio,
             child: VideoPlayer(c),
           ),
           // 暂停时给一个看得见的"继续播放"，否则用户会以为是卡住了
           if (!c.value.isPlaying)
             Container(
-              decoration: const BoxDecoration(color: Colors.black38, shape: BoxShape.circle),
+              decoration: const BoxDecoration(
+                color: Colors.black38,
+                shape: BoxShape.circle,
+              ),
               padding: const EdgeInsets.all(14),
-              child: const Icon(Icons.play_arrow, size: 40, color: Colors.white),
+              child: const Icon(
+                Icons.play_arrow,
+                size: 40,
+                color: Colors.white,
+              ),
             ),
           Positioned(
             left: 0,

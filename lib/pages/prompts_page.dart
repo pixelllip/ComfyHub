@@ -136,6 +136,7 @@ class _PromptsPageState extends State<PromptsPage>
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
     final section = _section;
+    final fab = _buildFab();
 
     return Scaffold(
       appBar: AppBar(
@@ -186,7 +187,13 @@ class _PromptsPageState extends State<PromptsPage>
                 const SizedBox(width: 4),
               ],
       ),
-      floatingActionButton: _buildFab(),
+      floatingActionButton: fab == null
+          ? null
+          : liftFabAbovePageBar(
+              fab,
+              // 卡片页签没有 PageBar；只有常规预设的翻页条会被 FAB 压住
+              lift: section == PresetSection.prompts && store.prompts.pages > 1,
+            ),
       bottomNavigationBar: _selectionMode && _selected.isNotEmpty
           ? _SelectionBar(
               count: _selected.length,

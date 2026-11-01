@@ -32,6 +32,9 @@ dependencies:
 
   # --- 选择本地文件上传 ---
   file_picker: ^12.3.0
+  # 手机端产物缓存目录（`<app-support>/media-cache`）。桌面端只有
+  # `path_provider_windows`，跨平台入口要这一个。
+  path_provider: ^2.1.5
 
   # --- 时间格式化 ---
   intl: ^0.20.3

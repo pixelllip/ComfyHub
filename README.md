@@ -32,7 +32,7 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 | --- | --- |
 | **AI 工作台**（默认落地页） | 和模型对话干活：写提示词、查 danbooru、投放参考图、提交 ComfyUI、看实时进度与产物入口卡。审批闸门 / 提问闸门 / 轮次与预算上限都在这一页看得见。AppBar 的「LoRA 训练台」进次级页（见下） |
 | **LoRA 训练台**（次级页） | 可选能力：本机 anima-lora-next 的**完整训练台**（与 Qt GUI 的页签对齐，MOSS 页除外）—— 取训练集 → **人工筛选** → 打标（可选）→ 预处理 → **参数（复现 Qt GUI 的 Config 表单）** → 正式训练；另有 **Krea-2**、**合并（烘焙 / 融合 / ΔW 提取）**、**EasyControl**（方法 / 描述符变体）、**TensorBoard**、**Anime Tools 策展面板**、**实验（Turbo / Soup）** 与**全局作业队列**。内嵌引擎自己的响应式 WebUI（手机 / 电脑同一份状态），AI 工作台调的是同一批 `anima_studio_*` 工具 |
-| **画廊** | 生成产物：列表 / 详情 / 大图（滚轮缩放）/ 视频播放；NSFW 标记与模糊；右键菜单 |
+| **画廊** | 生成产物：列表 / 详情 / 大图（滚轮缩放）/ 视频播放；NSFW 标记与模糊；右键菜单。**手机上默认缓存看过的缩略图 / 原件**，详情菜单可「保存到手机相册」 |
 | **提示词** | 本机提示词库：搜索、收藏、标签、工作流原文（界面格式 ↔ API 图的转换在服务端） |
 | **标签** | 标签库与分类、使用次数 |
 | **设置** | Provider / 模型目录 / API Key、「远程访问与配对」、NSFW 开关、ComfyUI 自动捕获、桌面端还有本地服务与后端地址、**产物导出** |
@@ -58,6 +58,14 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 - **外观**：默认跟随**系统强调色**（Windows 读 `HKCU` 的 `AccentColorMenu`，Android 12+ 读
   `system_accent1_500`；读不到就回默认紫）。页面与卡片的底色**始终保持白 / 灰**，
   强调色只用在按钮、开关、选中态这些组件上（设置页可关）。见 `lib/core/system_accent.dart`。
+- **手机端产物缓存 / 保存**：画廊格子与详情页看过的缩略图、原件默认落到
+  `<app-support>/media-cache/`（不是整库复制，避免几十 GB）；详情菜单「保存到手机相册」
+  把**这一条**交给 Android MediaStore（图片 / 视频 / 音频分别进 Pictures / Movies / Music）。
+  见 `lib/core/media_cache.dart`、`android/app/src/main/kotlin/com/example/viewer/MediaSaver.kt`。
+- **换网络自动找回桌面**：桌面在局域网里 UDP 4039 广播当前端口，已配对手机收到后
+  用**原配对令牌**探一次；只有当前地址不通才切换，**不重扫二维码、不轮换令牌**。
+  跨网段 / AP 隔离仍走 Tailscale 或手填地址。见 `server-rs/src/mobile/discovery.rs`、
+  `lib/core/lan_discovery.dart`。
 - **手机从桌面搬 Provider**：手机「AI 模型与凭据」里点「从电脑同步 Provider」，把桌面那份
   清单 + 模型目录（含能力声明）搬进本机库 —— 桌面有 / 手机没有的**新建**，同 id 的**用桌面覆盖**，
   **只在手机上的保留不删**；API Key 不在其中（要单独从「远程访问与配对」取回）。
@@ -177,7 +185,7 @@ D:\dist\ComfyHub\viewer.exe
 | `train-engine.ps1` | 可选能力：本地 LoRA 训练引擎（探测器 / 起停守护进程与自有 WebUI / 打开界面）。见 [docs/training-engine.md](docs/training-engine.md) |
 | `video-poster.ps1` | 给视频产物取封面 / 预览帧（可选能力） |
 | `gen-builtin-catalog.ps1` | 重新生成内置模型目录的冻结副本 |
-| `build-apk.ps1` | 打 Android 包 |
+| `build-apk.ps1` | 打 Android 包（只出 arm64-v8a） |
 | `e2e-*.ps1` | 端到端自测（都不出网）：`ai-tools` 111 项、`capture`、`submit`、`image-edit`、`inpaint`、`pair`、`recipe`、`credential` |
 
 ## 8. 捕获与接口

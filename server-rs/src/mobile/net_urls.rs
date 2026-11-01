@@ -136,6 +136,29 @@ pub fn collect(port: u16) -> Vec<Endpoint> {
     assemble(port, &ips)
 }
 
+/// **配对二维码**里的候选地址：回环一律不要，局域网排最前。
+///
+/// 二维码是给**另一台设备**扫的。回环地址在手机上指向手机自己 —— 拿它去配对
+/// 必然 `Connection refused`，而且报错完全看不出是地址问题（2026-10-31 真机现场）。
+/// 所以这条不是"排序偏好"，是**正确性**：回环绝不能出现在二维码的候选里。
+///
+/// 局域网排在 Tailscale 前面：同一 Wi-Fi 是最常见的配对现场；Tailscale 用户
+/// 仍能拿到自己的地址，只是不在第一顺位。
+pub fn pairing_candidates(mut endpoints: Vec<Endpoint>) -> Vec<Endpoint> {
+    endpoints.retain(|e| e.kind != "loopback");
+    endpoints.sort_by_key(|e| match e.kind {
+        "lan" => 0,
+        "tailscale" => 1,
+        _ => 2,
+    });
+    endpoints
+}
+
+/// 现探网卡并只留配对可用的地址（[`pairing_candidates`] 的真实现）。
+pub fn collect_for_pairing(port: u16) -> Vec<Endpoint> {
+    pairing_candidates(collect(port))
+}
+
 /// 端点响应体。
 pub fn urls_json(port: u16) -> Value {
     let urls: Vec<Value> = collect(port)

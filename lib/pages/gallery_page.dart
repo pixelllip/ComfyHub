@@ -201,13 +201,17 @@ class _GalleryPageState extends State<GalleryPage> {
       ),
       floatingActionButton: _selectionMode && _picked.isNotEmpty
           ? null
-          : FloatingActionButton.extended(
-              onPressed: () async {
-                final ok = await showUploadSheet(context);
-                if (ok) await store.refreshAll();
-              },
-              icon: const Icon(Icons.add_photo_alternate_outlined),
-              label: const Text('上传产物'),
+          : liftFabAbovePageBar(
+              FloatingActionButton.extended(
+                onPressed: () async {
+                  final ok = await showUploadSheet(context);
+                  if (ok) await store.refreshAll();
+                },
+                icon: const Icon(Icons.add_photo_alternate_outlined),
+                label: const Text('上传产物'),
+              ),
+              // 只有真有翻页条时才需要抬高；单页画廊别白留一条空白
+              lift: store.media.pages > 1,
             ),
       bottomNavigationBar: _selectionMode && _picked.isNotEmpty
           ? _SelectionBar(

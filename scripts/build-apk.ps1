@@ -1,13 +1,15 @@
 <#
 .SYNOPSIS
-    打一份**能装进真手机**的安卓 APK：一条命令走完「选 ABI → 编 → 报出装机要看的那些事实」。
+    打一份**能装进真手机**的安卓 APK：一条命令走完「编 → 报出装机要看的那些事实」。
+    只出 **arm64-v8a**（真机基本都是这个架构）。
 
 .DESCRIPTION
     为什么值得单独一个脚本（2026-09-28 用户 bug：「真手机无法安装手机端 app」）：
 
     ① **在这之前，装手机端是没有任何入口的**。仓库里 30 多个脚本没有一个是安卓的，
-       用户只能自己敲 `flutter build apk`，而且默认打出来的是 **debug** 包（实测 172MB）——
-       传输慢、被网盘/聊天软件二次打包的概率高，也看不出它到底是给哪个 ABI 编的。
+       用户只能自己敲 `flutter build apk` —— 包是出来了，但它对应哪个 ABI、versionCode 多少、
+       用的哪份签名、手机上那份能不能覆盖，**一样都看不出来**；顺手加个 `--debug` 就是
+       上百 MB（2026-10-29 的全量 debug 实测 212MB），而 `INSTALL_FAILED_*` 每一类要看的东西又完全不同。
 
     ② **装机失败时看不到任何判据**。APK 装不上无非这几类原因，而它们各自要看的东西
        完全不一样：ABI 与手机对不上（`native-code`）、系统版本低于 `minSdkVersion`、
@@ -15,8 +17,9 @@
        或者 APK 在传输途中被改坏了（签名校验不过）。所以本脚本编完之后
        **把这些事实一次性打出来**，而不是只丢一句"编译成功"。
 
-    ③ **arm64 单架构包**（`-Split`）通常只有全量包的 1/3~1/2，装机最快。
-       全量包（默认）三个 ABI 都带，随便哪台手机都能装 —— 先试全量，装不上再用 `-Split`。
+    ③ **只出 arm64-v8a 单架构包**（`--target-platform android-arm64`）：现在真机基本都是
+       arm64，包只有以前全量包（三个 ABI）的 1/3~1/2，装机也最快。`armeabi-v7a`（老 32 位机）
+       与 `x86_64`（模拟器）不再出 —— 需要它们时只能手工 `flutter build apk`。
 
     签名说明：`android\app\build.gradle.kts` 的 release 用的是 **debug 签名**
     （Flutter 模板的默认做法，`flutter run --release` 靠它才跑得起来）。
@@ -25,22 +28,19 @@
     `INSTALL_FAILED_UPDATE_INCOMPATIBLE`（这一条也打在报告里）。
 
 .EXAMPLE
-    pwsh -File scripts\build-apk.ps1                 # 全量 release 包（三个 ABI 都带）
-    pwsh -File scripts\build-apk.ps1 -Split          # 只出 arm64-v8a 等分架构包（小得多）
-    pwsh -File scripts\build-apk.ps1 -DebugBuild     # debug 包（大，但能连 flutter attach）
+    pwsh -File scripts\build-apk.ps1                 # arm64-v8a release 包
+    pwsh -File scripts\build-apk.ps1 -DebugBuild     # arm64-v8a debug 包（能连 flutter attach）
     pwsh -File scripts\build-apk.ps1 -Install        # 编完顺手 adb install -r（接了手机才用）
 #>
 [CmdletBinding()]
 param(
-    # 出**分架构**包（arm64-v8a / armeabi-v7a / x86_64 各一个）而不是一个全量包
-    [switch]$Split,
-    # 打 debug 包。⚠ 实测 172MB 起步：只在"要 flutter attach 调试"时才用。
+    # 打 debug 包。⚠ 仍是 arm64-v8a 单架构；只在"要 flutter attach 调试"时才用。
     # ⚠ 名字**不能**叫 `-Debug`：那是 `[CmdletBinding()]` 的公共参数，重名会直接
     #   报 `A parameter with the name 'Debug' was defined multiple times`（本次实测踩到）。
     [switch]$DebugBuild,
     # 编完调 adb install -r（手机上会弹安装确认）。没接设备就跳过，不算失败
     [switch]$Install,
-    # 跳过签名/ABI 体检那一趟（只想快点拿到文件时用）
+    # 跳过签名/架构体检那一趟（只想快点拿到文件时用）
     [switch]$NoReport
 )
 
@@ -66,20 +66,23 @@ $env:PUB_HOSTED_URL = 'https://pub.dev'
 
 $buildArgs = @('build', 'apk')
 $buildArgs += if ($DebugBuild) { '--debug' } else { '--release' }
-if ($Split) {
-    $buildArgs += '--split-per-abi'
-    # ★ 分架构包**不额外加 ABI 的 versionCode 偏移**（2026-09-28 起）。
-    #
-    # 不加这个的后果是**永久性**的：分架构包会拿到 1001 / 2001 / 4001，而全量包与
-    # `flutter run` 装的 debug 包是 1 —— 于是"装过一次分架构包"的手机，之后
-    # **`flutter run` 永远装不上去**（INSTALL_FAILED_VERSION_DOWNGRADE，`-r` 救不了，
-    # 只能先卸载）。这正是用户报"真手机无法安装"的第三个原因，实测复现过。
-    #
-    # 加了它，四种包（debug / 全量 release / 三个分架构）**共用同一个 versionCode**，
-    # 互相覆盖都是普通的"同版本替换"，`adb install -r` 与 `flutter run` 都能过。
-    # （这个开关是 Flutter 模板自己在 `android\app\build.gradle.kts` 里写明的，见那段注释。）
-    $buildArgs += '-Pforce-version-code-ignoring-abi=true'
-}
+# ★ 只出 arm64-v8a（2026-10-31 用户要求）：真机基本都是 arm64；x86_64 只给模拟器，
+#   armeabi-v7a 是 32 位老机。`--target-platform` 与 `--split-per-abi` 一起用，产物名
+#   固定带架构（`app-arm64-v8a-{debug,release}.apk`），不会被误当成全量包。
+$buildArgs += '--target-platform'
+$buildArgs += 'android-arm64'
+$buildArgs += '--split-per-abi'
+# ★ 分架构包**不额外加 ABI 的 versionCode 偏移**（2026-09-28 起）。
+#
+# 不加这个的后果是**永久性**的：分架构包会拿到 1001 / 2001 / 4001，而
+# `flutter run` 装的 debug 包是 1 —— 于是"装过一次分架构包"的手机，之后
+# **`flutter run` 永远装不上去**（INSTALL_FAILED_VERSION_DOWNGRADE，`-r` 救不了，
+# 只能先卸载）。这正是用户报"真手机无法安装"的第三个原因，实测复现过。
+#
+# 加了它，本脚本的 debug / release **共用同一个 versionCode**（与 `flutter run` 装的
+# debug 包一致），互相覆盖都是普通的"同版本替换"，`adb install -r` 与 `flutter run` 都能过。
+# （这个开关是 Flutter 模板自己在 `android\app\build.gradle.kts` 里写明的，见那段注释。）
+$buildArgs += '-Pforce-version-code-ignoring-abi=true'
 
 # JDK：Gradle 9.6 要**完整 JDK**（带 jlink），JBR jcef 只有运行时。
 # 判据不靠版本号，靠 `jlink.exe` 在不在 —— 缺了它 Gradle 会在
@@ -99,19 +102,38 @@ if ($jdk) {
 
 Say ("→ flutter " + ($buildArgs -join ' ')) 'Cyan'
 Say '  （第一次编要几分钟：Gradle 要编译 Kotlin 与各插件）' 'DarkGray'
+# 记下开始时间：Flutter 不会清理旧产物（见下面"只认本次构建的文件"）
+$buildStarted = Get-Date
 & flutter @buildArgs
 if ($LASTEXITCODE -ne 0) {
     Say '' 'Red'
     Say "✗ flutter build apk 失败（退出码 $LASTEXITCODE）。" 'Red'
-    Say '  常见两类：① JDK 不在 21~23（AGENTS §4）；② android\ 下的 AGP/Kotlin 配置被动过，' 'Yellow'
+    Say '  常见两类：① JAVA_HOME 不是完整 JDK（缺 bin\jlink.exe）或版本过低（AGP 9 要 17+，本机 25 实测可用）；' 'Yellow'
+    Say '  ② android\ 下的 AGP/Kotlin 配置被动过，' 'Yellow'
     Say '  先读 docs\android-agp9-builtin-kotlin-migration.md。' 'Yellow'
     exit 1
 }
 
 $outDir = Join-Path $ProjectRoot 'build\app\outputs\flutter-apk'
-$apks = @(Get-ChildItem $outDir -Filter '*.apk' -ErrorAction SilentlyContinue | Sort-Object Name)
+# ★ 只认**这一次**构建出来的文件。
+#
+# 为什么不能 `Get-ChildItem *.apk`：Flutter 不清理输出目录，所以编完 release 之后，
+# 目录里还躺着上次的 debug / 全量 / 分架构包（实测：一次 `--release` 之后目录里有 8 个包，
+# 其中三个还是 0.2.0 的旧构建）。那样做有三个后果，全是"看着成功、其实拿错包"：
+#   ① 「拿去装机」把旧包和旧 sha256 一起打出来，用户照着拷错；
+#   ② `-Install` 会把旧包也装一遍（`-DebugBuild -Install` 最后装上的反而是旧 release）；
+#   ③ 体检报的是旧包的 minSdk / 签名。
+# 产物名由 Flutter 固定：本脚本只出 app-arm64-v8a-{debug,release}.apk。
+$mode = if ($DebugBuild) { 'debug' } else { 'release' }
+$expected = @("app-arm64-v8a-$mode.apk")
+$allApks = @(Get-ChildItem $outDir -Filter '*.apk' -ErrorAction SilentlyContinue | Sort-Object Name)
+$apks = @($allApks | Where-Object { $expected -contains $_.Name })
 if ($apks.Count -eq 0) {
-    Say "✗ 编译说成功了，但 $outDir 里一个 apk 都没有。" 'Red'
+    # 兜底：万一哪天 Flutter 改了产物命名，按"本次构建之后写过"筛，总比把旧包当结果好。
+    $apks = @($allApks | Where-Object { $_.LastWriteTime -ge $buildStarted })
+}
+if ($apks.Count -eq 0) {
+    Say "✗ 编译说成功了，但 $outDir 里找不到本次构建的产物（预期 $($expected -join ' / ')）。" 'Red'
     exit 1
 }
 
@@ -119,6 +141,14 @@ Say ''
 Say '==================== 拿去装机 ====================' 'Green'
 foreach ($apk in $apks) {
     Say ("  {0}  ({1:N1} MB)" -f $apk.FullName, ($apk.Length / 1MB)) 'White'
+}
+$stale = @($allApks | Where-Object { $apks -notcontains $_ })
+if ($stale.Count -gt 0) {
+    Say ''
+    Say ("⚠ 目录里还有 $($stale.Count) 个**不是这次构建**的旧包（别拿错，也建议删掉）：") 'Yellow'
+    foreach ($s in $stale) {
+        Say ("    {0}  {1:yyyy-MM-dd HH:mm}  {2:N1} MB" -f $s.Name, $s.LastWriteTime, ($s.Length / 1MB)) 'DarkGray'
+    }
 }
 
 # adb 在哪：优先 PATH，其次 ANDROID_SDK_ROOT / LOCALAPPDATA 下的 platform-tools
@@ -155,7 +185,9 @@ if (-not $NoReport) {
             $aapt = Join-Path $buildTools 'aapt2.exe'
             if (Test-Path $aapt) {
                 $badging = & $aapt dump badging $apk.FullName 2>&1
-                foreach ($pattern in @('^package:', '^sdkVersion', '^targetSdkVersion', '^native-code')) {
+                # ⚠ aapt2 37 打的是 `minSdkVersion:'24'`，不是 `sdkVersion:` —— 只写
+                # `^sdkVersion` 时这一行会**静默不出现**（下面第 1 条还拿它当判据）。
+                foreach ($pattern in @('^package:', '^minSdkVersion', '^sdkVersion', '^targetSdkVersion', '^native-code')) {
                     $line = $badging | Where-Object { $_ -match $pattern } | Select-Object -First 1
                     if ($line) { Say ("    " + $line.Trim()) 'Gray' }
                 }
@@ -175,8 +207,8 @@ if (-not $NoReport) {
 
     Say ''
     Say '装不上时按这个顺序对：' 'Cyan'
-    Say '  1. 手机系统版本 < 上面那个 sdkVersion → 装不了（minSdk 目前是 24 = Android 7）。' 'Gray'
-    Say '  2. ABI 对不上 → 用全量包（不加 -Split），它三个 ABI 都带。' 'Gray'
+    Say '  1. 手机系统版本 < 上面那个 minSdkVersion → 装不了（minSdk 目前是 24 = Android 7）。' 'Gray'
+    Say '  2. 这个脚本只出 **arm64-v8a**；`armeabi-v7a` / `x86_64` 设备装不了（本项目不再出全量包）。' 'Gray'
     Say '  3. 「应用未安装 / 与已有应用签名不一致」→ 手机上先**卸载**旧的那份再装' 'Gray'
     Say '     （release 用的是 debug 签名，换一台机器编出来签名就不同）。' 'Gray'
     Say '  4. 「解析软件包时出现问题」→ APK 在传输途中被改坏了：重新拷（别走会二次打包的渠道），' 'Gray'
@@ -186,8 +218,9 @@ if (-not $NoReport) {
     Say '     **adb 链路半路断了**，不是包坏了。先 `adb devices -l` 看状态：offline / unauthorized' 'Gray'
     Say '     就按上面「adb 链路」那一节处理（解锁屏幕点允许 → 撤销授权重插 → 换线换口）。' 'Gray'
     Say '  7. ★ `INSTALL_FAILED_VERSION_DOWNGRADE`：手机上那份的 versionCode 比这份大。' 'Gray'
-    Say '     实测：分架构包是 1001 / 2001 / 4001，而全量包（含 flutter run 装的 debug 包）是 1 ——' 'Gray'
-    Say '     装过一次分架构包之后，`flutter run` 就再也覆盖不回去了。先卸载：' 'Gray'
+    Say '     本脚本出的 debug / release 都带统一开关，versionCode 一律是 1；' 'Gray'
+    Say '     但如果手机上装过**更早**（2026-09-28 之前）的分架构包，它可能是 1001 / 2001 / 4001 ——' 'Gray'
+    Say '     那种情况 `-r` 救不了，先卸载：' 'Gray'
     Say '       adb uninstall com.example.viewer' 'DarkGray'
 }
 
@@ -244,17 +277,8 @@ if ($Install) {
                 Say ''
                 Say "  看到 $($online.Count) 台设备，用第一台 $serial（要用别的就加 ANDROID_SERIAL=…）。" 'Yellow'
             }
-            # 装哪个：分架构包优先挑 **这台手机自己的 ABI**（小得多，传输更不容易断）
-            $abi = (& $adb -s $serial shell getprop ro.product.cpu.abi 2>&1 | Select-Object -First 1).Trim()
-            if ($abi) { Say ("  手机 ABI：" + $abi) 'Gray' }
+            # 现在只有一份 arm64-v8a 包：直接装它（多架构包的 ABI 挑选逻辑已随全量包一起删掉）。
             $targets = $apks
-            if ($apks.Count -gt 1 -and $abi -match '^(arm64-v8a|armeabi-v7a|x86_64)$') {
-                $matched = @($apks | Where-Object { $_.Name -like "*$abi*" })
-                if ($matched.Count -gt 0) {
-                    Say ("  → 只装匹配 $abi 的那一份（" + $matched[0].Name + "）") 'Gray'
-                    $targets = $matched
-                }
-            }
 
             foreach ($apk in $targets) {
                 Say ''
@@ -304,12 +328,12 @@ if ($Install) {
                         Say '      · 顺手关掉「应用安装管控 / 纯净模式 / 安全守护」里的拦截。' 'Gray'
                     }
                     if ($text -match 'INSTALL_FAILED_INSUFFICIENT_STORAGE') {
-                        Say '    手机存储不够了。debug 包实测 172MB，安装时还要再占一份临时空间 ——' 'Yellow'
-                        Say '    用 -Split 出的 arm64 包（~29MB）能省一大截。' 'Gray'
+                        Say '    手机存储不够了。本脚本出的 arm64 release 包约 30MB，安装时还要再占一份临时空间 ——' 'Yellow'
+                        Say '    先清掉手机上的旧包再装。' 'Gray'
                     }
-                    # ④ 降级：手机里那份 versionCode 更大（分架构包是 1001/2001/4001，
-                    #    全量包与 flutter run 的 debug 包都是 1）。这条**必须卸载再装**，
-                    #    `-r` 救不了 —— 实测现场就是这样（装过一次分架构包之后 flutter run 全红）。
+                    # ④ 降级：手机里那份 versionCode 更大。本脚本的包都带统一开关（一律 1），
+                    #    只有"2026-09-28 之前装过的分架构包"才会是 1001/2001/4001。
+                    #    这条**必须卸载再装**，`-r` 救不了。
                     if ($text -match 'INSTALL_FAILED_VERSION_DOWNGRADE|Downgrade detected') {
                         Say '    手机上那份的 versionCode 比这份大，覆盖不了（不是签名问题）。' 'Yellow'
                         Say '    → 自动执行 adb uninstall com.example.viewer 再装一次…' 'Yellow'

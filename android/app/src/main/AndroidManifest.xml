@@ -3,6 +3,13 @@
          ⚠ 与它配套的是 `res/xml/network_security_config.xml`（明文 http 策略）——
          少了那一条，真机上 `HttpURLConnection` 会被系统拦下，见那份文件的头注。 -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- 局域网桌面发现：收 UDP 广播时持有 multicast lock（否则 Wi-Fi 省电会丢广播） -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
+    <!-- 「保存到手机相册」：Android 10+ 走 MediaStore 不需要它；9 及以下写公共目录要。
+         maxSdkVersion 让它只出现在老系统上（新系统不申请存储权限）。 -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28"/>
     <!-- 相机：只有「扫桌面上的二维码」那条路用（扫码配对，docs/pairing-design.md §9）。
          ⚠ 它是**可选能力**：授权被拒 / 设备没相机时，配对仍然要走通 ——
          界面上那条「手输地址 + 敲 6 位码」的路一个字都不能少（android:required="false"

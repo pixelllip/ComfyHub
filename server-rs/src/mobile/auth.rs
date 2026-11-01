@@ -1107,7 +1107,10 @@ async fn pair_start(
     // 扫码通道在"出码"这一刻还不知道是哪台手机 —— 设备三个字段都留空
     push_session(unix, &secret, "", "", None)?;
 
-    let urls: Vec<Value> = crate::mobile::net_urls::collect(state.port())
+    // 二维码是给**另一台设备**扫的：回环地址在手机上指向手机自己，拿它去配对
+    // 必然 `Connection refused`。所以这里只发非回环地址，且局域网优先
+    // （`pairing_candidates` 是正确性过滤，不是排序偏好）。
+    let urls: Vec<Value> = crate::mobile::net_urls::collect_for_pairing(state.port())
         .into_iter()
         .map(|e| Value::String(e.url))
         .collect();

@@ -210,6 +210,21 @@ class _SwipePageViewState extends State<SwipePageView>
   }
 }
 
+/// 把 FAB 抬到 [PageBar] 之上（移动端底部的「新建 / 上传」会盖住翻页按钮）。
+///
+/// Scaffold 只把 FAB 定位在**屏幕**底部，不知道 body 里还有一条 PageBar；
+/// 于是 360dp 上「上传产物」/「新建提示词」的右半边正好压在「下一页」上
+/// （2026-10-31 用户反馈）。这里用一圈透明 padding 把 FAB 的布局盒整体抬高，
+/// 比在 PageBar 上留右内边距更稳：翻页按钮仍然居中，FAB 也不会跑到内容上面。
+const double kFabPageBarLift = 56;
+
+Widget liftFabAbovePageBar(Widget fab, {bool lift = true}) => lift
+    ? Padding(
+        padding: const EdgeInsets.only(bottom: kFabPageBarLift),
+        child: fab,
+      )
+    : fab;
+
 /// 分页条：`‹ 第 3 / 12 页 ›`，与 [SwipePageView] 配套。
 ///
 /// 抽出来是因为画廊与预设页原本各写了一份**逐字相同**的实现；统一之后

@@ -1,9 +1,12 @@
+import 'dart:io' show File;
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/api_client.dart';
 import '../core/formatting.dart';
+import '../core/media_cache.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
 import 'common.dart';
@@ -52,7 +55,11 @@ class MediaThumb extends StatelessWidget {
     final image = media.kind == MediaKind.image
         ? store.api.absolute(media.thumbUrl ?? media.fileUrl)
         : null;
-    final thumb = image ?? (media.kind == MediaKind.video ? store.api.mediaPosterUrl(media.id) : null);
+    final thumb =
+        image ??
+        (media.kind == MediaKind.video
+            ? store.api.mediaPosterUrl(media.id)
+            : null);
 
     return Material(
       color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
@@ -97,7 +104,10 @@ class MediaThumb extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Colors.black.withValues(alpha: 0.55), Colors.transparent],
+                    colors: [
+                      Colors.black.withValues(alpha: 0.55),
+                      Colors.transparent,
+                    ],
                   ),
                 ),
               ),
@@ -113,7 +123,10 @@ class MediaThumb extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.bottomCenter,
                     end: Alignment.topCenter,
-                    colors: [Colors.black.withValues(alpha: 0.72), Colors.transparent],
+                    colors: [
+                      Colors.black.withValues(alpha: 0.72),
+                      Colors.transparent,
+                    ],
                   ),
                 ),
               ),
@@ -170,7 +183,9 @@ class MediaThumb extends StatelessWidget {
                         fontSize: 11.5,
                         fontWeight: FontWeight.w500,
                         letterSpacing: 0,
-                        shadows: const [Shadow(blurRadius: 3, color: Colors.black87)],
+                        shadows: const [
+                          Shadow(blurRadius: 3, color: Colors.black87),
+                        ],
                       ),
                     ),
                 ],
@@ -185,7 +200,9 @@ class MediaThumb extends StatelessWidget {
                     color: Colors.black.withValues(alpha: 0.42),
                   ),
                   child: Icon(
-                    media.kind == MediaKind.video ? Icons.play_arrow_rounded : Icons.graphic_eq,
+                    media.kind == MediaKind.video
+                        ? Icons.play_arrow_rounded
+                        : Icons.graphic_eq,
                     color: Colors.white,
                     size: 26,
                   ),
@@ -200,7 +217,9 @@ class MediaThumb extends StatelessWidget {
                   height: 22,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: selected ? theme.colorScheme.primary : Colors.black45,
+                    color: selected
+                        ? theme.colorScheme.primary
+                        : Colors.black45,
                     border: Border.all(color: Colors.white70, width: 1.5),
                   ),
                   child: selected
@@ -224,16 +243,14 @@ class MediaThumb extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final dpr = MediaQuery.devicePixelRatioOf(context);
-        return Image.network(
-          url,
-          fit: BoxFit.cover,
-          // 缩略图用不上 mipmap：medium 会为每张纹理额外生成并采样 mipmap，
-          // 缩略图这种"小于等于绘制尺寸"的场景 low（双线性）就够了
-          filterQuality: FilterQuality.low,
+        return CachedThumbImage(
+          mediaId: media.id,
+          url: url,
+          api: context.read<LibraryStore>().api,
           cacheWidth: _decodeWidth(constraints, dpr),
-          loadingBuilder: (context, child, progress) =>
-              progress == null ? child : _loadingPlaceholder(theme),
-          errorBuilder: (context, error, stack) => _placeholder(theme),
+          theme: theme,
+          loading: () => _loadingPlaceholder(theme),
+          failed: () => _placeholder(theme),
         );
       },
     );
@@ -242,8 +259,12 @@ class MediaThumb extends StatelessWidget {
   /// 需要解码成多少设备像素宽（长宽比由引擎保持）。抽出来是为了能被测试直接钉住。
   int _decodeWidth(BoxConstraints constraints, double dpr) {
     final fallbackEdge = kThumbMaxDecodeEdge.toDouble();
-    final cellW = constraints.hasBoundedWidth ? constraints.maxWidth : fallbackEdge;
-    final cellH = constraints.hasBoundedHeight ? constraints.maxHeight : fallbackEdge;
+    final cellW = constraints.hasBoundedWidth
+        ? constraints.maxWidth
+        : fallbackEdge;
+    final cellH = constraints.hasBoundedHeight
+        ? constraints.maxHeight
+        : fallbackEdge;
     final naturalW = media.width;
     final naturalH = media.height;
 
@@ -270,12 +291,12 @@ class MediaThumb extends StatelessWidget {
   /// "压在 surface 底色上（而不是压在图片上）的白图标" —— 浅色主题下
   /// 白底白图标 = 什么都看不见（2026-10-13 加浅色主题时抓到的）。
   Widget _loadingPlaceholder(ThemeData theme) => Center(
-        child: Icon(
-          Icons.image_outlined,
-          size: 30,
-          color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.35),
-        ),
-      );
+    child: Icon(
+      Icons.image_outlined,
+      size: 30,
+      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.35),
+    ),
+  );
 
   Widget _placeholder(ThemeData theme) {
     if (media.kind == MediaKind.audio) {
@@ -293,7 +314,11 @@ class MediaThumb extends StatelessWidget {
         child: Center(
           // 同上：音频那层渐变是"主色系压在 surface 上"，浅色下会变很亮 ——
           // 图标跟着 `onSurfaceVariant` 走，两套主题都读得清。
-          child: Icon(Icons.graphic_eq, size: 40, color: theme.colorScheme.onSurfaceVariant),
+          child: Icon(
+            Icons.graphic_eq,
+            size: 40,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
       );
     }
@@ -307,8 +332,102 @@ class MediaThumb extends StatelessWidget {
         ),
       ),
       child: Center(
-        child: Icon(Icons.movie_outlined, size: 34, color: theme.colorScheme.onSurfaceVariant),
+        child: Icon(
+          Icons.movie_outlined,
+          size: 34,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
       ),
+    );
+  }
+}
+
+/// 缩略图：**先显示网络图，缓存下载完成后换成磁盘图**。
+///
+/// 这样"看过的格子"在桌面离线时仍然有图，而首次滑动不会为了等缓存而空着。
+/// 缓存失败不改变界面（继续用网络图），也不报错打扰用户。
+class CachedThumbImage extends StatefulWidget {
+  const CachedThumbImage({
+    super.key,
+    required this.mediaId,
+    required this.url,
+    required this.api,
+    required this.cacheWidth,
+    required this.theme,
+    required this.loading,
+    required this.failed,
+  });
+
+  final int mediaId;
+  final String url;
+  final ApiClient api;
+  final int cacheWidth;
+  final ThemeData theme;
+  final Widget Function() loading;
+  final Widget Function() failed;
+
+  @override
+  State<CachedThumbImage> createState() => CachedThumbImageState();
+}
+
+class CachedThumbImageState extends State<CachedThumbImage> {
+  File? _file;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(covariant CachedThumbImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.mediaId != widget.mediaId || oldWidget.url != widget.url) {
+      _file = null;
+      _resolve();
+    }
+  }
+
+  Future<void> _resolve() async {
+    if (!MediaCache.instance.enabled) return;
+    final cached = await MediaCache.instance.cached(
+      widget.mediaId,
+      thumb: true,
+    );
+    if (!mounted) return;
+    if (cached != null) {
+      setState(() => _file = cached);
+      return;
+    }
+    final file = await MediaCache.instance.ensure(
+      widget.mediaId,
+      url: widget.url,
+      thumb: true,
+      api: widget.api,
+    );
+    if (mounted && file != null) setState(() => _file = file);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final file = _file;
+    if (file != null) {
+      return Image.file(
+        file,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.low,
+        cacheWidth: widget.cacheWidth,
+        errorBuilder: (context, error, stack) => widget.failed(),
+      );
+    }
+    return Image.network(
+      widget.url,
+      fit: BoxFit.cover,
+      filterQuality: FilterQuality.low,
+      cacheWidth: widget.cacheWidth,
+      loadingBuilder: (context, child, progress) =>
+          progress == null ? child : widget.loading(),
+      errorBuilder: (context, error, stack) => widget.failed(),
     );
   }
 }

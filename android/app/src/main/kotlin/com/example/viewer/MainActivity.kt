@@ -23,10 +23,17 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
 
     private var bridge: HarnessBridge? = null
+    private var discovery: DiscoveryBridge? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         bridge = HarnessBridge(applicationContext).also {
+            it.attach(flutterEngine.dartExecutor.binaryMessenger)
+        }
+        // 产物保存到系统相册（这条通道不走 harness：它要 Activity 的权限与 MediaStore）
+        MediaSaver.attach(flutterEngine.dartExecutor.binaryMessenger, this)
+        // 局域网桌面发现（UDP 4039；与 Rust mobile::discovery 配套）
+        discovery = DiscoveryBridge(applicationContext).also {
             it.attach(flutterEngine.dartExecutor.binaryMessenger)
         }
         // 平台主题色（`lib/core/system_accent.dart`）：Android 12+ 从系统资源里读
@@ -56,6 +63,8 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         bridge?.detach()
         bridge = null
+        discovery?.detach()
+        discovery = null
         super.onDestroy()
     }
 

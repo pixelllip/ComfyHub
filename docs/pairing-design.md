@@ -149,9 +149,27 @@ Tailscale 的 `100.x.x.x`（`remote-access-security.md` §3.1），而手机只�
 
 - 地址怎么算：遍历网卡取"非回环、非 link-local、已启用"的地址；端口用后端**实际监听**的那个
   （端口是自动挑的、记在 `.run\api.json` 里，`Config.kt:82-90`）—— **不许硬编码 8080**。
+- **回环绝不能进二维码**：`127.0.0.1` 在手机上指向手机自己，扫码 + 验证码全对也只会
+  `Connection refused`（2026-10-31 真机现场）。`net_urls::pairing_candidates` 负责过滤，
+  手机端 `PairingPayload.preferredUrl` 再兜一层（旧桌面可能仍发回环）。
 - 逐个试的代价：多几次 `GET /api/health`（回环豁免、无令牌也通的最轻端点）。
 - **副作用**：二维码含多个内网 IP + ticket，等于把内网拓扑给"看到二维码的人"看一眼。
   可接受（他就站在你旁边，那台机器本来就监听在局域网上），但**别把它投到大屏上**。
+
+### 4.4.1 换网络后怎么找回桌面（2026-10-31）
+
+二维码只负责**首次配对**；配对成功后设备令牌一直在手机 Keystore 与桌面的
+`auth.pairing.devices[]` 里，换 Wi-Fi / DHCP 换 IP / 后端换端口都**不该重配**。
+
+- **桌面广播**：`server-rs/src/mobile/discovery.rs` 每 3 秒往各网卡广播地址发
+  `{"service":"comfyhub","v":1,"port":<实际端口>}`（UDP **4039**）；只在
+  `COMFYHUB_ALLOW_REMOTE=1`（听 `0.0.0.0`）时启动。
+- **手机发现**：`android/.../DiscoveryBridge.kt` 绑 UDP 4039 收包，用**源地址**拼
+  `http://<source>:<port>`；Flutter 侧 `lib/core/lan_discovery.dart`。
+- **切换纪律**：只有"当前地址探测不通、新地址带**已有令牌**探测通过"才
+  `adoptAutoBaseUrl`；**不重新配对、不轮换令牌**。当前地址还通就一个字都不动。
+- **边界**：UDP 广播只覆盖同一广播域；跨网段 / Wi-Fi 客户端隔离时仍要走
+  Tailscale（MagicDNS 名字 + 固定端口）或手填地址。
 
 ### 4.5 二维码内容（版本化）
 

@@ -29,7 +29,8 @@ void main() {
     // 会悄悄影响后面的断言。
     SharedPreferences.setMockInitialValues({});
     root = Directory.systemTemp.createTempSync('comfyhub-port-dart');
-    Directory('${root.path}${Platform.pathSeparator}.run').createSync(recursive: true);
+    Directory('${root.path}${Platform.pathSeparator}.run')
+        .createSync(recursive: true);
   });
 
   tearDown(() {
@@ -37,9 +38,29 @@ void main() {
     if (root.existsSync()) root.deleteSync(recursive: true);
   });
 
+  test('筛选栏默认值：手机收起、桌面展开（用户 2026-10-31）', () async {
+    SettingsStore.portFileRootsOverride = [root.path];
+    addTearDown(() => SettingsStore.mobileFiltersDefaultOverride = null);
+
+    SettingsStore.mobileFiltersDefaultOverride = true;
+    SharedPreferences.setMockInitialValues({});
+    final phone = SettingsStore();
+    await phone.load();
+    expect(phone.galleryFiltersCollapsed, isTrue);
+    expect(phone.promptFiltersCollapsed, isTrue);
+
+    SettingsStore.mobileFiltersDefaultOverride = false;
+    SharedPreferences.setMockInitialValues({});
+    final desktop = SettingsStore();
+    await desktop.load();
+    expect(desktop.galleryFiltersCollapsed, isFalse);
+    expect(desktop.promptFiltersCollapsed, isFalse);
+  });
+
   void writePortFile(Map<String, Object?> payload) {
-    File('${root.path}${Platform.pathSeparator}.run${Platform.pathSeparator}api.json')
-        .writeAsStringSync(jsonEncode(payload));
+    File(
+      '${root.path}${Platform.pathSeparator}.run${Platform.pathSeparator}api.json',
+    ).writeAsStringSync(jsonEncode(payload));
   }
 
   test('有端口记录时按它拼地址（这是"端口自动"能成立的关键一步）', () async {
@@ -69,8 +90,9 @@ void main() {
     expect(none.baseUrl, 'http://127.0.0.1:8080', reason: '连记录都没有时用出厂默认');
 
     // 半截 JSON（写入过程中被读到）
-    File('${root.path}${Platform.pathSeparator}.run${Platform.pathSeparator}api.json')
-        .writeAsStringSync('{"port": 51');
+    File(
+      '${root.path}${Platform.pathSeparator}.run${Platform.pathSeparator}api.json',
+    ).writeAsStringSync('{"port": 51');
     final broken = SettingsStore();
     await broken.load();
     expect(broken.baseUrl, 'http://127.0.0.1:8080');
@@ -118,7 +140,9 @@ void main() {
     expect(await settings.refreshBaseUrlFromPortFile(), isFalse);
 
     // 记录消失（后端停了）：保持原样，绝不猜
-    File('${root.path}${Platform.pathSeparator}.run${Platform.pathSeparator}api.json').deleteSync();
+    File(
+      '${root.path}${Platform.pathSeparator}.run${Platform.pathSeparator}api.json',
+    ).deleteSync();
     expect(await settings.refreshBaseUrlFromPortFile(), isFalse);
     expect(settings.baseUrl, 'http://127.0.0.1:50002');
   });
@@ -175,20 +199,29 @@ void main() {
     });
     // 先确认这份"脏偏好"真的喂进去了（读法与应用一致：**不带 `flutter.`**），
     // 否则下面的断言只是因为"偏好是空的"而通过 —— 那是假绿灯。
-    expect((await SharedPreferences.getInstance()).getString('comfyhub.baseUrl'),
-        'http://127.0.0.1:2175');
+    expect(
+      (await SharedPreferences.getInstance()).getString('comfyhub.baseUrl'),
+      'http://127.0.0.1:2175',
+    );
 
     final settings = SettingsStore();
     await settings.load();
 
-    expect(settings.baseUrl, 'http://127.0.0.1:51234', reason: '以 .run\\api.json 为准');
+    expect(
+      settings.baseUrl,
+      'http://127.0.0.1:51234',
+      reason: '以 .run\\api.json 为准',
+    );
     expect(settings.baseUrlIsAuto, isTrue);
     final prefs = await SharedPreferences.getInstance();
     // ⚠ 读的时候用**不带 `flutter.`** 的键（`getString` 自己会加前缀，见
     // shared_preferences 的 `_prefix`）—— 直接拿带前缀的串去读会读到 null，
     // 断言就变成了"永远为真"的假绿灯。
-    expect(prefs.getString('comfyhub.baseUrl'), isNull,
-        reason: '那条脏偏好要顺手清掉，免得下一个人以为"用户手填过"');
+    expect(
+      prefs.getString('comfyhub.baseUrl'),
+      isNull,
+      reason: '那条脏偏好要顺手清掉，免得下一个人以为"用户手填过"',
+    );
   });
 
   test('「保存并测试连接」把框里的本机地址存回去 → 仍然跟着端口记录走', () async {
@@ -230,15 +263,21 @@ void main() {
         'localhost:9959',
       ],
     });
-    expect((await SharedPreferences.getInstance()).getStringList('comfyhub.baseUrlHistory'),
-        hasLength(4), reason: '脏历史要真的喂进去');
+    expect(
+      (await SharedPreferences.getInstance()).getStringList(
+        'comfyhub.baseUrlHistory',
+      ),
+      hasLength(4),
+      reason: '脏历史要真的喂进去',
+    );
 
     final settings = SettingsStore();
     await settings.load();
 
     expect(settings.baseUrlHistory, ['http://192.168.1.9:8080']);
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getStringList('comfyhub.baseUrlHistory'),
-        ['http://192.168.1.9:8080'], reason: '洗干净的也要写回磁盘，别留着那串点不通的');
+    expect(prefs.getStringList('comfyhub.baseUrlHistory'), [
+      'http://192.168.1.9:8080',
+    ], reason: '洗干净的也要写回磁盘，别留着那串点不通的');
   });
 }

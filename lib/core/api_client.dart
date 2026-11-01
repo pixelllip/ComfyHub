@@ -105,6 +105,25 @@ class ApiClient {
     }
   }
 
+  /// 下载产物原件 / 缩略图（手机端缓存用）。
+  ///
+  /// 与 `_get` 共用**同一个令牌来源**：媒体 URL 在远程访问时同样要过配对闸门。
+  /// 非 2xx 一律抛 [ApiException]，**不返回半截字节**（缓存层据此不落盘）。
+  Future<List<int>> downloadBytes(String url) async {
+    try {
+      final res = await _client.get(
+        Uri.parse(absolute(url)),
+        headers: _authHeaders(),
+      );
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        return res.bodyBytes;
+      }
+      throw ApiException(res.statusCode, '下载产物失败（HTTP ${res.statusCode}）');
+    } on SocketException catch (e) {
+      throw ApiException(0, '无法连接后端 $baseUrl', e.message);
+    }
+  }
+
   Future<dynamic> _send(String method, String path, Object? body) async {
     final req = http.Request(method, _uri(path))
       ..headers.addAll(_jsonHeaders)

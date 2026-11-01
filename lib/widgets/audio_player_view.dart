@@ -1,12 +1,22 @@
+import 'dart:io' show File;
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 
 /// 音频播放器（audioplayers，Windows / Android / iOS 都支持）。
 class AudioPlayerView extends StatefulWidget {
   final String url;
+
+  /// 本机缓存原件；有它就不走网络（手机离线 / 远程访问都靠它）。
+  final File? file;
   final String title;
 
-  const AudioPlayerView({super.key, required this.url, this.title = ''});
+  const AudioPlayerView({
+    super.key,
+    required this.url,
+    this.file,
+    this.title = '',
+  });
 
   @override
   State<AudioPlayerView> createState() => _AudioPlayerViewState();
@@ -56,7 +66,11 @@ class _AudioPlayerViewState extends State<AudioPlayerView> {
       } else if (_position > Duration.zero && _position < _duration) {
         await _player.resume();
       } else {
-        await _player.play(UrlSource(widget.url));
+        await _player.play(
+          widget.file != null
+              ? DeviceFileSource(widget.file!.path)
+              : UrlSource(widget.url),
+        );
       }
     } catch (e) {
       setState(() => _error = '$e');
@@ -98,7 +112,11 @@ class _AudioPlayerViewState extends State<AudioPlayerView> {
           if (widget.title.isNotEmpty) ...[
             Row(
               children: [
-                Icon(Icons.graphic_eq, size: 26, color: theme.colorScheme.primary),
+                Icon(
+                  Icons.graphic_eq,
+                  size: 26,
+                  color: theme.colorScheme.primary,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -137,13 +155,15 @@ class _AudioPlayerViewState extends State<AudioPlayerView> {
                     onChanged: total == 0
                         ? null
                         : (v) => setState(() {
-                              _dragging = true;
-                              _dragValue = v;
-                            }),
+                            _dragging = true;
+                            _dragValue = v;
+                          }),
                     onChangeEnd: total == 0
                         ? null
                         : (v) async {
-                            await _player.seek(Duration(milliseconds: v.toInt()));
+                            await _player.seek(
+                              Duration(milliseconds: v.toInt()),
+                            );
                             setState(() {
                               _dragging = false;
                               _position = Duration(milliseconds: v.toInt());

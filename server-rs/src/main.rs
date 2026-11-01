@@ -528,6 +528,11 @@ async fn main() {
     // （不能拿请求里的 Host —— 那是客户端走过的路，手机问的恰恰是"还有别的没有"）。
     state.set_port(actual_port);
 
+    // 只监听回环时不要广播：手机连不上，广播只会让发现列表出现一个死地址。
+    if args.host == "0.0.0.0" {
+        comfyhub_server_rs::mobile::discovery::spawn(actual_port);
+    }
+
     // **端口只有一个真源**：后端绑好之后写进 `<项目根>\.run\api.json`，
     // 脚本（`scripts\api-port.ps1`）、App（`settings_store.dart`）与 ComfyUI 捕获扩展都只读它。
     // ⚠ 这是"把 `server.ps1` 指向 Rust"的硬前提：不写它，App 会对着旧端口等 90 秒。

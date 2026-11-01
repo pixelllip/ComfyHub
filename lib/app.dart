@@ -1,12 +1,16 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:ui' show AppExitResponse;
 
-import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
+import 'package:flutter/foundation.dart'
+    show debugPrint, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
 import 'core/backend_launcher.dart';
+import 'core/lan_discovery.dart';
+import 'core/pairing_token.dart';
 import 'core/settings_store.dart';
 import 'core/sync_endpoints.dart';
 import 'core/system_accent.dart';
@@ -36,7 +40,11 @@ class ComfyHubApp extends StatelessWidget {
   final SettingsStore settings;
   final BackendLauncher launcher;
 
-  const ComfyHubApp({super.key, required this.settings, required this.launcher});
+  const ComfyHubApp({
+    super.key,
+    required this.settings,
+    required this.launcher,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -108,8 +116,7 @@ class ComfyHubApp extends StatelessWidget {
   /// `ThemeData` 是常量数据，同一种种子构建一次用到底即可。
   static final Map<String, ThemeData> _themeCache = <String, ThemeData>{};
 
-  ThemeData _themeFor(Brightness brightness) =>
-      themeFor(settings, brightness);
+  ThemeData _themeFor(Brightness brightness) => themeFor(settings, brightness);
 
   /// **外观的唯一拼装点**（静态是为了让用例直接验"系统强调色开 / 关时
   /// 到底用了哪个种子色"，不用把整个 `HomeShell` 拉起来）。
@@ -144,7 +151,6 @@ class HomeShell extends StatefulWidget {
   @override
   State<HomeShell> createState() => _HomeShellState();
 }
-
 
 /// 启动闸门：先把后端拉起来，再进主界面。
 ///
@@ -200,10 +206,17 @@ class _StartupView extends StatelessWidget {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     else
-                      Icon(Icons.error_outline, size: 20, color: theme.colorScheme.error),
+                      Icon(
+                        Icons.error_outline,
+                        size: 20,
+                        color: theme.colorScheme.error,
+                      ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: Text(launcher.message, style: theme.textTheme.titleMedium),
+                      child: Text(
+                        launcher.message,
+                        style: theme.textTheme.titleMedium,
+                      ),
                     ),
                   ],
                 ),
@@ -211,7 +224,9 @@ class _StartupView extends StatelessWidget {
                 Text(
                   '正在自动准备本地服务：数据库（本地 SQLite 文件）→ Rust 后端。'
                   '后端由 App 自己直接启动，不再需要 PowerShell。',
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 if (tail.isNotEmpty)
@@ -220,7 +235,8 @@ class _StartupView extends StatelessWidget {
                     width: double.infinity,
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+                      color: theme.colorScheme.surfaceContainerHighest
+                          .withValues(alpha: 0.35),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: theme.dividerColor),
                     ),
@@ -265,7 +281,9 @@ class _StartupView extends StatelessWidget {
                   const SizedBox(height: 4),
                   Text(
                     '项目目录: ${launcher.projectRoot}',
-                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
                   ),
                 ],
               ],
@@ -318,6 +336,8 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     _lifecycle?.dispose();
+    _discovery?.cancel();
+    _discovery = null;
     _launcher?.removeListener(_onLauncherChanged);
     super.dispose();
   }
@@ -396,6 +416,10 @@ class _HomeShellState extends State<HomeShell> {
   /// 界面上看不到就只剩工具文案与 doctor 会说，用户（和模型）只能靠猜（2026-09-29 用户 bug）。
   ConfinementInfo? _confinement;
 
+  /// 局域网桌面发现（Android）。换 Wi-Fi / 桌面换 IP 时靠它自动改地址；
+  /// **不改配对令牌** —— 只把 baseUrl 换成探测通过的那一条。
+  StreamSubscription<Uri>? _discovery;
+
   static const _destinations = [
     _Dest('AI 工作台', Icons.auto_awesome_outlined, Icons.auto_awesome),
     _Dest('画廊', Icons.photo_library_outlined, Icons.photo_library),
@@ -418,7 +442,9 @@ class _HomeShellState extends State<HomeShell> {
   late final List<Widget> _pages = [
     const _ContentNavigator(child: AiHomePage()),
     const _ContentNavigator(child: GalleryPage()),
-    _ContentNavigator(child: PromptsPage(onSendToWorkspace: _handoffToWorkspace)),
+    _ContentNavigator(
+      child: PromptsPage(onSendToWorkspace: _handoffToWorkspace),
+    ),
     const _ContentNavigator(child: TagsPage()),
     const _ContentNavigator(child: SettingsPage()),
   ];
@@ -494,14 +520,63 @@ class _HomeShellState extends State<HomeShell> {
       return;
     }
     final settings = context.read<SettingsStore>();
-    if (!settings.baseUrlIsAuto) return;
-    final picked = await autoPickBaseUrl(
-      autoUrl: SettingsStore.defaultBaseUrl(),
-      current: settings.baseUrl,
-      history: settings.baseUrlHistory,
+    if (settings.baseUrlIsAuto) {
+      final picked = await autoPickBaseUrl(
+        autoUrl: SettingsStore.defaultBaseUrl(),
+        current: settings.baseUrl,
+        history: settings.baseUrlHistory,
+      );
+      if (picked.baseUrl != null) {
+        await settings.adoptAutoBaseUrl(picked.baseUrl!);
+      }
+    }
+    // 手填过地址也要挂发现：换 Wi-Fi / 桌面换 IP 后，旧地址会失效，
+    // 但**配对令牌仍然有效** —— 发现到新地址只改 baseUrl，不重新配对。
+    _startDiscovery(settings);
+  }
+
+  bool _discoveryBusy = false;
+
+  /// 听桌面广播；只接受**当前令牌探测通过**的那一条，绝不让广播改掉令牌。
+  void _startDiscovery(SettingsStore settings) {
+    if (_discovery != null || !LanDiscovery.supported) return;
+    _discovery = LanDiscovery.endpoints.listen(
+      (uri) async {
+        if (!mounted || _discoveryBusy) return;
+        final token = PairingTokenCache.value;
+        // 没配对 = 还没资格自动切地址；先让用户扫码 / 手填。
+        if (token == null || token.isEmpty) return;
+        _discoveryBusy = true;
+        try {
+          // 当前地址还能用就不动它 —— 发现是"救失联"，不是"每次广播都重连"。
+          final current = await probeSyncEndpoint(
+            settings.baseUrl,
+            token: token,
+            timeout: const Duration(milliseconds: 1500),
+          );
+          if (current.ok || !mounted) return;
+          final probe = await probeSyncEndpoint(
+            uri.toString(),
+            token: token,
+            timeout: const Duration(seconds: 2),
+          );
+          if (!probe.ok || !mounted) return;
+          final changed = await settings.adoptAutoBaseUrl(uri.toString());
+          if (!changed || !mounted) return;
+          // 地址换了，规则工件 / 同步也要按新地址重来一次；令牌仍是同一把。
+          await context.read<AiWorkspaceStore>().reloadPairingToken();
+          if (mounted) context.read<LibraryStore>().refreshAll();
+        } catch (_) {
+          // 发现失败不能影响任何页面：下一次广播还会再来
+        } finally {
+          _discoveryBusy = false;
+        }
+      },
+      onError: (Object error, StackTrace stack) {
+        // UDP 被系统回收 / 端口被占：静默降级成"手填地址"，不弹错误。
+        debugPrint('[discovery] $error');
+      },
     );
-    if (picked.baseUrl == null) return;
-    await settings.adoptAutoBaseUrl(picked.baseUrl!);
   }
 
   /// 只问一次。问不到（后端还没起 / 老版本没有这个端点）就当"不知道"：
@@ -663,10 +738,8 @@ class _ContentNavigator extends StatelessWidget {
     // 两种形态由**同一个宽度阈值**决定（[kWideLayoutMinWidth]），别在别处再写一个数字。
     if (MediaQuery.sizeOf(context).width < kWideLayoutMinWidth) return child;
     return Navigator(
-      onGenerateRoute: (settings) => MaterialPageRoute<void>(
-        settings: settings,
-        builder: (_) => child,
-      ),
+      onGenerateRoute: (settings) =>
+          MaterialPageRoute<void>(settings: settings, builder: (_) => child),
     );
   }
 }
@@ -727,7 +800,14 @@ class _BrandMark extends StatelessWidget {
         ),
       ),
       child: const Center(
-        child: Text('C', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 20)),
+        child: Text(
+          'C',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+            fontSize: 20,
+          ),
+        ),
       ),
     );
   }
