@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 11 及以下的备份规则（Android 12+ 用 `data_extraction_rules.xml`）。
+  排除清单**只有一条**：产物缓存目录 —— 见那份文件的注释。
+-->
+<full-backup-content>
+    <exclude domain="file" path="media-cache/" />
+</full-backup-content>

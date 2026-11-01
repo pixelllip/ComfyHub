@@ -124,6 +124,47 @@ class ApiClient {
     }
   }
 
+  /// 下载产物**直接落盘**（流式，不把整份塞进内存）。
+  ///
+  /// 为什么要有它：[downloadBytes] 会把整个响应读成 `List<int>`，而手机端缓存的原件
+  /// 可能是**几百 MB 的视频** —— 那样下载等于赌堆上限。这里 `send` 之后一段一段
+  /// 写进 [target]，内存占用只有缓冲区大小。
+  ///
+  /// 三条与 [downloadBytes] 一致的纪律：同一个令牌来源（远程访问要过配对闸门）、
+  /// 非 2xx 抛 [ApiException]、**失败不留半截文件**（调用方负责删 `.part`）。
+  ///
+  /// @return 实际落盘的字节数。
+  Future<int> downloadToFile(String url, File target) async {
+    final request = http.Request('GET', Uri.parse(absolute(url)));
+    final headers = _authHeaders();
+    if (headers != null) request.headers.addAll(headers);
+
+    final http.StreamedResponse res;
+    try {
+      res = await _client.send(request);
+    } on SocketException catch (e) {
+      throw ApiException(0, '无法连接后端 $baseUrl', e.message);
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      // 排空响应体：不读走的话连接会悬着，下一次请求可能排在它后面。
+      await res.stream.drain<void>();
+      throw ApiException(res.statusCode, '下载产物失败（HTTP ${res.statusCode}）');
+    }
+    final sink = target.openWrite();
+    try {
+      // `pipe` 结束时会把 sink 关掉；中途出错自己收尾，别留一个没关的写句柄。
+      await res.stream.pipe(sink);
+    } catch (_) {
+      try {
+        await sink.close();
+      } catch (_) {
+        // sink 已经坏掉了，忽略
+      }
+      rethrow;
+    }
+    return target.length();
+  }
+
   Future<dynamic> _send(String method, String path, Object? body) async {
     final req = http.Request(method, _uri(path))
       ..headers.addAll(_jsonHeaders)
@@ -426,6 +467,34 @@ class ApiClient {
   Future<void> deleteMedia(int id) async =>
       _send('DELETE', '/api/media/$id', null);
 
+  /// **导出产物**（2026-10-27）：把原件 + 绑定的工作流 / 提示词信息写进 [dir]。
+  ///
+  /// 三种范围**互斥**（与后端优先级一致：`mediaIds` > `collectionId` > `favorites`）：
+  /// * [mediaIds] 非空 = 只导这几条（画廊多选）；
+  /// * [collectionId] = 只导这个集合；
+  /// * [favorites] = 只导收藏；
+  /// * 都不给 = 全部。
+  ///
+  /// ⚠ 后端只允许**本机回环**调用（它会往任意绝对路径写文件），手机端不要接这颗按钮。
+  Future<MediaExportReport> exportMedia({
+    required String dir,
+    List<int>? mediaIds,
+    int? collectionId,
+    bool favorites = false,
+    bool includeWorkflow = true,
+    bool includeApiWorkflow = true,
+  }) async {
+    final json = await _send('POST', '/api/media/export', {
+      'dir': dir,
+      'mediaIds': ?mediaIds,
+      'collectionId': ?collectionId,
+      if (favorites) 'favorites': true,
+      'includeWorkflow': includeWorkflow,
+      'includeApiWorkflow': includeApiWorkflow,
+    });
+    return MediaExportReport.fromJson(Map<String, dynamic>.from(json as Map));
+  }
+
   /// 这条产物**在磁盘上的绝对路径**。
   ///
   /// 「复制文件本身」（写 `CF_HDROP`）要它。⚠ **不要**在前端自己拼
@@ -677,24 +746,21 @@ class ApiClient {
   // -------------------------------------------------------------------------
 
   /// 引擎装没装、守护进程 / WebUI 在哪个端口。
-  Future<TrainEngineStatus> trainStatus() async =>
-      TrainEngineStatus.fromJson(
-        Map<String, dynamic>.from(await _get('/api/train/status') as Map),
-      );
+  Future<TrainEngineStatus> trainStatus() async => TrainEngineStatus.fromJson(
+    Map<String, dynamic>.from(await _get('/api/train/status') as Map),
+  );
 
   /// 起守护进程 + WebUI（幂等）。
-  Future<TrainEngineStatus> trainStart() async =>
-      TrainEngineStatus.fromJson(
-        Map<String, dynamic>.from(
-          await _send('POST', '/api/train/start', const {}) as Map,
-        ),
-      );
+  Future<TrainEngineStatus> trainStart() async => TrainEngineStatus.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/train/start', const {}) as Map,
+    ),
+  );
 
   /// 停 WebUI + 守护进程；**不会 kill 正在跑的训练**（等它跑完）。
-  Future<TrainEngineStatus> trainStop() async =>
-      TrainEngineStatus.fromJson(
-        Map<String, dynamic>.from(
-          await _send('POST', '/api/train/stop', const {}) as Map,
-        ),
-      );
+  Future<TrainEngineStatus> trainStop() async => TrainEngineStatus.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/train/stop', const {}) as Map,
+    ),
+  );
 }

@@ -59,9 +59,13 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
   `system_accent1_500`；读不到就回默认紫）。页面与卡片的底色**始终保持白 / 灰**，
   强调色只用在按钮、开关、选中态这些组件上（设置页可关）。见 `lib/core/system_accent.dart`。
 - **手机端产物缓存 / 保存**：画廊格子与详情页看过的缩略图、原件默认落到
-  `<app-support>/media-cache/`（不是整库复制，避免几十 GB）；详情菜单「保存到手机相册」
+  `<app-support>/media-cache/`（不是整库复制，避免几十 GB）。**有上限**：缩略图 150MB、
+  原件默认 1.5GB（设置页「产物缓存」可调 512MB~4GB），超了按**最久未用**淘汰到 80%；
+  超过 200MB 的视频 / 音频**不在打开详情时自动下**（点「保存到手机相册」才下）。
+  设置页能看占用、也能一键清理。详情菜单「保存到手机相册」
   把**这一条**交给 Android MediaStore（图片 / 视频 / 音频分别进 Pictures / Movies / Music）。
-  见 `lib/core/media_cache.dart`、`android/app/src/main/kotlin/com/example/viewer/MediaSaver.kt`。
+  见 `lib/core/media_cache.dart`、`lib/widgets/media_cache_card.dart`、
+  `android/app/src/main/kotlin/com/example/viewer/MediaSaver.kt`。
 - **换网络自动找回桌面**：桌面在局域网里 UDP 4039 广播当前端口，已配对手机收到后
   用**原配对令牌**探一次；只有当前地址不通才切换，**不重扫二维码、不轮换令牌**。
   跨网段 / AP 隔离仍走 Tailscale 或手填地址。见 `server-rs/src/mobile/discovery.rs`、
@@ -119,9 +123,11 @@ Rust 后端（单文件 exe，SQLite 单文件）──► ComfyUI（127.0.0.1:8
 skill `card-writer`（角色卡 600+ token 全身上下；画风卡 100~200 token 起，复杂画风按覆盖清单写长）。
 
 **工作台怎么用**（`r2i-prompt` skill）：输入区底行的 `+` 菜单里选「角色卡 / 画风卡…」
-（或直接输入 `@`）→ 选一张卡 → 输入框上方出现 chip；发送时两张卡被拼成
-`[STYLE SPEC]` / `[CHARACTER CARD]` 两段**逐字正文**放在用户要求前面，模型按
-skill `r2i-prompt` 扩写成一整段提示词。再选同类会替换，不是叠加。
+（或直接输入 `@`）→ 点卡选中，面板**不收起**，可以接着点第二、第三张角色卡（多角色同框）；
+再点同一张 = 取消，画风卡仍然只有一张（选新的替换）。输入框上方每张卡一个 chip，发送时
+每张角色卡各拼一段 `[CHARACTER CARD]`、画风卡一段 `[STYLE SPEC]`（**逐字正文**，按选中顺序）
+放在用户要求前面，模型按 skill `r2i-prompt` 扩写成一整段提示词。AI 给的成品提示词一律放进
+Markdown 代码块（系统提示第 24 条，围栏语言 `text`），聊天气泡里可以一键复制。
 
 为什么是结构化的一张表而不是长期记忆：记忆是"一行一条文本"、有 100 条上限、超限**直接报错**，
 而卡片要按名字幂等地反复覆盖。

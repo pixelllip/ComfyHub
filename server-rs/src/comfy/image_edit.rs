@@ -17,8 +17,8 @@
 //!
 //! `mode="subject"` 只做三件事：确认人物图在 `input` 里、按颜色**估一个定位器剪影**
 //! （算 bbox / 支撑摆放 / 报诊断）、把 `personFilename` 回给调用方。真正的合成 alpha 由
-//! **工作流里的抠图节点**现算（`easy imageRemBg` + `refine_foreground=true`，见
-//! `comfyui\workflows\comfyhub_paste_person_matte_anima.json`）。
+//! **工作流里的抠图节点**现算（`easy imageRemBg` + `refine_foreground=true`；仓库不再随包带
+//! 模板工作流，这份链在用户自己的贴人工作流里，节点 id 从 `apiGraph` 现读）。
 //!
 //! ⛔ 以前还有一档"用颜色剪影**当合成遮罩** + Rust 收边/反混/去溢色/现算 ring"（`matteSource="color"`）。
 //! 活实例实测：贴出来的人物**轮廓外一圈青绿**（剪影外那条带 39.6% 像素偏绿，比底图多 +34.8pp）、
@@ -87,7 +87,8 @@ fn reject_removed_args(args: &Value) -> Result<(), ToolFailure> {
                 format!(
                     "参数 `{removed}` 已删除（2026-09-27：颜色抠图那一档整档删掉了，抠图交给工作流）。\
                      贴人物图用 mode=\"subject\" + subjectFilename，再照返回的 hint 用 \
-                     `comfyhub_paste_person_matte_anima.json` 提交；实例上没有抠图模型时先指引用户下载 \
+                     **用户自己的贴人工作流**（含 `easy imageRemBg` + `refine_foreground=true`）提交；\
+                     实例上没有抠图模型时先指引用户下载 \
                      （`comfy_get_status` 的 `mattingModels.usable`）。"
                 ),
             ));
@@ -677,9 +678,9 @@ pub fn use_attachment(
 ///  - `mode="rect" / "ellipse" / "full"`：照 `region` 画一张**几何**遮罩并写盘 —— 纯提示词重绘
 ///    （换背景 / 只改一块地方）用它；
 ///  - `mode="subject"`：贴人物图。这一档**不写遮罩**：合成用的 alpha 由工作流里的抠图节点现算
-///    （`easy imageRemBg` + `refine_foreground=true`，见
-///    `comfyui\workflows\comfyhub_paste_person_matte_anima.json`），本工具只回
-///    `personFilename`（拿它覆盖工作流的 `20.image`）。颜色剪影**只剩定位器用途**
+///    （`easy imageRemBg` + `refine_foreground=true`；这份链在**用户自己的贴人工作流**里，
+///    仓库不再随包带模板，id 从 `apiGraph` 现读），本工具只回
+///    `personFilename`（拿它覆盖工作流里人物那个 `LoadImage.image`）。颜色剪影**只剩定位器用途**
 ///    （算 bbox 供摆放、报 `subjectRatio` / `background` 供诊断），不参与画面。
 ///
 /// ⛔ **"颜色抠图当合成遮罩"那一档已经删除**（2026-09-27 用户拍板"放弃纯rust编辑，删除它"）。
@@ -949,11 +950,11 @@ pub fn make_mask_with(
         out["hint"] = json!(format!(
             "`mode=\"subject\"` **不写遮罩**：合成用的 alpha 由工作流里的抠图节点现算，\
              所以**不要**覆盖任何 LoadImageMask（那份工作流里也没有）。\
-             ① comfy_load_workflow(path=\"<项目根>\\comfyui\\workflows\\comfyhub_paste_person_matte_anima.json\")；\
-             ② 覆盖 10.image（底图）、20.image=\"{person}\"、\
-             11.width={w}、11.height={h}、21.width={w}、21.height={h}、\
-             15.text（只写**人物外面那一圈**该出现什么，写背景）、17.seed；\
-             ③ 17.denoise 用 0.3~0.45（只融接缝；0 = 纯合成、一个像素都不改）。\
+             ① comfy_load_workflow(path=<用户自己的贴人工作流>) —— 要有 `easy imageRemBg` + \
+             `refine_foreground=true` 那条链；仓库不再随包带模板，用户没有就让他先在 ComfyUI 里存一份；\
+             ② 从 apiGraph 现读 id 后覆盖：底图 LoadImage、人物 LoadImage=\"{person}\"、\
+             两个 ImageScale 的 width={w} / height={h}、正面提示词（只写**人物外面那一圈**该出现什么，写背景）、seed；\
+             ③ 采样器的 denoise 用 0.3~0.45（只融接缝；0 = 纯合成、一个像素都不改）。\
              ⚠ 那份工作流要求 ComfyUI 里有抠图模型（models\\rembg\\BEN2_Base.pth 或 RMBG-1.4.pth，\
              先用 comfy_get_status 的 mattingModels 查）——没有就如实告诉用户下哪个，别让它静默下载。",
             person = person_filename.unwrap_or_default(),

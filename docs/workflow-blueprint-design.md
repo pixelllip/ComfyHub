@@ -124,14 +124,12 @@
 
 ### 4.3 修完之后
 
-| 模板 | 节点 | 转换结果 | 配方 | 体检 |
-| --- | --- | --- | --- | --- |
-| `comfyhub_t2i_krea2.json` | 15 | 15 个 API 节点；广播补 5 条线 | `task=t2i`，`complete=true` | 0 错误 / 3 警告 / 1 提示 |
-| `comfyhub_i2i_krea2.json` | 29 | 27 个 API 节点（2 个直通开关被穿透）；广播补 5 条线 | `task=i2i`，`complete=true` | 0 错误 / 4 警告 / 1 提示 |
-
-活体回归：`server-rs/tests/krea2_templates.rs`（`--ignored`，直接拿仓库里那两份模板跑，要求**缺口为零**）。
-结构说明与可覆盖键写在 skill `krea-2` §6 —— 但那两份**只是回归夹具 / 结构样例**；
-按用户 2026-10-21 的要求，Krea 2 的出图起点必须是**用户自己从 ComfyUI 里另存出来的 krea2 工作流**。
+> **2026-10-28：这些模板已随"仓库不再随包带模板工作流"一起删除**（模板一律用各模型在
+> ComfyUI 模板库里的标准工作流，或用户自己存的那份）。原来那张对照表记的是当时两份
+> `comfyhub_*_krea2.json` 的实测结果 —— 结论（直通开关被穿透、广播补线、动态下拉框带点）
+> 仍然成立，只是不再有随包的夹具文件；`server-rs/tests/krea2_templates.rs` 也一并删了。
+> 结构说明与可覆盖键不再写在 skill `krea-2` §6（那一节同样删了）：Krea 2 的起点**只有**
+> 用户自己从 ComfyUI 里另存出来的 krea2 工作流 / 官方模板。
 
 ---
 
@@ -222,6 +220,6 @@
 | 广播改写（含零输出桩） | `workflow_frontend/tests.rs` + `workflow_convert/tests.rs::注册成零输出桩的广播节点照样等价改写` |
 | 直通开关 / 动态下拉框 | `workflow_convert/tests.rs::rgthree_直通开关把下游接到真正的上游` / `动态下拉框的子项要跟着主项一起进图` |
 | "缺口只算必填" | `workflow_convert/tests.rs` 与 `workflow_blueprint/tests.rs::有object_info时空插口归转换那一遍说_且只算必填` |
-| 两份真模板转换零缺口 | `server-rs/tests/krea2_templates.rs`（`--ignored`，要 ComfyUI 在跑） |
+| 真模板转换零缺口（**已下线**） | 原来靠 `server-rs/tests/krea2_templates.rs`（`--ignored`）；2026-10-28 起仓库不再随包带模板，这条随之删除 —— 现在验的是 `workflow_convert` / `workflow_frontend` 的构造型用例 + 用户自己那份工作流的活体抽查 |
 | AI 侧的接线体检工具 | `tests/api_test/tools.rs` 两条（不依赖 ComfyUI：指向不存在节点的线要点到 `2.vae`；路径准入 / 三选一缺参数都要说人话）+ `tools/tools/tests.rs` 的出厂档 + `tests/api_test/ai_run_kit.rs` 的工具清单 |
 | 端点 | `POST /api/workflow/blueprint` / `POST /api/workflow/save`（界面上走通即覆盖；活体抽查见 §4.3） |

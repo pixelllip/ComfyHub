@@ -329,7 +329,7 @@ class Handler(BaseHTTPRequestHandler):
                            seed=None):
         """按**工作流自己的节点表**算 overrides（真实模型也是先看清图里有哪些节点）。
 
-        刻意不写死节点 id：`comfyhub_inpaint_anima.json` 与 `..._krea2.json` 的编号不同，
+        刻意不写死节点 id：不同工作流（用户自己的 / 官方模板）编号不同，
         写死一个就只测得到那一份。判据是 class_type（ComfyUI 提交时也只认它）。
 
         `person`（阶段一的人物图文件名）给了就填进**第二个** LoadImage、并且由调用方把

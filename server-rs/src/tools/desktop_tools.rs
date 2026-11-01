@@ -224,7 +224,7 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
     DesktopToolSpec {
         name: "comfy_make_mask",
         description: r#"生成一张**局部重绘用的遮罩**放进 ComfyUI 的 input 目录（**白 = 要重新生成的地方**）。两种需求用同一个工作流，只是遮罩反过来：**保背景换人物** = 人物那块 region；**换背景保人物** = 同一个 region 再加 `invert=true`。给了 baseFilename（input 目录里的底图）就照它尺寸生成，**推荐**这么用。region 支持 full / left / right / top / bottom / center / person，或归一化的 "x,y,w,h"（例如 "0.3,0.05,0.4,0.9"）；`feather` 羽化边缘（把人物贴进新背景时 8~24 明显更自然）。**框是估的**：工具会回 approximate=true 与它实际用的框，不准就报新坐标重做 —— 不要指望它做分割，也不要让用户去 ComfyUI 里手画。
-**贴人物图（`20.image`）用 `mode="subject"`**：这一档**不写遮罩** —— 合成用的 alpha 由工作流里的抠图节点现算（`easy imageRemBg` + `refine_foreground=true`）。它只回 `personFilename`（就是 `20.image` 该填的那张，可能是摆放后的新名字）与几个**定位器**诊断（`subjectRatio` / `background` 只说明"我们估的人物在哪、多大"，**不影响画面**）。`subjectFilename` 给**人物图**的文件名；**别给 region**（`region` 在这一档只有裁切作用）。配 `comfyhub_paste_person_matte_anima.json` 用，**不要**覆盖任何 LoadImageMask。⚠ 那份工作流要求 ComfyUI 里有抠图模型（`models\rembg\BEN2_Base.pth` 1.1GB 或 `RMBG-1.4.pth` 169MB）：**先用 `comfy_get_status` 的 `mattingModels` 查、缺了就告诉用户下哪个**，别让它静默下载。摆放开 `scale` / `x` / `y`（人物像素与定位掩码一起搬，返回里会给新的文件名）。"#,
+**贴人物图（人物那个 `LoadImage`）用 `mode="subject"`**：这一档**不写遮罩** —— 合成用的 alpha 由工作流里的抠图节点现算（`easy imageRemBg` + `refine_foreground=true`）。它只回 `personFilename`（就是人物 LoadImage 该填的那张，可能是摆放后的新名字）与几个**定位器**诊断（`subjectRatio` / `background` 只说明"我们估的人物在哪、多大"，**不影响画面**）。`subjectFilename` 给**人物图**的文件名；**别给 region**（`region` 在这一档只有裁切作用）。配**用户自己的贴人工作流**（含上面那条抠图链；仓库不再随包带模板）用，**不要**覆盖任何 LoadImageMask。⚠ 那份工作流要求 ComfyUI 里有抠图模型（`models\rembg\BEN2_Base.pth` 1.1GB 或 `RMBG-1.4.pth` 169MB）：**先用 `comfy_get_status` 的 `mattingModels` 查、缺了就告诉用户下哪个**，别让它静默下载。摆放开 `scale` / `x` / `y`（人物像素与定位掩码一起搬，返回里会给新的文件名）。"#,
         // ⚠ 2026-09-27：颜色抠图那一档（`matteSource="color"` + `ring`/`shrink`/`edgeBand`/
         //   `light*`）整档删除（用户拍板"放弃纯rust编辑，删除它"），描述与 schema 一起收窄 ——
         //   不补这一刀的话，模型会照着旧描述去传 `matteSource`，而工具会明确拒绝它。
@@ -319,6 +319,18 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         scope: "DESKTOP",
         access: "ASK",
         mutating: true,
+    },
+    DesktopToolSpec {
+        name: "comfy_view_outputs",
+        description: r#"**看最近产物**：列出画廊里最近的图片产物，并把图附给模型。用户说"看看我刚在 ComfyUI 里跑的图 / 这张哪里不对 / 帮我评估一下效果"时用它 —— **不要让用户再把图发一遍**。
+两种用法：不传 `mediaId` 就取最近的 N 条（`limit` 默认 3、上限 8）；传 `mediaId`（`comfy_submit` 结果里的 mediaIds、画廊里的 id）就只看那一条。
+能看图的模型会自动收到缩图（长边 ≤1024、原图尺寸写在正文里）；看不到图的模型只会拿到元数据，**不许凭文件名编画面内容**。
+自动捕获有延迟：刚跑完的那张可能还没入库 —— 结果为空时稍等几秒再调用，或请用户从画廊拖图进对话。
+**只读**：不改库、不复制文件、不碰 ComfyUI。"#,
+        input_schema: r#"{"type":"object","properties":{"limit":{"type":"integer","description":"最多看几张（默认 3，上限 8；媒体 id 用 mediaId）"},"mediaId":{"type":"integer","description":"可选：只看这一条（画廊 id / 工具结果里的 mediaIds）"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
     },
     DesktopToolSpec {
         name: "danbooru_lookup",

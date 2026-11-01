@@ -528,7 +528,10 @@ fn captured_loras(raw: &str) -> Option<Vec<crate::workflow::graph_parse::LoraRef
 pub const PROMPT_BACKFILL_KEY: &str = "capture.prompts.backfill";
 
 /// 当前回填规则版本。以后**再改提取规则**就 +1（启动时会重扫一遍空正向的行）。
-pub const PROMPT_BACKFILL_VERSION: i64 = 1;
+///
+/// 2（2026-10-30）：`CLIPTextEncode.text` 改成连线的图（正文在上游
+/// `PrimitiveStringMultiline.value`）以前解析成空 —— 这类行也要重扫一遍。
+pub const PROMPT_BACKFILL_VERSION: i64 = 2;
 
 fn prompt_backfill_marker(conn: &rusqlite::Connection) -> rusqlite::Result<Option<i64>> {
     use rusqlite::OptionalExtension;
@@ -561,21 +564,23 @@ pub fn run_prompt_backfill(conn: &rusqlite::Connection) -> rusqlite::Result<usiz
     Ok(updated)
 }
 
-/// 把**运行时才生成**的正向提示词补进 `prompts.positive_prompt`（只补空的那一批）。
+/// 把**当时没解析出来**的正向提示词补进 `prompts.positive_prompt`（只补空的那一批）。
 ///
 /// # 为什么需要它
 ///
-/// Krea2 r2i 的 `TextGenerate`（本地看图 / 扩写模型）在跑的时候才写出最终提示词，
-/// 节点图里只有 system prompt 和空槽。2026-10-25 之前入库的那些行因此 `positive_prompt = ''`
-/// （现场：`test_00901_.png`，画廊详情里提示词一直空着）。
-/// 那次运行的 `/history` 条目（`capture_runs.raw`）里其实**有**最终文本
-/// （`outputs["55"].text`），只是入库时没读它。这里按同一套判据补一遍。
+/// 1. Krea2 r2i 的 `TextGenerate`（本地看图 / 扩写模型）在跑的时候才写出最终提示词，
+///    节点图里只有 system prompt 和空槽。2026-10-25 之前入库的那些行因此
+///    `positive_prompt = ''`（现场：`test_00901_.png`）。那次运行的 `/history` 条目
+///    （`capture_runs.raw`）里其实**有**最终文本（`outputs["55"].text`），这里补一遍。
+/// 2. 编码器 `text` 是连线的图（正文在上游 `PrimitiveStringMultiline.value`）以前也被
+///    解析成空（现场：`test_01357_.png`，2026-10-30 修）。入库规则改了之后，用同一份
+///    graph 重新解析一次就能补上 —— 与"新捕获入库"走**同一个** [`graph_parse::parse`]。
 ///
 /// # 四条纪律
 ///
 /// 1. **只碰空正向的行**（`TRIM(positive_prompt) = ''`）—— 用户手写或已经解析出来的一个字都不改；
-/// 2. **只认能证明"喂给了正向条件"的文本**（[`graph_parse::final_positive`]），找不到就跳过，
-///    绝不拿旁边的备注 / 负向顶替；
+/// 2. **只认能证明"喂给了正向条件"的文本**：先看 [`graph_parse::final_positive`] 的运行时输出，
+///    再退回 [`graph_parse::parse`] 的解析结果；找不到就跳过，绝不拿旁边的备注 / 负向顶替；
 /// 3. **解析失败不清空、不报错**：脏 raw 直接跳过（老库里有截断的）；
 /// 4. `UPDATE` 会顶 `updated_at`，所以同一行不会被反复改写，同步账本也会记一笔。
 pub fn backfill_runtime_prompts(conn: &rusqlite::Connection) -> rusqlite::Result<usize> {
@@ -605,7 +610,11 @@ pub fn backfill_runtime_prompts(conn: &rusqlite::Connection) -> rusqlite::Result
         let history = crate::comfy::capture::history::parse(&doc);
         let Some(graph) = history.graph.as_ref().and_then(Value::as_object) else { continue };
         let outputs = doc.get("outputs").and_then(Value::as_object);
-        let Some(text) = crate::workflow::graph_parse::final_positive(Some(graph), outputs) else {
+        let text = crate::workflow::graph_parse::final_positive(Some(graph), outputs).or_else(|| {
+            let positive = crate::workflow::graph_parse::parse(Some(graph)).positive;
+            (!positive.trim().is_empty()).then_some(positive)
+        });
+        let Some(text) = text else {
             continue;
         };
         let text = text.trim();

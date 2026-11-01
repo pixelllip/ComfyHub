@@ -25,8 +25,8 @@ version: 1
 按这个顺序，前一步没有再走下一步：
 
 1. `comfy_find_workflow(query="krea2" / "moss" / "anima" …)` —— 先搜库，库里没有会自动带上
-   本机 ComfyUI 已保存的 `localWorkflows`（带 `path` / `inLibrary`）。
-2. `comfy_list_workflows(query=…)` —— 直接列本机 `workflows` 目录；可按文件名过滤。
+   用户 ComfyUI 已保存的 `localWorkflows`（带 `path` / `inLibrary`）。
+2. `comfy_list_workflows(query=…)` —— 直接列用户 ComfyUI 的 `workflows` 目录；可按文件名过滤。
 3. `comfy_list_recipes(task="t2i" / "i2i" / "edit" / "inpaint" …)` —— 已经学过的骨架；
    它给 `skeletonHash` / 模型槽位 / 参数旋钮，适合"换个底模，但骨架不变"。
 
@@ -70,7 +70,7 @@ version: 1
 1. `comfy_load_workflow(path=…, includeGraph=true)` → 拿 `promptId` 与 `apiGraph`
    （**可覆盖键从 `apiGraph` 里读**，不要凭记忆写 `34.text`）。
 2. `comfy_check_inputs(promptId=…, graph=…)` 看还缺什么（参考图 / 遮罩 / 必填连线）。
-3. `comfy_fit_workflow(graph=…)` 看本机模型齐不齐；缺件按它给的说明让用户处理，
+3. `comfy_fit_workflow(graph=…)` 看用户机器上模型齐不齐；缺件按它给的说明让用户处理，
    **不要改文件名硬凑，也不要代下**。
 4. `comfy_submit(promptId=…, overrides={"节点id.输入名": 值})`；只改用户要求改的，
    `seed` / 分辨率 / steps 没要求就不动。
@@ -113,7 +113,7 @@ version: 1
    - 后端会把最终稿写进**正面** `CLIPTextEncode.text`，并把 `TextGenerate` 这一支
      **从这次提交的图里摘掉**（节点 + 指向它的显示节点 + 只喂它的上游）。
      只断线不够：ComfyUI 校验的是整张 prompt，留在图里的 `TextGenerate` 仍会被查类名 /
-     动态下拉框（本机没装那个节点包就整份报错）。
+     动态下拉框（用户没装那个节点包就整份报错）。
    - 返回里 `positivePromptApplied` / `textGenerateBypassed` 是证据；没有就别声称改好了。
 4. 如果正面文本编码器本身是**字面量**（没有连线），也可以直接 `overrides={"<id>.text": …}`；
    `positivePrompt` 同样能用（它会重写那个控件）。

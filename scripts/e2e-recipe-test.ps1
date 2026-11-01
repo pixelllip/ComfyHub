@@ -7,7 +7,7 @@
     落地的东西是三条工具 + 四条端点（设计见 docs/workflow-recipe-design.md）。这个脚本把那条闭环
     用**真 HTTP + 真库副本 + 真工作流文件**走一遍：
 
-      1. 学一份**项目自带的 API 格式**工作流       —— 零转换，必须 complete=true
+      1. 学一份**API 格式**工作流（`-ApiWorkflow` 指定） —— 零转换，必须 complete=true
       2. 幂等                                     —— 同一份文件学两次只有一行、同一个 id
       3. 学库里的提示词（promptId）                —— 从 capture_runs.raw 里那份 API 图学
       4. 用户真实的**界面格式**工作流（可选场景）  —— ComfyUI 在场时验"有缺口就拒学"
@@ -36,6 +36,9 @@ param(
     # 用户真实那份**界面格式**工作流（默认去 ComfyUI 的 workflows 目录找 krea2 编辑那两份）；
     # 找不到 / ComfyUI 不在跑就跳过第 4 幕（不判失败）
     [string]$UiWorkflow = '',
+    # 第 1 幕要学的那份 **API 格式**工作流。仓库不再随包带模板（2026-10-28 删除），
+    # 必须显式给一份（可以是你自己在 ComfyUI 里存的、或官方模板导出成 API 的那份）
+    [string]$ApiWorkflow = '',
     [switch]$KeepData
 )
 
@@ -175,10 +178,14 @@ try {
     }
     Write-Host "后端就绪：$base（库副本 $dbCopy）" -ForegroundColor DarkGray
 
-    # --- 1. 学一份项目自带的 API 格式工作流 -----------------------------
+    # --- 1. 学一份 API 格式工作流 --------------------------------------
     Write-Host "`n[1] 学一份 API 格式工作流（零转换，必须 complete=true）" -ForegroundColor Cyan
-    $apiFile = Join-Path $ProjectRoot 'comfyui\workflows\comfyhub_inpaint_krea2.json'
-    Assert-That '项目自带的 inpaint 工作流在' (Test-Path $apiFile) $apiFile
+    if (-not $ApiWorkflow) {
+        Write-Host "  仓库不再随包带模板工作流（2026-10-28 删除）。请用 -ApiWorkflow <path> 指定一份 API 格式工作流。" -ForegroundColor Red
+        throw '缺 -ApiWorkflow'
+    }
+    $apiFile = $ApiWorkflow
+    Assert-That '指定的 API 工作流在' (Test-Path $apiFile) $apiFile
     $learn1 = Invoke-Api -Method POST -Uri "$base/api/ai/workflow-recipes" -Body @{ path = $apiFile }
     Assert-That '学习返回 201' ($learn1.status -eq 201) "$($learn1.status) $($learn1.raw)"
     $recipe1 = $learn1.json

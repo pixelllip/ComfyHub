@@ -268,6 +268,8 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "comfy_use_media",
         "comfy_use_attachment",
         "comfy_make_mask",
+        // 看画廊产物（2026-10-29）：只读、不吃 ComfyUI 查询额度
+        "comfy_view_outputs",
         "search_prompts",
         "danbooru_lookup",
         // 体检两件（P4 第 62 步）
@@ -400,4 +402,58 @@ async fn diagnose_workflow_respects_the_read_whitelist() {
         .await
         .unwrap_err();
     assert_eq!(empty.code, "INVALID_ARGUMENT", "{}", empty.message);
+}
+
+/// `comfy_view_outputs`（2026-10-29 用户"能不能让 AI 看我直接在 comfy 运行的产物"）：
+/// 读画廊最近的图片 → 返回 `referenceImages`（执行器据此自动附图），并且在正文里给出
+/// id / 尺寸 / 关联提示词 —— **不用用户再把图发一遍**。
+///
+/// 这里只验工具层；"图真的挂进下一轮"由执行器的 `reference_attach` 那一份负责
+/// （能力判据 / 预算 / 去重都在它那里，工具不重复实现）。
+#[tokio::test]
+async fn view_outputs_returns_recent_media_as_reference_images() {
+    let state = state();
+    write_test_png(&state.media_dir().join("shot.png"), 320, 200);
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO media_assets
+                   (id, prompt_id, kind, original_name, stored_name, width, height, created_at, source)
+                 VALUES (101, 10, 'IMAGE', 'shot.png', 'shot.png', 320, 200,
+                         '2026-10-29T10:00:00.000Z', 'capture')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let out = call_tool(&state, "comfy_view_outputs", serde_json::json!({ "limit": 5 }))
+        .await
+        .unwrap();
+    // 夹具里还有一条 a.png（id=100）——两条都要列出来
+    assert_eq!(out.payload["count"], 2, "{}", out.content);
+    let refs = out.payload["referenceImages"].as_array().unwrap();
+    let shot = refs
+        .iter()
+        .find(|r| r["file"] == "shot.png")
+        .unwrap_or_else(|| panic!("新产物没进 referenceImages：{}", out.content));
+    assert_eq!(shot["label"], "产物 #101");
+    assert_eq!(shot["exists"], true);
+    assert!(shot["path"].as_str().unwrap().ends_with("shot.png"));
+    // 正文要带上关联提示词：模型看到图之后还得知道"这张是按什么提示词跑的"
+    assert!(out.content.contains("1girl, cyberpunk"), "{}", out.content);
+
+    // 指定 mediaId：只看这一条
+    let one = call_tool(&state, "comfy_view_outputs", serde_json::json!({ "mediaId": 101 }))
+        .await
+        .unwrap();
+    assert_eq!(one.payload["count"], 1);
+    assert_eq!(one.payload["items"][0]["id"], 101);
+
+    // 不存在：**空结果 + 一句下一步**，不要报成工具错误让模型反复重试
+    let none = call_tool(&state, "comfy_view_outputs", serde_json::json!({ "mediaId": 999 }))
+        .await
+        .unwrap();
+    assert_eq!(none.payload["count"], 0);
+    assert!(none.content.contains("没有"), "{}", none.content);
 }

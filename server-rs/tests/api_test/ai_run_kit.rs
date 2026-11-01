@@ -22,8 +22,8 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         ]
     );
     assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
-    // v54：comfy_load_workflow 返回 referenceImages + 执行器自动带图。
-    assert_eq!(body["promptVersion"], "v54");
+    // v57：新增 `comfy_view_outputs`（看画廊最近的产物，2026-10-29）。
+    assert_eq!(body["promptVersion"], "v57");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -321,7 +321,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（40 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（41 个），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
@@ -371,6 +371,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_sync_history",
             "comfy_use_attachment",
             "comfy_use_media",
+            // 看画廊产物（2026-10-29）：只读本机库、把图交给执行器自动附图（不吃 ComfyUI 额度）
+            "comfy_view_outputs",
             // danbooru（会把数据送出本机的工具；出厂档 allow，但受联网预算约束）
             "danbooru_lookup",
             "delete_skill",

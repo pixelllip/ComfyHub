@@ -1,0 +1,85 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux3Klein_klein_pruned_int8.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3VL4BAbliteratedComfyui_v10_full_bf16.safetensors",
+      "type": "flux3",
+      "device": "default"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["2", 0],
+      "text": "In <ref_image_0>, replace the earring with a single large openwork metal statement earring: one bold curved pendant, intricate hollow metal cutouts, layered metal wires, polished warm bronze finish, structured artistic shape, kept attached to the correct ear position on her right ear. Match the existing lighting, shadows and skin tone exactly. No pearls, no pearl beads, no scattered small beads. Keep everything else in the image completely unchanged: the same face and profile, the same braided hair, the same teal high-collar top, the same plain grey-beige background, and the same composition and framing."
+    },
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["17", 0],
+      "negative": ["17", 1],
+      "latent_image": ["17", 2],
+      "seed": 872341095762,
+      "steps": 16,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["7", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["8", 0],
+      "filename_prefix": "flux3_klein_edit_nocanvas"
+    }
+  },
+  "11": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "woman_gold_earring_teal_top_portrait.png"
+    }
+  },
+  "17": {
+    "class_type": "ReferenceMultiLatent",
+    "inputs": {
+      "positive": ["4", 0],
+      "negative": ["32", 0],
+      "vae": ["3", 0],
+      "images.image0": ["11", 0],
+      "resolution": "resize",
+      "resolution.megapixels": 1
+    }
+  },
+  "32": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": ["4", 0]
+    }
+  }
+}

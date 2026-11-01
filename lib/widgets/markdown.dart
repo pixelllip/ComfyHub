@@ -112,6 +112,212 @@ class MdRule extends MdBlock {
   const MdRule();
 }
 
+// ---------------------------------------------------------------------------
+//  硬折行的散文（模型把一整段提示词按 ~80 列折行）
+// ---------------------------------------------------------------------------
+
+/// 纯文本类语言标记 —— 只有这些块才可能被模型按列宽硬折行。
+///
+/// `python` / `json` / `diff` / `markdown` 等**一律不碰**：它们的换行有语义
+/// （缩进、结构、列表），并回去就是把代码改坏。
+const Set<String> _proseCodeLanguages = {
+  '',
+  'text',
+  'txt',
+  'plain',
+  'plaintext',
+};
+
+/// 硬折行的一行至少要多长。
+///
+/// 模型按 ~80 列折行（实测 70~91），取 60 留余量；同时这个阈值能把
+/// "一行一个标签 / 一行一句"的短行块排除掉（那种块不该被合并）。
+const int _reflowMinLine = 60;
+
+/// 行首出现这些形状 = 代码 / 列表 / 表格 / 模板，不是散文。
+final RegExp _codeishLineStart = RegExp(
+  r'^(?:[-*+]\s|\d{1,9}[.)]\s|#{1,6}\s|>|\||<\|[a-z]|\{|\}|//|/\*|```)',
+);
+
+/// 句末标点：硬折行不会正好断在句子结尾（真断了就说明是"一行一句"的排版）。
+final RegExp _sentenceEnd = RegExp(r'[.!?;:。！？；：]$');
+
+/// 这一块代码要不要**软换行**（显示用；复制仍然给原文）。
+///
+/// 判据（宁可横向滚，也不把真代码 / 排版折坏）：
+///  1. 已经并回段落的硬折行散文（`reflowed`）→ 换行；
+///  2. 不含换行的单行块 → 换行（原有行为，超过容器就折）；
+///  3. **显式声明成纯文本**（`text` / `txt` / `plain` / `plaintext`）且内容不像代码 /
+///     表格 / ASCII 排版 → 换行。
+///
+/// 为什么第 3 条要单列：模型常把一整段提示词按字段（`Hair:` / `Clothing:` …）写成
+/// ```text 里的多行长文本。那不是"硬折行"（每行是一个字段，`reflowWrappedProse`
+/// 会正确地拒绝合并），但行宽远超气泡 —— 不换行就只能横向拖，而且此前**连滚动条
+/// 都没有**（用户 2026-10-29 报的 bug）。
+///
+/// 空语言标记（裸 ```）**不在一档**：真代码常常就是不写语言，保持原来的"多行横滚"。
+bool codeBlockWraps(String code, String? language, {bool reflowed = false}) {
+  if (reflowed) return true;
+  if (!code.contains('\n')) return true;
+  final lang = (language ?? '').trim().toLowerCase();
+  if (!codeBlockProseLanguages.contains(lang)) return false;
+  return !_looksStructured(code);
+}
+
+/// 纯文本类语言标记 —— 只有这些块才可能是"一段散文被写进代码块"。
+///
+/// 与 [_proseCodeLanguages] 的差别：这里**不含空标记**。空标记留给"多行 = 代码"，
+/// 免得把没写语言的代码 / 对齐排版折坏（见 [codeBlockWraps] 第 3 条）。
+const Set<String> codeBlockProseLanguages = {
+  'text',
+  'txt',
+  'plain',
+  'plaintext',
+};
+
+/// 内容像不像"代码 / 表格 / ASCII 排版"（是的话就不能软换行）。
+///
+/// 判据与 [reflowWrappedProse] 共用一部分，但**更宽**：它只回答"能不能折"，
+/// 不回答"能不能并成一段"。
+bool _looksStructured(String code) {
+  final lines = code.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+  for (final line in lines) {
+    if (line.trim().isEmpty) continue;
+    // 缩进 / 制表符 / 连续空格 = 代码对齐或 ASCII 图
+    if (line != line.trimLeft()) return true;
+    if (line.contains('\t') || line.contains('  ')) return true;
+    final trimmed = line.trim();
+    if (_codeishLineStart.hasMatch(trimmed)) return true;
+    if (trimmed.contains('{') || trimmed.contains('}') || trimmed.contains('=>')) {
+      return true;
+    }
+    if (trimmed.endsWith(';') || trimmed.endsWith('\\')) return true;
+    // `+---+` / `====` / `~~~~` / `|---|---|` 这类框线 / 表头分隔
+    if (RegExp(r'^[-+*=~|]{2,}$').hasMatch(trimmed)) return true;
+  }
+  return false;
+}
+
+/// 把"模型按列宽硬折行的散文"重新拼回段落；不是这种块就返回 `null`（原样保留）。
+///
+/// 为什么需要：模型（DeepSeek）经常在代码块里把一整段提示词按 80 列硬折行 ——
+/// 那是正文里真实的 `\n`，不是显示换行。代码块里的 `\n` 会被原样复制走，于是
+/// "看起来只是自动换行"的提示词粘到别处变成一行一断。
+///
+/// **只在判据全部成立时动手**（宁可漏判，也不把真代码并坏）：
+///   · 语言标记是空 / `text` / `txt` / `plain` / `plaintext`；
+///   · 至少有一个段落（连续非空行）超过 1 行；
+///   · 没有缩进、制表符、连续空格（代码对齐）；
+///   · 行首不是列表 / 引用 / 表格 / 模板标记，行内没有 `{}`、`=>`；
+///   · 每个多行段落里，**除最后一行外**都 >= [_reflowMinLine] 字符、含空格（或中日韩字）；
+///   · 整段每一行都以句末标点收尾 = "一行一句"的排版，不动；只有个别行碰巧断在
+///     句号后面（硬折行正好落在句尾）不算 —— 否则会把正常提示词漏判掉。
+///
+/// 合并规则：段内单换行 → 空格（连字符 / 中日韩字两侧不加空格），段间空行保留。
+String? reflowWrappedProse(String code, String? language) {
+  final lang = (language ?? '').trim().toLowerCase();
+  if (!_proseCodeLanguages.contains(lang)) return null;
+
+  final lines = code.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+  final paragraphs = <List<String>>[];
+  var current = <String>[];
+  for (final line in lines) {
+    if (line.trim().isEmpty) {
+      if (current.isNotEmpty) {
+        paragraphs.add(current);
+        current = <String>[];
+      }
+      continue;
+    }
+    current.add(line);
+  }
+  if (current.isNotEmpty) paragraphs.add(current);
+  if (paragraphs.isEmpty) return null;
+
+  var hasWrappedParagraph = false;
+  for (final paragraph in paragraphs) {
+    var nonLast = 0;
+    var sentenceEnded = 0;
+    for (var i = 0; i < paragraph.length; i++) {
+      final line = paragraph[i];
+      final trimmed = line.trim();
+      // 缩进 / 制表符 / 连续空格：代码或对齐排版，别碰。
+      if (line != line.trimLeft()) return null;
+      if (line.contains('\t') || line.contains('  ')) return null;
+      if (_codeishLineStart.hasMatch(trimmed)) return null;
+      if (trimmed.contains('{') ||
+          trimmed.contains('}') ||
+          trimmed.contains('=>')) {
+        return null;
+      }
+      if (trimmed.endsWith(';') ||
+          trimmed.endsWith('\\') ||
+          trimmed.endsWith('{') ||
+          trimmed.endsWith('}')) {
+        return null;
+      }
+      // 段末之外的每一行都必须"像被折出来的"。
+      if (i < paragraph.length - 1) {
+        if (trimmed.length < _reflowMinLine) return null;
+        if (!_hasBreakableSpace(trimmed)) return null;
+        nonLast++;
+        if (_sentenceEnd.hasMatch(trimmed)) sentenceEnded++;
+      }
+    }
+    // 整段每一行都以句末标点收尾 = 一行一句的排版，不动。
+    if (nonLast >= 2 && sentenceEnded == nonLast) return null;
+    if (paragraph.length > 1) hasWrappedParagraph = true;
+  }
+  if (!hasWrappedParagraph) return null;
+
+  final out = StringBuffer();
+  for (var i = 0; i < paragraphs.length; i++) {
+    if (i > 0) out.write('\n\n');
+    out.write(_joinParagraph(paragraphs[i]));
+  }
+  return out.toString();
+}
+
+/// 段落内合并：默认补一个空格；连字符断词、中日韩字之间不补。
+String _joinParagraph(List<String> lines) {
+  final first = lines.first.trim();
+  final buffer = StringBuffer(first);
+  var previous = first;
+  for (var i = 1; i < lines.length; i++) {
+    final next = lines[i].trim();
+    if (next.isEmpty) continue;
+    final glue =
+        previous.endsWith('-') ||
+        (_isCjk(previous[previous.length - 1]) && _isCjk(next[0]));
+    if (!glue) buffer.write(' ');
+    buffer.write(next);
+    previous = next;
+  }
+  return buffer.toString();
+}
+
+/// 这一行里有没有"可以在折行处断开"的空白（或中日韩字）。
+bool _hasBreakableSpace(String line) {
+  if (line.contains(' ')) return true;
+  for (final rune in line.runes) {
+    if (_isCjkChar(rune)) return true;
+  }
+  return false;
+}
+
+bool _isCjk(String ch) {
+  if (ch.isEmpty) return false;
+  return _isCjkChar(ch.runes.first);
+}
+
+/// 中日韩文字 / 标点 / 假名 / 全角字符。
+bool _isCjkChar(int rune) =>
+    (rune >= 0x3040 && rune <= 0x30FF) ||
+    (rune >= 0x3400 && rune <= 0x4DBF) ||
+    (rune >= 0x4E00 && rune <= 0x9FFF) ||
+    (rune >= 0xF900 && rune <= 0xFAFF) ||
+    (rune >= 0xFF00 && rune <= 0xFFEF);
+
 /// 表格列对齐（GFM 的 `:---` / `:---:` / `---:`）。
 enum MdColumnAlign { none, left, center, right }
 

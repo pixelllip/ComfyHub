@@ -1,4 +1,4 @@
-import 'dart:io' show File;
+import 'dart:io' show File, Platform;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -16,6 +16,7 @@ import '../state/library_store.dart';
 import '../state/nsfw_store.dart';
 import '../widgets/audio_player_view.dart';
 import '../widgets/common.dart';
+import '../widgets/export_dialog.dart';
 import '../widgets/prompt_params.dart';
 import '../widgets/upload_sheet.dart';
 import '../widgets/video_view.dart';
@@ -55,6 +56,19 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   /// 当前这条的**本机缓存原件**（手机端）。`null` = 还没下完，预览继续走网络。
   File? _cachedFile;
 
+  /// 这一条**没有**在打开时自动缓存（太大，见 [kAutoCacheMaxBytes]）。
+  ///
+  /// 界面据此把菜单项改成「保存到手机相册（下载 xx MB）」—— 用户看到的不是
+  /// "怎么没下"，而是"点它才下、大概多大"。
+  bool _autoCacheSkipped = false;
+
+  /// 「保存到相册」成功、且原件很大时，记下"离开这一页时把缓存副本删掉"。
+  ///
+  /// 为什么**不立即删**：这一页可能正在用那个文件显示 / 播放（手机视频播放器
+  /// 握着句柄），当场删会让用户看到"保存成功 → 画面黑掉"。所以推迟到切换 / 返回时
+  /// （见 [_flushPendingEvict]）—— 相册里已经有一份，缓存副本纯属重复占空间。
+  int? _evictAfterSaveId;
+
   /// 当前这一条所属**集合**的成员 id（按时间升序）。
   ///
   /// 用户 2026-10-11："产物对应的工作流参数大体相同、只有一点点微调，完全可以放进同一个页面…
@@ -68,6 +82,23 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void dispose() {
+    // 保存过的大原件在这里回收（此时播放器 / 图片都已经不再用那个文件了）。
+    _flushPendingEvict();
+    super.dispose();
+  }
+
+  /// 把"保存到相册之后要删的缓存副本"删掉（推迟到离开这一页时，见 [_evictAfterSaveId]）。
+  void _flushPendingEvict() {
+    final id = _evictAfterSaveId;
+    if (id == null) return;
+    _evictAfterSaveId = null;
+    MediaCache.instance
+        .remove(id, thumb: false)
+        .then<void>((_) {}, onError: (_) {});
   }
 
   @override
@@ -123,19 +154,35 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
         _media = media;
         _prompt = prompt;
         _siblings = siblings;
-        _loading = false;
         _cachedFile = null;
+        _autoCacheSkipped = false;
+        _loading = false;
       });
       // 详情页打开 = 用户要看原件：默认把它缓存到手机，之后离线也能看 / 保存。
       // 失败不打扰界面，继续用网络图（见 MediaCache.ensure）。
-      final cached = await MediaCache.instance.ensure(
-        media.id,
-        url: media.fileUrl,
-        thumb: false,
-        api: store.api,
-      );
-      if (mounted && _currentId == media.id && cached != null) {
-        setState(() => _cachedFile = cached);
+      //
+      // ⚠ **大的视频 / 音频不在这里自动下**（2026-11-01 用户要求给缓存设上限）：
+      //    一条 300MB 的视频，用户只是划过去看一眼，没理由占掉 1/5 预算 ——
+      //    要存到手机是显式动作（菜单「保存到手机相册」会自己 ensure）。
+      final already = await MediaCache.instance.cached(media.id, thumb: false);
+      if (mounted && _currentId == media.id && already != null) {
+        // 之前下过（或上一步「保存到相册」下过）：直接用它，别再走网络。
+        setState(() => _cachedFile = already);
+      } else if (MediaCache.shouldAutoCache(
+        sizeBytes: media.sizeBytes,
+        streaming: media.kind != MediaKind.image,
+      )) {
+        final cached = await MediaCache.instance.ensure(
+          media.id,
+          url: media.fileUrl,
+          thumb: false,
+          api: store.api,
+        );
+        if (mounted && _currentId == media.id && cached != null) {
+          setState(() => _cachedFile = cached);
+        }
+      } else if (mounted && _currentId == media.id) {
+        setState(() => _autoCacheSkipped = true);
       }
     } catch (e) {
       if (!mounted) return;
@@ -178,6 +225,8 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   /// 所以"图换了词还是旧的"这个中间态根本不存在。
   void _goTo(int id) {
     if (id == _currentId) return;
+    // 上一条保存过的大原件在这一刻回收（页面马上换内容，那个文件没人再用了）
+    _flushPendingEvict();
     setState(() => _currentId = id);
     _load(showSpinner: false);
   }
@@ -205,11 +254,11 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       return;
     }
     final ok = await FileClipboard.writeFiles([path]);
-    messenger.showSnackBar(SnackBar(
-      content: Text(ok
-          ? '已复制文件，可以在资源管理器里 Ctrl+V 粘贴'
-          : '复制文件失败，可以改用「复制文件地址」'),
-    ));
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(ok ? '已复制文件，可以在资源管理器里 Ctrl+V 粘贴' : '复制文件失败，可以改用「复制文件地址」'),
+      ),
+    );
   }
 
   /// 「保存到手机相册」：先确保原件已缓存，再交给原生 MediaStore。
@@ -244,6 +293,16 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
         mime: mime,
         name: media.originalName,
       );
+      // 相册里已经有一份：这条要是不小，离开页面时把缓存副本收掉（见
+      // [_evictAfterSaveId]）—— 不然同一条 300MB 的视频会在手机上存三份
+      // （桌面一份、缓存一份、相册一份）。
+      try {
+        if (await file.length() >= kEvictAfterSaveMinBytes) {
+          _evictAfterSaveId = media.id;
+        }
+      } catch (_) {
+        // 拿不到大小就算了一次性的，不回收
+      }
       messenger.showSnackBar(const SnackBar(content: Text('已保存到手机相册')));
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('保存失败：$e')));
@@ -315,238 +374,287 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     return ContextMenuScope(
       child: Builder(
         builder: (context) => Scaffold(
-      appBar: AppBar(
-        title: Text(
-          m.title.isEmpty ? m.originalName : m.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          IconButton(
-            tooltip: m.favorite ? '取消收藏' : '收藏',
-            icon: Icon(m.favorite ? Icons.star : Icons.star_border, color: m.favorite ? Colors.amber : null),
-            onPressed: () async {
-              await store.api.updateMedia(m.id, favorite: !m.favorite);
-              await _load();
-              if (mounted) store.refreshAll();
-            },
-          ),
-          AppMenuButton<String>(
-            tooltip: '更多',
-            onSelected: (v) async {
-              final messenger = ScaffoldMessenger.of(context);
-              final navigator = Navigator.of(context);
-              switch (v) {
-                case 'rename':
-                  final name = await _promptText(
-                    title: '重命名',
-                    label: '标题',
-                    initial: m.title.isEmpty ? m.originalName : m.title,
-                  );
-                  if (name != null) {
-                    await store.api.updateMedia(m.id, title: name);
-                    await _load();
-                  }
-                  break;
-                case 'notes':
-                  final notes = await _promptText(
-                    title: '编辑备注',
-                    label: '备注',
-                    initial: m.notes ?? '',
-                    multiline: true,
-                  );
-                  if (notes != null) {
-                    await store.api.updateMedia(m.id, notes: notes);
-                    await _load();
-                  }
-                  break;
-                case 'open':
-                  final uri = Uri.parse(fileUrl);
-                  if (await canLaunchUrl(uri)) {
-                    await launchUrl(uri, mode: LaunchMode.externalApplication);
-                  } else {
-                    messenger.showSnackBar(const SnackBar(content: Text('无法用系统播放器打开')));
-                  }
-                  break;
-                case 'copyUrl':
-                  await copyToClipboard(context, fileUrl, label: '文件地址');
-                  break;
-                case 'detach':
-                  // 移出之后要**重新拉一遍**：`_siblings` 少一个，左右箭头跟着收起
-                  await store.api.updateMedia(m.id, clearCollection: true);
-                  await _load();
-                  messenger.showSnackBar(const SnackBar(content: Text('已移出集合')));
-                  break;
-                case 'copyFile':
-                  await _copyFileToClipboard(store, m.id, messenger);
-                  break;
-                case 'saveToGallery':
-                  await _saveToGallery(store, m, messenger);
-                  break;
-                case 'nsfw':
-                  // 手动标记 / 取消标记（用户 bug 2026-09-20）：AI 没声明过的内容
-                  // （自己导入的、或老数据）由用户自己说了算 —— 打码只作用于标记过的条目。
-                  await store.api.updateMedia(m.id, nsfw: !m.nsfw);
+          appBar: AppBar(
+            title: Text(
+              m.title.isEmpty ? m.originalName : m.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            actions: [
+              IconButton(
+                tooltip: m.favorite ? '取消收藏' : '收藏',
+                icon: Icon(
+                  m.favorite ? Icons.star : Icons.star_border,
+                  color: m.favorite ? Colors.amber : null,
+                ),
+                onPressed: () async {
+                  await store.api.updateMedia(m.id, favorite: !m.favorite);
                   await _load();
                   if (mounted) store.refreshAll();
-                  break;
-                case 'delete':
-                  final ok = await confirmDialog(
-                    context,
-                    title: '删除产物',
-                    message: '确定删除「${m.originalName}」吗？磁盘上的文件也会被删除。',
-                  );
-                  if (ok) {
-                    await store.deleteMedia(m.id);
-                    navigator.pop();
+                },
+              ),
+              AppMenuButton<String>(
+                tooltip: '更多',
+                onSelected: (v) async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final navigator = Navigator.of(context);
+                  switch (v) {
+                    case 'rename':
+                      final name = await _promptText(
+                        title: '重命名',
+                        label: '标题',
+                        initial: m.title.isEmpty ? m.originalName : m.title,
+                      );
+                      if (name != null) {
+                        await store.api.updateMedia(m.id, title: name);
+                        await _load();
+                      }
+                      break;
+                    case 'notes':
+                      final notes = await _promptText(
+                        title: '编辑备注',
+                        label: '备注',
+                        initial: m.notes ?? '',
+                        multiline: true,
+                      );
+                      if (notes != null) {
+                        await store.api.updateMedia(m.id, notes: notes);
+                        await _load();
+                      }
+                      break;
+                    case 'open':
+                      final uri = Uri.parse(fileUrl);
+                      if (await canLaunchUrl(uri)) {
+                        await launchUrl(
+                          uri,
+                          mode: LaunchMode.externalApplication,
+                        );
+                      } else {
+                        messenger.showSnackBar(
+                          const SnackBar(content: Text('无法用系统播放器打开')),
+                        );
+                      }
+                      break;
+                    case 'copyUrl':
+                      await copyToClipboard(context, fileUrl, label: '文件地址');
+                      break;
+                    case 'detach':
+                      // 移出之后要**重新拉一遍**：`_siblings` 少一个，左右箭头跟着收起
+                      await store.api.updateMedia(m.id, clearCollection: true);
+                      await _load();
+                      messenger.showSnackBar(
+                        const SnackBar(content: Text('已移出集合')),
+                      );
+                      break;
+                    case 'copyFile':
+                      await _copyFileToClipboard(store, m.id, messenger);
+                      break;
+                    case 'export':
+                      // 单条导出：与画廊多选 / 设置页共用同一个弹窗和后端端点。
+                      await showExportDialog(context, mediaIds: [m.id]);
+                      break;
+                    case 'saveToGallery':
+                      await _saveToGallery(store, m, messenger);
+                      break;
+                    case 'nsfw':
+                      // 手动标记 / 取消标记（用户 bug 2026-09-20）：AI 没声明过的内容
+                      // （自己导入的、或老数据）由用户自己说了算 —— 打码只作用于标记过的条目。
+                      await store.api.updateMedia(m.id, nsfw: !m.nsfw);
+                      await _load();
+                      if (mounted) store.refreshAll();
+                      break;
+                    case 'delete':
+                      final ok = await confirmDialog(
+                        context,
+                        title: '删除产物',
+                        message: '确定删除「${m.originalName}」吗？磁盘上的文件也会被删除。',
+                      );
+                      if (ok) {
+                        await store.deleteMedia(m.id);
+                        navigator.pop();
+                      }
+                      break;
                   }
-                  break;
-              }
-            },
-            options: [
-              const MenuOption(value: 'rename', icon: Icons.drive_file_rename_outline, label: '重命名'),
-              const MenuOption(value: 'notes', icon: Icons.notes, label: '编辑备注'),
-              MenuOption(
-                value: 'nsfw',
-                icon: m.nsfw ? Icons.visibility : Icons.visibility_off_outlined,
-                label: m.nsfw ? '取消 NSFW 标记' : '标记为 NSFW',
-              ),
-              const MenuOption(value: 'open', icon: Icons.open_in_new, label: '用系统播放器打开'),
-              // 归类纠错（2026-10-18）：只有真在某个集合里才给这一项。
-              // 后端会同时记下"用户已移出"，所以拆出来之后回填不会再吸回去。
-              if (m.isCollection)
-                MenuOption(
-                  value: 'detach',
-                  icon: Icons.call_split,
-                  label: '移出集合（共 ${m.collectionSize} 张里的这一张）',
-                  dividerBefore: true,
-                ),
-              const MenuOption(
-                value: 'copyUrl',
-                icon: Icons.link,
-                label: '复制文件地址',
-                dividerBefore: true,
-              ),
-              // 「复制文件本身」（2026-10-18）：写 CF_HDROP，资源管理器里能直接粘出文件。
-              // 只有 Windows 有这条路（见 `lib/core/file_clipboard.dart`）。
-              if (FileClipboard.supported)
-                const MenuOption(
-                  value: 'copyFile',
-                  icon: Icons.file_copy_outlined,
-                  label: '复制文件（可在资源管理器粘贴）',
-                ),
-              // 手机端：把**这一条**存进系统相册（与桌面「导出产物」不是同一件事）。
-              if (MediaSaver.supported)
-                const MenuOption(
-                  value: 'saveToGallery',
-                  icon: Icons.download_outlined,
-                  label: '保存到手机相册',
-                  dividerBefore: true,
-                ),
-              const MenuOption(
-                value: 'delete',
-                icon: Icons.delete_outline,
-                label: '删除',
-                danger: true,
-                dividerBefore: true,
-              ),
-            ],
-            button: (context, controller, isOpen) => IconButton(
-              tooltip: '更多',
-              onPressed: () => controller.isOpen ? controller.close() : controller.open(),
-              icon: const Icon(Icons.more_vert),
-            ),
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        // 左右方向键切换同批产物（用户 2026-10-11 报的"方向键在切按钮选中状态"）。
-        //
-        // 为什么要 `CallbackShortcuts` + `Focus`（而不是靠按钮自带的焦点遍历）：
-        // 方向键默认是 Flutter 的**焦点遍历**快捷键 —— 一按就在页面上的按钮之间跳，
-        // 用户按左键看到的是"某个按钮被选中了"，而不是"上一张图"。
-        // 这里用一个**自动获得焦点**的 `Focus` 把 ←/→ 接管掉：
-        //   · 只在有上一条/下一条时响应（边界上按了什么都不做，不会误触发别的）；
-        //   · 其他键（Tab / Enter / 空格）**原样放行**，不影响键盘操作按钮。
-        child: CallbackShortcuts(
-          bindings: {
-            const SingleActivator(LogicalKeyboardKey.arrowLeft): () {
-              final id = _prevId;
-              if (id != null) _goTo(id);
-            },
-            const SingleActivator(LogicalKeyboardKey.arrowRight): () {
-              final id = _nextId;
-              if (id != null) _goTo(id);
-            },
-          },
-          child: Focus(
-            autofocus: true,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 1000;
-            final info = _InfoPanel(
-              media: m,
-              prompt: _prompt,
-              onChanged: _load,
-              onSaveAsPreset: (p) => _saveAsPreset(context, p),
-            );
-            // ⚠ **不要在这里包 `AnimatedSwitcher`**（2026-10-11 用户报的"切换时整个界面闪烁"）。
-            //
-            // 曾经把整页（`Row` / `ListView`）包进一个 key 跟着 `_currentId` 变的
-            // `AnimatedSwitcher`：那样每切一张图，**整页骨架**都要重建一遍
-            // （`LayoutBuilder` → `Row` → 两个 `Expanded` → 滚动容器…），
-            // 而旧的那份在 `layoutBuilder` 里还占着位置 —— 于是整块闪。
-            //
-            // 正确做法：**布局原地不动，只让真正变的那块（图片）自己淡入**。
-            // 过渡在 `_previewArea` 里做（见那里的 `AnimatedSwitcher`）。
-            if (wide) {
-              return Row(
-                // stretch：左栏的大图查看器要铺满整屏高度（自己处理拖动 / 缩放）
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: _previewArea(
-                      m,
-                      fileUrl,
-                      wide: true,
-                      file: _cachedFile,
-                    ),
+                },
+                options: [
+                  const MenuOption(
+                    value: 'rename',
+                    icon: Icons.drive_file_rename_outline,
+                    label: '重命名',
                   ),
-                  const VerticalDivider(width: 1),
-                  Expanded(
-                    flex: 2,
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 48),
-                      child: info,
+                  const MenuOption(
+                    value: 'notes',
+                    icon: Icons.notes,
+                    label: '编辑备注',
+                  ),
+                  MenuOption(
+                    value: 'nsfw',
+                    icon: m.nsfw
+                        ? Icons.visibility
+                        : Icons.visibility_off_outlined,
+                    label: m.nsfw ? '取消 NSFW 标记' : '标记为 NSFW',
+                  ),
+                  const MenuOption(
+                    value: 'open',
+                    icon: Icons.open_in_new,
+                    label: '用系统播放器打开',
+                  ),
+                  // 归类纠错（2026-10-18）：只有真在某个集合里才给这一项。
+                  // 后端会同时记下"用户已移出"，所以拆出来之后回填不会再吸回去。
+                  if (m.isCollection)
+                    MenuOption(
+                      value: 'detach',
+                      icon: Icons.call_split,
+                      label: '移出集合（共 ${m.collectionSize} 张里的这一张）',
+                      dividerBefore: true,
                     ),
+                  const MenuOption(
+                    value: 'copyUrl',
+                    icon: Icons.link,
+                    label: '复制文件地址',
+                    dividerBefore: true,
+                  ),
+                  // 「复制文件本身」（2026-10-18）：写 CF_HDROP，资源管理器里能直接粘出文件。
+                  // 只有 Windows 有这条路（见 `lib/core/file_clipboard.dart`）。
+                  if (FileClipboard.supported)
+                    const MenuOption(
+                      value: 'copyFile',
+                      icon: Icons.file_copy_outlined,
+                      label: '复制文件（可在资源管理器粘贴）',
+                    ),
+                  if (Platform.isWindows)
+                    const MenuOption(
+                      value: 'export',
+                      icon: Icons.save_alt,
+                      label: '导出这一条…',
+                      dividerBefore: true,
+                    ),
+                  // 手机端：把**这一条**存进系统相册（与桌面「导出产物」不是同一件事）。
+                  // 大文件在打开详情时没有自动缓存（见 `_autoCacheSkipped`），所以这里
+                  // 把"点它才会下载、大概多大"直接写在菜单上 —— 别让用户以为已经下好了。
+                  if (MediaSaver.supported)
+                    MenuOption(
+                      value: 'saveToGallery',
+                      icon: Icons.download_outlined,
+                      label: _autoCacheSkipped && m.sizeBytes > 0
+                          ? '保存到手机相册（下载 ${formatSize(m.sizeBytes)}）'
+                          : '保存到手机相册',
+                      dividerBefore: true,
+                    ),
+                  const MenuOption(
+                    value: 'delete',
+                    icon: Icons.delete_outline,
+                    label: '删除',
+                    danger: true,
+                    dividerBefore: true,
                   ),
                 ],
-              );
-            }
-            // 窄屏：图片查看器给一块固定的高度，剩下的空间留给提示词
-            final previewHeight = (constraints.maxHeight * 0.62).clamp(240.0, 620.0);
-            return ListView(
-              children: [
-                _previewArea(
-                  m,
-                  fileUrl,
-                  wide: false,
-                  height: previewHeight,
-                  file: _cachedFile,
+                button: (context, controller, isOpen) => IconButton(
+                  tooltip: '更多',
+                  onPressed: () => controller.isOpen
+                      ? controller.close()
+                      : controller.open(),
+                  icon: const Icon(Icons.more_vert),
                 ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 48),
-                  child: info,
+              ),
+            ],
+          ),
+          body: RefreshIndicator(
+            onRefresh: _load,
+            // 左右方向键切换同批产物（用户 2026-10-11 报的"方向键在切按钮选中状态"）。
+            //
+            // 为什么要 `CallbackShortcuts` + `Focus`（而不是靠按钮自带的焦点遍历）：
+            // 方向键默认是 Flutter 的**焦点遍历**快捷键 —— 一按就在页面上的按钮之间跳，
+            // 用户按左键看到的是"某个按钮被选中了"，而不是"上一张图"。
+            // 这里用一个**自动获得焦点**的 `Focus` 把 ←/→ 接管掉：
+            //   · 只在有上一条/下一条时响应（边界上按了什么都不做，不会误触发别的）；
+            //   · 其他键（Tab / Enter / 空格）**原样放行**，不影响键盘操作按钮。
+            child: CallbackShortcuts(
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.arrowLeft): () {
+                  final id = _prevId;
+                  if (id != null) _goTo(id);
+                },
+                const SingleActivator(LogicalKeyboardKey.arrowRight): () {
+                  final id = _nextId;
+                  if (id != null) _goTo(id);
+                },
+              },
+              child: Focus(
+                autofocus: true,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final wide = constraints.maxWidth >= 1000;
+                    final info = _InfoPanel(
+                      media: m,
+                      prompt: _prompt,
+                      onChanged: _load,
+                      onSaveAsPreset: (p) => _saveAsPreset(context, p),
+                    );
+                    // ⚠ **不要在这里包 `AnimatedSwitcher`**（2026-10-11 用户报的"切换时整个界面闪烁"）。
+                    //
+                    // 曾经把整页（`Row` / `ListView`）包进一个 key 跟着 `_currentId` 变的
+                    // `AnimatedSwitcher`：那样每切一张图，**整页骨架**都要重建一遍
+                    // （`LayoutBuilder` → `Row` → 两个 `Expanded` → 滚动容器…），
+                    // 而旧的那份在 `layoutBuilder` 里还占着位置 —— 于是整块闪。
+                    //
+                    // 正确做法：**布局原地不动，只让真正变的那块（图片）自己淡入**。
+                    // 过渡在 `_previewArea` 里做（见那里的 `AnimatedSwitcher`）。
+                    if (wide) {
+                      return Row(
+                        // stretch：左栏的大图查看器要铺满整屏高度（自己处理拖动 / 缩放）
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: _previewArea(
+                              m,
+                              fileUrl,
+                              wide: true,
+                              file: _cachedFile,
+                            ),
+                          ),
+                          const VerticalDivider(width: 1),
+                          Expanded(
+                            flex: 2,
+                            child: SingleChildScrollView(
+                              padding: const EdgeInsets.fromLTRB(
+                                20,
+                                16,
+                                20,
+                                48,
+                              ),
+                              child: info,
+                            ),
+                          ),
+                        ],
+                      );
+                    }
+                    // 窄屏：图片查看器给一块固定的高度，剩下的空间留给提示词
+                    final previewHeight = (constraints.maxHeight * 0.62).clamp(
+                      240.0,
+                      620.0,
+                    );
+                    return ListView(
+                      children: [
+                        _previewArea(
+                          m,
+                          fileUrl,
+                          wide: false,
+                          height: previewHeight,
+                          file: _cachedFile,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 48),
+                          child: info,
+                        ),
+                      ],
+                    );
+                  },
                 ),
-              ],
-            );
-          },
+              ),
             ),
           ),
-        ),
-      ),
         ),
       ),
     );
@@ -590,7 +698,10 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           child: Listener(
             onPointerSignal: (event) {
               if (event is PointerScrollEvent) {
-                GestureBinding.instance.pointerSignalResolver.register(event, (_) {});
+                GestureBinding.instance.pointerSignalResolver.register(
+                  event,
+                  (_) {},
+                );
               }
             },
             // **过渡只做在图片上**（用户 2026-10-11："切换时整个界面闪烁"）：
@@ -605,7 +716,8 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
               // 同时布局 —— 预览区是"由外层 `Row` 的 stretch 给高度"的，
               // 两份同时存在时其中一份会拿到 unbounded 高度（溢出/闪烁）。
               // 这里只留"新的那一份"，过渡就只剩淡入，布局始终只有一份。
-              layoutBuilder: (current, previous) => current ?? const SizedBox.shrink(),
+              layoutBuilder: (current, previous) =>
+                  current ?? const SizedBox.shrink(),
               child: KeyedSubtree(
                 key: ValueKey<int>(_currentId),
                 child: _Preview(
@@ -638,7 +750,9 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                       child: _NavArrow(
                         icon: Icons.chevron_left,
                         tooltip: '上一张（←）',
-                        onPressed: _prevId == null ? null : () => _goTo(_prevId!),
+                        onPressed: _prevId == null
+                            ? null
+                            : () => _goTo(_prevId!),
                       ),
                     ),
                   ),
@@ -650,7 +764,9 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                       child: _NavArrow(
                         icon: Icons.chevron_right,
                         tooltip: '下一张（→）',
-                        onPressed: _nextId == null ? null : () => _goTo(_nextId!),
+                        onPressed: _nextId == null
+                            ? null
+                            : () => _goTo(_nextId!),
                       ),
                     ),
                   ),
@@ -796,7 +912,10 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
             child: const Text('确定'),
@@ -920,7 +1039,11 @@ class _NavCounter extends StatelessWidget {
       ),
       child: Text(
         '$index / $total',
-        style: const TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.w600),
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 11.5,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -944,7 +1067,10 @@ class _Unsupported extends StatelessWidget {
           Text(message, style: const TextStyle(color: Colors.white70)),
           if (hint != null) ...[
             const SizedBox(height: 4),
-            Text(hint!, style: const TextStyle(color: Colors.white38, fontSize: 12)),
+            Text(
+              hint!,
+              style: const TextStyle(color: Colors.white38, fontSize: 12),
+            ),
           ],
         ],
       ),
@@ -999,7 +1125,11 @@ class _InfoPanel extends StatelessWidget {
                   runSpacing: 0,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Icon(Icons.link, size: 18, color: theme.colorScheme.primary),
+                    Icon(
+                      Icons.link,
+                      size: 18,
+                      color: theme.colorScheme.primary,
+                    ),
                     Text('关联的提示词', style: theme.textTheme.titleSmall),
                     TextButton.icon(
                       onPressed: () => _changeLink(context),
@@ -1018,7 +1148,9 @@ class _InfoPanel extends StatelessWidget {
                 if (p == null)
                   Text(
                     '这条产物还没有关联提示词。关联之后，点开图片就能直接看到当初用的提示词。',
-                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
                   )
                 else ...[
                   InkWell(
@@ -1026,7 +1158,10 @@ class _InfoPanel extends StatelessWidget {
                     onTap: () async {
                       await Navigator.of(context).push(
                         MaterialPageRoute(
-                          builder: (_) => PromptDetailPage(promptId: p.id, showParams: true),
+                          builder: (_) => PromptDetailPage(
+                            promptId: p.id,
+                            showParams: true,
+                          ),
                         ),
                       );
                       await onChanged();
@@ -1042,7 +1177,9 @@ class _InfoPanel extends StatelessWidget {
                               p.title,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                           const Icon(Icons.chevron_right, size: 18),
@@ -1093,11 +1230,17 @@ class _InfoPanel extends StatelessWidget {
                     runSpacing: 2,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Icon(Icons.tune, size: 18, color: theme.colorScheme.primary),
+                      Icon(
+                        Icons.tune,
+                        size: 18,
+                        color: theme.colorScheme.primary,
+                      ),
                       Text('生成参数', style: theme.textTheme.titleSmall),
                       Text(
                         '来自关联的提示词',
-                        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.outline,
+                        ),
                       ),
                     ],
                   ),
@@ -1116,7 +1259,9 @@ class _InfoPanel extends StatelessWidget {
         if (media.promptTags.isEmpty)
           Text(
             '暂无标签',
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
           )
         else
           Wrap(
@@ -1135,7 +1280,9 @@ class _InfoPanel extends StatelessWidget {
         const SizedBox(height: 6),
         Text(
           '点击标签可以查看该标签下的全部提示词与产物',
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
         ),
         const SizedBox(height: 20),
 
@@ -1155,8 +1302,15 @@ class _InfoPanel extends StatelessWidget {
                   children: [
                     for (final item in _fileInfo(media))
                       SizedBox(
-                        width: (twoColumns && !item.wide) ? half : constraints.maxWidth,
-                        child: _kv(theme, item.key, item.value, full: item.full),
+                        width: (twoColumns && !item.wide)
+                            ? half
+                            : constraints.maxWidth,
+                        child: _kv(
+                          theme,
+                          item.key,
+                          item.value,
+                          full: item.full,
+                        ),
                       ),
                   ],
                 );
@@ -1177,11 +1331,15 @@ class _InfoPanel extends StatelessWidget {
                 title: media.title.isEmpty ? media.originalName : media.title,
                 load: () => store.api.mediaWorkflow(media.id),
                 blueprint: store.api.workflowBlueprint,
-                saveBlueprint: (raw, name) => store.api.saveWorkflow(raw: raw, name: name),
+                saveBlueprint: (raw, name) =>
+                    store.api.saveWorkflow(raw: raw, name: name),
               ),
             OutlinedButton.icon(
               onPressed: () async {
-                final ok = await showUploadSheet(context, promptId: media.promptId);
+                final ok = await showUploadSheet(
+                  context,
+                  promptId: media.promptId,
+                );
                 if (ok) await onChanged();
               },
               icon: const Icon(Icons.upload_file, size: 18),
@@ -1201,21 +1359,26 @@ class _InfoPanel extends StatelessWidget {
   /// 文件信息的一行。`wide` 表示这一行的值通常很长（文件名 / 备注），
   /// 让它自己占一整行，而不是挤进半列里折行。
   static List<_FileInfoItem> _fileInfo(MediaAsset media) => [
-        _FileInfoItem('文件名', media.originalName, wide: true),
-        _FileInfoItem(
-          '类型',
-          '${media.kind.label}${media.mimeType != null ? ' · ${media.mimeType}' : ''}',
-        ),
-        _FileInfoItem('大小', formatSize(media.sizeBytes)),
-        if (media.width != null && media.height != null)
-          _FileInfoItem('尺寸', '${media.width} × ${media.height}'),
-        _FileInfoItem('来源', media.source ?? ''),
-        _FileInfoItem('加入时间', formatDateTime(media.createdAt)),
-        if ((media.sha256 ?? '').isNotEmpty)
-          // 显示前 16 位，完整值放到 tooltip 里（鼠标停上去就能看全）
-          _FileInfoItem('SHA-256', '${media.sha256!.substring(0, 16)}…', full: media.sha256),
-        if ((media.notes ?? '').isNotEmpty) _FileInfoItem('备注', media.notes!, wide: true),
-      ].where((e) => e.value.isNotEmpty).toList();
+    _FileInfoItem('文件名', media.originalName, wide: true),
+    _FileInfoItem(
+      '类型',
+      '${media.kind.label}${media.mimeType != null ? ' · ${media.mimeType}' : ''}',
+    ),
+    _FileInfoItem('大小', formatSize(media.sizeBytes)),
+    if (media.width != null && media.height != null)
+      _FileInfoItem('尺寸', '${media.width} × ${media.height}'),
+    _FileInfoItem('来源', media.source ?? ''),
+    _FileInfoItem('加入时间', formatDateTime(media.createdAt)),
+    if ((media.sha256 ?? '').isNotEmpty)
+      // 显示前 16 位，完整值放到 tooltip 里（鼠标停上去就能看全）
+      _FileInfoItem(
+        'SHA-256',
+        '${media.sha256!.substring(0, 16)}…',
+        full: media.sha256,
+      ),
+    if ((media.notes ?? '').isNotEmpty)
+      _FileInfoItem('备注', media.notes!, wide: true),
+  ].where((e) => e.value.isNotEmpty).toList();
 
   Widget _kv(ThemeData theme, String key, String? value, {String? full}) {
     if (value == null || value.isEmpty) return const SizedBox.shrink();
@@ -1230,7 +1393,9 @@ class _InfoPanel extends StatelessWidget {
             width: 78,
             child: Text(
               key,
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           ),
           Expanded(

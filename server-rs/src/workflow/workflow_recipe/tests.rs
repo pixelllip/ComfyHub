@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::comfy::comfy_models::{Inventory, LocalModel, Source};
-use std::path::PathBuf;
 
 // -----------------------------------------------------------------------
 //  夹具小工具
@@ -72,14 +71,6 @@ fn t2i_graph(unet: &str) -> Map<String, Value> {
         ("8", node("VAEDecode", None, json!({ "samples": link("3", 0), "vae": link("1", 2) }))),
         ("9", node("SaveImage", None, json!({ "images": link("8", 0), "filename_prefix": "x" }))),
     ])
-}
-
-fn workflow_file(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("comfyui")
-        .join("workflows")
-        .join(name)
 }
 
 fn deps(info: Option<Map<String, Value>>) -> Deps<'static> {
@@ -496,59 +487,14 @@ fn render_里能直接看到改哪个键_to_json_键集合稳定() {
 }
 
 // -----------------------------------------------------------------------
-//  真文件（仓库里那两份 API 格式的 inpaint 工作流）
+//  真文件
 // -----------------------------------------------------------------------
+//
+// 2026-10-28：仓库**不再随包带模板工作流**（模板一律用各模型在 ComfyUI 模板库里的
+// 标准工作流），原来那三条"拿仓库里的 inpaint krea2 / anima 文件当夹具"的用例一并删除。
+// "从真文件学"这条路仍由下面「学一份 inpaint 图能落库并按 hash 幂等」覆盖 ——
+// 它把合成 API 图写到 `testpaths::scratch()`，仍然走磁盘文件那条入口。
 
-#[test]
-fn 仓库里真有的_inpaint_工作流能归纳出槽位与遮罩() {
-    let file = workflow_file("comfyhub_inpaint_krea2.json");
-    if !file.is_file() {
-        return; // 单独把文件挪走时不红（它不是本用例的产物）
-    }
-    let root = graph_of(&std::fs::read_to_string(&file).unwrap());
-    assert!(
-        crate::workflow::workflow_convert::is_node_graph(&root),
-        "这份文件应当是 API 格式（{}）",
-        file.display()
-    );
-
-    let r = analyze(&root);
-    assert_eq!(r.task, Task::Inpaint);
-    assert!(r.has_mask);
-    let roles: Vec<&str> = r.slots.iter().map(|s| s.role.as_str()).collect();
-    assert_eq!(
-        roles,
-        vec!["checkpoints", "text_encoders", "vae"],
-        "真文件里的槽位：底模 + 外挂 CLIP + 外挂 VAE"
-    );
-    assert!(r.slots.iter().any(|s| s.override_key() == "1.ckpt_name"));
-    // 提示词、底图、遮罩、采样参数都要能看见（模型照着写 overrides）
-    let keys: HashSet<String> = r.knobs.iter().map(|k| k.override_key()).collect();
-    for key in ["13.text", "10.image", "12.image", "15.steps", "15.cfg", "15.seed", "11.width"] {
-        assert!(keys.contains(key), "真文件里 {key} 应当是个旋钮：{keys:?}");
-    }
-    assert!(r.outputs.iter().any(|o| o.class_type == "SaveImage"));
-    assert!(r.image_inputs >= 2, "底图 + 人物图 + 遮罩，至少两个 LoadImage 类节点");
-}
-
-#[test]
-fn 同一族的两份真文件骨架相同_而细节不同() {
-    // 这两份是**同一族**（都是 krea2 的分离式加载 + 采样链），文件名不同、参数不同
-    let a = workflow_file("comfyhub_inpaint_krea2.json");
-    let b = workflow_file("comfyhub_inpaint_anima.json");
-    if !a.is_file() || !b.is_file() {
-        return;
-    }
-    let ra = analyze(&graph_of(&std::fs::read_to_string(&a).unwrap()));
-    let rb = analyze(&graph_of(&std::fs::read_to_string(&b).unwrap()));
-    assert_eq!(ra.task, Task::Inpaint);
-    assert_eq!(rb.task, Task::Inpaint);
-    assert!(!ra.slots.is_empty() && !rb.slots.is_empty());
-    // 骨架指纹是**内容**的函数：这里刻意只断言"算得出来且稳定"，不硬钉一个数字
-    let again = analyze(&graph_of(&std::fs::read_to_string(&a).unwrap()));
-    assert_eq!(ra.skeleton_hash, again.skeleton_hash);
-    assert_eq!(ra.skeleton_hash.len(), 16, "指纹是 8 字节 = 16 位十六进制");
-}
 
 // -----------------------------------------------------------------------
 //  仓储（`WorkflowRecipeRepoTest.kt`）
@@ -803,15 +749,37 @@ fn 写不进去就报错_不静默截断() {
 // -----------------------------------------------------------------------
 
 #[test]
-fn 真文件学一遍能落库并读回同一份配方() {
-    let file = workflow_file("comfyhub_inpaint_krea2.json");
-    if !file.is_file() {
-        return;
-    }
+fn 学一份_inpaint_图能落库并按_hash_幂等() {
+    // 仓库不再随包带模板：用合成 API 图写进 scratch，仍然走"从磁盘文件学"这条入口，
+    // 覆盖 任务判定 / 三个模型槽位 / sha 来源 / 落库读回 / 幂等 五件事。
     let conn = conn();
     let deps = deps(None);
+    let dir = crate::infra::testpaths::scratch("recipe-learn");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("inpaint_api.json");
+    std::fs::write(
+        &file,
+        r#"{
+          "1": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"a.safetensors"}},
+          "2": {"class_type":"CLIPLoader","inputs":{"clip_name":"te.safetensors","type":"krea2"}},
+          "3": {"class_type":"VAELoader","inputs":{"vae_name":"v.safetensors"}},
+          "4": {"class_type":"LoadImage","inputs":{"image":"bg.png"}},
+          "5": {"class_type":"LoadImageMask","inputs":{"image":"m.png","channel":"red"}},
+          "6": {"class_type":"VAEEncode","inputs":{"pixels":["4",0],"vae":["3",0]}},
+          "7": {"class_type":"SetLatentNoiseMask","inputs":{"samples":["6",0],"mask":["5",0]}},
+          "8": {"class_type":"CLIPTextEncode","inputs":{"text":"a cat","clip":["2",0]}},
+          "9": {"class_type":"KSampler","inputs":{"model":["1",0],"positive":["8",0],"negative":["8",0],
+                 "latent_image":["7",0],"seed":42,"steps":8,"cfg":1.0,"sampler_name":"euler",
+                 "scheduler":"simple","denoise":0.5}},
+          "10": {"class_type":"VAEDecode","inputs":{"samples":["9",0],"vae":["3",0]}},
+          "11": {"class_type":"SaveImage","inputs":{"images":["10",0]}}
+        }"#,
+    )
+    .unwrap();
+
     let learned = learn_file(&file, None, false, true, &deps).unwrap();
     assert_eq!(learned.recipe.task, Task::Inpaint);
+    assert!(learned.recipe.has_mask, "有 SetLatentNoiseMask 就该认成带遮罩");
     assert!(learned.complete, "API 格式零转换，不该有缺口");
     let bytes = std::fs::read(&file).unwrap();
     assert_eq!(learned.source_ref.as_deref(), Some(format!("file:{}", sha256_hex(&bytes)).as_str()));
@@ -835,9 +803,9 @@ fn 真文件学一遍能落库并读回同一份配方() {
     let row = get(&conn, id).unwrap().unwrap();
     assert_eq!(row.task, "inpaint");
     assert_eq!(learned.recipe.skeleton_hash, row.skeleton_hash);
-    assert_eq!(row.slots.as_array().unwrap().len(), 3);
+    assert_eq!(row.slots.as_array().unwrap().len(), 3, "底模 + 外挂 CLIP + 外挂 VAE");
 
-    // 再学一遍：还是同一行
+    // 再学一遍：还是同一行（幂等键是文件 sha）
     let again = learn_file(&file, None, false, true, &deps).unwrap();
     let again_write = write_of(
         &again.recipe,

@@ -117,6 +117,22 @@ const TEXT_INPUT_KEYS: [&str; 10] = [
 /// 负向提示词的键名线索。
 const NEGATIVE_HINT_KEYS: [&str; 3] = ["negative", "negative_prompt", "neg"];
 
+/// 顺着**连线**继续找正文时认的键。
+///
+/// ⚠ **不能含 `system_prompt` / `instruction`**：那是 `TextGenerate` 的扩写指令
+/// （真机 prompt 549 / 597 的编码器 `text` 直接连到 `TextGenerate`），把它当正向
+/// 比留空更糟 —— 画廊里会显示一整段"你是一个提示词工程师……"而不是用户要画的画面。
+const LINKED_TEXT_KEYS: [&str; 8] = [
+    "text",
+    "prompt",
+    "positive",
+    "positive_prompt",
+    "text_g",
+    "text_l",
+    "caption",
+    "prompt_text",
+];
+
 /// 继续下钻时认这些"条件 / 文本"转发键。
 const CHAIN_KEYS: [&str; 6] = ["conditioning", "cond", "positive", "negative", "clip", "prompt"];
 
@@ -866,6 +882,16 @@ fn text_from_ref(
     for key in TEXT_INPUT_KEYS {
         if let Some(text) = input_text(node, key).filter(|t| !t.trim().is_empty()) {
             return Some(text);
+        }
+    }
+    // 正文经常不在编码器自己身上：`CLIPTextEncode.text` 被改成**连线**，真正的长文本
+    // 在上游的 `PrimitiveStringMultiline.value` 里（真机 `test_01357_.png`）。上面只取
+    // 字面量，取不到时必须顺着这些文本键继续往下走，否则整段正向会被静默当成空。
+    for key in LINKED_TEXT_KEYS {
+        if let Some(text) = text_from_ref(input(node, key), nodes, depth + 1) {
+            if !text.trim().is_empty() {
+                return Some(text);
+            }
         }
     }
     // 上游是 String / Primitive 之类的原始值节点

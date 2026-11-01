@@ -69,6 +69,8 @@ fn 只列真搬过来了的那些() {
             "comfy_sync_history",
             "comfy_use_attachment",
             "comfy_use_media",
+            // 看画廊产物（2026-10-29）：只读；把图交给执行器的 reference_attach 自动附给模型
+            "comfy_view_outputs",
             "danbooru_lookup",
             "delete_skill",
             // 定向查询（P4 第 64 步）：**绝不代下**，只给链接 + sha256 + 目标目录

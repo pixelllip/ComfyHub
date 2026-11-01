@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../core/backend_launcher.dart';
 import '../core/formatting.dart';
+import '../core/media_cache.dart';
 import '../core/settings_store.dart';
 import '../core/system_accent.dart';
 import '../core/theme.dart';
@@ -16,6 +17,8 @@ import '../state/ai_workspace_store.dart';
 import '../state/library_store.dart';
 import '../state/nsfw_store.dart';
 import '../widgets/adaptive_layout.dart';
+import '../widgets/export_dialog.dart';
+import '../widgets/media_cache_card.dart';
 import 'ai_provider_settings_page.dart';
 import 'pairing_section.dart';
 
@@ -56,6 +59,10 @@ class _SettingsPageState extends State<SettingsPage> {
   /// NSFW 两个开关正在写库（避免连点把两次写入交叉）。
   bool _nsfwBusy = false;
 
+  /// 产物缓存占用（手机端；null = 还没统计完）。
+  MediaCacheStats? _cacheStats;
+  bool _cacheBusy = false;
+
   /// 「自动查找 ComfyUI」的探测结果（用户"其他建议"第 3 条）；null = 还没查过。
   ComfyLocation? _comfyLocation;
 
@@ -76,7 +83,17 @@ class _SettingsPageState extends State<SettingsPage> {
     _comfyUrlController = TextEditingController(text: 'http://127.0.0.1:8188');
     _comfyOutputController = TextEditingController();
     _autoTagController = TextEditingController(text: 'ComfyUI');
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadCapture());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadCapture();
+      _loadCacheStats();
+    });
+  }
+
+  /// 读一次产物缓存占用（手机端设置页那一节；桌面端 `stats()` 直接回 0，不碰磁盘）。
+  Future<void> _loadCacheStats() async {
+    final stats = await MediaCache.instance.stats();
+    if (!mounted) return;
+    setState(() => _cacheStats = stats);
   }
 
   /// 地址框跟着**当前真实地址**走。
@@ -575,6 +592,13 @@ class _SettingsPageState extends State<SettingsPage> {
               _section(theme, 'NSFW 内容', _nsfwCard(theme)),
               estimatedHeight: 300,
             ),
+            // 手机端「产物缓存」（2026-11-01 用户要求给缓存设上限）。
+            // 桌面端原件本来就在盘上，一行都不显示；判据与上面几节同一条。
+            if (!isWindowsDesktop && !kIsWeb)
+              AdaptiveSection(
+                _section(theme, '产物缓存（本机）', _cacheCard(theme)),
+                estimatedHeight: 240,
+              ),
             // 「后端服务」（后端地址 + 存储目录）只在 Windows 桌面端有用：
             // 手机连的桌面地址在「同步与连接」里选。
             if (isWindowsDesktop)
@@ -715,6 +739,29 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               estimatedHeight: 340,
             ),
+            // 导出（2026-10-27）：产物原件本来就在 storage\media 里，但"带出去"
+            // 需要把工作流 / 提示词 / 集合归属一起打包 —— 这一张卡是那个入口。
+            if (isWindowsDesktop)
+              AdaptiveSection(
+                _section(
+                  theme,
+                  '导出产物',
+                  Card(
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      leading: const Icon(Icons.save_alt),
+                      title: const Text('导出全部产物…'),
+                      subtitle: const Text(
+                        '按 图片 / 视频 / 音频 分目录；同一集合单独成夹；'
+                        '工作流与提示词信息一起带走（可先在画廊多选只导一部分）',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => showExportDialog(context),
+                    ),
+                  ),
+                ),
+                estimatedHeight: 120,
+              ),
             AdaptiveSection(
               _section(
                 theme,
@@ -887,6 +934,50 @@ class _SettingsPageState extends State<SettingsPage> {
           card,
         ],
       );
+
+  // -------------------------------------------------------------------------
+  //  产物缓存（手机端，2026-11-01 用户要求"给缓存设个上限"）
+  //
+  //  它曾经是**唯一**会无界长大的本地存储（看过的缩略图 + 原件，原件含视频）。
+  //  这一节只做"看得见 + 能清"；真正的淘汰在 `MediaCache` 里按总字节 LRU 做
+  //  （缩略图 150MB、原件按这里的档位，默认 1.5GB）。
+  // -------------------------------------------------------------------------
+
+  Widget _cacheCard(ThemeData theme) {
+    final settings = context.watch<SettingsStore>();
+    return MediaCacheCard(
+      stats: _cacheStats,
+      budgetMb: settings.mediaCacheOrigBudgetMb,
+      busy: _cacheBusy,
+      onBudgetChanged: _onBudgetChanged,
+      onClear: _clearCache,
+    );
+  }
+
+  /// 换档位：写偏好（`SettingsStore` 会**当场**把新预算交给缓存并淘汰一次），
+  /// 再等一拍重新统计 —— 淘汰是异步的，紧接着读会读到淘汰前的数字。
+  Future<void> _onBudgetChanged(int mb) async {
+    final settings = context.read<SettingsStore>();
+    await settings.setMediaCacheOrigBudgetMb(mb);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await _loadCacheStats();
+  }
+
+  Future<void> _clearCache() async {
+    setState(() => _cacheBusy = true);
+    final freed = await MediaCache.instance.clear();
+    final stats = await MediaCache.instance.stats();
+    if (!mounted) return;
+    setState(() {
+      _cacheStats = stats;
+      _cacheBusy = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(freed > 0 ? '已清理 ${formatSize(freed)}' : '缓存本来就是空的'),
+      ),
+    );
+  }
 
   // -------------------------------------------------------------------------
   //  NSFW 内容（2026-09-20 用户要求）

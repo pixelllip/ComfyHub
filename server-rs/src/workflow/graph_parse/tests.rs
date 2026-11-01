@@ -303,6 +303,84 @@ fn node_references_accept_numeric_ids() {
     assert_eq!(numeric, strings, "两种 id 写法必须解析成同一个结果");
 }
 
+/// 编码器的 `text` 被改成**连线**、正文放在上游原始值节点里 —— 必须顺着连线取到。
+///
+/// 真机 `test_01357_.png` 的形状（Krea2 + `BasicGuider`）：
+/// `BasicGuider.conditioning → CLIPTextEncode.text → PrimitiveStringMultiline.value`。
+/// 编码器自己的 `widgets_values` 里只剩一个旧触发词，长段正文在上游节点的 `value`；
+/// 只取字面量会让整段正向**静默变成空**。
+#[test]
+fn text_follows_link_when_encoder_text_is_wired() {
+    let parsed = parse(Some(&graph(
+        r#"{
+          "40": {"class_type":"SamplerCustomAdvanced","inputs":{"noise":["42",0],"guider":["41",0],
+                  "sampler":["37",0],"sigmas":["33",0],"latent_image":["33",1]}},
+          "41": {"class_type":"BasicGuider","inputs":{"model":["35",0],"conditioning":["34",0]}},
+          "34": {"class_type":"CLIPTextEncode","inputs":{"text":["55",0],"clip":["70",1]}},
+          "55": {"class_type":"PrimitiveStringMultiline","inputs":{"value":"A medium-wide frontal shot, three figures around one enormous old cherry tree."}},
+          "33": {"class_type":"Krea2TurboReferenceSigmaSchedulerFromLatent","inputs":{"steps":8,"denoise":1,"model":["70",0],"latent":["31",0]}},
+          "31": {"class_type":"EmptyLatentImage","inputs":{"width":1152,"height":1920,"batch_size":1}},
+          "42": {"class_type":"RandomNoise","inputs":{"noise_seed":155476874837224}},
+          "37": {"class_type":"KSamplerSelect","inputs":{"sampler_name":"er_sde"}},
+          "35": {"class_type":"ComfyUI-Krea2T-Enhancer","inputs":{"enabled":true,"strength":1.25,"model":["70",0]}},
+          "70": {"class_type":"Lora Loader Stack (rgthree)","inputs":{"lora_01":"None","strength_01":0,
+                  "lora_02":"None","strength_02":0,"lora_03":"None","strength_03":0,"lora_04":"None","strength_04":0,
+                  "model":["44",0],"clip":["30",0]}},
+          "30": {"class_type":"CLIPLoader","inputs":{"clip_name":"qwen3VL4B.safetensors","type":"krea2","device":"default"}},
+          "44": {"class_type":"UNETLoader","inputs":{"unet_name":"krea2TurboInt8.safetensors","weight_dtype":"default"}}
+        }"#,
+    )));
+    assert_eq!(
+        parsed.positive,
+        "A medium-wide frontal shot, three figures around one enormous old cherry tree."
+    );
+    assert_eq!(parsed.steps, Some(8));
+    assert_eq!(parsed.seed, Some(155476874837224));
+}
+
+/// 顺着连线找正文时**不许**把 `TextGenerate.system_prompt` 当正向。
+///
+/// 真机 prompt 549 / 597 的形状：编码器 `text` 直接连到 `TextGenerate`（它的运行时输出
+/// 由旁边的 `PreviewAny` 显示），`TextGenerate.system_prompt` 又连着一段很长的扩写指令。
+/// 那段指令比什么都长，一旦被当正文，画廊里显示的就是"你是一个提示词工程师……"。
+#[test]
+fn linked_text_does_not_take_text_generate_system_prompt() {
+    let parsed = parse(Some(&graph(
+        r#"{
+          "22": {"class_type":"SamplerCustomAdvanced","inputs":{"noise":["28",0],"guider":["41",0],
+                  "sampler":["23",0],"sigmas":["18",0],"latent_image":["18",1]}},
+          "41": {"class_type":"BasicGuider","inputs":{"model":["68",0],"conditioning":["108",0]}},
+          "108": {"class_type":"CLIPTextEncode","inputs":{"text":["43",0],"clip":["91",1]}},
+          "43": {"class_type":"TextGenerate","inputs":{"prompt":"","clip":["4",0],"image":["42",0],
+                  "system_prompt":["45",0]}},
+          "45": {"class_type":"PrimitiveStringMultiline","inputs":{"value":"You are an expert prompt engineer. Expand the user's prompt..."}},
+          "55": {"class_type":"PreviewAny","inputs":{"source":["43",0]}},
+          "18": {"class_type":"Krea2TurboReferenceSigmaSchedulerFromLatent","inputs":{"steps":8,"denoise":1,"model":["68",0],"latent":["5",0]}},
+          "5": {"class_type":"EmptyLatentImage","inputs":{"width":896,"height":1344,"batch_size":1}}
+        }"#,
+    )));
+    assert_eq!(parsed.positive, "", "system_prompt 是扩写指令，不是要画的正文");
+}
+
+/// 负向同理：`KSampler.negative → CLIPTextEncode.text → PrimitiveStringMultiline.value`。
+#[test]
+fn negative_follows_link_when_encoder_text_is_wired() {
+    let parsed = parse(Some(&graph(
+        r#"{
+          "3": {"class_type":"KSampler","inputs":{"steps":20,"cfg":3,"seed":5,
+                 "positive":["6",0],"negative":["7",0],"model":["4",0],"latent_image":["5",0]}},
+          "6": {"class_type":"CLIPTextEncode","inputs":{"text":["10",0]}},
+          "10": {"class_type":"PrimitiveStringMultiline","inputs":{"value":"a cat on a windowsill"}},
+          "7": {"class_type":"CLIPTextEncode","inputs":{"text":["11",0]}},
+          "11": {"class_type":"PrimitiveStringMultiline","inputs":{"value":"lowres, bad hands"}},
+          "4": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"m.safetensors"}},
+          "5": {"class_type":"EmptyLatentImage","inputs":{"width":512,"height":512}}
+        }"#,
+    )));
+    assert_eq!(parsed.positive, "a cat on a windowsill");
+    assert_eq!(parsed.negative.as_deref(), Some("lowres, bad hands"));
+}
+
 /// 空图 / null / 脏数据都不许 panic，也不许编字段。
 #[test]
 fn empty_and_dirty_graphs_are_safe() {

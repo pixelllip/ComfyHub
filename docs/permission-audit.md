@@ -57,8 +57,11 @@
 | 10 | `tools.rs` 的写入工具（`ToolPolicy::resolveWrite`） | `<根>\comfyui` | 项目内（发布包同样在包内） | ✅ |
 | 11 | `db` / `api_port_file` / `attachments` / `thumbs` / `poster` / `memory` / `credentials` / `skills` / `media_write` | 全部 `<根>\…` | 项目内 | ✅ |
 | 12 | `comfy::comfy_dirs::find_home` / `comfy_models` | **只读**探测 ComfyUI / models | — | ✅ 只读 |
+| 13 | `media::export::export`（2026-10-27） | **用户显式选的导出目录**（任意绝对路径） | 只允许回环调用；目录不可写 → 400 如实报，不静默换地方 | ✅ 用户动作 + 闸门 |
 
-**结论**：后端侧现在只有 #1~#3 会碰工作区外的写，三处都有 HTTP 退路；#4 有闸门；其余全在项目内。
+**结论**：后端侧现在只有 #1~#3 会碰工作区外的写，三处都有 HTTP 退路；#4 有闸门；
+#13 是用户显式点「导出」并选目录才发生（受限进程写不进去时如实报错，正确修法仍是
+把发布包放到工作区外，见 §0）。其余全在项目内。
 "input 目录写权限"这件事**从来不是** ACL 问题（见 §0）。
 
 ### 1.1 配套纪律

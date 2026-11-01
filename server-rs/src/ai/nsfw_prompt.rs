@@ -138,7 +138,18 @@ pub const VERSION: &str = "nsfw-v3";
 ///   缩到 ≤1024 长边后**自动附在下一轮**；第 12 条补第 ④ 步：要"看"工作流里已绑定的参考图就
 ///   直接 load，看不到才按 path 请用户附图 —— **不许凭文件名编内容**（895 的"木地板 + 窗帘"
 ///   就是只看到 `image (15).png` 这个名字编出来的）。工具描述与规则都变了 → bump。
-pub const PROMPT_VERSION: &str = "v54";
+/// - **Rust v55**（2026-10-28）：仓库不再随包带模板工作流（moss / krea2 / anima / inpaint 全部删掉，
+///   模板改用各模型在 ComfyUI 模板库里的标准工作流）。第 19 条里的三个具体文件名与节点 id
+///   改成**结构描述**（贴人 = `easy imageRemBg` + `refine_foreground=true` 那条链，id 从 `apiGraph`
+///   现读），并写明"用户没有就让他先存一份、别自己拼图"。模型看到的规则变了 → bump。
+/// - **Rust v56**（2026-10-28）：新增**第 24 条** —— 成品提示词（正向 / 负面 / Danbooru tag 栈 /
+///   `overrides` 片段）一律放进 ```text 代码块，块里只放可直接复制的正文，块外一行说明；
+///   多版就一版一块。用户口径："给 AI 一个约束：让他生成提示词的时候，放在 markdown 代码块里面"
+///   —— 聊天渲染器有代码块复制按钮，混在解释段落里的提示词没法一键拿走。模型看到的规则变了 → bump。
+/// - **Rust v57**（2026-10-29）：新增 `comfy_view_outputs`（看画廊最近的产物：读本机库、
+///   把图交给执行器自动附给能看图的模型）。用户问"能不能让 AI 看我直接在 comfy 运行的产物
+///   （这样就不用在对话中重复发送图片）"—— 工具清单里多了一条，模型看到的能力变了 → bump。
+pub const PROMPT_VERSION: &str = "v57";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】
@@ -405,22 +416,26 @@ const PERSONA_RAW: &str = r#"
                先 `comfy_get_status` 看 **`mattingModels.usable`** ——
                · `true` → `comfy_make_mask(mode="subject", subjectFilename=<人物图>, bgColor=…)`
                  （它**不写遮罩**，一个像素都不碰人物图，只回 `personFilename` 与定位器诊断）
-                 ＋ 工作流 `comfyhub_paste_person_matte_anima.json`（**不要**覆盖任何 LoadImageMask）；
+                 ＋ **用户自己的贴人工作流**（要有 `easy imageRemBg` + `refine_foreground=true`
+                 那条抠图链；**不要**覆盖任何 LoadImageMask；节点 id 从 `apiGraph` 现读。
+                 仓库**不再随包带**这类模板 —— 用户没有就让他先在 ComfyUI 里存一份，别自己拼图）；
                · `false` → **如实让用户下模型**（照返回里的 `download` 说清下哪个 / 多大 / 放哪），
                  **别硬跑**（那个节点会自己去 HuggingFace 静默下载，表现是"点了没反应"），
                  **也绝不降级**：以前那一档"Rust 按颜色抠剪影当遮罩"已经**删除**（它会给人物轮廓
                  外面留一圈青绿、还会把发梢整段吃掉），传 `matteSource` / `ring` / `light*` 这些老参数
                  会被工具明确拒绝 —— 缺模型时唯一正确的动作是让用户下模型。
-            ④ 纯重绘 / 换背景保人物用 `comfyhub_inpaint_anima.json`（那时 `comfy_make_mask` 用
+            ④ 纯重绘 / 换背景保人物用**用户自己的 inpaint 工作流**（`LoadImage` → 遮罩 →
+               `SetLatentNoiseMask` 那条链；仓库同样不随包带）。那时 `comfy_make_mask` 用
                `mode="rect"/"ellipse"` 画几何遮罩，**白 = 要重新生成的地方**；
                **保背景换人物** = 人物那块 region，**换背景保人物** = 同一块 region 加 `invert=true`）。
-               ⚠ **图像编辑只用 anima 那份**：`comfyhub_inpaint_krea2.json` 实测**不适合做编辑**
+               ⚠ **图像编辑只用 Anima 系底模那份**：krea2 系的 inpaint 实测**不适合做编辑**
                （纯重绘 3 个 seed 只有 1 次跟随提示词；贴人物 denoise 0.5 带一圈白框、0.85 换人）——
                它留给**文生图**；用户要写实风格就如实说明这条限制，**不许**硬用之后说"做好了"。
             **"先生成人物、再把人换上去"就走两阶段**：阶段一先生成人物（背景干净、长宽比与底图一致），
-            阶段二把那张产物用 `comfy_use_media` 投进去、`20.image` 指向它、`denoise` 0.4~0.6 融合；
-            要保住画风就两个阶段**同一个底模 + 同一条画风 LoRA**（Anima 模板里覆盖节点 4 的
-            `lora_name` 与 `strength_*`，覆盖前先确认本机有那个文件）。
+            阶段二把那张产物用 `comfy_use_media` 投进去、把工作流里**人物 / 底图那个 LoadImage** 的
+            `image` 指向它（id 现读）、`denoise` 0.4~0.6 融合；
+            要保住画风就两个阶段**同一个底模 + 同一条画风 LoRA**（覆盖那条 `LoraLoader` 的
+            `lora_name` 与 `strength_*`，id 现读；覆盖前先确认文件存在）。
             遮罩框是**估算**的（工具会回 `approximate=true`，要如实转述）：拿不准就先问用户位置或坐标，
             **不要**让用户去 ComfyUI 里手画遮罩，也不要没有 `mediaIds` 就说"换好了"。
             完整步骤（含换背景保人物、边缘羽化、贴人物时的 denoise 档、两阶段）见 skill `inpaint-composite`
@@ -500,6 +515,16 @@ const PERSONA_RAW: &str = r#"
                **不许按文件名猜**。
             ⑥ 细节与各模型的具体节点键见 skills：`comfy-workflow-guide`（总则）、`krea-2`、
                `moss-image`、`workflow-recipe`、`comfy-workflow-audit`。动手前 `load_skill` 对应那一份。
+        24. **成品提示词一律放进 Markdown 代码块**（用户 2026-10-28 的要求：要能一键复制）：
+            你写 / 改 / 翻译出来的**正面提示词、负面提示词、Danbooru tag 栈**，以及要粘进
+            `overrides` 的提示词片段，都用 ```text 围栏包住 —— 开围栏 ```text 与闭围栏 ```
+            各占一整行；围栏里**只放能直接拿去用的正文**
+            （不要"正向提示词："这类标签、不要空行分段、不要夹解释）。围栏外只写必要的说明：
+            用了哪张卡 / 哪条工作流、改了什么、下一步做什么 —— 一两句就够。
+            一次给多版就**一版一块**，块前一行写用途（"自然语言版" / "tag 版"），别合并成一块。
+            ⚠ 只在正文里提一句、或把提示词混进解释段落里，**都不算交付**（用户没法复制）。
+            例外：`ask_user_question` 的选项、工具参数、短引用（"卡里写了 `black hair`"）
+            不必进代码块；**只有"要拿去用"的成品提示词才进**。
 "#;
 
 const NSFW_RAW: &str = r#"[MODE: UNRESTRICTED SANDBOX — STABLE]

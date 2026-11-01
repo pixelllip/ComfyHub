@@ -5,6 +5,7 @@
 //      否则界面会出现"字越写越少"的诡异现象。
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:viewer/widgets/markdown.dart';
 import 'package:viewer/widgets/markdown_view.dart';
@@ -353,7 +354,36 @@ void main() {
 
       expect(tester.takeException(), isNull);
       expect(find.byType(SingleChildScrollView), findsOneWidget);
+      // 用户 2026-10-29：横向滚动的块**必须配一条看得见的滚动条**，
+      // 否则右边被裁掉的内容根本不知道能拖。
+      expect(find.byType(Scrollbar), findsOneWidget);
       expect(find.text(multi), findsOneWidget);
+    });
+
+    testWidgets('多行纯文本（text 块）改成换行显示，不再横向拖', (tester) async {
+      // 现场（2026-10-29）：模型把提示词按字段写成 ```text 里的多行长文本 ——
+      // 每行是一个完整字段（所以不是"硬折行"、不会被 reflow 合并），但行宽远超气泡。
+      const prose = 'Anime character design sheet of Sagisawa Arisa, a petite girl with a bright face.\n'
+          'Hair: pure ash-grey-and-silver, very long, falling well past the waist, softly wavy.\n'
+          'Clothing: a deep navy sailor school uniform with a close-fitting blouse and long sleeves.\n'
+          'Rendering: reference-sheet layout of the same character in three views, strict profile.';
+      await pump(tester, '```text\n$prose\n```');
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(SingleChildScrollView), findsNothing,
+          reason: '纯文本块该折行显示，而不是让人横向拖着看');
+      final size = tester.getSize(find.text(prose));
+      expect(size.width, lessThanOrEqualTo(320), reason: '不能超出容器宽度');
+      expect(size.height, greaterThan(60),
+          reason: '四行长文本折行之后一定明显变高（实际高 ${size.height}）');
+    });
+
+    testWidgets('text 块里真是代码 / 表格时仍然横滚（有滚动条）', (tester) async {
+      // 判据是"内容像不像排版"，不是语言标记本身：对齐 / 缩进折了就废了。
+      const table = '+------+------+\n| a    | b    |\n+------+------+';
+      await pump(tester, '```text\n$table\n```');
+      expect(find.byType(SingleChildScrollView), findsOneWidget);
+      expect(find.byType(Scrollbar), findsOneWidget);
     });
 
     testWidgets('代码块显式给 SelectionArea 一个选择色（否则选中态会被底色糊掉）', (tester) async {
@@ -364,6 +394,268 @@ void main() {
           .toList();
       expect(styles, isNotEmpty,
           reason: '代码块必须显式给 selectionColor：外层 SelectionArea 靠它画高亮');
+    });
+  });
+
+  group('代码块：类型行 + 一键复制', () {
+    const code = 'final a = 1;\nfinal b = 2;';
+
+    Future<String?> Function() mockClipboard(WidgetTester tester) {
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = (call.arguments as Map)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      return () async => copied;
+    }
+
+    testWidgets('类型行 / 分隔线 / 复制按钮都在，复制的是原文', (tester) async {
+      final clipboard = mockClipboard(tester);
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 360,
+              // 与聊天气泡同构：外层 SelectionArea，按钮必须仍然点得动。
+              child: SelectionArea(
+                child: MarkdownText('```dart\n$code\n```', selectable: false),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('dart'), findsOneWidget, reason: '类型行要显示代码类型');
+      expect(find.text('复制'), findsOneWidget);
+      expect(find.byType(Divider), findsOneWidget, reason: '类型行与正文之间要有分隔线');
+
+      await tester.tap(find.text('复制'));
+      await tester.pump();
+      expect(await clipboard(), code, reason: '复制按钮要复制代码原文');
+      expect(find.text('已复制'), findsOneWidget, reason: '复制后原位给一次反馈');
+
+      await tester.pump(const Duration(milliseconds: 1500));
+      expect(find.text('复制'), findsOneWidget, reason: '反馈要自己恢复');
+    });
+
+    testWidgets('类型行（含「复制」）不进选择域：全选复制不会把它带走', (tester) async {
+      final clipboard = mockClipboard(tester);
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 360,
+              // 与聊天气泡同构：外层一个 SelectionArea，MarkdownText 不再自己包一层。
+              child: SelectionArea(
+                child: MarkdownText('说明\n\n```\n$code\n```', selectable: false),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      final region = tester.state<SelectableRegionState>(
+        find.byType(SelectableRegion),
+      );
+      region.selectAll();
+      await tester.pump();
+      // 用「复制」菜单项自己的 onPressed（等价于用户点右键 → 复制），
+      // 不直接调已废弃的 copySelection。
+      final copy = region.contextMenuButtonItems
+          .firstWhere((item) => item.type == ContextMenuButtonType.copy);
+      copy.onPressed!();
+      await tester.pumpAndSettle();
+
+      final copied = await clipboard();
+      expect(copied, contains('说明'));
+      expect(copied, contains(code));
+      expect(copied, isNot(contains('复制')), reason: '按钮文案不该被选中复制');
+      expect(copied, isNot(contains('文本')), reason: '类型行不该被选中复制');
+    });
+  });
+
+  group('硬折行的散文（模型按 ~80 列折行的提示词）', () {
+    // 真实数据：DeepSeek 把一整段提示词按 80 列折行（行里是真实的 \n）。
+    // 显示 / 复制都要并回一段，否则粘到别处会一行一断。
+    const wrapped = 'A chest-up shot cropped at the waist, camera at her shoulder height set\n'
+        'behind and to her right, Sakuragi Mizuha standing with her back half turned to\n'
+        'the lens and her waist twisted, looking back over her right shoulder into the\n'
+        'cold air with her chin lifted.\n'
+        '\n'
+        'Her face is an oval with a soft, smoothly flowing contour, cheeks easing down\n'
+        'into a narrow chin, both pointed elf ears clear of the hair at her temples.';
+    const joined =
+        'A chest-up shot cropped at the waist, camera at her shoulder height set '
+        'behind and to her right, Sakuragi Mizuha standing with her back half turned to '
+        'the lens and her waist twisted, looking back over her right shoulder into the '
+        'cold air with her chin lifted.\n\n'
+        'Her face is an oval with a soft, smoothly flowing contour, cheeks easing down '
+        'into a narrow chin, both pointed elf ears clear of the hair at her temples.';
+
+    test('英文硬折行并回段落，空行保留为段落分隔', () {
+      expect(reflowWrappedProse(wrapped, null), joined);
+      expect(reflowWrappedProse(wrapped, 'text'), joined);
+    });
+
+    test('真代码 / 短行排版原样保留（返回 null）', () {
+      // 有缩进
+      expect(
+        reflowWrappedProse(
+          'def f(x):\n    return x\n',
+          'python',
+        ),
+        isNull,
+      );
+      // 没有语言标记，但行首是缩进
+      expect(
+        reflowWrappedProse(
+          'def f(x):\n    return x\n',
+          null,
+        ),
+        isNull,
+      );
+      // 一行一句（每行都以句末标点收尾，不是从句子中间断开的）
+      expect(
+        reflowWrappedProse(
+          '这是一句很长很长的话，长到已经超过六十个字符了所以看起来像被折过一样但其实是故意分行的。\n'
+          '这是第二句同样很长的话，也超过六十个字符了而且同样是以句号收尾的。\n'
+          '这是第三句，同样超过六十个字符，用来证明整段都是这种一行一句的排版。\n',
+          'text',
+        ),
+        isNull,
+      );
+      // 模板 / 列表 / 表格
+      expect(
+        reflowWrappedProse(
+          '<|im_start|>system\n[系统提示]\n<|im_end|>\n',
+          'text',
+        ),
+        isNull,
+      );
+      expect(
+        reflowWrappedProse('- 第一项\n- 第二项\n', 'text'),
+        isNull,
+      );
+      // 短行列表（一行一个标签）也不动
+      expect(
+        reflowWrappedProse(
+          'masterpiece, best quality,\nultra detailed, 8k,\n',
+          'text',
+        ),
+        isNull,
+      );
+    });
+
+    test('中日韩硬折行之间不插空格', () {
+      final first = List.filled(32, '中文').join(); // 64 字
+      final second = List.filled(32, '提示').join();
+      final out = reflowWrappedProse('$first\n$second\n', 'text');
+      expect(out, '$first$second');
+    });
+
+    test('硬折行正好落在句号后面也照样合并', () {
+      // 只有**个别**行以句末标点收尾（硬折行正好断在句尾）时不能误判成"一行一句"。
+      const first =
+          'The first wrapped line happens to end with a full stop right at the margin.';
+      const second =
+          'The next line continues the same paragraph and does not end with punctuation';
+      const tail = 'and this is the short tail.';
+      expect(
+        reflowWrappedProse('$first\n$second\n$tail', 'text'),
+        '$first $second $tail',
+      );
+    });
+
+    testWidgets('显示与复制都并回一段，不再带硬折行', (tester) async {
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = (call.arguments as Map)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 360,
+              child: MarkdownText('```\n$wrapped\n```'),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text(joined), findsOneWidget, reason: '显示要并回一段');
+      expect(find.text(wrapped), findsNothing, reason: '不能还按硬折行显示');
+
+      await tester.tap(find.text('复制'));
+      await tester.pump();
+      expect(copied, joined, reason: '复制出来的提示词必须没有硬折行');
+    });
+  });
+
+  group('代码块换行判据', () {
+    test('纯文本多行折行；代码 / 表格 / 空语言不折', () {
+      expect(
+        codeBlockWraps(
+          'Hair: very long ash-grey hair, falling past the waist.\n'
+          'Clothing: a deep navy sailor uniform with long sleeves.',
+          'text',
+        ),
+        isTrue,
+      );
+      expect(codeBlockWraps('def f():\n    return 1', 'text'), isFalse, reason: '缩进是代码');
+      expect(codeBlockWraps('| a | b |\n|---|---|', 'text'), isFalse, reason: '表格折了就废了');
+      expect(codeBlockWraps('+---+\n| a |', 'text'), isFalse, reason: 'ASCII 框线');
+      expect(codeBlockWraps('line one\nline two', null), isFalse, reason: '空语言按原来的"多行=代码"');
+      expect(codeBlockWraps('one line', null), isTrue, reason: '单行照旧折行');
+      expect(codeBlockWraps('a\nb', 'dart', reflowed: true), isTrue, reason: '并回一段的硬折行散文');
+    });
+  });
+
+  group('两列表格：铺满容器、自动换行', () {
+    testWidgets('两列长单元格不横向滚动，宽度铺满容器', (tester) async {
+      const reply = '| 参数 | 说明 |\n'
+          '|---|---|\n'
+          '| prompt | 这里是一段很长的说明文字，用来把两列表格撑宽；'
+          '它应该自动换行铺满容器，而不是让整张表向右延伸。 |\n';
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Center(child: SizedBox(width: 320, child: MarkdownText(reply))),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(SingleChildScrollView), findsNothing,
+          reason: '两列表格不许横向滚动');
+      expect(find.byType(Scrollbar), findsNothing);
+      expect(tester.getSize(find.byType(Table)).width, 320,
+          reason: '两列表格要铺满对话容器');
     });
   });
 }

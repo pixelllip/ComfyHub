@@ -11,6 +11,7 @@ import '../models/models.dart';
 import '../state/library_store.dart';
 import '../widgets/collection_thumb.dart';
 import '../widgets/common.dart';
+import '../widgets/export_dialog.dart';
 import '../widgets/media_thumb.dart';
 import '../widgets/paged_swipe.dart';
 import '../widgets/upload_sheet.dart';
@@ -93,8 +94,13 @@ class _GalleryPageState extends State<GalleryPage> {
       debugMouseFirstOverride ??
       (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
+  /// 导出写的是**后端所在机器**的磁盘，而且后端只允许回环调用 ——
+  /// 手机上那颗按钮只会撞 403，所以干脆不出现。
+  static bool get _canExport => Platform.isWindows;
+
   /// 选中项覆盖的**产物总数**（不是格子数）—— 底部栏与标题都按它显示。
-  int get _pickedCount => _picked.values.fold(0, (sum, pick) => sum + pick.size);
+  int get _pickedCount =>
+      _picked.values.fold(0, (sum, pick) => sum + pick.size);
 
   /// 把当前一页的格子收进"选中"（全选本页用）。
   ///
@@ -141,6 +147,19 @@ class _GalleryPageState extends State<GalleryPage> {
     await store.refreshMedia();
   }
 
+  /// 导出**全部**产物（不受画廊当前筛选影响 —— 弹窗里会把范围写清楚）。
+  Future<void> _exportAll() async {
+    await showExportDialog(context);
+  }
+
+  /// 导出多选中的产物。集合格子在 `_expandPicks` 里已经摊平成成员 id，
+  /// 所以后端仍然按成员所属的集合分文件夹。
+  Future<void> _exportSelected() async {
+    final ids = await _expandPicks();
+    if (ids == null || !mounted) return;
+    await showExportDialog(context, mediaIds: ids);
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
@@ -151,84 +170,100 @@ class _GalleryPageState extends State<GalleryPage> {
     return ContextMenuScope(
       child: Builder(
         builder: (context) => Scaffold(
-      appBar: AppBar(
-        leading: _selectionMode
-            ? IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: _exitSelection,
-              )
-            : null,
-        title: Text(_selectionMode ? '已选 $_pickedCount 张' : '画廊'),
-        actions: _selectionMode
-            ? [
-                IconButton(
-                  tooltip: '全选本页',
-                  icon: const Icon(Icons.select_all),
-                  onPressed: () => setState(() {
-                    // 集合格子整组计入：全选一页 10 格，可能是 30 张
-                    _picked.clear();
-                    for (final media in store.media.items) {
-                      _pickOf(media);
-                    }
-                  }),
-                ),
-                if (_busy)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16),
-                    child: Center(
-                      child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+          appBar: AppBar(
+            leading: _selectionMode
+                ? IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: _exitSelection,
+                  )
+                : null,
+            title: Text(_selectionMode ? '已选 $_pickedCount 张' : '画廊'),
+            actions: _selectionMode
+                ? [
+                    IconButton(
+                      tooltip: '全选本页',
+                      icon: const Icon(Icons.select_all),
+                      onPressed: () => setState(() {
+                        // 集合格子整组计入：全选一页 10 格，可能是 30 张
+                        _picked.clear();
+                        for (final media in store.media.items) {
+                          _pickOf(media);
+                        }
+                      }),
                     ),
+                    if (_busy)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16),
+                        child: Center(
+                          child: SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                      )
+                    else if (_picked.isNotEmpty && _canExport)
+                      IconButton(
+                        tooltip: '导出选中的产物',
+                        icon: const Icon(Icons.save_alt),
+                        onPressed: _exportSelected,
+                      ),
+                  ]
+                : [
+                    IconButton(
+                      tooltip: '多选',
+                      icon: const Icon(Icons.checklist),
+                      onPressed: () => setState(() => _selectionMode = true),
+                    ),
+                    IconButton(
+                      tooltip: '重新自动整理',
+                      icon: const Icon(Icons.auto_awesome_motion),
+                      onPressed: _busy ? null : _regroup,
+                    ),
+                    if (_canExport)
+                      IconButton(
+                        tooltip: '导出产物',
+                        icon: const Icon(Icons.save_alt),
+                        onPressed: _exportAll,
+                      ),
+                    IconButton(
+                      tooltip: '刷新',
+                      icon: const Icon(Icons.refresh),
+                      onPressed: () => store.refreshAll(),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+          ),
+          floatingActionButton: _selectionMode && _picked.isNotEmpty
+              ? null
+              : liftFabAbovePageBar(
+                  FloatingActionButton.extended(
+                    onPressed: () async {
+                      final ok = await showUploadSheet(context);
+                      if (ok) await store.refreshAll();
+                    },
+                    icon: const Icon(Icons.add_photo_alternate_outlined),
+                    label: const Text('上传产物'),
                   ),
-              ]
-            : [
-                IconButton(
-                  tooltip: '多选',
-                  icon: const Icon(Icons.checklist),
-                  onPressed: () => setState(() => _selectionMode = true),
+                  // 只有真有翻页条时才需要抬高；单页画廊别白留一条空白
+                  lift: store.media.pages > 1,
                 ),
-                IconButton(
-                  tooltip: '重新自动整理',
-                  icon: const Icon(Icons.auto_awesome_motion),
-                  onPressed: _busy ? null : _regroup,
-                ),
-                IconButton(
-                  tooltip: '刷新',
-                  icon: const Icon(Icons.refresh),
-                  onPressed: () => store.refreshAll(),
-                ),
-                const SizedBox(width: 4),
-              ],
-      ),
-      floatingActionButton: _selectionMode && _picked.isNotEmpty
-          ? null
-          : liftFabAbovePageBar(
-              FloatingActionButton.extended(
-                onPressed: () async {
-                  final ok = await showUploadSheet(context);
-                  if (ok) await store.refreshAll();
-                },
-                icon: const Icon(Icons.add_photo_alternate_outlined),
-                label: const Text('上传产物'),
-              ),
-              // 只有真有翻页条时才需要抬高；单页画廊别白留一条空白
-              lift: store.media.pages > 1,
-            ),
-      bottomNavigationBar: _selectionMode && _picked.isNotEmpty
-          ? _SelectionBar(
-              count: _pickedCount,
-              onLink: _bulkLink,
-              onFavorite: _bulkFavorite,
-              onMove: _bulkMove,
-              onDetach: _bulkDetach,
-              onDelete: _bulkDelete,
-            )
-          : null,
-      body: Column(
-        children: [
-          _buildToolbar(context, store),
-          Expanded(child: _buildBody(context, store)),
-        ],
-      ),
+          bottomNavigationBar: _selectionMode && _picked.isNotEmpty
+              ? _SelectionBar(
+                  count: _pickedCount,
+                  onLink: _bulkLink,
+                  onFavorite: _bulkFavorite,
+                  onMove: _bulkMove,
+                  onDetach: _bulkDetach,
+                  onDelete: _bulkDelete,
+                )
+              : null,
+          body: Column(
+            children: [
+              _buildToolbar(context, store),
+              Expanded(child: _buildBody(context, store)),
+            ],
+          ),
         ),
       ),
     );
@@ -271,7 +306,8 @@ class _GalleryPageState extends State<GalleryPage> {
               IconButton(
                 tooltip: collapsed ? '展开筛选' : '收起筛选',
                 icon: Icon(collapsed ? Icons.expand_more : Icons.expand_less),
-                onPressed: () => settings.setGalleryFiltersCollapsed(!collapsed),
+                onPressed: () =>
+                    settings.setGalleryFiltersCollapsed(!collapsed),
               ),
             ],
           ),
@@ -314,7 +350,11 @@ class _GalleryPageState extends State<GalleryPage> {
   ///
   /// 为什么分区：这些 chip 原来是一条扁平的流，"一键清除"那种**破坏性**动作
   /// 与"只看收藏"混在一起，扫一眼分不出哪个会改数据。
-  Widget _filterSections(BuildContext context, LibraryStore store, ThemeData theme) {
+  Widget _filterSections(
+    BuildContext context,
+    LibraryStore store,
+    ThemeData theme,
+  ) {
     return FilterGroupRow(
       groups: [
         FilterGroup(
@@ -392,15 +432,32 @@ class _GalleryPageState extends State<GalleryPage> {
               tooltip: '排序',
               onSelected: store.setMediaSort,
               options: const [
-                MenuOption(value: 'newest', icon: Icons.schedule, label: '最新加入'),
+                MenuOption(
+                  value: 'newest',
+                  icon: Icons.schedule,
+                  label: '最新加入',
+                ),
                 MenuOption(value: 'oldest', icon: Icons.history, label: '最旧加入'),
-                MenuOption(value: 'name', icon: Icons.sort_by_alpha, label: '按文件名'),
-                MenuOption(value: 'largest', icon: Icons.data_usage, label: '按体积'),
-                MenuOption(value: 'favorite', icon: Icons.star_border, label: '收藏优先'),
+                MenuOption(
+                  value: 'name',
+                  icon: Icons.sort_by_alpha,
+                  label: '按文件名',
+                ),
+                MenuOption(
+                  value: 'largest',
+                  icon: Icons.data_usage,
+                  label: '按体积',
+                ),
+                MenuOption(
+                  value: 'favorite',
+                  icon: Icons.star_border,
+                  label: '收藏优先',
+                ),
               ],
               button: (context, controller, isOpen) => InkWell(
                 borderRadius: BorderRadius.circular(8),
-                onTap: () => controller.isOpen ? controller.close() : controller.open(),
+                onTap: () =>
+                    controller.isOpen ? controller.close() : controller.open(),
                 child: Chip(
                   avatar: const Icon(Icons.sort, size: 16),
                   label: Text(_sortLabel(store.mediaSort)),
@@ -409,7 +466,9 @@ class _GalleryPageState extends State<GalleryPage> {
             ),
             Text(
               '共 ${store.media.total} 个',
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           ],
         ),
@@ -421,7 +480,9 @@ class _GalleryPageState extends State<GalleryPage> {
               onPressed: _busy ? null : _clearUnlinked,
               icon: const Icon(Icons.cleaning_services_outlined, size: 16),
               label: const Text('清除未关联产物'),
-              style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+              style: TextButton.styleFrom(
+                foregroundColor: theme.colorScheme.error,
+              ),
             ),
           ],
         ),
@@ -430,16 +491,17 @@ class _GalleryPageState extends State<GalleryPage> {
   }
 
   String _sortLabel(String s) => switch (s) {
-        'oldest' => '最旧加入',
-        'name' => '按文件名',
-        'largest' => '按体积',
-        'favorite' => '收藏优先',
-        _ => '最新加入',
-      };
+    'oldest' => '最旧加入',
+    'name' => '按文件名',
+    'largest' => '按体积',
+    'favorite' => '收藏优先',
+    _ => '最新加入',
+  };
 
   Widget _buildBody(BuildContext context, LibraryStore store) => LayoutBuilder(
-        builder: (context, constraints) => _libraryBody(context, store, constraints.maxWidth),
-      );
+    builder: (context, constraints) =>
+        _libraryBody(context, store, constraints.maxWidth),
+  );
 
   /// 集合面板的宽度：**随可用宽度缩放**，并夹在一个合理区间里。
   ///
@@ -448,15 +510,22 @@ class _GalleryPageState extends State<GalleryPage> {
   ///
   /// ⚠ 这两个数**不是布局断点**（断点仍然只有 `kWideLayoutMinWidth` 一个）：
   /// 它们是"这块面板自己长什么样"的尺寸区间。
-  static double collectionPanelWidth(double available) =>
-      (available * 0.32).clamp(kCollectionPanelMinWidth, kCollectionPanelMaxWidth);
+  static double collectionPanelWidth(double available) => (available * 0.32)
+      .clamp(kCollectionPanelMinWidth, kCollectionPanelMaxWidth);
 
-  Widget _libraryBody(BuildContext context, LibraryStore store, double available) {
+  Widget _libraryBody(
+    BuildContext context,
+    LibraryStore store,
+    double available,
+  ) {
     if (store.loadingMedia && store.media.items.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
     if (store.mediaError != null) {
-      return ErrorState(message: store.mediaError!, onRetry: store.refreshMedia);
+      return ErrorState(
+        message: store.mediaError!,
+        onRetry: store.refreshMedia,
+      );
     }
     if (store.media.items.isEmpty) {
       return EmptyState(
@@ -486,20 +555,20 @@ class _GalleryPageState extends State<GalleryPage> {
             pages: store.media.pages,
             onPageChanged: store.setMediaPage,
             child: GridView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-            // 每个格子**已经**带了自己的 RepaintBoundary（SliverChildBuilderDelegate
-            // 的 addRepaintBoundaries 默认就是 true），所以这里不用再手包一层；
-            // 但 keep-alive 媒体格子用不上（没有输入框 / 可保留的选择），关掉就少两个
-            // 包装 Element + State 要建。cacheExtent 也用默认的 250 逻辑像素：
-            // 只多预建一行的量，正是它挡住了"滑动时把几百张离屏图都解出来"。
-            addAutomaticKeepAlives: false,
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 230,
-              crossAxisSpacing: 10,
-              mainAxisSpacing: 10,
-              childAspectRatio: 1,
-            ),
-            itemCount: store.media.items.length,
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+              // 每个格子**已经**带了自己的 RepaintBoundary（SliverChildBuilderDelegate
+              // 的 addRepaintBoundaries 默认就是 true），所以这里不用再手包一层；
+              // 但 keep-alive 媒体格子用不上（没有输入框 / 可保留的选择），关掉就少两个
+              // 包装 Element + State 要建。cacheExtent 也用默认的 250 逻辑像素：
+              // 只多预建一行的量，正是它挡住了"滑动时把几百张离屏图都解出来"。
+              addAutomaticKeepAlives: false,
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 230,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 10,
+                childAspectRatio: 1,
+              ),
+              itemCount: store.media.items.length,
               itemBuilder: (context, i) {
                 final m = store.media.items[i];
                 // 集合格子（同一批微调的产物折叠成一张）：叠放封面 + 右下角总数。
@@ -567,7 +636,9 @@ class _GalleryPageState extends State<GalleryPage> {
     //    它是"停靠时面板长什么样"，跟"停靠还是弹窗"是两件事 —— 一个字都不改。
     final settings = context.watch<SettingsStore>();
     final wide = MediaQuery.sizeOf(context).width >= kWideLayoutMinWidth;
-    final style = wide ? settings.collectionDetailWide : settings.collectionDetailNarrow;
+    final style = wide
+        ? settings.collectionDetailWide
+        : settings.collectionDetailNarrow;
     final docked = open && style == CollectionDetailStyle.dock;
     final panelWidth = collectionPanelWidth(available);
 
@@ -636,7 +707,11 @@ class _GalleryPageState extends State<GalleryPage> {
             label: '删除选中的 $count 张',
             danger: true,
           ),
-          const MenuOption(value: 'cancelSelection', icon: Icons.close, label: '取消选择'),
+          const MenuOption(
+            value: 'cancelSelection',
+            icon: Icons.close,
+            label: '取消选择',
+          ),
         ],
       );
       if (picked == null || !mounted) return;
@@ -715,7 +790,9 @@ class _GalleryPageState extends State<GalleryPage> {
         if (picked == null || !mounted) return;
         await store.api.updateMedia(media.id, promptId: picked.id);
         await store.refreshAll();
-        messenger.showSnackBar(SnackBar(content: Text('已关联到「${picked.title}」')));
+        messenger.showSnackBar(
+          SnackBar(content: Text('已关联到「${picked.title}」')),
+        );
         break;
       case 'favorite':
         await store.api.updateMedia(media.id, favorite: !media.favorite);
@@ -725,7 +802,9 @@ class _GalleryPageState extends State<GalleryPage> {
         await store.api.updateMedia(media.id, nsfw: !media.nsfw);
         await store.refreshAll();
         messenger.showSnackBar(
-          SnackBar(content: Text(media.nsfw ? '已取消 NSFW 标记' : '已标记为 NSFW，预览图会按设置打码')),
+          SnackBar(
+            content: Text(media.nsfw ? '已取消 NSFW 标记' : '已标记为 NSFW，预览图会按设置打码'),
+          ),
         );
         break;
       case 'delete':
@@ -779,8 +858,9 @@ class _GalleryPageState extends State<GalleryPage> {
         onDragStarted: onDragStarted,
         onDragUpdate: onDragUpdate,
         onDragCompleted: onDragCompleted,
-        onDraggableCanceled:
-            onDragCanceled == null ? null : (_, _) => onDragCanceled(),
+        onDraggableCanceled: onDragCanceled == null
+            ? null
+            : (_, _) => onDragCanceled(),
         child: child,
       );
     }
@@ -791,8 +871,9 @@ class _GalleryPageState extends State<GalleryPage> {
       onDragStarted: onDragStarted,
       onDragUpdate: onDragUpdate,
       onDragCompleted: onDragCompleted,
-      onDraggableCanceled:
-          onDragCanceled == null ? null : (_, _) => onDragCanceled(),
+      onDraggableCanceled: onDragCanceled == null
+          ? null
+          : (_, _) => onDragCanceled(),
       child: child,
     );
   }
@@ -950,9 +1031,12 @@ class _GalleryPageState extends State<GalleryPage> {
       color: theme.colorScheme.surfaceContainerHigh,
       child: SizedBox(
         // 手机（窄屏）上**限制弹窗大小**：用户拍板的"手机 UI 限制弹窗大小就可以了"
-        width: docked ? constraints.maxWidth : (constraints.maxWidth * 0.78).clamp(320.0, 620.0),
-        height:
-            docked ? constraints.maxHeight : (constraints.maxHeight * 0.80).clamp(240.0, 640.0),
+        width: docked
+            ? constraints.maxWidth
+            : (constraints.maxWidth * 0.78).clamp(320.0, 620.0),
+        height: docked
+            ? constraints.maxHeight
+            : (constraints.maxHeight * 0.80).clamp(240.0, 640.0),
         child: Column(
           children: [
             ListTile(
@@ -966,7 +1050,9 @@ class _GalleryPageState extends State<GalleryPage> {
                 _folderSelection
                     ? '已选 $picked 张'
                     : '点一张进详情、长按可多选；拖一张到弹窗外 = 移出或转移集合',
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
               trailing: IconButton(
                 tooltip: '关闭',
@@ -979,22 +1065,29 @@ class _GalleryPageState extends State<GalleryPage> {
               child: members == null
                   ? const Center(child: CircularProgressIndicator())
                   : members.isEmpty
-                      ? Center(child: Text('这一组空了', style: theme.textTheme.bodySmall))
-                      : GridView.builder(
-                          padding: const EdgeInsets.all(12),
-                          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  ? Center(
+                      child: Text('这一组空了', style: theme.textTheme.bodySmall),
+                    )
+                  : GridView.builder(
+                      padding: const EdgeInsets.all(12),
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
                             maxCrossAxisExtent: 120,
                             crossAxisSpacing: 10,
                             mainAxisSpacing: 10,
                           ),
-                          itemCount: members.length,
-                          itemBuilder: (context, i) => _folderMemberTile(theme, members[i]),
-                        ),
+                      itemCount: members.length,
+                      itemBuilder: (context, i) =>
+                          _folderMemberTile(theme, members[i]),
+                    ),
             ),
             // 集合内**多选**（用户 2026-10-18："在集合内我不能多选操作"）
             if (_folderSelection && picked > 0)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   border: Border(top: BorderSide(color: theme.dividerColor)),
                 ),
@@ -1016,7 +1109,9 @@ class _GalleryPageState extends State<GalleryPage> {
                       onPressed: _folderDeletePicked,
                       icon: const Icon(Icons.delete_outline, size: 16),
                       label: const Text('删除'),
-                      style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+                      style: TextButton.styleFrom(
+                        foregroundColor: theme.colorScheme.error,
+                      ),
                     ),
                     TextButton(
                       onPressed: () => setState(() {
@@ -1040,7 +1135,9 @@ class _GalleryPageState extends State<GalleryPage> {
       builder: (context, candidates, _) => DecoratedBox(
         decoration: BoxDecoration(
           border: Border.all(
-            color: candidates.isEmpty ? Colors.transparent : theme.colorScheme.primary,
+            color: candidates.isEmpty
+                ? Colors.transparent
+                : theme.colorScheme.primary,
             width: 3,
           ),
         ),
@@ -1153,15 +1250,17 @@ class _GalleryPageState extends State<GalleryPage> {
               Icon(
                 Icons.call_split,
                 size: 16,
-                color:
-                    candidates.isEmpty ? theme.colorScheme.outline : theme.colorScheme.primary,
+                color: candidates.isEmpty
+                    ? theme.colorScheme.outline
+                    : theme.colorScheme.primary,
               ),
               const SizedBox(width: 8),
               Text(
                 '拖到这里 = 移出集合',
                 style: theme.textTheme.labelLarge?.copyWith(
-                  color:
-                      candidates.isEmpty ? theme.colorScheme.outline : theme.colorScheme.primary,
+                  color: candidates.isEmpty
+                      ? theme.colorScheme.outline
+                      : theme.colorScheme.primary,
                 ),
               ),
             ],
@@ -1192,7 +1291,9 @@ class _GalleryPageState extends State<GalleryPage> {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: selected ? theme.colorScheme.primary : theme.dividerColor,
+                color: selected
+                    ? theme.colorScheme.primary
+                    : theme.dividerColor,
                 width: selected ? 2 : 1,
               ),
             ),
@@ -1204,7 +1305,9 @@ class _GalleryPageState extends State<GalleryPage> {
               key: const Key('folder-member-thumb'),
               fit: BoxFit.cover,
               filterQuality: FilterQuality.low,
-              cacheWidth: (120 * MediaQuery.devicePixelRatioOf(context)).round().clamp(1, 512),
+              cacheWidth: (120 * MediaQuery.devicePixelRatioOf(context))
+                  .round()
+                  .clamp(1, 512),
               errorBuilder: (_, _, _) => Icon(
                 Icons.broken_image_outlined,
                 size: 16,
@@ -1250,7 +1353,9 @@ class _GalleryPageState extends State<GalleryPage> {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: candidates.isEmpty ? Colors.transparent : theme.colorScheme.primary,
+            color: candidates.isEmpty
+                ? Colors.transparent
+                : theme.colorScheme.primary,
             width: 2,
           ),
         ),
@@ -1284,17 +1389,22 @@ class _GalleryPageState extends State<GalleryPage> {
   ///
   /// kind 不一致**在前端就先拦一道**并说人话：后端也会拒（400），但让用户等到一次
   /// 往返之后才看到红字，不如当场说。
-  Future<void> _dropOnto({required int draggedId, required MediaAsset target}) async {
+  Future<void> _dropOnto({
+    required int draggedId,
+    required MediaAsset target,
+  }) async {
     final dragged = context.read<LibraryStore>().media.items.firstWhere(
-          (item) => item.id == draggedId,
-          orElse: () => target,
-        );
+      (item) => item.id == draggedId,
+      orElse: () => target,
+    );
     if (dragged.kind != target.kind) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          '${dragged.kind.name.toUpperCase()} 放不进 ${target.kind.name.toUpperCase()} 的集合',
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${dragged.kind.name.toUpperCase()} 放不进 ${target.kind.name.toUpperCase()} 的集合',
+          ),
         ),
-      ));
+      );
       return;
     }
 
@@ -1354,7 +1464,10 @@ class _GalleryPageState extends State<GalleryPage> {
     return null;
   }
 
-  Future<void> _detachFromCollections(List<int> ids, {required String what}) async {
+  Future<void> _detachFromCollections(
+    List<int> ids, {
+    required String what,
+  }) async {
     if (ids.isEmpty) return;
     await _run(() async {
       final store = context.read<LibraryStore>();
@@ -1404,9 +1517,8 @@ class _GalleryPageState extends State<GalleryPage> {
       return page.items.map((e) => e.id).toList(growable: false);
     } catch (e) {
       if (!mounted) return null;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('拉取集合成员失败，未执行操作：$e')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('拉取集合成员失败，未执行操作：$e')));
       return null;
     }
   }
@@ -1522,24 +1634,26 @@ class _GalleryPageState extends State<GalleryPage> {
     final ok = await confirmDialog(
       context,
       title: '清除 $total 个未关联产物？',
-      message: '这些产物没有关联任何提示词（多为提示词被删后留下的）。\n'
+      message:
+          '这些产物没有关联任何提示词（多为提示词被删后留下的）。\n'
           '磁盘上的文件会被删除，且不可恢复；提示词本身不受影响。',
       confirmText: '删除 $total 个',
     );
     if (!ok || !mounted) return;
-    await _run(
-      () async {
-        // 每次重新取第一页：边删边翻页会因为页码前移漏掉一部分
-        while (true) {
-          final page = await store.api.listMedia(untagged: true, page: 1, size: 200);
-          if (page.items.isEmpty) break;
-          for (final m in page.items) {
-            await store.api.deleteMedia(m.id);
-          }
+    await _run(() async {
+      // 每次重新取第一页：边删边翻页会因为页码前移漏掉一部分
+      while (true) {
+        final page = await store.api.listMedia(
+          untagged: true,
+          page: 1,
+          size: 200,
+        );
+        if (page.items.isEmpty) break;
+        for (final m in page.items) {
+          await store.api.deleteMedia(m.id);
         }
-      },
-      '已清除 $total 个未关联产物',
-    );
+      }
+    }, '已清除 $total 个未关联产物');
   }
 
   /// 「重新自动整理」：把**已存的**产物按当前规则重算一遍分组。
@@ -1553,7 +1667,8 @@ class _GalleryPageState extends State<GalleryPage> {
     final ok = await confirmDialog(
       context,
       title: '重新自动整理？',
-      message: '按提示词把**算法分出来的**分组重算一遍。\n\n'
+      message:
+          '按提示词把**算法分出来的**分组重算一遍。\n\n'
           '你手动新建或调整过的集合、以及你手动移出过的产物，**都不会被改动**。',
     );
     if (!ok || !mounted) return;
@@ -1579,6 +1694,7 @@ class _GalleryPageState extends State<GalleryPage> {
   Future<void> _run(
     Future<void> Function() action,
     String toast, {
+
     /// 提示语要**读了结果才知道**时给这个（例如"这次重算了 N 张"）。
     String Function()? toastOf,
     bool announce = false,
@@ -1588,9 +1704,15 @@ class _GalleryPageState extends State<GalleryPage> {
     final messenger = ScaffoldMessenger.of(context);
     try {
       await action();
-      await Future.wait([store.refreshMedia(), store.refreshPrompts(), store.refreshStats()]);
+      await Future.wait([
+        store.refreshMedia(),
+        store.refreshPrompts(),
+        store.refreshStats(),
+      ]);
       if (announce) {
-        messenger.showSnackBar(SnackBar(content: Text(toastOf?.call() ?? toast)));
+        messenger.showSnackBar(
+          SnackBar(content: Text(toastOf?.call() ?? toast)),
+        );
       }
       if (mounted) {
         // 改完归属之后展开的文件夹已经过期了 —— 收起它，让用户看到刷新后的画廊
@@ -1620,19 +1742,27 @@ class _FilterSummary extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+        color: theme.colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.45,
+        ),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         children: [
-          Icon(Icons.filter_alt_outlined, size: 14, color: theme.colorScheme.outline),
+          Icon(
+            Icons.filter_alt_outlined,
+            size: 14,
+            color: theme.colorScheme.outline,
+          ),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
               text,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ],
@@ -1671,8 +1801,16 @@ class _SelectionBar extends StatelessWidget {
         children: [
           Text('$count 张', style: theme.textTheme.titleSmall),
           const Spacer(),
-          TextButton.icon(onPressed: onLink, icon: const Icon(Icons.link), label: const Text('关联提示词')),
-          TextButton.icon(onPressed: onFavorite, icon: const Icon(Icons.star_border), label: const Text('收藏')),
+          TextButton.icon(
+            onPressed: onLink,
+            icon: const Icon(Icons.link),
+            label: const Text('关联提示词'),
+          ),
+          TextButton.icon(
+            onPressed: onFavorite,
+            icon: const Icon(Icons.star_border),
+            label: const Text('收藏'),
+          ),
           // 归类纠错（2026-10-18）：可以整组拖出去，也可以整批塞进另一个集合
           TextButton.icon(
             onPressed: onMove,
@@ -1688,7 +1826,9 @@ class _SelectionBar extends StatelessWidget {
             onPressed: onDelete,
             icon: const Icon(Icons.delete_outline),
             label: const Text('删除'),
-            style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+            style: TextButton.styleFrom(
+              foregroundColor: theme.colorScheme.error,
+            ),
           ),
         ],
       ),
@@ -1719,8 +1859,9 @@ class _DragChip extends StatelessWidget {
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.labelMedium
-                ?.copyWith(color: theme.colorScheme.onSecondaryContainer),
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSecondaryContainer,
+            ),
           ),
         ),
       ),
@@ -1740,7 +1881,8 @@ class CollectionTarget {
   final MediaCollection? collection;
   final String? title;
 
-  const CollectionTarget.existing(MediaCollection this.collection) : title = null;
+  const CollectionTarget.existing(MediaCollection this.collection)
+    : title = null;
   const CollectionTarget.create(this.title) : collection = null;
 }
 
@@ -1766,7 +1908,8 @@ class _CollectionPickerDialog extends StatefulWidget {
   const _CollectionPickerDialog({required this.mediaKind, required this.count});
 
   @override
-  State<_CollectionPickerDialog> createState() => _CollectionPickerDialogState();
+  State<_CollectionPickerDialog> createState() =>
+      _CollectionPickerDialogState();
 }
 
 class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
@@ -1817,8 +1960,7 @@ class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
                 child: Center(child: CircularProgressIndicator()),
               )
             else if (rows.isEmpty)
-              Text('还没有任何集合 —— 在下面起个名字新建一个',
-                  style: theme.textTheme.bodySmall)
+              Text('还没有任何集合 —— 在下面起个名字新建一个', style: theme.textTheme.bodySmall)
             else
               Flexible(
                 child: ListView.builder(
@@ -1831,11 +1973,17 @@ class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
                       dense: true,
                       enabled: fits,
                       leading: Icon(
-                        collection.isManual ? Icons.folder_outlined : Icons.auto_awesome_motion,
+                        collection.isManual
+                            ? Icons.folder_outlined
+                            : Icons.auto_awesome_motion,
                         size: 18,
                         color: fits ? null : theme.disabledColor,
                       ),
-                      title: Text(collection.label, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      title: Text(
+                        collection.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                       subtitle: Text(
                         fits
                             ? '${collection.kind} · ${collection.size} 张'
@@ -1843,7 +1991,9 @@ class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
                         style: theme.textTheme.labelSmall,
                       ),
                       onTap: fits
-                          ? () => Navigator.of(context).pop(CollectionTarget.existing(collection))
+                          ? () =>
+                                Navigator.of(context)
+                                    .pop(CollectionTarget.existing(collection))
                           : null,
                     );
                   },

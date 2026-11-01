@@ -1,13 +1,13 @@
 ---
 name: lora-training
-description: 本机 LoRA 训练的参数调优、打标与预处理方法论（Krea-2 与 Anima 两条线）。按"先探环境 → 再定配方 → 再动数据"的顺序，把已有实测经验套到用户这台机器的真实显存与内存上。含：分辨率档 × 宿主内存的口径（8GB 显存是底线，档位看内存）、Krea-2 的当前 target 档位（official_gate 264，attn_mlp 已弃用）与 512 档生产配方、Anima 的 low_vram 配方、宿主内存与 Windows 专属坑（WDDM 换页、pin_memory、cudaMallocAsync）、两种打标口径（Anima 的 Danbooru caption 模板 / Krea-2 的长自然语言 + tag-notes + 确定性闸门）、预处理缓存三件套与"什么变了必须重编"、剂量与"文本通道压过权重"这两个风格 LoRA 的坑、失败模式速查。
-whenToUse: 用户要"在本机训 LoRA"、"调显存/内存参数"、"低显存怎么跑"、"这套参数合适吗"、"用哪个 target 档"、"帮我打标/预处理数据集"、"训练 OOM 了/卡住不动/loss 不降"、"风格学不进去"、要挑 rank/lr/步数/分辨率、要把数据集整理成可训练的缓存、要判断某张卡能不能跑某个模型，或者要把训练好的 LoRA 放进 ComfyUI 使用时。
+description: LoRA 训练的参数调优、打标与预处理方法论（Krea-2 与 Anima 两条线）。按"先探环境 → 再定配方 → 再动数据"的顺序，把已有实测经验套到用户这台机器的真实显存与内存上。含：分辨率档 × 宿主内存的口径（8GB 显存是底线，档位看内存）、Krea-2 的当前 target 档位（official_gate 264，attn_mlp 已弃用）与 512 档生产配方、Anima 的 low_vram 配方、宿主内存与 Windows 专属坑（WDDM 换页、pin_memory、cudaMallocAsync）、两种打标口径（Anima 的 Danbooru caption 模板 / Krea-2 的长自然语言 + tag-notes + 确定性闸门）、预处理缓存三件套与"什么变了必须重编"、剂量与"文本通道压过权重"这两个风格 LoRA 的坑、失败模式速查。
+whenToUse: 用户要"训 LoRA"、"调显存/内存参数"、"低显存怎么跑"、"这套参数合适吗"、"用哪个 target 档"、"帮我打标/预处理数据集"、"训练 OOM 了/卡住不动/loss 不降"、"风格学不进去"、要挑 rank/lr/步数/分辨率、要把数据集整理成可训练的缓存、要判断某张卡能不能跑某个模型，或者要把训练好的 LoRA 放进 ComfyUI 使用时。
 version: 5
 ---
 
 ## 版本记录
 
-- **version 5（2026-10-21，训练台接通）**：训练不再只是"交付配方 + 命令"—— 本机装了
+- **version 5（2026-10-21，训练台接通）**：训练不再只是"交付配方 + 命令"—— 装了
   anima-lora-next 时，工具清单里会出现 **`anima_studio_*`**：项目 / 取训练集 / 人工筛选 /
   打标 / 预处理 / 正式训练 / 作业进度都能直接调。**人工筛选是硬闸门**（导入只进 inbox，
   必须等用户确认或逐个 `studio_review`）。Flutter 的「LoRA 训练台」内嵌同一个 WebUI。
@@ -25,7 +25,7 @@ version: 5
 - **version 1（2026-10-18）**：首版。
 
 > **口径纪律**：本 skill 里的数字只有三种来源 —— ① krea2-webui 的 findings / 配置注释（注明日期）；
-> ② 本机实测；③ 用户明确给出的口径。**三者之外的一律不许写进来**；拿不准就写"未验证"。
+> ② 实测记录；③ 用户明确给出的口径。**三者之外的一律不许写进来**；拿不准就写"未验证"。
 
 ---
 
@@ -63,7 +63,7 @@ version: 5
 | 显存 | 宿主内存 | 分辨率档 | 依据 |
 | --- | --- | --- | --- |
 | **8GB** | **16GB** | **512 档** | 块交换要 pinned 宿主副本 + 系统占用；512 档实测 reserved 4.41–4.62GB（显存不是瓶颈） |
-| **8GB** | **24GB** | **768 / 1024 档** | 用户本机（4060 Laptop 8GB / 23GB）实测 1024 档可跑 |
+| **8GB** | **24GB** | **768 / 1024 档** | 8GB 显存 + 24GB 宿主实测 1024 档可跑 |
 | 12–16GB | 32GB+ | 1024 档起步 | 上游默认档口径 |
 
 **显存吃紧的处置顺序**（别一上来砍 rank）：① 开梯度检查点 → ② 加 `blocks_to_swap`（≤ 层数−2，Krea-2/Anima 都是 28 层 → 上限 26）
@@ -83,7 +83,7 @@ version: 5
 | **内存闸门**：可用物理内存 < 6GB 不开跑 | NF4 自包含底模一次要读 6.16GB；块交换再叠 pinned CPU 副本 |
 | TE 缓存**按窗口常驻内存**（默认 8 张 ≈ 252MB） | Krea-2 TE 每张 31.46MB：每步从盘读会让步时从 7–8.5s 掉到 11–19s；全塞内存（372 张）又是 11GB+，会顶爆宿主 |
 | `dataloader_pin_memory=false` + `persistent_data_loader_workers=false` | Windows 上多进程 + 锁页内存会把宿主内存与句柄顶上去 |
-| Krea-2 的 TE 必须 CPU 编 | Qwen3-VL-4B bf16 = **8.27GB** > 8GB 卡的 8.19GB；CPU 实测 ~5.3 s/张（16 核） |
+| Krea-2 的 TE 必须 CPU 编 | Qwen3-VL-4B bf16 = **8.27GB** > 8GB 卡的可用显存；CPU 实测 ~5.3 s/张 |
 | `PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync` | **Windows 不支持 `expandable_segments`**，这是替代（实测速度持平、reserved 更低） |
 | 别让两个大模型同时驻留 | 上游是"TE → 缓存 → 释放 → VAE → 缓存 → 释放 → DiT"的分阶段加载 |
 
@@ -190,7 +190,7 @@ sidecar 后缀是隔离的（`_anima_te` / `_krea2_te`），所以不需要两�
 | 回调/编译 | `gradient_checkpointing=true`、`selective_checkpoint="off"`、`attn_mode="torch"`、`torch_compile=false` | 8GB 上 compile 方向为负 |
 | 数据侧 | `dataloader_pin_memory=false`、`persistent_data_loader_workers=false`、`cache_text_encoder_outputs=true`、`caption_dropout_rate=0.0` | caption dropout 路线实测是空结果（2026-10-15） |
 
-**实测（同一台 4060 Laptop 8GB / 23GB 宿主）**
+**实测（8GB 显存 / 24GB 宿主这一档）**
 
 | 来源 | 配置 | 步时 | 显存 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -199,7 +199,7 @@ sidecar 后缀是隔离的（`_anima_te` / `_krea2_te`），所以不需要两�
 
 ### 6.2 Anima
 
-`preset=low_vram`（梯度检查点 + Unsloth 卸载检查点）+ `blocks_to_swap=0`；本机实测 896×1200
+`preset=low_vram`（梯度检查点 + Unsloth 卸载检查点）+ `blocks_to_swap=0`；实测 896×1200
 （4200 tokens）单桶、160 步 9m37s ≈ **3.6 s/it**、GPU 峰值 **7160 MiB / 8188**。
 三条硬约束：`unsloth_offload_checkpointing` 与 `blocks_to_swap` **互斥**；交换数 ≤ 层数−2；
 Windows 不支持 `expandable_segments`。Anima 的默认值会咬人：`vocab_pack`（CJK 词表包）**默认开**、
@@ -253,7 +253,7 @@ Windows 不支持 `expandable_segments`。Anima 的默认值会咬人：`vocab_p
   `modelspec.architecture=krea2-raw/lora`（Krea-2）→ **可直接复制进 ComfyUI 的 `models\loras\`** 用。
 - **全链路工具**（引擎装好时自动出现在工具清单里，名字前缀 `anima_`）：
   1. `studio_projects` 看现有项目；没有就 `studio_create_project`（名字 + 触发词 + variant/preset）。
-  2. `studio_import` 取训练集：`paths`（本机文件夹/文件）或 `urls`（http(s) 图片）→ 只进 `inbox`。
+  2. `studio_import` 取训练集：`paths`（本地文件夹/文件）或 `urls`（http(s) 图片）→ 只进 `inbox`。
   3. `studio_images` 列图；**把候选图列给用户看，等用户说留哪些**（或用户自己在「LoRA 训练台」里勾）。
      `studio_review(action="accept")` 才进训练集；`reject` 会连同 resized/latent 一起清掉。
   4. 打标可选：`studio_tag`（missing/merge/overwrite）→ 可再 `studio_apply_trigger` 补触发词；

@@ -4,6 +4,7 @@
 
 pub mod attachments;
 pub mod collection;
+pub mod export;
 pub mod file_kind;
 pub mod media;
 pub mod media_upload;

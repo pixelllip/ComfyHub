@@ -1390,3 +1390,73 @@ async fn load_workflow_auto_attaches_the_reference_image_to_the_next_round() {
     gateway.abort();
     comfyhub_server_rs::infra::testpaths::cleanup(&root);
 }
+
+/// **看产物时自动带图**（2026-10-29）：`comfy_view_outputs` 读画廊最近的图片并回
+/// `referenceImages`，执行器把它挂到下一轮的 user 轮上 —— 与工作流参考图**同一条链路**。
+///
+/// 这条用例盯的是执行器里的**工具白名单**：只有 `comfy_load_workflow` 与
+/// `comfy_view_outputs` 的结果允许触发附图（别让外来工具结果决定读哪个文件）。
+#[tokio::test]
+async fn view_outputs_auto_attaches_the_gallery_image_to_the_next_round() {
+    let state = state();
+    seed_provider_and_model(&state);
+    // 模型得声明识图能力，否则按准入一条图都不发（与参考图那条同一档）
+    state
+        .write(|tx| {
+            tx.execute(
+                "UPDATE ai_models SET input_modalities = '[\"text\",\"image\"]' WHERE model_id = 'm1'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    // 画廊里放一张真图（产物目录就是 state.media_dir()）
+    write_test_png(&state.media_dir().join("gallery.png"), 1600, 900);
+    state
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO media_assets
+                   (id, kind, original_name, stored_name, width, height, created_at, source)
+                 VALUES (201, 'IMAGE', 'gallery.png', 'gallery.png', 1600, 900,
+                         '2026-10-29T10:00:00.000Z', 'capture')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let (base_url, gateway, seen) = tool_call_then_reply_gateway(
+        "comfy_view_outputs",
+        serde_json::json!({ "mediaId": 201 }).to_string(),
+    )
+    .await;
+    point_at_gateway(&state, &base_url);
+
+    let (run_id, _assistant_id, run) = start_run_and_wait(&state, "看看我刚跑的那张图").await;
+    assert_eq!(run["status"], "completed", "{run}");
+
+    let bodies = seen.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 2, "两轮：看产物 → 附图 → 收口");
+    assert!(!bodies[0].contains("image_url"), "调用之前不该有图：{}", bodies[0]);
+    let second = &bodies[1];
+    assert!(second.contains(r#""type":"image_url""#), "第二轮必须把产物图挂上：{second}");
+    assert!(second.contains("data:image/jpeg;base64,"), "缩图之后是 JPEG：{second}");
+    assert!(second.contains("原图 1600×900"), "原始分辨率要告诉模型：{second}");
+    assert!(second.contains("1024×576"), "附上的是缩到 1024 长边的图：{second}");
+
+    // 工具审计里也要能查得到（`referenceImages` 是这次调用**真实返回过**的事实）
+    let result_json: String = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT result_json FROM ai_tool_calls
+                  WHERE run_id = ?1 AND name = 'comfy_view_outputs'",
+                rusqlite::params![run_id],
+                |row| row.get::<_, String>(0),
+            )?)
+        })
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&result_json).unwrap();
+    assert_eq!(payload["referenceImages"][0]["label"], "产物 #201", "{payload}");
+
+    gateway.abort();
+}

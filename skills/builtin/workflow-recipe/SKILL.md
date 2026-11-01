@@ -17,7 +17,7 @@ version: 2
 > （详见 skill `comfy-workflow-guide` §2）。
 
 **一句话**：工作流拆成三层 —— **任务骨架（泛用）**、**模型槽位（特定）**、**参数档位（特定）**。
-本机把学过的骨架记在 `workflow_recipes` 表里，换模型时只改槽位那几格，**不重搭图**。
+后端把学过的骨架记在 `workflow_recipes` 表里，换模型时只改槽位那几格，**不重搭图**。
 设计与判据在 `docs/workflow-recipe-design.md`（这份 skill 只管"怎么用、怎么判断"）。
 
 ## 三层分别是什么（判据来自代码，不是猜的）
@@ -35,11 +35,11 @@ version: 2
 
 1. **先看有没有学过的**：`comfy_list_recipes(task="edit")`（任务按需换：`inpaint` / `i2i` / `t2i` / `video`…）。
    同一族会有相同的 `skeletonHash`。用 `q` 可以按槽位里的模型文件名搜（"这个模型我配过哪条工作流"）。
-2. **没有就学一份**：`comfy_learn_workflow(path="…json")`（本机工作流文件，界面格式也行）/
+2. **没有就学一份**：`comfy_learn_workflow(path="…json")`（本地工作流文件，界面格式也行）/
    `promptId=…`（库里已有 API 图的提示词）/ `graph={…}`（API 节点图）。
    - 它回的是**配方正文**：任务、骨架指纹、槽位（覆盖键 + 原文件名）、旋钮、输出。
    - **被拒（`UNSUPPORTED_NODES`）时先读那几行**：它列出"转不出来被摘掉的节点类"与悬空的输入。
-     真机上最常见的原因是**本机这个实例没装 / 没启用那个自定义节点包**
+     真机上最常见的原因是**用户这个实例没装 / 没启用那个自定义节点包**
      （例：用户两份 Krea 2 编辑工作流要 `Krea2EditModelPatch` / `TextEncodeKrea2OstrisEdit`，
      而跑着的实例 `/object_info` 里一个都没有）——
      **不是工作流坏了**，也**不是**让你去改用户的工作流。处置：
@@ -61,11 +61,11 @@ version: 2
 
 | 结论 | 含义 | 你该做什么 |
 | --- | --- | --- |
-| `exact` | 本机有同名文件**且当前实例能加载** | ✅ 唯一能自动绑的一档，直接写进 overrides 提交 |
+| `exact` | 盘上有同名文件**且当前实例能加载** | ✅ 唯一能自动绑的一档，直接写进 overrides 提交 |
 | `onDiskOnly` | 盘上有同名，但**这个实例枚举不到**（模型根没挂全） | ⛔ **别下载、也别改 overrides**：让用户重启 ComfyUI / 修模型根，再绑一次 |
-| `substitute` | 本机只有**字面相似**的（相似≠架构兼容：`sd_xl_base` 与 `sd_xl_refiner` 分数很高却是两个模型） | ⛔ **先问用户**（那是他的模型），确认后才用 `force=true` 或让他自己指定 |
-| `missing` | 本机确实没有 | ⛔ **绝不编文件名**：`find_model` / `civitai_search` 查它，再用 `ask_user_question` 给 2~4 个具体选项 |
-| `unchecked` | 拿不到本机清单（ComfyUI 没跑 / 没找到 models 目录） | ⚠ 没验证过；确实要试就 `force=true`，提交前预检还会再拦一次 |
+| `substitute` | 盘上只有**字面相似**的（相似≠架构兼容：`sd_xl_base` 与 `sd_xl_refiner` 分数很高却是两个模型） | ⛔ **先问用户**（那是他的模型），确认后才用 `force=true` 或让他自己指定 |
+| `missing` | 确实没有 | ⛔ **绝不编文件名**：`find_model` / `civitai_search` 查它，再用 `ask_user_question` 给 2~4 个具体选项 |
+| `unchecked` | 拿不到模型清单（ComfyUI 没跑 / 没找到 models 目录） | ⚠ 没验证过；确实要试就 `force=true`，提交前预检还会再拦一次 |
 | `notInRecipe` | 这条配方里没有这个角色 / 这个键 | 看报告里列出的槽位清单，换 `role` / `overrideKey` 或换一条骨架 |
 | `ambiguous` | 同角色有多个槽位（两条 LoRA） | 用 `overrideKey` 点明一个；**不要**把一个文件写给两个槽位 |
 | `notAModel` | 名字是 ComfyUI 写的 sidecar（`*.metadata.json`） | 用同名的 `.safetensors` |

@@ -3,11 +3,68 @@
 //! 夹具在 [`super::common`]；`use super::common::*;` 之后照旧直接写用例。
 
 use super::common::*;
+use axum::extract::ConnectInfo;
+use std::net::SocketAddr;
 
+/// 发一个带"来源地址"的 POST：导出端点的闸门就是按它判回环的。
+fn post_with_remote(
+    app: axum::Router,
+    uri: &str,
+    remote: SocketAddr,
+    body: serde_json::Value,
+) -> impl std::future::Future<Output = (StatusCode, Value)> {
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .extension(ConnectInfo(remote))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    async move {
+        let response = app.oneshot(request).await.expect("请求");
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+}
 
 // ===========================================================================
 //  产物（P4 第 3 步）：列表 / 详情 / 原件文件流
 // ===========================================================================
+
+#[tokio::test]
+async fn media_export_is_loopback_only_and_writes_the_kind_layout() {
+    let state = state();
+    let out = comfyhub_server_rs::infra::testpaths::scratch("export-http-out");
+    std::fs::create_dir_all(&out).unwrap();
+    let body = serde_json::json!({ "dir": out.display().to_string() });
+
+    // 非回环：403，而且**文件一个都不许落**
+    let (status, error) = post_with_remote(
+        router_for(state.clone()),
+        "/api/media/export",
+        "192.168.1.50:54321".parse().unwrap(),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "body={error}");
+    assert!(!out.join("导出清单.json").exists(), "被拒的请求不许留下任何产物");
+
+    // 回环：真的按类型目录落盘（夹具里 id=100 是 a.png）
+    let (status, report) = post_with_remote(
+        router_for(state),
+        "/api/media/export",
+        SocketAddr::from(([127, 0, 0, 1], 54321)),
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={report}");
+    assert_eq!(report["exported"], 1, "body={report}");
+    assert_eq!(report["dir"], out.display().to_string());
+    assert!(out.join("图片/a.png").is_file(), "按类型目录落盘");
+    assert!(out.join("图片/a.png.json").is_file(), "侧车元信息");
+    assert!(out.join("导出清单.json").is_file(), "总清单");
+}
 
 #[tokio::test]
 async fn media_list_uses_the_same_keys_and_filters() {

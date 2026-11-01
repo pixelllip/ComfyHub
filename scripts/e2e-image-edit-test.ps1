@@ -12,11 +12,12 @@
 
   两条路（**2026-09-27 起只剩这两条**）：
     · **几何档**（不给人物图）：`comfy_make_mask(mode="rect"/"ellipse")` 画一张"白=重绘区"的遮罩，
-      配 `comfyhub_inpaint_anima.json` 提交 —— 纯提示词重绘 / 换背景保人物；
+      配你自己的 inpaint 工作流（`-Workflow`）提交 —— 纯提示词重绘 / 换背景保人物；
     · **贴人物档**（`-TwoStage` 或 `-PersonMediaId`）：`comfy_make_mask(mode="subject")`
       **不写遮罩**（只回 `personFilename` 与定位器诊断），合成用的 alpha 由工作流里的
-      `easy imageRemBg`（`refine_foreground=true`）现算，配
-      `comfyhub_paste_person_matte_anima.json` 提交。
+      `easy imageRemBg`（`refine_foreground=true`）现算，配你自己的贴人工作流（`-PersonWorkflow`）提交。
+      ⚠ **仓库不再随包带模板工作流**（2026-10-28 删除）：模板用各模型在 ComfyUI 模板库里的
+      标准工作流，或你自己存的那份 —— 所以这两条路都必须显式给路径。
       ⚠ **"Rust 按颜色抠剪影当遮罩"那一档已经删除**（它会在人物轮廓外留一圈青绿、
       还会把发梢整段吃掉）—— 所以这里没有 `-Matte` / `-Ring` / `-Light` 这些开关了，
       贴人物图就一条路。传老参数给工具会被**明确拒绝**，回归线是 `image_edit.rs` 的
@@ -257,14 +258,17 @@ try {
     Say ("  ComfyUI: " + (($stats.devices | Select-Object -First 1).name) + "  显存空闲 " +
         [math]::Round((($stats.devices | Select-Object -First 1).vram_free / 1GB), 1) + "GB") 'DarkGray'
 
-    # 两条路：**贴人物档**（有人物图）用 matte 那份工作流（抠图在**工作流里**，
+    # 两条路：**贴人物档**（有人物图）用你自己的 matte 工作流（抠图在**工作流里**，
     # 所以它没有 LoadImageMask —— 一个遮罩覆盖都不该写）；否则走几何档（自己画的矩形遮罩）。
+    # ⚠ 2026-10-28 起仓库**不再随包带模板工作流**：模板一律用各模型在 ComfyUI 模板库里的标准
+    #   工作流（或你自己存的那份），所以这里必须用 -Workflow / -PersonWorkflow 指定。
     $pastePerson = ($PersonMediaId -gt 0) -or $TwoStage
-    $workflowPath = Join-Path $ProjectRoot "comfyui\workflows\comfyhub_inpaint_$Model.json"
-    if ($pastePerson) {
-        $workflowPath = Join-Path $ProjectRoot 'comfyui\workflows\comfyhub_paste_person_matte_anima.json'
+    $workflowPath = if ($pastePerson) { $PersonWorkflow } else { $Workflow }
+    if (-not $workflowPath) {
+        Say '  仓库不再随包带模板工作流（2026-10-28）。请用 -Workflow <你的 inpaint 工作流.json> 或 -PersonWorkflow <你的贴人工作流.json> 指定。' 'Red'
+        exit 1
     }
-    Check "自带工作流在（$(if ($pastePerson) { 'matte / 贴人物' } else { $Model })）" (Test-Path $workflowPath) $workflowPath
+    Check "工作流在（$(if ($pastePerson) { 'matte / 贴人物' } else { '几何 / inpaint' })）" (Test-Path $workflowPath) $workflowPath
     if (-not (Test-Path $workflowPath)) { exit 1 }
 
     if (-not $RefPhoto) {
@@ -372,7 +376,10 @@ try {
 
     # --- 6. 两阶段：先生成人物（t2i）--------------------------------------
     if ($TwoStage -and $PersonMediaId -le 0) {
-        if (-not $PersonWorkflow) { $PersonWorkflow = Join-Path $ProjectRoot 'comfyui\krea2_sage_turbo_t2i.json' }
+        if (-not $PersonWorkflow) {
+            Say '  阶段一（先生成人物）需要一份 t2i 工作流：用 -PersonWorkflow 指定（仓库不再随包带模板）。' 'Red'
+            exit 1
+        }
         if (-not (Test-Path $PersonWorkflow)) { Say "  阶段一的工作流不存在：$PersonWorkflow" 'Red'; exit 1 }
         if (-not $PersonPrompt) {
             $PersonPrompt = 'A photograph of a young woman with long black hair, wearing a red dress, ' +
@@ -485,7 +492,8 @@ try {
         Check '贴人物档如实报了 maskGenerated=false' ($mask.maskGenerated -eq $false) "$($mask.maskGenerated)"
         Check '贴人物档**不给**遮罩文件名' (-not $mask.filename) "$($mask.filename)"
         Check '贴人物档回了 personFilename（那才是 20.image 该填的）' ($mask.personFilename) "$($mask.personFilename)"
-        Check '贴人物档的 hint 指向 matte 工作流' ($mask.hint -match 'comfyhub_paste_person_matte_anima\.json') $mask.hint
+        Check '贴人物档的 hint 指向那条抠图链、并要求从 apiGraph 现读 id' `
+            ($mask.hint -match 'refine_foreground' -and $mask.hint -match 'apiGraph') $mask.hint
         Check '贴人物档的 hint 明说**不要**覆盖 LoadImageMask' ($mask.hint -match '不要' -and $mask.hint -match 'LoadImageMask') $mask.hint
         Check '贴人物档尺寸 = 画布尺寸（ImageScale 照它覆盖）' `
             ($mask.width -eq $canvasW -and $mask.height -eq $canvasH) "$($mask.width)x$($mask.height)"

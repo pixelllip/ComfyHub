@@ -459,12 +459,14 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前四十个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前四十一个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
 /// + 联网三件（`web_search` / `web_fetch` / `civitai_search`，见 [`crate::tools::web_tools`] 与
 /// [`crate::tools::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
 /// + comfy 查询三件（`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status`）
 /// + `comfy_load_workflow` / `comfy_submit` / `comfy_sync_history`
+/// + **看产物**（`comfy_view_outputs`，2026-10-29 用户："能不能让 AI 看我直接在 comfy
+/// 运行的产物"：读画廊最近的图片并交给执行器自动附图，见 [`crate::comfy::media_view`]）
 /// + 资料库四件（角色卡 + 画风卡：`search/save_character_card`、`search/save_style_card`）
 /// + **图像编辑三件**（`comfy_use_media` / `comfy_use_attachment` /
 /// `comfy_make_mask`，见 [`crate::comfy::image_edit`]）
@@ -478,7 +480,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **配方三件**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`，
 /// 见 [`crate::workflow::workflow_recipe`]，P4 第 67 步；学与绑都与
 /// `POST /api/ai/workflow-recipes*` 共用一份实现）。
-pub const IMPLEMENTED: [&str; 40] = [
+pub const IMPLEMENTED: [&str; 41] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
@@ -502,6 +504,7 @@ pub const IMPLEMENTED: [&str; 40] = [
     "comfy_sync_history",
     "comfy_use_attachment",
     "comfy_use_media",
+    "comfy_view_outputs",
     "danbooru_lookup",
     "delete_skill",
     "find_model",
@@ -688,6 +691,11 @@ pub async fn execute(
         "comfy_use_media" => crate::comfy::image_edit::tool_use_media(state, arguments).await,
         "comfy_use_attachment" => crate::comfy::image_edit::tool_use_attachment(state, arguments).await,
         "comfy_make_mask" => crate::comfy::image_edit::tool_make_mask(state, arguments).await,
+        // ---- 看产物（2026-10-29：用户"能不能让 AI 看我直接在 comfy 运行的产物"）------
+        // 只读画廊最近的图片并返回 `referenceImages`；真正把图附进上下文的是执行器
+        // 的 `reference_attach`（与 `comfy_load_workflow` 那条共用一份：能力判据 / 预算 /
+        // 去重都不在这里再写一遍）。它是**本机库读**，不碰 ComfyUI，所以出厂 ALLOW。
+        "comfy_view_outputs" => crate::comfy::media_view::tool_view_outputs(state, arguments),
         // ---- 资料库两件（P4 第 46 步：角色卡）--------------------------------
         // O7/O8 的落点：写角色之前**先查本机**（库里那张卡 / 那条提示词的 tag 栈），
         // 而不是凭印象编 —— 现场教训是"把 shinku 当成 iroi 写了两版废图"。

@@ -185,6 +185,12 @@ MockClient _fakeBackend({
           'prompt': 'Rin, black hair in a low ponytail, grey eyes, dry skin.',
           'examples': <Object>[],
         },
+        {
+          'id': 3,
+          'name': '诗音',
+          'prompt': 'Shion, silver bob cut, amber eyes, a thin scar on the left brow.',
+          'examples': <Object>[],
+        },
       ];
     } else if (path == '/api/ai/style-cards') {
       body = [
@@ -1184,7 +1190,7 @@ void main() {
     expect(find.text('你好，我是假模型'), findsOneWidget);
   });
 
-  testWidgets('@ 卡片：插入角色卡 / 画风卡后，发出去的正文带两个槽位', (tester) async {
+  testWidgets('@ 卡片：角色卡可以选多张（多角色同框），画风卡仍只有一张', (tester) async {
     tester.view.physicalSize = const Size(1600, 1100);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -1206,13 +1212,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
 
-    await openCardPicker();
+    // 面板**不收起**：直接再点第二张角色卡（用户 2026-10-28 的 bug：以前只能 @ 一张）
+    expect(find.text('诗音'), findsOneWidget, reason: '选完第一张后面板还要留着，才能接着选');
+    await tester.tap(find.text('诗音'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
+    expect(find.textContaining('角色卡 · 诗音'), findsOneWidget);
+    expect(find.text('角色卡 2 张'), findsOneWidget);
+
     await tester.tap(find.text('画风卡'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('物理感动画'));
     await tester.pumpAndSettle();
     expect(find.textContaining('画风卡 · 物理感动画'), findsOneWidget);
 
+    // 收起面板，再写用户自己的要求（面板里的搜索框也是 TextField，要按"收起"之后再取）
+    await tester.tap(find.byTooltip('收起卡片面板'));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, '保留构图');
     await tester.tap(find.widgetWithText(FilledButton, '发送'));
     await tester.pumpAndSettle();
@@ -1220,8 +1236,42 @@ void main() {
     final sent = lastRunBody!['text'] as String;
     expect(sent, startsWith('[STYLE SPEC]\n物理感动画\n'));
     expect(sent, contains('[CHARACTER CARD]\n凛\n'));
+    expect(sent, contains('[CHARACTER CARD]\n诗音\n'));
+    // 角色卡按选中顺序排在画风卡之后：凛 → 诗音
+    expect(
+      sent.indexOf('[CHARACTER CARD]\n凛\n'),
+      lessThan(sent.indexOf('[CHARACTER CARD]\n诗音\n')),
+    );
     expect(sent, endsWith('保留构图'));
     // 发出去之后卡片清空，下一轮不会重复带上一轮的卡
     expect(find.textContaining('角色卡 · 凛'), findsNothing);
+    expect(find.textContaining('角色卡 · 诗音'), findsNothing);
+    expect(find.textContaining('画风卡 · 物理感动画'), findsNothing);
+  });
+
+  testWidgets('@ 卡片：再点一次已选中的角色卡 = 取消（多选是切换，不是只能加）', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1100);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await buildAiHomePage());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('添加附件 / 插入卡片（@）'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('角色卡 / 画风卡…'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('凛'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('诗音'));
+    await tester.pumpAndSettle();
+    expect(find.text('角色卡 2 张'), findsOneWidget);
+
+    await tester.tap(find.text('诗音'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('角色卡 · 诗音'), findsNothing);
+    expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
+    expect(find.text('角色卡 1 张'), findsOneWidget);
   });
 }

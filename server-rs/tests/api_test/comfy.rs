@@ -318,13 +318,16 @@ async fn 贴人物档不写遮罩也不碰人物图交给工作流去抠() {
     assert!(out.payload.get("filename").is_none(), "没有遮罩文件名可给：{:?}", out.payload["filename"]);
     assert_eq!(
         out.payload["personFilename"], "person.png",
-        "要把人物图文件名回给调用方（它才是 20.image 该填的）"
+        "要把人物图文件名回给调用方（它才是人物 LoadImage 该填的）"
     );
     // 定位器诊断还在（它只影响摆放），但要说清"不参与合成"
     assert!(out.payload["subjectRatio"].as_f64().unwrap() > 0.005, "{:?}", out.payload["subjectRatio"]);
     assert!(out.payload["locatorNote"].as_str().unwrap().contains("定位器"));
     let hint = out.payload["hint"].as_str().unwrap();
-    assert!(hint.contains("comfyhub_paste_person_matte_anima.json"), "{hint}");
+    assert!(
+        hint.contains("refine_foreground=true") && hint.contains("apiGraph"),
+        "hint 要指向那条抠图链、并要求从 apiGraph 现读 id：{hint}"
+    );
     assert!(
         hint.contains("不要") && hint.contains("LoadImageMask"),
         "必须明确说「**不要**覆盖遮罩」：{hint}"

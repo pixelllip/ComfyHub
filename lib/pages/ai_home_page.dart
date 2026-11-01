@@ -3565,14 +3565,15 @@ class _ComposerState extends State<_Composer> {
   //  卡片（角色卡 / 画风卡）：输入区的 `@` 菜单
   // -----------------------------------------------------------------------
 
-  /// 这一条消息要带上的两张卡（各一张；再选同类会替换）。
+  /// 这一条消息要带上的卡：**角色卡可以多张**（多角色同框），画风卡最多一张。
   ///
-  /// 发送时被拼成两段固定标记的文本（`[STYLE SPEC]` / `[CHARACTER CARD]`），
-  /// 正文**逐字**带上 —— skill `r2i-prompt` 认的就是这两个槽位。
-  CharacterCard? _characterCard;
+  /// 发送时每张卡各拼一段固定标记的文本（`[STYLE SPEC]` / `[CHARACTER CARD]`），
+  /// 正文**逐字**带上 —— skill `r2i-prompt` 认的就是这些槽位。
+  /// 角色卡按**选中的先后**排（用户从 @ 面板一张一张点进来）。
+  final List<CharacterCard> _characterCards = [];
   StyleCard? _styleCard;
 
-  /// 卡片面板是否展开；null = 收起。
+  /// 卡片面板是否展开（选卡**不会**自动收起：角色卡是多选，选完可以接着点下一张）。
   bool _cardsOpen = false;
 
   /// 当前页签：false = 角色卡，true = 画风卡。
@@ -3622,6 +3623,11 @@ class _ComposerState extends State<_Composer> {
     });
   }
 
+  /// 点一张卡 = **切换选中**；面板不收起，方便接着选第二、第三张。
+  ///
+  /// 用户 2026-10-28："只能 @ 一张角色卡，我想引入两个或以上的角色怎么办" ——
+  /// 所以角色卡改成多选（同框 / 对话都靠它），再点同一张 = 取消。
+  /// 画风卡仍然只有一张（一张图只有一套渲染规格），选新的替换旧的、再点取消。
   void _chooseCard(CharacterCard card) {
     if ((card.prompt ?? '').trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3633,11 +3639,16 @@ class _ComposerState extends State<_Composer> {
     }
     setState(() {
       if (card is StyleCard) {
-        _styleCard = card;
+        _styleCard = identical(_styleCard, card) ? null : card;
       } else {
-        _characterCard = card;
+        final index = _characterCards.indexWhere((c) => c.id == card.id);
+        if (index >= 0) {
+          _characterCards.removeAt(index);
+        } else {
+          _characterCards.add(card);
+        }
       }
-      _cardsOpen = false;
+      // 选完清掉搜索词：下一张常常是另一个名字，不用先手动删一遍。
       _cardQuery = '';
       _cardSearch.clear();
     });
@@ -3651,20 +3662,21 @@ class _ComposerState extends State<_Composer> {
         selection: TextSelection.collapsed(offset: next.length),
       );
     }
+    // 焦点交回输入框：选完就能直接写要求（老手感），面板留着 —— 想再加一张点一下就行。
     widget.focusNode.requestFocus();
   }
 
-  /// 把选中的卡拼到消息前面。
+  /// 把选中的卡拼到消息前面（画风卡一段；角色卡**一张一段**，按选中顺序）。
   ///
   /// 槽位名与 skill `r2i-prompt` 的输入约定逐字一致；卡正文**一个字符都不改**。
+  /// 多段 `[CHARACTER CARD]` = 多角色同框，skill 里写清了怎么处理。
   String _composeOutgoing(String text) {
     final blocks = <String>[];
     final style = _styleCard;
     if (style != null) {
       blocks.add('[STYLE SPEC]\n${style.name}\n${style.prompt}');
     }
-    final character = _characterCard;
-    if (character != null) {
+    for (final character in _characterCards) {
       blocks.add('[CHARACTER CARD]\n${character.name}\n${character.prompt}');
     }
     final body = text.trim();
@@ -3817,7 +3829,7 @@ class _ComposerState extends State<_Composer> {
             ),
           // 卡片面板（角色卡 / 画风卡）：在输入框上方，和 `/` 菜单同一套位置。
           if (_cardsOpen) _cardsPanel(theme),
-          if (_characterCard != null || _styleCard != null) _cardChips(theme),
+          if (_characterCards.isNotEmpty || _styleCard != null) _cardChips(theme),
           // 排版：上一行整宽输入框，下一行 [附件] [模型选择] …… [发送]
           Shortcuts(
             shortcuts: const {
@@ -3857,7 +3869,7 @@ class _ComposerState extends State<_Composer> {
                   // 会把"文件路径"当内容贴进来（见 `_composerContextMenu`）
                   contextMenuBuilder: _composerContextMenu,
                   decoration: const InputDecoration(
-                    hintText: '描述你的生图需求；/ 调用 Skill，@ 插入角色卡 / 画风卡（Enter 发送，Shift+Enter 换行）',
+                    hintText: '描述你的生图需求；/ 调用 Skill，@ 插入角色卡（可多张）/ 画风卡（Enter 发送，Shift+Enter 换行）',
                     border: OutlineInputBorder(),
                     isDense: true,
                   ),
@@ -4054,6 +4066,17 @@ class _ComposerState extends State<_Composer> {
                     });
                   }),
                   const Spacer(),
+                  // 多选时把"已经选了几张"说清楚（面板不会自动收起）。
+                  if (_characterCards.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Text(
+                        '角色卡 ${_characterCards.length} 张',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ),
                   if (_cardsLoading)
                     const Padding(
                       padding: EdgeInsets.only(right: 8),
@@ -4147,10 +4170,11 @@ class _ComposerState extends State<_Composer> {
       itemCount: shown.length,
       itemBuilder: (context, i) {
         final card = shown[i];
-        final selected = identical(
-          card,
-          _cardsStyled ? _styleCard : _characterCard,
-        );
+        // 角色卡是多选：只要在选中列表里就算选中（不按对象身份，按 id —— 同一次
+        // 打开面板里列表可能重建过）。
+        final selected = _cardsStyled
+            ? identical(card, _styleCard)
+            : _characterCards.any((c) => c.id == card.id);
         return ListTile(
           dense: true,
           visualDensity: VisualDensity.compact,
@@ -4179,7 +4203,7 @@ class _ComposerState extends State<_Composer> {
     );
   }
 
-  /// 已选中的卡：输入框上方一排 chip，点 × 取消。
+  /// 已选中的卡：输入框上方一排 chip，点 × 取消（角色卡一张一个 chip）。
   Widget _cardChips(ThemeData theme) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
@@ -4201,19 +4225,22 @@ class _ComposerState extends State<_Composer> {
               visualDensity: VisualDensity.compact,
               onDeleted: () => setState(() => _styleCard = null),
             ),
-          if (_characterCard != null)
+          for (final card in _characterCards)
             InputChip(
+              key: ValueKey('character-card-chip-${card.id}'),
               avatar: Icon(
                 Icons.badge_outlined,
                 size: 16,
                 color: theme.colorScheme.primary,
               ),
               label: Text(
-                '角色卡 · ${_characterCard!.name}',
+                '角色卡 · ${card.name}',
                 style: theme.textTheme.labelSmall,
               ),
               visualDensity: VisualDensity.compact,
-              onDeleted: () => setState(() => _characterCard = null),
+              onDeleted: () => setState(
+                () => _characterCards.removeWhere((c) => c.id == card.id),
+              ),
             ),
         ],
       ),
@@ -4268,9 +4295,9 @@ class _ComposerState extends State<_Composer> {
     widget.onSubmit(text);
     // 只有"真的会被发出去"才清掉卡片：被拒时（正在生成 / 附件还在上传）卡片要留着，
     // 不能因为按了一次回车就没了。
-    if (sendable && (_characterCard != null || _styleCard != null)) {
+    if (sendable && (_characterCards.isNotEmpty || _styleCard != null)) {
       setState(() {
-        _characterCard = null;
+        _characterCards.clear();
         _styleCard = null;
         _cardsOpen = false;
       });

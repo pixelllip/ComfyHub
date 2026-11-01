@@ -1948,6 +1948,8 @@ class AiToolCallState {
     'comfy_sync_history' => '同步生成记录',
     'comfy_use_attachment' => '投放参考图',
     'comfy_use_media' => '投放画廊图片',
+    // 看画廊最近的产物（2026-10-29）：AI 主动"看图"的那一步
+    'comfy_view_outputs' => '查看生成产物',
     'comfy_make_mask' => '制作遮罩',
     'comfy_prune_workflow' => '摘改工作流',
     'comfy_audit_workflow' => '审核工作流',

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自动备份排除：`<app-support>/media-cache/`（手机上就是 `files/media-cache/`）。
+
+  它是**缓存**，不是数据：一份产物原件可能有几百 MB，而 Android Auto Backup 的
+  云端配额只有 25MB —— 不排除的话每次备份都在那里白白失败一遍，还会让"备份成功"
+  这件事变得无法判断。真源在桌面的 `storage/`，重新下载的成本远低于备份。
+
+  与 `backup_rules.xml`（Android 11 及以下）保持同一份排除清单。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="media-cache/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="media-cache/" />
+    </device-transfer>
+</data-extraction-rules>

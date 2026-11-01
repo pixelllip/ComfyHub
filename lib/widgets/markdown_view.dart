@@ -11,8 +11,11 @@
 //     于是选择可以跨段落、跨表格连续拉下去（外层气泡还会把它和思考 / 工具卡合并成一个域）；
 //   · 链接可点，走系统浏览器（url_launcher），失败只提示不抛。
 
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'markdown.dart';
@@ -146,69 +149,11 @@ class MarkdownText extends StatelessWidget {
         );
 
       case MdCodeBlock(:final code, :final language):
-        // 单行代码块（模型经常把一条命令 / 一段 JSON 整段塞进 ``` 里且不换行）：
-        // 横向滚动在这种场景下等于"永远看不全" —— 用户要求**超过容器宽度就换行显示**。
-        // 多行代码块**保持横向滚动**：代码的换行位置本身有意义（缩进 / 对齐 / 表格状输出），
-        // 自动折行反而更难读。
-        final singleLine = !code.contains('\n');
-        // ⚠ 代码块底色必须是**半透明**、而且要把 `selectionColor` 显式交给
-        // `DefaultSelectionStyle`：外层 `SelectionArea` 的高亮由每个 `RenderParagraph`
-        // 自己画，纯色块 + 主题里没给选择色时，选中区域会和底色糊在一起，看起来像"没选中"。
-        final codeText = DefaultSelectionStyle(
-          selectionColor: theme.colorScheme.primary.withValues(alpha: 0.45),
-          child: Text(
-            code,
-            style: base.copyWith(
-              fontFamily: 'Consolas',
-              fontFamilyFallback: const ['Courier New', 'monospace'],
-              fontSize: (base.fontSize ?? 14) - 0.5,
-              height: 1.4,
-            ),
-            softWrap: singleLine,
-          ),
-        );
-        return Container(
-          width: double.infinity,
-          margin: const EdgeInsets.symmetric(vertical: 6),
-          decoration: BoxDecoration(
-            // 0.7 → 0.42：留出透光率，选择高亮即使被画在底色下面也看得见。
-            color: theme.colorScheme.surfaceContainerHighest.withValues(
-              alpha: 0.42,
-            ),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (language != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
-                  child: Text(
-                    language,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.outline,
-                    ),
-                  ),
-                ),
-              // 单行：直接放进有界宽度里（软换行，必要时连超长单词也会被拆开）；
-              // 多行：横向滚动，保持原始排版
-              if (singleLine)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
-                  child: codeText,
-                )
-              else
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
-                  child: codeText,
-                ),
-            ],
-          ),
+        return _CodeBlock(
+          code: code,
+          language: language,
+          theme: theme,
+          base: base,
         );
 
       case MdTable(:final alignments, :final header, :final rows):
@@ -315,16 +260,208 @@ class MarkdownText extends StatelessWidget {
   }
 }
 
+/// 一张代码块：`[类型]` + 一键复制 一行，分隔线，正文。
+///
+/// 类型行（含「复制」按钮）包在 [SelectionContainer.disabled] 里：整条回复全选复制时，
+/// 不该把「复制」两个字也带进剪贴板。
+class _CodeBlock extends StatefulWidget {
+  const _CodeBlock({
+    required this.code,
+    required this.language,
+    required this.theme,
+    required this.base,
+  });
+
+  final String code;
+  final String? language;
+  final ThemeData theme;
+  final TextStyle base;
+
+  @override
+  State<_CodeBlock> createState() => _CodeBlockState();
+}
+
+class _CodeBlockState extends State<_CodeBlock> {
+  bool _copied = false;
+  Timer? _resetTimer;
+
+  /// 横向滚动条要靠它（`thumbVisibility` 需要一个自己的 controller）。
+  final ScrollController _hScroll = ScrollController();
+
+  /// 上一次算好的正文（按 code + language 缓存）：流式期间 code 每帧都变，
+  /// 但「复制成功」之类的 setState 不该把同一段正文再并一遍。
+  String? _bodyCache;
+  String? _bodyCacheCode;
+  String? _bodyCacheLanguage;
+
+  /// 展示 / 复制用的正文：模型硬折行的散文先并回段落，真代码原样。
+  String get _body {
+    if (_bodyCache != null &&
+        _bodyCacheCode == widget.code &&
+        _bodyCacheLanguage == widget.language) {
+      return _bodyCache!;
+    }
+    final body =
+        reflowWrappedProse(widget.code, widget.language) ?? widget.code;
+    _bodyCacheCode = widget.code;
+    _bodyCacheLanguage = widget.language;
+    _bodyCache = body;
+    return body;
+  }
+
+  /// 类型标签：代码块的语言标记；没有就写「文本」。
+  String get _typeLabel {
+    final lang = (widget.language ?? '').trim();
+    return lang.isEmpty ? '文本' : lang;
+  }
+
+  @override
+  void dispose() {
+    _resetTimer?.cancel();
+    _hScroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: _body));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    // 只在原位闪一下「已复制」：不弹 SnackBar，免得每复制一次都挡一下正文。
+    // 用可取消的 Timer（不是 Future.delayed）：代码块随流式文本反复重建 / 被滚出
+    // 屏幕时，不能留一个 1.4 秒后还在跑的定时器。
+    _resetTimer?.cancel();
+    _resetTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = widget.theme;
+    final base = widget.base;
+    final body = _body;
+    final reflowed = body != widget.code;
+    // 单行代码 / 硬折行散文 / 纯文本块：软换行（超过容器宽度就折）；
+    // 真·多行代码：横向滚动（缩进 / 对齐本身有意义，自动折行反而更难读），
+    // 并且**常驻一条横向滚动条** —— 在此之前什么提示都没有，用户根本不知道右边还有内容。
+    final softWrap = codeBlockWraps(
+      widget.code,
+      widget.language,
+      reflowed: reflowed,
+    );
+    // ⚠ 代码块底色必须是**半透明**、而且要把 `selectionColor` 显式交给
+    // `DefaultSelectionStyle`：外层 `SelectionArea` 的高亮由每个 `RenderParagraph`
+    // 自己画，纯色块 + 主题里没给选择色时，选中区域会和底色糊在一起，看起来像"没选中"。
+    final codeText = DefaultSelectionStyle(
+      selectionColor: theme.colorScheme.primary.withValues(alpha: 0.45),
+      child: Text(
+        body,
+        style: base.copyWith(
+          fontFamily: 'Consolas',
+          fontFamilyFallback: const ['Courier New', 'monospace'],
+          fontSize: (base.fontSize ?? 14) - 0.5,
+          height: 1.4,
+        ),
+        softWrap: softWrap,
+      ),
+    );
+    const codePadding = EdgeInsets.fromLTRB(10, 6, 10, 8);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        // 0.7 → 0.42：留出透光率，选择高亮即使被画在底色下面也看得见。
+        color: theme.colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.42,
+        ),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SelectionContainer.disabled(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 2, 4, 2),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _typeLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.outline,
+                        fontFamily: 'Consolas',
+                      ),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: _copy,
+                    icon: Icon(_copied ? Icons.check : Icons.copy, size: 14),
+                    label: Text(_copied ? '已复制' : '复制'),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: const Size(0, 32),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      textStyle: theme.textTheme.labelSmall,
+                      foregroundColor: _copied
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Divider(
+            height: 1,
+            thickness: 1,
+            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+          ),
+          // 单行 / 折行散文 / 纯文本：直接放进有界宽度里（软换行，必要时连超长单词也会被拆开）；
+          // 多行代码：横向滚动，保持原始排版，并配一条看得见的滚动条。
+          if (softWrap)
+            Padding(padding: codePadding, child: codeText)
+          else
+            Scrollbar(
+              controller: _hScroll,
+              // 常驻：用户**看得见**右边还有内容（默认只在滚动时闪一下，桌面端很容易错过）。
+              // 内容不超宽时 Flutter 自己不会画（`maxScrollExtent == 0`），不会白占一条。
+              thumbVisibility: true,
+              scrollbarOrientation: ScrollbarOrientation.bottom,
+              child: SingleChildScrollView(
+                controller: _hScroll,
+                scrollDirection: Axis.horizontal,
+                // 底部留出滚动条的位置，别让它压住最后一行
+                padding: const EdgeInsets.fromLTRB(10, 6, 10, 16),
+                child: codeText,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 这张表是不是"超宽"——决定用固有列宽 + 横向滚动，还是弹性列宽 + 换行。
 ///
 /// 判据刻意只看**内容规模**（列数 / 单元格字符数），不看实际像素：
 /// 像素要等布局之后才知道，而这里必须在建表之前选分支。阈值取得比较保守，
-/// 普通 3~4 列说明表不会误判成滚动表。
+/// 普通 3~4 列说明表不会误判成滚动表；**两列一律不滚动**（见下面的分支）。
 bool _tableLooksWide(
   List<MdColumnAlign> alignments,
   List<List<MdInline>> header,
   List<List<List<MdInline>>> rows,
 ) {
+  // **两列表格永远铺满容器、自动换行**（用户要求：优先满足铺满对话容器，
+  // 而不是向右延伸）。两列的表大多是"参数 → 说明"这种说明表，横向拖读很难受。
+  if (alignments.length <= 2) return false;
   if (alignments.length >= 6) return true;
   var maxCell = 0;
   var total = 0;

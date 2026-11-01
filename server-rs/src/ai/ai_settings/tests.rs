@@ -24,6 +24,10 @@ fn 类别与权限档的线上字与_kotlin_一致() {
     assert_eq!(category_of("search_style_cards"), "library");
     assert_eq!(category_of("save_style_card"), "library");
     assert_eq!(category_of("comfy_submit"), "comfy");
+    // 看画廊产物（2026-10-29）：读的是本机库，**不是** ComfyUI —— 落到 comfy 会白吃
+    // "不许把 ComfyUI 当轮询器"那 9 次额度（改了这里不会有别的用例变红）。
+    assert_eq!(category_of("comfy_view_outputs"), "library");
+    assert!(!is_comfy_query("comfy_view_outputs"));
     // 训练引擎的工具必须是**独立类别**：落到 comfy 会让它吃 ComfyUI 的查询额度。
     assert_eq!(category_of("anima_studio_projects"), "train");
     assert_eq!(category_of("anima_studio_train"), "train");

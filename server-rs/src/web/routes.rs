@@ -23,7 +23,7 @@
 //! | `GET /api/prompts/{id}` | — |
 
 use axum::{
-    extract::{FromRequestParts, Path, Query, State},
+    extract::{ConnectInfo, FromRequestParts, Path, Query, State},
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -32,6 +32,7 @@ use axum::{
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use crate::infra::db;
@@ -234,6 +235,10 @@ pub fn router(state: AppState) -> Router {
         // ⚠ 它和 `/api/media/{id}` 是**同段数**——静态段优先于参数段（matchit 的规矩），
         // 所以 `collections` 不会被当成 id 吃掉。
         .route("/api/media/collections", get(list_collections))
+        // 把产物**原件 + 绑定的工作流 / 提示词信息**一次性导到用户指定的文件夹
+        // （2026-10-27）。⚠ 只允许回环调用：它会往任意绝对路径写文件，不能跟着
+        // 配对令牌一起开放给局域网设备。
+        .route("/api/media/export", axum::routing::post(export_media))
         .route("/api/media/{id}", get(get_media))
         .route("/api/media/{id}/file", get(media_file))
         // 这条产物**在磁盘上的绝对路径**（2026-10-18）：给"复制文件本身"用。
@@ -412,6 +417,29 @@ async fn get_media(
     Id(id): Id,
 ) -> Result<Json<crate::web::models::MediaDto>, ApiError> {
     Ok(Json(crate::media::media::get(&state, id)?))
+}
+
+/// `POST /api/media/export` —— 产物导出（2026-10-27）。
+///
+/// 三条纪律：
+/// 1. **只允许回环**：它会往用户给的任意绝对路径写文件，不能和配对令牌一起开放给局域网；
+/// 2. 文件复制是**阻塞 IO**，放到 `spawn_blocking` 里，别占着事件循环；
+/// 3. 目标目录的校验（存在 / 可写 / 不许在 storage 里）在
+///    [`crate::media::export::export`] 里，只有一份实现。
+async fn export_media(
+    State(state): State<AppState>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    Json(req): Json<crate::media::export::ExportRequest>,
+) -> Result<Json<crate::media::export::ExportReport>, ApiError> {
+    if !crate::mobile::auth::is_loopback(Some(remote.ip())) {
+        return Err(ApiError::forbidden(
+            "导出产物只能在本机（127.0.0.1）操作 —— 它会往你指定的文件夹写文件",
+        ));
+    }
+    let report = tokio::task::spawn_blocking(move || crate::media::export::export(&state, req))
+        .await
+        .map_err(|e| ApiError::internal(format!("导出任务失败：{e}")))??;
+    Ok(Json(report))
 }
 
 async fn media_file(

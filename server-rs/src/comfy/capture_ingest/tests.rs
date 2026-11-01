@@ -370,6 +370,39 @@ fn prompt_backfill_fills_only_empty_positive_prompts() {
     assert_eq!(backfill_runtime_prompts(&conn).unwrap(), 0);
 }
 
+/// 编码器 `text` 是连线、正文在上游 `PrimitiveStringMultiline.value` 的历史行也要补上。
+///
+/// 真机 `test_01357_.png`：编码器自己的 `widgets_values` 只剩一个旧触发词，长段正向
+/// 在节点 55 的 `value` 里；以前 parse 只读字面量，于是入库成空。
+#[test]
+fn prompt_backfill_reparses_graph_linked_prompts() {
+    let conn = memory_db();
+    insert_empty_prompt(&conn);
+    let id = conn.last_insert_rowid();
+    attach_capture(
+        &conn,
+        id,
+        json!({
+            "prompt": [1, "uuid", {
+              "3": {"class_type":"KSampler","inputs":{"steps":8,"cfg":1,"seed":7,
+                     "positive":["6",0],"negative":["7",0],"model":["4",0],"latent_image":["5",0]}},
+              "6": {"class_type":"CLIPTextEncode","inputs":{"text":["10",0],"clip":["4",1]}},
+              "10": {"class_type":"PrimitiveStringMultiline","inputs":{"value":"A medium-wide frontal shot around one enormous old cherry tree."}},
+              "7": {"class_type":"CLIPTextEncode","inputs":{"text":""}},
+              "4": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"m.safetensors"}},
+              "5": {"class_type":"EmptyLatentImage","inputs":{"width":1152,"height":1920}}
+            }],
+            "outputs": {"39": {"images": [{"filename":"test_01357_.png"}]}}
+        }),
+    );
+
+    assert_eq!(backfill_runtime_prompts(&conn).unwrap(), 1);
+    assert_eq!(
+        positive_of(&conn, id),
+        "A medium-wide frontal shot around one enormous old cherry tree."
+    );
+}
+
 fn insert_empty_prompt(conn: &rusqlite::Connection) {
     conn.execute(
         "INSERT INTO prompts (title, kind, positive_prompt, source) \

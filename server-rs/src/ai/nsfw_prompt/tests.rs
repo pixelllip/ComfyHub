@@ -43,8 +43,9 @@ fn blocks_are_not_empty_and_trimmed() {
 #[test]
 fn 第19条钉住图像编辑的四条实测结论() {
     let persona = persona_block();
-    // ① 贴人物图首选 AI 软遮罩那份工作流，且要先查模型在不在
-    assert!(persona.contains("comfyhub_paste_person_matte_anima.json"), "第 19 条少了 matte 工作流");
+    // ① 贴人物图首选 AI 软遮罩（要有那条抠图链），且要先查模型在不在
+    assert!(persona.contains("refine_foreground=true"), "第 19 条少了 AI 软遮罩那条链");
+    assert!(persona.contains("不再随包带"), "要写明仓库不再随包带这类工作流、用户得自备");
     assert!(persona.contains("mattingModels.usable"), "少了「先查模型在不在」这一步");
     // ② 缺模型要指引用户下载，且**不许**硬跑 / 默默降级（颜色抠图那一档 2026-09-27 已删除）
     assert!(persona.contains("如实让用户下模型"), "少了「缺模型就指引用户下」");
@@ -144,5 +145,27 @@ fn 第20条钉住配方规则且点名的三件工具都真的实现了() {
             crate::tools::tools::is_implemented(name),
             "{name} 进了系统提示，却没进 IMPLEMENTED —— 模型按提示去找它只会失败"
         );
+    }
+}
+
+/// 第 24 条（成品提示词一律进 Markdown 代码块）—— 2026-10-28 用户明确要求。
+///
+/// 钉两件事：① 围栏语言写 `text` —— 聊天渲染器只对"散文类"语言标记做硬折行回收
+/// （`markdown.dart` 的 `_proseCodeLanguages`），换成 `json` / `markdown` 之类会按代码原样
+/// 保留换行，用户复制走的就是一行一断的提示词；② "只在正文里提一句不算交付"必须写着，
+/// 否则模型容易把它当成排版建议而不是硬约束。
+#[test]
+fn 第24条要求成品提示词放进_text_代码块() {
+    let persona = persona_block();
+    assert!(
+        persona.contains("24. **成品提示词一律放进 Markdown 代码块**"),
+        "第 24 条没进常驻段（这条是改提示词必须一起 bump 的那类改动）"
+    );
+    assert!(
+        persona.contains("```text"),
+        "围栏语言要写 text：渲染器据此把模型硬折行的提示词拼回一段"
+    );
+    for needle in ["正面提示词", "负面提示词", "Danbooru tag 栈", "一版一块", "都不算交付"] {
+        assert!(persona.contains(needle), "第 24 条少了 {needle}");
     }
 }

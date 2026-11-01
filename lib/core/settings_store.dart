@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'backend_paths.dart';
+import 'media_cache.dart';
 import 'system_accent.dart';
 import 'theme.dart';
 
@@ -83,6 +84,11 @@ class SettingsStore extends ChangeNotifier {
   /// 界面会回到 [AppTheme.defaultSeed] —— 与改之前完全一样。
   static const _kFollowSystemAccent = 'comfyhub.followSystemAccent';
 
+  /// 手机端**产物缓存**的原件预算（MB）。见 `media_cache.dart` 的
+  /// [kOriginalCacheBudgetChoicesMb] —— 档位就那几项，别让用户填任意数字
+  /// （填 1MB 等于关掉缓存，填 99999 等于没有上限，两头都不是"设上限"的本意）。
+  static const _kMediaCacheOrigBudgetMb = 'comfyhub.mediaCacheOrigBudgetMb';
+
   /// 上次后端**实际**监听的端口（0 / 缺省 = 还没记录过）。
   ///
   /// # 为什么必须记住它（2026-10-13 用户提的问题）
@@ -116,6 +122,10 @@ class SettingsStore extends ChangeNotifier {
   CollectionDetailStyle _collectionDetailNarrow = CollectionDetailStyle.popup;
   int? _lastApiPort;
   bool _loaded = false;
+
+  /// 手机端产物缓存的原件预算（MB）。默认取 `media_cache.dart` 的常量，
+  /// 老用户不吃"默认值漂移"的亏 —— 与 `kOriginalCacheBudgetBytes` 同一个数。
+  int _mediaCacheOrigBudgetMb = kOriginalCacheBudgetBytes ~/ (1024 * 1024);
 
   /// 用过哪些地址（最近用的在前，最多 [maxBaseUrlHistory] 条）。
   ///
@@ -226,6 +236,12 @@ class SettingsStore extends ChangeNotifier {
   ///
   /// 只用来**要回**同一个端口，不是"用户配置"：真源永远是后端写的 `.run\api.json`。
   int? get lastApiPort => _lastApiPort;
+
+  /// 手机端产物缓存的原件预算（MB，默认 1536 = 1.5GB）。
+  ///
+  /// 只认 [kOriginalCacheBudgetChoicesMb] 里的档位：手改偏好写进来的野值一律回默认，
+  /// 否则会出现"下拉框选不中任何一项"的界面。
+  int get mediaCacheOrigBudgetMb => _mediaCacheOrigBudgetMb;
 
   bool get loaded => _loaded;
 
@@ -359,6 +375,15 @@ class SettingsStore extends ChangeNotifier {
       fallback: CollectionDetailStyle.popup,
     );
     _lastApiPort = _sanitizePort(prefs.getInt(_kLastApiPort));
+    // 缓存预算：只认档位表里的值（老版本 / 手改的野值回默认），并**立刻应用到缓存**
+    // —— 用户上次把 2GB 调到 512MB，下次冷启动就该按 512MB 淘汰，不能等下一次下载。
+    final rawBudgetMb = prefs.getInt(_kMediaCacheOrigBudgetMb);
+    _mediaCacheOrigBudgetMb = kOriginalCacheBudgetChoicesMb.contains(rawBudgetMb)
+        ? rawBudgetMb!
+        : kOriginalCacheBudgetBytes ~/ (1024 * 1024);
+    MediaCache.instance.setOriginalBudget(
+      _mediaCacheOrigBudgetMb * 1024 * 1024,
+    );
     final rawHistory = prefs.getStringList(_kBaseUrlHistory);
     _baseUrlHistory = _sanitizeHistory(rawHistory);
     // 洗出来的和历史里躺着的不一样 → 把干净的**写回去**（同上：留着脏的只会误导排查，
@@ -571,6 +596,18 @@ class SettingsStore extends ChangeNotifier {
     } else {
       await prefs.setInt(_kLastApiPort, clean);
     }
+  }
+
+  /// 选产物缓存的原件预算（MB）。**当场生效**：缓存那边顺手淘汰一次，
+  /// 用户把 2GB 调到 512MB 之后占用必须马上降下来（见 `MediaCache.setOriginalBudget`）。
+  Future<void> setMediaCacheOrigBudgetMb(int mb) async {
+    if (!kOriginalCacheBudgetChoicesMb.contains(mb)) return;
+    if (_mediaCacheOrigBudgetMb == mb) return;
+    _mediaCacheOrigBudgetMb = mb;
+    MediaCache.instance.setOriginalBudget(mb * 1024 * 1024);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kMediaCacheOrigBudgetMb, mb);
   }
 
   /// 切换界面外观。**立刻 `notifyListeners()` 再落盘**：换主题是"看得见"的操作，

@@ -567,6 +567,76 @@ class MediaCollection {
       );
 }
 
+/// `POST /api/media/export` 的结果（2026-10-27）。
+///
+/// 后端把原件 + 工作流 / 提示词信息按「类型目录 / 集合文件夹」写进用户选的目录，
+/// 这里只带**回执**：多少条成功、多少条失败、清单落在哪。界面据此说人话，
+/// **不自己猜成功失败**。
+class MediaExportReport {
+  final String dir;
+  final String manifest;
+  final int exported;
+  final int collections;
+  final int workflows;
+  final int totalBytes;
+  final Map<String, int> byKind;
+  final List<MediaExportFailure> failed;
+  final List<String> warnings;
+
+  const MediaExportReport({
+    required this.dir,
+    required this.manifest,
+    required this.exported,
+    required this.collections,
+    required this.workflows,
+    required this.totalBytes,
+    required this.byKind,
+    required this.failed,
+    required this.warnings,
+  });
+
+  bool get hasFailures => failed.isNotEmpty;
+
+  factory MediaExportReport.fromJson(Map<String, dynamic> json) =>
+      MediaExportReport(
+        dir: (json['dir'] ?? '').toString(),
+        manifest: (json['manifest'] ?? '').toString(),
+        exported: (json['exported'] as num?)?.toInt() ?? 0,
+        collections: (json['collections'] as num?)?.toInt() ?? 0,
+        workflows: (json['workflows'] as num?)?.toInt() ?? 0,
+        totalBytes: (json['totalBytes'] as num?)?.toInt() ?? 0,
+        byKind: ((json['byKind'] as Map?) ?? const {}).map(
+          (key, value) => MapEntry(key.toString(), (value as num?)?.toInt() ?? 0),
+        ),
+        failed: ((json['failed'] as List?) ?? const [])
+            .map(
+              (e) => MediaExportFailure.fromJson(
+                Map<String, dynamic>.from(e as Map),
+              ),
+            )
+            .toList(growable: false),
+        warnings: ((json['warnings'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(growable: false),
+      );
+}
+
+/// 一条没导出的产物：`mediaId` / 原始文件名可能为空（例如整个清单写入失败）。
+class MediaExportFailure {
+  final int? mediaId;
+  final String? name;
+  final String reason;
+
+  const MediaExportFailure({this.mediaId, this.name, required this.reason});
+
+  factory MediaExportFailure.fromJson(Map<String, dynamic> json) =>
+      MediaExportFailure(
+        mediaId: (json['mediaId'] as num?)?.toInt(),
+        name: json['name']?.toString(),
+        reason: (json['reason'] ?? '').toString(),
+      );
+}
+
 // ===========================================================================
 //  分页
 // ===========================================================================

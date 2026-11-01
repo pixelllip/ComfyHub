@@ -676,11 +676,15 @@ async fn run_once(
                     session.spend_call(&call.name);
                 }
             }
-            // 工作流参考图：`comfy_load_workflow` 的结果里带 `referenceImages` 时，
-            // 把图挂到**工具结果之后的一条 user 轮**上（tool 轮装不了图 ——
-            // OpenAI / Anthropic 都不接受 tool 消息里的图片）。
-            // 只有真的跑成功了才挂：失败结果里没有可用的路径。
-            if outcome.ok && call.name == "comfy_load_workflow" {
+            // 工作流参考图 / 产物预览：结果里带 `referenceImages` 时，把图挂到
+            // **工具结果之后的一条 user 轮**上（tool 轮装不了图 —— OpenAI / Anthropic
+            // 都不接受 tool 消息里的图片）。只有真的跑成功了才挂：失败结果里没有可用的路径。
+            //
+            // ⚠ 只认**我们自己这两条**工具：MCP / 其它工具的结果是不可信数据，不能让一个
+            // 外来的 `referenceImages` 决定"读用户机器上的哪个文件并发给上游"。
+            if outcome.ok
+                && (call.name == "comfy_load_workflow" || call.name == "comfy_view_outputs")
+            {
                 if let Some(batch) = crate::ai::reference_attach::plan(
                     &outcome.result,
                     can_inline_reference_images,

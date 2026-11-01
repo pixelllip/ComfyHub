@@ -47,6 +47,7 @@ DSH 暴露给模型的东西分五类。对照结论（`docs/archive/dsh-tool-la
 | `comfy_sync_history` | comfy | **ask** | 会写我们的库，按 DEC-005 默认要审批 |
 | `comfy_load_workflow` | comfy | allow | 把**一份本机工作流文件**读进库换成一个能提交的 `promptId`（用户 bug ③，2026-09-18）：API 格式原样用；界面格式（nodes/links）按 ComfyUI 的 `/object_info` 转成 API 节点图 —— 普通节点、**组节点（subgraph）**、Reroute / Set-Get、旁路都会等价展开或改写，控件值**首选带名字的 `widgets_values_named`**。**## 模拟用户行为 ##**（用户建议 ②，2026-09-21）：`emulateFrontend` **默认开着**，把纯前端节点照前端排队前的行为等价改写（广播填空 / 丢显示节点 / 补 SaveImage），改了什么都列在 `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里（见 §2.0.2）；说不清类型的仍然如实报 `UNSUPPORTED_NODES`，带 `tolerateUnsupported=true` 再来一次则**摘掉它们并给出缺口清单**（`openInputs` / `unresolvedInputs`），交给模型补线。**2026-10-25 起**结果多一个 `referenceImages`（`LoadImage` 指向的真实路径 + 原始分辨率），能看图的模型由执行器把图缩到 ≤1024 长边后**自动附在下一轮**（见 §2.1.3）。只读用户机器上的文件，不改它 |
 | `comfy_find_workflow` | comfy | allow | 找一个**能直接跑**的工作流：先搜库里**能直接跑**的工作流（标注 `runnable` = 有没有 API 节点图）；**库里没有时自动回头列本机 ComfyUI 已保存的工作流文件**（结果在 `localWorkflows` 里，用户 bug ⑤，2026-09-18） |
+| `comfy_view_outputs` | comfy | allow | **看画廊里的产物**（2026-10-29 用户："能不能让 AI 看我直接在 comfy 运行的产物（这样就不用在对话中重复发送图片了）"）：列最近 N 条图片（或按 `mediaId` 指定一条），返回 `referenceImages` —— 能看图的模型由执行器缩到 ≤1024 长边后**自动附在下一轮**（与 §2.1.3 共用同一份 `reference_attach`，能力判据 / 每 Run 预算 / 按路径去重都不另写）。只读本机库、**不碰 ComfyUI**（所以不吃那 9 次查询额度）；自动捕获有几秒延迟，空结果如实说"等几秒 / 确认自动捕获开着"，**不许凭文件名编画面** |
 | `comfy_list_workflows` | comfy | allow | 列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`，用户 bug ⑤，2026-09-18）：带路径 / 格式（ui/api）/ 是否已入库（`inLibrary` / `promptId`），可按文件名过滤（如 `krea2`）。**只读**，不改用户的文件。首次使用、或 `comfy_find_workflow` 什么都搜不到时先看它 —— 这些工作流**不需要在 ComfyUI 里跑过一次**，拿到 path 直接 `comfy_load_workflow` 就能提交 |
 | `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数、`connections` 补连线（值写 `["<上游节点id>", 槽位]`），跑完直接入库；会消耗显卡时间，默认要审批。**2026-10-21 新增 `positivePrompt`**：工作流里带 `TextGenerate`（本地 LLM 扩写 / 布局编译器）时，AI 先读它的 `system_prompt`、自己写好最终提示词，再由后端写进正面 `CLIPTextEncode.text`，并把 TextGenerate 这一支**从这次提交的图里摘掉**（节点 + 指向它的显示节点 + 只喂它的上游；2026-10-24 起：只断线不够，ComfyUI 校验整张 prompt），本地 LLM 既不校验也不执行，原文件不动。返回 `positivePromptApplied` / `textGenerateBypassed` 作为证据 |
 | `comfy_use_attachment` | comfy | **ask** | 把用户发来的**图片附件**投放进 ComfyUI 的 `input/` 目录并返回真实文件名（用户 bug，2026-09-17）：图生图 / 参考图的唯一正路，默认要审批（往用户机器上写文件） |
@@ -305,6 +306,29 @@ D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows\krea2SF
 缺失如实说 / 每批 4 张·每 Run 6 张）+ `api_test` 的
 `load_workflow_auto_attaches_the_reference_image_to_the_next_round`（假网关看两轮请求体：
 第一轮无图、第二轮有 `image_url` + 原图 1600×900 + 缩图 1024×576）。
+
+### 2.1.4 看用户直接在 ComfyUI 里跑出来的产物（2026-10-29）
+
+用户口径："我能不能让 AI 看我直接在 comfy 运行的产物（这样就不用在对话中重复发送图片了）？"
+
+**能，而且走的是现成的那条自动附图链路**（§2.1.3 的 `reference_attach`）：
+
+1. 用户手动在 ComfyUI 里跑完 → 后端轮询 `/history`（自动捕获，默认开着）把产物收进画廊；
+2. 用户说"看看我刚跑的 / 这张哪里不对"→ 模型调 `comfy_view_outputs`（`limit` 默认 3、
+   上限 8；或 `mediaId` 指定一条）；
+3. 工具只读 `media_assets` 最近的图片，返回 `referenceImages`（`label` = "产物 #N"，
+   `path` 是 `storage/media` 下的真实文件）；执行器把图缩到 ≤1024 长边、JPEG 重编码，
+   挂成工具结果之后的一条 `user` 轮 —— 与工作流参考图**同一份预算 / 去重 / 能力判据**。
+
+三条边界：① **只读**（不写库、不复制文件、不碰 ComfyUI，所以出厂 `ALLOW` 且归
+`library` 类别、不吃 ComfyUI 的 9 次查询额度）；② **只附图片**，视频 / 音频如实列元数据
+并说明看不了；③ **自动捕获有延迟**，刚跑完可能还没入库 —— 空结果要说"等几秒再试 /
+确认捕获开着"，**不许**凭文件名编画面。看不到图的模型（`input_modalities` 里没有
+`image`）只会拿到元数据与提示词，那一句"没附上"的纪律由 `reference_attach` 守着。
+
+防线：`api_test` 的 `view_outputs_returns_recent_media_as_reference_images`
+（最近产物 / `mediaId` / 关联提示词 / 不存在时的空结果）+ `reference_attach` 既有 5 例
+（附图与预算）。
 
 ### 2.1 提交任务（`comfy_submit`）的几条纪律（2026-09-17）
 
@@ -630,7 +654,8 @@ SSE 新增事件：`reasoning.delta`、`tool.requested`、`tool.started`、`tool
    两阶段贴人）、`lora-training`、`moss-image`、`workflow-recipe`（换新模型：学配方 / 绑模型 /
    四档结论）、`card-writer`（角色卡 / 画风卡：一版自然语言正文、600+ / 100~200 token **起**
    （下限，复杂画风按材质分部位写长）、优化）、
-   `r2i-prompt`（参考图 + 角色卡 + 画风卡 → 一整段 r2i 提示词；工作台 `+` / `@` 插卡）；
+   `r2i-prompt`（参考图 + 一到多张角色卡 + 画风卡 → 一整段 r2i 提示词；工作台 `+` / `@` 插卡，
+   角色卡可多选 = 多角色同框；成品提示词按系统提示第 24 条放进 Markdown 代码块）；
    用户自己的 16 个（Anima / H3 / Music3 等）仍在投放口里 ——
    **别人的 skill 正文能不能随项目分发要单独确认许可**，所以它们刻意不进 `builtin`。
    `krea-2` 是唯一一份"官方 skill 落地"的样板：正文按 Krea 官方材料适配本机 ComfyUI 路线，
