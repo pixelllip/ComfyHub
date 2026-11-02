@@ -103,6 +103,27 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 这一台是不是**手机**（清单、模型目录、密钥都归本机管）。
   bool get _isPhone => _source.isLocal;
 
+  /// 布局 → 提示词：用**当前选中的 Provider / 模型**当译者。
+  ///
+  /// 不另开一套配置：用户在工作台挑哪一个，翻译就用哪一个（想用便宜的本地模型
+  /// 就在这里把它选中即可）。校验不过的重试在服务端做，这里只负责原样带回。
+  Future<Map<String, dynamic>> translateLayout({
+    required Map<String, Object?> spec,
+    required String intent,
+  }) {
+    final provider = selectedProvider;
+    final model = selectedModel;
+    if (provider == null || model == null) {
+      throw StateError('还没有选模型');
+    }
+    return _api.translateLayout(
+      spec: spec,
+      intent: intent,
+      providerId: provider.id,
+      model: model.id,
+    );
+  }
+
   Future<SharedPreferences> get _store async =>
       _injectedPrefs ?? (_prefs ??= await SharedPreferences.getInstance());
 

@@ -7,6 +7,7 @@ pub mod ai_settings;
 pub mod conversations;
 pub mod events;
 pub mod executor;
+pub mod layout_translate;
 pub mod memory;
 pub mod nsfw_prompt;
 pub mod pending;
