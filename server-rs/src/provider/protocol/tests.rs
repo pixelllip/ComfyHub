@@ -181,6 +181,7 @@ fn completions_reasoning_dialects() {
                 effort: wire.map(str::to_string),
                 wire_value: wire.map(str::to_string),
                 format: Some(format),
+                echo_all: false,
             },
             None,
         )
@@ -429,6 +430,7 @@ fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
         effort: Some("high".into()),
         wire_value: Some("high".into()),
         format: Some(ThinkingFormat::DeepSeek),
+        echo_all: false,
     };
     let body = adapter.build_body("m", &[silent_tool_turn.clone()], &[], &deepseek, None);
     assert_eq!(body["input"][0]["type"], "reasoning");
@@ -439,6 +441,7 @@ fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
         effort: Some("none".into()),
         wire_value: Some("none".into()),
         format: Some(ThinkingFormat::DeepSeek),
+        echo_all: false,
     };
     let body = adapter.build_body("m", &[silent_tool_turn.clone()], &[], &off, None);
     assert!(
@@ -450,12 +453,50 @@ fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
         effort: Some("high".into()),
         wire_value: Some("high".into()),
         format: Some(ThinkingFormat::OpenAi),
+        echo_all: false,
     };
     let body = adapter.build_body("m", &[silent_tool_turn], &[], &openai, None);
     assert!(
         body["input"].as_array().unwrap().iter().all(|i| i["type"] != "reasoning"),
         "别的方言不许凭空多一个 reasoning 项"
     );
+}
+
+/// 补回传的开关与方言**解耦**（2026-11-01 用户点名的那条）。
+///
+/// 模型没声明 DeepSeek 方言时，以前 `reasoning_echo_required` 直接返回 false ——
+/// 于是那一轮的空思维链没人补，上游一路 400，最后只能**把整个 Run 的思考关掉**。
+/// 现在"被拒过一次"就把 `echo_all` 置位：补的是一条缺失的条目，不是关掉思考的能力。
+#[test]
+fn responses_补回传与方言解耦() {
+    let adapter = OpenAiResponsesAdapter;
+    let silent = ChatTurn {
+        role: "assistant".into(),
+        content: String::new(),
+        tool_calls: vec![ToolCallRef { id: "call_1".into(), name: "t".into(), arguments: "{}".into() }],
+        ..Default::default()
+    };
+    // 声明了 OpenAI 方言（不是 DeepSeek）：默认不补
+    let plain = ReasoningRequest {
+        effort: Some("high".into()),
+        wire_value: Some("high".into()),
+        format: Some(ThinkingFormat::OpenAi),
+        echo_all: false,
+    };
+    let body = adapter.build_body("m", &[silent.clone()], &[], &plain, None);
+    assert!(
+        body["input"].as_array().unwrap().iter().all(|i| i["type"] != "reasoning"),
+        "没被拒过就不补，免得给不需要它的上游塞怪东西"
+    );
+
+    // 被拒过一次：同一个请求，只把 echo_all 打开 → 补出空 content 的 reasoning 项，
+    // 而**思考强度仍然在**（`reasoning.effort` 还在，没有被降成 none）
+    let echoed = ReasoningRequest { echo_all: true, ..plain };
+    let body = adapter.build_body("m", &[silent], &[], &echoed, None);
+    assert_eq!(body["input"][0]["type"], "reasoning");
+    assert_eq!(body["input"][0]["content"], json!([]));
+    assert_eq!(body["input"][1]["type"], "function_call");
+    assert_eq!(body["reasoning"]["effort"], "high", "补回传不许动思考强度");
 }
 
 /// responses 的流事件：文本 / 思考 / 函数调用开始与参数分片 / 收尾。
@@ -572,6 +613,7 @@ fn anthropic_body_shape() {
             effort: Some("max".into()),
             wire_value: Some("4096".into()),
             format: None,
+            echo_all: false,
         },
         None,
     );
@@ -584,6 +626,7 @@ fn anthropic_body_shape() {
             effort: Some("high".into()),
             wire_value: Some("high".into()),
             format: None,
+            echo_all: false,
         },
         None,
     );

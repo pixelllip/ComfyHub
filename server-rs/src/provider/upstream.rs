@@ -232,9 +232,10 @@ where
     );
 
     let client = client_for(&host)?;
-    // 思考模式下的"思维链回传"被上游拒绝时，我们把思考关掉重发**一次**，
-    // 并把这个事实交给执行器（这个 Run 余下的请求都沿用 effort=none，见 `Outcome`）。
+    // 思考模式下的"思维链回传"被拒时，先补回传、再考虑降档（顺序见下面的 `loop`）。
     let mut thinking_forced_off = false;
+    // 这一轮是不是**补了空 `reasoning` 项**才成功的（执行器据此让余下的轮次也补）。
+    let mut echo_forced = false;
     let response = loop {
         let mut builder = client
             .post(&url)
@@ -280,15 +281,37 @@ where
         // ⚠ **思考模式下"模型这一轮没思考"是救得回来的**（2026-10-25 现场）：
         // DeepSeek 的 Responses 要求工具轮逐轮回传思维链，而模型有些轮次**根本不思考**
         // （实测：只发一个工具调用、2.3 秒返回，`reasoning_tokens` 为 0）——
-        // 那一轮没有任何思维链可回传，再按思考模式发下去就是**恒定 400**，
-        // 用户的感受是"AI 走了大量弯路、每条消息最后都报同一个错"。
-        // 唯一的出路是**把思考关掉**：`effort: none` 那一档不校验回传（同一个请求体 200）。
+        // 那一轮没有任何思维链可回传，再按思考模式发下去就是**恒定 400**。
+        //
+        // 补救按两档走，**先修回传、再降档**：
+        //   ① 补一个空 `content` 的 reasoning 项重发 —— 思考照旧开着。
+        //      这是根因的修法：缺的是"这一轮的思维链条目"，不是"思考这个能力"。
+        //   ② 只有补了还被拒，才把强度降成 `effort: none`（那一档上游不校验回传）。
+        //      降档是**最后手段**：它会把这个 Run 余下所有轮次的思考一起关掉，
+        //      代价是模型变笨，不能拿来当默认反应。
         if !thinking_forced_off && is_reasoning_passback_error(&detail) {
+            if !echo_forced {
+                echo_forced = true;
+                reasoning.echo_all = true;
+                body = adapter.build_body(
+                    request.model,
+                    request.turns,
+                    request.tools,
+                    &reasoning,
+                    request.max_output_tokens,
+                );
+                eprintln!(
+                    "上游要求回传思维链，但这次请求里有轮次没有思维链：\
+                     先补空 reasoning 项重发（**思考保持开启**）"
+                );
+                continue;
+            }
             thinking_forced_off = true;
             reasoning = ReasoningRequest {
                 effort: Some("none".into()),
                 wire_value: Some("none".into()),
                 format: None,
+                echo_all: true,
             };
             body = adapter.build_body(
                 request.model,
@@ -298,8 +321,7 @@ where
                 request.max_output_tokens,
             );
             eprintln!(
-                "上游要求回传思维链，但这次请求里有工具轮没有思维链（模型没思考）：\
-                 改用 effort=none 重发一次（本次 Run 余下的请求也沿用）"
+                "补了空 reasoning 项仍被拒：改用 effort=none 重发一次（本次 Run 余下的请求也沿用）"
             );
             continue;
         }
@@ -317,6 +339,7 @@ where
     let mut accumulator = SseAccumulator::new();
     let mut outcome = Outcome::default();
     outcome.thinking_forced_off = thinking_forced_off;
+    outcome.echo_forced = echo_forced;
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut seen_done = false;
@@ -423,6 +446,11 @@ pub struct Outcome {
     pub finish_reason: Option<String>,
     /// 工具调用分片（**原样**转交给 [`crate::provider::protocol::ToolCallAccumulator`] 拼装）
     pub tool_calls: Vec<(usize, String, Option<String>, Option<String>, Option<String>)>,
+    /// 这一次请求是不是**补了空 `reasoning` 项**才成功的（执行器据此让余下的轮次也补）。
+    ///
+    /// 与 [`Self::thinking_forced_off`] 分开：补回传**不动思考强度**，
+    /// 只是把缺的那一条思维链补成"这一轮确实没思考"。
+    pub echo_forced: bool,
     /// 这一次请求是不是**因为思维链回传被拒而关掉思考重发**的（见 [`stream_chat`]）。
     ///
     /// 执行器据此把 `effort=none` 沿用到本次 Run 的余下请求：重发产生的这一轮同样没有

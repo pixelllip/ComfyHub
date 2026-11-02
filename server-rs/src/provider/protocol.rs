@@ -146,6 +146,17 @@ pub struct ReasoningRequest {
     pub effort: Option<String>,
     pub wire_value: Option<String>,
     pub format: Option<ThinkingFormat>,
+    /// **每一轮助手消息都回传 `reasoning` 项（空的也发）**。
+    ///
+    /// 和 [`format`] 是两个轴：`format` 说的是"用哪种方言表达强度"，
+    /// 这个开关说的是"要不要把思维链回传给上游"。
+    ///
+    /// 为什么要有它：有些模型**某些轮次根本不思考**（实测 2026-10-25：只发一个工具调用、
+    /// 2.3 秒返回、`reasoning_tokens` 为 0），而思考模式下带 tools 的 Responses 请求
+    /// 要求逐轮对得上。补 `content: []` 是唯一诚实的形状（编一段假的等于把别人的思考
+    /// 塞进它的历史）。以前这个判断绑在 `format == DeepSeek` 上 —— 模型没声明方言时
+    /// 就漏发，于是一路 400，最后只能把整个 Run 的思考关掉。现在改成"被拒过一次就置位"。
+    pub echo_all: bool,
 }
 
 /// 对话中的一轮（`ChatTurn`）。
@@ -646,8 +657,11 @@ pub struct OpenAiResponsesAdapter;
 /// ⚠ 别的方言没有实测过，不许顺手加：空 `content` 的 `reasoning` 项对 OpenAI 官方
 /// 是不合法条目（它要 `id` / 加密内容），多塞一个就把本来能跑的请求变成 400。
 fn reasoning_echo_required(reasoning: &ReasoningRequest) -> bool {
-    matches!(reasoning.format, Some(ThinkingFormat::DeepSeek))
-        && !matches!(reasoning.effort.as_deref(), Some("none"))
+    // `effort: none` 时不校验回传（实测：同一个请求体 200），补了反而可能被拒
+    if matches!(reasoning.effort.as_deref(), Some("none")) {
+        return false;
+    }
+    reasoning.echo_all || matches!(reasoning.format, Some(ThinkingFormat::DeepSeek))
 }
 
 impl Adapter for OpenAiResponsesAdapter {
