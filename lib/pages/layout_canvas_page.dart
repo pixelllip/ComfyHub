@@ -5,9 +5,11 @@ import 'package:provider/provider.dart';
 
 import '../app.dart' show kWideLayoutMinWidth;
 import '../core/layout_preset_store.dart';
+import '../models/layout_embed.dart';
 import '../models/layout_spec.dart';
 import '../state/ai_workspace_store.dart';
 import '../widgets/common.dart';
+import '../widgets/layout_thumbnail.dart' show layoutKindColor;
 
 /// 画布预设。**尺寸都取 16 的倍数**（ComfyUI / 采样器普遍按 16 对齐），
 /// 宽高比取整数比，[LayoutSpec.ratioLabel] 才拼得出"3:4 竖构图"。
@@ -38,9 +40,12 @@ const List<({double ax, double ay})> kLayoutHandles = [
 
 /// 布局 → 提示词。
 ///
-/// 这是一件**独立的工具**：不连后端、不调模型、不写库。左边框选，右边出两条文本，
-/// 复制走人。刻意如此 —— 先验证"这套词表翻出来的句子，人愿不愿意用"，
-/// 再决定要不要接 AI 润色 / 接 `comfy_submit`。
+/// 两条入口，**画布本身只有一份**：
+///   · 从 AI 工作台来（[fromWorkspace]）：AI 已经给了一份草图（[initialSpec]），
+///     用户在这里改，点「提交回工作台」把规格交回去 —— 模型按新框重写提示词
+///     （2026-11-03 用户口径："AI 生成提示词的同时给出可用的 2D 布局模板，
+///     我可打开预览并修改，修改后重新提交给工作台"）；
+///   · 从「预设库」来（默认）：空白画布，自己框，然后把提示词复制走。
 ///
 /// 三条设计纪律（对着这个文件看）：
 ///   ① **坐标只有一套单位**（0~1000，见 `LayoutRect`），画布只做乘除；
@@ -48,7 +53,21 @@ const List<({double ax, double ay})> kLayoutHandles = [
 ///   ③ **翻译是纯函数**（`LayoutSpec.translate`），同一份布局翻两次必须逐字节相同 ——
 ///      这条是"AI 只做可选润色"的前提，也是 `test/layout_spec_test.dart` 钉住的东西。
 class LayoutCanvasPage extends StatefulWidget {
-  const LayoutCanvasPage({super.key});
+  const LayoutCanvasPage({
+    super.key,
+    this.initialSpec,
+    this.initialName,
+    this.fromWorkspace = false,
+  });
+
+  /// AI 给的那份草图（或用户上次提交的那一版）；null = 空白画布。
+  final LayoutSpec? initialSpec;
+
+  /// 草图的名字（卡片标题），只用来在面板里标明"正在改哪一版"。
+  final String? initialName;
+
+  /// 是不是从 AI 工作台进来的：决定标题与「提交回工作台」那一块。
+  final bool fromWorkspace;
 
   @override
   State<LayoutCanvasPage> createState() => _LayoutCanvasPageState();
@@ -86,6 +105,13 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
   /// 指针**真正按下**的位置。见 [_onPanStart] 里那段"为什么不用 onPanStart"。
   Offset? _downLocal;
   (int, int)? _downUnit;
+
+  @override
+  void initState() {
+    super.initState();
+    final spec = widget.initialSpec;
+    if (spec != null) _loadSpec(spec);
+  }
 
   @override
   void dispose() {
@@ -367,7 +393,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
     final wide = MediaQuery.sizeOf(context).width >= kWideLayoutMinWidth;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('布局 → 提示词'),
+        title: Text(widget.fromWorkspace ? '调整布局' : '布局 → 提示词'),
         actions: [_ratioMenu(context), _moreMenu(context)],
       ),
       body: wide
@@ -500,6 +526,56 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
     );
   }
 
+  /// 把当前画布交回 AI 工作台（2026-11-03 的主流程）。
+  ///
+  /// 返回值是 [LayoutResubmit]：工作台拿它拼一条用户消息，模型按新框重写提示词。
+  /// 空画布不许提交 —— 交回一份"什么都没有"只会让模型问一句"你要画什么"。
+  Future<void> _submitToWorkspace() async {
+    if (_regions.isEmpty) {
+      _snack('先框出至少一个区域，再提交');
+      return;
+    }
+    final note = TextEditingController(text: LayoutResubmit.defaultNote);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('提交回工作台'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('AI 会按这份布局重写提示词。可以补一句要求：'),
+            const SizedBox(height: 10),
+            TextField(
+              controller: note,
+              minLines: 2,
+              maxLines: 3,
+              autofocus: true,
+              decoration: const InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('提交'),
+          ),
+        ],
+      ),
+    );
+    final noteText = note.text.trim();
+    note.dispose();
+    if (ok != true || !mounted) return;
+    Navigator.of(context).pop(LayoutResubmit(spec: _spec, note: noteText));
+  }
+
   Future<void> _saveLayout() async {
     final nameCtl = TextEditingController(text: _suggestName());
     final ok = await showDialog<bool>(
@@ -628,12 +704,12 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
     return '${t.month}-${t.day} ${two(t.hour)}:${two(t.minute)}';
   }
 
-  /// 把一份规格灌回画布。
-  void _applySpec(LayoutSpec spec) {
+  /// 把一份规格灌回画布（**不** setState；initState 里也用它）。
+  void _loadSpec(LayoutSpec spec) {
     var index =
         kLayoutPresets.indexWhere((p) => p.w == spec.width && p.h == spec.height);
     if (index < 0) {
-      // 尺寸不在预设里（老版本存的 / 手改过的）：按比例找最接近的一档，
+      // 尺寸不在预设里（老版本存的 / 手改过的 / AI 给的）：按比例找最接近的一档，
       // 坐标是 0~1000 归一的，换档不会错位。
       final ratio = spec.width / spec.height;
       var best = 0;
@@ -647,19 +723,20 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
       }
       index = best;
     }
-    setState(() {
-      _presetIndex = index;
-      _regions
-        ..clear()
-        ..addAll(spec.regions);
-      _brief.text = spec.brief;
-      _camera = spec.camera;
-      _selectedId = null;
-      _nextId = _maxId() + 1;
-      _mode = _DragMode.none;
-      _dragId = null;
-    });
+    _presetIndex = index;
+    _regions
+      ..clear()
+      ..addAll(spec.regions);
+    _brief.text = spec.brief;
+    _camera = spec.camera;
+    _selectedId = null;
+    _nextId = _maxId() + 1;
+    _mode = _DragMode.none;
+    _dragId = null;
   }
+
+  /// 用户从布局库打开一份 → 原地替换。
+  void _applySpec(LayoutSpec spec) => setState(() => _loadSpec(spec));
 
   /// 载入后重新起编号，否则新建框会和旧 id 撞（撞了以后 `_replace` 会改错框）。
   int _maxId() {
@@ -771,6 +848,41 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
     );
   }
 
+  /// 从工作台进来时面板最上面那一块：正在改哪一版 + 提交入口。
+  Widget _workspaceSubmit(BuildContext context) {
+    final theme = Theme.of(context);
+    final name = widget.initialName?.trim() ?? '';
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            name.isEmpty ? '从 AI 工作台打开的布局' : '正在修改：$name',
+            style: theme.textTheme.labelMedium,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '改完点下面「提交回工作台」，AI 会按这份框重写提示词。',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+          const SizedBox(height: 8),
+          FilledButton.icon(
+            onPressed: _submitToWorkspace,
+            icon: const Icon(Icons.send, size: 16),
+            label: const Text('提交回工作台'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _panel(BuildContext context) {
     final theme = Theme.of(context);
     final selected = _selected;
@@ -779,6 +891,11 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 28),
       children: [
+        // 从工作台进来时，第一件事是"怎么交回去" —— 它比"场景大概画什么"更要紧。
+        if (widget.fromWorkspace) ...[
+          _workspaceSubmit(context),
+          const SizedBox(height: 16),
+        ],
         _sectionTitle(context, '场景大概画什么'),
         const SizedBox(height: 6),
         TextField(
@@ -1154,12 +1271,7 @@ class _BoxPainter extends CustomPainter {
   final Color textColor;
   final Color surface;
 
-  static Color _kindColor(LayoutBoxKind k) => switch (k) {
-        LayoutBoxKind.object => const Color(0xFF4CA1FF),
-        LayoutBoxKind.character => const Color(0xFFFFA24C),
-        LayoutBoxKind.text => const Color(0xFF4CD29A),
-        LayoutBoxKind.blank => const Color(0xFF9E9E9E),
-      };
+  static Color _kindColor(LayoutBoxKind k) => layoutKindColor(k);
 
   @override
   void paint(Canvas canvas, Size size) {

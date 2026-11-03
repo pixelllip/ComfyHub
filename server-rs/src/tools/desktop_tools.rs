@@ -370,6 +370,20 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "layout_propose",
+        description: r#"**按用户要的画面给出 1~3 个可直接编辑的 2D 布局模板**（构图草稿）。
+用户要一版生图提示词时，在写提示词的同一轮调它一次：每个模板是一组 0~1000 归一化坐标的框（左上角为原点、不含右/下边界）+ 名称 / 描述 / 关系，前端会画成缩略图；用户可以打开画布修改、再提交回来，你按新框重写提示词。
+只摆空间（谁在哪、占多大、谁挡谁、镜里是不是同一个人），风格词留给提示词本身。
+常用构图：三分法（主体压左 / 右三分线）、中心对称、双人对分、俯视桌面、墙角双墙、前景框景、海报留白。
+规矩：① 2~3 个模板要真的不同；② 一版 2~6 个框（最多 8 个，超了会被裁）；③ 每个框必须有 label；④ 文字 / 留白框只在真有排版意图时给；⑤ relation=mirror / same / front 时 relationTo 指向同模板里的框 id；⑥ 坐标写 0~1000 的整数，越界会被夹回并如实告诉你。
+坐标感觉：主体压左三分线 = `{x:40,y:180,w:300,h:700}`，右侧留白 = `{x:700,y:0,w:300,h:1000}`；站满全身把 y 压到 120、h 到 760；俯视桌面把桌面铺成 `{x:60,y:200,w:880,h:700}`、手 / 道具落在它内部的上半部。
+它不生成图片、不写库、不改 ComfyUI —— 别拿它当"已出图"的证据。"#,
+        input_schema: r#"{"type":"object","properties":{"brief":{"type":"string","description":"这一幕的一句话（场景 / 主体 / 氛围），与用户描述一致"},"templates":{"type":"array","minItems":1,"maxItems":3,"description":"1~3 个互不相同的构图","items":{"type":"object","properties":{"title":{"type":"string","description":"给用户看的一句话标题，例如「三分法：旅人压左」"},"note":{"type":"string","description":"这版的构图意图，一句话"},"width":{"type":"integer","description":"出图宽（默认 1024）"},"height":{"type":"integer","description":"出图高（默认 1024）"},"camera":{"type":"string","enum":["auto","topdown","eye","low"],"description":"机位：俯视 / 平视 / 仰视"},"regions":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"id":{"type":"string","description":"本模板内唯一，例如 r1；不填也行，后端会按顺序编号"},"label":{"type":"string","description":"短名称（必填），例如「提灯的旅人」"},"caption":{"type":"string","description":"更长的描述，可留空"},"kind":{"type":"string","enum":["object","character","text","blank"],"description":"物体 / 角色 / 文字 / 留白"},"x":{"type":"integer","description":"左边界 0~1000"},"y":{"type":"integer","description":"上边界 0~1000"},"w":{"type":"integer","description":"宽，0~1000"},"h":{"type":"integer","description":"高，0~1000"},"surface":{"type":"string","enum":["none","left","right","back","floor","table"],"description":"挂在哪个面（墙面 / 地面 / 桌面）"},"relation":{"type":"string","enum":["none","mirror","same","front"],"description":"与另一个框的关系：镜像 / 同一主体 / 挡在前面"},"relationTo":{"type":"string","description":"relation 指向的框 id（必须是同模板里的框）"},"text":{"type":"string","description":"kind=text 时要排的文字"}},"required":["label","x","y","w","h"],"additionalProperties":false}}},"required":["title","regions"],"additionalProperties":false}}},"required":["brief","templates"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "list_dir",
         description: r#"列目录（默认 ComfyUI 目录）。只允许读允许的目录，越界会被拒绝。"#,
         input_schema: r#"{"type":"object","properties":{"path":{"type":"string","description":"相对项目根或绝对路径；缺省 = ComfyUI 目录"},"depth":{"type":"integer","description":"1 或 2，默认 1"}},"additionalProperties":false}"#,

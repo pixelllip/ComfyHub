@@ -286,6 +286,8 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "web_fetch",
         "civitai_search",
         "find_model",
+        // 2D 布局模板（2026-11-03）：只出构图草稿，桌面专属（手机没有画布）
+        "layout_propose",
         // 配方三件（P4 第 67 步）：`BOTH`/`DESKTOP` 都与 Kotlin 一致 —— 它们都是**桌面专属**，
         // 所以进桌面清单、**不进** run-kit 的手机那份（下面那段断言）
         "comfy_learn_workflow",
@@ -456,4 +458,60 @@ async fn view_outputs_returns_recent_media_as_reference_images() {
         .unwrap();
     assert_eq!(none.payload["count"], 0);
     assert!(none.content.contains("没有"), "{}", none.content);
+}
+
+/// 2026-11-03：`layout_propose` 的**执行接线**（不只是纯函数）。
+///
+/// 盯的是工具层这一跳：`execute` 真的有这条分支、结果进 `payload.layoutTemplates`、
+/// 越界框被夹回并如实写进 `issues`，而且**正文不再复述坐标**。
+#[tokio::test]
+async fn layout_propose_returns_editable_templates_and_fixes_boxes() {
+    let state = state();
+    let out = call_tool(
+        &state,
+        "layout_propose",
+        serde_json::json!({
+            "brief": "雾夜废墟，一名提灯的旅人正走近教堂",
+            "templates": [{
+                "title": "三分法：旅人压左",
+                "width": 768,
+                "height": 1024,
+                "camera": "eye",
+                "regions": [
+                    { "label": "提灯的旅人", "kind": "character",
+                      "x": 40, "y": 300, "w": 260, "h": 640, "surface": "floor" },
+                    // 900+400 越界：必须被夹回 600
+                    { "label": "教堂", "kind": "object",
+                      "x": 900, "y": 120, "w": 400, "h": 760 },
+                    { "label": "镜中的她", "kind": "character",
+                      "x": 700, "y": 200, "w": 120, "h": 200,
+                      "relation": "mirror", "relationTo": "r1" }
+                ]
+            }]
+        }),
+    )
+    .await
+    .unwrap();
+
+    let templates = out.payload["layoutTemplates"].as_array().expect("要有模板");
+    assert_eq!(templates.len(), 1, "{}", out.content);
+    let regions = templates[0]["spec"]["regions"].as_array().unwrap();
+    assert_eq!(regions.len(), 3);
+    assert_eq!(regions[1]["x"], 600, "越界框必须夹回界内");
+    assert_eq!(regions[2]["relation"], "mirror");
+    assert_eq!(regions[2]["relationTo"], "r1");
+    assert!(
+        out.payload["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i.as_str().unwrap_or("").contains("越出画布")),
+        "修正要如实记账：{}",
+        out.payload["issues"]
+    );
+    // 正文给模型看的是摘要，不重复贴整份坐标（坐标是它自己写的）
+    assert!(out.content.contains("三分法：旅人压左"), "{}", out.content);
+    assert!(!out.content.contains("\"regions\""), "正文不该复述 JSON：{}", out.content);
+
+    std::fs::remove_dir_all(state.project_root()).ok();
 }

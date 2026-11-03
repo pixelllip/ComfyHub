@@ -556,6 +556,8 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                           'skill' => Icons.auto_awesome_outlined,
                           'files' => Icons.folder_outlined,
                           'memory' => Icons.push_pin_outlined,
+                          // 2D 布局模板（2026-11-03）
+                          'layout' => Icons.dashboard_customize_outlined,
                           // 联网搜索（2026-09-20）：地球仪，一眼区分"这个工具出网"
                           'web' => Icons.travel_explore_outlined,
                           // 资料库（O7/O8，2026-09-25）：提示词库 / 角色卡

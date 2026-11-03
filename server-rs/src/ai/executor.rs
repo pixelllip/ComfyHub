@@ -1559,6 +1559,11 @@ impl Sink {
             if let Some(asked) = outcome.result.get("asked") {
                 map.insert("question".into(), asked.clone());
             }
+            // 2D 布局模板（2026-11-03）：它不像图片有 id 可以事后重新拉 ——
+            // 规格本身必须落进块里，否则重开 App 之后那条回复里的模板卡就没了。
+            if let Some(templates) = outcome.result.get("layoutTemplates") {
+                map.insert("layoutTemplates".into(), templates.clone());
+            }
         }
         self.parts.push((
             "tool_result".into(),

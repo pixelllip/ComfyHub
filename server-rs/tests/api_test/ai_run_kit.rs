@@ -22,8 +22,8 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         ]
     );
     assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
-    // v57：新增 `comfy_view_outputs`（看画廊最近的产物，2026-10-29）。
-    assert_eq!(body["promptVersion"], "v57");
+    // v58：新增 `layout_propose`（写提示词时同轮给 2D 布局模板，2026-11-03）。
+    assert_eq!(body["promptVersion"], "v58");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -379,6 +379,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             // 定向查询（P4 第 64 步）：先查本机、再按 Civitai → HF → ModelScope 查，
             // **绝不代下**（只给链接 + sha256 + 目标目录）
             "find_model",
+            // 2D 布局模板（2026-11-03）：写提示词时同轮给构图草稿，只读、不生成图片
+            "layout_propose",
             "list_dir",
             "list_skills",
             "load_skill",

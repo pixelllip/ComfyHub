@@ -4,6 +4,43 @@
 
 use super::*;
 
+#[test]
+fn 布局模板随工具结果落进块里_否则重开就没了() {
+    let mut sink = Sink::default();
+    sink.push_text("提示词写好了");
+    let outcome = CallOutcome {
+        content: "已生成 1 个 2D 布局模板".into(),
+        preview: "已生成 1 个 2D 布局模板".into(),
+        ok: true,
+        code: None,
+        approval: "not_required".into(),
+        result: serde_json::json!({
+            "layoutTemplates": [{
+                "title": "三分法",
+                "note": "主体压左",
+                "spec": { "width": 768, "height": 1024, "regions": [] }
+            }],
+            "issues": []
+        }),
+        elapsed_ms: 3,
+        cached: false,
+    };
+    sink.push_tool_result("call-1", "layout_propose", &outcome);
+
+    let parts = parts_of(&sink);
+    let raw = parts
+        .iter()
+        .find(|(kind, ..)| kind == "tool_result")
+        .and_then(|(_, _, _, payload)| payload.clone())
+        .expect("tool_result 必须带 payload");
+    let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    // ⚠ 漏掉这一条的表现是：当轮卡片在、**重开 App 之后整张卡消失**（payload 白名单只放行 mediaIds / asked）
+    assert_eq!(
+        payload["layoutTemplates"][0]["title"], "三分法",
+        "布局规格必须落进 tool_result 块里：{payload}"
+    );
+}
+
 fn message(role: &str, parts: Vec<AiMessagePartDto>) -> AiMessageDto {
     AiMessageDto {
         id: "m".into(),

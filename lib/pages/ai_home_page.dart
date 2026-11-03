@@ -15,14 +15,18 @@ import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../models/ai_models.dart';
+import '../models/layout_embed.dart';
+import '../models/layout_spec.dart';
 import '../state/ai_workspace_store.dart';
 import '../widgets/app_menu.dart';
 import '../widgets/common.dart' show FilterChipRow;
+import '../widgets/layout_templates_card.dart';
 import '../widgets/markdown_view.dart';
 import '../widgets/nsfw_blur.dart';
 import '../widgets/workflow_picker.dart';
 import '../widgets/workflow_viewer.dart';
 import '../widgets/zoomable_image_view.dart';
+import 'layout_canvas_page.dart';
 import 'media_detail_page.dart';
 import 'train_page.dart';
 
@@ -328,6 +332,31 @@ class _AiHomePageState extends State<AiHomePage> {
     // ComfyUI 进度轮询每秒会通知好几次，以前是整页（含左侧 240px 会话列表）
     // 跟着重建 —— DevTools 实测一帧 Build 24.7ms、侧栏每个会话行一次重建
     // （Tooltip 12 / MenuAnchor 12 / ListTile 10）。现在只有这棵树重建。
+    // 输入框回车与「布局画布 → 提交回工作台」走**同一条发送路**：
+    // 清空输入框 / 贴底 / 准入判断都只写一份，免得两条入口的规矩慢慢分叉。
+    Future<void> submit(AiWorkspaceStore store, String text) async {
+      // 空输入 + 没有附件：没什么可发的，静默返回（也别弹提示）。
+      if (text.trim().isEmpty && store.attachments.isEmpty) return;
+
+      // **只有"真的会被发出去"才清空输入框**。
+      //
+      // 准入判断是同步的、和 `send()` 共用同一份（`store.sendBlockReason()`）：
+      // 被拒时（最常见的是"还在生成中又按了一次回车"）一个字节都不动 ——
+      // 以前是"先清空、再由 send() 拒绝"，用户打的字被静默吃掉，只能自己
+      // 把上一条复制一遍再发一次（用户报的 bug）。
+      //
+      // 清空仍然发生在等待之前：`store.send()` 要一直 await 到整轮结束，
+      // 放到后面就会出现"点了发送输入框里的话还在"，看起来像没反应。
+      if (store.sendBlockReason() == null) {
+        _input.clear();
+        // 用户刚发了消息：无论刚才翻到哪儿，都跳回底部看回复
+        if (mounted) setState(() => _atBottom = true);
+        _scrollToBottom();
+      }
+      await store.send(text);
+      _scrollToBottom();
+    }
+
     final thread = _Thread(
       controller: _scroll,
       atBottom: _atBottom,
@@ -335,28 +364,8 @@ class _AiHomePageState extends State<AiHomePage> {
       inputFocus: _inputFocus,
       onShowStatus: showPanel ? null : () => _showStatusSheet(context),
       onJumpToBottom: _jumpToBottom,
-      onSubmitted: (store, text) async {
-        // 空输入 + 没有附件：没什么可发的，静默返回（也别弹提示）。
-        if (text.trim().isEmpty && store.attachments.isEmpty) return;
-
-        // **只有"真的会被发出去"才清空输入框**。
-        //
-        // 准入判断是同步的、和 `send()` 共用同一份（`store.sendBlockReason()`）：
-        // 被拒时（最常见的是"还在生成中又按了一次回车"）一个字节都不动 ——
-        // 以前是"先清空、再由 send() 拒绝"，用户打的字被静默吃掉，只能自己
-        // 把上一条复制一遍再发一次（用户报的 bug）。
-        //
-        // 清空仍然发生在等待之前：`store.send()` 要一直 await 到整轮结束，
-        // 放到后面就会出现"点了发送输入框里的话还在"，看起来像没反应。
-        if (store.sendBlockReason() == null) {
-          _input.clear();
-          // 用户刚发了消息：无论刚才翻到哪儿，都跳回底部看回复
-          if (mounted) setState(() => _atBottom = true);
-          _scrollToBottom();
-        }
-        await store.send(text);
-        _scrollToBottom();
-      },
+      onSubmitted: submit,
+      onLayoutResubmit: (text) => submit(store, text),
     );
 
     if (wide) {
@@ -451,6 +460,7 @@ class _Thread extends StatelessWidget {
     required this.onShowStatus,
     required this.onJumpToBottom,
     required this.onSubmitted,
+    required this.onLayoutResubmit,
   });
 
   final ScrollController controller;
@@ -460,6 +470,12 @@ class _Thread extends StatelessWidget {
   final VoidCallback? onShowStatus;
   final VoidCallback onJumpToBottom;
   final Future<void> Function(AiWorkspaceStore store, String text) onSubmitted;
+
+  /// 用户在画布上改完布局、点「提交回工作台」时走这条路。
+  ///
+  /// 与普通提交共用同一份发送逻辑（清空输入框 / 贴底 / 准入判断），只是正文是
+  /// `LayoutResubmit.toMessage()` 拼出来的 —— 所以它也是一条**用户消息**。
+  final Future<void> Function(String text) onLayoutResubmit;
 
   /// 顶栏「选择现有工作流」：把路径写进输入框，让 AI 照着这一份出图。
   ///
@@ -510,7 +526,11 @@ class _Thread extends StatelessWidget {
         Expanded(
           child: Stack(
             children: [
-              _MessageList(store: store, controller: controller),
+              _MessageList(
+                store: store,
+                controller: controller,
+                onLayoutResubmit: onLayoutResubmit,
+              ),
               // 「AI 正在生成」的加载提示**不再做成底部浮层**（用户建议 2026-09-20：
               // "不要出现在底部（很影响观感），而是当前正在生成回复的气泡底部，
               // 并且只保留转圈圈动画"）—— 它现在是那个气泡自己的内容，
@@ -923,7 +943,14 @@ class _MessageList extends StatelessWidget {
   final AiWorkspaceStore store;
   final ScrollController controller;
 
-  const _MessageList({required this.store, required this.controller});
+  /// 「提交回工作台」：与输入框回车同一条路（见 [_Thread.onLayoutResubmit]）。
+  final Future<void> Function(String text) onLayoutResubmit;
+
+  const _MessageList({
+    required this.store,
+    required this.controller,
+    required this.onLayoutResubmit,
+  });
 
   /// 每一条气泡的外边距（用户建议 2026-09-20："聊天气泡距离边缘 20 到 30 像素"）。
   ///
@@ -960,7 +987,11 @@ class _MessageList extends StatelessWidget {
               padding: _itemPadding,
               // RepaintBoundary / 重建闸门都在 `_MessageBubbleSlot` 里：见它的注释
               // （流式输出时只有**真的变了**的那一条会重建，历史气泡整棵跳过）。
-              child: _MessageBubbleSlot(store: store, message: message),
+              child: _MessageBubbleSlot(
+                store: store,
+                message: message,
+                onLayoutResubmit: onLayoutResubmit,
+              ),
             ),
         ],
       ),
@@ -998,7 +1029,14 @@ class _MessageBubbleSlot extends StatefulWidget {
   final AiWorkspaceStore store;
   final AiMessage message;
 
-  const _MessageBubbleSlot({required this.store, required this.message});
+  /// 画布提交回来的那条消息（与输入框发送同一条路）。
+  final Future<void> Function(String text) onLayoutResubmit;
+
+  const _MessageBubbleSlot({
+    required this.store,
+    required this.message,
+    required this.onLayoutResubmit,
+  });
 
   @override
   State<_MessageBubbleSlot> createState() => _MessageBubbleSlotState();
@@ -1070,6 +1108,11 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
         producedPromptIds: message.isUser
             ? const []
             : store.producedPromptIds(message),
+        // 2D 布局模板（2026-11-03）：AI 与提示词同轮给出的构图草稿
+        layoutCandidates: message.isUser
+            ? const []
+            : store.layoutCandidates(message),
+        onLayoutResubmit: widget.onLayoutResubmit,
         toolCategoryOf: store.toolCategoryOf,
         onApprove: store.approveToolCall,
         onDeny: store.denyToolCall,
@@ -1144,6 +1187,12 @@ class _MessageBubble extends StatelessWidget {
   /// 就能直接打开这次真正跑过的工作流（也能拖回 ComfyUI 复现）。
   final List<int> producedPromptIds;
 
+  /// AI 与提示词同轮给出的候选布局（`layout_propose`，2026-11-03）。
+  final List<LayoutCandidate> layoutCandidates;
+
+  /// 画布改完提交回工作台（正文是一条用户消息）。
+  final Future<void> Function(String text) onLayoutResubmit;
+
   final String Function(String toolName) toolCategoryOf;
   final Future<void> Function(String callId) onApprove;
   final Future<void> Function(String callId) onDeny;
@@ -1185,6 +1234,8 @@ class _MessageBubble extends StatelessWidget {
     this.producedMediaIds = const [],
     this.producedNsfwMediaIds = const [],
     this.producedPromptIds = const [],
+    this.layoutCandidates = const [],
+    required this.onLayoutResubmit,
     required this.toolCategoryOf,
     required this.onApprove,
     required this.onDeny,
@@ -1215,7 +1266,7 @@ class _MessageBubble extends StatelessWidget {
   ///     （宁可同一个环节名多一个组头，也不把正文挪到工具卡后面去：正文与工具卡的先后
   ///     是用户 bug⑥ 专门定下来的，不能再动）；
   ///  ② 同一环节名再次开组时标「续」，让人一眼看出这是同一个环节的第二段操作。
-  List<Widget> _orderedBody(ThemeData theme) {
+  List<Widget> _orderedBody(BuildContext context, ThemeData theme) {
     final m = message;
     final streaming = m.status == 'streaming';
     final blocks = <Widget>[];
@@ -1236,16 +1287,34 @@ class _MessageBubble extends StatelessWidget {
         // 桌面这边后端已经摘过，这里是幂等的 no-op）
         final visible = stripStepMarkers(text);
         if (visible.trim().isEmpty) return;
-        // 用户消息是**纯文本**，不走 Markdown（用户打什么就显示什么）
-        blocks.add(
-          m.isUser
-              ? Text(visible)
-              : MarkdownText(
-                  visible,
-                  style: theme.textTheme.bodyMedium,
-                  selectable: false,
+        // 用户消息是**纯文本**，不走 Markdown（用户打什么就显示什么）。
+        // 例外：布局画布提交回来的那条 —— 正文是一整套规格 JSON，原样铺开会占满一屏，
+        // 所以画成一张卡（点「再次修改」还能接着改**这一版**）。
+        if (m.isUser) {
+          final resubmit = LayoutResubmit.tryParse(visible);
+          if (resubmit != null) {
+            blocks.add(
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: LayoutResubmitCard(
+                  resubmit: resubmit,
+                  onEdit: () =>
+                      _openLayoutEditor(context, resubmit.spec),
                 ),
-        );
+              ),
+            );
+            return;
+          }
+          blocks.add(Text(visible));
+        } else {
+          blocks.add(
+            MarkdownText(
+              visible,
+              style: theme.textTheme.bodyMedium,
+              selectable: false,
+            ),
+          );
+        }
       }
     }
 
@@ -1312,8 +1381,29 @@ class _MessageBubble extends StatelessWidget {
     return blocks;
   }
 
-  Widget _toolCard(AiToolCallState call) => Padding(
-    padding: const EdgeInsets.only(top: 8),
+  /// 打开画布改这一份布局；用户点「提交回工作台」时把规格发回对话。
+  ///
+  /// 走的是与输入框回车**同一条发送路**（`onLayoutResubmit`）：所以清空输入框、
+  /// 贴底、准入判断的行为完全一致，不会出现"画布能发、输入框不能发"的两套规矩。
+  Future<void> _openLayoutEditor(
+    BuildContext context,
+    LayoutSpec spec, {
+    String? name,
+  }) async {
+    final result = await Navigator.of(context).push<LayoutResubmit>(
+      MaterialPageRoute<LayoutResubmit>(
+        builder: (_) => LayoutCanvasPage(
+          initialSpec: spec,
+          initialName: name,
+          fromWorkspace: true,
+        ),
+      ),
+    );
+    if (result == null || !context.mounted) return;
+    await onLayoutResubmit(result.toMessage());
+  }
+
+  Widget _toolCard(AiToolCallState call) => Padding(    padding: const EdgeInsets.only(top: 8),
     // 提问（用户建议 ⑥）画的**不是工具卡而是提问卡**：一个是"等你批准"，
     // 一个是"等你回答"，混在一起用户会以为点了就等于批准。
     child: call.allQuestions.isNotEmpty
@@ -1351,7 +1441,7 @@ class _MessageBubble extends StatelessWidget {
     // 待批准的工具调用（M4）：气泡里要能点「批准 / 拒绝」
     final pending = toolCalls.where((c) => c.needsApproval).toList();
     // 正文块只算一次：下面"退回整段正文"的兜底要用它判断"有序块与段是不是都没产出内容"
-    final body = _orderedBody(theme);
+    final body = _orderedBody(context, theme);
 
     return Column(
       crossAxisAlignment: align,
@@ -1484,6 +1574,20 @@ class _MessageBubble extends StatelessWidget {
                       '有 ${pending.length} 个工具调用在等你的批准（写盘 / 改动类操作）。',
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: theme.colorScheme.outline,
+                      ),
+                    ),
+                  ),
+                // 2D 布局模板（2026-11-03）：AI 与提示词同轮给出的构图草稿。
+                // 放在产物卡之前 —— 它是"还没出图、先对构图"的那一步。
+                if (layoutCandidates.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: LayoutTemplatesCard(
+                      candidates: layoutCandidates,
+                      onOpen: (candidate) => _openLayoutEditor(
+                        context,
+                        candidate.spec,
+                        name: candidate.title,
                       ),
                     ),
                   ),
@@ -2535,6 +2639,8 @@ class _ToolCallCardState extends State<_ToolCallCard> {
     'files' => Icons.folder_outlined,
     // 长期记忆（M6）：记住一条事实用的是「便签」这个意象
     'memory' => Icons.push_pin_outlined,
+    // 2D 布局模板（2026-11-03）
+    'layout' => Icons.dashboard_customize_outlined,
     _ => Icons.dns_outlined,
   };
 
@@ -3988,6 +4094,7 @@ class _ComposerState extends State<_Composer> {
       AppMenuButton<String>(
         onSelected: (v) {
           if (v == 'attach') _pickFiles();
+          if (v == 'layout') _openLayoutCanvas();
           if (v == 'cards') _openCards();
         },
         options: [
@@ -3996,6 +4103,8 @@ class _ComposerState extends State<_Composer> {
             icon: Icons.attach_file,
             label: '添加附件',
           ),
+          // 布局画布（2026-11-03）：工作台是主入口，画布只是"把构图摆清楚"的那一步。
+          // ⚠ 放在卡片库**后面**：两个 `dividerBefore` 挨在一起会画出一条空分隔线。
           // 卡片库只有桌面后端有（手机侧没有这两张表）。
           if (!widget.store.isLocal)
             const MenuOption(
@@ -4004,6 +4113,12 @@ class _ComposerState extends State<_Composer> {
               label: '角色卡 / 画风卡…',
               dividerBefore: true,
             ),
+          const MenuOption(
+            value: 'layout',
+            icon: Icons.dashboard_customize_outlined,
+            label: '布局画布…',
+            dividerBefore: true,
+          ),
         ],
         button: (context, controller, isOpen) => IconButton(
           tooltip: '添加附件 / 插入卡片（@）',
@@ -4304,8 +4419,21 @@ class _ComposerState extends State<_Composer> {
     }
   }
 
-  Future<void> _pickFiles() async {
-    // file_picker 12.x 起 pickFiles 是静态方法，直接返回 List<PlatformFile>
+  /// 空画布 → 提交回工作台（工作台是布局的主入口，不是一个独立工具页）。
+  ///
+  /// 不从卡片点、而是自己从空白开始时，先让用户框完再提交；提交出去的同样是
+  /// 一条普通用户消息（`LayoutResubmit.toMessage()`）。
+  Future<void> _openLayoutCanvas() async {
+    final result = await Navigator.of(context).push<LayoutResubmit>(
+      MaterialPageRoute<LayoutResubmit>(
+        builder: (_) => const LayoutCanvasPage(fromWorkspace: true),
+      ),
+    );
+    if (result == null || !mounted) return;
+    widget.onSubmit(result.toMessage());
+  }
+
+  Future<void> _pickFiles() async {    // file_picker 12.x 起 pickFiles 是静态方法，直接返回 List<PlatformFile>
     final files = await FilePicker.pickFiles(dialogTitle: '选择要发给 AI 的附件');
     if (files.isEmpty) return;
     // 上传走"路径"：不让几十 MB 的图片进 Dart 堆；类型判定、缩略图与准入都在后端做（M3）

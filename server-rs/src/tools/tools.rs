@@ -459,7 +459,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前四十一个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前四十二个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
 /// + 联网三件（`web_search` / `web_fetch` / `civitai_search`，见 [`crate::tools::web_tools`] 与
 /// [`crate::tools::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
@@ -480,7 +480,10 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **配方三件**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`，
 /// 见 [`crate::workflow::workflow_recipe`]，P4 第 67 步；学与绑都与
 /// `POST /api/ai/workflow-recipes*` 共用一份实现）。
-pub const IMPLEMENTED: [&str; 41] = [
+/// + **2D 布局模板**（`layout_propose`，见 [`crate::ai::layout_proposal`]，2026-11-03：
+/// 写提示词的同一轮把构图草稿交给用户预览 / 修改，改完再提交回来 —— 只出草稿，
+/// 不生成图片、不写库）。
+pub const IMPLEMENTED: [&str; 42] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
@@ -508,6 +511,7 @@ pub const IMPLEMENTED: [&str; 41] = [
     "danbooru_lookup",
     "delete_skill",
     "find_model",
+    "layout_propose",
     "list_dir",
     "list_skills",
     "load_skill",
@@ -706,6 +710,10 @@ pub async fn execute(
         "save_style_card" => crate::library::style_cards::tool_save(state, arguments),
         // `search_prompts`：同一个落点的另一半 —— 库里可能已经有那个角色的完整 tag 栈
         "search_prompts" => search_prompts(state, arguments),
+        // ---- 2D 布局模板（2026-11-03：工作台里"提示词 + 可编辑布局"同轮交付）------
+        // 它只把模型给的构图草稿规范化成 `layoutTemplates`（坐标 0~1000），界面画缩略图；
+        // 不生成图片、不写库、不碰 ComfyUI，所以出厂 ALLOW、不吃任何查询额度。
+        "layout_propose" => crate::ai::layout_proposal::tool_propose(arguments),
         // ---- 联网三件 + 定向查询（P4 第 64 步：用户 2026-09-20 的"只用通用方案"）------
         // 这个类别是**本项目里唯一会把数据送出本机**的那一类（`ai_settings::category_of`
         // 回 "web"），所以三件事绑在一起：出厂 `ASK`（用户点一下才发出去）、

@@ -6,6 +6,7 @@ library;
 
 import 'dart:convert';
 
+import 'layout_embed.dart';
 import 'models.dart';
 
 /// 凭据状态：只有"有没有 / 从哪来 / 能不能改"，没有值。
@@ -1553,6 +1554,8 @@ class AiToolInfo {
     'web' => '联网搜索',
     // O7/O8（2026-09-25）：搜自己的提示词库 / 读写角色卡
     'library' => '资料库',
+    // 2D 布局模板（2026-11-03）：写提示词时同轮给的构图草稿
+    'layout' => '布局',
     _ => category,
   };
 
@@ -1929,6 +1932,12 @@ class AiToolCallState {
   /// [question] 仍是"第一条"：历史回放与旧用例照旧读它。
   final List<AiQuestion> questions;
 
+  /// `layout_propose` 给出的候选布局（2026-11-03）。
+  ///
+  /// 与 [mediaIds] 同源：只认工具**结构化结果**（`jsonPayload.layoutTemplates`），
+  /// 不解析正文。回复末尾因此能画一张"2D 布局模板"卡，而不是让用户去别处找。
+  final List<LayoutCandidate> layoutCandidates;
+
   /// 这张卡要画几题：优先用 [questions]，没有就退回 [question]。
   List<AiQuestion> get allQuestions => questions.isNotEmpty
       ? questions
@@ -1979,6 +1988,7 @@ class AiToolCallState {
     'web_search' => '联网搜索',
     'web_fetch' => '读取网页',
     'ask_user_question' => '询问你',
+    'layout_propose' => '生成 2D 布局模板',
     'todo_write' => '更新任务清单',
     _ => name.isEmpty ? '工具调用' : name,
   };
@@ -2026,6 +2036,7 @@ class AiToolCallState {
     this.promptId,
     this.question,
     this.questions = const [],
+    this.layoutCandidates = const [],
   });
 
   factory AiToolCallState.fromJson(Map<String, dynamic> json) =>
@@ -2058,6 +2069,7 @@ class AiToolCallState {
               )
             : null,
         questions: _questionsOf(json['questions']),
+        layoutCandidates: LayoutCandidate.listFromPayload(json),
       );
 
   /// 解析一组提问（`questions[]`；没有就是空表）。
@@ -2162,6 +2174,7 @@ class AiToolCallState {
           promptId: AiToolCallState.promptIdOf(map),
           question: asked ?? prev?.question,
           questions: askedGroup,
+          layoutCandidates: LayoutCandidate.listFromPayload(map),
         );
         if (i == null) {
           indexOf[id] = out.length;
@@ -2188,6 +2201,7 @@ class AiToolCallState {
     int? promptId,
     AiQuestion? question,
     List<AiQuestion>? questions,
+    List<LayoutCandidate>? layoutCandidates,
   }) => AiToolCallState(
     callId: callId,
     name: name ?? this.name,
@@ -2203,6 +2217,7 @@ class AiToolCallState {
     promptId: promptId ?? this.promptId,
     question: question ?? this.question,
     questions: questions ?? this.questions,
+    layoutCandidates: layoutCandidates ?? this.layoutCandidates,
   );
 
   /// 待用户批准：气泡上要出「批准 / 拒绝」。

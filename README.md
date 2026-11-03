@@ -33,7 +33,7 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 | **AI 工作台**（默认落地页） | 和模型对话干活：写提示词、查 danbooru、投放参考图、提交 ComfyUI、看实时进度与产物入口卡。审批闸门 / 提问闸门 / 轮次与预算上限都在这一页看得见。AppBar 的「LoRA 训练台」进次级页（见下） |
 | **LoRA 训练台**（次级页） | 可选能力：本机 anima-lora-next 的**完整训练台**（与 Qt GUI 的页签对齐，MOSS 页除外）—— 取训练集 → **人工筛选** → 打标（可选）→ 预处理 → **参数（复现 Qt GUI 的 Config 表单）** → 正式训练；另有 **Krea-2**、**合并（烘焙 / 融合 / ΔW 提取）**、**EasyControl**（方法 / 描述符变体）、**TensorBoard**、**Anime Tools 策展面板**、**实验（Turbo / Soup）** 与**全局作业队列**。内嵌引擎自己的响应式 WebUI（手机 / 电脑同一份状态），AI 工作台调的是同一批 `anima_studio_*` 工具 |
 | **画廊** | 生成产物：列表 / 详情 / 大图（滚轮缩放）/ 视频播放；NSFW 标记与模糊；右键菜单。**手机上默认缓存看过的缩略图 / 原件**，详情菜单可「保存到手机相册」 |
-| **提示词** | 本机提示词库：搜索、收藏、标签、工作流原文（界面格式 ↔ API 图的转换在服务端）。AppBar 的「布局 → 提示词」进次级页（见下） |
+| **提示词** | 本机提示词库：搜索、收藏、标签、工作流原文（界面格式 ↔ API 图的转换在服务端）。AppBar 的「布局 → 提示词」进画布次级页（主入口在 AI 工作台的模板卡，见下） |
 | **标签** | 标签库与分类、使用次数 |
 | **设置** | Provider / 模型目录 / API Key、「远程访问与配对」、NSFW 开关、ComfyUI 自动捕获、桌面端还有本地服务与后端地址、**产物导出** |
 
@@ -55,17 +55,21 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 - **长期记忆**：`<storage>\ai\memory.md`，一行一条，用户可手改；写超限**报错不截断**。
 - **卡片库**：角色卡（画的是谁）+ 画风卡（画成什么样），同等地位。每张卡只有**一版自然语言正面提示词**
   + 负面提示词 + 示例产物；工作台输入区点 `+`（或输入 `@`）就能把卡插进这一条消息。见 §4。
-- **布局 → 提示词**（次级页，`lib/pages/layout_canvas_page.dart`）：空白画布上拖框 → 每个框起名 / 填描述 /
-  选类型（物体 / 角色 / 文字 / 留白）→ 同时产出两条出口：**通用提示词**（散文，任何模型都能读）与
-  **MOSS 布局 JSON**（与 ComfyUI `MOSSImageLayoutPrompt` 节点输出逐字节同构，可直接当提示词喂给 MOSS-Image）。
+- **2D 布局（工作台内，2026-11-03 换思路）**：用户在 AI 工作台描述画面、要一版提示词时，AI 在写提示词的
+  **同一轮**调 `layout_propose` 给出 1~3 个可编辑的构图草稿；回复末尾出现「2D 布局模板」卡，点开进画布
+  （`lib/pages/layout_canvas_page.dart`，带 AI 的草图）改框 / 改关系，点「提交回工作台」就把这份规格作为
+  一条用户消息发回对话，AI 按新框重写提示词。契约见
+  [docs/layout-workspace-design.md](docs/layout-workspace-design.md)；**3D 路线已搁置**
+  （[docs/layout-3d-design.md](docs/layout-3d-design.md) 保留为技术评估）。画布仍有两个入口（工作台卡片 /
+  预设库图标），产出两条出口：**通用提示词**（散文，任何模型都能读）与 **MOSS 布局 JSON**
+  （与 ComfyUI `MOSSImageLayoutPrompt` 节点输出逐字节同构，可直接当提示词喂给 MOSS-Image）。
   坐标内部只有一套单位（`0~1000`，与上游 `Create Bounding Boxes` 一致）；散文是**有损投影**，所以界面会列出
   **翻译损失**（超过 5 个框、框小于 1%、大面积重叠、留白进不了 JSON……）。框之间还能标**关系**（镜像 / 同一主体 /
   挡在前），它会同时进散文与 JSON —— 坐标说不出"镜里那个是不是同一个人"。布局可以**存进本地布局库**
   （`SharedPreferences`，键 `comfyhub.layoutPresets`）随时调回来，存的是规格不是提示词。
   **「让 AI 写」**把布局交给译者（`POST /api/layout/translate`，规则见 [docs/layout-translator.md](docs/layout-translator.md)），
-  **输出英文、一个框一段**。纯前端、不连后端、不调模型，
-  翻译是纯函数（`LayoutSpec.translate`）—— 同一份布局翻两次逐字节相同。见 `lib/models/layout_spec.dart`、
-  `lib/core/layout_preset_store.dart`。
+  **输出英文、一个框一段**。翻译是纯函数（`LayoutSpec.translate`）—— 同一份布局翻两次逐字节相同。
+  见 `lib/models/layout_spec.dart`、`lib/models/layout_embed.dart`、`lib/core/layout_preset_store.dart`。
 - **外观**：默认跟随**系统强调色**（Windows 读 `HKCU` 的 `AccentColorMenu`，Android 12+ 读
   `system_accent1_500`；读不到就回默认紫）。页面与卡片的底色**始终保持白 / 灰**，
   强调色只用在按钮、开关、选中态这些组件上（设置页可关）。见 `lib/core/system_accent.dart`。

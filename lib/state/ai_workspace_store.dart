@@ -13,6 +13,7 @@ import '../core/provider_store.dart';
 import '../core/run_event_source.dart';
 import '../core/workflow_blueprint.dart';
 import '../models/ai_models.dart';
+import '../models/layout_embed.dart';
 import '../models/models.dart' show ComfyWorkflowList;
 
 /// AI 工作台状态。
@@ -1162,6 +1163,23 @@ class AiWorkspaceStore extends ChangeNotifier {
       }
     }
     return seen.toList();
+  }
+
+  /// 一条助手消息里 `layout_propose` 给出的候选布局（2026-11-03）。
+  ///
+  /// 与 [producedMediaIds] 同一条纪律：**只认工具结构化结果**，不解析正文。
+  /// 按到达顺序去重（同一个标题 + 同一组框只留一份，模型偶尔会重复调一次）。
+  List<LayoutCandidate> layoutCandidates(AiMessage message) {
+    final seen = <String>{};
+    final out = <LayoutCandidate>[];
+    for (final call in toolCallsFor(message)) {
+      for (final candidate in call.layoutCandidates) {
+        final key = '${candidate.title}|${candidate.spec.regions.length}|'
+            '${candidate.spec.toJson()}';
+        if (seen.add(key)) out.add(candidate);
+      }
+    }
+    return out;
   }
 
   Future<void> denyToolCall(String callId) =>
@@ -2665,6 +2683,11 @@ class AiWorkspaceStore extends ChangeNotifier {
                         ),
                         // 入库的提示词 id：那张卡还要能打开"生成这些图的工作流"（用户建议 ①）
                         promptId: AiToolCallState.promptIdOf(
+                          event.data['result'],
+                        ),
+                        // 2D 布局模板（2026-11-03）：候选框来自工具的结构化结果，
+                        // 回复末尾据此画「布局模板」卡
+                        layoutCandidates: LayoutCandidate.listFromPayload(
                           event.data['result'],
                         ),
                       ),
