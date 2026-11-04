@@ -79,6 +79,8 @@ fn 只列真搬过来了的那些() {
             "layout_propose",
             "list_dir",
             "read_file",
+            // 参考图搜索（2026-11-04）：按 Danbooru tag 找真实图片、下载成本机附件
+            "reference_image_search",
             "register_skill",
             "save_character_card",
             "save_style_card",

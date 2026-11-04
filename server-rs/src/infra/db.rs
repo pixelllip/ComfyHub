@@ -102,7 +102,7 @@ pub const SCHEMA_SQL: &str = include_str!("../../../db/schema.sqlite.sql");
 /// ② 升级到 11 的那一次把 `tag_prompt` 转成一段自然语言灌进 `prompt`
 ///    （见 [`migrate_card_tags_to_prompt`]）——**只填 prompt 为空的卡**，
 ///    已经有自然语言版的卡一个字都不动。
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 13;
 
 /// **"这一列必须存在"的声明式清单**（2026-09-30 起）。
 ///
@@ -152,6 +152,25 @@ const NEW_COLUMNS: &[(&str, &str, &str)] = &[
         "media_assets",
         "collection_opt_out",
         "ALTER TABLE media_assets ADD COLUMN collection_opt_out INTEGER NOT NULL DEFAULT 0",
+    ),
+    // 提问卡带图（2026-11-04）：按设定图逐部位确认时，题目要带裁图、选项要带示意图。
+    // 两列都可空 → 符合"只能加可空列"的规矩；老库补上之后全是 NULL（旧提问一个字节不变）。
+    (
+        "ai_questions",
+        "image_url",
+        "ALTER TABLE ai_questions ADD COLUMN image_url TEXT NULL",
+    ),
+    (
+        "ai_questions",
+        "option_images_json",
+        "ALTER TABLE ai_questions ADD COLUMN option_images_json TEXT NULL",
+    ),
+    // 附件来源（2026-11-04）：upload / crop / search。带默认值 → 符合加列规矩；
+    // 老库里已有的附件一律按 upload 处理（宁可不清理，也不要把用户的图删掉）。
+    (
+        "ai_attachments",
+        "origin",
+        "ALTER TABLE ai_attachments ADD COLUMN origin TEXT NOT NULL DEFAULT 'upload'",
     ),
 ];
 

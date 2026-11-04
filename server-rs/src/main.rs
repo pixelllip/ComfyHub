@@ -303,6 +303,24 @@ async fn main() {
         println!("启动恢复：{queued} 条排队提交被处置（审批被打断 / 提交被中断 / 复起）");
     }
 
+    // ---- 附件缓存（2026-11-04）：清掉没人引用的裁图 / 搜图 / 上传 -------------
+    //
+    // 这些图是**真附件**（提问卡要能重开、历史要能显示），所以不能当临时文件删；
+    // 但也不能无限长。规则见 `media::attachments` 顶部：被引用的一个都不删，
+    // 没引用的留 7 天，总量超 2GB 再从最老的没引用图淘汰到 80%。
+    match comfyhub_server_rs::media::attachments::collect_garbage(&state) {
+        Ok(report) if report.removed > 0 || report.orphan_files > 0 => println!(
+            "附件缓存：清掉 {} 张没被引用的图（{:.1} MB）、孤儿文件 {} 个；剩 {} 张 / {:.1} MB",
+            report.removed,
+            report.freed_bytes as f64 / 1024.0 / 1024.0,
+            report.orphan_files,
+            report.remaining,
+            report.remaining_bytes as f64 / 1024.0 / 1024.0,
+        ),
+        Ok(_) => {}
+        Err(e) => eprintln!("附件缓存清理失败（不影响使用）：{}", e.human()),
+    }
+
     // ---- 老提示词的 LoRA 回填（2026-10-23）----------------------------------
     //
     // 2026-10-22 修了第三方 LoRA 加载节点（rgthree 的 `lora_01` / 嵌套对象等）的识别，

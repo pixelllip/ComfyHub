@@ -29,6 +29,8 @@ fn specs_only_include_implemented_tools() {
     }
     assert!(specs.iter().any(|s| s.name == "list_skills"));
     assert!(specs.iter().any(|s| s.name == "ask_user_question"), "提问闸门已搬，应当下发");
+    // 参考图搜索（2026-11-04）：按 Danbooru tag 找真实图、下载成本机附件
+    assert!(specs.iter().any(|s| s.name == "reference_image_search"));
     // 联网三件 + 定向查询（P4 第 64 步）：**应当**出现在清单里 ——
     // 系统提示第 17 条点名的那四个工具到这一步才真的下发给模型（在此之前那一节指向
     // 的是模型看不见的工具，等于一句空话）。
@@ -329,4 +331,82 @@ fn 节点契约查询不占_comfy_查询额度() {
     session.spend_call("nodes");
     assert_eq!(session.comfy_queries_in_window, 0);
     assert_eq!(session.calls_in_window, 2, "总调用额度照记");
+}
+
+/// 按设定图逐部位确认（2026-11-04）：`ask_user_question` 必须能把设定图裁成
+/// **一条真附件**（题目配图），并让选项图与选项文字一一对齐。
+///
+/// 为什么这条要在 `question_specs` 这一层钉：裁图发生在**开卡之前**，
+/// 出错了不该白占一张卡的额度；而且选项图一旦错位，用户会把"齐刘海"看成"斜刘海"。
+#[test]
+fn 带图提问把设定图裁成附件_选项图与文字对齐() {
+    use crate::media::attachments;
+    use crate::web::routes::AppState;
+
+    let dir = crate::infra::testpaths::scratch(&format!("ask-images-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("media")).unwrap();
+    let conn = crate::infra::db::open_memory().unwrap();
+    let schema = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("db")
+            .join("schema.sqlite.sql"),
+    )
+    .unwrap();
+    conn.execute_batch(&schema).unwrap();
+    let state = AppState::new(conn, ":memory:", dir.join("media"));
+
+    // 20×10 的真 PNG（裁左半 = 10×10）
+    let mut image = image::RgbImage::new(20, 10);
+    for pixel in image.pixels_mut() {
+        *pixel = image::Rgb([10, 20, 200]);
+    }
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(image)
+        .write_to(&mut buffer, image::ImageFormat::Png)
+        .unwrap();
+    let tmp = attachments::temp_file(&state).unwrap();
+    std::fs::write(&tmp, buffer.into_inner()).unwrap();
+    let sheet = attachments::save(&state, "设定图.png", &tmp, Some("image/png")).unwrap();
+
+    let args = json!({
+        "questions": [{
+            "question": "刘海是哪一种？",
+            "header": "发型",
+            "image": { "attachmentId": sheet.id, "region": "0,0,0.5,1" },
+            "options": [
+                { "text": "平直覆额的齐刘海", "imageUrl": "https://example.com/bangs.png" },
+                "偏分的长斜刘海"
+            ]
+        }]
+    });
+    let specs = question_specs(&state, &args).expect("参数应当能解析");
+    assert_eq!(specs.len(), 1);
+    let spec = &specs[0];
+    assert_eq!(spec.options, vec!["平直覆额的齐刘海", "偏分的长斜刘海"]);
+    assert_eq!(spec.option_images.len(), 2, "示意图必须与选项一一对齐");
+    assert_eq!(spec.option_images[0], "https://example.com/bangs.png");
+    assert_eq!(spec.option_images[1], "", "没图的选项留空占位");
+
+    let url = spec.image_url.as_deref().expect("题目要带裁图");
+    let crop_id = url
+        .strip_prefix("/api/ai/attachments/")
+        .and_then(|rest| rest.strip_suffix("/file"))
+        .expect("裁图地址必须是附件原址");
+    let crop = attachments::get(&state, crop_id).unwrap().unwrap();
+    assert_eq!((crop.width, crop.height), (Some(10), Some(10)), "裁的必须是左半块");
+    assert_eq!(crop.name, "问题「刘海是哪一种？」.png");
+
+    // 非 http(s) 的选项图直接报参数错（别把 file:// 之类塞给 <img>）
+    let bad = json!({
+        "questions": [{
+            "question": "刘海？",
+            "options": [{ "text": "齐刘海", "imageUrl": "file:///C:/x.png" }]
+        }]
+    });
+    let error = question_specs(&state, &bad).unwrap_err();
+    assert_eq!(error.code, "INVALID_ARGUMENT");
+    assert!(error.message.contains("http(s)"), "{}", error.message);
+
+    std::fs::remove_dir_all(dir).ok();
 }

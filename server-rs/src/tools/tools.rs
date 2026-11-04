@@ -459,7 +459,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前四十二个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前四十三个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
 /// + 联网三件（`web_search` / `web_fetch` / `civitai_search`，见 [`crate::tools::web_tools`] 与
 /// [`crate::tools::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
@@ -483,7 +483,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **2D 布局模板**（`layout_propose`，见 [`crate::ai::layout_proposal`]，2026-11-03：
 /// 写提示词的同一轮把构图草稿交给用户预览 / 修改，改完再提交回来 —— 只出草稿，
 /// 不生成图片、不写库）。
-pub const IMPLEMENTED: [&str; 42] = [
+pub const IMPLEMENTED: [&str; 43] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
@@ -516,6 +516,7 @@ pub const IMPLEMENTED: [&str; 42] = [
     "list_skills",
     "load_skill",
     "read_file",
+    "reference_image_search",
     "register_skill",
     "remember",
     "save_character_card",
@@ -627,6 +628,10 @@ pub async fn execute(
         // ---- 桌面文件工具五件（P4 第 40 步）--------------------------------
         "list_dir" => list_dir(policy, arguments),
         "read_file" => read_file(policy, arguments),
+        // 参考图搜索（2026-11-04）：按 Danbooru tag 找真实图片，下载成本机附件
+        "reference_image_search" => {
+            crate::tools::reference_images::tool_search(state, arguments).await
+        }
         "write_file" => write_file(policy, arguments),
         "register_skill" => register_skill(state, arguments),
         "delete_skill" => delete_skill(state, arguments),
@@ -1666,48 +1671,245 @@ fn capture_failure(error: crate::web::routes::ApiError) -> ToolFailure {
 }
 
 /// 一条提问的规格（`questions[]` 与单问的 `question` 都归一成它）。
+#[derive(Debug)]
 struct AskSpec {
     question: String,
     options: Vec<String>,
+    /// 与 `options` 一一对应：空串 = 这一项没有示意图。
+    option_images: Vec<String>,
+    /// 题目配图（设定图上裁下来的那一块）。
+    image_url: Option<String>,
     multi_select: bool,
     header: Option<String>,
+}
+
+/// `ApiError` → 提问参数错误（保留稳定码与人话：模型要能照着改参数）。
+fn question_failure(error: crate::web::routes::ApiError) -> ToolFailure {
+    ToolFailure::new(error.error.as_str(), error.human().to_string())
+}
+
+/// 选项 / 题目上的图片：`imageUrl`（公网直链）或 `attachmentId`(+`region`)。
+///
+/// 三种写法都认：
+/// ```jsonc
+/// { "text": "齐刘海", "imageUrl": "https://…/bangs.jpg" }
+/// { "text": "齐刘海", "attachmentId": "<设定图 id>", "region": "0.2,0.05,0.6,0.18" }
+/// { "text": "齐刘海", "image": { "attachmentId": "<id>", "region": "…" } }
+/// ```
+fn image_url_of_spec(
+    state: &AppState,
+    obj: &serde_json::Map<String, Value>,
+    label: &str,
+) -> Result<Option<String>, ToolFailure> {
+    fn url_only(raw: &str, label: &str) -> Result<Option<String>, ToolFailure> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+            return Err(ToolFailure::new(
+                "INVALID_ARGUMENT",
+                format!(
+                    "{label} 的图片地址必须是 http(s) 直链（网页链接不行，要图片文件本身）：{trimmed}"
+                ),
+            ));
+        }
+        Ok(Some(trimmed.to_string()))
+    }
+
+    fn region_of(obj: &serde_json::Map<String, Value>) -> Option<String> {
+        match obj.get("region") {
+            Some(Value::String(raw)) => Some(raw.clone()),
+            Some(Value::Object(boxed)) => {
+                let num = |key: &str| boxed.get(key).and_then(Value::as_f64);
+                let x = num("x")?;
+                let y = num("y")?;
+                let w = num("width").or_else(|| num("w"))?;
+                let h = num("height").or_else(|| num("h"))?;
+                Some(format!("{x},{y},{w},{h}"))
+            }
+            _ => None,
+        }
+    }
+
+    /// 有 `region` 这个键就必须解析得出来。
+    ///
+    /// 解析失败时**不许退回整张图**：用户看到的裁图与问题部位对不上，比直接报错更难查。
+    fn region_or_error(
+        obj: &serde_json::Map<String, Value>,
+        label: &str,
+    ) -> Result<Option<String>, ToolFailure> {
+        if obj.get("region").is_none() {
+            return Ok(None);
+        }
+        match region_of(obj) {
+            Some(region) if !region.trim().is_empty() => Ok(Some(region)),
+            _ => Err(ToolFailure::new(
+                "INVALID_ARGUMENT",
+                format!("{label} 的 region 要写成 \"x,y,w,h\" 四个 0~1 的数"),
+            )),
+        }
+    }
+
+    fn attachment_image(
+        state: &AppState,
+        attachment_id: &str,
+        region: Option<String>,
+        label: &str,
+    ) -> Result<Option<String>, ToolFailure> {
+        let id = attachment_id.trim();
+        if id.is_empty() {
+            return Ok(None);
+        }
+        match region.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()) {
+            Some(region) => {
+                let crop = crate::media::attachments::crop_image(
+                    state,
+                    id,
+                    &region,
+                    &format!("{label}.png"),
+                )
+                .map_err(question_failure)?;
+                Ok(Some(crate::media::attachments::file_url(&crop.id)))
+            }
+            None => {
+                // 不裁图也要确认它真的是图片附件：把视频 / 文档地址塞给 <img> 只会破图。
+                let dto = crate::media::attachments::get(state, id)
+                    .map_err(question_failure)?
+                    .ok_or_else(|| {
+                        ToolFailure::new("INVALID_ARGUMENT", format!("{label} 的附件不存在：{id}"))
+                    })?;
+                if dto.kind != "image" {
+                    return Err(ToolFailure::new(
+                        "INVALID_ARGUMENT",
+                        format!("{label} 只能引用图片附件（{} 是 {}）", dto.name, dto.kind),
+                    ));
+                }
+                Ok(Some(crate::media::attachments::file_url(&dto.id)))
+            }
+        }
+    }
+
+    // 1) 平铺的 `imageUrl`
+    if let Some(raw) = obj.get("imageUrl").and_then(Value::as_str) {
+        return url_only(raw, label);
+    }
+    // 2) 嵌套的 `image`（对象或直链字符串）
+    if let Some(image) = obj.get("image") {
+        match image {
+            Value::String(raw) => {
+                let lower = raw.trim().to_ascii_lowercase();
+                if lower.starts_with("http://") || lower.starts_with("https://") {
+                    return url_only(raw, label);
+                }
+                // 也允许直接给附件 id（模型有时会这么简写）
+                return attachment_image(state, raw, None, label);
+            }
+            Value::Object(boxed) => {
+                if let Some(raw) = boxed.get("url").and_then(Value::as_str) {
+                    return url_only(raw, label);
+                }
+                if let Some(id) = boxed.get("attachmentId").and_then(Value::as_str) {
+                    return attachment_image(state, id, region_or_error(boxed, label)?, label);
+                }
+                return Err(ToolFailure::new(
+                    "INVALID_ARGUMENT",
+                    format!("{label} 的 image 要带 url 或 attachmentId"),
+                ));
+            }
+            _ => {
+                return Err(ToolFailure::new(
+                    "INVALID_ARGUMENT",
+                    format!("{label} 的 image 只认对象或 http(s) 直链"),
+                ))
+            }
+        }
+    }
+    // 3) 平铺的 `attachmentId`（+ 可选 `region`）
+    if let Some(id) = obj.get("attachmentId").and_then(Value::as_str) {
+        return attachment_image(state, id, region_or_error(obj, label)?, label);
+    }
+    Ok(None)
+}
+
+/// 一条选项：字符串，或带图的 `{text, …}` 对象。
+fn option_of_spec(
+    state: &AppState,
+    raw: &Value,
+    index: usize,
+) -> Result<Option<(String, String)>, ToolFailure> {
+    if let Some(text) = raw.as_str() {
+        let text = text.trim();
+        return Ok((!text.is_empty()).then(|| (text.to_string(), String::new())));
+    }
+    let Some(obj) = raw.as_object() else { return Ok(None) };
+    let text = obj
+        .get("text")
+        .or_else(|| obj.get("label"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let image = image_url_of_spec(state, obj, &format!("第 {} 个选项", index + 1))?.unwrap_or_default();
+    Ok(Some((text, image)))
 }
 
 /// 把参数解析成提问规格列表（Kotlin `ToolRegistry.questionSpecs`）。
 ///
 /// 两种写法都认：`questions[]`（多问）与旧的 `question` + `options` + `header`（单问）。
 /// 空问题直接丢掉；一条都不剩时由调用方报参数错。
-fn question_specs(arguments: &Value) -> Vec<AskSpec> {
-    fn options_of(raw: Option<&Value>) -> Vec<String> {
-        raw.and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|v| v.as_str().map(str::trim))
-                    .filter(|s| !s.is_empty())
-                    .take(5)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default()
+///
+/// **会碰盘**：选项 / 题目带 `attachmentId` + `region` 时要把设定图裁一块存成新附件
+/// （见 [`crate::media::attachments::crop_image`]）—— 所以解析放在开卡之前，
+/// 参数错了不会白占一张卡的额度，更不会开出一张"图没生成出来"的空卡。
+fn question_specs(state: &AppState, arguments: &Value) -> Result<Vec<AskSpec>, ToolFailure> {
+    fn options_of(
+        state: &AppState,
+        raw: Option<&Value>,
+    ) -> Result<(Vec<String>, Vec<String>), ToolFailure> {
+        let mut texts = Vec::new();
+        let mut images = Vec::new();
+        if let Some(items) = raw.and_then(Value::as_array) {
+            for (index, item) in items.iter().enumerate() {
+                if texts.len() >= 5 {
+                    break;
+                }
+                if let Some((text, image)) = option_of_spec(state, item, index)? {
+                    texts.push(text);
+                    images.push(image);
+                }
+            }
+        }
+        Ok((texts, images))
     }
 
-    let many: Vec<AskSpec> = arguments
-        .get("questions")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_object)
-                .map(|q| AskSpec {
-                    question: q
-                        .get("question")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string(),
-                    options: options_of(q.get("options")),
-                    // 界面画复选框；缺省 false
+    let many: Vec<AskSpec> = match arguments.get("questions").and_then(Value::as_array) {
+        Some(items) => {
+            let mut out = Vec::new();
+            for q in items.iter().filter_map(Value::as_object) {
+                if out.len() >= crate::ai::questions::MAX_QUESTIONS_PER_CARD {
+                    break;
+                }
+                let question = q
+                    .get("question")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if question.is_empty() {
+                    continue;
+                }
+                let (options, option_images) = options_of(state, q.get("options"))?;
+                let image_url = image_url_of_spec(state, q, &format!("问题「{question}」"))?;
+                out.push(AskSpec {
+                    question,
+                    options,
+                    option_images,
+                    image_url,
                     multi_select: q.get("multiSelect").and_then(Value::as_bool).unwrap_or(false),
                     header: q
                         .get("header")
@@ -1715,14 +1917,14 @@ fn question_specs(arguments: &Value) -> Vec<AskSpec> {
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                         .map(str::to_string),
-                })
-                .filter(|spec| !spec.question.is_empty())
-                .take(crate::ai::questions::MAX_QUESTIONS_PER_CARD)
-                .collect()
-        })
-        .unwrap_or_default();
+                });
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     if !many.is_empty() {
-        return many;
+        return Ok(many);
     }
     // 单问（向后兼容）
     let single = arguments
@@ -1732,11 +1934,20 @@ fn question_specs(arguments: &Value) -> Vec<AskSpec> {
         .trim()
         .to_string();
     if single.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    vec![AskSpec {
+    let (options, option_images) = options_of(state, arguments.get("options"))?;
+    let empty = serde_json::Map::new();
+    let image_url = image_url_of_spec(
+        state,
+        arguments.as_object().unwrap_or(&empty),
+        "问题",
+    )?;
+    Ok(vec![AskSpec {
         question: single,
-        options: options_of(arguments.get("options")),
+        options,
+        option_images,
+        image_url,
         multi_select: arguments.get("multiSelect").and_then(Value::as_bool).unwrap_or(false),
         header: arguments
             .get("header")
@@ -1744,7 +1955,7 @@ fn question_specs(arguments: &Value) -> Vec<AskSpec> {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
-    }]
+    }])
 }
 
 /// 等答案时的读数：一条提问现在是什么状态（跨端可答 —— 手机点的提交也作数）。
@@ -1836,7 +2047,7 @@ async fn ask_user_question(
             ),
         ));
     }
-    let specs = question_specs(arguments);
+    let specs = question_specs(state, arguments)?;
     if specs.is_empty() {
         return Err(ToolFailure::new(
             "INVALID_ARGUMENT",
@@ -1879,6 +2090,8 @@ async fn ask_user_question(
                 total,
                 question: spec.question.clone(),
                 options: spec.options.clone(),
+                option_images: spec.option_images.clone(),
+                image_url: spec.image_url.clone(),
                 multi_select: spec.multi_select,
                 header: spec.header.clone(),
             },

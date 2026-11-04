@@ -45,7 +45,8 @@ pub const QUESTION_POLL_MS: u64 = 150;
 /// `ai_questions` 的列清单 —— **只此一份**（`SELECT` 与行 → JSON 都从它派生，
 /// 少一列就是界面上少一块内容，而那种错不报错）。
 pub const COLS: &str = "question_id, run_id, conversation_id, group_id, card_index, total,
-                        question, options_json, allow_free_text, multi_select, header,
+                        question, options_json, option_images_json, image_url,
+                        allow_free_text, multi_select, header,
                         status, answer, option_index, option_indexes, asked_at";
 
 /// 一行提问的完整内容（`status='pending'` 之外的行也读 —— 历史卡片回放要用）。
@@ -59,6 +60,16 @@ pub struct StoredQuestion {
     pub total: i64,
     pub question: String,
     pub options: Vec<String>,
+    /// 与 `options` 一一对应的示意图（空串 = 这一项没有图）。
+    ///
+    /// 约定：**带图也只是"多一列说明"**，选项文字仍是答案本身；
+    /// 长度不齐时按"有几位算几位"（旧数据 / 手机只回文字时都能读）。
+    pub option_images: Vec<String>,
+    /// 题目配图（通常是设定图上裁下来的那一块）。
+    ///
+    /// 存的是**相对后端根**的地址（`/api/ai/attachments/{id}/file`）——
+    /// 前端只补 baseUrl，不自己拼第二套路径。
+    pub image_url: Option<String>,
     pub allow_free_text: bool,
     pub multi_select: bool,
     pub header: Option<String>,
@@ -84,6 +95,22 @@ impl StoredQuestion {
             "options".into(),
             Value::Array(self.options.iter().cloned().map(Value::String).collect()),
         );
+        // 选项示意图：**只在真有图时出现**（没有图的老形状一个字节都不变）。
+        // 空串占位对界面没意义，这里压掉；前端按"短了就当作没有"读。
+        if self.option_images.iter().any(|url| !url.trim().is_empty()) {
+            out.insert(
+                "optionImages".into(),
+                Value::Array(
+                    self.option_images
+                        .iter()
+                        .map(|url| Value::String(url.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(image_url) = self.image_url.as_ref().filter(|url| !url.trim().is_empty()) {
+            out.insert("imageUrl".into(), Value::String(image_url.clone()));
+        }
         out.insert("askedAt".into(), Value::from(self.asked_at_ms));
         out.insert("index".into(), Value::from(self.index));
         out.insert("total".into(), Value::from(self.total));
@@ -145,6 +172,8 @@ pub struct NewQuestion {
     pub total: i64,
     pub question: String,
     pub options: Vec<String>,
+    pub option_images: Vec<String>,
+    pub image_url: Option<String>,
     pub multi_select: bool,
     pub header: Option<String>,
 }
@@ -174,6 +203,17 @@ pub fn row_to_json(row: &Row<'_>) -> rusqlite::Result<Value> {
         "options".into(),
         Value::Array(parse_string_array(row.get::<_, Option<String>>("options_json")?.as_deref())),
     );
+    let option_images =
+        parse_string_array(row.get::<_, Option<String>>("option_images_json")?.as_deref());
+    if option_images.iter().any(|v| matches!(v, Value::String(s) if !s.trim().is_empty())) {
+        out.insert("optionImages".into(), Value::Array(option_images));
+    }
+    if let Some(image_url) = row
+        .get::<_, Option<String>>("image_url")?
+        .filter(|url| !url.trim().is_empty())
+    {
+        out.insert("imageUrl".into(), Value::String(image_url));
+    }
     out.insert(
         "askedAt".into(),
         Value::from(asked_at_ms(row.get::<_, Option<String>>("asked_at")?.as_deref())),
@@ -218,6 +258,12 @@ fn row_to_stored(row: &Row<'_>) -> rusqlite::Result<StoredQuestion> {
         total: row.get::<_, Option<i64>>("total")?.unwrap_or(1),
         question: row.get::<_, Option<String>>("question")?.unwrap_or_default(),
         options: parse_string_array_str(row.get::<_, Option<String>>("options_json")?.as_deref()),
+        option_images: parse_string_array_str(
+            row.get::<_, Option<String>>("option_images_json")?.as_deref(),
+        ),
+        image_url: row
+            .get::<_, Option<String>>("image_url")?
+            .filter(|url| !url.trim().is_empty()),
         allow_free_text: row.get::<_, Option<i64>>("allow_free_text")?.unwrap_or(1) != 0,
         multi_select: row.get::<_, Option<i64>>("multi_select")?.unwrap_or(0) != 0,
         header: row.get::<_, Option<String>>("header")?,
@@ -235,6 +281,11 @@ fn row_to_stored(row: &Row<'_>) -> rusqlite::Result<StoredQuestion> {
 /// 落一行 pending（`track()` 的同一刻就落 —— M1 的纪律：**内存里活着但库里没有不许存在**）。
 pub fn insert(state: &AppState, q: &NewQuestion) -> Result<(), ApiError> {
     let options = serde_json::to_string(&q.options).unwrap_or_else(|_| "[]".into());
+    let option_images = if q.option_images.iter().any(|v| !v.trim().is_empty()) {
+        Some(serde_json::to_string(&q.option_images).unwrap_or_else(|_| "[]".into()))
+    } else {
+        None
+    };
     let q = NewQuestionRow {
         question_id: q.question_id.clone(),
         run_id: q.run_id.clone(),
@@ -244,6 +295,8 @@ pub fn insert(state: &AppState, q: &NewQuestion) -> Result<(), ApiError> {
         total: q.total,
         question: q.question.clone(),
         options,
+        option_images,
+        image_url: q.image_url.clone(),
         multi_select: q.multi_select,
         header: q.header.clone(),
     };
@@ -251,8 +304,9 @@ pub fn insert(state: &AppState, q: &NewQuestion) -> Result<(), ApiError> {
         tx.execute(
             "INSERT INTO ai_questions
                (question_id, run_id, conversation_id, group_id, card_index, total, question,
-                options_json, allow_free_text, multi_select, header, status, asked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, 'pending',
+                options_json, option_images_json, image_url, allow_free_text, multi_select,
+                header, status, asked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, 'pending',
                      strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
             rusqlite::params![
                 q.question_id,
@@ -263,6 +317,8 @@ pub fn insert(state: &AppState, q: &NewQuestion) -> Result<(), ApiError> {
                 q.total,
                 q.question,
                 q.options,
+                q.option_images,
+                q.image_url,
                 if q.multi_select { 1 } else { 0 },
                 q.header
             ],
@@ -281,6 +337,8 @@ struct NewQuestionRow {
     total: i64,
     question: String,
     options: String,
+    option_images: Option<String>,
+    image_url: Option<String>,
     multi_select: bool,
     header: Option<String>,
 }

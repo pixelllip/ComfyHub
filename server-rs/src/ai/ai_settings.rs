@@ -99,7 +99,8 @@ pub(crate) fn category_of(name: &str) -> &'static str {
         // `MAX_WEB_QUERIES_PER_RUN` 那份预算、界面上也归在"联网"组里。
         // ⚠ 漏掉 `find_model` 的后果是**它不吃预算**（回落到 `_ => "comfy"`，
         //   变成"按 ComfyUI 查询计"，而那份额度是另一条线），且界面上分组也会错。
-        "web_search" | "web_fetch" | "civitai_search" | "danbooru_lookup" | "find_model" => "web",
+        "web_search" | "web_fetch" | "civitai_search" | "danbooru_lookup"
+        | "reference_image_search" | "find_model" => "web",
         // 资料库（Kotlin `ToolCategory.LIBRARY`）：查自己的提示词库 / 角色卡 / 画风卡
         "search_prompts"
         | "search_character_cards"
@@ -370,8 +371,7 @@ pub fn save_nsfw(state: &AppState, body: NsfwUpdate) -> Result<Value, ApiError> 
 }
 
 /// 读 `ai.nsfw` 里那两个开关（读坏 / 没有 → 都关，与 Kotlin `NsfwConfig.load` 同口径）。
-fn nsfw_config(state: &AppState) -> Result<(bool, bool), ApiError> {
-    let raw: Option<String> = state.with(|conn| {
+fn nsfw_config(state: &AppState) -> Result<(bool, bool), ApiError> {    let raw: Option<String> = state.with(|conn| {
         Ok(conn
             .query_row(
                 "SELECT v FROM app_settings WHERE k = ?1",
@@ -394,6 +394,14 @@ fn nsfw_config(state: &AppState) -> Result<(bool, bool), ApiError> {
             .unwrap_or(false)
     };
     Ok((flag("enabled"), flag("blur")))
+}
+
+/// NSFW 总开关开着没有（读坏 / 没有一律按**关**）。
+///
+/// 给"会往用户眼前塞外部图片"的工具用：关着时参考图搜索必须加 `rating:general`，
+/// 不许因为模型传了 `allowNsfw=true` 就把成人图带进来。
+pub fn nsfw_enabled(state: &AppState) -> bool {
+    nsfw_config(state).map(|(enabled, _)| enabled).unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------

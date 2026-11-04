@@ -440,3 +440,28 @@ async fn 真实尺寸的照片不被请求体上限截断() {
     assert_eq!(body["items"][0]["kind"], json!("image"));
     assert_eq!(body["items"][0]["status"], json!("ready"));
 }
+
+/// 缓存端点（2026-11-04）：统计与手动 GC 不能把 `/api/ai/attachments/{id}` 顶掉，
+/// 而且 `stats` 的键与后端 `CacheStats` 对齐（界面那一节按它们画）。
+#[tokio::test]
+async fn 附件缓存统计与手动回收端点() {
+    let (state, _dir) = state("cache");
+    let (status, body) = upload(&state, &[("files", "缓存测试.png", png_bytes())]).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let id = body["items"][0]["id"].as_str().unwrap();
+
+    let (status, stats) = get_json(&state, "/api/ai/attachments/stats").await;
+    assert_eq!(status, StatusCode::OK, "stats 被 /{id} 路由顶掉了：{stats}");
+    assert_eq!(stats["count"], json!(1));
+    assert!(stats["bytes"].as_i64().unwrap() > 0);
+    assert_eq!(stats["byOrigin"][0]["origin"], json!("upload"));
+
+    // 手动 GC 不删"刚上传、还没引用"的图（1 小时宽限），只回一份可读报告
+    let (status, report) =
+        send_json(&state, "POST", "/api/ai/attachments/gc", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["removed"], json!(0));
+    assert_eq!(report["remaining"], json!(1));
+    let (status, _) = get_json(&state, &format!("/api/ai/attachments/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+}

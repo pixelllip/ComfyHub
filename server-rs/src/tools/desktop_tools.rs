@@ -400,6 +400,14 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "reference_image_search",
+        description: r#"按关键词找**真实参考图**（Danbooru 帖子），下载后存成本机附件。用户要确认发型 / 发饰 / 服装 / 场景"到底长什么样"时先用它找图，再把返回的 `attachmentId` 放进 `ask_user_question` 的选项里（界面会把图显示在选项文字前面）。`query` 用英文 Danbooru tag，多个用逗号分隔（例如 `blunt_bangs,hair_ornament` / `classroom,night` / `shrine,cherry_blossoms`）。只下载采样图 / 预览图，不贴外链；NSFW 受本机开关限制（关着时强制 general）。"#,
+        input_schema: r#"{"type":"object","properties":{"query":{"type":"string","description":"Danbooru tag，多个用逗号分隔（英文、下划线），例如 blunt_bangs / classroom,night"},"limit":{"type":"integer","description":"可选：最多几张（默认 4，上限 6）"},"allowNsfw":{"type":"boolean","description":"可选：用户明确要成人参考图时才传 true；本机 NSFW 总开关关着时无效"}},"required":["query"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: true,
+    },
+    DesktopToolSpec {
         name: "register_skill",
         description: r#"把一个新的 Skill 注册到本机（写入项目自己的 skills 目录，立刻生效，不用重启应用）。用户说"记住这个流程 / 注册一个 skill"时用它。name 用小写 kebab-case，正文写清步骤与判据。"#,
         input_schema: r#"{"type":"object","properties":{"name":{"type":"string","description":"kebab-case，例如 anima-prompt-helper"},"description":{"type":"string","description":"一句话说明这个 skill 干什么（必填，≤600 字）"},"whenToUse":{"type":"string","description":"什么情况下该用（可选）"},"content":{"type":"string","description":"Markdown 正文：完整规则与步骤"}},"required":["name","description","content"],"additionalProperties":false}"#,

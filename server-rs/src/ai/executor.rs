@@ -1559,6 +1559,11 @@ impl Sink {
             if let Some(asked) = outcome.result.get("asked") {
                 map.insert("question".into(), asked.clone());
             }
+            // 多问卡其余几题（2026-11-04）：不落的话重开 App 只剩第一题，
+            // 裁图与选项示意图也跟着一起丢（`askedAll` 是后端给整组的那一份）。
+            if let Some(asked_all) = outcome.result.get("askedAll") {
+                map.insert("askedAll".into(), asked_all.clone());
+            }
             // 2D 布局模板（2026-11-03）：它不像图片有 id 可以事后重新拉 ——
             // 规格本身必须落进块里，否则重开 App 之后那条回复里的模板卡就没了。
             if let Some(templates) = outcome.result.get("layoutTemplates") {

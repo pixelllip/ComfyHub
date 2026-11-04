@@ -53,7 +53,7 @@ final List<String> skipped = [];
 ///  - `question` 是**内层对象**：`PendingQuestion.toJson()` 整份塞在 `question` 键下，
 ///    外面只多一个 `runId`。
 /// 老形状：`PendingQuestion` 的字段**平铺**在 data 顶层（`question` 是问题文字那个字符串）。
-String _askPayload({required bool nested}) {
+String _askPayload({required bool nested, bool withImages = false}) {
   final q = <String, dynamic>{
     'questionId': _questionId,
     'runId': 'r1',
@@ -64,6 +64,11 @@ String _askPayload({required bool nested}) {
     'allowFreeText': true,
     'answered': false,
     'askedAt': 1,
+    // 按设定图逐部位确认（2026-11-04）：题目带裁图、选项带示意图
+    if (withImages) ...{
+      'imageUrl': '/api/ai/attachments/crop-1/file',
+      'optionImages': ['/api/ai/attachments/opt-1/file', ''],
+    },
   };
   return jsonEncode(nested ? {'runId': 'r1', 'question': q} : q);
 }
@@ -123,12 +128,18 @@ String _askToolEvents() => _sse(
 const _callId = 'call_00_w3oy2hgdwhoanKYvvw2Y8083';
 
 /// 事件体的拼装（抽出来是为了在用例里能断言"假后端真的发了这些事件"）。
-String _body({bool nested = true, bool paged = false}) =>
+String _body({bool nested = true, bool paged = false, bool withImages = false}) =>
     _sse(0, 'run.started', '{"runId":"r1"}') +
     _sse(1, 'message.started', '{"messageId":"a1"}') +
     // 真事件的顺序：tool.requested → tool.started → user.question
     _askToolEvents() +
-    (paged ? _pagedPayload() : _sse(3, 'user.question', _askPayload(nested: nested))) +
+    (paged
+        ? _pagedPayload()
+        : _sse(
+            3,
+            'user.question',
+            _askPayload(nested: nested, withImages: withImages),
+          )) +
     _askCompleted();
 
 /// Run 收尾时的落库形态（parts 里那条 `tool_call` + `tool_result`）：
@@ -181,6 +192,9 @@ class _Fake {
 
   /// true = 一次问 **3 题**（一张卡分页；第 2 题是多选）。
   bool paged = false;
+
+  /// true = 提问带图（题目配图 + 第一个选项的示意图）。
+  bool withImages = false;
 
   List<Map<String, dynamic>> _messages() => [
         {
@@ -261,7 +275,11 @@ class _Fake {
           // `_consumeRun` 在 `user.question` 那条上就挂住等用户回答了。
           return http.Response.bytes(
             utf8.encode(
-              _body(nested: !flatQuestionPayload, paged: paged),
+              _body(
+                nested: !flatQuestionPayload,
+                paged: paged,
+                withImages: withImages,
+              ),
             ),
             200,
             headers: {'content-type': 'text/event-stream; charset=utf-8'},
@@ -449,6 +467,19 @@ void main() {
     expect(find.text('跳过本题'), findsWidgets);
   });
 
+  testWidgets('矮窗口 + 带图：配图与选项一起收紧，作答入口不被挤没', (tester) async {
+    // 500 高：180 的配图 + 240 的选项区会把整块撑破；这里钉住"收一收之后仍在"。
+    await _openAsk(
+      tester,
+      _Fake()..withImages = true,
+      size: const Size(1000, 500),
+    );
+
+    expect(find.byKey(const Key('ask-composer-question-image')), findsOneWidget);
+    expect(find.byKey(const Key('ask-answer-field')), findsOneWidget);
+    expect(find.byKey(const Key('ask-answer-submit')), findsOneWidget);
+  });
+
   // ---- 多问改造（2026-09-22，用户给的 DSH 形态）--------------------------------
   // 一张卡装多题、分页、「最后一页按钮变提交」、多选题画复选框、
   // 答案可为空（空着的那题按"跳过"发 = 告诉模型"用户没回答"）。
@@ -533,5 +564,34 @@ void main() {
     expect(skipped, [_questionId]);
     expect(store.pendingQuestion, isNotNull, reason: '还有两题没答，卡片不能收');
     expect(find.text('第 2/3 题'), findsOneWidget, reason: '跳完自动翻到下一道没作答的题');
+  });
+
+  // 按设定图逐部位确认（2026-11-04）：AI 问细节时要**带上该部位的图**，
+  // 选项前面也能贴示例图；没有图的那一项保持纯文字（不许画破图占位）。
+  testWidgets('带图提问：题目配图与选项示意图都画出来', (tester) async {
+    await _openAsk(
+      tester,
+      _Fake()..withImages = true,
+      size: const Size(1400, 1200),
+    );
+
+    expect(
+      find.byKey(const Key('ask-composer-question-image')),
+      findsOneWidget,
+      reason: '题目要带裁图，否则用户不知道问的是哪个部位',
+    );
+    // 用户 2026-11-04 的反馈：图铺满整行时上下都是黑边，鼠标一停弹出的「点击放大」
+    // 还会把脸挡住。现在图是右侧一条窄栏、问题在左，而且不再有悬浮提示。
+    final imageRect = tester.getRect(
+      find.byKey(const Key('ask-composer-question-image')),
+    );
+    expect(imageRect.width, lessThan(320), reason: '配图是右侧窄栏，不再铺满整行');
+    expect(find.byTooltip('点击放大'), findsNothing);
+    expect(find.byKey(const Key('ask-option-image-0')), findsOneWidget);
+    expect(
+      find.byKey(const Key('ask-option-image-1')),
+      findsNothing,
+      reason: '没有图的那一项保持纯文字',
+    );
   });
 }

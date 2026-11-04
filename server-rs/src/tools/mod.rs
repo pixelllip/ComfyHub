@@ -9,6 +9,7 @@ pub mod find_model;
 pub mod mcp;
 pub mod mobile_tools;
 pub mod policy;
+pub mod reference_images;
 pub mod tool_cache;
 pub mod tools;
 pub mod web_tools;

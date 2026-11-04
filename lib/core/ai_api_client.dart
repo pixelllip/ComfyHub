@@ -764,6 +764,22 @@ class AiApiClient {
   Future<void> deleteAttachment(String attachmentId) async =>
       _send('DELETE', '/api/ai/attachments/$attachmentId');
 
+  /// 附件缓存统计（裁图 / 搜图 / 上传各自占多少）。
+  Future<AiAttachmentCacheStats> attachmentCacheStats() async =>
+      AiAttachmentCacheStats.fromJson(
+        Map<String, dynamic>.from(
+          await _get('/api/ai/attachments/stats') as Map,
+        ),
+      );
+
+  /// 清一次**没被历史引用**的旧附件（被引用的一个都不删；规则在后端）。
+  Future<AiAttachmentGcResult> gcAttachmentCache() async =>
+      AiAttachmentGcResult.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/ai/attachments/gc') as Map,
+        ),
+      );
+
   // --- 附件预检 ----------------------------------------------------------
 
   /// 准入预检（**纯计算**，不产生上游请求）。

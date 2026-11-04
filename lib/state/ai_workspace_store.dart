@@ -2329,6 +2329,9 @@ class AiWorkspaceStore extends ChangeNotifier {
       ? null
       : _api.attachmentThumbUrl(attachmentId);
 
+  /// 后端根地址。**只给界面拼图片地址用**（提问卡里的裁图是后端给的相对路径）。
+  String get baseUrl => _api.baseUrl;
+
   /// 原件的地址（点开看大图 / 播视频）。
   String? fileUrlFor(String? attachmentId) =>
       attachmentId == null || attachmentId.isEmpty

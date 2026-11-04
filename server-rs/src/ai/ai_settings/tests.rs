@@ -16,6 +16,8 @@ fn 类别与权限档的线上字与_kotlin_一致() {
     // 写的就是）—— 改一位，"联网预算"与界面分组会同时走偏，而两者都不会有用例变红：
     // 预算是执行器按**类别**判的（`MAX_WEB_QUERIES_PER_RUN`），分组是界面按它画的。
     assert_eq!(category_of("danbooru_lookup"), "web");
+    // 参考图搜索（2026-11-04）：它出网，必须吃同一份联网额度，否则"搜图"会绕开预算。
+    assert_eq!(category_of("reference_image_search"), "web");
     assert_eq!(category_of("find_model"), "web");
     assert_eq!(category_of("web_search"), "web");
     assert_eq!(category_of("web_fetch"), "web");

@@ -58,10 +58,11 @@ DSH 暴露给模型的东西分五类。对照结论（`docs/archive/dsh-tool-la
 | `web_search` | web | **ask** | 联网搜索（Keenable）：用自然语言描述"你想要的那一页"（语义索引，别堆关键词），返回**带编号与链接**的网页正文（`[n] 标题 (URL)` + 抽取好的正文），引用时给编号与 URL。**出厂免密钥**；查询词会离开本机，所以默认要批准；一次回复最多 8 次（独立预算 `maxWebQueriesPerRun`）。一条没搜到报 `NO_RESULTS` 并要求模型如实说明 |
 | `web_fetch` | web | **ask** | 把一个**公开**网页取回来读全文（服务端去样板转 markdown，默认 20000 字符上限）。目标 URL 出网前先过 `EndpointGuard` 的 PUBLIC 判定：内网 / 本机 / 云元数据一律 `FETCH_TARGET_DENIED`。正文套**不可信数据**横幅后才给模型。**它不是模型库检索**：要模型 / LoRA 的字段用 `civitai_search`（见 §2.0.3） |
 | `civitai_search` | web | **ask** | 搜 **Civitai 模型库**（用户建议 ④⑦，2026-09-20）：每条结果都给"**拿来做什么**"——类型 / 底模 / 简介 / 触发词 / 下载量 / 链接，并放进结构化 `meta.models`（界面与"登记进长期记忆"直接可用）。普通搜索走 `civitai.com`（免令牌）；**NSFW 必须显式 `allowNsfw=true`**，走 `civitai.red`：配了令牌（凭据名 `civitai`，或环境变量 `CIVITAI_API_KEY`）就带上登录态，**没配也照搜**，但结果里会写明"本次是匿名通道"（2026-09-20 线上核对后由用户决定放宽，见第 9 节第 11 条）。与 `web_search` / `web_fetch` **共用同一个联网额度** |
+| `reference_image_search` | web | allow | **按关键词找真实参考图**（2026-11-04 用户："有没有办法让 AI 问场景/人物细节时，给出选项中提到关键词的对应图片？网络搜索也行"）：调用 Danbooru `posts.json`，把 `query`（英文 tag，多个用逗号分隔，例如 `blunt_bangs,hair_ornament` / `classroom,night`）当标签搜索，**下载采样图 / 预览图**并落成本机附件（`storage/ai-attachments`），返回 `images[].attachmentId`。模型把 id 放进 `ask_user_question` 的选项，界面就会在选项文字前显示图。默认 `rating:general`；只有本机 `ai.nsfw` 开着且模型显式 `allowNsfw=true` 才不过滤。会写附件（`mutating`），所以不进工具结果缓存；**不贴外链**（国内直连 CDN 不稳、外链会过期）。 |
 | `comfy_prune_workflow` | comfy | allow | **给一份工作流做减法 / 加法**（用户建议 ②，2026-09-20）：`removeFrom` 点名要摘的输入（`"89.image"`）或节点（`"89"`），后端做**确定性图运算**——摘掉目标、把指着它的线接回它自己的上游、把"从输出再也走不到又不是孤立节点"的那些级联收掉；`injections` 往一条线上插节点（典型是显存不足时的 `SageAttention`，接哪些输入由 `/object_info` 算）。返回**改好的完整图** + `removed` / `rewired` / `injected` / `unresolvedInputs` / `openInputs` / `runnable`。**只读**（不改用户的文件）；`runnable=false` 时工具会明确说"别硬提交" |
 | `comfy_start` | comfy | **ask** | **把本机 ComfyUI 实例起起来**（2026-09-28，用户 bug「通过 CLI 启动 comfyui 总是失败」）：ComfyHub **自己起** —— 用工作区自己的 `.venv\Scripts\python.exe` 跑 `main.py`，带上 ComfyUI Desktop 的三个路径参数（共享模型根 / input / output，复用 `launch_comfyui` 那一份实现）、`PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`，日志落项目内 `.run\comfyui-<端口>.log`，**等 `/system_stats` 真的答话**才回报成功（进程刚退出 / 等超时分开如实报，带日志尾巴）。已经在跑时**不再起第二个**。起之前有一道**写权限闸门**：当前会话把进程关在项目里时（子进程继承这个限制，WMI / schtasks 都被系统挡掉）**当场拒绝**并让用户自己双击 ComfyUI Desktop —— 硬起只会得到一个卡死的实例。默认要审批（起一个占显存的长跑进程）。**不要再用 comfy-mcp 的 `launch_comfyui`**：comfy-cli 启动要写两个项目外的文件，受限会话里必然 `Errno 13` |
 | `comfy_stop` | comfy | **ask** | **停掉 ComfyHub 自己起的那个实例**（2026-09-28）：只认 `.run\comfyui-<端口>.pid` 里那条记录，杀之前还核一眼那个 pid 现在是 python（pid 会被系统回收）——**用户自己用 ComfyUI Desktop 起的实例一个进程都不碰**（那种情况如实拒绝，让他自己在那个窗口里关）。杀完等端口真的不再答话才回报成功 |
-| `ask_user_question` | ask | allow | **当场提问、不中断当前回答**（用户建议 ⑥，2026-09-20）：把问题（+ 2~5 个可点选项）递到界面，**挂在原地等**用户答，答完把答案当工具结果喂回模型，**同一个 Run 接着往下做**。提问期间**输入区被答题卡接管**，末尾固定补一条「自己输入答案」（用户 bug 2026-09-21）。等不到（超时 / 用户跳过 / Run 结束）时如实返回"用户还没有回答"，模型据此基于已有信息继续。同一句话问两遍会被 `QUESTION_ALREADY_ASKED` 挡掉。既不改盘也不出网，所以默认 allow |
+| `ask_user_question` | ask | allow | **当场提问、不中断当前回答**（用户建议 ⑥，2026-09-20）：把问题（+ 2~5 个可点选项）递到界面，**挂在原地等**用户答，答完把答案当工具结果喂回模型，**同一个 Run 接着往下做**。提问期间**输入区被答题卡接管**，末尾固定补一条「自己输入答案」（用户 bug 2026-09-21）。等不到（超时 / 用户跳过 / Run 结束）时如实返回"用户还没有回答"，模型据此基于已有信息继续。同一句话问两遍会被 `QUESTION_ALREADY_ASKED` 挡掉。既不改盘也不出网，所以默认 allow。**带图提问**（2026-11-04）：题目可带 `image:{attachmentId,region}`，后端从用户发来的设定图上裁一块存成新附件（`imageUrl`）；选项可带 `imageUrl`（http(s) 直链示例图）或 `attachmentId+region`，界面把图放在选项文字前面。裁图发生在**开卡之前**，参数错不会白占一张卡的额度 |
 
 ### 2.0.2 提问与审批是两件事（2026-09-20，用户建议 ⑥）
 
@@ -104,6 +105,22 @@ DSH 暴露给模型的东西分五类。对照结论（`docs/archive/dsh-tool-la
 - 出厂 `allow`：它不改盘、不出网，只是把一句话递到用户面前。
 - 提示词第 9.1 条（`NsfwPrompt`）写着纪律：**能自己查的不要问**、一次只问一个决定、
   同一个问题不要问第二遍、没等到回答时**不许假装他答过了**。
+
+### 2.0.4 附件缓存：裁图 / 搜图 / 上传（2026-11-04）
+
+裁图（`ask_user_question.image.region`）与网络参考图（`reference_image_search`）**不是临时文件**：
+它们和用户上传一样落进 `storage/ai-attachments` + `storage/ai-thumbs`，因为提问卡 / 选项图
+重开 App 之后还要能显示。代价是会长——所以有一套**只删没人引用**的回收：
+
+- `ai_attachments.origin` 记来源：`upload` / `crop` / `search`（老库默认 `upload`）。
+- **引用**只认两处：`ai_message_parts.attachment_id`（消息里的图）与
+  `ai_questions.image_url` / `option_images_json`（提问卡配图 / 选项图）。
+  只在工具结果 jsonPayload 里出现过、没进任何提问的搜图**不算引用**，可以清。
+- 启动时 `media::attachments::collect_garbage` 跑一次；设置页「AI 工具权限 → 参考图 / 截图缓存」
+  也能手动清（`GET /api/ai/attachments/stats`、`POST /api/ai/attachments/gc`）。
+- 规则：**被引用的一个都不删**；没引用的留 **7 天**（给草稿留余量）；总量超 **2 GB** 时从最老的
+  没引用图淘汰到 80%；只删至少 1 小时前的图（防和"刚搜回来、还没写进选项"抢同一张）。
+- 盘上多出来、库里没有的附件 / 缩略图（上传中断 / 入库失败）也会在 1 小时后被收掉。
 
 ### 2.0.2 「## 模拟用户行为 ##」——把纯前端节点也跑起来（2026-09-21，用户建议 ②）
 

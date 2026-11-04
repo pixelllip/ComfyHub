@@ -1125,6 +1125,101 @@ class AiAttachmentUploadResult {
       failed.map((f) => '${f.fileName}：${f.reason}').join('；');
 }
 
+/// AI 附件缓存统计（`GET /api/ai/attachments/stats`）。
+///
+/// 裁图 / 搜图 / 用户上传都落成附件；这里只做展示，**清理规则在后端**
+/// （被消息 / 提问引用的一个都不删，未引用的留 `graceDays` 天，超 `maxBytes` 淘汰）。
+class AiAttachmentCacheStats {
+  final int count;
+  final int bytes;
+  final int maxBytes;
+  final int graceDays;
+  final List<AiAttachmentOriginStats> byOrigin;
+
+  const AiAttachmentCacheStats({
+    this.count = 0,
+    this.bytes = 0,
+    this.maxBytes = 0,
+    this.graceDays = 0,
+    this.byOrigin = const [],
+  });
+
+  factory AiAttachmentCacheStats.fromJson(Map<String, dynamic> json) =>
+      AiAttachmentCacheStats(
+        count: (json['count'] as num?)?.toInt() ?? 0,
+        bytes: (json['bytes'] as num?)?.toInt() ?? 0,
+        maxBytes: (json['maxBytes'] as num?)?.toInt() ?? 0,
+        graceDays: (json['graceDays'] as num?)?.toInt() ?? 0,
+        byOrigin:
+            (json['byOrigin'] as List?)
+                ?.whereType<Map>()
+                .map(
+                  (e) => AiAttachmentOriginStats.fromJson(
+                    Map<String, dynamic>.from(e),
+                  ),
+                )
+                .toList() ??
+            const [],
+      );
+
+  int bytesOf(String origin) =>
+      byOrigin.where((o) => o.origin == origin).fold(0, (sum, o) => sum + o.bytes);
+}
+
+class AiAttachmentOriginStats {
+  final String origin;
+  final int count;
+  final int bytes;
+
+  const AiAttachmentOriginStats({
+    required this.origin,
+    required this.count,
+    required this.bytes,
+  });
+
+  factory AiAttachmentOriginStats.fromJson(Map<String, dynamic> json) =>
+      AiAttachmentOriginStats(
+        origin: (json['origin'] ?? 'upload').toString(),
+        count: (json['count'] as num?)?.toInt() ?? 0,
+        bytes: (json['bytes'] as num?)?.toInt() ?? 0,
+      );
+
+  String get label => switch (origin) {
+    'crop' => '设定图裁片',
+    'search' => '网络参考图',
+    _ => '用户上传',
+  };
+}
+
+/// 一次附件缓存 GC 的结果（`POST /api/ai/attachments/gc`）。
+class AiAttachmentGcResult {
+  final int removed;
+  final int freedBytes;
+  final int keptReferenced;
+  final int orphanFiles;
+  final int remaining;
+  final int remainingBytes;
+
+  const AiAttachmentGcResult({
+    this.removed = 0,
+    this.freedBytes = 0,
+    this.keptReferenced = 0,
+    this.orphanFiles = 0,
+    this.remaining = 0,
+    this.remainingBytes = 0,
+  });
+
+  factory AiAttachmentGcResult.fromJson(Map<String, dynamic> json) =>
+      AiAttachmentGcResult(
+        removed: (json['removed'] as num?)?.toInt() ?? 0,
+        freedBytes: (json['freedBytes'] as num?)?.toInt() ?? 0,
+        keptReferenced: (json['keptReferenced'] as num?)?.toInt() ?? 0,
+        orphanFiles: (json['orphanFiles'] as num?)?.toInt() ?? 0,
+        remaining: (json['remaining'] as num?)?.toInt() ?? 0,
+        remainingBytes: (json['remainingBytes'] as num?)?.toInt() ?? 0,
+      );
+}
+
 /// 单个附件的准入结论：界面用它给对应的缩略图打红框 / 悬浮显示原因。
 class AiPreflightItem {
   final int index;
@@ -1746,6 +1841,19 @@ class AiQuestion {
   /// 界面画成按钮的候选答案（可能为空，那就只能自己敲）。
   final List<String> options;
 
+  /// 与 [options] 一一对应的选项示意图（空串 = 这一项没有图）。
+  ///
+  /// 2026-11-04「按设定图逐部位确认」：AI 从设定图上裁一块当题目配图，
+  /// 候选款式有可靠示例图时贴在**选项文字前面**。长度可能比 [options] 短
+  /// （旧数据 / 手机回的），读之前先按下标判空。
+  final List<String> optionImages;
+
+  /// 题目配图（相对后端根的地址；界面补 baseUrl 之后显示）。
+  ///
+  /// 裁图是后端做的（`ask_user_question` 的 `image.attachmentId` + `region`），
+  /// 这里只拿结果地址 —— 前端不碰解码、也不自己拼附件路径。
+  final String? imageUrl;
+
   /// 允许自己敲一段（后端目前恒为 true —— 选项不一定对得上用户的需求）。
   final bool allowFreeText;
 
@@ -1780,6 +1888,13 @@ class AiQuestion {
   /// 这张卡不止一题（界面要画分页与进度）。
   bool get isPaged => total > 1;
 
+  /// 第 [index] 个选项的示意图地址（没有 / 越界都回 null）。
+  String? optionImageAt(int index) {
+    if (index < 0 || index >= optionImages.length) return null;
+    final url = optionImages[index].trim();
+    return url.isEmpty ? null : url;
+  }
+
   const AiQuestion({
     required this.questionId,
     this.runId = '',
@@ -1787,6 +1902,8 @@ class AiQuestion {
     required this.question,
     this.callId,
     this.options = const [],
+    this.optionImages = const [],
+    this.imageUrl,
     this.allowFreeText = true,
     this.header,
     this.answered = false,
@@ -1808,6 +1925,12 @@ class AiQuestion {
     options:
         (json['options'] as List?)?.map((e) => e.toString()).toList() ??
         const [],
+    optionImages:
+        (json['optionImages'] as List?)?.map((e) => e.toString()).toList() ??
+        const [],
+    imageUrl: (json['imageUrl']?.toString().trim().isEmpty ?? true)
+        ? null
+        : json['imageUrl'].toString(),
     allowFreeText: json['allowFreeText'] != false,
     header: json['header']?.toString(),
     answered: json['answered'] == true,
@@ -1838,6 +1961,8 @@ class AiQuestion {
     question: question,
     callId: callId ?? this.callId,
     options: options,
+    optionImages: optionImages,
+    imageUrl: imageUrl,
     allowFreeText: allowFreeText,
     header: header,
     answered: answered ?? this.answered,
@@ -1957,6 +2082,8 @@ class AiToolCallState {
     'comfy_sync_history' => '同步生成记录',
     'comfy_use_attachment' => '投放参考图',
     'comfy_use_media' => '投放画廊图片',
+    // 2026-11-04：按 Danbooru tag 找真实参考图（选项配图用）
+    'reference_image_search' => '查找参考图',
     // 看画廊最近的产物（2026-10-29）：AI 主动"看图"的那一步
     'comfy_view_outputs' => '查看生成产物',
     'comfy_make_mask' => '制作遮罩',

@@ -146,6 +146,134 @@ fn 非法_id_与目录穿越都挡住() {
 }
 
 #[test]
+fn 裁图按归一化区域裁_并落成新附件() {
+    let (state, dir) = state("crop");
+    // 20×10：左半红、右半蓝，裁右半应当正好是 10×10 的蓝块
+    let mut image = image::RgbImage::new(20, 10);
+    for (x, _, pixel) in image.enumerate_pixels_mut() {
+        *pixel = if x < 10 {
+            image::Rgb([200, 0, 0])
+        } else {
+            image::Rgb([0, 0, 200])
+        };
+    }
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(image)
+        .write_to(&mut buffer, image::ImageFormat::Png)
+        .unwrap();
+    let tmp = temp_file(&state).unwrap();
+    std::fs::write(&tmp, buffer.into_inner()).unwrap();
+    let source = save(&state, "设定图.png", &tmp, Some("image/png")).unwrap();
+
+    let crop = crop_image(&state, &source.id, "0.5,0,0.5,1", "发型.png").unwrap();
+    assert_eq!((crop.width, crop.height), (Some(10), Some(10)));
+    assert_eq!(crop.kind, "image");
+    assert_eq!(crop.name, "发型.png");
+    assert_eq!(file_url(&crop.id), format!("/api/ai/attachments/{}/file", crop.id));
+    let cropped = image::open(file_of(&state, &crop.id).unwrap().unwrap()).unwrap();
+    let pixel = cropped.to_rgb8().get_pixel(5, 5).0;
+    assert_eq!(pixel, [0, 0, 200], "裁的必须是右半那张（别拿整张图糊弄）");
+
+    // 归一化越界会被夹回图里；退化成 0 面积则明确报错
+    let clamped = crop_image(&state, &source.id, "-1,-1,9,9", "越界.png").unwrap();
+    assert_eq!((clamped.width, clamped.height), (Some(20), Some(10)));
+    let error = crop_image(&state, &source.id, "0.5,0.5,0,0.2", "空.png").unwrap_err();
+    assert_eq!(error.error, "INVALID_ARGUMENT");
+    assert!(parse_region("0.5,0.5,0,0.2").is_none());
+    assert!(parse_region("不是数字").is_none());
+    assert_eq!(parse_region("0.2, 0.1, 0.3, 0.4"), Some((0.2, 0.1, 0.3, 0.4)));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn 非图片附件不能裁() {
+    let (state, dir) = state("crop-doc");
+    let tmp = temp_file(&state).unwrap();
+    std::fs::write(&tmp, b"# not an image").unwrap();
+    let doc = save(&state, "note.md", &tmp, None).unwrap();
+    let error = crop_image(&state, &doc.id, "0,0,1,1", "x.png").unwrap_err();
+    assert_eq!(error.error, "INVALID_ARGUMENT");
+    assert!(error.human().contains("只能从图片附件上裁图"), "{}", error.human());
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn 缓存gc只删没被引用的旧图() {
+    let (state, dir) = state("gc");
+    let save_png = |name: &str| {
+        let tmp = temp_file(&state).unwrap();
+        std::fs::write(&tmp, png_bytes()).unwrap();
+        save(&state, name, &tmp, Some("image/png")).unwrap()
+    };
+    let upload = save_png("用户上传.png");
+    let crop = save_png("裁图.png");
+    let referenced = save_png("提问配图.png");
+    let young = save_png("刚传的.png");
+
+    // 三张"老图"（8 天前），一张刚传的
+    state
+        .with(|conn| {
+            conn.execute(
+                "UPDATE ai_attachments SET created_at = datetime('now','-8 days')
+                  WHERE id IN (?1, ?2, ?3)",
+                rusqlite::params![upload.id, crop.id, referenced.id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    // 只在 message_parts 里引用一张（FK 关掉：这一条只验引用集合，不验库结构）
+    state
+        .with(|conn| {
+            conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+            conn.execute(
+                "INSERT INTO ai_message_parts(message_id, ordinal, type, text, attachment_id)
+                 VALUES ('m1', 0, 'attachment', NULL, ?1)",
+                rusqlite::params![referenced.id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let before = cache_stats(&state).unwrap();
+    assert_eq!(before.count, 4);
+    assert_eq!(
+        before.bytes,
+        upload.size_bytes + crop.size_bytes + referenced.size_bytes + young.size_bytes
+    );
+    assert_eq!(before.grace_days, GC_GRACE_DAYS);
+    assert_eq!(before.max_bytes, MAX_CACHE_BYTES);
+
+    let report = collect_garbage(&state).unwrap();
+    assert_eq!(report.removed, 2, "只该删 upload 与 crop 两张老图");
+    assert_eq!(report.kept_referenced, 1);
+    assert!(get(&state, &referenced.id).unwrap().is_some(), "被引用的永远不删");
+    assert!(get(&state, &upload.id).unwrap().is_none(), "没引用的老上传要清");
+    assert!(get(&state, &crop.id).unwrap().is_none(), "没引用的老裁图要清");
+    assert!(get(&state, &young.id).unwrap().is_some(), "没到宽限期的图不动");
+    assert_eq!(report.remaining, 2);
+    assert_eq!(report.remaining_bytes, referenced.size_bytes + young.size_bytes);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn 附件地址能抠出_id_而公网图不算() {
+    assert_eq!(
+        attachment_id_from_url("/api/ai/attachments/abc-123/file").as_deref(),
+        Some("abc-123")
+    );
+    assert_eq!(
+        attachment_id_from_url("http://127.0.0.1:1234/api/ai/attachments/xyz/file").as_deref(),
+        Some("xyz")
+    );
+    assert_eq!(attachment_id_from_url("https://example.com/bangs.jpg"), None);
+    assert_eq!(
+        option_image_urls(Some(r#"["/api/ai/attachments/a/file","https://x/b.png",""]"#)),
+        vec!["/api/ai/attachments/a/file", "https://x/b.png", ""]
+    );
+    assert!(option_image_urls(Some("not json")).is_empty());
+}
+
+#[test]
 fn base64_编解码往返() {
     for case in [b"".to_vec(), b"a".to_vec(), b"ab".to_vec(), b"abc".to_vec(), vec![0u8, 255, 128, 7]] {
         let encoded = base64_encode(&case);

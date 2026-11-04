@@ -52,7 +52,7 @@ data: <payload 的 JSON 单行>
 | `tool.started` | `TOOL_STARTED` | `callId`, `name` | 批准后真正开始执行 |
 | `tool.completed` | `TOOL_COMPLETED` | `callId`, `name`, `elapsedMs`, `preview`, `result`（内含 `mediaIds`） | 工具成功 |
 | `tool.failed` | `TOOL_FAILED` | `callId`, `name`, `code`, `message`, `approval`, `elapsedMs` | 工具失败 |
-| `user.question` | `USER_QUESTION` | `questionId`, `question`, `options?` | **AI 问用户**（不是审批，见 §3） |
+| `user.question` | `USER_QUESTION` | `runId`, **`question`**（嵌套对象：`questionId` / `options?` / `multiSelect?` / `imageUrl?` / `optionImages?`） | **AI 问用户**（不是审批，见 §3）。`imageUrl` 是后端从设定图裁出来的局部图，`optionImages` 与 `options` 一一对应（空串 = 该项无图）——**都是可选键**，旧客户端忽略即可 |
 | `user.question.answered` | `USER_QUESTION_ANSWERED` | `questionId`, `answer` | 用户答完了 |
 | `usage.updated` | `USAGE_UPDATED` | `inputTokens`, `outputTokens`, `cachedTokens`, `reasoningTokens` | token 用量。⚠ 载荷**平铺**这四个键（**不是** `{"usage": {...}}` 包一层）；`message.completed.usage` 里装的是**同一组键**。`inputTokens` **含**缓存命中的那部分（各家的口径由后端 `provider/upstream.rs` 的 `TokenUsage` 统一），所以 `cachedTokens / inputTokens` 就是命中率 |
 | `message.completed` | `MESSAGE_COMPLETED` | `messageId`, `text`, `reasoning`, `finishReason`, `elapsedMs`, `reasoningEffort`, `steps`, **`parts`**, `usage` | 一条助手消息收口（**落块时机**）。⚠ `parts` 是**权威**：界面在 parts 非空时只渲染 parts |

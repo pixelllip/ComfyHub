@@ -1102,7 +1102,8 @@ pub(crate) fn seed_attachment(state: &comfyhub_server_rs::web::routes::AppState,
         status: "ready".to_string(),
         created_at: Some("2026-09-26T00:00:00.000Z".to_string()),
     };
-    comfyhub_server_rs::media::attachments::insert(state, &dto, &format!("{id}.png")).unwrap();
+    comfyhub_server_rs::media::attachments::insert(state, &dto, &format!("{id}.png"), "upload")
+        .unwrap();
 }
 
 /// 把"当前生效的输出目录"钉到 `<root>/shared/output`（ComfyUI Desktop 那种

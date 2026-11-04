@@ -44,6 +44,10 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
   AiCredentialStatus _searchCred = AiCredentialStatus.none;
   bool _searchBusy = false;
 
+  /// 附件缓存（裁图 / 搜图 / 上传）：只展示 + 手动清"没被引用"的旧图。
+  AiAttachmentCacheStats? _cacheStats;
+  bool _cacheBusy = false;
+
   @override
   void initState() {
     super.initState();
@@ -74,11 +78,17 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
       try {
         cred = await _api.webSearchCredentialStatus();
       } catch (_) {}
+      // 缓存统计拿不到也不挡这一页（老后端没有这条端点）
+      AiAttachmentCacheStats? stats;
+      try {
+        stats = await _api.attachmentCacheStats();
+      } catch (_) {}
       if (!mounted) return;
       setState(() {
         _tools = tools;
         _policy = policy;
         _searchCred = cred;
+        if (stats != null) _cacheStats = stats;
       });
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
@@ -287,6 +297,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                         if (_policy.autoReadRoots.isNotEmpty)
                           AdaptiveSection(_autoReadCard(), estimatedHeight: 160),
                         AdaptiveSection(_webSearchCard(), estimatedHeight: 320),
+                        AdaptiveSection(_attachmentCacheCard(), estimatedHeight: 240),
                         AdaptiveSection(_toolsCard(), estimatedHeight: 560),
                       ],
                     ),
@@ -524,6 +535,121 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
         ),
       ),
     );
+  }
+
+  /// 附件缓存（2026-11-04）：裁图 / 搜图 / 上传都落成附件，这里给出占用与手动清理。
+  ///
+  /// **只删没被引用的**：消息块里的附件、提问卡里的裁图 / 选项图都算引用，
+  /// 删了历史里就是破图。规则的真源在后端，界面不自己判断。
+  Widget _attachmentCacheCard() {
+    final theme = Theme.of(context);
+    final stats = _cacheStats;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.photo_library_outlined,
+                  size: 18,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 6),
+                Text('参考图 / 截图缓存', style: theme.textTheme.titleSmall),
+                const Spacer(),
+                if (_cacheBusy)
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  IconButton(
+                    tooltip: '重新统计',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.refresh, size: 17),
+                    onPressed: _loadCacheStats,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            if (stats == null)
+              Text(
+                '还没统计到缓存占用（后端未提供这条端点，或刚才读取失败）。',
+                style: theme.textTheme.bodySmall,
+              )
+            else ...[
+              Text(
+                '共 ${stats.count} 张 · ${formatSize(stats.bytes)}'
+                '（上限 ${formatSize(stats.maxBytes)}）',
+                style: theme.textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '用户上传 ${formatSize(stats.bytesOf('upload'))} · '
+                '设定图裁片 ${formatSize(stats.bytesOf('crop'))} · '
+                '网络参考图 ${formatSize(stats.bytesOf('search'))}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '被聊天记录或提问卡引用的图不会被删（历史里的配图要能重开）；'
+                '没被引用的保留 ${stats.graceDays} 天，总量超过上限时从最老的没引用图开始淘汰，'
+                '不会动正在等回答的那一轮。',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  onPressed: _cacheBusy ? null : _clearAttachmentCache,
+                  icon: const Icon(Icons.delete_sweep_outlined, size: 17),
+                  label: const Text('清理未引用的旧图'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _loadCacheStats() async {
+    try {
+      final stats = await _api.attachmentCacheStats();
+      if (mounted) setState(() => _cacheStats = stats);
+    } catch (e) {
+      if (mounted) _snack('读取缓存占用失败：$e', error: true);
+    }
+  }
+
+  Future<void> _clearAttachmentCache() async {
+    setState(() => _cacheBusy = true);
+    try {
+      final report = await _api.gcAttachmentCache();
+      final stats = await _api.attachmentCacheStats();
+      if (!mounted) return;
+      setState(() {
+        _cacheStats = stats;
+        _cacheBusy = false;
+      });
+      _snack(
+        report.removed > 0
+            ? '已清理 ${report.removed} 张，释放 ${formatSize(report.freedBytes)}'
+            : '没有可清理的旧图（被引用的图一律保留）',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _cacheBusy = false);
+      _snack('清理失败：$e', error: true);
+    }
   }
 
   Widget _toolsCard() {

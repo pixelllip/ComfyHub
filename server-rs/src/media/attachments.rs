@@ -23,6 +23,7 @@
 //! **还没有**（与 `GET /api/media/{id}/poster` 是同一块缺口）。所以视频附件的 `/thumb` 现在回 **204**，
 //! 界面按既有约定退化成文件图标（不是破图）—— **不假装**抽过帧。
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use axum::extract::{Multipart, Path as AxumPath, State};
@@ -68,6 +69,58 @@ pub const MAX_HEAD_BYTES: usize = 4096;
 /// （Anthropic 单图 5MB、OpenAI 单图 20MB）—— 8MB 原图 → ~10.7MB 请求体，
 /// 是"能发出去"和"别把网关打挂"之间的平衡点。
 pub const MAX_INLINE_BYTES: u64 = 8 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+//  附件缓存（2026-11-04）：裁图 / 搜图 / 上传都落成附件，不能无限长
+// ---------------------------------------------------------------------------
+//
+// 三条纪律：
+//  1. **被引用的永远不删**：消息块里的 `attachment_id`、提问卡的 `image_url` /
+//     `option_images_json` 都算引用 —— 删了历史里的图就变成破图。
+//  2. **没被引用的留 7 天**：草稿（SharedPreferences 里的附件 id）不在库里，
+//     所以不能"一没引用就删"；7 天是给用户回来继续那条草稿的余量。
+//  3. **总量 2GB 封顶，只淘汰"没被引用且超过 1 小时"的旧图**：1 小时的宽限是
+//     防"搜图刚返回 id、AI 还没把它写进选项"那一瞬间被 GC 抢走。
+/// 未被引用的附件保留天数（草稿宽限）。
+pub const GC_GRACE_DAYS: i64 = 7;
+/// 附件缓存总预算（2 GB）。超出后淘汰**未被引用**的旧图到 80%。
+pub const MAX_CACHE_BYTES: i64 = 2 * 1024 * 1024 * 1024;
+/// 超预算淘汰的最小年龄（秒）：防与"刚搜索完、还没写进提问"抢同一个附件。
+const GC_OVER_CAP_MIN_AGE_SECONDS: i64 = 3600;
+/// 孤儿文件（盘上有、库里没有）的最小年龄：上传是"先落盘再入库"，别删到半成品。
+const GC_ORPHAN_MIN_AGE_SECONDS: i64 = 3600;
+
+/// 附件缓存统计（`GET /api/ai/attachments/stats`）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheStats {
+    pub count: i64,
+    pub bytes: i64,
+    pub max_bytes: i64,
+    pub grace_days: i64,
+    /// 按来源分组：upload / crop / search（老数据是 upload）。
+    pub by_origin: Vec<OriginStats>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OriginStats {
+    pub origin: String,
+    pub count: i64,
+    pub bytes: i64,
+}
+
+/// 一次 GC 的结果（`POST /api/ai/attachments/gc`）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GcReport {
+    pub removed: i64,
+    pub freed_bytes: i64,
+    pub kept_referenced: i64,
+    pub orphan_files: i64,
+    pub remaining: i64,
+    pub remaining_bytes: i64,
+}
 
 // ---------------------------------------------------------------------------
 //  DTO
@@ -212,12 +265,18 @@ fn safe_path_id(id: &str) -> Option<&str> {
 //  库
 // ---------------------------------------------------------------------------
 
-pub fn insert(state: &AppState, dto: &AttachmentDto, stored_name: &str) -> Result<(), ApiError> {
+pub fn insert(
+    state: &AppState,
+    dto: &AttachmentDto,
+    stored_name: &str,
+    origin: &str,
+) -> Result<(), ApiError> {
     state.write(|conn| {
         conn.execute(
             "INSERT INTO ai_attachments \
-             (id, original_name, stored_name, kind, mime_type, size_bytes, width, height, sha256, status) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+             (id, original_name, stored_name, kind, mime_type, size_bytes, width, height, sha256,
+              status, origin) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
                 dto.id,
                 dto.name,
@@ -228,7 +287,8 @@ pub fn insert(state: &AppState, dto: &AttachmentDto, stored_name: &str) -> Resul
                 dto.width,
                 dto.height,
                 dto.sha256,
-                dto.status
+                dto.status,
+                origin
             ],
         )?;
         Ok(())
@@ -324,7 +384,21 @@ pub fn save(
     tmp: &Path,
     declared_mime: Option<&str>,
 ) -> Result<AttachmentDto, ApiError> {
-    let result = save_inner(state, name, tmp, declared_mime);
+    save_with_origin(state, name, tmp, declared_mime, "upload")
+}
+
+/// 与 [`save`] 同一条链，只是把来源记下来（upload / crop / search）。
+///
+/// 来源只用于缓存统计与 GC：**用户上传的图**哪怕一时没被引用也留得久一点，
+/// 裁图 / 搜图这类"过程图"可以更早清掉。
+pub fn save_with_origin(
+    state: &AppState,
+    name: &str,
+    tmp: &Path,
+    declared_mime: Option<&str>,
+    origin: &str,
+) -> Result<AttachmentDto, ApiError> {
+    let result = save_inner(state, name, tmp, declared_mime, origin);
     if result.is_err() {
         let _ = std::fs::remove_file(tmp);
     }
@@ -336,6 +410,7 @@ fn save_inner(
     name: &str,
     tmp: &Path,
     declared_mime: Option<&str>,
+    origin: &str,
 ) -> Result<AttachmentDto, ApiError> {
     let trimmed = name.trim();
     let file_name: String = if trimmed.is_empty() { "attachment.bin".to_string() } else { trimmed.to_string() }
@@ -402,9 +477,111 @@ fn save_inner(
         status: "ready".to_string(),
         created_at: None,
     };
-    insert(state, &dto, &stored)?;
+    insert(state, &dto, &stored, origin)?;
     // 回读一次：`created_at` 由库里的默认值给（与 Kotlin 的"插完再取"一致）
     get(state, &dto.id)?.ok_or_else(|| ApiError::internal("附件入库后读不回来"))
+}
+
+/// 附件的 HTTP 原址（相对后端根）。
+///
+/// 与 [`router`] 里那条路由**必须同源**：提问卡里的裁图、选项示意图都存这个地址，
+/// 前端拿到之后只补 `baseUrl`，不再自己拼一道路径。
+pub fn file_url(id: &str) -> String {
+    format!("/api/ai/attachments/{id}/file")
+}
+
+/// 归一化裁剪区（`"x,y,w,h"`，0~1，左上角原点）。
+///
+/// 只认逗号分隔的 4 个浮点；解析失败 / 非有限值 / 退化成 0 面积一律 `None`
+/// （调用方报参数错，**不要**悄悄当成整张图 —— 那样用户看到的裁图与问题对不上）。
+pub fn parse_region(raw: &str) -> Option<(f64, f64, f64, f64)> {
+    let parts: Vec<f64> = raw
+        .split(',')
+        .map(|part| part.trim().parse::<f64>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    if parts.len() != 4 || parts.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let (x, y, w, h) = (parts[0], parts[1], parts[2], parts[3]);
+    let x = x.clamp(0.0, 1.0);
+    let y = y.clamp(0.0, 1.0);
+    let w = w.clamp(0.0, 1.0 - x);
+    let h = h.clamp(0.0, 1.0 - y);
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    Some((x, y, w, h))
+}
+
+/// 从一张**图片附件**上裁一块，存成一条新的附件（提问卡 / 选项示意图用）。
+///
+/// 为什么裁图要在后端：模型只给归一化框，前端不碰解码；裁出来的图必须是一条
+/// **真附件**（有 id、有缩略图、能进历史消息），否则重开 App 那张图就没了。
+///
+/// 参数校验与失败都返回人话（模型据此改参数），不静默退化成整张图。
+pub fn crop_image(
+    state: &AppState,
+    source_id: &str,
+    region: &str,
+    display_name: &str,
+) -> Result<AttachmentDto, ApiError> {
+    let Some((x, y, w, h)) = parse_region(region) else {
+        return Err(ApiError::ai(
+            "INVALID_ARGUMENT",
+            format!("裁剪区域必须是 \"x,y,w,h\" 四个 0~1 的数：{region}"),
+        ));
+    };
+    let source = get(state, source_id)?
+        .ok_or_else(|| ApiError::ai("INVALID_ARGUMENT", format!("要裁图的附件不存在：{source_id}")))?;
+    if source.kind != "image" {
+        return Err(ApiError::ai(
+            "INVALID_ARGUMENT",
+            format!("只能从图片附件上裁图（{} 是 {}）", source.name, source.kind),
+        ));
+    }
+    let src = file_of(state, source_id)?
+        .ok_or_else(|| ApiError::ai("CONFIG_ERROR", format!("附件文件已丢失：{}", source.name)))?;
+    let image = image::open(&src)
+        .map_err(|e| ApiError::ai("UNSUPPORTED_CONTENT", format!("这张图打不开：{e}")))?;
+    let (iw, ih) = (image.width() as f64, image.height() as f64);
+    if iw < 1.0 || ih < 1.0 {
+        return Err(ApiError::ai("UNSUPPORTED_CONTENT", "这张图没有可裁的像素"));
+    }
+    let left = (x * iw).floor().clamp(0.0, iw - 1.0) as u32;
+    let top = (y * ih).floor().clamp(0.0, ih - 1.0) as u32;
+    let right = ((x + w) * iw).ceil().clamp((left + 1) as f64, iw) as u32;
+    let bottom = ((y + h) * ih).ceil().clamp((top + 1) as f64, ih) as u32;
+    let crop = image.crop_imm(left, top, right - left, bottom - top);
+    let tmp = temp_file(state).map_err(|e| ApiError::internal(format!("建临时文件失败：{e}")))?;
+    if let Err(e) = crop.save_with_format(&tmp, image::ImageFormat::Png) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(ApiError::internal(format!("裁图落盘失败：{e}")));
+    }
+    let name = if display_name.trim().is_empty() {
+        format!("{}（局部）.png", source.name)
+    } else {
+        display_name.trim().to_string()
+    };
+    save_with_origin(state, &name, &tmp, Some("image/png"), "crop")
+}
+
+/// 把一段**已经在内存里**的字节收进附件库（下载来的参考图用）。
+///
+/// 与上传那条路走**同一个** [`save`]：类型判定、尺寸探测、sha256、临时文件清理
+/// 全都复用，不为"网络下载"另开一套落盘逻辑。
+pub fn save_bytes(
+    state: &AppState,
+    name: &str,
+    bytes: &[u8],
+    declared_mime: Option<&str>,
+    origin: &str,
+) -> Result<AttachmentDto, ApiError> {
+    let tmp = temp_file(state).map_err(|e| ApiError::internal(format!("建临时文件失败：{e}")))?;
+    if let Err(e) = std::fs::write(&tmp, bytes) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(ApiError::internal(format!("写临时文件失败：{e}")));
+    }
+    save_with_origin(state, name, &tmp, declared_mime, origin)
 }
 
 fn read_head(path: &Path, max: usize) -> Vec<u8> {
@@ -467,6 +644,266 @@ pub fn delete(state: &AppState, id: &str) -> Result<bool, ApiError> {
         let _ = std::fs::remove_file(thumb_path(state, safe));
     }
     Ok(removed)
+}
+
+// ---------------------------------------------------------------------------
+//  附件缓存：统计 + GC
+// ---------------------------------------------------------------------------
+
+/// 从附件地址里抠出 id（`/api/ai/attachments/<id>/file`，允许绝对地址）。
+///
+/// 只认我们自己的路径：`image_url` / `option_images_json` 里也可能有公网示例图，
+/// 那些不是本机附件，不该进引用集合。
+fn attachment_id_from_url(url: &str) -> Option<String> {
+    let marker = "/api/ai/attachments/";
+    let index = url.find(marker)?;
+    let rest = &url[index + marker.len()..];
+    let id = rest.split('/').next()?.trim();
+    if id.is_empty() || id.len() > 64 || id.contains("..") {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+/// `option_images_json` 里的地址（字符串或 `{url}` 对象都认）。
+fn option_image_urls(raw: Option<&str>) -> Vec<String> {
+    let Some(text) = raw.map(str::trim).filter(|t| !t.is_empty()) else {
+        return Vec::new();
+    };
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| match item {
+            Value::String(url) => Some(url),
+            Value::Object(map) => map.get("url").and_then(Value::as_str).map(str::to_string),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 现在**还被历史引用**的附件 id。
+///
+/// 两处真源：消息块里的 `attachment_id`（用户上传）与提问卡里的 `image_url` /
+/// `option_images_json`（裁图 / 选项示意图）。工具结果 json_payload 里出现过、
+/// 但没进任何提问的参考图**故意不算引用** —— 那种图没在界面上出现过，可以清。
+fn referenced_ids(state: &AppState) -> Result<HashSet<String>, ApiError> {
+    state.with(|conn| {
+        let mut out = HashSet::new();
+        let mut parts = conn.prepare(
+            "SELECT attachment_id FROM ai_message_parts
+              WHERE attachment_id IS NOT NULL AND attachment_id <> ''",
+        )?;
+        let rows = parts.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            out.insert(row?);
+        }
+        let mut questions =
+            conn.prepare("SELECT image_url, option_images_json FROM ai_questions")?;
+        let rows = questions.query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })?;
+        for row in rows {
+            let (image, options) = row?;
+            if let Some(url) = image.as_deref() {
+                if let Some(id) = attachment_id_from_url(url) {
+                    out.insert(id);
+                }
+            }
+            for url in option_image_urls(options.as_deref()) {
+                if let Some(id) = attachment_id_from_url(&url) {
+                    out.insert(id);
+                }
+            }
+        }
+        Ok(out)
+    })
+}
+
+/// 附件缓存统计（数量 / 字节 / 按来源分组）。
+pub fn cache_stats(state: &AppState) -> Result<CacheStats, ApiError> {
+    state.with(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT origin, COUNT(*), COALESCE(SUM(size_bytes), 0)
+               FROM ai_attachments GROUP BY origin ORDER BY origin",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(OriginStats {
+                origin: row.get::<_, Option<String>>(0)?.unwrap_or_else(|| "upload".into()),
+                count: row.get(1)?,
+                bytes: row.get(2)?,
+            })
+        })?;
+        let mut by_origin = Vec::new();
+        let mut count = 0i64;
+        let mut bytes = 0i64;
+        for row in rows {
+            let row = row?;
+            count += row.count;
+            bytes += row.bytes;
+            by_origin.push(row);
+        }
+        Ok(CacheStats {
+            count,
+            bytes,
+            max_bytes: MAX_CACHE_BYTES,
+            grace_days: GC_GRACE_DAYS,
+            by_origin,
+        })
+    })
+}
+
+/// 清掉**没被引用**的旧附件（启动时跑一次；界面上的「清理未引用」也走它）。
+///
+/// 顺序：① 超 7 天且没引用 → 删；② 总量超 2GB → 从最老的开始删没引用且超 1 小时的，
+/// 直到 80%；③ 盘上多出来的孤儿文件（上传中断 / 入库失败留下的）也一并收掉。
+/// 被引用的**一个都不删** —— 历史里的图比省几 MB 重要。
+pub fn collect_garbage(state: &AppState) -> Result<GcReport, ApiError> {
+    let referenced = referenced_ids(state)?;
+    struct Row {
+        id: String,
+        size: i64,
+        old: bool,
+        stale: bool,
+    }
+    let rows: Vec<Row> = state.with(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, size_bytes,
+                    CASE WHEN datetime(created_at) < datetime('now', ?1) THEN 1 ELSE 0 END,
+                    CASE WHEN datetime(created_at) < datetime('now', ?2) THEN 1 ELSE 0 END
+               FROM ai_attachments ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![
+                format!("-{GC_GRACE_DAYS} days"),
+                format!("-{GC_OVER_CAP_MIN_AGE_SECONDS} seconds")
+            ],
+            |row| {
+                Ok(Row {
+                    id: row.get(0)?,
+                    size: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    old: row.get::<_, i64>(2)? != 0,
+                    stale: row.get::<_, i64>(3)? != 0,
+                })
+            },
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+    })?;
+
+    let kept_referenced = rows
+        .iter()
+        .filter(|row| referenced.contains(&row.id))
+        .count() as i64;
+    let mut total: i64 = rows.iter().map(|row| row.size).sum();
+    let mut removed = 0i64;
+    let mut freed_bytes = 0i64;
+    let mut deleted: HashSet<String> = HashSet::new();
+
+    // ① 过了宽限、又没人引用的
+    for row in rows.iter() {
+        if referenced.contains(&row.id) || !row.old || deleted.contains(&row.id) {
+            continue;
+        }
+        if let Ok(true) = delete(state, &row.id) {
+            removed += 1;
+            freed_bytes += row.size;
+            total -= row.size;
+            deleted.insert(row.id.clone());
+        }
+    }
+    // ② 总量超预算：只淘汰没引用、且至少 1 小时前的（防抢刚搜回来的图）
+    if total > MAX_CACHE_BYTES {
+        let target = MAX_CACHE_BYTES / 10 * 8;
+        for row in rows.iter() {
+            if total <= target {
+                break;
+            }
+            if referenced.contains(&row.id) || !row.stale || deleted.contains(&row.id) {
+                continue;
+            }
+            if let Ok(true) = delete(state, &row.id) {
+                removed += 1;
+                freed_bytes += row.size;
+                total -= row.size;
+                deleted.insert(row.id.clone());
+            }
+        }
+    }
+
+    let orphan_files = sweep_orphan_files(state).unwrap_or(0);
+    let stats = cache_stats(state)?;
+    Ok(GcReport {
+        removed,
+        freed_bytes,
+        kept_referenced,
+        orphan_files,
+        remaining: stats.count,
+        remaining_bytes: stats.bytes,
+    })
+}
+
+/// 删掉盘上"库里没有"的附件 / 缩略图；只删至少 1 小时前的，避开正在上传的临时状态。
+fn sweep_orphan_files(state: &AppState) -> Result<i64, ApiError> {
+    let stored: HashSet<String> = state.with(|conn| {
+        let mut stmt = conn.prepare("SELECT stored_name FROM ai_attachments")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<HashSet<_>>>()
+    })?;
+    let ids: HashSet<String> = state.with(|conn| {
+        let mut stmt = conn.prepare("SELECT id FROM ai_attachments")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<HashSet<_>>>()
+    })?;
+
+    let mut removed = 0i64;
+    let dir = attachment_dir(state);
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            if stored.contains(&name) || !old_enough(&path, GC_ORPHAN_MIN_AGE_SECONDS) {
+                continue;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    let thumb_dir = attachment_thumb_dir(state);
+    if let Ok(entries) = std::fs::read_dir(&thumb_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let id = name.strip_suffix(".jpg").unwrap_or(&name);
+            if ids.contains(id) || !old_enough(&path, GC_ORPHAN_MIN_AGE_SECONDS) {
+                continue;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
+}
+
+fn old_enough(path: &Path, seconds: i64) -> bool {
+    let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) else {
+        return false;
+    };
+    match std::time::SystemTime::now().duration_since(modified) {
+        Ok(age) => age.as_secs() >= seconds.max(0) as u64,
+        Err(_) => false,
+    }
 }
 
 /// 读成"可以直接内联给模型"的附件（图片才需要 base64）。
@@ -562,6 +999,16 @@ pub fn router() -> Router<AppState> {
     // （与 Kotlin 同名同义），直接 `use axum::routing::get` 会被同名遮蔽。
     Router::new()
         .route("/api/ai/attachments", axum::routing::post(upload))
+        // 缓存统计 / 手动回收（2026-11-04）：必须在 `{id}` 之前/旁边声明，
+        // matchit 的静态段优先于参数段，但两条都留着才不会 404。
+        .route(
+            "/api/ai/attachments/stats",
+            axum::routing::get(cache_stats_endpoint),
+        )
+        .route(
+            "/api/ai/attachments/gc",
+            axum::routing::post(cache_gc_endpoint),
+        )
         .route(
             "/api/ai/attachments/{id}",
             axum::routing::get(get_one).delete(delete_one),
@@ -840,6 +1287,16 @@ async fn get_one(
     let dto = get(&state, &id)?
         .ok_or_else(|| ApiError::ai("CONFIG_ERROR", format!("附件不存在: {id}")))?;
     Ok(Json(dto))
+}
+
+/// `GET /api/ai/attachments/stats`：缓存有多少、按来源分。
+async fn cache_stats_endpoint(State(state): State<AppState>) -> Result<Json<CacheStats>, ApiError> {
+    Ok(Json(cache_stats(&state)?))
+}
+
+/// `POST /api/ai/attachments/gc`：手动清一次没被引用的旧附件。
+async fn cache_gc_endpoint(State(state): State<AppState>) -> Result<Json<GcReport>, ApiError> {
+    Ok(Json(collect_garbage(&state)?))
 }
 
 async fn get_file(

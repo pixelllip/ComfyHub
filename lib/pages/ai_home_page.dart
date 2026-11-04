@@ -12,6 +12,7 @@ import '../core/api_client.dart';
 import '../core/file_clipboard.dart';
 import '../core/file_drop.dart';
 import '../core/formatting.dart';
+import '../core/pairing_token.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../models/ai_models.dart';
@@ -19,6 +20,7 @@ import '../models/layout_embed.dart';
 import '../models/layout_spec.dart';
 import '../state/ai_workspace_store.dart';
 import '../widgets/app_menu.dart';
+import '../widgets/attachment_preview.dart';
 import '../widgets/common.dart' show FilterChipRow;
 import '../widgets/layout_templates_card.dart';
 import '../widgets/markdown_view.dart';
@@ -30,26 +32,50 @@ import 'layout_canvas_page.dart';
 import 'media_detail_page.dart';
 import 'train_page.dart';
 
-/// 这个附件能不能**在本应用内**直接看（图片），而不是丢给系统默认程序。
+/// 后端给的相对地址（`/api/ai/attachments/...`）→ 可直接给 `Image.network` 的绝对地址。
 ///
-/// 历史消息里的附件块**没有 modality**（后端只落 `attachmentId` 与名字），所以：
-/// * 有 modality 就信它（输入区托盘是有的）；
-/// * 没有就按扩展名兜底 —— 认不出来一律外跳（文档 / 音频 / 压缩包本来就该交给系统）。
-///
-/// 用户 bug 2026-10-18："点击会话内的图片会跳转浏览器而不是在应用内弹出小窗。"
-bool canPreviewInline(String? modality, String name) {
-  if (modality != null && modality.isNotEmpty) return modality == 'image';
-  final lower = name.toLowerCase();
-  return const [
-    '.png',
-    '.jpg',
-    '.jpeg',
-    '.webp',
-    '.gif',
-    '.bmp',
-    '.avif',
-  ].any(lower.endsWith);
+/// 提问卡的裁图 / 选项示意图都是后端存的相对路径：前端**只补 baseUrl**，
+/// 不自己拼第二套附件路径（那种拼法在换端口 / 换机器时一定 404）。
+String absoluteBackendUrl(String base, String url) {
+  final trimmed = url.trim();
+  if (trimmed.isEmpty) return trimmed;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
+  }
+  return '$base$trimmed';
 }
+
+/// 附件预览取文本时带的头（配对令牌**现取**：空串不发，理由同 `AiApiClient._headers`）。
+Map<String, String> attachmentPreviewHeaders() {
+  final token = PairingTokenCache.read();
+  return {if (token != null && token.isNotEmpty) 'X-ComfyHub-Token': token};
+}
+
+/// 历史附件块没有原始文件名时，界面上拿什么称呼它。
+///
+/// `parts[].text` 为空时调用方会退回 `attachmentId`（一串 UUID）。把 UUID 原样当
+/// 标题既难读、又会让"按扩展名判类型"的兜底彻底失效 —— 所以这里换成"图片附件 / 附件"。
+String attachmentDisplayName(String raw, {required bool hasPreview}) {
+  final name = raw.trim();
+  final looksLikeId = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  ).hasMatch(name);
+  if (name.isEmpty || looksLikeId) {
+    return hasPreview ? '图片附件' : '附件';
+  }
+  return name;
+}
+
+/// 「从设定图生成角色卡」那条固定起手（用户 2026-11-04 的流程）。
+///
+/// 这句话只负责**把意图与顺序说清**：先逐部位问、带裁图、问完再写卡。
+/// 具体规则（怎么裁、选项要不要配图、哪些不许问）在系统提示第 26 条里。
+const _characterSheetPrompt =
+    '这是一张角色设定图。请从上到下逐部位分析，先别急着写卡：'
+    '凡是光看图会判错的地方（发型分缝 / 刘海、发饰、领口与服装分层、裙片、袜鞋、手上道具），'
+    '都用 ask_user_question 一次问清 —— 每题带一块从这张图上裁下来的局部图，'
+    '给几个具体候选项（有可靠示例图就贴在选项前面）；我答完你再按答案写成角色卡。'
+    '能看死的颜色和明显款式不要问。';
 
 /// AI 工作台（AIH-001 / AIH-002 / AIK-002）。
 ///
@@ -1128,6 +1154,8 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
             (await store.skipQuestion(questionId)).ok,
         // 卡片里"自己输入答案"→ 焦点交给底部被接管的那个答案框（用户 bug 2026-09-21）
         onFocusAskAnswer: () => store.pendingQuestionFocus.requestFocus(),
+        // 提问卡里的裁图是后端给的相对路径（`/api/ai/attachments/{id}/file`）
+        apiBase: store.baseUrl,
         // 用户消息里的附件块：按 id 现取缩略图 / 视频预览帧（M3）
         thumbUrlOf: store.thumbUrlFor,
         fileUrlOf: store.fileUrlFor,
@@ -1212,6 +1240,9 @@ class _MessageBubble extends StatelessWidget {
   /// 所以这一行只做一件事：把光标送到下面那个唯一的答案框里。
   final VoidCallback onFocusAskAnswer;
 
+  /// 后端根地址（提问卡里的裁图是相对路径，显示前补它）。
+  final String apiBase;
+
   /// 附件 id → 缩略图 / 预览帧地址（M3）。
   final String? Function(String? attachmentId) thumbUrlOf;
   final String? Function(String? attachmentId) fileUrlOf;
@@ -1242,6 +1273,7 @@ class _MessageBubble extends StatelessWidget {
     required this.onAnswerQuestion,
     required this.onSkipQuestion,
     required this.onFocusAskAnswer,
+    this.apiBase = '',
     required this.thumbUrlOf,
     required this.fileUrlOf,
     required this.mediaThumbUrlOf,
@@ -1411,6 +1443,7 @@ class _MessageBubble extends StatelessWidget {
             key: ValueKey('${message.id}-${call.callId}'),
             // 整张卡（同组的所有题）——多问改造后只给一题会让别的题在界面上消失
             questions: call.allQuestions,
+            apiBase: apiBase,
             onAnswer: onAnswerQuestion,
             onSkip: onSkipQuestion,
             // "自己输入答案"那一行把焦点交给底部被接管的输入框（用户 bug 2026-09-21）
@@ -1438,8 +1471,12 @@ class _MessageBubble extends StatelessWidget {
         !m.isUser &&
         (m.status == 'failed' || m.status == 'cancelled') &&
         !sending;
-    // 待批准的工具调用（M4）：气泡里要能点「批准 / 拒绝」
-    final pending = toolCalls.where((c) => c.needsApproval).toList();
+    // 待批准的工具调用（M4）：气泡里要能点「批准 / 拒绝」。
+    // ⚠ 提问卡也用 `pendingApproval` 这个状态（"等你回答"），但它**不是审批**：
+    // 混进来会让顶上多一条"有 1 个工具调用在等你的批准"，而用户根本找不到批准按钮。
+    final pending = toolCalls
+        .where((c) => c.needsApproval && c.allQuestions.isEmpty)
+        .toList();
     // 正文块只算一次：下面"退回整段正文"的兜底要用它判断"有序块与段是不是都没产出内容"
     final body = _orderedBody(context, theme);
 
@@ -1739,6 +1776,10 @@ class _AskCard extends StatefulWidget {
   /// 多问改造（2026-09-22）之前这里只有一条；只画第一条会让剩下的题在界面上
   /// 凭空消失（用户以为只问了一件事，模型却在等 N 个答案）。
   final List<AiQuestion> questions;
+
+  /// 后端根地址（裁图 / 选项图的相对路径补它）。
+  final String apiBase;
+
   final Future<bool> Function(
     String questionId, {
     int? optionIndex,
@@ -1753,6 +1794,7 @@ class _AskCard extends StatefulWidget {
   const _AskCard({
     super.key,
     required this.questions,
+    this.apiBase = '',
     required this.onAnswer,
     required this.onSkip,
     required this.onFocusAnswer,
@@ -1902,9 +1944,18 @@ class _AskCardState extends State<_AskCard> {
               ),
               const SizedBox(height: 2),
             ],
-            Text(
-              widget.questions[i].question,
-              style: theme.textTheme.bodyMedium,
+            // 裁图只在**展开**时画：一卡 5 题时各贴一张图会把气泡撑成一整屏
+            // （用户 2026-11-04 的现场）。等回答时看底部那张当前题的图就够；
+            // 答完之后卡片默认展开，历史里再连着答案一起看。
+            _AskQuestionHead(
+              question: widget.questions[i].question,
+              imageUrl: _expanded && widget.questions[i].imageUrl != null
+                  ? absoluteBackendUrl(
+                      widget.apiBase,
+                      widget.questions[i].imageUrl!,
+                    )
+                  : null,
+              imageKey: Key('ask-question-image-$i'),
             ),
             if (widget.questions[i].answered) ...[
               const SizedBox(height: 2),
@@ -1949,6 +2000,9 @@ class _AskCardState extends State<_AskCard> {
               _AskOptionRow(
                 index: i,
                 label: q.options[i],
+                imageUrl: q.optionImageAt(i) == null
+                    ? null
+                    : absoluteBackendUrl(widget.apiBase, q.optionImageAt(i)!),
                 selected: q.optionIndex == i,
                 enabled: !_busy && !answered,
                 onTap: () => _send(optionIndex: i),
@@ -2001,6 +2055,9 @@ class _AskOptionRow extends StatelessWidget {
   final int index;
   final String label;
   final String? hint;
+
+  /// 选项示意图（示例款式 / 从设定图裁的局部）；没有就是纯文字。
+  final String? imageUrl;
   final bool selected;
   final bool enabled;
   final Widget? trailing;
@@ -2011,6 +2068,7 @@ class _AskOptionRow extends StatelessWidget {
     required this.index,
     required this.label,
     this.hint,
+    this.imageUrl,
     this.selected = false,
     this.enabled = true,
     this.trailing,
@@ -2063,22 +2121,209 @@ class _AskOptionRow extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Column(
+                  child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(label, style: theme.textTheme.bodyMedium),
-                      if (hint != null)
-                        Text(
-                          hint!,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: theme.colorScheme.outline,
-                          ),
+                      // 图片在**选项文字前面**（用户 2026-11-04 的口径：
+                      // "如果有能力找到这种发型的示例图要贴到选项描述开头中"）。
+                      if (imageUrl != null) ...[
+                        _AskOptionThumb(
+                          key: Key('ask-option-image-$index'),
+                          url: imageUrl!,
                         ),
+                        const SizedBox(width: 8),
+                      ],
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(label, style: theme.textTheme.bodyMedium),
+                            if (hint != null)
+                              Text(
+                                hint!,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.outline,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
                 if (trailing != null) ...[const SizedBox(width: 6), trailing!],
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 提问卡的**题干 + 配图**：问题在左（占大部宽度）、部位截图在右。
+///
+/// 用户 2026-11-04 的现场：图铺满整行时上下都是黑边，鼠标一停还弹出「点击放大」
+/// 把脸挡住；改成"左侧问题、右侧截图"之后，图只占一条窄栏，问题仍能一眼读完。
+/// 窄窗口（< 560）放不下两栏，退回上下排。
+class _AskQuestionHead extends StatelessWidget {
+  final String question;
+
+  /// 已补好 baseUrl 的图片地址；null = 这一题没有配图。
+  final String? imageUrl;
+
+  /// 矮窗口里再收一档（配图 110 高）。
+  final bool compact;
+
+  /// 配图那一块的 key（用例要能精确找到"当前题的图"）。
+  final Key? imageKey;
+
+  const _AskQuestionHead({
+    required this.question,
+    required this.imageUrl,
+    this.compact = false,
+    this.imageKey,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final text = Text(question, style: theme.textTheme.bodyMedium);
+    final imageUrl = this.imageUrl;
+    if (imageUrl == null) return text;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 560) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              text,
+              const SizedBox(height: 5),
+              _AskQuestionImage(
+                key: imageKey,
+                url: imageUrl,
+                height: compact ? 120 : 160,
+              ),
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: text),
+            const SizedBox(width: 14),
+            _AskQuestionImage(
+              key: imageKey,
+              url: imageUrl,
+              width: compact ? 150 : 220,
+              height: compact ? 110 : 150,
+            ),          ],
+        );
+      },
+    );
+  }
+}
+
+/// 提问卡里的**题目配图**：AI 从设定图上裁下来的那一块。
+///
+/// 点一下走应用内大图（与聊天里的附件同一条路）。**刻意不加 Tooltip**：
+/// 鼠标停在图上时那句「点击放大」会正好盖住要看的细节（用户 2026-11-04）；
+/// 只在右下角放一个很小的放大镜图标。
+class _AskQuestionImage extends StatelessWidget {
+  final String url;
+
+  /// 展示宽度 / 高度。宽度 `double.infinity` = 占满一行（窄屏上下排时用）。
+  final double width;
+  final double height;
+
+  const _AskQuestionImage({
+    super.key,
+    required this.url,
+    this.width = double.infinity,
+    this.height = 180,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      borderRadius: BorderRadius.circular(8),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => showImagePreview(context, url: url),
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.network(
+                url,
+                fit: BoxFit.contain,
+                // 裁图是局部放大图：按 960 解码足够看清楚细节，又不至于把原图整张拉进内存
+                cacheWidth: 960,
+                filterQuality: FilterQuality.medium,
+                errorBuilder: (_, _, _) => Center(
+                  child: Icon(
+                    Icons.broken_image_outlined,
+                    size: 22,
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+              ),
+              Positioned(
+                right: 5,
+                bottom: 5,
+                child: IgnorePointer(
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: const Icon(
+                      Icons.zoom_in,
+                      size: 14,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 选项前面的小示意图（示例款式 / 局部裁图）。
+class _AskOptionThumb extends StatelessWidget {
+  final String url;
+
+  const _AskOptionThumb({super.key, required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: SizedBox(
+        width: 56,
+        height: 56,
+        child: Image.network(
+          url,
+          fit: BoxFit.cover,
+          cacheWidth: 168,
+          filterQuality: FilterQuality.low,
+          errorBuilder: (_, _, _) => Container(
+            color: theme.colorScheme.surfaceContainerHighest,
+            alignment: Alignment.center,
+            child: Icon(
+              Icons.image_not_supported_outlined,
+              size: 18,
+              color: theme.colorScheme.outline,
             ),
           ),
         ),
@@ -2302,6 +2547,9 @@ class _AskComposerState extends State<_AskComposer> {
     final q = qs[page];
     final total = qs.length;
     final paged = total > 1;
+    // 矮窗口（< 700）里把配图与选项区一起收一收：180 的图 + 240 的选项 +
+    // 输入行 + 底行会把 500 高的窗口撑破（Flutter 会直接画黄黑条纹）。
+    final compact = MediaQuery.sizeOf(context).height < 700;
     final answered = q.answered;
     final picked = _multi[q.questionId] ?? const <int>{};
     final single = _single[q.questionId];
@@ -2379,7 +2627,14 @@ class _AskComposerState extends State<_AskComposer> {
                   ],
                 ),
                 const SizedBox(height: 6),
-                Text(q.question, style: theme.textTheme.bodyMedium),
+                _AskQuestionHead(
+                  question: q.question,
+                  imageUrl: q.imageUrl == null
+                      ? null
+                      : absoluteBackendUrl(store.baseUrl, q.imageUrl!),
+                  compact: compact,
+                  imageKey: const Key('ask-composer-question-image'),
+                ),
                 if (q.multiSelect)
                   Text(
                     '可多选${q.options.isEmpty ? '' : '（选完按「${paged ? (_isLast ? '提交' : '下一题') : '提交'}」）'}',
@@ -2402,7 +2657,7 @@ class _AskComposerState extends State<_AskComposer> {
                 // 选项多 / 问题长时**只有选项那段**内部滚动（240 上限），
                 // "自己输入答案"排在它下面、永远看得见
                 ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 240),
+                  constraints: BoxConstraints(maxHeight: compact ? 130 : 240),
                   child: SingleChildScrollView(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2415,6 +2670,12 @@ class _AskComposerState extends State<_AskComposer> {
                             key: Key('ask-composer-option-$i'),
                             index: i,
                             label: q.options[i],
+                            imageUrl: q.optionImageAt(i) == null
+                                ? null
+                                : absoluteBackendUrl(
+                                    store.baseUrl,
+                                    q.optionImageAt(i)!,
+                                  ),
                             // 多选题画复选框（勾了哪几个），单选画单选高亮
                             selected: q.multiSelect
                                 ? picked.contains(i)
@@ -4096,6 +4357,7 @@ class _ComposerState extends State<_Composer> {
           if (v == 'attach') _pickFiles();
           if (v == 'layout') _openLayoutCanvas();
           if (v == 'cards') _openCards();
+          if (v == 'sheet') _startCardFromSheet();
         },
         options: [
           const MenuOption(
@@ -4112,6 +4374,13 @@ class _ComposerState extends State<_Composer> {
               icon: Icons.alternate_email,
               label: '角色卡 / 画风卡…',
               dividerBefore: true,
+            ),
+          // 从设定图建卡（2026-11-04）：选图 → 新会话 → AI 逐部位带图来问。
+          if (!widget.store.isLocal)
+            const MenuOption(
+              value: 'sheet',
+              icon: Icons.badge_outlined,
+              label: '从设定图生成角色卡…',
             ),
           const MenuOption(
             value: 'layout',
@@ -4451,6 +4720,37 @@ class _ComposerState extends State<_Composer> {
       widget.store.noteAttachmentsUnreadable(missing);
     }
     await widget.store.attachFiles(picked);
+  }
+
+  /// 「从设定图生成角色卡」：选一张设定图 → 开一条新会话 → 附上它并直接发问。
+  ///
+  /// 用户 2026-11-04 的新流程：不是让 AI 看一眼就写卡，而是**自上而下把拿不准的部位
+  /// 逐个问清楚**（题目带裁图、选项带候选 / 示例图）。这里只负责把图送进去并起个头，
+  /// 具体怎么问由系统提示第 26 条约束。
+  ///
+  /// 只在桌面后端上出现入口：手机本地 harness 没有卡片库，也没有后端的裁图能力。
+  Future<void> _startCardFromSheet() async {
+    if (widget.store.isLocal) return;
+    final files = await FilePicker.pickFiles(
+      type: FileType.image,
+      dialogTitle: '选择角色设定图',
+    );
+    if (files.isEmpty) return;
+    final file = files.first;
+    final path = file.path;
+    if (path == null || path.isEmpty) {
+      widget.store.noteAttachmentsUnreadable([file.name]);
+      return;
+    }
+    // 设定图不该接在上一段聊天后面：当前会话非空就新开一条
+    if (widget.store.messages.isNotEmpty) {
+      await widget.store.newConversation();
+    }
+    await widget.store.attachFiles([(name: file.name, path: path)]);
+    if (!mounted) return;
+    // 上传失败时 store 已经写过 error / notice；这里不再发一条"没有图"的消息
+    if (widget.store.attachments.isEmpty) return;
+    await widget.onSubmit(_characterSheetPrompt);
   }
 
   /// `Ctrl+V`：剪贴板里是**文件**或**一张图**就吃成附件，都不是就把这次粘贴还回去。
@@ -5354,14 +5654,12 @@ class _AttachmentTile extends StatelessWidget {
     final theme = Theme.of(context);
     final blocked = blockers.isNotEmpty;
     final borderColor = blocked ? theme.colorScheme.error : theme.dividerColor;
-    // 输入区托盘有 modality，直接信它（见 [canPreviewInline]）
-    final preview = canPreviewInline(attachment.modality, attachment.name);
 
     return Tooltip(
       message: blocked
           ? '这张附件发不出去：\n${blockers.map((b) => '· $b').join('\n')}'
           : '${attachment.name} · ${attachment.sizeLabel}${attachment.isVideo ? '（已取预览帧）' : ''}'
-                '\n${preview ? '点击预览' : '点击用系统程序打开'}',
+                '\n点击在应用内预览（弹窗）',
       child: SizedBox(
         width: _size,
         child: Column(
@@ -5377,9 +5675,13 @@ class _AttachmentTile extends StatelessWidget {
                     child: InkWell(
                       onTap: fileUrl == null
                           ? null
-                          : () => preview
-                                ? showImagePreview(context, url: fileUrl!)
-                                : _openAttachment(fileUrl!),
+                          : () => showAttachmentPreview(
+                              context,
+                              url: fileUrl!,
+                              name: attachment.name,
+                              modality: attachment.modality,
+                              headers: attachmentPreviewHeaders(),
+                            ),
                       child: Container(
                         clipBehavior: Clip.antiAlias,
                         decoration: BoxDecoration(
@@ -5505,16 +5807,25 @@ class _MessageAttachment extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // 历史消息没有 modality，只能按名字判（见 [canPreviewInline]）
-    final preview = canPreviewInline(null, name);
+    // 历史消息里的附件块**只有 attachmentId**（没有原始文件名 / modality），
+    // 所以 `name` 经常就是一串 UUID。别把它当扩展名判据（那会把图片判成"其它"，
+    // 用户点一下又被丢去浏览器 —— 2026-11-04 的现场）。
+    // 有缩略图 = 后端认得出这是图片，直接按图片预览。
+    final isImage = thumbUrl != null;
+    final label = attachmentDisplayName(name, hasPreview: isImage);
     return Tooltip(
-      message: preview ? '$name\n点击预览' : '$name\n点击用系统程序打开',
+      message: '$label\n点击在应用内预览（弹窗）',
       child: InkWell(
         onTap: fileUrl == null
             ? null
-            : () => preview
-                  ? showImagePreview(context, url: fileUrl!)
-                  : _openAttachment(fileUrl!),
+            : () => showAttachmentPreview(
+                context,
+                url: fileUrl!,
+                name: name,
+                // 缩略图存在就是图片：别让"没有扩展名"把它判成未知类型
+                modality: isImage ? 'image' : null,
+                headers: attachmentPreviewHeaders(),
+              ),
         child: Container(
           width: 96,
           height: 96,
@@ -5561,15 +5872,6 @@ IconData attachmentIcon(String? modality) => switch (modality) {
   'text' => Icons.article_outlined,
   _ => Icons.attach_file,
 };
-
-/// 用系统默认程序打开附件原件（Windows 上落到 ShellExecute）。
-Future<void> _openAttachment(String url) async {
-  try {
-    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-  } catch (_) {
-    // 打不开就什么都不做：URL 本身在 tooltip 里能看到
-  }
-}
 
 class _Badge extends StatelessWidget {
   final String text;

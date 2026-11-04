@@ -303,6 +303,9 @@ CREATE TABLE IF NOT EXISTS ai_attachments (
   height        INTEGER NULL,
   sha256        TEXT    NULL,
   status        TEXT    NOT NULL DEFAULT 'ready',
+  -- 这张图怎么来的：upload（用户上传）/ crop（设定图裁片）/ search（网络参考图）
+  -- 只用于缓存统计与 GC；**不进 DTO**（界面的行为不依赖它）。
+  origin        TEXT    NOT NULL DEFAULT 'upload',
   metadata_json TEXT    NULL,
   created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   PRIMARY KEY (id)
@@ -384,6 +387,10 @@ CREATE TABLE IF NOT EXISTS ai_questions (
   total           INTEGER NOT NULL DEFAULT 1,
   question        TEXT    NOT NULL,
   options_json    TEXT    NULL,
+  -- 选项示意图（与 options 一一对应；空串 = 这一项没有图）
+  option_images_json TEXT NULL,
+  -- 题目配图（设定图上裁下来的那一块；相对后端根的附件地址）
+  image_url       TEXT    NULL,
   allow_free_text INTEGER NOT NULL DEFAULT 1 CHECK (allow_free_text IN (0,1)),
   multi_select    INTEGER NOT NULL DEFAULT 0 CHECK (multi_select IN (0,1)),
   header          TEXT    NULL,
@@ -878,4 +885,8 @@ BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', OLD.id, 'dele
 --   ① 新库的两张卡表不再建 `tag_prompt`（老库那一列留在原地，再没人读）；
 --   ② 升级到 11 的那一次由 `infra::db::migrate_card_tags_to_prompt` 把老的 tag 版
 --      **转成自然语言**灌进 `prompt` —— 只填空卡，已有自然语言版的卡一个字都不动。
-PRAGMA user_version = 11;
+-- 2026-11-04 由 11 提到 12：**提问卡带图** —— `ai_questions` 加 `image_url` 与
+-- `option_images_json`（题目配图 / 选项示意图），供"按设定图逐部位确认"那条流程用。
+-- 2026-11-04 由 12 提到 13：**附件来源** —— `ai_attachments` 加 `origin`
+-- （upload / crop / search），供缓存统计与"只清理没有被任何消息 / 提问引用的图"。
+PRAGMA user_version = 13;

@@ -89,6 +89,28 @@ struct RelatedTag {
     frequency: f64,
 }
 
+/// 一条 danbooru 帖子（只取"当参考图"需要的字段）。
+#[derive(Debug, Clone)]
+pub struct Post {
+    pub id: i64,
+    pub preview_url: Option<String>,
+    /// 采样图（一般 1000~1500px，适合当参考；拿不到才退回原图 / 预览图）。
+    pub large_url: Option<String>,
+    pub file_url: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    /// `g` / `s` / `q` / `e`
+    pub rating: String,
+    pub score: i64,
+    pub tag_string: String,
+}
+
+/// 参考图一次最多回几张（再多对"让用户挑一个"没有帮助，只会白下几百 MB）。
+pub const MAX_REFERENCE_IMAGES: i64 = 6;
+
+/// 单张参考图的下载上限：超过就退回更小的采样图 / 预览图，宁可糊一点也别把盘吃满。
+pub const MAX_REFERENCE_BYTES: u64 = 8 * 1024 * 1024;
+
 /// danbooru 的 tag 分类码 → 人话。
 ///
 /// 0 普通 / 1 画师 / 3 作品（版权）/ 4 角色 / 5 meta。**2 目前没有定义**，
@@ -267,6 +289,97 @@ impl DanbooruClient {
             meta: Value::Object(meta),
         })
     }
+
+    /// 按 tag 找**参考图**（`posts.json`）：只取当参考图需要的字段。
+    ///
+    /// `tags` 必须是**已经编码好的**（空格用 `+` 分隔），调用方负责拼 `rating:`；
+    /// 这里不再二次编码 —— 否则 `+` 会被编成 `%2B`，变成"一个不存在的 tag"。
+    pub async fn fetch_posts(&self, tags: &str, limit: i64) -> Result<Vec<Post>, ToolFailure> {
+        let lim = limit.clamp(1, MAX_REFERENCE_IMAGES);
+        let fields = encode(
+            "id,preview_file_url,large_file_url,file_url,image_width,image_height,rating,score,\
+             tag_string_general,tag_string_character",
+        );
+        let url = format!(
+            "{}/posts.json?tags={tags}&limit={lim}&only={fields}",
+            self.base
+        );
+        let Some(body) = self.get_json(&url, true).await? else { return Ok(Vec::new()) };
+        let Some(items) = body.as_array() else { return Ok(Vec::new()) };
+        Ok(items.iter().filter_map(post_from_value).collect())
+    }
+
+    /// 下载一张参考图（走与 `posts.json` **同一条**出网路径：公网代理、本机直连）。
+    ///
+    /// 三道闸：必须是 http(s)、Content-Type 必须是图片、超过 [`MAX_REFERENCE_BYTES`] 直接拒绝。
+    pub async fn fetch_binary(&self, url: &str) -> Result<(Vec<u8>, String), ToolFailure> {
+        let parsed = reqwest::Url::parse(url)
+            .map_err(|_| ToolFailure::new("DANBOORU_FAILED", "参考图地址不合法"))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(ToolFailure::new("DANBOORU_FAILED", "参考图地址必须是 http(s)"));
+        }
+        let host = parsed.host_str().unwrap_or("cdn.donmai.us").to_string();
+        let route = crate::infra::outbound::route(&host).describe();
+        let client = self.http_client(&host)?;
+        let response = client
+            .get(parsed)
+            .header("User-Agent", &self.user_agent)
+            .send()
+            .await
+            .map_err(|e| {
+                ToolFailure::new(
+                    "DANBOORU_FAILED",
+                    format!("参考图下载失败（{host}；路径「{route}」）：{e}"),
+                )
+            })?;
+        let status = response.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(ToolFailure::new(
+                "DANBOORU_FAILED",
+                format!("参考图下载失败（HTTP {status}）"),
+            ));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if !content_type.starts_with("image/") {
+            return Err(ToolFailure::new(
+                "DANBOORU_FAILED",
+                format!("参考图地址返回的不是图片（Content-Type: {content_type}）"),
+            ));
+        }
+        if let Some(len) = response.content_length() {
+            if len > MAX_REFERENCE_BYTES {
+                return Err(ToolFailure::new(
+                    "DANBOORU_FAILED",
+                    format!(
+                        "参考图太大（{:.1} MB > {} MB）",
+                        len as f64 / 1024.0 / 1024.0,
+                        MAX_REFERENCE_BYTES / 1024 / 1024
+                    ),
+                ));
+            }
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| ToolFailure::new("DANBOORU_FAILED", format!("参考图读取失败：{e}")))?;
+        if bytes.len() as u64 > MAX_REFERENCE_BYTES {
+            return Err(ToolFailure::new(
+                "DANBOORU_FAILED",
+                format!("参考图太大（{} 字节）", bytes.len()),
+            ));
+        }
+        Ok((bytes.to_vec(), content_type))
+    }
+
 
     // -----------------------------------------------------------------------
     //  正文（给模型看的那一份）
@@ -585,8 +698,37 @@ fn encode(value: &str) -> String {
     out
 }
 
-fn tags_json(tags: &[Tag]) -> Value {
-    Value::Array(
+/// 一条 `posts.json` 数组项 → [`Post`]（缺 id 的脏项直接丢掉）。
+fn post_from_value(item: &Value) -> Option<Post> {
+    let id = item
+        .get("id")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))?;
+    let text = |key: &str| {
+        item.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let tags = [text("tag_string_character"), text("tag_string_general")]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(Post {
+        id,
+        preview_url: text("preview_file_url"),
+        large_url: text("large_file_url"),
+        file_url: text("file_url"),
+        width: item.get("image_width").and_then(Value::as_i64),
+        height: item.get("image_height").and_then(Value::as_i64),
+        rating: text("rating").unwrap_or_default(),
+        score: item.get("score").and_then(Value::as_i64).unwrap_or(0),
+        tag_string: tags,
+    })
+}
+
+fn tags_json(tags: &[Tag]) -> Value {    Value::Array(
         tags.iter()
             .map(|tag| {
                 let mut out = Map::new();
