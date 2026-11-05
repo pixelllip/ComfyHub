@@ -4382,8 +4382,10 @@ class _ComposerState extends State<_Composer> {
                     child: FilterChipRow(
                       key: const Key('ai-composer-actions'),
                       alignment: WrapAlignment.start,
-                      spacing: 4,
-                      runSpacing: 4,
+                      // 四枚按钮的间距**只由这一个值决定**（各按钮自己不再带
+                      // 左右 padding，见 `_PermissionPicker` 与 "+" 的注释）。
+                      spacing: 6,
+                      runSpacing: 6,
                       children: _composerActions(density),
                     ),
                   ),
@@ -4477,13 +4479,26 @@ class _ComposerState extends State<_Composer> {
             dividerBefore: true,
           ),
         ],
-        button: (context, controller, isOpen) => IconButton(
-          tooltip: '添加附件 / 插入卡片（@）',
-          onPressed: () => controller.isOpen ? controller.close() : controller.open(),
-          iconSize: 22,
-          padding: const EdgeInsets.all(10),
-          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-          icon: const Icon(Icons.add),
+        // 与右边三枚一样是 44×44 的描边方块：图标按钮光秃秃地待在一排
+        // 描边按钮最左边时，它自带的 10px 内边距会让"+"离下一枚明显更远
+        // （用户 2026-11-05："sizedbox 不统一"）。统一外形之后，间距只由
+        // `FilterChipRow.spacing` 一个值决定。
+        button: (context, controller, isOpen) => Tooltip(
+          message: '添加附件 / 插入卡片（@）',
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () =>
+                controller.isOpen ? controller.close() : controller.open(),
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                border: Border.all(color: Theme.of(context).dividerColor),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.add, size: 22),
+            ),
+          ),
         ),
       ),
       // 权限档（用户建议 ⑤）：就在附件按钮和模型选择之间
@@ -5117,10 +5132,12 @@ class _PermissionPicker extends StatelessWidget {
     // ⚠ 短标签**必须仍然能区分两档**（"自动" vs "询问"）——
     // 退回纯图标之后，用户点不准又看不出现在是哪一档，那正是用户抱怨的那件事。
     final shortText = full ? '自动' : AiToolPolicy.modeAskLabel;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: AppMenuButton<String>(
-        tooltip: full
+    // ⚠ 不要在这里再包一层 `Padding(horizontal: 4)`：那会让"附件 → 权限"
+    // 的间距变成 4（行间距）+4（这里）+4（权限自己）＝ 12，而"模型 → 思考"
+    // 只有 4。整排的间距只允许由 `FilterChipRow.spacing` 决定（2026-11-05
+    // 用户："sizedbox 不统一"）。
+    return AppMenuButton<String>(
+      tooltip: full
             ? '当前是$text，AI 调用工具不会等你批准。可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。'
             : '当前是$text，写盘 / 提交任务这类改动操作会先弹批准。点一下切到「${AiToolPolicy.modeFullLabel}」。',
         onSelected: store.setPermissionMode,
@@ -5191,7 +5208,6 @@ class _PermissionPicker extends StatelessWidget {
             ),
           ),
         ),
-      ),
     );
   }
 }

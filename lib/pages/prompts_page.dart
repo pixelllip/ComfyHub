@@ -9,6 +9,7 @@ import '../state/library_store.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common.dart';
 import '../widgets/paged_swipe.dart';
+import '../widgets/scroll_linked_title.dart';
 import '../widgets/tag_editor.dart';
 import 'cards_page.dart';
 import 'layout_canvas_page.dart';
@@ -92,12 +93,16 @@ class _PromptsPageState extends State<PromptsPage>
   bool _selectionMode = false;
   bool _busy = false;
 
+  /// 大标题 → AppBar 标题的联动进度（见 [ScrollTitleProgress]）。
+  final _titleProgress = ScrollTitleProgress();
+
   PresetSection get _section => PresetSection.values[_sectionIndex];
 
   @override
   void dispose() {
     _searchController.dispose();
     _tabs.dispose();
+    _titleProgress.dispose();
     super.dispose();
   }
 
@@ -138,6 +143,8 @@ class _PromptsPageState extends State<PromptsPage>
     final store = context.watch<LibraryStore>();
     final section = _section;
     final fab = _buildFab();
+    // 电脑端标题始终在 AppBar；手机端保留滚动联动（用户 2026-11-05）。
+    final phone = useCollapsingPageTitle;
 
     return Scaffold(
       appBar: AppBar(
@@ -148,7 +155,12 @@ class _PromptsPageState extends State<PromptsPage>
                 onPressed: _exitSelection,
               )
             : null,
-        title: Text(_selectionMode ? '已选 ${_selected.length} 项' : '预设库'),
+        // 电脑端标题始终在 AppBar；手机端大标题滚出视野后才淡入。
+        title: _selectionMode
+            ? Text('已选 ${_selected.length} 项')
+            : phone
+            ? FadingAppBarTitle(title: '预设库', progress: _titleProgress)
+            : const Text('预设库'),
         actions: _selectionMode
             ? [
                 IconButton(
@@ -215,6 +227,8 @@ class _PromptsPageState extends State<PromptsPage>
           : null,
       body: Column(
         children: [
+          if (!_selectionMode && phone)
+            CollapsingPageTitle(title: '预设库', progress: _titleProgress),
           // 详情（列表）**上面**的一条导航：常规预设 / 角色卡 / 画风卡同级
           Material(
             color: Theme.of(context).colorScheme.surface,
@@ -241,20 +255,23 @@ class _PromptsPageState extends State<PromptsPage>
           ),
           // 三份内容**常驻**（访问过才建）：切回来时搜索词 / 滚动位置都还在
           Expanded(
-            child: IndexedStack(
-              index: _sectionIndex,
-              sizing: StackFit.expand,
-              children: [
-                _promptsTab(context, store),
-                for (final tab in PresetSection.values.skip(1))
-                  _visitedSections.contains(tab.index)
-                      ? CardsView(
-                          key: _cardViews[tab.cardKind],
-                          kind: tab.cardKind!,
-                          api: widget.cardsApi,
-                        )
-                      : const SizedBox.shrink(),
-              ],
+            child: ScrollTitleListener(
+              progress: _titleProgress,
+              child: IndexedStack(
+                index: _sectionIndex,
+                sizing: StackFit.expand,
+                children: [
+                  _promptsTab(context, store),
+                  for (final tab in PresetSection.values.skip(1))
+                    _visitedSections.contains(tab.index)
+                        ? CardsView(
+                            key: _cardViews[tab.cardKind],
+                            kind: tab.cardKind!,
+                            api: widget.cardsApi,
+                          )
+                        : const SizedBox.shrink(),
+                ],
+              ),
             ),
           ),
         ],

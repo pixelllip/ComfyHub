@@ -99,18 +99,26 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
   }
 
   /// 所有改动都走这一条：PUT 只发要改的字段，返回生效后的完整策略。
-  Future<void> _patch(Map<String, dynamic> patch, String okMessage) async {
+  ///
+  /// 返回值给子页（逐工具权限）用 —— 它在自己的路由里，父页 `setState` 不会
+  /// 重建它，所以必须拿到"生效后的 tools + policy"自己更新。
+  Future<(List<AiToolInfo>, AiToolPolicy)?> _patch(
+    Map<String, dynamic> patch,
+    String okMessage,
+  ) async {
     setState(() => _saving = true);
     try {
       final next = await _api.updateToolPolicy(patch);
-      if (!mounted) return;
+      if (!mounted) return null;
       setState(() => _policy = next);
       _snack(okMessage);
       // 生效权限可能被后端复算（例如 deny 的工具），重新拉一遍工具清单
       final tools = await _api.listTools();
       if (mounted) setState(() => _tools = tools);
+      return (tools, next);
     } catch (e) {
       if (mounted) _snack('保存失败，$e', error: true);
+      return null;
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -303,7 +311,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                           AdaptiveSection(_autoReadCard(), estimatedHeight: 160),
                         AdaptiveSection(_webSearchCard(), estimatedHeight: 320),
                         AdaptiveSection(_attachmentCacheCard(), estimatedHeight: 240),
-                        AdaptiveSection(_toolsCard(), estimatedHeight: 560),
+                        AdaptiveSection(_toolsEntryCard(), estimatedHeight: 160),
                       ],
                     ),
                   ),
@@ -660,110 +668,36 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
     }
   }
 
-  Widget _toolsCard() {
-    final theme = Theme.of(context);
+  /// 「逐工具权限」的入口。
+  ///
+  /// 这一块**不再摊在本页**：工具有一百多个，每个还带两三行说明，展开后整页
+  /// 会变成一条几百行的长卷（用户 2026-11-05："这种预测会非常长的卡片，应该
+  /// 放进子界面"）。这里只留一行入口，点进去是独立的一页（带搜索）。
+  Widget _toolsEntryCard() {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('逐工具权限', style: theme.textTheme.titleSmall),
-            const SizedBox(height: 4),
-            Text(
-              '共 ${_tools.length} 个工具。改动立刻生效（后端每次调用现算，不用重启）。',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
-            ),
-            const SizedBox(height: 8),
-            if (_tools.isEmpty)
-              Text('后端没有返回工具清单', style: theme.textTheme.bodySmall)
-            else
-              // 工具清单固定十来条，一次建完没有卡顿问题
-              for (final tool in _tools)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        switch (tool.category) {
-                          'skill' => Icons.auto_awesome_outlined,
-                          'files' => Icons.folder_outlined,
-                          'memory' => Icons.push_pin_outlined,
-                          // 2D 布局模板（2026-11-03）
-                          'layout' => Icons.dashboard_customize_outlined,
-                          // 联网搜索（2026-09-20）：地球仪，一眼区分"这个工具出网"
-                          'web' => Icons.travel_explore_outlined,
-                          // 资料库（O7/O8，2026-09-25）：提示词库 / 角色卡
-                          'library' => Icons.menu_book_outlined,
-                          _ => Icons.dns_outlined,
-                        },
-                        size: 16,
-                        color: tool.isDenied
-                            ? theme.colorScheme.error
-                            : theme.colorScheme.outline,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Flexible(
-                                  child: Text(tool.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: theme.textTheme.labelMedium),
-                                ),
-                                if (tool.mutating) ...[
-                                  const SizedBox(width: 6),
-                                  Tooltip(
-                                    message: '这个工具会写盘或改数据',
-                                    child: Icon(Icons.edit_outlined,
-                                        size: 13, color: theme.colorScheme.error),
-                                  ),
-                                ],
-                                if (tool.overridden) ...[
-                                  const SizedBox(width: 6),
-                                  const _Tag('已改'),
-                                ],
-                              ],
-                            ),
-                            Text(
-                              tool.description,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.labelSmall
-                                  ?.copyWith(color: theme.colorScheme.outline),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      DropdownButton<String>(
-                        value: AiToolPolicy.accessOptions.containsKey(tool.access)
-                            ? tool.access
-                            : 'ask',
-                        isDense: true,
-                        onChanged: _saving
-                            ? null
-                            : (v) {
-                                if (v == null) return;
-                                _patch({
-                                  'overrides': {..._policy.overrides, tool.name: v},
-                                }, '${tool.name} 已设为「${AiToolPolicy.accessLabel(v)}」');
-                              },
-                        items: [
-                          for (final entry in AiToolPolicy.accessOptions.entries)
-                            DropdownMenuItem(value: entry.key, child: Text(entry.value)),
-                        ],
-                      ),
-                    ],
+      clipBehavior: Clip.antiAlias,
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: const Icon(Icons.tune),
+        title: const Text('逐工具权限'),
+        subtitle: Text(
+          _tools.isEmpty
+              ? '后端还没有返回工具清单。'
+              : '共 ${_tools.length} 个工具，每个都能单独设成允许、询问或拒绝。',
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: _tools.isEmpty
+            ? null
+            : () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => _ToolPermissionsPage(
+                      tools: _tools,
+                      policy: _policy,
+                      onPatch: _patch,
+                    ),
                   ),
                 ),
-          ],
-        ),
       ),
     );
   }
@@ -797,6 +731,203 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
         },
         '已移除读目录 $root',
       );
+}
+
+/// 「逐工具权限」子页。
+///
+/// 工具清单可能上百条、每条两三行说明 —— 放在 AI 工具权限页里会把那一页
+/// 拉成几百行的长卷，所以单独一页，并给一个搜索框。
+class _ToolPermissionsPage extends StatefulWidget {
+  final List<AiToolInfo> tools;
+  final AiToolPolicy policy;
+
+  /// 保存一档权限；返回值是生效后的 (tools, policy)，父页的 `setState` 到不了
+  /// 这条路由，得靠它自己更新。
+  final Future<(List<AiToolInfo>, AiToolPolicy)?> Function(
+    Map<String, dynamic> patch,
+    String message,
+  ) onPatch;
+
+  const _ToolPermissionsPage({
+    required this.tools,
+    required this.policy,
+    required this.onPatch,
+  });
+
+  @override
+  State<_ToolPermissionsPage> createState() => _ToolPermissionsPageState();
+}
+
+class _ToolPermissionsPageState extends State<_ToolPermissionsPage> {
+  late List<AiToolInfo> _tools = widget.tools;
+  late AiToolPolicy _policy = widget.policy;
+  bool _saving = false;
+  final _query = TextEditingController();
+
+  @override
+  void dispose() {
+    _query.dispose();
+    super.dispose();
+  }
+
+  List<AiToolInfo> get _shown {
+    final q = _query.text.trim().toLowerCase();
+    if (q.isEmpty) return _tools;
+    return [
+      for (final t in _tools)
+        if (t.name.toLowerCase().contains(q) ||
+            t.description.toLowerCase().contains(q))
+          t,
+    ];
+  }
+
+  Future<void> _setAccess(AiToolInfo tool, String value) async {
+    setState(() => _saving = true);
+    final result = await widget.onPatch(
+      {
+        'overrides': {..._policy.overrides, tool.name: value},
+      },
+      '${tool.name} 已设为「${AiToolPolicy.accessLabel(value)}」',
+    );
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      if (result != null) {
+        _tools = result.$1;
+        _policy = result.$2;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final shown = _shown;
+    return Scaffold(
+      body: Column(
+        children: [
+          const SettingsPageHeader(title: '逐工具权限'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              controller: _query,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                hintText: '按工具名或说明筛选',
+                prefixIcon: Icon(Icons.search),
+                isDense: true,
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '共 ${_tools.length} 个工具。改动立刻生效，后端每次调用现算，不用重启。',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ),
+          ),
+          Expanded(
+            child: shown.isEmpty
+                ? Center(
+                    child: Text('没有匹配的工具',
+                        style: theme.textTheme.bodyMedium),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                    itemCount: shown.length,
+                    // 工具之间给一个小间距，最后一项后面不留空
+                    // （用户 2026-11-05："考虑在每项之间给定较小的 sizedbox"）。
+                    separatorBuilder: (_, _) => const SizedBox(height: 6),
+                    itemBuilder: (context, i) => _row(theme, shown[i]),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _row(ThemeData theme, AiToolInfo tool) {
+    return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            switch (tool.category) {
+              'skill' => Icons.auto_awesome_outlined,
+              'files' => Icons.folder_outlined,
+              'memory' => Icons.push_pin_outlined,
+              'layout' => Icons.dashboard_customize_outlined,
+              'web' => Icons.travel_explore_outlined,
+              'library' => Icons.menu_book_outlined,
+              _ => Icons.dns_outlined,
+            },
+            size: 16,
+            color: tool.isDenied
+                ? theme.colorScheme.error
+                : theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        tool.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelMedium,
+                      ),
+                    ),
+                    if (tool.mutating) ...[
+                      const SizedBox(width: 6),
+                      Tooltip(
+                        message: '这个工具会写盘或改数据',
+                        child: Icon(Icons.edit_outlined,
+                            size: 13, color: theme.colorScheme.error),
+                      ),
+                    ],
+                    if (tool.overridden) ...[
+                      const SizedBox(width: 6),
+                      const _Tag('已改'),
+                    ],
+                  ],
+                ),
+                Text(
+                  tool.description,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          DropdownButton<String>(
+            value: AiToolPolicy.accessOptions.containsKey(tool.access)
+                ? tool.access
+                : 'ask',
+            isDense: true,
+            onChanged: _saving
+                ? null
+                : (v) {
+                    if (v == null) return;
+                    _setAccess(tool, v);
+                  },
+            items: [
+              for (final entry in AiToolPolicy.accessOptions.entries)
+                DropdownMenuItem(value: entry.key, child: Text(entry.value)),
+            ],
+          ),
+        ],
+    );
+  }
 }
 
 class _Tag extends StatelessWidget {

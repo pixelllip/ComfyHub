@@ -6,8 +6,16 @@ import '../models/models.dart';
 import '../state/library_store.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common.dart';
+import '../widgets/scroll_linked_title.dart';
 import 'prompts_page.dart' show confirmDialog;
 import 'tag_results_page.dart';
+
+/// 标签卡的最小宽度：**360 宽的窗口下的一列**（360 减去左右各 16 的列表内边距）。
+///
+/// 用户 2026-11-05 定的底线：标签卡再窄就放不下 16 个英文字符的标签名
+/// （左边有颜色点，右边有计数与两个操作按钮）。宽窗口按这个宽度分列，
+/// 所以任何一列都不会比最小窗口下的那张卡更窄。
+const double kTagCardMinWidth = 328;
 
 class TagsPage extends StatefulWidget {
   const TagsPage({super.key});
@@ -18,6 +26,9 @@ class TagsPage extends StatefulWidget {
 
 class _TagsPageState extends State<TagsPage> {
   final _searchController = TextEditingController();
+
+  /// 大标题 → AppBar 标题的联动进度（见 [ScrollTitleProgress]）。
+  final _titleProgress = ScrollTitleProgress();
   String _query = '';
   String _sort = 'popular';
   String? _category;
@@ -25,12 +36,15 @@ class _TagsPageState extends State<TagsPage> {
   @override
   void dispose() {
     _searchController.dispose();
+    _titleProgress.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
+    // 电脑端标题始终在 AppBar；手机端保留滚动联动（用户 2026-11-05）。
+    final phone = useCollapsingPageTitle;
 
     var tags = store.tags.where((t) {
       if (_category != null && t.category != _category) return false;
@@ -49,7 +63,10 @@ class _TagsPageState extends State<TagsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('标签'),
+        // 电脑端标题始终在 AppBar；手机端大标题滚出视野后才淡入。
+        title: phone
+            ? FadingAppBarTitle(title: '标签', progress: _titleProgress)
+            : const Text('标签'),
         actions: [
           IconButton(
             tooltip: '刷新',
@@ -66,6 +83,8 @@ class _TagsPageState extends State<TagsPage> {
       ),
       body: Column(
         children: [
+          if (phone)
+            CollapsingPageTitle(title: '标签', progress: _titleProgress),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
             child: Column(
@@ -124,7 +143,9 @@ class _TagsPageState extends State<TagsPage> {
             ),
           ),
           Expanded(
-            child: store.loadingTags && store.tags.isEmpty
+            child: ScrollTitleListener(
+              progress: _titleProgress,
+              child: store.loadingTags && store.tags.isEmpty
                 ? const Center(child: CircularProgressIndicator())
                 : tags.isEmpty
                     ? EmptyState(
@@ -139,20 +160,22 @@ class _TagsPageState extends State<TagsPage> {
                       )
                     : LayoutBuilder(
                         builder: (context, constraints) {
-                          // 列数 = 可用宽度 / **275**（= `kColumnWidth` 的一半）。
+                          // 列数 = 可用宽度 / [kTagCardMinWidth]（328 = 360 窗口的一列）。
                           //
                           // ⚠ 这里刻意**不用**通用的 550（用户 2026-10-12：
                           // "标签页的卡片宽度过大，缩小为原来一半"）：标签卡里只有
                           // 一个名字 + 一行分类/说明 + 一个计数 + 两个按钮，
-                          // 按 550 分列时在 1440 窗口上每张 ≈656 宽、1600 上 ≈780 宽 ——
-                          // 名字只占左边一小截，右边全是空的。按 275 分列正好是原来一半
-                          // （1440 上 4 列 ≈320），手机上仍是单列满宽。
+                          // 按 550 分列时在 1440 窗口上每张 ≈656 宽，名字只占左边
+                          // 一小截、右边全是空的。现在以"360 窗口下能完整显示
+                          // 16 个英文字符"为下限，宽窗口按这个下限分列。
                           //
                           // 卡片高度固定，所以直接用 GridView（`mainAxisExtent`），
                           // 不用 `AdaptiveColumnList` —— 那个是给"每行等高"的卡片用的。
                           final columns = adaptiveColumnCount(
                             constraints.maxWidth,
-                            minColumnWidth: kColumnWidth / 2,
+                            // **下限就是 360 宽窗口下的一列**（用户 2026-11-05）：
+                            // 再窄卡片就放不下 16 个英文字符的标签名了。
+                            minColumnWidth: kTagCardMinWidth,
                           );
                           return GridView.builder(
                             padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
@@ -171,6 +194,11 @@ class _TagsPageState extends State<TagsPage> {
                               final color = parseHexColor(tag.color) ?? tagColor(tag.name);
                               return Card(
                                 child: ListTile(
+                                  // 左右内边距收一点：标题要多留出一个 16 字符英文名
+                                  // 的位置（两枚按钮 + 计数在右边很占地方）。
+                                  contentPadding:
+                                      const EdgeInsets.only(left: 10, right: 2),
+                                  horizontalTitleGap: 8,
                                   leading: Container(
                                     width: 12,
                                     height: 12,
@@ -189,18 +217,42 @@ class _TagsPageState extends State<TagsPage> {
                                   trailing: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Chip(
-                                        visualDensity: VisualDensity.compact,
-                                        label: Text('${tag.useCount}'),
+                                      // 计数用紧凑胶囊而不是 Chip：Chip 的左右内边距
+                                      // 会把标题宽度吃掉一截（16 字符标签名就是这么被挤掉的）。
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .surfaceContainerHigh,
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          '${tag.useCount}',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .labelSmall,
+                                        ),
                                       ),
+                                      // 按钮**不许为了省宽度而缩小命中区**（用户
+                                      // 2026-11-05："标签卡片按钮太小，很难按到"）。
+                                      // 44 是视觉尺寸，默认的 padded 会把命中区补到 48；
+                                      // 省下来的宽度靠"计数不用 Chip + 卡片留白收紧"。
                                       IconButton(
                                         tooltip: '编辑',
-                                        icon: const Icon(Icons.edit_outlined, size: 18),
+                                        icon: const Icon(Icons.edit_outlined, size: 20),
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(
+                                            minWidth: 44, minHeight: 44),
                                         onPressed: () => _editTag(context, tag),
                                       ),
                                       IconButton(
                                         tooltip: '删除',
-                                        icon: const Icon(Icons.delete_outline, size: 18),
+                                        icon: const Icon(Icons.delete_outline, size: 20),
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(
+                                            minWidth: 44, minHeight: 44),
                                         onPressed: () async {
                                           final ok = await confirmDialog(
                                             context,
@@ -231,6 +283,7 @@ class _TagsPageState extends State<TagsPage> {
                           );
                         },
                       ),
+            ),
           ),
         ],
       ),

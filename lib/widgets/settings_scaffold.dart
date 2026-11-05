@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'adaptive_layout.dart';
+import 'scroll_linked_title.dart';
 
 /// 设置类页面的统一骨架：顶栏 + 可滚动内容。
 ///
@@ -11,7 +12,7 @@ import 'adaptive_layout.dart';
 /// [AdaptiveColumns]（列数 = 可用宽度 / 550，最多 4 列），窄窗口自动退回单列。
 /// 所以页面内容要按"块"（[SettingsSection]）组织，块内是标题 + 一张卡；
 /// 分列时整块一起走，不会出现"标题在左列、卡片在右列"。
-class SettingsScaffold extends StatelessWidget {
+class SettingsScaffold extends StatefulWidget {
   final String title;
   final List<SettingsSection> sections;
 
@@ -26,37 +27,92 @@ class SettingsScaffold extends StatelessWidget {
   });
 
   @override
+  State<SettingsScaffold> createState() => _SettingsScaffoldState();
+}
+
+class _SettingsScaffoldState extends State<SettingsScaffold> {
+  /// 大标题 → 顶栏标题的联动进度（见 [ScrollTitleProgress]）。
+  final _progress = ScrollTitleProgress();
+
+  @override
+  void dispose() {
+    _progress.dispose();
+    super.dispose();
+  }
+
+  /// AppBar 里的返回键：**带外圈的圆形按钮**（用户 2026-11-05 指定的样式）。
+  ///
+  /// 用 `BackButton` 而不是裸 `IconButton`：`tester.pageBack()` 与系统返回都
+  /// 认这个类型；外圈靠 40×40 的按钮背景画，不会撑满 56 的 leading 槽。
+  Widget _circleBackButton(ThemeData theme) => Center(
+        child: BackButton(
+          style: IconButton.styleFrom(
+            backgroundColor: theme.colorScheme.surfaceContainerHigh,
+            foregroundColor: theme.colorScheme.onSurface,
+            minimumSize: const Size(40, 40),
+            maximumSize: const Size(40, 40),
+            padding: EdgeInsets.zero,
+            shape: const CircleBorder(),
+          ),
+        ),
+      );
+
+  @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // 电脑端标题**始终在 AppBar 里**（用户 2026-11-05：电脑端恢复原状）；
+    // 手机端保留"大标题在正文里、滚走后在 AppBar 淡入"的联动。
+    final phone = useCollapsingPageTitle;
     return Scaffold(
-      // **标题不放 AppBar**（2026-11-05 用户对照 Material You 设置页）：
-      // 参考设计是"左上角一个圆形返回键 + 正文顶部一个大号标题"。
-      // 好处是标题属于内容、能随内容一起滚动，也不会在窄屏被 AppBar 压成小字。
+      appBar: AppBar(
+        // 手机端这条 AppBar 是透明的（大标题在正文里）；电脑端是普通 AppBar。
+        backgroundColor: phone ? Colors.transparent : null,
+        surfaceTintColor: phone ? Colors.transparent : null,
+        elevation: phone ? 0 : null,
+        scrolledUnderElevation: phone ? 0 : null,
+        automaticallyImplyLeading: false,
+        // 返回键**始终在 AppBar 里**（用户 2026-11-05："这种返回按钮应该待在
+        // appbar"），并且用它指定的**带外圈**样式；正文里不再放返回键。
+        leading: widget.showBack ? _circleBackButton(theme) : null,
+        // 首页没有返回键时，标题要和正文的 16 留白对齐。
+        titleSpacing: widget.showBack ? 0 : 16,
+        title: phone
+            ? FadingAppBarTitle(title: widget.title, progress: _progress)
+            : Text(widget.title),
+      ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 48),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SettingsPageHeader(
-                title: title,
-                showBack: showBack,
-                padding: EdgeInsets.zero,
-              ),
-              // 设置卡比列表行窄，550 的标准列宽会让"其实放得下两列"的窗口退回
-              // 单列（实测 1140 逻辑宽时 content≈1030 → 除以 550 只剩 1 列）。
-              // 460 是"标题 + 一句说明 + 箭头"这一行的舒适宽度，窗口一到 ~1000
-              // 逻辑宽就能并排两列。
-              AdaptiveColumns(
-                minColumnWidth: 460,
-                sections: [
-                  for (final section in sections)
-                    AdaptiveSection(
-                      section,
-                      estimatedHeight: section.estimatedHeight,
-                    ),
-                ],
-              ),
-            ],
+        top: false,
+        child: ScrollTitleListener(
+          progress: _progress,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 48),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 电脑端标题在 AppBar 上，正文里不再重复一个大标题；
+                // 手机端的大标题不再自带返回键（它已经在 AppBar 里）。
+                if (phone)
+                  SettingsPageHeader(
+                    title: widget.title,
+                    showBack: false,
+                    padding: EdgeInsets.zero,
+                  ),
+                // 设置卡比列表行窄，550 的标准列宽会让"其实放得下两列"的窗口退回
+                // 单列（实测 1140 逻辑宽时 content≈1030 → 除以 550 只剩 1 列）。
+                // 460 是"标题 + 一句说明 + 箭头"这一行的舒适宽度，窗口一到 ~1000
+                // 逻辑宽就能并排两列。
+                AdaptiveColumns(
+                  minColumnWidth: 460,
+                  sections: [
+                    for (final section in widget.sections)
+                      AdaptiveSection(
+                        section,
+                        estimatedHeight: section.estimatedHeight,
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),

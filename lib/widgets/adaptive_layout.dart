@@ -177,39 +177,53 @@ class AdaptiveColumns extends StatelessWidget {
         }
 
         final buckets = List.generate(columns, (_) => <AdaptiveSection>[]);
-        final heights = List<double>.filled(columns, 0);
-        for (final section in sections) {
-          var target = 0;
-          for (var i = 1; i < columns; i++) {
-            if (heights[i] < heights[target]) target = i;
-          }
-          buckets[target].add(section);
-          heights[target] += section.estimatedHeight + runSpacing;
-        }
 
-        // 两列时再做一次"末块搬家"的精修：贪心最后一步常常让一列比另一列
-        // 多出一整块。把较高那列的**最后一块**挪到另一列，如果这样两列更接近
-        // 就接受（差相同时不搬 —— 左列保持略长，符合用户"左列略长于右列"的观感）。
-        if (columns == 2) {
-          final taller = heights[0] >= heights[1] ? 0 : 1;
-          final shorter = 1 - taller;
-          if (buckets[taller].length > 1) {
-            final moving = buckets[taller].last;
-            final h = moving.estimatedHeight + runSpacing;
-            final newTaller = heights[taller] - h;
-            final newShorter = heights[shorter] + h;
-            final oldGap = (heights[0] - heights[1]).abs();
-            final newGap = (newTaller - newShorter).abs();
-            // 搬完后左列不许比右列短（"左列略长于右列"）。
-            final newLeft = taller == 0 ? newTaller : newShorter;
-            final newRight = taller == 0 ? newShorter : newTaller;
-            final keepsLeftLonger = newLeft >= newRight - 1;
-            if (newGap < oldGap - 1 && keepsLeftLonger) {
-              buckets[taller].removeLast();
-              buckets[shorter].add(moving);
-              heights[taller] = newTaller;
-              heights[shorter] = newShorter;
+        if (columns == 2 && sections.length > 1) {
+          // **两列按"连续切分"排**，而不是逐块填最矮的那列。
+          //
+          // 逐块贪心在"一块很高 + 两块较矮"时会把两块矮的都塞进右列，
+          // 结果左列只有一块、右列堆到两倍长（用户 2026-11-05 拿 ComfyUI 自动
+          // 捕获页指出的正是这个）。两列的正确形态是：左列是前若干块、右列是
+          // 剩下的块，阅读顺序仍然是"左列从上到下、再接右列"。
+          //
+          // 枚举所有切分点，取两列估算高度最接近的那个；差相同时取**左列更长**
+          // 的那个（用户："左列的最终长度略长于右列，整体长度相当"）。
+          double columnHeight(int start, int end) {
+            var h = 0.0;
+            for (var i = start; i < end; i++) {
+              h += sections[i].estimatedHeight + runSpacing;
             }
+            return h;
+          }
+
+          var bestSplit = 1;
+          var bestGap = double.infinity;
+          var bestLeftLonger = false;
+          for (var split = 1; split < sections.length; split++) {
+            final left = columnHeight(0, split);
+            final right = columnHeight(split, sections.length);
+            final gap = (left - right).abs();
+            final leftLonger = left >= right;
+            final better = gap < bestGap - 1;
+            final tieAndLeftLonger =
+                (gap - bestGap).abs() <= 1 && leftLonger && !bestLeftLonger;
+            if (better || tieAndLeftLonger) {
+              bestSplit = split;
+              bestGap = gap;
+              bestLeftLonger = leftLonger;
+            }
+          }
+          buckets[0].addAll(sections.sublist(0, bestSplit));
+          buckets[1].addAll(sections.sublist(bestSplit));
+        } else {
+          final heights = List<double>.filled(columns, 0);
+          for (final section in sections) {
+            var target = 0;
+            for (var i = 1; i < columns; i++) {
+              if (heights[i] < heights[target]) target = i;
+            }
+            buckets[target].add(section);
+            heights[target] += section.estimatedHeight + runSpacing;
           }
         }
 

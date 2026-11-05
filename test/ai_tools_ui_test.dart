@@ -1204,13 +1204,22 @@ void main() {
     expect(find.textContaining(r'viewer\comfyui'), findsWidgets);
     expect(find.text('写白名单'), findsOneWidget);
     expect(find.text('读白名单'), findsOneWidget);
-    expect(find.text('read_file'), findsOneWidget);
-    expect(find.text('load_skill'), findsOneWidget);
+    // 逐工具权限已经收进子页（工具上百个，摊在主页会拉成几百行）
+    expect(find.text('逐工具权限'), findsOneWidget);
     // 附件缓存卡：占用按来源分开显示，且说清"引用的不删 / 没引用的留 7 天"。
     expect(find.text('参考图 / 截图缓存'), findsOneWidget);
     expect(find.textContaining('共 3 张'), findsOneWidget);
     expect(find.textContaining('网络参考图'), findsWidgets);
     expect(find.textContaining('保留 7 天'), findsOneWidget);
+
+    // 进子页：工具清单与下拉都在那里
+    final entry = find.text('逐工具权限');
+    await tester.ensureVisible(entry);
+    await tester.pumpAndSettle();
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    expect(find.text('read_file'), findsOneWidget);
+    expect(find.text('load_skill'), findsOneWidget);
 
     // 把 read_file 改成「拒绝」→ 立刻 PUT
     final dropdown = find.byType(DropdownButton<String>).first;
@@ -1277,7 +1286,13 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    // 逐工具权限是页面上唯一的 DropdownButton：第一行就是 read_file，第二行是 write_file
+    // 进「逐工具权限」子页：第一行是 read_file，第二行是 write_file
+    final entry = find.text('逐工具权限');
+    await tester.ensureVisible(entry);
+    await tester.pumpAndSettle();
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+
     final dropdowns = find.byType(DropdownButton<String>);
     expect(dropdowns, findsNWidgets(2), reason: '两个工具两行下拉');
     final dropdown = dropdowns.at(1);

@@ -307,7 +307,9 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
       sections: [
         SettingsSection(
           title: '捕获配置',
-          estimatedHeight: 780,
+          // 估算值要贴近实际，否则两列的"连续切分"会选错切点
+          // （2026-11-05 用户指着这一页说视觉重心不对）。
+          estimatedHeight: 400,
           child: Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -429,7 +431,8 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
         ),
         SettingsSection(
           title: '轮询与操作',
-          estimatedHeight: 420,
+          // 轮询 + 自动标签 + 四个按钮 + 最近捕获（最多 8 条）
+          estimatedHeight: 820,
           child: Card(
             child: Padding(
               padding: const EdgeInsets.all(16),

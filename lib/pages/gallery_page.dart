@@ -10,6 +10,7 @@ import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
 import '../widgets/collection_thumb.dart';
+import '../widgets/scroll_linked_title.dart';
 import '../widgets/common.dart';
 import '../widgets/export_dialog.dart';
 import '../widgets/media_thumb.dart';
@@ -49,6 +50,9 @@ bool? debugMouseFirstOverride;
 
 class _GalleryPageState extends State<GalleryPage> {
   final _searchController = TextEditingController();
+
+  /// 大标题 → AppBar 标题的联动进度（见 [ScrollTitleProgress]）。
+  final _titleProgress = ScrollTitleProgress();
 
   /// 多选里的一项：`key` 是**代表那条**的 media id（集合取封面那条）。
   ///
@@ -120,6 +124,7 @@ class _GalleryPageState extends State<GalleryPage> {
   @override
   void dispose() {
     _searchController.dispose();
+    _titleProgress.dispose();
     super.dispose();
   }
 
@@ -163,6 +168,10 @@ class _GalleryPageState extends State<GalleryPage> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
+    // 电脑端标题**始终在 AppBar 里**（用户 2026-11-05：电脑端恢复原状）；
+    // 手机端保留"大标题在正文里、滚走后在 AppBar 淡入"的联动。
+    // 判据是**平台**，不是窗口宽度 —— 电脑窗口拉窄不该长成手机的样子。
+    final phone = useCollapsingPageTitle;
 
     // ContextMenuScope：右键菜单的宿主。它**不铺 ModalBarrier**，所以菜单开着时
     // 画廊照样能滚（用户 bug ②）。一个页面只挂一个。
@@ -177,7 +186,12 @@ class _GalleryPageState extends State<GalleryPage> {
                     onPressed: _exitSelection,
                   )
                 : null,
-            title: Text(_selectionMode ? '已选 $_pickedCount 张' : '画廊'),
+            // 桌面端标题始终在 AppBar；手机端大标题滚出视野后才淡入。
+            title: _selectionMode
+                ? Text('已选 $_pickedCount 张')
+                : phone
+                ? FadingAppBarTitle(title: '画廊', progress: _titleProgress)
+                : const Text('画廊'),
             actions: _selectionMode
                 ? [
                     IconButton(
@@ -260,8 +274,21 @@ class _GalleryPageState extends State<GalleryPage> {
               : null,
           body: Column(
             children: [
+              if (!_selectionMode && phone)
+                CollapsingPageTitle(
+                  title: '画廊',
+                  progress: _titleProgress,
+                  // 比设置页矮一点：画廊下面还压着固定的筛选栏 + 集合面板，
+                  // 标题块太高会把集合面板的可视高度挤掉一截。
+                  height: 44,
+                ),
               _buildToolbar(context, store),
-              Expanded(child: _buildBody(context, store)),
+              Expanded(
+                child: ScrollTitleListener(
+                  progress: _titleProgress,
+                  child: _buildBody(context, store),
+                ),
+              ),
             ],
           ),
         ),

@@ -70,7 +70,7 @@ void main() {
     expect(r1.top, greaterThan(r0.bottom + 1));
   });
 
-  testWidgets('AdaptiveColumns：把块依次放进当前最矮的一列，块不会被拆开', (tester) async {
+  testWidgets('AdaptiveColumns：两列按连续切分（左列前几块、右列剩下的），块不会被拆开', (tester) async {
     tester.view.physicalSize = const Size(1200, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -97,9 +97,61 @@ void main() {
     await tester.pumpAndSettle();
 
     final r0 = tester.getRect(find.byKey(const ValueKey('section0')));
+    final r1 = tester.getRect(find.byKey(const ValueKey('section1')));
     final r2 = tester.getRect(find.byKey(const ValueKey('section2')));
-    // 第 3 块（260 高）应该接在最矮的那列（第 2 块所在的右列）下面
-    expect(r2.left, closeTo(r0.right + 20, 1));
-    expect(r2.top, greaterThan(r0.top));
+    final r3 = tester.getRect(find.byKey(const ValueKey('section3')));
+
+    // 两列改成"连续切分"：先枚举切点取两列最接近的那个（400+200 vs 260+120），
+    // 所以左列是前两块、右列是后两块 —— 阅读顺序仍然是左列从上到下再接右列。
+    expect(r1.left, closeTo(r0.left, 0.5), reason: '第 2 块留在左列');
+    expect(r1.top, greaterThan(r0.bottom + 1));
+    expect(r2.left, closeTo(r0.right + 20, 1), reason: '第 3 块是右列的起点');
+    expect(r2.top, closeTo(r0.top, 0.5));
+    expect(r3.left, closeTo(r2.left, 0.5));
+    expect(r3.top, greaterThan(r2.bottom + 1));
+  });
+
+  testWidgets('AdaptiveColumns：一块高、两块矮时，把两块矮的放同一列（左列略长）', (tester) async {
+    // ComfyUI 自动捕获页的真实比例：捕获配置 400、地址与目录 360、轮询与操作 820。
+    // 逐块贪心会把"地址与目录"塞进右列、再把轮询也堆上去（右列 ≈ 两倍长）；
+    // 连续切分应该选 400+360 vs 820 —— 两列几乎一样长，且左列略长。
+    tester.view.physicalSize = const Size(1200, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    const heights = [400.0, 360.0, 820.0];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AdaptiveColumns(
+            sections: [
+              for (var i = 0; i < heights.length; i++)
+                AdaptiveSection(
+                  Container(
+                    key: ValueKey('case$i'),
+                    height: heights[i],
+                    color: Colors.blue,
+                  ),
+                  estimatedHeight: heights[i],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final r0 = tester.getRect(find.byKey(const ValueKey('case0')));
+    final r1 = tester.getRect(find.byKey(const ValueKey('case1')));
+    final r2 = tester.getRect(find.byKey(const ValueKey('case2')));
+
+    expect(r1.left, closeTo(r0.left, 0.5), reason: '前两块在左列');
+    expect(r1.top, greaterThan(r0.bottom + 1));
+    expect(r2.left, closeTo(r0.right + 20, 1), reason: '高块独占右列');
+    expect(r2.top, closeTo(r0.top, 0.5));
+    // 左列：400 + 360 + 间距 ≈ 784；右列：820 —— 左列略短但整体相当（差 < 60）
+    final leftHeight = r1.bottom - r0.top;
+    final rightHeight = r2.bottom - r2.top;
+    expect((leftHeight - rightHeight).abs(), lessThan(60));
   });
 }

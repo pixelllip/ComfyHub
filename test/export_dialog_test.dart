@@ -144,6 +144,22 @@ void main() {
     expect(find.textContaining('文件不在盘上'), findsOneWidget);
   });
 
+  testWidgets('点弹窗外面能关掉，且不会误发导出请求', (tester) async {
+    final harness = _Harness();
+    final store = await _store(harness);
+    await tester.pumpWidget(_host(store, mediaIds: [11]));
+    await tester.tap(find.text('打开导出'));
+    await tester.pumpAndSettle();
+    expect(find.text('导出产物'), findsOneWidget);
+
+    // 左上角落在遮罩上、在弹窗外
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pumpAndSettle();
+
+    expect(find.text('导出产物'), findsNothing, reason: '点外面应当关闭弹窗');
+    expect(harness.requests, isEmpty, reason: '只是关掉，不该发导出请求');
+  });
+
   testWidgets('窄屏 360 不溢出（弹窗要能在手机宽度下完整显示）', (tester) async {
     await tester.binding.setSurfaceSize(const Size(360, 640));
     addTearDown(() => tester.binding.setSurfaceSize(null));
