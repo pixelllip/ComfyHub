@@ -330,7 +330,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Text(
-                '选择一个 **Provider** 查看详情，或新建一个。\n填入的 API KEY 将不会再次显示。',
+                '选择一个 Provider 查看详情，或新建一个。\n填入的 API Key 保存后不会再显示。',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.outline),
               ),
@@ -1115,7 +1115,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         )
       else
         Text(
-          '测试只发一次请求，**10 秒**超时，且密钥不进日志。',
+          '测试只发一次请求，10 秒超时，密钥不会进日志。',
           style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
         ),
       if (_testResult != null) ...[
@@ -1143,7 +1143,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
-              '这一条保存在本机密钥库，**只在这台手机上生效**。想让桌面也用这一把，点下面的「推给桌面」（值会离开本机，桌面必须已允许这台设备改密钥）。反过来「从桌面同步密钥」在「远程访问与配对」那张卡里。',
+              '这一条保存在本机密钥库，只在这台手机上生效。想让桌面也用这一把，点下面的「推给桌面」（值会离开本机，桌面必须已允许这台设备改密钥）。反过来「从桌面同步密钥」在「远程访问与配对」那张卡里。',
               style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
             ),
           ),
@@ -1154,7 +1154,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           enableSuggestions: false,
           decoration: const InputDecoration(
             labelText: '粘贴密钥（留空表示不修改已有密钥）。',
-            helperText: '粘贴您的**密钥**',
+            helperText: '粘贴你的密钥',
             border: OutlineInputBorder(),
             isDense: true,
           ),

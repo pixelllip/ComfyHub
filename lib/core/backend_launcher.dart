@@ -602,7 +602,7 @@ class BackendLauncher extends ChangeNotifier {
       _claim(pid);
       _log('已认领正在运行的后端（pid $pid）：关 App 时会按设置把它一并停掉。');
     } else {
-      _log('提示：端口记录里没有后端 pid（`.run\\api.json` 缺 pid），退出时不会主动停它。');
+      _log('提示：端口记录里没有后端 pid（.run\\api.json 缺 pid），退出时不会主动停它。');
     }
   }
 

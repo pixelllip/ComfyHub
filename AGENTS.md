@@ -89,6 +89,8 @@
 - **能用一句人话说完的，不加从句、不套括号**：先给结论，再给条件；别写"当……时，如果……则……"。
 - **用用户熟悉的名词，少用专有名词**：模型、图片、画廊、设置、服务、缓存；别把类名、字段名、内部代号（`run-kit`、`WidgetsBinding`、`AiWorkspaceStore`）直接甩到界面上。必须提的时候，先用一句人话解释它是什么。
 - **错误提示同样说人话**：`保存失败，磁盘空间不够。`，不要 `保存失败：ENOSPC`；不要把异常栈 / 内部错误码当正文。
+- **不支持 Markdown 的地方不许写 Markdown**：`Text` / `SelectableText` / `SnackBar` / `InputDecoration` 的 label / hint / helper 都不解析 Markdown，`**粗体**`、反引号、`# 标题`、`- 列表` 会原样显示。要强调就用 `Text.rich` / `TextSpan`（`fontWeight: FontWeight.bold`），要排版就用本来就会渲染 Markdown 的 `MarkdownText`；不要指望纯文本控件自己变粗。
+- **先确认渲染器再写格式**：一个字符串会进 `MarkdownText`（聊天正文、蓝图详情）才可以用 Markdown；进 `Text` 的按纯文本写 —— 工具卡的结果区也是 `Text`，后端别往里塞 Markdown。后端回给界面的字符串同理，前端用 `Text` 接，它就不该带 Markdown。
 - **例外只有字面量**：URL、比例（`16:9`）、代码 / 路径 / 键名，按原样写。
 - **改文案要同步改测试断言**（不少用例直接 `find.text('……')`），改完跑 `flutter analyze` + `flutter test`；后端回给界面的那句也要一起改，别只改前半句。
 

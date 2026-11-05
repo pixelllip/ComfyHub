@@ -701,7 +701,7 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   Widget _banner(ThemeData theme, WorkflowBlueprint blueprint) {
     final notes = <String>[
       if (blueprint.autoLayout)
-        '这是 API 格式节点图，它没有保存画布坐标，位置是**自动排出来的**，'
+        '这是 API 格式节点图，它没有保存画布坐标，位置是自动排出来的，'
             '与你在 ComfyUI 里看到的那张图不是同一张（它只含真正被执行的节点）',
       if (!blueprint.objectInfo)
         '这次没连上 ComfyUI（拿不到节点定义），只做了结构检查，'

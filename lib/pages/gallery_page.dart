@@ -1668,8 +1668,8 @@ class _GalleryPageState extends State<GalleryPage> {
       context,
       title: '重新自动整理？',
       message:
-          '按提示词把**算法分出来的**分组重算一遍。\n\n'
-          '你手动新建或调整过的集合、以及你手动移出过的产物，**都不会被改动**。',
+          '按提示词把算法分出来的分组重算一遍。\n\n'
+          '你手动新建或调整过的集合、以及你手动移出过的产物，都不会被改动。',
     );
     if (!ok || !mounted) return;
     final store = context.read<LibraryStore>();

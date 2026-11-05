@@ -1103,8 +1103,8 @@ class _PairingSectionState extends State<PairingSection> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '两条路都行。**手机上点「配对新电脑」**（这里会出现一组 6 位码），'
-            '或者**桌面出二维码**（手机扫码，地址不用手抄）。两条都还要在手机上敲那 6 位码。',
+            '两条路都行。手机上点「配对新电脑」（这里会出现一组 6 位码），'
+            '或者桌面出二维码（手机扫码，地址不用手抄）。两条都还要在手机上敲那 6 位码。',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.outline,
             ),
@@ -1209,7 +1209,7 @@ class _PairingSectionState extends State<PairingSection> {
               title: '允许把密钥发给这台设备',
               subtitle: d.allowCredentials
                   ? '已允许，这台手机可以「从桌面同步密钥」把 API Key 取到本机密钥库。'
-                  : '未允许，**手机拿不到桌面上的 API Key**（配对成功不等于能取密钥）。',
+                  : '未允许，手机拿不到桌面上的 API Key（配对成功不等于能取密钥）。',
               value: d.allowCredentials,
               onChanged: _busy
                   ? null
