@@ -275,7 +275,7 @@ class _TextPreviewState extends State<_TextPreview> {
       }
       setState(() => _text = text);
     } catch (e) {
-      if (mounted) setState(() => _error = '读取失败：$e');
+      if (mounted) setState(() => _error = '读取失败，$e');
     }
   }
 

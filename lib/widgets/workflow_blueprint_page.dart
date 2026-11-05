@@ -265,7 +265,7 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      _toast('保存失败：$e');
+      _toast('保存失败，$e');
     }
   }
 
@@ -701,13 +701,13 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   Widget _banner(ThemeData theme, WorkflowBlueprint blueprint) {
     final notes = <String>[
       if (blueprint.autoLayout)
-        '这是 API 格式节点图：它没有保存画布坐标，位置是**自动排出来的**，'
+        '这是 API 格式节点图，它没有保存画布坐标，位置是**自动排出来的**，'
             '与你在 ComfyUI 里看到的那张图不是同一张（它只含真正被执行的节点）',
       if (!blueprint.objectInfo)
-        '这次没连上 ComfyUI（拿不到节点定义）：只做了结构检查，'
+        '这次没连上 ComfyUI（拿不到节点定义），只做了结构检查，'
             '判不出"哪个插口是必填""这两根线的类型对不对"',
-      if (_editing && _dirty) '改完会自动复检（不落库、不动原文件）；要带走请用「复制」或「保存」',
-      if (blueprint.warnings.isNotEmpty) blueprint.warnings.join('；'),
+      if (_editing && _dirty) '改完会自动复检（不落库、不动原文件）。要带走请用「复制」或「保存」',
+      if (blueprint.warnings.isNotEmpty) blueprint.warnings.join('\n'),
     ];
     if (notes.isEmpty) return const SizedBox.shrink();
     return Container(
@@ -901,7 +901,7 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                   if (issue.fix != null) ...[
                     const SizedBox(height: 6),
                     MarkdownText(
-                      '修法：${issue.fix}',
+                      '修法是 ${issue.fix}',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.primary,
                       ),
@@ -978,7 +978,7 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                     ? '错误'
                     : issue.isWarn
                     ? '警告'
-                    : '提示'}：${issue.title}',
+                    : '提示'}，${issue.title}',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: issue.isError
                       ? theme.colorScheme.error
@@ -1020,7 +1020,7 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
           ),
           const SizedBox(height: 6),
           Text(
-            '旁路 = 数据穿过去但不执行这个节点；静音 = 它和它的下游都拿不到东西',
+            '旁路是数据穿过去但不执行这个节点，静音是它和它的下游都拿不到东西',
             style: theme.textTheme.labelSmall?.copyWith(
               color: theme.colorScheme.outline,
             ),

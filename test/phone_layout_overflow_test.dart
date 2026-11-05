@@ -121,7 +121,7 @@ void main() {
     expect(tester.takeException(), isNull);
 
     // 返回 → 主屏
-    await tester.tap(find.byTooltip('返回'));
+    await tester.tap(find.byType(BackButton));
     await tester.pumpAndSettle();
     expect(find.text('新建 Provider'), findsOneWidget);
   });
@@ -138,7 +138,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // 子界面：标题就是那条 Provider，带返回箭头；列表已经不在屏幕上
-    expect(find.byTooltip('返回'), findsOneWidget);
+    expect(find.byType(BackButton), findsOneWidget);
     expect(find.text('Command Code Goat'), findsWidgets);
     expect(find.text('新建 Provider'), findsNothing, reason: '进了详情就不该还留着列表');
 
@@ -147,7 +147,9 @@ void main() {
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(find.text('新建 Provider'), findsOneWidget, reason: '系统返回只该退一层，不该退出整个页面');
-    expect(find.byTooltip('返回'), findsNothing);
+    // 回到列表后还剩**页面级**返回键（退到设置首页）；详情那一层已经没了。
+    expect(find.byType(BackButton), findsOneWidget);
+    expect(find.text('Command Code Goat'), findsWidgets);
   });
 
   testWidgets('更窄的屏幕（320dp）同样不溢出', (tester) async {

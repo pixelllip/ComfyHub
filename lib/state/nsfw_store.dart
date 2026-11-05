@@ -102,7 +102,7 @@ class NsfwStore extends ChangeNotifier {
       error = null;
     } catch (e) {
       // 后端没起来时**不当作"开了"**：宁可显示原图，也不要让人以为应用坏了
-      error = '读取 NSFW 设置失败：$e';
+      error = '读取 NSFW 设置失败，$e';
     } finally {
       _loading = false;
       notifyListeners();
@@ -122,7 +122,7 @@ class NsfwStore extends ChangeNotifier {
     } catch (e) {
       error = '$e';
       notifyListeners();
-      return (ok: false, message: '保存失败：$e');
+      return (ok: false, message: '保存失败，$e');
     }
   }
 

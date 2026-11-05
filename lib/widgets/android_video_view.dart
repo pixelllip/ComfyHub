@@ -97,7 +97,7 @@ class _AndroidVideoViewState extends State<AndroidVideoView> {
     } catch (e) {
       if (!mounted) return;
       // 原始异常原样带出来：Android 上"没有这个文件/编码不支持/明文被拦"是三种不同的处置
-      setState(() => _error = '无法打开视频：$e');
+      setState(() => _error = '无法打开视频，$e');
     }
   }
 

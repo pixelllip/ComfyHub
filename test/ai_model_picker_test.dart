@@ -118,8 +118,8 @@ void main() {
     await tester.tap(find.text('DeepSeek Chat').first);
     await tester.pumpAndSettle();
 
-    expect(find.text('来源：DeepSeek'), findsOneWidget);
-    expect(find.text('来源：本机网关'), findsOneWidget);
+    expect(find.text('来自 DeepSeek'), findsOneWidget);
+    expect(find.text('来自 本机网关'), findsOneWidget);
 
     // 布局的硬要求：**模型在 padding 里面，来源那一行在 padding 外面**
     expect(
@@ -128,7 +128,7 @@ void main() {
       reason: '模型行必须套在同一个 padding 里（用户原话）',
     );
     expect(
-      find.ancestor(of: find.text('来源：DeepSeek'), matching: find.byType(SliverPadding)),
+      find.ancestor(of: find.text('来自 DeepSeek'), matching: find.byType(SliverPadding)),
       findsNothing,
       reason: '来源标注必须在 padding 外面（用户原话）',
     );
@@ -172,10 +172,10 @@ void main() {
     await tester.enterText(_searchBox(), 'Qwen');
     await tester.pumpAndSettle();
 
-    expect(find.text('来源：本机网关'), findsOneWidget);
+    expect(find.text('来自 本机网关'), findsOneWidget);
     expect(find.text('Qwen3'), findsOneWidget);
     // 圈在对话框里找：右侧栏「模型能力」那张卡也写着当前模型的名字
-    expect(find.descendant(of: find.byType(Dialog), matching: find.text('来源：DeepSeek')),
+    expect(find.descendant(of: find.byType(Dialog), matching: find.text('来自 DeepSeek')),
         findsNothing,
         reason: '一条都搜不到的组不许留一个空标题占屏');
     expect(find.descendant(of: find.byType(Dialog), matching: find.text('DeepSeek Chat')),

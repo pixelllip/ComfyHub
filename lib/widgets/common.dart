@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/formatting.dart';
+import '../core/theme.dart';
 import '../models/models.dart';
 import 'app_menu.dart';
 import 'context_menu.dart';
@@ -12,6 +13,14 @@ export 'app_menu.dart';
 export 'context_menu.dart';
 
 /// 标签小胶囊。可用于展示、筛选、删除。
+///
+/// **走 M3 的 `FilterChip`**（不是手搓的 `Material + InkWell`）：选中态、对勾、
+/// 删除按钮、状态层与命中区都由框架提供，深浅两套主题下也不会再出现
+/// "白字压在浅色标签上"（以前 `Colors.white` 写死，浅色主题 + 浅绿标签
+/// 对比度只有约 2:1）。
+///
+/// 标签的颜色仍然由名字稳定散列决定（用户认得那条颜色），但它是**色相**：
+/// 饱和度 / 亮度跟着当前配色走，所以动态取色下也不会撞色。
 class TagChip extends StatelessWidget {
   final String label;
   final int? count;
@@ -35,62 +44,73 @@ class TagChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final base = color ?? tagColor(label);
-    final bg = selected ? base : base.withValues(alpha: 0.12);
-    final fg = selected ? Colors.white : Color.alphaBlend(base.withValues(alpha: 0.85), theme.colorScheme.surface);
+    final scheme = theme.colorScheme;
+    final accent = color ?? tagColor(label, scheme: scheme);
+    // 选中态用标签色填充：文字颜色按"这块颜色上读不读得清"来选，
+    // 不再无条件用白色（浅色标签 + 白字 = 看不见）。
+    final selectedFg =
+        ThemeData.estimateBrightnessForColor(accent) == Brightness.dark
+            ? Colors.white
+            : Colors.black87;
+    final fg = selected ? selectedFg : scheme.onSurfaceVariant;
 
     return Padding(
       padding: EdgeInsets.only(right: dense ? 4 : 6, bottom: dense ? 4 : 6),
-      child: Material(
-        color: bg,
-        borderRadius: BorderRadius.circular(20),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: onTap,
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: dense ? 8 : 10,
-              vertical: dense ? 3 : 5,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (selected) ...[
-                  const Icon(Icons.check, size: 13, color: Colors.white),
-                  const SizedBox(width: 3),
-                ],
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: fg,
-                    fontSize: dense ? 11.5 : 13,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
-                    letterSpacing: 0,
-                  ),
+      child: FilterChip(
+        selected: selected,
+        // 只有可点的才给 `onSelected`（纯展示标签保持禁用态观感）。
+        onSelected: onTap == null ? null : (_) => onTap!(),
+        showCheckmark: selected,
+        checkmarkColor: selectedFg,
+        selectedColor: accent,
+        backgroundColor: Colors.transparent,
+        side: BorderSide(color: scheme.outlineVariant),
+        // 未选中时左侧留一个色点：颜色编码不丢，又不用把整块底色染上。
+        avatar: selected || dense
+            ? null
+            : Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  color: accent,
+                  shape: BoxShape.circle,
                 ),
-                if (count != null) ...[
-                  const SizedBox(width: 4),
-                  Text(
-                    '$count',
-                    style: TextStyle(
-                      color: fg.withValues(alpha: 0.78),
-                      fontSize: dense ? 11 : 11.5,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: 0,
-                    ),
-                  ),
-                ],
-                if (onDeleted != null) ...[
-                  const SizedBox(width: 2),
-                  GestureDetector(
-                    onTap: onDeleted,
-                    child: Icon(Icons.close, size: dense ? 12 : 14, color: fg),
-                  ),
-                ],
-              ],
+              ),
+        label: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: fg,
+                fontSize: dense ? 11.5 : 13,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                letterSpacing: 0,
+              ),
             ),
-          ),
+            if (count != null) ...[
+              const SizedBox(width: 4),
+              Text(
+                '$count',
+                style: TextStyle(
+                  color: fg.withValues(alpha: 0.78),
+                  fontSize: dense ? 11 : 11.5,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0,
+                ),
+              ),
+            ],
+          ],
         ),
+        labelPadding: const EdgeInsets.symmetric(horizontal: 2),
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        onDeleted: onDeleted,
+        deleteIcon: onDeleted == null
+            ? null
+            : Icon(Icons.close, size: dense ? 13 : 15, color: fg),
+        deleteIconColor: fg,
+        deleteButtonTooltipMessage: '删除标签',
       ),
     );
   }
@@ -182,8 +202,9 @@ class FilterGroup extends StatelessWidget {
         // 只给一层**很淡的底**，**不加描边** —— 组里的 `ChoiceChip` / `FilterChip`
         // 自己就带描边，容器再套一圈会出现"双边框"，看着很脏（2026-10-11 试过）。
         // 分组靠"底色块 + 块之间的空隙"表达，足够清楚。
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(12),
+        // 用 M3 的表面角色而不是 `@0.3` 的叠色：叠色在深色下会发灰、层次不清。
+        color: theme.colorScheme.surfaceContainer,
+        borderRadius: AppShapes.of(context).mediumRadius,
       ),
       child: Wrap(
         spacing: spacing,
@@ -192,7 +213,7 @@ class FilterGroup extends StatelessWidget {
         children: [
           Text(
             title,
-            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
           ...children,
         ],
@@ -247,25 +268,56 @@ class KindBadge extends StatelessWidget {
         PromptKind.mixed => Icons.auto_awesome_mosaic_outlined,
       };
 
-  static Color colorOfKind(PromptKind k) => switch (k) {
-        PromptKind.image => const Color(0xFF4CAF50),
-        PromptKind.video => const Color(0xFF2196F3),
-        PromptKind.audio => const Color(0xFF9C27B0),
-        PromptKind.mixed => const Color(0xFFFF9800),
+  /// 该类型在当前配色里的"强调色"。
+  ///
+  /// 以前是四个写死的 M2 500 色（Green / Blue / Purple / Orange 500）：
+  /// 它们在浅色主题下偏亮、在动态取色下与主色打架。现在改用 M3 的角色 ——
+  /// 图片走 primary、视频走 tertiary、音频走 secondary，"混合"走中性色。
+  static Color colorOfKind(ColorScheme scheme, PromptKind k) => switch (k) {
+        PromptKind.image => scheme.primary,
+        PromptKind.video => scheme.tertiary,
+        PromptKind.audio => scheme.secondary,
+        PromptKind.mixed => scheme.onSurfaceVariant,
+      };
+
+  static Color _containerOf(ColorScheme scheme, PromptKind k) => switch (k) {
+        PromptKind.image => scheme.primaryContainer,
+        PromptKind.video => scheme.tertiaryContainer,
+        PromptKind.audio => scheme.secondaryContainer,
+        PromptKind.mixed => scheme.surfaceContainerHighest,
+      };
+
+  static Color _onContainerOf(ColorScheme scheme, PromptKind k) => switch (k) {
+        PromptKind.image => scheme.onPrimaryContainer,
+        PromptKind.video => scheme.onTertiaryContainer,
+        PromptKind.audio => scheme.onSecondaryContainer,
+        PromptKind.mixed => scheme.onSurfaceVariant,
+      };
+
+  static Color _onColorOf(ColorScheme scheme, PromptKind k) => switch (k) {
+        PromptKind.image => scheme.onPrimary,
+        PromptKind.video => scheme.onTertiary,
+        PromptKind.audio => scheme.onSecondary,
+        PromptKind.mixed => scheme.surface,
       };
 
   @override
   Widget build(BuildContext context) {
-    final color = colorOfKind(kind);
-    final bg = onImage ? color.withValues(alpha: 0.95) : color.withValues(alpha: 0.14);
-    final fg = onImage ? Colors.white : color;
+    final scheme = Theme.of(context).colorScheme;
+    final color = colorOfKind(scheme, kind);
+    // 压在图片 / 视频上时用实心角色色 + on 色（不再叠 alpha：0.95 的白字
+    // 底色在浅色主题下会变成"浅底白字"）。
+    final bg = onImage ? color : _containerOf(scheme, kind);
+    final fg = onImage ? _onColorOf(scheme, kind) : _onContainerOf(scheme, kind);
     return Container(
       padding: EdgeInsets.symmetric(horizontal: compact ? 6 : 8, vertical: compact ? 2 : 3),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(AppShapes.standard.small),
+        // 缩略图底色深浅不定，实心角标需要一点投影把边缘拉开
+        // （这是"压在图片上"的局部阴影，不是列表项那种每帧 N 份的 elevation）。
         boxShadow: onImage
-            ? const [BoxShadow(color: Colors.black38, blurRadius: 4, offset: Offset(0, 1))]
+            ? const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 1))]
             : null,
       ),
       child: Row(
@@ -279,7 +331,6 @@ class KindBadge extends StatelessWidget {
               fontSize: compact ? 10 : 11.5,
               color: fg,
               fontWeight: onImage ? FontWeight.w700 : FontWeight.w600,
-              shadows: onImage ? const [Shadow(blurRadius: 2, color: Colors.black54)] : null,
             ),
           ),
         ],
@@ -329,7 +380,7 @@ class EmptyState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 56, color: theme.colorScheme.outline),
+            Icon(icon, size: 56, color: theme.colorScheme.onSurfaceVariant),
             const SizedBox(height: 14),
             Text(title, style: theme.textTheme.titleMedium),
             if (subtitle != null) ...[
@@ -337,7 +388,7 @@ class EmptyState extends StatelessWidget {
               Text(
                 subtitle!,
                 textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
             ],
             if (action != null) ...[const SizedBox(height: 18), action!],
@@ -410,8 +461,8 @@ class CopyableText extends StatelessWidget {
     final value = (text ?? '').trim();
     if (value.isEmpty) {
       return Text(
-        '$label：（空）',
-        style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+        '$label 为空',
+        style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
       );
     }
     return Column(
@@ -439,9 +490,9 @@ class CopyableText extends StatelessWidget {
           width: double.infinity,
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: theme.dividerColor.withValues(alpha: 0.4)),
+            color: theme.colorScheme.surfaceContainer,
+            borderRadius: AppShapes.of(context).smallRadius,
+            border: Border.all(color: theme.colorScheme.outlineVariant),
           ),
           child: SelectableText(
             value,
@@ -472,19 +523,19 @@ class MetaChip extends StatelessWidget {
       margin: const EdgeInsets.only(right: 8, bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(8),
+        color: theme.colorScheme.surfaceContainerHigh,
+        borderRadius: AppShapes.of(context).smallRadius,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[
-            Icon(icon, size: 13, color: theme.colorScheme.outline),
+            Icon(icon, size: 13, color: theme.colorScheme.onSurfaceVariant),
             const SizedBox(width: 4),
           ],
           Text(
             label,
-            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
           const SizedBox(width: 6),
           Text(
@@ -505,7 +556,6 @@ Future<void> copyToClipboard(BuildContext context, String text, {String label = 
       content: Text('$label已复制'),
       duration: const Duration(milliseconds: 1200),
       behavior: SnackBarBehavior.floating,
-      width: 240,
     ),
   );
 }

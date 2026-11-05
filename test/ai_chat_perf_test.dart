@@ -1012,7 +1012,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     // 默认档是「询问」，气泡里要写着
-    expect(find.textContaining('本轮权限：${AiToolPolicy.modeAskLabel}'), findsOneWidget);
+    expect(find.textContaining('本轮权限是 ${AiToolPolicy.modeAskLabel}'), findsOneWidget);
 
     // 生成**还没结束**就切档（转圈动画会让 pumpAndSettle 超时，这里只能 pump）
     await tester.tap(find.text(AiToolPolicy.modeAskLabel));
@@ -1023,7 +1023,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('本轮权限：${AiToolPolicy.modeFullLabel}'), findsOneWidget,
+    expect(find.textContaining('本轮权限是 ${AiToolPolicy.modeFullLabel}'), findsOneWidget,
         reason: '切档要**当场**反映到正在生成的回复气泡里（用户建议 ①）');
 
     // 这一轮结束：那个"实时"标记跟着转圈一起收掉（后端没按轮存权限档，
@@ -1035,7 +1035,7 @@ void main() {
     ));
     unawaited(events.close());
     await tester.pumpAndSettle();
-    expect(find.textContaining('本轮权限：'), findsNothing,
+    expect(find.textContaining('本轮权限是 '), findsNothing,
         reason: '历史气泡上挂"现在的档位"是假的，必须收掉');
   });
 }

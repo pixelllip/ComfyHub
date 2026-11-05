@@ -6,6 +6,7 @@ import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/ai_models.dart';
 import '../widgets/adaptive_layout.dart';
+import '../widgets/settings_scaffold.dart';
 
 /// AI 工具权限（M4 / AIH-031 ~ AIH-036 / AIH-049）。
 ///
@@ -109,7 +110,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
       final tools = await _api.listTools();
       if (mounted) setState(() => _tools = tools);
     } catch (e) {
-      if (mounted) _snack('保存失败：$e', error: true);
+      if (mounted) _snack('保存失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -135,7 +136,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
   Future<void> _saveSearchKey() async {
     final value = _searchKey.text;
     if (value.trim().isEmpty) {
-      _snack('密钥留空 = 不修改；要清除请点「移除密钥」。');
+      _snack('密钥留空就是不修改，要清除请点「移除密钥」。');
       return;
     }
     setState(() => _searchBusy = true);
@@ -145,7 +146,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
       if (mounted) setState(() => _searchCred = status);
       _snack('密钥已保存（${status.source}）。值不会再被读回。');
     } catch (e) {
-      _snack('保存密钥失败：$e', error: true);
+      _snack('保存密钥失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _searchBusy = false);
     }
@@ -158,7 +159,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
       if (mounted) setState(() => _searchCred = status);
       _snack('密钥已移除，联网搜索回到免密钥模式。');
     } catch (e) {
-      _snack('移除失败：$e', error: true);
+      _snack('移除失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _searchBusy = false);
     }
@@ -177,9 +178,9 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
             Text('联网搜索（Keenable）', style: theme.textTheme.titleSmall),
             const SizedBox(height: 4),
             Text(
-              'web_search / web_fetch 的后端。出厂免密钥可用（按来源限速，每小时约 1000 次）；'
-              '两个工具的默认权限档都是「询问」——查询词会发送给搜索服务，每一次都要你点批准，'
-              '嫌烦可在下面改成「允许」。抓取目标只接受公开网址，内网与本机地址会被拒绝。',
+              'web_search 和 web_fetch 都走这个后端。出厂免密钥就能用，按来源限速，每小时约 1000 次。'
+              '两个工具的默认权限都是「询问」，因为查询词会发给搜索服务，每一次都要你点批准。'
+              '嫌烦可以在下面改成「允许」。抓取目标只接受公开网址，内网与本机地址会被拒绝。',
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
             ),
             const SizedBox(height: 10),
@@ -208,8 +209,8 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                 autocorrect: false,
                 enableSuggestions: false,
                 decoration: const InputDecoration(
-                  labelText: '粘贴 Keenable 密钥（可选；留空表示不修改）',
-                  helperText: '只用来提高额度（keenable.ai/console 创建）；只粘贴值本身，不要引号或 NAME=value',
+                  labelText: '粘贴 Keenable 密钥（可选，留空表示不修改）',
+                  helperText: '只用来提高额度，可在 keenable.ai/console 创建。只粘贴值本身，不要带引号或 NAME=value。',
                   border: OutlineInputBorder(),
                   isDense: true,
                 ),
@@ -240,19 +241,23 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('AI 工具权限'),
-        actions: [
-          IconButton(
-            tooltip: '重新加载',
-            onPressed: _loading ? null : _reload,
-            icon: const Icon(Icons.refresh),
+      // 标题进正文（与设置首页/其它设置子页同一套大标题），不再用 AppBar。
+      body: Column(
+        children: [
+          SettingsPageHeader(
+            title: 'AI 工具权限',
+            actions: [
+              IconButton(
+                tooltip: '重新加载',
+                onPressed: _loading ? null : _reload,
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
           ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : Column(
               children: [
                 if (_saving) const LinearProgressIndicator(minHeight: 2),
                 if (_error != null)
@@ -260,7 +265,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     color: Theme.of(context).colorScheme.errorContainer,
-                    child: Text('读取工具权限失败：$_error',
+                    child: Text('读取工具权限失败，$_error',
                         style: Theme.of(context).textTheme.bodySmall),
                   ),
                 Expanded(
@@ -304,7 +309,10 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                   ),
                 ),
               ],
-            ),
+                ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -335,8 +343,8 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
             ),
             const SizedBox(height: 4),
             Text(
-              '工具调用要看权限：允许 = 直接执行，询问 = 在聊天里等你点「批准 / 拒绝」，拒绝 = 直接挡掉。'
-              '需要审批的工具在回复气泡里出按钮；没人点就会按拒绝处理。',
+              '工具调用分允许、询问、拒绝三档。允许会直接执行，询问会在聊天里等你点「批准 / 拒绝」，'
+              '拒绝会直接挡掉。需要审批的工具会在回复气泡里出按钮，没人点就按拒绝处理。',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.onTertiaryContainer),
             ),
@@ -367,9 +375,9 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
             ),
             const SizedBox(height: 4),
             Text(
-              '这些是本机 ComfyUI 的目录，后端每次现探、自动只读放行 —— '
+              '这些是本机 ComfyUI 的目录，后端每次现探、自动只读放行，'
               '所以 AI 能直接读你自己的工作流文件（例如 user\\default\\workflows 下的 .json），'
-              '不用你手动加白名单。**它们不在写白名单里**：写入仍然只允许上面那些目录。',
+              '不用你手动加白名单。写入仍然只允许上面那些目录，这些目录不在写白名单里。',
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
             ),
             const SizedBox(height: 8),
@@ -426,9 +434,9 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
               Text(
                 // 用户 2026-09-19：「单轮读写上限给得太低了」→ 读 256KB→2MB、写 1MB→4MB，
                 // 而且 read_file 现在支持 offset 分段读（没读完会告诉你下一段从哪读）。
-                '单次读写上限：读 ${formatSize(_policy.maxReadBytes)} · '
-                '写 ${formatSize(_policy.maxWriteBytes)}（后端固定，界面不可改；'
-                '读不完可以按 offset 分段读）',
+                '单次读写上限是读 ${formatSize(_policy.maxReadBytes)}、'
+                '写 ${formatSize(_policy.maxWriteBytes)}。后端固定，界面不能改，'
+                '读不完可以按 offset 分段读。',
                 style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
               ),
             ],
@@ -598,7 +606,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
               ),
               const SizedBox(height: 6),
               Text(
-                '被聊天记录或提问卡引用的图不会被删（历史里的配图要能重开）；'
+                '被聊天记录或提问卡引用的图不会被删，历史里的配图要能重开。'
                 '没被引用的保留 ${stats.graceDays} 天，总量超过上限时从最老的没引用图开始淘汰，'
                 '不会动正在等回答的那一轮。',
                 style: theme.textTheme.bodySmall?.copyWith(
@@ -626,7 +634,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
       final stats = await _api.attachmentCacheStats();
       if (mounted) setState(() => _cacheStats = stats);
     } catch (e) {
-      if (mounted) _snack('读取缓存占用失败：$e', error: true);
+      if (mounted) _snack('读取缓存占用失败，$e', error: true);
     }
   }
 
@@ -648,7 +656,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _cacheBusy = false);
-      _snack('清理失败：$e', error: true);
+      _snack('清理失败，$e', error: true);
     }
   }
 
@@ -764,14 +772,14 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
         {
           'writeRoots': [..._policy.writeRoots, root],
         },
-        '已加入写目录：$root',
+        '已加入写目录 $root',
       );
 
   Future<void> _addReadRoot(String root) => _patch(
         {
           'readRoots': [..._policy.readRoots, root],
         },
-        '已加入读目录：$root',
+        '已加入读目录 $root',
       );
 
   /// 移除一个目录。**新建列表**再发（`_policy` 里的列表可能是 const，而且就地改会
@@ -780,14 +788,14 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
         {
           'writeRoots': [for (final r in _policy.writeRoots) if (r != root) r],
         },
-        '已移除写目录：$root',
+        '已移除写目录 $root',
       );
 
   Future<void> _removeReadRoot(String root) => _patch(
         {
           'readRoots': [for (final r in _policy.readRoots) if (r != root) r],
         },
-        '已移除读目录：$root',
+        '已移除读目录 $root',
       );
 }
 

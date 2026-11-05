@@ -560,7 +560,7 @@ void main() {
     // 再加一条：走 POST /memory/entries
     await tester.tap(find.byTooltip('查看 / 编辑长期记忆'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.widgetWithText(TextField, '例如：交付一律 16:9、带字幕'), '交付 16:9');
+    await tester.enterText(find.widgetWithText(TextField, '例如 交付一律 16:9、带字幕'), '交付 16:9');
     await tester.tap(find.text('添加'));
     await tester.pumpAndSettle();
     expect(rec.memoryAdded, ['交付 16:9']);
@@ -905,7 +905,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('实时进度'), findsOneWidget);
-    expect(find.textContaining('正在生成：雨夜霓虹'), findsOneWidget);
+    expect(find.textContaining('正在生成「雨夜霓虹」'), findsOneWidget);
     expect(find.textContaining('赛博朋克少女'), findsWidgets);
     // ★ 用户要的"不只显示进行中"：**当前步骤 + 百分比**都得看得见
     expect(find.textContaining('正在执行 KSampler（12/30）'), findsOneWidget);
@@ -1755,8 +1755,8 @@ void main() {
     // 切档后的说明文字在 tooltip 里（点开菜单/悬停能看到）
     expect(
       find.byTooltip(
-          '当前：${AiToolPolicy.modeFullLabel} —— AI 调用工具不会等你批准'
-          '（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
+          '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
+          '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
       findsWidgets,
       reason: '档位说明与"目录范围没放宽"那句必须还能查到',
     );

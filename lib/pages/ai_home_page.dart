@@ -14,6 +14,7 @@ import '../core/file_drop.dart';
 import '../core/formatting.dart';
 import '../core/pairing_token.dart';
 import '../core/settings_store.dart';
+import '../core/theme.dart';
 import '../models/models.dart';
 import '../models/ai_models.dart';
 import '../models/layout_embed.dart';
@@ -316,8 +317,9 @@ class _AiHomePageState extends State<AiHomePage> {
       if (!mounted || !_scroll.hasClients) return;
       _scroll.animateTo(
         _scroll.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
+        // M3 动效令牌（AppMotion）：同一类"回到位置"的动作全 App 用同一档。
+        duration: AppMotion.medium,
+        curve: AppMotion.emphasized,
       );
     });
   }
@@ -327,8 +329,8 @@ class _AiHomePageState extends State<AiHomePage> {
       if (_scroll.hasClients) {
         _scroll.animateTo(
           _scroll.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
+          duration: AppMotion.short,
+          curve: AppMotion.emphasized,
         );
       }
     });
@@ -388,7 +390,7 @@ class _AiHomePageState extends State<AiHomePage> {
       atBottom: _atBottom,
       input: _input,
       inputFocus: _inputFocus,
-      onShowStatus: showPanel ? null : () => _showStatusSheet(context),
+      onShowStatus: showPanel ? null : () => _showContextSheet(context),
       onJumpToBottom: _jumpToBottom,
       onSubmitted: submit,
       onLayoutResubmit: (text) => submit(store, text),
@@ -416,14 +418,42 @@ class _AiHomePageState extends State<AiHomePage> {
     );
   }
 
-  void _showStatusSheet(BuildContext context) {
+  /// 手机上「上下文与状态」面板（模型能力 / ComfyUI / Skills / 长期记忆）。
+  ///
+  /// ⚠ 入口名字必须与内容一致（用户 2026-11-05："手机的 comfyui 详情菜单中，
+  /// 包含的内容与其名字不符"）：它早先叫「ComfyUI 状态」，但面板里 ComfyUI 只是
+  /// 其中一张卡 —— 用户点进来会以为走错地方。现在顶栏菜单叫「ComfyUI 与上下文」、
+  /// 面板自己再标一行"上下文与状态"。
+  void _showContextSheet(BuildContext context) {
     final store = context.read<AiWorkspaceStore>();
+    final theme = Theme.of(context);
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (_) => SizedBox(
-        height: MediaQuery.sizeOf(context).height * 0.6,
-        child: _ContextPanel(store: store),
+        height: MediaQuery.sizeOf(context).height * 0.72,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('上下文与状态', style: theme.textTheme.titleMedium),
+                  Text(
+                    '模型能力 · ComfyUI · Skills · 长期记忆',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(child: _ContextPanel(store: store)),
+          ],
+        ),
       ),
     );
   }
@@ -503,24 +533,22 @@ class _Thread extends StatelessWidget {
   /// `LayoutResubmit.toMessage()` 拼出来的 —— 所以它也是一条**用户消息**。
   final Future<void> Function(String text) onLayoutResubmit;
 
-  /// 顶栏「选择现有工作流」：把路径写进输入框，让 AI 照着这一份出图。
+  /// 输入框 `+` 菜单里的「选择现有工作流」：把路径写进输入框，让 AI 照着这一份出图。
   ///
   /// 不直接发送：用户还要补一句"想生成什么"。路径写进去之后，AI 的第一动作必然是
   /// `comfy_load_workflow(path=…)`（系统提示第 23 条 + `comfy-workflow-guide`），
   /// 不会自己编一份新的。
   Future<void> _pickWorkflow(BuildContext context) async {
     final store = context.read<AiWorkspaceStore>();
+    // 选择器**只做选择**：蓝图入口已按用户要求移除（2026-11-05）。
     final file = await showWorkflowPicker(
       context,
       loadList: store.listWorkflowFiles,
-      loadRaw: store.readWorkflowFile,
-      diagnose: store.workflowBlueprint,
-      save: (raw, name) => store.saveWorkflow(raw: raw, name: name),
     );
     if (file == null || !context.mounted) return;
     final existing = input.text.trimRight();
     final hint = existing.isEmpty ? '' : '\n';
-    final insert = '用这份工作流生成：${file.path}\n';
+    final insert = '用这份工作流生成 ${file.path}\n';
     final next = '$existing$hint$insert';
     input.value = TextEditingValue(
       text: next,
@@ -547,7 +575,8 @@ class _Thread extends StatelessWidget {
         _ConversationAppBar(
           store: store,
           onShowStatus: onShowStatus,
-          onPickWorkflow: () => _pickWorkflow(context),
+          // 工作流库只在桌面后端有：手机上不给这个入口（给了也只会弹"读不到"）。
+          onPickWorkflow: store.isLocal ? null : () => _pickWorkflow(context),
         ),
         Expanded(
           child: Stack(
@@ -596,6 +625,9 @@ class _Thread extends StatelessWidget {
             controller: input,
             focusNode: inputFocus,
             onSubmit: (text) => onSubmitted(store, text),
+            // 顶栏精简后，工作流选择从输入框的 `+` 菜单进（功能不丢）。
+            onPickWorkflow:
+                store.isLocal ? null : () => _pickWorkflow(context),
           ),
       ],
     );
@@ -723,9 +755,9 @@ class _ConversationListState extends State<_ConversationList> {
                         ),
                         // M3 的 ListTile 选中态**默认只把文字染成主题色、没有底色**，
                         // 于是"鼠标压过的那一行"看着比真选中的还显眼。这里给当前会话一个明确的底色。
-                        selectedTileColor: theme.colorScheme.primary.withValues(
-                          alpha: 0.16,
-                        ),
+                        // M3 的选中角色是 `secondaryContainer`，不是"primary 叠 16%"。
+                        selectedTileColor: theme.colorScheme.secondaryContainer,
+                        selectedColor: theme.colorScheme.onSecondaryContainer,
                         title: Text(
                           c.title,
                           maxLines: 1,
@@ -797,7 +829,7 @@ class _ConversationAppBar extends StatelessWidget
     implements PreferredSizeWidget {
   final AiWorkspaceStore store;
 
-  /// 给「ComfyUI 状态」用的入口（可空）。
+  /// 给「上下文与状态」面板用的入口（可空）。
   ///
   /// **只在第三栏铺不开时给**（< 1200px）：那个宽度下右侧栏不存在，不补这个按钮
   /// 的话 Comfy 状态整块内容在界面上不可达（用户建议 ② / AIH-002）。
@@ -853,38 +885,69 @@ class _ConversationAppBar extends StatelessWidget
           ),
         ],
       ),
+      // **一个主操作 + 一个 overflow**（2026-11-05 用户："AppBar 按钮太多"）。
+      //
+      // 以前这里平铺 5 枚图标（工作流 / ComfyUI 状态 / 训练台 / 重命名 / 新建），
+      // 窄屏挤、宽屏也在抢标题宽度。M3 的做法是主操作留在外面、其余收进菜单：
+      //   · 「新建对话」是这一页唯一的主动作 → `IconButton.filledTonal`；
+      //   · 工作流 / 状态 / 重命名 / 训练台 → 「更多」菜单。
+      //
+      // ⚠ 原来那枚「选择现有工作流（可看蓝图）」**从顶栏移除**（用户点名要删的
+      //   "查看蓝图入口"）；工作流选择改从输入框的 `+` 菜单进（功能不丢）。
       actions: [
-        if (onPickWorkflow != null)
-          IconButton(
-            tooltip: '选择现有工作流（可看蓝图）',
-            icon: const Icon(Icons.account_tree_outlined, size: 18),
-            onPressed: onPickWorkflow,
+        AppMenuButton<String>(
+          tooltip: '更多操作',
+          onSelected: (v) {
+            if (v == 'rename') _renameCurrent(context);
+            if (v == 'context') onShowStatus?.call();
+            if (v == 'workflow') onPickWorkflow?.call();
+            if (v == 'train') {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const TrainPage()),
+              );
+            }
+          },
+          options: [
+            if (conv != null)
+              const MenuOption(
+                value: 'rename',
+                icon: Icons.edit_outlined,
+                label: '重命名本对话',
+              ),
+            if (onShowStatus != null)
+              const MenuOption(
+                value: 'context',
+                icon: Icons.dns_outlined,
+                label: '上下文与状态',
+              ),
+            if (onPickWorkflow != null)
+              const MenuOption(
+                value: 'workflow',
+                icon: Icons.account_tree_outlined,
+                label: '选择现有工作流…',
+              ),
+            const MenuOption(
+              value: 'train',
+              icon: Icons.school_outlined,
+              label: 'LoRA 训练台',
+              dividerBefore: true,
+            ),
+          ],
+          // 不再给按钮单独的 tooltip：`AppMenuButton` 已经用 `tooltip` 包了一层，
+          // 两处都给会让 `find.byTooltip('更多操作')` 命中两个节点。
+          button: (context, controller, isOpen) => IconButton(
+            onPressed: () =>
+                controller.isOpen ? controller.close() : controller.open(),
+            icon: const Icon(Icons.more_vert),
           ),
-        if (onShowStatus != null)
-          IconButton(
-            tooltip: 'ComfyUI 状态',
-            icon: const Icon(Icons.dns_outlined, size: 18),
-            onPressed: onShowStatus,
-          ),
-        IconButton(
-          tooltip: 'LoRA 训练台（取训练集 → 筛选 → 打标 → 预处理 → 参数 → 训练 / Krea-2）',
-          icon: const Icon(Icons.school_outlined, size: 18),
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const TrainPage()),
-          ),
-        ),
-        if (conv != null)
-          IconButton(
-            tooltip: '重命名这条对话',
-            icon: const Icon(Icons.edit_outlined, size: 18),
-            onPressed: () => _renameCurrent(context),
-          ),
-        IconButton(
-          tooltip: '新建对话',
-          icon: const Icon(Icons.add_comment_outlined, size: 18),
-          onPressed: () => store.newConversation(),
         ),
         const SizedBox(width: 4),
+        IconButton.filledTonal(
+          tooltip: '新建对话',
+          onPressed: () => store.newConversation(),
+          icon: const Icon(Icons.add_comment_outlined, size: 20),
+        ),
+        const SizedBox(width: 8),
       ],
     );
   }
@@ -1463,9 +1526,18 @@ class _MessageBubble extends StatelessWidget {
     final theme = Theme.of(context);
     final m = message;
     final align = m.isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    // 用户气泡 = primaryContainer（M3 的"我"侧），助手气泡 = surfaceContainerHigh
+    // （实色，不再叠 alpha：叠色在深色下会发灰、在动态取色下还会串色）。
     final bg = m.isUser
         ? theme.colorScheme.primaryContainer
-        : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5);
+        : theme.colorScheme.surfaceContainerHigh;
+    // M3 表达性气泡：大圆角 + 靠近说话人的那一角收小（用户消息贴右、助手贴左）。
+    final bubbleShape = BorderRadius.only(
+      topLeft: const Radius.circular(16),
+      topRight: const Radius.circular(16),
+      bottomLeft: Radius.circular(m.isUser ? 16 : 4),
+      bottomRight: Radius.circular(m.isUser ? 4 : 16),
+    );
     // 失败/取消的助手消息可以重试：新建一个 Run，用 retryOfRunId 关联回去（AIH-024）
     final canRetry =
         !m.isUser &&
@@ -1505,7 +1577,7 @@ class _MessageBubble extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: bg,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: bubbleShape,
           ),
           // 整条气泡一个选择域（用户 bug ②："仅能选择 3 行文本"）：
           // 一段回复被解析成很多个块（段落 / 标题 / 列表 / 表格 / 代码块），
@@ -1590,7 +1662,7 @@ class _MessageBubble extends StatelessWidget {
                           ),
                           const SizedBox(width: 3),
                           Text(
-                            '本轮权限：$permissionLabel',
+                            '本轮权限是 $permissionLabel',
                             style: theme.textTheme.labelSmall?.copyWith(
                               color:
                                   permissionLabel == AiToolPolicy.modeFullLabel
@@ -1666,7 +1738,9 @@ class _MessageBubble extends StatelessWidget {
                       label: const Text('重试'),
                       style: TextButton.styleFrom(
                         padding: const EdgeInsets.symmetric(horizontal: 8),
-                        minimumSize: const Size(0, 32),
+                        // M3 的最小触控高度是 48；聊天里的次要按钮压到 44，
+                        // 既不再出现"28~32 高、点不准"的小按钮，也不把气泡撑得太胖。
+                        minimumSize: const Size(0, 44),
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                     ),
@@ -1870,7 +1944,7 @@ class _AskCardState extends State<_AskCard> {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: color.withValues(alpha: 0.55)),
-        color: theme.colorScheme.surface.withValues(alpha: 0.6),
+        color: theme.colorScheme.surface,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2088,7 +2162,7 @@ class _AskOptionRow extends StatelessWidget {
         // Flutter 会直接抛断言，见 AGENTS.md 第 6 节）
         color: selected
             ? color.withValues(alpha: 0.10)
-            : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+            : theme.colorScheme.surfaceContainerHighest,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
           side: BorderSide(
@@ -2247,7 +2321,7 @@ class _AskQuestionImage extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Material(
-      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      color: theme.colorScheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(8),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -2591,7 +2665,7 @@ class _AskComposerState extends State<_AskComposer> {
               border: Border.all(
                 color: theme.colorScheme.tertiary.withValues(alpha: 0.55),
               ),
-              color: theme.colorScheme.surface.withValues(alpha: 0.6),
+              color: theme.colorScheme.surface,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -2647,8 +2721,8 @@ class _AskComposerState extends State<_AskComposer> {
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
                       (q.answer ?? '').isEmpty
-                          ? '（这一题已跳过：模型会当作"用户没有回答"）'
-                          : '已作答：${q.answer}',
+                          ? '（这一题已跳过，模型会当作"用户没有回答"）'
+                          : '已作答，${q.answer}',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.primary,
                       ),
@@ -2736,7 +2810,7 @@ class _AskComposerState extends State<_AskComposer> {
                   onPressed: (_busy || page == 0) ? null : () => _go(-1),
                   style: TextButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: const Size(0, 32),
+                    minimumSize: const Size(0, 44),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                   child: const Text('上一题'),
@@ -2746,7 +2820,7 @@ class _AskComposerState extends State<_AskComposer> {
                 onPressed: _busy ? null : _skipCurrent,
                 style: TextButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: const Size(0, 32),
+                  minimumSize: const Size(0, 44),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
                 child: const Text('跳过本题'),
@@ -2759,7 +2833,7 @@ class _AskComposerState extends State<_AskComposer> {
                   label: const Text('停止生成'),
                   style: TextButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: const Size(0, 32),
+                    minimumSize: const Size(0, 44),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                 ),
@@ -2779,7 +2853,7 @@ class _AskComposerState extends State<_AskComposer> {
                       },
                 style: FilledButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 14),
-                  minimumSize: const Size(0, 36),
+                  minimumSize: const Size(0, 44),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
                 child: Text(_isLast ? '提交' : '下一题'),
@@ -2801,7 +2875,7 @@ class _AskComposerState extends State<_AskComposer> {
   ) {
     final outline = theme.colorScheme.outline;
     return Material(
-      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      color: theme.colorScheme.surfaceContainerHighest,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
         side: BorderSide(
@@ -2923,7 +2997,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: color.withValues(alpha: 0.5)),
-        color: theme.colorScheme.surface.withValues(alpha: 0.6),
+        color: theme.colorScheme.surface,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3001,7 +3075,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
                     onPressed: _busy ? null : () => _resolve(approve: true),
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(horizontal: 12),
-                      minimumSize: const Size(0, 30),
+                      minimumSize: const Size(0, 44),
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     child: const Text('批准'),
@@ -3011,7 +3085,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
                     onPressed: _busy ? null : () => _resolve(approve: false),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(horizontal: 12),
-                      minimumSize: const Size(0, 30),
+                      minimumSize: const Size(0, 44),
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     child: const Text('拒绝'),
@@ -3105,7 +3179,7 @@ class _ToolSection extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        color: theme.colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: theme.dividerColor.withValues(alpha: 0.6)),
       ),
@@ -3302,7 +3376,7 @@ class _ProducedMediaCard extends StatelessWidget {
 
   static final ButtonStyle _buttonStyle = TextButton.styleFrom(
     padding: const EdgeInsets.symmetric(horizontal: 8),
-    minimumSize: const Size(0, 30),
+    minimumSize: const Size(0, 44),
     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
   );
 
@@ -3806,7 +3880,7 @@ class _EmptyThread extends StatelessWidget {
               const SizedBox(height: 6),
               Text(
                 '生图 / 生视频需求的澄清、提示词设计与进度跟进。\n'
-                '输入 / 可以调出 Skills 目录；也可以把文件拖进来当附件。',
+                '输入 / 可以调出 Skills 目录，也可以把文件拖进来当附件。',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.outline,
@@ -3818,7 +3892,7 @@ class _EmptyThread extends StatelessWidget {
                   child: Padding(
                     padding: const EdgeInsets.all(12),
                     child: Text(
-                      '还没有配置 Provider。请到「设置 → AI 模型」添加协议、Base URL 和模型目录；'
+                      '还没有配置 Provider。请到「设置 → AI 模型」添加协议、Base URL 和模型目录，'
                       'API Key 只写不读，不会出现在界面或日志里。',
                       style: theme.textTheme.bodySmall,
                     ),
@@ -3843,11 +3917,15 @@ class _Composer extends StatefulWidget {
   final FocusNode focusNode;
   final Future<void> Function(String text) onSubmit;
 
+  /// 「选择现有工作流…」（从顶栏搬到 `+` 菜单）。null = 这个端没有工作流库。
+  final Future<void> Function()? onPickWorkflow;
+
   const _Composer({
     required this.store,
     required this.controller,
     required this.focusNode,
     required this.onSubmit,
+    this.onPickWorkflow,
   });
 
   @override
@@ -3977,7 +4055,7 @@ class _ComposerState extends State<_Composer> {
       if (!mounted) return;
       setState(() {
         _cardsLoading = false;
-        _cardsError = '读不到卡片库：$e';
+        _cardsError = '读不到卡片库，$e';
       });
     }
   }
@@ -3999,7 +4077,7 @@ class _ComposerState extends State<_Composer> {
     if ((card.prompt ?? '').trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('这张卡的正面提示词还空着：先去「预设库 → 卡片库」补上再用。'),
+          content: Text('这张卡的正面提示词还空着，先去「预设库 → 卡片库」补上再用。'),
         ),
       );
       return;
@@ -4112,7 +4190,7 @@ class _ComposerState extends State<_Composer> {
           if (blockers.isNotEmpty)
             _Banner(
               text:
-                  '附件未通过准入，发送会被阻断：\n${blockers.map((b) => '· $b').join('\n')}',
+                  '附件未通过准入，发送会被阻断。\n${blockers.map((b) => '· $b').join('\n')}',
               icon: Icons.block,
               error: true,
             ),
@@ -4236,7 +4314,7 @@ class _ComposerState extends State<_Composer> {
                   // 会把"文件路径"当内容贴进来（见 `_composerContextMenu`）
                   contextMenuBuilder: _composerContextMenu,
                   decoration: const InputDecoration(
-                    hintText: '描述你的生图需求；/ 调用 Skill，@ 插入角色卡（可多张）/ 画风卡（Enter 发送，Shift+Enter 换行）',
+                    hintText: '描述你的生图需求。/ 可以调用 Skill，@ 可以插入角色卡（可多张）或画风卡。Enter 发送，Shift+Enter 换行。',
                     border: OutlineInputBorder(),
                     isDense: true,
                   ),
@@ -4358,6 +4436,7 @@ class _ComposerState extends State<_Composer> {
           if (v == 'layout') _openLayoutCanvas();
           if (v == 'cards') _openCards();
           if (v == 'sheet') _startCardFromSheet();
+          if (v == 'workflow') widget.onPickWorkflow?.call();
         },
         options: [
           const MenuOption(
@@ -4365,6 +4444,15 @@ class _ComposerState extends State<_Composer> {
             icon: Icons.attach_file,
             label: '添加附件',
           ),
+          // 「选择现有工作流」从顶栏搬到这里（2026-11-05 顶栏精简）。
+          // 只有桌面后端才有 ComfyUI 工作流库；手机上给了也没东西可选。
+          if (widget.onPickWorkflow != null)
+            const MenuOption(
+              value: 'workflow',
+              icon: Icons.account_tree_outlined,
+              label: '选择现有工作流…',
+              dividerBefore: true,
+            ),
           // 布局画布（2026-11-03）：工作台是主入口，画布只是"把构图摆清楚"的那一步。
           // ⚠ 放在卡片库**后面**：两个 `dividerBefore` 挨在一起会画出一条空分隔线。
           // 卡片库只有桌面后端有（手机侧没有这两张表）。
@@ -4423,10 +4511,10 @@ class _ComposerState extends State<_Composer> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Material(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+        color: theme.colorScheme.surfaceContainerHigh,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: BorderSide(color: theme.dividerColor),
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: theme.colorScheme.outlineVariant),
         ),
         clipBehavior: Clip.antiAlias,
         child: SizedBox(
@@ -4506,7 +4594,7 @@ class _ComposerState extends State<_Composer> {
   ) => TextButton(
     onPressed: onTap,
     style: TextButton.styleFrom(
-      minimumSize: const Size(0, 34),
+      minimumSize: const Size(0, 44),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       foregroundColor: selected
           ? theme.colorScheme.primary
@@ -4541,7 +4629,7 @@ class _ComposerState extends State<_Composer> {
       return Center(
         child: Text(
           _cardQuery.trim().isEmpty
-              ? '还没有${_cardsStyled ? '画风卡' : '角色卡'}：去「预设库 → 卡片库」新建一张。'
+              ? '还没有${_cardsStyled ? '画风卡' : '角色卡'}，去「预设库 → 卡片库」新建一张。'
               : '没有匹配的卡片',
           style: theme.textTheme.labelSmall?.copyWith(
             color: theme.colorScheme.outline,
@@ -4829,7 +4917,7 @@ class _ComposerState extends State<_Composer> {
     if (FileClipboard.channelAlive == false && !_clipboardNoticeShown) {
       _clipboardNoticeShown = true;
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(content: Text('读剪贴板（文件 / 图片）的原生通道没接上：Ctrl+V 现在只能粘文本')),
+        const SnackBar(content: Text('读剪贴板（文件 / 图片）的原生通道没接上，Ctrl+V 现在只能粘文本')),
       );
     }
     // 这是一次**普通文本粘贴**，原样实现一遍交给输入框
@@ -5033,8 +5121,8 @@ class _PermissionPicker extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: AppMenuButton<String>(
         tooltip: full
-            ? '当前：$text —— AI 调用工具不会等你批准（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'
-            : '当前：$text —— 写盘 / 提交任务这类改动操作会先弹批准。点一下切到「${AiToolPolicy.modeFullLabel}」。',
+            ? '当前是$text，AI 调用工具不会等你批准。可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。'
+            : '当前是$text，写盘 / 提交任务这类改动操作会先弹批准。点一下切到「${AiToolPolicy.modeFullLabel}」。',
         onSelected: store.setPermissionMode,
         options: [
           MenuOption(
@@ -5197,9 +5285,9 @@ class _ModelPicker extends StatelessWidget {
     final provider = store.selectedProvider?.displayName;
     return Tooltip(
       message:
-          '当前模型：$name${modalities.isEmpty ? '' : '（$modalities）'}'
-          '${provider == null ? '' : '\n来源：$provider'}'
-          ' —— 点一下换一个',
+          '当前模型是 $name${modalities.isEmpty ? '' : '（$modalities）'}'
+          '${provider == null ? '' : '，来自 $provider'}'
+          '。点一下换一个',
       child: button,
     );
   }
@@ -5297,7 +5385,7 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
           const SizedBox(width: 6),
           Flexible(
             child: Text(
-              '来源：${p.displayName}',
+              '来自 ${p.displayName}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.labelMedium?.copyWith(
@@ -5547,11 +5635,9 @@ class _EffortPicker extends StatelessWidget {
 
     // 纯图标档用 tooltip 兜住信息（tooltip 里带着档位说明与"为什么置灰"）
     final tooltip = enabled
-        ? '思考强度（当前：${store.reasoningEffort.label}）'
-              '：「默认」始终可选：不发思考参数、由网关决定；'
-              '模型声明的档位：'
-              '${options.where((e) => e.isThinking).map((e) => e.label).join(' / ')}'
-        : (model == null ? '还没选模型' : '$text —— 该模型未声明推理能力，请到「设置 → AI 模型」声明');
+        ? '思考强度（当前是 ${store.reasoningEffort.label}）。「默认」始终可选，不发思考参数，由网关决定。'
+              '模型声明的档位有 ${options.where((e) => e.isThinking).map((e) => e.label).join(' / ')}'
+        : (model == null ? '还没选模型' : '$text。该模型未声明推理能力，请到「设置 → AI 模型」声明。');
 
     return AppMenuButton<AiReasoningEffort>(
       tooltip: tooltip,
@@ -5657,7 +5743,7 @@ class _AttachmentTile extends StatelessWidget {
 
     return Tooltip(
       message: blocked
-          ? '这张附件发不出去：\n${blockers.map((b) => '· $b').join('\n')}'
+          ? '这张附件发不出去。\n${blockers.map((b) => '· $b').join('\n')}'
           : '${attachment.name} · ${attachment.sizeLabel}${attachment.isVideo ? '（已取预览帧）' : ''}'
                 '\n点击在应用内预览（弹窗）',
       child: SizedBox(
@@ -5950,14 +6036,14 @@ class _ComfyProgress extends StatelessWidget {
             const SizedBox(height: 6),
             if (!jobs.comfyReachable)
               Text(
-                'ComfyUI 不可达：进度拿不到（它没在跑？）',
+                'ComfyUI 连不上，进度拿不到（它没在跑？）',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: theme.colorScheme.outline,
                 ),
               )
             else if (jobs.queueRunning > 0)
               Text(
-                '正在生成：${jobs.runningLabel ?? '未知工作流'}'
+                '正在生成「${jobs.runningLabel ?? '未知工作流'}」'
                 '${jobs.queuePending > 0 ? '（还有 ${jobs.queuePending} 个排队）' : ''}',
                 style: theme.textTheme.bodySmall,
               ),
@@ -6001,12 +6087,10 @@ class _ComfyProgress extends StatelessWidget {
 /// 两处共用这一个函数，就不会出现"只有实时进度有卡片"或者几张卡长得不一样。
 /// 数值与主题里的 `cardTheme` 对齐（M3 的 surfaceContainerLow、14 圆角、
 /// outlineVariant@0.5 描边）。
+/// 与 `cardTheme` 对齐的"填充卡"：实心 surfaceContainerHigh + 24 圆角，无描边。
 BoxDecoration panelCardDecoration(ThemeData theme) => BoxDecoration(
-  color: theme.colorScheme.surfaceContainerLow,
-  borderRadius: BorderRadius.circular(14),
-  border: Border.all(
-    color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-  ),
+  color: theme.colorScheme.surfaceContainerHigh,
+  borderRadius: BorderRadius.circular(24),
 );
 
 /// 右侧栏里的一块：统一的卡片容器 + 一行标题（可选右侧动作）。
@@ -6194,7 +6278,7 @@ class _PendingApprovalsState extends State<_PendingApprovals> {
         children: [
           if (error != null)
             Text(
-              '待审批列表取不到：$error',
+              '待审批列表取不到，$error',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.labelSmall?.copyWith(
@@ -6442,7 +6526,7 @@ class _ContextPanelState extends State<_ContextPanel> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '来源：${model.capabilitySourceLabel}'
+                      '来源是 ${model.capabilitySourceLabel}'
                       '${model.contextWindow != null ? ' · 上下文 ${model.contextWindow}' : ''}',
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: theme.colorScheme.outline,
@@ -6472,7 +6556,7 @@ class _ContextPanelState extends State<_ContextPanel> {
                   if (_loading)
                     const LinearProgressIndicator(minHeight: 2)
                   else if (_error != null)
-                    Text('查询失败：$_error', style: theme.textTheme.bodySmall)
+                    Text('查询失败，$_error', style: theme.textTheme.bodySmall)
                   else if (_status == null)
                     Text('暂无数据', style: theme.textTheme.bodySmall)
                   else ...[
@@ -6589,7 +6673,7 @@ class _ContextPanelState extends State<_ContextPanel> {
                           const LinearProgressIndicator(minHeight: 2),
                         if (store.skillsError != null)
                           Text(
-                            'Skills 加载失败：${store.skillsError}',
+                            'Skills 加载失败，${store.skillsError}',
                             style: theme.textTheme.bodySmall,
                           ),
                       ],
@@ -6664,7 +6748,7 @@ class _ContextPanelState extends State<_ContextPanel> {
     if (result.ok && widget.store.skillsError == null) {
       _snack(result.message);
     } else if (widget.store.skillsError != null) {
-      _snack('Skills 加载失败：${widget.store.skillsError}', error: true);
+      _snack('Skills 加载失败，${widget.store.skillsError}', error: true);
     } else {
       _snack(result.message, error: true);
     }
@@ -6679,7 +6763,7 @@ class _ContextPanelState extends State<_ContextPanel> {
     }
     final ok = await _openFolder(path);
     if (!ok && mounted) {
-      _snack('打不开文件管理器，请手动打开：$path');
+      _snack('打不开文件管理器，请手动打开 $path');
     }
   }
 
@@ -6688,7 +6772,7 @@ class _ContextPanelState extends State<_ContextPanel> {
     final path = widget.store.skillRoots?.userRoot ?? '';
     if (path.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: path));
-    if (mounted) _snack('已复制 skills 目录：$path');
+    if (mounted) _snack('已复制 skills 目录到 $path');
   }
 
   /// 长期记忆编辑器：整篇可改（真源是 memory.md，人是可以手改的）。
@@ -6799,7 +6883,7 @@ class _SkillRow extends StatelessWidget {
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      '有问题：${skill.validationError != null ? '格式不合法' : '有冲突'}',
+                      '有问题，${skill.validationError != null ? '格式不合法' : '有冲突'}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.labelSmall?.copyWith(
@@ -6925,7 +7009,7 @@ class _SkillDropIn extends StatelessWidget {
       children: [
         const SizedBox(height: 2),
         Text(
-          '把 skill 拷进这个目录即装好（启动/刷新时自动登记）：',
+          '把 skill 拷进下面这个目录就算装好，启动或刷新时会自动登记。',
           style: theme.textTheme.labelSmall?.copyWith(
             color: theme.colorScheme.outline,
           ),
@@ -7009,14 +7093,14 @@ class _MemoryPanel extends StatelessWidget {
           ],
         ),
         Text(
-          '每次对话都会带上它；AI 也能用 remember 追加一条。点右上角的图标查看 / 编辑内容。',
+          '每次对话都会带上它，AI 也能用 remember 追加一条。点右上角的图标查看 / 编辑内容。',
           style: theme.textTheme.labelSmall?.copyWith(
             color: theme.colorScheme.outline,
           ),
         ),
         if (store.memoryError != null)
           Text(
-            '长期记忆不可用：${store.memoryError}',
+            '长期记忆不可用，${store.memoryError}',
             style: theme.textTheme.bodySmall,
           ),
       ],
@@ -7206,7 +7290,7 @@ class _MemoryEditorDialogState extends State<_MemoryEditorDialog> {
                   Expanded(
                     child: Text(
                       path.isEmpty
-                          ? '一行一条；AI 的 remember 工具会追加到这里。'
+                          ? '一行一条，AI 的 remember 工具会追加到这里。'
                           : '真源是 $path（也可以直接改那个文件）。',
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: theme.colorScheme.outline,
@@ -7279,7 +7363,7 @@ class _MemoryEditorDialogState extends State<_MemoryEditorDialog> {
                       controller: _entry,
                       decoration: const InputDecoration(
                         labelText: '再加一条',
-                        hintText: '例如：交付一律 16:9、带字幕',
+                        hintText: '例如 交付一律 16:9、带字幕',
                         border: OutlineInputBorder(),
                         isDense: true,
                       ),

@@ -944,7 +944,7 @@ class _GalleryPageState extends State<GalleryPage> {
     } catch (e) {
       if (!mounted) return null;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('展开这一组失败：$e')));
+          .showSnackBar(SnackBar(content: Text('展开这一组失败，$e')));
       return null;
     }
   }
@@ -1049,7 +1049,7 @@ class _GalleryPageState extends State<GalleryPage> {
               subtitle: Text(
                 _folderSelection
                     ? '已选 $picked 张'
-                    : '点一张进详情、长按可多选；拖一张到弹窗外 = 移出或转移集合',
+                    : '点一张进详情，长按可多选。把一张拖到弹窗外，就是移出或转移集合',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: theme.colorScheme.outline,
                 ),
@@ -1518,7 +1518,7 @@ class _GalleryPageState extends State<GalleryPage> {
     } catch (e) {
       if (!mounted) return null;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('拉取集合成员失败，未执行操作：$e')));
+          .showSnackBar(SnackBar(content: Text('拉取集合成员失败，未执行操作，$e')));
       return null;
     }
   }
@@ -1636,7 +1636,7 @@ class _GalleryPageState extends State<GalleryPage> {
       title: '清除 $total 个未关联产物？',
       message:
           '这些产物没有关联任何提示词（多为提示词被删后留下的）。\n'
-          '磁盘上的文件会被删除，且不可恢复；提示词本身不受影响。',
+          '磁盘上的文件会被删除，且不可恢复。提示词本身不受影响。',
       confirmText: '删除 $total 个',
     );
     if (!ok || !mounted) return;
@@ -1679,7 +1679,7 @@ class _GalleryPageState extends State<GalleryPage> {
         regrouped = await store.api.regroupCollections();
       },
       '已重新自动整理',
-      toastOf: () => '已重新自动整理：这次重算了 $regrouped 张',
+      toastOf: () => '已重新自动整理，这次重算了 $regrouped 张',
       // 这一条**要**播报：重算是后台跑完才知道几件事的，光看格子变没变看不出来
       announce: true,
     );
@@ -1742,9 +1742,8 @@ class _FilterSummary extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.45,
-        ),
+        // 用 surface 角色代替"叠 45% alpha"：深色下叠色会发灰，动态取色下还会串色。
+        color: theme.colorScheme.surfaceContainerHigh,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -1953,7 +1952,7 @@ class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (_error != null)
-              Text('读不到集合清单：$_error', style: theme.textTheme.bodySmall)
+              Text('读不到集合清单，$_error', style: theme.textTheme.bodySmall)
             else if (rows == null)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 16),
@@ -1987,7 +1986,7 @@ class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
                       subtitle: Text(
                         fits
                             ? '${collection.kind} · ${collection.size} 张'
-                            : '装不下：那个集合是 ${collection.kind}',
+                            : '装不下，那个集合是 ${collection.kind}',
                         style: theme.textTheme.labelSmall,
                       ),
                       onTap: fits

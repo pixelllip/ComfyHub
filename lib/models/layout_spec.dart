@@ -413,7 +413,7 @@ class LayoutSpec {
     final cam = camera.phrase;
     if (cam.isNotEmpty) {
       // 机位决定透视：俯视才看得见桌面，平视才看得出墙面竖向关系
-      b.write('机位：$cam。');
+      b.write('机位是 $cam。');
     }
     final intro = brief.trim();
     if (intro.isNotEmpty) {
@@ -451,14 +451,14 @@ class LayoutSpec {
     final rel = _relationClause(r);
     switch (r.kind) {
       case LayoutBoxKind.blank:
-        return '$head（$size）：留白，不安排内容。';
+        return '$head（$size）是留白，不安排内容。';
       case LayoutBoxKind.text:
         final t = r.text.trim();
-        if (t.isEmpty) return '$head（$size）：一块文字区域，内容待定。';
-        return '$head（$size）：一行文字「$t」$rel。';
+        if (t.isEmpty) return '$head（$size）是一块文字区域，内容待定。';
+        return '$head（$size）里有一行文字「$t」$rel。';
       case LayoutBoxKind.object:
       case LayoutBoxKind.character:
-        return '$head（$size）：${r.detail}$rel。';
+        return '$head（$size）是${r.detail}$rel。';
     }
   }
 
@@ -609,7 +609,7 @@ class LayoutSpec {
 
     if (active.length > 5) {
       out.add(
-        '当前 ${active.length} 个区域：一段散文大约只能稳定承载 5 个约束，'
+        '当前 ${active.length} 个区域。一段散文大约只能稳定承载 5 个约束，'
         '超出的位置模型会随机忽略。建议改用下面的 MOSS 布局 JSON。',
       );
     }
@@ -634,7 +634,7 @@ class LayoutSpec {
 
     final blanks = regions.length - active.length;
     if (blanks > 0) {
-      out.add('有 $blanks 个留白框：它们进不了 MOSS 布局 JSON（那套格式只认有内容的框），'
+      out.add('有 $blanks 个留白框，它们进不了 MOSS 布局 JSON（那套格式只认有内容的框），'
           '这些信息只保留在通用提示词里。');
     }
 

@@ -78,11 +78,13 @@ class SettingsStore extends ChangeNotifier {
   /// 写死 dark），换成别的默认值等于给所有存量用户换一套配色。
   static const _kThemeMode = 'comfyhub.themeMode';
 
-  /// 是否把**系统强调色**当作主题的种子色（默认开：用户 2026-10-24 要的就是"自动套用"）。
+  /// **Material You 取色档位**（默认 `full` = 整份配色都由系统强调色派生，
+  /// 2026-11-05 用户拍板"尺度做到 A"）。
   ///
-  /// 取不到系统强调色的平台（Linux / macOS / Android 11-）上它没有任何效果，
-  /// 界面会回到 [AppTheme.defaultSeed] —— 与改之前完全一样。
-  static const _kFollowSystemAccent = 'comfyhub.followSystemAccent';
+  /// 老版本只存了布尔 `comfyhub.followSystemAccent`：读不到新键时按它迁移
+  /// （true → full，false → off），用户已有的选择不丢。
+  static const _kAccentMode = 'comfyhub.accentMode';
+  static const _kLegacyFollowSystemAccent = 'comfyhub.followSystemAccent';
 
   /// 手机端**产物缓存**的原件预算（MB）。见 `media_cache.dart` 的
   /// [kOriginalCacheBudgetChoicesMb] —— 档位就那几项，别让用户填任意数字
@@ -117,7 +119,7 @@ class SettingsStore extends ChangeNotifier {
   bool _allowRemoteBackend = false;
   String? _projectRoot;
   AppThemeMode _themeMode = AppThemeMode.dark;
-  bool _followSystemAccent = true;
+  AppAccentMode _accentMode = AppAccentMode.full;
   CollectionDetailStyle _collectionDetailWide = CollectionDetailStyle.dock;
   CollectionDetailStyle _collectionDetailNarrow = CollectionDetailStyle.popup;
   int? _lastApiPort;
@@ -223,8 +225,11 @@ class SettingsStore extends ChangeNotifier {
   /// 界面外观（默认深色）。[AppThemeMode.material] 才是给 `MaterialApp` 的那个值。
   AppThemeMode get themeMode => _themeMode;
 
-  /// 是否跟随系统强调色（见 [SystemAccent]）。
-  bool get followSystemAccent => _followSystemAccent;
+  /// **Material You 取色档位**（见 [AppAccentMode]）。
+  AppAccentMode get accentMode => _accentMode;
+
+  /// 兼容旧接口：等价于"档位不是 off"。
+  bool get followSystemAccent => _accentMode != AppAccentMode.off;
 
   /// 宽屏（`>= kWideLayoutMinWidth`）下集合详情的形态。默认 [CollectionDetailStyle.dock]。
   CollectionDetailStyle get collectionDetailWide => _collectionDetailWide;
@@ -364,7 +369,13 @@ class SettingsStore extends ChangeNotifier {
     _projectRoot = prefs.getString(_kProjectRoot);
     // 认不出来的值（老版本写的 / 手改过的）回默认，不抛：见 AppThemeMode.parse
     _themeMode = AppThemeMode.parse(prefs.getString(_kThemeMode));
-    _followSystemAccent = prefs.getBool(_kFollowSystemAccent) ?? true;
+    // 新键优先；没有就按老布尔迁移（true → accent，false → off）。
+    final storedAccentMode = prefs.getString(_kAccentMode);
+    _accentMode = storedAccentMode != null
+        ? AppAccentMode.parse(storedAccentMode)
+        : AppAccentMode.fromLegacyBool(
+            prefs.getBool(_kLegacyFollowSystemAccent),
+          );
     // 同上：回默认值就是"改之前写死在代码里的行为"（宽屏停靠 / 窄屏居中弹窗）
     _collectionDetailWide = CollectionDetailStyle.parse(
       prefs.getString(_kCollectionDetailWide),
@@ -620,15 +631,19 @@ class SettingsStore extends ChangeNotifier {
     await prefs.setString(_kThemeMode, value.name);
   }
 
-  /// 打开 / 关闭"跟随系统强调色"。**先通知再落盘**（`MaterialApp` 挂着这个 notifier，
+  /// 切换取色档位。**先通知再落盘**（`MaterialApp` 挂着这个 notifier，
   /// 主题要当场换，不该等磁盘）。
-  Future<void> setFollowSystemAccent(bool value) async {
-    if (_followSystemAccent == value) return;
-    _followSystemAccent = value;
+  Future<void> setAccentMode(AppAccentMode value) async {
+    if (_accentMode == value) return;
+    _accentMode = value;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kFollowSystemAccent, value);
+    await prefs.setString(_kAccentMode, value.name);
   }
+
+  /// 兼容旧接口：开 = [AppAccentMode.accent]，关 = [AppAccentMode.off]。
+  Future<void> setFollowSystemAccent(bool value) =>
+      setAccentMode(value ? AppAccentMode.accent : AppAccentMode.off);
 
   /// 重新检测一次系统强调色，然后让主题重建（设置页的「重新检测」）。
   Future<void> refreshSystemAccent() async {

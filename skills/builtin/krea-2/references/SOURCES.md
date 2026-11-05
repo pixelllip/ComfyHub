@@ -1,7 +1,7 @@
 # 来源 / 版本 / 许可
 
 本目录是内置 skill `krea-2` 的**官方原文**存放处（模型自己读不到这里：
-本项目的读路径白名单默认只有 `comfyui` 与 `storage`，见 `ToolPolicyConfig.DEFAULT_READ_DIRS`）。
+本软件的读路径白名单默认只有 `comfyui` 与 `storage`）。
 采集日期统一为 **2026-09**（采集当天 `main` 分支的内容）。
 
 | 本地文件 | 上游 | 许可 / 备注 |

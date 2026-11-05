@@ -176,7 +176,7 @@ class _WorkflowDialogState extends State<_WorkflowDialog> {
     // 超大工作流跳过格式化：JsonEncoder 也要把整个对象遍历一遍，这一步省掉
     final end = _safeCut(raw, _maxDisplayChars);
     return '${raw.substring(0, end)}\n\n'
-        '…（工作流超过 400 KB，这里只显示开头，已省略后面 ${raw.length - end} 个字符；'
+        '…（工作流超过 400 KB，这里只显示开头，已省略后面 ${raw.length - end} 个字符。'
         '点「复制」拿到的是完整内容）';
   }
 
@@ -331,7 +331,7 @@ class _WorkflowDialogState extends State<_WorkflowDialog> {
             Expanded(
               child: Text(
                 _apiFormat
-                    ? '这是提交给 ComfyUI 的 API 格式节点图（agent / 脚本生图只会留下这份）：'
+                    ? '这是提交给 ComfyUI 的 API 格式节点图（agent / 脚本生图只会留下这份），'
                         '参数与连接都在里面，存成 .json 拖进 ComfyUI 就能加载'
                     : '这是 ComfyUI 的工作流 JSON，拖回 ComfyUI 即可复现',
                 style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),

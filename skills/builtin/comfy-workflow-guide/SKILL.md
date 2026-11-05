@@ -7,7 +7,7 @@ version: 1
 
 # 工作流第一站：先看懂，再选，再复制
 
-## 0. 一条硬纪律（用户 2026-10-21 拍板）
+## 0. 一条硬纪律（2026-10-21 定稿）
 
 > **不许自己编工作流。**
 > 用户的机器上已经有工作流（ComfyUI 的 `user\<用户>\workflows\*.json`、库里捕获过的运行、
@@ -56,7 +56,7 @@ version: 1
    `PreviewAny` 是 `mode=4` 时，它们对结果没有贡献。
 2. **连线 ≠ 控件值**：`CLIPTextEncode.text` 如果是一个 `["节点id", 槽位]` 数组，它就被上游覆盖了；
    你在它自己的 `widgets_values` 里看到的文字**不一定生效**。
-3. **别拿标题 / 文件名当证据**：真机上 `moss image edit workflow.json` 其实是
+3. **别拿标题 / 文件名当证据** —— 实际案例：一份名为 `moss image edit workflow.json` 的工作流其实是
    **layout t2i**（`LoadImage` 只接旁路节点，采样器没吃图）。把"它叫 edit"当结论，
    接下来所有建议都会错。
 

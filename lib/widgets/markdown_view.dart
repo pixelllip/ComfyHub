@@ -253,9 +253,9 @@ class MarkdownText extends StatelessWidget {
         Uri.parse(url),
         mode: LaunchMode.externalApplication,
       );
-      if (!ok) messenger?.showSnackBar(SnackBar(content: Text('打不开链接：$url')));
+      if (!ok) messenger?.showSnackBar(SnackBar(content: Text('打不开链接，$url')));
     } catch (e) {
-      messenger?.showSnackBar(SnackBar(content: Text('打不开链接：$e')));
+      messenger?.showSnackBar(SnackBar(content: Text('打不开链接，$e')));
     }
   }
 }

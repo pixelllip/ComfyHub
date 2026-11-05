@@ -249,13 +249,13 @@ class MediaCache {
       await trim();
       return file;
     } catch (e) {
-      // 下载中途断了 / 写盘失败：**残片当场清掉**（别等下次扫描的"超过 1 小时"，
+      // 下载中途断了 / 写盘失败，**残片当场清掉**（别等下次扫描的"超过 1 小时"，
       // 那期间它是纯粹的白占空间，而且下一条会写进同一个文件名）。
       if (part != null) await _deleteQuietly(part);
       // 缓存是"锦上添花"：失败就继续用网络图，别把详情页打成错误页。
       // 但日志要留，真机上排查"为什么离线没有图"就靠它。
       // ignore: avoid_print
-      print('[media-cache] 缓存 $mediaId（${thumb ? 'thumb' : 'orig'}）失败：$e');
+      print('[media-cache] 缓存 $mediaId（${thumb ? 'thumb' : 'orig'}）失败，$e');
       return null;
     }
   }
@@ -329,7 +329,7 @@ class MediaCache {
         }
       }
     } catch (_) {
-      // 列目录失败：返回已经清掉的部分
+      // 列目录失败，返回已经清掉的部分
     }
     _index.clear();
     _thumbBytes = 0;

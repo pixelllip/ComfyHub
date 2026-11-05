@@ -122,12 +122,13 @@ class ComfyHubApp extends StatelessWidget {
   /// 到底用了哪个种子色"，不用把整个 `HomeShell` 拉起来）。
   @visibleForTesting
   static ThemeData themeFor(SettingsStore settings, Brightness brightness) {
-    final accent = settings.followSystemAccent ? SystemAccent.color : null;
+    final mode = settings.accentMode;
+    final accent = mode.usesSystemColor ? SystemAccent.color : null;
     final seed = accent ?? AppTheme.defaultSeed;
-    final key = '${brightness.index}:${seed.toARGB32()}';
+    final key = '${brightness.index}:${seed.toARGB32()}:${mode.name}';
     return _themeCache.putIfAbsent(
       key,
-      () => AppTheme.build(brightness, seedColor: seed),
+      () => AppTheme.build(brightness, seedColor: seed, accentMode: mode),
     );
   }
 }
@@ -222,7 +223,7 @@ class _StartupView extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '正在自动准备本地服务：数据库（本地 SQLite 文件）→ Rust 后端。'
+                  '正在自动准备本地服务，包括本地 SQLite 数据库和 Rust 后端。'
                   '后端由 App 自己直接启动，不再需要 PowerShell。',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.outline,
@@ -510,7 +511,7 @@ class _HomeShellState extends State<HomeShell> {
   /// 只在手机上做：桌面的地址由 `.run\api.json` 自动决定（[SettingsStore.defaultBaseUrl]），
   /// 而且**用户手填过地址就一个都不试**（[SettingsStore.baseUrlIsAuto] 为假 = 那是他的远程配置）。
   ///
-  /// 静默失败：一条都不通时保持现状、不弹任何东西 —— 真正要用到后端时，
+  /// 静默失败，一条都不通时保持现状、不弹任何东西 —— 真正要用到后端时，
   /// 各页面本来就会如实报"连不上"（那条路比启动横幅更接近用户当时在做的事）。
   Future<void> _pickDesktopAutomatically() async {
     if (kIsWeb) return;
@@ -799,11 +800,13 @@ class _BrandMark extends StatelessWidget {
           end: Alignment.bottomRight,
         ),
       ),
-      child: const Center(
+      // 文字颜色跟着主色走（`onPrimary`）：深色主题的主色是浅色调，白字会糊；
+      // 浅色主题的主色是深色调，深字会糊 —— 只有 on 角色在两套里都成立。
+      child: Center(
         child: Text(
           'C',
           style: TextStyle(
-            color: Colors.white,
+            color: scheme.onPrimary,
             fontWeight: FontWeight.w900,
             fontSize: 20,
           ),

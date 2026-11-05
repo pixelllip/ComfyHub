@@ -61,7 +61,7 @@ enum CardKind {
           '要 Danbooru tag 版时让 AI 当场另写一版给你看 —— 卡片里只存自然语言。',
     CardKind.style =>
       '画风卡与角色卡同等地位，只写"画成什么样"（画师 / 媒介 / 上色 / 打光 / 材质 / 后期）。\n'
-          '正面提示词至少 100~200 token（英文约 75~150 词）—— 这是下限：复杂画风可以按'
+          '正面提示词至少 100~200 token（英文约 75~150 词），这是下限。复杂画风可以按'
           '面部 / 头发 / 衣物 / 其他物体分开写材质，该长就长。要 tag 版时让 AI 当场另写。',
   };
 
@@ -180,7 +180,7 @@ class CardsViewState extends State<CardsView> {
       _snack('已删除「${card.name}」');
       await _reload();
     } catch (e) {
-      _snack('删除失败：$e');
+      _snack('删除失败，$e');
     }
   }
 
@@ -200,7 +200,7 @@ class CardsViewState extends State<CardsView> {
       _snack(picked.isEmpty ? '已清空示例产物' : '已保存 ${picked.length} 个示例产物');
       await _reload();
     } catch (e) {
-      _snack('保存示例失败：$e');
+      _snack('保存示例失败，$e');
     }
   }
 
@@ -504,7 +504,7 @@ class _CardTile extends StatelessWidget {
               if (card.negative != null) ...[
                 const SizedBox(height: 6),
                 Text(
-                  '负面：${card.negative}',
+                  '负面提示词是 ${card.negative}',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.outline,
                   ),
@@ -615,7 +615,7 @@ class _VersionBlock extends StatelessWidget {
     final theme = Theme.of(context);
     if (value == null) {
       return Text(
-        '$label：$emptyText',
+        emptyText,
         style: theme.textTheme.bodySmall?.copyWith(
           color: theme.colorScheme.outline,
         ),
@@ -859,8 +859,8 @@ class _CardEditorDialogState extends State<_CardEditorDialog> {
                 'prompt',
                 '正面提示词',
                 hint: kind == CardKind.character
-                    ? '从头到脚写全：脸、眼睛、头发、皮肤、身体、服装分层、鞋袜、饰品、体态……600+ token'
-                    : '一段话：媒介 → 上色风格 → 打光习惯 → 材质（面部 / 头发 / 衣物 / 其他物体）→ 画面维度与后期。100~200 token 起，复杂画风按需写长',
+                    ? '从头到脚写全，包括脸、眼睛、头发、皮肤、身体、服装分层、鞋袜、饰品、体态……600+ token'
+                    : '写成一段话，按媒介 → 上色风格 → 打光习惯 → 材质（面部 / 头发 / 衣物 / 其他物体）→ 画面维度与后期。100~200 token 起，复杂画风按需写长',
                 maxLines: kind == CardKind.character ? 12 : 8,
               ),
               _field(
@@ -873,7 +873,7 @@ class _CardEditorDialogState extends State<_CardEditorDialog> {
               ),
               Text(
                 '${kind.editorHint}\n'
-                '示例产物在卡片上点「添加示例」管理（最多 24 条；新建的卡保存后就能加）。',
+                '示例产物在卡片上点「添加示例」管理（最多 24 条，新建的卡保存后就能加）。',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               if (_error != null) ...[

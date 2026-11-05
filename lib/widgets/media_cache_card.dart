@@ -124,9 +124,9 @@ class MediaCacheCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              '缓存只留"看过的"：缩略图在格子出现时下，原件在打开详情时下'
-              '（太大的视频 / 音频不自动下，点「保存到手机相册」才下）。'
-              '超过上限按最久未用的淘汰到 80%。清理只删本机这些副本，'
+              '缓存只保留看过的内容，缩略图在格子出现时下载，原件在打开详情时下载。'
+              '太大的视频 / 音频不会自动下载，点「保存到手机相册」才会下。'
+              '超过上限按最久未用淘汰到 80%。清理只删本机这些副本，'
               '桌面上的原件与已保存进相册的文件都不受影响。',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.outline,

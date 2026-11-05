@@ -1,6 +1,6 @@
 ---
 name: krea-2
-description: 写 Krea 2（K2）生图提示词，并用**用户自己在 ComfyUI 里存出来的 krea2 工作流**出图（官方推荐参数：RAW 52 步 cfg 3.5 ≤1K，Turbo 8 步 cfg 0 mu 1.15 1K~2K）。含 Krea 官方 prompting 规则、提示词扩写纪律、风格参考（Srefs）与风格 LoRA 用法，以及"先找用户工作流 → 读 apiGraph 认节点 → 只覆盖真实存在的输入 → 带 TextGenerate 时由 AI 服从其 system prompt 写终稿再 `positivePrompt` 摘线"的完整流程。**不依赖仓库里的模板**：模板只是回归测试夹具 / 结构样例，出图起点必须是用户自己存出来的那一份。
+description: 写 Krea 2（K2）生图提示词，并用**用户自己在 ComfyUI 里存出来的 krea2 工作流**出图（官方推荐参数：RAW 52 步 cfg 3.5 ≤1K，Turbo 8 步 cfg 0 mu 1.15 1K~2K）。含 Krea 官方 prompting 规则、提示词扩写纪律、风格参考（Srefs）与风格 LoRA 用法，以及"先找用户工作流 → 读 apiGraph 认节点 → 只覆盖真实存在的输入 → 带 TextGenerate 时由 AI 服从其 system prompt 写终稿再 `positivePrompt` 摘线"的完整流程。**不依赖随包模板**：模板只作结构样例，出图起点必须是用户自己存出来的那一份。
 whenToUse: 用户提到 Krea 2 / K2 / krea2，要写 Krea 2 提示词，要调 Krea 2 的步数 / CFG / mu / 分辨率 / 种子，要用 Krea 2 的风格参考或风格 LoRA，问"Krea 2 在 ComfyUI 里怎么配/怎么出图"，或者要用他自己 ComfyUI 里保存的 krea2 工作流出图时。
 version: 5
 ---
@@ -8,18 +8,18 @@ version: 5
 ## 版本记录
 
 - **version 2（2026-10-17）**：新增两份 krea2 模板的节点结构、可覆盖键与三个坑
-  （**2026-10-28 起这两份已随"仓库不再随包带模板"删除**，结构说明见 §6 的说明）。
+  （**2026-10-28 起本软件不再随包带模板，这两份已删除**；结构说明见 §6）。
 - **version 3（2026-10-21）**：新增「工作流优先 / 副本 / TextGenerate 摘线」；
   修正"直接覆盖 `108.text`"的错误说法（它被 `116 PrimitiveString` 连线覆盖，覆盖会被拒），
   改为 `comfy_submit(positivePrompt=…)`。
-- **version 4（2026-10-21）**：**不再把仓库里的两份模板当默认起点**。
+- **version 4（2026-10-21）**：**不再把随包的两份模板当默认起点**。
   出图一律先找**用户自己从 ComfyUI 里存出来的 krea2 工作流**，按它的实际 `apiGraph` 识别节点；
-  模板只保留为回归测试夹具与结构样例，**不许拿它当"现成工作流"直接跑**。
-- **version 5（2026-10-28）**：仓库**不再随包带模板**（两份 `comfyhub_*_krea2.json` 已删除，
+  模板只作为结构样例，**不许拿它当"现成工作流"直接跑**。
+- **version 5（2026-10-28）**：本软件**不再随包带模板**（两份 `comfyhub_*_krea2.json` 已删除，
   §6 的结构样例一并移除）。起点只有两个：**官方 Krea-2 模板**、**用户自己另存的那份**。
 
 > **⚠ 唯一默认起点：用户自己的 krea2 工作流（或官方 Krea-2 模板）。**
-> 仓库里**没有**任何随包模板可拿。用户还没有自己的工作流时，教他：
+> 本软件**没有**任何随包模板可拿。用户还没有自己的工作流时，教他：
 > 在 ComfyUI 里打开官方 Krea-2 模板 → **另存为** `我的krea2_xxx.json`（放在
 > `user\<用户>\workflows\`）→ 再以那份为起点；**不要**自己拼节点图。
 
@@ -35,7 +35,7 @@ version: 5
 - ComfyUI 官方教程《Krea-2 ComfyUI Workflow Example》（模型文件、8 步默认、风格参考管线、9 个风格 LoRA）；
 - krea.ai 官方文档《Krea 2》（Medium / Large / Turbo 三档、Srefs、情绪板、生成滑杆、Creativity）。
 
-> **注意**：本仓库的读路径白名单默认只有 `comfyui` 与 `storage`，所以**你自己读不到 `references/`**；
+> **注意**：本软件的读路径白名单默认只有 `comfyui` 与 `storage`，所以**你自己读不到 `references/`**；
 > 那几份原文是给人看的（用户想核对官方原话时，让他打开 `<根>\skills\builtin\krea-2\references\`）。
 > 下面正文已经把"出图要用到的部分"写全了，不需要去读原文。
 
@@ -208,7 +208,7 @@ ComfyUI/models/loras/            krea2_style_reference.safetensors
 
 ## 6. 结构参考（**节点 id 一律 `apiGraph` 现读**）
 
-> **2026-10-28：仓库不再随包带模板**，原来那两份 `comfyhub_t2i_krea2.json` /
+> **2026-10-28：本软件不再随包带模板**，原来那两份 `comfyhub_t2i_krea2.json` /
 > `comfyhub_i2i_krea2.json`（以及它们的骨架图、可覆盖键表、体检结论）已整体删除。
 > 现在只用两个来源：**ComfyUI 模板库里的官方 Krea-2 模板**，或**用户自己另存的那份**。
 >
@@ -220,13 +220,13 @@ ComfyUI/models/loras/            krea2_style_reference.safetensors
 > `Fast Bypasser (rgthree)` 是直通开关、`TextGenerate.sampling_mode` 是动态下拉框 ——
 > 处理方式见 §3.2 与 `comfy-workflow-guide`。
 
-## 7. 工作流优先 / 副本 / TextGenerate 摘线（2026-10-21 用户拍板）
+## 7. 工作流优先 / 副本 / TextGenerate 摘线（2026-10-21 定稿）
 
-### 7.1 不许从零编，也不拿仓库模板顶替
+### 7.1 不许从零编，也不拿随包模板顶替
 
 - 要 krea2 出图时，**只用用户自己存出来的 krea2 工作流（或官方 Krea-2 模板）**作为起点；
   先 `comfy_list_workflows(query="krea")` / `comfy_find_workflow(query="krea2")` 找，
-  把候选与用途列给用户选。**不要**自己拼节点图 —— 仓库里**没有**可回退的模板。
+  把候选与用途列给用户选。**不要**自己拼节点图 —— 本软件里**没有**可回退的模板。
 - 用户说"换新模型 / 换个底模"时，先看 `comfy_list_recipes(task=…)`；
   要改骨架也只在**副本**上改（蓝图保存 / `write_file` 存 `*_copy.json`），原文件不动。
 

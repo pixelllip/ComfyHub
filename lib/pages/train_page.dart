@@ -6,6 +6,7 @@ import 'package:webview_all/webview_all.dart';
 
 import '../core/api_client.dart';
 import '../core/settings_store.dart';
+import '../core/theme.dart';
 import '../models/train_models.dart';
 
 /// 本地 LoRA 训练台（anima-lora-next 的自有 WebUI 内嵌）。
@@ -145,7 +146,7 @@ class _TrainPageState extends State<TrainPage> {
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('打不开浏览器：$url')),
+          SnackBar(content: Text('打不开浏览器，$url')),
         );
       }
     }
@@ -304,7 +305,6 @@ class _TrainWebViewState extends State<_TrainWebView> {
     super.initState();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFFFFFFFF))
       ..setNavigationDelegate(
         NavigationDelegate(
           onNavigationRequest: _onNavigationRequest,
@@ -348,7 +348,16 @@ class _TrainWebViewState extends State<_TrainWebView> {
         error.url != widget.url) {
       return;
     }
-    widget.onMainFrameError('WebUI 加载失败：${error.description}');
+    widget.onMainFrameError('WebUI 加载失败，${error.description}');
+  }
+
+  @override
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // WebView 的默认背景是白的：深色主题下加载瞬间会闪一屏白。
+    // 背景色要跟着主题走，而且必须在依赖就绪之后设（initState 里拿不到 Theme）。
+    _controller.setBackgroundColor(Theme.of(context).colorScheme.surface);
   }
 
   @override
@@ -363,19 +372,21 @@ class _StatusStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     Widget pill(String label, bool ok, String detail) => Container(
           padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
           decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
-            borderRadius: BorderRadius.circular(999),
+            // 状态底色走 surface 角色 + 语义色描边（不再用 green@0.5 这种叠色）
+            color: theme.colorScheme.surfaceContainer,
+            borderRadius: const BorderRadius.all(Radius.circular(999)),
             border: Border.all(
-              color: ok ? Colors.green.withValues(alpha: 0.5) : theme.dividerColor,
+              color: ok ? colors.success : theme.colorScheme.outlineVariant,
             ),
           ),
           child: Text(
             '$label · $detail',
             style: theme.textTheme.labelSmall?.copyWith(
-              color: ok ? Colors.greenAccent : theme.colorScheme.outline,
+              color: ok ? colors.success : theme.colorScheme.onSurfaceVariant,
             ),
           ),
         );
@@ -384,8 +395,8 @@ class _StatusStrip extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.18),
-        border: Border(bottom: BorderSide(color: theme.dividerColor)),
+        color: theme.colorScheme.surfaceContainerLow,
+        border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
       ),
       child: Wrap(
         spacing: 8,
@@ -440,7 +451,7 @@ class _NotInstalledCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  '训练是可选能力：缺了只影响“在本机训 LoRA”，不影响出图。'
+                  '训练是可选能力，缺了只影响“在本机训 LoRA”，不影响出图。'
                   '引擎是 anima-lora-next（train.py + .venv\\Scripts\\python.exe），'
                   '默认找 <项目>\\training\\anima_lora，也认同级目录 anima-lora-next 与 '
                   'ANIMA_LORA_ROOT / COMFYHUB_TRAIN_DIR。',
@@ -474,7 +485,7 @@ class _NotInstalledCard extends StatelessWidget {
                       label: const Text('重新探测'),
                     ),
                     Text(
-                      '装好之后回到这里即可；AI 工作台也会自动多出 anima_studio_* 工具。',
+                      '装好之后回到这里即可，AI 工作台也会自动多出 anima_studio_* 工具。',
                       style: theme.textTheme.labelSmall,
                     ),
                   ],

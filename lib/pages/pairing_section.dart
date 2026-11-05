@@ -207,11 +207,11 @@ class _PairingSectionState extends State<PairingSection> {
         _qrError = switch (e.statusCode) {
           404 || 501 => '这台后端还没有"扫码配对"接口（旧版本）—— 用上面那条手动敲验证码的路。',
           403 => '生成二维码只允许在桌面本机上操作（127.0.0.1）。',
-          _ => '生成二维码失败：${e.message}',
+          _ => '生成二维码失败，${e.message}',
         };
       });
     } catch (e) {
-      if (mounted) setState(() => _qrError = '生成二维码失败：$e');
+      if (mounted) setState(() => _qrError = '生成二维码失败，$e');
     } finally {
       if (mounted) setState(() => _qrBusy = false);
     }
@@ -285,7 +285,7 @@ class _PairingSectionState extends State<PairingSection> {
       });
       _syncSessionTimer();
     } catch (e) {
-      if (mounted) setState(() => _error = '读取配对状态失败：$e');
+      if (mounted) setState(() => _error = '读取配对状态失败，$e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -314,7 +314,7 @@ class _PairingSectionState extends State<PairingSection> {
       if (!mounted) return;
       // 拉不到就不再每 2 秒撞一次（旧后端没有这个端点时尤其明显），
       // 把原因写在界面上，用户点「重试」再开始轮询
-      setState(() => _pendingError = '读取待配对列表失败：$e');
+      setState(() => _pendingError = '读取待配对列表失败，$e');
       _syncSessionTimer();
     } finally {
       _polling = false;
@@ -342,14 +342,14 @@ class _PairingSectionState extends State<PairingSection> {
         _pending = next.pending;
         if (next.enabled == value) {
           _message = value
-              ? '已开启「允许移动端连接」：手机要带配对令牌才能连这台电脑。'
-              : '已关闭：局域网内任何设备都能连。';
+              ? '已开启「允许移动端连接」，手机要带配对令牌才能连这台电脑。'
+              : '已关闭，局域网内任何设备都能连。';
         } else {
           _error = '后端没有接受这个开关（响应里 enabled=${next.enabled}），设置没有被改。';
         }
       });
     } catch (e) {
-      if (mounted) setState(() => _error = '切换失败：$e');
+      if (mounted) setState(() => _error = '切换失败，$e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -378,7 +378,7 @@ class _PairingSectionState extends State<PairingSection> {
         _message = '已吊销「${d.name.isEmpty ? d.id : d.name}」的令牌。';
       });
     } catch (e) {
-      if (mounted) setState(() => _error = '吊销失败：$e');
+      if (mounted) setState(() => _error = '吊销失败，$e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -430,11 +430,11 @@ class _PairingSectionState extends State<PairingSection> {
           if (allowUpload && !updated.allowCredentialsUpload) {
             // 回读为 false = 这台后端**不认识**这个开关（旧版本）—— 如实说，别假装开了
             _error =
-                '这台后端还不支持"允许设备改密钥"（旧版本）：开关没有生效。'
+                '这台后端还不支持"允许设备改密钥"（旧版本），开关没有生效。'
                 '升级桌面后端之后再来勾这一项。';
           } else {
             _message = updated.allowCredentialsUpload
-                ? '已允许「$name」改桌面上的密钥：当桌面联网且客户端在线时，手机端改的密钥将会推送到桌面端。'
+                ? '已允许「$name」改桌面上的密钥，当桌面联网且客户端在线时，手机端改的密钥会推送到桌面端。'
                 : '已禁止「$name」改桌面上的密钥。';
           }
         } else {
@@ -444,7 +444,7 @@ class _PairingSectionState extends State<PairingSection> {
         }
       });
     } catch (e) {
-      if (mounted) setState(() => _error = '设置失败：$e');
+      if (mounted) setState(() => _error = '设置失败，$e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -508,7 +508,7 @@ class _PairingSectionState extends State<PairingSection> {
         _pairedDeviceId = deviceId.isEmpty ? null : deviceId;
       });
     } catch (e) {
-      if (mounted) setState(() => _error = '读取本机配对状态失败：$e');
+      if (mounted) setState(() => _error = '读取本机配对状态失败，$e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -608,8 +608,8 @@ class _PairingSectionState extends State<PairingSection> {
         if (!mounted) return;
         setState(
           () => _error =
-              '配对令牌写不进本机密钥库，这次配对作废（令牌已丢弃，'
-              '没有任何地方留着它）：$e',
+              '配对令牌写不进本机密钥库，这次配对作废，令牌已经丢弃，'
+              '没有任何地方留着它。错误是 $e。',
         );
         return;
       }
@@ -625,7 +625,7 @@ class _PairingSectionState extends State<PairingSection> {
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = _pairErrorText(e));
     } catch (e) {
-      if (mounted) setState(() => _error = '配对失败：$e');
+      if (mounted) setState(() => _error = '配对失败，$e');
     } finally {
       api.dispose();
       if (mounted) setState(() => _pairing = false);
@@ -690,14 +690,14 @@ class _PairingSectionState extends State<PairingSection> {
         : '${e.message}（${e.detail}）';
     switch (e.statusCode) {
       case 400:
-        return '配对没通过：$human '
-            '6 位码要按桌面上显示的那组原样敲；试错 5 次这张码就作废了。';
+        return '配对没通过。$human '
+            '6 位码要按桌面上显示的那组原样敲，试错 5 次这张码就作废了。';
       case 410:
-        return '这次配对会话已经失效：$human 请点「配对新电脑」重新举手（桌面会给出新的一组码）。';
+        return '这次配对会话已经失效。$human 请点「配对新电脑」重新举手，桌面会给出新的一组码。';
       case 429:
-        return '请求太频繁了：$human 等一会儿再点「配对新电脑」。';
+        return '请求太频繁了。$human 等一会儿再点「配对新电脑」。';
       case 403:
-        return '桌面拒绝了这次配对：$human 确认桌面上的「允许移动端连接」已经打开。';
+        return '桌面拒绝了这次配对。$human 确认桌面上的「允许移动端连接」已经打开。';
       default:
         return human;
     }
@@ -728,7 +728,7 @@ class _PairingSectionState extends State<PairingSection> {
       });
       await widget.onPaired?.call();
     } catch (e) {
-      if (mounted) setState(() => _error = '忘记失败：$e');
+      if (mounted) setState(() => _error = '忘记失败，$e');
     }
   }
 
@@ -746,10 +746,10 @@ class _PairingSectionState extends State<PairingSection> {
       setState(
         () => _message = url.isEmpty
             ? '已清空桌面地址（桌面端 = 自动发现本机后端）。'
-            : '桌面地址已保存：$url',
+            : '桌面地址已保存为 $url',
       );
     } catch (e) {
-      if (mounted) setState(() => _error = '保存地址失败：$e');
+      if (mounted) setState(() => _error = '保存地址失败，$e');
     }
   }
 
@@ -765,7 +765,7 @@ class _PairingSectionState extends State<PairingSection> {
       final text = await fn();
       if (mounted) setState(() => _message = text);
     } catch (e) {
-      if (mounted) setState(() => _error = '从桌面同步密钥失败：$e');
+      if (mounted) setState(() => _error = '从桌面同步密钥失败，$e');
     } finally {
       if (mounted) setState(() => _syncingKeys = false);
     }
@@ -896,10 +896,10 @@ class _PairingSectionState extends State<PairingSection> {
               // 顺序写出来 —— 关掉它不是"不允许连接"，而是"局域网内任何设备
               // 都能连、不用令牌"，那反而更松。
               subtitle: _enabled
-                  ? '② 已开启：手机带配对令牌才能连（没带会被 403 挡下）。'
+                  ? '② 已开启，手机要带配对令牌才能连，没带会被 403 挡下。'
                         '前提是「本地服务」里的 ① 已开且重启过后端。'
-                  : '② 未开启：局域网内任何设备都能连（不需要令牌）。'
-                        '要连手机的话建议开启；前提是「本地服务」里的 ① 已开。',
+                  : '② 未开启，局域网内任何设备都能连，不需要令牌。'
+                        '要连手机的话建议开启，前提是「本地服务」里的 ① 已开。',
               value: _enabled,
               onChanged: (_busy || _loading) ? null : _setEnabled,
             ),
@@ -946,7 +946,7 @@ class _PairingSectionState extends State<PairingSection> {
                           ),
                         const SizedBox(height: 2),
                         Text(
-                          '手机与这台电脑要在同一个局域网里；地址里的端口与桌面后端一致。',
+                          '手机与这台电脑要在同一个局域网里，地址里的端口要与桌面后端一致。',
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: theme.colorScheme.outline,
                           ),
@@ -1103,7 +1103,7 @@ class _PairingSectionState extends State<PairingSection> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '两条路都行：**手机上点「配对新电脑」**（这里会出现一组 6 位码），'
+            '两条路都行。**手机上点「配对新电脑」**（这里会出现一组 6 位码），'
             '或者**桌面出二维码**（手机扫码，地址不用手抄）。两条都还要在手机上敲那 6 位码。',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.outline,
@@ -1208,8 +1208,8 @@ class _PairingSectionState extends State<PairingSection> {
             child: _switchRow(
               title: '允许把密钥发给这台设备',
               subtitle: d.allowCredentials
-                  ? '已允许：这台手机可以「从桌面同步密钥」把 API Key 取到本机密钥库。'
-                  : '未允许：**手机拿不到桌面上的 API Key**（配对成功不等于能取密钥）。',
+                  ? '已允许，这台手机可以「从桌面同步密钥」把 API Key 取到本机密钥库。'
+                  : '未允许，**手机拿不到桌面上的 API Key**（配对成功不等于能取密钥）。',
               value: d.allowCredentials,
               onChanged: _busy
                   ? null
@@ -1225,8 +1225,8 @@ class _PairingSectionState extends State<PairingSection> {
             child: _switchRow(
               title: '允许这台设备改桌面上的密钥',
               subtitle: d.allowCredentialsUpload
-                  ? '已允许：手机上可以「推给桌面」，把它本机密钥库里的那一把写到桌面上。'
-                  : '未允许（默认）：此时手机推上来的密钥会被桌面拒绝（403）。',
+                  ? '已允许，手机上可以「推给桌面」，把它本机密钥库里的那一把写到桌面上。'
+                  : '未允许（默认），此时手机推上来的密钥会被桌面拒绝（403）。',
               value: d.allowCredentialsUpload,
               onChanged: _busy
                   ? null
@@ -1292,7 +1292,7 @@ class _PairingSectionState extends State<PairingSection> {
                   child: Text(
                     _paired
                         ? '已配对${_pairedDeviceId == null ? '' : '（${_prefix(_pairedDeviceId!)}）'}'
-                        : '还没配对：配一次对之后，本机才能连桌面取规则工件与密钥。',
+                        : '还没配对，配一次对之后，本机才能连桌面取规则工件与密钥。',
                     style: theme.textTheme.bodySmall,
                   ),
                 ),

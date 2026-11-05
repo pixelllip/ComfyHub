@@ -246,7 +246,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     try {
       path = await store.api.mediaPath(mediaId);
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('拿不到磁盘路径：$e')));
+      messenger.showSnackBar(SnackBar(content: Text('拿不到磁盘路径，$e')));
       return;
     }
     if (path.isEmpty) {
@@ -305,7 +305,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       }
       messenger.showSnackBar(const SnackBar(content: Text('已保存到手机相册')));
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('保存失败：$e')));
+      messenger.showSnackBar(SnackBar(content: Text('保存失败，$e')));
     }
   }
 
@@ -385,7 +385,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                 tooltip: m.favorite ? '取消收藏' : '收藏',
                 icon: Icon(
                   m.favorite ? Icons.star : Icons.star_border,
-                  color: m.favorite ? Colors.amber : null,
+                  color: m.favorite ? Theme.of(context).colorScheme.tertiary : null,
                 ),
                 onPressed: () async {
                   await store.api.updateMedia(m.id, favorite: !m.favorite);

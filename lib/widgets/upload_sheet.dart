@@ -175,7 +175,7 @@ class _UploadSheetState extends State<_UploadSheet> {
                 constraints: const BoxConstraints(maxHeight: 140),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(10),
-                  color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                  color: theme.colorScheme.surfaceContainerHigh,
                 ),
                 child: ListView.builder(
                   shrinkWrap: true,
@@ -287,7 +287,7 @@ class _UploadSheetState extends State<_UploadSheet> {
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  '提示：标签词表为空，先去「标签」页创建几个吧。',
+                  '标签词表还是空的，先去「标签」页创建几个吧。',
                   style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
                 ),
               ),

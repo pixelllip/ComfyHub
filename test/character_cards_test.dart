@@ -124,7 +124,7 @@ void main() {
     expect(find.text('shinku'), findsOneWidget);
     expect(find.text('iroi'), findsOneWidget);
     expect(find.text('A quiet girl with red eyes and silver hair.'), findsOneWidget);
-    expect(find.text('负面：bad hands'), findsOneWidget);
+    expect(find.text('负面提示词是 bad hands'), findsOneWidget);
     expect(find.textContaining('还没有正面提示词'), findsOneWidget, reason: '空着是个事实，要显式画出来');
   });
 

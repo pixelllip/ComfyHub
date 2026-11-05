@@ -129,7 +129,7 @@ version: 2
 8. **散景 / 颗粒**：`creamy circular bokeh, faint film grain`；
 9. **完成度**：`a luminous, transparent, high-key finish`。
 
-对照样例（用户给的基准，约 130 token）：
+对照样例（约 130 token）：
 
 > A digital anime illustration painted semi-thick: thin warm-gray line work that dissolves where light lands, forms modeled by airbrushed gradients rather than cel steps, a low-chroma blue-gray field cut by small islands of warmth, shadows hue-shifted toward blue-violet and lifted off black, tinted ice-white key, clipped-white bloom around hair strands and collar ridges, cool gray-violet contact shadows, creamy circular bokeh, faint film grain, and a luminous, transparent, high-key finish.
 

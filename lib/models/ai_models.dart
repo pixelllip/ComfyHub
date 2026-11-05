@@ -107,7 +107,7 @@ enum AiReasoningEffort {
   /// 也就是说"关掉思考"在这类网关上**做不到**，叫「关闭」就是承诺一件做不到的事。
   /// 叫「默认」才是真话 —— 我们不发任何思考参数，思考与否由网关决定
   /// （DSH 同一个档位也叫 `Default`）。要真正不思考，只能换一个不思考的模型/网关。
-  off('off', '默认', hint: '不发思考参数，由网关决定；有的网关（如聚合站）仍会思考'),
+  off('off', '默认', hint: '不发思考参数，由网关决定，有的网关（如聚合站）仍会思考'),
   minimal('minimal', '极低'),
   low('low', '低'),
   medium('medium', '中'),
@@ -1122,7 +1122,7 @@ class AiAttachmentUploadResult {
       );
 
   String get failedLabel =>
-      failed.map((f) => '${f.fileName}：${f.reason}').join('；');
+      failed.map((f) => '${f.fileName}，${f.reason}').join('。');
 }
 
 /// AI 附件缓存统计（`GET /api/ai/attachments/stats`）。
@@ -1371,7 +1371,7 @@ class AiSkill {
 
   /// 悬浮提示上的完整说明：问题优先，其次冲突，最后来源。
   String get warningText {
-    if ((validationError ?? '').isNotEmpty) return '不合法：$validationError';
+    if ((validationError ?? '').isNotEmpty) return '不合法，$validationError';
     if ((conflict ?? '').isNotEmpty) return conflict!;
     return origin == null ? sourceLabel : '$sourceLabel · $origin';
   }
@@ -1466,7 +1466,7 @@ class AiSkillRescanResult {
       parts.add('自动登记 $registered 个（${names.take(3).join('、')}）');
     }
     if (errors.isNotEmpty) {
-      parts.add('${errors.length} 个没法用：${errors.take(2).join('；')}');
+      parts.add('${errors.length} 个没法用，${errors.take(2).join('。')}');
     }
     return parts.join(' · ');
   }

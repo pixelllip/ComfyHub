@@ -187,7 +187,7 @@ void main() {
 
     await tester.tap(find.text('Model 0'));
     await tester.pumpAndSettle();
-    expect(find.text('模型能力：Model 0'), findsOneWidget, reason: '点一行要能打开编辑弹窗');
+    expect(find.text('模型能力（Model 0）'), findsOneWidget, reason: '点一行要能打开编辑弹窗');
 
     // 打开"思考强度"，勾上「高」；顺手把「图片」关掉。
     // Switch 要圈定在弹窗里 —— 「AI 模型与凭据」页的「模型能力目录」卡里也有一个开关

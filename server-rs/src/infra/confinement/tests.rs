@@ -52,7 +52,7 @@ fn 留证与清证_并且只认当前后端() {
     let restricted = Report {
         restricted: true,
         blocked_paths: vec!["ComfyUI 工作区 D:\\x".to_string()],
-        checked_paths: vec!["产物目录：D:\\o".to_string()],
+        checked_paths: vec!["产物目录 D:\\o".to_string()],
     };
     assert!(apply(&root, &restricted, 4242).is_some());
     assert!(path(&root).is_file());

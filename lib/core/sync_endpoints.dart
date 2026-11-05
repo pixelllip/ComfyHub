@@ -154,7 +154,7 @@ Future<({List<SyncEndpoint> endpoints, String? note})> discoveredEndpoints(
   } on TimeoutException {
     return (endpoints: const <SyncEndpoint>[], note: '问对端要地址超时（它可能不在线）');
   } catch (e) {
-    return (endpoints: const <SyncEndpoint>[], note: '问对端要地址失败：$e');
+    return (endpoints: const <SyncEndpoint>[], note: '问对端要地址失败，$e');
   } finally {
     if (client == null) own.close();
   }
@@ -199,7 +199,7 @@ class SyncProbe {
 
   /// 给界面的一行结论（人话）。
   String get summary {
-    if (!ok) return '连不上：${error ?? '未知原因'}';
+    if (!ok) return '连不上，${error ?? '未知原因'}';
     final bits = <String>[
       if (impl != null) '后端 $impl',
       if (version != null) 'v$version',
@@ -255,7 +255,7 @@ Future<SyncProbe> probeSyncEndpoint(
         ok: false,
         baseUrl: base,
         elapsedMs: sw.elapsedMilliseconds,
-        error: '这个地址回的不是 ComfyHub 后端（/api/health 少了 status / database）：${_snippet(reply.body)}',
+        error: '这个地址回的不是 ComfyHub 后端（/api/health 少了 status / database），${_snippet(reply.body)}',
       );
     }
     // 补充信息：manifest 拿不到不算失败（多半是没配对 / 令牌过期）
@@ -340,7 +340,7 @@ class AutoPickedEndpoint {
     if (baseUrl != null) return '已自动连上 $baseUrl（${probe?.summary ?? ''}）';
     if (candidates.isEmpty) return '没有可试的地址';
     final list = candidates.map((e) => '${e.url}（${e.source}）').join('、');
-    return '试了 $tried 个地址都没连上：$list。最后一次：${probe?.error ?? '未知原因'}';
+    return '试了 $tried 个地址都没连上，$list。最后一次是 ${probe?.error ?? '未知原因'}';
   }
 }
 

@@ -135,7 +135,7 @@ pub fn probe(targets: &[(&str, Option<&Path>)], judge: &dyn Fn(&Path) -> Result<
         let Some(dir) = dir else { continue };
         report
             .checked_paths
-            .push(format!("{label}：{}", dir.display()));
+            .push(format!("{label} {}", dir.display()));
         match judge(dir) {
             Ok(()) => {}
             Err(reason) => report
@@ -214,14 +214,14 @@ pub fn describe(state: &crate::web::routes::AppState) -> serde_json::Value {
 /// min(父进程, 映像)** —— 所以修法是"换到没有 Low 标签的地方 / 把标签修回 Medium"，
 /// 而不是改 ACL、也不是"换个终端重起"（终端换了、映像标签还是 Low，照样受限）。
 pub fn remedy_text() -> String {
-    "真因：本进程是**低完整性（Low IL）令牌** —— 工作区里的产物带着 Low 标签，\
-     Windows 取 min(父进程, 映像)，Low 写不了工作区外的 Medium 对象（一律 os error 5）。\n\
-     修法（三选一，内容照旧全在它自己的文件夹里）：\n\
-     1. 把整套 ComfyHub 放到工作区外：pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub，\
-     然后运行 D:\\dist\\ComfyHub\\viewer.exe（App 会自己把 backend\\ 里的后端拉起来）；\n\
-     2. 已有工作区外的构建产物：$env:COMFYHUB_SERVER_EXE = \"<完整路径>\"；\n\
-     3. 就地修标签：pwsh -File scripts\\backend.ps1 start（起之前把 Low 标签修回 Medium；\
-     **当前会话本身是 Low 时修不动**，那就只剩 1/2 两条路）。"
+    "真因是本进程用了**低完整性（Low IL）令牌**。工作区里的产物带着 Low 标签，\
+     Windows 取 min(父进程, 映像)，Low 写不了工作区外的 Medium 对象，所以一律是 os error 5。\n\
+     修法有三种，内容照旧全在它自己的文件夹里：\n\
+     1. 把整套 ComfyHub 放到工作区外。运行 pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub，\
+     然后启动 D:\\dist\\ComfyHub\\viewer.exe，App 会自己把 backend\\ 里的后端拉起来。\n\
+     2. 已有工作区外的构建产物时，设 $env:COMFYHUB_SERVER_EXE = \"<完整路径>\"。\n\
+     3. 就地修标签。运行 pwsh -File scripts\\backend.ps1 start，它会在启动前把 Low 标签修回 Medium；\
+     **当前会话本身是 Low 时修不动**，那就只剩前两条路。"
         .to_string()
 }
 

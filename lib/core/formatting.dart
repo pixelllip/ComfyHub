@@ -44,27 +44,26 @@ String relativeTime(DateTime? dt) {
 }
 
 /// 把标签名字符串映射成稳定颜色，保证同名标签颜色一致。
-Color tagColor(String name, {Color? fallback}) {
-  const palette = [
-    Color(0xFF4CAF50),
-    Color(0xFF2196F3),
-    Color(0xFF9C27B0),
-    Color(0xFFE91E63),
-    Color(0xFFFF9800),
-    Color(0xFF00BCD4),
-    Color(0xFF795548),
-    Color(0xFF3F51B5),
-    Color(0xFF8BC34A),
-    Color(0xFFF44336),
-    Color(0xFF009688),
-    Color(0xFF673AB7),
-  ];
-  if (name.isEmpty) return fallback ?? palette.first;
+///
+/// 以前是 12 个写死的 **Material 2 500 色**（`0xFF4CAF50`…）：它们和当前
+/// `ColorScheme` 没有关系，动态取色下会撞色，浅色主题下还容易让白字读不清。
+///
+/// 现在只有**色相**由名字散列决定（360° 色轮，撞色概率更低），饱和度 / 亮度
+/// 跟着 [scheme] 的明暗走 —— 深色主题取亮一点、浅色主题取深一点。
+Color tagColor(String name, {Color? fallback, ColorScheme? scheme}) {
+  if (name.isEmpty) return fallback ?? scheme?.primary ?? const Color(0xFF7C5CFF);
   var hash = 0;
   for (final c in name.codeUnits) {
     hash = (hash * 31 + c) & 0x7fffffff;
   }
-  return palette[hash % palette.length];
+  final hue = (hash % 360).toDouble();
+  final dark = (scheme?.brightness ?? Brightness.dark) == Brightness.dark;
+  return HSVColor.fromAHSV(
+    1,
+    hue,
+    dark ? 0.42 : 0.55,
+    dark ? 0.88 : 0.62,
+  ).toColor();
 }
 
 Color? parseHexColor(String? hex) {

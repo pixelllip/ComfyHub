@@ -11,7 +11,7 @@ import '../core/provider_sync.dart';
 import '../core/settings_store.dart';
 import '../models/ai_models.dart';
 import '../state/ai_workspace_store.dart';
-import 'ai_tools_settings_page.dart';
+import '../widgets/settings_scaffold.dart';
 
 /// AI 模型设置（AIH-006 / AIH-007 / AIH-010 / AIH-011 / AIH-012 / AIH-013）。
 ///
@@ -142,7 +142,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       setState(() => _cap = status);
       _notify(status.lastMessage ?? '已请求更新能力目录。');
     } catch (e) {
-      if (mounted) _notify('更新能力目录失败：$e', error: true);
+      if (mounted) _notify('更新能力目录失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _capBusy = false);
     }
@@ -157,7 +157,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       setState(() => _cap = status);
       _notify(status.lastMessage ?? (on ? '已允许实测校准' : '已关闭实测校准'));
     } catch (e) {
-      if (mounted) _notify('更新校准开关失败：$e', error: true);
+      if (mounted) _notify('更新校准开关失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _capBusy = false);
     }
@@ -174,9 +174,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       builder: (ctx) => AlertDialog(
         title: const Text('校准思考档位？'),
         content: const Text(
-          '会对每个 Provider 最多 8 个支持推理的模型，从最高档往下发极小的真实请求'
-          '返回网关接受的实际挡位。\n\n'
-          '可能产生少量费用；手动声明过的模型不会被覆盖。',
+          '会对每个 Provider 最多 8 个支持推理的模型，从最高档往下发极小的真实请求，'
+          '返回网关接受的实际档位。\n\n'
+          '可能产生少量费用。手动声明过的模型不会被覆盖。',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
@@ -192,7 +192,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       await _showProbeResults(response);
       if (!response.ok) _notify(response.message, error: true);
     } catch (e) {
-      if (mounted) _notify('校准失败：$e', error: true);
+      if (mounted) _notify('校准失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _probeBusy = false);
     }
@@ -363,22 +363,12 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           );
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('AI 模型与凭据'),
-        actions: [
-          // 工具权限（M4）单独一页：白名单 / 逐工具 allow-ask-deny / 预算
-          TextButton.icon(
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const AiToolsSettingsPage()),
-            ),
-            icon: const Icon(Icons.shield_outlined, size: 18),
-            label: const Text('AI 工具权限'),
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
+      // ⚠ 「AI 工具权限」的入口**不在这里**（2026-11-05 用户：它和模型/凭据
+      // 不构成附属关系，层级提高一级）—— 入口在设置首页，和「AI 模型与凭据」并列。
       body: Column(
         children: [
+          // 标题不放 AppBar：与其它设置页同一套"圆形返回键 + 大号正文标题"。
+          const SettingsPageHeader(title: 'AI 模型与凭据'),
           // 没有选中 Provider 时，错误也要看得见（新建失败最常发生在这种情况下）
           if (_error != null) _errorBanner(theme),
           Expanded(
@@ -455,16 +445,12 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         final provider = _selected!;
         return withBackGuard(
           Scaffold(
-            appBar: AppBar(
-              leading: IconButton(
-                tooltip: '返回',
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => setState(() => _pane = _NarrowPane.list),
-              ),
-              title: Text(provider.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
-            ),
             body: Column(
               children: [
+                SettingsPageHeader(
+                  title: provider.displayName,
+                  onBack: () => setState(() => _pane = _NarrowPane.list),
+                ),
                 if (_error != null) _errorBanner(theme),
                 Expanded(
                   child: _ProviderDetail(
@@ -498,20 +484,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         );
       case _NarrowPane.list:
         return Scaffold(
-          appBar: AppBar(
-            title: const Text('AI 模型与凭据'),
-            actions: [
-              IconButton(
-                tooltip: 'AI 工具权限',
-                icon: const Icon(Icons.shield_outlined),
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const AiToolsSettingsPage()),
-                ),
-              ),
-            ],
-          ),
           body: Column(
             children: [
+              const SettingsPageHeader(title: 'AI 模型与凭据'),
               if (_error != null) _errorBanner(theme),
               Expanded(
                 child: _ProviderList(
@@ -546,7 +521,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       ..clearSnackBars()
       ..showSnackBar(
         SnackBar(
-          // 长错误（比如"更新能力目录失败：接口不存在: /api/ai/capabilities/refresh"）
+          // 长错误（比如"更新能力目录失败，接口不存在: /api/ai/capabilities/refresh"）
           // 在手机上会超出浮层允许的高度，画成 `BOTTOM OVERFLOWED BY 14 PIXELS`
           // （2026-09-24 真机验收用户报的就是它）。套一层滚动容器：
           // 高度不够就**滚动**，而不是把内容画到框外面去。消息一个字都不改。
@@ -589,7 +564,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           : '已创建 Provider「${created.displayName}」，接下来可以填 API Key 和模型目录。');
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
-      _notify('创建失败：$e', error: true);
+      _notify('创建失败，$e', error: true);
     }
   }
 
@@ -603,7 +578,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       await _credentials.save(provider, key);
       return true;
     } catch (e) {
-      _notify('Provider 已保存，但 API Key 没存上：$e', error: true);
+      _notify('Provider 已保存，但 API Key 没存上，$e', error: true);
       return false;
     }
   }
@@ -650,7 +625,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           : '已保存 Provider「${updated.displayName}」（revision ${updated.revision}）。');
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
-      _notify('保存失败：$e', error: true);
+      _notify('保存失败，$e', error: true);
     }
   }
 
@@ -676,7 +651,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       _notify('已删除 Provider「${p.displayName}」');
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
-      _notify('删除失败：$e', error: true);
+      _notify('删除失败，$e', error: true);
     }
   }
 
@@ -703,11 +678,10 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         title: const Text('从电脑同步 Provider？'),
         content: const SingleChildScrollView(
           child: Text(
-            '把桌面上的 Provider 清单与模型目录搬到这台手机：\n\n'
-            '· 桌面有、手机没有的 → 新建\n'
-            '· 同 id 的 → 用桌面那份覆盖（显示名 / 协议 / Base URL / 模型能力）\n'
-            '· 只在手机上有的 → 保留，不删\n\n'
-            'API Key 不在其中 —— 它要单独在「远程访问与配对」里取回（桌面要允许这台设备读密钥）。',
+            '把桌面上的 Provider 清单与模型目录搬到这台手机。\n\n'
+            '桌面有、手机没有的会新建。同 id 的用桌面那份覆盖，包括显示名、协议、Base URL 和模型能力。'
+            '只在手机上有的保留不删。\n\n'
+            'API Key 不在其中，它要单独在「远程访问与配对」里取回，而且桌面要允许这台设备读密钥。',
           ),
         ),
         actions: [
@@ -746,7 +720,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       await _showSyncReport(report);
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
-      _notify('从电脑同步失败：$e', error: true);
+      _notify('从电脑同步失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _syncingProviders = false);
     }
@@ -759,15 +733,15 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       return;
     }
     final lines = <String>[
-      if (report.created.isNotEmpty) '新建 ${report.created.length} 个：${report.created.join('、')}',
-      if (report.updated.isNotEmpty) '覆盖 ${report.updated.length} 个：${report.updated.join('、')}',
+      if (report.created.isNotEmpty) '新建 ${report.created.length} 个（${report.created.join('、')}）',
+      if (report.updated.isNotEmpty) '覆盖 ${report.updated.length} 个（${report.updated.join('、')}）',
       if (report.unchanged.isNotEmpty) '${report.unchanged.length} 个与桌面一致，没有改动',
       '模型目录写入 ${report.modelsWritten} 条',
       if (report.localOnly.isNotEmpty)
-        '只在手机上有的 ${report.localOnly.length} 个保留不动：${report.localOnly.join('、')}',
+        '只在手机上有的 ${report.localOnly.length} 个保留不动（${report.localOnly.join('、')}）',
     ];
     if (report.problems.isNotEmpty) {
-      lines.add('没同步成的 ${report.problems.length} 条：');
+      lines.add('还有 ${report.problems.length} 条没同步成。');
       for (final p in report.problems) {
         lines.add('· $p');
       }
@@ -818,7 +792,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       if (mounted) await _reload();
       _notify(text);
     } catch (e) {
-      _notify('从桌面同步密钥失败：$e', error: true);
+      _notify('从桌面同步密钥失败，$e', error: true);
     }
   }
 }
@@ -898,10 +872,10 @@ class _ProviderList extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: _Note(
-              text: '这些 Provider 只在这台手机上（存在本机库里），桌面看不到它们；'
-                  '两端的清单各归各，不会自动合并 —— 桌面那份要手动点「从电脑同步 Provider」搬过来'
-                  '（同 id 会被覆盖，只在手机上有的保留不动，API Key 不在其中）。'
-                  '桌面不在线时也能在这里新建 / 编辑 / 删除、改模型目录。',
+              text: '这些 Provider 只在这台手机上，存在本机库里，桌面看不到它们。'
+                  '两端的清单各归各，不会自动合并。桌面那份要手动点「从电脑同步 Provider」搬过来，'
+                  '同 id 会被覆盖，只在手机上有的保留不动，API Key 不在其中。'
+                  '桌面不在线时也能在这里新建、编辑、删除和改模型目录。',
               error: false,
             ),
           ),
@@ -1108,7 +1082,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       const SizedBox(height: 6),
       SelectableText(p.baseURL, style: theme.textTheme.bodySmall),
       const SizedBox(height: 4),
-      Text('端点信任级别：${p.endpointTrust}（保存时校验，公网必须是 https）',
+      Text('端点信任级别是 ${p.endpointTrust}（保存时校验，公网必须是 https）',
           style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
       if (widget.info != null) ...[
         const SizedBox(height: 10),
@@ -1135,7 +1109,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       ),
       if (!widget.providers.supportsProbe)
         Text(
-          '连接测试与「获取模型」目前只在桌面可用（要由那一端自己向上游发请求）；'
+          '连接测试与「获取模型」目前只在桌面可用，因为要由那一端自己向上游发请求。'
           '这台手机上还做不到，所以这两个按钮先禁用着。',
           style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
         )
@@ -1452,7 +1426,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
   Future<void> _test() async {
     if (!widget.providers.supportsProbe) {
       // 兜底（按钮已经禁用了）：真被调到也要说人话，别去撞桌面那条不存在的 id
-      _toast('手机上还没有"连接测试"：这一步要由本机自己向上游发请求，本批未实现。', error: true);
+      _toast('手机上还没有"连接测试"，这一步要由本机自己向上游发请求，本批未实现。', error: true);
       return;
     }
     setState(() {
@@ -1462,9 +1436,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     try {
       final result = await widget.api.testProvider(widget.provider.id);
       if (mounted) setState(() => _testResult = result);
-      _toast(result.ok ? '连接正常：${result.message}' : '连接失败：${result.display}', error: !result.ok);
+      _toast(result.ok ? '连接正常，${result.message}' : '连接失败，${result.display}', error: !result.ok);
     } catch (e) {
-      _toast('连接测试失败：$e', error: true);
+      _toast('连接测试失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1473,7 +1447,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
   Future<void> _saveKey() async {
     final value = _key.text;
     if (value.trim().isEmpty) {
-      _toast('密钥留空 = 不修改；如果要清除请点「移除密钥」。');
+      _toast('密钥留空就是不修改，要清除请点「移除密钥」。');
       return;
     }
     setState(() => _busy = true);
@@ -1484,7 +1458,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       await widget.onChanged('密钥已保存（$where）。值不会再被读回。');
       _toast('密钥已保存（$where），值不会再被读回。');
     } catch (e) {
-      _toast('保存密钥失败：$e', error: true);
+      _toast('保存密钥失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1497,7 +1471,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       await widget.onChanged('密钥已移除。');
       _toast('密钥已移除。');
     } catch (e) {
-      _toast('移除失败：$e', error: true);
+      _toast('移除失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1554,10 +1528,10 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       }
       if (result.applied.contains(ref)) {
         await widget.onChanged('「$ref」已推到桌面。');
-        _toast('已推给桌面：$ref');
+        _toast('已推给桌面 $ref');
       } else if (result.rejected.isNotEmpty) {
         final r = result.rejected.firstWhere((e) => e.ref == ref, orElse: () => result.rejected.first);
-        _toast('桌面拒收「${r.ref}」：${r.hint}', error: true);
+        _toast('桌面拒收「${r.ref}」，${r.hint}', error: true);
       } else {
         // 既没说成功也没说被拒 —— 如实说"桌面没回这一条"，别假装成功
         _toast('桌面既没回成功也没回被拒（回执里没有 $ref）—— 别当它成了。', error: true);
@@ -1566,10 +1540,10 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       if (e.statusCode == 404 || e.statusCode == 501) {
         _toast('这台后端还没有"上行密钥"的接口（旧版本）—— 升级桌面后端再试。', error: true);
       } else {
-        _toast('推给桌面失败：${e.message}', error: true);
+        _toast('推给桌面失败，${e.message}', error: true);
       }
     } catch (e) {
-      _toast('推给桌面失败：$e', error: true);
+      _toast('推给桌面失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1580,7 +1554,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
   Future<void> _discover() async {
     if (!widget.providers.supportsProbe) {
       // 兜底（按钮已经禁用了）：说清"这一端还做不到"，而不是去问桌面（它不认识本机这条 id）
-      _toast('手机上还没有"获取模型"：这一步要由本机自己去拉上游的 /models，本批未实现。', error: true);
+      _toast('手机上还没有"获取模型"，这一步要由本机自己去拉上游的 /models，本批未实现。', error: true);
       return;
     }
     setState(() => _busy = true);
@@ -1588,7 +1562,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       final result = await widget.api.discoverModels(widget.provider.id);
       if (!mounted) return;
       if (!result.ok) {
-        _toast('获取模型失败：${result.display}', error: true);
+        _toast('获取模型失败，${result.display}', error: true);
         return;
       }
       if (result.candidates.isEmpty) {
@@ -1641,7 +1615,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       await _saveModels();
       _toast('已加入并保存 $added 个模型');
     } catch (e) {
-      _toast('获取模型失败：$e', error: true);
+      _toast('获取模型失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1703,7 +1677,7 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       }
       await widget.onChanged('模型目录已保存（${_models.length} 个）。');
     } catch (e) {
-      _toast('保存模型目录失败：$e', error: true);
+      _toast('保存模型目录失败，$e', error: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1891,7 +1865,7 @@ class _ProviderDialogState extends State<_ProviderDialog> {
                 decoration: InputDecoration(
                   labelText: 'Base URL',
                   hintText: 'https://api.deepseek.com/v1',
-                  helperText: '只去掉末尾的 /；兼容网关的路径原样保留',
+                  helperText: '只去掉末尾的 /，兼容网关的路径原样保留。',
                   errorText: _urlError,
                   isDense: true,
                 ),
@@ -1908,8 +1882,8 @@ class _ProviderDialogState extends State<_ProviderDialog> {
                   labelText: 'API Key（可选）',
                   hintText: 'sk-…',
                   helperText: _editing
-                      ? '只写不读：留空表示不修改已有密钥（要清除请到详情里点「移除密钥」）'
-                      : '只写不读：填了就一起保存，留空可以先建好、稍后在详情里填',
+                      ? '密钥只写不读，留空表示不修改已有密钥，要清除请到详情里点「移除密钥」。'
+                      : '密钥只写不读，填了就一起保存，留空可以先建好、稍后在详情里填。',
                   isDense: true,
                 ),
               ),
@@ -1917,7 +1891,7 @@ class _ProviderDialogState extends State<_ProviderDialog> {
                 const SizedBox(height: 8),
                 const _Note(
                   text: '端点信任级别（公网 / 本机 / 局域网）与凭据引用名都由程序按地址与 ID 自动决定，'
-                      '不用你选：地址是本机就按本机放行，是公网就要求 https。',
+                      '不用你选。地址是本机就按本机放行，是公网就要求 https。',
                   error: false,
                 ),
               ],
@@ -2156,7 +2130,7 @@ class _ModelDialogState extends State<_ModelDialog> {
               decoration: const InputDecoration(labelText: '显示名', isDense: true),
             ),
             const SizedBox(height: 12),
-            const Text('输入能力（不勾 = 不支持；不猜）'),
+            const Text('输入能力（不勾就是不支持，也不做猜测）'),
             const SizedBox(height: 6),
             Wrap(
               spacing: 6,
@@ -2281,7 +2255,7 @@ class _CapabilityCatalogCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '预填来源：**在线目录 models.dev**（「立即更新」拉它）> 手工目录；'
+              '能力先按在线目录 models.dev 预填，点「立即更新」可以拉取。其次才是手工目录。'
               '接口自己声明的永远优先，网关什么都不说时才轮到最后那层兜底推断。',
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
             ),
@@ -2289,7 +2263,7 @@ class _CapabilityCatalogCard extends StatelessWidget {
             if (s == null)
               Text('正在读取能力目录状态…', style: theme.textTheme.bodySmall)
             else if (s.error != null)
-              Text('读取失败：${s.error}',
+              Text('读取失败，${s.error}',
                   style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error))
             else ...[
               Wrap(
@@ -2501,7 +2475,7 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
     final theme = Theme.of(context);
     final busy = widget.busy;
     return AlertDialog(
-      title: Text('模型能力：${_m.displayName}'),
+      title: Text('模型能力（${_m.displayName}）'),
       content: SizedBox(
         width: 520,
         child: SingleChildScrollView(
@@ -2545,10 +2519,10 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
               ),
               Text(
                 _m.reasoning
-                    ? '勾选该模型真正支持的档位（「默认」不在这个列表里 —— 它不发任何思考参数、'
-                        '任何模型都成立，聊天界面永远可选）。留空 = 不声明；真正的思考档位宁可不给选，'
-                        '也不要发出去被上游 400。'
-                    : '该模型不支持推理；勾选后可以逐档声明。',
+                    ? '勾选该模型真正支持的档位。「默认」不在这个列表里，它不发任何思考参数，'
+                        '任何模型都成立，聊天界面永远可选。留空就是不声明。'
+                        '真正的思考档位宁可不给选，也不要发出去被上游 400。'
+                    : '该模型不支持推理。勾选后可以逐档声明。',
                 style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
               ),
               if (_m.reasoning) ...[
@@ -2586,7 +2560,7 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
                   decoration: const InputDecoration(
                     labelText: '网关思考方言（同一个"高"落到哪个字段）',
                     helperText:
-                        'OpenAI 风格用 reasoning_effort；DeepSeek / Qwen / Z.AI / OpenRouter 各有自己的字段组合',
+                        'OpenAI 风格用 reasoning_effort，DeepSeek / Qwen / Z.AI / OpenRouter 各有自己的字段组合。',
                     isDense: true,
                   ),
                   items: [
@@ -2604,7 +2578,7 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(
-                      '实际发送：${_m.thinkingEfforts.entries.map((e) => '${e.key}→${e.value}').join('  ')}',
+                      '实际发送的值是 ${_m.thinkingEfforts.entries.map((e) => '${e.key}→${e.value}').join('  ')}',
                       style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
                     ),
                   ),

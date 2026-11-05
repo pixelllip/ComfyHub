@@ -1,7 +1,7 @@
 # Prompting guidelines（Krea 官方提示词指南原文）
 
 > 来源：<https://github.com/krea-ai/krea-2/blob/main/docs/prompting.md>
-> 采集日期：2026-09，正文逐字未改；**官方的示例配图（`../assets/samples/*.png`）没有随本仓库分发**，
+> 采集日期：2026-09，正文逐字未改；**官方的示例配图（`../assets/samples/*.png`）没有随本软件分发**，
 > 所以下面只剩提示词文本（想看图请打开上面的链接）。
 
 ---

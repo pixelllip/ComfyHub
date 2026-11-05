@@ -490,7 +490,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
     }
     final store = context.read<AiWorkspaceStore>();
     if (store.selectedProvider == null || store.selectedModel == null) {
-      _snack('还没选模型：先去 AI 工作台挑一个');
+      _snack('还没选模型，先去 AI 工作台挑一个');
       return;
     }
     setState(() => _translating = true);
@@ -509,7 +509,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
       });
     } catch (e) {
       if (!mounted) return;
-      _snack('翻译失败：$e');
+      _snack('翻译失败，$e');
     } finally {
       if (mounted) setState(() => _translating = false);
     }
@@ -544,7 +544,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('AI 会按这份布局重写提示词。可以补一句要求：'),
+            const Text('AI 会按这份布局重写提示词。可以补一句要求。'),
             const SizedBox(height: 10),
             TextField(
               controller: note,
@@ -862,7 +862,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            name.isEmpty ? '从 AI 工作台打开的布局' : '正在修改：$name',
+            name.isEmpty ? '从 AI 工作台打开的布局' : '正在修改 $name',
             style: theme.textTheme.labelMedium,
           ),
           const SizedBox(height: 4),
@@ -905,7 +905,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
           decoration: const InputDecoration(
             border: OutlineInputBorder(),
             isDense: true,
-            hintText: '例：雾夜废墟，一名提灯的旅人正走近教堂',
+            hintText: '例如 雾夜废墟，一名提灯的旅人正走近教堂',
           ),
           onChanged: (_) => setState(() {}),
         ),
@@ -978,7 +978,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
               label: Text(_translating ? '正在编译…' : '让 AI 写'),
             ),
             Text(
-              _aiModel == null ? '译者：工作台当前模型' : '译者：$_aiModel',
+              _aiModel == null ? '译者是工作台当前模型' : '译者是 $_aiModel',
               style: theme.textTheme.labelSmall
                   ?.copyWith(color: theme.colorScheme.outline),
             ),
@@ -1008,7 +1008,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
         Text(
           '专用 JSON 与 ComfyUI 的 MOSS-Image Layout Prompt 节点输出同构，'
           '可以直接当提示词文本喂给 MOSS-Image。\n'
-          '通用提示词里，模型基本吃得下的是"在哪里"；"占多大"只是形容词，'
+          '通用提示词里，模型基本吃得下的是"在哪里"，"占多大"只是形容词，'
           '"镜中是不是同一个人"也只能靠关系字段明说 —— 这两类约束它可能不照做。',
           style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
         ),
@@ -1045,7 +1045,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
             initialValue: r.label,
             decoration: const InputDecoration(
               labelText: '名称',
-              hintText: '例：提灯的旅人',
+              hintText: '例如 提灯的旅人',
               isDense: true,
               border: OutlineInputBorder(),
             ),
@@ -1059,7 +1059,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
             maxLines: 3,
             decoration: const InputDecoration(
               labelText: '描述（可留空，留空就用名称）',
-              hintText: '例：提着一盏灯，从雾里走出来，灯光是唯一的暖色',
+              hintText: '例如 提着一盏灯，从雾里走出来，灯光是唯一的暖色',
               isDense: true,
               border: OutlineInputBorder(),
             ),

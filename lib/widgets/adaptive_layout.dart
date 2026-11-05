@@ -176,15 +176,41 @@ class AdaptiveColumns extends StatelessWidget {
           );
         }
 
-        final buckets = List.generate(columns, (_) => <Widget>[]);
+        final buckets = List.generate(columns, (_) => <AdaptiveSection>[]);
         final heights = List<double>.filled(columns, 0);
         for (final section in sections) {
           var target = 0;
           for (var i = 1; i < columns; i++) {
             if (heights[i] < heights[target]) target = i;
           }
-          buckets[target].add(section.child);
+          buckets[target].add(section);
           heights[target] += section.estimatedHeight + runSpacing;
+        }
+
+        // 两列时再做一次"末块搬家"的精修：贪心最后一步常常让一列比另一列
+        // 多出一整块。把较高那列的**最后一块**挪到另一列，如果这样两列更接近
+        // 就接受（差相同时不搬 —— 左列保持略长，符合用户"左列略长于右列"的观感）。
+        if (columns == 2) {
+          final taller = heights[0] >= heights[1] ? 0 : 1;
+          final shorter = 1 - taller;
+          if (buckets[taller].length > 1) {
+            final moving = buckets[taller].last;
+            final h = moving.estimatedHeight + runSpacing;
+            final newTaller = heights[taller] - h;
+            final newShorter = heights[shorter] + h;
+            final oldGap = (heights[0] - heights[1]).abs();
+            final newGap = (newTaller - newShorter).abs();
+            // 搬完后左列不许比右列短（"左列略长于右列"）。
+            final newLeft = taller == 0 ? newTaller : newShorter;
+            final newRight = taller == 0 ? newShorter : newTaller;
+            final keepsLeftLonger = newLeft >= newRight - 1;
+            if (newGap < oldGap - 1 && keepsLeftLonger) {
+              buckets[taller].removeLast();
+              buckets[shorter].add(moving);
+              heights[taller] = newTaller;
+              heights[shorter] = newShorter;
+            }
+          }
         }
 
         return Row(
@@ -195,7 +221,7 @@ class AdaptiveColumns extends StatelessWidget {
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: _withGaps(buckets[i]),
+                  children: _withGaps([for (final s in buckets[i]) s.child]),
                 ),
               ),
             ],

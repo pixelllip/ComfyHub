@@ -269,12 +269,12 @@ class BackendLauncher extends ChangeNotifier {
     return true;
   }
 
-  String _missingExeMessage() => '没找到后端程序 $kServerExeName。三种修法：\n'
-      '  · 发布包 / Release 产物：它应该跟 viewer.exe 同级放在 backend\\ 里'
-      '（release 构建时由 windows\\CMakeLists.txt 自动装配，见 README「构建」一节）；\n'
-      '  · 源码树：cargo build --release --manifest-path server-rs\\Cargo.toml；\n'
-      '  · 已有别处的构建产物：设环境变量 $kServerExeEnv 指过去'
-      '（把后端映像挪出受限目录也是用这个开关）。';
+  String _missingExeMessage() => '没找到后端程序 $kServerExeName。'
+      '发布包或 Release 产物里，它应该跟 viewer.exe 同级放在 backend\\ 里，'
+      'release 构建时会由 windows\\CMakeLists.txt 自动装配（见 README「构建」一节）。'
+      '源码树里可以先运行 cargo build --release --manifest-path server-rs\\Cargo.toml。'
+      '已有别处的构建产物时，设环境变量 $kServerExeEnv 指过去，'
+      '把后端映像挪出受限目录也是用这个开关。';
 
   // -------------------------------------------------------------------------
   //  启动
@@ -445,8 +445,8 @@ class BackendLauncher extends ChangeNotifier {
       }
       if (_cancelled) return _fail('已取消启动');
       if (exited) {
-        return _fail('后端启动失败：进程已退出（退出码 $exitCode）。日志见上。'
-            '常见原因：数据库文件被别的进程占着、端口绑不上、或 exe 与源码不匹配。');
+        return _fail('后端启动失败，进程已退出（退出码 $exitCode）。日志见上。'
+            '常见原因可能是数据库文件被别的进程占着、端口绑不上，或 exe 与源码不匹配。');
       }
       if (attempt % 10 == 0) {
         _log('仍在等待…（${attempt}s）'
@@ -456,7 +456,7 @@ class BackendLauncher extends ChangeNotifier {
     }
 
     return _fail('等待后端超时（${(waitDeadlineOverride ?? readyTimeout).inSeconds} 秒）。'
-        '后端日志见上方输出；也可以在「设置 → 本地服务」里点「停止」再点「启动 / 修复服务」。');
+        '后端日志见上方输出，也可以在「设置 → 本地服务」里点「停止」再点「启动 / 修复服务」。');
   }
 
   /// 停下"我们认领过的"后端（自己起的 + 接管来的），不动别人的。
@@ -639,7 +639,7 @@ class BackendLauncher extends ChangeNotifier {
 
     if (portFallbackFrom != null) {
       _log('⚠ 端口 $portFallbackFrom 这次没能用上（被别的程序占了，或落在系统保留段），'
-          '后端改听 $port。**手机上保存的地址会失效**：'
+          '后端改听 $port。手机上保存的地址会失效，'
           '请在「设置 → 远程访问与配对」里重新扫一次二维码。');
     } else if (spawned && wanted != null) {
       _log('端口沿用上次的 $port（手机存的地址不用改）。');

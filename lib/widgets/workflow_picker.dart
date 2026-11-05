@@ -3,47 +3,31 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/models.dart';
-import 'workflow_blueprint_page.dart';
 
 /// 「选择现有工作流」对话框：列出本机 ComfyUI 里已经保存的工作流。
 ///
 /// 用户 2026-10-21 的要求：
 /// - **给用户选择现有工作流的机会**（不要 AI 自己编一份）；
-/// - **点击查看蓝图详情**；
 /// - 选中的路径会写回输入框，让 AI 明确"用这一份"，而不是靠它猜。
 ///
-/// 只读：列表走 `GET /api/capture/workflows`，原文走 `GET /api/capture/workflow`
-/// （路径准入在后端，前端不拼盘路径）。
+/// 2026-11-05：用户要求"把查看蓝图入口移除"—— 这个对话框只做**选择**，
+/// 不再带「看蓝图」按钮（蓝图仍可从工作流卡片 / 详情页的「查看工作流」进）。
+///
+/// 只读：列表走 `GET /api/capture/workflows`（路径准入在后端，前端不拼盘路径）。
 Future<ComfyWorkflowFile?> showWorkflowPicker(
   BuildContext context, {
   required Future<ComfyWorkflowList> Function({String? q}) loadList,
-  required Future<String> Function(String path) loadRaw,
-  required BlueprintDiagnose diagnose,
-  BlueprintSave? save,
 }) {
   return showDialog<ComfyWorkflowFile>(
     context: context,
-    builder: (_) => _WorkflowPickerDialog(
-      loadList: loadList,
-      loadRaw: loadRaw,
-      diagnose: diagnose,
-      save: save,
-    ),
+    builder: (_) => _WorkflowPickerDialog(loadList: loadList),
   );
 }
 
 class _WorkflowPickerDialog extends StatefulWidget {
   final Future<ComfyWorkflowList> Function({String? q}) loadList;
-  final Future<String> Function(String path) loadRaw;
-  final BlueprintDiagnose diagnose;
-  final BlueprintSave? save;
 
-  const _WorkflowPickerDialog({
-    required this.loadList,
-    required this.loadRaw,
-    required this.diagnose,
-    this.save,
-  });
+  const _WorkflowPickerDialog({required this.loadList});
 
   @override
   State<_WorkflowPickerDialog> createState() => _WorkflowPickerDialogState();
@@ -56,9 +40,6 @@ class _WorkflowPickerDialogState extends State<_WorkflowPickerDialog> {
   bool _loading = true;
   String? _error;
   ComfyWorkflowList? _list;
-
-  /// 正在读原文、准备开蓝图的那一份（按钮上转圈）。
-  String? _openingPath;
 
   @override
   void initState() {
@@ -103,28 +84,6 @@ class _WorkflowPickerDialogState extends State<_WorkflowPickerDialog> {
     });
   }
 
-  Future<void> _openBlueprint(ComfyWorkflowFile file) async {
-    if (_openingPath != null) return;
-    setState(() => _openingPath = file.path);
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    try {
-      final raw = await widget.loadRaw(file.path);
-      if (!mounted) return;
-      setState(() => _openingPath = null);
-      await showWorkflowBlueprint(
-        context,
-        title: file.name,
-        raw: raw,
-        diagnose: widget.diagnose,
-        save: widget.save,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _openingPath = null);
-      messenger?.showSnackBar(SnackBar(content: Text('读不到这份工作流：$e')));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -167,7 +126,7 @@ class _WorkflowPickerDialogState extends State<_WorkflowPickerDialog> {
               '这些是 ComfyUI 里已经保存的工作流。选一份后会把路径写进输入框 —— '
               '补一句「想生成什么」再发送，AI 就会基于这一份出图（不会改你的原文件）。',
               style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.outline,
+                color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ],
@@ -228,7 +187,7 @@ class _WorkflowPickerDialogState extends State<_WorkflowPickerDialog> {
             Icon(
               Icons.folder_off_outlined,
               size: 42,
-              color: theme.colorScheme.outline,
+              color: theme.colorScheme.onSurfaceVariant,
             ),
             const SizedBox(height: 10),
             Text(
@@ -246,7 +205,6 @@ class _WorkflowPickerDialogState extends State<_WorkflowPickerDialog> {
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final file = list.files[index];
-        final opening = _openingPath == file.path;
         return ListTile(
           dense: true,
           visualDensity: VisualDensity.compact,
@@ -270,31 +228,9 @@ class _WorkflowPickerDialogState extends State<_WorkflowPickerDialog> {
             style: theme.textTheme.labelSmall,
           ),
           isThreeLine: true,
-          onTap: opening ? null : () => Navigator.of(context).pop(file),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextButton.icon(
-                onPressed: opening ? null : () => _openBlueprint(file),
-                icon: opening
-                    ? const SizedBox(
-                        width: 13,
-                        height: 13,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.visibility_outlined, size: 16),
-                label: const Text('看蓝图'),
-              ),
-              const SizedBox(width: 2),
-              IconButton(
-                tooltip: '用这份工作流',
-                onPressed: opening
-                    ? null
-                    : () => Navigator.of(context).pop(file),
-                icon: const Icon(Icons.check_circle_outline, size: 19),
-              ),
-            ],
-          ),
+          onTap: () => Navigator.of(context).pop(file),
+          // 只做选择：不再有「看蓝图」入口（2026-11-05 用户要求移除）。
+          trailing: const Icon(Icons.chevron_right, size: 20),
         );
       },
     );

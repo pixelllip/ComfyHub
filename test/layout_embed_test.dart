@@ -306,7 +306,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('调整布局'), findsOneWidget);
-      expect(find.text('正在修改：三分法：旅人压左'), findsOneWidget);
+      expect(find.text('正在修改 三分法：旅人压左'), findsOneWidget);
       expect(find.text('提交回工作台'), findsOneWidget);
       // 草图灌进画布了：面板里数得出 1 个框，场景描述也在
       expect(find.text('框（1）'), findsOneWidget);

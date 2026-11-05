@@ -75,11 +75,11 @@ class ConfinementInfo {
     final lines = <String>[];
     if (serverImage != null && serverImage!.isNotEmpty) {
       lines.add(
-        '后端映像：$serverImage${imageInsideProjectRoot ? '（在运行根目录内）' : ''}',
+        '后端映像是 $serverImage${imageInsideProjectRoot ? '（在运行根目录内）' : ''}',
       );
     }
     if (blockedPaths.isNotEmpty) {
-      lines.add('写不进：${blockedPaths.join('、')}');
+      lines.add('写不进这些目录 ${blockedPaths.join('、')}');
     }
     return lines.join('\n');
   }
@@ -952,7 +952,7 @@ class CapturePollResult {
 
   String get summary => ok
       ? '检查 $checked 次运行，新捕获 $newRuns 次（$newMedia 个产物）'
-      : '同步失败：${message ?? "未知原因"}';
+      : '同步失败，${message ?? "未知原因"}';
 }
 
 class ImportFolderResult {
@@ -988,8 +988,8 @@ class ImportFolderResult {
       );
 
   String get summary =>
-      '扫描 $scanned 个文件：新导入 $imported，跳过重复 $duplicates，失败 $failed；'
-      '其中 $promptsCreated 个带内嵌工作流已自动建提示词';
+      '扫描 $scanned 个文件，新导入 $imported，跳过重复 $duplicates，失败 $failed。'
+      '其中 $promptsCreated 个带内嵌工作流，已自动建提示词';
 }
 
 /// 「导入本机工作流文件」的结果（用户 bug ⑤）。
@@ -1036,8 +1036,8 @@ class ImportWorkflowsResult {
   String get summary {
     final base =
         message ??
-        '扫描 $scanned 份工作流文件：新导入 $imported，已在库里 $duplicates，失败 $failed';
-    return dirs.isEmpty ? base : '$base（目录：${dirs.join("、")}）';
+        '扫描 $scanned 份工作流文件，新导入 $imported，已在库里 $duplicates，失败 $failed';
+    return dirs.isEmpty ? base : '$base（目录是 ${dirs.join("、")}）';
   }
 }
 

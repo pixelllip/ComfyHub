@@ -105,11 +105,11 @@ class _ExportDialogState extends State<_ExportDialog> {
     try {
       final opened = await launchUrl(Uri.directory(dir));
       if (!opened && mounted) {
-        setState(() => _error = '系统没有打开这个文件夹：$dir');
+        setState(() => _error = '系统没有打开这个文件夹，$dir');
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = '打开文件夹失败：$e');
+      setState(() => _error = '打开文件夹失败，$e');
     }
   }
 
@@ -170,7 +170,7 @@ class _ExportDialogState extends State<_ExportDialog> {
     return [
       Text(
         '把原件连同它绑定的工作流 / 提示词信息一起写进你选的文件夹。'
-        '结构是：图片 / 视频 / 音频 / 其它，集合作品单独一个文件夹。',
+        '目录按图片、视频、音频、其它分开，集合作品单独一个文件夹。',
         style: theme.textTheme.bodySmall?.copyWith(
           color: theme.colorScheme.onSurfaceVariant,
         ),
@@ -239,7 +239,7 @@ class _ExportDialogState extends State<_ExportDialog> {
         dense: true,
         controlAffinity: ListTileControlAffinity.leading,
         title: const Text('包含 API 格式节点图'),
-        subtitle: const Text('有捕获记录的产物才带；这是当时真正提交给 ComfyUI 的那份'),
+        subtitle: const Text('有捕获记录的产物才带，这是当时真正提交给 ComfyUI 的那份'),
       ),
       if (_error != null) ...[
         const SizedBox(height: 8),
@@ -294,10 +294,10 @@ class _ExportDialogState extends State<_ExportDialog> {
         style: theme.textTheme.bodyMedium,
       ),
       const SizedBox(height: 8),
-      SelectableText('目录：${report.dir}', style: theme.textTheme.bodySmall),
+      SelectableText('目录是 ${report.dir}', style: theme.textTheme.bodySmall),
       const SizedBox(height: 4),
       SelectableText(
-        '清单：${report.manifest}',
+        '导出清单是 ${report.manifest}',
         style: theme.textTheme.labelSmall?.copyWith(
           color: theme.colorScheme.outline,
         ),
@@ -313,7 +313,7 @@ class _ExportDialogState extends State<_ExportDialog> {
           Padding(
             padding: const EdgeInsets.only(bottom: 2),
             child: Text(
-              '· ${failure.name ?? '#${failure.mediaId}'}：${failure.reason}',
+              '· ${failure.name ?? '#${failure.mediaId}'}，${failure.reason}',
               style: theme.textTheme.bodySmall,
             ),
           ),

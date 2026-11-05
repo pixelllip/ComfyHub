@@ -175,7 +175,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 而用户要的恰恰是"刚加的模型立刻能选到"。
       await _loadCatalog();
     } catch (e) {
-      error = "读本机那份 Provider 清单失败：$e";
+      error = "读本机那份 Provider 清单失败，$e";
     }
     notifyListeners();
   }
@@ -228,7 +228,7 @@ class AiWorkspaceStore extends ChangeNotifier {
         _clampReasoningEffort();
       }
     } catch (e) {
-      error = '重读模型目录失败：$e';
+      error = '重读模型目录失败，$e';
     }
     notifyListeners();
   }
@@ -674,22 +674,22 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 于是最常见的"正在生成中又按了一次回车"会把用户刚打的字**静默吃掉**
   /// （用户报的 bug：只能自己把上一条复制一遍再发一次）。被拒时一个字节都不能动。
   String? sendBlockReason() {
-    if (sending) return '正在生成中：先点「停止」，或等这一轮结束再发。你打的字还在输入框里。';
+    if (sending) return '正在生成中。先点「停止」，或等这一轮结束再发。你打的字还在输入框里。';
     if (uploadingAttachments) return '附件还在上传，等它传完再发（免得只发出去一半）。';
     // 手机：规则工件（系统提示 / 工具描述 / 安全横幅）只有桌面能产出（R13）。
     // 一份都没有时**不许开跑** —— 否则模型会拿着一套瞎编的规则回答（R13 的另一面）。
     if (_source.isLocal && kitIssue != null) {
-      return '本机还没有可用的规则工件（run-kit）：$kitIssue';
+      return '本机还没有可用的规则工件（run-kit）。$kitIssue';
     }
     if (!(preflight?.allowed ?? true)) {
-      return '有附件未通过准入，已阻断发送：${preflight!.blockers.join('；')}';
+      return '有附件未通过准入，已阻断发送。${preflight!.blockers.join('。')}';
     }
     if (selectedProvider == null || selectedModel == null) {
       return '请先选择 Provider 与模型（设置 → AI 模型）';
     }
     // 还有没上传成功的附件时不给发：否则用户以为图发出去了，其实只发了文字
     if (!attachments.every((a) => a.hasId)) {
-      return '有附件还没上传成功，已阻断发送；请移除它们或重新选择文件。';
+      return '有附件还没上传成功，已阻断发送。请移除它们或重新选择文件。';
     }
     return null;
   }
@@ -727,7 +727,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       skillsError = null;
       return (ok: result.errors.isEmpty, message: result.summary);
     } catch (e) {
-      return (ok: false, message: '重新扫描失败：$e');
+      return (ok: false, message: '重新扫描失败，$e');
     } finally {
       skillsBusy = false;
       notifyListeners();
@@ -745,7 +745,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       skillsError = null;
       return (ok: true, message: '已删除 skill「$name」');
     } catch (e) {
-      return (ok: false, message: '删除「$name」失败：$e');
+      return (ok: false, message: '删除「$name」失败，$e');
     } finally {
       skillsBusy = false;
       notifyListeners();
@@ -787,7 +787,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       return (ok: true, message: '长期记忆已保存（${memory.entryCount} 条）');
     } catch (e) {
       memoryError = '$e';
-      return (ok: false, message: '保存失败：$e');
+      return (ok: false, message: '保存失败，$e');
     } finally {
       memoryBusy = false;
       notifyListeners();
@@ -804,7 +804,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       return (ok: true, message: '已添加（共 ${memory.entryCount} 条）');
     } catch (e) {
       memoryError = '$e';
-      return (ok: false, message: '添加失败：$e');
+      return (ok: false, message: '添加失败，$e');
     } finally {
       memoryBusy = false;
       notifyListeners();
@@ -829,7 +829,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       );
     } catch (e) {
       memoryError = '$e';
-      return (ok: false, message: '删除失败：$e');
+      return (ok: false, message: '删除失败，$e');
     } finally {
       memoryBusy = false;
       notifyListeners();
@@ -846,7 +846,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       return (ok: true, message: '长期记忆已清空');
     } catch (e) {
       memoryError = '$e';
-      return (ok: false, message: '清空失败：$e');
+      return (ok: false, message: '清空失败，$e');
     } finally {
       memoryBusy = false;
       notifyListeners();
@@ -873,7 +873,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       return (ok: true, message: '已注册 skill「${saved.name}」');
     } catch (e) {
       notifyListeners();
-      return (ok: false, message: '注册失败：$e');
+      return (ok: false, message: '注册失败，$e');
     }
   }
 
@@ -915,16 +915,16 @@ class AiWorkspaceStore extends ChangeNotifier {
         // 成「询问」，界面上看着就是"点了没反应"（用户 bug ①）。这里如实说出来，
         // 而不是让用户一直点。
         notice =
-            '切换权限失败：后端没有接受「${mode == AiToolPolicy.modeFull ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel}」'
+            '切换权限失败，后端没有接受「${mode == AiToolPolicy.modeFull ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel}」'
             '（当前仍是「${policy.permissionMode == AiToolPolicy.modeFull ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel}」）。'
             '多半是后端还是旧构建 —— 在「设置 → 本地服务」里重启一次本地服务即可。';
         return;
       }
       notice = policy.permissionMode == AiToolPolicy.modeFull
-          ? '已切换到「${AiToolPolicy.modeFullLabel}」：AI 调用工具不再等你批准（可读 / 可写目录范围不变，越界仍会被拒）。'
-          : '已切换到「${AiToolPolicy.modeAskLabel}」：写盘 / 提交这类改动操作会先等你批准。';
+          ? '已切换到「${AiToolPolicy.modeFullLabel}」，AI 调用工具不再等你批准（可读 / 可写目录范围不变，越界仍会被拒）。'
+          : '已切换到「${AiToolPolicy.modeAskLabel}」，写盘 / 提交这类改动操作会先等你批准。';
     } catch (e) {
-      notice = '切换权限失败：$e';
+      notice = '切换权限失败，$e';
     } finally {
       permissionBusy = false;
       notifyListeners();
@@ -1082,7 +1082,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       if (!accepted) {
         return (
           accepted: false,
-          message: '桌面没有接受这一条${approve ? '批准' : '拒绝'}：它可能已经结束或超时了，可以等下一次刷新确认。',
+          message: '桌面没有接受这一条${approve ? '批准' : '拒绝'}，它可能已经结束或超时了，可以等下一次刷新确认。',
         );
       }
       // 被接受了：后端那一刻确实把它移出了待办，就地摘掉（不靠下一次轮询刚好拉回来）。
@@ -1098,12 +1098,12 @@ class AiWorkspaceStore extends ChangeNotifier {
         accepted: true,
         message: approve
             ? (queued
-                  ? '已批准：桌面会走 comfy_submit 那条链路真提交，跑完产物进画廊、结果回那条会话。'
+                  ? '已批准，桌面会走 comfy_submit 那条链路真提交，跑完产物进画廊、结果回那条会话。'
                   : '已批准这次工具调用，模型会继续执行。')
             : (queued ? '已拒绝这一条排队提交，桌面不会提交它。' : '已拒绝这次工具调用。'),
       );
     } catch (e) {
-      return (accepted: false, message: '${approve ? '批准' : '拒绝'}失败：$e');
+      return (accepted: false, message: '${approve ? '批准' : '拒绝'}失败，$e');
     }
   }
 
@@ -1225,7 +1225,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       notifyListeners();
       return (ok: true, message: '已回答');
     } catch (e) {
-      return (ok: false, message: '回答失败：$e');
+      return (ok: false, message: '回答失败，$e');
     }
   }
 
@@ -1240,7 +1240,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       notifyListeners();
       return (ok: true, message: '已跳过');
     } catch (e) {
-      return (ok: false, message: '跳过失败：$e');
+      return (ok: false, message: '跳过失败，$e');
     }
   }
 
@@ -1314,7 +1314,7 @@ class AiWorkspaceStore extends ChangeNotifier {
         notice = approve ? '已批准这次工具调用，模型会继续执行。' : '已拒绝这次工具调用。';
       }
     } catch (e) {
-      notice = '${approve ? '批准' : '拒绝'}失败：$e';
+      notice = '${approve ? '批准' : '拒绝'}失败，$e';
     }
     notifyListeners();
   }
@@ -1347,7 +1347,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       // **先等本地服务有个结论**（见 [backendReady] / `BackendLauncher.settled`）：
       // 冷启动时 `.run\api.json` 还没写出来，这一刻 `baseUrl` 是 8080 兜底值，
       // 发出去的请求注定失败 —— 而后端 1 秒后就绪，用户看到的就是一句莫名其妙的
-      // "连接后端失败：ClientException … 127.0.0.1:8080/api/ai/providers"。
+      // "连接后端失败，ClientException … 127.0.0.1:8080/api/ai/providers"。
       await backendReady?.call();
       // 先尽力把配对令牌读进内存（手机专有）：下面 ensureRunKit / syncOutbox 都要带它。
       // ⚠ 必须 **await**：不等它回来就往下走，`ensureRunKit` / `syncOutbox` 拿到的还是
@@ -1369,7 +1369,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       }
       _loaded = true;
     } catch (e) {
-      error = '连接后端失败：$e';
+      error = '连接后端失败，$e';
       // 失败不算"加载过"：下次进页面还能重试
       _loading = null;
     } finally {
@@ -1423,7 +1423,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       error = providers.isEmpty ? _emptyLocalProvidersNotice : null;
     } catch (e) {
       providers = const [];
-      error = '读本机那份 Provider 清单失败：$e';
+      error = '读本机那份 Provider 清单失败，$e';
     }
     // "这台手机有没有 key"只有本机密钥库知道：本机库那几行里**没有**凭据状态，
     // 所以要现问一次（桌面路径由后端随清单下发，不需要这一步）。
@@ -1518,7 +1518,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       kitIssue = r.ok ? null : (r.reason ?? '本机还没有规则工件（run-kit）');
     } catch (e) {
       // 连通道都炸了也要如实说，不能让"没有规则"变成一条静默的失败
-      kitIssue = '取规则工件失败：$e';
+      kitIssue = '取规则工件失败，$e';
     }
     // 拿不到规则 = **发不出去**（按钮会一直是灰的）。这条日志是给排查用的：
     // 手机上"按钮点了没反应"最常见的原因就是它，而界面上没有别的地方会说。
@@ -1547,7 +1547,7 @@ class AiWorkspaceStore extends ChangeNotifier {
             '${r.pending > 0 ? '（还有 ${r.pending} 条待同步）' : ''}。';
       } else if (!r.ok && r.error != null && r.pending > 0) {
         // 离线时不吵人：只在**确实有东西没推上去**时记一句
-        pushNotice = '本机还有 ${r.pending} 条没同步到桌面：${r.error}';
+        pushNotice = '本机还有 ${r.pending} 条没同步到桌面，${r.error}';
       }
       // M4 补全：队列里还有东西就**挂着定时重试**，推空了立刻停 ——
       // 既不能"只在冷启动与 Run 收尾各推一次"（用户停在聊天页就永远不推了），
@@ -1560,7 +1560,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       return r.applied;
     } catch (e) {
       // 通道本身炸了：pending 未知，**不动**已经挂着的定时器（挂着就还会重试）
-      pushNotice = '同步到桌面失败：$e';
+      pushNotice = '同步到桌面失败，$e';
       return 0;
     } finally {
       _outboxPushing = false;
@@ -1608,13 +1608,13 @@ class AiWorkspaceStore extends ChangeNotifier {
         );
         if (r.error != null) {
           // 失败要如实说，但不吵人：游标一个字都没动，下次接着拉
-          pushNotice = '从桌面拉取失败：${r.error}';
+          pushNotice = '从桌面拉取失败，${r.error}';
         }
       }
       return r.applied;
     } catch (e) {
       // 通道本身炸了（桥没起来 / 库坏了）：与上行同一条处置 —— 只记一句
-      pushNotice = '从桌面拉取失败：$e';
+      pushNotice = '从桌面拉取失败，$e';
       debugPrint('[M4] 下行：异常 $e');
       return 0;
     } finally {
@@ -1721,10 +1721,10 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
     final token = pairingToken?.trim() ?? '';
     if (token.isEmpty) {
-      return '还没有配对令牌：先在设置 →「远程访问与配对」里和桌面配一次对，再来取密钥。';
+      return '还没有配对令牌，先在设置 →「远程访问与配对」里和桌面配一次对，再来取密钥。';
     }
     final base = baseUrlProvider?.call().trim() ?? '';
-    if (base.isEmpty) return '还不知道桌面地址：先在设置里填上桌面的地址。';
+    if (base.isEmpty) return '还不知道桌面地址，先在设置里填上桌面的地址。';
 
     final refs = <String>{};
     for (final p in providers) {
@@ -1762,20 +1762,20 @@ class AiWorkspaceStore extends ChangeNotifier {
       final parts = <String>[
         written.isEmpty
             ? '桌面没有下发任何密钥'
-            : '已从桌面取得并写入本机密钥库 ${written.length} 把：${written.join('、')}',
+            : '已从桌面取得并写入本机密钥库 ${written.length} 把（${written.join('、')}）',
       ];
       if (missing.isNotEmpty) {
         parts.add(
-          '${missing.length} 把没拿到（桌面没配过，或这台设备还没被允许下行密钥）：'
+          '${missing.length} 把没拿到（桌面没配过，或这台设备还没被允许下行密钥），分别是'
           '${missing.join('、')}',
         );
       }
       if (failed.isNotEmpty) {
-        parts.add('${failed.length} 把写不进本机密钥库：${failed.join('、')}');
+        parts.add('${failed.length} 把写不进本机密钥库（${failed.join('、')}）');
       }
-      return '${parts.join('；')}。';
+      return '${parts.join('。')}。';
     } catch (e) {
-      return '从桌面同步密钥失败：$e';
+      return '从桌面同步密钥失败，$e';
     } finally {
       api.dispose();
     }
@@ -1902,13 +1902,13 @@ class AiWorkspaceStore extends ChangeNotifier {
         models = await _providerStore.listModels(p.id);
         if (models.isEmpty) {
           modelsIssue =
-              '本机还没为「${p.displayName}」配过模型清单：'
+              '本机还没为「${p.displayName}」配过模型清单，'
               '去「AI 模型与凭据」里加一个模型（能力要显式声明，别指望它按名字猜），'
               '加完这里就能选它了。';
         }
       } catch (e) {
         models = const [];
-        modelsIssue = '读本机那份模型清单失败：$e';
+        modelsIssue = '读本机那份模型清单失败，$e';
       }
     } else {
       // 桌面：后端是唯一真源，拿不到就**如实抛**（界面显示"连接后端失败"）——
@@ -1948,7 +1948,7 @@ class AiWorkspaceStore extends ChangeNotifier {
         await _loadModels();
       } catch (e) {
         // 目录读失败**不该让用户点不中**：那条模型明明就摆在这份界面上。
-        error = '读「${p.displayName}」的模型目录失败：$e';
+        error = '读「${p.displayName}」的模型目录失败，$e';
         models = catalogByProvider[p.id] ?? const [];
       }
       if (!models.any((e) => e.id == m.id)) {
@@ -2012,7 +2012,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       await _cleanupEmptyConversation();
       await _createConversation();
     } catch (e) {
-      error = '新建会话失败：$e';
+      error = '新建会话失败，$e';
     }
     notifyListeners();
   }
@@ -2056,7 +2056,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       _pruneLiveState();
       notice = null;
     } catch (e) {
-      error = '打开会话失败：$e';
+      error = '打开会话失败，$e';
     }
     notifyListeners();
   }
@@ -2126,7 +2126,7 @@ class AiWorkspaceStore extends ChangeNotifier {
           .toList();
       conversation = updated;
     } catch (e) {
-      error = '重命名失败：$e';
+      error = '重命名失败，$e';
     }
     notifyListeners();
   }
@@ -2140,7 +2140,7 @@ class AiWorkspaceStore extends ChangeNotifier {
         messages = const [];
       }
     } catch (e) {
-      error = '归档失败：$e';
+      error = '归档失败，$e';
     }
     notifyListeners();
   }
@@ -2175,7 +2175,7 @@ class AiWorkspaceStore extends ChangeNotifier {
           messages = const [];
         }
       } catch (e) {
-        error = '删除失败：$e';
+        error = '删除失败，$e';
       }
       notifyListeners();
       return;
@@ -2204,9 +2204,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
 
     if (localFailure != null && remoteFailure != null) {
-      error = '删除失败：本机 $localFailure；桌面 $remoteFailure';
+      error = '删除失败，本机 $localFailure，桌面 $remoteFailure';
     } else if (localFailure != null) {
-      error = '桌面那份已删除，但本机没删掉：$localFailure';
+      error = '桌面那份已删除，但本机没删掉，$localFailure';
     } else if (remoteFailure != null) {
       error = '已从本机删除，但桌面上那份还在（$remoteFailure）—— 桌面不在线时就是这样';
     }
@@ -2260,12 +2260,12 @@ class AiWorkspaceStore extends ChangeNotifier {
       final result = await upload();
       attachments.addAll(result.items);
       if (result.failed.isNotEmpty) {
-        notice = '有 ${result.failed.length} 个附件没能上传：${result.failedLabel}';
+        notice = '有 ${result.failed.length} 个附件没能上传，${result.failedLabel}';
       }
       await _stashAttachments();
       await refreshPreflight();
     } catch (e) {
-      error = '附件上传失败：$e';
+      error = '附件上传失败，$e';
     } finally {
       uploadingAttachments = false;
       notifyListeners();
@@ -2310,7 +2310,7 @@ class AiWorkspaceStore extends ChangeNotifier {
         attachmentIds: ids,
       );
     } catch (e) {
-      preflight = AiPreflightResult(allowed: false, blockers: ['预检请求失败：$e']);
+      preflight = AiPreflightResult(allowed: false, blockers: ['预检请求失败，$e']);
     }
     notifyListeners();
   }
@@ -2319,7 +2319,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 而不是"选了却什么都没发生"。
   void noteAttachmentsUnreadable(List<String> names) {
     if (names.isEmpty) return;
-    notice = '这些文件读不到本地路径，已跳过：${names.join('、')}';
+    notice = '这些文件读不到本地路径，已跳过 ${names.join('、')}';
     notifyListeners();
   }
 
@@ -2503,11 +2503,11 @@ class AiWorkspaceStore extends ChangeNotifier {
 
       await _consumeRun(start.runId, assistantId, conv.id);
     } on AiApiException catch (e) {
-      error = '启动失败：${e.message}';
+      error = '启动失败，${e.message}';
       sending = false;
       notifyListeners();
     } catch (e) {
-      error = '发送失败：$e';
+      error = '发送失败，$e';
       sending = false;
       notifyListeners();
     }
@@ -2787,7 +2787,7 @@ class AiWorkspaceStore extends ChangeNotifier {
         }
       }
     } catch (e) {
-      error = '事件流中断：$e';
+      error = '事件流中断，$e';
     } finally {
       _activeRunId = null;
       sending = false;
@@ -2816,7 +2816,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       await _source.cancelRun(runId);
       notice = '已请求停止…';
     } catch (e) {
-      error = '停止失败：$e';
+      error = '停止失败，$e';
     }
     notifyListeners();
   }
@@ -2833,13 +2833,13 @@ class AiWorkspaceStore extends ChangeNotifier {
     final p = selectedProvider;
     final m = selectedModel;
     if (conv == null || p == null || m == null) {
-      error = '无法重试：请先选择 Provider 与模型';
+      error = '无法重试，请先选择 Provider 与模型';
       notifyListeners();
       return;
     }
     final index = messages.indexWhere((x) => x.id == assistantMessageId);
     if (index <= 0) {
-      error = '无法重试：找不到这条回复对应的提问';
+      error = '无法重试，找不到这条回复对应的提问';
       notifyListeners();
       return;
     }
@@ -2848,7 +2848,7 @@ class AiWorkspaceStore extends ChangeNotifier {
         .sublist(0, index)
         .lastWhere((x) => x.isUser, orElse: () => messages[index]);
     if (!ask.isUser) {
-      error = '无法重试：找不到这条回复对应的提问';
+      error = '无法重试，找不到这条回复对应的提问';
       notifyListeners();
       return;
     }
@@ -2919,11 +2919,11 @@ class AiWorkspaceStore extends ChangeNotifier {
       notifyListeners();
       await _consumeRun(start.runId, freshAssistantId, conv.id);
     } on AiApiException catch (e) {
-      error = '重试失败：${e.message}';
+      error = '重试失败，${e.message}';
       sending = false;
       notifyListeners();
     } catch (e) {
-      error = '重试失败：$e';
+      error = '重试失败，$e';
       sending = false;
       notifyListeners();
     }

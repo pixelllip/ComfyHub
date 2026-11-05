@@ -379,7 +379,7 @@ class _SourceBadge extends StatelessWidget {
 
     final ref = sourceRef;
     if (ref == null || ref.isEmpty) return badge;
-    return Tooltip(message: '来源 ID：$ref', child: badge);
+    return Tooltip(message: '来源 ID 是 $ref', child: badge);
   }
 }
 

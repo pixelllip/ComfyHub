@@ -29,7 +29,7 @@ class PairingQrImage extends StatelessWidget {
         size: size,
         backgroundColor: Colors.white,
         // 语义标签给读屏用户一句话（二维码本身对它们没有意义）
-        semanticsLabel: '配对二维码：手机扫码后仍需输入桌上显示的 6 位码',
+        semanticsLabel: '配对二维码，手机扫码后仍需输入桌上显示的 6 位码',
       ),
     );
   }

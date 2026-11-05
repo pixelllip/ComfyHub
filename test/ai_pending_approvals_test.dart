@@ -354,8 +354,10 @@ void main() {
     await tester.pumpWidget(await _homePage(rec));
     await tester.pumpAndSettle();
 
-    // 窄屏没有第三栏，状态（含这张卡）从标题栏的「ComfyUI 状态」进
-    await tester.tap(find.byTooltip('ComfyUI 状态'));
+    // 窄屏没有第三栏，状态（含这张卡）从标题栏的「更多」菜单进
+    await tester.tap(find.byTooltip('更多操作'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('上下文与状态'));
     await tester.pumpAndSettle();
 
     expect(find.text('待审批'), findsOneWidget);

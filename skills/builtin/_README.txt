@@ -8,7 +8,7 @@
 
 也支持平铺写法：`skills/builtin/<name>.md`。
 
-规则（与 `server/src/main/kotlin/com/comfyhub/ai/tools/SkillStore.kt` 一致）：
+规则（与后端扫描器的规则一致）：
 
 - `<name>` 必须是小写 kebab-case（`^[a-z0-9][a-z0-9-]{0,63}$`），且与 frontmatter 里的
   `name` 一致；
@@ -23,7 +23,7 @@
    给用户选现有工作流、复制副本再改、TextGenerate 摘线）；
   `img2img-reference`（把用户发来的图投放进 ComfyUI 的 input 目录，再覆盖 LoadImage）；
   `inpaint-composite`（图像编辑的局部重绘：保背景换人物 / 换背景保人物 / 两阶段"先生成人物再换上去"。
-   配套工具 `comfy_make_mask` + `comfy_use_media`；工作流用**用户自己的**（仓库 2026-10-28 起不再随包带模板），
+   配套工具 `comfy_make_mask` + `comfy_use_media`；工作流用**用户自己的**（本软件 2026-10-28 起不再随包带模板），
    贴人那条链要求 `easy imageRemBg` + `refine_foreground=true`）；
   `comfy-workflow-audit`（工作流审核的判定与修法）；
   `lora-training`（LoRA 数据集 / 打标 / 训练配方与验收）；
@@ -39,10 +39,9 @@
     工作台输入区 `+` 菜单 / `@` 插卡（角色卡可多选 = 多角色同框），卡片正文逐字进槽位、
     **卡本身不进成品**：画风卡是锁定渲染规格，面部 / 身体 / 头发 / 衣物的具体渲染写进对应部位的句子，
     结尾只留 ≤25 词总括；参考图的表情按可见面部配置如实写出；成品正文放进三反引号 text 围栏）。
-  发布包能带上它们靠 `packaging/manifest.json` 的 `skills` 组件（source/target 都是 `skills`）。
+  这些 Skill 随发布包一起分发。
 - 用户自己的 Skill **不放这里**：拷进投放口 `<storage>\ai\skills` 就算装好
   （后端启动时 / 点「重新扫描」会自动给没有 frontmatter 的文件补登记）。
-  注意 `%USERPROFILE%\.dsh` 已经没有任何代码读了（连"从 DSH 导入"按钮都删了）。
 
 > 注意：本文件故意用 `.txt` 后缀 —— 扫描器只认 `*.md`，一个 `README.md` 会被当成
 > 一个"缺少 description 的非法 Skill"列到界面上。

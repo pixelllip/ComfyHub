@@ -15,7 +15,7 @@ version: 3
   和本 skill 冲突时以它为准。
 - 官方项目页：<https://openmoss.ai/MOSS-Image/>
 - ComfyUI 官方教程：<https://docs.comfy.org/zh/tutorials/image/moss-image/moss-image>
-- 官方模板：ComfyUI 模板库里的四个 MOSS-Image 变体（见 §5）——**仓库不随包带模板**，
+- 官方模板：ComfyUI 模板库里的四个 MOSS-Image 变体（见 §5）——**本软件不随包带模板**，
   出图起点就是官方模板，或用户自己另存的那份。
 
 > **一句话**：MOSS-Image 是**文生图 / 布局引导文生图**模型，**不是图生图 / 参考图编辑模型**。
@@ -68,7 +68,7 @@ version: 3
 
 | | 官方 Python / Gradio | ComfyUI 官方模板 |
 | --- | --- | --- |
-| steps | **≥ 50**（官方口径：≥50 步时效果最佳） | 25 |
+| steps | **≥ 50**（官方说明：≥50 步时效果最佳） | 25 |
 | cfg | 3.0（推荐区间 **3.0–6.0**） | 2.5 |
 | sampler | Euler（flow-matching） | `er_sde` |
 | scheduler | 默认 | `simple` |
@@ -182,7 +182,7 @@ python3 <skill>/scripts/compile_prompt.py draft.json --output prompt.txt
 - 布局只是"更强的位置约束"，不是像素级排版保证；文字仍可能被模型重排。
   要求逐字正确时，把文字放进 `text` 字段，`caption` 只写外观与字体/材质。
 
-## 5. 工作流：用 ComfyUI 官方模板（**仓库里不带模板**）
+## 5. 工作流：用 ComfyUI 官方模板（**本软件不随包带模板**）
 
 MOSS-Image 的标准工作流由 **ComfyUI 官方模板库**提供（`Template` → 搜 `MOSS-Image`），四个变体：
 `MOSS-Image: Text to Image` / `MOSS-Image Base: Text to Image` /
@@ -191,7 +191,7 @@ MOSS-Image 的标准工作流由 **ComfyUI 官方模板库**提供（`Template` 
 
 - **t2i 模板自带提示词增强器**（子图节点上的 `enable_prompt_upsampler`，默认 **true**）：
   短请求先被改写成完整 caption 再进模型，实际送进去的那段在 `Preview Any` 里可见。
-  要"原样送我的 prompt"就把它关掉；增强器用的 system prompt 来自官方 prompt-enhancer skill。
+  要"原样送自己的 prompt"就把它关掉；增强器用的 system prompt 来自官方 prompt-enhancer skill。
 - **layout 模板**用 `Create Bounding Boxes` 画框 + `MOSS-Image Layout Prompt` 编译成 §4 的 JSON：
   `enable_prompt_enhancer` **默认关**（打开会改写文本，可能把框丢掉）；框按绘制顺序输出，
   标成 text 的框渲染 `text`，其余是 `object`；人物框要在 `character_boxes` 里填预览里的编号。
@@ -199,7 +199,7 @@ MOSS-Image 的标准工作流由 **ComfyUI 官方模板库**提供（`Template` 
   不要背 id，也不要照抄别人的节点号。
 - 用户要用**自己另存的工作流**时以那份为起点：先看清接线与实时参数，
   再 `comfy_diagnose_workflow` 看有没有悬挂线 / 旁路节点 / 缺口。
-- **不要**从零拼节点图，也**不要**指望仓库里带一份现成模板（已删除）。
+- **不要**从零拼节点图，也**不要**指望本软件带一份现成模板（已删除）。
 
 提交链照 `comfy-workflow-guide`：`comfy_load_workflow` → `comfy_check_inputs` →
 `comfy_fit_workflow`（缺 `moss_image_*` / `qwen3.5_9b_*` / `flux2-vae_small` 时照它给的说明让用户下，

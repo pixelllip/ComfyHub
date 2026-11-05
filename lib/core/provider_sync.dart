@@ -63,14 +63,14 @@ class ProviderSync {
       remote = await desktop.listProviders();
     } catch (e) {
       // 整趟失败（没配对令牌 / 桌面不在线 / 闸门 403）：**一条都没动**
-      return ProviderSyncReport.failed('读桌面 Provider 清单失败：${_describe(e)}');
+      return ProviderSyncReport.failed('读桌面 Provider 清单失败，${_describe(e)}');
     }
 
     final List<AiProvider> localRows;
     try {
       localRows = await local.listProviders();
     } catch (e) {
-      return ProviderSyncReport.failed('读本机 Provider 清单失败：$e');
+      return ProviderSyncReport.failed('读本机 Provider 清单失败，$e');
     }
     final byId = {for (final row in localRows) row.id: row};
 
@@ -125,7 +125,7 @@ class ProviderSync {
         }
       } catch (e) {
         // 单条失败只记这一条，其余照常 —— 一条坏数据不该让整趟白跑
-        problems.add(ProviderSyncProblem(id, '写本机库失败：$e'));
+        problems.add(ProviderSyncProblem(id, '写本机库失败，$e'));
         continue;
       }
 
@@ -148,7 +148,7 @@ class ProviderSync {
         // ⚠ 这里**绝不能**回落成 `saveModels(id, const [])`：网关抖一下 = 模型全没了
         problems.add(ProviderSyncProblem(
           id,
-          'Provider 已同步，但模型目录没同步上（本机那份没动）：${_describe(e)}',
+          'Provider 已同步，但模型目录没同步上（本机那份没动），${_describe(e)}',
         ));
       }
     }
@@ -184,7 +184,7 @@ class ProviderSync {
     if (p.baseURL.trim().isEmpty) return '桌面那条没有 Base URL';
     // 手机 harness 只实现这三种协议（`AiApi` / Kotlin `AiApiRef`）。不认识的**跳过**：
     // 建一条本机发不出去的 Provider，只会在用户点发送时变成一句看不懂的上游错误。
-    if (AiApi.parse(p.api) == null) return '手机不支持这个协议：${p.api}';
+    if (AiApi.parse(p.api) == null) return '手机不支持这个协议 ${p.api}';
     return null;
   }
 
@@ -214,7 +214,7 @@ class ProviderSyncProblem {
   final String reason;
 
   @override
-  String toString() => '$providerId：$reason';
+  String toString() => '$providerId，$reason';
 }
 
 /// 一趟同步的结果（形状取自 `docs/pairing-design.md` §14.6）。

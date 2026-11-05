@@ -90,7 +90,7 @@ class _TagEditorState extends State<TagEditor> {
                 controller: _controller,
                 focusNode: _focusNode,
                 decoration: InputDecoration(
-                  hintText: widget.allowCreate ? '输入标签后回车，例如：赛博朋克' : '搜索标签',
+                  hintText: widget.allowCreate ? '输入标签后回车，例如 赛博朋克' : '搜索标签',
                   prefixIcon: const Icon(Icons.sell_outlined, size: 18),
                 ),
                 onChanged: (_) => setState(() => _showSuggestions = true),

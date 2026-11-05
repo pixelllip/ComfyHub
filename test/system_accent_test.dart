@@ -32,8 +32,15 @@ void main() {
     await first.load();
     expect(first.followSystemAccent, isTrue, reason: '用户 2026-10-24 要的是"自动套用"');
 
+    expect(
+      first.accentMode,
+      AppAccentMode.full,
+      reason: '2026-11-05 起默认就是 A：完整动态取色',
+    );
+
     await first.setFollowSystemAccent(false);
     expect(first.followSystemAccent, isFalse);
+    expect(first.accentMode, AppAccentMode.off);
 
     SharedPreferences.setMockInitialValues({
       'comfyhub.followSystemAccent': false,
@@ -41,6 +48,54 @@ void main() {
     final second = SettingsStore();
     await second.load();
     expect(second.followSystemAccent, isFalse);
+  });
+
+  test('三档取色：默认 A 连表面一起染色，accent 只染组件', () {
+    const accent = Color(0xFF00A0B0);
+    // 默认档 = full（A），用默认种子构建出来就是"默认紫的完整方案"
+    final base = AppTheme.build(Brightness.light);
+
+    final accentOnly = AppTheme.build(
+      Brightness.light,
+      seedColor: accent,
+      accentMode: AppAccentMode.accent,
+    );
+    expect(
+      accentOnly.colorScheme.surface,
+      base.colorScheme.surface,
+      reason: 'accent 档只染组件，表面仍来自默认种子',
+    );
+    expect(accentOnly.colorScheme.primary, isNot(base.colorScheme.primary));
+
+    // 不传 accentMode：默认就是 A（full）
+    final full = AppTheme.build(Brightness.light, seedColor: accent);
+    expect(
+      full.colorScheme.surface,
+      isNot(base.colorScheme.surface),
+      reason: 'A 档：表面也由系统强调色派生（会带一层很淡的同色相）',
+    );
+    expect(
+      full.colorScheme.surfaceContainerHighest,
+      isNot(base.colorScheme.surfaceContainerHighest),
+    );
+
+    final off = AppTheme.build(
+      Brightness.light,
+      seedColor: accent,
+      accentMode: AppAccentMode.off,
+    );
+    expect(off.colorScheme.primary, base.colorScheme.primary,
+        reason: 'off 档不读系统颜色');
+    expect(off.colorScheme.surface, base.colorScheme.surface);
+  });
+
+  test('形状 / 语义色令牌已经注册', () {
+    final theme = AppTheme.build(Brightness.dark);
+    expect(theme.extension<AppShapes>(), isNotNull);
+    expect(theme.extension<AppColors>(), isNotNull);
+    final light = AppTheme.build(Brightness.light);
+    expect(theme.extension<AppColors>()!.success,
+        isNot(light.extension<AppColors>()!.success));
   });
 
   test('主体底色：浅色是白、深色是灰（不跟强调色染色）', () {
@@ -59,40 +114,49 @@ void main() {
     addTearDown(() => SystemAccent.debugSetColor(null));
 
     final withAccent = ComfyHubApp.themeFor(settings, Brightness.dark);
+    final seeded = AppTheme.build(Brightness.dark, seedColor: accent);
     expect(
       withAccent.colorScheme.primary,
-      AppTheme.build(Brightness.dark, seedColor: accent).colorScheme.primary,
+      seeded.colorScheme.primary,
       reason: '强调色要作用于主色 / 选中态',
     );
-    // 背景（含侧边栏 / 底部导航）一律白 / 灰，强调色只改组件
-    final neutral = AppTheme.build(Brightness.dark);
-    expect(withAccent.colorScheme.surface, neutral.colorScheme.surface);
+    // 默认档是 A：表面（含侧栏 / 卡片的底色）也由系统强调色派生
+    expect(withAccent.colorScheme.surface, seeded.colorScheme.surface);
     expect(
       withAccent.colorScheme.surfaceContainerHighest,
-      neutral.colorScheme.surfaceContainerHighest,
-    );
-    expect(
-      withAccent.colorScheme.surfaceContainerHigh,
-      neutral.colorScheme.surfaceContainerHigh,
+      seeded.colorScheme.surfaceContainerHighest,
     );
     expect(
       withAccent.navigationRailTheme.backgroundColor,
-      neutral.colorScheme.surfaceContainerLow,
+      seeded.colorScheme.surfaceContainerLow,
     );
     expect(
       withAccent.navigationBarTheme.backgroundColor,
-      neutral.colorScheme.surfaceContainerLow,
+      seeded.colorScheme.surfaceContainerLow,
     );
-    // 卡片也走**中性** surfaceContainerLow（M3 默认）：与页面一起保持白 / 灰，
-    // 不跟着强调色染色（用户 2026-10-24："全部界面统一回这种上色"）。
-    expect(withAccent.cardTheme.color, isNull);
-    expect(withAccent.cardTheme.color, neutral.cardTheme.color);
+    // 填充卡：颜色来自 surfaceContainerHigh 角色，跟着 A 档一起染色
+    expect(
+      withAccent.cardTheme.color,
+      seeded.colorScheme.surfaceContainerHigh,
+      reason: '卡片是"实心浅一档"的 M3 填充卡，不是描边卡',
+    );
 
-    await settings.setFollowSystemAccent(false);
+    // 显式回到"只染组件"档：表面必须回到默认种子的方案
+    await settings.setAccentMode(AppAccentMode.accent);
+    final neutral = AppTheme.build(Brightness.dark);
+    final accentOnly = ComfyHubApp.themeFor(settings, Brightness.dark);
+    expect(accentOnly.colorScheme.surface, neutral.colorScheme.surface);
+    expect(
+      accentOnly.colorScheme.primary,
+      isNot(neutral.colorScheme.primary),
+      reason: 'accent 档仍然使用系统强调色，只是不染表面',
+    );
+
+    await settings.setAccentMode(AppAccentMode.off);
     final fallback = ComfyHubApp.themeFor(settings, Brightness.dark);
     expect(
       fallback.colorScheme.primary,
-      AppTheme.build(Brightness.dark).colorScheme.primary,
+      neutral.colorScheme.primary,
       reason: '关掉后必须回到默认紫，而不是继续用检测到的颜色',
     );
     expect(fallback.colorScheme.primary, isNot(withAccent.colorScheme.primary));

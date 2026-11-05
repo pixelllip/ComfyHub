@@ -1,8 +1,8 @@
-// 设置页的两条回归：
+// 设置页的回归（2026-11-05 起首页只放入口，配置项进子页）：
 //
-//   1) 宽窗口按「宽度 / 550」分列（以前一路单列往下滚）
-//   2) 开关行（「开启自动捕获」这些）不能顶到卡片边缘 —— 它们用的是
-//      contentPadding 为零的 SwitchListTile，必须自己套一层内边距
+//   1) 选项 ≥ 3 的配置不在首页摊开，首页是可点的入口行；
+//   2) 「AI 工具权限」与「AI 模型与凭据」是**平级**入口，不在模型页里面；
+//   3) 子页里的开关行不能顶到卡片边缘；窄窗口下按钮组折行、不溢出。
 
 import 'dart:convert';
 
@@ -107,7 +107,10 @@ Future<BackendLauncher> _pumpSettings(
         ChangeNotifierProvider<LibraryStore>.value(value: store),
         ChangeNotifierProvider<NsfwStore>.value(value: nsfw),
       ],
-      child: const MaterialApp(home: SettingsPage()),
+      // ⚠ `UniqueKey` 不能省：同一个测试里第二次 `_pumpSettings` 时，若沿用同一个
+      // `MaterialApp` 元素，Navigator 的**路由栈会保留**（上一轮 push 的子页还在），
+      // 新树仍停在那条子页上。换 key 强制重建整棵树。
+      child: MaterialApp(key: UniqueKey(), home: const SettingsPage()),
     ),
   );
   await tester.pumpAndSettle();
@@ -115,23 +118,35 @@ Future<BackendLauncher> _pumpSettings(
 }
 
 void main() {
-  testWidgets('设置页：宽窗口分列，开关行左右都留出了内边距', (tester) async {
+  testWidgets('设置首页只放入口行；选项收进子页，开关行仍有内边距', (tester) async {
     tester.view.physicalSize = const Size(1700, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
 
-    // 1) 分列：自动捕获排到了右边那一列
-    final left = tester.getTopLeft(find.text('本地服务（后端 + 数据库）'));
-    final right = tester.getTopLeft(find.text('ComfyUI 自动捕获'));
-    expect(right.dx, greaterThan(left.dx + 100), reason: '宽窗口应该分两列');
+    // 1) 选项 ≥ 3 的配置**不在首页摊开**：首页只有入口
+    for (final entry in const [
+      '本地服务（后端 + 数据库）',
+      '远程访问与配对',
+      'AI 模型与凭据',
+      'AI 工具权限',
+      'ComfyUI 自动捕获',
+      '外观与布局',
+    ]) {
+      expect(find.text(entry), findsOneWidget, reason: '首页应该有「$entry」入口');
+    }
+    expect(find.text('开启自动捕获'), findsNothing, reason: '自动捕获的配置属于子页');
+    expect(find.text('主题'), findsNothing, reason: '界面配置属于子页');
 
-    // 2) 开关行不顶到卡片边缘（16 卡片内边距 + 10 自己套的内边距）
+    // 2) 点进去才看到配置；开关行不顶到卡片边缘
+    await tester.tap(find.text('本地服务（后端 + 数据库）'));
+    await tester.pumpAndSettle();
+    const switchTitle = '启动 App 时自动拉起服务';
     final tile = find
-        .ancestor(of: find.text('开启自动捕获'), matching: find.byType(SwitchListTile))
+        .ancestor(of: find.text(switchTitle), matching: find.byType(SwitchListTile))
         .first;
-    final card = find.ancestor(of: find.text('开启自动捕获'), matching: find.byType(Card)).first;
+    final card = find.ancestor(of: find.text(switchTitle), matching: find.byType(Card)).first;
     final tileRect = tester.getRect(tile);
     final cardRect = tester.getRect(card);
     expect(tileRect.left - cardRect.left, greaterThanOrEqualTo(20),
@@ -155,32 +170,41 @@ void main() {
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
+    await tester.tap(find.text('外观与布局'));
+    await tester.pumpAndSettle();
 
-    final title = tester.getRect(find.text('主题'));
+    final title = tester.getRect(find.text('明暗模式'));
     final picker = tester.getRect(find.byType(SegmentedButton<AppThemeMode>));
     expect(picker.left, greaterThan(title.right), reason: '选择器要在标题右边');
-    expect((picker.center.dy - title.center.dy).abs(), lessThan(8),
-        reason: '两者必须在同一行（纵向中心基本重合），不能另起一行');
+    // 标题行带一句副标题（两行），选择器在右侧垂直居中 —— 两者中心允许差半个
+    // 行高；真正"另起一行"时差值会跳到 40 以上。
+    expect((picker.center.dy - title.center.dy).abs(), lessThan(20),
+        reason: '两者必须在同一行，不能另起一行');
   });
 
-  // 「AI 模型与凭据」是这一页最常去的入口，必须排在前面的列里，
-  // 不能压在「ComfyUI 自动捕获 / 库统计」下面（用户反馈过要往下翻很久）。
-  testWidgets('设置页：AI 模型与凭据排在 ComfyUI 自动捕获前面', (tester) async {
+  // 用户 2026-11-05："窗口宽度较大时依然允许多列排布"。
+  // 另外：工具权限与模型/凭据平级，同组同列、紧挨着排在它后面。
+  testWidgets('设置首页：宽窗口多列；AI 工具权限与模型/凭据同组', (tester) async {
     tester.view.physicalSize = const Size(1700, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
 
-    final local = tester.getTopLeft(find.text('本地服务（后端 + 数据库）'));
-    final ai = tester.getTopLeft(find.text('AI 模型与凭据'));
-    final capture = tester.getTopLeft(find.text('ComfyUI 自动捕获'));
+    // 列数 = 宽度 / 550 → 1700 宽（减去左右 32 的 padding）≈ 3 列。
+    // 服务组与 AI 组因此起点 x 不同；单列时它们会完全对齐。
+    final services = tester.getTopLeft(find.text('服务'));
+    final aiSection = tester.getTopLeft(find.text('AI'));
+    expect(
+      (services.dx - aiSection.dx).abs(),
+      greaterThan(100),
+      reason: '宽窗口必须多列排布（用户 2026-11-05）',
+    );
 
-    // 排在「自动捕获」前面（同一列更靠上，或者前一个列）
-    final beforeCapture = ai.dx < capture.dx - 100 || ai.dy < capture.dy;
-    expect(beforeCapture, isTrue,
-        reason: 'AI 入口不能排在 ComfyUI 自动捕获之后（实际 ai=$ai capture=$capture）');
-    expect(ai.dy, greaterThan(local.dy - 1), reason: '本地服务仍然排在最前');
+    final ai = tester.getTopLeft(find.text('AI 模型与凭据'));
+    final tools = tester.getTopLeft(find.text('AI 工具权限'));
+    expect(tools.dx, ai.dx, reason: '同一组必须落在同一列');
+    expect(tools.dy, greaterThan(ai.dy), reason: '工具权限紧挨在模型与凭据之后');
   });
 
   // NSFW 两个开关放一起（用户要求），而且模糊选项**从属于**开关：
@@ -232,6 +256,8 @@ void main() {
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
+    await tester.tap(find.text('本地服务（后端 + 数据库）'));
+    await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull, reason: '窄窗口下设置页不许 RenderFlex overflow');
     for (final label in const [
@@ -242,10 +268,13 @@ void main() {
       expect(find.text(label), findsOneWidget, reason: '$label 不能被裁掉');
     }
 
-    // 「主题」那一行是**标题 + 三段选择器挤在一行**里（用户 2026-10-13 报过
-    // "排版奇怪，不应该一行搞定吗"，所以它不能退回"另起一行居中"）。
-    // 一行放三个中文标签最容易挤爆的就是这个宽度 —— 三段一个都不许被裁掉。
-    expect(find.text('主题'), findsOneWidget);
+    // 回首页 → 进「界面」：三段主题选择器在最窄的 320dp 上一个都不许被裁掉。
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('外观与布局'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: '窄窗口下界面子页不许溢出');
+    expect(find.text('明暗模式'), findsOneWidget);
     for (final label in const ['深色', '浅色', '跟随系统']) {
       expect(find.text(label), findsOneWidget, reason: '主题的「$label」不能被挤掉');
     }
@@ -263,6 +292,8 @@ void main() {
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
+    await tester.tap(find.text('本地服务（后端 + 数据库）'));
+    await tester.pumpAndSettle();
 
     expect(find.text('允许手机 / 局域网设备连接'), findsOneWidget);
     expect(find.textContaining('① 让后端监听局域网'), findsOneWidget);
@@ -287,6 +318,8 @@ void main() {
       addTearDown(tester.view.reset);
 
       await _pumpSettings(tester, portFallbackFrom: 6430);
+      await tester.tap(find.text('本地服务（后端 + 数据库）'));
+      await tester.pumpAndSettle();
 
       expect(find.textContaining('6430 这次没能用上'), findsOneWidget,
           reason: '${width}dp：端口回落必须写出来');
@@ -297,6 +330,7 @@ void main() {
     // 正常要回来（portFallbackFrom 为 null）→ 一个字都不该出现
     tester.view.physicalSize = const Size(1700, 1200);
     await _pumpSettings(tester);
+    // 正常时**首页**就不该出现这条警告（子页里也不该有，但先守住第一道）
     expect(find.textContaining('这次没能用上'), findsNothing,
         reason: '端口正常时不许常年亮一条警告');
   });

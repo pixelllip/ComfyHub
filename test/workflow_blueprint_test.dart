@@ -564,7 +564,7 @@ void main() {
       await tester.tap(find.textContaining('体检 2'));
       await tester.pumpAndSettle();
       expect(find.text('按提交链转换这份图会留下缺口'), findsOneWidget);
-      expect(find.textContaining('修法：'), findsWidgets);
+      expect(find.textContaining('修法是'), findsWidgets);
 
       // 从结论跳到节点
       await tester.tap(find.widgetWithText(ActionChip, '#2'));

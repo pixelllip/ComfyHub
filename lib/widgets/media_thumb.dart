@@ -62,7 +62,8 @@ class MediaThumb extends StatelessWidget {
             : null);
 
     return Material(
-      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      // 占位底色走 surface 角色（不用叠 alpha：深色下叠出来会发灰）
+      color: theme.colorScheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -138,10 +139,17 @@ class MediaThumb extends StatelessWidget {
               child: MediaKindBadge(kind: media.kind),
             ),
             if (media.favorite)
-              const Positioned(
+              Positioned(
                 top: 6,
                 right: 6,
-                child: Icon(Icons.star, size: 16, color: Colors.amber),
+                child: Icon(
+                  Icons.star,
+                  size: 16,
+                  // 收藏是"状态"不是"警告"：用 tertiary（M3 的强调变体），
+                  // 不再写死 amber —— 深浅主题与动态取色下都能读清。
+                  color: theme.colorScheme.tertiary,
+                  shadows: const [Shadow(blurRadius: 3, color: Colors.black54)],
+                ),
               ),
             if (media.durationMs != null)
               Positioned(
@@ -220,10 +228,19 @@ class MediaThumb extends StatelessWidget {
                     color: selected
                         ? theme.colorScheme.primary
                         : Colors.black45,
-                    border: Border.all(color: Colors.white70, width: 1.5),
+                    border: Border.all(
+                      color: selected
+                          ? theme.colorScheme.onPrimary
+                          : theme.colorScheme.onInverseSurface,
+                      width: 1.5,
+                    ),
                   ),
                   child: selected
-                      ? const Icon(Icons.check, size: 14, color: Colors.white)
+                      ? Icon(
+                          Icons.check,
+                          size: 14,
+                          color: theme.colorScheme.onPrimary,
+                        )
                       : null,
                 ),
               ),

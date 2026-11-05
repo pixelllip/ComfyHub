@@ -652,7 +652,7 @@ class _PromptsPageState extends State<PromptsPage>
     if (picked == null || picked.isEmpty) return;
     await _run(
       () => store.addTagsToPrompts(ids, picked),
-      '已给 ${ids.length} 条提示词加上：${picked.join('、')}',
+      '已给 ${ids.length} 条提示词加上 ${picked.join('、')}',
     );
   }
 
@@ -698,7 +698,7 @@ class _PromptsPageState extends State<PromptsPage>
           children: [
             const Text(
               '这些提示词目前没有关联任何产物（产物被删掉了，或还没关联过）。\n'
-              '删除后不可恢复；产物本身不受影响。',
+              '删除后不可恢复，产物本身不受影响。',
             ),
             const SizedBox(height: 10),
             for (final p in sample.items)
@@ -766,9 +766,8 @@ class _FilterSummary extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.45,
-        ),
+        // 用 surface 角色代替"叠 45% alpha"：与画廊的筛选摘要保持同一档。
+        color: theme.colorScheme.surfaceContainerHigh,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -978,7 +977,7 @@ class PromptCard extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.only(right: 4),
                       child: Tooltip(
-                        message: '没有关联任何产物：可能是产物被删掉了，或还没关联过',
+                        message: '没有关联任何产物，可能是产物被删掉了，或还没关联过',
                         child: Chip(
                           visualDensity: VisualDensity.compact,
                           backgroundColor: Colors.orange.withValues(

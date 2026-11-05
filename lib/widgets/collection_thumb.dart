@@ -134,7 +134,7 @@ class CollectionThumb extends StatelessWidget {
     );
 
     return Material(
-      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      color: theme.colorScheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
       child: Stack(
@@ -194,10 +194,15 @@ class CollectionThumb extends StatelessWidget {
               child: MediaKindBadge(kind: media.kind),
             ),
             if (media.favorite)
-              const Positioned(
+              Positioned(
                 top: 6,
                 right: 6,
-                child: Icon(Icons.star, size: 16, color: Colors.amber),
+                child: Icon(
+                  Icons.star,
+                  size: 16,
+                  color: theme.colorScheme.tertiary,
+                  shadows: const [Shadow(blurRadius: 3, color: Colors.black54)],
+                ),
               ),
             Positioned(
               left: 8,
@@ -263,10 +268,19 @@ class CollectionThumb extends StatelessWidget {
     decoration: BoxDecoration(
       shape: BoxShape.circle,
       color: selected ? theme.colorScheme.primary : Colors.black45,
-      border: Border.all(color: Colors.white70, width: 1.5),
+      border: Border.all(
+        color: selected
+            ? theme.colorScheme.onPrimary
+            : theme.colorScheme.onInverseSurface,
+        width: 1.5,
+      ),
     ),
     child: selected
-        ? const Icon(Icons.check, size: 14, color: Colors.white)
+        ? Icon(
+            Icons.check,
+            size: 14,
+            color: theme.colorScheme.onPrimary,
+          )
         : null,
   );
 }

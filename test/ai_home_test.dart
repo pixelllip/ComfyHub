@@ -317,11 +317,18 @@ void main() {
 
     // 但入口必须在：这一段既不是 <900 的右下角 FAB，也不是 ≥1200 的第三栏，
     // 曾经两边都不占 → Comfy 状态整块内容在界面上不可达（需求审计 AIH-002）。
-    final entry = find.byTooltip('ComfyUI 状态');
-    expect(entry, findsOneWidget, reason: 'AIH-002：900~1199px 必须有一个 Comfy 状态入口');
+    // 2026-11-05 起顶栏收敛成「主操作 + 更多菜单」，入口在菜单里。
+    expect(
+      find.byTooltip('更多操作'),
+      findsOneWidget,
+      reason: 'AIH-002：900~1199px 必须有一个通往状态的入口',
+    );
 
-    await tester.tap(entry);
+    await tester.tap(find.byTooltip('更多操作'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('上下文与状态'));
+    await tester.pumpAndSettle();
+    expect(find.text('上下文与状态'), findsOneWidget, reason: '入口名字要和面板内容一致');
     expect(find.text('ComfyUI'), findsWidgets, reason: '点开就能看到状态内容');
   });
 
@@ -334,7 +341,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('ComfyUI'), findsOneWidget);
-    expect(find.byTooltip('ComfyUI 状态'), findsNothing);
+    // 第三栏已经铺开：菜单里不该再有"ComfyUI 与上下文"（入口只留一个）。
+    await tester.tap(find.byTooltip('更多操作'));
+    await tester.pumpAndSettle();
+    expect(find.text('上下文与状态'), findsNothing);
   });
 
   // 用户建议（2026-09-20）：「给右边栏除了实时进度以外的内容也拿类似容器分别包裹起来」。
@@ -553,13 +563,15 @@ void main() {
     expect(find.byType(FloatingActionButton), findsNothing,
         reason: '窄屏的 Comfy 状态入口进了标题栏，不该再留一个 FAB 压住发送按钮');
 
-    final entry = find.byTooltip('ComfyUI 状态');
+    final entry = find.byTooltip('更多操作');
     expect(entry, findsOneWidget, reason: '第三栏铺不开时，标题栏必须有一个可达的入口');
 
     final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
     expect(tester.getRect(entry).overlaps(send), isFalse, reason: '入口不能压在发送按钮上');
 
     await tester.tap(entry);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('上下文与状态'));
     await tester.pumpAndSettle();
     expect(find.text('ComfyUI'), findsWidgets, reason: '点开就能看到状态内容');
   });
@@ -599,21 +611,21 @@ void main() {
     // 所以紧凑形态的 tooltip 额外带着来源（2026-10：工作台的模型按 Provider 分组，
     // 来源要标出来）。那行来源跟着选中项变，逐字匹配会让这条用例一换 Provider 就红。
     final modelTooltip = find.byWidgetPredicate(
-      (w) => w is Tooltip && (w.message ?? '').startsWith('当前模型：DeepSeek V4.1 Flash（文本 / 图片）'),
+      (w) => w is Tooltip && (w.message ?? '').startsWith('当前模型是 DeepSeek V4.1 Flash（文本 / 图片）'),
     );
     expect(
       tester.widget<Tooltip>(modelTooltip).message,
-      contains('来源：本机网关'),
+      contains('来自 本机网关'),
       reason: 'tooltip 必须写出这个模型来自哪条 Provider',
     );
     final controls = <String, Finder>{
       '添加附件 / 插入卡片（@）': find.byTooltip('添加附件 / 插入卡片（@）'),
       '权限档': find.byTooltip(
-          '当前：${AiToolPolicy.modeFullLabel} —— AI 调用工具不会等你批准'
-          '（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
+          '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
+          '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
       '模型选择': modelTooltip,
       '思考强度': find.byTooltip(
-          '不支持思考 —— 该模型未声明推理能力，请到「设置 → AI 模型」声明'),
+          '不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'),
     };
     for (final entry in controls.entries) {
       expect(entry.value, findsWidgets, reason: '${entry.key} 必须还在底行里');
@@ -639,7 +651,7 @@ void main() {
     // 容差 5px 是 `IconButton` 自己的内缩（48 的命中区里那 40 宽的可见盒居中，左缩 4）。
     expect(tester.getRect(find.byTooltip('添加附件 / 插入卡片（@）')).left, closeTo(input.left, 5),
         reason: '第一枚操作控件（添加附件）必须贴在输入区左边缘，不能整排靠右');
-    expect(find.byTooltip('不支持思考 —— 该模型未声明推理能力，请到「设置 → AI 模型」声明'),
+    expect(find.byTooltip('不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'),
         findsWidgets);
     // 窄屏不再显示 token 用量（用户：宽度太窄的时候可以不显示）
     expect(find.textContaining('本对话 ↑'), findsNothing,
@@ -689,10 +701,10 @@ void main() {
     final controls320 = <String, Finder>{
       '添加附件 / 插入卡片（@）': find.byTooltip('添加附件 / 插入卡片（@）'),
       '权限档': find.byTooltip(
-          '当前：${AiToolPolicy.modeFullLabel} —— AI 调用工具不会等你批准'
-          '（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
+          '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
+          '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
       '思考强度': find.byTooltip(
-          '不支持思考 —— 该模型未声明推理能力，请到「设置 → AI 模型」声明'),
+          '不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'),
     };
     for (final entry in controls320.entries) {
       expect(entry.value, findsWidgets, reason: '${entry.key} 必须还在底行里');
@@ -707,7 +719,7 @@ void main() {
 
     // 操作控件全都排在发送按钮**左边**（发送仍然是最右那一枚）
     final effort = tester.getRect(
-      find.byTooltip('不支持思考 —— 该模型未声明推理能力，请到「设置 → AI 模型」声明'));
+      find.byTooltip('不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'));
     expect(effort.right, lessThanOrEqualTo(send.left + 0.5),
         reason: '操作控件在左、发送在右（和宽屏的次序一致）');
 
@@ -756,8 +768,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('自动'), findsNothing, reason: '最窄档退成图标');
     final permTip = find.byTooltip(
-        '当前：${AiToolPolicy.modeFullLabel} —— AI 调用工具不会等你批准'
-        '（可读 / 可写目录范围不变，越界仍会被拒）。点一下改回「${AiToolPolicy.modeAskLabel}」。');
+        '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
+        '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。');
     expect(permTip, findsOneWidget, reason: '退成图标后当前档位必须还能查到（tooltip）');
     expect(tester.getRect(permTip).height, greaterThanOrEqualTo(44),
         reason: '最窄档也要点得准（用户："按钮太小了比较难点"）');

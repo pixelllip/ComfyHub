@@ -377,7 +377,7 @@ class _Minimap extends StatelessWidget {
   Widget build(BuildContext context) {
     final size = _minimapSize();
     return Tooltip(
-      message: '缩略图：亮框是当前看到的位置，点一下可以跳过去',
+      message: '缩略图里亮框是当前看到的位置，点一下可以跳过去',
       child: Container(
         width: size.width,
         height: size.height,
