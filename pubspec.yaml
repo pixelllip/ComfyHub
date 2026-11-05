@@ -1,8 +1,8 @@
 name: viewer
-description: "ComfyHub — ComfyUI 提示词与生成产物管理"
+description: "ComfyHub — 为 ComfyUI 设计的一站式 AI 助手"
 publish_to: 'none'
 
-version: 0.3.0+1
+version: 0.5.0+1
 
 environment:
   sdk: ^3.13.2
@@ -16,7 +16,7 @@ dependencies:
   flutter_localizations:
     sdk: flutter
 
-  cupertino_icons: ^1.0.8
+  cupertino_icons: ^2.0.0
 
   # --- 网络 / 状态 / 本地设置 ---
   http: ^1.6.0
@@ -31,7 +31,7 @@ dependencies:
   shared_preferences_windows: ^2.4.1
 
   # --- 选择本地文件上传 ---
-  file_picker: ^12.3.0
+  file_picker: ^13.3.2
   # 手机端产物缓存目录（`<app-support>/media-cache`）。桌面端只有
   # `path_provider_windows`，跨平台入口要这一个。
   path_provider: ^2.1.5
@@ -58,7 +58,7 @@ dependencies:
   # --- 用系统默认播放器打开（兜底） ---
   url_launcher: ^6.3.2
   qr_flutter: ^4.1.0
-  mobile_scanner: ^7.4.2
+  mobile_scanner: ^7.5.0
   # 训练台内嵌 WebUI（Windows / Android 都要）。**刻意不用 flutter_inappwebview**：
   # 它的 Windows 端（flutter_inappwebview_windows 0.6.0）在**插件注册时**就创建
   # Windows.UI.Composition.Compositor + DispatcherQueue（InAppWebViewManager 构造
@@ -66,9 +66,10 @@ dependencies:
   # （csrss 硬错误，出错模块 dcomp.dll；上游 flutter_inappwebview#2512 关门未修）。
   # webview_all 是 webview_flutter 的跨平台实现：1.4.1 修过同类退出崩溃，Android
   # 端支持 AGP 9 内建 Kotlin —— 换过来去掉了 Android 的 third_party 补丁副本。
-  # ⚠ Windows 端的 <experimental/coroutine> 逃生宏**仍然要留**（它 1.4.5 也没躲开），
-  # 见 windows/CMakeLists.txt。钉版本：升级前先跑 Windows 关窗回归（AGENTS §9.1）。
-  webview_all: 1.4.5
+  # ⚠ Windows 端的 <experimental/coroutine> 逃生宏**仍然要留**（1.4.12 也没躲开），
+  # 见 windows/CMakeLists.txt。**升级前必须跑 Windows 关窗回归**（AGENTS §9.1）；
+  # 1.4.12 已在本机跑过：WM_CLOSE 后 System 日志 0 条 Application Popup（ID 26）。
+  webview_all: 1.4.12
 
 dev_dependencies:
   flutter_test:

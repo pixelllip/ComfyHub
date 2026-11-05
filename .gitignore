@@ -108,6 +108,13 @@ __pycache__/
 # 本机用 anima 跑批留下的任务文件（不属于工程产物）
 /comfyui/anima_jobs/
 
+# 本机跑图产物（flux3 输出 / 一次性 krea2 任务），不属于工程产物
+/comfyui/flux3_out/
+/comfyui/krea2_r2i_run*.json
+
+# 角色卡资料草稿（本机整理用，未定稿不入库）
+/docs/character-cards/
+
 # Rust（server-rs）构建产物：621MB，绝不进版本库
 /server-rs/target/
 
