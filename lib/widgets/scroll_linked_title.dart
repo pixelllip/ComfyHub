@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 
 /// 标题形态按**平台**分，不按窗口宽度分（用户 2026-11-05："手机端 UI 维持
@@ -11,8 +12,16 @@ import 'package:flutter/material.dart';
 ///
 /// ⚠ 不要用 `kWideLayoutMinWidth` 判：电脑窗口拉窄到 900 以下时它仍是电脑端，
 /// 不该长成手机的样子。
-bool get useCollapsingPageTitle =>
-    !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+/// ⚠ 单测用 `debugDefaultTargetPlatformOverride` 模拟手机：`flutter test` 跑在
+/// Windows 上，`Platform.isAndroid` 永远是假，手机那一套标题就一条用例都覆盖不到。
+/// 正式运行时它是 null，判据仍然只有真实平台。
+bool get useCollapsingPageTitle {
+  final override = debugDefaultTargetPlatformOverride;
+  if (override != null) {
+    return override == TargetPlatform.android || override == TargetPlatform.iOS;
+  }
+  return !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+}
 
 /// 「大标题 → AppBar 标题」的滚动联动（2026-11-05 用户定下的规则）：
 ///

@@ -248,24 +248,20 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      // 标题进正文（与设置首页/其它设置子页同一套大标题），不再用 AppBar。
-      body: Column(
-        children: [
-          SettingsPageHeader(
-            title: 'AI 工具权限',
-            actions: [
-              IconButton(
-                tooltip: '重新加载',
-                onPressed: _loading ? null : _reload,
-                icon: const Icon(Icons.refresh),
-              ),
-            ],
-          ),
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : Column(
+    // 与其它设置子页同一套骨架（AppBar + 圆形返回键 + 手机端大标题滚动联动）：
+    // 以前这一页没有 AppBar，页头直接顶在 body 上，手机上会压到状态栏。
+    return SettingsPageScaffold(
+      title: 'AI 工具权限',
+      actions: [
+        IconButton(
+          tooltip: '重新加载',
+          onPressed: _loading ? null : _reload,
+          icon: const Icon(Icons.refresh),
+        ),
+      ],
+      child: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
               children: [
                 if (_saving) const LinearProgressIndicator(minHeight: 2),
                 if (_error != null)
@@ -317,10 +313,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                   ),
                 ),
               ],
-                ),
-          ),
-        ],
-      ),
+            ),
     );
   }
 
@@ -803,10 +796,10 @@ class _ToolPermissionsPageState extends State<_ToolPermissionsPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final shown = _shown;
-    return Scaffold(
-      body: Column(
+    return SettingsPageScaffold(
+      title: '逐工具权限',
+      child: Column(
         children: [
-          const SettingsPageHeader(title: '逐工具权限'),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: TextField(

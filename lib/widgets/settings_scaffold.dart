@@ -30,6 +30,14 @@ class SettingsScaffold extends StatefulWidget {
   State<SettingsScaffold> createState() => _SettingsScaffoldState();
 }
 
+/// 手机端大标题块的高度：原页头是「上 8 + 34 号字（约 39）+ 下 20」≈ 68。
+/// 滚动时按 [ScrollTitleProgress] **收掉高度**，下面的内容才会顶上来
+/// （AGENTS §6.3：标题滚走之后页首不许永远空一条）。
+const double _pageTitleHeight = 68;
+
+/// 大标题左边距：正文左右各 16，块内标题再缩进 4，所以是 20。
+const double _pageTitleLeft = 20;
+
 class _SettingsScaffoldState extends State<SettingsScaffold> {
   /// 大标题 → 顶栏标题的联动进度（见 [ScrollTitleProgress]）。
   final _progress = ScrollTitleProgress();
@@ -40,154 +48,210 @@ class _SettingsScaffoldState extends State<SettingsScaffold> {
     super.dispose();
   }
 
-  /// AppBar 里的返回键：**带外圈的圆形按钮**（用户 2026-11-05 指定的样式）。
-  ///
-  /// 用 `BackButton` 而不是裸 `IconButton`：`tester.pageBack()` 与系统返回都
-  /// 认这个类型；外圈靠 40×40 的按钮背景画，不会撑满 56 的 leading 槽。
-  Widget _circleBackButton(ThemeData theme) => Center(
-        child: BackButton(
-          style: IconButton.styleFrom(
-            backgroundColor: theme.colorScheme.surfaceContainerHigh,
-            foregroundColor: theme.colorScheme.onSurface,
-            minimumSize: const Size(40, 40),
-            maximumSize: const Size(40, 40),
-            padding: EdgeInsets.zero,
-            shape: const CircleBorder(),
-          ),
-        ),
-      );
-
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    // 电脑端标题**始终在 AppBar 里**（用户 2026-11-05：电脑端恢复原状）；
-    // 手机端保留"大标题在正文里、滚走后在 AppBar 淡入"的联动。
     final phone = useCollapsingPageTitle;
     return Scaffold(
-      appBar: AppBar(
-        // 手机端这条 AppBar 是透明的（大标题在正文里）；电脑端是普通 AppBar。
-        backgroundColor: phone ? Colors.transparent : null,
-        surfaceTintColor: phone ? Colors.transparent : null,
-        elevation: phone ? 0 : null,
-        scrolledUnderElevation: phone ? 0 : null,
-        automaticallyImplyLeading: false,
-        // 返回键**始终在 AppBar 里**（用户 2026-11-05："这种返回按钮应该待在
-        // appbar"），并且用它指定的**带外圈**样式；正文里不再放返回键。
-        leading: widget.showBack ? _circleBackButton(theme) : null,
-        // 首页没有返回键时，标题要和正文的 16 留白对齐。
-        titleSpacing: widget.showBack ? 0 : 16,
-        title: phone
-            ? FadingAppBarTitle(title: widget.title, progress: _progress)
-            : Text(widget.title),
+      appBar: SettingsAppBar(
+        title: widget.title,
+        showBack: widget.showBack,
+        progress: _progress,
       ),
       body: SafeArea(
         top: false,
-        child: ScrollTitleListener(
-          progress: _progress,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 48),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // 电脑端标题在 AppBar 上，正文里不再重复一个大标题；
-                // 手机端的大标题不再自带返回键（它已经在 AppBar 里）。
-                if (phone)
-                  SettingsPageHeader(
-                    title: widget.title,
-                    showBack: false,
-                    padding: EdgeInsets.zero,
-                  ),
-                // 设置卡比列表行窄，550 的标准列宽会让"其实放得下两列"的窗口退回
-                // 单列（实测 1140 逻辑宽时 content≈1030 → 除以 550 只剩 1 列）。
-                // 460 是"标题 + 一句说明 + 箭头"这一行的舒适宽度，窗口一到 ~1000
-                // 逻辑宽就能并排两列。
-                AdaptiveColumns(
-                  minColumnWidth: 460,
-                  sections: [
-                    for (final section in widget.sections)
-                      AdaptiveSection(
-                        section,
-                        estimatedHeight: section.estimatedHeight,
+        child: Column(
+          children: [
+            // 手机端：大标题属于正文，随滚动**上移 + 淡出、高度收掉**，
+            // 同一个标题在 AppBar 里按同一个进度淡入（AGENTS §6.3）；
+            // 电脑端：标题始终在 AppBar 上，正文里不再重复一个大标题。
+            if (phone)
+              CollapsingPageTitle(
+                title: widget.title,
+                progress: _progress,
+                height: _pageTitleHeight,
+                leftPadding: _pageTitleLeft,
+              ),
+            Expanded(
+              child: ScrollTitleListener(
+                progress: _progress,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 48),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // 设置卡比列表行窄，550 的标准列宽会让"其实放得下两列"的窗口退回
+                      // 单列（实测 1140 逻辑宽时 content≈1030 → 除以 550 只剩 1 列）。
+                      // 460 是"标题 + 一句说明 + 箭头"这一行的舒适宽度，窗口一到 ~1000
+                      // 逻辑宽就能并排两列。
+                      AdaptiveColumns(
+                        minColumnWidth: 460,
+                        sections: [
+                          for (final section in widget.sections)
+                            AdaptiveSection(
+                              section,
+                              estimatedHeight: section.estimatedHeight,
+                            ),
+                        ],
                       ),
-                  ],
+                    ],
+                  ),
                 ),
-              ],
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
   }
 }
 
-/// 设置类页面的**大标题头**：圆形返回键 + 正文顶部的大号标题（不是 AppBar）。
+/// 设置家族的**统一顶栏**（首页 / 子页 / 两个自定义正文的页面共用）。
 ///
-/// 2026-11-05 用户对照 Material You 设置页后定的形态；AI 模型与凭据、AI 工具权限
-/// 这两个不是 `SettingsScaffold` 的页面也复用它，保证"同一套页面标题"。
-class SettingsPageHeader extends StatelessWidget {
+/// * 返回键**始终在 AppBar 里**，带外圈、40×40 的圆形 `BackButton`
+///   （用户 2026-11-05："这种返回按钮应该待在 appbar"）；
+/// * 电脑端标题**始终在 AppBar 里**（用户 2026-11-05：电脑端恢复原状）；
+/// * 手机端这条 AppBar 是透明的，标题按 [progress] 淡入 —— 大标题在正文里
+///   滚走之后，这里才出现同一个名字（AGENTS §6.3）。
+class SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String title;
-
-  /// 是否显示返回键（首页 / `HomeShell` 内容区里的页面传 `false`）。
   final bool showBack;
 
   /// 自定义返回动作（默认 `Navigator.maybePop`）。
   final VoidCallback? onBack;
 
-  /// 标题行右侧的动作（例如「重新加载」）。
   final List<Widget> actions;
 
-  final EdgeInsetsGeometry padding;
+  /// 大标题 → 顶栏标题的联动进度（手机端用；电脑端忽略）。
+  final ScrollTitleProgress progress;
 
-  const SettingsPageHeader({
+  const SettingsAppBar({
     super.key,
     required this.title,
+    required this.progress,
     this.showBack = true,
     this.onBack,
     this.actions = const [],
-    this.padding = const EdgeInsets.fromLTRB(16, 8, 16, 0),
   });
+
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final hasRow = showBack || actions.isNotEmpty;
-    return Padding(
-      padding: padding,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (hasRow)
-            Row(
-              children: [
-                if (showBack)
-                  BackButton(
-                    onPressed: onBack,
-                    style: IconButton.styleFrom(
-                      backgroundColor: theme.colorScheme.surfaceContainerHigh,
-                      foregroundColor: theme.colorScheme.onSurface,
-                      minimumSize: const Size(44, 44),
-                    ),
-                  ),
-                const Spacer(),
-                ...actions,
-              ],
-            ),
-          Padding(
-            padding: EdgeInsets.only(
-              left: 4,
-              top: hasRow ? 12 : 8,
-              bottom: 20,
-            ),
-            child: Text(
-              title,
-              style: theme.textTheme.displaySmall?.copyWith(
-                fontSize: 34,
-                height: 1.15,
-                fontWeight: FontWeight.w700,
+    final phone = useCollapsingPageTitle;
+    return AppBar(
+      backgroundColor: phone ? Colors.transparent : null,
+      surfaceTintColor: phone ? Colors.transparent : null,
+      elevation: phone ? 0 : null,
+      scrolledUnderElevation: phone ? 0 : null,
+      automaticallyImplyLeading: false,
+      leading: showBack ? _circleBackButton(theme, onPressed: onBack) : null,
+      // 返回键在 leading 槽里时，标题从槽后开始；首页没有返回键时与正文的 16 对齐。
+      titleSpacing: showBack ? 0 : 16,
+      title: phone
+          ? FadingAppBarTitle(title: title, progress: progress)
+          : Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      actions: actions.isEmpty ? null : [...actions, const SizedBox(width: 4)],
+    );
+  }
+}
+
+/// AppBar 里的返回键：**带外圈的圆形按钮**（用户 2026-11-05 指定的样式）。
+///
+/// 用 `BackButton` 而不是裸 `IconButton`：`tester.pageBack()` 与系统返回都
+/// 认这个类型；外圈靠 40×40 的按钮背景画，不会撑满 56 的 leading 槽。
+Widget _circleBackButton(ThemeData theme, {VoidCallback? onPressed}) => Center(
+      child: BackButton(
+        onPressed: onPressed,
+        style: IconButton.styleFrom(
+          backgroundColor: theme.colorScheme.surfaceContainerHigh,
+          foregroundColor: theme.colorScheme.onSurface,
+          minimumSize: const Size(40, 40),
+          maximumSize: const Size(40, 40),
+          padding: EdgeInsets.zero,
+          shape: const CircleBorder(),
+        ),
+      ),
+    );
+
+/// **正文自己排版**的设置页骨架（AI 模型与凭据 / AI 工具权限 / 逐工具权限）。
+///
+/// 这两类页面的正文是列表、双栏或子面板，塞不进 [SettingsScaffold] 的
+/// [SettingsSection] 结构；但顶栏、返回键与大标题联动必须和其它设置子页**一模一样**
+/// —— 以前它们各自 `Scaffold(body: Column[SettingsPageHeader…])`，手机上既没有
+/// AppBar（页头顶进状态栏），大标题也不会随滚动淡出。
+///
+/// [child] 自己负责滚动（页内 `ListView` / `CustomScrollView` 都行），
+/// 这里只把它的**最外层纵向滚动**换算成标题进度。
+class SettingsPageScaffold extends StatefulWidget {
+  final String title;
+
+  /// 正文。它自己是一块能撑满剩余高度的内容（列表 / 分栏 / 面板）。
+  final Widget child;
+
+  final bool showBack;
+
+  /// 自定义返回动作（例如详情面板退回列表，而不是弹出整个路由）。
+  final VoidCallback? onBack;
+
+  final List<Widget> actions;
+
+  const SettingsPageScaffold({
+    super.key,
+    required this.title,
+    required this.child,
+    this.showBack = true,
+    this.onBack,
+    this.actions = const [],
+  });
+
+  @override
+  State<SettingsPageScaffold> createState() => _SettingsPageScaffoldState();
+}
+
+class _SettingsPageScaffoldState extends State<SettingsPageScaffold> {
+  final _progress = ScrollTitleProgress();
+
+  @override
+  void dispose() {
+    _progress.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final phone = useCollapsingPageTitle;
+    return Scaffold(
+      appBar: SettingsAppBar(
+        title: widget.title,
+        showBack: widget.showBack,
+        onBack: widget.onBack,
+        actions: widget.actions,
+        progress: _progress,
+      ),
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            if (phone)
+              CollapsingPageTitle(
+                title: widget.title,
+                progress: _progress,
+                height: _pageTitleHeight,
+                leftPadding: _pageTitleLeft,
               ),
+            // 只有手机端才需要换算进度；电脑端标题常驻 AppBar，不挂监听。
+            Expanded(
+              child: phone
+                  ? ScrollTitleListener(
+                      progress: _progress,
+                      child: widget.child,
+                    )
+                  : widget.child,
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

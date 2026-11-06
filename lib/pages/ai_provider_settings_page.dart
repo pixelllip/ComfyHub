@@ -362,13 +362,16 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
             },
           );
 
-    return Scaffold(
-      // ⚠ 「AI 工具权限」的入口**不在这里**（2026-11-05 用户：它和模型/凭据
-      // 不构成附属关系，层级提高一级）—— 入口在设置首页，和「AI 模型与凭据」并列。
-      body: Column(
+    // ⚠ 「AI 工具权限」的入口**不在这里**（2026-11-05 用户：它和模型/凭据
+    // 不构成附属关系，层级提高一级）—— 入口在设置首页，和「AI 模型与凭据」并列。
+    //
+    // 顶栏 / 返回键 / 大标题联动**和其它设置子页完全一样**（[SettingsPageScaffold]
+    // 与 [SettingsScaffold] 共用 [SettingsAppBar]）：以前这一页没有 AppBar，
+    // 正文页头直接顶在 body 上，手机上会被状态栏压住。
+    return SettingsPageScaffold(
+      title: 'AI 模型与凭据',
+      child: Column(
         children: [
-          // 标题不放 AppBar：与其它设置页同一套"圆形返回键 + 大号正文标题"。
-          const SettingsPageHeader(title: 'AI 模型与凭据'),
           // 没有选中 Provider 时，错误也要看得见（新建失败最常发生在这种情况下）
           if (_error != null) _errorBanner(theme),
           Expanded(
@@ -444,13 +447,23 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       case _NarrowPane.detail:
         final provider = _selected!;
         return withBackGuard(
-          Scaffold(
-            body: Column(
+          // key 跟着 Provider 走：换一条 = 换一段正文，标题进度从 0 重新开始
+          // （不换 key 的话，上一条滚到一半的进度会让 AppBar 上立刻挂着新标题）。
+          SettingsPageScaffold(
+            key: ValueKey('ai-provider-detail-${provider.id}'),
+            title: provider.displayName,
+            onBack: () => setState(() => _pane = _NarrowPane.list),
+            // 大标题就是这条 Provider 的名字，所以详情里不再重复一行同名标题
+            // （AGENTS §6.3：同一个标题不许出现两次）；「编辑」因此挪到 AppBar。
+            actions: [
+              IconButton(
+                tooltip: '编辑 Provider',
+                icon: const Icon(Icons.edit_outlined),
+                onPressed: () => _editProvider(provider),
+              ),
+            ],
+            child: Column(
               children: [
-                SettingsPageHeader(
-                  title: provider.displayName,
-                  onBack: () => setState(() => _pane = _NarrowPane.list),
-                ),
                 if (_error != null) _errorBanner(theme),
                 Expanded(
                   child: _ProviderDetail(
@@ -463,6 +476,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
                     models: _models,
                     info: _info,
                     error: _error,
+                    showName: false,
                     // 与桌面同一处：能力目录嵌在这条 Provider 的详情里
                     capability: _cap,
                     capabilityBusy: _capBusy,
@@ -483,10 +497,11 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           ),
         );
       case _NarrowPane.list:
-        return Scaffold(
-          body: Column(
+        return SettingsPageScaffold(
+          key: const ValueKey('ai-provider-list'),
+          title: 'AI 模型与凭据',
+          child: Column(
             children: [
-              const SettingsPageHeader(title: 'AI 模型与凭据'),
               if (_error != null) _errorBanner(theme),
               Expanded(
                 child: _ProviderList(
@@ -942,6 +957,13 @@ class _ProviderDetail extends StatefulWidget {
   final String? info;
   final String? error;
 
+  /// 正文里要不要再摆一行 Provider 名字 + 「编辑 Provider」。
+  ///
+  /// 手机上这一条 Provider 的**页面大标题**就是它的名字（`_buildNarrow` 的详情
+  /// 面板），正文再摆一次 = 同一个标题出现两次；那里改由 AppBar 的编辑图标负责。
+  /// 桌面是双栏，右边这不是页面标题，所以照旧保留。
+  final bool showName;
+
   /// 「模型能力目录」那一块（在线数据集 = **models.dev**）。
   ///
   /// ⚠ 它是**全局**状态（一个 `remote.json`），却只显示在**这一条** Provider 的详情里 ——
@@ -970,6 +992,7 @@ class _ProviderDetail extends StatefulWidget {
     required this.models,
     required this.info,
     required this.error,
+    this.showName = true,
     this.capability,
     this.capabilityBusy = false,
     this.probeBusy = false,
@@ -1064,19 +1087,20 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     // 每个模型卡里有 6 个 FilterChip + 一个下拉框，几十个模型全在首帧就建出来，
     // 滚动时整个列表跟着重建 —— 这就是"AI 模型与凭据界面滑动卡顿"的主因。
     final header = <Widget>[
-      Row(
-        children: [
-          Expanded(child: Text(p.displayName, style: theme.textTheme.titleLarge)),
-          // 「改个 baseURL / 协议」的路（用户要的"独立配置 provider"）：
-          // 两端都走同一条 store（手机 = 本机库、桌面 = 后端），提交时带 revision（乐观锁）。
-          OutlinedButton.icon(
-            onPressed: _busy ? null : () => widget.onEdit(),
-            icon: const Icon(Icons.edit_outlined, size: 18),
-            label: const Text('编辑 Provider'),
-          ),
-        ],
-      ),
-      const SizedBox(height: 4),
+      if (widget.showName)
+        Row(
+          children: [
+            Expanded(child: Text(p.displayName, style: theme.textTheme.titleLarge)),
+            // 「改个 baseURL / 协议」的路（用户要的"独立配置 provider"）：
+            // 两端都走同一条 store（手机 = 本机库、桌面 = 后端），提交时带 revision（乐观锁）。
+            OutlinedButton.icon(
+              onPressed: _busy ? null : () => widget.onEdit(),
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              label: const Text('编辑 Provider'),
+            ),
+          ],
+        ),
+      if (widget.showName) const SizedBox(height: 4),
       Text('${p.id} · ${p.apiLabel} · revision ${p.revision}',
           style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
       const SizedBox(height: 6),
