@@ -470,6 +470,10 @@ fn capitalize_first(text: &str) -> String {
 /// 现在这条是**自愈**的：缺哪张补哪张，并且**打一行日志把补了什么说出来**（绝不静默）。
 pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
     let path = path.as_ref();
+    // **先处理"上次点了恢复"的标记，再开库**（`infra/backup.rs`）。
+    // 顺序不能反：活着的连接上换文件，SQLite 会把两个库的页混着读 —— 那种损坏不报错。
+    // 它在没有标记时只是一次 `exists()`，所以每条测试 / 每次冷启动都可以放心调。
+    crate::infra::backup::apply_pending(path);
     let fresh = !path.exists() || std::fs::metadata(path).map(|m| m.len() == 0).unwrap_or(true);
     if fresh {
         if let Some(parent) = path.parent() {

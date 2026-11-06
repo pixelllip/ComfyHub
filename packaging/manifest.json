@@ -28,7 +28,8 @@
     "writable": {
       "database": ".db",
       "artifacts": "storage",
-      "logs": ".run"
+      "logs": ".run",
+      "backups": "backups"
     },
     "optionalRuntime": {
       "mcp": {
@@ -50,7 +51,7 @@
         "环境变量 COMFYHUB_JDBC_URL（搬迁核对时也可以显式指向目标文件）",
         "默认 <根>\\.db\\comfyhub.db"
       ],
-      "backup": "停掉后端后拷 .db 整个目录（含 -wal / -shm）"
+      "backup": "设置 → 本地服务 → 备份与恢复（后端 VACUUM INTO 出一份单文件，不用停服务，落在 <根>\\backups）。手工拷 .db 目录的旧办法要连 -wal / -shm 一起，而且必须停掉后端 —— 别再教用户手工拷"
     },
     "artifactsLocation": {
       "default": "storage",

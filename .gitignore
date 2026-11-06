@@ -73,6 +73,9 @@ app.*.map.json
 # 用户上传的生成产物原始文件
 /storage/
 
+# 库备份（`VACUUM INTO` 出来的 .db）：属于运行期数据，每台机器各一份
+/backups/
+
 # 演示用媒体（可由 scripts/make-sample-media.ps1 重新生成）
 /samples/
 

@@ -281,6 +281,7 @@
 | 内容 | 落点 | 一次性导入 |
 | --- | --- | --- |
 | 数据库 | `<根>\.db\comfyhub.db` | 无 |
+| 库备份（`VACUUM INTO` 出来的 .db） | `<根>\backups\` | 无 |
 | 产物 / 缩略图 / 附件 | `<根>\storage\` | 无 |
 | 偏好 | `<根>\storage\app-support` | `%APPDATA%\…\shared_preferences.json` |
 | MCP 运行时（便携 python + venv） | `<根>\storage\ai\mcp` | 无 |

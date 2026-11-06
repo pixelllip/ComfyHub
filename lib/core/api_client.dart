@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../models/backup_models.dart';
 import '../models/models.dart';
 import '../models/train_models.dart';
 import 'pairing_token.dart';
@@ -203,6 +204,33 @@ class ApiClient {
   Future<LibraryStats> stats() async => LibraryStats.fromJson(
     Map<String, dynamic>.from(await _get('/api/stats') as Map),
   );
+
+  // -------------------------------------------------------------------------
+  //  备份 / 恢复（`server-rs/src/web/backup.rs`）
+  // -------------------------------------------------------------------------
+
+  Future<BackupListing> listBackups() async => BackupListing.fromJson(
+    Map<String, dynamic>.from(await _get('/api/system/backups') as Map),
+  );
+
+  /// 现在拍一张（后端用 `VACUUM INTO`，不会打断正在跑的请求）。
+  Future<BackupItem> createBackup() async {
+    final json = Map<String, dynamic>.from(
+      await _send('POST', '/api/system/backups', null) as Map,
+    );
+    return BackupItem.fromJson(Map<String, dynamic>.from(json['item'] as Map));
+  }
+
+  Future<void> deleteBackup(String name) async =>
+      _send('DELETE', '/api/system/backups/${Uri.encodeComponent(name)}', null);
+
+  /// 校验 + 拍保险 + 落标记；**真正换库要重启后端**（响应里的 `restartRequired`）。
+  Future<RestorePreparation> restoreBackup(String name) async =>
+      RestorePreparation.fromJson(
+        Map<String, dynamic>.from(
+          await _send('POST', '/api/system/restore', {'name': name}) as Map,
+        ),
+      );
 
   // -------------------------------------------------------------------------
   //  提示词

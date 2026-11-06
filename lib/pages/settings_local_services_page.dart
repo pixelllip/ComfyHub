@@ -6,6 +6,7 @@ import '../core/backend_launcher.dart';
 import '../core/settings_store.dart';
 import '../core/theme.dart';
 import '../state/library_store.dart';
+import '../widgets/backup_card.dart';
 import '../widgets/settings_scaffold.dart';
 import '../widgets/settings_switch_row.dart';
 
@@ -358,6 +359,13 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
               ),
             ),
           ),
+        ),
+        // 备份与恢复（2026-11-06）：放在「服务状态」后面 —— 恢复之后要重启服务，
+        // 两件事在同一屏，用户不用来回翻。
+        const SettingsSection(
+          title: '备份与恢复',
+          estimatedHeight: 460,
+          child: BackupCard(),
         ),
         SettingsSection(
           title: '运行根目录',
