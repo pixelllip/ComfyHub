@@ -732,5 +732,255 @@ fn truncate(value: &Option<String>, max: usize) -> Option<String> {
     value.as_ref().map(|v| v.chars().take(max).collect())
 }
 
+// ---------------------------------------------------------------------------
+//  事件归档（2026-11-06）
+// ---------------------------------------------------------------------------
+
+/// 一次最多归档多少条。单 Run 的保留窗口是 4000（R5），2 万条 ≈ 5 个 Run ——
+/// 一次把几十万条读进内存不值当，剩下的下次再点。
+pub const MAX_ARCHIVE_ROWS: i64 = 20_000;
+
+/// 归档文件保留份数（按 mtime 从新到旧）。不设上限的话"归档"只是把库里的涨
+/// 换成了磁盘上的涨，等于没解决问题。
+pub const KEEP_ARCHIVES: usize = 10;
+
+/// `ai_run_events` 的规模。界面上要能看见"它涨到多大了"。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventStats {
+    pub rows: i64,
+    pub oldest: Option<String>,
+    pub newest: Option<String>,
+}
+
+pub fn event_stats(state: &AppState) -> Result<EventStats, ApiError> {
+    state.with(|conn| {
+        conn.query_row(
+            "SELECT count(*), min(created_at), max(created_at) FROM ai_run_events",
+            [],
+            |row| {
+                Ok(EventStats {
+                    rows: row.get(0)?,
+                    oldest: row.get(1)?,
+                    newest: row.get(2)?,
+                })
+            },
+        )
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventArchive {
+    pub archived: i64,
+    pub bytes: u64,
+    /// 归档文件（绝对路径）。
+    pub file: String,
+    /// 截止时间（ISO）；比它早的事件进了这份归档。
+    pub cutoff: String,
+    /// 还有多少条同样够老、这次没装下的（> 0 就提示用户再点一次）。
+    pub remaining: i64,
+}
+
+struct ArchiveRow {
+    run_id: String,
+    seq: i64,
+    event_type: String,
+    payload: Option<String>,
+    created_at: String,
+}
+
+/// 把 `days` 天之前的事件写成 JSONL，再从库里删掉。
+///
+/// 三条纪律：
+/// 1. **正在跑的 Run 一条都不动** —— 它还要靠 `?after=seq` 回放（R5）；
+/// 2. **先写成文件、再删库**：写文件失败就什么都不删；删库失败就把文件删掉，
+///    绝不出现"文件说归档了、库里其实还在"；
+/// 3. 每次都只装 [`MAX_ARCHIVE_ROWS`] 条，`remaining` 如实告诉界面还有多少。
+pub fn archive_events(
+    state: &AppState,
+    days: i64,
+    dir: &std::path::Path,
+) -> Result<EventArchive, ApiError> {
+    use std::io::Write;
+
+    let days = days.clamp(1, 3650);
+    let modifier = format!("-{days} days");
+    let cutoff = crate::infra::iso_time::from_system_time(
+        std::time::SystemTime::now() - std::time::Duration::from_secs(days as u64 * 86_400),
+    );
+
+    let rows: Vec<ArchiveRow> = state.with(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT run_id, seq, event_type, payload_json, created_at
+               FROM ai_run_events
+              WHERE datetime(created_at) < datetime('now', ?1)
+                AND run_id NOT IN (SELECT id FROM ai_runs WHERE status = 'running')
+              ORDER BY created_at, run_id, seq
+              LIMIT ?2",
+        )?;
+        let mapped = stmt.query_map(rusqlite::params![modifier, MAX_ARCHIVE_ROWS], |row| {
+            Ok(ArchiveRow {
+                run_id: row.get(0)?,
+                seq: row.get(1)?,
+                event_type: row.get(2)?,
+                payload: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in mapped {
+            out.push(row?);
+        }
+        Ok(out)
+    })?;
+
+    if rows.is_empty() {
+        return Ok(EventArchive {
+            archived: 0,
+            bytes: 0,
+            file: String::new(),
+            cutoff,
+            remaining: 0,
+        });
+    }
+
+    std::fs::create_dir_all(dir)
+        .map_err(|e| ApiError::internal(format!("建归档目录失败（{}）：{e}", dir.display())))?;
+    let iso = crate::infra::iso_time::from_system_time(std::time::SystemTime::now());
+    let stamp = iso
+        .split('.')
+        .next()
+        .unwrap_or(&iso)
+        .trim_end_matches('Z')
+        .replace(['-', ':'], "")
+        .replace('T', "-");
+    // 同一秒里点两次也不许互相覆盖（Windows 的 rename 不覆盖已存在的目标）
+    let mut name = format!("run-events-{stamp}.jsonl");
+    let mut seq = 0;
+    let path = loop {
+        let candidate = dir.join(&name);
+        if !candidate.exists() {
+            break candidate;
+        }
+        seq += 1;
+        if seq > 99 {
+            return Err(ApiError::internal("同一秒里归档太多次，换一秒再试"));
+        }
+        name = format!("run-events-{stamp}-{seq}.jsonl");
+    };
+    let tmp = dir.join(format!("{name}.part"));
+
+    let mut bytes = 0u64;
+    {
+        let mut file = std::fs::File::create(&tmp)
+            .map_err(|e| ApiError::internal(format!("建归档文件失败：{e}")))?;
+        for row in &rows {
+            // payload 本来就是 JSON 文本，原样嵌进去（不解析再序列化，省一遍也保真）
+            let line = format!(
+                "{{\"runId\":{},\"seq\":{},\"type\":{},\"payload\":{},\"createdAt\":{}}}",
+                json_string(&row.run_id),
+                row.seq,
+                json_string(&row.event_type),
+                row.payload.as_deref().unwrap_or("null"),
+                json_string(&row.created_at),
+            );
+            bytes += line.len() as u64 + 1;
+            writeln!(file, "{line}").map_err(|e| ApiError::internal(format!("写归档失败：{e}")))?;
+        }
+        file.sync_all()
+            .map_err(|e| ApiError::internal(format!("归档落盘失败：{e}")))?;
+    }
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(ApiError::internal(format!("归档文件改名失败：{e}")));
+    }
+    prune_archives(dir);
+
+    // 删除**只删这一批的 (run_id, seq)**，不是"按时间再筛一遍"（那会删掉没进文件的）。
+    let deleted = match state.write(|tx| {
+        tx.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS _archive_keys (
+                 run_id TEXT NOT NULL,
+                 seq    INTEGER NOT NULL,
+                 PRIMARY KEY (run_id, seq)
+             )",
+        )?;
+        tx.execute("DELETE FROM _archive_keys", [])?;
+        {
+            let mut ins = tx.prepare("INSERT OR IGNORE INTO _archive_keys (run_id, seq) VALUES (?1, ?2)")?;
+            for row in &rows {
+                ins.execute(rusqlite::params![row.run_id, row.seq])?;
+            }
+        }
+        let n = tx.execute(
+            "DELETE FROM ai_run_events
+              WHERE (run_id, seq) IN (SELECT run_id, seq FROM _archive_keys)",
+            [],
+        )?;
+        tx.execute("DELETE FROM _archive_keys", [])?;
+        Ok(n as i64)
+    }) {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
+    };
+
+    let remaining: i64 = state.with(|conn| {
+        conn.query_row(
+            "SELECT count(*) FROM ai_run_events
+              WHERE datetime(created_at) < datetime('now', ?1)
+                AND run_id NOT IN (SELECT id FROM ai_runs WHERE status = 'running')",
+            rusqlite::params![modifier],
+            |row| row.get(0),
+        )
+    })?;
+
+    Ok(EventArchive {
+        archived: deleted,
+        bytes,
+        file: path.to_string_lossy().to_string(),
+        cutoff,
+        remaining,
+    })
+}
+
+/// 只留最新的 [`KEEP_ARCHIVES`] 份归档。不设上限的话"归档"只是把库里的涨
+/// 换成了磁盘上的涨，等于没解决问题。
+///
+/// 只认我们自己命名的 `run-events-*.jsonl`（用户往这个目录里放别的东西不动）；
+/// 删不掉不算错（可能被杀毒软件占着），下次再删。
+fn prune_archives(dir: &std::path::Path) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+    for entry in read.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("run-events-") || !name.ends_with(".jsonl") {
+            continue;
+        }
+        let mtime = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        files.push((mtime, path));
+    }
+    files.sort_by_key(|(mtime, _)| std::cmp::Reverse(*mtime));
+    for (_, path) in files.into_iter().skip(KEEP_ARCHIVES) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// 一个字符串 → JSON 字面量（转义交给 serde，别手拼引号）。
+fn json_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
+}
+
 #[cfg(test)]
 mod tests;

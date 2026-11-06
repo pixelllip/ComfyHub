@@ -386,6 +386,8 @@ pub fn router(state: AppState) -> Router {
         // 备份与恢复（2026-11-06）：`/api/system/backups*` + `/api/system/restore`。
         // 恢复只落标记，真正换库在下次启动（见 `infra/backup.rs` 的文件头）。
         .merge(crate::web::backup::router())
+        // 存储占用 / 孤儿清理 / 事件归档（2026-11-06）：`/api/system/storage*` + `/api/system/events/archive`。
+        .merge(crate::web::storage::router())
         // 角色卡 + 画风卡（2026-10-21 合并到同一个仓储）：界面的卡片页与 AI 的
         // `save_character_card` / `save_style_card` 共用这一份实现。
         .merge(crate::library::cards::router())

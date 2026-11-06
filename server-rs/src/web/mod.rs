@@ -7,5 +7,7 @@ pub mod backup;
 pub mod endpoint_guard;
 pub mod inputs;
 pub mod models;
+pub mod remote;
 pub mod routes;
+pub mod storage;
 pub mod write_routes;

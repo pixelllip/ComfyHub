@@ -35,7 +35,7 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 | **画廊** | 生成产物：列表 / 详情 / 大图（滚轮缩放）/ 视频播放；NSFW 标记与模糊；右键菜单。**手机上默认缓存看过的缩略图 / 原件**，详情菜单可「保存到手机相册」 |
 | **提示词** | 本机提示词库：搜索、收藏、标签、工作流原文（界面格式 ↔ API 图的转换在服务端）。AppBar 的「布局 → 提示词」进画布次级页（主入口在 AI 工作台的模板卡，见下） |
 | **标签** | 标签库与分类、使用次数 |
-| **设置** | Provider / 模型目录 / API Key、「远程访问与配对」、NSFW 开关、ComfyUI 自动捕获、桌面端还有本地服务与后端地址、**产物导出**、**备份与恢复** |
+| **设置** | Provider / 模型目录 / API Key、「远程访问与配对」、NSFW 开关、ComfyUI 自动捕获、桌面端还有本地服务与后端地址、**产物导出**、**备份与恢复**、**存储占用与清理** |
 
 后端能力（都是 AI 的工具，不是界面按钮）：
 
@@ -260,6 +260,24 @@ D:\dist\ComfyHub\viewer.exe
 - 端点：`GET/POST /api/system/backups`、`DELETE /api/system/backups/{name}`、
   `POST /api/system/restore`。实现只有一份（`server-rs/src/infra/backup.rs` +
   `server-rs/src/web/backup.rs`），界面在**设置 → 本地服务 → 备份与恢复**。
+
+### 8.3 存储占用、孤儿文件与事件归档（2026-11-06）
+
+桌面端此前看不到自己占了多少盘。现在**设置 → 本地服务 → 存储**：
+
+- **占用**按目录列：数据库（含 `-wal` / `-shm`）、库备份、产物原图、产物缩略图、
+  对话附件、附件缩略图、AI 数据（Skills / 记忆 / MCP 运行时）、运行日志。只读统计，
+  不改任何东西。
+- **孤儿文件** = 磁盘上有、库里没有对应行的文件。只扫四个平铺目录
+  （`media` / `thumbs` / `ai-attachments` / `ai-thumbs`），**先扫描、再确认**，
+  而且 **1 小时内动过的文件不算**（可能正在上传）。⚠ 恢复过更早的备份之后，
+  备份之后新生成的产物也会落进这一类 —— 所以绝不自动删，界面上要把这一点说清楚。
+- **事件归档**：`ai_run_events` 是按 Run 留尾部 4000 条（R5），更早的行会一直攒着。
+  归档把 N 天前的行先写成 `<storage>\ai\run-events\run-events-<UTC>.jsonl`，再从库里删掉。
+  **正在跑的 Run 一条不动**，一次最多 2 万条（还有就提示再点一次），
+  归档文件只留最近 10 份（否则只是把库里的涨换成磁盘上的涨）。
+- 端点：`GET /api/system/storage`、`POST /api/system/storage/orphans`（`apply` 缺省 false，
+  删除时只允许回环）、`POST /api/system/events/archive`（只允许回环）。
 
 ## 9. 数据库
 

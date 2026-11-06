@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/backup_models.dart';
 import '../models/models.dart';
+import '../models/storage_models.dart';
 import '../models/train_models.dart';
 import 'pairing_token.dart';
 import 'workflow_blueprint.dart';
@@ -231,6 +232,42 @@ class ApiClient {
           await _send('POST', '/api/system/restore', {'name': name}) as Map,
         ),
       );
+
+  // -------------------------------------------------------------------------
+  //  存储 / 孤儿 / 事件归档（`server-rs/src/web/storage.rs`）
+  // -------------------------------------------------------------------------
+
+  Future<StorageUsage> storageUsage() async => StorageUsage.fromJson(
+    Map<String, dynamic>.from(await _get('/api/system/storage') as Map),
+  );
+
+  /// **只扫描不删**（`apply` 缺省 false）。删之前先看一遍数量与体积。
+  ///
+  /// ⚠ 必须发一个 `{}`：后端用的是 `Json<OrphanInput>`，无 body 的 POST 会被
+  /// 415 / 400 拒掉（`createBackup` 那条没有 body 提取器，才能传 null）。
+  Future<OrphanScan> scanOrphans() async => OrphanScan.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/system/storage/orphans', const <String, dynamic>{})
+          as Map,
+    ),
+  );
+
+  Future<CleanReport> cleanOrphans() async => CleanReport.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/system/storage/orphans', {'apply': true})
+          as Map,
+    ),
+  );
+
+  /// 把 `days` 天之前的事件写成 JSONL 再删库。
+  Future<EventArchiveReport> archiveEvents({int days = 30}) async {
+    final json = Map<String, dynamic>.from(
+      await _send('POST', '/api/system/events/archive', {'days': days}) as Map,
+    );
+    return EventArchiveReport.fromJson(
+      Map<String, dynamic>.from(json['report'] as Map),
+    );
+  }
 
   // -------------------------------------------------------------------------
   //  提示词

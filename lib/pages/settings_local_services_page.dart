@@ -8,6 +8,7 @@ import '../core/theme.dart';
 import '../state/library_store.dart';
 import '../widgets/backup_card.dart';
 import '../widgets/settings_scaffold.dart';
+import '../widgets/storage_card.dart';
 import '../widgets/settings_switch_row.dart';
 
 /// 「本地服务（后端 + 数据库）」子页。
@@ -366,6 +367,12 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
           title: '备份与恢复',
           estimatedHeight: 460,
           child: BackupCard(),
+        ),
+        // 存储占用 / 孤儿 / 事件归档：与备份同屏，用户排查"盘怎么满了"时不用来回翻。
+        const SettingsSection(
+          title: '存储',
+          estimatedHeight: 420,
+          child: StorageCard(),
         ),
         SettingsSection(
           title: '运行根目录',

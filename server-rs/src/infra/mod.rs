@@ -7,4 +7,5 @@ pub mod confinement;
 pub mod db;
 pub mod iso_time;
 pub mod outbound;
+pub mod storage;
 pub mod testpaths;

@@ -16,17 +16,17 @@
 //! 也授权出去。备份 / 列表 / 删除不设这条限制（它们只碰 `backups\` 目录，破坏面小）。
 
 use axum::{
-    extract::{ConnectInfo, FromRequestParts, Path as UrlPath, State},
-    http::{request::Parts, StatusCode},
+    extract::{Path as UrlPath, State},
+    http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use crate::infra::backup;
+use crate::web::remote::MaybeRemote;
 use crate::web::routes::{ApiError, AppState};
 
 pub fn router() -> Router<AppState> {
@@ -97,29 +97,6 @@ async fn delete_backup(
     Ok(Json(json!({ "deleted": name })))
 }
 
-/// `ConnectInfo` 的**可选**版本。
-///
-/// `Option<ConnectInfo<_>>` 在 axum 0.8 里不成立（它要的是 `OptionalFromRequestParts`，
-/// `ConnectInfo` 没实现）。但这一条又必须能"没有对端地址"：集成测试走的是
-/// `Router::oneshot`，压根没有 TCP 连接。所以自己读一次 extensions —— 取不到就是 `None`。
-struct MaybeRemote(Option<SocketAddr>);
-
-impl<S> FromRequestParts<S> for MaybeRemote
-where
-    S: Send + Sync,
-{
-    type Rejection = std::convert::Infallible;
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        Ok(MaybeRemote(
-            parts
-                .extensions
-                .get::<ConnectInfo<SocketAddr>>()
-                .map(|c| c.0),
-        ))
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct RestoreInput {
     name: String,
@@ -133,12 +110,10 @@ async fn restore(
     remote: MaybeRemote,
     Json(input): Json<RestoreInput>,
 ) -> Result<Json<Value>, ApiError> {
-    if let Some(addr) = remote.0 {
-        if !crate::mobile::auth::is_loopback(Some(addr.ip())) {
-            return Err(ApiError::forbidden(
-                "恢复库只能在这台机器上操作 —— 它会替换掉当前数据库",
-            ));
-        }
+    if !crate::web::remote::is_loopback(&remote) {
+        return Err(ApiError::forbidden(
+            "恢复库只能在这台机器上操作 —— 它会替换掉当前数据库",
+        ));
     }
     if state.db_path == ":memory:" {
         return Err(ApiError::bad_request(
