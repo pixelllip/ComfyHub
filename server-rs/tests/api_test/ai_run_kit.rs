@@ -286,11 +286,11 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(saved["writeRoots"], policy["writeRoots"], "没传的字段照旧");
     let stored: String = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT v FROM app_settings WHERE k = 'ai.tools.policy'",
                 [],
                 |row| row.get::<_, String>(0),
-            )?)
+            )
         })
         .unwrap();
     assert!(stored.contains("\"permissionMode\":\"full\""), "{stored}");
@@ -466,7 +466,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     .await;
     assert_eq!(saved["effectiveBlur"], true);
     // run-kit 读的是**同一行**（各写一份键名就会出现"界面开了、提示词没注入"）
-    assert_eq!(comfyhub_server_rs::ai::run_kit::nsfw_enabled(&state).unwrap(), true);
+    assert!(comfyhub_server_rs::ai::run_kit::nsfw_enabled(&state).unwrap());
 }
 
 /// `GET /skills/roots` 报的两个路径必须**就是**读写实际用的那两个（拼错一处就是

@@ -291,7 +291,7 @@ fn media_dto(kind: &str, pos: Option<&str>, neg: Option<&str>) -> MediaDto {
 }
 
 #[test]
-fn 从产物DTO取端点_没关联提示词就是空() {
+fn 从产物_dto取端点_没关联提示词就是空() {
     let a = Endpoint::from(&media_dto("IMAGE", None, None));
     let b = ep("IMAGE", "", None);
     assert_eq!(group_key(&a), group_key(&b), "孤儿产物也要能算出一个稳定的 key");
@@ -302,7 +302,7 @@ fn 从产物DTO取端点_没关联提示词就是空() {
 }
 
 #[test]
-fn 从产物DTO取端点_负提示词空白当没有() {
+fn 从产物_dto取端点_负提示词空白当没有() {
     let a = Endpoint::from(&media_dto("IMAGE", Some("1girl"), Some("  ")));
     let b = ep("IMAGE", "1girl", None);
     assert_eq!(group_key(&a), group_key(&b));
@@ -340,7 +340,7 @@ fn prompt_dto(kind: &str, pos: &str, neg: Option<&str>) -> PromptDto {
 }
 
 #[test]
-fn 从提示词DTO取端点() {
+fn 从提示词_dto取端点() {
     let a = Endpoint::from(&prompt_dto("IMAGE", "(masterpiece:1.2), 1girl", Some("bad hands")));
     let b = ep("IMAGE", "1girl, masterpiece", Some("bad hands"));
     assert!(same_group(&a, &b));

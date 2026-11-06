@@ -235,12 +235,12 @@ async fn executor_runs_a_tool_round_trip_and_orders_the_parts() {
     // `tool.completed` 的键集合也是契约的一部分（`preview` 是工具卡上的那一行小字）
     let completed = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT payload_json FROM ai_run_events
                   WHERE run_id = ?1 AND event_type = 'tool.completed' ORDER BY seq LIMIT 1",
                 rusqlite::params![run_id],
                 |row| row.get::<_, String>(0),
-            )?)
+            )
         })
         .unwrap();
     let completed: serde_json::Value = serde_json::from_str(&completed).unwrap();
@@ -423,11 +423,11 @@ async fn approval_gate_opens_before_the_user_can_click() {
     // 否则那边就是"白等一场"（M1 的纪律）。
     let requested_seq = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT MIN(seq) FROM ai_run_events WHERE run_id = ?1 AND event_type = 'tool.requested'",
                 rusqlite::params![run_id],
                 |row| row.get::<_, Option<i64>>(0),
-            )?)
+            )
         })
         .unwrap()
         .expect("tool.requested 已经在库里");
@@ -505,12 +505,12 @@ async fn a_denied_call_is_recorded_and_never_runs() {
     assert!(!types.contains(&"tool.started".to_string()), "拒绝的调用没开始过：{types:?}");
     let denied_event = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT payload_json FROM ai_run_events
                   WHERE run_id = ?1 AND event_type = 'tool.failed' ORDER BY seq LIMIT 1",
                 rusqlite::params![run_id],
                 |row| row.get::<_, String>(0),
-            )?)
+            )
         })
         .unwrap();
     let denied_event: serde_json::Value = serde_json::from_str(&denied_event).unwrap();
@@ -725,12 +725,12 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
     // ① 事件形状：`question` 必须是**对象**（不是问题文字）
     let question_event = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT payload_json FROM ai_run_events
                   WHERE run_id = ?1 AND event_type = 'user.question' ORDER BY seq LIMIT 1",
                 rusqlite::params![run_id],
                 |row| row.get::<_, String>(0),
-            )?)
+            )
         })
         .unwrap();
     let question_event: serde_json::Value = serde_json::from_str(&question_event).unwrap();
@@ -809,12 +809,12 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
     // 工具的结构化结果（`tool.completed` 的 `result`）才是预算 / 整组答案那一份
     let completed = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT payload_json FROM ai_run_events
                   WHERE run_id = ?1 AND event_type = 'tool.completed' ORDER BY seq LIMIT 1",
                 rusqlite::params![run_id],
                 |row| row.get::<_, String>(0),
-            )?)
+            )
         })
         .unwrap();
     let completed: serde_json::Value = serde_json::from_str(&completed).unwrap();
@@ -1373,12 +1373,12 @@ async fn load_workflow_auto_attaches_the_reference_image_to_the_next_round() {
     // 工具审计里也要能查得到（`referenceImages` 是这次调用**真实返回过**的事实）
     let result_json: String = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT result_json FROM ai_tool_calls
                   WHERE run_id = ?1 AND name = 'comfy_load_workflow'",
                 rusqlite::params![run_id],
                 |row| row.get::<_, String>(0),
-            )?)
+            )
         })
         .unwrap();
     let payload: serde_json::Value = serde_json::from_str(&result_json).unwrap();
@@ -1447,12 +1447,12 @@ async fn view_outputs_auto_attaches_the_gallery_image_to_the_next_round() {
     // 工具审计里也要能查得到（`referenceImages` 是这次调用**真实返回过**的事实）
     let result_json: String = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT result_json FROM ai_tool_calls
                   WHERE run_id = ?1 AND name = 'comfy_view_outputs'",
                 rusqlite::params![run_id],
                 |row| row.get::<_, String>(0),
-            )?)
+            )
         })
         .unwrap();
     let payload: serde_json::Value = serde_json::from_str(&result_json).unwrap();

@@ -333,7 +333,7 @@ async fn 创建_run_之前拦住不支持的附件_上游零请求() {
     assert!(seen.lock().unwrap().is_empty(), "预检拦下时不许有任何上游请求");
     // 用户消息也不该落库（在 append 之前就返回了）
     let count: i64 = state
-        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM ai_messages", [], |r| r.get(0))?))
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM ai_messages", [], |r| r.get(0)))
         .unwrap();
     assert_eq!(count, 0, "被拦下时不该往会话里塞消息");
 

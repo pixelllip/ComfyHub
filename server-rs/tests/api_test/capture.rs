@@ -26,7 +26,7 @@ async fn capture_workflows_lists_files_with_the_same_keys() {
     // `file:<sha256>` 是**同一把钥匙**：在库里就得如实说，并且给出可以直接提交的 promptId
     assert_eq!(file["inLibrary"], true);
     assert_eq!(file["promptId"], 10);
-    assert!(body["dirs"].as_array().unwrap().len() >= 1, "三份来源里的项目内 comfyui 必须被认出来");
+    assert!(!body["dirs"].as_array().unwrap().is_empty(), "三份来源里的项目内 comfyui 必须被认出来");
 }
 
 #[tokio::test]
@@ -165,7 +165,7 @@ async fn capture_config_round_trips_and_normalizes() {
     );
     assert_eq!(saved["pollSeconds"], 600, "夹到上限：轮询太快会把 ComfyUI 问崩");
     assert_eq!(saved["maxPerPoll"], 1);
-    assert_eq!(saved["comfyUrl"].as_str().unwrap().ends_with('/'), false);
+    assert!(!saved["comfyUrl"].as_str().unwrap().ends_with('/'));
 
     // 再读一次：落库的确实是归一化后的那份（GET 与 PUT 的响应必须一致）
     let (_, again) = get_json(router_for(state.clone()), "/api/capture/config").await;
@@ -282,8 +282,10 @@ async fn api_graph_distinguishes_404_from_204_from_200() {
 async fn capture_poll_endpoint_returns_the_kotlin_shape() {
     let state = state();
     // ComfyUI 不在 → ok=false + 一句人话（**不是 500**）
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = "http://127.0.0.1:1".to_string();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: "http://127.0.0.1:1".to_string(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
     let (status, body) = send_json(router_for(state.clone()), "POST", "/api/capture/poll", serde_json::json!({})).await;
     assert_eq!(status, StatusCode::OK, "{body}");

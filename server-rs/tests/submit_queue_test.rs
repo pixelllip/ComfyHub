@@ -413,7 +413,7 @@ async fn the_same_queue_id_pushed_twice_submits_once() {
     assert!(second.rejected.is_empty(), "{:?}", second.rejected);
     let rows: i64 = fixture
         .state
-        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM submit_jobs", [], |row| row.get(0))?))
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM submit_jobs", [], |row| row.get(0)))
         .unwrap();
     assert_eq!(rows, 1, "同一条推两次只许有一行账");
 
@@ -467,7 +467,7 @@ async fn a_payload_missing_fields_is_rejected_permanently() {
     // 一条都没落进账里（不留半截状态），也一个上游请求都没发
     let rows: i64 = fixture
         .state
-        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM submit_jobs", [], |row| row.get(0))?))
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM submit_jobs", [], |row| row.get(0)))
         .unwrap();
     assert_eq!(rows, 0);
     assert!(submitted.lock().unwrap().is_empty());

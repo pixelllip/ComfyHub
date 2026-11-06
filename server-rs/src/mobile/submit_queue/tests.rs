@@ -83,7 +83,7 @@ async fn 受理会落一行并把审批挂成_pending() {
     assert_eq!(job.prompt_id, Some(7));
     assert_eq!(job.reply_state, "pending");
     // 审批列表里能看见它（复用 /api/ai/pending 的通道）
-    let listed = state.with(|conn| Ok(pending_approvals(conn)?)).unwrap();
+    let listed = state.with(pending_approvals).unwrap();
     assert_eq!(listed.len(), 1, "{listed:?}");
     assert_eq!(listed[0]["callId"], json!("submit:q1"));
     assert_eq!(listed[0]["conversationId"], json!("c1"));
@@ -100,7 +100,7 @@ async fn 同一个_queue_id_推两次只受理一次() {
     assert_eq!(accept(&state, &item(payload.clone())).unwrap(), Accepted::Fresh);
     assert_eq!(accept(&state, &item(payload)).unwrap(), Accepted::Duplicate);
     let count: i64 = state
-        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM submit_jobs", [], |row| row.get(0))?))
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM submit_jobs", [], |row| row.get(0)))
         .unwrap();
     assert_eq!(count, 1, "同一条推两次只有一行");
 }
@@ -233,11 +233,11 @@ async fn 会话还没同步上来时回执留着等() {
     assert_eq!(job.reply_state, "delivered");
     let count: i64 = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM ai_messages WHERE conversation_id='late'",
                 [],
                 |row| row.get(0),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(count, 1);
@@ -245,11 +245,11 @@ async fn 会话还没同步上来时回执留着等() {
     assert_eq!(deliver_pending(&state), 0, "已送达的不用再管");
     let count: i64 = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM ai_messages WHERE conversation_id='late'",
                 [],
                 |row| row.get(0),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(count, 1, "回执只许有一条");

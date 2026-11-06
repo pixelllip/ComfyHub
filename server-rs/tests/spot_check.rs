@@ -82,14 +82,14 @@ async fn real_db_spot_check_replay_ingest() {
     let picked: Option<(String, String)> = state
         .with(|conn| {
             use rusqlite::OptionalExtension;
-            Ok(conn
+            conn
                 .query_row(
                     "SELECT run_key, raw FROM capture_runs \
                       WHERE raw IS NOT NULL AND media_count > 0 ORDER BY id DESC LIMIT 1",
                     [],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
                 )
-                .optional()?)
+                .optional()
         })
         .unwrap();
     let Some((run_key, raw)) = picked else {
@@ -138,14 +138,14 @@ async fn real_db_spot_check_replay_ingest() {
     if let Some(prompt_id) = outcome.prompt_id {
         let (title, positive, seed): (String, String, Option<i64>) = state
             .with(|conn| {
-                Ok(conn.query_row(
+                conn.query_row(
                     "SELECT title, positive_prompt, seed FROM prompts WHERE id = ?1",
                     [prompt_id],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )?)
+                )
             })
             .unwrap();
-        println!("提示词 {prompt_id}：title={title:?} seed={seed:?} positive[:60]={:?}", &positive.chars().take(60).collect::<String>());
+        println!("提示词 {prompt_id}：title={title:?} seed={seed:?} positive[:60]={:?}", positive.chars().take(60).collect::<String>());
         assert!(!title.trim().is_empty());
     }
 }

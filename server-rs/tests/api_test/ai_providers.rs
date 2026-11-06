@@ -550,7 +550,7 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
         ],
         "`providerId` **在**（它是目录里那个 provider 的 id），`error` 不在（成功时是 null）"
     );
-    assert_eq!(preview["providerId"].as_str().unwrap().is_empty(), false);
+    assert!(!preview["providerId"].as_str().unwrap().is_empty());
     assert_eq!(preview["mode"], "add-missing");
     assert_eq!(preview["providerCreated"], true);
     assert!(preview["added"].as_i64().unwrap() > 0);
@@ -650,12 +650,12 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
     assert_eq!(sync["modelCount"], total + 1, "用户自己加的那个还在");
     let (name, enabled, max_bytes): (String, i64, Option<i64>) = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT display_name, enabled, max_attachment_bytes FROM ai_models
                   WHERE provider_id=?1 AND model_id=?2",
                 rusqlite::params![provider_id, model_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(name, "用户改的名字", "补齐模式绝不碰用户改过的显示名");
@@ -675,12 +675,12 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
     assert!(refreshed["updated"].as_i64().unwrap() >= 0);
     let (name, enabled, max_bytes): (String, i64, Option<i64>) = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT display_name, enabled, max_attachment_bytes FROM ai_models
                   WHERE provider_id=?1 AND model_id=?2",
                 rusqlite::params![provider_id, model_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(name, "用户改的名字");
@@ -710,7 +710,7 @@ async fn builtin_status_shape_changes_when_the_provider_exists() {
     assert_eq!(status, StatusCode::OK);
     // 库里没有内置目录那个 provider → 仍然按"整份插入"算，但 `providerCreated=true` 且带 id
     assert_eq!(body["providerCreated"], true);
-    assert_eq!(body["providerId"].as_str().unwrap().is_empty(), false);
+    assert!(!body["providerId"].as_str().unwrap().is_empty());
     assert!(keys(&body).contains(&"providerId".to_string()));
 }
 

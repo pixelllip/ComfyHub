@@ -80,7 +80,7 @@ fn 只列真的能用的_坏_json_空文件_非_json_与未知格式都跳过() 
     write_workflow(&dir, ".hidden.json", r#"{"nodes":[]}"#);
     std::fs::write(dir.join("empty.json"), "").unwrap();
 
-    let files = scan(&[dir.clone()], None, MAX_FILES);
+    let files = scan(std::slice::from_ref(&dir), None, MAX_FILES);
     let mut names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
     names.sort();
     assert_eq!(names, vec!["api.json", "ui.json"], "只列 ui/api 两种真能跑的");

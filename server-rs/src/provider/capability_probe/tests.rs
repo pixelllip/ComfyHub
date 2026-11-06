@@ -6,12 +6,15 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+/// 假网关的应答计划：`(状态码, 正文)`。
+type Plan = Box<dyn Fn(Option<&str>) -> (u16, &'static str) + Send + Sync>;
+
 /// 假网关：按调用顺序回预设的状态码，并**记下每一次请求的正文**（用例据此断言"发了什么"）。
 struct FakeGateway {
     calls: AtomicUsize,
     bodies: Mutex<Vec<String>>,
     /// 收到这个 body 里带的档位时回什么（`None` = 基准请求）
-    plan: Box<dyn Fn(Option<&str>) -> (u16, &'static str) + Send + Sync>,
+    plan: Plan,
 }
 
 impl FakeGateway {

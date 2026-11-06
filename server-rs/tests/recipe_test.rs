@@ -236,7 +236,7 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
     // 拒了就不许留行（"报错的行不许半截写进去"）
     let rows: i64 = f
         .state
-        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM workflow_recipes", [], |r| r.get(0))?))
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM workflow_recipes", [], |r| r.get(0)))
         .unwrap();
     assert_eq!(rows, 0, "被拒的学习不该往库里写");
 
@@ -316,7 +316,7 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
     assert_eq!(again.payload["recipeId"], out.payload["recipeId"]);
     let rows: i64 = f
         .state
-        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM workflow_recipes", [], |r| r.get(0))?))
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM workflow_recipes", [], |r| r.get(0)))
         .unwrap();
     assert_eq!(rows, 1, "同一份文件学两次只有一行");
 

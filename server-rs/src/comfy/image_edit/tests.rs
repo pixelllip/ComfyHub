@@ -360,7 +360,7 @@ fn 主体遮罩要把被包住的同色窟窿填回来() {
     let mut img = image::RgbImage::from_pixel(200, 200, image::Rgb([252, 252, 250]));
     for y in 40..160 {
         for x in 60..140 {
-            let edge = y < 44 || y >= 156 || x < 64 || x >= 136;
+            let edge = !(44..156).contains(&y) || !(64..136).contains(&x);
             img.put_pixel(x, y, if edge { image::Rgb([20, 20, 24]) } else { image::Rgb([250, 250, 248]) });
         }
     }
@@ -416,7 +416,7 @@ fn 白底仍然填洞但会提醒改绿幕() {
     let mut img = image::RgbImage::from_pixel(200, 200, image::Rgb([252, 252, 250]));
     for y in 40..160 {
         for x in 70..130 {
-            let edge = y < 44 || y >= 156 || x < 74 || x >= 126;
+            let edge = !(44..156).contains(&y) || !(74..126).contains(&x);
             img.put_pixel(x, y, if edge { image::Rgb([20, 20, 24]) } else { image::Rgb([250, 250, 248]) });
         }
     }
@@ -694,7 +694,7 @@ fn 抠图模型检查只认_comfyui_根下的_rembg_且如实报缺() {
     );
 
     // 一个都没有 → usable=false（调用方据此指引用户下载，而不是硬跑）
-    let none = matting_models(&[without.clone()]);
+    let none = matting_models(std::slice::from_ref(&without));
     assert_eq!(none["usable"], false);
     assert_eq!(none["checked"].as_array().unwrap().len(), 1);
 

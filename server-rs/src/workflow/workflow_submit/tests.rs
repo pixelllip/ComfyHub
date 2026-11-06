@@ -303,7 +303,7 @@ fn 负面能力_只有正面文本编码器不算认负面() {
 }
 
 #[test]
-fn 负面能力_拿不到_object_info_就回_None_不猜() {
+fn 负面能力_拿不到_object_info_就回_none_不猜() {
     let graph = json!({ "3": { "class_type": "KSampler", "inputs": { "negative": ["7", 0] } } });
     assert_eq!(
         negative_capability(&graph, None),

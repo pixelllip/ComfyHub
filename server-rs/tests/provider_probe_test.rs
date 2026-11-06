@@ -270,7 +270,7 @@ async fn 模型发现_逐维度合并能力且不落库() {
 
     // **不落库**（AIH-009）：发现只是候选，用户勾选后才保存
     let count: i64 = state
-        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM ai_models", [], |r| r.get(0))?))
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM ai_models", [], |r| r.get(0)))
         .unwrap();
     assert_eq!(count, 0, "发现不许写目录");
 

@@ -32,7 +32,7 @@ async fn sync_manifest_lists_scope_and_never_offers_credentials() {
     let fixture_cursor = body["cursor"].as_i64().unwrap();
     assert!(fixture_cursor > 0, "夹具插过行，_sync_log 就不该是空的");
     let max_seq: i64 = state
-        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)).map_err(Into::into))
+        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)))
         .unwrap();
     assert_eq!(fixture_cursor, max_seq, "游标 = MAX(_sync_log.seq)");
     assert!(
@@ -96,7 +96,7 @@ async fn sync_manifest_cursor_follows_the_sync_log() {
 
     // 与账本里的最大值**同源**（不能是"自己数的行数"）
     let max_seq: i64 = state
-        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)).map_err(Into::into))
+        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)))
         .unwrap();
     assert_eq!(cursor, max_seq, "游标 = MAX(_sync_log.seq)");
 }
@@ -226,9 +226,7 @@ async fn sync_changes_never_leaks_settings_or_providers() {
                 "SELECT COUNT(*) FROM _sync_log WHERE seq > ?1 AND tbl IN ('app_settings','ai_providers')",
                 [since],
                 |r| r.get(0),
-            )
-            .map_err(Into::into)
-        })
+            )})
         .unwrap();
     assert_eq!(
         touched, 0,
@@ -265,7 +263,7 @@ async fn sync_changes_never_leaks_settings_or_providers() {
     // 但游标要能跨过这些**不属于同步范围**的条目（否则手机永远推不动）
     let cursor = body["cursor"].as_i64().unwrap();
     let max_seq: i64 = state
-        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)).map_err(Into::into))
+        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)))
         .unwrap();
     assert_eq!(cursor, max_seq, "扫完了就跳到账本末尾，跨过不同步的条目");
 }
@@ -303,7 +301,7 @@ async fn sync_changes_returns_410_when_the_cursor_fell_out_of_the_window() {
 
     // 贴着窗口左沿（min - 1）是**安全**的，不该 410
     let min: i64 = state
-        .with(|conn| conn.query_row("SELECT MIN(seq) FROM _sync_log", [], |r| r.get(0)).map_err(Into::into))
+        .with(|conn| conn.query_row("SELECT MIN(seq) FROM _sync_log", [], |r| r.get(0)))
         .unwrap();
     let (status, _) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={}", min - 1)).await;
     assert_eq!(status, StatusCode::OK, "刚好贴着左沿应当正常返回（不多报一次全量）");
@@ -341,7 +339,7 @@ async fn sync_changes_paginates_and_advances_the_cursor() {
     let c1 = page1["cursor"].as_i64().unwrap();
     assert!(c1 > cursor, "游标要往前走");
     let max_seq: i64 = state
-        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)).map_err(Into::into))
+        .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)))
         .unwrap();
     assert!(c1 < max_seq, "没扫完就不能跳到末尾（否则中间那几条永远丢）：c1={c1} max={max_seq}");
     assert_eq!(page1["upserts"]["tags"].as_array().unwrap().len(), 2, "一页就是 limit 条");
@@ -400,16 +398,12 @@ async fn sync_push_applies_and_is_idempotent() {
                 "SELECT COUNT(*) FROM ai_conversations WHERE id = 'conv-phone-1'",
                 [],
                 |r| r.get(0),
-            )
-            .map_err(Into::into)
-        })
+            )})
         .unwrap();
     assert_eq!(n, 1, "重复推送**只能有一行**（就地更新，绝不新增）");
     let title: String = state
         .with(|conn| {
-            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-phone-1'", [], |r| r.get(0))
-                .map_err(Into::into)
-        })
+            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-phone-1'", [], |r| r.get(0))})
         .unwrap();
     assert_eq!(title, "手机上起的会话", "被拒的那次不该改动内容");
 }
@@ -444,9 +438,7 @@ async fn sync_push_keeps_the_desktop_value_when_the_push_is_older() {
     assert_eq!(body["rejected"][0]["code"], "STALE_IGNORED");
     let title: String = state
         .with(|conn| {
-            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-lww'", [], |r| r.get(0))
-                .map_err(Into::into)
-        })
+            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-lww'", [], |r| r.get(0))})
         .unwrap();
     assert_eq!(title, "桌面改过的名字", "旧的推送不许把桌面的行回退");
 
@@ -463,9 +455,7 @@ async fn sync_push_keeps_the_desktop_value_when_the_push_is_older() {
     assert_eq!(body["applied"], serde_json::json!(["conv-lww"]));
     let title: String = state
         .with(|conn| {
-            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-lww'", [], |r| r.get(0))
-                .map_err(Into::into)
-        })
+            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-lww'", [], |r| r.get(0))})
         .unwrap();
     assert_eq!(title, "手机上的新名字");
 }
@@ -535,9 +525,7 @@ async fn sync_push_rejects_with_per_item_codes() {
                 "SELECT COUNT(*) FROM ai_conversations WHERE id IN ('p1','m1','t1','x1','conv-badcol','conv-ref')",
                 [],
                 |r| r.get(0),
-            )
-            .map_err(Into::into)
-        })
+            )})
         .unwrap();
     assert_eq!(bad, 0, "被拒的行一条都不许落库");
 }
@@ -658,9 +646,7 @@ async fn sync_push_accepts_composite_key_tables_without_an_id_column() {
                 "SELECT text FROM ai_message_parts WHERE message_id='msg-0' AND ordinal=1",
                 [],
                 |r| r.get(0),
-            )
-            .map_err(Into::into)
-        })
+            )})
         .unwrap();
     assert_eq!(text, "手机推上来的块");
 
@@ -695,9 +681,7 @@ async fn sync_push_accepts_composite_key_tables_without_an_id_column() {
                 "SELECT COUNT(*) FROM ai_message_parts WHERE message_id='msg-0' AND ordinal=1",
                 [],
                 |r| r.get(0),
-            )
-            .map_err(Into::into)
-        })
+            )})
         .unwrap();
     assert_eq!(n, 1, "幂等：同一块推两次**只有一行**");
 }
@@ -749,9 +733,7 @@ async fn sync_push_lights_up_the_sync_log_without_fake_deletes() {
                 "SELECT COUNT(*) FROM _sync_log WHERE seq > ?1 AND tbl='ai_conversations' AND op='delete'",
                 [since],
                 |r| r.get(0),
-            )
-            .map_err(Into::into)
-        })
+            )})
         .unwrap();
     assert_eq!(fake_deletes, 0, "upsert 不许写假 delete（R3）");
 
@@ -761,9 +743,7 @@ async fn sync_push_lights_up_the_sync_log_without_fake_deletes() {
                 "SELECT COUNT(*) FROM _sync_log WHERE seq > ?1 AND tbl='ai_conversations' AND op='upsert'",
                 [since],
                 |r| r.get(0),
-            )
-            .map_err(Into::into)
-        })
+            )})
         .unwrap();
     assert!(upserts >= 2, "插入与更新都要进账本，实际 {upserts}");
 }

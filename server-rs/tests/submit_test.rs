@@ -271,12 +271,12 @@ async fn submit_runs_the_workflow_then_ingests_the_product() {
     let (media_prompt, media_count): (i64, i64) = fixture
         .state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT p.id, (SELECT COUNT(*) FROM media_assets m WHERE m.prompt_id = p.id) \
                  FROM prompts p WHERE p.id = ?1",
                 rusqlite::params![payload["capturedPromptId"].as_i64().unwrap()],
                 |row| Ok((row.get(0)?, row.get(1)?)),
-            )?)
+            )
         })
         .unwrap();
     assert!(media_prompt > 0 && media_count == 1, "产物要挂在那条新提示词上");
@@ -284,11 +284,11 @@ async fn submit_runs_the_workflow_then_ingests_the_product() {
     let positive: String = fixture
         .state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT positive_prompt FROM prompts WHERE id = ?1",
                 rusqlite::params![payload["capturedPromptId"].as_i64().unwrap()],
                 |row| row.get(0),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(positive, "a dog", "入库解析出的正向提示词要来自真正提交的图");
@@ -317,7 +317,7 @@ async fn nsfw_flag_travels_into_the_library() {
     let nsfw: i64 = fixture
         .state
         .with(|conn| {
-            Ok(conn.query_row("SELECT nsfw FROM media_assets WHERE id = ?1", rusqlite::params![media_id], |r| r.get(0))?)
+            conn.query_row("SELECT nsfw FROM media_assets WHERE id = ?1", rusqlite::params![media_id], |r| r.get(0))
         })
         .unwrap();
     assert_eq!(nsfw, 1, "产物要带上 NSFW 标记");

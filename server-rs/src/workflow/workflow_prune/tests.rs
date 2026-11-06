@@ -314,7 +314,7 @@ fn 摘除结果的_json_形状与_kotlin_一致() {
     assert!(!r.graph.contains_key("89"));
     assert!(!r.removed.is_empty(), "摘了什么要如实列出来");
     assert!(r.removed.iter().any(|entry| entry.starts_with("89")));
-    assert_eq!(r.summary().contains("摘掉"), true);
+    assert!(r.summary().contains("摘掉"));
 }
 
 /// 拼装位置 / 上游 / 节点类的四种拒法都要有**人话**（不静默）。

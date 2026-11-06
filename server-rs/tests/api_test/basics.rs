@@ -207,13 +207,13 @@ async fn preset_media_matches_by_normalized_prompt() {
     assert_eq!(count, 1, "前提：同款产物 900 真的入库了");
     let norm = state
         .with(|conn| {
-            Ok(conn
+            conn
                 .query_row(
                     "SELECT COUNT(*) FROM media_assets m JOIN prompts p ON p.id = m.prompt_id
                       WHERE m.kind = 'IMAGE'",
                     [],
                     |r| r.get::<_, i64>(0),
-                )?)
+                )
         })
         .unwrap();
     assert!(norm >= 2, "前提：至少两条 IMAGE 产物进了候选（实际 {norm}）");

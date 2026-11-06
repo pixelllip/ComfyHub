@@ -139,7 +139,7 @@ fn 非法_id_与目录穿越都挡住() {
     // 非法 id 与"查不到"同一条路（Kotlin 同）：**不是**另一个错误
     assert!(get(&state, "../../etc/passwd").unwrap().is_none());
     assert!(stored_name(&state, "../../etc/passwd").unwrap().is_none());
-    assert!(delete(&state, "../../etc/passwd").unwrap() == false);
+    assert!(!delete(&state, "../../etc/passwd").unwrap());
     assert!(resolve_attachment(&state, "../media/x.png").is_none());
     assert!(resolve_attachment(&state, "sub/x.png").is_none());
     std::fs::remove_dir_all(dir).ok();

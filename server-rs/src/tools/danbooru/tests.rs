@@ -62,10 +62,8 @@ fn wiki_截断是逐字符的() {
 #[test]
 fn 选角色是并列取第一个() {
     // 与 Kotlin `maxByOrNull` 同义：postCount 并列时**取先来的那个**
-    let tags = vec![
-        Tag { name: "a_(x)".into(), category: Some(4), post_count: 100, deprecated: false },
-        Tag { name: "b_(x)".into(), category: Some(4), post_count: 100, deprecated: false },
-    ];
+    let tags = [Tag { name: "a_(x)".into(), category: Some(4), post_count: 100, deprecated: false },
+        Tag { name: "b_(x)".into(), category: Some(4), post_count: 100, deprecated: false }];
     let picked = tags
         .iter()
         .filter(|t| t.category == Some(4))

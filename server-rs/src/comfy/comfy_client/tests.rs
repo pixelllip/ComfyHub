@@ -72,7 +72,7 @@ fn dir_owning_picks_the_input_the_instance_actually_reads() {
     // 并列第一（两边都只装着公共那份）→ **None**：宁可回落到候选顺序，也不猜
     assert_eq!(dir_owning(&[install.clone(), shared], &["example.png".to_string()]), None);
     // 名单是空的 / 候选里一个都装不下 → None
-    assert_eq!(dir_owning(&[install.clone()], &[]), None);
+    assert_eq!(dir_owning(std::slice::from_ref(&install), &[]), None);
     assert_eq!(dir_owning(&[install], &["nope.png".to_string()]), None);
 
     std::fs::remove_dir_all(&root).ok();

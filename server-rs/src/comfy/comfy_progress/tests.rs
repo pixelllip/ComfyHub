@@ -417,6 +417,9 @@ fn 进度表不会无限涨() {
 // -----------------------------------------------------------------------
 
 /// 跑一次 `pump`，返回服务端看到的请求路径。
+// `accept_hdr_async` 的 Err 是 tungstenite 的 `ErrorResponse`（很大）；这是测试里的
+// 假服务端，不值得为它把错误装箱。
+#[allow(clippy::result_large_err)]
 async fn pump_against(frames: Vec<&'static str>, tracker: Arc<ComfyProgress>) -> String {
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::Message;

@@ -126,11 +126,11 @@ async fn 导入目录_用_png_内嵌的_prompt_还原出提示词() {
     // 提示词里的参数真的来自内嵌的图（不是猜的）
     let (title, seed, positive): (String, Option<i64>, String) = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT title, seed, positive_prompt FROM prompts WHERE id = ?1",
                 rusqlite::params![prompt_ids[0].as_i64().unwrap()],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(positive, "imported cat, masterpiece");
@@ -140,11 +140,11 @@ async fn 导入目录_用_png_内嵌的_prompt_还原出提示词() {
     // 产物挂在那条提示词上（画廊里点进去能看到参数）
     let linked: i64 = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM media_assets WHERE prompt_id = ?1",
                 rusqlite::params![prompt_ids[0].as_i64().unwrap()],
                 |row| row.get(0),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(linked, 1, "带元数据那张要关联到提示词");
@@ -154,7 +154,7 @@ async fn 导入目录_用_png_内嵌的_prompt_还原出提示词() {
     assert_eq!(again["imported"], json!(0), "{again}");
     assert_eq!(again["duplicates"], json!(3), "{again}");
     let media_count: i64 = state
-        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM media_assets", [], |r| r.get(0))?))
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM media_assets", [], |r| r.get(0)))
         .unwrap();
     assert_eq!(media_count, 3, "导两次仍然只有三份产物");
 

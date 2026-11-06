@@ -128,7 +128,7 @@ fn sha256_只认_64_位十六进制() {
 #[test]
 fn 渲染的抬头与条目形状() {
     let m = to_model(&model_json()).unwrap();
-    let text = render(&[m.clone()], "水墨风", false, true);
+    let text = render(std::slice::from_ref(&m), "水墨风", false, true);
     assert!(text.starts_with("Civitai 搜索「水墨风」：1 条"), "{text}");
     assert!(!text.contains("匿名通道"), "安全档不许出现匿名通道那句：{text}");
     assert!(text.contains("[1] 水墨风 LoRA（LORA · 底模 SDXL 1.0）"), "{text}");
@@ -138,7 +138,7 @@ fn 渲染的抬头与条目形状() {
     assert!(text.contains("https://civitai.com/models/42（下载 1234 · 赞 56）"), "{text}");
 
     // NSFW 且没令牌 → 抬头补一句"本次是匿名通道"（放宽的是能不能搜，不是要不要说实话）
-    let nsfw_text = render(&[m.clone()], "水墨风", true, true);
+    let nsfw_text = render(std::slice::from_ref(&m), "水墨风", true, true);
     assert!(nsfw_text.contains("（NSFW 通道）"), "{nsfw_text}");
     assert!(nsfw_text.contains("本次没带 Civitai 令牌，走的是匿名通道"), "{nsfw_text}");
     // 有令牌时不该出现那句

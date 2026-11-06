@@ -619,11 +619,11 @@ async fn run_persistence_round_trips_shape_and_terminal_state() {
     // 快照真的落了库（事后追溯"当时用的是哪版规则 / 带没带 NSFW"靠它）
     let snapshots: (String, String, String) = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT provider_snapshot, model_snapshot, skill_snapshot FROM ai_runs WHERE id = ?1",
                 rusqlite::params![run.id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )?)
+            )
         })
         .unwrap();
     assert!(snapshots.0.contains("\"credentialRef\":\"GOAT_KEY\""), "快照里只有引用名");

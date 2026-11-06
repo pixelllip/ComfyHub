@@ -124,7 +124,7 @@ fn 升级会写回库并且只做一次() {
     assert_eq!(first.config.max_tool_steps, DEFAULT_MAX_TOOL_STEPS, "旧出厂值要当没设过");
     // 写回库：别的键（我们这一版不认识的 maxReadBytes 等）一个都不能丢
     let stored: String = state
-        .with(|conn| Ok(conn.query_row("SELECT v FROM app_settings WHERE k = ?1", [KEY], |r| r.get(0))?))
+        .with(|conn| conn.query_row("SELECT v FROM app_settings WHERE k = ?1", [KEY], |r| r.get(0)))
         .unwrap();
     assert!(stored.contains("\"maxToolSteps\":25"), "{stored}");
     assert!(stored.contains("maxReadBytes"), "合并写回，不许把别的键删掉：{stored}");

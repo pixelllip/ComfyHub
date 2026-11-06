@@ -74,7 +74,7 @@ fn inferred_trust_matches_the_scope() {
     // （`AddressScope.of` 永远不会产出它）—— 这里照抄，不"顺手让它有意义"。
     // 结果一样是拒绝：`assert_allowed(fe80::1, "public")` 撞红线。
     assert_eq!(infer_trust("fe80::1"), "public");
-    assert!(assert_allowed("fe80::1", &infer_trust("fe80::1")).is_err());
+    assert!(assert_allowed("fe80::1", infer_trust("fe80::1")).is_err());
 }
 
 /// 失败文案要**带当前判定**（用户排错全靠那半句）。

@@ -485,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn 关系词_front_输出成前端枚举名_inFront() {
+    fn 关系词_front_输出成前端枚举名_in_front() {
         let mut args = valid();
         args["templates"][0]["regions"][2]["relation"] = json!("front");
         let (payload, _) = normalize(&args).unwrap();

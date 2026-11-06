@@ -54,7 +54,7 @@ fn undecodable_files_report_false_instead_of_panicking() {
     let dir = crate::infra::testpaths::scratch("thumb-bad");
     let bogus = dir.join("broken.png");
     std::fs::write(&bogus, b"not an image at all").unwrap();
-    assert_eq!(write_thumbnail(&bogus, &dir.join("x.jpg")).unwrap(), false);
+    assert!(!write_thumbnail(&bogus, &dir.join("x.jpg")).unwrap());
     assert!(probe_image_size(&bogus).is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }

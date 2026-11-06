@@ -60,7 +60,7 @@ fn 留证与清证_并且只认当前后端() {
 
     // 别的后端来读：旧标记无权代表现状
     assert!(belongs_to(&root, 999).is_none());
-    assert_eq!(belongs_to(&root, 4242).unwrap().restricted, true);
+    assert!(belongs_to(&root, 4242).unwrap().restricted);
 
     // 探到正常 → 立刻清掉（不能让过期标记一直亮着吓用户）
     assert!(apply(&root, &Report::default(), 4242).is_none());

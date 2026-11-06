@@ -922,14 +922,14 @@ pub(crate) fn event_payload(
     let _ = state.bus.flush(state, run_id);
     let raw: Option<String> = state
         .with(|conn| {
-            Ok(conn
+            conn
                 .query_row(
                     "SELECT payload_json FROM ai_run_events WHERE run_id = ?1 AND event_type = ?2 \
                      ORDER BY seq LIMIT 1",
                     rusqlite::params![run_id, kind],
                     |row| row.get::<_, String>(0),
                 )
-                .optional()?)
+                .optional()
         })
         .unwrap();
     raw.map(|text| serde_json::from_str(&text).expect("payload_json 必须是合法 JSON"))

@@ -389,7 +389,7 @@ fn api格式_类型不匹配与必填缺失() {
 }
 
 #[test]
-fn 认不出的JSON不许炸() {
+fn 认不出的_json不许炸() {
     for raw in [json!("not json"), json!({}), json!({"a": 1}), json!([])] {
         let blueprint = build(&raw, None);
         assert_eq!(blueprint.format, "unknown");
@@ -415,14 +415,14 @@ fn 组节点实例画成subgraph框并如实说明() {
 }
 
 #[test]
-fn 报告文本与JSON都带上了错误条数() {
+fn 报告文本与_json都带上了错误条数() {
     let raw = ui_fixture("备注");
     let blueprint = build(&raw, Some(&object_info()));
     let json = blueprint.to_json();
     assert_eq!(json["format"], "ui");
     assert_eq!(json["counts"]["nodes"], 6);
     assert_eq!(json["counts"]["errors"], blueprint.count(SEV_ERROR));
-    assert!(json["issues"].as_array().unwrap().len() >= 1);
+    assert!(!json["issues"].as_array().unwrap().is_empty());
     let text = blueprint.render();
     assert!(text.contains("接线体检"));
     assert!(blueprint.summary().is_some());

@@ -486,8 +486,10 @@ async fn comfy_list_workflows_reads_the_same_dirs_as_the_endpoint() {
     std::fs::write(workflows.join("broken.json"), b"{ not json").unwrap();
     std::fs::write(workflows.join("empty.json"), b"").unwrap();
     std::fs::write(workflows.join("note.txt"), b"{}").unwrap();
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.output_dir = Some(root.join("comfyui").join("output").display().to_string());
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        output_dir: Some(root.join("comfyui").join("output").display().to_string()),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     let out = call_tool(&state, "comfy_list_workflows", serde_json::json!({})).await.unwrap();
@@ -543,8 +545,10 @@ async fn comfy_list_workflows_reads_the_same_dirs_as_the_endpoint() {
 async fn capture_status_and_jobs_ask_the_real_queue() {
     let state = state();
     // ① ComfyUI 不在：如实回 comfyReachable=false，**不是 500**（状态查询失败会让整个页面挂掉）
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = "http://127.0.0.1:1".to_string();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: "http://127.0.0.1:1".to_string(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
     let (status_code, down) = get_json(router_for(state.clone()), "/api/capture/status").await;
     assert_eq!(status_code, StatusCode::OK, "{down}");
@@ -559,8 +563,10 @@ async fn capture_status_and_jobs_ask_the_real_queue() {
 
     // ② ComfyUI 在：队列数与队首标题都要真的读到
     let (url, handle) = fake_comfy_queue(queue_body()).await;
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = url.clone();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     let (status_code, up) = get_json(router_for(state.clone()), "/api/capture/status").await;
@@ -621,8 +627,10 @@ async fn capture_jobs_and_status_carry_real_progress_and_current_step() {
     // ⚠ 把 ComfyUI 地址钉死在一个**没人听**的端口上：不钉的话这台机器上真跑着的
     //   8188 会被问一句，队首真有任务时 `runningLabel` 冒出来、键集合就随环境变了
     //   （与上面那条用例同一个理由）。
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = "http://127.0.0.1:1".to_string();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: "http://127.0.0.1:1".to_string(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
     // ① 什么都没跑、也没进度：`current` 与 `progress` **整键不出现**
     //    （不做这一步就不知道"省略规则"有没有被写坏成 `null`）
@@ -729,10 +737,12 @@ async fn poll_captures_a_run_into_prompts_and_media() {
     let view: &'static [u8] = Box::leak(media_bytes.clone().into_boxed_slice());
     let (url, handle) = fake_comfy(history, view).await;
 
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = url.clone();
-    config.output_dir = Some(output_dir.display().to_string());
-    config.auto_tag = "ComfyUI".to_string();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        output_dir: Some(output_dir.display().to_string()),
+        auto_tag: "ComfyUI".to_string(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     // ② 轮询一次：应当收下 1 次运行、1 个产物
@@ -746,11 +756,11 @@ async fn poll_captures_a_run_into_prompts_and_media() {
     // ③ 运行记录：success + prompt_id + media_count + 标题（seed 进标题）
     let (status, prompt_id, media_count, title): (String, i64, i64, String) = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT status, prompt_id, media_count, title FROM capture_runs WHERE run_key = 'uuid-run-1'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(status, "success");
@@ -758,20 +768,21 @@ async fn poll_captures_a_run_into_prompts_and_media() {
     assert!(title.contains("seed 4242"), "标题要带 seed：{title}");
 
     // ④ 提示词：字段真的解析进去了（这条链就是第 43 步第一半的产物）
-    let (positive, negative, checkpoint, seed, steps, width): (
+    type PromptFields = (
         String,
         Option<String>,
         Option<String>,
         Option<i64>,
         Option<i64>,
         Option<i64>,
-    ) = state
+    );
+    let (positive, negative, checkpoint, seed, steps, width): PromptFields = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT positive_prompt, negative_prompt, checkpoint, seed, steps, width FROM prompts WHERE id = ?1",
                 [prompt_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(positive, "1girl, ink painting");
@@ -783,11 +794,11 @@ async fn poll_captures_a_run_into_prompts_and_media() {
     // source / source_ref 是"同一次生成只建一条提示词"的钥匙
     let (source, source_ref, loras, extra): (Option<String>, Option<String>, Option<String>, Option<String>) = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT source, source_ref, loras, extra_params FROM prompts WHERE id = ?1",
                 [prompt_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(source.as_deref(), Some("ComfyUI"));
@@ -799,11 +810,11 @@ async fn poll_captures_a_run_into_prompts_and_media() {
     // ⑤ 产物：真的落进 storage/media、挂在提示词上、带了标签与 sha256
     let asset: (i64, String, i64, Option<i64>, String) = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT id, kind, size_bytes, prompt_id, stored_name FROM media_assets ORDER BY id DESC LIMIT 1",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(asset.1, "IMAGE");
@@ -813,21 +824,21 @@ async fn poll_captures_a_run_into_prompts_and_media() {
     // 图片顺手写缩略图（画廊列表用它）
     assert!(comfyhub_server_rs::media::thumbs::thumb_path(state.media_dir(), asset.0).is_file());
     let tag_count: i64 = state
-        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM media_tags WHERE media_id = ?1", [asset.0], |r| r.get(0))?))
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM media_tags WHERE media_id = ?1", [asset.0], |r| r.get(0)))
         .unwrap();
     assert_eq!(tag_count, 1, "autoTag（ComfyUI）要挂上");
 
     // ⑥ 幂等：再轮询一次**什么都不该变**（success 是终态）
     let prompts_before: i64 =
-        state.with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM prompts", [], |r| r.get(0))?)).unwrap();
+        state.with(|conn| conn.query_row("SELECT COUNT(*) FROM prompts", [], |r| r.get(0))).unwrap();
     assert_eq!(prompts_before, 3, "夹具 2 条 + 这次捕获 1 条");
     let again = capture_ingest::poll_once(&state, &config).await;
     assert_eq!(again["checked"], 0, "{again}");
     assert_eq!(again["newRuns"], 0, "{again}");
     let prompts_after: i64 =
-        state.with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM prompts", [], |r| r.get(0))?)).unwrap();
+        state.with(|conn| conn.query_row("SELECT COUNT(*) FROM prompts", [], |r| r.get(0))).unwrap();
     let media_after: i64 =
-        state.with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM media_assets", [], |r| r.get(0))?)).unwrap();
+        state.with(|conn| conn.query_row("SELECT COUNT(*) FROM media_assets", [], |r| r.get(0))).unwrap();
     assert_eq!(prompts_after, prompts_before, "不该重复建提示词");
     // 夹具里本来就有 1 条产物（`a.png`）+ 这次捕获的 1 条
     assert_eq!(media_after, 2, "不该重复入库产物");
@@ -860,11 +871,13 @@ async fn poll_downloads_missing_outputs_and_retries_empty_runs() {
         .into_boxed_str(),
     );
     let (url, handle) = fake_comfy(empty_history, view).await;
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = url.clone();
-    // ⚠ 故意把 outputDir 指向一个**没有那份文件**的目录 → 逼出 HTTP 下载兜底
-    config.output_dir = Some(output_dir.display().to_string());
-    config.auto_tag = "ComfyUI".to_string();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        // ⚠ 故意把 outputDir 指向一个**没有那份文件**的目录 → 逼出 HTTP 下载兜底
+        output_dir: Some(output_dir.display().to_string()),
+        auto_tag: "ComfyUI".to_string(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     let config = comfyhub_server_rs::comfy::capture::capture_config(&state).unwrap();
@@ -872,7 +885,7 @@ async fn poll_downloads_missing_outputs_and_retries_empty_runs() {
     assert_eq!(first["checked"], 1, "{first}");
     assert_eq!(first["newRuns"], 0, "没有产物 → 不算新运行");
     let status: String = state
-        .with(|conn| Ok(conn.query_row("SELECT status FROM capture_runs WHERE run_key='uuid-run-2'", [], |r| r.get(0))?))
+        .with(|conn| conn.query_row("SELECT status FROM capture_runs WHERE run_key='uuid-run-2'", [], |r| r.get(0)))
         .unwrap();
     assert_eq!(status, "empty");
     // 产物晚到之后**必须能重收**（当终态就会出现"AI 说生成了、画廊里却没有"）
@@ -909,11 +922,11 @@ async fn poll_downloads_missing_outputs_and_retries_empty_runs() {
     assert_eq!(second["newMedia"], 1, "下载兜底要真的把产物收进来：{second}");
     let (status, media_count): (String, i64) = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT status, media_count FROM capture_runs WHERE run_key='uuid-run-2'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(status, "success");
@@ -947,11 +960,11 @@ async fn load_api_workflow_file_is_idempotent_and_feeds_api_graph() {
     // 解析出来的字段真的进了库（第一半那份 GraphParse）
     let (source, source_ref, seed): (Option<String>, Option<String>, Option<i64>) = state
         .with(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT source, source_ref, seed FROM prompts WHERE id = ?1",
                 [prompt_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(source.as_deref(), Some("ComfyUI-File"));
@@ -973,7 +986,7 @@ async fn load_api_workflow_file_is_idempotent_and_feeds_api_graph() {
         .unwrap();
     assert_eq!(again.payload["promptId"], prompt_id, "同一份文件必须复用同一条提示词");
     let count: i64 = state
-        .with(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM prompts WHERE source='ComfyUI-File'", [], |r| r.get(0))?))
+        .with(|conn| conn.query_row("SELECT COUNT(*) FROM prompts WHERE source='ComfyUI-File'", [], |r| r.get(0)))
         .unwrap();
     assert_eq!(count, 1);
 
@@ -1011,8 +1024,10 @@ async fn load_ui_workflow_uses_object_info_and_reports_gaps() {
     let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
     let info: &'static str = Box::leak(object_info_json().into_boxed_str());
     let (url, handle) = fake_comfy_full(history, view, info).await;
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = url.clone();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     // ① 默认档：撞上不认识的前端节点 → **如实拒绝**（UNSUPPORTED_NODES），不许猜着提交
@@ -1127,8 +1142,10 @@ async fn load_ui_workflow_emulates_frontend_and_injects_a_save_node() {
     let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
     let info: &'static str = Box::leak(object_info_for_broadcast().into_boxed_str());
     let (url, handle) = fake_comfy_full(history, view, info).await;
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = url.clone();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     let out = call_tool(
@@ -1272,8 +1289,10 @@ async fn comfy_fit_workflow_pairs_graph_models_with_the_instance_inventory() {
     let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
     let info: &'static str = Box::leak(FIT_OBJECT_INFO.to_string().into_boxed_str());
     let (url, handle) = fake_comfy_full(history, view, info).await;
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = url.clone();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     let graph = serde_json::json!({
@@ -1347,8 +1366,10 @@ async fn comfy_audit_workflow_reports_facts_and_gates_only_blocking_items() {
     let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
     let info: &'static str = Box::leak(FIT_OBJECT_INFO.to_string().into_boxed_str());
     let (url, handle) = fake_comfy_full(history, view, info).await;
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = url.clone();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     // 一份"处处有问题"的图：前端节点 + 版本不兼容 + 本机没有的类 + 固定 seed/前缀 +
@@ -1395,8 +1416,10 @@ async fn comfy_audit_workflow_reports_facts_and_gates_only_blocking_items() {
     assert!(frontend["detail"].as_str().unwrap().contains("0.01"), "{frontend}");
 
     // 每个模型的检查都"拿不准就不说"：换掉 /object_info（ComfyUI 不在）→ **不判**本机缺节点
-    let mut down = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    down.comfy_url = "http://127.0.0.1:1".to_string();
+    let down = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: "http://127.0.0.1:1".to_string(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, down).unwrap();
     let offline = call_tool(&state, "comfy_audit_workflow", serde_json::json!({ "graph": graph.clone() }))
         .await
@@ -1540,8 +1563,10 @@ async fn comfy_prune_workflow_only_prunes_when_the_instance_is_unreachable() {
     let inject = serde_json::json!([{"at":"3.model","classType":"SageAttention"}]);
 
     // ① ComfyUI 不在 → `ok=false` + `COMFY_UNREACHABLE`，但**摘除部分照样给出来**
-    let mut down = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    down.comfy_url = "http://127.0.0.1:1".to_string();
+    let down = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: "http://127.0.0.1:1".to_string(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, down).unwrap();
     let out = call_tool(
         &state,
@@ -1561,8 +1586,10 @@ async fn comfy_prune_workflow_only_prunes_when_the_instance_is_unreachable() {
     let view: &'static [u8] = Box::leak(Vec::new().into_boxed_slice());
     let info: &'static str = Box::leak(FIT_OBJECT_INFO.to_string().into_boxed_str());
     let (url, handle) = fake_comfy_full(history, view, info).await;
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = url.clone();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
     let out = call_tool(
         &state,
@@ -1588,8 +1615,10 @@ async fn comfy_prune_workflow_only_prunes_when_the_instance_is_unreachable() {
         r#"{"SageAttention": {"input":{"required":{"model":["MODEL"]}}}}"#.to_string().into_boxed_str(),
     );
     let (url, handle2) = fake_comfy_full(history, view, with_sage).await;
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = url.clone();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
     let out = call_tool(
         &state,
@@ -1629,8 +1658,10 @@ async fn start_and_stop_refuse_to_touch_what_is_not_ours() {
     let state = state();
     // 一个"已经在跑"的假实例（假服务对 /system_stats 也回 200 + JSON，够 comfy_start 判定）
     let (url, handle) = fake_comfy(r#"{}"#, &[]).await;
-    let mut config = comfyhub_server_rs::comfy::capture::CaptureConfig::default();
-    config.comfy_url = url.clone();
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        ..Default::default()
+    };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
 
     let out = call_tool(&state, "comfy_start", serde_json::json!({})).await.unwrap();

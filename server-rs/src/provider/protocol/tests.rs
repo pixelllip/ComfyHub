@@ -432,7 +432,7 @@ fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
         format: Some(ThinkingFormat::DeepSeek),
         echo_all: false,
     };
-    let body = adapter.build_body("m", &[silent_tool_turn.clone()], &[], &deepseek, None);
+    let body = adapter.build_body("m", std::slice::from_ref(&silent_tool_turn), &[], &deepseek, None);
     assert_eq!(body["input"][0]["type"], "reasoning");
     assert_eq!(body["input"][0]["content"], json!([]), "空 content，而不是空白 reasoning_text");
     assert_eq!(body["input"][1]["type"], "function_call");
@@ -443,7 +443,7 @@ fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
         format: Some(ThinkingFormat::DeepSeek),
         echo_all: false,
     };
-    let body = adapter.build_body("m", &[silent_tool_turn.clone()], &[], &off, None);
+    let body = adapter.build_body("m", std::slice::from_ref(&silent_tool_turn), &[], &off, None);
     assert!(
         body["input"].as_array().unwrap().iter().all(|i| i["type"] != "reasoning"),
         "思考关掉时不校验回传，不补"
@@ -483,7 +483,7 @@ fn responses_补回传与方言解耦() {
         format: Some(ThinkingFormat::OpenAi),
         echo_all: false,
     };
-    let body = adapter.build_body("m", &[silent.clone()], &[], &plain, None);
+    let body = adapter.build_body("m", std::slice::from_ref(&silent), &[], &plain, None);
     assert!(
         body["input"].as_array().unwrap().iter().all(|i| i["type"] != "reasoning"),
         "没被拒过就不补，免得给不需要它的上游塞怪东西"
@@ -790,8 +790,7 @@ fn 下一轮的请求前缀逐字节包含上一轮() {
         parameters: json!({"type": "object"}),
     }];
     let base = vec![turn("system", "规则"), turn("user", "读一下那个文件")];
-    let appended = vec![
-        ChatTurn {
+    let appended = [ChatTurn {
             role: "assistant".into(),
             content: String::new(),
             tool_calls: vec![ToolCallRef {
@@ -806,8 +805,7 @@ fn 下一轮的请求前缀逐字节包含上一轮() {
             content: "内容".into(),
             tool_call_id: Some("call_1".into()),
             ..Default::default()
-        },
-    ];
+        }];
     let mut second_turns = base.clone();
     second_turns.extend(appended.iter().cloned());
 

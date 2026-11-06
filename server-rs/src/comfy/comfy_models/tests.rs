@@ -43,7 +43,7 @@ fn 相似度用的是词根而不是字面() {
     assert!(ModelName::similarity(want, want) == 1.0);
     // 字面很像但确实是两份模型 —— 高过阈值是**有意**的（工具不替模型做决定）
     let s = ModelName::similarity("sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors");
-    assert!(s >= MIN_SCORE && s < 1.0, "{s}");
+    assert!((MIN_SCORE..1.0).contains(&s), "{s}");
     assert!(ModelName::same("Krea2_Turbo.safetensors", "krea2 turbo.safetensors"));
     assert!(!ModelName::same("sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors"));
 }
@@ -94,7 +94,7 @@ fn 扫盘认后缀且深度与体积如实() {
     std::fs::write(loras.join("a.metadata.json"), b"{}").unwrap();
     std::fs::write(loras.join("A.METADATA.JSON"), b"{}").unwrap();
 
-    let inv = scan(None, &[dir.clone()]);
+    let inv = scan(None, std::slice::from_ref(&dir));
     assert_eq!(inv.source, Source::Scan);
     let names: Vec<String> = inv.models.iter().map(|m| m.name.clone()).collect();
     assert!(names.contains(&"a.safetensors".to_string()), "{names:?}");
@@ -125,7 +125,7 @@ fn 并集把实例看不到的那些单列出来() {
     let (k, v) = loader("CheckpointLoaderSimple", "ckpt_name", &["seen.safetensors"]);
     oi.insert(k, v);
 
-    let inv = inventory(Some(&oi), None, &[dir.clone()]);
+    let inv = inventory(Some(&oi), None, std::slice::from_ref(&dir));
     assert!(inv.merged);
     assert_eq!(inv.source, Source::ObjectInfo, "权威来源仍然是实例");
     assert_eq!(inv.models.len(), 2);
@@ -207,5 +207,5 @@ fn 从_object_info_认出第三方加载器的模型输入() {
     );
     let found = enumerate_model_inputs(Some(&m));
     assert!(found.get("MyThirdPartyLoader").unwrap().contains("model_name"));
-    assert!(found.get("FreeText").is_none());
+    assert!(!found.contains_key("FreeText"));
 }

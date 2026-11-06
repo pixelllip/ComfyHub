@@ -39,7 +39,7 @@ fn load_image_解析出真实路径与原始分辨率() {
         // 不是 LoadImage：跳过
         "44": {"class_type": "PreviewImage", "inputs": {"images": ["42", 0]}}
     }));
-    let refs = collect_in(&graph, &[input.clone()], &[output]);
+    let refs = collect_in(&graph, std::slice::from_ref(&input), &[output]);
     assert_eq!(refs.len(), 1, "只该有节点 42：{refs:?}");
     let entry = &refs[0];
     assert_eq!(entry.node_id, "42");
